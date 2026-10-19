@@ -180,6 +180,30 @@ public class ApplicationConfiguration {
                 dataSource, auditPort);
     }
 
+    /**
+     * 限流器（P3-D08 / D-2）。
+     *
+     * <p>⚠️ <b>限额与窗口取自配置，缺失即拒绝启动</b>（fail-closed）：
+     * 退回默认值等于「悄悄用了一个没人审过的限额」。
+     *
+     * <p>初值取<b>保守</b>档（30 次 / 60 秒），接入真实流量后按实测调整。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.RateLimitPort rateLimitPort(
+            DataSource dataSource,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${" + cn.studykid.multiagent.application.config.RateLimitPolicy
+                            .KEY_LIMIT + "}") Long limit,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${" + cn.studykid.multiagent.application.config.RateLimitPolicy
+                            .KEY_WINDOW_SECONDS + "}") Long windowSeconds) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcRateLimiter(
+                dataSource,
+                cn.studykid.multiagent.application.config.RateLimitPolicy.requireLimit(limit),
+                cn.studykid.multiagent.application.config.RateLimitPolicy
+                        .requireWindowSeconds(windowSeconds));
+    }
+
     @Bean
     public cn.studykid.multiagent.ports.persistence.AuditPort auditPort(
             DataSource dataSource) {

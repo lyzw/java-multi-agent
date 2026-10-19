@@ -127,11 +127,11 @@ cmd_migrate() {
   container_running || die "容器未运行"
   # ⚠️ 必须按版本号顺序应用**全部**迁移，不能只跑 V1。
   #    V2（画像）/ V3（账号）/ V4（预算预留唯一性）/ V5（审批状态守卫）/
-#    V6（审计追加约束）缺失时，
+#    V6（审计追加约束）/ V7（限流桶）缺失时，
   #    集成测试会因「表不存在」失败，而报错点离真正的缺失原因很远
   #    ——本项目已因此误判过「约束全部失效」。
   local version
-  for version in 1 2 3 4 5 6; do
+  for version in 1 2 3 4 5 6 7; do
     local f
     f=$(ls "$MIGRATION_DIR"/V${version}__*.sql 2>/dev/null | head -1) || true
     [ -n "$f" ] || continue

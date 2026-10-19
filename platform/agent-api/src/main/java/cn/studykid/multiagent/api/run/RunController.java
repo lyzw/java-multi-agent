@@ -17,6 +17,7 @@ import cn.studykid.multiagent.core.compliance.ZeroRetentionViolationException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 
@@ -45,15 +46,63 @@ public class RunController {
     private final ZeroRetentionGate retentionGate;
     private final CurrentPrincipal currentPrincipal;
 
+    /**
+     * 限流器（P3-D08 / D-2）。
+     *
+     * <p>⚠️ <b>默认桩 = 永不拒绝</b>：未装配时保持既有行为；
+     * 装配为真实实现后即生效（fail-closed）。
+     */
+    private final RateLimitPort rateLimiter;
+
+    /**
+     * ⚠️ <b>测试与「限流未装配」场景的便捷构造器</b>（P3-D08）。
+     *
+     * <p>本类被 {@code @RestController} 组件扫描注册，<b>有两个构造器时
+     * Spring 无法选择</b> → {@code No default constructor found} →
+     * 上下文启动失败（与 P3-D07 F-6 同源）。
+     * 故必须用 {@link org.springframework.beans.factory.annotation.Autowired}
+     * 显式标记注入用的那个。
+     */
     public RunController(RunCreationService runCreation,
                          AuthorizationService authorization,
                          ZeroRetentionGate retentionGate,
                          CurrentPrincipal currentPrincipal) {
+        this(runCreation, authorization, retentionGate, currentPrincipal, NEVER_LIMIT);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RunController(RunCreationService runCreation,
+                         AuthorizationService authorization,
+                         ZeroRetentionGate retentionGate,
+                         CurrentPrincipal currentPrincipal,
+                         RateLimitPort rateLimiter) {
         this.runCreation = runCreation;
         this.authorization = authorization;
         this.retentionGate = retentionGate;
         this.currentPrincipal = currentPrincipal;
+        this.rateLimiter = rateLimiter;
     }
+
+    /**
+     * 默认桩：永不拒绝（限流未装配时保持既有行为）。
+     *
+     * <p>⚠️ <b>不可退化为 lambda</b>：{@link RateLimitPort} 有两个抽象方法
+     * （{@code check} + {@code currentCount}），不是函数式接口。
+     * 这正是 D4 把 {@code BudgetReserver}（返回 boolean）换成多方法
+     * {@code BudgetPort} 的用意——<b>强制替身实现全部契约</b>，
+     * 防止「恒真放行」的替身蒙混过关。
+     */
+    private static final RateLimitPort NEVER_LIMIT = new RateLimitPort() {
+        @Override
+        public Decision check(String tenantId, String bucketKey) {
+            return Decision.ALLOWED;
+        }
+
+        @Override
+        public long currentCount(String tenantId, String bucketKey) {
+            return 0L;
+        }
+    };
 
     /**
      * 创建 Run。
@@ -82,6 +131,21 @@ public class RunController {
 
         // 3) 执行时授权（红线 9）—— 在创建之前，而非之后
         authorization.requireAuthorized(context, AuthorizationService.Actions.RUN_CREATE, null);
+
+        // 3b) ⚠️ 限流（P3-D08 / D-2）：预算约束管「总量」，限流管「速率」。
+        //     攻击者以高 QPS 调用、每笔都远低于单次预留额时，
+        //     budget_no_overspend 一次都不会触发，但预算会在几分钟内被打穿。
+        //     ⚠️ fail-closed：REJECTED 与 FAIL_CLOSED **都**返回 429。
+        RateLimitPort.Decision limit = rateLimiter.check(
+                context.tenantId(), RateLimitPort.Buckets.RUN_CREATE);
+        if (limit != RateLimitPort.Decision.ALLOWED) {
+            log.warn("创建 Run 被限流拒绝: tenant={}, decision={}",
+                    context.tenantId(), limit);
+            // ⚠️ 429 + Retry-After：让客户端知道这是速率问题而非参数错误
+            return ResponseEntity.status(429)
+                    .header("Retry-After", "60")
+                    .build();
+        }
 
         // 4) 用例：原子提交 + 幂等判定
         var result = runCreation.createRun(

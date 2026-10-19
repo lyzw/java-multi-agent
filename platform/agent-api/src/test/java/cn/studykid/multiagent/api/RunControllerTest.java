@@ -184,6 +184,110 @@ class RunControllerTest {
     }
 
     @Nested
+    @DisplayName("⚠️ P3-D08 限流（D-2 预算击穿）")
+    class RateLimitGate {
+
+        /** 可脚本化的限流替身：让「是否真的调用了限流」可证伪。 */
+        private static final class ScriptedRateLimiter
+                implements cn.studykid.multiagent.ports.persistence.RateLimitPort {
+            private final cn.studykid.multiagent.ports.persistence.RateLimitPort.Decision forced;
+            int checkCalls;
+            String lastBucket;
+
+            ScriptedRateLimiter(
+                    cn.studykid.multiagent.ports.persistence.RateLimitPort.Decision forced) {
+                this.forced = forced;
+            }
+
+            @Override
+            public Decision check(String tenantId, String bucketKey) {
+                checkCalls++;
+                lastBucket = bucketKey;
+                return forced;
+            }
+
+            @Override
+            public long currentCount(String tenantId, String bucketKey) {
+                return 0L;
+            }
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 超限(REJECTED) → 429 + Retry-After，且用例绝不被调用")
+        void overLimitReturns429() {
+            var limiter = new ScriptedRateLimiter(
+                    cn.studykid.multiagent.ports.persistence.RateLimitPort.Decision.REJECTED);
+            var controller = new RunController(null, allowAll(), retentionGate, principal,
+                    limiter);
+
+            var response = controller.createRun(request());
+
+            assertThat(response.getStatusCode().value())
+                    .as("⚠️⚠️ 限流必须返回 429（否则客户端无法区分速率问题与参数错误）")
+                    .isEqualTo(429);
+            assertThat(response.getHeaders().getFirst("Retry-After"))
+                    .as("⚠️ 必须带 Retry-After")
+                    .isNotNull();
+            assertThat(useCaseInvoked)
+                    .as("⚠️⚠️ 被限流时绝不能创建 Run（否则限流形同虚设）")
+                    .isFalse();
+            assertThat(limiter.lastBucket)
+                    .as("⚠️ 必须用 RUN_CREATE 桶")
+                    .isEqualTo(
+                            cn.studykid.multiagent.ports.persistence.RateLimitPort.Buckets.RUN_CREATE);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 限流组件故障(FAIL_CLOSED) → 同样 429（禁止降级放行）")
+        void limiterFailureAlsoReturns429() {
+            var limiter = new ScriptedRateLimiter(
+                    cn.studykid.multiagent.ports.persistence.RateLimitPort.Decision.FAIL_CLOSED);
+            var controller = new RunController(null, allowAll(), retentionGate, principal,
+                    limiter);
+
+            var response = controller.createRun(request());
+
+            assertThat(response.getStatusCode().value())
+                    .as("⚠️⚠️ 限流组件故障必须 fail-closed（放行 = 限流形同虚设）")
+                    .isEqualTo(429);
+            assertThat(useCaseInvoked).isFalse();
+        }
+
+        @Test
+        @DisplayName("✅ 未超限(ALLOWED) → 正常创建（限流不被误伤）")
+        void underLimitProceeds() {
+            var limiter = new ScriptedRateLimiter(
+                    cn.studykid.multiagent.ports.persistence.RateLimitPort.Decision.ALLOWED);
+            var controller = new RunController(new CountingRunCreationService(useCaseInvoked),
+                    allowAll(), retentionGate, principal, limiter);
+
+            var response = controller.createRun(request());
+
+            assertThat(response.getStatusCode().value())
+                    .as("⚠️ 未超限时不得被误拦（否则功能不可用）")
+                    .isEqualTo(201);
+            assertThat(limiter.checkCalls).isEqualTo(1);
+            assertThat(useCaseInvoked).isTrue();
+        }
+
+        @Test
+        @DisplayName("⚠️ 授权失败时不应消耗限流配额（限流在授权之后）")
+        void authorizationCheckedBeforeRateLimit() {
+            var limiter = new ScriptedRateLimiter(
+                    cn.studykid.multiagent.ports.persistence.RateLimitPort.Decision.ALLOWED);
+            var controller = new RunController(null, denyAll(), retentionGate, principal,
+                    limiter);
+
+            catchThrowableOfType(() -> controller.createRun(request()),
+                    AccessDeniedException.class);
+
+            assertThat(limiter.checkCalls)
+                    .as("⚠️ 限流在授权之后——未授权请求不应占用租户的限流配额")
+                    .isZero();
+        }
+    }
+
+    @Nested
     @DisplayName("⚠️ 授权闸门（红线 9）")
     class AuthorizationGate {
 

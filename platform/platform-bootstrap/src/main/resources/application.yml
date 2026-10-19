@@ -34,6 +34,16 @@ spring:
     connection-timeout: 10s
 
 agent:
+  # ── 限流（P3-D08 / D-2）──────────────────────────────────────────
+  # ⚠️ 缺失即拒绝启动（fail-closed）：退回默认值等于「悄悄用了一个
+  #    没人审过的限额」。初值取保守档，接入真实流量后按实测调整。
+  # ⚠️ 数值必须加引号：YAML 中裸数字会被 YamlPropertiesFactoryBean 丢弃
+  #    （P1 已记录的静默失效：delivery-limit 被丢弃后退回 quorum 默认 20，
+  #     导致 record_weakness 重复写入 Sev-0）。
+  rate-limit:
+    limit-per-window: "30"
+    window-seconds: "60"
+
   # ── MQ 队列拓扑（ADR-001 §4）───────────────────────────────────
   # ⚠️ x-queue-type 与 x-delivery-limit 必须显式声明。
   #   RabbitMQ 4.x 未配置 vhost 默认队列类型时默认仍是 classic，
