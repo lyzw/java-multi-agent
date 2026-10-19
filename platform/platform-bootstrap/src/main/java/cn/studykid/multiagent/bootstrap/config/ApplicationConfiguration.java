@@ -181,6 +181,17 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * Prompt 注入防护（P3-D09 / FR-016）。
+     *
+     * <p>⚠️ 上限取<b>保守档</b>：宁可误拒超长输入，也不能让 Prompt 无限膨胀
+     * （token 爆炸 → 成本失控，与 D8 限流同源威胁）。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.prompt.PromptGuard promptGuard() {
+        return new cn.studykid.multiagent.application.prompt.PromptGuard();
+    }
+
+    /**
      * 限流器（P3-D08 / D-2）。
      *
      * <p>⚠️ <b>限额与窗口取自配置，缺失即拒绝启动</b>（fail-closed）：

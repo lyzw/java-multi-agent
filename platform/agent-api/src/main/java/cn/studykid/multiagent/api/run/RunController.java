@@ -55,6 +55,13 @@ public class RunController {
     private final RateLimitPort rateLimiter;
 
     /**
+     * Prompt 注入防护（P3-D09 / FR-016）。
+     *
+     * <p>⚠️ <b>默认用标准上限</b>，不提供「无防护」构造路径。
+     */
+    private final cn.studykid.multiagent.application.prompt.PromptGuard promptGuard;
+
+    /**
      * ⚠️ <b>测试与「限流未装配」场景的便捷构造器</b>（P3-D08）。
      *
      * <p>本类被 {@code @RestController} 组件扫描注册，<b>有两个构造器时
@@ -70,17 +77,28 @@ public class RunController {
         this(runCreation, authorization, retentionGate, currentPrincipal, NEVER_LIMIT);
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
     public RunController(RunCreationService runCreation,
                          AuthorizationService authorization,
                          ZeroRetentionGate retentionGate,
                          CurrentPrincipal currentPrincipal,
                          RateLimitPort rateLimiter) {
+        this(runCreation, authorization, retentionGate, currentPrincipal, rateLimiter,
+                new cn.studykid.multiagent.application.prompt.PromptGuard());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RunController(RunCreationService runCreation,
+                         AuthorizationService authorization,
+                         ZeroRetentionGate retentionGate,
+                         CurrentPrincipal currentPrincipal,
+                         RateLimitPort rateLimiter,
+                         cn.studykid.multiagent.application.prompt.PromptGuard promptGuard) {
         this.runCreation = runCreation;
         this.authorization = authorization;
         this.retentionGate = retentionGate;
         this.currentPrincipal = currentPrincipal;
         this.rateLimiter = rateLimiter;
+        this.promptGuard = promptGuard;
     }
 
     /**
@@ -122,6 +140,18 @@ public class RunController {
 
         // 1) 内容合规：拒绝明显可识别信息（纵深防御）
         request.assertNoIdentifyingContent();
+
+        // 1b) ⚠️ Prompt 注入防护（P3-D09 / FR-016）：长度/深度/元素数有界。
+        //     ⚠️ 刻意放在**创建之前**：超限输入若先落库再被 Worker 拒绝，
+        //     已经消耗了 DB 写入与 MQ 投递——检查必须早于任何成本。
+        try {
+            promptGuard.validateBounds(request.input());
+        } catch (cn.studykid.multiagent.application.prompt.PromptRejectedException e) {
+            log.warn("输入被 Prompt 防护拒绝: tenant={}, reason={}, msg={}",
+                    context.tenantId(), e.reason(), e.getMessage());
+            // ⚠️ 400 而非 429/500：这是**客户端输入**问题，不是服务端故障
+            return ResponseEntity.badRequest().build();
+        }
 
         // 2) 零保留闸门：未确认供应商时禁止真实学生数据
         //    ⚠️ 当前 P2 用 SYNTHETIC；接入真实数据时按 DataClassification 判定

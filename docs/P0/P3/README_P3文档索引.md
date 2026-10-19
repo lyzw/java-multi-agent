@@ -1,6 +1,6 @@
 # P3 文档索引 — 可靠性与安全
 
-> 阶段：P3（可靠性与安全，8–13 周，P1-10 重估）　**状态**：🟢 进行中（D1 ✅ D2 ✅ D3 ✅ D4 ✅ D5 ✅ D6 ✅ D7 ✅ D8 ✅ / D9–D11 ⬜）
+> 阶段：P3（可靠性与安全，8–13 周，P1-10 重估）　**状态**：🟢 进行中（D1 ✅ D2 ✅ D3 ✅ D4 ✅ D5 ✅ D6 ✅ D7 ✅ D8 ✅ D9 ✅ / D10–D11 ⬜）
 > 总纲：[P3-01 执行计划](P3-01_执行计划.md)
 
 ## 切片进度
@@ -15,7 +15,7 @@
 | [P3-D06_取消竞态.md](P3-D06_取消竞态.md) | 取消原子置终态 + 循环级/闸门级双检查 + 在途提交被拒（含 2 项独立反证）| ✅ 完成（8 IT + 5 单测全绿 + 2 项反证）| FR-011 |
 | [P3-D07_审计链路.md](P3-D07_审计链路.md) | 审批/访问审计写入 + 追加不可改约束（含 F-6 装配缺陷修复）| ✅ 完成（11 IT 全绿 + T-4 触发器反证）| R-1 / R-2 / R-3 |
 | [P3-D08_限流.md](P3-D08_限流.md) | 固定窗口限流 + 原子计数 + 端点 fail-closed 接入（含 4 次反证迭代）| ✅ 完成（9 IT + 4 单测全绿 + 确定性交错反证）| D-2 |
-| P3-D09 | Prompt 注入红队回归 | ⬜ 待开发 | FR-016 |
+| [P3-D09_Prompt注入红队回归.md](P3-D09_Prompt注入红队回归.md) | 用户输入标记隔离 + 工具输出不可信标注 + 长度/深度有界（含 F-7 裸奔缺陷修复）| ✅ 完成（21 项红队用例全绿 + 4 项反证）| FR-016 |
 | P3-D10 | SSE 实时推送 + 可观测性指标 | ⬜ 待开发 | FR-014(部分) / FR-017(指标) |
 | P3-D11 | 业务验收评测集 + 无编造出处 + 威胁模型复审 | ⬜ 待开发 | FR-018/020 / I-5 |
 
@@ -31,3 +31,4 @@
 | D6 | ✅ P3-D06 | RunClaimPort.requestCancel/isCancelled + JdbcRunClaimRepository + 循环级/闸门级双检查 + CANCELLED 结局 | D1, D5 |
 | D7 | ✅ P3-D07 | AuditPort / JdbcAuditRepository / V6 审计追加约束 + 审批·取消接入审计 + F-6 装配缺陷修复 | D5, D6 |
 | D8 | ✅ P3-D08 | RateLimitPort / JdbcRateLimiter / V7 限流桶 + RunController 429 接入 + RateLimitPolicy | D1, D4 |
+| D9 | ✅ P3-D09 | PromptGuard + PromptRejectedException + RunExecutionLoop/RunController 接入 + F-7 修复 | D1 |

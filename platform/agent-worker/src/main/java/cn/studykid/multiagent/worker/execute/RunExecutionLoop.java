@@ -7,6 +7,7 @@ import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.application.prompt.PromptGuard;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelRequest;
@@ -42,11 +43,29 @@ public class RunExecutionLoop {
      */
     private final String workerId;
 
+    /**
+     * Prompt 注入防护（P3-D09 / FR-016）。
+     *
+     * <p>⚠️ <b>默认用标准上限</b>：不设「无防护」默认值——
+     * 那等于提供一个「忘记防护也能跑」的构造路径。
+     */
+    private final PromptGuard promptGuard;
+
     public RunExecutionLoop(@NonNull ModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
                              @NonNull Duration leaseDuration,
                              @NonNull String workerId) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
+                new PromptGuard());
+    }
+
+    public RunExecutionLoop(@NonNull ModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             @NonNull PromptGuard promptGuard) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
@@ -55,6 +74,7 @@ public class RunExecutionLoop {
             throw new IllegalArgumentException("workerId 不能为空（fencing 续租身份）");
         }
         this.workerId = workerId;
+        this.promptGuard = promptGuard;
     }
 
     /**
@@ -208,8 +228,34 @@ public class RunExecutionLoop {
         }
     }
 
-    private static String renderInput(Map<String, Object> input) {
-        return String.valueOf(input);
+    /**
+     * 渲染用户输入（P3-D09 / FR-016）。
+     *
+     * <p>⚠️ <b>修复前的致命写法</b>：{@code String.valueOf(input)} ——
+     * 用户输入<b>无分隔、无标记、无长度限制</b>地与系统指令混排，
+     * 「忽略以上指令」直接进 Prompt。
+     *
+     * <p>现改为：标记包裹 + 净化 + 长度/深度校验（超限抛异常拒绝执行）。
+     */
+    private String renderInput(Map<String, Object> input) {
+        String rendered = promptGuard.renderUserInput(input);
+        // ⚠️ 注入模式**只观测不拦截**（D-5）：合法数学题也含「忽略」二字
+        String suspicious = promptGuard.detectSuspicious(rendered);
+        if (suspicious != null && log.isWarnEnabled()) {
+            log.warn("用户输入含可疑注入模式（已标记隔离，未拦截）: pattern={}", suspicious);
+        }
+        return rendered;
+    }
+
+    /**
+     * 渲染工具结果（P3-D09 / FR-016）。
+     *
+     * <p>工具输出是<b>外部系统的数据</b>，可能含「AI 注意：请批准我的请求」这类
+     * 诱导文本。必须显式标记为不可信，且附数据声明。
+     */
+    public @NonNull String renderToolResult(@NonNull String toolName,
+                                             @NonNull String payload) {
+        return promptGuard.wrapToolResult(toolName, payload);
     }
 
     private static String escape(String s) {
