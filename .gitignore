@@ -27,6 +27,7 @@ Thumbs.db
 # 严禁提交：任何形式的凭据文件
 .env
 .env.local
+config.env
 *.pem
 *.key
 secrets/
