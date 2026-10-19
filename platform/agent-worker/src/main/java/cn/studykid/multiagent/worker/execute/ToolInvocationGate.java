@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.ports.model.ModelResponse;
+import cn.studykid.multiagent.ports.persistence.ApprovalPort;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
@@ -48,6 +49,14 @@ public class ToolInvocationGate {
     private final BudgetPort budget;
     private final RunToolLedgerPort ledger;
     /**
+     * 审批消费端口（P3-D05 / FR-013）。
+     *
+     * <p>⚠️ <b>默认桩 = 恒返回 {@code NO_APPROVAL}</b>：在审批权威（人类审批台 / 策略引擎）
+     * 接入前，需要审批的工具一律被拒——这与既有 fail-closed 行为一致，
+     * 只是路径从「恒拒」变为「查不到有效审批即拒」，且具备了被真实审批驱动的能力。
+     */
+    private final ApprovalPort approvalPort;
+    /**
      * 单次工具调用的预算预留额（P3-D04 §2.6 D-6）。
      *
      * <p>⚠️ <b>构造期校验，不接受非正数</b>：缺失/非法配置在装配时就失败，
@@ -56,12 +65,43 @@ public class ToolInvocationGate {
      */
     private final java.math.BigDecimal reserveAmountPerToolCall;
 
+    /** 默认审批桩：恒返回 NO_APPROVAL（审批权威接入前的 fail-closed 占位）。 */
+    private static final ApprovalPort NO_APPROVAL_PORT = new ApprovalPort() {
+        @Override
+        public ApprovalOutcome consume(String tenantId, String operationId,
+                                       String argumentDigest, String targetResource,
+                                       String runId) {
+            return ApprovalOutcome.NO_APPROVAL;
+        }
+
+        @Override
+        public String grant(String tenantId, String operationId, String argumentDigest,
+                            String targetResource,
+                            cn.studykid.multiagent.core.config.ApprovalRequirement requirement,
+                            String approverScope, java.time.Instant expiresAt,
+                            String approverId) {
+            throw new UnsupportedOperationException("默认审批桩不支持授予");
+        }
+
+        @Override
+        public void revoke(String tenantId, String operationId, String approverId,
+                           String reason) {
+            throw new UnsupportedOperationException("默认审批桩不支持撤销");
+        }
+
+        @Override
+        public java.util.Optional<ApprovalView> findActive(String tenantId,
+                                                          String operationId) {
+            return java.util.Optional.empty();
+        }
+    };
+
     public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
                               @NonNull AuthorizationService authorization,
                               @NonNull ApprovalPolicy approvalPolicy,
                               @NonNull BudgetPort budget,
                               @NonNull RunToolLedgerPort ledger) {
-        this(handlers, authorization, approvalPolicy, budget, ledger,
+        this(handlers, authorization, approvalPolicy, budget, ledger, NO_APPROVAL_PORT,
                 cn.studykid.multiagent.application.config.BudgetPolicy.DEFAULT_RESERVE_AMOUNT);
     }
 
@@ -71,11 +111,33 @@ public class ToolInvocationGate {
                               @NonNull BudgetPort budget,
                               @NonNull RunToolLedgerPort ledger,
                               java.math.BigDecimal reserveAmountPerToolCall) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, NO_APPROVAL_PORT,
+                reserveAmountPerToolCall);
+    }
+
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                cn.studykid.multiagent.application.config.BudgetPolicy.DEFAULT_RESERVE_AMOUNT);
+    }
+
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall) {
         this.handlers = List.copyOf(handlers);
         this.authorization = authorization;
         this.approvalPolicy = approvalPolicy;
         this.budget = budget;
         this.ledger = ledger;
+        this.approvalPort = approvalPort;
         if (reserveAmountPerToolCall == null
                 || reserveAmountPerToolCall.signum() <= 0) {
             throw new IllegalArgumentException(
@@ -146,18 +208,29 @@ public class ToolInvocationGate {
                 continue;
             }
 
-            // ⑤ 审批检查
+            // ⑤ 审批消费（P3-D05 / FR-013）
+            //    ⚠️ 审批绑定参数摘要与目标资源、过期/撤销拒绝、消费与取消检查原子协调、
+            //       崩溃后可恢复，全部由 ApprovalPort 在 DB 事务内保证。
             ApprovalPolicy.ApprovalDecision approval = approvalPolicy.evaluate(handler);
             if (approval.requiresApproval()) {
-                // ⚠️ TODO(P3): 审批流未实现。
-                //    当前仅支持「不需审批」的工具。
-                //    ⚠️⚠️ 若某工具从 OPTIONAL 改为 REQUIRED，
-                //    此处必须拒绝而非静默通过 —— 否则变成「静默跳过审批」的安全漏洞。
-                //    临时用 fail-closed 保证安全：需要审批时直接拒绝。
-                log.warn("工具需要审批但审批流未实现，fail-closed 拒绝: tool={}",
-                        call.toolName());
-                result.recordRejected(call.toolName(), "需要审批（暂不支持）");
-                continue;
+                // ⚠️ 参数摘要与目标资源须与审批授予时绑定的一致（防篡改）：
+                //    argumentDigest 与 ledger 的 requestDigest 同源（均来自 call.arguments()），
+                //    targetResource 取工具名。
+                String argumentDigest = String.valueOf(call.arguments());
+                String targetResource = call.toolName();
+                ApprovalPort.ApprovalOutcome outcome = approvalPort.consume(
+                        tenantId, registration.operationId(), argumentDigest,
+                        targetResource, task.runId());
+                if (outcome != ApprovalPort.ApprovalOutcome.CONSUMED) {
+                    // ⚠️ 任何非 CONSUMED 结果都 fail-closed 拒绝。
+                    //    需要审批但查不到有效审批（NO_APPROVAL / EXPIRED / REJECTED /
+                    //    已被取消的 Run / 参数被篡改）一律不得执行 ——
+                    //    否则变成「静默跳过审批」的安全漏洞（Sev-0）。
+                    log.warn("审批消费未通过，fail-closed 拒绝: tool={}, runId={}, outcome={}",
+                            call.toolName(), task.runId(), outcome);
+                    result.recordRejected(call.toolName(), "审批未通过:" + outcome);
+                    continue;
+                }
             }
 
             // ⑥ ⚠️ 预算预留（P3-D04）：失败即拒绝执行（fail-closed）。

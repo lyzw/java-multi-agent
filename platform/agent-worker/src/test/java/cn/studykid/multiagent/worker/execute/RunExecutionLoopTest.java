@@ -24,6 +24,8 @@ import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
+import cn.studykid.multiagent.ports.persistence.ApprovalPort;
+import cn.studykid.multiagent.ports.persistence.ApprovalPort.ApprovalOutcome;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
@@ -746,6 +748,128 @@ class RunExecutionLoopTest {
             assertThat(laterTool.executeCount.get())
                     .as("⚠️ UNKNOWN 后不得继续执行其他工具（状态已不可信）")
                     .isZero();
+        }
+    }
+
+    @Nested
+    @DisplayName("⚠️ P3-D05 审批消费（FR-013）")
+    class ApprovalConsumption {
+
+        /**
+         * 可脚本化审批端口替身：让「闸门是否真的消费审批并尊重其结果」可证伪。
+         *
+         * <p>⚠️ 只实现 {@code consume}，其余抛异常——闸门第 ⑤ 环只消费、不授予，
+         * 替身若被调用到 grant/revoke 即说明闸门越权。
+         */
+        private static final class ScriptedApproval implements ApprovalPort {
+            private final ApprovalOutcome forced;
+            int consumeCalls;
+
+            ScriptedApproval(ApprovalOutcome forced) {
+                this.forced = forced;
+            }
+
+            @Override
+            public ApprovalOutcome consume(String tenantId, String operationId,
+                                          String argumentDigest, String targetResource,
+                                          String runId) {
+                consumeCalls++;
+                return forced;
+            }
+
+            @Override public String grant(String t, String o, String d, String r,
+                                          ApprovalRequirement req, String s, Instant e, String a) {
+                throw new UnsupportedOperationException();
+            }
+            @Override public void revoke(String t, String o, String a, String reason) {
+                throw new UnsupportedOperationException();
+            }
+            @Override public Optional<ApprovalView> findActive(String t, String o) {
+                throw new UnsupportedOperationException();
+            }
+        }
+
+        @Test
+        @DisplayName("⚠️ 需要审批且审批有效(CONSUMED) → 工具执行")
+        void requiredWithValidApprovalRuns() {
+            var handler = new RecordingTool();
+            var approval = new ScriptedApproval(ApprovalOutcome.CONSUMED);
+            var gate = new ToolInvocationGate(List.of(handler), allowAll(),
+                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision
+                            .required("WRITE_EXTERNAL"),
+                    budget(), ledger(), approval);
+
+            gate.invokeAll(TENANT, task(), Map.of(
+                    "c1", new ModelResponse.ToolCallRequest(
+                            "recording_tool", Map.of(), "c1")));
+
+            assertThat(approval.consumeCalls)
+                    .as("⚠️ 需要审批时必须真的调用审批端口消费")
+                    .isEqualTo(1);
+            assertThat(handler.executeCount.get())
+                    .as("⚠️ 审批有效则工具必须执行")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 需要审批但无有效审批(NO_APPROVAL) → fail-closed 拒绝")
+        void requiredWithoutApprovalBlocked() {
+            var handler = new RecordingTool();
+            var approval = new ScriptedApproval(ApprovalOutcome.NO_APPROVAL);
+            var gate = new ToolInvocationGate(List.of(handler), allowAll(),
+                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision
+                            .required("WRITE_EXTERNAL"),
+                    budget(), ledger(), approval);
+
+            var result = gate.invokeAll(TENANT, task(), Map.of(
+                    "c1", new ModelResponse.ToolCallRequest(
+                            "recording_tool", Map.of(), "c1")));
+
+            assertThat(approval.consumeCalls).isEqualTo(1);
+            assertThat(handler.executeCount.get())
+                    .as("⚠️⚠️ 查不到有效审批必须拒绝，否则审批门禁形同虚设（Sev-0）")
+                    .isZero();
+            assertThat(result.rejectedCount()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("⚠️ 需要审批但过期(EXPIRED) → 拒绝")
+        void requiredExpiredBlocked() {
+            var handler = new RecordingTool();
+            var approval = new ScriptedApproval(ApprovalOutcome.EXPIRED);
+            var gate = new ToolInvocationGate(List.of(handler), allowAll(),
+                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision
+                            .required("WRITE_EXTERNAL"),
+                    budget(), ledger(), approval);
+
+            var result = gate.invokeAll(TENANT, task(), Map.of(
+                    "c1", new ModelResponse.ToolCallRequest(
+                            "recording_tool", Map.of(), "c1")));
+
+            assertThat(handler.executeCount.get())
+                    .as("过期审批不得放行")
+                    .isZero();
+            assertThat(result.rejectedCount()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("⚠️ 不需审批 → 直接执行，且不查审批端口")
+        void notRequiredSkipsApproval() {
+            var handler = new RecordingTool();
+            // 即便端口表态拒绝，不需审批的工具也不应被拒
+            var approval = new ScriptedApproval(ApprovalOutcome.NO_APPROVAL);
+            var gate = new ToolInvocationGate(List.of(handler), allowAll(),
+                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    budget(), ledger(), approval);
+
+            gate.invokeAll(TENANT, task(), Map.of(
+                    "c1", new ModelResponse.ToolCallRequest(
+                            "recording_tool", Map.of(), "c1")));
+
+            assertThat(approval.consumeCalls)
+                    .as("⚠️ 不需审批时绝不应调用审批端口（避免无谓的 fail-closed）")
+                    .isZero();
+            assertThat(handler.executeCount.get()).isEqualTo(1);
         }
     }
 

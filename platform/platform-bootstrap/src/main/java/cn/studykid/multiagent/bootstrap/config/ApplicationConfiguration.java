@@ -152,6 +152,22 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 审批消费仓储（P3-D05 / FR-013）。
+     *
+     * <p>⚠️ <b>刻意不加 {@code @Service}</b>：与 {@code JdbcBudgetRepository} 一致，
+     * 装配统一归本类，避免被测试切片的组件扫描意外拾取。
+     *
+     * <p><b>默认 fail-closed</b>：审批权威（人类审批台 / 策略引擎）尚未接入，
+     * 需要审批的工具在查不到有效审批时一律被拒——这是设计内的安全行为。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ApprovalPort approvalPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcApprovalRepository(
+                dataSource);
+    }
+
+    /**
      * 预算对账服务（P3-D04 §4.3）。
      *
      * <p>⚠️ <b>无调度器</b>：本 Bean 只提供能力，触发时机待 D7 审计链路接入
