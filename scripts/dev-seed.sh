@@ -114,6 +114,48 @@ cmd_login() {
   psql_cmd -tAc "SELECT tenant_id FROM principal WHERE login_name = '$login';"
 }
 
+# ── 登录诊断 ────────────────────────────────────────────
+# ⚠️ 用途：登录返回 invalid_credentials 时，**无法区分**两种原因：
+#    ① 账号不存在（被清理脚本删了 / 连错库）
+#    ② 账号存在但口令错
+#    而这两种的处理方式完全相反（重建 vs 核对口令），必须分开。
+#
+# 实测遇到过：账号 tadmin / agentauthor 在库中消失（外部清理），
+#   若不去查库，会误以为是「口令记错了」而反复试错，方向完全错误。
+cmd_diagnose() {
+  local login="$1"
+  local rows status failed
+
+  rows=$(psql_cmd -tAc "SELECT tenant_id || '|' || status || '|' || failed_attempts
+                         FROM principal WHERE login_name = '${login}';" | tr -d ' ')
+
+  if [[ -z "$rows" ]]; then
+    printf "❌ 账号不存在：%s\n" "$login"
+    echo
+    echo "可能原因（按概率排序）："
+    echo "  1. 账号被清理脚本删除 —— 本地库会因 migrate/destroy 等操作丢失账号"
+    echo "  2. 连错了数据库 —— 本机有 5433(PG17 正确) 与 5432(PG16 旧，无 agent_dev)"
+    echo
+    echo "请先确认当前库： ./scripts/dev-seed.sh --list"
+    echo "确认后可重建：   ./scripts/dev-seed.sh --slug t-a --login ${login} \\"
+    echo "                   --password '<口令>' --roles TENANT_ADMIN"
+    return 1
+  fi
+
+  IFS='|' read -r _ status failed <<< "$rows"
+  echo "✅ 账号存在：${login}"
+  echo "   状态          : ${status}"
+  echo "   连续失败次数  : ${failed}"
+  if [[ "$status" != "ACTIVE" ]]; then
+    echo "   ⚠️ 状态非 ACTIVE，无法登录。可能是 LOCKED（失败次数超限）。"
+  fi
+  echo
+  echo "若口令确认无误却仍失败，可重建该账号（脚本不会覆盖已有账号，需先删除）："
+  echo "  docker exec ${PG_CONTAINER} psql -U ${PG_USER} -d ${PG_DB} -c \\"
+  echo "    \"DELETE FROM principal_role WHERE principal_id IN (SELECT principal_id FROM principal WHERE login_name='${login}'); DELETE FROM principal WHERE login_name='${login}';\""
+  return 0
+}
+
 # ── 初始化 ──────────────────────────────────────────────
 cmd_seed() {
   local slug="$DEFAULT_SLUG"
@@ -281,6 +323,11 @@ main() {
       shift || true
       cmd_login "${1:-}"
       ;;
+    --diagnose)
+      check_prerequisites
+      shift || true
+      cmd_diagnose "${1:-}"
+      ;;
     --help|-h)
       usage
       ;;
@@ -306,17 +353,19 @@ usage() {
   ./scripts/dev-seed.sh                        用默认参数初始化（t-dev / devstudent）
   ./scripts/dev-seed.sh --list                 列出现有租户、账号、角色
   ./scripts/dev-seed.sh --lookup <name>        查某账号的 tenant_id
+  ./scripts/dev-seed.sh --diagnose <name>      诊断登录失败原因（账号不存在 / 被锁）
 
 seed 可选参数：
   --slug <slug>        租户标识（默认 t-dev）
   --name <name>        租户名称（默认 本地开发租户）
   --login <name>       登录名（默认 devstudent）
-  --password <pwd>     口令（默认 Dev-local-2026）
+  --password <pwd>     口令（默认 Dev-local-2026，仅限字母数字 . _ -）
   --roles <R1,R2>      角色，逗号分隔（默认 STUDENT）
 
 示例：
   ./scripts/dev-seed.sh --login alice --roles TEACHER,APPROVER
   ./scripts/dev-seed.sh --lookup alice
+  ./scripts/dev-seed.sh --diagnose alice
 USAGE
 }
 
