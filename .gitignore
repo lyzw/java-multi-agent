@@ -34,3 +34,19 @@ secrets/
 
 # ── 依赖扫描产物 ─────────────────────────────────────────
 dependency-check-report.*
+
+# ── 前端（FE 阶段）────────────────────────────────────
+# ⚠️ node_modules 含大量文件，误提交会撑爆仓库
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+coverage/
+test-results/
+playwright-report/
+
+# ⚠️ Vite 只暴露 VITE_ 前缀变量；此处禁止误提交任何 .env.*，
+#    仅放行 .env.example 作为模板
+.env.*
+!.env.example

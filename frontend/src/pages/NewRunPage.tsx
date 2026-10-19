@@ -1,0 +1,236 @@
+/**
+ * 发起辅导页（FE-D1 F2；FE-01 P3）
+ *
+ * ⛔ 合规红线（FE-D1 §6.3）：
+ *   S-1 禁用字段（姓名/学校/班级/身份证/手机号）**根本不存在输入框**
+ *   S-2 学生标识固定提示「匿名编号，不要填姓名」
+ *   S-3 预检命中 → **阻断提交 + 高亮**，不发请求
+ *   S-4 受控数据不落 localStorage
+ *
+ * ⛔ 幂等键（FE-D1 §5）：失败重试复用同一 key；表单内容变更才换新。
+ *    否则重复创建 Run → record_weakness 重复写入 = Sev-0。
+ */
+
+import { useMemo, useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { createRun, ApiError } from '@/api/client'
+import { isIdempotencyConflict, type NormalizedError } from '@/api/errors'
+import {
+  resolveIdempotencyKey,
+  clearIdempotencyKey,
+  discardIdempotencyKey,
+} from '@/features/run/idempotency'
+import { scanForm, hasViolation, type Violation } from '@/features/compliance/scan'
+import { Field } from '@/shared/Field'
+import { ErrorView } from '@/shared/ErrorView'
+
+/**
+ * ⚠️ agentId 为占位配置。
+ * 后端无 Agent 管理接口（G2），此处由环境变量注入。
+ * 真实多 Agent 切换需后端补 GET /api/agents。
+ */
+const AGENT_ID = import.meta.env['VITE_AGENT_ID'] ?? 'default-agent'
+
+/** 白名单枚举 —— DEC-6 采集白名单：仅随机 student_id / 年级 / 学科 / 薄弱点 */
+const SUBJECTS = ['数学', '物理', '化学', '生物', '语文', '英语'] as const
+const GRADES = ['初一', '初二', '初三'] as const
+
+interface FormState {
+  studentId: string
+  subject: string
+  grade: string
+  questionText: string
+  studentSolution: string
+  correctAnswer: string
+}
+
+const EMPTY_FORM: FormState = {
+  studentId: '',
+  subject: SUBJECTS[0],
+  grade: GRADES[0],
+  questionText: '',
+  studentSolution: '',
+  correctAnswer: '',
+}
+
+export function NewRunPage(): JSX.Element {
+  const navigate = useNavigate()
+  const [form, setForm] = useState<FormState>(EMPTY_FORM)
+  const [violations, setViolations] = useState<Record<string, Violation[]>>({})
+  const [error, setError] = useState<NormalizedError | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  const update = (name: keyof FormState) => (value: string): void => {
+    setForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  /** 仅文本字段需预检；枚举字段无自由输入 */
+  const textFields = useMemo(
+    () => ({
+      studentId: form.studentId,
+      questionText: form.questionText,
+      studentSolution: form.studentSolution,
+      correctAnswer: form.correctAnswer,
+    }),
+    [form.studentId, form.questionText, form.studentSolution, form.correctAnswer],
+  )
+
+  const isComplete = useMemo(
+    () =>
+      form.studentId.trim().length > 0 &&
+      form.questionText.trim().length > 0 &&
+      form.studentSolution.trim().length > 0 &&
+      form.correctAnswer.trim().length > 0,
+    [form],
+  )
+
+  const handleSubmit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault()
+    setError(null)
+
+    // ⛔ S-3 预检先行：命中即阻断，不发请求
+    const found = scanForm(textFields)
+    setViolations(found)
+    if (hasViolation(found)) {
+      setError({
+        status: 400,
+        code: 'INVALID_REQUEST',
+        message: '提交内容包含不可采集的信息，请修改后重试',
+        fieldErrors: {},
+      })
+      return
+    }
+
+    setSubmitting(true)
+    const input: Record<string, unknown> = {
+      studentId: form.studentId.trim(),
+      subject: form.subject,
+      grade: form.grade,
+      questionText: form.questionText.trim(),
+      studentSolution: form.studentSolution.trim(),
+      correctAnswer: form.correctAnswer.trim(),
+    }
+
+    try {
+      const idempotencyKey = resolveIdempotencyKey({ agentId: AGENT_ID, input })
+      const response = await createRun({
+        idempotencyKey,
+        agentId: AGENT_ID,
+        input,
+      })
+      clearIdempotencyKey()
+      navigate(`/runs/${response.runId}`, { replace: true })
+    } catch (cause) {
+      if (cause instanceof ApiError) {
+        // ⛔ 409 时清除 key 但**不自动换 key 重试** —— 可能造成重复 Run
+        if (isIdempotencyConflict(cause.normalized)) {
+          discardIdempotencyKey()
+        }
+        setError(cause.normalized)
+      } else {
+        setError({
+          status: 0,
+          code: 'UNKNOWN',
+          message: '提交失败，请稍后重试',
+          fieldErrors: {},
+        })
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <main className="new-run">
+      <h1>发起辅导</h1>
+      <p className="muted">
+        请提交一道错题。我们只采集随机匿名编号、年级、学科与解题过程，
+        不会收集姓名、学校、班级等身份信息。
+      </p>
+
+      <form onSubmit={(e) => void handleSubmit(e)} noValidate>
+        <Field
+          name="studentId"
+          label="学生匿名编号"
+          required
+          value={form.studentId}
+          onChange={update('studentId')}
+          violations={violations['studentId']}
+          hint="请填写平台生成的匿名编号，不要填姓名"
+        />
+
+        <div className="field">
+          <label htmlFor="subject">
+            学科<span aria-hidden="true"> *</span>
+          </label>
+          <select
+            id="subject"
+            name="subject"
+            value={form.subject}
+            onChange={(e) => update('subject')(e.target.value)}
+          >
+            {SUBJECTS.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label htmlFor="grade">
+            年级<span aria-hidden="true"> *</span>
+          </label>
+          <select
+            id="grade"
+            name="grade"
+            value={form.grade}
+            onChange={(e) => update('grade')(e.target.value)}
+          >
+            {GRADES.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <Field
+          name="questionText"
+          label="题目内容"
+          required
+          multiline
+          value={form.questionText}
+          onChange={update('questionText')}
+          violations={violations['questionText']}
+        />
+
+        <Field
+          name="studentSolution"
+          label="我的解题过程"
+          required
+          multiline
+          value={form.studentSolution}
+          onChange={update('studentSolution')}
+          violations={violations['studentSolution']}
+        />
+
+        <Field
+          name="correctAnswer"
+          label="已知正确答案"
+          required
+          multiline
+          value={form.correctAnswer}
+          onChange={update('correctAnswer')}
+          violations={violations['correctAnswer']}
+        />
+
+        <button type="submit" disabled={submitting || !isComplete}>
+          {submitting ? '提交中…' : '开始分析'}
+        </button>
+      </form>
+
+      {error !== null ? <ErrorView error={error} /> : null}
+    </main>
+  )
+}
