@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.worker.execute;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -81,6 +82,9 @@ class RunExecutionLoopTest {
         String committedState;
         long committedToken = -1;
         int commitCount;
+        /** ⚠️ 记录续租传入的身份，供「身份一致性」断言（P3-D02 F-1）。 */
+        String lastRenewWorkerId;
+        int renewCount;
 
         @Override public List<LeasedTask> claimTasks(String t, String w, Duration d, int l) {
             return List.of();
@@ -89,6 +93,8 @@ class RunExecutionLoopTest {
             return Optional.empty();
         }
         @Override public boolean renewLease(String t, String r, String w, long f, Duration d) {
+            renewCount++;
+            lastRenewWorkerId = w;
             return renewSucceeds;
         }
         @Override public boolean releaseLease(String t, String r, String w, long f) { return true; }
@@ -101,6 +107,17 @@ class RunExecutionLoopTest {
         @Override public boolean isCurrentGeneration(String t, String r, long f) {
             return generationValid;
         }
+    }
+
+    /**
+     * 统一构造：workerId 固定为 {@code w-1}。
+     *
+     * <p>⚠️ P3-D02 F-1 修复后 workerId 是构造参数 ——
+     * 所有用例必须经此工厂创建，避免散落的构造调用再次出现身份分叉。
+     */
+    private static RunExecutionLoop loop(ModelGateway gw, RunClaimPort port,
+                                         ToolInvocationGate gate) {
+        return new RunExecutionLoop(gw, port, gate, Duration.ofSeconds(30), "w-1");
     }
 
     private static ModelGateway modelReturning(ModelResponse response) {
@@ -129,10 +146,10 @@ class RunExecutionLoopTest {
             FakeClaimPort port = new FakeClaimPort();
             port.generationValid = false;
 
-            var loop = new RunExecutionLoop(modelReturning(textResponse("ok")),
-                    port, new ToolInvocationGate(List.of(), allowAll(),
+            var loop = loop(modelReturning(textResponse("ok")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true), Duration.ofSeconds(30));
+                            (t, r, n) -> true));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "一元二次方程"));
@@ -151,10 +168,10 @@ class RunExecutionLoopTest {
         @DisplayName("✅ 正常执行 → SUCCEEDED 且携带当前世代提交")
         void normalExecutionSucceeds() {
             FakeClaimPort port = new FakeClaimPort();
-            var loop = new RunExecutionLoop(modelReturning(textResponse("x=2 或 x=3")),
-                    port, new ToolInvocationGate(List.of(), allowAll(),
+            var loop = loop(modelReturning(textResponse("x=2 或 x=3")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true), Duration.ofSeconds(30));
+                            (t, r, n) -> true));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "一元二次方程"));
@@ -164,6 +181,52 @@ class RunExecutionLoopTest {
             assertThat(port.committedToken)
                     .as("提交必须携带当前世代，否则 fencing 失效")
                     .isEqualTo(1L);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 续租身份 = 构造时的 workerId（P3-D02 F-1 回归）")
+        void renewUsesConstructedWorkerId() {
+            FakeClaimPort port = new FakeClaimPort();
+            // 模型第一次返回工具调用（触发续租），第二次返回文本（完成）
+            int[] step = {0};
+            ModelGateway gw = request -> {
+                if (step[0]++ == 0) {
+                    return new ModelResponse("", Map.of(
+                            "c1", new ModelResponse.ToolCallRequest(
+                                    "recording_tool", Map.of(), "c1")),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            };
+
+            var outcome = loop(gw, port,
+                    new ToolInvocationGate(List.of(new RecordingTool()), allowAll(),
+                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            (t, r, n) -> true))
+                    .execute(TENANT, task(), agentConfig(), snapshot(5),
+                            Map.of("q", "x"));
+
+            assertThat(outcome.kind()).isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+            assertThat(port.renewCount)
+                    .as("多步执行第二步前必须续租")
+                    .isEqualTo(1);
+            assertThat(port.lastRenewWorkerId)
+                    .as("⚠️ F-1：续租身份必须与领取身份一致。"
+                            + "旧实现从 task 拼凑 'worker-'+token，lease_owner 永不匹配，"
+                            + "所有多步 Run 被误判为已被接管")
+                    .isEqualTo("w-1");
+        }
+
+        @Test
+        @DisplayName("⚠️ workerId 为空 → 构造即拒绝（fail-fast）")
+        void blankWorkerIdRejected() {
+            assertThatThrownBy(() -> new RunExecutionLoop(
+                    modelReturning(textResponse("x")), new FakeClaimPort(),
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            (t, r, n) -> true), Duration.ofSeconds(30), " "))
+                    .isInstanceOf(IllegalArgumentException.class);
         }
     }
 
@@ -179,10 +242,10 @@ class RunExecutionLoopTest {
                 throw new ModelGateway.ModelGatewayException(
                         ModelGateway.ModelErrorKind.TIMEOUT, "timeout");
             };
-            var loop = new RunExecutionLoop(gw, port,
+            var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true), Duration.ofSeconds(30));
+                            (t, r, n) -> true));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "x"));
@@ -200,10 +263,10 @@ class RunExecutionLoopTest {
                 throw new ModelGateway.ModelGatewayException(
                         ModelGateway.ModelErrorKind.UNAUTHORIZED, "invalid key");
             };
-            var loop = new RunExecutionLoop(gw, port,
+            var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true), Duration.ofSeconds(30));
+                            (t, r, n) -> true));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "x"));
@@ -229,11 +292,11 @@ class RunExecutionLoopTest {
                     new ModelResponse.ModelUsage(10, 5),
                     ModelResponse.FinishReason.TOOL_CALLS);
 
-            var loop = new RunExecutionLoop(gw, port,
+            var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(new UnknownResultTool()),
                             allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true), Duration.ofSeconds(30));
+                            (t, r, n) -> true));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "x"));
@@ -267,11 +330,11 @@ class RunExecutionLoopTest {
                 return textResponse("完成");
             };
 
-            var loop = new RunExecutionLoop(gw, port,
+            var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(new DefinitelyFailedTool()),
                             allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true), Duration.ofSeconds(30));
+                            (t, r, n) -> true));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "x"));
@@ -409,10 +472,10 @@ class RunExecutionLoopTest {
                         new ModelResponse.ModelUsage(1, 1),
                         ModelResponse.FinishReason.TOOL_CALLS);
             };
-            var loop = new RunExecutionLoop(gw, port,
+            var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(new RecordingTool()), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true), Duration.ofSeconds(30));
+                            (t, r, n) -> true));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(3),
                     Map.of("q", "x"));

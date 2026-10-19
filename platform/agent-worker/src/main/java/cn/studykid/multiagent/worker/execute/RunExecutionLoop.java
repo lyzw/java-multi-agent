@@ -33,15 +33,28 @@ public class RunExecutionLoop {
     private final RunClaimPort claimPort;
     private final ToolInvocationGate toolGate;
     private final Duration leaseDuration;
+    /**
+     * 本 Worker 实例的身份，必须与领取时传给 {@code claimTasks}/
+     * {@code claimSpecificRun} 的 workerId <b>完全一致</b>——
+     * {@code renewLease} 的 WHERE 子句按 {@code lease_owner} 匹配，
+     * 身份不一致会导致续租永远失败，多步 Run 在第二步被误判为「已被接管」
+     * （P3-D02 §2 F-1）。
+     */
+    private final String workerId;
 
     public RunExecutionLoop(@NonNull ModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
-                             @NonNull Duration leaseDuration) {
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
         this.leaseDuration = leaseDuration;
+        if (workerId == null || workerId.isBlank()) {
+            throw new IllegalArgumentException("workerId 不能为空（fencing 续租身份）");
+        }
+        this.workerId = workerId;
     }
 
     /**
@@ -111,8 +124,10 @@ public class RunExecutionLoop {
                 }
 
                 // ── §5 续租（长任务必须，否则会被接管）──────────────────
+                // ⚠️ 身份必须是构造时的 workerId（与领取时一致），
+                //    不可从 task 现场拼凑 —— 那会让 lease_owner 永远不匹配（F-1）
                 if (!claimPort.renewLease(tenantId, task.runId(),
-                        currentWorker(task), task.fencingToken(), leaseDuration)) {
+                        workerId, task.fencingToken(), leaseDuration)) {
                     log.info("续租失败（已被接管），停止执行: runId={}", task.runId());
                     return ExecutionOutcome.skippedStaleGeneration();
                 }
@@ -185,10 +200,6 @@ public class RunExecutionLoop {
 
     private static String renderInput(Map<String, Object> input) {
         return String.valueOf(input);
-    }
-
-    private static String currentWorker(RunClaimPort.LeasedTask task) {
-        return "worker-" + task.fencingToken();
     }
 
     private static String escape(String s) {
