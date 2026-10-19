@@ -38,6 +38,16 @@
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-infrastructure</artifactId>
     </dependency>
+    <!--
+      健康检查端点 /actuator/health。
+      ⚠️ SecurityConfiguration 已将其列为匿名白名单，但此前缺依赖导致
+         该端点不存在，请求落入静态资源处理器抛 500（NoResourceFoundException）。
+      仅暴露 health（最小暴露面）；其余端点保持关闭。
+    -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
   </dependencies>
 
   <build>

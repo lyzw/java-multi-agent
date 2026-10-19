@@ -57,24 +57,28 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                 FROM idempotency_record
                 WHERE tenant_id = ?::uuid AND key_namespace = ? AND idempotency_key = ?
                 """;
-        try (Connection conn = tenantConnection(tenantId);
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, tenantId);
-            ps.setString(2, key.namespace());
-            ps.setString(3, key.keyValue());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    conn.rollback();
-                    return IdempotencyDecision.firstExecution("pending");
+        // ⚠️ P2-D05：租约区分「自开」与「复用外层」——
+        //    复用时不得 rollback/close，否则摧毁外层事务。
+        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
+            Connection conn = lease.connection();
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, tenantId);
+                ps.setString(2, key.namespace());
+                ps.setString(3, key.keyValue());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        lease.rollbackQuietly();
+                        return IdempotencyDecision.firstExecution("pending");
+                    }
+                    String storedDigest = rs.getString("request_digest");
+                    String resourceId = rs.getString("resource_id");
+                    lease.rollbackQuietly();
+                    if (digest.value().equals(storedDigest)) {
+                        return IdempotencyDecision.replay(resourceId);
+                    }
+                    log.warn("幂等冲突: tenant={}, namespace={}", tenantId, key.namespace());
+                    return IdempotencyDecision.conflict();
                 }
-                String storedDigest = rs.getString("request_digest");
-                String resourceId = rs.getString("resource_id");
-                conn.rollback();
-                if (digest.value().equals(storedDigest)) {
-                    return IdempotencyDecision.replay(resourceId);
-                }
-                log.warn("幂等冲突: tenant={}, namespace={}", tenantId, key.namespace());
-                return IdempotencyDecision.conflict();
             }
         } catch (SQLException e) {
             throw new IllegalStateException("查询幂等记录失败", e);
@@ -93,7 +97,28 @@ public class JdbcRunCreationRepository implements RunCreationPort {
         // 消息体安全校验：即便调用方误传敏感字段，也在入库前拦下
         OutboxMessage.assertPayloadSafe(agentPayload.toPayload());
 
-        // 使用单个连接执行全部写入 → 同事务原子提交
+        // ⚠️ P2-D05 §2 D-1：优先复用外层事务连接。
+        //    此前此处无条件 dataSource.getConnection() 并自行 commit，
+        //    导致应用层 TransactionRunner 的事务语义形同虚设——
+        //    外层即使开了事务，本方法的写入也不在其中，回滚会漏掉它。
+        //    现改为：外层有连接则复用（提交权归外层），否则自开自提交。
+        if (TransactionalConnectionHolder.isActive()) {
+            Connection outer = TransactionalConnectionHolder.current();
+            try {
+                insertAll(outer, tenantId, runId, snapshotId, key, digest,
+                        inputPayload, correlationId, agentPayload);
+                // ⚠️ 不在此处 commit —— 外层事务尚未结束，
+                //    提前提交会让外层后续失败时无法回滚本次写入。
+                return runId;
+            } catch (SQLException | RuntimeException e) {
+                log.warn("Run 原子写入失败（外层事务将回滚）: runId={}, 原因={}",
+                        runId, e.getMessage());
+                throw e instanceof RuntimeException re
+                        ? re : new IllegalStateException("Run 原子写入失败", e);
+            }
+        }
+
+        // 无外层事务 → 自开连接，完整管理提交与回滚
         try (Connection conn = dataSource.getConnection()) {
             boolean prevAutoCommit = conn.getAutoCommit();
             conn.setAutoCommit(false);
@@ -101,14 +126,8 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                 // 绑定租户上下文（RLS 前置条件）——必须在任何业务 SQL 之前
                 TenantSessionBinder.bind(conn, systemContext(tenantId));
 
-                // 1) Run
-                insertRun(conn, tenantId, runId, snapshotId, key, digest, inputPayload, correlationId);
-                // 2) 初始事件（SSE 续传起点，sequence_no 从 1 开始）
-                insertInitialEvent(conn, tenantId, runId, correlationId);
-                // 3) 幂等记录
-                insertIdempotencyRecord(conn, tenantId, key, digest, runId);
-                // 4) Outbox（唤醒信号）
-                insertOutbox(conn, tenantId, runId, agentPayload);
+                insertAll(conn, tenantId, runId, snapshotId, key, digest,
+                        inputPayload, correlationId, agentPayload);
 
                 conn.commit();
                 if (log.isDebugEnabled()) {
@@ -134,6 +153,28 @@ public class JdbcRunCreationRepository implements RunCreationPort {
         } catch (SQLException e) {
             throw new IllegalStateException("获取数据库连接失败", e);
         }
+    }
+
+    /**
+     * 四者同写入（红线 3）。
+     *
+     * <p>⚠️ <b>不自行提交</b>：提交与回滚由调用方（事务边界）决定。
+     * 若在此处 commit，异常路径上的回滚就会被绕过，
+     * 留下「Run 已写但 Outbox 未写」的半成品状态——
+     * 表现为 Run 永远不会被 Worker 领取，任务静默卡死。
+     */
+    private void insertAll(Connection conn, String tenantId, String runId, String snapshotId,
+                           IdempotencyKey key, RequestDigest digest,
+                           Map<String, Object> inputPayload, String correlationId,
+                           OutboxMessage agentPayload) throws SQLException {
+        // 1) Run
+        insertRun(conn, tenantId, runId, snapshotId, key, digest, inputPayload, correlationId);
+        // 2) 初始事件（SSE 续传起点，sequence_no 从 1 开始）
+        insertInitialEvent(conn, tenantId, runId, correlationId);
+        // 3) 幂等记录
+        insertIdempotencyRecord(conn, tenantId, key, digest, runId);
+        // 4) Outbox（唤醒信号）
+        insertOutbox(conn, tenantId, runId, agentPayload);
     }
 
     private void insertRun(Connection conn, String tenantId, String runId, String snapshotId,
@@ -215,26 +256,28 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                        lease_owner, lease_expires_at, created_at
                 FROM run WHERE tenant_id = ? AND run_id = ?::uuid
                 """;
-        try (Connection conn = tenantConnection(tenantId);
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, tenantId);
-            ps.setString(2, runId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    conn.rollback();
-                    return null;
+        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
+            Connection conn = lease.connection();
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, tenantId);
+                ps.setString(2, runId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        lease.rollbackQuietly();
+                        return null;
+                    }
+                    Timestamp leaseExp = rs.getTimestamp("lease_expires_at");
+                    RunRecord record = new RunRecord(
+                            rs.getString("run_id"),
+                            rs.getString("state"),
+                            rs.getInt("attempt"),
+                            rs.getLong("fencing_token"),
+                            rs.getString("lease_owner"),
+                            leaseExp == null ? null : leaseExp.toInstant(),
+                            rs.getTimestamp("created_at").toInstant());
+                    lease.rollbackQuietly();
+                    return record;
                 }
-                Timestamp leaseExp = rs.getTimestamp("lease_expires_at");
-                RunRecord record = new RunRecord(
-                        rs.getString("run_id"),
-                        rs.getString("state"),
-                        rs.getInt("attempt"),
-                        rs.getLong("fencing_token"),
-                        rs.getString("lease_owner"),
-                        leaseExp == null ? null : leaseExp.toInstant(),
-                        rs.getTimestamp("created_at").toInstant());
-                conn.rollback();
-                return record;
             }
         } catch (SQLException e) {
             throw new IllegalStateException("查询 Run 失败", e);
@@ -251,21 +294,23 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                 LIMIT ?
                 """;
         List<PendingOutbox> events = new ArrayList<>();
-        try (Connection conn = tenantConnection(tenantId);
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, tenantId);
-            ps.setInt(2, limit);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    events.add(new PendingOutbox(
-                            rs.getString("outbox_id"),
-                            rs.getString("run_id"),
-                            rs.getString("event_type"),
-                            parseJsonObject(rs.getString("payload")),
-                            rs.getInt("attempts")));
+        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
+            Connection conn = lease.connection();
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, tenantId);
+                ps.setInt(2, limit);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        events.add(new PendingOutbox(
+                                rs.getString("outbox_id"),
+                                rs.getString("run_id"),
+                                rs.getString("event_type"),
+                                parseJsonObject(rs.getString("payload")),
+                                rs.getInt("attempts")));
+                    }
                 }
             }
-            conn.rollback();
+            lease.rollbackQuietly();
         } catch (SQLException e) {
             throw new IllegalStateException("查询待发布 Outbox 失败", e);
         }
@@ -280,13 +325,15 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                 SET state = 'PUBLISHED', published_at = ?
                 WHERE tenant_id = ?::uuid AND outbox_id = ?::uuid
                 """;
-        try (Connection conn = tenantConnection(tenantId);
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setTimestamp(1, Timestamp.from(publishedAt));
-            ps.setString(2, tenantId);
-            ps.setString(3, outboxId);
-            ps.executeUpdate();
-            conn.commit();
+        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
+            Connection conn = lease.connection();
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setTimestamp(1, Timestamp.from(publishedAt));
+                ps.setString(2, tenantId);
+                ps.setString(3, outboxId);
+                ps.executeUpdate();
+                lease.commitQuietly();
+            }
         } catch (SQLException e) {
             throw new IllegalStateException("标记 Outbox 已发布失败", e);
         }
@@ -300,13 +347,15 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                 SET state = 'FAILED', attempts = attempts + 1, last_error = ?
                 WHERE tenant_id = ?::uuid AND outbox_id = ?::uuid
                 """;
-        try (Connection conn = tenantConnection(tenantId);
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, error == null ? "unknown" : error.substring(0, Math.min(500, error.length())));
-            ps.setString(2, tenantId);
-            ps.setString(3, outboxId);
-            ps.executeUpdate();
-            conn.commit();
+        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
+            Connection conn = lease.connection();
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, error == null ? "unknown" : error.substring(0, Math.min(500, error.length())));
+                ps.setString(2, tenantId);
+                ps.setString(3, outboxId);
+                ps.executeUpdate();
+                lease.commitQuietly();
+            }
         } catch (SQLException e) {
             throw new IllegalStateException("标记 Outbox 失败状态失败", e);
         }
@@ -328,11 +377,29 @@ public class JdbcRunCreationRepository implements RunCreationPort {
      * <p>调用方负责 commit/rollback；本方法不改变原连接的自动提交设置语义，
      * 由 {@link #closeAndRestore} 统一还原。
      */
-    private Connection tenantConnection(String tenantId) throws SQLException {
+    /**
+     * 取租户连接：<b>优先复用外层事务连接</b>（P2-D05 §2 D-1）。
+     *
+     * <p>复用而非另开的原因：若外层事务中另开连接，
+     * 本方法读到的可能是<b>外层未提交前的旧数据</b>，
+     * 造成「自己刚写完却查不到」的假象。
+     *
+     * <p>⚠️ 复用时<b>不重复绑定租户</b>：外层连接已绑定，
+     * 重复 {@code set_config} 无害但会掩盖「绑定被谁做的」这一事实。
+     *
+     * @return 连接；调用方负责 commit/rollback 与关闭
+     */
+    private TenantConnectionLease tenantConnection(String tenantId) throws SQLException {
+        // ⚠️ RLS 铁律：外层已有连接时复用，绝不另开。
+        //    另开会导致「写入在事务 A、读取在事务 B」，原子性失效。
+        Connection outer = TransactionalConnectionHolder.current();
+        if (outer != null) {
+            return TenantConnectionLease.borrowed(outer);
+        }
         Connection conn = dataSource.getConnection();
         conn.setAutoCommit(false);
         TenantSessionBinder.bind(conn, systemContext(tenantId));
-        return conn;
+        return TenantConnectionLease.open(conn);
     }
 
     private static TenantContext systemContext(String tenantId) {

@@ -144,3 +144,20 @@ auth:
 dr:
   rpo: 24h
   rto: 4h
+
+
+# ── 健康检查（D-001 端到端 / SRE 探针）────────────────────────────
+# ⚠️ 仅暴露 health，最小暴露面；其余端点保持关闭。
+#    匿名可访问已在 SecurityConfiguration.PUBLIC_ENDPOINTS 中放行。
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health"
+  endpoint:
+    health:
+      # 匿名访问仅返回 status（不泄露磁盘/DB 等细节）
+      show-details: "never"
+      probes:
+        # 启用 liveness/readiness 分组，供 k8s 探针使用
+        enabled: "true"

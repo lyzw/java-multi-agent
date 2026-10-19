@@ -1,8 +1,12 @@
 package cn.studykid.multiagent.bootstrap.config;
 
+import javax.sql.DataSource;
+
+import java.sql.Connection;
 import java.time.Clock;
 import java.util.UUID;
 
+import org.jspecify.annotations.NonNull;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -15,6 +19,7 @@ import cn.studykid.multiagent.core.compliance.ModelProviders;
 import cn.studykid.multiagent.core.compliance.ZeroRetentionGate;
 import cn.studykid.multiagent.core.compliance.ZeroRetentionRegistry;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
 import cn.studykid.multiagent.infrastructure.security.AuthenticationService;
 import cn.studykid.multiagent.infrastructure.security.RoleBasedAuthorizationService;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
@@ -39,26 +44,59 @@ import cn.studykid.multiagent.ports.security.AuthorizationService;
 public class ApplicationConfiguration {
 
     /**
-     * 事务执行器。
+     * 事务执行器（P2-D5 生产实现）。
+     *
+     * <p>⚠️ <b>此处曾是「直接抛异常」的占位</b>，导致
+     * {@code POST /api/runs} <b>必然 500</b>，端到端链路从未跑通。
+     *
+     * <p><b>为什么不用 Spring 的 {@code TransactionTemplate}</b>：
+     * 事务管理器只管连接复用，<b>不管 RLS 租户绑定</b>。
+     * 本项目必须在事务内执行 {@code set_config('app.tenant_id', ..., true)}，
+     * 且该绑定必须在任何业务 SQL <b>之前</b>完成。
+     * 用 Spring 事务管理器需要在事务内插一个 hook，
+     * 反而不如显式持有连接来得可控 —— 这正是 P2-D05 §2 D-1 的取舍。
      *
      * <p>⚠️ <b>RLS 铁律</b>：实现必须「关自动提交 + 绑定租户 + commit/rollback」。
      * 少了任何一步，{@code set_config(..., is_local=true)} 立即失效，
      * 表现为「写入成功但查询恒为 0」—— 本项目曾有 6 处这样的缺陷。
-     *
-     * <p>TODO(P2-D5)：改用 Spring {@code TransactionTemplate} +
-     * {@code TenantSessionBinder}，避免手写 JDBC 事务。
      */
     @Bean
-    public RunCreationService.TransactionRunner transactionRunner() {
+    public RunCreationService.TransactionRunner transactionRunner(DataSource dataSource) {
         return new RunCreationService.TransactionRunner() {
             @Override
-            public <T> T execute(String tenantId,
+            public <T> T execute(@NonNull String tenantId,
                                  RunCreationService.TransactionRunner.TransactionalAction<T> action) {
-                throw new IllegalStateException(
-                        "TransactionRunner 生产实现待接入（P2-D5）。"
-                                + "RLS 要求事务内绑定租户，该路径不可省略。");
+                // ⚠️ 租户 ID 来自认证上下文（RunCreationService 传入），
+                //    **不是**来自请求参数。此处不得引入任何客户端输入。
+                return TransactionalConnectionHolder.inTransaction(
+                        dataSource,
+                        systemContext(tenantId),
+                        // ⚠️ TxAction<T> 声明 throws SQLException，
+                        //    而 TransactionalAction<T> 不允许 ——
+                        //    故必须用匿名类适配，不能直接传 lambda 引用。
+                        new TransactionalConnectionHolder.TxAction<T>() {
+                            @Override
+                            public T run(@NonNull Connection connection) {
+                                // ⚠️ action.run() 不声明受检异常，
+                                //    但实现内部可能包了 IllegalStateException —— 原样透传
+                                return action.run();
+                            }
+                        });
             }
         };
+    }
+
+    /**
+     * 事务内使用的系统上下文。
+     *
+     * <p>⚠️ <b>为何用「系统」身份而非业务主体</b>：
+     * 事务边界需要的是<b>RLS 租户绑定</b>，而 RLS 只依据
+     * {@code app.tenant_id}，与角色无关。用空角色集的系统身份
+     * 可避免误导——让人误以为这里做了授权检查。
+     * <b>授权在 {@code RunController} 中已完成，此处绝不重复授权</b>。
+     */
+    private static TenantContext systemContext(String tenantId) {
+        return new TenantContext(tenantId, "system", java.util.Set.of(), 0L);
     }
 
     /**
@@ -67,7 +105,7 @@ public class ApplicationConfiguration {
      * <p>⚠️ <b>P1 内存实现</b>：{@link RoleBasedAuthorizationService} 用内存维护
      * {@code authzVersion}，<b>多实例部署时状态不共享</b> ——
      * 实例 A 撤销的授权，实例 B 不知情。
-     * 生产须换数据库实现（D-001 后续项）。
+     * 生产须换数据库实现（D-001 后续项 / P2-D05 §6 L3）。
      */
     @Bean
     public AuthorizationService authorizationService() {
@@ -82,6 +120,9 @@ public class ApplicationConfiguration {
      * 确认是运营事实，应由配置驱动。
      * 未登记供应商一律拒绝（fail-closed），
      * 接入真实数据前须在配置中登记。
+     *
+     * <p>⚠️ 这意味着<b>所有供应商调用当前均被拒绝</b>，
+     * 这是设计内的 fail-closed 行为，不是缺陷。
      */
     @Bean
     public ZeroRetentionGate zeroRetentionGate() {
@@ -138,11 +179,14 @@ public class ApplicationConfiguration {
             public String providerId() {
                 // ⚠️ 多供应商场景应按路由选择。当前返回第一家 ——
                 //    未在零保留注册表登记的供应商会被闸门拒绝，不会被错误放行。
+                //    已知限制：P2-D05 §6 L4。
                 return ModelProviders.DEEPSEEK;
             }
 
             @Override
             public String snapshotId() {
+                // ⚠️ 每次随机生成 → 同一幂等键重放时快照不一致。
+                //    已知限制：P2-D05 §6 L5。
                 return UUID.randomUUID().toString();
             }
 
