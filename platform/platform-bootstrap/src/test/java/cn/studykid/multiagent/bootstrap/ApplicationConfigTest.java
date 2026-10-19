@@ -103,6 +103,18 @@ class ApplicationConfigTest {
     }
 
     @Test
+    @DisplayName("⚠️ 预算预留额必须为正（P3-D04：缺失/非正即 fail-closed 拒绝工具执行）")
+    void budgetReserveAmountIsPositive() {
+        String raw = load().get("agent.budget.reserve-per-tool-call");
+        assertThat(raw)
+                .as("⚠️ 键不存在：预留额缺失将导致全部工具调用被拒（fail-closed）")
+                .isNotBlank();
+        assertThat(new java.math.BigDecimal(raw).signum())
+                .as("预留额必须为正数，否则预留恒被拒（业务不可用）或被按 0 放行（成本失控）")
+                .isPositive();
+    }
+
+    @Test
     @DisplayName("DEC-11 审批配置：WRITE_EXTERNAL 必须 REQUIRED（不能被放松）")
     void approvalMatrixNotRelaxed() {
         Map<String, String> props = load();

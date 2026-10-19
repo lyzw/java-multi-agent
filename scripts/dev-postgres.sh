@@ -125,18 +125,29 @@ cmd_start() {
 
 cmd_migrate() {
   container_running || die "容器未运行"
-  say "执行 DDL"
-  docker cp "$MIGRATION_DIR/V1__baseline_schema.sql" "$CONTAINER_NAME":/tmp/v1.sql >/dev/null
-  local errs
-  errs=$(psql_super -v ON_ERROR_STOP=1 -f /tmp/v1.sql 2>&1 | grep -c "^ERROR" || true)
-  [ "$errs" -eq 0 ] || die "DDL 执行失败（$errs 个错误），请查看日志"
+  # ⚠️ 必须按版本号顺序应用**全部**迁移，不能只跑 V1。
+  #    V2（画像）/ V3（账号）/ V4（预算预留唯一性）缺失时，
+  #    集成测试会因「表不存在」失败，而报错点离真正的缺失原因很远
+  #    ——本项目已因此误判过「约束全部失效」。
+  local version
+  for version in 1 2 3 4; do
+    local f
+    f=$(ls "$MIGRATION_DIR"/V${version}__*.sql 2>/dev/null | head -1) || true
+    [ -n "$f" ] || continue
+    say "执行 V${version}：$(basename "$f")"
+    docker cp "$f" "$CONTAINER_NAME":/tmp/migrate_v${version}.sql >/dev/null
+    local errs
+    errs=$(psql_super -v ON_ERROR_STOP=1 -f /tmp/migrate_v${version}.sql 2>&1 | grep -c "^ERROR" || true)
+    [ "$errs" -eq 0 ] || die "V${version} 执行失败（$errs 个错误），请查看日志"
+  done
 
   say "执行种子数据（幂等）"
   docker cp "$MIGRATION_DIR/verify/V1_seed.sql" "$CONTAINER_NAME":/tmp/seed.sql >/dev/null
+  local errs
   errs=$(psql_super -f /tmp/seed.sql 2>&1 | grep -c "^ERROR" || true)
   [ "$errs" -eq 0 ] || warn "种子数据有 $errs 个错误（可重复执行，通常可忽略）"
 
-  say "数据概览：$(psql_super -tAc "SELECT (SELECT count(*) FROM tenant)||' 租户, '||(SELECT count(*) FROM agent)||' agent, '||(SELECT count(*) FROM run)||' run, '||(SELECT count(*) FROM tool_operation)||' tool_operation'")"
+  say "数据概览：$(psql_super -tAc "SELECT (SELECT count(*) FROM tenant)||' 租户, '||(SELECT count(*) FROM agent)||' agent, '||(SELECT count(*) FROM run)||' run, '||(SELECT count(*) FROM tool_operation)||' tool_operation, '||(SELECT count(*) FROM budget_account)||' budget_account'")"
 }
 
 # 授权给非特权角色。

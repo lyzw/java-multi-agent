@@ -24,6 +24,7 @@ import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
+import cn.studykid.multiagent.ports.persistence.BudgetPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
@@ -195,6 +196,107 @@ class RunExecutionLoopTest {
         }
     }
 
+    /**
+     * 内存预算替身（P3-D04）。
+     *
+     * <p>⚠️ <b>不可退化为 lambda</b>：D4 之前闸门持有的是返回 boolean 的
+     * {@code BudgetReserver}，测试里写 {@code (t, r, n) -> true} 恒真放行——
+     * 那正是「预算闸门从未真正生效」的根源。端口改为
+     * {@link BudgetPort} 后（预留 + 结算 + 释放 + 查询），
+     * lambda 无法表达，<b>替身被强制实现</b>：预算失败路径必须可构造。
+     *
+     * <p>替身同样要让契约可证伪：
+     * <ul>
+     *   <li>{@code granted} 可关（构造「额度不足 / 未开通账户」）；</li>
+     *   <li>{@code reserveCalls} 计数（证明预算环节真的被调用）；</li>
+     *   <li>结算/释放各计数（证明三种结局的处置分支都走到了）；</li>
+     *   <li>UNKNOWN 分支<b>不</b>结算也不释放——可在断言中核对。</li>
+     * </ul>
+     */
+    private static final class InMemoryBudget implements BudgetPort {
+
+        final Map<String, Reservation> byOperation = new java.util.LinkedHashMap<>();
+        int reserveCalls;
+        int settleCalls;
+        int releaseCalls;
+        /** false = 预留被拒（模拟额度不足 / 未开通账户） */
+        boolean granted = true;
+        /** true = 预留层抛异常（验证 fail-closed） */
+        boolean reserveThrows;
+
+        @Override public ReserveOutcome reserve(String tenantId, String runId,
+                String operationId, java.math.BigDecimal amount) {
+            reserveCalls++;
+            if (reserveThrows) {
+                throw new IllegalStateException("模拟预算服务故障");
+            }
+            if (!granted) {
+                return ReserveOutcome.INSUFFICIENT;
+            }
+            String key = operationId == null ? "anon-" + reserveCalls : operationId;
+            Reservation existing = byOperation.get(key);
+            if (existing != null) {
+                // ⚠️ 与真实实现一致：同 operation 重复预留复用既有预留
+                return ReserveOutcome.REPLAYED;
+            }
+            String rid = UUID.randomUUID().toString();
+            byOperation.put(key, new Reservation(rid, runId, operationId, amount,
+                    java.math.BigDecimal.ZERO, States.RESERVED, "CNY"));
+            return ReserveOutcome.RESERVED;
+        }
+
+        @Override public boolean settle(String tenantId, String reservationId,
+                java.math.BigDecimal actualAmount, String modelId) {
+            settleCalls++;
+            return true;
+        }
+
+        @Override public boolean release(String tenantId, String reservationId,
+                String reason) {
+            releaseCalls++;
+            return true;
+        }
+
+        @Override public Optional<Reservation> findByOperation(String tenantId,
+                String operationId) {
+            return Optional.ofNullable(byOperation.get(operationId));
+        }
+
+        @Override public List<OrphanedReservation> findOrphaned(String tenantId) {
+            return List.of();
+        }
+
+        @Override public Optional<AccountSnapshot> accountSnapshot(String tenantId,
+                String currency) {
+            return Optional.of(new AccountSnapshot("a", currency,
+                    java.math.BigDecimal.valueOf(100), java.math.BigDecimal.ZERO,
+                    java.math.BigDecimal.ZERO));
+        }
+
+        @Override public boolean isConsistent(String tenantId, String currency) {
+            return true;
+        }
+    }
+
+    /** 预算充足且行为正常的替身工厂。 */
+    private static InMemoryBudget budget() {
+        return new InMemoryBudget();
+    }
+
+    /** 预算被拒的替身工厂（额度不足 / 未开通账户）。 */
+    private static InMemoryBudget deniedBudget() {
+        InMemoryBudget b = new InMemoryBudget();
+        b.granted = false;
+        return b;
+    }
+
+    /** 预留层抛异常的替身工厂（验证 fail-closed 而非降级放行）。 */
+    private static InMemoryBudget brokenBudget() {
+        InMemoryBudget b = new InMemoryBudget();
+        b.reserveThrows = true;
+        return b;
+    }
+
     private static ModelGateway modelReturning(ModelResponse response) {
         return request -> {
             MODEL_CALLS.incrementAndGet();
@@ -224,7 +326,7 @@ class RunExecutionLoopTest {
             var loop = loop(modelReturning(textResponse("ok")), port,
                     new ToolInvocationGate(List.of(), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true, ledger()));
+                            budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "一元二次方程"));
@@ -246,7 +348,7 @@ class RunExecutionLoopTest {
             var loop = loop(modelReturning(textResponse("x=2 或 x=3")), port,
                     new ToolInvocationGate(List.of(), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true, ledger()));
+                            budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "一元二次方程"));
@@ -278,7 +380,7 @@ class RunExecutionLoopTest {
             var outcome = loop(gw, port,
                     new ToolInvocationGate(List.of(new RecordingTool()), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true, ledger()))
+                            budget(), ledger()))
                     .execute(TENANT, task(), agentConfig(), snapshot(5),
                             Map.of("q", "x"));
 
@@ -300,7 +402,7 @@ class RunExecutionLoopTest {
                     modelReturning(textResponse("x")), new FakeClaimPort(),
                     new ToolInvocationGate(List.of(), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true, ledger()), Duration.ofSeconds(30), " "))
+                            budget(), ledger()), Duration.ofSeconds(30), " "))
                     .isInstanceOf(IllegalArgumentException.class);
         }
     }
@@ -320,7 +422,7 @@ class RunExecutionLoopTest {
             var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true, ledger()));
+                            budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "x"));
@@ -341,7 +443,7 @@ class RunExecutionLoopTest {
             var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true, ledger()));
+                            budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "x"));
@@ -371,7 +473,7 @@ class RunExecutionLoopTest {
                     new ToolInvocationGate(List.of(new UnknownResultTool()),
                             allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true, ledger()));
+                            budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "x"));
@@ -409,7 +511,7 @@ class RunExecutionLoopTest {
                     new ToolInvocationGate(List.of(new DefinitelyFailedTool()),
                             allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true, ledger()));
+                            budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     Map.of("q", "x"));
@@ -430,7 +532,7 @@ class RunExecutionLoopTest {
             var handler = new RecordingTool();
             var gate = new ToolInvocationGate(List.of(handler), denyAll(),
                     h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                    (t, r, n) -> true, ledger());
+                    budget(), ledger());
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
                     "c1", new ModelResponse.ToolCallRequest(
@@ -448,7 +550,7 @@ class RunExecutionLoopTest {
             var handler = new SchemaRejectingTool();
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
                     h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                    (t, r, n) -> true, ledger());
+                    budget(), ledger());
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
                     "c1", new ModelResponse.ToolCallRequest(
@@ -467,7 +569,7 @@ class RunExecutionLoopTest {
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
                     // 模拟风险级别被提升为需要审批
                     h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.required("WRITE_EXTERNAL"),
-                    (t, r, n) -> true, ledger());
+                    budget(), ledger());
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
                     "c1", new ModelResponse.ToolCallRequest(
@@ -484,7 +586,7 @@ class RunExecutionLoopTest {
         void unregisteredToolRejected() {
             var gate = new ToolInvocationGate(List.of(), allowAll(),
                     h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                    (t, r, n) -> true, ledger());
+                    budget(), ledger());
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
                     "c1", new ModelResponse.ToolCallRequest(
@@ -501,7 +603,7 @@ class RunExecutionLoopTest {
             broken.registerFails = true;
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
                     h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                    (t, r, n) -> true, broken);
+                    budget(), broken);
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
                     "c1", new ModelResponse.ToolCallRequest(
@@ -515,12 +617,14 @@ class RunExecutionLoopTest {
         }
 
         @Test
-        @DisplayName("⚠️ 预算不足 → 不执行")
+        @DisplayName("⚠️ 预算不足 → 不执行，且账本记 FAILED（不是 UNKNOWN）")
         void budgetExhaustedBlocksTool() {
             var handler = new RecordingTool();
+            InMemoryBudget denied = deniedBudget();
+            var led = ledger();
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
                     h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                    (t, r, n) -> false, ledger());  // 预算预留失败
+                    denied, led);  // 预算预留失败
 
             gate.invokeAll(TENANT, task(), Map.of(
                     "c1", new ModelResponse.ToolCallRequest(
@@ -529,6 +633,102 @@ class RunExecutionLoopTest {
             assertThat(handler.executeCount.get())
                     .as("预算不足不得执行（成本已超 DEC-9 上限）")
                     .isZero();
+            assertThat(denied.reserveCalls)
+                    .as("预算环节必须真的被调用过")
+                    .isEqualTo(1);
+            // ⚠️ 预留失败时工具**根本没有发出**，结果是确定的「未执行」。
+            //    记 UNKNOWN 会凭空造出待对账的幽灵操作，污染对账队列。
+            assertThat(led.states.values())
+                    .as("⚠️ 预留失败必须记 FAILED 而非 UNKNOWN")
+                    .containsExactly(ToolOperationState.FAILED);
+            assertThat(led.states.values())
+                    .as("⚠️ 不得产生任何 UNKNOWN（幽灵对账项）")
+                    .doesNotContain(ToolOperationState.UNKNOWN);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 预算服务故障 → fail-closed 拒绝执行（降级放行 = 无限花钱）")
+        void budgetServiceFailureFailsClosed() {
+            var handler = new RecordingTool();
+            var led = ledger();
+            var gate = new ToolInvocationGate(List.of(handler), allowAll(),
+                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    brokenBudget(), led);
+
+            gate.invokeAll(TENANT, task(), Map.of(
+                    "c1", new ModelResponse.ToolCallRequest(
+                            "recording_tool", Map.of(), "c1")));
+
+            assertThat(handler.executeCount.get())
+                    .as("⚠️ 预算系统不可用时放行 = 该租户可无限花钱（P1-10 Sev-0 类）")
+                    .isZero();
+            assertThat(led.states.values())
+                    .containsExactly(ToolOperationState.FAILED);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ UNKNOWN → 预留既不结算也不释放（R-007）")
+        void unknownNeitherSettlesNorReleases() {
+            var unknownTool = new UnknownResultTool();
+            var b = budget();
+            var gate = new ToolInvocationGate(List.of(unknownTool), allowAll(),
+                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    b, ledger());
+
+            gate.invokeAll(TENANT, task(), Map.of(
+                    "c1", new ModelResponse.ToolCallRequest(
+                            "record_weakness", Map.of(), "c1")));
+
+            assertThat(b.reserveCalls).isEqualTo(1);
+            assertThat(b.settleCalls)
+                    .as("⚠️⚠️ UNKNOWN 时成本可能已发生，绝不可结算为「确定消耗」")
+                    .isZero();
+            assertThat(b.releaseCalls)
+                    .as("⚠️⚠️ UNKNOWN 时释放预留 = 白送额度（R-007）")
+                    .isZero();
+        }
+
+        @Test
+        @DisplayName("⚠️ 工具确定失败 → 释放预留（额度可安全退回）")
+        void definitelyFailedReleasesBudget() {
+            var failing = new DefinitelyFailedTool();
+            var b = budget();
+            var gate = new ToolInvocationGate(List.of(failing), allowAll(),
+                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    b, ledger());
+
+            gate.invokeAll(TENANT, task(), Map.of(
+                    "c1", new ModelResponse.ToolCallRequest(
+                            "flaky_tool", Map.of(), "c1")));
+
+            assertThat(b.releaseCalls)
+                    .as("确定失败 = 无副作用，额度应退回")
+                    .isEqualTo(1);
+            assertThat(b.settleCalls)
+                    .as("确定失败不得结算")
+                    .isZero();
+        }
+
+        @Test
+        @DisplayName("⚠️ 工具成功 → 结算预留，且账本先落 SUCCEEDED")
+        void successSettlesBudget() {
+            var ok = new RecordingTool();
+            var b = budget();
+            var led = ledger();
+            var gate = new ToolInvocationGate(List.of(ok), allowAll(),
+                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    b, led);
+
+            gate.invokeAll(TENANT, task(), Map.of(
+                    "c1", new ModelResponse.ToolCallRequest(
+                            "recording_tool", Map.of(), "c1")));
+
+            assertThat(ok.executeCount.get()).isEqualTo(1);
+            assertThat(b.settleCalls)
+                    .as("成功必须结算（成本真实发生）")
+                    .isEqualTo(1);
+            assertThat(b.releaseCalls).isZero();
+            assertThat(led.states.values()).containsExactly(ToolOperationState.SUCCEEDED);
         }
 
         @Test
@@ -538,7 +738,7 @@ class RunExecutionLoopTest {
             var laterTool = new RecordingTool();
             var gate = new ToolInvocationGate(List.of(unknownTool, laterTool), allowAll(),
                     h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                    (t, r, n) -> true, ledger());
+                    budget(), ledger());
 
             var result = gate.invokeAll(TENANT, task(), orderedCalls());
 
@@ -571,7 +771,7 @@ class RunExecutionLoopTest {
             var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(new RecordingTool()), allowAll(),
                             h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
-                            (t, r, n) -> true, ledger()));
+                            budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(3),
                     Map.of("q", "x"));

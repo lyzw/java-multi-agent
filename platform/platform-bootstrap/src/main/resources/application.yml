@@ -73,6 +73,13 @@ agent:
   tenant:
     # 租户并发 Run 上限。初值 5。调优时点：P4 压测后
     max-concurrent-runs: "5"
+  budget:
+    # ⚠️ 单次工具调用预留额（元）。P3-D04 FR-012。
+    # ⚠️ 必填，缺失即 fail-closed 拒绝工具执行 —— 禁止退回默认值放行：
+    #    那等于让工具按未经配置的额度花钱（成本失控）。
+    # ⚠️ 该值只是**传给 DB 的输入**，能否预留由 budget_no_overspend
+    #    CHECK 与原子条件 UPDATE 裁决。调优时点：P4 实测 usage 后
+    reserve-per-tool-call: "0.50"
   tool:
     # 工具风险级别映射（P0-D00 §3.2）
     # ⚠️ 未登记的工具名一律按 WRITE_EXTERNAL 兜底（fail-closed），不会漏审批

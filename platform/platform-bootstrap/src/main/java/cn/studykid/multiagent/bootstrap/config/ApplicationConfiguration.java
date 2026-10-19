@@ -138,6 +138,51 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 预算仓储（P3-D04 / FR-012）。
+     *
+     * <p>⚠️ <b>刻意不加 {@code @Service}</b>：与 {@code JdbcToolOperationLedger}
+     * 一致，装配统一归本类，避免被测试切片的组件扫描意外拾取
+     * （E2E 15 项曾因此全错）。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository(
+                dataSource);
+    }
+
+    /**
+     * 预算对账服务（P3-D04 §4.3）。
+     *
+     * <p>⚠️ <b>无调度器</b>：本 Bean 只提供能力，触发时机待 D7 审计链路接入
+     * （P3-D04 §6 L-3）。在对账被调度之前，「悬挂预留」只会被发现、不会被处置。
+     */
+    @Bean
+    public cn.studykid.multiagent.infrastructure.budget.BudgetReconciliationService
+            budgetReconciliationService(
+                    cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort,
+                    cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository repo) {
+        return new cn.studykid.multiagent.infrastructure.budget.BudgetReconciliationService(
+                budgetPort, repo);
+    }
+
+    /**
+     * 单次工具调用的预算预留额（P3-D04 §2.6 D-6）。
+     *
+     * <p>⚠️ <b>装配期即校验</b>：缺失或非正数在此处抛异常拒绝启动，
+     * 而不是等到某个工具调用时才被拒。后者会让「预算闸门形同虚设」
+     * 在测试中不易察觉（F-4 的教训）。
+     */
+    @Bean
+    public java.math.BigDecimal budgetReserveAmountPerToolCall(
+            @org.springframework.beans.factory.annotation.Value(
+                    "${" + cn.studykid.multiagent.application.config.BudgetPolicy
+                            .KEY_RESERVE_PER_TOOL_CALL + "}") Object raw) {
+        return cn.studykid.multiagent.application.config.BudgetPolicy
+                .requireReserveAmount(raw);
+    }
+
+    /**
      * 当前主体。
      *
      * <p>⚠️ <b>本实现只在真实 HTTP 请求下有意义</b>：它从请求属性取
