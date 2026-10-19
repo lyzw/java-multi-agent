@@ -1,0 +1,106 @@
+# P1 工程基线配置模板
+#
+# 依据 P0-D00《决策基线》v1.1 §1.2 / §1.4（DEC-9 / DEC-11）
+#
+# ⚠️ fail-closed 约定：
+#   下列每项都是**必填**。缺失或非法时应用应**拒绝**启动/拒绝创建 Run，
+#   而不是退回默认值放行（P0-D03 §4 红线 15、R-020）。
+#   注释中的「保守初值」仅用于生成模板与文档标注，不参与运行时兜底。
+
+spring:
+  application:
+    name: java-saas-agent-platform
+
+  # ── RabbitMQ（DEC-12 / ADR-001）──────────────────────────────────
+  # 本地实例：./scripts/dev-rabbitmq.sh start
+  rabbitmq:
+    host: 127.0.0.1
+    port: "5672"
+    username: ${RABBITMQ_USER:agent}
+    password: ${RABBITMQ_PASSWORD:}
+    virtual-host: ${RABBITMQ_VHOST:agent}
+    # ⚠️ 手动确认 + 死信，配合 quorum queue 的 delivery-limit 使用。
+    #    自动确认在故障场景下易造成「未处理完就丢消息」。
+    listener:
+      simple:
+        acknowledge-mode: manual
+        # 有副作用工具不得无限重投；与队列级 delivery-limit 共同设防
+        default-requeue-rejected: "false"
+        prefetch: "10"
+    # ⚠️ publisher confirms：quorum queue 只有在消息被多数派复制后
+    #    才确认写入成功，这是 Outbox 发布可靠性的前提。
+    publisher-confirm-type: correlated
+    publisher-returns: "true"
+    connection-timeout: 10s
+
+agent:
+  # ── MQ 队列拓扑（ADR-001 §4）───────────────────────────────────
+  # ⚠️ x-queue-type 与 x-delivery-limit 必须显式声明。
+  #   RabbitMQ 4.x 未配置 vhost 默认队列类型时默认仍是 classic，
+  #   而 classic 在 4.x 没有复制能力（mirrored queue 已在 4.0 移除）。
+  #   quorum queue 默认 delivery-limit 是 20——对 record_weakness
+  #   这类有副作用工具而言，重投 20 次即重复写入最多 20 次（Sev-0），
+  #   故必须显式降到 3。
+  #   另：队列类型一经声明不可更改，改类型需删队列重建。
+  mq:
+    exchange: agent.run.dispatch
+    dead-letter-exchange: agent.run.dlx
+    queues:
+      execute:
+        name: agent.run.execute
+        # 有限重试后进死信转人工
+        # ⚠️ 必须加引号：YAML 中裸数字会被 YamlPropertiesFactoryBean 丢弃
+        delivery-limit: "3"
+        dead-letter-exchange: agent.run.dlx
+        dead-letter-routing-key: agent.run.dead
+      reconcile:
+        name: agent.run.reconcile
+        delivery-limit: "3"
+        dead-letter-exchange: agent.run.dlx
+        dead-letter-routing-key: agent.run.dead
+      dead:
+        name: agent.run.dead
+        # 死信队列自身不再挂 DLX，避免死信循环
+
+  # ── DEC-9 成本与容量（保守初值，P2/P4 实测后调优）──────────────
+  run:
+    # 单 Run 成本上限（元）。初值 2.00。调优时点：P4 实测 usage 后
+    max-cost-per-run: "2.00"
+    # 单 Run 模型调用上限。初值 12。调优时点：P2 评测集实测
+    max-llm-calls: "12"
+    # 单 Run 最大步数。初值 20。调优时点：P2
+    max-steps: "20"
+  tenant:
+    # 租户并发 Run 上限。初值 5。调优时点：P4 压测后
+    max-concurrent-runs: "5"
+  tool:
+    # 工具风险级别映射（P0-D00 §3.2）
+    # ⚠️ 未登记的工具名一律按 WRITE_EXTERNAL 兜底（fail-closed），不会漏审批
+    risk-level-map:
+      get_student_profile: READ
+      record_weakness: WRITE_PROFILE
+  approval:
+    # 按风险级别的审批要求。
+    # ⚠️ 只能收紧不能放松：将 WRITE_EXTERNAL 调为非 REQUIRED 属安全门禁降级，
+    #    须走 P0-D03 §6 变更模板 + ISO-5 外部抽检
+    required-by-risk:
+      READ: NOT_REQUIRED
+      WRITE_PROFILE: OPTIONAL
+      WRITE_EXTERNAL: REQUIRED
+    # 审批有效期（分钟）。初值 15
+    ttl: 15m
+    # 审批人范围：家长或教师（与 DEC-6 角色一致）
+    approver-scope: PARENT_OR_TEACHER
+
+
+# ── 部署与试点 ────────────────────────────────────────────────────
+deployment:
+  pilot:
+    # 试点租户数上限。初值 1，灰度起步。调优时点：P5 灰度扩量
+    max-tenants: "1"
+
+
+# ── 灾备（P4 演练后确认）──────────────────────────────────────────
+dr:
+  rpo: 24h
+  rto: 4h
