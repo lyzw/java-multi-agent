@@ -58,12 +58,18 @@ public class RunController {
     /**
      * 创建 Run。
      *
-     * @param context 认证上下文（由安全链注入，**不来自请求参数**）
+     * <p>⚠️ <b>无 tenantId 参数</b>：租户来自已验签令牌（{@code CurrentPrincipal}），
+     * 不可由客户端指定。这是 D1 部署阻断的修复点。
+     *
+     * @param request 请求体（不含任何租户字段）
      */
     @PostMapping
     public ResponseEntity<CreateRunResponse> createRun(
-            @NonNull TenantContext context,
             @RequestBody CreateRunRequest request) {
+
+        // ⚠️ 0) 可信身份：唯一来源是已验签的令牌，
+        //    绝不从请求参数或请求体取租户 —— 这是 D1 部署阻断的核心修复。
+        TenantContext context = currentPrincipal.context();
 
         // 1) 内容合规：拒绝明显可识别信息（纵深防御）
         request.assertNoIdentifyingContent();
@@ -106,6 +112,23 @@ public class RunController {
      * 分开可避免领域层被 API 概念污染。
      */
     public interface CurrentPrincipal {
+
+        /**
+         * 当前请求的<b>可信</b>租户上下文。
+         *
+         * <p>⚠️ <b>这是 D1 部署阻断的修复点</b>：此前上下文由方法参数
+         * {@code @NonNull TenantContext context} 接收，Spring 会尝试
+         * 从请求构造它 —— 任何调用方都能填入任意 {@code tenantId} 与
+         * {@code roles}，使授权闸门形同虚设。
+         *
+         * <p>改为由本接口提供，实现方必须先验签再返回。
+         * 生产实现见 {@code JwtCurrentPrincipal}（D-001）。
+         *
+         * @throws cn.studykid.multiagent.api.security.CurrentPrincipal.UnauthenticatedException
+         *         无令牌或令牌无效（→ 401）
+         */
+        @NonNull TenantContext context();
+
         @NonNull String principalId();
 
         @NonNull String providerId();

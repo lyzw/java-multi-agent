@@ -56,11 +56,17 @@ class RunControllerTest {
     private ZeroRetentionGate retentionGate;
     private RunController.CurrentPrincipal principal;
 
+    /** 当前请求的可信上下文 —— 由 CurrentPrincipal 提供，控制器不再直接接收。 */
+    private TenantContext currentContext;
+
     @BeforeEach
     void setUp() {
         useCaseInvoked.set(false);
         callCount.set(0);
+        currentContext = context("user-1", Set.of());
         principal = new RunController.CurrentPrincipal() {
+            @Override
+            public TenantContext context() { return currentContext; }
             @Override public String principalId() { return "user-1"; }
             @Override public String providerId() { return ModelProviders.DEEPSEEK; }
             @Override public String snapshotId() { return UUID.randomUUID().toString(); }
@@ -188,7 +194,7 @@ class RunControllerTest {
 
             assertThat(catchThrowableOfType(
                     () -> controller.createRun(
-                            context("user-1", Set.of()), request()),
+                            request()),
                     AccessDeniedException.class))
                     .isNotNull();
         }
@@ -199,7 +205,7 @@ class RunControllerTest {
             var controller = new RunController(null, denyAll(), retentionGate, principal);
 
             catchThrowableOfType(
-                    () -> controller.createRun(context("user-1", Set.of()), request()),
+                    () -> controller.createRun(request()),
                     AccessDeniedException.class);
 
             assertThat(useCaseInvoked)
@@ -216,7 +222,6 @@ class RunControllerTest {
                     allowAll(), retentionGate, principal);
 
             var resp = controller.createRun(
-                    context("user-1", Set.of(AuthorizationService.Roles.AGENT_AUTHOR)),
                     request()).getBody();
 
             assertThat(resp).isNotNull();
@@ -242,7 +247,7 @@ class RunControllerTest {
                     new CountingRunCreationService(useCaseInvoked),
                     recording, retentionGate, principal);
 
-            controller.createRun(context("user-1", Set.of()), request());
+            controller.createRun(request());
 
             assertThat(recording.capturedAction())
                     .isEqualTo(AuthorizationService.Actions.RUN_CREATE);
@@ -298,14 +303,14 @@ class RunControllerTest {
             var service = new CountingRunCreationService(useCaseInvoked);
             var controller = new RunController(service, allowAll(), retentionGate, principal);
 
-            var resp = controller.createRun(context("user-1", Set.of()), request());
+            var resp = controller.createRun(request());
             assertThat(resp.getBody().replayed()).isFalse();
 
             var replayService = new ReplayRunCreationService();
             var replayController =
                     new RunController(replayService, allowAll(), retentionGate, principal);
             assertThat(replayController.createRun(
-                    context("user-1", Set.of()), request()).getBody().replayed()).isTrue();
+                    request()).getBody().replayed()).isTrue();
         }
     }
 

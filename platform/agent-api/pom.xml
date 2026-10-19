@@ -31,5 +31,15 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-security</artifactId>
     </dependency>
+    <!--
+      D-001 IAM：解析 Bearer 令牌为可信 TenantContext。
+      ⚠️ 依赖 infrastructure 是**本层的必要例外**：认证链的具体实现
+      （验签、角色复核）按 ADR-006 属基础设施层。
+      接口层只依赖其**公开能力**，不感知 JDBC / 密钥细节。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-infrastructure</artifactId>
+    </dependency>
   </dependencies>
 </project>
