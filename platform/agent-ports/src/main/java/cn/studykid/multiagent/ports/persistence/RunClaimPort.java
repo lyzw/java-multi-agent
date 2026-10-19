@@ -49,6 +49,28 @@ public interface RunClaimPort {
                                          int limit);
 
     /**
+     * 领取<b>指定</b> Run 的租约（P2-D02 §4.1）。
+     *
+     * <p><b>为何需要独立方法</b>：MQ 消息已经指名了 runId，
+     * 若走批量领取 {@link #claimTasks}，会拿到消息里<b>没有</b>的任务，
+     * 导致消息与执行错配 —— 执行的任务不是消息指定的那个。
+     *
+     * <p><b>返回 {@code null} 是正常语义</b>，不是错误：
+     * 表示该 Run 已被他人领取（重复投递）或不存在。
+     * 调用方<b>不应</b>重试 —— 重试会让消息在多个 Worker 间来回打转。
+     *
+     * @param tenantId      租户；须用于绑定 RLS 上下文
+     * @param runId         目标 Run
+     * @param workerId      Worker 标识
+     * @param leaseDuration 租约时长
+     * @return 领取成功返回任务；已被领取或不存在返回 {@code null}
+     */
+    java.util.Optional<LeasedTask> claimSpecificRun(@NonNull String tenantId,
+                                                     @NonNull String runId,
+                                                     @NonNull String workerId,
+                                                     @NonNull Duration leaseDuration);
+
+    /**
      * 续租。仅当<b>持有相同世代</b>时成功——旧世代续租会失败。
      *
      * @return 是否成功（false 表示已被接管，调用方须停止工作）

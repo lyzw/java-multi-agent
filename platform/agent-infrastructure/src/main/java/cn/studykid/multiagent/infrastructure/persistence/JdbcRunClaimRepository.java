@@ -107,6 +107,100 @@ public class JdbcRunClaimRepository implements RunClaimPort {
     }
 
     @Override
+    public java.util.Optional<LeasedTask> claimSpecificRun(@NonNull String tenantId,
+                                                           @NonNull String runId,
+                                                           @NonNull String workerId,
+                                                           @NonNull Duration leaseDuration) {
+        // ⚠️ 与 claimTasks 的区别：不捞「所有待办」，只认消息指定的那一个。
+        //    批量领取会拿到消息里没有的任务，导致消息与执行错配。
+        // ⚠️ WHERE 含 fencing_token 条件：已被他人领取时影响 0 行 → 返回 empty。
+        //    这是「重复投递」的正常形态，调用方应丢弃而非重试。
+        String sql = """
+                UPDATE run
+                SET state = 'RUNNING',
+                    lease_owner = ?,
+                    lease_expires_at = now() + (? || ' seconds')::interval,
+                    fencing_token = fencing_token + 1,
+                    attempt = attempt + 1,
+                    updated_at = now()
+                WHERE tenant_id = ?::uuid AND run_id = ?::uuid
+                  AND fencing_token = ?
+                  AND (state = 'QUEUED'
+                       OR (state = 'RUNNING'
+                           AND (lease_expires_at IS NULL OR lease_expires_at < now())))
+                RETURNING run_id, fencing_token, lease_expires_at, attempt
+                """;
+        return execReturning(conn -> {
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, workerId);
+                ps.setInt(2, (int) leaseDuration.toSeconds());
+                ps.setString(3, tenantId);
+                ps.setString(4, runId);
+                ps.setLong(5, messageTokenOf(conn, tenantId, runId));
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return java.util.Optional.empty();
+                    }
+                    Timestamp exp = rs.getTimestamp("lease_expires_at");
+                    return java.util.Optional.of(new LeasedTask(
+                            rs.getString("run_id"),
+                            rs.getLong("fencing_token"),
+                            exp.toInstant(),
+                            rs.getInt("attempt")));
+                }
+            }
+        }, tenantId);
+    }
+
+    /** 读取当前 token（用于乐观校验，避免领取到已被接管的世代）。 */
+    private long messageTokenOf(Connection conn, String tenantId, String runId)
+            throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT fencing_token FROM run WHERE tenant_id = ?::uuid AND run_id = ?::uuid")) {
+            ps.setString(1, tenantId);
+            ps.setString(2, runId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : -1L;
+            }
+        }
+    }
+
+    /** 在已绑定租户上下文的事务中执行并返回结果。 */
+    private <T> T execReturning(ReturningAction<T> action, String tenantId) {
+        try (Connection conn = dataSource.getConnection()) {
+            boolean prev = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try {
+                TenantSessionBinder.bind(conn, systemContext(tenantId));
+                T result = action.apply(conn);
+                conn.commit();
+                return result;
+            } catch (SQLException | RuntimeException e) {
+                try {
+                    conn.rollback();
+                } catch (SQLException ignored) {
+                    // 连接即将归还
+                }
+                throw e instanceof RuntimeException re
+                        ? re : new IllegalStateException("领取指定任务失败", e);
+            } finally {
+                try {
+                    conn.setAutoCommit(prev);
+                } catch (SQLException ignored) {
+                    // 连接即将归还
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("领取指定任务失败", e);
+        }
+    }
+
+    @FunctionalInterface
+    private interface ReturningAction<T> {
+        T apply(Connection conn) throws SQLException;
+    }
+
+    @Override
     public boolean renewLease(@NonNull String tenantId, @NonNull String runId,
                               @NonNull String workerId, long expectedFencingToken,
                               @NonNull Duration leaseDuration) {
