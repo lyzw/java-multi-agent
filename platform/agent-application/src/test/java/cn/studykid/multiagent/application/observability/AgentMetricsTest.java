@@ -148,6 +148,64 @@ class AgentMetricsTest {
                 .isEmpty();
     }
 
+    // ── M-7/M-8：Prometheus 导出（P4-D02 / D-4）────────────────────
+
+    @Test
+    @DisplayName("M-7 ⚠️ 导出为 Prometheus 文本格式（含 HELP/TYPE 头）")
+    void exportsPrometheusText() {
+        metrics.increment("run_completed_total", Map.of("run_state", "SUCCEEDED"));
+        metrics.increment("run_completed_total", Map.of("run_state", "FAILED"));
+        metrics.increment("sse_active");
+
+        String out = metrics.exportPrometheus();
+
+        assertThat(out)
+                .as("⚠️ Prometheus 只认 text/plain 的 HELP/TYPE/样本三段式")
+                .contains("# HELP run_completed_total")
+                .contains("# TYPE run_completed_total counter")
+                .contains("run_completed_total{run_state=SUCCEEDED} 1")
+                .contains("run_completed_total{run_state=FAILED} 1")
+                .contains("sse_active 1");
+    }
+
+    @Test
+    @DisplayName("⚠️⚠️ M-8 导出内容绝不含高基数字段（P4-D02 D-4 的核心约束）")
+    void exportNeverLeaksHighCardinalityFields() {
+        metrics.increment("run_completed_total", Map.of("run_state", "SUCCEEDED"));
+        metrics.increment("tool_invoked_total",
+                Map.of("tool_name", "record_weakness", "outcome", "SUCCEEDED"));
+
+        String out = metrics.exportPrometheus();
+
+        for (String forbidden : AgentMetrics.FORBIDDEN_LABEL_KEYS) {
+            assertThat(out)
+                    .as("⚠️⚠️ 免认证的 /metrics 端点绝不能出现高基数字段：%s", forbidden)
+                    .doesNotContain(forbidden + "=");
+        }
+        assertThat(out)
+                .as("⚠️ 导出中不得出现任何 UUID 形态的值")
+                .doesNotContainPattern("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}");
+    }
+
+    @Test
+    @DisplayName("⚠️ 导出的标签键全部在白名单内（结构约束延续到导出层）")
+    void exportLabelsStayWithinWhitelist() {
+        metrics.increment("run_completed_total", Map.of("run_state", "SUCCEEDED"));
+        String out = metrics.exportPrometheus();
+
+        // 提取所有 {k= 部分，逐一核对白名单
+        var matcher = java.util.regex.Pattern
+                .compile("\\{([^}]*)\\}").matcher(out);
+        while (matcher.find()) {
+            for (String pair : matcher.group(1).split(",")) {
+                String key = pair.split("=")[0].trim();
+                assertThat(AgentMetrics.ALLOWED_LABEL_KEYS)
+                        .as("⚠️ 导出中出现白名单外的标签键：%s", key)
+                        .contains(key);
+            }
+        }
+    }
+
     @Test
     @DisplayName("M-6b 禁用清单本身覆盖了全部已知高基数字段")
     void forbiddenListIsComprehensive() {

@@ -213,6 +213,39 @@ public class JdbcRunCreationRepository implements RunCreationPort {
             ps.setString(3, correlationId);
             ps.executeUpdate();
         }
+        // ⚠️ P4-D02 D-1：在**同一事务内**发 NOTIFY。
+        //    事务回滚则通知不发出 —— 不推送不存在的事件（原子性）。
+        //    ⚠️ 载荷只含「坐标」（tenantId/runId/sequenceNo），
+        //    **不含 payload** —— 否则事件内容绕过 SSE 载荷白名单（D-2）。
+        notifyRunEvent(conn, tenantId, runId, 1L);
+    }
+
+    /**
+     * 发出事件通知（P4-D02 / D-1）。
+     *
+     * <p>⚠️ <b>为何用 {@code SELECT ... INTO + pg_notify} 而非 {@code PERFORM}</b>：
+     * {@code PERFORM pg_notify(...)} 在 JDBC {@code PreparedStatement} 下同样可用，
+     * 但 {@code SELECT} 形式能拿到影响行数，便于断言「通知确实发出」。
+     *
+     * <p>⚠️ <b>失败不得影响业务</b>：通知是优化手段，不是正确性依赖——
+     * 事件已落库，订阅者还有轮询兜底（D-3）。故此处吞掉异常并记 WARN。
+     */
+    private void notifyRunEvent(Connection conn, String tenantId, String runId, long sequenceNo) {
+        String sql = """
+                SELECT pg_notify('run_event', json_build_object(
+                        'tenantId', ?::text, 'runId', ?::text, 'sequenceNo', ?::text)::text)
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, runId);
+            ps.setString(3, String.valueOf(sequenceNo));
+            ps.executeQuery();
+        } catch (SQLException e) {
+            // ⚠️ 吞掉：事件已落库，订阅者靠轮询兜底（D-3）。
+            //    让通知失败拖垮 Run 创建是本末倒置。
+            log.warn("事件通知发送失败（已落库，订阅者将由轮询兜底）: runId={}, seq={}",
+                    runId, sequenceNo, e);
+        }
     }
 
     private void insertIdempotencyRecord(Connection conn, String tenantId, IdempotencyKey key,

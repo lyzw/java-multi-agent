@@ -127,6 +127,48 @@ public class AgentMetrics {
         return new LinkedHashSet<>(counters.keySet());
     }
 
+    /**
+     * 导出 Prometheus 文本格式（P4-D02 / D-4 / FR-017）。
+     *
+     * <p><b>⚠️ 刻意不引 Micrometer</b>：引入后标签白名单约束会退化为文档约定
+     * （D10 已确立的立场）。本类作为唯一数据源，约束始终在自己手里。
+     *
+     * <p><b>格式</b>：{@code # HELP} / {@code # TYPE} + 样本行。
+     * 序列键格式为 {@code name{k=v,...}}，与 Prometheus 的 label 语法一致。
+     *
+     * @return Prometheus 文本；无指标时返回仅含注释头的空文本
+     */
+    public @NonNull String exportPrometheus() {
+        StringBuilder sb = new StringBuilder();
+        // ⚠️ 按指标名分组输出，使同名的多序列共享一个 TYPE 头
+        java.util.TreeSet<String> names = new java.util.TreeSet<>();
+        for (String key : counters.keySet()) {
+            int brace = key.indexOf('{');
+            names.add(brace < 0 ? key : key.substring(0, brace));
+        }
+        for (String name : names) {
+            sb.append("# HELP ").append(name).append(" ").append(name).append("\n");
+            sb.append("# TYPE ").append(name).append(" counter\n");
+            for (Map.Entry<String, AtomicLong> e : counters.entrySet()) {
+                String key = e.getKey();
+                int brace = key.indexOf('{');
+                if (brace < 0) {
+                    if (key.equals(name)) {
+                        sb.append(name).append(' ').append(e.getValue().get()).append('\n');
+                    }
+                    continue;
+                }
+                if (key.substring(0, brace).equals(name)) {
+                    // ⚠️ 键中已是 k=v 形式，直接拼即可
+                    sb.append(key.substring(0, brace))
+                            .append(key.substring(brace))
+                            .append(' ').append(e.getValue().get()).append('\n');
+                }
+            }
+        }
+        return sb.toString();
+    }
+
     /** 仅测试用：清空。 */
     public void reset() {
         counters.clear();
