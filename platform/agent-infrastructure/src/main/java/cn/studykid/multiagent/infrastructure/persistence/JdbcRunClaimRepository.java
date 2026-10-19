@@ -310,6 +310,58 @@ public class JdbcRunClaimRepository implements RunClaimPort {
         return new TenantContext(tenantId, "system", java.util.Set.of(), 0L);
     }
 
+    @Override
+    public boolean requestCancel(@NonNull String tenantId, @NonNull String runId) {
+        // ⚠️ 直接置终态 CANCELLED + 置 cancel_requested_at。
+        //    WHERE 仅收 QUEUED/RUNNING —— 已终态的 Run 取消不生效（返回 false）。
+        //    触发器 enforce_run_state_transition 已允许 QUEUED/RUNNING → CANCELLED，不冲突。
+        String sql = """
+                UPDATE run
+                SET state = 'CANCELLED'::run_state,
+                    cancel_requested_at = now(),
+                    completed_at = now(),
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = now()
+                WHERE tenant_id = ?::uuid AND run_id = ?::uuid
+                  AND state IN ('QUEUED', 'RUNNING')
+                """;
+        return execUpdate(sql,
+                ps -> {
+                    ps.setString(1, tenantId);
+                    ps.setString(2, runId);
+                },
+                tenantId) > 0;
+    }
+
+    @Override
+    public boolean isCancelled(@NonNull String tenantId, @NonNull String runId) {
+        String sql = """
+                SELECT 1 FROM run
+                WHERE tenant_id = ?::uuid AND run_id = ?::uuid
+                  AND (state = 'CANCELLED' OR cancel_requested_at IS NOT NULL)
+                """;
+        try (Connection conn = dataSource.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                TenantSessionBinder.bind(conn, systemContext(tenantId));
+                try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                    ps.setString(1, tenantId);
+                    ps.setString(2, runId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        boolean cancelled = rs.next();
+                        conn.rollback();
+                        return cancelled;
+                    }
+                }
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("检查取消状态失败", e);
+        }
+    }
+
     private int execUpdate(String sql, StatementBinder binder, String tenantId) {
         try (Connection conn = dataSource.getConnection()) {
             boolean prev = conn.getAutoCommit();

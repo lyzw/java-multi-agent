@@ -83,6 +83,16 @@ public class RunExecutionLoop {
             while (steps < snapshot.maxSteps()) {
                 steps++;
 
+                // ── §2.2 取消检查（协作式，P3-D06 / FR-011）─────────────
+                // ⚠️ 每轮迭代开头（模型调用前）即查取消。一旦观察到取消，
+                //    立即停止，不再发起新一轮模型调用与工具动作。
+                //    状态终态已由 requestCancel 置 CANCELLED（claimSpecificRun /
+                //    commitResult 均拒绝已取消 Run），双重保险。
+                if (claimPort.isCancelled(tenantId, task.runId())) {
+                    log.info("检测到取消请求，停止执行: runId={}", task.runId());
+                    return ExecutionOutcome.cancelled();
+                }
+
                 // ── §2 循环体 ────────────────────────────────────────────
                 // ⚠️ 模型参数来自 Agent 配置（Run 关联的 Agent），
                 //    运行约束（maxSteps）来自 Run 创建时的快照。
@@ -226,7 +236,9 @@ public class RunExecutionLoop {
             /** ⚠️ 结果未知：**禁止重试**，须对账。 */
             UNKNOWN_RESULT,
             /** 世代已失效：已被接管，不重试。 */
-            SKIPPED_STALE_GENERATION
+            SKIPPED_STALE_GENERATION,
+            /** ⚠️ 用户取消：协作式停止，不再启动新动作。 */
+            CANCELLED
         }
 
         public ExecutionOutcome {
@@ -253,6 +265,10 @@ public class RunExecutionLoop {
 
         public static ExecutionOutcome skippedStaleGeneration() {
             return new ExecutionOutcome(Kind.SKIPPED_STALE_GENERATION, null);
+        }
+
+        public static ExecutionOutcome cancelled() {
+            return new ExecutionOutcome(Kind.CANCELLED, null);
         }
 
         /** @return 是否允许重新投递重试。UNKNOWN 与世代失效均**不允许**。 */

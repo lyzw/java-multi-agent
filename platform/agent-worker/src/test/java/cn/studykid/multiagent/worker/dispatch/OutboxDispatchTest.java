@@ -224,6 +224,17 @@ class OutboxDispatchTest {
             public boolean isCurrentGeneration(String t, String r, long f) {
                 return true;
             }
+
+            /** P3-D06：取消相关方法（Outbox 消费链路不涉及，恒未取消）。 */
+            @Override
+            public boolean requestCancel(String t, String r) {
+                return false;
+            }
+
+            @Override
+            public boolean isCancelled(String t, String r) {
+                return false;
+            }
         }
 
         private Map<String, Object> validPayload() {

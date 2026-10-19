@@ -107,6 +107,29 @@ public interface RunClaimPort {
     boolean isCurrentGeneration(@NonNull String tenantId, @NonNull String runId,
                                 long fencingToken);
 
+    /**
+     * 协作式取消（P3-D06 / FR-011）。
+     *
+     * <p><b>原子</b>将 {@code RUNNING/QUEUED → CANCELLED} 并置 {@code cancel_requested_at}。
+     * 终态不可回退：已终态（SUCCEEDED/FAILED/CANCELLED/TIMED_OUT）的 Run 取消不生效。
+     *
+     * <p>⚠️ 直接置终态而非只置 flag：即便 Worker 进程已死，取消也不会被「复活」；
+     * {@code claimSpecificRun} 只收 {@code QUEUED/RUNNING}、{@code commitResult} 要求
+     * {@code state='RUNNING'}，已取消 Run 的重新领取与提交覆盖均被拒。
+     *
+     * @return 是否生效（受影响行数 > 0）
+     */
+    boolean requestCancel(@NonNull String tenantId, @NonNull String runId);
+
+    /**
+     * 是否已取消（P3-D06 / FR-011）。
+     *
+     * <p>{@code state = 'CANCELLED'} 或 {@code cancel_requested_at} 已置均视为已取消。
+     *
+     * @return true 表示已取消
+     */
+    boolean isCancelled(@NonNull String tenantId, @NonNull String runId);
+
     /** 已建立租约的任务。 */
     record LeasedTask(
             @NonNull String runId,

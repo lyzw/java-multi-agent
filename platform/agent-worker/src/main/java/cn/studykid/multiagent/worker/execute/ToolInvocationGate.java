@@ -57,6 +57,14 @@ public class ToolInvocationGate {
      */
     private final ApprovalPort approvalPort;
     /**
+     * 取消守卫（P3-D06 / FR-011）。
+     *
+     * <p>⚠️ <b>默认桩 = 永不取消</b>：在取消链路/Worker 主循环装配前不改变既有行为，
+     * 装配为 {@code RunClaimPort.isCancelled} 后即生效。每工具开头检查，
+     * 配合循环级检查（RunExecutionLoop）构成双保险，保证「取消后不启动新工具动作」。
+     */
+    private final CancelGuard cancelGuard;
+    /**
      * 单次工具调用的预算预留额（P3-D04 §2.6 D-6）。
      *
      * <p>⚠️ <b>构造期校验，不接受非正数</b>：缺失/非法配置在装配时就失败，
@@ -96,6 +104,15 @@ public class ToolInvocationGate {
         }
     };
 
+    /** 默认取消守卫：永不取消（取消链路未接入前的占位）。 */
+    private static final CancelGuard NO_CANCEL = (tenantId, runId) -> false;
+
+    /** 取消守卫（P3-D06 / FR-011）：判断指定 Run 是否已取消。 */
+    @FunctionalInterface
+    public interface CancelGuard {
+        boolean isCancelled(String tenantId, String runId);
+    }
+
     public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
                               @NonNull AuthorizationService authorization,
                               @NonNull ApprovalPolicy approvalPolicy,
@@ -122,7 +139,8 @@ public class ToolInvocationGate {
                               @NonNull RunToolLedgerPort ledger,
                               @NonNull ApprovalPort approvalPort) {
         this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
-                cn.studykid.multiagent.application.config.BudgetPolicy.DEFAULT_RESERVE_AMOUNT);
+                cn.studykid.multiagent.application.config.BudgetPolicy.DEFAULT_RESERVE_AMOUNT,
+                NO_CANCEL);
     }
 
     public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
@@ -132,12 +150,25 @@ public class ToolInvocationGate {
                               @NonNull RunToolLedgerPort ledger,
                               @NonNull ApprovalPort approvalPort,
                               java.math.BigDecimal reserveAmountPerToolCall) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                reserveAmountPerToolCall, NO_CANCEL);
+    }
+
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall,
+                              @NonNull CancelGuard cancelGuard) {
         this.handlers = List.copyOf(handlers);
         this.authorization = authorization;
         this.approvalPolicy = approvalPolicy;
         this.budget = budget;
         this.ledger = ledger;
         this.approvalPort = approvalPort;
+        this.cancelGuard = cancelGuard;
         if (reserveAmountPerToolCall == null
                 || reserveAmountPerToolCall.signum() <= 0) {
             throw new IllegalArgumentException(
@@ -169,6 +200,16 @@ public class ToolInvocationGate {
                 // ⚠️ 不静默忽略 —— 模型可能因此陷入循环
                 log.warn("未登记的工具被拒绝: tool={}, runId={}", call.toolName(), task.runId());
                 result.recordRejected(call.toolName(), "未登记的工具");
+                continue;
+            }
+
+            // ②b ⚠️ 取消检查（P3-D06 / FR-011）：闸门级双保险。
+            //    即使循环级检查已放过当前轮（取消在模型返回后到达），
+            //    本检查保证批次内的后续工具不再启动。取消后不得发起任何副作用。
+            if (cancelGuard.isCancelled(tenantId, task.runId())) {
+                log.info("Run 已取消，拒绝启动工具: tool={}, runId={}",
+                        call.toolName(), task.runId());
+                result.recordRejected(call.toolName(), "Run 已取消");
                 continue;
             }
 

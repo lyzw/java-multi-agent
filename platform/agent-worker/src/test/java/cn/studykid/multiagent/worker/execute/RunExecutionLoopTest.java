@@ -112,6 +112,18 @@ class RunExecutionLoopTest {
         @Override public boolean isCurrentGeneration(String t, String r, long f) {
             return generationValid;
         }
+        /** P3-D06：可配置的取消标志（默认未取消）。 */
+        boolean cancelled = false;
+        @Override public boolean requestCancel(String t, String r) {
+            if (cancelled) {
+                return false;
+            }
+            cancelled = true;
+            return true;
+        }
+        @Override public boolean isCancelled(String t, String r) {
+            return cancelled;
+        }
     }
 
     /**
@@ -974,6 +986,140 @@ class RunExecutionLoopTest {
         @Override public String toolName() { return "bad_schema_tool"; }
         @Override public void validate(Map<String, Object> arguments) {
             throw new IllegalArgumentException("缺少必填字段");
+        }
+    }
+
+    // ── P3-D06 取消竞态（FR-011）─────────────────────────────────────
+
+    @Nested
+    @DisplayName("⚠️ P3-D06 取消竞态（FR-011）")
+    class CancellationRace {
+
+        /** 恒定「已取消」的守卫替身。 */
+        private static final ToolInvocationGate.CancelGuard CANCELLED =
+                (t, r) -> true;
+
+        /** 恒定「未取消」的守卫替身。 */
+        private static final ToolInvocationGate.CancelGuard NOT_CANCELLED =
+                (t, r) -> false;
+
+        /**
+         * 构造带显式取消守卫的闸门。
+         *
+         * <p>⚠️ 审批策略一律 notRequired —— 本组用例只验证取消路径，
+         * 审批路径由 {@link ApprovalConsumption} 独立覆盖，两者互不干扰
+         * （D6 与 D5 的检查点必须能分别证伪）。
+         */
+        private static ToolInvocationGate gateWith(ToolHandler handler,
+                                                 ToolInvocationGate.CancelGuard guard) {
+            return new ToolInvocationGate(List.of(handler), allowAll(),
+                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    budget(), ledger(), neverApproving(), java.math.BigDecimal.ONE, guard);
+        }
+
+        /** 永不批准的审批端口（策略为 notRequired 时不会被调用，仅为满足构造契约）。 */
+        private static ApprovalPort neverApproving() {
+            return new ApprovalPort() {
+                @Override public ApprovalOutcome consume(String t, String o, String d,
+                        String r, String runId) {
+                    throw new AssertionError("notRequired 策略下不应调用审批消费");
+                }
+                @Override public String grant(String t, String o, String d, String r,
+                        ApprovalRequirement q, String s, Instant e, String a) {
+                    throw new UnsupportedOperationException();
+                }
+                @Override public void revoke(String t, String o, String a, String reason) {
+                    throw new UnsupportedOperationException();
+                }
+                @Override public Optional<ApprovalView> findActive(String t, String o) {
+                    throw new UnsupportedOperationException();
+                }
+            };
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 循环级：已取消的 Run → 模型不被调用、工具不执行")
+        void cancelledRunStopsBeforeModelCall() {
+            MODEL_CALLS.set(0);
+            FakeClaimPort port = new FakeClaimPort();
+            // ⚠️ 取消在执行开始前已到达
+            assertThat(port.requestCancel(TENANT, RUN_ID)).isTrue();
+            assertThat(port.isCancelled(TENANT, RUN_ID)).isTrue();
+
+            var handler = new RecordingTool();
+            var loop = loop(modelReturning(textResponse("ok")), port,
+                    gateWith(handler, CANCELLED));
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.CANCELLED);
+            assertThat(MODEL_CALLS.get())
+                    .as("⚠️⚠️ 已取消的 Run 不得再调模型（白花钱且可能启动新动作）")
+                    .isZero();
+            assertThat(handler.executeCount.get()).isZero();
+            assertThat(port.commitCount)
+                    .as("取消不额外提交终态——requestCancel 已原子置 CANCELLED")
+                    .isZero();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 闸门级：取消在模型返回后到达 → 批次内工具被拒、不执行")
+        void cancelAfterModelReturnBlocksTools() {
+            var handler = new RecordingTool();
+            var gate = gateWith(handler, CANCELLED);
+
+            // ⚠️ 批次内两个工具调用（顺序固定：record_weakness → recording_tool）
+            var result = gate.invokeAll(TENANT, task(), orderedCalls());
+
+            assertThat(handler.executeCount.get())
+                    .as("⚠️⚠️ 取消后不得启动任何工具动作（副作用可能已发生）")
+                    .isZero();
+            assertThat(result.rejectedCount())
+                    .as("批次内两个工具都应被拒")
+                    .isEqualTo(2);
+            assertThat(result.allRejected()).isTrue();
+        }
+
+        @Test
+        @DisplayName("⚠️ 反证：闸门无取消检查（默认 NO_CANCEL 桩）→ 已取消 Run 的工具照常执行")
+        void withoutCancelGuardToolsStillRun() {
+            var handler = new RecordingTool();
+            // ⚠️ 默认构造器 = NO_CANCEL 桩 = 取消检查缺失
+            var gate = new ToolInvocationGate(List.of(handler), allowAll(),
+                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    budget(), ledger());
+
+            gate.invokeAll(TENANT, task(), orderedCalls());
+
+            assertThat(handler.executeCount.get())
+                    .as("⚠️ 反证：默认桩下工具仍执行，证明闸门级取消检查是 load-bearing")
+                    .isGreaterThan(0);
+        }
+
+        @Test
+        @DisplayName("✅ 控制组：未取消 → 工具正常执行（闸门不被误伤）")
+        void notCancelledRunsNormally() {
+            FakeClaimPort port = new FakeClaimPort();
+            assertThat(port.isCancelled(TENANT, RUN_ID)).isFalse();
+
+            var handler = new RecordingTool();
+            gateWith(handler, NOT_CANCELLED).invokeAll(TENANT, task(), orderedCalls());
+
+            assertThat(handler.executeCount.get())
+                    .as("⚠️ 未取消时不得被误拦（否则功能不可用）")
+                    .isGreaterThan(0);
+        }
+
+        @Test
+        @DisplayName("⚠️ 取消幂等：已取消的 Run 重复取消返回 false")
+        void cancelIsIdempotent() {
+            FakeClaimPort port = new FakeClaimPort();
+            assertThat(port.requestCancel(TENANT, RUN_ID)).isTrue();
+            assertThat(port.requestCancel(TENANT, RUN_ID))
+                    .as("已取消的 Run 重复取消必须返回 false（幂等且不回退终态）")
+                    .isFalse();
         }
     }
 }
