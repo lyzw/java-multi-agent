@@ -1,5 +1,9 @@
 package cn.studykid.multiagent.application.config;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -28,7 +32,64 @@ public final class WorkerPolicy {
     /** 发布失败累计上限（超过则停止重试并告警）。 */
     public static final String KEY_MAX_PUBLISH_ATTEMPTS = "agent.worker.max-publish-attempts";
 
+    /** 本实例服务的租户 slug 清单（P4-D05 / L-4）。 */
+    public static final String KEY_TENANT_SLUGS = "agent.worker.tenant-slugs";
+
     private WorkerPolicy() {
+    }
+
+    /**
+     * 解析租户 slug 清单（P4-D05 / 关闭 L-4）。
+     *
+     * <p><b>⚠️ 为何是「显式清单」而不是「全部租户」</b>：
+     * 「扫全表」要求连接具备跨租户读权限，
+     * 一旦配置或实现出错就是<b>跨租户发布</b>（越权，且静默）。
+     * 显式清单的最坏结果是<b>漏发或拒启</b>——
+     * 失败形态从「越权」降级为「不可用」，这是本片的核心取舍。
+     *
+     * <p><b>⚠️ 清单长度受 {@code deployment.pilot.max-tenants} 约束</b>：
+     * 试点期上限是灰度承诺的一部分，
+     * 允许配置悄悄超过上限等于「灰度控制形同虚设」（FE-02 已记该缺口）。
+     *
+     * @param raw        配置原始值（逗号分隔）
+     * @param maxTenants 试点允许的最大租户数（≥1）
+     * @return 去重后的 slug 清单（保持配置顺序）
+     * @throws IllegalStateException 缺失 / 为空 / 重复 / 超过上限
+     */
+    public static List<String> requireTenantSlugs(@Nullable Object raw, int maxTenants) {
+        if (raw == null) {
+            throw new IllegalStateException(
+                    "Worker 配置缺失（fail-closed，禁止退回默认值）：" + KEY_TENANT_SLUGS);
+        }
+        if (maxTenants < 1) {
+            throw new IllegalStateException(
+                    "试点租户上限必须 ≥1（非法上限会让清单校验失去意义）: " + maxTenants);
+        }
+        List<String> slugs = new ArrayList<>();
+        for (String part : String.valueOf(raw).split(",")) {
+            String slug = part.trim();
+            if (!slug.isEmpty()) {
+                slugs.add(slug);
+            }
+        }
+        if (slugs.isEmpty()) {
+            // ⚠️ 空清单 = 消息永不发布，而系统表面完全正常（断链的典型形态）
+            throw new IllegalStateException(
+                    "租户 slug 清单为空（fail-closed：空清单即消息永不发布）: "
+                            + KEY_TENANT_SLUGS + " = " + raw);
+        }
+        int distinct = new LinkedHashSet<>(slugs).size();
+        if (distinct != slugs.size()) {
+            throw new IllegalStateException(
+                    "租户 slug 清单含重复项（同一租户被发布两次 = 消息重复）: " + slugs);
+        }
+        if (slugs.size() > maxTenants) {
+            throw new IllegalStateException(
+                    "租户 slug 数量超过试点上限（灰度控制不得被配置绕过）: "
+                            + KEY_TENANT_SLUGS + " 共 " + slugs.size() + " 个，"
+                            + PlatformConfig.KEY_PILOT_MAX_TENANTS + " = " + maxTenants);
+        }
+        return List.copyOf(slugs);
     }
 
     public static long requireRelayIntervalMs(@Nullable Object raw) {

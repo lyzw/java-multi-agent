@@ -21,11 +21,15 @@ import cn.studykid.multiagent.ports.persistence.RunCreationPort;
  * <b>任务永久丢失且无任何报错</b>。Outbox 把「待发消息」与业务数据
  * 放在同一事务，消息丢失与业务数据丢失绑定在一起。
  *
- * <p><b>单租户设计</b>（P2-D02 §3.2）：一个实例只处理一个租户。
- * 全租户轮询需要能读所有租户的权限，一旦连接配置错误就会
- * <b>跨租户发布消息</b> —— 隔离在最弱的地方被打破。
+ * <p><b>单租户绑定</b>（P2-D02 §3.2 / P4-D05）：
+ * 一个发布器实例只服务<b>一个</b>租户（构造期绑定 {@code tenantId}）。
+ * 多租户由一个实例持有<b>多个</b>发布器实现（见 {@link TenantOutboxPublishers}），
+ * 而<b>不是</b>「一个发布器扫全表」——后者需要能读所有租户的权限，
+ * 一旦连接配置错误就会<b>跨租户发布消息</b>：隔离在最弱的地方被打破。
  *
- * <p>代价：租户数增加时需多实例。试点期 max-tenants=1，推迟到 P4。
+ * <p><b>⚠️ 第二道防线</b>：即便仓储实现出错（例如忽略 {@code tenantId} 参数
+ * 返回了别人的行），本类在发送前仍会断言事件属于自己绑定的租户，
+ * 不匹配即拒绝发布并标记失败（见 {@link #publishOne}）。
  */
 public class OutboxPublisher {
 
@@ -82,6 +86,21 @@ public class OutboxPublisher {
             // 此处仍复核一遍——发布器是消息进入 MQ 的最后关口
             OutboxMessage.assertPayloadSafe(event.payload());
             OutboxMessage message = OutboxMessage.fromPayload(event.payload());
+
+            // ⚠️⚠️ 租户归属复核（P4-D05 / I-D05-1）：
+            //    仓储若忽略 tenantId 参数返回了别的租户的行，
+            //    此处必须拦下——消息一旦跨租户进入 MQ 就难以精确删除，
+            //    且消费端会按错误的租户上下文执行（越权）。
+            if (!tenantId.equals(message.tenantId())) {
+                handleFailure(event, "跨租户事件，拒绝发布（本发布器绑定 tenantId="
+                        + tenantId + "，事件属于 tenantId=" + message.tenantId() + "）");
+                // ⚠️ 不抛异常到循环外：一条错配的行不应让整个租户停摆，
+                //    但它**永远不该被发出**，故标记失败留待人工介入。
+                log.error("⚠️⚠️ 检测到跨租户事件，已拒绝发布并标记失败: outboxId={}, "
+                                + "runId={}, bound={}, event={}",
+                        event.outboxId(), event.runId(), tenantId, message.tenantId());
+                return false;
+            }
 
             // ⚠️ 必须等 broker 确认（publisher confirms）。
             //    发出即标记的话，消息未到达时 Outbox 已不再重试 → 任务静默丢失

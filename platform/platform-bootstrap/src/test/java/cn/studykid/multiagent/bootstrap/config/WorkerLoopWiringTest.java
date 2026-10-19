@@ -36,6 +36,7 @@ import cn.studykid.multiagent.ports.persistence.RunCreationPort;
 import cn.studykid.multiagent.worker.dispatch.OutboxPublisher;
 import cn.studykid.multiagent.worker.dispatch.OutboxRelay;
 import cn.studykid.multiagent.worker.dispatch.RunDispatchConsumer;
+import cn.studykid.multiagent.worker.dispatch.TenantOutboxPublishers;
 
 /**
  * Worker 主循环**连通性测试**（P4-D03）。
@@ -105,16 +106,21 @@ class WorkerLoopWiringTest {
     }
 
         @Test
-        @DisplayName("⚠️⚠️ C-2 OutboxPublisher 存在且持有真实的 MessageSender")
-        void publisherHoldsRealSender() {
-        OutboxPublisher publisher = ctx.getBean(OutboxPublisher.class);
-        assertThat(publisher).isNotNull();
+        @DisplayName("⚠️⚠️ C-2 租户发布器清单存在，且每个发布器持有真实的 MessageSender")
+        void tenantPublishersHoldRealSender() {
+        TenantOutboxPublishers tenantPublishers = ctx.getBean(TenantOutboxPublishers.class);
+        assertThat(tenantPublishers).isNotNull();
+        assertThat(tenantPublishers.size())
+                .as("⚠️⚠️ 至少应有一个租户发布器（空清单 = 消息永不发布）")
+                .isGreaterThanOrEqualTo(1);
         // ⚠️ 断言的是「持有真实实现」而非某个具体类——
         //    换 MQ 供应商时本用例仍成立（端口化换来的收益）。
-        assertThat(senderFieldValue(publisher))
-                .as("⚠️⚠️ Publisher 必须持有真实 MessageSender；"
-                        + "为 null/NO_OP 即意味着消息发不出去")
-                .isNotNull();
+        for (OutboxPublisher publisher : tenantPublishers.publishers()) {
+            assertThat(senderFieldValue(publisher))
+                    .as("⚠️⚠️ 每个租户发布器必须持有真实 MessageSender；"
+                            + "为 null/NO_OP 即意味着消息发不出去")
+                    .isNotNull();
+        }
     }
 
         @Test

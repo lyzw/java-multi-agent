@@ -2,6 +2,7 @@ package cn.studykid.multiagent.bootstrap.config;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 import javax.sql.DataSource;
@@ -13,7 +14,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import cn.studykid.multiagent.application.config.PlatformConfig;
 import cn.studykid.multiagent.application.config.RetentionPolicy;
+import cn.studykid.multiagent.application.config.WorkerPolicy;
 import cn.studykid.multiagent.application.retention.ConsentWithdrawalService;
 import cn.studykid.multiagent.application.retention.RetentionPurgeService;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcErasureRepository;
@@ -35,9 +38,11 @@ import cn.studykid.multiagent.worker.retention.RetentionJob;
  * 不为任何 Bean 类增加第二个构造器——此前三次因「组件扫描类含两个构造器」
  * 导致 {@code No default constructor found}，进而 E2E 全军覆没。
  *
- * <p><b>为何租户来自 {@code agent.worker.tenant-slug}</b>：
+ * <p><b>为何租户来自 {@code agent.worker.tenant-slugs}</b>：
  * 复用 D03 已确立的「配置放人类可读 slug、启动时解析成 UUID」约定，
  * 避免同一份配置里出现两套租户来源——两套来源迟早不一致。
+ * （P4-D05 起该键为<b>清单</b>：中继与清理服务同一份租户来源，
+ * 否则会出现「消息按 3 个租户发、清理只清 1 个租户」的静默缺口。）
  */
 @Configuration
 @ConditionalOnProperty(name = "agent.retention.enabled", havingValue = "true")
@@ -97,13 +102,21 @@ public class RetentionConfig {
     public RetentionJob retentionJob(
             RetentionPurgeService purgeService,
             DataSource dataSource,
-            @Value("${agent.worker.tenant-slug}") String tenantSlug,
+            @Value("${" + WorkerPolicy.KEY_TENANT_SLUGS + "}") String tenantSlugs,
+            @Value("${" + PlatformConfig.KEY_PILOT_MAX_TENANTS + "}") String pilotMaxTenants,
             @Value("${" + RetentionPolicy.KEY_INTERVAL_MS + "}") String intervalMs) {
-        String tenantId = TenantSlugResolver.resolve(dataSource, tenantSlug);
-        // ⚠️ 单实例多租户（D05 的范围）：此处启动解析一个 slug，
-        //    多租户时改为解析多个——但清单一律显式，不得「全租户扫描」，
-        //    后者会在配置错误时跨租户删除。
-        return new RetentionJob(purgeService, List.of(tenantId),
+        // ⚠️ 与中继共用同一份租户清单（P4-D05）：
+        //    两套来源迟早不一致，而「清理漏掉某个租户」的表现是
+        //    「数据超期留存」——违反 PIPL 且不报任何错。
+        int maxTenants = PlatformConfig.Resolver.requirePositiveInt(
+                pilotMaxTenants, PlatformConfig.KEY_PILOT_MAX_TENANTS);
+        List<String> slugs = WorkerPolicy.requireTenantSlugs(tenantSlugs, maxTenants);
+        List<String> tenantIds = new ArrayList<>(slugs.size());
+        for (String slug : slugs) {
+            tenantIds.add(TenantSlugResolver.resolve(dataSource, slug));
+        }
+        log.info("保留期清理租户清单: slugs={}, 租户数={}", slugs, tenantIds.size());
+        return new RetentionJob(purgeService, List.copyOf(tenantIds),
                 Duration.ofMillis(RetentionPolicy.requireIntervalMs(intervalMs)));
     }
 }

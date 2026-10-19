@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import cn.studykid.multiagent.application.backpressure.BackpressureController;
 import cn.studykid.multiagent.ports.messaging.MessageSender;
 import cn.studykid.multiagent.ports.messaging.MessageSender.MessagePublishException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyDecision;
@@ -28,7 +30,7 @@ import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
 
 /**
- * Outbox 中继行为测试（P4-D03）。
+ * Outbox 中继行为测试（P4-D03，P4-D05 扩展：多租户 + 背压）。
  *
  * <p>⚠️ <b>本类与 {@code WorkerLoopWiringTest} 是互补的两类测试</b>：
  * <ul>
@@ -37,10 +39,12 @@ import cn.studykid.multiagent.ports.persistence.RunCreationPort;
  * </ul>
  * 缺任一类，整条链路都可断裂而不被发现（D01 断链的教训）。
  */
-@DisplayName("P4-D03 OutboxRelay 行为测试")
+@DisplayName("P4-D03/D05 OutboxRelay 行为测试")
 class OutboxRelayTest {
 
     private static final String TENANT = "11111111-1111-1111-1111-111111111111";
+
+    private static final String TENANT_B = "22222222-2222-2222-2222-222222222222";
 
     // ── R-1：驱动发布 ────────────────────────────────────────────
 
@@ -57,10 +61,11 @@ class OutboxRelayTest {
             outbox.add(pending("ob-2"));
 
             OutboxRelay relay = new OutboxRelay(
-                    new OutboxPublisher(outbox, sender, TENANT,
+                    List.of(new OutboxPublisher(outbox, sender, TENANT,
                             Clock.fixed(Instant.parse("2026-10-19T00:00:00Z"),
                                     ZoneOffset.UTC),
-                            50, 5),
+                            50, 5)),
+                    allowAll(),
                     Duration.ofMillis(200));
 
             assertThat(relay.relayOnce())
@@ -214,12 +219,213 @@ class OutboxRelayTest {
             OutboxPublisher publisher = new OutboxPublisher(
                     outbox, new RecordingSender(), TENANT, Clock.systemUTC(), 50, 5);
 
-            assertThatThrownBy(() -> new OutboxRelay(publisher, Duration.ZERO))
+            assertThatThrownBy(() -> relayOf(List.of(publisher), Duration.ZERO))
                     .as("⚠️⚠️ 0 间隔等于忙等——必须在构造期就拒绝，"
                             + "不能等到运行时把 CPU 打满")
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> new OutboxRelay(publisher, Duration.ofMillis(-1)))
+            assertThatThrownBy(() -> relayOf(List.of(publisher), Duration.ofMillis(-1)))
                     .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ R-3b 空租户清单 → 构造即拒绝（空清单 = 消息永不发布）")
+        void emptyPublisherListRejected() {
+            assertThatThrownBy(() -> relayOf(List.of(), Duration.ofMillis(200)))
+                    .as("⚠️⚠️ 空清单的失败形态是「消息永不发布而系统全绿」，"
+                            + "必须在构造期就拒绝")
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    // ── R-5：多租户分发（P4-D05 / L-4）──────────────────────────
+
+    @Nested
+    @DisplayName("R-5 多租户分发（P4-D05 / L-4）")
+    class MultiTenant {
+
+        @Test
+        @DisplayName("⚠️⚠️ R-5a 一轮驱动**全部**租户的发布器（不是只发第一个）")
+        void drivesEveryTenantPublisher() {
+            RecordingSender senderA = new RecordingSender();
+            RecordingSender senderB = new RecordingSender();
+            StubOutbox outboxA = new StubOutbox();
+            StubOutbox outboxB = new StubOutbox();
+            outboxA.add(pending("ob-a"));
+            outboxB.add(pendingB("ob-b"));
+
+            OutboxRelay relay = relayOf(List.of(
+                    publisherOf(outboxA, senderA, TENANT),
+                    publisherOf(outboxB, senderB, TENANT_B)),
+                    Duration.ofMillis(200));
+
+            assertThat(relay.relayOnce())
+                    .as("⚠️⚠️ 两个租户各有一条待发事件，一轮必须全部发出")
+                    .isEqualTo(2);
+            assertThat(senderA.sent).hasSize(1);
+            assertThat(senderB.sent).hasSize(1);
+            assertThat(relay.tenantCount()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ R-5b 单租户发布失败不影响其他租户（隔离的硬要求）")
+        void oneTenantFailureDoesNotBlockOthers() {
+            StubOutbox outboxA = new StubOutbox();
+            outboxA.add(pending("ob-a"));
+            StubOutbox outboxB = new StubOutbox();
+            outboxB.add(pendingB("ob-b"));
+
+            RecordingSender senderB = new RecordingSender();
+            // A 的发布器直接抛异常（模拟该租户数据/连接异常）
+            OutboxPublisher brokenA = new OutboxPublisher(outboxA, new RecordingSender() {
+                @Override
+                public void send(String eventType, OutboxMessage message) {
+                    throw new MessagePublishException("模拟 A 租户 broker 故障");
+                }
+            }, TENANT, Clock.systemUTC(), 50, 5);
+
+            OutboxRelay relay = relayOf(List.of(brokenA,
+                    publisherOf(outboxB, senderB, TENANT_B)), Duration.ofMillis(200));
+
+            assertThat(relay.relayOnce())
+                    .as("⚠️⚠️ 一个租户故障不得让所有租户停摆——"
+                            + "这是多租户隔离的硬要求，不是可用性优化")
+                    .isEqualTo(1);
+            assertThat(senderB.sent).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ R-5c 跨租户事件在上游被拒（仓储返回了别人的行）")
+        void crossTenantEventRejectedByPublisher() {
+            RecordingSender sender = new RecordingSender();
+            StubOutbox outbox = new StubOutbox();
+            // ⚠️ 模拟「仓储忽略 tenantId 参数」：绑定 A 的发布器取到了 B 的事件
+            outbox.add(pendingB("ob-of-b"));
+
+            OutboxRelay relay = relayOf(
+                    List.of(publisherOf(outbox, sender, TENANT)), Duration.ofMillis(200));
+
+            assertThat(relay.relayOnce())
+                    .as("⚠️⚠️ 跨租户消息一旦进入 MQ 就难以精确删除，"
+                            + "且消费端会按错误租户上下文执行（越权）")
+                    .isZero();
+            assertThat(sender.sent).isEmpty();
+            assertThat(outbox.failed)
+                    .as("⚠️ 被拒的事件必须标记失败留待人工介入，而不是静默跳过")
+                    .contains("ob-of-b");
+        }
+    }
+
+    // ── R-6：背压护栏（P4-D05 / L-6）────────────────────────────
+
+    @Nested
+    @DisplayName("R-6 背压护栏（P4-D05 / L-6）")
+    class Backpressure {
+
+        @Test
+        @DisplayName("⚠️⚠️ R-6a 队列达高水位 → 整轮停发（一条都不发）")
+        void highWatermarkStopsPublishing() {
+            StubOutbox outbox = new StubOutbox();
+            outbox.add(pending("ob-1"));
+            RecordingSender sender = new RecordingSender();
+            OutboxRelay relay = new OutboxRelay(List.of(publisherOf(outbox, sender, TENANT)),
+                    controllerWithDepth(1000), Duration.ofMillis(200));
+
+            assertThat(relay.relayOnce())
+                    .as("⚠️⚠️ 队列已过载时必须停发——否则队列无界增长且无任何告警")
+                    .isZero();
+            assertThat(sender.sent).isEmpty();
+            assertThat(relay.isThrottled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("⚠️ R-6b 低水位以下正常发布（护栏不误伤）")
+        void belowLowWatermarkPublishes() {
+            StubOutbox outbox = new StubOutbox();
+            outbox.add(pending("ob-1"));
+            RecordingSender sender = new RecordingSender();
+            OutboxRelay relay = new OutboxRelay(List.of(publisherOf(outbox, sender, TENANT)),
+                    controllerWithDepth(10), Duration.ofMillis(200));
+
+            assertThat(relay.relayOnce()).isEqualTo(1);
+            assertThat(relay.isThrottled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ R-6c 滞回：深度落在高低水位之间时维持上一状态（不抖动）")
+        void hysteresisAvoidsFlapping() {
+            AtomicInteger depth = new AtomicInteger(0);
+            StubOutbox outbox = new StubOutbox();
+            RecordingSender sender = new RecordingSender();
+            BackpressureController controller =
+                    new BackpressureController(q -> depth.get(), "agent.run.execute",
+                            1000, 200, 4);
+            OutboxRelay relay = new OutboxRelay(List.of(publisherOf(outbox, sender, TENANT)),
+                    controller, Duration.ofMillis(200));
+
+            // ① 低水位 → 正常发布
+            depth.set(10);
+            relay.relayOnce();
+            assertThat(relay.isThrottled()).isFalse();
+
+            // ② 冲到高水位 → 停发
+            depth.set(1500);
+            relay.relayOnce();
+            assertThat(relay.isThrottled()).isTrue();
+
+            // ③ 回落到中间地带（仍在低水位之上）→ **仍停发**（滞回）
+            depth.set(500);
+            outbox.add(pending("ob-2"));
+            assertThat(relay.relayOnce())
+                    .as("⚠️⚠️ 滞回区间内必须维持停发：否则会在阈值处来回抖动，"
+                            + "表现为「发布—停止—发布—停止」，比恒定停发更难排障")
+                    .isZero();
+            assertThat(relay.isThrottled()).isTrue();
+
+            // ④ 回落到低水位以下 → 恢复
+            depth.set(100);
+            assertThat(relay.relayOnce()).isEqualTo(1);
+            assertThat(relay.isThrottled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ R-6d 探测失败 = 超限停发（fail-closed，不得当队列为空）")
+        void probeFailureIsTreatedAsOverload() {
+            StubOutbox outbox = new StubOutbox();
+            outbox.add(pending("ob-1"));
+            RecordingSender sender = new RecordingSender();
+            BackpressureController controller = new BackpressureController(q -> {
+                throw new IllegalStateException("模拟 broker 不可达");
+            }, "agent.run.execute", 1000, 200, 4);
+
+            OutboxRelay relay = new OutboxRelay(List.of(publisherOf(outbox, sender, TENANT)),
+                    controller, Duration.ofMillis(200));
+
+            assertThat(relay.relayOnce())
+                    .as("⚠️⚠️ 探测失败时放行 = 背压在最需要它的时候失效"
+                            + "（与 D8「限流组件故障反成 DoS 入口」同源）")
+                    .isZero();
+            assertThat(sender.sent).isEmpty();
+            assertThat(controller.probeFailures()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("⚠️ R-6e 降级时轮询间隔按倍数拉长（不给已过载的 broker 加压）")
+        void throttledIntervalIsMultiplied() {
+            // ⚠️ effectiveInterval 读的是「降级标志位」，须先 allowPublish 建立状态
+            BackpressureController controller = controllerWithDepth(5000);
+            assertThat(controller.allowPublish())
+                    .as("⚠️ 深度 5000 ≥ 高水位 1000 → 本轮停发")
+                    .isFalse();
+            assertThat(controller.isThrottled()).isTrue();
+            assertThat(controller.effectiveInterval(Duration.ofMillis(200)))
+                    .as("⚠️ 队列已过载时高频探测只是给 broker 加压")
+                    .isEqualTo(Duration.ofMillis(800));
+
+            BackpressureController normal = controllerWithDepth(0);
+            assertThat(normal.allowPublish()).isTrue();
+            assertThat(normal.isThrottled()).isFalse();
+            assertThat(normal.effectiveInterval(Duration.ofMillis(200)))
+                    .isEqualTo(Duration.ofMillis(200));
         }
     }
 
@@ -272,14 +478,43 @@ class OutboxRelayTest {
     // ── 工具 ────────────────────────────────────────────────────
 
     private static OutboxRelay relay(StubOutbox outbox, MessageSender sender) {
-        return new OutboxRelay(
-                new OutboxPublisher(outbox, sender, TENANT, Clock.systemUTC(), 50, 5),
+        return relayOf(List.of(
+                        new OutboxPublisher(outbox, sender, TENANT, Clock.systemUTC(), 50, 5)),
                 Duration.ofMillis(200));
     }
 
+    /** 单个租户的中继（背压放行）。 */
+    private static OutboxRelay relayOf(List<OutboxPublisher> publishers, Duration interval) {
+        return new OutboxRelay(publishers, allowAll(), interval);
+    }
+
+    private static OutboxPublisher publisherOf(RunCreationPort outbox,
+                                               MessageSender sender,
+                                               String tenantId) {
+        return new OutboxPublisher(outbox, sender, tenantId, Clock.systemUTC(), 50, 5);
+    }
+
+    /** 永不触发背压的控制器（深度恒为 0）。 */
+    private static BackpressureController allowAll() {
+        return controllerWithDepth(0);
+    }
+
+    /** 固定深度的背压控制器（高水位 1000 / 低水位 200 / 降级倍数 4）。 */
+    private static BackpressureController controllerWithDepth(int depth) {
+        return new BackpressureController(q -> depth, "agent.run.execute", 1000, 200, 4);
+    }
+
     private static RunCreationPort.PendingOutbox pending(String outboxId) {
+        return pending(outboxId, TENANT);
+    }
+
+    private static RunCreationPort.PendingOutbox pendingB(String outboxId) {
+        return pending(outboxId, TENANT_B);
+    }
+
+    private static RunCreationPort.PendingOutbox pending(String outboxId, String tenantId) {
         String runId = UUID.randomUUID().toString();
-        OutboxMessage msg = new OutboxMessage(runId, TENANT, 0, 1L, Instant.now());
+        OutboxMessage msg = new OutboxMessage(runId, tenantId, 0, 1L, Instant.now());
         return new RunCreationPort.PendingOutbox(outboxId, runId, "RUN_DISPATCH",
                 msg.toPayload(), 0);
     }

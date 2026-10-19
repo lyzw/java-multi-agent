@@ -2,6 +2,8 @@ package cn.studykid.multiagent.bootstrap.config;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,14 +20,21 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import cn.studykid.multiagent.application.backpressure.BackpressureController;
+import cn.studykid.multiagent.application.config.BackpressurePolicy;
+import cn.studykid.multiagent.application.config.PlatformConfig;
 import cn.studykid.multiagent.application.config.WorkerPolicy;
 import cn.studykid.multiagent.infrastructure.messaging.RabbitExecutionListener;
 import cn.studykid.multiagent.infrastructure.messaging.RabbitMessageSender;
+import cn.studykid.multiagent.infrastructure.messaging.RabbitQueueDepthProbe;
 import cn.studykid.multiagent.ports.messaging.MessageSender;
+import cn.studykid.multiagent.ports.messaging.QueueDepthProbe;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
 import cn.studykid.multiagent.worker.dispatch.OutboxPublisher;
 import cn.studykid.multiagent.worker.dispatch.OutboxRelay;
 import cn.studykid.multiagent.worker.dispatch.RunDispatchConsumer;
+import cn.studykid.multiagent.worker.dispatch.TenantOutboxPublishers;
+import cn.studykid.multiagent.worker.dispatch.TenantSlugResolver;
 
 import javax.sql.DataSource;
 import tools.jackson.databind.ObjectMapper;
@@ -166,40 +175,86 @@ public class WorkerLoopConfig {
     }
 
     /**
-     * Outbox 发布器（P2-D02 逻辑 + P4-D03 装配）。
+     * 队列深度探测（P4-D05 / L-6 背压护栏的输入）。
      *
-     * <p>⚠️ <b>单租户设计</b>（P2-D02 §3.2）：一个实例只处理一个租户。
-     * 全租户轮询需要能读所有租户的权限，一旦连接配置错误就会
-     * <b>跨租户发布消息</b>——隔离在最弱的地方被打破。
+     * <p>⚠️ 探测失败由 {@link BackpressureController} 按「超限」处理：
+     * 探测不到深度时放行 = 背压在最需要它的时候失效。
      */
     @Bean
-    public OutboxPublisher outboxPublisher(RunCreationPort runCreationPort,
-                                          MessageSender messageSender,
-                                          DataSource dataSource,
-                                          @Value("${agent.worker.tenant-slug}")
-                                                  String tenantSlug,
-                                          @Value("${agent.worker.outbox-batch}")
-                                                  String outboxBatch,
-                                          @Value("${agent.worker.max-publish-attempts}")
-                                                  String maxAttempts) {
-        // ⚠️ 配置只放人类可读的 slug，启动时解析成 UUID——
-        //    配置里出现裸 UUID 时没人能看出它指哪个租户（见 TenantSlugResolver）。
-        return new OutboxPublisher(runCreationPort, messageSender,
-                cn.studykid.multiagent.worker.dispatch.TenantSlugResolver
-                        .resolve(dataSource, tenantSlug),
-                Clock.systemUTC(),
-                WorkerPolicy.requireOutboxBatch(outboxBatch),
-                WorkerPolicy.requireMaxPublishAttempts(maxAttempts));
+    public QueueDepthProbe queueDepthProbe(RabbitTemplate template) {
+        return new RabbitQueueDepthProbe(template);
     }
 
     /**
-     * Outbox 中继（P4-D03 / D-1）。
+     * 背压控制器（P4-D05 / L-6）。
+     *
+     * <p>⚠️ 三项水位配置<b>缺失即拒绝启动</b>（fail-closed）：
+     * 水位线的「过高」与「过低」两个方向都危险，不存在保守兜底值。
      */
     @Bean
-    public OutboxRelay outboxRelay(OutboxPublisher publisher,
+    public BackpressureController backpressureController(
+            QueueDepthProbe probe,
+            @Value("${agent.mq.queues.execute.name}") String queueName,
+            @Value("${" + BackpressurePolicy.KEY_HIGH_WATERMARK + "}")
+                    String highWatermark,
+            @Value("${" + BackpressurePolicy.KEY_LOW_WATERMARK + "}")
+                    String lowWatermark,
+            @Value("${" + BackpressurePolicy.KEY_COOLDOWN_MULTIPLIER + "}")
+                    String cooldownMultiplier) {
+        int high = BackpressurePolicy.requireHighWatermark(highWatermark);
+        return new BackpressureController(probe, queueName, high,
+                BackpressurePolicy.requireLowWatermark(lowWatermark, high),
+                BackpressurePolicy.requireCooldownMultiplier(cooldownMultiplier));
+    }
+
+    /**
+     * 租户发布器清单（P4-D05 / 关闭 L-4）。
+     *
+     * <p><b>⚠️ 每个租户一个独立的 {@link OutboxPublisher}</b>，
+     * 各自绑定自己的 {@code tenantId}，而不是「一个发布器扫全表」——
+     * 后者需要跨租户读权限，配置错误即<b>跨租户发布</b>。
+     * 显式清单的最坏结果是<b>漏发或拒启</b>，
+     * 失败形态从「越权」降级为「不可用」。
+     *
+     * <p>⚠️ <b>清单长度受试点上限约束</b>：
+     * {@code deployment.pilot.max-tenants} 是灰度承诺的一部分，
+     * 允许配置绕过等于灰度控制失效。
+     */
+    @Bean
+    public TenantOutboxPublishers tenantOutboxPublishers(
+            RunCreationPort runCreationPort,
+            MessageSender messageSender,
+            DataSource dataSource,
+            @Value("${" + WorkerPolicy.KEY_TENANT_SLUGS + "}") String tenantSlugs,
+            @Value("${" + PlatformConfig.KEY_PILOT_MAX_TENANTS + "}") String pilotMaxTenants,
+            @Value("${agent.worker.outbox-batch}") String outboxBatch,
+            @Value("${agent.worker.max-publish-attempts}") String maxAttempts) {
+        int maxTenants = PlatformConfig.Resolver.requirePositiveInt(
+                pilotMaxTenants, PlatformConfig.KEY_PILOT_MAX_TENANTS);
+        List<String> slugs = WorkerPolicy.requireTenantSlugs(tenantSlugs, maxTenants);
+        int batch = WorkerPolicy.requireOutboxBatch(outboxBatch);
+        int attempts = WorkerPolicy.requireMaxPublishAttempts(maxAttempts);
+
+        List<OutboxPublisher> publishers = new ArrayList<>(slugs.size());
+        for (String slug : slugs) {
+            // ⚠️ slug → UUID 在启动期解析，解析失败即拒绝启动（fail-closed）
+            String tenantId = TenantSlugResolver.resolve(dataSource, slug);
+            publishers.add(new OutboxPublisher(runCreationPort, messageSender, tenantId,
+                    Clock.systemUTC(), batch, attempts));
+        }
+        log.info("租户发布器已装配: slugs={}, 租户数={}", slugs, publishers.size());
+        return new TenantOutboxPublishers(publishers);
+    }
+
+    /**
+     * Outbox 中继（P4-D03 / D-1，P4-D05 接入多租户与背压）。
+     */
+    @Bean
+    public OutboxRelay outboxRelay(TenantOutboxPublishers publishers,
+                                   BackpressureController backpressure,
                                    @Value("${agent.worker.relay-interval-ms}")
                                            String relayIntervalMs) {
-        return new OutboxRelay(publisher,
+        return new OutboxRelay(publishers.publishers(), backpressure,
                 Duration.ofMillis(WorkerPolicy.requireRelayIntervalMs(relayIntervalMs)));
     }
 
