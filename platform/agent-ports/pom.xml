@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.multiagent</groupId>
+    <artifactId>java-saas-agent-platform</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>agent-ports</artifactId>
+  <name>agent-ports :: 端口定义</name>
+  <description>
+    定义领域层与外部世界的契约接口：ModelGateway、ToolHandler、RunRepository、Outbox 等。
+    依赖 agent-core；不依赖任何具体实现。
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-core</artifactId>
+    </dependency>
+  </dependencies>
+</project>

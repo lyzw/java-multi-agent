@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.multiagent</groupId>
+    <artifactId>java-saas-agent-platform</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>agent-core</artifactId>
+  <name>agent-core :: 领域层</name>
+  <description>
+    领域模型、状态机与端口契约。
+    架构约束（v3.1）：本模块不依赖 Spring AI、MQ SDK、Web 框架、数据库驱动。
+    依赖方向校验由 AgentCorePurityTest 执行，违反即构建失败。
+  </description>
+
+  <dependencies>
+    <!--
+      有意保持为空：领域层零框架依赖。
+      仅允许 JSpecify（编译期 null-safety 注解，无运行时依赖）。
+    -->
+    <dependency>
+      <groupId>org.jspecify</groupId>
+      <artifactId>jspecify</artifactId>
+      <version>${jspecify.version}</version>
+    </dependency>
+  </dependencies>
+</project>

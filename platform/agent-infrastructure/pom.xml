@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.multiagent</groupId>
+    <artifactId>java-saas-agent-platform</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>agent-infrastructure</artifactId>
+  <name>agent-infrastructure :: 基础设施层</name>
+  <description>
+    端口实现：PostgreSQL 持久化、Outbox、MQ、对象存储、ModelGateway 适配。
+    ADR-011 注意：Spring Boot 4.x 已模块化为 70+ starter，此处只显式引入所需模块，
+    禁止依赖「统一 classpath 一定包含某类」的隐式假设。
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-ports</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-application</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <!--
+      ADR-001：RabbitMQ 4.3.6 + Quorum Queue。
+      Spring Boot 4.1 已自动装配 RabbitMQ 的 Observation 约定（metrics/traces），
+      直接服务 FR-017 可观测性，无需自研指标采集。
+      ⚠️ 禁用内置 @Retryable：与 ModelGateway 自研重试会双重重试（ADR-011 §3.2）。
+    -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-amqp</artifactId>
+    </dependency>
+    <!-- PostgreSQL 17（DEC-13），支持至 2029-11-08 -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+    </dependency>
+    <!-- Flyway 12.x（ADR-011 适配项），迁移规范按新版重写 -->
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+  </dependencies>
+</project>
