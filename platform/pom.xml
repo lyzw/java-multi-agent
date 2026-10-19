@@ -112,6 +112,11 @@
           <artifactId>maven-surefire-plugin</artifactId>
           <version>3.5.4</version>
         </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <version>3.5.4</version>
+        </plugin>
       </plugins>
     </pluginManagement>
     <plugins>
@@ -124,6 +129,39 @@
             <arg>-parameters</arg>
           </compilerArgs>
         </configuration>
+      </plugin>
+      <!--
+        ⚠️⚠️ F-14（P4-D04 实测发现）：本项目此前**没有**配置 failsafe，
+        而 surefire 的默认 include 是 Test*/*Test/*Tests/*TestCase，
+        不含 *IT.java —— 于是 14 个集成测试类在 `mvn verify` 中
+        **一条都不会执行**，构建依然 BUILD SUCCESS。
+        这是最坏的失效形态：不是「测试红」，而是「测试从未运行」。
+        台账上「集成测试 N 项」在 CI 里实际等于 0。
+
+        修复：显式注册 failsafe 并把 *IT.java 纳入 integration-test 阶段。
+        IT 自身用 @EnabledIfEnvironmentVariable(IT_PG_URL) 守门——
+        无数据库时**跳过**（不是失败），故 CI 无库时仍可绿，
+        但「有库时」必须真跑，且跳过数会被 failsafe 报告如实记录。
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <configuration>
+          <includes>
+            <include>**/*IT.java</include>
+          </includes>
+          <!-- ⚠️ 不设 failIfNoSpecifiedTests=false 之类放宽项：
+               一旦 IT 一个都没被发现，视为构建问题而非「通过」。 -->
+        </configuration>
+        <executions>
+          <execution>
+            <id>run-integration-tests</id>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>
