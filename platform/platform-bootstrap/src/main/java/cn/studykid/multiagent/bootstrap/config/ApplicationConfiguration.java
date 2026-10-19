@@ -160,11 +160,39 @@ public class ApplicationConfiguration {
      * <p><b>默认 fail-closed</b>：审批权威（人类审批台 / 策略引擎）尚未接入，
      * 需要审批的工具在查不到有效审批时一律被拒——这是设计内的安全行为。
      */
+    /**
+     * Run 领取仓储（P3-D07）。
+     *
+     * <p>⚠️ <b>刻意去掉 {@code @Repository} 组件扫描</b>（P3-D07）：
+     * 本类新增 {@code AuditPort} 构造参数后有<b>两个</b>构造器，
+     * 组件扫描无法选择 → {@code No default constructor found}，
+     * Spring 上下文启动失败、E2E 15 项全红。
+     * <p>改为在本类显式 {@code @Bean} 注册，可同时做到：
+     * ① 注入<b>真实</b> {@link cn.studykid.multiagent.ports.persistence.AuditPort}
+     * （否则取消动作在生产中无痕，R-1 名存实亡）；
+     * ② 与 budgetPort / approvalPort 的装配风格一致。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.RunClaimPort runClaimPort(
+            DataSource dataSource,
+            cn.studykid.multiagent.ports.persistence.AuditPort auditPort) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcRunClaimRepository(
+                dataSource, auditPort);
+    }
+
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.AuditPort auditPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcAuditRepository(
+                dataSource);
+    }
+
     @Bean
     public cn.studykid.multiagent.ports.persistence.ApprovalPort approvalPort(
-            DataSource dataSource) {
+            DataSource dataSource,
+            cn.studykid.multiagent.ports.persistence.AuditPort auditPort) {
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcApprovalRepository(
-                dataSource);
+                dataSource, auditPort);
     }
 
     /**

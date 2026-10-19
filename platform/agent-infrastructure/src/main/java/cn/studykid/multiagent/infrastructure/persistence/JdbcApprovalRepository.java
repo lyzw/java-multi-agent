@@ -7,6 +7,7 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -20,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import cn.studykid.multiagent.core.config.ApprovalRequirement;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.ApprovalPort;
+import cn.studykid.multiagent.ports.persistence.AuditPort;
 
 /**
  * {@link ApprovalPort} 的 JDBC 实现（P3-D05 / FR-013）。
@@ -48,8 +50,47 @@ public class JdbcApprovalRepository implements ApprovalPort {
 
     private final DataSource dataSource;
 
+    /**
+     * 审计端口（P3-D07 / R-1）。
+     *
+     * <p>⚠️ <b>可空 + 默认空实现</b>：本类此前无审计依赖；新增构造参数会波及
+     * 所有调用方。缺省为空实现（no-op）保持既有行为，
+     * 生产装配必须传入真实实现——否则 R-1 的「审批决定可追溯」名存实亡。
+     */
+    private final AuditPort audit;
+
+    /** 空审计（未装配时的占位）。生产<b>必须</b>替换为真实实现。 */
+    private static final AuditPort NO_AUDIT = new AuditPort() {
+        @Override
+        public void recordRequired(String tenantId, String actorId, String action,
+                                   String resourceType, String resourceId,
+                                   Map<String, Object> detail) {
+            log.error("⚠️⚠️ 关键审计未装配，审批动作将无痕（tenant={}, action={}）",
+                    tenantId, action);
+        }
+
+        @Override
+        public void recordAccess(String tenantId, String actorId, String action,
+                                 String resourceType, String resourceId,
+                                 Map<String, Object> detail) {
+            // no-op
+        }
+
+        @Override
+        public java.util.List<AuditView> findByResource(String tenantId,
+                                                        String resourceType,
+                                                        String resourceId) {
+            return java.util.List.of();
+        }
+    };
+
     public JdbcApprovalRepository(@NonNull DataSource dataSource) {
+        this(dataSource, NO_AUDIT);
+    }
+
+    public JdbcApprovalRepository(@NonNull DataSource dataSource, @NonNull AuditPort audit) {
         this.dataSource = dataSource;
+        this.audit = audit;
     }
 
     @Override
@@ -61,7 +102,7 @@ public class JdbcApprovalRepository implements ApprovalPort {
                                  @NonNull String approverScope,
                                  @NonNull Instant expiresAt,
                                  @NonNull String approverId) {
-        return inTenantTx(tenantId, conn -> {
+        String approvalId = inTenantTx(tenantId, conn -> {
             String sql = """
                     INSERT INTO approval
                         (tenant_id, operation_id, state, requirement,
@@ -90,15 +131,27 @@ public class JdbcApprovalRepository implements ApprovalPort {
                 }
             }
         });
+        // ⚠️ 审计在审批事务提交<b>之后</b>写（P3-D07 §2.1 D-1）：
+        //    审批写失败时不会留下「已批准」的错误审计；
+        //    反之审计失败会向上抛 → 调用方中止（关键审计 fail-closed）。
+        audit.recordRequired(tenantId, approverId, AuditPort.Actions.APPROVAL_GRANT,
+                "approval", operationId,
+                Map.of("requirement", requirement.name(),
+                        "targetResource", targetResource,
+                        "expiresAt", expiresAt.toString()));
+        return approvalId;
     }
 
     @Override
     public @NonNull ApprovalOutcome consume(@NonNull String tenantId,
                                            @NonNull String operationId,
                                            @NonNull String argumentDigest,
-                                           @NonNull String targetResource,
-                                           @NonNull String runId) {
-        return inTenantTx(tenantId, conn -> {
+@NonNull String targetResource,
+                                     @NonNull String runId) {
+        // ⚠️ firstConsume 区分「首次消费」与「幂等重放」：
+        //    两者都返回 CONSUMED，但只有前者应留审计（否则崩溃恢复重放会产生 N 条重复痕迹）。
+        boolean[] firstConsume = {false};
+        ApprovalOutcome outcome = inTenantTx(tenantId, conn -> {
             // ① 锁 Run 校验取消（D-1：消费与取消检查原子）
             RunCancelView run = lockRun(conn, tenantId, runId);
             if (run == null || run.cancelled()) {
@@ -150,12 +203,23 @@ public class JdbcApprovalRepository implements ApprovalPort {
             // ⑥ 标记消费（幂等：已消费则跳过更新）
             if (a.state != ApprovalState.CONSUMED) {
                 markConsumed(conn, tenantId, operationId);
+                firstConsume[0] = true;
             }
             if (log.isInfoEnabled()) {
                 log.info("审批消费成功: tenant={}, operation={}", tenantId, operationId);
             }
             return ApprovalOutcome.CONSUMED;
         });
+
+        // ⚠️ 只在<b>首次消费</b>时留痕（幂等重放不重复记）：
+        //    崩溃恢复场景会重放 consume，若每次都记审计会产生 N 条重复痕迹，
+        //    反而让「消费了几次」这个问题无法回答。
+        if (outcome == ApprovalOutcome.CONSUMED && firstConsume[0]) {
+            audit.recordRequired(tenantId, "worker", AuditPort.Actions.APPROVAL_CONSUME,
+                    "approval", operationId,
+                    Map.of("runId", runId, "targetResource", targetResource));
+        }
+        return outcome;
     }
 
     @Override
@@ -163,7 +227,7 @@ public class JdbcApprovalRepository implements ApprovalPort {
                        @NonNull String operationId,
                        @NonNull String approverId,
                        @NonNull String reason) {
-        inTenantTx(tenantId, conn -> {
+        int updated = inTenantTx(tenantId, conn -> {
             // ⚠️ 只撤销尚未消费的审批（已消费不可撤销，须走对账）
             String sql = """
                     UPDATE approval
@@ -171,18 +235,24 @@ public class JdbcApprovalRepository implements ApprovalPort {
                     WHERE tenant_id = ?::uuid AND operation_id = ?::uuid
                       AND state = 'APPROVED'
                     """;
+            int affected;
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, approverId);
                 ps.setString(2, tenantId);
                 ps.setString(3, operationId);
-                int updated = ps.executeUpdate();
-                if (log.isInfoEnabled()) {
-                    log.info("审批撤销: operation={}, 影响行={}, 原因={}",
-                            operationId, updated, reason);
-                }
+                affected = ps.executeUpdate();
             }
-            return null;
+            return affected;
         });
+        if (log.isInfoEnabled()) {
+            log.info("审批撤销: operation={}, 影响行={}, 原因={}", operationId, updated, reason);
+        }
+        // ⚠️ 只在<b>确实撤销</b>时留痕：updated == 0 说明已是终态，
+        //    记一条「撤销」审计会污染追溯（让人以为发生过一次撤销）。
+        if (updated > 0) {
+            audit.recordRequired(tenantId, approverId, AuditPort.Actions.APPROVAL_REVOKE,
+                    "approval", operationId, Map.of("reason", reason));
+        }
     }
 
     @Override

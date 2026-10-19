@@ -17,8 +17,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.ports.persistence.AuditPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
-import org.springframework.stereotype.Repository;
 
 /**
  * {@link RunClaimPort} 的 JDBC 实现。
@@ -32,15 +32,55 @@ import org.springframework.stereotype.Repository;
  *       与数据库触发器形成双保险。</li>
  * </ol>
  */
-@Repository
 public class JdbcRunClaimRepository implements RunClaimPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcRunClaimRepository.class);
 
     private final DataSource dataSource;
 
+    /**
+     * 审计端口（P3-D07 / R-1）。
+     *
+     * <p>⚠️ <b>可空，默认空实现</b>：取消是<b>用户主动的安全动作</b>，
+     * 「谁取消的」必须可追溯（D6 §5 L-2）。生产装配必须传入真实实现。
+     */
+    private final AuditPort audit;
+
+    /** 空审计占位（未装配时只记 ERROR 日志，不静默吞掉）。 */
+    private static final AuditPort NO_AUDIT =
+            new AuditPort() {
+                @Override
+                public void recordRequired(String tenantId, String actorId, String action,
+                        String resourceType, String resourceId,
+                        java.util.Map<String, Object> detail) {
+                    log.error("⚠️⚠️ 关键审计未装配，取消动作将无痕（tenant={}, run={}）",
+                            tenantId, resourceId);
+                }
+
+                @Override
+                public void recordAccess(String tenantId, String actorId, String action,
+                        String resourceType, String resourceId,
+                        java.util.Map<String, Object> detail) {
+                    // no-op
+                }
+
+                @Override
+                public java.util.List<
+                        AuditPort.AuditView>
+                        findByResource(String tenantId, String resourceType,
+                                String resourceId) {
+                    return java.util.List.of();
+                }
+            };
+
     public JdbcRunClaimRepository(@NonNull DataSource dataSource) {
+        this(dataSource, NO_AUDIT);
+    }
+
+    public JdbcRunClaimRepository(@NonNull DataSource dataSource,
+                                  @NonNull AuditPort audit) {
         this.dataSource = dataSource;
+        this.audit = audit;
     }
 
     @Override
@@ -326,12 +366,21 @@ public class JdbcRunClaimRepository implements RunClaimPort {
                 WHERE tenant_id = ?::uuid AND run_id = ?::uuid
                   AND state IN ('QUEUED', 'RUNNING')
                 """;
-        return execUpdate(sql,
+        boolean cancelled = execUpdate(sql,
                 ps -> {
                     ps.setString(1, tenantId);
                     ps.setString(2, runId);
                 },
                 tenantId) > 0;
+        // ⚠️ 只在真正取消时留痕：返回 false（已是终态）时记一条会污染追溯。
+        //    actor 用 "api" —— 取消由用户经 API 发起，具体主体待认证上下文接入后细化
+        //    （D6 L-2 的残余：端口层尚无「仅创建者可取消」的二次鉴权）。
+        if (cancelled) {
+            audit.recordRequired(tenantId, "api",
+                    AuditPort.Actions.RUN_CANCEL,
+                    "run", runId, java.util.Map.of());
+        }
+        return cancelled;
     }
 
     @Override
