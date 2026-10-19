@@ -1,0 +1,348 @@
+{
+  "caseSetId": "BR-01",
+  "scenario": "初中生错题归因",
+  "version": "1.0",
+  "note": "P3-D11 可执行评测集。每条 case 的 rationale 为人工标注依据；AI 不得自行签署评测结论（P1-D08 R-016）。",
+  "cases": [
+    {
+      "id": "EVAL-01",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "易",
+      "question": "解方程：2x + 6 = 14",
+      "studentWork": "2x + 6 = 14，2x = 14，x = 14",
+      "correctAnswer": "x = 4",
+      "expectedKnowledgePoint": "一元一次方程",
+      "expectedErrorType": "移项错误（未把常数项移过去）",
+      "rationale": "学生把 2x+6=14 直接算成 x=14，跳过移项步骤。属最基础的一元一次方程错误。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-02",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "易",
+      "question": "解方程：3(x - 2) = 12",
+      "studentWork": "3(x-2)=12，x-2=4，x=6",
+      "correctAnswer": "x = 6",
+      "expectedKnowledgePoint": "一元一次方程（去括号）",
+      "expectedErrorType": "去括号时符号处理错误",
+      "rationale": "标准去括号题型。用于验证模型能识别去括号环节的符号错误。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-03",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "中",
+      "question": "计算：(2a²b) · (3ab²)",
+      "studentWork": "= 6a³b³",
+      "correctAnswer": "6a³b³",
+      "expectedKnowledgePoint": "幂的运算",
+      "expectedErrorType": "同底数幂相乘系数与指数处理",
+      "rationale": "单项式乘法。指数相加规则是初二易错点，学生常把指数相加写成相乘。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-04",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "易",
+      "question": "因式分解：x² - 9",
+      "studentWork": "x² - 9 = (x-3)(x+3)",
+      "correctAnswer": "(x-3)(x+3)",
+      "expectedKnowledgePoint": "平方差公式",
+      "expectedErrorType": "平方差公式识别错误",
+      "rationale": "平方差是必考题型。用于验证归因能否落到具体公式而非笼统『不会因式分解』。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-05",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "中",
+      "question": "计算：√12 + √27",
+      "studentWork": "= 2√3 + 3√3 = 5√3",
+      "correctAnswer": "5√3",
+      "expectedKnowledgePoint": "二次根式",
+      "expectedErrorType": "二次根式化简（系数处理错误）",
+      "rationale": "最简二次根式合并。学生常把 √12 化为 √3（漏系数 2）。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-06",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "中",
+      "question": "解不等式：3(x - 1) < 6",
+      "studentWork": "3x - 3 < 6，3x < 9，x < 3",
+      "correctAnswer": "x < 3",
+      "expectedKnowledgePoint": "一元一次不等式",
+      "expectedErrorType": "不等式两边同乘除负数时未变号",
+      "rationale": "含负数的解不等式是经典陷阱：-x > 2 两边乘 -1 得 x < -2。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-07",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "易",
+      "question": "已知 a = 2，b = -3，求 a² - b²",
+      "studentWork": "= 4 - 9 = -5",
+      "correctAnswer": "-5",
+      "expectedKnowledgePoint": "整式运算",
+      "expectedErrorType": "负数平方漏符号",
+      "rationale": "验证模型能否识别『负数平方后为正』这一具体错误类型。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-08",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "中",
+      "question": "分式化简：(x² - 1)/(x - 1)",
+      "studentWork": "= (x-1)(x+1)/(x-1) = x + 1（x≠1）",
+      "correctAnswer": "x + 1（x≠1）",
+      "expectedKnowledgePoint": "分式约分",
+      "expectedErrorType": "约分后遗漏定义域限制 x≠1",
+      "rationale": "约分必须保留原分母为零的限制。遗漏是高频错误，且影响后续解题有效性。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-09",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "中",
+      "question": "计算：(a + b)² - a² - b²",
+      "studentWork": "= a²+2ab+b²-a²-b² = 2ab",
+      "correctAnswer": "2ab",
+      "expectedKnowledgePoint": "完全平方公式",
+      "expectedErrorType": "完全平方公式展开时漏中间项 2ab",
+      "rationale": "用于验证模型能否指出『漏中间项』而非笼统说公式记错。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-10",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "中",
+      "question": "解方程组：x + y = 5，2x - y = 1",
+      "studentWork": "x=2, y=3",
+      "correctAnswer": "x = 2，y = 3",
+      "expectedKnowledgePoint": "二元一次方程组",
+      "expectedErrorType": "代入消元法计算错误",
+      "rationale": "二元一次方程组是本章综合题型，适合验证多步骤归因。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-11",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "难",
+      "question": "化简：(1 - 1/(x+1)) · (x+1)/x",
+      "studentWork": "= x/(x+1) · (x+1)/x = 1（x≠0,-1）",
+      "correctAnswer": "1（x ≠ 0，x ≠ -1）",
+      "expectedKnowledgePoint": "分式混合运算",
+      "expectedErrorType": "混合运算中约分导致定义域丢失",
+      "rationale": "分式混合 + 定义域保留，两类错误叠加。属高难度 case。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-12",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "难",
+      "question": "求证：若 a² + b² = c²，则 a/c + b/c 的取值范围",
+      "studentWork": "1/a² + 1/b² = (a²+b²)/(a²b²) = c²/(a²b²)",
+      "correctAnswer": "范围分析",
+      "expectedKnowledgePoint": "勾股定理应用",
+      "expectedErrorType": "未使用均值不等式求最值",
+      "rationale": "综合运用均值不等式。用于验证模型面对非直接计算题时的归因质量。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-13",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "难",
+      "question": "计算：2³ × 2⁻²",
+      "studentWork": "= 2¹",
+      "correctAnswer": "2",
+      "expectedKnowledgePoint": "负整数指数幂",
+      "expectedErrorType": "负指数与同底数幂相乘规则",
+      "rationale": "负指数是易错点，学生常答 8。属概念性错误而非计算错误。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-14",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "中",
+      "question": "分解因式：x³ - 8",
+      "studentWork": "= (x - 2)(x² + 2x + 4)",
+      "correctAnswer": "(x-2)(x²+2x+4)",
+      "expectedKnowledgePoint": "立方和公式",
+      "expectedErrorType": "立方和公式与平方差公式混淆",
+      "rationale": "立方和 x³+a³ 属必考。用于验证公式选择类错误的归因。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-15",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "易",
+      "question": "计算：|-3| + |-2| × |-1|",
+      "studentWork": "= 3 + 2 = 5",
+      "correctAnswer": "5",
+      "expectedKnowledgePoint": "绝对值运算",
+      "expectedErrorType": "绝对值与乘法的运算顺序",
+      "rationale": "运算顺序类错误（先乘后加）。验证模型能区分「顺序」而非「符号」。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-16",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "难",
+      "question": "解分式方程：2/(x-1) = 3/x",
+      "studentWork": "2x = 3(x-1)，2x=3x-3，x=3",
+      "correctAnswer": "x = 3（x≠0,1）",
+      "expectedKnowledgePoint": "分式方程",
+      "expectedErrorType": "去分母后未验根",
+      "rationale": "分式方程必须验根。遗漏验根属规范性问题，归因应具体指出。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-17",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "中",
+      "question": "已知 a+b=3，ab=2，求 a² + b²",
+      "studentWork": "= (a+b)² - 2ab = 9-4=5",
+      "correctAnswer": "5",
+      "expectedKnowledgePoint": "完全平方公式变形",
+      "expectedErrorType": "未使用 (a+b)²=a²+b²+2ab 变形",
+      "rationale": "整体代换思路。用于验证模型能否给出解题策略而非只给答案。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-18",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "中",
+      "question": "计算：(3/4)² ÷ (3/4) × (3/4)",
+      "studentWork": "= 3/4",
+      "correctAnswer": "3/4",
+      "expectedKnowledgePoint": "有理数乘方与乘除",
+      "expectedErrorType": "同级运算从左到右顺序",
+      "rationale": "乘除同级从左到右是易错点。顺序类错误归因应指出具体规则。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-19",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "难",
+      "question": "解不等式：|x - 1| < 3",
+      "studentWork": "-3 < x-1 < 3，-2 < x < 4",
+      "correctAnswer": "-2 < x < 4",
+      "expectedKnowledgePoint": "含绝对值不等式",
+      "expectedErrorType": "绝对值不等式两边同时去符号时忘变号",
+      "rationale": "复合型：高难度题型。用于评估模型在多约束下的归因稳定性。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    },
+    {
+      "id": "EVAL-20",
+      "grade": "初二",
+      "subject": "数学",
+      "difficulty": "中",
+      "question": "求 y = x² - 4x + 3 的最小值",
+      "studentWork": "= (x-2)² - 1，最小值 -1",
+      "correctAnswer": "-1（当 x = 2）",
+      "expectedKnowledgePoint": "二次函数最值",
+      "expectedErrorType": "未用配方法求顶点",
+      "rationale": "配方求最值。用于验证模型能否识别『配方』这一关键策略。",
+      "acceptance": [
+        "SB-01",
+        "SB-02",
+        "SB-03"
+      ]
+    }
+  ]
+}

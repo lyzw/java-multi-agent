@@ -130,8 +130,22 @@ public class RunExecutionLoop {
                 ModelResponse response = modelGateway.complete(request);
 
                 if (response.toolCalls().isEmpty()) {
+                    // ⚠️ 编造出处检查（P3-D11 / FR-020 / I-5）：
+                    //    DEC-5 不做 RAG，项目无任何教材语料，
+                    //    因此「提到出处」本身就是编造，必须在提交前拦截。
+                    //    这是 Sev-0 级失败判据（P0-D00 §3.4），不可降级为警告。
+                    String content = response.content();
+                    try {
+                        cn.studykid.multiagent.application.evaluation
+                                .HallucinationDetector.assertNoFabricatedSource(content);
+                    } catch (cn.studykid.multiagent.application.evaluation
+                            .HallucinatedSourceException e) {
+                        log.error("⚠️⚠️ 输出涉嫌编造出处，拒绝提交: runId={}, rule={}",
+                                task.runId(), e.rule());
+                        return commitFailure(tenantId, task, "输出涉嫌编造资料出处");
+                    }
                     // 无工具调用 → 生成结果，正常完成
-                    return commitSuccess(tenantId, task, response.content());
+                    return commitSuccess(tenantId, task, content);
                 }
 
                 // ── §4 工具调用（逐个走完整闸门）───────────────────────

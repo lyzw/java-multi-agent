@@ -302,6 +302,43 @@ class AuditChainIT {
         assertThat(countAudits(tenantA, resourceId)).isEqualTo(1);
     }
 
+    // ── T-9：平台标识符不得被误判为学号（真实缺陷回归）───────────────
+
+    @Test
+    @DisplayName("⚠️⚠️ T-9 真实 Run UUID 不应被「学号」规则误判（D7 实测缺陷回归）")
+    void uuidIdentifiersNotFalsePositives() {
+        // ⚠️ **真实缺陷**：UUID 的十六进制串常含 8–12 位连续数字，
+        //    会被「学号」规则命中 → 关键审计被拒写 →
+        //    丢掉的恰是 R-1 最需要的审批痕迹。
+        //    本用例用**真实 Run**（其 UUID 由 DB 生成，含数字串）
+        //    走完整 grant→consume 链路，确保不再复发。
+        String runId = newRun(tenantA, "RUNNING");
+        String opId = newOperation(tenantA, runId, "recording_tool");
+
+        assertThatCode(() -> approvals.grant(tenantA, opId, "DIGEST-1", "recording_tool",
+                ApprovalRequirement.REQUIRED, "scope-test",
+                Instant.now().plusSeconds(900), "approver-1"))
+                .as("⚠️⚠️ 平台生成的 UUID 标识符不得被当成学号而拒绝审计写入")
+                .doesNotThrowAnyException();
+
+        assertThat(countAction(tenantA, opId,
+                cn.studykid.multiagent.ports.persistence.AuditPort.Actions.APPROVAL_GRANT))
+                .as("⚠️ 审计必须真的写进去了（豁免不等于跳过写入）")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("⚠️ T-9b 但真实可识别信息仍必须被拒（豁免不得扩大）")
+    void exemptionDoesNotWidenSensitiveDetection() {
+        // ⚠️ 豁免是**按键**的：studentId 不在豁免名单，塞入学号仍须被拒
+        assertThatThrownBy(() -> audit.recordRequired(tenantA, "auditor",
+                cn.studykid.multiagent.ports.persistence.AuditPort.Actions.APPROVAL_GRANT,
+                "approval", "ex-" + java.util.UUID.randomUUID(),
+                Map.of("studentId", "20210300123")))
+                .as("⚠️⚠️ studentId 不在豁免名单——塞入真实学号必须被拒")
+                .isNotNull();
+    }
+
     // ── T-8：跨租户隔离 ──────────────────────────────────────────────
 
     @Test

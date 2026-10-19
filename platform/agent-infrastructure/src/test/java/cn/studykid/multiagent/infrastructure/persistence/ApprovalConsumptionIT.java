@@ -66,6 +66,7 @@ class ApprovalConsumptionIT {
 
     @AfterAll
     static void tearDown() {
+        purgeRunsCreatedByTests();
         if (appPool != null) {
             appPool.close();
         }
@@ -296,6 +297,32 @@ class ApprovalConsumptionIT {
                      + "BEFORE UPDATE ON approval "
                      + "FOR EACH ROW EXECUTE FUNCTION enforce_approval_state_transition()")) {
             ps.executeUpdate();
+        }
+    }
+
+    /**
+     * 清理本测试类创建的 Run 行。
+     *
+     * <p>⚠️ <b>为什么必须清理</b>（本片实测踩到的测试隔离缺陷）：
+     * {@code claimTasks} 用 {@code ORDER BY created_at LIMIT 1000} 批量领取。
+     * 若本类留下的 {@code RUNNING} 行（租约已过期）累积超过 1000，
+     * 其他 IT（如 {@code RunClaimFencingIT}）新建的 {@code QUEUED} 行
+     * 会<b>排在配额之外</b>，导致「任务未被领取」——
+     * <b>失败原因与被测代码无关，纯粹是测试数据污染</b>。
+     *
+     * <p>教训与 P3-D4 §7.1 同源：<b>测试之间会互相污染</b>，
+     * 新增写数据的用例必须自带清理，否则会污染后来者。
+     */
+    private static void purgeRunsCreatedByTests() {
+        try (var conn = adminPool.getConnection();
+             var ps = conn.prepareStatement(
+                     "DELETE FROM run WHERE correlation_id LIKE 'corr-%' "
+                             + "AND idempotency_key LIKE 'run-%' "
+                             + "AND NOT EXISTS (SELECT 1 FROM outbox_event o "
+                             + "                WHERE o.run_id = run.run_id)")) {
+            ps.executeUpdate();
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("清理测试 Run 失败", e);
         }
     }
 }

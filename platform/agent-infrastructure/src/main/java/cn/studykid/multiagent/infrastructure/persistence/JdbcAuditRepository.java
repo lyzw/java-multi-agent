@@ -167,6 +167,25 @@ public class JdbcAuditRepository implements AuditPort {
      * <p>⚠️ 检测覆盖<b>键与值</b>：键名本身含 {@code studentName} 也会暴露信息形态。
      * 命中即抛异常——<b>整条审计不写</b>，宁可少一条记录。
      */
+    /**
+     * 审计明细中<b>按键豁免</b>的字段（值不参与敏感信息扫描）。
+     *
+     * <p>⚠️ <b>为何需要按键豁免</b>（D7 实测踩到）：UUID 形式的内部标识符
+     * （{@code runId}/{@code operationId}）其十六进制串里<b>常常含 8–12 位连续数字</b>，
+     * 会被「学号」规则误判，导致<b>关键审计被拒写</b>——
+     * 而「宁可少一条审计」的原则在这里是<b>错的</b>：
+     * 少掉的恰恰是 R-1 最需要的审批痕迹。
+     *
+     * <p>豁免是<b>按键而非按值</b>的：值里若混入了真实可识别信息，
+     * 键名不会变（攻击者无法通过改键名绕过），而豁免只对白名单键生效。
+     *
+     * <p>⚠️ <b>边界</b>：豁免仅限<b>平台生成的不透明标识符</b>。
+     * {@code studentId} <b>不在</b>豁免名单内——它必须被扫描，
+     * 因为它虽是随机 ID，但一旦有人塞进真实学号就属违规。
+     */
+    private static final Set<String> VALUE_SCAN_EXEMPT_KEYS = Set.of(
+            "runId", "operationId", "approvalId", "resourceId", "correlationId");
+
     private String toJsonWithSensitiveGuard(String tenantId, String action,
                                             Map<String, Object> detail) {
         StringBuilder sb = new StringBuilder("{");
@@ -175,16 +194,24 @@ public class JdbcAuditRepository implements AuditPort {
             String key = e.getKey();
             Object value = e.getValue();
             String rendered = value == null ? "null" : String.valueOf(value);
-            String probe = key + "=" + rendered;
-            for (IdentifyingPattern pattern : IdentifyingPattern.values()) {
-                if (pattern.detect(probe)) {
-                    throw new IllegalStateException(
-                            "审计明细检出可识别信息（" + pattern.label()
-                                    + "），已拒绝写入（tenant=" + tenantId
-                                    + ", action=" + action
-                                    + ", key=" + key + "）。"
-                                    + "宁可少一条审计，不可留下未成年人可识别信息（PIPL）。");
+            // ⚠️ 豁免键仍做「长度有界」检查，只跳过模式扫描
+            if (!VALUE_SCAN_EXEMPT_KEYS.contains(key)) {
+                String probe = key + "=" + rendered;
+                for (IdentifyingPattern pattern : IdentifyingPattern.values()) {
+                    if (pattern.detect(probe)) {
+                        throw new IllegalStateException(
+                                "审计明细检出可识别信息（" + pattern.label()
+                                        + "），已拒绝写入（tenant=" + tenantId
+                                        + ", action=" + action
+                                        + ", key=" + key + "）。"
+                                        + "宁可少一条审计，不可留下未成年人可识别信息（PIPL）。");
+                    }
                 }
+            }
+            if (rendered.length() > AuditPort.MAX_FIELD_LENGTH) {
+                throw new IllegalArgumentException(
+                        "审计明细值超长（key=" + key + "，"
+                                + rendered.length() + " 字符）：标识符不应是长文本");
             }
             if (!first) {
                 sb.append(", ");
