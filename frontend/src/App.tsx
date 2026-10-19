@@ -14,18 +14,16 @@ import { SessionProvider, useSession } from '@/auth/session'
 import { RequireAuth } from '@/auth/RequireAuth'
 import { RequireRole } from '@/auth/RequireRole'
 import { setUnauthorizedHandler } from '@/api/client'
-import { AppLayout } from '@/layouts/AppLayout'
+import { AppShell } from '@/layouts/AppShell'
 
 import { LoginPage } from '@/pages/LoginPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { NewRunPage } from '@/pages/NewRunPage'
 import { RunProgressPage } from '@/pages/RunProgressPage'
 
-import {
-  RunResultPage,
-  ProfilePage,
-  RunSearchPage,
-} from '@/pages/business/BusinessPages'
+import { RunResultPage } from '@/pages/business/RunResultPage'
+import { ProfilePage } from '@/pages/business/ProfilePage'
+import { RunSearchPage } from '@/pages/business/RunSearchPage'
 import {
   ConfigOverviewPage,
   ConfigRuntimePage,
@@ -54,7 +52,7 @@ function UnauthorizedBridge(): null {
 function Shell(): JSX.Element {
   return (
     <RequireAuth>
-      <AppLayout />
+      <AppShell />
     </RequireAuth>
   )
 }

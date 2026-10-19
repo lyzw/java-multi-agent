@@ -1,0 +1,366 @@
+/**
+ * 视觉设计规范 —— token 层（FE-D3 §2）
+ *
+ * 主题：批改纸。老师批作业的那张纸，而不是后台仪表盘。
+ *
+ * ⛔ 用色纪律（可被测试检查）：
+ *   R1 批改红只用于错误/待核对/阻止性提示 —— 不得用于按钮、链接、装饰
+ *   R2 主按钮用墨色，不用彩色 —— 避免界面像玩具
+ *   R3 状态色低饱和，禁止高饱和绿/蓝
+ *   R4 前景背景对比 ≥ 4.5:1
+ */
+
+:root {
+  /* ── 纸与墨 ── */
+  --paper: #fcfcfb;
+  --paper-sunk: #f5f6f7;
+  --rule: #e3e5e8;
+  --rule-strong: #c7cbd1;
+
+  --ink: #1a1d21;
+  --ink-2: #5b6169;
+  --ink-3: #8a9099;
+
+  /* ── 语义色 ── */
+  /* 批改红：唯一的"错"，不做装饰不做按钮 */
+  --mark: #c8382d;
+  --mark-wash: #fdf2f1;
+  /* 已确认：低饱和青，非荧光绿 */
+  --settled: #1d6b5c;
+  --settled-wash: #eef6f4;
+
+  /* 焦点环 */
+  --focus: #1a1d21;
+
+  /* ── 字体 ── */
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  /* 宋体：教材本身是宋体，用字体把"题目区"与"界面区"分开 */
+  --font-hand: 'Songti SC', 'STSong', SimSun, 'Source Han Serif SC', serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* ── 字阶 ── */
+  --t-display: 26px;
+  --t-title: 18px;
+  --t-body: 15px;
+  --t-note: 13px;
+  --t-mark: 13px;
+
+  /* ── 间距 ── */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 20px;
+  --s-5: 32px;
+  --s-6: 48px;
+
+  /* ⚠️ 圆角仅用于控件；区块靠线与留白分隔，不用卡片阴影 */
+  --radius-ctl: 4px;
+
+  /* 栏宽 */
+  --nav-w: 208px;
+  --nav-w-mid: 64px;
+  --content-max: 880px;
+  --header-h: 56px;
+}
+
+/* ── 基础 ─────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  /* 中文正文行高比英文惯例更松 */
+  line-height: 1.7;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+/* 焦点环全站可见 —— 键盘可达性基线（FE-D3 §5） */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── 排版 ─────────────────────────────────────────────── */
+
+h1 {
+  font-size: var(--t-display);
+  line-height: 1.3;
+  margin: 0 0 var(--s-3);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: var(--t-title);
+  line-height: 1.4;
+  margin: 0 0 var(--s-1);
+  font-weight: 600;
+}
+
+h3 {
+  font-size: var(--t-body);
+  margin: 0 0 var(--s-1);
+  font-weight: 600;
+}
+
+p {
+  margin: 0 0 var(--s-3);
+  /* 行宽上限 72 字符 */
+  max-width: 72ch;
+}
+
+.muted {
+  color: var(--ink-2);
+  font-size: var(--t-note);
+  line-height: 1.6;
+}
+
+code,
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* 题目/解题内容区 —— 宋体，与界面区在字体上分开 */
+.hand {
+  font-family: var(--font-hand);
+  line-height: 1.85;
+}
+
+/* ── 分隔：靠线与留白，不用卡片阴影 ──────────────────── */
+
+.sheet {
+  padding: var(--s-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+.sheet:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.sheet__title {
+  font-size: var(--t-title);
+  font-weight: 600;
+  margin: 0 0 var(--s-1);
+}
+
+.sheet__note {
+  font-size: var(--t-note);
+  color: var(--ink-2);
+  margin: 0 0 var(--s-3);
+}
+
+/**
+ * ⛔ 批改纸区块 —— 本产品的签名
+ *
+ * 左红边 = 老师的批注栏，仅在"指出错误"时出现。
+ * 红边内侧 20px 缩进，形成天然的注记关系。
+ */
+.marked {
+  border-left: 2px solid var(--mark);
+  padding-left: var(--s-4);
+  margin: var(--s-4) 0;
+}
+
+.marked--calm {
+  border-left-color: var(--rule-strong);
+}
+
+.marked__label {
+  font-size: var(--t-mark);
+  color: var(--mark);
+  margin: 0 0 var(--s-1);
+}
+
+/* ── 按钮：墨色，不用彩色 ─────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 var(--s-4);
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  font-family: inherit;
+  font-size: var(--t-body);
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  background: #2c3037;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn--quiet {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--rule-strong);
+}
+
+.btn--quiet:hover:not(:disabled) {
+  background: var(--paper-sunk);
+}
+
+/* 触摸目标 ≥ 40px（学生可能用平板）*/
+.btn,
+button,
+[role='button'] {
+  min-height: 40px;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* ── 表单 ─────────────────────────────────────────────── */
+
+.field {
+  margin-bottom: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.field > label {
+  font-weight: 600;
+  font-size: var(--t-body);
+}
+
+.field__hint {
+  font-size: var(--t-note);
+  color: var(--ink-2);
+  margin: 0;
+}
+
+.field__error {
+  font-size: var(--t-note);
+  color: var(--mark);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.field input,
+.field textarea,
+.field select {
+  font-family: inherit;
+  font-size: var(--t-body);
+  line-height: 1.6;
+  padding: var(--s-2) var(--s-3);
+  min-height: 40px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-ctl);
+  background: var(--paper);
+  color: var(--ink);
+  width: 100%;
+}
+
+.field input:focus,
+.field textarea:focus,
+.field select:focus {
+  border-color: var(--ink);
+  outline: none;
+}
+
+.field input[aria-invalid='true'],
+.field textarea[aria-invalid='true'] {
+  border-color: var(--mark);
+  background: var(--mark-wash);
+}
+
+.field textarea {
+  resize: vertical;
+  min-height: 88px;
+}
+
+/* 题目输入区用宋体 —— 学生写字的地方 */
+.field textarea.hand {
+  font-family: var(--font-hand);
+  line-height: 1.85;
+}
+
+/* ── 表格 ─────────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-body);
+}
+
+th,
+td {
+  text-align: left;
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+th {
+  font-size: var(--t-note);
+  font-weight: 600;
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+/* ── 标记 ─────────────────────────────────────────────── */
+
+.mark {
+  color: var(--mark);
+}
+
+.settled {
+  color: var(--settled);
+}
+
+.chip {
+  display: inline-block;
+  font-size: var(--t-note);
+  padding: 2px var(--s-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: 10px;
+  color: var(--ink-2);
+}
+
+.chip--mark {
+  border-color: var(--mark);
+  color: var(--mark);
+  background: var(--mark-wash);
+}
+
+.chip--settled {
+  border-color: var(--settled);
+  color: var(--settled);
+  background: var(--settled-wash);
+}

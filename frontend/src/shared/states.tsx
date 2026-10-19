@@ -1,0 +1,211 @@
+/**
+ * 数据区块的五态（FE-D3 §4）
+ *
+ * 每个区块必须实现：默认 / 加载 / 空 / 错误 / 未开放。
+ *
+ * ⛔ 五态**不可互相混淆**：
+ *   空     = 查了，确实没有 → 邀请行动
+ *   错误   = 查失败了       → 说明原因 + 下一步
+ *   未开放 = 根本没接口可查 → 标注缺口
+ *   加载   = 正在查         → 呼吸纸面
+ *
+ * 混为一谈的后果：用户以为系统坏了，或以为有数据却看不到。
+ */
+
+/* ── 加载：呼吸纸面 ──────────────────────────────────── */
+
+/**
+ * ⛔ 刻意不用灰色微光条（AI 生成默认）。
+ * 改为整块纸面做极缓慢明度呼吸 —— 像纸在等墨迹干。
+ */
+export function Loading({ label = '正在读取' }: { label?: string }): JSX.Element {
+  return (
+    <div className="loading" role="status" aria-live="polite">
+      <span className="loading__label">{label}</span>
+    </div>
+  )
+}
+
+/** 加载行：表格内的占位 */
+export function LoadingRows({
+  columns,
+  rows = 5,
+  label,
+}: {
+  columns: string[]
+  rows?: number
+  label?: string
+}): JSX.Element {
+  return (
+    <div className="loading-rows" role="status" aria-live="polite">
+      <span className="sr-only">{label ?? '正在读取'}</span>
+      <table>
+        <thead>
+          <tr>
+            {columns.map((c) => (
+              <th key={c} scope="col">
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody aria-hidden="true">
+          {Array.from({ length: rows }, (_, i) => (
+            <tr key={i}>
+              {columns.map((c) => (
+                <td key={c}>{''}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/* ── 空：邀请行动 ────────────────────────────────────── */
+
+export function Empty({
+  title,
+  hint,
+  action,
+}: {
+  title: string
+  /** 下一步做什么 —— ⛔ 不写「暂无数据」这种死话 */
+  hint?: string
+  action?: React.ReactNode
+}): JSX.Element {
+  return (
+    <div className="empty">
+      <p className="empty__title">{title}</p>
+      {hint !== undefined ? <p className="muted">{hint}</p> : null}
+      {action !== undefined ? <div className="empty__action">{action}</div> : null}
+    </div>
+  )
+}
+
+/* ── 错误：说明原因 + 可执行的下一步 ────────────────── */
+
+export interface ErrorStateProps {
+  /** 具体原因，不是「出错了」 */
+  reason: string
+  /** 用户下一步该做什么 */
+  next?: string
+  onRetry?: () => void
+  retryLabel?: string
+}
+
+/**
+ * ⛔ 不道歉、不写「请求失败」。
+ * 错误页的价值在于**告诉用户怎么办**。
+ */
+export function ErrorState({
+  reason,
+  next,
+  onRetry,
+  retryLabel = '重试',
+}: ErrorStateProps): JSX.Element {
+  return (
+    <div className="marked" role="alert">
+      <p className="marked__label">没能完成</p>
+      <p style={{ marginBottom: next !== undefined ? 4 : 0 }}>{reason}</p>
+      {next !== undefined ? (
+        <p className="muted" style={{ marginBottom: onRetry !== undefined ? 12 : 0 }}>
+          {next}
+        </p>
+      ) : null}
+      {onRetry !== undefined ? (
+        <button type="button" className="btn btn--quiet" onClick={onRetry}>
+          {retryLabel}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/* ── 未开放：与「空」区分 ────────────────────────────── */
+
+export interface UnavailableProps {
+  /** 功能名，如「归因结果」 */
+  feature: string
+  /** 后端缺口编号，如 G5 —— 可追溯 */
+  blockedBy: string
+  /** 人话原因 */
+  reason: string
+  /** 承接阶段 */
+  eta?: string
+  children?: React.ReactNode
+}
+
+/**
+ * ⚠️ 与 Empty 的区别：
+ *   Empty     = 接口正常，确实没数据 → 邀请行动
+ *   Unavailable = 接口不存在         → 标注缺口，说明这是开发中的功能
+ *
+ * 混淆后果：用户会反复刷新等一个永远不会来的结果。
+ */
+export function Unavailable({
+  feature,
+  blockedBy,
+  reason,
+  eta,
+  children,
+}: UnavailableProps): JSX.Element {
+  return (
+    <div className="unavailable">
+      {children}
+      <div className="unavailable__box">
+        <p className="unavailable__title">
+          {feature}还没接上后端
+        </p>
+        <p className="muted">{reason}</p>
+        <p className="unavailable__meta">
+          阻塞编号 <code>{blockedBy}</code>
+          {eta !== undefined ? <> · {eta} 阶段承接</> : null}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/** 区块容器：线与留白分隔，不用圆角卡片 */
+export function Sheet({
+  title,
+  note,
+  children,
+}: {
+  title: string
+  note?: string
+  children: React.ReactNode
+}): JSX.Element {
+  return (
+    <section className="sheet">
+      <h2 className="sheet__title">{title}</h2>
+      {note !== undefined ? <p className="sheet__note">{note}</p> : null}
+      {children}
+    </section>
+  )
+}
+
+/**
+ * 批改纸区块 —— 产品签名
+ *
+ * ⛔ 左侧红边**仅在指出错误时**出现；无错时用 marked--calm 的中性线。
+ */
+export function Marked({
+  label,
+  tone = 'calm',
+  children,
+}: {
+  label?: string
+  tone?: 'calm' | 'error'
+  children: React.ReactNode
+}): JSX.Element {
+  const cls = tone === 'error' ? 'marked' : 'marked marked--calm'
+  return (
+    <div className={cls}>
+      {label !== undefined ? <p className="marked__label">{label}</p> : null}
+      {children}
+    </div>
+  )
+}

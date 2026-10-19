@@ -60,65 +60,78 @@ export function LoginPage(): JSX.Element {
 
   return (
     <main className="login">
-      <h1>错题归因辅导</h1>
-
-      {expiredNotice ? (
-        <p role="status" className="login__expired">
-          登录已过期，请重新登录
+      <div className="login__panel">
+        <h1 className="login__brand">错题归因辅导</h1>
+        <p className="login__lead">
+          用学校发的账号登录。
+          <br />
+          我们只采集匿名编号、年级、学科和薄弱点，不收姓名、学校、班级。
         </p>
-      ) : null}
 
-      <form onSubmit={(e) => void handleSubmit(e)} noValidate>
-        <div className="field">
-          <label htmlFor="tenantId">租户标识</label>
-          <input
-            id="tenantId"
-            name="tenantId"
-            type="text"
-            value={tenantId}
-            onChange={(e) => setTenantId(e.target.value)}
-            autoComplete="organization"
-            required
-          />
-        </div>
+        {expiredNotice ? (
+          <p role="status" className="marked marked--calm">
+            <span className="marked__label" style={{ color: 'var(--ink-2)' }}>
+              会话已结束
+            </span>
+            重新登录即可继续
+          </p>
+        ) : null}
 
-        <div className="field">
-          <label htmlFor="loginName">账号</label>
-          <input
-            id="loginName"
-            name="loginName"
-            type="text"
-            value={loginName}
-            onChange={(e) => setLoginName(e.target.value)}
-            autoComplete="username"
-            required
-          />
-        </div>
+        <form onSubmit={(e) => void handleSubmit(e)} noValidate>
+          <div className="field">
+            <label htmlFor="tenantId">租户标识</label>
+            <input
+              id="tenantId"
+              name="tenantId"
+              type="text"
+              value={tenantId}
+              onChange={(e) => setTenantId(e.target.value)}
+              autoComplete="organization"
+              aria-invalid={error !== null}
+              required
+            />
+          </div>
 
-        <div className="field">
-          <label htmlFor="password">密码</label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-          />
-        </div>
+          <div className="field">
+            <label htmlFor="loginName">账号</label>
+            <input
+              id="loginName"
+              name="loginName"
+              type="text"
+              value={loginName}
+              onChange={(e) => setLoginName(e.target.value)}
+              autoComplete="username"
+              aria-invalid={error !== null}
+              required
+            />
+          </div>
 
-        <button type="submit" disabled={submitting}>
-          {submitting ? '登录中…' : '登录'}
-        </button>
-      </form>
+          <div className="field">
+            <label htmlFor="password">密码</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              aria-invalid={error !== null}
+              required
+            />
+          </div>
 
-      {error !== null ? <ErrorView error={error} /> : null}
+          {error !== null ? <ErrorView error={error} /> : null}
 
-      {/*
-        ⛔ 刻意不提供：忘记密码、注册、多租户切换
-        理由见文件头注释，非遗漏。
-      */}
+          <button type="submit" className="btn" disabled={submitting}>
+            {submitting ? '登录中…' : '登录'}
+          </button>
+        </form>
+
+        {/*
+          ⛔ 刻意不提供：忘记密码、注册、多租户切换
+          理由见文件头注释，非遗漏。
+        */}
+      </div>
     </main>
   )
 }

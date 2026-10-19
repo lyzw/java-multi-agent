@@ -9,7 +9,8 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { RunResultPage, ProfilePage, pickWhitelisted, findLeakedFields } from '@/pages/business/BusinessPages'
+import { RunResultPage, findLeakedFields } from '@/pages/business/RunResultPage'
+import { ProfilePage, pickWhitelisted } from '@/pages/business/ProfilePage'
 import { ReconciliationPage, AuditPage } from '@/pages/governance/GovernancePages'
 import { ConfigCompliancePage } from '@/pages/config/ConfigPages'
 
@@ -26,13 +27,23 @@ function renderAt(path: string, element: React.ReactElement, pattern = '/:id'): 
 describe('骨架页统一占位', () => {
   it('T1：应显示未开放占位并含缺口编号', () => {
     renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
-    expect(screen.getByText(/尚未开放/)).toBeInTheDocument()
+    // ⚠️ FE-D3 起文案改为「人话」而非技术术语：
+    //    旧文案「功能尚未开放」偏技术，新文案「还没接上后端」像人说话。
+    expect(screen.getByText(/还没接上后端/)).toBeInTheDocument()
     expect(screen.getByText('G5')).toBeInTheDocument()
   })
 
   it('T1：占位应说明原因', () => {
     renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
-    expect(screen.getByText(/result:read/)).toBeInTheDocument()
+    // ⚠️ 断言人话原因，而非接口名 —— 文案本身就是设计内容
+    expect(screen.getByText(/读取分析结果的接口/)).toBeInTheDocument()
+  })
+
+  it('T1：⛔ 未开放与「空」必须区分', () => {
+    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
+    // 「未开放」= 没接口；「空」= 查了没有
+    // 混淆会导致用户反复刷新等一个永远不会来的结果
+    expect(screen.queryByText(/还没有记录到/)).not.toBeInTheDocument()
   })
 })
 
@@ -175,9 +186,9 @@ describe('P6 画像白名单（纵深防御）', () => {
 
   it('画像页渲染时应走白名单', () => {
     renderAt('/profile/stu_abc', <ProfilePage />, '/profile/:studentId')
-    // ⚠️ 「学习画像」在标题与占位文案中各出现一次，故用 getAllByText
+    // ⚠️ 文案改为人话（FE-D3）：不再是「白名单字段仅四个」这种技术表述
     expect(screen.getAllByText(/学习画像/).length).toBeGreaterThan(0)
-    expect(screen.getByText(/白名单字段仅四个/)).toBeInTheDocument()
+    expect(screen.getByText(/只采集四类信息/)).toBeInTheDocument()
   })
 })
 
