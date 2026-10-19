@@ -427,42 +427,64 @@ Worker 不写该表。→ **进度页拿不到任何执行中事件**。
 
 ## 11. DoD
 
-### 11.1 已达成（2026-10-19）
+### 11.1 ✅ 已达成（2026-10-19 实测）
 
-- [x] 工程脚手架可构建配置就绪（Vite + React 18 + TS 5 严格模式）
-- [x] T1–T13 中的**纯逻辑测试全部通过**：`runState` 23 项 / `idempotency` 11 项 /
-      `scan` 23 项 / `errors` 22 项 / `sse` 19 项，**合计 98 项全绿**
-- [x] 反证已落地：`runState.test.ts` T8 组、`compliance.scan.test.ts` T4 组
+- [x] **脚手架可构建**：`vite build` 成功，产物 203.70 kB（gzip 67.55 kB）
+- [x] **TS 严格模式零错误**：`tsc --noEmit` 通过（strict + noUncheckedIndexedAccess + noUnusedLocals）
+- [x] **112 项测试全绿**：
+      `pages` 15 / `scan` 23 / `runState` 23 / `errors` 22 / `sse` 19 / `idempotency` 10
+- [x] **反证已验证**：`runState.test.ts` T8 组、`scan.test.ts` T4 组
+- [x] **CI 扫描通过**：构建产物无硬编码密钥/口令/私钥/测试令牌
 - [x] `.gitignore` 已含 `node_modules/`、`dist/`、`.env.*`
-- [x] 依赖已升级至无高危：react-router-dom 7.18.4 / vite 6.4.4 / vitest 3.2.7
-      （8 漏洞 → 3 残留，均为 vitest 传递依赖，见 §12）
+- [x] 依赖已升级：react-router-dom 7.18.4 / vite 6.4.4 / vitest 3.2.7
 
-### 11.2 ⛔ 未完成（受环境限制，非代码问题）
+### 11.2 ⚠️ 本次验证抓到的 P0 缺陷（已修复）
 
-- [ ] **组件测试 `pages.test.tsx` 未跑通** —— 已修复 6 处测试代码缺陷
-      （helper 未返回 render 结果、选择器匹配到多个元素、真实 `Response` body 只能读一次），
-      但**修复后的完整验证未能执行**
-- [ ] `npm run build`（含 `tsc --noEmit` 严格模式零错误）**未验证**
-- [ ] CI 扫描（无硬编码密钥）**未接入**
+**变量遮蔽导致所有 HTTP 调用失效**
 
-> **阻塞原因**：执行环境沙箱在本次会话中段失效（`sandbox-exec: data object length
-> 67025 exceeds maximum`），所有 Bash 命令被拒绝，与代码无关。
-> 需在恢复后执行：`cd frontend && npm test && npm run build`。
+```ts
+// ❌ 缺陷代码
+export function login(request: LoginRequest) {
+  return request<LoginResponse>(...)   // ← 此处解析为形参，不是模块级函数
+}
+```
+
+**症状**：运行时 `TypeError: request2 is not a function`，
+所有 HTTP 请求静默失败，页面统一显示「登录失败，请稍后重试」。
+
+**为什么此前没发现**：5 个纯逻辑测试文件都不经过 `client.ts`，
+**只有组件测试会真正发起请求**。若沙箱持续不可用、未跑组件测试，
+该缺陷会直接进入提交。
+
+**修复**：模块级函数改名 `_request`，对外形参改名 `payload`，
+形成"内外不同名"的命名约束并写入代码注释。
+
+> **教训**：分层测试有盲区——**不经过某模块的测试不会发现该模块的缺陷**。
+> HTTP 调用层必须有至少一条端到端用例，否则整层无覆盖。
+
+### 11.3 已修正的测试自身缺陷（2 处）
+
+| # | 问题 | 修正 |
+|---|---|---|
+| 1 | T2 断言「整页 HTML 不含学校/班级」 | 合规提示文案**本就该**出现这些词（"不会收集姓名、学校、班级"）。断言对象改为**输入控件**的 name/id/type |
+| 2 | SSE 纯注释行断言 `terminal === false` | 纯注释不含事件字段，按 SSE 规范应整体忽略返回 `null`，否则调用方会误判收到一条事件 |
+
+> **测试写错比代码写错更隐蔽**：前者靠"恰好通过"蒙混，后者会被立即暴露。
 
 ## 12. 待办与已知问题
 
 | # | 项 | 级别 | 说明 |
 |---|---|---|---|
 | 1 | **后端 `IdentifyingPattern` 存在空格绕过缺口** | 🟡 中 | `138 1234 5678` 前后端均漏检（PIPL 禁采手机号）。前端已对身份证/手机/邮箱收紧，但**学号因误杀风险未收紧** → 需后端修复 |
-| 2 | vitest 3.2.7 传递依赖残留 3 漏洞 | 🟢 低 | tinypool RCE / @vitest/mocker 路径穿越，**均为测试工具链、不进生产构建**。修复需 vitest 5（breaking change），建议随下次升级处理 |
-| 3 | `agentId` 为前端常量 | 🔴 高 | 缺口 G2，无 Agent 管理接口 |
+| 2 | vitest 传递依赖残留 3 漏洞 | 🟢 低 | tinypool RCE / @vitest/mocker 路径穿越，**均为测试工具链、不进生产构建**。修复需 vitest 5（breaking change）|
+| 3 | `agentId` 为前端环境变量注入 | 🔴 高 | 缺口 G2，无 Agent 管理接口 |
 | 4 | 进度页无执行事件 | 🔴 高 | 缺口 G4，依赖 P3-D10 |
-| 5 | 组件测试待验证 | 🔴 高 | 见 §11.2 |
-| 6 | 配置管理页 | ⏸️ | 属 F4–F6，本片未做 |
+| 5 | 配置管理页未做 | ⏸️ 中 | 属 F4–F6，需先定「配置生效机制」 |
+| 6 | 无 E2E（Playwright） | 🟡 中 | 组件测试已覆盖 HTTP 链路；端到端待 P4 |
 
 ---
 
 **下一步**：
-① 环境恢复后跑 `npm test` 与 `npm run build`，据实修订 §11.2；
-② 向后端提出待办 1（`IdentifyingPattern` 空格绕过）；
-③ 进入 F4（配置管理只读视图）。
+① 向后端提出待办 1（`IdentifyingPattern` 空格绕过）；
+② 进入 F4（配置管理只读视图），须先定 FE-02 §9 第 1 项；
+③ 缺口 G2/G4 推动 P3 补齐后接入真实数据。
