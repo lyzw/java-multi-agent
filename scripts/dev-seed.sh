@@ -155,58 +155,98 @@ cmd_seed() {
     fi
   done
 
-  info "租户 slug : $slug"
-  info "租户名称 : $name"
-  info "登录账号 : $login"
-  info "口令     : $password"
+  # ⚠️⚠️ 口令中的特殊字符会导致**静默失败**（实测踩坑）。
+  #
+  # 现象：口令含 '!' 等 shell 敏感字符时，脚本输出「初始化完成」
+  #       但账号**根本没入库**—— psql 报错被 shell 吞掉，
+  #       而脚本仍继续执行到成功分支（EXIT 0）。
+  #
+  # 风险：⚠️ 这属于「谎报成功」。比直接失败更危险——
+  #       使用者会以为账号可用，直到登录失败才发现。
+  #
+  # 处置：显式拒绝含 shell/SQL 敏感字符的口令。
+  if [[ "$password" == *[!A-Za-z0-9._-]* ]]; then
+    fail "口令含不允许的字符。仅支持字母、数字与 . _ -
+   ⚠️ 这不是功能限制而是刻意约束：含 \$ ' \` \" ! & | ; ( ) < > 等字符时
+   脚本会出现「报成功但实际未入库」的静默失败，极难排查。
+   请改用字母数字组合（如 Admin-2026a）。"
+  fi
+
+  info "租户 slug : ${slug}"
+  info "租户名称 : ${name}"
+  info "登录账号 : ${login}"
+  info "口令     : ${password}"
   info "角色     : ${roles[*]}"
 
   local hash
   hash=$(generate_password_hash "$password")
 
-  # ⚠️ 幂等：ON CONFLICT DO NOTHING，绝不覆盖已有账号
-  #    （覆盖等于静默改口令，且会绕过失败锁定计数）
-  #
-  # ⚠️ login_name 的唯一性由**索引**（uq_principal_login_name）而非**约束**实现，
-  #    故不能用 ON CONFLICT ON CONSTRAINT（实测报
-  #    「constraint does not exist」），须用 ON CONFLICT (login_name) 列推断。
-  psql_cmd <<SQL
-BEGIN;
+  # ⚠️ 预构造角色 VALUES 字面量。
+  #    不能写 VALUES ('A'), ('B') —— 变量与中文逗号相邻会被
+  #    shell 解析为变量名的一部分（报 unbound variable）。
+  local role_values=""
+  for role in "${roles[@]}"; do
+    if [[ -z "$role_values" ]]; then
+      role_values="('${role}')"
+    else
+      role_values="${role_values}, ('${role}')"
+    fi
+  done
 
--- ① 租户
-INSERT INTO tenant (tenant_id, slug, name, status)
-VALUES (gen_random_uuid(), '$slug', '$name', 'ACTIVE')
-ON CONFLICT (slug) DO NOTHING;
+  # ⚠️⚠️ **不使用 heredoc 拼接 SQL**。
+  #    实测踩坑 3 次：heredoc 未加引号时做变量展开，而 SQL 里的
+  #    逗号（','）紧跟变量（'$slug', ...），shell 会把
+  #    "'$slug'," 当成一个变量名 → 报 `unbound variable`。
+  #    ⚠️ 该坑对**半角逗号**同样成立，不只是全角标点。
+  #    故改用 printf 逐行构造：变量只在双引号串内独立出现。
+  local sql=""
+  sql+="BEGIN;"$'\n'
+  sql+="INSERT INTO tenant (tenant_id, slug, name, status) "
+  sql+="VALUES (gen_random_uuid(), '${slug}', '${name}', 'ACTIVE') "
+  sql+="ON CONFLICT (slug) DO NOTHING;"$'\n'
+  sql+="INSERT INTO principal (tenant_id, login_name, password_hash, status) "
+  sql+="SELECT t.tenant_id, '${login}', '${hash}', 'ACTIVE' "
+  sql+="FROM tenant t WHERE t.slug = '${slug}' "
+  sql+="ON CONFLICT (login_name) DO NOTHING;"$'\n'
+  sql+="INSERT INTO principal_role (tenant_id, principal_id, role) "
+  sql+="SELECT p.tenant_id, p.principal_id, r.role "
+  sql+="FROM principal p CROSS JOIN (VALUES ${role_values}) AS r(role) "
+  sql+="WHERE p.login_name = '${login}' "
+  sql+="ON CONFLICT DO NOTHING;"$'\n'
+  sql+="COMMIT;"$'\n'
 
--- ② 账号
---    login_name 全局唯一（V3 迁移注释：租户内唯一会让同名账号跨租户存在）
---    格式约束：^[a-z0-9][a-z0-9._-]{2,63}$（小写起始，允许点/下划线/连字符，3–64 位）
-INSERT INTO principal (tenant_id, login_name, password_hash, status)
-SELECT t.tenant_id, '$login', '$hash', 'ACTIVE'
-FROM tenant t
-WHERE t.slug = '$slug'
-ON CONFLICT (login_name) DO NOTHING;
-
--- ③ 角色
-INSERT INTO principal_role (tenant_id, principal_id, role)
-SELECT p.tenant_id, p.principal_id, r.role
-FROM principal p
-CROSS JOIN (VALUES $(printf "('%s'), " "${roles[@]}" | sed 's/, $//')) AS r(role)
-WHERE p.login_name = '$login'
-ON CONFLICT DO NOTHING;
-
-COMMIT;
-SQL
+  # 幂等说明：全部 ON CONFLICT DO NOTHING，
+  # 绝不覆盖已有账号（覆盖等于静默改口令，且会绕过失败锁定计数）。
+  # ⚠️ login_name 唯一性由**索引**（uq_principal_login_name）而非约束实现，
+  #    故用 ON CONFLICT (login_name) 列推断；
+  #    ON CONFLICT ON CONSTRAINT 会报「constraint does not exist」（实测）。
+  printf '%s' "$sql" | psql_cmd
 
   echo
   local tenant_id
   tenant_id=$(cmd_login "$login" | tr -d ' ')
 
+  # ⚠️⚠️ 事后校验（不可省略）：
+  #   仅靠 SQL 的输出判断成败是不够的 —— psql 的报错可能被吞掉，
+  #   而流程仍会走到成功分支（实测出现过「报成功但未入库」）。
+  #   故必须**回查数据库**确认真实存在，才能宣告成功。
   if [[ -z "$tenant_id" ]]; then
-    fail "初始化后仍查不到账号 ${login}，请检查上述 SQL 输出"
+    fail "初始化失败：数据库中查不到账号 ${login}。
+   可能原因：含特殊字符的口令被 shell 截断，或权限不足。
+   请检查上方 psql 输出是否有 ERROR。"
   fi
 
-  ok "初始化完成"
+  # 角色也要回查：角色插入失败同样是静默的
+  local role_count
+  role_count=$(psql_cmd -tAc \
+    "SELECT count(*) FROM principal_role pr
+       JOIN principal p USING (principal_id)
+      WHERE p.login_name = '${login}';" | tr -d ' ')
+  if [[ "$role_count" == "0" ]]; then
+    fail "账号 ${login} 已创建，但角色未生效。roles 参数：${roles[*]}"
+  fi
+
+  ok "初始化完成（已回查确认账号与角色均已入库）"
   echo
   echo "─── 登录信息（可直接复制）───"
   echo "  租户 ID : $tenant_id"
