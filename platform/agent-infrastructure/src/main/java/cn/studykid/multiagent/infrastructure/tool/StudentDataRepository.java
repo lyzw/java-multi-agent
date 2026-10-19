@@ -35,7 +35,8 @@ public class StudentDataRepository {
      * 在租户上下文内执行。
      *
      * <p>⚠️ 事务局部语义要求**必须开启事务**，故此处强制
-     * {@code setAutoCommit(false)}，执行完 rollback 释放。
+     * {@code setAutoCommit(false)}；成功路径 commit（写入真正落库——F-2 修复），
+     * 异常路径 rollback。
      */
     private <T> T inTenantScope(String tenantId, TenantQuery<T> body) {
         try (Connection conn = dataSource.getConnection()) {
@@ -47,7 +48,10 @@ public class StudentDataRepository {
                         conn, new cn.studykid.multiagent.core.tenant.TenantContext(
                                 tenantId, "worker", java.util.Set.of(), 0L));
                 T result = body.apply(conn);
-                conn.rollback();
+                // ⚠️ P3-D03 修复 F-2：成功路径必须 commit。
+                //    原实现无条件 rollback —— insertWeakness 的写入从未落库（P2-D4 引入），
+                //    record_weakness 实为空操作。只读方法 commit 是 no-op，无害。
+                conn.commit();
                 return result;
             } catch (SQLException e) {
                 try {

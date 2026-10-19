@@ -9,8 +9,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
+import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.ports.model.ModelResponse;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
+import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 import cn.studykid.multiagent.ports.tool.ToolHandler;
 
@@ -33,15 +35,18 @@ public class ToolInvocationGate {
     private final AuthorizationService authorization;
     private final ApprovalPolicy approvalPolicy;
     private final BudgetReserver budget;
+    private final RunToolLedgerPort ledger;
 
     public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
                               @NonNull AuthorizationService authorization,
                               @NonNull ApprovalPolicy approvalPolicy,
-                              @NonNull BudgetReserver budget) {
+                              @NonNull BudgetReserver budget,
+                              @NonNull RunToolLedgerPort ledger) {
         this.handlers = List.copyOf(handlers);
         this.authorization = authorization;
         this.approvalPolicy = approvalPolicy;
         this.budget = budget;
+        this.ledger = ledger;
     }
 
     /**
@@ -90,6 +95,21 @@ public class ToolInvocationGate {
             // ③ 幂等键（ADR-003）
             String idemKey = buildIdempotencyKey(call);
 
+            // ④ ⚠️ 账本登记（P3-D03）：失败即拒绝执行（fail-closed）。
+            //    无账可对的调用，其 UNKNOWN 无处安放——对账无从做起。
+            RunToolLedgerPort.Registration registration;
+            try {
+                registration = ledger.register(tenantId, task.runId(),
+                        call.toolName(), handler.riskLevel().name(),
+                        idemKey, String.valueOf(call.arguments()),
+                        call.arguments(), task.fencingToken());
+            } catch (RuntimeException e) {
+                log.error("账本登记失败，fail-closed 拒绝执行: tool={}, runId={}",
+                        call.toolName(), task.runId(), e);
+                result.recordRejected(call.toolName(), "账本登记失败");
+                continue;
+            }
+
             // ⑤ 审批检查
             ApprovalPolicy.ApprovalDecision approval = approvalPolicy.evaluate(handler);
             if (approval.requiresApproval()) {
@@ -118,6 +138,9 @@ public class ToolInvocationGate {
 
             try {
                 ToolHandler.ToolResult toolResult = handler.execute(ctx, call.arguments());
+                // ⑧ 账本记结果（P3-D03）：账本失败会让执行循环按 UNKNOWN 处置（fail-closed）
+                ledger.recordResult(tenantId, registration.operationId(),
+                        ToolOperationState.SUCCEEDED, task.fencingToken(), null, null);
                 result.recordSucceeded(call.toolName(), toolResult);
 
             } catch (cn.studykid.multiagent.ports.tool.ToolExecutionException e) {
@@ -125,22 +148,31 @@ public class ToolInvocationGate {
                 if (e.isResultUnknown()) {
                     // 结果未知：可能已产生副作用
                     // ⚠️ 不释放预算预留（成本可能已发生），不重试
-                    log.warn("工具结果未知，转对账: tool={}, runId={}",
-                            call.toolName(), task.runId());
-                    result.recordUnknown(call.toolName(), idemKey);
+                    log.warn("工具结果未知，落账转对账: tool={}, runId={}, operation={}",
+                            call.toolName(), task.runId(), registration.operationId());
+                    ledger.recordResult(tenantId, registration.operationId(),
+                            ToolOperationState.UNKNOWN, task.fencingToken(), null,
+                            e.getMessage());
+                    result.recordUnknown(call.toolName(), registration.operationId());
                     // ⚠️ 立即返回：UNKNOWN 后不得继续执行后续工具
                     return result;
                 }
                 // 确定失败：无副作用，可重试
                 log.info("工具确定失败: tool={}, err={}", call.toolName(), e.getMessage());
+                ledger.recordResult(tenantId, registration.operationId(),
+                        ToolOperationState.FAILED, task.fencingToken(),
+                        e.getClass().getSimpleName(), e.getMessage());
                 result.recordFailed(call.toolName(), e.getMessage());
 
             } catch (RuntimeException e) {
                 // ⚠️ 未预期异常按「结果未知」处理 —— 保守假设可能有副作用。
                 //    若按确定失败处理而实际已写入，会导致重复写入 = Sev-0
-                log.error("工具抛出未预期异常，保守按 UNKNOWN 处理: tool={}",
+                log.error("工具抛出未预期异常，保守按 UNKNOWN 落账: tool={}",
                         call.toolName(), e);
-                result.recordUnknown(call.toolName(), idemKey);
+                ledger.recordResult(tenantId, registration.operationId(),
+                        ToolOperationState.UNKNOWN, task.fencingToken(), null,
+                        String.valueOf(e.getMessage()));
+                result.recordUnknown(call.toolName(), registration.operationId());
                 return result;
             }
         }
