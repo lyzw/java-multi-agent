@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
+import org.springframework.stereotype.Repository;
 
 /**
  * {@link RunClaimPort} 的 JDBC 实现。
@@ -31,6 +32,7 @@ import cn.studykid.multiagent.ports.persistence.RunClaimPort;
  *       与数据库触发器形成双保险。</li>
  * </ol>
  */
+@Repository
 public class JdbcRunClaimRepository implements RunClaimPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcRunClaimRepository.class);

@@ -24,6 +24,8 @@ import cn.studykid.multiagent.core.idempotency.RequestDigest;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
+import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Service;
 
 /**
  * {@link RunCreationPort} 的 JDBC 实现。
@@ -35,6 +37,7 @@ import cn.studykid.multiagent.ports.persistence.RunCreationPort;
  * {@code RunCreationService.TransactionRunner} 控制。这是有意为之：
  * 若实现内部提交，异常路径上的回滚就会被绕过。
  */
+@Repository
 public class JdbcRunCreationRepository implements RunCreationPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcRunCreationRepository.class);

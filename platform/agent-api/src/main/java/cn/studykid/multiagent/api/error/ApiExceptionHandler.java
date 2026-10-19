@@ -101,6 +101,24 @@ public class ApiExceptionHandler {
      * <p>⚠️ 返回**通用**消息，不透出异常详情——
      * 堆栈与内部结构可能含路径、表名、数据。
      */
+    /**
+     * 媒体类型不支持 → 415。
+     *
+     * <p>⚠️ <b>这是端到端测试发现的真实缺陷</b>：原先落入兜底处理器返回
+     * {@code 500}，让「客户端发错 Content-Type」被报成「服务端故障」。
+     * 后果有二：客户端无法区分「我错了」与「服务端坏了」，
+     * 监控上服务端错误率被客户端笔误污染。
+     *
+     * <p>⚠️ 响应同样不含 {@code getMessage()} —— 它会回显请求体的媒体类型细节。
+     */
+    @ExceptionHandler(org.springframework.web.HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleUnsupportedMediaType(
+            org.springframework.web.HttpMediaTypeNotSupportedException e) {
+        log.warn("媒体类型不支持");
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(new ErrorResponse("UNSUPPORTED_MEDIA_TYPE", "请求媒体类型不受支持"));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception e) {
         log.error("未预期异常", e);

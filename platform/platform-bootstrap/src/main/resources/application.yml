@@ -116,6 +116,30 @@ deployment:
     max-tenants: "1"
 
 
+# ── D-001 认证（平台自建）────────────────────────────────────────
+auth:
+  jwt:
+    # 签发方标识。非空，缺失则启动失败（fail-closed）
+    issuer: "${JWT_ISSUER:https://auth.studykid.cn}"
+    # 接收方标识。防止为其他服务签发的令牌被冒用
+    audience: "${JWT_AUDIENCE:agent-platform}"
+    # 令牌有效期（秒）。范围 60~3600，超出即启动失败
+    token-ttl-seconds: "900"
+    # ⚠️ RS256 私钥（Base64 的 PKCS#8 DER）。
+    #    缺省为空：仅 dev profile 允许启动时生成；
+    #    其余环境为空即启动失败 —— 生产若用启动生成，
+    #    滚动重启会导致全员掉线。P4 接入 KMS。
+    private-key: "${JWT_PRIVATE_KEY:}"
+  login:
+    # 连续失败达到此数即锁定
+    max-failed-attempts: "5"
+    # 锁定时长（分钟）
+    lock-duration-minutes: "15"
+    # 允许的角色白名单。⚠️ 与 Roles 权限矩阵保持一致，
+    # 未登记的角色在签发与校验时均被丢弃
+    known-roles: "STUDENT,PARENT,TEACHER,TENANT_ADMIN,VIEWER,APPROVER,AGENT_AUTHOR,WORKER"
+
+
 # ── 灾备（P4 演练后确认）──────────────────────────────────────────
 dr:
   rpo: 24h

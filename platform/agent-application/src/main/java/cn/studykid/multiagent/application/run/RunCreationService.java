@@ -12,6 +12,7 @@ import cn.studykid.multiagent.core.idempotency.RequestDigest;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
+import org.springframework.stereotype.Service;
 
 /**
  * Run 创建用例（P1-05 / 红线 3）。
@@ -27,6 +28,7 @@ import cn.studykid.multiagent.ports.persistence.RunCreationPort;
  *   <li>键相同但请求不同 → 冲突，拒绝。</li>
  * </ul>
  */
+@Service
 public class RunCreationService {
 
     private final RunCreationPort runCreation;

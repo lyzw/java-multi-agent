@@ -62,6 +62,16 @@ public class PrincipalRepository {
      * @return 不存在时返回 {@link Optional#empty()}
      */
     public Optional<PrincipalRecord> findByLogin(String tenantId, String loginName) {
+        // 校验 tenantId 格式：非法 UUID 会让 SQL 抛异常并返回 500。
+        // 后果有二：错误分类错误，且 500 与其他失败的 401 不同，
+        // 构成「该租户不存在」的探测通道。故 fail-closed 返回空。
+        if (tenantId == null || !UUID_PATTERN.matcher(tenantId).matches()) {
+            return Optional.empty();
+        }
+        if (loginName == null || loginName.isBlank()) {
+            return Optional.empty();
+        }
+
         String sql = """
                 SELECT principal_id, tenant_id, login_name, password_hash, display_name,
                        status, failed_attempts, locked_until, authz_version
@@ -82,6 +92,14 @@ public class PrincipalRepository {
             throw new IllegalStateException("查询账号失败", e);
         }
     }
+
+    /**
+     * 租户/主体 ID 格式（与数据库 uuid 列类型一致）。
+     */
+    private static final java.util.regex.Pattern UUID_PATTERN =
+            java.util.regex.Pattern.compile(
+                    "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+                            + "-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
 
     /** 校验密码。
      *
@@ -217,6 +235,11 @@ public class PrincipalRepository {
      * 带 {@code TENANT_ADMIN} 的令牌即可提权。
      */
     public Set<String> findRoles(String tenantId, String principalId) {
+        if (tenantId == null || principalId == null
+                || !UUID_PATTERN.matcher(tenantId).matches()
+                || !UUID_PATTERN.matcher(principalId).matches()) {
+            return java.util.Collections.emptySet();
+        }
         String sql = """
                 SELECT role FROM principal_role
                 WHERE tenant_id = ?::uuid AND principal_id = ?::uuid

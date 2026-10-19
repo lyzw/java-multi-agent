@@ -19,6 +19,17 @@
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-api</artifactId>
     </dependency>
+    <!--
+      D-001 端到端测试：RestTestClient。
+      ⚠️ Spring Boot 4 把 @AutoConfigureRestTestClient 与 TestRestTemplate
+         移出了 spring-boot-starter-test，须显式引入此模块。
+         用 RestTestClient 而非已移除的 TestRestTemplate。
+    -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-resttestclient</artifactId>
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-worker</artifactId>
