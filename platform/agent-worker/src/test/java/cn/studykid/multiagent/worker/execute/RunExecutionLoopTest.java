@@ -29,6 +29,7 @@ import cn.studykid.multiagent.ports.persistence.ApprovalPort.ApprovalOutcome;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
+import cn.studykid.multiagent.ports.security.ApprovalPolicy;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 import cn.studykid.multiagent.ports.tool.ToolExecutionException;
 import cn.studykid.multiagent.ports.tool.ToolHandler;
@@ -339,7 +340,7 @@ class RunExecutionLoopTest {
 
             var loop = loop(modelReturning(textResponse("ok")), port,
                     new ToolInvocationGate(List.of(), allowAll(),
-                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
@@ -361,7 +362,7 @@ class RunExecutionLoopTest {
             FakeClaimPort port = new FakeClaimPort();
             var loop = loop(modelReturning(textResponse("x=2 或 x=3")), port,
                     new ToolInvocationGate(List.of(), allowAll(),
-                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
@@ -393,7 +394,7 @@ class RunExecutionLoopTest {
 
             var outcome = loop(gw, port,
                     new ToolInvocationGate(List.of(new RecordingTool()), allowAll(),
-                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()))
                     .execute(TENANT, task(), agentConfig(), snapshot(5),
                             Map.of("q", "x"));
@@ -415,7 +416,7 @@ class RunExecutionLoopTest {
             assertThatThrownBy(() -> new RunExecutionLoop(
                     modelReturning(textResponse("x")), new FakeClaimPort(),
                     new ToolInvocationGate(List.of(), allowAll(),
-                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()), Duration.ofSeconds(30), " "))
                     .isInstanceOf(IllegalArgumentException.class);
         }
@@ -435,7 +436,7 @@ class RunExecutionLoopTest {
             };
             var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(), allowAll(),
-                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
@@ -456,7 +457,7 @@ class RunExecutionLoopTest {
             };
             var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(), allowAll(),
-                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
@@ -486,7 +487,7 @@ class RunExecutionLoopTest {
             var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(new UnknownResultTool()),
                             allowAll(),
-                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
@@ -524,7 +525,7 @@ class RunExecutionLoopTest {
             var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(new DefinitelyFailedTool()),
                             allowAll(),
-                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
@@ -545,7 +546,7 @@ class RunExecutionLoopTest {
         void authorizationDeniedBlocksTool() {
             var handler = new RecordingTool();
             var gate = new ToolInvocationGate(List.of(handler), denyAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     budget(), ledger());
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
@@ -563,7 +564,7 @@ class RunExecutionLoopTest {
         void schemaFailureBlocksTool() {
             var handler = new SchemaRejectingTool();
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     budget(), ledger());
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
@@ -582,7 +583,7 @@ class RunExecutionLoopTest {
             var handler = new RecordingTool();
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
                     // 模拟风险级别被提升为需要审批
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.required("WRITE_EXTERNAL"),
+                    h -> ApprovalPolicy.ApprovalDecision.required("WRITE_EXTERNAL"),
                     budget(), ledger());
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
@@ -599,7 +600,7 @@ class RunExecutionLoopTest {
         @DisplayName("⚠️ 未登记工具 → 拒绝")
         void unregisteredToolRejected() {
             var gate = new ToolInvocationGate(List.of(), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     budget(), ledger());
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
@@ -616,7 +617,7 @@ class RunExecutionLoopTest {
             InMemoryLedger broken = new InMemoryLedger();
             broken.registerFails = true;
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     budget(), broken);
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
@@ -637,7 +638,7 @@ class RunExecutionLoopTest {
             InMemoryBudget denied = deniedBudget();
             var led = ledger();
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     denied, led);  // 预算预留失败
 
             gate.invokeAll(TENANT, task(), Map.of(
@@ -666,7 +667,7 @@ class RunExecutionLoopTest {
             var handler = new RecordingTool();
             var led = ledger();
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     brokenBudget(), led);
 
             gate.invokeAll(TENANT, task(), Map.of(
@@ -686,7 +687,7 @@ class RunExecutionLoopTest {
             var unknownTool = new UnknownResultTool();
             var b = budget();
             var gate = new ToolInvocationGate(List.of(unknownTool), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     b, ledger());
 
             gate.invokeAll(TENANT, task(), Map.of(
@@ -708,7 +709,7 @@ class RunExecutionLoopTest {
             var failing = new DefinitelyFailedTool();
             var b = budget();
             var gate = new ToolInvocationGate(List.of(failing), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     b, ledger());
 
             gate.invokeAll(TENANT, task(), Map.of(
@@ -730,7 +731,7 @@ class RunExecutionLoopTest {
             var b = budget();
             var led = ledger();
             var gate = new ToolInvocationGate(List.of(ok), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     b, led);
 
             gate.invokeAll(TENANT, task(), Map.of(
@@ -751,7 +752,7 @@ class RunExecutionLoopTest {
             var unknownTool = new UnknownResultTool();
             var laterTool = new RecordingTool();
             var gate = new ToolInvocationGate(List.of(unknownTool, laterTool), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     budget(), ledger());
 
             var result = gate.invokeAll(TENANT, task(), orderedCalls());
@@ -801,15 +802,30 @@ class RunExecutionLoopTest {
             }
         }
 
+        /**
+         * 可脚本化的审批结论来源（P4-D01）。
+         *
+         * <p>⚠️ D5 的用例此前只提供 {@code ApprovalPort}，闸门在本片新增
+         * 「先问审批权威」之后会先被它拦住 —— 故须一并提供。
+         */
+        private static cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
+                .ApprovalSource source(
+                cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
+                        .ApprovalSource.Verdict verdict) {
+            return (tenantId, handler) -> verdict;
+        }
+
         @Test
         @DisplayName("⚠️ 需要审批且审批有效(CONSUMED) → 工具执行")
         void requiredWithValidApprovalRuns() {
             var handler = new RecordingTool();
             var approval = new ScriptedApproval(ApprovalOutcome.CONSUMED);
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision
-                            .required("WRITE_EXTERNAL"),
-                    budget(), ledger(), approval);
+                    h -> ApprovalPolicy.ApprovalDecision.required("WRITE_EXTERNAL"),
+                    budget(), ledger(), approval, java.math.BigDecimal.ONE,
+                    (t, r) -> false, source(
+                            cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
+                                    .ApprovalSource.Verdict.APPROVED));
 
             gate.invokeAll(TENANT, task(), Map.of(
                     "c1", new ModelResponse.ToolCallRequest(
@@ -829,9 +845,11 @@ class RunExecutionLoopTest {
             var handler = new RecordingTool();
             var approval = new ScriptedApproval(ApprovalOutcome.NO_APPROVAL);
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision
-                            .required("WRITE_EXTERNAL"),
-                    budget(), ledger(), approval);
+                    h -> ApprovalPolicy.ApprovalDecision.required("WRITE_EXTERNAL"),
+                    budget(), ledger(), approval, java.math.BigDecimal.ONE,
+                    (t, r) -> false, source(
+                            cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
+                                    .ApprovalSource.Verdict.APPROVED));
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
                     "c1", new ModelResponse.ToolCallRequest(
@@ -850,8 +868,7 @@ class RunExecutionLoopTest {
             var handler = new RecordingTool();
             var approval = new ScriptedApproval(ApprovalOutcome.EXPIRED);
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision
-                            .required("WRITE_EXTERNAL"),
+                    h -> ApprovalPolicy.ApprovalDecision.required("WRITE_EXTERNAL"),
                     budget(), ledger(), approval);
 
             var result = gate.invokeAll(TENANT, task(), Map.of(
@@ -871,7 +888,7 @@ class RunExecutionLoopTest {
             // 即便端口表态拒绝，不需审批的工具也不应被拒
             var approval = new ScriptedApproval(ApprovalOutcome.NO_APPROVAL);
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     budget(), ledger(), approval);
 
             gate.invokeAll(TENANT, task(), Map.of(
@@ -906,7 +923,7 @@ class RunExecutionLoopTest {
             };
             var loop = loop(gw, port,
                     new ToolInvocationGate(List.of(new RecordingTool()), allowAll(),
-                            h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()));
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(3),
@@ -1013,7 +1030,7 @@ class RunExecutionLoopTest {
         private static ToolInvocationGate gateWith(ToolHandler handler,
                                                  ToolInvocationGate.CancelGuard guard) {
             return new ToolInvocationGate(List.of(handler), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     budget(), ledger(), neverApproving(), java.math.BigDecimal.ONE, guard);
         }
 
@@ -1088,7 +1105,7 @@ class RunExecutionLoopTest {
             var handler = new RecordingTool();
             // ⚠️ 默认构造器 = NO_CANCEL 桩 = 取消检查缺失
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
-                    h -> ToolInvocationGate.ApprovalPolicy.ApprovalDecision.notRequired(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                     budget(), ledger());
 
             gate.invokeAll(TENANT, task(), orderedCalls());

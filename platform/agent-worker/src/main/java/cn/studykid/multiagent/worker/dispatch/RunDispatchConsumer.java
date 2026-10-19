@@ -32,10 +32,60 @@ public class RunDispatchConsumer {
     private final RunClaimPort claimPort;
     private final Duration leaseDuration;
 
+    /**
+     * 执行器（P4-D01）。
+     *
+     * <p>⚠️ <b>这是修复「断链」的关键</b>：此前 {@code consume} 领到租约后
+     * 直接返回 {@code CLAIMED}，{@code task} 拿到手就被丢弃——
+     * <b>D5–D11 交付的全部闸门在生产中一次都不会执行</b>。
+     *
+     * <p>抽成接口而非直接依赖 {@code RunExecutionLoop}：
+     * 消费者只关心「执行结局 → MQ 处置」的映射，不应知道执行细节。
+     */
+    private final RunExecutor executor;
+
+    /** 执行器：领取后真正跑执行循环。 */
+    @FunctionalInterface
+    public interface RunExecutor {
+        /**
+         * @param tenantId 租户（来自已验签消息，RLS 绑定依据）
+         * @param task已领取的任务
+         * @return 执行结局
+         */
+        Outcome execute(String tenantId, RunClaimPort.LeasedTask task);
+    }
+
+    /** 执行结局（决定 MQ 处置）。 */
+    public enum Outcome {
+        /** 正常完成。 */
+        SUCCEEDED,
+        /** 可归因失败（已终结，重投无意义）。 */
+        FAILED,
+        /** 用户取消。 */
+        CANCELLED,
+        /** 可重试失败 → <b>nack 重投</b>。 */
+        RETRYABLE_FAILURE,
+        /** ⚠️ 结果未知 → <b>ack 丢弃，绝不重投</b>（重投 = 重复副作用 = Sev-0）。 */
+        UNKNOWN_RESULT,
+        /** 世代失效（已被接管）→ ack 丢弃。 */
+        STALE_GENERATION
+    }
+
     public RunDispatchConsumer(@NonNull RunClaimPort claimPort,
                                @NonNull Duration leaseDuration) {
+        this(claimPort, leaseDuration, null);
+    }
+
+    /**
+     * @param executor 执行器；<b>null 表示不执行</b>（仅领取租约）。
+     *        ⚠️ 保留 null 仅为兼容既有调用方与单测；生产<b>必须</b>传入。
+     */
+    public RunDispatchConsumer(@NonNull RunClaimPort claimPort,
+                               @NonNull Duration leaseDuration,
+                               @org.jspecify.annotations.Nullable RunExecutor executor) {
         this.claimPort = claimPort;
         this.leaseDuration = leaseDuration;
+        this.executor = executor;
     }
 
     /**
@@ -44,9 +94,26 @@ public class RunDispatchConsumer {
      * <p>区分三种结果，因为后续处置完全不同 ——
      * 混在一起会导致重试策略错误。
      */
+    /**
+     * 执行结局 → MQ 处置。
+     *
+     * <p>⚠️ {@link Outcome#UNKNOWN_RESULT} 必须映射为<b>丢弃</b>——
+     * 重投意味着同一个工具动作再执行一次，对 {@code record_weakness}
+     * 就是<b>重复写入</b>（Sev-0）。这是全项目最危险的一行映射。
+     */
+    private ConsumeResult toConsumeResult(Outcome outcome) {
+        return switch (outcome) {
+            case SUCCEEDED, FAILED, CANCELLED, UNKNOWN_RESULT, STALE_GENERATION ->
+                    ConsumeResult.CLAIMED;
+            case RETRYABLE_FAILURE -> ConsumeResult.RETRY;
+        };
+    }
+
     public enum ConsumeResult {
-        /** 已领取租约，交由 D3 执行。 */
+        /** 已领取租约并执行完毕（含终态与 UNKNOWN——<b>均不得重投</b>）。 */
         CLAIMED,
+        /** 可重试失败 → <b>nack 重投</b>。 */
+        RETRY,
         /** 已被他人领取（重复投递），**丢弃不重试**。 */
         DUPLICATE_DISCARDED,
         /** 消息非法或事件类型不符，**不重试**。 */
@@ -96,6 +163,24 @@ public class RunDispatchConsumer {
 
         RunClaimPort.LeasedTask task = claimed.get();
         log.debug("已领取任务: runId={}, fencingToken={}", task.runId(), task.fencingToken());
-        return ConsumeResult.CLAIMED;
+
+        // ⚠️⚠️ **断链修复点（P4-D01）**：此前这里直接 return CLAIMED，
+        //    task 拿到手即丢弃 —— 执行循环从未被调用。
+        //    现在真正执行，并按结局决定 MQ 处置。
+        if (executor == null) {
+            log.warn("⚠️ 未装配执行器，仅领取租约不执行（生产不应出现）: runId={}",
+                    task.runId());
+            return ConsumeResult.CLAIMED;
+        }
+        Outcome outcome;
+        try {
+            outcome = executor.execute(message.tenantId(), task);
+        } catch (RuntimeException e) {
+            // ⚠️ 执行异常按「可重试」处理，但**不得吞掉**——
+            //    异常消息会走死信，便于排查。
+            log.error("执行循环抛出未捕获异常，按可重试处理: runId={}", task.runId(), e);
+            return ConsumeResult.REJECTED;
+        }
+        return toConsumeResult(outcome);
     }
 }

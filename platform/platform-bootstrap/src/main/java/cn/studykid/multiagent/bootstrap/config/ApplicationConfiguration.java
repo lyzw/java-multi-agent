@@ -42,6 +42,7 @@ import cn.studykid.multiagent.ports.security.AuthorizationService;
  * 端口实现属基础设施层，授权逻辑属安全层。
  */
 @Configuration
+@org.springframework.context.annotation.Import(WorkerExecutionConfig.class)
 public class ApplicationConfiguration {
 
     /**

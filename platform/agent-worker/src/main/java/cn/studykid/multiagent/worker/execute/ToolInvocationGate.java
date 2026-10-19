@@ -15,6 +15,8 @@ import cn.studykid.multiagent.ports.persistence.ApprovalPort;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
+import cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy;
+import cn.studykid.multiagent.ports.security.ApprovalPolicy;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 import cn.studykid.multiagent.ports.tool.ToolHandler;
 
@@ -46,6 +48,15 @@ public class ToolInvocationGate {
     private final List<ToolHandler> handlers;
     private final AuthorizationService authorization;
     private final ApprovalPolicy approvalPolicy;
+
+    /**
+     * 审批结论来源（P4-D01 / E-2）。
+     *
+     * <p>⚠️ <b>默认恒 {@code FAIL_CLOSED}</b>：未装配真实来源时，
+     * 需要审批的工具一律被拒——与 D5 的默认行为一致，
+     * 但路径从「恒拒」变为「向权威查询后拒绝」，且<b>已可被真实审批驱动</b>。
+     */
+    private final RiskBasedApprovalPolicy.ApprovalSource approvalSource;
     private final BudgetPort budget;
     private final RunToolLedgerPort ledger;
     /**
@@ -103,6 +114,16 @@ public class ToolInvocationGate {
             return java.util.Optional.empty();
         }
     };
+
+    /**
+     * 默认审批结论来源：恒 {@code FAIL_CLOSED}。
+     *
+     * <p>⚠️ 未装配真实审批权威时，需要审批的工具一律被拒——
+     * 这是 fail-closed 的正确方向，绝不能默认 {@code APPROVED}。
+     */
+    private static final RiskBasedApprovalPolicy.ApprovalSource DENY_ALL_APPROVALS =
+            (tenantId, handler) -> cn.studykid.multiagent.application.approval
+                    .RiskBasedApprovalPolicy.ApprovalSource.Verdict.FAIL_CLOSED;
 
     /** 默认取消守卫：永不取消（取消链路未接入前的占位）。 */
     private static final CancelGuard NO_CANCEL = (tenantId, runId) -> false;
@@ -162,6 +183,25 @@ public class ToolInvocationGate {
                               @NonNull ApprovalPort approvalPort,
                               java.math.BigDecimal reserveAmountPerToolCall,
                               @NonNull CancelGuard cancelGuard) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                reserveAmountPerToolCall, cancelGuard, DENY_ALL_APPROVALS);
+    }
+
+    /**
+     * 完整构造器（P4-D01）：额外注入审批结论来源。
+     *
+     * <p>⚠️ 构造器数量已多，**新增依赖一律加在最完整的那一个**，
+     * 其余保持不变并委托——避免再次出现「两个构造器导致 Spring 无法选择」（F-6）。
+     */
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall,
+                              @NonNull CancelGuard cancelGuard,
+                              RiskBasedApprovalPolicy.ApprovalSource approvalSource) {
         this.handlers = List.copyOf(handlers);
         this.authorization = authorization;
         this.approvalPolicy = approvalPolicy;
@@ -169,6 +209,7 @@ public class ToolInvocationGate {
         this.ledger = ledger;
         this.approvalPort = approvalPort;
         this.cancelGuard = cancelGuard;
+        this.approvalSource = approvalSource;
         if (reserveAmountPerToolCall == null
                 || reserveAmountPerToolCall.signum() <= 0) {
             throw new IllegalArgumentException(
@@ -254,6 +295,26 @@ public class ToolInvocationGate {
             //       崩溃后可恢复，全部由 ApprovalPort 在 DB 事务内保证。
             ApprovalPolicy.ApprovalDecision approval = approvalPolicy.evaluate(handler);
             if (approval.requiresApproval()) {
+                // ⚠️ 先问审批权威（E-2 / P4-D01）：拿不到「明确批准」即拒绝。
+                //    FAIL_CLOSED（来源不可用）同样拒绝——不可用 ≠ 可放行。
+                cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
+                        .ApprovalSource.Verdict verdict;
+                try {
+                    verdict = approvalSource.verdictFor(tenantId, handler);
+                } catch (RuntimeException e) {
+                    // ⚠️ 权威异常同样 fail-closed（异常不得被当作「无异议」）
+                    log.error("审批权威异常，fail-closed 拒绝: tool={}, tenant={}",
+                            call.toolName(), tenantId, e);
+                    verdict = cn.studykid.multiagent.application.approval
+                            .RiskBasedApprovalPolicy.ApprovalSource.Verdict.FAIL_CLOSED;
+                }
+                if (verdict != cn.studykid.multiagent.application.approval
+                        .RiskBasedApprovalPolicy.ApprovalSource.Verdict.APPROVED) {
+                    log.warn("审批权威未批准，fail-closed 拒绝: tool={}, runId={}, verdict={}",
+                            call.toolName(), task.runId(), verdict);
+                    result.recordRejected(call.toolName(), "审批未批准:" + verdict);
+                    continue;
+                }
                 // ⚠️ 参数摘要与目标资源须与审批授予时绑定的一致（防篡改）：
                 //    argumentDigest 与 ledger 的 requestDigest 同源（均来自 call.arguments()），
                 //    targetResource 取工具名。
@@ -531,21 +592,4 @@ public class ToolInvocationGate {
         }
     }
 
-    /** 审批策略（DEC-11）。 */
-    @FunctionalInterface
-    public interface ApprovalPolicy {
-        /** @return 决策；默认不需审批（生产实现按 riskLevel 决定）。 */
-        ApprovalDecision evaluate(ToolHandler handler);
-
-        /** 审批决策。 */
-        record ApprovalDecision(boolean requiresApproval, String reason) {
-            public static ApprovalDecision notRequired() {
-                return new ApprovalDecision(false, null);
-            }
-
-            public static ApprovalDecision required(String reason) {
-                return new ApprovalDecision(true, reason);
-            }
-        }
-    }
 }
