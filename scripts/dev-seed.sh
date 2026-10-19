@@ -133,8 +133,11 @@ cmd_diagnose() {
     printf "❌ 账号不存在：%s\n" "$login"
     echo
     echo "可能原因（按概率排序）："
-    echo "  1. 账号被清理脚本删除 —— 本地库会因 migrate/destroy 等操作丢失账号"
+    echo "  1. ⚠️ 集成测试清理时误删 —— 历史上有测试按【租户】删光账号"
+    echo "     （PlatformSecurityE2ETest，已修）。若刚跑过集成测试，优先怀疑此项。"
+    echo "     检查：ls -lt platform/*/target/surefire-reports/ | head -3"
     echo "  2. 连错了数据库 —— 本机有 5433(PG17 正确) 与 5432(PG16 旧，无 agent_dev)"
+    echo "  3. 库被重建（dev-postgres.sh destroy 会删容器）"
     echo
     echo "请先确认当前库： ./scripts/dev-seed.sh --list"
     echo "确认后可重建：   ./scripts/dev-seed.sh --slug t-a --login ${login} \\"
