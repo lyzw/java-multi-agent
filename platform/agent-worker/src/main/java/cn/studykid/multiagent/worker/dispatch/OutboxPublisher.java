@@ -8,6 +8,8 @@ import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.ports.messaging.MessageSender.MessagePublishException;
+import cn.studykid.multiagent.ports.messaging.MessageSender;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
@@ -30,7 +32,7 @@ public class OutboxPublisher {
     private static final Logger log = LoggerFactory.getLogger(OutboxPublisher.class);
 
     private final RunCreationPort outbox;
-    private final MessageSender sender;
+    private final cn.studykid.multiagent.ports.messaging.MessageSender sender;
     private final String tenantId;
     private final Clock clock;
 
@@ -119,35 +121,6 @@ public class OutboxPublisher {
         } else {
             log.warn("Outbox 发布失败: outboxId={}, attempts={}, error={}",
                     event.outboxId(), event.attempts() + 1, error);
-        }
-    }
-
-    /**
-     * 消息发送端口。
-     *
-     * <p><b>刻意抽象</b>：便于测试注入假实现，也避免 Worker 模块
-     * 强依赖某个 MQ SDK —— 供应商可替换（ADR-001）。
-     */
-    @FunctionalInterface
-    public interface MessageSender {
-        /**
-         * 发送消息。<b>实现必须在 broker 确认后才返回</b>。
-         *
-         * @throws MessagePublishException 发布失败（含确认失败）
-         */
-        void send(@NonNull String eventType, @NonNull OutboxMessage message);
-    }
-
-    /** 发布失败。 */
-    public static class MessagePublishException extends RuntimeException {
-        private static final long serialVersionUID = 1L;
-
-        public MessagePublishException(String message) {
-            super(message);
-        }
-
-        public MessagePublishException(String message, Throwable cause) {
-            super(message, cause);
         }
     }
 }

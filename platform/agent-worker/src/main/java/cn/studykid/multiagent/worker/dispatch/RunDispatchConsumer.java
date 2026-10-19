@@ -8,6 +8,7 @@ import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.ports.messaging.MessageHandler;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 
@@ -22,7 +23,7 @@ import cn.studykid.multiagent.ports.persistence.RunClaimPort;
  * Outbox 是 at-least-once，重复是<em>正常形态</em>而非异常。
  * 领取失败说明已被他人领走，重试会让消息在多个 Worker 间来回打转。
  */
-public class RunDispatchConsumer {
+public class RunDispatchConsumer implements MessageHandler {
 
     private static final Logger log = LoggerFactory.getLogger(RunDispatchConsumer.class);
 
@@ -118,6 +119,28 @@ public class RunDispatchConsumer {
         DUPLICATE_DISCARDED,
         /** 消息非法或事件类型不符，**不重试**。 */
         REJECTED
+    }
+
+    /**
+     * {@link MessageHandler} 适配（P4-D03）。
+     *
+     * <p>把 {@link ConsumeResult} 映射为端口层的 {@link Outcome}。
+     * ⚠️ 映射是<b>多对一</b>的：{@code ConsumeResult} 的三个值与
+     * {@code Outcome} 一一对应，此处只是为让 MQ 容器（infrastructure）
+     * 不必反向依赖 worker。
+     */
+    @Override
+    public MessageHandler.Outcome handle(@NonNull String eventType,
+                                                  @NonNull Map<String, Object> payload,
+                                                  @NonNull String workerId) {
+        return switch (consume(eventType, payload, workerId)) {
+            case CLAIMED -> MessageHandler.Outcome.CLAIMED;
+            case RETRY -> MessageHandler.Outcome.RETRY;
+            case REJECTED -> MessageHandler.Outcome.REJECTED;
+            // ⚠️ 兜底：新增枚举值时按「丢弃」而非「重投」——
+            //    重投 = 重复副作用（Sev-0），丢弃只丢一次执行。
+            default -> MessageHandler.Outcome.CLAIMED;
+        };
     }
 
     /**

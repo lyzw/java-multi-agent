@@ -23,6 +23,12 @@ spring:
     #    自动确认在故障场景下易造成「未处理完就丢消息」。
     listener:
       simple:
+        # ⚠️ 与 agent.worker.enabled **必须同步设置**（P4-D03 实测）：
+        #    @RabbitListener 端点由 RabbitBootstrap 注册，
+        #    不受本项目 @Configuration 的 @ConditionalOnProperty 影响——
+        #    只关 agent.worker.enabled 仍会启动容器并连 broker。
+        #    生产两者均为 true；测试/无 broker 环境两者均 false。
+        auto-startup: "${AGENT_WORKER_ENABLED:true}"
         acknowledge-mode: manual
         # 有副作用工具不得无限重投；与队列级 delivery-limit 共同设防
         default-requeue-rejected: "false"
@@ -43,6 +49,33 @@ agent:
   rate-limit:
     limit-per-window: "30"
     window-seconds: "60"
+
+  # ── Worker 主循环（P4-D03）──────────────────────────────────────
+  # ⚠️ 以下配置**缺失即拒绝启动**（fail-closed）：退回默认值等于
+  #    「悄悄用了一个没人审过的并发度」，容器化环境下可能直接
+  #    打垮下游模型服务与 MQ。
+  # ⚠️ 数值必须加引号：YamlPropertiesFactoryBean 会丢弃裸标量
+  #    （P1 已在 delivery-limit 上踩过该坑）。
+  worker:
+    # 关掉即回到「消息永不消费」状态，生产必须为 true。
+    # 本地无 RabbitMQ 时可设 false，仅为让上下文能启动。
+    enabled: "true"
+    # Outbox 中继轮询间隔（毫秒）。下限 10ms——过小等于忙等。
+    # 代价：发布延迟 ≈ 该值。取舍理由见 P4-D03 §1 D-1。
+    relay-interval-ms: "200"
+    # 消费并发度。上限 64——过高会压垮下游模型服务。
+    concurrency: "4"
+    # 每消费者预取数。上限 100——过大放大重投时的重复处理窗口。
+    prefetch: "10"
+    # 单轮发布的 outbox 批量上限。
+    outbox-batch: "50"
+    # 发布失败累计上限（超过则停止重试并告警）。
+    max-publish-attempts: "5"
+    # 本实例服务的租户 slug（人类可读，启动时解析成 UUID）。
+    # ⚠️ 不在配置里写 UUID：换环境要改配置，且没人看得出它指哪个租户。
+    # ⚠️ slug 不存在即拒绝启动——静默跳过会让消息永不发布，
+    #    而系统表面完全正常（本片要修的正是这种断链）。
+    tenant-slug: "${AGENT_TENANT_SLUG:t-a}"
 
   # ── MQ 队列拓扑（ADR-001 §4）───────────────────────────────────
   # ⚠️ x-queue-type 与 x-delivery-limit 必须显式声明。

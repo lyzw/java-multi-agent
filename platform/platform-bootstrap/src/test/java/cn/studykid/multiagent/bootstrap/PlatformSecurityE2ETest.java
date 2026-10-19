@@ -78,7 +78,17 @@ import cn.studykid.multiagent.ports.security.AuthorizationService;
         "spring.flyway.enabled=false",
         "auth.jwt.issuer=https://auth.test",
         "auth.jwt.audience=agent-platform",
-        "auth.jwt.token-ttl-seconds=900"
+        "auth.jwt.token-ttl-seconds=900",
+        // ⚠️ Worker 主循环关闭（P4-D03）。
+        //    本类验证 HTTP 认证链 + RLS 隔离，不需要 RabbitMQ；
+        //    且测试环境的 broker 凭据未必与本机实例一致。
+        //
+        //    ⚠️ **两个开关必须同时设**（本次实测踩到）：
+        //    agent.worker.enabled 只关掉 WorkerLoopConfig 的 @Configuration，
+        //    而 @RabbitListener 端点由 RabbitBootstrap 注册，
+        //    **不受 ConditionalOnProperty 影响** —— 只关前者仍会启动容器连 broker。
+        "agent.worker.enabled=false",
+        "spring.rabbitmq.listener.simple.auto-startup=false"
 })
 class PlatformSecurityE2ETest {
 

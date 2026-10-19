@@ -18,6 +18,8 @@ import org.junit.jupiter.api.Test;
 import cn.studykid.multiagent.core.idempotency.IdempotencyDecision;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
+import cn.studykid.multiagent.ports.messaging.MessageSender;
+import cn.studykid.multiagent.ports.messaging.MessageSender.MessagePublishException;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
@@ -90,7 +92,7 @@ class OutboxDispatchTest {
     }
 
     private static OutboxPublisher publisher(FakeOutbox outbox,
-                                             OutboxPublisher.MessageSender sender) {
+                                             MessageSender sender) {
         return new OutboxPublisher(outbox, sender, TENANT,
                 java.time.Clock.fixed(NOW, java.time.ZoneOffset.UTC), 100, 3);
     }
@@ -126,7 +128,7 @@ class OutboxDispatchTest {
         void publishFailureMarksFailed() {
             FakeOutbox outbox = outboxWith("ob-2", 0);
             var pub = publisher(outbox, (type, msg) -> {
-                throw new OutboxPublisher.MessagePublishException("broker down");
+                throw new MessagePublishException("broker down");
             });
 
             assertThat(pub.publishOnce()).isZero();
@@ -139,7 +141,7 @@ class OutboxDispatchTest {
         void exhaustedAttemptsNotReset() {
             FakeOutbox outbox = outboxWith("ob-3", 2); // 阈值=3，本次将达到
             var pub = publisher(outbox, (type, msg) -> {
-                throw new OutboxPublisher.MessagePublishException("永久失败");
+                throw new MessagePublishException("永久失败");
             });
 
             pub.publishOnce();
