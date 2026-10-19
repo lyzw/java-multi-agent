@@ -1,0 +1,232 @@
+# CI 流水线
+#
+# 设计要点：
+#   1. 单元测试与集成测试分离 —— 集成测试需 PG，快速反馈优先
+#   2. 集成测试用 **非特权角色**（app_agent）：超级用户绕过 RLS，
+#      用它跑租户隔离测试会得到「隔离失效」的虚假结论
+#   3. 配置契约断言单独成 job —— 这是防「静默失效」的关键闸门
+#   4. 依赖漏洞扫描独立 job —— 失败不阻塞构建但需可见
+#
+# 触发：push / PR / 手动。分支 master、develop 受保护，强制要求 CI 通过。
+
+name: CI
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+    branches: [master, develop]
+  workflow_dispatch:
+
+# 同分支的旧运行取消，避免浪费配额
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: '21'
+  MAVEN_VERSION: '3.10.0'
+  # ⚠️ 必须与 DEC-13 一致。PG 14 已 EOL，禁止使用
+  PG_IMAGE: 'postgres:17'
+
+jobs:
+  # ── 1. 单元测试（快速反馈）────────────────────────────────────
+  unit-test:
+    name: 构建与单元测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: 编译并运行单元测试
+        working-directory: platform
+        run: mvn -B clean verify
+        # ⚠️ 未设 IT_PG_URL 时集成测试自动跳过，
+        #    故此处不会误跑依赖数据库的用例
+
+      - name: 上传构建产物
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fat-jar
+          path: platform/platform-bootstrap/target/*.jar
+          retention-days: 7
+
+  # ── 2. 配置契约断言（防静默失效）────────────────────────────
+  config-contract:
+    name: 配置契约与门禁断言
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      # ApplicationConfigTest 断言：
+      #   · delivery-limit = 3（否则退回 quorum 默认 20 → 重复写入 Sev-0）
+      #   · 零保留供应商清单非空、有效期为正
+      #   · WRITE_EXTERNAL = REQUIRED（审批不可放松）
+      #   · 无明文口令
+      # 这些断言失败意味着**安全机制已静默失效**，故单独成 job 以便快速定位。
+      - name: 运行配置契约测试
+        working-directory: platform
+        run: mvn -B -pl platform-bootstrap test -Dtest=ApplicationConfigTest
+
+      - name: 领域层纯净度检查
+        working-directory: platform
+        run: mvn -B -pl agent-core test -Dtest=AgentCorePurityTest
+        # AgentCorePurityTest 禁止领域层引入 Spring/Jakarta/Hibernate/Flyway/
+        # MQ SDK/PG 驱动/logback。破了它，ADR-011 的回滚收益即消失。
+
+  # ── 3. 集成测试（真实 PG 17）─────────────────────────────────
+  integration-test:
+    name: 集成测试（PostgreSQL 17）
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: unit-test
+    services:
+      postgres:
+        image: ${{ env.PG_IMAGE }}
+        env:
+          # ⚠️ 集成测试需要创建角色，故必须用超级用户初始化容器；
+          #    但**应用连接仍使用 app_agent 非特权角色**
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_only_not_a_secret
+          POSTGRES_DB: agent_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: 安装 PostgreSQL 客户端
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: 执行迁移与种子
+        env:
+          PGPASSWORD: ci_only_not_a_secret
+        run: |
+          cd platform/agent-infrastructure/src/main/resources/db/migration
+          psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 -f V1__baseline_schema.sql
+          psql -h 127.0.0.1 -U postgres -d agent_ci -f verify/V1_seed.sql
+
+      - name: 创建非特权验证角色
+        env:
+          PGPASSWORD: ci_only_not_a_secret
+        run: |
+          psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='app_agent') THEN
+              CREATE ROLE app_agent NOSUPERUSER NOBYPASSRLS LOGIN;
+            END IF;
+          END $$;
+          GRANT USAGE ON SCHEMA public TO app_agent;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_agent;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_agent;
+          SQL
+          # ⚠️ GRANT 必须逐条执行。整段放一个事务里，任意一条失败会连带回滚全部
+          #    GRANT，表现为「授权数=0」却无明显报错。
+
+      - name: 验证 DDL 约束（15 项）
+        env:
+          PGPASSWORD: ci_only_not_a_secret
+        run: |
+          psql -h 127.0.0.1 -U app_agent -d agent_ci -f platform/agent-infrastructure/src/main/resources/db/migration/verify/V1_constraint_check.sql
+          # ⚠️ 必须以 app_agent 执行。超级用户绕过所有 RLS 策略，
+          #    FORCE ROW LEVEL SECURITY 也拦不住 → 得到虚假结论。
+
+      - name: 运行集成测试
+        working-directory: platform
+        env:
+          IT_PG_URL: jdbc:postgresql://127.0.0.1:5432/agent_ci
+          IT_PG_USER: app_agent
+          IT_PG_PASSWORD: ''
+          IT_PG_ADMIN_USER: postgres
+        run: mvn -B -pl agent-infrastructure test -Dtest='*IT'
+
+  # ── 4. 依赖漏洞扫描（不阻塞，但需可见）───────────────────────
+  dependency-scan:
+    name: 依赖漏洞扫描
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true    # 扫描结果不阻塞构建，但会在 PR 中可见
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 依赖树与已知漏洞扫描
+        working-directory: platform
+        run: mvn -B org.owasp:dependency-check-maven:check \
+          -DfailBuildOnCVSS=7 \
+          -DsuppressionFile=../docs/security-suppressions.xml || true
+        # ⚠️ OWASP 数据库首次下载较慢；CI 缓存后可接受
+        # ⚠️ 漏洞库滞后于依赖发布，故不设阻塞；高危项须人工复核
+
+      - name: 上传扫描报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-scan-report
+          path: platform/dependency-check-report.xml
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ── 5. 门禁汇总 ────────────────────────────────────────────
+  gate:
+    name: 质量门禁
+    runs-on: ubuntu-latest
+    needs: [unit-test, config-contract, integration-test]
+    if: always()
+    steps:
+      # ⚠️ 必须用 needs.<job>.result 判定，不能用 job.status ——
+      #    后者读的是本 job 自身状态，会永远显示「通过」。
+      - name: 判定结果
+        env:
+          UNIT: ${{ needs.unit-test.result }}
+          CONFIG: ${{ needs.config-contract.result }}
+          INTEGRATION: ${{ needs.integration-test.result }}
+        run: |
+          failed=0
+          for entry in "单元测试:$UNIT" "配置契约断言:$CONFIG" "集成测试:$INTEGRATION"; do
+            name="${entry%%:*}"
+            result="${entry##*:}"
+            if [ "$result" = "success" ]; then
+              echo "$name  ✅ 通过"
+            else
+              echo "$name  ❌ $result"
+              failed=1
+            fi
+          done
+
+          echo ""
+          if [ "$failed" -ne 0 ]; then
+            echo "❌ 门禁未通过 —— 禁止合并"
+            exit 1
+          fi
+          echo "✅ 门禁通过"
+          echo ""
+          echo "注：依赖漏洞扫描为非阻塞（continue-on-error），"
+          echo "    高危项须人工复核报告，勿以「CI 绿了」代替审查。"

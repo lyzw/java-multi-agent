@@ -30,3 +30,6 @@ Thumbs.db
 *.pem
 *.key
 secrets/
+
+# ── 依赖扫描产物 ─────────────────────────────────────────
+dependency-check-report.*
