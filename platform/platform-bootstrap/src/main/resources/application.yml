@@ -77,6 +77,36 @@ agent:
     #    而系统表面完全正常（本片要修的正是这种断链）。
     tenant-slug: "${AGENT_TENANT_SLUG:t-a}"
 
+  # ── 数据保留与删除（P4-D04 / PIPL 未成年人）────────────────────
+  # ⚠️ 五项保留期**全部必填**，缺失或越界即拒绝启动（fail-closed）。
+  #    为什么说"没有安全默认值"：
+  #      过短 = 违规删除（提前销毁审计举证能力，等于自行削弱 R-1/R-3）；
+  #      过长 = 违规留存（PIPL 超期留存，泄露影响面随时间线性增长）。
+  #    两个方向都不是「保守」，故不存在可接受的兜底值。
+  # ⚠️ 数值必须加引号：YamlPropertiesFactoryBean 会丢弃裸标量。
+  retention:
+    # 关掉后数据从不被清理——生产必须为 true。
+    # ⚠️ 与「配置缺失」的表现完全一致，差别只在日志。
+    enabled: "true"
+    # 学习画像保留月数（student_profile / weakness_record）
+    profile-months: "12"
+    # Prompt 与工具结果保留天数。到期置空，不删 run 行
+    # （删 run 行会经 ON DELETE CASCADE 级联删除学生薄弱点）
+    prompt-days: "90"
+    # 审计日志保留天数（走受控清理通道，须声明 actor）
+    audit-days: "180"
+    # Trace（run_event）保留天数
+    trace-days: "30"
+    # 监护人撤回同意后的删除宽限天数。
+    # ⚠️ 上限 30：FR-019 明文要求「30 日内删除」，超过即违反验收条款
+    withdrawal-grace-days: "30"
+    # 单表单轮清理上限。过大长时间锁表，过小清理太慢
+    batch-size: "1000"
+    # 清理轮询间隔毫秒。下限 60s——保留期是天/月级，分钟级轮询无收益
+    interval-ms: "3600000"
+    # ⚠️ 操作主体：审计删除的凭证责任人，不可为空（R-1）
+    actor: "${AGENT_RETENTION_ACTOR:retention-job}"
+
   # ── MQ 队列拓扑（ADR-001 §4）───────────────────────────────────
   # ⚠️ x-queue-type 与 x-delivery-limit 必须显式声明。
   #   RabbitMQ 4.x 未配置 vhost 默认队列类型时默认仍是 classic，
