@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Java SaaS Agent 平台｜决策落地后的推进安排与执行计划 v1.1</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#1a1d21; --ink-2:#4a5158; --ink-3:#79828c;
+  --line:#e3e6ea; --line-2:#eef0f3;
+  --accent:#1f5fd0; --accent-soft:#eaf1fd;
+  --ok:#0f7b52; --ok-soft:#e6f4ee;
+  --warn:#a86400; --warn-soft:#fdf2e0;
+  --risk:#c0392b; --risk-soft:#fdecea;
+  --r:#1f5fd0; --a:#c0392b; --c:#a86400; --i:#79828c;
+  --mono:'SF Mono',Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);
+  font:15px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  padding:32px 20px 72px}
+.wrap{max-width:1240px;margin:0 auto}
+
+header.doc{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:30px 32px;margin-bottom:22px}
+header.doc h1{font-size:25px;letter-spacing:-.3px;margin-bottom:6px}
+header.doc .sub{color:var(--ink-3);font-size:14px;margin-bottom:20px}
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.meta div{background:#fafbfc;border:1px solid var(--line-2);border-radius:8px;padding:10px 13px}
+.meta b{display:block;font-size:11px;color:var(--ink-3);font-weight:600;letter-spacing:.4px;margin-bottom:3px}
+.meta span{font-size:13.5px;color:var(--ink-2)}
+
+.banner{background:var(--ok-soft);border:1px solid #bfe3d3;border-left:4px solid var(--ok);
+  border-radius:10px;padding:16px 20px;margin-bottom:22px}
+.banner h3{font-size:15px;color:#0a5c3d;margin-bottom:7px}
+.banner p{font-size:14px;color:#0d4a34;line-height:1.7}
+.banner code{background:rgba(0,0,0,.06);padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:12.5px}
+
+.alert{background:var(--warn-soft);border:1px solid #f0dcae;border-left:4px solid var(--warn);
+  border-radius:10px;padding:16px 20px;margin-bottom:20px}
+.alert h3{font-size:15px;color:#7a4a00;margin-bottom:8px}
+.alert li{font-size:13.8px;color:#6b4a12;line-height:1.75;margin-left:19px}
+.alert p{font-size:13.8px;color:#6b4a12;line-height:1.7;margin-top:7px}
+
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 30px;margin-bottom:20px}
+section>h2{font-size:19px;letter-spacing:-.2px;padding-bottom:12px;margin-bottom:20px;
+  border-bottom:2px solid var(--line-2);display:flex;align-items:center;gap:10px}
+section>h2 .n{background:var(--accent);color:#fff;width:26px;height:26px;border-radius:7px;
+  display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex:none}
+h3.blk{font-size:15.5px;margin:24px 0 11px;padding-left:10px;border-left:3px solid var(--accent)}
+h3.blk:first-of-type{margin-top:6px}
+p.note{font-size:13.5px;color:var(--ink-3);margin:9px 0 0;line-height:1.65}
+
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 4px}
+th{background:#f4f6f8;text-align:left;padding:9px 11px;font-weight:600;color:var(--ink-2);
+  border-bottom:1.5px solid var(--line);font-size:12.5px;white-space:nowrap}
+td{padding:9px 11px;border-bottom:1px solid var(--line-2);vertical-align:top;line-height:1.6}
+tbody tr:hover{background:#fafbfd}
+td.c,th.c{text-align:center}
+td.id{font-family:var(--mono);font-size:12.5px;color:var(--ink-3);white-space:nowrap}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+.b{display:inline-block;min-width:19px;padding:1px 5px;border-radius:5px;font-size:11px;
+  font-weight:700;text-align:center;letter-spacing:.2px;vertical-align:middle}
+.b.r{background:var(--accent-soft);color:var(--r)}
+.b.a{background:var(--risk-soft);color:var(--a)}
+.b.c{background:var(--warn-soft);color:var(--c)}
+.b.i{background:#f0f2f4;color:var(--i)}
+.b.ok{background:var(--ok-soft);color:var(--ok)}
+.b.no{background:var(--risk-soft);color:var(--risk)}
+.tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.tag.dec{background:var(--ok-soft);color:var(--ok)}
+.tag.p1{background:var(--accent-soft);color:var(--accent)}
+.tag.p2{background:#f0ecfd;color:#5b3fb8}
+.tag.fix{background:var(--warn-soft);color:var(--warn)}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-3);margin:12px 0 4px;padding:11px 14px;
+  background:#fafbfc;border:1px solid var(--line-2);border-radius:8px}
+.legend i{font-style:normal;margin-right:5px}
+
+.gantt{font-size:11px;border-collapse:collapse;width:100%}
+.gantt th{font-size:10.5px;padding:6px 2px;text-align:center;background:#f4f6f8;white-space:nowrap}
+.gantt td{padding:5px 3px;border-bottom:1px solid var(--line-2);text-align:center}
+.gantt td.lbl{text-align:left;padding-left:9px;font-size:12.5px;white-space:nowrap;font-weight:600;color:var(--ink-2)}
+.bar{display:block;border-radius:5px;padding:5px 4px;font-size:11px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden}
+.bar.tbd{background:repeating-linear-gradient(45deg,#b9bfc6,#b9bfc6 6px,#cdd2d7 6px,#cdd2d7 12px);color:#3a4046}
+.gate td{background:#fffdf5;font-size:11.5px;color:var(--warn);text-align:center;font-weight:600;border-bottom:1.5px dashed #ecd9a8}
+
+.callout{background:var(--accent-soft);border:1px solid #cfe0f8;border-radius:10px;padding:14px 18px;margin:14px 0}
+.callout h4{font-size:13.5px;color:var(--accent);margin-bottom:6px}
+.callout p,.callout li{font-size:13.5px;color:#1c467f;line-height:1.7}
+.callout ol,.callout ul{margin-left:20px}
+
+.warnbox{background:var(--risk-soft);border:1px solid #f5cdc7;border-radius:10px;padding:14px 18px;margin:14px 0}
+.warnbox h4{font-size:13.5px;color:var(--risk);margin-bottom:7px}
+.warnbox li{font-size:13.5px;color:#8c2f22;line-height:1.7;margin-left:18px}
+.warnbox p{font-size:13.3px;color:#8c2f22;line-height:1.7}
+
+.okbox{background:var(--ok-soft);border:1px solid #bfe3d3;border-radius:10px;padding:14px 18px;margin:14px 0}
+.okbox h4{font-size:13.5px;color:var(--ok);margin-bottom:7px}
+.okbox li{font-size:13.5px;color:#0d4a34;line-height:1.7;margin-left:18px}
+
+.split{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:900px){.split{grid-template-columns:1fr}
+  body{padding:18px 12px 48px}section{padding:20px 17px}header.doc{padding:22px 19px}}
+
+.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin:4px 0 8px}
+.stat div{background:#fafbfc;border:1px solid var(--line-2);border-radius:9px;padding:13px 15px;text-align:center}
+.stat b{display:block;font-size:21px;color:var(--accent);line-height:1.25;font-weight:700}
+.stat span{font-size:12px;color:var(--ink-3);display:block;margin-top:3px}
+
+footer{text-align:center;color:var(--ink-3);font-size:12.5px;padding:26px 0 0;line-height:1.8}
+@media print{body{background:#fff;padding:0}section,header.doc,.banner,.alert{break-inside:avoid;border:1px solid #ddd}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>Java SaaS Agent 平台｜决策落地后的推进安排与执行计划</h1>
+  <p class="sub">依据 P0-D06《初始项目计划与 RACI》v0.3 + P0-D00《决策基线与首个业务场景定义》v1.1 · 十一项决策已全部闭环</p>
+  <div class="meta">
+    <div><b>版本</b><span>v1.1（决策全部闭环）</span></div>
+    <div><b>角色承担</b><span>十角色全 AI Agent（DEC-1）</span></div>
+    <div><b>最终责任人</b><span>zhouwei</span></div>
+    <div><b>首个场景</b><span>初中生错题归因（DEC-2）</span></div>
+    <div><b>技术基线</b><span>Java 21 + Spring Boot 4.1.1</span></div>
+    <div><b>RAG</b><span>首期不做（DEC-5）</span></div>
+    <div><b>段一周期</b><span>2026-10-19 ~ 10-30（2 周固定）</span></div>
+    <div><b>段二排期</b><span>W2 D5 门禁重估（DEC-8）</span></div>
+  </div>
+</header>
+
+<div class="banner">
+  <h3>✅ 十一项决策已全部闭环并写入文档</h3>
+  <p>四项原始答复（AI 全角色 / 初中生学习 / 依赖自提供 / Java 21 + Spring Boot 4.x）、四项边界确认（不做 RAG / 最小化画像 / 隔离 Agent 审查 + 季度抽检 / P0+P1 后重估），以及本轮三项处置（<b>DEC-9 成本容量配置化 / DEC-10 零保留允许延后但设三道硬闸门 / DEC-11 审批策略配置化</b>）已固化为 <code>DEC-1 ～ DEC-11</code>。<b>M0 门禁不再有外部待决项。</b></p>
+</div>
+
+<div class="alert">
+  <h3>⚠️ 落地过程中必须注意的三个技术事实</h3>
+  <ul>
+    <li><b>Spring Boot 必须锁 4.1.1，不能锁 4.0.x</b> — 4.0.x 的 OSS 支持 <b>2026-12-31 到期</b>（距今仅 2 个月）；4.1.1 支持至 2027-07-31，且已修复 98 个缺陷。同时 v3.1 架构文档第 83 行写的是 <code>Spring Boot 3.x</code>，本次属<b>基线偏离</b>，已新增 <b>ADR-011</b> 记录影响面与回滚方案。</li>
+    <li><b>首期不做 RAG 是个真实约束，不是措辞</b> — 场景用<b>模型参数内知识</b>做归因，<b>不引入向量库、不做文档切分入库、不引用教材原文</b>。相应地 Agent <b>不得输出任何资料出处</b>（编造出处即判失败，已登记 R-018），并新增 A-008 假设：参数内知识须足以支撑初中归因准确性，否则触发 DEC-5 重审。</li>
+    <li><b>AI 全角色存在共享盲区，这是残余风险不是已解决</b> — AG-SEC 与 AG-BE 若基于同一模型，可能犯同类错误。因此 Sev-0 判定<b>不得仅依赖 AI</b>，必须有自动化测试证据 + 你的外部抽检（≥30% 且含全部 Sev-0 项），抽检记录归档 P4-D09。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section>
+  <h2><span class="n">1</span>决策落地后的阻塞状态变化</h2>
+
+  <div class="stat">
+    <div><b>11/11</b><span>决策已闭环</span></div>
+    <div><b>7/7</b><span>P0 文档已更新</span></div>
+    <div><b>3/5</b><span>原阻塞已解除</span></div>
+    <div><b>6</b><span>新增风险 R-016～021</span></div>
+    <div><b>1</b><span>新增 ADR-011</span></div>
+    <div><b>3</b><span>新增需求 FR-019/020</span></div>
+  </div>
+
+  <h3 class="blk">1.1 原 5 项阻塞的处置结果</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:70px">阻塞</th><th>原问题</th><th style="width:96px" class="c">状态</th><th>处置方式</th></tr></thead>
+    <tbody>
+      <tr><td class="id">BLK-1</td><td>十个角色全部 [待确认]，RACI 无法落到人</td><td class="c"><span class="b ok">已解除</span></td><td>DEC-1 落为 AG-BUS/PO/PM/ARC/BE/AI/QA/SEC/SRE + zhouwei；新增 ISO-1～5 隔离规则（R-016）</td></tr>
+      <tr><td class="id">BLK-2</td><td>首个业务场景未冻结</td><td class="c"><span class="b ok">已解除</span></td><td>DEC-2 落为「初中生错题归因与个性化辅导」，含 7 项成功判定 SB-01～07 与工具契约</td></tr>
+      <tr><td class="id">BLK-3</td><td>D-001 IAM / D-002 模型 / D-004 PG 无 owner</td><td class="c"><span class="b ok">已解除</span></td><td>DEC-3 全部由项目负责人直接提供；owner 列已填，状态改为「待登记版本」</td></tr>
+      <tr><td class="id">BLK-4</td><td>成本/容量无业务基线（NFR-006/010）</td><td class="c"><span class="b ok">已解除</span></td><td>DEC-9 配置化并给出保守初值（成本 ¥2.00、调用 12 步数 20、并发 5、RPO 24h/RTO 4h），P2/P4 实测后调优（见 §7.1）</td></tr>
+      <tr><td class="id">BLK-5</td><td>数据驻留/保留未确认</td><td class="c"><span class="b ok">已解除</span></td><td>DEC-6 落为采集白名单 + PIPL 第 31 条合规义务 + 四类保留期（R-012 重新定级 4/5/高）</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="okbox">
+    <h4>决策带来的正向收益（原先被低估的部分）</h4>
+    <ul>
+      <li><b>依赖不再是排期风险</b>：DEC-3 后 D-001～D-010 无外部第三方 SLA，P1 的 PoC 不再被外部等待阻塞。</li>
+      <li><b>审查独立性反而优于人类自审</b>：隔离上下文 Agent 之间不存在「作者偏见」，ISO-1/ISO-2 让 P0-D06 §5 的利益冲突条款第一次可被结构性满足，而非靠「尽量避免」。</li>
+      <li><b>Spring Boot 4.1 自带能力可复用</b>：<code>InetAddressFilter</code>（SSRF 防护）、<code>@ConcurrencyLimit</code>、<code>@Retryable</code>、OTel Starter、API 版本控制——直接对应原计划 P3-09 / P4-05 / P4-03 的自研项，可省下可观工作量。</li>
+    </ul>
+  </div>
+
+  <h3 class="blk">1.2 决策带来的新增风险与工作量</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:70px">编号</th><th>风险</th><th style="width:78px" class="c">分级</th><th>缓解措施</th><th style="width:96px">Owner</th></tr></thead>
+    <tbody>
+      <tr><td class="id">R-016</td><td>AI 全角色导致安全审查与实现共享盲区</td><td class="c"><span class="b no">4/5 高</span></td><td>ISO-1～ISO-5 上下文隔离；Sev-0 须自动化证据 + 外部抽检（≥30% 含全部 Sev-0）</td><td>AG-SEC / zhouwei</td></tr>
+      <tr><td class="id">R-017</td><td>学生数据被用于模型训练或出境</td><td class="c"><span class="b no">3/5 高</span></td><td>供应商零保留条款或境内实例；Prompt 分离存储；保留 90 天</td><td>AG-SEC / AG-AI</td></tr>
+      <tr><td class="id">R-018</td><td>模型编造不存在的知识点或资料出处</td><td class="c"><span class="b no">4/4 高</span></td><td>输出约束禁止引用外部资料；无引用字段；纳入评测集与失败判定</td><td>AG-AI / AG-PO</td></tr>
+      <tr><td class="id">R-019</td><td>Spring Boot 4.x 生态未适配致运行时故障</td><td class="c"><span class="b c">3/4 中</span></td><td>ADR-011 记录影响面；jOOQ 需 Java 21；Security 7 重设计；集测优先</td><td>AG-ARC / AG-BE</td></tr>
+      <tr><td class="id">A-008</td><td>参数内知识不足以支撑初中归因（假设）</td><td class="c"><span class="b c">待验证</span></td><td>20 题样本评测（SB-01/SB-02）；不达标则触发 DEC-5 重审，RAG 回补 +3～4 周</td><td>AG-PO / AG-AI</td></tr>
+      <tr><td class="id">A-009</td><td>模型服务不支持零保留（假设）</td><td class="c"><span class="b c">延后确认</span></td><td>DEC-10 允许延后至 W2 D5，但设 GATE-1/2/3：P1 仅用模拟数据，逾期未确认则 P2 仅做技术闭环（见 §7.3）</td><td>AG-SEC / AG-AI</td></tr>
+      <tr><td class="id">R-020</td><td>配置化被当作绕过安全门禁的后门</td><td class="c"><span class="b no">3/5 高</span></td><td>配置缺失 fail-closed；审批只能收紧不能放松；门禁降级走 CHG + ISO-5 抽检；未成年人保护强度禁止运行时下调</td><td>AG-SEC / AG-ARC</td></tr>
+      <tr><td class="id">R-021</td><td>运行中改配置致同一 Run 前后不一致</td><td class="c"><span class="b c">3/4 中</span></td><td>Run 创建时快照配置值写入 ExecutionSnapshot；改配置只影响新 Run</td><td>AG-BE / AG-ARC</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section>
+  <h2><span class="n">2</span>首个业务场景：初中生错题归因与个性化辅导</h2>
+
+  <div class="callout">
+    <h4>场景一句话</h4>
+    <p>学生提交一道错题（题目 + 自己的解题过程 + 正确答案），Agent 读取学习画像 → 归因错因 → 生成可执行讲解 → 记录薄弱点 → 返回结构化结果。</p>
+    <p style="margin-top:7px"><b>不使用 RAG</b>：全部基于模型参数内知识，<b>不引入向量库、不做文档切分入库、不引用教材原文</b>（DEC-5）。</p>
+  </div>
+
+  <h3 class="blk">2.1 工具契约（2 个，1 个有副作用）</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:190px">工具</th><th style="width:88px" class="c">副作用</th><th style="width:230px">幂等键</th><th>授权要求</th><th style="width:210px">验证的最高风险协议</th></tr></thead>
+    <tbody>
+      <tr><td class="id">get_student_profile</td><td class="c"><span class="b ok">只读</span></td><td>—</td><td>学生仅可读本人画像；跨学生访问拒绝</td><td>执行时授权（FR-008）、跨租户隔离（FR-010）</td></tr>
+      <tr><td class="id">record_weakness</td><td class="c"><span class="b no">有副作用</span></td><td class="id">student_id + run_id + knowledge_point</td><td>仅本人；执行时重新授权；是否需审批待定</td><td><b>Attempt 区分、fencing、UNKNOWN 对账、预算并发、审批/取消竞态</b>（R-003/R-007/R-008）</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="warnbox">
+    <h4>为什么刻意保留一个有副作用的工具</h4>
+    <p>若首期全用只读工具，P0-D03 §4 红线 4/5/7（Attempt 区分、fencing、UNKNOWN 对账）与 R-003/R-007/R-008 将<b>只能靠玩具 PoC 验证</b>，而这些恰恰是返工成本最高的协议。<code>record_weakness</code> 让最高风险协议有真实业务场景承载，同时幂等键天然（student_id + run_id + knowledge_point）使重复调用可安全去重。</p>
+  </div>
+
+  <h3 class="blk">2.2 成功判定 SB-01～SB-07（业务验收标准）</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:62px">编号</th><th>指标</th><th style="width:110px" class="c">阈值</th><th>验证方式</th><th style="width:158px">责任</th></tr></thead>
+    <tbody>
+      <tr><td class="id">SB-01</td><td>错因归因准确率</td><td class="c"><b>≥ 80%</b></td><td>人工评审 20 题标注样本</td><td>AG-QA + AG-PO</td></tr>
+      <tr><td class="id">SB-02</td><td>讲解可执行性</td><td class="c"><b>平均 ≥ 4/5</b></td><td>教师人工评分量表</td><td>AG-BUS</td></tr>
+      <tr><td class="id">SB-03</td><td>薄弱点记录准确率</td><td class="c"><b>≥ 85%</b></td><td>与人工标注对比</td><td>AG-QA</td></tr>
+      <tr><td class="id">SB-04</td><td>跨用户数据隔离</td><td class="c"><b>100% 拒绝</b></td><td>自动化安全测试 AT-TENANT-001/002</td><td>AG-SEC</td></tr>
+      <tr><td class="id">SB-05</td><td>响应时延</td><td class="c"><b>P95 ≤ 30s</b></td><td>性能基线，P4 复核</td><td>AG-SRE</td></tr>
+      <tr><td class="id">SB-06</td><td>幂等正确性</td><td class="c"><b>同键无重复</b></td><td>并发集成测试 AT-IDEM-001/002</td><td>AG-QA</td></tr>
+      <tr><td class="id">SB-07</td><td>UNKNOWN 不盲重放</td><td class="c"><b>0 次</b></td><td>故障注入 AT-UNKNOWN-001</td><td>AG-SEC</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">失败判定（触发 Sev-0/Sev-1）：编造不存在的知识点或资料出处、归因错误致学生形成错误认知、画像泄露给其他学生、重复记录致薄弱点虚高、生成内容违反未成年人内容安全要求。</p>
+
+  <h3 class="blk">2.3 未成年人数据合规基线（DEC-6）</h3>
+  <div class="split">
+    <div>
+      <div class="okbox" style="margin-top:0">
+        <h4>采集白名单（仅此三类）</h4>
+        <ul style="margin-left:0">
+          <li>随机 <code>student_id</code>（不可反推身份）</li>
+          <li>年级、学科</li>
+          <li>薄弱点（知识点 + 错误类型）</li>
+        </ul>
+      </div>
+      <div class="warnbox">
+        <h4>禁止采集（硬红线）</h4>
+        <p style="margin:0">姓名、学校、班级、身份证号、手机号、精确地理位置、面部/声纹、生物识别、社交账号、家庭经济状况。</p>
+      </div>
+    </div>
+    <div>
+      <div class="callout" style="margin-top:0">
+        <h4>法定义务（《个人信息保护法》第 31 条）</h4>
+        <ul style="margin-left:0">
+          <li>不满十四周岁未成年人信息属<b>敏感个人信息</b>，须监护人<b>单独同意</b></li>
+          <li>须制定专门处理规则（P0-D00 §4 即为该规则）</li>
+          <li>单独同意<b>可撤回</b>；撤回后 30 日内删除画像并留痕</li>
+          <li>不得用于模型训练；须零保留或境内实例；全链路不出境</li>
+        </ul>
+      </div>
+      <div class="callout">
+        <h4>保留期</h4>
+        <p style="margin:0">学习画像 <b>12 个月</b> · Prompt/工具结果 <b>90 天</b> · 审计日志 <b>180 天</b> · Trace/指标 <b>30 天</b></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section>
+  <h2><span class="n">3</span>AI 全角色责任模型与隔离规则</h2>
+  <p class="note">P0-D06 §5 原文要求「安全审批、代码作者自审和高风险验收应尽量避免利益冲突」。AI 全角色承担时，用<b>上下文隔离</b>把「尽量」变成硬门禁。</p>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:80px">角色</th><th style="width:104px">Agent 代号</th><th>职责</th><th>隔离要求</th></tr></thead>
+    <tbody>
+      <tr><td>最终责任人</td><td class="id">zhouwei</td><td>业务决策、高风险风险接受、生产准入</td><td><b>Sev-0/Sev-1 外部季度抽检执行人</b></td></tr>
+      <tr><td>业务负责人</td><td class="id">AG-BUS</td><td>业务价值、场景验收</td><td>只读需求与验收证据，不参与实现</td></tr>
+      <tr><td>产品负责人</td><td class="id">AG-PO</td><td>范围、优先级、验收口径</td><td>不参与实现</td></tr>
+      <tr><td>项目经理</td><td class="id">AG-PM</td><td>计划、风险、依赖、会议</td><td>不参与实现</td></tr>
+      <tr><td>架构负责人</td><td class="id">AG-ARC</td><td>架构一致性、ADR、模块边界</td><td>可参与设计，<b>不审查自己的设计决策</b>（ISO-4）</td></tr>
+      <tr><td>后端负责人</td><td class="id">AG-BE</td><td>Java 服务、数据模型、执行引擎</td><td>实现方</td></tr>
+      <tr><td>AI/模型接入</td><td class="id">AG-AI</td><td>ModelGateway、评测、模型策略</td><td>实现方</td></tr>
+      <tr><td>测试负责人</td><td class="id">AG-QA</td><td>测试策略、追踪矩阵、验收证据</td><td><b>独立上下文，无实现过程可见性</b></td></tr>
+      <tr><td>安全负责人</td><td class="id">AG-SEC</td><td>威胁模型、权限、隔离、密钥</td><td><b>独立上下文，无实现过程可见性</b></td></tr>
+      <tr><td>运维/平台</td><td class="id">AG-SRE</td><td>CI/CD、监控、部署、备份</td><td>实现方</td></tr>
+      <tr><td>外部系统/IAM</td><td>—</td><td>资源直接提供（DEC-3）</td><td>无独立 Agent</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 class="blk">3.1 ISO-1～ISO-5 强制隔离规则</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:70px">规则</th><th>内容</th><th style="width:200px">违反后果</th></tr></thead>
+    <tbody>
+      <tr><td class="id">ISO-1</td><td>AG-QA / AG-SEC 的上下文<b>不得包含</b> AG-BE / AG-AI / AG-SRE 的实现过程、推理记录或设计草案</td><td>审查结论作废，任务退回</td></tr>
+      <tr><td class="id">ISO-2</td><td>审查方输入<b>仅限</b>：需求 ID、代码、测试结果、运行日志、数据库断言</td><td>同上</td></tr>
+      <tr><td class="id">ISO-3</td><td>同一 Agent 不得在同一任务中同时承担 R 与 C/A</td><td>DoD 不通过</td></tr>
+      <tr><td class="id">ISO-4</td><td>AG-ARC 设计的协议由 AG-QA + AG-SEC 交叉审查，AG-ARC 不得自审</td><td>门禁不通过</td></tr>
+      <tr><td class="id">ISO-5</td><td><b>Sev-0 / Sev-1 结论每阶段需 zhouwei 外部抽检复核，覆盖率 ≥ 30% 且必须包含全部 Sev-0 项</b>；记录归档 P4-D09</td><td>阶段门禁不通过</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="warnbox">
+    <h4>残余风险声明（不可省略）</h4>
+    <p>同基座模型存在<b>相关盲区</b>：AG-SEC 与 AG-BE 若基于同一模型，可能共享同类错误。因此：</p>
+    <ul>
+      <li>Sev-0（跨租户泄露、未授权副作用、UNKNOWN 盲目重放、预算/审批绕过）的判定<b>不得仅依赖 AI</b>，必须有自动化测试证据 + 外部抽检。</li>
+      <li>ISO-5 的季度抽检是<b>补偿控制</b>，不是形式要求；抽检须逐条留痕（样本、结论、异议、处理）。</li>
+      <li>若后续更换模型基座，须<b>重新评估隔离有效性</b>并更新 ADR。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section>
+  <h2><span class="n">4</span>技术基线：Java 21 + Spring Boot 4.1.1</h2>
+
+  <div class="callout">
+    <h4>版本锁定与偏离说明</h4>
+    <p>v3.1 架构文档第 83 行原文为 <code>Spring Boot 3.x</code>，本次改为 4.1.1 属<b>架构基线偏离</b>，须以 <b>ADR-011</b>（W2 D1 由 AG-ARC 起草）记录理由、影响面、验证方式与回滚方案。</p>
+    <p style="margin-top:7px"><b>不选 4.0.x 的原因</b>：其 OSS 支持 <b>2026-12-31 到期</b>，距今仅 2 个月；4.1.1 支持至 2027-07-31 且已修复 98 个缺陷。</p>
+  </div>
+
+  <h3 class="blk">4.1 可直接复用的能力（降低工作量）</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:230px">Spring Boot 4.1 能力</th><th>说明</th><th style="width:130px">对应原计划任务</th><th style="width:88px" class="c">阶段</th></tr></thead>
+    <tbody>
+      <tr><td class="id">InetAddressFilter</td><td>HTTP 客户端 SSRF 防护，DNS 解析前拦截私网与云元数据地址</td><td>P3-09 Egress/SSRF</td><td class="c"><span class="tag p1">P3</span></td></tr>
+      <tr><td class="id">@ConcurrencyLimit</td><td>内置并发上限</td><td>P4-05 限流与过载保护</td><td class="c"><span class="tag p1">P4</span></td></tr>
+      <tr><td class="id">@Retryable</td><td>内置重试</td><td>ModelGateway 重试</td><td class="c"><span class="tag p2">P2</span></td></tr>
+      <tr><td class="id">OpenTelemetry Starter</td><td>Kafka/RabbitMQ/JVM 观测约定自动装配</td><td>P4-03 可观测性</td><td class="c"><span class="tag p1">P4</span></td></tr>
+      <tr><td class="id">API 版本控制</td><td>MVC/WebFlux 原生 API versioning</td><td>P1-D06 错误码与版本策略</td><td class="c"><span class="tag p2">P2</span></td></tr>
+      <tr><td class="id">RestTestClient</td><td>REST API 测试</td><td>P2-D07 测试计划</td><td class="c"><span class="tag p2">P2</span></td></tr>
+      <tr><td class="id">JSpecify</td><td>全栈 null-safety 注解，编译期可发现 NPE 风险</td><td>P1-D01 模块边界静态约束</td><td class="c"><span class="tag p2">P2</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 class="blk">4.2 必须适配的破坏性变更（写入 ADR-011）</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:190px">变更</th><th>影响面</th><th>应对</th><th style="width:72px" class="c">风险</th></tr></thead>
+    <tbody>
+      <tr><td><b>Jackson 3</b>（Jackson 2 移除）</td><td>事件序列化、ToolOperation 账本、API 契约</td><td>序列化层统一适配；契约测试重写</td><td class="c"><span class="b no">高</span></td></tr>
+      <tr><td><b>Security 7</b> 全组件化，<code>WebSecurityConfigurerAdapter</code> 移除</td><td>认证授权链、TenantContext 注入</td><td>P1-04 重新设计安全配置</td><td class="c"><span class="b no">高</span></td></tr>
+      <tr><td>模块化 70+ starter</td><td>依赖管理、classpath 假设</td><td>只引显式模块 starter，禁依赖 classpath 扫描假设</td><td class="c"><span class="b c">中</span></td></tr>
+      <tr><td>Hibernate 7 / JSpecify</td><td>领域层空值语义</td><td>领域层用 <code>@NullMarked</code> 显式声明</td><td class="c"><span class="b c">中</span></td></tr>
+      <tr><td>内置 retry / concurrency</td><td>与自研重试逻辑可能<b>双重重试</b></td><td>明确单一重试点，禁止框架与自研同时重试</td><td class="c"><span class="b no">高</span></td></tr>
+      <tr><td>jOOQ 3.20+ <b>需 Java 21</b></td><td>JDK 基线（本项目已选 21，无冲突）</td><td>确认版本；Java 17 不可用</td><td class="c"><span class="b ok">无</span></td></tr>
+      <tr><td>Flyway 12.x</td><td>迁移脚本兼容性</td><td>P1-08 迁移规范按新版重写</td><td class="c"><span class="b c">中</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 class="blk">4.3 ModelGateway 与 Spring AI 2.0 的边界</h3>
+  <div class="okbox">
+    <h4>天然对齐，但要主动利用其约束</h4>
+    <ul>
+      <li>Spring AI 2.0 要求 <b>Java 21 + Spring Boot 4.x + Spring Framework 7</b>，与本基线<b>完全对齐</b>；统一 <code>ChatClient</code> 有利于满足 v3.1「领域层不依赖框架专属类型」。</li>
+      <li><b>关键机会</b>：Spring AI 2.0 <b>移除了内置工具执行循环</b>，工具不再按 Bean 名自动解析，必须显式注册 <code>ToolCallback</code>。本项目应<b>利用</b>该约束——在 <code>ToolCallback</code> 注册环节插入服务端授权、Schema 校验与 <code>ToolOperation</code> 账本写入，从<b>架构上</b>保证「模型不能绕过服务端授权直接执行工具」（P0-D03 §2 不可妥协边界）。</li>
+      <li><b>注意</b>：Spring AI 2.0 的 Tool Calling Advisor 会自动执行工具循环，若直接使用会绕过上述授权闸门。必须在 ADR-011 中明确<b>不使用</b>其自动执行路径，或在其前后强制插入授权检查。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section>
+  <h2><span class="n">5</span>两段式排期与重估机制</h2>
+  <p class="note">18 周基线基于人类团队估算，AI 全角色承担后<b>不直接沿用</b>（DEC-8）。斜纹柱表示待重估占位。</p>
+
+  <div class="tbl-wrap">
+  <table class="gantt">
+    <thead><tr>
+      <th style="width:150px;text-align:left">阶段 / 门禁</th>
+      <th>W1</th><th>W2</th><th>W3</th><th>W4</th><th>W5</th><th>W6</th><th>W7</th><th>W8</th><th>W9</th>
+      <th>W10</th><th>W11</th><th>W12</th><th>W13</th><th>W14</th><th>W15</th><th>W16</th><th>W17</th><th>W18</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="lbl"><span class="tag dec">P0</span> 决策基线与需求</td>
+        <td colspan="1"><span class="bar" style="background:#0f7b52">W1</span></td>
+        <td colspan="17" style="background:#fbfbfc"></td>
+      </tr>
+      <tr class="gate"><td style="text-align:left">⛔ M0 基线批准</td><td>D5</td><td colspan="17"></td></tr>
+      <tr>
+        <td class="lbl"><span class="tag dec">P1</span> 架构冻结与 PoC</td>
+        <td style="background:#fbfbfc"></td>
+        <td colspan="1"><span class="bar" style="background:#1f5fd0">W2</span></td>
+        <td colspan="16" style="background:#fbfbfc"></td>
+      </tr>
+      <tr class="gate" style="background:#fff4e5"><td style="text-align:left">⛔ M1 门禁 + <b>排期重估</b></td><td></td><td>D5</td><td colspan="16"></td></tr>
+      <tr>
+        <td class="lbl">P2 核心闭环 MVP</td>
+        <td colspan="2" style="background:#fbfbfc"></td>
+        <td colspan="5"><span class="bar tbd">待重估 · 原 3–7 周 · 5 Sprint</span></td>
+        <td colspan="11" style="background:#fbfbfc"></td>
+      </tr>
+      <tr>
+        <td class="lbl">P3 可靠性与安全</td>
+        <td colspan="7" style="background:#fbfbfc"></td>
+        <td colspan="5"><span class="bar tbd">待重估 · 原 8–12 周</span></td>
+        <td colspan="6" style="background:#fbfbfc"></td>
+      </tr>
+      <tr>
+        <td class="lbl">P4 企业集成与生产化</td>
+        <td colspan="12" style="background:#fbfbfc"></td>
+        <td colspan="4"><span class="bar tbd">待重估 · 原 13–16 周</span></td>
+        <td colspan="2" style="background:#fbfbfc"></td>
+      </tr>
+      <tr>
+        <td class="lbl">P5 试点与交接</td>
+        <td colspan="16" style="background:#fbfbfc"></td>
+        <td colspan="2"><span class="bar tbd">待重估 · 原 17–18 周</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 class="blk">5.1 重估输入与决策规则</h3>
+  <div class="split">
+    <div>
+      <div class="callout" style="margin-top:0">
+        <h4>W2 D5 重估输入数据项</h4>
+        <ul style="margin-left:0">
+          <li>各角色 Agent 实测吞吐（任务/周）</li>
+          <li>单任务 Review 平均耗时</li>
+          <li>返工率与返工原因分布</li>
+          <li>PoC 暴露的协议风险数量</li>
+          <li>外部依赖实际就绪时间</li>
+          <li>ISO 隔离规则的实际执行成本</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="warnbox" style="margin-top:0">
+        <h4>重估的硬性约束（P0-D06 §9）</h4>
+        <ul style="margin-left:0">
+          <li>只允许<b>调整排期或资源</b></li>
+          <li><b>不允许</b>通过削减安全/一致性验收项追赶进度</li>
+          <li>延迟超 2 个工作日 → PM 组织影响评估（范围/资源/里程碑三选一）</li>
+          <li>门禁未过 → 记 <code>Blocked</code> 或 <code>Accepted with conditions</code>，须写明批准人、限制范围、复审日期</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section>
+  <h2><span class="n">6</span>下一步执行计划：W1–W2 逐日</h2>
+  <p class="note">原 5 项阻塞已解除 2 项，W1 的重心从「具名 + 找依赖」转为<b>「把决策写进文档并冻结基线」+「补齐成本与合规数值」</b>。</p>
+
+  <h3 class="blk">6.1 W1 决策落地与基线冻结（10-19 ~ 10-23）</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:88px">日期</th><th style="width:62px">任务</th><th>具体动作</th><th style="width:146px">交付物</th><th style="width:78px">DRI</th><th style="width:52px" class="c">A</th></tr></thead>
+    <tbody>
+      <tr><td class="id">10-19 一<br>W1 D1</td><td class="id">T-1</td><td>确认 ISO-1～ISO-5 隔离规则可执行；建立 AG-QA/AG-SEC 独立上下文；约定 ISO-5 抽检流程</td><td>隔离规则执行方案</td><td>AG-PM</td><td class="c"><i class="b a">SEC</i></td></tr>
+      <tr><td class="id">10-19 一</td><td class="id">T-2</td><td><span style="color:var(--ok)">并行启动</span>：建仓库、模块骨架、迁移工具脚手架、CI 空壳（<b>不依赖任何 ADR 结论</b>）</td><td>可执行 <code>mvn verify</code> 的 Spring Boot 4.1.1 空工程</td><td>AG-SRE + AG-BE</td><td class="c"><i class="b a">SRE</i></td></tr>
+      <tr><td class="id">10-20 二<br>W1 D2</td><td class="id">T-3</td><td>场景细化：确认 SB-01～07 的测量方法与 20 题标注样本来源；确认 <code>record_weakness</code> 是否需审批</td><td>场景画布 v1 + 评测集方案</td><td>AG-PO + AG-BUS</td><td class="c"><i class="b a">BUS</i></td></tr>
+      <tr><td class="id">10-21 三<br>W1 D3</td><td class="id">T-4</td><td>依赖登记：把 D-001～D-010 的「待登记版本」填为实际版本、连接方式、容量边界</td><td>依赖登记册 v1（无占位）</td><td>AG-PM</td><td class="c"><i class="b a">PM</i></td></tr>
+      <tr><td class="id">10-21 三</td><td class="id">T-5</td><td>推进 <b>A-009 零保留条款</b>与模型服务数据区域核查（R-017 前置）；<b>P1 期间一律用模拟数据</b>（DEC-10 GATE-1）</td><td>核查进展 + 模拟数据策略确认</td><td>AG-AI + AG-SEC</td><td class="c"><i class="b a">SEC</i></td></tr>
+      <tr><td class="id">10-22 四<br>W1 D4</td><td class="id">T-6</td><td><b>配置基线落表</b>（DEC-9/DEC-11）：把 7 项成本容量配置 + 4 项审批配置写入配置表，<b>校验缺失时 fail-closed 行为</b>（P0-D00 §1.2/§1.4）</td><td>配置表 v1 + fail-closed 测试</td><td>AG-BE + AG-SRE</td><td class="c"><i class="b a">ARC</i></td></tr>
+      <tr><td class="id">10-22 四</td><td class="id">T-7</td><td>合规专项：监护人同意文本、撤回流程、删除工单设计（P0-D00 §4.3）</td><td>同意文本 v1 + 撤回/删除流程</td><td>AG-SEC</td><td class="c"><i class="b a">SEC</i></td></tr>
+      <tr><td class="id">10-22 四</td><td class="id">T-8</td><td>权限模型：租户/组织/用户/服务账号关系；高风险工具清单与审批规则（P0-D02 §9 第 2/3 项）</td><td>权限模型 v1 + 审批策略</td><td>AG-SEC + AG-ARC</td><td class="c"><i class="b a">ARC</i></td></tr>
+      <tr><td class="id">10-23 五<br>W1 D5</td><td class="id">T-9</td><td>冻结基线：P0-D01～D06 全部升 <code>v1.0-baseline</code>，无 <code>[待确认]</code>；TODO-1～6 关闭</td><td>六份签署版基线</td><td>AG-PM</td><td class="c"><i class="b a">PM</i></td></tr>
+      <tr style="background:#fffdf5"><td class="id">10-23 五</td><td class="id">T-10</td><td><b>⛔ M0 门禁评审</b>：7 项退出门禁逐条判定；含 <b>ISO-5 首次抽检</b>（对 P0 阶段安全结论抽检 ≥30%）</td><td>M0 评审记录 + 抽检归档</td><td>AG-PM</td><td class="c"><i class="b a">BUS</i></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 class="blk">6.2 W2 架构冻结与 PoC（10-26 ~ 10-30）</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:88px">日期</th><th style="width:62px">任务</th><th>具体动作</th><th style="width:146px">交付物</th><th style="width:78px">DRI</th><th style="width:52px" class="c">A</th></tr></thead>
+    <tbody>
+      <tr><td class="id">10-26 一<br>W2 D1</td><td class="id">P1-01</td><td><b>ADR-011</b>：Java 21 + Spring Boot 4.1.1 偏离说明、影响面、回滚方案；<b>ADR-001</b> 主 MQ；<b>ADR-002</b> 数据访问（注意 jOOQ 需 Java 21）</td><td>ADR-001/002/011</td><td>AG-ARC</td><td class="c"><i class="b a">ARC</i></td></tr>
+      <tr><td class="id">10-26 一</td><td class="id">P1-02</td><td>领域模型与状态机：Tenant、Agent/Version、Run、Step、ToolOperation、Approval、RunEvent、Outbox、Usage/Budget（ADR-004）</td><td>状态机表 v1</td><td>AG-BE</td><td class="c"><i class="b a">ARC</i></td></tr>
+      <tr><td class="id">10-27 二<br>W2 D2</td><td class="id">P1-03/04</td><td>三层 Attempt 与幂等键域（ADR-003）；<b>Security 7</b> 重新设计认证授权链与 TenantContext 注入；ADR-006/007</td><td>幂等协议 + 安全设计 v1</td><td>AG-BE + AG-SEC</td><td class="c"><i class="b a">ARC</i></td></tr>
+      <tr><td class="id">10-27 二</td><td class="id">P1-08</td><td>事件/SSE PoC：Last-Event-ID 续传、越权拒绝、游标过期；<b>未成年人数据保留期决策</b>（ADR-009/010）</td><td>SSE PoC + 保留期 ADR</td><td>AG-BE + AG-SEC</td><td class="c"><i class="b a">SEC</i></td></tr>
+      <tr style="background:#fff4e5"><td class="id">10-28 三<br>W2 D3</td><td class="id">P1-05/06</td><td><span style="color:var(--risk)"><b>最高风险日</b></span>：Outbox 原子性 PoC + Worker 强杀/接管/fencing PoC（含故障注入脚本）</td><td>PoC 代码 + 故障注入记录</td><td>AG-BE + AG-SRE</td><td class="c"><i class="b a">ARC</i></td></tr>
+      <tr><td class="id">10-29 四<br>W2 D4</td><td class="id">P1-07</td><td>ModelGateway PoC（超时/错误映射/usage）；<b>ToolCallback 注册环节插入授权闸门</b>并验证模型无法绕过；只读工具契约测试</td><td>PoC + 授权闸门验证</td><td>AG-AI + AG-BE</td><td class="c"><i class="b a">AI</i></td></tr>
+      <tr><td class="id">10-29 四</td><td class="id">P1-09</td><td>工程基线补齐：镜像构建、密钥注入、静态检查、依赖扫描；验证「新成员按文档可启动」</td><td>P1-D10 + 可复现环境</td><td>AG-SRE</td><td class="c"><i class="b a">SRE</i></td></tr>
+      <tr style="background:#fffdf5"><td class="id">10-30 五<br>W2 D5</td><td class="id">P1-10</td><td><b>⛔ M1 门禁 + 排期重估</b>：附录 E 七项 PoC 数据核对；P1-D01～D11 交付审查；<b>按实测吞吐重估 P2–P5</b>；<b>ISO-5 第二次抽检</b></td><td>M1 评审记录 + 承诺基线</td><td>AG-PM</td><td class="c"><i class="b a">ARC</i></td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section>
+  <h2><span class="n">7</span>DEC-9～11 落地：配置基线</h2>
+  <p class="note">原「仍需你决策的 3 项」已全部处置：DEC-9 与 DEC-11 走<b>配置化</b>，DEC-10 <b>允许延后</b>但设硬闸门。<b>11 项决策至此全部闭环，M0 门禁不再有外部待决项。</b></p>
+
+  <h3 class="blk">7.1 DEC-9 成本与容量配置基线</h3>
+  <div class="callout">
+    <h4>一个必须点明的前提</h4>
+    <p><b>「配置化」解决的是「后续谁来调」，不解决「初始值是多少」。</b>配置项必须有初值，而初值本身就是决策——若缺省过大，系统上线首日即可能失控。故本决策同时给出<b>保守初值</b>与<b>调优路径</b>，而非把问题推给配置表。</p>
+  </div>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>配置项</th><th style="width:250px">配置键（建议）</th><th style="width:110px" class="c">保守初值</th><th>依据</th><th style="width:170px">调优时点</th></tr></thead>
+    <tbody>
+      <tr><td>单 Run 成本上限</td><td class="id">agent.run.max-cost-per-run</td><td class="c"><b>¥2.00</b></td><td>错题归因为单轮短任务，按 7 次调用 × 混合单价估算</td><td>P4 实测 usage 后</td></tr>
+      <tr><td>单 Run 模型调用上限</td><td class="id">agent.run.max-llm-calls</td><td class="c"><b>12</b></td><td>覆盖 5 步 Loop + 重试余量</td><td>P2 评测集实测</td></tr>
+      <tr><td>单 Run 最大步数</td><td class="id">agent.run.max-steps</td><td class="c"><b>20</b></td><td>防异常循环；超出即失败且可解释</td><td>P2</td></tr>
+      <tr><td>租户并发 Run 上限</td><td class="id">agent.tenant.max-concurrent-runs</td><td class="c"><b>5</b></td><td>保守起步，防下游过载</td><td>P4 压测后</td></tr>
+      <tr><td>试点租户数</td><td class="id">deployment.pilot.max-tenants</td><td class="c"><b>1</b></td><td>灰度起步</td><td>P5 灰度扩量</td></tr>
+      <tr><td>RPO</td><td class="id">dr.rpo</td><td class="c"><b>24 小时</b></td><td>无外部约束时的保守值</td><td>P4 演练后确认</td></tr>
+      <tr><td>RTO</td><td class="id">dr.rto</td><td class="c"><b>4 小时</b></td><td>同上</td><td>P4 演练后确认</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="warnbox">
+    <h4>配置化带来的三个副作用（不处理，配置化本身会成为新的风险源 → R-020 / R-021）</h4>
+    <ul>
+      <li><b>配置错误导致预算失控或误拒</b> → 预算预留/结算仍以 <b>DB 原子条件更新</b>为准，配置仅作上限输入；配置缺失时<b>拒绝而非放行</b>（fail-closed）。</li>
+      <li><b>运行中改配置导致同一 Run 前后不一致</b> → <b>Run 创建时快照配置值</b>写入 ExecutionSnapshot，改配置只影响新 Run。</li>
+      <li><b>配置被当作绕过安全门禁的后门</b> → 高风险阈值变更须走 CHG 模板 + 审计留痕 + ISO-5 抽检；未成年人保护强度<b>禁止运行时下调</b>。</li>
+    </ul>
+  </div>
+
+  <h3 class="blk">7.2 DEC-11 审批策略配置基线</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>配置项</th><th style="width:270px">配置键（建议）</th><th style="width:230px">初值</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>工具风险级别映射</td><td class="id">agent.tool.risk-level-map</td><td class="id">record_weakness=WRITE_PROFILE</td><td>级别枚举：READ / WRITE_PROFILE / WRITE_EXTERNAL</td></tr>
+      <tr><td>审批触发矩阵</td><td class="id">agent.approval.required-by-risk</td><td class="id">WRITE_EXTERNAL=REQUIRED<br>WRITE_PROFILE=OPTIONAL<br>READ=NOT_REQUIRED</td><td>三档：REQUIRED / OPTIONAL / NOT_REQUIRED</td></tr>
+      <tr><td>审批有效期</td><td class="id">agent.approval.ttl</td><td class="c"><b>15 分钟</b></td><td>过期拒绝</td></tr>
+      <tr><td>审批人范围</td><td class="id">agent.approval.approver-scope</td><td>家长或教师</td><td>与 DEC-6 角色一致</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="okbox">
+    <h4>这个设计的好处</h4>
+    <p>首期 <code>record_weakness</code> 按 <code>OPTIONAL</code> 快速跑通闭环（<b>不阻塞 P2</b>）；P3 验证审批/取消竞态时只需把配置切为 <code>REQUIRED</code>，<b>无需改代码</b>。FR-013 审批消费因此有真实业务场景承载。</p>
+    <p style="margin-top:6px"><b>硬约束</b>：审批策略<b>只能收紧、不能放松</b>。将 <code>WRITE_EXTERNAL</code> 从 REQUIRED 调为非 REQUIRED 属<b>安全门禁降级</b>，必须走范围变更模板 + ISO-5 外部抽检，不得作为普通配置调整处理。</p>
+  </div>
+
+  <h3 class="blk">7.3 DEC-10 零保留确认：允许延后，但设三道硬闸门</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:80px">闸门</th><th>规则</th><th style="width:230px">违反后果</th></tr></thead>
+    <tbody>
+      <tr><td class="id">GATE-1</td><td><b>P1 阶段全部使用模拟/合成数据</b>，禁止任何真实学生数据进入 Prompt</td><td>P1 门禁不通过</td></tr>
+      <tr><td class="id">GATE-2</td><td>接入真实学生数据前，<b>必须</b>取得供应商零保留书面条款或确认使用境内实例</td><td>禁止接入，业务验收延期</td></tr>
+      <tr><td class="id">GATE-3</td><td>确认截止点 <b>W2 D5（M1 门禁）</b>。逾期未确认则 P2 仅用模拟数据做技术闭环，业务验收顺延至确认完成</td><td>P2 退出条件记 <code>Accepted with conditions</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="warnbox">
+    <p><b>延后不等于无约束。</b>该闸门设计与 R-017、A-009 联动，<b>不允许以「稍后确认」为由在 P1/P2 直接接入真实学生数据</b>。这正是 DEC-10 虽可延后却仍需写入文档的原因——没有闸门的「稍后」会变成「一直没有」。</p>
+  </div>
+
+  <h3 class="blk">7.4 ISO-5 季度抽检日历</h3>
+  <div class="callout">
+    <p>每阶段门禁后执行一次抽检，抽样比例 ≥ 30% 且必须包含全部 Sev-0 项：</p>
+    <p style="margin-top:6px">M0（W1 D5）→ M1（W2 D5）→ M2 → M3 → M4 → M5，每季度汇总一次归档至 P4-D09 风险接受单。</p>
+    <p style="margin-top:6px">配置类变更（DEC-9/DEC-11）若触及高危阈值，同样纳入 ISO-5 抽检范围。</p>
+  </div>
+
+  <h3 class="blk">7.5 本计划边界</h3>
+  <ul style="font-size:13.5px;color:var(--ink-2);margin-left:18px;line-height:1.8">
+    <li>段一日期为<b>固定</b>（2026-10-19 ~ 10-30）；段二 P2–P5 日历日期<b>待 W2 D5 重估后确定</b>，本计划不预设。</li>
+    <li>成本与容量初值为<b>保守建议值</b>，非业务承诺；成本收益须试点实测后才能声称达标。</li>
+    <li>SB-01～SB-07 的阈值为<b>初始建议值</b>，须在 W1 D2 由 AG-PO + AG-BUS 依 20 题样本复核后确认。</li>
+    <li>P0-D02 §9 剩余 Open 项：第 2（权限模型）、5（取消后冲正）、6（UNKNOWN 处置角色）、9（监护人同意文本实现）——均为工程可推进项，不阻塞 M0。</li>
+    <li>本计划不替代 P0-D00～D06 的批准记录；六份文档当前为 <code>v0.2-draft</code>，W1 D5 冻结为 <code>v1.0-baseline</code>。</li>
+  </ul>
+</section>
+
+<footer>
+  Java SaaS Agent 平台｜决策落地后的推进安排与执行计划 v1.1<br>
+  依据 P0-D00 决策基线 v1.1（DEC-1～DEC-11）+ P0-D06 v0.3 + v3.1 架构方案编制 · 2026-10-17<br>
+  前置版本：P0-D06_推进安排与下一步执行计划.v0.1-决策前.html（保留供对照）
+</footer>
+
+</div>
+</body>
+</html>

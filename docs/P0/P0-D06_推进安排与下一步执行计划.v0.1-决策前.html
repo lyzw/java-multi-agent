@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Java SaaS Agent 平台｜P0 基线收口与 P1 推进执行计划</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#1a1d21; --ink-2:#4a5158; --ink-3:#79828c;
+  --line:#e3e6ea; --line-2:#eef0f3;
+  --accent:#1f5fd0; --accent-soft:#eaf1fd;
+  --ok:#0f7b52; --ok-soft:#e6f4ee;
+  --warn:#a86400; --warn-soft:#fdf2e0;
+  --risk:#c0392b; --risk-soft:#fdecea;
+  --r:#1f5fd0; --a:#c0392b; --c:#a86400; --i:#79828c;
+  --mono:'SF Mono',Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);
+  font:15px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  padding:32px 20px 72px}
+.wrap{max-width:1220px;margin:0 auto}
+
+header.doc{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:30px 32px;margin-bottom:22px}
+header.doc h1{font-size:25px;letter-spacing:-.3px;margin-bottom:6px}
+header.doc .sub{color:var(--ink-3);font-size:14px;margin-bottom:20px}
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.meta div{background:#fafbfc;border:1px solid var(--line-2);border-radius:8px;padding:10px 13px}
+.meta b{display:block;font-size:11px;color:var(--ink-3);font-weight:600;letter-spacing:.4px;margin-bottom:3px}
+.meta span{font-size:13.5px;color:var(--ink-2)}
+
+.banner{background:var(--warn-soft);border:1px solid #f0dcae;border-left:4px solid var(--warn);
+  border-radius:10px;padding:16px 20px;margin-bottom:22px}
+.banner h3{font-size:15px;color:#7a4a00;margin-bottom:7px}
+.banner p{font-size:14px;color:#6b4a12;line-height:1.7}
+.banner code{background:rgba(0,0,0,.06);padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:12.5px}
+
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 30px;margin-bottom:20px}
+section>h2{font-size:19px;letter-spacing:-.2px;padding-bottom:12px;margin-bottom:20px;
+  border-bottom:2px solid var(--line-2);display:flex;align-items:center;gap:10px}
+section>h2 .n{background:var(--accent);color:#fff;width:26px;height:26px;border-radius:7px;
+  display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex:none}
+h3.blk{font-size:15.5px;margin:24px 0 11px;padding-left:10px;border-left:3px solid var(--accent)}
+h3.blk:first-of-type{margin-top:6px}
+p.note{font-size:13.5px;color:var(--ink-3);margin:9px 0 0;line-height:1.65}
+
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 4px}
+th{background:#f4f6f8;text-align:left;padding:9px 11px;font-weight:600;color:var(--ink-2);
+  border-bottom:1.5px solid var(--line);font-size:12.5px;white-space:nowrap}
+td{padding:9px 11px;border-bottom:1px solid var(--line-2);vertical-align:top;line-height:1.6}
+tbody tr:hover{background:#fafbfd}
+td.c,th.c{text-align:center}
+td.id{font-family:var(--mono);font-size:12.5px;color:var(--ink-3);white-space:nowrap}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+.b{display:inline-block;min-width:19px;padding:1px 5px;border-radius:5px;font-size:11px;
+  font-weight:700;text-align:center;letter-spacing:.2px;vertical-align:middle}
+.b.r{background:var(--accent-soft);color:var(--r)}
+.b.a{background:var(--risk-soft);color:var(--a)}
+.b.c{background:var(--warn-soft);color:var(--c)}
+.b.i{background:#f0f2f4;color:var(--i)}
+.b.ok{background:var(--ok-soft);color:var(--ok)}
+.b.no{background:var(--risk-soft);color:var(--risk)}
+.tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.tag.p0{background:var(--risk-soft);color:var(--risk)}
+.tag.p1{background:var(--accent-soft);color:var(--accent)}
+.tag.p2{background:#f0ecfd;color:#5b3fb8}
+.tag.p3{background:var(--warn-soft);color:var(--warn)}
+.tag.p4{background:#e7f6f9;color:#0b7285}
+.tag.p5{background:var(--ok-soft);color:var(--ok)}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-3);margin:12px 0 4px;padding:11px 14px;
+  background:#fafbfc;border:1px solid var(--line-2);border-radius:8px}
+.legend i{font-style:normal;margin-right:5px}
+
+.gantt{font-size:11px;border-collapse:collapse;width:100%}
+.gantt th{font-size:10.5px;padding:6px 2px;text-align:center;background:#f4f6f8;white-space:nowrap}
+.gantt td{padding:5px 3px;border-bottom:1px solid var(--line-2);text-align:center}
+.gantt td.lbl{text-align:left;padding-left:9px;font-size:12.5px;white-space:nowrap;font-weight:600;color:var(--ink-2)}
+.bar{display:block;border-radius:5px;padding:5px 4px;font-size:11px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden}
+.gate td{background:#fffdf5;font-size:11.5px;color:var(--warn);text-align:center;font-weight:600;border-bottom:1.5px dashed #ecd9a8}
+
+.callout{background:var(--accent-soft);border:1px solid #cfe0f8;border-radius:10px;padding:14px 18px;margin:14px 0}
+.callout h4{font-size:13.5px;color:var(--accent);margin-bottom:6px}
+.callout p,.callout li{font-size:13.5px;color:#1c467f;line-height:1.7}
+.callout ol,.callout ul{margin-left:20px}
+
+.warnbox{background:var(--risk-soft);border:1px solid #f5cdc7;border-radius:10px;padding:14px 18px;margin:14px 0}
+.warnbox h4{font-size:13.5px;color:var(--risk);margin-bottom:7px}
+.warnbox li{font-size:13.5px;color:#8c2f22;line-height:1.7;margin-left:18px}
+
+.split{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:900px){.split{grid-template-columns:1fr}
+  body{padding:18px 12px 48px}section{padding:20px 17px}header.doc{padding:22px 19px}}
+
+.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:12px;margin:4px 0 8px}
+.stat div{background:#fafbfc;border:1px solid var(--line-2);border-radius:9px;padding:13px 15px;text-align:center}
+.stat b{display:block;font-size:22px;color:var(--accent);line-height:1.25;font-weight:700}
+.stat span{font-size:12px;color:var(--ink-3);display:block;margin-top:3px}
+
+footer{text-align:center;color:var(--ink-3);font-size:12.5px;padding:26px 0 0;line-height:1.8}
+@media print{body{background:#fff;padding:0}section,header.doc,.banner{break-inside:avoid;page-break-inside:avoid;border:1px solid #ddd}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>Java SaaS Agent 平台｜基线收口与阶段推进执行计划</h1>
+  <p class="sub">依据 P0-D06《初始项目计划与 RACI》v0.1-draft，梳理组件团队启动后的推进安排、阶段任务、责任分工与时间节点</p>
+  <div class="meta">
+    <div><b>计划来源</b><span>P0-D06 §2/§3/§5 + v3.1 实施计划 §3–§8</span></div>
+    <div><b>基线周数</b><span>18 周（P0 结束后需重估）</span></div>
+    <div><b>假设启动日</b><span>2026-10-19（周一，W1 D1）</span></div>
+    <div><b>假设完成日</b><span>2027-02-19（W18 D5）</span></div>
+    <div><b>当前所处阶段</b><span>P0 收口（文档已产出，未签署）</span></div>
+    <div><b>阻塞项</b><span>5 项（均为具名/事实缺失）</span></div>
+    <div><b>文档状态</b><span>v0.1 草案 · 待评审</span></div>
+    <div><b>编制日期</b><span>2026-10-17</span></div>
+  </div>
+</header>
+
+<div class="banner">
+  <h3>⚠️ 首要结论：当前不能直接进入 P1 实施</h3>
+  <p>P0-D06 自身规定「P0 退出门禁全部通过」才进入 P1。核查 P0 文档包后确认：<b>六份文档均为 <code>v0.1-draft / 待评审</code>，全部责任人字段为 <code>[待确认]</code>，P0-D05 中 D-001～D-010 十个外部依赖 owner 全部缺失</b>。因此推进安排必须从 <b>P0 收口（具名 + 签署）</b> 开始，而非从 P1 技术决策开始。本计划的前 5 个工作日全部用于解除该阻塞。</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<section>
+  <h2><span class="n">1</span>当前状态盘点：团队启动后的真实位置</h2>
+
+  <div class="stat">
+    <div><b>6/6</b><span>P0 文档已产出</span></div>
+    <div><b>0/6</b><span>已签署基线</span></div>
+    <div><b>0/10</b><span>依赖 owner 已落实</span></div>
+    <div><b>0/10</b><span>RACI 已落到人</span></div>
+    <div><b>0/6</b><span>假设已验证</span></div>
+    <div><b>0/18</b><span>周已排期</span></div>
+  </div>
+
+  <h3 class="blk">1.1 已完成（可直接沿用）</h3>
+  <table>
+    <thead><tr><th style="width:88px">文档</th><th>内容完备性核查</th><th style="width:96px" class="c">状态</th></tr></thead>
+    <tbody>
+      <tr><td class="id">P0-D01</td><td>章程、范围、里程碑 M0–M5、成功定义、决策机制齐备；业务背景四项、指标五项为待确认</td><td class="c"><span class="b no">待签署</span></td></tr>
+      <tr><td class="id">P0-D02</td><td>BR-01～04、FR-001～020、NFR-001～010 齐备；FR 优先级已标注 P0/P1</td><td class="c"><span class="b no">待签署</span></td></tr>
+      <tr><td class="id">P0-D03</td><td>13 个能力域首期范围、10 项非目标、10 条验收红线、MVP-A～D 分批齐备</td><td class="c"><span class="b no">待签署</span></td></tr>
+      <tr><td class="id">P0-D04</td><td>FR-001～018 全部绑定验收条件 + 测试 ID + 证据类型 + 门禁阶段；缺陷分级规则齐备</td><td class="c"><span class="b no">待签署</span></td></tr>
+      <tr><td class="id">P0-D05</td><td>R-001～015 风险登记册（含 P/I/Owner/到期）、D-001～010 依赖、A-001～006 假设齐备</td><td class="c"><span class="b no">待签署</span></td></tr>
+      <tr><td class="id">P0-D06</td><td>第一周日计划、六阶段计划、依赖图、13×10 RACI、会议机制、DoR/DoD、调整规则齐备</td><td class="c"><span class="b no">待签署</span></td></tr>
+    </tbody>
+  </table>
+  <p class="note">结论：<b>文档产能不是瓶颈，具名与签署才是瓶颈。</b>六份文档结构完整且互有交叉引用（FR 编号在 D02/D04 一致，风险到期日与阶段门禁对齐），可直接进入评审，不需要重写。</p>
+
+  <h3 class="blk">1.2 阻塞项（按解除优先级排序）</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:74px">阻塞</th><th>问题</th><th style="width:120px">依据</th><th style="width:150px">不解除的后果</th><th style="width:88px" class="c">紧急度</th></tr></thead>
+    <tbody>
+      <tr><td class="id">BLK-1</td><td>十个角色全部 <code>[待确认]</code>，RACI 无法落到具体人</td><td>P0-D01 §5 / P0-D06 §5</td><td>任何任务无唯一 DRI，DoR 第 1 条即不成立</td><td class="c"><span class="b a">W1 D1</span></td></tr>
+      <tr><td class="id">BLK-2</td><td>首个真实业务场景未冻结（无输入/输出/成功判定）</td><td>R-001（4×5=高）</td><td>P2 退出门禁「至少一个业务任务成功执行」无法达成，业务收益不可度量</td><td class="c"><span class="b a">W1 D2</span></td></tr>
+      <tr><td class="id">BLK-3</td><td>D-001 IAM、D-002 模型服务、D-004 PostgreSQL 无 owner 与可用日期</td><td>P0-D05 §3</td><td>P1 PoC（P1-05/06/07）全部阻塞，PoC 是 P1 退出门禁</td><td class="c"><span class="b a">W1 D3</span></td></tr>
+      <tr><td class="id">BLK-4</td><td>成本/容量无业务基线，NFR-006/010 无数值</td><td>R-010（4×4=高）</td><td>P4 容量/SLO/灾备无法定稿，退出门禁只能写「待确认」</td><td class="c"><span class="b c">W1 D4</span></td></tr>
+      <tr><td class="id">BLK-5</td><td>数据驻留/日志保留/数据分级未确认</td><td>R-012（3×5=高）</td><td>不得接入真实敏感数据，P3-D10/P4-D10 无法定稿</td><td class="c"><span class="b c">W1 D4</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">五项全部属于「事实缺失」而非「技术未知」，<b>只能由具名责任人补齐，不能由团队自行假设</b>。P0-D06 §1 与 P0-D03 §1 均明确禁止用模拟值替代业务事实。</p>
+</section>
+
+<!-- ============ 2 ============ -->
+<section>
+  <h2><span class="n">2</span>阶段推进总览与时间节点</h2>
+  <p class="note">下表把 P0-D06 §3 的「相对周数」换算为日历日期。P0-D06 §1 已声明「下表周数是相对项目启动周，不是承诺日期」，因此以下日期为<b>假设基线</b>，须在 P0-C8 排期确认任务（W1 D5）后转为承诺基线。假设 W1 D1 = 2026-10-19（周一）。</p>
+
+  <div class="tbl-wrap">
+  <table class="gantt">
+    <thead><tr>
+      <th style="width:150px;text-align:left">阶段 / 门禁</th>
+      <th>W1</th><th>W2</th><th>W3</th><th>W4</th><th>W5</th><th>W6</th><th>W7</th><th>W8</th><th>W9</th>
+      <th>W10</th><th>W11</th><th>W12</th><th>W13</th><th>W14</th><th>W15</th><th>W16</th><th>W17</th><th>W18</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="lbl"><span class="tag p0">P0</span> 启动与需求基线</td>
+        <td colspan="1"><span class="bar" style="background:#c0392b">W1</span></td>
+        <td colspan="17" style="background:#fbfbfc"></td>
+      </tr>
+      <tr class="gate"><td style="text-align:left">⛔ M0 基线批准</td><td>D5</td><td colspan="17"></td></tr>
+      <tr>
+        <td class="lbl"><span class="tag p1">P1</span> 架构冻结与 PoC</td>
+        <td style="background:#fbfbfc"></td>
+        <td colspan="1"><span class="bar" style="background:#1f5fd0">W2</span></td>
+        <td colspan="16" style="background:#fbfbfc"></td>
+      </tr>
+      <tr class="gate"><td style="text-align:left">⛔ M1 架构与 PoC 验证</td><td></td><td>D5</td><td colspan="16"></td></tr>
+      <tr>
+        <td class="lbl"><span class="tag p2">P2</span> 核心闭环 MVP</td>
+        <td colspan="2" style="background:#fbfbfc"></td>
+        <td colspan="5"><span class="bar" style="background:#5b3fb8">W3–W7 · 5 个 Sprint 垂直切片</span></td>
+        <td colspan="11" style="background:#fbfbfc"></td>
+      </tr>
+      <tr class="gate"><td style="text-align:left">⛔ M2 核心闭环 MVP</td><td colspan="2"></td><td colspan="4"></td><td>W7 末</td><td colspan="11"></td></tr>
+      <tr>
+        <td class="lbl"><span class="tag p3">P3</span> 可靠性与安全治理</td>
+        <td colspan="7" style="background:#fbfbfc"></td>
+        <td colspan="5"><span class="bar" style="background:#a86400">W8–W12 · 12 个工作包</span></td>
+        <td colspan="6" style="background:#fbfbfc"></td>
+      </tr>
+      <tr class="gate"><td style="text-align:left">⛔ M3 可靠性与安全门禁</td><td colspan="7"></td><td colspan="4"></td><td>W12 末</td><td colspan="6"></td></tr>
+      <tr>
+        <td class="lbl"><span class="tag p4">P4</span> 企业集成与生产化</td>
+        <td colspan="12" style="background:#fbfbfc"></td>
+        <td colspan="4"><span class="bar" style="background:#0b7285">W13–W16</span></td>
+        <td colspan="2" style="background:#fbfbfc"></td>
+      </tr>
+      <tr class="gate"><td style="text-align:left">⛔ M4 生产候选版本</td><td colspan="12"></td><td colspan="3"></td><td>W16 末</td><td colspan="2"></td></tr>
+      <tr>
+        <td class="lbl"><span class="tag p5">P5</span> 试点与运营交接</td>
+        <td colspan="16" style="background:#fbfbfc"></td>
+        <td colspan="2"><span class="bar" style="background:#0f7b52">W17–W18</span></td>
+      </tr>
+      <tr class="gate"><td style="text-align:left">⛔ M5 试点验收</td><td colspan="16"></td><td>W18 末</td><td></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="tbl-wrap">
+  <table style="margin-top:16px">
+    <thead><tr><th style="width:150px">阶段</th><th style="width:190px">日历窗口</th><th>阶段目标</th><th style="width:230px">退出条件（门禁）</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag p0">P0</span> 启动与需求基线</td><td class="id">10-19 ~ 10-23</td><td>明确首期业务价值、MVP 边界、验收口径与责任人</td><td>范围经业务+技术签署；P0 需求均有验收条件；依赖有 owner 与日期</td></tr>
+      <tr><td><span class="tag p1">P1</span> 架构冻结与 PoC</td><td class="id">10-26 ~ 10-30</td><td>冻结关键协议，验证高风险技术路径</td><td>ADR-001～010 决策完成；附录 E 七项 PoC 有数据证据；新成员可按文档跑通环境</td></tr>
+      <tr><td><span class="tag p2">P2</span> 核心闭环 MVP</td><td class="id">11-02 ~ 12-04</td><td>Agent→Run→Worker→Model→Tool→结果/事件 端到端闭环</td><td>≥1 个业务任务端到端成功；幂等/快照/事务/授权/注入边界测试通过；评测集进 CI</td></tr>
+      <tr><td><span class="tag p3">P3</span> 可靠性与安全治理</td><td class="id">12-07 ~ 2027-01-08</td><td>把「可运行」提升为「可恢复、可审计、无不可控副作用」</td><td>旧 fencing 无法写入；UNKNOWN 不盲目重放；预算不超发；审批竞态、跨租户测试通过</td></tr>
+      <tr><td><span class="tag p4">P4</span> 企业集成与生产化</td><td class="id">2027-01-11 ~ 02-05</td><td>达到可运维、可观测、可扩容、可恢复的候选发布状态</td><td>SLO/RPO/RTO 有测试证据；告警已实测；高危安全问题关闭；准入清单逐项通过</td></tr>
+      <tr><td><span class="tag p5">P5</span> 试点与交接</td><td class="id">2027-02-08 ~ 02-19</td><td>灰度发布、演练、试点验收、运维交接</td><td>回滚已实操；告警通知到人；业务方验收；遗留项有责任人与期限</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 class="blk">2.1 关键路径与并行窗口</h3>
+  <div class="callout">
+    <h4>串行主链（不可压缩，任何一环延迟整体顺延）</h4>
+    <p>ADR 与数据/安全约束冻结 → DDL + RLS + 迁移基座 → Run 创建/幂等/Event/Outbox → MQ 消费/租约/fencing/接管 → ToolOperation 与 UNKNOWN 对账 → Approval 消费与取消竞态 → 端到端安全可靠性验收 → 可观测性/压测/备份恢复/生产准入</p>
+    <h4 style="margin-top:12px">可并行支线</h4>
+    <ul>
+      <li><b>P2 内：</b>OpenAPI/客户端示例、工具开发指南、测试数据、监控基础设施（P2-S1-04 完成后启动）</li>
+      <li><b>P3 内：</b>预算账本、审批策略、对象存储授权、租户隔离——接口冻结后可分组并行</li>
+      <li><b>P0→P1 交叠：</b>P1-09 工程基线（建仓库、CI、迁移工具）不依赖 ADR 结论，W1 即可并行启动，是压缩 P1 的最大杠杆</li>
+    </ul>
+    <p style="margin-top:10px"><b>禁止的加速方式：</b>P0-D06 §9 明确「不通过减少安全/一致性验收项追赶进度」；P0-D03 §5 明确分批交付不表示可在未满足安全门禁时把有副作用工具提前开放给真实用户。</p>
+  </div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section>
+  <h2><span class="n">3</span>分阶段任务与 RACI</h2>
+
+  <div class="legend">
+    <span><i class="b r">R</i> Responsible 执行</span>
+    <span><i class="b a">A</i> Accountable 批准（每项唯一）</span>
+    <span><i class="b c">C</i> Consulted 咨询</span>
+    <span><i class="b i">I</i> Informed 知会</span>
+    <span style="color:var(--ink-3)">角色：BUS 业务 · PO 产品 · PM 项目 · ARC 架构 · BE 后端 · AI 模型 · QA 测试 · SEC 安全 · SRE 运维 · EXT 外部/IAM</span>
+  </div>
+
+  <h3 class="blk">3.1 P0 收口任务（W1 · 10-19 ~ 10-23）</h3>
+  <p class="note">P0-D06 §2 原计划 D1–D5 的文档编写工作已完成；下表是<b>收口版本</b>，把原「产出文档」替换为「具名 + 签署 + 门禁判定」，并对应 §5 RACI 与 §12 计划调整规则。</p>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:74px">ID</th><th style="width:96px">节点</th><th>任务</th><th style="width:158px">产物 / 完成标准</th><th style="width:52px" class="c">BUS</th><th style="width:44px" class="c">PO</th><th style="width:44px" class="c">PM</th><th style="width:48px" class="c">ARC</th><th style="width:44px" class="c">BE</th><th style="width:44px" class="c">AI</th><th style="width:44px" class="c">QA</th><th style="width:44px" class="c">SEC</th><th style="width:48px" class="c">SRE</th><th style="width:44px" class="c">EXT</th></tr></thead>
+    <tbody>
+      <tr><td class="id">P0-C1</td><td class="id">W1 D1</td><td>补齐干系人具名：十个角色落实到人，确认审批链与可用投入</td><td>干系人名单 v1；<b>每角色有姓名、备份人、投入比例</b></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td></tr>
+      <tr><td class="id">P0-C2</td><td class="id">W1 D2</td><td>冻结首个真实业务场景：输入/输出/成功判定/测试数据/安全约束</td><td>业务场景画布 v1；对应 P0-D02 BR-01 闭环</td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b r">R</i></td></tr>
+      <tr><td class="id">P0-C3</td><td class="id">W1 D3</td><td>外部依赖落实：D-001～D-010 逐条指定 owner、最晚需要日期、备用方案</td><td>依赖登记册无 <code>[待确认]</code>；D-001/002/004 有可用日期</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td></tr>
+      <tr><td class="id">P0-C4</td><td class="id">W1 D3</td><td>签发 MVP 范围基线 P0-D03 v1.0-baseline；争议点逐条结论化</td><td>业务+产品+技术三方签署；范围变更走 CHG 模板</td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td></tr>
+      <tr><td class="id">P0-C5</td><td class="id">W1 D3</td><td>签发需求基线 P0-D02 v1.0-baseline；FR/NFR 优先级与未知业务规则显式标记</td><td>20 条 FR + 10 条 NFR 全部有验收口径</td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td class="id">P0-C6</td><td class="id">W1 D4</td><td>签发验收矩阵 P0-D04 v1.0-baseline；占位测试 ID 映射到测试管理系统</td><td>FR-001～018 每条有正向 + 失败/越权路径；18 条 FR 全部可测</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td></tr>
+      <tr><td class="id">P0-C7</td><td class="id">W1 D4</td><td>风险与假设闭环：R-001～015 指派 owner 与到期；A-001～006 给出验证结论或否决</td><td>5 项高风险各有 owner/缓解/到期/升级路径；假设不得默认成立</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td class="id">P0-C8</td><td class="id">W1 D4</td><td>NFR 数值输入：租户规模、并发、时延、保留期、RPO/RTO 由业务给出或明确「P4 前定稿」</td><td>NFR-006/010 有 owner + 决策截止日；禁止以默认值进生产</td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td class="id">P0-C9</td><td class="id">W1 D5</td><td>排期与 RACI 确认：投入重估 → 18 周基线转为承诺基线；日历日期生效</td><td>P0-D06 升 v1.0-baseline；全部职能确认 RACI 与里程碑日期</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td class="id">P0-C10</td><td class="id">W1 D5</td><td><b>M0 基线评审与签署</b>：逐条判定 7 项退出门禁（通过 / 有条件 / 退回）</td><td>六份文档冻结 v1.0-baseline；未通过项有正式决定与限制范围</td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="warnbox">
+    <h4>P0 退出门禁判定表（M0，W1 D5 逐条勾选）</h4>
+    <ul>
+      <li>□ 项目目标与首个真实业务任务已由业务负责人确认 <span class="b no">依赖 P0-C2</span></li>
+      <li>□ MVP 范围与明确非目标已由产品、业务、技术负责人确认 <span class="b no">依赖 P0-C4</span></li>
+      <li>□ 所有 P0/P1 需求均有可验证验收条件及责任人 <span class="b no">依赖 P0-C5/C6</span></li>
+      <li>□ 外部依赖有负责人、可用时间和替代/降级方案 <span class="b no">依赖 P0-C3</span></li>
+      <li>□ 高风险项有缓解措施、决策期限和风险接受人 <span class="b no">依赖 P0-C7</span></li>
+      <li>□ 初始排期和 RACI 获得项目团队确认 <span class="b no">依赖 P0-C1/C9</span></li>
+      <li>□ 关键技术决策已登记到 P1 ADR backlog（P0 不假装完成技术验证） <span class="b no">依赖 P0-C10 输出</span></li>
+    </ul>
+    <p style="margin-top:8px;font-size:13px;color:#8c2f22">任一项未通过 → 记 <code>Blocked</code> 或 <code>Accepted with conditions</code>，须写明批准人、限制范围与复审日期（P0-D06 §9）。</p>
+  </div>
+
+  <h3 class="blk">3.2 P1 架构冻结与高风险 PoC（W2 · 10-26 ~ 10-30）</h3>
+  <p class="note">P1 是<b>唯一允许在完整实现前做技术验证</b>的阶段。ADR-001～010 是全项目的协议源头，一旦冻结后续变更必须走 ADR（P0-D06 §7）。</p>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:70px">ID</th><th>任务与交付</th><th style="width:250px">量化验收（v3.1 附录 E / 门禁）</th><th style="width:48px" class="c">BUS</th><th style="width:42px" class="c">PO</th><th style="width:42px" class="c">PM</th><th style="width:46px" class="c">ARC</th><th style="width:42px" class="c">BE</th><th style="width:42px" class="c">AI</th><th style="width:42px" class="c">QA</th><th style="width:42px" class="c">SEC</th><th style="width:46px" class="c">SRE</th><th style="width:42px" class="c">EXT</th></tr></thead>
+    <tbody>
+      <tr><td class="id">P1-01</td><td><b>技术决策冻结</b>：PG 版本、数据访问方案（ADR-002）、主 MQ 二选一（ADR-001）、Redis 用途、对象存储、模型供应商、部署形态</td><td>ADR-001/002/005 有结论、有理由、有回滚方案；不双栈 MQ</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td class="id">P1-02</td><td><b>领域模型与状态机</b>：Tenant、Agent/Version、Run、Step、ToolOperation、Approval、RunEvent、Outbox、Usage/Budget；合法迁移与终态（ADR-004）</td><td>状态机表完整；非法迁移与并发条件更新规则明确</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td></tr>
+      <tr><td class="id">P1-03</td><td><b>三层 Attempt 与幂等协议</b>：Run attempt / ToolOperation 逻辑操作 / 调用 attempt 区分；幂等键域、请求摘要冲突、保留期（ADR-003）</td><td>幂等键域与保留期有结论；同名不同摘要明确冲突</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td></tr>
+      <tr><td class="id">P1-04</td><td><b>数据与租户安全设计</b>：复合约束、RLS 角色、TenantContext、连接池事务上下文、对象存储访问模型（ADR-006/007）</td><td>DDL 初稿含租户归属与复合唯一约束；威胁模型 v1</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td class="id">P1-05</td><td><b>Outbox/MQ PoC</b>：业务事务与 Outbox 原子提交、重复投递、消费幂等、发布重试、积压可观测</td><td>DB 提交后进程崩溃仍可恢复发布；重复消息不重复创建逻辑执行；积压有指标</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td class="id">P1-06</td><td><b>Worker lease/fencing PoC</b>：领取、续租、过期接管、旧 fencing token 拒绝写入、取消轮询</td><td><b>强杀 Worker → 旧世代无法写入；新 Worker 安全接管；未知工具操作不重放</b></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td></tr>
+      <tr><td class="id">P1-07</td><td><b>ModelGateway / Tool SPI PoC</b>：模型调用、超时/错误映射/用量采集；一个只读工具 + 输入输出 Schema 校验</td><td>供应商专属类型不泄漏到领域接口；<b>秘密不出现在日志</b>；Schema 错误被拒绝</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td class="id">P1-08</td><td><b>事件/SSE PoC</b>：RunEvent 持久化、Last-Event-ID 续传、越权拒绝、游标过期行为（ADR-009）</td><td><b>不丢失约定范围内事件；过期游标明确重置；跨租户游标拒绝</b></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td></tr>
+      <tr><td class="id">P1-09</td><td><b>工程基线</b>（<span style="color:var(--ok)">W1 即可提前启动</span>）：仓库、模块骨架、迁移工具、CI、测试环境、镜像构建、密钥注入、静态检查、依赖扫描</td><td>空仓 → 可复现构建 → 迁移可跑 → 测试可跑；新成员按文档可启动</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td class="id">P1-10</td><td><b>PoC 评审与决策</b>：按附录 E 记录成功/失败、量化数据、未决问题、风险接受人；产出 P1-D01～D11</td><td>附录 E 七项 PoC 均有数据证据；<b>未通过项有修复任务 + 复测日期</b></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 class="blk">3.3 P2–P5 阶段责任主线（概览）</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:130px">阶段 / 窗口</th><th>工作包主线</th><th style="width:200px">A（唯一批准人）</th><th style="width:170px">主 R（执行）</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="tag p2">P2</span> 核心闭环<br><span class="id">11-02 ~ 12-04</span></td>
+        <td>S1 骨架/租户上下文/Agent 版本 → S2 Run API/幂等/状态机/事件/Outbox → S3 Worker/租约/ModelGateway/执行快照 → S4 Tool SPI/权限/ToolOperation 账本/不可信输出边界 → S5 上下文/结果/SSE/端到端演示/评测集</td>
+        <td>ARC（技术方案）<br>PO（范围与演示）</td>
+        <td>BE（主体）· AI（ModelGateway）· API（OpenAPI/SSE）· QA（评测集）</td>
+      </tr>
+      <tr>
+        <td><span class="tag p3">P3</span> 可靠性安全<br><span class="id">12-07 ~ 01-08</span></td>
+        <td>P3-01 租约接管 → 02 Outbox/MQ → 03 幂等/UNKNOWN/对账 → 04 预算预留结算 → 05 审批与取消竞态 → 06 取消超时语义 → 07 多租户/RLS → 08 对象存储授权 → 09 Prompt/Egress → 10 事件审计 → 11 版本兼容恢复 → 12 故障注入总测</td>
+        <td>ARC（协议）<br>SEC（安全门禁）<br>QA（测试结论）</td>
+        <td>执行引擎负责人（03/06/11）· 消息平台（02/04）· 安全（05/07/08/09）· QA+SRE（12）</td>
+      </tr>
+      <tr>
+        <td><span class="tag p4">P4</span> 生产化<br><span class="id">01-11 ~ 02-05</span></td>
+        <td>P4-01 IAM 集成 → 02 业务系统适配器 → 03 可观测性 → 04 容量性能 → 05 限流过载 → 06 部署迁移 → 07 备份灾备 → 08 安全合规复核 → 09 运行手册 → 10 生产准入评审</td>
+        <td>SEC（安全准入）<br>SRE（运行准备）<br>技术负责人（SLO/容量）</td>
+        <td>集成负责人 · SRE · DBA · 性能测试 · BE</td>
+      </tr>
+      <tr>
+        <td><span class="tag p5">P5</span> 试点交接<br><span class="id">02-08 ~ 02-19</span></td>
+        <td>P5-01 试点范围 → 02 发布预演 → 03 灰度发布 → 04 运行观察 → 05 应急演练 → 06 问题收敛 → 07 运营交接复盘</td>
+        <td>PM（发布决策）<br>BUS（业务验收）<br>技术负责人（交接）</td>
+        <td>发布负责人 · QA · SRE · PO</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 class="blk">3.4 基线 RACI 矩阵（P0-D06 §5 原文保留）</h3>
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>工作项</th><th class="c">BUS</th><th class="c">PO</th><th class="c">PM</th><th class="c">ARC</th><th class="c">BE</th><th class="c">AI</th><th class="c">QA</th><th class="c">SEC</th><th class="c">SRE</th><th class="c">EXT</th></tr></thead>
+    <tbody>
+      <tr><td>业务场景与价值目标</td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td>MVP 范围/优先级</td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td></tr>
+      <tr><td>项目计划/依赖/风险</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td>需求规格与验收口径</td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td>架构/ADR/模块边界</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b a">A</i><i class="b r">R</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td>领域模型/状态机/DDL</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td></tr>
+      <tr><td>模型接入/评测</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td>Tool SPI/业务集成</td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b r">R</i><i class="b c">C</i></td></tr>
+      <tr><td>测试策略/追踪矩阵</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td></tr>
+      <tr><td>威胁模型/安全门禁</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td>CI/CD/运行监控/恢复</td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td>生产发布与回滚</td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td></tr>
+      <tr><td>业务验收与试点决策</td><td class="c"><i class="b a">A</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b i">I</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b r">R</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td><td class="c"><i class="b c">C</i></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">P0-D06 §5 附注：团队规模小时允许一人承担多角色，但<b>安全审批、代码作者自审、高风险验收应尽量避免利益冲突</b>。若 SEC/QA 由同一人承担，必须由 BUS 或外部方复核高风险结论。</p>
+</section>
+
+<!-- ============ 4 ============ -->
+<section>
+  <h2><span class="n">4</span>下一步执行计划：未来 10 个工作日</h2>
+  <p class="note">这是唯一需要立即投入资源的窗口。W1 解除阻塞、W2 启动 P1。<b>P1-09 工程基线提前到 W1 D2 启动</b>是压缩关键路径的最大杠杆——它不依赖任何 ADR 结论。</p>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th style="width:92px">日期</th><th style="width:66px">任务</th><th>具体动作</th><th style="width:150px">交付物</th><th style="width:104px">DRI</th><th style="width:60px" class="c">A</th></tr></thead>
+    <tbody>
+      <tr><td class="id">10-19 一<br>W1 D1</td><td class="id">P0-C1</td><td>发出具名征集：十个角色落实到人 + 备份人 + 投入比例 + 审批链；同步启动会确认决策机制</td><td>干系人名单 v1（含审批链图）</td><td>项目经理</td><td class="c"><i class="b a">BUS</i></td></tr>
+      <tr><td class="id">10-19 一</td><td class="id">P1-09a</td><td><span style="color:var(--ok)">并行启动</span>：建代码仓库、模块骨架目录、迁移工具脚手架、CI 流水线空壳</td><td>可执行 <code>mvn verify</code> 的空工程</td><td>SRE + 后端</td><td class="c"><i class="b a">SRE</i></td></tr>
+      <tr><td class="id">10-20 二<br>W1 D2</td><td class="id">P0-C2</td><td>业务场景工作坊：与 BUS + 工具/API owner 逐条确定输入、输出、成功判定、测试数据、安全约束</td><td>业务场景画布 v1（对应 BR-01 / AT-BIZ 模板）</td><td>产品/BA</td><td class="c"><i class="b a">BUS</i></td></tr>
+      <tr><td class="id">10-21 三<br>W1 D3</td><td class="id">P0-C3</td><td>依赖逐条攻坚：<b>D-001 IAM / D-002 模型 / D-004 PG</b> 优先（阻塞 P1 全部 PoC），再 D-009 CI、D-008 密钥</td><td>依赖登记册 v1（无 <code>[待确认]</code>）</td><td>项目经理</td><td class="c"><i class="b a">PM</i></td></tr>
+      <tr><td class="id">10-21 三</td><td class="id">P0-C4</td><td>MVP 范围评审会：过 13 个能力域 + 10 项非目标；争议点当场结论化或指派 owner/截止日</td><td>P0-D03 v1.0-baseline</td><td>产品负责人</td><td class="c"><i class="b a">PO</i></td></tr>
+      <tr><td class="id">10-21 三</td><td class="id">P0-C5</td><td>需求基线评审：20 条 FR + 10 条 NFR 逐条确认可测试性与优先级</td><td>P0-D02 v1.0-baseline</td><td>产品/BA</td><td class="c"><i class="b a">PO</i></td></tr>
+      <tr><td class="id">10-22 四<br>W1 D4</td><td class="id">P0-C6</td><td>验收矩阵定稿：18 条 FR 的正向 + 失败/越权路径；占位 AT-ID 映射到测试管理系统真实用例</td><td>P0-D04 v1.0-baseline</td><td>测试负责人</td><td class="c"><i class="b a">QA</i></td></tr>
+      <tr><td class="id">10-22 四</td><td class="id">P0-C7</td><td>风险评审会：5 项高风险逐条定 owner/缓解/到期/升级路径；6 项假设给验证结论或否决</td><td>P0-D05 v1.0-baseline</td><td>各风险 owner</td><td class="c"><i class="b a">PM</i></td></tr>
+      <tr><td class="id">10-22 四</td><td class="id">P0-C8</td><td>NFR 数值收集：租户规模、并发、时延、保留期、RPO/RTO；无法给出则明确「P4 前定稿 + owner」</td><td>NFR 待决项清单（含决策截止日）</td><td>产品 + SRE</td><td class="c"><i class="b a">BUS</i></td></tr>
+      <tr><td class="id">10-23 五<br>W1 D5</td><td class="id">P0-C9</td><td>按实际投入重估 18 周基线 → 转为承诺基线；确认日历日期与 RACI 具名版</td><td>P0-D06 v1.0-baseline</td><td>项目经理</td><td class="c"><i class="b a">PM</i></td></tr>
+      <tr style="background:#fffdf5"><td class="id">10-23 五</td><td class="id">P0-C10</td><td><b>⛔ M0 门禁评审</b>：7 项退出门禁逐条判定（通过 / 有条件 / 退回）；输出 P1 ADR backlog 与 W2 任务书</td><td>M0 评审记录 + 六份签署版 + W2 任务书</td><td>项目经理</td><td class="c"><i class="b a">BUS</i></td></tr>
+      <tr><td class="id">10-26 一<br>W2 D1</td><td class="id">P1-01/02</td><td>技术决策会：<b>ADR-001 主 MQ</b>、<b>ADR-002 数据访问</b>、ADR-004 状态枚举；同步领域模型与状态机草案</td><td>ADR-001/002/004 + 状态机表 v1</td><td>架构负责人</td><td class="c"><i class="b a">ARC</i></td></tr>
+      <tr><td class="id">10-27 二<br>W2 D2</td><td class="id">P1-03/04</td><td>幂等键域与三层 attempt 定义；<b>ADR-006 RLS 角色 / TenantContext</b>；威胁模型 v1</td><td>ADR-003/006/007 + P1-D07</td><td>后端 + DBA</td><td class="c"><i class="b a">ARC</i></td></tr>
+      <tr><td class="id">10-28 三<br>W2 D3</td><td class="id">P1-05/06</td><td><span style="color:var(--risk)"><b>最高风险日</b></span>：Outbox/MQ 原子性 PoC + Worker 强杀/接管/fencing PoC（含故障注入脚本）</td><td>PoC 代码 + 故障注入记录</td><td>后端 + 平台</td><td class="c"><i class="b a">ARC</i></td></tr>
+      <tr><td class="id">10-29 四<br>W2 D4</td><td class="id">P1-07/08</td><td>ModelGateway + 只读 Tool SPI PoC（含契约测试、日志秘密扫描）；SSE 续传与越权拒绝 PoC</td><td>PoC + 契约测试报告</td><td>AI 接入 + API</td><td class="c"><i class="b a">AI</i></td></tr>
+      <tr><td class="id">10-29 四</td><td class="id">P1-09b</td><td>工程基线补齐：镜像构建、密钥注入、静态检查、依赖扫描；<b>验证「新成员按文档可启动」</b></td><td>P1-D10 开发规范 + 可复现环境</td><td>SRE</td><td class="c"><i class="b a">SRE</i></td></tr>
+      <tr style="background:#fffdf5"><td class="id">10-30 五<br>W2 D5</td><td class="id">P1-10</td><td><b>⛔ M1 门禁评审</b>：附录 E 七项 PoC 数据核对；P1-D01～D11 交付审查；未通过项定修复任务 + 复测日期</td><td>P0/P1 阶段验收签字表 + PoC 验证报告</td><td>项目经理</td><td class="c"><i class="b a">ARC</i></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout">
+    <h4>W1 期间必须并行保持的会议机制（P0-D06 §6）</h4>
+    <ul>
+      <li><b>项目站会</b> 每日 10–15 分钟：昨日进展 / 今日计划 / 阻塞——W1 阻塞密度最高，不可省略</li>
+      <li><b>需求/范围评审</b>：P0 期间每日短会（对应 P0-C4 / P0-C5）</li>
+      <li><b>风险/依赖评审</b>：W1 D4 集中开一次，之后每周一次</li>
+      <li><b>技术/ADR 评审</b>：W2 每日按需（ADR 冻结窗口仅 5 天）</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section>
+  <h2><span class="n">5</span>计划调整规则与升级机制</h2>
+  <div class="split">
+    <div>
+      <h3 class="blk">5.1 预测与纠偏（P0-D06 §9）</h3>
+      <table>
+        <tbody>
+          <tr><td style="width:118px"><b>每周</b></td><td>基于实际吞吐与依赖状态更新预测完成日期（周五站会后发布）</td></tr>
+          <tr><td><b>延迟 &gt; 2 工作日</b></td><td>关键路径任务延迟超 2 个工作日 → PM 组织影响评估，三选一：范围调整 / 资源调整 / 里程碑重排</td></tr>
+          <tr><td><b>硬性禁止</b></td><td>不通过减少安全/一致性验收项「追赶进度」</td></tr>
+          <tr><td><b>门禁未过</b></td><td>记 <code>Blocked</code> 或 <code>Accepted with conditions</code>，须写明批准人、限制范围、复审日期</td></tr>
+          <tr><td><b>1 个工作日</b></td><td>发现重大阻塞后 1 个工作日内登记（P0-D01 §5）；超 SLA 未解则升级至项目负责人</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <h3 class="blk">5.2 立即升级 / 阻断条件（P0-D05 §5）</h3>
+      <div class="warnbox" style="margin-top:4px">
+        <ul style="margin-left:0">
+          <li>高风险<b>无 owner 或无到期日</b> → 升级为项目阻塞</li>
+          <li>外部依赖预计延误<b>超 2 个工作日</b> → PM 提出替代路径与排期影响</li>
+          <li>发生<b>跨租户泄漏 / 秘密泄漏 / 未授权副作用 / UNKNOWN 盲目重放</b> → <b>立即阻断相关路径</b>并升级安全 + 技术负责人</li>
+          <li>风险接受必须记录<b>接受人、范围、补偿控制、到期日、复审条件</b>，不得永久豁免</li>
+          <li>Sev-0（跨租户泄露、未授权副作用、UNKNOWN 盲重放、预算/审批可绕过）<b>禁止进入生产</b></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="blk">5.3 任务级 DoR / DoD 门禁（P0-D06 §7 / §8，沿用不修改）</h3>
+  <div class="split">
+    <div>
+      <div class="callout" style="margin-top:0">
+        <h4>Definition of Ready（开工前必须满足）</h4>
+        <ol>
+          <li>有任务 ID、目标、范围和<b>唯一 DRI</b></li>
+          <li>有可验证验收条件与关联需求 ID</li>
+          <li>前置依赖、测试数据、权限和环境已准备或有明确计划</li>
+          <li>API/DDL/状态机/安全影响已识别；涉未决架构决策先建 ADR/验证任务</li>
+          <li>估算和目标 Sprint 明确</li>
+        </ol>
+      </div>
+    </div>
+    <div>
+      <div class="callout" style="margin-top:0">
+        <h4>Definition of Done（完成需同时满足）</h4>
+        <ol>
+          <li>代码合并且经过<b>非作者</b> Review</li>
+          <li>单元/集成/契约/安全测试通过，<b>证据可定位</b></li>
+          <li>API、DDL、状态机、配置、运维文档同步更新</li>
+          <li>日志、指标、Trace、审计与错误分类满足需求</li>
+          <li>数据迁移已在目标版本验证，失败处理/前向修复明确</li>
+          <li>涉副作用时<b>幂等、超时、重试、UNKNOWN/对账</b>语义有测试</li>
+          <li>涉权限时含<b>授权成功 + 越权拒绝</b>测试</li>
+          <li>未完成项、风险、临时开关、回滚方式被明确记录</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section>
+  <h2><span class="n">6</span>需决策事项与本计划边界</h2>
+  <div class="split">
+    <div>
+      <h3 class="blk">6.1 需项目发起人立即决策（4 项）</h3>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th style="width:52px">编号</th><th>决策事项</th><th style="width:96px">决策人</th><th style="width:78px" class="c">期限</th></tr></thead>
+        <tbody>
+          <tr><td class="id">DEC-1</td><td>W1 D1 是否可行——十个角色能否在 10-19 具名？若不能，整体基线顺延</td><td>业务发起人</td><td class="c">10-19</td></tr>
+          <tr><td class="id">DEC-2</td><td>首个业务场景选哪个？是否有可安全测试的只读工具或沙箱（A-005）？</td><td>BUS + PO</td><td class="c">10-20</td></tr>
+          <tr><td class="id">DEC-3</td><td>IAM / 模型服务 / PostgreSQL 由谁提供、何时可用？延误是否触发降级方案</td><td>发起人 + PM</td><td class="c">10-21</td></tr>
+          <tr><td class="id">DEC-4</td><td>技术基线：Java 21 + Spring Boot 3.x（A-001）是否被组织运行时兼容矩阵接受</td><td>技术负责人</td><td class="c">10-21</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+    <div>
+      <h3 class="blk">6.2 本计划的编制边界（沿用 P0 文档包声明）</h3>
+      <ul style="font-size:13.5px;color:var(--ink-2);margin-left:18px;line-height:1.8">
+        <li>日历日期为<b>假设基线</b>，W1 D1 = 2026-10-19；须在 P0-C9（10-23）转为承诺基线。</li>
+        <li>未假设具体行业、客户、业务系统、模型供应商、MQ 产品、团队人数或正式 SLA。</li>
+        <li>P0 结束后须<b>按团队实际投入和依赖状态重估 18 周</b>（P0-D06 计划基线字段原文要求）。</li>
+        <li>本计划不替代 P0-D01～D06 的批准记录；六份文档仍为 <code>v0.1-draft</code>。</li>
+        <li>PoC 数值仅证明被测条件下行为，<b>不外推为生产容量或 SLA 承诺</b>（v3.1 附录 E）。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Java SaaS Agent 平台｜基线收口与阶段推进执行计划 v0.1-draft<br>
+  依据 P0-D06《初始项目计划与 RACI》v0.1-draft + v3.1 实施计划与架构方案 v3.1 编制 · 2026-10-17<br>
+  角色具名后需同步更新 P0-D01 §5、P0-D05 §3、P0-D06 §5 三处，并冻结为 v1.0-baseline
+</footer>
+
+</div>
+</body>
+</html>
