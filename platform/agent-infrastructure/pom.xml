@@ -27,6 +27,16 @@
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-application</artifactId>
     </dependency>
+    <!--
+      D-001 IAM：JWT 载荷解析。
+      ⚠️ 只用 Map/List 反序列化，不绑定到具体 POJO —— 令牌内容是攻击者可控的，
+      绑定多态类型会带来反序列化 gadget 风险。
+      Jackson 3（tools.jackson），随 Spring Boot 4.1 基线。
+    -->
+    <dependency>
+      <groupId>tools.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-jdbc</artifactId>
