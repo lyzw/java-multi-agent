@@ -116,6 +116,45 @@ class ApplicationConfigTest {
     }
 
     @Test
+    @DisplayName("DEC-10 零保留配置：三家供应商均已确认，且有效期不得为 0")
+    void zeroRetentionProvidersConfirmed() {
+        Map<String, String> props = load();
+
+        String confirmed = props.get("agent.compliance.zero-retention.confirmed-providers");
+        assertThat(confirmed)
+                .as("已取得书面合同承诺的供应商清单缺失或被清空")
+                .isNotNull()
+                .contains("deepseek")
+                .contains("minimax")
+                .contains("workbuddy");
+
+        // 有效期为 0 或缺失会导致条款立即过期 → 真实数据被全量拒绝（业务不可用）
+        String months = props.get("agent.compliance.zero-retention.validity-months");
+        assertThat(months)
+                .as("条款有效期必须为正，否则闸门立即失效")
+                .isNotNull();
+        assertThat(Integer.parseInt(months))
+                .as("有效期须为正数")
+                .isPositive();
+
+        assertThat(Integer.parseInt(props.get("agent.compliance.zero-retention.expiry-warn-days")))
+                .as("临期告警天数须为正，否则条款静默过期")
+                .isPositive();
+    }
+
+    @Test
+    @DisplayName("⚠️ 零保留：确认供应商清单不得为空（清空即等于全员拒绝）")
+    void confirmedProvidersNotEmptied() {
+        Map<String, String> props = load();
+        String confirmed = props.get("agent.compliance.zero-retention.confirmed-providers");
+        assertThat(confirmed)
+                .as("⚠️ 清空清单会使所有供应商落入 fail-closed，真实数据全部被拒")
+                .isNotBlank();
+        assertThat(confirmed.trim().split(",")).allSatisfy(p ->
+                assertThat(p.trim()).as("清单中存在空项").isNotEmpty());
+    }
+
+    @Test
     @DisplayName("口令必须由环境变量注入，不得硬编码明文")
     void noPlaintextSecrets() {
         Map<String, String> props = load();

@@ -18,13 +18,16 @@ public class ZeroRetentionViolationException extends RuntimeException {
 
     private final transient ZeroRetentionStatus.State state;
     private final transient DataClassification classification;
+    private final transient String providerId;
 
     public ZeroRetentionViolationException(String reason,
                                           ZeroRetentionStatus.State state,
-                                          DataClassification classification) {
+                                          DataClassification classification,
+                                          String providerId) {
         super(reason);
         this.state = state;
         this.classification = classification;
+        this.providerId = providerId;
     }
 
     /** 判定所依据的确认状态。 */
@@ -35,5 +38,14 @@ public class ZeroRetentionViolationException extends RuntimeException {
     /** 被拦截的数据分级。 */
     public DataClassification classification() {
         return classification;
+    }
+
+    /**
+     * 被拦截时使用的供应商标识。
+     *
+     * <p>为 null 表示违规发生在内容检测环节而非供应商判定环节。
+     */
+    public String providerId() {
+        return providerId;
     }
 }
