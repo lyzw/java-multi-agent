@@ -138,12 +138,19 @@ class PlatformSecurityE2ETest {
      * <p>⚠️ <b>用真实密码哈希</b>：验证「口令 → PBKDF2 → 登录」整条链路，
      * 而非让替身直接放行。若此处写死「永远成功」，
      * 认证链的失败会被全部掩盖。
+     *
+     * <p>⛔⛔ <b>清理只针对本测试创建的账号，绝不按租户清空</b>。
+     * 原实现是 {@code DELETE FROM principal WHERE tenant_id = ?}，
+     * 会把该租户下**所有**账号删光 —— 包括开发者手工建的本地账号。
+     * 后果实测出现过两次：本地管理员账号跑一次测试就没了，
+     * 且现象是「登录失败」，排查方向完全错误。
+     * 教训同 P3-D4「新增写数据的集成测试必须自带清理」，
+     * 但这里更进一步：<b>清理的范围必须与创建的范围一致</b>。
      */
     @BeforeEach
     void seedAccount() {
         JdbcTemplate admin = adminJdbc();
-        admin.update("DELETE FROM principal_role WHERE tenant_id = ?::uuid", tenant());
-        admin.update("DELETE FROM principal WHERE tenant_id = ?::uuid", tenant());
+        cleanUpOwnAccount(admin);
 
         String principalId = java.util.UUID.randomUUID().toString();
         admin.update(
@@ -156,6 +163,20 @@ class PlatformSecurityE2ETest {
                 "INSERT INTO principal_role (tenant_id, principal_id, role) "
                         + "VALUES (?::uuid, ?::uuid, 'STUDENT')",
                 tenant(), principalId);
+    }
+
+    /**
+     * 只删除本测试创建的账号。
+     *
+     * <p>⛔ 用 {@code login_name} 精确定位，<b>不用 tenant_id</b> ——
+     * 后者会连带删除同租户下他人的账号。
+     */
+    private void cleanUpOwnAccount(JdbcTemplate admin) {
+        admin.update(
+                "DELETE FROM principal_role WHERE principal_id IN "
+                        + "(SELECT principal_id FROM principal WHERE login_name = ?)",
+                VALID_LOGIN);
+        admin.update("DELETE FROM principal WHERE login_name = ?", VALID_LOGIN);
     }
 
     // ════════════════════════════════════════════════════════════
