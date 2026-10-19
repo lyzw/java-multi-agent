@@ -13,6 +13,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import cn.studykid.multiagent.api.run.RunController;
+import cn.studykid.multiagent.api.run.RunEventStreamer;
 import cn.studykid.multiagent.api.security.JwtCurrentPrincipal;
 import cn.studykid.multiagent.application.run.RunCreationService;
 import cn.studykid.multiagent.core.compliance.ModelProviders;
@@ -178,6 +179,29 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.AuditPort auditPort) {
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcRunClaimRepository(
                 dataSource, auditPort);
+    }
+
+    /**
+     * SSE 长连接推送器（P3-D10 / FR-014 部分）。
+     *
+     * <p>⚠️ 轮询 500ms / 最大存活 30 分钟：最大存活是<b>防连接泄漏的兜底</b>——
+     * 即便 Run 永不终结（如 Worker 全挂），连接也不会无限占用资源。
+     */
+    @Bean
+    public RunEventStreamer runEventStreamer() {
+        return new RunEventStreamer(500L, 30 * 60 * 1000L);
+    }
+
+    /**
+     * 指标注册表（P3-D10 / FR-017）。
+     *
+     * <p>⚠️ 刻意<b>不引 Micrometer</b>：引入后「指标不含高基数标签」会退化为
+     * 文档约定。本类在<b>运行期</b>强制标签白名单——加错标签时**第一次调用就抛异常**，
+     * 而非上线后由时序库崩溃来告知。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.observability.AgentMetrics agentMetrics() {
+        return new cn.studykid.multiagent.application.observability.AgentMetrics();
     }
 
     /**

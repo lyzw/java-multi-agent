@@ -16,10 +16,12 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.core.run.RunState;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.persistence.RunEventQueryPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 
@@ -86,17 +88,90 @@ public class RunEventController {
         return v instanceof String || v instanceof Number || v instanceof Boolean;
     }
 
+    /**
+     * 终态集合（供 SSE 长连接推送器复用）。
+     *
+     * <p>⚠️ <b>取自 {@link RunState} 而非硬编码</b>——P2-D05 初稿曾漏
+     * {@code TIMED_OUT}，漏判会导致连接永不关闭（P3-D02 已记录该教训）。
+     */
+    static java.util.Set<String> terminalStates() {
+        return TERMINAL_STATES;
+    }
+
+    /**
+     * 载荷字段是否在白名单内（P3-D10 §5.2 S-6）。
+     *
+     * <p>⚠️ <b>fail-closed</b>：未列入即丢弃。新增字段若忘记加白名单，
+     * 默认<b>不会</b>流出——这与「黑名单」的默认放行正好相反。
+     * P2-D05 的实现期教训：黑名单在此场景不可能完备，
+     * {@code studentName}/{@code idCard} 都是字符串标量会原样透出。
+     */
+    public boolean isPayloadFieldAllowed(@NonNull String field) {
+        return ALLOWED_PAYLOAD_FIELDS.contains(field);
+    }
+
     private final RunEventQueryPort eventQuery;
     private final AuthorizationService authorization;
     private final cn.studykid.multiagent.api.run.RunController.CurrentPrincipal currentPrincipal;
 
+    /**
+     * 限流器（P3-D10 / D-4，收口 P2-D05 §6 L7）。
+     *
+     * <p>⚠️ 长连接比短请求更危险——它<b>长期占用</b>服务端资源。
+     * 未装配时用「永不拒绝」桩，保持既有行为。
+     */
+    private final RateLimitPort rateLimiter;
+
     public RunEventController(@NonNull RunEventQueryPort eventQuery,
                               @NonNull AuthorizationService authorization,
                               cn.studykid.multiagent.api.run.RunController.CurrentPrincipal currentPrincipal) {
+        this(eventQuery, authorization, currentPrincipal, NEVER_LIMIT,
+                new RunEventStreamer(500L, 30 * 60 * 1000L));
+    }
+
+    /** 「限流已装配、推送器用默认参数」的便捷构造器（单测用）。 */
+    public RunEventController(@NonNull RunEventQueryPort eventQuery,
+                              @NonNull AuthorizationService authorization,
+                              cn.studykid.multiagent.api.run.RunController.CurrentPrincipal currentPrincipal,
+                              @NonNull RateLimitPort rateLimiter) {
+        this(eventQuery, authorization, currentPrincipal, rateLimiter,
+                new RunEventStreamer(500L, 30 * 60 * 1000L));
+    }
+
+    /**
+     * ⚠️ 本类被组件扫描注册且有<b>两个</b>构造器时，Spring 无法选择
+     * → {@code No default constructor found} → 上下文启动失败。
+     * 这是 F-6 的<b>第三次</b>发生（D7 {@code JdbcRunClaimRepository}、
+     * D8 {@code RunController}、D10 {@code RunEventController}）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public RunEventController(@NonNull RunEventQueryPort eventQuery,
+                              @NonNull AuthorizationService authorization,
+                              cn.studykid.multiagent.api.run.RunController.CurrentPrincipal currentPrincipal,
+                              @NonNull RateLimitPort rateLimiter,
+                              @NonNull RunEventStreamer streamer) {
         this.eventQuery = eventQuery;
         this.authorization = authorization;
         this.currentPrincipal = currentPrincipal;
+        this.rateLimiter = rateLimiter;
+        this.streamer = streamer;
     }
+
+    /** SSE 长连接推送器（P3-D10 / FR-014 部分）。 */
+    private final RunEventStreamer streamer;
+
+    /** 默认限流桩：永不拒绝（限流未装配时保持既有行为）。 */
+    private static final RateLimitPort NEVER_LIMIT = new RateLimitPort() {
+        @Override
+        public Decision check(String tenantId, String bucketKey) {
+            return Decision.ALLOWED;
+        }
+
+        @Override
+        public long currentCount(String tenantId, String bucketKey) {
+            return 0L;
+        }
+    };
 
     /**
      * 读取 Run 事件（支持断线续传）。
@@ -119,6 +194,16 @@ public class RunEventController {
         // 2) 授权（红线 9）—— 每次请求都重新校验，不信任上次订阅
         authorization.requireAuthorized(
                 context, AuthorizationService.Actions.EVENT_SUBSCRIBE, runId);
+
+        // 2b) ⚠️ 建连限流（P3-D10 D-4）：长连接长期占用资源，比短请求更危险。
+        //     收口 P2-D05 §6 L7「SSE 无每租户连接数限流」。
+        var limit = rateLimiter.check(context.tenantId(), RateLimitPort.Buckets.SSE_CONNECT);
+        if (limit != RateLimitPort.Decision.ALLOWED) {
+            log.warn("SSE 建连被限流拒绝: tenant={}, runId={}, decision={}",
+                    context.tenantId(), runId, limit);
+            throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS, "事件流连接过于频繁");
+        }
 
         // 3) 游标解析：非法游标必须显式拒绝
         long cursor = parseCursor(lastEventId);
