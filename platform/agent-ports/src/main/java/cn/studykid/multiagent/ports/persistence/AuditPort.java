@@ -77,6 +77,24 @@ public interface AuditPort {
         public static final String APPROVAL_CONSUME = "APPROVAL_CONSUME";
         public static final String RUN_CANCEL = "RUN_CANCEL";
         public static final String PROFILE_READ = "PROFILE_READ";
+
+        /**
+         * 读取审计记录（P4-D13 / G10）。
+         *
+         * <p>⚠️ <b>与授权动作 {@code audit:read} 同名但不是同一概念</b>：
+         * 这里是<b>审计动作字面量</b>（写入 {@code audit_record.action} 列的值），
+         * 授权那边是 {@code AuthorizationService.Actions.AUDIT_READ}。
+         * 两者碰巧同名，但一个是「被记录的行为」，一个是「检查权限的动作」。
+         */
+        public static final String AUDIT_READ = "AUDIT_READ";
+
+        /**
+         * 人工处置 UNKNOWN 操作（P4-D13 / G9）。
+         *
+         * <p>⚠️ 与 {@link #APPROVAL_REVOKE} 不同：处置<b>不是撤销</b>，
+         * 它把一个「副作用未知」的操作归档为终态，不回退任何状态。
+         */
+        public static final String UNKNOWN_DISPOSE = "UNKNOWN_DISPOSE";
     }
 
     /** 审计视图（查询用）。 */

@@ -139,7 +139,7 @@ public class JdbcUnknownOperationRepository implements UnknownOperationPort {
                 update(conn, tenantId, operationId, disposition, operatorId, note, now);
                 conn.commit();
 
-                audit.recordRequired(tenantId, operatorId, "UNKNOWN_DISPOSE",
+                audit.recordRequired(tenantId, operatorId, AuditPort.Actions.UNKNOWN_DISPOSE,
                         "tool_operation", operationId,
                         java.util.Map.of("disposition", disposition.name(),
                                 "runId", current.runId(),
