@@ -58,6 +58,39 @@
         <executions>
           <execution>
             <goals><goal>repackage</goal></goals>
+            <configuration>
+              <!--
+                ⚠️⚠️ F-15（P4-D09 修复实测发现）：必须给 repackage 挂 classifier。
+
+                现象：`platform-bootstrap` 下的**每一个** `*IT` 集成测试类
+                在 `mvn verify` 中都必然报
+                  「Failed to find merged annotation for @BootstrapWith」
+                而 surefire（`mvn test`）跑同一个类却完全正常。
+
+                根因（探针实测 classpath 构成）：
+                  surefire : target/test-classes, **target/classes**, ...
+                  failsafe : target/test-classes, **target/platform-bootstrap-x.jar**, ...
+                spring-boot-maven-plugin:repackage 在 package 阶段把项目主构件
+                替换成了 Spring Boot **fat jar**，其类位于 `BOOT-INF/classes/`
+                那是 Spring Boot 自定义类加载器的布局，
+                **普通 classloader 读不到**。于是 failsafe 侧
+                `Class.forName("...PlatformApplication")` 抛 ClassNotFoundException
+                → Spring 内省 `@SpringBootTest` 的 `classes` 属性时
+                抛 TypeNotPresentException → 元注解 @BootstrapWith 无法内省
+                → 「Failed to find merged annotation」。
+
+                危害等级：高。它使本模块的集成测试**整体失效**，
+                而构建仍报 BUILD FAILURE 之外的其它模块 SUCCESS，
+                极易被误判为「测试写得不对」而改测试代码。
+
+                修法：加 <classifier>exec</classifier>，
+                使 repackage 产出 `platform-bootstrap-0.1.0-SNAPSHOT-exec.jar`（可执行胖包），
+                主构件保持 thin jar（类在根目录，可被普通 classloader 读取）。
+                这是 Spring Boot 官方文档给出的标准做法。
+                部署时使用带 `exec` 后缀的包，见 docs/本地启动指南.md。
+              -->
+              <classifier>exec</classifier>
+            </configuration>
           </execution>
         </executions>
       </plugin>

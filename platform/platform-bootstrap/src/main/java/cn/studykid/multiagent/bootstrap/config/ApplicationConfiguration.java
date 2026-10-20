@@ -4,10 +4,14 @@ import javax.sql.DataSource;
 
 import java.sql.Connection;
 import java.time.Clock;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.jspecify.annotations.NonNull;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.env.Environment;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -290,6 +294,128 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.AuditPort auditPort) {
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcApprovalRepository(
                 dataSource, auditPort);
+    }
+
+    // ── 工具注册（P4-D08 R-1 修复）────────────────────────────────────
+    //
+    // ⚠️⚠️ **本块存在的唯一理由**：修复一处**断链**——
+    // GetStudentProfileTool / RecordWeaknessTool / StudentDataRepository
+    // 三个类**均无 Spring 注解**，且全仓非测试代码**零处**实例化它们，
+    // 于是 WorkerExecutionConfig 注入的 `List<ToolHandler>` 在生产中**恒为空**。
+    //
+    // 后果：ToolInvocationGate.findHandler 恒返回 null → 记「未登记的工具」→
+    // **工具从不执行** → `weakness_record` 表在生产中**永远为空**。
+    // 而系统表面完全正常：Run 仍 SUCCEEDED、模型仍返回文本、全部测试仍全绿
+    // （测试直接 `new` 这些类，验证的是「被直接调用时行为正确」，
+    //   没有任何一个验证「它是否真被调用」——这正是 P4-D01 确立的方法论）。
+    //
+    // ⚠️ **沿用 P4-D07 装配惯例**：显式 `@Bean` 而非 `@Service`/`@Component`
+    // （避免测试切片扫描冲突）。
+    //
+    // ⚠️ **两个工具都声明为 ToolHandler 接口类型**：
+    // 闸门按接口收集，新增工具只需再加一个 @Bean，不必改闸门装配
+    // （符合「闸门是唯一入口」ADR-011 §3.3）。
+    //
+    // ⚠️ **DataSource 用主池（非 adminPool）**：
+    // StudentDataRepository 走 TenantSessionBinder（关自动提交 + 事务内绑定租户），
+    // 必须在**应用角色**连接上执行，RLS 策略才生效。
+
+    /**
+     * 画像与薄弱点仓储（P2-D04 / P4-D08 R-1）。
+     *
+     * <p>⚠️ 走 {@code TenantSessionBinder}：关自动提交 + 事务内绑定租户，
+     * 少任何一步 RLS 绑定即失效，表现为「查询恒返回 0 行」。
+     */
+    @Bean
+    public cn.studykid.multiagent.infrastructure.tool.StudentDataRepository
+            studentDataRepository(DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.tool.StudentDataRepository(dataSource);
+    }
+
+    /**
+     * {@code get_student_profile} 工具（只读，READ 风险等级）。
+     *
+     * <p>⚠️ 声明为 {@link cn.studykid.multiagent.ports.tool.ToolHandler} 接口类型，
+     * 由 Spring 收集进 {@code List<ToolHandler>} 注入闸门。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.tool.ToolHandler getStudentProfileTool(
+            cn.studykid.multiagent.infrastructure.tool.StudentDataRepository repository) {
+        return new cn.studykid.multiagent.infrastructure.tool.GetStudentProfileTool(repository);
+    }
+
+    /**
+     * {@code record_weakness} 工具（首期唯一有副作用工具，WRITE_PROFILE 风险等级）。
+     *
+     * <p>⚠️ 同上：声明为接口类型。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.tool.ToolHandler recordWeaknessTool(
+            cn.studykid.multiagent.infrastructure.tool.StudentDataRepository repository) {
+        return new cn.studykid.multiagent.infrastructure.tool.RecordWeaknessTool(repository);
+    }
+
+    /**
+     * 平台级**映射型**配置（C8 接线 / P4-D11）。
+     *
+     * <p>⚠️ <b>fail-closed</b>：映射缺失 → <b>拒绝启动</b>。
+     * 退回默认值等于「悄悄用了一个没人审过的风险映射」。
+     */
+    @Bean
+    public PlatformConfigMaps platformConfigMaps(
+            @NonNull Environment environment) {
+        Map<String, cn.studykid.multiagent.core.config.ToolRiskLevel> riskMap =
+                org.springframework.boot.context.properties.bind.Binder.get(environment)
+                        .bind("agent.tool.risk-level-map",
+                                org.springframework.boot.context.properties.bind.Bindable
+                                        .mapOf(String.class,
+                                                cn.studykid.multiagent.core.config.ToolRiskLevel.class))
+                        .orElseThrow(() -> new IllegalStateException(
+                                "agent.tool.risk-level-map 缺失或非法，拒绝启动（fail-closed）"));
+        Map<cn.studykid.multiagent.core.config.ToolRiskLevel,
+                cn.studykid.multiagent.core.config.ApprovalRequirement> approvalMap =
+                org.springframework.boot.context.properties.bind.Binder.get(environment)
+                        .bind("agent.approval.required-by-risk",
+                                org.springframework.boot.context.properties.bind.Bindable
+                                        .mapOf(cn.studykid.multiagent.core.config.ToolRiskLevel.class,
+                                                cn.studykid.multiagent.core.config.ApprovalRequirement.class))
+                        .orElseThrow(() -> new IllegalStateException(
+                                "agent.approval.required-by-risk 缺失或非法，拒绝启动（fail-closed）"));
+        return new PlatformConfigMaps(riskMap, approvalMap);
+    }
+
+    /**
+     * ⛔ 工具风险级别**一致性守卫**（C8 接线 / P4-D11 D11-3）。
+     *
+     * <p>⚠️⚠️ <b>为什么必须有这道守卫</b>：
+     * 工具的**风险级别由代码决定**（{@code ToolHandler.riskLevel()}）——
+     * 一个工具有没有副作用是<b>代码事实</b>，不是运维能「配置」出来的东西。
+     * 而 yml 的 {@code agent.tool.risk-level-map} 是同一事实的<b>镜像声明</b>。
+     *
+     * <p><b>在接线前，这个镜像是完全惰性的</b>：
+     * 改 yml 把 {@code record_weakness} 写成 {@code READ}，
+     * 工具**仍然**按代码里的 {@code WRITE_PROFILE} 判定 ——
+     * 声明与实际分叉，而<b>系统表面完全正常</b>。
+     * （与 P4-D08 的 R-1「工具未注册为 Bean」、RAG-D09 的 R-D1「挂接方向反了」同构。）
+     *
+     * <p>⚠️ <b>更危险的是「看起来能放松」</b>：若运维把
+     * {@code record_weakness} 改成 {@code READ}，
+     * 按 {@code required-by-risk} 映射它就只需 {@code NOT_REQUIRED} 审批
+     * → <b>有副作用的工具绕过审批</b>。虽然当前实现取严（代码权威），
+     * 但这依赖「实现恰好更严」这一偶然，<b>不是保证</b>。
+     *
+     * <p>⚠️ <b>fail-closed</b>：二者不一致 → <b>拒绝启动</b>并打印差异明细。
+     * 绝不「以代码为准、忽略 yml」——那等于让声明继续惰性，
+     * 管理员仍然会以为改了有用。
+     *
+     * @param handlers 已注册的工具（{@code List<ToolHandler>}）
+     * @param declared yml 声明的 工具→风险级别 映射
+     */
+    @Bean
+    public ToolRiskLevelConsistencyGuard toolRiskLevelConsistencyGuard(
+            @NonNull List<cn.studykid.multiagent.ports.tool.ToolHandler> handlers,
+            @NonNull PlatformConfigMaps configMaps) {
+        return new ToolRiskLevelConsistencyGuard(handlers, configMaps.toolRiskLevelMap());
     }
 
     /**

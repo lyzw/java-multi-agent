@@ -149,6 +149,84 @@ class IdempotencyProtocolTest {
         }
     }
 
+    // ── P4-D08 R-2：幂等键必须含 run 维度 ──────────────────────────
+
+    @Nested
+    @DisplayName("P4-D08 R-2 幂等键含 run 维度")
+    class RunDimensionPresent {
+
+        @Test
+        @DisplayName("⚠️⚠️ record_weakness 键含真实 runId（修复前是硬编码占位）")
+        void recordWeaknessCarriesRealRunId() {
+            IdempotencyKey k = IdempotencyKey.forRecordWeakness(
+                    "stu-1", "run-abc123", "一元二次方程");
+            assertThat(k.keyValue())
+                    .as("⚠️⚠️ 键必须含真实 runId——"
+                            + "tool_operation 的 UNIQUE(tenant_id, idempotency_key) 是**租户级**，"
+                            + "缺 run 维度会让跨 Run 撞键并复用旧 operation")
+                    .isEqualTo("stu-1/run-abc123/一元二次方程");
+            assertThat(k.keyValue())
+                    .as("⚠️⚠️ 绝不能出现占位符 runId（修复前为 \"pending-run\"）")
+                    .doesNotContain("pending-run");
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 跨 Run 不撞键（同 student + 同 knowledgePoint）")
+        void differentRunsProduceDifferentKeys() {
+            IdempotencyKey runA = IdempotencyKey.forRecordWeakness(
+                    "stu-1", "run-a", "一元二次方程");
+            IdempotencyKey runB = IdempotencyKey.forRecordWeakness(
+                    "stu-1", "run-b", "一元二次方程");
+            assertThat(runA.composite())
+                    .as("⚠️⚠️ 跨 Run 撞键 = 新 Run 的调用被记到旧 Run 的 operation 上"
+                            + " = 副作用语义破裂 = Sev-0")
+                    .isNotEqualTo(runB.composite());
+        }
+
+        @Test
+        @DisplayName("✅ 工具调用键 = runId + toolName + callId，命名空间 tool.invoke")
+        void toolInvokeKeyShape() {
+            IdempotencyKey k = IdempotencyKey.forToolInvoke(
+                    "run-1", "get_student_profile", "call-7");
+            assertThat(k.namespace())
+                    .as("⚠️ 工具调用不得复用 run.create 命名空间"
+                            + "（否则日志与排障无法区分来源，且违背 ADR-003 隔离意图）")
+                    .isEqualTo("tool.invoke");
+            assertThat(k.keyValue()).isEqualTo("run-1/get_student_profile/call-7");
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 工具调用键跨 Run 不撞键（同工具名 + 同 callId）")
+        void toolInvokeDoesNotCollideAcrossRuns() {
+            IdempotencyKey runA = IdempotencyKey.forToolInvoke("run-a", "t", "call-1");
+            IdempotencyKey runB = IdempotencyKey.forToolInvoke("run-b", "t", "call-1");
+            assertThat(runA.composite())
+                    .as("⚠️⚠️ 同工具名 + 同 callId 跨 Run 必须产生不同键")
+                    .isNotEqualTo(runB.composite());
+        }
+
+        @Test
+        @DisplayName("⚠️ 工具调用键与 Run 创建键不同命名空间")
+        void toolInvokeNamespaceIsolated() {
+            IdempotencyKey runKey = IdempotencyKey.forRunCreate("shared");
+            IdempotencyKey toolKey = IdempotencyKey.forToolInvoke("shared", "shared", "shared");
+            assertThat(runKey.composite())
+                    .as("⚠️ 跨用途撞值会导致错误复用")
+                    .isNotEqualTo(toolKey.composite());
+        }
+
+        @Test
+        @DisplayName("⚠️ 组成部分含分隔符被拒（同 record_weakness 规则）")
+        void toolInvokeRejectsSeparator() {
+            assertThatThrownBy(() -> IdempotencyKey.forToolInvoke("run/1", "t", "c"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("runId");
+            assertThatThrownBy(() -> IdempotencyKey.forToolInvoke("run-1", "t", ""))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("callId");
+        }
+    }
+
     @Nested
     @DisplayName("⚠️ 三态判定不可混淆")
     class DecisionSemantics {

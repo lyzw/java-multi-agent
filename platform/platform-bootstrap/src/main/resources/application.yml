@@ -149,11 +149,15 @@ agent:
         delivery-limit: "3"
         dead-letter-exchange: agent.run.dlx
         dead-letter-routing-key: agent.run.dead
-      reconcile:
-        name: agent.run.reconcile
-        delivery-limit: "3"
-        dead-letter-exchange: agent.run.dlx
-        dead-letter-routing-key: agent.run.dead
+      # ⚠️⚠️ **原 reconcile 队列声明已删除**（P4-D11 D11-4）：
+      #   它在 ADR-001 §4 的拓扑图里画着，但**代码中从未落地**——
+      #   既无 {@code @Bean} 声明该队列，也无任何发布者/消费者。
+      #   UNKNOWN 对账走的是 **DB 侧**（tool_operation 状态 + ToolOperationReconciliationService），
+      #   不经 MQ。
+      #   保留一条「看起来存在、实际不存在」的声明，等于给运维一个「系统会用它」的错觉
+      #   ——这与「工具未注册为 Bean」「声明未接线」是同一族失败形态。
+      #   若将来确需 MQ 对账通道，须**同时**落地队列 + 发布者 + 消费者，
+      #   并在此处恢复声明。
       dead:
         name: agent.run.dead
         # 死信队列自身不再挂 DLX，避免死信循环

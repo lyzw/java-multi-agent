@@ -80,10 +80,19 @@ public interface AuthorizationService {
         public static final String AUDIT_READ = "audit:read";
         /** 管理 Agent 配置。 */
         public static final String AGENT_MANAGE = "agent:manage";
+        /**
+         * 读取学习画像（P4-D09 / G6）。
+         *
+         * <p>⚠️ <b>刻意不复用 {@link #RUN_READ}</b>：画像是<b>学生维度</b>数据，
+         * Run 是<b>执行维度</b>数据，二者授权范围不同
+         * （家长/教师可读画像，未必可读所有 Run）。为省事复用会让授权范围失真。
+         */
+        public static final String PROFILE_READ = "profile:read";
 
         private static final Set<String> ALL = Set.of(
                 RUN_CREATE, RUN_READ, RUN_CANCEL, EVENT_SUBSCRIBE, RESULT_READ,
-                TOOL_INVOKE, APPROVAL_CONSUME, UNKNOWN_DISPOSE, AUDIT_READ, AGENT_MANAGE);
+                TOOL_INVOKE, APPROVAL_CONSUME, UNKNOWN_DISPOSE, AUDIT_READ, AGENT_MANAGE,
+                PROFILE_READ);
 
         /** @return 全部受控动作，供启动期自检使用。 */
         public static @NonNull Set<String> all() {

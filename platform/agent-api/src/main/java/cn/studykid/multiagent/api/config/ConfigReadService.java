@@ -104,33 +104,49 @@ public class ConfigReadService {
             new Spec("数据保留与删除", "agent.retention.actor", true, "yml",
                     "P4-D04（非敏感作业名）"),
 
-            // ── 工具与审批（声明未接线）──
-            new Spec("工具与审批", "agent.run.max-cost-per-run", false, "yml",
-                    "FE-02 §2：生产无读取点，改后不影响行为"),
-            new Spec("工具与审批", "agent.run.max-llm-calls", false, "yml",
-                    "FE-02 §2：生产无读取点，改后不影响行为"),
-            new Spec("工具与审批", "agent.run.max-steps", false, "yml",
-                    "FE-02 §2：生产无读取点，改后不影响行为"),
+            // ── 工具与审批 ──
+            // ⚠️⚠️ 以下三条的 effective 于 **P4-D11（D11-1）** 由 false 改为 true：
+            //   接线前生产快照是**硬编码**的
+            //   （成本上限 10.00 / 步数 20 / 调用 8），
+            //   yml 的 max-cost-per-run=2.00 **无任何生产读取点**
+            //   ——声明比真实敞口**紧 5 倍**，运维读到的数字是假的。
+            //   现已改为经 RunConfigSnapshotFactory 读 yml（fail-closed）。
+            new Spec("工具与审批", "agent.run.max-cost-per-run", true, "yml",
+                    "P4-D11 已接入运行时（生产快照读 yml；改后对新执行即刻生效）"),
+            new Spec("工具与审批", "agent.run.max-llm-calls", true, "yml",
+                    "P4-D11 已接入运行时（生产快照读 yml）"),
+            new Spec("工具与审批", "agent.run.max-steps", true, "yml",
+                    "P4-D11 已接入运行时（生产快照读 yml）"),
             new Spec("工具与审批", "agent.tenant.max-concurrent-runs", false, "yml",
-                    "FE-02 §2：生产无读取点，改后不影响行为"),
-            new Spec("工具与审批", "agent.tool.risk-level-map", false, "yml(校验镜像)",
-                    "权威来自代码 ToolHandler.riskLevel()，yml 仅校验镜像"),
-            new Spec("工具与审批", "agent.approval.required-by-risk", false, "yml",
-                    "收紧算法已有但未接线"),
+                    "⛔ 实测：常量 KEY_MAX_CONCURRENT_RUNS 定义外引用数 0 → 租户并发**无限制**"),
+            // ⚠️ 风险级别的**权威在代码**（ToolHandler.riskLevel()）；
+            //    yml 是同一事实的**镜像**，P4-D11 起由启动守卫强制二者一致
+            //    （不一致 → 拒绝启动），故声明不再惰性。
+            new Spec("工具与审批", "agent.tool.risk-level-map", true, "yml(镜像·启动守卫)",
+                    "P4-D11：权威在代码 ToolHandler.riskLevel()；yml 镜像由启动守卫强制一致，"
+                            + "不一致即拒绝启动（fail-closed）"),
+            new Spec("工具与审批", "agent.approval.required-by-risk", true, "yml",
+                    "P4-D11 已接入运行时（经快照工厂解析；只能收紧不能放松）"),
             new Spec("工具与审批", "agent.approval.ttl", false, "yml",
-                    "审批有效期声明未接线"),
+                    "⛔ 实测：无任何读取点 → 审批记录**无过期判定**"),
             new Spec("工具与审批", "agent.approval.approver-scope", false, "yml",
-                    "审批人范围声明未接线"),
+                    "⛔ 实测：常量 KEY_APPROVAL_SCOPE 定义外引用数 0；"
+                            + "范围实际由 DEC-6 硬编码冻结（PARENT_OR_TEACHER）"),
 
-            // ── 合规与零保留（声明未确认）──
-            new Spec("合规与零保留", KEY_ZERO_RETENTION_PROVIDERS, false, "yml",
-                    "仅声明未确认证据 → 仍 fail-closed"),
+            // ── 合规与零保留 ──
+            // ⚠️ 本条于 **P4-D11** 由 false 改为 true：
+            //   P4-D07（C9）已把该清单接入零保留注册表（ApplicationConfiguration 从 yml 读），
+            //   此前标注「仅声明未确认证据」把「**是否接入**」与「**证据是否确认**」
+            //   两件事混为一谈——键确实已被读取，只是三家均 PENDING。
+            //   PENDING 状态由 P17 页的零保留分区单独呈现。
+            new Spec("合规与零保留", KEY_ZERO_RETENTION_PROVIDERS, true, "yml",
+                    "P4-D07（C9）已接入零保留注册表；三家均 PENDING → 闸门仍 fail-closed"),
             new Spec("合规与零保留",
                     "agent.compliance.zero-retention.validity-months", false, "yml",
-                    "未接入运行时确认逻辑"),
+                    "⛔ 实测：无任何读取点 → 零保留条款**无到期判定**"),
             new Spec("合规与零保留",
                     "agent.compliance.zero-retention.expiry-warn-days", false, "yml",
-                    "未接入运行时确认逻辑")
+                    "⛔ 实测：无任何读取点 → **无到期告警**")
     );
 
     /** 生成配置快照。 */

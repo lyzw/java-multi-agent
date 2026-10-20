@@ -125,6 +125,8 @@ class SseStreamingTest {
     /** 记录型帧发送器（单测用；见 {@link RunEventStreamer.FrameSender}）。 */
     private static final class RecordingSender implements RunEventStreamer.FrameSender {
         final List<String> frames = new CopyOnWriteArrayList<>();
+        /** ⚠️ 注释行帧（如 {@code : run-terminal}）——与业务事件帧分开记录 */
+        final List<String> comments = new CopyOnWriteArrayList<>();
         final AtomicInteger completed = new AtomicInteger();
         final CountDownLatch completedLatch = new CountDownLatch(1);
         /** ⚠️ 至少收到一帧即放行——轮询是<b>异步</b>的，同步断言必然 flaky。 */
@@ -133,6 +135,13 @@ class SseStreamingTest {
         @Override
         public void send(String eventType, String sequenceNo, Object data) {
             frames.add(eventType + "#" + sequenceNo);
+            firstFrame.countDown();
+        }
+
+        /** ⚠️ 注释帧单独记录（P4-D12 M-1）：终止信号必须走这里。 */
+        @Override
+        public void sendComment(String comment) {
+            comments.add(comment);
             firstFrame.countDown();
         }
 
@@ -250,7 +259,17 @@ class SseStreamingTest {
                     .isTrue();
             assertThat(sender.frames)
                     .as("⚠️ 必须先推事件、再推完成标记")
-                    .contains("RUN_STARTED#1", "run-terminal#");
+                    .contains("RUN_STARTED#1");
+            // ⚠️⚛️ P4-D12 M-1：终止信号必须是**注释行**，不是事件帧。
+            //    FE-01 §P4 与前端 sse.ts 解析器都规定 ': run-terminal' 注释行；
+            //    原实现发的是事件帧 → 前端解析器（事件分支要求 id 行）直接丢弃
+            //    → 前端**永远收不到终止信号** → 轮询每 3 秒重连、永不停止。
+            assertThat(sender.comments)
+                    .as("终止信号必须是注释行 ': run-terminal'")
+                    .contains("run-terminal");
+            assertThat(sender.frames)
+                    .as("⛔ 终止信号不得再以事件帧形式出现（前端会丢弃它）")
+                    .noneMatch(f -> f.startsWith("run-terminal"));
         }
 
         @Test

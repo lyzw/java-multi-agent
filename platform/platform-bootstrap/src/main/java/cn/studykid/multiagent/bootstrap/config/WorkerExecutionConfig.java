@@ -3,6 +3,7 @@ package cn.studykid.multiagent.bootstrap.config;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import javax.sql.DataSource;
 
@@ -15,8 +16,11 @@ import org.springframework.context.annotation.Configuration;
 
 import cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy;
 import cn.studykid.multiagent.application.config.BudgetPolicy;
+import cn.studykid.multiagent.application.config.RunConfigSnapshotFactory;
 import cn.studykid.multiagent.application.prompt.PromptGuard;
+import cn.studykid.multiagent.core.config.ApprovalRequirement;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
+import cn.studykid.multiagent.core.config.ToolRiskLevel;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.persistence.ApprovalPort;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
@@ -55,6 +59,34 @@ public class WorkerExecutionConfig {
     @Value("${agent.worker.lease-seconds:30}")
     long leaseSeconds;
 
+    // ── C8 接线（P4-D11 D11-1）────────────────────────────────────
+    //
+    // ⚠️⚠️ 这三个值此前**完全没有生产读取点**：生产快照是硬编码的
+    //    （maxCost=10.00 / maxSteps=20 / maxLlmCalls=8），
+    //    而 yml 声明 max-cost-per-run=2.00 —— **声明比实际紧 5 倍**。
+    //    运维读配置页看到的数字与真实成本敞口不一致。
+    //
+    // ⚠️ **不加默认值**：缺配置必须**拒绝**（fail-closed），
+    //    退回默认值等于「悄悄用了一个没人审过的额度」。
+    @Value("${agent.run.max-cost-per-run}")
+    String maxCostPerRun;
+
+    @Value("${agent.run.max-llm-calls}")
+    String maxLlmCalls;
+
+    @Value("${agent.run.max-steps}")
+    String maxSteps;
+
+    /**
+     * 平台级**映射型**配置（风险映射 + 审批要求）。
+     *
+     * <p>⚠️ 必须经 {@link PlatformConfigMaps}（Binder）绑定：
+     * {@code @Value} 无法绑定 YAML map（会抛 Could not resolve placeholder）。
+     * 缺失 → 该 Bean 的创建失败 → <b>拒绝启动</b>（fail-closed）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    PlatformConfigMaps configMaps;
+
     /** Worker 身份（生产应为实例唯一标识）。 */
     @Value("${agent.worker.id:worker-local}")
     String workerId;
@@ -89,10 +121,59 @@ public class WorkerExecutionConfig {
      *
      * <p>⚠️ <b>fail-closed</b>：{@code READ} 不需审批，
      * 其余（含未知等级）一律需要审批。
+     *
+     * <p>⚠️ <b>P4-D08 R-3</b>：本 Bean 改为<b>读取 {@code agent.approval.required-by-risk}</b>，
+     * 与 yml 声明对齐。原实现硬编码「非 READ 一律需审批」，
+     * 与 yml 的 {@code WRITE_PROFILE: OPTIONAL} 矛盾——
+     * 配置的 {@code OPTIONAL} 语义从未被任何代码读取，
+     * 致使 {@code record_weakness} 工具即便修好注册也仍会被审批闸门拦死。
+     *
+     * <p>⚠️ <b>只能收紧不能放松</b>：每个等级的实际要求 =
+     * {@code defaultApproval().maxWith(配置值)}——
+     * 配置只能把要求<b>调严</b>，不能调松。
+     * 例：某等级默认 REQUIRED，配置写 NOT_REQUIRED → 实际仍为 REQUIRED。
      */
     @Bean
-    public RiskBasedApprovalPolicy riskBasedApprovalPolicy() {
-        return new RiskBasedApprovalPolicy();
+    public RiskBasedApprovalPolicy riskBasedApprovalPolicy(
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.approval.required-by-risk.READ:NOT_REQUIRED}")
+            String readRequirement,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.approval.required-by-risk.WRITE_PROFILE:OPTIONAL}")
+            String writeProfileRequirement,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.approval.required-by-risk.WRITE_EXTERNAL:REQUIRED}")
+            String writeExternalRequirement) {
+        Map<ToolRiskLevel, ApprovalRequirement> byRisk = new java.util.EnumMap<>(
+                ToolRiskLevel.class);
+        byRisk.put(ToolRiskLevel.READ, parseRequirement(readRequirement, ToolRiskLevel.READ));
+        byRisk.put(ToolRiskLevel.WRITE_PROFILE,
+                parseRequirement(writeProfileRequirement, ToolRiskLevel.WRITE_PROFILE));
+        byRisk.put(ToolRiskLevel.WRITE_EXTERNAL,
+                parseRequirement(writeExternalRequirement, ToolRiskLevel.WRITE_EXTERNAL));
+        log.info("装配审批策略: {}", byRisk);
+        return new RiskBasedApprovalPolicy(byRisk);
+    }
+
+    /**
+     * 解析审批要求（fail-closed）。
+     *
+     * <p>⚠️ 非法值不回落默认值，而是<b>按最严（REQUIRED）处理</b>——
+     * 配置写错时放行有副作用工具 = Sev-0。
+     */
+    private static ApprovalRequirement parseRequirement(String raw, ToolRiskLevel level) {
+        if (raw == null || raw.isBlank()) {
+            return ApprovalRequirement.REQUIRED;
+        }
+        ApprovalRequirement parsed;
+        try {
+            parsed = ApprovalRequirement.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            log.error("审批要求配置非法，按最严处理: level={}, value={}", level, raw);
+            return ApprovalRequirement.REQUIRED;
+        }
+        // ⚠️ 只能收紧不能放松：实际要求 = 默认要求 maxWith 配置值
+        return level.defaultApproval().maxWith(parsed);
     }
 
     /**
@@ -135,14 +216,25 @@ public class WorkerExecutionConfig {
     /**
      * 执行循环（FR-004）。
      */
+    /**
+     * Worker 执行循环（含事件写入，P4-D12 / G4）。
+     *
+     * <p>⚠️⚠️ <b>事件端口必须在这里真实注入</b>：
+     * P4-D08 的 R-1 教训——「工具未注册为 Bean → 工具从不执行，
+     * 而系统表面完全正常」；本片若只把端口留在执行循环里而**不注入**，
+     * 事件就会**永远不写**（默认 {@code null} = 不写），
+     * 进度页时间线依旧只有一条，而**没有任何报错**。
+     * 故本片的连通性测试专门断言「事件端口**确实**被注入」。
+     */
     @Bean
     public RunExecutionLoop runExecutionLoop(
             ModelGateway modelGateway,
             RunClaimPort claimPort,
             ToolInvocationGate gate,
-            PromptGuard promptGuard) {
+            PromptGuard promptGuard,
+            cn.studykid.multiagent.ports.persistence.RunEventPort eventPort) {
         return new RunExecutionLoop(modelGateway, claimPort, gate,
-                Duration.ofSeconds(leaseSeconds), workerId, promptGuard);
+                Duration.ofSeconds(leaseSeconds), workerId, promptGuard, eventPort);
     }
 
     /**
@@ -186,7 +278,8 @@ public class WorkerExecutionConfig {
      */
     @Bean
     public RunExecutionInputs runExecutionInputs() {
-        return new RunExecutionInputs();
+        return new RunExecutionInputs(maxCostPerRun, maxLlmCalls, maxSteps,
+                configMaps.toolRiskLevelMap(), configMaps.approvalRequiredByRisk());
     }
 
     /**
@@ -196,6 +289,23 @@ public class WorkerExecutionConfig {
      * 真实实现须读 {@code run.input_payload} 与 Agent 配置表。
      */
     public static final class RunExecutionInputs {
+
+        // ⚠️ C8 接线（P4-D11）：快照必须来自 yml，不得硬编码。
+        private final String maxCostPerRun;
+        private final String maxLlmCalls;
+        private final String maxSteps;
+        private final Map<String, ToolRiskLevel> toolRiskLevelMap;
+        private final Map<ToolRiskLevel, ApprovalRequirement> approvalRequiredByRisk;
+
+        RunExecutionInputs(String maxCostPerRun, String maxLlmCalls, String maxSteps,
+                           Map<String, ToolRiskLevel> toolRiskLevelMap,
+                           Map<ToolRiskLevel, ApprovalRequirement> approvalRequiredByRisk) {
+            this.maxCostPerRun = maxCostPerRun;
+            this.maxLlmCalls = maxLlmCalls;
+            this.maxSteps = maxSteps;
+            this.toolRiskLevelMap = toolRiskLevelMap;
+            this.approvalRequiredByRisk = approvalRequiredByRisk;
+        }
 
         /** Agent 模型配置（占位）。 */
         public RunExecutionLoop.AgentModelConfig agentConfig() {
@@ -216,13 +326,45 @@ public class WorkerExecutionConfig {
             return java.util.Map.of("q", "解方程 x²-5x+6=0");
         }
 
-        /** Run 配置快照（占位）。 */
+        /**
+         * Run 配置快照。
+         *
+         * <p>⚠️⚠️ <b>C8 接线（P4-D11 D11-1）</b>：此前此处返回<b>硬编码</b>快照
+         * （成本上限 {@code 10.00} / 步数 {@code 20} / 调用 {@code 8}），
+         * 而 yml 声明的 {@code agent.run.max-cost-per-run=2.00} <b>没有任何生产读取点</b>
+         * —— 声明值比真实敞口<b>紧 5 倍</b>，运维读到的数字是假的。
+         *
+         * <p>⚠️ <b>fail-closed</b>：配置缺失/非法 → {@code ConfigResolutionException}
+         * → <b>拒绝执行该 Run</b>，<b>不</b>退回硬编码默认值。
+         * 退回默认值等于「悄悄用了一个没人审过的额度」——
+         * 那正是本片要消除的分叉。
+         *
+         * <p>⚠️ <b>审批要求按「最严」解析</b>：本次 Run 的主工具未知
+         * （{@code run.input_payload} 尚未接通，L-4），故按
+         * {@code WRITE_EXTERNAL} 兜底 → 必然 {@code REQUIRED}——
+         * 与改造前的硬编码行为一致，<b>不放松</b>任何门禁。
+         */
         public RunConfigSnapshot snapshotFor(RunClaimPort.LeasedTask task) {
-            return new RunConfigSnapshot(
-                    task.runId(), new BigDecimal("10.00"), 20, 8,
-                    cn.studykid.multiagent.core.config.ApprovalRequirement.REQUIRED,
-                    java.time.Instant.now());
+            return new RunConfigSnapshotFactory(java.time.Clock.systemUTC()).create(
+                    task.runId(),
+                    maxCostPerRun,
+                    maxLlmCalls,
+                    maxSteps,
+                    toolRiskLevelMap,
+                    approvalRequiredByRisk,
+                    // ⚠️ 主工具未知 → 未登记工具按 WRITE_EXTERNAL 兜底（fail-closed）
+                    UNKNOWN_PRIMARY_TOOL);
         }
+
+        /**
+         * 「主工具未知」的占位工具名。
+         *
+         * <p>⚠️ 它<b>不在</b> yml 的 risk-level-map 中 → 按
+         * {@code ToolRiskLevel.resolve} 规则落到 {@code WRITE_EXTERNAL}
+         * → 审批要求 {@code REQUIRED}。这是<b>最严</b>方向，符合
+         * 「判据只增不减」（RAG-D00 §3 原则 7 / P0-D03 红线 15）。
+         */
+        private static final String UNKNOWN_PRIMARY_TOOL = "__unknown_primary_tool__";
     }
 
     /**

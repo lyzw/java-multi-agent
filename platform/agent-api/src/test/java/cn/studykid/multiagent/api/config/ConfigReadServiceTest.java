@@ -110,9 +110,35 @@ class ConfigReadServiceTest {
         @Test
         @DisplayName("R-1b 仅声明键：effective=false 且声明值正确")
         void declaredOnlyKeyNotEffective() {
-            ConfigEntry e = entryByKey(service.snapshot(), "agent.run.max-cost-per-run");
+            // ⚠️ P4-D11：原先这里断言的是 `agent.run.max-cost-per-run`（当时未接线）。
+            //    该键已接线（P4-D11 D11-1），故改用**真正仍未接线**的键：
+            //    `agent.tenant.max-concurrent-runs`（常量定义外引用数 0 → 并发无限制）。
+            ConfigEntry e = entryByKey(service.snapshot(), "agent.tenant.max-concurrent-runs");
             assertThat(e.effective()).isFalse();
-            assertThat(e.declaredValue()).isEqualTo("2.00");
+            assertThat(e.declaredValue()).isEqualTo("5");
+        }
+
+        @Test
+        @DisplayName("R-1b2 P4-D11：已接线的运行上限键 effective=true")
+        void wiredRunLimitsEffective() {
+            // ⚠️ 接线前生产快照是**硬编码**的（成本上限 10.00），
+            //    yml 的 2.00 无任何生产读取点 —— 声明比真实敞口紧 5 倍。
+            //    P4-D11 起由 RunConfigSnapshotFactory 读 yml，故 effective=true。
+            ConfigResponse resp = service.snapshot();
+            assertThat(entryByKey(resp, "agent.run.max-cost-per-run").effective()).isTrue();
+            assertThat(entryByKey(resp, "agent.run.max-steps").effective()).isTrue();
+            assertThat(entryByKey(resp, "agent.run.max-llm-calls").effective()).isTrue();
+            assertThat(entryByKey(resp, "agent.approval.required-by-risk").effective()).isTrue();
+        }
+
+        @Test
+        @DisplayName("R-1b3 P4-D11：零保留供应商清单已接入注册表（C9），不再标为未接线")
+        void zeroRetentionProvidersWired() {
+            // ⚠️ 此前把「是否接入」与「证据是否确认」混为一谈：
+            //    键确实已被 C9 读取（三家均 PENDING 是**证据状态**，由 P17 页单独呈现）。
+            assertThat(entryByKey(service.snapshot(),
+                    "agent.compliance.zero-retention.confirmed-providers").effective())
+                    .isTrue();
         }
 
         @Test
@@ -128,7 +154,8 @@ class ConfigReadServiceTest {
         void effectiveFlagsProjection() {
             ConfigResponse resp = service.snapshot();
             assertThat(resp.effectiveFlags().get("agent.backpressure.enabled")).isTrue();
-            assertThat(resp.effectiveFlags().get("agent.run.max-cost-per-run")).isFalse();
+            assertThat(resp.effectiveFlags().get("agent.run.max-cost-per-run")).isTrue();
+            assertThat(resp.effectiveFlags().get("agent.tenant.max-concurrent-runs")).isFalse();
         }
     }
 
@@ -144,7 +171,10 @@ class ConfigReadServiceTest {
                     .as("Binder 必须能把扁平子键聚合成 map 表示")
                     .contains("READ")
                     .contains("WRITE_PROFILE");
-            assertThat(e.effective()).isFalse();
+            // ⚠️ P4-D11：风险映射由「惰性镜像」升级为「**启动守卫**」——
+            //    yml 与工具代码声明不一致即拒绝启动（fail-closed）。
+            //    故它不再「未接入」。
+            assertThat(e.effective()).isTrue();
         }
     }
 

@@ -1,21 +1,24 @@
 package cn.studykid.multiagent.application.approval;
 
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
 
 import org.jspecify.annotations.NonNull;
 
+import cn.studykid.multiagent.core.config.ApprovalRequirement;
 import cn.studykid.multiagent.core.config.ToolRiskLevel;
 import cn.studykid.multiagent.ports.security.ApprovalPolicy;
 import cn.studykid.multiagent.ports.tool.ToolHandler;
 
 /**
- * 按风险等级的审批策略（P4-D01 / FR-013 / DEC-11）。
+ * 按风险等级的审批策略（P4-D01 / FR-013 / DEC-11 / P4-D08 R-3）。
  *
- * <p><b>判定规则</b>（D-2）：
+ * <p><b>判定规则</b>（D-2 / P4-D08）：
  * <ul>
- *   <li>{@code READ} —— 只读，无副作用 → <b>不需审批</b>；</li>
- *   <li>{@code WRITE_PROFILE} / {@code WRITE_EXTERNAL} —— 有副作用 → <b>需审批</b>。</li>
+ *   <li>{@code NOT_REQUIRED} —— 不需审批；</li>
+ *   <li>{@code OPTIONAL} —— <b>默认不阻塞</b>，但满足条件时仍可触发；</li>
+ *   <li>{@code REQUIRED} —— 需审批。</li>
  * </ul>
  *
  * <p><b>⚠️ 未登记等级一律按最严处理</b>（fail-closed）：
@@ -23,13 +26,46 @@ import cn.studykid.multiagent.ports.tool.ToolHandler;
  * 默认「需审批」比默认「放行」安全得多——
  * 与 {@code ConfigFailClosedTest} 的既有语义一致。
  *
+ * <p>⚠️ <b>依据 P4-D08 R-3 修复</b>：本类原先硬编码「非 READ 一律需审批」，
+ * 与 {@code application.yml} 声明的 {@code agent.approval.required-by-risk}
+ * （{@code READ: NOT_REQUIRED, WRITE_PROFILE: OPTIONAL, WRITE_EXTERNAL: REQUIRED}）
+ * <b>相矛盾</b>——配置的 {@code OPTIONAL} 语义从未被任何代码读取，
+ * 致使 {@code record_weakness} 工具即便修好注册也仍会被审批闸门拦死。
+ * 现改为<b>由配置驱动</b>，让代码与声明一致。
+ *
+ * <p>⚠️ <b>这不是门禁降级</b>：{@code WRITE_PROFILE: OPTIONAL} 是 <b>yml 中已有的声明</b>，
+ * 本次变更方向是「代码对齐配置」，不是「配置对齐代码」。
+ * {@code WRITE_EXTERNAL: REQUIRED} 仍是最严；未登记工具按 {@code WRITE_EXTERNAL} 兜底（仍需审批）。
+ *
  * <p><b>依据</b>：P0-D00 §3.2 —— {@code record_weakness} 是首期
  * <b>唯一</b>的有副作用工具，正是红线 4/5/7 的实证载体。
  */
 public final class RiskBasedApprovalPolicy implements ApprovalPolicy {
 
-    /** 明确「不需审批」的风险等级（白名单）。 */
-    private static final Set<ToolRiskLevel> NO_APPROVAL_LEVELS = Set.of(ToolRiskLevel.READ);
+    /**
+     * 风险等级 → 审批要求。
+     *
+     * <p>⚠️ 空映射 = fail-closed 兜底：未登记等级按最严处理（需审批）。
+     */
+    private final Map<ToolRiskLevel, ApprovalRequirement> byRisk;
+
+    /**
+     * 按配置构造。
+     *
+     * @param byRisk 风险等级 → 审批要求（来自 {@code agent.approval.required-by-risk}）
+     */
+    public RiskBasedApprovalPolicy(@NonNull Map<ToolRiskLevel, ApprovalRequirement> byRisk) {
+        this.byRisk = Map.copyOf(byRisk);
+    }
+
+    /**
+     * fail-closed 兜底构造：空映射 → 所有等级均需审批。
+     *
+     * <p>⚠️ 这是<b>比配置更严</b>的方向（安全侧），不构成门禁放松。
+     */
+    public RiskBasedApprovalPolicy() {
+        this(Map.of());
+    }
 
     @Override
     public @NonNull ApprovalDecision evaluate(@NonNull ToolHandler handler) {
@@ -38,15 +74,45 @@ public final class RiskBasedApprovalPolicy implements ApprovalPolicy {
         if (level == null) {
             return ApprovalDecision.required("风险等级未知，按最严处理");
         }
-        if (NO_APPROVAL_LEVELS.contains(level)) {
-            return ApprovalDecision.notRequired();
+        ApprovalRequirement configured = byRisk.get(level);
+        if (configured == null) {
+            // ⚠️ 未登记等级一律按最严（fail-closed）—— 与 ConfigFailClosedTest 语义一致
+            return ApprovalDecision.required(level.name());
         }
-        return ApprovalDecision.required(level.name());
+        // ⚠️⚠️ **只能收紧不能放松**（P0-D03 红线 15 / R-020）：
+        //    实际要求 = 该等级的默认要求 maxWith 配置值。
+        //    默认要求是「代码层的下限」，配置只能把它调严，不能调松。
+        //    ⚠️ 此处合并**必须在本类内部**做，不能只依赖装配层——
+        //    策略若被直接构造（测试/其他装配路径），绕过合并即等于门禁可被放松。
+        ApprovalRequirement effective = level.defaultApproval().maxWith(configured);
+        return switch (effective) {
+            case NOT_REQUIRED -> ApprovalDecision.notRequired();
+            // ⚠️ OPTIONAL：默认不阻塞，但审批记录/审计链仍可由外部流程触发
+            case OPTIONAL -> ApprovalDecision.notRequired();
+            case REQUIRED -> ApprovalDecision.required(level.name());
+        };
     }
 
-    /** @return 需审批的风险等级集合（文档/审计用）。 */
-    public static @NonNull Set<ToolRiskLevel> approvalRequiredLevels() {
-        return Set.of(ToolRiskLevel.WRITE_PROFILE, ToolRiskLevel.WRITE_EXTERNAL);
+    /**
+     * @return 必然需审批的风险等级集合（文档/审计用）。
+     *
+     * <p>⚠️ 随配置变化：仅 {@code REQUIRED} 等级必然需审批；
+     * {@code OPTIONAL} 默认不阻塞，故不在此集合内。
+     */
+    public @NonNull Set<ToolRiskLevel> approvalRequiredLevels() {
+        EnumSet<ToolRiskLevel> result = EnumSet.noneOf(ToolRiskLevel.class);
+        for (ToolRiskLevel level : ToolRiskLevel.values()) {
+            // ⚠️ 与 evaluate 保持**同一判据**（否则二者会给出矛盾结论）：
+            //    未配置 → 必审（fail-closed）；已配置 → 默认要求 maxWith 配置值。
+            ApprovalRequirement configured = byRisk.get(level);
+            ApprovalRequirement effective = configured == null
+                    ? ApprovalRequirement.REQUIRED
+                    : level.defaultApproval().maxWith(configured);
+            if (effective == ApprovalRequirement.REQUIRED) {
+                result.add(level);
+            }
+        }
+        return Set.copyOf(result);
     }
 
     /**

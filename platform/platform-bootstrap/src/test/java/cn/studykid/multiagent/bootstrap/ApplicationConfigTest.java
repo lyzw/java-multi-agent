@@ -50,9 +50,23 @@ class ApplicationConfigTest {
         assertThat(props.get("agent.mq.queues.execute.delivery-limit"))
                 .as("键不存在。实际键集: %s", props.keySet())
                 .isEqualTo("3");
-        assertThat(props.get("agent.mq.queues.reconcile.delivery-limit"))
-                .as("键不存在")
-                .isEqualTo("3");
+    }
+
+    @Test
+    @DisplayName("⚠️⛔ P4-D11：虚构的 reconcile 队列声明必须不存在（该队列从未落地）")
+    void reconcileQueueDeclarationAbsent() {
+        // ⚠️ 原断言「reconcile.delivery-limit == 3」**固化了��个虚构**：
+        //    该队列在代码中既无 @Bean 声明，也无发布者/消费者
+        //    （UNKNOWN 对账走 DB 侧，不经 MQ）。
+        //    保留一条「看起来存在、实际不存在」的声明，
+        //    等于给运维一个「系统会用它」的错觉。
+        //    P4-D11 D11-4 已删除该声明 → 此处断言其**不存在**。
+        Map<String, String> props = load();
+        assertThat(props.get("agent.mq.queues.reconcile.name"))
+                .as("⛔ reconcile 队列从未落地，yml 不得再声明它")
+                .isNull();
+        assertThat(props.get("agent.mq.queues.reconcile.delivery-limit")).isNull();
+        assertThat(props.get("agent.mq.queues.reconcile.dead-letter-exchange")).isNull();
     }
 
     @Test

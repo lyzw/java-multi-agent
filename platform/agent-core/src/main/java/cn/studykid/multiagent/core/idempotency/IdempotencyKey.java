@@ -20,6 +20,8 @@ import org.jspecify.annotations.NonNull;
  *       <td>调用方提供（建议 UUID）</td></tr>
  *   <tr><td>{@code record_weakness}</td><td>{@code tool.record_weakness}</td>
  *       <td>{@code student_id + run_id + knowledge_point}</td></tr>
+ *   <tr><td>其他工具调用</td><td>{@code tool.invoke}（P4-D08）</td>
+ *       <td>{@code run_id + tool_name + call_id}</td></tr>
  * </table>
  *
  * <p><b>分隔符用 {@code '/'} 而非 {@code '|'}</b>：管道符在日志、SQL LIKE、
@@ -38,6 +40,18 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
 
     /** 记录薄弱点的命名空间。 */
     public static final String NS_TOOL_RECORD_WEAKNESS = "tool.record_weakness";
+
+    /**
+     * 工具调用的命名空间（P4-D08）。
+     *
+     * <p>⚠️ <b>刻意不与 {@link #NS_RUN_CREATE} 复用</b>：
+     * 类注释已说明「命名空间不可省略——不同用途的键若混在一起，
+     * {@code run:xxx} 与 {@code tool:xxx} 可能在同一租户内撞值」。
+     * 创建 Run 的键落在 {@code run} 表，工具调用的键落在 {@code tool_operation} 表，
+     * 两表约束彼此独立，但<b>共用命名空间会让日志与排障无法区分来源</b>，
+     * 并违背 ADR-003 的隔离意图。
+     */
+    public static final String NS_TOOL_INVOKE = "tool.invoke";
 
     /** 默认保留期：24 小时（ADR-003）。 */
     public static final Duration DEFAULT_RETENTION = Duration.ofHours(24);
@@ -85,6 +99,31 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
         requirePart(knowledgePoint, "knowledgePoint");
         return new IdempotencyKey(NS_TOOL_RECORD_WEAKNESS,
                 studentId + SEPARATOR + runId + SEPARATOR + knowledgePoint);
+    }
+
+    /**
+     * 工具调用的键（P4-D08）。
+     *
+     * <p><b>键 = {@code run_id + tool_name + call_id}</b>。
+     *
+     * <p>⚠️ <b>runId 必须参与</b>：{@code tool_operation} 的唯一约束是
+     * {@code UNIQUE (tenant_id, idempotency_key)}——<b>租户级</b>，不含 run 维度。
+     * 若键中缺 runId，则<b>同一租户下不同 Run 的同名工具 + 同 callId 会撞键</b>，
+     * 而账本命中重复键时**复用既有 operation**（不新建），
+     * 于是新 Run 的调用被记到旧 Run 的 operation 上——对账链路与副作用语义同时破裂。
+     *
+     * @param runId    所属 Run
+     * @param toolName 工具名
+     * @param callId   模型返回的调用标识（缺失时由调用方填占位值）
+     */
+    public static @NonNull IdempotencyKey forToolInvoke(@NonNull String runId,
+                                                        @NonNull String toolName,
+                                                        @NonNull String callId) {
+        requirePart(runId, "runId");
+        requirePart(toolName, "toolName");
+        requirePart(callId, "callId");
+        return new IdempotencyKey(NS_TOOL_INVOKE,
+                runId + SEPARATOR + toolName + SEPARATOR + callId);
     }
 
     /** 校验单个组成部分：非空且不含分隔符。 */

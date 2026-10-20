@@ -273,7 +273,8 @@ public class ToolInvocationGate {
             }
 
             // ③ 幂等键（ADR-003）
-            String idemKey = buildIdempotencyKey(call);
+            // ⚠️ 必须传真实 runId：键缺 run 维度会跨 Run 撞键（P4-D08 R-2）
+            String idemKey = buildIdempotencyKey(task.runId(), call);
 
             // ④ ⚠️ 账本登记（P3-D03）：失败即拒绝执行（fail-closed）。
             //    无账可对的调用，其 UNKNOWN 无处安放——对账无从做起。
@@ -515,25 +516,43 @@ public class ToolInvocationGate {
      *
      * <p>⚠️ 需按工具类型区分：`record_weakness` 用
      * {@code student_id + run_id + knowledge_point}（ADR-003），
-     * 其他工具用 {@code run_id + tool_name + 调用序号}。
+     * 其他工具用 {@code run_id + tool_name + call_id}（ADR-003 / P4-D08）。
+     *
+     * <p>⚠️⚠️ <b>runId 必须是真实 Run 标识（P4-D08 R-2 修复）</b>：
+     * {@code tool_operation} 的唯一约束是 {@code UNIQUE (tenant_id, idempotency_key)}——
+     * <b>租户级，不含 run 维度</b>。而账本命中重复键时<b>复用既有 operation</b>（不新建）。
+     * 若键中缺 runId（或填占位符），则同租户下<b>不同 Run 的同名工具 + 同 callId 会撞键</b>，
+     * 新 Run 的调用被记到旧 Run 的 operation 上 → 对账链路错乱、副作用语义破裂。
      */
-    private String buildIdempotencyKey(ModelResponse.ToolCallRequest call) {
+    private String buildIdempotencyKey(String runId, ModelResponse.ToolCallRequest call) {
         Object studentId = call.arguments().get("studentId");
         Object knowledgePoint = call.arguments().get("knowledgePoint");
 
         if (studentId != null && knowledgePoint != null) {
             return IdempotencyKey.forRecordWeakness(
-                    String.valueOf(studentId), "pending-run",
+                    String.valueOf(studentId), runId,
                     String.valueOf(knowledgePoint)).composite();
         }
-        return IdempotencyKey.forRunCreate(
-                call.toolName() + "-" + Optional.ofNullable(call.callId()).orElse("no-call-id"))
+        return IdempotencyKey.forToolInvoke(
+                runId, call.toolName(),
+                Optional.ofNullable(call.callId()).orElse("no-call-id"))
                 .composite();
     }
 
     private cn.studykid.multiagent.core.tenant.TenantContext systemContext(String tenantId) {
+        // ⚠️⚠️ **必须携带 WORKER 角色**（P4-D08 R-4 修复）：
+        //    授权按**角色**判定（RoleBasedAuthorizationService: roles → 动作集合），
+        //    空角色集 → isAuthorized 恒 false → 工具执行时必被「无权调用该工具」拦下。
+        //
+        //    Roles.WORKER 本就含 TOOL_INVOKE（权限模型为 Worker 设计的既有角色），
+        //    且本次修复**未扩大**该角色的动作集合。
+        //    修复前 Worker 上下文无任何角色 = 授权链路根本没接上，
+        //    那不是更严的安全姿态，而是「看起来有防线、实际不存在」。
         return new cn.studykid.multiagent.core.tenant.TenantContext(
-                tenantId, "worker", java.util.Set.of(), 0L);
+                tenantId, "worker",
+                java.util.Set.of(cn.studykid.multiagent.ports.security.AuthorizationService
+                        .Roles.WORKER),
+                0L);
     }
 
     /** 工具调用汇总结果。 */
@@ -581,6 +600,32 @@ public class ToolInvocationGate {
 
         public int succeededCount() {
             return succeeded.size();
+        }
+
+        /**
+         * 成功执行的工具名（不可变副本）。
+         *
+         * <p>⚠️ P4-D12 / G4：执行事件需要<b>工具名</b>（SSE 白名单字段 {@code toolName}），
+         * 此前本类只暴露计数 → 调用方拿不到名字。
+         * 计数用于「统计」，名字用于「**说清发生了什么**」，二者不可互相替代。
+         */
+        public java.util.List<String> succeededTools() {
+            return java.util.List.copyOf(succeeded);
+        }
+
+        /** 被拒绝的工具名（不可变副本）。 */
+        public java.util.List<String> rejectedTools() {
+            return java.util.List.copyOf(rejected);
+        }
+
+        /** 执行失败的工具名（不可变副本）。 */
+        public java.util.List<String> failedTools() {
+            return java.util.List.copyOf(failed);
+        }
+
+        /** 结果未知的工具名；无 UNKNOWN 时为 {@code null}。 */
+        public String unknownToolName() {
+            return unknownTool;
         }
 
         public int rejectedCount() {

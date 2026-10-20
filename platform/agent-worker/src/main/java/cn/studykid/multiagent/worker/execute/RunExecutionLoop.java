@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.Map;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,6 +14,7 @@ import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
+import cn.studykid.multiagent.ports.persistence.RunEventPort;
 import cn.studykid.multiagent.ports.tool.ToolExecutionException;
 
 /**
@@ -44,6 +46,18 @@ public class RunExecutionLoop {
     private final String workerId;
 
     /**
+     * 执行事件写入（P4-D12 / G4）。
+     *
+     * <p>⚠️ <b>此前生产里没有写入方</b>：{@code run_event} 只有
+     * {@code RUN_CREATED} 由 Run 创建事务写入 → 进度页时间线<b>永远只有一条</b>。
+     *
+     * <p>⚠️ <b>默认「不写」而非「默认写」</b>：未注入时事件不落库，
+     * 但**不报错**——单元测试与部分切片不需要事件。
+     * 生产装配由 P4-D12 §3 D12-5 保证（连通性测试断言它真的被注入）。
+     */
+    private final RunEventPort eventPort;
+
+    /**
      * Prompt 注入防护（P3-D09 / FR-016）。
      *
      * <p>⚠️ <b>默认用标准上限</b>：不设「无防护」默认值——
@@ -57,7 +71,7 @@ public class RunExecutionLoop {
                              @NonNull Duration leaseDuration,
                              @NonNull String workerId) {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
-                new PromptGuard());
+                new PromptGuard(), null);
     }
 
     public RunExecutionLoop(@NonNull ModelGateway modelGateway,
@@ -66,10 +80,27 @@ public class RunExecutionLoop {
                              @NonNull Duration leaseDuration,
                              @NonNull String workerId,
                              @NonNull PromptGuard promptGuard) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
+                promptGuard, null);
+    }
+
+    /**
+     * 含事件写入的完整构造器（P4-D12 / G4）。
+     *
+     * @param eventPort 事件写入端口；{@code null} 表示**不写事件**（默认）
+     */
+    public RunExecutionLoop(@NonNull ModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             @NonNull PromptGuard promptGuard,
+                             @Nullable RunEventPort eventPort) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
         this.leaseDuration = leaseDuration;
+        this.eventPort = eventPort;
         if (workerId == null || workerId.isBlank()) {
             throw new IllegalArgumentException("workerId 不能为空（fencing 续租身份）");
         }
@@ -99,6 +130,10 @@ public class RunExecutionLoop {
 
         int steps = 0;
 
+        // ⚠️ P4-D12 / G4：开始执行 → RUN_STARTED
+        appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_STARTED,
+                java.util.Map.of("state", "RUNNING", "attempt", task.attempt()));
+
         try {
             while (steps < snapshot.maxSteps()) {
                 steps++;
@@ -110,6 +145,8 @@ public class RunExecutionLoop {
                 //    commitResult 均拒绝已取消 Run），双重保险。
                 if (claimPort.isCancelled(tenantId, task.runId())) {
                     log.info("检测到取消请求，停止执行: runId={}", task.runId());
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_CANCELLED,
+                            java.util.Map.of("state", "CANCELLED"));
                     return ExecutionOutcome.cancelled();
                 }
 
@@ -151,6 +188,27 @@ public class RunExecutionLoop {
                 // ── §4 工具调用（逐个走完整闸门）───────────────────────
                 ToolInvocationGate.ToolInvocationResult toolResult = toolGate.invokeAll(
                         tenantId, task, response.toolCalls());
+
+                // ⚠️ P4-D12 / G4：工具调用后记录事件（含 UNKNOWN）
+                //    operationState 取工具账本状态：SUCCEEDED / FAILED / REJECTED / UNKNOWN。
+                //    ⚠️ 不放账本 ID——它不在 SSE 白名单里。
+                for (String tool : toolResult.succeededTools()) {
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.TOOL_INVOKED,
+                            java.util.Map.of("toolName", tool, "operationState", "SUCCEEDED"));
+                }
+                for (String tool : toolResult.failedTools()) {
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.TOOL_INVOKED,
+                            java.util.Map.of("toolName", tool, "operationState", "FAILED"));
+                }
+                for (String tool : toolResult.rejectedTools()) {
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.TOOL_INVOKED,
+                            java.util.Map.of("toolName", tool, "operationState", "REJECTED"));
+                }
+                if (toolResult.unknownToolName() != null) {
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.TOOL_INVOKED,
+                            java.util.Map.of("toolName", toolResult.unknownToolName(),
+                                    "operationState", "UNKNOWN"));
+                }
 
                 if (toolResult.unknownResultOccurred()) {
                     // ── §3.2 UNKNOWN 处置 ────────────────────────────────
@@ -205,10 +263,44 @@ public class RunExecutionLoop {
         }
     }
 
+    /**
+     * 追加一条执行事件（观测用途，**失败不影响主流程**）。
+     *
+     * <p>⚠️ <b>为什么吞掉异常</b>：事件是<b>观测</b>，不是业务事实。
+     * Run 的成败**不依赖**事件是否写成功。
+     * 若事件写失败就让 Run 失败 → 会触发重试 → <b>重复副作用</b>（Sev-0）。
+     *
+     * <p>⚠️ <b>但不得静默</b>：必须留 WARN——
+     * 否则「时间线空了」无人知晓，这正是本项目反复吃的「静默失效」亏。
+     *
+     * @param tenantId 租户
+     * @param runId    Run
+     * @param type     事件类型
+     * @param payload  载荷（只含白名单标量）
+     */
+    private void appendEvent(String tenantId, String runId, String type,
+                             java.util.Map<String, Object> payload) {
+        if (eventPort == null) {
+            return;
+        }
+        try {
+            eventPort.append(tenantId, runId, type, payload);
+        } catch (RuntimeException e) {
+            log.warn("⚠️ 追加执行事件失败（不影响本次执行结果）: runId={}, type={}, cause={}",
+                    runId, type, e.toString());
+        }
+    }
+
     private ExecutionOutcome commitSuccess(String tenantId, RunClaimPort.LeasedTask task,
                                           String content) {
         boolean ok = claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
                 "SUCCEEDED", "{\"content\":\"" + escape(content) + "\"}");
+        if (ok) {
+            // ⚠️ 只在**真的提交成功**后才记终态事件：
+            //    提交失败 = 世代失效（白干了），不是「执行失败」。
+            appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_SUCCEEDED,
+                    java.util.Map.of("state", "SUCCEEDED"));
+        }
         // ⚠️ 提交失败（世代不符）不是执行失败，是「白干了」
         return ok ? ExecutionOutcome.succeeded()
                   : ExecutionOutcome.skippedStaleGeneration();
@@ -218,6 +310,15 @@ public class RunExecutionLoop {
                                            String reason) {
         boolean ok = claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
                 "FAILED", "{\"reason\":\"" + escape(reason) + "\"}");
+        if (ok) {
+            // ⚠️ 失败载荷**只放 state**，不放 reason 原文：
+            //    reason 是内部错误细节（如「模型调用失败：TIMEOUT」），
+            //    白名单里的 errorCode 要求是**码**而非原文。
+            //    ⚠️ 且当前 run.error_code 列**根本没被写入**
+            //    （commitResult 只写 state + result_payload）→ 记为已知缺口。
+            appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
+                    java.util.Map.of("state", "FAILED"));
+        }
         return ok ? ExecutionOutcome.failed(reason)
                   : ExecutionOutcome.skippedStaleGeneration();
     }

@@ -48,10 +48,10 @@ import cn.studykid.multiagent.infrastructure.security.JwtTokenService;
         "auth.jwt.issuer=https://auth.test",
         "auth.jwt.audience=agent-platform",
         "auth.jwt.token-ttl-seconds=900",
-        // ⚠️ 关闭 Worker 主循环与 RabbitMQ 监听（同 E2E），本类只验证配置端点
+    // ⚠️ 关闭 Worker 主循环与 RabbitMQ 监听（同 E2E），本类只验证配置端点
         "agent.worker.enabled=false",
         "spring.rabbitmq.listener.simple.auto-startup=false",
-        // ⚠️ RetentionConfig 复用 worker 租户 slug（同 RetentionWiringTest），缺则上下文启动失败
+    // ⚠️ RetentionConfig 复用 worker 租户 slug（同 RetentionWiringTest），缺则上下文启动失败
         "agent.worker.tenant-slug=t-a"
 })
 @DisplayName("P4-D07 C1 配置端点连通性")
@@ -70,72 +70,69 @@ class ConfigEndpointIT {
                 Instant.now());
     }
 
-    @Nested
-    @DisplayName("E-1 未认证 → 401（端点受保护）")
-    class Unauthenticated {
+    // ⚠️⚠️ 以下 4 项曾被 P4-D09 误删（P4-D09 修复时恢复）：
+    //   删掉的 E-2c 是**密钥泄露防护断言**，属安全回归网。
+    //   类变空壳后不再出现在 failsafe 报告里，
+    //   看着像「修好了」，实际是**把测试删了**——
+    //   这是本项目铁律「不得因代码做完而宣称风险消除」的反面样本。
+    //   本组仍**平铺**而非 @Nested：与 ReadEndpointIT / PlatformSecurityE2ETest 一致。
 
-        @Test
-        @DisplayName("E-1a 无令牌访问 → 401")
-        void noTokenRejected() {
-            rest.get().uri("/api/config")
-                    .exchange()
-                    .expectStatus().isUnauthorized();
-        }
+    @Test
+    @DisplayName("E-1a 无令牌访问 → 401")
+    void noTokenRejected() {
+        rest.get().uri("/api/config")
+                .exchange()
+                .expectStatus().isUnauthorized();
     }
 
-    @Nested
-    @DisplayName("E-2 已认证 → 200 + 结构正确")
-    class Authenticated {
+    @Test
+    @DisplayName("E-2a 带令牌 → 200 且含 groups / zeroRetention")
+    void returnsStructure() {
+        rest.get().uri("/api/config")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + validToken())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.groups").isArray()
+                .jsonPath("$.groups.length()").isNotEmpty()
+                .jsonPath("$.zeroRetention").exists()
+                .jsonPath("$.zeroRetention.failClosed").isEqualTo(true)
+                .jsonPath("$.zeroRetention.anyConfirmed").isEqualTo(false)
+                .jsonPath("$.effectiveFlags").exists();
+    }
 
-        @Test
-        @DisplayName("E-2a 带令牌 → 200 且含 groups / zeroRetention")
-        void returnsStructure() {
-            rest.get().uri("/api/config")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + validToken())
-                    .exchange()
-                    .expectStatus().isOk()
-                    .expectBody()
-                    .jsonPath("$.groups").isArray()
-                    .jsonPath("$.groups.length()").isNotEmpty()
-                    .jsonPath("$.zeroRetention").exists()
-                    .jsonPath("$.zeroRetention.failClosed").isEqualTo(true)
-                    .jsonPath("$.zeroRetention.anyConfirmed").isEqualTo(false)
-                    .jsonPath("$.effectiveFlags").exists();
-        }
+    @Test
+    @DisplayName("E-2b 零保留声明三家且均为 PENDING")
+    void zeroRetentionDeclared() {
+        rest.get().uri("/api/config")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + validToken())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.zeroRetention.declaredProviders.length()").isEqualTo(3)
+                .jsonPath("$.zeroRetention.registryStatus.deepseek")
+                .isEqualTo("PENDING")
+                .jsonPath("$.zeroRetention.registryStatus.minimax")
+                .isEqualTo("PENDING")
+                .jsonPath("$.zeroRetention.registryStatus.workbuddy")
+                .isEqualTo("PENDING");
+    }
 
-        @Test
-        @DisplayName("E-2b 零保留声明三家且均为 PENDING")
-        void zeroRetentionDeclared() {
-            rest.get().uri("/api/config")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + validToken())
-                    .exchange()
-                    .expectStatus().isOk()
-                    .expectBody()
-                    .jsonPath("$.zeroRetention.declaredProviders.length()").isEqualTo(3)
-                    .jsonPath("$.zeroRetention.registryStatus.deepseek")
-                    .isEqualTo("PENDING")
-                    .jsonPath("$.zeroRetention.registryStatus.minimax")
-                    .isEqualTo("PENDING")
-                    .jsonPath("$.zeroRetention.registryStatus.workbuddy")
-                    .isEqualTo("PENDING");
-        }
+    @Test
+    @DisplayName("⛔ E-2c 响应不含私钥 / 口令（密钥泄露防护）")
+    void noSecrets() {
+        String body = rest.get().uri("/api/config")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + validToken())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class)
+                .returnResult()
+                .getResponseBody();
 
-        @Test
-        @DisplayName("E-2c 响应不含私钥 / 口令")
-        void noSecrets() {
-            String body = rest.get().uri("/api/config")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + validToken())
-                    .exchange()
-                    .expectStatus().isOk()
-                    .expectBody(String.class)
-                    .returnResult()
-                    .getResponseBody();
-
-            assertThat(body)
-                    .as("⚠️ 配置端点绝不暴露私钥/口令")
-                    .doesNotContain("private-key")
-                    .doesNotContain("RABBITMQ_PASSWORD")
-                    .doesNotContain("BEGIN PRIVATE KEY");
-        }
+        assertThat(body)
+                .as("⚠️ 配置端点绝不暴露私钥/口令")
+                .doesNotContain("private-key")
+                .doesNotContain("RABBITMQ_PASSWORD")
+                .doesNotContain("BEGIN PRIVATE KEY");
     }
 }

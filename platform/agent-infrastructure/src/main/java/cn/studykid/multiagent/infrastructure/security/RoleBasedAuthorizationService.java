@@ -34,7 +34,9 @@ public class RoleBasedAuthorizationService implements AuthorizationService {
                     Actions.RUN_CREATE, Actions.RUN_READ, Actions.RUN_CANCEL,
                     Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ,
                     Actions.TOOL_INVOKE, Actions.APPROVAL_CONSUME,
-                    Actions.UNKNOWN_DISPOSE, Actions.AUDIT_READ, Actions.AGENT_MANAGE),
+                    Actions.UNKNOWN_DISPOSE, Actions.AUDIT_READ, Actions.AGENT_MANAGE,
+                    // ⚠️ 画像读取（P4-D09 / G6）：租户管理员是画像数据的管理方
+                    Actions.PROFILE_READ),
             Roles.AGENT_AUTHOR, Set.of(
                     Actions.RUN_CREATE, Actions.RUN_READ, Actions.RUN_CANCEL,
                     Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ,
@@ -43,8 +45,13 @@ public class RoleBasedAuthorizationService implements AuthorizationService {
                     Actions.RUN_READ, Actions.APPROVAL_CONSUME,
                     Actions.UNKNOWN_DISPOSE, Actions.EVENT_SUBSCRIBE),
             Roles.VIEWER, Set.of(
-                    Actions.RUN_READ, Actions.RESULT_READ, Actions.EVENT_SUBSCRIBE),
+                    Actions.RUN_READ, Actions.RESULT_READ, Actions.EVENT_SUBSCRIBE,
+                    // ⚠️ 画像读取（P4-D09 / G6）：只读角色读只读数据，语义一致
+                    Actions.PROFILE_READ),
             // Worker 服务账号：需要执行与处置能力，但不需人工审批
+            // ⚠️ **刻意不含 PROFILE_READ**（P4-D09 / G6）：
+            //    Worker 是执行侧服务账号，读学生画像不属于其职责；
+            //    且画像是学生维度数据，给服务账号开这个口子会扩大数据可见面。
             Roles.WORKER, Set.of(
                     Actions.RUN_READ, Actions.RUN_CANCEL, Actions.TOOL_INVOKE,
                     Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ)

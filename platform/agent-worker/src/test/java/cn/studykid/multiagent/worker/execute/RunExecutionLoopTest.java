@@ -28,6 +28,7 @@ import cn.studykid.multiagent.ports.persistence.ApprovalPort;
 import cn.studykid.multiagent.ports.persistence.ApprovalPort.ApprovalOutcome;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
+import cn.studykid.multiagent.ports.persistence.RunEventPort;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
 import cn.studykid.multiagent.ports.security.ApprovalPolicy;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
@@ -136,6 +137,38 @@ class RunExecutionLoopTest {
     private static RunExecutionLoop loop(ModelGateway gw, RunClaimPort port,
                                          ToolInvocationGate gate) {
         return new RunExecutionLoop(gw, port, gate, Duration.ofSeconds(30), "w-1");
+    }
+
+    /** 带事件写入的循环（P4-D12 / G4）。 */
+    private static RunExecutionLoop loop(ModelGateway gw, RunClaimPort port,
+                                         ToolInvocationGate gate,
+                                         cn.studykid.multiagent.ports.persistence.RunEventPort eventPort) {
+        return new RunExecutionLoop(gw, port, gate, Duration.ofSeconds(30), "w-1",
+                new cn.studykid.multiagent.application.prompt.PromptGuard(), eventPort);
+    }
+
+    /**
+     * 记录型事件端口（P4-D12 / G4）。
+     *
+     * <p>⚠️ 本类存在的理由：P4-D08 的 R-1 教训——
+     * 「工具未注册为 Bean → 工具从不执行，而系统表面完全正常」。
+     * 事件写入若只做「类里有个方法」，同样会**静默不写**。
+     */
+    private static final class RecordingEventPort
+            implements cn.studykid.multiagent.ports.persistence.RunEventPort {
+        final List<String> types = new java.util.ArrayList<>();
+        final List<Map<String, Object>> payloads = new java.util.ArrayList<>();
+        boolean failOnAppend = false;
+
+        @Override
+        public void append(String tenantId, String runId, String eventType,
+                           Map<String, Object> payload) {
+            if (failOnAppend) {
+                throw new IllegalStateException("事件写入失败（模拟）");
+            }
+            types.add(eventType);
+            payloads.add(payload);
+        }
     }
 
     /** 内存账本替身（P3-D03）。每个用例独立实例，互不污染。 */
@@ -419,6 +452,139 @@ class RunExecutionLoopTest {
                             h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()), Duration.ofSeconds(30), " "))
                     .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("执行事件写入（P4-D12 / G4）")
+    class ExecutionEvents {
+
+        /**
+         * ⚠️ 事件类型断言必须引用 {@link RunEventPort.Types} 的**常量本身**，
+         * 不得用字符串拼接（如 {@code "RunEventPort." + "Types.RUN_STARTED"}）：
+         * 拼出来的是全限定类名字符串，与实际写入的 {@code "RUN_STARTED"} 不等，
+         * 而断言看上去仍在「验证事件类型」——实测过：编译通过、断言写对、
+         * 但期望值根本不是事件类型，于是恒红。
+         */
+
+        @Test
+        @DisplayName("✅ E-3 执行成功 → 写入 RUN_STARTED 与 RUN_SUCCEEDED")
+        void writesStartAndSuccess() {
+            FakeClaimPort port = new FakeClaimPort();
+            RecordingEventPort events = new RecordingEventPort();
+            var loop = loop(modelReturning(textResponse("x=2 或 x=3")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()), events);
+
+            loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(events.types)
+                    .as("⚠️ 此前生产里**没有任何写入方** → 时间线永远只有 RUN_CREATED")
+                    .contains(RunEventPort.Types.RUN_STARTED, RunEventPort.Types.RUN_SUCCEEDED);
+            assertThat(events.types.get(events.types.size() - 1))
+                    .as("终态事件必须是最后一条")
+                    .isEqualTo(RunEventPort.Types.RUN_SUCCEEDED);
+        }
+
+        @Test
+        @DisplayName("✅ E-8 载荷只含白名单标量（无 Prompt 原文、无学生信息）")
+        void payloadOnlyScalarWhitelistFields() {
+            FakeClaimPort port = new FakeClaimPort();
+            RecordingEventPort events = new RecordingEventPort();
+            var loop = loop(modelReturning(textResponse("x=2 或 x=3")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()), events);
+
+            loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(events.payloads).isNotEmpty();
+            for (Map<String, Object> payload : events.payloads) {
+                for (Map.Entry<String, Object> e : payload.entrySet()) {
+                    // ⚠️ 必须用 isInstanceOfAny(String, Number, Boolean) 一次断言三者之一：
+                    //    分三条链式断言会因「先 isInstanceOf 失败就短路」而漏掉后两种类型，
+                    //    等于把「只允许标量」写成了「只允许 String」。
+                    assertThat(e.getValue())
+                            .as("载荷只允许标量（String/Number/Boolean）")
+                            .isInstanceOfAny(String.class, Number.class, Boolean.class);
+                    assertThat(e.getKey()).isIn("state", "attempt", "stepType", "toolName",
+                            "operationState", "errorCode", "phase");
+                }
+            }
+        }
+
+        @Test
+        @DisplayName("⛔ E-7 事件写入失败**不影响** Run 成败（否则会误触发重试 → 重复副作用）")
+        void eventWriteFailureDoesNotBreakRun() {
+            FakeClaimPort port = new FakeClaimPort();
+            RecordingEventPort events = new RecordingEventPort();
+            events.failOnAppend = true;
+            var loop = loop(modelReturning(textResponse("x=2 或 x3")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()), events);
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .as("⚠️ 事件写失败若让 Run 失败 → 重试 → 重复副作用（Sev-0）")
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+            assertThat(port.committedState).isEqualTo("SUCCEEDED");
+        }
+
+        @Test
+        @DisplayName("⛔ E-6 失败时载荷不含失败原因原文")
+        void failurePayloadHasNoReasonText() {
+            FakeClaimPort port = new FakeClaimPort();
+            RecordingEventPort events = new RecordingEventPort();
+            ModelGateway gw = request -> {
+                // ⚠️ 必须用**不可重试**的错误种类：可重试失败按 P4-D12 §2.2
+                //    **刻意不写终态事件**（会重投，写了会让前端误判已结束）。
+                //    此前此用例误用 TIMEOUT（可重试）→ 断言 RUN_FAILED 出现，
+                //    而实现正确地不写 —— 测的是「与设计相反」的东西。
+                throw new ModelGateway.ModelGatewayException(
+                        ModelGateway.ModelErrorKind.INVALID_REQUEST, "模型调用失败：TIMEOUT");
+            };
+            var loop = loop(gw, port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()), events);
+
+            loop.execute(TENANT, task(), agentConfig(), snapshot(5), Map.of("q", "x"));
+
+            assertThat(events.types).contains(RunEventPort.Types.RUN_FAILED);
+            assertThat(events.payloads.toString())
+                    .as("⛔ 失败原因是内部错误细节，不得进事件载荷")
+                    .doesNotContain("TIMEOUT")
+                    .doesNotContain("模型调用失败");
+        }
+
+        @Test
+        @DisplayName("⛔ E-6b 可重试失败**不得**写终态事件（否则前端误判已结束）")
+        void retryableFailureWritesNoTerminalEvent() {
+            FakeClaimPort port = new FakeClaimPort();
+            RecordingEventPort events = new RecordingEventPort();
+            ModelGateway gw = request -> {
+                throw new ModelGateway.ModelGatewayException(
+                        ModelGateway.ModelErrorKind.TIMEOUT, "timeout");
+            };
+            var loop = loop(gw, port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()), events);
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.RETRYABLE_FAILURE);
+            assertThat(events.types)
+                    .as("⛔ 会重投的失败不得写终态事件——前端会以为「结束了」而不再等")
+                    .containsExactly(RunEventPort.Types.RUN_STARTED);
         }
     }
 

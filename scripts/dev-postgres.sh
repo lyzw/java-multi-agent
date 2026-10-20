@@ -127,14 +127,21 @@ cmd_migrate() {
   container_running || die "容器未运行"
   # ⚠️ 必须按版本号顺序应用**全部**迁移，不能只跑 V1。
   #    V2（画像）/ V3（账号）/ V4（预算预留唯一性）/ V5（审批状态守卫）/
-#    V6（审计追加约束）/ V7（限流桶）缺失时，
+  #    V6（审计追加约束）/ V7（限流桶）缺失时，
   #    集成测试会因「表不存在」失败，而报错点离真正的缺失原因很远
   #    ——本项目已因此误判过「约束全部失效」。
+  #
+  # ⚠️⚠️ 迁移清单**必须自动发现**，不得硬编码版本号列表（P4-D10 实测教训）：
+  #    本函数曾硬编码 `for version in 1 2 3 4 5 6 7`，
+  #    结果 **V8（保留期与删除）/ V9（结果读取索引）从未被本脚本应用**——
+  #    新建环境会缺这两项，而集成测试的报错点（表不存在 / 全表扫）
+  #    离真正的缺失原因很远。
+  #    与 P4-D08 的 R-1（工具未注册为 Bean）同源：
+  #    *清单与现实脱节，且系统表面正常*。
+  #    改为扫描迁移目录并按版本号排序 → 新增迁移**自动生效**，不会有人忘记改脚本。
   local version
-  for version in 1 2 3 4 5 6 7; do
-    local f
-    f=$(ls "$MIGRATION_DIR"/V${version}__*.sql 2>/dev/null | head -1) || true
-    [ -n "$f" ] || continue
+  for f in $(ls "$MIGRATION_DIR"/V*__*.sql 2>/dev/null | sort -t'V' -k2 -n); do
+    version=$(basename "$f" | sed -E 's/^V([0-9]+)__.*/\1/')
     say "执行 V${version}：$(basename "$f")"
     docker cp "$f" "$CONTAINER_NAME":/tmp/migrate_v${version}.sql >/dev/null
     local errs

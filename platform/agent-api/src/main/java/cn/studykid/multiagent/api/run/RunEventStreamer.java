@@ -66,6 +66,21 @@ public class RunEventStreamer {
     public interface FrameSender {
         void send(String eventType, String sequenceNo, Object data);
 
+        /**
+         * 发送**注释行**（SSE 注释帧），如 {@code : run-terminal}。
+         *
+         * <p>⚠️⚛️ <b>为什么终止信号必须是注释行、不是事件帧</b>（P4-D12 M-1 实测）：
+         * FE-01 §P4 的轮询策略与前端 {@code sse.ts} 解析器都规定
+         * 「终止：收到 {@code : run-terminal} <b>注释行</b>」。
+         * 而本类原先发的是<b>事件帧</b>（{@code event: run-terminal} + data），
+         * 前端解析器的事件分支要求有 {@code id} 行 → 无 id 的终止帧被<b>直接丢弃</b>
+         * → 前端<b>永远收不到终止信号</b> → 轮询每 3 秒重连、<b>永不停止</b>。
+         *
+         * <p>注释行是<b>控制帧</b>（不携带业务数据），用事件帧表达终止信号
+         * 还会让业务事件流里混进一个「假事件」——两端都该拒绝这种表达。
+         */
+        void sendComment(String comment);
+
         void complete();
     }
 
@@ -81,6 +96,17 @@ public class RunEventStreamer {
                             .data(data));
                 } catch (IOException e) {
                     throw new IllegalStateException("SSE 写入失败", e);
+                }
+            }
+
+            @Override
+            public void sendComment(String comment) {
+                try {
+                    // ⚠️ SSE 注释帧：线上形态为 ":run-terminal\n\n"
+                    //    （SseEmitter 自行补冒号与空行分隔）
+                    emitter.send(SseEmitter.event().comment(comment));
+                } catch (IOException e) {
+                    throw new IllegalStateException("SSE 注释写入失败", e);
                 }
             }
 
@@ -160,7 +186,10 @@ public class RunEventStreamer {
                 //    不关的话连接会一直占用到超时，客户端也等不到结束信号。
                 String state = stateSupplier.get();
                 if (state != null && terminalStates.contains(state)) {
-                    sender.send("run-terminal", "", Map.of("state", state));
+                    // ⚠️⚛️ 终止信号必须是**注释行**（P4-D12 M-1）——
+                    //    前端解析器只认 ': run-terminal' 注释行；
+                    //    发事件帧会被丢弃 → 客户端轮询永不停止。
+                    sender.sendComment("run-terminal");
                     sender.complete();
                     closed.set(true);
                 }

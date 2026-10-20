@@ -7,8 +7,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.api.run.RunController.ErrorResponse;
+import cn.studykid.multiagent.api.security.CurrentPrincipal.UnauthenticatedException;
 import cn.studykid.multiagent.core.compliance.ZeroRetentionViolationException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
@@ -124,5 +126,98 @@ public class ApiExceptionHandler {
         log.error("未预期异常", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(new ErrorResponse("INTERNAL_ERROR", "服务暂时不可用"));
+    }
+
+    // ── 以下两个是 P4-D09 端到端验证发现的真实缺陷 ──────────────────────
+
+    /**
+     * 控制器显式声明的 HTTP 状态 → 按声明返回。
+     *
+     * <p>⚠️⚠️ <b>这是 fail-open 缺陷的修复（P4-D09 实测）</b>：
+     * {@link ResponseStatusException} 是「资源不存在 404」「参数格式非法 400」
+     * 这类<b>刻意声明</b>的客户端可见状态。但 {@code @RestControllerAdvice}
+     * 的 {@link ExceptionHandler} 解析器<b>优先于</b> Spring 内置的
+     * {@code ResponseStatusExceptionResolver}，
+     * 于是本类原有的兜底 {@code @ExceptionHandler(Exception.class)}
+     * 会<b>抢先把它们吞成 500</b>。
+     *
+     * <p>危害（三重，且都属于「安全语义」）：
+     * <ol>
+     *   <li><b>状态码语义反转</b>：404 变 500，客户端无法区分
+     *       「资源不存在」与「服务端故障」，会做出完全相反的重试决策；</li>
+     *   <li><b>破坏存在性探测纪律</b>：404 与 500 的差异被抹平虽看似更"安全"，
+     *       但同时把<b>真的 404 也变成了 500</b>——
+     *       正确做法是让声明的状态码生效，由控制器自己保证
+     *       「不存在」与「无权限」返回同一个码（见 {@code RunQueryController}）；</li>
+     *   <li><b>监控污染</b>：用户数据错误被计入服务端错误率，
+     *       真实故障被淹没——恰好与本类 Javadoc 声明的
+     *       「异常与拒绝必须可区分」原则相反。</li>
+     * </ol>
+     *
+     * <p>⚠️ <b>消息需归一化</b>：{@code getReason()} 由控制器编写，
+     * 本项目约定其为不含内部结构的短句（如「资源不存在」）；
+     * 但为防止后续新增端点误传敏感信息，此处<b>不回显原文</b>，
+     * 仅按状态码给出固定文案。
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ErrorResponse> handleResponseStatus(ResponseStatusException e) {
+        HttpStatus status = HttpStatus.resolve(e.getStatusCode().value());
+        // ⚠️ 未映射到 HttpStatus 的状态码按 500 处理：
+        //    它意味着控制器声明了一个不存在的状态，属编程错误，不能当 4xx 放行。
+        if (status == null || status.is5xxServerError()) {
+            log.error("控制器声明了非法或服务端错误状态: code={}", e.getStatusCode(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ErrorResponse("INTERNAL_ERROR", "服务暂时不可用"));
+        }
+        log.info("控制器声明的状态: code={}", e.getStatusCode());
+        return ResponseEntity.status(status)
+                .body(new ErrorResponse(codeOf(status), messageOf(status)));
+    }
+
+    /**
+     * 缺少认证凭据 → 401。
+     *
+     * <p>⚠️ <b>同样是被兜底处理器吞掉的缺陷（P4-D09 实测）</b>：
+     * {@link UnauthenticatedException} 由 {@code CurrentPrincipal.require()} 抛出，
+     * 原本应映射 401。
+     *
+     * <p><b>为什么这条格外重要</b>：正常部署下 Spring Security 过滤器链
+     * 会在请求抵达控制器<b>之前</b>返回 401，故这条路径平时不触发。
+     * 但它<b>确实可达</b>——一旦请求通过了过滤器链却缺少可解析的租户上下文
+     * （如令牌被中途清除、异步派发丢失 SecurityContext），
+     * 没有本处理器时用户会看到 <b>500「服务暂时不可用」</b>，
+     * 即<b>「鉴权失败」被伪装成「服务端故障」</b>——
+     * 这与本类的核心原则直接矛盾，且会诱导客户端反复重试一个永远不会成功的请求。
+     */
+    @ExceptionHandler(UnauthenticatedException.class)
+    public ResponseEntity<ErrorResponse> handleUnauthenticated(UnauthenticatedException e) {
+        // ⚠️ 消息固定为「未认证」，不回显 getMessage()（不含令牌内容但也无必要透出细节）
+        log.info("缺少认证凭据: principal=匿名");
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(new ErrorResponse("UNAUTHENTICATED", "未认证"));
+    }
+
+    /** 4xx 状态 → 归一化 code。 */
+    private static String codeOf(HttpStatus status) {
+        return switch (status) {
+            case BAD_REQUEST -> "INVALID_REQUEST";
+            case UNAUTHORIZED -> "UNAUTHENTICATED";
+            case FORBIDDEN -> "ACCESS_DENIED";
+            case NOT_FOUND -> "NOT_FOUND";
+            case CONFLICT -> "IDEMPOTENCY_CONFLICT";
+            default -> "REQUEST_REJECTED";
+        };
+    }
+
+    /** 4xx 状态 → 归一化消息（<b>不含</b>控制器传入的原文）。 */
+    private static String messageOf(HttpStatus status) {
+        return switch (status) {
+            case BAD_REQUEST -> "请求参数不合法";
+            case UNAUTHORIZED -> "未认证";
+            case FORBIDDEN -> "无权执行该操作";
+            case NOT_FOUND -> "资源不存在";
+            case CONFLICT -> "请求与当前资源状态冲突";
+            default -> "请求被拒绝";
+        };
     }
 }
