@@ -117,18 +117,55 @@ public class ApplicationConfiguration {
     /**
      * 零保留闸门。
      *
-     * <p>⚠️ <b>当前无供应商确认</b>：DEC-10 GATE-2 已取得三家书面承诺，
-     * 但本项目<b>刻意不在代码中硬编码确认状态</b> ——
-     * 确认是运营事实，应由配置驱动。
-     * 未登记供应商一律拒绝（fail-closed），
-     * 接入真实数据前须在配置中登记。
+     * <p>⚠️ <b>配置驱动登记（P4-D07 / C9 接线）</b>：
+     * 从 yml {@code agent.compliance.zero-retention.confirmed-providers}
+     * 读取声明的供应商清单，逐家注册为 {@code pending()}（已登记但未确认）。
      *
-     * <p>⚠️ 这意味着<b>所有供应商调用当前均被拒绝</b>，
-     * 这是设计内的 fail-closed 行为，不是缺陷。
+     * <p><b>⚠️ 诚实、fail-closed 安全</b>：
+     * {@code ZeroRetentionRegistry.confirm()} <b>强制 {@code evidenceRef} 非空</b>
+     * （CM-1 红线），而 yml 仅提供供应商清单、<b>不含证据出处</b>——
+     * 本片<b>不伪造证据</b>，故只注册为 {@code pending}。
+     * {@code pending} ≠ {@code confirmed}，{@code allows()} 对 pending 返回 false
+     * → 闸门<b>仍拒绝</b>真实学生数据，<b>运行时行为不变（fail-closed 维持）</b>，
+     * 仅注册表不再为空，合规页得以诚实展示「已声明 N 家 / 均无有效确认 → 仍拒绝」。
+     *
+     * <p>⚠️ 真正按证据确认（CM-1）需新增证据承载配置
+     * （如 {@code agent.compliance.zero-retention.provider-evidence.<id>}），
+     * 属后续独立 CHG，本片不引入。
      */
     @Bean
-    public ZeroRetentionGate zeroRetentionGate() {
-        return new ZeroRetentionGate(ZeroRetentionRegistry.empty(), Clock.systemUTC());
+    public ZeroRetentionGate zeroRetentionGate(
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.compliance.zero-retention.confirmed-providers:}") String confirmedProviders) {
+        ZeroRetentionRegistry.Builder builder = ZeroRetentionRegistry.builder();
+        if (confirmedProviders != null && !confirmedProviders.isBlank()) {
+            for (String id : confirmedProviders.split(",")) {
+                String trimmed = id.trim();
+                if (!trimmed.isEmpty()) {
+                    builder = builder.pending(trimmed);
+                }
+            }
+        }
+        return new ZeroRetentionGate(builder.build(), Clock.systemUTC());
+    }
+
+    /**
+     * 配置只读投影服务（P4-D07 / C1）。
+     *
+     * <p>⚠️ <b>纯只读</b>：仅从 {@link org.springframework.core.env.Environment}
+     * 读出 yml 声明值并标注每条配置的 {@code effective}（是否接入运行时）。
+     * <b>不含任何业务逻辑</b>，故放在 api 层作为读模型。
+     *
+     * <p>⚠️ 刻意<b>不</b>加 {@code @Service}：与本项目装配统一归本类的约定一致
+     * （见 {@code budgetPort} / {@code runClaimPort}），避免被测试切片的组件扫描
+     * 意外拾取导致 Bean 候选冲突。
+     */
+    @Bean
+    public cn.studykid.multiagent.api.config.ConfigReadService configReadService(
+            org.springframework.core.env.Environment environment,
+            ZeroRetentionGate zeroRetentionGate) {
+        return new cn.studykid.multiagent.api.config.ConfigReadService(
+                environment, zeroRetentionGate);
     }
 
     @Bean
