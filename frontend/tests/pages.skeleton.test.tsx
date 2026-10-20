@@ -124,10 +124,29 @@ describe('⛔ P9 UNKNOWN 处置台（禁重试）', () => {
     expect(screen.queryByRole('button', { name: /重试/ })).not.toBeInTheDocument()
   })
 
-  it('两种未决状态必须显式区分', () => {
+  it('两种未决状态必须显式区分（⛔ FE-D10 实测更正原断言）', () => {
     renderAt('/reconciliation', <ReconciliationPage />, '/reconciliation')
-    expect(screen.getByText('UNKNOWN')).toBeInTheDocument()
-    expect(screen.getByText('RECONCILIATION_REQUIRED')).toBeInTheDocument()
+
+    // ⚠️ **原断言在此处是错的**（FE-D10 实测更正）：
+    //    它要求页面出现 `RECONCILIATION_REQUIRED`，
+    //    但 `tool_operation_state` 枚举里**根本没有这个值**——
+    //    实测枚举为 PENDING/IN_FLIGHT/SUCCEEDED/FAILED/UNKNOWN/
+    //    RECONCILED_SUCCEEDED/RECONCILED_ABSENT/MANUAL_DISPOSED。
+    //    要求前端展示一个数据库里不存在的状态 = 要求前端编造，
+    //    与 FE-D8 清掉的「编造内容」同型。
+    //
+    //    真正的区分是：`UNKNOWN`（尚未核对） vs 三个已核对终态。
+    //    该命题改由 `governance.page.test.tsx` 以真实 mock 数据断言。
+    expect(screen.queryByText('RECONCILIATION_REQUIRED')).not.toBeInTheDocument()
+    // ⛔ 页面不得假造一个待核对状态名——直接查 <option> 的 value/text，
+    //    避开 getByText 对多节点（如 select 的选中项回显）的歧义
+    const optionTexts = Array.from(document.querySelectorAll('option')).map((o) =>
+      `${o.getAttribute('value') ?? ''}|${(o.textContent ?? '').trim()}`,
+    )
+    for (const t of optionTexts) {
+      expect(t).not.toContain('RECONCILIATION_REQUIRED')
+    }
+    expect(screen.queryAllByText(/待核对/)).toHaveLength(0)
   })
 })
 

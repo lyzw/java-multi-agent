@@ -95,6 +95,15 @@ public interface AuditPort {
          * 它把一个「副作用未知」的操作归档为终态，不回退任何状态。
          */
         public static final String UNKNOWN_DISPOSE = "UNKNOWN_DISPOSE";
+
+        /** Agent 创建（P4-D14 / G2 / P18）。 */
+        public static final String AGENT_CREATE = "AGENT_CREATE";
+
+        /** Agent 版本发布（P4-D14 / G2 / P18）。定义不可变快照。 */
+        public static final String AGENT_PUBLISH = "AGENT_PUBLISH";
+
+        /** 查看配置（P4-D14 / C6 / P19）。fail-open 访问日志。 */
+        public static final String CONFIG_VIEW = "CONFIG_VIEW";
     }
 
     /** 审计视图（查询用）。 */

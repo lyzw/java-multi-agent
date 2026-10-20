@@ -217,7 +217,120 @@ export interface ProfileWeakness {
   createdAt: string | null
 }
 
-/* ── Run 状态查询（P4-D09 / G3）──────────────────────────────── */
+/* ── 治理只读 / 决策（P4-D13 / G7~G10）──────────────────── */
+
+/* ── Run 列表（G7 / P7 检索台）────────────────────────────────── */
+
+/**
+ * 游标分页响应。
+ *
+ * ⚠️ `nextCursor === null` 表示**没有更多**，与「本页为空」是两回事。
+ */
+export interface PageResponse<T> {
+  items: T[]
+  nextCursor: string | null
+}
+
+/** `run_state` 的合法取值（P4-D10 §1.4 实测，**不含 UNKNOWN**）。 */
+export type RunState =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'CANCELLED'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'TIMED_OUT'
+
+export interface RunListItem {
+  runId: string
+  state: string
+  createdAt: string
+  /** 非终态为 null */
+  completedAt: string | null
+  attempt: number
+  /** 失败原因**码**，不是错误原文；当前生产未写入（P4-D12 L-1）→ 恒为 null */
+  errorCode: string | null
+}
+
+/* ── 审批（G8 / P8 审批台）────────────────────────────────────── */
+
+export type ApprovalState = 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED' | 'CONSUMED'
+
+export interface ApprovalItem {
+  approvalId: string
+  operationId: string
+  runId: string
+  state: string
+  requirement: string
+  /** ⚠️ 是**参数摘要**，不是参数原文（FR-014） */
+  argumentDigest: string
+  targetResource: string
+  approverScope: string
+  expiresAt: string
+  approverId: string | null
+  decidedAt: string | null
+  createdAt: string
+  /** ⚠️ **服务端计算**的过期标志——前端不得自己比时间 */
+  expired: boolean
+}
+
+export interface ApprovalDecisionResponse {
+  approvalId: string
+  state: string
+}
+
+/* ── UNKNOWN 处置（G9 / P9）───────────────────────────────────── */
+
+export type OperationState =
+  | 'PENDING'
+  | 'IN_FLIGHT'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'UNKNOWN'
+  | 'RECONCILED_SUCCEEDED'
+  | 'RECONCILED_ABSENT'
+  | 'MANUAL_DISPOSED'
+
+export interface OperationItem {
+  operationId: string
+  runId: string
+  toolName: string
+  riskLevel: string
+  state: string
+  createdAt: string
+  updatedAt: string
+  /** P3-D03 自动对账来源；人工处置后为 `MANUAL` */
+  reconciliationSource: string | null
+  manuallyDisposed: boolean
+}
+
+/**
+ * 处置取值。
+ *
+ * ⛔⛔ **刻意没有 `RETRY`**：UNKNOWN 的含义是「副作用是否已发生**不知道**」，
+ * 此时重放 = 可能在学生数据上重复施加副作用（**Sev-0**）。
+ * 三个取值全部是**终态归档**，没有任何一条会退回执行态。
+ */
+export type Disposition = 'RECONCILED_SUCCEEDED' | 'RECONCILED_ABSENT' | 'MANUAL_DISPOSED'
+
+export interface DispositionResponse {
+  operationId: string
+  state: string
+  disposedBy: string
+  disposedAt: string
+}
+
+/* ── 审计（G10 / P10）──────────────────────────────────────────── */
+
+export interface AuditEntry {
+  auditId: string
+  actorId: string
+  action: string
+  resourceType: string
+  resourceId: string | null
+  createdAt: string
+  correlationId: string | null
+  detail: Record<string, unknown>
+}
 
 /**
  * Run 状态快照（后端 `GET /api/runs/{runId}`）。

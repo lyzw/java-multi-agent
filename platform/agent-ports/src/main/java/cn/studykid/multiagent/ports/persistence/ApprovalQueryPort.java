@@ -92,7 +92,13 @@ public interface ApprovalQueryPort {
         }
     }
 
-    /** 审批决定被拒（过期 / 状态不允许）。 */
+    /**
+     * 审批决定被拒（过期 / 状态不允许）。
+     *
+     * <p>⚠️ <b>只用于「资源状态冲突」</b>（→ 409），
+     * <b>不用于「请求体不合法」</b>（如拒绝未填理由，那是 400）——
+     * 两者语义不同，混用会让前端给出错误的引导。
+     */
     class ApprovalDecisionException extends RuntimeException {
         private static final long serialVersionUID = 1L;
 

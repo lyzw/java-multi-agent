@@ -174,13 +174,33 @@ class GovernanceQueryIT {
     }
 
     @Test
-    @DisplayName("⛔ G-5 跨租户列表为空（B 租户看不到 A 的 Run）")
-    void crossTenantListIsEmpty() {
-        newRun(tenantA);
+    @DisplayName("⛔ G-5 跨租户不可见：B 的列表里不得出现 A 的任何 Run")
+    void crossTenantListIsInvisible() {
+        String runIdA = newRun(tenantA);
+        // ⚠️ **不得断言「B 的列表为空」**：
+        //    隔离 IT 库是**跨多次运行累积**的，tenantB 自己也有 Run
+        //    （本类的其它用例会为 tenantB 造夹具），
+        //    「B 看到自己的数据」是完全正确的行为。
+        //    真正的隔离不变式是：**B 看不到 A 的任何一行**。
+        //    ——此前写成 isEmpty()，首轮恰好成立，一旦 B 有了自己的数据就转红，
+        //    且失败现场指向错误的排查方向（F-9 同形态）。
+        List<String> visibleToB = runList.list(tenantB, null, null, null, null, 100)
+                .items().stream()
+                .map(RunListQueryPort.RunListItem::runId)
+                .toList();
 
-        assertThat(runList.list(tenantB, null, null, null, null, 50).items())
+        assertThat(visibleToB)
                 .as("⛔ 跨租户必须完全不可见（RLS + 显式 tenant_id 双保险）")
-                .isEmpty();
+                .doesNotContain(runIdA);
+
+        // 且 B 只能看到 B 自己的行——用管理连接对照核对
+        List<String> ownRunIdsOfB = adminQueryList(
+                "SELECT run_id::text FROM run WHERE tenant_id='" + tenantB + "'::uuid");
+        for (String id : visibleToB) {
+            assertThat(ownRunIdsOfB)
+                    .as("⛔ B 的列表出现了不属于 B 的 Run")
+                    .contains(id);
+        }
     }
 
     // ── G8：审批 ────────────────────────────────────────────────────
@@ -265,9 +285,11 @@ class GovernanceQueryIT {
         String noReason = newApproval(tenantA, operationId, futureExpiry());
         assertThatThrownBy(() -> approvals.decide(tenantA, noReason, false, "a-1", null))
                 .as("⛔ 没有理由的拒绝在事后追责时等于没有决定")
-                .isInstanceOf(ApprovalQueryPort.ApprovalDecisionException.class);
+                // ⚠️ 必须是 IllegalArgumentException（→ 400）而非 ApprovalDecisionException（→ 409）：
+                //    409 会让前端提示「已被别人处理」，而真相是「你少填了理由」
+                .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> approvals.decide(tenantA, noReason, false, "a-1", "  "))
-                .isInstanceOf(ApprovalQueryPort.ApprovalDecisionException.class);
+                .isInstanceOf(IllegalArgumentException.class);
 
         String withReason = newApproval(tenantA, operationId, futureExpiry());
         var d = approvals.decide(tenantA, withReason, false, "a-1", "参数越权，需复核");
@@ -335,13 +357,22 @@ class GovernanceQueryIT {
     }
 
     @Test
-    @DisplayName("⛔ 处置列表跨租户为空；不存在 → NotFound")
+    @DisplayName("⛔ 处置列表跨租户不可见：B 不得看到 A 的 UNKNOWN 操作")
     void unknownListIsolationAndNotFound() {
-        newUnknownOperation(tenantA, "UNKNOWN");
+        String operationIdA = newUnknownOperation(tenantA, "UNKNOWN");
+        String operationIdB = newUnknownOperation(tenantB, "UNKNOWN");
 
-        assertThat(operations.list(tenantB, "UNKNOWN", null, 50).items())
-                .as("⛔ B 租户看不到 A 的 UNKNOWN")
-                .isEmpty();
+        List<String> visibleToB = operations.list(tenantB, "UNKNOWN", null, 100)
+                .items().stream()
+                .map(UnknownOperationPort.OperationItem::operationId).toList();
+
+        assertThat(visibleToB)
+                .as("⛔⛔ B 不得看到 A 的 UNKNOWN 操作（跨租户泄漏）")
+                .doesNotContain(operationIdA);
+        assertThat(visibleToB)
+                .as("控制组：B 应当能看到自己的操作（否则本用例可能在测「什么都没返回」）")
+                .contains(operationIdB);
+
         assertThatThrownBy(() -> operations.dispose(tenantA, UUID.randomUUID().toString(),
                 UnknownOperationPort.Disposition.MANUAL_DISPOSED, "op-1", null))
                 .isInstanceOf(UnknownOperationPort.OperationNotFoundException.class);
@@ -389,11 +420,17 @@ class GovernanceQueryIT {
     }
 
     @Test
-    @DisplayName("⛔ 审计查询跨租户为空")
-    void auditCrossTenantIsEmpty() {
-        newAuditRecord(tenantA, "RUN_CANCEL", "run", "r-1", Map.of());
-        assertThat(audits.query(tenantB, null, null, null, null, null, null, 50).items())
-                .isEmpty();
+    @DisplayName("⛔ 审计查询跨租户不可见：B 不得看到 A 的审计行")
+    void auditCrossTenantIsInvisible() {
+        String auditIdA = newAuditRecord(tenantA, "RUN_CANCEL", "run", "r-1", Map.of());
+
+        List<String> visibleToB = audits.query(tenantB, null, null, null, null, null, null, 100)
+                .items().stream()
+                .map(AuditQueryPort.AuditEntry::auditId).toList();
+
+        assertThat(visibleToB)
+                .as("⛔ B 不得看到 A 的审计行")
+                .doesNotContain(auditIdA);
     }
 
     // ── 游标单元（不依赖 DB）─────────────────────────────────────────
@@ -431,6 +468,22 @@ class GovernanceQueryIT {
         }
     }
 
+    /** 管理员查询多行（用于「某租户实际拥有哪些 Run」这类对照断言）。 */
+    private static List<String> adminQueryList(String sql) {
+        List<String> out = new java.util.ArrayList<>();
+        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
+             Connection conn = adminPool.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             var rs = ps.executeQuery()) {
+            while (rs.next()) {
+                out.add(rs.getString(1));
+            }
+            return out;
+        } catch (Exception e) {
+            throw new IllegalStateException("管理员查询失败: " + sql, e);
+        }
+    }
+
     private static HikariConfig adminConfig() {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
@@ -450,14 +503,31 @@ class GovernanceQueryIT {
     }
 
     private static String newRun(String tenantId) {
+        // ⚠️ **快照必须按租户取**：execution_snapshot 有 tenant_id，
+        //    拿 A 的快照去给 B 建 Run 会撞跨租户约束
+        //    （首次表现为「Run 原子提交失败」，指向 Run 代码，实际是夹具造错）。
+        String snapshot = snapshotIdFor(tenantId);
         String runId = UUID.randomUUID().toString();
-        creationRepo.insertRunAtomically(tenantId, runId, snapshotId,
+        creationRepo.insertRunAtomically(tenantId, runId, snapshot,
                 new IdempotencyKey("run.create", "gov-it-" + runId),
                 RequestDigest.ofText("digest-" + runId),
                 Map.of("question", "一元二次方程"),
                 "corr-" + runId,
                 new OutboxMessage(runId, tenantId, 0, 0L, CLOCK.instant()));
         return runId;
+    }
+
+    private static java.util.Map<String, String> snapshotCache = new java.util.HashMap<>();
+
+    private static synchronized String snapshotIdFor(String tenantId) {
+        return snapshotCache.computeIfAbsent(tenantId, t -> {
+            try {
+                return adminQuery("SELECT snapshot_id::text FROM execution_snapshot "
+                        + "WHERE tenant_id = '" + t + "'::uuid LIMIT 1");
+            } catch (Exception e) {
+                throw new IllegalStateException("租户 " + t + " 没有执行快照，无法造 Run 夹具", e);
+            }
+        });
     }
 
     /** 造一条 tool_operation（超级用户写入：RLS 下 app_agent 无权建任意操作）。 */

@@ -27,6 +27,9 @@ import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
 import cn.studykid.multiagent.infrastructure.security.AuthenticationService;
 import cn.studykid.multiagent.infrastructure.security.RoleBasedAuthorizationService;
+import cn.studykid.multiagent.application.config.RateLimitPolicy;
+import cn.studykid.multiagent.infrastructure.persistence.JdbcRateLimiter;
+import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 
 /**
@@ -273,12 +276,45 @@ public class ApplicationConfiguration {
                             .KEY_LIMIT + "}") Long limit,
             @org.springframework.beans.factory.annotation.Value(
                     "${" + cn.studykid.multiagent.application.config.RateLimitPolicy
-                            .KEY_WINDOW_SECONDS + "}") Long windowSeconds) {
-        return new cn.studykid.multiagent.infrastructure.persistence.JdbcRateLimiter(
+                            .KEY_WINDOW_SECONDS + "}") Long windowSeconds,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${" + cn.studykid.multiagent.application.config.RateLimitPolicy
+                            .KEY_GOVERNANCE_QUERY_LIMIT + ":}") Long governanceQueryLimit,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${" + cn.studykid.multiagent.application.config.RateLimitPolicy
+                            .KEY_GOVERNANCE_DECIDE_LIMIT + ":}") Long governanceDecideLimit) {
+        // ⚠️ 治理桶限额走**独立的配置键 + 缺省回落**，不走 requireLimit 的 fail-closed：
+        //    治理台阈值配错只影响可用性，不会造成越权（见 RateLimitPolicy#governanceLimitFor）。
+        //    但**全局限额仍 fail-closed**（它服务学生侧动作，配错就是安全边界）。
+        java.util.Map<String, Long> bucketLimits = new java.util.LinkedHashMap<>();
+        bucketLimits.put(RateLimitPort.Buckets.GOVERNANCE_QUERY,
+                optionalLimit(governanceQueryLimit, RateLimitPort.Buckets.GOVERNANCE_QUERY));
+        bucketLimits.put(RateLimitPort.Buckets.GOVERNANCE_DECIDE,
+                optionalLimit(governanceDecideLimit, RateLimitPort.Buckets.GOVERNANCE_DECIDE));
+
+        return new JdbcRateLimiter(
                 dataSource,
-                cn.studykid.multiagent.application.config.RateLimitPolicy.requireLimit(limit),
-                cn.studykid.multiagent.application.config.RateLimitPolicy
-                        .requireWindowSeconds(windowSeconds));
+                RateLimitPolicy.requireLimit(limit),
+                RateLimitPolicy.requireWindowSeconds(windowSeconds),
+                bucketLimits);
+    }
+
+    /** 治理桶限额：未配置则用 {@link RateLimitPolicy} 的缺省值；配置了则必须为正。 */
+    private static long optionalLimit(Long configured, String bucket) {
+        if (configured == null || configured.toString().isBlank()) {
+            return RateLimitPolicy.governanceLimitFor(bucket);
+        }
+        long value;
+        try {
+            value = Long.parseLong(configured.toString().trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("治理桶限额不是整数（拒绝启动）：" + bucket);
+        }
+        if (value <= 0) {
+            throw new IllegalStateException("治理桶限额必须为正数（0 会锁死治理台）："
+                    + bucket + " = " + value);
+        }
+        return value;
     }
 
     @Bean

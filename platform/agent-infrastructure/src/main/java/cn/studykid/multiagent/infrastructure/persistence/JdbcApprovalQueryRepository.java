@@ -137,7 +137,13 @@ public class JdbcApprovalQueryRepository implements ApprovalQueryPort {
                                              @Nullable String reason) {
         if (!approve && (reason == null || reason.isBlank())) {
             // ⛔ 拒绝必须有理由：没有理由的拒绝在事后追责时等于没有决定
-            throw new ApprovalDecisionException("拒绝审批必须填写理由", "PENDING");
+            //
+            // ⚠️ 抛 IllegalArgumentException 而非 ApprovalDecisionException：
+            //    前者是**客户端请求体不合法**（→ 400），
+            //    后者表示**资源当前状态不允许该决定**（→ 409）。
+            //    两者混在一个异常里会让「少填一个字段」被报成「状态冲突」，
+            //    前端据此提示「这条审批已被别人处理」——完全错误的引导。
+            throw new IllegalArgumentException("拒绝审批必须填写理由（deny without reason）");
         }
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             Connection conn = lease.connection();

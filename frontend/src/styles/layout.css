@@ -433,6 +433,37 @@
   font-size: var(--t-note);
 }
 
+/* ── 键值明细表（FE-D10 / G8~G10 治理页）───────────────── */
+
+/*
+ * ⛔ 本类是 FE-D5 CSS 完整性不变式**当场报错后补上的**——
+ *    即「组件用了某个 className，但主样式层没定义」的 F-17 同形态。
+ *    不补的后果：审批台/处置台的「参数摘要 / 目标资源 / 有效期」
+ *    会以裸 <dl> 渲染（默认左缩进 + 行距塌陷），
+ *    而这三项恰恰是 FR-014 要求的**审批人必须看到的内容**——
+ *    排版塌陷会让它「看起来像可有可无的补充说明」。
+ *
+ *    故此处的取舍与 FE-D8/D9 的「零新增类」相反且是刻意的：
+ *    那两片没引入新视觉概念，本片**引入了**（键值明细网格）。
+ */
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--s-1) var(--s-3);
+  margin: var(--s-2) 0 0;
+  font-size: var(--t-note);
+}
+
+.kv dt {
+  color: var(--ink-3);
+}
+
+.kv dd {
+  margin: 0;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
 /* ── 错误容器（ErrorView 自带，主样式层从未定义）────── */
 
 /*

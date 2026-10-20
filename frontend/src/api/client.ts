@@ -17,6 +17,14 @@ import type {
   RunResultResponse,
   ProfileResponse,
   RunStatusResponse,
+  PageResponse,
+  RunListItem,
+  ApprovalItem,
+  ApprovalDecisionResponse,
+  OperationItem,
+  Disposition,
+  DispositionResponse,
+  AuditEntry,
 } from './types'
 
 /** 401 时通知上层（SessionProvider）清理会话并跳登录 */
@@ -227,6 +235,156 @@ export function getProfile(studentId: string): Promise<ProfileResponse> {
 export function getRunStatus(runId: string): Promise<RunStatusResponse> {
   return _request<RunStatusResponse>(
     `/api/runs/${encodeURIComponent(runId)}`,
+    { method: 'GET' },
+    false,
+  )
+}
+
+/* ── 治理只读 / 决策（P4-D13 / G7~G10）────────────────────── */
+
+/**
+ * 治理类端点的限流纪律（FE-D10）。
+ *
+ * ⚠️ 后端把治理请求放在**独立的限流桶** `GOVERNANCE_QUERY`（120 次/60 秒），
+ *    与学生侧进度页的 `EVENT_QUERY`（30 次/60 秒）**互不相干**——
+ *    这正是 P4-D13 把治理桶限额与全局限额分开的原因：
+ *    运维翻列表不会把学生的进度页轮询打挂（FE-D9 §2.3 余量只有 4 次/分）。
+ *
+ * ⚠️ 但**治理页之间仍共享同一桶**（按租户限流，不按人）：
+ *    故本页**不做自动轮询**，只在用户显式操作时请求。
+ */
+
+/** 列表类查询的通用参数（游标分页）。 */
+export interface ListQuery {
+  limit?: number
+  cursor?: string | null
+  state?: string | null
+}
+
+/** 审计查询参数：⚠️ 动作字段叫 `action` 而非 `state`（见 {@link queryAudit}）。 */
+export interface AuditQuery extends ListQuery {
+  action?: string | null
+  resourceType?: string | null
+  resourceId?: string | null
+  from?: string | null
+  to?: string | null
+}
+
+/**
+ * 拼查询串。
+ *
+ * ⚠️ 空值一律**省略**而不是传空串：
+ * 后端对 `state=""` 会走「不限」分支，但对 `limit=` 会因非数字而 400。
+ * 前端多传一个空参数就换回一个 400，排查成本极高。
+ */
+function toQuery(params: Record<string, string | number | null | undefined>): string {
+  const parts: string[] = []
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined || value === '') continue
+    parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+  }
+  return parts.length === 0 ? '' : `?${parts.join('&')}`
+}
+
+/** GET /api/runs —— Run 列表（游标分页）。 */
+export function listRuns(
+  params: ListQuery & { createdFrom?: string | null; createdTo?: string | null } = {},
+): Promise<PageResponse<RunListItem>> {
+  return _request<PageResponse<RunListItem>>(
+    `/api/runs${toQuery({ ...params })}`,
+    { method: 'GET' },
+    false,
+  )
+}
+
+/** GET /api/approvals —— 审批列表（游标分页）。 */
+export function listApprovals(
+  params: ListQuery = {},
+): Promise<PageResponse<ApprovalItem>> {
+  return _request<PageResponse<ApprovalItem>>(
+    `/api/approvals${toQuery({ ...params })}`,
+    { method: 'GET' },
+    false,
+  )
+}
+
+/**
+ * POST /api/approvals/{id}/decision —— 记录审批决定。
+ *
+ * ⚠️ **没有任何身份字段**（`approverId` 由后端从令牌取）：
+ * 传了也会被后端忽略，且传错会让人误以为「可以把审批记到别人名下」。
+ *
+ * ⚠️ `reason` 在 DENY 时**必填**，缺失后端返回 400。
+ */
+export function decideApproval(
+  approvalId: string,
+  decision: 'APPROVE' | 'DENY',
+  reason?: string | null,
+): Promise<ApprovalDecisionResponse> {
+  return _request<ApprovalDecisionResponse>(
+    `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ decision, reason: reason ?? null }),
+    },
+    true,
+  )
+}
+
+/** GET /api/operations —— 工具操作列表（游标分页）。 */
+export function listOperations(
+  params: ListQuery = {},
+): Promise<PageResponse<OperationItem>> {
+  return _request<PageResponse<OperationItem>>(
+    `/api/operations${toQuery({ ...params })}`,
+    { method: 'GET' },
+    false,
+  )
+}
+
+/**
+ * POST /api/operations/{id}/disposition —— 人工处置 UNKNOWN 操作。
+ *
+ * ⛔⛔ `disposition` 的类型**不含 `RETRY`**——不是遗漏，是 Sev-0 级产品边界。
+ */
+export function disposeOperation(
+  operationId: string,
+  disposition: Disposition,
+  note?: string | null,
+): Promise<DispositionResponse> {
+  return _request<DispositionResponse>(
+    `/api/operations/${encodeURIComponent(operationId)}/disposition`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ disposition, note: note ?? null }),
+    },
+    true,
+  )
+}
+
+/**
+ * GET /api/audit —— 审计查询。
+ *
+ * ⚠️ 审计是**只读**的：本文件刻意不提供任何删除/修改端点。
+ */
+export function queryAudit(
+  params: AuditQuery = {},
+): Promise<PageResponse<AuditEntry>> {
+  return _request<PageResponse<AuditEntry>>(
+    // ⚠️ `action` 必须**显式**映射：`ListQuery` 只有 `state`，
+    //    若直接 `{ ...params }` 展开，`action` 仍会被 toQuery 带上——
+    //    但一旦有人把 `action` 写成 `state`（或反过来），
+    //    TS 在展开后**不报错**，筛选条件会**静默失效**，
+    //    页面表现为「怎么筛都没数据」。故逐字段列举。
+    `/api/audit${toQuery({
+      limit: params.limit,
+      cursor: params.cursor,
+      action: params.action,
+      resourceType: params.resourceType,
+      resourceId: params.resourceId,
+      from: params.from,
+      to: params.to,
+    })}`,
     { method: 'GET' },
     false,
   )
