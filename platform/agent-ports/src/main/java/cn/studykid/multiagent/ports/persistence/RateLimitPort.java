@@ -38,6 +38,27 @@ public interface RateLimitPort {
 
         /** 事件查询（SSE 续传轮询）。 */
         public static final String EVENT_QUERY = "EVENT_QUERY";
+
+        /**
+         * 治理类**只读**查询（P4-D13 / G7~G10：Run 列表、审批列表、审计查询）。
+         *
+         * <p>⚠️⚠️ <b>为什么不复用 {@link #EVENT_QUERY}</b>：
+         * FE-D9 的配额表已把进度页算满——SSE 轮询 20 次/分 + G3 状态轮询 6 次/分
+         * = 26 次/分，而 {@code EVENT_QUERY} 的限额只有 30 次/60 秒，
+         * <b>余量仅 4 次/分</b>。若治理页复用同一桶，
+         * 运维打开一个列表页就能把学生的进度页轮询<b>直接打挂</b>。
+         * 两个场景的<b>威胁模型不同</b>（个人高频轮询 vs 运维低频检索），
+         * 必须分开计量。
+         */
+        public static final String GOVERNANCE_QUERY = "GOVERNANCE_QUERY";
+
+        /**
+         * 治理类**决策**写操作（P4-D13：审批批准/拒绝、UNKNOWN 人工处置）。
+         *
+         * <p>限额低于只读桶：写操作的后果不可逆（审批一经批准即被工具消费，
+         * 处置即关闭对账通道），必须比查询更严格。
+         */
+        public static final String GOVERNANCE_DECIDE = "GOVERNANCE_DECIDE";
     }
 
     /**
