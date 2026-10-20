@@ -121,6 +121,13 @@ export function createRunEventPoller(
   let stopped = false
 
   const emit = (patch: Partial<StreamSnapshot>): void => {
+    // ⚠️ F-23 修复：stop() 之后一律不再写状态。
+    //    旧实现只在 poll 起始检查 stopped —— 一旦进入 `await openEventStream`，
+    //    stop() 清掉的是「下一轮」定时器，本轮已发出、正在路上的响应返回后
+    //    仍会 emit，导致已停止的 poller 继续更新 snapshot（StrictMode 双挂载下
+    //    还会用旧/空快照覆盖活跃 poller 的快照）。
+    //    在 emit 自身加守卫，使任何 stop() 之后的 emit 都失效。
+    if (stopped) return
     snapshot = { ...snapshot, ...patch }
     callbacks.onSnapshot(snapshot)
   }
