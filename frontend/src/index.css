@@ -7,4 +7,4 @@
 @import './styles/tokens.css';
 @import './styles/layout.css';
 
-/* 旧样式已归档至 legacy-backup.css（FE-D2 版本），未删除以便回溯。 */
+/* 旧样式（FE-D2 版本）已于 FE-D5 收敛进 layout.css 并删除 legacy-backup.css。 */

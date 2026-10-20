@@ -240,7 +240,7 @@ PROBE warns    = 1 Warning: Encountered two children with the same key, `%s`.
 
 | 项 | 理由 |
 |---|---|
-| 删 `legacy-backup.css`（685 行） | 注释已说明保留以便回溯；且其中 19 个类仍被组件使用，**现在删会直接破样式**。列为待收敛项，需先做一轮「legacy 类逐个迁移」 |
+| 删 `legacy-backup.css`（685 行） | ~~注释已说明保留以便回溯；且其中 19 个类仍被组件使用，现在删会直接破样式。列为待收敛项~~ **⚠️ 此条判断有误，见 FE-D5 §6 更正**：实测 legacy 从未被 `index.css` `@import`，不是样式源；其类在生产环境零样式。已在 FE-D5 迁移 8 个裸奔类并删除该文件 |
 | 删 `NotAvailable` | 仍被 `RunProgressPage` 之外的页面使用；本轮的修复是让 `RunProgressPage` 收敛到 `Unavailable`，而非反向 |
 | 接角色守卫 | G1 未补齐，接了就是猜。见 §1.8 |
 | 接分页控件 | 后端无分页契约（G7），FE-D2 §3.6 已定「不擅自定契约」 |
@@ -326,8 +326,9 @@ PROBE warns    = 1 Warning: Encountered two children with the same key, `%s`.
 
 1. **角色级菜单隐藏仍未实现** —— G1 未补齐。学生登录后会看到「审批台」
    等管理入口，点进去由后端 403 给权威结论。这是**已知的体验缺口，不是安全缺口**。
-2. **`legacy-backup.css` 仍是双份样式源** —— 其中 19 个类仍在使用，
-   任何样式修改都要同时检查它是否覆盖。待下一轮专项收敛。
+2. ~~**`legacy-backup.css` 仍是双份样式源** —— 其中 19 个类仍在使用，任何样式修改都要同时检查它是否覆盖。待下一轮专项收敛。~~
+   **⚠️ 已更正（FE-D5 §6）**：legacy 从未被加载，不是样式源；其类长期裸奔。
+   已在 FE-D5 迁移 8 个裸奔类（`error`/`field__errors`/`not-available`/`status`(+修饰符)/`status__label`/`status__hint`/`notice`/`unavailable`）并删除该文件。
 3. **`NotAvailable` 与 `Unavailable` 仍未彻底统一** —— 本轮只收敛了进度页。
 4. **到期提示只到「提前 60s」** —— 后端 TTL 硬编码 900s 且无 refresh token（G13），
    用户若无操作仍会被硬跳登录，提示只争取到一次保存机会。

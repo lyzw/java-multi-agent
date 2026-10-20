@@ -463,6 +463,95 @@
   font-family: var(--font-mono);
 }
 
+/* ── FE-D5：从 legacy-backup.css 收敛的裸奔类（2026-10-20）────
+ *
+ * ⚠️ 背景：legacy-backup.css 自 FE-D3 起就**没有被 index.css 引入**，
+ *    所以其中定义的类在生产环境全部无效。FE-D4 的 F-17 只补了 6 个类，
+ *    漏了下面这 8 个——它们对应的组件（进度页错误提示、表单校验错误列表、
+ *    状态区、降级提示、未开放外壳）真实渲染时一直裸奔。
+ *
+ * ⛔ 不照搬 legacy 旧写法：legacy 引用的是已被淘汰的 --color-* / --radius
+ *    等 token，且用了圆角卡片。这里遵循 FE-D3 纪律：区块靠线与留白分隔，
+ *    禁圆角禁阴影；批改红(--mark)只给错误，状态色用低饱和 --settled/--mark。
+ */
+
+/* 进度页错误提示（role=alert）—— 错误用批改红 */
+.error {
+  margin: var(--s-3) 0 0;
+  color: var(--mark);
+  font-size: var(--t-note);
+}
+
+/* 表单校验错误列表（Field 的 <ul>）—— 与 .field__error 同语调 */
+.field__errors {
+  margin: var(--s-1) 0 0;
+  padding-left: var(--s-4);
+  color: var(--mark);
+  font-size: var(--t-note);
+  list-style: disc;
+}
+
+.field__errors li {
+  margin: var(--s-1) 0;
+}
+
+/* 未开放（NotAvailable）—— 中性，不是错误，不染红 */
+.not-available {
+  margin: var(--s-4) 0;
+  padding: var(--s-4) 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  text-align: center;
+}
+
+.not-available p {
+  margin: var(--s-1) 0;
+}
+
+/* 进度页状态区（status--${tone}：pending/running/neutral 沿用基线）*/
+.status {
+  margin: var(--s-3) 0;
+  padding: var(--s-3);
+  border-left: 3px solid var(--rule-strong);
+  background: var(--paper-sunk);
+}
+
+.status--success {
+  border-left-color: var(--settled);
+  background: var(--settled-wash);
+}
+
+.status--failure {
+  border-left-color: var(--mark);
+  background: var(--mark-wash);
+}
+
+.status__label {
+  margin: 0;
+  font-size: var(--t-body);
+  font-weight: 600;
+}
+
+.status__hint {
+  margin: var(--s-1) 0 0;
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+/* 进度页降级提示（role=status）—— 中性信息块 */
+.notice {
+  margin: var(--s-3) 0;
+  padding: var(--s-3);
+  border: 1px solid var(--rule);
+  background: var(--paper-sunk);
+  font-size: var(--t-note);
+}
+
+/* 未开放外壳（Unavailable 组件最外层）—— 内层 __box 已在上方定义 */
+.unavailable {
+  margin-top: var(--s-4);
+}
+
 /* ── 响应式：三断点 ──────────────────────────────────── */
 
 /* 中屏：侧栏收窄为图标条 */
