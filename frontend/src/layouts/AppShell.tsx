@@ -57,7 +57,7 @@ const NAV: NavGroup[] = [
 ]
 
 export function AppShell(): JSX.Element {
-  const { signOut } = useSession()
+  const { signOut, expiringSoon } = useSession()
   const navigate = useNavigate()
   const [warn, setWarn] = useState(false)
 
@@ -90,6 +90,19 @@ export function AppShell(): JSX.Element {
         <p role="alert" className="marked" style={{ margin: 0, borderLeftWidth: 2 }}>
           <span className="marked__label">退出时出错</span>
           已回到登录页
+        </p>
+      ) : null}
+
+      {/*
+        ⚠️ 到期前 60s 预警（FE-D1 §4.2）。
+
+        ⛔ 不用 --mark 红：这是**提示**不是**错误**，红边只留给指出错误（FE-D3 R1）。
+        用中性线 + settled 色文字，与「错误」在视觉上明确区分。
+      */}
+      {expiringSoon ? (
+        <p role="status" className="marked marked--calm" style={{ margin: 0 }}>
+          <span className="marked__label">会话即将到期</span>
+          还有约 1 分钟。后端暂不支持自动续期，届时需要重新登录。
         </p>
       ) : null}
 

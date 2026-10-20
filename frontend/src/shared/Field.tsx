@@ -75,8 +75,15 @@ export function Field({
 
       {hasViolation ? (
         <ul id={errorId} role="alert" className="field__errors">
-          {violations.map((violation) => (
-            <li key={violation.kind}>{violation.message}</li>
+          {/*
+            ⚠️ key 必须含索引（F-20）：
+            旧写法 `key={violation.kind}` 在同一 kind 命中多次时
+            （如文本里出现**两个手机号**）会产生重复 key，
+            React 据此复用节点 → 第二条违规提示不渲染，
+            用户改完第一条仍被拒，反复试错。
+          */}
+          {violations.map((violation, index) => (
+            <li key={`${violation.kind}-${index}`}>{violation.message}</li>
           ))}
         </ul>
       ) : null}

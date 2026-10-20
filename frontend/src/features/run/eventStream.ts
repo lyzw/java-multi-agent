@@ -166,15 +166,28 @@ export function createRunEventPoller(
         }
       }
 
+      const merged = [...snapshot.events, ...newEvents]
+
       emit({
         loading: false,
-        events: [...snapshot.events, ...newEvents],
+        events: merged,
         lastEventId: maxSeq,
         done: sawTerminal,
-        // ⚠️ 降级判定：请求成功但一个执行事件都没拿到。
-        //    当前后端只有 RUN_CREATED 会写入，属已知限制（G4），
-        //    如实告知用户优于假装有进度。
-        degraded: newEvents.length === 0 && !sawTerminal,
+        /*
+         * ⚠️ 降级判定（F-19 修复）：
+         *    旧写法是 `newEvents.length === 0 && !sawTerminal`，
+         *    语义被写成「**本轮**无新事件」。实际想表达的是
+         *    「**整个流从未产生过任何事件**」。
+         *
+         *    混淆后果：第 1 轮收到 RUN_CREATED、第 2 轮无新事件时
+         *    degraded 翻回 true，UI 说「详细执行步骤将在功能完善后展示」，
+         *    而上方的执行事件时间线**已经列出了** RUN_CREATED
+         *    → 文案说「没步骤」、界面显示「有步骤」，自相矛盾。
+         *
+         * ✅ 改为只看**累计**：一旦收到过事件，永久不再降级提示。
+         *    这是单向阀 —— 不会因为某一轮空翻就撤回已告知用户的事实。
+         */
+        degraded: merged.length === 0 && !sawTerminal,
       })
 
       if (sawTerminal) {

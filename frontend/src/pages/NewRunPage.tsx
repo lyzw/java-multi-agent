@@ -141,12 +141,20 @@ export function NewRunPage(): JSX.Element {
   }
 
   return (
-    <main className="new-run">
-      <h1>发起辅导</h1>
-      <p className="muted">
-        请提交一道错题。我们只采集随机匿名编号、年级、学科与解题过程，
-        不会收集姓名、学校、班级等身份信息。
-      </p>
+    <>
+      {/*
+        ⚠️ 这里曾是 <main className="new-run"> ——
+        AppShell 已渲染 <main className="main">，main 嵌套 main
+        违反 HTML 规范（一个文档只有一个主内容区）。
+        已按 FE-D3 §3.1 迁移为 main__head 结构（F-16）。
+      */}
+      <div className="main__head">
+        <h1>发起辅导</h1>
+        <p className="main__lead">
+          请提交一道错题。我们只采集随机匿名编号、年级、学科与解题过程，
+          不会收集姓名、学校、班级等身份信息。
+        </p>
+      </div>
 
       <form onSubmit={(e) => void handleSubmit(e)} noValidate>
         <Field
@@ -231,6 +239,6 @@ export function NewRunPage(): JSX.Element {
       </form>
 
       {error !== null ? <ErrorView error={error} /> : null}
-    </main>
+    </>
   )
 }

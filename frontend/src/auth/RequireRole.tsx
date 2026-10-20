@@ -6,6 +6,14 @@
  *    隐藏入口 ≠ 用户无权访问 —— 后端仍会拒绝。
  *
  * ⚠️ 刻意不引入权限库：依赖越少，攻击面越小（同 FE-D1 理由）。
+ *
+ * ⚠️⚠️ **`ROLE_PERMISSIONS` 是后端 `RoleBasedAuthorizationService.java:32` 的第二份副本**
+ * （FE-D4 §1.8 F-22）：
+ *    · 后端变更**不会**让这边编译失败，两边会静默漂移
+ *    · 当前无调用方（`RequireRole` 内 `void area` 刻意放行），也无 UI 消费
+ *    · G1（登录响应不含 `roles`）补齐前，任何真实角色判定都只能是猜
+ * 故本文件保留契约定义 + 测试锁住语义，**不接假实现**。
+ * 真正接入时必须以服务端 roles 为准，并删除这份副本。
  */
 
 import type { ReactNode } from 'react'

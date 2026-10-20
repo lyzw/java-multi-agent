@@ -162,14 +162,25 @@ export function normalizeHttpError(
   }
 }
 
-/** 网络层失败（fetch 抛错）归一化 */
+/**
+ * 网络层失败（fetch 抛错）归一化
+ *
+ * ⛔ 刻意**不**把 `cause.message` 透出给用户（F-21）：
+ *    原实现写的是 `...(cause instanceof Error && cause.message ? {} : {})`，
+ *    三元两边都是 `{}`，恒展开空对象 —— 是死代码，
+ *    推测本意是想带出原始异常文案。
+ *    但 `fetch` 的异常文案（`Failed to fetch` / `Load failed` /
+ *    `net::ERR_CONNECTION_REFUSED`）对终端用户没有任何意义，
+ *    还可能泄漏内网细节。保持统一的归一化文案即可。
+ */
 export function normalizeNetworkError(cause: unknown): NormalizedError {
+  // cause 仅保留签名以便将来接入日志；不进入用户可见文案
+  void cause
   return {
     status: 0,
     code: 'NETWORK_ERROR',
     message: defaultMessage(0, 'NETWORK_ERROR'),
     fieldErrors: {},
-    ...(cause instanceof Error && cause.message ? {} : {}),
   }
 }
 

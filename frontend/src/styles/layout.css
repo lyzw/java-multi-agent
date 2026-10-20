@@ -383,6 +383,86 @@
   font-size: var(--t-note);
 }
 
+/* ── 执行事件时间线（进度页）─────────────────────────── */
+
+/*
+ * ⚠️ 这里曾是 legacy-backup.css 里的定义，FE-D3 视觉迁移时未随页面搬迁，
+ *    导致 timeline / timeline__seq / timeline__time / timeline__type
+ *    四个类在主样式层无定义（F-17）。__op / __step / __tool 三个标签类
+ *    则从未被任何样式层定义过 —— 时间线的操作态、步骤、工具名在真实渲染中裸奔。
+ */
+.timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--rule);
+}
+
+.timeline li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--t-note);
+}
+
+.timeline__seq {
+  font-family: var(--font-mono);
+  color: var(--ink-3);
+  flex: none;
+}
+
+.timeline__type {
+  color: var(--ink);
+  flex: none;
+}
+
+.timeline__step,
+.timeline__tool,
+.timeline__op {
+  color: var(--ink-2);
+  flex: none;
+}
+
+.timeline__time {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--t-note);
+}
+
+/* ── 错误容器（ErrorView 自带，主样式层从未定义）────── */
+
+/*
+ * ⚠️ error-view__hint / error-view__message 在 legacy-backup.css 有定义，
+ *    但外层容器 .error-view 在主样式层不存在（F-17）——
+ *    错误提示失去了统一的外框，与 marked 区块的观感不一致。
+ * ⛔ 不用 --mark 红：错误已由 role="alert" + 文案承载，
+ *    这里用中性线容器，避免把一切提示都染成红色（FE-D3 R1）。
+ */
+.error-view {
+  padding: var(--s-3);
+  border-left: 2px solid var(--rule-strong);
+  margin: var(--s-3) 0;
+}
+
+.error-view__message {
+  margin: 0;
+  color: var(--ink);
+}
+
+.error-view__hint {
+  margin: var(--s-1) 0 0;
+  color: var(--ink-3);
+  font-size: var(--t-note);
+}
+
+.error-view__hint code {
+  font-family: var(--font-mono);
+}
+
 /* ── 响应式：三断点 ──────────────────────────────────── */
 
 /* 中屏：侧栏收窄为图标条 */

@@ -16,7 +16,7 @@ import { useParams } from 'react-router-dom'
 import { createRunEventPoller, type StreamSnapshot } from '@/features/run/eventStream'
 import { stateLabel, stateTone, stateHint, isTerminalState } from '@/features/run/runState'
 import { useSession } from '@/auth/session'
-import { NotAvailable } from '@/shared/ErrorView'
+import { Unavailable } from '@/shared/states'
 
 function formatTime(iso: string): string {
   if (iso.length === 0) return ''
@@ -71,16 +71,43 @@ export function RunProgressPage(): JSX.Element {
     (currentState === null || !isTerminalState(currentState))
 
   if (runId === undefined) {
-    return <NotAvailable feature="进度追踪" detail="缺少运行标识" />
+    return (
+      <>
+        <div className="main__head">
+          <h1>分析进度</h1>
+        </div>
+        {/*
+          ⚠️ 这里曾是 NotAvailable（shared/ErrorView.tsx）。
+          FE-D2 §2.1 已决策「DataUnavailable 取代散落的 NotAvailable」，
+          理由：一致性本身就是信息 —— 两套未开放表达会让用户无法判断
+          哪些功能能用、哪些在开发中，更无法得知由谁承接（F-18）。
+          NotAvailable 不带 blockedBy / eta，进度页改用 Unavailable 后可追溯缺口编号。
+        */}
+        <Unavailable
+          feature="进度追踪"
+          blockedBy="G3"
+          reason="缺少运行标识，无法定位该次辅导"
+        />
+      </>
+    )
   }
 
   const tone = stateTone(currentState ?? '')
   const hint = stateHint(currentState ?? '', errorCode)
 
   return (
-    <main className="run-progress">
-      <h1>分析进度</h1>
-      <p className="muted">运行标识：<code>{runId}</code></p>
+    <>
+      {/*
+        ⚠️ 这里曾是 <main className="run-progress"> ——
+        AppShell 已渲染 <main className="main">，main 嵌套 main
+        违反 HTML 规范（一个文档只有一个主内容区），
+        屏幕阅读器会把它当作第二个主内容区。
+        已按 FE-D3 §3.1 迁移为 main__head 结构（F-16）。
+      */}
+      <div className="main__head">
+        <h1>分析进度</h1>
+        <p className="main__lead">运行标识：<code>{runId}</code></p>
+      </div>
 
       {/* 状态区 */}
       <section className={`status status--${tone}`} aria-live="polite">
@@ -139,16 +166,21 @@ export function RunProgressPage(): JSX.Element {
         后端无 result:read 端点（G5），且结果页须预留
         UNKNOWN/待核对分区（P0-D00 §3.4 明令不得隐藏），
         接口就绪后再按 FE-01 §P5 实现。
+
+        ⚠️ 这里曾是 NotAvailable（F-18）—— FE-D2 §2.1 已决策统一用
+        Unavailable，见本文件上方注释。带 blockedBy="G5" 使缺口可追溯。
       */}
-      <NotAvailable
+      <Unavailable
         feature="归因结果"
-        detail="结果查看功能尚未开放，请稍后再来"
+        blockedBy="G5"
+        reason="后端尚未提供 result:read 端点"
+        eta="P3"
       />
 
       {/* 重连指示：诚实告知数据更新状态 */}
       {shouldShowSyncing ? (
         <p className="muted">正在同步最新状态…</p>
       ) : null}
-    </main>
+    </>
   )
 }
