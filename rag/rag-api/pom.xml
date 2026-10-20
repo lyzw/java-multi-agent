@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.rag</groupId>
+    <artifactId>java-saas-rag</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>rag-api</artifactId>
+  <name>rag-api :: 接口层</name>
+  <description>检索与入库 REST 接口、SSE 进度流、错误契约</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-ports</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-application</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-infrastructure</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+  </dependencies>
+</project>

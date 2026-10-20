@@ -121,22 +121,31 @@ describe('T5：进度页未开放占位应可追溯缺口（F-18）', () => {
     expect(source).toMatch(/Unavailable/)
   })
 
-  it('归因结果占位应带阻塞编号 G5 与承接阶段', () => {
-    // ⚠️ RunProgressPage 内部 useSession() → 必须包 SessionProvider
-    // ⚠️ 还必须给出 :runId 路由参数，否则走「缺少运行标识」的另一分支
+  it('⛔ G5 已关闭（FE-D9）：进度页不得再显示「归因结果未开放」占位', () => {
+    // ⚠️⚠️ FE-D9：**G5 已由 P4-D10 关闭**，结果页已接真实数据（FE-D8）。
+    //    进度页继续显示「后端尚未提供 result:read 端点 / G5 / P3 阶段承接」
+    //    是**过时的谎言**——会让用户以为功能还没做。
+    //    故此处断言：**不得出现**该占位。
+    const source = readCode('pages/RunProgressPage.tsx')
+    expect(source).not.toMatch(/blockedBy="G5"/)
+    expect(source).not.toMatch(/result:read/)
+  })
+
+  it('⛔ 但「缺少运行标识」仍应带可追溯的缺口编号', () => {
+    // ⚠️ 区分两件事：
+    //    · 缺的是**运行标识**（前端入参）→ 仍用 Unavailable + 缺口编号；
+    //    · G5 **端点**已关闭 → 不再是缺口。
+    //    故此处的 Unavailable 仍在，但它标注的是「缺运行标识」而非「G5 未实现」。
     render(
-      <MemoryRouter initialEntries={['/runs/run-abc-123']}>
+      <MemoryRouter initialEntries={['/runs']}>
         <SessionProvider>
           <Routes>
-            <Route path="/runs/:runId" element={<RunProgressPage />} />
+            <Route path="/runs" element={<RunProgressPage />} />
           </Routes>
         </SessionProvider>
       </MemoryRouter>,
     )
-    expect(screen.getByText(/归因结果还没接上后端/)).toBeInTheDocument()
-    expect(screen.getByText('G5')).toBeInTheDocument()
-    // 承接阶段也应如实呈现
-    expect(screen.getByText(/P3 阶段承接/)).toBeInTheDocument()
+    expect(screen.getByText(/进度追踪还没接上后端/)).toBeInTheDocument()
   })
 
   it('缺少运行标识时也应带阻塞编号', () => {

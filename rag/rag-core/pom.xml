@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.rag</groupId>
+    <artifactId>java-saas-rag</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>rag-core</artifactId>
+  <name>rag-core :: 领域层</name>
+  <description>教辅语料领域模型：版本坐标系、知识点本体、片段角色、引用与接地判定</description>
+
+  <dependencies>
+    <!--
+      ⚠️ 领域层零框架依赖（仅 JSpecify）。
+      这与 platform/agent-core 的 AgentCorePurityTest 同构：
+      RagCorePurityTest 断言本模块的编译期依赖中除 jspecify 外无任何 jar。
+      理由：领域规则（版本过滤、泄题闸门、接地判定）是最需要长期稳定、
+      最容易被框架升级破坏的部分——它们必须能跨 Spring Boot 版本迁移。
+    -->
+    <dependency>
+      <groupId>org.jspecify</groupId>
+      <artifactId>jspecify</artifactId>
+      <version>${jspecify.version}</version>
+    </dependency>
+  </dependencies>
+</project>

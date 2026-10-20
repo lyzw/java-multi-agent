@@ -13,6 +13,10 @@ import type {
   LoginResponse,
   CreateRunRequest,
   CreateRunResponse,
+  ConfigResponse,
+  RunResultResponse,
+  ProfileResponse,
+  RunStatusResponse,
 } from './types'
 
 /** 401 时通知上层（SessionProvider）清理会话并跳登录 */
@@ -122,6 +126,19 @@ export function createRun(payload: CreateRunRequest): Promise<CreateRunResponse>
   )
 }
 
+/* ── 配置只读（P4-D07 / C1）─────────────────────────── */
+
+/**
+ * GET /api/config
+ *
+ * ⚠️ 只读、零副作用、不暴露密钥（P4-D07 B-2）。
+ * 返回 yml 声明值 + 每条配置的 `effective`（是否真正接入运行时），
+ * 供配置页诚实呈现「声明 vs 实际」。
+ */
+export function getConfig(): Promise<ConfigResponse> {
+  return _request<ConfigResponse>('/api/config', { method: 'GET' }, false)
+}
+
 /**
  * GET /api/runs/{runId}/events —— 返回 SSE 文本流。
  *
@@ -165,4 +182,52 @@ export async function openEventStream(
   }
 
   return response
+}
+
+/* ── 结果读取（P4-D10 / G5）────────────────────────────────── */
+
+/**
+ * GET /api/runs/{runId}/result
+ *
+ * ⚠️ 404 表示「不存在**或**不属于本租户」——后端**不区分**二者，
+ *    故前端**不得**据此推断「该 Run 属于别人」。
+ */
+export function getRunResult(runId: string): Promise<RunResultResponse> {
+  return _request<RunResultResponse>(
+    `/api/runs/${encodeURIComponent(runId)}/result`,
+    { method: 'GET' },
+    false,
+  )
+}
+
+/* ── 学习画像（P4-D09 / G6）─────────────────────────────────── */
+
+/**
+ * GET /api/profiles/{studentId}
+ *
+ * ⚠️ 不存在时返回 **200 + notFound:true**（不是 404）——
+ *    返回 404 会构成 studentId 枚举通道。
+ */
+export function getProfile(studentId: string): Promise<ProfileResponse> {
+  return _request<ProfileResponse>(
+    `/api/profiles/${encodeURIComponent(studentId)}`,
+    { method: 'GET' },
+    false,
+  )
+}
+
+/* ── Run 状态查询（P4-D09 / G3）──────────────────────────────── */
+
+/**
+ * GET /api/runs/{runId}
+ *
+ * ⚠️ 与 SSE 端点**共用同一个限流桶**（EVENT_QUERY，30 次/60 秒）——
+ *    故状态轮询间隔必须大于 SSE 的 3 秒（见 FE-D9 §2.3 配额分配）。
+ */
+export function getRunStatus(runId: string): Promise<RunStatusResponse> {
+  return _request<RunStatusResponse>(
+    `/api/runs/${encodeURIComponent(runId)}`,
+    { method: 'GET' },
+    false,
+  )
 }

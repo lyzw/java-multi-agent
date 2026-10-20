@@ -99,6 +99,12 @@ Exchange: agent.run.dispatch  (type=direct, durable=true)
                                      └─ x-queue-type: quorum
 ```
 
+> ⚠️⚠️ **P4-D11 D11-4 勘误**：上图的 reconcile 队列
+> (`agent.run.reconcile`) **未落地**——代码中既无该队列的 `@Bean` 声明，
+> 也无任何发布者/消费者。UNKNOWN 对账走的是 **DB 侧**
+> （`tool_operation` 状态 + `ToolOperationReconciliationService`），不经 MQ。
+> yml 中对应的声明已删除（见 [P4-D11 §3.1](../P0/P4/P4-D11_C8配置接入运行时.md)）。
+
 | 声明项 | 值 | 理由 |
 |---|---|---|
 | `x-queue-type` | `quorum` | 唯一有复制能力的类型 |

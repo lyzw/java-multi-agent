@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>项目开发进度整理 · 2026-10-21</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --ink: #1f2329;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --blue: #2563eb;
+    --green: #16a34a;
+    --amber: #d97706;
+    --red: #dc2626;
+    --chip-bg: #eef2ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.6; font-size: 14px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin-bottom: 22px; }
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 26px; }
+  .metric { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .metric .n { font-size: 26px; font-weight: 700; color: var(--blue); }
+  .metric .l { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin-bottom: 20px; }
+  .card h2 { font-size: 17px; margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+  .card h2 .tag { font-size: 11px; font-weight: 600; color: var(--muted); background: var(--chip-bg); padding: 2px 8px; border-radius: 20px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  tbody tr:last-child td { border-bottom: none; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .b-done { background: #dcfce7; color: #15803d; }
+  .b-cond { background: #fef3c7; color: #b45309; }
+  .b-prog { background: #dbeafe; color: #1d4ed8; }
+  .b-pend { background: #f3f4f6; color: #6b7280; }
+  .b-block { background: #fee2e2; color: #b91c1c; }
+  .warn { background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; }
+  .warn .t { font-weight: 700; color: var(--amber); margin-bottom: 6px; }
+  .warn code { background: #fef3c7; padding: 1px 5px; border-radius: 4px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  ul { margin: 8px 0 0; padding-left: 20px; }
+  li { margin-bottom: 6px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 24px; text-align: center; }
+  .pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .pill { font-size: 12px; background: var(--chip-bg); color: #3730a3; padding: 3px 10px; border-radius: 20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>项目开发进度整理</h1>
+  <div class="sub">Java 多租户 SaaS Agent 平台（初中生错题归因辅导） · 整理时间 2026-10-21 01:52 · 包名 <code>cn.studykid.multiagent</code></div>
+
+  <div class="metrics">
+    <div class="metric"><div class="n">975</div><div class="l">测试全绿（后端636 + 前端265 + RAG74）</div></div>
+    <div class="metric"><div class="n">87</div><div class="l">Git 提交（全部本地未推 remote）</div></div>
+    <div class="metric"><div class="n">P0–P3</div><div class="l">主平台四阶段已收口</div></div>
+    <div class="metric"><div class="n">~80%</div><div class="l">FE 前端阶段完成度</div></div>
+  </div>
+
+  <div class="warn">
+    <div class="t">⚠️ 关键状态：近期全部进度仍未提交（在工作区）</div>
+    <div class="small">
+      HEAD 停在 <code>4c649b2</code>，但工作树有大量未提交改动：<b>FE-D7/D8/D9</b>、<b>P4-D08~D12</b>、
+      <b>RAG 子项目（rag/ 整目录未跟踪）</b>、以及三份进度文档（台账 / 总览 / 盘点报告）本身。
+      即 975 项全绿的验证基线与所有设计文档，目前都是<b>未提交状态</b>。建议先确认这批工作的提交策略。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>一、阶段进度总表 <span class="tag">SOURCE · 台账 / 总览</span></h2>
+    <table>
+      <thead><tr><th>阶段</th><th>状态</th><th>完成度</th><th>一句话说明</th></tr></thead>
+      <tbody>
+        <tr><td><b>P0</b> 启动与需求基线</td><td><span class="badge b-done">✅ 完成</span></td><td>100%</td><td>DEC-1~13 全部闭环，需求/验收/风险/计划四件套齐备</td></tr>
+        <tr><td><b>P1</b> 架构验证与工程准备</td><td><span class="badge b-cond">⚠️ AWC</span></td><td>95%</td><td>代码先行；文档缺口 P1-D02~D09 未成文；P1-10 重估门禁待 zhouwei 确认</td></tr>
+        <tr><td><b>P2</b> 核心闭环 MVP</td><td><span class="badge b-cond">⚠️ AWC</span></td><td>100%</td><td><code>创建Run→Outbox→MQ→模型→工具→提交→SSE</code> 全链路通；4 项延至 P3</td></tr>
+        <tr><td><b>P3</b> 可靠性与安全</td><td><span class="badge b-cond">⚠️ AWC</span></td><td>100%</td><td>D1–D11 全交付；退出条件 C-1~C-4（2 项部分关闭、2 项外部承接）</td></tr>
+        <tr><td><b>P4</b> 企业集成与生产化</td><td><span class="badge b-prog">🔄 进行中</span></td><td>切片 11/11<br>+ D12 在途</td><td>D01–D11 完成（含 D11 C8 配置接入）；内嵌 22 项后端缺口，<b>已闭 6 项</b>；D12 在途未提交</td></tr>
+        <tr><td><b>FE</b> 前端独立阶段</td><td><span class="badge b-prog">🔄 进行中</span></td><td>~80%</td><td>F1–F3 + D2–D9 完成（含 F5 接真实数据并清除 6 处编造、进度页接 G3）；F4–F8 受后端缺口阻塞</td></tr>
+        <tr><td><b>P5</b> 试点与交接</td><td><span class="badge b-pend">⏸️ 未启动</span></td><td>0%</td><td>灰度/回滚/演练/复盘/运营交接未启动</td></tr>
+        <tr><td><b>RAG</b> 子项目（独立工程）</td><td><span class="badge b-prog">🔄 早期</span></td><td>~30%</td><td>文档 D00–D09 全齐；7 模块仅 3 个有代码；测试 74 项全绿（3 缺陷已修并附反证）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>二、验证基线 <span class="tag">实测 · 2026-10-20 全量构建</span></h2>
+    <table>
+      <thead><tr><th>对象</th><th>命令 / 环境</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td>后端整体</td><td><code>mvn clean verify</code>（agent_it 隔离库 + agent-test vhost）</td><td><b>BUILD SUCCESS</b> · 单测 481 + 集成 155 = <b>636 项全绿</b></td></tr>
+        <tr><td>前端</td><td><code>vitest run</code> + <code>tsc --noEmit</code></td><td><b>265 项全绿</b> · TypeScript 严格模式零错误</td></tr>
+        <tr><td>RAG</td><td><code>mvn clean test</code></td><td><b>74 项 / 0 失败</b>（R-D1/R-D2/R-D3 已修并附反证）</td></tr>
+      </tbody>
+    </table>
+    <p class="small muted" style="margin-bottom:0">
+      复跑纪律：凭据从<b>仓库根</b> <code>config.env</code> 加载（platform/ 内加载会静默失败→ACCESS_REFUSED）；
+      本机若有 IntelliJ 调试实例在跑，broker 队列被抢空会使 RealBrokerEndToEndIT 失败——用隔离 vhost <code>agent-test</code>；
+      数用例要数 XML 的 <code>&lt;testcase&gt;</code>，不读 .txt 里的 0。
+    </p>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <h2>三、后端 22 项缺口 <span class="tag">已闭 6 / 余 16~18</span></h2>
+      <p class="small muted" style="margin-top:0">已关闭（均为可复现证据）：</p>
+      <div class="pill-row">
+        <span class="pill">C1 配置读取端点</span>
+        <span class="pill">C9 零保留接线</span>
+        <span class="pill">G3 Run状态查询</span>
+        <span class="pill">G6 学习画像</span>
+        <span class="pill">G5 结果读取</span>
+        <span class="pill">C8 配置接入运行时</span>
+      </div>
+      <p class="small muted" style="margin-top:12px">仍开放（阻塞 FE F4–F8 / P4 治理）：</p>
+      <ul class="small">
+        <li><b>配置体系</b> C2–C7（性质最严重：不是"接口没写"，是"体系没建"——0 张配置表/0 端点/0 审计）</li>
+        <li><b>业务侧</b> G1 身份展示 / G7 列表分页 / G8–G10 治理审计页 / G11–G14 CORS·OpenAPI·refresh·健康</li>
+        <li><b>模型</b> D-002 真实模型接入（仍为 FakeModelGateway → 工具永不真正被调用，weakness_record 生产恒空）</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>四、P3 退出条件 <span class="tag">代码层面无解</span></h2>
+      <table>
+        <thead><tr><th>条件</th><th>状态</th><th>归属</th></tr></thead>
+        <tbody>
+          <tr><td>C-1 SB 达标结论</td><td><span class="badge b-pend">⬜</span></td><td>P5（需真实模型+人工评审）</td></tr>
+          <tr><td>C-2 T-6 配置降级风险</td><td><span class="badge b-pend">⬜ 仍"高"</span></td><td>流程 + ISO-5 外部抽检</td></tr>
+          <tr><td>C-3 E-2 审批权威</td><td><span class="badge b-cond">⚠️ 部分</span></td><td>D01 契约+本地引擎；真实人类审批台需外部系统</td></tr>
+          <tr><td>C-4 SSE 真推送+指标持久化</td><td><span class="badge b-cond">⚠️ 部分</span></td><td>D02 LISTEN/NOTIFY 已落地；无告警规则</td></tr>
+        </tbody>
+      </table>
+      <p class="small muted" style="margin-bottom:0">
+        ⚠️ 不得因"代码做完了"而宣称风险消除。另 R-022 停维残余 7 项中 <b>R2（Sev-0）卷丢失致已确认消息永久丢</b> 仍无自动闭环。
+      </p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>五、下一步（按优先级）</h2>
+    <table>
+      <thead><tr><th>#</th><th>事项</th><th>性质 / 前置</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><b>提交/梳理当前未提交批次</b></td><td>工作树有 FE-D7~D9、P4-D08~D12、RAG、进度文档全部未提交——先确认提交策略（分批？按里程碑？）</td></tr>
+        <tr><td>2</td><td>闭 G7 列表分页 / G1 / G11 / G12</td><td>需补 <code>run(subject,duration,created_at)</code> 列与索引；G1 角色入令牌、G11 CORS 策略</td></tr>
+        <tr><td>3</td><td>C2–C7 配置体系</td><td>建议 <b>C8 已先行</b>，再建端点，否则建出"改了没用"的配置页</td></tr>
+        <tr><td>4</td><td>外部承接 D-002 真实模型 / C-2 / C-3</td><td>供应商接入+评测集、ISO-5 抽检、人类审批台——均非代码可闭环</td></tr>
+        <tr><td>5</td><td>P5 试点与交接</td><td>灰度/回滚/演练/复盘/运营交接（P5 排期 18–20 周）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>六、诚实边界（已知限制，不夸大）</h2>
+    <ul class="small">
+      <li><b>模型仍是占位</b>：FakeModelGateway 的 toolCalls 恒空 → 端到端只到"Run 创建→MQ→Worker 领取→假模型响应→结果落库"，G6 在真实模型接入前返回空画像。</li>
+      <li><b>编造内容已清除</b>：FE-D8 删掉 P5 的 6 处编造解题过程/错因/知识点；weaknesses/steps 恒空时显示真实空态，不编造、不说成故障。</li>
+      <li><b>"测试通过≠已验证"</b>：本项目反复出现"静默失效、系统表面正常"形态（R-1 工具未注册、R-D1 挂接方向反、T-1 IT 清理从未生效、fat-jar 使集成测试整体失效）——判据是反证能否转红。</li>
+      <li><b>配置降级风险未消除</b>：生产快照曾硬编码（C8 已修读 yml），但 T-6 在威胁模型中仍维持"高"。</li>
+    </ul>
+  </div>
+
+  <div class="foot">
+    数据来源：<code>docs/项目进度台账.md</code> · <code>docs/开发进度总览.md</code> · <code>docs/开发进度盘点报告_20261020.md</code> 及 2026-10-21 git 工作树核对。
+    所有"✅"均要求有可复现验证证据，非仅代码存在。
+  </div>
+</div>
+</body>
+</html>

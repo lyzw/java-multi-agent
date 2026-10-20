@@ -20,6 +20,8 @@ import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.RunEventQueryPort;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * {@link RunEventQueryPort} 的 JDBC 实现（P2-D05）。
@@ -42,6 +44,14 @@ import cn.studykid.multiagent.ports.persistence.RunEventQueryPort;
 public class JdbcRunEventQueryRepository implements RunEventQueryPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcRunEventQueryRepository.class);
+
+    /**
+     * 载荷解析器。
+     *
+     * <p>⚠️ <b>单例而非每行 new</b>：{@code ObjectMapper} 构造代价高且线程安全，
+     * 事件流是高频读取路径，每行 new 一个会让 GC 压力与读取成本同阶。
+     */
+    private static final ObjectMapper PAYLOAD_MAPPER = new ObjectMapper();
 
     /**
      * ⚠️ <b>{@code tenant_id} 条件不可删除</b>（P2-D05 §5.2 S7 反证测试会失败）。
@@ -153,11 +163,28 @@ public class JdbcRunEventQueryRepository implements RunEventQueryPort {
     }
 
     /**
-     * 最小化 JSON 解析。
+     * JSON 载荷解析。
      *
-     * <p>⚠️ <b>刻意不引入完整 JSON 库</b>：事件载荷在写入时已被限制为
-     * 「扁平的标量键值对」（见 {@code insertInitialEvent}），
-     * 无嵌套结构。为一个扁平对象拖入 Jackson 不划算。
+     * <p><b>⚠️⛔ 本方法曾是一段手写的字符串切分器，已被 P4-D12 实测推翻并重写</b>。
+     * 原实现「为一个扁平对象拖入 Jackson 不划算」，
+     * 但 {@code agent-infrastructure} <b>本来就依赖 Jackson</b>（Spring Boot 基线），
+     * 「不引入」的收益是 0，而手写切分器的代价是<b>静默的数据损坏</b>。
+     *
+     * <p><b>手写版实测暴露的三个真实缺陷</b>（全部是「不报错、只是值变了」）：
+     * <ol>
+     *   <li><b>逗号截断</b>：{@code body.split(",")} 不识别字符串内的逗号，
+     *       值里出现一个 {@code ,} 就被劈成两段 → 前半段变成垃圾键值对。
+     *       {@code errorCode="E1,E2"} 会被读成 {@code {errorCode=E1, E2=null}}。</li>
+     *   <li><b>转义不完整</b>：{@code unquote} 只处理 {@code \"} 与 {@code \\}，
+     *       不处理 {@code \n \r \t} → 含换行的值回读为<b>字面量两字符 {@code \n}</b>。</li>
+     *   <li><b>类型不可靠</b>：手写 {@code coerce} 把所有整数当 {@code Long}，
+     *       写入端的 {@code Integer} 与读取端的 {@code Long} 不对称，
+     *       下游做 {@code ==} 比较时会静默失败。</li>
+     * </ol>
+     *
+     * <p>三者都<b>不会抛异常</b>，测试也不会变红——除非专门为它们写用例。
+     * 这正是 P4-D08 R-1 的又一次翻版：<b>静默失效靠断言是抓不到的，
+     * 只能靠「针对可疑行为的专项用例」抓</b>。
      *
      * <p>⚠️ <b>解析失败不抛异常</b>：返回空载荷而非让整个查询失败。
      * 理由：SSE 订阅是<b>可观测性</b>通道，一条事件解析失败不应
@@ -167,53 +194,50 @@ public class JdbcRunEventQueryRepository implements RunEventQueryPort {
         if (json == null || json.isBlank()) {
             return Map.of();
         }
-        Map<String, Object> result = new LinkedHashMap<>();
-        String body = json.trim();
-        if (body.startsWith("{")) {
-            body = body.substring(1);
-        }
-        if (body.endsWith("}")) {
-            body = body.substring(0, body.length() - 1);
-        }
-        if (body.isBlank()) {
+        try {
+            JsonNode root = PAYLOAD_MAPPER.readTree(json);
+            if (root == null || !root.isObject()) {
+                log.warn("事件载荷不是 JSON 对象，按空载荷处理: {}", abbreviate(json));
+                return Map.of();
+            }
+            Map<String, Object> result = new LinkedHashMap<>();
+            // ⚠️ 显式逐字段取：SSE 白名单要求标量，嵌套结构一律拒收（fail-closed），
+            //    不能让 ObjectMapper 默认把对象/数组反序列化成 Map/List 混进载荷。
+            root.properties().forEach(entry -> {
+                JsonNode v = entry.getValue();
+                if (v.isObject() || v.isArray()) {
+                    log.warn("事件载荷含嵌套结构，丢弃该字段: {}", entry.getKey());
+                    return;
+                }
+                result.put(entry.getKey(), toScalar(v));
+            });
+            return result;
+        } catch (Exception e) {
+            log.warn("事件载荷解析失败，按空载荷处理: {}（原因={}）",
+                    abbreviate(json), e.getMessage());
             return Map.of();
         }
-        for (String pair : body.split(",")) {
-            int idx = pair.indexOf(':');
-            if (idx <= 0) {
-                continue;
-            }
-            String key = unquote(pair.substring(0, idx).trim());
-            String raw = unquote(pair.substring(idx + 1).trim());
-            result.put(key, coerce(raw));
-        }
-        return result;
     }
 
-    private static String unquote(String s) {
-        String v = s.trim();
-        if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
-            return v.substring(1, v.length() - 1)
-                    .replace("\\\"", "\"").replace("\\\\", "\\");
-        }
-        return v;
-    }
-
-    private static Object coerce(String raw) {
-        if ("null".equals(raw)) {
+    /** JSON 标量 → Java 标量。整数统一为 {@code Integer}/{@code Long}（按位宽选）。 */
+    private static Object toScalar(JsonNode v) {
+        if (v.isNull()) {
             return null;
         }
-        if ("true".equals(raw) || "false".equals(raw)) {
-            return Boolean.parseBoolean(raw);
+        if (v.isBoolean()) {
+            return v.booleanValue();
         }
-        try {
-            if (raw.indexOf('.') >= 0) {
-                return Double.parseDouble(raw);
-            }
-            return Long.parseLong(raw);
-        } catch (NumberFormatException e) {
-            // 非数字 → 保持字符串，这是最常见的合法情况
-            return raw;
+        if (v.isIntegralNumber()) {
+            long n = v.longValue();
+            return (n >= Integer.MIN_VALUE && n <= Integer.MAX_VALUE) ? (Object) (int) n : n;
         }
+        if (v.isNumber()) {
+            return v.doubleValue();
+        }
+        return v.asString();
+    }
+
+    private static String abbreviate(String s) {
+        return s.length() <= 120 ? s : s.substring(0, 120) + "…";
     }
 }

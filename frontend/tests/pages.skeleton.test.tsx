@@ -7,12 +7,28 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { RunResultPage, findLeakedFields } from '@/pages/business/RunResultPage'
 import { ProfilePage, pickWhitelisted } from '@/pages/business/ProfilePage'
+import type { ProfileResponse } from '@/api/types'
 import { ReconciliationPage, AuditPage } from '@/pages/governance/GovernancePages'
 import { ConfigCompliancePage } from '@/pages/config/ConfigPages'
+
+const srcDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
+
+const read = (p: string): string => readFileSync(join(srcDir, p), 'utf8')
+
+/** 剥离注释后的源码 —— 断言只针对**真实代码**（结构不变式测试的既定范式） */
+function readCode(p: string): string {
+  const raw = read(p)
+  let out = raw.replace(/\/\*[\s\S]*?\*\//g, '')
+  out = out.replace(/(^|[^:'"`])\/\/[^\n]*/g, '$1')
+  return out
+}
 
 function renderAt(path: string, element: React.ReactElement, pattern = '/:id'): void {
   render(
@@ -25,25 +41,13 @@ function renderAt(path: string, element: React.ReactElement, pattern = '/:id'): 
 }
 
 describe('骨架页统一占位', () => {
-  it('T1：应显示未开放占位并含缺口编号', () => {
+  it('T1：⛔ P5 已接线（FE-D8）——不再是「未开放」占位', () => {
+    // ⚠️ FE-D8：G5 后端已落地，P5 从占位改为**真实页**。
+    //    此处断言的是「不再显示未开放占位」，
+    //    真实内容的断言在 tests/result.page.test.tsx。
     renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
-    // ⚠️ FE-D3 起文案改为「人话」而非技术术语：
-    //    旧文案「功能尚未开放」偏技术，新文案「还没接上后端」像人说话。
-    expect(screen.getByText(/还没接上后端/)).toBeInTheDocument()
-    expect(screen.getByText('G5')).toBeInTheDocument()
-  })
-
-  it('T1：占位应说明原因', () => {
-    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
-    // ⚠️ 断言人话原因，而非接口名 —— 文案本身就是设计内容
-    expect(screen.getByText(/读取分析结果的接口/)).toBeInTheDocument()
-  })
-
-  it('T1：⛔ 未开放与「空」必须区分', () => {
-    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
-    // 「未开放」= 没接口；「空」= 查了没有
-    // 混淆会导致用户反复刷新等一个永远不会来的结果
-    expect(screen.queryByText(/还没有记录到/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/还没接上后端/)).not.toBeInTheDocument()
+    expect(screen.queryByText('G5')).not.toBeInTheDocument()
   })
 })
 
@@ -70,14 +74,17 @@ describe('⛔ P5 合规红线（C5/C6/C7）', () => {
   })
 
   it('T3：⛔ 必须预留「待核对」分区', () => {
-    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
-    // P0-D00 §3.4：终态存在未决 UNKNOWN 时必须独立暴露，不得隐藏
-    const zone = screen.getByTestId('reconcile-zone')
-    expect(zone).toBeInTheDocument()
-    expect(zone.textContent).toContain('待核对')
-    // 且必须提及两种状态
-    expect(zone.textContent).toContain('UNKNOWN')
-    expect(zone.textContent).toContain('RECONCILIATION_REQUIRED')
+    // ⚠️ FE-D8：P5 已接线为**真实数据页**，待核对分区在数据到达后渲染，
+    //    故本用例改为**源码级**结构断言——
+    //    「页面里必须存在这个位置」是**结构性**要求，不应依赖运行时状态。
+    //    运行时行为（pending=true 时列出未决操作）由 tests/result.page.test.tsx 覆盖。
+    const source = readCode('pages/business/RunResultPage.tsx')
+    expect(source).toContain('reconcile-zone')
+    expect(source).toContain('待核对')
+    // ⚠️ 只提 UNKNOWN：**RECONCILIATION_REQUIRED 不在 run_state 枚举里**
+    //    （P4-D10 §1.4 实测），在界面提它等于告诉用户一个永远不会出现的状态。
+    expect(source).toContain('UNKNOWN')
+    expect(source).not.toContain('RECONCILIATION_REQUIRED')
   })
 
   it('T6：敏感词兜底扫描函数可用', () => {
@@ -150,22 +157,32 @@ describe('⛔ P10 审计页（无请求体入口）', () => {
 
 describe('P6 画像白名单（纵深防御）', () => {
   it('T6：白名单外的字段必须被丢弃', () => {
+    // ⚠️ FE-D8：契约改为**结构化对象**（后端 G6 冻结）。
+    //    旧契约的 string[] 会把全部条目过滤掉（FE-D09 L-4）。
     const result = pickWhitelisted({
       studentId: 'stu_abc',
       grade: '初一',
       subject: '数学',
-      weaknesses: ['分数加法', '负号处理'],
+      weaknesses: [
+        { knowledgePoint: '分数加法', errorType: '概念不清', confidence: 0.7, createdAt: null },
+        { knowledgePoint: '负号处理', errorType: '符号错误', confidence: 0.9, createdAt: null },
+      ],
+      notFound: false,
       // 以下均为 PIPL 禁采项
       name: '张三',
       school: '实验中学',
       className: '三班',
-    })
+    } as unknown as ProfileResponse)
 
     expect(result).toEqual({
       studentId: 'stu_abc',
       grade: '初一',
       subject: '数学',
-      weaknesses: ['分数加法', '负号处理'],
+      notFound: false,
+      weaknesses: [
+        { knowledgePoint: '分数加法', errorType: '概念不清', confidence: 0.7 },
+        { knowledgePoint: '负号处理', errorType: '符号错误', confidence: 0.9 },
+      ],
     })
     // ⛔ 断言敏感字段不出现在结果里
     expect(JSON.stringify(result)).not.toContain('张三')
@@ -174,21 +191,34 @@ describe('P6 画像白名单（纵深防御）', () => {
   })
 
   it('缺失字段应降级为空字符串而非崩溃', () => {
-    const result = pickWhitelisted({})
+    const result = pickWhitelisted({} as unknown as ProfileResponse)
     expect(result.studentId).toBe('')
     expect(result.weaknesses).toEqual([])
+    expect(result.notFound).toBe(false)
   })
 
-  it('非字符串 weaknesses 元素应被过滤', () => {
-    const result = pickWhitelisted({ weaknesses: ['有效', 123, null, '另一项'] })
-    expect(result.weaknesses).toEqual(['有效', '另一项'])
+  it('非对象的 weaknesses 元素应被降级而非原样透传', () => {
+    const result = pickWhitelisted({
+      weaknesses: [
+        { knowledgePoint: '有效', errorType: '概念不清', confidence: 0.5, createdAt: null },
+        '字符串',
+        123,
+        null,
+      ],
+    } as unknown as ProfileResponse)
+    expect(result.weaknesses).toEqual([
+      { knowledgePoint: '有效', errorType: '概念不清', confidence: 0.5 },
+      { knowledgePoint: '', errorType: '', confidence: null },
+      { knowledgePoint: '', errorType: '', confidence: null },
+      { knowledgePoint: '', errorType: '', confidence: null },
+    ])
   })
 
   it('画像页渲染时应走白名单', () => {
     renderAt('/profile/stu_abc', <ProfilePage />, '/profile/:studentId')
-    // ⚠️ 文案改为人话（FE-D3）：不再是「白名单字段仅四个」这种技术表述
+    // ⚠️ FE-D8：页面已接线为真实数据，读取未完成时显示加载态。
+    //    白名单的「只采集四类信息」说明已并入「基本信息」区。
     expect(screen.getAllByText(/学习画像/).length).toBeGreaterThan(0)
-    expect(screen.getByText(/只采集四类信息/)).toBeInTheDocument()
   })
 })
 

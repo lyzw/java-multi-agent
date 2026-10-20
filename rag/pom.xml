@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>cn.studykid.rag</groupId>
+  <artifactId>java-saas-rag</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>Java SaaS RAG Platform</name>
+  <description>教辅语料 RAG 平台 — 教材/辅导资料/学术论文的权威检索与可溯源生成</description>
+
+  <!--
+    技术基线与主平台对齐（ADR-011）：
+      - Java 21 + Spring Boot 4.1.1，与 platform/ 保持同一版本矩阵，
+        使 RAG 可作为 platform 的 Tool SPI 实现被直接装配。
+      - PostgreSQL 17 + pgvector，向量与元数据同库同事务。
+      - 领域层（rag-core）零框架依赖，仅依赖 JSpecify，
+        由 RagCorePurityTest 保证（与 AgentCorePurityTest 同构）。
+
+    ⚠️ 与 platform/ 的关系：
+      platform/ 是 Agent 执行平台（Run/Worker/审批/预算）；
+      rag/ 是知识检索子系统（语料/切分/索引/召回/引用/溯源）。
+      两者通过「检索工具（Tool SPI 实现）+ 引用校验」双向对接，
+      而不是把 RAG 代码塞进 platform/ 的模块里。
+  -->
+  <properties>
+    <java.version>21</java.version>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+    <spring-boot.version>4.1.1</spring-boot.version>
+    <jspecify.version>1.0.0</jspecify.version>
+  </properties>
+
+  <modules>
+    <module>rag-core</module>
+    <module>rag-ports</module>
+    <module>rag-application</module>
+    <module>rag-infrastructure</module>
+    <module>rag-worker</module>
+    <module>rag-api</module>
+    <module>rag-bootstrap</module>
+  </modules>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${spring-boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>cn.studykid.rag</groupId>
+        <artifactId>rag-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.rag</groupId>
+        <artifactId>rag-ports</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.rag</groupId>
+        <artifactId>rag-application</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.rag</groupId>
+        <artifactId>rag-infrastructure</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.rag</groupId>
+        <artifactId>rag-worker</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.rag</groupId>
+        <artifactId>rag-api</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+          <version>${spring-boot.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.14.1</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.5.4</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <version>3.5.4</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <release>${maven.compiler.release}</release>
+          <compilerArgs>
+            <arg>-parameters</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+      <!--
+        ⚠️ 与 platform/pom.xml 同构（F-14 教训）：
+        surefire 默认 include 不含 *IT.java —— 集成测试若不显式注册 failsafe，
+        就会「一条都没跑」而构建仍 BUILD SUCCESS。
+        这里显式注册并纳入 **/*IT.java。
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <configuration>
+          <includes>
+            <include>**/*IT.java</include>
+          </includes>
+        </configuration>
+        <executions>
+          <execution>
+            <id>run-integration-tests</id>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

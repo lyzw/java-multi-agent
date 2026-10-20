@@ -116,7 +116,7 @@ class RunEventAppendIT {
                         RunEventPort.Types.RUN_SUCCEEDED);
 
         assertThat(events.get(1).payload())
-                .as("载荷应原样可回读")
+                .as("载荷应原样可回读（小整数应还原为 Integer，与写入端对称）")
                 .containsEntry("state", "RUNNING")
                 .containsEntry("attempt", 1);
         assertThat(events.get(2).payload())
@@ -253,6 +253,44 @@ class RunEventAppendIT {
         assertThat(events.get(1).payload())
                 .as("载荷列 NOT NULL，空载荷应落为 {} 而非报错")
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("⛔ 载荷值内含逗号/冒号/方括号时不被切碎（旧手写解析器会劈成垃圾键值对）")
+    void delimiterInsidePayloadValueIsNotSplit() {
+        String runId = newRun(tenantA);
+
+        // ⚠️ 这三个值各自都含解析器曾经的「分隔符」。
+        //    旧实现 body.split(",") 会把 "E1,E2" 劈成两段，
+        //    indexOf(':') 会在值内部的冒号处截断——两者都不抛异常，只是值悄悄变了。
+        appendRepo.append(tenantA, runId, RunEventPort.Types.RUN_FAILED, Map.of(
+                "state", "FAILED",
+                "errorCode", "E1,E2,E3",
+                "toolName", "ns:tool[x]"));
+
+        Map<String, Object> payload =
+                queryRepo.findAfter(tenantA, runId, 0, 100).get(1).payload();
+
+        assertThat(payload)
+                .as("⛔ 载荷值必须是原值——被切碎的值会让 SSE 消费者拿到错误的错误码")
+                .containsEntry("errorCode", "E1,E2,E3")
+                .containsEntry("toolName", "ns:tool[x]");
+        assertThat(payload)
+                .as("⛔ 不得产生垃圾键（劈碎后的残段）")
+                .hasSize(3);
+    }
+
+    @Test
+    @DisplayName("⛔ 载荷值内的换行/制表符被正确还原（旧解析器只处理 \\\" 与 \\\\）")
+    void controlCharsInPayloadAreRestored() {
+        String runId = newRun(tenantA);
+
+        appendRepo.append(tenantA, runId, RunEventPort.Types.RUN_FAILED,
+                Map.of("state", "FAILED", "errorCode", "line1\nline2\ttabbed\rcr"));
+
+        assertThat(queryRepo.findAfter(tenantA, runId, 0, 100).get(1).payload())
+                .as("⛔ 控制字符必须还原成真字符，而不是字面量两字符 \\n / \\t / \\r")
+                .containsEntry("errorCode", "line1\nline2\ttabbed\rcr");
     }
 
     // ── 辅助 ────────────────────────────────────────────────────────
