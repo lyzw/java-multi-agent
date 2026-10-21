@@ -19,8 +19,12 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
  * 是为了让四个端点<b>对这批易错决策只有一份实现</b>——
  * FE-01 §P7~P10 明确要求分页契约「先冻结再开工」，
  * 而契约一旦分散在四个控制器里，冻结的就只是纸面。
+ * <p>⚠️ <b>public 是因为不再只服务 governance 包</b>（P4-D15 新增
+ * {@code ConfigOverrideController} 同在 api 层但不同包，复用同一套
+ * 限流与分页语义）。保持包私有会迫使新端点复制一份限流判断，
+ * 而两份实现漂移的后果是「有的端点限流、有的不限流」。
  */
-final class GovernanceSupport {
+public final class GovernanceSupport {
 
     /** 默认页大小。 */
     static final int DEFAULT_LIMIT = 20;
@@ -41,7 +45,7 @@ final class GovernanceSupport {
      *
      * @throws IllegalArgumentException 越界 → 由全局处理器转 <b>400</b>
      */
-    static int limit(@Nullable Integer requested) {
+    public static int limit(@Nullable Integer requested) {
         int value = requested == null ? DEFAULT_LIMIT : requested;
         if (value <= 0) {
             throw new IllegalArgumentException("limit 必须为正数: " + value);
@@ -86,7 +90,7 @@ final class GovernanceSupport {
      * 但把它报成 500 会让前端以为是系统故障而触发重试风暴。
      * 429 的语义就是「现在不行，稍后重试」，对两种情况都成立。
      */
-    static boolean rateLimited(@NonNull RateLimitPort limiter,
+    public static boolean rateLimited(@NonNull RateLimitPort limiter,
                                @NonNull TenantContext context,
                                @NonNull String bucket) {
         return limiter.check(context.tenantId(), bucket) != RateLimitPort.Decision.ALLOWED;
@@ -99,7 +103,7 @@ final class GovernanceSupport {
      * （{@code PageResponse<X>} / {@code DecisionResponse}），
      * 固定返回 {@code ResponseEntity<Void>} 会让限流分支无法编译。
      */
-    static <T> ResponseEntity<T> tooManyRequests() {
+    public static <T> ResponseEntity<T> tooManyRequests() {
         return ResponseEntity.status(429).header("Retry-After", "60").build();
     }
 

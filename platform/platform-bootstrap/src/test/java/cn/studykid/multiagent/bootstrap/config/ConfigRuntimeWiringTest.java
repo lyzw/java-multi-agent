@@ -106,8 +106,11 @@ class ConfigRuntimeWiringTest {
         void snapshotFollowsConfiguredValue() {
             // ⚠️ 直接构造两套不同配置的 inputs：
             //    若快照仍是硬编码，两个值会相同 → 用例转红。
+            // ⚠️ P4-D15：首参 resolver 传 null = 不叠加 DB 覆盖，
+            //    本用例仍然只验证 yml → 快照的接线（P4-D11 的原始契约），
+            //    覆盖叠加由 ConfigOverrideIT 单独覆盖。
             WorkerExecutionConfig.RunExecutionInputs cheap = new WorkerExecutionConfig.RunExecutionInputs(
-                    "0.50", "1", "2",
+                    null, "0.50", "1", "2",
                     Map.of("record_weakness",
                             cn.studykid.multiagent.core.config.ToolRiskLevel.WRITE_PROFILE),
                     Map.of(cn.studykid.multiagent.core.config.ToolRiskLevel.WRITE_EXTERNAL,

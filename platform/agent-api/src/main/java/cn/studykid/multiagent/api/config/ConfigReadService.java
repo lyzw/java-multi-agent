@@ -198,6 +198,26 @@ public class ConfigReadService {
     }
 
     /**
+     * 返回目录内全部配置键的 yml 声明值（键 → 文本值）。
+     *
+     * <p>⚠️ <b>专供 {@code EffectiveConfigResolver}</b>：写入路径需要
+     * 「DB 无覆盖时回落到什么」的基准，即 yml 默认值。
+     *
+     * <p>⚠️ <b>只含 {@code effective=true} 的键</b>：未接入运行时的键
+     * 改了也不改变行为，把它塞进生效配置只会制造「看起来生效了」的错觉
+     * （FE-02 §0.4 警告的形态）。写路径也不该覆盖这类键。
+     */
+    public java.util.Map<String, String> declaredValues() {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Spec spec : CATALOG) {
+            if (spec.effective) {
+                out.put(spec.key, declaredValueOf(spec.key));
+            }
+        }
+        return out;
+    }
+
+    /**
      * 读取声明值。
      *
      * <p>⚠️ 先取标量；标量不存在（如嵌套 map 的父键）再经 {@link Binder}

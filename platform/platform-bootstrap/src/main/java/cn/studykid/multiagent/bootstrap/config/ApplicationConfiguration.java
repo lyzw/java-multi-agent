@@ -175,6 +175,23 @@ public class ApplicationConfiguration {
                 environment, zeroRetentionGate);
     }
 
+    /**
+     * 生效配置解析器（P4-D15 / C3 生效侧）。
+     *
+     * <p>⚠️ <b>不加 {@code @Service}</b>：与本类统一装配约定一致
+     * （见 {@code configReadService} / {@code budgetPort}），
+     * 避免被测试切片的组件扫描意外拾取导致 Bean 候选冲突。
+     *
+     * <p>⚠️ <b>无本地缓存</b>：每次快照读一次 DB，故多实例天然一致；
+     * 若将来加缓存，<b>必须</b>同时实现失效，否则会出现
+     * 「实例 A 已生效、实例 B 仍用旧值」的分裂（P4-D15 §6 L-3）。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.config.EffectiveConfigResolver
+            effectiveConfigResolver(cn.studykid.multiagent.ports.persistence.ConfigOverridePort port) {
+        return new cn.studykid.multiagent.application.config.EffectiveConfigResolver(port);
+    }
+
     @Bean
     public RunCreationService runCreationService(
             cn.studykid.multiagent.ports.persistence.RunCreationPort port,

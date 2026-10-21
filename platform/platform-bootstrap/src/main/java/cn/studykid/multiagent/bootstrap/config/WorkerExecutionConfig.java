@@ -16,6 +16,8 @@ import org.springframework.context.annotation.Configuration;
 
 import cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy;
 import cn.studykid.multiagent.application.config.BudgetPolicy;
+import cn.studykid.multiagent.application.config.EffectiveConfigResolver;
+import cn.studykid.multiagent.application.config.PlatformConfig;
 import cn.studykid.multiagent.application.config.RunConfigSnapshotFactory;
 import cn.studykid.multiagent.application.prompt.PromptGuard;
 import cn.studykid.multiagent.core.config.ApprovalRequirement;
@@ -254,7 +256,7 @@ public class WorkerExecutionConfig {
                 (tenantId, task) -> {
                     RunExecutionLoop.ExecutionOutcome outcome = loop.execute(
                             tenantId, task, inputs.agentConfig(),
-                            inputs.snapshotFor(task), inputs.runInput(task));
+                            inputs.snapshotFor(task, tenantId), inputs.runInput(task));
                     return switch (outcome.kind()) {
                         case SUCCEEDED -> RunDispatchConsumer.Outcome.SUCCEEDED;
                         case FAILED -> RunDispatchConsumer.Outcome.FAILED;
@@ -277,8 +279,15 @@ public class WorkerExecutionConfig {
      * 占位配置使链路<b>结构上完整</b>，但不代表真实业务参数已接通。
      */
     @Bean
-    public RunExecutionInputs runExecutionInputs() {
-        return new RunExecutionInputs(maxCostPerRun, maxLlmCalls, maxSteps,
+    public RunExecutionInputs runExecutionInputs(
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.ports.persistence.ConfigOverridePort configOverridePort) {
+        // ⚠️ P4-D15：ConfigOverridePort 可选注入——缺失时本 Bean 与改动前完全等价，
+        //    使配置表尚未迁移的环境也能启动（fail-open 于**装配**，
+        //    但**收紧校验与审计**仍在写入路径 fail-closed）。
+        EffectiveConfigResolver resolver =
+                configOverridePort == null ? null : new EffectiveConfigResolver(configOverridePort);
+        return new RunExecutionInputs(resolver, maxCostPerRun, maxLlmCalls, maxSteps,
                 configMaps.toolRiskLevelMap(), configMaps.approvalRequiredByRisk());
     }
 
@@ -290,6 +299,16 @@ public class WorkerExecutionConfig {
      */
     public static final class RunExecutionInputs {
 
+        /**
+         * P4-D15：租户配置覆盖解析器（可为 null——未装配时行为与改动前逐位相同）。
+         *
+         * <p>⚠️ <b>为什么允许为 null 而不直接依赖注入</b>：本类由
+         * {@link #runExecutionInputs()} 无参构造；若强制依赖 {@code ConfigOverridePort}，
+         * 则任何只关心 Worker 的上下文测试/装配都得先准备配置表。
+         * 保持可空 + <b>缺失即回落 yml</b>，使本切片对既有行为零影响（D15-2）。
+         */
+        private final EffectiveConfigResolver effectiveResolver;
+
         // ⚠️ C8 接线（P4-D11）：快照必须来自 yml，不得硬编码。
         private final String maxCostPerRun;
         private final String maxLlmCalls;
@@ -297,9 +316,11 @@ public class WorkerExecutionConfig {
         private final Map<String, ToolRiskLevel> toolRiskLevelMap;
         private final Map<ToolRiskLevel, ApprovalRequirement> approvalRequiredByRisk;
 
-        RunExecutionInputs(String maxCostPerRun, String maxLlmCalls, String maxSteps,
+        RunExecutionInputs(EffectiveConfigResolver effectiveResolver,
+                           String maxCostPerRun, String maxLlmCalls, String maxSteps,
                            Map<String, ToolRiskLevel> toolRiskLevelMap,
                            Map<ToolRiskLevel, ApprovalRequirement> approvalRequiredByRisk) {
+            this.effectiveResolver = effectiveResolver;
             this.maxCostPerRun = maxCostPerRun;
             this.maxLlmCalls = maxLlmCalls;
             this.maxSteps = maxSteps;
@@ -345,11 +366,51 @@ public class WorkerExecutionConfig {
          * 与改造前的硬编码行为一致，<b>不放松</b>任何门禁。
          */
         public RunConfigSnapshot snapshotFor(RunClaimPort.LeasedTask task) {
+            return snapshotFor(task, null);
+        }
+
+        /**
+         * P4-D15：叠加租户配置覆盖后生成快照。
+         *
+         * <p>⚠️ <b>为什么不把覆盖读进构造</b>：构造期注入的是 yml（启动期 fail-closed 守卫），
+         * 而覆盖是<b>租户级、运行期可变</b>的。两者混在一起会把「启动期校验」
+         * 退化成「运行期才发现配错」——原本 yml 配错 = 启动失败，是好的。
+         *
+         * <p>⚠️ <b>tenantId 为 null（无租户上下文）时直接用 yml</b>：
+         * 保持与 P4-D15 之前逐位相同的行为，不让覆盖查询在无租户时抛错。
+         *
+         * @param tenantId 租户；为 null 时不叠加覆盖
+         */
+        public RunConfigSnapshot snapshotFor(RunClaimPort.LeasedTask task, String tenantId) {
+            String cost = maxCostPerRun;
+            String calls = maxLlmCalls;
+            String steps = maxSteps;
+
+            // ⚠️ P4-D15：DB 覆盖 ⊕ yml 默认。有覆盖才替换，无覆盖逐位沿用原值。
+            if (effectiveResolver != null && tenantId != null) {
+                var effective = effectiveResolver.resolve(tenantId, Map.of(
+                        PlatformConfig.KEY_MAX_COST_PER_RUN, maxCostPerRun,
+                        PlatformConfig.KEY_MAX_LLM_CALLS, maxLlmCalls,
+                        PlatformConfig.KEY_MAX_STEPS, maxSteps));
+                String c = effective.get(PlatformConfig.KEY_MAX_COST_PER_RUN);
+                String l = effective.get(PlatformConfig.KEY_MAX_LLM_CALLS);
+                String s = effective.get(PlatformConfig.KEY_MAX_STEPS);
+                if (c != null) {
+                    cost = c;
+                }
+                if (l != null) {
+                    calls = l;
+                }
+                if (s != null) {
+                    steps = s;
+                }
+            }
+
             return new RunConfigSnapshotFactory(java.time.Clock.systemUTC()).create(
                     task.runId(),
-                    maxCostPerRun,
-                    maxLlmCalls,
-                    maxSteps,
+                    cost,
+                    calls,
+                    steps,
                     toolRiskLevelMap,
                     approvalRequiredByRisk,
                     // ⚠️ 主工具未知 → 未登记工具按 WRITE_EXTERNAL 兜底（fail-closed）

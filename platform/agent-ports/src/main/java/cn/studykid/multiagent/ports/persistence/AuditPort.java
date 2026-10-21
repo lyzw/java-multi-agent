@@ -104,6 +104,19 @@ public interface AuditPort {
 
         /** 查看配置（P4-D14 / C6 / P19）。fail-open 访问日志。 */
         public static final String CONFIG_VIEW = "CONFIG_VIEW";
+
+        /**
+         * 配置变更（P4-D15 / C3+C4 / P15~P17）。
+         *
+         * <p>⚠️ <b>写入与清除共用同一动作码</b>：靠 {@code detail.tightening}
+         * 区分（写入时为方向，清除时为 {@code CLEARED}）。
+         * 不分成两个码是因为查询侧按「配置发生了什么变更」聚合，
+         * 两个码会让前端多写一次合并逻辑。
+         *
+         * <p>⚠️ <b>fail-closed</b>：配置变更走 {@link #recordRequired}，
+         * 审计写不进去就<b>不生效</b>——无声的高危变更比变更失败危险得多。
+         */
+        public static final String CONFIG_UPDATE = "CONFIG_UPDATE";
     }
 
     /** 审计视图（查询用）。 */
