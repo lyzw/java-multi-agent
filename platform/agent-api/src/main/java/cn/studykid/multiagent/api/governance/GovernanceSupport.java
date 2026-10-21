@@ -134,17 +134,23 @@ public final class GovernanceSupport {
      *
      * @param nextCursor 无更多时为 {@code null}——<b>「空页」与「没有更多」是两回事</b>
      */
-    record PageResponse<T>(@NonNull List<T> items, @Nullable String nextCursor) {
-        PageResponse {
+    public record PageResponse<T>(@NonNull List<T> items, @Nullable String nextCursor) {
+        public PageResponse {
             items = items == null ? List.of() : List.copyOf(items);
         }
 
-        static <T> PageResponse<T> of(Page<T> page) {
+        public static <T> PageResponse<T> of(Page<T> page) {
             return new PageResponse<>(page.items(), page.nextCursor());
         }
 
-        /** 已把端口条目映射为响应 DTO 后的构造入口。 */
-        static <T> PageResponse<T> of(List<T> items, String nextCursor) {
+        /**
+         * 已把端口条目映射为响应 DTO 后的构造入口。
+         *
+         * <p>⚠️ <b>public 是因为 P4-D16 的配置变更页复用同一分页契约</b>：
+         * 保持包私有会迫使新端点自定义一套分页响应，
+         * 而两套实现漂移的后果是「有的端点能翻页、有的不能」。
+         */
+        public static <T> PageResponse<T> of(List<T> items, String nextCursor) {
             return new PageResponse<>(items, nextCursor);
         }
     }

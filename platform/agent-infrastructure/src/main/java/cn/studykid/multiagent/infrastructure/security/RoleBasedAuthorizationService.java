@@ -36,11 +36,24 @@ public class RoleBasedAuthorizationService implements AuthorizationService {
                     Actions.TOOL_INVOKE, Actions.APPROVAL_CONSUME,
                     Actions.UNKNOWN_DISPOSE, Actions.AUDIT_READ, Actions.AGENT_MANAGE,
                     // ⚠️ 画像读取（P4-D09 / G6）：租户管理员是画像数据的管理方
-                    Actions.PROFILE_READ),
+                    Actions.PROFILE_READ,
+                    // ⚠️ **配置审批（P4-D16 / C7）**：
+                    //    TENANT_ADMIN 同时具备申请与审批两个动作——这是**刻意的**：
+                    //    「管理员什么都能做」是既有不变式，而双人复核靠的是
+                    //    **身份比对**（approver_id <> requester_id，应用层 + DB CHECK 双保险），
+                    //    不是靠权限拆分。
+                    //    若把审批权从管理员手里拿走，反而会导致「无人可批」：
+                    //    试点期往往只有一个管理员。
+                    Actions.CONFIG_REQUEST, Actions.CONFIG_APPROVE),
             Roles.AGENT_AUTHOR, Set.of(
                     Actions.RUN_CREATE, Actions.RUN_READ, Actions.RUN_CANCEL,
                     Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ,
-                    Actions.TOOL_INVOKE, Actions.AGENT_MANAGE),
+                    Actions.TOOL_INVOKE, Actions.AGENT_MANAGE,
+                    // ⚠️ **只能申请、不能审批**（P4-D16 / C7）：
+                    //    作者负责准备变更，审批权在管理员。
+                    //    这使双人复核在**权限层面**就有落点，
+                    //    而不只是靠同一管理员的自律。
+                    Actions.CONFIG_REQUEST),
             Roles.APPROVER, Set.of(
                     Actions.RUN_READ, Actions.APPROVAL_CONSUME,
                     Actions.UNKNOWN_DISPOSE, Actions.EVENT_SUBSCRIBE),
