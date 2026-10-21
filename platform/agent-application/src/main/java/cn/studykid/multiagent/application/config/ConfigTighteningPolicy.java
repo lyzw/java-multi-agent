@@ -78,7 +78,7 @@ public final class ConfigTighteningPolicy {
     /**
      * 上限类：只能变小。
      *
-     * <p>⚠️ 保留期 / TTL 的方向与上限类<b>相反</b>：它们是「只能变短」，
+     * <p>⚠️ <b>保留期 / TTL 的方向与上限类<b>相反</b></b>：它们是「只能变短」，
      * 但语义同样是「更严」。这里按各自的自然序比较——
      * 上限类变小为收紧，保留期变小也为收紧（留存更短 = 更合规）。
      */
@@ -87,6 +87,14 @@ public final class ConfigTighteningPolicy {
                                                   String currentValue,
                                                   ValueType type) {
         BigDecimal next = type.parse(newValue);
+        // ⚠️ **必须先拒非正数**：只比较「变小」会漏掉负数与零
+        //    （-1 < 20 看似是「收紧」而放行），但负上限会让该 Run 永远无法执行，
+        //    零上限同理——两者都是把「保护」换成了「停摆」。
+        //    这是实测补上的缺口：首版只写 next > current 才拒，负数漏过。
+        if (next.signum() <= 0) {
+            throw new ConfigRelaxationException(key, currentValue, newValue,
+                    "上限类配置必须为正数（0 或负数会使 Run 永远无法执行）");
+        }
         if (currentValue == null) {
             return; // 无当前值 = 从 yml 默认起步，此时任何正值都合法（格式已校验）
         }
