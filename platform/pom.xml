@@ -36,6 +36,7 @@
     <module>agent-ports</module>
     <module>agent-application</module>
     <module>agent-infrastructure</module>
+    <module>agent-infra</module>
     <module>agent-worker</module>
     <module>agent-api</module>
     <module>platform-bootstrap</module>
@@ -70,6 +71,11 @@
       <dependency>
         <groupId>cn.studykid.multiagent</groupId>
         <artifactId>agent-infrastructure</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.multiagent</groupId>
+        <artifactId>agent-infra</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

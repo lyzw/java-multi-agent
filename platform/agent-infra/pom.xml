@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.multiagent</groupId>
+    <artifactId>java-saas-agent-platform</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>agent-infra</artifactId>
+  <name>agent-infra :: 检索引擎层（G3）</name>
+  <description>
+    G3 检索引擎：Authority Triple Gate（RLS + TTL + 语义分）混合检索。
+    ⚠️ 草稿期：真实向量库 / BERT 嵌入为外部依赖（A-008 阻断），
+    以占位实现保留门控语义，待接真实向量库后闭环。
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>
