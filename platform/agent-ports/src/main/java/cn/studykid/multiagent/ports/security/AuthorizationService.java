@@ -88,11 +88,28 @@ public interface AuthorizationService {
          * （家长/教师可读画像，未必可读所有 Run）。为省事复用会让授权范围失真。
          */
         public static final String PROFILE_READ = "profile:read";
+        /**
+         * 提交/读取配置变更申请（P4-D16 / C7）。
+         *
+         * <p>⚠️ <b>与 {@link #AGENT_MANAGE} 分开</b>：P4-D15 的配置直写用的是
+         * {@code AGENT_MANAGE}，而审批需要<b>更高且不同</b>的权限——
+         * 若二者共用，会出现「有配置写权限的人也能审批」，
+         * 双人复核就退化成「同一个人两个身份」。
+         */
+        public static final String CONFIG_REQUEST = "config:request";
+        /**
+         * 审批高危配置变更（P4-D16 / C7）。
+         *
+         * <p>⛔ <b>仍不能消除自我审批</b>：权限与身份是两件事——
+         * 同一个 principal 同时具备两个动作时，双人复核靠
+         * {@code approver_id <> requester_id} 兜底（应用层 + DB CHECK 双保险）。
+         */
+        public static final String CONFIG_APPROVE = "config:approve";
 
         private static final Set<String> ALL = Set.of(
                 RUN_CREATE, RUN_READ, RUN_CANCEL, EVENT_SUBSCRIBE, RESULT_READ,
                 TOOL_INVOKE, APPROVAL_CONSUME, UNKNOWN_DISPOSE, AUDIT_READ, AGENT_MANAGE,
-                PROFILE_READ);
+                PROFILE_READ, CONFIG_REQUEST, CONFIG_APPROVE);
 
         /** @return 全部受控动作，供启动期自检使用。 */
         public static @NonNull Set<String> all() {

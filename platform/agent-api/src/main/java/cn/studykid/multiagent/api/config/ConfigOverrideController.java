@@ -143,6 +143,12 @@ public class ConfigOverrideController {
         }
 
         Tightening direction = ConfigOverridePort.WRITABLE.get(key);
+        // ⛔ **L3 高危键不得直写**（P4-D16 / C7）：必须先提交变更申请。
+        // ⚠️ 绝不能「也写进去、同时留个申请记录」——那等于审批形同虚设。
+        if (ConfigOverridePort.requiresApproval(key)) {
+            throw new ApprovalRequiredException(key,
+                    ConfigOverridePort.tierOf(key).name());
+        }
         Map<String, String> declared = readService.declaredValues();
         EffectiveConfigResolver.Effective effective =
                 resolver.resolve(context.tenantId(), declared);
@@ -214,6 +220,38 @@ public class ConfigOverrideController {
 
     /** 写入请求。 */
     public record OverrideRequest(@Nullable String value, @Nullable String reason) {
+    }
+
+    /**
+     * L3 高危键试图直写（P4-D16 / C7 → 409）。
+     *
+     * <p>⚠️ 独立于 {@code ConfigRelaxationException}：
+     * 二者对前端的行动建议<b>完全不同</b>——
+     * <ul>
+     *   <li>收紧被拒 → 「只能收紧」→ 改小一点再试</li>
+     *   <li>L3 直写被拒 → 「须走审批」→ <b>换一条路</b>（提交变更申请）</li>
+     * </ul>
+     * 混成一个文案会让人反复重试同一条注定被拒的路。
+     */
+    public static class ApprovalRequiredException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        private final String key;
+        private final String tier;
+
+        public ApprovalRequiredException(String key, String tier) {
+            super("配置键 " + key + " 为高危项（" + tier + "），须提交变更申请后方可生效");
+            this.key = key;
+            this.tier = tier;
+        }
+
+        public String key() {
+            return key;
+        }
+
+        public String tier() {
+            return tier;
+        }
     }
 
     /** 覆盖响应。 */
