@@ -1,14 +1,12 @@
 package cn.studykid.multiagent.api.auth;
 
 import java.time.Clock;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -17,7 +15,7 @@ import cn.studykid.multiagent.infrastructure.security.AuthenticationService;
 import cn.studykid.multiagent.infrastructure.security.JwtTokenService;
 
 /**
- * 认证端点（D-001）。G1: 登录返回角色
+ * 认证端点（D-001）。
  *
  * <p><b>⚠️ 端点设计的三条约束</b>（详见设计文档 §3）：
  * <ol>
@@ -45,78 +43,87 @@ public class AuthController {
     }
 
     /**
-     * 查询当前认证用户的角色列表（G1）。
-     *
-     * <p><b>G1: 登录返回角色</b>。从 JWT token 中提取 principalId，
-     * 调用 {@link AuthenticationService} 以无状态方式查询数据库中的角色集合。fail-fast，避免延迟抖动。
-     *
-     * <p>⚠️ 未携带有效令牌的请求将返回 401 Unauthorized。
-     */
-    @GetMapping("/roles")
-    public ResponseEntity<Map<String, Set<String>>> queryRoles() {
-        // G1: 查询用户当前角色
-        return ResponseEntity.ok(createRoleResponse());
-    }
-
-    
-    /**
-     * 从 JWT token 提取并返回用户角色列表（G1）。
-     *
-     * <p>⚠️ 此实现为临时方案，使用 JwtTokenService 直接解析。正式实现待 Spring Security 启用后改为：
-     * 1. 从 SecurityContextHolder 获取认证上下文
-     * 2. 调用 AuthenticationService.queryRoles() 查询数据库角色
-     */
-    private Set<String> createRoleResponse() {
-        try {
-            // G1: 临时方案 —— jwt token 直接解析
-            String authHeader = java.lang.reflect.Method.invoke(
-                    RequestContextHolder.currentRequestAttributes(), "getRequest");
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                return Set.of();
-            }
-            // ⚠️ G1: 临时回退方案 —— 未集成 Spring Security 时手动解析
-            String token = authHeader.substring(7).trim();
-            TenantContext context = tokens.verify(token, Clock.systemUTC().instant(), java.util.Set.of("ROLE_STUDENT", "ROLE_PARENT", "ROLE_TEACHER", "TENANT_ADMIN", "VIEWER", "APPROVER", "AGENT_AUTHOR", "WORKER"));
-            
-            // 将 Java Set 转换为 Map 的 Set 类型
-            return (Set<String>) context.roles();
-        } catch (Exception e) {
-            return Set.of();
-        }
-    }
-
-    /**
      * 登录换取访问令牌。
+     *
+     * <p>⚠️ {@code tenantId} 由请求体提供 —— 这是**有意识的取舍**：
+     * 客户端可指定租户，但因登录名全局唯一 + 所有失败路径原因不可辨 +
+     * 耗时一致，**不产生可利用的枚举面**（设计文档 §3.2）。
      */
     @PostMapping("/token")
     public ResponseEntity<?> issueToken(@RequestBody LoginRequest request) {
         if (request == null || !request.isComplete()) {
+            // ⚠️ 参数缺失也返回统一失败，不区分「缺哪个字段」
+            //    —— 否则可用差异响应探测接口结构
             return unauthorized();
         }
+
         AuthenticationService.AuthResult result = authentication.authenticate(
                 request.tenantId(), request.loginName(), request.password(), clock.instant());
+
         if (!result.success()) {
             return unauthorized();
         }
-        return ResponseEntity.ok(new TokenResponse(result.token(), "Bearer", tokenTtlSeconds()));
+        return ResponseEntity.ok(new TokenResponse(
+                result.token(), "Bearer", tokenTtlSeconds()));
     }
 
     /**
-     * 公钥端点（JWKS）。
+     * 公钥端点（JWKS 的最小实现）。
+     *
+     * <p>⚠️ 只暴露<b>公钥</b>。RSA 的安全性依赖私钥不出现在任何对外接口中。
+     * 公钥公开是设计使然（RS256 的非对称性正是为此）。
      */
     @GetMapping("/jwks")
     public ResponseEntity<?> jwks() {
-        return ResponseEntity.ok(new JwksResponse(tokens.keyId(), "RSA", tokens.publicKeyBase64()));
+        return ResponseEntity.ok(new JwksResponse(
+                tokens.keyId(), "RSA", tokens.publicKeyBase64()));
+    }
+
+    /**
+     * 当前令牌的生效角色（G1：登录返角色）。
+     *
+     * <p>⚠️ <b>角色不取 JWT 声明</b>：{@code tokens.verify(token, now, knownRoles)}
+     * 会把令牌里的角色与库中登记角色取交集，<b>只有登记过的才生效</b>——
+     * 否则拿到签发能力的一方可自签带 {@code TENANT_ADMIN} 的令牌提权。
+     *
+     * <p>⚠️ 所有失败路径（缺头/格式错/验签失败/过期/角色不在白名单）一律返回
+     * 同一个 401，且不区分原因——与 {@code /token} 的账号枚举防护同构。
+     */
+    @GetMapping("/roles")
+    public ResponseEntity<?> queryRoles(@RequestHeader(value = "Authorization", required = false) String authorization) {
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            return unauthorized();
+        }
+        String token = authorization.substring("Bearer ".length()).trim();
+        if (token.isEmpty()) {
+            return unauthorized();
+        }
+        try {
+            TenantContext context = authentication.authenticateToken(token, clock.instant());
+            return ResponseEntity.ok(new RolesResponse(context.roles()));
+        } catch (RuntimeException e) {
+            // ⚠️ fail-closed：异常类型可能泄露验签内部细节，故不区分、不透传
+            return unauthorized();
+        }
     }
 
     private ResponseEntity<?> unauthorized() {
         return ResponseEntity.status(401).body(new ErrorResponse("invalid_credentials"));
     }
 
-    private long tokenTtlSeconds() { return 900L; }
+    private long tokenTtlSeconds() {
+        // 本期与配置一致；如需动态可从 JwtTokenService 暴露
+        return 900L;
+    }
 
-    /** 登录请求。 */
+    /**
+     * 登录请求。
+     *
+     * <p>⚠️ <b>无 tenantId 之外的租户字段</b>，也<b>不接受邮箱/手机号</b>
+     * —— PIPL 要求平台不采集这些（设计文档 §7）。
+     */
     public record LoginRequest(String tenantId, String loginName, String password) {
+
         boolean isComplete() {
             return tenantId != null && !tenantId.isBlank()
                     && loginName != null && !loginName.isBlank()
@@ -124,12 +131,29 @@ public class AuthController {
         }
     }
 
-    /** 令牌响应。 */
-    public record TokenResponse(String accessToken, String tokenType, long expiresIn) {}
+    /**
+     * 令牌响应。
+     *
+     * <p>⚠️ <b>刻意不包含 principalId 与 tenantId</b> —— 最小化原则。
+     * 客户端拿令牌即可调用，无需知道内部标识。
+     */
+    public record TokenResponse(String accessToken, String tokenType, long expiresIn) {
+    }
 
     /** JWKS 最小形式。 */
-    public record JwksResponse(String kid, String alg, String publicKeyBase64) {}
+    public record JwksResponse(String kid, String alg, String publicKeyBase64) {
+    }
 
-    /** 统一错误响应。 */
-    public record ErrorResponse(String error) {}
+    /** 统一错误响应。消息固定，不含失败原因。 */
+    public record ErrorResponse(String error) {
+    }
+
+    /**
+     * 角色响应（G1）。
+     *
+     * <p>⚠️ 只含角色集合，不含 principalId / tenantId / authzVersion——
+     * 最小化原则，与 {@code TokenResponse} 一致。
+     */
+    public record RolesResponse(java.util.Set<String> roles) {
+    }
 }
