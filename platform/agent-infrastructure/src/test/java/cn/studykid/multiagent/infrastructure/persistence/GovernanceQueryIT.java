@@ -93,22 +93,73 @@ class GovernanceQueryIT {
     @Test
     @DisplayName("✅ G-1 列表按 (created_at, run_id) 全序返回，同刻多行不重复不遗漏")
     void listIsTotallyOrdered() {
-        java.util.stream.IntStream.range(0, 6).forEach(i -> newRun(tenantA));
+        // ⚠️ **6 条必须「同刻」**：run.created_at 是 PG 语句级 now()，
+        //    逐条插入实测各不相同 → 去掉 run_id 排序键也分不出重复，
+        //    断言会**恒真**、A-2 反证永远转不红（2026-10-21 复核实测发现）。
+        //
+        // ⚠️ **必须落在列表最前**：排序是 created_at DESC（倒序），
+        //    同刻时刻若早于其它行就会沉到末尾，而本用例只翻前两页 → 取不到同刻行。
+        //    故用**远期未来**时刻，保证这 6 条正好是被翻页的那批。
+        java.time.Instant sameInstant = java.time.Instant.parse("2099-12-31T23:59:59Z");
+        java.util.List<String> sameInstantRuns = new java.util.ArrayList<>();
+        try {
+            java.util.stream.IntStream.range(0, 6).forEach(i ->
+                    sameInstantRuns.add(newRun(tenantA, sameInstant)));
 
-        Page<RunListQueryPort.RunListItem> p1 = runList.list(tenantA, null, null, null, null, 3);
-        Page<RunListQueryPort.RunListItem> p2 =
-                runList.list(tenantA, null, null, null, p1.nextCursor(), 3);
+            Page<RunListQueryPort.RunListItem> p1 =
+                    runList.list(tenantA, null, null, null, null, 3);
+            Page<RunListQueryPort.RunListItem> p2 =
+                    runList.list(tenantA, null, null, null, p1.nextCursor(), 3);
 
-        List<String> firstPage = p1.items().stream()
-                .map(RunListQueryPort.RunListItem::runId).toList();
-        List<String> secondPage = p2.items().stream()
-                .map(RunListQueryPort.RunListItem::runId).toList();
+            List<String> firstPage = p1.items().stream()
+                    .map(RunListQueryPort.RunListItem::runId).toList();
+            List<String> secondPage = p2.items().stream()
+                    .map(RunListQueryPort.RunListItem::runId).toList();
 
-        assertThat(firstPage).hasSize(3).doesNotHaveDuplicates();
-        assertThat(secondPage).hasSize(3).doesNotHaveDuplicates();
-        assertThat(java.util.stream.Stream.concat(firstPage.stream(), secondPage.stream()).toList())
-                .as("⛔ 全序缺失时同刻行会在两页中重复或丢失（反证 A-2）")
-                .doesNotHaveDuplicates();
+            // 前置自证：被翻的两页**确实全是同刻行**，否则断言不承载任何信息。
+            assertThat(adminQueryLong("SELECT count(*) FROM run WHERE run_id IN ("
+                            + (String.join(",", firstPage.stream().map(id -> "'" + id + "'::uuid").toList()))
+                            + "," + (String.join(",", secondPage.stream().map(id -> "'" + id + "'::uuid").toList()))
+                            + ") AND created_at = '" + sameInstant + "'::timestamptz"))
+                    .as("⛔ 被翻的两页未全是同刻行 → 全序断言恒真，本用例失去判别力")
+                    .isEqualTo(6L);
+
+            assertThat(firstPage).hasSize(3).doesNotHaveDuplicates();
+            assertThat(secondPage).hasSize(3).doesNotHaveDuplicates();
+            assertThat(java.util.stream.Stream.concat(firstPage.stream(), secondPage.stream()).toList())
+                    .as("⛔ 全序缺失时同刻行会在两页中重复或丢失（反证 A-2）")
+                    .doesNotHaveDuplicates();
+        } finally {
+            // ⚠️ **必须清理**：同刻行用的是远期未来时刻，
+            //    若残留会给其它用例的「未来起点不应命中」断言带脏数据
+            //    （实测：filtersWork 首次跑就被污染变红）。
+            //    共享隔离库时，**夹具不得把自己的数据留在别人看不见的地方**。
+            deleteRuns(sameInstantRuns);
+        }
+    }
+
+    private static void deleteRuns(java.util.List<String> runIds) {
+        if (runIds.isEmpty()) {
+            return;
+        }
+        String in = String.join(",", runIds.stream().map(id -> "'" + id + "'::uuid").toList());
+        // ⚠️ **不硬编码子表名单**：表名/外键列名会随迁移演进（如 outbox → outbox_event），
+        //    写死清单迟早对不上（实测首次即踩：approval 无 run_id、outbox 实际叫 outbox_event）。
+        //    改为**从 information_schema 反查真实外键**，
+        //    依赖顺序 = FK 依赖倒序，删不掉的子表由 DB 自己报错暴露。
+        List<String> children = adminQueryList(
+                "SELECT DISTINCT tc.table_name || '.' || kcu.column_name "
+                + "FROM information_schema.table_constraints tc "
+                + "JOIN information_schema.key_column_usage kcu "
+                + "  ON tc.constraint_name = kcu.constraint_name "
+                + "JOIN information_schema.constraint_column_usage ccu "
+                + "  ON tc.constraint_name = ccu.constraint_name "
+                + "WHERE tc.constraint_type = 'FOREIGN KEY' AND ccu.table_name = 'run'");
+        for (String ref : children) {
+            String[] parts = ref.split("\\.", 2);
+            adminExec("DELETE FROM " + parts[0] + " WHERE " + parts[1] + " IN (" + in + ")");
+        }
+        adminExec("DELETE FROM run WHERE run_id IN (" + in + ")");
     }
 
     @Test
@@ -484,6 +535,19 @@ class GovernanceQueryIT {
         }
     }
 
+    /** 管理员查询单值（计数等）。 */
+    private static long adminQueryLong(String sql) {
+        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
+             Connection conn = adminPool.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             var rs = ps.executeQuery()) {
+            assertThat(rs.next()).as("查询应返回一行: " + sql).isTrue();
+            return rs.getLong(1);
+        } catch (Exception e) {
+            throw new IllegalStateException("管理员查询失败: " + sql, e);
+        }
+    }
+
     private static HikariConfig adminConfig() {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
@@ -503,6 +567,26 @@ class GovernanceQueryIT {
     }
 
     private static String newRun(String tenantId) {
+        return newRun(tenantId, null);
+    }
+
+    /**
+     * ⚠️ <b>{@code sameInstant} 只在验证「全序」时使用</b>。
+     *
+     * <p><b>为什么必须有这个参数</b>：{@code run.created_at} 取 {@code DEFAULT now()}，
+     * 而 PG 的 {@code now()} 是<b>语句级</b>时间戳（微秒精度）。逐条插入的 6 条 Run
+     * 实测 created_at <b>互不相同</b>（间隔约 50ms），此时
+     * {@code ORDER BY created_at DESC} 本身已唯一确定顺序，
+     * <b>去掉 {@code run_id} 排序键也分不出重复</b>——
+     * 于是「全序」断言 {@code doesNotHaveDuplicates()} 在没有同刻行时
+     * <b>恒真</b>，A-2 反证（去掉 run_id）也就永远转不了红。
+     *
+     * <p>这不是「反证脚本写错了」，而是<b>断言与夹具不匹配</b>：
+     * 要证伪「全序」，前提是<b>真的存在同刻多行</b>，否则该断言不承载任何信息。
+     *
+     * @param sameInstant 非 null 时把该 Run 的 created_at 归一到固定值，制造同刻多行
+     */
+    private static String newRun(String tenantId, java.time.Instant sameInstant) {
         // ⚠️ **快照必须按租户取**：execution_snapshot 有 tenant_id，
         //    拿 A 的快照去给 B 建 Run 会撞跨租户约束
         //    （首次表现为「Run 原子提交失败」，指向 Run 代码，实际是夹具造错）。
@@ -514,6 +598,11 @@ class GovernanceQueryIT {
                 Map.of("question", "一元二次方程"),
                 "corr-" + runId,
                 new OutboxMessage(runId, tenantId, 0, 0L, CLOCK.instant()));
+        if (sameInstant != null) {
+            // 用管理连接归一 created_at：应用连接是非特权 app_agent 且强制 RLS，改不动行。
+            adminExec("UPDATE run SET created_at = '" + sameInstant + "'::timestamptz "
+                    + "WHERE run_id = '" + runId + "'::uuid");
+        }
         return runId;
     }
 

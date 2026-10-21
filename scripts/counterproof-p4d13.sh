@@ -70,6 +70,8 @@ echo "── A-1 去掉显式 tenant_id + 删除 RLS 策略"
 cp "$INF/JdbcRunListQueryRepository.java" /tmp/A1.bak
 sed -i '' 's|WHERE tenant_id = ?::uuid|WHERE true /* A1 注入 */|' \
     "$INF/JdbcRunListQueryRepository.java"
+grep -q 'WHERE true /\* A1 注入 \*/' "$INF/JdbcRunListQueryRepository.java" \
+  || { echo "     ⛔ 注入未生效（sed 未匹配）"; cp /tmp/A1.bak "$INF/JdbcRunListQueryRepository.java"; report A-1 "$RED" "$INVALID"; }
 docker exec agent-pg17 psql -U agent -d agent_it -qc \
     "DROP POLICY IF EXISTS run_tenant_isolation ON run;" >/dev/null 2>&1
 A1=$INVALID
@@ -85,10 +87,26 @@ docker exec agent-pg17 psql -U agent -d agent_it -qc \
 report A-1 "$RED" "$A1"
 
 # ── A-2 排序键去掉 run_id → 全序性断言必须红 ──
-echo "── A-2 排序键去掉 run_id"
+echo "── A-2 排序键去掉 run_id（排序 + 游标比较，两处同时去掉）"
 cp "$INF/JdbcRunListQueryRepository.java" /tmp/A2.bak
 sed -i '' 's|ORDER BY created_at DESC, run_id DESC LIMIT ?|ORDER BY created_at DESC LIMIT ?|' \
     "$INF/JdbcRunListQueryRepository.java"
+sed -i '' 's|AND (created_at < ? OR (created_at = ? AND run_id < ?::uuid))|AND created_at <= ?|' \
+    "$INF/JdbcRunListQueryRepository.java"
+# ⚠️⚠️ 自检：注入必须真的发生，否则这次反证等于没跑。
+#
+#   **本条自检是 2026-10-21 复核时补的，且是本项目至今最深的一次纠错。**
+#
+#   ① 原脚本 sed 模式串带行首锚定，被 `sql.append("` 前缀挡住 → 从未匹配，
+#      注入没发生、反证报 GREEN（假阴性，形态同台账 §3.2 CP-1/CP-2）。
+#   ② 更深一层：**即使注入成功，A-2 依然转不了红**。因为 keyset 分页的全序由
+#      **两处**共同保证——ORDER BY 排序键 + 游标比较谓词（`run_id < ?`）。
+#      只去掉 ORDER BY 里的 run_id，游标谓词仍在做确定性过滤，
+#      结果集依旧唯一确定 → 「不重复不遗漏」断言恒真。
+#      **教训：反证必须打到「保证不变量的全部机制」，而不是其中一处。**
+grep -q 'ORDER BY created_at DESC LIMIT' "$INF/JdbcRunListQueryRepository.java" \
+  && grep -q 'AND created_at <= ?' "$INF/JdbcRunListQueryRepository.java" \
+  || { echo "     ⛔ 注入未生效（sed 未匹配）"; cp /tmp/A2.bak "$INF/JdbcRunListQueryRepository.java"; report A-2 "$RED" "$INVALID"; }
 A2=$INVALID
 if run_it agent-infrastructure GovernanceQueryIT; then
   is_red && A2=$RED || A2=$GREEN
@@ -100,6 +118,8 @@ report A-2 "$RED" "$A2"
 echo "── A-3 limit 上限放开到 10000"
 cp "$API/GovernanceSupport.java" /tmp/A3.bak
 sed -i '' 's|MAX_LIMIT = 100;|MAX_LIMIT = 10000;|' "$API/GovernanceSupport.java"
+grep -q 'MAX_LIMIT = 10000;' "$API/GovernanceSupport.java" \
+  || { echo "     ⛔ 注入未生效（sed 未匹配）"; cp /tmp/A3.bak "$API/GovernanceSupport.java"; report A-3 "$RED" "$INVALID"; }
 A3=$INVALID
 if run_it platform-bootstrap GovernanceEndpointIT; then
   is_red && A3=$RED || A3=$GREEN
@@ -112,6 +132,8 @@ echo "── A-4 过期审批自动批准"
 cp "$INF/JdbcApprovalQueryRepository.java" /tmp/A4.bak
 sed -i '' 's|if (current.expired()) {|if (false) { /* A4 注入 */|' \
     "$INF/JdbcApprovalQueryRepository.java"
+grep -q 'if (false) { /\* A4 注入 \*/' "$INF/JdbcApprovalQueryRepository.java" \
+  || { echo "     ⛔ 注入未生效（sed 未匹配）"; cp /tmp/A4.bak "$INF/JdbcApprovalQueryRepository.java"; report A-4 "$RED" "$INVALID"; }
 A4=$INVALID
 if run_it platform-bootstrap GovernanceEndpointIT; then
   is_red && A4=$RED || A4=$GREEN
@@ -139,6 +161,8 @@ echo "── A-6 跨租户抛 AccessDenied 而非 NotFound"
 cp "$INF/JdbcApprovalQueryRepository.java" /tmp/A6.bak
 sed -i '' 's|throw new ApprovalQueryPort.ApprovalNotFoundException(approvalId);|throw new cn.studykid.multiagent.ports.security.AccessDeniedException("actor", "approval:consume", approvalId); // A6 注入|' \
     "$INF/JdbcApprovalQueryRepository.java"
+grep -q 'A6 注入' "$INF/JdbcApprovalQueryRepository.java" \
+  || { echo "     ⛔ 注入未生效（sed 未匹配）"; cp /tmp/A6.bak "$INF/JdbcApprovalQueryRepository.java"; report A-6 "$RED" "$INVALID"; }
 A6=$INVALID
 if run_it platform-bootstrap GovernanceEndpointIT; then
   is_red && A6=$RED || A6=$GREEN
