@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 
+import cn.studykid.multiagent.api.config.ConfigOverrideController;
 import cn.studykid.multiagent.api.run.RunController.ErrorResponse;
 import cn.studykid.multiagent.api.security.CurrentPrincipal.UnauthenticatedException;
 import cn.studykid.multiagent.application.config.ConfigTighteningPolicy;
@@ -174,6 +175,27 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(status)
                 .body(new ErrorResponse(codeOf(status), messageOf(status)));
     }
+
+    /**
+ * L3 高危配置键试图直写（P4-D16 / C7 → 409）。
+ *
+ * <p>⚠️ <b>必须是 409 而非 500</b>：这不是服务端故障，
+ * 而是一个<b>有确定解法</b>的状态——「请改走审批通道」。
+ * 报 500 会让前端与运维都以为系统坏了，从而反复重试；
+ * 而正确响应是引导用户换一条路。
+ *
+ * <p>⚠️ <b>与 {@link ConfigTighteningPolicy.ConfigRelaxationException} 分开</b>：
+ * 二者对前端的行动建议完全不同——
+ * 收紧被拒是「改小一点再试」，L3 直写被拒是「<b>换一条路</b>」。
+ */
+@ExceptionHandler(ConfigOverrideController.ApprovalRequiredException.class)
+public ResponseEntity<ErrorResponse> handleApprovalRequired(
+        ConfigOverrideController.ApprovalRequiredException e) {
+    log.info("高危配置键试图直写（须走审批）: key={} tier={}", e.key(), e.tier());
+    return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(new ErrorResponse("CONFIG_APPROVAL_REQUIRED",
+                    "该配置项为高危变更，须提交变更申请并经审批后生效"));
+}
 
     /**
      * 配置变更被安全门禁拒绝（P4-D15 / C5）。

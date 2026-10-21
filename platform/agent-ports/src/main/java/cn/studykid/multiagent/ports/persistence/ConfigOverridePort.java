@@ -121,6 +121,71 @@ public interface ConfigOverridePort {
         TIGHTEN_RATCHET
     }
 
+    /**
+     * 配置分级（FE-02 §2）。
+     *
+     * <p>⚠️ <b>与 {@link Tightening} 是两个正交维度</b>，不可混为一谈：
+     * <ul>
+     *   <li>{@code Tightening} 回答「<b>往哪个方向</b>改」</li>
+     *   <li>{@code Tier} 回答「<b>改完要不要人批</b>」</li>
+     * </ul>
+     * 一个 L3 键同样只能收紧——「只能收紧」不等于「可以自己动手」。
+     */
+    enum Tier {
+        /** L2：安全可写，仅能收紧 → 直接生效。 */
+        L2_SAFE,
+        /** L3：高危 → 须走 CHG 审批（P4-D16）。 */
+        L3_HIGH
+    }
+
+    /**
+     * 键 → 分级（P4-D16 / C7）。
+     *
+     * <p>⛔ <b>刻意使用白名单而非「默认 L2」</b>：
+     * 新增配置键若忘记分级，<b>默认应落在需审批的安全方向</b>。
+     * 若用「不在 L2 清单里即可直写」，则某天有人加了个成本类键
+     * 却忘了写进 L2 清单，它就会<b>静默变成无需审批</b>——
+     * 这正是本项目反复追捕的「静默失效」形态。
+     *
+     * <p>⚠️ {@code retention.*} 全部为 L3：直接关联 PIPL 留存义务，
+     * 即便「收紧」也应留痕（收紧也可能是误操作导致数据过早删除）。
+     * 审计留存期尤其不可仅凭「能变小」就自动执行。
+     */
+    Map<String, Tier> TIERS = Map.ofEntries(
+            // ── A 运行与容量（FE-02 §2 全为 L3）──
+            Map.entry("agent.run.max-cost-per-run", Tier.L3_HIGH),
+            Map.entry("agent.run.max-llm-calls", Tier.L3_HIGH),
+            Map.entry("agent.run.max-steps", Tier.L3_HIGH),
+            Map.entry("agent.tenant.max-concurrent-runs", Tier.L3_HIGH),
+            Map.entry("deployment.pilot.max-tenants", Tier.L3_HIGH),
+            // ── 过载保护：放宽 = 失去保护 ──
+            Map.entry("agent.rate-limit.limit-per-window", Tier.L3_HIGH),
+            Map.entry("agent.worker.concurrency", Tier.L3_HIGH),
+            Map.entry("agent.backpressure.high-watermark", Tier.L3_HIGH),
+            // ── 合规留存：即便收紧也要留痕（PIPL）──
+            Map.entry("agent.retention.profile-months", Tier.L3_HIGH),
+            Map.entry("agent.retention.prompt-days", Tier.L3_HIGH),
+            Map.entry("agent.retention.trace-days", Tier.L3_HIGH),
+            Map.entry("agent.retention.audit-days", Tier.L3_HIGH),
+            // ── B 审批口径：FE-02 §2 明确 L2（只能收紧）──
+            Map.entry("agent.approval.ttl", Tier.L2_SAFE),
+            Map.entry("agent.approval.required-by-risk", Tier.L2_SAFE));
+
+    /**
+     * 取某键的分级。
+     *
+     * <p>⚠️ <b>不在白名单内一律按 L3</b>（fail-closed 到更严的方向）。
+     * 宁可多要一次审批，也不要漏一次高危变更。
+     */
+    static Tier tierOf(String key) {
+        return TIERS.getOrDefault(key, Tier.L3_HIGH);
+    }
+
+    /** 该键是否需要 CHG 审批。 */
+    static boolean requiresApproval(String key) {
+        return tierOf(key) == Tier.L3_HIGH;
+    }
+
     /** 可写目录中不存在的配置键（→ 404）。 */
     class UnknownConfigKeyException extends RuntimeException {
         private static final long serialVersionUID = 1L;

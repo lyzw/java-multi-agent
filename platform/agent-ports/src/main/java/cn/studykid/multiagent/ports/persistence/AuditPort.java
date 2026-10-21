@@ -117,6 +117,21 @@ public interface AuditPort {
          * 审计写不进去就<b>不生效</b>——无声的高危变更比变更失败危险得多。
          */
         public static final String CONFIG_UPDATE = "CONFIG_UPDATE";
+
+        /** 提交高危配置变更申请（P4-D16 / C7）。 */
+        public static final String CONFIG_CHANGE_REQUEST = "CONFIG_CHANGE_REQUEST";
+        /** 批准高危配置变更（P4-D16 / C7）。不写入配置表。 */
+        public static final String CONFIG_CHANGE_APPROVE = "CONFIG_CHANGE_APPROVE";
+        /** 拒绝高危配置变更（P4-D16 / C7）。 */
+        public static final String CONFIG_CHANGE_REJECT = "CONFIG_CHANGE_REJECT";
+        /**
+         * 应用已批准的变更（P4-D16 / C7）——<b>此步才真正写入配置表</b>。
+         *
+         * <p>⚠️ 刻意与 {@link #CONFIG_CHANGE_APPROVE} 分开：
+         * 「批准」与「生效」是两件事，合并会让审计无法回答
+         * 「配置到底有没有真的变过」。
+         */
+        public static final String CONFIG_CHANGE_APPLY = "CONFIG_CHANGE_APPLY";
     }
 
     /** 审计视图（查询用）。 */
