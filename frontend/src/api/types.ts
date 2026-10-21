@@ -386,3 +386,41 @@ export interface CreateAgentRequest {
 export interface PublishVersionRequest {
   definition: string
 }
+
+/* ── P4-D15 配置写入（F6 · C2/C3/C5/C7）───────────────────────── */
+
+/** 配置收紧方向（与后端 `ConfigOverridePort.Tightening` 一致）。 */
+export type Tightening = 'TIGHTEN' | 'TIGHTEN_RATCHET' | 'NEUTRAL'
+
+/**
+ * 单条配置覆盖（后端 `GET /api/config/overrides` 列表项）。
+ *
+ * ⚠️ `declaredValue` 与 `effectiveValue` **刻意并存**：
+ *    前者是对照用的 yml 声明值，后者才是当前真正生效的值。
+ *    未被覆盖时二者相同且 `source='yml'`；被覆盖时 `source='db_override'`。
+ *    页面必须**如实展示这一区别**——否则管理员无法判断自己改的值有没有生效。
+ */
+export interface ConfigOverrideItem {
+  key: string
+  /** yml 声明值（不可变参照） */
+  declaredValue: string | null
+  /** 当前生效值（DB 覆盖优先） */
+  effectiveValue: string | null
+  /** 'db_override' | 'yml' | null（后端未返回该键时） */
+  source: string | null
+  /** 收紧方向：决定 UI 允许的方向 */
+  tightening: Tightening
+  /** 上次变更理由（未变更过为 null） */
+  reason: string | null
+  /** 上次操作者 */
+  changedBy: string | null
+  /** 上次变更时刻 */
+  updatedAt: string | null
+}
+
+/** PUT /api/config/overrides/{key} 请求体。 */
+export interface ApplyOverrideRequest {
+  value: string
+  /** CHG 变更理由，后端要求 ≥10 字 */
+  reason: string
+}

@@ -16,6 +16,8 @@
 import { useCallback, useState } from 'react'
 import { Sheet, Marked, Empty, Loading, LoadingRows, ErrorState } from '@/shared/states'
 import { useConfig } from '@/features/config/useConfig'
+import { useConfigOverrides } from '@/features/config/useConfigOverrides'
+import { ConfigOverrideRow } from '@/features/config/ConfigOverrideRow'
 import { useGovernancePage } from '@/features/governance/useGovernancePage'
 import { listAgents, createAgent, publishAgentVersion, queryAudit } from '@/api/client'
 import type {
@@ -28,6 +30,34 @@ import type {
 } from '@/api/types'
 
 /* ── 通用：配置表 + 生效 chip ──────────────────────────── */
+
+/**
+ * 本页展示的可写键（P4-D15 / C3）。
+ *
+ * ⚠️ **这些是后端白名单的子集，刻意在此显式列举而非全量渲染**：
+ * P15 是「运行与容量」页，P16 是「工具与审批」页——全量渲染会把
+ * 另一页的配置挤进来，也会让页面职责变得模糊。
+ *
+ * ⛔ **本清单不含任何 L1 锁定键**（工具风险级别 / 审批人范围）：
+ * 它们是代码事实与合规边界，不存在「写入口」这个概念。
+ */
+const RUNTIME_WRITABLE_KEYS = [
+  'agent.run.max-cost-per-run',
+  'agent.run.max-llm-calls',
+  'agent.run.max-steps',
+  'agent.tenant.max-concurrent-runs',
+  'deployment.pilot.max-tenants',
+  'agent.rate-limit.limit-per-window',
+  'agent.worker.concurrency',
+  'agent.backpressure.high-watermark',
+  'agent.retention.profile-months',
+  'agent.retention.prompt-days',
+] as const
+
+const TOOLS_WRITABLE_KEYS = [
+  'agent.approval.ttl',
+  'agent.approval.required-by-risk',
+] as const
 
 /**
  * ⚠️ 生效 chip 文案严格区分：
@@ -168,6 +198,11 @@ export function ConfigRuntimePage(): JSX.Element {
         reload={reload}
         groupName="运行与容量"
       />
+
+      <WritableConfigTable
+        title="可调整的上限"
+        keys={RUNTIME_WRITABLE_KEYS}
+      />
     </>
   )
 }
@@ -199,7 +234,99 @@ export function ConfigToolsPage(): JSX.Element {
         reload={reload}
         groupName="工具与审批"
       />
+
+      <WritableConfigTable
+        title="可调整的审批口径"
+        keys={TOOLS_WRITABLE_KEYS}
+      />
     </>
+  )
+}
+
+/* ── P4-D15 可写配置区（C3/C5/C7）────────────────────── */
+
+/**
+ * 可写配置表。
+ *
+ * ⛔ **FE-CFG-05：必须显著标明生效方式**。
+ * 本体系的生效机制是「**下次 Run 创建时读取**」，
+ * 而非「保存即全局生效」——正在执行的 Run 不受影响（R-021 快照隔离）。
+ * 若不写明，管理员会以为保存后所有在途 Run 都变了。
+ */
+function WritableConfigTable({
+  title,
+  keys,
+}: {
+  title: string
+  keys: readonly string[]
+}): JSX.Element {
+  const {
+    items,
+    loading,
+    error,
+    reload,
+    submittingKey,
+    actionError,
+    apply,
+    clear,
+    clearActionError,
+  } = useConfigOverrides()
+
+  if (loading && items === null) {
+    return <Loading label="正在读取可写配置" />
+  }
+  if (error !== null && items === null) {
+    return <ErrorState reason={error} next="可以稍后重试" onRetry={reload} />
+  }
+
+  // ⚠️ 按**本页关心的键**过滤，而非全量渲染：
+  //    工具风险级别 / 审批人范围等 L1 锁定项压根不该出现在写页面。
+  const visible = (items ?? []).filter((i) => keys.includes(i.key))
+
+  return (
+    <Sheet title={title}>
+      <Marked label="保存后何时生效">
+        <p style={{ margin: 0 }}>
+          保存后<b>下一个新建的 Run</b> 会使用新值；已经开始执行的 Run 不受影响
+          （配置在 Run 创建时即被快照固化）。
+        </p>
+      </Marked>
+
+      {actionError !== null && (
+        <p role="alert" className="field__error">
+          {actionError}
+          <button type="button" onClick={clearActionError}>
+            知道了
+          </button>
+        </p>
+      )}
+
+      {visible.length === 0 ? (
+        <Empty title="本页没有可写配置" hint="当前租户下这些配置均未被允许修改。" />
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">配置项</th>
+              <th scope="col">当前生效值</th>
+              <th scope="col">约束</th>
+              <th scope="col">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((item) => (
+              <ConfigOverrideRow
+                key={item.key}
+                item={item}
+                busy={submittingKey === item.key}
+                onSubmit={(k, v, r) => void apply(k, v, r)}
+                onClear={(k) => void clear(k)}
+              />
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Sheet>
   )
 }
 

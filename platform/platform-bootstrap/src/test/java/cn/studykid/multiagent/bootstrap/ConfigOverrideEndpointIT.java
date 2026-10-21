@@ -204,7 +204,12 @@ class ConfigOverrideEndpointIT {
                 .header("Authorization", adminAuth())
                 .contentType(MediaType.APPLICATION_JSON)
                 .body("{\"value\":\"999\",\"reason\":\"" + REASON + "\"}")
-                .exchange().expectStatus().isEqualTo(409);
+                .exchange().expectStatus().isEqualTo(409)
+                // ⚠️ code 必须是 CONFIG_RELAXATION_REJECTED 而非 IDEMPOTENCY_CONFLICT：
+                //    前端据此决定提示「只能收紧」而非「刷新重试」——
+                //    错标会把安全拒绝伪装成可重试冲突，诱导无效重试。
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("CONFIG_RELAXATION_REJECTED");
 
         // ⚠️ 被拒的写入**不得落库**——否则「拒绝了但还是生效」比不拒绝更危险。
         String stored = adminQuery("SELECT value_text FROM tenant_config_override "
@@ -225,7 +230,9 @@ class ConfigOverrideEndpointIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .body("{\"value\":\"READ=NOT_REQUIRED,WRITE_EXTERNAL=REQUIRED\","
                         + "\"reason\":\"" + REASON + "\"}")
-                .exchange().expectStatus().isEqualTo(409);
+                .exchange().expectStatus().isEqualTo(409)
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("CONFIG_RELAXATION_REJECTED");
     }
 
     // ── C7：理由强制 ──────────────────────────────────────────────

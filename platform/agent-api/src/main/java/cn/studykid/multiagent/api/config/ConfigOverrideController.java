@@ -155,8 +155,12 @@ public class ConfigOverrideController {
             ConfigTighteningPolicy.validate(key, request.value(), currentValue,
                     request.reason(), valueTypeOf(key));
         } catch (ConfigRelaxationException e) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "配置变更被安全策略拒绝：只允许收紧，不允许放松");
+            // ⚠️ 不在此处转 409：交给 ApiExceptionHandler#handleConfigRelaxation，
+            //    以便返回专用 code CONFIG_RELAXATION_REJECTED。
+            //    若走 ResponseStatusException，codeOf(CONFLICT) 会把它错标成
+            //    IDEMPOTENCY_CONFLICT，前端就会建议「刷新重试」——而刷新
+            //    永远不会让「只能收紧」变松。
+            throw e;
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         }

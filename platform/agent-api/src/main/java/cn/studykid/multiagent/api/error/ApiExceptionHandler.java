@@ -11,6 +11,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.api.run.RunController.ErrorResponse;
 import cn.studykid.multiagent.api.security.CurrentPrincipal.UnauthenticatedException;
+import cn.studykid.multiagent.application.config.ConfigTighteningPolicy;
 import cn.studykid.multiagent.core.compliance.ZeroRetentionViolationException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
@@ -172,6 +173,28 @@ public class ApiExceptionHandler {
         log.info("控制器声明的状态: code={}", e.getStatusCode());
         return ResponseEntity.status(status)
                 .body(new ErrorResponse(codeOf(status), messageOf(status)));
+    }
+
+    /**
+     * 配置变更被安全门禁拒绝（P4-D15 / C5）。
+     *
+     * <p>⚠️ <b>为什么单独一个处理器而不走 {@code ResponseStatusException}</b>：
+     * {@code codeOf(CONFLICT)} 会把所有 409 映射成 {@code IDEMPOTENCY_CONFLICT}，
+     * 而本条的语义是「<b>安全门禁降级</b>」——两者对前端的行动建议<b>完全相反</b>：
+     * 幂等冲突的正确反应是「刷新后重试」，而门禁拒绝的正确反应是
+     * 「<b>停下来</b>，别再重试，改为只收紧」。
+     *
+     * <p>若前端拿到 {@code IDEMPOTENCY_CONFLICT} 会反复刷新重试一个注定被拒的操作，
+     * 而刷新永远不会让「只能收紧」变松——这是把安全拒绝伪装成可重试错误。
+     */
+    @ExceptionHandler(ConfigTighteningPolicy.ConfigRelaxationException.class)
+    public ResponseEntity<ErrorResponse> handleConfigRelaxation(
+            ConfigTighteningPolicy.ConfigRelaxationException e) {
+        // ⚠️ 固定文案、不回显 e.getMessage()：后者含新旧值，可能携带用户输入。
+        log.info("配置变更被收紧策略拒绝: key={}", e.key());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse("CONFIG_RELAXATION_REJECTED",
+                        "该变更被安全策略拒绝：配置只允许收紧，不允许放松"));
     }
 
     /**

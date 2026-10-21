@@ -27,6 +27,8 @@ import type {
   AuditEntry,
   AgentItem,
   AgentVersionItem,
+  ConfigOverrideItem,
+  ApplyOverrideRequest,
   CreateAgentRequest,
   PublishVersionRequest,
 } from './types'
@@ -443,5 +445,55 @@ export function publishAgentVersion(
     `/api/agents/${encodeURIComponent(agentId)}/versions`,
     { method: 'POST', body: JSON.stringify(payload) },
     true,
+  )
+}
+
+/* ── 配置写入（P4-D15 / F6 · C3）────────────────────────────── */
+
+/**
+ * GET /api/config/overrides —— 列本租户的可写配置及其生效值。
+ *
+ * ⚠️ 与 `getConfig()`（只读目录）**刻意分开**：只读端点给出
+ * 「声明值 + 是否接线」，本端点给出「**声明值 + 生效值 + 来源**」，
+ * 写页面需要知道用户改的值**到底有没有真的生效**。
+ */
+export function listConfigOverrides(): Promise<ConfigOverrideItem[]> {
+  return _request<ConfigOverrideItem[]>(
+    '/api/config/overrides',
+    { method: 'GET' },
+    false,
+  )
+}
+
+/**
+ * PUT /api/config/overrides/{key} —— 写入一条配置覆盖。
+ *
+ * ⚠️ 收紧类配置**只能调小**；试图调大会得到 **409 +
+ * `CONFIG_RELAXATION_REJECTED`**，调用方应据此提示「只能收紧」，
+ * 而**不是**提示「刷新重试」——刷新永远不会让收紧限制变松。
+ *
+ * ⚠️ `reason` 必填且后端要求 ≥10 字（C7 变更模板）。
+ */
+export function applyConfigOverride(
+  key: string,
+  payload: ApplyOverrideRequest,
+): Promise<ConfigOverrideItem> {
+  return _request<ConfigOverrideItem>(
+    `/api/config/overrides/${encodeURIComponent(key)}`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+    true,
+  )
+}
+
+/**
+ * DELETE /api/config/overrides/{key} —— 清除覆盖，回落到 yml 默认值。
+ *
+ * ⚠️ **清除也是一次变更**（会收紧/放宽取决于方向），后端同样记审计。
+ */
+export function clearConfigOverride(key: string): Promise<void> {
+  return _request<void>(
+    `/api/config/overrides/${encodeURIComponent(key)}`,
+    { method: 'DELETE' },
+    false,
   )
 }

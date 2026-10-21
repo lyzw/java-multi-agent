@@ -682,3 +682,31 @@
     font-size: 22px;
   }
 }
+
+/* ── 可写配置区（P4-D15 / FE-D11）─────────────────────────
+   纸感体系：用线与留白分隔，⛔ 不用卡片阴影（design.spec R1/R3）。
+   ⚠️ 这三类是 FE-D11 引入的编辑控件布局，
+      CSS 完整性不变式要求「组件用到的类名必须在主样式层有定义」，
+      故在此显式定义而非走豁免清单。 */
+
+/* 操作按钮行：与既有 .field 的 gap 保持一致 */
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+/* 行内编辑面板：左侧细线标示「这一行正在被编辑」，
+   ⛔ 不用底色块，避免与禁用态混淆。 */
+.editor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding-left: var(--s-2);
+  border-left: 2px solid var(--rule);
+}
+
+.editor-panel .field {
+  margin: 0;
+}

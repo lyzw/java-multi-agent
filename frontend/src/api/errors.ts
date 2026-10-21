@@ -37,6 +37,15 @@ const MAX_MESSAGE_LENGTH = 200
  */
 const CREDENTIAL_FAILURE_MESSAGE = '租户、账号或密码不正确'
 
+/**
+ * 配置收紧拒绝的固定文案（P4-D15 / C5）。
+ *
+ * ⚠️ **绝不能是「刷新后重试」**：刷新不会让「只能收紧」变松，
+ * 那种提示会诱导管理员对一个注定被拒的操作反复重试。
+ * 故无论服务端传什么 message，该 code 一律收敛到此句。
+ */
+const CONFIG_RELAXATION_MESSAGE = '该变更被安全策略拒绝：配置只允许收紧，不允许放松'
+
 function clamp(text: string): string {
   return text.length > MAX_MESSAGE_LENGTH
     ? `${text.slice(0, MAX_MESSAGE_LENGTH)}…`
@@ -96,7 +105,9 @@ function defaultMessage(status: number, code: string): string {
     case 404:
       return '资源不存在'
     case 409:
-      return '请求冲突，请刷新后重试'
+      return code === 'CONFIG_RELAXATION_REJECTED'
+        ? CONFIG_RELAXATION_MESSAGE
+        : '请求冲突，请刷新后重试'
     case 422:
       return '请求无法处理'
     default:
@@ -122,14 +133,23 @@ export function normalizeHttpError(
     //    若走默认映射会得到「登录已过期」——语义完全错误，
     //    会让用户以为会话失效而反复重新登录。
     const isCredentialFailure = codeMessage.code === 'INVALID_CREDENTIALS'
+    // ⚠️ **P4-D15**：配置收紧拒绝与凭据错误同类——**文案必须收敛**。
+    // 若沿用「服务端 message 优先」，则：
+    //   ① 后端若改了文案，前端提示随之漂移（提示会误导管理员重试）；
+    //   ② 空 message 时才会落到 defaultMessage，使那条 409 映射变成**死代码**。
+    // 实测反证 T-4 就是这么发现的：注入 defaultMessage 后 F17 仍绿，
+    // 因为请求根本没走到那个分支。故此处**强制覆盖**，与凭据错误一致。
+    const isConfigRelaxation = codeMessage.code === 'CONFIG_RELAXATION_REJECTED'
     return {
       status,
       code: codeMessage.code,
       message: isCredentialFailure
         ? CREDENTIAL_FAILURE_MESSAGE
-        : codeMessage.message.length > 0
-          ? clamp(codeMessage.message)
-          : defaultMessage(status, codeMessage.code),
+        : isConfigRelaxation
+          ? CONFIG_RELAXATION_MESSAGE
+          : codeMessage.message.length > 0
+            ? clamp(codeMessage.message)
+            : defaultMessage(status, codeMessage.code),
       ...(correlationId ? { correlationId } : {}),
       fieldErrors: {},
     }
