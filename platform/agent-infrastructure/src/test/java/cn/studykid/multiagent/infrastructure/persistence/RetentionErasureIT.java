@@ -80,6 +80,14 @@ class RetentionErasureIT {
 
         tenantA = FaultInjectionSupport.tenantIdBySlug(admin, SLUG_A);
         tenantB = FaultInjectionSupport.tenantIdBySlug(admin, SLUG_B);
+        // ⚠️ 夹具必须由本类自己准备（2026-10-22 修复）：
+        //    V1_seed.sql 只为 t-a 建了 agent_version/execution_snapshot，
+        //    本类却直接向 t-b 取快照。旧实现依赖「别的 IT 跑过并留下数据」——
+        //    而那些 IT 按纪律会在 @AfterAll 自清理，于是本类在干净库上必然失败，
+        //    在脏库上则靠执行顺序侥幸通过（假绿）。
+        //    ensureTenantSnapshot 幂等（ON CONFLICT DO NOTHING），故先无条件补齐两个租户。
+        FaultInjectionSupport.ensureTenantSnapshot(admin, SLUG_A);
+        FaultInjectionSupport.ensureTenantSnapshot(admin, SLUG_B);
         // ⚠️ run.snapshot_id 是 (tenant_id, snapshot_id) 复合外键：
         //    给 B 租户的 run 复用 A 的 snapshot 会直接违反 run_snapshot_fk，
         //    且报错指向「外键」而非真正的错因「夹具拿错了租户」。

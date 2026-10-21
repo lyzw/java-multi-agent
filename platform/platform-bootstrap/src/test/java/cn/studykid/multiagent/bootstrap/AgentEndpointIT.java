@@ -75,6 +75,12 @@ class AgentEndpointIT {
             HikariConfig cfg = new HikariConfig();
             cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
             cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
+// ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
+//    密码认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，否则连接失败。
+            String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
+            if (adminPwd != null && !adminPwd.isBlank()) {
+                cfg.setPassword(adminPwd);
+            }
             cfg.setMaximumPoolSize(2);
             adminPool = new HikariDataSource(cfg);
         }

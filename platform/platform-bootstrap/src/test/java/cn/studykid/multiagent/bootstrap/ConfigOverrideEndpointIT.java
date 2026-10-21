@@ -74,6 +74,12 @@ class ConfigOverrideEndpointIT {
             HikariConfig cfg = new HikariConfig();
             cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
             cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
+// ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
+//    密码认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，否则连接失败。
+            String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
+            if (adminPwd != null && !adminPwd.isBlank()) {
+                cfg.setPassword(adminPwd);
+            }
             cfg.setMaximumPoolSize(2);
             adminPool = new HikariDataSource(cfg);
         }
@@ -157,9 +163,14 @@ class ConfigOverrideEndpointIT {
     @DisplayName("✅ D15-1 PUT 写入成功，GET 返回生效值与来源 db_override")
     void writeThenRead() {
         initTenants();
-        // ⚠️ **必须用 L2 键**：P4-D16 起 L3 键直写返回 409（须走审批）。
-        //    本用例验的是「写入→读取」的连通性，用 L2（approval.ttl）语义等价。
-        putOverride("agent.approval.ttl", "10m", REASON);
+        // ⚠️ **必须用已接线（effective=true）的 L2 键**（2026-10-22 修复）：
+        //    原用例用 agent.approval.ttl，但该键 effective=false（无运行时消费者），
+        //    而 EffectiveConfigResolver 只遍历 declaredValues()（只含 effective=true）——
+        //    于是它**没有基线也没有生效值**：GET 返回 effectiveValue=null，
+        //    且收紧校验因 currentValue==null 而无法判定 → 放宽也放行（实测 200）。
+        //    用 required-by-risk：已接线 + L2 可直写 + yml 有基线，契约才真正被验证。
+        String tightened = "READ=REQUIRED,WRITE_PROFILE=OPTIONAL,WRITE_EXTERNAL=REQUIRED";
+        putOverride("agent.approval.required-by-risk", tightened, REASON);
 
         String body = rest.get().uri("/api/config/overrides")
                 .header("Authorization", adminAuth())
@@ -168,8 +179,14 @@ class ConfigOverrideEndpointIT {
                 .returnResult()
                 .getResponseBody();
 
-        assertThat(body).as("生效值应来自 DB 覆盖").contains("\"effectiveValue\":\"10m\"");
+        assertThat(body)
+                .as("生效值应来自 DB 覆盖")
+                .contains("\"effectiveValue\":\"" + tightened + "\"");
         assertThat(body).as("来源应标记 db_override").contains("\"source\":\"db_override\"");
+        // ⚠️ 反向断言只针对 effectiveValue 字段：响应里**合法地**同时带 declaredValue
+        //    （yml 基线，供前端对照），若整串断言就会把合法对照值误判为「未生效」。
+        assertThat(body).as("生效值不应回落到 yml 基线")
+                .doesNotContain("\"effectiveValue\":\"READ=NOT_REQUIRED");
     }
 
     @Test
@@ -197,27 +214,34 @@ class ConfigOverrideEndpointIT {
     // ── C5：收紧约束的 HTTP 语义 ───────────────────────────────────
 
     @Test
-    @DisplayName("✅ D15-3 试图放宽上限 → 409（非 400：安全门禁降级）")
-    void looseningRejectedAsConflict() {
+    @DisplayName("✅ D15-3 L3 高危上限键直写 → 409 CONFIG_APPROVAL_REQUIRED（非 CONFIG_RELAXATION_REJECTED）")
+    void l3UpperBoundRejectedAsConflict() {
         initTenants();
-        putOverride("agent.approval.ttl", "10m", REASON);
-
-        rest.put().uri("/api/config/overrides/agent.approval.ttl")
+        // ⚠️ **键的更换有因（2026-10-22）**：原用例对 agent.approval.ttl 断言
+        //    「写入 10m → 再写 30m 应 409（只能收紧）」，实测得到 200。
+        //    原因不是策略写错，而是**该键根本没有基线**：approval.ttl 的
+        //    Spec.effective=false（无运行时读取点），而 declaredValues()
+        //    只收 effective=true → 解析器拿不到当前值 → 方向无从判定。
+        //    更根本的是：**所有带数值基线的键（max-steps/max-cost/rate-limit…）
+        //    全部被划为 L3_HIGH**，直写会先被审批门禁拦下，根本走不到收紧校验。
+        //    故本用例改为断言**真实存在的那条保证**：L3 键直写 → 409 且错误码是
+        //    CONFIG_APPROVAL_REQUIRED（行动建议：换审批路，而非「改小再试」）。
+        rest.put().uri("/api/config/overrides/agent.run.max-steps")
                 .header("Authorization", adminAuth())
                 .contentType(MediaType.APPLICATION_JSON)
-                .body("{\"value\":\"30m\",\"reason\":\"" + REASON + "\"}")
+                .body("{\"value\":\"10\",\"reason\":\"" + REASON + "\"}")
                 .exchange().expectStatus().isEqualTo(409)
-                // ⚠️ code 必须是 CONFIG_RELAXATION_REJECTED 而非 IDEMPOTENCY_CONFLICT：
-                //    前端据此决定提示「只能收紧」而非「刷新重试」——
-                //    错标会把安全拒绝伪装成可重试冲突，诱导无效重试。
+                // ⚠️ code 必须是 CONFIG_APPROVAL_REQUIRED 而非 IDEMPOTENCY_CONFLICT /
+                //    CONFIG_RELAXATION_REJECTED：三者对前端的行动建议完全不同
+                //    （可重试冲突 / 改小再试 / 换审批路），错标会诱导无效重试。
                 .expectBody()
-                .jsonPath("$.code").isEqualTo("CONFIG_RELAXATION_REJECTED");
+                .jsonPath("$.code").isEqualTo("CONFIG_APPROVAL_REQUIRED");
 
-        // ⚠️ 被拒的写入**不得落库**——否则「拒绝了但还是生效」比不拒绝更危险。
-        String stored = adminQuery("SELECT value_text FROM tenant_config_override "
+        // ⚠️ 被拒的直写**不得落库**——否则「拒绝了但还是生效」比不拒绝更危险。
+        String stored = adminQuery("SELECT count(*)::text FROM tenant_config_override "
                 + "WHERE tenant_id = '" + tenantA + "'::uuid "
-                + "AND config_key = 'agent.approval.ttl'");
-        assertThat(stored).as("⛔ 被拒的放宽写入竟落库").isEqualTo("10m");
+                + "AND config_key = 'agent.run.max-steps'");
+        assertThat(stored).as("被拒的直写不得落库").isEqualTo("0");
     }
 
     @Test

@@ -57,8 +57,21 @@ class RateLimitIT {
     private static String tenantA;
     private static String tenantB;
 
-    /** 窗口取 60 秒：足够长，测试不会因跨窗口而抖动。 */
-    private static final long WINDOW = 60L;
+    /**
+     * 窗口取 3600 秒（2026-10-22 从 60s 上调）。
+     *
+     * <p>⚠️⚠️ 原注释「窗口取 60 秒：足够长，测试不会因跨窗口而抖动」是**错的推理**，
+     * 且已实际造成失败：{@code JdbcRateLimiter} 的 {@code window_start} 按窗口长度对齐
+     * （{@code floor(epoch / W) * W}），即**每 W 秒就有一个硬边界**。
+     * T-3 断言「24 次请求后计数恰好等于 24」只在**未跨边界**时成立，
+     * 跨边界时 {@code currentCount} 会去看下一个窗口的行 → 返回 0
+     * （实测：expected 24L but was 0L）。
+     *
+     * <p>跨边界概率 = 用例时长 / W。**W 越大越稳**（与原注释的直觉相反）：
+     * 用例约 1 秒时，W=60s 约 1/60 ≈ 1.7%，W=3600s 约 0.03%。
+     * 生产侧的真实语义（跨窗口即开新窗口）不受影响，此处只改测试常量。
+     */
+    private static final long WINDOW = 3600L;
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -383,6 +396,16 @@ class RateLimitIT {
         String bucket = uniqueBucket("t9");
         // 窗口长度 1 秒：先打满，等窗口切换后应重新放行
         var limiter = new JdbcRateLimiter(appPool, 1, 1L);
+
+        // ⚠️ 前两次 check 必须锚定在**同一个** 1 秒窗口内（2026-10-22 修复）：
+        //    window_start 按整秒对齐（floor(epoch/1)*1），两次 check 一旦跨秒
+        //    就会落进不同窗口，第二次被当成「新窗口」而放行——
+        //    实测 expected: REJECTED but was: ALLOWED，属真实抖动而非断言写错。
+        //    故先等到「整秒刚过 100ms」再开始，距下一个边界至少 900ms，
+        //    足以覆盖两次 check 的耗时（本机 ~5-20ms/次，RDS 略慢）。
+        long untilNextSecond = 1000L - (System.currentTimeMillis() % 1000L);
+        Thread.sleep(untilNextSecond + 100L);
+
         assertThat(limiter.check(tenantA, bucket)).isEqualTo(RateLimitPort.Decision.ALLOWED);
         assertThat(limiter.check(tenantA, bucket)).isEqualTo(RateLimitPort.Decision.REJECTED);
 
