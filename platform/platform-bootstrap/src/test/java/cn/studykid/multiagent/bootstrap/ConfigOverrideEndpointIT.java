@@ -157,7 +157,9 @@ class ConfigOverrideEndpointIT {
     @DisplayName("✅ D15-1 PUT 写入成功，GET 返回生效值与来源 db_override")
     void writeThenRead() {
         initTenants();
-        putOverride("agent.run.max-steps", "12", REASON);
+        // ⚠️ **必须用 L2 键**：P4-D16 起 L3 键直写返回 409（须走审批）。
+        //    本用例验的是「写入→读取」的连通性，用 L2（approval.ttl）语义等价。
+        putOverride("agent.approval.ttl", "10m", REASON);
 
         String body = rest.get().uri("/api/config/overrides")
                 .header("Authorization", adminAuth())
@@ -166,7 +168,7 @@ class ConfigOverrideEndpointIT {
                 .returnResult()
                 .getResponseBody();
 
-        assertThat(body).as("生效值应来自 DB 覆盖").contains("\"effectiveValue\":\"12\"");
+        assertThat(body).as("生效值应来自 DB 覆盖").contains("\"effectiveValue\":\"10m\"");
         assertThat(body).as("来源应标记 db_override").contains("\"source\":\"db_override\"");
     }
 
@@ -198,12 +200,12 @@ class ConfigOverrideEndpointIT {
     @DisplayName("✅ D15-3 试图放宽上限 → 409（非 400：安全门禁降级）")
     void looseningRejectedAsConflict() {
         initTenants();
-        putOverride("agent.run.max-steps", "10", REASON);
+        putOverride("agent.approval.ttl", "10m", REASON);
 
-        rest.put().uri("/api/config/overrides/agent.run.max-steps")
+        rest.put().uri("/api/config/overrides/agent.approval.ttl")
                 .header("Authorization", adminAuth())
                 .contentType(MediaType.APPLICATION_JSON)
-                .body("{\"value\":\"999\",\"reason\":\"" + REASON + "\"}")
+                .body("{\"value\":\"30m\",\"reason\":\"" + REASON + "\"}")
                 .exchange().expectStatus().isEqualTo(409)
                 // ⚠️ code 必须是 CONFIG_RELAXATION_REJECTED 而非 IDEMPOTENCY_CONFLICT：
                 //    前端据此决定提示「只能收紧」而非「刷新重试」——
@@ -214,8 +216,8 @@ class ConfigOverrideEndpointIT {
         // ⚠️ 被拒的写入**不得落库**——否则「拒绝了但还是生效」比不拒绝更危险。
         String stored = adminQuery("SELECT value_text FROM tenant_config_override "
                 + "WHERE tenant_id = '" + tenantA + "'::uuid "
-                + "AND config_key = 'agent.run.max-steps'");
-        assertThat(stored).as("⛔ 被拒的放宽写入竟落库").isEqualTo("10");
+                + "AND config_key = 'agent.approval.ttl'");
+        assertThat(stored).as("⛔ 被拒的放宽写入竟落库").isEqualTo("10m");
     }
 
     @Test
@@ -241,10 +243,10 @@ class ConfigOverrideEndpointIT {
     @DisplayName("✅ D15-5 理由过短 → 400")
     void shortReasonRejected() {
         initTenants();
-        rest.put().uri("/api/config/overrides/agent.run.max-steps")
+        rest.put().uri("/api/config/overrides/agent.approval.ttl")
                 .header("Authorization", adminAuth())
                 .contentType(MediaType.APPLICATION_JSON)
-                .body("{\"value\":\"12\",\"reason\":\"太贵\"}")
+                .body("{\"value\":\"10m\",\"reason\":\"太贵\"}")
                 .exchange().expectStatus().isBadRequest();
     }
 
@@ -252,10 +254,10 @@ class ConfigOverrideEndpointIT {
     @DisplayName("✅ D15-5b 值格式非法 → 400（不放行、不取默认值兜底）")
     void malformedValueRejected() {
         initTenants();
-        rest.put().uri("/api/config/overrides/agent.run.max-steps")
+        rest.put().uri("/api/config/overrides/agent.approval.ttl")
                 .header("Authorization", adminAuth())
                 .contentType(MediaType.APPLICATION_JSON)
-                .body("{\"value\":\"not-a-number\",\"reason\":\"" + REASON + "\"}")
+                .body("{\"value\":\"not-a-duration\",\"reason\":\"" + REASON + "\"}")
                 .exchange().expectStatus().isBadRequest();
     }
 
@@ -281,14 +283,15 @@ class ConfigOverrideEndpointIT {
     @DisplayName("✅ D15-8 DELETE 清除覆盖 → 204，且回落 yml 默认")
     void clearOverride() {
         initTenants();
-        putOverride("agent.run.max-steps", "12", REASON);
-        rest.delete().uri("/api/config/overrides/agent.run.max-steps")
+        putOverride("agent.approval.ttl", "10m", REASON);
+
+        rest.delete().uri("/api/config/overrides/agent.approval.ttl")
                 .header("Authorization", adminAuth())
                 .exchange().expectStatus().isNoContent();
 
         String stored = adminQuery("SELECT count(*)::text FROM tenant_config_override "
                 + "WHERE tenant_id = '" + tenantA + "'::uuid "
-                + "AND config_key = 'agent.run.max-steps'");
+                + "AND config_key = 'agent.approval.ttl'");
         assertThat(stored).as("⛔ 清除后仍有残留").isEqualTo("0");
     }
 
@@ -298,12 +301,12 @@ class ConfigOverrideEndpointIT {
     @DisplayName("✅ D15-6 配置变更真落 audit_record（CONFIG_UPDATE）")
     void changeIsAudited() {
         initTenants();
-        putOverride("agent.run.max-steps", "12", REASON);
+        putOverride("agent.approval.ttl", "10m", REASON);
 
         long n = Long.parseLong(adminQuery("SELECT count(*)::text FROM audit_record "
                 + "WHERE tenant_id = '" + tenantA + "'::uuid "
                 + "AND action = 'CONFIG_UPDATE' "
-                + "AND resource_id = 'agent.run.max-steps'"));
+                + "AND resource_id = 'agent.approval.ttl'"));
         assertThat(n).as("⛔ 配置变更未落审计 = 无声变更").isGreaterThanOrEqualTo(1L);
     }
 }
