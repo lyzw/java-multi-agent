@@ -8,12 +8,24 @@
  *   - 本片只展示声明值，不编造实时指标（待 C3）/ 审批流运行态（待 C4）。
  *
  * 数据全部来自 `GET /api/config`（P4-D07 / C1 + C9）。
- * 仍无接口的页（P18 Agent 配置 G2、P19 审计 C6）维持诚实 `Unavailable`。
+ * P18 Agent 配置（G2）/ P19 配置审计（C6）已接入真实接口（P4-D14）：
+ *   - P18 走 `GET/POST /api/agents` 与 `POST /api/agents/{id}/versions`；
+ *   - P19 复用审计通路，查询 `resourceType=config` 的 `CONFIG_VIEW` 留痕。
  */
 
-import { Sheet, Unavailable, Marked, Empty, Loading, ErrorState } from '@/shared/states'
+import { useCallback, useState } from 'react'
+import { Sheet, Marked, Empty, Loading, LoadingRows, ErrorState } from '@/shared/states'
 import { useConfig } from '@/features/config/useConfig'
-import type { ConfigEntry, ConfigResponse, ConfigGroup, ZeroRetentionView } from '@/api/types'
+import { useGovernancePage } from '@/features/governance/useGovernancePage'
+import { listAgents, createAgent, publishAgentVersion, queryAudit } from '@/api/client'
+import type {
+  ConfigEntry,
+  ConfigResponse,
+  ConfigGroup,
+  ZeroRetentionView,
+  AgentItem,
+  AuditEntry,
+} from '@/api/types'
 
 /* ── 通用：配置表 + 生效 chip ──────────────────────────── */
 
@@ -294,6 +306,60 @@ export function ConfigCompliancePage(): JSX.Element {
 /* ── P18 Agent 配置与发布 ────────────────────────────── */
 
 export function AgentsPage(): JSX.Element {
+  const [creating, setCreating] = useState(false)
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [creatingBusy, setCreatingBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  const [publishFor, setPublishFor] = useState<string | null>(null)
+  const [definition, setDefinition] = useState('')
+  const [publishBusy, setPublishBusy] = useState(false)
+
+  const fetcher = useCallback(
+    (params: { limit: number; cursor: string | null }) =>
+      listAgents({ limit: params.limit, cursor: params.cursor }),
+    [],
+  )
+  const { items, loading, loadingMore, error, hasMore, reset, loadMore } =
+    useGovernancePage<AgentItem>({ fetcher, deps: [] })
+
+  const submitCreate = async (): Promise<void> => {
+    if (name.trim() === '') return
+    setCreatingBusy(true)
+    setActionError(null)
+    try {
+      await createAgent({
+        name: name.trim(),
+        description: description.trim() === '' ? null : description.trim(),
+      })
+      setName('')
+      setDescription('')
+      setCreating(false)
+      reset()
+    } catch (cause: unknown) {
+      setActionError(cause instanceof Error ? cause.message : '创建失败，请稍后重试')
+    } finally {
+      setCreatingBusy(false)
+    }
+  }
+
+  const submitPublish = async (agentId: string): Promise<void> => {
+    if (definition.trim() === '') return
+    setPublishBusy(true)
+    setActionError(null)
+    try {
+      await publishAgentVersion(agentId, { definition: definition.trim() })
+      setDefinition('')
+      setPublishFor(null)
+      reset()
+    } catch (cause: unknown) {
+      setActionError(cause instanceof Error ? cause.message : '发布失败，请稍后重试')
+    } finally {
+      setPublishBusy(false)
+    }
+  }
+
   return (
     <>
       <div className="main__head">
@@ -301,42 +367,151 @@ export function AgentsPage(): JSX.Element {
         <p className="main__lead">定义分析流程用的智能体。</p>
       </div>
 
-      <Unavailable
-        feature="Agent 配置"
-        blockedBy="G2"
-        reason="后端还没有提供查询和发布接口；声明类配置可在「配置总览」看到"
-        eta="P3"
-      >
-        <Sheet title="Agent">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">名称</th>
-                <th scope="col">当前版本</th>
-                <th scope="col">状态</th>
-              </tr>
-            </thead>
-            <tbody aria-hidden="true">
-              <tr>
-                <td />
-                <td />
-                <td />
-              </tr>
-            </tbody>
-          </table>
-        </Sheet>
+      <div className="status-line">
+        <button type="button" onClick={() => setCreating((v) => !v)}>
+          {creating ? '取消新建' : '新建 Agent'}
+        </button>
+      </div>
 
-        <Marked label="改配置不会影响正在进行的分析">
-          <p style={{ margin: 0 }}>
-            发布时会生成一份不可变的执行快照。已经发起的分析会继续用它开始时的那份，
-            不会中途换配置。
+      {creating ? (
+        <Sheet title="新建 Agent">
+          <div className="field">
+            <label htmlFor="agent-name">名称</label>
+            <input
+              id="agent-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="agent-desc">说明（可选）</label>
+            <input
+              id="agent-desc"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </div>
+          {actionError !== null ? <ErrorState reason={actionError} onRetry={reset} /> : null}
+          <div className="status-line">
+            <button
+              type="button"
+              disabled={creatingBusy || name.trim() === ''}
+              onClick={() => void submitCreate()}
+            >
+              {creatingBusy ? '正在创建…' : '创建'}
+            </button>
+          </div>
+          <p className="muted">租户内名称不可重复；重名会被拒绝（409）。</p>
+        </Sheet>
+      ) : null}
+
+      {actionError !== null && !creating ? (
+        <ErrorState reason={actionError} onRetry={reset} />
+      ) : null}
+
+      <Sheet title="Agent 列表">
+        {loading ? (
+          <LoadingRows
+            columns={['名称', '说明', '版本数', '当前版本', '最近发布', '操作']}
+            rows={4}
+          />
+        ) : error !== null ? (
+          <ErrorState reason={error} onRetry={reset} retryLabel="重新加载" />
+        ) : items.length === 0 ? (
+          <Empty title="还没有 Agent" hint="点上方「新建 Agent」创建第一个。" />
+        ) : (
+          <>
+            <table>
+              <thead>
+                <tr>
+                  {['名称', '说明', '版本数', '当前版本', '最近发布', '操作'].map((c) => (
+                    <th key={c} scope="col">
+                      {c}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((agent) => (
+                  <tr key={agent.agentId}>
+                    <td>
+                      <code>{agent.name}</code>
+                    </td>
+                    <td className="muted">{agent.description ?? '—'}</td>
+                    <td>{agent.versionCount}</td>
+                    <td>{agent.latestVersionNumber > 0 ? `v${agent.latestVersionNumber}` : '未发布'}</td>
+                    <td className="muted">{formatTime(agent.latestPublishedAt)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPublishFor(agent.agentId)
+                          setDefinition('')
+                        }}
+                      >
+                        发布新版本
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <PageFooter
+              count={items.length}
+              hasMore={hasMore}
+              loadingMore={loadingMore}
+              onLoadMore={loadMore}
+            />
+          </>
+        )}
+      </Sheet>
+
+      {publishFor !== null ? (
+        <Sheet title="发布新版本">
+          <p className="muted">
+            definition 是不可变快照（JSON 文本）。发布后生成新版本号，不影响在途分析。
           </p>
-          <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
-            这条说明在具备发布能力后仍要留着，
-            否则会让人以为改配置会影响到在途的分析。
-          </p>
-        </Marked>
-      </Unavailable>
+          <div className="field">
+            <label htmlFor="agent-def">definition（JSON）</label>
+            <textarea
+              id="agent-def"
+              rows={6}
+              value={definition}
+              onChange={(e) => setDefinition(e.target.value)}
+            />
+          </div>
+          <div className="status-line">
+            <button
+              type="button"
+              disabled={publishBusy || definition.trim() === ''}
+              onClick={() => void submitPublish(publishFor)}
+            >
+              {publishBusy ? '正在发布…' : '发布'}
+            </button>
+            <button
+              type="button"
+              className="btn btn--quiet"
+              onClick={() => {
+                setPublishFor(null)
+                setDefinition('')
+              }}
+            >
+              取消
+            </button>
+          </div>
+        </Sheet>
+      ) : null}
+
+      <Marked label="改配置不会影响正在进行的分析">
+        <p style={{ margin: 0 }}>
+          发布时会生成一份不可变的执行快照。已经发起的分析会继续用它开始时的那份，
+          不会中途换配置。
+        </p>
+        <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
+          这条说明在具备发布能力后仍要留着，
+          否则会让人以为改配置会影响到在途的分析。
+        </p>
+      </Marked>
     </>
   )
 }
@@ -344,31 +519,139 @@ export function AgentsPage(): JSX.Element {
 /* ── P19 配置变更审计 ────────────────────────────────── */
 
 export function ConfigAuditPage(): JSX.Element {
+  const fetcher = useCallback(
+    (params: { limit: number; cursor: string | null }) =>
+      queryAudit({
+        limit: params.limit,
+        cursor: params.cursor,
+        resourceType: 'config',
+      }),
+    [],
+  )
+  const { items, loading, loadingMore, error, hasMore, reset, loadMore } =
+    useGovernancePage<AuditEntry>({ fetcher, deps: [], pageSize: 50 })
+
   return (
     <>
       <div className="main__head">
         <h1>配置变更审计</h1>
-        <p className="main__lead">谁改过配置，改了什么。</p>
+        <p className="main__lead">谁查看过配置，以及查看轨迹（R-1 可追溯性）。</p>
       </div>
 
-      <Unavailable
-        feature="配置变更审计"
-        blockedBy="C6"
-        reason="后端还没有提供审计查询接口；配置声明值可在「配置总览」看到"
-        eta="P4"
-      >
-        <Sheet title="变更记录">
-          <Empty title="没有变更记录" hint="配置被改动时会在这里留痕。" />
-        </Sheet>
+      <Marked label="这里记录的是「配置查看」">
+        <p style={{ margin: 0 }}>
+          ⚠️ 配置本身是只读的，没有修改入口——因此不存在「改了什么」的变更记录。
+          这里留痕的是「谁在什么时候查看了配置」（CONFIG_VIEW），用于事后追溯。
+        </p>
+        <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
+          审计记录只读、保留 180 天后自动清理，且不展示请求原文。
+        </p>
+      </Marked>
 
-        {/* ⛔ 与 P10 同源：审计不含原文，此处同样不提供「查看完整请求体」。 */}
-        <Marked label="记录里有什么">
-          <p style={{ margin: 0 }}>
-            只记录改了哪一项、从什么变成什么、谁改的、什么时候。
-            不记录提交内容本身。
-          </p>
-        </Marked>
-      </Unavailable>
+      <Sheet title="配置查看记录">
+        {loading ? (
+          <LoadingRows
+            columns={['时间', '操作者', '动作', '资源', '明细']}
+            rows={6}
+            label="正在读取审计记录"
+          />
+        ) : error !== null ? (
+          <ErrorState reason={error} onRetry={reset} retryLabel="重新加载" />
+        ) : items.length === 0 ? (
+          <Empty title="还没有配置查看记录" hint="查看配置后会在这里留痕。" />
+        ) : (
+          <>
+            <table>
+              <thead>
+                <tr>
+                  {['时间', '操作者', '动作', '资源', '明细'].map((c) => (
+                    <th key={c} scope="col">
+                      {c}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((entry) => (
+                  <tr key={entry.auditId}>
+                    <td>{formatTime(entry.createdAt)}</td>
+                    <td className="mono">{entry.actorId}</td>
+                    <td>{AUDIT_ACTION_LABELS[entry.action] ?? entry.action}</td>
+                    <td className="mono">
+                      {entry.resourceType}
+                      {entry.resourceId !== null ? `/${entry.resourceId}` : ''}
+                    </td>
+                    <td className="mono">{renderAuditDetail(entry.detail)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <PageFooter
+              count={items.length}
+              hasMore={hasMore}
+              loadingMore={loadingMore}
+              onLoadMore={loadMore}
+            />
+          </>
+        )}
+      </Sheet>
     </>
   )
+}
+
+/* ── 本地渲染助手（与 GovernancePages 同源，不跨文件引入以避免耦合）── */
+
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  CONFIG_VIEW: '查看配置',
+  APPROVAL_GRANT: '审批通过',
+  APPROVAL_REVOKE: '审批拒绝',
+  APPROVAL_CONSUME: '审批消费',
+  RUN_CANCEL: '取消运行',
+  PROFILE_READ: '读取画像',
+  AUDIT_READ: '查询审计',
+  UNKNOWN_DISPOSE: '处置未知操作',
+}
+
+function formatTime(iso: string | null): string {
+  if (iso === null) return '—'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('zh-CN', { hour12: false })
+}
+
+function PageFooter({
+  count,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: {
+  count: number
+  hasMore: boolean
+  loadingMore: boolean
+  onLoadMore: () => void
+}): JSX.Element {
+  return (
+    <div className="status-line" style={{ marginTop: 'var(--s-3)' }}>
+      {hasMore ? (
+        <button type="button" onClick={onLoadMore} disabled={loadingMore}>
+          {loadingMore ? '正在加载…' : '加载更多'}
+        </button>
+      ) : null}
+      <span className="muted">
+        {hasMore ? `已显示 ${count} 条` : `已显示全部 ${count} 条`}
+      </span>
+    </div>
+  )
+}
+
+function renderAuditDetail(detail: Record<string, unknown>): string {
+  const parts: string[] = []
+  for (const [key, value] of Object.entries(detail)) {
+    if (value === null) continue
+    if (typeof value === 'object') {
+      parts.push(`${key}: …`)
+    } else {
+      parts.push(`${key}: ${String(value)}`)
+    }
+  }
+  return parts.length === 0 ? '—' : parts.join('  ')
 }

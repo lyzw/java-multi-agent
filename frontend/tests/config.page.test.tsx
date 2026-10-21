@@ -25,10 +25,21 @@ import type { ConfigResponse } from '@/api/types'
 
 /** 用 vi.hoisted 保底 mock 函数可被 vi.mock 工厂引用 */
 const getConfigMock = vi.hoisted(() => vi.fn())
+const listAgentsMock = vi.hoisted(() => vi.fn())
+const createAgentMock = vi.hoisted(() => vi.fn())
+const publishAgentVersionMock = vi.hoisted(() => vi.fn())
+const queryAuditMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/client', async (importActual) => {
   const actual = await importActual<typeof import('@/api/client')>()
-  return { ...actual, getConfig: getConfigMock }
+  return {
+    ...actual,
+    getConfig: getConfigMock,
+    listAgents: listAgentsMock,
+    createAgent: createAgentMock,
+    publishAgentVersion: publishAgentVersionMock,
+    queryAudit: queryAuditMock,
+  }
 })
 
 function renderPage(ui: ReactElement): void {
@@ -46,6 +57,10 @@ function renderPage(ui: ReactElement): void {
  */
 beforeEach(() => {
   getConfigMock.mockReset()
+  listAgentsMock.mockReset()
+  createAgentMock.mockReset()
+  publishAgentVersionMock.mockReset()
+  queryAuditMock.mockReset()
 })
 
 /** 标准样本：覆盖 effective=true/false、零保留 PENDING/fail-closed */
@@ -271,19 +286,111 @@ describe('P16 工具与审批', () => {
   })
 })
 
-describe('P18 / P19 仍保持诚实未开放', () => {
+describe('P18 Agent 配置与发布（G2 真实接线）', () => {
   beforeEach(() => {
     window.sessionStorage.clear()
   })
 
-  it('P18 Agent 配置仍 Unavailable（G2），不调用 getConfig', () => {
+  it('T9 连通性 + 行为：调用 listAgents 并渲染 Agent 列表', async () => {
+    listAgentsMock.mockResolvedValueOnce({
+      items: [
+        {
+          agentId: 'a-sentinel-1',
+          name: 'SENTINEL-AGENT-9F3',
+          description: 'sentinel desc',
+          versionCount: 2,
+          latestVersionNumber: 2,
+          latestDefinition: null,
+          latestPublishedAt: null,
+        },
+      ],
+      nextCursor: null,
+    })
     renderPage(<AgentsPage />)
-    expect(screen.getByText('G2')).toBeInTheDocument()
+
+    // ⛔ 先确认请求确实发出，且走的是 listAgents（而非 getConfig）
+    await waitFor(() => expect(listAgentsMock).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(screen.getByText('SENTINEL-AGENT-9F3')).toBeInTheDocument(),
+    )
+    // 连通性反证：P18 是管理页，绝不应调用 getConfig
+    expect(getConfigMock).not.toHaveBeenCalled()
+    // 新建入口存在
+    expect(
+      screen.getByRole('button', { name: '新建 Agent' }),
+    ).toBeInTheDocument()
+    // 已发布版本渲染为 v2
+    expect(screen.getByText('v2')).toBeInTheDocument()
+  })
+
+  it('T10 反证：列表随 mock 数据变化（非硬编码）', async () => {
+    listAgentsMock.mockResolvedValueOnce({ items: [], nextCursor: null })
+    renderPage(<AgentsPage />)
+
+    await waitFor(() => expect(listAgentsMock).toHaveBeenCalledTimes(1))
+    // 空列表 → 诚实空态（不是写死的占位）
+    expect(screen.getByText('还没有 Agent')).toBeInTheDocument()
+  })
+
+  it('T11 行为：展开「新建 Agent」后出现输入控件（编辑控件只在管理页出现，P17 仍无）', async () => {
+    listAgentsMock.mockResolvedValueOnce({ items: [], nextCursor: null })
+    renderPage(<AgentsPage />)
+    await waitFor(() => expect(listAgentsMock).toHaveBeenCalledTimes(1))
+
+    await userEvent.click(screen.getByRole('button', { name: '新建 Agent' }))
+    // 表单展开：名称输入框出现且初始为空
+    const nameInput = screen.getByLabelText('名称') as HTMLInputElement
+    expect(nameInput).toBeInTheDocument()
+    expect(nameInput.value).toBe('')
+    // 输入名称后「创建」按钮可用（disabled 绑定 name.trim() 非空）
+    await userEvent.type(nameInput, 'abc')
+    expect(
+      screen.getByRole('button', { name: '创建' }),
+    ).not.toBeDisabled()
+  })
+})
+
+describe('P19 配置变更审计（C6 真实接线）', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  it('T12 连通性 + 行为：用 resourceType=config 调用 queryAudit 并渲染查看轨迹', async () => {
+    queryAuditMock.mockResolvedValueOnce({
+      items: [
+        {
+          auditId: 'aud-sentinel-1',
+          actorId: 'tenant-sentinel',
+          action: 'CONFIG_VIEW',
+          resourceType: 'config',
+          resourceId: null,
+          createdAt: '2026-01-01T08:00:00Z',
+          correlationId: null,
+          detail: {},
+        },
+      ],
+      nextCursor: null,
+    })
+    renderPage(<ConfigAuditPage />)
+
+    await waitFor(() => expect(queryAuditMock).toHaveBeenCalledTimes(1))
+    // ⛔ 连通性：必须按 config 资源类型查询（而非全量审计）
+    expect(queryAuditMock).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceType: 'config' }),
+    )
+    // 动作标签映射：CONFIG_VIEW → 查看配置
+    await waitFor(() =>
+      expect(screen.getByText('查看配置')).toBeInTheDocument(),
+    )
+    // P19 是只读审计页，绝不应调用 getConfig
     expect(getConfigMock).not.toHaveBeenCalled()
   })
 
-  it('P19 配置变更审计仍 Unavailable（C6）', () => {
+  it('T13 反证：审计条目随 mock 数据变化（非硬编码）', async () => {
+    queryAuditMock.mockResolvedValueOnce({ items: [], nextCursor: null })
     renderPage(<ConfigAuditPage />)
-    expect(screen.getByText('C6')).toBeInTheDocument()
+
+    await waitFor(() => expect(queryAuditMock).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('还没有配置查看记录')).toBeInTheDocument()
   })
 })

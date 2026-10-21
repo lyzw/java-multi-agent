@@ -25,6 +25,10 @@ import type {
   Disposition,
   DispositionResponse,
   AuditEntry,
+  AgentItem,
+  AgentVersionItem,
+  CreateAgentRequest,
+  PublishVersionRequest,
 } from './types'
 
 /** 401 时通知上层（SessionProvider）清理会话并跳登录 */
@@ -387,5 +391,57 @@ export function queryAudit(
     })}`,
     { method: 'GET' },
     false,
+  )
+}
+
+/* ── Agent 配置与发布（P4-D14 / G2）──────────────────── */
+
+/**
+ * GET /api/agents —— Agent 列表（游标分页）。
+ *
+ * ⚠️ 与治理页同桶 `GOVERNANCE_QUERY`，故**不做自动轮询**。
+ * 仅 `limit` / `cursor`，其余筛选暂不需要（后端也不支持）。
+ */
+export function listAgents(
+  params: ListQuery = {},
+): Promise<PageResponse<AgentItem>> {
+  return _request<PageResponse<AgentItem>>(
+    `/api/agents${toQuery({ limit: params.limit, cursor: params.cursor })}`,
+    { method: 'GET' },
+    false,
+  )
+}
+
+/**
+ * POST /api/agents —— 创建 Agent。
+ *
+ * ⚠️ 创建人由后端从令牌取，请求体**不含**创建人字段。
+ * 租户内重名 → 409（后端唯一约束兜底），前端按冲突提示即可。
+ */
+export function createAgent(
+  payload: CreateAgentRequest,
+): Promise<AgentItem> {
+  return _request<AgentItem>(
+    '/api/agents',
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+  )
+}
+
+/**
+ * POST /api/agents/{agentId}/versions —— 发布新版本。
+ *
+ * ⚠️ `definition` 是不可变快照（JSON 文本）；要改配置只能再发一个版本，
+ *     端点**不提供**「编辑已发布版本」。
+ * 不存在的 agent → 404；并发发布竞态 → 409（前端按冲突提示）。
+ */
+export function publishAgentVersion(
+  agentId: string,
+  payload: PublishVersionRequest,
+): Promise<AgentVersionItem> {
+  return _request<AgentVersionItem>(
+    `/api/agents/${encodeURIComponent(agentId)}/versions`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
   )
 }

@@ -4,8 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 
 import cn.studykid.multiagent.api.governance.ApprovalController;
 import cn.studykid.multiagent.api.governance.AuditQueryController;
@@ -38,7 +41,17 @@ import cn.studykid.multiagent.ports.persistence.UnknownOperationPort;
  * <p>故本测试<b>显式断言「端口注入的是 JDBC 实现」</b>，
  * 把「装配对了」这件事从「启动没报错」升级为「可断言的事实」。
  */
+@EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
+@ActiveProfiles("test")
+@TestPropertySource(properties = {
+        "spring.datasource.url=${IT_PG_URL}",
+        "spring.datasource.username=${IT_PG_USER:app_agent}",
+        "spring.datasource.password=${IT_PG_PASSWORD:}",
+        "spring.flyway.enabled=false",
+        "agent.worker.enabled=false",
+        "spring.rabbitmq.listener.simple.auto-startup=false"
+})
 @DisplayName("P4-D13 治理端点装配（G7~G10）")
 class GovernanceWiringTest {
 

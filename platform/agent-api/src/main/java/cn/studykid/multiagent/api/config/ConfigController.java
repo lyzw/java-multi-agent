@@ -5,6 +5,9 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
+import cn.studykid.multiagent.ports.persistence.AuditPort;
+
 /**
  * 配置只读端点（P4-D07 / C1）。
  *
@@ -16,15 +19,25 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p><b>⚠️ 只读、零副作用、不暴露密钥</b>：
  * 仅返回 yml 声明值 + 生效标志 + 零保留运行态。绝不返回任何密钥 / 口令 / 私钥。
+ *
+ * <p><b>⚠️ C6 配置查看审计（P4-D14）</b>：成功返回前追加
+ * {@code AuditPort.Actions.CONFIG_VIEW} 访问日志（fail-open，
+ * 写入失败仅告警，绝不阻断查看配置本身）。
  */
 @RestController
 @RequestMapping("/api/config")
 public class ConfigController {
 
     private final ConfigReadService readService;
+    private final AuditPort audit;
+    private final CurrentPrincipal currentPrincipal;
 
-    public ConfigController(ConfigReadService readService) {
+    public ConfigController(ConfigReadService readService,
+                            AuditPort audit,
+                            CurrentPrincipal currentPrincipal) {
         this.readService = readService;
+        this.audit = audit;
+        this.currentPrincipal = currentPrincipal;
     }
 
     /**
@@ -35,6 +48,11 @@ public class ConfigController {
      */
     @GetMapping
     public ResponseEntity<ConfigResponse> config() {
-        return ResponseEntity.ok(readService.snapshot());
+        ConfigResponse snapshot = readService.snapshot();
+        // ⚠️ C6：查看配置留痕（fail-open——审计失败不阻断查看）
+        audit.recordAccess(currentPrincipal.context().tenantId(),
+                currentPrincipal.principalId(),
+                AuditPort.Actions.CONFIG_VIEW, "config", null, java.util.Map.of());
+        return ResponseEntity.ok(snapshot);
     }
 }

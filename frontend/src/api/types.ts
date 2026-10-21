@@ -347,3 +347,42 @@ export interface RunStatusResponse {
   attempt: number
   errorCode: string | null
 }
+
+/* ── Agent 配置与发布（P4-D14 / G2）────────────────────── */
+
+/**
+ * Agent 列表项（后端 `GET /api/agents`，与 `AgentItemResponse` 同构）。
+ *
+ * ⚠️ `latestDefinition` / `latestPublishedAt` 在「尚无版本」时为 `null`——
+ *    前端**不得**把 null 退化成占位串，直接显示「—」或「未发布」。
+ * ⚠️ `description` 可空（创建时可不填）。
+ */
+export interface AgentItem {
+  agentId: string
+  name: string
+  description: string | null
+  versionCount: number
+  latestVersionNumber: number
+  latestDefinition: string | null
+  latestPublishedAt: string | null
+}
+
+/** 已发布的 Agent 版本（后端 `POST /api/agents/{id}/versions` 响应）。 */
+export interface AgentVersionItem {
+  versionId: string
+  versionNumber: number
+  definition: string
+  publishedAt: string | null
+  createdAt: string
+}
+
+/** POST /api/agents 请求体。 */
+export interface CreateAgentRequest {
+  name: string
+  description?: string | null
+}
+
+/** POST /api/agents/{id}/versions 请求体。 */
+export interface PublishVersionRequest {
+  definition: string
+}

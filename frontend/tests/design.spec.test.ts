@@ -129,8 +129,15 @@ describe('⛔ 合规红线仍是结构级（非文案）', () => {
 
   it('P17 合规页零编辑控件', () => {
     const config = read('pages/config/ConfigPages.tsx')
-    expect(config).not.toMatch(/<input/)
-    expect(config).not.toMatch(/<textarea/)
+    // ⛔ 只检查 P17 合规页区间：零保留登记属法律承诺（GATE-2 合同承诺），
+    //    P17 前端不得提供编辑控件。P18 起是 Agent 管理页（G2），允许创建/发布
+    //    表单（input/textarea）——若整文件扫描会把 P18 的合法管理表单误判为违规。
+    //    故仿 P9 区间切法，定位到 P17→P18 段。
+    const start = config.indexOf('P17 合规与零保留')
+    const end = config.indexOf('P18 Agent 配置与发布')
+    const p17 = config.slice(start, end === -1 ? undefined : end)
+    expect(p17).not.toMatch(/<input/)
+    expect(p17).not.toMatch(/<textarea/)
   })
 
   it('待核对分区仍然存在（P0-D00 §3.4 硬禁令）', () => {
