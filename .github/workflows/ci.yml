@@ -7,6 +7,12 @@
 #   3. 配置契约断言单独成 job —— 这是防「静默失效」的关键闸门
 #   4. 依赖漏洞扫描独立 job —— 失败不阻塞构建但需可见
 #
+# ⚠️ 2026-10-22 实测修订（本文件此前**从未在 Runner 上真实运行过**，因此隐藏着 3 个必红/假绿缺陷）：
+#   a) `mvn ... | tee log` 吞掉构建退出码（默认 shell `bash -e` 无 pipefail）→ 失败仍报绿；
+#   b) unit-test job 无库 → 29 项「装配测试」报错（它们需要**活库且已建表**）→ 构建必红；
+#   c) integration-test job 无 RabbitMQ，而 RealBrokerEndToEndIT **没有跳过门禁** → 3 项 ERROR 拖垮构建。
+#   三处均已修复；修复依据是本机实跑日志，不是推断。
+#
 # 触发：push / PR / 手动。分支 master、develop 受保护，强制要求 CI 通过。
 
 name: CI
@@ -45,11 +51,53 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           cache: maven
 
-      - name: 编译并运行单元测试
+      - name: 编译、打包并运行单元测试
         working-directory: platform
-        run: mvn -B clean verify
-        # ⚠️ 未设 IT_PG_URL 时集成测试自动跳过，
-        #    故此处不会误跑依赖数据库的用例
+        # ⚠️⚠️ 这里**故意只跑到 package**（2026-10-22 修改）：
+        #    原命令是 `mvn clean verify`，而本 job 不提供 IT_PG_URL，
+        #    于是 249 项集成测试被 @EnabledIfEnvironmentVariable 整体跳过，
+        #    界面依旧显示“构建与单元测试 ✅ 通过”——绿得没有意义。
+        #    现在 IT 由 integration-test job 跑**全 reactor**，并断言**跳过数为 0**。
+        #    单元/集成职责分开，比“同一命令跑两遍、其中一遍全跳过”诚实。
+        #
+        # ⚠️⚠️ `set -o pipefail` 是**必须**的（2026-10-22 实测补）：
+        #    GitHub Actions 的 `run:` 默认 shell 是 `bash -e {0}`，**不含 pipefail**。
+        #    而 `mvn ... | tee log` 的退出码取自 **tee**（恒为 0）——
+        #    实测：`bash -e -c 'false | tee /tmp/x; echo $?'` → 0。
+        #    即：**构建失败该步骤仍报绿**。这是 F-14/CP-1/CP-2 同一形态的
+        #    「在反假绿脚本里自己造假绿」，故此处显式开启 pipefail。
+        run: |
+          set -o pipefail
+          mvn -B clean package 2>&1 | tee /tmp/ci-unit.log
+
+      # ⚠️ 单元测试阶段**没有库**，故允许「需要库的测试」被跳过（门禁见 IT_PG_URL）。
+      #    但「跳过的数量」必须是**已知且有限**的：若某天新增的测试被误门禁，
+      #    跳过数会悄悄变大 —— 故设上限，而不是放任。
+      - name: 断言单元测试真实执行
+        run: |
+          # 只取**模块汇总行**（行尾即 Skipped: N）。逐类明细行带
+          # ", Time elapsed: ... -- in ..."，锚定行尾可将其排除，
+          # 否则计数会翻倍（实测：无库场景未锚定 366 vs 真实 180）。
+          summary() { grep -oE "Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$" "$1"; }
+          ran=$(summary /tmp/ci-unit.log | grep -oE "^Tests run: [0-9]+" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+          failed=$(summary /tmp/ci-unit.log | grep -oE "Failures: [0-9]+" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+          errors=$(summary /tmp/ci-unit.log | grep -oE "Errors: [0-9]+" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+          skipped=$(summary /tmp/ci-unit.log | grep -oE "Skipped: [0-9]+" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+          echo "单元测试：执行 $ran 项 / 失败 $failed / 错误 $errors / 跳过 $skipped"
+          if [ "$failed" -ne 0 ] || [ "$errors" -ne 0 ]; then
+            echo "❌ 单元测试存在失败或错误"; exit 1
+          fi
+          # 下限取 2026-10-22 本机实测基线（无库场景 503 项）；
+          # 低于此说明环境退步（如模块未构建），而不是「代码变好了所以测得少」。
+          if [ "$ran" -lt 480 ]; then
+            echo "❌ 仅执行 $ran 项，低于实测基线 503 —— 请检查构建环境"; exit 1
+          fi
+          # 上限：已知需库而跳过的测试 = 4 个装配测试类（整体跳过，JUnit 按类容器记 1 项）
+          #      + 既有库门禁 17 项 = 21（2026-10-22 实测）
+          if [ "$skipped" -gt 60 ]; then
+            echo "❌ 跳过 $skipped 项，超出已知需库集合（21）—— 有测试被误门禁"; exit 1
+          fi
+          echo "✅ 单元测试真实执行且无失败"
 
       - name: 上传构建产物
         if: success()
@@ -126,13 +174,23 @@ jobs:
       - name: 安装 PostgreSQL 客户端
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: 执行迁移与种子
+      - name: 执行迁移（V1~V12 全量按序）+ 种子
         env:
           PGPASSWORD: ci_only_not_a_secret
         run: |
           cd platform/agent-infrastructure/src/main/resources/db/migration
-          psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 -f V1__baseline_schema.sql
-          psql -h 127.0.0.1 -U postgres -d agent_ci -f verify/V1_seed.sql
+          # ⚠️⚠️ 必须**全量按序**（2026-10-22 修复）：原先只跑 V1__baseline_schema.sql，
+          #    而 IT 用到的 V7 rate_limit_bucket、V8 retention/erasure、
+          #    V11 tenant_config_override、V12 config_change_request 全不存在——
+          #    该 job 从未在 Runner 上真实跑过，所以缺陷一直没暴露。
+          #    排序用 sort -t_ -k1.2 -n（按 V 后面的数字），不依赖字典序。
+          for f in $(ls V*.sql | sort -t_ -k1.2 -n); do
+            echo "--- $f ---"
+            psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+          # ⚠️ 种子必须在**管理角色**下跑：以非特权角色执行会被 RLS 拒
+          # （new row violates row-level security policy）——种子层与测试层必须分层。
+          psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 -q -f verify/V1_seed.sql
 
       - name: 创建非特权验证角色
         env:
@@ -141,7 +199,9 @@ jobs:
           psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 <<'SQL'
           DO $$ BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='app_agent') THEN
-              CREATE ROLE app_agent NOSUPERUSER NOBYPASSRLS LOGIN;
+              CREATE ROLE app_agent NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'ci_app_not_a_secret';
+            ELSE
+              ALTER ROLE app_agent NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'ci_app_not_a_secret';
             END IF;
           END $$;
           GRANT USAGE ON SCHEMA public TO app_agent;
@@ -153,20 +213,70 @@ jobs:
 
       - name: 验证 DDL 约束（15 项）
         env:
-          PGPASSWORD: ci_only_not_a_secret
+          PGPASSWORD: ci_app_not_a_secret
         run: |
           psql -h 127.0.0.1 -U app_agent -d agent_ci -f platform/agent-infrastructure/src/main/resources/db/migration/verify/V1_constraint_check.sql
-          # ⚠️ 必须以 app_agent 执行。超级用户绕过所有 RLS 策略，
-          #    FORCE ROW LEVEL SECURITY 也拦不住 → 得到虚假结论。
 
-      - name: 运行集成测试
+      # ⚠️⚠️ 跑**全 reactor** 而不是只 -pl agent-infrastructure（2026-10-22 修复）：
+      #    原命令只跑基础设施层，而 platform-bootstrap 的 67 项 IT
+      #    （PlatformSecurityE2ETest 15 / GovernanceEndpointIT 19 /
+      #    ConfigOverrideEndpointIT 11 / AgentEndpointIT 9 / ReadEndpointIT 12 …）
+      #    —— 包含全部 HTTP 端点契约与 D-001 E2E —— **在 CI 里一次都不会执行**。
+      - name: 运行集成测试（全 reactor）
         working-directory: platform
         env:
           IT_PG_URL: jdbc:postgresql://127.0.0.1:5432/agent_ci
           IT_PG_USER: app_agent
-          IT_PG_PASSWORD: ''
+          IT_PG_PASSWORD: ci_app_not_a_secret
+          # ⚠️ 管理员池（造跨租户夹具）用的是另一个角色，**必须单独给口令**：
+          #    缺失时报「server requested password-based authentication,
+          #    but no password was provided」，表现为 18 个 IT 类整体无法启动。
           IT_PG_ADMIN_USER: postgres
-        run: mvn -B -pl agent-infrastructure test -Dtest='*IT'
+          IT_PG_ADMIN_PASSWORD: ci_only_not_a_secret
+        # ⚠️ `set -o pipefail` 是**必须**的（2026-10-22 实测补）：
+        #    默认 shell 是 `bash -e {0}`，不含 pipefail；`mvn | tee` 的退出码
+        #    取自 tee（恒 0）→ **构建失败仍报绿**。实测：bash -e 下 false|tee → 0。
+        #
+        # ⚠️ 排除 RealBrokerEndToEndIT（2026-10-22 实测）：该 IT **没有跳过门禁**
+        #    （源码注释明写「没有 broker 的环境跑此 IT 会失败」），本 job 无 RabbitMQ
+        #    service → 它会以 3 项 ERROR 拖垮整个构建（实测 3 errors / 0 skipped）。
+        #    它已在本机以真实 broker 验通（2026-10-22：E-1/E-2/E-3 全绿），
+        #    但 **CI 仍未覆盖 broker IT** —— 属已知缺口，见进度台账。
+        run: |
+          set -o pipefail
+          mvn -B clean verify -Dit.test='*IT,!RealBrokerEndToEndIT' \
+            -Dfailsafe.failIfNoSpecifiedTests=false 2>&1 | tee /tmp/ci-it.log
+
+      # ⚠️⚠️ **跳过必须判失败**（2026-10-22 新增）：
+      #    没有 IT_PG_URL 时 IT 会被 @EnabledIfEnvironmentVariable 整体跳过，
+      #    而构建依旧 BUILD SUCCESS —— 这是本项目反复踩的 F-14/CP-1/CP-2 同形态。
+      #    「绿但一条没跑」与「真绿」在 CI 界面上长得一模一样，故在此拆穿。
+      - name: 断言集成测试确实执行（跳过数必须为 0）
+        run: |
+          # ⚠️ 只取**模块汇总行**（行尾即 Skipped: N，无逗号尾巴）。
+          #    若误抓逐类明细行（带 ", Time elapsed: ... -- in ..."），
+          #    计数会翻倍——实测无库场景：未锚定 366 vs 真实 180，
+          #    报出来的数字是假的。下限断言也会因此永远为真。
+          summary() { grep -oE "Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$" "$1"; }
+          ran=$(summary /tmp/ci-it.log | grep -oE "^Tests run: [0-9]+" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+          failed=$(summary /tmp/ci-it.log | grep -oE "Failures: [0-9]+" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+          errors=$(summary /tmp/ci-it.log | grep -oE "Errors: [0-9]+" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+          skipped=$(summary /tmp/ci-it.log | grep -oE "Skipped: [0-9]+" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+          echo "集成测试：执行 $ran 项 / 失败 $failed / 错误 $errors / 跳过 $skipped"
+          if [ "$failed" -ne 0 ] || [ "$errors" -ne 0 ]; then
+            echo "❌ 集成测试存在失败或错误"; exit 1
+          fi
+          if [ "$skipped" -ne 0 ]; then
+            echo "❌ 有 $skipped 项被跳过 —— IT 未真正执行，构建绿不等于验证过"
+            exit 1
+          fi
+          # 下限取 2026-10-22 实测基线（781 全绿 / 0 跳过）；低于此说明环境退步
+          #（如迁移未执行、角色未建），而不是“代码变好了所以测得少”。
+          if [ "$ran" -lt 700 ]; then
+            echo "❌ 仅执行 $ran 项，低于实测基线 781 —— 请检查迁移/角色是否就绪"
+            exit 1
+          fi
+          echo "✅ 集成测试真实执行且零跳过"
 
   # ── 4. 依赖漏洞扫描（不阻塞，但需可见）───────────────────────
   dependency-scan:
