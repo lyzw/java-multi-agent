@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.infrastructure.messaging;
 
 import java.util.Map;
+import java.util.Set;
 
 import org.jspecify.annotations.NonNull;
 
@@ -75,7 +76,7 @@ public class TenantRoutingMessageSender implements MessageSender {
     }
 
     /** @return 被覆盖的租户 ID 清单（可观测性） */
-    public @NonNull java.util.Set<String> overriddenTenants() {
+    public @NonNull Set<String> overriddenTenants() {
         return byTenant.keySet();
     }
 }
