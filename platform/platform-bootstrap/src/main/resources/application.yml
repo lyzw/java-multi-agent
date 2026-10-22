@@ -172,6 +172,47 @@ agent:
         name: agent.run.dead
         # 死信队列自身不再挂 DLX，避免死信循环
 
+  # ── 消息通道（P4-D17 · 可切换消息通道）────────────────────────────
+  # ⚠️ **缺失即拒绝启动**（fail-closed）：通道选错的症状是
+  #    「消息静默不消费」——API 正常、无报错、无告警、Run 永远不动。
+  #    回落默认值等于「悄悄用了一个没人审过的通道」。
+  #
+  # ⚠️ 两条通道**语义等价**（at-least-once + 有限重试 + 死信 + 背压），
+  #    共用同一组端口，故切换不触碰业务语义：
+  #      · rabbitmq —— 既有通道（quorum 队列 + publisher confirms + DLX）；
+  #      · database —— 以 PostgreSQL 表为队列（**无外部 broker 依赖**）。
+  #    故 CI / 本地开发 / 试运营小客群阶段都可无 broker 运行。
+  messaging:
+    # 全局通道。当前默认 database：**暂时以异步（数据库队列）替代 RabbitMQ**，
+    # RabbitMQ 通道**完整保留**，改一个键即可切回。
+    # ⚠️ 切换不是「随时热切」：切换前必须**先排空旧通道**，
+    #    否则旧通道里的消息会滞留到无人消费。装配期会做残留检查并拒绝启动
+    #    （见 MessagingSwitchGuard），把「静默滞留」变成「明确报错」。
+    mode: "database"
+    # 租户覆盖（灰度）：形如 t-b=database,t-c=rabbitmq
+    # ⚠️ 留空 = 全部租户跟随全局模式。
+    # ⚠️ 模式值非法 → **拒绝启动**（灰度静默失效比报错更危险）；
+    #    slug 不在本实例租户清单内 → 启动日志点名告警。
+    tenant-modes: ""
+    # DB 队列消费轮询间隔（毫秒）。下限 10ms——过小等于忙等，会打满 CPU。
+    # 代价：消费延迟 ≈ 该值（与 Outbox 中继同量级）。
+    poll-interval-ms: "200"
+    # 单轮单租户领取上限（对应 Rabbit 的 prefetch 量级）。
+    batch-size: "50"
+    # 重试次数上限（超过即进死信，须人工介入）。
+    # ⚠️ 与 Rabbit 的 x-delivery-limit=3 同一意图：
+    #    有副作用工具不得无限重投（重复写入 = Sev-0）。
+    max-attempts: "3"
+    # 可见性超时（毫秒）：领取后超过此时长未确认即被回收重投
+    #（等价 broker 的 unacked 重投）。
+    # ⚠️ 必须显著大于单次 Run 执行耗时；即便超时导致重复消费，
+    #    安全性仍由既有的**租约 + fencing** 保证（第二个消费者领不到同一 Run）。
+    visibility-timeout-ms: "300000"
+    # 重试退避基数与上限（毫秒，指数退避：base × 2^(n-1)）。
+    # ⚠️ 比 Rabbit 的「立即重投」更保守，避免坏消息把数据库打热。
+    retry-backoff-ms: "1000"
+    retry-backoff-max-ms: "30000"
+
   # ── DEC-9 成本与容量（保守初值，P2/P4 实测后调优）──────────────
   run:
     # 单 Run 成本上限（元）。初值 2.00。调优时点：P4 实测 usage 后

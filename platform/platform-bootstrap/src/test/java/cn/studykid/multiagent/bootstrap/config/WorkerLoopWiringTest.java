@@ -18,6 +18,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
@@ -61,6 +62,12 @@ import cn.studykid.multiagent.worker.dispatch.TenantOutboxPublishers;
  * {@code NONE} 下会报 {@code NoSuchBeanDefinitionException}。
  * MOCK 不启真实端口，成本与 NONE 相当。
  */
+// ⚠️ 2026-10-22 实测：本类会装配**完整 Spring 上下文**，启动期即查询 tenant 表
+//    （RetentionJob → 解析租户 slug fail-closed）→ **必须有活库且已建表**。
+//    无库时它不是「跳过」而是**报错**（29 项 error），会把无库的构建拖红。
+//    故按项目既有约定（见 RateLimitIT 等）用 IT_PG_URL 门禁：
+//    无库 → 跳过；integration-test job（有库）→ 真跑并纳入 skipped==0 断言。
+@EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 @SpringBootTest(
         classes = cn.studykid.multiagent.bootstrap.PlatformApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.MOCK)
@@ -78,7 +85,11 @@ import cn.studykid.multiagent.worker.dispatch.TenantOutboxPublishers;
         //    关掉容器不影响 Bean 图（见 P4-D03 实测：
         //    ConditionalOnProperty 不会影响 @RabbitListener 端点注册，
         //    故用 auto-startup 而非 enabled 来关容器）。
-        "spring.rabbitmq.listener.simple.auto-startup=false"
+        "spring.rabbitmq.listener.simple.auto-startup=false",
+        // ⚠️ P4-D17：本类断言的是 **RabbitMQ 通道**的装配
+        //    （C-3 执行器宿主、C-5 队列拓扑），故**显式声明**走 Rabbit 通道。
+        //    默认模式已是 database（P4-D17 的临时替代），不声明则这些断言会失真。
+        "agent.messaging.mode=rabbitmq"
 })
 @DisplayName("P4-D03 Worker 主循环连通性测试")
 class WorkerLoopWiringTest {

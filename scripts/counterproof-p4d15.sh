@@ -12,12 +12,17 @@
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../platform" || exit 1
-export JAVA_HOME="/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home"
+export JAVA_HOME="${JAVA_HOME:-/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home}"   # 允许外部覆盖（CI / 非 IntelliJ 环境）
 export PATH="$JAVA_HOME/bin:/Applications/IntelliJ IDEA.app/Contents/plugins/maven-plugin/lib/maven3/bin:$PATH"
 set -a; source ../config.env; set +a
-export IT_PG_URL=jdbc:postgresql://127.0.0.1:5433/agent_it
-export IT_PG_USER=app_agent
-export IT_PG_PASSWORD=
+export IT_PG_URL="${IT_PG_URL:-jdbc:postgresql://127.0.0.1:5433/agent_it}"
+export IT_PG_USER="${IT_PG_USER:-app_agent}"
+export IT_PG_PASSWORD="${IT_PG_PASSWORD:-}"
+# ⚠️ 2026-10-22：管理员池（造跨租户夹具）已改为读 IT_PG_ADMIN_PASSWORD；
+#    口令认证的库（RDS / CI）必须显式提供，否则连接失败并报
+#    「server requested password-based authentication, but no password was provided」。
+export IT_PG_ADMIN_USER="${IT_PG_ADMIN_USER:-agent}"
+export IT_PG_ADMIN_PASSWORD="${IT_PG_ADMIN_PASSWORD:-}"
 export RABBITMQ_VHOST=agent-test
 
 APP=agent-application/src/main/java/cn/studykid/multiagent/application/config

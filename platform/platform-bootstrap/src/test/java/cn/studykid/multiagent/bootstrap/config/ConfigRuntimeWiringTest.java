@@ -13,6 +13,7 @@ import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.env.Environment;
@@ -39,6 +40,12 @@ import cn.studykid.multiagent.ports.tool.ToolHandler;
  * <p>⚠️ <b>本类不依赖真实 broker</b>：只断言装配与配置来源，
  * 故可在 CI 无 RabbitMQ 时运行。
  */
+// ⚠️ 2026-10-22 实测：本类会装配**完整 Spring 上下文**，启动期即查询 tenant 表
+//    （RetentionJob → 解析租户 slug fail-closed）→ **必须有活库且已建表**。
+//    无库时它不是「跳过」而是**报错**（29 项 error），会把无库的构建拖红。
+//    故按项目既有约定（见 RateLimitIT 等）用 IT_PG_URL 门禁：
+//    无库 → 跳过；integration-test job（有库）→ 真跑并纳入 skipped==0 断言。
+@EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 @SpringBootTest(
         classes = cn.studykid.multiagent.bootstrap.PlatformApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.MOCK)
