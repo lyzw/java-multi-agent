@@ -42,4 +42,22 @@ public interface CorpusRepository {
      */
     void updateJiebaTokens(@NonNull String tenantId, @NonNull String chunkId,
                            @NonNull String jiebaTokens);
+
+    /**
+     * 写入或更新片段向量（RAG-D09 R2-1：历史片段向量缺失重索引 / 换模型代际重建）。
+     *
+     * <p>语义：{@code chunk_id} 已存在则更新其向量与模型标识，不存在则插入。
+     * 与 {@link #saveChunkAndEmbedding}（整片段+向量原子插入）互补——
+     * 本方法针对「片段已入库、仅向量待补/待重建」的场景，避免整行重插造成的冲突。
+     *
+     * <p>⚠️ 租户隔离：实现在事务内 {@code set_config('app.tenant_id', ..., true)}，
+     * 使 RLS FORCE 对 {@code rag_chunk_embedding} 的 INSERT/UPDATE 同时生效。
+     *
+     * @param tenantId 租户 ID
+     * @param chunkId 片段 ID
+     * @param embedding 向量（维度须与 embedModel 一致）
+     * @param embedModel 嵌入模型标识（写入索引元数据，用于代际管理）
+     */
+    void upsertEmbedding(@NonNull String tenantId, @NonNull String chunkId,
+                         @NonNull float[] embedding, @NonNull String embedModel);
 }

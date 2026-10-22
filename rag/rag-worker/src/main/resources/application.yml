@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: java-saas-rag-worker
+  datasource:
+    # ⚠️ 生产必须通过环境变量（RAG_PG_*）覆盖：连接角色必须是
+    #   「非特权 + 无 BYPASSRLS」的应用账号（见 ReindexRunner 的 fail-closed 探针）。
+    #   超级用户或 rls-bypass 角色会破坏租户隔离。
+    url: ${RAG_PG_URL:jdbc:postgresql://localhost:5432/study_rag}
+    username: ${RAG_PG_USERNAME:rag_app}
+    password: ${RAG_PG_PASSWORD:rag_app}
+    driver-class-name: org.postgresql.Driver
+  flyway:
+    # 迁移脚本位于 rag-infrastructure 的 classpath:db/migration（V1/V2）。
+    # 与 rag-bootstrap 共用同一 flyway_schema_history（不指定 schemas，沿用默认），
+    # 确保两者对迁移历史认知一致、可幂等重跑。
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+  jdbc:
+    template:
+      fetch-size: 100
+
+rag:
+  indexer:
+    # 启动即触发重索引（仅本 Worker 应用默认开启）。
+    auto-start: true
+    # 每页扫描的待索引片段数（键集分页）。
+    batch-size: 200
+    # ⚠️ 受 RLS 约束，Worker 无法跨租户枚举 rag_tenant，须显式列出租户 UUID。
+    #    生产建议由主平台在创建/校验来源后下发索引任务（见 ReindexRunner 注释）。
+    tenants: []
+
+logging:
+  level:
+    cn.studykid.rag.worker: INFO

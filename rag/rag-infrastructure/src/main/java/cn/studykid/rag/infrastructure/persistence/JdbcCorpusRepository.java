@@ -66,6 +66,26 @@ public class JdbcCorpusRepository implements CorpusRepository {
                 "UPDATE rag_chunk SET text_jieba = ? WHERE chunk_id = ?", jiebaTokens, chunkId);
     }
 
+    @Override
+    @Transactional
+    public void upsertEmbedding(@NonNull String tenantId, @NonNull String chunkId,
+                                @NonNull float[] embedding, @NonNull String embedModel) {
+        jdbcTemplate.update("SELECT set_config('app.tenant_id', ?, true)", tenantId);
+        // ⚠️ ON CONFLICT (chunk_id)：片段已存在则更新向量与模型标识；否则插入。
+        //    PK 为 chunk_id（单列），tenant_id 经 rag_current_tenant() 取值，
+        //    与 V1 的 RLS WITH CHECK 一致（tenant_id = rag_current_tenant()）。
+        jdbcTemplate.update("""
+                INSERT INTO rag_chunk_embedding
+                    (chunk_id, tenant_id, index_generation, embed_model, embedding)
+                VALUES (?, rag_current_tenant(), 1, ?, ?::vector)
+                ON CONFLICT (chunk_id) DO UPDATE SET
+                    embedding = EXCLUDED.embedding,
+                    embed_model = EXCLUDED.embed_model,
+                    index_generation = 1
+                """,
+                chunkId, embedModel, vectorToString(embedding));
+    }
+
     /** 把 UUID 列表格式化为 PostgreSQL 数组字面量 {@code {uuid,...}}。 */
     private static String toUuidArrayLiteral(List<String> ids) {
         if (ids == null || ids.isEmpty()) {

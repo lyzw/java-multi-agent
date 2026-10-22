@@ -21,10 +21,6 @@
     </dependency>
     <dependency>
       <groupId>cn.studykid.rag</groupId>
-      <artifactId>rag-worker</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>cn.studykid.rag</groupId>
       <artifactId>rag-infrastructure</artifactId>
     </dependency>
     <dependency>
