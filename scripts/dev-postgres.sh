@@ -171,7 +171,16 @@ cmd_grant() {
   psql_super -c "GRANT USAGE ON SCHEMA public TO ${APP_ROLE};" >/dev/null
   psql_super -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${APP_ROLE};" >/dev/null
   psql_super -c "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE};" >/dev/null
+  # ⚠️ 默认权限必须设（W-PERM-P0 实测）：
+  #    上面三条只覆盖**已存在**的表。新增迁移（如 V15 的 cap_* 表）建出的表
+  #    **不会**自动带上授权 → 应用角色一访问就报 permission denied，
+  #    而报错点在业务代码，离「表没授权」的真实成因很远
+  #    （与 P4-D10「迁移清单与现实脱节」同源：清单与现实脱节且系统表面正常）。
+  #    这里让**后续**建表自动继承授权，新增迁移无需再手工补。
+  psql_super -c "ALTER DEFAULT PRIVILEGES IN SCHEMA PUBLIC GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${APP_ROLE};" >/dev/null
+  psql_super -c "ALTER DEFAULT PRIVILEGES IN SCHEMA PUBLIC GRANT USAGE, SELECT ON SEQUENCES TO ${APP_ROLE};" >/dev/null
   say "授权完成（NOSUPERUSER NOBYPASSRLS —— 验证 RLS 必需）"
+  say "已设置默认权限：后续迁移新建的表/序列自动授权给 ${APP_ROLE}"
 }
 
 cmd_verify() {

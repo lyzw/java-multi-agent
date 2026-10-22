@@ -15,6 +15,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 import com.zaxxer.hikari.HikariConfig;
@@ -57,6 +58,24 @@ class GovernanceQueryIT {
     private static String tenantA;
     private static String tenantB;
     private static String snapshotId;
+
+    /**
+     * 关闭应用连接池（W-PERM-P0 阶段实测修正）。
+     *
+     * <p>⚠️ <b>必须关闭</b>：本类原先建池不关。全量构建时各 IT 类累积的
+     * 连接会打满 PostgreSQL 的 {@code max_connections}（默认 100），
+     * 导致<b>后续模块</b>（platform-bootstrap）的 Spring 上下文加载以
+     * {@code FATAL: sorry, too many clients already} 失败 ——
+     * 失败现场在别的模块，报错点离真因（本类泄漏了连接）极远，
+     * 极易被误判成「装配被改坏了」。
+     */
+    @AfterAll
+    static void closeAppPool() {
+        if (appPool != null) {
+            appPool.close();
+            appPool = null;
+        }
+    }
 
     @BeforeAll
     static void setUp() throws Exception {

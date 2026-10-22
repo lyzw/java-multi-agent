@@ -104,21 +104,38 @@ class RealBrokerEndToEndIT {
 
         sender = new RabbitMessageSender(template);
         probe = new RabbitQueueDepthProbe(template);
+
+        // ⚠️ **开测前先清场**：队列跨轮次累积（每轮全量构建都会发消息），
+        //    残留的历史消息会被本片的「接收」先取到，
+        //    断言「回环载荷的 runId 必须与发出的一致」就会失败 ——
+        //    而该失败与本片逻辑毫无关系，纯属上一轮的残留。
+        //    只在收尾时清理是不够的：残留已经污染了本次的接收。
+        drainQueue();
+    }
+
+    /**
+     * 排空执行队列。
+     *
+     * <p>⚠️ 上限 1000 条是防跑飞的安全阀：队列若被别的生产者持续灌入，
+     * 收空会变成无底洞，把测试挂死。
+     */
+    private void drainQueue() {
+        try {
+            for (int i = 0; i < 1000; i++) {
+                if (template.receive(QUEUE, 200) == null) {
+                    return;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 清场失败不应影响测试结果（后续断言会暴露真实问题）
+        }
     }
 
     private void close() {
         if (template != null) {
             // ⚠️ 尽力收走本片可能遗留的测试消息，避免污染真实队列
             //    （dev broker 无应用运行，仅本片消息会残留）。
-            try {
-                for (int i = 0; i < 5; i++) {
-                    if (template.receive(QUEUE, 200) == null) {
-                        break;
-                    }
-                }
-            } catch (RuntimeException ignored) {
-                // 收尾失败不应影响测试结果
-            }
+            drainQueue();
         }
         if (cf != null) {
             cf.destroy();

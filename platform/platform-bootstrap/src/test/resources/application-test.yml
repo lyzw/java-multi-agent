@@ -1,0 +1,36 @@
+# =====================================================================
+# 集成测试专用配置（profile: test）
+#
+# ⚠️ **为什么必须收窄连接池**（W-PERM-P0 阶段实测修正）：
+#
+#   Hikari 的默认值是 minimumIdle = maximumPoolSize = 10，
+#   即**每个** DataSource 会常驻 10 条连接（哪怕完全空闲）。
+#   而 @SpringBootTest 的 Spring 上下文缓存默认保留 32 个上下文，
+#   每个上下文各持一个 DataSource →
+#     32 × 10 = 320 条连接 ≫ PostgreSQL 默认 max_connections = 100
+#
+#   后果：**后续模块**的 Spring 上下文加载以
+#   `FATAL: sorry, too many clients already` 失败 ——
+#   报错点在 platform-bootstrap 的某个 IT，而真因是
+#   agent-infrastructure 的 IT 累积的连接（或本模块自身的上下文缓存）。
+#   失败现场与真因相隔一个模块，排查方向极易被带偏
+#   （实测误判为「装配被改坏了」）。
+#
+#   因此把测试环境的池压到：上限 4、空闲 1。
+#   稳态占用 ≈ 32 × 1 = 32 条，并发吃紧时才增长到 4。
+#
+# ⚠️ 该文件**只影响集成测试**（@ActiveProfiles("test")），
+#    生产与开发环境的连接池参数不在此改动范围内。
+# =====================================================================
+spring:
+  datasource:
+    hikari:
+      # 上限：并发吃紧时的上限
+      maximum-pool-size: 4
+      # ⚠️ 关键：**不**让它等于 maximumPoolSize。
+      #    相等 = 每个上下文常驻满额连接，32 个上下文就是 320 条。
+      minimum-idle: 1
+      # 空闲连接回收：避免上下文缓存里的连接一直挂着
+      idle-timeout: 30000
+      # 连接存活探测：避免拿到已被服务端关闭的连接
+      max-lifetime: 600000

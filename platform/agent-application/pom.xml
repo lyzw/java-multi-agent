@@ -31,5 +31,16 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter</artifactId>
     </dependency>
+    <!--
+      W-PERM-P0：迁移期双写需要解析存量自由 JSONB（agent_version.definition）
+      并投影为结构化 cap_agent_def。
+      ⚠️ 只解析到 Map/List，不绑定到具体 POJO —— 存量 definition 是自由 schema
+      且内容由用户写入，绑定多态类型会带来反序列化 gadget 风险（同 JwtTokenService 的处置）。
+      Jackson 3（tools.jackson），随 Spring Boot 4.1 基线。
+    -->
+    <dependency>
+      <groupId>tools.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
   </dependencies>
 </project>

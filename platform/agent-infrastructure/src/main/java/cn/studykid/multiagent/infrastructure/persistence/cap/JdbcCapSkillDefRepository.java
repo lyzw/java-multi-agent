@@ -1,0 +1,156 @@
+package cn.studykid.multiagent.infrastructure.persistence.cap;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.List;
+import java.util.Optional;
+
+import javax.sql.DataSource;
+
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
+
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
+
+import cn.studykid.multiagent.core.cap.CapSkillDef;
+import cn.studykid.multiagent.core.cap.CapabilityRiskLevel;
+import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
+import cn.studykid.multiagent.ports.persistence.CapSkillDefPort;
+
+/**
+ * {@link CapSkillDefPort} 的 PostgreSQL 实现（W-PERM-P1）。
+ *
+ * <p>platform 级对象（{@code cap_skill_def} <b>不启用 RLS</b>）。
+ *
+ * <p>⚠️ <b>{@code declaredMcp[].toolAllowlist} 的 null 与 [] 必须区分</b>（§4.4）：
+ * {@code null} = 未配置（取 ServerAllowedOps 全集），{@code []} = 显式不允许任何操作。
+ * 故 DTO 用 {@code @Nullable List<String>} 承载 —— Jackson 会把「键缺失」与「显式 null」
+ * 都映射成 {@code null}，把 {@code []} 映射成空列表，语义得以保留。
+ */
+public class JdbcCapSkillDefRepository implements CapSkillDefPort {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final String COLUMNS = """
+            id, version, name, description, declared_tools::text, declared_mcp::text,
+            risk_ceiling, param_policies::text, required_caps::text, config_fingerprint,
+            schema_version, created_at, published_at
+            """;
+
+    private static final String SQL_FIND = "SELECT " + COLUMNS
+            + " FROM cap_skill_def WHERE id = ? AND version = ?";
+
+    private static final String SQL_FIND_LATEST_PUBLISHED = "SELECT " + COLUMNS
+            + " FROM cap_skill_def WHERE id = ? AND published_at IS NOT NULL"
+            + " ORDER BY version DESC LIMIT 1";
+
+    private final DataSource dataSource;
+
+    public JdbcCapSkillDefRepository(@NonNull DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
+    @Override
+    public @NonNull Optional<CapSkillDef> find(@NonNull String skillId, int version) {
+        return query(SQL_FIND, ps -> {
+            ps.setString(1, skillId);
+            ps.setInt(2, version);
+        });
+    }
+
+    @Override
+    public @NonNull Optional<CapSkillDef> findLatestPublished(@NonNull String skillId) {
+        return query(SQL_FIND_LATEST_PUBLISHED, ps -> ps.setString(1, skillId));
+    }
+
+    private @NonNull Optional<CapSkillDef> query(@NonNull String sql,
+                                                  @NonNull StatementBinder binder) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                        binder.bind(ps);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            return rs.next() ? Optional.of(map(rs)) : Optional.empty();
+                        }
+                    }
+                });
+    }
+
+    private static CapSkillDef map(ResultSet rs) throws SQLException {
+        Timestamp publishedAt = rs.getTimestamp("published_at");
+        return new CapSkillDef(
+                rs.getString("id"),
+                rs.getInt("version"),
+                rs.getString("name"),
+                rs.getString("description"),
+                readStringList(rs.getString("declared_tools")),
+                readMcpDeclarations(rs.getString("declared_mcp")),
+                CapabilityRiskLevel.parse(rs.getString("risk_ceiling")),
+                rs.getString("param_policies"),
+                readStringList(rs.getString("required_caps")),
+                rs.getString("config_fingerprint"),
+                rs.getInt("schema_version"),
+                rs.getTimestamp("created_at").toInstant(),
+                publishedAt == null ? null : publishedAt.toInstant());
+    }
+
+    private static @NonNull List<String> readStringList(@Nullable String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            return MAPPER.readValue(json, new TypeReference<List<String>>() {
+            });
+        } catch (JacksonException e) {
+            // ⚠️ 与 P0 既有实现一致：存量脏数据不能静默当空列表
+            //    （那会把「声明了 3 个 Tool」读成「一个都没声明」，授权被无声放宽）
+            throw new IllegalStateException("解析 JSON 数组失败: " + json, e);
+        }
+    }
+
+    private static @NonNull List<CapSkillDef.McpDeclaration> readMcpDeclarations(@Nullable String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<McpDeclarationDto> dtos =
+                    MAPPER.readValue(json, new TypeReference<List<McpDeclarationDto>>() {
+                    });
+            return dtos.stream()
+                    .map(dto -> new CapSkillDef.McpDeclaration(dto.serverId(), dto.toolAllowlist()))
+                    .toList();
+        } catch (JacksonException e) {
+            throw new IllegalStateException("解析 declaredMcp 失败: " + json, e);
+        }
+    }
+
+    /**
+     * {@code declaredMcp[]} 的传输形态。
+     *
+     * @param serverId      MCP Server 标识
+     * @param toolAllowlist 操作白名单；<b>{@code null} ≠ {@code []}</b>（§4.4）
+     */
+    private record McpDeclarationDto(@NonNull String serverId, @Nullable List<String> toolAllowlist) {
+    }
+
+    /**
+     * platform 级读取用的租户上下文（零 UUID 哨兵，见
+     * {@link JdbcCapToolDefRepository} 的同名说明）。
+     */
+    private static TenantContext platformContext() {
+        return new TenantContext("00000000-0000-0000-0000-000000000000", "system",
+                java.util.Set.of(), 0L);
+    }
+
+    /** 语句参数绑定器。 */
+    @FunctionalInterface
+    private interface StatementBinder {
+        void bind(PreparedStatement ps) throws SQLException;
+    }
+}

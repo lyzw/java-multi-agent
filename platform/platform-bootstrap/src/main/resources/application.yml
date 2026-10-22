@@ -307,6 +307,25 @@ dr:
   rto: 4h
 
 
+# ── 统一配置与权限管控（W-PERM-P0 迁移期开关）──────────────────────
+config:
+  flag:
+    # 迁移双写开关（P0-T6）。
+    #
+    # ⚠️ **默认 false**：双写会在旧模型写入的同时追加写新模型
+    #    （cap_agent_def / execution_capability_snapshot），
+    #    增加写放大与延迟。未经验证的灰度不应直接作用于生产写路径。
+    #
+    # ⚠️ **关闭即回退**：置 false 后所有双写立即停止，
+    #    旧读/写路径（agent_version / execution_snapshot）完全接管，
+    #    且**不删除**任何已写入的新表数据 —— 双写是「追加」不是「搬移」，
+    #    故回退不产生数据丢失。
+    #
+    # ⚠️ 数值必须加引号：YamlPropertiesFactoryBean 会丢弃裸标量
+    #    （P1 已在 delivery-limit 上踩过该坑）。
+    cap-dual-write: "false"
+
+
 # ── 健康检查（D-001 端到端 / SRE 探针）────────────────────────────
 # ⚠️ 仅暴露 health，最小暴露面；其余端点保持关闭。
 #    匿名可访问已在 SecurityConfiguration.PUBLIC_ENDPOINTS 中放行。

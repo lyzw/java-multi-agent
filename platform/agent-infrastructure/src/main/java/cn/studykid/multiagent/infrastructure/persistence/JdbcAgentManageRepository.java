@@ -12,7 +12,6 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.AgentManagePort;
@@ -37,8 +36,14 @@ import cn.studykid.multiagent.ports.persistence.AuditPort;
  *
  * <p>⚠️ 全部走 {@code tenantConnection} 绑定 RLS；事务内显式 commit/rollback，
  * Repository 绝不自行提交借用连接。
+ *
+ * <p>⚠️ <b>刻意去掉 {@code @Repository} 组件扫描</b>（W-PERM-P0-T6）：
+ * 本类现在被 {@code DualWriteAgentManagePort} 装饰（迁移期双写），
+ * 若同时保留组件扫描，Spring 上下文里会有<b>两个</b> {@code AgentManagePort}
+ * 候选 Bean → {@code NoUniqueBeanDefinitionException}，<b>整个应用无法启动</b>。
+ * 装配改由 {@code ApplicationConfiguration} 显式 {@code @Bean} 完成，
+ * 与 {@code runClaimPort}（P3-D07）的既有惯例一致。
  */
-@Repository
 public class JdbcAgentManageRepository implements AgentManagePort {
 
     /** Agent 名称长度上限（自由文本，过长是异常信号）。 */

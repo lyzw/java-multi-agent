@@ -583,4 +583,216 @@ public class ApplicationConfiguration {
             }
         };
     }
+
+    // =====================================================================
+    // 统一配置与权限管控（W-PERM-P0 · 地基）
+    //
+    // ⚠️ 本段只注册**端口实现**，不含任何授权语义。
+    //    Phase A 校验（P1）、执行准入（P2）、审批双哈希（P3）、MCP 传输（P4）、
+    //    发布 CAS（P5）均属后续阶段；P0 只交付「可持久化 + 可回退」的底座。
+    // =====================================================================
+
+    /**
+     * 迁移双写开关（P0-T6）。
+     *
+     * <p>⚠️ <b>默认 false</b>：双写会增加旧路径的写放大与延迟，
+     * 未经验证的灰度不应直接作用于生产写路径。
+     * 回退路径：运行时置 false 即让旧读/写路径完全接管，且不删除任何已写数据。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.CapDualWriteSwitch capDualWriteSwitch(
+            @Value("${" + cn.studykid.multiagent.application.cap.CapDualWriteSwitch.KEY
+                    + ":false}") boolean enabled) {
+        return new cn.studykid.multiagent.application.cap.CapDualWriteSwitch(enabled);
+    }
+
+    /** Agent 结构化定义仓储（P0-T4/T6）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CapAgentDefPort capAgentDefPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcCapAgentDefRepository(
+                dataSource);
+    }
+
+    /**
+     * 迁移双写服务（P0-T6）。
+     *
+     * <p>⚠️ <b>fail-soft</b>：双写失败<b>不</b>让旧路径写入失败。
+     * 旧路径是当前生产真源，让它因「顺带写一份新表」而失败，
+     * 等于用迁移期的附加动作打断正在服务的业务。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CapDualWritePort capDualWritePort(
+            cn.studykid.multiagent.application.cap.CapDualWriteSwitch dualWriteSwitch,
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            cn.studykid.multiagent.application.cap.PermissionResolver resolver,
+            cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersions,
+            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
+            Clock clock) {
+        return new cn.studykid.multiagent.application.cap.CapDualWriteService(
+                dualWriteSwitch, agentDefs, resolver, authzVersions, snapshots, clock);
+    }
+
+    /**
+     * Agent 管理端口（**双写装饰器**）。
+     *
+     * <p>⚠️ <b>刻意不在 JDBC 仓储里直接写双写</b>：装饰器让「旧模型写入」与
+     * 「新模型双写」在同一个应用服务边界上可见，
+     * 且不改动既有仓储的事务与审计时序（该仓储的审计在提交<b>之后</b>落库，
+     * 是既有刻意设计，不能被顺带改掉）。
+     *
+     * <p>⚠️ <b>本类不再有 {@code @Repository} 组件扫描</b>：
+     * 否则上下文里会出现两个 {@code AgentManagePort} 候选 Bean → 启动失败。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.AgentManagePort agentManagePort(
+            DataSource dataSource,
+            cn.studykid.multiagent.ports.persistence.AuditPort auditPort,
+            cn.studykid.multiagent.ports.persistence.CapDualWritePort capDualWrite) {
+        return new cn.studykid.multiagent.application.cap.DualWriteAgentManagePort(
+                new cn.studykid.multiagent.infrastructure.persistence.JdbcAgentManageRepository(
+                        dataSource, auditPort),
+                capDualWrite);
+    }
+
+    /**
+     * 授权版本仓储（P0-T3）。
+     *
+     * <p>⚠️ <b>DB 支撑的强一致版本源</b>：多实例部署下，
+     * 内存版 {@code RoleBasedAuthorizationService} 无法保证「撤权即时全实例失效」。
+     * P1 起，授权判定必须读本端口。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersionPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcAuthzVersionRepository(
+                dataSource);
+    }
+
+    /** Run 级能力闭包快照仓储（P0-T4）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort
+            capabilitySnapshotPort(DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcCapabilitySnapshotRepository(dataSource);
+    }
+
+    /** 配置发布头仓储（P0-T4；CAS 属 P5）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ConfigReleasePort configReleasePort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcConfigReleaseRepository(
+                dataSource);
+    }
+
+    /** 确定结果事件仓储（P0-T5）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ResultEventPort resultEventPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcResultEventRepository(
+                dataSource);
+    }
+
+    /** 执行意图仓储（P0-T5）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ExecutionIntentPort executionIntentPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcExecutionIntentRepository(dataSource);
+    }
+
+    /** 双写一致性比对工具（P0-T7）。 */
+    @Bean
+    public cn.studykid.multiagent.infrastructure.persistence.cap.CapDualWriteComparator
+            capDualWriteComparator(DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap.CapDualWriteComparator(
+                dataSource);
+    }
+
+    // ── W-PERM-P1：解析校验 ─────────────────────────────────────────
+
+    /** Tool 定义版本行仓储（P1-T1）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CapToolDefPort capToolDefPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcCapToolDefRepository(
+                dataSource);
+    }
+
+    /** Skill 定义版本行仓储（P1-T1）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CapSkillDefPort capSkillDefPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcCapSkillDefRepository(
+                dataSource);
+    }
+
+    /** MCP Server 定义版本行仓储（P1-T1）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort capMcpServerDefPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcCapMcpServerDefRepository(dataSource);
+    }
+
+    /**
+     * 发布版本解析（P1-T1）。
+     *
+     * <p>⚠️ <b>这是 P1 的过渡实现</b>（对象级解析 + 回滚守卫），
+     * P5 必须替换为「指针指向的 PUBLISHED release」读（§6.3）。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.PublishedVersionPort publishedVersionPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcPublishedVersionPort(
+                dataSource);
+    }
+
+    /**
+     * MCP 固定清单端口（P1-T6）。
+     *
+     * <p>⚠️ <b>P4 落地前的 fail-closed 占位</b>：一律返回空集 → 任何 MCP 操作都不被允许。
+     * 绝不返回「全部允许」——那会把「未接入适配器」变成「MCP 可调用任意操作」。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.mcp.McpManifestPort mcpManifestPort() {
+        return new cn.studykid.multiagent.infrastructure.mcp.UnconfiguredMcpManifestPort();
+    }
+
+    /** 角色→动作权限端口（P1-T3）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.security.RolePermissionPort rolePermissionPort() {
+        return new cn.studykid.multiagent.infrastructure.security.RolePermissionAdapter();
+    }
+
+    /** 无副作用能力闭包解析器（P1-T1）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.PermissionResolver permissionResolver(
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            cn.studykid.multiagent.ports.persistence.CapSkillDefPort skillDefs,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort serverDefs,
+            cn.studykid.multiagent.ports.persistence.PublishedVersionPort publishedVersions,
+            cn.studykid.multiagent.ports.mcp.McpManifestPort manifest) {
+        return new cn.studykid.multiagent.application.cap.PermissionResolver(
+                agentDefs, skillDefs, toolDefs, serverDefs, publishedVersions, manifest);
+    }
+
+    /**
+     * Phase A 授权校验器（P1-T3）。
+     *
+     * <p>⚠️ <b>本 Bean 目前不接入任何执行路径</b>：闸门接线属 P2。
+     * P2 接线时必须<b>置于开关之后</b> —— 在 P5 的发布指针读落地前，
+     * {@code PublishedVersionPort} 的对象级解析与 §6.3 存在已知偏差。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.InvocationValidator invocationValidator(
+            cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersions,
+            cn.studykid.multiagent.ports.security.RolePermissionPort rolePermissions,
+            cn.studykid.multiagent.application.cap.PermissionResolver resolver,
+            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
+            cn.studykid.multiagent.ports.mcp.McpManifestPort manifest) {
+        return new cn.studykid.multiagent.application.cap.InvocationValidator(
+                authzVersions, rolePermissions, resolver, snapshots, manifest);
+    }
 }
