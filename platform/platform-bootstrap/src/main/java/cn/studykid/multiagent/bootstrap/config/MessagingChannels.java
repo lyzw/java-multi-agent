@@ -50,16 +50,28 @@ public final class MessagingChannels {
     /** tenantId → 该租户实际使用的模式。 */
     private final Map<String, MessagingMode> modeByTenantId;
 
+    /**
+     * 租户 ID **有序**清单（按 {@code agent.worker.tenant-slugs} 的配置顺序）。
+     *
+     * <p>⚠️ 必须保序：发布器清单、深度探测的租户顺序都依赖它。
+     * {@code Map.copyOf} 返回的是<b>无序</b>不可变 Map —— 用它存有序数据
+     * 会让「配置里第一个租户」在运行时变成另一个，
+     * 且**不报错**（顺序错乱是最难查的一类）。
+     */
+    private final List<String> orderedTenantIds;
+
     /** 覆盖表中出现、但不在本实例租户清单里的 slug（告警项）。 */
     private final List<String> foreignOverrideSlugs;
 
     private MessagingChannels(MessagingMode globalMode,
                                Map<String, String> slugByTenantId,
                                Map<String, MessagingMode> modeByTenantId,
+                               List<String> orderedTenantIds,
                                List<String> foreignOverrideSlugs) {
         this.globalMode = globalMode;
         this.slugByTenantId = Map.copyOf(slugByTenantId);
         this.modeByTenantId = Map.copyOf(modeByTenantId);
+        this.orderedTenantIds = List.copyOf(orderedTenantIds);
         this.foreignOverrideSlugs = List.copyOf(foreignOverrideSlugs);
     }
 
@@ -97,7 +109,8 @@ public final class MessagingChannels {
         }
 
         MessagingChannels resolved = new MessagingChannels(
-                global, slugByTenantId, modeByTenantId, foreign);
+                global, slugByTenantId, modeByTenantId,
+                List.copyOf(modeByTenantId.keySet()), foreign);
         resolved.logSummary();
         return resolved;
     }
@@ -172,9 +185,21 @@ public final class MessagingChannels {
         return globalMode;
     }
 
-    /** @return 本实例服务的全部租户 ID */
+    /** @return 本实例服务的全部租户 ID（**按配置顺序**） */
     public @NonNull List<String> tenantIds() {
-        return List.copyOf(modeByTenantId.keySet());
+        return orderedTenantIds;
+    }
+
+    /**
+     * @param tenantId 租户 ID
+     * @return 该租户的 slug（运维可读）
+     */
+    public @NonNull String slugOf(@NonNull String tenantId) {
+        String slug = slugByTenantId.get(tenantId);
+        if (slug == null) {
+            throw new IllegalArgumentException("未知租户: tenantId=" + tenantId);
+        }
+        return slug;
     }
 
     /** @return 走 RabbitMQ 通道的租户 ID */
@@ -189,9 +214,10 @@ public final class MessagingChannels {
 
     private List<String> tenantIdsOf(MessagingMode mode) {
         List<String> out = new ArrayList<>();
-        for (Map.Entry<String, MessagingMode> e : modeByTenantId.entrySet()) {
-            if (e.getValue() == mode) {
-                out.add(e.getKey());
+        // ⚠️ 遍历**有序**清单而非 Map.entrySet（Map 无序）
+        for (String tenantId : orderedTenantIds) {
+            if (modeByTenantId.get(tenantId) == mode) {
+                out.add(tenantId);
             }
         }
         return out;

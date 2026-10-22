@@ -116,7 +116,16 @@ public final class MessagingSwitchGuard {
             return;
         }
         Integer depth = residualDepth(rabbitAdmin, rabbitQueueName);
-        if (depth != null && depth > 0) {
+        if (depth == null) {
+            // ⚠️⚠️ **「无法检查」不等于「通过」**：这里必须如实说「没查成」，
+            //    绝不能打「检查通过」——那会让运维以为残留已被确认不存在。
+            //    （本项目已多次栽在「看着在查其实没查」上。）
+            log.warn("⚠️⚠️ 未能检查 Rabbit 侧残留（broker 不可达或认证失败），"
+                    + "因此**不能确认**队列为空。若该 broker 中仍有旧消息，"
+                    + "它们不会丢但也无人消费——请人工确认后再切换。");
+            return;
+        }
+        if (depth > 0) {
             throw new IllegalStateException(
                     "⛔ 消息通道切换残留：RabbitMQ 队列 " + rabbitQueueName + " 仍有 " + depth
                             + " 条未消费消息，而当前存在数据库模式租户。"
@@ -124,7 +133,7 @@ public final class MessagingSwitchGuard {
                             + "故必须先排空再切换（否则这些消息永远滞留、Run 永不执行）。"
                             + "处置：先用 rabbitmq 模式启动一次让队列排空，或在 broker 侧清理。");
         }
-        log.info("消息通道切换残留检查通过: Rabbit 队列 {} 无残留", rabbitQueueName);
+        log.info("消息通道切换残留检查通过: Rabbit 队列 {} 实测深度为 0（无残留）", rabbitQueueName);
     }
 
     /**
