@@ -160,10 +160,31 @@ public final class MessagingChannels {
             }
         } catch (SQLException e) {
             throw new IllegalStateException(
-                    "解析租户 slug 失败（fail-closed）: slug=" + slug, e);
+                    "解析租户 slug 失败（fail-closed）: slug=" + slug
+                            + " → " + describeSqlFailure(e), e);
         }
         throw new IllegalStateException(
                 "租户 slug 不存在（fail-closed：静默跳过将导致消息永不发布）: slug=" + slug);
+    }
+
+    /**
+     * 把底层 SQLException 翻译成<b>可执行</b>的排查提示。
+     *
+     * <p>⚠️ 与 {@code TenantSlugResolver} 同理：外层只写「解析租户 slug 失败」
+     * 会把「连不上库」与「连错库」都伪装成「租户没建」，极易误判。
+     */
+    private static String describeSqlFailure(SQLException e) {
+        String state = e.getSQLState();
+        String raw = e.getMessage() == null ? "" : e.getMessage().split("\n")[0];
+        if ("42P01".equals(state)) {
+            return "当前连接的库里没有 tenant 表（" + raw + "）"
+                    + " → 检查 SPRING_DATASOURCE_URL 指向的库：平台库应为 agent_dev";
+        }
+        if (state != null && state.startsWith("08")) {
+            return "数据库连接失败（" + raw + "）"
+                    + " → 检查 host/端口/安全组白名单（本实例线上库仅 5432 开放）";
+        }
+        return "SQL 异常 [" + state + "] " + raw;
     }
 
     private void logSummary() {

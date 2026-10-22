@@ -1,0 +1,47 @@
+{
+  "tools": [
+    {
+      "id": "get_student_profile",
+      "name": "查询学生画像",
+      "kind": "native",
+      "riskLevel": "READ",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "studentId": { "type": "string" } },
+        "required": ["studentId"]
+      },
+      "paramPolicies": [],
+      "namespace": "platform"
+    },
+    {
+      "id": "record_weakness",
+      "name": "记录薄弱点",
+      "kind": "native",
+      "riskLevel": "WRITE_PROFILE",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "studentId": { "type": "string" }, "point": { "type": "string" } },
+        "required": ["studentId", "point"]
+      },
+      "paramPolicies": [],
+      "namespace": "platform"
+    },
+    {
+      "id": "send_email",
+      "name": "发送邮件",
+      "kind": "mcp",
+      "mcpServerId": "notify_mcp",
+      "mcpToolName": "send_mail",
+      "riskLevel": "WRITE_EXTERNAL",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "toDomain": { "type": "string" }, "subject": { "type": "string" } },
+        "required": ["toDomain", "subject"]
+      },
+      "paramPolicies": [
+        { "param": "toDomain", "op": "in_allowlist", "value": ["school.edu", "parent.org"] }
+      ],
+      "namespace": "platform"
+    }
+  ]
+}

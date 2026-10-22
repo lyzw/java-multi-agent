@@ -1,0 +1,64 @@
+{
+  "agents": [
+    {
+      "id": "homework_tutor",
+      "tenantId": "t-1001",
+      "name": "作业辅导",
+      "roles": ["AGENT_AUTHOR"],
+      "enabledSkills": ["student_profile_reader", "weakness_recorder"],
+      "skillBundles": [],
+      "capabilityTags": ["edu:read", "edu:write_profile"],
+      "inherits": null,
+      "overrides": { "removeSkills": [], "removeTools": [], "lowerRiskCeiling": {} },
+      "version": 1
+    },
+    {
+      "id": "read_only_tutor",
+      "tenantId": "t-1001",
+      "name": "只读辅导",
+      "roles": ["AGENT_AUTHOR"],
+      "enabledSkills": ["student_profile_reader"],
+      "skillBundles": [],
+      "capabilityTags": ["edu:read"],
+      "inherits": null,
+      "overrides": { "removeSkills": [], "removeTools": [], "lowerRiskCeiling": {} },
+      "version": 1
+    },
+    {
+      "id": "overconfident_agent",
+      "tenantId": "t-1001",
+      "name": "越权尝试者",
+      "roles": ["AGENT_AUTHOR"],
+      "enabledSkills": ["student_profile_reader"],
+      "skillBundles": [],
+      "capabilityTags": ["edu:read"],
+      "inherits": null,
+      "overrides": {},
+      "version": 1
+    },
+    {
+      "id": "composite_agent",
+      "tenantId": "t-1001",
+      "name": "组合代理（启用 composite_tutor）",
+      "roles": ["AGENT_AUTHOR"],
+      "enabledSkills": ["composite_tutor"],
+      "skillBundles": [],
+      "capabilityTags": ["edu:read", "edu:write_profile"],
+      "inherits": null,
+      "overrides": { "removeSkills": [], "removeTools": [], "lowerRiskCeiling": {} },
+      "version": 1
+    },
+    {
+      "id": "notifier_agent",
+      "tenantId": "t-1001",
+      "name": "通知代理（启用 notifier，可发邮件）",
+      "roles": ["AGENT_AUTHOR"],
+      "enabledSkills": ["notifier"],
+      "skillBundles": [],
+      "capabilityTags": ["notify:send"],
+      "inherits": null,
+      "overrides": { "removeSkills": [], "removeTools": [], "lowerRiskCeiling": {} },
+      "version": 1
+    }
+  ]
+}

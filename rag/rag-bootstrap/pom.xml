@@ -23,6 +23,15 @@
       <groupId>cn.studykid.rag</groupId>
       <artifactId>rag-infrastructure</artifactId>
     </dependency>
+    <!--
+      ⚠️ Spring Boot 4.x 把 Flyway/Liquibase 自动配置从核心 autoconfigure 模块
+      移到了各自 starter（见 Boot 4.0 迁移指南）。仅引入 flyway-core 不会触发
+      迁移；必须引入本 starter 才能恢复 FlywayAutoConfiguration 自动执行 V1/V2。
+    -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-flyway</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>

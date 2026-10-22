@@ -93,7 +93,6 @@ class SseStreamingTest {
             }
             @Override public String principalId() { return "user-1"; }
             @Override public String providerId() { return "deepseek"; }
-            @Override public String snapshotId() { return "snap-1"; }
             @Override public String correlationId() { return "corr-1"; }
         };
     }

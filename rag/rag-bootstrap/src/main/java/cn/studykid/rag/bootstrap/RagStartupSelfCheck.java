@@ -75,15 +75,21 @@ public class RagStartupSelfCheck implements ApplicationRunner {
 
     private void checkNonPrivilegedRole(List<String> failures) {
         try {
+            String role = jdbcTemplate.queryForObject(
+                    "SELECT current_user", String.class);
             Boolean superUser = jdbcTemplate.queryForObject(
                     "SELECT rolsuper FROM pg_roles WHERE rolname = current_user", Boolean.class);
             Boolean bypassRls = jdbcTemplate.queryForObject(
                     "SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user", Boolean.class);
             if (Boolean.TRUE.equals(superUser)) {
-                failures.add("连接角色为超级用户（会绕过 RLS，租户隔离失效）");
+                failures.add("连接角色 " + role + " 是超级用户（会绕过 RLS，租户隔离失效）"
+                        + " → 运行时必须改用非特权应用角色（NOSUPERUSER + NOBYPASSRLS），"
+                        + " 如 rag_app；超管角色仅可用于建角色/跑迁移/灌夹具");
             }
             if (Boolean.TRUE.equals(bypassRls)) {
-                failures.add("连接角色具有 BYPASSRLS（会绕过 RLS，租户隔离失效）");
+                failures.add("连接角色 " + role + " 具有 BYPASSRLS（会绕过 RLS，租户隔离失效）"
+                        + " → 运行时必须改用非特权应用角色（NOSUPERUSER + NOBYPASSRLS），"
+                        + " 如 rag_app；BYPASSRLS 角色仅可用于建角色/跑迁移/灌跨租户夹具");
             }
         } catch (Exception e) {
             failures.add("检查连接角色权限失败：" + e.getMessage());

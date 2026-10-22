@@ -9,6 +9,10 @@ spring:
     username: ${RAG_PG_USERNAME:rag_app}
     password: ${RAG_PG_PASSWORD:rag_app}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      # ⚠️ 同 rag-bootstrap：RAG 对象在独立 schema `rag`，应用 SQL 用未限定表名，
+      #    每条连接必须把 search_path 指向 rag，否则解析不到对象。
+      connection-init-sql: SET search_path TO rag, public
   flyway:
     # 迁移脚本位于 rag-infrastructure 的 classpath:db/migration（V1/V2）。
     # 与 rag-bootstrap 共用同一 flyway_schema_history（不指定 schemas，沿用默认），
@@ -16,6 +20,9 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: false
+    # ⚠️ 历史表固定在 public（与 bootstrap 一致）：连接 search_path 首元素为 rag，
+    #    不显式指定会误定位到 rag schema 而重复执行已应用的迁移。
+    default-schema: public
   jdbc:
     template:
       fetch-size: 100

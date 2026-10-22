@@ -345,9 +345,28 @@ public class WorkerLoopConfig {
     public OutboxRelay outboxRelay(TenantOutboxPublishers publishers,
                                    BackpressureController backpressure,
                                    @Value("${agent.worker.relay-interval-ms}")
-                                           String relayIntervalMs) {
-        return new OutboxRelay(publishers.publishers(), backpressure,
+                                           String relayIntervalMs,
+                                   @Value("${agent.worker.relay-enabled:true}")
+                                           String relayEnabled) {
+        OutboxRelay relay = new OutboxRelay(publishers.publishers(), backpressure,
                 Duration.ofMillis(WorkerPolicy.requireRelayIntervalMs(relayIntervalMs)));
+        // ⚠️⚠️ 必须在这里启动（P4-D18 修复）：
+        //   OutboxRelay 是**手动生命周期**（start()/stop()），没有
+        //   @PostConstruct、没有 SmartLifecycle —— 只把它注册成 @Bean
+        //   不会跑起任何线程。
+        //   后果：outbox_event 永远停在 PENDING，没人往
+        //   agent_message_queue 投递，PgQueueListener 只能空转，
+        //   Run 永远停在 QUEUED。而系统表面**完全正常**：
+        //   API 返回 201、无报错、无告警。
+        //   ——这正是本类文件头「关闭断链的第二层」要防的形态，
+        //   而断链恰恰在这里发生了。
+        if (Boolean.parseBoolean(relayEnabled)) {
+            relay.start();
+        } else {
+            log.info("Outbox 中继未启动（agent.worker.relay-enabled=false）——"
+                    + "⚠️ 此时消息不会被发布，仅供测试装配场景使用");
+        }
+        return relay;
     }
 
     /**

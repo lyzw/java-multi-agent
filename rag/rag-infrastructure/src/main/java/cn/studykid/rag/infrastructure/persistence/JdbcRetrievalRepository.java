@@ -55,6 +55,13 @@ import cn.studykid.rag.ports.RetrievalPort;
  * 本类不自行解析令牌、不硬编码租户。SQL 中显式写 {@code c.tenant_id = rag_current_tenant()}
  * 仅用于提示优化器，<b>真正隔离由 RLS FORCE 保证</b>。
  *
+ * <p><b>⚠️ source 的关联路径</b>：V1 的三层模型是
+ * {@code source（作品）→ document（载体）→ chunk（片段）}，
+ * {@code rag_chunk} <b>没有 source_id 列</b>，来源须经 {@code rag_document} 中转：
+ * {@code JOIN rag_document doc ON c.document_id = doc.document_id
+ * JOIN rag_source src ON doc.source_id = src.source_id}。
+ * 写 {@code c.source_id} 会得到 {@code column c.source_id does not exist}。
+ *
  * <p><b>⚠️ 诚实边界</b>：本实现依赖的 {@link EmbeddingPort} 在生产中是 BGE-M3，
  * 当前由 {@code LocalDeterministicEmbeddingPort}（确定性占位）提供——
  * 见该类的标注。在真实模型接入前，稠密通道的<b>语义相关性</b>不可用于生产判定，
@@ -125,7 +132,8 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 SELECT %s
                 FROM rag_chunk c
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
-                JOIN rag_source src ON c.source_id = src.source_id AND c.tenant_id = src.tenant_id
+                JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
+                JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
                   AND src.ver_status = 'VERIFIED'
                   AND c.kp_ids @> CAST(ARRAY[?::uuid] AS uuid[])
@@ -145,8 +153,8 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 FROM rag_knowledge_point
                 WHERE tenant_id = rag_current_tenant() AND kp_id = ?::uuid
                 """;
-        UUID[] prereqs = jdbcTemplate.queryForObject(
-                prereqSql, (rs, i) -> rs.getObject("prerequisites", UUID[].class), knowledgePointId);
+        UUID[] prereqs = queryForUuidArray(
+                jdbcTemplate, prereqSql, knowledgePointId);
         if (prereqs == null || prereqs.length == 0) {
             return List.of();
         }
@@ -162,7 +170,8 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 SELECT DISTINCT %s
                 FROM rag_chunk c
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
-                JOIN rag_source src ON c.source_id = src.source_id AND c.tenant_id = src.tenant_id
+                JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
+                JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
                   AND src.ver_status = 'VERIFIED'
                   AND c.kp_ids && ?::uuid[]
@@ -179,7 +188,8 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 SELECT %s
                 FROM rag_chunk c
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
-                JOIN rag_source src ON c.source_id = src.source_id AND c.tenant_id = src.tenant_id
+                JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
+                JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
                   AND src.ver_status = 'VERIFIED'
                   AND c.document_id = ?
@@ -228,8 +238,10 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                      ON c.chunk_id = e.chunk_id AND c.tenant_id = e.tenant_id
                 JOIN rag_edition ed
                      ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
+                JOIN rag_document doc
+                     ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src
-                     ON c.source_id = src.source_id AND c.tenant_id = src.tenant_id
+                     ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
                   AND src.ver_status = 'VERIFIED'
                 ORDER BY e.embedding <=> ?::vector
@@ -255,8 +267,10 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 FROM rag_chunk c
                 JOIN rag_edition ed
                      ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
+                JOIN rag_document doc
+                     ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src
-                     ON c.source_id = src.source_id AND c.tenant_id = src.tenant_id
+                     ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
                   AND src.ver_status = 'VERIFIED'
                   AND to_tsvector('simple', c.text_jieba) @@ to_tsquery('simple', ?)
@@ -301,7 +315,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         String exerciseNo = rs.getString("exercise_no");
         int charStart = rs.getInt("char_start");
         int charEnd = rs.getInt("char_end");
-        List<String> kpIds = arrayToStrings(rs.getObject("kp_ids", UUID[].class));
+        List<String> kpIds = uuidArrayToStrings(rs, "kp_ids");
         String exerciseRef = rs.getString("exercise_ref");
         String contentHash = rs.getString("content_hash");
         EditionCoordinate edition = toEdition(rs);
@@ -321,7 +335,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         //    统一交给 arrayToStrings(Object[]) 转字符串——
         //    若把 UUID[] 列按 String[].class 读，即使能编过，运行期也会直接抛类型错。
         List<String> aliases = arrayToStrings(rs.getObject("aliases", String[].class));
-        List<String> prerequisites = arrayToStrings(rs.getObject("prerequisites", UUID[].class));
+        List<String> prerequisites = uuidArrayToStrings(rs, "prerequisites");
         // ⚠️ facets 为 JSONB；本实现不引入 JSON 解析依赖，
         //    resolveKnowledgePoints 路径不消费 facets（编排层只用 canonicalName/aliases/id），
         //    故此处返回空列表。接入 Jackson 后可补全（见 RAG-D09 R3-1 评测集需求）。
@@ -358,6 +372,55 @@ public class JdbcRetrievalRepository implements RetrievalPort {
             }
         }
         return result;
+    }
+
+    /**
+     * 读取 PostgreSQL 的 {@code uuid[]} 列。
+     *
+     * <p>⚠️ <b>不能用 {@code rs.getObject(col, UUID[].class)}</b>：pgjdbc 不支持
+     * {@code _uuid → UUID[]} 转换，会抛
+     * {@code conversion to class [Ljava.util.UUID; from _uuid not supported}。
+     * 必须经 {@link java.sql.Array#getArray()} 取原始 {@code Object[]}（元素已是 UUID）。
+     *
+     * @param rs     结果集
+     * @param column 列名
+     * @return UUID 的字符串形式列表（空数组返回空列表）
+     */
+    private static List<String> uuidArrayToStrings(ResultSet rs, String column) throws SQLException {
+        java.sql.Array sqlArray = rs.getArray(column);
+        if (sqlArray == null) {
+            return List.of();
+        }
+        Object raw = sqlArray.getArray();
+        if (!(raw instanceof Object[])) {
+            return List.of();
+        }
+        return arrayToStrings((Object[]) raw);
+    }
+
+    /** 读取单列 {@code uuid[]} 查询结果（同样避开 pgjdbc 的 UUID[] 转换限制）。 */
+    private static UUID[] queryForUuidArray(JdbcTemplate jdbcTemplate, String sql, Object... args) {
+        List<UUID[]> result = jdbcTemplate.query(sql, (rs, i) -> {
+            java.sql.Array arr = rs.getArray(1);
+            if (arr == null) {
+                return null;
+            }
+            Object raw = arr.getArray();
+            if (!(raw instanceof Object[])) {
+                return null;
+            }
+            Object[] items = (Object[]) raw;
+            List<UUID> ids = new ArrayList<>(items.length);
+            for (Object o : items) {
+                if (o instanceof UUID) {
+                    ids.add((UUID) o);
+                } else if (o != null) {
+                    ids.add(UUID.fromString(String.valueOf(o)));
+                }
+            }
+            return ids.toArray(new UUID[0]);
+        }, args);
+        return result.isEmpty() ? null : result.get(0);
     }
 
     // ---------------------------------------------------------------------

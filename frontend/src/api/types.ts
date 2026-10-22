@@ -424,3 +424,153 @@ export interface ApplyOverrideRequest {
   /** CHG 变更理由，后端要求 ≥10 字 */
   reason: string
 }
+
+/* ── RAG 检索增强（rag 模块 /api/v1/retrieval）──────────────
+ *
+ * ⚠️ 严格对齐后端 `rag-api` 实测契约（RAG-D02 §6 / RAG-D00 §2.8）。
+ * 后端当前**只暴露检索端点**，生成端点（/api/v1/retrieval/generate）
+ * 尚未实现 —— 前端先把契约定下来，便于后端零改动点亮，
+ * 接入前调用会得到 404/501，页面按「生成能力未接入」诚实呈现。
+ */
+
+/**
+ * 检索模式（对齐后端 `RetrievalRequest.RetrievalMode` 枚举）。
+ * ⚠️ 取值必须与后端一致：EXPLAIN=讲解 / SOLVE=解题 / VERIFY=核对 / OVERVIEW=概览。
+ * 模式是**检索期过滤条件**而非生成期提示（防泄题第一道闸门）。
+ */
+export type RagRetrievalMode = 'EXPLAIN' | 'SOLVE' | 'VERIFY' | 'OVERVIEW'
+
+/**
+ * 版本检索范围模式（对齐后端 `EditionScope.Mode`）。
+ * STRICT=严格锁定当前版本；PREFERRED_WITH_FALLBACK=优先本版可回退同册；CROSS_EDITION=跨版本。
+ */
+export type RagScopeMode = 'STRICT' | 'PREFERRED_WITH_FALLBACK' | 'CROSS_EDITION'
+
+/**
+ * 教材版本坐标系（对齐后端 `EditionDto`：五轴字符串以**展示名**传入）。
+ *
+ * ⚠️ 五轴全部必填且必须命中后端枚举展示名，否则后端 400
+ *    （控制器负责把展示名映射到领域枚举，不匹配即 400）。
+ *    subject/grade/term/publisher 用下方 RagEditionOptions 的展示名；
+ *    revisionCode 为自由文本版次（如 "2024"）。
+ */
+export interface RagEdition {
+  subject: string
+  grade: string
+  term: string
+  publisher: string
+  revisionCode: string
+}
+
+/** POST /api/v1/retrieval 请求体（对齐 `RetrievalRequestDto`）。 */
+export interface RagRetrievalRequest {
+  /** 用户问题（后端 @NotBlank） */
+  query: string
+  /** 检索模式（后端 @NotNull） */
+  mode: RagRetrievalMode
+  /** 版本坐标系（后端 @NotNull，五轴全必填） */
+  edition: RagEdition
+  /** 版本检索范围；可空，后端缺省按 STRICT 处理 */
+  scopeMode?: RagScopeMode | null
+  /** 已知知识点 ID → 走知识点聚合（解决碎片化召回） */
+  knowledgePointId?: string | null
+  /** ⚠️ 与 edition 五轴重复，本项目不另传，恒为 null，避免语义冲突 */
+  subject?: string | null
+  /** ⚠️ 与 edition 五轴重复，本项目不另传，恒为 null */
+  grade?: string | null
+  /** 召回数量（后端 @Min(1) @Max(50)） */
+  topK: number
+}
+
+/** 单个召回片段（对齐 `RetrievalResultDto.HitDto`）。 */
+export interface RagRetrievalHit {
+  /** 片段 ID */
+  chunkId: string
+  /** 片段正文 */
+  text: string
+  /** 片段角色（EXPLANATION / EXERCISE_HINT / EXERCISE_ANSWER …） */
+  role: string
+  /** 综合得分 0~1（低于门禁已被编排层过滤） */
+  score: number
+  /** 版本展示名 */
+  edition: string
+  /** 面向学生的引用文本（册/章/页/题） */
+  locator: string
+  /** 召回通道（稠密/词法/知识点聚合…） */
+  channel: string
+  /** 命中原因 */
+  reason: string
+}
+
+/** POST /api/v1/retrieval 响应体（对齐 `RetrievalResultDto`）。 */
+export interface RagRetrievalResponse {
+  hits: RagRetrievalHit[]
+  /** 是否检测到版本不匹配（前端应显式提示差异） */
+  versionMismatchDetected: boolean
+  /** 答案类内容是否被抑制（讲解模式下应为 true） */
+  answerContentSuppressed: boolean
+  /** 主版本展示名 */
+  primaryEdition: string
+}
+
+/**
+ * 生成回答请求（前端约定，**待后端实现** /api/v1/retrieval/generate）。
+ *
+ * ⚠️ 后端尚未提供该端点。前端先把契约定下来：以检索召回的片段 ID 作为
+ *    Grounding 依据，让模型在引用基础上生成讲解，避免「抄答案」与幻觉。
+ *    接入前调用会得到 404/501，页面按「生成能力未接入」诚实呈现，不伪装故障。
+ */
+export interface RagGenerateRequest {
+  query: string
+  mode: RagRetrievalMode
+  edition: RagEdition
+  /** 检索阶段召回的片段 ID，作为生成依据 */
+  hitIds: string[]
+}
+
+/** 生成回答响应（前端约定，待后端实现）。 */
+export interface RagGenerateResponse {
+  /** 模型生成的讲解/回答正文 */
+  answer: string
+  /** 生成时实际引用的片段（与检索命中同源，便于回溯） */
+  citations: RagRetrievalHit[]
+}
+
+/**
+ * 教材版本可选项（展示名）。
+ *
+ * ⚠️ 从后端 `rag-core` 的 `EditionCoordinate` 枚举逐项提取，
+ *    **不得**改成自由输入（否则「人教版」「人教」会被当成不同版本导致漏召回）。
+ *    后端 `RagRetrievalController.toCoordinate` 用 `displayName()` 精确匹配。
+ */
+export const RAG_SUBJECTS = [
+  '数学', '语文', '英语', '物理', '化学',
+  '生物', '历史', '地理', '道法',
+] as const
+
+export const RAG_GRADES = [
+  '一年级', '二年级', '三年级', '四年级', '五年级', '六年级',
+  '七年级', '八年级', '九年级',
+  '高一', '高二', '高三',
+] as const
+
+export const RAG_TERMS = ['上册', '下册', '全一册'] as const
+
+export const RAG_PUBLISHERS = [
+  '人教版', '苏教版', '北师大版', '华师大版', '鲁教版', '鄂教版', '其他',
+] as const
+
+/** 检索模式的可读标签（界面展示用，值仍用枚举原名）。 */
+export const RAG_MODE_LABELS: Record<RagRetrievalMode, string> = {
+  EXPLAIN: '讲解',
+  SOLVE: '解题',
+  VERIFY: '核对',
+  OVERVIEW: '概览',
+}
+
+/** 版本范围模式的可读标签。 */
+export const RAG_SCOPE_LABELS: Record<RagScopeMode, string> = {
+  STRICT: '严格锁定当前版本',
+  PREFERRED_WITH_FALLBACK: '优先本版，可回退同册',
+  CROSS_EDITION: '跨版本对比',
+}

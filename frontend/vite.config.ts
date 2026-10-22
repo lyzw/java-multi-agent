@@ -21,7 +21,15 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // /api 与 /actuator 转发到后端，与生产同源部署保持一致
+      // ⚠️ RAG 模块是**独立部署**的 Spring 应用（rag-bootstrap，默认端口 RAG_SERVER_PORT）。
+      //    它的端点挂在 /api/v1 下（如 /api/v1/retrieval），与平台后端的 /api 不同源。
+      //    故此处单独代理 /api/v1 到 RAG 目标，且必须**排在 /api 之前**，
+      //    否则会被 /api 的前缀匹配抢走。
+      '/api/v1': {
+        target: process.env.VITE_DEV_RAG_API_TARGET ?? 'http://127.0.0.1:8081',
+        changeOrigin: true,
+      },
+      // /api 与 /actuator 转发到平台后端，与生产同源部署保持一致
       '/api': {
         target: process.env.VITE_DEV_API_TARGET ?? 'http://127.0.0.1:8080',
         changeOrigin: true,

@@ -1,0 +1,13 @@
+{
+  "mcpServers": [
+    {
+      "id": "notify_mcp",
+      "transport": "http",
+      "endpoint": "https://mcp.internal/notify",
+      "trustTier": "internal",
+      "exposedToolAllowlist": ["send_mail", "send_sms"],
+      "connectionRisk": "WRITE_EXTERNAL",
+      "dynamicDiscovery": true
+    }
+  ]
+}

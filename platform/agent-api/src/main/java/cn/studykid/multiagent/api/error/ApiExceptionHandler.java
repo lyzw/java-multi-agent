@@ -13,6 +13,7 @@ import cn.studykid.multiagent.api.config.ConfigOverrideController;
 import cn.studykid.multiagent.api.run.RunController.ErrorResponse;
 import cn.studykid.multiagent.api.security.CurrentPrincipal.UnauthenticatedException;
 import cn.studykid.multiagent.application.config.ConfigTighteningPolicy;
+import cn.studykid.multiagent.application.run.ExecutionSnapshotUnavailableException;
 import cn.studykid.multiagent.core.compliance.ZeroRetentionViolationException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
@@ -44,6 +45,31 @@ public class ApiExceptionHandler {
                 e.principalId(), e.action());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(new ErrorResponse("ACCESS_DENIED", "无权执行该操作"));
+    }
+
+    /**
+     * 执行快照不可解析 → 404（P4-D18）。
+     *
+     * <p><b>⚠️ 为什么必须是 404 而非 500</b>：传入了一个<b>不可用的资源</b>
+     *（Agent 不存在 / 未发布 / 无快照），属客户端错误，且<b>有确定解法</b>——
+     * 换一个已发布的 Agent。报 500 会让前端与运维都以为系统坏了从而反复重试，
+     * 而重试永远不会成功（与本类「拒绝伪装成故障」的核心原则直接矛盾）。
+     *
+     * <p><b>修复前的真实症状</b>：{@code CurrentPrincipal.snapshotId()} 返回随机 UUID
+     * → 外键 {@code run_snapshot_fk} 必然违反 → 冒泡为
+     * {@code IllegalStateException("Run 原子写入失败")} → 被兜底处理器接住 → 500。
+     * 即<b>一个完全正确的 agentId 也返回 500</b>。
+     *
+     * <p>⚠️ 消息固定、不回显 agentId：后者是客户端自己给的，
+     * 回显无信息增益，却会让「枚举 Agent 是否存在」变得容易。
+     */
+    @ExceptionHandler(ExecutionSnapshotUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleSnapshotUnavailable(
+            ExecutionSnapshotUnavailableException e) {
+        log.warn("执行快照不可解析: tenant={}, agentId={}", e.tenantId(), e.agentId());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ErrorResponse("AGENT_SNAPSHOT_UNAVAILABLE",
+                        "该 Agent 尚无可用的已发布版本"));
     }
 
     /**

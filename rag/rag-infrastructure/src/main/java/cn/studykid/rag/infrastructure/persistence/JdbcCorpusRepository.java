@@ -35,7 +35,11 @@ public class JdbcCorpusRepository implements CorpusRepository {
     public void saveChunkAndEmbedding(@NonNull String tenantId, @NonNull Chunk chunk,
                                      @NonNull String editionId, float[] embedding,
                                      @NonNull String embedModel) {
-        jdbcTemplate.update("SELECT set_config('app.tenant_id', ?, true)", tenantId);
+        // ⚠️ 必须用 queryForObject() 而非 update()：set_config 是 SELECT，会返回一行，
+        //    update() 期望「无结果集」，否则抛 DataIntegrityViolation
+        //    （A result was returned when none was expected）。
+        jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                String.class, tenantId);
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk
                     (chunk_id, tenant_id, document_id, edition_id, role, text, page_number,
@@ -61,7 +65,11 @@ public class JdbcCorpusRepository implements CorpusRepository {
     @Transactional
     public void updateJiebaTokens(@NonNull String tenantId, @NonNull String chunkId,
                                   @NonNull String jiebaTokens) {
-        jdbcTemplate.update("SELECT set_config('app.tenant_id', ?, true)", tenantId);
+        // ⚠️ 必须用 queryForObject() 而非 update()：set_config 是 SELECT，会返回一行，
+        //    update() 期望「无结果集」，否则抛 DataIntegrityViolation
+        //    （A result was returned when none was expected）。
+        jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                String.class, tenantId);
         jdbcTemplate.update(
                 "UPDATE rag_chunk SET text_jieba = ? WHERE chunk_id = ?", jiebaTokens, chunkId);
     }
@@ -70,7 +78,11 @@ public class JdbcCorpusRepository implements CorpusRepository {
     @Transactional
     public void upsertEmbedding(@NonNull String tenantId, @NonNull String chunkId,
                                 @NonNull float[] embedding, @NonNull String embedModel) {
-        jdbcTemplate.update("SELECT set_config('app.tenant_id', ?, true)", tenantId);
+        // ⚠️ 必须用 queryForObject() 而非 update()：set_config 是 SELECT，会返回一行，
+        //    update() 期望「无结果集」，否则抛 DataIntegrityViolation
+        //    （A result was returned when none was expected）。
+        jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                String.class, tenantId);
         // ⚠️ ON CONFLICT (chunk_id)：片段已存在则更新向量与模型标识；否则插入。
         //    PK 为 chunk_id（单列），tenant_id 经 rag_current_tenant() 取值，
         //    与 V1 的 RLS WITH CHECK 一致（tenant_id = rag_current_tenant()）。

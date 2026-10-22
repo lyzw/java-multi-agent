@@ -10,6 +10,7 @@ import cn.studykid.multiagent.core.idempotency.IdempotencyDecision;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
 import org.springframework.stereotype.Service;
@@ -32,13 +33,16 @@ import org.springframework.stereotype.Service;
 public class RunCreationService {
 
     private final RunCreationPort runCreation;
+    private final ExecutionSnapshotPort snapshots;
     private final TransactionRunner tx;
     private final Clock clock;
 
     public RunCreationService(@NonNull RunCreationPort runCreation,
+                              @NonNull ExecutionSnapshotPort snapshots,
                               @NonNull TransactionRunner tx,
                               @NonNull Clock clock) {
         this.runCreation = runCreation;
+        this.snapshots = snapshots;
         this.tx = tx;
         this.clock = clock;
     }
@@ -47,13 +51,14 @@ public class RunCreationService {
      * 创建 Run（原子提交）。
      *
      * @param context      认证上下文；<b>tenantId 取自此处，不得取自请求参数</b>
-     * @param snapshotId   执行快照
+     * @param agentId      Agent ID（来自请求体）；执行快照由本用例<b>在写事务内</b>解析
      * @param key          幂等键
      * @param inputPayload 输入载荷（不含可识别学生信息）
      * @return 创建结果
+     * @throws ExecutionSnapshotUnavailableException 该 Agent 未发布或无执行快照（→ 404）
      */
     public @NonNull CreateRunResult createRun(@NonNull TenantContext context,
-                                               @NonNull String snapshotId,
+                                               @NonNull String agentId,
                                                @NonNull IdempotencyKey key,
                                                @NonNull Map<String, Object> inputPayload) {
         RequestDigest digest = RequestDigest.of(inputPayload);
@@ -79,6 +84,18 @@ public class RunCreationService {
         OutboxMessage.assertPayloadSafe(message.toPayload());
 
         return tx.execute(tenantId(context), () -> {
+            // ⚠️⚠️ 快照解析**必须在写事务内**（P4-D18 修复）：
+            //   此前由调用方传入的 snapshotId() 恒为随机 UUID，
+            //   必然违反 run_snapshot_fk → 端点恒 500。
+            //   放事务内解析还顺带消除了「解析完 → Agent 恰好被改版」的窗口：
+            //   解析与写入落在同一个快照下。
+            //   ⚠️ 不可解析属**客户端错误**（4xx），必须显式抛出而非让
+            //   外键以 PSQLException 的形式冒泡成 500。
+            String snapshotId = snapshots
+                    .resolveSnapshotId(context.tenantId(), agentId)
+                    .orElseThrow(() -> new ExecutionSnapshotUnavailableException(
+                            context.tenantId(), agentId));
+
             String actualRunId = runCreation.insertRunAtomically(
                     context.tenantId(),
                     runId,

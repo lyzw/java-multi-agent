@@ -710,3 +710,102 @@
 .editor-panel .field {
   margin: 0;
 }
+
+/* ── 知识检索（RAG 前端模块）────────────────────────────
+ * 纸感体系：靠线与留白分隔，⛔ 不用卡片阴影、不滥用色彩。
+ * 来源卡片用左侧细线标示「这是一条引用」，与批改纸隐喻一致。 */
+
+/* 版本坐标系：一组必填字段，用线分组而非圆角卡片 */
+.rag-edition {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-ctl);
+  padding: var(--s-3) var(--s-4) var(--s-4);
+  margin: 0 0 var(--s-4);
+}
+
+.rag-edition legend {
+  font-size: var(--t-note);
+  font-weight: 600;
+  color: var(--ink-2);
+  padding: 0 var(--s-2);
+}
+
+.rag-edition-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--s-3) var(--s-4);
+}
+
+.rag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+  margin-bottom: var(--s-4);
+}
+
+/* 来源列表：每条引用独立、可回溯 */
+.source-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.source {
+  /* ⚠️ 左侧细线 = 批改纸的引用栏，不是错误红边 */
+  border-left: 2px solid var(--rule-strong);
+  padding-left: var(--s-4);
+}
+
+.source__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+}
+
+.source__no {
+  font-family: var(--font-mono);
+  font-size: var(--t-note);
+  color: var(--ink-3);
+}
+
+.source__score {
+  margin-left: auto;
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+.source__text {
+  margin: 0 0 var(--s-2);
+  /* 引用正文用宋体，与界面区在字体上分开（教材本身是宋体） */
+  font-family: var(--font-hand);
+  font-size: var(--t-body);
+  line-height: 1.85;
+}
+
+.source__meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--s-1) var(--s-3);
+  margin: 0;
+  font-size: var(--t-note);
+}
+
+.source__meta dt {
+  color: var(--ink-3);
+}
+
+.source__meta dd {
+  margin: 0;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+/* 回答正文：普通界面字体，保证长文可读性（非题目区，不用宋体） */
+.answer {
+  font-size: var(--t-body);
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

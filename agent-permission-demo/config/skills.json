@@ -1,0 +1,48 @@
+{
+  "skills": [
+    {
+      "id": "student_profile_reader",
+      "name": "学生画像读取",
+      "declaredTools": ["get_student_profile"],
+      "declaredMcp": [],
+      "riskCeiling": "READ",
+      "paramPolicies": [],
+      "inherits": [],
+      "requiredCaps": ["edu:read"],
+      "namespace": "platform"
+    },
+    {
+      "id": "weakness_recorder",
+      "name": "薄弱点记录",
+      "declaredTools": ["record_weakness"],
+      "declaredMcp": [],
+      "riskCeiling": "WRITE_PROFILE",
+      "paramPolicies": [],
+      "inherits": [],
+      "requiredCaps": ["edu:write_profile"],
+      "namespace": "platform"
+    },
+    {
+      "id": "notifier",
+      "name": "通知",
+      "declaredMcp": [{ "serverId": "notify_mcp", "toolAllowlist": ["send_mail"] }],
+      "declaredTools": [],
+      "riskCeiling": "WRITE_EXTERNAL",
+      "paramPolicies": [],
+      "inherits": [],
+      "requiredCaps": ["notify:send"],
+      "namespace": "platform"
+    },
+    {
+      "id": "composite_tutor",
+      "name": "组合导师（继承 student_profile_reader）",
+      "declaredTools": ["record_weakness"],
+      "declaredMcp": [],
+      "riskCeiling": "WRITE_PROFILE",
+      "paramPolicies": [],
+      "inherits": ["student_profile_reader"],
+      "requiredCaps": ["edu:read", "edu:write_profile"],
+      "namespace": "platform"
+    }
+  ]
+}

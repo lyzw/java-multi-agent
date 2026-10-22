@@ -111,6 +111,14 @@ BEGIN
     --    的任务窗口，也不占限流配额），审计表本就该由保留期作业回收。
     'outbox_event','idempotency_record','rate_limit_bucket',
     'weakness_record','student_profile','consent_withdrawal',
+    -- ⚠️ P4-D18 补：V13 新增的 PG 队列两表（实测遗漏导致 IT 互相污染）
+    --
+    --   漏清的后果不是「测试变慢」而是**后续 IT 直接无法启动**：
+    --   WorkerLoopWiringTest 强制 agent.messaging.mode=rabbitmq，
+    --   而 MessagingSwitchGuard 在启动期检查「该租户是否有 database 模式的残留消息」——
+    --   有就 fail-closed 拒绝启动。报错文案把矛头指向「通道切换残留」，
+    --   与「上轮测试没清库」的真实成因**完全不同**，排查方向被带偏（实测踩到）。
+    'agent_message_queue','agent_message_dead_letter',
     'erasure_certificate','run'
   ] LOOP
     IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=t) THEN

@@ -48,6 +48,9 @@ class RunControllerTest {
     private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
     private static final String TENANT = "6f5d33fc-723e-4f64-beda-9e4435c72691";
 
+    /** 测试用快照 ID（P4-D18：必须是确定的 UUID，不能是随机值）。 */
+    private static final String SNAPSHOT_ID = "9c1d0f2a-4e6b-4a7c-8b3d-1f2e3a4b5c6d";
+
     /** 记录用例是否被调用——用于断言授权失败时未发生写入。 */
     private final AtomicBoolean useCaseInvoked = new AtomicBoolean(false);
     private final AtomicInteger callCount = new AtomicInteger();
@@ -69,7 +72,6 @@ class RunControllerTest {
             public TenantContext context() { return currentContext; }
             @Override public String principalId() { return "user-1"; }
             @Override public String providerId() { return ModelProviders.DEEPSEEK; }
-            @Override public String snapshotId() { return UUID.randomUUID().toString(); }
             @Override public String correlationId() { return "corr-1"; }
         };
         retentionGate = new ZeroRetentionGate(ZeroRetentionRegistry.builder()
@@ -447,12 +449,12 @@ class RunControllerTest {
         private final AtomicBoolean invoked;
 
         CountingRunCreationService(AtomicBoolean invoked) {
-            super(null, new NoopTransactionRunner(), CLOCK);
+            super(null, new FixedSnapshotResolver(SNAPSHOT_ID), new NoopTransactionRunner(), CLOCK);
             this.invoked = invoked;
         }
 
         @Override
-        public CreateRunResult createRun(TenantContext context, String snapshotId,
+        public CreateRunResult createRun(TenantContext context, String agentId,
                                          cn.studykid.multiagent.core.idempotency.IdempotencyKey key,
                                          Map<String, Object> input) {
             invoked.set(true);
@@ -464,14 +466,35 @@ class RunControllerTest {
     private static class ReplayRunCreationService
             extends cn.studykid.multiagent.application.run.RunCreationService {
         ReplayRunCreationService() {
-            super(null, new NoopTransactionRunner(), CLOCK);
+            super(null, new FixedSnapshotResolver(SNAPSHOT_ID), new NoopTransactionRunner(), CLOCK);
         }
 
         @Override
-        public CreateRunResult createRun(TenantContext context, String snapshotId,
+        public CreateRunResult createRun(TenantContext context, String agentId,
                                          cn.studykid.multiagent.core.idempotency.IdempotencyKey key,
                                          Map<String, Object> input) {
             return new CreateRunResult(UUID.randomUUID().toString(), true);
+        }
+    }
+
+    /**
+     * 快照解析替身（P4-D18）。
+     *
+     * <p>⚠️ <b>不得返回随机 UUID</b>：那正是被修复的生产缺陷
+     * （{@code run_snapshot_fk} 必然违反）。替身必须给一个<b>确定的</b>值，
+     * 否则本类会重蹈「替身掩盖了生产缺陷」的覆辙。
+     */
+    private static class FixedSnapshotResolver
+            implements cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort {
+        private final String snapshotId;
+
+        FixedSnapshotResolver(String snapshotId) {
+            this.snapshotId = snapshotId;
+        }
+
+        @Override
+        public java.util.Optional<String> resolveSnapshotId(String tenantId, String agentId) {
+            return java.util.Optional.ofNullable(snapshotId);
         }
     }
 

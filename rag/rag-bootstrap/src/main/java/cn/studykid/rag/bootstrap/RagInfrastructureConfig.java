@@ -4,12 +4,16 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.application.retrieval.RetrievalOrchestrator;
 import cn.studykid.rag.infrastructure.embedding.LocalDeterministicEmbeddingPort;
 import cn.studykid.rag.infrastructure.persistence.JdbcRetrievalRepository;
+import cn.studykid.rag.infrastructure.persistence.JdbcTenantScopedRetrieval;
 import cn.studykid.rag.ports.EmbeddingPort;
 import cn.studykid.rag.ports.RetrievalPort;
+import cn.studykid.rag.ports.TenantScopedRetrieval;
 
 /**
  * RAG 检索链路装配（RAG-D09 G2：可部署检索制品）。
@@ -47,5 +51,25 @@ public class RagInfrastructureConfig {
     @Bean
     public RetrievalOrchestrator retrievalOrchestrator(RetrievalPort retrievalPort) {
         return new RetrievalOrchestrator(retrievalPort, minScore);
+    }
+
+    /**
+     * 事务模板：RLS 租户上下文必须在事务内建立
+     * （{@code set_config('app.tenant_id', ?, true)} 的 is_local 语义）。
+     */
+    @Bean
+    public TransactionTemplate ragTransactionTemplate(PlatformTransactionManager txManager) {
+        return new TransactionTemplate(txManager);
+    }
+
+    /**
+     * 租户作用域检索：HTTP 端点跨进程调用时主平台的事务上下文已丢失，
+     * 必须在此重建租户上下文，否则 RLS 会静默过滤掉全部行（检索恒空）。
+     */
+    @Bean
+    public TenantScopedRetrieval tenantScopedRetrieval(JdbcTemplate jdbcTemplate,
+                                                       TransactionTemplate ragTransactionTemplate,
+                                                       RetrievalOrchestrator retrievalOrchestrator) {
+        return new JdbcTenantScopedRetrieval(jdbcTemplate, ragTransactionTemplate, retrievalOrchestrator);
     }
 }

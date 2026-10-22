@@ -65,20 +65,20 @@ public class JdbcRunEventAppendRepository implements RunEventPort {
                        @NonNull String eventType,
                        @NonNull Map<String, Object> payload) {
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
+            // ⚠️ 自持连接已由 openTenantConnection 置 autoCommit=false；
+            //    此处不再经租约做额外回滚——事务边界由下面的 commit/rollback 收口。
+            lease.connection().setAutoCommit(false);
             try {
-                lease.connection().setAutoCommit(false);
-                try {
-                    long next = nextSequence(lease.connection(), tenantId, runId);
-                    insert(lease.connection(), tenantId, runId, next, eventType, payload);
-                    lease.connection().commit();
-                } catch (SQLException | RuntimeException e) {
-                    lease.connection().rollback();
-                    throw e;
-                } finally {
-                    lease.connection().setAutoCommit(true);
-                }
+                long next = nextSequence(lease.connection(), tenantId, runId);
+                insert(lease.connection(), tenantId, runId, next, eventType, payload);
+                lease.connection().commit();
+            } catch (SQLException | RuntimeException e) {
+                lease.connection().rollback();
+                throw e;
             } finally {
-                lease.rollbackQuietly();
+                // ⚠️ 还原 autoCommit，避免租约 close() 在归还连接前再次显式回滚
+                //    （autoCommit 有效时回滚会抛 WARN —— 这正是日志风暴的根因）。
+                lease.connection().setAutoCommit(true);
             }
         } catch (SQLException e) {
             throw new IllegalStateException("追加 Run 事件失败", e);

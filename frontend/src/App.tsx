@@ -24,6 +24,7 @@ import { RunProgressPage } from '@/pages/RunProgressPage'
 import { RunResultPage } from '@/pages/business/RunResultPage'
 import { ProfilePage } from '@/pages/business/ProfilePage'
 import { RunSearchPage } from '@/pages/business/RunSearchPage'
+import { RagSearchPage } from '@/pages/rag/RagSearchPage'
 import {
   ConfigOverviewPage,
   ConfigRuntimePage,
@@ -72,6 +73,7 @@ function AppRoutes(): JSX.Element {
           <Route path="/runs/:runId" element={<RunProgressPage />} />
           <Route path="/runs/:runId/result" element={<RunResultPage />} />
           <Route path="/profile/:studentId" element={<ProfilePage />} />
+          <Route path="/rag" element={<RequireRole area="rag"><RagSearchPage /></RequireRole>} />
 
           {/* ── 配置（F4，只读骨架）── */}
           <Route path="/config" element={<RequireRole area="config"><ConfigOverviewPage /></RequireRole>} />

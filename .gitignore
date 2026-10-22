@@ -28,6 +28,8 @@ Thumbs.db
 .env
 .env.local
 config.env
+*.env
+*.env.*
 *.pem
 *.key
 secrets/

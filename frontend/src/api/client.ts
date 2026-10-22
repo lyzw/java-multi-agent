@@ -5,6 +5,7 @@
 import {
   normalizeHttpError,
   normalizeNetworkError,
+  makeTimeoutError,
   type NormalizedError,
 } from './errors'
 import { loadSession, clearSession } from '@/auth/tokenStorage'
@@ -31,6 +32,10 @@ import type {
   ApplyOverrideRequest,
   CreateAgentRequest,
   PublishVersionRequest,
+  RagRetrievalRequest,
+  RagRetrievalResponse,
+  RagGenerateRequest,
+  RagGenerateResponse,
 } from './types'
 
 /** 401 时通知上层（SessionProvider）清理会话并跳登录 */
@@ -44,12 +49,17 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler): void {
 
 const BASE = ''
 
-function buildHeaders(hasBody: boolean): Headers {
+function buildHeaders(hasBody: boolean, extra?: Record<string, string>): Headers {
   const headers = new Headers()
   if (hasBody) headers.set('Content-Type', 'application/json')
   const session = loadSession()
   if (session !== null) {
     headers.set('Authorization', `Bearer ${session.accessToken}`)
+  }
+  if (extra !== undefined) {
+    for (const [key, value] of Object.entries(extra)) {
+      headers.set(key, value)
+    }
   }
   return headers
 }
@@ -88,12 +98,15 @@ async function _request<T>(
   path: string,
   init: RequestInit,
   hasBody: boolean,
+  signal?: AbortSignal,
+  extraHeaders?: Record<string, string>,
 ): Promise<T> {
   let response: Response
   try {
     response = await fetch(`${BASE}${path}`, {
       ...init,
-      headers: buildHeaders(hasBody),
+      headers: buildHeaders(hasBody, extraHeaders),
+      ...(signal !== undefined ? { signal } : {}),
     })
   } catch (cause) {
     throw new ApiError(normalizeNetworkError(cause))
@@ -495,5 +508,93 @@ export function clearConfigOverride(key: string): Promise<void> {
     `/api/config/overrides/${encodeURIComponent(key)}`,
     { method: 'DELETE' },
     false,
+  )
+}
+
+/* ── RAG 检索增强（rag 模块 /api/v1）──────────────────── */
+
+/**
+ * RAG 请求的默认超时（毫秒）。
+ *
+ * ⚠️ 检索/生成是**重操作**（向量召回 + 模型推理），后端无 SLA 保证，
+ *    前端必须自带超时而不是无限等待（FE-D3 五态纪律：加载态要有出口）。
+ *    超时会被归一化为 REQUEST_TIMEOUT，页面给出「重试 / 换问题」的下一步。
+ */
+const DEFAULT_RAG_TIMEOUT_MS = 20000
+
+/**
+ * 带超时的请求封装。
+ *
+ * ⛔ 用 `timedOut` 标志判定超时，而非依赖 `fetch` 抛出的 AbortError：
+ *    `_request` 内部已把 fetch 异常归一为 `ApiError(NETWORK_ERROR)`，
+ *    AbortError 不会原样冒泡。用标志能稳定区分「主动超时」与「其他网络失败」。
+ */
+async function requestWithTimeout<T>(
+  path: string,
+  init: RequestInit,
+  hasBody: boolean,
+  timeoutMs: number,
+  extraHeaders?: Record<string, string>,
+): Promise<T> {
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+
+  try {
+    return await _request<T>(path, init, hasBody, controller.signal, extraHeaders)
+  } catch (cause) {
+    if (timedOut) throw new ApiError(makeTimeoutError())
+    throw cause
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * POST /api/v1/retrieval —— 执行检索，返回可溯源的召回片段。
+ *
+ * ⚠️ 严格对齐后端 `RagRetrievalController`（RAG-D02 §6）。
+ *    `edition` 五轴必须命中后端枚举展示名，否则后端 400。
+ *
+ * ⚠️ **必须携带 `X-Tenant-Id`**：检索 SQL 以 `tenant_id = rag_current_tenant()`
+ *    收口，而该函数读的是**会话变量** `app.tenant_id`——只在事务内有效。
+ *    跨进程 HTTP 调用时主平台的事务上下文不会随之而来，
+ *    后端必须显式重建租户上下文；缺失该头后端返回 400（而非静默空结果）。
+ */
+export function retrieveChunks(
+  payload: RagRetrievalRequest,
+  timeoutMs: number = DEFAULT_RAG_TIMEOUT_MS,
+  tenantId?: string,
+): Promise<RagRetrievalResponse> {
+  return requestWithTimeout<RagRetrievalResponse>(
+    '/api/v1/retrieval',
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+    timeoutMs,
+    tenantId === undefined || tenantId.trim() === ''
+      ? undefined
+      : { 'X-Tenant-Id': tenantId.trim() },
+  )
+}
+
+/**
+ * POST /api/v1/retrieval/generate —— 在检索召回基础上生成讲解。
+ *
+ * ⚠️ **后端尚未实现该端点**（rag 模块当前只暴露检索）。
+ *    调用会得到 404/501，由上层按「生成能力未接入」诚实呈现，
+ *    **不要**把它当故障刷红——否则用户会反复刷新等一个不存在的结果。
+ */
+export function generateRagAnswer(
+  payload: RagGenerateRequest,
+  timeoutMs: number = DEFAULT_RAG_TIMEOUT_MS,
+): Promise<RagGenerateResponse> {
+  return requestWithTimeout<RagGenerateResponse>(
+    '/api/v1/retrieval/generate',
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+    timeoutMs,
   )
 }

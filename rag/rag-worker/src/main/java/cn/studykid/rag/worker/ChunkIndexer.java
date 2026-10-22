@@ -84,11 +84,17 @@ public class ChunkIndexer {
         List<PendingChunk> all = new ArrayList<>();
         String lastChunkId = FIRST_CHUNK_ID;
         while (true) {
+            // ⚠️ lastChunkId 在循环末尾被重新赋值，不能被 lambda 捕获（非 effectively final）。
+            //    故在每次迭代开始时取一个 final 游标副本供查询使用。
+            final String cursor = lastChunkId;
             List<PendingChunk> page = transactionTemplate.execute(status -> {
-                jdbcTemplate.update("SELECT set_config('app.tenant_id', ?, true)", tenantId);
+                // ⚠️ 必须用 queryForObject() 而非 update()：set_config 是 SELECT，会返回一行，
+                //    update() 期望「无结果集」，否则抛 DataIntegrityViolation。
+                jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                        String.class, tenantId);
                 return jdbcTemplate.query(PENDING_SQL,
                         (rs, i) -> new PendingChunk(rs.getString("chunk_id"), rs.getString("text")),
-                        lastChunkId, batchSize);
+                        cursor, batchSize);
             });
             if (page == null || page.isEmpty()) {
                 break;

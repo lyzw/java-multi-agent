@@ -213,3 +213,35 @@ export function isAuthError(error: NormalizedError): boolean {
 export function isIdempotencyConflict(error: NormalizedError): boolean {
   return error.status === 409 && error.code === 'IDEMPOTENCY_CONFLICT'
 }
+
+/**
+ * 请求超时（fetch + AbortController 主动中断）。
+ *
+ * ⚠️ 与「网络层失败」（status 0 / NETWORK_ERROR）区分：
+ *    超时是「连上了但没在规定时间内回来」，用户下一步是**重试或换问题**；
+ *    而纯网络失败提示「检查网络」。两者文案不同，混为一谈会误导。
+ */
+export function makeTimeoutError(): NormalizedError {
+  return {
+    status: 0,
+    code: 'REQUEST_TIMEOUT',
+    message: '请求超时，后端没有在规定时间内返回。可以稍后重试，或把问题说得更具体一些。',
+    fieldErrors: {},
+  }
+}
+
+/** 是否为超时错误 */
+export function isTimeoutError(error: NormalizedError): boolean {
+  return error.code === 'REQUEST_TIMEOUT'
+}
+
+/**
+ * 能力未接入（后端**确实没有**该端点，不是故障）。
+ *
+ * ⚠️ 刻意与「错误态」区分（沿用 FE-D3 五态纪律）：
+ *    404/501 表示「生成端点尚未实现」，前端应展示「能力未接入」的冷静提示，
+ *    而非红色故障框——否则用户会反复刷新等一个永远不来的结果。
+ */
+export function isNotImplemented(error: NormalizedError): boolean {
+  return error.status === 404 || error.status === 501
+}

@@ -178,9 +178,12 @@ public class RunController {
         }
 
         // 4) 用例：原子提交 + 幂等判定
+        //    ⚠️ 传入 request.agentId()（P4-D18 修复）：执行快照由用例在写事务内
+        //    解析。此前这里传的是 currentPrincipal.snapshotId()——
+        //    一个恒为随机 UUID 的值，必然违反 run_snapshot_fk → 端点恒 500。
         var result = runCreation.createRun(
                 context,
-                currentPrincipal.snapshotId(),
+                request.agentId(),
                 IdempotencyKey.forRunCreate(request.idempotencyKey()),
                 request.input());
 
@@ -202,8 +205,18 @@ public class RunController {
      * 当前主体信息。
      *
      * <p><b>为何独立于 TenantContext</b>：TenantContext 是领域概念（租户+主体+角色），
-     * 而 providerId / snapshotId / correlationId 是调用侧上下文。
+     * 而 providerId / correlationId 是调用侧上下文。
      * 分开可避免领域层被 API 概念污染。
+     *
+     * <p><b>⚠️ 此处**曾经**有一个 {@code snapshotId()}，已删除（P4-D18）</b>：
+     * 它返回 {@code UUID.randomUUID()}，而 {@code run.snapshot_id} 有外键
+     * {@code run_snapshot_fk → execution_snapshot}，使
+     * {@code POST /api/runs} <b>恒返回 500</b>（实测：任何 agentId 都失败）。
+     * <b>删除而非修正</b>——一个叫「当前主体」却要靠随机数回答
+     * 「该用哪个配置快照」的接口本身就是错误抽象；
+     * 留着它只会诱使下一个接线的人再犯同样的错。
+     * 快照现由 {@code RunCreationService} 在<b>写事务内</b>按
+     * {@code request.agentId()} 解析。
      */
     public interface CurrentPrincipal {
 
@@ -226,8 +239,6 @@ public class RunController {
         @NonNull String principalId();
 
         @NonNull String providerId();
-
-        @NonNull String snapshotId();
 
         @NonNull String correlationId();
     }

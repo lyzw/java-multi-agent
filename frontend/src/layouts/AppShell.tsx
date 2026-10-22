@@ -27,6 +27,7 @@ const NAV: NavGroup[] = [
       { to: '/', label: '工作台' },
       { to: '/runs/new', label: '发起辅导' },
       { to: '/runs', label: '检索记录' },
+      { to: '/rag', label: '知识检索' },
     ],
   },
   {

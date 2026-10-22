@@ -195,9 +195,23 @@ public class ApplicationConfiguration {
     @Bean
     public RunCreationService runCreationService(
             cn.studykid.multiagent.ports.persistence.RunCreationPort port,
+            cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort snapshots,
             RunCreationService.TransactionRunner tx,
             Clock clock) {
-        return new RunCreationService(port, tx, clock);
+        return new RunCreationService(port, snapshots, tx, clock);
+    }
+
+    /**
+     * 执行快照解析端口（P4-D18）。
+     *
+     * <p>⚠️ <b>不可加 {@code @Repository}</b>：与 {@code JdbcRateLimiter} 同理，
+     * 装配统一归本类，避免被测试切片的组件扫描意外拾取。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort executionSnapshotPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcExecutionSnapshotResolver(
+                dataSource);
     }
 
     /**
@@ -546,13 +560,6 @@ public class ApplicationConfiguration {
                 //    未在零保留注册表登记的供应商会被闸门拒绝，不会被错误放行。
                 //    已知限制：P2-D05 §6 L4。
                 return ModelProviders.DEEPSEEK;
-            }
-
-            @Override
-            public String snapshotId() {
-                // ⚠️ 每次随机生成 → 同一幂等键重放时快照不一致。
-                //    已知限制：P2-D05 §6 L5。
-                return UUID.randomUUID().toString();
             }
 
             @Override

@@ -79,13 +79,31 @@ class RetrievalRepositoryIT {
 
     @BeforeEach
     void setup() {
-        String url = System.getenv(PG_URL_ENV);
+        String url = withRagSearchPath(System.getenv(PG_URL_ENV));
         DriverManagerDataSource ds = new DriverManagerDataSource(url);
         jdbcTemplate = new JdbcTemplate(ds);
         transactionTemplate = new TransactionTemplate(
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds));
         repository = new JdbcRetrievalRepository(jdbcTemplate, embedder);
         seedTenantT();
+    }
+
+    /**
+     * 给 JDBC URL 补上 {@code search_path=rag, public}。
+     *
+     * <p>⚠️ 必须与应用侧一致：RAG 全部对象位于独立 schema {@code rag}（V1 迁移创建），
+     * 而应用 SQL 用的是<b>未限定表名</b>。生产应用通过
+     * {@code spring.datasource.hikari.connection-init-sql=SET search_path TO rag, public}
+     * 设置（见 rag-bootstrap / rag-worker 的 application.yml）；
+     * 本 IT 自建 {@link DriverManagerDataSource}，没有 init-sql 机制，
+     * 因此改用 PostgreSQL 的 {@code options=-c search_path=...} 在连接建立时生效。
+     */
+    private static String withRagSearchPath(String url) {
+        if (url == null || url.isBlank() || url.contains("search_path=")) {
+            return url;
+        }
+        String sep = url.contains("?") ? "&" : "?";
+        return url + sep + "options=-c%20search_path%3Drag%2Cpublic";
     }
 
     // ---------------------------------------------------------------------
@@ -131,14 +149,17 @@ class RetrievalRepositoryIT {
 
     private List<ScoredChunk> searchAs(String tenantId, RetrievalRequest req) {
         return transactionTemplate.execute(status -> {
-            jdbcTemplate.update("SELECT set_config('app.tenant_id', ?, true)", tenantId);
+            // ⚠️ set_config 是 SELECT（返回一行），必须用 queryForObject() 而非 update()。
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
             return repository.search(req);
         });
     }
 
     private void seedTenantT() {
         transactionTemplate.execute(status -> {
-            jdbcTemplate.update("SELECT set_config('app.tenant_id', ?, true)", T);
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, T);
             insertTenant(T, "t-tenant");
             insertSource(S, T, "人教版", "ISBN-T");
             insertEdition(E, T, S, "人教版");
@@ -156,7 +177,8 @@ class RetrievalRepositoryIT {
 
     private void seedTenantU() {
         transactionTemplate.execute(status -> {
-            jdbcTemplate.update("SELECT set_config('app.tenant_id', ?, true)", U);
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, U);
             insertTenant(U, "u-tenant");
             insertSource(S2, U, "人教版", "ISBN-U");
             insertEdition(E3, U, S2, "人教版");
@@ -168,8 +190,9 @@ class RetrievalRepositoryIT {
     }
 
     private void insertTenant(String tenantId, String slug) {
+        // ⚠️ UUID 列必须显式 ::uuid：PostgreSQL 不做 varchar → uuid 的隐式转换。
         jdbcTemplate.update(
-                "INSERT INTO rag_tenant (tenant_id, id, slug, name) VALUES (?, ?, ?, 'fixture') "
+                "INSERT INTO rag_tenant (tenant_id, id, slug, name) VALUES (?::uuid, ?::uuid, ?, 'fixture') "
                         + "ON CONFLICT (tenant_id) DO NOTHING",
                 tenantId, tenantId, slug);
     }
@@ -178,7 +201,7 @@ class RetrievalRepositoryIT {
         jdbcTemplate.update(
                 "INSERT INTO rag_source (source_id, tenant_id, source_type, title, publisher, "
                         + "trust_tier, ver_status, ver_evidence, verified_at, license_status, isbn) "
-                        + "VALUES (?, ?, 'TEXTBOOK', 'fixture', ?, 'OFFICIAL_PUBLISHER', 'VERIFIED', "
+                        + "VALUES (?::uuid, ?::uuid, 'TEXTBOOK', 'fixture', ?, 'OFFICIAL_PUBLISHER', 'VERIFIED', "
                         + "'fixture', now(), 'LICENSED', ?) "
                         + "ON CONFLICT (tenant_id, source_id) DO NOTHING",
                 sourceId, tenantId, publisher, isbn);
@@ -187,7 +210,7 @@ class RetrievalRepositoryIT {
     private void insertEdition(String editionId, String tenantId, String sourceId, String publisher) {
         jdbcTemplate.update(
                 "INSERT INTO rag_edition (edition_id, tenant_id, source_id, subject, grade, term, "
-                        + "publisher, revision_code) VALUES (?, ?, ?, '数学', '八年级', '上册', ?, '2024修订') "
+                        + "publisher, revision_code) VALUES (?::uuid, ?::uuid, ?::uuid, '数学', '八年级', '上册', ?, '2024修订') "
                         + "ON CONFLICT (tenant_id, edition_id) DO NOTHING",
                 editionId, tenantId, sourceId, publisher);
     }
@@ -195,7 +218,7 @@ class RetrievalRepositoryIT {
     private void insertDocument(String documentId, String tenantId, String sourceId, String editionId) {
         jdbcTemplate.update(
                 "INSERT INTO rag_document (document_id, tenant_id, source_id, edition_id, title, "
-                        + "parse_status) VALUES (?, ?, ?, ?, 'fixture', 'CHUNKED') "
+                        + "parse_status) VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, 'fixture', 'CHUNKED') "
                         + "ON CONFLICT (tenant_id, document_id) DO NOTHING",
                 documentId, tenantId, sourceId, editionId);
     }
@@ -206,13 +229,14 @@ class RetrievalRepositoryIT {
         jdbcTemplate.update(
                 "INSERT INTO rag_chunk (chunk_id, tenant_id, document_id, edition_id, role, text, "
                         + "page_number, section_path, char_start, char_end, kp_ids, content_hash, "
-                        + "embed_model, index_generation) VALUES (?, ?, ?, ?, ?::rag_chunk_role, ?, "
+                        + "embed_model, index_generation) VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, "
+                        + "?::rag_chunk_role, ?, "
                         + "45, 'chapter', 0, ?, '{}'::uuid[], 'h', 'local-deterministic-v1', 1) "
                         + "ON CONFLICT (tenant_id, chunk_id) DO NOTHING",
                 chunkId, tenantId, documentId, editionId, role, text, text.length());
         jdbcTemplate.update(
                 "INSERT INTO rag_chunk_embedding (chunk_id, tenant_id, index_generation, embed_model, "
-                        + "embedding) VALUES (?, ?, 1, 'local-deterministic-v1', ?::vector) "
+                        + "embedding) VALUES (?::uuid, ?::uuid, 1, 'local-deterministic-v1', ?::vector) "
                         + "ON CONFLICT (chunk_id) DO NOTHING",
                 chunkId, tenantId, vec);
     }

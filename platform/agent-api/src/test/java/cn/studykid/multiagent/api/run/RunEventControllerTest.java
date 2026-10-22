@@ -320,11 +320,6 @@ class RunEventControllerTest {
             }
 
             @Override
-            public String snapshotId() {
-                return "snap-1";
-            }
-
-            @Override
             public String correlationId() {
                 return "corr-1";
             }

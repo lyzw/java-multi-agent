@@ -38,6 +38,17 @@ public class LocalDeterministicDocumentParserPort implements DocumentParserPort 
     /** 占位实现不重建物理页码，恒置 1（真实解析器须给出真实页码）。 */
     private static final int PLACEHOLDER_PAGE = 1;
 
+    /**
+     * 标题行启发式：行首「第…章/节/课/目/部/分」。
+     *
+     * <p>⚠️ 必须用 {@link java.util.regex.Matcher#find()} 而非
+     * {@code String.matches()}：后者要求<b>整串匹配</b>，
+     * 而标题行后面还有正文（如「第1章 一次函数」之后有「 一次函数」），
+     * 用 matches() 会永远匹配不上，标题启发式形同虚设。
+     */
+    private static final java.util.regex.Pattern HEADING_PATTERN =
+            java.util.regex.Pattern.compile("^第.{1,6}[章节节目部分]");
+
     @Override
     public @NonNull ParsedDocument parse(@NonNull String documentId, @NonNull byte[] content) {
         String text = new String(content, StandardCharsets.UTF_8);
@@ -75,7 +86,7 @@ public class LocalDeterministicDocumentParserPort implements DocumentParserPort 
      */
     private static BlockType classify(@NonNull String line) {
         String trimmed = line.trim();
-        if (trimmed.startsWith("#") || trimmed.matches("^第.{1,6}[章节节目部分]")) {
+        if (trimmed.startsWith("#") || HEADING_PATTERN.matcher(trimmed).find()) {
             return BlockType.HEADING;
         }
         if (isAnswerZone(trimmed)) {

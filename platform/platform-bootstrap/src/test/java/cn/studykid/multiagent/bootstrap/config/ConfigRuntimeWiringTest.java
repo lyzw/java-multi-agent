@@ -51,6 +51,13 @@ import cn.studykid.multiagent.ports.tool.ToolHandler;
         webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @ActiveProfiles("test")
 @TestPropertySource(properties = {
+        // ⚠️ P4-D18：关闭 Outbox 中继。
+        //    本类的断言目标与中继无关，而中继一旦启动会把**其它用例**
+        //    遗留的 PENDING outbox 事件投进 agent_message_queue，
+        //    随后 MessagingSwitchGuard 因「通道切换残留」fail-closed，
+        //    使后续 rabbitmq 模式用例无法启动上下文——
+        //    症状指向通道配置，真因是跨用例的数据库共享。
+        "agent.worker.relay-enabled=false",
         "spring.datasource.url=${IT_PG_URL}",
         "spring.datasource.username=${IT_PG_USER:app_agent}",
         "spring.datasource.password=${IT_PG_PASSWORD:}",

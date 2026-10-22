@@ -1,0 +1,9 @@
+{
+  "t-1001": {
+    "homework_tutor": {
+      "removeSkills": ["weakness_recorder"],
+      "removeTools": [],
+      "lowerRiskCeiling": {}
+    }
+  }
+}

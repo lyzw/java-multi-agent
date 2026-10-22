@@ -116,6 +116,36 @@ class WorkerLoopWiringTest {
                 .isNotNull();
     }
 
+        /**
+         * P4-D18 回归：<b>Bean 存在 ≠ 线程在跑</b>。
+         *
+         * <p>⚠️ <b>这条断链与 C-1 形似而实质相反</b>：
+         * {@code OutboxRelay} 是<b>手动生命周期</b>（{@code start()}/{@code stop()}），
+         * 既无 {@code @PostConstruct} 也非 {@code SmartLifecycle}。
+         * 只把它注册成 Bean，<b>不会跑起任何线程</b>——
+         * 此时 C-1 完全通过，而 {@code outbox_event} 永远停在 PENDING、
+         * Run 永远停在 QUEUED，且系统表面无任何报错。
+         *
+         * <p>实测症状：{@code POST /api/runs} 返回 201、无告警，
+         * 但 {@code agent_message_queue} 恒空、Run 永不推进。
+         */
+        @Test
+        @DisplayName("⚠️⚠️ C-1b OutboxRelay 的轮询线程必须已启动（P4-D18 回归）")
+        void relayThreadIsActuallyRunning() {
+        assertThat(ctx.getBean(OutboxRelay.class))
+                .as("Bean 应存在").isNotNull();
+
+        boolean relayThreadAlive = Thread.getAllStackTraces().keySet().stream()
+                .anyMatch(t -> "outbox-relay".equals(t.getName()) && t.isAlive());
+
+        assertThat(relayThreadAlive)
+                .as("⚠️⚠️ 未发现存活的 outbox-relay 线程 —— OutboxRelay.start() 没被调用。"
+                        + "Bean 存在只保证「对象被创建」，不保证「它在轮询」；"
+                        + "缺这一步时 outbox_event 永远 PENDING、Run 永远 QUEUED，"
+                        + "而 API 照常返回 201，系统表面完全正常")
+                .isTrue();
+    }
+
         @Test
         @DisplayName("⚠️⚠️ C-2 租户发布器清单存在，且每个发布器持有真实的 MessageSender")
         void tenantPublishersHoldRealSender() {
