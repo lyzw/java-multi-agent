@@ -185,15 +185,18 @@ agent:
   messaging:
     # 全局通道。当前默认 database：**暂时以异步（数据库队列）替代 RabbitMQ**，
     # RabbitMQ 通道**完整保留**，改一个键即可切回。
+    # ⚠️ 支持环境变量覆盖（部署时不用改文件）：
+    #    AGENT_MESSAGING_MODE=rabbitmq 即切回 RabbitMQ 通道。
+    #    ⚠️ 传空值 = 拒绝启动（fail-closed），不会回落默认。
     # ⚠️ 切换不是「随时热切」：切换前必须**先排空旧通道**，
     #    否则旧通道里的消息会滞留到无人消费。装配期会做残留检查并拒绝启动
     #    （见 MessagingSwitchGuard），把「静默滞留」变成「明确报错」。
-    mode: "database"
+    mode: "${AGENT_MESSAGING_MODE:database}"
     # 租户覆盖（灰度）：形如 t-b=database,t-c=rabbitmq
     # ⚠️ 留空 = 全部租户跟随全局模式。
     # ⚠️ 模式值非法 → **拒绝启动**（灰度静默失效比报错更危险）；
     #    slug 不在本实例租户清单内 → 启动日志点名告警。
-    tenant-modes: ""
+    tenant-modes: "${AGENT_MESSAGING_TENANT_MODES:}"
     # DB 队列消费轮询间隔（毫秒）。下限 10ms——过小等于忙等，会打满 CPU。
     # 代价：消费延迟 ≈ 该值（与 Outbox 中继同量级）。
     poll-interval-ms: "200"

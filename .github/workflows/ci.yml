@@ -13,6 +13,10 @@
 #   c) integration-test job 无 RabbitMQ，而 RealBrokerEndToEndIT **没有跳过门禁** → 3 项 ERROR 拖垮构建。
 #   三处均已修复；修复依据是本机实跑日志，不是推断。
 #
+# ⚠️ P4-D17：消息通道默认走 **database**（PostgreSQL 队列）→ 本 CI **不需要 RabbitMQ service**。
+#    RabbitMQ 通道完整保留（`AGENT_MESSAGING_MODE=rabbitmq` 即切回），
+#    但 broker 端到端（E-1/E-2/E-3）**仍不在 CI 覆盖范围内**（需另加 rabbitmq service）。
+#
 # 触发：push / PR / 手动。分支 master、develop 受保护，强制要求 CI 通过。
 
 name: CI
@@ -87,15 +91,15 @@ jobs:
           if [ "$failed" -ne 0 ] || [ "$errors" -ne 0 ]; then
             echo "❌ 单元测试存在失败或错误"; exit 1
           fi
-          # 下限取 2026-10-22 本机实测基线（无库场景 503 项）；
+          # 下限取 2026-10-22 本机实测基线（无库场景 523 项）；
           # 低于此说明环境退步（如模块未构建），而不是「代码变好了所以测得少」。
           if [ "$ran" -lt 480 ]; then
-            echo "❌ 仅执行 $ran 项，低于实测基线 503 —— 请检查构建环境"; exit 1
+            echo "❌ 仅执行 $ran 项，低于实测基线 523 —— 请检查构建环境"; exit 1
           fi
-          # 上限：已知需库而跳过的测试 = 4 个装配测试类（整体跳过，JUnit 按类容器记 1 项）
-          #      + 既有库门禁 17 项 = 21（2026-10-22 实测）
+          # 上限：已知需库而跳过的测试 = 4 个装配测试类 + 既有库门禁 + 新增通道 IT
+          #      = 24（2026-10-22 实测；整类被门禁时 JUnit 按类容器记 1 项）
           if [ "$skipped" -gt 60 ]; then
-            echo "❌ 跳过 $skipped 项，超出已知需库集合（21）—— 有测试被误门禁"; exit 1
+            echo "❌ 跳过 $skipped 项，超出已知需库集合（24）—— 有测试被误门禁"; exit 1
           fi
           echo "✅ 单元测试真实执行且无失败"
 
@@ -233,6 +237,10 @@ jobs:
           #    but no password was provided」，表现为 18 个 IT 类整体无法启动。
           IT_PG_ADMIN_USER: postgres
           IT_PG_ADMIN_PASSWORD: ci_only_not_a_secret
+          # ⚠️ P4-D17：消息通道走 **database**（PostgreSQL 队列）——
+          #    故本 job **不需要 RabbitMQ service**。
+          #    显式声明而非依赖 yml 缺省：yml 缺省一改，CI 的行为就静默变了。
+          AGENT_MESSAGING_MODE: database
         # ⚠️ `set -o pipefail` 是**必须**的（2026-10-22 实测补）：
         #    默认 shell 是 `bash -e {0}`，不含 pipefail；`mvn | tee` 的退出码
         #    取自 tee（恒 0）→ **构建失败仍报绿**。实测：bash -e 下 false|tee → 0。
@@ -270,10 +278,10 @@ jobs:
             echo "❌ 有 $skipped 项被跳过 —— IT 未真正执行，构建绿不等于验证过"
             exit 1
           fi
-          # 下限取 2026-10-22 实测基线（781 全绿 / 0 跳过）；低于此说明环境退步
+          # 下限取 2026-10-22 实测基线（810 全绿 / 0 跳过）；低于此说明环境退步
           #（如迁移未执行、角色未建），而不是“代码变好了所以测得少”。
           if [ "$ran" -lt 700 ]; then
-            echo "❌ 仅执行 $ran 项，低于实测基线 781 —— 请检查迁移/角色是否就绪"
+            echo "❌ 仅执行 $ran 项，低于实测基线 810 —— 请检查迁移/角色是否就绪"
             exit 1
           fi
           echo "✅ 集成测试真实执行且零跳过"

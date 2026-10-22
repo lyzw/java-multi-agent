@@ -275,12 +275,16 @@ class PgQueueIT {
         assertThat(adminCount("SELECT count(*) FROM agent_message_queue")).isZero();
 
         // ② RETRY → 退回 PENDING
+        // ⚠️ 必须先清队列：上一场景的消息若还在，会被本轮一起领走，
+        //    导致「领到的不是本场景那条」——断言就指向了错对象。
+        cleanQueue();
         repository.enqueue(tenantA, "RUN_DISPATCH", runId, payload(runId));
         PgQueueListener retry = listener(fixedOutcome(MessageHandler.Outcome.RETRY));
         assertThat(retry.pollOnce()).isZero();
         assertThat(repository.pendingDepth(tenantA)).isEqualTo(1);
 
         // ③ REJECTED → 死信
+        cleanQueue();
         repository.enqueue(tenantA, "RUN_DISPATCH", runId, payload(runId));
         PgQueueListener rejected = listener(fixedOutcome(MessageHandler.Outcome.REJECTED));
         assertThat(rejected.pollOnce()).isZero();
@@ -397,15 +401,16 @@ class PgQueueIT {
         try (Connection conn = adminPool.getConnection()) {
             conn.setAutoCommit(false);
             try (PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO run (tenant_id, snapshot_id, idempotency_key, request_digest, "
-                            + "input_payload, correlation_id, state) "
-                            + "SELECT ?::uuid, snapshot_id, ?, ?, '{}'::jsonb, ?, 'QUEUED' "
+                    "INSERT INTO run (run_id, tenant_id, snapshot_id, idempotency_key, "
+                            + "request_digest, input_payload, correlation_id, state) "
+                            + "SELECT ?::uuid, ?::uuid, snapshot_id, ?, ?, '{}'::jsonb, ?, 'QUEUED' "
                             + "FROM execution_snapshot WHERE tenant_id = ?::uuid LIMIT 1")) {
-                ps.setString(1, tenantId);
-                ps.setString(2, "pgq-" + runId);
-                ps.setString(3, "d-" + runId);
-                ps.setString(4, "c-" + runId);
-                ps.setString(5, tenantId);
+                ps.setObject(1, UUID.fromString(runId));
+                ps.setString(2, tenantId);
+                ps.setString(3, "pgq-" + runId);
+                ps.setString(4, "d-" + runId);
+                ps.setString(5, "c-" + runId);
+                ps.setString(6, tenantId);
                 ps.executeUpdate();
             }
             conn.commit();
