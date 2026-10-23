@@ -28,7 +28,7 @@ import { SessionProvider } from '@/auth/session'
 const FULL_MENU_GROUPS = ['辅导台', '知识库治理', '运行治理', '平台配置与运维']
 const FULL_MENU_ITEMS = [
   // 辅导台
-  '工作台', '发起辅导', '检索记录', '知识检索', '学习画像',
+  '工作台', '发起辅导', '检索记录', '知识检索', '学习画像', '报表中心',
   // 知识库治理
   '语料管理',
   // 运行治理

@@ -100,8 +100,17 @@ public class CachingClosureResolver implements ClosureResolver {
         this.manifest = manifest;
         this.maxEntries = maxEntries;
         this.cache = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+            /**
+             * ⚠️ **必须写全限定名 {@code CachingClosureResolver.Entry}**：
+             * 在匿名 {@code LinkedHashMap} 子类体内，简单名 {@code Entry} 会被
+             * **继承来的成员类型** {@code Map.Entry} 遮蔽（继承成员类型优先于外层类作用域），
+             * 于是签名会变成 {@code Map.Entry<String, Map.Entry>} —— 既不覆盖
+             * {@code LinkedHashMap.removeEldestEntry}，又与之同名冲突，
+             * 整个 {@code agent-application} 模块编译失败。
+             */
             @Override
-            protected boolean removeEldestEntry(Map.Entry<String, Entry> eldest) {
+            protected boolean removeEldestEntry(
+                    Map.Entry<String, CachingClosureResolver.Entry> eldest) {
                 return size() > CachingClosureResolver.this.maxEntries;
             }
         });

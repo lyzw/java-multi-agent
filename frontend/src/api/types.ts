@@ -955,10 +955,42 @@ export interface DailyStatistics {
   weaknessesByDay: WeaknessDayStat[]
   /** 每日学生活跃 / 新增（连续日期，缺数据填 0） */
   studentsByDay: StudentDayStat[]
-  /** 薄弱知识点排行（按命中次数降序） */
+  /** 薄弱知识点排行（**全历史累计**，按命中次数降序） */
   topKnowledgePoints: KnowledgePointRank[]
+  /** 薄弱知识点排行（**所选区间内**，按命中次数降序） */
+  topKnowledgePointsInRange: KnowledgePointRank[]
   /** 实际生成的连续天数 */
   generatedDays: number
+  /** 本区间汇总（与逐日数组同源，后端口径） */
+  currentPeriod: PeriodSummary
+  /** 紧邻的上一等长区间汇总（环比基线） */
+  previousPeriod: PeriodSummary
+}
+
+/**
+ * 一个统计窗口的汇总值（环比用，对齐后端 `StatisticsPort.PeriodSummary`）。
+ *
+ * ⚠️ **前端不得自行对逐日数组求和来替代它**：
+ *    「上一区间」的数据根本不在响应里，前端无从算起；
+ *    若本区间由前端求和、上一区间由后端给出，
+ *    就出现两份口径，分歧时同一张报表会有两个总数。
+ *    两个窗口都由后端给出，前端只做展示与对比。
+ */
+export interface PeriodSummary {
+  /** 发起量（含在途） */
+  total: number
+  /** 终态量（成功率分母） */
+  terminal: number
+  succeeded: number
+  failed: number
+  timedOut: number
+  cancelled: number
+  /** 错因记录条数 */
+  weaknessCount: number
+  /** 活跃**人次**（逐日去重后累加；不是去重人数） */
+  activeStudentDays: number
+  /** 新增学生数 */
+  newStudents: number
 }
 
 /** 单日辅导量（含终态拆分）。 */

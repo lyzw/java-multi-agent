@@ -27,6 +27,7 @@ import { ProfilePage } from '@/pages/business/ProfilePage'
 import { RunSearchPage } from '@/pages/business/RunSearchPage'
 import { RagSearchPage } from '@/pages/rag/RagSearchPage'
 import { RagManagementPage } from '@/pages/rag/RagManagementPage'
+import { ReportsPage } from '@/pages/reports/ReportsPage'
 import {
   ConfigOverviewPage,
   ConfigRuntimePage,
@@ -116,6 +117,12 @@ function AppRoutes(): JSX.Element {
           <Route path="/profile" element={<ProfileLookup />} />
           <Route path="/profile/:studentId" element={<ProfilePage />} />
           <Route path="/rag" element={<RagSearchPage />} />
+          {/* ⚠️ 报表中心：租户级**聚合**视图（辅导量 / 错题 / 学生活跃 /
+              知识点排行 / 检索次数 / 语料导入与准入）。
+              与「检索记录」的区别：前者是逐条明细，后者是按天汇总。
+              ⚠️ 不挂 area：聚合数据不含个体信息，任何已登录用户可见本租户汇总
+              （与后端 StatisticsController 复用 RUN_READ 动作的授权范围一致）。 */}
+          <Route path="/reports" element={<ReportsPage />} />
           {/* ⚠️ RAG 管理面（RAG-D10）：语料登记、校验审核、索引统计。
               与 /rag 检索面是**两个方向的闸门**，故单独成页。 */}
           <Route

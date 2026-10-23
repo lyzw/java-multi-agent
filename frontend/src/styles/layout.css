@@ -1226,6 +1226,17 @@ tbody tr:hover { background: var(--surface-hover); }
   overflow: visible;
   display: block;
 }
+/* ⚠️ 图表横向滚动容器（2026-10-23）：
+   图表改为 1:1 像素绘制后，宽区间（90 天）会超出容器宽度。
+   此前用 `width:100%` 把整图等比压扁，坐标轴文字缩到 2~3px 完全不可读；
+   现在宁可让用户横向滑动，也不把图表压成一条细线。
+   与表格的 `.table-wrap` 同一套处理方式。 */
+.chart-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* 横向滚动条会盖住基线，留出 4px 让基线可见 */
+  padding-bottom: 4px;
+}
 .chart__label {
   font-size: 10px;
   fill: var(--ink-3);

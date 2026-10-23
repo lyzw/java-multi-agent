@@ -252,7 +252,31 @@ jobs:
         #    但 **CI 仍未覆盖 broker IT** —— 属已知缺口，见进度台账。
         run: |
           set -o pipefail
-          mvn -B clean verify -Dit.test='*IT,!RealBrokerEndToEndIT' \
+          # ⚠️ 同时排除 **MessagingCanaryWiringTest**（2026-10-23 实测补）：
+          #    它在 @TestPropertySource 里把通道强制设为 rabbitmq，
+          #    而应用的 fail-closed 守卫会在**broker 不可达时拒绝启动上下文**
+          #    （"通道启用却连不上 = 消息永远不消费"）→ 无 broker 的 job 里 3 项 ERROR。
+          #    本 job 没有 RabbitMQ service（见上方 AGENT_MESSAGING_MODE 说明），
+          #    故与 RealBrokerEndToEndIT 同样处理；有 broker 的环境请单独跑它。
+          #
+          # ⚠️⚠️⚠️ `-Dtest` **必须带正向模式**（2026-10-23 实测踩坑）：
+          #    写成 `-Dtest='!MessagingCanaryWiringTest'`（**纯排除**）时，
+          #    surefire 的扫描集合会从「默认 includes」退化成「**全部类**」——
+          #    于是 38 个 `*IT` 类被拉进**单元测试**阶段跑，
+          #    `RealBrokerEndToEndIT`（无跳过门禁）当场 3 项 ERROR 拖垮构建，
+          #    且 failsafe 阶段根本没开始跑（IT 全部没执行 → 「绿但没跑」）。
+          #    实测对照（agent-infrastructure 模块）：
+          #      `-Dtest='!MessagingCanaryWiringTest'` → 扫到 38 个 *IT / 432 项 / 3 ERROR
+          #      `-Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest'`
+          #                                     → 扫到 0 个 *IT / 141 项 / 0 ERROR
+          #    下面这四个正向模式 = surefire 的默认 includes（Test* / *Test /
+          #    *Tests / *TestCase），逐个写出来是为了**显式复现默认行为**，
+          #    而不是为了改变它。少写一个 → 该类在本 job 里静默不跑。
+          #    （对比：`-Dit.test` 带正向模式时排除是生效的，实测
+          #      `!RealBrokerEndToEndIT` 出现 0 次 → 排除有效。）
+          mvn -B clean verify \
+            -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \
+            -Dit.test='*IT,!RealBrokerEndToEndIT' \
             -Dfailsafe.failIfNoSpecifiedTests=false 2>&1 | tee /tmp/ci-it.log
 
       # ⚠️⚠️ **跳过必须判失败**（2026-10-22 新增）：
@@ -278,10 +302,12 @@ jobs:
             echo "❌ 有 $skipped 项被跳过 —— IT 未真正执行，构建绿不等于验证过"
             exit 1
           fi
-          # 下限取 2026-10-22 实测基线（822 全绿 / 0 跳过）；低于此说明环境退步
-          #（如迁移未执行、角色未建），而不是“代码变好了所以测得少”。
-          if [ "$ran" -lt 700 ]; then
-            echo "❌ 仅执行 $ran 项，低于实测基线 822 —— 请检查迁移/角色是否就绪"
+          # 下限取 2026-10-23 本机实测基线（1289 全绿 / 0 跳过 = 单测 872 + IT 417）；
+          # 低于此说明环境退步（如模块未构建、迁移未执行、角色未建），
+          # 而不是“代码变好了所以测得少”。
+          # 下限取 1000 而非 1289，是给 CI 的 PG 17 容器与本机 PG 18.6 留余量。
+          if [ "$ran" -lt 1000 ]; then
+            echo "❌ 仅执行 $ran 项，低于实测基线 1289 —— 请检查构建环境"
             exit 1
           fi
           echo "✅ 集成测试真实执行且零跳过"

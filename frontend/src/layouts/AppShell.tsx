@@ -47,6 +47,11 @@ const NAV: NavGroup[] = [
       { to: '/runs', label: '检索记录', icon: 'search' },
       { to: '/rag', label: '知识检索', icon: 'book' },
       { to: '/profile', label: '学习画像', icon: 'profile' },
+      // ⚠️ 报表中心：租户级**聚合**视图（按天看辅导 / 错题 / 检索 / 语料导入）。
+      //    与「检索记录」不同：后者是逐条明细，前者是按天汇总。
+      //    不挂 area —— 聚合数据不含个体信息，与后端 StatisticsController
+      //    复用 RUN_READ 动作的授权范围保持一致（任何已登录用户可见本租户汇总）。
+      { to: '/reports', label: '报表中心', icon: 'activity' },
     ],
   },
   {

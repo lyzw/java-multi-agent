@@ -105,7 +105,18 @@ class RunEventAppendIT {
 
         tenantA = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-a'");
         tenantB = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-b'");
-        snapshotId = adminQuery("SELECT snapshot_id::text FROM execution_snapshot LIMIT 1");
+        // ⚠️ 必须**按租户过滤**（2026-10-23 实测修正）：
+        //    原来是无条件 `LIMIT 1`，取到的是「物理顺序里的第一条」快照——
+        //    只要库里有别的租户的快照（任何 IT 建过快照都可能留下），
+        //    就会取到**别的租户**的快照 → run 的复合外键
+        //    (tenant_id, snapshot_id) 报错 → 本 IT 整片变红，
+        //    而失败现场（外键冲突）与真因（夹具选取不当）相距很远。
+        snapshotId = adminQuery("SELECT snapshot_id::text FROM execution_snapshot"
+                + " WHERE tenant_id='" + tenantA + "'::uuid LIMIT 1");
+        if (snapshotId == null || snapshotId.isBlank()) {
+            throw new IllegalStateException(
+                    "缺少 t-a 的执行快照：请先应用 migration/verify/V1_seed.sql");
+        }
     }
 
     // ── 测试 ────────────────────────────────────────────────────────

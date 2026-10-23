@@ -19,43 +19,66 @@
 --   （用 session 级而非 local 级，详见步骤 1 注释。）
 -- =====================================================================
 
--- 1) 设置租户上下文
--- ⚠️ 必须用 session 级（is_local = false），不能用 local（true）：
---    psql 默认 autocommit，每条语句各自一个事务；若用 local=true，
---    set_config 所在事务提交后该值即被丢弃，后续 INSERT 读到 NULL
---    → 触发 "null value in column tenant_id violates not-null constraint"。
---    session 级在 psql 手动执行与 Flyway（单事务）下均能正确传递。
-SELECT set_config('app.tenant_id',
-                 (SELECT tenant_id::text FROM tenant WHERE slug = 't-a'),
-                 false);
+-- ⚠️⚠️ **空库上必须可重放**（2026-10-23 实测修复）：
+--    本迁移依赖租户 slug = 't-a'，而 't-a' 只由
+--    `migration/verify/V1_seed.sql` 创建 —— 那一步在 CI 与本地脚本里都
+--    **排在迁移之后**。故在全新库上跑迁移时，'t-a' 尚不存在：
+--      · set_config 写入 NULL → principal.tenant_id 违反 NOT NULL → **迁移报错**；
+--      · CI 的 `psql -v ON_ERROR_STOP=1` 会让整个 integration job **必红**；
+--      · 本地 `dev-it-db.sh` 用 `|| 继续` 吞掉错误 → 迁移「看似成功」，
+--        实则 agent-admin 根本没种上（静默跳过）。
+--    故此处改为：**'t-a' 不存在就整段跳过并 RAISE NOTICE**，
+--    既不报错（空库可重放），也不静默（留下可查的痕迹）。
+--    't-a' 存在时的行为与原先完全一致。
+DO $$
+DECLARE
+    v_tenant UUID;
+BEGIN
+    SELECT tenant_id INTO v_tenant FROM tenant WHERE slug = 't-a';
 
--- 2) 插入管理员账号（若 login_name 已存在则跳过，避免覆盖真实账号/口令）
-INSERT INTO principal (tenant_id, login_name, password_hash, display_name, status)
-SELECT current_tenant_id(),
-       'agent-admin',
-       '$pbkdf2-sha256$i=600000$8gJHUVocOBBJ1EC5akzhIw$ggu5RsO//NnYwgqz4ZFFs899LX/IvP+qPTuKUuVB6xc',
-       'Agent Admin',
-       'ACTIVE'
-WHERE NOT EXISTS (
-    SELECT 1 FROM principal WHERE login_name = 'agent-admin'
-)
-ON CONFLICT (login_name) DO NOTHING;
+    IF v_tenant IS NULL THEN
+        RAISE NOTICE 'V14: 租户 t-a 不存在，跳过 agent-admin 种子'
+                     '（预期行为：种子迁移依赖 dev 租户，种子由 verify/V1_seed.sql 提供）';
+        RETURN;
+    END IF;
 
--- 3) 授予 TENANT_ADMIN 角色（若已授予则跳过）
-INSERT INTO principal_role (tenant_id, principal_id, role)
-SELECT current_tenant_id(), p.principal_id, 'TENANT_ADMIN'
-FROM principal p
-WHERE p.login_name = 'agent-admin'
-  AND NOT EXISTS (
-        SELECT 1
-        FROM principal_role pr
-        WHERE pr.tenant_id    = current_tenant_id()
-          AND pr.principal_id = p.principal_id
-          AND pr.role         = 'TENANT_ADMIN'
-  );
+    -- 1) 设置租户上下文
+    -- ⚠️ 必须用 session 级（is_local = false），不能用 local（true）：
+    --    psql 默认 autocommit，每条语句各自一个事务；若用 local=true，
+    --    set_config 所在事务提交后该值即被丢弃，后续 INSERT 读到 NULL
+    --    → 触发 "null value in column tenant_id violates not-null constraint"。
+    --    session 级在 psql 手动执行与 Flyway（单事务）下均能正确传递。
+    PERFORM set_config('app.tenant_id', v_tenant::text, false);
 
--- 4) 复位租户上下文（session 级，与上面保持一致，确保真正清掉），避免泄漏到后续语句
-SELECT set_config('app.tenant_id', '', false);
+    -- 2) 插入管理员账号（若 login_name 已存在则跳过，避免覆盖真实账号/口令）
+    INSERT INTO principal (tenant_id, login_name, password_hash, display_name, status)
+    SELECT current_tenant_id(),
+           'agent-admin',
+           '$pbkdf2-sha256$i=600000$8gJHUVocOBBJ1EC5akzhIw$ggu5RsO//NnYwgqz4ZFFs899LX/IvP+qPTuKUuVB6xc',
+           'Agent Admin',
+           'ACTIVE'
+    WHERE NOT EXISTS (
+        SELECT 1 FROM principal WHERE login_name = 'agent-admin'
+    )
+    ON CONFLICT (login_name) DO NOTHING;
+
+    -- 3) 授予 TENANT_ADMIN 角色（若已授予则跳过）
+    INSERT INTO principal_role (tenant_id, principal_id, role)
+    SELECT current_tenant_id(), p.principal_id, 'TENANT_ADMIN'
+    FROM principal p
+    WHERE p.login_name = 'agent-admin'
+      AND NOT EXISTS (
+            SELECT 1
+            FROM principal_role pr
+            WHERE pr.tenant_id    = current_tenant_id()
+              AND pr.principal_id = p.principal_id
+              AND pr.role         = 'TENANT_ADMIN'
+      );
+
+    -- 4) 复位租户上下文（session 级，与上面保持一致，确保真正清掉），避免泄漏到后续语句
+    PERFORM set_config('app.tenant_id', '', false);
+END;
+$$;
 
 -- =====================================================================
 -- 校验（可选，人工跑迁移后确认）
