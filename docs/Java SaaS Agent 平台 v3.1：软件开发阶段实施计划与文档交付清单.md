@@ -294,6 +294,8 @@ P0 需求/范围/验收基线
 | **安全门槛**：fail-closed 全场景（未知风险 / 存储不可用） | ✅ 达成 | `InvocationValidatorIT#unreachableAuthzStoreFailsClosed`（**真实不可达端口**）+ `InvocationValidatorTest#unknownRiskIsDeniedWithDedicatedCode` |
 | **工程门槛**：需求级状态可追溯（§10 七态） | ✅ 达成 | `docs/统一配置与权限管控体系_开发计划/P6_需求追踪终态矩阵.md`（证据路径机器可核对，Demo≠平台分列） |
 | **硬约束**：平台级发布须由平台运维角色（BYPASSRLS）写入 | ✅ 达成（2026-10-23） | `PlatformOpsPublishIT`（9 项，真实 PG + **专用** `NOSUPERUSER + BYPASSRLS` 角色）+ `PlatformOpsDataSourceArchitectureTest`（5 项）+ `PlatformOpsDataSourceProviderTest`（8 项） |
+| **工程门槛**：§9.1 运行期四字段在**真实 PG** 上验证（原仅单测层） | ✅ 达成（2026-10-23） | `RuntimeDecisionScenarioIT`（7 项：S4a/S4b/S4c/S5b/S5c×2/未知风险不可达）+ `ExecutionPhaseBScenarioIT`（1 项：Schema 失败 + 真实表零副作用） |
+| **工程门槛**：模块依赖方向不可反转（NFR-03 · 静态扫描） | ✅ 达成（2026-10-23） | `ModuleDependencyDirectionTest`（7 项：领域层/端口层/应用层/外层四层方向约束） |
 
 **切片冻结结论**：**M6「V1 冻结候选」，带 12 项已登记限制**（见 `docs/统一配置与权限管控体系_开发计划/P6_V1冻结判定报告.md` §6）。
 

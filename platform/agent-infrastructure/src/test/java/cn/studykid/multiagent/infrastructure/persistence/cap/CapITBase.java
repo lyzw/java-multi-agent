@@ -118,15 +118,19 @@ abstract class CapITBase {
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
         // ⚠️ platform 级对象定义（P1）：无 RLS、无 tenant_id，按 id 清理。
         //    只清本轮用例用到的固定 id，避免误删他人数据。
-        // ⚠️ 'it-ops-%' 是 P6R1 平台运维接入点 IT 的前缀 ——
+        // ⚠️ 'it-ops-%'（P6R1 平台运维接入点）与 'it-r2-%'（P6R2 运行期四字段）是
+        //    新增 IT 类的自有前缀 ——
         //    **必须**一并清理：跨测试类的残留会让其他 IT 的「零写入」断言失真
         //    （ConfigPublishIT 的「配置非法仍写入了版本行」就是这么红过一次）。
         adminExec("DELETE FROM cap_tool_def WHERE id LIKE 'it-cap-%' OR id LIKE 'it-p5%'"
-                + " OR id LIKE 'it-ops-%'");
+                + " OR id LIKE 'it-ops-%' OR id LIKE 'it-r2-%'"
+                + " OR id LIKE 'it-r2b-%'");
         adminExec("DELETE FROM cap_skill_def WHERE id LIKE 'it-cap-%' OR id LIKE 'it-p5%'"
-                + " OR id LIKE 'it-ops-%'");
+                + " OR id LIKE 'it-ops-%' OR id LIKE 'it-r2-%'"
+                + " OR id LIKE 'it-r2b-%'");
         adminExec("DELETE FROM cap_mcp_server_def WHERE id LIKE 'it-cap-%' OR id LIKE 'it-p5%'"
-                + " OR id LIKE 'it-ops-%'");
+                + " OR id LIKE 'it-ops-%' OR id LIKE 'it-r2-%'"
+                + " OR id LIKE 'it-r2b-%'");
         // ⚠️ P5：发布指针与发布头是「当前生效版本」的权威来源。
         //    不清则上一例的指针会让本例解析到上一例的版本 ——
         //    失败现场指向「解析逻辑坏了」，真因却是夹具残留。

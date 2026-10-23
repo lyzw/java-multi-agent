@@ -294,25 +294,29 @@ public final class Section9ScenarioRegistry {
                 AuthorizationDecision.Execution.NOT_EVALUATED,
                 AuthorizationDecision.Status.NOT_STARTED,
                 ReasonCode.SKILL_NOT_ENABLED,
-                "仅单测层",
-                "InvocationValidatorTest#skillRemovedFromEnabledIsDenied");
+                "单测 + IT 双层；IT 覆盖**移除转移**（真实 PG：启用时 ALLOW → 移除后新调用 DENY）",
+                "InvocationValidatorTest#skillRemovedFromEnabledIsDenied",
+                "RuntimeDecisionScenarioIT#skillRemovedFromEnabledIsDeniedOnRealDatabase");
 
         behavior("S4b", "riskCeiling 收紧",
                 AuthorizationDecision.Authorization.DENY,
                 AuthorizationDecision.Execution.NOT_EVALUATED,
                 AuthorizationDecision.Status.NOT_STARTED,
                 ReasonCode.RISK_EXCEEDS_CEILING,
-                "仅单测层",
+                "单测 + IT 双层；IT 覆盖**收紧转移**（真实 PG：上限宽松时 ALLOW → 收紧后 DENY）",
                 "InvocationValidatorTest#riskCeilingTightenedIsDenied",
-                "PermissionResolverTest#overridesCannotLoosenRiskCeiling");
+                "PermissionResolverTest#overridesCannotLoosenRiskCeiling",
+                "RuntimeDecisionScenarioIT#tightenedRiskCeilingIsDeniedOnRealDatabase");
 
         behavior("S4c", "参数策略收紧",
                 AuthorizationDecision.Authorization.DENY,
                 AuthorizationDecision.Execution.NOT_EVALUATED,
                 AuthorizationDecision.Status.NOT_STARTED,
                 ReasonCode.PARAM_POLICY_FAIL,
-                "仅单测层；ParamPolicyEngineTest 为引擎层断言（不断言四字段）",
+                "单测 + IT 双层；IT 覆盖**策略收紧转移**（真实 PG）；"
+                        + "ParamPolicyEngineTest 为引擎层断言（不断言四字段）",
                 "InvocationValidatorTest#paramPolicyTightenedIsDenied",
+                "RuntimeDecisionScenarioIT#tightenedParamPolicyIsDeniedOnRealDatabase",
                 "ParamPolicyEngineTest#allowlistRejectsUnlistedValue",
                 "ParamPolicyEngineTest#lteRejectsAboveThreshold",
                 "ParamPolicyEngineTest#typeMismatchIsRejected",
@@ -333,20 +337,26 @@ public final class Section9ScenarioRegistry {
                 AuthorizationDecision.Execution.NOT_EVALUATED,
                 AuthorizationDecision.Status.NOT_STARTED,
                 ReasonCode.MCP_OP_NOT_ALLOWED,
-                "仅单测层",
+                "单测 + IT 双层；IT 用**真实库闭包**（Skill 操作清单 ∩ 已发布服务定义）判越界",
                 "InvocationValidatorTest#mcpOperationOutsideAllowlistIsDenied",
-                "McpSecurityBehaviorTest#s5bOperationOutsideAllowlist");
+                "McpSecurityBehaviorTest#s5bOperationOutsideAllowlist",
+                "RuntimeDecisionScenarioIT#mcpOperationOutsideAllowlistIsDeniedOnRealDatabase");
 
         behaviorExplicit("S5c", "清单下线/漂移",
                 AuthorizationDecision.Authorization.DENY,
                 AuthorizationDecision.Execution.NOT_EVALUATED,
                 List.of(AuthorizationDecision.Status.NOT_STARTED),
                 List.of(ReasonCode.MCP_TOOL_DRIFTED, ReasonCode.CONFIG_FINGERPRINT_STALE),
-                "⚠️ 两个码分支均无 IT 层落点；TOCTOU 依赖内存 manifest 替身",
+                "单测 + IT 双层；两个码分支各有 IT 落点："
+                        + "CONFIG_FINGERPRINT_STALE = 已发布白名单收紧（**纯 DB 漂移**）；"
+                        + "MCP_TOOL_DRIFTED = 清单在指纹重算与操作复核之间漂移（TOCTOU；"
+                        + "DB 侧全真，仅 MCP 传输边界替身）",
                 "InvocationValidatorTest#mcpManifestDriftIsCaughtByFingerprint",
                 "InvocationValidatorTest#mcpManifestToctouDriftIsDenied",
                 "McpSecurityBehaviorTest#s5cManifestRemoved",
-                "McpSecurityBehaviorTest#s5cToctouDrift");
+                "McpSecurityBehaviorTest#s5cToctouDrift",
+                "RuntimeDecisionScenarioIT#narrowedServerAllowlistInvalidatesFingerprintOnRealDatabase",
+                "RuntimeDecisionScenarioIT#mcpManifestToctouDriftIsDeniedOnRealDatabase");
 
         behavior("S6a", "审批不存在",
                 AuthorizationDecision.Authorization.ALLOW,
@@ -439,24 +449,35 @@ public final class Section9ScenarioRegistry {
                 AuthorizationDecision.Execution.DENY,
                 AuthorizationDecision.Status.NOT_STARTED,
                 ReasonCode.PARAM_SCHEMA_FAIL,
-                "仅单测层",
-                "CapExecutionFlowTest#schemaFailureDeniesWithoutSideEffects");
+                "单测 + IT 双层；IT 用**真实 JDBC 仓储**装配执行流，断言落在真实表上："
+                        + "决策日志恰好 1 行且四字段与决策一致，"
+                        + "而执行意图/审批/预算/账本/结果事件**全部 0 行**（真·零副作用）",
+                "CapExecutionFlowTest#schemaFailureDeniesWithoutSideEffects",
+                "ExecutionPhaseBScenarioIT#schemaFailureDeniesWithoutSideEffectsOnRealDatabase");
 
         behavior("参数策略失败", "参数策略失败",
                 AuthorizationDecision.Authorization.DENY,
                 AuthorizationDecision.Execution.NOT_EVALUATED,
                 AuthorizationDecision.Status.NOT_STARTED,
                 ReasonCode.PARAM_POLICY_FAIL,
-                "仅单测层；与 S4c 共用同一落点（同一码、同一条判定路径）",
-                "InvocationValidatorTest#paramPolicyTightenedIsDenied");
+                "单测 + IT 双层；与 S4c 共用同一落点（同一码、同一条判定路径）",
+                "InvocationValidatorTest#paramPolicyTightenedIsDenied",
+                "RuntimeDecisionScenarioIT#tightenedParamPolicyIsDeniedOnRealDatabase");
 
         behavior("未知风险", "未知风险",
                 AuthorizationDecision.Authorization.DENY,
                 AuthorizationDecision.Execution.NOT_EVALUATED,
                 AuthorizationDecision.Status.NOT_STARTED,
                 ReasonCode.RISK_LEVEL_UNKNOWN,
-                "仅单测层（运行期）；配置期拒发布另有 ConfigPublishIT 落点",
-                "InvocationValidatorTest#unknownRiskIsDeniedWithDedicatedCode");
+                "⚠️ 运行期四字段仍为**仅单测层**，但原因不是「没验」而是**验不了**："
+                        + "cap_tool_def.risk_level 是 NOT NULL + CHECK，取值域只含三个已知等级，"
+                        + "**未知风险在数据层不可能存在**。"
+                        + "故 IT 层证明的是「不可达」（unknownRiskCannotBePersisted），"
+                        + "与单测的「若出现则拒为 RISK_LEVEL_UNKNOWN」合起来才是完整结论："
+                        + "状态不可达 + 不可达时仍 fail-closed；"
+                        + "配置期拒发布另有 ConfigPublishIT 落点",
+                "InvocationValidatorTest#unknownRiskIsDeniedWithDedicatedCode",
+                "RuntimeDecisionScenarioIT#unknownRiskCannotBePersisted");
 
         // ── §9.2 不变量与故障注入 ──────────────────────────────────
         invariant("S3c", "并发撤权 → authzVersion 单调无丢失",
