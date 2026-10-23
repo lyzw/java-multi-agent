@@ -1,7 +1,6 @@
 package cn.studykid.multiagent.infrastructure.persistence.cap;
 
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
+import java.util.List;
 import java.util.Optional;
 
 import javax.sql.DataSource;
@@ -11,93 +10,106 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.cap.CapObjectType;
-import cn.studykid.multiagent.core.tenant.TenantContext;
-import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
+import cn.studykid.multiagent.application.cap.ConfigObjectVersionCodec;
+import cn.studykid.multiagent.core.cap.ConfigObjectVersion;
+import cn.studykid.multiagent.core.cap.ConfigPointer;
+import cn.studykid.multiagent.core.cap.ConfigRelease;
+import cn.studykid.multiagent.ports.persistence.ConfigPointerPort;
+import cn.studykid.multiagent.ports.persistence.ConfigReleasePort;
 import cn.studykid.multiagent.ports.persistence.PublishedVersionPort;
 
 /**
- * {@link PublishedVersionPort} 的 <b>P1 过渡实现</b>（对象级解析 + 回滚守卫）。
+ * {@link PublishedVersionPort} 的 PostgreSQL 实现（§6.2 / §6.3 第 5 条 · W-PERM-P5）。
  *
- * <p>⚠️⚠️ <b>这不是 §6.2 规定的最终口径，P5 必须替换本类</b>。
+ * <p>⚠️ <b>本类在 P5 已被整体替换</b>：
+ * P1 的过渡实现退化为「对象级解析」（取该对象最新已发布版本行），
+ * 并在「存在 ROLLED_BACK 发布」时一律解析失败 ——
+ * 因为没有「当前指针」这一实体，回滚后无法判断「当前该用哪个版本」
+ * （P1 的类注释已写明「P5 必须替换本类」）。
  *
- * <p>§6.2 要求「当前 PUBLISHED release → {@code object_versions} → 解析 id→精确版本」，
- * §6.3 要求「<b>当前版本不以 max(seq) 选择</b>」「只认<b>指针指向的</b> PUBLISHED release」。
- * P0 建立的 {@code cap_config_release} 只有发布头与 {@code object_versions}，
- * <b>没有「当前指针」这一实体</b>（指针的写侧 CAS 属 P5）。
- * 本类因此退化为<b>对象级</b>解析：取该对象「最新已发布版本行」。
+ * <p><b>现在的口径（唯一正确口径）</b>：
+ * <pre>
+ * 当前指针 → 指针指向的 PUBLISHED release → object_versions → id→精确版本
+ * </pre>
  *
- * <p><b>回滚守卫</b>：一旦存在 {@code ROLLED_BACK} 的发布，
- * 对象级解析就<b>不再等价于</b>「当前发布所指版本」（§6.3.6 回滚保留原 release、
- * 新建回滚发布并切指针）—— 此时<b>一律解析失败</b>（返回空），让上层 fail-closed。
- * 宁可「无人能授权」，也不可「解析到已回滚的版本」。
+ * <p>⚠️ <b>绝不以 max(seq) 选择当前版本</b>：
+ * {@code config_publish_seq} 的分配序 ≠ 提交序（PUB-2），
+ * 且回滚发布保留原 release —— 按 seq 取最大可能选中已回滚的发布。
+ * 本类只读指针，读不到就是读不到。
  *
- * <p>⚠️ <b>P5 上线前的强制约束</b>：在 P5 的指针读落地前，
- * CAP 授权链路<b>不得</b>在生产开启 —— 本类的语义与 §6.3 存在已知偏差。
+ * <p>⚠️ <b>解析失败必须表现为「空」而非兜底版本</b>：
+ * 解析不到即意味着该对象当前不可用，调用方应 fail-closed 拒绝；
+ * 若返回一个「默认版本」（如 version=1），未发布的新对象会被当成已发布对象使用 ——
+ * 那是一条直接的越权路径。
  */
 public class JdbcPublishedVersionPort implements PublishedVersionPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcPublishedVersionPort.class);
 
-    private static final String SQL_HAS_ROLLED_BACK =
-            "SELECT EXISTS (SELECT 1 FROM cap_config_release WHERE status = 'ROLLED_BACK')";
+    private final ConfigPointerPort pointers;
+    private final ConfigReleasePort releases;
 
-    private static final String SQL_TOOL_VERSION =
-            "SELECT version FROM cap_tool_def WHERE id = ? AND published_at IS NOT NULL"
-                    + " ORDER BY version DESC LIMIT 1";
-    private static final String SQL_SKILL_VERSION =
-            "SELECT version FROM cap_skill_def WHERE id = ? AND published_at IS NOT NULL"
-                    + " ORDER BY version DESC LIMIT 1";
-    private static final String SQL_MCP_VERSION =
-            "SELECT version FROM cap_mcp_server_def WHERE id = ? AND published_at IS NOT NULL"
-                    + " ORDER BY version DESC LIMIT 1";
-
-    private final DataSource dataSource;
-
-    public JdbcPublishedVersionPort(@NonNull DataSource dataSource) {
-        this.dataSource = dataSource;
-    }
-
-    @Override
-    public @NonNull Optional<Integer> currentVersion(@NonNull CapObjectType type,
-                                                     @NonNull String objectId) {
-        if (hasRolledBackRelease()) {
-            // ⚠️ fail-closed：回滚后对象级解析不可信，一律拒绝解析
-            log.warn("存在已回滚的发布，发布版本解析一律失败（P1 过渡实现 · P5 须替换为指针读）");
-            return Optional.empty();
-        }
-        String sql = switch (type) {
-            case TOOL -> SQL_TOOL_VERSION;
-            case SKILL -> SQL_SKILL_VERSION;
-            case MCP_SERVER -> SQL_MCP_VERSION;
-        };
-        return TransactionalConnectionHolder.inTransaction(
-                dataSource, platformContext(),
-                conn -> {
-                    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                        ps.setString(1, objectId);
-                        try (ResultSet rs = ps.executeQuery()) {
-                            return rs.next() ? Optional.of(rs.getInt(1)) : Optional.empty();
-                        }
-                    }
-                });
-    }
-
-    private boolean hasRolledBackRelease() {
-        return TransactionalConnectionHolder.inTransaction(
-                dataSource, platformContext(),
-                conn -> {
-                    try (PreparedStatement ps = conn.prepareStatement(SQL_HAS_ROLLED_BACK);
-                         ResultSet rs = ps.executeQuery()) {
-                        return rs.next() && rs.getBoolean(1);
-                    }
-                });
+    public JdbcPublishedVersionPort(@NonNull ConfigPointerPort pointers,
+                                     @NonNull ConfigReleasePort releases) {
+        this.pointers = pointers;
+        this.releases = releases;
     }
 
     /**
-     * platform 级读取用的租户上下文（零 UUID 哨兵）。
+     * 便捷构造：直接用同一个 {@link DataSource} 装配两个仓储。
+     *
+     * @param dataSource 数据源
      */
-    private static TenantContext platformContext() {
-        return new TenantContext("00000000-0000-0000-0000-000000000000", "system",
-                java.util.Set.of(), 0L);
+    public JdbcPublishedVersionPort(@NonNull DataSource dataSource) {
+        this(new JdbcConfigPointerRepository(dataSource), new JdbcConfigReleaseRepository(dataSource));
+    }
+
+    @Override
+    @NonNull
+    public Optional<Integer> currentVersion(@NonNull CapObjectType type,
+                                            @NonNull String objectId) {
+        // ⚠️ 平台对象（Tool / Skill / MCP Server）由**平台级发布**管理，
+        //    故只读 PLATFORM 指针。租户级发布只含本租户对象（Agent），
+        //    其版本由调用方按显式版本号解析，不走本端口。
+        Optional<ConfigPointer> pointer = pointers.current(ConfigRelease.Scope.PLATFORM, null);
+        if (pointer.isEmpty()) {
+            // ⚠️ fail-closed：平台尚未发布过任何配置 → 一切对象都不可用。
+            //    「没有发布」不等于「对象存在」。
+            log.debug("平台当前无发布指针，版本解析一律失败: type={}, id={}",
+                    type.code(), objectId);
+            return Optional.empty();
+        }
+        ConfigPointer current = pointer.get();
+        if (!current.isPublished() || current.currentReleaseId() == null) {
+            log.debug("平台指针尚未指向任何发布，版本解析失败: type={}, id={}",
+                    type.code(), objectId);
+            return Optional.empty();
+        }
+
+        Optional<ConfigRelease> release =
+                releases.findByReleaseId(null, current.currentReleaseId());
+        if (release.isEmpty()) {
+            // ⚠️ 指针指向的发布不存在 = 数据损坏。宁可拒绝，不可放行。
+            log.warn("指针指向的发布记录不存在，版本解析失败: releaseId={}, type={}, id={}",
+                    current.currentReleaseId(), type.code(), objectId);
+            return Optional.empty();
+        }
+        ConfigRelease releaseRow = release.get();
+        if (releaseRow.status() != ConfigRelease.Status.PUBLISHED) {
+            // ⚠️ 指针只应指向 PUBLISHED 发布。指向其它状态说明指针与发布头不一致，
+            //    按 fail-closed 处理（不猜测「大概还是有效的」）。
+            log.warn("指针指向的发布不是 PUBLISHED，版本解析失败: releaseId={}, status={}",
+                    current.currentReleaseId(), releaseRow.status());
+            return Optional.empty();
+        }
+
+        List<ConfigObjectVersion> refs =
+                ConfigObjectVersionCodec.parse(releaseRow.objectVersions());
+        if (refs.isEmpty()) {
+            log.warn("当前发布的 object_versions 不可解析，版本解析失败: releaseId={}",
+                    current.currentReleaseId());
+            return Optional.empty();
+        }
+        return ConfigObjectVersionCodec.findVersion(refs, type.code(), objectId);
     }
 }

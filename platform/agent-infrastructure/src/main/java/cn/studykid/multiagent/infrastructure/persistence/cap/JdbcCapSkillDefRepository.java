@@ -45,6 +45,21 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
     private static final String SQL_FIND = "SELECT " + COLUMNS
             + " FROM cap_skill_def WHERE id = ? AND version = ?";
 
+    /**
+     * 插入一条不可变版本行（§6.3 第 1 条 · W-PERM-P5）。
+     *
+     * <p>⚠️ <b>ON CONFLICT DO NOTHING 而非 DO UPDATE</b>：已发布版本行不可变（§6.1）。
+     */
+    private static final String SQL_INSERT = """
+            INSERT INTO cap_skill_def
+                (id, version, name, description, declared_tools, declared_mcp,
+                 risk_ceiling, param_policies, required_caps, namespace,
+                 config_fingerprint, schema_version, created_at, updated_at, published_at)
+            VALUES (?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?::jsonb, ?::jsonb, 'platform',
+                    ?, ?, ?, ?, ?)
+            ON CONFLICT (id, version) DO NOTHING
+            """;
+
     private static final String SQL_FIND_LATEST_PUBLISHED = "SELECT " + COLUMNS
             + " FROM cap_skill_def WHERE id = ? AND published_at IS NOT NULL"
             + " ORDER BY version DESC LIMIT 1";
@@ -53,6 +68,35 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
 
     public JdbcCapSkillDefRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    @Override
+    public boolean insert(@NonNull CapSkillDef def) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_INSERT)) {
+                        ps.setString(1, def.id());
+                        ps.setInt(2, def.version());
+                        ps.setString(3, def.name());
+                        ps.setString(4, def.description());
+                        ps.setString(5, toJson(def.declaredTools()));
+                        ps.setString(6, toJsonMcpDeclarations(def.declaredMcp()));
+                        ps.setString(7, def.riskCeiling().name());
+                        ps.setString(8, def.paramPolicies());
+                        ps.setString(9, toJson(def.requiredCaps()));
+                        ps.setString(10, def.configFingerprint());
+                        ps.setInt(11, def.schemaVersion());
+                        ps.setTimestamp(12, Timestamp.from(def.createdAt()));
+                        ps.setTimestamp(13, Timestamp.from(def.createdAt()));
+                        if (def.publishedAt() == null) {
+                            ps.setNull(14, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                        } else {
+                            ps.setTimestamp(14, Timestamp.from(def.publishedAt()));
+                        }
+                        return ps.executeUpdate() > 0;
+                    }
+                });
     }
 
     @Override
@@ -137,6 +181,36 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
      * @param toolAllowlist 操作白名单；<b>{@code null} ≠ {@code []}</b>（§4.4）
      */
     private record McpDeclarationDto(@NonNull String serverId, @Nullable List<String> toolAllowlist) {
+    }
+
+    /**
+     * 序列化为 JSON 文本。
+     *
+     * <p>⚠️ 序列化失败<b>抛异常</b>而非写空值：写空数组会让
+     * 「声明了 3 个 MCP server」被读成「一个都没声明」，授权被无声放宽。
+     */
+    private static @NonNull String toJson(@NonNull Object value) {
+        try {
+            return MAPPER.writeValueAsString(value);
+        } catch (JacksonException e) {
+            throw new IllegalStateException("序列化 JSON 失败", e);
+        }
+    }
+
+    /**
+     * 序列化 {@code declaredMcp}。
+     *
+     * <p>⚠️ <b>{@code null} 与 {@code []} 必须区分</b>（§4.4）：
+     * {@code null} = 未配置（取 ServerAllowedOps 全集），
+     * {@code []} = 显式不允许任何操作。
+     * 故 DTO 用可空的 {@code toolAllowlist}，Jackson 会把「键缺失」与「显式 null」
+     * 都写成 {@code null}，把 {@code []} 写成空数组，语义得以保留。
+     */
+    private static @NonNull String toJsonMcpDeclarations(
+            @NonNull List<CapSkillDef.McpDeclaration> declarations) {
+        return toJson(declarations.stream()
+                .map(d -> new McpDeclarationDto(d.serverId(), d.toolAllowlist()))
+                .toList());
     }
 
     /**

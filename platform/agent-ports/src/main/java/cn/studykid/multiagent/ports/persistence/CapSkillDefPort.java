@@ -14,6 +14,22 @@ import cn.studykid.multiagent.core.cap.CapSkillDef;
 public interface CapSkillDefPort {
 
     /**
+     * 插入一条版本行（§6.3 第 1 条 · W-PERM-P5）。
+     *
+     * <p>⚠️ <b>本方法在发布事务内被调用</b>：版本行插入、release 记录、
+     * 指针 CAS 必须同事务提交（§6.3 第 1 条）。
+     * 实现<b>不得</b>自行提交，否则外层事务失败时无法回滚本次插入，
+     * 会留下「版本行已存在、指针未移动」的半成品当前发布（PUB-1）。
+     *
+     * <p>幂等：同一 {@code (id, version)} 已存在时返回 {@code false}，
+     * <b>不覆盖</b>既有行（不可变版本行，06 §1.1）。
+     *
+     * @param def 版本行
+     * @return {@code true} 表示本次插入；{@code false} 表示已存在
+     */
+    boolean insert(@NonNull CapSkillDef def);
+
+    /**
      * 按固定版本读取。
      *
      * @param skillId Skill 逻辑 id

@@ -47,6 +47,21 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
     private static final String SQL_FIND = "SELECT " + COLUMNS
             + " FROM cap_mcp_server_def WHERE id = ? AND version = ?";
 
+    /**
+     * 插入一条不可变版本行（§6.3 第 1 条 · W-PERM-P5）。
+     *
+     * <p>⚠️ <b>ON CONFLICT DO NOTHING 而非 DO UPDATE</b>：已发布版本行不可变（§6.1）。
+     */
+    private static final String SQL_INSERT = """
+            INSERT INTO cap_mcp_server_def
+                (id, version, transport, endpoint, command, auth_kind, trust_tier,
+                 exposed_tool_allowlist, connection_risk, dynamic_discovery,
+                 config_fingerprint, credential_ref, schema_version, created_at,
+                 updated_at, published_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id, version) DO NOTHING
+            """;
+
     private static final String SQL_FIND_LATEST_PUBLISHED = "SELECT " + COLUMNS
             + " FROM cap_mcp_server_def WHERE id = ? AND published_at IS NOT NULL"
             + " ORDER BY version DESC LIMIT 1";
@@ -55,6 +70,43 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
 
     public JdbcCapMcpServerDefRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    @Override
+    public boolean insert(@NonNull CapMcpServerDef def) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_INSERT)) {
+                        ps.setString(1, def.id());
+                        ps.setInt(2, def.version());
+                        // ⚠️ DB 的 transport / auth_kind / trust_tier 取值域为小写
+                        ps.setString(3, def.transport().name().toLowerCase(java.util.Locale.ROOT));
+                        ps.setString(4, def.endpoint());
+                        ps.setString(5, def.command());
+                        ps.setString(6, def.authKind().name().toLowerCase(java.util.Locale.ROOT));
+                        ps.setString(7, def.trustTier().name().toLowerCase(java.util.Locale.ROOT));
+                        if (def.exposedToolAllowlist() == null) {
+                            // ⚠️ null ≠ []（§4.4）：未配置与显式空清单语义不同，不可混淆
+                            ps.setNull(8, java.sql.Types.OTHER);
+                        } else {
+                            ps.setString(8, writeJson(def.exposedToolAllowlist()));
+                        }
+                        ps.setString(9, def.connectionRisk().name());
+                        ps.setBoolean(10, def.dynamicDiscovery());
+                        ps.setString(11, def.configFingerprint());
+                        ps.setString(12, def.credentialRef());
+                        ps.setInt(13, def.schemaVersion());
+                        ps.setTimestamp(14, Timestamp.from(def.createdAt()));
+                        ps.setTimestamp(15, Timestamp.from(def.createdAt()));
+                        if (def.publishedAt() == null) {
+                            ps.setNull(16, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                        } else {
+                            ps.setTimestamp(16, Timestamp.from(def.publishedAt()));
+                        }
+                        return ps.executeUpdate() > 0;
+                    }
+                });
     }
 
     @Override
@@ -143,6 +195,21 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
     private static TenantContext platformContext() {
         return new TenantContext("00000000-0000-0000-0000-000000000000", "system",
                 java.util.Set.of(), 0L);
+    }
+
+    /**
+     * 序列化为 JSON 文本。
+     *
+     * <p>⚠️ 序列化失败<b>抛异常</b>而非写空值：写空数组会让
+     * 「显式不允许任何操作」被读成「未配置」——
+     * 后者按 ServerAllowedOps 全集放行，是直接的权限放宽。
+     */
+    private static @NonNull String writeJson(@NonNull List<String> value) {
+        try {
+            return MAPPER.writeValueAsString(value);
+        } catch (JacksonException e) {
+            throw new IllegalStateException("序列化 exposed_tool_allowlist 失败", e);
+        }
     }
 
     /** 语句参数绑定器。 */

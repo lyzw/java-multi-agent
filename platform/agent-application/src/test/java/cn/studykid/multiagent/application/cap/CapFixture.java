@@ -224,6 +224,11 @@ final class CapFixture {
     @NonNull CapSkillDefPort skillDefs() {
         return new CapSkillDefPort() {
             @Override
+            public boolean insert(@NonNull CapSkillDef def) {
+                return skills.putIfAbsent(key(def.id(), def.version()), def) == null;
+            }
+
+            @Override
             public @NonNull Optional<CapSkillDef> find(@NonNull String skillId, int version) {
                 return Optional.ofNullable(skills.get(key(skillId, version)));
             }
@@ -237,6 +242,11 @@ final class CapFixture {
 
     @NonNull CapToolDefPort toolDefs() {
         return new CapToolDefPort() {
+            @Override
+            public boolean insert(@NonNull CapToolDef def) {
+                return tools.putIfAbsent(key(def.id(), def.version()), def) == null;
+            }
+
             @Override
             public @NonNull Optional<CapToolDef> find(@NonNull String toolId, int version) {
                 return Optional.ofNullable(tools.get(key(toolId, version)));
@@ -260,6 +270,11 @@ final class CapFixture {
 
     @NonNull CapMcpServerDefPort serverDefs() {
         return new CapMcpServerDefPort() {
+            @Override
+            public boolean insert(@NonNull CapMcpServerDef def) {
+                return servers.putIfAbsent(key(def.id(), def.version()), def) == null;
+            }
+
             @Override
             public @NonNull Optional<CapMcpServerDef> find(@NonNull String serverId, int version) {
                 return Optional.ofNullable(servers.get(key(serverId, version)));

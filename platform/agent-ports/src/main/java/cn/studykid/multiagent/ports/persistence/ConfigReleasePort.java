@@ -3,6 +3,7 @@ package cn.studykid.multiagent.ports.persistence;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 
@@ -25,6 +26,38 @@ public interface ConfigReleasePort {
      * @return 已保存的发布记录（含分配的序号与标识）
      */
     @NonNull ConfigRelease save(@NonNull ConfigRelease release);
+
+    /**
+     * 按发布记录 id 读取（回滚协议用 · §6.3 第 6 条）。
+     *
+     * <p>⚠️ 回滚需要「按 id 精确取到目标发布」，
+     * 而 {@link #findByPublishSeq} 需要调用方先知道序号 ——
+     * 回滚场景下调用方手里只有 id。
+     *
+     * <p>⚠️ <b>必须带租户标识</b>：发布头行受 RLS 保护，
+     * TENANT 作用域的行只有在该租户的上下文里才可见。
+     *
+     * @param tenantId  租户标识；PLATFORM 作用域传 {@code null}
+     * @param releaseId 发布记录 id
+     * @return 发布记录；不存在时为 {@link Optional#empty()}
+     */
+    @NonNull Optional<ConfigRelease> findByReleaseId(@Nullable String tenantId, long releaseId);
+
+    /**
+     * 把一条发布记录标记为 {@code ROLLED_BACK}（§6.3 第 7 条 / 06 §3.2）。
+     *
+     * <p>⚠️ <b>仅作审计旁路</b>：被标记的发布记录<b>不参与当前版本解析</b>，
+     * 历史内容<b>一字不改</b>（06 §3.2「回滚不覆盖、不删除任何历史对象版本或历史 release 记录」）。
+     *
+     * <p>⚠️ <b>只有当该发布记录当前仍被指针指向时才允许标记</b> ——
+     * 否则会出现「标记了一条早已不是当前的发布记录」的错账，
+     * 使审计旁路指向错误的对象。
+     *
+     * @param tenantId  租户标识；PLATFORM 作用域传 {@code null}
+     * @param releaseId 发布记录 id
+     * @return {@code true} 表示已标记
+     */
+    boolean markRolledBack(@Nullable String tenantId, long releaseId);
 
     /**
      * 按发布序号读取（<b>租户作用域</b>）。

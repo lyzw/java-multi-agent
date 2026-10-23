@@ -38,6 +38,22 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
     private static final String SQL_FIND = "SELECT " + COLUMNS
             + " FROM cap_tool_def WHERE id = ? AND version = ?";
 
+    /**
+     * 插入一条不可变版本行（§6.3 第 1 条 · W-PERM-P5）。
+     *
+     * <p>⚠️ <b>ON CONFLICT DO NOTHING 而非 DO UPDATE</b>：
+     * 已发布版本行不可变（§6.1）；重复插入必须<b>保留原行</b>。
+     * 若用 DO UPDATE，一次误重放就会<b>改写已发布内容</b>。
+     */
+    private static final String SQL_INSERT = """
+            INSERT INTO cap_tool_def
+                (id, version, name, kind, risk_level, mcp_server_id, mcp_tool_name,
+                 input_schema, param_policies, namespace, config_fingerprint,
+                 schema_version, created_at, updated_at, published_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, 'platform', ?, ?, ?, ?, ?)
+            ON CONFLICT (id, version) DO NOTHING
+            """;
+
     private static final String SQL_FIND_LATEST_PUBLISHED = "SELECT " + COLUMNS
             + " FROM cap_tool_def WHERE id = ? AND published_at IS NOT NULL"
             + " ORDER BY version DESC LIMIT 1";
@@ -50,6 +66,36 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
 
     public JdbcCapToolDefRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    @Override
+    public boolean insert(@NonNull CapToolDef def) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_INSERT)) {
+                        ps.setString(1, def.id());
+                        ps.setInt(2, def.version());
+                        ps.setString(3, def.name());
+                        // ⚠️ DB 的 kind 取值域是小写（'native' / 'mcp'）
+                        ps.setString(4, def.kind().name().toLowerCase(java.util.Locale.ROOT));
+                        ps.setString(5, def.riskLevel().name());
+                        ps.setString(6, def.mcpServerId());
+                        ps.setString(7, def.mcpToolName());
+                        ps.setString(8, def.inputSchema());
+                        ps.setString(9, def.paramPolicies());
+                        ps.setString(10, def.configFingerprint());
+                        ps.setInt(11, def.schemaVersion());
+                        ps.setTimestamp(12, Timestamp.from(def.createdAt()));
+                        ps.setTimestamp(13, Timestamp.from(def.createdAt()));
+                        if (def.publishedAt() == null) {
+                            ps.setNull(14, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                        } else {
+                            ps.setTimestamp(14, Timestamp.from(def.publishedAt()));
+                        }
+                        return ps.executeUpdate() > 0;
+                    }
+                });
     }
 
     @Override

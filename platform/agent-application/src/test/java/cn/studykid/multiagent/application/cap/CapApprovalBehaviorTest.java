@@ -87,7 +87,8 @@ class CapApprovalBehaviorTest {
                 new CompensationFramework(exec.capApprovalPort(), exec.budgetPort(),
                         exec.compensationTaskPort()),
                 cap.toolDefs(), exec.budgetPort(), exec.ledgerPort(), exec.intentPort(),
-                exec.resultEventPort(), BigDecimal.ONE, new CapEnforcementSwitch(true));
+                exec.resultEventPort(), BigDecimal.ONE, new CapEnforcementSwitch(true),
+                DecisionAuditService.noop());
     }
 
     private CapExecutionFlow flowRequiringApproval() {

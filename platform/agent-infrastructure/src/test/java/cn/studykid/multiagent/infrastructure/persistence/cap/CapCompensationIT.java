@@ -25,6 +25,7 @@ import cn.studykid.multiagent.application.cap.CapEnforcementSwitch;
 import cn.studykid.multiagent.application.cap.CapExecutionFlow;
 import cn.studykid.multiagent.application.cap.ClosureFingerprint;
 import cn.studykid.multiagent.application.cap.CompensationFramework;
+import cn.studykid.multiagent.application.cap.DecisionAuditService;
 import cn.studykid.multiagent.application.cap.ExecutionAdmissionChecker;
 import cn.studykid.multiagent.application.cap.IdempotencyGuard;
 import cn.studykid.multiagent.application.cap.InvocationValidator;
@@ -147,6 +148,8 @@ class CapCompensationIT extends CapITBase {
                 + " param_policies, namespace, config_fingerprint, published_at)"
                 + " VALUES ('" + TOOL_ID + "', 1, 'it tool', 'native', 'WRITE_EXTERNAL', '{}'::jsonb,"
                 + " '[]'::jsonb, 'platform', 'fp-tool', now())");
+        // ⚠️ P5：当前生效版本只由**发布指针**决定（§6.3 第 5 条）
+        publishPlatformObjects("tool:" + TOOL_ID + "@1", "skill:" + SKILL_ID + "@1");
     }
 
     private String seedAgent(String tenantId, String enabledSkillsJson) {
@@ -353,7 +356,8 @@ class CapCompensationIT extends CapITBase {
                 new FaultyBudget(), new FaultyLedger(),
                 new JdbcExecutionIntentRepository(appPool),
                 new FaultyResultEvents(),
-                BigDecimal.ONE, new CapEnforcementSwitch(true));
+                BigDecimal.ONE, new CapEnforcementSwitch(true),
+                DecisionAuditService.noop());
     }
 
     /** 需要审批的策略（P3 走 CAP 审批链）。 */
@@ -713,7 +717,8 @@ class CapCompensationIT extends CapITBase {
                 new FaultyBudget(), new FaultyLedger(),
                 new JdbcExecutionIntentRepository(appPool),
                 new FaultyResultEvents(),
-                BigDecimal.ONE, new CapEnforcementSwitch(true));
+                BigDecimal.ONE, new CapEnforcementSwitch(true),
+                DecisionAuditService.noop());
     }
 
     /**

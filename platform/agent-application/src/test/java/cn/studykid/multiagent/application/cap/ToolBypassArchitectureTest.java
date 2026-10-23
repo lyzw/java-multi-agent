@@ -347,7 +347,7 @@ class ToolBypassArchitectureTest {
                 stateMachine, compensation, cap.toolDefs(),
                 exec.budgetPort(), exec.ledgerPort(), exec.intentPort(),
                 exec.resultEventPort(), java.math.BigDecimal.ONE,
-                new CapEnforcementSwitch(true));
+                new CapEnforcementSwitch(true), DecisionAuditService.noop());
     }
 
     private static RunClaimPort.LeasedTask task() {

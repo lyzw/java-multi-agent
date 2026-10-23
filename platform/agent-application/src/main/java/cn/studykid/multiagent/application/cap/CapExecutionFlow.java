@@ -125,6 +125,8 @@ public class CapExecutionFlow {
     private final BigDecimal reserveAmountPerToolCall;
     private final String principalId;
     private final CapEnforcementSwitch enforcementSwitch;
+    /** 四字段决策日志（P5-T6 · §5.1 / 08 §7）。 */
+    private final DecisionAuditService audit;
 
     public CapExecutionFlow(@NonNull InvocationValidator validator,
                              @NonNull ClosureResolver closureResolver,
@@ -145,7 +147,8 @@ public class CapExecutionFlow {
         this(validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
                 snapshots, approvalPolicy, approvalStateMachine, compensation, toolDefs,
                 budget, ledger, intents, resultEvents, reserveAmountPerToolCall,
-                DEFAULT_PRINCIPAL_ID, new CapEnforcementSwitch(false));
+                DEFAULT_PRINCIPAL_ID, new CapEnforcementSwitch(false),
+                DecisionAuditService.noop());
     }
 
     /**
@@ -169,11 +172,12 @@ public class CapExecutionFlow {
                              @NonNull ExecutionIntentPort intents,
                              @NonNull ResultEventPort resultEvents,
                              @NonNull BigDecimal reserveAmountPerToolCall,
-                             @NonNull CapEnforcementSwitch enforcementSwitch) {
+                             @NonNull CapEnforcementSwitch enforcementSwitch,
+                             @NonNull DecisionAuditService audit) {
         this(validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
                 snapshots, approvalPolicy, approvalStateMachine, compensation, toolDefs,
                 budget, ledger, intents, resultEvents, reserveAmountPerToolCall,
-                DEFAULT_PRINCIPAL_ID, enforcementSwitch);
+                DEFAULT_PRINCIPAL_ID, enforcementSwitch, audit);
     }
 
     public CapExecutionFlow(@NonNull InvocationValidator validator,
@@ -192,11 +196,12 @@ public class CapExecutionFlow {
                              @NonNull ExecutionIntentPort intents,
                              @NonNull ResultEventPort resultEvents,
                              @NonNull BigDecimal reserveAmountPerToolCall,
-                             @NonNull String principalId) {
+                             @NonNull String principalId,
+                             @NonNull DecisionAuditService audit) {
         this(validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
                 snapshots, approvalPolicy, approvalStateMachine, compensation, toolDefs,
                 budget, ledger, intents, resultEvents, reserveAmountPerToolCall, principalId,
-                new CapEnforcementSwitch(false));
+                new CapEnforcementSwitch(false), audit);
     }
 
     /**
@@ -221,7 +226,8 @@ public class CapExecutionFlow {
                              @NonNull ResultEventPort resultEvents,
                              @NonNull BigDecimal reserveAmountPerToolCall,
                              @NonNull String principalId,
-                             @NonNull CapEnforcementSwitch enforcementSwitch) {
+                             @NonNull CapEnforcementSwitch enforcementSwitch,
+                             @NonNull DecisionAuditService audit) {
         if (reserveAmountPerToolCall == null || reserveAmountPerToolCall.signum() <= 0) {
             // ⚠️ 构造期校验：缺失/非法配置在装配时就失败，
             //    而不是等某个工具调用时才被拒 —— 那会让「预算闸门形同虚设」。
@@ -246,6 +252,7 @@ public class CapExecutionFlow {
         this.reserveAmountPerToolCall = reserveAmountPerToolCall;
         this.principalId = principalId;
         this.enforcementSwitch = enforcementSwitch;
+        this.audit = audit;
     }
 
     /**
@@ -260,6 +267,9 @@ public class CapExecutionFlow {
     /**
      * 执行一次工具调用的完整准入链（§5.3 步骤 1–15）。
      *
+     * <p>⚠️ <b>本方法只做「判定 + 副作用」，审计在返回值之后统一落库</b>：
+     * 见 {@link #decide} 与 {@link #auditDecision}。
+     *
      * @param tenantId 租户
      * @param task     已领取任务（提供 runId / fencingToken / attempt）
      * @param call     模型请求的工具调用
@@ -267,6 +277,50 @@ public class CapExecutionFlow {
      * @return 四字段决策结论
      */
     public @NonNull CapToolDecision invoke(@NonNull String tenantId,
+                                            RunClaimPort.@NonNull LeasedTask task,
+                                            ModelResponse.@NonNull ToolCallRequest call,
+                                           @NonNull ToolHandler handler) {
+        CapToolDecision decision = decide(tenantId, task, call, handler);
+        auditDecision(tenantId, task, call, decision);
+        return decision;
+    }
+
+    /**
+     * 落一条四字段决策日志（§5.1 / 08 §7）。
+     *
+     * <p>⚠️ <b>invocationId ≡ 账本 operationId</b>（P2 决策 2）：
+     * 同一个 id 才能把「决策」与「账本」串起来 ——
+     * 否则「每次调用可经 runId + invocationId 追踪」在跨表关联时就断了。
+     * 尚未分配 operationId 的拒绝（Phase A 拒绝）没有账本行，
+     * 此时用「工具名 + 尝试号」构造一个<b>稳定</b>的替代标识，
+     * 保证同一调用的多条拒绝日志仍可归并。
+     *
+     * <p>⚠️ <b>审计失败的处置分级在 {@link DecisionAuditService} 内完成</b>：
+     * 未执行的决策写不进去 → fail-closed（拒绝本次调用是安全的）；
+     * 已执行的决策写不进去 → 只告警（不能把「已完成」变成「失败」造成重复副作用）。
+     */
+    private void auditDecision(@NonNull String tenantId,
+                               RunClaimPort.@NonNull LeasedTask task,
+                               ModelResponse.@NonNull ToolCallRequest call,
+                               @NonNull CapToolDecision decision) {
+        String invocationId = decision.operationId() != null
+                ? decision.operationId()
+                : "pending:" + task.runId() + ':' + call.toolName();
+        audit.recordDecision(
+                decision.decision(), tenantId, task.runId(), invocationId,
+                null, null, principalId, call.toolName());
+    }
+
+    /**
+     * 执行一次工具调用的完整准入链（§5.3 步骤 1–15）——<b>不含审计</b>。
+     *
+     * @param tenantId 租户
+     * @param task     已领取任务
+     * @param call     模型请求的工具调用
+     * @param handler  目标工具处理器
+     * @return 四字段决策结论
+     */
+    private @NonNull CapToolDecision decide(@NonNull String tenantId,
                                             RunClaimPort.@NonNull LeasedTask task,
                                             ModelResponse.@NonNull ToolCallRequest call,
                                            @NonNull ToolHandler handler) {

@@ -104,7 +104,7 @@ class CapExecutionFlowTest {
                 validator, resolver, admission, idempotency, authz, cap.rolePermissions(),
                 cap.snapshots(), approvalPolicy, stateMachine, compensation, cap.toolDefs(),
                 exec.budgetPort(), exec.ledgerPort(), exec.intentPort(),
-                exec.resultEventPort(), BigDecimal.ONE, capSwitch);
+                exec.resultEventPort(), BigDecimal.ONE, capSwitch, DecisionAuditService.noop());
     }
 
     /**

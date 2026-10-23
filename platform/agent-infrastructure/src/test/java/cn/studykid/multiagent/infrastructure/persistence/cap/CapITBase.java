@@ -118,9 +118,72 @@ abstract class CapITBase {
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
         // ⚠️ platform 级对象定义（P1）：无 RLS、无 tenant_id，按 id 清理。
         //    只清本轮用例用到的固定 id，避免误删他人数据。
-        adminExec("DELETE FROM cap_tool_def WHERE id LIKE 'it-cap-%'");
-        adminExec("DELETE FROM cap_skill_def WHERE id LIKE 'it-cap-%'");
-        adminExec("DELETE FROM cap_mcp_server_def WHERE id LIKE 'it-cap-%'");
+        adminExec("DELETE FROM cap_tool_def WHERE id LIKE 'it-cap-%' OR id LIKE 'it-p5%'");
+        adminExec("DELETE FROM cap_skill_def WHERE id LIKE 'it-cap-%' OR id LIKE 'it-p5%'");
+        adminExec("DELETE FROM cap_mcp_server_def WHERE id LIKE 'it-cap-%' OR id LIKE 'it-p5%'");
+        // ⚠️ P5：发布指针与发布头是「当前生效版本」的权威来源。
+        //    不清则上一例的指针会让本例解析到上一例的版本 ——
+        //    失败现场指向「解析逻辑坏了」，真因却是夹具残留。
+        //    ⚠️ 顺序：先删指针（外键指向发布头），再删发布头。
+        adminExec("DELETE FROM cap_config_pointer");
+        adminExec("DELETE FROM cap_config_release");
+        // ⚠️ P5：四字段决策日志（追加不可改的表不在此列，DELETE 不受触发器限制）
+        adminExec("DELETE FROM cap_decision_log");
+    }
+
+    /**
+     * 把给定的平台对象版本发布到<b>当前发布指针</b>上（P5 · §6.3）。
+     *
+     * <p>⚠️ <b>为什么需要它</b>：
+     * P5 起「当前生效版本」只由<b>指针指向的 PUBLISHED release</b>决定
+     * （§6.3 第 5 条），<b>绝不</b>以「某对象最新已发布版本行」代替。
+     * 因此仅往 {@code cap_*_def} 插一行 {@code published_at = now()}
+     * <b>不再足以让对象可解析</b> —— 必须同时有一条发布头与一条指针。
+     * 本助手把这两样一次造齐，让夹具与真实发布语义一致。
+     *
+     * <p>⚠️ <b>用管理角色执行</b>：
+     * PLATFORM 作用域的发布头与指针写入受 RLS 写策略限制
+     * （只放行「本租户的 TENANT 行」，见 V15 注释），
+     * 平台级发布须由平台运维角色执行 —— 这正是被测的隔离边界。
+     *
+     * @param objects 对象引用，形如 {@code tool:it-cap-tool@1}、{@code skill:it-cap-skill@1}
+     */
+    protected static void publishPlatformObjects(String... objects) {
+        StringBuilder json = new StringBuilder("[");
+        for (int i = 0; i < objects.length; i++) {
+            if (i > 0) {
+                json.append(',');
+            }
+            json.append(objectRefJson(objects[i]));
+        }
+        json.append(']');
+
+        long seq = adminQueryLong("SELECT nextval('cap_config_publish_seq')");
+        adminExec("INSERT INTO cap_config_release (config_publish_seq, scope, tenant_id,"
+                + " object_versions, aggregate_fingerprint, status, requester_id, approver_id,"
+                + " effective_at, created_at)"
+                + " VALUES (" + seq + ", 'PLATFORM', NULL, '" + json + "'::jsonb,"
+                + " 'fp-agg-" + seq + "', 'PUBLISHED', 'it-requester', 'it-approver',"
+                + " now(), now())");
+        long releaseId = adminQueryLong("SELECT release_id FROM cap_config_release"
+                + " WHERE config_publish_seq = " + seq);
+        adminExec("INSERT INTO cap_config_pointer (pointer_key, scope, tenant_id,"
+                + " current_release_id, current_publish_seq, updated_at)"
+                + " VALUES ('PLATFORM', 'PLATFORM', NULL, " + releaseId + ", " + seq + ", now())"
+                + " ON CONFLICT (pointer_key) DO UPDATE SET current_release_id = EXCLUDED.current_release_id,"
+                + " current_publish_seq = EXCLUDED.current_publish_seq, updated_at = now()");
+    }
+
+    /**
+     * 把 {@code type:id@version} 转成发布头 {@code object_versions} 的一项。
+     */
+    private static String objectRefJson(String ref) {
+        int at = ref.lastIndexOf('@');
+        int colon = ref.indexOf(':');
+        String type = ref.substring(0, colon);
+        String id = ref.substring(colon + 1, at);
+        String version = ref.substring(at + 1);
+        return "{\"type\":\"" + type + "\",\"id\":\"" + id + "\",\"version\":" + version + "}";
     }
 
     /**

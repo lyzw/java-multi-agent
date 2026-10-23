@@ -752,16 +752,116 @@ public class ApplicationConfiguration {
     }
 
     /**
-     * 发布版本解析（P1-T1）。
+     * 发布版本解析（P5 替换为「指针指向的 PUBLISHED release」读）。
      *
-     * <p>⚠️ <b>这是 P1 的过渡实现</b>（对象级解析 + 回滚守卫），
-     * P5 必须替换为「指针指向的 PUBLISHED release」读（§6.3）。
+     * <p>⚠️ <b>P1 的过渡实现已被整体替换</b>：
+     * 原实现退化为「对象级解析」（取该对象最新已发布版本行），
+     * 并在「存在 ROLLED_BACK 发布」时一律解析失败 ——
+     * 因为没有「当前指针」这一实体，回滚后无从判断「当前该用哪个版本」。
+     * 现在的口径：<b>平台指针 → 指针指向的 PUBLISHED release → object_versions → id→精确版本</b>，
+     * <b>绝不以 max(seq) 选择当前版本</b>（§6.3 第 2/5 条，PUB-2）。
      */
     @Bean
     public cn.studykid.multiagent.ports.persistence.PublishedVersionPort publishedVersionPort(
-            DataSource dataSource) {
+            cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
+            cn.studykid.multiagent.ports.persistence.ConfigReleasePort releases) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcPublishedVersionPort(
+                pointers, releases);
+    }
+
+    // ── W-PERM-P5：发布审计与生命周期 ───────────────────────────────
+
+    /**
+     * 当前发布指针仓储（P5-T1 · §6.3 第 3/5 条）。
+     *
+     * <p>⚠️ <b>PLATFORM 指针的写入受 RLS 限制</b>：
+     * {@code cap_config_pointer} 的写策略只放行「本租户的 TENANT 指针」
+     * （与 {@code cap_config_release} 同一处置，见 V15 注释）。
+     * 平台级发布须由<b>平台运维角色</b>（BYPASSRLS）执行，
+     * 这是刻意的隔离：任一租户都能改写全局当前指针 = 任一租户单方面替换全平台生效配置。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ConfigPointerPort configPointerPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcConfigPointerRepository(
                 dataSource);
+    }
+
+    /** 发布事务边界（P5-T1 · §6.3 第 1 条：版本行 + release + 指针 CAS 同事务）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ConfigPublishTransaction
+            configPublishTransaction(DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcConfigPublishTransaction(dataSource);
+    }
+
+    /** 四字段决策日志仓储（P5-T6 · §5.1 / 08 §7）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.DecisionAuditPort decisionAuditPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcDecisionAuditRepository(dataSource);
+    }
+
+    /** 生命周期状态迁移仓储（P5-T4 · §6.6 / 06 §3）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ConfigLifecyclePort configLifecyclePort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcConfigLifecycleRepository(dataSource);
+    }
+
+    /** 生命周期状态机（P5-T4）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ConfigLifecycleStateMachine
+            configLifecycleStateMachine() {
+        return new cn.studykid.multiagent.application.cap.ConfigLifecycleStateMachine();
+    }
+
+    /** 生命周期迁移服务（P5-T4 · 状态机 + CAS 端口的合体）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ConfigLifecycleService configLifecycleService(
+            cn.studykid.multiagent.ports.persistence.ConfigLifecyclePort port,
+            cn.studykid.multiagent.application.cap.ConfigLifecycleStateMachine machine) {
+        return new cn.studykid.multiagent.application.cap.ConfigLifecycleService(port, machine);
+    }
+
+    /** 配置期校验门禁（P5-T5 · §6.4 / 06 §3）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ConfigValidationGate configValidationGate() {
+        return new cn.studykid.multiagent.application.cap.ConfigValidationGate();
+    }
+
+    /** 四字段决策日志服务（P5-T6/T7）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.DecisionAuditService decisionAuditService(
+            cn.studykid.multiagent.ports.persistence.DecisionAuditPort port,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.cap.DecisionAuditService(port, clock);
+    }
+
+    /**
+     * 原子发布与回滚服务（P5-T1/T2/T3 · §6.3）。
+     *
+     * <p>⚠️ <b>CAP 链路的生产开启前置条件已在本阶段解除</b>：
+     * P2/P3 交付说明登记的「P5 发布指针读落地前不得生产开启 CAP」，
+     * 其技术前提（{@code JdbcPublishedVersionPort} 的 §6.3 偏差）已由本次替换消除。
+     * 剩余的运营前置（平台运维角色的 DB 凭据接入）见 P5 交付说明。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ConfigPublishService configPublishService(
+            cn.studykid.multiagent.ports.persistence.ConfigPublishTransaction tx,
+            cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
+            cn.studykid.multiagent.ports.persistence.ConfigReleasePort releases,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.ports.persistence.CapSkillDefPort skillDefs,
+            cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort serverDefs,
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            cn.studykid.multiagent.ports.persistence.DecisionAuditPort audit,
+            cn.studykid.multiagent.application.cap.ConfigValidationGate gate,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.cap.ConfigPublishService(
+                tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate, clock);
     }
 
     /**
@@ -1018,12 +1118,13 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.RunToolLedgerPort ledger,
             cn.studykid.multiagent.ports.persistence.ExecutionIntentPort intents,
             cn.studykid.multiagent.ports.persistence.ResultEventPort resultEvents,
-            cn.studykid.multiagent.application.cap.CapEnforcementSwitch enforcementSwitch) {
+            cn.studykid.multiagent.application.cap.CapEnforcementSwitch enforcementSwitch,
+            cn.studykid.multiagent.application.cap.DecisionAuditService decisionAuditService) {
         return new cn.studykid.multiagent.application.cap.CapExecutionFlow(
                 validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
                 snapshots, approvalPolicy, approvalStateMachine, compensationFramework,
                 capToolDefPort, budget, ledger, intents, resultEvents,
                 cn.studykid.multiagent.application.config.BudgetPolicy.DEFAULT_RESERVE_AMOUNT,
-                enforcementSwitch);
+                enforcementSwitch, decisionAuditService);
     }
 }

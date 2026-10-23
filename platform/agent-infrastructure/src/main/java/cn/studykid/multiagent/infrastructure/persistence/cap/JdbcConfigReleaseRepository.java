@@ -11,6 +11,7 @@ import java.util.Set;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.tenant.TenantContext;
@@ -80,6 +81,39 @@ public class JdbcConfigReleaseRepository implements ConfigReleasePort {
             LIMIT 1
             """;
 
+    /**
+     * 按发布记录 id 读取（回滚协议用 · §6.3 第 6 条）。
+     *
+     * <p>⚠️ 不带租户过滤：{@code cap_config_release} 的<b>读</b>策略已放行
+     * PLATFORM 行与本租户行（V15 分读写策略），租户边界由 DB 保证。
+     */
+    private static final String SQL_FIND_BY_ID = """
+            SELECT release_id, config_publish_seq, scope, tenant_id::text, object_versions::text,
+                   aggregate_fingerprint, status, requester_id, approver_id,
+                   effective_at, created_at
+            FROM cap_config_release
+            WHERE release_id = ?
+            """;
+
+    /**
+     * 标记为 ROLLED_BACK（§6.3 第 7 条 / 06 §3.2）。
+     *
+     * <p>⚠️ <b>「仍被指针指向」是前置条件</b>：
+     * 否则会把一条早已不是当前的发布记录标记成已回滚 ——
+     * 审计旁路指向错误的对象，比不标记更糟。
+     *
+     * <p>⚠️ <b>历史内容一字不改</b>：只改 status 列。
+     * 对象版本行与发布记录本身都保留（06 §3.2「回滚不覆盖、不删除任何历史记录」）。
+     */
+    private static final String SQL_MARK_ROLLED_BACK = """
+            UPDATE cap_config_release
+               SET status = 'ROLLED_BACK'
+             WHERE release_id = ?
+               AND status = 'PUBLISHED'
+               AND EXISTS (SELECT 1 FROM cap_config_pointer
+                            WHERE current_release_id = ?)
+            """;
+
     private final DataSource dataSource;
 
     public JdbcConfigReleaseRepository(@NonNull DataSource dataSource) {
@@ -126,6 +160,34 @@ public class JdbcConfigReleaseRepository implements ConfigReleasePort {
                                     release.effectiveAt(),
                                     rs.getTimestamp("created_at").toInstant());
                         }
+                    }
+                });
+    }
+
+    @Override
+    public @NonNull Optional<ConfigRelease> findByReleaseId(@Nullable String tenantId,
+                                                              long releaseId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(tenantId),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_FIND_BY_ID)) {
+                        ps.setLong(1, releaseId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            return rs.next() ? Optional.of(map(rs)) : Optional.empty();
+                        }
+                    }
+                });
+    }
+
+    @Override
+    public boolean markRolledBack(@Nullable String tenantId, long releaseId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(tenantId),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_MARK_ROLLED_BACK)) {
+                        ps.setLong(1, releaseId);
+                        ps.setLong(2, releaseId);
+                        return ps.executeUpdate() > 0;
                     }
                 });
     }

@@ -59,6 +59,9 @@ class InvocationValidatorIT extends CapITBase {
                 + " param_policies, namespace, config_fingerprint, published_at)"
                 + " VALUES ('" + TOOL_ID + "', 1, 'it tool', 'native', 'READ', '{}'::jsonb,"
                 + " '[]'::jsonb, 'platform', 'fp-tool', now())");
+        // ⚠️ P5：当前生效版本只由**发布指针**决定（§6.3 第 5 条），
+        //    仅插版本行不足以让对象可解析 —— 必须同时发布到指针上。
+        publishPlatformObjects("tool:" + TOOL_ID + "@1", "skill:" + SKILL_ID + "@1");
     }
 
     /**
@@ -203,6 +206,8 @@ class InvocationValidatorIT extends CapITBase {
                 + " param_policies, namespace, config_fingerprint, published_at)"
                 + " VALUES ('" + TOOL_ID + "', 2, 'it tool', 'native', 'READ', '{}'::jsonb,"
                 + " '[]'::jsonb, 'platform', 'fp-tool-v2', now())");
+        // Tool 重发 = 新版本 + **新的发布头 + 指针前移**（§6.3 原子发布）
+        publishPlatformObjects("tool:" + TOOL_ID + "@2", "skill:" + SKILL_ID + "@1");
 
         AuthorizationDecision decision = validator()
                 .validate(request(tenantA, agentId, runId, 1L));
