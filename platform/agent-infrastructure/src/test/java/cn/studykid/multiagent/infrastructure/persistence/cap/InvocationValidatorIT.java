@@ -45,7 +45,8 @@ class InvocationValidatorIT extends CapITBase {
     private static final String PRINCIPAL = "it-cap-principal";
 
     /** 固定清单（P4 落地前的测试替身）：本阶段只测 native 工具。 */
-    private static final McpManifestPort EMPTY_MANIFEST = serverId -> Set.of();
+    private static final McpManifestPort EMPTY_MANIFEST =
+            serverId -> McpManifestPort.ManifestSnapshot.available(Set.of());
 
     // ── 夹具 ──────────────────────────────────────────────────────
 

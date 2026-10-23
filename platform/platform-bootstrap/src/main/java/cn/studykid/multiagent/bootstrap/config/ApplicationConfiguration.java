@@ -765,14 +765,99 @@ public class ApplicationConfiguration {
     }
 
     /**
-     * MCP 固定清单端口（P1-T6）。
+     * MCP 固定清单端口（P1-T6 · P4-T2 落地真实适配）。
      *
-     * <p>⚠️ <b>P4 落地前的 fail-closed 占位</b>：一律返回空集 → 任何 MCP 操作都不被允许。
-     * 绝不返回「全部允许」——那会把「未接入适配器」变成「MCP 可调用任意操作」。
+     * <p>⚠️ <b>清单「不可用」与「清单为空」必须区分</b>：
+     * 前者是运行故障（server 宕机 / SSRF 拦截 / 熔断打开），
+     * 后者是配置事实（这个 server 确实没有工具）。
+     * 两者在授权语义上都是「无法确认操作仍在清单内」，
+     * 但运维处置方式完全不同 —— 靠日志区分，不靠原因码。
      */
     @Bean
-    public cn.studykid.multiagent.ports.mcp.McpManifestPort mcpManifestPort() {
-        return new cn.studykid.multiagent.infrastructure.mcp.UnconfiguredMcpManifestPort();
+    public cn.studykid.multiagent.ports.mcp.McpManifestPort mcpManifestPort(
+            cn.studykid.multiagent.ports.mcp.McpTransportPort mcpTransport,
+            cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort serverDefs) {
+        return new cn.studykid.multiagent.infrastructure.mcp.TransportMcpManifestPort(
+                mcpTransport, serverDefs);
+    }
+
+    /**
+     * MCP 地址解析端口（P4-T5）。
+     *
+     * <p>抽成端口是为了让<b>防 rebinding 的时序行为可测</b>：
+     * 测试可以精确控制「第一次解析返回 A、第二次解析返回 B」。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.mcp.McpAddressResolverPort mcpAddressResolverPort() {
+        return new cn.studykid.multiagent.infrastructure.mcp.SystemMcpAddressResolver();
+    }
+
+    /**
+     * MCP 端点安全守卫（P4-T5 · 06 §5 SSRF）。
+     */
+    @Bean
+    public cn.studykid.multiagent.infrastructure.mcp.McpEndpointGuard mcpEndpointGuard(
+            cn.studykid.multiagent.ports.mcp.McpAddressResolverPort resolver) {
+        return new cn.studykid.multiagent.infrastructure.mcp.McpEndpointGuard(resolver);
+    }
+
+    /**
+     * MCP 凭据解析端口（P4-T6 · 06 §5 凭据）。
+     *
+     * <p>⚠️ 只支持 {@code env://} 与 {@code prop://} 两种定位符：
+     * 数据库里永远只有定位符，材料在解析那一刻才从外部取，取到即用即弃。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.mcp.McpCredentialPort mcpCredentialPort(
+            org.springframework.core.env.Environment environment) {
+        return new cn.studykid.multiagent.infrastructure.mcp.RefMcpCredentialPort(
+                name -> {
+                    String value = System.getenv(name);
+                    return value == null ? java.util.Optional.empty() : java.util.Optional.of(value);
+                },
+                key -> java.util.Optional.ofNullable(environment.getProperty(key)));
+    }
+
+    /**
+     * MCP 熔断器（P4-T1 · §6.5 超时/限流/熔断）。
+     */
+    @Bean
+    public cn.studykid.multiagent.infrastructure.mcp.McpCircuitBreaker mcpCircuitBreaker() {
+        return new cn.studykid.multiagent.infrastructure.mcp.McpCircuitBreaker(
+                5, java.time.Duration.ofSeconds(30));
+    }
+
+    /**
+     * MCP 传输端口（P4-T1 · §6.5）。
+     *
+     * <p>⚠️ <b>这是唯一的 MCP 外部副作用出口</b>：
+     * SSRF 校验、超时、限流、熔断、响应上限、凭据脱敏全在这里集中施加。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.mcp.McpTransportPort mcpTransportPort(
+            cn.studykid.multiagent.infrastructure.mcp.McpEndpointGuard guard,
+            cn.studykid.multiagent.ports.mcp.McpCredentialPort credentials,
+            cn.studykid.multiagent.infrastructure.mcp.McpCircuitBreaker breaker) {
+        return new cn.studykid.multiagent.infrastructure.mcp.HttpMcpTransport(
+                guard, credentials,
+                cn.studykid.multiagent.infrastructure.mcp.McpTransportOptions.defaults(),
+                breaker);
+    }
+
+    /**
+     * MCP-backed 工具解析器（P4 · ADR-011 / 07 §3）。
+     *
+     * <p>⚠️ MCP 工具<b>不另开执行入口</b>：它们与原生工具共用
+     * {@code ToolInvocationGate} 这一条路径。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlerProvider(
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort serverDefs,
+            cn.studykid.multiagent.ports.persistence.PublishedVersionPort publishedVersions,
+            cn.studykid.multiagent.ports.mcp.McpTransportPort transport) {
+        return new cn.studykid.multiagent.infrastructure.mcp.DbMcpHandlerProvider(
+                toolDefs, serverDefs, publishedVersions, transport);
     }
 
     /** 角色→动作权限端口（P1-T3）。 */
@@ -813,9 +898,10 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.application.cap.PermissionResolver resolver,
             cn.studykid.multiagent.ports.persistence.PublishedVersionPort publishedVersions,
             cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
-            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs) {
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            cn.studykid.multiagent.ports.mcp.McpManifestPort manifest) {
         return new cn.studykid.multiagent.application.cap.CachingClosureResolver(
-                resolver, publishedVersions, toolDefs, agentDefs);
+                resolver, publishedVersions, toolDefs, agentDefs, manifest);
     }
 
     /**

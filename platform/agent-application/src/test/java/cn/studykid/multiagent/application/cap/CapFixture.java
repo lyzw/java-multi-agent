@@ -49,6 +49,8 @@ final class CapFixture {
     final Map<String, CapMcpServerDef> servers = new LinkedHashMap<>();
     final Map<String, CapAgentDef> agents = new LinkedHashMap<>();
     final Map<String, Set<String>> manifests = new LinkedHashMap<>();
+    /** 标记为「清单不可用」的 server（运行故障态，与「清单为空」语义不同）。 */
+    final Set<String> unavailableManifests = new LinkedHashSet<>();
     final Map<String, List<Set<String>>> manifestSequences = new LinkedHashMap<>();
     final Map<String, Integer> manifestCallCounts = new LinkedHashMap<>();
     final Map<String, Long> authzVersions = new LinkedHashMap<>();
@@ -102,9 +104,26 @@ final class CapFixture {
      */
     @NonNull CapFixture withServer(@NonNull String id, int version,
                                     @Nullable List<String> exposedToolAllowlist) {
+        return withServer(id, version, exposedToolAllowlist,
+                "https://mcp.internal/" + id, McpTrustTier.INTERNAL);
+    }
+
+    /**
+     * 登记一个 MCP Server（可指定端点与信任级别 —— P4 端点安全用例需要）。
+     *
+     * @param id              Server 逻辑 id
+     * @param version         版本号
+     * @param exposedToolAllowlist 暴露清单；{@code null} = 未配置；{@code []} = 显式空清单（§4.4）
+     * @param endpoint        端点 URL
+     * @param tier            信任级别
+     */
+    @NonNull CapFixture withServer(@NonNull String id, int version,
+                                    @Nullable List<String> exposedToolAllowlist,
+                                    @NonNull String endpoint,
+                                    @NonNull McpTrustTier tier) {
         servers.put(key(id, version), new CapMcpServerDef(id, version,
-                CapMcpServerDef.Transport.HTTP, "https://mcp.internal/" + id, null,
-                CapMcpServerDef.AuthKind.TOKEN, McpTrustTier.INTERNAL,
+                CapMcpServerDef.Transport.HTTP, endpoint, null,
+                CapMcpServerDef.AuthKind.TOKEN, tier,
                 exposedToolAllowlist, CapabilityRiskLevel.WRITE_EXTERNAL, false,
                 "fp-server-" + id + "-" + version, "cred-ref-" + id, 1,
                 java.time.Instant.EPOCH, java.time.Instant.EPOCH));
@@ -274,13 +293,22 @@ final class CapFixture {
     }
 
     @NonNull McpManifestPort manifest() {
-        return serverId -> {
-            List<Set<String>> sequence = manifestSequences.get(serverId);
-            if (sequence == null) {
-                return manifests.getOrDefault(serverId, Set.of());
+        return new McpManifestPort() {
+            @Override
+            public McpManifestPort.@NonNull ManifestSnapshot manifest(@NonNull String serverId) {
+                if (unavailableManifests.contains(serverId)) {
+                    // ⚠️ 「清单不可用」≠「清单为空」：前者是运行故障，后者是配置事实
+                    return McpManifestPort.ManifestSnapshot.unavailable("测试夹具：清单不可用");
+                }
+                List<Set<String>> sequence = manifestSequences.get(serverId);
+                if (sequence == null) {
+                    return McpManifestPort.ManifestSnapshot.available(
+                            manifests.getOrDefault(serverId, Set.of()));
+                }
+                int call = manifestCallCounts.merge(serverId, 1, Integer::sum) - 1;
+                return McpManifestPort.ManifestSnapshot.available(
+                        sequence.get(Math.min(call, sequence.size() - 1)));
             }
-            int call = manifestCallCounts.merge(serverId, 1, Integer::sum) - 1;
-            return sequence.get(Math.min(call, sequence.size() - 1));
         };
     }
 

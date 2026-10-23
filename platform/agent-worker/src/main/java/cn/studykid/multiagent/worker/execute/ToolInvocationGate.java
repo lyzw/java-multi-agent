@@ -94,6 +94,15 @@ public class ToolInvocationGate {
      */
     private final cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow;
 
+    /**
+     * MCP-backed 工具处理器的动态解析器（P4 · ADR-011 / 07 §3）。
+     *
+     * <p>⚠️ <b>可为空 = MCP 未装配</b>：此时只有静态注册的原生工具可用。
+     * MCP 工具<b>不另开执行入口</b>——它与原生工具共用本类这一条路径，
+     * 否则八道闸门对 MCP 全部失效。
+     */
+    private final cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers;
+
     /** 默认审批桩：恒返回 NO_APPROVAL（审批权威接入前的 fail-closed 占位）。 */
     private static final ApprovalPort NO_APPROVAL_PORT = new ApprovalPort() {
         @Override
@@ -232,6 +241,27 @@ public class ToolInvocationGate {
                               @NonNull CancelGuard cancelGuard,
                               RiskBasedApprovalPolicy.ApprovalSource approvalSource,
                               cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                reserveAmountPerToolCall, cancelGuard, approvalSource, capFlow, null);
+    }
+
+    /**
+     * 最完整构造器（P4）：额外注入 MCP-backed 工具解析器。
+     *
+     * <p>⚠️ <b>MCP 工具不另开执行入口</b>（ADR-011 / 07 §3）：
+     * 它们与原生工具共用本类这一条路径，八道闸门一视同仁。
+     */
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall,
+                              @NonNull CancelGuard cancelGuard,
+                              RiskBasedApprovalPolicy.ApprovalSource approvalSource,
+                              cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow,
+                              cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers) {
         this.handlers = List.copyOf(handlers);
         this.authorization = authorization;
         this.approvalPolicy = approvalPolicy;
@@ -241,6 +271,7 @@ public class ToolInvocationGate {
         this.cancelGuard = cancelGuard;
         this.approvalSource = approvalSource;
         this.capFlow = capFlow;
+        this.mcpHandlers = mcpHandlers;
         if (reserveAmountPerToolCall == null
                 || reserveAmountPerToolCall.signum() <= 0) {
             throw new IllegalArgumentException(
@@ -638,10 +669,20 @@ public class ToolInvocationGate {
     }
 
     private ToolHandler findHandler(String toolName) {
-        return handlers.stream()
+        ToolHandler registered = handlers.stream()
                 .filter(h -> h.toolName().equals(toolName))
                 .findFirst()
                 .orElse(null);
+        if (registered != null) {
+            return registered;
+        }
+        // ⚠️ MCP 工具走**同一条**路径（ADR-011）：这里只做「解析」，
+        //    后续的 Schema 校验 / 重授权 / 审批 / 预算 / 账本 / 准入 / 意图 / 落盘
+        //    与原生工具完全一致 —— 不为 MCP 开任何旁路。
+        if (mcpHandlers == null) {
+            return null;
+        }
+        return mcpHandlers.resolve(toolName).orElse(null);
     }
 
     /**

@@ -167,9 +167,18 @@ public class PermissionResolver implements ClosureResolver {
                                 "MCP Server 版本行缺失: server=" + serverId
                                         + ", version=" + serverVersion));
 
-                Set<String> manifestOps = new TreeSet<>(manifest.currentManifestOps(serverId));
-                Set<String> serverAllowed = normalizeServerAllowed(server, manifestOps);
-                Set<String> skillAllowed = normalizeSkillAllowed(declaration, serverAllowed);
+                // ⚠️ 清单不可用 ≠ 清单为空：
+                //    「读不到这个 server」与「这个 server 没有工具」是两件事。
+                //    这里两者都让 allowedOps 变空（fail-closed），
+                //    但「不可用」会在 §5.8 步骤 3 由 InvocationValidator 给出 MCP_TOOL_DRIFTED
+                //    （无法确认操作仍在当前清单内），运维据此区分「宕机」与「下线」。
+                McpManifestPort.ManifestSnapshot manifestSnapshot =
+                        manifest.manifest(serverId);
+                Set<String> manifestOps = new TreeSet<>(manifestSnapshot.ops());
+                Set<String> serverAllowed = McpOpAllowlistNormalizer.serverAllowedOps(
+                        server.exposedToolAllowlist(), manifestOps);
+                Set<String> skillAllowed = McpOpAllowlistNormalizer.skillAllowedOps(
+                        declaration.toolAllowlist(), serverAllowed);
                 Set<String> allowed = applyForcedSafety(skillAllowed, server, serverId, ceiling);
 
                 // 被 ForcedSafety 放行的操作，其工具定义一并进入闭包
@@ -210,68 +219,34 @@ public class PermissionResolver implements ClosureResolver {
     // ── §4.4 规范化与交集 ─────────────────────────────────────────
 
     /**
-     * {@code ServerAllowedOps}（§4.4 规范化表）。
-     *
-     * <pre>
-     *   exposedToolAllowlist = null → ManifestOps
-     *   exposedToolAllowlist = []   → ∅
-     *   exposedToolAllowlist = L   → L ∩ ManifestOps
-     * </pre>
+     * {@code ServerAllowedOps} / {@code SkillAllowedOps} 的规范化已抽到
+     * {@link McpOpAllowlistNormalizer}（P4-T3）——
+     * <b>全仓库只有那一处实现</b>，避免「两处各写一遍三态规则」导致语义漂移。
      */
-    private @NonNull Set<String> normalizeServerAllowed(@NonNull CapMcpServerDef server,
-                                                          @NonNull Set<String> manifestOps) {
-        List<String> allowlist = server.exposedToolAllowlist();
-        if (allowlist == null) {
-            // null = 未配置 → 取清单全集
-            return new TreeSet<>(manifestOps);
-        }
-        if (allowlist.isEmpty()) {
-            // [] = 显式空清单 → 任何操作都不允许
-            return Set.of();
-        }
-        Set<String> result = new TreeSet<>(allowlist);
-        result.retainAll(manifestOps);
-        return result;
-    }
-
-    /**
-     * {@code SkillAllowedOps}（§4.4 规范化表）。
-     *
-     * <pre>
-     *   toolAllowlist = null → ServerAllowedOps
-     *   toolAllowlist = []   → ∅
-     *   toolAllowlist = L   → L ∩ ServerAllowedOps
-     * </pre>
-     */
-    private @NonNull Set<String> normalizeSkillAllowed(CapSkillDef.@NonNull McpDeclaration declaration,
-                                                       @NonNull Set<String> serverAllowed) {
-        List<String> allowlist = declaration.toolAllowlist();
-        if (allowlist == null) {
-            return new TreeSet<>(serverAllowed);
-        }
-        if (allowlist.isEmpty()) {
-            return Set.of();
-        }
-        Set<String> result = new TreeSet<>(allowlist);
-        result.retainAll(serverAllowed);
-        return result;
-    }
 
     /**
      * ForcedSafety 逐操作过滤（§4.4）。
      *
-     * <p>P1 只实现<b>风险上限</b>这一条谓词；{@code trustTier} / {@code endpoint}
-     * 属 P4 的 MCP 安全范围（§6.5），在此之前它们<b>不构成放行依据</b> ——
-     * 未实现的谓词不会让操作被拒（P4 落地后才会逐条收紧），但也不会被当成「已通过」，
-     * 因为本方法的返回值直接进入 {@code allowedOps}，P4 会在此追加过滤。
+     * <p>本阶段实现的谓词：
+     * <ul>
+     *   <li><b>风险上限</b>：操作的工具定义风险等级必须 ≤ Skill 上限；</li>
+     *   <li><b>端点安全</b>（P4-T5 · 06 §5）：endpoint 的静态形态必须合规
+     *       （协议 / 用户信息 / IP 字面量判定）。DNS 后的实际 IP 校验在传输层
+     *       （{@code McpEndpointGuard}）—— Phase A 不触网。</li>
+     * </ul>
      *
-     * <p>⚠️ <b>查不到工具定义的操作一律剔除</b>（fail-closed）：
+     * ⚠️ <b>查不到工具定义的操作一律剔除</b>（fail-closed）：
      * 无法确认其风险等级，就不能断言它满足 ForcedSafety。
      */
     private @NonNull Set<String> applyForcedSafety(@NonNull Set<String> candidateOps,
                                                     @NonNull CapMcpServerDef server,
                                                     @NonNull String serverId,
                                                     @NonNull CapabilityRiskLevel ceiling) {
+        // ⚠️ 端点静态形态不合规 → 该 server 的<b>全部</b>操作都不放行。
+        //    端点是连接级属性：endpoint 不安全时，按操作逐个放行毫无意义。
+        if (!endpointIsStaticallySafe(server)) {
+            return Set.of();
+        }
         Set<String> allowed = new TreeSet<>();
         for (String op : candidateOps) {
             Optional<CapToolDef> bound = toolDefs.findByMcpBinding(serverId, op);
@@ -289,6 +264,65 @@ public class PermissionResolver implements ClosureResolver {
             }
         }
         return allowed;
+    }
+
+    /**
+     * 端点的<b>静态</b>安全判定（P4-T5 · 06 §5）。
+     *
+     * <p>⚠️ <b>只做静态判定，不触网</b>：
+     * Phase A 是授权路径，不应引入 DNS 解析（延迟 + 被用作放大器）。
+     * 「域名解析到哪里」由传输层的 {@code McpEndpointGuard} 在<b>每次连接前</b>判定，
+     * 且那里才是最终拦截点。
+     *
+     * <p>静态判定能拦住：非 http/sse 协议、URL 里带凭据、endpoint 直接写成
+     * 内网/元数据 IP 字面量。
+     */
+    private boolean endpointIsStaticallySafe(@NonNull CapMcpServerDef server) {
+        if (!server.transport().isSupportedInV1()) {
+            // stdio 在 V1 未启用（N7）
+            return false;
+        }
+        if (!McpServerConfigValidator.validate(server).isEmpty()) {
+            return false;
+        }
+        String endpoint = server.endpoint();
+        if (endpoint == null || endpoint.isBlank()) {
+            return false;
+        }
+        // ⚠️ IP 字面量：直接按地址策略判定（云元数据 / 内网地址当场拒）
+        String host = hostOf(endpoint);
+        if (host == null) {
+            return false;
+        }
+        java.net.InetAddress literal = literalAddress(host);
+        if (literal != null) {
+            return McpAddressPolicy.isAllowed(literal, server.trustTier());
+        }
+        return true;
+    }
+
+    private static @Nullable String hostOf(@NonNull String endpoint) {
+        try {
+            return java.net.URI.create(endpoint.trim()).getHost();
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static java.net.@Nullable InetAddress literalAddress(@NonNull String host) {
+        String candidate = host;
+        if (candidate.startsWith("[") && candidate.endsWith("]")) {
+            candidate = candidate.substring(1, candidate.length() - 1);
+        }
+        // ⚠️ 只认「确凿是 IP 字面量」的形态：含字母的一律当域名处理
+        if (!candidate.matches("^(\\d{1,3}\\.){3}\\d{1,3}$") && !candidate.contains(":")) {
+            return null;
+        }
+        try {
+            return java.net.InetAddress.getByName(candidate);
+        } catch (java.net.UnknownHostException e) {
+            return null;
+        }
     }
 
     private @NonNull CapabilityRiskLevel effectiveCeiling(@NonNull CapabilityRiskLevel skillCeiling,

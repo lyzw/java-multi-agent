@@ -207,14 +207,15 @@ public class WorkerExecutionConfig {
             ToolInvocationGate.CancelGuard cancelGuard,
             RiskBasedApprovalPolicy.PolicyEngineApprovalSource approvalSource,
             BigDecimal reserveAmount,
-            cn.studykid.multiagent.application.cap.CapExecutionFlow capExecutionFlow) {
+            cn.studykid.multiagent.application.cap.CapExecutionFlow capExecutionFlow,
+            cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlerProvider) {
         log.info("装配工具闸门: 工具 {} 个，审批策略=按风险等级，审批来源=策略引擎，"
                         + "CAP 授权链路={}",
                 tools.size(), capExecutionFlow.isEnabled());
         return new ToolInvocationGate(
                 tools, authorization, approvalPolicy, budget, ledger, approvalPort,
                 BudgetPolicy.requireReserveAmount(reserveAmount),
-                cancelGuard, approvalSource, capExecutionFlow);
+                cancelGuard, approvalSource, capExecutionFlow, mcpHandlerProvider);
     }
 
     /**

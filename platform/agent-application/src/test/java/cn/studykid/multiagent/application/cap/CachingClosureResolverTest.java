@@ -41,7 +41,7 @@ class CachingClosureResolverTest {
         delegate = new PermissionResolver(cap.agentDefs(), cap.skillDefs(), cap.toolDefs(),
                 cap.serverDefs(), cap.publishedVersions(), cap.manifest());
         caching = new CachingClosureResolver(delegate, cap.publishedVersions(), cap.toolDefs(),
-                cap.agentDefs());
+                cap.agentDefs(), cap.manifest());
     }
 
     @Nested
@@ -151,7 +151,7 @@ class CachingClosureResolverTest {
                 cap.withAgent(TENANT, agent, 1, List.of(SKILL), "{}");
             }
             CachingClosureResolver bounded = new CachingClosureResolver(delegate,
-                    cap.publishedVersions(), cap.toolDefs(), cap.agentDefs(), 2);
+                    cap.publishedVersions(), cap.toolDefs(), cap.agentDefs(), cap.manifest(), 2);
 
             bounded.resolveCurrent(TENANT, "agent-a");
             bounded.resolveCurrent(TENANT, "agent-b");

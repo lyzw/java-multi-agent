@@ -108,4 +108,35 @@ public record CapMcpServerDef(
     public boolean hasEmptyAllowlist() {
         return exposedToolAllowlist != null && exposedToolAllowlist.isEmpty();
     }
+
+    /**
+     * <b>脱敏</b>描述：{@code credentialRef} 不出现在字符串形式里。
+     *
+     * <p>⚠️ <b>为什么必须覆写</b>：
+     * {@code record} 自动生成的 {@code toString()} 会把<b>所有</b>字段拼进去。
+     * 只要这个对象被日志框架、异常消息或 {@code Map.toString()} 带出来，
+     * 凭据定位符就跟着进了日志 —— 而定位符往往指向一个真实凭据。
+     * 记录被打印是最常见的泄漏路径，因此在这里就把它堵死。
+     *
+     * <p>⚠️ 注意：<b>凭据材料</b>本来就不在这个对象里（只有定位符），
+     * 但定位符也不该随记录到处走。
+     *
+     * @return 脱敏后的描述
+     */
+    @Override
+    public String toString() {
+        return "CapMcpServerDef[id=" + id + ", version=" + version
+                + ", transport=" + transport
+                + ", endpoint=" + endpoint
+                + ", authKind=" + authKind
+                + ", trustTier=" + trustTier
+                + ", exposedToolAllowlist=" + exposedToolAllowlist
+                + ", connectionRisk=" + connectionRisk
+                + ", dynamicDiscovery=" + dynamicDiscovery
+                + ", configFingerprint=" + configFingerprint
+                + ", credentialRef=" + (credentialRef == null ? "null" : "<redacted>")
+                + ", schemaVersion=" + schemaVersion
+                + ", createdAt=" + createdAt
+                + ", publishedAt=" + publishedAt + "]";
+    }
 }

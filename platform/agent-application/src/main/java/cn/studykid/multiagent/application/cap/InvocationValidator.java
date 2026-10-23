@@ -242,8 +242,11 @@ public class InvocationValidator {
         }
 
         // §5.8 步骤 3：请求 op 仍 ∈ 当前 ManifestOps
-        Set<String> liveManifest = manifest.currentManifestOps(target.serverId());
-        if (!liveManifest.contains(target.op())) {
+        // ⚠️ 清单「不可用」与「不含该 op」给同一个码（MCP_TOOL_DRIFTED）：
+        //    两者在授权语义上是同一件事 ——「无法确认该 op 仍在当前清单内」。
+        //    区分「宕机」与「下线」靠日志，不靠原因码（原因码是对外稳定契约，不能随意分化）。
+        McpManifestPort.ManifestSnapshot live = manifest.manifest(target.serverId());
+        if (!live.available() || !live.ops().contains(target.op())) {
             return AuthorizationDecision.deny(ReasonCode.MCP_TOOL_DRIFTED);
         }
 

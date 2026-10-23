@@ -62,7 +62,9 @@ class ToolBypassArchitectureTest {
      *   <li>端口定义与工具实现 —— 提供 SPI 与实现；</li>
      *   <li>审批策略（端口 + 实现）—— 只读工具的<b>风险等级</b>以决定是否需要审批；</li>
      *   <li>启动期一致性守卫 —— 只读风险等级，与 yml 镜像比对；</li>
-     *   <li>装配配置 —— 声明工具 Bean 与把工具集合注入闸门。</li>
+     *   <li>装配配置 —— 声明工具 Bean 与把工具集合注入闸门；</li>
+     *   <li>MCP-backed 工具与其解析器（P4）—— <b>提供</b> MCP 工具的执行器，
+     *       但<b>不执行</b>：真正的执行只发生在闸门内（它们只被闸门取得并调用）。</li>
      * </ul>
      */
     private static final Set<String> READERS = Set.of(
@@ -71,6 +73,9 @@ class ToolBypassArchitectureTest {
             "agent-application/src/main/java/cn/studykid/multiagent/application/approval/RiskBasedApprovalPolicy.java",
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/tool/RecordWeaknessTool.java",
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/tool/GetStudentProfileTool.java",
+            "agent-ports/src/main/java/cn/studykid/multiagent/ports/mcp/McpHandlerProvider.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/mcp/McpBackedToolHandler.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/mcp/DbMcpHandlerProvider.java",
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/WorkerExecutionConfig.java",
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ApplicationConfiguration.java",
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ToolRiskLevelConsistencyGuard.java");

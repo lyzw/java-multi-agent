@@ -84,7 +84,8 @@ class CapCompensationIT extends CapITBase {
     private static final String EMPTY_MANIFEST_ID = "it-cap-c-empty";
 
     /** 固定清单替身（本阶段只测 native 工具）。 */
-    private static final McpManifestPort EMPTY_MANIFEST = serverId -> Set.of();
+    private static final McpManifestPort EMPTY_MANIFEST =
+            serverId -> McpManifestPort.ManifestSnapshot.available(Set.of());
 
     /** 角色权限替身：放行 WORKER 的 tool:invoke。 */
     private static final RolePermissionPort ROLE_STUB = (roles, action) ->
