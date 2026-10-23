@@ -866,6 +866,30 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 权威配置变更的三步工作流（P6R4 · 管理端点）。
+     *
+     * <p>⚠️ <b>注入的是应用角色通道的 {@code configPublishService}</b>：
+     * 本工作流只服务**租户级**对象（Agent 定义），走应用角色连接 ——
+     * 写入本租户行由 RLS 强制，写 PLATFORM 行会被 DB 层拒写。
+     *
+     * <p>⚠️ <b>不注入 {@code platformOpsPublishService}</b>：
+     * 平台级发布不经租户身份暴露（P6R4 的作用域闸门），
+     * 运维通道由带外运维工具驱动，不接在租户可达的 HTTP 路径上。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService
+            configPublishWorkflowService(
+            cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort requests,
+            cn.studykid.multiagent.application.cap.ConfigPublishService publisher,
+            cn.studykid.multiagent.application.cap.ConfigLifecycleService lifecycle,
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService(
+                requests, publisher, lifecycle, agentDefs, pointers, clock);
+    }
+
+    /**
      * 平台运维角色的发布事务（P6R1 · 上线阻塞项的接入点）。
      *
      * <p>⚠️ <b>刻意与 {@link #configPublishTransaction} 分开</b>：

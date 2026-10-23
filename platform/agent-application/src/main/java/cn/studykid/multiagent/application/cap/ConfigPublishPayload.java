@@ -1,0 +1,205 @@
+package cn.studykid.multiagent.application.cap;
+
+import java.util.List;
+
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
+
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
+
+import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
+import cn.studykid.multiagent.core.cap.ConfigRelease;
+
+/**
+ * 配置变更方案（P6R4 · 管理端点 · 申请单里保存的「原文」）。
+ *
+ * <p>⚠️ <b>为什么保存原文而不是保存「解析后的领域对象」</b>：
+ * 审批人批的是**这份**方案，执行时执行的也必须是**这份**方案。
+ * 若在申请时就把方案翻译成领域对象，执行时再翻译一次，
+ * 两次翻译之间的任何差异都会让「批的」和「做的」不是同一件事。
+ * 故申请单里存 JSON 原文（{@code cap_config_publish_request.payload}），
+ * 执行时**只解析一次**并直接使用。
+ *
+ * <p>⚠️ <b>本载荷只描述租户级对象</b>（Agent 定义）：
+ * 平台级对象（Tool / Skill / MCP Server）无 {@code tenant_id}，
+ * 其发布走平台运维通道，**不经租户身份暴露**。
+ *
+ * @param operation          变更类型
+ * @param scope              作用域（**本通道只接受 {@code TENANT}**）
+ * @param expectedPublishSeq CAS 基线（客户端读到的当前发布序号；{@code null} = 未指定）
+ * @param agents             本次发布的 Agent 定义草稿（仅 {@code PUBLISH} 用）
+ * @param targetReleaseId    回滚目标发布（仅 {@code ROLLBACK} 用）
+ * @param lifecycle          生命周期迁移参数（仅 {@code LIFECYCLE_TRANSITION} 用）
+ */
+public record ConfigPublishPayload(
+        ConfigPublishRequest.@NonNull Operation operation,
+        ConfigRelease.@NonNull Scope scope,
+        @Nullable Long expectedPublishSeq,
+        @NonNull List<AgentSpec> agents,
+        @Nullable Long targetReleaseId,
+        @Nullable LifecycleSpec lifecycle) {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    public ConfigPublishPayload {
+        if (operation == null) {
+            throw new IllegalArgumentException("operation 不能为空");
+        }
+        if (scope == null) {
+            throw new IllegalArgumentException("scope 不能为空");
+        }
+        agents = agents == null ? List.of() : List.copyOf(agents);
+    }
+
+    /**
+     * Agent 定义草稿（<b>只含客户端可提交的语义字段</b>）。
+     *
+     * <p>⚠️ <b>刻意不含 version / configFingerprint / createdAt / publishedAt</b>：
+     * 版本号由服务端按「现有最大版本 + 1」分配，
+     * 内容指纹由服务端计算（{@link CapObjectFingerprint}），
+     * 时间戳由服务端填写。
+     * 客户端若能指定这三者，就等于能指定「内容没变」这个证明。
+     *
+     * @param agentId        Agent 标识
+     * @param name           名称
+     * @param description    描述
+     * @param roles          角色集
+     * @param enabledSkills  启用的 Skill 集
+     * @param skillBundles   Skill 包集
+     * @param capabilityTags 能力标签集
+     * @param overrides      收紧覆盖（JSON 文本）
+     */
+    public record AgentSpec(@NonNull String agentId,
+                            @Nullable String name,
+                            @Nullable String description,
+                            @NonNull List<String> roles,
+                            @NonNull List<String> enabledSkills,
+                            @NonNull List<String> skillBundles,
+                            @NonNull List<String> capabilityTags,
+                            @NonNull String overrides) {
+
+        public AgentSpec {
+            if (agentId == null || agentId.isBlank()) {
+                throw new IllegalArgumentException("agentId 不能为空");
+            }
+            if (overrides == null || overrides.isBlank()) {
+                throw new IllegalArgumentException("overrides 不能为空");
+            }
+            roles = roles == null ? List.of() : List.copyOf(roles);
+            enabledSkills = enabledSkills == null ? List.of() : List.copyOf(enabledSkills);
+            skillBundles = skillBundles == null ? List.of() : List.copyOf(skillBundles);
+            capabilityTags = capabilityTags == null ? List.of() : List.copyOf(capabilityTags);
+        }
+    }
+
+    /**
+     * 生命周期迁移参数（§6.6）。
+     *
+     * @param type        对象类型标识（{@code tool} / {@code skill} / {@code mcp_server} / {@code agent}）
+     * @param objectId    对象逻辑 id
+     * @param version     版本号
+     * @param expectedFrom 期望的原状态（CAS 前置条件）
+     * @param to          目标状态
+     */
+    public record LifecycleSpec(@NonNull String type,
+                                @NonNull String objectId,
+                                int version,
+                                @NonNull String expectedFrom,
+                                @NonNull String to) {
+
+        public LifecycleSpec {
+            if (type == null || type.isBlank()) {
+                throw new IllegalArgumentException("type 不能为空");
+            }
+            if (objectId == null || objectId.isBlank()) {
+                throw new IllegalArgumentException("objectId 不能为空");
+            }
+            if (version <= 0) {
+                throw new IllegalArgumentException("version 必须为正数: " + version);
+            }
+            if (expectedFrom == null || expectedFrom.isBlank()) {
+                throw new IllegalArgumentException("expectedFrom 不能为空");
+            }
+            if (to == null || to.isBlank()) {
+                throw new IllegalArgumentException("to 不能为空");
+            }
+        }
+    }
+
+    /**
+     * 序列化为 JSON 文本。
+     *
+     * @return JSON 文本
+     */
+    public @NonNull String toJson() {
+        return MAPPER.writeValueAsString(this);
+    }
+
+    /**
+     * 从 JSON 文本反序列化。
+     *
+     * @param json JSON 文本
+     * @return 变更方案
+     * @throws IllegalArgumentException JSON 非法或结构不符
+     */
+    public static @NonNull ConfigPublishPayload fromJson(@NonNull String json) {
+        try {
+            return MAPPER.readValue(json, ConfigPublishPayload.class);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("变更方案不是合法 JSON 或结构不符: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 生成一个「回滚」方案。
+     *
+     * @param targetReleaseId    回滚目标发布 id
+     * @param expectedPublishSeq CAS 基线
+     * @return 变更方案
+     */
+    public static @NonNull ConfigPublishPayload rollback(long targetReleaseId,
+                                                          @Nullable Long expectedPublishSeq) {
+        return new ConfigPublishPayload(ConfigPublishRequest.Operation.ROLLBACK,
+                ConfigRelease.Scope.TENANT, expectedPublishSeq, List.of(), targetReleaseId, null);
+    }
+
+    /**
+     * 生成一个「生命周期迁移」方案。
+     *
+     * @param spec 迁移参数
+     * @return 变更方案
+     */
+    public static @NonNull ConfigPublishPayload lifecycle(@NonNull LifecycleSpec spec) {
+        return new ConfigPublishPayload(ConfigPublishRequest.Operation.LIFECYCLE_TRANSITION,
+                ConfigRelease.Scope.TENANT, null, List.of(), null, spec);
+    }
+
+    /**
+     * 生成一个「发布」方案。
+     *
+     * @param agents             Agent 定义草稿
+     * @param expectedPublishSeq CAS 基线
+     * @return 变更方案
+     */
+    public static @NonNull ConfigPublishPayload publish(@NonNull List<AgentSpec> agents,
+                                                         @Nullable Long expectedPublishSeq) {
+        return new ConfigPublishPayload(ConfigPublishRequest.Operation.PUBLISH,
+                ConfigRelease.Scope.TENANT, expectedPublishSeq, agents, null, null);
+    }
+
+    /**
+     * 把方案转成便于审计的摘要（<b>不含用户自由文本</b>）。
+     *
+     * @return 摘要 JSON 文本
+     */
+    public @NonNull String summary() {
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("operation", operation.name());
+        node.put("agentCount", agents.size());
+        node.put("hasExpectedPublishSeq", expectedPublishSeq != null);
+        node.put("hasTargetReleaseId", targetReleaseId != null);
+        node.put("hasLifecycle", lifecycle != null);
+        return MAPPER.writeValueAsString(node);
+    }
+}

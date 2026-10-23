@@ -44,7 +44,13 @@ public class RoleBasedAuthorizationService implements AuthorizationService {
                     //    不是靠权限拆分。
                     //    若把审批权从管理员手里拿走，反而会导致「无人可批」：
                     //    试点期往往只有一个管理员。
-                    Actions.CONFIG_REQUEST, Actions.CONFIG_APPROVE),
+                    Actions.CONFIG_REQUEST, Actions.CONFIG_APPROVE,
+                    // ⚠️ **权威配置对象的发布 / 回滚（P6R4）**：
+                    //    租户管理员可发布**本租户**的 Agent 定义（发布 / 回滚 / 生命周期迁移）。
+                    //    ⚠️ 平台级对象（Tool / Skill / MCP Server）**不在此列** ——
+                    //    平台身份表是租户内的，没有跨租户主体；
+                    //    若把平台级发布挂到租户角色上，任一租户管理员自授角色即可改全平台配置。
+                    Actions.CONFIG_PUBLISH, Actions.CONFIG_ROLLBACK),
             Roles.AGENT_AUTHOR, Set.of(
                     Actions.RUN_CREATE, Actions.RUN_READ, Actions.RUN_CANCEL,
                     Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ,

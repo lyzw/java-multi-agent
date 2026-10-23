@@ -117,6 +117,26 @@ public class ConfigPublishService {
     // ── 原子发布 ────────────────────────────────────────────────
 
     /**
+     * <b>只跑门禁，不发布</b>（P6R4 管理端点用：申请阶段预检）。
+     *
+     * <p>⚠️ <b>为什么要有这个方法</b>：§6.3 的发布是「版本行 + 发布头 + 指针 CAS」的原子事务，
+     * <b>不可拆</b>；而双人复核要求申请与审批是两次独立调用。
+     * 若只在执行时才校验配置合法性，一个非法方案会先占住一个审批名额、
+     * 让另一个人去审批一份根本执行不了的东西。
+     * 故申请阶段先跑一次同样的门禁，把非法方案挡在审批之前。
+     *
+     * <p>⚠️ <b>预检不能替代执行时的门禁</b>：两次之间配置可能已被他人改动，
+     * 故 {@link #publish(ConfigPublishCommand)} 内部仍会再跑一次权威门禁。
+     *
+     * @param command 待校验的发布命令
+     * @throws ConfigPublishRejectedException 配置期门禁不通过
+     */
+    public void validateForReview(@NonNull ConfigPublishCommand command) {
+        gate.validate(command);
+        gate.validateNoDuplicateObjects(command);
+    }
+
+    /**
      * 原子发布（§6.3 第 1/3/4 条）。
      *
      * @param command 发布命令

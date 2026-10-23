@@ -106,10 +106,33 @@ public interface AuthorizationService {
          */
         public static final String CONFIG_APPROVE = "config:approve";
 
+        /**
+         * 申请/执行<b>权威配置对象</b>的发布、回滚与生命周期迁移（P6R4）。
+         *
+         * <p>⚠️ <b>与 {@link #CONFIG_REQUEST} 分开</b>：后者是<b>配置覆盖</b>
+         * （键值对，受收紧策略约束），本项是<b>权威对象版本行</b>
+         * （Agent / Tool / Skill / MCP Server）的发布申请 ——
+         * 二者的风险模型、审批对象、写入路径都不同。
+         * 混在一个动作里会出现「能改覆盖值的人，也能改版本行」。
+         *
+         * <p>⛔ <b>不覆盖平台级发布</b>：平台级对象无 {@code tenant_id}，
+         * 走平台运维通道（BYPASSRLS 凭据 + 带外运维工具），
+         * <b>不经租户身份暴露</b> —— 平台身份表是租户内的，没有跨租户主体。
+         */
+        public static final String CONFIG_PUBLISH = "config:publish";
+        /**
+         * 回滚<b>权威配置对象</b>的当前发布（P6R4）。
+         *
+         * <p>⚠️ <b>刻意与 {@link #CONFIG_PUBLISH} 分开</b>：
+         * 回滚把当前生效配置换回历史版本，方向与「发布新配置」相反 ——
+         * 在收紧优先的体系里，二者的审批语义不应混为一谈。
+         */
+        public static final String CONFIG_ROLLBACK = "config:rollback";
+
         private static final Set<String> ALL = Set.of(
                 RUN_CREATE, RUN_READ, RUN_CANCEL, EVENT_SUBSCRIBE, RESULT_READ,
                 TOOL_INVOKE, APPROVAL_CONSUME, UNKNOWN_DISPOSE, AUDIT_READ, AGENT_MANAGE,
-                PROFILE_READ, CONFIG_REQUEST, CONFIG_APPROVE);
+                PROFILE_READ, CONFIG_REQUEST, CONFIG_APPROVE, CONFIG_PUBLISH, CONFIG_ROLLBACK);
 
         /** @return 全部受控动作，供启动期自检使用。 */
         public static @NonNull Set<String> all() {

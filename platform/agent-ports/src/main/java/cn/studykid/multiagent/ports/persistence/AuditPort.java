@@ -132,6 +132,37 @@ public interface AuditPort {
          * 「配置到底有没有真的变过」。
          */
         public static final String CONFIG_CHANGE_APPLY = "CONFIG_CHANGE_APPLY";
+
+        // ── W-PERM-P6R4：权威配置对象的发布 / 回滚 / 生命周期迁移 ──
+
+        /**
+         * 提交权威配置变更申请（P6R4）。
+         *
+         * <p>⚠️ 刻意与 {@link #CONFIG_CHANGE_REQUEST} 分开：
+         * 后者是<b>配置覆盖</b>（键值对，可被收紧策略约束），
+         * 本项是<b>权威对象</b>（Agent / Tool / Skill / MCP Server 版本行）的发布申请 ——
+         * 二者的风险模型、审批对象、写入路径都不同，混在一个动作里会让审计无法回答
+         * 「改的到底是覆盖值还是版本行」。
+         */
+        public static final String CONFIG_PUBLISH_REQUEST = "CONFIG_PUBLISH_REQUEST";
+        /** 批准权威配置变更申请（P6R4）。不写入配置表。 */
+        public static final String CONFIG_PUBLISH_APPROVE = "CONFIG_PUBLISH_APPROVE";
+        /** 拒绝权威配置变更申请（P6R4）。 */
+        public static final String CONFIG_PUBLISH_REJECT = "CONFIG_PUBLISH_REJECT";
+        /**
+         * 执行已批准的权威配置变更（P6R4）——<b>此步才真正写入配置表</b>。
+         *
+         * <p>⚠️ 与 {@link #CONFIG_PUBLISH_APPROVE} 分开的理由同
+         * {@link #CONFIG_CHANGE_APPLY}：批准与生效是两件事。
+         */
+        public static final String CONFIG_PUBLISH_APPLY = "CONFIG_PUBLISH_APPLY";
+        /**
+         * 权威配置变更执行失败（P6R4）。
+         *
+         * <p>⚠️ 失败也必须留痕：一份「批过但没生效」的申请必须能被查到，
+         * 否则运维看到的现象是「批了但没反应」，无从判断是失败还是没执行。
+         */
+        public static final String CONFIG_PUBLISH_FAILED = "CONFIG_PUBLISH_FAILED";
     }
 
     /** 审计视图（查询用）。 */

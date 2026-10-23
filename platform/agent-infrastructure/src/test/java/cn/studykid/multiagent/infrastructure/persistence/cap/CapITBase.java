@@ -114,6 +114,11 @@ abstract class CapITBase {
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
         adminExec("DELETE FROM cap_authz_version WHERE tenant_id IN ('"
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
+        // ⚠️ P6R4：配置变更申请单（管理端点）。租户级表 → 按 tenant_id 清。
+        //    不清则上一例的「已批准未执行」申请单会挡住本例的同 id 操作，
+        //    且残留的申请单会让「本例没有任何配置写入」的断言失真。
+        adminExec("DELETE FROM cap_config_publish_request WHERE tenant_id IN ('"
+                + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
         adminExec("DELETE FROM cap_agent_def WHERE tenant_id IN ('"
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
         // ⚠️ platform 级对象定义（P1）：无 RLS、无 tenant_id，按 id 清理。
