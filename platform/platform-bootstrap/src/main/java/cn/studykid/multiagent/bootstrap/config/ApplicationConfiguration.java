@@ -765,7 +765,14 @@ public class ApplicationConfiguration {
         return new cn.studykid.multiagent.infrastructure.security.RolePermissionAdapter();
     }
 
-    /** 无副作用能力闭包解析器（P1-T1）。 */
+    /**
+     * 无副作用能力闭包解析器（P1-T1）。
+     *
+     * <p>⚠️ <b>本 Bean 是<b>无缓存</b>的原始解析器</b>，仅作为
+     * {@link #closureResolver} 的被装饰对象。
+     * 执行链上的所有闭包读取都必须走缓存装饰器
+     * （校验器与闸门共享<b>同一个</b>实例，否则两条路径可能读出不同版本的闭包）。
+     */
     @Bean
     public cn.studykid.multiagent.application.cap.PermissionResolver permissionResolver(
             cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
@@ -779,20 +786,102 @@ public class ApplicationConfiguration {
     }
 
     /**
-     * Phase A 授权校验器（P1-T3）。
+     * 闭包解析缓存装饰器（P2-T9 · §7.3 缓存）。
      *
-     * <p>⚠️ <b>本 Bean 目前不接入任何执行路径</b>：闸门接线属 P2。
-     * P2 接线时必须<b>置于开关之后</b> —— 在 P5 的发布指针读落地前，
-     * {@code PublishedVersionPort} 的对象级解析与 §6.3 存在已知偏差。
+     * <p>⚠️ <b>必须是单例且被校验器与闸门共享</b>：
+     * 两条路径各读各的闭包会在同一请求内出现「校验器比的是快照指纹、
+     * 闸门用的是另一份闭包」的不一致，表现为不可复现的误判。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ClosureResolver closureResolver(
+            cn.studykid.multiagent.application.cap.PermissionResolver resolver,
+            cn.studykid.multiagent.ports.persistence.PublishedVersionPort publishedVersions,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs) {
+        return new cn.studykid.multiagent.application.cap.CachingClosureResolver(
+                resolver, publishedVersions, toolDefs, agentDefs);
+    }
+
+    /**
+     * Phase A 授权校验器（P1-T3 · P2 接线）。
+     *
+     * <p>⚠️ <b>接线置于开关之后</b>：本 Bean 一直存在，但它<b>只在</b>
+     * CAP 授权链路开启时才被执行链调用。
+     * P5 的发布指针读落地前，{@code PublishedVersionPort} 的对象级解析与 §6.3
+     * 存在已知偏差，故默认不开关。
      */
     @Bean
     public cn.studykid.multiagent.application.cap.InvocationValidator invocationValidator(
             cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersions,
             cn.studykid.multiagent.ports.security.RolePermissionPort rolePermissions,
-            cn.studykid.multiagent.application.cap.PermissionResolver resolver,
+            cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
             cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
             cn.studykid.multiagent.ports.mcp.McpManifestPort manifest) {
         return new cn.studykid.multiagent.application.cap.InvocationValidator(
-                authzVersions, rolePermissions, resolver, snapshots, manifest);
+                authzVersions, rolePermissions, closureResolver, snapshots, manifest);
+    }
+
+    /**
+     * CAP 授权链路迁移开关（P2）。
+     *
+     * <p>⚠️ <b>默认 false</b>：P5 的发布指针读落地前不得在生产开启
+     * （见 {@code CapEnforcementSwitch} 的类注释）。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.CapEnforcementSwitch capEnforcementSwitch(
+            @Value("${" + cn.studykid.multiagent.application.cap.CapEnforcementSwitch.KEY
+                    + ":false}") boolean enabled) {
+        return new cn.studykid.multiagent.application.cap.CapEnforcementSwitch(enabled);
+    }
+
+    /** 执行准入检查器（P2-T5 · §5.5 准入线性化）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ExecutionAdmissionChecker
+            executionAdmissionChecker(
+            cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersions,
+            cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
+            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots) {
+        return new cn.studykid.multiagent.application.cap.ExecutionAdmissionChecker(
+                authzVersions, closureResolver, snapshots);
+    }
+
+    /** 幂等键校验器（P2-T2 · §5.3 步骤 8）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.IdempotencyGuard idempotencyGuard(
+            cn.studykid.multiagent.ports.persistence.RunToolLedgerPort ledger,
+            cn.studykid.multiagent.ports.persistence.ResultEventPort resultEvents) {
+        return new cn.studykid.multiagent.application.cap.IdempotencyGuard(ledger, resultEvents);
+    }
+
+    /**
+     * CAP 执行准入编排器（P2-T1 · §5.3 唯一协议）。
+     *
+     * <p>⚠️ 本 Bean <b>始终装配</b>，但只有开关开启时才会被闸门调用。
+     * 开关在编排器内部，故不存在「以为走了新链路、其实没走」的静默降级。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.CapExecutionFlow capExecutionFlow(
+            cn.studykid.multiagent.application.cap.InvocationValidator validator,
+            cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
+            cn.studykid.multiagent.application.cap.ExecutionAdmissionChecker admission,
+            cn.studykid.multiagent.application.cap.IdempotencyGuard idempotency,
+            cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersions,
+            cn.studykid.multiagent.ports.security.RolePermissionPort rolePermissions,
+            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
+            cn.studykid.multiagent.ports.security.ApprovalPolicy approvalPolicy,
+            cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy.ApprovalSource
+                    approvalSource,
+            cn.studykid.multiagent.ports.persistence.ApprovalPort approvalPort,
+            cn.studykid.multiagent.ports.persistence.BudgetPort budget,
+            cn.studykid.multiagent.ports.persistence.RunToolLedgerPort ledger,
+            cn.studykid.multiagent.ports.persistence.ExecutionIntentPort intents,
+            cn.studykid.multiagent.ports.persistence.ResultEventPort resultEvents,
+            cn.studykid.multiagent.application.cap.CapEnforcementSwitch enforcementSwitch) {
+        return new cn.studykid.multiagent.application.cap.CapExecutionFlow(
+                validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
+                snapshots, approvalPolicy, approvalSource, approvalPort, budget, ledger, intents,
+                resultEvents,
+                cn.studykid.multiagent.application.config.BudgetPolicy.DEFAULT_RESERVE_AMOUNT,
+                enforcementSwitch);
     }
 }

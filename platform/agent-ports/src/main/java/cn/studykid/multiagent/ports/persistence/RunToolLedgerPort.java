@@ -86,6 +86,25 @@ public interface RunToolLedgerPort {
                                                          @NonNull String idempotencyKey);
 
     /**
+     * 读取幂等键对应的<b>请求摘要</b>（§5.3 步骤 8「同键不同参数」判定用）。
+     *
+     * <p>⚠️ <b>默认实现返回空 = 「读不到摘要」</b>，调用方据此<b>不得</b>判定冲突，
+     * 但也<b>不得</b>据此重新执行同一幂等键 —— 键已存在即意味着该逻辑操作已在进行，
+     * 重新执行会造成重复副作用（§5.3.4「同幂等键重试 → 禁止重复副作用」）。
+     *
+     * <p>生产实现<b>必须</b>覆写本方法返回真实的请求摘要，
+     * 否则「同键不同参数 → {@code IDEMPOTENCY_CONFLICT}」这条契约无法成立。
+     *
+     * @param tenantId      租户
+     * @param idempotencyKey 幂等键
+     * @return 已登记的请求摘要；无记录或读不到时为空
+     */
+    default @NonNull Optional<String> findRequestDigest(@NonNull String tenantId,
+                                                         @NonNull String idempotencyKey) {
+        return Optional.empty();
+    }
+
+    /**
      * 登记结果。{@code state} 为 IN_FLIGHT 表示新登记；
      * 命中既有操作时返回其当前状态与既定 attempt 数。
      */

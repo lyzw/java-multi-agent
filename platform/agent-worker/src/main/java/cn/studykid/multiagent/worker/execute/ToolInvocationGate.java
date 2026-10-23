@@ -84,6 +84,16 @@ public class ToolInvocationGate {
      */
     private final java.math.BigDecimal reserveAmountPerToolCall;
 
+    /**
+     * CAP 授权链路编排器（P2 · §5.3 唯一协议）。
+     *
+     * <p>⚠️ <b>可为空 = CAP 链路未装配</b>：此时本类走既有链路。
+     * 开关（{@code CapEnforcementSwitch}）位于编排器内部，
+     * 因此「开关开启却未装配编排器」这一配置错误<b>不可能</b>发生 ——
+     * 不存在「以为走了新链路、其实没走」的静默降级。
+     */
+    private final cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow;
+
     /** 默认审批桩：恒返回 NO_APPROVAL（审批权威接入前的 fail-closed 占位）。 */
     private static final ApprovalPort NO_APPROVAL_PORT = new ApprovalPort() {
         @Override
@@ -202,6 +212,26 @@ public class ToolInvocationGate {
                               java.math.BigDecimal reserveAmountPerToolCall,
                               @NonNull CancelGuard cancelGuard,
                               RiskBasedApprovalPolicy.ApprovalSource approvalSource) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                reserveAmountPerToolCall, cancelGuard, approvalSource, null);
+    }
+
+    /**
+     * 最完整构造器（P2-T1）：额外注入 CAP 授权链路编排器。
+     *
+     * <p>⚠️ {@code capFlow} 为 {@code null} 表示「CAP 链路未装配」，
+     * 本类走既有链路；装配后由 {@code CapEnforcementSwitch} 决定实际走哪条。
+     */
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall,
+                              @NonNull CancelGuard cancelGuard,
+                              RiskBasedApprovalPolicy.ApprovalSource approvalSource,
+                              cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow) {
         this.handlers = List.copyOf(handlers);
         this.authorization = authorization;
         this.approvalPolicy = approvalPolicy;
@@ -210,6 +240,7 @@ public class ToolInvocationGate {
         this.approvalPort = approvalPort;
         this.cancelGuard = cancelGuard;
         this.approvalSource = approvalSource;
+        this.capFlow = capFlow;
         if (reserveAmountPerToolCall == null
                 || reserveAmountPerToolCall.signum() <= 0) {
             throw new IllegalArgumentException(
@@ -222,12 +253,114 @@ public class ToolInvocationGate {
     /**
      * 执行模型请求的全部工具调用。
      *
+     * <p>⚠️ <b>唯一执行入口</b>（07 §3 / ADR-011）：所有 Native 与 MCP-backed 工具
+     * 都必须经由本方法进入，禁止业务代码直接调用 {@code ToolHandler.execute}。
+     *
+     * <p>P2 起本方法有<b>两条内部链路</b>，由 CAP 迁移开关决定：
+     * <ul>
+     *   <li><b>CAP 链路</b>（开关开启）：按 §5.3 唯一协议编排
+     *       Phase A（能力链授权）→ Phase B（执行准入），产出四字段结论；</li>
+     *   <li><b>既有链路</b>（开关关闭或未装配）：原有实现，行为不变。</li>
+     * </ul>
+     * 两条链路<b>都在本类内部</b>，不存在第三条路径。
+     *
      * @param tenantId 租户（由消息携带，须与 DB 上下文一致）
      * @param task     已领取任务
      * @param calls    模型请求的工具调用
      * @return 汇总结果
      */
     public ToolInvocationResult invokeAll(
+            String tenantId,
+            RunClaimPort.LeasedTask task,
+            Map<String, ModelResponse.ToolCallRequest> calls) {
+
+        if (capFlow != null && capFlow.isEnabled()) {
+            return invokeAllCap(tenantId, task, calls);
+        }
+        return invokeAllLegacy(tenantId, task, calls);
+    }
+
+    /**
+     * CAP 授权链路（P2-T1 · §5.3 唯一协议）。
+     *
+     * <p>⚠️ <b>取消检查在 Phase A 之前</b>：取消是 Run 的状态而非授权结论，
+     * 且「取消后不得发起任何副作用」是硬约束 —— 把它排在授权判定之前，
+     * 才能保证被取消的 Run 连能力链解析都不必做。
+     */
+    private ToolInvocationResult invokeAllCap(
+            String tenantId,
+            RunClaimPort.LeasedTask task,
+            Map<String, ModelResponse.ToolCallRequest> calls) {
+
+        ToolInvocationResult result = new ToolInvocationResult();
+
+        for (ModelResponse.ToolCallRequest call : calls.values()) {
+            ToolHandler handler = findHandler(call.toolName());
+            if (handler == null) {
+                // 未登记工具：拒绝并把错误回给模型让它自我纠正。
+                // ⚠️ 不静默忽略 —— 模型可能因此陷入循环。
+                log.warn("未登记的工具被拒绝: tool={}, runId={}", call.toolName(), task.runId());
+                result.recordRejected(call.toolName(), "未登记的工具");
+                result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                        call.toolName(), null,
+                        cn.studykid.multiagent.core.cap.AuthorizationDecision.deny(
+                                cn.studykid.multiagent.core.cap.ReasonCode.TOOL_NOT_DECLARED)));
+                continue;
+            }
+
+            if (cancelGuard.isCancelled(tenantId, task.runId())) {
+                log.info("Run 已取消，拒绝启动工具: tool={}, runId={}",
+                        call.toolName(), task.runId());
+                result.recordRejected(call.toolName(), "Run 已取消");
+                result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                        call.toolName(), null,
+                        cn.studykid.multiagent.core.cap.AuthorizationDecision.deny(
+                                cn.studykid.multiagent.core.cap.ReasonCode.RUN_CANCELLED)));
+                continue;
+            }
+
+            cn.studykid.multiagent.core.cap.CapToolDecision decision =
+                    capFlow.invoke(tenantId, task, call, handler);
+            result.recordDecision(decision);
+            applyDecision(result, decision);
+
+            if (decision.requiresReconciliation()) {
+                // ⚠️ UNKNOWN 后立即返回：后续工具不得再启动
+                //    （可能已有副作用发生，且需要人工/对账介入）。
+                return result;
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 把四字段决策落到汇总结果。
+     *
+     * <p>⚠️ 映射规则与 §5.1 一致：
+     * {@code SUCCEEDED} → 成功；{@code FAILED} → 失败；
+     * {@code UNKNOWN} → 结果未知（须转对账）；{@code NOT_STARTED} → 被拒。
+     */
+    private static void applyDecision(ToolInvocationResult result,
+                                      cn.studykid.multiagent.core.cap.CapToolDecision decision) {
+        var status = decision.decision().status();
+        switch (status) {
+            case SUCCEEDED -> result.recordSucceeded(decision.toolName());
+            case FAILED -> result.recordFailed(decision.toolName(),
+                    decision.decision().reasonCode().name());
+            case UNKNOWN -> result.recordUnknown(decision.toolName(), decision.operationId());
+            case NOT_STARTED, RUNNING -> result.recordRejected(decision.toolName(),
+                    decision.decision().reasonCode().name());
+        }
+    }
+
+    /**
+     * 既有执行链路（P2 之前的实现，行为保持不变）。
+     *
+     * <p>⚠️ 本链路的顺序<b>不是</b> §5.3 的顺序（Schema 先于授权、账本 PRE 先于审批），
+     * 它是 CAP 授权链路落地前的既有行为。开关开启后本方法<b>不被调用</b>。
+     */
+    private ToolInvocationResult invokeAllLegacy(
             String tenantId,
             RunClaimPort.LeasedTask task,
             Map<String, ModelResponse.ToolCallRequest> calls) {
@@ -561,10 +694,22 @@ public class ToolInvocationGate {
         private final java.util.List<String> succeeded = new java.util.ArrayList<>();
         private final java.util.List<String> rejected = new java.util.ArrayList<>();
         private final java.util.List<String> failed = new java.util.ArrayList<>();
+        /**
+         * 每次调用的四字段决策（P2 · §5.1）。
+         *
+         * <p>⚠️ <b>既有链路下为空</b>：既有链路不产出结构化决策，
+         * 只有 CAP 链路才按 §9.1 逐字段断言。
+         */
+        private final java.util.List<cn.studykid.multiagent.core.cap.CapToolDecision> decisions =
+                new java.util.ArrayList<>();
         private String unknownTool;
         private String unknownOperationId;
 
         void recordSucceeded(String tool, ToolHandler.ToolResult r) {
+            succeeded.add(tool);
+        }
+
+        void recordSucceeded(String tool) {
             succeeded.add(tool);
         }
 
@@ -579,6 +724,37 @@ public class ToolInvocationGate {
         void recordUnknown(String tool, String operationId) {
             this.unknownTool = tool;
             this.unknownOperationId = operationId;
+        }
+
+        /**
+         * 记录一次调用的四字段决策（P2）。
+         *
+         * @param decision 决策记录
+         */
+        void recordDecision(cn.studykid.multiagent.core.cap.CapToolDecision decision) {
+            decisions.add(decision);
+        }
+
+        /**
+         * 每次调用的四字段决策（不可变副本）。
+         *
+         * <p>⚠️ 既有链路下为空列表（该链路不产出结构化决策）。
+         */
+        public java.util.List<cn.studykid.multiagent.core.cap.CapToolDecision> decisions() {
+            return java.util.List.copyOf(decisions);
+        }
+
+        /**
+         * 按工具名取决策（测试与决策日志用）。
+         *
+         * @param toolName 工具名
+         * @return 该工具的决策；无则空
+         */
+        public java.util.Optional<cn.studykid.multiagent.core.cap.CapToolDecision> decisionOf(
+                String toolName) {
+            return decisions.stream()
+                    .filter(d -> d.toolName().equals(toolName))
+                    .findFirst();
         }
 
         /** @return 是否出现 UNKNOWN（须停止执行并转对账）。 */

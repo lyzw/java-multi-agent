@@ -236,6 +236,25 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
         return inTenantTx(tenantId, conn -> findExisting(conn, tenantId, idempotencyKey));
     }
 
+    @Override
+    public @NonNull Optional<String> findRequestDigest(@NonNull String tenantId,
+                                                        @NonNull String idempotencyKey) {
+        return inTenantTx(tenantId, conn -> {
+            String sql = """
+                    SELECT o.request_digest
+                    FROM tool_operation o
+                    WHERE o.tenant_id = ?::uuid AND o.idempotency_key = ?
+                    """;
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, tenantId);
+                ps.setString(2, idempotencyKey);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() ? Optional.ofNullable(rs.getString(1)) : Optional.empty();
+                }
+            }
+        });
+    }
+
     // ── 内部 ────────────────────────────────────────────────────────
 
     private Optional<Registration> findExisting(Connection conn, String tenantId,

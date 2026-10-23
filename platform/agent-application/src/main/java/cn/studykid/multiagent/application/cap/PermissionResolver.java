@@ -49,7 +49,7 @@ import cn.studykid.multiagent.ports.persistence.PublishedVersionPort;
  * <b>绝不</b>退化为「跳过该对象」—— 跳过等于把「声明了但解析不出」当成「没声明」，
  * 那会让越权被伪装成「工具未声明」。
  */
-public class PermissionResolver {
+public class PermissionResolver implements ClosureResolver {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -86,6 +86,7 @@ public class PermissionResolver {
      * @return 有效能力闭包
      * @throws ClosureResolutionException 解析失败
      */
+    @Override
     public @NonNull EffectiveClosure resolve(@NonNull String tenantId,
                                               @NonNull String agentId,
                                               int agentVersion) {
@@ -108,6 +109,7 @@ public class PermissionResolver {
      * @return 有效能力闭包
      * @throws ClosureResolutionException 解析失败
      */
+    @Override
     public @NonNull EffectiveClosure resolveCurrent(@NonNull String tenantId,
                                                      @NonNull String agentId) {
         var agentDef = agentDefs.findLatestPublished(tenantId, agentId)

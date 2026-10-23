@@ -82,6 +82,32 @@ public interface ApprovalPort {
     java.util.Optional<ApprovalView> findActive(@NonNull String tenantId,
                                                @NonNull String operationId);
 
+    /**
+     * 标记「执行意图已提交」（§5.3 步骤 13b）。
+     *
+     * <p>§5.3.3 的审批状态机为 {@code PENDING → RESERVED → INTENT_SUBMITTED → CONSUMED}，
+     * 其中 {@code RESERVED → INTENT_SUBMITTED} 的语义是
+     * 「<b>执行意图已持久化，即将发起外部副作用</b>」——
+     * 它是崩溃恢复的判据：审批停在 {@code RESERVED} 说明<b>尚未</b>发出副作用，
+     * 停在 {@code INTENT_SUBMITTED} 说明<b>可能已发出</b>。
+     *
+     * <p>⚠️ <b>默认实现是空操作，属 P2 过渡语义</b>：
+     * 完整的审批状态机（预占 / 双哈希 / 补偿）属 <b>P3</b>，
+     * P2 的 {@link #consume} 是「一次性消费」语义（等价于预占 + 确认合一），
+     * 审批在步骤 10 即已落到终态，故步骤 13b 无状态可迁移。
+     * P3 落地状态机后覆写本方法即可，<b>调用点无需改动</b>。
+     *
+     * <p>⚠️ 本方法<b>不得</b>承担放行职责：它只是状态记账，
+     * 审批是否通过由步骤 10 的 {@link #consume} 决定。
+     * 实现方<b>不得</b>因为本方法被调用就认为审批已通过。
+     *
+     * @param tenantId    租户
+     * @param operationId 操作标识
+     */
+    default void markIntentSubmitted(@NonNull String tenantId, @NonNull String operationId) {
+        // P2 过渡：审批状态机属 P3，本步骤暂无可迁移的状态。
+    }
+
     /** 消费结果。每个值都对应一个可被反证的不变量。 */
     enum ApprovalOutcome {
         /** 消费成功（含幂等命中已消费）。 */

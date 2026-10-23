@@ -45,13 +45,13 @@ public class InvocationValidator {
 
     private final AuthzVersionPort authzVersions;
     private final RolePermissionPort rolePermissions;
-    private final PermissionResolver resolver;
+    private final ClosureResolver resolver;
     private final CapabilitySnapshotPort snapshots;
     private final McpManifestPort manifest;
 
     public InvocationValidator(@NonNull AuthzVersionPort authzVersions,
                                @NonNull RolePermissionPort rolePermissions,
-                               @NonNull PermissionResolver resolver,
+                               @NonNull ClosureResolver resolver,
                                @NonNull CapabilitySnapshotPort snapshots,
                                @NonNull McpManifestPort manifest) {
         this.authzVersions = authzVersions;
