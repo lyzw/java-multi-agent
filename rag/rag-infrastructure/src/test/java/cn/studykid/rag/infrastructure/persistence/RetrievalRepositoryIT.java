@@ -275,13 +275,21 @@ class RetrievalRepositoryIT {
      * <p>⚠️ 为什么单列一个夹具而不是复用 {@link #seedTenantT()}：
      * 撤回语义必须与「正常 VERIFIED 语料」在同一个测试里对比才有意义。
      * 若把 C1 的来源改成 REVOKED，就再也验证不了「VERIFIED 的能取到」。
+     *
+     * <p>⚠️ 为什么版本坐标必须与 {@link #seedTenantT()} 错开（北师大版而非人教版）：
+     * {@code rag_edition_unique} 是 {@code (tenant_id, subject, grade, term, publisher,
+     * revision_code)}——**不含 source_id**。同一租户内「人教版数学八年级上册2024修订」
+     * 只能存在一个 edition，与它挂在哪个 source 下无关（版本坐标标识的是「那个版本」
+     * 本身，不是每个来源各存一份副本）。若复用人教版，INSERT 会撞 {@code rag_edition_unique}，
+     * 而 {@code ON CONFLICT (tenant_id, edition_id)} 只覆盖主键冲突，自然键冲突直接报错
+     * （2026-10-23 线上 RDS 首跑实测）。
      */
     private void seedRevokedSource() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, T);
-            insertSourceWithStatus(S4, T, "人教版", "ISBN-R", "REVOKED");
-            insertEdition(E4, T, S4, "人教版");
+            insertSourceWithStatus(S4, T, "北师大版", "ISBN-R", "REVOKED");
+            insertEdition(E4, T, S4, "北师大版");
             insertDocument(D4, T, S4, E4);
             insertChunk(C5, T, D4, E4, "EXPLANATION", "已撤回的讲解内容");
             return null;
@@ -290,10 +298,17 @@ class RetrievalRepositoryIT {
 
     private void insertSourceWithStatus(String sourceId, String tenantId, String publisher,
                                         String isbn, String verStatus) {
+        // ⚠️ ver_status 必须显式转型 `?::rag_verification_status`（2026-10-23 线上 RDS 实测）：
+        //    V1 起该列就是枚举类型。字面量 'VERIFIED'（insertSource）PG 会按 unknown
+        //    字面量隐式转枚举；但**绑定参数**经 pgjdbc 按 varchar 发送，
+        //    varchar → enum 没有隐式转换，直接报
+        //    `column "ver_status" is of type rag_verification_status but expression is of type character varying`。
+        //    （同文件 insertChunk 对 role 用 `?::rag_chunk_role` 正是同理。）
         jdbcTemplate.update(
                 "INSERT INTO rag_source (source_id, tenant_id, source_type, title, publisher, "
                         + "trust_tier, ver_status, ver_evidence, verified_at, license_status, isbn) "
-                        + "VALUES (?::uuid, ?::uuid, 'TEXTBOOK', 'fixture', ?, 'OFFICIAL_PUBLISHER', ?, "
+                        + "VALUES (?::uuid, ?::uuid, 'TEXTBOOK', 'fixture', ?, 'OFFICIAL_PUBLISHER', "
+                        + "?::rag_verification_status, "
                         + "'fixture', now(), 'LICENSED', ?) "
                         + "ON CONFLICT (tenant_id, source_id) DO NOTHING",
                 sourceId, tenantId, publisher, verStatus, isbn);
