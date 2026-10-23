@@ -109,9 +109,13 @@ export function HealthPage(): JSX.Element {
         <Marked label="后端没有正常响应" tone="error">
           <p style={{ margin: 0 }}>{health.detail ?? '检查失败'}</p>
           <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
-            先确认后端进程在跑，再看数据库连得上没。
-            要快速判断后端是否存活，可以用 <code>GET /api/auth/jwks</code> ——
+            先确认后端进程在跑。要快速判断后端是否存活，可以用 <code>GET /api/auth/jwks</code> ——
             它不依赖健康探针。
+          </p>
+          <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
+            ⚠️ 后端把健康检查设成了<b>最简模式</b>（不暴露组件明细），本页<b>看不出是哪个组件异常</b>——
+            数据库、消息通道、磁盘都可能，需要查后端日志确认，
+            不要只看这一页就断定是数据库。
           </p>
         </Marked>
       ) : null}
