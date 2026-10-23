@@ -49,6 +49,10 @@ class RetrievalRepositoryIT {
 
     private static final String PG_URL_ENV = "IT_RAG_PG_URL";
 
+    /** 数据库账号/口令环境变量名（须与 URL 分开，见 {@link #setup()}）。 */
+    private static final String PG_USER_ENV = "IT_RAG_PG_USERNAME";
+    private static final String PG_PASSWORD_ENV = "IT_RAG_PG_PASSWORD";
+
     private static final String T = "11111111-1111-1111-1111-111111111111";
     private static final String U = "22222222-2222-2222-2222-222222222222";
     private static final String S = "33333333-3333-3333-3333-333333333333";
@@ -58,6 +62,10 @@ class RetrievalRepositoryIT {
     private static final String E3 = "77777777-7777-7777-7777-777777777777";
     private static final String D = "88888888-8888-8888-8888-888888888888";
     private static final String D3 = "99999999-9999-9999-9999-999999999999";
+    private static final String S4 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4";
+    private static final String E4 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa5";
+    private static final String D4 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa6";
+    private static final String C5 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa7";
     private static final String C1 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
     private static final String C2 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2";
     private static final String C3 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3";
@@ -80,12 +88,40 @@ class RetrievalRepositoryIT {
     @BeforeEach
     void setup() {
         String url = withRagSearchPath(System.getenv(PG_URL_ENV));
-        DriverManagerDataSource ds = new DriverManagerDataSource(url);
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setUrl(url);
+        // ⚠️ 凭证必须走**独立参数**（2026-10-22 实测修正）：
+        //   URL 内嵌 "user:pass@host" 时 pgjdbc 会把整段当成主机名，
+        //   报 `caused by: rag_app:rag_app%2123@host`——密码含 '!' 时必现。
+        //   拆成 setUsername / setPassword 后连接正常。
+        ds.setUsername(envOrDefault(PG_USER_ENV, extractUserFromUrl(System.getenv(PG_URL_ENV))));
+        ds.setPassword(envOrDefault(PG_PASSWORD_ENV, null));
         jdbcTemplate = new JdbcTemplate(ds);
         transactionTemplate = new TransactionTemplate(
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds));
         repository = new JdbcRetrievalRepository(jdbcTemplate, embedder);
         seedTenantT();
+    }
+
+    /** 读取环境变量，未设置时回落到默认值。 */
+    private static String envOrDefault(String name, String fallback) {
+        String v = System.getenv(name);
+        return (v == null || v.isBlank()) ? fallback : v;
+    }
+
+    /** 从 JDBC URL 中提取用户名（形如 {@code jdbc:postgresql://user:pass@host/...}）。 */
+    private static String extractUserFromUrl(String url) {
+        if (url == null || !url.contains("@")) {
+            return null;
+        }
+        String afterScheme = url.substring(url.indexOf("//") + 2);
+        int at = afterScheme.indexOf('@');
+        if (at <= 0) {
+            return null;
+        }
+        String cred = afterScheme.substring(0, at);
+        int colon = cred.indexOf(':');
+        return colon > 0 ? cred.substring(0, colon) : cred;
     }
 
     /**
@@ -144,8 +180,50 @@ class RetrievalRepositoryIT {
     }
 
     // ---------------------------------------------------------------------
+    // B5：生成期依据取回（loadByIds）的隔离与撤回语义
+    // ---------------------------------------------------------------------
+
+    @Test
+    void loadByIdsReturnsOwnTenantChunks() {
+        List<Chunk> loaded = loadByIdsAs(T, List.of(C1, C2));
+        List<String> ids = loaded.stream().map(Chunk::id).toList();
+        assertTrue(ids.contains(C1), "本租户的片段应能取回");
+        assertTrue(ids.contains(C2), "本租户的片段应能取回（答案类角色由上层闸门滤，不在此处）");
+    }
+
+    @Test
+    void loadByIdsCrossTenantReturnsNothing() {
+        seedTenantU();
+        List<Chunk> loaded = loadByIdsAs(T, List.of(C4));
+        assertTrue(loaded.isEmpty(),
+                "必须拒绝跨租户取回依据：C4 属租户 U，租户 T 取它必须得到空（RLS FORCE）");
+    }
+
+    @Test
+    void loadByIdsExcludesRevokedSource() {
+        seedRevokedSource();
+        List<Chunk> loaded = loadByIdsAs(T, List.of(C5));
+        assertTrue(loaded.isEmpty(),
+                "来源已撤回（REVOKED）的片段不得作为生成依据——比不引用更糟的是引用已下架内容");
+    }
+
+    @Test
+    void loadByIdsEmptyInputReturnsEmpty() {
+        assertTrue(loadByIdsAs(T, List.of()).isEmpty(), "空入参应直接返回空，不发 SQL");
+    }
+
+    // ---------------------------------------------------------------------
     // 夹具：在同一事务内 set_config 模拟主平台传入的租户上下文
     // ---------------------------------------------------------------------
+
+    private List<Chunk> loadByIdsAs(String tenantId, List<String> chunkIds) {
+        return transactionTemplate.execute(status -> {
+            // ⚠️ set_config 是 SELECT（返回一行），必须用 queryForObject() 而非 update()。
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
+            return repository.loadByIds(chunkIds);
+        });
+    }
 
     private List<ScoredChunk> searchAs(String tenantId, RetrievalRequest req) {
         return transactionTemplate.execute(status -> {
@@ -160,7 +238,10 @@ class RetrievalRepositoryIT {
         transactionTemplate.execute(status -> {
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, T);
-            insertTenant(T, "t-tenant");
+            // ⚠️ 不再插入租户行：RAG 库里**没有**租户表
+            //    （V4 迁移移除了 rag_tenant 副本——租户信息的权威源是 platform，
+            //    见 RAG-D00 §4「租户与身份」边界）。
+            //    隔离仍由 RLS 保证：租户上下文只影响可见行。
             insertSource(S, T, "人教版", "ISBN-T");
             insertEdition(E, T, S, "人教版");
             insertEdition(E2, T, S, "苏教版");
@@ -179,7 +260,6 @@ class RetrievalRepositoryIT {
         transactionTemplate.execute(status -> {
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, U);
-            insertTenant(U, "u-tenant");
             insertSource(S2, U, "人教版", "ISBN-U");
             insertEdition(E3, U, S2, "人教版");
             insertDocument(D3, U, S2, E3);
@@ -189,13 +269,36 @@ class RetrievalRepositoryIT {
         });
     }
 
-    private void insertTenant(String tenantId, String slug) {
-        // ⚠️ UUID 列必须显式 ::uuid：PostgreSQL 不做 varchar → uuid 的隐式转换。
-        jdbcTemplate.update(
-                "INSERT INTO rag_tenant (tenant_id, id, slug, name) VALUES (?::uuid, ?::uuid, ?, 'fixture') "
-                        + "ON CONFLICT (tenant_id) DO NOTHING",
-                tenantId, tenantId, slug);
+    /**
+     * 造一条「来源已撤回」的语料。
+     *
+     * <p>⚠️ 为什么单列一个夹具而不是复用 {@link #seedTenantT()}：
+     * 撤回语义必须与「正常 VERIFIED 语料」在同一个测试里对比才有意义。
+     * 若把 C1 的来源改成 REVOKED，就再也验证不了「VERIFIED 的能取到」。
+     */
+    private void seedRevokedSource() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, T);
+            insertSourceWithStatus(S4, T, "人教版", "ISBN-R", "REVOKED");
+            insertEdition(E4, T, S4, "人教版");
+            insertDocument(D4, T, S4, E4);
+            insertChunk(C5, T, D4, E4, "EXPLANATION", "已撤回的讲解内容");
+            return null;
+        });
     }
+
+    private void insertSourceWithStatus(String sourceId, String tenantId, String publisher,
+                                        String isbn, String verStatus) {
+        jdbcTemplate.update(
+                "INSERT INTO rag_source (source_id, tenant_id, source_type, title, publisher, "
+                        + "trust_tier, ver_status, ver_evidence, verified_at, license_status, isbn) "
+                        + "VALUES (?::uuid, ?::uuid, 'TEXTBOOK', 'fixture', ?, 'OFFICIAL_PUBLISHER', ?, "
+                        + "'fixture', now(), 'LICENSED', ?) "
+                        + "ON CONFLICT (tenant_id, source_id) DO NOTHING",
+                sourceId, tenantId, publisher, verStatus, isbn);
+    }
+
 
     private void insertSource(String sourceId, String tenantId, String publisher, String isbn) {
         jdbcTemplate.update(

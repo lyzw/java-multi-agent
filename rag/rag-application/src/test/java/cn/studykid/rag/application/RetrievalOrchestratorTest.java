@@ -85,6 +85,18 @@ class RetrievalOrchestratorTest {
             return List.of();
         }
 
+        /**
+         * B5 新增方法的替身实现。
+         *
+         * <p>⚠️ 本测试类只覆盖检索编排，不覆盖生成路径；
+         * 这里返回空列表仅为满足接口契约，生成期行为由
+         * {@code GroundedGenerationServiceTest} 单独覆盖。
+         */
+        @Override
+        public List<Chunk> loadByIds(List<String> chunkIds) {
+            return List.of();
+        }
+
         @Override
         public List<cn.studykid.rag.core.knowledge.KnowledgePoint> resolveKnowledgePoints(
                 String query, String subject) {

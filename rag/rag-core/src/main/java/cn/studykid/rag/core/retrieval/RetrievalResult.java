@@ -89,7 +89,16 @@ public record RetrievalResult(
         /** 沿先修关系扩展召回。 */
         PREREQUISITE_EXPANSION,
         /** 版本内同章节邻接扩展。 */
-        SECTION_NEIGHBOR
+        SECTION_NEIGHBOR,
+        /**
+         * 生成期依据（B5）。
+         *
+         * <p>⚠️ 这不是检索通道：这些片段<b>不是被本端检索出来的</b>，
+         * 而是调用方从前一次检索结果里指定后交来生成的。
+         * 单列一个值是为了让「这条为什么出现」的审计解释保持诚实——
+         * 若复用 {@link #DENSE_VECTOR}，会让人以为本端做过向量召回。
+         */
+        GENERATION_BASIS
     }
 
     /** 命中原因。 */
@@ -105,6 +114,13 @@ public record RetrievalResult(
         /** 同章节邻接。 */
         NEIGHBOR,
         /** 答案类内容被模式过滤排除（保留在审计中）。 */
-        SUPPRESSED_BY_MODE
+        SUPPRESSED_BY_MODE,
+        /**
+         * 由调用方指定为生成依据（B5）。
+         *
+         * <p>与 {@link RetrievalChannel#GENERATION_BASIS} 配对：
+         * 说明「这条片段的出现是调用方的选择，不是检索器的判断」。
+         */
+        CITED_AS_BASIS
     }
 }

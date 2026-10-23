@@ -201,6 +201,54 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 chunk.documentId(), chunk.id(), chunk.locator().pageNumber(), limit);
     }
 
+    /**
+     * 按 ID 批量取回片段（B5 生成期依据装配）。
+     *
+     * <p><b>⚠️ 与 {@link #search} 的三处刻意差异</b>：
+     * <ul>
+     *   <li><b>不调 {@link EmbeddingPort}</b>：取回不需要查询向量，
+     *       少一次模型调用，也避免「取依据还要先算 embedding」的荒谬；</li>
+     *   <li><b>不做版本/角色过滤</b>：那是应用层
+     *       {@code GroundedGenerationService} 的职责（与检索期同源复用
+     *       {@link RetrievalPolicy}）。在 SQL 里再滤一遍会产生两套规则；</li>
+     *   <li><b>不排序</b>：顺序由调用方决定，数据库顺序无意义。</li>
+     * </ul>
+     *
+     * <p><b>⚠️ {@code = ANY(?::uuid[])} 而不是 IN (...)</b>：
+     * 入参数目不固定，拼 IN 列表既要手工转义又要防注入；
+     * {@code = ANY} 传一个数组字面量即可，且Postgres 可走主键索引。
+     * 数组字面量形如 {@code {uuid1,uuid2}}，元素已由上层校验为合法 UUID。
+     *
+     * <p><b>⚠️ VERIFIED 条件不能省</b>：来源被撤回（{@code REVOKED}）后，
+     * 其片段虽仍在表里，但已不是「已授权语料」。若生成期不校验，
+     * 就会出现「内容已下架但讲解仍引用它」——比不引用更糟。
+     */
+    @Override
+    public @NonNull List<Chunk> loadByIds(@NonNull List<String> chunkIds) {
+        if (chunkIds.isEmpty()) {
+            return List.of();
+        }
+        StringBuilder arr = new StringBuilder("{");
+        for (int i = 0; i < chunkIds.size(); i++) {
+            if (i > 0) {
+                arr.append(',');
+            }
+            arr.append(chunkIds.get(i));
+        }
+        arr.append('}');
+        String sql = """
+                SELECT %s
+                FROM rag_chunk c
+                JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
+                JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
+                JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
+                WHERE c.tenant_id = rag_current_tenant()
+                  AND src.ver_status = 'VERIFIED'
+                  AND c.chunk_id = ANY(?::uuid[])
+                """.formatted(SELECT_COLUMNS);
+        return jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs), arr.toString());
+    }
+
     @Override
     public @NonNull List<KnowledgePoint> resolveKnowledgePoints(@NonNull String query,
                                                               @Nullable String subject) {

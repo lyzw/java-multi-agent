@@ -68,6 +68,29 @@ public interface RetrievalPort {
     @NonNull List<Chunk> findSectionNeighbors(@NonNull Chunk chunk, int limit);
 
     /**
+     * 按 ID 批量取回片段（生成期依据装配，RAG-D00 §2.7 / B5）。
+     *
+     * <p><b>⚠️ 与 {@link #search} 的本质区别：不检索、不打分、不做知识点补全</b>——
+     * 它只回答「这些 ID 对应哪些片段」。检索已由调用方完成，
+     * 本方法负责把调用方指定的依据<b>原样</b>取回，供生成期引用。
+     *
+     * <p><b>⚠️ 租户隔离与检索路径完全同构</b>：依赖调用方在事务内
+     * {@code set_config('app.tenant_id', ..., true)} 建立的上下文，
+     * SQL 中 {@code c.tenant_id = rag_current_tenant()} 与
+     * {@code src.ver_status = 'VERIFIED'} 双条件收口。
+     * 因此传进来的 ID 若属于其他租户，结果就是「取不到」——
+     * 上层据此显式报错，而不是静默给一个空回答。
+     *
+     * <p><b>⚠️ 顺序不保证</b>：返回顺序由数据库决定；
+     * 调用方若需按入参顺序呈现，应自行按 ID 重排。
+     *
+     * @param chunkIds 片段 ID 列表（须为合法 UUID；上限见
+     *                 {@link cn.studykid.rag.core.generation.GenerationRequest#MAX_HIT_IDS}）
+     * @return 取回的片段（入参中不存在的 ID 不会出现在结果里）
+     */
+    @NonNull List<Chunk> loadByIds(@NonNull List<String> chunkIds);
+
+    /**
      * 解析查询到知识点。
      *
      * @param query 查询串
