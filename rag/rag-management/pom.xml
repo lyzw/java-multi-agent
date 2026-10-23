@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.rag</groupId>
+    <artifactId>java-saas-rag</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>rag-management</artifactId>
+  <name>rag-management :: 语料数据管理</name>
+  <description>语料来源登记、校验状态机、文档/片段管理、索引统计的管理面模块</description>
+
+  <!--
+    ⚠️ 分层与依赖方向（与 rag/ 其余模块同构，依赖只能向内）：
+      rag-core / rag-ports  ← 领域与端口（零框架依赖）
+      rag-application          ← 用例
+      rag-infrastructure       ← JDBC 适配器
+      rag-management（本模块）← 管理面用例 + 管理 REST 端点 + 装配
+
+    本模块<b>不</b>依赖 rag-api：管理端点是独立的一组 REST 契约，
+    与检索端点（/api/v1/retrieval）职责不同、演进节奏不同，
+    合并会让检索面被管理面的变更牵动。
+  -->
+  <dependencies>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-ports</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-infrastructure</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+  </dependencies>
+</project>

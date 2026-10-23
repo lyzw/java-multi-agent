@@ -43,6 +43,7 @@
     <module>rag-infrastructure</module>
     <module>rag-worker</module>
     <module>rag-api</module>
+    <module>rag-management</module>
     <module>rag-bootstrap</module>
   </modules>
 
@@ -84,6 +85,11 @@
       <dependency>
         <groupId>cn.studykid.rag</groupId>
         <artifactId>rag-api</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.rag</groupId>
+        <artifactId>rag-management</artifactId>
         <version>${project.version}</version>
       </dependency>
     </dependencies>

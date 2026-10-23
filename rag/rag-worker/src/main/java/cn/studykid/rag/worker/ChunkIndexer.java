@@ -127,12 +127,22 @@ public class ChunkIndexer {
     /**
      * 待索引片段扫描 SQL（键集分页 + VERIFIED 来源 + 缺失判定）。
      * RLS 下 {@code c.tenant_id = rag_current_tenant()} 由 set_config 满足。
+     *
+     * <p>⚠️ <b>2026-10-22 修复</b>：原实现写的是 {@code JOIN rag_source src
+     * ON c.source_id = src.source_id}，但 {@code rag_chunk} 表<b>没有 source_id 列</b>
+     * （V1 的三层模型是 source → document → chunk，来源须经 rag_document 中转），
+     * 运行期必然抛 {@code column c.source_id does not exist}——
+     * 即重索引功能<b>从未真正跑通过</b>。
+     * 现改为经 {@code rag_document} 中转，与
+     * {@code JdbcRetrievalRepository} 的关联路径保持一致。
      */
     private static final String PENDING_SQL = """
             SELECT c.chunk_id, c.text
             FROM rag_chunk c
+            JOIN rag_document doc
+                 ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
             JOIN rag_source src
-                 ON c.source_id = src.source_id AND c.tenant_id = src.tenant_id
+                 ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
             WHERE c.tenant_id = rag_current_tenant()
               AND src.ver_status = 'VERIFIED'
               AND c.chunk_id > ?

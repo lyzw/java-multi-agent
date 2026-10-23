@@ -1,0 +1,158 @@
+package cn.studykid.rag.management.ports;
+
+import java.util.List;
+
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
+
+import cn.studykid.rag.management.core.CorpusDocument;
+import cn.studykid.rag.management.core.CorpusSource;
+import cn.studykid.rag.management.core.CorpusStatistics;
+import cn.studykid.rag.management.core.RagTenantContext;
+import cn.studykid.rag.management.core.SourceQuery;
+import cn.studykid.rag.management.core.SourceRegistration;
+import cn.studykid.rag.management.core.VerificationDecision;
+
+/**
+ * 语料数据管理端口（RAG-D07 §2 准入流程的管理面出口）。
+ *
+ * <p><b>⚠️ 本端口是「管理面」，与 {@code RetrievalPort} 是两个方向</b>：
+ * 检索端口回答「能召回什么」，管理端口回答「库里有什么、哪些还没审、能不能放行」。
+ * 二者<b>不能合并</b>——检索面是 fail-closed 的自动闸门，
+ * 管理面是带留痕与双人复核的<b>人工闸门</b>。
+ *
+ * <p><b>⚠️ 租户上下文的来源</b>：本端口的所有方法接收 {@link RagTenantContext}
+ * 而非裸 {@code tenantId}——租户信息（含 G-3 权威门槛）的<b>权威源是 platform</b>
+ * （RAG-D00 §4），RAG 库里<b>不存</b>租户清单（V4 迁移已移除 {@code rag_tenant}）。
+ * 实现方在事务内 {@code set_config('app.tenant_id', ..., true)}，
+ * 使 V1 的 RLS FORCE 策略生效。
+ *
+ * <p><b>⚠️ 写入禁令</b>：本端口<b>不提供</b>物理删除语料的方法。
+ * 撤回的唯一手段是 {@code ver_status='REVOKED'}
+ * （RAG-D07 §8 INV-4-a：禁止把物理 DELETE 当作撤回手段，
+ * 因为 DELETE 会级联抹除历史引用，破坏可溯源性）。
+ */
+public interface CorpusManagementPort {
+
+    /**
+     * 登记新的语料来源（阶段① PENDING）。
+     *
+     * <p>⚠️ 登记结果恒为 {@code trust_tier=UNVERIFIED}、{@code ver_status=PENDING}：
+     * 采集员不得自行提升等级或置 VERIFIED（RAG-D07 §2.2）。
+     *
+     * <p>⚠️ 登记必须留痕（RAG-D07 §2.5：「至少 INGEST（登记）必须落审计」），
+     * 故本方法要求显式传入登记人——{@code rag_access_audit.principal_id}
+     * 是 NOT NULL，且「谁采集的」是后续争议追溯的第一问。
+     *
+     * @param context 租户上下文（由 platform 下发）
+     * @param registration 登记信息
+     * @param principalId 登记人（UUID）
+     * @return 登记后的来源视图
+     */
+    @NonNull CorpusSource registerSource(@NonNull RagTenantContext context,
+                                         @NonNull SourceRegistration registration,
+                                         @NonNull String principalId);
+
+    /**
+     * 按查询条件列出来源。
+     *
+     * @param context 租户上下文
+     * @param query 查询条件
+     * @return 匹配的来源列表
+     */
+    @NonNull List<CorpusSource> listSources(@NonNull RagTenantContext context,
+                                             @NonNull SourceQuery query);
+
+    /**
+     * 按 ID 查询单个来源。
+     *
+     * @param context 租户上下文
+     * @param sourceId 来源 ID
+     * @return 来源视图；不存在返回 {@code null}
+     */
+    @Nullable CorpusSource findSource(@NonNull RagTenantContext context,
+                                       @NonNull String sourceId);
+
+    /**
+     * 执行一次校验状态转移（审核/拒绝/撤回/重新认领）。
+     *
+     * <p>⚠️ 实现方<b>必须</b>先校验转移合法性
+     * （{@code VerificationTransition.requireAllowed}），
+     * 非法转移必须拒绝而非静默执行。
+     *
+     * @param context 租户上下文
+     * @param sourceId 来源 ID
+     * @param decision 校验决定（含证据与决定人）
+     * @return 转移后的来源视图；来源不存在返回 {@code null}
+     */
+    @Nullable CorpusSource applyVerification(@NonNull RagTenantContext context,
+                                             @NonNull String sourceId,
+                                             @NonNull VerificationDecision decision);
+
+    /**
+     * 列出某来源下的文档载体。
+     *
+     * @param context 租户上下文
+     * @param sourceId 来源 ID
+     * @return 文档列表
+     */
+    @NonNull List<CorpusDocument> listDocuments(@NonNull RagTenantContext context,
+                                                @NonNull String sourceId);
+
+    /**
+     * 列出某文档下的片段摘要（管理面浏览用）。
+     *
+     * @param context 租户上下文
+     * @param documentId 文档 ID
+     * @param limit 返回条数上限
+     * @return 片段摘要列表
+     */
+    @NonNull List<ChunkSummary> listChunks(@NonNull RagTenantContext context,
+                                            @NonNull String documentId,
+                                            int limit);
+
+    /**
+     * 统计租户语料与索引状况。
+     *
+     * @param context 租户上下文
+     * @return 统计视图
+     */
+    @NonNull CorpusStatistics statistics(@NonNull RagTenantContext context);
+
+    /**
+     * 写入语料访问审计（追加写，不可改）。
+     *
+     * <p>⚠️ RAG-D07 §2.5：「转移必须写审计」。审计表由 DB 触发器强制只追加。
+     *
+     * @param context 租户上下文
+     * @param principalId 操作人
+     * @param action 动作（RETRIEVE / INGEST / CITE / EXPORT / REVOKE / ADMIT / REJECT）
+     * @param sourceId 关联来源（可为 null）
+     */
+    void appendAudit(@NonNull RagTenantContext context, @NonNull String principalId,
+                     @NonNull String action, @Nullable String sourceId);
+
+    /**
+     * 片段摘要（管理面列表项）。
+     *
+     * @param chunkId 片段 ID
+     * @param role 片段角色
+     * @param pageNumber 页码
+     * @param sectionPath 章节路径
+     * @param exerciseNo 题号
+     * @param charLength 正文字符数
+     * @param hasEmbedding 是否已写入向量
+     * @param contentHash 内容校验和
+     */
+    record ChunkSummary(
+            @NonNull String chunkId,
+            @NonNull String role,
+            int pageNumber,
+            @NonNull String sectionPath,
+            @Nullable String exerciseNo,
+            int charLength,
+            boolean hasEmbedding,
+            @Nullable String contentHash
+    ) {
+    }
+}

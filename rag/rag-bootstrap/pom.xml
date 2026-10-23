@@ -24,6 +24,15 @@
       <artifactId>rag-infrastructure</artifactId>
     </dependency>
     <!--
+      ⚠️ 管理面（语料登记 / 校验状态机 / 文档片段管理 / 索引统计）。
+      与检索面（rag-api）并列装配：两者是**两个方向**的闸门——
+      检索面回答「能召回什么」，管理面回答「库里有什么、哪些还没审、能不能放行」。
+    -->
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-management</artifactId>
+    </dependency>
+    <!--
       ⚠️ Spring Boot 4.x 把 Flyway/Liquibase 自动配置从核心 autoconfigure 模块
       移到了各自 starter（见 Boot 4.0 迁移指南）。仅引入 flyway-core 不会触发
       迁移；必须引入本 starter 才能恢复 FlywayAutoConfiguration 自动执行 V1/V2。
