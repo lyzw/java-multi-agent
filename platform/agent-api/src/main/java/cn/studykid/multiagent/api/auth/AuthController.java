@@ -63,8 +63,20 @@ public class AuthController {
         if (!result.success()) {
             return unauthorized();
         }
+        // ⚠️ 回带 tenantId（2026-10-22）：认证层**本就持有**权威租户 ID
+        //    （AuthResult.tenantId 来自 tenant 表），此前未透出，
+        //    导致前端进入 RAG 管理面时只能让用户**手填**租户 UUID——
+        //    而 RAG 侧的租户 ID 空间与 platform 不同，用户无从得知该填什么，
+        //    表现为「登录后 RAG 管理页不可用」。
+        //    回带的是**权威租户标识**（非敏感），不构成信息泄露：
+        //    调用方本就需按该租户授权。
+        // ⚠️ 回带角色（B1：登录返角色，2026-10-23 增补）：
+        //    角色取自库中登记值，与 JWT 声明同源，但此处直接透出，
+        //    前端无需再调 /api/auth/roles，一次往返即得身份用于导航显隐。
+        //    安全边界仍由执行时重授权保证（红线 9），本响应仅作 UI 提示。
         return ResponseEntity.ok(new TokenResponse(
-                result.token(), "Bearer", tokenTtlSeconds()));
+                result.token(), "Bearer", tokenTtlSeconds(),
+                result.tenantId(), result.principalId(), result.roles()));
     }
 
     /**
@@ -134,10 +146,22 @@ public class AuthController {
     /**
      * 令牌响应。
      *
-     * <p>⚠️ <b>刻意不包含 principalId 与 tenantId</b> —— 最小化原则。
-     * 客户端拿令牌即可调用，无需知道内部标识。
+     * <p>⚠️ 含 <b>tenantId / principalId / roles</b>（均在 2026-10-22～10-23 增补）：
+     * 三者皆非敏感——调用方本就按该租户/主体授权，角色仅用于前端导航显隐。
+     * 最小化原则在此让位于「一次往返即得身份」，避免前端为拿角色多打一次
+     * {@code /api/auth/roles}（该端点仍保留，供令牌续期后的角色重校验）。
+     * <b>安全边界不以本响应为准</b>：执行时仍按红线 9 重新授权。
+     *
+     * @param accessToken 访问令牌
+     * @param tokenType 令牌类型
+     * @param expiresIn 有效期（秒）
+     * @param tenantId <b>权威租户 ID</b>（2026-10-22 新增）——
+     *                 来自认证层持有的租户记录，供前端按租户调用下游服务
+     * @param principalId 主体 ID（2026-10-22 新增）——审核留痕需要「谁操作的」
+     * @param roles 主体在本租户内的角色集合（B1：2026-10-23 新增），仅用于导航显隐
      */
-    public record TokenResponse(String accessToken, String tokenType, long expiresIn) {
+    public record TokenResponse(String accessToken, String tokenType, long expiresIn,
+                                String tenantId, String principalId, java.util.Set<String> roles) {
     }
 
     /** JWKS 最小形式。 */

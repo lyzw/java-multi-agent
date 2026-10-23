@@ -55,15 +55,18 @@ public class AuthenticationService {
     }
 
     /** 认证结果。仅两种状态，<b>不区分失败原因</b>。 */
-    public record AuthResult(boolean success, String token, String principalId, String tenantId) {
+    public record AuthResult(boolean success, String token, String principalId, String tenantId,
+                             Set<String> roles) {
 
-        public static AuthResult success(String token, String principalId, String tenantId) {
-            return new AuthResult(true, token, principalId, tenantId);
+        public static AuthResult success(String token, String principalId, String tenantId,
+                                        Set<String> roles) {
+            return new AuthResult(true, token, principalId, tenantId,
+                    roles == null ? Set.of() : Set.copyOf(roles));
         }
 
         /** 统一失败结果：消息与耗时均不可区分。 */
         public static AuthResult failure() {
-            return new AuthResult(false, null, null, null);
+            return new AuthResult(false, null, null, null, Set.of());
         }
     }
 
@@ -100,12 +103,16 @@ public class AuthenticationService {
 
         principals.recordSuccess(record, now);
 
+        Set<String> roles = rolesOf(record);
         TenantContext context = new TenantContext(
-                record.tenantId(), record.principalId(), rolesOf(record), record.authzVersion());
+                record.tenantId(), record.principalId(), roles, record.authzVersion());
 
         String token = tokens.issue(context, now);
         log.info("登录成功: tenant={}, principal={}", record.tenantId(), record.principalId());
-        return AuthResult.success(token, record.principalId(), record.tenantId());
+        // ⚠️ 回带角色（B1：登录返角色）：角色来自库中登记值（rolesOf），
+        //    与 JWT 声明同源但此处直接给前端，免去一次 /api/auth/roles 往返。
+        //    前端仅用于**导航显隐**（非安全边界），安全判定仍以执行时重授权为准。
+        return AuthResult.success(token, record.principalId(), record.tenantId(), roles);
     }
 
     /**
