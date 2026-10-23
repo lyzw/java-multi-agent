@@ -11,9 +11,9 @@
  *    否则重复创建 Run → record_weakness 重复写入 = Sev-0。
  */
 
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createRun, ApiError } from '@/api/client'
+import { createRun, ApiError, getDictionaries } from '@/api/client'
 import { isIdempotencyConflict, type NormalizedError } from '@/api/errors'
 import {
   resolveIdempotencyKey,
@@ -31,9 +31,12 @@ import { ErrorView } from '@/shared/ErrorView'
  */
 const AGENT_ID = import.meta.env['VITE_AGENT_ID'] ?? 'default-agent'
 
-/** 白名单枚举 —— DEC-6 采集白名单：仅随机 student_id / 年级 / 学科 / 薄弱点 */
-const SUBJECTS = ['数学', '物理', '化学', '生物', '语文', '英语'] as const
-const GRADES = ['初一', '初二', '初三'] as const
+/**
+ * ⚠️ B3：学科/年级改为后端 `/api/reference` 词表单一真相源（见 getDictionaries）。
+ *    此处为**离线兜底**常量——端点未就绪或不可达时表单仍可用，不阻断提交。
+ */
+const FALLBACK_SUBJECTS = ['数学', '物理', '化学', '生物', '语文', '英语'] as const
+const FALLBACK_GRADES = ['初一', '初二', '初三'] as const
 
 interface FormState {
   studentId: string
@@ -46,8 +49,8 @@ interface FormState {
 
 const EMPTY_FORM: FormState = {
   studentId: '',
-  subject: SUBJECTS[0],
-  grade: GRADES[0],
+  subject: FALLBACK_SUBJECTS[0],
+  grade: FALLBACK_GRADES[0],
   questionText: '',
   studentSolution: '',
   correctAnswer: '',
@@ -59,6 +62,26 @@ export function NewRunPage(): JSX.Element {
   const [violations, setViolations] = useState<Record<string, Violation[]>>({})
   const [error, setError] = useState<NormalizedError | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  // ⚠️ B3：运行时从后端拉取业务词表，作为下拉单一真相源；失败回退硬编码兜底。
+  const [subjects, setSubjects] = useState<string[]>([...FALLBACK_SUBJECTS])
+  const [grades, setGrades] = useState<string[]>([...FALLBACK_GRADES])
+
+  useEffect(() => {
+    let cancelled = false
+    getDictionaries()
+      .then((d) => {
+        if (cancelled) return
+        if (d.subjects.length > 0) setSubjects(d.subjects)
+        if (d.grades.length > 0) setGrades(d.grades)
+      })
+      .catch(() => {
+        /* 端点不可达 → 保留 FALLBACK，不阻断表单 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const update = (name: keyof FormState) => (value: string): void => {
     setForm((prev) => ({ ...prev, [name]: value }))
@@ -177,7 +200,7 @@ export function NewRunPage(): JSX.Element {
             value={form.subject}
             onChange={(e) => update('subject')(e.target.value)}
           >
-            {SUBJECTS.map((item) => (
+            {subjects.map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>
@@ -195,7 +218,7 @@ export function NewRunPage(): JSX.Element {
             value={form.grade}
             onChange={(e) => update('grade')(e.target.value)}
           >
-            {GRADES.map((item) => (
+            {grades.map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>

@@ -1,47 +1,41 @@
 /**
- * 工作台（FE-D3）
+ * 工作台（FE-D3 / B6）。
  *
- * ⛔ 不做全局任务列表：后端无列表接口（G7），也无分页契约。
- *    用 localStorage 冒充「全部任务」是静默误导。
- *    本机记录**明确标注范围**。
+ * ⚠️ 改为消费真实列表端点（GET /api/runs，P4-D13 / G7 · FE-01 §P7 检索台）：
+ * 此前用 sessionStorage 冒充「本设备记录」是静默误导——且**无人写入**，永远为空。
+ * 现直接拉取本租户近期辅导（最多 10 条），与后端 RunListController 对齐。
  */
 
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useSession } from '@/auth/session'
-import { Empty, Sheet } from '@/shared/states'
-
-interface LocalRun {
-  runId: string
-  createdAt: string
-}
-
-const LOCAL_RUNS_KEY = 'agent.localRuns'
-
-function readLocalRuns(): LocalRun[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.sessionStorage.getItem(LOCAL_RUNS_KEY)
-    if (raw === null) return []
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter(
-      (item): item is LocalRun =>
-        typeof item === 'object' &&
-        item !== null &&
-        typeof (item as Record<string, unknown>)['runId'] === 'string',
-    )
-  } catch {
-    return []
-  }
-}
+import { Empty, Sheet, Loading, ErrorState } from '@/shared/states'
+import { listRuns, ApiError } from '@/api/client'
+import type { RunListItem } from '@/api/types'
+import type { NormalizedError } from '@/api/errors'
 
 export function DashboardPage(): JSX.Element {
   const { session } = useSession()
-  const [localRuns, setLocalRuns] = useState<LocalRun[]>([])
+  const [runs, setRuns] = useState<RunListItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<NormalizedError | null>(null)
 
   useEffect(() => {
-    setLocalRuns(readLocalRuns())
+    let cancelled = false
+    setLoading(true)
+    listRuns({ limit: 10 })
+      .then((page) => {
+        if (!cancelled) setRuns(page.items)
+      })
+      .catch((cause) => {
+        if (!cancelled && cause instanceof ApiError) setLoadError(cause.normalized)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   return (
@@ -89,10 +83,14 @@ export function DashboardPage(): JSX.Element {
         </div>
       </Sheet>
 
-      <Sheet title="本设备发起的辅导" note="只显示这台设备上的记录，不是全部记录。">
-        {localRuns.length === 0 ? (
+      <Sheet title="近期辅导" note="本账号在本租户下最近的分析记录（最多 10 条）。">
+        {loading ? (
+          <Loading label="加载中…" />
+        ) : loadError !== null ? (
+          <ErrorState reason={loadError.message} />
+        ) : runs.length === 0 ? (
           <Empty
-            title="这台设备还没有发起过辅导"
+            title="还没有辅导记录"
             hint="从上面选「发起辅导」，提交第一道错题。"
             action={
               <Link to="/runs/new" className="btn">
@@ -102,7 +100,7 @@ export function DashboardPage(): JSX.Element {
           />
         ) : (
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {localRuns.map((run) => (
+            {runs.map((run) => (
               <li key={run.runId} className="entry">
                 <span>
                   <Link to={`/runs/${run.runId}`} className="entry__title">
@@ -110,7 +108,9 @@ export function DashboardPage(): JSX.Element {
                   </Link>
                   <span className="entry__desc mono">{run.runId}</span>
                 </span>
-                <time className="muted">{new Date(run.createdAt).toLocaleString('zh-CN')}</time>
+                <span className="muted">
+                  {new Date(run.createdAt).toLocaleString('zh-CN')} · {run.state}
+                </span>
               </li>
             ))}
           </ul>

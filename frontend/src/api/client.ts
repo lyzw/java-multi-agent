@@ -323,6 +323,22 @@ export function listRuns(
   )
 }
 
+/** 业务字典响应（B3：平台辅导业务学科/年级词表，作为下拉单一真相源）。 */
+export interface DictionaryResponse {
+  subjects: string[]
+  grades: string[]
+}
+
+/**
+ * GET /api/reference —— 业务字典（B3）。
+ *
+ * ⚠️ 返回平台辅导业务词表（初中理科为主），与 RAG 检索页词表（RAG_SUBJECTS）
+ *    语义不同，不可混用。任何已登录用户可见（端点触发令牌校验）。
+ */
+export function getDictionaries(): Promise<DictionaryResponse> {
+  return _request<DictionaryResponse>(`/api/reference`, { method: 'GET' }, false)
+}
+
 /** GET /api/approvals —— 审批列表（游标分页）。 */
 export function listApprovals(
   params: ListQuery = {},

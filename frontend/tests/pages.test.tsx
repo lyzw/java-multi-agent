@@ -279,8 +279,15 @@ describe('发起辅导页', () => {
       await waitFor(() => {
         expect(screen.getAllByRole('alert').length).toBeGreaterThan(0)
       })
-      // ⛔ 预检命中时不得发出请求
-      expect(fetchSpy).not.toHaveBeenCalled()
+      // ⛔ 预检命中时不得发出**创建 Run** 的请求
+      // （挂载时的 /api/reference 字典加载不在此列，那是预期行为）
+      const createRunCalls = fetchSpy.mock.calls.filter(
+        (c) =>
+          typeof c[0] === 'string' &&
+          c[0].includes('/api/runs') &&
+          (c[1] as { method?: string } | undefined)?.method === 'POST',
+      )
+      expect(createRunCalls).toHaveLength(0)
       expect(screen.getByText(/手机号/)).toBeInTheDocument()
     })
   })
