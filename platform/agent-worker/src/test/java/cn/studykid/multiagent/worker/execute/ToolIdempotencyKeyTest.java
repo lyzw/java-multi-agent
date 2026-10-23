@@ -67,7 +67,7 @@ class ToolIdempotencyKeyTest {
             capturedKeys.add(idempotencyKey);
             String opId = UUID.randomUUID().toString();
             operationsByKey.put(idempotencyKey, opId);
-            return new Registration(opId, ToolOperationState.IN_FLIGHT, 0);
+            return new Registration(opId, ToolOperationState.IN_FLIGHT, 0, 0L);
         }
 
         @Override public void recordResult(String tenantId, String operationId,
@@ -84,7 +84,7 @@ class ToolIdempotencyKeyTest {
                 String tenantId, String idempotencyKey) {
             String opId = operationsByKey.get(idempotencyKey);
             return opId == null ? Optional.empty()
-                    : Optional.of(new Registration(opId, ToolOperationState.IN_FLIGHT, 0));
+                    : Optional.of(new Registration(opId, ToolOperationState.IN_FLIGHT, 0, 0L));
         }
     }
 

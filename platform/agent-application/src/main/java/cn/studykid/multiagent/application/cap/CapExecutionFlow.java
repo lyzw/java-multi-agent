@@ -3,6 +3,7 @@ package cn.studykid.multiagent.application.cap;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -12,8 +13,8 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy;
 import cn.studykid.multiagent.core.cap.AuthorizationDecision;
+import cn.studykid.multiagent.core.cap.CapCompensationTask;
 import cn.studykid.multiagent.core.cap.CapToolDecision;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
@@ -24,9 +25,9 @@ import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.model.ModelResponse;
-import cn.studykid.multiagent.ports.persistence.ApprovalPort;
 import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
+import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 import cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort;
 import cn.studykid.multiagent.ports.persistence.ExecutionIntentPort;
 import cn.studykid.multiagent.ports.persistence.ResultEventPort;
@@ -84,11 +85,16 @@ import cn.studykid.multiagent.ports.tool.ToolHandler;
  * <b>审批 → 预算</b>的相对顺序不变（§5.3 的补偿链依赖它）。
  * 其余全部语义（尤其「Schema 失败不写 PRE」「准入失败释放预算」）完全保持。
  *
- * <p>⚠️ <b>审批在本阶段是过渡语义</b>：§5.3.3 的
- * {@code PENDING → RESERVED → INTENT_SUBMITTED → CONSUMED} 状态机与 §5.3.1 的双哈希
- * 属 <b>P3</b>。P2 复用既有的 {@link ApprovalPort#consume}（一次性消费），
- * 其代价是<b>准入失败时审批已被消费、无法取消</b>（§5.3 步骤 13 要求「cancel 审批」）。
- * 该差距已登记为 P3 交接项。
+ * <p>⚠️ <b>审批在本阶段是 CAP 模型</b>（P3 落地）：
+ * §5.3.3 的 {@code PENDING → RESERVED → INTENT_SUBMITTED → CONSUMED} 状态机与
+ * §5.3.1 的双哈希绑定，由 {@link ApprovalStateMachine} 承担
+ * （P2 曾复用既有 {@code ApprovalPort.consume} 的一次性消费语义，
+ *  其代价是准入失败时审批已被消费、无法取消；该差距已在本阶段消除）。
+ *
+ * <p>⚠️ <b>参数摘要全链路同源</b>（P3 决策）：
+ * 审批的有效参数哈希、账本的请求摘要、执行意图的参数指纹
+ * 全部走 {@link ArgsNormalizer}（{@code args_norm_v1}），
+ * 否则「审批绑定的参数」与「实际执行的参数」会算出两个值，防重放形同虚设。
  *
  * <p>⚠️ <b>本类无副作用地做判定，有副作用地做编排</b>：
  * 授权判定（步骤 2–7）委托 {@link InvocationValidator}（P1，无副作用）；
@@ -109,8 +115,9 @@ public class CapExecutionFlow {
     private final RolePermissionPort rolePermissions;
     private final CapabilitySnapshotPort snapshots;
     private final ApprovalPolicy approvalPolicy;
-    private final RiskBasedApprovalPolicy.ApprovalSource approvalSource;
-    private final ApprovalPort approvalPort;
+    private final ApprovalStateMachine approvalStateMachine;
+    private final CompensationFramework compensation;
+    private final CapToolDefPort toolDefs;
     private final BudgetPort budget;
     private final RunToolLedgerPort ledger;
     private final ExecutionIntentPort intents;
@@ -127,17 +134,18 @@ public class CapExecutionFlow {
                              @NonNull RolePermissionPort rolePermissions,
                              @NonNull CapabilitySnapshotPort snapshots,
                              @NonNull ApprovalPolicy approvalPolicy,
-                              RiskBasedApprovalPolicy.@NonNull ApprovalSource approvalSource,
-                             @NonNull ApprovalPort approvalPort,
+                             @NonNull ApprovalStateMachine approvalStateMachine,
+                             @NonNull CompensationFramework compensation,
+                             @NonNull CapToolDefPort toolDefs,
                              @NonNull BudgetPort budget,
                              @NonNull RunToolLedgerPort ledger,
                              @NonNull ExecutionIntentPort intents,
                              @NonNull ResultEventPort resultEvents,
                              @NonNull BigDecimal reserveAmountPerToolCall) {
         this(validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
-                snapshots, approvalPolicy, approvalSource, approvalPort, budget, ledger, intents,
-                resultEvents, reserveAmountPerToolCall, DEFAULT_PRINCIPAL_ID,
-                new CapEnforcementSwitch(false));
+                snapshots, approvalPolicy, approvalStateMachine, compensation, toolDefs,
+                budget, ledger, intents, resultEvents, reserveAmountPerToolCall,
+                DEFAULT_PRINCIPAL_ID, new CapEnforcementSwitch(false));
     }
 
     /**
@@ -153,8 +161,9 @@ public class CapExecutionFlow {
                              @NonNull RolePermissionPort rolePermissions,
                              @NonNull CapabilitySnapshotPort snapshots,
                              @NonNull ApprovalPolicy approvalPolicy,
-                             RiskBasedApprovalPolicy.@NonNull ApprovalSource approvalSource,
-                             @NonNull ApprovalPort approvalPort,
+                             @NonNull ApprovalStateMachine approvalStateMachine,
+                             @NonNull CompensationFramework compensation,
+                             @NonNull CapToolDefPort toolDefs,
                              @NonNull BudgetPort budget,
                              @NonNull RunToolLedgerPort ledger,
                              @NonNull ExecutionIntentPort intents,
@@ -162,8 +171,9 @@ public class CapExecutionFlow {
                              @NonNull BigDecimal reserveAmountPerToolCall,
                              @NonNull CapEnforcementSwitch enforcementSwitch) {
         this(validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
-                snapshots, approvalPolicy, approvalSource, approvalPort, budget, ledger, intents,
-                resultEvents, reserveAmountPerToolCall, DEFAULT_PRINCIPAL_ID, enforcementSwitch);
+                snapshots, approvalPolicy, approvalStateMachine, compensation, toolDefs,
+                budget, ledger, intents, resultEvents, reserveAmountPerToolCall,
+                DEFAULT_PRINCIPAL_ID, enforcementSwitch);
     }
 
     public CapExecutionFlow(@NonNull InvocationValidator validator,
@@ -174,8 +184,9 @@ public class CapExecutionFlow {
                              @NonNull RolePermissionPort rolePermissions,
                              @NonNull CapabilitySnapshotPort snapshots,
                              @NonNull ApprovalPolicy approvalPolicy,
-                              RiskBasedApprovalPolicy.@NonNull ApprovalSource approvalSource,
-                             @NonNull ApprovalPort approvalPort,
+                             @NonNull ApprovalStateMachine approvalStateMachine,
+                             @NonNull CompensationFramework compensation,
+                             @NonNull CapToolDefPort toolDefs,
                              @NonNull BudgetPort budget,
                              @NonNull RunToolLedgerPort ledger,
                              @NonNull ExecutionIntentPort intents,
@@ -183,8 +194,8 @@ public class CapExecutionFlow {
                              @NonNull BigDecimal reserveAmountPerToolCall,
                              @NonNull String principalId) {
         this(validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
-                snapshots, approvalPolicy, approvalSource, approvalPort, budget, ledger, intents,
-                resultEvents, reserveAmountPerToolCall, principalId,
+                snapshots, approvalPolicy, approvalStateMachine, compensation, toolDefs,
+                budget, ledger, intents, resultEvents, reserveAmountPerToolCall, principalId,
                 new CapEnforcementSwitch(false));
     }
 
@@ -201,8 +212,9 @@ public class CapExecutionFlow {
                              @NonNull RolePermissionPort rolePermissions,
                              @NonNull CapabilitySnapshotPort snapshots,
                              @NonNull ApprovalPolicy approvalPolicy,
-                             RiskBasedApprovalPolicy.@NonNull ApprovalSource approvalSource,
-                             @NonNull ApprovalPort approvalPort,
+                             @NonNull ApprovalStateMachine approvalStateMachine,
+                             @NonNull CompensationFramework compensation,
+                             @NonNull CapToolDefPort toolDefs,
                              @NonNull BudgetPort budget,
                              @NonNull RunToolLedgerPort ledger,
                              @NonNull ExecutionIntentPort intents,
@@ -224,8 +236,9 @@ public class CapExecutionFlow {
         this.rolePermissions = rolePermissions;
         this.snapshots = snapshots;
         this.approvalPolicy = approvalPolicy;
-        this.approvalSource = approvalSource;
-        this.approvalPort = approvalPort;
+        this.approvalStateMachine = approvalStateMachine;
+        this.compensation = compensation;
+        this.toolDefs = toolDefs;
         this.budget = budget;
         this.ledger = ledger;
         this.intents = intents;
@@ -266,10 +279,14 @@ public class CapExecutionFlow {
 
         // ══ 步骤 8：幂等键校验 ════════════════════════════════════
         String idempotencyKey = buildIdempotencyKey(task.runId(), call);
-        String requestDigest = InvocationDigest.of(call.arguments());
+        // ⚠️⚠️ 参数摘要全链路<b>同源</b>（P3 决策）：
+        //    审批绑定的有效参数哈希、账本的请求摘要、执行意图的参数指纹
+        //    全部取这一个值（args_norm_v1）。若各算各的，
+        //    「审批绑定的参数」与「实际执行的参数」就是两个值，防重放形同虚设。
+        String argsDigest = argsDigest(call.toolName(), phaseA.toolVersion(), call.arguments());
 
         IdempotencyGuard.Result idem =
-                idempotency.check(tenantId, idempotencyKey, requestDigest);
+                idempotency.check(tenantId, idempotencyKey, argsDigest);
         if (idem.outcome() != IdempotencyGuard.Outcome.PROCEED) {
             // ⚠️ 已完成 → 返回首次结果；进行中 / 冲突 / 存储不可用 → 拒绝。
             //    四种情形都<b>不</b>重新执行副作用。
@@ -295,7 +312,7 @@ public class CapExecutionFlow {
         RunToolLedgerPort.Registration registration;
         try {
             registration = ledger.register(tenantId, task.runId(), call.toolName(),
-                    handler.riskLevel().name(), idempotencyKey, requestDigest,
+                    handler.riskLevel().name(), idempotencyKey, argsDigest,
                     call.arguments(), task.fencingToken());
         } catch (RuntimeException e) {
             // ⚠️ 账本登记失败 → 拒绝执行（fail-closed）。
@@ -307,10 +324,12 @@ public class CapExecutionFlow {
         }
         String operationId = registration.operationId();
 
-        // ══ 步骤 11：Approval ═════════════════════════════════════
+        // ══ 步骤 11：Approval（CAP 状态机 · §5.3.3）════════════════
         ApprovalGate approvalGate = approve(tenantId, task, call, handler, operationId,
-                requestDigest);
+                phaseA);
         if (approvalGate.denial() != null) {
+            // ⚠️ 审批未通过 → 账本记 FAILED（PRE 取消）。
+            //    此时审批尚未预占（预占失败即未预占），无审批可补偿。
             recordLedgerFailed(tenantId, operationId, task.fencingToken(),
                     "approval:" + approvalGate.denial().reasonCode());
             return new CapToolDecision(call.toolName(), operationId, approvalGate.denial());
@@ -324,6 +343,11 @@ public class CapExecutionFlow {
             if (!outcome.granted()) {
                 log.warn("预算预留被拒: tool={}, run={}, outcome={}",
                         call.toolName(), task.runId(), outcome);
+                // ⚠️ §5.3.5「预算失败 → 审批 CANCELLED」：审批已预占，必须作废，
+                //    否则它悬在 RESERVED 挡住后续调用。
+                compensate(tenantId, approvalGate.approvalId(), operationId,
+                        findReservationId(tenantId, operationId),
+                        "budget:" + outcome);
                 recordLedgerFailed(tenantId, operationId, task.fencingToken(),
                         "budget:" + outcome);
                 return new CapToolDecision(call.toolName(), operationId,
@@ -336,12 +360,16 @@ public class CapExecutionFlow {
             // ⚠️ 预留异常同样 fail-closed：降级放行等于「预算系统故障时无限花钱」。
             log.error("预算预留异常，fail-closed 拒绝执行: tool={}, run={}, err={}",
                     call.toolName(), task.runId(), e.getMessage());
+            compensate(tenantId, approvalGate.approvalId(), operationId,
+                    findReservationId(tenantId, operationId), "budget:exception");
             recordLedgerFailed(tenantId, operationId, task.fencingToken(), "budget:exception");
             return new CapToolDecision(call.toolName(), operationId,
                     AuthorizationDecision.executionDeny(ReasonCode.BUDGET_EXCEEDED));
         }
         if (reservationId == null) {
             // ⚠️ 预留成功但查不到预留记录 → 无法在终态结算/释放 → fail-closed。
+            compensate(tenantId, approvalGate.approvalId(), operationId, null,
+                    "budget:unconfirmed");
             recordLedgerFailed(tenantId, operationId, task.fencingToken(), "budget:unconfirmed");
             return new CapToolDecision(call.toolName(), operationId,
                     AuthorizationDecision.executionDeny(ReasonCode.BUDGET_EXCEEDED));
@@ -353,10 +381,10 @@ public class CapExecutionFlow {
                         tenantId, principalId, phaseA.agentId(), task.runId(),
                         phaseA.authzVersion(), phaseA.fingerprint()));
         if (!admissionOutcome.admitted()) {
-            // ⚠️ 准入失效 → 释放预算 + PRE 标失败，阻断新副作用（§5.3 步骤 13）。
-            //    「cancel 审批」在 P2 不可实现（审批已被一次性消费），
-            //    该差距由 P3 的审批状态机补齐（见类注释）。
-            releaseQuietly(tenantId, reservationId, "exec-admission-stale");
+            // ⚠️ 准入失效 → 取消审批 + 释放预算 + PRE 标失败，阻断新副作用（§5.3 步骤 13）。
+            //    §5.3.5「准入失败 → CANCELLED / 释放 / PRE 取消」。
+            compensate(tenantId, approvalGate.approvalId(), operationId, reservationId,
+                    "exec-admission-stale:" + admissionOutcome.reasonCode());
             recordLedgerFailed(tenantId, operationId, task.fencingToken(),
                     "admission:" + admissionOutcome.reasonCode());
             log.warn("执行准入失效，阻断新副作用: tool={}, run={}, reason={}",
@@ -373,7 +401,7 @@ public class CapExecutionFlow {
                 operationId,
                 call.toolName(),
                 phaseA.toolVersion(),
-                requestDigest,
+                argsDigest,
                 approvalGate.approvalId(),
                 ExecutionIntent.IntentState.INTENT_SUBMITTED,
                 Instant.now(),
@@ -385,7 +413,8 @@ public class CapExecutionFlow {
             //    否则崩溃后无从判断副作用是否已发生，只能全部转人工对账。
             log.error("执行意图持久化失败，fail-closed 拒绝执行: tool={}, run={}, err={}",
                     call.toolName(), task.runId(), e.getMessage());
-            releaseQuietly(tenantId, reservationId, "intent-persist-failed");
+            compensate(tenantId, approvalGate.approvalId(), operationId, reservationId,
+                    "intent-persist-failed");
             recordLedgerFailed(tenantId, operationId, task.fencingToken(),
                     "intent-persist-failed");
             return new CapToolDecision(call.toolName(), operationId,
@@ -393,13 +422,19 @@ public class CapExecutionFlow {
         }
 
         // ══ 步骤 13b：审批 RESERVED → INTENT_SUBMITTED ═══════════
-        try {
-            approvalPort.markIntentSubmitted(tenantId, operationId);
-        } catch (RuntimeException e) {
-            // ⚠️ 记账失败不阻断执行：审批在步骤 11 已 fail-closed 校验通过，
-            //    本步骤只是状态记账（P3 落地状态机后才有可迁移的状态）。
-            log.warn("审批意图状态标记失败（不影响放行）: tool={}, run={}, err={}",
-                    call.toolName(), task.runId(), e.getMessage());
+        if (approvalGate.approvalId() != null) {
+            try {
+                approvalStateMachine.markIntentSubmitted(tenantId,
+                        approvalGate.approvalId(), operationId);
+            } catch (RuntimeException e) {
+                // ⚠️ 记账失败不阻断执行：审批在步骤 11 已 fail-closed 校验通过，
+                //    本步骤只是状态记账。
+                //    ⚠️ 但它有恢复语义：审批停在 RESERVED = 「尚未发出副作用」，
+                //    停在 INTENT_SUBMITTED = 「可能已发出」——
+                //    标记失败会让恢复方判错方向，故必须显式告警。
+                log.warn("审批意图状态标记失败（影响恢复判读）: tool={}, run={}, err={}",
+                        call.toolName(), task.runId(), e.getMessage());
+            }
         }
 
         // ══ 步骤 14：执行 ═════════════════════════════════════════
@@ -410,16 +445,55 @@ public class CapExecutionFlow {
             ToolHandler.ToolResult toolResult = handler.execute(ctx, call.arguments());
 
             // ── 步骤 14a：确定结果先入可恢复存储，再更新 executionStatus ──
-            boolean eventWritten = persistResult(tenantId, task, operationId,
+            ResultPersistence persistence = persistResult(tenantId, task, operationId,
                     ResultEvent.Status.SUCCEEDED, toolResult.output(), ReasonCode.SUCCESS);
+
+            // ⚠️⚠️ 14a 失败 = 确定结果<b>未落盘</b> → <b>不得</b>直接落账
+            //    （§5.3「结果事件必须先落盘」）。
+            //    账本若此时记 SUCCEEDED，对账就无从做起：
+            //    运维看到 SUCCEEDED 便不会再去查结果载荷。
+            if (persistence == ResultPersistence.FAILED) {
+                boolean queued = enqueueLedgerRetry(tenantId, operationId, task.runId(),
+                        ResultEvent.Status.SUCCEEDED, toolResult.output(), ReasonCode.SUCCESS);
+                if (queued) {
+                    // 结局已存进补偿任务 → 恢复流程补写事件再落账；本进程不落账。
+                    // ⚠️ 成本已发生（工具确实成功）→ 结算而非释放。
+                    settleQuietly(tenantId, reservationId, call.toolName());
+                    return new CapToolDecision(call.toolName(), operationId,
+                            AuthorizationDecision.executionSucceeded(
+                                    AuthorizationDecision.Ledger.RETRYING));
+                }
+                // 结局彻底丢失（补偿任务也落不下去）→ 只能按 UNKNOWN 进对账，
+                // 绝不谎报成功（§7.4：UNKNOWN 是唯一需要人工确认的状态）。
+                log.error("确定结果既未落盘也未入补偿任务，按 UNKNOWN 进对账: operation={}",
+                        operationId);
+                boolean postedUnknown = recordLedger(tenantId, operationId, task.fencingToken(),
+                        ToolOperationState.UNKNOWN, null, "result-persistence-lost");
+                settleQuietly(tenantId, reservationId, call.toolName());
+                return new CapToolDecision(call.toolName(), operationId,
+                        AuthorizationDecision.executionUnknown(
+                                postedUnknown ? AuthorizationDecision.Ledger.RECORDED
+                                        : AuthorizationDecision.Ledger.NEEDS_MANUAL,
+                                ReasonCode.EXEC_UNKNOWN));
+            }
 
             // ── 步骤 15：账本 POST ──
             boolean posted = recordLedger(tenantId, operationId, task.fencingToken(),
                     ToolOperationState.SUCCEEDED, null, null);
 
-            AuthorizationDecision.Ledger ledgerStatus = ledgerStatus(eventWritten, posted);
+            // ⚠️ 落账失败 → 把「已确定的结局」交给补偿任务（COMP-4 / COMP-6）：
+            //    重启后由恢复流程<b>只重试落账</b>，绝不重新 execute。
+            boolean retryQueued = false;
+            if (!posted) {
+                retryQueued = enqueueLedgerRetry(tenantId, operationId, task.runId(),
+                        ResultEvent.Status.SUCCEEDED, toolResult.output(), ReasonCode.SUCCESS);
+            }
+
+            AuthorizationDecision.Ledger ledgerStatus =
+                    ledgerStatus(persistence, posted, retryQueued);
             if (ledgerStatus == AuthorizationDecision.Ledger.RECORDED) {
                 consumeIntent(tenantId, operationId);
+                consumeApproval(tenantId, approvalGate.approvalId(), operationId, "SUCCEEDED");
             }
             // ⚠️ 结算放在落账之后（§5.3 §7.4）：账本是事实源，
             //    结算失败不能反过来改写「工具已成功」这一事实。
@@ -433,36 +507,57 @@ public class CapExecutionFlow {
                 //    不释放预算预留（成本可能已发生），不重试，进对账。
                 log.warn("工具结果未知，落账转对账: tool={}, run={}, operation={}",
                         call.toolName(), task.runId(), operationId);
-                boolean eventWritten = persistResult(tenantId, task, operationId,
+                ResultPersistence persistence = persistResult(tenantId, task, operationId,
                         ResultEvent.Status.UNKNOWN, null, ReasonCode.EXEC_UNKNOWN);
                 boolean posted = recordLedger(tenantId, operationId, task.fencingToken(),
                         ToolOperationState.UNKNOWN, null, e.getMessage());
+                boolean retryQueued = false;
+                if (!posted) {
+                    retryQueued = enqueueLedgerRetry(tenantId, operationId, task.runId(),
+                            ResultEvent.Status.UNKNOWN, null, ReasonCode.EXEC_UNKNOWN);
+                }
+                // ⚠️ UNKNOWN 不释放预算预留：成本可能已发生（红线）。
+                // ⚠️ 也不自动收敛：结果不确定只能进对账（§7.4 / COMP-5）。
                 return new CapToolDecision(call.toolName(), operationId,
-                        AuthorizationDecision.executionUnknown(ledgerStatus(eventWritten, posted),
+                        AuthorizationDecision.executionUnknown(
+                                ledgerStatus(persistence, posted, retryQueued),
                                 ReasonCode.EXEC_UNKNOWN));
             }
             // 确定失败：无副作用，可重试 → 预算额度可安全退回。
             log.info("工具确定失败: tool={}, err={}", call.toolName(), e.getMessage());
-            boolean eventWritten = persistResult(tenantId, task, operationId,
+            ResultPersistence persistence = persistResult(tenantId, task, operationId,
                     ResultEvent.Status.FAILED, null, ReasonCode.TOOL_EXECUTION_FAILED);
             boolean posted = recordLedger(tenantId, operationId, task.fencingToken(),
                     ToolOperationState.FAILED, e.getClass().getSimpleName(), e.getMessage());
+            boolean retryQueued = false;
+            if (!posted) {
+                retryQueued = enqueueLedgerRetry(tenantId, operationId, task.runId(),
+                        ResultEvent.Status.FAILED, null, ReasonCode.TOOL_EXECUTION_FAILED);
+            }
+            // ⚠️ 确定失败 = 无副作用发生 → 额度可安全退回。
             releaseQuietly(tenantId, reservationId,
                     "tool-failed:" + e.getClass().getSimpleName());
             return new CapToolDecision(call.toolName(), operationId,
-                    AuthorizationDecision.executionFailed(ledgerStatus(eventWritten, posted),
+                    AuthorizationDecision.executionFailed(
+                            ledgerStatus(persistence, posted, retryQueued),
                             ReasonCode.TOOL_EXECUTION_FAILED));
 
         } catch (RuntimeException e) {
             // ⚠️ 未预期异常按「结果未知」处理 —— 保守假设可能有副作用。
             //    若按确定失败处理而实际已写入，会导致重复写入 = Sev-0。
             log.error("工具抛出未预期异常，保守按 UNKNOWN 落账: tool={}", call.toolName(), e);
-            boolean eventWritten = persistResult(tenantId, task, operationId,
+            ResultPersistence persistence = persistResult(tenantId, task, operationId,
                     ResultEvent.Status.UNKNOWN, null, ReasonCode.EXEC_UNKNOWN);
             boolean posted = recordLedger(tenantId, operationId, task.fencingToken(),
                     ToolOperationState.UNKNOWN, null, String.valueOf(e.getMessage()));
+            boolean retryQueued = false;
+            if (!posted || persistence == ResultPersistence.FAILED) {
+                retryQueued = enqueueLedgerRetry(tenantId, operationId, task.runId(),
+                        ResultEvent.Status.UNKNOWN, null, ReasonCode.EXEC_UNKNOWN);
+            }
             return new CapToolDecision(call.toolName(), operationId,
-                    AuthorizationDecision.executionUnknown(ledgerStatus(eventWritten, posted),
+                    AuthorizationDecision.executionUnknown(
+                            ledgerStatus(persistence, posted, retryQueued),
                             ReasonCode.EXEC_UNKNOWN));
         }
     }
@@ -625,64 +720,138 @@ public class CapExecutionFlow {
                                             ModelResponse.@NonNull ToolCallRequest call,
                                            @NonNull ToolHandler handler,
                                            @NonNull String operationId,
-                                           @NonNull String requestDigest) {
+                                           @NonNull PhaseA phaseA) {
         ApprovalPolicy.ApprovalDecision approval = approvalPolicy.evaluate(handler);
         if (!approval.requiresApproval()) {
             return new ApprovalGate(null, null);
         }
 
-        // ⚠️ 先问审批权威：拿不到「明确批准」即拒绝。
-        //    FAIL_CLOSED（来源不可用）同样拒绝 —— 不可用 ≠ 可放行。
-        RiskBasedApprovalPolicy.ApprovalSource.Verdict verdict;
+        // ⚠️ 审批是 CAP 状态机：定位候选 → 校验双哈希绑定 → 原子预占（§5.3.3）。
+        //    拿不到「明确批准」即拒绝（fail-closed）：不可用 ≠ 可放行。
+        ApprovalStateMachine.Acquisition acquisition = approvalStateMachine.acquire(
+                new ApprovalStateMachine.AcquireRequest(
+                        tenantId,
+                        principalId,
+                        call.toolName(),
+                        task.runId(),
+                        operationId,
+                        operationId,
+                        call.arguments(),
+                        phaseA.fingerprint(),
+                        phaseA.authzVersion(),
+                        Instant.now()));
+        if (!acquisition.acquired()) {
+            log.warn("审批未通过，fail-closed 拒绝: tool={}, run={}, reason={}, detail={}",
+                    call.toolName(), task.runId(), acquisition.reasonCode(),
+                    acquisition.detail());
+            return new ApprovalGate(
+                    AuthorizationDecision.executionDeny(acquisition.reasonCode()), null);
+        }
+        return new ApprovalGate(null, acquisition.approvalId());
+    }
+
+    // ── 参数摘要（args_norm_v1 · §5.3.2）───────────────────────────
+
+    /**
+     * 计算本次调用的参数摘要。
+     *
+     * <p>⚠️ <b>规范化依据必须取闭包固定版本</b>的工具定义：
+     * Schema 默认值是「省略参数」与「显式传默认值」能算出同一摘要的前提。
+     * 取不到定义时按「无默认值」处理 ——
+     * 后果是审批绑定校验不通过（{@code APPROVAL_SCOPE_MISMATCH}），仍是 fail-closed。
+     */
+    private @NonNull String argsDigest(@NonNull String toolId,
+                                       @Nullable Integer toolVersion,
+                                       @NonNull Map<String, Object> arguments) {
+        return ArgsNormalizer.hash(arguments, argsOptions(toolId, toolVersion));
+    }
+
+    private ArgsNormalizer.@NonNull Options argsOptions(@NonNull String toolId,
+                                                         @Nullable Integer toolVersion) {
+        if (toolVersion == null) {
+            return ArgsNormalizer.Options.all();
+        }
+        return toolDefs.find(toolId, toolVersion)
+                .map(def -> new ArgsNormalizer.Options(null,
+                        ArgsNormalizer.defaultsFromSchema(def.inputSchema()), null))
+                .orElse(ArgsNormalizer.Options.all());
+    }
+
+    // ── 补偿（§5.3.5）─────────────────────────────────────────────
+
+    /**
+     * 触发补偿：取消审批 + 释放预算（幂等；失败落补偿任务）。
+     */
+    private void compensate(@NonNull String tenantId,
+                            @Nullable String approvalId,
+                            @NonNull String operationId,
+                            @Nullable String reservationId,
+                            @NonNull String reason) {
         try {
-            verdict = approvalSource.verdictFor(tenantId, handler);
+            compensation.compensate(new CompensationFramework.Request(
+                    tenantId, approvalId, operationId, reservationId, reason));
         } catch (RuntimeException e) {
-            log.error("审批权威异常，fail-closed 拒绝: tool={}, tenant={}, err={}",
-                    call.toolName(), tenantId, e.getMessage());
-            verdict = RiskBasedApprovalPolicy.ApprovalSource.Verdict.FAIL_CLOSED;
+            // ⚠️ 补偿框架自身异常不得掩盖主流程的失败结论；
+            //    框架内部已把失败落成补偿任务。
+            log.error("补偿执行异常: operation={}, reason={}, err={}",
+                    operationId, reason, e.getMessage(), e);
         }
-        if (verdict != RiskBasedApprovalPolicy.ApprovalSource.Verdict.APPROVED) {
-            log.warn("审批权威未批准，fail-closed 拒绝: tool={}, run={}, verdict={}",
-                    call.toolName(), task.runId(), verdict);
-            return new ApprovalGate(
-                    AuthorizationDecision.executionDeny(ReasonCode.APPROVAL_NOT_FOUND), null);
-        }
+    }
 
-        // 审批 id 在消费前读取：消费后审批进入终态，findActive 可能读不到了。
-        String approvalId = approvalPort.findActive(tenantId, operationId)
-                .map(ApprovalPort.ApprovalView::approvalId)
-                .orElse(null);
-
-        ApprovalPort.ApprovalOutcome outcome = approvalPort.consume(tenantId, operationId,
-                requestDigest, call.toolName(), task.runId());
-        if (outcome != ApprovalPort.ApprovalOutcome.CONSUMED) {
-            // ⚠️ 任何非 CONSUMED 结果都 fail-closed 拒绝。
-            log.warn("审批消费未通过，fail-closed 拒绝: tool={}, run={}, outcome={}",
-                    call.toolName(), task.runId(), outcome);
-            return new ApprovalGate(
-                    AuthorizationDecision.executionDeny(mapApprovalOutcome(outcome)), null);
+    /** 查该逻辑操作的预算预留 id（不存在时为空）。 */
+    private @Nullable String findReservationId(@NonNull String tenantId,
+                                               @NonNull String operationId) {
+        try {
+            return budget.findByOperation(tenantId, operationId)
+                    .map(BudgetPort.Reservation::reservationId)
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            log.warn("查询预算预留失败（按无预留处理）: operation={}, err={}",
+                    operationId, e.getMessage());
+            return null;
         }
-        return new ApprovalGate(null, approvalId);
     }
 
     /**
-     * 审批结局 → §5.7 原因码映射。
+     * 落一条「重试落账」补偿任务（COMP-4 / COMP-6）。
      *
-     * <p>⚠️ <b>P2 过渡映射</b>：§5.7 只给了 S6a–e 五个具体码，
-     * 而既有 {@link ApprovalPort.ApprovalOutcome} 的取值更细
-     * （含「目标不符」「Run 已取消」等）。
-     * 本映射把语义等价者合并，<b>不新造码</b>；
-     * P3 落地审批状态机与双哈希后，将按 §9.1 S6a–e 精确到码。
+     * <p>⚠️ 任务载荷携带<b>已确定的结局</b>：
+     * 重启后由恢复流程据此补记结果事件与账本，
+     * <b>绝不重新执行工具</b>。
+     *
+     * @return 是否成功入队（false = 结局无处留存，需人工处置）
      */
-    private static @NonNull ReasonCode mapApprovalOutcome(
-             ApprovalPort.@NonNull ApprovalOutcome outcome) {
-        return switch (outcome) {
-            case CONSUMED -> ReasonCode.SUCCESS;
-            case EXPIRED -> ReasonCode.APPROVAL_EXPIRED;
-            case ARGUMENT_MISMATCH, TARGET_MISMATCH -> ReasonCode.APPROVAL_SCOPE_MISMATCH;
-            case RUN_CANCELLED -> ReasonCode.RUN_CANCELLED;
-            case NO_APPROVAL, REJECTED, NOT_APPROVED -> ReasonCode.APPROVAL_NOT_FOUND;
-        };
+    private boolean enqueueLedgerRetry(@NonNull String tenantId,
+                                       @NonNull String operationId,
+                                       @Nullable String runId,
+                                       ResultEvent.@NonNull Status status,
+                                       @Nullable String payload,
+                                       @NonNull ReasonCode reasonCode) {
+        try {
+            String encoded = ResultRecoveryService.encodeOutcome(new ResultRecoveryService.Outcome(
+                    runId, operationId, status, payload, reasonCode.name()));
+            return compensation.enqueueLedgerRetry(tenantId, operationId, operationId, encoded);
+        } catch (RuntimeException e) {
+            log.error("落账重试任务入队失败（结局无处留存，需人工处置）: operation={}, err={}",
+                    operationId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /** 审批与终态关联（步骤 15 之后）。 */
+    private void consumeApproval(@NonNull String tenantId,
+                                  @Nullable String approvalId,
+                                  @NonNull String operationId,
+                                  @NonNull String terminalStatus) {
+        if (approvalId == null) {
+            return;
+        }
+        try {
+            approvalStateMachine.consume(tenantId, approvalId, operationId, terminalStatus);
+        } catch (RuntimeException e) {
+            log.warn("审批消费失败（账本已是事实源，留待对账）: operation={}, err={}",
+                    operationId, e.getMessage());
+        }
     }
 
     // ── 结果落盘与账本 ────────────────────────────────────────────
@@ -690,12 +859,17 @@ public class CapExecutionFlow {
     /**
      * 步骤 14a：把确定结果写入可恢复存储（结果事件表）。
      *
-     * @return 是否写入成功（{@code false} 表示已存在或写入失败）
+     * ⚠️ <b>「已存在」不等于「没写成功」</b>：
+     * {@code recordIfAbsent} 返回 {@code false} 表示「本次没插入」，
+     * 而「没插入」最常见的原因是<b>幂等命中</b>（前一次已写）。
+     * 若把它一律当成「写失败」，就会把「结果其实已落盘」误判为证据缺失，
+     * 于是本可自动重试落账的场景被升级成人工处置。
+     * 故必须回读确认到底是「已存在」还是「真失败」。
      */
-    private boolean persistResult(@NonNull String tenantId,
+    private @NonNull ResultPersistence persistResult(@NonNull String tenantId,
                                    RunClaimPort.@NonNull LeasedTask task,
                                   @NonNull String operationId,
-                                   ResultEvent.@NonNull Status status,
+                                  ResultEvent.@NonNull Status status,
                                   @Nullable String payload,
                                   @NonNull ReasonCode reasonCode) {
         ResultEvent event = new ResultEvent(
@@ -710,12 +884,29 @@ public class CapExecutionFlow {
                 Instant.now());
         try {
             // ⚠️ 幂等：同一 invocation 最多一条结果事件（先写入者为准）。
-            return resultEvents.recordIfAbsent(event);
+            if (resultEvents.recordIfAbsent(event)) {
+                return ResultPersistence.WRITTEN;
+            }
+            return resultEvents.findByInvocation(tenantId, operationId).isPresent()
+                    ? ResultPersistence.PRESENT
+                    : ResultPersistence.FAILED;
         } catch (RuntimeException e) {
             log.error("结果事件写入失败（确定结果未落盘）: operation={}, status={}, err={}",
                     operationId, status, e.getMessage());
-            return false;
+            return ResultPersistence.FAILED;
         }
+    }
+
+    /**
+     * 结果事件持久化结论。
+     */
+    private enum ResultPersistence {
+        /** 本次写入成功。 */
+        WRITTEN,
+        /** 已存在（幂等命中）—— 结局同样已落盘。 */
+        PRESENT,
+        /** 写入失败且读不到 —— 结局无处留存。 */
+        FAILED
     }
 
     /** 步骤 15：账本 POST。 */
@@ -737,20 +928,34 @@ public class CapExecutionFlow {
     /**
      * 双维度结果合成（§7.4）。
      *
-     * @param eventWritten 结果事件是否已落盘
-     * @param posted       账本 POST 是否成功
+     * <p>⚠️ <b>口径是「关于账本」的</b>，不是「关于副作用是否发生」的：
+     * <ul>
+     *   <li>账本 POST 成功 → {@code RECORDED}（终态已可靠落账）；</li>
+     *   <li>POST 失败，但结局仍被持久化（结果事件已存在，
+     *       或结局已存进补偿任务）→ {@code RETRYING}
+     *       （只重试落账，<b>禁止</b>重新 execute）；</li>
+     *   <li>POST 失败<b>且</b>结局无处留存 → {@code NEEDS_MANUAL}
+     *       （恢复所需证据缺失，只能人工处置）。</li>
+     * </ul>
+     * 副作用是否发生由 {@code executionStatus} 表达，两者<b>互不覆盖</b>。
+     *
+     * @param persistence 结果事件持久化结论
+     * @param posted      账本 POST 是否成功
+     * @param retryQueued 结局是否已存进补偿任务
      * @return 终态落账状态
      */
-    private static  AuthorizationDecision.@NonNull Ledger ledgerStatus(boolean eventWritten,
-                                                                     boolean posted) {
-        if (eventWritten && posted) {
+    private static AuthorizationDecision.@NonNull Ledger ledgerStatus(
+            @NonNull ResultPersistence persistence,
+            boolean posted,
+            boolean retryQueued) {
+        if (posted) {
             return AuthorizationDecision.Ledger.RECORDED;
         }
-        if (eventWritten) {
-            // ⚠️ 结果事件已存在 → 只重试落账（ledger=RETRYING）
+        if (persistence != ResultPersistence.FAILED || retryQueued) {
+            // ⚠️ 结局仍被持久化 → 恢复流程可补记 → 只重试落账
             return AuthorizationDecision.Ledger.RETRYING;
         }
-        // ⚠️ 确定结果未落盘 → 恢复所需的证据缺失 → 需人工处置
+        // ⚠️ 确定结果无处留存 → 恢复所需证据缺失 → 需人工处置
         return AuthorizationDecision.Ledger.NEEDS_MANUAL;
     }
 

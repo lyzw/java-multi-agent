@@ -105,12 +105,38 @@ public interface RunToolLedgerPort {
     }
 
     /**
+     * 按<b>操作标识</b>读取逻辑操作（崩溃恢复入口 · §5.3.4）。
+     *
+     * <p>⚠️ 恢复方拿到的是<b>执行意图</b>，意图上记的是 {@code invocationId}
+     * （= 账本 {@code operationId}），不是幂等键 ——
+     * 故恢复流程需要按 operationId 反查账本状态，
+     * 才能判定「外部是否已执行、结果是否已知」。
+     *
+     * @param tenantId    租户
+     * @param operationId 操作标识
+     * @return 登记信息；无记录时为空
+     */
+    default @NonNull Optional<Registration> findByOperationId(@NonNull String tenantId,
+                                                              @NonNull String operationId) {
+        return Optional.empty();
+    }
+
+    /**
      * 登记结果。{@code state} 为 IN_FLIGHT 表示新登记；
      * 命中既有操作时返回其当前状态与既定 attempt 数。
+     *
+     * @param operationId   逻辑操作标识
+     * @param state         当前状态
+     * @param attemptCount  已记录的调用尝试数
+     * @param fencingToken  该操作所属的租约世代（红线 5）。
+     *                       ⚠️ 崩溃恢复补记 attempt 时用它 ——
+     *                       恢复方没有自己的租约，但 attempt 记录的是
+     *                       「这次调用发生在哪一代租约下」，不能写假值。
      */
     record Registration(String operationId,
                         ToolOperationState state,
-                        int attemptCount) {
+                        int attemptCount,
+                        long fencingToken) {
     }
 
     /** 对账扫描条目。 */

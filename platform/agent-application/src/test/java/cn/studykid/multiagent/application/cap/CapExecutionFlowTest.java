@@ -82,20 +82,47 @@ class CapExecutionFlowTest {
     }
 
     private CapExecutionFlow flow(CapEnforcementSwitch capSwitch) {
+        return flow(capSwitch, handler -> ApprovalPolicy.ApprovalDecision.notRequired());
+    }
+
+    private CapExecutionFlow flow(ApprovalPolicy approvalPolicy) {
+        return flow(new CapEnforcementSwitch(true), approvalPolicy);
+    }
+
+    private CapExecutionFlow flow(CapEnforcementSwitch capSwitch, ApprovalPolicy approvalPolicy) {
         InvocationValidator validator = new InvocationValidator(authz, cap.rolePermissions(),
                 resolver, cap.snapshots(), cap.manifest());
         ExecutionAdmissionChecker admission = new ExecutionAdmissionChecker(authz, resolver,
                 cap.snapshots());
         IdempotencyGuard idempotency = new IdempotencyGuard(exec.ledgerPort(), exec.resultEventPort());
-        ApprovalPolicy noApproval = handler -> ApprovalPolicy.ApprovalDecision.notRequired();
+        // ⚠️ P3：审批走 CAP 状态机（cap_approval），不再是既有 approval 表的一次性消费。
+        ApprovalStateMachine stateMachine = new ApprovalStateMachine(exec.capApprovalPort(),
+                new ApprovalBindingService());
+        CompensationFramework compensation = new CompensationFramework(exec.capApprovalPort(),
+                exec.budgetPort(), exec.compensationTaskPort());
         return new CapExecutionFlow(
                 validator, resolver, admission, idempotency, authz, cap.rolePermissions(),
-                cap.snapshots(), noApproval,
-                (tenantId, handler) ->
-                        cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
-                                .ApprovalSource.Verdict.APPROVED,
-                exec.approvalPort(), exec.budgetPort(), exec.ledgerPort(), exec.intentPort(),
+                cap.snapshots(), approvalPolicy, stateMachine, compensation, cap.toolDefs(),
+                exec.budgetPort(), exec.ledgerPort(), exec.intentPort(),
                 exec.resultEventPort(), BigDecimal.ONE, capSwitch);
+    }
+
+    /**
+     * 授予一份 CAP 审批（与本次调用参数、闭包指纹、授权版本绑定）。
+     *
+     * @param args 调用参数
+     * @return 审批 id
+     */
+    private String grantApproval(Map<String, Object> args) {
+        ApprovalScope scope = new ApprovalScope(TOOL, Map.of(), null, null, null);
+        ApprovalBindingService.Binding binding =
+                new ApprovalBindingService().generate(scope, args);
+        return exec.capApprovalPort().grant(new cn.studykid.multiagent.ports.persistence
+                .CapApprovalPort.CapApprovalGrant(
+                TENANT, CapExecutionFlow.DEFAULT_PRINCIPAL_ID, TOOL, "resource",
+                binding.approvalScopeHash(), scope.canonicalText(), binding.effectiveArgsHash(),
+                ClosureFingerprint.of(resolver.resolveCurrent(TENANT, AGENT)), 1L,
+                "approver-1", "SCOPE_ALL", Instant.now().plusSeconds(3600)));
     }
 
     private static RunClaimPort.LeasedTask task() {
@@ -173,7 +200,12 @@ class CapExecutionFlowTest {
         @Test
         @DisplayName("✅ 审批 RESERVED → INTENT_SUBMITTED 记账在意图之后")
         void approvalIntentSubmittedRecordedAfterIntent() {
-            flow().invoke(TENANT, task(), call(), exec.tool(TOOL));
+            // ⚠️ 审批链必须真的走 CAP 状态机：先授予一份与本次参数绑定的审批。
+            grantApproval(call().arguments());
+            ApprovalPolicy requireApproval =
+                    handler -> ApprovalPolicy.ApprovalDecision.required("test");
+
+            flow(requireApproval).invoke(TENANT, task(), call(), exec.tool(TOOL));
 
             int intentIndex = exec.indexOf("intent:record");
             int approvalIndex = exec.indexOf("approval:intent-submitted");
@@ -319,7 +351,7 @@ class CapExecutionFlowTest {
             assertThat(exec.indexOf("budget:reserve"))
                     .as("§5.3 步骤 9：Schema 失败不得预留预算")
                     .isEqualTo(-1);
-            assertThat(exec.indexOf("approval:consume"))
+            assertThat(exec.indexOf("approval:reserve"))
                     .as("§5.3 步骤 9：Schema 失败不得预占审批")
                     .isEqualTo(-1);
         }
@@ -459,57 +491,6 @@ class CapExecutionFlowTest {
         void switchOffReportsDisabled() {
             assertThat(flow(new CapEnforcementSwitch(false)).isEnabled()).isFalse();
             assertThat(flow(new CapEnforcementSwitch(true)).isEnabled()).isTrue();
-        }
-    }
-
-    // ── 辅助：可编排授权版本的读次数的端口 ────────────────────────
-
-    /**
-     * 可编排「第几次读之后开始返回新版本」的授权版本端口。
-     *
-     * <p>用于精确构造 §9.1 S3b / S3f 的时序：
-     * 撤权提交在 Phase A 之后、准入之前 → S3b；
-     * 撤权提交在准入之后 → S3f。
-     */
-    private static final class BumpingAuthzVersions implements AuthzVersionPort {
-
-        private final AuthzVersionPort delegate;
-        private int reads;
-        private int bumpAfterRead = -1;
-        private long bumpedVersion;
-
-        BumpingAuthzVersions(AuthzVersionPort delegate) {
-            this.delegate = delegate;
-        }
-
-        void bumpAfterRead(int afterRead, long version) {
-            this.bumpAfterRead = afterRead;
-            this.bumpedVersion = version;
-        }
-
-        @Override
-        public @NonNull Optional<AuthzVersion> find(@NonNull String tenantId,
-                                                     @NonNull String principalId) {
-            return delegate.find(tenantId, principalId);
-        }
-
-        @Override
-        public @NonNull AuthzVersion require(@NonNull String tenantId, @NonNull String principalId) {
-            reads++;
-            if (bumpAfterRead >= 0 && reads > bumpAfterRead) {
-                return new AuthzVersion(tenantId, principalId, bumpedVersion, Instant.EPOCH);
-            }
-            return delegate.require(tenantId, principalId);
-        }
-
-        @Override
-        public @NonNull AuthzVersion initialize(@NonNull String tenantId, @NonNull String principalId) {
-            return delegate.initialize(tenantId, principalId);
-        }
-
-        @Override
-        public long bump(@NonNull String tenantId, @NonNull String principalId) {
-            return delegate.bump(tenantId, principalId);
         }
     }
 }

@@ -330,14 +330,17 @@ class ToolBypassArchitectureTest {
         ExecutionAdmissionChecker admission = new ExecutionAdmissionChecker(cap.authzVersions(),
                 resolver, cap.snapshots());
         IdempotencyGuard idempotency = new IdempotencyGuard(exec.ledgerPort(), exec.resultEventPort());
+        // ⚠️ P3：审批走 CAP 状态机，不再注入既有 approval 表的一次性消费端口。
+        ApprovalStateMachine stateMachine = new ApprovalStateMachine(exec.capApprovalPort(),
+                new ApprovalBindingService());
+        CompensationFramework compensation = new CompensationFramework(exec.capApprovalPort(),
+                exec.budgetPort(), exec.compensationTaskPort());
         return new CapExecutionFlow(validator, resolver, admission, idempotency,
                 cap.authzVersions(), cap.rolePermissions(), cap.snapshots(),
                 handler -> cn.studykid.multiagent.ports.security.ApprovalPolicy.ApprovalDecision
                         .notRequired(),
-                (tenantId, handler) ->
-                        cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
-                                .ApprovalSource.Verdict.APPROVED,
-                exec.approvalPort(), exec.budgetPort(), exec.ledgerPort(), exec.intentPort(),
+                stateMachine, compensation, cap.toolDefs(),
+                exec.budgetPort(), exec.ledgerPort(), exec.intentPort(),
                 exec.resultEventPort(), java.math.BigDecimal.ONE,
                 new CapEnforcementSwitch(true));
     }

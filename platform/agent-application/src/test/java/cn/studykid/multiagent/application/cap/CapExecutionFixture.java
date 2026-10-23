@@ -12,12 +12,16 @@ import java.util.UUID;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import cn.studykid.multiagent.core.cap.CapApproval;
+import cn.studykid.multiagent.core.cap.CapCompensationTask;
 import cn.studykid.multiagent.core.cap.ExecutionIntent;
 import cn.studykid.multiagent.core.cap.ResultEvent;
 import cn.studykid.multiagent.core.config.ToolRiskLevel;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.ports.persistence.ApprovalPort;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
+import cn.studykid.multiagent.ports.persistence.CapApprovalPort;
+import cn.studykid.multiagent.ports.persistence.CompensationTaskPort;
 import cn.studykid.multiagent.ports.persistence.ExecutionIntentPort;
 import cn.studykid.multiagent.ports.persistence.ResultEventPort;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
@@ -52,11 +56,23 @@ final class CapExecutionFixture {
     final List<String> intentTransitions = new ArrayList<>();
     /** 结果事件。 */
     final Map<String, ResultEvent> resultEvents = new LinkedHashMap<>();
+    /** CAP 审批（id → 审批记录）。 */
+    final Map<String, CapApproval> approvals = new LinkedHashMap<>();
+    /** 补偿任务。 */
+    final Map<String, CapCompensationTask> compensationTasks = new LinkedHashMap<>();
 
     /** 工具执行次数。 */
     int toolExecutions;
     /** 工具执行失败模式。 */
     RuntimeException toolFailure;
+    /** ⚠️ 预算预留结局（可置为 INSUFFICIENT 模拟额度不足）。 */
+    BudgetPort.ReserveOutcome budgetReserveOutcome = BudgetPort.ReserveOutcome.RESERVED;
+    /** ⚠️ 账本 POST 是否失败（模拟落账失败）。 */
+    boolean failLedgerPost;
+    /** ⚠️ 结果事件写入是否失败（模拟「确定结果未落盘」）。 */
+    boolean failResultEventWrite;
+    /** ⚠️ 补偿任务入队是否失败（模拟「结局无处留存」）。 */
+    boolean failCompensationEnqueue;
 
     /** 账本条目。 */
     static final class LedgerEntry {
@@ -89,7 +105,7 @@ final class CapExecutionFixture {
                     entry = new LedgerEntry(UUID.randomUUID().toString(), idempotencyKey, requestDigest);
                     ledger.put(idempotencyKey, entry);
                 }
-                return new Registration(entry.operationId, entry.state, 1);
+                return new Registration(entry.operationId, entry.state, 1, 0L);
             }
 
             @Override
@@ -97,6 +113,9 @@ final class CapExecutionFixture {
                                       @NonNull ToolOperationState result, long fencingToken,
                                       String errorClass, String errorMessage) {
                 timeline.add("ledger:record:" + result);
+                if (failLedgerPost) {
+                    throw new IllegalStateException("注入：账本落账失败");
+                }
                 ledger.values().stream()
                         .filter(e -> e.operationId.equals(operationId))
                         .findFirst()
@@ -124,7 +143,7 @@ final class CapExecutionFixture {
                 LedgerEntry entry = ledger.get(idempotencyKey);
                 return entry == null
                         ? Optional.empty()
-                        : Optional.of(new Registration(entry.operationId, entry.state, 1));
+                        : Optional.of(new Registration(entry.operationId, entry.state, 1, 0L));
             }
 
             @Override
@@ -142,6 +161,9 @@ final class CapExecutionFixture {
             public @NonNull ReserveOutcome reserve(@NonNull String tenantId, @NonNull String runId,
                                                     String operationId, @NonNull BigDecimal amount) {
                 timeline.add("budget:reserve");
+                if (!budgetReserveOutcome.granted()) {
+                    return budgetReserveOutcome;
+                }
                 String reservationId = "res-" + operationId;
                 reservations.put(operationId, new BudgetPort.Reservation(reservationId, runId,
                         operationId, amount, BigDecimal.ZERO, "RESERVED", "CNY"));
@@ -226,6 +248,218 @@ final class CapExecutionFixture {
         };
     }
 
+    /**
+     * CAP 审批端口（内存实现）。
+     *
+     * <p>⚠️ 预占按 CAS 语义实现：只有 {@code PENDING} 且未过期才能被预占，
+     * 且绑定项（参数哈希 / 闭包指纹 / 授权版本）必须一致 ——
+     * 与 JDBC 实现的 CAS 条件保持同一语义，避免测试与生产行为分叉。
+     */
+    @NonNull CapApprovalPort capApprovalPort() {
+        return new CapApprovalPort() {
+            @Override
+            public @NonNull String grant(@NonNull CapApprovalGrant grant) {
+                timeline.add("approval:grant");
+                String id = "cap-approval-" + (approvals.size() + 1);
+                Instant now = Instant.now();
+                approvals.put(id, new CapApproval(id, grant.tenantId(), grant.principalId(),
+                        null, null, null, grant.toolId(), grant.targetResource(),
+                        grant.approvalScopeHash(), grant.scopeDefinition(),
+                        grant.effectiveArgsHash(), grant.closureFingerprint(),
+                        grant.authzVersion(), grant.approverId(), grant.approverScope(),
+                        now, grant.expiresAt(), CapApproval.ApprovalState.PENDING,
+                        null, null, now, now));
+                return id;
+            }
+
+            @Override
+            public @NonNull ReservationOutcome reserve(@NonNull String tenantId,
+                                                        @NonNull String approvalId,
+                                                        @NonNull String invocationId,
+                                                        @NonNull String operationId,
+                                                        @Nullable String runId,
+                                                        @NonNull String effectiveArgsHash,
+                                                        @NonNull String closureFingerprint,
+                                                        long authzVersion) {
+                timeline.add("approval:reserve");
+                CapApproval existing = approvals.get(approvalId);
+                if (existing == null) {
+                    return ReservationOutcome.NOT_FOUND;
+                }
+                if (!existing.expiresAt().isAfter(Instant.now())) {
+                    return ReservationOutcome.EXPIRED;
+                }
+                if (existing.state() == CapApproval.ApprovalState.PENDING
+                        && existing.effectiveArgsHash().equals(effectiveArgsHash)
+                        && existing.closureFingerprint().equals(closureFingerprint)
+                        && existing.authzVersion() == authzVersion) {
+                    approvals.put(approvalId, withState(existing,
+                            CapApproval.ApprovalState.RESERVED, invocationId, operationId, runId));
+                    return ReservationOutcome.RESERVED;
+                }
+                if (existing.state() == CapApproval.ApprovalState.RESERVED) {
+                    return invocationId.equals(existing.invocationId())
+                            ? ReservationOutcome.ALREADY_RESERVED_BY_SAME
+                            : ReservationOutcome.ALREADY_RESERVED_BY_OTHER;
+                }
+                if (existing.state() == CapApproval.ApprovalState.INTENT_SUBMITTED) {
+                    return ReservationOutcome.INTENT_SUBMITTED;
+                }
+                if (existing.state() == CapApproval.ApprovalState.CONSUMED) {
+                    return ReservationOutcome.ALREADY_CONSUMED;
+                }
+                if (existing.state() == CapApproval.ApprovalState.CANCELLED) {
+                    return ReservationOutcome.CANCELLED;
+                }
+                return ReservationOutcome.NOT_FOUND;
+            }
+
+            @Override
+            public boolean markIntentSubmitted(@NonNull String tenantId,
+                                                @NonNull String approvalId,
+                                                @NonNull String invocationId) {
+                timeline.add("approval:intent-submitted");
+                CapApproval existing = approvals.get(approvalId);
+                if (existing == null
+                        || existing.state() != CapApproval.ApprovalState.RESERVED) {
+                    return false;
+                }
+                approvals.put(approvalId, withState(existing,
+                        CapApproval.ApprovalState.INTENT_SUBMITTED,
+                        existing.invocationId(), existing.operationId(), existing.runId()));
+                return true;
+            }
+
+            @Override
+            public boolean consume(@NonNull String tenantId, @NonNull String approvalId,
+                                   @NonNull String invocationId, @NonNull String terminalStatus) {
+                timeline.add("approval:consume");
+                CapApproval existing = approvals.get(approvalId);
+                if (existing == null
+                        || existing.state() != CapApproval.ApprovalState.INTENT_SUBMITTED) {
+                    return false;
+                }
+                approvals.put(approvalId, withState(existing,
+                        CapApproval.ApprovalState.CONSUMED,
+                        existing.invocationId(), existing.operationId(), existing.runId()));
+                return true;
+            }
+
+            @Override
+            public boolean cancel(@NonNull String tenantId, @NonNull String approvalId,
+                                  @NonNull String invocationId, @NonNull String reason) {
+                timeline.add("approval:cancel");
+                CapApproval existing = approvals.get(approvalId);
+                if (existing == null || existing.state().isTerminal()) {
+                    return false;
+                }
+                approvals.put(approvalId, withState(existing,
+                        CapApproval.ApprovalState.CANCELLED,
+                        existing.invocationId(), existing.operationId(), existing.runId()));
+                return true;
+            }
+
+            @Override
+            public @NonNull Optional<CapApproval> findById(@NonNull String tenantId,
+                                                            @NonNull String approvalId) {
+                return Optional.ofNullable(approvals.get(approvalId));
+            }
+
+            @Override
+            public @NonNull List<CapApproval> findByTool(@NonNull String tenantId,
+                                                          @NonNull String toolId) {
+                return approvals.values().stream()
+                        .filter(a -> a.toolId().equals(toolId))
+                        .toList();
+            }
+
+            @Override
+            public @NonNull Optional<CapApproval> findByInvocation(@NonNull String tenantId,
+                                                                     @NonNull String invocationId) {
+                return approvals.values().stream()
+                        .filter(a -> invocationId.equals(a.invocationId()))
+                        .findFirst();
+            }
+        };
+    }
+
+    /** 审批状态迁移辅助（内存实现）。 */
+    private static @NonNull CapApproval withState(@NonNull CapApproval a,
+                                                   CapApproval.@NonNull ApprovalState state,
+                                                   @Nullable String invocationId,
+                                                   @Nullable String operationId,
+                                                   @Nullable String runId) {
+        return new CapApproval(a.approvalId(), a.tenantId(), a.principalId(), runId,
+                invocationId, operationId, a.toolId(), a.targetResource(),
+                a.approvalScopeHash(), a.scopeDefinition(), a.effectiveArgsHash(),
+                a.closureFingerprint(), a.authzVersion(), a.approverId(), a.approverScope(),
+                a.decidedAt(), a.expiresAt(), state, a.terminalStatus(), a.cancelReason(),
+                a.createdAt(), Instant.now());
+    }
+
+    /** 补偿任务端口（内存实现）。 */
+    @NonNull CompensationTaskPort compensationTaskPort() {
+        return new CompensationTaskPort() {
+            @Override
+            public boolean enqueue(@NonNull CapCompensationTask task) {
+                timeline.add("compensation:enqueue:" + task.kind());
+                if (failCompensationEnqueue) {
+                    throw new IllegalStateException("注入：补偿任务入队失败");
+                }
+                boolean exists = compensationTasks.values().stream()
+                        .anyMatch(t -> t.kind() == task.kind()
+                                && t.targetId().equals(task.targetId()));
+                if (!exists) {
+                    compensationTasks.put(task.taskId(), task);
+                }
+                return !exists;
+            }
+
+            @Override
+            public @NonNull Optional<CapCompensationTask> findById(@NonNull String tenantId,
+                                                                     @NonNull String taskId) {
+                return Optional.ofNullable(compensationTasks.get(taskId));
+            }
+
+            @Override
+            public @NonNull List<CapCompensationTask> findPending(@NonNull String tenantId,
+                                                                   int limit) {
+                return compensationTasks.values().stream()
+                        .filter(t -> t.state() == CapCompensationTask.TaskState.PENDING
+                                || t.state() == CapCompensationTask.TaskState.FAILED)
+                        .limit(limit)
+                        .toList();
+            }
+
+            @Override
+            public boolean markCompleted(@NonNull String tenantId, @NonNull String taskId) {
+                CapCompensationTask t = compensationTasks.get(taskId);
+                if (t == null) {
+                    return false;
+                }
+                compensationTasks.put(taskId, new CapCompensationTask(t.taskId(), t.tenantId(),
+                        t.kind(), t.targetId(), t.invocationId(), t.payload(),
+                        CapCompensationTask.TaskState.COMPLETED, t.attempts(), t.lastError(),
+                        t.createdAt(), Instant.now(), t.nextRetryAt()));
+                return true;
+            }
+
+            @Override
+            public boolean markFailed(@NonNull String tenantId, @NonNull String taskId,
+                                       @NonNull String error, @NonNull Instant nextRetryAt) {
+                CapCompensationTask t = compensationTasks.get(taskId);
+                if (t == null) {
+                    return false;
+                }
+                compensationTasks.put(taskId, new CapCompensationTask(t.taskId(), t.tenantId(),
+                        t.kind(), t.targetId(), t.invocationId(), t.payload(),
+                        CapCompensationTask.TaskState.FAILED, t.attempts() + 1, error,
+                        t.createdAt(), Instant.now(), nextRetryAt));
+                return true;
+            }
+        };
+    }
+
     @NonNull ExecutionIntentPort intentPort() {
         return new ExecutionIntentPort() {
             @Override
@@ -238,6 +472,15 @@ final class CapExecutionFixture {
             public @NonNull Optional<ExecutionIntent> findByInvocation(@NonNull String tenantId,
                                                                         @NonNull String invocationId) {
                 return Optional.ofNullable(intents.get(invocationId));
+            }
+
+            @Override
+            public @NonNull List<ExecutionIntent> findPending(@NonNull String tenantId,
+                                                              int limit) {
+                return intents.values().stream()
+                        .filter(ExecutionIntent::isPending)
+                        .limit(limit)
+                        .toList();
             }
 
             @Override
@@ -264,6 +507,9 @@ final class CapExecutionFixture {
             @Override
             public boolean recordIfAbsent(@NonNull ResultEvent event) {
                 timeline.add("result-event:record:" + event.resultStatus());
+                if (failResultEventWrite) {
+                    throw new IllegalStateException("注入：结果事件写入失败");
+                }
                 if (resultEvents.containsKey(event.invocationId())) {
                     return false;
                 }

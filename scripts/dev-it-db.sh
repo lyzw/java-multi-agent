@@ -102,6 +102,11 @@ DECLARE t TEXT;
 BEGIN
   -- ⚠️ 顺序：先删子表再删父表，避免外键报错
   FOREACH t IN ARRAY ARRAY[
+    -- ⚠️ cap_approval 有 FK 指向 tool_operation / run，
+    --    故**必须先删它**，否则下面的 DELETE FROM tool_operation 会被外键拒绝。
+    --    且它有 UNIQUE(tenant_id, invocation_id, tool_id)：
+    --    跨轮次残留会让下一轮的 IT 直接撞唯一约束失败。
+    'cap_approval','cap_compensation_task','cap_result_event','cap_execution_intent',
     'tool_operation_attempt','tool_operation','run_event','run_step',
     'usage_record','budget_reservation','approval',
     -- ⚠️ **audit_record 刻意不清**：它有「追加不可改」触发器（R-3 不变式），

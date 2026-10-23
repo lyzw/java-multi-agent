@@ -99,6 +99,13 @@ abstract class CapITBase {
         // ⚠️ 每例前清空：否则上一例的版本行/授权版本会影响本例判定
         //    （例如「原子自增后版本应为 3」在上一例已自增过时会变成 4）。
         // ⚠️ 顺序：**先删引用方，再删被引用方** —— cap_agent_def 复合外键指向 agent。
+        // ⚠️ P3 新表：审批与补偿任务同样必须每例清理 ——
+        //    cap_approval 有 UNIQUE(tenant_id, invocation_id, tool_id)，
+        //    跨例残留会让下一例直接撞唯一约束失败（且失败现场指向错误方向）。
+        adminExec("DELETE FROM cap_approval WHERE tenant_id IN ('"
+                + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
+        adminExec("DELETE FROM cap_compensation_task WHERE tenant_id IN ('"
+                + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
         adminExec("DELETE FROM cap_result_event WHERE tenant_id IN ('"
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
         adminExec("DELETE FROM cap_execution_intent WHERE tenant_id IN ('"

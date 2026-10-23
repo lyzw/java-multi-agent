@@ -5,6 +5,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -47,6 +49,18 @@ public class JdbcExecutionIntentRepository implements ExecutionIntentPort {
             UPDATE cap_execution_intent
             SET intent_state = ?::cap_intent_state, updated_at = now()
             WHERE tenant_id = ?::uuid AND invocation_id = ? AND intent_state = ?::cap_intent_state
+            """;
+
+    /** 恢复扫描：捞出尚未终结的意图（§5.3.4 崩溃恢复入口）。 */
+    private static final String SQL_FIND_PENDING = """
+            SELECT intent_id::text, tenant_id::text, run_id::text, invocation_id, tool_id,
+                   tool_version, args_fingerprint, approval_id, intent_state,
+                   created_at, updated_at
+            FROM cap_execution_intent
+            WHERE tenant_id = ?::uuid
+              AND intent_state IN ('RESERVED', 'INTENT_SUBMITTED')
+            ORDER BY created_at ASC
+            LIMIT ?
             """;
 
     private final DataSource dataSource;
@@ -125,6 +139,30 @@ public class JdbcExecutionIntentRepository implements ExecutionIntentPort {
                         ps.setString(4, expectedFrom.name());
                         return ps.executeUpdate() > 0;
                     }
+                });
+    }
+
+    @Override
+    public @NonNull List<ExecutionIntent> findPending(@NonNull String tenantId,
+                                                         int limit) {
+        // ⚠️ 只捞「尚未终结」的两态（RESERVED / INTENT_SUBMITTED）：
+        //    CONSUMED 已终结、CANCELLED/EXPIRED 已旁路掉 —— 捞进来只会拖慢恢复扫描。
+        // ⚠️ 按创建时间升序：恢复必须<b>按发生顺序</b>处理，
+        //    否则先处理后发生的意图会让先发生的意图永远等不到它的结果。
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(tenantId),
+                conn -> {
+                    List<ExecutionIntent> out = new ArrayList<>();
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_FIND_PENDING)) {
+                        ps.setString(1, tenantId);
+                        ps.setInt(2, Math.max(1, limit));
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                out.add(map(rs));
+                            }
+                        }
+                    }
+                    return out;
                 });
     }
 

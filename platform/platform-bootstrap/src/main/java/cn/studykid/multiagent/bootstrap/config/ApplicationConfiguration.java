@@ -701,6 +701,22 @@ public class ApplicationConfiguration {
                 .JdbcExecutionIntentRepository(dataSource);
     }
 
+    /** CAP 审批仓储（P3-T3 · §5.3.1 / §5.3.3）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CapApprovalPort capApprovalPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcCapApprovalRepository(
+                dataSource);
+    }
+
+    /** 补偿任务仓储（P3-T4 · §5.3.5）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CompensationTaskPort compensationTaskPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcCompensationTaskRepository(dataSource);
+    }
+
     /** 双写一致性比对工具（P0-T7）。 */
     @Bean
     public cn.studykid.multiagent.infrastructure.persistence.cap.CapDualWriteComparator
@@ -853,8 +869,48 @@ public class ApplicationConfiguration {
         return new cn.studykid.multiagent.application.cap.IdempotencyGuard(ledger, resultEvents);
     }
 
+    // ── W-PERM-P3：审批与故障恢复 ───────────────────────────────────
+
+    /** 审批绑定服务（P3-T1 · §5.3.1 双哈希）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ApprovalBindingService approvalBindingService() {
+        return new cn.studykid.multiagent.application.cap.ApprovalBindingService();
+    }
+
+    /** 审批状态机（P3-T3 · §5.3.3）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ApprovalStateMachine approvalStateMachine(
+            cn.studykid.multiagent.ports.persistence.CapApprovalPort capApprovalPort,
+            cn.studykid.multiagent.application.cap.ApprovalBindingService approvalBindingService) {
+        return new cn.studykid.multiagent.application.cap.ApprovalStateMachine(
+                capApprovalPort, approvalBindingService);
+    }
+
+    /** 补偿框架（P3-T4 · §5.3.5）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.CompensationFramework compensationFramework(
+            cn.studykid.multiagent.ports.persistence.CapApprovalPort capApprovalPort,
+            cn.studykid.multiagent.ports.persistence.BudgetPort budget,
+            cn.studykid.multiagent.ports.persistence.CompensationTaskPort compensationTaskPort) {
+        return new cn.studykid.multiagent.application.cap.CompensationFramework(
+                capApprovalPort, budget, compensationTaskPort);
+    }
+
+    /** 结果事件恢复服务（P3-T6 · §5.3.4 / §7.4 · COMP-6 硬门槛）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ResultRecoveryService resultRecoveryService(
+            cn.studykid.multiagent.ports.persistence.ExecutionIntentPort executionIntentPort,
+            cn.studykid.multiagent.ports.persistence.ResultEventPort resultEventPort,
+            cn.studykid.multiagent.ports.persistence.RunToolLedgerPort runToolLedgerPort,
+            cn.studykid.multiagent.ports.persistence.CompensationTaskPort compensationTaskPort,
+            cn.studykid.multiagent.ports.persistence.CapApprovalPort capApprovalPort) {
+        return new cn.studykid.multiagent.application.cap.ResultRecoveryService(
+                executionIntentPort, resultEventPort, runToolLedgerPort,
+                compensationTaskPort, capApprovalPort);
+    }
+
     /**
-     * CAP 执行准入编排器（P2-T1 · §5.3 唯一协议）。
+     * CAP 执行准入编排器（P2-T1 · §5.3 唯一协议；P3 接入 CAP 审批链路）。
      *
      * <p>⚠️ 本 Bean <b>始终装配</b>，但只有开关开启时才会被闸门调用。
      * 开关在编排器内部，故不存在「以为走了新链路、其实没走」的静默降级。
@@ -869,9 +925,9 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.security.RolePermissionPort rolePermissions,
             cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
             cn.studykid.multiagent.ports.security.ApprovalPolicy approvalPolicy,
-            cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy.ApprovalSource
-                    approvalSource,
-            cn.studykid.multiagent.ports.persistence.ApprovalPort approvalPort,
+            cn.studykid.multiagent.application.cap.ApprovalStateMachine approvalStateMachine,
+            cn.studykid.multiagent.application.cap.CompensationFramework compensationFramework,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort capToolDefPort,
             cn.studykid.multiagent.ports.persistence.BudgetPort budget,
             cn.studykid.multiagent.ports.persistence.RunToolLedgerPort ledger,
             cn.studykid.multiagent.ports.persistence.ExecutionIntentPort intents,
@@ -879,8 +935,8 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.application.cap.CapEnforcementSwitch enforcementSwitch) {
         return new cn.studykid.multiagent.application.cap.CapExecutionFlow(
                 validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
-                snapshots, approvalPolicy, approvalSource, approvalPort, budget, ledger, intents,
-                resultEvents,
+                snapshots, approvalPolicy, approvalStateMachine, compensationFramework,
+                capToolDefPort, budget, ledger, intents, resultEvents,
                 cn.studykid.multiagent.application.config.BudgetPolicy.DEFAULT_RESERVE_AMOUNT,
                 enforcementSwitch);
     }

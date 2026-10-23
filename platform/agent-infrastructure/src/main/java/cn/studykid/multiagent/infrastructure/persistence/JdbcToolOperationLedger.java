@@ -94,7 +94,7 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                 try (ResultSet rs = ps.executeQuery()) {
                     rs.next();
                     return new Registration(rs.getString(1),
-                            ToolOperationState.IN_FLIGHT, 0);
+                            ToolOperationState.IN_FLIGHT, 0, fencingToken);
                 }
             }
         });
@@ -255,12 +255,44 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
         });
     }
 
+    @Override
+    public @NonNull Optional<Registration> findByOperationId(@NonNull String tenantId,
+                                                              @NonNull String operationId) {
+        // ⚠️ 恢复方拿到的是**执行意图**（意图上记的是 invocationId = 账本 operationId），
+        //    故恢复流程必须按 operationId 反查账本状态，
+        //    才能判定「外部是否已执行、结果是否已知」（§5.3.4）。
+        return inTenantTx(tenantId, conn -> {
+            String sql = """
+                    SELECT o.operation_id::text, o.state::text, o.fencing_token,
+                           (SELECT count(*) FROM tool_operation_attempt a
+                            WHERE a.tenant_id = o.tenant_id AND a.operation_id = o.operation_id)
+                           AS attempt_count
+                    FROM tool_operation o
+                    WHERE o.tenant_id = ?::uuid AND o.operation_id = ?::uuid
+                    """;
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, tenantId);
+                ps.setString(2, operationId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(new Registration(
+                            rs.getString("operation_id"),
+                            ToolOperationState.valueOf(rs.getString("state")),
+                            rs.getInt("attempt_count"),
+                            rs.getLong("fencing_token")));
+                }
+            }
+        });
+    }
+
     // ── 内部 ────────────────────────────────────────────────────────
 
     private Optional<Registration> findExisting(Connection conn, String tenantId,
                                                 String idempotencyKey) throws SQLException {
         String sql = """
-                SELECT o.operation_id::text, o.state::text,
+                SELECT o.operation_id::text, o.state::text, o.fencing_token,
                        (SELECT count(*) FROM tool_operation_attempt a
                         WHERE a.tenant_id = o.tenant_id AND a.operation_id = o.operation_id)
                        AS attempt_count
@@ -277,7 +309,8 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                 return Optional.of(new Registration(
                         rs.getString("operation_id"),
                         ToolOperationState.valueOf(rs.getString("state")),
-                        rs.getInt("attempt_count")));
+                        rs.getInt("attempt_count"),
+                        rs.getLong("fencing_token")));
             }
         }
     }

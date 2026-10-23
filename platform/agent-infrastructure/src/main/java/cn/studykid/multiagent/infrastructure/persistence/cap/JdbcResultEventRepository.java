@@ -68,13 +68,40 @@ public class JdbcResultEventRepository implements ResultEventPort {
                         if (event.resultPayload() == null) {
                             ps.setNull(7, java.sql.Types.OTHER);
                         } else {
-                            ps.setString(7, event.resultPayload());
+                            ps.setString(7, toJsonb(event.resultPayload()));
                         }
                         ps.setString(8, event.reasonCode());
                         ps.setTimestamp(9, Timestamp.from(event.createdAt()));
                         return ps.executeUpdate() > 0;
                     }
                 });
+    }
+
+    /**
+     * 把结果载荷转成可写入 JSONB 的文本。
+     *
+     * <p>⚠️ <b>工具输出不保证是合法 JSON</b>：
+     * {@code ToolResult.output} 是 {@code String}，真实工具一般产出 JSON 文档，
+     * 但并非强制。若直接 {@code ?::jsonb} 写入非 JSON 文本，
+     * PostgreSQL 会报 {@code invalid input syntax for type json} ——
+     * 而这个失败发生在<b>「确定结果落盘」</b>这一步，
+     * 后果是「工具成功了但结果没落盘」→ 系统把成功判成「证据丢失」。
+     *
+     * <p>故：<b>合法 JSON 原样写入</b>（保住结构，下游可按 JSONB 查询）；
+     * <b>非 JSON 转成 JSON 字符串</b>（内容不丢，只是类型退化为字符串）。
+     */
+    private static @NonNull String toJsonb(@NonNull String payload) {
+        try {
+            tools.jackson.databind.JsonNode node =
+                    tools.jackson.databind.json.JsonMapper.builder().build().readTree(payload);
+            if (node != null) {
+                return payload;
+            }
+        } catch (RuntimeException e) {
+            // ⚠️ 非 JSON → 落成 JSON 字符串（不抛：抛了等于让「载荷格式」决定成败）
+        }
+        return tools.jackson.databind.json.JsonMapper.builder().build()
+                .writeValueAsString(payload);
     }
 
     @Override

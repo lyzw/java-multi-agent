@@ -90,7 +90,7 @@ class ToolGateAuthorizationContextTest {
                 String toolName, String riskLevel, String idempotencyKey,
                 String requestDigest, Map<String, Object> arguments, long fencingToken) {
             return new Registration(UUID.randomUUID().toString(),
-                    ToolOperationState.IN_FLIGHT, 0);
+                    ToolOperationState.IN_FLIGHT, 0, 0L);
         }
         @Override public void recordResult(String tenantId, String operationId,
                 ToolOperationState result, long fencingToken,
