@@ -39,6 +39,9 @@ describe('角色矩阵契约（与后端 RoleBasedAuthorizationService 对应）
       'reconciliation',
       'audit',
       'health',
+      // ⚠️ RAG 语料管理面（RAG-D10）：审核/撤回属治理动作，
+      //    与辅导侧的 `rag`（知识检索）语义不同，故单列。
+      'ragManagement',
     ])
   })
 

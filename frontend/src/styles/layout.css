@@ -809,3 +809,58 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* ── RAG 语料管理（RAG-D10 管理面）────────────────────────
+ * 与「知识检索」同源：靠线与留白分隔，⛔ 不用卡片阴影。
+ * 管理面的动作是审核与下架，故沿用批改纸的引用栏隐喻。 */
+
+/* 选中条目：左侧细线 + 略深底色，⛔ 不用高亮蓝（避免像后台仪表盘）。 */
+.rag-mgmt__pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rag-mgmt__pick:hover .entry__title {
+  color: var(--ink);
+}
+
+/* ⛔ 选中态用左侧细线表示，与「引用栏」隐喻一致；
+   不用背景色块，避免与禁用态混淆。 */
+.rag-mgmt__pick[aria-pressed='true'] {
+  border-left: 2px solid var(--rule-strong);
+  padding-left: var(--s-3);
+  margin-left: calc(-1 * var(--s-3));
+}
+
+/* 右侧标签组：状态 / 等级 / 版权 */
+.rag-mgmt__tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  flex-shrink: 0;
+}
+
+/* 审核区块：与上方详情用线分组，不用卡片 */
+.rag-mgmt__block {
+  margin-top: var(--s-5);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--rule);
+}
+
+.rag-mgmt__block-title {
+  font-size: var(--t-body);
+  font-weight: 600;
+  margin: 0 0 var(--s-3);
+}

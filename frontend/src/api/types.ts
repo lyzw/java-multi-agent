@@ -18,14 +18,31 @@ export interface LoginRequest {
 /**
  * POST /api/auth/token 成功响应
  *
- * ⚠️ **不含 roles / 用户标识** —— 这是缺口 G1，
- * 故前端无法显示「当前身份」，不得自行假设角色。
+ * ⚠️ B1（2026-10-23）：登录响应**现已包含 `roles`**，前端据此做导航显隐，
+ *    无需再调 {@code GET /api/auth/roles}（该端点仍保留供续期后重校验）。
+ *    `roles` 仅用于 UI 提示，**不是安全边界**——后端执行时仍重新授权。
  */
 export interface LoginResponse {
   accessToken: string
   tokenType: 'Bearer'
   /** ⚠️ 后端硬编码 900（不读配置 auth.jwt.token-ttl-seconds） */
   expiresIn: number
+  /**
+   * 权威租户 ID（2026-10-22 新增）。
+   *
+   * ⚠️ RAG 管理面/检索面据此构造 {@code X-Tenant-Id} 头重建 RLS 租户上下文
+   *    （`tokenStorage` 文档已明确该值即 RAG 侧的租户标识）。
+   */
+  tenantId?: string | null
+  /** 主体 ID（2026-10-22 新增）——审核留痕需要「谁操作的」 */
+  principalId?: string | null
+  /**
+   * 主体在本租户内的角色集合（B1：2026-10-23 新增）。
+   *
+   * ⚠️ 仅用于前端导航显隐（如学生不显示审批台）。
+   *    安全判定以执行时后端重授权为准，前端**不得**据此放行敏感操作。
+   */
+  roles?: string[]
 }
 
 /* ── Run ───────────────────────────────────────────────── */
@@ -573,4 +590,198 @@ export const RAG_SCOPE_LABELS: Record<RagScopeMode, string> = {
   STRICT: '严格锁定当前版本',
   PREFERRED_WITH_FALLBACK: '优先本版，可回退同册',
   CROSS_EDITION: '跨版本对比',
+}
+
+/* ── RAG 语料数据管理（rag-management / RAG-D10）───────────────── */
+
+/**
+ * 语料来源的校验状态（对齐后端 `SourceVerification.VerificationStatus`）。
+ *
+ * ⚠️ 取值与后端枚举严格一致（RAG-D07 §2.4 状态机 T-1～T-12）：
+ *    PENDING 待校验 → IN_REVIEW 审核中 → VERIFIED 已通过
+ *    REJECTED 已拒绝 / REVOKED 已撤回
+ *
+ * ⚠️ **REVOKED 是终态**：撤回后不可复活，重新准入必须新建 source_id
+ *    （RAG-D07 §2.4 T-10）。前端不得提供「撤销撤回」入口。
+ */
+export type RagVerificationStatus =
+  | 'PENDING'
+  | 'IN_REVIEW'
+  | 'VERIFIED'
+  | 'REJECTED'
+  | 'REVOKED'
+
+/** 权威等级（对齐后端 `TrustTier`）。 */
+export type RagTrustTier =
+  | 'OFFICIAL_PUBLISHER'
+  | 'OFFICIAL_TUTORIAL'
+  | 'PEER_REVIEWED_PAPER'
+  | 'PREPRINT'
+  | 'UNVERIFIED'
+
+/** 校验手段（对齐后端 `SourceVerification.VerificationMethod`）。 */
+export type RagVerificationMethod =
+  | 'NONE'
+  | 'ISBN'
+  | 'DOI'
+  | 'MANUAL_REVIEW'
+  | 'OFFICIAL_HASH'
+
+/** 版权状态（对齐后端 `rag_license_status` 枚举，V3 迁移后为 DB 枚举）。 */
+export type RagLicenseStatus =
+  | 'LICENSED'
+  | 'FAIR_USE_QUOTATION'
+  | 'PENDING'
+  | 'RESTRICTED'
+
+/**
+ * 来源视图（对齐后端 `ManagementDtos.SourceResponse`）。
+ *
+ * ⚠️ `stale` 与 `admissible` 是**服务端算好的计算属性**：
+ *    · stale = 校验结论已过期（verified_at + valid_days < now）
+ *      ——「过期」**不是**状态位，枚举里没有 STALE（RAG-D07 §3.4）
+ *    · admissible = 当前准入（VERIFIED ∧ 未过期 ∧ 达门槛 ∧ 版权放行）
+ *    前端**不得**自行推算，租户权威门槛只有服务端知道。
+ */
+export interface RagSource {
+  sourceId: string
+  sourceType: string
+  title: string
+  publisher: string
+  isbn: string | null
+  doi: string | null
+  trustTier: RagTrustTier
+  verificationStatus: RagVerificationStatus
+  verificationMethod: RagVerificationMethod
+  verificationEvidence: string | null
+  verifiedAt: string | null
+  verifiedBy: string | null
+  validDays: number
+  licenseStatus: RagLicenseStatus
+  /** 校验结论是否已过期（计算属性） */
+  stale: boolean
+  /** 当前是否准入可检索（计算属性） */
+  admissible: boolean
+  objectRef: string | null
+  contentHash: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** 文档载体视图（对齐后端 `ManagementDtos.DocumentResponse`）。 */
+export interface RagDocument {
+  documentId: string
+  sourceId: string
+  editionId: string
+  carrier: string
+  title: string
+  pageCount: number | null
+  objectRef: string | null
+  parseStatus: string
+  parserVersion: string | null
+  contentHash: string | null
+  chunkCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+/** 片段摘要（对齐后端 `ManagementDtos.ChunkResponse`）。 */
+export interface RagChunk {
+  chunkId: string
+  role: string
+  pageNumber: number
+  sectionPath: string
+  exerciseNo: string | null
+  charLength: number
+  /** 是否已写入向量 —— 缺失即「静默漏召回」风险（RAG-D03 §1） */
+  hasEmbedding: boolean
+  contentHash: string | null
+}
+
+/** 索引统计（对齐后端 `ManagementDtos.StatisticsResponse`）。 */
+export interface RagStatistics {
+  totalSources: number
+  verifiedSources: number
+  admissibleSources: number
+  totalDocuments: number
+  totalChunks: number
+  /** 可检索片段数 —— 与 totalChunks 的差额即「已入库但不可检索」 */
+  retrievableChunks: number
+  /** 已入库但缺向量的片段数 —— 静默漏召回风险 */
+  chunksMissingEmbedding: number
+  missingEmbeddingRatio: number
+  chunksByRole: Record<string, number>
+  sourcesByVerificationStatus: Record<string, number>
+  documentsByParseStatus: Record<string, number>
+}
+
+/** 来源登记请求（对齐后端 `ManagementDtos.RegisterSourceRequest`）。 */
+export interface RagRegisterSourceRequest {
+  sourceType: string
+  title: string
+  publisher: string
+  isbn: string | null
+  doi: string | null
+  objectRef: string | null
+  contentHash: string | null
+  /** 登记人 UUID —— 登记必须留痕（后端 principal_id NOT NULL） */
+  registeredBy: string
+}
+
+/** 校验决定请求（对齐后端 `ManagementDtos.VerificationRequest`）。 */
+export interface RagVerificationRequest {
+  targetStatus: RagVerificationStatus
+  /** 校验依据 —— 必填（后端强制留痕） */
+  evidenceRef: string
+  /** 决定人 UUID —— 必填 */
+  decidedBy: string
+  verificationMethod: RagVerificationMethod
+  /** 判定 VERIFIED 时必填（否则来源通过校验却仍被权威门槛拦下） */
+  trustTier: RagTrustTier | null
+  validDays: number
+}
+
+/** 来源查询参数（对齐后端 `SourceQuery`）。 */
+export interface RagSourceQuery {
+  status?: RagVerificationStatus | null
+  trustTier?: RagTrustTier | null
+  keyword?: string | null
+  includeStale?: boolean
+  limit?: number
+  offset?: number
+}
+
+/** 校验状态的可读标签。 */
+export const RAG_VERIFICATION_LABELS: Record<RagVerificationStatus, string> = {
+  PENDING: '待校验',
+  IN_REVIEW: '审核中',
+  VERIFIED: '已通过',
+  REJECTED: '已拒绝',
+  REVOKED: '已撤回',
+}
+
+/** 权威等级的可读标签。 */
+export const RAG_TRUST_TIER_LABELS: Record<RagTrustTier, string> = {
+  OFFICIAL_PUBLISHER: '教材出版社官方',
+  OFFICIAL_TUTORIAL: '教辅品牌正式出版',
+  PEER_REVIEWED_PAPER: '同行评审论文',
+  PREPRINT: '预印本 / 白皮书',
+  UNVERIFIED: '未校验',
+}
+
+/** 校验手段的可读标签。 */
+export const RAG_VERIFICATION_METHOD_LABELS: Record<RagVerificationMethod, string> = {
+  NONE: '无',
+  ISBN: 'ISBN 校验',
+  DOI: 'DOI 校验',
+  MANUAL_REVIEW: '人工逐份比对',
+  OFFICIAL_HASH: '官方哈希比对',
+}
+
+/** 版权状态的可读标签。 */
+export const RAG_LICENSE_LABELS: Record<RagLicenseStatus, string> = {
+  LICENSED: '已获授权',
+  FAIR_USE_QUOTATION: '合理引用',
+  PENDING: '未取得授权',
+  RESTRICTED: '禁止使用',
 }

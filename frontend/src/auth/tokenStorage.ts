@@ -14,6 +14,24 @@ export interface StoredSession {
   accessToken: string
   /** 绝对过期时刻（epoch ms） */
   expiresAt: number
+  /**
+   * 权威租户 ID（2026-10-22 新增）。
+   *
+   * ⚠️ 来自登录响应（后端认证层本就持有该值）。
+   *    RAG 管理面需要它来构造 {@code X-Tenant-Id} 头——
+   *    此前只能让用户手填，而 RAG 库已不存租户副本（RAG-D00 §4），
+   *    用户无从得知该填什么。
+   */
+  tenantId?: string | null
+  /** 主体 ID（2026-10-22 新增）——审核留痕需要「谁操作的」 */
+  principalId?: string | null
+  /**
+   * 角色集合（B1：2026-10-23 新增）。
+   *
+   * ⚠️ 仅用于导航显隐，非安全边界。旧会话（升级前写入）无此字段时回落为空数组，
+   *    不影响加载——安全判定以执行时后端重授权为准。
+   */
+  roles?: string[]
 }
 
 function isBrowser(): boolean {
@@ -30,19 +48,36 @@ export function loadSession(): StoredSession | null {
     const record = parsed as Record<string, unknown>
     if (typeof record['accessToken'] !== 'string') return null
     if (typeof record['expiresAt'] !== 'number') return null
-    return { accessToken: record['accessToken'], expiresAt: record['expiresAt'] }
+    // ⚠️ tenantId / principalId / roles 是**可选**的：
+    //    旧会话（升级前写入的）没有这些字段，须仍能正常加载，
+    //    否则升级后所有用户会被强制登出。
+    const tenantId = typeof record['tenantId'] === 'string' ? record['tenantId'] : null
+    const principalId = typeof record['principalId'] === 'string' ? record['principalId'] : null
+    const roles = Array.isArray(record['roles'])
+      ? (record['roles'] as unknown[]).filter((r): r is string => typeof r === 'string')
+      : []
+    return { accessToken: record['accessToken'], expiresAt: record['expiresAt'], tenantId, principalId, roles }
   } catch {
     // JSON 损坏：视为无会话，不抛错打断应用
     return null
   }
 }
 
-export function saveSession(accessToken: string, expiresInSeconds: number): StoredSession {
+export function saveSession(
+  accessToken: string,
+  expiresInSeconds: number,
+  tenantId?: string | null,
+  principalId?: string | null,
+  roles?: string[],
+): StoredSession {
   // ⚠️ 用后端返回的 expiresIn 计算，不读前端配置。
   //    后端该值硬编码 900（不读 auth.jwt.token-ttl-seconds）。
   const session: StoredSession = {
     accessToken,
     expiresAt: Date.now() + expiresInSeconds * 1000,
+    tenantId: tenantId ?? null,
+    principalId: principalId ?? null,
+    roles: roles === undefined ? [] : roles,
   }
   if (isBrowser()) {
     window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session))

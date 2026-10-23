@@ -36,6 +36,13 @@ import type {
   RagRetrievalResponse,
   RagGenerateRequest,
   RagGenerateResponse,
+  RagStatistics,
+  RagSource,
+  RagDocument,
+  RagChunk,
+  RagRegisterSourceRequest,
+  RagVerificationRequest,
+  RagSourceQuery,
 } from './types'
 
 /** 401 时通知上层（SessionProvider）清理会话并跳登录 */
@@ -583,18 +590,201 @@ export function retrieveChunks(
 /**
  * POST /api/v1/retrieval/generate —— 在检索召回基础上生成讲解。
  *
- * ⚠️ **后端尚未实现该端点**（rag 模块当前只暴露检索）。
- *    调用会得到 404/501，由上层按「生成能力未接入」诚实呈现，
- *    **不要**把它当故障刷红——否则用户会反复刷新等一个不存在的结果。
+ * ⚠️ **后端尚未实现该端点**（rag 模块当前只暴露检索），故会返回 404/501，
+ *    上层按「生成能力未接入」诚实呈现，**不要**当故障刷红。
+ *
+ * ⚠️ **必须携带 `X-Tenant-Id`**（B2 修复，2026-10-23）：生成端点与前端的
+ *    检索端点共用同一套 RLS 租户收口，缺失该头后端返回 400。此前该调用
+ *    **漏传**此头，是已确认的缺陷——生成端点一旦上线即 400。
+ *    租户值取自会话（登录回带的权威 tenantId），与 `retrieveChunks` 同源。
  */
 export function generateRagAnswer(
   payload: RagGenerateRequest,
   timeoutMs: number = DEFAULT_RAG_TIMEOUT_MS,
+  tenantId?: string,
 ): Promise<RagGenerateResponse> {
   return requestWithTimeout<RagGenerateResponse>(
     '/api/v1/retrieval/generate',
     { method: 'POST', body: JSON.stringify(payload) },
     true,
     timeoutMs,
+    tenantId === undefined || tenantId.trim() === ''
+      ? undefined
+      : { 'X-Tenant-Id': tenantId.trim() },
+  )
+}
+
+/* ── RAG 语料数据管理（rag-management / RAG-D10）────────────── */
+
+/**
+ * RAG 管理端点的默认超时（毫秒）。
+ *
+ * ⚠️ 管理面是**人工操作**，每次都是显式点击触发，
+ *    不像检索那样有自动重试。故超时给得比检索宽松，
+ *    避免管理员在审核过程中被 20 秒超时打断。
+ */
+const DEFAULT_RAG_MGMT_TIMEOUT_MS = 30000
+
+/**
+ * 管理端点的租户头。
+ *
+ * ⚠️ **必须携带 `X-Tenant-Id`**：管理 SQL 一律以
+ * `tenant_id = rag_current_tenant()` 收口，而该函数读的是**会话变量**
+ * `app.tenant_id`——只在事务内有效。跨进程 HTTP 调用时主平台的事务上下文
+ * 不会随之而来，后端必须显式重建租户上下文。
+ * 缺失该头后端返回 **400**（而非静默返回空列表）。
+ */
+function tenantHeaders(tenantId: string): Record<string, string> {
+  return { 'X-Tenant-Id': tenantId.trim() }
+}
+
+/**
+ * GET /api/v1/management/statistics —— 索引与准入统计。
+ *
+ * ⚠️ 统计口径已区分「已入库」与「可检索」（RAG-D10 D-3）——
+ *    管理方最常见的误判是「片段数 = 可用知识量」。
+ */
+export function getRagStatistics(
+  tenantId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagStatistics> {
+  return requestWithTimeout<RagStatistics>(
+    '/api/v1/management/statistics',
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * GET /api/v1/management/sources —— 列出来源。
+ *
+ * ⚠️ 后端 `limit` 上限为 500，超出返回 400；
+ *    `includeStale=false`（默认）时**过期来源不返回**——
+ *    「过期」是计算属性（verified_at + valid_days < now），
+ *    不是状态位，故由服务端在 SQL 中计算。
+ */
+export function listRagSources(
+  tenantId: string,
+  query: RagSourceQuery = {},
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagSource[]> {
+  return requestWithTimeout<RagSource[]>(
+    `/api/v1/management/sources${toQuery({
+      status: query.status,
+      trustTier: query.trustTier,
+      keyword: query.keyword,
+      includeStale: query.includeStale === true ? 'true' : null,
+      limit: query.limit,
+      offset: query.offset,
+    })}`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * GET /api/v1/management/sources/{sourceId} —— 来源详情。
+ *
+ * ⚠️ 不存在返回 **404**。跨租户访问同样表现为 404
+ *    （RLS 过滤掉，前端**不得**据此推断「该来源属于别的租户」）。
+ */
+export function getRagSource(
+  tenantId: string,
+  sourceId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagSource> {
+  return requestWithTimeout<RagSource>(
+    `/api/v1/management/sources/${encodeURIComponent(sourceId)}`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * POST /api/v1/management/sources —— 登记语料来源。
+ *
+ * ⚠️ 登记结果恒为 PENDING / UNVERIFIED（采集员不得自行提升等级）。
+ * ⚠️ `registeredBy` 必填——登记必须留痕（后端 principal_id NOT NULL）。
+ */
+export function registerRagSource(
+  tenantId: string,
+  payload: RagRegisterSourceRequest,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagSource> {
+  return requestWithTimeout<RagSource>(
+    '/api/v1/management/sources',
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * POST /api/v1/management/sources/{sourceId}/verification —— 校验状态流转。
+ *
+ * ⚠️ **409 = 非法状态转移**（RAG-D07 §2.4 T-1～T-12），不是服务故障：
+ *    例如「已拒绝 → 直接通过」被禁（必须先回到「审核中」）、
+ *    「已撤回 → 任意」被禁（撤回是终态）。
+ *    前端须把 409 呈现为**流程走错了**并给出合法下一步，
+ *    **绝不能**提示「刷新后重试」——刷新不会让非法转移变合法。
+ */
+export function applyRagVerification(
+  tenantId: string,
+  sourceId: string,
+  payload: RagVerificationRequest,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagSource> {
+  return requestWithTimeout<RagSource>(
+    `/api/v1/management/sources/${encodeURIComponent(sourceId)}/verification`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * GET /api/v1/management/sources/{sourceId}/documents —— 列出来源的载体。
+ */
+export function listRagDocuments(
+  tenantId: string,
+  sourceId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagDocument[]> {
+  return requestWithTimeout<RagDocument[]>(
+    `/api/v1/management/sources/${encodeURIComponent(sourceId)}/documents`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * GET /api/v1/management/documents/{documentId}/chunks —— 列出文档的片段摘要。
+ *
+ * ⚠️ 后端 limit 上限 500，超出返回 400。
+ */
+export function listRagChunks(
+  tenantId: string,
+  documentId: string,
+  limit = 100,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagChunk[]> {
+  return requestWithTimeout<RagChunk[]>(
+    `/api/v1/management/documents/${encodeURIComponent(documentId)}/chunks${toQuery({
+      limit,
+    })}`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
   )
 }

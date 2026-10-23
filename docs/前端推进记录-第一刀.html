@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>前端结构重设计 · 第一刀推进记录</title>
+<style>
+  :root { --ink:#1f2328; --ink2:#5a6573; --line:#e3e6ea; --brand:#c0392b; --ok:#2e7d32; --bg:#fbfbfa; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); line-height:1.7; }
+  .wrap { max-width:920px; margin:0 auto; padding:40px 28px 80px; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  .sub { color:var(--ink2); margin:0 0 28px; font-size:14px; }
+  h2 { font-size:19px; margin:34px 0 12px; padding-bottom:6px; border-bottom:2px solid var(--line); }
+  .lead { font-size:15px; }
+  .card { border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin:14px 0; background:#fff; }
+  .tag { display:inline-block; font-size:12px; padding:2px 9px; border-radius:20px; background:#f0f1f3; color:var(--ink2); margin-right:6px; }
+  .tag.ok { background:#e7f4e8; color:var(--ok); }
+  code { background:#f3f4f6; padding:1px 6px; border-radius:4px; font-size:13px; }
+  table { width:100%; border-collapse:collapse; margin:10px 0; font-size:14px; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--ink2); font-weight:600; background:#fafafa; }
+  ul { margin:8px 0; padding-left:20px; } li { margin:4px 0; }
+  .ok { color:var(--ok); font-weight:600; }
+  .note { background:#fff8e6; border-left:3px solid #e0a800; padding:10px 14px; border-radius:6px; font-size:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>前端结构重设计 · 第一刀推进记录</h1>
+  <p class="sub">2026-10-23 · 角色分面导航（B1 闭合）+ 两处已确认缺陷修复 · 前后端均已编译/测试通过</p>
+
+  <div class="card">
+    <p class="lead"><b>一句话结论：</b>此前评审发现的根因——<b>登录响应不含 roles 导致导航不分层、RAG 需手填租户</b>——本刀在后端真正闭合（登录一次往返回带 roles），前端据此把导航按角色显隐、顶栏显示身份，并修掉两处会直接报错的缺陷。<b>安全边界仍在后端</b>（执行时重授权），前端角色判定仅作 UI 引导（fail-closed）。</p>
+  </div>
+
+  <h2>① 后端（B1 真正闭合）</h2>
+  <table>
+    <tr><th>文件</th><th>改动</th></tr>
+    <tr><td><code>agent-infrastructure/.../security/AuthenticationService.java</code></td><td><code>AuthResult</code> 新增 <code>roles</code> 字段，取自库登记值 <code>rolesOf(record)</code>（与 JWT 声明同源）。</td></tr>
+    <tr><td><code>agent-api/.../auth/AuthController.java</code></td><td><code>TokenResponse</code> 新增 <code>roles</code> 并透出；登录一次往返即得角色，免去 <code>/api/auth/roles</code> 二次调用（端点保留供续期重校验）。</td></tr>
+  </table>
+  <p class="note">⚠️ <code>/api/auth/roles</code> 在 <code>SecurityConfiguration</code> 中受保护（需 Bearer），前端登录后即可调用，无需改接线。RAG 管理页此前已预填 <code>session.tenantId</code>。</p>
+
+  <h2>② 前端（消费 roles + 修缺陷）</h2>
+  <table>
+    <tr><th>文件</th><th>改动</th></tr>
+    <tr><td><code>api/types.ts</code></td><td><code>LoginResponse</code> 增加 <code>roles?: string[]</code>。</td></tr>
+    <tr><td><code>auth/tokenStorage.ts</code></td><td><code>StoredSession</code> 增加 <code>roles</code> 并持久化/加载（旧会话回落空数组）。</td></tr>
+    <tr><td><code>auth/session.tsx</code></td><td>暴露 <code>roles</code>；<code>signIn</code> 接收 <code>roles</code>。</td></tr>
+    <tr><td><code>pages/LoginPage.tsx</code></td><td>登录后透传 <code>response.roles ?? []</code>。</td></tr>
+    <tr><td><code>auth/RequireRole.tsx</code></td><td>去掉 <code>void area</code> 空操作，改用 <code>hasRoleAccess(session.roles, area)</code> 真实判定。</td></tr>
+    <tr><td><code>layouts/AppShell.tsx</code></td><td>导航按角色显隐（学生/家长/老师仅见「辅导」组）；顶栏身份条显示「角色 + 租户短 ID」。</td></tr>
+    <tr><td><code>App.tsx</code></td><td>移除 <code>/runs</code>、<code>/rag</code> 的 area 守卫（学生侧页面，任何已登录可见，避免生效后被误锁）；新增 <code>/profile</code> 查询路由。</td></tr>
+    <tr><td><code>pages/DashboardPage.tsx</code></td><td>缺陷①：<code>/profile/current</code> 死链 → <code>/profile</code>（输入学号跳转）。</td></tr>
+    <tr><td><code>api/client.ts</code> / <code>features/rag/useRagSearch.ts</code></td><td>缺陷②：<code>generateRagAnswer</code> 增加 <code>tenantId</code> 并透传 <code>X-Tenant-Id</code>；生成调用补传租户（上线即不再 400）。</td></tr>
+    <tr><td><code>pages/rag/RagSearchPage.tsx</code></td><td>B2：检索租户预填 <code>session.tenantId</code>，消除手填 UUID。</td></tr>
+  </table>
+
+  <h2>③ 验证结果</h2>
+  <p><span class="tag ok">前端</span> <code>tsc --noEmit</code> 通过；<code>vitest run</code> <b>346 用例全绿</b>。<br/>
+  <span class="tag ok">后端</span> <code>mvn -o -pl agent-infrastructure,agent-api -am compile</code> 通过；auth 单测（含 <code>AuthControllerRolesTest</code>）通过。</p>
+
+  <h2>④ 下一刀（待续，未做）</h2>
+  <ul>
+    <li><b>B5</b> 真实生成端点（rag 模块当前只暴露检索，生成仍 404/501）。</li>
+    <li><b>B3</b> 学科/年级词表端点（去前端硬编码、防漏召回）。</li>
+    <li><b>B4</b> Worker 真实写入 run_event / steps / weaknesses（当前多处恒空）。</li>
+    <li><b>B6</b> 提供「近期辅导」列表 + 工作台「本设备记录」改用服务端数据。</li>
+    <li>前端打磨：面包屑、审计入口合并、列表组件抽取、把导航重排为「角色分面」四视图（本刀仅按角色显隐，未重排分组）。</li>
+  </ul>
+
+  <div class="card">
+    <p class="lead"><b>是否提交？</b> 本刀改动尚未 git commit。如确认，我可分批提交（后端 B1 一组、前端一组）并在授权后推送。</p>
+  </div>
+</div>
+</body>
+</html>

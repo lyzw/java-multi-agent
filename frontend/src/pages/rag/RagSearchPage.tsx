@@ -19,6 +19,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Sheet, Loading, Empty, ErrorState } from '@/shared/states'
 import { useRagSearch } from '@/features/rag/useRagSearch'
+import { useSession } from '@/auth/session'
 import type {
   RagRetrievalMode,
   RagScopeMode,
@@ -110,7 +111,12 @@ export function RagSearchPage(): JSX.Element {
   //    该函数读会话变量 `app.tenant_id`（只在事务内有效）。跨进程调用时
   //    主平台的事务上下文不随请求而来，故必须由调用方显式携带（X-Tenant-Id）。
   //    缺失时后端返回 400，而不是静默返回空结果。
-  const [tenantId, setTenantId] = useState<string>(() => readStoredTenantId())
+  // ⚠️ B2（2026-10-23）：优先用登录回带的权威 tenantId 预填，消除手填 UUID 的痛苦；
+  //    若用户此前在本机手填过（localStorage 记忆），仍以手填值为准，并允许重新编辑。
+  const { session } = useSession()
+  const [tenantId, setTenantId] = useState<string>(
+    () => session?.tenantId ?? readStoredTenantId(),
+  )
 
   const { retrieval, generation, search, retry } = useRagSearch()
 
@@ -202,8 +208,8 @@ export function RagSearchPage(): JSX.Element {
               autoComplete="off"
             />
             <p className="field__hint">
-              ⚠️ 检索按租户隔离（RLS）：租户由主平台在调用时注入，此处需手填一次，
-              之后本机自动记住。留空将无法检索。
+              ⚠️ 检索按租户隔离（RLS）：已自动填入登录租户，一般无需修改；
+              若与你的教材租户不同，可手动更正。留空将无法检索。
             </p>
           </div>
 

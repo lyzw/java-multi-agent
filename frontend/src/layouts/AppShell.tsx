@@ -3,16 +3,21 @@
  *
  * 顶栏 + 侧栏。侧栏用线与留白分组，不用圆角卡片。
  *
- * ⚠️ 身份不由服务端提供时不伪造（G1）。
+ * ⚠️ 2026-10-23（B1）：导航按登录回带的 `roles` 显隐——
+ *    学生/家长/老师只看到「辅导」组，管理页（配置/治理/运维）按角色出现。
+ *    这只是一层 UI 引导，**不是安全边界**：后端执行时仍按红线 9 重授权。
  */
 
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useSession } from '@/auth/session'
+import { hasRoleAccess } from '@/auth/RequireRole'
 
 interface NavItem {
   to: string
   label: string
+  /** 需要的角色区域；缺省 = 任何已登录用户可见（学生侧页面） */
+  area?: string
 }
 
 interface NavGroup {
@@ -33,34 +38,53 @@ const NAV: NavGroup[] = [
   {
     title: '配置',
     items: [
-      { to: '/config', label: '总览' },
-      { to: '/config/runtime', label: '运行与容量' },
-      { to: '/config/tools', label: '工具与审批' },
-      { to: '/config/compliance', label: '合规与零保留' },
-      { to: '/agents', label: 'Agent 配置' },
+      { to: '/config', label: '总览', area: 'config' },
+      { to: '/config/runtime', label: '运行与容量', area: 'config' },
+      { to: '/config/tools', label: '工具与审批', area: 'config' },
+      { to: '/config/compliance', label: '合规与零保留', area: 'config' },
+      { to: '/agents', label: 'Agent 配置', area: 'agents' },
     ],
   },
   {
     title: '治理',
     items: [
-      { to: '/approvals', label: '审批台' },
-      { to: '/reconciliation', label: '未知操作处置' },
+      { to: '/approvals', label: '审批台', area: 'approvals' },
+      { to: '/reconciliation', label: '未知操作处置', area: 'reconciliation' },
+      // ⚠️ RAG 语料管理属**治理**组而非「辅导」组：
+      //    它的动作是审核与下架（撤回），不是面向学生的检索。
+      { to: '/rag/management', label: '语料管理', area: 'ragManagement' },
     ],
   },
   {
     title: '运维',
     items: [
-      { to: '/audit', label: '审计查询' },
-      { to: '/config/audit', label: '配置变更审计' },
-      { to: '/health', label: '系统健康' },
+      { to: '/audit', label: '审计查询', area: 'audit' },
+      { to: '/config/audit', label: '配置变更审计', area: 'audit' },
+      { to: '/health', label: '系统健康', area: 'health' },
     ],
   },
 ]
 
 export function AppShell(): JSX.Element {
-  const { signOut, expiringSoon } = useSession()
+  const { signOut, expiringSoon, roles, session } = useSession()
   const navigate = useNavigate()
   const [warn, setWarn] = useState(false)
+
+  // ⚠️ 按角色显隐导航项：没有 area 的项（学生侧页面）对所有人可见；
+  //    带 area 的项仅当 hasRoleAccess 通过才显示。安全以后端为准。
+  const visibleNav = NAV.map((group) => ({
+    ...group,
+    items: group.items.filter(
+      (item) => item.area === undefined || hasRoleAccess(roles, item.area),
+    ),
+  })).filter((group) => group.items.length > 0)
+
+  const roleLabel =
+    roles.length > 0 ? roles.join(' · ') : '学生 / 家长 / 老师'
+  const tenantShort =
+    session?.tenantId != null && session.tenantId.length >= 8
+      ? session.tenantId.slice(0, 8)
+      : session?.tenantId ?? '—'
 
   const handleSignOut = (): void => {
     try {
@@ -78,8 +102,11 @@ export function AppShell(): JSX.Element {
       <header className="header">
         <span className="header__brand">错题归因辅导</span>
         <div className="header__right">
-          <span className="header__identity" title="后端登录响应未包含身份信息（G1）">
-            身份未由服务端提供
+          <span
+            className="header__identity"
+            title={`角色来自登录响应；租户 ${session?.tenantId ?? '—'}（仅用于 RAG 等下游调用）`}
+          >
+            角色：{roleLabel} · 租户 {tenantShort}
           </span>
           <button type="button" className="btn btn--quiet" onClick={handleSignOut}>
             退出
@@ -109,7 +136,7 @@ export function AppShell(): JSX.Element {
 
       <div className="shell__body">
         <nav className="nav" aria-label="主导航">
-          {NAV.map((group) => (
+          {visibleNav.map((group) => (
             <div key={group.title} className="nav__group">
               <p className="nav__group-title">{group.title}</p>
               <ul>

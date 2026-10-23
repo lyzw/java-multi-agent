@@ -134,12 +134,18 @@ export function useRagSearch(): UseRagSearchResult {
     const runGeneration = async (hits: RagRetrievalHit[]): Promise<void> => {
       setGeneration({ status: 'loading', answer: null, citations: [], error: null })
       try {
-        const result = await generateRagAnswer({
-          query: payload.query,
-          mode: payload.mode,
-          edition: payload.edition,
-          hitIds: hits.map((h) => h.chunkId),
-        })
+        // ⚠️ B2 修复：生成端点与检索共用 RLS 租户收口，必须透传 X-Tenant-Id，
+        //    否则后端 400。租户取自最近一次检索请求（lastTenantId）。
+        const result = await generateRagAnswer(
+          {
+            query: payload.query,
+            mode: payload.mode,
+            edition: payload.edition,
+            hitIds: hits.map((h) => h.chunkId),
+          },
+          undefined,
+          lastTenantId.current,
+        )
         if (cancelled) return
         setGeneration({
           status: 'success',

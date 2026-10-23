@@ -26,11 +26,28 @@ import {
 export interface SessionState {
   session: StoredSession | null
   authenticated: boolean
+  /** 角色集合（B1）；仅用于导航显隐，非安全边界。 */
+  roles: string[]
   /** 是否处于「即将过期」窗口 */
   expiringSoon: boolean
   /** 登录失效的原因（用于登录页展示提示） */
   expiredNotice: boolean
-  signIn: (accessToken: string, expiresIn: number) => void
+  /**
+   * 建立会话。
+   *
+   * @param accessToken 访问令牌
+   * @param expiresIn 有效期（秒）
+   * @param tenantId 权威租户 ID（供 RAG 管理面构造 X-Tenant-Id 头）
+   * @param principalId 主体 ID（供审核留痕）
+   * @param roles 主体角色集合（B1）；仅用于导航显隐
+   */
+  signIn: (
+    accessToken: string,
+    expiresIn: number,
+    tenantId?: string | null,
+    principalId?: string | null,
+    roles?: string[],
+  ) => void
   signOut: () => void
   /** 由 API 层 401 触发 */
   onUnauthorized: () => void
@@ -99,8 +116,14 @@ export function SessionProvider({ children }: { children: ReactNode }): JSX.Elem
     }
   }, [session])
 
-  const signIn = useCallback((accessToken: string, expiresIn: number) => {
-    const saved = saveSession(accessToken, expiresIn)
+  const signIn = useCallback((
+        accessToken: string,
+        expiresIn: number,
+        tenantId?: string | null,
+        principalId?: string | null,
+        roles?: string[],
+      ) => {
+    const saved = saveSession(accessToken, expiresIn, tenantId, principalId, roles)
     setSession(saved)
     setExpiredNotice(false)
     setExpiringSoon(false)
@@ -124,6 +147,7 @@ export function SessionProvider({ children }: { children: ReactNode }): JSX.Elem
     () => ({
       session,
       authenticated: session !== null && !isExpired(session),
+      roles: session?.roles ?? [],
       expiringSoon,
       expiredNotice,
       signIn,

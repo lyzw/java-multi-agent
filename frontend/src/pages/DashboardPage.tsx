@@ -77,7 +77,7 @@ export function DashboardPage(): JSX.Element {
             </span>
           </Link>
 
-          <Link to="/profile/current" className="entry">
+          <Link to="/profile" className="entry">
             <span>
               <span className="entry__title">学习画像</span>
               <span className="entry__desc">看看哪些知识点反复出错</span>

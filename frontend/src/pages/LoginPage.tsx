@@ -39,7 +39,21 @@ export function LoginPage(): JSX.Element {
     setSubmitting(true)
     try {
       const response = await login({ tenantId, loginName, password })
-      signIn(response.accessToken, response.expiresIn)
+      // ⚠️ 把后端回带的**权威** tenantId / principalId 存入会话（2026-10-22）：
+      //    RAG 管理面需要它们来构造 X-Tenant-Id 头与审核留痕的「决定人」。
+      //    后端认证层本就持有该租户（AuthResult.tenantId），此前未透出，
+      //    导致用户进入 RAG 管理页时只能手填 UUID 且无从填对。
+      //    ⚠️ 优先用**后端回带值**；后端未回带时才回落到用户输入的 tenantId
+      //    （兼容旧后端），但绝不因此报错中断登录。
+      // ⚠️ B1（2026-10-23）：登录响应现含 roles，透传给会话层用于导航显隐。
+      //    旧后端未回带时回落为空数组（不影响登录，安全判定仍由后端执行时重授权）。
+      signIn(
+        response.accessToken,
+        response.expiresIn,
+        response.tenantId ?? tenantId,
+        response.principalId ?? null,
+        response.roles ?? [],
+      )
       const state = location.state as LocationState | null
       navigate(state?.from ?? '/', { replace: true })
     } catch (cause) {
