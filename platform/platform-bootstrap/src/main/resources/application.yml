@@ -325,6 +325,34 @@ config:
     #    （P1 已在 delivery-limit 上踩过该坑）。
     cap-dual-write: "false"
 
+  # ── 平台运维角色（BYPASSRLS · 平台级发布接入点）──────────────────
+  # ⚠️ **这是平台级发布（PLATFORM 作用域）的唯一合法写入通道**：
+  #   cap_config_release / cap_config_pointer / cap_decision_log 的写策略
+  #   只放行「本租户的 TENANT 行」（V15/V17 注释），
+  #   PLATFORM 行必须由带 BYPASSRLS 的平台运维角色写入 ——
+  #   否则**任一租户都能单方面替换全平台生效配置**，那是直接的越权。
+  #
+  # ⚠️ **默认不启用**（enabled=false）：未接入时 PLATFORM 作用域发布
+  #   **明确失败**（PlatformOpsUnavailableException），**不会**静默回落到
+  #   应用角色去写、再被 RLS 拒掉 —— 后者的失败现场是「RLS 策略拒写」，
+  #   离「这个环境没配运维凭据」这一真因极远。
+  #
+  # ⚠️ **enabled=true 但缺 url/username → 拒绝启动**（fail-closed）：
+  #   声明了要用却没给凭据还继续启动，等于「以为平台运维已接入、实际没接入」。
+  #
+  # ⚠️ **凭据刻意与主数据源分开配置**（主数据源用 SPRING_DATASOURCE_*）：
+  #   运维凭据应单独轮换、单独授权、单独审计；
+  #   混在一个配置段里会让「轮换应用口令」顺手把运维口令也换了。
+  platform-ops:
+    datasource:
+      enabled: "${AGENT_PLATFORM_OPS_ENABLED:false}"
+      url: "${AGENT_PLATFORM_OPS_DATASOURCE_URL:}"
+      username: "${AGENT_PLATFORM_OPS_DATASOURCE_USERNAME:}"
+      password: "${AGENT_PLATFORM_OPS_DATASOURCE_PASSWORD:}"
+      # ⚠️ 池很小是刻意的：平台运维通道只服务「平台级发布」这一条低频路径，
+      #    不该占用与主业务池相当的连接额度。
+      max-pool-size: "2"
+
 
 # ── 健康检查（D-001 端到端 / SRE 探针）────────────────────────────
 # ⚠️ 仅暴露 health，最小暴露面；其余端点保持关闭。

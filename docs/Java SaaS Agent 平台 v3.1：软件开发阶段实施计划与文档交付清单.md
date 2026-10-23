@@ -276,6 +276,40 @@ P0 需求/范围/验收基线
 - 跨租户数据、事件、缓存和文件访问测试通过。
 - 复杂补偿状态不作为 MVP 必备；首期以 UNKNOWN、对账和受控人工处置为主，除非业务场景另行批准补偿设计。
 
+#### 附：W-PERM「统一配置与权限管控」切片证据映射（本段为追加，不改动上列门禁本身）
+
+> **依据**：`docs/统一配置与权限管控体系_开发计划/00_完整开发计划.md` §「与整体平台计划的关系」——
+> 「W-PERM-P6 冻结结论应回写整体平台计划 P3 门禁，作为平台进入 P4（企业集成与生产化）的前置证据之一。
+> 冻结未达成时，平台 P4 不得依赖本体系的生产就绪状态。」
+>
+> **本段只登记证据与结论，不替代上列门禁**：P3 门禁的判定权仍在 P3-D07/D08/D09 的评审与抽检，
+> 此处提供的是「权限管控切片已产出可核对证据」的指向。
+
+| W-PERM 切片门槛（设计文档 §8.3） | 结论 | 可核对证据（机器可验证） |
+|---|---|---|
+| **功能门槛**：§9 行为表 24 行全绿（四字段 + 原因码逐条比对） | ✅ 达成 | `Section9ScenarioCoverageTest`（8 项，**直接解析设计文档 §9 表格**，期望四字段不写死在代码里） |
+| **功能门槛**：§9.2 不变量与故障注入 13 行全绿 | ✅ 达成 | `Section9ScenarioRegistry`（13 条）+ `FreezeGateEvidenceTest`（3 项） |
+| **安全门槛**：防绕过 0（静态扫描 / 架构包边界 / 运行时注入 / 上游执行 四层） | ✅ 达成 | `ToolBypassArchitectureTest`（9 项）+ `ToolGateAuthorizationContextTest` + `RunExecutionLoopTest` + `AgentCorePurityTest` |
+| **安全门槛**：RLS 跨租户隔离（**非特权角色** `app_agent` 验证） | ✅ 达成 | `CapRepositoryIT#rlsIsolatesAllTenantTables` 等 13 条 IT + `ConfigPublishIT#tenantCannotPublishPlatformScope` + `PlatformOpsPublishIT#appRoleStillCannotPublishPlatformScope` |
+| **安全门槛**：fail-closed 全场景（未知风险 / 存储不可用） | ✅ 达成 | `InvocationValidatorIT#unreachableAuthzStoreFailsClosed`（**真实不可达端口**）+ `InvocationValidatorTest#unknownRiskIsDeniedWithDedicatedCode` |
+| **工程门槛**：需求级状态可追溯（§10 七态） | ✅ 达成 | `docs/统一配置与权限管控体系_开发计划/P6_需求追踪终态矩阵.md`（证据路径机器可核对，Demo≠平台分列） |
+| **硬约束**：平台级发布须由平台运维角色（BYPASSRLS）写入 | ✅ 达成（2026-10-23） | `PlatformOpsPublishIT`（9 项，真实 PG + **专用** `NOSUPERUSER + BYPASSRLS` 角色）+ `PlatformOpsDataSourceArchitectureTest`（5 项）+ `PlatformOpsDataSourceProviderTest`（8 项） |
+
+**切片冻结结论**：**M6「V1 冻结候选」，带 12 项已登记限制**（见 `docs/统一配置与权限管控体系_开发计划/P6_V1冻结判定报告.md` §6）。
+
+- 限制 6（**平台运维角色凭据接入点未落地**）——原为**上线阻塞项** —— 已由 **W-PERM-P6R1** 消解，
+  证据与接入步骤见 `docs/统一配置与权限管控体系_开发计划/P6R1_平台运维角色接入说明.md`。
+  ⚠️ **代码与机制已就位，但目标环境的运维凭据仍需运维方配置**；
+  未配置时平台级发布**明确失败**（fail-closed），**不会**静默降级。
+- 其余 11 项限制均已如实登记（性能压测、模块依赖方向测试、部分场景的 IT 层覆盖等），
+  **不阻塞**本门禁，但**不得**在对外材料中声称「性能达标」或「全量 IT 覆盖」。
+
+> ⚠️ **对平台 P4 的影响**：本体系已达到「冻结候选」并具备可核对证据，
+> 故平台 P4 **可以**在**不依赖本体系的生产就绪状态**的前提下推进。
+> 但平台级配置发布能力**须待 P6R1 的运维凭据在目标环境就位后方可启用**；
+> 在此之前，平台级配置变更**无合法写入通道**（这是设计意图，不是缺陷）。
+
+
 ---
 
 ## 7. P4：企业集成与生产化（第 13–16 周）

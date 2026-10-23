@@ -850,6 +850,7 @@ public class ApplicationConfiguration {
      */
     @Bean
     public cn.studykid.multiagent.application.cap.ConfigPublishService configPublishService(
+            @org.springframework.beans.factory.annotation.Qualifier("configPublishTransaction")
             cn.studykid.multiagent.ports.persistence.ConfigPublishTransaction tx,
             cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
             cn.studykid.multiagent.ports.persistence.ConfigReleasePort releases,
@@ -862,6 +863,58 @@ public class ApplicationConfiguration {
             java.time.Clock clock) {
         return new cn.studykid.multiagent.application.cap.ConfigPublishService(
                 tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate, clock);
+    }
+
+    /**
+     * 平台运维角色的发布事务（P6R1 · 上线阻塞项的接入点）。
+     *
+     * <p>⚠️ <b>刻意与 {@link #configPublishTransaction} 分开</b>：
+     * 前者用应用角色连接（PLATFORM 作用域写入会被 RLS 拒写 = 刻意的隔离），
+     * 本者用平台运维角色连接（BYPASSRLS，是唯一能写 PLATFORM 行的通道）。
+     *
+     * <p>⚠️ <b>不得合并为「按 scope 自动选池」</b>：
+     * 那会让「调用方把 scope 写成 PLATFORM」等价于「拿到运维凭据」，
+     * 把 DB 层的越权防线降级成应用层的一行判断。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ConfigPublishTransaction
+            platformOpsPublishTransaction(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
+                    platformOps) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcPlatformOpsConfigPublishTransaction(platformOps);
+    }
+
+    /**
+     * 平台运维角色的发布入口（P6R1）。
+     *
+     * <p>⚠️ <b>本 Bean 是运维凭据的唯一可达路径</b>，且<b>只接受 PLATFORM 作用域</b>。
+     *
+     * <p>⚠️ <b>接入前置条件（硬性）</b>：
+     * 调用方必须已完成<b>平台运维身份认证</b>。
+     * 本服务只负责「用哪条数据库通道写」，不负责「谁有资格发平台级配置」——
+     * 当前仓库尚未接入任何管理端点（P6 登记限制 7），
+     * 故本 Bean 暂无生产调用方，这是<b>刻意</b>的：
+     * 先有凭据通道，再有认证，二者不可颠倒。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.PlatformOpsPublishService
+            platformOpsPublishService(
+            @org.springframework.beans.factory.annotation.Qualifier("platformOpsPublishTransaction")
+            cn.studykid.multiagent.ports.persistence.ConfigPublishTransaction
+                    platformOpsPublishTransaction,
+            cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
+            cn.studykid.multiagent.ports.persistence.ConfigReleasePort releases,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.ports.persistence.CapSkillDefPort skillDefs,
+            cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort serverDefs,
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            cn.studykid.multiagent.ports.persistence.DecisionAuditPort audit,
+            cn.studykid.multiagent.application.cap.ConfigValidationGate gate,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.cap.PlatformOpsPublishService(
+                platformOpsPublishTransaction, pointers, releases, toolDefs, skillDefs,
+                serverDefs, agentDefs, audit, gate, clock);
     }
 
     /**

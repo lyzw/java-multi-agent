@@ -24,6 +24,12 @@ import cn.studykid.multiagent.ports.persistence.ConfigPublishTransaction;
  * <p>⚠️ <b>RLS 前置条件</b>：
  * 租户上下文必须在事务内、且在任何业务 SQL 之前绑定。
  * PLATFORM 作用域绑定零 UUID 哨兵（合法 UUID，且不对应任何真实租户）。
+ *
+ * <p>⚠️ <b>本实现只用应用角色连接，PLATFORM 作用域写入会被 RLS 拒绝</b> ——
+ * 这是<b>刻意的隔离</b>，不是缺陷：写策略只放行「本租户的 TENANT 行」，
+ * 任一租户能改写全局当前指针 = 任一租户单方面替换全平台生效配置。
+ * 平台级发布必须走 {@link JdbcPlatformOpsConfigPublishTransaction}
+ * （平台运维角色，BYPASSRLS）—— 那是一条<b>独立且显式</b>的通道。
  */
 public class JdbcConfigPublishTransaction implements ConfigPublishTransaction {
 
