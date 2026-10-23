@@ -1,18 +1,61 @@
 /**
- * 工作台（FE-D3 / B6）。
+ * 工作台（演进重做 · 保留真实数据接线）
  *
- * ⚠️ 改为消费真实列表端点（GET /api/runs，P4-D13 / G7 · FE-01 §P7 检索台）：
- * 此前用 sessionStorage 冒充「本设备记录」是静默误导——且**无人写入**，永远为空。
- * 现直接拉取本租户近期辅导（最多 10 条），与后端 RunListController 对齐。
+ * 数据仍来自 GET /api/runs（P4-D13 / G7）。演进只改观感与操作习惯：
+ *   · 快捷入口改为图标动作卡（扫读更快、点击目标更大）；
+ *   · 近期辅导改为带状态药丸的表格；
+ * ⛔ 不编造统计数字（无真实指标源）。
  */
 
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useSession } from '@/auth/session'
-import { Empty, Sheet, Loading, ErrorState } from '@/shared/states'
+import { Empty, Loading, ErrorState } from '@/shared/states'
 import { listRuns, ApiError } from '@/api/client'
 import type { RunListItem } from '@/api/types'
 import type { NormalizedError } from '@/api/errors'
+import { PageHead, Panel, StatusPill, type PillTone } from '@/components/ui'
+import { Icon } from '@/components/Icon'
+
+/** 运行状态 → 中文标签（取值与 run_state 枚举一致，无 UNKNOWN）。 */
+const STATE_LABELS: Record<string, string> = {
+  QUEUED: '排队中',
+  RUNNING: '分析中',
+  CANCELLED: '已取消',
+  SUCCEEDED: '已完成',
+  FAILED: '失败',
+  TIMED_OUT: '超时',
+}
+
+/** 运行状态 → 药丸色调（低饱和，语义色仅 success/danger）。 */
+function stateTone(state: string): PillTone {
+  if (state === 'SUCCEEDED') return 'success'
+  if (state === 'FAILED' || state === 'TIMED_OUT') return 'danger'
+  if (state === 'RUNNING') return 'info'
+  return 'neutral'
+}
+
+interface ActionCardProps {
+  to: string
+  icon: Parameters<typeof Icon>[0]['name']
+  title: string
+  desc: string
+}
+
+function ActionCard({ to, icon, title, desc }: ActionCardProps): JSX.Element {
+  return (
+    <Link to={to} className="action">
+      <span className="action__icon">
+        <Icon name={icon} />
+      </span>
+      <span className="action__body">
+        <span className="action__title">{title}</span>
+        <span className="action__desc">{desc}</span>
+      </span>
+      <Icon name="chevron" className="action__go" />
+    </Link>
+  )
+}
 
 export function DashboardPage(): JSX.Element {
   const { session } = useSession()
@@ -40,50 +83,59 @@ export function DashboardPage(): JSX.Element {
 
   return (
     <>
-      <div className="main__head">
-        <h1>工作台</h1>
-        <p className="main__lead">从一道做错的题开始，看它错在哪一步。</p>
-      </div>
-
-      <Sheet title="开始">
-        {/*
-          ⛔ 不用卡片网格（AI 默认：等圆角 + 同一套阴影）。
-          用线分隔的列表 —— 更像一张目录，安静且信息密度高。
-        */}
-        <div className="entry-list">
-          <Link to="/runs/new" className="entry">
-            <span>
-              <span className="entry__title">发起辅导</span>
-              <span className="entry__desc">提交一道做错的题，找出原因并给出正确步骤</span>
-            </span>
-            <span className="entry__arrow" aria-hidden="true">
-              →
-            </span>
+      <PageHead
+        title="工作台"
+        lead="从一道做错的题开始，看它错在哪一步。"
+        actions={
+          <Link to="/runs/new" className="btn">
+            <Icon name="plus" />
+            发起辅导
           </Link>
+        }
+      />
 
-          <Link to="/runs" className="entry">
-            <span>
-              <span className="entry__title">检索记录</span>
-              <span className="entry__desc">按状态、学科、时间查找分析过的题</span>
-            </span>
-            <span className="entry__arrow" aria-hidden="true">
-              →
-            </span>
-          </Link>
-
-          <Link to="/profile" className="entry">
-            <span>
-              <span className="entry__title">学习画像</span>
-              <span className="entry__desc">看看哪些知识点反复出错</span>
-            </span>
-            <span className="entry__arrow" aria-hidden="true">
-              →
-            </span>
-          </Link>
+      <Panel title="开始" icon="dashboard">
+        <div className="action-grid">
+          <ActionCard
+            to="/runs/new"
+            icon="plus"
+            title="发起辅导"
+            desc="提交一道做错的题，找出原因并给出正确步骤"
+          />
+          <ActionCard
+            to="/runs"
+            icon="search"
+            title="检索记录"
+            desc="按状态、学科、时间查找分析过的题"
+          />
+          <ActionCard
+            to="/rag"
+            icon="book"
+            title="知识检索"
+            desc="从教材语料检索可溯源的讲解与出处"
+          />
+          <ActionCard
+            to="/profile"
+            icon="profile"
+            title="学习画像"
+            desc="看看哪些知识点反复出错"
+          />
+          {/*
+            ⚠️ 报表中心入口：**独立成页**而非内嵌工作台。
+               工作台是「今天要做什么」，报表是「一段时间里发生了什么」——
+               两者时间尺度不同，塞在一起会让工作台被图表淹没。
+               入口放在这里，是为了让「想看统计」的人不必猜菜单在哪。
+          */}
+          <ActionCard
+            to="/reports"
+            icon="activity"
+            title="报表中心"
+            desc="按天看辅导、错题、检索与语料导入的汇总"
+          />
         </div>
-      </Sheet>
+      </Panel>
 
-      <Sheet title="近期辅导" note="本账号在本租户下最近的分析记录（最多 10 条）。">
+      <Panel title="近期辅导" icon="clock" note="本账号在本租户下最近的分析记录（最多 10 条）。">
         {loading ? (
           <Loading label="加载中…" />
         ) : loadError !== null ? (
@@ -99,23 +151,38 @@ export function DashboardPage(): JSX.Element {
             }
           />
         ) : (
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {runs.map((run) => (
-              <li key={run.runId} className="entry">
-                <span>
-                  <Link to={`/runs/${run.runId}`} className="entry__title">
-                    查看分析进度
-                  </Link>
-                  <span className="entry__desc mono">{run.runId}</span>
-                </span>
-                <span className="muted">
-                  {new Date(run.createdAt).toLocaleString('zh-CN')} · {run.state}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">运行标识</th>
+                  <th scope="col">状态</th>
+                  <th scope="col">发起时间</th>
+                  <th scope="col">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((run) => (
+                  <tr key={run.runId}>
+                    <td className="mono">{run.runId}</td>
+                    <td>
+                      <StatusPill tone={stateTone(run.state)}>
+                        {STATE_LABELS[run.state] ?? run.state}
+                      </StatusPill>
+                    </td>
+                    <td>{new Date(run.createdAt).toLocaleString('zh-CN')}</td>
+                    <td>
+                      <Link to={`/runs/${run.runId}`} className="btn btn--quiet">
+                        查看进度
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-      </Sheet>
+      </Panel>
 
       {session !== null ? (
         <p className="muted">登录状态由服务端控制，有效期到后会要求重新登录。</p>

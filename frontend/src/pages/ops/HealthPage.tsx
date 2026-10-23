@@ -8,7 +8,9 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Sheet, Marked, Unavailable, Loading } from '@/shared/states'
+import { Marked, Unavailable, Loading } from '@/shared/states'
+import { PageHead, Panel, StatusPill } from '@/components/ui'
+import { Icon } from '@/components/Icon'
 
 interface HealthState {
   status: 'UP' | 'DOWN'
@@ -66,41 +68,42 @@ export function HealthPage(): JSX.Element {
 
   return (
     <>
-      <div className="main__head">
-        <h1>系统健康</h1>
-        <p className="main__lead">检查后端是否在运行。</p>
-      </div>
+      <PageHead title="系统健康" lead="检查后端是否在运行。" />
 
-      <Sheet title="当前状态">
+      <Panel
+        title="当前状态"
+        icon="activity"
+        actions={
+          health !== null ? (
+            <button type="button" className="btn btn--quiet" onClick={() => void check()} disabled={checking}>
+              <Icon name="refresh" />
+              {checking ? '检测中…' : '重新检测'}
+            </button>
+          ) : null
+        }
+      >
         {checking && health === null ? (
           <Loading label="正在检测" />
         ) : (
-          <>
-            <div className="status-line" style={{ gap: 'var(--s-4)', marginBottom: 'var(--s-3)' }}>
-              <span className="muted">状态</span>
-              {health?.status === 'UP' ? (
-                <span className="chip chip--settled">正常</span>
-              ) : (
-                <span className="chip chip--mark">异常</span>
-              )}
+          <div className="status-line" style={{ gap: 'var(--s-4)', flexWrap: 'wrap' }}>
+            {health?.status === 'UP' ? (
+              <StatusPill tone="success">正常</StatusPill>
+            ) : (
+              <StatusPill tone="danger">异常</StatusPill>
+            )}
 
-              <span className="muted">响应码</span>
-              <code>{health?.httpStatus ?? '—'}</code>
+            <span className="muted">响应码</span>
+            <code>{health?.httpStatus ?? '—'}</code>
 
-              <span className="muted">检测时间</span>
-              <time className="muted">
-                {health !== undefined && health !== null
-                  ? new Date(health.checkedAt).toLocaleString('zh-CN')
-                  : '—'}
-              </time>
-            </div>
-
-            <button type="button" className="btn btn--quiet" onClick={() => void check()} disabled={checking}>
-              {checking ? '检测中…' : '重新检测'}
-            </button>
-          </>
+            <span className="muted">检测时间</span>
+            <time className="muted">
+              {health !== undefined && health !== null
+                ? new Date(health.checkedAt).toLocaleString('zh-CN')
+                : '—'}
+            </time>
+          </div>
         )}
-      </Sheet>
+      </Panel>
 
       {health !== null && health.status === 'DOWN' ? (
         <Marked label="后端没有正常响应" tone="error">
@@ -123,12 +126,12 @@ export function HealthPage(): JSX.Element {
           ⛔ 刻意不画组件级健康表（数据库/队列/磁盘）：
           后端未暴露该数据。硬画一张表只能填假数据。
         */}
-        <Sheet title="组件明细">
+        <Panel title="组件明细" icon="layers">
           <p className="muted" style={{ margin: 0 }}>
             数据库、消息队列、磁盘这些明细现在看不到，
             后端没有通过健康检查接口暴露。
           </p>
-        </Sheet>
+        </Panel>
       </Unavailable>
     </>
   )

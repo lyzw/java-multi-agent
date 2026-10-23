@@ -23,6 +23,8 @@ import {
 import { scanForm, hasViolation, type Violation } from '@/features/compliance/scan'
 import { Field } from '@/shared/Field'
 import { ErrorView } from '@/shared/ErrorView'
+import { PageHead, Panel } from '@/components/ui'
+import { Icon } from '@/components/Icon'
 
 /**
  * ⚠️ agentId 为占位配置。
@@ -171,95 +173,99 @@ export function NewRunPage(): JSX.Element {
         违反 HTML 规范（一个文档只有一个主内容区）。
         已按 FE-D3 §3.1 迁移为 main__head 结构（F-16）。
       */}
-      <div className="main__head">
-        <h1>发起辅导</h1>
-        <p className="main__lead">
-          请提交一道错题。我们只采集随机匿名编号、年级、学科与解题过程，
-          不会收集姓名、学校、班级等身份信息。
-        </p>
-      </div>
+      <PageHead
+        title="发起辅导"
+        lead="请提交一道错题。我们只采集随机匿名编号、年级、学科与解题过程，不会收集姓名、学校、班级等身份信息。"
+      />
 
-      <form onSubmit={(e) => void handleSubmit(e)} noValidate>
-        <Field
-          name="studentId"
-          label="学生匿名编号"
-          required
-          value={form.studentId}
-          onChange={update('studentId')}
-          violations={violations['studentId']}
-          hint="请填写平台生成的匿名编号，不要填姓名"
-        />
+      <Panel title="错题信息" icon="file">
+        <form onSubmit={(e) => void handleSubmit(e)} noValidate>
+          <Field
+            name="studentId"
+            label="学生匿名编号"
+            required
+            value={form.studentId}
+            onChange={update('studentId')}
+            violations={violations['studentId']}
+            hint="请填写平台生成的匿名编号，不要填姓名"
+          />
 
-        <div className="field">
-          <label htmlFor="subject">
-            学科<span aria-hidden="true"> *</span>
-          </label>
-          <select
-            id="subject"
-            name="subject"
-            value={form.subject}
-            onChange={(e) => update('subject')(e.target.value)}
-          >
-            {subjects.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </div>
+          <div className="toolbar">
+            <div className="field" style={{ minWidth: 160 }}>
+              <label htmlFor="subject">
+                学科<span aria-hidden="true"> *</span>
+              </label>
+              <select
+                id="subject"
+                name="subject"
+                value={form.subject}
+                onChange={(e) => update('subject')(e.target.value)}
+              >
+                {subjects.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <div className="field">
-          <label htmlFor="grade">
-            年级<span aria-hidden="true"> *</span>
-          </label>
-          <select
-            id="grade"
-            name="grade"
-            value={form.grade}
-            onChange={(e) => update('grade')(e.target.value)}
-          >
-            {grades.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </div>
+            <div className="field" style={{ minWidth: 160 }}>
+              <label htmlFor="grade">
+                年级<span aria-hidden="true"> *</span>
+              </label>
+              <select
+                id="grade"
+                name="grade"
+                value={form.grade}
+                onChange={(e) => update('grade')(e.target.value)}
+              >
+                {grades.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-        <Field
-          name="questionText"
-          label="题目内容"
-          required
-          multiline
-          value={form.questionText}
-          onChange={update('questionText')}
-          violations={violations['questionText']}
-        />
+          <Field
+            name="questionText"
+            label="题目内容"
+            required
+            multiline
+            value={form.questionText}
+            onChange={update('questionText')}
+            violations={violations['questionText']}
+          />
 
-        <Field
-          name="studentSolution"
-          label="我的解题过程"
-          required
-          multiline
-          value={form.studentSolution}
-          onChange={update('studentSolution')}
-          violations={violations['studentSolution']}
-        />
+          <Field
+            name="studentSolution"
+            label="我的解题过程"
+            required
+            multiline
+            value={form.studentSolution}
+            onChange={update('studentSolution')}
+            violations={violations['studentSolution']}
+          />
 
-        <Field
-          name="correctAnswer"
-          label="已知正确答案"
-          required
-          multiline
-          value={form.correctAnswer}
-          onChange={update('correctAnswer')}
-          violations={violations['correctAnswer']}
-        />
+          <Field
+            name="correctAnswer"
+            label="已知正确答案"
+            required
+            multiline
+            value={form.correctAnswer}
+            onChange={update('correctAnswer')}
+            violations={violations['correctAnswer']}
+          />
 
-        <button type="submit" disabled={submitting || !isComplete}>
-          {submitting ? '提交中…' : '开始分析'}
-        </button>
-      </form>
+          <div className="btn-row">
+            <button type="submit" className="btn btn--lg" disabled={submitting || !isComplete}>
+              <Icon name="arrow" />
+              {submitting ? '提交中…' : '开始分析'}
+            </button>
+          </div>
+        </form>
+      </Panel>
 
       {error !== null ? <ErrorView error={error} /> : null}
     </>

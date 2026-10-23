@@ -20,6 +20,7 @@ import { useConfigOverrides } from '@/features/config/useConfigOverrides'
 import { ConfigOverrideRow } from '@/features/config/ConfigOverrideRow'
 import { useGovernancePage } from '@/features/governance/useGovernancePage'
 import { listAgents, createAgent, publishAgentVersion } from '@/api/client'
+import { PageHead, StatusPill } from '@/components/ui'
 import type {
   ConfigEntry,
   ConfigResponse,
@@ -65,9 +66,9 @@ const TOOLS_WRITABLE_KEYS = [
  */
 function EffectiveChip({ effective }: { effective: boolean }): JSX.Element {
   return effective ? (
-    <span className="chip chip--settled">已接入</span>
+    <StatusPill tone="success">已接入</StatusPill>
   ) : (
-    <span className="chip">仅声明未接入</span>
+    <StatusPill tone="neutral">仅声明未接入</StatusPill>
   )
 }
 
@@ -155,10 +156,7 @@ export function ConfigOverviewPage(): JSX.Element {
   const { config, loading, error, reload } = useConfig()
   return (
     <>
-      <div className="main__head">
-        <h1>配置总览</h1>
-        <p className="main__lead">系统各项配置，以及它们是否真正接入了运行时。</p>
-      </div>
+      <PageHead title="配置总览" lead="系统各项配置，以及它们是否真正接入了运行时。" />
 
       <Marked label="这里看到的是配置声明值">
         <p style={{ margin: 0 }}>
@@ -178,10 +176,7 @@ export function ConfigRuntimePage(): JSX.Element {
   const { config, loading, error, reload } = useConfig()
   return (
     <>
-      <div className="main__head">
-        <h1>运行与容量</h1>
-        <p className="main__lead">并发、限流、背压与 Worker 的声明配置。</p>
-      </div>
+      <PageHead title="运行与容量" lead="并发、限流、背压与 Worker 的声明配置。" />
 
       <Marked label="这里只是声明值">
         <p style={{ margin: 0 }}>
@@ -212,10 +207,7 @@ export function ConfigToolsPage(): JSX.Element {
   const { config, loading, error, reload } = useConfig()
   return (
     <>
-      <div className="main__head">
-        <h1>工具与审批</h1>
-        <p className="main__lead">系统能调用哪些工具，各自的分级与审批口径。</p>
-      </div>
+      <PageHead title="工具与审批" lead="系统能调用哪些工具，各自的分级与审批口径。" />
 
       <Marked label="有一条规则不能调松">
         <p style={{ margin: 0 }}>
@@ -332,9 +324,9 @@ function WritableConfigTable({
 /* ── P17 合规与零保留 ────────────────────────────────── */
 
 function ProviderStatusChip({ status }: { status: string }): JSX.Element {
-  if (status === 'CONFIRMED') return <span className="chip chip--settled">已确认</span>
-  if (status === 'PENDING') return <span className="chip chip--mark">待确认</span>
-  return <span className="chip">{status}</span>
+  if (status === 'CONFIRMED') return <StatusPill tone="success">已确认</StatusPill>
+  if (status === 'PENDING') return <StatusPill tone="warn">待确认</StatusPill>
+  return <StatusPill tone="neutral">{status}</StatusPill>
 }
 
 function ComplianceBody({ config }: { config: ConfigResponse }): JSX.Element {
@@ -400,10 +392,7 @@ export function ConfigCompliancePage(): JSX.Element {
   const { config, error, reload } = useConfig()
   return (
     <>
-      <div className="main__head">
-        <h1>合规与零保留</h1>
-        <p className="main__lead">哪些模型供应商承诺不留存对话内容，以及当前是否真生效。</p>
-      </div>
+      <PageHead title="合规与零保留" lead="哪些模型供应商承诺不留存对话内容，以及当前是否真生效。" />
 
       {config === null && error !== null ? (
         <ErrorState reason={error} next="可以稍后重试" onRetry={reload} />
@@ -488,16 +477,15 @@ export function AgentsPage(): JSX.Element {
 
   return (
     <>
-      <div className="main__head">
-        <h1>Agent 配置</h1>
-        <p className="main__lead">定义分析流程用的智能体。</p>
-      </div>
-
-      <div className="status-line">
-        <button type="button" onClick={() => setCreating((v) => !v)}>
-          {creating ? '取消新建' : '新建 Agent'}
-        </button>
-      </div>
+      <PageHead
+        title="Agent 配置"
+        lead="定义分析流程用的智能体。"
+        actions={
+          <button type="button" className="btn" onClick={() => setCreating((v) => !v)}>
+            {creating ? '取消新建' : '新建 Agent'}
+          </button>
+        }
+      />
 
       {creating ? (
         <Sheet title="新建 Agent">

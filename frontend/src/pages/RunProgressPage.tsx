@@ -25,6 +25,8 @@ import { useRunStatus } from '@/features/run/useRunStatus'
 import { stateLabel, stateTone, stateHint, isTerminalState } from '@/features/run/runState'
 import { useSession } from '@/auth/session'
 import { Unavailable, Breadcrumbs } from '@/shared/states'
+import { PageHead } from '@/components/ui'
+import { Icon } from '@/components/Icon'
 
 function formatTime(iso: string): string {
   if (iso.length === 0) return ''
@@ -113,14 +115,10 @@ export function RunProgressPage(): JSX.Element {
     return (
       <>
         <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '分析进度' }]} />
-        <div className="main__head">
-          <h1>分析进度</h1>
-        </div>
+        <PageHead title="分析进度" />
         {/*
           ⚠️ 这里曾是 NotAvailable（shared/ErrorView.tsx）。
           FE-D2 §2.1 已决策「DataUnavailable 取代散落的 NotAvailable」，
-          理由：一致性本身就是信息 —— 两套未开放表达会让用户无法判断
-          哪些功能能用、哪些在开发中，更无法得知由谁承接（F-18）。
           NotAvailable 不带 blockedBy / eta，进度页改用 Unavailable 后可追溯缺口编号。
         */}
         <Unavailable
@@ -128,8 +126,6 @@ export function RunProgressPage(): JSX.Element {
           blockedBy="G3"
           reason="缺少运行标识，无法定位该次辅导"
         />
-        {/* ⚠️ 此处仍标注 G3：缺的是**运行标识**（前端入参），
-            不是后端端点缺失（G3 已由 P4-D09 关闭）。 */}
       </>
     )
   }
@@ -140,17 +136,14 @@ export function RunProgressPage(): JSX.Element {
   return (
     <>
       <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '分析进度' }]} />
-      {/*
-        ⚠️ 这里曾是 <main className="run-progress"> ——
-        AppShell 已渲染 <main className="main">，main 嵌套 main
-        违反 HTML 规范（一个文档只有一个主内容区），
-        屏幕阅读器会把它当作第二个主内容区。
-        已按 FE-D3 §3.1 迁移为 main__head 结构（F-16）。
-      */}
-      <div className="main__head">
-        <h1>分析进度</h1>
-        <p className="main__lead">运行标识：<code>{runId}</code></p>
-      </div>
+      <PageHead
+        title="分析进度"
+        lead={
+          <>
+            运行标识：<code>{runId}</code>
+          </>
+        }
+      />
 
       {/* 状态区 */}
       <section className={`status status--${tone}`} aria-live="polite">
@@ -233,7 +226,8 @@ export function RunProgressPage(): JSX.Element {
       */}
       {statusDone && status?.state === 'SUCCEEDED' ? (
         <p style={{ marginTop: 'var(--s-5)' }}>
-          <Link to={`/runs/${encodeURIComponent(runId)}/result`} className="btn">
+          <Link to={`/runs/${encodeURIComponent(runId)}/result`} className="btn btn--lg">
+            <Icon name="arrow" />
             查看归因结果
           </Link>
         </p>

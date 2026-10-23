@@ -22,6 +22,8 @@ import { useParams, Link } from 'react-router-dom'
 import { Sheet, Empty, Loading, ErrorState, Breadcrumbs } from '@/shared/states'
 import { scanText } from '@/features/compliance/scan'
 import { useRunResult } from '@/features/run/useRunResult'
+import { PageHead, StatusPill } from '@/components/ui'
+import { Icon } from '@/components/Icon'
 
 /**
  * ⛔ C6 的实现：渲染前的敏感词兜底扫描。
@@ -56,9 +58,7 @@ export function RunResultPage(): JSX.Element {
     return (
       <>
         <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '归因结果' }]} />
-        <div className="main__head">
-          <h1>归因结果</h1>
-        </div>
+        <PageHead title="归因结果" />
         <Loading label="正在读取结果" />
       </>
     )
@@ -68,12 +68,14 @@ export function RunResultPage(): JSX.Element {
     return (
       <>
         <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '归因结果' }]} />
-        <div className="main__head">
-          <h1>归因结果</h1>
-          <p className="main__lead">
-            运行标识 <code>{runId ?? '缺失'}</code>
-          </p>
-        </div>
+        <PageHead
+          title="归因结果"
+          lead={
+            <>
+              运行标识 <code>{runId ?? '缺失'}</code>
+            </>
+          }
+        />
         {/* ⛔ 错误页**不得**露出任何编造内容占位 */}
         <ErrorState
           reason={error}
@@ -88,9 +90,7 @@ export function RunResultPage(): JSX.Element {
     return (
       <>
         <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '归因结果' }]} />
-        <div className="main__head">
-          <h1>归因结果</h1>
-        </div>
+        <PageHead title="归因结果" />
         <ErrorState reason="没有读到这次运行的结果。" next="请重新发起一次辅导。" />
       </>
     )
@@ -103,12 +103,14 @@ export function RunResultPage(): JSX.Element {
   return (
     <>
       <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '归因结果' }]} />
-      <div className="main__head">
-        <h1>归因结果</h1>
-        <p className="main__lead">
-          运行标识 <code>{result.runId}</code>
-        </p>
-      </div>
+      <PageHead
+        title="归因结果"
+        lead={
+          <>
+            运行标识 <code>{result.runId}</code>
+          </>
+        }
+      />
 
       {leakedFields.length > 0 ? (
         <div className="marked" role="alert">
@@ -119,8 +121,17 @@ export function RunResultPage(): JSX.Element {
 
       {/* 状态行：真实状态，不编造 */}
       <div className="status-line" style={{ flexWrap: 'wrap', gap: 12 }}>
-        <span className="muted">状态</span>
-        <span className={isTerminal ? 'chip chip--settled' : 'chip'}>{result.state}</span>
+        <StatusPill
+          tone={
+            result.state === 'SUCCEEDED'
+              ? 'success'
+              : result.state === 'FAILED' || result.state === 'TIMED_OUT'
+                ? 'danger'
+                : 'info'
+          }
+        >
+          {result.state}
+        </StatusPill>
         {result.errorCode !== null ? (
           <>
             <span className="muted">原因码</span>
@@ -263,7 +274,8 @@ export function RunResultPage(): JSX.Element {
       */}
 
       <p style={{ marginTop: 'var(--s-5)' }}>
-        <Link to="/runs/new" className="btn">
+        <Link to="/runs/new" className="btn btn--lg">
+          <Icon name="plus" />
           再辅导一道
         </Link>
       </p>

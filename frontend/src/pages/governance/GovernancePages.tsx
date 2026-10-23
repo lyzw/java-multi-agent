@@ -24,6 +24,7 @@ import {
   queryAudit,
 } from '@/api/client'
 import { useGovernancePage } from '@/features/governance/useGovernancePage'
+import { PageHead, Panel, Toolbar } from '@/components/ui'
 import type {
   ApprovalItem,
   OperationItem,
@@ -93,30 +94,29 @@ export function ApprovalsPage(): JSX.Element {
 
   return (
     <>
-      <div className="main__head">
-        <h1>审批台</h1>
-        <p className="main__lead">等着你确认才能执行的操作。</p>
-      </div>
+      <PageHead title="审批台" lead="等着你确认才能执行的操作。" />
 
-      <div className="sheet">
-        <div className="field" style={{ margin: 0, minWidth: 200 }}>
-          <label htmlFor="a-state">审批状态</label>
-          <select
-            id="a-state"
-            value={state}
-            onChange={(e) => {
-              setState(e.target.value)
-              reset()
-            }}
-          >
-            {Object.entries(APPROVAL_STATE_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
+      <Panel title="筛选" icon="sliders">
+        <Toolbar>
+          <div className="field" style={{ minWidth: 200 }}>
+            <label htmlFor="a-state">审批状态</label>
+            <select
+              id="a-state"
+              value={state}
+              onChange={(e) => {
+                setState(e.target.value)
+                reset()
+              }}
+            >
+              {Object.entries(APPROVAL_STATE_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </Toolbar>
+      </Panel>
 
       <Sheet title="待审批">
         {actionError !== null ? (
@@ -309,10 +309,7 @@ export function ReconciliationPage(): JSX.Element {
 
   return (
     <>
-      <div className="main__head">
-        <h1>未知操作处置</h1>
-        <p className="main__lead">结果不确定的操作，要人工核对后才能继续。</p>
-      </div>
+      <PageHead title="未知操作处置" lead="结果不确定的操作，要人工核对后才能继续。" />
 
       {/*
         ⛔⛔ 结构约束说明：这里**没有「重试」按钮**，而且不会有。
@@ -502,14 +499,11 @@ export function AuditPage(): JSX.Element {
 
   return (
     <>
-      <div className="main__head">
-        <h1>审计查询</h1>
-        <p className="main__lead">谁在什么时候做了什么。</p>
-      </div>
+      <PageHead title="审计查询" lead="谁在什么时候做了什么。" />
 
-      <div className="sheet">
-        <div style={{ display: 'flex', gap: 'var(--s-4)', flexWrap: 'wrap' }}>
-          <div className="field" style={{ margin: 0, minWidth: 200 }}>
+      <Panel title="筛选" icon="sliders">
+        <Toolbar>
+          <div className="field" style={{ minWidth: 200 }}>
             <label htmlFor="au-action">动作</label>
             <select
               id="au-action"
@@ -527,7 +521,7 @@ export function AuditPage(): JSX.Element {
               ))}
             </select>
           </div>
-          <div className="field" style={{ margin: 0, minWidth: 200 }}>
+          <div className="field" style={{ minWidth: 200 }}>
             <label htmlFor="au-resource">资源类型</label>
             <select
               id="au-resource"
@@ -546,12 +540,12 @@ export function AuditPage(): JSX.Element {
               <option value="audit_record">审计记录</option>
             </select>
           </div>
-        </div>
+        </Toolbar>
         <p className="muted" style={{ marginTop: 'var(--s-3)', marginBottom: 0 }}>
           审计记录<b>只读</b>：没有删除或修改入口，且记录保留 180 天后自动清理。
           这里也不会展示请求原文——学生提交的题目与解答不在审计明细里。
         </p>
-      </div>
+      </Panel>
 
       <Sheet title="审计记录">
         {loading ? (

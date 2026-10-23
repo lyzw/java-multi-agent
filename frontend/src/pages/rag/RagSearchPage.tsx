@@ -19,9 +19,10 @@
  */
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { Sheet, Loading, Empty, ErrorState, CapabilityNote } from '@/shared/states'
+import { Loading, Empty, ErrorState, CapabilityNote } from '@/shared/states'
 import { useRagSearch } from '@/features/rag/useRagSearch'
 import { useSession } from '@/auth/session'
+import { PageHead, Panel } from '@/components/ui'
 import type {
   RagRetrievalMode,
   RagScopeMode,
@@ -162,15 +163,13 @@ export function RagSearchPage(): JSX.Element {
 
   return (
     <>
-      <div className="main__head">
-        <h1>知识检索</h1>
-        <p className="main__lead">
-          输入问题，从教材语料中检索可溯源的讲解与出处；生成回答会基于这些来源，避免凭空编造。
-        </p>
-      </div>
+      <PageHead
+        title="知识检索"
+        lead="输入问题，从教材语料中检索可溯源的讲解与出处；生成回答会基于这些来源，避免凭空编造。"
+      />
 
       {/* ── 检索设置 ── */}
-      <Sheet title="检索设置" note="版本五轴决定引用能否被校验，请按学生正在用的教材填写。">
+      <Panel title="检索设置" icon="sliders" note="版本五轴决定引用能否被校验，请按学生正在用的教材填写。">
         <form onSubmit={handleSubmit} noValidate>
           <div className="field">
             <label htmlFor="rag-query">你的问题</label>
@@ -329,11 +328,12 @@ export function RagSearchPage(): JSX.Element {
             </span>
           </div>
         </form>
-      </Sheet>
+      </Panel>
 
       {/* ── 回答区 ── */}
-      <Sheet
+      <Panel
         title="回答"
+        icon="book"
         note="内容逐字摘自下方检索来源，未作改写；未接入大模型前不产生新的解释。"
       >
         {generation.status === 'idle' ? (
@@ -388,11 +388,12 @@ export function RagSearchPage(): JSX.Element {
             onRetry={retry}
           />
         )}
-      </Sheet>
+      </Panel>
 
       {/* ── 来源区 ── */}
-      <Sheet
+      <Panel
         title="检索来源"
+        icon="layers"
         note="每个来源都带册/章/页/题引用，可回溯到具体教材位置。"
       >
         {retrieval.status === 'idle' ? (
@@ -434,7 +435,7 @@ export function RagSearchPage(): JSX.Element {
             </div>
           </>
         )}
-      </Sheet>
+      </Panel>
     </>
   )
 }
