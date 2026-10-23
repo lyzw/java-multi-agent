@@ -2,12 +2,14 @@
  * 知识检索页（RAG 前端模块 · FE-RAG）
  *
  * 交互结构：搜索框 + 检索/版本控件 → 发起「检索 + 生成」请求 →
- *   ① 回答区：展示模型基于检索来源生成的讲解；
+ *   ① 回答区：展示基于检索来源整理的教材原文（B5：逐字摘录，非大模型）；
  *   ② 来源区：展示可溯源的召回片段（册/章/页/题）。
  *
  * ⚠️ 诚实边界（沿用全站五态纪律）：
- *   · 后端**只暴露检索端点**，生成端点尚未实现 → 回答区按「未接入」冷静呈现，
- *     不刷红、不伪装故障、不编造答案（RAG-D00 防泄题/防幻觉纪律）。
+ *   · 生成方式是「逐字摘录装配」（`EXCERPT_ASSEMBLY`），**不是大模型**——
+ *     页面必须展示后端回带的 `generator` 标识，不得写成「AI 讲解」。
+ *   · 依据不足（后端 200 + 空 answer）是**合法结果**，按冷静提示呈现，
+ *     不刷红、不伪装故障（RAG-D00 防幻觉纪律）。
  *   · 0 命中 = 合法空态（分数门禁过滤），不是故障。
  *   · 超时 / 网络失败 / 端点缺失 三者文案与下一步各不相同。
  *
@@ -322,7 +324,8 @@ export function RagSearchPage(): JSX.Element {
               {busy ? '检索中…' : '检索并生成'}
             </button>
             <span className="muted">
-              检索会调用 <code>/api/v1/retrieval</code>；生成回答依赖检索来源。
+              检索调用 <code>/api/v1/retrieval</code>；整理调用{' '}
+              <code>/api/v1/retrieval/generate</code>，依据就是本次召回结果。
             </span>
           </div>
         </form>
@@ -331,29 +334,52 @@ export function RagSearchPage(): JSX.Element {
       {/* ── 回答区 ── */}
       <Sheet
         title="回答"
-        note="模型基于下方检索来源生成讲解；未接入时只展示来源，不编造答案。"
+        note="内容逐字摘自下方检索来源，未作改写；未接入大模型前不产生新的解释。"
       >
         {generation.status === 'idle' ? (
           <p className="muted" style={{ margin: 0 }}>
-            提交问题后，这里会显示模型基于检索来源生成的讲解。
+            提交问题后，这里会显示基于检索来源整理的教材原文。
           </p>
         ) : generation.status === 'loading' ? (
-          <Loading label="正在生成回答" />
+          <Loading label="正在整理教材原文" />
         ) : generation.status === 'success' ? (
           <>
+            {/*
+              ⚠️ B5：生成方式必须如实展示。后端当前是「逐字摘录装配」
+                 （EXCERPT_ASSEMBLY），不是大模型——写成「AI 讲解」是欺骗。
+            */}
+            <p className="generator-note">
+              整理方式：<code>{generation.generator ?? 'EXCERPT_ASSEMBLY'}</code>
+              （逐字摘自教材原文，未作改写）
+            </p>
             <div className="answer">{generation.answer}</div>
             {generation.citations.length > 0 ? (
               <p className="muted" style={{ marginTop: 'var(--s-3)' }}>
-                生成时引用了 {generation.citations.length} 个来源。
+                本段引用了 {generation.citations.length} 处教材原文。
               </p>
             ) : null}
+            {generation.disclaimer !== null ? (
+              <div className="notice" role="status" style={{ marginTop: 'var(--s-3)' }}>
+                <p style={{ margin: 0 }}>{generation.disclaimer}</p>
+              </div>
+            ) : null}
           </>
+        ) : generation.status === 'insufficient' ? (
+          // ⚠️ 依据不足 = 合法结果（后端 200 + 空 answer），不是故障。
+          <div className="notice" role="status">
+            <p style={{ margin: 0 }}>
+              {generation.disclaimer ??
+                '没有可引用的教材依据，因此不生成讲解——比给一段无出处的解释更诚实。'}
+            </p>
+            <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
+              可以换个说法，或把版本范围改成「优先本版，可回退同册」再试。
+            </p>
+          </div>
         ) : generation.status === 'notConnected' ? (
-          // ⚠️ 端点未实现 = 冷静提示，不是故障（沿用五态纪律）。
           <CapabilityNote
             feature="生成回答"
             blockedBy="B5"
-            reason="rag 模块目前只提供检索端点 /api/v1/retrieval。检索来源已经在下方列出，可据此查看讲解依据；后端补齐生成端点后会自动点亮此区域。"
+            reason="rag 模块的生成端点未就绪。检索来源已经在下方列出，可据此查看讲解依据。"
           />
         ) : (
           <ErrorState

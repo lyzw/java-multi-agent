@@ -604,10 +604,15 @@ export function retrieveChunks(
 }
 
 /**
- * POST /api/v1/retrieval/generate —— 在检索召回基础上生成讲解。
+ * POST /api/v1/retrieval/generate —— 基于调用方指定的依据片段装配讲解（B5）。
  *
- * ⚠️ **后端尚未实现该端点**（rag 模块当前只暴露检索），故会返回 404/501，
- *    上层按「生成能力未接入」诚实呈现，**不要**当故障刷红。
+ * ⚠️ **依据由调用方指定**：`payload.hitIds` 必须来自前一次检索的命中列表。
+ *    后端不自行检索，否则「这段话引用了哪几处语料」对学生不可见、对审计不可复现。
+ *
+ * ⚠️ **端点已实现，但生成方式是「逐字摘录」而非大模型**（RAG-D09 G3 条件未满足，
+ *    EmbeddingPort/EntailmentPort 仍是本地确定性占位）。响应里的 `generator`
+ *    恒为 `EXCERPT_ASSEMBLY`，`disclaimer` 必须随 `answer` 一同展示——
+ *    只展示 answer 而不展示它们，等于把摘录伪装成 AI 讲解。
  *
  * ⚠️ **必须携带 `X-Tenant-Id`**（B2 修复，2026-10-23）：生成端点与前端的
  *    检索端点共用同一套 RLS 租户收口，缺失该头后端返回 400。此前该调用

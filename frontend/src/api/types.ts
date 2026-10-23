@@ -531,11 +531,11 @@ export interface RagRetrievalResponse {
 }
 
 /**
- * 生成回答请求（前端约定，**待后端实现** /api/v1/retrieval/generate）。
+ * 生成回答请求（对应 `POST /api/v1/retrieval/generate`，B5 已实现）。
  *
- * ⚠️ 后端尚未提供该端点。前端先把契约定下来：以检索召回的片段 ID 作为
- *    Grounding 依据，让模型在引用基础上生成讲解，避免「抄答案」与幻觉。
- *    接入前调用会得到 404/501，页面按「生成能力未接入」诚实呈现，不伪装故障。
+ * ⚠️ **依据由调用方指定**：`hitIds` 必须来自前一次检索的命中列表。
+ *    后端不自行检索——否则「依据集合」退化成服务端黑箱，
+ *    学生看不到这段话引用了哪几处语料，审计也无法复现。
  */
 export interface RagGenerateRequest {
   query: string
@@ -543,14 +543,35 @@ export interface RagGenerateRequest {
   edition: RagEdition
   /** 检索阶段召回的片段 ID，作为生成依据 */
   hitIds: string[]
+  /** 版本范围模式（缺省按 STRICT 严格锁定当前版本） */
+  scopeMode?: RagScopeMode | null
 }
 
-/** 生成回答响应（前端约定，待后端实现）。 */
+/**
+ * 生成回答响应（B5）。
+ *
+ * ⚠️ `generator` 与 `disclaimer` **不是可选的装饰字段**：
+ *    前者说明「这段文字是怎么来的」，后者说明「哪些内容被策略藏起来了」。
+ *    只展示 `answer` 而不展示它们，等于把「逐字摘录」伪装成「AI 讲解」。
+ */
 export interface RagGenerateResponse {
-  /** 模型生成的讲解/回答正文 */
+  /** 讲解正文。空串 = 依据不足（合法业务结果，不是故障） */
   answer: string
-  /** 生成时实际引用的片段（与检索命中同源，便于回溯） */
+  /** 实际构成讲解的依据片段 */
   citations: RagRetrievalHit[]
+  /**
+   * 生成方式标识。当前恒为 `EXCERPT_ASSEMBLY`（逐字摘录装配）。
+   *
+   * ⚠️ 真实大模型接入前不会是 `LLM`；界面必须如实展示这个值，
+   *    不得写「AI 生成」。
+   */
+  generator: string
+  /** 必须随回答展示的说明（空串表示无附加说明） */
+  disclaimer: string
+  /** 依据中是否存在非首选版本内容 */
+  versionMismatchDetected: boolean
+  /** 是否因模式过滤丢弃过答案类内容 */
+  answerContentSuppressed: boolean
 }
 
 /**

@@ -72,6 +72,12 @@ function sampleGeneration(overrides?: Partial<RagGenerateResponse>): RagGenerate
   return {
     answer: '顶点公式是 -b/2a 和 4ac-b²/4a。',
     citations: [],
+    // ⚠️ B5：generator/disclaimer 不是可选项——后端必须如实标注生成方式，
+    //    前端必须展示。缺省值按「逐字摘录 + 无附加说明」构造。
+    generator: 'EXCERPT_ASSEMBLY',
+    disclaimer: '',
+    versionMismatchDetected: false,
+    answerContentSuppressed: false,
     ...overrides,
   }
 }
@@ -244,6 +250,60 @@ describe('知识检索页（FE-RAG 接线）', () => {
     // ⚠️ 必须是「未接入」冷静提示，而不是「生成回答失败」红框
     expect(await screen.findByText(/生成回答能力尚未接入后端/)).toBeTruthy()
     expect(screen.queryByText(/生成回答失败/)).toBeNull()
+  })
+
+  // ── B5：生成方式必须如实展示，依据不足不是故障 ──────────────
+
+  it('⛔ B5：生成方式必须原样展示，不得伪装成「AI 讲解」', async () => {
+    generateRagAnswerMock.mockResolvedValue(
+      sampleGeneration({ generator: 'EXCERPT_ASSEMBLY' }),
+    )
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.type(await screen.findByLabelText('你的问题'), '顶点怎么求')
+    await fillTenant(user)
+    await user.click(screen.getByRole('button', { name: /检索并生成/ }))
+
+    expect(await screen.findByText(/整理方式/)).toBeTruthy()
+    expect(screen.getByText('EXCERPT_ASSEMBLY')).toBeTruthy()
+    expect(screen.getByText(/逐字摘自教材原文，未作改写/)).toBeTruthy()
+    // ⛔ 不得把摘录说成模型生成
+    expect(screen.queryByText(/AI 讲解|AI生成|智能生成/)).toBeNull()
+  })
+
+  it('⛔ B5：依据不足（200 + 空 answer）是冷静提示，不是红色故障', async () => {
+    generateRagAnswerMock.mockResolvedValue(
+      sampleGeneration({
+        answer: '',
+        disclaimer: '指定的 2 处依据在当前「讲解」模式下不可引用（答案类内容已被策略排除）。',
+        answerContentSuppressed: true,
+      }),
+    )
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.type(await screen.findByLabelText('你的问题'), '顶点怎么求')
+    await fillTenant(user)
+    await user.click(screen.getByRole('button', { name: /检索并生成/ }))
+
+    expect(await screen.findByText(/不可引用/)).toBeTruthy()
+    // ⚠️ 依据不足 ≠ 生成失败
+    expect(screen.queryByText(/生成回答失败/)).toBeNull()
+  })
+
+  it('⛔ B5：0 命中时不发起生成（后端 hitIds 非空，空数组会换回 400）', async () => {
+    retrieveChunksMock.mockResolvedValue(sampleRetrieval({ hits: [] }))
+    renderPage()
+    const user = userEvent.setup()
+
+    await user.type(await screen.findByLabelText('你的问题'), '很冷门的问题')
+    await fillTenant(user)
+    await user.click(screen.getByRole('button', { name: /检索并生成/ }))
+
+    expect(await screen.findByText(/没有找到相关语料/)).toBeTruthy()
+    // ⛔ 空 hitIds 会让后端 400，把一次合法空检索显示成「生成失败」
+    expect(generateRagAnswerMock).not.toHaveBeenCalled()
   })
 
   it('⛔ 空问题不提交：按钮初始禁用', async () => {
