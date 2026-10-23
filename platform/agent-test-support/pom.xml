@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.multiagent</groupId>
+    <artifactId>java-saas-agent-platform</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>agent-test-support</artifactId>
+
+  <name>agent-test-support :: 跨模块测试支撑件</name>
+  <description>
+    W-PERM-P6 · 验收支撑件：§9 场景注册表、设计文档 §9 解析器、测试源码索引、统一四字段断言框架。
+
+    ⚠️ **为什么需要独立模块**：
+    §9 场景的证据同时落在**单元测试**（agent-application）与**集成测试**（agent-infrastructure）两侧。
+    若把注册表与断言框架放在任一模块的 src/test 下，另一模块都看不到它 ——
+    而 §10 要求「每项附证据路径」，证据路径又必须能被**机器校验**（P6 §6：禁止手工勾选代替）。
+    故本模块以「被两个模块以 test 作用域依赖」的方式提供唯一一份实现。
+  </description>
+
+  <dependencies>
+    <!-- 断言框架用得到领域层的四字段与原因码 -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-core</artifactId>
+    </dependency>
+    <!--
+      ⚠️ **assertj 必须是 compile 作用域**：本模块的 src/main 里就是断言框架本身，
+      它要用 AssertJ 的断言 API。若只靠父 pom 的 spring-boot-starter-test（test 作用域），
+      编译期看不到 AssertJ —— 那会让「共享断言框架」退化成「共享空壳」。
+    -->
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <scope>compile</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

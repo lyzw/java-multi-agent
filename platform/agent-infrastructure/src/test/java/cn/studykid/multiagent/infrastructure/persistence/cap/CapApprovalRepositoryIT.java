@@ -190,6 +190,41 @@ class CapApprovalRepositoryIT extends CapITBase {
                     null, "args-hash", "cap_fp_v1:test", 1L))
                     .isEqualTo(CapApprovalPort.ReservationOutcome.EXPIRED);
         }
+
+        @Test
+        @DisplayName("⛔ S6a 审批不存在 → 预占被拒（NOT_FOUND）")
+        void missingApprovalCannotBeReserved() {
+            // ⚠️ 审批 id 根本不存在 —— 不是「存在但被取消/过期/已消费」。
+            //    仓储层必须把它与「绑定不符」区分开：前者是「没有这份授权」，
+            //    后者是「有这份授权但这次调用不匹配」—— 处置方式不同。
+            String absentId = UUID.randomUUID().toString();
+
+            assertThat(approvals().reserve(tenantA, absentId, "inv-1", createOperation(tenantA),
+                    null, "args-hash", "cap_fp_v1:test", 1L))
+                    .as("⛔ 审批不存在却预占成功 = 没有授权也能执行")
+                    .isEqualTo(CapApprovalPort.ReservationOutcome.NOT_FOUND);
+        }
+
+        @Test
+        @DisplayName("⛔ S6e 已消费审批 → 再次预占被拒（ALREADY_CONSUMED，重放）")
+        void consumedApprovalCannotBeReservedAgain() {
+            String id = approvals().grant(grant(tenantA, PRINCIPAL,
+                    Instant.now().plusSeconds(3600)));
+            String op = createOperation(tenantA);
+
+            assertThat(approvals().reserve(tenantA, id, "inv-1", op,
+                    null, "args-hash", "cap_fp_v1:test", 1L))
+                    .isEqualTo(CapApprovalPort.ReservationOutcome.RESERVED);
+            assertThat(approvals().markIntentSubmitted(tenantA, id, "inv-1")).isTrue();
+            assertThat(approvals().consume(tenantA, id, "inv-1", "SUCCEEDED")).isTrue();
+
+            // ⚠️ 换一个调用标识重来 —— 这正是「审批重放」攻击的形态：
+            //    拿已消费的审批去执行另一次调用。
+            assertThat(approvals().reserve(tenantA, id, "inv-2", op,
+                    null, "args-hash", "cap_fp_v1:test", 1L))
+                    .as("⛔ 已消费的审批能再次预占 = 一次审批可被无限重放")
+                    .isEqualTo(CapApprovalPort.ReservationOutcome.ALREADY_CONSUMED);
+        }
     }
 
     @Nested

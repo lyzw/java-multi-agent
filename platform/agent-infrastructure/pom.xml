@@ -65,5 +65,14 @@
       <groupId>org.flywaydb</groupId>
       <artifactId>flyway-database-postgresql</artifactId>
     </dependency>
-  </dependencies>
+      <!--
+      ⚠️ **test 作用域**：§9 场景注册表与统一四字段断言框架（§9 / §5.1）。
+      单测与 IT 必须引用**同一份**注册表 —— 否则「证据路径」会分裂成两份真相。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-test-support</artifactId>
+      <scope>test</scope>
+    </dependency>
+</dependencies>
 </project>

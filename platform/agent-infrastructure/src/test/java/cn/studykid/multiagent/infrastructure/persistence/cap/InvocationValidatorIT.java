@@ -346,4 +346,142 @@ class InvocationValidatorIT extends CapITBase {
         assertThat(new JdbcCapToolDefRepository(appPool).findLatestPublished(TOOL_ID))
                 .isPresent();
     }
+
+    // ── S3a 真跨实例 ──────────────────────────────────────────────
+
+    @Test
+    @DisplayName("⛔ S3a 跨实例撤权：A 实例提交后，B 实例（独立连接池）立即判 AUTHZ_STALE")
+    void crossInstanceRevocationIsDeniedImmediately() {
+        seedPlatformDefs();
+        String agentId = seedAgent(tenantA, "[\"" + SKILL_ID + "\"]");
+        String runId = seedRun(tenantA, agentId);
+        seedAuthzVersion(tenantA, 1L);
+        PermissionResolver resolver = resolver();
+        writeSnapshot(tenantA, runId, agentId, resolver.resolve(tenantA, agentId, 1));
+
+        // ⚠️ **实例 A**：提交撤权（authzVersion 原子自增）
+        long bumped = new JdbcAuthzVersionRepository(appPool).bump(tenantA, PRINCIPAL);
+        assertThat(bumped).isEqualTo(2L);
+
+        // ⚠️ **实例 B**：全新独立连接池 —— 与 A 无任何进程内共享状态。
+        //    若版本被缓存在实例内存里，B 读到的仍是旧版本 → 撤权跨实例失效。
+        try (com.zaxxer.hikari.HikariDataSource instanceB = newInstancePool()) {
+            InvocationValidator validatorB = new InvocationValidator(
+                    new JdbcAuthzVersionRepository(instanceB),
+                    ROLE_STUB,
+                    resolver(),
+                    new JdbcCapabilitySnapshotRepository(appPool),
+                    EMPTY_MANIFEST);
+
+            AuthorizationDecision decision = validatorB
+                    .validate(request(tenantA, agentId, runId, 1L));
+
+            assertThat(decision.authorization())
+                    .as("⛔ B 实例未感知 A 实例的撤权：跨实例撤权失效（旧上下文仍能调用）")
+                    .isEqualTo(AuthorizationDecision.Authorization.DENY);
+            assertThat(decision.reasonCode())
+                    .isEqualTo(ReasonCode.AUTHZ_STALE);
+            assertThat(decision.execution())
+                    .isEqualTo(AuthorizationDecision.Execution.NOT_EVALUATED);
+            assertThat(decision.status())
+                    .isEqualTo(AuthorizationDecision.Status.NOT_STARTED);
+        }
+    }
+
+    // ── S3d 存储真不可用 ──────────────────────────────────────────
+
+    @Test
+    @DisplayName("⛔ S3d 授权存储真不可用（连不上）→ fail-closed AUTHZ_UNAVAILABLE")
+    void unreachableAuthzStoreFailsClosed() {
+        seedPlatformDefs();
+        String agentId = seedAgent(tenantA, "[\"" + SKILL_ID + "\"]");
+        String runId = seedRun(tenantA, agentId);
+
+        // ⚠️ 授权版本读指向一个**必然连不上**的地址：
+        //    这不是「记录不存在」，而是真正的存储不可用。
+        InvocationValidator validatorWithBrokenStore = new InvocationValidator(
+                new JdbcAuthzVersionRepository(unreachableDataSource()),
+                ROLE_STUB,
+                resolver(),
+                new JdbcCapabilitySnapshotRepository(appPool),
+                EMPTY_MANIFEST);
+
+        AuthorizationDecision decision = validatorWithBrokenStore
+                .validate(request(tenantA, agentId, runId, 1L));
+
+        assertThat(decision.authorization())
+                .as("⛔ 存储不可用却未拒绝：无法确认授权状态时放行 = 直接越权")
+                .isEqualTo(AuthorizationDecision.Authorization.DENY);
+        assertThat(decision.reasonCode())
+                .as("⛔ 存储不可用的原因码不稳定：运维无法区分「服务故障」与「配置错误」")
+                .isEqualTo(ReasonCode.AUTHZ_UNAVAILABLE);
+        assertThat(decision.execution())
+                .isEqualTo(AuthorizationDecision.Execution.NOT_EVALUATED);
+        assertThat(decision.status())
+                .isEqualTo(AuthorizationDecision.Status.NOT_STARTED);
+    }
+
+    // ── S3g 单次调用配置有效性 / 新调用只见完整已发布配置 ───────────
+
+    @Test
+    @DisplayName("✅ S3g-a 单次调用配置有效性：同一次解析内的对象版本自洽")
+    void singleCallSeesSelfConsistentConfiguration() {
+        seedPlatformDefs();
+        String agentId = seedAgent(tenantA, "[\"" + SKILL_ID + "\"]");
+        String runId = seedRun(tenantA, agentId);
+        seedAuthzVersion(tenantA, 1L);
+
+        PermissionResolver resolver = resolver();
+        EffectiveClosure closure = resolver.resolve(tenantA, agentId, 1);
+
+        // ⚠️ 「配置有效性」= 一次调用内解析到的对象集合必须**自洽**：
+        //    不得出现「Skill 是 v1 而它声明的 Tool 是另一个版本」这类撕裂。
+        assertThat(closure.skill(SKILL_ID)).isPresent();
+        assertThat(closure.tool(TOOL_ID))
+                .as("⛔ 闭包里没有它声明的 Tool：配置集合不完整")
+                .isPresent();
+        assertThat(closure.tool(TOOL_ID).orElseThrow().version())
+                .as("⛔ 闭包解析到的 Tool 版本与当前发布头不一致：一次调用内配置被撕裂")
+                .isEqualTo(1);
+
+        // 同一份配置重复解析必须得到同一指纹（可复现性 = 有效性）
+        assertThat(ClosureFingerprint.of(closure))
+                .as("⛔ 同一配置两次解析得到不同指纹：在途 Run 会被无故判失效")
+                .isEqualTo(ClosureFingerprint.of(resolver.resolve(tenantA, agentId, 1)));
+    }
+
+    @Test
+    @DisplayName("✅ S3g-b 新调用只见完整已发布配置：发布后新调用立刻看到新版本")
+    void newCallSeesCompleteNewConfigurationAfterPublish() {
+        seedPlatformDefs();
+        String agentId = seedAgent(tenantA, "[\"" + SKILL_ID + "\"]");
+        String runId = seedRun(tenantA, agentId);
+        seedAuthzVersion(tenantA, 1L);
+        PermissionResolver resolver = resolver();
+        writeSnapshot(tenantA, runId, agentId, resolver.resolve(tenantA, agentId, 1));
+
+        // 发布新版本：Tool → v2，Skill 仍 v1（一次原子发布）
+        adminExec("INSERT INTO cap_tool_def (id, version, name, kind, risk_level, input_schema,"
+                + " param_policies, namespace, config_fingerprint, published_at)"
+                + " VALUES ('" + TOOL_ID + "', 2, 'it tool v2', 'native', 'READ', '{}'::jsonb,"
+                + " '[]'::jsonb, 'platform', 'fp-tool-v2', now())");
+        publishPlatformObjects("tool:" + TOOL_ID + "@2", "skill:" + SKILL_ID + "@1");
+
+        // ⚠️ **新调用**：按当前发布头解析 → 立刻看到 v2
+        EffectiveClosure newClosure = resolver.resolve(tenantA, agentId, 1);
+        assertThat(newClosure.tool(TOOL_ID).orElseThrow().version())
+                .as("⛔ 发布后新调用仍解析到旧版本：当前生效版本不是由发布指针决定的")
+                .isEqualTo(2);
+        assertThat(newClosure.skill(SKILL_ID).orElseThrow().version())
+                .as("⛔ 发布后 Skill 版本丢失：新配置不完整（半成品可见）")
+                .isEqualTo(1);
+
+        // ⚠️ 而**在途 Run 的旧快照**必须被判失效 —— 这证明新旧配置没有混在一起：
+        //    「新调用只见完整新配置」的前提是旧配置不再被当作当前配置。
+        AuthorizationDecision decision = validator()
+                .validate(request(tenantA, agentId, runId, 1L));
+        assertThat(decision.reasonCode())
+                .as("⛔ 旧快照在配置发布后仍然有效：新旧配置被混用")
+                .isEqualTo(ReasonCode.CONFIG_FINGERPRINT_STALE);
+    }
 }

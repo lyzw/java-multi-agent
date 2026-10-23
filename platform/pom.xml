@@ -34,6 +34,12 @@
   <modules>
     <module>agent-core</module>
     <module>agent-ports</module>
+    <!--
+      ⚠️ **顺序有意**：测试支撑件排在 agent-application 之前，
+      因为后两者都以 test 作用域依赖它（§9 场景注册表与统一四字段断言框架）。
+      Maven 本身会按依赖拓扑排序，但显式声明可读性更好。
+    -->
+    <module>agent-test-support</module>
     <module>agent-application</module>
     <module>agent-infrastructure</module>
     <module>agent-infra</module>
@@ -61,6 +67,11 @@
       <dependency>
         <groupId>cn.studykid.multiagent</groupId>
         <artifactId>agent-ports</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.multiagent</groupId>
+        <artifactId>agent-test-support</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

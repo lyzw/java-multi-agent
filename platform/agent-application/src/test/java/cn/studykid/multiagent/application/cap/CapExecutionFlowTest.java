@@ -25,7 +25,9 @@ import cn.studykid.multiagent.ports.model.ModelResponse;
 import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.security.ApprovalPolicy;
+import cn.studykid.multiagent.ports.tool.ToolExecutionException;
 import cn.studykid.multiagent.ports.tool.ToolHandler;
+import cn.studykid.multiagent.testsupport.acceptance.DecisionFields;
 
 /**
  * P2 执行准入行为测试（§9.1 场景 S1 / S3b / S3f + Schema 失败 + 幂等 + 准入失效）。
@@ -292,6 +294,50 @@ class CapExecutionFlowTest {
                     .as("⚠️⚠️ 准入后的在途调用不承诺取消（§5.5 契约 2）——"
                             + "撤销已发出的副作用是做不到的，硬要撤销只会制造不一致")
                     .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("⚠️ 准入通过后撤权 + 工具确定失败 → FAILED/TOOL_EXECUTION_FAILED（在途不被撤销）")
+        void inFlightCallFailureIsNotCancelled() {
+            // ⚠️ 与 SUCCEEDED 分支同构：准入点读到 v1 → 准入通过；此后撤权（v2）。
+            //    区别只在工具结局 —— 这里工具**明确失败**（无副作用，可重试）。
+            authz.bumpAfterRead(3, 2L);
+            exec.toolFailure = ToolExecutionException.definitelyFailed("下游明确拒绝");
+
+            CapToolDecision decision = flow().invoke(TENANT, task(), call(), exec.tool(TOOL));
+
+            DecisionFields.assertFourFields(decision.decision(),
+                    AuthorizationDecision.Authorization.ALLOW,
+                    AuthorizationDecision.Execution.ALLOW,
+                    AuthorizationDecision.Status.FAILED,
+                    ReasonCode.TOOL_EXECUTION_FAILED);
+            assertThat(exec.toolExecutions)
+                    .as("⚠️⚠️ 准入后的在途调用不承诺取消（§5.5 契约 2）")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("⚠️ 准入通过后撤权 + 工具结果未知 → UNKNOWN/EXEC_UNKNOWN（进对账，不盲目重试）")
+        void inFlightCallUnknownIsNotCancelled() {
+            // ⚠️ 结果未知是**唯一**需要进对账的状态：
+            //    可能已产生副作用 → 不得释放预算预留、不得盲目重试（红线）。
+            authz.bumpAfterRead(3, 2L);
+            exec.toolFailure = ToolExecutionException.unknownResult("响应丢失", null);
+
+            CapToolDecision decision = flow().invoke(TENANT, task(), call(), exec.tool(TOOL));
+
+            DecisionFields.assertFourFields(decision.decision(),
+                    AuthorizationDecision.Authorization.ALLOW,
+                    AuthorizationDecision.Execution.ALLOW,
+                    AuthorizationDecision.Status.UNKNOWN,
+                    ReasonCode.EXEC_UNKNOWN);
+            assertThat(exec.toolExecutions)
+                    .as("⚠️⚠️ 准入后的在途调用不承诺取消（§5.5 契约 2）")
+                    .isEqualTo(1);
+            assertThat(exec.reservations)
+                    .as("⚠️⚠️ UNKNOWN 不释放预算预留：成本可能已发生（红线）。"
+                            + "误释放会让下一次调用白花已发生的成本")
+                    .hasSize(1);
         }
     }
 

@@ -187,6 +187,71 @@ abstract class CapITBase {
     }
 
     /**
+     * 造一个<b>全新的独立连接池</b>，模拟「另一个 JVM 实例」。
+     *
+     * <p>⚠️ <b>为什么需要它</b>：
+     * §9.1 的 S3a 要求验证「<b>跨实例</b>撤权后调用」——
+     * 即 A 实例提交撤权后，B 实例<b>立即</b>读到新版本。
+     * 用同一个池造两个仓储对象只能证明「同一连接池里读到了新值」，
+     * 证不了「版本来自权威库而非进程内状态」——
+     * 而后者才是「跨实例撤权」的技术要害。
+     *
+     * <p>独立连接池意味着：独立连接、独立 DB 会话、<b>无任何进程内共享状态</b>。
+     * 若实现把授权版本缓存在实例内存里，本助手造出的 B 实例就读不到 A 的撤权。
+     *
+     * <p>⚠️ <b>必须用非特权角色</b>：与 {@link #appPool} 同凭据，
+     * 否则 RLS 会被绕过，跨租户断言全部失真。
+     *
+     * @return 独立连接池（调用方负责关闭）
+     */
+    protected static HikariDataSource newInstancePool() {
+        HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        cfg.setUsername(System.getenv().getOrDefault("IT_PG_USER", "app_agent"));
+        String pwd = System.getenv("IT_PG_PASSWORD");
+        if (pwd != null && !pwd.isBlank()) {
+            cfg.setPassword(pwd);
+        }
+        cfg.setMaximumPoolSize(2);
+        cfg.setPoolName("it-instance-pool");
+        return new HikariDataSource(cfg);
+    }
+
+    /**
+     * 造一个指向<b>必然拒绝连接</b>地址的数据源（模拟存储不可用）。
+     *
+     * <p>⚠️ <b>为什么用「真的连不上」而不是桩件</b>：
+     * 桩件只能证明「仓储把异常透传了」，
+     * 而真实不可达端口才能证明<b>整条 JDBC 链路</b>（驱动 → 连接池 →
+     * 事务持有者 → 仓储 → 校验器）都把存储故障收敛成
+     * 「fail-closed + AUTHZ_UNAVAILABLE」，而不是抛出一个未分类的 500。
+     *
+     * <p>端口取法：先向操作系统申请一个空闲端口再立刻释放 ——
+     * 它此刻无人监听，连接会被<b>立即</b>拒绝（ECONNREFUSED），不会拖慢构建。
+     *
+     * @return 指向不可达地址的数据源
+     */
+    protected static javax.sql.DataSource unreachableDataSource() {
+        int closedPort;
+        try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+            closedPort = socket.getLocalPort();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("无法申请临时端口", e);
+        }
+        HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl("jdbc:postgresql://127.0.0.1:" + closedPort + "/postgres?connectTimeout=1");
+        cfg.setUsername("nobody");
+        cfg.setPassword("nobody");
+        cfg.setMaximumPoolSize(1);
+        // ⚠️ 不在初始化阶段就失败：故障必须发生在**业务调用**时，
+        //    否则测的是「建池失败」而不是「授权期存储不可用」。
+        cfg.setInitializationFailTimeout(-1);
+        cfg.setConnectionTimeout(2000);
+        cfg.setPoolName("it-unreachable-pool");
+        return new HikariDataSource(cfg);
+    }
+
+    /**
      * 生成一个新的 UUID 字符串。
      *
      * <p>⚠️ 用于代理键（event_id / intent_id 等 UUID 列）。
