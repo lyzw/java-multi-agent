@@ -12,6 +12,7 @@ import { loadSession, clearSession } from '@/auth/tokenStorage'
 import type {
   LoginRequest,
   LoginResponse,
+  RolesResponse,
   CreateRunRequest,
   CreateRunResponse,
   ConfigResponse,
@@ -42,7 +43,13 @@ import type {
   RagChunk,
   RagRegisterSourceRequest,
   RagVerificationRequest,
+  RagDocumentVerificationRequest,
+  RagMaintenanceIssues,
+  RagReindexResult,
   RagSourceQuery,
+  DailyStatistics,
+  RagDailySearchStatistics,
+  RagDailyImportStatistics,
 } from './types'
 
 /** 401 时通知上层（SessionProvider）清理会话并跳登录 */
@@ -148,6 +155,22 @@ export function login(payload: LoginRequest): Promise<LoginResponse> {
     { method: 'POST', body: JSON.stringify(payload) },
     true,
   )
+}
+
+/**
+ * GET /api/auth/roles —— 按令牌现查库中登记的角色（G1）。
+ *
+ * ⚠️ **存在的理由不是「多一次往返」，而是「登录响应可能没有 roles」**：
+ *    · 后端 B1 之前不返回 `roles`（旧版后端 / 灰度中的实例）；
+ *    · 会话持久化在 sessionStorage，**登录早于 B1 的会话其 roles 恒为空**，
+ *      管理员会**永久**看不到管理菜单，除非重新登录。
+ *    本端点按令牌现查库，故能在**不重新登录**的前提下回补角色。
+ *
+ * ⚠️ 后端该端点的角色取自「令牌声明 ∩ 库中登记」，
+ *    故未登记的角色不会出现在结果里（与登录响应同源，不构成提权面）。
+ */
+export function getRoles(): Promise<RolesResponse> {
+  return _request<RolesResponse>('/api/auth/roles', { method: 'GET' }, false)
 }
 
 /* ── Run ───────────────────────────────────────────────── */
@@ -647,6 +670,16 @@ export function generateRagAnswer(
 const DEFAULT_RAG_MGMT_TIMEOUT_MS = 30000
 
 /**
+ * 重跑索引的超时。
+ *
+ * ⚠️ 比普通管理端点更宽松：重跑是**批量**操作，
+ *    耗时与待索引片段数成正比（默认上限 500 条）。
+ *    给窄了会把「还在跑」误报成「失败」，
+ *    而重跑是幂等的（只补缺失的向量），重试成本低。
+ */
+const DEFAULT_RAG_REINDEX_TIMEOUT_MS = 120000
+
+/**
  * 管理端点的租户头。
  *
  * ⚠️ **必须携带 `X-Tenant-Id`**：管理 SQL 一律以
@@ -803,6 +836,133 @@ export function listRagChunks(
     `/api/v1/management/documents/${encodeURIComponent(documentId)}/chunks${toQuery({
       limit,
     })}`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * POST /api/v1/management/documents/{documentId}/verification —— 载体级校验流转。
+ *
+ * ⚠️ **载体不得高于来源**：来源未通过校验时，载体置 VERIFIED 会被后端拒（409）。
+ *    前端**不预判**这条规则——权威在服务端，预判会与真实门槛漂移。
+ */
+export function applyRagDocumentVerification(
+  tenantId: string,
+  documentId: string,
+  payload: RagDocumentVerificationRequest,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagDocument> {
+  return requestWithTimeout<RagDocument>(
+    `/api/v1/management/documents/${encodeURIComponent(documentId)}/verification`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * GET /api/v1/management/issues —— 维护问题清单。
+ *
+ * ⚠️ 这是「**哪里坏了**」的定位入口，与统计的「有多少」互补：
+ *    统计说缺 12 个向量，清单才说是哪几个载体。
+ */
+export function getRagIssues(
+  tenantId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagMaintenanceIssues> {
+  return requestWithTimeout<RagMaintenanceIssues>(
+    '/api/v1/management/issues',
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * POST /api/v1/management/reindex —— 重跑本租户的索引。
+ *
+ * ⚠️ 同步执行，耗时与待索引片段数成正比；故后端有 `limit` 上限。
+ *    超时会被前端按「timeout」成态（区别于服务故障）。
+ */
+export function reindexRagCorpus(
+  tenantId: string,
+  limit = 500,
+  timeoutMs: number = DEFAULT_RAG_REINDEX_TIMEOUT_MS,
+): Promise<RagReindexResult> {
+  return requestWithTimeout<RagReindexResult>(
+    '/api/v1/management/reindex',
+    { method: 'POST', body: JSON.stringify({ limit }) },
+    true,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/* ── 报表中心（平台统计 + RAG 每日统计）────────────────── */
+
+/**
+ * GET /api/statistics/daily —— 平台侧每日聚合（报表中心）。
+ *
+ * ⚠️ **响应只含租户级聚合**：辅导量、错因记录数、学生活跃/新增、知识点排行。
+ *    后端刻意不返回 student_id / 姓名 / 题目原文（P0-D00 §4 合规红线）。
+ *
+ * ⚠️ 租户**只来自已验签令牌**，前端**不得**也**无法**传 tenantId 参数。
+ *
+ * ⚠️ `days` 被后端钳制在 1～90，超出不会报错而是静默截断，
+ *    故前端的选择器本身只提供合法区间。
+ */
+export function getDailyStatistics(
+  days = 30,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<DailyStatistics> {
+  return requestWithTimeout<DailyStatistics>(
+    `/api/statistics/daily${toQuery({ days })}`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+  )
+}
+
+/**
+ * GET /api/v1/management/statistics/daily-searches —— 每日检索次数。
+ *
+ * ⚠️ 数据起点说明：**上线前的历史检索没有审计记录**，
+ *    故报表里「之前那些日子搜索数为 0」是**数据起点**，不是接口缺陷。
+ *    页面须如实说明这一点，避免被误读为「检索功能坏了」。
+ */
+export function getRagDailySearches(
+  tenantId: string,
+  days = 30,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagDailySearchStatistics> {
+  return requestWithTimeout<RagDailySearchStatistics>(
+    `/api/v1/management/statistics/daily-searches${toQuery({ days })}`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * GET /api/v1/management/statistics/daily-imports —— 每日导入语料量。
+ *
+ * ⚠️ 三个层级含义不同，**不可互相替代**：
+ *    sources（登记的资料来源）⊇ documents（导入的物理文件）⊇ chunks（切出的片段）。
+ *    页面上三者分开呈现，不做求和。
+ */
+export function getRagDailyImports(
+  tenantId: string,
+  days = 30,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagDailyImportStatistics> {
+  return requestWithTimeout<RagDailyImportStatistics>(
+    `/api/v1/management/statistics/daily-imports${toQuery({ days })}`,
     { method: 'GET' },
     false,
     timeoutMs,

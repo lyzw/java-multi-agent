@@ -33,7 +33,9 @@ public record RetrievalResultDto(
      * @param chunkId 片段 ID
      * @param text 片段正文
      * @param role 片段角色（决定是否在讲解模式下被召回）
-     * @param score 综合得分（0~1，低于门禁的已被编排层过滤）
+     * @param score 相关性分（0~1，低于门禁的已被编排层过滤）。
+     *              ⚠️ 这是<b>相关性</b>不是「排名」：稠密通道是余弦相似度、
+     *              词法通道是 ts_rank。排序另由 RRF 融合分决定（内部字段，不对外暴露）。
      * @param edition 版本展示名
      * @param locator 面向学生的引用文本（册/章/页/题）
      * @param channel 召回通道（稠密/词法/知识点聚合…）

@@ -179,6 +179,38 @@ class RetrievalRepositoryIT {
         assertFalse(ids.contains(C4), "必须拒绝跨租户引用：C4 属租户 U，检索租户 T 不应见");
     }
 
+    /**
+     * 回归：检索器返回的 {@code score} 必须是<b>相关性分</b>，不是 RRF 融合分。
+     *
+     * <p><b>⚠️ 2026-10-23 实测缺陷（线上 RDS 复现）</b>：JDBC 实现曾把 RRF 融合分
+     * 写进 {@code score}，而分数门禁阈值（默认 0.2、设计初值 0.35）是按
+     * <b>相关性量纲</b>（余弦相似度 / ts_rank）标定的。RRF 上限约 0.033
+     * （双通道命中时 2/61）→ 门禁恒不通过 → <b>检索永远返回「未找到依据」</b>，
+     * 语料再全也召不回任何东西。端口契约明写「门禁必须作用于检索器给出的
+     * 真实相关性分数」，此测试把该契约钉死。
+     *
+     * <p>断言两件事：强相关命中的相关性分应<b>达到</b>默认门禁；
+     * 且融合分与相关性分<b>量纲必须不同</b>（否则又混回去了）。
+     */
+    @Test
+    void returnedScoreIsRelevanceNotRrfFusionValue() {
+        RetrievalRequest req = new RetrievalRequest(
+                "二次函数的顶点", RetrievalMode.EXPLAIN, EditionScope.strict(E_PEP),
+                null, null, null, 10);
+        List<ScoredChunk> result = searchAs(T, req);
+        ScoredChunk strong = result.stream()
+                .filter(s -> s.chunk().id().equals(C1))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("强相关片段 C1 应被召回"));
+        assertTrue(strong.score() >= 0.2,
+                "强相关命中的相关性分应达到默认门禁 0.2，实际=" + strong.score());
+        assertTrue(strong.fusionScore() < 0.05,
+                "融合排序分（RRF）量纲远小于相关性分，实际=" + strong.fusionScore());
+        assertTrue(strong.score() > strong.fusionScore(),
+                "两个分数量纲必须不同：相关性分=" + strong.score()
+                        + "，融合排序分=" + strong.fusionScore());
+    }
+
     // ---------------------------------------------------------------------
     // B5：生成期依据取回（loadByIds）的隔离与撤回语义
     // ---------------------------------------------------------------------

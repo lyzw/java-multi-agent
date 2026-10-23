@@ -21,8 +21,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
+import cn.studykid.rag.management.core.CorpusDocument;
+import cn.studykid.rag.management.core.CorpusIssues;
 import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.management.core.CorpusStatistics;
+import cn.studykid.rag.management.core.DocumentVerificationDecision;
 import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
@@ -74,9 +77,26 @@ class JdbcCorpusManagementRepositoryIT {
     private final RagTenantContext ctxT =
             new RagTenantContext(T, cn.studykid.rag.core.source.TrustTier.OFFICIAL_TUTORIAL);
 
+    /**
+     * 载体级夹具专用租户。
+     *
+     * <p>⚠️ <b>为什么载体夹具不能落在租户 T</b>：管理 IT 与检索 IT
+     * （{@code RetrievalRepositoryIT}）共用同一个 IT 库，而检索 IT 会在
+     * <b>整个租户</b>上做检索断言。载体夹具一旦落在租户 T，
+     * 等这些片段被补上向量（重索引端点正是干这个的），
+     * 检索 IT 就会把它们当成自己的命中结果 → 两个 IT 互相污染、
+     * 失败现场指向错误的文件。
+     * 故载体夹具独占一个租户。
+     */
+    private static final String M = "66666666-6666-6666-6666-666666666666";
+
     /** 租户 U 的上下文（用于跨租户隔离验证）。 */
     private final RagTenantContext ctxU =
             new RagTenantContext(U, cn.studykid.rag.core.source.TrustTier.OFFICIAL_TUTORIAL);
+
+    /** 载体级夹具的租户上下文。 */
+    private final RagTenantContext ctxM =
+            new RagTenantContext(M, cn.studykid.rag.core.source.TrustTier.OFFICIAL_TUTORIAL);
 
     @BeforeAll
     static void guard() {
@@ -380,5 +400,285 @@ class JdbcCorpusManagementRepositoryIT {
                 new SourceRegistration("教材", title, "人民教育出版社", isbn, null,
                         "obj://book.pdf", "b".repeat(64)),
                 REVIEWER);
+    }
+
+    /**
+     * 在指定租户下登记一条来源（供载体级夹具使用）。
+     */
+    private CorpusSource registerIn(RagTenantContext ctx, String isbn, String title) {
+        return repository.registerSource(ctx,
+                new SourceRegistration("教材", title, "人民教育出版社", isbn, null,
+                        "obj://book.pdf", "b".repeat(64)),
+                REVIEWER);
+    }
+
+    // ---------------------------------------------------------------------
+    // 载体级校验流转（IT：只有真 DB 才能证明状态真的落库了）
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("载体不得高于来源：来源未 VERIFIED 时载体置 VERIFIED 被拒且状态未变")
+    void carrierCannotExceedUnverifiedSource() {
+        CorpusSource source = registerIn(ctxM, "9787100000010", "待审教材");
+        String documentId = seedDocument(ctxM, source.sourceId(), "扫描版", "SCAN", "CHUNKED");
+
+        // ⚠️ 载体初始态是 PENDING（DB 默认），必须先认领才能谈「通过」——
+        //    否则被拒的原因是「PENDING 直通 VERIFIED 非法」，
+        //    而<b>不是</b>本用例要验的「载体不得高于来源」，断言就落空了。
+        repository.applyDocumentVerification(ctxM, documentId,
+                new DocumentVerificationDecision(VerificationStatus.IN_REVIEW, "认领", REVIEWER,
+                        VerificationMethod.NONE, null, 365));
+
+        assertThrows(IllegalStateException.class, () -> repository.applyDocumentVerification(ctxM,
+                documentId, DocumentVerificationDecision.approve(VerificationMethod.ISBN,
+                        "ISBN:ref@2026-10-23", REVIEWER, 365)),
+                "来源未通过校验时载体不得自称 VERIFIED");
+
+        // ⚠️ 关键断言：库中状态必须仍是 IN_REVIEW——被拒的流转不能留下写入痕迹。
+        CorpusDocument after = findDocument(ctxM, documentId);
+        assertNotNull(after);
+        assertEquals(VerificationStatus.IN_REVIEW, after.verificationStatus());
+        assertFalse(after.retrievable(), "未通过校验的载体不得可检索");
+    }
+
+    @Test
+    @DisplayName("载体级合法流转：来源已 VERIFIED 时载体可置 VERIFIED 并置为可检索")
+    void carrierCanBeVerifiedAfterSource() {
+        CorpusSource source = registerIn(ctxM, "9787100000011", "已审教材");
+        approveSource(ctxM, source.sourceId());
+        String documentId = seedDocument(ctxM, source.sourceId(), "官方电子版", "PDF", "CHUNKED");
+
+        // ⚠️ 载体初始态是 PENDING：必须走 PENDING → IN_REVIEW → VERIFIED
+        //    （载体复用来源级转移表，T-12 禁止跳过 IN_REVIEW 直通 VERIFIED）。
+        repository.applyDocumentVerification(ctxM, documentId,
+                new DocumentVerificationDecision(VerificationStatus.IN_REVIEW, "认领", REVIEWER,
+                        VerificationMethod.NONE, null, 365));
+        CorpusDocument updated = repository.applyDocumentVerification(ctxM, documentId,
+                DocumentVerificationDecision.approve(VerificationMethod.ISBN,
+                        "ISBN:ref@2026-10-23", REVIEWER, 365));
+        assertNotNull(updated);
+        assertEquals(VerificationStatus.VERIFIED, updated.verificationStatus());
+        assertTrue(updated.retrievable(), "VERIFIED 的载体必须可检索");
+        assertNull(updated.revokedAt());
+        assertEquals("PENDING", updated.licenseStatus());
+    }
+
+    @Test
+    @DisplayName("载体级撤回：置不可检索、写撤回依据、并留 REVOKE 审计")
+    void carrierRevocationRecordsReasonAndAudit() {
+        CorpusSource source = registerIn(ctxM, "9787100000012", "待撤回教材");
+        approveSource(ctxM, source.sourceId());
+        String documentId = seedDocument(ctxM, source.sourceId(), "第三方扫描版", "SCAN", "CHUNKED");
+
+        CorpusDocument revoked = repository.applyDocumentVerification(ctxM, documentId,
+                DocumentVerificationDecision.revoke("权利人要求下架", LEGAL));
+        assertNotNull(revoked);
+        assertEquals(VerificationStatus.REVOKED, revoked.verificationStatus());
+        assertFalse(revoked.retrievable(), "撤回后载体必须不可检索");
+        assertNotNull(revoked.revokedAt(), "撤回必须写撤回时间");
+        assertEquals("权利人要求下架", revoked.revokedReason(), "撤回必须带依据（DB CHECK 亦强制）");
+        assertEquals("RESTRICTED", revoked.licenseStatus(), "撤回必须同时关闭版权轴（G-4）");
+
+        Integer auditCount = transactionTemplate.execute(st -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, ctxM.tenantId());
+            return jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM rag_access_audit WHERE source_id = ?::uuid AND action = 'REVOKE'",
+                    Integer.class, source.sourceId());
+        });
+        assertNotNull(auditCount);
+        assertTrue(auditCount >= 1, "载体级撤回必须留下 REVOKE 审计");
+    }
+
+    @Test
+    @DisplayName("载体级 REVOKED 是终态：不可再流转")
+    void revokedCarrierIsTerminal() {
+        CorpusSource source = registerIn(ctxM, "9787100000013", "终态教材");
+        approveSource(ctxM, source.sourceId());
+        String documentId = seedDocument(ctxM, source.sourceId(), "被撤回载体", "PDF", "CHUNKED");
+        repository.applyDocumentVerification(ctxM, documentId,
+                DocumentVerificationDecision.revoke("权利人要求下架", LEGAL));
+
+        assertThrows(IllegalStateException.class, () -> repository.applyDocumentVerification(ctxM,
+                documentId, DocumentVerificationDecision.approve(VerificationMethod.ISBN,
+                        "ISBN:ref@2026-10-23", REVIEWER, 365)),
+                "REVOKED 是终态（T-10）");
+    }
+
+    // ---------------------------------------------------------------------
+    // 维护问题清单（IT：SQL 口径只有真 DB 才能证明）
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("问题清单：缺向量载体按载体统计缺向量片段数")
+    void issuesReportDocumentsMissingEmbedding() {
+        CorpusSource source = registerIn(ctxM, "9787100000014", "缺向量教材");
+        approveSource(ctxM, source.sourceId());
+        String documentId = seedDocument(ctxM, source.sourceId(), "缺向量载体", "PDF", "CHUNKED");
+        String editionId = queryEditionId(ctxM, documentId);
+        seedChunk(ctxM, documentId, editionId, "片段一");
+        seedChunk(ctxM, documentId, editionId, "片段二");
+
+        CorpusIssues issues = repository.listIssues(ctxM);
+
+        CorpusIssues.DocumentEmbeddingGap gap = issues.documentsMissingEmbedding().stream()
+                .filter(g -> g.documentId().equals(documentId))
+                .findFirst()
+                .orElse(null);
+        assertNotNull(gap, "两个片段都没有向量 → 该载体必须出现在缺向量清单里");
+        assertEquals(2, gap.chunkCount());
+        assertEquals(2, gap.missingEmbeddingCount());
+        assertEquals("PDF", gap.carrier());
+    }
+
+    @Test
+    @DisplayName("问题清单：一个片段都没有的载体不算「缺向量」（避免掩盖解析失败）")
+    void issuesDoNotMixParseFailureIntoMissingEmbedding() {
+        CorpusSource source = registerIn(ctxM, "9787100000015", "解析失败教材");
+        approveSource(ctxM, source.sourceId());
+        String documentId = seedDocument(ctxM, source.sourceId(), "解析失败载体", "PDF", "FAILED");
+
+        CorpusIssues issues = repository.listIssues(ctxM);
+
+        assertTrue(issues.documentsMissingEmbedding().stream()
+                        .noneMatch(g -> g.documentId().equals(documentId)),
+                "没有片段的载体不应被算成「缺向量」——那会掩盖真正的解析失败");
+        CorpusIssues.DocumentParseFailure failure = issues.documentsFailedParse().stream()
+                .filter(f -> f.documentId().equals(documentId))
+                .findFirst()
+                .orElse(null);
+        assertNotNull(failure, "parse_status='FAILED' 的载体必须出现在解析失败清单里");
+        assertEquals(0, failure.chunkCount());
+        assertEquals("FAILED", failure.parseStatus());
+    }
+
+    @Test
+    @DisplayName("问题清单：待审核来源带服务端计算的 stale 标记")
+    void issuesReportPendingSourcesWithServerComputedStale() {
+        CorpusSource source = registerIn(ctxM, "9787100000016", "待审教材");
+        // 来源登记后恒为 PENDING
+        CorpusIssues issues = repository.listIssues(ctxM);
+
+        CorpusIssues.SourcePendingReview pending = issues.sourcesPendingReview().stream()
+                .filter(s -> s.sourceId().equals(source.sourceId()))
+                .findFirst()
+                .orElse(null);
+        assertNotNull(pending, "PENDING 来源必须出现在待审核清单里");
+        assertEquals("PENDING", pending.verificationStatus());
+        assertEquals("UNVERIFIED", pending.trustTier());
+        assertFalse(pending.stale(), "未通过校验的来源谈不上「结论过期」");
+    }
+
+    // ---------------------------------------------------------------------
+    // 夹具
+    // ---------------------------------------------------------------------
+
+    /**
+     * 把来源推进到 VERIFIED。
+     */
+    private void approveSource(RagTenantContext ctx, String sourceId) {
+        repository.applyVerification(ctxM, sourceId, new VerificationDecision(
+                VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
+        repository.applyVerification(ctxM, sourceId,
+                VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
+                        "ISBN:ref@2026-10-23", REVIEWER, 365));
+    }
+
+    /**
+     * 在租户 T 下种一个载体（edition + document）。
+     *
+     * @return 载体 ID
+     */
+    private String seedDocument(RagTenantContext ctx, String sourceId, String title, String carrier, String parseStatus) {
+        String editionId = java.util.UUID.randomUUID().toString();
+        String documentId = java.util.UUID.randomUUID().toString();
+        transactionTemplate.executeWithoutResult(st -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, ctx.tenantId());
+            jdbcTemplate.update("""
+                    INSERT INTO rag_edition (edition_id, tenant_id, source_id, subject, grade, term,
+                                             publisher, revision_code)
+                    VALUES (?::uuid, rag_current_tenant(), ?::uuid, '数学', '八年级', '上册',
+                            '人教版', 'IT-' || ?)
+                    """, editionId, sourceId, editionId);
+            jdbcTemplate.update("""
+                    INSERT INTO rag_document (document_id, tenant_id, source_id, edition_id, carrier,
+                                              title, parse_status)
+                    VALUES (?::uuid, rag_current_tenant(), ?::uuid, ?::uuid, ?, ?, ?)
+                    """, documentId, sourceId, editionId, carrier, title, parseStatus);
+        });
+        return documentId;
+    }
+
+    /**
+     * 在租户 T 下种一个片段（不写向量 → 构成「缺向量」夹具）。
+     */
+    private void seedChunk(RagTenantContext ctx, String documentId, String editionId, String text) {
+        String chunkId = java.util.UUID.randomUUID().toString();
+        transactionTemplate.executeWithoutResult(st -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, ctx.tenantId());
+            jdbcTemplate.update("""
+                    INSERT INTO rag_chunk (chunk_id, tenant_id, document_id, edition_id, role, text,
+                                           page_number, section_path, char_start, char_end, content_hash)
+                    VALUES (?::uuid, rag_current_tenant(), ?::uuid, ?::uuid,
+                            'EXPLANATION'::rag_chunk_role, ?, 1, '第一章', 0, ?, ?)
+                    """, chunkId, documentId, editionId, text, text.length(), "d".repeat(64));
+        });
+    }
+
+    /**
+     * 读回载体（含载体级治理字段）。
+     */
+    private CorpusDocument findDocument(RagTenantContext ctx, String documentId) {
+        return transactionTemplate.execute(st -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, ctx.tenantId());
+            return jdbcTemplate.query("""
+                    SELECT d.document_id, d.source_id, d.edition_id, d.carrier, d.title,
+                           d.page_count, d.object_ref, d.parse_status, d.parser_version,
+                           d.content_hash, d.created_at, d.updated_at,
+                           d.ver_status, d.retrievable, d.revoked_at, d.revoked_reason,
+                           d.license_status,
+                           (SELECT count(*) FROM rag_chunk c
+                             WHERE c.tenant_id = d.tenant_id AND c.document_id = d.document_id)
+                               AS chunk_count
+                    FROM rag_document d
+                    WHERE d.tenant_id = rag_current_tenant() AND d.document_id = ?::uuid
+                    """, (rs, i) -> new CorpusDocument(
+                            rs.getString("document_id"),
+                            rs.getString("source_id"),
+                            rs.getString("edition_id"),
+                            rs.getString("carrier"),
+                            rs.getString("title"),
+                            rs.getInt("page_count"),
+                            rs.getString("object_ref"),
+                            rs.getString("parse_status"),
+                            rs.getString("parser_version"),
+                            rs.getString("content_hash"),
+                            rs.getLong("chunk_count"),
+                            VerificationStatus.valueOf(rs.getString("ver_status")),
+                            rs.getBoolean("retrievable"),
+                            rs.getTimestamp("revoked_at") == null ? null
+                                    : rs.getTimestamp("revoked_at").toInstant(),
+                            rs.getString("revoked_reason"),
+                            rs.getString("license_status"),
+                            rs.getTimestamp("created_at").toInstant(),
+                            rs.getTimestamp("updated_at").toInstant()),
+                    documentId).stream().findFirst().orElse(null);
+        });
+    }
+
+    /**
+     * 取载体所属的版本坐标 ID（种片段时需要）。
+     */
+    private String queryEditionId(RagTenantContext ctx, String documentId) {
+        return transactionTemplate.execute(st -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, ctx.tenantId());
+            return jdbcTemplate.queryForObject(
+                    "SELECT edition_id FROM rag_document WHERE document_id = ?::uuid",
+                    String.class, documentId);
+        });
     }
 }

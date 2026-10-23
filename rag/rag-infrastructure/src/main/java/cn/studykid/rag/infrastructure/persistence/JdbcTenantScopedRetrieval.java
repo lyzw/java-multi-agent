@@ -45,7 +45,20 @@ public class JdbcTenantScopedRetrieval implements TenantScopedRetrieval {
         return transactionTemplate.execute(status -> {
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, tenantId);
-            return orchestrator.retrieve(request);
+            RetrievalResult result = orchestrator.retrieve(request);
+            // ⚠️ 检索留痕（报表中心「每日搜索的问题数」的唯一数据源）：
+            //    检索由系统发起（platform 工具调用），没有人类 principal，
+            //    principal_id 记 NULL——V5 迁移已把该列放宽为可空，
+            //    这是对「系统动作本就没有人类责任人」的诚实表达。
+            // ⚠️ 与检索同事务：审计写失败则整次检索回滚，
+            //    不允许「检索成功但无痕迹」——那会让报表少算一天，
+            //    且治理上留下不可追溯的召回行为。
+            jdbcTemplate.update("""
+                    INSERT INTO rag_access_audit
+                        (audit_id, tenant_id, principal_id, action, source_id)
+                    VALUES (gen_random_uuid(), rag_current_tenant(), NULL, 'RETRIEVE', NULL)
+                    """);
+            return result;
         });
     }
 }

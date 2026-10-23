@@ -18,8 +18,11 @@ export interface LoginRequest {
 /**
  * POST /api/auth/token 成功响应
  *
- * ⚠️ B1（2026-10-23）：登录响应**现已包含 `roles`**，前端据此做导航显隐，
- *    无需再调 {@code GET /api/auth/roles}（该端点仍保留供续期后重校验）。
+ * ⚠️ B1（2026-10-23）：登录响应**现已包含 `roles`**，前端据此做导航显隐。
+ *    但 `roles` 仍是**可选**字段（`roles?`）：
+ *    ① 后端版本较旧时该字段不存在；
+ *    ② 登录响应缺失角色时，前端会用 {@code GET /api/auth/roles} 回补
+ *       （见 {@link RolesResponse} 与 `SessionProvider` 的回补逻辑）。
  *    `roles` 仅用于 UI 提示，**不是安全边界**——后端执行时仍重新授权。
  */
 export interface LoginResponse {
@@ -43,6 +46,21 @@ export interface LoginResponse {
    *    安全判定以执行时后端重授权为准，前端**不得**据此放行敏感操作。
    */
   roles?: string[]
+}
+
+/**
+ * GET /api/auth/roles 成功响应（G1：登录返角色）
+ *
+ * ⚠️ **本类型不是冗余**——它是「登录响应缺 roles」时的**唯一**补救通道：
+ *    `POST /api/auth/token` 的 `roles` 字段是后端 B1 增补的，**旧版后端没有**；
+ *    而会话是持久化在 sessionStorage 里的，登录早于 B1 的会话其 `roles` 恒为空，
+ *    管理员会**永久**看不到管理菜单，除非重新登录。
+ *    `/api/auth/roles` 按令牌现查库中登记角色，故可在**不重新登录**的前提下回补。
+ *
+ * ⚠️ 角色仅用于 UI 提示，**不是安全边界**——后端执行时仍重新授权（红线 9）。
+ */
+export interface RolesResponse {
+  roles: string[]
 }
 
 /* ── Run ───────────────────────────────────────────────── */
@@ -702,6 +720,21 @@ export interface RagDocument {
   parserVersion: string | null
   contentHash: string | null
   chunkCount: number
+  /**
+   * 载体级校验状态（V3 迁移新增字段，此前一直是死字段）。
+   *
+   * ⚠️ 与来源级状态**并行**：同一 edition 下可以有官方电子版（VERIFIED）
+   *    与第三方扫描版（REJECTED），压平就无法表达「只下架其中一个载体」。
+   */
+  verificationStatus?: RagVerificationStatus
+  /** 载体级可检索标记 —— 撤回时置 false */
+  retrievable?: boolean
+  /** 撤回时刻 */
+  revokedAt?: string | null
+  /** 撤回依据（DB CHECK：REVOKED 必带依据） */
+  revokedReason?: string | null
+  /** 载体级版权状态（独立于来源级版权） */
+  licenseStatus?: RagLicenseStatus
   createdAt: string
   updatedAt: string
 }
@@ -762,9 +795,73 @@ export interface RagVerificationRequest {
   validDays: number
 }
 
+/**
+ * 载体级校验决定请求（对齐后端 `ManagementDtos.DocumentVerificationRequest`）。
+ *
+ * ⚠️ 字段与来源级**同构**，但作用对象不同：载体是「物理载体」
+ *    （一份 PDF / 一册扫描件），下架它不影响同版本的其它载体。
+ */
+export interface RagDocumentVerificationRequest {
+  targetStatus: RagVerificationStatus
+  /** 校验依据 —— 必填（撤回必带依据，DB CHECK 亦会拦） */
+  evidenceRef: string
+  /** 决定人 UUID —— 必填 */
+  decidedBy: string
+  verificationMethod: RagVerificationMethod
+  trustTier: RagTrustTier | null
+  validDays: number
+}
+
+/**
+ * 维护问题清单（对齐后端 `ManagementDtos.IssuesResponse`）。
+ *
+ * ⚠️ 这些是**「哪里坏了」的定位信息**，不是统计数字——
+ *    统计只说「缺 12 个向量」，清单才说「是哪几个载体」。
+ */
+export interface RagMaintenanceIssues {
+  /** 缺向量的载体（片段已入库但没有向量 → 静默漏召回） */
+  documentsMissingEmbedding: RagIssueDocument[]
+  /** 解析失败的载体（不产出片段 → 这份语料在检索侧等于不存在） */
+  documentsFailedParse: RagIssueDocument[]
+  /** 待审核的来源 */
+  sourcesPendingReview: RagIssueSource[]
+  totals: {
+    documentsMissingEmbedding: number
+    documentsFailedParse: number
+    sourcesPendingReview: number
+  }
+}
+
+/** 问题清单里的载体条目。 */
+export interface RagIssueDocument {
+  documentId: string
+  sourceId: string
+  title: string
+  carrier: string
+  parseStatus: string
+  chunkCount: number
+  /** 缺向量的片段数（仅 documentsMissingEmbedding 有意义） */
+  missingEmbeddingCount?: number
+}
+
+/** 问题清单里的来源条目。 */
+export interface RagIssueSource {
+  sourceId: string
+  title: string
+  verificationStatus: RagVerificationStatus
+  stale: boolean
+  trustTier: RagTrustTier
+}
+
+/** 重跑索引结果（对齐后端 `ManagementDtos.ReindexResponse`）。 */
+export interface RagReindexResult {
+  indexedChunks: number
+  scannedChunks: number
+  durationMs: number
+}
+
 /** 来源查询参数（对齐后端 `SourceQuery`）。 */
-export interface RagSourceQuery {
-  status?: RagVerificationStatus | null
+export interface RagSourceQuery {  status?: RagVerificationStatus | null
   trustTier?: RagTrustTier | null
   keyword?: string | null
   includeStale?: boolean
@@ -805,4 +902,128 @@ export const RAG_LICENSE_LABELS: Record<RagLicenseStatus, string> = {
   FAIR_USE_QUOTATION: '合理引用',
   PENDING: '未取得授权',
   RESTRICTED: '禁止使用',
+}
+
+/**
+ * 片段角色的可读标签（对齐后端 `rag-core` 的 `ChunkRole` 枚举）。
+ *
+ * ⚠️ 统计端点的 `chunksByRole` 以**枚举名**为 key（如 `EXERCISE_ANSWER`），
+ *    直接把英文枚举名甩给运维是「数据已取到但没读懂」——
+ *    故这里补一层中文标签。
+ *
+ * ⚠️ 用 `Record<string, string>` 而非 `Record<ChunkRole, string>`：
+ *    分布表的 key 来自 DB 的 `role::text`，**类型上不可知**，
+ *    新增枚举值时不该让前端编译失败（那会阻断构建而非暴露问题）。
+ */
+export const RAG_CHUNK_ROLE_LABELS: Record<string, string> = {
+  EXPLANATION: '正文讲解',
+  EXAMPLE: '例题',
+  EXAMPLE_SOLUTION: '例题标准解答',
+  EXERCISE: '习题',
+  EXERCISE_ANSWER: '习题答案',
+  EXERCISE_HINT: '习题提示',
+  PAPER_BODY: '论文正文',
+  PAPER_METHOD: '论文方法',
+  APPENDIX: '附录',
+}
+
+/**
+ * 载体解析状态的可读标签（对齐 `rag_document.parse_status` 的 DB CHECK 白名单）。
+ *
+ * ⚠️ 同上：key 来自 DB，类型不可知，故用 `Record<string, string>`。
+ */
+export const RAG_PARSE_STATUS_LABELS: Record<string, string> = {
+  PENDING: '待解析',
+  PARSED: '已解析',
+  CHUNKED: '已切分',
+  FAILED: '解析失败',
+}
+
+/* ── 报表中心（平台统计 / RAG 每日统计）────────────────── */
+
+/**
+ * 平台侧每日统计（对齐后端 `StatisticsPort.DailyStatistics`）。
+ *
+ * ⚠️ **只含租户级聚合，不含任何学生可识别信息**——
+ *    后端刻意不返回 student_id / 姓名 / 题目原文（P0-D00 §4 合规红线）。
+ *    前端**不得**据此推断个体行为。
+ */
+export interface DailyStatistics {
+  /** 每日辅导量（连续日期，缺数据填 0） */
+  runsByDay: RunDayStat[]
+  /** 每日错题分析数（连续日期，缺数据填 0） */
+  weaknessesByDay: WeaknessDayStat[]
+  /** 每日学生活跃 / 新增（连续日期，缺数据填 0） */
+  studentsByDay: StudentDayStat[]
+  /** 薄弱知识点排行（按命中次数降序） */
+  topKnowledgePoints: KnowledgePointRank[]
+  /** 实际生成的连续天数 */
+  generatedDays: number
+}
+
+/** 单日辅导量（含终态拆分）。 */
+export interface RunDayStat {
+  /** UTC 日期，格式 yyyy-MM-dd */
+  date: string
+  /** 当日发起的辅导总数（含在途：排队中/分析中） */
+  total: number
+  /** 当日终态数（成功+失败+超时+取消）—— 成功率的分母 */
+  terminal: number
+  succeeded: number
+  failed: number
+  timedOut: number
+  cancelled: number
+}
+
+/** 单日错题分析数（错题产生的错因记录条数）。 */
+export interface WeaknessDayStat {
+  date: string
+  count: number
+}
+
+/** 单日学生活跃 / 新增。 */
+export interface StudentDayStat {
+  date: string
+  /** 当日参与错因分析的去重学生数 */
+  activeStudents: number
+  /** 当日首次建档的学生数 */
+  newStudents: number
+}
+
+/** 薄弱知识点排行项。 */
+export interface KnowledgePointRank {
+  knowledgePoint: string
+  /** 命中次数 */
+  count: number
+  /** 该知识点下的错因分布（errorType → 次数） */
+  errorTypes: Record<string, number>
+}
+
+/** RAG 侧每日检索次数（对齐后端 `ManagementDtos.DailySearchResponse`）。 */
+export interface RagDailySearchStatistics {
+  searchesByDay: RagDailySearchCount[]
+  generatedDays: number
+}
+
+/** 单日检索次数。 */
+export interface RagDailySearchCount {
+  date: string
+  searches: number
+}
+
+/** RAG 侧每日导入语料量（对齐后端 `ManagementDtos.DailyImportResponse`）。 */
+export interface RagDailyImportStatistics {
+  importsByDay: RagDailyImportCount[]
+  generatedDays: number
+}
+
+/** 单日导入语料量（三层级）。 */
+export interface RagDailyImportCount {
+  date: string
+  /** 资料来源（册 / 作品）数 */
+  sources: number
+  /** 文档载体（物理文件）数 */
+  documents: number
+  /** 可检索片段数 */
+  chunks: number
 }

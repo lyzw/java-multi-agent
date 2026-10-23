@@ -50,14 +50,33 @@ public record RetrievalResult(
     /**
      * 单个召回片段及其分数与解释。
      *
+     * <p><b>⚠️ 为什么是两个分数而不是一个</b>（2026-10-23 修复）：
+     * 这两个分数<b>量纲不同</b>，混用会直接废掉分数门禁。
+     * <ul>
+     *   <li>{@code score}——<b>相关性分</b>（0~1）：检索器给出的真实相关性，
+     *       稠密通道是余弦相似度、词法通道是 {@code ts_rank}。
+     *       <b>分数门禁作用在它上面</b>（门禁阈值按 0~1 相关性标定，
+     *       见 RD-Q2）：低于阈值即「未找到依据」。</li>
+     *   <li>{@code fusionScore}——<b>融合排序分</b>：RRF 值，
+     *       只用排名、跨语料稳定，量纲极小（双通道命中时最大约 2/61 ≈ 0.033）。
+     *       <b>排序与版本降权作用在它上面</b>。</li>
+     * </ul>
+     * ⚠️ <b>曾经的缺陷</b>：JDBC 实现把 RRF 融合分塞进 {@code score}，
+     * 于是门禁（0.2/0.35）永远高于 RRF 上限（≈0.033），
+     * 检索<b>恒定返回「未找到依据」</b>——语料再全也召不回任何东西。
+     * 这正是端口契约所说的「门禁必须作用于检索器给出的真实相关性分数」
+     * 被实现层违反的后果。
+     *
      * @param chunk 被召回片段
-     * @param score 综合得分（0~1）
+     * @param score 相关性分（0~1，门禁作用于此）
+     * @param fusionScore 融合排序分（RRF，排序作用于此）
      * @param channel 召回通道
      * @param reason 命中原因
      */
     public record ScoredChunk(
             @NonNull Chunk chunk,
             double score,
+            double fusionScore,
             @NonNull RetrievalChannel channel,
             @NonNull HitReason reason
     ) {
@@ -68,6 +87,9 @@ public record RetrievalResult(
             }
             if (score < 0.0 || score > 1.0) {
                 throw new IllegalArgumentException("score 必须落在 [0,1]");
+            }
+            if (fusionScore < 0.0 || fusionScore > 1.0) {
+                throw new IllegalArgumentException("fusionScore 必须落在 [0,1]");
             }
             if (channel == null) {
                 throw new IllegalArgumentException("channel 不能为空");

@@ -10,6 +10,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
+
 /**
  * 启动即触发重索引（RAG-D09 R2-1）。
  *

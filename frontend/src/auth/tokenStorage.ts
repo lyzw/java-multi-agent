@@ -90,6 +90,39 @@ export function clearSession(): void {
   window.sessionStorage.removeItem(STORAGE_KEY)
 }
 
+/**
+ * 原地更新已存会话的角色集合（回补用）。
+ *
+ * ⚠️ **必须保留 `expiresAt`**：重新走 {@link saveSession} 需要 `expiresIn`，
+ *    而回补时手里只有绝对过期时刻——用 TTL 反推会引入漂移，
+ *    故这里只改 `roles` 一个字段，其余原样保留。
+ *
+ * ⚠️ `expectedToken` 用于**防串写**：回补是异步的，期间会话可能已被
+ *    登出或换成另一个令牌。此时若无条件写入，就会把旧令牌的角色
+ *    写到新会话上——故只在存储中的令牌仍与预期一致时才写。
+ *
+ * ⛔ 写失败（如 JSON 损坏）**不抛**：内存态已更新，持久化只是锦上添花。
+ *
+ * @returns 是否确实写入（false = 无可写会话、令牌不匹配或存储异常）
+ */
+export function updateSessionRoles(roles: string[], expectedToken?: string): boolean {
+  if (!isBrowser()) return false
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_KEY)
+    if (raw === null) return false
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return false
+    const record = parsed as Record<string, unknown>
+    if (typeof record['accessToken'] !== 'string') return false
+    if (expectedToken !== undefined && record['accessToken'] !== expectedToken) return false
+    record['roles'] = roles
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(record))
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** 剩余有效秒数；<= 0 表示已过期 */
 export function remainingSeconds(
   session: StoredSession | null,

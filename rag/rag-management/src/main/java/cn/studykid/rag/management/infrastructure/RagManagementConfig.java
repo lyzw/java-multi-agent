@@ -7,6 +7,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
+import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 
 /**
@@ -15,6 +17,7 @@ import cn.studykid.rag.management.ports.CorpusManagementPort;
  * <p>装配内容：
  * <pre>
  *   CorpusManagementPort → JdbcCorpusManagementRepository
+ *   CorpusIndexingPort   → ChunkIndexerIndexingAdapter（委托给基础设施层的 ChunkIndexer）
  * </pre>
  *
  * <p><b>⚠️ 事务模板的必要性</b>：管理侧所有 SQL 都以
@@ -65,5 +68,27 @@ public class RagManagementConfig {
             @Qualifier("ragManagementTransactionTemplate")
             TransactionTemplate transactionTemplate) {
         return new JdbcCorpusManagementRepository(jdbcTemplate, transactionTemplate);
+    }
+
+    /**
+     * 语料重索引端口。
+     *
+     * <p><b>⚠️ 依赖的是基础设施层的 {@link ChunkIndexer} 实现</b>：
+     * 索引逻辑只有一份（{@code rag-infrastructure}），
+     * 管理面与 worker 共用——「哪些片段算待索引」这条 fail-closed 口径
+     * 若有两份实现，未校验语料就可能经由其中一条路径进索引。
+     *
+     * <p><b>⚠️ 本类不定义 {@link ChunkIndexer} bean</b>：
+     * 它需要 {@code EmbeddingPort} 与 {@code CorpusRepository}，
+     * 而这两个 bean 的归属方是<b>启动装配</b>（rag-bootstrap / rag-worker），
+     * 管理面只「消费」而不「生产」——
+     * 否则管理面会替启动器决定用哪个嵌入模型。
+     *
+     * @param chunkIndexer 基础设施层的片段索引器
+     * @return 重索引端口
+     */
+    @Bean
+    public CorpusIndexingPort corpusIndexingPort(ChunkIndexer chunkIndexer) {
+        return new ChunkIndexerIndexingAdapter(chunkIndexer);
     }
 }

@@ -1,101 +1,91 @@
 /**
- * 应用外壳（FE-D3 §3.1）
+ * 应用外壳（演进重做 · 保留全部行为契约）
  *
- * 顶栏 + 侧栏。侧栏用线与留白分组，不用圆角卡片。
+ * 顶栏 + 侧栏。侧栏按角色分面分组（辅导台 / 知识库治理 / 运行治理 / 平台配置与运维）。
  *
- * ⚠️ 2026-10-23（评审方案 F1 + B1）：导航按**角色分面**重排——
- *    辅导台 / 知识库治理 / 运行治理 / 平台配置与运维 四个分面，
- *    每个分面标题下标注「通常需要哪些角色」。
- *    可见性由登录回带的 `roles` 控制（学生/家长/老师只看到辅导台等学生侧页；
- *    语料管理、审批台等需角色的分面按角色出现）。
- *    这只是一层 UI 引导，**不是安全边界**：后端执行时仍按红线 9 重授权。
+ * ✅ 演进点：
+ *   · 每个导航项配图标（线性描边），扫描更快；
+ *   · 新增「折叠为图标栏」开关，替代旧版中屏「只显示首字」的信息丢失；
+ *   · 顶栏加品牌标识块；折叠按钮为图标按钮。
+ *
+ * ⚠️ 保留的硬契约（nav.menu.test.tsx / design.spec.test.ts 依赖）：
+ *   · 恰好 16 个 link，可访问名 = 中文标签（图标 aria-hidden）；
+ *   · 4 个分面标题；header-identity / roles-unknown-notice 两个 testid；
+ *   · <main className="main">；小屏（≤767px）侧栏横向滚动；
+ *   · 到期预警 / 角色未回传提示 / 登出 全部保留。
  */
 
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useSession } from '@/auth/session'
 import { hasRoleAccess } from '@/auth/RequireRole'
+import { Icon, type IconName } from '@/components/Icon'
 
 interface NavItem {
   to: string
   label: string
+  icon: IconName
   /** 需要的角色区域；缺省 = 任何已登录用户可见（学生侧页面） */
   area?: string
 }
 
 interface NavGroup {
   title: string
-  /**
-   * 该分面的受众说明（F1）。
-   *
-   * ⚠️ 只作**解释性小字**，不参与过滤判定——真正决定可见性的是 item.area
-   *    与登录回带的 roles。写清楚受众能避免「为什么我看不到那一组」的困惑。
-   */
+  icon: IconName
   rolesHint?: string
   items: NavItem[]
 }
 
-/**
- * ⚠️ 四视图分面（评审方案 §3.2）：
- *   · 辅导台       —— 终端用户（学生/家长/老师），无 area，对所有人可见
- *   · 知识库治理   —— 内容审核 / 租户管理员（语料管理是审核与下架，非学生检索）
- *   · 运行治理     —— 审批人 / 租户管理员（审批台 / 处置台 / 审计）
- *   · 平台配置与运维 —— 租户管理员 / 运维（配置只读骨架 + 系统健康）
- *
- * ⚠️ 知识检索（/rag）只放在「辅导台」：它是学生侧的检索入口；
- *    「知识库治理」只放语料管理（审核面）。两者同属知识库主题，
- *    但受众与动作不同，按分面分开比在两组各放一份更清晰（避免重复入口）。
- */
 const NAV: NavGroup[] = [
   {
     title: '辅导台',
+    icon: 'dashboard',
     rolesHint: '学生 / 家长 / 老师',
     items: [
-      { to: '/', label: '工作台' },
-      { to: '/runs/new', label: '发起辅导' },
-      { to: '/runs', label: '检索记录' },
-      { to: '/rag', label: '知识检索' },
-      { to: '/profile', label: '学习画像' },
+      { to: '/', label: '工作台', icon: 'dashboard' },
+      { to: '/runs/new', label: '发起辅导', icon: 'plus' },
+      { to: '/runs', label: '检索记录', icon: 'search' },
+      { to: '/rag', label: '知识检索', icon: 'book' },
+      { to: '/profile', label: '学习画像', icon: 'profile' },
     ],
   },
   {
     title: '知识库治理',
+    icon: 'layers',
     rolesHint: '需内容审核 / 租户管理员',
-    items: [
-      // ⚠️ 语料管理属治理分面：动作是审核与下架（撤回），不是面向学生的检索。
-      { to: '/rag/management', label: '语料管理', area: 'ragManagement' },
-    ],
+    items: [{ to: '/rag/management', label: '语料管理', icon: 'layers', area: 'ragManagement' }],
   },
   {
     title: '运行治理',
+    icon: 'shield',
     rolesHint: '需审批人 / 租户管理员',
     items: [
-      { to: '/approvals', label: '审批台', area: 'approvals' },
-      { to: '/reconciliation', label: '未知操作处置', area: 'reconciliation' },
-      { to: '/audit', label: '审计查询', area: 'audit' },
+      { to: '/approvals', label: '审批台', icon: 'shield', area: 'approvals' },
+      { to: '/reconciliation', label: '未知操作处置', icon: 'alert', area: 'reconciliation' },
+      { to: '/audit', label: '审计查询', icon: 'file', area: 'audit' },
     ],
   },
   {
     title: '平台配置与运维',
+    icon: 'sliders',
     rolesHint: '需租户管理员 / 运维',
     items: [
-      { to: '/config', label: '配置总览', area: 'config' },
-      { to: '/config/runtime', label: '运行与容量', area: 'config' },
-      { to: '/config/tools', label: '工具与审批', area: 'config' },
-      { to: '/config/compliance', label: '合规与零保留', area: 'config' },
-      { to: '/agents', label: 'Agent 配置', area: 'agents' },
-      { to: '/health', label: '系统健康', area: 'health' },
+      { to: '/config', label: '配置总览', icon: 'sliders', area: 'config' },
+      { to: '/config/runtime', label: '运行与容量', icon: 'gauge', area: 'config' },
+      { to: '/config/tools', label: '工具与审批', icon: 'wrench', area: 'config' },
+      { to: '/config/compliance', label: '合规与零保留', icon: 'lock', area: 'config' },
+      { to: '/agents', label: 'Agent 配置', icon: 'cpu', area: 'agents' },
+      { to: '/health', label: '系统健康', icon: 'activity', area: 'health' },
     ],
   },
 ]
 
 export function AppShell(): JSX.Element {
-  const { signOut, expiringSoon, roles, session } = useSession()
+  const { signOut, expiringSoon, roles, rolesStatus, session, refreshRoles } = useSession()
   const navigate = useNavigate()
   const [warn, setWarn] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
 
-  // ⚠️ 按角色显隐导航项：没有 area 的项（学生侧页面）对所有人可见；
-  //    带 area 的项仅当 hasRoleAccess 通过才显示。安全以后端为准。
   const visibleNav = NAV.map((group) => ({
     ...group,
     items: group.items.filter(
@@ -104,7 +94,13 @@ export function AppShell(): JSX.Element {
   })).filter((group) => group.items.length > 0)
 
   const roleLabel =
-    roles.length > 0 ? roles.join(' · ') : '学生 / 家长 / 老师'
+    rolesStatus === 'unknown'
+      ? '角色未回传'
+      : roles.length > 0
+        ? roles.join(' · ')
+        : '无管理角色'
+
+  const rolesUnknown = rolesStatus === 'unknown'
   const tenantShort =
     session?.tenantId != null && session.tenantId.length >= 8
       ? session.tenantId.slice(0, 8)
@@ -115,24 +111,40 @@ export function AppShell(): JSX.Element {
       signOut()
       navigate('/login', { replace: true })
     } catch {
-      // ⛔ 登出异常不应阻断跳转，否则用户被困在失效会话里
       setWarn(true)
       navigate('/login', { replace: true })
     }
   }
 
   return (
-    <div className="shell">
+    <div className="shell" data-collapsed={collapsed}>
       <header className="header">
-        <span className="header__brand">错题归因辅导</span>
+        <span className="brand">
+          <span className="brand__mark">
+            <Icon name="book" />
+          </span>
+          <span className="brand__text">错题归因辅导</span>
+        </span>
         <div className="header__right">
           <span
             className="header__identity"
-            title={`角色来自登录响应；租户 ${session?.tenantId ?? '—'}（仅用于 RAG 等下游调用）`}
+            data-testid="header-identity"
+            title={`角色来自登录响应或 /api/auth/roles 回补；租户 ${session?.tenantId ?? '—'}（仅用于 RAG 等下游调用）`}
           >
             角色：{roleLabel} · 租户 {tenantShort}
           </span>
+          <button
+            type="button"
+            className="btn btn--quiet btn--icon"
+            aria-label={collapsed ? '展开导航' : '折叠导航'}
+            aria-pressed={collapsed}
+            title={collapsed ? '展开导航' : '折叠导航'}
+            onClick={() => setCollapsed((v) => !v)}
+          >
+            <Icon name="panel" />
+          </button>
           <button type="button" className="btn btn--quiet" onClick={handleSignOut}>
+            <Icon name="logout" />
             退出
           </button>
         </div>
@@ -145,17 +157,30 @@ export function AppShell(): JSX.Element {
         </p>
       ) : null}
 
-      {/*
-        ⚠️ 到期前 60s 预警（FE-D1 §4.2）。
-
-        ⛔ 不用 --mark 红：这是**提示**不是**错误**，红边只留给指出错误（FE-D3 R1）。
-        用中性线 + settled 色文字，与「错误」在视觉上明确区分。
-      */}
       {expiringSoon ? (
         <p role="status" className="marked marked--calm" style={{ margin: 0 }}>
           <span className="marked__label">会话即将到期</span>
           还有约 1 分钟。后端暂不支持自动续期，届时需要重新登录。
         </p>
+      ) : null}
+
+      {rolesUnknown ? (
+        <div
+          role="status"
+          className="marked marked--calm"
+          style={{ margin: 0 }}
+          data-testid="roles-unknown-notice"
+        >
+          <span className="marked__label">角色未回传</span>
+          后端未返回当前账号的角色，管理菜单暂不显示（安全策略：角色未知一律不放行）。
+          <button
+            type="button"
+            className="btn btn--quiet"
+            onClick={() => void refreshRoles(true)}
+          >
+            重试获取角色
+          </button>
+        </div>
       ) : null}
 
       <div className="shell__body">
@@ -169,8 +194,9 @@ export function AppShell(): JSX.Element {
               <ul>
                 {group.items.map((item) => (
                   <li key={item.to}>
-                    <NavLink to={item.to} end={item.to === '/'}>
-                      {item.label}
+                    <NavLink to={item.to} end={item.to === '/'} className="nav__link" title={item.label}>
+                      <Icon name={item.icon} className="nav__icon" />
+                      <span className="nav__label">{item.label}</span>
                     </NavLink>
                   </li>
                 ))}

@@ -18,11 +18,14 @@ import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
+import cn.studykid.rag.management.core.CorpusDocument;
 import cn.studykid.rag.management.core.CorpusSource;
+import cn.studykid.rag.management.core.DocumentVerificationDecision;
 import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
 import cn.studykid.rag.management.core.VerificationDecision;
+import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort.ChunkSummary;
 
@@ -85,13 +88,34 @@ public class RagManagementController {
     /** 片段列举的硬上限：防止管理端一次性拉走整册内容。 */
     private static final int MAX_CHUNK_LIMIT = 500;
 
-    private final CorpusManagementPort managementPort;
+    /**
+     * 单次重索引的默认片段数。
+     *
+     * <p>⚠️ 默认值偏小是刻意的：重索引是<b>同步 HTTP 调用</b>，
+     * 一次处理太多会让管理面的响应时间不可控（详见 {@link #MAX_REINDEX_LIMIT}）。
+     */
+    private static final int DEFAULT_REINDEX_LIMIT = 500;
 
-    public RagManagementController(CorpusManagementPort managementPort) {
-        if (managementPort == null) {
-            throw new IllegalArgumentException("managementPort 不能为空");
+    /**
+     * 单次重索引的硬上限。
+     *
+     * <p>⚠️ 为什么必须有上限：重索引会为每个片段调用一次嵌入模型，
+     * 上限 2000 意味着最坏情况也要跑上数十秒。HTTP 请求线程被长期占用，
+     * 高并发下会拖垮管理面（乃至占满 Web 容器工作线程）。
+     * 剩下的片段留给下一次调用——管理面是<b>可重复触发</b>的。
+     */
+    private static final int MAX_REINDEX_LIMIT = 2000;
+
+    private final CorpusManagementPort managementPort;
+    private final CorpusIndexingPort indexingPort;
+
+    public RagManagementController(CorpusManagementPort managementPort,
+                                   CorpusIndexingPort indexingPort) {
+        if (managementPort == null || indexingPort == null) {
+            throw new IllegalArgumentException("managementPort / indexingPort 不能为空");
         }
         this.managementPort = managementPort;
+        this.indexingPort = indexingPort;
     }
 
     /**
@@ -261,6 +285,183 @@ public class RagManagementController {
                 stats.chunksMissingEmbedding(), stats.missingEmbeddingRatio(),
                 stats.chunksByRole(), stats.sourcesByVerificationStatus(),
                 stats.documentsByParseStatus());
+    }
+
+    /**
+     * 每日检索次数（报表中心 · 每日搜索的问题数）。
+     *
+     * <p>⚠️ 数据来源是 {@code rag_access_audit} 的 {@code RETRIEVE} 动作：
+     * 检索链路每次检索都会落审计（见 {@code JdbcTenantScopedRetrieval}）。
+     * 上线前的历史检索没有审计记录，会体现为「之前的日子里搜索数为 0」——
+     * 这是数据起点，不是接口缺陷。
+     *
+     * @param tenantId 租户 ID
+     * @param days 最近天数（缺省 30，钳制在 1～90）
+     * @return 连续日期的每日检索次数
+     */
+    @GetMapping("/statistics/daily-searches")
+    public ManagementDtos.DailySearchResponse dailySearches(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestParam(value = "days", defaultValue = "30") int days) {
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        var stats = managementPort.dailySearchStatistics(tenant, days);
+        return ManagementDtos.toDailySearchResponse(stats);
+    }
+
+    /**
+     * 每日导入语料量（报表中心 · 每日导入 RAG 的资料数）。
+     *
+     * <p>三层级分别计数：资料来源（登记了多少资料）、
+     * 文档载体（导入了多少物理文件）、片段（切出了多少可检索片段）。
+     *
+     * @param tenantId 租户 ID
+     * @param days 最近天数（缺省 30，钳制在 1～90）
+     * @return 连续日期的每日导入量
+     */
+    @GetMapping("/statistics/daily-imports")
+    public ManagementDtos.DailyImportResponse dailyImports(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestParam(value = "days", defaultValue = "30") int days) {
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        var stats = managementPort.dailyImportStatistics(tenant, days);
+        return ManagementDtos.toDailyImportResponse(stats);
+    }
+
+    /**
+     * 载体级校验流转（认领 / 通过 / 拒绝 / 撤回某个物理载体）。
+     *
+     * <p><b>⚠️ 为什么需要载体级端点</b>（RAG-D03 §4 / RAG-D07 §2.3.1 G-0）：
+     * 来源与载体是<b>两个独立轴</b>。同一版本下可能同时存在
+     * 「官方电子版」（可信）与「第三方扫描版」（质量存疑）。
+     * 只有来源级端点时，管理员只能「整部撤回」或「整部放过」——
+     * 要么误伤正版电子版，要么放行劣质扫描件。
+     *
+     * <p><b>⚠️ 错误语义</b>：
+     * <ul>
+     *   <li>缺租户头 / 非法入参 → 400；</li>
+     *   <li>非法状态转移、载体高于来源 → 409（治理规则被违反）；</li>
+     *   <li>载体不存在 → 404。</li>
+     * </ul>
+     *
+     * <p><b>⚠️ 诚实边界</b>：本端点把「载体已下架」如实落到
+     * {@code rag_document.ver_status='REVOKED'} 与 {@code retrievable=false}，
+     * 管理台因此能显示真实结论；但<b>检索期尚未过滤 {@code doc.retrievable}</b>
+     * （RAG-D07 §8 登记的 RAG-R01 缺口），
+     * 故「单独撤回某个载体」在检索侧仍可能被召回。
+     * 来源级撤回不受此影响（它会把载体一并置 REVOKED，且来源级过滤本就生效）。
+     *
+     * @param tenantId 租户 ID
+     * @param documentId 载体 ID
+     * @param request 校验决定
+     * @return 转移后的载体视图
+     */
+    @PostMapping("/documents/{documentId}/verification")
+    public ManagementDtos.DocumentResponse applyDocumentVerification(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @PathVariable("documentId") String documentId,
+            @Valid @RequestBody ManagementDtos.DocumentVerificationRequest request) {
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        // ⚠️ 路径参数先做形态校验：非 UUID 的 document_id 会被 PG 的
+        //    `?::uuid` 转换拒绝，那会变成一条 500 的 SQL 错误——
+        //    而它其实是调用方传参错误，应当是 400。
+        requireUuidPathVariable(documentId, "documentId");
+        CorpusDocument updated;
+        try {
+            // ⚠️ 命令构造与端口调用必须放在**同一个** try 里：
+            //    「目标状态不在允许集合内」是命令构造期就拒绝的入参形态问题（400），
+            //    若只包住端口调用，这个 IllegalArgumentException 会漏成 500。
+            DocumentVerificationDecision decision = new DocumentVerificationDecision(
+                    request.targetStatus(), request.evidenceRef(), request.decidedBy(),
+                    request.verificationMethod(), request.trustTier(),
+                    request.validDays() == null ? 365 : request.validDays());
+            updated = managementPort.applyDocumentVerification(tenant, documentId, decision);
+        } catch (IllegalArgumentException e) {
+            // ⚠️ 入参形态问题（目标状态不在允许集合内等）→ 400。
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (IllegalStateException e) {
+            // ⚠️ 非法状态转移 / 载体高于来源 → 409：
+            //    那是**治理规则被违反**，不是服务故障。
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
+        if (updated == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "载体不存在：" + documentId);
+        }
+        return ManagementDtos.toDocumentResponse(updated);
+    }
+
+    /**
+     * 维护问题清单（缺向量 / 解析失败 / 待审核）。
+     *
+     * <p><b>⚠️ 计算属性一律服务端算</b>：清单里的 {@code stale}
+     * 依赖校验有效期与当前时刻，前端没有租户权威门槛（G-3）上下文，
+     * 自己推算出来的结论必然与服务端口径漂移。
+     *
+     * @param tenantId 租户 ID
+     * @return 问题清单视图
+     */
+    @GetMapping("/issues")
+    public ManagementDtos.IssuesResponse issues(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader) {
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        return ManagementDtos.toIssuesResponse(managementPort.listIssues(tenant));
+    }
+
+    /**
+     * 重跑索引（补齐缺切词或缺向量的片段）。
+     *
+     * <p><b>⚠️ 只索引本租户</b>：租户上下文来自请求头，
+     * 索引实现全程在设置了 {@code app.tenant_id} 的事务内操作。
+     *
+     * <p><b>⚠️ fail-closed</b>：只处理「来源已 VERIFIED」的片段，
+     * 与 worker 的启动重索引<b>同一口径</b>（同一份 SQL）——
+     * 未校验语料不会因为「点了重跑索引」就进索引。
+     *
+     * @param tenantId 租户 ID
+     * @param request 重索引请求（可空 → 用默认上限）
+     * @return 重索引结果
+     */
+    @PostMapping("/reindex")
+    public ManagementDtos.ReindexResponse reindex(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @Valid @RequestBody(required = false) ManagementDtos.ReindexRequest request) {
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        int limit = request == null || request.limit() == null
+                ? DEFAULT_REINDEX_LIMIT
+                : request.limit();
+        // ⚠️ 上限在这里再压一道：Bean Validation 只在**请求体存在**时生效，
+        //    而 body 可空 → 默认值分支也要过同一道闸。
+        if (limit <= 0 || limit > MAX_REINDEX_LIMIT) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "limit 必须在 1～" + MAX_REINDEX_LIMIT + " 之间");
+        }
+        CorpusIndexingPort.ReindexOutcome outcome = indexingPort.reindex(tenant.tenantId(), limit);
+        return new ManagementDtos.ReindexResponse(
+                outcome.indexedChunks(), outcome.scannedChunks(), outcome.durationMs());
+    }
+
+    /**
+     * 校验路径参数是否为合法 UUID。
+     *
+     * @param raw 原始路径参数
+     * @param field 字段名（用于错误消息）
+     */
+    private void requireUuidPathVariable(String raw, String field) {
+        if (raw == null || raw.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + " 不能为空");
+        }
+        try {
+            java.util.UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException e) {
+            // ⚠️ 不合法 UUID 若放行到 SQL，PG 的 `?::uuid` 转换会抛异常 → 500。
+            //    那是调用方传参错误，必须是 400。
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    field + " 不是合法 UUID：" + raw);
+        }
     }
 
     /**

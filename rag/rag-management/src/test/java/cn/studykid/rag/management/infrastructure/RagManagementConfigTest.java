@@ -15,6 +15,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
+import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 
 /**
@@ -52,6 +54,18 @@ class RagManagementConfigTest {
         PlatformTransactionManager transactionManager() {
             return mock(PlatformTransactionManager.class);
         }
+
+        /**
+         * 片段索引器的替身。
+         *
+         * <p>⚠️ 管理面<b>消费</b>基础设施层的 {@link ChunkIndexer}（不自己造），
+         * 因此装配上下文里必须有一个它，否则 {@code corpusIndexingPort} 无法创建——
+         * 这正是本测试要守住的那类「启动就崩」问题。
+         */
+        @Bean
+        ChunkIndexer chunkIndexer() {
+            return mock(ChunkIndexer.class);
+        }
     }
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
@@ -88,6 +102,29 @@ class RagManagementConfigTest {
             assertNotNull(context.getBean("ragManagementTransactionTemplate"));
             assertNotNull(context.getBean(TransactionTemplate.class),
                     "只存在一个事务模板时按类型注入也必须可用");
+        });
+    }
+
+    @Test
+    @DisplayName("重索引端口被注册为 Bean，且实现为 ChunkIndexer 适配器")
+    void corpusIndexingPortIsRegistered() {
+        runner.run(context -> {
+            assertNotNull(context.getBean(CorpusIndexingPort.class),
+                    "重索引端口应被注册为 Bean");
+            assertSame(ChunkIndexerIndexingAdapter.class,
+                    context.getBean(CorpusIndexingPort.class).getClass(),
+                    "重索引端口应装配为委托给基础设施层 ChunkIndexer 的适配器");
+        });
+    }
+
+    @Test
+    @DisplayName("存在且仅存在一个 CorpusIndexingPort（无歧义）")
+    void exactlyOneIndexingPortExists() {
+        runner.run(context -> {
+            String[] names = context.getBeanNamesForType(CorpusIndexingPort.class);
+            assertNotNull(names);
+            assertEquals(1, names.length,
+                    "重索引端口应恰好有一个实现，实际 " + names.length + " 个");
         });
     }
 }

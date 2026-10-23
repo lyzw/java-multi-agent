@@ -17,6 +17,7 @@ import { login, ApiError } from '@/api/client'
 import type { NormalizedError } from '@/api/errors'
 import { useSession } from '@/auth/session'
 import { ErrorView } from '@/shared/ErrorView'
+import { Icon } from '@/components/Icon'
 
 interface LocationState {
   from?: string
@@ -46,13 +47,19 @@ export function LoginPage(): JSX.Element {
       //    ⚠️ 优先用**后端回带值**；后端未回带时才回落到用户输入的 tenantId
       //    （兼容旧后端），但绝不因此报错中断登录。
       // ⚠️ B1（2026-10-23）：登录响应现含 roles，透传给会话层用于导航显隐。
-      //    旧后端未回带时回落为空数组（不影响登录，安全判定仍由后端执行时重授权）。
+      //    ⚠️ **必须原样透传 `response.roles`（可能是 undefined），不得用 `?? []`**：
+      //        `undefined` = 后端**没有回带**该字段（老版本后端）→ 角色未知，
+      //        会话层将回补 `/api/auth/roles`；
+      //        `[]` = 后端回带了**空数组**（该账号确实无角色）→ 角色已知且为空。
+      //    二者在 `?? []` 之后会**坍缩成同一个值**，
+      //    于是「后端没回带」被误判成「你没有管理权限」——
+      //    管理员会永久看不到管理菜单，且**没有任何提示**。
       signIn(
         response.accessToken,
         response.expiresIn,
         response.tenantId ?? tenantId,
         response.principalId ?? null,
-        response.roles ?? [],
+        response.roles,
       )
       const state = location.state as LocationState | null
       navigate(state?.from ?? '/', { replace: true })
@@ -75,7 +82,12 @@ export function LoginPage(): JSX.Element {
   return (
     <main className="login">
       <div className="login__panel">
-        <h1 className="login__brand">错题归因辅导</h1>
+        <div className="brand login__brand">
+          <span className="brand__mark">
+            <Icon name="book" />
+          </span>
+          <h1 className="brand__text">错题归因辅导</h1>
+        </div>
         <p className="login__lead">
           用学校发的账号登录。
           <br />
@@ -136,7 +148,7 @@ export function LoginPage(): JSX.Element {
 
           {error !== null ? <ErrorView error={error} /> : null}
 
-          <button type="submit" className="btn" disabled={submitting}>
+          <button type="submit" className="btn btn--block" disabled={submitting}>
             {submitting ? '登录中…' : '登录'}
           </button>
         </form>

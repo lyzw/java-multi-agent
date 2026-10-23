@@ -595,30 +595,27 @@
 
 /* ── 响应式：三断点 ──────────────────────────────────── */
 
-/* 中屏：侧栏收窄为图标条 */
+/* 中屏：侧栏收窄为图标栏（修复旧版「只显示首字」的信息丢失）*/
 @media (max-width: 1023px) {
   .nav {
-    width: var(--nav-w-mid);
+    width: var(--nav-w-rail);
   }
 
-  .nav__group-title {
-    /* 图标态不显示分组文字 */
-    display: none;
-  }
-
+  .nav__group-title,
   .nav__group-hint {
-    /* 图标态同样不显示角色提示 */
+    /* 图标态不显示分组文字与角色提示 */
     display: none;
   }
 
-  .nav a {
+  .nav a,
+  .nav__link {
     padding: 0;
     justify-content: center;
-    font-size: var(--t-note);
-    /* 文字改为首字，避免完全丢失信息 */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+
+  /* 标签隐藏、图标保留；title 属性在悬浮时给出完整名称 */
+  .nav__label {
+    display: none;
   }
 
   .main {
@@ -662,14 +659,26 @@
     display: flex;
   }
 
-  .nav a {
+  .nav a,
+  .nav__link {
     padding: var(--s-2) var(--s-3);
     border-left: none;
     border-bottom: 2px solid transparent;
     white-space: nowrap;
   }
 
-  .nav a[aria-current='page'] {
+  /* 顶部横条重新显示文字标签（覆盖中屏的隐藏）*/
+  .nav__label {
+    display: inline;
+  }
+
+  .nav__group-title,
+  .nav__group-hint {
+    display: none;
+  }
+
+  .nav a[aria-current='page'],
+  .nav__link[aria-current='page'] {
     border-left-color: transparent;
     border-bottom-color: var(--ink);
   }
@@ -931,4 +940,357 @@
 
 .breadcrumbs__sep {
   color: var(--ink-3);
+}
+
+/* ═══════════════════════════════════════════════════════════
+ * 演进（现代化）组件层 —— 在「批改纸」纪律内补齐现代交互件
+ *
+ * 三条不变的红线：
+ *   ⛔ 不用 box-shadow（区块分层靠 1px 边 + 极浅纸面，仍是纸不是浮起卡片）
+ *   ⛔ 不引入彩色主按钮 / 品牌蓝（--ink 仍是唯一主色，--mark/--settled 仍是唯二语义色）
+ *   ⛔ 所有新类名都在本文件定义（css.integrity 不变式）
+ * ═══════════════════════════════════════════════════════════ */
+
+/* ── 图标：线性描边，继承 currentColor，随颜色/字号走 ─────── */
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--icon);
+  height: var(--icon);
+  color: inherit;
+}
+.icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.icon--sm { width: var(--icon-sm); height: var(--icon-sm); }
+.icon--lg { width: var(--icon-lg); height: var(--icon-lg); }
+
+/* ── 页头：eyebrow + 标题 + 导语 + 右侧操作 ────────────────── */
+.page-head { margin-bottom: var(--s-5); }
+.page-head__eyebrow {
+  margin: 0 0 var(--s-1);
+  font-size: var(--t-note);
+  color: var(--ink-3);
+  letter-spacing: 0.02em;
+}
+.page-head__title { margin: 0 0 var(--s-2); }
+.page-head__lead {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--t-note);
+  max-width: 72ch;
+}
+.page-head__row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+.page-head__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+/* ── 面板：1px 边 + 极浅纸面（禁阴影）────────────────────── */
+.panel {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  margin: 0 0 var(--s-4);
+}
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--rule);
+}
+.panel__title {
+  margin: 0;
+  font-size: var(--t-title);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.panel__note {
+  margin: var(--s-1) 0 0;
+  font-size: var(--t-note);
+  color: var(--ink-2);
+  max-width: 72ch;
+}
+.panel__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: none;
+}
+.panel__body { padding: var(--s-4); }
+.panel__body--flush { padding: 0; }
+.panel--quiet { background: var(--paper-sunk); }
+.panel--danger { border-color: var(--mark); }
+
+/* ── 状态药丸：带圆点的低饱和状态指示 ─────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 3px var(--s-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--t-note);
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.pill__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.pill--neutral { background: var(--pill-neutral-bg); color: var(--pill-neutral-fg); }
+.pill--info    { background: var(--pill-info-bg);    color: var(--pill-info-fg); }
+.pill--success { background: var(--pill-success-bg); color: var(--pill-success-fg); }
+.pill--warn    { background: var(--pill-warn-bg);    color: var(--pill-warn-fg); }
+.pill--danger  { background: var(--pill-danger-bg);  color: var(--pill-danger-fg); }
+
+/* ── 统计卡片（工作台 / 统计看板）──────────────────────────── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s-3);
+}
+.stat {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: var(--s-3) var(--s-4);
+}
+.stat__label {
+  margin: 0;
+  font-size: var(--t-note);
+  color: var(--ink-2);
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.stat__value {
+  margin: var(--s-1) 0 0;
+  font-size: var(--t-title);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.stat__hint {
+  margin: var(--s-1) 0 0;
+  font-size: var(--t-note);
+  color: var(--ink-3);
+}
+
+/* ── 工具条：筛选控件 + 操作，底部对齐 ─────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.toolbar .field { margin: 0; }
+.toolbar__spacer { flex: 1; }
+
+/* ── 品牌 ─────────────────────────────────────────────────── */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-weight: 600;
+}
+.brand__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--ink);
+  color: var(--paper);
+  flex: none;
+}
+.brand__text { font-size: var(--t-body); letter-spacing: -0.01em; }
+
+/* ── 导航：图标 + 标签，可折叠为纯图标栏 ───────────────────── */
+.nav__link { gap: var(--s-3); }
+.nav__icon { flex: none; color: var(--ink-3); }
+.nav__link:hover .nav__icon,
+.nav__link[aria-current='page'] .nav__icon { color: var(--ink); }
+.nav__label { white-space: nowrap; }
+.nav__badge {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 折叠态（顶栏按钮触发）：只留图标，标签/组标题隐藏（DOM 保留以保无障碍名）*/
+.shell[data-collapsed='true'] .nav { width: var(--nav-w-rail); }
+.shell[data-collapsed='true'] .nav__label,
+.shell[data-collapsed='true'] .nav__group-title,
+.shell[data-collapsed='true'] .nav__group-hint,
+.shell[data-collapsed='true'] .nav__badge { display: none; }
+.shell[data-collapsed='true'] .nav__link { justify-content: center; padding: 0; }
+
+/* ── 按钮变体 ─────────────────────────────────────────────── */
+.btn--icon {
+  padding: 0;
+  width: 40px;
+  min-height: 40px;
+  flex: none;
+}
+.btn--lg { min-height: 44px; padding: 0 var(--s-5); }
+.btn--block { width: 100%; }
+.btn .icon { margin-right: var(--s-2); }
+
+/* ── 表格容器：窄屏横向滚动；行 hover 低对比 ───────────────── */
+.table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius-card);
+}
+.table-wrap table { min-width: 520px; }
+tbody tr:hover { background: var(--surface-hover); }
+
+/* ── 入口：现代卡片化一行（仍克制，无阴影）────────────────── */
+.entry--card {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-2);
+  transition: border-color var(--transition-fast, 150ms ease);
+}
+.entry--card:hover { border-color: var(--rule-strong); }
+
+/* ── chip 变体补充（与 pill 的低饱和一致）─────────────────── */
+.chip--warn { border-color: var(--pill-warn-fg); color: var(--pill-warn-fg); background: var(--pill-warn-bg); }
+.chip--info { border-color: var(--rule-strong); color: var(--pill-info-fg); }
+
+/* ── 动作卡（工作台快捷入口）──────────────────────────────── */
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--s-3);
+}
+.action {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: var(--s-3) var(--s-4);
+  text-decoration: none;
+  color: inherit;
+  min-height: 40px;
+  transition: border-color var(--transition-fast, 150ms ease), background var(--transition-fast, 150ms ease);
+}
+.action:hover { border-color: var(--rule-strong); background: var(--surface-2); }
+.action__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--surface-sunk);
+  color: var(--ink);
+  flex: none;
+}
+.action__body { min-width: 0; }
+.action__title { font-weight: 600; display: block; }
+.action__desc { margin: 2px 0 0; font-size: var(--t-note); color: var(--ink-2); }
+.action__go { margin-left: auto; color: var(--ink-3); flex: none; }
+
+/* ── 图表（报表中心）─────────────────────────────────────────
+   ⛔ 不引图表库：项目刻意保持零新增依赖，SVG 直接画更可控，
+      且颜色必须走 CSS 变量（否则主题一变图表就与界面脱节）。
+   ⛔ 不用 box-shadow 做浮起效果（版式纪律）：靠线与留白分层。 */
+.chart {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  display: block;
+}
+.chart__label {
+  font-size: 10px;
+  fill: var(--ink-3);
+  font-family: var(--font-ui);
+}
+.chart__legend {
+  list-style: none;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+}
+.chart__legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+.chart__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
+
+/* 排行条：横向条 + 右侧数值（数值不可省——条长只给相对印象） */
+.rank {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rank__row {
+  display: grid;
+  grid-template-columns: minmax(96px, 168px) 1fr auto;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.rank__row:last-child { border-bottom: none; }
+.rank__label {
+  font-size: var(--t-note);
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rank__track {
+  height: 8px;
+  background: var(--surface-sunk);
+  border-radius: 4px;
+  overflow: hidden;
+  display: block;
+}
+.rank__bar {
+  display: block;
+  height: 100%;
+  background: var(--ink-2);
+  border-radius: 4px;
+}
+.rank__value {
+  font-size: var(--t-note);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
 }

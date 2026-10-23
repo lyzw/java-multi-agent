@@ -29,6 +29,16 @@ import { Sheet, Loading, LoadingRows, Empty, ErrorState } from '@/shared/states'
 import { useRagManagement, allowedVerificationTargets } from '@/features/rag/useRagManagement'
 import { useSession } from '@/auth/session'
 import { listRagDocuments, listRagChunks } from '@/api/client'
+import { PageHead, Panel, StatusPill, type PillTone } from '@/components/ui'
+import {
+  ChunkRoleDistribution,
+  DocumentEntry,
+  MaintenanceIssueBoard,
+  ParseStatusDistribution,
+  RetrievalProbe,
+  SourceStatusDistribution,
+  VocabularyDrift,
+} from '@/pages/rag/RagMaintenancePanels'
 import type {
   RagSource,
   RagDocument,
@@ -98,15 +108,22 @@ function formatTime(iso: string | null): string {
  *
  * ⚠️ 用色纪律（FE-D3 R1/R3）：批改红只用于**错误/阻止性**状态。
  *    REVOKED（撤回）与 REJECTED（拒绝）是阻止性状态 → 用红；
- *    其余用中性色。⛔ 不用颜色表达「好/坏」之外的语义。
+ *    其余用中性/低饱和色。⛔ 不用颜色表达「好/坏」之外的语义。
  */
 function StatusChip({ source }: { source: RagSource }): JSX.Element {
   const label = RAG_VERIFICATION_LABELS[source.verificationStatus]
-  const blocking = source.verificationStatus === 'REVOKED' || source.verificationStatus === 'REJECTED'
-  const cls = blocking ? 'chip chip--mark' : 'chip'
+  const status = source.verificationStatus
+  const tone: PillTone =
+    status === 'VERIFIED'
+      ? 'success'
+      : status === 'REVOKED' || status === 'REJECTED'
+        ? 'danger'
+        : status === 'IN_REVIEW'
+          ? 'info'
+          : 'warn'
   return (
     <>
-      <span className={cls}>{label}</span>
+      <StatusPill tone={tone}>{label}</StatusPill>
       {source.stale ? <span className="chip">已过期</span> : null}
       {source.admissible ? <span className="chip chip--settled">准入可检索</span> : null}
     </>
@@ -237,20 +254,25 @@ function SourceDetail({
         ) : (
           <div className="entry-list" style={{ marginTop: 'var(--s-3)' }}>
             {documents.map((doc) => (
-              <div key={doc.documentId} className="entry">
-                <span className="entry__title">{doc.title}</span>
-                <span className="entry__desc">
-                  {doc.carrier} · 解析 {doc.parseStatus} · {doc.chunkCount} 个片段
-                  {doc.pageCount !== null ? ` · ${doc.pageCount} 页` : ''}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn--quiet"
-                  onClick={() => loadChunks(doc.documentId)}
-                >
-                  查看片段
-                </button>
-              </div>
+              <DocumentEntry
+                key={doc.documentId}
+                document={doc}
+                tenantId={tenantId}
+                // ⚠️ 载体不得高于来源：来源没过校验时，载体的「通过校验」选项不出现。
+                //    这条不变量是公开的领域规则（不是服务端才知道的权威门槛），
+                //    故前端可据此裁剪；最终判定仍在服务端。
+                sourceStatus={source.verificationStatus}
+                onChanged={(updated) => {
+                  // ⚛ 就地更新：载体判定后列表必须反映新状态，
+                  //    否则运维会以为下架没生效（实际后端已改）。
+                  setDocuments((prev) =>
+                    prev === null
+                      ? prev
+                      : prev.map((d) => (d.documentId === updated.documentId ? updated : d)),
+                  )
+                }}
+                onViewChunks={loadChunks}
+              />
             ))}
           </div>
         )
@@ -471,6 +493,17 @@ function StatisticsBoard({ stats }: { stats: import('@/api/types').RagStatistics
           </p>
         </div>
       ) : null}
+
+      {/*
+        ⚠️ 三张**分布表**此前被整块丢弃：后端 `StatisticsResponse` 一直返回
+           `chunksByRole` / `sourcesByVerificationStatus` / `documentsByParseStatus`，
+           前端类型也定义了，但看板只渲染标量总数。
+           后果：运维只知道「缺 12 个向量」，**不知道缺在哪一类**——
+           分布正是「问题集中在哪」的唯一答案（RAG-D10 Q-5 的下钻雏形）。
+      */}
+      <ChunkRoleDistribution entries={stats.chunksByRole ?? {}} />
+      <SourceStatusDistribution entries={stats.sourcesByVerificationStatus ?? {}} />
+      <ParseStatusDistribution entries={stats.documentsByParseStatus ?? {}} />
     </>
   )
 }
@@ -542,16 +575,13 @@ export function RagManagementPage(): JSX.Element {
 
   return (
     <>
-      <div className="main__head">
-        <h1>语料管理</h1>
-        <p className="main__lead">
-          登记教材与教辅来源、走完校验流程、查看入库与索引状况。
-          未通过校验的来源不会进入可检索索引。
-        </p>
-      </div>
+      <PageHead
+        title="语料管理"
+        lead="登记教材与教辅来源、走完校验流程、查看入库与索引状况。未通过校验的来源不会进入可检索索引。"
+      />
 
       {/* ── 查询条件 ── */}
-      <Sheet title="查询条件" note="检索与管理均按租户隔离（RLS）：租户由主平台在调用时注入，此处需手填一次。">
+      <Panel title="查询条件" icon="search" note="检索与管理均按租户隔离（RLS）：租户由主平台在调用时注入，此处需手填一次。">
         <form onSubmit={handleLoad} noValidate>
           <div className="field">
             <label htmlFor="rag-mgmt-tenant">租户标识</label>
@@ -618,7 +648,7 @@ export function RagManagementPage(): JSX.Element {
             ) : null}
           </div>
         </form>
-      </Sheet>
+      </Panel>
 
       {/* ── 来源列表 ── */}
       <Sheet title="语料来源" note="点击一条来源查看详情与审核。撤回是终态，不能复活。">
@@ -739,6 +769,43 @@ export function RagManagementPage(): JSX.Element {
         ) : stats.stats !== null ? (
           <StatisticsBoard stats={stats.stats} />
         ) : null}
+      </Sheet>
+
+      {/*
+        ⚠️ 召回测试（D-1）：管理面与检索面之间**没有交叉验证**时，
+           「来源已 VERIFIED」会给出虚假的安心感——
+           RAG-D10 已知限制 L-1 明确：检索路径尚未强制消费
+           过期/版权/等级三闸门，治理状态「可管理」不等于「被检索路径尊重」。
+           故把真实检索端点摆到运维面前，直接看能不能召回。
+      */}
+      <Sheet
+        title="召回测试"
+        note="用真实检索端点验证「已准入的语料到底能不能被召回」。当前嵌入为确定性占位，故本面板验证的是链路，不是语义质量。"
+      >
+        <RetrievalProbe tenantId={tenantId.trim()} />
+      </Sheet>
+
+      {/*
+        ⚠️ 维护问题清单（B-1）+ 重跑索引（B-2）：
+           统计只回答「有多少」，运维需要知道「**是哪些**」才能动手。
+      */}
+      <Sheet
+        title="维护问题清单"
+        note="定位缺向量的载体、解析失败的载体与待审核的来源，并可重跑索引补建缺失向量。"
+      >
+        <MaintenanceIssueBoard tenantId={tenantId.trim()} />
+      </Sheet>
+
+      {/*
+        ⚠️ 词表口径差异（D-2）：platform 的 /api/reference 与 RAG 侧硬编码坐标
+           各有一份学科/年级词表（评审报告 §2.4 点名的缺陷）。
+           两边不一致时**静默漏召回**，且原先没有任何地方能看见这个差异。
+      */}
+      <Sheet
+        title="词表口径差异"
+        note="platform 业务词表与 RAG 版本坐标词表的差集。差异会导致按学科/年级过滤时静默漏召回。"
+      >
+        <VocabularyDrift />
       </Sheet>
     </>
   )

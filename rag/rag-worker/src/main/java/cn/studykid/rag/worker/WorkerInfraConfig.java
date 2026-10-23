@@ -8,6 +8,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.infrastructure.LocalRagPortsConfig;
 import cn.studykid.rag.infrastructure.embedding.LocalDeterministicEmbeddingPort;
+import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
 import cn.studykid.rag.infrastructure.persistence.JdbcCorpusRepository;
 import cn.studykid.rag.ports.CorpusRepository;
 import cn.studykid.rag.ports.EmbeddingPort;
@@ -21,6 +22,12 @@ import org.springframework.context.annotation.Import;
  * {@link EmbeddingPort} → {@link CorpusRepository} → {@link ChunkIndexer}。
  * 扫描基包为 {@code cn.studykid.rag.worker}，<b>不</b>扫描 rag-api / rag-bootstrap，
  * 故本 Worker 不会误托管检索 REST 端点，rag-bootstrap 也不会误托管索引 bean。
+ *
+ * <p>⚠️ {@link ChunkIndexer} 的<b>实现</b>已下沉到 {@code rag-infrastructure}
+ *   （{@code cn.studykid.rag.infrastructure.indexing}），因为管理面也需要触发重索引，
+ *   而 {@code rag-management} <b>不依赖</b> {@code rag-worker}。
+ *   下沉而非复制，是为了保证「哪些片段算待索引」这条 fail-closed 口径<b>只有一处</b>；
+ *   本类只负责<b>装配</b>（决定 batchSize 与用哪个事务模板），不承载任何口径逻辑。
  *
  * <p>通过 {@link Import} 引入 {@link LocalRagPortsConfig}，使 Worker 上下文也能托管
  * G1/G3 的本地占位切片（解析/蕴含/入库用例/接地用例），为未来「完整入库执行器」

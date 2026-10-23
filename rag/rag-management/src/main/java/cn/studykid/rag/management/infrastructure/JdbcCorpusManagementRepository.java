@@ -4,6 +4,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,8 +21,11 @@ import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
 import cn.studykid.rag.management.core.CorpusDocument;
+import cn.studykid.rag.management.core.CorpusIssues;
 import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.management.core.CorpusStatistics;
+import cn.studykid.rag.management.core.DocumentVerification;
+import cn.studykid.rag.management.core.DocumentVerificationDecision;
 import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
@@ -304,10 +309,15 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                                                 @NonNull String sourceId) {
         return transactionTemplate.execute(status -> {
             setTenant(context.tenantId());
+            // ⚠️ 载体级状态列（ver_status / retrievable / revoked_* / license_status）
+            //    必须一并选出：管理台要按载体展示「这份扫描件是否可检索、
+            //    是否已被撤回」，缺列会让前端只能看到解析状态而看不到治理结论。
             return jdbcTemplate.query("""
                     SELECT d.document_id, d.source_id, d.edition_id, d.carrier, d.title,
                            d.page_count, d.object_ref, d.parse_status, d.parser_version,
                            d.content_hash, d.created_at, d.updated_at,
+                           d.ver_status, d.retrievable, d.revoked_at, d.revoked_reason,
+                           d.license_status,
                            (SELECT count(*) FROM rag_chunk c
                              WHERE c.tenant_id = d.tenant_id AND c.document_id = d.document_id)
                                AS chunk_count
@@ -316,6 +326,150 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                     ORDER BY d.created_at DESC, d.document_id
                     """,
                     (rs, i) -> mapDocument(rs), sourceId);
+        });
+    }
+
+    @Override
+    @Nullable
+    public CorpusDocument applyDocumentVerification(@NonNull RagTenantContext context,
+                                                     @NonNull String documentId,
+                                                     @NonNull DocumentVerificationDecision decision) {
+        return transactionTemplate.execute(status -> {
+            setTenant(context.tenantId());
+            CorpusDocument current = findDocumentWithinTenant(documentId);
+            if (current == null) {
+                return null;
+            }
+            // ⚠️ 状态机校验在**写库之前**：非法转移必须被拒绝，
+            //    而不是「先改了再说」——否则 T-10（REVOKED 是终态）
+            //    这类禁止转移就会变成「可绕过的建议」。
+            DocumentVerification.requireAllowed(
+                    current.verificationStatus(), decision.targetStatus());
+
+            // ⚠️ 载体不得高于来源：来源没过校验，载体不能自称 VERIFIED。
+            //    来源状态必须在**同一事务**内读取——否则并发撤回来源时，
+            //    可能读到「来源仍 VERIFIED」的旧快照而放行载体。
+            String sourceStatus = querySourceVerificationStatus(current.sourceId());
+            if (sourceStatus == null) {
+                throw new IllegalStateException("载体所属来源不存在：" + current.sourceId()
+                        + "（来源缺失意味着无法判定「载体不得高于来源」）");
+            }
+            DocumentVerification.requireSourceAllowsVerified(
+                    decision.targetStatus(), VerificationStatus.valueOf(sourceStatus));
+
+            // ⚠️ 只有 VERIFIED 才置可检索（fail-closed）：
+            //    「被认领」「被拒绝」都不足以让语料进入检索。
+            boolean retrievable = DocumentVerification.retrievableAfter(decision.targetStatus());
+            boolean revoked = decision.targetStatus() == VerificationStatus.REVOKED;
+
+            jdbcTemplate.update("""
+                    UPDATE rag_document
+                    SET ver_status = ?::rag_verification_status,
+                        retrievable = ?,
+                        revoked_at = CASE WHEN ?::rag_verification_status = 'REVOKED'
+                                          THEN now() ELSE revoked_at END,
+                        revoked_reason = CASE WHEN ?::rag_verification_status = 'REVOKED'
+                                              THEN ? ELSE revoked_reason END,
+                        license_status = CASE WHEN ?::rag_verification_status = 'REVOKED'
+                                              THEN 'RESTRICTED'::rag_license_status
+                                              ELSE license_status END,
+                        updated_at = now()
+                    WHERE tenant_id = rag_current_tenant() AND document_id = ?::uuid
+                    """,
+                    decision.targetStatus().name(), retrievable,
+                    decision.targetStatus().name(), decision.targetStatus().name(),
+                    decision.evidenceRef(), decision.targetStatus().name(), documentId);
+
+            // ⚠️ 审计与状态变更同事务（RAG-D07 §2.5）。
+            //    载体级动作记在**来源**上：审计表没有「文档」维度，
+            //    而「这个来源下的语料发生过什么」正是审计要回答的问题。
+            appendAuditWithinTenant(context.tenantId(), decision.decidedBy(),
+                    DocumentVerification.auditActionFor(decision.targetStatus()),
+                    current.sourceId());
+
+            return findDocumentWithinTenant(documentId);
+        });
+    }
+
+    @Override
+    @NonNull
+    public CorpusIssues listIssues(@NonNull RagTenantContext context) {
+        return transactionTemplate.execute(status -> {
+            setTenant(context.tenantId());
+
+            // ⚠️ 缺向量的载体：用 LEFT JOIN + FILTER 一次算出
+            //    「片段总数」与「其中缺向量的个数」，再 HAVING 掉缺向量数为 0 的载体。
+            //    ⚠️ FILTER 条件里必须同时判 c.chunk_id IS NOT NULL：
+            //    否则「一个片段都没有的载体」会因为 LEFT JOIN 产生的空行
+            //    被误判成「有 1 个片段缺向量」——那会把解析失败的载体
+            //    错误地混进「缺向量」清单，掩盖真正的失败原因。
+            List<CorpusIssues.DocumentEmbeddingGap> missingEmbedding = jdbcTemplate.query("""
+                    SELECT d.document_id, d.source_id, d.title, d.carrier, d.parse_status,
+                           count(c.chunk_id) AS chunk_count,
+                           count(*) FILTER (WHERE c.chunk_id IS NOT NULL AND e.chunk_id IS NULL)
+                               AS missing_embedding_count
+                    FROM rag_document d
+                    LEFT JOIN rag_chunk c
+                           ON c.document_id = d.document_id AND c.tenant_id = d.tenant_id
+                    LEFT JOIN rag_chunk_embedding e
+                           ON e.chunk_id = c.chunk_id AND e.tenant_id = c.tenant_id
+                    WHERE d.tenant_id = rag_current_tenant()
+                    GROUP BY d.document_id, d.source_id, d.title, d.carrier, d.parse_status
+                    HAVING count(*) FILTER (WHERE c.chunk_id IS NOT NULL AND e.chunk_id IS NULL) > 0
+                    ORDER BY d.created_at DESC, d.document_id
+                    """,
+                    (rs, i) -> new CorpusIssues.DocumentEmbeddingGap(
+                            rs.getString("document_id"),
+                            rs.getString("source_id"),
+                            rs.getString("title"),
+                            rs.getString("carrier"),
+                            rs.getString("parse_status"),
+                            rs.getLong("chunk_count"),
+                            rs.getLong("missing_embedding_count")));
+
+            List<CorpusIssues.DocumentParseFailure> failedParse = jdbcTemplate.query("""
+                    SELECT d.document_id, d.source_id, d.title, d.carrier, d.parse_status,
+                           (SELECT count(*) FROM rag_chunk c
+                             WHERE c.tenant_id = d.tenant_id AND c.document_id = d.document_id)
+                               AS chunk_count
+                    FROM rag_document d
+                    WHERE d.tenant_id = rag_current_tenant() AND d.parse_status = 'FAILED'
+                    ORDER BY d.created_at DESC, d.document_id
+                    """,
+                    (rs, i) -> new CorpusIssues.DocumentParseFailure(
+                            rs.getString("document_id"),
+                            rs.getString("source_id"),
+                            rs.getString("title"),
+                            rs.getString("carrier"),
+                            rs.getString("parse_status"),
+                            rs.getLong("chunk_count")));
+
+            // ⚠️ stale 必须在 SQL 里算：它是「结论是否已过期」的计算属性
+            //    （verified_at + ver_valid_days < now()），前端没有租户门槛上下文，
+            //    自己算会与服务端口径漂移。
+            //    ⚠️ 判定式只在 ver_status='VERIFIED' 时才有意义：
+            //    未通过校验的来源谈不上「结论过期」（那属于「还没结论」），
+            //    故 PENDING / IN_REVIEW 一律为 false。
+            List<CorpusIssues.SourcePendingReview> pendingReview = jdbcTemplate.query("""
+                    SELECT source_id, title, ver_status::text AS verification_status,
+                           trust_tier::text AS trust_tier,
+                           (ver_status = 'VERIFIED'
+                            AND (verified_at IS NULL
+                                 OR verified_at + (ver_valid_days || ' days')::interval < now()))
+                               AS stale
+                    FROM rag_source
+                    WHERE tenant_id = rag_current_tenant()
+                      AND ver_status IN ('PENDING', 'IN_REVIEW')
+                    ORDER BY created_at DESC, source_id
+                    """,
+                    (rs, i) -> new CorpusIssues.SourcePendingReview(
+                            rs.getString("source_id"),
+                            rs.getString("title"),
+                            rs.getString("verification_status"),
+                            rs.getBoolean("stale"),
+                            rs.getString("trust_tier")));
+
+            return new CorpusIssues(missingEmbedding, failedParse, pendingReview);
         });
     }
 
@@ -441,6 +595,134 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
     }
 
     // ---------------------------------------------------------------------
+    // 每日统计（报表中心）
+    // ---------------------------------------------------------------------
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>⚠️ 时区统一用 <b>UTC</b>：{@code occurred_at} 是 {@code timestamptz}，
+     * {@code AT TIME ZONE 'UTC'} 先把它落到 UTC 墙面时刻再截日期，
+     * 与应用侧生成连续日期序列用的 {@code LocalDate.now(ZoneOffset.UTC)} 同基准，
+     * 否则跨时区部署时「今天的数据落在昨天」。
+     */
+    @Override
+    @NonNull
+    public DailySearchStatistics dailySearchStatistics(@NonNull RagTenantContext context, int days) {
+        int safeDays = clampDays(days);
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        LocalDate start = today.minusDays(safeDays - 1L);
+        Map<String, Long> countsByDay = transactionTemplate.execute(status -> {
+            setTenant(context.tenantId());
+            return dailyCount("""
+                    SELECT to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS k,
+                           count(*) AS c
+                    FROM rag_access_audit
+                    WHERE tenant_id = rag_current_tenant()
+                      AND action = 'RETRIEVE'
+                      AND occurred_at >= ?
+                      AND occurred_at < ?
+                    GROUP BY 1
+                    """, start, today.plusDays(1));
+        });
+        List<DailySearchCount> byDay = new ArrayList<>();
+        for (LocalDate date = start; !date.isAfter(today); date = date.plusDays(1)) {
+            byDay.add(new DailySearchCount(date.toString(),
+                    countsByDay.getOrDefault(date.toString(), 0L)));
+        }
+        return new DailySearchStatistics(byDay, safeDays);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>⚠️ 三个层级各查一次再在应用侧合并，而不是一条 JOIN：
+     * {@code rag_source → rag_document → rag_chunk} 是三层不同粒度的表，
+     * JOIN 会产生笛卡尔式放大（一个 source 的多个 document 会重复计数 source）。
+     * 「连续日期补零」同样在应用侧做——SQL 的 {@code generate_series}
+     * 需要显式类型转换且更难单测。
+     */
+    @Override
+    @NonNull
+    public DailyImportStatistics dailyImportStatistics(@NonNull RagTenantContext context, int days) {
+        int safeDays = clampDays(days);
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        LocalDate start = today.minusDays(safeDays - 1L);
+        Map<String, Long> sourcesByDay = transactionTemplate.execute(status -> {
+            setTenant(context.tenantId());
+            return dailyCount("""
+                    SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS k,
+                           count(*) AS c
+                    FROM rag_source
+                    WHERE tenant_id = rag_current_tenant()
+                      AND created_at >= ?
+                      AND created_at < ?
+                    GROUP BY 1
+                    """, start, today.plusDays(1));
+        });
+        Map<String, Long> documentsByDay = transactionTemplate.execute(status -> {
+            setTenant(context.tenantId());
+            return dailyCount("""
+                    SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS k,
+                           count(*) AS c
+                    FROM rag_document
+                    WHERE tenant_id = rag_current_tenant()
+                      AND created_at >= ?
+                      AND created_at < ?
+                    GROUP BY 1
+                    """, start, today.plusDays(1));
+        });
+        Map<String, Long> chunksByDay = transactionTemplate.execute(status -> {
+            setTenant(context.tenantId());
+            return dailyCount("""
+                    SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS k,
+                           count(*) AS c
+                    FROM rag_chunk
+                    WHERE tenant_id = rag_current_tenant()
+                      AND created_at >= ?
+                      AND created_at < ?
+                    GROUP BY 1
+                    """, start, today.plusDays(1));
+        });
+        List<DailyImportCount> byDay = new ArrayList<>();
+        for (LocalDate date = start; !date.isAfter(today); date = date.plusDays(1)) {
+            String key = date.toString();
+            byDay.add(new DailyImportCount(key,
+                    sourcesByDay.getOrDefault(key, 0L),
+                    documentsByDay.getOrDefault(key, 0L),
+                    chunksByDay.getOrDefault(key, 0L)));
+        }
+        return new DailyImportStatistics(byDay, safeDays);
+    }
+
+    /**
+     * 按天分组的计数查询（连续日期补零由调用方负责）。
+     *
+     * <p>⚠️ 必须传入 {@code Timestamp}：{@code created_at} / {@code occurred_at}
+     * 是 {@code timestamptz}，pgjdbc 对 {@code LocalDate} 参数会按 {@code date} 类型发送，
+     * 与 timestamptz 比较依赖隐式转换，显式转 Timestamp 最稳。
+     */
+    @NonNull
+    private Map<String, Long> dailyCount(@NonNull String sql, @NonNull LocalDate fromInclusive,
+                                         @NonNull LocalDate toExclusive) {
+        Timestamp from = Timestamp.from(fromInclusive.atStartOfDay(ZoneOffset.UTC).toInstant());
+        Timestamp to = Timestamp.from(toExclusive.atStartOfDay(ZoneOffset.UTC).toInstant());
+        Map<String, Long> result = new LinkedHashMap<>();
+        jdbcTemplate.query(sql, ps -> {
+            ps.setTimestamp(1, from);
+            ps.setTimestamp(2, to);
+        }, rs -> {
+            result.put(rs.getString("k"), rs.getLong("c"));
+        });
+        return result;
+    }
+
+    /** 天数钳制在 1～90，防御前端乱传导致的全表扫描。 */
+    private static int clampDays(int days) {
+        return Math.min(90, Math.max(1, days));
+    }
+
+    // ---------------------------------------------------------------------
     // 内部辅助
     // ---------------------------------------------------------------------
 
@@ -474,6 +756,48 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                 WHERE tenant_id = rag_current_tenant() AND source_id = ?::uuid
                 """,
                 (rs, i) -> mapSource(rs), sourceId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /**
+     * 在<b>已建立租户上下文</b>的事务内查询载体。
+     *
+     * <p>⚠️ 该方法<b>不</b>自己开事务——它假定调用方已在
+     * {@code set_config} 之后调用（否则 RLS 会把它过滤成空，
+     * 表现为「载体不存在」这类难以定位的静默失败）。
+     */
+    @Nullable
+    private CorpusDocument findDocumentWithinTenant(@NonNull String documentId) {
+        List<CorpusDocument> rows = jdbcTemplate.query("""
+                SELECT d.document_id, d.source_id, d.edition_id, d.carrier, d.title,
+                       d.page_count, d.object_ref, d.parse_status, d.parser_version,
+                       d.content_hash, d.created_at, d.updated_at,
+                       d.ver_status, d.retrievable, d.revoked_at, d.revoked_reason,
+                       d.license_status,
+                       (SELECT count(*) FROM rag_chunk c
+                         WHERE c.tenant_id = d.tenant_id AND c.document_id = d.document_id)
+                           AS chunk_count
+                FROM rag_document d
+                WHERE d.tenant_id = rag_current_tenant() AND d.document_id = ?::uuid
+                """,
+                (rs, i) -> mapDocument(rs), documentId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /**
+     * 在<b>已建立租户上下文</b>的事务内读取来源的校验状态。
+     *
+     * <p>⚠️ 只取状态位而非整个来源对象：载体级判定只需要「来源过没过校验」，
+     * 多取字段既无用途，又会让调用方误以为拿到了可改写的快照。
+     *
+     * @return 校验状态名；来源不存在返回 {@code null}
+     */
+    @Nullable
+    private String querySourceVerificationStatus(@NonNull String sourceId) {
+        List<String> rows = jdbcTemplate.query(
+                "SELECT ver_status::text FROM rag_source"
+                        + " WHERE tenant_id = rag_current_tenant() AND source_id = ?::uuid",
+                (rs, i) -> rs.getString(1), sourceId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -587,6 +911,14 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                 rs.getString("parser_version"),
                 rs.getString("content_hash"),
                 rs.getLong("chunk_count"),
+                // ⚠️ ver_status / retrievable 是载体级治理结论，
+                //    必须随读模型一起返回——管理台要按载体展示
+                //    「这份扫描件是否可检索、是否已被撤回」。
+                VerificationStatus.valueOf(rs.getString("ver_status")),
+                rs.getBoolean("retrievable"),
+                toInstant(rs.getTimestamp("revoked_at")),
+                rs.getString("revoked_reason"),
+                rs.getString("license_status"),
                 toInstant(rs.getTimestamp("created_at")),
                 toInstant(rs.getTimestamp("updated_at")));
     }

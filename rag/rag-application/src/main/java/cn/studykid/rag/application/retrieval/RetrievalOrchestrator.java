@@ -113,13 +113,18 @@ public class RetrievalOrchestrator {
                     .forEach(completed::add);
         }
 
-        // ⑥ 排序：保留真实分数，叠加版本惩罚
+        // ⑥ 排序：按融合分（RRF）排，叠加版本惩罚
+        //    ⚠️ 排序键与门禁键**不是同一个数**：排序用融合分（RRF，只看排名），
+        //    门禁用相关性分（余弦/ts_rank，0~1）。两者量纲不同，混用会废掉门禁。
         List<ScoredChunk> scored = completed.stream()
                 .map(s -> applyEditionPenalty(s, request.editionScope()))
-                .sorted((a, b) -> Double.compare(b.score(), a.score()))
+                .sorted((a, b) -> Double.compare(b.fusionScore(), a.fusionScore()))
                 .toList();
 
         // ⑦ 分数门禁——使「未找到依据」成为合法输出
+        //    ⚠️ 门禁作用在**相关性分**上（0~1，阈值按相关性标定，见 RD-Q2）。
+        //    若误用融合分（RRF，上限约 0.033），门禁将恒不通过——
+        //    检索会永远返回「未找到依据」，语料再全也召不回东西。
         List<ScoredChunk> above = scored.stream()
                 .filter(s -> s.score() >= minScore)
                 .toList();
@@ -142,11 +147,14 @@ public class RetrievalOrchestrator {
     }
 
     /**
-     * 知识点补全片段的基准分。
+     * 知识点补全片段的相关性基准分。
      *
-     * <p>⚠️ 必须<b>低于</b>真实检索命中的典型分数，否则补全内容会挤掉
-     * 直接命中的高价值片段。取 0.5 是一个保守初值，
-     * 实际阈值须由评测集标定（RAG-D08 §4）。
+     * <p>⚠️ 补全片段<b>没有独立的检索分数</b>（它不是被检索出来的，
+     * 是沿知识点关系补进来的），故给一个<b>声明式基准分</b>：
+     * 它让补全片段能通过分数门禁（否则任何非零门禁都会把补全全部砍掉，
+     * 补全功能形同虚设），同时在<b>排序上排在真实命中之后</b>
+     * （补全片段的融合分为 0），符合「补全不能挤掉直接命中的高价值片段」。
+     * 取 0.5 是一个保守初值，实际阈值须由评测集标定（RAG-D08 §4）。
      */
     private static final double COMPLETION_BASE_SCORE = 0.5;
 
@@ -164,7 +172,7 @@ public class RetrievalOrchestrator {
             if (present.contains(chunk.id())) {
                 continue;
             }
-            result.add(new ScoredChunk(chunk, COMPLETION_BASE_SCORE, channel, reason));
+            result.add(new ScoredChunk(chunk, COMPLETION_BASE_SCORE, 0.0, channel, reason));
         }
         return result;
     }
@@ -180,8 +188,14 @@ public class RetrievalOrchestrator {
         if (penalty == 0) {
             return scored;
         }
-        double adjusted = Math.max(0.0, scored.score() - (penalty / 100.0));
-        return new ScoredChunk(scored.chunk(), adjusted, scored.channel(), scored.reason());
+        // ⚠️ 惩罚必须作用在**融合分**（排序键）上，且用**乘法**：
+        //    ① 作用在相关性分上会把「降权」变成「过滤」——相关性 0.36 减 0.1 得 0.26，
+        //       低于门禁 0.35 → 异版本内容被静默丢弃，与「降权≠过滤」的设计约定冲突；
+        //    ② RRF 量纲极小（≈0.03），加法惩罚会把所有异版本分数一律压成 0，
+        //       组内相对次序全部丢失；乘法则只影响名次，不破坏量纲与组内次序。
+        double adjusted = scored.fusionScore() * (1.0 - (penalty / 100.0));
+        return new ScoredChunk(scored.chunk(), scored.score(), adjusted,
+                scored.channel(), scored.reason());
     }
 
     private List<KnowledgePoint> resolveKnowledgePoints(RetrievalRequest request) {

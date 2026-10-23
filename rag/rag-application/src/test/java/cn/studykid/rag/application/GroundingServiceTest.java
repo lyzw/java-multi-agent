@@ -41,7 +41,7 @@ class GroundingServiceTest {
             List.of("kp-quadratic"), "12", "hash-2");
 
     private static ScoredChunk scored(Chunk chunk) {
-        return new ScoredChunk(chunk, 0.9, RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH);
+        return new ScoredChunk(chunk, 0.9, 0.9, RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH);
     }
 
     /** 可控的蕴含判定端口替身。 */

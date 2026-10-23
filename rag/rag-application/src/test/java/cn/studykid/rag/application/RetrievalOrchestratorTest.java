@@ -59,7 +59,8 @@ class RetrievalOrchestratorTest {
 
         StubRetrievalPort(List<Chunk> searchResults, List<Chunk> knowledgePointResults, double score) {
             this.searchResults = searchResults.stream()
-                    .map(c -> new ScoredChunk(c, score, RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH))
+                    .map(c -> new ScoredChunk(c, score, score,
+                            RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH))
                     .toList();
             this.knowledgePointResults = knowledgePointResults;
             this.score = score;
@@ -73,6 +74,23 @@ class RetrievalOrchestratorTest {
         @Override
         public List<Chunk> findByKnowledgePoint(String knowledgePointId, EditionScope editionScope) {
             return knowledgePointResults;
+        }
+
+        /**
+         * 直接给定带分数的结果（用于「相关性分 vs 融合分」的量纲用例）。
+         *
+         * ⚠️ 与「按分数造结果」的构造器分开：这两个分数量纲不同，
+         *    只有能分别指定，才能验证门禁读的是相关性分、排序读的是融合分。
+         */
+        private StubRetrievalPort(List<ScoredChunk> preScored, List<Chunk> knowledgePointResults,
+                boolean preScoredFlag) {
+            this.searchResults = preScored;
+            this.knowledgePointResults = knowledgePointResults;
+            this.score = 0.0;
+        }
+
+        static StubRetrievalPort scored(List<ScoredChunk> preScored) {
+            return new StubRetrievalPort(preScored, List.of(), true);
         }
 
         @Override
@@ -194,5 +212,56 @@ class RetrievalOrchestratorTest {
 
         assertThat(result.versionMismatchDetected()).isTrue();
         assertThat(result.chunks()).extracting(s -> s.chunk().id()).contains("c-old");
+    }
+
+    /**
+     * 回归：门禁必须作用在<b>相关性分</b>上，而不是融合排序分。
+     *
+     * <p>⚠️ 2026-10-23 线上实测缺陷：JDBC 实现曾把 RRF 融合分写进 {@code score}，
+     *    而门禁阈值按相关性量纲（0.2/0.35）标定 → RRF 上限约 0.033 → 门禁恒不通过
+     *    → 检索永远返回「未找到依据」。本用例构造「融合分不低、相关性分低」的结果，
+     *    断言它<b>被</b>门禁丢弃——若实现又把融合分当相关性分，它就会被放行。
+     */
+    @Test
+    @DisplayName("门禁作用在相关性分：融合分高但相关性低的结果被丢弃")
+    void scoreGateUsesRelevanceNotFusionScore() {
+        ScoredChunk weakButRanked = new ScoredChunk(
+                chunk("c-1", PEP_2024, ChunkRole.EXPLANATION),
+                0.10, 0.03, RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH);
+
+        RetrievalOrchestrator orchestrator = new RetrievalOrchestrator(
+                StubRetrievalPort.scored(List.of(weakButRanked)), 0.2);
+
+        RetrievalResult result = orchestrator.retrieve(new RetrievalRequest(
+                "完全无关的问题", RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
+                null, "数学", "八年级", 10));
+
+        assertThat(result.isEmpty()).isTrue();
+    }
+
+    /**
+     * 回归：排序按<b>融合排序分</b>，与门禁所用的相关性分各司其职。
+     *
+     * <p>⚠️ 两条链路必须解耦：门禁读相关性分（判「够不够相关」），
+     *    排序读融合分（判「哪个更该先出现」）。若排序改用相关性分，
+     *    词法通道的贡献会被稠密通道吃掉（融合的意义就没了）。
+     */
+    @Test
+    @DisplayName("排序按融合分：相关性相同时融合分高者在前")
+    void orderingFollowsFusionScore() {
+        ScoredChunk a = new ScoredChunk(chunk("c-a", PEP_2024, ChunkRole.EXPLANATION),
+                0.50, 0.030, RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH);
+        ScoredChunk b = new ScoredChunk(chunk("c-b", PEP_2024, ChunkRole.EXPLANATION),
+                0.50, 0.020, RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH);
+
+        RetrievalOrchestrator orchestrator = new RetrievalOrchestrator(
+                StubRetrievalPort.scored(List.of(b, a)), 0.0);
+
+        RetrievalResult result = orchestrator.retrieve(new RetrievalRequest(
+                "顶点公式", RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
+                null, "数学", "八年级", 10));
+
+        assertThat(result.chunks()).extracting(s -> s.chunk().id())
+                .containsExactly("c-a", "c-b");
     }
 }

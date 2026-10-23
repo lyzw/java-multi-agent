@@ -105,6 +105,72 @@ public final class ManagementDtos {
     }
 
     /**
+     * 载体级校验决定请求。
+     *
+     * <p><b>⚠️ 与来源级 {@link VerificationRequest} 同形，但语义不同</b>：
+     * {@code trustTier} 与 {@code validDays} 在载体级<b>不产生任何效果</b>——
+     * 权威等级是出版层面（来源）的属性，一份扫描件再可靠也不会让整部教材升级；
+     * 载体也没有独立的有效期字段（有效期绑定在来源的校验结论上）。
+     * 之所以仍接受这两个字段，是为了让两份 HTTP 契约同形、前端复用同一套表单。
+     *
+     * @param targetStatus 目标状态（IN_REVIEW / VERIFIED / REJECTED / REVOKED）
+     * @param evidenceRef 校验依据引用（撤回时落 {@code revoked_reason}）
+     * @param decidedBy 决定人 UUID
+     * @param verificationMethod 校验手段
+     * @param trustTier 权威等级（载体级不生效，仅保持契约同形）
+     * @param validDays 有效天数（载体级不生效，仅保持契约同形）
+     */
+    public record DocumentVerificationRequest(
+            @NotNull(message = "targetStatus 不能为空")
+            VerificationStatus targetStatus,
+
+            @NotBlank(message = "evidenceRef 不能为空"
+                    + "（RAG-D07 §2.5：每次转移必须有证据留痕）")
+            @Size(max = 1024, message = "evidenceRef 长度不能超过 1024")
+            String evidenceRef,
+
+            @NotBlank(message = "decidedBy 不能为空")
+            @Pattern(regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                    message = "decidedBy 必须是合法 UUID")
+            String decidedBy,
+
+            @NotNull(message = "verificationMethod 不能为空")
+            VerificationMethod verificationMethod,
+
+            TrustTier trustTier,
+
+            @MinValidDays
+            Integer validDays
+    ) {
+    }
+
+    /**
+     * 重跑索引请求。
+     *
+     * @param limit 本次最多处理的片段数（可空 → 用默认上限）
+     */
+    public record ReindexRequest(
+            @jakarta.validation.constraints.Min(value = 1, message = "limit 必须 >= 1")
+            @jakarta.validation.constraints.Max(value = 2000, message = "limit 不能超过 2000")
+            Integer limit
+    ) {
+    }
+
+    /**
+     * 重跑索引响应。
+     *
+     * @param indexedChunks 实际完成索引的片段数
+     * @param scannedChunks 扫描到的待索引片段数
+     * @param durationMs 本次耗时（毫秒）
+     */
+    public record ReindexResponse(
+            int indexedChunks,
+            int scannedChunks,
+            long durationMs
+    ) {
+    }
+
+    /**
      * 来源视图（响应）。
      *
      * @param sourceId 来源 ID
@@ -153,7 +219,13 @@ public final class ManagementDtos {
     }
 
     /**
-     * 文档视图（响应）。
+     * 文档载体视图（响应）。
+     *
+     * <p><b>⚠️ 载体级治理字段必须随文档一起返回</b>：
+     * {@code verificationStatus} / {@code retrievable} / {@code revokedAt} /
+     * {@code revokedReason} / {@code licenseStatus} 是「这份物理文件能不能用」的
+     * 结论。缺了它们，前端只能看到「解析成功」这类技术状态，
+     * 却看不到「已被撤回」——管理台会显示一份可下载的已下架语料。
      *
      * @param documentId 文档 ID
      * @param sourceId 来源 ID
@@ -166,6 +238,11 @@ public final class ManagementDtos {
      * @param parserVersion 解析器版本
      * @param contentHash 校验和
      * @param chunkCount 片段数
+     * @param verificationStatus 载体级校验状态
+     * @param retrievable 载体级可检索标记
+     * @param revokedAt 撤回时间（可空）
+     * @param revokedReason 撤回依据（可空）
+     * @param licenseStatus 载体级版权状态
      * @param createdAt 创建时间
      * @param updatedAt 更新时间
      */
@@ -181,8 +258,107 @@ public final class ManagementDtos {
             String parserVersion,
             String contentHash,
             long chunkCount,
+            String verificationStatus,
+            boolean retrievable,
+            String revokedAt,
+            String revokedReason,
+            String licenseStatus,
             String createdAt,
             String updatedAt
+    ) {
+    }
+
+    /**
+     * 维护问题清单视图（响应）。
+     *
+     * @param documentsMissingEmbedding 缺向量的载体
+     * @param documentsFailedParse 解析失败的载体
+     * @param sourcesPendingReview 待审核的来源
+     * @param totals 各类问题条数
+     */
+    public record IssuesResponse(
+            List<MissingEmbeddingDocumentResponse> documentsMissingEmbedding,
+            List<FailedParseDocumentResponse> documentsFailedParse,
+            List<PendingReviewSourceResponse> sourcesPendingReview,
+            IssueTotalsResponse totals
+    ) {
+    }
+
+    /**
+     * 缺向量的载体（清单项）。
+     *
+     * @param documentId 载体 ID
+     * @param sourceId 来源 ID
+     * @param title 标题
+     * @param carrier 载体类型
+     * @param parseStatus 解析状态
+     * @param chunkCount 片段总数
+     * @param missingEmbeddingCount 缺向量的片段数
+     */
+    public record MissingEmbeddingDocumentResponse(
+            String documentId,
+            String sourceId,
+            String title,
+            String carrier,
+            String parseStatus,
+            long chunkCount,
+            long missingEmbeddingCount
+    ) {
+    }
+
+    /**
+     * 解析失败的载体（清单项）。
+     *
+     * @param documentId 载体 ID
+     * @param sourceId 来源 ID
+     * @param title 标题
+     * @param carrier 载体类型
+     * @param parseStatus 解析状态
+     * @param chunkCount 片段总数
+     */
+    public record FailedParseDocumentResponse(
+            String documentId,
+            String sourceId,
+            String title,
+            String carrier,
+            String parseStatus,
+            long chunkCount
+    ) {
+    }
+
+    /**
+     * 待审核的来源（清单项）。
+     *
+     * <p>⚠️ {@code stale} 是<b>服务端计算</b>的结论：
+     * 它依赖「校验结论有效期 + 当前时刻」，前端没有租户权威门槛上下文，
+     * 自己算必然与服务端口径不一致。
+     *
+     * @param sourceId 来源 ID
+     * @param title 标题
+     * @param verificationStatus 当前校验状态
+     * @param stale 校验结论是否已过期
+     * @param trustTier 权威等级
+     */
+    public record PendingReviewSourceResponse(
+            String sourceId,
+            String title,
+            String verificationStatus,
+            boolean stale,
+            String trustTier
+    ) {
+    }
+
+    /**
+     * 问题清单合计（响应）。
+     *
+     * @param documentsMissingEmbedding 缺向量的载体数
+     * @param documentsFailedParse 解析失败的载体数
+     * @param sourcesPendingReview 待审核的来源数
+     */
+    public record IssueTotalsResponse(
+            int documentsMissingEmbedding,
+            int documentsFailedParse,
+            int sourcesPendingReview
     ) {
     }
 
@@ -237,6 +413,55 @@ public final class ManagementDtos {
             java.util.Map<String, Long> chunksByRole,
             java.util.Map<String, Long> sourcesByVerificationStatus,
             java.util.Map<String, Long> documentsByParseStatus
+    ) {
+    }
+
+    /**
+     * 单日检索次数（报表中心 · 每日搜索的问题数）。
+     *
+     * @param date 日期（UTC，YYYY-MM-DD）
+     * @param searches 当日检索次数
+     */
+    public record DailySearchCountResponse(String date, long searches) {
+    }
+
+    /**
+     * 每日检索次数聚合响应。
+     *
+     * @param searchesByDay 连续日期的每日检索次数（无数据的日子为 0）
+     * @param generatedDays 覆盖天数
+     */
+    public record DailySearchResponse(
+            List<DailySearchCountResponse> searchesByDay,
+            int generatedDays
+    ) {
+    }
+
+    /**
+     * 单日导入语料量（三层级）。
+     *
+     * @param date 日期（UTC，YYYY-MM-DD）
+     * @param sources 当日登记的资料（来源）数
+     * @param documents 当日导入的文档载体数
+     * @param chunks 当日切分的片段数
+     */
+    public record DailyImportCountResponse(
+            String date,
+            long sources,
+            long documents,
+            long chunks
+    ) {
+    }
+
+    /**
+     * 每日导入语料量聚合响应。
+     *
+     * @param importsByDay 连续日期的每日导入量（无数据的日子三层均为 0）
+     * @param generatedDays 覆盖天数
+     */
+    public record DailyImportResponse(
+            List<DailyImportCountResponse> importsByDay,
+            int generatedDays
     ) {
     }
 
@@ -302,12 +527,58 @@ public final class ManagementDtos {
     public static List<DocumentResponse> toDocumentResponses(
             List<cn.studykid.rag.management.core.CorpusDocument> documents) {
         return documents.stream()
-                .map(d -> new DocumentResponse(
-                        d.documentId(), d.sourceId(), d.editionId(), d.carrier(), d.title(),
-                        d.pageCount(), d.objectRef(), d.parseStatus(), d.parserVersion(),
-                        d.contentHash(), d.chunkCount(),
-                        d.createdAt().toString(), d.updatedAt().toString()))
+                .map(ManagementDtos::toDocumentResponse)
                 .toList();
+    }
+
+    /**
+     * 把领域载体转换为响应视图。
+     *
+     * @param document 领域载体
+     * @return 响应视图
+     */
+    public static DocumentResponse toDocumentResponse(
+            cn.studykid.rag.management.core.CorpusDocument document) {
+        return new DocumentResponse(
+                document.documentId(), document.sourceId(), document.editionId(),
+                document.carrier(), document.title(), document.pageCount(), document.objectRef(),
+                document.parseStatus(), document.parserVersion(), document.contentHash(),
+                document.chunkCount(),
+                document.verificationStatus().name(), document.retrievable(),
+                document.revokedAt() == null ? null : document.revokedAt().toString(),
+                document.revokedReason(), document.licenseStatus(),
+                document.createdAt().toString(), document.updatedAt().toString());
+    }
+
+    /**
+     * 把领域问题清单转换为响应视图。
+     *
+     * @param issues 领域问题清单
+     * @return 响应视图
+     */
+    public static IssuesResponse toIssuesResponse(
+            cn.studykid.rag.management.core.CorpusIssues issues) {
+        List<MissingEmbeddingDocumentResponse> missing = issues.documentsMissingEmbedding().stream()
+                .map(g -> new MissingEmbeddingDocumentResponse(
+                        g.documentId(), g.sourceId(), g.title(), g.carrier(), g.parseStatus(),
+                        g.chunkCount(), g.missingEmbeddingCount()))
+                .toList();
+        List<FailedParseDocumentResponse> failed = issues.documentsFailedParse().stream()
+                .map(f -> new FailedParseDocumentResponse(
+                        f.documentId(), f.sourceId(), f.title(), f.carrier(), f.parseStatus(),
+                        f.chunkCount()))
+                .toList();
+        List<PendingReviewSourceResponse> pending = issues.sourcesPendingReview().stream()
+                .map(s -> new PendingReviewSourceResponse(
+                        s.sourceId(), s.title(), s.verificationStatus(), s.stale(), s.trustTier()))
+                .toList();
+        // ⚠️ 合计由分项长度派生（服务端同一次读的结果），
+        //    不另查一次库——两次查询之间数据可能变化，
+        //    「总数对不上分项」会被运维误读为数据竞态。
+        var totals = issues.totals();
+        return new IssuesResponse(missing, failed, pending,
+                new IssueTotalsResponse(totals.documentsMissingEmbedding(),
+                        totals.documentsFailedParse(), totals.sourcesPendingReview()));
     }
 
     /**
@@ -321,5 +592,34 @@ public final class ManagementDtos {
                         c.chunkId(), c.role(), c.pageNumber(), c.sectionPath(), c.exerciseNo(),
                         c.charLength(), c.hasEmbedding(), c.contentHash()))
                 .toList();
+    }
+
+    /**
+     * 每日检索统计 → 响应契约。
+     *
+     * @param stats 端口返回的每日检索聚合
+     * @return 响应契约
+     */
+    public static DailySearchResponse toDailySearchResponse(
+            cn.studykid.rag.management.ports.CorpusManagementPort.DailySearchStatistics stats) {
+        List<DailySearchCountResponse> byDay = stats.searchesByDay().stream()
+                .map(s -> new DailySearchCountResponse(s.date(), s.searches()))
+                .toList();
+        return new DailySearchResponse(byDay, stats.generatedDays());
+    }
+
+    /**
+     * 每日导入统计 → 响应契约。
+     *
+     * @param stats 端口返回的每日导入聚合
+     * @return 响应契约
+     */
+    public static DailyImportResponse toDailyImportResponse(
+            cn.studykid.rag.management.ports.CorpusManagementPort.DailyImportStatistics stats) {
+        List<DailyImportCountResponse> byDay = stats.importsByDay().stream()
+                .map(i -> new DailyImportCountResponse(i.date(), i.sources(), i.documents(),
+                        i.chunks()))
+                .toList();
+        return new DailyImportResponse(byDay, stats.generatedDays());
     }
 }

@@ -106,6 +106,18 @@ describe('登录页', () => {
   })
 
   describe('登录成功', () => {
+    /**
+     * ⚠️ 只数**登录请求**（`/api/auth/token`），不数总请求数。
+     *
+     * 原因（B1 补强）：登录响应**不含 roles** 时，会话层会补打一次
+     * `GET /api/auth/roles` 回补角色——那是**另一个端点**的调用，
+     * 与「登录表单不得重复提交」是两回事。
+     * 原断言用总请求数代理「只登录一次」，会把合法的角色回补误判为重复提交。
+     */
+    function loginCalls(fetchMock: ReturnType<typeof vi.fn>): unknown[][] {
+      return fetchMock.mock.calls.filter((c) => String(c[0]).includes('/api/auth/token'))
+    }
+
     it('应写入 sessionStorage 而非 localStorage', async () => {
       // ⚠️ 不使用真实 Response：其 body 只能读取一次，
       //    而 client.ts 的 readBody 会消费它。用轻量替身更稳定。
@@ -127,7 +139,7 @@ describe('登录页', () => {
       await userEvent.click(screen.getByRole('button', { name: '登录' }))
 
       await waitFor(() => {
-        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(loginCalls(fetchMock)).toHaveLength(1)
       })
       await waitFor(() => {
         expect(window.sessionStorage.getItem('agent.session')).toContain('tok-123')
@@ -151,9 +163,9 @@ describe('登录页', () => {
       await userEvent.click(screen.getByRole('button', { name: '登录' }))
 
       await waitFor(() => {
-        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(loginCalls(fetchMock)).toHaveLength(1)
       })
-      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      const [, init] = loginCalls(fetchMock)[0] as [string, RequestInit]
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
       expect(Object.keys(body).sort()).toEqual([
         'loginName',

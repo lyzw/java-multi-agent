@@ -105,15 +105,21 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         // RRF 融合：按通道内排名倒数求和，排名取 1-based。
         Map<String, Double> fused = new LinkedHashMap<>();
         Map<String, ScoredChunk> byId = new HashMap<>();
-        accumulate(fused, byId, dense);
-        accumulate(fused, byId, lexical);
+        // ⚠️ 相关性分与融合分必须分开记：门禁要的是「这条到底有多相关」
+        //    （稠密=余弦相似度，词法=ts_rank），排序要的是「各通道都排在前面的」。
+        Map<String, Double> relevance = new HashMap<>();
+        accumulate(fused, byId, relevance, dense);
+        accumulate(fused, byId, relevance, lexical);
 
         List<ScoredChunk> merged = fused.entrySet().stream()
                 .sorted(Map.Entry.comparingByValue(Comparator.reverseOrder()))
                 .map(e -> {
                     ScoredChunk base = byId.get(e.getKey());
-                    return new ScoredChunk(base.chunk(), e.getValue(),
-                            base.channel(), base.reason());
+                    // ⚠️ 排序键是 RRF 融合分（e.getValue()），
+                    //    门禁键是相关性分（relevance）——两者量纲不同，不可互换。
+                    return new ScoredChunk(base.chunk(),
+                            relevance.getOrDefault(e.getKey(), base.score()),
+                            e.getValue(), base.channel(), base.reason());
                 })
                 .toList();
 
@@ -330,12 +336,15 @@ public class JdbcRetrievalRepository implements RetrievalPort {
     }
 
     private void accumulate(Map<String, Double> fused, Map<String, ScoredChunk> byId,
-                            List<ScoredChunk> channel) {
+                            Map<String, Double> relevance, List<ScoredChunk> channel) {
         for (int rank = 0; rank < channel.size(); rank++) {
             ScoredChunk sc = channel.get(rank);
             String id = sc.chunk().id();
             double rrf = 1.0 / (RRF_K + (rank + 1));
             fused.merge(id, rrf, Double::sum);
+            // ⚠️ 相关性分取各通道中的<b>最高值</b>：门禁判的是「这条内容有多相关」，
+            //    不是「它在几个通道里排第几」。用 RRF 值当相关性分会让门禁恒不通过。
+            relevance.merge(id, sc.score(), Math::max);
             // 优先保留稠密通道标记；否则用词法（merge 仅在已存在时触发 remap）。
             byId.merge(id, sc, (existing, newer) ->
                     existing.channel() == RetrievalChannel.DENSE_VECTOR ? existing : newer);
@@ -350,7 +359,9 @@ public class JdbcRetrievalRepository implements RetrievalPort {
             score = 0.0;
         }
         score = Math.max(0.0, Math.min(1.0, score));
-        return new ScoredChunk(chunk, score, channel, reason);
+        // ⚠️ fusionScore 这里是 0：本方法只产出<b>单通道</b>结果，
+        //    融合分由 search() 里的 RRF 归并阶段统一写入。
+        return new ScoredChunk(chunk, score, 0.0, channel, reason);
     }
 
     private Chunk mapChunk(ResultSet rs) throws SQLException {

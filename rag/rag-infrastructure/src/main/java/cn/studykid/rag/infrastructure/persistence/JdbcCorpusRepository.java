@@ -45,8 +45,8 @@ public class JdbcCorpusRepository implements CorpusRepository {
                     (chunk_id, tenant_id, document_id, edition_id, role, text, page_number,
                      section_path, exercise_no, char_start, char_end, kp_ids, exercise_ref,
                      content_hash, embed_model, index_generation)
-                VALUES (?, rag_current_tenant(), ?, ?, ?::rag_chunk_role, ?, ?, ?, ?, ?, ?,
-                        ?::uuid[], ?, ?, ?, 1)
+                VALUES (?::uuid, rag_current_tenant(), ?::uuid, ?::uuid, ?::rag_chunk_role, ?, ?,
+                        ?, ?, ?, ?, ?::uuid[], ?, ?, ?, 1)
                 """,
                 chunk.id(), chunk.documentId(), editionId, chunk.role().name(), chunk.text(),
                 chunk.locator().pageNumber(), chunk.locator().sectionPath(),
@@ -56,7 +56,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, index_generation, embed_model, embedding)
-                VALUES (?, rag_current_tenant(), 1, ?, ?::vector)
+                VALUES (?::uuid, rag_current_tenant(), 1, ?, ?::vector)
                 """,
                 chunk.id(), embedModel, vectorToString(embedding));
     }
@@ -70,8 +70,12 @@ public class JdbcCorpusRepository implements CorpusRepository {
         //    （A result was returned when none was expected）。
         jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                 String.class, tenantId);
+        // ⚠️ chunk_id 必须显式转 uuid：列是 uuid，参数以字符串传入时
+        //    PG 无 {@code uuid = varchar} 运算符，运行期直接报
+        //    「operator does not exist: uuid = character varying」。
+        //    这条路径此前从未被真正调用过（重索引从未跑通），故一直潜伏。
         jdbcTemplate.update(
-                "UPDATE rag_chunk SET text_jieba = ? WHERE chunk_id = ?", jiebaTokens, chunkId);
+                "UPDATE rag_chunk SET text_jieba = ? WHERE chunk_id = ?::uuid", jiebaTokens, chunkId);
     }
 
     @Override
@@ -86,10 +90,13 @@ public class JdbcCorpusRepository implements CorpusRepository {
         // ⚠️ ON CONFLICT (chunk_id)：片段已存在则更新向量与模型标识；否则插入。
         //    PK 为 chunk_id（单列），tenant_id 经 rag_current_tenant() 取值，
         //    与 V1 的 RLS WITH CHECK 一致（tenant_id = rag_current_tenant()）。
+        // ⚠️ chunk_id 必须显式转 uuid：列是 uuid、参数以字符串传入时，
+        //    PG 报「column chunk_id is of type uuid but expression is of type character varying」。
+        //    2026-10-23 由管理面「重跑索引」端点首次真实触发并暴露（此前该路径从未跑通）。
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, index_generation, embed_model, embedding)
-                VALUES (?, rag_current_tenant(), 1, ?, ?::vector)
+                VALUES (?::uuid, rag_current_tenant(), 1, ?, ?::vector)
                 ON CONFLICT (chunk_id) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     embed_model = EXCLUDED.embed_model,

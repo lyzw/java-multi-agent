@@ -60,8 +60,32 @@
   /* 栏宽 */
   --nav-w: 208px;
   --nav-w-mid: 64px;
+  --nav-w-rail: 64px;
   --content-max: 880px;
   --header-h: 56px;
+
+  /* ── 演进新增：浅色面板 / 图标 / 状态药丸（不破坏纸感纪律）──
+     ⛔ 仍不用卡片阴影；面板靠 1px 边 + 极浅纸面分层。
+     ⛔ 不引入彩色主色 token（design.spec R1 纪律）；
+        交互强调继续用墨色，语义仍只有 --mark / --settled 两色。 */
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --surface-sunk: #f1f2f4;
+  --surface-hover: #eef0f2;
+
+  --radius-card: 12px;
+  --radius-pill: 999px;
+
+  --icon-sm: 16px;
+  --icon: 18px;
+  --icon-lg: 24px;
+
+  /* 状态药丸：低饱和底 + 同色前景（R3 纪律）*/
+  --pill-neutral-bg: #f1f2f4;  --pill-neutral-fg: #5b6169;
+  --pill-info-bg: #eceef2;     --pill-info-fg: #3f4753;
+  --pill-success-bg: var(--settled-wash); --pill-success-fg: var(--settled);
+  --pill-danger-bg: var(--mark-wash);     --pill-danger-fg: var(--mark);
+  --pill-warn-bg: #f7f1e6;      --pill-warn-fg: #8a5a1c;
 }
 
 /* ── 基础 ─────────────────────────────────────────────── */
