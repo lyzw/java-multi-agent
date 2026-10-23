@@ -178,6 +178,18 @@ public class JdbcAgentManageRepository implements AgentManagePort {
                         storedDefinition = rs.getString("stored_definition");
                     }
                 }
+                // 2) 同事务创建执行快照（**必须有**）。
+                //    ⚠️ 为什么必须有：`JdbcExecutionSnapshotResolver` 的解析 SQL 是
+                //    `agent JOIN agent_version(已发布) JOIN execution_snapshot` 的**内连接**，
+                //    没有快照 = 「查不到」= 该 Agent 永远不可运行（404 AGENT_SNAPSHOT_UNAVAILABLE）。
+                //    而此前**没有任何生产代码路径**创建 execution_snapshot ——
+                //    只有种子脚本（V1_seed.sql）会建。故经 API 发布的 Agent 一律不可运行，
+                //    症状是「发布成功、跑不起来」，且报错点在 Run 创建处，离真因很远。
+                //    （2026-10-23 全栈 E2E 实测发现）
+                //
+                //    ⚠️ 必须与版本行**同事务**：快照与版本是同一个发布事实的两面，
+                //    分开提交会出现「版本已发布但无快照」的中间态 —— 那正是本缺陷本身。
+                createExecutionSnapshot(conn, tenantId, versionId, storedDefinition);
                 conn.commit();
                 audit.recordRequired(tenantId, publisherId,
                         AuditPort.Actions.AGENT_PUBLISH, "agent", agentId,
@@ -221,6 +233,53 @@ public class JdbcAgentManageRepository implements AgentManagePort {
             }
         }
     }
+
+    /**
+     * 为已发布版本创建执行快照（与版本行同事务）。
+     *
+     * <p>⚠️ <b>内容口径</b>：
+     * <ul>
+     *   <li>{@code agent_config} = 该版本的 {@code definition}（Agent 自身的配置）；
+     *       运行期当前**不读**该列（见 §6.6 待接线），但写进去可让快照自解释、
+     *       并为后续「读路径切到 cap_agent_def」保留对照基准；</li>
+     *   <li>{@code prompt_config} / {@code tool_contracts} = {@code {}}（尚无权威模型，
+     *       凭空造结构等于自创契约）；</li>
+     *   <li>{@code run_config} = DEC-9 的运行期容量配置，取值与
+     *       {@code application.yml} 的 {@code agent.run.*} 默认值一致
+     *       （max-cost-per-run=2.00 / max-llm-calls=12 / max-steps=20），
+     *       与种子脚本 {@code V1_seed.sql} 的形态保持一致。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>不与种子脚本抢口径</b>：种子里这三列是 {@code {}}，
+     * 因为种子造的是「形状占位」；运行期发布的版本则带上真实 definition。
+     * 两者都满足 NOT NULL 约束，且运行期当前不消费这三列。
+     */
+    private void createExecutionSnapshot(Connection conn, String tenantId, String versionId,
+                                         @Nullable String definition) throws SQLException {
+        String sql = """
+                INSERT INTO execution_snapshot
+                    (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config)
+                VALUES (?::uuid, ?::uuid, ?::jsonb, '{}'::jsonb, '{}'::jsonb, ?::jsonb)
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, versionId);
+            ps.setString(3, definition == null || definition.isBlank() ? "{}" : definition);
+            ps.setString(4, RUN_CONFIG_DEFAULTS);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * DEC-9 运行期容量配置快照（与 {@code application.yml} 的 {@code agent.run.*} 默认值一致）。
+     *
+     * <p>⚠️ 值来源是**平台默认档**，不是「该租户当时的生效值」——
+     * 运行期当前不消费该列（读路径未接线），故此处取平台默认档作为形状基准；
+     * 待「Run 创建时固化生效配置」落地后，须改为读取该租户当时的实际生效值。
+     */
+    private static final String RUN_CONFIG_DEFAULTS =
+            "{\"maxCostPerRun\":\"2.00\",\"maxLlmCalls\":12,\"maxSteps\":20,"
+                    + "\"approvalRequired\":\"OPTIONAL\"}";
 
     @Nullable
     private static Instant instantOrNull(@Nullable Timestamp ts) {

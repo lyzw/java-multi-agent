@@ -268,6 +268,40 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
                 .body(new ErrorResponse("UNAUTHENTICATED", "未认证"));
     }
 
+    /**
+     * 请求路径未映射到任何端点 → 404。
+     *
+     * <p>⚠️ <b>与 P4-D09 已修的 {@code ResponseStatusException} 同类的缺陷</b>：
+     * Spring 6+ 起，路径不匹配静态资源与任何 {@code @RequestMapping} 时，
+     * 抛的是 {@link org.springframework.web.servlet.resource.NoResourceFoundException}，
+     * Spring 默认会把它映射成 <b>404</b>。
+     * 但本类的兜底 {@code @ExceptionHandler(Exception.class)}
+     * <b>优先于</b> Spring 内置的 {@code DefaultHandlerExceptionResolver}，
+     * 于是未映射路径被<b>吞成 500</b>。
+     *
+     * <p>危害与 P4-D09 记录的一致，且此处更隐蔽：
+     * <ul>
+     *   <li><b>状态码语义反转</b>：404 变 500，客户端无法区分
+     *       「路径不存在」与「服务端故障」，会做出完全相反的重试决策；</li>
+     *   <li><b>监控污染</b>：用户把路径写错、客户端版本不匹配、
+     *       前端调用了已下线的端点 —— 这些都是<b>客户端数据错误</b>，
+     *       却被计入服务端错误率，把真实故障淹没。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>实测证据</b>（2026-10-23 全栈 E2E）：{@code /api/nonexistent}、
+     * {@code /api/cap/config/nope}、{@code /api/audit-records}、{@code /actuator/nope}
+     * 全部返回 500；而「已映射但资源不存在」正确返回 404 —— 两者本应是同一个码。
+     * 对照组：RAG 服务同场景<b>正确返 404</b>（它没有这个兜底处理器），故本条为 platform 特有。
+     */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNoResourceFound(
+            org.springframework.web.servlet.resource.NoResourceFoundException e) {
+        // ⚠️ 不回显 e.getMessage()：它含请求路径原文（可能含客户端数据）
+        log.info("请求路径未映射到任何端点: path={}", e.getResourcePath());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ErrorResponse(codeOf(HttpStatus.NOT_FOUND), messageOf(HttpStatus.NOT_FOUND)));
+    }
+
     /** 4xx 状态 → 归一化 code。 */
     private static String codeOf(HttpStatus status) {
         return switch (status) {

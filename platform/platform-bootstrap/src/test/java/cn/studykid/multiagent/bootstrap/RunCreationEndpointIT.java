@@ -15,6 +15,7 @@ import javax.sql.DataSource;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -78,13 +79,37 @@ class RunCreationEndpointIT {
     @Autowired
     private JwtTokenService tokens;
 
-    private HikariDataSource adminPool;
+    /**
+     * 管理员连接池（<b>静态 + 必须关闭</b>）。
+     *
+     * <p>⚠️ <b>为什么必须是 static</b>：JUnit 默认每个测试方法新建一个测试类实例，
+     * 实例字段因而「每个方法都是 null」→ <b>每个方法都新建一个连接池</b>。
+     * Hikari 的 {@code minimumIdle} 默认等于 {@code maximumPoolSize}，
+     * 池不关闭则连接永不归还；各 IT 类叠加后打满 PostgreSQL 的
+     * {@code max_connections=100} → <b>别的 IT 类的上下文启动失败</b>
+     * （报错点与真因相隔一个类，排查方向极易被带偏）。
+     */
+    private static HikariDataSource adminPool;
+
     private String tenantA;
     private final List<String> createdRunIds = new java.util.ArrayList<>();
 
+    /**
+     * 关闭管理员池。
+     *
+     * <p>⚠️ static 只把泄漏从「每方法一个」降到「每类一个」，<b>不关闭则泄漏依旧</b>。
+     */
+    @AfterAll
+    static void closeAdminPool() {
+        if (adminPool != null) {
+            adminPool.close();
+            adminPool = null;
+        }
+    }
+
     // ── 夹具 ────────────────────────────────────────────────────────
 
-    private synchronized DataSource admin() {
+    private static synchronized DataSource admin() {
         if (adminPool == null) {
             HikariConfig cfg = new HikariConfig();
             cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
@@ -129,6 +154,17 @@ class RunCreationEndpointIT {
             ps.executeUpdate();
         } catch (Exception e) {
             throw new IllegalStateException("写入失败: " + sql, e);
+        }
+    }
+
+    /** 查询首行首列，<b>无行时返回 null</b>（用于「本该有一行却没有」的断言）。 */
+    private String queryOrNull(String sql) {
+        try (Connection c = admin().getConnection();
+             PreparedStatement ps = c.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            return rs.next() ? rs.getString(1) : null;
+        } catch (Exception e) {
+            throw new IllegalStateException("查询失败: " + sql, e);
         }
     }
 
@@ -294,6 +330,62 @@ class RunCreationEndpointIT {
                         + "（execution_snapshot.snapshot_id，而非 version_id）")
                 .as("绝不可能是随机 UUID——那正是原缺陷")
                 .isEqualTo(f.versionId());
+    }
+
+    @Test
+    @DisplayName("✅ E2E 回归：经 API 发布的 Agent 可直接建 Run（发布即产执行快照）")
+    void apiPublishedAgentCanCreateRun() {
+        // ⚠️⚠️ 本条锁定 2026-10-23 全栈 E2E 实测发现的真实缺陷：
+        //    此前**没有任何生产代码路径**创建 execution_snapshot（只有种子脚本会建），
+        //    而快照解析是 agent JOIN agent_version JOIN execution_snapshot 的**内连接**
+        //    → 经 API 发布的 Agent **永远不可运行**（建 Run 报 404 AGENT_SNAPSHOT_UNAVAILABLE），
+        //    且报错点在「建 Run」处、真因在「发布」处，排查方向被带偏。
+        //
+        // ⚠️ **全程走真实 HTTP 端点，不手工插快照**：
+        //    手工插 execution_snapshot 就等于把缺陷盖住 —— 本类其余用例正是这么造的，
+        //    于是「发布 → 运行」这条真实链路**从未被任何 IT 覆盖过**，
+        //    缺陷才能长期存活且全绿。
+        String name = "rc-pub-" + UUID.randomUUID();
+
+        String agentId = jsonString(rest.post().uri("/api/agents")
+                .header("Authorization", auth())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"name\":\"" + name + "\",\"description\":\"e2e\"}")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class).returnResult().getResponseBody(), "agentId");
+        assertThat(agentId).as("创建 Agent 应返回 agentId").isNotBlank();
+
+        String versionId = jsonString(rest.post().uri("/api/agents/{id}/versions", agentId)
+                .header("Authorization", auth())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"definition\":\"{\\\"kind\\\":\\\"tutor\\\"}\"}")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class).returnResult().getResponseBody(), "versionId");
+        assertThat(versionId).as("发布版本应返回 versionId").isNotBlank();
+
+        // ⛔ 发布即产快照：库中必须真的多了一行，且挂在该版本上
+        String snapshotId = queryOrNull(
+                "SELECT snapshot_id::text FROM execution_snapshot "
+                        + "WHERE tenant_id = '" + tenant() + "'::uuid "
+                        + "AND version_id = '" + versionId + "'::uuid");
+        assertThat(snapshotId)
+                .as("⛔ 发布必须同时产出执行快照 —— 否则该 Agent 永远不可运行")
+                .isNotBlank();
+
+        // 直接建 Run —— 不做任何手工夹具
+        String key = UUID.randomUUID().toString();
+        String response = createRun(agentId, key, 201);
+        remember(jsonString(response, "runId"));
+        assertThat(response).contains("\"replayed\":false");
+        assertThat(runCount(key)).as("⛔ 返回 201 却没落库 = 「看起来通了」").isEqualTo(1L);
+
+        String runSnapshot = query("SELECT snapshot_id::text FROM run WHERE idempotency_key = '"
+                + key + "'");
+        assertThat(runSnapshot)
+                .as("⛔ run.snapshot_id 必须等于发布时产出的**快照主键**")
+                .isEqualTo(snapshotId);
     }
 
     @Test

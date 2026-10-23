@@ -12,6 +12,7 @@ import javax.sql.DataSource;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -66,10 +67,30 @@ class ConfigOverrideEndpointIT {
     @Autowired
     private DataSource dataSource;
 
-    private HikariDataSource adminPool;
+    /**
+     * 管理员连接池（<b>静态 + 必须关闭</b>）。
+     *
+     * <p>⚠️ <b>为什么必须是 static</b>：JUnit 默认每个测试方法新建一个测试类实例，
+     * 实例字段因而「每个方法都是 null」→ <b>每个方法都新建一个连接池</b>。
+     * Hikari 的 {@code minimumIdle} 默认等于 {@code maximumPoolSize}，
+     * 每个池常驻 2 条连接；池若不关闭，连接就<b>永不归还</b>，
+     * 累积后打满 PostgreSQL 的 {@code max_connections=100}
+     * → <b>别的 IT 类的 Spring 上下文启动失败</b>（报错点与真因相隔一个类）。
+     */
+    private static HikariDataSource adminPool;
+
     private String tenantA;
 
-    private synchronized void adminPool() {
+    /** 关闭管理员池（<b>必须</b>：static 只把泄漏从「每方法」降到「每类」）。 */
+    @AfterAll
+    static void closeAdminPool() {
+        if (adminPool != null) {
+            adminPool.close();
+            adminPool = null;
+        }
+    }
+
+    private static synchronized void adminPool() {
         if (adminPool == null) {
             HikariConfig cfg = new HikariConfig();
             cfg.setJdbcUrl(System.getenv("IT_PG_URL"));

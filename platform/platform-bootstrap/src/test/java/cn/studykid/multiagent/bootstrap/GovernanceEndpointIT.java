@@ -13,6 +13,7 @@ import javax.sql.DataSource;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -76,8 +77,19 @@ class GovernanceEndpointIT {
      * 而真实原因是<b>夹具没造出来</b>，与被测端点无关。
      *
      * <p>这与 GovernanceQueryIT 的 {@code adminQuery} 同源。
+     *
+     * <p>⚠️ <b>必须 static 且必须关闭</b>（2026-10-23 实测修正）：
+     * JUnit 默认每个测试方法新建一个测试类实例 → 实例字段「每个方法都是 null」
+     * → <b>每个方法都新建一个连接池</b>；Hikari 的 {@code minimumIdle}
+     * 默认等于 {@code maximumPoolSize}（此处 2），池不关闭则连接永不归还。
+     * 本类 19 个测试方法 = 19 个泄漏池 = 38 条连接，
+     * 与其它 IT 类的同类泄漏叠加 → 打满 PostgreSQL 的 {@code max_connections=100}
+     * → <b>后续 IT 类的 Spring 上下文启动失败</b>
+     * （{@code FATAL: remaining connection slots are reserved for
+     * roles with the SUPERUSER attribute}），
+     * 报错点在<b>别的类</b>、真因在<b>本类</b>，排查方向极易被带偏。
      */
-    private HikariDataSource adminPool;
+    private static HikariDataSource adminPool;
 
     private String tenantA;
     private String tenantB;
@@ -88,7 +100,21 @@ class GovernanceEndpointIT {
         // 占位以提醒：真正初始化在 initTenants()（懒加载，避免与 Spring 生命周期竞争）
     }
 
-    private synchronized void adminPool() {
+    /**
+     * 关闭管理员池。
+     *
+     * <p>⚠️ static 只把泄漏从「每方法一个」降到「每类一个」，
+     * <b>不关闭则泄漏依旧</b> —— 两个动作缺一不可。
+     */
+    @AfterAll
+    static void closeAdminPool() {
+        if (adminPool != null) {
+            adminPool.close();
+            adminPool = null;
+        }
+    }
+
+    private static synchronized void adminPool() {
         if (adminPool == null) {
             HikariConfig cfg = new HikariConfig();
             cfg.setJdbcUrl(System.getenv("IT_PG_URL"));

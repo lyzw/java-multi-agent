@@ -10,6 +10,7 @@ import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.Set;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -123,6 +124,28 @@ class PlatformSecurityE2ETest {
     private JdbcTemplate jdbc;
 
     /**
+     * 管理员连接池（<b>静态 + 必须关闭</b>）。
+     *
+     * <p>⚠️ <b>2026-10-23 实测修正</b>：本方法原先<b>每次调用都 new 一个
+     * {@code HikariDataSource}</b>，而它被 {@code @BeforeEach} 的
+     * {@code seedAccount} 与多个用例反复调用 → 每个池常驻 1 条连接且
+     * <b>从不关闭</b> → 连接永不归还。
+     * 本类 15 个测试方法 + 若干次 {@code validToken()} 调用
+     * → 数十条连接泄漏 → 与其它 IT 类的泄漏叠加后打满 PostgreSQL 的
+     * {@code max_connections=100} → <b>别的 IT 类的上下文启动失败</b>。
+     */
+    private static HikariDataSource adminPool;
+
+    /** 关闭管理员池（<b>必须</b>：不关闭则泄漏依旧）。 */
+    @AfterAll
+    static void closeAdminPool() {
+        if (adminPool != null) {
+            adminPool.close();
+            adminPool = null;
+        }
+    }
+
+    /**
      * 以系统身份执行准备语句。
      *
      * <p>⚠️ <b>RLS 生效是正确行为</b>：{@code principal} 表受租户隔离，
@@ -134,17 +157,20 @@ class PlatformSecurityE2ETest {
      * 绝不能用系统身份做验证 —— 那会得到「隔离失效」的虚假结论。
      */
     private JdbcTemplate adminJdbc() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
-        cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
-        // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
-        //    密码认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，否则连接失败。
-        String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
-        if (adminPwd != null && !adminPwd.isBlank()) {
-            cfg.setPassword(adminPwd);
+        if (adminPool == null) {
+            HikariConfig cfg = new HikariConfig();
+            cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+            cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
+            // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
+            //    密码认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，否则连接失败。
+            String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
+            if (adminPwd != null && !adminPwd.isBlank()) {
+                cfg.setPassword(adminPwd);
+            }
+            cfg.setMaximumPoolSize(1);
+            adminPool = new HikariDataSource(cfg);
         }
-        cfg.setMaximumPoolSize(1);
-        return new JdbcTemplate(new HikariDataSource(cfg));
+        return new JdbcTemplate(adminPool);
     }
 
     /**

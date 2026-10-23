@@ -13,6 +13,7 @@ import javax.sql.DataSource;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -63,14 +64,42 @@ class AgentEndpointIT {
     @Autowired
     private JwtTokenService tokens;
 
-    private HikariDataSource adminPool;
+    /**
+     * 管理员连接池（<b>静态 + 必须关闭</b>）。
+     *
+     * <p>⚠️ <b>为什么必须是 static</b>：JUnit 默认每个测试方法新建一个测试类实例，
+     * 实例字段因而「每个方法都是 null」→ <b>每个方法都新建一个连接池</b>。
+     * Hikari 的 {@code minimumIdle} 默认等于 {@code maximumPoolSize}，
+     * 每个池常驻 2 条连接；池若不关闭，连接就<b>永不归还</b>。
+     * 9 个测试方法 = 9 个泄漏池 = 18 条连接；各 IT 类叠加后
+     * → 打满 PostgreSQL 的 {@code max_connections=100}
+     * → <b>别的 IT 类的 Spring 上下文启动失败</b>
+     * （报错 {@code FATAL: remaining connection slots are reserved for
+     * roles with the SUPERUSER attribute}，而真因在别的类里，极易误判）。
+     */
+    private static HikariDataSource adminPool;
+
     private String tenantA;
 
     @BeforeAll
     static void unusedHook() {
     }
 
-    private synchronized void adminPool() {
+    /**
+     * 关闭管理员池（<b>必须在类结束时关闭</b>，否则连接永久泄漏）。
+     *
+     * <p>⚠️ 只做 static 不关闭，泄漏依旧存在（只是从「每方法一个」降为「每类一个」）；
+     * 两个动作缺一不可。
+     */
+    @AfterAll
+    static void closeAdminPool() {
+        if (adminPool != null) {
+            adminPool.close();
+            adminPool = null;
+        }
+    }
+
+    private static synchronized void adminPool() {
         if (adminPool == null) {
             HikariConfig cfg = new HikariConfig();
             cfg.setJdbcUrl(System.getenv("IT_PG_URL"));

@@ -149,6 +149,108 @@ class AgentRepositoryIT {
         assertThat(countAudit(tenantA, "AGENT_PUBLISH", agent.agentId())).isEqualTo(2);
     }
 
+    // ── 执行快照（2026-10-23 全栈 E2E 实测发现的真实缺陷）─────────────
+    //
+    // ⚠️ 缺陷原文：经 API 发布的 Agent **永远不可运行**。
+    //    `JdbcExecutionSnapshotResolver` 的解析 SQL 是
+    //    `agent JOIN agent_version(已发布) JOIN execution_snapshot` 的**内连接**，
+    //    而此前**没有任何生产代码路径**创建 execution_snapshot（只有种子脚本会建）。
+    //    → 无快照 = 查不到 = Run 创建报 404 AGENT_SNAPSHOT_UNAVAILABLE。
+    //    症状离真因极远：报错在「创建 Run」处，真因在「发布 Agent」处。
+    //    修复：`publishVersion` 在同事务内创建 execution_snapshot。
+
+    @Test
+    @DisplayName("⛔ 发布即产执行快照：否则该 Agent 永远不可运行（E2E 真实缺陷回归）")
+    void publishVersionCreatesExecutionSnapshot() throws Exception {
+        String name = "agent-snap-" + UUID.randomUUID();
+        var agent = manage.createAgent(tenantA, name, null, "creator-1");
+
+        // 控制组：发布前没有快照
+        assertThat(countSnapshots(tenantA, agent.agentId()))
+                .as("前置条件：新建 Agent 尚无版本、无快照")
+                .isZero();
+
+        String def = "{\"kind\":\"tutor\",\"v\":1}";
+        manage.publishVersion(tenantA, agent.agentId(), def, "publisher-1");
+
+        // ⛔ 连通性：快照行真的出现了
+        assertThat(countSnapshots(tenantA, agent.agentId()))
+                .as("⛔ 发布后必须存在 execution_snapshot —— 缺它 = 该 Agent 永远不可运行")
+                .isOne();
+
+        // 快照内容口径：agent_config = 已发布 definition
+        var rows = snapshotRows(tenantA, agent.agentId());
+        assertThat(rows).hasSize(1);
+        assertJsonEquals(def, rows.get(0)[0]);
+        // prompt_config / tool_contracts 尚无权威模型 → 空对象（不自创契约）
+        assertJsonEquals("{}", rows.get(0)[1]);
+        assertJsonEquals("{}", rows.get(0)[2]);
+        // run_config = DEC-9 运行期容量配置档
+        assertJsonEquals("{\"maxCostPerRun\":\"2.00\",\"maxLlmCalls\":12,\"maxSteps\":20,"
+                + "\"approvalRequired\":\"OPTIONAL\"}", rows.get(0)[3]);
+    }
+
+    @Test
+    @DisplayName("✅ 发布后的 Agent 可被快照解析器命中（Run 创建链路的真前提）")
+    void publishedAgentResolvesExecutionSnapshot() {
+        String name = "agent-resolve-" + UUID.randomUUID();
+        var agent = manage.createAgent(tenantA, name, null, "creator-1");
+        manage.publishVersion(tenantA, agent.agentId(), "{\"kind\":\"tutor\"}", "publisher-1");
+
+        // ⚠️ 走真实解析器（内连接 agent/version/snapshot + published_at 硬过滤），
+        //    不直接查表 —— 否则测的是「我写的 SQL 对不对」而非「链路通不通」。
+        var resolver = new JdbcExecutionSnapshotResolver(appPool);
+        assertThat(resolver.resolveSnapshotId(tenantA, agent.agentId()))
+                .as("⛔ 解析器取不到快照 = 该 Agent 不可运行 = 缺陷未修复")
+                .isPresent();
+    }
+
+    @Test
+    @DisplayName("✅ 二次发布产第二条快照；解析器取最新版本那条")
+    void secondPublishCreatesSecondSnapshotAndLatestWins() {
+        String name = "agent-snap2-" + UUID.randomUUID();
+        var agent = manage.createAgent(tenantA, name, null, "creator-1");
+
+        manage.publishVersion(tenantA, agent.agentId(), "{\"kind\":\"tutor\",\"v\":1}", "publisher-1");
+        manage.publishVersion(tenantA, agent.agentId(), "{\"kind\":\"tutor\",\"v\":2}", "publisher-1");
+
+        assertThat(countSnapshots(tenantA, agent.agentId()))
+                .as("⛔ 一版本一快照：缺一条即某版本不可运行")
+                .isEqualTo(2);
+
+        var resolver = new JdbcExecutionSnapshotResolver(appPool);
+        String latest = resolver.resolveSnapshotId(tenantA, agent.agentId()).orElseThrow();
+        // ⚠️ .formatted() 必须作用在**整段拼接**上：
+        //    方法调用的优先级高于 +，写成 "...sql " + "...".formatted(...) 会只格式化最后一段。
+        String expected = adminQuery(
+                ("SELECT es.snapshot_id::text FROM execution_snapshot es "
+                        + "JOIN agent_version v ON v.version_id = es.version_id "
+                        + "  AND v.tenant_id = es.tenant_id "
+                        + "WHERE es.tenant_id='%s'::uuid AND v.agent_id='%s'::uuid "
+                        + "ORDER BY v.version_number DESC LIMIT 1")
+                        .formatted(tenantA, agent.agentId()));
+        assertThat(latest)
+                .as("⛔ 解析器须取最新已发布版本的快照（ORDER BY version_number DESC）")
+                .isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("⛔ 跨租户：B 解析不到 A 的 Agent 快照（RLS 隔离不得被快照写入绕开）")
+    void crossTenantSnapshotIsolation() {
+        String name = "agent-snapiso-" + UUID.randomUUID();
+        var agent = manage.createAgent(tenantA, name, null, "creator-1");
+        manage.publishVersion(tenantA, agent.agentId(), "{\"kind\":\"tutor\"}", "publisher-1");
+
+        var resolver = new JdbcExecutionSnapshotResolver(appPool);
+        assertThat(resolver.resolveSnapshotId(tenantB, agent.agentId()))
+                .as("⛔⛔ B 不得解析到 A 的快照")
+                .isEmpty();
+        // 控制组：A 自己能解析到
+        assertThat(resolver.resolveSnapshotId(tenantA, agent.agentId()))
+                .as("控制组：A 应当能解析到自己的快照")
+                .isPresent();
+    }
+
     @Test
     @DisplayName("⛔ 发布到不存在的 Agent → AgentNotFoundException（端点转 404）")
     void publishToUnknownAgent() {
@@ -209,6 +311,49 @@ class AgentRepositoryIT {
                 "SELECT count(*)::text FROM agent_version "
                         + "WHERE tenant_id='%s'::uuid AND agent_id='%s'::uuid"
                         .formatted(tenant, agentId)));
+    }
+
+    /** 该 Agent 名下已产生的执行快照行数（经 agent_version 关联）。 */
+    private static long countSnapshots(String tenant, String agentId) {
+        return Long.parseLong(adminQuery(
+                "SELECT count(*)::text FROM execution_snapshot es "
+                        + "JOIN agent_version v ON v.version_id = es.version_id "
+                        + "  AND v.tenant_id = es.tenant_id "
+                        + "WHERE es.tenant_id='%s'::uuid AND v.agent_id='%s'::uuid"
+                        .formatted(tenant, agentId)));
+    }
+
+    /**
+     * 快照内容四列：{@code [agent_config, prompt_config, tool_contracts, run_config]}。
+     *
+     * <p>⚠️ <b>用管理员连接读</b>（超管绕过 RLS）：本方法的目的是
+     * 「确认真实写了什么内容」，不是「验证隔离」——隔离由
+     * {@link #crossTenantSnapshotIsolation()} 单独验证。
+     */
+    private static List<String[]> snapshotRows(String tenant, String agentId) {
+        List<String[]> rows = new java.util.ArrayList<>();
+        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
+             Connection conn = adminPool.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT es.agent_config::text, es.prompt_config::text, "
+                             + "es.tool_contracts::text, es.run_config::text "
+                             + "FROM execution_snapshot es "
+                             + "JOIN agent_version v ON v.version_id = es.version_id "
+                             + "  AND v.tenant_id = es.tenant_id "
+                             + "WHERE es.tenant_id=?::uuid AND v.agent_id=?::uuid "
+                             + "ORDER BY v.version_number")) {
+            ps.setString(1, tenant);
+            ps.setString(2, agentId);
+            try (var rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.add(new String[] {
+                            rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4)});
+                }
+            }
+            return rows;
+        } catch (Exception e) {
+            throw new IllegalStateException("查询执行快照失败", e);
+        }
     }
 
     /**

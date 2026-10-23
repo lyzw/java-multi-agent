@@ -317,6 +317,20 @@ P0 需求/范围/验收基线
   ⚠️ 回滚与生命周期迁移的**成功路径未单列 IT**（已如实登记）。
 - 其余 6 项限制均已如实登记（§5.7 权威表回填、`trustTier` 语义归属、P4 交接项等），**不阻塞**本门禁，
   但**不得**在对外材料中声称「性能达标」或「全量 IT 覆盖」。
+- **追加（2026-10-23 · 第五批）**：本批**不消解任何 P6 登记限制**、**不改变任何需求终态等级**、
+  **不改动上列门禁本身**；仅登记 2026-10-23 **全栈 E2E 实测**（本地 PG 17 + RabbitMQ + platform-bootstrap +
+  rag-bootstrap + 前端，全程真实 HTTP）后**新发现并修复的三个平台侧缺陷**及其可核对证据：
+  ① 未映射路径 **500→404**（`NotFoundMappingIT` 4 项 + `ApiExceptionHandlerTest` 5 项）；
+  ② 经 API 发布的 Agent **永远不可运行** → `publishVersion` **同事务**产出 `execution_snapshot`
+  （`AgentRepositoryIT` +4 项 + `RunCreationEndpointIT` +1 项，真实 HTTP 全链路：`POST /api/agents` → 发布 → `POST /api/runs` → 201 → `SUCCEEDED`）；
+  ③ platform-bootstrap IT 管理员连接池**永久泄漏**（JUnit 每方法新建实例 → 每方法新建池 → 打满 PG `max_connections`；
+  PG 连接峰值 **99→10**）。
+  全量 **1276 项 / 0 失败 / 0 错误 / 0 跳过**（基线 1262 + 新增 14）。
+  证据见 `docs/E2E实测缺陷修复与复验_20261023.md` 与 `docs/项目进度台账.md` §9。
+  ⚠️ **诚实边界**：本批修复的是**旧模型链**（`agent`→`agent_version`→`execution_snapshot`）的自洽性，
+  **不是** CAP 新模型链的读路径打通 —— P0 §3.3 第 5 步**仍未完成**
+  （`execution_capability_snapshot` 生产从不写入、`cap_authz_version` 无 `worker` 行，
+  故 `config.flag.cap-authorization-enforced` 一旦置 true 会 **100% fail-closed 拒绝**），属**阶段级任务**。
 
 > ⚠️ **对平台 P4 的影响**：本体系已达到「冻结候选」并具备可核对证据，
 > 故平台 P4 **可以**在**不依赖本体系的生产就绪状态**的前提下推进。
