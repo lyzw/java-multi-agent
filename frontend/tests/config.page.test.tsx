@@ -19,7 +19,6 @@ import {
   ConfigToolsPage,
   ConfigCompliancePage,
   AgentsPage,
-  ConfigAuditPage,
 } from '@/pages/config/ConfigPages'
 import type { ConfigResponse } from '@/api/types'
 
@@ -350,47 +349,10 @@ describe('P18 Agent 配置与发布（G2 真实接线）', () => {
   })
 })
 
-describe('P19 配置变更审计（C6 真实接线）', () => {
-  beforeEach(() => {
-    window.sessionStorage.clear()
-  })
-
-  it('T12 连通性 + 行为：用 resourceType=config 调用 queryAudit 并渲染查看轨迹', async () => {
-    queryAuditMock.mockResolvedValueOnce({
-      items: [
-        {
-          auditId: 'aud-sentinel-1',
-          actorId: 'tenant-sentinel',
-          action: 'CONFIG_VIEW',
-          resourceType: 'config',
-          resourceId: null,
-          createdAt: '2026-01-01T08:00:00Z',
-          correlationId: null,
-          detail: {},
-        },
-      ],
-      nextCursor: null,
-    })
-    renderPage(<ConfigAuditPage />)
-
-    await waitFor(() => expect(queryAuditMock).toHaveBeenCalledTimes(1))
-    // ⛔ 连通性：必须按 config 资源类型查询（而非全量审计）
-    expect(queryAuditMock).toHaveBeenCalledWith(
-      expect.objectContaining({ resourceType: 'config' }),
-    )
-    // 动作标签映射：CONFIG_VIEW → 查看配置
-    await waitFor(() =>
-      expect(screen.getByText('查看配置')).toBeInTheDocument(),
-    )
-    // P19 是只读审计页，绝不应调用 getConfig
-    expect(getConfigMock).not.toHaveBeenCalled()
-  })
-
-  it('T13 反证：审计条目随 mock 数据变化（非硬编码）', async () => {
-    queryAuditMock.mockResolvedValueOnce({ items: [], nextCursor: null })
-    renderPage(<ConfigAuditPage />)
-
-    await waitFor(() => expect(queryAuditMock).toHaveBeenCalledTimes(1))
-    expect(screen.getByText('还没有配置查看记录')).toBeInTheDocument()
-  })
-})
+/*
+ * ⚠️ P19「配置变更审计」独立页面已于 F4（2026-10-23）合并进 P10 审计查询：
+ *    /config/audit 路由与冗余导航项删除，配置查看留痕改由审计页
+ *    「资源类型 → 配置查看」过滤视图承担（不再单设一页）。
+ *    原行为覆盖（resourceType=config 查询 + CONFIG_VIEW 标签 + 诚实空态）
+ *    已迁移至 tests/governance.page.test.tsx 的 P10 用例集。
+ */

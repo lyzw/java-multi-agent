@@ -24,7 +24,7 @@ import { createRunEventPoller, type StreamSnapshot } from '@/features/run/eventS
 import { useRunStatus } from '@/features/run/useRunStatus'
 import { stateLabel, stateTone, stateHint, isTerminalState } from '@/features/run/runState'
 import { useSession } from '@/auth/session'
-import { Unavailable } from '@/shared/states'
+import { Unavailable, Breadcrumbs } from '@/shared/states'
 
 function formatTime(iso: string): string {
   if (iso.length === 0) return ''
@@ -112,6 +112,7 @@ export function RunProgressPage(): JSX.Element {
   if (runId === undefined) {
     return (
       <>
+        <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '分析进度' }]} />
         <div className="main__head">
           <h1>分析进度</h1>
         </div>
@@ -138,6 +139,7 @@ export function RunProgressPage(): JSX.Element {
 
   return (
     <>
+      <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '分析进度' }]} />
       {/*
         ⚠️ 这里曾是 <main className="run-progress"> ——
         AppShell 已渲染 <main className="main">，main 嵌套 main

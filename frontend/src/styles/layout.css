@@ -92,6 +92,16 @@
   color: var(--ink-3);
 }
 
+/* ⚠️ F1：分面角色提示——小字说明该分面通常需要哪些角色，
+     帮助用户理解「为什么有些分组对自己不可见」。 */
+.nav__group-hint {
+  margin: 0 0 var(--s-2);
+  padding: 0 var(--s-5);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
 .nav ul {
   list-style: none;
   margin: 0;
@@ -596,6 +606,11 @@
     display: none;
   }
 
+  .nav__group-hint {
+    /* 图标态同样不显示角色提示 */
+    display: none;
+  }
+
   .nav a {
     padding: 0;
     justify-content: center;
@@ -863,4 +878,44 @@
   font-size: var(--t-body);
   font-weight: 600;
   margin: 0 0 var(--s-3);
+}
+
+/* ── 面包屑（F3）───────────────────────────────────────
+ * 纸感体系：靠小字 + 分隔线表达层级，⛔ 不滥用色彩与卡片。
+ * 与批改纸隐喻一致：位置信息用中性灰，当前页略深。 */
+
+.breadcrumbs {
+  margin-bottom: var(--s-3);
+}
+
+.breadcrumbs ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-1);
+  font-size: var(--t-note);
+  color: var(--ink-3);
+}
+
+.breadcrumbs li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-1);
+}
+
+.breadcrumbs a {
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.breadcrumbs a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.breadcrumbs__sep {
+  color: var(--ink-3);
 }

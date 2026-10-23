@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useState } from 'react'
-import { Sheet, LoadingRows, Empty, ErrorState } from '@/shared/states'
+import { Sheet, LoadingRows, Empty, ErrorState, ListFooter } from '@/shared/states'
 import {
   listApprovals,
   decideApproval,
@@ -32,33 +32,6 @@ import type {
 } from '@/api/types'
 
 /* ── 通用小组件 ─────────────────────────────────────────── */
-
-function PageFooter({
-  count,
-  hasMore,
-  loadingMore,
-  onLoadMore,
-}: {
-  count: number
-  hasMore: boolean
-  loadingMore: boolean
-  onLoadMore: () => void
-}): JSX.Element {
-  return (
-    <div className="status-line" style={{ marginTop: 'var(--s-3)' }}>
-      {/* ⚠️ 只有后端给了 nextCursor 才显示「加载更多」——
-          否则点它会发一个必然为空的请求，白白消耗治理桶配额。 */}
-      {hasMore ? (
-        <button type="button" onClick={onLoadMore} disabled={loadingMore}>
-          {loadingMore ? '正在加载…' : '加载更多'}
-        </button>
-      ) : null}
-      <span className="muted">
-        {hasMore ? `已显示 ${count} 条` : `已显示全部 ${count} 条`}
-      </span>
-    </div>
-  )
-}
 
 function formatTime(iso: string | null): string {
   if (iso === null) return '—'
@@ -251,7 +224,7 @@ export function ApprovalsPage(): JSX.Element {
                 </div>
               )
             })}
-            <PageFooter
+            <ListFooter
               count={items.length}
               hasMore={hasMore}
               loadingMore={loadingMore}
@@ -477,7 +450,7 @@ export function ReconciliationPage(): JSX.Element {
                 </div>
               )
             })}
-            <PageFooter
+            <ListFooter
               count={items.length}
               hasMore={hasMore}
               loadingMore={loadingMore}
@@ -500,6 +473,10 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   PROFILE_READ: '读取画像',
   AUDIT_READ: '查询审计',
   UNKNOWN_DISPOSE: '处置未知操作',
+  // F4（2026-10-23）：原 P19 独立页合并进本页后，配置查看留痕
+  // 在此渲染。⚠️ 该标签曾只存在于 ConfigPages 的本地副本，
+  // 合并时若漏带，CONFIG_VIEW 会退化成原始枚举名显示给用户。
+  CONFIG_VIEW: '查看配置',
 }
 
 export function AuditPage(): JSX.Element {
@@ -565,6 +542,7 @@ export function AuditPage(): JSX.Element {
               <option value="tool_operation">工具操作</option>
               <option value="run">运行</option>
               <option value="profile">学生画像</option>
+              <option value="config">配置查看</option>
               <option value="audit_record">审计记录</option>
             </select>
           </div>
@@ -613,7 +591,7 @@ export function AuditPage(): JSX.Element {
                 ))}
               </tbody>
             </table>
-            <PageFooter
+            <ListFooter
               count={items.length}
               hasMore={hasMore}
               loadingMore={loadingMore}

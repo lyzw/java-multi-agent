@@ -333,4 +333,57 @@ describe('P10 审计查询（G10 接线）', () => {
     expect(await screen.findByText('没有符合条件的审计记录')).toBeTruthy()
     expect(screen.queryByText(/读取失败/)).toBeNull()
   })
+
+  /*
+   * ── F4（2026-10-23）：P19「配置变更审计」合并进本页 ──────────────
+   *
+   * 原 P19 是独立页面 + 独立路由 /config/audit，与 P10 语义重叠
+   * （都是查审计表，只是 resourceType 固定为 config）。
+   * 合并后：删除独立页与导航项，配置查看留痕由本页
+   * 「资源类型 → 配置查看」过滤视图承担。
+   * 下面两条用例即原 P19 的行为覆盖，迁移至此以防回归。
+   */
+  it('F4：资源类型筛选提供「配置查看」选项（承接原 P19 入口）', async () => {
+    renderPage(<AuditPage />)
+
+    const select = screen.getByLabelText('资源类型') as HTMLSelectElement
+    const values = Array.from(select.options).map((o) => o.value)
+    expect(values).toContain('config')
+    // ⛔ 合并 ≠ 保留两个入口：不得再出现独立「配置变更审计」页式导航
+    expect(screen.queryByText('配置变更审计')).toBeNull()
+  })
+
+  it('F4：选「配置查看」→ 以 resourceType=config 查询并渲染查看轨迹', async () => {
+    const user = userEvent.setup()
+    queryAuditMock.mockResolvedValue({
+      items: [
+        sampleAudit({
+          auditId: 'aud-sentinel-1',
+          actorId: 'tenant-sentinel',
+          action: 'CONFIG_VIEW',
+          resourceType: 'config',
+          resourceId: null,
+          detail: {},
+        }),
+      ],
+      nextCursor: null,
+    })
+    renderPage(<AuditPage />)
+    // 初始加载即带 CONFIG_VIEW 条目（actorId 已被上面覆盖）
+    await screen.findByText('tenant-sentinel')
+
+    await user.selectOptions(screen.getByLabelText('资源类型'), 'config')
+
+    // ⛔ 连通性：必须按 config 资源类型查询（而非全量审计）
+    await waitFor(() => {
+      const last = queryAuditMock.mock.calls.at(-1)?.[0] as {
+        resourceType?: string
+      }
+      expect(last?.resourceType).toBe('config')
+    })
+    // 动作标签映射：CONFIG_VIEW → 查看配置
+    // ⚠️ 「查看配置」既在动作筛选 <option> 里、也在表格单元格里，
+    //    故用 getAllByText（与既有 P10 用例同一处理）。
+    expect((await screen.findAllByText('查看配置')).length).toBeGreaterThanOrEqual(2)
+  })
 })

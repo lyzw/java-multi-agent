@@ -33,7 +33,6 @@ import {
   ConfigToolsPage,
   ConfigCompliancePage,
   AgentsPage,
-  ConfigAuditPage,
 } from '@/pages/config/ConfigPages'
 import {
   ApprovalsPage,
@@ -129,7 +128,6 @@ function AppRoutes(): JSX.Element {
           <Route path="/config/runtime" element={<RequireRole area="config"><ConfigRuntimePage /></RequireRole>} />
           <Route path="/config/tools" element={<RequireRole area="config"><ConfigToolsPage /></RequireRole>} />
           <Route path="/config/compliance" element={<RequireRole area="config"><ConfigCompliancePage /></RequireRole>} />
-          <Route path="/config/audit" element={<RequireRole area="audit"><ConfigAuditPage /></RequireRole>} />
           <Route path="/agents" element={<RequireRole area="agents"><AgentsPage /></RequireRole>} />
 
           {/* ── 治理 ── */}

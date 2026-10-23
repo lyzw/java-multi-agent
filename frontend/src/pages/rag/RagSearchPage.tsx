@@ -17,7 +17,7 @@
  */
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { Sheet, Loading, Empty, ErrorState } from '@/shared/states'
+import { Sheet, Loading, Empty, ErrorState, CapabilityNote } from '@/shared/states'
 import { useRagSearch } from '@/features/rag/useRagSearch'
 import { useSession } from '@/auth/session'
 import type {
@@ -350,13 +350,11 @@ export function RagSearchPage(): JSX.Element {
           </>
         ) : generation.status === 'notConnected' ? (
           // ⚠️ 端点未实现 = 冷静提示，不是故障（沿用五态纪律）。
-          <div className="notice" role="status">
-            <p style={{ margin: 0 }}>
-              生成回答能力尚未接入后端（rag 模块目前只提供检索端点
-              <code> /api/v1/retrieval</code>）。检索来源已经在下方列出，
-              可据此查看讲解依据；后端补齐生成端点后会自动点亮此区域。
-            </p>
-          </div>
+          <CapabilityNote
+            feature="生成回答"
+            blockedBy="B5"
+            reason="rag 模块目前只提供检索端点 /api/v1/retrieval。检索来源已经在下方列出，可据此查看讲解依据；后端补齐生成端点后会自动点亮此区域。"
+          />
         ) : (
           <ErrorState
             reason={generation.error ?? '生成回答失败'}

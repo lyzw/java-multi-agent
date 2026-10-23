@@ -19,7 +19,7 @@
 
 import { useMemo } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { Sheet, Empty, Loading, ErrorState } from '@/shared/states'
+import { Sheet, Empty, Loading, ErrorState, Breadcrumbs } from '@/shared/states'
 import { scanText } from '@/features/compliance/scan'
 import { useRunResult } from '@/features/run/useRunResult'
 
@@ -55,6 +55,7 @@ export function RunResultPage(): JSX.Element {
   if (loading) {
     return (
       <>
+        <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '归因结果' }]} />
         <div className="main__head">
           <h1>归因结果</h1>
         </div>
@@ -66,6 +67,7 @@ export function RunResultPage(): JSX.Element {
   if (error !== null) {
     return (
       <>
+        <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '归因结果' }]} />
         <div className="main__head">
           <h1>归因结果</h1>
           <p className="main__lead">
@@ -85,6 +87,7 @@ export function RunResultPage(): JSX.Element {
   if (result === null) {
     return (
       <>
+        <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '归因结果' }]} />
         <div className="main__head">
           <h1>归因结果</h1>
         </div>
@@ -99,6 +102,7 @@ export function RunResultPage(): JSX.Element {
 
   return (
     <>
+      <Breadcrumbs items={[{ label: '检索记录', to: '/runs' }, { label: '归因结果' }]} />
       <div className="main__head">
         <h1>归因结果</h1>
         <p className="main__lead">

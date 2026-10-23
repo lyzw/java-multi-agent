@@ -16,7 +16,7 @@
 
 import { useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Sheet, Empty, Loading, ErrorState } from '@/shared/states'
+import { Sheet, Empty, Loading, ErrorState, Breadcrumbs } from '@/shared/states'
 import { useProfile } from '@/features/profile/useProfile'
 import type { ProfileResponse } from '@/api/types'
 
@@ -90,6 +90,9 @@ export function ProfilePage(): JSX.Element {
   if (error !== null) {
     return (
       <>
+        <Breadcrumbs
+          items={[{ label: '学习画像', to: '/profile' }, { label: studentId ?? '画像' }]}
+        />
         <div className="main__head">
           <h1>学习画像</h1>
           <p className="main__lead">
@@ -108,6 +111,12 @@ export function ProfilePage(): JSX.Element {
   if (safe.notFound) {
     return (
       <>
+        <Breadcrumbs
+          items={[
+            { label: '学习画像', to: '/profile' },
+            { label: safe.studentId || studentId || '画像' },
+          ]}
+        />
         <div className="main__head">
           <h1>学习画像</h1>
           <p className="main__lead">
@@ -124,6 +133,9 @@ export function ProfilePage(): JSX.Element {
 
   return (
     <>
+      <Breadcrumbs
+        items={[{ label: '学习画像', to: '/profile' }, { label: safe.studentId || '画像' }]}
+      />
       <div className="main__head">
         <h1>学习画像</h1>
         <p className="main__lead">

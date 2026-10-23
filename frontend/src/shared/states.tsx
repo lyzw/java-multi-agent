@@ -12,6 +12,111 @@
  * 混为一谈的后果：用户以为系统坏了，或以为有数据却看不到。
  */
 
+import { Link } from 'react-router-dom'
+
+/* ── 面包屑：深层页位置指示（F3）─────────────────────── */
+
+/**
+ * ⚠️ 深层页（进度 / 结果 / 画像 / 详情）没有返回上级的路径指示，
+ *     用户从结果页回不到列表。面包屑补这一环。
+ * 仅用线与小字，不引入新视觉概念；最后一项为当前页（不渲染链接）。
+ */
+export interface Crumb {
+  label: string
+  /** 提供则渲染为链接；最后一项不传 to，表示当前页 */
+  to?: string
+}
+
+export function Breadcrumbs({ items }: { items: Crumb[] }): JSX.Element {
+  return (
+    <nav className="breadcrumbs" aria-label="位置">
+      <ol>
+        {items.map((crumb, index) => {
+          const isLast = index === items.length - 1
+          return (
+            <li key={`${crumb.label}-${index}`}>
+              {crumb.to !== undefined && !isLast ? (
+                <Link to={crumb.to}>{crumb.label}</Link>
+              ) : (
+                <span aria-current={isLast ? 'page' : undefined}>{crumb.label}</span>
+              )}
+              {isLast ? null : (
+                <span className="breadcrumbs__sep" aria-hidden="true">
+                  /
+                </span>
+              )}
+            </li>
+          )
+        })}
+      </ol>
+    </nav>
+  )
+}
+
+/* ── 列表底栏：加载更多 + 计数（F6 抽取，去重 PageFooter）── */
+
+/**
+ * ⚠️ 原 `PageFooter` 在 GovernancePages 与 ConfigPages 各抄了一份完全相同的实现。
+ *     抽到此处作为单一真相源：只有后端给了 nextCursor 才显示「加载更多」，
+ *     否则点它会发一个必然为空的请求，白白消耗治理桶配额。
+ */
+export function ListFooter({
+  count,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: {
+  count: number
+  hasMore: boolean
+  loadingMore: boolean
+  onLoadMore: () => void
+}): JSX.Element {
+  return (
+    <div className="status-line" style={{ marginTop: 'var(--s-3)' }}>
+      {hasMore ? (
+        <button type="button" onClick={onLoadMore} disabled={loadingMore}>
+          {loadingMore ? '正在加载…' : '加载更多'}
+        </button>
+      ) : null}
+      <span className="muted">
+        {hasMore ? `已显示 ${count} 条` : `已显示全部 ${count} 条`}
+      </span>
+    </div>
+  )
+}
+
+/* ── 待后端能力提示（F7：统一「尚未接入后端」话术）────── */
+
+/**
+ * ⚠️ 全站多处「尚未接入 / 待后端能力」提示此前各写一套。
+ *     统一为同一声音与阻断编号，便于用户追溯（也避免文案漂移）。
+ */
+export function CapabilityNote({
+  feature,
+  blockedBy,
+  reason,
+}: {
+  /** 功能名，如「生成回答」 */
+  feature: string
+  /** 后端缺口编号，如 B5 —— 可追溯 */
+  blockedBy?: string
+  /** 人话原因 */
+  reason: string
+}): JSX.Element {
+  return (
+    <div className="notice" role="status">
+      <p style={{ margin: 0 }}>
+        {feature}能力尚未接入后端。{reason}
+        {blockedBy !== undefined ? (
+          <>
+            （阻塞编号 <code>{blockedBy}</code>）
+          </>
+        ) : null}
+      </p>
+    </div>
+  )
+}
+
 /* ── 加载：呼吸纸面 ──────────────────────────────────── */
 
 /**

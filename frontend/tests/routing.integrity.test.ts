@@ -100,9 +100,15 @@ describe('F-25：链接目标 ⊆ 已声明路由（CI 不变式）', () => {
     },
   )
 
-  it('⛔ 反证：删掉 /config/audit 这条 Route 后，对应导航项应失配转红', () => {
-    const without = routes.filter((r) => r !== '/config/audit')
-    // /config/audit 是 AppShell 导航项之一；去掉后应失配
+  /*
+   * ⚠️ 反证用例曾以 `/config/audit` 为样本（F4 前它是独立审计页）。
+   *    F4（2026-10-23）已把配置查看留痕合并进 `/audit` 过滤视图，
+   *    该路由与导航项随之删除。改用仍在用的治理入口 `/approvals`
+   *    作样本，反证语义不变：删掉一条 Route，对应导航项必须失配转红。
+   */
+  it('⛔ 反证：删掉 /approvals 这条 Route 后，对应导航项应失配转红', () => {
+    const without = routes.filter((r) => r !== '/approvals')
+    // /approvals 是 AppShell 导航项之一；去掉后应失配
     const navStillCovered = navTargets.every((t) => isCovered(t, without))
     expect(navStillCovered).toBe(false)
   })

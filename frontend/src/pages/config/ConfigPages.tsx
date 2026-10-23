@@ -14,19 +14,18 @@
  */
 
 import { useCallback, useState } from 'react'
-import { Sheet, Marked, Empty, Loading, LoadingRows, ErrorState } from '@/shared/states'
+import { Sheet, Marked, Empty, Loading, LoadingRows, ErrorState, ListFooter } from '@/shared/states'
 import { useConfig } from '@/features/config/useConfig'
 import { useConfigOverrides } from '@/features/config/useConfigOverrides'
 import { ConfigOverrideRow } from '@/features/config/ConfigOverrideRow'
 import { useGovernancePage } from '@/features/governance/useGovernancePage'
-import { listAgents, createAgent, publishAgentVersion, queryAudit } from '@/api/client'
+import { listAgents, createAgent, publishAgentVersion } from '@/api/client'
 import type {
   ConfigEntry,
   ConfigResponse,
   ConfigGroup,
   ZeroRetentionView,
   AgentItem,
-  AuditEntry,
 } from '@/api/types'
 
 /* ── 通用：配置表 + 生效 chip ──────────────────────────── */
@@ -583,7 +582,7 @@ export function AgentsPage(): JSX.Element {
                 ))}
               </tbody>
             </table>
-            <PageFooter
+            <ListFooter
               count={items.length}
               hasMore={hasMore}
               loadingMore={loadingMore}
@@ -643,142 +642,16 @@ export function AgentsPage(): JSX.Element {
   )
 }
 
-/* ── P19 配置变更审计 ────────────────────────────────── */
-
-export function ConfigAuditPage(): JSX.Element {
-  const fetcher = useCallback(
-    (params: { limit: number; cursor: string | null }) =>
-      queryAudit({
-        limit: params.limit,
-        cursor: params.cursor,
-        resourceType: 'config',
-      }),
-    [],
-  )
-  const { items, loading, loadingMore, error, hasMore, reset, loadMore } =
-    useGovernancePage<AuditEntry>({ fetcher, deps: [], pageSize: 50 })
-
-  return (
-    <>
-      <div className="main__head">
-        <h1>配置变更审计</h1>
-        <p className="main__lead">谁查看过配置，以及查看轨迹（R-1 可追溯性）。</p>
-      </div>
-
-      <Marked label="这里记录的是「配置查看」">
-        <p style={{ margin: 0 }}>
-          ⚠️ 配置本身是只读的，没有修改入口——因此不存在「改了什么」的变更记录。
-          这里留痕的是「谁在什么时候查看了配置」（CONFIG_VIEW），用于事后追溯。
-        </p>
-        <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
-          审计记录只读、保留 180 天后自动清理，且不展示请求原文。
-        </p>
-      </Marked>
-
-      <Sheet title="配置查看记录">
-        {loading ? (
-          <LoadingRows
-            columns={['时间', '操作者', '动作', '资源', '明细']}
-            rows={6}
-            label="正在读取审计记录"
-          />
-        ) : error !== null ? (
-          <ErrorState reason={error} onRetry={reset} retryLabel="重新加载" />
-        ) : items.length === 0 ? (
-          <Empty title="还没有配置查看记录" hint="查看配置后会在这里留痕。" />
-        ) : (
-          <>
-            <table>
-              <thead>
-                <tr>
-                  {['时间', '操作者', '动作', '资源', '明细'].map((c) => (
-                    <th key={c} scope="col">
-                      {c}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((entry) => (
-                  <tr key={entry.auditId}>
-                    <td>{formatTime(entry.createdAt)}</td>
-                    <td className="mono">{entry.actorId}</td>
-                    <td>{AUDIT_ACTION_LABELS[entry.action] ?? entry.action}</td>
-                    <td className="mono">
-                      {entry.resourceType}
-                      {entry.resourceId !== null ? `/${entry.resourceId}` : ''}
-                    </td>
-                    <td className="mono">{renderAuditDetail(entry.detail)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <PageFooter
-              count={items.length}
-              hasMore={hasMore}
-              loadingMore={loadingMore}
-              onLoadMore={loadMore}
-            />
-          </>
-        )}
-      </Sheet>
-    </>
-  )
-}
-
 /* ── 本地渲染助手（与 GovernancePages 同源，不跨文件引入以避免耦合）── */
 
-const AUDIT_ACTION_LABELS: Record<string, string> = {
-  CONFIG_VIEW: '查看配置',
-  APPROVAL_GRANT: '审批通过',
-  APPROVAL_REVOKE: '审批拒绝',
-  APPROVAL_CONSUME: '审批消费',
-  RUN_CANCEL: '取消运行',
-  PROFILE_READ: '读取画像',
-  AUDIT_READ: '查询审计',
-  UNKNOWN_DISPOSE: '处置未知操作',
-}
+/**
+ * ⚠️ 配置查看留痕（CONFIG_VIEW）已并入统一的「审计查询」页（F4）：
+ *   审计页资源类型下拉新增「配置查看」即可过滤，无需独立的配置变更审计页。
+ *   下方仅保留 AgentsPage 仍用的 formatTime。
+ */
 
 function formatTime(iso: string | null): string {
   if (iso === null) return '—'
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('zh-CN', { hour12: false })
-}
-
-function PageFooter({
-  count,
-  hasMore,
-  loadingMore,
-  onLoadMore,
-}: {
-  count: number
-  hasMore: boolean
-  loadingMore: boolean
-  onLoadMore: () => void
-}): JSX.Element {
-  return (
-    <div className="status-line" style={{ marginTop: 'var(--s-3)' }}>
-      {hasMore ? (
-        <button type="button" onClick={onLoadMore} disabled={loadingMore}>
-          {loadingMore ? '正在加载…' : '加载更多'}
-        </button>
-      ) : null}
-      <span className="muted">
-        {hasMore ? `已显示 ${count} 条` : `已显示全部 ${count} 条`}
-      </span>
-    </div>
-  )
-}
-
-function renderAuditDetail(detail: Record<string, unknown>): string {
-  const parts: string[] = []
-  for (const [key, value] of Object.entries(detail)) {
-    if (value === null) continue
-    if (typeof value === 'object') {
-      parts.push(`${key}: …`)
-    } else {
-      parts.push(`${key}: ${String(value)}`)
-    }
-  }
-  return parts.length === 0 ? '—' : parts.join('  ')
 }
