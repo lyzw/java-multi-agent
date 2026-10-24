@@ -63,6 +63,31 @@ import type {
 /** 可选统计区间（后端钳制在 1～90 天）。 */
 const DAY_OPTIONS = [7, 14, 30, 90] as const
 
+/**
+ * 报表区块锚点表（页首导航用）。
+ *
+ * ⚠️ **为什么需要这一排锚点**：本页实测 scrollHeight 超过 10000px，
+ *    却一个页内锚点都没有——想找「知识点薄弱排行」只能一路滚到底，
+ *    中途没有任何办法定位。锚点让 9 个区块在页首一览，点击直达。
+ *
+ * ⚠️ **id 放在区块的包裹层上**（Panel 组件本身不接收 id），
+ *    区块标题的 h2 文案与结构保持原样，测试仍可按标题查找。
+ *
+ * ⛔ **不得留下指向不存在 id 的死锚点**：这 9 个区块的 Panel 都是无条件渲染的
+ *    （加载中/失败/空态只换内容，不换区块），故锚点恒有落点。
+ */
+const SECTION_ANCHORS: { id: string; label: string }[] = [
+  { id: 'report-range', label: '统计区间' },
+  { id: 'report-daily-search', label: '每日搜索的问题数' },
+  { id: 'report-daily-import', label: '每日导入 RAG 的资料数' },
+  { id: 'report-daily-weakness', label: '每日错题分析' },
+  { id: 'report-daily-runs', label: '每日辅导量与成功率' },
+  { id: 'report-knowledge-rank', label: '知识点薄弱排行' },
+  { id: 'report-daily-students', label: '每日活跃与新增学生' },
+  { id: 'report-rag-corpus', label: 'RAG 语料增长与准入率' },
+  { id: 'report-related', label: '相关页面' },
+]
+
 /** 日期显示：只取「月-日」，图上不需要年份。 */
 function shortDate(iso: string): string {
   return iso.length >= 10 ? iso.slice(5) : iso
@@ -114,6 +139,9 @@ function rateTrendText(
   return `较上期 ${delta > 0 ? '+' : ''}${delta} 个百分点`
 }
 
+/* ── 图表区块 ─────────────────────────────────────────────── */
+
+
 /* ── 表格区块 ─────────────────────────────────────────────── */
 
 /**
@@ -151,7 +179,12 @@ function DailyTable({
           <span className="muted">导出的数字与下方表格逐格一致（同源数据）。</span>
         </div>
       ) : null}
-      <div className="table-wrap">
+      {/*
+        ⚠️ **表格容器必须可聚焦**：宽表在窄屏是横向滚动的，
+           而表格里若没有可聚焦元素，键盘用户根本滚不动它。
+           故显式声明为一个带名字的区域（role="region" + aria-label）。
+      */}
+      <div className="table-wrap" tabIndex={0} role="region" aria-label={caption}>
         <table>
           <caption className="sr-only">{caption}</caption>
           <thead>
@@ -164,8 +197,11 @@ function DailyTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={String(row[0])}>
+            {/* ⚠️ **key 必须带行序号**：只用「日期」做 key 时，同一天出现多行
+                （跨月补数、跨表口径合并等）就会撞 key —— React 会丢行或错位，
+                而且只在浏览器控制台里报一条 warning，肉眼很难发现。 */}
+            {rows.map((row, rowIndex) => (
+              <tr key={`${String(row[0])}-${rowIndex}`}>
                 {row.map((cell, i) => (
                   <td key={`${String(row[0])}-${i}`} className={i === 0 ? 'mono' : undefined}>
                     {cell}
@@ -260,8 +296,8 @@ function DailySearchReport({
           检索审计从本次改造起才落库——早于上线日的那几天显示 0 是<b>数据起点</b>，
           不是检索功能异常。
           <br />
-          ⚠️ 本表<b>暂无环比</b>：RAG 侧管理面只返回当前区间的逐日值，
-          没有上一等长区间的基线——没有基线就不编百分比。
+          本表<b>暂无环比</b>：当前只有这一个区间的数据，没有上一等长区间可比——
+          没有基线就不编百分比。
         </p>
       </div>
 
@@ -358,7 +394,7 @@ function DailyImportReport({
           是<b>同一份资料的不同层级</b>，把它们加起来会把同一份资料数三次。
           故图中三条线并列呈现，不做堆叠。
           <br />
-          ⚠️ 本表<b>暂无环比</b>：RAG 侧管理面未提供上一等长区间的基线。
+          本表<b>暂无环比</b>：没有上一等长区间的基线可比。
         </p>
       </div>
 
@@ -653,10 +689,14 @@ function KnowledgePointReport({
   return (
     <>
       <div className="toolbar" style={{ marginBottom: 'var(--s-3)' }}>
-        <div className="btn-row">
+        {/* ⚠️ **两个口径的答案完全不同，必须能被读屏用户分辨当前在看哪个**：
+            .btn / .btn--quiet 的深浅只是视觉区分，对读屏是「无声」的。
+            故显式声明这是一个按钮组，并给每个按钮 aria-pressed。 */}
+        <div className="btn-row" role="group" aria-label="排行口径">
           <button
             type="button"
             className={rangeButtonClass}
+            aria-pressed={scope === 'range'}
             onClick={() => setScope('range')}
           >
             所选区间内
@@ -664,6 +704,7 @@ function KnowledgePointReport({
           <button
             type="button"
             className={allButtonClass}
+            aria-pressed={scope === 'all'}
             onClick={() => setScope('all')}
           >
             全历史累计
@@ -943,155 +984,193 @@ export function ReportsPage(): JSX.Element {
         }
       />
 
+      {/*
+        ⚠️ **页首区块导航**：本页有 9 个区块、实测超过 10000px 高，
+           没有锚点就只能一路滚到底才能找到「知识点薄弱排行」。
+           用 .btn-row（flex + wrap）横排，窄屏自动换行。
+           ⛔ 不用 role="navigation"：主导航地标已存在，再加一个同类型地标会混淆；
+              这里用 role="group" + aria-label，让名字对读屏真的可播报。
+      */}
+      <div
+        className="btn-row"
+        role="group"
+        aria-label="报表区块导航"
+        style={{ marginBottom: 'var(--s-4)' }}
+      >
+        {SECTION_ANCHORS.map((s) => (
+          <a key={s.id} className="btn btn--quiet" href={`#${s.id}`}>
+            {s.label}
+          </a>
+        ))}
+      </div>
+
       {/* ── 区间选择 ── */}
-      <Panel title="统计区间" icon="clock" note="后端把区间钳制在 1～90 天，超出会静默截断。">
-        <div className="toolbar">
-          <div className="field" style={{ margin: 0, maxWidth: 200 }}>
-            <label htmlFor="reports-days">统计天数</label>
-            <select
-              id="reports-days"
-              value={days}
-              onChange={(e) => setDays(Number(e.target.value))}
-            >
-              {DAY_OPTIONS.map((d) => (
-                <option key={d} value={d}>
-                  最近 {d} 天
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="toolbar__spacer" />
-          <span className="muted">
-            <StatusPill tone="info">UTC 日期口径</StatusPill>
-            <span style={{ marginLeft: 'var(--s-2)' }}>
-              日期按 UTC 归日，与后端聚合口径一致（跨午夜不会错位）。
+      <div id="report-range">
+        <Panel title="统计区间" icon="clock" note="后端把区间钳制在 1～90 天，超出会静默截断。">
+          <div className="toolbar">
+            <div className="field" style={{ margin: 0, maxWidth: 200 }}>
+              <label htmlFor="reports-days">统计天数</label>
+              <select
+                id="reports-days"
+                value={days}
+                onChange={(e) => setDays(Number(e.target.value))}
+              >
+                {DAY_OPTIONS.map((d) => (
+                  <option key={d} value={d}>
+                    最近 {d} 天
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="toolbar__spacer" />
+            <span className="muted">
+              <StatusPill tone="info">UTC 日期口径</StatusPill>
+              <span style={{ marginLeft: 'var(--s-2)' }}>
+                日期按 UTC 归日，与后端聚合口径一致（跨午夜不会错位）。
+              </span>
             </span>
-          </span>
-        </div>
-      </Panel>
+          </div>
+        </Panel>
+      </div>
 
       {/* ── 必含报表 ①：每日搜索的问题数 ── */}
-      <Panel
-        title="每日搜索的问题数"
-        icon="search"
-        note="按天统计的 RAG 检索次数——检索审计从本次改造起才开始落库。"
-      >
-        <DailySearchReport
-          data={rag.searches?.searchesByDay ?? null}
-          status={rag.status}
-          error={rag.error}
-          onRetry={reload}
-        />
-      </Panel>
+      <div id="report-daily-search">
+        <Panel
+          title="每日搜索的问题数"
+          icon="search"
+          note="按天统计的 RAG 检索次数——检索审计从本次改造起才开始落库。"
+        >
+          <DailySearchReport
+            data={rag.searches?.searchesByDay ?? null}
+            status={rag.status}
+            error={rag.error}
+            onRetry={reload}
+          />
+        </Panel>
+      </div>
 
       {/* ── 必含报表 ②：每日导入 RAG 的资料数 ── */}
-      <Panel
-        title="每日导入 RAG 的资料数"
-        icon="book"
-        note="资料来源 / 文档载体 / 片段三个层级并列，不做求和。"
-      >
-        <DailyImportReport
-          data={rag.imports?.importsByDay ?? null}
-          status={rag.status}
-          error={rag.error}
-          onRetry={reload}
-        />
-      </Panel>
+      <div id="report-daily-import">
+        <Panel
+          title="每日导入 RAG 的资料数"
+          icon="book"
+          note="资料来源 / 文档载体 / 片段三个层级并列，不做求和。"
+        >
+          <DailyImportReport
+            data={rag.imports?.importsByDay ?? null}
+            status={rag.status}
+            error={rag.error}
+            onRetry={reload}
+          />
+        </Panel>
+      </div>
 
       {/* ── 必含报表 ③：每日错题分析 ── */}
-      <Panel
-        title="每日错题分析"
-        icon="file"
-        note="按天的错因记录条数——一道题可能记多条错因。"
-      >
-        <DailyWeaknessReport
-          data={weaknesses}
-          status={platform.status}
-          error={platform.error}
-          onRetry={reload}
-          current={currentPeriod}
-          previous={previousPeriod}
-        />
-      </Panel>
+      <div id="report-daily-weakness">
+        <Panel
+          title="每日错题分析"
+          icon="file"
+          note="按天的错因记录条数——一道题可能记多条错因。"
+        >
+          <DailyWeaknessReport
+            data={weaknesses}
+            status={platform.status}
+            error={platform.error}
+            onRetry={reload}
+            current={currentPeriod}
+            previous={previousPeriod}
+          />
+        </Panel>
+      </div>
 
       {/* ── 常用报表 ④：每日辅导量与成功率 ── */}
-      <Panel
-        title="每日辅导量与成功率"
-        icon="activity"
-        note="发起量含在途；成功率的分母只算终态。"
-      >
-        <DailyRunReport
-          data={runs}
-          status={platform.status}
-          error={platform.error}
-          onRetry={reload}
-          current={currentPeriod}
-          previous={previousPeriod}
-        />
-      </Panel>
+      <div id="report-daily-runs">
+        <Panel
+          title="每日辅导量与成功率"
+          icon="activity"
+          note="发起量含在途；成功率的分母只算终态。"
+        >
+          <DailyRunReport
+            data={runs}
+            status={platform.status}
+            error={platform.error}
+            onRetry={reload}
+            current={currentPeriod}
+            previous={previousPeriod}
+          />
+        </Panel>
+      </div>
 
       {/* ── 常用报表 ⑤：知识点薄弱排行 ── */}
-      <Panel
-        title="知识点薄弱排行"
-        icon="alert"
-        note="Top 10；可切换「所选区间内」与「全历史累计」两个口径。"
-      >
-        <KnowledgePointReport
-          inRange={knowledgePointsInRange}
-          allTime={knowledgePoints}
-          status={platform.status}
-          error={platform.error}
-          onRetry={reload}
-        />
-      </Panel>
+      <div id="report-knowledge-rank">
+        <Panel
+          title="知识点薄弱排行"
+          icon="alert"
+          note="Top 10；可切换「所选区间内」与「全历史累计」两个口径。"
+        >
+          <KnowledgePointReport
+            inRange={knowledgePointsInRange}
+            allTime={knowledgePoints}
+            status={platform.status}
+            error={platform.error}
+            onRetry={reload}
+          />
+        </Panel>
+      </div>
 
       {/* ── 常用报表 ⑥：每日活跃 / 新增学生 ── */}
-      <Panel
-        title="每日活跃与新增学生"
-        icon="profile"
-        note="活跃 = 当日产生过错因记录的去重学生数，不是登录学生数。"
-      >
-        <DailyStudentReport
-          data={students}
-          status={platform.status}
-          error={platform.error}
-          onRetry={reload}
-          current={currentPeriod}
-          previous={previousPeriod}
-        />
-      </Panel>
+      <div id="report-daily-students">
+        <Panel
+          title="每日活跃与新增学生"
+          icon="profile"
+          note="活跃 = 当日产生过错因记录的去重学生数，不是登录学生数。"
+        >
+          <DailyStudentReport
+            data={students}
+            status={platform.status}
+            error={platform.error}
+            onRetry={reload}
+            current={currentPeriod}
+            previous={previousPeriod}
+          />
+        </Panel>
+      </div>
 
       {/* ── 常用报表 ⑦：RAG 语料增长与准入率 ── */}
-      <Panel
-        title="RAG 语料增长与准入率"
-        icon="layers"
-        note="来源状态分布 + 准入率 + 缺向量片段；增量趋势见上方「每日导入」。"
-      >
-        <CorpusAdmissionReport
-          corpus={rag.corpus}
-          status={rag.status}
-          error={rag.error}
-          onRetry={reload}
-        />
-      </Panel>
+      <div id="report-rag-corpus">
+        <Panel
+          title="RAG 语料增长与准入率"
+          icon="layers"
+          note="来源状态分布 + 准入率 + 缺向量片段；增量趋势见上方「每日导入」。"
+        >
+          <CorpusAdmissionReport
+            corpus={rag.corpus}
+            status={rag.status}
+            error={rag.error}
+            onRetry={reload}
+          />
+        </Panel>
+      </div>
 
       {/* ── 相关页面 ── */}
-      <Panel title="相关页面" icon="external" variant="quiet">
-        <div className="btn-row">
-          <Link to="/runs" className="btn btn--quiet">
-            检索记录（逐条明细）
-          </Link>
-          <Link to="/rag/management" className="btn btn--quiet">
-            语料管理（来源与载体）
-          </Link>
-          <Link to="/audit" className="btn btn--quiet">
-            审计查询
-          </Link>
-        </div>
-        <p className="muted" style={{ marginTop: 'var(--s-3)', marginBottom: 0 }}>
-          报表是<b>聚合视图</b>；要看逐条记录请到「检索记录」与「审计查询」。
-        </p>
-      </Panel>
+      <div id="report-related">
+        <Panel title="相关页面" icon="external" variant="quiet">
+          <div className="btn-row">
+            <Link to="/runs" className="btn btn--quiet">
+              检索记录（逐条明细）
+            </Link>
+            <Link to="/rag/management" className="btn btn--quiet">
+              语料管理（来源与载体）
+            </Link>
+            <Link to="/audit" className="btn btn--quiet">
+              审计查询
+            </Link>
+          </div>
+          <p className="muted" style={{ marginTop: 'var(--s-3)', marginBottom: 0 }}>
+            报表是<b>聚合视图</b>；要看逐条记录请到「检索记录」与「审计查询」。
+          </p>
+        </Panel>
+      </div>
     </>
   )
 }

@@ -430,6 +430,23 @@ describe('错误呈现', () => {
   })
 })
 
+describe('窄屏防撑破：可写配置表必须包在 .table-wrap 内', () => {
+  it('F20：写区表格在 .table-wrap 里（否则整页横向滚动）', async () => {
+    listConfigOverridesMock.mockResolvedValue([
+      override('agent.run.max-steps', '20'),
+    ])
+
+    renderPage(<ConfigRuntimePage />)
+
+    await screen.findByTestId('override-row-agent.run.max-steps')
+    const tables = Array.from(document.querySelectorAll('table'))
+    expect(tables.length).toBeGreaterThan(0)
+    for (const t of tables) {
+      expect(t.parentElement?.classList.contains('table-wrap')).toBe(true)
+    }
+  })
+})
+
 /* ── 范围纪律 ────────────────────────────────────────────── */
 
 describe('页面职责边界', () => {

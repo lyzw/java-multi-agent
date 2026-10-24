@@ -429,10 +429,15 @@ export function RetrievalProbe({ tenantId }: { tenantId: string }): JSX.Element 
           <div className="entry-list" style={{ marginTop: 'var(--s-3)' }}>
             {response.hits.map((hit) => (
               <div key={hit.chunkId} className="entry">
-                <span className="entry__title">
-                  {RAG_CHUNK_ROLE_LABELS[hit.role] ?? hit.role}
-                </span>
-                <span className="entry__desc">{hit.text}</span>
+                {/* ⚠️ 标题与描述包进 .entry__body：.entry 是 flex **行**布局，
+                    直接子元素会并排——描述（这里是教材片段正文，最长的一类文本）
+                    会被挤到标题右侧，并把容器撑破。 */}
+                <div className="entry__body">
+                  <span className="entry__title">
+                    {RAG_CHUNK_ROLE_LABELS[hit.role] ?? hit.role}
+                  </span>
+                  <span className="entry__desc">{hit.text}</span>
+                </div>
                 <span className="chip">相关性分 {hit.score.toFixed(3)}</span>
               </div>
             ))}
@@ -562,16 +567,19 @@ export function MaintenanceIssueBoard({ tenantId }: { tenantId: string }): JSX.E
             缺向量的载体（{issues.totals.documentsMissingEmbedding}）
           </h3>
           <p className="sheet__note">
-            这些载体的片段已入库但没有向量——**召不回**，是静默漏召回。
+            这些载体的片段已入库但没有向量——<b>召不回</b>，是静默漏召回。
           </p>
           <div className="entry-list">
             {issues.documentsMissingEmbedding.map((doc) => (
               <div key={doc.documentId} className="entry">
-                <span className="entry__title">{doc.title}</span>
-                <span className="entry__desc">
-                  {doc.carrier} · 解析 {RAG_PARSE_STATUS_LABELS[doc.parseStatus] ?? doc.parseStatus} ·
-                  共 {doc.chunkCount} 片段，其中 {doc.missingEmbeddingCount} 个缺向量
-                </span>
+                {/* ⚠️ .entry 是 flex 行布局：标题与描述必须包进 .entry__body 才不会并排。 */}
+                <div className="entry__body">
+                  <span className="entry__title">{doc.title}</span>
+                  <span className="entry__desc">
+                    {doc.carrier} · 解析 {RAG_PARSE_STATUS_LABELS[doc.parseStatus] ?? doc.parseStatus} ·
+                    共 {doc.chunkCount} 片段，其中 {doc.missingEmbeddingCount} 个缺向量
+                  </span>
+                </div>
               </div>
             ))}
           </div>
@@ -589,11 +597,14 @@ export function MaintenanceIssueBoard({ tenantId }: { tenantId: string }): JSX.E
           <div className="entry-list">
             {issues.documentsFailedParse.map((doc) => (
               <div key={doc.documentId} className="entry">
-                <span className="entry__title">{doc.title}</span>
-                <span className="entry__desc">
-                  {doc.carrier} · 解析 {RAG_PARSE_STATUS_LABELS[doc.parseStatus] ?? doc.parseStatus} ·
-                  共 {doc.chunkCount} 片段
-                </span>
+                {/* ⚠️ .entry 是 flex 行布局：标题与描述必须包进 .entry__body 才不会并排。 */}
+                <div className="entry__body">
+                  <span className="entry__title">{doc.title}</span>
+                  <span className="entry__desc">
+                    {doc.carrier} · 解析 {RAG_PARSE_STATUS_LABELS[doc.parseStatus] ?? doc.parseStatus} ·
+                    共 {doc.chunkCount} 片段
+                  </span>
+                </div>
               </div>
             ))}
           </div>
@@ -609,12 +620,15 @@ export function MaintenanceIssueBoard({ tenantId }: { tenantId: string }): JSX.E
           <div className="entry-list">
             {issues.sourcesPendingReview.map((src) => (
               <div key={src.sourceId} className="entry">
-                <span className="entry__title">{src.title}</span>
-                <span className="entry__desc">
-                  {RAG_VERIFICATION_LABELS[src.verificationStatus] ?? src.verificationStatus} ·{' '}
-                  {RAG_TRUST_TIER_LABELS[src.trustTier] ?? src.trustTier}
-                  {src.stale ? ' · 已过期' : ''}
-                </span>
+                {/* ⚠️ .entry 是 flex 行布局：标题与描述必须包进 .entry__body 才不会并排。 */}
+                <div className="entry__body">
+                  <span className="entry__title">{src.title}</span>
+                  <span className="entry__desc">
+                    {RAG_VERIFICATION_LABELS[src.verificationStatus] ?? src.verificationStatus} ·{' '}
+                    {RAG_TRUST_TIER_LABELS[src.trustTier] ?? src.trustTier}
+                    {src.stale ? ' · 已过期' : ''}
+                  </span>
+                </div>
               </div>
             ))}
           </div>
@@ -849,7 +863,7 @@ export function DocumentVerificationControls({
               autoComplete="off"
             />
             <p className="field__hint">
-              ⚠️ 决定人与依据都会写入审计。撤回（已撤回状态）**必带依据**。
+              决定人与依据都会写入审计。撤回（已撤回状态）<b>必带依据</b>。
             </p>
           </div>
 
@@ -883,12 +897,16 @@ export function DocumentEntry({
   const blocking = status === 'REVOKED' || status === 'REJECTED'
   return (
     <div className="entry">
-      <span className="entry__title">{document.title}</span>
-      <span className="entry__desc">
-        {document.carrier} · 解析 {RAG_PARSE_STATUS_LABELS[document.parseStatus] ?? document.parseStatus} ·
-        {document.chunkCount} 个片段
-        {document.pageCount !== null ? ` · ${document.pageCount} 页` : ''}
-      </span>
+      {/* ⚠️ .entry 是 flex 行布局：标题与描述必须包进 .entry__body 才不会并排，
+          否则描述（载体 + 解析状态 + 片段数）会挤到标题右侧。 */}
+      <div className="entry__body">
+        <span className="entry__title">{document.title}</span>
+        <span className="entry__desc">
+          {document.carrier} · 解析 {RAG_PARSE_STATUS_LABELS[document.parseStatus] ?? document.parseStatus} ·
+          {document.chunkCount} 个片段
+          {document.pageCount !== null ? ` · ${document.pageCount} 页` : ''}
+        </span>
+      </div>
       <div className="rag-mgmt__tags">
         <span className={blocking ? 'chip chip--mark' : 'chip'}>
           {RAG_VERIFICATION_LABELS[status]}
@@ -918,8 +936,8 @@ export function DocumentEntry({
         <div className="marked marked--calm">
           <p className="marked__label">载体级下架的诚实边界</p>
           <p style={{ margin: 0 }}>
-            撤回只在**管理面**生效：检索路径尚未过滤载体级可检索标记
-            （RAG-D07 §8 的 RAG-R01 缺口），因此**单独撤回这个载体，学生端仍可能召回它**。
+            撤回只在<b>管理面</b>生效：检索路径尚未过滤载体级可检索标记，
+            因此<b>单独撤回这个载体，学生端仍可能召回它</b>。
             来源级撤回会连带下架载体，那才是真正阻断召回的路径。
           </p>
         </div>

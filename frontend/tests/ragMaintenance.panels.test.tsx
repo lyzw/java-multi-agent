@@ -589,3 +589,60 @@ describe('⛔ 载体级下架的诚实边界', () => {
     expect(screen.queryByText('载体级下架的诚实边界')).not.toBeInTheDocument()
   })
 })
+
+/* ── 条目排版与文案纪律（2026-10-24 UX 评审 P0-4 / P1）───── */
+
+/**
+ * ⛔ `.entry` 是 flex **行**布局：标题与描述若各自是直接子元素，
+ *    描述（按「标题下方第二行」设计）会被挤到标题**右侧**；
+ *    更长的教材片段正文还会把容器撑破。
+ *    故两者必须同处一个纵向容器 `.entry__body`。
+ */
+describe('条目排版与文案纪律', () => {
+  it('⛔ 清单条目的标题与描述必须在 .entry__body 里（纵向排列）', async () => {
+    const user = userEvent.setup()
+    getRagIssuesMock.mockResolvedValue(ISSUES)
+    render(<MaintenanceIssueBoard tenantId={TENANT} />)
+    await user.click(screen.getByRole('button', { name: '检查问题清单' }))
+
+    const title = await screen.findByText('八年级上册电子版')
+    const body = title.closest('.entry__body')
+    expect(body).not.toBeNull()
+    // 描述必须与标题同处一个容器（否则会被挤到标题右侧）
+    expect(body?.textContent).toContain('缺向量')
+  })
+
+  it('⛔ 召回片段的长正文也必须在 .entry__body 里（否则撑破容器）', async () => {
+    const user = userEvent.setup()
+    retrieveChunksMock.mockResolvedValue({
+      hits: [
+        {
+          chunkId: 'c-1',
+          text: '二次函数的顶点式为 y=a(x-h)^2+k',
+          role: 'EXPLANATION',
+          score: 0.8123,
+        },
+      ],
+      versionMismatchDetected: false,
+      answerContentSuppressed: true,
+      primaryEdition: '数学',
+    })
+    render(<RetrievalProbe tenantId={TENANT} />)
+    await user.type(screen.getByLabelText('测试问题'), '二次函数')
+    await user.click(screen.getByRole('button', { name: '开始召回测试' }))
+
+    const text = await screen.findByText(/顶点式为/)
+    expect(text.closest('.entry__body')).not.toBeNull()
+  })
+
+  it('⛔ 文案不得出现 markdown 标记或 emoji', async () => {
+    const user = userEvent.setup()
+    getRagIssuesMock.mockResolvedValue(ISSUES)
+    render(<MaintenanceIssueBoard tenantId={TENANT} />)
+    await user.click(screen.getByRole('button', { name: '检查问题清单' }))
+    await screen.findByText(/缺向量的载体（1）/)
+
+    expect(document.body.textContent).not.toContain('**')
+    expect(document.body.textContent).not.toMatch(/⚠/)
+  })
+})

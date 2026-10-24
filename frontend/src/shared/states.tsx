@@ -13,6 +13,7 @@
  */
 
 import { Link } from 'react-router-dom'
+import { Icon, type IconName } from '@/components/Icon'
 
 /* ── 面包屑：深层页位置指示（F3）─────────────────────── */
 
@@ -74,7 +75,15 @@ export function ListFooter({
   return (
     <div className="status-line" style={{ marginTop: 'var(--s-3)' }}>
       {hasMore ? (
-        <button type="button" onClick={onLoadMore} disabled={loadingMore}>
+        // ⚠️ 2026-10-24：此前是裸 <button> —— 浏览器默认灰底，
+        //    与本站墨色按钮体系不一致（看起来像另一个系统的控件）。
+        //    改用既有的 .btn btn--quiet：安静态、可访问名与文案不变。
+        <button
+          type="button"
+          className="btn btn--quiet"
+          onClick={onLoadMore}
+          disabled={loadingMore}
+        >
           {loadingMore ? '正在加载…' : '加载更多'}
         </button>
       ) : null}
@@ -174,14 +183,22 @@ export function Empty({
   title,
   hint,
   action,
+  icon,
 }: {
   title: string
   /** 下一步做什么 —— ⛔ 不写「暂无数据」这种死话 */
   hint?: string
   action?: React.ReactNode
+  /** 空态示意图标（2026-10-24）：让"这里故意空着"比纯文字更易认 */
+  icon?: IconName
 }): JSX.Element {
   return (
     <div className="empty">
+      {icon !== undefined ? (
+        <span className="empty__icon">
+          <Icon name={icon} />
+        </span>
+      ) : null}
       <p className="empty__title">{title}</p>
       {hint !== undefined ? <p className="muted">{hint}</p> : null}
       {action !== undefined ? <div className="empty__action">{action}</div> : null}

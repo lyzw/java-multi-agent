@@ -10,17 +10,25 @@
  */
 
 import { useEffect, useState, type FormEvent } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom'
 import { SessionProvider, useSession } from '@/auth/session'
 import { RequireAuth } from '@/auth/RequireAuth'
 import { RequireRole } from '@/auth/RequireRole'
 import { setUnauthorizedHandler } from '@/api/client'
 import { AppShell } from '@/layouts/AppShell'
+import { PageHead } from '@/components/ui'
 
 import { LoginPage } from '@/pages/LoginPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { NewRunPage } from '@/pages/NewRunPage'
 import { RunProgressPage } from '@/pages/RunProgressPage'
+import { NotFoundPage } from '@/pages/NotFoundPage'
 
 import { RunResultPage } from '@/pages/business/RunResultPage'
 import { ProfilePage } from '@/pages/business/ProfilePage'
@@ -60,9 +68,16 @@ function ProfileLookup(): JSX.Element {
   }
 
   return (
-    <div className="main__head">
-      <h1>学习画像</h1>
-      <p className="main__lead">输入学生编号，查看其薄弱知识点与归因。</p>
+    <>
+      {/*
+        ⚠️ 2026-10-24：改用 PageHead。
+          本页此前是全站唯一手写 .main__head/.main__lead 的页面 ——
+          后果有二：① 浏览器标签停在上一页的标题（没调 usePageTitle）；
+          ② 页头样式与其它页面不一致。
+          PageHead 是除登录页外每个页面的第一件事，
+          "忘了设标题"在它这里不可能发生。
+      */}
+      <PageHead title="学习画像" lead="输入学生编号，查看其薄弱知识点与归因。" />
       <form onSubmit={handleSubmit} noValidate style={{ marginTop: 'var(--s-4)' }}>
         <div className="field" style={{ maxWidth: 360 }}>
           <label htmlFor="lookup-student">学生编号</label>
@@ -78,7 +93,7 @@ function ProfileLookup(): JSX.Element {
           查看画像
         </button>
       </form>
-    </div>
+    </>
   )
 }
 
@@ -88,6 +103,24 @@ function UnauthorizedBridge(): null {
   useEffect(() => {
     setUnauthorizedHandler(onUnauthorized)
   }, [onUnauthorized])
+  return null
+}
+
+/**
+ * 路由切换后滚动复位（2026-10-24）。
+ *
+ * ⚠️ 浏览器只在「同文档内锚点跳转」时恢复滚动；
+ *    前端路由切换不会 —— 于是一条长列表滚到一半 → 点进详情 →
+ *    返回时落在原地，用户看到的还是详情页的滚动位置，像"没退回去"。
+ *
+ * ⛔ 用 instant 而非 smooth：路由切换是"换了一页"，
+ *    平滑滚动会让用户以为还在同一个页面上滑。
+ */
+function ScrollReset(): null {
+  const { pathname } = useLocation()
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  }, [pathname])
   return null
 }
 
@@ -104,6 +137,7 @@ function AppRoutes(): JSX.Element {
   return (
     <>
       <UnauthorizedBridge />
+      <ScrollReset />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
 
@@ -147,9 +181,14 @@ function AppRoutes(): JSX.Element {
 
           {/* ── 运维 ── */}
           <Route path="/health" element={<RequireRole area="health"><HealthPage /></RequireRole>} />
-        </Route>
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+          {/*
+            ⚠️ 2026-10-24：未知路径从「静默跳工作台」改为 404 页。
+               旧行为让输错网址的人看到一个"正常"的工作台，得不到任何反馈；
+               且 404 页仍在壳内（保留导航），不会把人困死。
+          */}
+          <Route path="*" element={<NotFoundPage />} />
+        </Route>
       </Routes>
     </>
   )

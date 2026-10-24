@@ -43,6 +43,8 @@ import type {
   RagChunk,
   RagRegisterSourceRequest,
   RagVerificationRequest,
+  RagBulkSourceItem,
+  RagBulkImportResponse,
   RagDocumentVerificationRequest,
   RagMaintenanceIssues,
   RagReindexResult,
@@ -50,6 +52,12 @@ import type {
   DailyStatistics,
   RagDailySearchStatistics,
   RagDailyImportStatistics,
+  RagDictionaryType,
+  RagDictionaryTypeView,
+  RagDictionaryEntry,
+  RagUpsertDictionaryEntryRequest,
+  CapToolCatalogItem,
+  CapSkillCatalogItem,
 } from './types'
 
 /** 401 时通知上层（SessionProvider）清理会话并跳登录 */
@@ -337,7 +345,17 @@ function toQuery(params: Record<string, string | number | null | undefined>): st
 
 /** GET /api/runs —— Run 列表（游标分页）。 */
 export function listRuns(
-  params: ListQuery & { createdFrom?: string | null; createdTo?: string | null } = {},
+  params: ListQuery & {
+    createdFrom?: string | null
+    createdTo?: string | null
+    /**
+     * 学科筛选（FE-01 §P7）。
+     *
+     * ⚠️ 必须是业务词表内的规范值：后端对非法取值直接 400，
+     *    而不是返回空列表（空列表会把「传错参数」伪装成「没有数据」）。
+     */
+    subject?: string | null
+  } = {},
 ): Promise<PageResponse<RunListItem>> {
   return _request<PageResponse<RunListItem>>(
     `/api/runs${toQuery({ ...params })}`,
@@ -503,6 +521,48 @@ export function publishAgentVersion(
   return _request<AgentVersionItem>(
     `/api/agents/${encodeURIComponent(agentId)}/versions`,
     { method: 'POST', body: JSON.stringify(payload) },
+    true,
+  )
+}
+
+/* ── 能力目录（Point 3 · Tool / Skill 只读目录）────────────── */
+
+/**
+ * GET /api/cap/catalog/tools —— 列出全部 Tool 定义。
+ *
+ * ⚠️ **只读**：Tool 定义是 platform 级对象，其变更走带外运维通道
+ * （BYPASSRLS 凭据 + 运维工具），不挂在租户身份上——
+ * 否则任一租户管理员自授角色即可改全平台配置。
+ * 故本端点（及本函数）刻意不提供任何写入入口。
+ */
+export function listCapabilityTools(): Promise<CapToolCatalogItem[]> {
+  return _request<CapToolCatalogItem[]>('/api/cap/catalog/tools', { method: 'GET' }, true)
+}
+
+/** GET /api/cap/catalog/tools/{toolId} —— 读取单个 Tool 定义（最高版本）。 */
+export function getCapabilityTool(toolId: string): Promise<CapToolCatalogItem> {
+  return _request<CapToolCatalogItem>(
+    `/api/cap/catalog/tools/${encodeURIComponent(toolId)}`,
+    { method: 'GET' },
+    true,
+  )
+}
+
+/**
+ * GET /api/cap/catalog/skills —— 列出全部 Skill 定义。
+ *
+ * ⚠️ **只读**：同 {@link listCapabilityTools} —— Skill 定义是 platform 级对象，
+ * 变更走带外运维通道，不在此处开放写入。
+ */
+export function listCapabilitySkills(): Promise<CapSkillCatalogItem[]> {
+  return _request<CapSkillCatalogItem[]>('/api/cap/catalog/skills', { method: 'GET' }, true)
+}
+
+/** GET /api/cap/catalog/skills/{skillId} —— 读取单个 Skill 定义（最高版本）。 */
+export function getCapabilitySkill(skillId: string): Promise<CapSkillCatalogItem> {
+  return _request<CapSkillCatalogItem>(
+    `/api/cap/catalog/skills/${encodeURIComponent(skillId)}`,
+    { method: 'GET' },
     true,
   )
 }
@@ -781,6 +841,38 @@ export function registerRagSource(
 }
 
 /**
+ * POST /api/v1/management/sources/batch —— 批量登记语料来源（数据导入）。
+ *
+ * ⚠️ 逐条成败、整体不回滚：一行失败（缺 ISBN/DOI、内容哈希格式非法等）
+ *     只影响该行，其余行照常入库。响应逐条给出成功/失败与原因，
+ *     前端据此逐行展示，而不是「整批失败却说不清是哪一行」。
+ *
+ * ⚠️ `registeredBy` 在批量层面统一提供（对整批统一审计留痕），
+ *     每条来源项不含登记人（与单条 {@link registerRagSource} 不同）。
+ *
+ * @param tenantId 租户 ID
+ * @param registeredBy 登记人 UUID（整批统一留痕）
+ * @param items 待登记来源列表（非空，≤ 100）
+ */
+export function bulkRegisterRagSources(
+  tenantId: string,
+  registeredBy: string,
+  items: RagBulkSourceItem[],
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagBulkImportResponse> {
+  return requestWithTimeout<RagBulkImportResponse>(
+    '/api/v1/management/sources/batch',
+    {
+      method: 'POST',
+      body: JSON.stringify({ registeredBy, sources: items }),
+    },
+    true,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
  * POST /api/v1/management/sources/{sourceId}/verification —— 校验状态流转。
  *
  * ⚠️ **409 = 非法状态转移**（RAG-D07 §2.4 T-1～T-12），不是服务故障：
@@ -965,6 +1057,68 @@ export function getRagDailyImports(
     `/api/v1/management/statistics/daily-imports${toQuery({ days })}`,
     { method: 'GET' },
     false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/* ── RAG 字典（Point 2：枚举下拉的数据源，可由前端维护）──────── */
+
+/**
+ * GET /api/v1/management/dictionaries —— 列出全部字典类型（含是否可维护、各类型条目）。
+ *
+ * ⚠️ 一次拉全量即可：字典项数量很小（动态字典通常十数条，
+ * 派生字典各 4～5 条），前端按 `type` 取用，无需逐类型轮询。
+ */
+export function getRagDictionaries(
+  tenantId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagDictionaryTypeView[]> {
+  return requestWithTimeout<RagDictionaryTypeView[]>(
+    '/api/v1/management/dictionaries',
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * POST /api/v1/management/dictionaries/{type}/entries —— 写入 / 更新一项。
+ *
+ * ⚠️ 仅对可编辑类型（如 `SOURCE_TYPE`）生效；对派生字典调用后端返回 **409**。
+ * `code` 是幂等键，重复提交走 upsert，不会新建重复项。
+ */
+export function upsertRagDictionaryEntry(
+  tenantId: string,
+  type: RagDictionaryType,
+  payload: RagUpsertDictionaryEntryRequest,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagDictionaryEntry> {
+  return requestWithTimeout<RagDictionaryEntry>(
+    `/api/v1/management/dictionaries/${encodeURIComponent(type)}/entries`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * DELETE /api/v1/management/dictionaries/{type}/entries/{code} —— 删除一项。
+ *
+ * ⚠️ 仅对可编辑类型生效；对派生字典调用后端返回 **409**。
+ */
+export function deleteRagDictionaryEntry(
+  tenantId: string,
+  type: RagDictionaryType,
+  code: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<void> {
+  return requestWithTimeout<void>(
+    `/api/v1/management/dictionaries/${encodeURIComponent(type)}/entries/${encodeURIComponent(code)}`,
+    { method: 'DELETE' },
+    true,
     timeoutMs,
     tenantHeaders(tenantId),
   )

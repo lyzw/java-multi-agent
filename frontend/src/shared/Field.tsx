@@ -42,7 +42,13 @@ export function Field({
     <div className="field">
       <label htmlFor={name}>
         {label}
-        {required ? <span aria-hidden="true"> *</span> : null}
+        {/*
+          ⚠️ 星号改用既有的 .req（批改红）：它是**视觉**标记，必须 aria-hidden
+            ——「必填」的语义由 input/textarea 上的 required + aria-required 承担。
+            此前星号是裸文本且控件不带 required，
+            读屏只会念出字段名，用户**听不出哪些是必填**。
+        */}
+        {required ? <span className="req" aria-hidden="true"> *</span> : null}
       </label>
 
       {multiline ? (
@@ -53,6 +59,8 @@ export function Field({
           onChange={(e) => onChange(e.target.value)}
           aria-invalid={hasViolation}
           aria-describedby={describedBy}
+          required={required}
+          aria-required={required}
           rows={4}
         />
       ) : (
@@ -64,6 +72,8 @@ export function Field({
           onChange={(e) => onChange(e.target.value)}
           aria-invalid={hasViolation}
           aria-describedby={describedBy}
+          required={required}
+          aria-required={required}
         />
       )}
 

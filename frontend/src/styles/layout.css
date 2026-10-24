@@ -33,7 +33,11 @@
   justify-content: space-between;
   padding: 0 var(--s-5);
   border-bottom: 1px solid var(--rule);
-  background: var(--paper);
+  /* 纸面薄纱：内容滚过顶栏时透出一点，边界仍然靠那根 1px 线。
+     ⛔ 不用 box-shadow 浮起（版式纪律）—— 层次由"半透明 +  blur"给。 */
+  background: var(--paper-veil);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
   position: sticky;
   top: 0;
   z-index: 20;
@@ -54,7 +58,7 @@
 /* ⚠️ 身份不由服务端提供时如实说明，不伪造（G1） */
 .header__identity {
   font-size: var(--t-note);
-  color: var(--ink-3);
+  color: var(--ink-2);
   padding: 2px var(--s-2);
   border: 1px dashed var(--rule-strong);
   border-radius: 10px;
@@ -89,7 +93,7 @@
   margin: 0 0 var(--s-2);
   padding: 0 var(--s-5);
   font-size: var(--t-note);
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 /* ⚠️ F1：分面角色提示——小字说明该分面通常需要哪些角色，
@@ -99,7 +103,7 @@
   padding: 0 var(--s-5);
   font-size: 11px;
   line-height: 1.45;
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .nav ul {
@@ -119,6 +123,10 @@
   display: flex;
   align-items: center;
   border-left: 2px solid transparent;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast);
 }
 
 .nav a:hover {
@@ -131,6 +139,34 @@
   font-weight: 600;
   /* 选中态用墨色左边线，与批改纸隐喻一致 */
   border-left-color: var(--ink);
+}
+
+/*
+ * 顶栏开关：折叠（桌面/中屏）与菜单（小屏抽屉）互斥。
+ *
+ * ⚠️ **位置很要紧**：这两条基础规则必须写在**媒体查询之前**。
+ *    媒体查询不提升优先级——同优先级下「后写的赢」。若基础规则
+ *    写在断点之后，桌面端的 `display:none` 会反过来覆盖掉
+ *    小屏断点里的 `display:inline-flex`，菜单按钮就不出现了
+ *    （实测踩过：390px 下菜单按钮 display:none、折叠按钮反而显示）。
+ */
+.nav-toggle {
+  display: none; /* 默认（桌面/中屏）不出现，只在小屏出现 */
+}
+
+.nav-collapse {
+  display: inline-flex;
+}
+
+/* 抽屉遮罩：小屏抽屉打开时盖住主内容，点击即关闭 */
+.nav-scrim {
+  position: fixed;
+  inset: var(--header-h) 0 0;
+  z-index: 29;
+  background: rgba(20, 23, 30, 0.32);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 
 .main {
@@ -150,6 +186,32 @@
   font-size: var(--t-note);
 }
 
+/* ── 链接：收编进墨色体系（2026-10-24 UX 评审 P1-A）─────────
+ *
+ * ⚠️ 此前**没有任何一条** main 内的链接规则，于是正文里的
+ *    <a>（如检索记录页的运行标识）落回浏览器默认：
+ *    color rgb(0,0,238) + 下划线——在一套「墨+纸」界面里，
+ *    它像另一个系统的残留（tokens.css:140 连 ::selection 都特意
+ *    改掉了默认蓝，理由正是「那会像另一个系统的残留」）。
+ *
+ * ⛔ 只改**颜色**，不改 .btn / .action / .entry 这三类
+ *    「长得像按钮/卡片」的链接的既有观感——它们是 class 优先级，
+ *    本条（元素选择器）压不过它们。
+ */
+main a {
+  color: var(--ink-2);
+}
+
+main a:hover {
+  color: var(--ink);
+}
+
+/* 表格里的标识链接保留「可点击」线索，但换成墨色体系 */
+main a.mono {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* ── 加载：呼吸纸面 ──────────────────────────────────── */
 
 @keyframes breathe {
@@ -166,7 +228,7 @@
 
 .loading__label {
   font-size: var(--t-note);
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -232,7 +294,7 @@
 .unavailable__meta {
   margin: 0;
   font-size: var(--t-note);
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 /* ── 结果页：解题步骤 ────────────────────────────────── */
@@ -290,7 +352,7 @@
 .steps__no {
   font-family: var(--font-mono);
   font-size: var(--t-note);
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .steps__body {
@@ -301,7 +363,7 @@
 
 /* 步骤错误内容：删除线 + 标注，模拟老师划掉 */
 .steps__wrong {
-  color: var(--ink-3);
+  color: var(--ink-2);
   text-decoration: line-through;
   text-decoration-color: var(--mark);
 }
@@ -362,6 +424,7 @@
   text-decoration: none;
   color: inherit;
   min-height: 40px;
+  transition: background var(--transition-fast);
 }
 
 .entry:hover .entry__title {
@@ -371,6 +434,24 @@
 .entry__title {
   font-weight: 600;
   font-size: var(--t-body);
+}
+
+/**
+ * 标题 + 描述的**纵向**容器（2026-10-24 UX 评审 P0-4 修复）
+ *
+ * ⚠️ .entry 是 flex **行**布局（display:flex; align-items:center），
+ *    直接子元素会并排成一行——于是 .entry__desc（按「标题下方第二行」
+ *    的语义设计，margin: 2px 0 0）被挤到了标题**右侧**，
+ *    8 处渲染点全部错位；RagMaintenancePanels 里更长的教材片段正文
+ *    还会把容器撑破（flex 行没有 min-width:0 / overflow-wrap 兜底）。
+ *
+ * 故把「标题 + 描述」包进 .entry__body，让它成为唯一的 flex item，
+ * 内部再按纵向排列。
+ */
+.entry__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .entry__desc {
@@ -420,7 +501,7 @@
 
 .timeline__seq {
   font-family: var(--font-mono);
-  color: var(--ink-3);
+  color: var(--ink-2);
   flex: none;
 }
 
@@ -438,7 +519,7 @@
 
 .timeline__time {
   margin-left: auto;
-  color: var(--ink-3);
+  color: var(--ink-2);
   font-family: var(--font-mono);
   font-size: var(--t-note);
 }
@@ -465,7 +546,7 @@
 }
 
 .kv dt {
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .kv dd {
@@ -567,6 +648,26 @@
   background: var(--mark-wash);
 }
 
+/**
+ * 进行中/排队中（2026-10-24 UX 评审 P2-4）
+ *
+ * ⚠️ 此前 .status--pending / --running / --neutral **没有任何 CSS 规则**，
+ *    而 stateTone() 会返回这三种 tone —— 于是「排队中」与「执行中」
+ *    渲染得**完全一样**（都回落基类）。补上：排队用弱化线，
+ *    执行中用墨色线（进行中比等待更"重"）。
+ */
+.status--pending {
+  border-left-color: var(--rule-strong);
+}
+
+.status--running {
+  border-left-color: var(--ink-2);
+}
+
+.status--neutral {
+  border-left-color: var(--rule-strong);
+}
+
 .status__label {
   margin: 0;
   font-size: var(--t-body);
@@ -601,10 +702,29 @@
     width: var(--nav-w-rail);
   }
 
+  /* ⚠️ 2026-10-24 UX 评审（P0-5）：这里**不能**再用 display:none。
+   *
+   * 实测 1023 / 900 / 820 / 768px 四个宽度下，
+   * .nav__label 与 .nav__group-title 都是 display:none ——
+   * display:none 会把元素移出**无障碍树**：16 个入口只剩裸图标，
+   * 分组标题也一并消失。链接名靠 title 属性兜底（读屏仍能念），
+   * 但**触屏没有 hover、键盘不弹 tooltip**——这两类用户看到的是
+   * 16 个无法辨识的图标（768–1023px 正好是 iPad 横屏区间）。
+   *
+   * 故改为「视觉隐藏」：clip 式收起，保留在无障碍树与可访问名计算里。
+   */
   .nav__group-title,
-  .nav__group-hint {
-    /* 图标态不显示分组文字与角色提示 */
-    display: none;
+  .nav__group-hint,
+  .nav__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .nav a,
@@ -614,73 +734,199 @@
   }
 
   /* 标签隐藏、图标保留；title 属性在悬浮时给出完整名称 */
-  .nav__label {
-    display: none;
-  }
-
   .main {
     padding: var(--s-4);
   }
 }
 
-/* 小屏：侧栏转顶部横向标签条 */
+/* ⚠️ 2026-10-24 UX 评审（P0-1）：移动端整页横向滚动
+ *
+ * 根因不在 .main 自身，而在**父容器**：≤767px 时 .shell__body
+ * 变成纵向 flex（flex-direction: column），但它自带的
+ * `align-items: flex-start` 是为「横向排列时让侧栏不拉伸」写的，
+ * 在纵向容器里横向就成了交叉轴 —— 于是 .main 被收缩成
+ * **内容最大宽度**而不是撑满视口，页面随之溢出。
+ *
+ * 实测（390px 视口，未修前 document.scrollWidth）：
+ *   /config 935 · /reports 881 · /runs 678 · / 586 · /audit 487
+ */
 @media (max-width: 767px) {
   .shell__body {
     flex-direction: column;
+    align-items: stretch; /* ← 关键修复 */
+  }
+
+  .main {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  /* 72ch 的行宽上限在窄屏必须收敛到容器宽，
+     否则长句会把整页顶出视口（min() 是渐进增强，不支持也无害）。 */
+  p,
+  .page-head__lead,
+  .panel__note,
+  .marked,
+  .field__hint,
+  .muted {
+    max-width: min(72ch, 100%);
+  }
+}
+
+/* 小屏：侧栏改为**抽屉**（2026-10-24 UX 评审 P1-F）
+ *
+ * ⚠️ 旧形态是一条横向滚动的标签条：16 个入口总宽 1918px，
+ *    390px 视口首屏只露出 3.5 项，第 4 项被裁在「知」字中间——
+ *    一个点不动的半截元素，且没有任何「还能往右滑」的提示。
+ *    横向滚动条治不了 16 项：用户要横向翻 4 屏才能找到入口。
+ *
+ * 故改为抽屉（与桌面「折叠为图标栏」同构）：
+ *   · 顶栏出现菜单按钮，折叠按钮让位（移动端折叠无意义）；
+ *   · 抽屉收起时用 visibility:hidden —— 它同时把内容移出
+ *     **焦点序列与无障碍树**，这正是抽屉该有的语义
+ *     （只用 transform 移出屏幕是不够的：那些链接仍可被 Tab 到）；
+ *   · 抽屉内恢复纵向分面结构，16 项一屏可见、可纵向滚动。
+ */
+@media (max-width: 767px) {
+  /* 顶栏按钮：菜单出现，折叠让位 */
+  .nav-toggle {
+    display: inline-flex;
+  }
+
+  .nav-collapse {
+    display: none;
   }
 
   .nav {
-    width: 100%;
-    position: sticky;
+    position: fixed;
+    left: 0;
     top: var(--header-h);
+    bottom: 0;
+    width: min(280px, 84vw);
     max-height: none;
-    overflow-x: auto;
-    overflow-y: hidden;
-    border-right: none;
-    border-bottom: 1px solid var(--rule);
-    padding: 0;
-    display: flex;
+    overflow-y: auto;
+    overflow-x: hidden;
+    z-index: 30;
+    border-right: 1px solid var(--rule);
+    border-bottom: none;
+    padding: var(--s-3) 0 var(--s-5);
     background: var(--paper);
+    display: block;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition:
+      transform var(--transition-med),
+      visibility 0s linear var(--transition-med);
   }
 
+  .shell[data-drawer='true'] .nav {
+    transform: none;
+    visibility: visible;
+    transition:
+      transform var(--transition-med),
+      visibility 0s;
+  }
+
+  /* 抽屉内恢复纵向分面结构 */
   .nav__group {
-    display: flex;
-    align-items: center;
-    flex: none;
+    display: block;
   }
 
   .nav__group + .nav__group {
-    margin: 0;
-    padding: 0;
-    border-top: none;
+    margin-top: var(--s-3);
+    padding-top: var(--s-3);
+    border-top: 1px solid var(--rule);
   }
 
   .nav ul {
-    display: flex;
+    display: block;
   }
 
   .nav a,
   .nav__link {
-    padding: var(--s-2) var(--s-3);
-    border-left: none;
-    border-bottom: 2px solid transparent;
+    padding: var(--s-2) var(--s-4);
+    border-left: 2px solid transparent;
+    border-bottom: none;
+    justify-content: flex-start;
     white-space: nowrap;
   }
 
-  /* 顶部横条重新显示文字标签（覆盖中屏的隐藏）*/
+  /* 标签与分组标题恢复可见（撤掉中屏的 clip 视觉隐藏） */
   .nav__label {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: nowrap;
     display: inline;
   }
 
   .nav__group-title,
   .nav__group-hint {
-    display: none;
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0 var(--s-4);
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+    display: block;
   }
 
   .nav a[aria-current='page'],
   .nav__link[aria-current='page'] {
-    border-left-color: transparent;
-    border-bottom-color: var(--ink);
+    border-left-color: var(--ink);
+    border-bottom-color: transparent;
+  }
+
+  /*
+   * ⚠️ 折叠态是**跨设备持久化**的（localStorage 'nav.collapsed'）：
+   *    在桌面折叠过侧栏的用户到手机上会得到一个 64px 的图标栏、
+   *    且标签全被 clip 掉。故移动端必须把折叠态的视觉副作用一并撤销。
+   */
+  .shell[data-collapsed='true'] .nav {
+    width: min(280px, 84vw);
+  }
+
+  .shell[data-collapsed='true'] .nav__link {
+    justify-content: flex-start;
+    padding: var(--s-2) var(--s-4);
+  }
+
+  .shell[data-collapsed='true'] .nav__label {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: nowrap;
+    display: inline;
+  }
+
+  .shell[data-collapsed='true'] .nav__group-title,
+  .shell[data-collapsed='true'] .nav__group-hint {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0 var(--s-4);
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+    display: block;
+  }
+
+  /* 横向滚动容器：窄屏下表格/图表的容器内滚动必须显式保留
+     （design.spec 断言 ≤767px 断点内存在 overflow-x: auto） */
+  .table-wrap,
+  .chart-scroll {
+    overflow-x: auto;
   }
 
   .main {
@@ -791,7 +1037,7 @@
 .source__no {
   font-family: var(--font-mono);
   font-size: var(--t-note);
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .source__score {
@@ -817,7 +1063,7 @@
 }
 
 .source__meta dt {
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .source__meta dd {
@@ -844,7 +1090,7 @@
 .generator-note {
   margin: 0 0 var(--s-3);
   font-size: var(--t-note);
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 /* ── RAG 语料管理（RAG-D10 管理面）────────────────────────
@@ -919,7 +1165,7 @@
   align-items: baseline;
   gap: var(--s-1);
   font-size: var(--t-note);
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .breadcrumbs li {
@@ -931,6 +1177,7 @@
 .breadcrumbs a {
   color: var(--ink-2);
   text-decoration: none;
+  transition: color var(--transition-fast);
 }
 
 .breadcrumbs a:hover {
@@ -974,7 +1221,7 @@
 .page-head__eyebrow {
   margin: 0 0 var(--s-1);
   font-size: var(--t-note);
-  color: var(--ink-3);
+  color: var(--ink-2);
   letter-spacing: 0.02em;
 }
 .page-head__title { margin: 0 0 var(--s-2); }
@@ -1049,6 +1296,8 @@
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  transition: opacity var(--transition-fast);
 }
 .pill__dot {
   width: 7px;
@@ -1092,7 +1341,7 @@
 .stat__hint {
   margin: var(--s-1) 0 0;
   font-size: var(--t-note);
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 /* ── 工具条：筛选控件 + 操作，底部对齐 ─────────────────────── */
@@ -1138,11 +1387,25 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 折叠态（顶栏按钮触发）：只留图标，标签/组标题隐藏（DOM 保留以保无障碍名）*/
+/* 折叠态（顶栏按钮触发）：只留图标，标签/组标题隐藏（DOM 保留以保无障碍名）
+ * ⚠️ 2026-10-24 UX 评审（P0-5）：原写法是 display:none，
+ *    那会把标签移出无障碍树——注释说「DOM 保留以保无障碍名」与实际效果不符。
+ *    改为 clip 式**视觉隐藏**：文字仍在 DOM 与可访问名计算里，
+ *    但不再占位（折叠态本就是给键盘/鼠标用户主动收窄用的）。 */
 .shell[data-collapsed='true'] .nav { width: var(--nav-w-rail); }
 .shell[data-collapsed='true'] .nav__label,
 .shell[data-collapsed='true'] .nav__group-title,
-.shell[data-collapsed='true'] .nav__group-hint,
+.shell[data-collapsed='true'] .nav__group-hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .shell[data-collapsed='true'] .nav__badge { display: none; }
 .shell[data-collapsed='true'] .nav__link { justify-content: center; padding: 0; }
 
@@ -1155,7 +1418,8 @@
 }
 .btn--lg { min-height: 44px; padding: 0 var(--s-5); }
 .btn--block { width: 100%; }
-.btn .icon { margin-right: var(--s-2); }
+/* ⚠️ 图标与文字的统一间距由 .btn 的 gap 负责（2026-10-24），
+   此处不再单独设 margin —— 否则图标按钮会得到双倍间距。 */
 
 /* ── 表格容器：窄屏横向滚动；行 hover 低对比 ───────────────── */
 .table-wrap {
@@ -1172,7 +1436,9 @@ tbody tr:hover { background: var(--surface-hover); }
   background: var(--surface);
   padding: var(--s-3) var(--s-4);
   margin-bottom: var(--s-2);
-  transition: border-color var(--transition-fast, 150ms ease);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
 }
 .entry--card:hover { border-color: var(--rule-strong); }
 
@@ -1197,9 +1463,12 @@ tbody tr:hover { background: var(--surface-hover); }
   text-decoration: none;
   color: inherit;
   min-height: 40px;
-  transition: border-color var(--transition-fast, 150ms ease), background var(--transition-fast, 150ms ease);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
 }
 .action:hover { border-color: var(--rule-strong); background: var(--surface-2); }
+.action:active { background: var(--surface-sunk); transition-duration: var(--transition-press); }
 .action__icon {
   display: inline-flex;
   align-items: center;
@@ -1239,7 +1508,7 @@ tbody tr:hover { background: var(--surface-hover); }
 }
 .chart__label {
   font-size: 10px;
-  fill: var(--ink-3);
+  fill: var(--ink-2);
   font-family: var(--font-ui);
 }
 .chart__legend {
@@ -1303,5 +1572,197 @@ tbody tr:hover { background: var(--surface-hover); }
   font-size: var(--t-note);
   font-variant-numeric: tabular-nums;
   color: var(--ink);
+  white-space: nowrap;
+}
+
+/* ── 标签页（语料管理：上部分功能分 tab 展示）──────────── */
+/* 设计约束：无阴影，仅用 1px 横线与墨色区分；强调态用墨色下划线，
+   不用填充色块——与「批改纸」体系保持一致。 */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border-bottom: 1px solid var(--rule);
+  margin: var(--s-4) 0 var(--s-4);
+}
+.tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--t-body);
+  color: var(--ink-2);
+  padding: var(--s-3) var(--s-4);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.tab:hover {
+  color: var(--ink);
+}
+.tab:focus-visible {
+  outline: 2px solid var(--ink-2);
+  outline-offset: -2px;
+}
+.tab--active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+  font-weight: 600;
+}
+
+/* 必填星标（录入 / 导入表单通用） */
+.req {
+  color: var(--mark);
+}
+
+/* 批量导入：校验未通过的行标红（仅淡红底色，不破坏线条体系） */
+.import-row--invalid {
+  background: var(--mark-wash);
+}
+.import-row--invalid td {
+  color: var(--mark);
+}
+
+/* ── 字典维护（Point 2：枚举下拉的数据源，可由前端维护）────── */
+.dict-type {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-card, 8px);
+  padding: var(--s-4);
+  margin-bottom: var(--s-4);
+  background: var(--paper);
+}
+.dict-type__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin: 0 0 var(--s-3);
+}
+.dict-type__head h3 {
+  margin: 0;
+  /* ⚠️ 原写 var(--t-h3, 1.05rem) —— --t-h3 从未定义，一直吃兜底。
+     改用已立户的 --t-body（h3 本身已带 600 字重，无需再放大）。 */
+  font-size: var(--t-body);
+}
+.dict-list {
+  list-style: none;
+  margin: 0 0 var(--s-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.dict-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-ctl, 6px);
+  /* ⚠️ 原写 var(--paper-2, #fff) —— --paper-2 从未定义，一直吃兜底。
+     改用已立户的 --surface（#ffffff）。 */
+  background: var(--surface);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+.dict-item:hover { border-color: var(--rule-strong); background: var(--surface-2); }
+.dict-item__code {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--t-note);
+  color: var(--ink-2);
+  min-width: 7em;
+}
+.dict-item__label {
+  font-weight: 600;
+  flex: 1;
+}
+.dict-empty {
+  color: var(--ink-2);
+  font-size: var(--t-note);
+  padding: var(--s-2) 0;
+}
+.dict-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px dashed var(--rule);
+}
+.dict-add .field {
+  margin: 0;
+  flex: 1 1 180px;
+}
+.dict-add__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+/* ── 能力目录（Point 3 · Tool / Skill 只读目录）───────────── */
+.cap-tags {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+.cap-tags li {
+  font-size: var(--t-note);
+}
+.cap-json {
+  margin-top: var(--s-2);
+}
+.cap-json__pre {
+  margin: var(--s-2) 0 0;
+  padding: var(--s-2) var(--s-3);
+  /* ⚠️ 原写 var(--paper-2, #fff) —— --paper-2 从未定义；改用 --surface。 */
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-ctl, 6px);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--t-note);
+  line-height: 1.5;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.link-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--t-note);
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--transition-fast);
+}
+.link-btn:hover {
+  color: var(--ink);
+}
+.link-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.link-btn--danger {
+  color: var(--mark);
+}
+
+/* 行内复选（字典维护的「启用」开关） */
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--t-note);
+  color: var(--ink-2);
   white-space: nowrap;
 }

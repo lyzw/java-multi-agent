@@ -22,6 +22,7 @@ import { useParams, Link } from 'react-router-dom'
 import { Sheet, Empty, Loading, ErrorState, Breadcrumbs } from '@/shared/states'
 import { scanText } from '@/features/compliance/scan'
 import { useRunResult } from '@/features/run/useRunResult'
+import { stateLabel } from '@/features/run/runState'
 import { PageHead, StatusPill } from '@/components/ui'
 import { Icon } from '@/components/Icon'
 
@@ -42,6 +43,50 @@ export function findLeakedFields(payload: Record<string, string>): string[] {
 
 /** ⛔ 终态判定：与后端 `run_state` 枚举一致（不含 UNKNOWN）。 */
 const TERMINAL_STATES = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'])
+
+/**
+ * 步骤状态 → 中文标签。
+ *
+ * ⚠️ 权威取值：`run_step.state` 的列类型就是 `run_state`
+ *    （V1__baseline_schema.sql：`state run_state NOT NULL`），
+ *    即 QUEUED / RUNNING / CANCELLED / SUCCEEDED / FAILED / TIMED_OUT。
+ *    故这里同时认 'SUCCESS' 与 'SUCCEEDED' 两种写法，
+ *    **未知取值原样显示**（不猜含义，与 runState.ts 的既有原则一致）。
+ */
+const STEP_STATE_LABELS: Record<string, string> = {
+  SUCCESS: '成功',
+  SUCCEEDED: '成功',
+  FAILED: '失败',
+  RUNNING: '执行中',
+  QUEUED: '排队中',
+  PENDING: '待执行',
+  CANCELLED: '已取消',
+  TIMED_OUT: '已超时',
+}
+
+function stepStateLabel(state: string): string {
+  return STEP_STATE_LABELS[state] ?? state
+}
+
+/**
+ * 步骤状态 → `.steps__item` 修饰类。
+ *
+ * ⚠️ 「错在第几步」必须**看得见**：
+ *    CSS 里 .steps__item--done（绿点）与 .steps__item--bad（红点）
+ *    早就定义好了，此前一次都没被引用过——步骤全是同一个中性点。
+ *    未知取值**不加**修饰类（保守：不猜哪一步成功了）。
+ */
+function stepStateModifier(state: string): string {
+  switch (state) {
+    case 'SUCCESS':
+    case 'SUCCEEDED':
+      return 'steps__item--done'
+    case 'FAILED':
+      return 'steps__item--bad'
+    default:
+      return ''
+  }
+}
 
 export function RunResultPage(): JSX.Element {
   const { runId } = useParams<{ runId: string }>()
@@ -130,8 +175,18 @@ export function RunResultPage(): JSX.Element {
                 : 'info'
           }
         >
-          {result.state}
+          {/*
+            ⚠️ 标签用中文（stateLabel），英文枚举**不作为状态标签**直接甩给用户。
+          */}
+          {stateLabel(result.state)}
         </StatusPill>
+        {/*
+          ⚠️ 中文标签与原始状态码**并存**（与 P9 处置台同一套做法）：
+            标签给普通读者（「已完成」），状态码给排障与跨系统对齐
+            （搜日志、对导出、跟后端枚举对账都要用原始值）。
+        */}
+        <span className="muted">状态码</span>
+        <span className="mono">{result.state}</span>
         {result.errorCode !== null ? (
           <>
             <span className="muted">原因码</span>
@@ -173,17 +228,26 @@ export function RunResultPage(): JSX.Element {
           />
         ) : (
           <ol className="steps">
-            {result.steps.map((step) => (
-              <li className="steps__item" key={step.number}>
-                <div className="steps__head">
-                  <span className="steps__no">第 {step.number} 步</span>
-                  <span className="chip">{step.state}</span>
-                </div>
-                {step.output !== null ? (
-                  <p className="steps__body">{step.output}</p>
-                ) : null}
-              </li>
-            ))}
+            {result.steps.map((step) => {
+              // ⚠️ 失败步骤的正文用 .steps__wrong（删除线 + 批改红划线），
+              //    与红点一起把「错在第几步」标出来。
+              const failed = step.state === 'FAILED'
+              return (
+                <li className={`steps__item ${stepStateModifier(step.state)}`} key={step.number}>
+                  <div className="steps__head">
+                    <span className="steps__no">第 {step.number} 步</span>
+                    <span className={failed ? 'chip chip--mark' : 'chip'}>
+                      {stepStateLabel(step.state)}
+                    </span>
+                  </div>
+                  {step.output !== null ? (
+                    <p className={failed ? 'steps__body steps__wrong' : 'steps__body'}>
+                      {step.output}
+                    </p>
+                  ) : null}
+                </li>
+              )
+            })}
           </ol>
         )}
       </Sheet>

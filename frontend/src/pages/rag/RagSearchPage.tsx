@@ -198,22 +198,6 @@ export function RagSearchPage(): JSX.Element {
             </select>
           </div>
 
-          <div className="field">
-            <label htmlFor="rag-tenant">租户标识</label>
-            <input
-              id="rag-tenant"
-              value={tenantId}
-              onChange={(e) => setTenantId(e.target.value)}
-              placeholder="UUID，例如 11111111-1111-1111-1111-111111111111"
-              className="hand"
-              autoComplete="off"
-            />
-            <p className="field__hint">
-              ⚠️ 检索按租户隔离（RLS）：已自动填入登录租户，一般无需修改；
-              若与你的教材租户不同，可手动更正。留空将无法检索。
-            </p>
-          </div>
-
           <fieldset className="rag-edition">
             <legend>教材版本</legend>
             <div className="rag-edition-grid">
@@ -286,46 +270,113 @@ export function RagSearchPage(): JSX.Element {
             </div>
           </fieldset>
 
-          <div className="rag-row">
-            <div className="field" style={{ margin: 0, maxWidth: 200 }}>
-              <label htmlFor="rag-topk">召回数量（1–50）</label>
-              <input
-                id="rag-topk"
-                type="number"
-                min={1}
-                max={50}
-                value={topK}
-                onChange={(e) => {
-                  const n = Number(e.target.value)
-                  if (Number.isFinite(n)) setTopK(Math.min(50, Math.max(1, Math.trunc(n))))
+          {/*
+            ⚠️ 2026-10-24 UX 评审 P1：渐进披露（**不是删字段**）。
+              原来「检索设置」一屏铺开 8 个控件（含一个裸 UUID 输入框），
+              对只想问一句「二次函数的顶点怎么求」的学生过重。
+              故把低频项折进原生 <details>：字段一个都没少，只是默认收起；
+              原生折叠无需 JS、无需新 class 名，也不破坏 label↔input 关联。
+          */}
+          <div className="rag-row" style={{ alignItems: 'baseline' }}>
+            <details style={{ flex: '0 1 auto', minWidth: 0 }}>
+              {/*
+                ⚠️ summary 保持浏览器默认的 list-item 呈现（自带展开箭头），
+                  只补触控目标与墨色字重；不用 display:flex，否则箭头会消失。
+              */}
+              <summary
+                style={{
+                  minHeight: '40px',
+                  lineHeight: '40px',
+                  cursor: 'pointer',
+                  color: 'var(--ink-2)',
+                  fontWeight: 600,
                 }}
-              />
-            </div>
-            <div className="field" style={{ margin: 0, maxWidth: 320 }}>
-              <label htmlFor="rag-scope">版本范围</label>
-              <select
-                id="rag-scope"
-                value={scopeMode}
-                onChange={(e) => setScopeMode(e.target.value)}
               >
-                <option value="">默认（严格锁定当前版本）</option>
-                {(Object.keys(RAG_SCOPE_LABELS) as RagScopeMode[]).map((s) => (
-                  <option key={s} value={s}>
-                    {RAG_SCOPE_LABELS[s]}
-                  </option>
-                ))}
-              </select>
-            </div>
+                高级设置
+              </summary>
+
+              {/*
+                ⚠️ 租户标识必须**留在折叠区内**：它决定检索落在哪个租户的语料上，
+                  跨教材/跨租户检索时确实要改。折叠只是收起，不是删除，
+                  面向师生的说明文案原样保留。
+              */}
+              <div className="field">
+                <label htmlFor="rag-tenant">租户标识</label>
+                <input
+                  id="rag-tenant"
+                  value={tenantId}
+                  onChange={(e) => setTenantId(e.target.value)}
+                  placeholder="UUID，例如 11111111-1111-1111-1111-111111111111"
+                  className="hand"
+                  autoComplete="off"
+                />
+                <p className="field__hint">
+                  检索范围已按登录信息自动填入，一般无需修改；
+                  若与你正在使用的教材不是同一套，可手动更正。留空将无法检索。
+                </p>
+              </div>
+
+              <div className="rag-row">
+                <div className="field" style={{ margin: 0, maxWidth: 200 }}>
+                  <label htmlFor="rag-topk">召回数量（1–50）</label>
+                  <input
+                    id="rag-topk"
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={topK}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (Number.isFinite(n)) setTopK(Math.min(50, Math.max(1, Math.trunc(n))))
+                    }}
+                  />
+                </div>
+                <div className="field" style={{ margin: 0, maxWidth: 320 }}>
+                  <label htmlFor="rag-scope">版本范围</label>
+                  <select
+                    id="rag-scope"
+                    value={scopeMode}
+                    onChange={(e) => setScopeMode(e.target.value)}
+                  >
+                    <option value="">默认（严格锁定当前版本）</option>
+                    {(Object.keys(RAG_SCOPE_LABELS) as RagScopeMode[]).map((s) => (
+                      <option key={s} value={s}>
+                        {RAG_SCOPE_LABELS[s]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </details>
+            {/* 折叠区旁边补一句说明：让用户知道里面是什么、需不需要动 */}
+            <span className="muted" style={{ flex: '0 0 auto' }}>
+              召回数量与版本范围一般无需调整
+            </span>
           </div>
 
           <div className="btn-row" style={{ marginTop: 'var(--s-4)' }}>
-            <button type="submit" className="btn" disabled={!canSubmit}>
+            <button type="submit" className="btn" disabled={!canSubmit} aria-busy={busy}>
               {busy ? '检索中…' : '检索并生成'}
             </button>
-            <span className="muted">
-              检索调用 <code>/api/v1/retrieval</code>；整理调用{' '}
-              <code>/api/v1/retrieval/generate</code>，依据就是本次召回结果。
-            </span>
+            {/*
+              ⚠️ 2026-10-24：禁用原因可见化。
+                 按钮在「没填问题」或「没填租户」时禁用（有意为之），
+                 但不说明原因的禁用按钮对用户只是个谜。
+                 ⚠️ 租户标识已折进「高级设置」，故这里要点明它在哪，
+                    否则用户只看到一个禁用的按钮，找不到该填的地方。
+            */}
+            {!tenantReady ? (
+              <span className="muted">
+                填写租户标识后才能检索（在「高级设置」里，已按登录租户预填）
+              </span>
+            ) : query.trim().length === 0 ? (
+              <span className="muted">先在上方写下你的问题</span>
+            ) : busy ? null : (
+              <span className="muted">
+                检索调用 <code>/api/v1/retrieval</code>；整理调用{' '}
+                <code>/api/v1/retrieval/generate</code>，依据就是本次召回结果。
+              </span>
+            )}
           </div>
         </form>
       </Panel>
@@ -404,6 +455,7 @@ export function RagSearchPage(): JSX.Element {
           <Loading label="正在检索教材语料" />
         ) : retrieval.status === 'empty' ? (
           <Empty
+            icon="search"
             title="没有找到相关语料"
             hint="换个说法，或把版本范围改成「优先本版，可回退同册」再试。"
           />

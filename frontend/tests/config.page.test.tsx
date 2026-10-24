@@ -241,6 +241,112 @@ describe('P17 合规与零保留', () => {
     expect(screen.queryByText(/零保留闸门生效中/)).toBeNull()
     expect(screen.getByText(/零保留闸门未生效/)).toBeInTheDocument()
   })
+
+  it('T6b ⛔ 闸门未生效必须渲染成「失败」态（安全异常不能长得像普通说明）', async () => {
+    // ⚠️ failClosed=false = 已有供应商被允许接入真实数据 = 危险状态。
+    //    若沿用中性基线 .status，这条安全异常与一条普通说明视觉完全相同，
+    //    管理员扫一眼根本发现不了。故必须带 status--failure。
+    getConfigMock.mockResolvedValueOnce(
+      sampleConfig({
+        zeroRetention: {
+          declaredProviders: ['acme'],
+          registryStatus: { acme: 'CONFIRMED' },
+          anyConfirmed: true,
+          failClosed: false,
+        },
+      }),
+    )
+    renderPage(<ConfigCompliancePage />)
+
+    await waitFor(() => expect(screen.getByText(/零保留闸门未生效/)).toBeInTheDocument())
+    const box = screen.getByText(/零保留闸门未生效/).closest('.status')
+    expect(box?.className).toContain('status--failure')
+  })
+
+  it('T6c ⛔ 闸门生效时是「成功」态（两种状态视觉上必须可区分）', async () => {
+    getConfigMock.mockResolvedValueOnce(sampleConfig())
+    renderPage(<ConfigCompliancePage />)
+
+    await waitFor(() => expect(screen.getByText(/零保留闸门生效中/)).toBeInTheDocument())
+    const box = screen.getByText(/零保留闸门生效中/).closest('.status')
+    expect(box?.className).toContain('status--success')
+    expect(box?.className).not.toContain('status--failure')
+  })
+})
+
+describe('窄屏防撑破：表格必须包在 .table-wrap 内', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  it('T13：配置总览的每张表都在 .table-wrap 里（否则整页横向滚动）', async () => {
+    getConfigMock.mockResolvedValueOnce(sampleConfig())
+    renderPage(<ConfigOverviewPage />)
+
+    await waitFor(() => expect(screen.getByText('运行与容量')).toBeInTheDocument())
+    const tables = Array.from(document.querySelectorAll('table'))
+    expect(tables.length).toBeGreaterThan(0)
+    for (const t of tables) {
+      expect(t.parentElement?.classList.contains('table-wrap')).toBe(true)
+    }
+  })
+
+  it('T13b：Agent 列表的表也在 .table-wrap 里', async () => {
+    listAgentsMock.mockResolvedValueOnce({
+      items: [
+        {
+          agentId: 'a-1',
+          name: '数学归因助手',
+          description: null,
+          versionCount: 1,
+          latestVersionNumber: 1,
+          latestDefinition: null,
+          latestPublishedAt: null,
+        },
+      ],
+      nextCursor: null,
+    })
+    renderPage(<AgentsPage />)
+
+    await waitFor(() => expect(screen.getByText('数学归因助手')).toBeInTheDocument())
+    const tables = Array.from(document.querySelectorAll('table'))
+    expect(tables.length).toBeGreaterThan(0)
+    for (const t of tables) {
+      expect(t.parentElement?.classList.contains('table-wrap')).toBe(true)
+    }
+  })
+})
+
+describe('P16 子分区 tab：标准 ARIA tabs 模式', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  it('T12：roving tabindex + aria-controls/aria-labelledby + 方向键切换', async () => {
+    const user = userEvent.setup()
+    getConfigMock.mockResolvedValueOnce(sampleConfig())
+    renderPage(<ConfigToolsPage />)
+
+    const policies = await screen.findByRole('tab', { name: '工具与审批口径' })
+    const tools = screen.getByRole('tab', { name: 'Tool 目录' })
+    expect(policies).toHaveAttribute('aria-selected', 'true')
+
+    // ⛔ roving tabindex：整组 tab 只占一个 Tab 停靠点
+    expect(policies).toHaveAttribute('tabindex', '0')
+    expect(tools).toHaveAttribute('tabindex', '-1')
+
+    // ⛔ tab 与内容面板必须互相指认（读屏才知道选中的是哪一块）
+    const panel = screen.getByRole('tabpanel')
+    expect(policies.getAttribute('aria-controls')).toBe(panel.id)
+    expect(panel.getAttribute('aria-labelledby')).toBe(policies.id)
+
+    // ⛔ 方向键必须能切换（键盘用户不必按 N 次 Tab）
+    policies.focus()
+    await user.keyboard('{ArrowRight}')
+    await waitFor(() => expect(tools).toHaveAttribute('aria-selected', 'true'))
+    expect(policies).toHaveAttribute('tabindex', '-1')
+    expect(tools).toHaveAttribute('tabindex', '0')
+  })
 })
 
 describe('P15 运行与容量', () => {

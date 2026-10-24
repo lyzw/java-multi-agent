@@ -15,6 +15,7 @@
 
 import type { ReactNode } from 'react'
 import { Icon, type IconName } from '@/components/Icon'
+import { usePageTitle } from '@/shared/usePageTitle'
 
 /* ── 页头 ─────────────────────────────────────────────────── */
 
@@ -27,6 +28,10 @@ export interface PageHeadProps {
 }
 
 export function PageHead({ title, lead, eyebrow, actions }: PageHeadProps): JSX.Element {
+  // ⚠️ 标题同步放在这里而不是每个页面各写一遍：
+  //    PageHead 是除登录页外每个页面的第一件事，"忘了设标题"
+  //    在这个位置不可能发生。
+  usePageTitle(title)
   const heading = (
     <>
       {eyebrow !== undefined ? <p className="page-head__eyebrow">{eyebrow}</p> : null}

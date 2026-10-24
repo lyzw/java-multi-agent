@@ -119,9 +119,19 @@ export function ApprovalsPage(): JSX.Element {
       </Panel>
 
       <Sheet title="待审批">
+        {/*
+          ⚠️ 动作失败是**行内提示**，不是整页替换：
+            一次「拒绝」失败就把列表换成错误框，用户刚填的理由看不见也改不了，
+            而那个「重试」重试的还是**列表拉取**（不是那次决定本身）。
+            故错误条挂在列表上方，列表本身继续渲染。
+        */}
         {actionError !== null ? (
-          <ErrorState reason={actionError} onRetry={reset} />
-        ) : loading ? (
+          <div className="marked" role="alert">
+            <p className="marked__label">这次操作没有成功</p>
+            <p style={{ marginBottom: 0 }}>{actionError}</p>
+          </div>
+        ) : null}
+        {loading ? (
           <LoadingRows columns={['操作', '目标资源', '有效期', '决定']} rows={4} />
         ) : error !== null ? (
           <ErrorState reason={error} onRetry={reset} retryLabel="重新加载" />
@@ -132,12 +142,32 @@ export function ApprovalsPage(): JSX.Element {
             {items.map((item) => {
               // ⛔ 过期审批**不提供**批准按钮——后端会 409，
               //    但让用户点一个注定失败的操作是产品缺陷。
+              // ⚠️ 但**过期仍然可以拒绝**：过期只否定了「批准」这一个决定；
+              //    把「拒绝」也一并掐掉，这条待办就既不能批也不能驳，
+              //    只能干等系统清理——那不是「保护用户」，是把活儿留给运维。
               const actionable = item.state === 'PENDING' && !item.expired
+              const denyable = item.state === 'PENDING' && item.expired
+              const stateText = APPROVAL_STATE_LABELS[item.state] ?? item.state
+              // ⚠️ 红色**只**留给「已过期」（R1：红 = 这里有问题）。
+              //    「待审批」这类中性状态若也用批改红，一屏 20 张连成红墙，
+              //    真正需要被看见的「过期」反而被稀释掉。
+              const expiredOnly = stateText === '已过期'
+              const expiredMark = item.expired && !expiredOnly
               return (
-                <div key={item.approvalId} className="marked">
-                  <p className="marked__label">
-                    {APPROVAL_STATE_LABELS[item.state] ?? item.state}
-                    {item.expired ? ' · 已过期' : ''}
+                <div
+                  key={item.approvalId}
+                  // ⚠️ 非过期条目用 .marked--calm：左边的红线同样会连成一片，
+                  //    把红留给真正出过事的条目。
+                  className={item.expired ? 'marked' : 'marked marked--calm'}
+                >
+                  <p
+                    className="marked__label"
+                    style={expiredOnly ? undefined : { color: 'var(--ink-2)' }}
+                  >
+                    {stateText}
+                    {expiredMark ? (
+                      <b style={{ color: 'var(--mark)' }}> · 已过期</b>
+                    ) : null}
                   </p>
                   {/*
                     ⚠️ FR-014 要求审批人看到三项，缺一不可：
@@ -156,10 +186,15 @@ export function ApprovalsPage(): JSX.Element {
                     <dd className="mono">{item.runId}</dd>
                   </dl>
 
-                  {item.expired ? (
+                  {/*
+                    ⚠️ 文案必须自洽：既然下面给了「拒绝」，就不能再说
+                      「只能拒绝或等待系统清理」这种把用户往外推的说法。
+                      「已过期，不可批准」必须留着（过期项不给批准按钮），
+                      但要把**还能做什么**说清楚。
+                  */}
+                  {expiredMark ? (
                     <p className="muted">
-                      这条审批已过期，只能拒绝或等待系统清理——
-                      过期的批准不再是同一个决定。
+                      已过期，不可批准。如需终止这条等待，请点「拒绝」并写明理由。
                     </p>
                   ) : null}
 
@@ -174,6 +209,7 @@ export function ApprovalsPage(): JSX.Element {
                       <div className="status-line" style={{ marginTop: 'var(--s-2)' }}>
                         <button
                           type="button"
+                          className="btn"
                           disabled={busyId === item.approvalId || reason.trim() === ''}
                           onClick={() =>
                             void submit(item.approvalId, 'DENY', reason.trim())
@@ -195,8 +231,16 @@ export function ApprovalsPage(): JSX.Element {
                     </div>
                   ) : actionable ? (
                     <div className="status-line">
+                      {/*
+                        ⚠️ 主操作必须比次操作**重**：
+                          「批准」用墨色主按钮，「拒绝」用静默按钮。
+                          此前「批准」是裸 <button>（浏览器默认灰），
+                          「拒绝」反而有样式——主次颠倒。
+                          ⚠️ 可访问名（批准 / 拒绝 / 确认拒绝）不得改动。
+                      */}
                       <button
                         type="button"
+                        className="btn"
                         disabled={busyId === item.approvalId}
                         onClick={() => void submit(item.approvalId, 'APPROVE')}
                       >
@@ -214,9 +258,25 @@ export function ApprovalsPage(): JSX.Element {
                         拒绝
                       </button>
                     </div>
+                  ) : denyable ? (
+                    // ⚠️ 过期项**只**给「拒绝」——批准按钮不渲染（点了必定 409），
+                    //    但拒绝必须给得出来，否则这条待办没有任何出路。
+                    <div className="status-line">
+                      <button
+                        type="button"
+                        className="btn btn--quiet"
+                        disabled={busyId === item.approvalId}
+                        onClick={() => {
+                          setDenyTarget(item.approvalId)
+                          setReason('')
+                        }}
+                      >
+                        拒绝
+                      </button>
+                    </div>
                   ) : (
                     <p className="muted">
-                      {item.state !== 'PENDING'
+                      {item.state !== 'PENDING' && item.state !== 'EXPIRED'
                         ? `已由 ${item.approverId ?? '系统'} 处理，不再可改。`
                         : '已过期，不可批准。'}
                     </p>
@@ -349,9 +409,26 @@ export function ReconciliationPage(): JSX.Element {
       </div>
 
       <Sheet title="待处置操作">
+        {/*
+          ⚠️ 2026-10-24：动作失败是**行内提示**，不是整页替换列表
+             （与 P8 审批台同一做法）。
+             此前 actionError 排在三元**第一位**：一次处置失败就把整张
+             「待处置操作」列表换成错误框，用户刚写的处置说明看不见也改不了；
+             而那个错误框里的按钮重新拉取的是**列表**，并不是那次处置本身。
+             故错误条挂在列表上方，列表本身继续渲染。
+             ⛔ 这里**不提供任何按钮**：P9 段落不得出现重放语义的入口
+                （在未知副作用之上再施加一次 = Sev-0）。
+        */}
         {actionError !== null ? (
-          <ErrorState reason={actionError} onRetry={reset} />
-        ) : loading ? (
+          <div className="marked" role="alert">
+            <p className="marked__label">这次处置没有归档成功</p>
+            <p style={{ marginBottom: 0 }}>{actionError}</p>
+            <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
+              下面的待处置列表和刚写的处置说明都还在。请核对结论后，再从三个选项里选一次。
+            </p>
+          </div>
+        ) : null}
+        {loading ? (
           <LoadingRows columns={['操作', '风险', '时间', '处置']} rows={4} />
         ) : error !== null ? (
           <ErrorState reason={error} onRetry={reset} retryLabel="重新加载" />
@@ -398,23 +475,12 @@ export function ReconciliationPage(): JSX.Element {
 
                   {isOpen ? (
                     <div>
-                      {DISPOSITION_OPTIONS.map((opt) => (
-                        <div key={opt.value} className="field">
-                          <label htmlFor={`${item.operationId}-${opt.value}`}>
-                            {opt.label}
-                          </label>
-                          <p className="muted" style={{ margin: '0 0 var(--s-2)' }}>
-                            {opt.hint}
-                          </p>
-                          <input
-                            id={`${item.operationId}-${opt.value}`}
-                            type="radio"
-                            name={`disposition-${item.operationId}`}
-                            disabled={busyId === item.operationId}
-                            onChange={() => void submit(item.operationId, opt.value)}
-                          />
-                        </div>
-                      ))}
+                      {/*
+                        ⚠️ 说明框**排在 radio 之前**：
+                          选中 radio 即完成归档（终态、不可撤销），
+                          说明必须**先写**再选——排在后面的话，
+                          用户选完才发现「原来还能写点东西」，可那时已经归档了。
+                      */}
                       <div className="field">
                         <label htmlFor={`note-${item.operationId}`}>
                           处置说明（可选）
@@ -425,7 +491,48 @@ export function ReconciliationPage(): JSX.Element {
                           onChange={(e) => setNote(e.target.value)}
                           disabled={busyId === item.operationId}
                         />
+                        <p className="field__hint">
+                          写下核对依据，会随这次归档一起记录。
+                        </p>
                       </div>
+                      {/*
+                        ⚠️ 后果必须**写在选择之前**：
+                          「选中即归档」是终态动作，不是表单里的一个待提交值。
+                          不提前说清，用户会以为只是"选了个选项"，
+                          点下去才发现已经不可撤销。
+                      */}
+                      <p className="muted" style={{ margin: '0 0 var(--s-2)' }}>
+                        选中即完成归档，不可撤销。归档后该操作不再出现在待处置列表。
+                      </p>
+                      {DISPOSITION_OPTIONS.map((opt) => (
+                        <div key={opt.value} className="field">
+                          {/*
+                            ⚠️ 整块可点：hint 放进 <label> 内部——
+                              点标题、点说明都等价于点这个 radio
+                              （label 的 htmlFor 与 input 的 id 已配对）。
+                          */}
+                          <label htmlFor={`${item.operationId}-${opt.value}`}>
+                            {opt.label}
+                            <span
+                              className="field__hint"
+                              style={{
+                                display: 'block',
+                                marginTop: 'var(--s-1)',
+                                fontWeight: 400,
+                              }}
+                            >
+                              {opt.hint}
+                            </span>
+                          </label>
+                          <input
+                            id={`${item.operationId}-${opt.value}`}
+                            type="radio"
+                            name={`disposition-${item.operationId}`}
+                            disabled={busyId === item.operationId}
+                            onChange={() => void submit(item.operationId, opt.value)}
+                          />
+                        </div>
+                      ))}
                       <button
                         type="button"
                         className="btn btn--quiet"
@@ -438,7 +545,11 @@ export function ReconciliationPage(): JSX.Element {
                       </button>
                     </div>
                   ) : actionable ? (
-                    <button type="button" onClick={() => setSelected(item.operationId)}>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setSelected(item.operationId)}
+                    >
                       记录核对结论
                     </button>
                   ) : (
@@ -560,31 +671,37 @@ export function AuditPage(): JSX.Element {
           <Empty title="没有符合条件的审计记录" hint="放宽筛选条件再试。" />
         ) : (
           <>
-            <table>
-              <thead>
-                <tr>
-                  {['时间', '操作者', '动作', '资源', '明细'].map((c) => (
-                    <th key={c} scope="col">
-                      {c}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((entry) => (
-                  <tr key={entry.auditId}>
-                    <td>{formatTime(entry.createdAt)}</td>
-                    <td className="mono">{entry.actorId}</td>
-                    <td>{AUDIT_ACTION_LABELS[entry.action] ?? entry.action}</td>
-                    <td className="mono">
-                      {entry.resourceType}
-                      {entry.resourceId !== null ? `/${entry.resourceId}` : ''}
-                    </td>
-                    <td className="mono">{renderDetail(entry.detail)}</td>
+            {/*
+              ⚠️ 必须包在 .table-wrap 里：明细列里的 UUID 有 min-content 宽度，
+                窄屏（实测 390px）下会把整页撑破（scrollWidth 487）。
+            */}
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    {['时间', '操作者', '动作', '资源', '明细'].map((c) => (
+                      <th key={c} scope="col">
+                        {c}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {items.map((entry) => (
+                    <tr key={entry.auditId}>
+                      <td>{formatTime(entry.createdAt)}</td>
+                      <td className="mono">{entry.actorId}</td>
+                      <td>{AUDIT_ACTION_LABELS[entry.action] ?? entry.action}</td>
+                      <td className="mono">
+                        {entry.resourceType}
+                        {entry.resourceId !== null ? `/${entry.resourceId}` : ''}
+                      </td>
+                      <td className="mono">{renderDetail(entry.detail)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <ListFooter
               count={items.length}
               hasMore={hasMore}

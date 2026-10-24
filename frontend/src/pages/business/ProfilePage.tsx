@@ -149,13 +149,20 @@ export function ProfilePage(): JSX.Element {
           <ul className="entry-list">
             {safe.weaknesses.map((w, index) => (
               <li className="entry entry--card" key={`${w.knowledgePoint}-${index}`}>
-                <span>
+                {/*
+                  ⚠️ 2026-10-24：标题与描述包进 .entry__body。
+                    .entry 是 flex **行**布局（align-items:center），
+                    直接子元素会并排 —— .entry__desc（按「标题下方第二行」
+                    设计）此前被挤到了标题**右侧**，读起来像并列的两个字段。
+                    包一层纵向容器后，描述回到标题下方。
+                */}
+                <div className="entry__body">
                   <span className="entry__title">{w.knowledgePoint}</span>
                   <span className="entry__desc">
                     {w.errorType}
                     {w.confidence !== null ? ` · 置信度 ${w.confidence}` : ''}
                   </span>
-                </span>
+                </div>
               </li>
             ))}
           </ul>

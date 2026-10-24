@@ -284,6 +284,15 @@ export interface RunListItem {
   attempt: number
   /** 失败原因**码**，不是错误原文；当前生产未写入（P4-D12 L-1）→ 恒为 null */
   errorCode: string | null
+  /**
+   * 学科（DEC-6 白名单的分类字段）。
+   *
+   * ⚠️ 后端已按业务词表 **fail-closed** 校验：不在词表内一律为 `null`。
+   *    前端**不得**自行拼装或猜测学科——凭空生成的列比没有列更糟。
+   */
+  subject: string | null
+  /** 年级（同上：不在词表内为 `null`） */
+  grade: string | null
 }
 
 /* ── 审批（G8 / P8 审批台）────────────────────────────────────── */
@@ -782,6 +791,46 @@ export interface RagRegisterSourceRequest {
   registeredBy: string
 }
 
+/**
+ * 批量导入的单条来源项（对齐后端 `ManagementDtos.BulkSourceItem`）。
+ *
+ * ⚠️ 不含 `registeredBy`：批量导入的登记人对整批统一留痕，
+ * 由批量请求头部的 `registeredBy` 提供，避免 CSV/JSON 每行重复写 UUID。
+ */
+export interface RagBulkSourceItem {
+  sourceType: string
+  title: string
+  publisher: string
+  isbn: string | null
+  doi: string | null
+  objectRef: string | null
+  contentHash: string | null
+}
+
+/** 批量导入逐条结果（对齐后端 `ManagementDtos.BulkItemResultDto`）。 */
+export interface RagBulkImportItemResult {
+  /** 该行在提交数组中的下标（从 0 开始） */
+  index: number
+  /** 是否登记成功 */
+  ok: boolean
+  /** 成功时的来源 ID（失败为 null） */
+  sourceId: string | null
+  /** 失败原因（成功为 null） */
+  error: string | null
+}
+
+/** 批量导入响应（对齐后端 `ManagementDtos.BulkRegisterResponse`）。 */
+export interface RagBulkImportResponse {
+  /** 请求总条数 */
+  total: number
+  /** 成功条数 */
+  succeeded: number
+  /** 失败条数 */
+  failed: number
+  /** 逐条结果（与请求同序） */
+  items: RagBulkImportItemResult[]
+}
+
 /** 校验决定请求（对齐后端 `ManagementDtos.VerificationRequest`）。 */
 export interface RagVerificationRequest {
   targetStatus: RagVerificationStatus
@@ -902,6 +951,108 @@ export const RAG_LICENSE_LABELS: Record<RagLicenseStatus, string> = {
   FAIR_USE_QUOTATION: '合理引用',
   PENDING: '未取得授权',
   RESTRICTED: '禁止使用',
+}
+
+/* ── RAG 字典（Point 2：枚举下拉的数据源，可由前端维护）──────── */
+
+/**
+ * 字典类型。
+ *
+ * - `SOURCE_TYPE`：动态字典，可前端维护（增删改），落地 `rag_dictionary` 表；
+ * - 其余三类为派生字典（由后端按 Java 枚举派生，只读），保证准入判定单一权威。
+ */
+export type RagDictionaryType =
+  | 'SOURCE_TYPE'
+  | 'TRUST_TIER'
+  | 'VERIFICATION_METHOD'
+  | 'LICENSE_STATUS'
+
+/** 字典项（动态 / 派生类型共用）。 */
+export interface RagDictionaryEntry {
+  type: RagDictionaryType
+  code: string
+  label: string
+  sortOrder: number
+  enabled: boolean
+}
+
+/** 字典类型视图（含是否可维护、该类型下的全部条目）。 */
+export interface RagDictionaryTypeView {
+  type: RagDictionaryType
+  editable: boolean
+  entries: RagDictionaryEntry[]
+}
+
+/** 字典项写入 / 更新请求（仅对可编辑类型生效）。 */
+export interface RagUpsertDictionaryEntryRequest {
+  code: string
+  label: string
+  sortOrder: number
+  enabled: boolean
+}
+
+/* ── 能力目录（Point 3 · Tool / Skill 只读目录）────────────── */
+
+/**
+ * Tool 目录项（对齐后端 `CapabilityCatalogController.ToolResponse`）。
+ *
+ * ⚠️ **只读数据**：Tool 定义是 platform 级对象（无租户隔离），
+ * 其变更走带外运维通道，不在管理台上开放写入口。
+ */
+export interface CapToolCatalogItem {
+  toolId: string
+  name: string | null
+  /** `NATIVE` = 平台原生工具；`MCP` = MCP 远端工具 */
+  kind: 'NATIVE' | 'MCP' | string
+  /** `READ` / `WRITE_PROFILE` / `WRITE_EXTERNAL`（未知即不可判定） */
+  riskLevel: string
+  mcpServerId: string | null
+  mcpToolName: string | null
+  /** 输入参数 JSON Schema（原文） */
+  inputSchema: string
+  /** 参数策略 JSON（原文） */
+  paramPolicies: string
+  version: number
+  schemaVersion: number
+  published: boolean
+  publishedAt: string | null
+}
+
+/**
+ * Skill 目录项（对齐后端 `CapabilityCatalogController.SkillResponse`）。
+ *
+ * ⚠️ **只读数据**：同 {@link CapToolCatalogItem} —— Skill 定义是 platform 级对象。
+ */
+export interface CapSkillCatalogItem {
+  skillId: string
+  name: string | null
+  description: string | null
+  /** 声明的平台原生工具 id 清单 */
+  declaredTools: string[]
+  /** 声明的 MCP server 及其操作白名单 */
+  declaredMcp: CapMcpDeclarationItem[]
+  /** 风险上限（ceiling）：Skill 内所有操作不得超过它 */
+  riskCeiling: string
+  /** 参数策略 JSON（原文） */
+  paramPolicies: string
+  /** 必需的能力标签 */
+  requiredCaps: string[]
+  version: number
+  schemaVersion: number
+  published: boolean
+  publishedAt: string | null
+}
+
+/**
+ * Skill 的 MCP 声明。
+ *
+ * ⚠️ **`toolAllowlist` 可空，且空数组不等价于 null**：
+ * `null` = 未配置（取 ServerAllowedOps 全集），
+ * `[]` = 显式不允许任何操作。两者语义不同，展示时不可归一化。
+ */
+export interface CapMcpDeclarationItem {
+  serverId: string
+  toolAllowlist: string[] | null
 }
 
 /**

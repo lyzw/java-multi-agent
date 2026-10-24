@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { AppShell } from '@/layouts/AppShell'
 import { SessionProvider } from '@/auth/session'
@@ -93,7 +93,14 @@ describe('侧栏菜单完整性', () => {
       expect(screen.getByRole('link', { name: item })).toBeInTheDocument()
     }
     // 恰好 16 项，不多不少（多出重复入口同样是「菜单不完整」）
-    expect(screen.getAllByRole('link')).toHaveLength(FULL_MENU_ITEMS.length)
+    // ⚠️ 2026-10-24：作用域收敛到**导航地标**。壳内现有两类 link：
+    //    ① 侧栏导航项（16 个，本断言的对象）；
+    //    ② 「跳到主内容」skip link（键盘可达性基线，不是导航项）。
+    //    旧写法用全局 getAllByRole('link') 会把 skip link 一并数进去，
+    //    于是"加一个无障碍跳转链接"会被误判成"菜单多了入口"。
+    //    按地标收窄后，两类关注点各归其位，断言力度不减。
+    const nav = within(screen.getByRole('navigation'))
+    expect(nav.getAllByRole('link')).toHaveLength(FULL_MENU_ITEMS.length)
   })
 
   it('TENANT_ADMIN 的顶栏应显示真实角色名', () => {

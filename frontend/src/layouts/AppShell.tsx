@@ -6,20 +6,46 @@
  * ✅ 演进点：
  *   · 每个导航项配图标（线性描边），扫描更快；
  *   · 新增「折叠为图标栏」开关，替代旧版中屏「只显示首字」的信息丢失；
- *   · 顶栏加品牌标识块；折叠按钮为图标按钮。
+ *     折叠态持久化到 localStorage，刷新不弹回；
+ *   · 顶栏加品牌标识块；折叠按钮为图标按钮；
+ *   · 壳内第一个可聚焦元素是「跳到主内容」skip link（键盘可达性基线）。
+ *   · **小屏抽屉**（2026-10-24 UX 评审 P1-F）：≤767px 时侧栏不再是一条
+ *     横向滚动条（16 项总宽 1918px，首屏只露 3.5 项且第 4 项被裁成半截），
+ *     改为顶栏菜单按钮拉出的抽屉：打开进焦点、Esc/遮罩可关、关后焦点回按钮。
  *
  * ⚠️ 保留的硬契约（nav.menu.test.tsx / design.spec.test.ts 依赖）：
  *   · 恰好 16 个 link，可访问名 = 中文标签（图标 aria-hidden）；
  *   · 4 个分面标题；header-identity / roles-unknown-notice 两个 testid；
- *   · <main className="main">；小屏（≤767px）侧栏横向滚动；
+ *   · <main className="main">；
  *   · 到期预警 / 角色未回传提示 / 登出 全部保留。
  */
 
-import { useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useSession } from '@/auth/session'
 import { hasRoleAccess } from '@/auth/RequireRole'
 import { Icon, type IconName } from '@/components/Icon'
+
+/** 侧栏折叠态的本机记忆键（纯布局偏好，不涉及任何凭据 / 受控数据）。 */
+const COLLAPSED_KEY = 'nav.collapsed'
+
+/** 读取折叠态；存储不可用（隐私模式）时按展开处理。 */
+function readCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeCollapsed(value: boolean): void {
+  try {
+    if (value) window.localStorage.setItem(COLLAPSED_KEY, '1')
+    else window.localStorage.removeItem(COLLAPSED_KEY)
+  } catch {
+    // 记忆失败不影响使用，静默忽略
+  }
+}
 
 interface NavItem {
   to: string
@@ -88,8 +114,74 @@ const NAV: NavGroup[] = [
 export function AppShell(): JSX.Element {
   const { signOut, expiringSoon, roles, rolesStatus, session, refreshRoles } = useSession()
   const navigate = useNavigate()
+  const location = useLocation()
   const [warn, setWarn] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  // ⚠️ 折叠态跨刷新保留：重度用户把侧栏收起来后，
+  //    每次刷新都被弹回展开态是很烦人的小刺。
+  const [collapsed, setCollapsed] = useState(readCollapsed)
+  /*
+   * 小屏抽屉（2026-10-24 UX 评审 P1-F）
+   *
+   * ⚠️ 旧形态是 ≤767px 时侧栏变一条横向滚动条：16 个入口总宽 1918px，
+   *    390px 视口首屏只露出 3.5 项，第 4 项被裁在「知」字中间——
+   *    一个点不动的半截元素。横向滚动条治不了 16 项。
+   *
+   * 抽屉的三条行为约定：
+   *   1. 打开时焦点进入抽屉（否则键盘用户不知道自己在哪）；
+   *   2. Esc / 点遮罩 / 点导航项都能关闭，关闭后焦点回到菜单按钮；
+   *   3. 收起时抽屉用 visibility:hidden —— 它同时移出焦点序列与
+   *      无障碍树（只用 transform 移出屏幕的话，那 16 个链接
+   *      仍会被 Tab 到，那才是真正的坑）。
+   */
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const drawerButtonRef = useRef<HTMLButtonElement>(null)
+  const navRef = useRef<HTMLElement>(null)
+
+  const closeDrawer = useCallback((): void => {
+    setDrawerOpen(false)
+    // 焦点回到触发它的按钮，否则键盘用户会被丢在文档流里
+    drawerButtonRef.current?.focus()
+  }, [])
+
+  // 路由一变就收起抽屉：否则点完导航项，遮罩还盖着新页面
+  useEffect(() => {
+    setDrawerOpen(false)
+  }, [location.pathname])
+
+  // Esc 关闭抽屉
+  useEffect(() => {
+    if (!drawerOpen) return undefined
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') closeDrawer()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [drawerOpen, closeDrawer])
+
+  // 抽屉打开时锁住页面滚动（背景跟着滚会把抽屉甩掉）
+  useEffect(() => {
+    if (!drawerOpen) return undefined
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = previous
+    }
+  }, [drawerOpen])
+
+  // 打开后把焦点送进抽屉的第一个入口
+  useEffect(() => {
+    if (!drawerOpen) return
+    const first = navRef.current?.querySelector<HTMLElement>('a[href]')
+    first?.focus()
+  }, [drawerOpen])
+
+  const toggleCollapsed = (): void => {
+    setCollapsed((prev) => {
+      const next = !prev
+      writeCollapsed(next)
+      return next
+    })
+  }
 
   const visibleNav = NAV.map((group) => ({
     ...group,
@@ -122,7 +214,16 @@ export function AppShell(): JSX.Element {
   }
 
   return (
-    <div className="shell" data-collapsed={collapsed}>
+    <div className="shell" data-collapsed={collapsed} data-drawer={drawerOpen}>
+      {/*
+        ⚠️ skip link 必须是壳内第一个可聚焦元素：
+        键盘用户进页面第一件事就是跳过 16 个导航链接直达主内容。
+        锚点指向 #main-content（主内容区内的焦点靶），
+        不改 <main className="main"> 的字面结构（structure.integrity 锁死它）。
+      */}
+      <a href="#main-content" className="skip-link">
+        跳到主内容
+      </a>
       <header className="header">
         <span className="brand">
           <span className="brand__mark">
@@ -138,13 +239,33 @@ export function AppShell(): JSX.Element {
           >
             角色：{roleLabel} · 租户 {tenantShort}
           </span>
+          {/*
+            小屏抽屉开关（桌面不显示，见 layout.css 的 .nav-toggle）。
+            ⚠️ 与「折叠导航」互斥：折叠收窄侧栏、菜单弹出侧栏，
+               两者在小屏上同时出现会让顶栏挤成一团。
+          */}
+          <button
+            ref={drawerButtonRef}
+            type="button"
+            className="btn btn--quiet btn--icon nav-toggle"
+            aria-label={drawerOpen ? '关闭导航' : '打开导航'}
+            aria-expanded={drawerOpen}
+            aria-controls="main-nav"
+            title={drawerOpen ? '关闭导航' : '打开导航'}
+            onClick={() => {
+              if (drawerOpen) closeDrawer()
+              else setDrawerOpen(true)
+            }}
+          >
+            <Icon name={drawerOpen ? 'close' : 'menu'} />
+          </button>
           <button
             type="button"
-            className="btn btn--quiet btn--icon"
+            className="btn btn--quiet btn--icon nav-collapse"
             aria-label={collapsed ? '展开导航' : '折叠导航'}
             aria-pressed={collapsed}
             title={collapsed ? '展开导航' : '折叠导航'}
-            onClick={() => setCollapsed((v) => !v)}
+            onClick={toggleCollapsed}
           >
             <Icon name="panel" />
           </button>
@@ -189,7 +310,21 @@ export function AppShell(): JSX.Element {
       ) : null}
 
       <div className="shell__body">
-        <nav className="nav" aria-label="主导航">
+        {/*
+          抽屉遮罩：只在抽屉打开时存在，点击即关闭。
+          aria-hidden：它没有语义，只是挡住背景防止误点。
+        */}
+        {drawerOpen ? (
+          <button
+            type="button"
+            className="nav-scrim"
+            aria-label="关闭导航"
+            tabIndex={-1}
+            onClick={closeDrawer}
+          />
+        ) : null}
+
+        <nav id="main-nav" ref={navRef} className="nav" aria-label="主导航">
           {visibleNav.map((group) => (
             <div key={group.title} className="nav__group">
               <p className="nav__group-title">{group.title}</p>
@@ -211,6 +346,8 @@ export function AppShell(): JSX.Element {
         </nav>
 
         <main className="main">
+          {/* skip link 的焦点靶：tabIndex=-1 让锚点跳转能把焦点也带进来 */}
+          <span id="main-content" className="sr-only" tabIndex={-1} />
           <Outlet />
         </main>
       </div>

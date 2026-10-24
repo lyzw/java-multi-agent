@@ -72,6 +72,24 @@ function maxOf(values: number[]): number {
 }
 
 /**
+ * 取**真实**最大值（不做防除零抬升）。
+ *
+ * ⚠️ 2026-10-24 UX 评审（P1-17）：渲染用的 max 被抬到至少 1，
+ *    而这个**被抬高的值**曾被直接写进 aria-label 摘要——全零序列时
+ *    屏上是一条贴基线的线（正确的「没有数据」），读屏却听到「峰值 1」。
+ *    用假数字描述真状态，与本文件头「不编造」的纪律自相矛盾。
+ *    故渲染用 max、叙述用峰值，分开计算。
+ */
+function trueMaxOf(values: number[]): number {
+  return values.reduce((acc, v) => (v > acc ? v : acc), 0)
+}
+
+/** 生成「峰值」叙述片段：全零时说「区间内没有数据」，而不是编一个数。 */
+function peakPhrase(peak: number, unit: string): string {
+  return peak > 0 ? `峰值 ${peak}${unit}` : '区间内没有数据'
+}
+
+/**
  * 计算绘图几何。
  *
  * @param count 数据点个数
@@ -103,6 +121,7 @@ export function BarChart({
   unit?: string
 }): JSX.Element {
   const max = maxOf(data.map((d) => d.value))
+  const peak = trueMaxOf(data.map((d) => d.value))
   const total = data.reduce((acc, d) => acc + d.value, 0)
   const fill = TONE_FILL[tone]
 
@@ -119,14 +138,25 @@ export function BarChart({
   const labelStep = slot < 30 ? Math.ceil(30 / slot) : 1
 
   return (
-    <div className="chart-scroll">
+    <div
+      className="chart-scroll"
+      /*
+       * ⚠️ 2026-10-24 UX 评审（P2-8）：长区间图表（30/90 天）装不下时
+       *    靠横向滚动查看，而图表内部**没有任何可聚焦元素**——
+       *    键盘用户无法滚动它（方向键只滚动**焦点所在**的容器）。
+       *    故容器本身做成可聚焦的 region，并说明「可横向滚动」。
+       */
+      tabIndex={0}
+      role="region"
+      aria-label="柱状图，可横向滚动"
+    >
       <svg
         className="chart"
         style={{ width: `${width}px`, height: `${height + 24}px` }}
         viewBox={`0 0 ${width} ${height + 24}`}
         preserveAspectRatio="xMinYMin meet"
         role="img"
-        aria-label={`柱状图：共 ${data.length} 个数据点，合计 ${total}${unit}，峰值 ${max}${unit}`}
+        aria-label={`柱状图：共 ${data.length} 个数据点，合计 ${total}${unit}，${peakPhrase(peak, unit)}`}
       >
         {/* 基线 */}
         <line
@@ -197,6 +227,7 @@ export function LineChart({
   const length = Math.max(...series.map((s) => s.data.length))
   const { width, slot } = geometry(length)
   const max = maxOf(series.flatMap((s) => s.data.map((d) => d.value)))
+  const peak = trueMaxOf(series.flatMap((s) => s.data.map((d) => d.value)))
 
   const pathFor = (data: LineDatum[]): string => {
     if (data.length === 0) return ''
@@ -211,14 +242,20 @@ export function LineChart({
 
   return (
     <>
-      <div className="chart-scroll">
+      <div
+        className="chart-scroll"
+        /* 同上：容器可聚焦 + 标注「可横向滚动」 */
+        tabIndex={0}
+        role="region"
+        aria-label="折线图，可横向滚动"
+      >
         <svg
           className="chart"
           style={{ width: `${width}px`, height: `${height + 24}px` }}
           viewBox={`0 0 ${width} ${height + 24}`}
           preserveAspectRatio="xMinYMin meet"
           role="img"
-          aria-label={`折线图：${series.length} 条序列，峰值 ${max}${unit}`}
+          aria-label={`折线图：${series.length} 条序列，${peakPhrase(peak, unit)}`}
         >
           <line
             x1="0"

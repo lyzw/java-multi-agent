@@ -546,6 +546,94 @@ describe('报表中心：知识点排行双口径切换', () => {
     })
     expect(screen.getByText(/本榜是/)).toHaveTextContent('全历史累计')
   })
+
+  it('⛔ 口径切换必须暴露选中态（读屏用户要能判断当前在看哪个口径）', async () => {
+    // ⚠️ 两个口径的答案完全不同；只靠 .btn / .btn--quiet 的深浅区分，
+    //    对读屏是「无声」的 —— 必须有 role="group" + aria-pressed。
+    seedSession()
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '所选区间内' })).toBeInTheDocument()
+    })
+    const group = screen.getByRole('group', { name: '排行口径' })
+    expect(group).toBeInTheDocument()
+
+    const range = screen.getByRole('button', { name: '所选区间内' })
+    const all = screen.getByRole('button', { name: '全历史累计' })
+    expect(range).toHaveAttribute('aria-pressed', 'true')
+    expect(all).toHaveAttribute('aria-pressed', 'false')
+
+    fireEvent.click(all)
+    await waitFor(() => {
+      expect(all).toHaveAttribute('aria-pressed', 'true')
+    })
+    expect(range).toHaveAttribute('aria-pressed', 'false')
+  })
+})
+
+describe('报表中心：表格行 key 唯一（重复日期不得丢行）', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+    downloadCsvMock.mockReset()
+    getRagDailySearchesMock.mockReset().mockResolvedValue(searchData([3, 5, 0]))
+    getRagDailyImportsMock.mockReset().mockResolvedValue(importData())
+    getRagStatisticsMock.mockReset().mockResolvedValue(corpusData())
+  })
+
+  it('⛔ 同一天出现多行时不得触发 React 重复 key 警告', async () => {
+    // ⚠️ 夹具**故意**造重复日期（i % 28）：跨月补数时同一天会出现多行。
+    //    若 <tr key> 只用日期，React 会丢行/错位，而它只在控制台报一条
+    //    warning —— 极易被静默忽略。故把该 warning 变成红灯。
+    const days = Array.from({ length: 90 }, (_, i) => ({
+      date: `2026-07-${String((i % 28) + 1).padStart(2, '0')}`,
+      total: 1,
+      terminal: 1,
+      succeeded: 1,
+      failed: 0,
+      timedOut: 0,
+      cancelled: 0,
+    }))
+    // ⛔ 先确认夹具里**真的有**重复日期，否则这条断言会恒真（误报安全）
+    expect(new Set(days.map((d) => d.date)).size).toBeLessThan(days.length)
+
+    getDailyStatisticsMock.mockReset().mockResolvedValue(
+      platformData({
+        runsByDay: days,
+        currentPeriod: {
+          total: 90,
+          terminal: 90,
+          succeeded: 90,
+          failed: 0,
+          timedOut: 0,
+          cancelled: 0,
+          weaknessCount: 0,
+          activeStudentDays: 0,
+          newStudents: 0,
+        },
+      }),
+    )
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      seedSession()
+      renderPage()
+
+      await waitFor(() => {
+        expect(screen.getByText('区间内发起量')).toBeInTheDocument()
+      })
+      // ⛔ React 的重复 key 警告必须一条都不出现
+      const keyWarnings = errorSpy.mock.calls.filter((args) =>
+        String(args[0]).includes('same key'),
+      )
+      expect(keyWarnings).toEqual([])
+      // 且重复日期的行一条都不能少（丢行 = 报表数字说谎）
+      const table = screen.getByText('每日辅导量与终态构成明细').closest('table')
+      expect(table?.querySelectorAll('tbody tr')).toHaveLength(90)
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
 })
 
 describe('报表中心：CSV 导出（与表格同源）', () => {
@@ -646,5 +734,90 @@ describe('报表中心：长区间图表必须 1:1 渲染（2026-10-23 修复）
     // ⚠️ 且必须存在一张按 90 天铺开的宽图（90 × 34px）
     const widths = svgs.map((s) => parseInt(s.style.width || '0', 10))
     expect(Math.max(...widths)).toBeGreaterThanOrEqual(90 * 34)
+  })
+})
+
+/**
+ * 2026-10-24 UX 实测回归：页内定位与键盘可达性。
+ *
+ * ⛔ 本页实测 scrollHeight 超过 10000px 却零锚点 ——
+ *    想找「知识点薄弱排行」只能滚到底。故把锚点与可聚焦的滚动容器钉住。
+ */
+describe('报表中心：页内定位与键盘可达性', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+    downloadCsvMock.mockReset()
+    getDailyStatisticsMock.mockReset().mockResolvedValue(platformData())
+    getRagDailySearchesMock.mockReset().mockResolvedValue(searchData([3, 5, 0]))
+    getRagDailyImportsMock.mockReset().mockResolvedValue(importData())
+    getRagStatisticsMock.mockReset().mockResolvedValue(corpusData())
+  })
+
+  it('⛔ 页首必须有区块锚点导航，且每个锚点都指向真实存在的区块', async () => {
+    seedSession()
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('group', { name: '报表区块导航' })).toBeInTheDocument()
+    })
+
+    const anchors = Array.from(
+      document.querySelectorAll<HTMLAnchorElement>('a[href^="#"]'),
+    )
+    // ⛔ 9 个区块一个都不能少（少了某个就等于那个区块找不到了）
+    expect(anchors.length).toBe(9)
+
+    // ⛔ 不得有死锚点：href 里的 id 必须在文档里真实存在
+    for (const a of anchors) {
+      const id = (a.getAttribute('href') ?? '').slice(1)
+      expect(id.length, '锚点必须带 id').toBeGreaterThan(0)
+      expect(
+        document.getElementById(id),
+        `锚点 #${id} 指向的区块不存在`,
+      ).not.toBeNull()
+      // 锚点文字必须就是区块标题（否则用户点进去对不上号）
+      expect(a.textContent?.trim().length ?? 0).toBeGreaterThan(0)
+    }
+
+    // ⚠️ 关键区块必须在锚点表里（「知识点薄弱排行」正是实测中最难找的）
+    const hrefs = anchors.map((a) => a.getAttribute('href'))
+    expect(hrefs).toContain('#report-knowledge-rank')
+    expect(hrefs).toContain('#report-daily-search')
+  })
+
+  it('⛔ 图表的横向滚动容器必须可聚焦（否则键盘用户滚不动长区间图表）', async () => {
+    seedSession()
+    renderPage()
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.chart-scroll').length).toBeGreaterThan(0)
+    })
+    // ⚠️ 滚动容器内部没有任何可聚焦元素 → 焦点必须落在容器自己身上
+    await waitFor(() => {
+      for (const scroller of Array.from(
+        document.querySelectorAll<HTMLElement>('.chart-scroll'),
+      )) {
+        expect(scroller.getAttribute('tabindex')).toBe('0')
+        expect(scroller.getAttribute('role')).toBe('region')
+        expect(scroller.getAttribute('aria-label') ?? '').toContain('可横向滚动')
+      }
+    })
+  })
+
+  it('⛔ 表格容器必须是一个带名字的可聚焦区域', async () => {
+    seedSession()
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByText('每日搜索的问题数明细')).toBeInTheDocument()
+    })
+    const wraps = Array.from(document.querySelectorAll<HTMLElement>('.table-wrap'))
+    expect(wraps.length).toBeGreaterThan(0)
+    for (const wrap of wraps) {
+      expect(wrap.getAttribute('tabindex')).toBe('0')
+      expect(wrap.getAttribute('role')).toBe('region')
+      // ⚠️ region 必须有可访问名，否则对读屏只是个无名容器
+      expect((wrap.getAttribute('aria-label') ?? '').length).toBeGreaterThan(0)
+    }
   })
 })

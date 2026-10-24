@@ -43,7 +43,13 @@ export function RunProgressPage(): JSX.Element {
 
   // ⚠️ FE-D9：状态权威来自 G3（run.state 快照），不是事件。
   //    与 SSE 共用限流桶 EVENT_QUERY（30 次/60 秒）→ 状态轮询间隔 10 秒。
-  const { status, error: statusError, done: statusDone } = useRunStatus(runId)
+  const {
+    status,
+    error: statusError,
+    done: statusDone,
+    reload: reloadStatus,
+    loading: statusLoading,
+  } = useRunStatus(runId)
 
   // ⛔ 必须清理，否则定时器泄漏。pollerRef 让我们能在**读到终态时主动停掉**它。
   const pollerRef = useRef<{ stop: () => void } | null>(null)
@@ -155,6 +161,27 @@ export function RunProgressPage(): JSX.Element {
               : '正在处理'}
         </p>
         {hint !== null ? <p className="status__hint">{hint}</p> : null}
+        {/*
+          ⚠️ 2026-10-24：手动刷新按钮。
+             轮询是 10 秒一拍（限流配额约束），用户等不及时应当能主动催一次；
+             ⛔ 但只挂在状态区、且刷新中禁用 —— 自动轮询 + 手动连点
+             会把 EVENT_QUERY 桶（30 次/60 秒，多运维共享）瞬间烧穿。
+        */}
+        <p className="status-line" style={{ marginTop: 'var(--s-3)' }}>
+          <button
+            type="button"
+            className="btn btn--quiet"
+            onClick={reloadStatus}
+            disabled={statusLoading}
+            aria-busy={statusLoading}
+          >
+            <Icon name="refresh" />
+            {statusLoading ? '刷新中…' : '刷新状态'}
+          </button>
+          {statusError !== null ? (
+            <span className="muted">上一次读取失败，可再试一次</span>
+          ) : null}
+        </p>
       </section>
 
       {/*
@@ -231,6 +258,26 @@ export function RunProgressPage(): JSX.Element {
             查看归因结果
           </Link>
         </p>
+      ) : null}
+
+      {/*
+        ⚠️ 2026-10-24：失败 / 超时 / 取消终态的下一步。
+            此前只有成功态有 CTA，失败态是**死路**——
+            用户看完「失败」两个学，页面上没有任何可做的事。
+            错题辅导的重试成本极低（同一道题重新提交即可），
+            把入口摆在状态旁边，比让人回工作台再点一遍「发起辅导」少三步。
+      */}
+      {statusDone && status != null && status.state !== 'SUCCEEDED' ? (
+        <div className="status-line" style={{ marginTop: 'var(--s-4)', flexWrap: 'wrap', gap: 'var(--s-3)' }}>
+          <Link to="/runs/new" className="btn btn--quiet">
+            <Icon name="plus" />
+            重新发起这道题
+          </Link>
+          <Link to="/runs" className="btn btn--quiet">
+            <Icon name="search" />
+            回检索记录
+          </Link>
+        </div>
       ) : null}
 
       {/* 重连指示：诚实告知数据更新状态 */}

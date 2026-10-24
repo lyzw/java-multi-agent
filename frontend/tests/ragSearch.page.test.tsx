@@ -43,6 +43,15 @@ function renderPage(): void {
 
 /** 填入租户标识：检索按租户隔离，缺失时后端直接 400，页面也不允许提交。 */
 async function fillTenant(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  /*
+   * ⚠️ 租户标识已折进「高级设置」（原生 <details>）：真实浏览器里默认收起、
+   *    看不见也点不到。故先展开折叠区再填——
+   *    这样验的是真用户路径，而不是 jsdom 不隐藏 details 内容的巧合。
+   */
+  const details = document.querySelector('details')
+  expect(details, '应有「高级设置」折叠区').toBeTruthy()
+  await user.click(screen.getByText('高级设置'))
+  expect((details as HTMLDetailsElement).open).toBe(true)
   const field = await screen.findByLabelText('租户标识')
   await user.type(field, TENANT)
 }
@@ -310,5 +319,66 @@ describe('知识检索页（FE-RAG 接线）', () => {
     renderPage()
     const button = screen.getByRole('button', { name: /检索并生成/ }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
+  })
+
+  /* ── 面向师生的文案纪律（2026-10-24 UX 评审 P1）────────── */
+
+  it('⛔ 租户提示面向师生：保留「已自动填入」「留空将无法检索」，去掉工程术语', async () => {
+    renderPage()
+    const hint = await screen.findByText(/留空将无法检索/)
+    expect(hint.textContent).toContain('已按登录信息自动填入')
+    // ⛔ RLS 之类的工程术语对师生没有意义；emoji 也破坏「墨 + 纸」两色纪律。
+    expect(hint.textContent).not.toMatch(/RLS|⚠/)
+  })
+
+  it('⛔ 检索页文案不得出现 markdown 标记或 emoji', async () => {
+    renderPage()
+    await screen.findByLabelText('你的问题')
+    expect(document.body.textContent).not.toContain('**')
+    expect(document.body.textContent).not.toMatch(/⚠/)
+  })
+
+  /*
+   * ── 渐进披露（2026-10-24 UX 评审 P1）──────────────────────────
+   *
+   * 检索设置原来一屏铺开 8 个控件（含一个裸 UUID 输入框），
+   * 对只想问一句「二次函数的顶点怎么求」的学生过重。
+   * 定案是**折叠**而不是删字段——所以断言分两面：
+   *   ① 低频项折进「高级设置」且默认收起；
+   *   ② 但字段一个都没删（仍在 DOM 里，租户标识仍在折叠区内）。
+   */
+  it('⛔ 渐进披露：低频项折进「高级设置」，默认收起', async () => {
+    renderPage()
+    await screen.findByLabelText('你的问题')
+
+    // 高频项常显：问题、检索模式、教材版本五轴
+    expect(screen.getByLabelText('你的问题')).toBeInTheDocument()
+    expect(screen.getByLabelText('检索模式')).toBeInTheDocument()
+    for (const label of ['学科', '年级', '册次', '出版社', '版次']) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument()
+    }
+
+    // 折叠区存在，且默认收起
+    const details = document.querySelector('details')
+    expect(details, '应有「高级设置」折叠区').toBeTruthy()
+    expect((details as HTMLDetailsElement).open).toBe(false)
+    expect(screen.getByText('高级设置')).toBeInTheDocument()
+    // 折叠区旁边要有一句说明，告诉用户里面是什么、需不需要动
+    expect(screen.getByText(/召回数量与版本范围一般无需调整/)).toBeInTheDocument()
+  })
+
+  it('⛔ 折叠不是删除：租户标识 / 召回数量 / 版本范围仍在 DOM 里', async () => {
+    renderPage()
+    await screen.findByLabelText('你的问题')
+
+    expect(screen.getByLabelText('租户标识')).toBeInTheDocument()
+    expect(screen.getByLabelText(/召回数量/)).toBeInTheDocument()
+    expect(screen.getByLabelText('版本范围')).toBeInTheDocument()
+    // 面向师生的租户说明不得因为折叠而消失
+    expect(screen.getByText(/留空将无法检索/)).toBeInTheDocument()
+
+    // ⚠️ 租户标识必须在折叠区**内**（它决定检索落在哪个租户的语料上）
+    const details = document.querySelector('details')
+    expect(details?.contains(screen.getByLabelText('租户标识'))).toBe(true)
   })
 })

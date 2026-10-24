@@ -28,6 +28,7 @@ import {
   getRagStatistics,
   applyRagVerification,
   registerRagSource,
+  bulkRegisterRagSources,
   ApiError,
 } from '@/api/client'
 import { isTimeoutError } from '@/api/errors'
@@ -36,6 +37,8 @@ import type {
   RagStatistics,
   RagSourceQuery,
   RagRegisterSourceRequest,
+  RagBulkSourceItem,
+  RagBulkImportResponse,
   RagVerificationRequest,
   RagVerificationStatus,
 } from '@/api/types'
@@ -133,6 +136,8 @@ export interface UseRagManagementResult {
   sources: RagSourceListState
   stats: RagStatsState
   action: RagActionState
+  /** 批量导入状态（独立的五态，避免与单条审核动作互相干扰） */
+  bulk: RagBulkState
   /** 加载来源列表（可带筛选条件） */
   loadSources: (tenantId: string, query?: RagSourceQuery) => void
   /** 加载统计 */
@@ -141,18 +146,45 @@ export interface UseRagManagementResult {
   verify: (tenantId: string, sourceId: string, payload: RagVerificationRequest) => void
   /** 登记新的语料来源 */
   register: (tenantId: string, payload: RagRegisterSourceRequest) => void
+  /** 批量登记语料来源（数据导入） */
+  bulkRegister: (
+    tenantId: string,
+    registeredBy: string,
+    items: RagBulkSourceItem[],
+  ) => void
   /** 重跑最近一次列表查询 */
   retrySources: () => void
   /** 重跑最近一次统计查询 */
   retryStats: () => void
   /** 清空动作提示（关闭后调用） */
   resetAction: () => void
+  /** 清空批量导入结果 */
+  resetBulk: () => void
 }
+
+/**
+ * 批量导入状态。
+ *
+ * ⚠️ 与 `action` **分开**：批量导入与单条审核是不同的操作，
+ * 共用一个状态会让「导入完成」的提示误覆盖「审核完成」的提示。
+ */
+export type RagBulkStatus = 'idle' | 'submitting' | 'success' | 'error' | 'timeout'
+
+export interface RagBulkState {
+  status: RagBulkStatus
+  /** 最近一次导入的逐条结果（供列表就地展示） */
+  response: RagBulkImportResponse | null
+  /** 错误/超时说明 */
+  error: string | null
+}
+
+const IDLE_BULK: RagBulkState = { status: 'idle', response: null, error: null }
 
 export function useRagManagement(): UseRagManagementResult {
   const [sources, setSources] = useState<RagSourceListState>(IDLE_LIST)
   const [stats, setStats] = useState<RagStatsState>(IDLE_STATS)
   const [action, setAction] = useState<RagActionState>(IDLE_ACTION)
+  const [bulk, setBulk] = useState<RagBulkState>(IDLE_BULK)
 
   /** 触发计：每次加载自增，effect 据此重新发请求 */
   const [listNonce, setListNonce] = useState(0)
@@ -255,6 +287,28 @@ export function useRagManagement(): UseRagManagementResult {
     void run()
   }, [])
 
+  const bulkRegister = useCallback(
+    (tenantId: string, registeredBy: string, items: RagBulkSourceItem[]) => {
+      setBulk({ status: 'submitting', response: null, error: null })
+      const run = async (): Promise<void> => {
+        try {
+          const response = await bulkRegisterRagSources(tenantId, registeredBy, items)
+          setBulk({ status: 'success', response, error: null })
+        } catch (cause) {
+          if (cause instanceof ApiError && isTimeoutError(cause.normalized)) {
+            setBulk({ status: 'timeout', response: null, error: cause.normalized.message })
+          } else if (cause instanceof ApiError) {
+            setBulk({ status: 'error', response: null, error: cause.normalized.message })
+          } else {
+            setBulk({ status: 'error', response: null, error: '导入失败，请稍后重试' })
+          }
+        }
+      }
+      void run()
+    },
+    [],
+  )
+
   const retrySources = useCallback(() => {
     setListNonce((n) => n + 1)
   }, [])
@@ -267,17 +321,24 @@ export function useRagManagement(): UseRagManagementResult {
     setAction(IDLE_ACTION)
   }, [])
 
+  const resetBulk = useCallback(() => {
+    setBulk(IDLE_BULK)
+  }, [])
+
   return {
     sources,
     stats,
     action,
+    bulk,
     loadSources,
     loadStats,
     verify,
     register,
+    bulkRegister,
     retrySources,
     retryStats,
     resetAction,
+    resetBulk,
   }
 }
 

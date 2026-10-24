@@ -8,17 +8,33 @@
  *   R2 主按钮用墨色，不用彩色 —— 避免界面像玩具
  *   R3 状态色低饱和，禁止高饱和绿/蓝
  *   R4 前景背景对比 ≥ 4.5:1
+ *   R5 三级墨 --ink-3 只许给**非文字装饰**（图标、箭头、分隔线）；
+ *      任何**承载文字**的元素一律用 --ink / --ink-2
+ *      （--ink-3 #8a9099 实算仅 2.77~3.22:1，承载文字即违反 R4）
  */
 
 :root {
+  /* 声明浅色主题：让表单控件/滚动条按浅色渲染，
+     而不是跟随系统深色模式出现一块突兀的深色 select。 */
+  color-scheme: light;
+
   /* ── 纸与墨 ── */
   --paper: #fcfcfb;
   --paper-sunk: #f5f6f7;
   --rule: #e3e5e8;
   --rule-strong: #c7cbd1;
+  /* ⚠️ 输入框边框专用 token（2026-10-24 UX 评审修复）：
+   *    --rule-strong #c7cbd1 在纸面上只有 1.59:1，低于 WCAG 1.4.11
+   *    要求的 3:1（非文本对比度）—— 低视力用户看不见输入框的边界。
+   *    实算 #868c94：paper 3.30:1 / surface 3.39:1 / paper-sunk 3.13:1。
+   *    ⛔ 不改 --rule-strong：它还被面板/分隔线当装饰线用。 */
+  --rule-input: #868c94;
 
   --ink: #1a1d21;
   --ink-2: #5b6169;
+  /* ⚠️ --ink-3 只许用于**非文字装饰**（图标/箭头/分隔线）。
+   *    实算对比度：paper 3.13:1 / surface 3.22:1 / paper-sunk 2.97:1 ———
+   *    承载文字即违反本文件 R4。文字请用 --ink-2（paper 上 5.58:1）。 */
   --ink-3: #8a9099;
 
   /* ── 语义色 ── */
@@ -53,6 +69,27 @@
   --s-4: 20px;
   --s-5: 32px;
   --s-6: 48px;
+
+  /* ══════════════════════════════════════════════════════
+   * 动效（2026-10-24 补）
+   *
+   * ⚠️ 这三个 token 此前**被 layout.css 引用却从未定义**
+   *    （`var(--transition-fast, 150ms ease)` 一直吃兜底值）——
+   *    「引用了不存在的 token」与「裸奔的 className」是同型缺陷：
+   *    语义漂移时没有单一真相源可改。故在此显式立户。
+   *
+   * ⛔ 时长全部 ≤ 240ms：这是工具，不是娱乐产品；
+   *    纸感界面靠**即时的微反馈**建立"活着"的手感，
+   *    长动画会让批改纸变成幻灯片。
+   * ⛔ 全局已在下方 prefers-reduced-motion 里一刀切禁用，
+   *    此处不需要再为每个用途写第二套。 */
+  --transition-fast: 140ms ease;
+  --transition-med: 220ms cubic-bezier(0.2, 0.6, 0.2, 1);
+  --transition-press: 80ms ease;
+
+  /* 粘性顶栏的「纸面薄纱」：内容滚过顶栏时透出一点，
+     仍是不透字的浅色，不是毛玻璃装饰。 */
+  --paper-veil: rgba(252, 252, 251, 0.86);
 
   /* ⚠️ 圆角仅用于控件；区块靠线与留白分隔，不用卡片阴影 */
   --radius-ctl: 4px;
@@ -108,6 +145,42 @@ body {
   line-height: 1.7;
   color: var(--ink);
   background: var(--paper);
+}
+
+/* 划选：墨字落在批改红的淡洗里 —— 与「红笔批过这一句」同感。
+   ⛔ 不用浏览器默认蓝（那会像另一个系统的残留）。 */
+::selection {
+  background: var(--mark-wash);
+  color: var(--ink);
+}
+
+/* 占位符：比正文弱两级，但**不是**浏览器默认灰蓝
+   （Safari 的默认占位色偏冷，与纸感打架）。
+   ⚠️ 用 --ink-2 而非 --ink-3：--ink-3 实算仅 3.13:1，
+      而占位符承载的是**用户还没填的内容提示**，属于必须能读的文字。 */
+::placeholder {
+  color: var(--ink-2);
+  opacity: 1;
+}
+
+/* 平滑滚动：尊重 reduced-motion（无偏好时才启用）。
+   锚点跳转（skip link / 面包屑）因此不会"瞬移"。 */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* 标题均衡换行：中文标题被拦腰折断是排版最常见的丑态。
+   text-wrap 是渐进增强，不支持的浏览器原样渲染，无副作用。 */
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
 }
 
 /* 焦点环全站可见 —— 键盘可达性基线（FE-D3 §5） */
@@ -226,6 +299,7 @@ code,
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: var(--s-2);
   min-height: 40px;
   padding: 0 var(--s-4);
   border-radius: var(--radius-ctl);
@@ -235,15 +309,33 @@ code,
   font-family: inherit;
   font-size: var(--t-body);
   cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    opacity var(--transition-fast);
 }
 
 .btn:hover:not(:disabled) {
   background: #2c3037;
 }
 
+/* 按压反馈：墨色再沉一档。
+   ⛔ 不用 transform: translateY —— 位移会让按钮里的文字
+      在慢速连点时发虚，改色已经足够表达"按到了"。 */
+.btn:active:not(:disabled) {
+  background: #101215;
+  transition-duration: var(--transition-press);
+}
+
 .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* 进行中：按钮转为"等待"光标，配合 aria-busy 由调用方设置 */
+.btn[aria-busy='true']:not(:disabled) {
+  cursor: progress;
 }
 
 .btn--quiet {
@@ -254,6 +346,11 @@ code,
 
 .btn--quiet:hover:not(:disabled) {
   background: var(--paper-sunk);
+}
+
+.btn--quiet:active:not(:disabled) {
+  background: var(--surface-hover);
+  transition-duration: var(--transition-press);
 }
 
 /* 触摸目标 ≥ 40px（学生可能用平板）*/
@@ -305,11 +402,27 @@ button {
   line-height: 1.6;
   padding: var(--s-2) var(--s-3);
   min-height: 40px;
-  border: 1px solid var(--rule-strong);
+  /* ⚠️ 用 --rule-input（3.3:1）而非 --rule-strong（1.59:1）：
+   *    输入框边界是「这是可以输入的」的唯一视觉线索，
+   *    低于 WCAG 1.4.11 的 3:1 时低视力用户看不到框在哪。 */
+  border: 1px solid var(--rule-input);
   border-radius: var(--radius-ctl);
   background: var(--paper);
   color: var(--ink);
   width: 100%;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+/* 悬停时边框深一档：暗示"这是可以输入的"，
+   比只在 focus 时才有反馈更跟手。
+   ⚠️ 用 --ink-2 而非 --ink-3：悬停边框是**唯一的边界提示**，
+      3.13:1 在低视力下仍看不出边界。 */
+.field input:hover:not(:focus):not(:disabled),
+.field textarea:hover:not(:focus):not(:disabled),
+.field select:hover:not(:focus):not(:disabled) {
+  border-color: var(--ink-2);
 }
 
 .field input:focus,
@@ -368,6 +481,61 @@ th {
   color: var(--settled);
 }
 
+/* ── 跳转链接（键盘用户的第一件武器）───────────────────
+ *
+ * 没有它，键盘用户每次进页面都要先 tab 过 16 个导航链接
+ * 才能碰到主内容 —— 这是全站可达性最便宜的一笔修复。
+ * ⛔ 不毁视觉：聚焦前完全不可见，聚焦时才落到左上角。 */
+.skip-link {
+  position: absolute;
+  left: var(--s-3);
+  top: var(--s-3);
+  z-index: 50;
+  padding: var(--s-2) var(--s-4);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: var(--t-note);
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: var(--radius-ctl);
+  transform: translateY(-200%);
+  transition: transform var(--transition-fast);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ── 工具类 ───────────────────────────────────────────── */
+
+/* 数字列：等宽数字 + 右对齐。
+   表格里的时间/计数用默认比例数字会左右跳动，
+   扫读时对不齐列 —— 这是数据表最便宜的质感修复。 */
+.num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* 空状态图标：比纯文字空态多一层"这里故意空着"的示意 */
+.empty__icon {
+  display: inline-flex;
+  color: var(--ink-3);
+  margin-bottom: var(--s-2);
+}
+
+.empty__icon .icon {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+}
+
+/* 表格行悬停：低对比过渡，不是高亮块 */
+tbody tr {
+  transition: background var(--transition-fast);
+}
+
 .chip {
   display: inline-block;
   font-size: var(--t-note);
@@ -375,6 +543,10 @@ th {
   border: 1px solid var(--rule-strong);
   border-radius: 10px;
   color: var(--ink-2);
+  transition:
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    background var(--transition-fast);
 }
 
 .chip--mark {

@@ -151,6 +151,56 @@ describe('P8 审批台（G8 接线）', () => {
     expect(screen.getByText(/已过期，不可批准/)).toBeTruthy()
   })
 
+  /*
+   * ⚠️ 过期项的**出路**：批准不可用（后端 409），但拒绝必须留着——
+   *    否则这条待办既不能批也不能驳，只能干等系统清理。
+   */
+  it('⛔ 过期审批仍可拒绝（只有「批准」被关闭）', async () => {
+    const user = userEvent.setup()
+    listApprovalsMock.mockResolvedValue({
+      items: [sampleApproval({ expired: true })],
+      nextCursor: null,
+    })
+    renderPage(<ApprovalsPage />)
+
+    await screen.findByText('已过期')
+    expect(screen.queryByRole('button', { name: '批准' })).toBeNull()
+    // 过期项必须给得出「拒绝」，并且点开就是填理由的表单
+    await user.click(screen.getByRole('button', { name: '拒绝' }))
+    expect(screen.getByRole('button', { name: '确认拒绝' })).toBeTruthy()
+    expect(screen.getByLabelText(/拒绝理由/)).toBeTruthy()
+  })
+
+  it('⚠️ 主操作比次操作更重：批准是主按钮，拒绝是静默按钮', async () => {
+    listApprovalsMock.mockResolvedValue({ items: [sampleApproval()], nextCursor: null })
+    renderPage(<ApprovalsPage />)
+
+    const approve = await screen.findByRole('button', { name: '批准' })
+    const deny = screen.getByRole('button', { name: '拒绝' })
+    expect(approve.classList.contains('btn')).toBe(true)
+    expect(deny.classList.contains('btn--quiet')).toBe(true)
+  })
+
+  it('⛔ 审批动作失败：列表不被替换，错误以行内提示出现', async () => {
+    const user = userEvent.setup()
+    decideApprovalMock.mockRejectedValue(new Error('审批服务暂时不可用'))
+    listApprovalsMock.mockResolvedValue({ items: [sampleApproval()], nextCursor: null })
+    renderPage(<ApprovalsPage />)
+
+    await user.click(await screen.findByRole('button', { name: '拒绝' }))
+    await user.type(screen.getByLabelText(/拒绝理由/), '参数越权')
+    await user.click(screen.getByRole('button', { name: '确认拒绝' }))
+
+    // ⚠️ 错误必须是**行内提示**，不是把整张列表换成错误框
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent ?? '').toContain('审批服务暂时不可用')
+    // 列表还在：参数摘要仍可见，用户刚填的理由也没丢
+    expect(screen.getByText('sha256:abc123')).toBeTruthy()
+    expect(
+      (screen.getByLabelText(/拒绝理由/) as HTMLInputElement).value,
+    ).toBe('参数越权')
+  })
+
   it('⛔ 拒绝必须先填理由才能提交', async () => {
     const user = userEvent.setup()
     listApprovalsMock.mockResolvedValue({ items: [sampleApproval()], nextCursor: null })
@@ -184,6 +234,23 @@ describe('P8 审批台（G8 接线）', () => {
 
     expect(await screen.findByText('没有等待审批的操作')).toBeTruthy()
     expect(screen.queryByText(/读取失败/)).toBeNull()
+  })
+
+  /*
+   * ⚠️ 共享列表底栏（ListFooter）：「加载更多」此前是裸 <button>，
+   *    渲染成浏览器默认灰底，看着像另一个系统的控件。
+   *    断言它用的是站内按钮类，且可访问名与文案不变。
+   */
+  it('⛔ 列表底栏的「加载更多」是站内按钮，不是浏览器默认灰', async () => {
+    listApprovalsMock.mockResolvedValue({
+      items: [sampleApproval()],
+      nextCursor: 'cursor-2',
+    })
+    renderPage(<ApprovalsPage />)
+
+    const more = await screen.findByRole('button', { name: '加载更多' })
+    expect(more.classList.contains('btn')).toBe(true)
+    expect(more.classList.contains('btn--quiet')).toBe(true)
   })
 })
 
@@ -256,6 +323,32 @@ describe('P9 UNKNOWN 处置台（G9 接线）', () => {
     })
   })
 
+  it('⛔ 处置选项的后果必须写在选择之前（选中即归档、不可撤销）', async () => {
+    const user = userEvent.setup()
+    listOperationsMock.mockResolvedValue({ items: [sampleOperation()], nextCursor: null })
+    renderPage(<ReconciliationPage />)
+
+    await user.click(await screen.findByRole('button', { name: '记录核对结论' }))
+    // ⚠️ 终态动作必须**先说后果**，否则用户以为只是「选了个值」
+    expect(screen.getByText(/选中即完成归档，不可撤销/)).toBeTruthy()
+    expect(screen.getAllByRole('radio')).toHaveLength(3)
+  })
+
+  it('⚠️ 处置选项整块可点：点说明文字等同于点该 radio', async () => {
+    const user = userEvent.setup()
+    listOperationsMock.mockResolvedValue({ items: [sampleOperation()], nextCursor: null })
+    renderPage(<ReconciliationPage />)
+
+    await user.click(await screen.findByRole('button', { name: '记录核对结论' }))
+    // 说明文字在 <label> 内部 → 点击即选中对应 radio（即刻归档）
+    await user.click(
+      screen.getByText('工具在真正生效前就失败了，可以安全地重新发起一次新的辅导。'),
+    )
+    await waitFor(() => {
+      expect(disposeOperationMock).toHaveBeenCalledWith('op-1', 'RECONCILED_ABSENT', null)
+    })
+  })
+
   it('⛔ 已处置的操作不再显示「记录核对结论」', async () => {
     listOperationsMock.mockResolvedValue({
       items: [sampleOperation({ manuallyDisposed: true, state: 'MANUAL_DISPOSED' })],
@@ -277,6 +370,38 @@ describe('P9 UNKNOWN 处置台（G9 接线）', () => {
     await screen.findByText('record_weakness')
     expect(screen.queryByText(/toolArguments/)).toBeNull()
     expect(screen.queryByText(/resultPayload/)).toBeNull()
+  })
+
+  /*
+   * ⚠️ 2026-10-24：处置失败**不得整页替换列表**。
+   *   此前 actionError 排在三元第一位，一次失败就把「待处置操作」
+   *   换成错误框，用户刚写的处置说明看不见也改不了。
+   */
+  it('⛔ 处置失败：列表不被替换，错误以行内提示出现', async () => {
+    const user = userEvent.setup()
+    disposeOperationMock.mockRejectedValue(new Error('归档服务暂时不可用'))
+    listOperationsMock.mockResolvedValue({ items: [sampleOperation()], nextCursor: null })
+    renderPage(<ReconciliationPage />)
+
+    await user.click(await screen.findByRole('button', { name: '记录核对结论' }))
+    await user.type(screen.getByLabelText(/处置说明/), '已核对：工具未生效')
+    await user.click(screen.getAllByRole('radio')[1] as HTMLElement)
+
+    // ⚠️ 错误必须是**行内提示**，不是把整张列表换成错误框
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent ?? '').toContain('归档服务暂时不可用')
+    // 列表还在：待处置条目与用户刚写的处置说明都没丢
+    expect(screen.getByText('record_weakness')).toBeTruthy()
+    expect((screen.getByLabelText(/处置说明/) as HTMLInputElement).value).toBe(
+      '已核对：工具未生效',
+    )
+    // 提示必须挂在列表**上方**（行内提示，不是列表末尾的补充说明）
+    const listNode = screen.getByText('record_weakness')
+    expect(
+      alert.compareDocumentPosition(listNode) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    // ⛔ 提示里不得出现任何重放入口（P9 红线）
+    expect(screen.queryByRole('button', { name: /重试|重放|retry/i })).toBeNull()
   })
 })
 
@@ -325,6 +450,16 @@ describe('P10 审计查询（G10 接线）', () => {
       const last = queryAuditMock.mock.calls.at(-1)?.[0] as { action?: string }
       expect(last?.action).toBe('PROFILE_READ')
     })
+  })
+
+  it('⛔ 审计表必须包在 .table-wrap 里（窄屏 UUID 不得撑破页面）', async () => {
+    queryAuditMock.mockResolvedValue({ items: [sampleAudit()], nextCursor: null })
+    renderPage(<AuditPage />)
+
+    await screen.findByText('approver-7')
+    const table = screen.getByRole('table')
+    // ⚠️ 明细列里的 UUID 有 min-content 宽度，不包 .table-wrap 会横向溢出整页
+    expect(table.parentElement?.classList.contains('table-wrap')).toBe(true)
   })
 
   it('⛔ 诚实空态 ≠ 故障', async () => {

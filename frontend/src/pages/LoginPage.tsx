@@ -17,6 +17,7 @@ import { login, ApiError } from '@/api/client'
 import type { NormalizedError } from '@/api/errors'
 import { useSession } from '@/auth/session'
 import { ErrorView } from '@/shared/ErrorView'
+import { usePageTitle } from '@/shared/usePageTitle'
 import { Icon } from '@/components/Icon'
 
 interface LocationState {
@@ -27,6 +28,8 @@ export function LoginPage(): JSX.Element {
   const { signIn, expiredNotice } = useSession()
   const navigate = useNavigate()
   const location = useLocation()
+  // 登录页不用 PageHead（无壳、无页头组件），标题在此单独同步
+  usePageTitle('登录')
 
   const [tenantId, setTenantId] = useState('')
   const [loginName, setLoginName] = useState('')
@@ -104,6 +107,16 @@ export function LoginPage(): JSX.Element {
         ) : null}
 
         <form onSubmit={(e) => void handleSubmit(e)} noValidate>
+          {/*
+            ⚠️ 2026-10-24：三个输入框不再随全局错误一起标 aria-invalid。
+                旧写法 `aria-invalid={error !== null}` 会在**任何**失败
+                （网络断了、服务端 500、凭据错误）时把三个框全判"非法"——
+                对屏幕阅读器用户等于同时断言"租户是错的、账号是错的、
+                密码也是错的"，而真相可能只是网线掉了。
+                后端归一化从不回 fieldErrors（见 api/errors.ts），
+                故这里只在真有字段级错误时才标（为将来到来保留正确语义），
+                全局失败由下方 ErrorView 的 role="alert" 播报。
+          */}
           <div className="field">
             <label htmlFor="tenantId">租户标识</label>
             <input
@@ -113,8 +126,9 @@ export function LoginPage(): JSX.Element {
               value={tenantId}
               onChange={(e) => setTenantId(e.target.value)}
               autoComplete="organization"
-              aria-invalid={error !== null}
+              aria-invalid={error?.fieldErrors['tenantId'] !== undefined}
               required
+              autoFocus
             />
           </div>
 
@@ -127,7 +141,7 @@ export function LoginPage(): JSX.Element {
               value={loginName}
               onChange={(e) => setLoginName(e.target.value)}
               autoComplete="username"
-              aria-invalid={error !== null}
+              aria-invalid={error?.fieldErrors['loginName'] !== undefined}
               required
             />
           </div>
@@ -141,14 +155,14 @@ export function LoginPage(): JSX.Element {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
-              aria-invalid={error !== null}
+              aria-invalid={error?.fieldErrors['password'] !== undefined}
               required
             />
           </div>
 
           {error !== null ? <ErrorView error={error} /> : null}
 
-          <button type="submit" className="btn btn--block" disabled={submitting}>
+          <button type="submit" className="btn btn--block" disabled={submitting} aria-busy={submitting}>
             {submitting ? '登录中…' : '登录'}
           </button>
         </form>

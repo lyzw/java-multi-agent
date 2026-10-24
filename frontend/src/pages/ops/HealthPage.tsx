@@ -86,17 +86,23 @@ export function HealthPage(): JSX.Element {
           <Loading label="正在检测" />
         ) : (
           <div className="status-line" style={{ gap: 'var(--s-4)', flexWrap: 'wrap' }}>
-            {health?.status === 'UP' ? (
-              <StatusPill tone="success">正常</StatusPill>
-            ) : (
-              <StatusPill tone="danger">异常</StatusPill>
-            )}
+            {/* ⚠️ 状态会从「正常」翻到「异常」，读屏用户听不到这个变化：
+                故把状态放进 live region，翻转即播报。 */}
+            <span role="status" aria-live="polite">
+              {health?.status === 'UP' ? (
+                <StatusPill tone="success">正常</StatusPill>
+              ) : (
+                <StatusPill tone="danger">异常</StatusPill>
+              )}
+            </span>
 
             <span className="muted">响应码</span>
             <code>{health?.httpStatus ?? '—'}</code>
 
             <span className="muted">检测时间</span>
-            <time className="muted">
+            {/* ⚠️ datetime 给机器可读值：toLocaleString 的本地化字符串
+                人能读，程序解析不了。 */}
+            <time className="muted" dateTime={health?.checkedAt}>
               {health !== undefined && health !== null
                 ? new Date(health.checkedAt).toLocaleString('zh-CN')
                 : '—'}
@@ -113,8 +119,8 @@ export function HealthPage(): JSX.Element {
             它不依赖健康探针。
           </p>
           <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
-            ⚠️ 后端把健康检查设成了<b>最简模式</b>（不暴露组件明细），本页<b>看不出是哪个组件异常</b>——
-            数据库、消息通道、磁盘都可能，需要查后端日志确认，
+            健康检查当前只返回总状态，不暴露组件明细，因此本页<b>看不出是哪个组件异常</b>——
+            数据库、消息通道、磁盘都有可能，需要时请结合后端日志确认，
             不要只看这一页就断定是数据库。
           </p>
         </Marked>

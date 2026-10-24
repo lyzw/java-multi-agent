@@ -36,6 +36,8 @@ export type IconName =
   | 'external'
   | 'info'
   | 'inbox'
+  | 'menu'
+  | 'close'
 
 const PATHS: Record<IconName, React.ReactNode> = {
   dashboard: (
@@ -194,6 +196,25 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
       <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+    </>
+  ),
+  /*
+   * 菜单与关闭（2026-10-24 移动端抽屉）：
+   *   移动端 390px 下侧栏曾是一条横向滚动条，16 个入口总宽 1918px，
+   *   首屏只露出 3.5 项且第 4 项被裁在半个字上。改为抽屉后需要
+   *   这两个状态图标：菜单＝抽屉收起，关闭＝抽屉打开。
+   */
+  menu: (
+    <>
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="18" x2="21" y2="18" />
+    </>
+  ),
+  close: (
+    <>
+      <line x1="5" y1="5" x2="19" y2="19" />
+      <line x1="19" y1="5" x2="5" y2="19" />
     </>
   ),
 }

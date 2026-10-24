@@ -304,9 +304,61 @@ describe('发起辅导页', () => {
     })
   })
 
-  it('提交按钮在字段未填齐时应禁用', () => {
+  /**
+   * ⚠️ 2026-10-24：断言从 `toBeDisabled()` **升级**为下面这一组。
+   *
+   * 为什么升级（不是削弱）：HTML disabled 的按钮**不可聚焦**——
+   * 点击的瞬间焦点掉回 body，键盘用户得从页首重新 Tab；
+   * 读屏用户更是走不到这个按钮，于是"还有 N 项必填未填"永远送不到耳朵里。
+   * 所以按钮改用 aria-disabled（可聚焦），防线则搬进提交处理里；
+   * 这里逐条盯住三件事：语义标记、**不发请求**、**焦点落到首个缺填字段**。
+   */
+  it('⛔ 字段未填齐时：按钮标 aria-disabled、不夺焦点、点击不发请求、焦点落到首个缺填字段', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
     renderWithProviders(<NewRunPage />)
-    expect(screen.getByRole('button', { name: '开始分析' })).toBeDisabled()
+
+    const submit = screen.getByRole('button', { name: '开始分析' })
+    // 语义由 ARIA 承担，且**不能**用原生 disabled（会夺走焦点）
+    expect(submit).toHaveAttribute('aria-disabled', 'true')
+    expect(submit).not.toBeDisabled()
+
+    // 缺项提示必须在上方且是 live region（role=status），否则读屏收不到
+    const missing = screen.getByText(/还有 4 项必填未填/)
+    expect(missing).toHaveAttribute('id', 'missing-fields')
+    expect(missing).toHaveAttribute('role', 'status')
+    expect(submit).toHaveAttribute('aria-describedby', 'missing-fields')
+
+    await userEvent.click(submit)
+
+    // 防线没丢：缺项时**不得**发出创建 Run 的请求
+    const createRunCalls = fetchSpy.mock.calls.filter(
+      (c) =>
+        typeof c[0] === 'string' &&
+        c[0].includes('/api/runs') &&
+        (c[1] as { method?: string } | undefined)?.method === 'POST',
+    )
+    expect(createRunCalls).toHaveLength(0)
+
+    // 焦点必须落到第一个未填字段（否则键盘用户不知道从哪改起）
+    expect(document.activeElement).toBe(screen.getByLabelText(/学生匿名编号/))
+  })
+
+  it('⛔ 必填字段必须对读屏可见（required + aria-required，星号只是视觉标记）', () => {
+    renderWithProviders(<NewRunPage />)
+
+    const input = screen.getByLabelText(/学生匿名编号/)
+    expect(input).toHaveAttribute('required')
+    expect(input).toHaveAttribute('aria-required', 'true')
+
+    const textarea = screen.getByLabelText(/题目内容/)
+    expect(textarea).toHaveAttribute('required')
+    expect(textarea).toHaveAttribute('aria-required', 'true')
+
+    // 星号是纯视觉标记：aria-hidden，语义由 required 承担（不得重复播报）
+    const star = document.querySelector('.req')
+    expect(star).not.toBeNull()
+    expect(star).toHaveAttribute('aria-hidden', 'true')
   })
 })
 
