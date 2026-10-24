@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent / Tool / Skill / MCP 统一管理后台系统设计方案</title>
+<style>
+  :root{
+    --bg:#f7f9fc; --panel:#ffffff; --ink:#1f2733; --muted:#5b6b7e;
+    --line:#e3e9f2; --brand:#2f6df6; --brand-soft:#eaf1ff;
+    --green:#1f9d57; --green-soft:#e7f6ee; --amber:#d98a00; --amber-soft:#fdf3e0;
+    --red:#d6453d; --red-soft:#fdeceb; --violet:#7a52d6; --violet-soft:#f1ebfd;
+    --teal:#0e8a8a; --teal-soft:#e3f6f6;
+    --radius:12px; --shadow:0 1px 3px rgba(16,32,64,.06),0 6px 24px rgba(16,32,64,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.7;font-size:15px;}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 80px;}
+  header.hero{background:linear-gradient(135deg,#2f6df6,#5b8def);color:#fff;border-radius:16px;padding:34px 36px;box-shadow:var(--shadow);}
+  header.hero h1{margin:0 0 8px;font-size:26px;letter-spacing:.5px}
+  header.hero p{margin:0;opacity:.92;font-size:14px}
+  .badges{margin-top:16px;display:flex;gap:10px;flex-wrap:wrap}
+  .badge{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);padding:5px 12px;border-radius:999px;font-size:12.5px}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:26px 28px;margin-top:22px;box-shadow:var(--shadow)}
+  h2{font-size:20px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+  h2 .idx{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;background:var(--brand-soft);color:var(--brand);font-size:15px;font-weight:700}
+  h3{font-size:16px;margin:22px 0 8px;color:#243044}
+  h4{font-size:14px;margin:16px 0 6px;color:#33425a}
+  p.lead{color:var(--muted);margin:6px 0 16px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:#f3f6fc;color:#33425a;font-weight:600}
+  tbody tr:nth-child(even){background:#fafcff}
+  code{background:#eef2f9;padding:1px 6px;border-radius:5px;font-size:12.5px;color:#27406b;font-family:"SFMono-Regular",Consolas,monospace}
+  .tag{display:inline-block;padding:2px 9px;border-radius:6px;font-size:12px;font-weight:600}
+  .t-blue{background:var(--brand-soft);color:var(--brand)}
+  .t-green{background:var(--green-soft);color:var(--green)}
+  .t-amber{background:var(--amber-soft);color:var(--amber)}
+  .t-red{background:var(--red-soft);color:var(--red)}
+  .t-violet{background:var(--violet-soft);color:var(--violet)}
+  .t-teal{background:var(--teal-soft);color:var(--teal)}
+  ul.tight{margin:8px 0;padding-left:22px}
+  ul.tight li{margin:5px 0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin:14px 0}
+  .card{border:1px solid var(--line);border-radius:10px;padding:16px 18px;background:#fbfdff}
+  .card h4{margin:0 0 6px;color:var(--brand)}
+  .note{border-left:4px solid var(--brand);background:var(--brand-soft);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:13.5px}
+  .warn{border-left-color:var(--amber);background:var(--amber-soft)}
+  .danger{border-left-color:var(--red);background:var(--red-soft)}
+  .nav-tree{font-family:"SFMono-Regular",Consolas,monospace;font-size:13px;background:#0f1726;color:#cdd9ee;padding:18px 20px;border-radius:10px;overflow:auto}
+  .nav-tree .dir{color:#7fb0ff}
+  .nav-tree .leaf{color:#a9e6c4}
+  .nav-tree .act{color:#ffd479}
+  .nav-tree .cmt{color:#6b7a90}
+  svg{width:100%;height:auto;display:block;background:#fff;border:1px solid var(--line);border-radius:10px;margin:14px 0}
+  .flow{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;margin:12px 0}
+  .step{flex:1;min-width:160px;border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:#fbfdff}
+  .step .n{display:inline-block;width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;text-align:center;font-size:12px;line-height:22px;margin-right:8px}
+  .step b{font-size:13.5px}
+  .step span{display:block;color:var(--muted);font-size:12.5px;margin-top:4px}
+  footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:30px}
+  .pill{font-size:11.5px;color:var(--muted);border:1px dashed var(--line);border-radius:6px;padding:1px 7px;margin-left:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Agent / Tool / Skill / MCP 统一管理后台系统设计方案</h1>
+  <p>在既有「统一配置与权限管控体系」领域模型之上，构建集中式管理控制台，覆盖四类实体的列表 / 详情 / 创建 / 编辑 / 删除 / 配置管理与运行监控。</p>
+  <div class="badges">
+    <span class="badge">单一事实源 · cap_*_def</span>
+    <span class="badge">平台级 / 租户级分层</span>
+    <span class="badge">双人复核 · fail-closed</span>
+    <span class="badge">复用 RLS 多租户</span>
+    <span class="badge">租户生命周期 / 配置覆盖 / 隔离校验</span>
+    <span class="badge">复用 ConfigPublish 工作流</span>
+  </div>
+</header>
+
+<section>
+  <h2><span class="idx">0</span>定位、目标与复用边界</h2>
+  <p class="lead">本方案不是重新设计领域模型，而是在已落地的 <code>cap_*</code> 配置域、发布审批工作流、<code>authzVersion</code> 强一致授权与 RLS 多租户之上，补齐「管理控制台」这一层（前端 + 管理 API），让管理员能够高效地集中维护与监控四类资源。</p>
+
+  <h3>0.1 设计原则</h3>
+  <ul class="tight">
+    <li><b>单一事实源</b>：所有实体以 <code>cap_tool_def / cap_skill_def / cap_mcp_server_def / cap_agent_def</code> 为权威；当前生效版本由 <code>cap_config_release.object_versions</code> 解析，绝不在前端维护「当前版本」副本。</li>
+    <li><b>作用域分层</b>：Tool / Skill / MCP 为<strong>平台级</strong>（无 <code>tenant_id</code>）；Agent 为<strong>租户级</strong>。平台级写操作不可经租户身份暴露（PLATFORM 作用域显式 403），由带外运维通道（BYPASSRLS）处理；控制台对平台级资源提供「申请 → 运维受理」或只读视图。</li>
+    <li><b>审批双复核</b>：高危变更（<code>trustTier=public</code> / <code>WRITE_EXTERNAL</code> 等）强制双人复核，<code>approver_id &lt;&gt; requester_id</code>。</li>
+    <li><b>收紧棘轮</b>：<code>overrides</code> / <code>paramPolicies</code> 只能收紧不能放宽；放宽即拒。前端需实时提示。</li>
+    <li><b>fail-closed</b>：依赖解析失败 / 版本服务不可用 → 拒绝，并产出可监控告警信号；前端必须给出明确错误状态。</li>
+  </ul>
+
+  <h3>0.2 直接复用的既有能力（避免重复造轮子）</h3>
+  <table>
+    <thead><tr><th>既有组件</th><th>位置 / 端点</th><th>在本控制台中的角色</th></tr></thead>
+    <tbody>
+      <tr><td>配置对象定义与版本化</td><td><code>cap_*_def</code> 表（复合主键 id,version）</td><td>四类实体的存储与不可变版本真源</td></tr>
+      <tr><td>发布 / 审批工作流</td><td><code>ConfigPublishWorkflowService</code> + <code>cap_config_publish_request</code></td><td>三步工作流（申请 → 审批 → 执行）后端</td></tr>
+      <tr><td>发布管理端点</td><td><code>CapConfigPublishController</code>（5 端点）</td><td>租户级 Agent 发布 / 回滚 / 生命周期迁移入口</td></tr>
+      <tr><td>权限解析与准入</td><td><code>PermissionResolver</code> / <code>InvocationValidator</code> / <code>ToolInvocationGate</code></td><td>闭包校验、运行期逐跳重验（控制台监控其信号）</td></tr>
+      <tr><td>强一致授权版本</td><td><code>cap_authz_version</code>（DB 自增）</td><td>撤权水位监控、DENY 溯源</td></tr>
+      <tr><td>审计账本</td><td><code>AuditPort</code> + ledger 维度</td><td>操作审计、双人复核留痕</td></tr>
+      <tr><td>多租户隔离</td><td>RLS（<code>tenant_id</code>）</td><td>控制台按租户维度过滤与隔离</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">本控制台的<strong>新增工作量集中在「展示、编排与交互」</strong>：列表/详情/表单/图、发布审批 UI、依赖与影响分析、运行监控面板、审计视图。领域规则（校验、闭包、指纹、CAS、双复核）全部复用既有服务，控制台只负责调用与呈现。</div>
+</section>
+
+<section>
+  <h2><span class="idx">1</span>总体架构</h2>
+  <p class="lead">三层结构：管理前端（React/TS 控制台）→ 管理 API 层（在 <code>agent-api</code> 新增 admin 包）→ 复用既有领域 / 应用 / 基础设施。两条作用域通道决定哪些写操作走 HTTP、哪些走运维通道。</p>
+
+  <svg viewBox="0 0 980 420" role="img" aria-label="总体架构图">
+    <defs>
+      <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#345"/></marker>
+      <style>
+        .bx{fill:#fff;stroke:#cbd6e6;stroke-width:1.4;rx:10}
+        .t{font:13px -apple-system,"PingFang SC",sans-serif;fill:#1f2733}
+        .th{font:bold 13px -apple-system,"PingFang SC",sans-serif;fill:#2f6df6}
+        .sub{font:11.5px -apple-system,sans-serif;fill:#5b6b7e}
+        .grp{fill:#f3f7ff;stroke:#d6e2f5;stroke-dasharray:5 4}
+      </style>
+    </defs>
+
+    <!-- left: frontend -->
+    <rect class="grp" x="14" y="20" width="250" height="380" rx="12"/>
+    <text class="th" x="28" y="44">① 管理控制台前端</text>
+    <text class="sub" x="28" y="62">React 18 + TS + Zustand</text>
+    <rect class="bx" x="28" y="74" width="222" height="46" rx="9"/><text class="t" x="40" y="94">概览仪表盘 Dashboard</text><text class="sub" x="40" y="112">全局统计 / 健康 / 待办</text>
+    <rect class="bx" x="28" y="128" width="222" height="46" rx="9"/><text class="t" x="40" y="148">实体管理（A/T/S/M）</text><text class="sub" x="40" y="166">列表/详情/表单/版本</text>
+    <rect class="bx" x="28" y="182" width="222" height="46" rx="9"/><text class="t" x="40" y="202">发布与审批中心</text><text class="sub" x="40" y="220">申请→审批→执行</text>
+    <rect class="bx" x="28" y="236" width="222" height="46" rx="9"/><text class="t" x="40" y="256">关系 / 依赖视图</text><text class="sub" x="40" y="274">能力闭包 + 影响分析</text>
+    <rect class="bx" x="28" y="290" width="222" height="46" rx="9"/><text class="t" x="40" y="310">运行监控与审计</text><text class="sub" x="40" y="328">authzVersion/连接/日志</text>
+    <rect class="bx" x="28" y="344" width="222" height="40" rx="9"/><text class="t" x="40" y="368">复用 auth/layouts/api</text>
+
+    <!-- middle: admin api -->
+    <rect class="grp" x="300" y="20" width="330" height="380" rx="12"/>
+    <text class="th" x="316" y="44">② 管理 API 层（agent-api / admin）</text>
+    <text class="sub" x="316" y="62">Spring Boot 4.1.1 · TENANT_ADMIN 鉴权</text>
+    <rect class="bx" x="316" y="74" width="298" height="40" rx="9"/><text class="t" x="328" y="99">AdminQueryController（新增）</text>
+    <rect class="bx" x="316" y="122" width="298" height="40" rx="9"/><text class="t" x="328" y="147">CapAdminService（新增编排）</text>
+    <rect class="bx" x="316" y="170" width="298" height="40" rx="9"/><text class="t" x="328" y="195">ConfigPublishController（复用·5端点）</text>
+    <rect class="bx" x="316" y="218" width="298" height="40" rx="9"/><text class="t" x="328" y="243">DependencyGraphService（新增）</text>
+    <rect class="bx" x="316" y="266" width="298" height="40" rx="9"/><text class="t" x="328" y="291">MonitoringViewService（新增·只读聚合）</text>
+    <rect class="bx" x="316" y="314" width="298" height="40" rx="9"/><text class="t" x="328" y="339">AuditQueryController（新增）</text>
+    <rect class="bx" x="316" y="362" width="298" height="34" rx="9"/><text class="t" x="328" y="384">作用域闸门：PLATFORM→403 / TENANT→放行</text>
+
+    <!-- right: domain -->
+    <rect class="grp" x="660" y="20" width="306" height="380" rx="12"/>
+    <text class="th" x="676" y="44">③ 领域 / 基础设施（复用）</text>
+    <text class="sub" x="676" y="62">cap_* 服务 · 发布工作流 · RLS</text>
+    <rect class="bx" x="676" y="74" width="282" height="40" rx="9"/><text class="t" x="688" y="99">Cap 配置服务 / 校验门禁</text>
+    <rect class="bx" x="676" y="122" width="282" height="40" rx="9"/><text class="t" x="688" y="147">ConfigPublishWorkflowService</text>
+    <rect class="bx" x="676" y="170" width="282" height="40" rx="9"/><text class="t" x="688" y="195">PermissionResolver / InvocationValidator</text>
+    <rect class="bx" x="676" y="218" width="282" height="40" rx="9"/><text class="t" x="688" y="243">authzVersion（DB 自增）</text>
+    <rect class="bx" x="676" y="266" width="282" height="40" rx="9"/><text class="t" x="688" y="291">cap_config_release（原子发布头）</text>
+    <rect class="bx" x="676" y="314" width="282" height="40" rx="9"/><text class="t" x="688" y="339">RLS / AuditPort（ledger）</text>
+    <rect class="bx" x="676" y="362" width="282" height="34" rx="9"/><text class="t" x="688" y="384">PG 18 + pgvector（study_rag/平台库）</text>
+
+    <!-- arrows -->
+    <line x1="250" y1="200" x2="298" y2="200" stroke="#345" stroke-width="1.6" marker-end="url(#arr)"/>
+    <line x1="630" y1="200" x2="658" y2="200" stroke="#345" stroke-width="1.6" marker-end="url(#arr)"/>
+    <text class="sub" x="430" y="194" text-anchor="middle">HTTPS · JWT(TENANT_ADMIN)</text>
+    <text class="sub" x="645" y="194" text-anchor="middle">领域调用</text>
+
+    <!-- scope note -->
+    <rect x="300" y="404" width="666" height="0" />
+  </svg>
+
+  <div class="note"><b>作用域通道关键约束（来自 P6R4 勘察）</b>：平台没有跨租户身份——<code>principal</code> 表是租户内的。因此 Tool/Skill/MCP（平台级）的写发布<strong>不能</strong>经租户 HTTP 端点暴露，否则任一租户管理员自授 <code>config:publish</code> 即可改全平台配置。控制台对平台级资源：表单提交 → 生成「平台运维受理申请」→ 由带外运维通道（BYPASSRLS 凭据）执行；控制台本身对平台级仅做只读 + 申请。Agent（租户级）的发布则经 <code>CapConfigPublishController</code> 正常放开。</div>
+</section>
+
+<section>
+  <h2><span class="idx">2</span>核心功能模块</h2>
+  <p class="lead">十一个模块，覆盖「租户管理 → 配置管理 → 运行监控」三条主线。租户管理为平台/运营级基础模块，前五个实体管理与后五个横切能力建立在其之上。</p>
+
+  <h3>2.0 租户管理模块（新增 · 平台/运营级）</h3>
+  <p class="lead">在 RLS 多租户地基上，为<strong>平台运营者</strong>提供跨租户的租户治理能力。注意：平台没有跨租户身份（<code>principal</code> 表为租户内），因此租户管理属于 <strong>PLATFORM 作用域</strong>，必须经带外运维通道 / 超级管理员角色，与租户内 <code>TENANT_ADMIN</code> 管理自身 Agent 的视角严格区分。</p>
+  <ul class="tight">
+    <li><b>租户生命周期</b>：列表 / 详情 / 创建（开通租户 + 默认 principal + RLS 策略生效）/ 编辑 / 启停（active / suspended / decommissioned）。</li>
+    <li><b>租户配置覆盖</b>：查看与编辑 <code>tenant_config_override</code>（沿用 <code>EffectiveConfigResolver</code> 的收紧棘轮语义），提供「平台默认 vs 租户覆盖」对比视图。</li>
+    <li><b>主体与角色</b>：列出租户内 <code>principal</code>、分配 / 回收角色（<code>TENANT_ADMIN</code> 等）、查看 <code>authz_version</code>；角色变更与 authz 版本自增同事务。</li>
+    <li><b>租户作用域资源视图</b>：该租户下的 Agent 定义、运行实例、资源用量（配额/计量，V2）。</li>
+    <li><b>隔离校验（RLS）</b>：提供「以租户身份运行校验查询」确认 RLS 隔离正确（须用非特权 <code>app_agent</code> 账号验证，呼应既有 RLS 铁律）。</li>
+    <li><b>租户级发布受理</b>：TENANT 作用域发布（仅 Agent 定义）的状态与受理视图（复用 <code>CapConfigPublishController</code>）。</li>
+  </ul>
+  <div class="note warn"><b>作用域红线</b>：租户管理写操作不可经普通租户 HTTP 端点暴露（否则任一租户管理员自授权限即可改全平台）。本模块在控制台中仅由超级管理员经运维/BYPASSRLS 通道访问，普通 <code>TENANT_ADMIN</code> 仅能看到并管理<strong>自身租户</strong>内的 Agent 与主体。</div>
+
+  <div class="grid">
+    <div class="card"><h4>M0 租户管理 <span class="t-amber">平台/运营级</span></h4>租户生命周期、配置覆盖、主体与角色、RLS 隔离校验、租户级资源与发布受理（超级管理员）。</div>
+    <div class="card"><h4>M1 概览仪表盘 <span class="t-blue">Dashboard</span></h4>全局实体数量、生命周期分布（DRAFT/VALIDATED/PUBLISHED/DEPRECATED）、待审批队列、运行健康概览、最近变更、活跃告警。</div>
+    <div class="card"><h4>M2 Agent 管理 <span class="t-violet">租户级</span></h4>CRUD、<code>enabledSkills</code> 选择、<code>overrides</code> 收紧、版本历史、发布/回滚、运行实例与能力闭包快照查看。</div>
+    <div class="card"><h4>M3 Tool 管理 <span class="t-teal">平台级</span></h4>CRUD、<code>kind</code>(native/mcp)、<code>riskLevel</code>、<code>input_schema</code> 编辑器、<code>paramPolicies</code>；kind=mcp 时绑定 McpServer+tool；引用关系视图。</div>
+    <div class="card"><h4>M4 Skill 管理 <span class="t-teal">平台级</span></h4>CRUD、<code>declaredTools</code>、<code>declaredMcp[{serverId,toolAllowlist}]</code>、<code>riskCeiling</code>、<code>paramPolicies</code>；依赖图谱与风险上限校验。</div>
+    <div class="card"><h4>M5 MCP 服务管理 <span class="t-teal">平台级</span></h4>CRUD、<code>transport</code>(http/sse)、endpoint/command（SSRF 白名单）、auth、<code>trustTier</code>、<code>exposedToolAllowlist</code>、连接测试、工具清单采集（manifest）。</div>
+    <div class="card"><h4>M6 发布与审批中心 <span class="t-amber">工作流</span></h4>三步工作流（申请→审批→执行）、双复核、作用域对象集合约束、回滚、生命周期迁移（DEPRECATED）、发布事件时间线。</div>
+    <div class="card"><h4>M7 关系与依赖视图 <span class="t-blue">图谱</span></h4>能力闭包可视化（Agent→Skill→{Tool,MCP}）、影响分析（改/删某对象影响哪些 Agent）、循环依赖检测（V2）。</div>
+    <div class="card"><h4>M8 运行监控与告警 <span class="t-red">监控</span></h4><code>authzVersion</code> 水位、能力快照一致性、MCP 连接健康、调用准入 DENY 告警、运行日志流。</div>
+    <div class="card"><h4>M9 权限与审计 <span class="t-green">审计</span></h4>操作日志（ledger 维度）、审计动作映射、角色矩阵、双人复核留痕、凭据引用（<code>credential_ref</code> 非明文）管理。</div>
+    <div class="card"><h4>M10 配置中心 <span class="t-violet">扩展</span></h4>全局参数、namespace 管理、凭据引用登记、MCP SSRF 允许范围维护（可选，V1 可后置）。</div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="idx">3</span>实体关系模型（ER）</h2>
+  <p class="lead">四类实体的核心属性（精简自 <code>cap_*_def</code> 表）与关系。关系解析遵循「引用仅存 id，有效版本由 <code>cap_config_release</code> 统一解析，禁止硬编码版本号」。</p>
+
+  <h3>3.1 实体与关键字段</h3>
+  <table>
+    <thead><tr><th>实体</th><th>作用域</th><th>关键字段</th><th>关系锚点</th></tr></thead>
+    <tbody>
+      <tr><td><b>Tool</b><br/><code>cap_tool_def</code></td><td>平台级</td><td><code>id, version, name, kind(native|mcp), risk_level, input_schema, param_policies, mcp_server_id?, mcp_tool_name?, config_fingerprint</code></td><td>kind=mcp → 指向 McpServer</td></tr>
+      <tr><td><b>Skill</b><br/><code>cap_skill_def</code></td><td>平台级</td><td><code>id, version, name, declared_tools[], declared_mcp[{serverId,toolAllowlist?}], risk_ceiling, param_policies, config_fingerprint</code></td><td>声明 Tool / MCP</td></tr>
+      <tr><td><b>MCP</b><br/><code>cap_mcp_server_def</code></td><td>平台级</td><td><code>id, version, transport(http|sse), endpoint/command, auth_kind, trust_tier, exposed_tool_allowlist, credential_ref, dynamic_discovery(=false)</code></td><td>暴露工具清单</td></tr>
+      <tr><td><b>Agent</b><br/><code>cap_agent_def</code></td><td>租户级<br/>(tenant_id)</td><td><code>agent_id, tenant_id, version, name, roles[], enabled_skills[], overrides{removeSkills?,removeTools?,lowerRiskCeiling?}, config_fingerprint</code></td><td>启用 Skill</td></tr>
+      <tr><td><b>Tenant</b><br/><code>tenant</code></td><td>平台级<br/>(根)</td><td><code>id, name, status(active|suspended|decommissioned)</code>；派生 <code>principal</code>(租户内, roles, login_name)、<code>tenant_config_override</code>、<code>cap_authz_version(tenant_id,principal_id)</code></td><td>隔离根 / 资源容器</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.2 关系与依赖方向</h3>
+  <svg viewBox="0 0 980 360" role="img" aria-label="实体关系图">
+    <defs>
+      <marker id="r1" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto"><path d="M0,0 L9,4 L0,8 z" fill="#2f6df6"/></marker>
+      <marker id="r2" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto"><path d="M0,0 L9,4 L0,8 z" fill="#7a52d6"/></marker>
+      <style>
+        .eb{fill:#fff;stroke:#b9c6db;stroke-width:1.6}
+        .et{font:bold 14px -apple-system,"PingFang SC",sans-serif}
+        .ef{font:11px "SFMono-Regular",Consolas,monospace;fill:#41506a}
+        .rl{font:11.5px -apple-system,sans-serif;fill:#33425a}
+      </style>
+    </defs>
+
+    <!-- MCP -->
+    <rect class="eb" x="40" y="40" width="200" height="78" rx="10"/>
+    <text class="et" x="58" y="64" fill="#0e8a8a">MCP Server</text>
+    <text class="ef" x="58" y="84">id, transport</text>
+    <text class="ef" x="58" y="102">exposedToolAllowlist</text>
+
+    <!-- Tool -->
+    <rect class="eb" x="40" y="200" width="200" height="90" rx="10"/>
+    <text class="et" x="58" y="224" fill="#0e8a8a">Tool</text>
+    <text class="ef" x="58" y="244">id, kind, riskLevel</text>
+    <text class="ef" x="58" y="262">input_schema</text>
+    <text class="ef" x="58" y="280">paramPolicies</text>
+
+    <!-- Skill -->
+    <rect class="eb" x="390" y="120" width="200" height="100" rx="10"/>
+    <text class="et" x="408" y="146" fill="#7a52d6">Skill</text>
+    <text class="ef" x="408" y="166">id, riskCeiling</text>
+    <text class="ef" x="408" y="184">declaredTools[]</text>
+    <text class="ef" x="408" y="202">declaredMcp[]</text>
+    <text class="ef" x="408" y="220">paramPolicies</text>
+
+    <!-- Agent -->
+    <rect class="eb" x="760" y="160" width="190" height="90" rx="10"/>
+    <text class="et" x="778" y="186" fill="#2f6df6">Agent</text>
+    <text class="ef" x="778" y="206">agent_id, tenant_id</text>
+    <text class="ef" x="778" y="224">enabledSkills[]</text>
+    <text class="ef" x="778" y="242">overrides</text>
+
+    <!-- Tenant -->
+    <rect class="eb" x="760" y="20" width="190" height="58" rx="10"/>
+    <text class="et" x="778" y="44" fill="#d98a00">Tenant</text>
+    <text class="ef" x="778" y="62">id, name, status</text>
+    <line x1="855" y1="78" x2="855" y2="158" stroke="#d98a00" stroke-width="1.8" marker-end="url(#r1)"/>
+    <text class="rl" x="862" y="124" fill="#d98a00">tenant_id (1:N)</text>
+
+    <!-- tenant-scoped objects note -->
+    <text class="rl" x="250" y="34">Tenant 1─* principal(roles,</text>
+    <text class="rl" x="250" y="50">  authz_version) /</text>
+    <text class="rl" x="250" y="66">  tenant_config_override /</text>
+    <text class="rl" x="250" y="82">  cap_authz_version</text>
+
+    <!-- relationships -->
+    <line x1="240" y1="80" x2="392" y2="150" stroke="#0e8a8a" stroke-width="1.8" marker-end="url(#r1)"/>
+    <text class="rl" x="300" y="108">kind=mcp 指向</text>
+
+    <line x1="240" y1="245" x2="388" y2="170" stroke="#7a52d6" stroke-width="1.8" marker-end="url(#r2)"/>
+    <text class="rl" x="300" y="215">declaredTools (M:N)</text>
+
+    <line x1="590" y1="160" x2="758" y2="190" stroke="#7a52d6" stroke-width="1.8" marker-end="url(#r2)"/>
+    <text class="rl" x="640" y="168">declaredMcp (M:N)</text>
+
+    <line x1="590" y1="190" x2="758" y2="205" stroke="#2f6df6" stroke-width="1.8" marker-end="url(#r1)"/>
+    <text class="rl" x="630" y="212">enabledSkills (M:N)</text>
+
+    <!-- closure arrow -->
+    <path d="M760,250 C620,330 380,330 150,300" fill="none" stroke="#d6453d" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#r1)"/>
+    <text class="rl" x="430" y="345" fill="#d6453d">能力禁闭方向：Tool/Skill/MCP ──▶ Agent（有效权限 = 闭包交集）</text>
+  </svg>
+
+  <h3>3.3 关系规则要点</h3>
+  <ul class="tight">
+    <li><b>单向能力禁闭</b>：Agent 只能启用已声明的 Skill；Skill 只能声明存在的 Tool / MCP；有效权限 = 沿链逐层取交集闭包（V1 禁止 <code>inherits</code> 嵌套抬权）。</li>
+    <li><b>引用完整性</b>：<code>declared_tools</code> 的每个 id 必须存在于 <code>cap_tool_def</code>；<code>declared_mcp[].serverId</code> 必须存在于 <code>cap_mcp_server_def</code>（T1 校验）。</li>
+    <li><b>版本化</b>：所有 <code>cap_*_def</code> 采用 <code>(id, version)</code> 复合主键不可变版本行；当前版本由 <code>cap_config_release.object_versions</code> 解析。</li>
+    <li><b>删除守卫</b>：被引用对象禁止物理删除 → 置 <code>DEPRECATED</code>（不可新引用），控制台删除操作前必须跑影响分析。</li>
+    <li><b>null vs [] 语义</b>：<code>exposedToolAllowlist</code> / <code>toolAllowlist</code> 的 <code>null</code>≠<code>[]</code>，前端须区分「未配置」与「显式空」，禁止对未规范化 <code>null</code> 直接做集合运算。</li>
+    <li><b>平台级 / 租户级</b>：Tool/Skill/MCP 无 <code>tenant_id</code>（平台级）；Agent 带 <code>tenant_id</code>（租户级，受 RLS）。</li>
+    <li><b>租户是隔离根与资源容器</b>：<code>tenant</code> 派生 <code>principal</code>（租户内，无跨租户身份）、<code>tenant_config_override</code>（仅收紧的平台配置覆盖）、<code>cap_authz_version</code>（按 <code>(tenant_id, principal_id)</code> 作用域）。所有租户级读写必须带 <code>tenant_id</code> 并经 RLS。</li>
+    <li><b>租户管理作用域</b>：开通 / 启停 / 配置覆盖 / 主体与角色属 PLATFORM 作用域（平台运营），与 <code>TENANT_ADMIN</code> 的「租户内管理」视角分离；控制台对前者仅由超级管理员经运维通道访问。</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="idx">4</span>页面结构与导航树</h2>
+  <p class="lead">控制台作为前端 <code>features/admin</code>（或 <code>pages/admin</code>）下的路由子树，复用既有 <code>layouts</code>（带侧边栏的管理布局）、<code>auth</code>（<code>TENANT_ADMIN</code> 守卫）与 <code>api</code> 层。以下为导航树与路由映射。</p>
+
+  <div class="nav-tree">
+<span class="dir">/console</span>                              <span class="cmt"># 管理布局（侧边栏 + 顶部租户切换）</span>
+├── <span class="leaf">/dashboard</span>                    <span class="cmt"># M1 概览仪表盘</span>
+├── <span class="dir">/tenants</span>                      <span class="cmt"># M0 租户管理（平台/运营级 · 超级管理员）</span>
+│   ├── <span class="leaf">/</span>                        <span class="act">租户列表</span>（状态/搜索/分页）
+│   ├── <span class="leaf">/new</span>                     <span class="act">开通租户</span>
+│   ├── <span class="leaf">/:tenantId</span>               <span class="act">租户详情</span>（概览/配置覆盖/主体/资源/发布）
+│   ├── <span class="leaf">/:tenantId/edit</span>          <span class="act">编辑 / 启停</span>
+│   ├── <span class="leaf">/:tenantId/overrides</span>      <span class="act">配置覆盖</span>（平台 vs 租户对比）
+│   ├── <span class="leaf">/:tenantId/principals</span>    <span class="act">主体与角色</span>
+│   └── <span class="leaf">/:tenantId/rls-verify</span>     <span class="act">RLS 隔离校验</span>
+├── <span class="dir">/agents</span>                        <span class="cmt"># M2 Agent（租户级）</span>
+│   ├── <span class="leaf">/</span>                          <span class="act">列表</span>（状态/搜索/分页）
+│   ├── <span class="leaf">/new</span>                       <span class="act">创建</span>
+│   ├── <span class="leaf">/:agentId</span>                  <span class="act">详情</span>（概览/配置JSON/版本/依赖/运行 选项卡）
+│   ├── <span class="leaf">/:agentId/edit</span>             <span class="act">编辑草稿</span>
+│   ├── <span class="leaf">/:agentId/versions</span>         <span class="act">版本历史</span> + 回滚
+│   └── <span class="leaf">/:agentId/runs</span>             <span class="act">运行实例</span> + 能力闭包快照
+├── <span class="dir">/tools</span>                         <span class="cmt"># M3 Tool（平台级·申请/只读为主）</span>
+│   ├── <span class="leaf">/</span>  <span class="leaf">/new</span>  <span class="leaf">/:id</span>  <span class="leaf">/:id/edit</span>  <span class="leaf">/:id/versions</span>  <span class="leaf">/:id/refs</span>
+├── <span class="dir">/skills</span>                        <span class="cmt"># M4 Skill（平台级）</span>
+│   └── （同 tools 结构 + 依赖图谱）
+├── <span class="dir">/mcp</span>                          <span class="cmt"># M5 MCP（平台级）</span>
+│   ├── <span class="leaf">/</span>  <span class="leaf">/new</span>  <span class="leaf">/:id</span>  <span class="leaf">/:id/edit</span>  <span class="leaf">/:id/test</span> <span class="cmt">连接测试</span>  <span class="leaf">/:id/manifest</span> <span class="cmt">工具采集</span>
+├── <span class="dir">/publish</span>                       <span class="cmt"># M6 发布与审批中心</span>
+│   ├── <span class="leaf">/requests</span>                   <span class="act">申请队列</span>（待审/已审/失败）
+│   ├── <span class="leaf">/requests/:rid</span>              <span class="act">审批</span>（通过/驳回 + 双复核校验）
+│   └── <span class="leaf">/releases</span>                   <span class="act">发布时间线</span> + 回滚
+├── <span class="dir">/dependencies</span>                  <span class="cmt"># M7 关系与依赖视图</span>
+│   ├── <span class="leaf">/graph</span>                      <span class="act">能力闭包图谱</span>
+│   └── <span class="leaf">/impact?entity=:id</span>         <span class="act">影响分析</span>
+├── <span class="dir">/monitoring</span>                    <span class="cmt"># M8 运行监控</span>
+│   ├── <span class="leaf">/health</span>                     <span class="act">健康总览</span>
+│   ├── <span class="leaf">/authz</span>                      <span class="act">authzVersion 水位</span>
+│   └── <span class="leaf">/alerts</span>                     <span class="act">告警与 DENY 日志</span>
+├── <span class="dir">/audit</span>                         <span class="cmt"># M9 权限与审计</span>
+│   └── <span class="leaf">/logs</span>                       <span class="act">操作日志</span>（ledger 维度筛选）
+└── <span class="dir">/settings</span>                       <span class="cmt"># M10 配置中心（扩展）</span>
+    ├── <span class="leaf">/globals</span>                    <span class="act">全局参数</span>
+    └── <span class="leaf">/credentials</span>                <span class="act">凭据引用</span>（credential_ref）
+  </div>
+
+  <h3>4.1 通用页面模式（四类实体复用）</h3>
+  <table>
+    <thead><tr><th>页面类型</th><th>组成</th><th>关键交互</th></tr></thead>
+    <tbody>
+      <tr><td>列表 List</td><td>表格 + 状态徽标 + 搜索/过滤 + 分页 + 批量操作</td><td>按生命周期状态/作用域过滤；行内「编辑/发布/弃用/查看依赖」</td></tr>
+      <tr><td>详情 Detail</td><td>选项卡：概览 / 配置 JSON / 版本 / 依赖 / 运行</td><td>查看指纹、当前版本来源、闭包、引用方</td></tr>
+      <tr><td>创建/编辑 Form</td><td>表单 + 引用多选（Skill/Tool/MCP）+ Schema 编辑器 + 校验提示</td><td>实时校验（闭包可达、riskCeiling 合法、收紧棘轮、allowlist 语义）</td></tr>
+      <tr><td>发布抽屉 Drawer</td><td>三步：校验 → 提交申请 → 双复核 → 执行</td><td>高危强制审批；作用域/对象集合约束；失败可见性</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="idx">5</span>关键交互流程</h2>
+  <p class="lead">以下流程全部复用既有后端服务，控制台负责编排与呈现。重点给出高价值流程的时序与步骤。</p>
+
+  <h3>5.1 创建并发布一个 Agent（租户级）</h3>
+  <div class="flow">
+    <div class="step"><span class="n">1</span><b>填写基本信息</b><span>name / description / roles（调用资格）</span></div>
+    <div class="step"><span class="n">2</span><b>选择 enabledSkills</b><span>多选平台 Skill；仅启用，非授权授予</span></div>
+    <div class="step"><span class="n">3</span><b>配置 overrides</b><span>仅收紧：removeSkills/removeTools/lowerRiskCeiling</span></div>
+    <div class="step"><span class="n">4</span><b>校验闭包</b><span>PermissionResolver 算有效闭包 + T1 守卫</span></div>
+    <div class="step"><span class="n">5</span><b>提交发布申请</b><span>生成 cap_config_publish_request</span></div>
+    <div class="step"><span class="n">6</span><b>双复核 + 执行</b><span>approver≠requester；写 release 指针</span></div>
+    <div class="step"><span class="n">7</span><b>新 Run 生效</b><span>创建 Run 时读当前 config_publish_seq</span></div>
+  </div>
+
+  <h3>5.2 发布审批时序（三步工作流）</h3>
+  <svg viewBox="0 0 980 220" role="img" aria-label="发布审批时序图">
+    <defs><marker id="sa" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#345"/></marker>
+      <style>.pa{font:12px -apple-system,"PingFang SC",sans-serif;fill:#1f2733}.pl{font:11px -apple-system,sans-serif;fill:#5b6b7e}</style></defs>
+    <!-- lanes -->
+    <rect x="20" y="20" width="160" height="170" rx="8" fill="#eaf1ff"/><text class="pa" x="34" y="40" fill="#2f6df6">管理员</text>
+    <rect x="220" y="20" width="180" height="170" rx="8" fill="#f3f7ff"/><text class="pa" x="234" y="40">控制台前端</text>
+    <rect x="430" y="20" width="200" height="170" rx="8" fill="#f3f7ff"/><text class="pa" x="444" y="40">AdminAPI / Workflow</text>
+    <rect x="660" y="20" width="200" height="170" rx="8" fill="#eef6ee"/><text class="pa" x="674" y="40" fill="#1f9d57">领域服务</text>
+    <!-- msgs -->
+    <line x1="100" y1="56" x2="220" y2="56" stroke="#345" marker-end="url(#sa)"/><text class="pl" x="120" y="50">填写并校验</text>
+    <line x1="400" y1="80" x2="430" y2="80" stroke="#345" marker-end="url(#sa)"/><text class="pl" x="250" y="74">提交申请(request)</text>
+    <line x1="630" y1="104" x2="660" y2="104" stroke="#345" marker-end="url(#sa)"/><text class="pl" x="450" y="98">validateForReview(门禁)</text>
+    <line x1="660" y1="128" x2="630" y2="128" stroke="#345" marker-end="url(#sa)"/><text class="pl" x="500" y="122">VALIDATED / REJECTED</text>
+    <line x1="400" y1="152" x2="430" y2="152" stroke="#345" marker-end="url(#sa)"/><text class="pl" x="250" y="146">审批(approve, 双复核)</text>
+    <line x1="630" y1="170" x2="660" y2="170" stroke="#345" marker-end="url(#sa)"/><text class="pl" x="450" y="164">apply→cap_config_release(原子)</text>
+  </svg>
+  <div class="note warn"><b>高危强制审批</b>：当发布对象含 <code>trustTier=public</code> 或 <code>risk_level=WRITE_EXTERNAL</code> 时，<code>ConfigPublishWorkflowService</code> 强制双人复核；前端在提交前即给出「需审批」提示与审批人选择。</div>
+
+  <h3>5.3 其余关键流程（要点）</h3>
+  <ul class="tight">
+    <li><b>绑定 / 解绑 Skill 与 Tool</b>：表单多选 → 实时计算闭包 → 校验 <code>riskCeiling</code> 不越权、<code>paramPolicies</code> 只收紧 → 落草稿 → 走发布。</li>
+    <li><b>新建 MCP 服务并采集工具清单</b>：填写 endpoint（SSRF 白名单校验）→ 连接测试 → <code>TransportMcpManifestPort.collect</code> 采集 manifest → 生成 <code>exposedToolAllowlist</code> 候选 → 保存草稿。</li>
+    <li><b>回滚发布</b>：选择历史 release → 创建新 release 指向旧 version（新当前指针），不覆盖历史；回滚不恢复已撤销的主体授权。</li>
+    <li><b>删除守卫</b>：触发删除 → <code>DependencyGraphService</code> 跑影响分析（哪些 Skill/Agent 引用）→ 若有引用 → 置 <code>DEPRECATED</code> 并提示，禁止物理删除；无引用且 DRAFT → 允许删除。</li>
+    <li><b>依赖影响分析</b>：改/删某 Tool → 反向查 <code>declared_tools</code> 命中 Skill → 再查 <code>enabled_skills</code> 命中 Agent，输出影响链路图。</li>
+    <li><b>运行监控：authzVersion bump</b>：角色变化/禁用/撤销 → <code>authzVersion</code> 单调自增（同事务）→ 在途 Run 检测到失效 → 新调用 DENY → 监控面板告警 + ledger 留痕。</li>
+  </ul>
+
+  <h3>5.4 租户生命周期与配置覆盖管理（平台/运营级）</h3>
+  <div class="flow">
+    <div class="step"><span class="n">1</span><b>开通租户</b><span>创建 tenant + 默认 principal + RLS 策略生效</span></div>
+    <div class="step"><span class="n">2</span><b>配置覆盖</b><span>tenant_config_override（仅收紧，棘轮）</span></div>
+    <div class="step"><span class="n">3</span><b>分配主体角色</b><span>TENANT_ADMIN 等；同事务 bump authz_version</span></div>
+    <div class="step"><span class="n">4</span><b>资源与发布视图</b><span>租户内 Agent / 运行 / TENANT 发布受理</span></div>
+    <div class="step"><span class="n">5</span><b>启停 / 注销</b><span>active / suspended / decommissioned</span></div>
+    <div class="step"><span class="n">6</span><b>隔离校验</b><span>以租户身份跑 RLS 校验查询</span></div>
+  </div>
+
+  <h3>5.5 租户隔离校验（RLS）</h3>
+  <ul class="tight">
+    <li>提供「以租户身份运行校验查询」入口：用非特权 <code>app_agent</code> 账号（设置 <code>app.tenant_id</code>）执行跨租户读取尝试，断言被 RLS 拦截。</li>
+    <li>校验项：① 租户 A 的主体无法读取租户 B 的 <code>cap_agent_def</code> / <code>principal</code> / <code>cap_authz_version</code>；② <code>set_config('app.tenant_id',?,true)</code> 必须在事务内（既有 RLS 铁律）；③ 配置覆盖仅影响本租户。</li>
+    <li>校验结果以报表呈现（通过/失败 + 失败样例），失败时阻断该租户的配置发布（fail-closed）。</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="idx">6</span>后端端点规划（复用 + 新增）</h2>
+  <p class="lead">以「只读查询」与「编排入口」为主，写发布全部复用既有 <code>ConfigPublishController</code> / <code>ConfigPublishWorkflowService</code>。</p>
+  <table>
+    <thead><tr><th>端点 / 服务</th><th>方法</th><th>说明</th><th>类型</th></tr></thead>
+    <tbody>
+      <tr><td><code>/api/admin/{agents|tools|skills|mcps}</code></td><td>GET</td><td>分页列表 + 过滤（状态/作用域/名称）</td><td>新增·只读</td></tr>
+      <tr><td><code>/api/admin/{type}/{id}</code></td><td>GET</td><td>详情 + 当前版本来源 + 指纹</td><td>新增·只读</td></tr>
+      <tr><td><code>/api/admin/{type}/{id}/versions</code></td><td>GET</td><td>版本历史（不可变版本行）</td><td>新增·只读</td></tr>
+      <tr><td><code>/api/admin/{type}/{id}/refs</code></td><td>GET</td><td>正向/反向引用（谁声明/谁被引用）</td><td>新增</td></tr>
+      <tr><td><code>/api/admin/dependencies/graph</code></td><td>GET</td><td>能力闭包图谱数据（节点+边）</td><td>新增</td></tr>
+      <tr><td><code>/api/admin/dependencies/impact?entity=</code></td><td>GET</td><td>影响分析链路</td><td>新增</td></tr>
+      <tr><td><code>/api/admin/mcp/{id}/test</code></td><td>POST</td><td>连接测试（SSRF 白名单）</td><td>新增</td></tr>
+      <tr><td><code>/api/admin/mcp/{id}/manifest</code></td><td>POST</td><td>采集工具清单（collect）</td><td>新增</td></tr>
+      <tr><td><code>/api/admin/monitoring/{health|authz|alerts}</code></td><td>GET</td><td>只读聚合监控指标</td><td>新增·只读</td></tr>
+      <tr><td><code>/api/admin/audit/logs</code></td><td>GET</td><td>操作日志（ledger 维度筛选）</td><td>新增·只读</td></tr>
+      <tr><td><code>/api/admin/tenants</code></td><td>GET</td><td>租户列表 + 状态过滤（平台/运营级）</td><td>新增·超级管理员</td></tr>
+      <tr><td><code>/api/admin/tenants/:id</code> / <code>/overrides</code> / <code>/principals</code></td><td>GET/PUT</td><td>租户详情、配置覆盖、主体与角色</td><td>新增·超级管理员</td></tr>
+      <tr><td><code>/api/admin/tenants/:id/rls-verify</code></td><td>POST</td><td>RLS 隔离校验（非特权账号）</td><td>新增</td></tr>
+      <tr><td><code>/api/config/publish/*</code></td><td>POST/GET</td><td>复用 CapConfigPublishController（5 端点）</td><td>复用</td></tr>
+      <tr><td><code>ConfigPublishWorkflowService</code></td><td>—</td><td>三步工作流 / 作用域闸门 / CAS</td><td>复用</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="idx">7</span>技术选型</h2>
+  <ul class="tight">
+    <li><b>前端</b>：React 18 + TypeScript + Zustand（状态）+ React Query（列表/详情数据获取与缓存）+ 现有组件库（Ant Design 或项目既有 UI）；关系图用 <code>react-flow</code>，图表用 ECharts/Recharts。全部落在 <code>frontend/src/features/admin</code> 下，复用 <code>layouts</code>、<code>auth</code>(TENANT_ADMIN 守卫)、<code>api</code>。</li>
+    <li><b>后端</b>：Spring Boot 4.1.1（与平台一致）；在 <code>agent-api</code> 新增 <code>admin</code> 包；管理查询服务复用既有的 cap 配置服务、发布工作流、审计与 RLS，不新增领域规则。</li>
+    <li><b>数据</b>：PostgreSQL 18（平台库），复用 <code>cap_*</code> 表与 <code>cap_config_release</code>；监控视图以只读聚合为主，不新增写表（除非 M10 凭据登记需要）。</li>
+    <li><b>鉴权</b>：复用 JWT + <code>Roles.TENANT_ADMIN</code>；平台级写发布保持带外运维通道，控制台不暴露 PLATFORM 作用域写入口。</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="idx">8</span>实施路线图（分阶段）</h2>
+  <table>
+    <thead><tr><th>阶段</th><th>范围</th><th>交付</th><th>估时</th></tr></thead>
+    <tbody>
+      <tr><td><span class="t-blue">P0 脚手架</span></td><td>管理布局、路由、TENANT_ADMIN 守卫、API client、设计令牌</td><td>可路由空壳 + 仪表盘骨架</td><td>~1 周</td></tr>
+      <tr><td><span class="t-amber">P0.5 租户管理</span></td><td>租户生命周期、配置覆盖、主体/角色、RLS 隔离校验（超级管理员通道）</td><td>M0 可用</td><td>~1.5 周</td></tr>
+      <tr><td><span class="t-violet">P1 实体管理</span></td><td>Agent/Tool/Skill/MCP 列表 + 详情 + 创建/编辑草稿 + 版本历史</td><td>四类实体完整 CRUD（草稿态）</td><td>~2 周</td></tr>
+      <tr><td><span class="t-amber">P2 发布审批</span></td><td>发布中心、三步工作流 UI、双复核、回滚、生命周期迁移</td><td>M6 可用</td><td>~1.5 周</td></tr>
+      <tr><td><span class="t-blue">P3 关系视图</span></td><td>能力闭包图谱、影响分析、删除守卫</td><td>M7 可用</td><td>~1 周</td></tr>
+      <tr><td><span class="t-red">P4 运行监控</span></td><td>authzVersion 水位、MCP 健康、DENY 告警、运行日志</td><td>M8 可用</td><td>~1.5 周</td></tr>
+      <tr><td><span class="t-green">P5 审计/配置</span></td><td>操作日志视图、角色矩阵、凭据引用登记</td><td>M9 + M10 基础</td><td>~1 周</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2><span class="idx">9</span>风险与注意（来自既有设计约束）</h2>
+  <ul class="tight">
+    <li class="danger"><b>平台级作用域不可经租户身份暴露</b>：Tool/Skill/MCP 写发布走运维通道，控制台仅对这些提供「申请（运维受理）」或只读；PLATFORM 作用域 HTTP 写入口显式 403。</li>
+    <li class="warn"><b>收紧棘轮</b>：<code>overrides</code> / <code>paramPolicies</code> 只能收紧不能放宽，前端须实时校验并提示，放宽即拒。</li>
+    <li><b>null vs []</b>：allowlist 字段的「未配置(null)」与「显式空([])」语义不同，前端须显式区分，禁止对未规范化 <code>null</code> 直接做集合运算。</li>
+    <li><b>fail-closed</b>：依赖解析失败 / <code>authzVersion</code> 服务不可用 → 拒绝并告警；前端须给出明确错误态，不可静默降级放行。</li>
+    <li><b>凭据安全</b>：<code>credential_ref</code> 仅存引用，永不入前端明文 / 日志 / 指纹。</li>
+    <li><b>V1 边界</b>：禁止 <code>inherits</code> 嵌套抬权、<code>dynamicDiscovery</code> 固定 false、仅 http/sse 传输——这些约束在表单层即禁用对应选项。</li>
+    <li class="danger"><b>租户管理作用域红线</b>：平台没有跨租户身份，租户管理（含开通、配置覆盖、主体/角色、启停）属 PLATFORM 作用域，必须经超级管理员 / 带外运维（BYPASSRLS）通道；普通 <code>TENANT_ADMIN</code> 仅能管理自身租户内的 Agent 与主体，控制台不得向其暴露跨租户写入口。</li>
+    <li class="warn"><b>租户配置覆盖仅收紧</b>：<code>tenant_config_override</code> 继承平台配置并仅可进一步收紧（棘轮），放宽即拒；主体角色变更须与 <code>authz_version</code> 自增在同一事务提交，否则出现撤权竞态。</li>
+    <li><b>RLS 隔离校验必须用非特权账号</b>：验证隔离时须用 <code>app_agent</code> 而非特权账号，且 <code>set_config('app.tenant_id',?,true)</code> 必须在事务内，否则校验结论不可信。</li>
+  </ul>
+
+  <div class="note">本方案与既有文档的关系：领域模型与权限语义以《统一配置与权限管控体系》（<code>docs/Agent - Skill- Tool -MCP 统一配置与权限管控体系.md</code>）与《06 配置数据模型与生命周期设计》《P6R4 配置发布管理端点》为唯一契约；本方案仅补齐「管理控制台」展示与编排层，不重写任何安全决策语义。</div>
+</section>
+
+<footer>
+  管理后台系统设计方案 · 基于既有 cap_* 领域模型与 ConfigPublish 工作流 · 复用 RLS / authzVersion / 双复核 ·
+  生成于 2026-10-24
+</footer>
+
+</div>
+</body>
+</html>
