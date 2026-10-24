@@ -17,8 +17,11 @@ import cn.studykid.multiagent.core.cap.AuthorizationDecision;
 import cn.studykid.multiagent.core.cap.DecisionAuditCoverage;
 import cn.studykid.multiagent.core.cap.DecisionAuditEntry;
 import cn.studykid.multiagent.core.cap.ReasonCode;
+import cn.studykid.multiagent.core.monitoring.DenySeverity;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.monitoring.NoopAlertWebhook;
 import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
+import cn.studykid.multiagent.ports.monitoring.AlertWebhookPort;
 import cn.studykid.multiagent.ports.persistence.DecisionAuditPort;
 
 /**
@@ -85,8 +88,20 @@ public class JdbcDecisionAuditRepository implements DecisionAuditPort {
 
     private final DataSource dataSource;
 
+    /**
+     * 严重拒绝告警外发通道（P5 · 最小实现）。⚠️ best-effort：
+     * 外发失败不影响审计写入；默认 {@link NoopAlertWebhook}（关闭）。
+     */
+    private final AlertWebhookPort alertWebhook;
+
     public JdbcDecisionAuditRepository(@NonNull DataSource dataSource) {
+        this(dataSource, new NoopAlertWebhook());
+    }
+
+    public JdbcDecisionAuditRepository(@NonNull DataSource dataSource,
+                                       @NonNull AlertWebhookPort alertWebhook) {
         this.dataSource = dataSource;
+        this.alertWebhook = alertWebhook;
     }
 
     @Override
@@ -120,6 +135,33 @@ public class JdbcDecisionAuditRepository implements DecisionAuditPort {
                     }
                     return null;
                 });
+        maybeFireCriticalDenyAlert(entry);
+    }
+
+    /**
+     * 严重拒绝 → best-effort 外发（P5 告警通道）。
+     *
+     * <p>⚠️ <b>在事务提交之后才外发</b>：本方法在 {@code inTransaction}
+     * 返回后才触发，绝不持有连接等网络 —— 外发的观测副产品不能反压写入。
+     * 极端时序（外发后事务回滚）可接受：告警只是加速「有人知道」，
+     * 权威事实以审计表为准。
+     *
+     * <p>⚠️ tenantId 为 {@code null} 的行（理论上有 NOT NULL 约束兜底）
+     * 不外发 —— 没有租户上下文的告警无法路由，宁缺勿滥。
+     */
+    private void maybeFireCriticalDenyAlert(@NonNull DecisionAuditEntry entry) {
+        if (entry.tenantId() == null || !isCriticalDeny(entry)) {
+            return;
+        }
+        alertWebhook.onCriticalDeny(new AlertWebhookPort.CriticalDenyAlert(
+                entry.tenantId(), entry.principalId(), entry.toolId(),
+                entry.reasonCode().name(), entry.invocationId(), entry.createdAt()));
+    }
+
+    /** 触发判据（包私有，供测试）：DENY 且原因码定档 CRITICAL。 */
+    static boolean isCriticalDeny(@NonNull DecisionAuditEntry entry) {
+        return entry.authzDecision() == AuthorizationDecision.Authorization.DENY
+                && DenySeverity.of(entry.reasonCode()) == DenySeverity.CRITICAL;
     }
 
     @Override

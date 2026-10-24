@@ -220,8 +220,9 @@ public class CapabilityCatalogController {
     /**
      * MCP Server 目录视图。
      *
-     * <p>⚠️ <b>刻意不包含 {@code credentialRef}</b>：该字段只是凭据库定位符，
+     * <p>⚠️ <b>刻意不包含 {@code credentialRef} 取值</b>：该字段只是凭据库定位符，
      * 凭据材料永不入响应（§4.2 / §6.4）；目录页只呈现连接形态与风险画像。
+     * 仅暴露 {@code hasCredentialRef} 布尔，告知「是否存在凭据引用」而不回显任何定位符。
      */
     public record McpResponse(
             @NonNull String serverId,
@@ -236,14 +237,16 @@ public class CapabilityCatalogController {
             @NonNull String configFingerprint,
             int schemaVersion,
             @Nullable Instant createdAt,
-            @Nullable Instant publishedAt
+            @Nullable Instant publishedAt,
+            boolean hasCredentialRef
     ) {
         static McpResponse of(CapMcpServerDef def) {
             return new McpResponse(
                     def.id(), def.version(), def.transport().name(), def.endpoint(),
                     def.authKind().name(), def.trustTier().name(), def.exposedToolAllowlist(),
                     def.connectionRisk().name(), def.dynamicDiscovery(), def.configFingerprint(),
-                    def.schemaVersion(), def.createdAt(), def.publishedAt());
+                    def.schemaVersion(), def.createdAt(), def.publishedAt(),
+                    def.credentialRef() != null);
         }
     }
 }

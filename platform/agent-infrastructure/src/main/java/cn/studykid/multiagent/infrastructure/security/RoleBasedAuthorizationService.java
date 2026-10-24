@@ -73,7 +73,12 @@ public class RoleBasedAuthorizationService implements AuthorizationService {
             //    且画像是学生维度数据，给服务账号开这个口子会扩大数据可见面。
             Roles.WORKER, Set.of(
                     Actions.RUN_READ, Actions.RUN_CANCEL, Actions.TOOL_INVOKE,
-                    Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ)
+                    Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ),
+            // ⚠️ **平台级管理员（PLATFORM_ADMIN）**：
+            //    平台/运维级治理角色，可覆盖全部动作（含平台级端点）。
+            //    默认不授予任何主体 —— 仅在 out-of-band 授权通道（bootstrap）授予后才生效，
+            //    应用层平台级端点仍以 {@code hasRole("PLATFORM_ADMIN")} 直判（见 AdminTenantController）。
+            Roles.PLATFORM_ADMIN, Actions.all()
     );
 
     /** 租户+主体 → 当前授权版本。撤销时递增。 */

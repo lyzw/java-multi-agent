@@ -798,9 +798,18 @@ public class ApplicationConfiguration {
     /** 四字段决策日志仓储（P5-T6 · §5.1 / 08 §7）。 */
     @Bean
     public cn.studykid.multiagent.ports.persistence.DecisionAuditPort decisionAuditPort(
-            DataSource dataSource) {
+            DataSource dataSource,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.alerts.webhook-url:}") String alertWebhookUrl) {
+        // ⚠️ 告警外发默认关闭（空白 url → Noop）：不配置目标就不外发，
+        //    避免「悄悄把审计内容发给一个没人审过的地址」。
+        cn.studykid.multiagent.ports.monitoring.AlertWebhookPort webhook =
+                (alertWebhookUrl == null || alertWebhookUrl.isBlank())
+                        ? new cn.studykid.multiagent.infrastructure.monitoring.NoopAlertWebhook()
+                        : new cn.studykid.multiagent.infrastructure.monitoring.HttpAlertWebhook(
+                                alertWebhookUrl);
         return new cn.studykid.multiagent.infrastructure.persistence.cap
-                .JdbcDecisionAuditRepository(dataSource);
+                .JdbcDecisionAuditRepository(dataSource, webhook);
     }
 
     /** 生命周期状态迁移仓储（P5-T4 · §6.6 / 06 §3）。 */
@@ -1097,6 +1106,26 @@ public class ApplicationConfiguration {
             java.time.Clock clock) {
         return new cn.studykid.multiagent.application.monitoring.MonitoringViewService(
                 authzVersions, decisionAudit, clock);
+    }
+
+    /**
+     * 仪表盘概览聚合服务（管理面 · M1 概览 · GET /api/admin/dashboard）。
+     *
+     * <p>⚠️ <b>不做 fail-closed</b>：仪表盘是导航入口而非决策依据，各计数源独立 try/catch，
+     * 个别源不可用只让该项记 0，不整页 503（与 {@link #monitoringViewService} 的严格 fail-closed 不同）。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.monitoring.DashboardViewService
+            dashboardViewService(
+            cn.studykid.multiagent.ports.persistence.AdminTenantPort tenantPort,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefPort,
+            cn.studykid.multiagent.ports.persistence.CapSkillDefPort skillDefPort,
+            cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort mcpDefPort,
+            cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort publishPort,
+            cn.studykid.multiagent.ports.persistence.DecisionAuditPort decisionAudit,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.monitoring.DashboardViewService(
+                tenantPort, toolDefPort, skillDefPort, mcpDefPort, publishPort, decisionAudit, clock);
     }
 
     /**

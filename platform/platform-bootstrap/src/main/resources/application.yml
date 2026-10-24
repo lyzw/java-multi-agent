@@ -298,7 +298,18 @@ auth:
     lock-duration-minutes: "15"
     # 允许的角色白名单。⚠️ 与 Roles 权限矩阵保持一致，
     # 未登记的角色在签发与校验时均被丢弃
-    known-roles: "STUDENT,PARENT,TEACHER,TENANT_ADMIN,VIEWER,APPROVER,AGENT_AUTHOR,WORKER"
+    # ⚠️ PLATFORM_ADMIN：平台/运维级治理角色，默认不授予任何主体；
+    #    仅经 out-of-band 运维通道（deploy/sql/platform/04_platform_admin_grant.sql）
+    #    写入 principal_role 权威表后生效。
+    known-roles: "STUDENT,PARENT,TEACHER,TENANT_ADMIN,VIEWER,APPROVER,AGENT_AUTHOR,WORKER,PLATFORM_ADMIN"
+
+  # ── 告警外发（P5 · 真实告警分发通道最小实现）────────────────────
+  alerts:
+    # ⚠️ 默认关闭（空白 = NoopAlertWebhook）：不配置目标就不外发，
+    #    避免「悄悄把审计内容发给一个没人审过的地址」。
+    #    配置后仅 DENY 且定档 CRITICAL 的拒绝才 best-effort POST 外发，
+    #    载荷只含定位字段（租户/主体/工具/原因码/调用标识/时刻），无凭据无参数。
+    webhook-url: "${AGENT_ALERT_WEBHOOK_URL:}"
 
 
 # ── 灾备（P4 演练后确认）──────────────────────────────────────────
