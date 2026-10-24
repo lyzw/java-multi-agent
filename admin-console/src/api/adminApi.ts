@@ -39,6 +39,7 @@ import type {
   ImpactEntityType,
   MonitoringHealth,
   DenyAlert,
+  AuditLogEntry,
 } from '@/api/types'
 
 /** POST /api/auth/token —— 无需鉴权 */
@@ -301,7 +302,6 @@ export function getDependencyImpact(
 }
 
 /* ── P4 运行监控（只读） ── */
-
 /**
  * GET /api/admin/monitoring/health —— 租户运行健康快照（聚合视图）
  *
@@ -337,4 +337,30 @@ export function getMonitoringDenies(params?: {
     `/admin/monitoring/denies${q ? `?${q}` : ''}`,
     { method: 'GET' },
   )
+}
+
+/* ── P5 审计日志（只读，复用既有 /api/audit） ──
+   ⚠️ audit_record 有 forbid_audit_mutation 触发器：无任何写/删路径。
+   查询行为本身由后端 recordAccess 留痕（fail-open）。 */
+
+/** GET /api/audit —— 审计流水（游标分页，ledger 维度筛选） */
+export function getAuditLogs(params?: {
+  action?: string
+  resourceType?: string
+  resourceId?: string
+  from?: string
+  to?: string
+  limit?: number
+  cursor?: string
+}): Promise<CursorPage<AuditLogEntry>> {
+  const qs = new URLSearchParams()
+  if (params?.action) qs.set('action', params.action)
+  if (params?.resourceType) qs.set('resourceType', params.resourceType)
+  if (params?.resourceId) qs.set('resourceId', params.resourceId)
+  if (params?.from) qs.set('from', params.from)
+  if (params?.to) qs.set('to', params.to)
+  if (params?.limit) qs.set('limit', String(params.limit))
+  if (params?.cursor) qs.set('cursor', params.cursor)
+  const q = qs.toString()
+  return request<CursorPage<AuditLogEntry>>(`/audit${q ? `?${q}` : ''}`, { method: 'GET' })
 }

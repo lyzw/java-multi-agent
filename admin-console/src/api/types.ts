@@ -195,6 +195,8 @@ export interface McpCatalogItem {
   schemaVersion: number
   createdAt: string | null
   publishedAt: string | null
+  /** ⚠️ 仅布尔标识「是否登记了凭据引用」；定位符与凭据材料永不入响应（P5-T3） */
+  hasCredentialRef: boolean
 }
 
 /* ── P2 发布审批（复用既有 /api/cap/config/publishes 三步工作流） ──
@@ -424,4 +426,24 @@ export interface MonitoringHealth {
   infoCount: number
   coverage: DecisionAuditCoverage
   observedAt: string
+}
+
+/* ── P5 审计与配置 ── */
+
+/**
+ * 审计条目（GET /api/audit · AuditEntryResponse）。
+ *
+ * ⚠️ 后端不返回 tenantId（RLS 已按调用方租户过滤）；audit_record 有
+ * forbid_audit_mutation 触发器，本类型仅供展示，无任何写回路径。
+ */
+export interface AuditLogEntry {
+  auditId: string
+  actorId: string
+  action: string
+  resourceType: string
+  resourceId: string | null
+  createdAt: string
+  correlationId: string | null
+  /** 事件细节（后端 Map<String,Object>，键集随 action 变化，原样呈现） */
+  detail: Record<string, unknown>
 }

@@ -20,13 +20,10 @@ import { DependencyGraphPage } from '@/pages/dependencies/DependencyGraphPage'
 import { ImpactAnalysisPage } from '@/pages/dependencies/ImpactAnalysisPage'
 import { MonitoringHealthPage } from '@/pages/monitoring/MonitoringHealthPage'
 import { MonitoringDeniesPage } from '@/pages/monitoring/MonitoringDeniesPage'
+import { AuditLogsPage } from '@/pages/audit/AuditLogsPage'
+import { PrincipalMatrixPage } from '@/pages/PrincipalMatrixPage'
+import { SettingsPage } from '@/pages/settings/SettingsPage'
 import { APP_BASE_PATH, PLATFORM_SCOPE_ROLES, TENANT_SCOPE_ROLES } from '@/config/constants'
-import { NAV_NODES } from '@/layout/navConfig'
-
-function placeholderFor(key: string) {
-  const node = NAV_NODES.find((n) => n.key === key)
-  return <PlaceholderPage node={node} />
-}
 
 export const router = createBrowserRouter(
   [
@@ -162,13 +159,30 @@ export const router = createBrowserRouter(
           ),
         },
         {
+          // 审计日志（P5）：ledger 维度筛选 + 详情抽屉（只读，查询本身留痕）
           path: 'audit',
-          element: <RequireRole roles={TENANT_SCOPE_ROLES}>{placeholderFor('audit')}</RequireRole>,
+          element: (
+            <RequireRole roles={TENANT_SCOPE_ROLES}>
+              <AuditLogsPage />
+            </RequireRole>
+          ),
         },
         {
+          // 角色矩阵（P5）：主体-角色与授权版本水位（只读）
+          path: 'roles',
+          element: (
+            <RequireRole roles={TENANT_SCOPE_ROLES}>
+              <PrincipalMatrixPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 配置中心（P5）：凭据引用（仅布尔标识）+ 全局参数（占位，平台级）
           path: 'settings',
           element: (
-            <RequireRole roles={PLATFORM_SCOPE_ROLES}>{placeholderFor('settings')}</RequireRole>
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <SettingsPage />
+            </RequireRole>
           ),
         },
         { path: '*', element: <PlaceholderPage node={undefined} /> },

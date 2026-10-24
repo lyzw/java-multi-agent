@@ -11,6 +11,7 @@ import {
   MonitorOutlined,
   FileProtectOutlined,
   SettingOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 import { PLATFORM_SCOPE_ROLES, TENANT_SCOPE_ROLES, type Role } from '@/config/constants'
 
@@ -115,6 +116,15 @@ export const NAV_NODES: NavNode[] = [
     icon: <FileProtectOutlined />,
     requiredRoles: TENANT_SCOPE_ROLES,
     description: '操作日志 ledger 维度筛选与详情、双人复核留痕。',
+    phase: 'P5',
+  },
+  {
+    key: 'roles',
+    label: '角色矩阵',
+    path: '/roles',
+    icon: <TeamOutlined />,
+    requiredRoles: TENANT_SCOPE_ROLES,
+    description: '主体-角色矩阵与授权版本水位（只读）：谁有什么角色、谁被撤权过；授权变更走带外运维通道。',
     phase: 'P5',
   },
   {
