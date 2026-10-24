@@ -55,6 +55,26 @@ public record SourceRegistration(
         if (!hasIsbn && !hasDoi) {
             throw new IllegalArgumentException("ISBN 与 DOI 至少提供一个（否则无法进入校验流程）");
         }
+        // ⚠️⚠️ 内容校验和必须是 64 位十六进制（SHA-256）。
+        //
+        //    ⚠️ **为什么在领域层校验而不是只靠 DTO 的 @Pattern**：
+        //    批量登记端点**刻意不级联 @Valid**（否则任一行的约束失败会让
+        //    整批返回 400，与「逐条独立成败」的治理语义冲突）。
+        //    若此处不校验，非法 contentHash 会一路进库 ——
+        //    而 {@code rag_source.content_hash} 是 {@code CHAR(64)}：
+        //    **短值会被 PostgreSQL 静默空格填充**（不报错），
+        //    该列的用途恰恰是「检测语料被静默替换」，
+        //    填充后的哈希失去校验能力（且与真实摘要比较时永不相等）。
+        //
+        //    ⚠️ 单条登记路径由 DTO 的 @Pattern 拦截（400），
+        //    批量路径由本处拦截（该行失败、其余行照常）——
+        //    两条路径都拒绝非法哈希，只是报告粒度不同（各自符合其语义）。
+        if (contentHash != null && !contentHash.isBlank()
+                && !contentHash.matches("^[0-9a-fA-F]{64}$")) {
+            throw new IllegalArgumentException(
+                    "contentHash 必须是 64 位十六进制 SHA-256（实际长度 "
+                            + contentHash.length() + "）");
+        }
     }
 
     /**

@@ -9,6 +9,7 @@ import java.util.function.Function;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -70,9 +71,18 @@ class RetrievalRepositoryIT {
     private static final String C2 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2";
     private static final String C3 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3";
     private static final String C4 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb4";
+    // 载体级撤回夹具（来源 VERIFIED，但载体被单独下架）
+    private static final String S5 = "cccccccc-cccc-cccc-cccc-ccccccccccc1";
+    private static final String E5 = "cccccccc-cccc-cccc-cccc-ccccccccccc2";
+    private static final String D5 = "cccccccc-cccc-cccc-cccc-ccccccccccc3";
+    private static final String C6 = "cccccccc-cccc-cccc-cccc-ccccccccccc4";
 
     private static final EditionCoordinate E_PEP = new EditionCoordinate(
             Subject.MATH, GradeBand.GRADE_8, Term.FIRST, Publisher.PEP, "2024修订");
+
+    /** 载体级撤回夹具所用的版本坐标（北师大版，与人教版错开以避开 rag_edition_unique）。 */
+    private static final EditionCoordinate E_BSED = new EditionCoordinate(
+            Subject.MATH, GradeBand.GRADE_8, Term.FIRST, Publisher.BEISHIDA, "2024修订");
 
     private JdbcTemplate jdbcTemplate;
     private TransactionTemplate transactionTemplate;
@@ -245,6 +255,43 @@ class RetrievalRepositoryIT {
     }
 
     // ---------------------------------------------------------------------
+    // 载体级撤回：检索侧必须真的过滤（修复前的核心缺口）
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("⛔ 载体已被单独撤回时，其片段不得被召回（修复前撤回动作在检索侧完全无效）")
+    void withdrawnCarrierIsNotRetrieved() {
+        seedWithdrawnCarrier();
+
+        // ① 检索通道：不得召回
+        RetrievalRequest req = new RetrievalRequest(
+                "二次函数的顶点", RetrievalMode.EXPLAIN, EditionScope.strict(E_BSED),
+                null, null, null, 10);
+        List<String> searched = searchAs(T, req).stream().map(s -> s.chunk().id()).toList();
+        assertFalse(searched.contains(C6),
+                "⚠️⚠️ 载体已单独撤回（retrievable=false），其片段却仍被召回 —— "
+                        + "「撤回某个载体」在检索侧形同虚设");
+
+        // ② 生成期取依据通道：同样不得取回
+        List<String> loaded = loadByIdsAs(T, List.of(C6)).stream().map(Chunk::id).toList();
+        assertTrue(loaded.isEmpty(),
+                "⚠️⚠️ 载体已撤回的内容不得作为生成依据 —— "
+                        + "比不引用更糟的是引用已下架内容");
+    }
+
+    @Test
+    @DisplayName("✅ 载体已校验且可检索时，其片段必须能被召回（防止修过头）")
+    void retrievableCarrierIsRetrieved() {
+        // 夹具文档由 insertDocument 显式置位 ver_status='VERIFIED' / retrievable=TRUE
+        RetrievalRequest req = new RetrievalRequest(
+                "二次函数的顶点", RetrievalMode.EXPLAIN, EditionScope.strict(E_PEP),
+                null, null, null, 10);
+        List<String> searched = searchAs(T, req).stream().map(s -> s.chunk().id()).toList();
+        assertTrue(searched.contains(C1),
+                "✅ 正常（载体已校验且可检索）的语料必须仍能召回");
+    }
+
+    // ---------------------------------------------------------------------
     // 夹具：在同一事务内 set_config 模拟主平台传入的租户上下文
     // ---------------------------------------------------------------------
 
@@ -328,6 +375,38 @@ class RetrievalRepositoryIT {
         });
     }
 
+    /**
+     * 造一条「载体被单独撤回、但来源仍然 VERIFIED」的语料。
+     *
+     * <p><b>⚠️ 这是「来源与载体是两个独立轴」（RAG-D07 §2.3.1 G-0）的核心场景</b>：
+     * 同一版本下「官方电子版」可留、「第三方扫描版」可单独撤回。
+     * 管理端「撤回某个载体」写的是 {@code rag_document.retrievable=FALSE}
+     * 与 {@code ver_status='REVOKED'} ——
+     * <b>修复前检索侧根本不读这两列</b>，撤回动作在检索侧完全无效。
+     *
+     * <p>⚠️ 版本坐标必须与 {@link #seedTenantT()} 错开（版次坐标含 publisher），
+     * 否则撞 {@code rag_edition_unique}（见 {@link #seedRevokedSource()} 的说明）。
+     */
+    private void seedWithdrawnCarrier() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, T);
+            insertSource(S5, T, "北师大版", "ISBN-W");
+            insertEdition(E5, T, S5, "北师大版");
+            // ⚠️ 载体级撤回：来源是 VERIFIED，但这个载体被单独下架了
+            jdbcTemplate.update(
+                    "INSERT INTO rag_document (document_id, tenant_id, source_id, edition_id, title, "
+                            + "parse_status, ver_status, retrievable, revoked_at, revoked_reason) "
+                            + "VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, '已撤回载体', 'CHUNKED', "
+                            + "'REVOKED'::rag_verification_status, FALSE, now(), '载体单独撤回') "
+                            + "ON CONFLICT (tenant_id, document_id) DO NOTHING",
+                    D5, T, S5, E5);
+            insertChunk(C6, T, D5, E5, "EXPLANATION",
+                    "已撤回载体里的二次函数顶点讲解内容");
+            return null;
+        });
+    }
+
     private void insertSourceWithStatus(String sourceId, String tenantId, String publisher,
                                         String isbn, String verStatus) {
         // ⚠️ ver_status 必须显式转型 `?::rag_verification_status`（2026-10-23 线上 RDS 实测）：
@@ -366,9 +445,16 @@ class RetrievalRepositoryIT {
     }
 
     private void insertDocument(String documentId, String tenantId, String sourceId, String editionId) {
+        // ⚠️⚠️ **必须显式置位载体级准入标记**（修复前此处不写，依赖默认值）：
+        //    rag_document.ver_status 默认 'PENDING'、retrievable 默认 FALSE，
+        //    而检索侧现在**会**过滤这两列（载体级撤回此前在检索侧完全无效）。
+        //    不置位则所有夹具文档都不可检索 —— 那正是修复要达成的效果，
+        //    但会让本 IT 测不到「正常语料能召回」这件事。
         jdbcTemplate.update(
                 "INSERT INTO rag_document (document_id, tenant_id, source_id, edition_id, title, "
-                        + "parse_status) VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, 'fixture', 'CHUNKED') "
+                        + "parse_status, ver_status, retrievable) "
+                        + "VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, 'fixture', 'CHUNKED', "
+                        + "'VERIFIED'::rag_verification_status, TRUE) "
                         + "ON CONFLICT (tenant_id, document_id) DO NOTHING",
                 documentId, tenantId, sourceId, editionId);
     }

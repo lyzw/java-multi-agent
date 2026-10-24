@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -31,6 +32,7 @@ import cn.studykid.rag.management.core.SourceRegistration;
 import cn.studykid.rag.management.core.VerificationDecision;
 import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
+import cn.studykid.rag.management.ports.DictionaryPort;
 
 /**
  * 管理端点的契约测试（RAG-D10）。
@@ -54,8 +56,9 @@ class RagManagementControllerTest {
 
     private final CorpusManagementPort port = mock(CorpusManagementPort.class);
     private final CorpusIndexingPort indexingPort = mock(CorpusIndexingPort.class);
+    private final DictionaryPort dictionaryPort = mock(DictionaryPort.class);
     private final RagManagementController controller =
-            new RagManagementController(port, indexingPort);
+            new RagManagementController(port, indexingPort, dictionaryPort);
 
     private static CorpusSource sampleSource() {
         Instant now = Instant.parse("2026-10-22T00:00:00Z");
@@ -152,6 +155,82 @@ class RagManagementControllerTest {
         assertEquals(false, responses.get(0).stale());
         assertEquals(true, responses.get(0).admissible(),
                 "VERIFIED + 未过期 + 版权放行 → 准入（以最低门槛判定）");
+    }
+
+    // ---------------------------------------------------------------------
+    // 批量登记（数据导入）
+    // ---------------------------------------------------------------------
+
+    private static ManagementDtos.BulkSourceItem bulkItem() {
+        return new ManagementDtos.BulkSourceItem(
+                "教材", "人教版八年级上册数学", "人民教育出版社",
+                "9787100000000", null, "obj://book.pdf", "b".repeat(64));
+    }
+
+    @Test
+    @DisplayName("批量导入：成功行入库、构造失败行归入失败列表且不下传端口")
+    void bulkImportMixOfSuccessAndInvalid() {
+        when(port.registerSources(any(), any(), eq(REVIEWER)))
+                .thenReturn(new CorpusManagementPort.BulkRegistrationResult(List.of(
+                        new CorpusManagementPort.BulkItemResult(0, true, SOURCE_ID, null))));
+        ManagementDtos.BulkRegisterRequest request = new ManagementDtos.BulkRegisterRequest(
+                REVIEWER,
+                List.of(
+                        bulkItem(),
+                        // 缺 ISBN 与 DOI → 构造期校验失败（SourceRegistration 要求至少其一）
+                        new ManagementDtos.BulkSourceItem(
+                                "教材", "无标识来源", "人民教育出版社", null, null, null, null)));
+        ManagementDtos.BulkRegisterResponse response =
+                controller.bulkRegisterSources(TENANT, null, request);
+        assertEquals(2, response.total());
+        assertEquals(1, response.succeeded());
+        assertEquals(1, response.failed());
+        assertTrue(response.items().stream().anyMatch(i -> i.ok() && SOURCE_ID.equals(i.sourceId())),
+                "成功行应带 sourceId");
+        assertTrue(response.items().stream().anyMatch(i -> !i.ok() && i.error() != null),
+                "构造失败行应带错误信息且不下传端口");
+        verify(port).registerSources(any(), argThat(list -> list.size() == 1), eq(REVIEWER));
+    }
+
+    @Test
+    @DisplayName("批量导入缺租户头返回 400")
+    void bulkImportWithoutTenantIsBadRequest() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.bulkRegisterSources(null, null,
+                        new ManagementDtos.BulkRegisterRequest(REVIEWER, List.of(bulkItem()))));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("⛔ 批量导入：内容校验和格式非法的行必须被拒，且不得整批报废")
+    void bulkImportRejectsMalformedContentHashPerRow() {
+        when(port.registerSources(any(), any(), eq(REVIEWER)))
+                .thenReturn(new CorpusManagementPort.BulkRegistrationResult(List.of(
+                        new CorpusManagementPort.BulkItemResult(0, true, SOURCE_ID, null))));
+        ManagementDtos.BulkRegisterRequest request = new ManagementDtos.BulkRegisterRequest(
+                REVIEWER,
+                List.of(
+                        bulkItem(),
+                        // ⚠️ contentHash 非 64 位十六进制 —— 修复前会一路进库
+                        //    （rag_source.content_hash 是 CHAR(64)，
+                        //     短值会被 PG 静默空格填充，不报错）
+                        new ManagementDtos.BulkSourceItem(
+                                "教材", "哈希非法的来源", "人民教育出版社",
+                                "9787100000001", null, "obj://book2.pdf", "NOT-A-HASH")));
+        ManagementDtos.BulkRegisterResponse response =
+                controller.bulkRegisterSources(TENANT, null, request);
+
+        assertEquals(2, response.total());
+        assertEquals(1, response.succeeded(),
+                "合法行仍应入库（逐条成败语义不被破坏）");
+        assertEquals(1, response.failed());
+        ManagementDtos.BulkItemResultDto badRow = response.items().stream()
+                .filter(i -> !i.ok())
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("应有一行因 contentHash 非法而失败"));
+        assertTrue(badRow.error() != null && badRow.error().contains("contentHash"),
+                "失败原因应指明是 contentHash 问题，实际: " + badRow.error());
+        verify(port).registerSources(any(), argThat(list -> list.size() == 1), eq(REVIEWER));
     }
 
     @Test
@@ -348,5 +427,87 @@ class RagManagementControllerTest {
         return new ManagementDtos.DocumentVerificationRequest(
                 target, "ISBN:ref@2026-10-23", REVIEWER, VerificationMethod.ISBN,
                 TrustTier.OFFICIAL_PUBLISHER, 365);
+    }
+
+    // ---------------------------------------------------------------------
+    // 字典（Point 2：枚举下拉的数据源）
+    // ---------------------------------------------------------------------
+
+    private static final String SOURCE_TYPE = DictionaryPort.TYPE_SOURCE_TYPE;
+
+    private static ManagementDtos.UpsertDictionaryEntryRequest entryRequest() {
+        return new ManagementDtos.UpsertDictionaryEntryRequest(
+                "TEXTBOOK", "教材", 0, true);
+    }
+
+    @Test
+    @DisplayName("字典列表返回四类字典，且只有 SOURCE_TYPE 可编辑")
+    void dictionaryListMarksEditable() {
+        when(dictionaryPort.isEditable(SOURCE_TYPE)).thenReturn(true);
+        when(dictionaryPort.isEditable(DictionaryPort.TYPE_TRUST_TIER)).thenReturn(false);
+        when(dictionaryPort.isEditable(DictionaryPort.TYPE_VERIFICATION_METHOD)).thenReturn(false);
+        when(dictionaryPort.isEditable(DictionaryPort.TYPE_LICENSE_STATUS)).thenReturn(false);
+        when(dictionaryPort.entriesOf(any(), eq(SOURCE_TYPE)))
+                .thenReturn(List.of(new DictionaryPort.DictEntry(
+                        SOURCE_TYPE, "TEXTBOOK", "教材", 0, true)));
+
+        List<ManagementDtos.DictionaryTypeDto> types =
+                controller.listDictionaries(TENANT, null);
+
+        assertEquals(4, types.size());
+        ManagementDtos.DictionaryTypeDto source = types.stream()
+                .filter(t -> SOURCE_TYPE.equals(t.type())).findFirst().orElseThrow();
+        assertEquals(true, source.editable(), "SOURCE_TYPE 应可维护");
+        assertEquals(1, source.entries().size());
+        assertTrue(types.stream().filter(t -> !SOURCE_TYPE.equals(t.type())).allMatch(t -> !t.editable()),
+                "派生字典应只读");
+    }
+
+    @Test
+    @DisplayName("派生字典不允许前端写入 → 409（治理规则被违反）")
+    void derivedDictionaryUpsertIsConflict() {
+        when(dictionaryPort.isEditable(DictionaryPort.TYPE_TRUST_TIER)).thenReturn(false);
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.upsertDictionaryEntry(TENANT, null,
+                        DictionaryPort.TYPE_TRUST_TIER, entryRequest()));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("派生字典不允许前端删除 → 409")
+    void derivedDictionaryDeleteIsConflict() {
+        when(dictionaryPort.isEditable(DictionaryPort.TYPE_TRUST_TIER)).thenReturn(false);
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.deleteDictionaryEntry(TENANT, null,
+                        DictionaryPort.TYPE_TRUST_TIER, "ISBN"));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("可编辑字典写入后返回写入的条目")
+    void editableDictionaryUpsertReturnsEntry() {
+        when(dictionaryPort.isEditable(SOURCE_TYPE)).thenReturn(true);
+        ManagementDtos.DictionaryEntryDto dto = controller.upsertDictionaryEntry(
+                TENANT, null, SOURCE_TYPE, entryRequest());
+        assertEquals("TEXTBOOK", dto.code());
+        assertEquals("教材", dto.label());
+        verify(dictionaryPort).upsertEntry(any(), argThat(e ->
+                "TEXTBOOK".equals(e.code()) && "教材".equals(e.label())));
+    }
+
+    @Test
+    @DisplayName("字典端点缺租户头返回 400")
+    void dictionaryWithoutTenantIsBadRequest() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.listDictionaries(null, null));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("空字典类型返回 400（防止 SQL 误删/误查全表）")
+    void blankDictionaryTypeIsBadRequest() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.listDictionaryEntries(TENANT, null, "  "));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 }

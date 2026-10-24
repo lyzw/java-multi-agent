@@ -6,6 +6,7 @@ import java.util.List;
 import jakarta.validation.Valid;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,6 +29,7 @@ import cn.studykid.rag.management.core.VerificationDecision;
 import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort.ChunkSummary;
+import cn.studykid.rag.management.ports.DictionaryPort;
 
 /**
  * RAG 数据管理 REST 端点（RAG-D07 §2 准入流程的管理面入口）。
@@ -108,14 +110,22 @@ public class RagManagementController {
 
     private final CorpusManagementPort managementPort;
     private final CorpusIndexingPort indexingPort;
+    private final DictionaryPort dictionaryPort;
 
     public RagManagementController(CorpusManagementPort managementPort,
                                    CorpusIndexingPort indexingPort) {
+        this(managementPort, indexingPort, null);
+    }
+
+    public RagManagementController(CorpusManagementPort managementPort,
+                                   CorpusIndexingPort indexingPort,
+                                   DictionaryPort dictionaryPort) {
         if (managementPort == null || indexingPort == null) {
             throw new IllegalArgumentException("managementPort / indexingPort 不能为空");
         }
         this.managementPort = managementPort;
         this.indexingPort = indexingPort;
+        this.dictionaryPort = dictionaryPort;
     }
 
     /**
@@ -137,6 +147,78 @@ public class RagManagementController {
         CorpusSource source = managementPort.registerSource(tenant, registration,
                 request.registeredBy());
         return ManagementDtos.toResponse(source, TrustTier.UNVERIFIED, Instant.now());
+    }
+
+    /**
+     * 批量登记语料来源（数据导入）。
+     *
+     * <p><b>⚠️ 与单条登记的区别</b>：单条 {@code POST /sources} 用于「录入一条」，
+     * 本端点用于「按 CSV/JSON 一次性导入多条」。二者的治理语义完全一致——
+     * 每条登记结果都是 {@code UNVERIFIED / PENDING}，登记人都写入审计。
+     *
+     * <p><b>⚠️ 逐条成败、整体不回滚</b>：一行失败（缺 ISBN/DOI、
+     * 内容哈希格式非法、DB 约束冲突等）只影响该行，其余行照常入库。
+     * 响应逐条给出成功/失败与原因，前端据此逐行展示，
+     * 而不是「整批失败却说不清是哪一行」。
+     *
+     * <p><b>⚠️ 上限 100 条</b>：超出在 Bean Validation 之外由
+     * {@code @Size(max=100)} 拦截（见 {@link ManagementDtos.BulkRegisterRequest}），
+     * 这里只做构造期校验失败的逐条归类——不通过的行进入响应体的失败列表，
+     * 而非让整次请求 400。
+     *
+     * @param tenantId 租户 ID
+     * @param minTrustTierHeader 权威门槛头（批量登记不消费，仅沿用租户上下文约定）
+     * @param request 批量登记请求
+     * @return 逐条结果（与请求同序）
+     */
+    @PostMapping("/sources/batch")
+    public ManagementDtos.BulkRegisterResponse bulkRegisterSources(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @Valid @RequestBody ManagementDtos.BulkRegisterRequest request) {
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+
+        // ⚠️ 构造期校验：把「ISBN/DOI 至少一」「内容哈希格式」等前置错误
+        //    逐条归入响应失败列表，而不是抛 400 让整批报废。
+        List<SourceRegistration> valid = new java.util.ArrayList<>();
+        List<ManagementDtos.BulkItemResultDto> results =
+                new java.util.ArrayList<>(request.sources().size());
+        List<Integer> validOriginalIndex = new java.util.ArrayList<>();
+
+        for (int i = 0; i < request.sources().size(); i++) {
+            ManagementDtos.BulkSourceItem item = request.sources().get(i);
+            try {
+                SourceRegistration registration = new SourceRegistration(
+                        item.sourceType(), item.title(), item.publisher(),
+                        item.isbn(), item.doi(), item.objectRef(), item.contentHash());
+                valid.add(registration);
+                validOriginalIndex.add(i);
+            } catch (IllegalArgumentException e) {
+                results.add(new ManagementDtos.BulkItemResultDto(i, false, null, e.getMessage()));
+            }
+        }
+
+        if (!valid.isEmpty()) {
+            CorpusManagementPort.BulkRegistrationResult portResult =
+                    managementPort.registerSources(tenant, valid, request.registeredBy());
+            // ⚠️ 端口结果按「有效列表」顺序返回，按下标映射回原始行号。
+            List<CorpusManagementPort.BulkItemResult> portItems = portResult.items();
+            for (int j = 0; j < portItems.size(); j++) {
+                CorpusManagementPort.BulkItemResult r = portItems.get(j);
+                int original = validOriginalIndex.get(j);
+                results.add(new ManagementDtos.BulkItemResultDto(
+                        original, r.ok(), r.sourceId(), r.error()));
+            }
+        }
+
+        // ⚠️ 按下标升序，保证响应顺序与用户提交顺序一致（便于逐行核对）。
+        results.sort(java.util.Comparator.comparingInt(ManagementDtos.BulkItemResultDto::index));
+        int succeeded = 0;
+        for (ManagementDtos.BulkItemResultDto r : results) {
+            if (r.ok()) succeeded++;
+        }
+        return new ManagementDtos.BulkRegisterResponse(
+                request.sources().size(), succeeded, results.size() - succeeded, results);
     }
 
     /**
@@ -408,6 +490,129 @@ public class RagManagementController {
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader) {
         RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
         return ManagementDtos.toIssuesResponse(managementPort.listIssues(tenant));
+    }
+
+    /**
+     * 列出全部字典类型（含是否可维护、各类型下的全部条目）。
+     *
+     * <p><b>⚠️ 两类字典一并返回</b>：动态字典（{@code SOURCE_TYPE}，可写）
+     * 与派生字典（{@code TRUST_TIER} / {@code VERIFICATION_METHOD} /
+     * {@code LICENSE_STATUS}，只读）共用同一响应结构，
+     * 前端只要按 {@code editable} 决定是否显示「新增/删除」按钮即可，
+     * 无需为两类字典写两套渲染逻辑。
+     *
+     * @param tenantId 租户 ID
+     * @return 全部字典类型视图
+     */
+    @GetMapping("/dictionaries")
+    public List<ManagementDtos.DictionaryTypeDto> listDictionaries(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader) {
+        RagTenantContext context = requireTenantContext(tenantId, minTrustTierHeader);
+        List<String> types = List.of(
+                DictionaryPort.TYPE_SOURCE_TYPE,
+                DictionaryPort.TYPE_TRUST_TIER,
+                DictionaryPort.TYPE_VERIFICATION_METHOD,
+                DictionaryPort.TYPE_LICENSE_STATUS);
+        return types.stream().map(type -> new ManagementDtos.DictionaryTypeDto(
+                type, dictionaryPort.isEditable(type), toEntryDtos(context, type))).toList();
+    }
+
+    /**
+     * 列出某字典类型的全部条目。
+     *
+     * @param tenantId 租户 ID
+     * @param type 字典类型
+     * @return 该类型下的条目（动态类型按 sort_order 升序）
+     */
+    @GetMapping("/dictionaries/{type}")
+    public List<ManagementDtos.DictionaryEntryDto> listDictionaryEntries(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @PathVariable("type") String type) {
+        RagTenantContext context = requireTenantContext(tenantId, minTrustTierHeader);
+        requireNonBlankType(type);
+        return toEntryDtos(context, type);
+    }
+
+    /**
+     * 写入 / 更新某字典类型下的一项（仅可编辑类型生效）。
+     *
+     * <p><b>⚠️ 只对 {@code SOURCE_TYPE} 这类可编辑类型开放</b>：
+     * 派生字典（权威等级 / 校验手段 / 版权状态）由后端按 Java 枚举派生，
+     * 参与准入与版权判定，不允许前端改写，否则会漂移治理语义。
+     * 对不可编辑类型调用本端点 → 返回 409（治理规则被违反）。
+     *
+     * @param tenantId 租户 ID
+     * @param type 字典类型
+     * @param request 字典项请求（code 为幂等键）
+     * @return 写入后的条目
+     */
+    @PostMapping("/dictionaries/{type}/entries")
+    public ManagementDtos.DictionaryEntryDto upsertDictionaryEntry(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @PathVariable("type") String type,
+            @Valid @RequestBody ManagementDtos.UpsertDictionaryEntryRequest request) {
+        RagTenantContext context = requireTenantContext(tenantId, minTrustTierHeader);
+        requireNonBlankType(type);
+        if (!dictionaryPort.isEditable(type)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "字典类型不可维护（派生字典只读）：" + type);
+        }
+        DictionaryPort.DictEntry entry = new DictionaryPort.DictEntry(
+                type, request.code(), request.label(), request.sortOrder(), request.enabled());
+        dictionaryPort.upsertEntry(context, entry);
+        return new ManagementDtos.DictionaryEntryDto(
+                entry.type(), entry.code(), entry.label(), entry.sortOrder(), entry.enabled());
+    }
+
+    /**
+     * 删除某字典类型下的一项（仅可编辑类型生效）。
+     *
+     * @param tenantId 租户 ID
+     * @param type 字典类型
+     * @param code 字典项编码
+     */
+    @DeleteMapping("/dictionaries/{type}/entries/{code}")
+    public void deleteDictionaryEntry(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @PathVariable("type") String type,
+            @PathVariable("code") String code) {
+        RagTenantContext context = requireTenantContext(tenantId, minTrustTierHeader);
+        requireNonBlankType(type);
+        if (!dictionaryPort.isEditable(type)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "字典类型不可维护（派生字典只读）：" + type);
+        }
+        dictionaryPort.deleteEntry(context, type, code);
+    }
+
+    /**
+     * 字典条目 → 响应 DTO。
+     *
+     * @param context 租户上下文
+     * @param type 字典类型
+     * @return 响应条目列表
+     */
+    private List<ManagementDtos.DictionaryEntryDto> toEntryDtos(
+            RagTenantContext context, String type) {
+        return dictionaryPort.entriesOf(context, type).stream()
+                .map(e -> new ManagementDtos.DictionaryEntryDto(
+                        e.type(), e.code(), e.label(), e.sortOrder(), e.enabled()))
+                .toList();
+    }
+
+    /**
+     * 校验字典类型非空（空类型在 SQL 里会变成「查所有 / 删所有」，是危险语义）。
+     *
+     * @param type 字典类型
+     */
+    private void requireNonBlankType(String type) {
+        if (type == null || type.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "字典类型不能为空");
+        }
     }
 
     /**

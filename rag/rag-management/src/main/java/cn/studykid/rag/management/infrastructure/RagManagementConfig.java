@@ -10,6 +10,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
 import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
+import cn.studykid.rag.management.ports.DictionaryPort;
 
 /**
  * 管理面装配（RAG-D07 §2 管理面入口）。
@@ -90,5 +91,25 @@ public class RagManagementConfig {
     @Bean
     public CorpusIndexingPort corpusIndexingPort(ChunkIndexer chunkIndexer) {
         return new ChunkIndexerIndexingAdapter(chunkIndexer);
+    }
+
+    /**
+     * 字典端口的 JDBC 实现（Point 2：枚举下拉的数据源）。
+     *
+     * <p><b>⚠️ 复用管理面事务模板</b>：动态字典的读写同样以
+     * {@code rag_current_tenant()} 收口，必须在设置了 {@code app.tenant_id} 的
+     * 事务内执行——与 {@link CorpusManagementPort} 同一把锁，
+     * 故共用 {@code ragManagementTransactionTemplate}。
+     *
+     * @param jdbcTemplate JDBC 模板
+     * @param transactionTemplate 管理面事务模板
+     * @return 字典端口
+     */
+    @Bean
+    public DictionaryPort dictionaryPort(
+            JdbcTemplate jdbcTemplate,
+            @Qualifier("ragManagementTransactionTemplate")
+            TransactionTemplate transactionTemplate) {
+        return new JdbcDictionaryRepository(jdbcTemplate, transactionTemplate);
     }
 }

@@ -71,6 +71,123 @@ public final class ManagementDtos {
     }
 
     /**
+     * 批量导入的单条来源项（不含登记人：登记人对整批统一留痕）。
+     *
+     * <p>⚠️ 与 {@link RegisterSourceRequest} 同形但<b>不含</b> {@code registeredBy}：
+     * 批量导入是「一个人导入一批」，登记人由批量请求头部的
+     * {@link BulkRegisterRequest#registeredBy()} 统一提供，
+     * 避免 CSV/JSON 每行都重复写一遍 UUID。
+     *
+     * @param sourceType 来源类型
+     * @param title 书名/标题
+     * @param publisher 出版社/出版方
+     * @param isbn ISBN（与 doi 至少提供一个）
+     * @param doi DOI（与 isbn 至少提供一个）
+     * @param objectRef 正文在对象存储中的引用
+     * @param contentHash 整册内容校验和（可空；若提供须为 64 位十六进制）
+     */
+    public record BulkSourceItem(
+            @NotBlank(message = "sourceType 不能为空")
+            @Size(max = 64, message = "sourceType 长度不能超过 64")
+            String sourceType,
+
+            @NotBlank(message = "title 不能为空")
+            @Size(max = 512, message = "title 长度不能超过 512")
+            String title,
+
+            @NotBlank(message = "publisher 不能为空")
+            @Size(max = 256, message = "publisher 长度不能超过 256")
+            String publisher,
+
+            @Size(max = 64, message = "isbn 长度不能超过 64")
+            String isbn,
+
+            @Size(max = 128, message = "doi 长度不能超过 128")
+            String doi,
+
+            @Size(max = 1024, message = "objectRef 长度不能超过 1024")
+            String objectRef,
+
+            @Pattern(regexp = "^[0-9a-fA-F]{64}$", message = "contentHash 必须是 64 位十六进制 SHA-256")
+            String contentHash
+    ) {
+    }
+
+    /**
+     * 批量登记语料来源请求。
+     *
+     * <p>⚠️ <b>上限 100 条</b>：批量导入是人工操作，不应一次灌入海量数据；
+     * 超出由控制器在 Bean Validation 之外显式拦截并返回 400，
+     * 而不是让单次 HTTP 请求在循环里跑很久。
+     *
+     * @param registeredBy 登记人 UUID（对整批统一审计留痕）
+     * @param sources 待登记来源列表（非空，≤ 100）
+     */
+    public record BulkRegisterRequest(
+            @NotBlank(message = "registeredBy 不能为空（登记必须留痕）")
+            @Pattern(regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                    message = "registeredBy 必须是合法 UUID")
+            String registeredBy,
+
+            @NotNull(message = "sources 不能为空")
+            @jakarta.validation.constraints.Size(
+                    min = 1, max = 100,
+                    message = "sources 至少 1 条、最多 100 条")
+            // ⚠️ **刻意不加 @Valid**（Jakarta Bean Validation 规范：加了会级联校验元素）：
+            //    批量端点的治理语义是「**逐条独立成败**」——一行不合法只影响该行，
+            //    其余行照常入库（见控制器 javadoc 与端口契约）。
+            //    若在此级联 @Valid，则任一行的 @NotBlank / @Pattern 失败会让
+            //    **整批返回 400**，把「一行错」升级成「全批废」，
+            //    与逐条成败的承诺直接冲突。
+            //
+            //    ⚠️ 元素级约束改由**领域层**兜住：
+            //    {@link cn.studykid.rag.management.core.SourceRegistration}
+            //    的构造期校验（标题/出版社非空、ISBN 与 DOI 至少其一、
+            //    **contentHash 必须是 64 位十六进制**）——
+            //    控制器逐条捕获该异常并归入该行的失败列表，
+            //    既保住「逐条成败」语义，又不让非法值进库。
+            //
+            //    ⚠️ contentHash 尤其关键：rag_source.content_hash 是 CHAR(64)，
+            //    短值会被 PG **静默空格填充**入库（不报错），
+            //    而该列的用途是「检测语料被静默替换」——
+            //    填充后的哈希失去校验能力。
+            List<BulkSourceItem> sources
+    ) {
+    }
+
+    /**
+     * 批量登记单条结果（响应）。
+     *
+     * @param index 该行在请求数组中的下标
+     * @param ok 是否成功
+     * @param sourceId 成功时的来源 ID
+     * @param error 失败时的原因
+     */
+    public record BulkItemResultDto(
+            int index,
+            boolean ok,
+            String sourceId,
+            String error
+    ) {
+    }
+
+    /**
+     * 批量登记响应。
+     *
+     * @param total 请求总条数
+     * @param succeeded 成功条数
+     * @param failed 失败条数
+     * @param items 逐条结果（与请求同序）
+     */
+    public record BulkRegisterResponse(
+            int total,
+            int succeeded,
+            int failed,
+            List<BulkItemResultDto> items
+    ) {
+    }
+
+    /**
      * 校验决定请求。
      *
      * @param targetStatus 目标状态
@@ -621,5 +738,69 @@ public final class ManagementDtos {
                         i.chunks()))
                 .toList();
         return new DailyImportResponse(byDay, stats.generatedDays());
+    }
+
+    // ---------------------------------------------------------------------
+    // 字典（Point 2：枚举下拉的数据源，可由前端维护）
+    // ---------------------------------------------------------------------
+
+    /**
+     * 字典项响应（动态/派生类型共用）。
+     *
+     * @param type 字典类型（SOURCE_TYPE / TRUST_TIER / VERIFICATION_METHOD / LICENSE_STATUS）
+     * @param code 字典项编码（稳定标识，存库与表单提交都用它）
+     * @param label 展示名
+     * @param sortOrder 排序权重（升序）
+     * @param enabled 是否启用
+     */
+    public record DictionaryEntryDto(
+            @NotBlank String type,
+            @NotBlank String code,
+            @NotBlank String label,
+            int sortOrder,
+            boolean enabled
+    ) {
+    }
+
+    /**
+     * 字典类型视图（含该类型的全部条目 + 是否可维护）。
+     *
+     * @param type 字典类型
+     * @param editable 是否允许前端维护（动态字典可写；派生字典只读）
+     * @param entries 该类型的全部条目（已按 sortOrder 升序）
+     */
+    public record DictionaryTypeDto(
+            @NotBlank String type,
+            boolean editable,
+            List<DictionaryEntryDto> entries
+    ) {
+    }
+
+    /**
+     * 字典项写入/更新请求（仅对可编辑类型生效）。
+     *
+     * <p>⚠️ {@code code} 是幂等键：同一 (租户, 类型, code) 重复提交走 upsert，
+     * 不会新建重复项。{@code type} 由路径参数带入，不放在请求体里——
+     * 避免「请求体里的 type 与路径 type 不一致」这种语义冲突。
+     *
+     * @param code 字典项编码（稳定标识）
+     * @param label 展示名
+     * @param sortOrder 排序权重
+     * @param enabled 是否启用
+     */
+    public record UpsertDictionaryEntryRequest(
+            @NotBlank(message = "code 不能为空")
+            @Size(max = 64, message = "code 长度不能超过 64")
+            @Pattern(regexp = "^[A-Za-z0-9_]+$", message = "code 只能包含字母、数字、下划线")
+            String code,
+
+            @NotBlank(message = "label 不能为空")
+            @Size(max = 128, message = "label 长度不能超过 128")
+            String label,
+
+            int sortOrder,
+
+            boolean enabled
+    ) {
     }
 }

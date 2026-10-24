@@ -83,6 +83,38 @@ public class JdbcRetrievalRepository implements RetrievalPort {
             ed.subject, ed.grade, ed.term, ed.publisher, ed.revision_code
             """;
 
+    /**
+     * 检索侧的「<b>可准入</b>」谓词（<b>单一真源</b> · 6 处 SELECT 共用）。
+     *
+     * <p><b>⚠️⚠️ 修复前的真实缺陷：载体级撤回在检索侧完全无效</b>。
+     * 此前 6 处检索 SELECT <b>只</b>过滤 {@code src.ver_status = 'VERIFIED'}，
+     * <b>从不读</b> {@code rag_document.ver_status} 与 {@code rag_document.retrievable}
+     * —— 而这正是管理端「撤回某个载体」所写的两列
+     * （{@code JdbcCorpusManagementRepository} 的载体级校验与来源级撤回级联都写它们）。
+     *
+     * <p>后果：<b>撤回动作看起来成功，内容却照常被召回、照常被引用、照常进入答案</b>。
+     * 载体级撤回在检索侧<b>形同虚设</b>——这是治理动作对运维「说谎」。
+     *
+     * <p>⚠️ <b>为什么必须放在 SQL 里而不是 Java 后置过滤</b>：
+     * 后置过滤会让「已下架内容」先进入应用内存（再被丢掉），
+     * 既没有 fail-closed 的语义，也与端口契约相悖。
+     *
+     * <p>⚠️ <b>来源与载体是两个独立轴</b>（RAG-D07 §2.3.1 G-0）：
+     * 两者都要通过才可检索 —— 同一版本下「官方电子版」可留、
+     * 「第三方扫描版」可单独撤回。
+     *
+     * <p>⚠️ 本谓词刻意<b>只含</b>「来源已校验」与「载体已校验且未被撤回」两轴。
+     * 版权状态（{@code license_status}）与校验有效期目前**不在**检索口径内
+     * —— 那属于「检索与管理台口径不一致」的另一项缺口，
+     * 需连同租户信任等级（检索 API 当前没有该请求头）一并处理，
+     * 不在此处半途改动。
+     */
+    private static final String ADMISSIBLE_PREDICATE = """
+                  AND src.ver_status = 'VERIFIED'
+                  AND doc.ver_status = 'VERIFIED'
+                  AND doc.retrievable
+            """;
+
     private final JdbcTemplate jdbcTemplate;
     private final EmbeddingPort embeddingPort;
 
@@ -141,9 +173,9 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
-                  AND src.ver_status = 'VERIFIED'
+%s
                   AND c.kp_ids @> CAST(ARRAY[?::uuid] AS uuid[])
-                """.formatted(SELECT_COLUMNS);
+                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
         List<Chunk> chunks = jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs), knowledgePointId);
         // 版本过滤在 SQL 之外做：edition 坐标需 domain 对象比较。
         return chunks.stream()
@@ -179,9 +211,9 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
-                  AND src.ver_status = 'VERIFIED'
+%s
                   AND c.kp_ids && ?::uuid[]
-                """.formatted(SELECT_COLUMNS);
+                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
         List<Chunk> chunks = jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs), arr.toString());
         return chunks.stream()
                 .filter(c -> editionScope.admits(c.edition()))
@@ -197,12 +229,12 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
-                  AND src.ver_status = 'VERIFIED'
+%s
                   AND c.document_id = ?
                   AND c.chunk_id <> ?
                 ORDER BY abs(c.page_number - ?), c.char_start
                 LIMIT ?
-                """.formatted(SELECT_COLUMNS);
+                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
         return jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs),
                 chunk.documentId(), chunk.id(), chunk.locator().pageNumber(), limit);
     }
@@ -249,9 +281,9 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
-                  AND src.ver_status = 'VERIFIED'
+%s
                   AND c.chunk_id = ANY(?::uuid[])
-                """.formatted(SELECT_COLUMNS);
+                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
         return jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs), arr.toString());
     }
 
@@ -297,10 +329,10 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_source src
                      ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
-                  AND src.ver_status = 'VERIFIED'
+%s
                 ORDER BY e.embedding <=> ?::vector
                 LIMIT ?
-                """.formatted(SELECT_COLUMNS);
+                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
         return jdbcTemplate.query(sql, (rs, i) -> toScoredChunk(rs,
                 RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH), vec, vec, limit);
     }
@@ -326,11 +358,11 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_source src
                      ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id = rag_current_tenant()
-                  AND src.ver_status = 'VERIFIED'
+%s
                   AND to_tsvector('simple', c.text_jieba) @@ to_tsquery('simple', ?)
                 ORDER BY score DESC
                 LIMIT ?
-                """.formatted(SELECT_COLUMNS);
+                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
         return jdbcTemplate.query(sql, (rs, i) -> toScoredChunk(rs,
                 RetrievalChannel.LEXICAL, HitReason.ALIAS_MATCH), tsQuery, tsQuery, limit);
     }

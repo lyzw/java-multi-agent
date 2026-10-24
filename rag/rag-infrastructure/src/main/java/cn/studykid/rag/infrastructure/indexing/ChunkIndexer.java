@@ -226,6 +226,8 @@ public class ChunkIndexer {
                  ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
             WHERE c.tenant_id = rag_current_tenant()
               AND src.ver_status = 'VERIFIED'
+              AND doc.ver_status = 'VERIFIED'
+              AND doc.retrievable
               AND c.chunk_id > ?::uuid
               AND (c.text_jieba = '' OR NOT EXISTS (
                     SELECT 1 FROM rag_chunk_embedding e

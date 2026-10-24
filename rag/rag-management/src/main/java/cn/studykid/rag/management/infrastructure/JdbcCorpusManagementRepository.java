@@ -32,6 +32,8 @@ import cn.studykid.rag.management.core.SourceRegistration;
 import cn.studykid.rag.management.core.VerificationDecision;
 import cn.studykid.rag.management.core.VerificationTransition;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
+import cn.studykid.rag.management.ports.CorpusManagementPort.BulkItemResult;
+import cn.studykid.rag.management.ports.CorpusManagementPort.BulkRegistrationResult;
 
 /**
  * 语料数据管理的 JDBC 实现（RAG-D07 §2 准入流程 / RAG-D03 §2 数据模型）。
@@ -118,6 +120,47 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             appendAuditWithinTenant(context.tenantId(), principalId, "INGEST", sourceId);
             return findSourceWithinTenant(sourceId);
         });
+    }
+
+    /**
+     * 批量登记来源。
+     *
+     * <p>⚠️ 逐条调用 {@link #registerSource}（其本身在独立事务内完成
+     * 「set_config → INSERT → 审计」），单条失败仅影响该条——
+     * 捕获异常后记为失败项，继续下一条。结果与入参<b>同序同长</b>，
+     * 调用方按下标即可对齐到原始行。
+     */
+    @Override
+    @NonNull
+    public BulkRegistrationResult registerSources(@NonNull RagTenantContext context,
+                                                @NonNull List<SourceRegistration> registrations,
+                                                @NonNull String principalId) {
+        List<BulkItemResult> items = new ArrayList<>(registrations.size());
+        for (int i = 0; i < registrations.size(); i++) {
+            SourceRegistration registration = registrations.get(i);
+            try {
+                CorpusSource created = registerSource(context, registration, principalId);
+                items.add(new BulkItemResult(i, true, created.sourceId(), null));
+            } catch (Exception e) {
+                // ⚠️ 单条失败不阻断整批：可能是 ISBN/DOI 自洽校验不过、
+                // 内容哈希格式非法、DB 约束冲突或 RLS 过滤等。
+                // 把原因原样带回（裁剪掉可能过长的栈信息），让前端逐行展示。
+                items.add(new BulkItemResult(i, false, null, shorten(e.getMessage())));
+            }
+        }
+        return new BulkRegistrationResult(items);
+    }
+
+    /** 错误信息裁剪，避免把整条堆栈塞进响应体（只保留一线 message）。 */
+    private static String shorten(@Nullable String message) {
+        if (message == null || message.isBlank()) {
+            return "登记失败（无可用错误详情）";
+        }
+        // ⚠️ 只取第一行：PostgreSQL 的详情常带 "位置" 与 "提示" 多行，
+        // 截断到首个换行即可拿到「为什么会失败」的那句话。
+        int newline = message.indexOf('\n');
+        String first = newline >= 0 ? message.substring(0, newline) : message;
+        return first.length() > 400 ? first.substring(0, 397) + "…" : first;
     }
 
     @Override

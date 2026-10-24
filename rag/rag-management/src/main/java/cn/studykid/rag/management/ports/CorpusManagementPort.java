@@ -248,4 +248,72 @@ public interface CorpusManagementPort {
             @Nullable String contentHash
     ) {
     }
+
+    /**
+     * 批量登记来源的单条结果。
+     *
+     * <p><b>⚠️ 每条独立成败</b>：批量登记是「尽力而为」——
+     * 一行失败（缺 ISBN/DOI、DB 约束冲突、RLS 过滤等）不影响其它行。
+     * 故结果逐条返回，而不是「任一行失败即整体回滚」（那会丢入整批已校验通过的来源）。
+     *
+     * @param index 该行在请求数组中的下标（从 0 开始）
+     * @param ok 是否登记成功
+     * @param sourceId 成功时的来源 ID（失败为 null）
+     * @param error 失败时的原因（成功为 null）
+     */
+    record BulkItemResult(
+            int index,
+            boolean ok,
+            @Nullable String sourceId,
+            @Nullable String error
+    ) {
+    }
+
+    /**
+     * 批量登记来源的结果。
+     *
+     * <p>⚠️ {@code items} 与入参同序同长：第 i 项对应请求数组第 i 行，
+     * 调用方可直接按下标对齐到原始输入，无需二次匹配。
+     *
+     * @param items 逐条结果（与入参顺序一致）
+     */
+    record BulkRegistrationResult(@NonNull List<BulkItemResult> items) {
+        /** 成功条数（派生）。 */
+        public int succeeded() {
+            int n = 0;
+            for (BulkItemResult r : items) {
+                if (r.ok()) n++;
+            }
+            return n;
+        }
+
+        /** 失败条数（派生）。 */
+        public int failed() {
+            return items.size() - succeeded();
+        }
+    }
+
+    /**
+     * 批量登记语料来源（阶段① PENDING）。
+     *
+     * <p><b>⚠️ 逐条独立事务</b>：每条来源在自己的事务内登记
+     * （复用 {@link #registerSource} 的「set_config → INSERT → 审计」两步），
+     * 任一失败整体回滚该条、不影响其它条。
+     * 登记结果与 {@link #registerSource} 同语义：恒为
+     * {@code trust_tier=UNVERIFIED}、{@code ver_status=PENDING}。
+     *
+     * <p><b>⚠️ 为什么不在端口层做批量 SQL</b>：登记必须逐条留痕
+     * （RAG-D07 §2.5），且 ISBN/DOI 自洽校验、内容哈希格式等前置校验
+     * 都发生在领域命令构造期——逐条调用能精确到「第几行为什么失败」，
+     * 否则整批失败只会给出一个无指向的错误。
+     *
+     * @param context 租户上下文
+     * @param registrations 登记命令列表（已是合法领域对象，构造期校验通过）
+     * @param principalId 登记人（UUID），对整批统一留痕
+     * @return 逐条结果（与入参同序同长）
+     */
+    @NonNull
+    BulkRegistrationResult registerSources(@NonNull RagTenantContext context,
+                                           @NonNull List<SourceRegistration> registrations,
+                                           @NonNull String principalId);
 }
