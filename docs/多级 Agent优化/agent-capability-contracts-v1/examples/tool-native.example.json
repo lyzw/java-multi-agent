@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0",
+  "id": "tool_customer_get",
+  "name": "Get Customer",
+  "description": "读取客户资料",
+  "kind": "native",
+  "status": "DRAFT",
+  "namespace": "platform",
+  "tenantId": null,
+  "riskLevel": "READ",
+  "defaultApproval": "NOT_REQUIRED",
+  "inputSchema": {
+    "type": "object",
+    "required": [
+      "customerId"
+    ],
+    "properties": {
+      "customerId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      }
+    },
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object"
+  },
+  "paramPolicies": [],
+  "idempotency": {
+    "required": true,
+    "keyStrategy": "REQUEST_HASH"
+  },
+  "timeoutMs": 5000,
+  "maxResponseBytes": 1048576,
+  "handlerRef": "getCustomerTool",
+  "reconcilePolicy": "NOT_APPLICABLE",
+  "revision": 1,
+  "configFingerprint": null
+}

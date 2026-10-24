@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0",
+  "id": "mcp_crm",
+  "name": "CRM MCP Server",
+  "description": "CRM 查询服务",
+  "status": "DRAFT",
+  "namespace": "platform",
+  "tenantId": null,
+  "transport": "streamable-http",
+  "endpoint": "https://mcp.example.invalid/mcp",
+  "command": null,
+  "args": [],
+  "envRefs": {},
+  "auth": {
+    "mode": "bearer",
+    "credentialRef": "secretref_crm_mcp",
+    "scopes": [
+      "crm.read"
+    ]
+  },
+  "trustTier": "internal",
+  "dynamicDiscovery": false,
+  "exposedToolAllowlist": [
+    "query_customer"
+  ],
+  "discoveredToolsSnapshot": [
+    {
+      "name": "query_customer",
+      "inputSchemaHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "descriptionHash": null
+    }
+  ],
+  "connectionRisk": "READ",
+  "timeoutMs": 5000,
+  "readTimeoutMs": 15000,
+  "maxResponseBytes": 1048576,
+  "maxConcurrency": 10,
+  "circuitBreaker": {
+    "failureThreshold": 5,
+    "openDurationMs": 30000,
+    "halfOpenMaxCalls": 1
+  },
+  "endpointPolicyRef": "endpoint_policy_internal_mcp",
+  "revision": 1,
+  "configFingerprint": null
+}

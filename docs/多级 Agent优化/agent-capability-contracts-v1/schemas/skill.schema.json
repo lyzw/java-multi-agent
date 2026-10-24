@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.invalid/agent-platform/skill.schema.json",
+  "title": "SkillDefinition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "status",
+    "namespace",
+    "declaredTools",
+    "declaredMcp",
+    "riskCeiling",
+    "paramPolicies",
+    "revision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "id": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "tenantId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "null 仅允许平台级 Skill；服务端必须验证 namespace 与租户策略"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "status": {
+      "$ref": "common.schema.json#/$defs/lifecycleStatus"
+    },
+    "namespace": {
+      "type": "string",
+      "enum": [
+        "platform",
+        "tenant"
+      ]
+    },
+    "declaredTools": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "common.schema.json#/$defs/ref"
+      }
+    },
+    "declaredMcp": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/mcpBinding"
+      }
+    },
+    "riskCeiling": {
+      "$ref": "common.schema.json#/$defs/riskLevel"
+    },
+    "paramPolicies": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "common.schema.json#/$defs/paramPolicy"
+      }
+    },
+    "inherits": {
+      "type": "array",
+      "maxItems": 0,
+      "items": {
+        "type": "string"
+      },
+      "description": "V1 必须为空；非空拒绝发布"
+    },
+    "requiredCaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "V1 预留，不参与授权计算；若提供只能用于展示"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "configFingerprint": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

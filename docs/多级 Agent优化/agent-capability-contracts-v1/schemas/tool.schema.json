@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.invalid/agent-platform/tool.schema.json",
+  "title": "ToolDefinition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "kind",
+    "status",
+    "namespace",
+    "riskLevel",
+    "inputSchema",
+    "paramPolicies",
+    "revision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "id": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "native",
+        "mcp"
+      ]
+    },
+    "status": {
+      "$ref": "common.schema.json#/$defs/lifecycleStatus"
+    },
+    "namespace": {
+      "type": "string",
+      "enum": [
+        "platform",
+        "tenant"
+      ]
+    },
+    "tenantId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "riskLevel": {
+      "$ref": "common.schema.json#/$defs/riskLevel"
+    },
+    "defaultApproval": {
+      "type": "string",
+      "enum": [
+        "NOT_REQUIRED",
+        "REQUIRED"
+      ]
+    },
+    "inputSchema": {
+      "type": "object",
+      "description": "完整 JSON Schema；实现必须用 Draft 2020-12 meta-schema 验证"
+    },
+    "outputSchema": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "paramPolicies": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/paramPolicy"
+      }
+    },
+    "idempotency": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "keyStrategy": {
+          "type": "string",
+          "enum": [
+            "REQUEST_HASH",
+            "BUSINESS_KEY",
+            "CALLER_PROVIDED"
+          ]
+        },
+        "keyParam": {
+          "type": "string"
+        }
+      }
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 3600000
+    },
+    "maxResponseBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 104857600
+    },
+    "mcpBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "serverId",
+        "serverVersion",
+        "toolName"
+      ],
+      "properties": {
+        "serverId": {
+          "$ref": "common.schema.json#/$defs/id"
+        },
+        "serverVersion": {
+          "$ref": "common.schema.json#/$defs/version"
+        },
+        "toolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "handlerRef": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "reconcilePolicy": {
+      "type": "string",
+      "enum": [
+        "NOT_APPLICABLE",
+        "QUERY_BEFORE_RETRY",
+        "MANUAL_RECONCILIATION",
+        "PROVIDER_IDEMPOTENCY"
+      ]
+    },
+    "configFingerprint": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "native"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "handlerRef"
+        ],
+        "not": {
+          "required": [
+            "mcpBinding"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "mcp"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "mcpBinding"
+        ],
+        "not": {
+          "required": [
+            "handlerRef"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,109 @@
+{
+  "schemaVersion": "1.0",
+  "id": "agent_customer_support",
+  "key": "customer-support",
+  "tenantId": "tenant_001",
+  "name": "Customer Support Agent",
+  "description": "处理客户咨询与售后请求",
+  "owner": "team_support",
+  "tags": [
+    "support"
+  ],
+  "status": "DRAFT",
+  "enabled": false,
+  "instructions": {
+    "systemPromptRef": "prompt_support",
+    "systemPromptVersion": "3"
+  },
+  "contract": {
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "question"
+      ],
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "answer"
+      ],
+      "properties": {
+        "answer": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "responseFormat": "json_schema"
+  },
+  "modelRef": "model_reasoning_default",
+  "generationParams": {
+    "temperature": 0.2,
+    "maxOutputTokens": 4096
+  },
+  "fallbackPolicy": {
+    "enabled": false,
+    "allowedModelRefs": []
+  },
+  "enabledSkills": [
+    {
+      "id": "skill_customer_lookup",
+      "version": "1.0.0"
+    }
+  ],
+  "roles": [
+    "customer_support_user"
+  ],
+  "overrides": {
+    "removeSkills": [],
+    "removeTools": []
+  },
+  "security": {
+    "riskCeiling": "READ",
+    "authorizationPolicyRef": "authz_support_v1",
+    "approvalPolicyRef": null,
+    "denyByDefault": true,
+    "allowPrivilegeEscalation": false
+  },
+  "executionPolicy": {
+    "timeoutMs": 60000,
+    "retryPolicy": {
+      "maxAttempts": 1,
+      "retryableErrors": [
+        "TIMEOUT"
+      ]
+    },
+    "concurrencyPolicy": {
+      "maxConcurrentRuns": 10,
+      "duplicateExecution": "reject"
+    }
+  },
+  "resourceLimits": {
+    "maxInputTokens": 12000,
+    "maxOutputTokens": 4096,
+    "maxToolCalls": 10,
+    "maxExecutionSteps": 20
+  },
+  "contextPolicy": {
+    "maxContextTokens": 16000,
+    "includeConversationHistory": true,
+    "maxHistoryMessages": 20
+  },
+  "memoryPolicyRef": null,
+  "knowledgeRefs": [],
+  "observabilityPolicy": {
+    "logLevel": "INFO",
+    "traceEnabled": true,
+    "redactionPolicyRef": "redact_default"
+  },
+  "revision": 1,
+  "releaseRef": null,
+  "configFingerprint": null
+}

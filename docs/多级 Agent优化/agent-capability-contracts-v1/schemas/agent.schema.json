@@ -1,0 +1,432 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.invalid/agent-platform/agent.schema.json",
+  "title": "AgentDefinition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "tenantId",
+    "name",
+    "status",
+    "enabled",
+    "instructions",
+    "contract",
+    "modelRef",
+    "enabledSkills",
+    "roles",
+    "security",
+    "executionPolicy",
+    "revision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "id": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "tenantId": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "owner": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 64
+      }
+    },
+    "status": {
+      "$ref": "common.schema.json#/$defs/lifecycleStatus"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "instructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "systemPromptRef"
+      ],
+      "properties": {
+        "systemPromptRef": {
+          "$ref": "common.schema.json#/$defs/id"
+        },
+        "systemPromptVersion": {
+          "$ref": "common.schema.json#/$defs/version"
+        },
+        "inlineInstructions": {
+          "type": "string",
+          "maxLength": 50000
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inputSchema",
+        "outputSchema"
+      ],
+      "properties": {
+        "inputSchema": {
+          "$ref": "common.schema.json#/$defs/jsonSchema"
+        },
+        "outputSchema": {
+          "$ref": "common.schema.json#/$defs/jsonSchema"
+        },
+        "responseFormat": {
+          "type": "string",
+          "enum": [
+            "text",
+            "json",
+            "json_schema"
+          ]
+        }
+      }
+    },
+    "modelRef": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "generationParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "topP": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        }
+      }
+    },
+    "fallbackPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "allowedModelRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/id"
+          }
+        }
+      }
+    },
+    "enabledSkills": {
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 0,
+      "items": {
+        "$ref": "common.schema.json#/$defs/ref"
+      }
+    },
+    "roles": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "overrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "removeSkills": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/id"
+          }
+        },
+        "removeTools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/id"
+          }
+        },
+        "lowerRiskCeiling": {
+          "$ref": "common.schema.json#/$defs/riskLevel"
+        }
+      }
+    },
+    "orchestration": {
+      "type": "object",
+      "description": "多级 Agent 编排声明。缺省等价于 LEAF（旧配置兼容解析，MA-T01）。字段受 additionalProperties=false 约束，不得为规避迁移而关闭额外字段校验。",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "$ref": "common.schema.json#/$defs/orchestrationMode"
+        },
+        "childAgentRefs": {
+          "type": "array",
+          "description": "固定版本的子 Agent 引用。同一父 release 内不得重复声明同一子 release；LEAF 模式必须为空。",
+          "uniqueItems": true,
+          "maxItems": 16,
+          "items": {
+            "$ref": "common.schema.json#/$defs/childAgentRef"
+          }
+        },
+        "routingPolicyRef": {
+          "description": "固定版本的路由策略引用。ROUTER 模式必填；模型输出仅是候选选择，服务端校验后才可委派（NFR-013）。",
+          "$ref": "common.schema.json#/$defs/fixedVersionRef"
+        },
+        "maxDelegationDepth": {
+          "type": "integer",
+          "description": "最大委派深度（含根 Agent 计为 1）。",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "maxChildInvocations": {
+          "type": "integer",
+          "description": "单个父 Agent 允许发起的最大子调用次数。全调用树共享根 Run 的总上限，不能通过嵌套重置（MA-T17）。",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "description": "本级委派链路的总超时预算（毫秒）。",
+          "minimum": 100,
+          "maximum": 3600000
+        },
+        "failurePolicy": {
+          "$ref": "common.schema.json#/$defs/delegationFailurePolicy"
+        },
+        "resultContractRef": {
+          "description": "固定版本的委派结果输出契约引用。父子输出不同构时须经该契约做映射。",
+          "$ref": "common.schema.json#/$defs/fixedVersionRef"
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "riskCeiling",
+        "authorizationPolicyRef",
+        "denyByDefault"
+      ],
+      "properties": {
+        "riskCeiling": {
+          "$ref": "common.schema.json#/$defs/riskLevel"
+        },
+        "authorizationPolicyRef": {
+          "$ref": "common.schema.json#/$defs/id"
+        },
+        "approvalPolicyRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "denyByDefault": {
+          "const": true
+        },
+        "allowPrivilegeEscalation": {
+          "const": false
+        }
+      }
+    },
+    "executionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timeoutMs",
+        "retryPolicy"
+      ],
+      "properties": {
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        },
+        "retryPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxAttempts"
+          ],
+          "properties": {
+            "maxAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            },
+            "retryableErrors": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "concurrencyPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxConcurrentRuns": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "duplicateExecution": {
+              "type": "string",
+              "enum": [
+                "reject",
+                "reuse_result",
+                "wait"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "resourceLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxInputTokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxToolCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxExecutionSteps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxCostMicros": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "contextPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxContextTokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "includeConversationHistory": {
+          "type": "boolean"
+        },
+        "maxHistoryMessages": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "memoryPolicyRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "knowledgeRefs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "common.schema.json#/$defs/ref"
+      }
+    },
+    "observabilityPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "logLevel": {
+          "type": "string",
+          "enum": [
+            "ERROR",
+            "WARN",
+            "INFO",
+            "DEBUG"
+          ]
+        },
+        "traceEnabled": {
+          "type": "boolean"
+        },
+        "redactionPolicyRef": {
+          "type": "string"
+        }
+      }
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "releaseRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "configFingerprint": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "createdBy": {
+      "type": "string"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedBy": {
+      "type": "string"
+    }
+  }
+}

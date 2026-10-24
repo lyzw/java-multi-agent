@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0",
+  "id": "skill_customer_lookup",
+  "tenantId": "tenant_001",
+  "name": "Customer Lookup",
+  "description": "只读查询客户资料",
+  "status": "DRAFT",
+  "namespace": "tenant",
+  "declaredTools": [
+    {
+      "id": "tool_customer_get",
+      "version": "1.0.0"
+    }
+  ],
+  "declaredMcp": [],
+  "riskCeiling": "READ",
+  "paramPolicies": [],
+  "inherits": [],
+  "requiredCaps": [],
+  "revision": 1,
+  "configFingerprint": null
+}

@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.invalid/agent-platform/common.schema.json",
+  "title": "Shared Agent Platform Contract Definitions",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "pinnedVersion": {
+      "type": "string",
+      "description": "固定版本引用。多级 Agent 的子 Agent / 路由策略 / 输出契约必须使用固定版本，禁止 latest 等漂移别名（06 变更补充 · 发布闭包算法）。",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^(?!latest$)[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "orchestrationMode": {
+      "type": "string",
+      "description": "编排模式。LEAF = 不委派；ROUTER = 按路由策略选择子 Agent；SEQUENTIAL = 按声明顺序串行执行子 Agent（V1 有界串行）。",
+      "enum": [
+        "LEAF",
+        "ROUTER",
+        "SEQUENTIAL"
+      ]
+    },
+    "delegationFailurePolicy": {
+      "type": "string",
+      "description": "子调用失败策略。FAIL_FAST = 首个失败即停止后续委派；CONTINUE_ON_ERROR = 继续执行剩余子调用并按输出契约聚合失败。",
+      "enum": [
+        "FAIL_FAST",
+        "CONTINUE_ON_ERROR"
+      ]
+    },
+    "childAgentRef": {
+      "type": "object",
+      "description": "固定版本的子 Agent 引用。禁止 latest：委派目标必须在发布时固定 release，否则在途 Run 会静默漂移（MA-T02 / MA-T08）。",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "$ref": "#/$defs/pinnedVersion"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "该子 Agent 是否为必选依赖。false 表示可选，父 Agent 不得因其失败而整体失败（failurePolicy 仍为准）。"
+        }
+      }
+    },
+    "fixedVersionRef": {
+      "type": "object",
+      "description": "固定版本引用（路由策略 / 输出契约 / 委派目标）。",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "$ref": "#/$defs/pinnedVersion"
+        }
+      }
+    },
+    "lifecycleStatus": {
+      "type": "string",
+      "enum": [
+        "DRAFT",
+        "VALIDATED",
+        "PUBLISHED",
+        "DEPRECATED"
+      ]
+    },
+    "riskLevel": {
+      "type": "string",
+      "enum": [
+        "READ",
+        "WRITE_PROFILE",
+        "WRITE_EXTERNAL"
+      ]
+    },
+    "paramPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "param",
+        "op",
+        "value"
+      ],
+      "properties": {
+        "param": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "op": {
+          "type": "string",
+          "enum": [
+            "in_allowlist",
+            "lte"
+          ]
+        },
+        "value": {
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            {
+              "type": "number"
+            }
+          ]
+        }
+      }
+    },
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        }
+      }
+    },
+    "mcpBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "serverId"
+      ],
+      "properties": {
+        "serverId": {
+          "$ref": "#/$defs/id"
+        },
+        "serverVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "toolAllowlist": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      }
+    },
+    "jsonSchema": {
+      "type": "object",
+      "description": "A JSON Schema object. Full meta-schema validation is required by the implementation."
+    }
+  }
+}
