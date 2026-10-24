@@ -126,9 +126,9 @@ class GovernanceQueryIT {
                     sameInstantRuns.add(newRun(tenantA, sameInstant)));
 
             Page<RunListQueryPort.RunListItem> p1 =
-                    runList.list(tenantA, null, null, null, null, 3);
+                    runList.list(tenantA, null, null, null, null, null, 3);
             Page<RunListQueryPort.RunListItem> p2 =
-                    runList.list(tenantA, null, null, null, p1.nextCursor(), 3);
+                    runList.list(tenantA, null, null, null, null, p1.nextCursor(), 3);
 
             List<String> firstPage = p1.items().stream()
                     .map(RunListQueryPort.RunListItem::runId).toList();
@@ -185,19 +185,19 @@ class GovernanceQueryIT {
     @DisplayName("✅ G-2 游标翻页不重不漏；并发新插入不影响已翻页的结果")
     void cursorPagingHasNoGapOrOverlap() {
         String marker = newRun(tenantA);
-        List<String> all = runList.list(tenantA, null, null, null, null, 100)
+        List<String> all = runList.list(tenantA, null, null, null, null, null, 100)
                 .items().stream().map(RunListQueryPort.RunListItem::runId).toList();
         assertThat(all).contains(marker);
 
         // 第一页
-        Page<RunListQueryPort.RunListItem> p1 = runList.list(tenantA, null, null, null, null, 2);
+        Page<RunListQueryPort.RunListItem> p1 = runList.list(tenantA, null, null, null, null, null, 2);
         assertThat(p1.hasMore()).isTrue();
 
         // ⛔ 翻页期间插入一条更「新」的 Run（created_at 更晚 = 排序更靠前）
         newRun(tenantA);
 
         Page<RunListQueryPort.RunListItem> p2 =
-                runList.list(tenantA, null, null, null, p1.nextCursor(), 2);
+                runList.list(tenantA, null, null, null, null, p1.nextCursor(), 2);
 
         List<String> seen = java.util.stream.Stream.concat(
                         p1.items().stream().map(RunListQueryPort.RunListItem::runId),
@@ -215,10 +215,10 @@ class GovernanceQueryIT {
     @Test
     @DisplayName("✅ G-3 坏游标 / 非正 limit → 拒绝（不静默当成第一页）")
     void invalidArgumentsAreRejected() {
-        assertThatThrownBy(() -> runList.list(tenantA, null, null, null, "not-base64!!", 10))
+        assertThatThrownBy(() -> runList.list(tenantA, null, null, null, null, "not-base64!!", 10))
                 .as("⛔ 坏游标必须报错，不能静默当成第一页")
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> runList.list(tenantA, null, null, null, null, 0))
+        assertThatThrownBy(() -> runList.list(tenantA, null, null, null, null, null, 0))
                 .isInstanceOf(IllegalArgumentException.class);
         // ⚠️ limit 上限 100 是在**端点层**（GovernanceSupport）强制的契约，
         //    仓库层只挡非正数——那条断言在 GovernanceEndpointIT 里。
@@ -229,15 +229,15 @@ class GovernanceQueryIT {
     void filtersWork() {
         String runId = newRun(tenantA);
 
-        assertThat(runList.list(tenantA, "QUEUED", null, null, null, 50).items())
+        assertThat(runList.list(tenantA, "QUEUED", null, null, null, null, 50).items())
                 .as("新建的 Run 应处于 QUEUED")
                 .anySatisfy(i -> assertThat(i.runId()).isEqualTo(runId));
 
         Instant future = Instant.now().plusSeconds(3600);
-        assertThat(runList.list(tenantA, null, future, null, null, 50).items())
+        assertThat(runList.list(tenantA, null, null, future, null, null, 50).items())
                 .as("未来起点不应命中任何行")
                 .isEmpty();
-        assertThat(runList.list(tenantA, null, null, Instant.parse("2000-01-01T00:00:00Z"), null, 50)
+        assertThat(runList.list(tenantA, null, null, null, Instant.parse("2000-01-01T00:00:00Z"), null, 50)
                 .items())
                 .as("过去终点不应命中任何行")
                 .isEmpty();
@@ -254,7 +254,7 @@ class GovernanceQueryIT {
         //    真正的隔离不变式是：**B 看不到 A 的任何一行**。
         //    ——此前写成 isEmpty()，首轮恰好成立，一旦 B 有了自己的数据就转红，
         //    且失败现场指向错误的排查方向（F-9 同形态）。
-        List<String> visibleToB = runList.list(tenantB, null, null, null, null, 100)
+        List<String> visibleToB = runList.list(tenantB, null, null, null, null, null, 100)
                 .items().stream()
                 .map(RunListQueryPort.RunListItem::runId)
                 .toList();
@@ -327,6 +327,84 @@ class GovernanceQueryIT {
                 + approvalId + "'"))
                 .as("拒绝后状态必须仍是 PENDING")
                 .isEqualTo("PENDING");
+    }
+
+    @Test
+    @DisplayName("✅ 过期审批：**可以拒绝**（过期只否定「批准」，不否定「拒绝」）")
+    void expiredApprovalCanStillBeDenied() {
+        String operationId = newUnknownOperation(tenantA, "UNKNOWN");
+        String approvalId = newApproval(tenantA, operationId, pastExpiry());
+
+        assertThat(approvals.find(tenantA, approvalId).expired())
+                .as("⛔ expired 必须由服务端算，前端时钟不可信")
+                .isTrue();
+
+        var decision = approvals.decide(
+                tenantA, approvalId, false, "approver-1", "已过期，不再执行");
+        assertThat(decision.newState())
+                .as("⛔ 过期审批不得批准，但**必须**能拒绝——"
+                        + "否则这条待办既不能批也不能驳，只能干等系统清理")
+                .isEqualTo("REJECTED");
+
+        assertThat(adminQuery("SELECT state::text FROM approval WHERE approval_id='"
+                + approvalId + "'"))
+                .isEqualTo("REJECTED");
+        assertThat(adminQuery("SELECT approver_id FROM approval WHERE approval_id='"
+                + approvalId + "'"))
+                .as("审批人标识必须落库（来自令牌，不来自请求体）")
+                .isEqualTo("approver-1");
+    }
+
+    @Test
+    @DisplayName("✅ G-7 Run 列表回填学科/年级（经 DEC-6 词表校验）")
+    void listCarriesSubjectAndGrade() {
+        String runId = newRunWithPayload(tenantA, Map.of(
+                "studentId", "stu_0123456789abcdef",
+                "subject", "数学",
+                "grade", "初二",
+                "questionText", "解方程 x^2 - 4 = 0"));
+
+        RunListQueryPort.RunListItem item = findItem(tenantA, runId);
+        assertThat(item.subject())
+                .as("前端检索台要按学科筛（FE-01 §P7），列表必须带得出学科")
+                .isEqualTo("数学");
+        assertThat(item.grade()).isEqualTo("初二");
+    }
+
+    @Test
+    @DisplayName("⛔ 客户端可控的非法学科/年级不得回显（fail-closed）")
+    void invalidSubjectIsNotEchoedBack() {
+        String runId = newRunWithPayload(tenantA, Map.of(
+                "subject", "<script>alert(1)</script>",
+                "grade", "高一",
+                "questionText", "任意文本"));
+
+        RunListQueryPort.RunListItem item = findItem(tenantA, runId);
+        assertThat(item.subject())
+                .as("⛔ input_payload 是客户端可控的 JSON，不校验就回显等于把它直接送到前端")
+                .isNull();
+        assertThat(item.grade())
+                .as("⛔ 同上：不在 DEC-6 词表内的年级一律当「没有」")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("✅ 按学科筛选只返回该学科的运行")
+    void listFiltersBySubject() {
+        String mathRun = newRunWithPayload(tenantA, Map.of("subject", "数学", "grade", "初二"));
+        String physicsRun = newRunWithPayload(tenantA, Map.of("subject", "物理", "grade", "初三"));
+
+        List<String> mathIds = runList.list(tenantA, null, "数学", null, null, null, 200)
+                .items().stream()
+                .map(RunListQueryPort.RunListItem::runId).toList();
+
+        assertThat(mathIds).contains(mathRun);
+        assertThat(mathIds)
+                .as("⛔ 学科筛选必须真的生效，否则前端下拉是个摆设")
+                .doesNotContain(physicsRun);
+        assertThat(mathIds)
+                .as("筛选结果里的每一行都必须是该学科")
+                .allMatch(id -> "数学".equals(findItem(tenantA, id).subject()));
     }
 
     @Test
@@ -630,6 +708,41 @@ class GovernanceQueryIT {
                     + "WHERE run_id = '" + runId + "'::uuid");
         }
         return runId;
+    }
+
+    /**
+     * 造一条带指定 {@code input_payload} 的 Run（学科/年级回填用例用）。
+     *
+     * <p>⚠️ 刻意<b>不</b>复用 {@link #newRun(String)}：那个夹具的载荷是
+     * {@code {"question": ...}}，没有学科/年级——复用会让回填用例恒拿到 null，
+     * 断言变成<b>恒真</b>，完全不承载信息。
+     */
+    private static String newRunWithPayload(String tenantId, Map<String, Object> payload) {
+        String snapshot = snapshotIdFor(tenantId);
+        String runId = UUID.randomUUID().toString();
+        creationRepo.insertRunAtomically(tenantId, runId, snapshot,
+                new IdempotencyKey("run.create", "gov-it-" + runId),
+                RequestDigest.ofText("digest-" + runId),
+                payload,
+                "corr-" + runId,
+                new OutboxMessage(runId, tenantId, 0, 0L, CLOCK.instant()));
+        return runId;
+    }
+
+    /**
+     * 按 runId 取出列表项。
+     *
+     * <p>⚠️ <b>刻意带上「未来时刻」上界</b>：本类里有一条用例把 created_at
+     * 归一到 2099-12-31（造同刻多行），而排序是 created_at DESC——
+     * 不设上界，那几行会永远排在最前面，把真正要查的夹具挤出第一页。
+     */
+    private static RunListQueryPort.RunListItem findItem(String tenantId, String runId) {
+        Instant upperBound = Instant.now().plusSeconds(60);
+        return runList.list(tenantId, null, null, null, upperBound, null, 500)
+                .items().stream()
+                .filter(i -> i.runId().equals(runId))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("列表里找不到 run " + runId));
     }
 
     private static java.util.Map<String, String> snapshotCache = new java.util.HashMap<>();

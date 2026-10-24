@@ -149,6 +149,65 @@ class IdempotencyProtocolTest {
         }
     }
 
+    // ── P1-9：幂等键必须含工具身份 ───────────────────
+
+    @Nested
+    @DisplayName("P1-9 幂等键含工具身份")
+    class ToolIdentityInKey {
+
+        @Test
+        @DisplayName("✅ record_weakness 自己仍用 record_weakness 命名空间")
+        void recordWeaknessKeepsItsOwnShape() {
+            IdempotencyKey k = IdempotencyKey.forToolCall(
+                    "run-1", IdempotencyKey.RECORD_WEAKNESS_TOOL, "call-1",
+                    "stu-1", "一元二次方程");
+            assertThat(k.namespace()).isEqualTo("tool.record_weakness");
+            assertThat(k.keyValue()).isEqualTo("stu-1/run-1/一元二次方程");
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 其他工具不得占用 record_weakness 命名空间（P1-9 反证）")
+        void otherToolMustNotReuseRecordWeaknessNamespace() {
+            // ⚠️ 修复前：调用方只看「参数里有没有 studentId + knowledgePoint」，
+            //    于是任意带这两个参数的工具都被塞进 tool.record_weakness 命名空间 ——
+            //    两个不同工具算出同一个键（UNIQUE(tenant_id, idempotency_key)）。
+            IdempotencyKey k = IdempotencyKey.forToolCall(
+                    "run-1", "generate_explanation", "call-1",
+                    "stu-1", "一元二次方程");
+
+            assertThat(k.namespace())
+                    .as("⚠️⚠️ 非 record_weakness 工具必须用 tool.invoke 命名空间；"
+                            + "否则它与 record_weakness 的调用拉同一个键")
+                    .isEqualTo("tool.invoke");
+            assertThat(k.keyValue())
+                    .as("⚠️⚠️ 键里必须含工具名")
+                    .isEqualTo("run-1/generate_explanation/call-1");
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 两个不同工具 + 相同参数 → 不同键（P1-9 反证）")
+        void differentToolsWithSameArgumentsProduceDifferentKeys() {
+            IdempotencyKey a = IdempotencyKey.forToolCall(
+                    "run-1", "record_weakness", "call-1", "stu-1", "KP");
+            IdempotencyKey b = IdempotencyKey.forToolCall(
+                    "run-1", "generate_explanation", "call-1", "stu-1", "KP");
+
+            assertThat(a.composite())
+                    .as("⚠️⚠️ 工具不同必须产生不同键 —— "
+                            + "相同键会让后者被判「重放」（静默不执行）"
+                            + "或被判「冲突」（被拒绝执行）")
+                    .isNotEqualTo(b.composite());
+        }
+
+        @Test
+        @DisplayName("✅ 缺 callId 时仍产生带工具名的键")
+        void missingCallIdStillCarriesToolName() {
+            IdempotencyKey k = IdempotencyKey.forToolCall(
+                    "run-1", "get_student_profile", null, "stu-1", null);
+            assertThat(k.keyValue()).isEqualTo("run-1/get_student_profile/no-call-id");
+        }
+    }
+
     // ── P4-D08 R-2：幂等键必须含 run 维度 ──────────────────────────
 
     @Nested

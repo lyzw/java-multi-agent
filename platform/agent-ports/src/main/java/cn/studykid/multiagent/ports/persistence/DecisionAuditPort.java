@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.ports.persistence;
 
+import java.time.Instant;
 import java.util.List;
 
 import org.jspecify.annotations.NonNull;
@@ -69,4 +70,27 @@ public interface DecisionAuditPort {
      */
     @NonNull
     DecisionAuditCoverage coverage(@NonNull String tenantId);
+
+    /**
+     * 读取<b>近期拒绝记录</b>（管理面 P4 运行监控）。
+     *
+     * <p>⚠️ <b>只返回 DENY</b>：ALLOW 行不构成告警素材。
+     * 把允许记录一并返回会让调用方自行过滤 —— 那等于把
+     * 「拒绝才算异常」这一口径分散到每个调用点，容易漏筛。
+     *
+     * <p>⚠️ <b>排序固定为发生时刻倒序</b>：监控视图看的是「最近发生了什么」，
+     * 顺序若不确定则同一批数据在不同次调用里排列不同，无法做增量对比。
+     *
+     * <p>⚠️ <b>只读，不写入</b>：本方法不产生任何审计副作用。
+     *
+     * @param tenantId 租户标识
+     * @param since    起始时刻（含）；<b>不得为 null</b> —— 监控必须有窗口，
+     *                 无窗口的「近期」在数据量增长后等于全表扫描
+     * @param limit    最大返回条数（调用方已校验上限）
+     * @return 拒绝记录（按 {@code created_at} 倒序）
+     */
+    public @NonNull List<DecisionAuditEntry> findRecentDenies(
+            @NonNull String tenantId,
+            @NonNull Instant since,
+            int limit);
 }

@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.ports.persistence;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
@@ -68,4 +69,23 @@ public interface CapToolDefPort {
      */
     @NonNull Optional<CapToolDef> findByMcpBinding(@NonNull String mcpServerId,
                                                     @NonNull String mcpToolName);
+
+    /**
+     * 列出全部 Tool 定义（各逻辑 id 的<b>最新</b>版本行）。
+     *
+     * <p>⚠️ <b>只读用途</b>：供配置台的 Tool 目录页展示「平台上有哪些工具、
+     * 各自的风险等级 / 输入 schema / MCP 绑定」。
+     * <b>不</b>用于授权判定中的版本解析（那必须走 {@link PublishedVersionPort}）。
+     *
+     * <p>⚠️ <b>为什么不按租户过滤</b>：Tool 定义是 platform 级对象
+     * （{@code cap_tool_def} 不启用 RLS），全平台唯一；
+     * 租户边界体现在「哪个租户的 Agent 能启用哪个 Skill」上。
+     *
+     * <p>⚠️ <b>本端口只读，不提供写入入口</b>：平台级对象的变更
+     * 走带外运维通道（见 {@code CapConfigPublishController} 的 403 作用域闸门），
+     * 不挂在租户身份上——否则任一租户管理员自授角色即可改全平台配置。
+     *
+     * @return 全部 Tool 定义（每个逻辑 id 取其最高版本行），按 id 升序
+     */
+    @NonNull List<CapToolDef> listAll();
 }

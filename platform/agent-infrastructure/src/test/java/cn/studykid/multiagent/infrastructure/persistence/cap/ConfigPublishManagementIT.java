@@ -70,6 +70,7 @@ class ConfigPublishManagementIT extends CapITBase {
                         new ConfigLifecycleStateMachine()),
                 new JdbcCapAgentDefRepository(appPool),
                 new JdbcConfigPointerRepository(appPool),
+                new JdbcConfigReleaseRepository(appPool),
                 CLOCK);
     }
 

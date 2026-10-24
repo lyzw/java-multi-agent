@@ -4,6 +4,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -66,6 +67,19 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
             + " FROM cap_mcp_server_def WHERE id = ? AND published_at IS NOT NULL"
             + " ORDER BY version DESC LIMIT 1";
 
+    /**
+     * 列出全部 MCP Server 定义（各逻辑 id 的最高版本行）。
+     *
+     * <p>⚠️ 用 {@code (id, version) IN (SELECT id, MAX(version) ...)} 取每 id 最高版本，
+     * 与 {@code CapToolDefPort#listAll} 的「最高版本行」语义一致。
+     */
+    private static final String SQL_LIST_ALL = "SELECT " + COLUMNS
+            + " FROM cap_mcp_server_def"
+            + " WHERE (id, version) IN ("
+            + "   SELECT id, MAX(version) FROM cap_mcp_server_def GROUP BY id"
+            + ")"
+            + " ORDER BY id ASC";
+
     private final DataSource dataSource;
 
     public JdbcCapMcpServerDefRepository(@NonNull DataSource dataSource) {
@@ -120,6 +134,23 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
     @Override
     public @NonNull Optional<CapMcpServerDef> findLatestPublished(@NonNull String serverId) {
         return query(SQL_FIND_LATEST_PUBLISHED, ps -> ps.setString(1, serverId));
+    }
+
+    @Override
+    public @NonNull List<CapMcpServerDef> listAll() {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    List<CapMcpServerDef> rows = new ArrayList<>();
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_ALL)) {
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                rows.add(map(rs));
+                            }
+                        }
+                    }
+                    return rows;
+                });
     }
 
     private @NonNull Optional<CapMcpServerDef> query(@NonNull String sql,

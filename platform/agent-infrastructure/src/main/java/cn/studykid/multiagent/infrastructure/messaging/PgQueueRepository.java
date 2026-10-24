@@ -118,8 +118,16 @@ public class PgQueueRepository {
         if (limit <= 0) {
             return List.of();
         }
+        // ⚠️⚠️ **回收的 INFLIGHT 行必须计 attempts**（P1-13 修复）：
+        //    上一任消费者进程崩溃/卡死 → 行停在 INFLIGHT → 超时被回收重投。
+        //    修复前回收不加 attempts → 毒消息（消费者永远卡死）
+        //    可以无限重投，**永远到不会进死信**（maxAttempts 只在
+        //    「处理者正常返回/抛异常」的重试路径上检查）。
+        //    另外 SELECT 返回的 attempts 也必须是「加计后」的值，
+        //    否则内存里的消费计数与库里的不一致 → 重试上限偏离。
         String selectSql = """
-                SELECT queue_id, tenant_id, run_id, event_type, payload, attempts
+                SELECT queue_id, tenant_id, run_id, event_type, payload,
+                       attempts + CASE WHEN state = 'INFLIGHT' THEN 1 ELSE 0 END AS attempts
                 FROM agent_message_queue
                 WHERE tenant_id = ?::uuid
                   AND (
@@ -132,7 +140,10 @@ public class PgQueueRepository {
                 """;
         String updateSql = """
                 UPDATE agent_message_queue
-                SET state = 'INFLIGHT', claimed_by = ?, claimed_at = now()
+                SET state = 'INFLIGHT',
+                    claimed_by = ?,
+                    claimed_at = now(),
+                    attempts = attempts + CASE WHEN state = 'INFLIGHT' THEN 1 ELSE 0 END
                 WHERE queue_id = ?::uuid AND tenant_id = ?::uuid
                 """;
 
@@ -173,14 +184,36 @@ public class PgQueueRepository {
         return claimed;
     }
 
-    /** 确认消费完成（删除行）。 */
-    public void ack(@NonNull String tenantId, @NonNull UUID queueId) {
-        String sql = "DELETE FROM agent_message_queue WHERE queue_id = ?::uuid AND tenant_id = ?::uuid";
+    /**
+     * 确认消费完成（删除行）。
+     *
+     * <p>⚠️⚠️ <b>必须带 {@code claimed_by} 围栏</b>（P1-14 修复）：
+     * 本行的持有者可能已经超出可见性超时，被另一个 worker 回收并取得了新的领取。
+     * 若不围栏，旧 worker 的 ack 会<b>删掉新 worker 正在处理的那行</b> ——
+     * 新 worker 的副作用可能已经发生，但消息行已消失（新 worker 随后崩溃 → 消息永不重投）。
+     * 围栏后旧 worker 的 ack 变成幂等的「无效操作」，行由新 worker 负责收尾。
+     *
+     * @param tenantId 租户
+     * @param queueId  队列行 id
+     * @param workerId 当前 worker 标识（必须与领取时一致）
+     */
+    public void ack(@NonNull String tenantId, @NonNull UUID queueId, @NonNull String workerId) {
+        String sql = """
+                DELETE FROM agent_message_queue
+                WHERE queue_id = ?::uuid AND tenant_id = ?::uuid AND claimed_by = ?
+                """;
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             try (PreparedStatement ps = lease.connection().prepareStatement(sql)) {
                 ps.setObject(1, queueId);
                 ps.setString(2, tenantId);
-                ps.executeUpdate();
+                ps.setString(3, workerId);
+                int deleted = ps.executeUpdate();
+                if (deleted == 0) {
+                    // ⚠️ 本行已不在本 worker 手上（被其他 worker 回收了）→ 不做任何事，
+                    //    由当前持有者收尾。这里不是错误，不需要抛异常。
+                    log.debug("确认被围栏拒绝（行已被其他 worker 回收）: queueId={}, worker={}",
+                            queueId, workerId);
+                }
             }
             lease.commitQuietly();
         } catch (SQLException e) {
@@ -197,7 +230,11 @@ public class PgQueueRepository {
     public void retry(@NonNull String tenantId,
                       @NonNull UUID queueId,
                       @NonNull String error,
-                      @NonNull Instant nextAttemptAt) {
+                      @NonNull Instant nextAttemptAt,
+                      @NonNull String workerId) {
+        // ⚠️⚠️ <b>必须带 {@code claimed_by} 围栏</b>（P1-14 修复）：
+        //    无围栏时，旧 worker 的 retry 会把<b>新 worker 正在处理的行退回 PENDING</b> ——
+        //    新 worker 还在处理，行却已可被再次领取 → <b>重复执行</b>（重复副作用 = Sev-0）。
         String sql = """
                 UPDATE agent_message_queue
                 SET state = 'PENDING',
@@ -206,7 +243,7 @@ public class PgQueueRepository {
                     last_error = ?,
                     claimed_by = NULL,
                     claimed_at = NULL
-                WHERE queue_id = ?::uuid AND tenant_id = ?::uuid
+                WHERE queue_id = ?::uuid AND tenant_id = ?::uuid AND claimed_by = ?
                 """;
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             try (PreparedStatement ps = lease.connection().prepareStatement(sql)) {
@@ -214,7 +251,12 @@ public class PgQueueRepository {
                 ps.setString(2, error);
                 ps.setObject(3, queueId);
                 ps.setString(4, tenantId);
-                ps.executeUpdate();
+                ps.setString(5, workerId);
+                int updated = ps.executeUpdate();
+                if (updated == 0) {
+                    log.debug("重试登记被围栏拒绝（行已被其他 worker 回收）: queueId={}, worker={}",
+                            queueId, workerId);
+                }
             }
             lease.commitQuietly();
         } catch (SQLException e) {
@@ -234,13 +276,20 @@ public class PgQueueRepository {
                        @NonNull String runId,
                        @NonNull Map<String, Object> payload,
                        int attempts,
-                       @NonNull String error) {
+                       @NonNull String error,
+                       @NonNull String workerId) {
         String insertSql = """
                 INSERT INTO agent_message_dead_letter
                     (tenant_id, queue_id, run_id, event_type, payload, attempts, error)
                 VALUES (?::uuid, ?::uuid, ?::uuid, ?, ?::jsonb, ?, ?)
                 """;
-        String deleteSql = "DELETE FROM agent_message_queue WHERE queue_id = ?::uuid AND tenant_id = ?::uuid";
+        // ⚠️⚠️ <b>删除必须带 {@code claimed_by} 围栏</b>（P1-14 修复）：
+        //    否则旧 worker 能把「新 worker 正在处理的行」拉进死信。
+        //    死信表是「只进不出」的，一条被误拉的死信就是一条永久的错误记录。
+        String deleteSql = """
+                DELETE FROM agent_message_queue
+                WHERE queue_id = ?::uuid AND tenant_id = ?::uuid AND claimed_by = ?
+                """;
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             Connection conn = lease.connection();
             try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
@@ -256,7 +305,14 @@ public class PgQueueRepository {
             try (PreparedStatement ps = conn.prepareStatement(deleteSql)) {
                 ps.setObject(1, queueId);
                 ps.setString(2, tenantId);
-                ps.executeUpdate();
+                ps.setString(3, workerId);
+                int deleted = ps.executeUpdate();
+                if (deleted == 0) {
+                    // ⚠️ 围栏拒绝 → 本次死信登记也不能生效（否则「已进死信但队列里还在」——
+                    //    两步必须同生共死。抛异常 → 连接回滚 → 死信登记一并回滚。
+                    throw new IllegalStateException(
+                            "消息死信登记被围栏拒绝（行已被其他 worker 回收）: queueId=" + queueId);
+                }
             }
             lease.commitQuietly();
         } catch (SQLException e) {

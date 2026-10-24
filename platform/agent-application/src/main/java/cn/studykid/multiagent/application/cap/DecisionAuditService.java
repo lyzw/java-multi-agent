@@ -209,5 +209,13 @@ public class DecisionAuditService {
         public DecisionAuditCoverage coverage(@NonNull String tenantId) {
             return new DecisionAuditCoverage(0, 0, 0, 0, 0);
         }
+
+        @Override
+        public @NonNull List<DecisionAuditEntry> findRecentDenies(@NonNull String tenantId,
+                                                                  @NonNull Instant since,
+                                                                  int limit) {
+            // 故意不返回任何记录：仅供单元测试使用
+            return List.of();
+        }
     }
 }

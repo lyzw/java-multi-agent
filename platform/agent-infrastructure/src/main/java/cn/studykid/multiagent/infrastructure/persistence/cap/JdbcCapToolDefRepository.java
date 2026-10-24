@@ -5,6 +5,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import javax.sql.DataSource;
@@ -61,6 +62,16 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
     private static final String SQL_FIND_BY_MCP_BINDING = "SELECT " + COLUMNS
             + " FROM cap_tool_def WHERE mcp_server_id = ? AND mcp_tool_name = ?"
             + " AND published_at IS NOT NULL ORDER BY version DESC LIMIT 1";
+
+    /**
+     * 每个逻辑 id 的最高版本行。
+     *
+     * <p>⚠️ 用 {@code DISTINCT ON} 而非 {@code GROUP BY + MAX}：
+     * 后者只能拿到版本号，取不到整行；前者一次扫描即得「每个 id 的最高版本整行」。
+     * ⚠️ 排序键必须与 DISTINCT ON 的首列一致（PG 强制要求）。
+     */
+    private static final String SQL_LIST_ALL = "SELECT DISTINCT ON (id) " + COLUMNS
+            + " FROM cap_tool_def ORDER BY id, version DESC";
 
     private final DataSource dataSource;
 
@@ -130,6 +141,22 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
                         try (ResultSet rs = ps.executeQuery()) {
                             return rs.next() ? Optional.of(map(rs)) : Optional.empty();
                         }
+                    }
+                });
+    }
+
+    @Override
+    public @NonNull List<CapToolDef> listAll() {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_ALL);
+                         ResultSet rs = ps.executeQuery()) {
+                        List<CapToolDef> out = new java.util.ArrayList<>();
+                        while (rs.next()) {
+                            out.add(map(rs));
+                        }
+                        return List.copyOf(out);
                     }
                 });
     }

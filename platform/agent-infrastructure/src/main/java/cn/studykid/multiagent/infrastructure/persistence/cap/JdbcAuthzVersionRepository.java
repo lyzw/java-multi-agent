@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.cap.AuthzUnavailableException;
 import cn.studykid.multiagent.core.cap.AuthzVersion;
+import cn.studykid.multiagent.core.monitoring.AuthzWatermark;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
 import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
@@ -79,6 +80,24 @@ public class JdbcAuthzVersionRepository implements AuthzVersionPort {
             INSERT INTO cap_authz_version (tenant_id, principal_id, authz_version, version, updated_at)
             VALUES (?::uuid, ?, 1, 0, now())
             ON CONFLICT (tenant_id, principal_id) DO NOTHING
+            """;
+
+    /**
+     * 租户级水位聚合（管理面 P4 运行监控）。
+     *
+     * <p>⚠️ <b>{@code revoked_subjects} 的口径是 {@code authz_version > 1}</b>：
+     * 初始版本恒为 1（{@code AuthzVersion.INITIAL_VERSION}），
+     * 故「> 1」精确等于「发生过至少一次撤权递增」，且与
+     * {@code CHECK (authz_version >= 1)} 约束不冲突。
+     */
+    private static final String SQL_WATERMARK = """
+            SELECT
+                count(*)                                        AS subject_count,
+                count(*) FILTER (WHERE authz_version > 1)      AS revoked_subjects,
+                COALESCE(max(authz_version), 0)                 AS max_authz_version,
+                max(updated_at)                                 AS last_bump_at
+            FROM cap_authz_version
+            WHERE tenant_id = ?::uuid
             """;
 
     private final DataSource dataSource;
@@ -150,6 +169,53 @@ public class JdbcAuthzVersionRepository implements AuthzVersionPort {
                     tenantId, principalId, version);
         }
         return version;
+    }
+
+    /**
+     * 租户级授权版本水位聚合（管理面 P4 运行监控）。
+     *
+     * <p>⚠️ <b>为什么用一条聚合 SQL 而不是遍历主体</b>：
+     * 水位是租户级指标，主体数随租户增长；逐主体 {@code find} 是 N+1 查询，
+     * 在监控页这种「高频打开」的场景会直接拖垮 DB。
+     *
+     * <p>⚠️ <b>单条 SQL 保证口径一致</b>：
+     * {@code count(*)} / {@code count(*) FILTER (authz_version > 1)} /
+     * {@code max(authz_version)} / {@code max(updated_at)} 在同一条语句的同一快照上求值，
+     * 不会出现「计数取自时刻 A、最大版本取自时刻 B」的自相矛盾。
+     *
+     * <p>⚠️ <b>无记录时返回零值快照而不是空</b>：
+     * 「该租户还没有任何授权版本记录」是一个<b>合法的初始状态</b>（尚未授权任何主体），
+     * 不是故障。此时返回 subjectCount=0 的水位，让监控页展示「暂无授权记录」；
+     * 真正的故障（表不存在 / 连接失败）会抛 SQLException，由上层转 503。
+     */
+    @Override
+    public @NonNull AuthzWatermark watermark(@NonNull String tenantId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(tenantId),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_WATERMARK)) {
+                        ps.setString(1, tenantId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (!rs.next()) {
+                                // ⚠️ 聚合查询无匹配行时返回 0 值行；
+                                //    但本 SQL 无 GROUP BY，恒有一行 —— 保留兜底以防 SQL 变更
+                                return new AuthzWatermark(
+                                        tenantId, 0L, 0L, 0L, null, Instant.now());
+                            }
+                            long subjects = rs.getLong("subject_count");
+                            long revoked = rs.getLong("revoked_subjects");
+                            long maxVersion = rs.getLong("max_authz_version");
+                            Timestamp lastBump = rs.getTimestamp("last_bump_at");
+                            return new AuthzWatermark(
+                                    tenantId,
+                                    subjects,
+                                    revoked,
+                                    maxVersion,
+                                    lastBump == null ? null : lastBump.toInstant(),
+                                    Instant.now());
+                        }
+                    }
+                });
     }
 
     private static AuthzVersion map(ResultSet rs) throws SQLException {

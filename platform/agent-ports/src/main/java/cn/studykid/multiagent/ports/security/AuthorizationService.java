@@ -155,5 +155,23 @@ public interface AuthorizationService {
         public static final String VIEWER = "VIEWER";
         /** Worker 服务账号。 */
         public static final String WORKER = "WORKER";
+
+        /**
+         * 平台管理员（运营级）。
+         *
+         * <p>⚠️ <b>刻意不在 {@code RoleBasedAuthorizationService} 的权限矩阵中登记</b>：
+         * 此角色由<b>平台运维通道（BYPASSRLS 凭据 + 带外运维工具）</b>授予，
+         * 不经租户身份暴露（见 {@code CapConfigPublishController} 的平台级发布限制）。
+         * 应用层租户主体默认<b>不持有</b>该角色，
+         * 故任何依赖它的端点（如租户开通/启停/跨租户列）默认返回 403 ——
+         * 这是「默认拒绝」而非「默认放行」的刻意结果。
+         *
+         * <p>⚠️ 本角色用于<b>跨租户</b>的租户生命周期与主体治理；
+         * 普通租户管理员（{@link #TENANT_ADMIN}）仅能管理<b>本租户</b>资源。
+         */
+        public static final String PLATFORM_ADMIN = "PLATFORM_ADMIN";
+
+        /** 超级管理员（平台级最高权限，当前预留）。 */
+        public static final String SUPER_ADMIN = "SUPER_ADMIN";
     }
 }

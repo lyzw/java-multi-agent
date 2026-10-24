@@ -64,54 +64,49 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
                                         @NonNull String payload,
                                         @NonNull String reason,
                                         @NonNull String requesterId) {
-        ConfigPublishRequest created;
-        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
-            Connection conn = lease.connection();
-            conn.setAutoCommit(false);
-            try {
-                String sql = """
-                        INSERT INTO cap_config_publish_request
-                            (tenant_id, operation, payload, reason, requester_id, state)
-                        VALUES (?::uuid, ?, ?::jsonb, ?, ?, 'PENDING')
-                        RETURNING request_id::text, requested_at
-                        """;
-                String requestId;
-                Instant requestedAt;
-                try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                    ps.setString(1, tenantId);
-                    ps.setString(2, operation.name());
-                    ps.setString(3, payload);
-                    ps.setString(4, reason);
-                    ps.setString(5, requesterId);
-                    try (ResultSet rs = ps.executeQuery()) {
-                        if (!rs.next()) {
-                            throw new IllegalStateException("变更申请插入未返回 request_id");
+            return TransactionalConnectionHolder.inTransaction(dataSource,
+                    new TenantContext(tenantId, "system", java.util.Set.of(), 0L),
+                    conn -> {
+                        String sql = """
+                                INSERT INTO cap_config_publish_request
+                                    (tenant_id, operation, payload, reason, requester_id, state)
+                                VALUES (?::uuid, ?, ?::jsonb, ?, ?, 'PENDING')
+                                RETURNING request_id::text, requested_at
+                                """;
+                        String requestId;
+                        Instant requestedAt;
+                        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                            ps.setString(1, tenantId);
+                            ps.setString(2, operation.name());
+                            ps.setString(3, payload);
+                            ps.setString(4, reason);
+                            ps.setString(5, requesterId);
+                            try (ResultSet rs = ps.executeQuery()) {
+                                if (!rs.next()) {
+                                    throw new IllegalStateException(
+                                            "变更申请插入未返回 request_id");
+                                }
+                                requestId = rs.getString(1);
+                                requestedAt = rs.getTimestamp(2).toInstant();
+                            }
                         }
-                        requestId = rs.getString(1);
-                        requestedAt = rs.getTimestamp(2).toInstant();
-                    }
-                }
-                conn.commit();
-                // ⚠️ 审计明细只放**系统常量**，不放 payload / reason ——
-                //    二者是用户自由文本，PIPL 敏感信息扫描（fail-closed）会拒写。
-                audit.recordRequired(tenantId, requesterId,
-                        AuditPort.Actions.CONFIG_PUBLISH_REQUEST, "config_publish_request",
-                        requestId, Map.of("operation", operation.name()));
-                created = new ConfigPublishRequest(requestId, tenantId,
-                        operation, payload, reason,
-                        requesterId, ConfigPublishRequest.State.PENDING,
-                        null, null, requestedAt, null, null, null);
-            } catch (SQLException | RuntimeException e) {
-                safeRollback(conn);
-                throw e instanceof RuntimeException re
-                        ? re : new IllegalStateException("创建变更申请失败", e);
-            } finally {
-                restoreAutoCommit(conn);
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException("创建变更申请失败", e);
-        }
-        return created;
+                        // ⚠️⚠️ **审计与状态变更同事务**（P1-15 修复）：
+                        //    修复前的顺序是「先 commit 状态变更、再写审计」，
+                        //    审计写失败（fail-closed 抛异常）时状态变更**已经生效** ——
+                        //    得到的是「无审计的高危变更」，而类注释写明的恰恰是
+                        //    「审计写不进去就不生效」。现在两者在同一事务里：
+                        //    审计写不进去 → 全部回滚。
+                        //
+                        // ⚠️ 审计明细只放**系统常量**，不放 payload / reason ——
+                        //    二者是用户自由文本，PIPL 敏感信息扫描（fail-closed）会拒写。
+                        audit.recordRequired(tenantId, requesterId,
+                                AuditPort.Actions.CONFIG_PUBLISH_REQUEST, "config_publish_request",
+                                requestId, Map.of("operation", operation.name()));
+                        return new ConfigPublishRequest(requestId, tenantId,
+                                operation, payload, reason,
+                                requesterId, ConfigPublishRequest.State.PENDING,
+                                null, null, requestedAt, null, null, null);
+                    });
     }
 
     @Override
@@ -193,48 +188,47 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
                                         @NonNull Decision decision,
                                         @Nullable String note,
                                         @NonNull String approverId) {
-        ConfigPublishRequest decided;
-        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
-            Connection conn = lease.connection();
-            conn.setAutoCommit(false);
-            try {
-                ConfigPublishRequest existing = loadForUpdate(conn, tenantId, requestId);
-                // ⚛️ **双人复核第一道**：应用层比对身份
-                if (existing.requesterId().equals(approverId)) {
-                    throw new SelfApprovalException();
-                }
-                if (existing.state() != ConfigPublishRequest.State.PENDING) {
-                    throw new StateConflictException(
-                            "申请已处于 " + existing.state() + "，不可再决定");
-                }
-                ConfigPublishRequest.State target = decision == Decision.APPROVE
-                        ? ConfigPublishRequest.State.APPROVED
-                        : ConfigPublishRequest.State.REJECTED;
-                ConfigPublishRequest updated = updateDecision(conn, tenantId, requestId,
-                        target, note, approverId);
-                conn.commit();
-                audit.recordRequired(tenantId, approverId,
-                        decision == Decision.APPROVE
-                                ? AuditPort.Actions.CONFIG_PUBLISH_APPROVE
-                                : AuditPort.Actions.CONFIG_PUBLISH_REJECT,
-                        "config_publish_request", requestId,
-                        Map.of("operation", existing.operation().name(), "state", target.name()));
-                decided = updated;
-            } catch (SQLException | RuntimeException e) {
-                safeRollback(conn);
-                if (e instanceof SQLException se && CHECK_VIOLATION.equals(se.getSQLState())) {
-                    // ⚛️ **双人复核第二道**：DB CHECK 拦截（应用层被绕过时生效）
-                    throw new SelfApprovalException();
-                }
-                throw e instanceof RuntimeException re
-                        ? re : new IllegalStateException("审批失败", e);
-            } finally {
-                restoreAutoCommit(conn);
+        try {
+            return TransactionalConnectionHolder.inTransaction(dataSource,
+                    new TenantContext(tenantId, "system", java.util.Set.of(), 0L),
+                    conn -> {
+                        try {
+                            ConfigPublishRequest existing = loadForUpdate(conn, tenantId, requestId);
+                            // ⚛️ **双人复核第一道**：应用层比对身份
+                            if (existing.requesterId().equals(approverId)) {
+                                throw new SelfApprovalException();
+                            }
+                            if (existing.state() != ConfigPublishRequest.State.PENDING) {
+                                throw new StateConflictException(
+                                        "申请已处于 " + existing.state() + "，不可再决定");
+                            }
+                            ConfigPublishRequest.State target = decision == Decision.APPROVE
+                                    ? ConfigPublishRequest.State.APPROVED
+                                    : ConfigPublishRequest.State.REJECTED;
+                            ConfigPublishRequest updated = updateDecision(conn, tenantId, requestId,
+                                    target, note, approverId);
+                            // ⚠️⚠️ **审计与状态变更同事务**（P1-15 修复）：
+                            //    审计写不进去 → 状态变更一并回滚（无审计的批准不存在）。
+                            audit.recordRequired(tenantId, approverId,
+                                    decision == Decision.APPROVE
+                                            ? AuditPort.Actions.CONFIG_PUBLISH_APPROVE
+                                            : AuditPort.Actions.CONFIG_PUBLISH_REJECT,
+                                    "config_publish_request", requestId,
+                                    Map.of("operation", existing.operation().name(),
+                                            "state", target.name()));
+                            return updated;
+                        } catch (SQLException e) {
+                            // ⚛️ 保留 SQLState：双人复核的 DB CHECK 需要它才能区分
+                            throw new SqlStateCarrier(e.getSQLState(), e);
+                        }
+                    });
+        } catch (SqlStateCarrier e) {
+            if (CHECK_VIOLATION.equals(e.sqlState())) {
+                // ⚛️ **双人复核第二道**：DB CHECK 拦截（应用层被绕过时生效）
+                throw new SelfApprovalException();
             }
-        } catch (SQLException e) {
-            throw new IllegalStateException("审批失败", e);
+            throw new IllegalStateException("审批失败", e.getCause());
         }
-        return decided;
     }
 
     @Override
@@ -260,63 +254,61 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
                                               ConfigPublishRequest.State target,
                                               String failureReason, String actorId,
                                               Instant appliedAt) {
-        ConfigPublishRequest updated;
-        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
-            Connection conn = lease.connection();
-            conn.setAutoCommit(false);
-            try {
-                ConfigPublishRequest existing = loadForUpdate(conn, tenantId, requestId);
-                if (existing.state() != ConfigPublishRequest.State.APPROVED) {
-                    throw new StateConflictException(
-                            "只有 APPROVED 状态可执行，当前为 " + existing.state());
-                }
-                String sql = """
-                        UPDATE cap_config_publish_request
-                        SET state = ?, failure_reason = ?, applied_at = ?
-                        WHERE tenant_id = ?::uuid AND request_id = ?::uuid
-                        RETURNING request_id::text, tenant_id::text, operation, payload::text,
-                                  reason, requester_id, state, approver_id, decision_note,
-                                  requested_at, decided_at, applied_at, failure_reason
-                        """;
-                try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                    ps.setString(1, target.name());
-                    ps.setString(2, failureReason);
-                    if (appliedAt == null) {
-                        ps.setNull(3, java.sql.Types.TIMESTAMP);
-                    } else {
-                        ps.setTimestamp(3, Timestamp.from(appliedAt));
-                    }
-                    ps.setString(4, tenantId);
-                    ps.setString(5, requestId);
-                    try (ResultSet rs = ps.executeQuery()) {
-                        if (!rs.next()) {
-                            throw new NotFoundException(requestId);
+        try {
+            return TransactionalConnectionHolder.inTransaction(dataSource,
+                    new TenantContext(tenantId, "system", java.util.Set.of(), 0L),
+                    conn -> {
+                        try {
+                            ConfigPublishRequest existing = loadForUpdate(conn, tenantId, requestId);
+                            if (existing.state() != ConfigPublishRequest.State.APPROVED) {
+                                throw new StateConflictException(
+                                        "只有 APPROVED 状态可执行，当前为 " + existing.state());
+                            }
+                            String sql = """
+                                    UPDATE cap_config_publish_request
+                                    SET state = ?, failure_reason = ?, applied_at = ?
+                                    WHERE tenant_id = ?::uuid AND request_id = ?::uuid
+                                    RETURNING request_id::text, tenant_id::text, operation, payload::text,
+                                              reason, requester_id, state, approver_id, decision_note,
+                                              requested_at, decided_at, applied_at, failure_reason
+                                    """;
+                            ConfigPublishRequest updated;
+                            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                                ps.setString(1, target.name());
+                                ps.setString(2, failureReason);
+                                if (appliedAt == null) {
+                                    ps.setNull(3, java.sql.Types.TIMESTAMP);
+                                } else {
+                                    ps.setTimestamp(3, Timestamp.from(appliedAt));
+                                }
+                                ps.setString(4, tenantId);
+                                ps.setString(5, requestId);
+                                try (ResultSet rs = ps.executeQuery()) {
+                                    if (!rs.next()) {
+                                        throw new NotFoundException(requestId);
+                                    }
+                                    updated = read(rs);
+                                }
+                            }
+                            // ⚠️⚠️ **审计与状态变更同事务**（P1-15 修复）。
+                            if (target == ConfigPublishRequest.State.APPLIED) {
+                                audit.recordRequired(tenantId, actorId,
+                                        AuditPort.Actions.CONFIG_PUBLISH_APPLY, "config_publish_request",
+                                        requestId, Map.of("operation", existing.operation().name()));
+                            } else {
+                                // ⚠️ 失败也要留痕：一份「批过但没生效」的申请必须能被查到
+                                audit.recordRequired(tenantId, actorId == null ? "system" : actorId,
+                                        AuditPort.Actions.CONFIG_PUBLISH_FAILED, "config_publish_request",
+                                        requestId, Map.of("operation", existing.operation().name()));
+                            }
+                            return updated;
+                        } catch (SQLException e) {
+                            throw new SqlStateCarrier(e.getSQLState(), e);
                         }
-                        updated = read(rs);
-                    }
-                }
-                conn.commit();
-                if (target == ConfigPublishRequest.State.APPLIED) {
-                    audit.recordRequired(tenantId, actorId,
-                            AuditPort.Actions.CONFIG_PUBLISH_APPLY, "config_publish_request",
-                            requestId, Map.of("operation", existing.operation().name()));
-                } else {
-                    // ⚠️ 失败也要留痕：一份「批过但没生效」的申请必须能被查到
-                    audit.recordRequired(tenantId, actorId == null ? "system" : actorId,
-                            AuditPort.Actions.CONFIG_PUBLISH_FAILED, "config_publish_request",
-                            requestId, Map.of("operation", existing.operation().name()));
-                }
-            } catch (SQLException | RuntimeException e) {
-                safeRollback(conn);
-                throw e instanceof RuntimeException re
-                        ? re : new IllegalStateException("更新申请状态失败", e);
-            } finally {
-                restoreAutoCommit(conn);
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException("更新申请状态失败", e);
+                    });
+        } catch (SqlStateCarrier e) {
+            throw new IllegalStateException("更新申请状态失败", e.getCause());
         }
-        return updated;
     }
 
     private ConfigPublishRequest loadForUpdate(Connection conn, String tenantId,
@@ -414,19 +406,24 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
         return ts == null ? null : ts.toInstant();
     }
 
-    private static void safeRollback(Connection conn) {
-        try {
-            conn.rollback();
-        } catch (SQLException ignored) {
-            // rollback 失败不掩盖原始异常
-        }
-    }
+    /**
+     * 携带 SQLState 的运行时异常（事务边界内部使用）。
+     *
+     * <p>⚠️ 为什么需要它：{@code TransactionalConnectionHolder.inTransaction}
+     * 会把 {@link SQLException} 包装成 {@link IllegalStateException}，SQLState 丢了。
+     * 而「双人复核的 DB CHECK」只能靠 {@code SQLState=23514} 识别。
+     */
+    private static final class SqlStateCarrier extends RuntimeException {
 
-    private static void restoreAutoCommit(Connection conn) {
-        try {
-            conn.setAutoCommit(true);
-        } catch (SQLException ignored) {
-            // 同上
+        private final String sqlState;
+
+        SqlStateCarrier(String sqlState, SQLException cause) {
+            super(cause);
+            this.sqlState = sqlState;
+        }
+
+        String sqlState() {
+            return sqlState;
         }
     }
 

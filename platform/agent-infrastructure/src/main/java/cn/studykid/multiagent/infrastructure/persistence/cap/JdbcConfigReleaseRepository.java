@@ -5,6 +5,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -14,9 +16,11 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.cap.ConfigRelease;
+import cn.studykid.multiagent.core.page.PageCursor;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
 import cn.studykid.multiagent.ports.persistence.ConfigReleasePort;
+import cn.studykid.multiagent.ports.persistence.Page;
 
 /**
  * {@link ConfigReleasePort} 的 PostgreSQL 实现（§6.1 / 06 §1.7 · W-PERM-P0-T4）。
@@ -112,6 +116,25 @@ public class JdbcConfigReleaseRepository implements ConfigReleasePort {
                AND status = 'PUBLISHED'
                AND EXISTS (SELECT 1 FROM cap_config_pointer
                             WHERE current_release_id = ?)
+            """;
+
+    /**
+     * 本租户发布历史（TENANT 作用域，含 ROLLED_BACK）。
+     *
+     * <p>⚠️ keyset 游标：{@code config_publish_seq} 由 DB 序列分配、
+     * 全局唯一单调，是全序键；游标二元组 {@code (created_at, release_id)}
+     * 与既有列表实现同口径（比较两个分量，防同刻行漏读）。
+     *
+     * <p>⚠️ 必须绑定<b>本租户</b>上下文：发布头行受 RLS 保护，
+     * 且本查询刻意只取 TENANT 作用域（平台级行不属于租户时间线）。
+     */
+    private static final String SQL_LIST = """
+            SELECT release_id, config_publish_seq, scope, tenant_id::text, object_versions::text,
+                   aggregate_fingerprint, status, requester_id, approver_id,
+                   effective_at, created_at
+            FROM cap_config_release
+            WHERE scope = 'TENANT'
+              AND tenant_id = ?::uuid
             """;
 
     private final DataSource dataSource;
@@ -227,6 +250,77 @@ public class JdbcConfigReleaseRepository implements ConfigReleasePort {
                         }
                     }
                 });
+    }
+
+    @Override
+    public @NonNull Page<ConfigRelease> listReleases(@NonNull String tenantId,
+                                                     @Nullable String cursor,
+                                                     int limit) {
+        if (limit <= 0) {
+            throw new IllegalArgumentException("limit 必须为正数: " + limit);
+        }
+        PageCursor after = (cursor == null || cursor.isBlank()) ? null : PageCursor.decode(cursor);
+
+        StringBuilder sql = new StringBuilder(SQL_LIST);
+        List<Object> params = new ArrayList<>();
+        params.add(tenantId);
+        if (after != null) {
+            // ⚠️ 全序游标：created_at 同刻的多行必须按 release_id 再区分
+            sql.append("""
+                     AND (created_at < ?
+                          OR (created_at = ? AND release_id < ?))
+                    """);
+            params.add(Timestamp.from(after.createdAt()));
+            params.add(Timestamp.from(after.createdAt()));
+            params.add(after.id());
+        }
+        sql.append(" ORDER BY created_at DESC, release_id DESC LIMIT ?");
+        params.add(limit + 1);
+
+        List<ConfigRelease> rows = new ArrayList<>();
+        try {
+            return TransactionalConnectionHolder.inTransaction(
+                    dataSource, tenantContext(tenantId),
+                    conn -> {
+                        try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+                            bind(ps, params);
+                            try (ResultSet rs = ps.executeQuery()) {
+                                while (rs.next()) {
+                                    rows.add(map(rs));
+                                }
+                            }
+                        }
+                        String next = null;
+                        if (rows.size() > limit) {
+                            ConfigRelease last = rows.get(limit - 1);
+                            rows.subList(limit, rows.size()).clear();
+                            next = new PageCursor(last.createdAt(),
+                                    String.valueOf(last.releaseId())).encode();
+                        }
+                        return Page.of(rows, next);
+                    });
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("查询发布历史失败", e);
+        }
+    }
+
+    /** 按位置绑定参数（与申请仓储同口径：TIMESTAMP / 数值 / 文本分流）。 */
+    private static void bind(PreparedStatement ps, List<Object> params) throws SQLException {
+        for (int i = 0; i < params.size(); i++) {
+            Object p = params.get(i);
+            int index = i + 1;
+            if (p instanceof Timestamp ts) {
+                ps.setTimestamp(index, ts);
+            } else if (p instanceof Integer value) {
+                // ⚠️ LIMIT 参数必须按整数绑定：setString 会让 PG 报
+                //    「argument of LIMIT must be type bigint」
+                ps.setInt(index, value);
+            } else if (p instanceof Long value) {
+                ps.setLong(index, value);
+            } else {
+                ps.setString(index, String.valueOf(p));
+            }
+        }
     }
 
     private static ConfigRelease map(ResultSet rs) throws SQLException {

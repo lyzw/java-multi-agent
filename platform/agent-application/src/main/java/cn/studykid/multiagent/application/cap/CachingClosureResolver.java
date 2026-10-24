@@ -197,9 +197,13 @@ public class CachingClosureResolver implements ClosureResolver {
                 return false;
             }
         } else {
-            Optional<cn.studykid.multiagent.core.cap.CapAgentDef> latest =
-                    agentDefs.findLatestPublished(tenantId, entry.agentId());
-            if (latest.isEmpty() || latest.get().version() != entry.agentVersion()) {
+            // ⚠️⚠️ 必须与 {@link PermissionResolver#resolveCurrent} **同口径**
+            //    （P0-5 修复）：解析侧走「TENANT 指针 → release → object_versions」，
+            //    这里若仍用「最新已发布版本行」，回滚后本处会判定「版本没变」
+            //    （findLatestPublished 仍返回被回滚掉的版本）→ 陈旧闭包继续被使用。
+            Optional<Integer> current = CurrentAgentVersion.resolve(
+                    publishedVersions, agentDefs, tenantId, entry.agentId());
+            if (current.isEmpty() || current.get() != entry.agentVersion()) {
                 return false;
             }
         }

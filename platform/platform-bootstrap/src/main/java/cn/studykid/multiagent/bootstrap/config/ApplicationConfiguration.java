@@ -884,9 +884,10 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.application.cap.ConfigLifecycleService lifecycle,
             cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
             cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
+            cn.studykid.multiagent.ports.persistence.ConfigReleasePort releases,
             java.time.Clock clock) {
         return new cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService(
-                requests, publisher, lifecycle, agentDefs, pointers, clock);
+                requests, publisher, lifecycle, agentDefs, pointers, releases, clock);
     }
 
     /**
@@ -1061,6 +1062,41 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.mcp.McpManifestPort manifest) {
         return new cn.studykid.multiagent.application.cap.PermissionResolver(
                 agentDefs, skillDefs, toolDefs, serverDefs, publishedVersions, manifest);
+    }
+
+    /**
+     * 能力依赖图谱与影响分析（管理面 M7 · 只读）。
+     *
+     * <p>⚠️ 与 {@link #permissionResolver} 刻意分开：后者是授权路径
+     * （fail-closed、按发布指针），前者是管理面（含草稿、按最高版本行），
+     * 二者口径不同，不共享实例也不互相委托。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.DependencyGraphService dependencyGraphService(
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            cn.studykid.multiagent.ports.persistence.CapSkillDefPort skillDefs,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort serverDefs) {
+        return new cn.studykid.multiagent.application.cap.DependencyGraphService(
+                agentDefs, toolDefs, skillDefs, serverDefs);
+    }
+
+    /**
+     * 租户运行监控聚合服务（管理面 P4 运行监控 · 只读）。
+     *
+     * <p>⚠️ <b>与 {@link #decisionAuditService} 共用同一 {@code DecisionAuditPort}</b>：
+     * 监控读的是同一张决策日志表。刻意<b>不新建独立的读端口</b> ——
+     * 两个端口读同一张表会让「监控看到的拒绝」与「审计记录的拒绝」出现口径差，
+     * 而运维恰恰会用后者去核对前者。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.monitoring.MonitoringViewService
+            monitoringViewService(
+            cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersions,
+            cn.studykid.multiagent.ports.persistence.DecisionAuditPort decisionAudit,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.monitoring.MonitoringViewService(
+                authzVersions, decisionAudit, clock);
     }
 
     /**

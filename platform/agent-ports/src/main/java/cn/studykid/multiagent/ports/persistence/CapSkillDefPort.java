@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.ports.persistence;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
@@ -48,4 +49,21 @@ public interface CapSkillDefPort {
      * @return 最新已发布版本行；无已发布版本时为 {@link Optional#empty()}
      */
     @NonNull Optional<CapSkillDef> findLatestPublished(@NonNull String skillId);
+
+    /**
+     * 列出全部 Skill 定义（各逻辑 id 的<b>最新</b>版本行）。
+     *
+     * <p>⚠️ <b>只读用途</b>：供配置台的 Skill 目录页展示「平台上有哪些技能、
+     * 各自声明的工具 / MCP / 风险上限 / 必需能力」。
+     * <b>不</b>用于授权判定中的版本解析（那必须走 {@link PublishedVersionPort}）。
+     *
+     * <p>⚠️ <b>不按租户过滤</b>：Skill 定义是 platform 级对象
+     * （{@code cap_skill_def} 不启用 RLS），全平台唯一。
+     *
+     * <p>⚠️ <b>本端口只读，不提供写入入口</b>：平台级对象的变更走带外运维通道，
+     * 不挂在租户身份上（理由见 {@code CapConfigPublishController} 的 403 作用域闸门）。
+     *
+     * @return 全部 Skill 定义（每个逻辑 id 取其最高版本行），按 id 升序
+     */
+    @NonNull List<CapSkillDef> listAll();
 }

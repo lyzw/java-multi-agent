@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.api.governance;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -84,6 +85,52 @@ public class AgentController {
         return ResponseEntity.ok(GovernanceSupport.PageResponse.of(
                 page.items().stream().map(AgentItemResponse::of).toList(),
                 page.nextCursor()));
+    }
+
+    /**
+     * 查询单个 Agent（含最新版本摘要）。
+     *
+     * <p>⚠️ 404 不区分「不存在」与「无权限」——区分即存在性探测通道，
+     * 故先统一鉴权，再由 {@code findAgent} 的结果决定 404。
+     */
+    @GetMapping("/{agentId}")
+    public ResponseEntity<AgentItemResponse> getAgent(@PathVariable String agentId) {
+        TenantContext context = currentPrincipal.context();
+        authorization.requireAuthorized(context,
+                AuthorizationService.Actions.AGENT_MANAGE, null);
+        if (GovernanceSupport.rateLimited(rateLimiter, context,
+                RateLimitPort.Buckets.GOVERNANCE_QUERY)) {
+            return GovernanceSupport.tooManyRequests();
+        }
+        AgentItem item = agents.findAgent(context.tenantId(), agentId);
+        if (item == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "资源不存在");
+        }
+        return ResponseEntity.ok(AgentItemResponse.of(item));
+    }
+
+    /**
+     * 查询单个 Agent 的版本历史（不可变快照，按版本号降序）。
+     *
+     * <p>⚠️ 404 不区分「不存在」与「无权限」——区分即存在性探测通道，
+     * 故先统一鉴权，再校验 Agent 存在性后返回版本列表。
+     */
+    @GetMapping("/{agentId}/versions")
+    public ResponseEntity<List<AgentVersionItemResponse>> listAgentVersions(
+            @PathVariable String agentId) {
+        TenantContext context = currentPrincipal.context();
+        authorization.requireAuthorized(context,
+                AuthorizationService.Actions.AGENT_MANAGE, null);
+        if (GovernanceSupport.rateLimited(rateLimiter, context,
+                RateLimitPort.Buckets.GOVERNANCE_QUERY)) {
+            return GovernanceSupport.tooManyRequests();
+        }
+        if (agents.findAgent(context.tenantId(), agentId) == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "资源不存在");
+        }
+        var versions = agents.listVersions(context.tenantId(), agentId).stream()
+                .map(AgentVersionItemResponse::of).toList();
+        return ResponseEntity.ok(versions);
     }
 
     /**

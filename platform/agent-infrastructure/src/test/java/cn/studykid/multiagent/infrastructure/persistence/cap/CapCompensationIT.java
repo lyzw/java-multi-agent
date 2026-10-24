@@ -41,6 +41,7 @@ import cn.studykid.multiagent.core.cap.EffectiveClosure;
 import cn.studykid.multiagent.core.cap.ReasonCode;
 import cn.studykid.multiagent.core.cap.ResultEvent;
 import cn.studykid.multiagent.core.config.ToolRiskLevel;
+import cn.studykid.multiagent.core.monitoring.AuthzWatermark;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcToolOperationLedger;
@@ -760,6 +761,11 @@ class CapCompensationIT extends CapITBase {
         @Override
         public long bump(@NonNull String tenantId, @NonNull String principalId) {
             return delegate.bump(tenantId, principalId);
+        }
+
+        @Override
+        public AuthzWatermark watermark(@NonNull String tenantId) {
+            return delegate.watermark(tenantId);
         }
     }
 }

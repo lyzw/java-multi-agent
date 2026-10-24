@@ -30,6 +30,7 @@ import cn.studykid.multiagent.ports.persistence.ConfigPointerPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishTransaction;
 import cn.studykid.multiagent.ports.persistence.ConfigReleasePort;
 import cn.studykid.multiagent.ports.persistence.DecisionAuditPort;
+import cn.studykid.multiagent.ports.persistence.Page;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -222,7 +223,12 @@ class PlatformOpsPublishServiceTest {
 
             @Override
             public Optional<ConfigRelease> findLatestPublished(ConfigRelease.Scope scope,
-                                                               String tenantId) {
+                                                                String tenantId) {
+                throw new UnsupportedOperationException("闸门路径不应触达发布头端口");
+            }
+
+            @Override
+            public Page<ConfigRelease> listReleases(String tenantId, String cursor, int limit) {
                 throw new UnsupportedOperationException("闸门路径不应触达发布头端口");
             }
         };
@@ -249,6 +255,11 @@ class PlatformOpsPublishServiceTest {
             public Optional<CapToolDef> findByMcpBinding(String mcpServerId, String mcpToolName) {
                 throw new UnsupportedOperationException("闸门路径不应触达 Tool 端口");
             }
+
+            @Override
+            public List<CapToolDef> listAll() {
+                throw new UnsupportedOperationException("闸门路径不应触达 Tool 端口");
+            }
         };
     }
 
@@ -268,6 +279,11 @@ class PlatformOpsPublishServiceTest {
             public Optional<CapSkillDef> findLatestPublished(String skillId) {
                 throw new UnsupportedOperationException("闸门路径不应触达 Skill 端口");
             }
+
+            @Override
+            public List<CapSkillDef> listAll() {
+                throw new UnsupportedOperationException("闸门路径不应触达 Skill 端口");
+            }
         };
     }
 
@@ -285,6 +301,11 @@ class PlatformOpsPublishServiceTest {
 
             @Override
             public Optional<CapMcpServerDef> findLatestPublished(String serverId) {
+                throw new UnsupportedOperationException("闸门路径不应触达 MCP Server 端口");
+            }
+
+            @Override
+            public java.util.List<CapMcpServerDef> listAll() {
                 throw new UnsupportedOperationException("闸门路径不应触达 MCP Server 端口");
             }
         };
@@ -311,6 +332,11 @@ class PlatformOpsPublishServiceTest {
             public Optional<CapAgentDef> findLatestPublished(String tenantId, String agentId) {
                 throw new UnsupportedOperationException("闸门路径不应触达 Agent 端口");
             }
+
+            @Override
+            public java.util.List<CapAgentDef> listLatestPerAgent(String tenantId) {
+                throw new UnsupportedOperationException("闸门路径不应触达 Agent 端口");
+            }
         };
     }
 
@@ -333,6 +359,13 @@ class PlatformOpsPublishServiceTest {
 
             @Override
             public DecisionAuditCoverage coverage(String tenantId) {
+                throw new UnsupportedOperationException("闸门路径不应触达审计端口");
+            }
+
+            @Override
+            public List<DecisionAuditEntry> findRecentDenies(String tenantId,
+                                                             java.time.Instant since,
+                                                             int limit) {
                 throw new UnsupportedOperationException("闸门路径不应触达审计端口");
             }
         };

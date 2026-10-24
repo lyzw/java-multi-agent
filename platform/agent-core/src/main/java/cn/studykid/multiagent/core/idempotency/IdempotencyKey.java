@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.Instant;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 幂等键（ADR-003）。
@@ -52,6 +53,22 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
      * 并违背 ADR-003 的隔离意图。
      */
     public static final String NS_TOOL_INVOKE = "tool.invoke";
+
+    /**
+     * 「记录薄弱点」工具名（{@code record_weakness}）。
+     *
+     * <p>⚠️ <b>只有这个工具才允许使用 {@link #NS_TOOL_RECORD_WEAKNESS} 命名空间</b>。
+     * 修复前调用方只看「参数里有没有 {@code studentId} + {@code knowledgePoint}」，
+     * 于是<b>任何</b>带这两个参数的工具都被塞进同一个命名空间 ——
+     * 两个不同工具算出同一个键，而 {@code tool_operation} 的唯一约束是
+     * {@code UNIQUE (tenant_id, idempotency_key)}：
+     * <ul>
+     *   <li>参数不同 → 第二个工具被判「同键不同参数」→ <b>被拒绝执行</b>；</li>
+     *   <li>参数相同 → 第二个工具被判「重放」→ <b>静默不执行</b>。</li>
+     * </ul>
+     * 两种都是「一个工具的调用把另一个工具的调用吞掉」。
+     */
+    public static final String RECORD_WEAKNESS_TOOL = "record_weakness";
 
     /** 默认保留期：24 小时（ADR-003）。 */
     public static final Duration DEFAULT_RETENTION = Duration.ofHours(24);
@@ -124,6 +141,45 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
         requirePart(callId, "callId");
         return new IdempotencyKey(NS_TOOL_INVOKE,
                 runId + SEPARATOR + toolName + SEPARATOR + callId);
+    }
+
+    /**
+     * 工具调用的键（<b>全链路唯一的构造入口</b> · P1-9 修复）。
+     *
+     * <p>⚠️ <b>为什么必须把「按工具分流」收进本类</b>：
+     * 调用方（Worker 闸门、CAP 执行流）此前各写一遍分流规则，
+     * 而两遍都只看「参数里有没有 {@code studentId} + {@code knowledgePoint}」——
+     * 于是<b>任何</b>带这两个参数的工具都被塞进 {@code tool.record_weakness} 命名空间，
+     * 两个不同工具算出同一个键：
+     * <ul>
+     *   <li>参数不同 → 后者被判「同键不同参数」→ <b>被拒绝执行</b>；</li>
+     *   <li>参数相同 → 后者被判「重放」→ <b>静默不执行</b>。</li>
+     * </ul>
+     * 收进本类后，「哪个工具用哪种键形状」只有<b>一处</b>定义。
+     *
+     * <p>⚠️ <b>只有 {@link #RECORD_WEAKNESS_TOOL} 走 record_weakness 形状</b>：
+     * 其余工具一律走 {@link #forToolInvoke}（键里含工具名）。
+     *
+     * @param runId          所属 Run
+     * @param toolName       工具名
+     * @param callId         模型返回的调用标识（可空 → 填占位值）
+     * @param studentId      学生标识参数（可空）
+     * @param knowledgePoint 知识点参数（可空）
+     * @return 幂等键
+     */
+    public static @NonNull IdempotencyKey forToolCall(@NonNull String runId,
+                                                       @NonNull String toolName,
+                                                       @Nullable String callId,
+                                                       @Nullable String studentId,
+                                                       @Nullable String knowledgePoint) {
+        requirePart(runId, "runId");
+        requirePart(toolName, "toolName");
+        if (RECORD_WEAKNESS_TOOL.equals(toolName)
+                && studentId != null && knowledgePoint != null) {
+            return forRecordWeakness(studentId, runId, knowledgePoint);
+        }
+        return forToolInvoke(runId, toolName,
+                callId == null || callId.isBlank() ? "no-call-id" : callId);
     }
 
     /** 校验单个组成部分：非空且不含分隔符。 */

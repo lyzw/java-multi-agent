@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.ports.persistence;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -35,6 +36,22 @@ public interface AgentQueryPort {
      * @return 存在且属于该租户时返回；否则 {@code null}
      */
     @Nullable AgentItem findAgent(@NonNull String tenantId, @NonNull String agentId);
+
+    /**
+     * 查询单个 Agent 的<b>全部版本</b>（不可变快照，按版本号降序）。
+     *
+     * <p>⚠️ <b>走端口而非直查</b>：{@code agent_version} 是租户隔离实体，
+     * 必须走 {@code tenantConnection} 绑定 RLS；绕过端口等于绕过隔离。
+     *
+     * <p>⚠️ <b>版本历史不可变</b>：每行都是一次发布的快照（FR-002），
+     * 列表仅展示，不提供「编辑历史版本」入口（要改只能再发一个版本）。
+     *
+     * @param tenantId 租户
+     * @param agentId  Agent 逻辑 id
+     * @return 版本列表（降序）；Agent 不存在或不属于该租户时返回空列表
+     */
+    @NonNull List<AgentVersionItem> listVersions(@NonNull String tenantId,
+                                                @NonNull String agentId);
 
     /** Agent 视图（含最新版本摘要）。 */
     record AgentItem(

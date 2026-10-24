@@ -67,7 +67,7 @@ class ToolIdempotencyKeyTest {
             capturedKeys.add(idempotencyKey);
             String opId = UUID.randomUUID().toString();
             operationsByKey.put(idempotencyKey, opId);
-            return new Registration(opId, ToolOperationState.IN_FLIGHT, 0, 0L);
+            return new Registration(opId, ToolOperationState.IN_FLIGHT, 0, 0L, true);
         }
 
         @Override public void recordResult(String tenantId, String operationId,
@@ -84,7 +84,7 @@ class ToolIdempotencyKeyTest {
                 String tenantId, String idempotencyKey) {
             String opId = operationsByKey.get(idempotencyKey);
             return opId == null ? Optional.empty()
-                    : Optional.of(new Registration(opId, ToolOperationState.IN_FLIGHT, 0, 0L));
+                    : Optional.of(new Registration(opId, ToolOperationState.IN_FLIGHT, 0, 0L, false));
         }
     }
 
@@ -274,6 +274,74 @@ class ToolIdempotencyKeyTest {
             assertThat(key)
                     .as("✅ 命名空间须为 tool.invoke（不得复用 run.create）")
                     .startsWith("tool.invoke:");
+        }
+    }
+
+    // ── P1-9：幂等键必须含工具身份 ───────────────────────
+
+    @Nested
+    @DisplayName("P1-9 门的幂等键含工具身份")
+    class ToolIdentityInGateKey {
+
+        @Test
+        @DisplayName("⚠️⚠️ 非 record_weakness 工具不得占用 record_weakness 命名空间")
+        void otherToolMustNotReuseRecordWeaknessNamespace() {
+            KeyCapturingLedger ledger = new KeyCapturingLedger();
+            ToolInvocationGate gate = gate(ledger, List.of(new ExplainTool()));
+
+            gate.invokeAll(TENANT, task(UUID.randomUUID().toString()), Map.of(
+                    "call-1", new ModelResponse.ToolCallRequest("generate_explanation",
+                            Map.of("studentId", "stu_0123456789abcdef",
+                                    "knowledgePoint", "一元二次方程"),
+                            "call-1")));
+
+            assertThat(ledger.capturedKeys).hasSize(1);
+            String key = ledger.capturedKeys.get(0);
+            assertThat(key)
+                    .as("⚠️⚠️ 修复前门的只看「参数里有没有 studentId + knowledgePoint」，"
+                            + "于是任意带这两个参数的工具都被塞进 tool.record_weakness 命名空间 ——"
+                            + "与 record_weakness 的调用拉同一个键")
+                    .startsWith("tool.invoke:");
+            assertThat(key)
+                    .as("⚠️⚠️ 键里必须含工具名")
+                    .contains("generate_explanation");
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 两个不同工具 + 相同参数 → 不同键")
+        void differentToolsWithSameArgumentsProduceDifferentKeys() {
+            KeyCapturingLedger ledger = new KeyCapturingLedger();
+            ToolInvocationGate gate = gate(ledger,
+                    List.of(new RecordWeaknessLikeTool(), new ExplainTool()));
+
+            String runId = UUID.randomUUID().toString();
+            Map<String, Object> args = Map.of(
+                    "studentId", "stu_0123456789abcdef",
+                    "knowledgePoint", "一元二次方程");
+
+            gate.invokeAll(TENANT, task(runId), Map.of(
+                    "call-1", new ModelResponse.ToolCallRequest("record_weakness", args, "call-1")));
+            gate.invokeAll(TENANT, task(runId), Map.of(
+                    "call-1", new ModelResponse.ToolCallRequest("generate_explanation",
+                            args, "call-1")));
+
+            assertThat(ledger.capturedKeys).hasSize(2);
+            assertThat(ledger.capturedKeys.get(0))
+                    .as("⚠️⚠️ 工具不同必须产生不同键 —— "
+                            + "相同键会让后者被判「重放」（静默不执行）"
+                            + "或被判「冲突」（被拒绝执行）")
+                    .isNotEqualTo(ledger.capturedKeys.get(1));
+        }
+    }
+
+    /** 名为 generate_explanation 的只读工具替身（带 studentId + knowledgePoint 的“其他工具”）。 */
+    private static final class ExplainTool implements ToolHandler {
+        @Override public String toolName() { return "generate_explanation"; }
+        @Override public String inputSchema() { return "{}"; }
+        @Override public ToolRiskLevel riskLevel() { return ToolRiskLevel.READ; }
+        @Override public void validate(Map<String, Object> arguments) { }
+        @Override public ToolResult execute(ToolExecutionContext c, Map<String, Object> a) {
+            return ToolResult.of("ok");
         }
     }
 

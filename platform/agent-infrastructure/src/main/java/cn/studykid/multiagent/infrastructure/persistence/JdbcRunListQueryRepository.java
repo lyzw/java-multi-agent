@@ -16,6 +16,7 @@ import org.jspecify.annotations.Nullable;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.page.PageCursor;
+import cn.studykid.multiagent.core.reference.TutoringVocabulary;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.Page;
 import cn.studykid.multiagent.ports.persistence.RunListQueryPort;
@@ -39,9 +40,16 @@ public class JdbcRunListQueryRepository implements RunListQueryPort {
      *
      * <p>多取 {@code limit + 1} 行用于判断「是否还有下一页」——
      * 比多发一次 {@code COUNT} 查询便宜得多，且不会在并发下与 COUNT 结果不一致。
+     *
+     * <p>⚠️ <b>只取两个 JSONB 标量字段，不取整个 {@code input_payload}</b>：
+     * {@code input_payload} 里除了学科/年级，还有学生提交的题干与解答原文。
+     * 用 {@code ->>} 精确取两个键，而不是把整列拉进内存再解析——
+     * 后者会让「不小心多读一个字段」变成一次静默的隐私事故。
      */
     private static final String SQL_BASE = """
-            SELECT run_id, state, created_at, completed_at, attempt, error_code
+            SELECT run_id, state, created_at, completed_at, attempt, error_code,
+                   input_payload->>'subject' AS subject,
+                   input_payload->>'grade'   AS grade
             FROM run
             WHERE tenant_id = ?::uuid
             """;
@@ -55,6 +63,7 @@ public class JdbcRunListQueryRepository implements RunListQueryPort {
     @Override
     public @NonNull Page<RunListItem> list(@NonNull String tenantId,
                                            @Nullable String state,
+                                           @Nullable String subject,
                                            @Nullable Instant from,
                                            @Nullable Instant to,
                                            @Nullable String cursor,
@@ -72,6 +81,13 @@ public class JdbcRunListQueryRepository implements RunListQueryPort {
         if (state != null) {
             sql.append(" AND state = ?::run_state");
             params.add(state);
+        }
+        if (subject != null) {
+            // ⚠️ 用 btrim 比较：存的值可能带首尾空白（客户端可控），
+            //    而展示侧（TutoringVocabulary）也只做 trim——
+            //    两边口径必须一致，否则会出现「列表里显示数学，却筛不出数学」。
+            sql.append(" AND btrim(input_payload->>'subject') = ?");
+            params.add(subject.trim());
         }
         if (from != null) {
             sql.append(" AND created_at >= ?");
@@ -126,7 +142,12 @@ public class JdbcRunListQueryRepository implements RunListQueryPort {
                 rs.getTimestamp("created_at").toInstant(),
                 completed == null ? null : completed.toInstant(),
                 rs.getInt("attempt"),
-                rs.getString("error_code"));
+                rs.getString("error_code"),
+                // ⚠️⛔ **fail-closed**：客户端可控的学科/年级，只有命中 DEC-6 词表
+                //    才允许回显；不认识的一律当「没有」（null）。
+                //    原样回显等于把请求体里的任意文本直接送到前端渲染。
+                TutoringVocabulary.subject(rs.getString("subject")),
+                TutoringVocabulary.grade(rs.getString("grade")));
     }
 
     private static void bind(PreparedStatement ps, List<Object> params) throws SQLException {

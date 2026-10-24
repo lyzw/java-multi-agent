@@ -2,7 +2,6 @@ package cn.studykid.multiagent.worker.execute;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
@@ -455,7 +454,61 @@ public class ToolInvocationGate {
                 continue;
             }
 
-            // ⑤ 审批消费（P3-D05 / FR-013）
+            // ⑤ ⚠️⚠️ 幂等命中闸门：既有操作**不得再次执行**（防重复副作用 = Sev-0）
+            //
+            //    ⚠️ 此闸门是修复前的**真实缺陷**：账本登记在键已存在时返回
+            //    **既有 operation 及其当前状态**，而此前**从不检查该状态**，
+            //    于是流程径直走向 ⑦ 执行 → 同一逻辑操作产生**两次副作用**
+            //    （重复发放 / 重复写入）；随后 ⑧ 记结果时因状态已非 IN_FLIGHT
+            //    抛 IllegalStateTransitionException，而 catch 块里的兜底
+            //    recordResult 又抛一次 —— **异常从 catch 内部逃出闸门**，
+            //    Run 被标记 FAILED 且账本说 SUCCEEDED（两个事实互相矛盾），
+            //    同时没有任何对账记录。
+            //
+            //    ⚠️ 为什么必须看 createdByThisCall 而不是只看状态：
+            //    既有操作的状态**可能仍是 IN_FLIGHT**（上次调用崩在中途，
+            //    或另一 worker 正在执行）——只看状态会把「本次新建」误判为
+            //    「命中既有」，从而**连正常调用也执行不了**。
+            if (!registration.createdByThisCall()) {
+                ToolOperationState existingState = registration.state();
+                log.warn("幂等键命中既有操作，不重复执行: tool={}, runId={}, operation={}, state={}",
+                        call.toolName(), task.runId(), registration.operationId(), existingState);
+                switch (existingState) {
+                    case SUCCEEDED, RECONCILED_SUCCEEDED -> {
+                        // ⚠️ 重放：上一次已成功。不执行工具，按「已成功」记账。
+                        //    （原始载荷不在本路径可得，故只记成功不记载荷。）
+                        result.recordSucceeded(call.toolName());
+                    }
+                    case UNKNOWN, RECONCILED_ABSENT, MANUAL_DISPOSED -> {
+                        // ⚠️ 终态且结果未知/已处置：**不得盲目重试**，
+                        //    转对账（记账行已由恢复流程负责）。
+                        result.recordUnknown(call.toolName(), registration.operationId());
+                        return result;
+                    }
+                    case FAILED -> {
+                        // ⚠️ 工具明确失败（无副作用），但账本行已终态，
+                        //    而 recordResult 只接受 IN_FLIGHT —— 不能复用该行。
+                        //    故此处不执行；确需重试须用**新的幂等键**
+                        //    （即新的逻辑操作），否则记结果会被状态机拒绝。
+                        result.recordFailed(call.toolName(),
+                                "幂等键命中已失败的既有操作，未重复执行");
+                    }
+                    case IN_FLIGHT, PENDING -> {
+                        // ⚠️ 既有操作仍在途：可能崩在中途，或另一 worker 正在执行。
+                        //    此时再次执行 = 重复副作用；按「结果未知」交对账。
+                        result.recordUnknown(call.toolName(), registration.operationId());
+                        return result;
+                    }
+                    default -> {
+                        result.recordRejected(call.toolName(),
+                                "幂等键命中未预期的既有操作状态：" + existingState);
+                        return result;
+                    }
+                }
+                continue;
+            }
+
+            // ⑥ 审批消费（P3-D05 / FR-013）
             //    ⚠️ 审批绑定参数摘要与目标资源、过期/撤销拒绝、消费与取消检查原子协调、
             //       崩溃后可恢复，全部由 ApprovalPort 在 DB 事务内保证。
             ApprovalPolicy.ApprovalDecision approval = approvalPolicy.evaluate(handler);
@@ -543,7 +596,7 @@ public class ToolInvocationGate {
                     // ⚠️⚠️ 不释放预算预留（成本可能已发生，R-007），不重试
                     log.warn("工具结果未知，落账转对账: tool={}, runId={}, operation={}",
                             call.toolName(), task.runId(), registration.operationId());
-                    ledger.recordResult(tenantId, registration.operationId(),
+                    recordResultQuietly(tenantId, registration.operationId(),
                             ToolOperationState.UNKNOWN, task.fencingToken(), null,
                             e.getMessage());
                     result.recordUnknown(call.toolName(), registration.operationId());
@@ -552,7 +605,7 @@ public class ToolInvocationGate {
                 }
                 // 确定失败：无副作用，可重试 → 预算额度可安全退回
                 log.info("工具确定失败: tool={}, err={}", call.toolName(), e.getMessage());
-                ledger.recordResult(tenantId, registration.operationId(),
+                recordResultQuietly(tenantId, registration.operationId(),
                         ToolOperationState.FAILED, task.fencingToken(),
                         e.getClass().getSimpleName(), e.getMessage());
                 releaseQuietly(tenantId, reservationId,
@@ -564,7 +617,7 @@ public class ToolInvocationGate {
                 //    若按确定失败处理而实际已写入，会导致重复写入 = Sev-0
                 log.error("工具抛出未预期异常，保守按 UNKNOWN 落账: tool={}",
                         call.toolName(), e);
-                ledger.recordResult(tenantId, registration.operationId(),
+                recordResultQuietly(tenantId, registration.operationId(),
                         ToolOperationState.UNKNOWN, task.fencingToken(), null,
                         String.valueOf(e.getMessage()));
                 result.recordUnknown(call.toolName(), registration.operationId());
@@ -668,6 +721,36 @@ public class ToolInvocationGate {
         }
     }
 
+    /**
+     * 记结果且<b>不让异常逃出</b>（专供 catch 块内部使用）。
+     *
+     * <p><b>⚠️ 为什么 catch 块里的记账必须吞异常</b>：
+     * 修复前，catch 块里的 {@code ledger.recordResult(...)} 会再抛一次
+     * （典型场景：上一次调用已把操作记成终态，本次
+     * {@code recordResult(SUCCEEDED)} 抛 IllegalStateTransitionException，
+     * 进入 catch 后 {@code recordResult(UNKNOWN)} 又因状态非 IN_FLIGHT 再抛）——
+     * <b>异常从 catch 块内部逃出闸门</b>，一路冒泡到执行循环，
+     * Run 被标记 FAILED 且账本说 SUCCEEDED（两个事实互相矛盾），
+     * 同时<b>没有任何对账记录</b>（兜底记账本身就是失败的那一次）。
+     *
+     * <p>处置：catch 路径里的记账失败<b>只记日志</b>，
+     * 闸门照常返回 UNKNOWN 交由对账流程处置 ——
+     * 记账失败本身就是「结果未知」的信号，不该在这里再抛一次。
+     *
+     * @param state 目标状态
+     */
+    private void recordResultQuietly(String tenantId, String operationId,
+                                     ToolOperationState state, long fencingToken,
+                                     String errorClass, String errorMessage) {
+        try {
+            ledger.recordResult(tenantId, operationId, state, fencingToken,
+                    errorClass, errorMessage);
+        } catch (RuntimeException e) {
+            log.error("账本记账失败（异常处理路径，不再上抛，转对账）: operation={}, state={}, err={}",
+                    operationId, state, e.toString());
+        }
+    }
+
     private ToolHandler findHandler(String toolName) {
         ToolHandler registered = handlers.stream()
                 .filter(h -> h.toolName().equals(toolName))
@@ -697,19 +780,19 @@ public class ToolInvocationGate {
      * <b>租户级，不含 run 维度</b>。而账本命中重复键时<b>复用既有 operation</b>（不新建）。
      * 若键中缺 runId（或填占位符），则同租户下<b>不同 Run 的同名工具 + 同 callId 会撞键</b>，
      * 新 Run 的调用被记到旧 Run 的 operation 上 → 对账链路错乱、副作用语义破裂。
+     *
+     * <p>⚠️⚠️ <b>「按工具分流」的口径收在 {@link IdempotencyKey#forToolCall}</b>（P1-9 修复）：
+     * 修复前本方法只看「参数里有没有 {@code studentId} + {@code knowledgePoint}」，
+     * 于是<b>任意</b>带这两个参数的工具都被塞进 {@code tool.record_weakness} 命名空间 ——
+     * 两个不同工具算出同一个键 → 后者被判「同键不同参数」而拒绝执行，
+     * 或被判「重放」而静默不执行。
      */
     private String buildIdempotencyKey(String runId, ModelResponse.ToolCallRequest call) {
         Object studentId = call.arguments().get("studentId");
         Object knowledgePoint = call.arguments().get("knowledgePoint");
-
-        if (studentId != null && knowledgePoint != null) {
-            return IdempotencyKey.forRecordWeakness(
-                    String.valueOf(studentId), runId,
-                    String.valueOf(knowledgePoint)).composite();
-        }
-        return IdempotencyKey.forToolInvoke(
-                runId, call.toolName(),
-                Optional.ofNullable(call.callId()).orElse("no-call-id"))
+        return IdempotencyKey.forToolCall(runId, call.toolName(), call.callId(),
+                        studentId == null ? null : String.valueOf(studentId),
+                        knowledgePoint == null ? null : String.valueOf(knowledgePoint))
                 .composite();
     }
 

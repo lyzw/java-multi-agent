@@ -156,7 +156,13 @@ public class JdbcApprovalQueryRepository implements ApprovalQueryPort {
                     throw new ApprovalQueryPort.ApprovalNotFoundException(approvalId);
                 }
                 // ⛔⛔ 过期审批**不得批准**（FE-01 §P8：过期/撤销须拒绝而非静默通过）
-                if (current.expired()) {
+                // ⚠️ 但**过期可以拒绝**（2026-10-24 修复）：
+                //    过期只否定「批准」这一个决定，不否定「拒绝」。
+                //    把「拒绝」一并掐掉，这条待办就既不能批也不能驳，只能干等系统清理——
+                //    那不是「保护用户」，是把活儿留给运维；
+                //    而且拒绝方向是**更严格**的（把悬而未决推向终态），不构成任何放行。
+                //    前端审批台对此已有正确实现：过期项只渲染「拒绝」，不渲染「批准」。
+                if (current.expired() && approve) {
                     throw new ApprovalDecisionException(
                             "审批已过期，不得批准（expires_at=" + current.expiresAt() + "）",
                             current.state());

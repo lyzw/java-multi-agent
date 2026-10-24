@@ -20,9 +20,10 @@ import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.ConfigRollbackCommand;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPointerPort;
-import cn.studykid.multiagent.ports.persistence.Page;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort.Decision;
+import cn.studykid.multiagent.ports.persistence.ConfigReleasePort;
+import cn.studykid.multiagent.ports.persistence.Page;
 
 /**
  * 权威配置变更的三步工作流（P6R4 · 管理端点）。
@@ -61,6 +62,7 @@ public class ConfigPublishWorkflowService {
     private final ConfigLifecycleService lifecycle;
     private final CapAgentDefPort agentDefs;
     private final ConfigPointerPort pointers;
+    private final ConfigReleasePort releases;
     private final Clock clock;
 
     public ConfigPublishWorkflowService(@NonNull ConfigPublishRequestPort requests,
@@ -68,12 +70,14 @@ public class ConfigPublishWorkflowService {
                                         @NonNull ConfigLifecycleService lifecycle,
                                         @NonNull CapAgentDefPort agentDefs,
                                         @NonNull ConfigPointerPort pointers,
+                                        @NonNull ConfigReleasePort releases,
                                         @NonNull Clock clock) {
         this.requests = requests;
         this.publisher = publisher;
         this.lifecycle = lifecycle;
         this.agentDefs = agentDefs;
         this.pointers = pointers;
+        this.releases = releases;
         this.clock = clock;
     }
 
@@ -244,6 +248,30 @@ public class ConfigPublishWorkflowService {
             String cursor,
             int limit) {
         return requests.list(tenantId, state, cursor, limit);
+    }
+
+    /**
+     * 读取单条变更申请（详情深链用）。
+     *
+     * @param tenantId   租户标识
+     * @param requestId  申请单标识
+     * @return 申请单；不存在时为 {@link Optional#empty()}
+     */
+    public @NonNull Optional<ConfigPublishRequest> findRequest(@NonNull String tenantId,
+                                                               @NonNull String requestId) {
+        return requests.find(tenantId, requestId);
+    }
+
+    /**
+     * 列出本租户的发布历史（发布时间线 / 回滚目标选择）。
+     *
+     * <p>⚠️ <b>只列 TENANT 作用域</b>：与 {@link #requestPublish} 等写入路径
+     * 同口径 —— 本通道只服务租户级对象，平台级发布头不属于租户时间线。
+     */
+    public @NonNull Page<ConfigRelease> listReleases(@NonNull String tenantId,
+                                                     @Nullable String cursor,
+                                                     int limit) {
+        return releases.listReleases(tenantId, cursor, limit);
     }
 
     // ── 内部 ───────────────────────────────────────────────────────

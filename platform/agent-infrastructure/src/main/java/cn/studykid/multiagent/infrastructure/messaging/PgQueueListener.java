@@ -165,6 +165,19 @@ public class PgQueueListener {
     private boolean handleOne(String tenantId, PgQueueRepository.QueuedMessage message) {
         Map<String, Object> payload = message.payload();
 
+        // ⚠️⚠️ **已达上限则直接进死信**（P1-13 修复的完整化）：
+        //    消息的 {@code attempts} 现在计入了「因持有者失联而被回收」的次数（回收时 +1）。
+        //    此前这部分消息永远不会进死信（下面的上限检查只在「处理者返回」的路径上）：
+        //    消费者卡死/卡住时，消息被无限回收重投 → 永不进死信，也从不告警。
+        //    这里直接判死信，与 {@code retryOrDead} 的上限口径一致。
+        if (message.attempts() >= maxAttempts) {
+            log.error("消息已达重试上限，直接进死信: queueId={}, attempts={}",
+                    message.queueId(), message.attempts());
+            deadLetter(tenantId, message,
+                    "重试 " + message.attempts() + " 次仍失败（进死信）");
+            return false;
+        }
+
         // ⚠️ I-1 纵深防御：消费侧也校验，堵住「绕过 Publisher 直接入队」的路径
         try {
             OutboxMessage.assertPayloadSafe(payload);
@@ -192,7 +205,7 @@ public class PgQueueListener {
 
         switch (outcome) {
             case CLAIMED -> {
-                repository.ack(tenantId, message.queueId());
+                repository.ack(tenantId, message.queueId(), workerId);
                 return true;
             }
             case RETRY -> {
@@ -210,7 +223,7 @@ public class PgQueueListener {
                 //    新增枚举值若忘记映射，「重投」会造成重复副作用（Sev-0），
                 //    「丢弃」只是丢一次执行——安全方向的默认值。
                 log.error("未知 Outcome={}，按丢弃处理（安全默认值）", outcome);
-                repository.ack(tenantId, message.queueId());
+                repository.ack(tenantId, message.queueId(), workerId);
                 return true;
             }
         }
@@ -231,7 +244,7 @@ public class PgQueueListener {
             return;
         }
         repository.retry(tenantId, message.queueId(), error,
-                Instant.now().plus(backoffFor(nextAttempts)));
+                Instant.now().plus(backoffFor(nextAttempts)), workerId);
     }
 
     /** 指数退避（基数 × 2^(n-1)，封顶）。 */
@@ -243,7 +256,7 @@ public class PgQueueListener {
 
     private void deadLetter(String tenantId, PgQueueRepository.QueuedMessage message, String error) {
         repository.reject(tenantId, message.queueId(), message.eventType(),
-                message.runId(), message.payload(), message.attempts() + 1, error);
+                message.runId(), message.payload(), message.attempts() + 1, error, workerId);
         totalDeadLettered++;
         log.error("消息已进死信: queueId={}, runId={}, error={}",
                 message.queueId(), message.runId(), error);

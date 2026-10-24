@@ -133,6 +133,38 @@ public class JdbcAgentQueryRepository implements AgentQueryPort {
         }
     }
 
+    @Override
+    public @NonNull List<AgentVersionItem> listVersions(@NonNull String tenantId,
+                                                       @NonNull String agentId) {
+        // ⚠️ 走 tenantConnection 绑定 RLS：agent_version 是租户隔离实体
+        String sql = """
+                SELECT version_id, version_number, definition, published_at, created_at
+                FROM agent_version
+                WHERE tenant_id = ?::uuid AND agent_id = ?::uuid
+                ORDER BY version_number DESC
+                """;
+        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
+            List<AgentVersionItem> rows = new ArrayList<>();
+            try (PreparedStatement ps = lease.connection().prepareStatement(sql)) {
+                ps.setString(1, tenantId);
+                ps.setString(2, agentId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        rows.add(new AgentVersionItem(
+                                rs.getString("version_id"),
+                                rs.getInt("version_number"),
+                                rs.getString("definition"),
+                                instantOrNull(rs.getTimestamp("published_at")),
+                                rs.getTimestamp("created_at").toInstant()));
+                    }
+                }
+            }
+            return rows;
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询 Agent 版本历史失败", e);
+        }
+    }
+
     private AgentItem read(ResultSet rs) throws SQLException {
         // ⚠️ getInt 对 NULL 返回 0；version_number 约束 > 0，故 0 即「无版本」
         int latestVersionNumber = rs.getInt("latest_version_number");

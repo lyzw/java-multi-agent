@@ -64,6 +64,14 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
             + " FROM cap_skill_def WHERE id = ? AND published_at IS NOT NULL"
             + " ORDER BY version DESC LIMIT 1";
 
+    /**
+     * 每个逻辑 id 的最高版本行（只读目录，见 {@link CapSkillDefPort#listAll()}）。
+     *
+     * <p>⚠️ {@code DISTINCT ON} + 首列一致的排序键（PG 强制要求）。
+     */
+    private static final String SQL_LIST_ALL = "SELECT DISTINCT ON (id) " + COLUMNS
+            + " FROM cap_skill_def ORDER BY id, version DESC";
+
     private final DataSource dataSource;
 
     public JdbcCapSkillDefRepository(@NonNull DataSource dataSource) {
@@ -122,6 +130,22 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
                         try (ResultSet rs = ps.executeQuery()) {
                             return rs.next() ? Optional.of(map(rs)) : Optional.empty();
                         }
+                    }
+                });
+    }
+
+    @Override
+    public @NonNull List<CapSkillDef> listAll() {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_ALL);
+                         ResultSet rs = ps.executeQuery()) {
+                        List<CapSkillDef> out = new java.util.ArrayList<>();
+                        while (rs.next()) {
+                            out.add(map(rs));
+                        }
+                        return List.copyOf(out);
                     }
                 });
     }

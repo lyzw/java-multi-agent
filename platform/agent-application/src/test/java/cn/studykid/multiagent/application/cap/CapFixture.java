@@ -19,9 +19,11 @@ import cn.studykid.multiagent.core.cap.CapObjectType;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.CapToolKind;
+import cn.studykid.multiagent.core.cap.ConfigObjectVersion;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
 import cn.studykid.multiagent.core.cap.CapabilityRiskLevel;
 import cn.studykid.multiagent.core.cap.McpTrustTier;
+import cn.studykid.multiagent.core.monitoring.AuthzWatermark;
 import cn.studykid.multiagent.ports.mcp.McpManifestPort;
 import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
@@ -56,6 +58,13 @@ final class CapFixture {
     final Map<String, Long> authzVersions = new LinkedHashMap<>();
     final Map<String, CapabilitySnapshot> snapshots = new LinkedHashMap<>();
     final Map<String, Set<String>> rolePermissions = new LinkedHashMap<>();
+    /**
+     * 租户级「当前发布指针」所指的 Agent 版本（P0-5）。
+     *
+     * <p>键：{@code tenantId/agentId}；值：指针指向的发布头里声明的精确版本。
+     * 未登记 = 该发布头未引用此 Agent → 解析时回退到「最新已发布版本行」。
+     */
+    final Map<String, Integer> publishedAgentVersions = new LinkedHashMap<>();
 
     /** 置为 true 时 {@code AuthzVersionPort.require} 抛「版本服务不可用」。 */
     boolean authzUnavailable;
@@ -148,6 +157,19 @@ final class CapFixture {
         return this;
     }
 
+    /**
+     * 登记「租户当前发布指针所指的 Agent 版本」（P0-5）。
+     *
+     * @param tenantId 租户标识
+     * @param agentId  Agent 标识
+     * @param version  指针指向的发布头里声明的精确版本
+     */
+    @NonNull CapFixture withPublishedAgentVersion(@NonNull String tenantId,
+                                                   @NonNull String agentId, int version) {
+        publishedAgentVersions.put(tenantId + "/" + agentId, version);
+        return this;
+    }
+
     @NonNull CapFixture withAuthzVersion(@NonNull String tenantId, @NonNull String principalId,
                                          long version) {
         authzVersions.put(tenantId + "/" + principalId, version);
@@ -212,6 +234,23 @@ final class CapFixture {
                 return latestAgent(tenantId, agentId);
             }
 
+            @Override
+            public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
+                Map<String, CapAgentDef> latest = new LinkedHashMap<>();
+                for (CapAgentDef a : agents.values()) {
+                    if (!tenantId.equals(a.tenantId())) {
+                        continue;
+                    }
+                    CapAgentDef prev = latest.get(a.agentId());
+                    if (prev == null || a.version() > prev.version()) {
+                        latest.put(a.agentId(), a);
+                    }
+                }
+                return latest.values().stream()
+                        .sorted((a, b) -> a.agentId().compareTo(b.agentId()))
+                        .toList();
+            }
+
             private Optional<CapAgentDef> latestAgent(
                     String tenantId, String agentId) {
                 return agents.values().stream()
@@ -236,6 +275,11 @@ final class CapFixture {
             @Override
             public @NonNull Optional<CapSkillDef> findLatestPublished(@NonNull String skillId) {
                 return latestPublished(skills, skillId);
+            }
+
+            @Override
+            public @NonNull List<CapSkillDef> listAll() {
+                return latestPerId(skills);
             }
         };
     }
@@ -265,6 +309,11 @@ final class CapFixture {
                                 && mcpToolName.equals(t.mcpToolName()))
                         .max((a, b) -> Integer.compare(a.version(), b.version()));
             }
+
+            @Override
+            public @NonNull List<CapToolDef> listAll() {
+                return latestPerId(tools);
+            }
         };
     }
 
@@ -284,26 +333,54 @@ final class CapFixture {
             public @NonNull Optional<CapMcpServerDef> findLatestPublished(@NonNull String serverId) {
                 return latestPublished(servers, serverId);
             }
+
+            @Override
+            public java.util.List<CapMcpServerDef> listAll() {
+                return java.util.List.copyOf(servers.values());
+            }
         };
     }
 
     @NonNull PublishedVersionPort publishedVersions() {
-        return (type, objectId) -> {
-            Map<String, ?> source = switch (type) {
-                case TOOL -> tools;
-                case SKILL -> skills;
-                case MCP_SERVER -> servers;
-            };
-            List<Integer> versions = new ArrayList<>();
-            String prefix = objectId + "@";
-            for (String mapKey : source.keySet()) {
-                if (mapKey.startsWith(prefix)) {
-                    versions.add(Integer.parseInt(mapKey.substring(prefix.length())));
+        return new PublishedVersionPort() {
+            @Override
+            public @NonNull Optional<Integer> currentVersion(@NonNull CapObjectType type,
+                                                             @NonNull String objectId) {
+                Map<String, ?> source = switch (type) {
+                    case TOOL -> tools;
+                    case SKILL -> skills;
+                    case MCP_SERVER -> servers;
+                };
+                List<Integer> versions = new ArrayList<>();
+                String prefix = objectId + "@";
+                for (String mapKey : source.keySet()) {
+                    if (mapKey.startsWith(prefix)) {
+                        versions.add(Integer.parseInt(mapKey.substring(prefix.length())));
+                    }
                 }
+                return versions.isEmpty()
+                        ? Optional.empty()
+                        : Optional.of(versions.stream().max(Integer::compareTo).orElseThrow());
             }
-            return versions.isEmpty()
-                    ? Optional.empty()
-                    : Optional.of(versions.stream().max(Integer::compareTo).orElseThrow());
+
+            /**
+             * 租户级（Agent）当前发布指针所指的版本（P0-5）。
+             *
+             * <p>⚠️ 夹具用 {@code publishedAgentVersions} 模拟
+             * 「TENANT 指针 → release → object_versions」这条解析链的结果：
+             * 未显式登记时返回空 → 调用方按「该发布头未引用此 Agent」回退到
+             * 「最新已发布版本行」（与真实实现同构）。
+             */
+            @Override
+            public @NonNull Optional<Integer> currentTenantVersion(@NonNull String tenantId,
+                                                                    @NonNull String type,
+                                                                    @NonNull String objectId) {
+                if (!ConfigObjectVersion.TYPE_AGENT.equals(type)) {
+                    return Optional.empty();
+                }
+                return Optional.ofNullable(
+                        publishedAgentVersions.get(tenantId + "/" + objectId));
+            }
         };
     }
 
@@ -369,6 +446,26 @@ final class CapFixture {
                 authzVersions.put(tenantId + "/" + principalId, next);
                 return next;
             }
+
+            @Override
+            public AuthzWatermark watermark(@NonNull String tenantId) {
+                long subjects = 0;
+                long revoked = 0;
+                long max = 0;
+                String prefix = tenantId + "/";
+                for (Map.Entry<String, Long> entry : authzVersions.entrySet()) {
+                    if (!entry.getKey().startsWith(prefix)) {
+                        continue;
+                    }
+                    subjects++;
+                    if (entry.getValue() > AuthzVersion.INITIAL_VERSION) {
+                        revoked++;
+                    }
+                    max = Math.max(max, entry.getValue());
+                }
+                return new AuthzWatermark(tenantId, subjects, revoked, max, null,
+                        java.time.Instant.EPOCH);
+            }
         };
     }
 
@@ -403,6 +500,19 @@ final class CapFixture {
         return source.values().stream()
                 .filter(v -> id.equals(idOf(v)))
                 .max((a, b) -> Integer.compare(versionOf2(a), versionOf2(b)));
+    }
+
+    /**
+     * 每个逻辑 id 的最高版本（供 {@code CapToolDefPort#listAll()} /
+     * {@code CapSkillDefPort#listAll()} 的夹具实现，与 DB 侧
+     * {@code DISTINCT ON (id) ... ORDER BY id, version DESC} 同口径）。
+     */
+    private static <T> List<T> latestPerId(Map<String, T> source) {
+        Map<String, T> best = new LinkedHashMap<>();
+        for (T def : source.values()) {
+            best.merge(idOf(def), def, (a, b) -> versionOf2(a) >= versionOf2(b) ? a : b);
+        }
+        return List.copyOf(best.values());
     }
 
     private static String idOf(Object def) {

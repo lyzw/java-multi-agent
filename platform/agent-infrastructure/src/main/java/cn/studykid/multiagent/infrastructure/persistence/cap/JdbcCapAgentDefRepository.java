@@ -5,6 +5,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -74,6 +75,29 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
               AND published_at IS NOT NULL
             ORDER BY version DESC
             LIMIT 1
+            """;
+
+    /**
+     * 每 Agent 一行的最高版本（按 {@code agent_id} 分组取 {@code MAX(version)}）。
+     *
+     * <p>⚠️ 与 {@code JdbcCapMcpServerDefRepository} 的 {@code listAll} 同口径；
+     * ⚠️ {@code cap_agent_def} 是 RLS 表 —— 必须经 {@code tenantConnection(tenantId)}
+     * 绑定租户上下文后查询（外层 WHERE tenant_id 与 RLS 策略双保险）。
+     */
+    private static final String SQL_LIST_LATEST_PER_AGENT = """
+            SELECT tenant_id::text, agent_id::text, version, name, description,
+                   roles::text, enabled_skills::text, skill_bundles::text,
+                   capability_tags::text, overrides::text, config_fingerprint,
+                   schema_version, created_at, published_at
+            FROM cap_agent_def
+            WHERE tenant_id = ?::uuid
+              AND (agent_id, version) IN (
+                  SELECT agent_id, MAX(version)
+                    FROM cap_agent_def
+                   WHERE tenant_id = ?::uuid
+                   GROUP BY agent_id
+              )
+            ORDER BY agent_id ASC
             """;
 
     private final DataSource dataSource;
@@ -159,6 +183,26 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
                             return rs.next() ? Optional.of(map(rs)) : Optional.<CapAgentDef>empty();
                         }
                     }
+                });
+    }
+
+    @Override
+    public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(tenantId),
+                conn -> {
+                    List<CapAgentDef> rows = new ArrayList<>();
+                    try (PreparedStatement ps =
+                                 conn.prepareStatement(SQL_LIST_LATEST_PER_AGENT)) {
+                        ps.setString(1, tenantId);
+                        ps.setString(2, tenantId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                rows.add(map(rs));
+                            }
+                        }
+                    }
+                    return rows;
                 });
     }
 

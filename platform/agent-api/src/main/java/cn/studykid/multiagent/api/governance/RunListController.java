@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
+import cn.studykid.multiagent.core.reference.TutoringVocabulary;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.persistence.RunListQueryPort;
@@ -24,6 +25,11 @@ import cn.studykid.multiagent.ports.security.AuthorizationService;
  *
  * <p>⛔ <b>不返回 {@code inputPayload} / {@code errorMessage} / {@code tenantId}</b>：
  * 前两者分别是学生提交的题目解答与内部错误细节。
+ *
+ * <p>⚠️ <b>学科/年级例外，但只在词表内</b>：前端检索台要按学科筛（FE-01 §P7），
+ * 而 {@code input_payload} 里本就带这两个字段。放行它们的前提是
+ * {@link TutoringVocabulary} 的 fail-closed 校验——
+ * <b>只回显词表内的分类值，绝不回显客户端原文</b>。
  */
 @RestController
 public class RunListController {
@@ -59,6 +65,7 @@ public class RunListController {
             @RequestParam(required = false) @Nullable Integer limit,
             @RequestParam(required = false) @Nullable String cursor,
             @RequestParam(required = false) @Nullable String state,
+            @RequestParam(required = false) @Nullable String subject,
             @RequestParam(required = false) @Nullable String createdFrom,
             @RequestParam(required = false) @Nullable String createdTo) {
 
@@ -72,21 +79,45 @@ public class RunListController {
         }
 
         int pageSize = GovernanceSupport.limit(limit);
-        GovernanceSupport.requireEnum(state, RUN_STATES, "state");
+        // ⚠️ **空白等同「不筛选」**：不归一的话，`?state=` 会把空串推进 SQL，
+        //    PG 在 `''::run_state` 上直接抛类型转换错误 → 500。
+        //    前端不会这么传（空值被 toQuery 丢掉），但外部调用方会——
+        //    一个畸形参数不该换来一个服务端故障。
+        String stateFilter = blankToNull(state);
+        String subjectFilter = blankToNull(subject);
+
+        GovernanceSupport.requireEnum(stateFilter, RUN_STATES, "state");
+        // ⚠️ 学科取值非法必须 400，而不是返回空列表——
+        //    空列表会把「你传错了参数」伪装成「这个租户没有数据」。
+        GovernanceSupport.requireEnum(subjectFilter, TutoringVocabulary.subjectSet(), "subject");
         Instant from = GovernanceSupport.instant(createdFrom, "createdFrom");
         Instant to = GovernanceSupport.instant(createdTo, "createdTo");
         GovernanceSupport.checkRange(from, to);
 
-        var page = runList.list(context.tenantId(), state, from, to, cursor, pageSize);
+        var page = runList.list(context.tenantId(), stateFilter, subjectFilter,
+                from, to, cursor, pageSize);
         return ResponseEntity.ok(GovernanceSupport.PageResponse.of(
                 page.items().stream().map(RunListItemResponse::of).toList(),
                 page.nextCursor()));
+    }
+
+    /** 空白（含全空格）归一为 {@code null}；其余裁掉首尾空白。 */
+    private static @Nullable String blankToNull(@Nullable String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /**
      * Run 列表条目。
      *
      * <p>⚠️ <b>字段名一律 camelCase</b>（Java record 直接序列化，零转换）。
+     *
+     * <p>⚠️ <b>学科/年级是分类字段，不是题干</b>：
+     * 二者来自 {@code input_payload}，但已由 {@link TutoringVocabulary} 做
+     * fail-closed 校验——客户端传了什么就回显什么，在这里是<b>不允许</b>的。
      */
     public record RunListItemResponse(
             @NonNull String runId,
@@ -94,11 +125,14 @@ public class RunListController {
             @NonNull Instant createdAt,
             @Nullable Instant completedAt,
             int attempt,
-            @Nullable String errorCode
+            @Nullable String errorCode,
+            @Nullable String subject,
+            @Nullable String grade
     ) {
         static RunListItemResponse of(RunListQueryPort.RunListItem item) {
             return new RunListItemResponse(item.runId(), item.state(), item.createdAt(),
-                    item.completedAt(), item.attempt(), item.errorCode());
+                    item.completedAt(), item.attempt(), item.errorCode(),
+                    item.subject(), item.grade());
         }
     }
 }

@@ -6,6 +6,7 @@ import java.util.Optional;
 import org.jspecify.annotations.NonNull;
 
 import cn.studykid.multiagent.core.cap.AuthzVersion;
+import cn.studykid.multiagent.core.monitoring.AuthzWatermark;
 import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
 
 /**
@@ -71,5 +72,10 @@ final class BumpingAuthzVersions implements AuthzVersionPort {
     @Override
     public long bump(@NonNull String tenantId, @NonNull String principalId) {
         return delegate.bump(tenantId, principalId);
+    }
+
+    @Override
+    public AuthzWatermark watermark(@NonNull String tenantId) {
+        return delegate.watermark(tenantId);
     }
 }

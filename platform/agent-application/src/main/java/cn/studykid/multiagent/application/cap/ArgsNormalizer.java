@@ -33,7 +33,8 @@ import org.jspecify.annotations.Nullable;
  * <ol>
  *   <li><b>字段字典序</b> —— 对象键按字典序输出；</li>
  *   <li><b>字符串 UTF-8 NFC</b> —— Unicode 等价但字节不同的字符串必须同摘要；</li>
- *   <li><b>数字十进制规范形式</b> —— {@code 1}、{@code 1.0}、{@code 1.00} 同摘要；</li>
+ *   <li><b>数字十进制规范形式</b> —— {@code 1}、{@code 1.0}、{@code 1.00} 同摘要，
+ *       但<b>数字与字符串不同摘要</b>（{@code 1} ≠ {@code "1"}）；</li>
  *   <li><b>布尔 {@code true/false}</b>；</li>
  *   <li><b>数组默认保持调用序</b>；元数据声明 {@code set} 时按字典序排序；</li>
  *   <li><b>缺失字段与显式 {@code null} 区分编码</b> —— {@code {}} 与 {@code {"a":null}} 不同摘要；</li>
@@ -255,9 +256,39 @@ public final class ArgsNormalizer {
             return MAPPER.getNodeFactory().booleanNode(bool);
         }
         if (value instanceof Number number) {
-            return MAPPER.getNodeFactory().textNode(canonicalNumber(number));
+            // ⚠️⚠️ 必须是**数字节点**，不能写成文本（修复前的真实缺陷）：
+            //    写成文本后 {"score":1} 与 {"score":"1"} 算出**同一个摘要** ——
+            //    「审批绑定的参数」与「实际执行的参数」类型都不同却同摘要，
+            //    防重放与审批绑定同时失效。
+            //    §5.3.2 规则 3 只要求「整数与浮点不分」（1 / 1.0 / 1.00 同摘要），
+            //    从未允许「数字与字符串不分」——
+            //    后者与 {@code ParamPolicyEngine.valueKey} 的 "n:" / "s:" 前缀口径
+            //    直接冲突（那边明确「数值与字符串永不等价」）。
+            return numberNode(number);
         }
         return MAPPER.getNodeFactory().textNode(canonicalString(String.valueOf(value)));
+    }
+
+    /**
+     * 数字的规范形式节点（数字节点；非有限值退化为文本节点）。
+     *
+     * <p>⚠️ <b>非有限值（NaN / Infinity）不是合法 JSON 数字</b>，
+     * 无法表示为数字节点 —— 此时保留文本形态。
+     * 理论上的同形风险（与字符串 {@code "NaN"} 撞摘要）不可达：
+     * 调用参数来自 JSON，而 JSON 本身承载不了 NaN。
+     *
+     * @param number 数值
+     * @return 规范形式的节点
+     */
+    private static @NonNull JsonNode numberNode(@NonNull Number number) {
+        String canonical = canonicalNumber(number);
+        try {
+            // ⚠️ 只经 canonicalNumber 转 BigDecimal：所有数值形态（Integer / Long /
+            //    Double / BigDecimal）都落到同一份十进制规范文本 → 同一摘要。
+            return MAPPER.getNodeFactory().numberNode(new BigDecimal(canonical));
+        } catch (NumberFormatException e) {
+            return MAPPER.getNodeFactory().textNode(canonical);
+        }
     }
 
     /**

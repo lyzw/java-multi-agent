@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.rabbit.core.RabbitAdmin;
 
 import cn.studykid.multiagent.infrastructure.messaging.PgQueueRepository;
 
@@ -139,7 +140,19 @@ public final class MessagingSwitchGuard {
     /**
      * 取队列中未消费的消息数。
      *
-     * @return 深度；队列不存在返回 0；broker 不可达返回 null（无法检查）
+     * <p><b>⚠️ 必须按 {@link RabbitAdmin#QUEUE_MESSAGE_COUNT} 取值，且不能用
+     * {@code Properties.getProperty}</b>：
+     * Spring AMQP 4 的 {@code RabbitAdmin.getQueueProperties} 写入的是
+     * {@code props.put(QUEUE_MESSAGE_COUNT, queueInfo.getMessageCount())}
+     * —— 值是 <b>{@link Integer}</b>，而 {@link java.util.Properties#getProperty}
+     * <b>只对 {@link String} 值返回结果</b>，
+     * 对非 String 值一律返回 {@code null}。
+     * 于是 {@code getProperty(...)} 恒为 {@code null} → 深度恒为 0 →
+     * <b>守卫永远打印「残留检查通过」</b> —— 正是本类要杜绝的「假绿」。
+     *
+     * <p>因此这里改用 {@code props.get(...)}（按 Object 取）再自行转型。
+     *
+     * @return 深度；队列不存在返回 0；<b>取不到或无法解析返回 {@code null}（无法检查）</b>
      */
     private static @Nullable Integer residualDepth(AmqpAdmin admin, String queueName) {
         try {
@@ -149,15 +162,25 @@ public final class MessagingSwitchGuard {
             if (props == null) {
                 return 0;
             }
-            String count = props.getProperty("QUEUE_MESSAGE_COUNT");
-            if (count == null) {
-                return 0;
+            // ⚠️ 用 RabbitAdmin 的常量做键（它是 Object 类型的 key，值即 "QUEUE_MESSAGE_COUNT"），
+            //    并且必须用 get() 而非 getProperty() —— 详见本方法 javadoc。
+            Object raw = props.get(RabbitAdmin.QUEUE_MESSAGE_COUNT);
+            if (raw == null) {
+                // ⚠️⚠️ 取不到 = **不能确认队列为空**，绝不当作 0。
+                //    当成 0 会让「检查通过」变成一句没有依据的话。
+                log.warn("⚠️⚠️ Rabbit 队列 {} 的属性里没有消息数字段（不能确认队列为空）", queueName);
+                return null;
             }
+            if (raw instanceof Number number) {
+                return number.intValue();
+            }
+            String text = String.valueOf(raw).trim();
             try {
-                return Integer.parseInt(count.trim());
+                return Integer.parseInt(text);
             } catch (NumberFormatException e) {
-                log.warn("Rabbit 队列 {} 的消息数为非数字（按 0 处理）: {}", queueName, count);
-                return 0;
+                // ⚠️ 非数字同样不能当作 0 —— 那是「查不到」不是「查到是空」。
+                log.warn("⚠️⚠️ Rabbit 队列 {} 的消息数非数字（不能确认队列为空）: {}", queueName, raw);
+                return null;
             }
         } catch (AmqpException e) {
             log.warn("读取 Rabbit 队列 {} 深度失败（无法检查残留）: {}", queueName, e.getMessage());

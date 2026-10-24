@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.ports.persistence;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
@@ -56,4 +57,23 @@ public interface CapAgentDefPort {
      */
     @NonNull Optional<CapAgentDef> findLatestPublished(@NonNull String tenantId,
                                                         @NonNull String agentId);
+
+    /**
+     * 列出该租户<b>每个 Agent 的最高版本行</b>（不按发布状态过滤）。
+     *
+     * <p>⚠️ <b>为什么需要整租户列举</b>：依赖图谱 / 影响分析要基于全租户 Agent 的
+     * <b>结构化声明</b>（{@code enabled_skills} / {@code overrides}）计算边，
+     * 而 {@code AgentQueryPort} 只透传自由 JSON {@code definition}，不满足。
+     *
+     * <p>⚠️ 与 {@code CapToolDefPort#listAll()} 同口径：取最高版本行（含未发布），
+     * 由调用方按 {@link CapAgentDef#isPublished()} 标注；「当前生效版本」以发布
+     * 指针为准（§6.3），本方法只服务于管理面图谱展示。
+     *
+     * <p>⚠️ <b>RLS 绑定</b>：{@code cap_agent_def} 是租户隔离表，必须经
+     * {@code tenantConnection} 绑定后查询，绕过即绕过隔离。
+     *
+     * @param tenantId 租户标识
+     * @return 每 Agent 一行的最高版本定义（按 agent_id 升序）；无 Agent 时为空列表
+     */
+    @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId);
 }

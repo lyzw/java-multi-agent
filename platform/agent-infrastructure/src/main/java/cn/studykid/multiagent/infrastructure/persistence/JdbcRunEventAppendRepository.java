@@ -9,6 +9,9 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Repository;
 
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
+
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.RunEventPort;
 
@@ -28,6 +31,15 @@ import cn.studykid.multiagent.ports.persistence.RunEventPort;
  */
 @Repository
 public class JdbcRunEventAppendRepository implements RunEventPort {
+
+    /**
+     * JSON 序列化器（Jackson 3）。
+     *
+     * <p>⚠️ 用它而不是手工拼字符串：事件载荷落进 PG 的 {@code jsonb} 列，
+     * 裸控制字符会被 PG 拒绝 → 事件追加失败 → 整条 Run 的时间线丢失。
+     * 详见 {@link #payloadJson(Map)}。
+     */
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     /**
      * 锁 run 行并取下一个序号，随后插入事件。
@@ -127,37 +139,42 @@ public class JdbcRunEventAppendRepository implements RunEventPort {
      * <p>⚠️ <b>只允许标量</b>：与 SSE 白名单一致（P3-D10 §5.2 S-6）。
      * 非标量值（Map/List）<b>直接拒绝</b>而不是静默丢弃——
      * 静默丢弃会让「我明明写了却没看到」这类问题极难排查。
+     *
+     * <p>⚠️ <b>序列化走 Jackson，不手工拼字符串</b>：本方法此前手工拼 JSON，
+     * 转义表只补了 {@code \n\r\t}，<b>其余控制字符（\b \f 与 U+0000～U+001F）仍会漏</b>。
+     * 而载荷列是 {@code ?::jsonb}——PG 拒绝字符串里的裸控制字符
+     * （RFC 8259 要求 U+0000～U+001F 必须转义）→
+     * 事件追加失败 → <b>整条 Run 的时间线丢失</b>。
+     * 手写转义表迟早漏项，故一律交给 Jackson。
      */
     private static String payloadJson(Map<String, Object> payload) {
-        StringBuilder sb = new StringBuilder("{");
-        boolean first = true;
+        ObjectNode root = JSON.createObjectNode();
         for (Map.Entry<String, Object> e : payload.entrySet()) {
             Object v = e.getValue();
             if (v == null) {
                 continue;
             }
-            if (!(v instanceof String || v instanceof Number || v instanceof Boolean)) {
+            if (v instanceof String str) {
+                root.put(e.getKey(), str);
+            } else if (v instanceof Boolean bool) {
+                root.put(e.getKey(), bool);
+            } else if (v instanceof Number number) {
+                // ⚠️ NaN / Infinity 不是合法 JSON（RFC 8259 无此字面量），
+                //    PG 的 jsonb 也会拒 → 明确拒绝而不是产出一个坏载荷。
+                if (number instanceof Double d && !Double.isFinite(d)
+                        || number instanceof Float f && !Float.isFinite(f)) {
+                    throw new IllegalArgumentException(
+                            "事件载荷的数值必须是有限值（NaN/Infinity 不是合法 JSON）: "
+                                    + e.getKey() + "=" + number);
+                }
+                root.set(e.getKey(), JSON.valueToTree(number));
+            } else {
                 throw new IllegalArgumentException(
                         "事件载荷只允许标量（String/Number/Boolean），实际: " + e.getKey()
                                 + "=" + v.getClass().getSimpleName());
             }
-            if (!first) {
-                sb.append(',');
-            }
-            first = false;
-            sb.append('"').append(escape(e.getKey())).append("\":");
-            if (v instanceof String str) {
-                sb.append('"').append(escape(str)).append('"');
-            } else {
-                sb.append(v);
-            }
         }
-        return sb.append('}').toString();
-    }
-
-    private static String escape(String s) {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+        return JSON.writeValueAsString(root);
     }
 
     /**

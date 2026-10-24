@@ -1,11 +1,13 @@
 package cn.studykid.multiagent.ports.persistence;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.cap.ConfigRelease;
+import cn.studykid.multiagent.ports.persistence.Page;
 
 /**
  * 配置发布头仓储端口（§6.1 / 06 §1.7 · W-PERM-P0-T4）。
@@ -84,4 +86,28 @@ public interface ConfigReleasePort {
      */
     @NonNull Optional<ConfigRelease> findLatestPublished(ConfigRelease.@NonNull Scope scope,
                                                           String tenantId);
+
+    /**
+     * 列出本租户的发布历史（发布时间线 / 回滚目标选择）。
+     *
+     * <p>⚠️ <b>只列 TENANT 作用域</b>：本端口服务租户级发布工作流，
+     * 平台级发布头（{@code tenant_id IS NULL}）虽在 RLS 读策略下可见，
+     * 但不属于本租户的时间线，且其内容由运维通道管理。
+     *
+     * <p>⚠️ <b>含 ROLLED_BACK 行</b>：时间线的意义正是「发生过什么」——
+     * 已回滚的发布必须可见（回滚不删除历史，06 §3.2），
+     * 它同时是再次回滚的目标来源。
+     *
+     * <p>⚠️ <b>keyset 游标按 {@code config_publish_seq} 降序</b>：
+     * 序号由 DB 序列分配、全局唯一且单调，是全序键；
+     * 游标二元组取 {@code (created_at, release_id)} 与既有列表实现保持一致。
+     *
+     * @param tenantId 租户标识（TENANT 作用域）
+     * @param cursor   游标；首页传 {@code null}
+     * @param limit    页大小
+     * @return 分页结果（按 {@code config_publish_seq} 降序）
+     */
+    @NonNull Page<ConfigRelease> listReleases(@NonNull String tenantId,
+                                              @Nullable String cursor,
+                                              int limit);
 }

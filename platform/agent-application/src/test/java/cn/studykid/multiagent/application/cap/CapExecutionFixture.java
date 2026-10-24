@@ -101,11 +101,12 @@ final class CapExecutionFixture {
                                                   long fencingToken) {
                 timeline.add("ledger:register");
                 LedgerEntry entry = ledger.get(idempotencyKey);
+                boolean created = entry == null;
                 if (entry == null) {
                     entry = new LedgerEntry(UUID.randomUUID().toString(), idempotencyKey, requestDigest);
                     ledger.put(idempotencyKey, entry);
                 }
-                return new Registration(entry.operationId, entry.state, 1, 0L);
+                return new Registration(entry.operationId, entry.state, 1, 0L, created);
             }
 
             @Override
@@ -143,7 +144,7 @@ final class CapExecutionFixture {
                 LedgerEntry entry = ledger.get(idempotencyKey);
                 return entry == null
                         ? Optional.empty()
-                        : Optional.of(new Registration(entry.operationId, entry.state, 1, 0L));
+                        : Optional.of(new Registration(entry.operationId, entry.state, 1, 0L, false));
             }
 
             @Override

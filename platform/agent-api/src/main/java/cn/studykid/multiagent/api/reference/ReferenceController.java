@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
+import cn.studykid.multiagent.core.reference.TutoringVocabulary;
 
 /**
  * 业务字典端点（FE-01 协作项 B3）。
@@ -32,14 +33,16 @@ public class ReferenceController {
      * 平台辅导业务学科词表（DEC-6 采集白名单：仅学科）。
      *
      * <p>⚠️ 故意不暴露「历史/地理/道法」等：平台当前辅导业务聚焦初中国家课程
-     * 理科与语英，词表即业务边界。新增学科须同步 {@code createRun} 的合规白名单。
+     * 理科与语英，词表即业务边界。
+     *
+     * <p>⚠️ <b>词表本体在 {@code agent-core} 的 {@link TutoringVocabulary}</b>，
+     * 不在本类里再存一份：Run 列表回填学科时要用<b>同一份</b>词表做 fail-closed 校验，
+     * 两份拷贝迟早漂移（前端能选、后端不认 → 提交成功但列表查不出来）。
      */
-    private static final List<String> SUBJECTS = List.of(
-            "数学", "物理", "化学", "生物", "语文", "英语");
+    private static final List<String> SUBJECTS = TutoringVocabulary.SUBJECTS;
 
-    /** 平台辅导业务年级词表。 */
-    private static final List<String> GRADES = List.of(
-            "初一", "初二", "初三");
+    /** 平台辅导业务年级词表（同上：与 Run 列表共用一份）。 */
+    private static final List<String> GRADES = TutoringVocabulary.GRADES;
 
     private final CurrentPrincipal currentPrincipal;
 

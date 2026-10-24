@@ -177,18 +177,56 @@ public class ConfigPublishService {
     private ConfigPublishResult doPublish(ConfigPublishCommand command, Long expected, int attempt) {
         Instant now = clock.instant();
 
-        // ── 1. 插入本次发布的不可变新版本行（幂等：已存在则跳过）──
+        // ── 1. 插入本次发布的不可变新版本行 ──────────────────────────────
+        //    ⚠️⚠️ **必须检查 insert() 的返回值**（修复前的真实缺陷）：
+        //    插入是 `ON CONFLICT (…, version) DO NOTHING`（不覆盖既有行），
+        //    而修复前**返回值被丢弃** → 冲突被静默吞掉。
+        //    叠加「版本号在事务外、无锁计算」，两个并发发布同一对象时：
+        //      · A、B 都算出 version = N+1；
+        //      · A 插入成功；B 的插入 DO NOTHING → **B 的内容被丢弃，无任何报错**；
+        //      · B 的指针 CAS 失败 → 变基重试 → 重试复用同一 command（含同一 version）
+        //        → 插入仍是 no-op → B 新建 release，object_versions 指向
+        //          agent v(N+1)（**其实是 A 的内容**）→ CAS 成功。
+        //    结果：**B 申请单里被审批通过的内容从未生效，运行期跑的是 A 的内容，
+        //    而 publish() 返回成功** —— 典型的「假成功」。
+        //
+        //    ⚠️ 现在 insert() 返回 false 时**按内容指纹判定**：
+        //      · 指纹相同 → 真正的幂等重放（同一内容再次发布）→ 放行；
+        //      · 指纹不同 → 有人并发写了同一版本号 → **判为冲突并失败**，
+        //        绝不把别人的内容当成自己的发出去。
         for (CapToolDef tool : command.tools()) {
-            toolDefs.insert(withPublished(tool, now));
+            CapToolDef published = withPublished(tool, now);
+            if (!toolDefs.insert(published)) {
+                verifySameContentOnConflict("tool", tool.id(), tool.version(),
+                        published.configFingerprint(),
+                        toolDefs.find(tool.id(), tool.version()).map(CapToolDef::configFingerprint));
+            }
         }
         for (CapSkillDef skill : command.skills()) {
-            skillDefs.insert(withPublished(skill, now));
+            CapSkillDef published = withPublished(skill, now);
+            if (!skillDefs.insert(published)) {
+                verifySameContentOnConflict("skill", skill.id(), skill.version(),
+                        published.configFingerprint(),
+                        skillDefs.find(skill.id(), skill.version()).map(CapSkillDef::configFingerprint));
+            }
         }
         for (CapMcpServerDef server : command.mcpServers()) {
-            serverDefs.insert(withPublished(server, now));
+            CapMcpServerDef published = withPublished(server, now);
+            if (!serverDefs.insert(published)) {
+                verifySameContentOnConflict("mcp_server", server.id(), server.version(),
+                        published.configFingerprint(),
+                        serverDefs.find(server.id(), server.version())
+                                .map(CapMcpServerDef::configFingerprint));
+            }
         }
         for (CapAgentDef agent : command.agents()) {
-            agentDefs.insert(withPublished(agent, now));
+            CapAgentDef published = withPublished(agent, now);
+            if (!agentDefs.insert(published)) {
+                verifySameContentOnConflict("agent", agent.agentId(), agent.version(),
+                        published.configFingerprint(),
+                        agentDefs.find(command.tenantId(), agent.agentId(), agent.version())
+                                .map(CapAgentDef::configFingerprint));
+            }
         }
 
         // ── 2. 插入发布头（序号由 DB 序列分配，§6.3 第 2 条）──
@@ -359,6 +397,57 @@ public class ConfigPublishService {
      * 若由调用方决定，未发布行就可能被写进发布头 ——
      * 那样「未发布不可被 Agent 启用」（§6.6）就只剩约定，没有机制。
      */
+    /**
+     * 版本行插入冲突时的<b>内容一致性</b>判定。
+     *
+     * <p><b>⚠️ 为什么不能只看「已存在就跳过」</b>：
+     * 版本行不可变，插入是 {@code ON CONFLICT DO NOTHING}——
+     * 冲突既可能是「同一份内容再次发布」（幂等重放，无害），
+     * 也可能是「别人并发写了同一版本号」（<b>内容不同</b>，必须失败）。
+     * 二者都表现为 {@code insert() == false}，
+     * <b>只有内容指纹能区分</b>。
+     *
+     * <p>⚠️ 冲突且<b>查不到</b>既有行时判为失败（fail-closed）：
+     * 「刚说它存在、转头又查不到」是数据不一致，不能当成「没事」。
+     *
+     * <p>⚠️ <b>为什么抛 {@link ConfigPublishRejectedException} 而不是
+     * {@link ConfigPublishConflictException}</b>：
+     * 后者会被 {@link #publish} 的<b>变基重试</b>捕获并重试<b>同一份命令</b>——
+     * 而版本号冲突与 CAS 基线无关，重试必然再次撞同一个版本号，
+     * 徒劳耗尽重试次数，还把「内容冲突（要重新读取状态）」误报成「并发竞争（稍后重试）」。
+     * 版本号被占用是<b>配置层</b>的问题：调用方须重新读取当前状态后再发布。
+     *
+     * @param type        对象类型（tool / skill / mcp_server / agent）
+     * @param objectId    对象逻辑 id
+     * @param version     版本号
+     * @param fingerprint 本次要发布的内容指纹
+     * @param existingFingerprint 既有版本行的内容指纹（{@link Optional#empty()} = 查不到）
+     * @throws ConfigPublishRejectedException 内容不一致 → 判定为版本冲突
+     */
+    private static void verifySameContentOnConflict(@NonNull String type,
+                                                     @NonNull String objectId,
+                                                     int version,
+                                                     @NonNull String fingerprint,
+                                                     @NonNull Optional<String> existingFingerprint) {
+        if (existingFingerprint.isEmpty()) {
+            throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_VERSION_MISMATCH, type,
+                    "版本行插入冲突但查不到既有行（数据不一致，拒绝发布）: id=" + objectId
+                            + ", version=" + version);
+        }
+        String existing = existingFingerprint.get();
+        if (!existing.equals(fingerprint)) {
+            throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_VERSION_MISMATCH, type,
+                    "版本行冲突且内容不一致（拒绝发布：本次内容会被静默丢弃，"
+                            + "而发布却会报成功）: id=" + objectId
+                            + ", version=" + version
+                            + ", existing=" + existing + ", incoming=" + fingerprint
+                            + "。处置：重新读取当前状态后再发布（内容与版本号需重新分配）");
+        }
+        // ⚠️ 指纹一致 → 真正的幂等重放（同一份内容再次发布）→ 放行。
+        log.debug("版本行已存在且内容一致，按幂等重放处理: type={}, id={}, version={}",
+                type, objectId, version);
+    }
+
     private static CapToolDef withPublished(CapToolDef def, Instant publishedAt) {
         if (def.publishedAt() != null) {
             return def;

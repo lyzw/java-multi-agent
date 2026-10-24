@@ -199,12 +199,12 @@ class RunExecutionLoopTest {
             registerCount++;
             String existing = operationsByKey.get(idempotencyKey);
             if (existing != null) {
-                return new Registration(existing, states.get(existing), 1, 0L);
+                return new Registration(existing, states.get(existing), 1, 0L, false);
             }
             String opId = UUID.randomUUID().toString();
             operationsByKey.put(idempotencyKey, opId);
             states.put(opId, ToolOperationState.IN_FLIGHT);
-            return new Registration(opId, ToolOperationState.IN_FLIGHT, 0, 0L);
+            return new Registration(opId, ToolOperationState.IN_FLIGHT, 0, 0L, true);
         }
 
         @Override public void recordResult(String tenantId, String operationId,
@@ -240,7 +240,7 @@ class RunExecutionLoopTest {
                 String tenantId, String idempotencyKey) {
             String opId = operationsByKey.get(idempotencyKey);
             return opId == null ? Optional.empty()
-                    : Optional.of(new Registration(opId, states.get(opId), 1, 0L));
+                    : Optional.of(new Registration(opId, states.get(opId), 1, 0L, false));
         }
     }
 

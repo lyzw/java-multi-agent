@@ -17,6 +17,9 @@ import org.jspecify.annotations.Nullable;
  *   <li>SQL <b>必须显式携带 {@code tenant_id}</b>——RLS 是第二道防线，不是唯一一道；</li>
  *   <li><b>不得返回 {@code input_payload}</b>（学生题目与解答）与
  *       {@code error_message}（内部错误细节），只返回 {@code error_code}；</li>
+ *   <li>学科/年级<b>可以</b>回填（前端检索台要按学科筛，FE-01 §P7），
+ *       但必须经 DEC-6 词表 <b>fail-closed</b> 校验——{@code input_payload}
+ *       是<b>客户端可控</b>的 JSON，不校验就回显等于把客户端文本直接送到前端；</li>
  *   <li>排序必须为 {@code (created_at DESC, run_id DESC)}<b>全序</b>，
  *       否则同毫秒多行在翻页时会重复或漏读。</li>
  * </ul>
@@ -28,6 +31,9 @@ public interface RunListQueryPort {
      *
      * @param tenantId 租户标识；<b>必须来自认证上下文</b>
      * @param state    状态过滤；{@code null} 表示不限
+     * @param subject  学科过滤；{@code null} 表示不限。
+     *                ⚠️ 必须是<b>词表内</b>的规范值（调用方已校验），
+     *                实现方仍须按归一后的值比较（去首尾空白）
      * @param from     起始时刻（含）；{@code null} 表示不限
      * @param to       结束时刻（含）；{@code null} 表示不限
      * @param cursor   起始游标；{@code null} 表示第一页
@@ -35,6 +41,7 @@ public interface RunListQueryPort {
      */
     @NonNull Page<RunListItem> list(@NonNull String tenantId,
                                     @Nullable String state,
+                                    @Nullable String subject,
                                     @Nullable Instant from,
                                     @Nullable Instant to,
                                     @Nullable String cursor,
@@ -49,6 +56,8 @@ public interface RunListQueryPort {
      * @param completedAt 完成时刻；非终态为 {@code null}
      * @param attempt     领取次数
      * @param errorCode   失败原因<b>码</b>；<b>不是</b>错误原文
+     * @param subject     学科（DEC-6 白名单的分类字段）；<b>不在词表内为 {@code null}</b>
+     * @param grade       年级（DEC-6 白名单的分类字段）；<b>不在词表内为 {@code null}</b>
      */
     record RunListItem(
             @NonNull String runId,
@@ -56,7 +65,9 @@ public interface RunListQueryPort {
             @NonNull Instant createdAt,
             @Nullable Instant completedAt,
             int attempt,
-            @Nullable String errorCode
+            @Nullable String errorCode,
+            @Nullable String subject,
+            @Nullable String grade
     ) {
     }
 }

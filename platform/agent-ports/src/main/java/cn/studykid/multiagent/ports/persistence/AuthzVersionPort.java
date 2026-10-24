@@ -6,6 +6,7 @@ import org.jspecify.annotations.NonNull;
 
 import cn.studykid.multiagent.core.cap.AuthzUnavailableException;
 import cn.studykid.multiagent.core.cap.AuthzVersion;
+import cn.studykid.multiagent.core.monitoring.AuthzWatermark;
 
 /**
  * 授权版本仓储端口（§6.1 / 06 §1.5 · W-PERM-P0-T3）。
@@ -61,4 +62,21 @@ public interface AuthzVersionPort {
      * 否则会出现「已撤权但版本未变」或反之的中间态。
      */
     long bump(@NonNull String tenantId, @NonNull String principalId);
+
+    /**
+     * 读取<b>租户级授权版本水位快照</b>（管理面 P4 运行监控）。
+     *
+     * <p>⚠️ <b>与 {@link #find} 的口径差异</b>：
+     * {@link #find} 是<b>单主体</b>强一致读（服务于撤权校验），
+     * 本方法是<b>租户级聚合</b>（服务于管理面展示）。二者不可互相替代：
+     * 用 {@link #find} 逐个主体遍历来算水位，在主体数增长后是 N+1 查询；
+     * 而用聚合结果去做撤权校验，则会丢掉「哪个主体」这一必要信息。
+     *
+     * <p>⚠️ <b>本方法只读，不 bump</b>：读取水位绝不能产生版本递增，
+     * 否则运维看一眼监控就会让全租户的授权上下文失效。
+     *
+     * @param tenantId 租户标识
+     * @return 授权版本水位；<b>读不到即抛异常</b>（fail-closed，不返回空快照）
+     */
+    public @NonNull AuthzWatermark watermark(@NonNull String tenantId);
 }

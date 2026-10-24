@@ -8,6 +8,9 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
+
 import cn.studykid.multiagent.application.prompt.PromptGuard;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
 import cn.studykid.multiagent.ports.model.ModelGateway;
@@ -31,6 +34,15 @@ import cn.studykid.multiagent.ports.tool.ToolExecutionException;
 public class RunExecutionLoop {
 
     private static final Logger log = LoggerFactory.getLogger(RunExecutionLoop.class);
+
+    /**
+     * JSON 序列化器（Jackson 3）。
+     *
+     * <p>⚠️ 用它而不是手工拼字符串：{@code result_payload} 要落进 PG 的
+     * {@code jsonb} 列，裸控制字符会被 PG 拒绝 → 提交失败 →
+     * Run 被误报为失败。详见 {@link #jsonPayload(String, String)}。
+     */
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final ModelGateway modelGateway;
     private final RunClaimPort claimPort;
@@ -294,7 +306,7 @@ public class RunExecutionLoop {
     private ExecutionOutcome commitSuccess(String tenantId, RunClaimPort.LeasedTask task,
                                           String content) {
         boolean ok = claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
-                "SUCCEEDED", "{\"content\":\"" + escape(content) + "\"}");
+                "SUCCEEDED", jsonPayload("content", content));
         if (ok) {
             // ⚠️ 只在**真的提交成功**后才记终态事件：
             //    提交失败 = 世代失效（白干了），不是「执行失败」。
@@ -309,7 +321,7 @@ public class RunExecutionLoop {
     private ExecutionOutcome commitFailure(String tenantId, RunClaimPort.LeasedTask task,
                                            String reason) {
         boolean ok = claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
-                "FAILED", "{\"reason\":\"" + escape(reason) + "\"}");
+                "FAILED", jsonPayload("reason", reason));
         if (ok) {
             // ⚠️ 失败载荷**只放 state**，不放 reason 原文：
             //    reason 是内部错误细节（如「模型调用失败：TIMEOUT」），
@@ -373,8 +385,31 @@ public class RunExecutionLoop {
         return promptGuard.wrapToolResult(toolName, payload);
     }
 
-    private static String escape(String s) {
-        return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
+    /**
+     * 把「单个字符串字段」序列化为 JSON 对象。
+     *
+     * <p><b>⚠️ 为什么不用手工拼字符串</b>：本方法此前是
+     * {@code "{\"content\":\"" + escape(content) + "\"}"}，
+     * 而 {@code escape} 只处理 {@code \} 与 {@code "}，
+     * <b>不处理换行等控制字符</b>。
+     * PostgreSQL 的 {@code ?::jsonb} 拒绝字符串里的裸控制字符
+     * （RFC 8259 要求 U+0000～U+001F 必须转义），
+     * 于是<b>任何含换行的模型答案</b>都会让提交失败 →
+     * 异常被兜底 catch 吞成「执行异常」→ <b>Run 明明产出了好答案却被报成失败</b>，
+     * 而此时工具副作用已经发生。
+     *
+     * <p>同仓 {@code JdbcRunEventAppendRepository} 里有一份补全了
+     * {@code \n\r\t} 的 {@code escape}，但那是「另一处手写」——
+     * 手写转义表迟早漏项，故此处一律走 Jackson 序列化。
+     *
+     * @param field 字段名
+     * @param value 字段值（{@code null} 归一为空串，与旧行为一致）
+     * @return 合法的 JSON 对象文本
+     */
+    private static String jsonPayload(@NonNull String field, @Nullable String value) {
+        ObjectNode root = JSON.createObjectNode();
+        root.put(field, value == null ? "" : value);
+        return JSON.writeValueAsString(root);
     }
 
     /**

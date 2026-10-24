@@ -5,6 +5,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -180,6 +181,53 @@ public class JdbcDecisionAuditRepository implements DecisionAuditPort {
                                     rs.getLong("denies"),
                                     rs.getLong("non_specific"),
                                     rs.getLong("incomplete"));
+                        }
+                    }
+                });
+    }
+
+    /**
+     * 近期拒绝记录查询（管理面 P4 运行监控）。
+     *
+     * <p>⚠️ <b>只取 DENY</b>：ALLOW 行不是告警素材，混入只会放大结果集
+     * 并让调用方各自再过滤一遍（口径分散的典型来源）。
+     *
+     * <p>⚠️ <b>排序是 {@code created_at DESC, decision_id DESC} 全序</b>：
+     * 只按 {@code created_at} 排序时，同一毫秒的多条拒绝顺序不确定，
+     * 两次相邻查询可能给出不同排列 —— 那会让「告警列表是否变化」无法判断。
+     * 加 {@code decision_id} 作为第二排序键可保证全序稳定。
+     */
+    private static final String SQL_RECENT_DENIES = "SELECT " + COLUMNS
+            + " FROM cap_decision_log"
+            + " WHERE tenant_id = ?::uuid AND authz_decision = 'DENY'"
+            + " AND created_at >= ?"
+            + " ORDER BY created_at DESC, decision_id DESC"
+            + " LIMIT ?";
+
+    @Override
+    @NonNull
+    public List<DecisionAuditEntry> findRecentDenies(@NonNull String tenantId,
+                                                     @NonNull Instant since,
+                                                     int limit) {
+        if (since == null) {
+            throw new IllegalArgumentException("since 不能为空：监控查询必须有窗口");
+        }
+        if (limit <= 0) {
+            throw new IllegalArgumentException("limit 必须为正数");
+        }
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, context(tenantId),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_RECENT_DENIES)) {
+                        ps.setString(1, tenantId);
+                        ps.setTimestamp(2, Timestamp.from(since));
+                        ps.setInt(3, limit);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            List<DecisionAuditEntry> entries = new ArrayList<>();
+                            while (rs.next()) {
+                                entries.add(map(rs));
+                            }
+                            return entries;
                         }
                     }
                 });

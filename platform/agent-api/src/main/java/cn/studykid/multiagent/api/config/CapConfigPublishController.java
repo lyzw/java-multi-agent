@@ -232,6 +232,53 @@ public class CapConfigPublishController {
         return ResponseEntity.ok(PointerResponse.of(pointer));
     }
 
+    /**
+     * 读取单条变更申请（详情深链用）。
+     *
+     * <p>⚠️ 与 {@link #list} 同口径：只读本租户申请单；
+     * 跨租户 id 与不存在的 id 同样返回 404（不泄露存在性）。
+     */
+    @GetMapping("/publishes/{requestId}")
+    public ResponseEntity<RequestResponse> getRequest(@PathVariable String requestId) {
+        TenantContext context = currentPrincipal.context();
+        authorization.requireAuthorized(context,
+                AuthorizationService.Actions.CONFIG_PUBLISH, null);
+        if (rateLimited(context)) {
+            return GovernanceSupport.tooManyRequests();
+        }
+        ConfigPublishRequest item = workflow.findRequest(context.tenantId(), requestId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "变更申请不存在"));
+        return ResponseEntity.ok(RequestResponse.of(item));
+    }
+
+    /**
+     * 本租户发布时间线（游标分页，含 ROLLED_BACK）。
+     *
+     * <p>⚠️ <b>含已回滚发布</b>：时间线的意义是「发生过什么」；
+     * ROLLED_BACK 行不参与当前版本解析，但既是历史事实，
+     * 也是再次回滚的目标来源（{@code targetReleaseId} 即取于此）。
+     *
+     * <p>⚠️ <b>只列 TENANT 作用域</b>：平台级发布头由运维通道管理，
+     * 不属于租户时间线（与工作流服务同口径）。
+     */
+    @GetMapping("/releases")
+    public ResponseEntity<GovernanceSupport.PageResponse<ReleaseResponse>> releases(
+            @RequestParam(required = false) @Nullable Integer limit,
+            @RequestParam(required = false) @Nullable String cursor) {
+        TenantContext context = currentPrincipal.context();
+        authorization.requireAuthorized(context,
+                AuthorizationService.Actions.CONFIG_PUBLISH, null);
+        if (rateLimited(context)) {
+            return GovernanceSupport.tooManyRequests();
+        }
+        var page = workflow.listReleases(context.tenantId(), cursor,
+                GovernanceSupport.limit(limit));
+        return ResponseEntity.ok(GovernanceSupport.PageResponse.of(
+                page.items().stream().map(ReleaseResponse::of).toList(),
+                page.nextCursor()));
+    }
+
     // ── 内部 ───────────────────────────────────────────────────────
 
     /**
@@ -375,6 +422,45 @@ public class CapConfigPublishController {
                     ? new PointerResponse(null, null, null)
                     : new PointerResponse(pointer.currentReleaseId(),
                             pointer.currentPublishSeq(), pointer.updatedAt().toString());
+        }
+    }
+
+    /**
+     * 发布历史条目响应。
+     *
+     * <p>⚠️ {@code releaseId} / {@code configPublishSeq} 以<b>字符串</b>透出：
+     * 前端回传 {@code targetReleaseId}（回滚目标）时按字符串解析，
+     * 避免 JS number 精度问题落在审计字段上。
+     *
+     * <p>⚠️ {@code objectVersions} 是<b>聚合 JSON</b>（该发布包含的全部对象版本），
+     * 只作审计展示，不在此处展开。
+     */
+    public record ReleaseResponse(
+            @NonNull String releaseId,
+            @NonNull String configPublishSeq,
+            @NonNull String scope,
+            @Nullable String tenantId,
+            @NonNull String objectVersions,
+            @Nullable String aggregateFingerprint,
+            @NonNull String status,
+            @Nullable String requesterId,
+            @Nullable String approverId,
+            @Nullable String effectiveAt,
+            @NonNull String createdAt) {
+
+        public static ReleaseResponse of(ConfigRelease release) {
+            return new ReleaseResponse(
+                    String.valueOf(release.releaseId()),
+                    String.valueOf(release.configPublishSeq()),
+                    release.scope().name(),
+                    release.tenantId(),
+                    release.objectVersions(),
+                    release.aggregateFingerprint(),
+                    release.status().name(),
+                    release.requesterId(),
+                    release.approverId(),
+                    release.effectiveAt() == null ? null : release.effectiveAt().toString(),
+                    release.createdAt().toString());
         }
     }
 }

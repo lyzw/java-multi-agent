@@ -13,6 +13,7 @@ import cn.studykid.multiagent.api.config.ConfigOverrideController;
 import cn.studykid.multiagent.api.run.RunController.ErrorResponse;
 import cn.studykid.multiagent.api.security.CurrentPrincipal.UnauthenticatedException;
 import cn.studykid.multiagent.application.config.ConfigTighteningPolicy;
+import cn.studykid.multiagent.application.monitoring.MonitoringViewService;
 import cn.studykid.multiagent.application.run.ExecutionSnapshotUnavailableException;
 import cn.studykid.multiagent.core.compliance.ZeroRetentionViolationException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
@@ -123,6 +124,33 @@ public class ApiExceptionHandler {
     public ResponseEntity<ErrorResponse> handleInvalidArgument(IllegalArgumentException e) {
         return ResponseEntity.badRequest()
                 .body(new ErrorResponse("INVALID_REQUEST", e.getMessage()));
+    }
+
+    /**
+     * 监控数据源不可用 → 503（管理面 P4 运行监控）。
+     *
+     * <p>⚠️ <b>必须是 503 而不是「返回空数据」或 500</b>：
+     * <ul>
+     *   <li><b>不返回空数据</b>：监控页的默认状态是「一切正常」。
+     *       若在数据源故障时返回「0 个拒绝、0 个主体」，运维看到的是<b>绿色</b>，
+     *       而真相是「我什么都看不到」—— 这是最危险的一种失败；</li>
+     *   <li><b>不用 500</b>：500 表示「服务端坏了，重试可能有用」，
+     *       而数据源不可用时重试同样会失败；503 明确表达
+     *       「服务暂时不可用，稍后重试」。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>与 403 严格区分</b>：本异常表示「我看不到」，
+     * 403 表示「我看到了并拒绝了」。混用会让「监控挂了」被误读成「你在越权」。
+     *
+     * <p>⚠️ 消息固定、不回显 {@code getMessage()}：后者含底层异常摘要，
+     * 可能泄漏表名与连接串。
+     */
+    @ExceptionHandler(MonitoringViewService.MonitoringUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleMonitoringUnavailable(
+            MonitoringViewService.MonitoringUnavailableException e) {
+        log.error("监控数据源不可用: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new ErrorResponse("MONITORING_UNAVAILABLE", "监控数据暂时不可用"));
     }
 
     /**
@@ -243,6 +271,110 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new ErrorResponse("CONFIG_RELAXATION_REJECTED",
                         "该变更被安全策略拒绝：配置只允许收紧，不允许放松"));
+    }
+
+    /**
+     * 配置期门禁拒绝 → 422。
+     *
+     * <p><b>⚠️ 修复前是 500（真实缺陷）</b>：
+     * {@link cn.studykid.multiagent.application.cap.ConfigPublishRejectedException}
+     * 在全仓库<b>从未被任何 catch 捕获</b>，也没有对应的 handler →
+     * 一路冒泡到兜底的 {@code @ExceptionHandler(Exception.class)} →
+     * 返回 <b>500「服务暂时不可用」</b>。
+     *
+     * <p>后果与本类的核心原则（「异常与拒绝必须可区分」）直接相反：
+     * 「配置非法」被伪装成「系统故障」→ 运维拿着发布失败的告警去查数据库与连接池，
+     * 而真实原因只是某个 Tool 的 {@code risk_level} 写错了；
+     * 同时用户配置错误被计入服务端错误率，把真实故障淹没。
+     *
+     * <p>该异常自带 {@link cn.studykid.multiagent.core.cap.ReasonCode} 与违规字段，
+     * 本就为了「让失败原因直接可读」而设计 —— 此前却全被丢弃。
+     *
+     * <p>⚠️ 消息<b>固定</b>、不回显原文：原文含新旧配置值，可能携带用户输入。
+     * 原因码与字段名是<b>枚举/标识</b>，回显无泄漏风险且对排障有用。
+     */
+    @ExceptionHandler(cn.studykid.multiagent.application.cap.ConfigPublishRejectedException.class)
+    public ResponseEntity<ErrorResponse> handlePublishRejected(
+            cn.studykid.multiagent.application.cap.ConfigPublishRejectedException e) {
+        log.info("配置发布被拒: reasonCode={}, field={}",
+                e.reasonCode(), e.field());
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(new ErrorResponse("CONFIG_PUBLISH_REJECTED",
+                        "配置未通过发布门禁: " + e.reasonCode() + "（字段 " + e.field() + "）"));
+    }
+
+    /**
+     * 配置发布并发冲突 → 409。
+     *
+     * <p>⚠️ 修复前同样落到兜底 → 500。
+     * 「CAS 基线已被他人推进」是<b>可重试的竞争</b>，不是服务端故障。
+     */
+    @ExceptionHandler(cn.studykid.multiagent.application.cap.ConfigPublishConflictException.class)
+    public ResponseEntity<ErrorResponse> handlePublishConflict(
+            cn.studykid.multiagent.application.cap.ConfigPublishConflictException e) {
+        log.info("配置发布冲突（基线已被推进）: expectedPublishSeq={}", e.expectedPublishSeq());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse("CONFIG_PUBLISH_CONFLICT",
+                        "配置已被他人变更，请重新读取当前状态后再发布"));
+    }
+
+    /**
+     * 租户不匹配 → 403。
+     *
+     * <p>⚠️ 修复前落到兜底 → 500。
+     * 租户不匹配是<b>明确拒绝</b>（越权尝试），不是故障。
+     */
+    @ExceptionHandler(cn.studykid.multiagent.core.tenant.TenantMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTenantMismatch(
+            cn.studykid.multiagent.core.tenant.TenantMismatchException e) {
+        log.warn("租户不匹配被拒: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(new ErrorResponse("TENANT_MISMATCH", "无权访问该租户的资源"));
+    }
+
+    /**
+     * Run / ToolOperation 非法状态转移 → 409。
+     *
+     * <p>⚠️ 修复前落到兜底 → 500。
+     * 非法转移是<b>调用方的流程错误</b>（如对已终态的 Run 再次取消），
+     * 有确定解法（换一个状态的对象），报 500 会诱导客户端反复重试。
+     */
+    @ExceptionHandler(cn.studykid.multiagent.core.run.IllegalStateTransitionException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalTransition(
+            cn.studykid.multiagent.core.run.IllegalStateTransitionException e) {
+        log.info("非法状态转移: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse("ILLEGAL_STATE_TRANSITION", "请求与当前资源状态冲突"));
+    }
+
+    /**
+     * 配置发布申请单不存在 → 404。
+     *
+     * <p>⚠️ 修复前落到兜底 → 500。
+     */
+    @ExceptionHandler(cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort
+            .NotFoundException.class)
+    public ResponseEntity<ErrorResponse> handlePublishRequestNotFound(
+            cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort
+                    .NotFoundException e) {
+        log.info("配置发布申请单不存在: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ErrorResponse("NOT_FOUND", "资源不存在"));
+    }
+
+    /**
+     * 配置变更申请不存在 → 404。
+     *
+     * <p>⚠️ 修复前落到兜底 → 500。
+     */
+    @ExceptionHandler(cn.studykid.multiagent.ports.persistence.ConfigChangePort
+            .ChangeNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleConfigChangeNotFound(
+            cn.studykid.multiagent.ports.persistence.ConfigChangePort
+                    .ChangeNotFoundException e) {
+        log.info("配置变更申请不存在: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ErrorResponse("NOT_FOUND", "资源不存在"));
     }
 
     /**

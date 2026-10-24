@@ -125,6 +125,13 @@ public interface RunToolLedgerPort {
      * 登记结果。{@code state} 为 IN_FLIGHT 表示新登记；
      * 命中既有操作时返回其当前状态与既定 attempt 数。
      *
+     * <p><b>⚠️ {@code createdByThisCall} 是防重复副作用的关键</b>：
+     * 幂等键命中既有操作时，{@code state} <b>可能仍是 IN_FLIGHT</b>
+     * （上一次调用崩在中途，或另一 worker 正在执行），
+     * 因此<b>光看状态无法区分「本次新建」与「命中别人留下的」</b>。
+     * 调用方据此决定「是否执行工具」——
+     * 命中既有操作时再次执行 = 同一逻辑操作产生两次副作用 = Sev-0。
+     *
      * @param operationId   逻辑操作标识
      * @param state         当前状态
      * @param attemptCount  已记录的调用尝试数
@@ -132,11 +139,14 @@ public interface RunToolLedgerPort {
      *                       ⚠️ 崩溃恢复补记 attempt 时用它 ——
      *                       恢复方没有自己的租约，但 attempt 记录的是
      *                       「这次调用发生在哪一代租约下」，不能写假值。
+     * @param createdByThisCall {@code true} = 本次登记**新建**了操作行；
+     *                           {@code false} = 幂等键命中**既有**操作行。
      */
     record Registration(String operationId,
                         ToolOperationState state,
                         int attemptCount,
-                        long fencingToken) {
+                        long fencingToken,
+                        boolean createdByThisCall) {
     }
 
     /** 对账扫描条目。 */

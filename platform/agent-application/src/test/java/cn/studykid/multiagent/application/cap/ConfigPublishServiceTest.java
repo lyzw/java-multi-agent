@@ -34,6 +34,7 @@ import cn.studykid.multiagent.ports.persistence.ConfigPointerPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishTransaction;
 import cn.studykid.multiagent.ports.persistence.ConfigReleasePort;
 import cn.studykid.multiagent.ports.persistence.DecisionAuditPort;
+import cn.studykid.multiagent.ports.persistence.Page;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -307,6 +308,11 @@ class ConfigPublishServiceTest {
             public Optional<CapToolDef> findByMcpBinding(String mcpServerId, String mcpToolName) {
                 return Optional.empty();
             }
+
+            @Override
+            public List<CapToolDef> listAll() {
+                return List.copyOf(tools.values());
+            }
         };
         final CapSkillDefPort skillDefs = new CapSkillDefPort() {
             @Override
@@ -329,6 +335,11 @@ class ConfigPublishServiceTest {
             public Optional<CapSkillDef> findLatestPublished(String skillId) {
                 return Optional.empty();
             }
+
+            @Override
+            public List<CapSkillDef> listAll() {
+                return List.copyOf(skills.values());
+            }
         };
         final CapMcpServerDefPort serverDefs = new CapMcpServerDefPort() {
             @Override
@@ -346,6 +357,11 @@ class ConfigPublishServiceTest {
             public Optional<cn.studykid.multiagent.core.cap.CapMcpServerDef> findLatestPublished(
                     String id) {
                 return Optional.empty();
+            }
+
+            @Override
+            public java.util.List<cn.studykid.multiagent.core.cap.CapMcpServerDef> listAll() {
+                return java.util.List.of();
             }
         };
         final CapAgentDefPort agentDefs = new CapAgentDefPort() {
@@ -371,6 +387,12 @@ class ConfigPublishServiceTest {
             public Optional<cn.studykid.multiagent.core.cap.CapAgentDef> findLatestPublished(
                     String tenantId, String agentId) {
                 return Optional.empty();
+            }
+
+            @Override
+            public java.util.List<cn.studykid.multiagent.core.cap.CapAgentDef> listLatestPerAgent(
+                    String tenantId) {
+                return java.util.List.of();
             }
         };
     }
@@ -489,6 +511,13 @@ class ConfigPublishServiceTest {
                     .filter(r -> r.scope() == scope && r.status() == ConfigRelease.Status.PUBLISHED)
                     .reduce((a, b) -> b);
         }
+
+        @Override
+        public Page<ConfigRelease> listReleases(String tenantId, String cursor, int limit) {
+            return Page.of(rows.stream()
+                    .filter(r -> tenantId.equals(r.tenantId()))
+                    .toList(), null);
+        }
     }
 
     private static final class FakeAudit implements DecisionAuditPort {
@@ -521,6 +550,18 @@ class ConfigPublishServiceTest {
         public cn.studykid.multiagent.core.cap.DecisionAuditCoverage coverage(String tenantId) {
             return new cn.studykid.multiagent.core.cap.DecisionAuditCoverage(
                     entries.size(), entries.size(), 0, 0, 0);
+        }
+
+        @Override
+        public List<DecisionAuditEntry> findRecentDenies(String tenantId,
+                                                         java.time.Instant since,
+                                                         int limit) {
+            return entries.stream()
+                    .filter(e -> e.authzDecision()
+                            == cn.studykid.multiagent.core.cap.AuthorizationDecision
+                                    .Authorization.DENY)
+                    .filter(e -> !e.createdAt().isBefore(since))
+                    .toList();
         }
     }
 }

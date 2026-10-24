@@ -62,11 +62,13 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                                           long fencingToken) {
         return inTenantTx(tenantId, conn -> {
             // ① 幂等键命中 → 复用既有逻辑操作（重复调用不新建，FR-003）
+            //    ⚠️ createdByThisCall=false：**不得据此再次执行工具** ——
+            //    该逻辑操作可能已经产生过副作用（重复执行 = Sev-0）。
             Optional<Registration> existing = findExisting(conn, tenantId, idempotencyKey);
             if (existing.isPresent()) {
                 if (log.isDebugEnabled()) {
-                    log.debug("账本幂等命中: key={}, operation={}",
-                            idempotencyKey, existing.get().operationId());
+                    log.debug("账本幂等命中: key={}, operation={}, state={}",
+                            idempotencyKey, existing.get().operationId(), existing.get().state());
                 }
                 return existing.get();
             }
@@ -94,7 +96,7 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                 try (ResultSet rs = ps.executeQuery()) {
                     rs.next();
                     return new Registration(rs.getString(1),
-                            ToolOperationState.IN_FLIGHT, 0, fencingToken);
+                            ToolOperationState.IN_FLIGHT, 0, fencingToken, true);
                 }
             }
         });
@@ -281,7 +283,8 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                             rs.getString("operation_id"),
                             ToolOperationState.valueOf(rs.getString("state")),
                             rs.getInt("attempt_count"),
-                            rs.getLong("fencing_token")));
+                            rs.getLong("fencing_token"),
+                            false));
                 }
             }
         });
@@ -310,7 +313,8 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                         rs.getString("operation_id"),
                         ToolOperationState.valueOf(rs.getString("state")),
                         rs.getInt("attempt_count"),
-                        rs.getLong("fencing_token")));
+                        rs.getLong("fencing_token"),
+                        false));
             }
         }
     }

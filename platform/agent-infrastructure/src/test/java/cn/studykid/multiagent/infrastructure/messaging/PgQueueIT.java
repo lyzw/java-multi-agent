@@ -110,7 +110,7 @@ class PgQueueIT {
         assertThat(adminCount("SELECT count(*) FROM agent_message_queue WHERE state='INFLIGHT'"))
                 .isEqualTo(1);
 
-        repository.ack(tenantA, claimed.get(0).queueId());
+        repository.ack(tenantA, claimed.get(0).queueId(), "w1");
         assertThat(adminCount("SELECT count(*) FROM agent_message_queue")).isZero();
     }
 
@@ -139,7 +139,7 @@ class PgQueueIT {
         PgQueueRepository.QueuedMessage msg =
                 repository.claim(tenantA, 10, Duration.ofSeconds(60), "w1").get(0);
 
-        repository.retry(tenantA, msg.queueId(), "临时故障", Instant.now());
+        repository.retry(tenantA, msg.queueId(), "临时故障", Instant.now(), "w1");
 
         assertThat(repository.pendingDepth(tenantA)).isEqualTo(1);
         assertThat(adminCount("SELECT attempts FROM agent_message_queue LIMIT 1")).isEqualTo(1);
@@ -154,7 +154,7 @@ class PgQueueIT {
                 repository.claim(tenantA, 10, Duration.ofSeconds(60), "w1").get(0);
 
         repository.reject(tenantA, msg.queueId(), "RUN_DISPATCH", runId,
-                msg.payload(), 1, "消息非法");
+                msg.payload(), 1, "消息非法", "w1");
 
         assertThat(adminCount("SELECT count(*) FROM agent_message_queue")).isZero();
         assertThat(adminCount("SELECT count(*) FROM agent_message_dead_letter")).isEqualTo(1);
@@ -183,6 +183,89 @@ class PgQueueIT {
                 .as("可见性超时后应被重新领取（否则消息永久滞留 = Run 永不执行）")
                 .hasSize(1);
         assertThat(reclaimed.get(0).queueId()).isEqualTo(first.get(0).queueId());
+    }
+
+    // ── Q-5b：回收必须计 attempts（P1-13）────────────────
+
+    @Test
+    @DisplayName("⚠️⚠️ Q-5b 可见性超时回收必须加 attempts（否则毒消息无限重投）")
+    void reclaimIncrementsAttempts() throws Exception {
+        String runId = createRun(tenantA);
+        repository.enqueue(tenantA, "RUN_DISPATCH", runId, payload(runId));
+
+        List<PgQueueRepository.QueuedMessage> first =
+                repository.claim(tenantA, 10, Duration.ofMillis(1), "w1");
+        assertThat(first).hasSize(1);
+        assertThat(first.get(0).attempts()).as("首次领取不计失败次数").isZero();
+
+        Thread.sleep(50);
+
+        List<PgQueueRepository.QueuedMessage> reclaimed =
+                repository.claim(tenantA, 10, Duration.ofMillis(1), "w2");
+        assertThat(reclaimed).hasSize(1);
+        assertThat(reclaimed.get(0).attempts())
+                .as("⚠️⚠️ 回收必须加 attempts —— "
+                        + "否则「消费者崩溃 → 行停在 INFLIGHT → 被回收」这条路径"
+                        + "永远不会达到重试上限 → 毒消息无限重投、永不进死信")
+                .isEqualTo(1);
+        assertThat(adminCount("SELECT attempts FROM agent_message_queue LIMIT 1"))
+                .as("⚠️ 库里的 attempts 也必须同步加 1（否则内存里的计数与库里不一致）")
+                .isEqualTo(1);
+    }
+
+    // ── Q-5c：ck/retry 的 claimed_by 围栏（P1-14）───────────────
+
+    @Test
+    @DisplayName("⚠️⚠️ Q-5c 非持有者的 ack 不得删行（claimed_by 围栏）")
+    void ackIsFencedByClaimer() throws Exception {
+        String runId = createRun(tenantA);
+        repository.enqueue(tenantA, "RUN_DISPATCH", runId, payload(runId));
+
+        List<PgQueueRepository.QueuedMessage> first =
+                repository.claim(tenantA, 10, Duration.ofMillis(1), "w1");
+        assertThat(first).hasSize(1);
+        Thread.sleep(50);
+
+        // 行已被 w2 回收
+        List<PgQueueRepository.QueuedMessage> reclaimed =
+                repository.claim(tenantA, 10, Duration.ofMillis(1), "w2");
+        assertThat(reclaimed).hasSize(1);
+
+        // ⚠️ 旧持有者 w1 返回来 ack —— 必须被围栏拒绝
+        repository.ack(tenantA, first.get(0).queueId(), "w1");
+        assertThat(adminCount("SELECT count(*) FROM agent_message_queue"))
+                .as("⚠️⚠️ 旧持有者的 ack 不得删掉新持有者正在处理的行 —— "
+                        + "否则新 worker 崩溃就会消失消息（at-least-once 变成 at-most-once）")
+                .isEqualTo(1);
+
+        // ⚠️ 新持有者的 ack 必须生效
+        repository.ack(tenantA, reclaimed.get(0).queueId(), "w2");
+        assertThat(adminCount("SELECT count(*) FROM agent_message_queue")).isZero();
+    }
+
+    @Test
+    @DisplayName("⚠️⚠️ Q-5d 非持有者的 retry 不得退回行（否则重复执行）")
+    void retryIsFencedByClaimer() throws Exception {
+        String runId = createRun(tenantA);
+        repository.enqueue(tenantA, "RUN_DISPATCH", runId, payload(runId));
+
+        List<PgQueueRepository.QueuedMessage> first =
+                repository.claim(tenantA, 10, Duration.ofMillis(1), "w1");
+        assertThat(first).hasSize(1);
+        Thread.sleep(50);
+        List<PgQueueRepository.QueuedMessage> reclaimed =
+                repository.claim(tenantA, 10, Duration.ofMillis(1), "w2");
+        assertThat(reclaimed).hasSize(1);
+
+        repository.retry(tenantA, first.get(0).queueId(), "超时持有者的重试",
+                Instant.now(), "w1");
+
+        assertThat(adminCount("SELECT count(*) FROM agent_message_queue WHERE state='PENDING'"))
+                .as("⚠️⚠️ 旧持有者的 retry 不得把新持有者正在处理的行退回 PENDING —— "
+                        + "那会让同一条消息被再次领取 → 重复执行")
+                .isZero();
+        assertThat(adminCount("SELECT count(*) FROM agent_message_queue WHERE state='INFLIGHT'"))
+                .isEqualTo(1);
     }
 
     // ── Q-6：租户隔离（RLS）───────────────────────────────────────

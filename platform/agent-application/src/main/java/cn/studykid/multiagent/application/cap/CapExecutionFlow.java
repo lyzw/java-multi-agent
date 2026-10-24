@@ -338,9 +338,14 @@ public class CapExecutionFlow {
         //    全部取这一个值（args_norm_v1）。若各算各的，
         //    「审批绑定的参数」与「实际执行的参数」就是两个值，防重放形同虚设。
         String argsDigest = argsDigest(call.toolName(), phaseA.toolVersion(), call.arguments());
+        // ⚠️ 账本的「请求摘要」额外含<b>工具身份</b>（P1-9）：
+        //    同键不同工具必须判为「冲突」而不是「重放」——
+        //    幂等键虽已含工具名，但键是「谁写的」，摘要是「内容是否相同」的判据，
+        //    两者都得带上工具身份，才不会出现「A 工具的调用被判成 B 工具的重放」。
+        String requestDigest = requestDigest(call.toolName(), argsDigest);
 
         IdempotencyGuard.Result idem =
-                idempotency.check(tenantId, idempotencyKey, argsDigest);
+                idempotency.check(tenantId, idempotencyKey, requestDigest);
         if (idem.outcome() != IdempotencyGuard.Outcome.PROCEED) {
             // ⚠️ 已完成 → 返回首次结果；进行中 / 冲突 / 存储不可用 → 拒绝。
             //    四种情形都<b>不</b>重新执行副作用。
@@ -366,7 +371,7 @@ public class CapExecutionFlow {
         RunToolLedgerPort.Registration registration;
         try {
             registration = ledger.register(tenantId, task.runId(), call.toolName(),
-                    handler.riskLevel().name(), idempotencyKey, argsDigest,
+                    handler.riskLevel().name(), idempotencyKey, requestDigest,
                     call.arguments(), task.fencingToken());
         } catch (RuntimeException e) {
             // ⚠️ 账本登记失败 → 拒绝执行（fail-closed）。
@@ -831,6 +836,27 @@ public class CapExecutionFlow {
                 .orElse(ArgsNormalizer.Options.all());
     }
 
+    /**
+     * 账本的「请求摘要」：<b>工具身份 + 参数摘要</b>（P1-9）。
+     *
+     * <p>⚠️ <b>为什么要含工具身份</b>：
+     * 账本用请求摘要判定「同键是否同参」（{@code IdempotencyGuard}）。
+     * 若摘要只覆盖参数，则「A 工具的调用」与「B 工具的调用」只要参数恰好相同，
+     * 就会被判成同一个逻辑操作 —— 后者要么被当成重放（<b>静默不执行</b>），
+     * 要么在参数不同时被当成冲突（<b>被拒绝执行</b>）。
+     *
+     * <p>⚠️ <b>实现方式是「组合」而不是「重新规范化」</b>：
+     * 把参数包一层再规范化会破坏 §5.3.2 规则 7
+     * （Schema 默认值在<b>顶层</b>展开，包一层后默认值会落在错误的位置）。
+     * 故这里对已算好的参数摘要做一次带工具名的二次摘要。
+     */
+    private static @NonNull String requestDigest(@NonNull String toolId,
+                                                 @NonNull String argsDigest) {
+        return ArgsNormalizer.hash(
+                Map.of("tool", toolId, "args", argsDigest),
+                ArgsNormalizer.Options.all());
+    }
+
     // ── 补偿（§5.3.5）─────────────────────────────────────────────
 
     /**
@@ -1071,18 +1097,20 @@ public class CapExecutionFlow {
      * <p>⚠️ 键必须含真实 {@code runId}：{@code tool_operation} 的唯一约束是
      * {@code UNIQUE (tenant_id, idempotency_key)}（<b>租户级，不含 run 维度</b>），
      * 缺 run 维度会让同租户下不同 Run 的同名工具 + 同 callId 撞键。
+     *
+     * <p>⚠️ <b>「按工具分流」的口径收在 {@link IdempotencyKey#forToolCall}</b>（P1-9 修复）：
+     * 修复前本方法只看「参数里有没有 {@code studentId} + {@code knowledgePoint}」，
+     * 于是<b>任何</b>带这两个参数的工具都被塞进 {@code tool.record_weakness} 命名空间 ——
+     * 两个不同工具算出同一个键 → 后者被判「同键不同参数」而拒绝执行，
+     * 或被判「重放」而静默不执行。
      */
     private static @NonNull String buildIdempotencyKey(@NonNull String runId,
                                                        ModelResponse.@NonNull ToolCallRequest call) {
         Object studentId = call.arguments().get("studentId");
         Object knowledgePoint = call.arguments().get("knowledgePoint");
-        if (studentId != null && knowledgePoint != null) {
-            return IdempotencyKey.forRecordWeakness(
-                    String.valueOf(studentId), runId,
-                    String.valueOf(knowledgePoint)).composite();
-        }
-        return IdempotencyKey.forToolInvoke(
-                runId, call.toolName(),
-                Optional.ofNullable(call.callId()).orElse("no-call-id")).composite();
+        return IdempotencyKey.forToolCall(runId, call.toolName(), call.callId(),
+                        studentId == null ? null : String.valueOf(studentId),
+                        knowledgePoint == null ? null : String.valueOf(knowledgePoint))
+                .composite();
     }
 }

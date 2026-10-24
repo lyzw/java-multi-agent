@@ -83,6 +83,34 @@ class ArgsNormalizerTest {
             assertThat(ArgsNormalizer.canonicalNumber(new java.math.BigDecimal("1.00")))
                     .isEqualTo("1");
         }
+
+        @Test
+        @DisplayName("⚠️⚠️ 数字与同值字符串必须不同摘要（修复前两者同摘要）")
+        void numberAndSameTextAreDistinct() {
+            // ⚠️ 修复前：Number 被写成**文本节点**（textNode(canonicalNumber(n))），
+            //    于是 {"score":1} 与 {"score":"1"} 归一化后**逐字符相同** → 同摘要。
+            //    后果：审批绑定的参数是数字、实际执行时换成同值字符串，
+            //    审批绑定校验照样通过 —— 类型被悄悄换掉。
+            assertThat(ArgsNormalizer.hash(Map.of("score", 1), ArgsNormalizer.Options.all()))
+                    .as("⚠️⚠️ 数字 1 与字符串 \"1\" 必须不同摘要"
+                            + "（与 ParamPolicyEngine.valueKey 的 n:/s: 前缀口径一致）")
+                    .isNotEqualTo(ArgsNormalizer.hash(Map.of("score", "1"),
+                            ArgsNormalizer.Options.all()));
+
+            assertThat(ArgsNormalizer.hash(Map.of("score", 1), ArgsNormalizer.Options.all()))
+                    .as("⚠️⚠️ 浮点 1.0 与字符串 \"1.0\" 也必须不同摘要")
+                    .isNotEqualTo(ArgsNormalizer.hash(Map.of("score", "1.0"),
+                            ArgsNormalizer.Options.all()));
+        }
+
+        @Test
+        @DisplayName("⚠️ 规范化 JSON 保留数字类型（不是字符串）")
+        void normalizedJsonKeepsNumberType() {
+            assertThat(ArgsNormalizer.normalizedJson(Map.of("score", 1),
+                    ArgsNormalizer.Options.all()))
+                    .as("⚠️ 数字必须落成 JSON 数字，否则与字符串无法区分")
+                    .isEqualTo("{\"score\":1}");
+        }
     }
 
     @Nested

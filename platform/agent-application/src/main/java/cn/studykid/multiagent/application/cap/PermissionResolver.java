@@ -2,16 +2,11 @@ package cn.studykid.multiagent.application.cap;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
-
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ObjectNode;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -50,8 +45,6 @@ import cn.studykid.multiagent.ports.persistence.PublishedVersionPort;
  * 那会让越权被伪装成「工具未声明」。
  */
 public class PermissionResolver implements ClosureResolver {
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final CapAgentDefPort agentDefs;
     private final CapSkillDefPort skillDefs;
@@ -104,6 +97,13 @@ public class PermissionResolver implements ClosureResolver {
      * Skill / Tool / MCP Server 的版本解析口径两者相同 ——
      * 因为闭包的失效判定本来就建立在「依赖对象是否被重新发布」之上。
      *
+     * <p>⚠️ <b>Agent 版本必须按「当前发布指针」解析（P0-5 修复）</b>：
+     * {@code CapAgentDefPort.findLatestPublished} 取的是「该 Agent 最新已发布版本行」，
+     * 而版本行在回滚时<b>不会被删除</b>（§6.1 不可变 + §6.3 回滚只移指针）——
+     * 修复前本方法走的就是它，于是<b>租户回滚对运行期完全无效</b>：
+     * 回滚只是「治理动作」，Agent 的实际生效版本一点没变。
+     * 现统一走 {@link CurrentAgentVersion}（TENANT 指针 → release → object_versions）。
+     *
      * @param tenantId 租户标识
      * @param agentId  Agent 标识
      * @return 有效能力闭包
@@ -112,10 +112,16 @@ public class PermissionResolver implements ClosureResolver {
     @Override
     public @NonNull EffectiveClosure resolveCurrent(@NonNull String tenantId,
                                                      @NonNull String agentId) {
-        var agentDef = agentDefs.findLatestPublished(tenantId, agentId)
+        int agentVersion = CurrentAgentVersion.resolve(publishedVersions, agentDefs,
+                        tenantId, agentId)
                 .orElseThrow(() -> new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
-                        "Agent 无已发布版本: tenant=" + tenantId + ", agent=" + agentId));
-        return build(agentId, agentDef.version(), agentDef);
+                        "Agent 无当前已发布版本: tenant=" + tenantId + ", agent=" + agentId));
+        var agentDef = agentDefs.find(tenantId, agentId, agentVersion)
+                .orElseThrow(() -> new ClosureResolutionException(
+                        ReasonCode.RESOURCE_VERSION_MISMATCH,
+                        "Agent 版本行缺失: tenant=" + tenantId + ", agent=" + agentId
+                                + ", version=" + agentVersion));
+        return build(agentId, agentVersion, agentDef);
     }
 
     // ── 闭包构建 ──────────────────────────────────────────────────
@@ -123,7 +129,9 @@ public class PermissionResolver implements ClosureResolver {
     private @NonNull EffectiveClosure build(@NonNull String agentId,
                                              int agentVersion,
                                              @NonNull CapAgentDef agentDef) {
-        Overrides overrides = Overrides.parse(agentDef.overrides());
+        // ⚠️ overrides 解析抽至 AgentOverrides（全仓唯一实现）：授权路径与管理面
+        //    图谱共用同一份解析，避免「图谱显示与实际收紧不一致」。
+        AgentOverrides overrides = AgentOverrides.parse(agentDef.overrides());
 
         List<EffectiveClosure.@NonNull SkillBinding> skills = new ArrayList<>();
         Map<String, EffectiveClosure.@NonNull ToolBinding> tools = new LinkedHashMap<>();
@@ -326,7 +334,7 @@ public class PermissionResolver implements ClosureResolver {
     }
 
     private @NonNull CapabilityRiskLevel effectiveCeiling(@NonNull CapabilityRiskLevel skillCeiling,
-                                                           @NonNull Overrides overrides,
+                                                           @NonNull AgentOverrides overrides,
                                                            @NonNull String skillId) {
         CapabilityRiskLevel result = skillCeiling;
         CapabilityRiskLevel global = overrides.globalLowerRiskCeiling();
@@ -339,105 +347,5 @@ public class PermissionResolver implements ClosureResolver {
             result = CapabilityRiskLevel.stricter(result, perSkill);
         }
         return result;
-    }
-
-    // ── Agent overrides ───────────────────────────────────────────
-
-    /**
-     * Agent 的收紧覆盖（§4.2「overrides 仅收紧」）。
-     *
-     * <p>支持的形态：
-     * <ul>
-     *   <li>{@code removeSkills: [..]} —— 移除 Skill；</li>
-     *   <li>{@code removeTools: [..]} —— 移除 Tool；</li>
-     *   <li>{@code lowerRiskCeiling: "READ"} —— 全局下调风险上限；</li>
-     *   <li>{@code lowerRiskCeiling: {"skill-a": "READ"}} —— 按 Skill 下调。</li>
-     * </ul>
-     *
-     * ⚠️ <b>解析失败即拒绝</b>：覆盖写错却静默忽略，等于把「本应被收紧的配置」放行。
-     */
-    record Overrides(Set<String> removeSkills, Set<String> removeTools,
-                     @Nullable CapabilityRiskLevel globalLowerRiskCeiling,
-                     Map<String, CapabilityRiskLevel> perSkillLowerRiskCeiling) {
-
-        static @NonNull Overrides parse(@Nullable String overridesJson) {
-            if (overridesJson == null || overridesJson.isBlank()) {
-                return new Overrides(Set.of(), Set.of(), null, Map.of());
-            }
-            JsonNode root;
-            try {
-                root = MAPPER.readTree(overridesJson);
-            } catch (RuntimeException e) {
-                throw new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
-                        "Agent overrides 不是合法 JSON: " + overridesJson);
-            }
-            if (root == null || root.isMissingNode() || root.isNull()) {
-                return new Overrides(Set.of(), Set.of(), null, Map.of());
-            }
-            if (!root.isObject()) {
-                throw new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
-                        "Agent overrides 结构非法: " + overridesJson);
-            }
-            ObjectNode node = (ObjectNode) root;
-            Set<String> removeSkills = readStringSet(node.get("removeSkills"), "removeSkills");
-            Set<String> removeTools = readStringSet(node.get("removeTools"), "removeTools");
-
-            CapabilityRiskLevel global = null;
-            Map<String, CapabilityRiskLevel> perSkill = new LinkedHashMap<>();
-            JsonNode ceilingNode = node.get("lowerRiskCeiling");
-            if (ceilingNode != null && !ceilingNode.isMissingNode() && !ceilingNode.isNull()) {
-                if (ceilingNode.isTextual()) {
-                    global = CapabilityRiskLevel.parse(ceilingNode.asText());
-                    if (global.isUnknown()) {
-                        throw new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
-                                "lowerRiskCeiling 取值非法: " + ceilingNode.asText());
-                    }
-                } else if (ceilingNode.isObject()) {
-                    ceilingNode.properties().forEach(entry -> {
-                        CapabilityRiskLevel level = CapabilityRiskLevel.parse(entry.getValue().asText(null));
-                        if (level.isUnknown()) {
-                            throw new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
-                                    "lowerRiskCeiling 取值非法: skill=" + entry.getKey());
-                        }
-                        perSkill.put(entry.getKey(), level);
-                    });
-                } else {
-                    throw new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
-                            "lowerRiskCeiling 结构非法");
-                }
-            }
-            return new Overrides(removeSkills, removeTools, global, Map.copyOf(perSkill));
-        }
-
-        private static @NonNull Set<String> readStringSet(@Nullable JsonNode node, @NonNull String field) {
-            if (node == null || node.isMissingNode() || node.isNull()) {
-                return Set.of();
-            }
-            if (!node.isArray()) {
-                throw new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
-                        "Agent overrides." + field + " 结构非法");
-            }
-            Set<String> values = new LinkedHashSet<>();
-            for (JsonNode element : node) {
-                if (!element.isTextual()) {
-                    throw new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
-                            "Agent overrides." + field + " 含非字符串元素");
-                }
-                values.add(element.asText());
-            }
-            return Set.copyOf(values);
-        }
-
-        boolean removesSkill(@NonNull String skillId) {
-            return removeSkills.contains(skillId);
-        }
-
-        boolean removesTool(@NonNull String toolId) {
-            return removeTools.contains(toolId);
-        }
-
-        @Nullable CapabilityRiskLevel lowerRiskCeilingOf(@NonNull String skillId) {
-            return perSkillLowerRiskCeiling.get(skillId);
-        }
     }
 }
