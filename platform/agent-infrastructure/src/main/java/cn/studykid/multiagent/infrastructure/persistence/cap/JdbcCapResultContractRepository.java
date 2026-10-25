@@ -27,6 +27,15 @@ import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
  *
  * <p>⚠️ <b>RLS 表</b>：必须经 {@code tenantConnection(tenantId)} 绑定租户上下文后查询
  * （外层 {@code WHERE tenant_id} 与 RLS 策略双保险）。
+ *
+ * <p>⚠️ <b>{@code contract_id} 是可读字符串，不是 UUID</b>（V23 修复）：
+ * 对外 schema 契约（{@code common.schema.json#/$defs/id}）把契约 id 定义为
+ * 可读字符串（形如 {@code answer-contract}），治理通道也按字符串接收。
+ * 曾把该列声明为 {@code UUID} 并在 SQL 里写 {@code ?::uuid} →
+ * 非 UUID 形式的契约 id 会让<b>整个发布事务回滚</b>（PSQLException），
+ * 运行期的契约解析也每次抛异常 → 委派全部 fail-closed。
+ * ⚠️ 该转换在 mock 连接的单元测试里<b>从不真正执行</b>，
+ * 故只有 DB 层 IT 才能发现它 —— 见 {@code MultiAgentPersistenceIT}。
  */
 public class JdbcCapResultContractRepository implements CapResultContractPort {
 
@@ -34,7 +43,7 @@ public class JdbcCapResultContractRepository implements CapResultContractPort {
             INSERT INTO cap_result_contract
                 (tenant_id, contract_id, version, schema_json, config_fingerprint,
                  schema_version, created_at, published_at)
-            VALUES (?::uuid, ?::uuid, ?, ?::jsonb, ?, ?, ?, ?)
+            VALUES (?::uuid, ?, ?, ?::jsonb, ?, ?, ?, ?)
             ON CONFLICT (tenant_id, contract_id, version) DO NOTHING
             """;
 
@@ -42,14 +51,14 @@ public class JdbcCapResultContractRepository implements CapResultContractPort {
             SELECT tenant_id::text, contract_id::text, version, schema_json::text,
                    config_fingerprint, schema_version, created_at, published_at
             FROM cap_result_contract
-            WHERE tenant_id = ?::uuid AND contract_id = ?::uuid AND version = ?
+            WHERE tenant_id = ?::uuid AND contract_id = ? AND version = ?
             """;
 
     private static final String SQL_FIND_LATEST_PUBLISHED = """
             SELECT tenant_id::text, contract_id::text, version, schema_json::text,
                    config_fingerprint, schema_version, created_at, published_at
             FROM cap_result_contract
-            WHERE tenant_id = ?::uuid AND contract_id = ?::uuid
+            WHERE tenant_id = ?::uuid AND contract_id = ?
               AND published_at IS NOT NULL
             ORDER BY version DESC
             LIMIT 1
@@ -66,7 +75,7 @@ public class JdbcCapResultContractRepository implements CapResultContractPort {
             SELECT tenant_id::text, contract_id::text, version, schema_json::text,
                    config_fingerprint, schema_version, created_at, published_at
             FROM cap_result_contract
-            WHERE tenant_id = ?::uuid AND contract_id = ?::uuid
+            WHERE tenant_id = ?::uuid AND contract_id = ?
             ORDER BY version DESC
             LIMIT 1
             """;
