@@ -15,6 +15,7 @@ import tools.jackson.databind.node.ObjectNode;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapResultContractDef;
+import cn.studykid.multiagent.core.cap.CapRoutingPolicyDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 
@@ -129,6 +130,35 @@ public final class CapObjectFingerprint {
         // ⚠️ Schema 文本必须**规范化**后入哈希：同一份 Schema 的键序不同
         //    不应被读成「契约变了」—— 那会让每次重新登记都变成一次内容变化。
         root.put("schemaJson", canonicalJsonFragment(def.schemaJson()));
+        root.put("schemaVersion", def.schemaVersion());
+        return PREFIX + sha256Hex(MAPPER.writeValueAsString(root));
+    }
+
+    /**
+     * 计算路由策略的内容指纹（多级 Agent v1.1 · 第十四批）。
+     *
+     * <p>⚠️ <b>为什么策略也必须由服务端算</b>：与 Agent / Tool / Skill / 契约同理 ——
+     * {@code config_fingerprint} 是「这一行内容没变」的证明；
+     * 若让调用方提供这个值，它就成了一个<b>可以随便填的字符串</b>，
+     * 闭包指纹仍会自洽，于是「内容变了但指纹没变」再也检测不出来。
+     * 而路由策略恰恰是「路由行为是什么」的判定依据 ——
+     * 它的内容变了却指纹不变，等于「路由输出悄悄换了一套规则」。
+     *
+     * <p>⚠️ <b>targets 的顺序必须参与计算</b>：{@code ORDERED_FALLBACK} 的降级
+     * 语义依赖声明顺序，同一组目标换个次序就是<b>另一种路由行为</b>。
+     * 若按集合计算指纹，改顺序会被读成「内容没变」—— 那正是本指纹要防的事。
+     *
+     * <p>⚠️ <b>不包含时间戳</b>：理由与其他对象一致。
+     */
+    public static @NonNull String of(@NonNull CapRoutingPolicyDef def) {
+        ObjectNode root = MAPPER.createObjectNode();
+        root.put("type", "routing_policy");
+        root.put("id", def.policyId());
+        root.put("version", def.version());
+        root.put("strategy", def.strategy().name());
+        // ⚠️ 按**声明顺序**逐个写入，不用集合：顺序是路由语义的一部分。
+        ArrayNode targets = root.putArray("targets");
+        def.targets().forEach(targets::add);
         root.put("schemaVersion", def.schemaVersion());
         return PREFIX + sha256Hex(MAPPER.writeValueAsString(root));
     }

@@ -88,6 +88,15 @@ public enum DenySeverity {
             //    这与「角色不足」同类 —— 有东西在试探边界，必须立刻看
             //    （典型来源：路由模型被注入后指向未声明的 Agent，MA-T05）。
             case DELEGATION_TARGET_NOT_DECLARED -> CRITICAL;
+            // ⚠️ 路由候选越出**策略允许的子集**（第十四批）：与「越出父声明的委派拓扑」
+            //    同类 —— 都是「有东西在试探边界」。典型来源同样是路由模型被注入后
+            //    指向了一个存在但策略不允许的 Agent（MA-T05）。必须立刻看。
+            case ROUTING_TARGET_NOT_ALLOWED -> CRITICAL;
+            // ⚠️ 路由策略**不可用**（第十四批）：这是「路由依据失效」，
+            //    与 AUTHZ_UNAVAILABLE 同类 —— 判据拿不到，就无法做路由决策。
+            //    若落 INFO/WARNING，会被当成「偶发一次」，而实际后果是
+            //    「引用它的每个 ROUTER Agent 的每次委派都在 fail-closed」。
+            case ROUTING_POLICY_UNAVAILABLE -> CRITICAL;
             // ⚠️ EXEC_UNKNOWN 是「副作用结果不确定」——§7.4 唯一需要进人工对账的码。
             //    它不是「没成功」，而是「不知道成没成」：自动重试会造成重复副作用，
             //    只能由人工判定。故与越权同级，不能落 INFO。
@@ -107,6 +116,9 @@ public enum DenySeverity {
             // ⚠️ 输出契约引用未发布：与「子 Agent 引用未发布」同类 ——
             //    都是「引用了一个还没生效的固定版本」，走常规变更流程修正。
             case RESULT_CONTRACT_NOT_PUBLISHED -> WARNING;
+            // ⚠️ 路由策略引用未发布（第十四批）：与「输出契约引用未发布」同类 ——
+            //    都是「引用了一个还没生效的固定版本」，走常规变更流程修正。
+            case ROUTING_POLICY_NOT_PUBLISHED -> WARNING;
             case DELEGATION_NOT_ALLOWED -> WARNING;
             case DELEGATION_DEPTH_EXCEEDED -> WARNING;
             case DELEGATION_TIMEOUT -> WARNING;
