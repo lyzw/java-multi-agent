@@ -13,7 +13,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import cn.studykid.multiagent.application.cap.CapEnforcementSwitch;
 import cn.studykid.multiagent.application.cap.CapExecutionFlow;
@@ -26,9 +29,11 @@ import cn.studykid.multiagent.core.cap.AuthzVersion;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
+import cn.studykid.multiagent.core.cap.ExecutionScope;
 import cn.studykid.multiagent.core.cap.ReasonCode;
 import cn.studykid.multiagent.core.orchestration.AgentInvocation;
 import cn.studykid.multiagent.core.orchestration.AgentInvocationStatus;
+import cn.studykid.multiagent.core.orchestration.DelegationContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.model.ModelResponse;
 import cn.studykid.multiagent.ports.orchestration.ChildAgentRunner;
@@ -446,6 +451,19 @@ class DelegationGateBranchTest {
     private static ToolInvocationGate gate(DelegationExecutor delegation,
                                             boolean cancelled,
                                             Clock clock) {
+        return gate(Chain.CAP, delegation, cancelled, clock);
+    }
+
+    /**
+     * 按指定链路装配闸门（第十九批）。
+     *
+     * @param chain {@link Chain#LEGACY} = 未装配 CAP 执行流（**生产默认路径**：
+     *               {@code config.flag.cap-authorization-enforced} 默认 false）；
+     *               {@link Chain#CAP} = 装配并开启 CAP 授权链路。
+     */
+    private static ToolInvocationGate gate(Chain chain, DelegationExecutor delegation,
+                                            boolean cancelled,
+                                            Clock clock) {
         cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
                 .ApprovalSource approveAll = (tenantId, handler) ->
                 cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
@@ -458,7 +476,7 @@ class DelegationGateBranchTest {
                         .ApprovalDecision.notRequired(),
                 GRANT_BUDGET, FRESH_LEDGER, NO_APPROVAL,
                 BigDecimal.ONE, (t, r) -> cancelled, approveAll,
-                enabledCapFlow(), null, delegation, clock);
+                chain == Chain.CAP ? enabledCapFlow() : null, null, delegation, clock);
     }
 
     private static RunClaimPort.LeasedTask task() {
@@ -478,9 +496,18 @@ class DelegationGateBranchTest {
                 callId));
     }
 
+    /** 子 Agent 的执行作用域（固定 release + 闭包指纹）。 */
+    private static ExecutionScope scopeOf(String agentId) {
+        return new ExecutionScope(agentId, 1, "fp-" + agentId);
+    }
+
+    /** 委派上下文（当前执行中的 Agent + 深度 + 父调用标识）。 */
+    private static DelegationContext contextOf(String agentId, String invocationId) {
+        return new DelegationContext(agentId, 1, 2, invocationId);
+    }
+
     /** 两个委派调用（用于验证失败策略对后续委派的影响）。 */
-    private static Map<String, ModelResponse.ToolCallRequest> twoDelegationCalls() {
-        Map<String, ModelResponse.ToolCallRequest> calls = new LinkedHashMap<>();
+    private static Map<String, ModelResponse.ToolCallRequest> twoDelegationCalls() {        Map<String, ModelResponse.ToolCallRequest> calls = new LinkedHashMap<>();
         calls.put("call-1", new ModelResponse.ToolCallRequest(
                 DelegationExecutor.DELEGATION_TOOL_NAME,
                 Map.of("targetAgentId", CHILD, "input", Map.of("question", "q")), "call-1"));
@@ -696,5 +723,248 @@ class DelegationGateBranchTest {
                 .as("CONTINUE_ON_ERROR 下后续委派必须继续")
                 .isEqualTo(2);
         assertThat(result.failedTools()).hasSize(2);
+    }
+
+    // ── 第十九批：两条执行链路的一致性 ────────────────────────────
+
+    /**
+     * 闸门内部的两条执行链路。
+     *
+     * <p>⚠️ {@link Chain#LEGACY} 是**生产默认路径**：
+     * {@code config.flag.cap-authorization-enforced} 默认 {@code false}
+     * → 闸门走既有链路（CAP 执行流未装配或开关关闭）。
+     */
+    enum Chain {
+        /** 既有链路（未装配 CAP 执行流）。 */
+        LEGACY,
+        /** CAP 授权链路。 */
+        CAP
+    }
+
+    /**
+     * 第十九批：两条执行链路的一致性。
+     *
+     * <p>⚠️ <b>本组用例针对的是「同一个委派调用在两条链路上是否同一结论」</b>。
+     * 修复前委派分支<b>只存在于 CAP 链路</b>，既有链路里委派调用会被当成
+     * 「未登记的工具」拒掉 —— 而既有链路正是**生产默认路径**
+     * （CAP 开关默认 false）→ 多级 Agent 在生产上根本不可用。
+     *
+     * <p>⚠️ <b>为什么逐条链路参数化</b>：只测一条链路的话，
+     * 「把委派分支摘掉」这类改动仍可能让另一条链路的用例全绿。
+     * 参数化之后，**每条断言都必须同时在两条链路上成立**。
+     */
+    @Nested
+    @DisplayName("两条执行链路的一致性（第十九批）")
+    class ChainParity {
+
+        @ParameterizedTest(name = "链路={0}")
+        @EnumSource(Chain.class)
+        @DisplayName("⚠️⚠️ 合法委派在两条链路上都必须成功（生产默认链路也不例外）")
+        void legalDelegationSucceedsOnBothChains(Chain chain) {
+            CountingRunner runner = new CountingRunner();
+
+            var result = gate(chain, executor(runner), false, CLOCK)
+                    .invokeAll(TENANT, task(), delegationCall("call-1", CHILD));
+
+            assertThat(result.succeededTools())
+                    .as("⚠️⚠️ 委派必须在**两条链路**上都跑通 —— "
+                            + "既有链路是生产默认路径，它跑不通等于多级 Agent 在生产上不可用")
+                    .containsExactly(DelegationExecutor.DELEGATION_TOOL_NAME);
+            assertThat(runner.calls.get()).as("合法委派必须真的执行子 Agent").isEqualTo(1);
+        }
+
+        @ParameterizedTest(name = "链路={0}")
+        @EnumSource(Chain.class)
+        @DisplayName("⚠️ 目标未声明 → 两条链路都拒绝且零子执行")
+        void undeclaredTargetRejectedOnBothChains(Chain chain) {
+            CountingRunner runner = new CountingRunner();
+
+            var result = gate(chain, executor(runner), false, CLOCK)
+                    .invokeAll(TENANT, task(), delegationCall("call-1", "other-agent"));
+
+            assertThat(result.rejectedTools())
+                    .containsExactly(DelegationExecutor.DELEGATION_TOOL_NAME);
+            assertThat(runner.calls.get()).as("被拒的委派不得触发子执行").isZero();
+            assertThat(result.decisionOf(DelegationExecutor.DELEGATION_TOOL_NAME))
+                    .get()
+                    .satisfies(d -> assertThat(d.decision().reasonCode())
+                            .isEqualTo(ReasonCode.DELEGATION_TARGET_NOT_DECLARED));
+        }
+
+        @ParameterizedTest(name = "链路={0}")
+        @EnumSource(Chain.class)
+        @DisplayName("⚠️ 参数非法 → 两条链路都拒绝且零子执行")
+        void malformedArgumentsRejectedOnBothChains(Chain chain) {
+            CountingRunner runner = new CountingRunner();
+            Map<String, ModelResponse.ToolCallRequest> calls = Map.of("call-1",
+                    new ModelResponse.ToolCallRequest(DelegationExecutor.DELEGATION_TOOL_NAME,
+                            Map.of("input", Map.of("question", "q")), "call-1"));
+
+            var result = gate(chain, executor(runner), false, CLOCK)
+                    .invokeAll(TENANT, task(), calls);
+
+            assertThat(result.rejectedTools())
+                    .containsExactly(DelegationExecutor.DELEGATION_TOOL_NAME);
+            assertThat(runner.calls.get()).isZero();
+            assertThat(result.decisionOf(DelegationExecutor.DELEGATION_TOOL_NAME))
+                    .get()
+                    .satisfies(d -> assertThat(d.decision().reasonCode())
+                            .isEqualTo(ReasonCode.PARAM_SCHEMA_FAIL));
+        }
+
+        @ParameterizedTest(name = "链路={0}")
+        @EnumSource(Chain.class)
+        @DisplayName("⚠️ FAIL_FAST → 两条链路都停止本轮后续委派")
+        void failFastStopsSubsequentDelegationsOnBothChains(Chain chain) {
+            CountingRunner runner = new CountingRunner();
+            runner.result = ChildAgentResult.failed(ReasonCode.TOOL_EXECUTION_FAILED.name(), "boom");
+
+            var result = gate(chain, executor(runner), false, CLOCK)
+                    .invokeAll(TENANT, task(), twoDelegationCalls());
+
+            assertThat(runner.calls.get())
+                    .as("FAIL_FAST 下后续委派不得再启动子 Agent（父声明的失败策略）")
+                    .isEqualTo(1);
+            assertThat(result.rejectedTools())
+                    .containsExactly(DelegationExecutor.DELEGATION_TOOL_NAME);
+        }
+
+        @ParameterizedTest(name = "链路={0}")
+        @EnumSource(Chain.class)
+        @DisplayName("⚠️ 执行作用域与委派上下文串了 → 两条链路都 fail-closed 拒绝委派")
+        void inconsistentScopeAndContextRejectedOnBothChains(Chain chain) {
+            // ⚠️ 场景：执行作用域说的是「当前执行的是 CHILD」，
+            //    而委派上下文说的是「当前执行的是 PARENT」——
+            //    二者指向不同的 Agent，说明上下文串了（多半是调用方拼错了）。
+            //
+            // ⚠️ 为什么必须拒绝而不是「挑一个信的用」：
+            //    挑一个 = 在越权路径上替调用方做决定。
+            //    委派拓扑由「当前 Agent 的声明」决定（第十五批），
+            //    授权按「作用域的 release」解析 —— 两者指向不同 Agent 时，
+            //    无论挑哪个都可能让 A 借 B 的声明越权委派。
+            CountingRunner runner = new CountingRunner();
+
+            var result = gate(chain, executor(runner), false, CLOCK)
+                    .invokeAll(TENANT, task(), delegationCall("call-1", CHILD),
+                            scopeOf(CHILD), contextOf(PARENT, "inv-parent"));
+
+            assertThat(result.rejectedTools())
+                    .as("⚠️ 上下文串了 → 委派必须被拒（fail-closed）")
+                    .containsExactly(DelegationExecutor.DELEGATION_TOOL_NAME);
+            assertThat(runner.calls.get())
+                    .as("⚠️ 被拒的委派不得产生任何子执行")
+                    .isZero();
+            var decision = result.decisionOf(DelegationExecutor.DELEGATION_TOOL_NAME)
+                    .orElseThrow();
+            assertThat(decision.decision().reasonCode())
+                    .as("⚠️ 原因码必须是编排非法（不是「未登记的工具」）")
+                    .isEqualTo(ReasonCode.ORCHESTRATION_INVALID);
+            assertThat(decision.decision().authorization())
+                    .as("⚠️ 授权阶段就拒绝 → execution 不得被评估")
+                    .isEqualTo(AuthorizationDecision.Authorization.DENY);
+            assertThat(decision.decision().execution())
+                    .as("⚠️ Phase A 已拒 → execution = NOT_EVALUATED")
+                    .isEqualTo(AuthorizationDecision.Execution.NOT_EVALUATED);
+            assertThat(decision.decision().status())
+                    .as("⚠️ 从未启动 → 状态必须是 NOT_STARTED（不得记成 FAILED）")
+                    .isEqualTo(AuthorizationDecision.Status.NOT_STARTED);
+        }
+
+        @ParameterizedTest(name = "链路={0}")
+        @EnumSource(Chain.class)
+        @DisplayName("⚠️⚠️ 同一 Agent 但版本不一致 → 两条链路都拒绝（漂移形态）")
+        void versionMismatchAlsoRejectedOnBothChains(Chain chain) {
+            // ⚠️ 这是**另一种**漏网形态：Agent 标识相同，只有 release 不同。
+            //    若一致性校验只比 agentId 不比 version，这条路径就漏了 ——
+            //    而「子 Agent 在途委派漂移到新 release」恰好就是这个形态
+            //    （第十八批的固定 release 语义就是为此而设）。
+            //
+            // ⚠️ 单独成例的理由：只比标识的校验照样能让上一条用例绿，
+            //    所以必须**按漏网形态分别钉死**，否则反证时看不出哪一处校验被摘掉。
+            CountingRunner runner = new CountingRunner();
+
+            var result = gate(chain, executor(runner), false, CLOCK)
+                    .invokeAll(TENANT, task(), delegationCall("call-1", CHILD),
+                            scopeOf(CHILD),
+                            new DelegationContext(CHILD, 2, 2, "inv-child-v2"));
+
+            assertThat(result.rejectedTools())
+                    .as("⚠️⚠️ 版本不一致 → 委派必须被拒（这是漂移的入口）")
+                    .containsExactly(DelegationExecutor.DELEGATION_TOOL_NAME);
+            assertThat(runner.calls.get())
+                    .as("⚠️ 被拒的委派不得产生任何子执行")
+                    .isZero();
+            assertThat(result.decisionOf(DelegationExecutor.DELEGATION_TOOL_NAME))
+                    .get()
+                    .satisfies(d -> assertThat(d.decision().reasonCode())
+                            .isEqualTo(ReasonCode.ORCHESTRATION_INVALID));
+        }
+
+        @ParameterizedTest(name = "链路={0}")
+        @EnumSource(Chain.class)
+        @DisplayName("⚠️ 未装配委派执行器 → 两条链路都以「未登记的工具」被拒（不得静默放行）")
+        void missingExecutorRejectedOnBothChains(Chain chain) {
+            // ⚠️ 未装配执行器时委派落回「未登记的工具」——
+            //    两条链路的**处理位置不同**（CAP 链路在授权之前，既有链路在 handler 查找处），
+            //    但**结论必须一致**：都拒绝、都零子执行。
+            //
+            // ⚠️ 本用例是**成对**的（组装好 → 拒绝）：
+            //    只测「未装配 → 被拒」的话，「委派在两条链路上根本没跑起来」
+            //    也会让用例绿 —— 那正是第十九批修复前的状态。
+            //    所以先用装配好的替身做对照，证明委派确实能跑通。
+            CountingRunner runner = new CountingRunner();
+
+            var assembled = gate(chain, executor(runner), false, CLOCK)
+                    .invokeAll(TENANT, task(), delegationCall("call-1", CHILD));
+            assertThat(runner.calls.get())
+                    .as("对照组：装配了委派执行器 → 委派必须真的执行（否则下面的拒绝毫无意义）")
+                    .isEqualTo(1);
+            assertThat(assembled.succeededTools())
+                    .containsExactly(DelegationExecutor.DELEGATION_TOOL_NAME);
+
+            var missing = gate(chain, null, false, CLOCK)
+                    .invokeAll(TENANT, task(), delegationCall("call-1", CHILD));
+
+            assertThat(missing.rejectedTools())
+                    .as("⚠️ 未装配委派执行器 → 两条链路都必须拒绝")
+                    .containsExactly(DelegationExecutor.DELEGATION_TOOL_NAME);
+            assertThat(missing.succeededTools())
+                    .as("⚠️ 未装配执行器 → 不得有任何成功项")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 两条链路的四字段结论逐项一致")
+        void bothChainsProduceIdenticalConclusions() {
+            // ⚠️ 这是本组最强的断言：不是「两条链路各自通过」，
+            //    而是「同一个场景在两条链路上的结论**逐字段相同**」。
+            //    各自通过却结论不同（比如一条给 PARAM_SCHEMA_FAIL、
+            //    另一条给「未登记的工具」）—— 那也是缺陷。
+            CountingRunner legacyRunner = new CountingRunner();
+            CountingRunner capRunner = new CountingRunner();
+
+            var legacy = gate(Chain.LEGACY, executor(legacyRunner), false, CLOCK)
+                    .invokeAll(TENANT, task(), delegationCall("call-1", CHILD));
+            var cap = gate(Chain.CAP, executor(capRunner), false, CLOCK)
+                    .invokeAll(TENANT, task(), delegationCall("call-1", CHILD));
+
+            var legacyDecision = legacy.decisionOf(DelegationExecutor.DELEGATION_TOOL_NAME)
+                    .orElseThrow();
+            var capDecision = cap.decisionOf(DelegationExecutor.DELEGATION_TOOL_NAME)
+                    .orElseThrow();
+            assertThat(capDecision.decision().reasonCode())
+                    .as("⚠️⚠️ 两条链路的原因码必须相同")
+                    .isEqualTo(legacyDecision.decision().reasonCode());
+            assertThat(capDecision.decision().status())
+                    .as("⚠️⚠️ 两条链路的执行状态必须相同")
+                    .isEqualTo(legacyDecision.decision().status());
+            assertThat(capDecision.decision().authorization())
+                    .as("⚠️⚠️ 两条链路的授权结论必须相同")
+                    .isEqualTo(legacyDecision.decision().authorization());
+            assertThat(capDecision.decision().execution())
+                    .as("⚠️⚠️ 两条链路的执行结论必须相同")
+                    .isEqualTo(legacyDecision.decision().execution());
+            assertThat(capRunner.calls.get()).isEqualTo(legacyRunner.calls.get());
+        }
     }
 }

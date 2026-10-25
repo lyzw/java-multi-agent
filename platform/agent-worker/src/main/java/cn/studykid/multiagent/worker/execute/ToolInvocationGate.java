@@ -469,9 +469,10 @@ public class ToolInvocationGate {
         if (capFlow != null && capFlow.isEnabled()) {
             return invokeAllCap(tenantId, task, calls, scope, delegationContext);
         }
-        // ⚠️ 既有链路也必须带 Agent 维度（第十七批）：幂等键是**两条链路共用**的账本键，
-        //    只在 CAP 链路加分域的话，迁移开关一关就退回「父子互相吞调用」。
-        return invokeAllLegacy(tenantId, task, calls, resolveAgentRef(scope, delegationContext));
+        // ⚠️ 既有链路同样带委派分支（第十九批）：委派不是 CAP 授权链路的能力，
+        //    它的授权与边界由 DelegationGuard 承担 ——
+        //    CAP 开关管的是「用哪条授权链路」，不是「多级 Agent 是否可用」。
+        return invokeAllLegacy(tenantId, task, calls, scope, delegationContext);
     }
 
     /**
@@ -524,47 +525,19 @@ public class ToolInvocationGate {
         // ⚠️ 父声明的失败策略（FAIL_FAST / CONTINUE_ON_ERROR）决定：
         //    本轮里某个子调用失败后，**后续的委派调用**还跑不跑。
         boolean delegationHalted = false;
-        // ⚠️ 上下文一致性校验（第十五批）：scope 与 delegationContext 同时存在时，
-        //    Agent 标识与版本必须一致 —— 不一致说明上下文串了。
-        //    此时**委派一律拒绝**（fail-closed）：猜哪个是对的，等于在越权路径上
-        //    替调用方做决定。
-        boolean contextMismatch = scope != null && delegationContext != null
-                && (!scope.agentId().equals(delegationContext.agentId())
-                        || scope.agentVersion() != delegationContext.agentVersion());
 
         for (ModelResponse.ToolCallRequest call : calls.values()) {
-            // ── 委派分支（多级 Agent v1.1）──────────────────────────
+            // ── 委派分支（两条执行链路共用 · 第十九批）────────────
             //    ⚠️ 委派**不是**普通工具：它不进 Skill→Tool 能力闭包，
             //    授权走 DelegationGuard（逐跳授权 + 深度/次数/超时/预算）。
             //    但它仍在本类内部执行 —— 保持「唯一执行入口」不变。
-            if (delegation != null
-                    && cn.studykid.multiagent.application.orchestration.DelegationExecutor
-                            .DELEGATION_TOOL_NAME.equals(call.toolName())) {
-                // ⚠️ FAIL_FAST 之后不再发起后续委派（父声明的失败策略）
-                if (delegationHalted) {
-                    log.info("失败策略 FAIL_FAST：跳过本轮后续委派: tool={}, runId={}",
-                            call.toolName(), task.runId());
-                    result.recordRejected(call.toolName(),
-                            cn.studykid.multiagent.core.cap.ReasonCode.DELEGATION_NOT_ALLOWED
-                                    .name());
-                    continue;
-                }
-                if (contextMismatch) {
-                    // ⚠️ 上下文串了 → 拒绝委派（不猜哪个是对的）
-                    log.error("执行作用域与委派上下文不一致，拒绝委派: runId={}, scopeAgent={},"
-                                    + " ctxAgent={}", task.runId(), scope.agentId(),
-                            delegationContext.agentId());
-                    result.recordRejected(call.toolName(),
-                            cn.studykid.multiagent.core.cap.ReasonCode.ORCHESTRATION_INVALID
-                                    .name());
-                    result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
-                            call.toolName(), null,
-                            cn.studykid.multiagent.core.cap.AuthorizationDecision.deny(
-                                    cn.studykid.multiagent.core.cap.ReasonCode
-                                            .ORCHESTRATION_INVALID)));
-                    continue;
-                }
-                if (invokeDelegation(tenantId, task, call, result, delegationContext)) {
+            //    ⚠️ **两条链路必须共用同一段代码**：修复前委派分支只存在于
+            //    CAP 链路，既有链路里委派调用被当成「未登记的工具」拒掉 ——
+            //    而既有链路正是**生产默认路径**（CAP 开关默认 false），
+            //    于是多级 Agent 在生产上根本不可用。
+            if (isDelegationCall(call)) {
+                if (handleDelegationCall(tenantId, task, call, result, scope,
+                        delegationContext, delegationHalted)) {
                     delegationHalted = true;
                 }
                 continue;
@@ -606,6 +579,74 @@ public class ToolInvocationGate {
         }
 
         return result;
+    }
+
+    /**
+     * 是否是委派调用（委派**不是**普通工具，不注册 {@code ToolHandler}）。
+     *
+     * <p>⚠️ <b>未装配委派执行器时返回 {@code false}</b>：
+     * 那时委派调用会落回「未登记的工具」被拒（而不是静默放行）——
+     * 两条链路同口径，既有测试 {@code delegationIsRejectedWhenExecutorIsMissing} 钉死这一点。
+     *
+     * @param call 模型请求的工具调用
+     * @return 是否走委派分支
+     */
+    private boolean isDelegationCall(ModelResponse.ToolCallRequest call) {
+        return delegation != null
+                && cn.studykid.multiagent.application.orchestration.DelegationExecutor
+                        .DELEGATION_TOOL_NAME.equals(call.toolName());
+    }
+
+    /**
+     * 委派分支（<b>两条执行链路共用</b> · 第十九批）。
+     *
+     * <p>⚠️ <b>为什么必须共用</b>：修复前这段逻辑只写在 CAP 链路里，
+     * 于是同一个委派调用在两条链路上给出<b>不同的结论</b>
+     * （CAP 链路：委派成功；既有链路：「未登记的工具」被拒）。
+     * 既有链路是**生产默认路径**（CAP 开关默认 false）——
+     * 那意味着「多级 Agent 在生产上根本不可用」，而代码看上去是齐的。
+     *
+     * <p>⚠️ 委派**不经过**普通工具的那几道闸门（Schema → 授权 → 幂等 → 账本）：
+     * 委派不是工具，它的授权与边界由 {@code DelegationGuard} 承担
+     * （逐跳授权 + 深度/次数/超时/预算），副作用由 {@code agent_invocation} 承担。
+     *
+     * @param delegationHalted 本轮是否已因 FAIL_FAST 停止后续委派
+     * @return 是否应当停止本轮的后续委派（失败策略生效 / 结果不确定）
+     */
+    private boolean handleDelegationCall(String tenantId,
+                                         RunClaimPort.LeasedTask task,
+                                         ModelResponse.ToolCallRequest call,
+                                         ToolInvocationResult result,
+                                         @Nullable ExecutionScope scope,
+                                         @Nullable DelegationContext delegationContext,
+                                         boolean delegationHalted) {
+        // ⚠️ FAIL_FAST 之后不再发起后续委派（父声明的失败策略）
+        if (delegationHalted) {
+            log.info("失败策略 FAIL_FAST：跳过本轮后续委派: tool={}, runId={}",
+                    call.toolName(), task.runId());
+            result.recordRejected(call.toolName(),
+                    cn.studykid.multiagent.core.cap.ReasonCode.DELEGATION_NOT_ALLOWED.name());
+            return false;
+        }
+        // ⚠️ 上下文一致性校验（第十五批）：scope 与 delegationContext 同时存在时，
+        //    Agent 标识与版本必须一致 —— 不一致说明上下文串了。
+        //    此时**委派一律拒绝**（fail-closed）：猜哪个是对的，等于在越权路径上
+        //    替调用方做决定。
+        if (scope != null && delegationContext != null
+                && (!scope.agentId().equals(delegationContext.agentId())
+                        || scope.agentVersion() != delegationContext.agentVersion())) {
+            log.error("执行作用域与委派上下文不一致，拒绝委派: runId={}, scopeAgent={},"
+                            + " ctxAgent={}", task.runId(), scope.agentId(),
+                    delegationContext.agentId());
+            result.recordRejected(call.toolName(),
+                    cn.studykid.multiagent.core.cap.ReasonCode.ORCHESTRATION_INVALID.name());
+            result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                    call.toolName(), null,
+                    cn.studykid.multiagent.core.cap.AuthorizationDecision.deny(
+                            cn.studykid.multiagent.core.cap.ReasonCode.ORCHESTRATION_INVALID)));
+            return false;
+        }
+        return invokeDelegation(tenantId, task, call, result, delegationContext);
     }
 
     /**
@@ -933,11 +974,29 @@ public class ToolInvocationGate {
             String tenantId,
             RunClaimPort.LeasedTask task,
             Map<String, ModelResponse.ToolCallRequest> calls,
-            @Nullable String agentRef) {
+            @Nullable ExecutionScope scope,
+            @Nullable DelegationContext delegationContext) {
 
         ToolInvocationResult result = new ToolInvocationResult();
+        // ⚠️ 既有链路也必须带 Agent 维度（第十七批）：幂等键是**两条链路共用**的账本键，
+        //    只在 CAP 链路加分域的话，迁移开关一关就退回「父子互相吞调用」。
+        String agentRef = resolveAgentRef(scope, delegationContext);
+        // ⚠️ 父声明的失败策略（FAIL_FAST / CONTINUE_ON_ERROR）决定：
+        //    本轮里某个子调用失败后，**后续的委派调用**还跑不跑。
+        boolean delegationHalted = false;
 
         for (ModelResponse.ToolCallRequest call : calls.values()) {
+            // ── 委派分支（两条执行链路共用 · 第十九批）────────────
+            //    ⚠️ 必须排在「未登记的工具」判定**之前**：
+            //    委派不是普通工具（不注册 ToolHandler），
+            //    若先做 handler 查找，委派调用会被当成「未登记的工具」拒掉。
+            if (isDelegationCall(call)) {
+                if (handleDelegationCall(tenantId, task, call, result, scope,
+                        delegationContext, delegationHalted)) {
+                    delegationHalted = true;
+                }
+                continue;
+            }
             ToolHandler handler = findHandler(call.toolName());
             if (handler == null) {
                 // 未登记工具：拒绝，并把错误回给模型让它自我纠正
