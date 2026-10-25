@@ -615,6 +615,48 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 父子 Agent 关系投影仓储（多级 Agent v1.1 · 06 变更补充「关系数据」）。
+     *
+     * <p>⚠️ <b>投影不是权威来源</b>：权威定义是不可变 Agent release 里的
+     * {@code childAgentRefs}；本表只是把「边」投影出来便于查询与分析，可重建。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort capAgentChildRefPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcCapAgentChildRefRepository(dataSource);
+    }
+
+    /**
+     * 输出契约仓储（多级 Agent v1.1 · FR-027 · MA-T16）。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CapResultContractPort capResultContractPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcCapResultContractRepository(dataSource);
+    }
+
+    /**
+     * 多级 Agent 发布期闭包校验器（FR-023 · MA-T02～T04）。
+     *
+     * <p>⚠️ 装配它意味着「声明了子 Agent 引用但引用不合法」在<b>发布期</b>就被拒，
+     * 而不是留到运行期让新 Run 集体失败。
+     *
+     * <p>⚠️ <b>契约仓储必须一并装配</b>：声明了 {@code resultContractRef} 的 Agent
+     * 若在发布期不校验契约，运行期每次委派都会因「取不到契约」fail-closed ——
+     * 配置看起来生效了，实际委派全废。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.AgentPublishClosureValidator
+            agentPublishClosureValidator(
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts) {
+        return new cn.studykid.multiagent.application.cap.AgentPublishClosureValidator(
+                agentDefs, contracts);
+    }
+
+    /**
      * 迁移双写服务（P0-T6）。
      *
      * <p>⚠️ <b>fail-soft</b>：双写失败<b>不</b>让旧路径写入失败。
@@ -850,6 +892,102 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 委派守卫（多级 Agent v1.1 · FR-024 / FR-025）。
+     *
+     * <p>⚠️ <b>预算探针口径是「租户级余额」，不是 Run 级预算</b>：
+     * 现行预算模型（{@code budget_account}）只有「租户 + 币种」维度，
+     * 没有「单个 Run 可花多少」的独立口径。
+     * 因此它保证「租户整体还有余额」，<b>不</b>保证「这一棵调用树没超预算」——
+     * Run 级预算需新增维度，属于待办。
+     * 嵌套 Agent 无法重置额度的最终保证仍在<b>工具级预算预留</b>：
+     * 同一 {@code runId} 的所有预留汇入同一账户，嵌套层无法另起一份额度。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.orchestration.DelegationGuard delegationGuard(
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            cn.studykid.multiagent.ports.security.AuthorizationService authorization,
+            cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersions,
+            cn.studykid.multiagent.ports.persistence.BudgetPort budget,
+            cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudgetProbe) {
+        return new cn.studykid.multiagent.application.orchestration.DelegationGuard(
+                agentDefs, authorization, authzVersions,
+                new cn.studykid.multiagent.application.orchestration.BudgetBalanceProbe(
+                        budget, "CNY", runBudgetProbe));
+    }
+
+    /**
+     * 在途委派接管器（多级 Agent v1.1 · MA-T12 · P3-MA-02）。
+     *
+     * <p>⚠️ <b>它补的是接管场景的实质缺口</b>：Worker 崩溃后由新世代接管，
+     * 但在途委派记录仍带旧世代 token —— 新世代写不了终态、旧世代也写不了，
+     * 那条记录会<b>永远悬在 RUNNING</b>，真实原因被掩盖成普通子调用失败。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter
+            inFlightDelegationAdopter(
+            cn.studykid.multiagent.ports.persistence.AgentInvocationPort invocations,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter(
+                invocations, clock);
+    }
+
+    /**
+     * Run 级预算端口（多级 Agent v1.1 · FR-024 · MA-T17）。
+     *
+     * <p>⚠️ <b>「全调用树共享预算上限」的读口径</b>：按 {@code run_id} 聚合
+     * {@code budget_reservation} —— 所有深度的工具调用都记在同一个 Run 下，
+     * 嵌套 Agent 无法通过「自己再开一份额度」绕过上限。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.RunBudgetPort runBudgetPort(
+            javax.sql.DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcRunBudgetRepository(
+                dataSource);
+    }
+
+    /**
+     * Run 级预算探针（多级 Agent v1.1 · FR-024 · MA-T17）。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudgetProbe(
+            cn.studykid.multiagent.ports.persistence.RunBudgetPort runBudgetPort) {
+        return new cn.studykid.multiagent.application.orchestration.RunBudgetProbe(runBudgetPort);
+    }
+
+    /**
+     * 委派结果契约提供端口（多级 Agent v1.1 · P2-MA-04 · FR-027）。
+     *
+     * <p>⚠️ <b>只认已发布的固定版本</b>：引用 {@code id@version} 解析不到
+     * 已发布契约时返回 {@code null}，调用方按 fail-closed 拒绝这次委派
+     * （{@code CHILD_RESULT_INVALID}）——「契约写了却无法校验」等于契约没生效。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.orchestration.ResultContractProvider resultContractProvider(
+            cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcResultContractProvider(contracts);
+    }
+
+    /**
+     * 委派执行器（多级 Agent v1.1 · P2-MA-01）。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.orchestration.DelegationExecutor delegationExecutor(
+            cn.studykid.multiagent.application.orchestration.DelegationGuard guard,
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
+            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
+            cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersions,
+            cn.studykid.multiagent.ports.persistence.AgentInvocationPort invocations,
+            cn.studykid.multiagent.ports.orchestration.ChildAgentRunner childRunner,
+            cn.studykid.multiagent.ports.orchestration.ResultContractProvider contracts,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.orchestration.DelegationExecutor(
+                guard, agentDefs, closureResolver, snapshots, authzVersions, invocations,
+                childRunner, contracts, clock);
+    }
+
+    /**
      * 原子发布与回滚服务（P5-T1/T2/T3 · §6.3）。
      *
      * <p>⚠️ <b>CAP 链路的生产开启前置条件已在本阶段解除</b>：
@@ -869,9 +1007,16 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
             cn.studykid.multiagent.ports.persistence.DecisionAuditPort audit,
             cn.studykid.multiagent.application.cap.ConfigValidationGate gate,
+            cn.studykid.multiagent.application.cap.AgentPublishClosureValidator closureValidator,
+            cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort childRefs,
+            cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts,
             java.time.Clock clock) {
+        // ⚠️ 输出契约仓储必须注入：未装配时「发布命令带契约」会被拒（fail-closed），
+        //    绝不静默跳过 —— 那等于「发布成功但契约没落库」。
         return new cn.studykid.multiagent.application.cap.ConfigPublishService(
-                tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate, clock);
+                tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate,
+                clock, cn.studykid.multiagent.application.cap.ConfigPublishService.DEFAULT_MAX_ATTEMPTS,
+                closureValidator, childRefs, contracts);
     }
 
     /**
@@ -894,9 +1039,12 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
             cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
             cn.studykid.multiagent.ports.persistence.ConfigReleasePort releases,
+            cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts,
             java.time.Clock clock) {
+        // ⚠️ 输出契约仓储必须注入：未装配时「提交带契约的发布申请」会被拒，
+        //    免得申请单看起来带了契约、执行时却被静默丢掉。
         return new cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService(
-                requests, publisher, lifecycle, agentDefs, pointers, releases, clock);
+                requests, publisher, lifecycle, agentDefs, pointers, releases, contracts, clock);
     }
 
     /**
@@ -1261,12 +1409,14 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.ExecutionIntentPort intents,
             cn.studykid.multiagent.ports.persistence.ResultEventPort resultEvents,
             cn.studykid.multiagent.application.cap.CapEnforcementSwitch enforcementSwitch,
-            cn.studykid.multiagent.application.cap.DecisionAuditService decisionAuditService) {
+            cn.studykid.multiagent.application.cap.DecisionAuditService decisionAuditService,
+            cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudgetProbe) {
         return new cn.studykid.multiagent.application.cap.CapExecutionFlow(
                 validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
                 snapshots, approvalPolicy, approvalStateMachine, compensationFramework,
                 capToolDefPort, budget, ledger, intents, resultEvents,
                 cn.studykid.multiagent.application.config.BudgetPolicy.DEFAULT_RESERVE_AMOUNT,
-                enforcementSwitch, decisionAuditService);
+                cn.studykid.multiagent.application.cap.CapExecutionFlow.DEFAULT_PRINCIPAL_ID,
+                enforcementSwitch, decisionAuditService, runBudgetProbe);
     }
 }

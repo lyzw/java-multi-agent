@@ -208,14 +208,76 @@ public class WorkerExecutionConfig {
             RiskBasedApprovalPolicy.PolicyEngineApprovalSource approvalSource,
             BigDecimal reserveAmount,
             cn.studykid.multiagent.application.cap.CapExecutionFlow capExecutionFlow,
-            cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlerProvider) {
+            cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlerProvider,
+            cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation,
+            java.time.Clock clock,
+            cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudgetProbe) {
         log.info("装配工具闸门: 工具 {} 个，审批策略=按风险等级，审批来源=策略引擎，"
-                        + "CAP 授权链路={}",
-                tools.size(), capExecutionFlow.isEnabled());
+                        + "CAP 授权链路={}，多级委派={}，Run 级预算={}",
+                tools.size(), capExecutionFlow.isEnabled(), delegation != null,
+                runBudgetProbe != null);
         return new ToolInvocationGate(
                 tools, authorization, approvalPolicy, budget, ledger, approvalPort,
                 BudgetPolicy.requireReserveAmount(reserveAmount),
-                cancelGuard, approvalSource, capExecutionFlow, mcpHandlerProvider);
+                cancelGuard, approvalSource, capExecutionFlow, mcpHandlerProvider, delegation,
+                clock, runBudgetProbe);
+    }
+
+    /**
+     * 子 Agent 模型配置装配（多级 Agent v1.1 · P2-MA-02）。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider
+            childAgentModelConfigProvider(
+            cn.studykid.multiagent.ports.persistence.AgentQueryPort agentQuery,
+            cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs) {
+        return new cn.studykid.multiagent.worker.execute.WorkerChildAgentModelConfigProvider(
+                agentQuery, closureResolver, toolDefs);
+    }
+
+    /**
+     * 子 Agent 执行器（多级 Agent v1.1 · P2-MA-02）。
+     *
+     * <p>⚠️ <b>懒加载</b>：它依赖闸门，而闸门依赖委派执行器，委派执行器又依赖
+     * 本端口 —— 直接构造会成环。{@code LazyChildAgentRunner} 把解析推迟到
+     * 第一次真实委派，那时闸门已就绪。
+     */
+    @Bean
+    public cn.studykid.multiagent.worker.execute.WorkerChildAgentRunner workerChildAgentRunner(
+            cn.studykid.multiagent.ports.model.ModelGateway modelGateway,
+            ToolInvocationGate gate,
+            cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider configs,
+            cn.studykid.multiagent.ports.orchestration.CancellationProbe cancellation) {
+        return new cn.studykid.multiagent.worker.execute.WorkerChildAgentRunner(
+                modelGateway, gate, configs,
+                cn.studykid.multiagent.worker.execute.WorkerChildAgentRunner.DEFAULT_MAX_CHILD_STEPS,
+                cancellation);
+    }
+
+    /**
+     * 取消探针（多级 Agent v1.1 · MA-T11）。
+     *
+     * <p>⚠️ <b>与闸门的取消守卫同源</b>：都接 {@code RunClaimPort.isCancelled} ——
+     * 取消是 <b>Run 级</b>状态，父 Run 取消必须能传播到运行中的子 Agent；
+     * 两处若读的不是同一个事实，就会出现「闸门以为没取消、子执行却停了」
+     * 或反之的错位。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.orchestration.CancellationProbe cancellationProbe(
+            @NonNull RunClaimPort claimPort) {
+        return claimPort::isCancelled;
+    }
+
+    /**
+     * 子 Agent 执行端口（懒解析）。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.orchestration.ChildAgentRunner childAgentRunner(
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.worker.execute.WorkerChildAgentRunner> delegate) {
+        return new cn.studykid.multiagent.worker.execute.LazyChildAgentRunner(
+                () -> delegate.getObject());
     }
 
     /**
@@ -237,9 +299,14 @@ public class WorkerExecutionConfig {
             RunClaimPort claimPort,
             ToolInvocationGate gate,
             PromptGuard promptGuard,
-            cn.studykid.multiagent.ports.persistence.RunEventPort eventPort) {
+            cn.studykid.multiagent.ports.persistence.RunEventPort eventPort,
+            cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter adopter) {
+        // ⚠️⚠️ **接管器必须在这里真实注入**（第九批 · MA-T12）：
+        //    不注入时，Worker 接管后 RUNNING 的委派记录**永远无人能收敛**
+        //    （新世代 token 不匹配、旧世代已被接管），
+        //    真实原因（Worker 崩溃）会被掩盖成一次普通的子调用失败。
         return new RunExecutionLoop(modelGateway, claimPort, gate,
-                Duration.ofSeconds(leaseSeconds), workerId, promptGuard, eventPort);
+                Duration.ofSeconds(leaseSeconds), workerId, promptGuard, eventPort, adopter);
     }
 
     /**

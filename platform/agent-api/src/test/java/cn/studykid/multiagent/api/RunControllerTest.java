@@ -456,7 +456,9 @@ class RunControllerTest {
         @Override
         public CreateRunResult createRun(TenantContext context, String agentId,
                                          cn.studykid.multiagent.core.idempotency.IdempotencyKey key,
-                                         Map<String, Object> input) {
+                                         Map<String, Object> input,
+                                         Long timeoutMs,
+                                         java.math.BigDecimal budgetAmount) {
             invoked.set(true);
             return new CreateRunResult(UUID.randomUUID().toString(), false);
         }
@@ -472,7 +474,9 @@ class RunControllerTest {
         @Override
         public CreateRunResult createRun(TenantContext context, String agentId,
                                          cn.studykid.multiagent.core.idempotency.IdempotencyKey key,
-                                         Map<String, Object> input) {
+                                         Map<String, Object> input,
+                                         Long timeoutMs,
+                                         java.math.BigDecimal budgetAmount) {
             return new CreateRunResult(UUID.randomUUID().toString(), true);
         }
     }

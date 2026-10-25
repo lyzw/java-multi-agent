@@ -185,7 +185,14 @@ public class RunController {
                 context,
                 request.agentId(),
                 IdempotencyKey.forRunCreate(request.idempotencyKey()),
-                request.input());
+                request.input(),
+                // ⚠️ 资源上限随 Run 一起落库：它是整棵委派调用树的共同上界
+                //    （多级 Agent v1.1 · FR-024），逐跳只能收窄不得放宽。
+                //    ⚠️ 时间换算在服务层完成（那里有注入的 Clock）——
+                //    这里若自己取 Instant.now()，就会出现**两个时间源**，
+                //    二者漂移时截止时刻会与实际不符。
+                request.timeoutMs(),
+                request.budgetAmount());
 
         // 5) 幂等重放返回 200，新建返回 201 —— 让客户端能区分
         ResponseEntity.BodyBuilder builder = result.replayed()
