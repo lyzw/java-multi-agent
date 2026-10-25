@@ -1,13 +1,8 @@
 package cn.studykid.multiagent.worker.execute;
 
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-
-import tools.jackson.core.JacksonException;
-import tools.jackson.core.type.TypeReference;
-import tools.jackson.databind.ObjectMapper;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -15,8 +10,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.application.cap.ClosureResolver;
-import cn.studykid.multiagent.core.cap.EffectiveClosure;
-import cn.studykid.multiagent.core.orchestration.DelegationToolSchema;
 import cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
@@ -38,8 +31,6 @@ public class WorkerChildAgentModelConfigProvider implements ChildAgentModelConfi
 
     private static final Logger log = LoggerFactory.getLogger(
             WorkerChildAgentModelConfigProvider.class);
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final AgentQueryPort agentQuery;
     private final ClosureResolver closureResolver;
@@ -83,71 +74,36 @@ public class WorkerChildAgentModelConfigProvider implements ChildAgentModelConfi
     public @NonNull Optional<ChildModelConfig> configFor(@NonNull String tenantId,
                                                          @NonNull String agentId,
                                                          int agentVersion) {
-        Optional<String> definition = definitionOf(tenantId, agentId, agentVersion);
-        if (definition.isEmpty()) {
+        // ⚠️⚠️ 第二十一批：**解析逻辑下沉到共用装配器**。
+        // 此前本类自己解析定义（modelRef / systemPrompt / temperature / …），
+        // 根路径却走硬编码占位 —— 于是同一个平台里根与子对
+        // 「模型是谁、提示词是什么」给出两套答案。
+        // 现在两者共用 {@link AgentModelConfigAssembler}：**只有一份定义**。
+        Optional<AgentModelConfigAssembler.AgentModelSettings> settings =
+                assembler().assemble(tenantId, agentId, agentVersion);
+        if (settings.isEmpty()) {
             return Optional.empty();
         }
-        Map<String, Object> root;
-        try {
-            Map<String, Object> parsed = MAPPER.readValue(definition.get(),
-                    new TypeReference<Map<String, Object>>() {
-                    });
-            root = parsed == null ? Map.of() : parsed;
-        } catch (JacksonException e) {
-            log.warn("子 Agent 定义解析失败: agent={}, version={}", agentId, agentVersion, e);
-            return Optional.empty();
-        }
-
-        String modelId = text(root.get("modelRef"), root.get("modelId"));
-        if (modelId == null) {
-            // ⚠️ 无法确定模型 → 拒绝执行（不猜）
-            log.warn("子 Agent 定义缺少模型标识: agent={}, version={}", agentId, agentVersion);
-            return Optional.empty();
-        }
-        String systemPrompt = systemPrompt(root);
-        double temperature = number(root.get("temperature"), 0.2);
-        int maxTokens = (int) number(root.get("maxOutputTokens"), 1024);
-        Duration timeout = Duration.ofMillis((long) number(root.get("timeoutMs"), 30_000));
-
-        return Optional.of(new ChildModelConfig(modelId, systemPrompt, temperature,
-                maxTokens, timeout, toolSchemas(tenantId, agentId, agentVersion)));
+        AgentModelConfigAssembler.AgentModelSettings s = settings.get();
+        return Optional.of(new ChildModelConfig(s.modelId(), s.systemPrompt(),
+                s.temperature(), s.maxTokens(), s.timeout(),
+                toolSchemas(tenantId, agentId, agentVersion, s.toolSchemas())));
     }
 
     /**
-     * 读取指定<b>版本</b>的 Agent 定义文本。
+     * 共用装配器（根路径与子路径<b>同一份</b>）。
      */
-    private @NonNull Optional<String> definitionOf(@NonNull String tenantId,
-                                                   @NonNull String agentId,
-                                                   int agentVersion) {
-        try {
-            return agentQuery.listVersions(tenantId, agentId).stream()
-                    .filter(version -> version.versionNumber() == agentVersion)
-                    .map(AgentQueryPort.AgentVersionItem::definition)
-                    .findFirst();
-        } catch (RuntimeException e) {
-            log.warn("子 Agent 版本读取失败: agent={}, version={}", agentId, agentVersion, e);
-            return Optional.empty();
-        }
+    private @NonNull AgentModelConfigAssembler assembler() {
+        return new AgentModelConfigAssembler(agentQuery, closureResolver, toolDefs);
     }
 
     /**
-     * 解析系统提示：兼容契约形态（{@code instructions.inlineInstructions}）
-     * 与存量扁平形态（{@code systemPrompt}）。
-     */
-    private static @NonNull String systemPrompt(@NonNull Map<String, Object> root) {
-        Object instructions = root.get("instructions");
-        if (instructions instanceof Map<?, ?> map) {
-            Object inline = map.get("inlineInstructions");
-            if (inline instanceof String s && !s.isBlank()) {
-                return s;
-            }
-        }
-        String flat = text(root.get("systemPrompt"));
-        return flat == null ? "" : flat;
-    }
-
-    /**
-     * 装配子 Agent 的工具 Schema（<b>按它自己的闭包</b>）。
+     * 装配该 Agent <b>自己闭包</b>里的工具 Schema（并<b>并列</b>委派工具）。
+     *
+     * <p>⚠️ <b>第二十一批：闭包工具表已下沉到共用装配器</b>：
+     * 根路径此前走硬编码占位，子路径在这里自己实现一份 ——
+     * 两份实现必然漂移（改一处漏一处 → 「根能调的工具子调不了」）。
+     * 现在两者<b>共用 {@link AgentModelConfigAssembler}</b>。
      *
      * <p>⚠️ <b>委派工具必须显式装配（第二十批）</b>：
      * 委派<b>不是</b>普通工具 —— 它<b>不进</b> Skill→Tool 能力闭包
@@ -160,28 +116,14 @@ public class WorkerChildAgentModelConfigProvider implements ChildAgentModelConfi
      * <p>⚠️ <b>只给「有委派能力」的 Agent</b>：编排声明缺省即 {@code LEAF}
      * （MA-T01），LEAF 或无子引用 → <b>不装配</b>。
      * 给没有委派能力的 Agent 发委派工具，等于让模型反复尝试必然被拒的调用。
+     *
+     * <p>⚠️ <b>委派工具与闭包工具并列</b>：它不属于闭包，但同样出现在模型可见的工具表里。
      */
     private @NonNull Map<String, Object> toolSchemas(@NonNull String tenantId,
                                                       @NonNull String agentId,
-                                                      int agentVersion) {
-        Map<String, Object> schemas = new LinkedHashMap<>();
-        EffectiveClosure closure;
-        try {
-            closure = closureResolver.resolve(tenantId, agentId, agentVersion);
-        } catch (RuntimeException e) {
-            log.warn("子 Agent 闭包解析失败，工具表为空: agent={}, version={}",
-                    agentId, agentVersion, e);
-            return schemas;
-        }
-        for (EffectiveClosure.ToolBinding binding : closure.tools()) {
-            toolDefs.find(binding.toolId(), binding.version()).ifPresent(tool -> {
-                Map<String, Object> schema = new LinkedHashMap<>();
-                schema.put("name", tool.id());
-                schema.put("description", tool.name() == null ? tool.id() : tool.name());
-                schema.put("inputSchema", parseSchema(tool.inputSchema()));
-                schemas.put(tool.id(), schema);
-            });
-        }
+                                                      int agentVersion,
+                                                      @NonNull Map<String, Object> closureSchemas) {
+        Map<String, Object> schemas = new LinkedHashMap<>(closureSchemas);
         // ⚠️ 委派工具与闭包工具<b>并列</b>：它不属于闭包，但同样出现在模型可见的工具表里。
         schemas.putAll(delegationToolSchema(tenantId, agentId, agentVersion));
         return schemas;
@@ -203,37 +145,5 @@ public class WorkerChildAgentModelConfigProvider implements ChildAgentModelConfi
             return Map.of();
         }
         return delegationSchemas.assemble(tenantId, agentId, agentVersion);
-    }
-
-    private static @NonNull Object parseSchema(@NonNull String raw) {
-        try {
-            return MAPPER.readTree(raw);
-        } catch (JacksonException e) {
-            // ⚠️ Schema 解析不了 → 退回空对象（工具侧会拒绝参数），不静默放行
-            return Map.of();
-        }
-    }
-
-    private static @Nullable String text(Object... candidates) {
-        for (Object candidate : candidates) {
-            if (candidate instanceof String s && !s.isBlank()) {
-                return s.trim();
-            }
-        }
-        return null;
-    }
-
-    private static double number(Object raw, double defaultValue) {
-        if (raw instanceof Number number) {
-            return number.doubleValue();
-        }
-        if (raw instanceof String s) {
-            try {
-                return Double.parseDouble(s.trim());
-            } catch (NumberFormatException e) {
-                return defaultValue;
-            }
-        }
-        return defaultValue;
     }
 }

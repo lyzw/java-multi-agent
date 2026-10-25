@@ -344,8 +344,18 @@ public class WorkerExecutionConfig {
                 workerId, leaseSeconds);
         return new RunDispatchConsumer(claimPort, Duration.ofSeconds(leaseSeconds),
                 (tenantId, task) -> {
+                    // ⚠️⚠️ **fail-closed（第二十一批）**：拿不到根 Agent 的模型配置
+                    // → **拒绝执行该 Run**，绝不回落硬编码占位模型。
+                    // 回落等于让「配置缺失」被伪装成「配置正常」——
+                    // 根 Agent 会拿着假模型跑完整个 Run，而日志里看不出任何异常。
+                    java.util.Optional<RunExecutionLoop.AgentModelConfig> config =
+                            inputs.agentConfig(tenantId, task.runId());
+                    if (config.isEmpty()) {
+                        log.warn("根 Agent 模型配置不可用，Run 拒绝执行: run={}", task.runId());
+                        return RunDispatchConsumer.Outcome.FAILED;
+                    }
                     RunExecutionLoop.ExecutionOutcome outcome = loop.execute(
-                            tenantId, task, inputs.agentConfig(tenantId, task.runId()),
+                            tenantId, task, config.get(),
                             inputs.snapshotFor(task, tenantId), inputs.runInput(task));
                     return switch (outcome.kind()) {
                         case SUCCEEDED -> RunDispatchConsumer.Outcome.SUCCEEDED;
@@ -374,7 +384,10 @@ public class WorkerExecutionConfig {
             cn.studykid.multiagent.ports.persistence.ConfigOverridePort configOverridePort,
             cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
                     delegationToolSchemaAssembler,
-            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots) {
+            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.worker.execute.RootAgentModelConfigProvider
+                    rootAgentModelConfigProvider) {
         // ⚠️ P4-D15：ConfigOverridePort 可选注入——缺失时本 Bean 与改动前完全等价，
         //    使配置表尚未迁移的环境也能启动（fail-open 于**装配**，
         //    但**收紧校验与审计**仍在写入路径 fail-closed）。
@@ -382,7 +395,35 @@ public class WorkerExecutionConfig {
                 configOverridePort == null ? null : new EffectiveConfigResolver(configOverridePort);
         return new RunExecutionInputs(resolver, maxCostPerRun, maxLlmCalls, maxSteps,
                 configMaps.toolRiskLevelMap(), configMaps.approvalRequiredByRisk(),
-                delegationToolSchemaAssembler, snapshots);
+                delegationToolSchemaAssembler, snapshots, rootAgentModelConfigProvider);
+    }
+
+    /**
+     * 根 Agent 模型配置提供器（第二十一批 · FR-036）。
+     *
+     * <p>⚠️ <b>根 Agent 此前走硬编码占位</b>（{@code fake-model} + 空工具表），
+     * 意味着根 Agent <b>没有任何普通工具可用</b> ——
+     * 「多级 Agent 可用」在根这一层是假的。现在根按
+     * <b>Run 能力快照里的固定 release</b> 读真实定义，
+     * 与子路径<b>共用同一份装配实现</b>。
+     *
+     * <p>⚠️ <b>读不到即拒绝执行</b>：拿不到根 Agent 的模型配置 → 该 Run 不执行，
+     * 绝不回落占位模型。
+     */
+    @Bean
+    public cn.studykid.multiagent.worker.execute.RootAgentModelConfigProvider
+            rootAgentModelConfigProvider(
+            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
+            cn.studykid.multiagent.ports.persistence.AgentQueryPort agentQuery,
+            cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
+                    delegationToolSchemaAssembler) {
+        return new cn.studykid.multiagent.worker.execute.RootAgentModelConfigProvider(
+                snapshots,
+                new cn.studykid.multiagent.worker.execute.AgentModelConfigAssembler(
+                        agentQuery, closureResolver, toolDefs),
+                delegationToolSchemaAssembler);
     }
 
     /**
@@ -427,6 +468,16 @@ public class WorkerExecutionConfig {
          */
         private final cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots;
 
+        /**
+         * 根 Agent 模型配置提供器（第二十一批）。
+         *
+         * <p>⚠️ <b>可为空 = 未装配</b>：此时根路径<b>拒绝执行该 Run</b> ——
+         * 拿不到根 Agent 的模型配置时，<b>不得</b>回落硬编码占位
+         * （回落等于让「配置缺失」被伪装成「配置正常」）。
+         */
+        private final cn.studykid.multiagent.worker.execute.RootAgentModelConfigProvider
+                rootAgentModelConfigProvider;
+
         RunExecutionInputs(EffectiveConfigResolver effectiveResolver,
                            String maxCostPerRun, String maxLlmCalls, String maxSteps,
                            Map<String, ToolRiskLevel> toolRiskLevelMap,
@@ -436,10 +487,38 @@ public class WorkerExecutionConfig {
         }
 
         /**
-         * 最完整构造器（第二十批 · 增加委派工具装配）。
+         * 最完整构造器（第二十一批 · 增加根 Agent 模型配置装配）。
          *
          * @param delegationToolSchemaAssembler 委派工具 Schema 装配器（可空）
          * @param snapshots                    Run 能力快照仓储（可空）
+         * @param rootAgentModelConfigProvider 根 Agent 模型配置提供器（可空 = 拒绝执行）
+         */
+        RunExecutionInputs(EffectiveConfigResolver effectiveResolver,
+                           String maxCostPerRun, String maxLlmCalls, String maxSteps,
+                           Map<String, ToolRiskLevel> toolRiskLevelMap,
+                           Map<ToolRiskLevel, ApprovalRequirement> approvalRequiredByRisk,
+                           cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
+                                   delegationToolSchemaAssembler,
+                           cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort
+                                   snapshots,
+                           cn.studykid.multiagent.worker.execute.RootAgentModelConfigProvider
+                                   rootAgentModelConfigProvider) {
+            this.effectiveResolver = effectiveResolver;
+            this.maxCostPerRun = maxCostPerRun;
+            this.maxLlmCalls = maxLlmCalls;
+            this.maxSteps = maxSteps;
+            this.toolRiskLevelMap = toolRiskLevelMap;
+            this.approvalRequiredByRisk = approvalRequiredByRisk;
+            this.delegationToolSchemaAssembler = delegationToolSchemaAssembler;
+            this.snapshots = snapshots;
+            this.rootAgentModelConfigProvider = rootAgentModelConfigProvider;
+        }
+
+        /**
+         * 兼容构造器（第二十批形态 · 根 Agent 配置未装配）。
+         *
+         * <p>⚠️ <b>根路径会拒绝执行</b>：未装配根 Agent 模型配置提供器时，
+         * {@link #agentConfig(String, String)} 返回空 → 该 Run 不执行。
          */
         RunExecutionInputs(EffectiveConfigResolver effectiveResolver,
                            String maxCostPerRun, String maxLlmCalls, String maxSteps,
@@ -449,84 +528,45 @@ public class WorkerExecutionConfig {
                                    delegationToolSchemaAssembler,
                            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort
                                    snapshots) {
-            this.effectiveResolver = effectiveResolver;
-            this.maxCostPerRun = maxCostPerRun;
-            this.maxLlmCalls = maxLlmCalls;
-            this.maxSteps = maxSteps;
-            this.toolRiskLevelMap = toolRiskLevelMap;
-            this.approvalRequiredByRisk = approvalRequiredByRisk;
-            this.delegationToolSchemaAssembler = delegationToolSchemaAssembler;
-            this.snapshots = snapshots;
+            this(effectiveResolver, maxCostPerRun, maxLlmCalls, maxSteps,
+                    toolRiskLevelMap, approvalRequiredByRisk, delegationToolSchemaAssembler,
+                    snapshots, null);
         }
 
         /**
-         * Agent 模型配置（占位）。
+         * Agent 模型配置（<b>按 Run 装配真实定义</b> · 第二十一批）。
          *
-         * <p>⚠️ <b>L-4</b>：模型标识、提示词、<b>普通工具表</b>均为占位
-         * （真实实现须读 Agent 配置表）。
-         */
-        public RunExecutionLoop.AgentModelConfig agentConfig() {
-            return new RunExecutionLoop.AgentModelConfig(
-                    "fake-model",
-                    "你是初中数学辅导助手。请用初中生能懂的语言讲解，不要编造教材出处。",
-                    0.7d, 2048, Duration.ofSeconds(30), java.util.Map.of());
-        }
-
-        /**
-         * Agent 模型配置（<b>按 Run 装配委派工具</b> · 第二十批）。
+         * <p>⚠️ <b>修复前的真实缺陷</b>：根 Agent 的模型标识 / 提示词 /
+         * <b>普通工具表</b>此前是<b>硬编码占位</b>（{@code fake-model} +
+         * 写死的提示词 + 空工具表）。后果不是「配置不准」，而是
+         * <b>根 Agent 实际上没有任何普通工具可用</b> ——
+         * 它能看见的只有委派工具。于是「多级 Agent 可用」这句话在根这一层是假的：
+         * <b>根只能委派、不能自己干活</b>。
          *
-         * <p>⚠️ <b>为什么必须按 Run</b>：根 Agent 的身份来自
-         * <b>Run 能力快照</b>（{@code snapshot.agentId()} / {@code agentVersion()}）——
+         * <p>⚠️ <b>根 Agent 身份来自 Run 能力快照</b>：
          * 同一个租户的不同 Run 可能由不同根 Agent 执行，
-         * 按全局装配会让 A 的 Run 拿到 B 的委派目标。
+         * 按全局装配会让 A 的 Run 拿到 B 的模型与工具。
          *
-         * <p>⚠️ <b>读不到快照 → 不装配委派工具</b>（fail-closed）：
-         * 不知道根 Agent 是谁，就不知道它有没有委派能力。
+         * <p>⚠️ <b>读不到即 fail-closed</b>：拿不到根 Agent 的模型配置
+         * → 返回空 → 由调用方<b>拒绝执行该 Run</b>。
+         * 绝不回落 {@code fake-model} 占位 ——
+         * 回落等于让「配置缺失」被伪装成「配置正常」。
          *
          * @param tenantId 租户标识
          * @param runId    Run 标识
-         * @return Agent 模型配置（委派工具按根 Agent 自己的编排声明装配）
+         * @return Agent 模型配置；<b>读不到时返回空</b>（fail-closed）
          */
-        public RunExecutionLoop.AgentModelConfig agentConfig(@NonNull String tenantId,
-                                                              @NonNull String runId) {
-            RunExecutionLoop.AgentModelConfig base = agentConfig();
-            java.util.Map<String, Object> schemas = base.toolSchemas();
-            java.util.Map<String, Object> delegation =
-                    delegationToolSchema(tenantId, runId);
-            if (delegation.isEmpty()) {
-                return base;
-            }
-            java.util.Map<String, Object> merged = new java.util.LinkedHashMap<>(schemas);
-            merged.putAll(delegation);
-            return new RunExecutionLoop.AgentModelConfig(
-                    base.modelId(), base.systemPrompt(), base.temperature(),
-                    base.maxTokens(), base.timeout(), merged);
-        }
-
-        /**
-         * 装配根 Agent 的委派工具 Schema。
-         *
-         * <p>⚠️ <b>与子路径共用同一份实现</b>（{@code DelegationToolSchemaAssembler}）：
-         * 两处各写一份必然漂移，而漂移的后果是
-         * 「根能委派、子不能」（或反之）—— 那正是「两套语义」本身。
-         */
-        private java.util.Map<String, Object> delegationToolSchema(
+        public java.util.Optional<RunExecutionLoop.AgentModelConfig> agentConfig(
                 @NonNull String tenantId, @NonNull String runId) {
-            if (delegationToolSchemaAssembler == null || snapshots == null) {
-                return java.util.Map.of();
+            if (rootAgentModelConfigProvider == null) {
+                // ⚠️ 未装配根 Agent 配置提供器 → 无从知道根 Agent 的模型 → 拒绝执行。
+                log.warn("未装配根 Agent 模型配置提供器，Run 拒绝执行: run={}", runId);
+                return java.util.Optional.empty();
             }
-            cn.studykid.multiagent.core.cap.CapabilitySnapshot snapshot;
-            try {
-                snapshot = snapshots.find(tenantId, runId).orElse(null);
-            } catch (RuntimeException e) {
-                log.warn("Run 能力快照读取失败，根路径不装配委派工具: run={}", runId, e);
-                return java.util.Map.of();
-            }
-            if (snapshot == null) {
-                return java.util.Map.of();
-            }
-            return delegationToolSchemaAssembler.assemble(tenantId, snapshot.agentId(),
-                    snapshot.agentVersion());
+            return rootAgentModelConfigProvider.configFor(tenantId, runId)
+                    .map(c -> new RunExecutionLoop.AgentModelConfig(
+                            c.modelId(), c.systemPrompt(), c.temperature(),
+                            c.maxTokens(), c.timeout(), c.toolSchemas()));
         }
 
         /**
