@@ -27,7 +27,9 @@ import cn.studykid.multiagent.core.cap.ConfigPublishCommand;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.DecisionAuditEntry;
 import cn.studykid.multiagent.core.cap.ReasonCode;
+import cn.studykid.multiagent.core.orchestration.CapAgentChildRef;
 import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
+import cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
 import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
@@ -102,7 +104,7 @@ class RoutingPolicyPublishFlowTest {
                 world.tx, world.pointers, world.releases,
                 world.toolDefs, world.skillDefs, world.serverDefs, world.agentDefs,
                 world.audit, new ConfigValidationGate(), CLOCK,
-                ConfigPublishService.DEFAULT_MAX_ATTEMPTS, validator, null,
+                ConfigPublishService.DEFAULT_MAX_ATTEMPTS, validator, world.childRefs,
                 world.contracts, withPolicies ? world.routingPolicies : null);
     }
 
@@ -358,6 +360,61 @@ class RoutingPolicyPublishFlowTest {
             public List<DecisionAuditEntry> findRecentDenies(String tenantId, Instant since,
                                                              int limit) {
                 return List.of();
+            }
+        };
+
+        /**
+         * 父子关系投影端口（评审前置决策 4：存储）。
+         *
+         * <p>⚠️ <b>决策 4 之后它不再是可选的</b>：发布带子 Agent 引用的 Agent 时，
+         * 投影未装配即**拒绝发布**（fail-closed）——
+         * 关系边落不了库，「谁依赖谁」就查不出来，
+         * 影响分析与删除守卫会因此放行「被引用对象被抽走」的事故。
+         * 故本类必须装配它（此前这里是 {@code null}）。
+         */
+        final List<CapAgentChildRef> childRefRows = new ArrayList<>();
+
+        final CapAgentChildRefPort childRefs = new CapAgentChildRefPort() {
+            @Override
+            public boolean insert(CapAgentChildRef ref) {
+                boolean exists = childRefRows.stream().anyMatch(r ->
+                        r.parentAgentId().equals(ref.parentAgentId())
+                                && r.parentReleaseVersion() == ref.parentReleaseVersion()
+                                && r.childAgentId().equals(ref.childAgentId())
+                                && r.childReleaseVersion() == ref.childReleaseVersion());
+                if (exists) {
+                    return false;
+                }
+                childRefRows.add(ref);
+                return true;
+            }
+
+            @Override
+            public List<CapAgentChildRef> listByParentRelease(String tenantId, String parentAgentId,
+                                                               int parentReleaseVersion) {
+                return childRefRows.stream()
+                        .filter(r -> r.parentAgentId().equals(parentAgentId))
+                        .filter(r -> r.parentReleaseVersion() == parentReleaseVersion)
+                        .toList();
+            }
+
+            @Override
+            public List<CapAgentChildRef> listByParentAgent(String tenantId, String parentAgentId) {
+                return childRefRows.stream()
+                        .filter(r -> r.parentAgentId().equals(parentAgentId))
+                        .toList();
+            }
+
+            @Override
+            public List<CapAgentChildRef> listByChildAgent(String tenantId, String childAgentId) {
+                return childRefRows.stream()
+                        .filter(r -> r.childAgentId().equals(childAgentId))
+                        .toList();
+            }
+
+            @Override
+            public List<CapAgentChildRef> listByTenant(String tenantId) {
+                return List.copyOf(childRefRows);
             }
         };
 

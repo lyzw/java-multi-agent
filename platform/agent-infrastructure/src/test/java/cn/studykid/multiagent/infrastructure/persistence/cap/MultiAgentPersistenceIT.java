@@ -97,11 +97,25 @@ class MultiAgentPersistenceIT extends CapITBase {
     /** 建一条 cap_agent_def 行（子引用表的复合外键目标）。 */
     private String seedAgentDef(String tenantId) {
         String agentId = createAgentWithVersion(tenantId, uniqueName("it-ma-agent"), "{}", true);
+        seedAgentDefVersion(tenantId, agentId, 1);
+        return agentId;
+    }
+
+    /**
+     * 补建某个 Agent 的第 N 版定义行。
+     *
+     * <p>⚠️ <b>为什么需要它</b>：{@code cap_agent_child_ref} 的父侧外键是
+     * <b>复合</b>外键 {@code (tenant_id, parent_agent_id, parent_release)} →
+     * {@code cap_agent_def (tenant_id, agent_id, version)}。
+     * 于是「父 Agent 的第 2 版上挂的边」必须先有第 2 版定义行才写得进去 ——
+     * 少了它，插入报的是外键违约，而不是「边不存在」。
+     */
+    private void seedAgentDefVersion(String tenantId, String agentId, int version) {
         adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
-                + " VALUES ('" + tenantId + "'::uuid, '" + agentId + "'::uuid, 1, 'it agent',"
-                + " '[\"TEACHER\"]'::jsonb, '[]'::jsonb, '{}'::jsonb, 'fp-agent', now())");
-        return agentId;
+                + " VALUES ('" + tenantId + "'::uuid, '" + agentId + "'::uuid, " + version
+                + ", 'it agent', '[\"TEACHER\"]'::jsonb, '[]'::jsonb, '{}'::jsonb, 'fp-agent-"
+                + version + "', now())");
     }
 
     /** 造一条委派记录。 */
@@ -426,6 +440,77 @@ class MultiAgentPersistenceIT extends CapITBase {
 
             assertThat(childRefs.listByParentRelease(tenantB, parent, 1))
                     .as("⚠️⚠️ 租户 B 不得读到租户 A 的关系投影")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("M-7 ✅ 反查：谁声明了我（删除守卫问的正是这个问题）")
+        void inboundQueryFindsParents() {
+            String parent = seedAgentDef(tenantA);
+            String other = seedAgentDef(tenantA);
+            String child = seedAgentDef(tenantA);
+            childRefs.insert(new CapAgentChildRef(tenantA, parent, 1, child, 1, 0, true,
+                    Instant.now()));
+            childRefs.insert(new CapAgentChildRef(tenantA, other, 1, child, 1, 0, false,
+                    Instant.now()));
+
+            List<CapAgentChildRef> parents = childRefs.listByChildAgent(tenantA, child);
+            assertThat(parents)
+                    .as("⛔ 反查不到入向边：删除守卫问的正是「谁依赖我」，"
+                            + "查不到就等于放行「被引用对象被抽走」")
+                    .hasSize(2);
+            assertThat(parents.stream().map(CapAgentChildRef::parentAgentId))
+                    .containsExactlyInAnyOrder(parent, other);
+            assertThat(childRefs.listByChildAgent(tenantA, uuid()))
+                    .as("没人声明的 Agent 不得凭空有入向边")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("M-8 ✅ 反查不按子版本过滤：引用任何一版都算依赖")
+        void inboundQuerySpansChildVersions() {
+            String parent = seedAgentDef(tenantA);
+            String child = seedAgentDef(tenantA);
+            // 父引用的是子 Agent 的 **v1**；v2 未被引用
+            childRefs.insert(new CapAgentChildRef(tenantA, parent, 1, child, 1, 0, true,
+                    Instant.now()));
+
+            assertThat(childRefs.listByChildAgent(tenantA, child))
+                    .as("⚠️ 反查必须按 Agent 维度（不限版本）："
+                            + "被停用的是那个 Agent，不是某一版")
+                    .hasSize(1);
+        }
+
+        @Test
+        @DisplayName("M-9 ✅ 出向按父 Agent 聚合：跨父 release 的边都在")
+        void outboundQuerySpansParentVersions() {
+            String parent = seedAgentDef(tenantA);
+            String child = seedAgentDef(tenantA);
+            // ⚠️ 父侧外键是复合外键 → 父的第 2 版定义行必须先存在
+            seedAgentDefVersion(tenantA, parent, 2);
+            childRefs.insert(new CapAgentChildRef(tenantA, parent, 1, child, 1, 0, true,
+                    Instant.now()));
+            childRefs.insert(new CapAgentChildRef(tenantA, parent, 2, child, 1, 0, true,
+                    Instant.now()));
+
+            assertThat(childRefs.listByParentAgent(tenantA, parent))
+                    .as("⚠️ 出向必须跨父 release 聚合："
+                            + "拓扑图要呈现全部边，否则图会随版本选择而「缺边」")
+                    .hasSize(2);
+            assertThat(childRefs.listByParentAgent(tenantA, uuid())).isEmpty();
+        }
+
+        @Test
+        @DisplayName("M-10 ✅ 全量拓扑按租户返回；跨租户不可见")
+        void tenantWideTopologyIsTenantScoped() {
+            String parent = seedAgentDef(tenantA);
+            String child = seedAgentDef(tenantA);
+            childRefs.insert(new CapAgentChildRef(tenantA, parent, 1, child, 1, 0, true,
+                    Instant.now()));
+
+            assertThat(childRefs.listByTenant(tenantA)).isNotEmpty();
+            assertThat(childRefs.listByTenant(tenantB))
+                    .as("⚠️⚠️ 全量拓扑必须按租户收窄：跨租户不可见（MA-T04）")
                     .isEmpty();
         }
     }

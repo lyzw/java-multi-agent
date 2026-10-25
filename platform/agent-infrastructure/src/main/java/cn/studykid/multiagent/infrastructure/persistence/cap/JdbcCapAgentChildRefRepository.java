@@ -43,6 +43,30 @@ public class JdbcCapAgentChildRefRepository implements CapAgentChildRefPort {
             ORDER BY ordinal ASC
             """;
 
+    private static final String SQL_LIST_BY_PARENT_AGENT = """
+            SELECT tenant_id::text, parent_agent_id::text, parent_release_version,
+                   child_agent_id::text, child_release_version, ordinal, required, created_at
+            FROM cap_agent_child_ref
+            WHERE tenant_id = ?::uuid AND parent_agent_id = ?::uuid
+            ORDER BY parent_release_version ASC, ordinal ASC
+            """;
+
+    private static final String SQL_LIST_BY_CHILD = """
+            SELECT tenant_id::text, parent_agent_id::text, parent_release_version,
+                   child_agent_id::text, child_release_version, ordinal, required, created_at
+            FROM cap_agent_child_ref
+            WHERE tenant_id = ?::uuid AND child_agent_id = ?::uuid
+            ORDER BY parent_agent_id ASC, parent_release_version ASC, ordinal ASC
+            """;
+
+    private static final String SQL_LIST_BY_TENANT = """
+            SELECT tenant_id::text, parent_agent_id::text, parent_release_version,
+                   child_agent_id::text, child_release_version, ordinal, required, created_at
+            FROM cap_agent_child_ref
+            WHERE tenant_id = ?::uuid
+            ORDER BY parent_agent_id ASC, parent_release_version ASC, ordinal ASC
+            """;
+
     private final DataSource dataSource;
 
     public JdbcCapAgentChildRefRepository(@NonNull DataSource dataSource) {
@@ -80,6 +104,64 @@ public class JdbcCapAgentChildRefRepository implements CapAgentChildRefPort {
                         ps.setString(1, tenantId);
                         ps.setString(2, parentAgentId);
                         ps.setInt(3, parentReleaseVersion);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                rows.add(map(rs));
+                            }
+                        }
+                    }
+                    return rows;
+                });
+    }
+
+    @Override
+    public @NonNull List<CapAgentChildRef> listByParentAgent(@NonNull String tenantId,
+                                                              @NonNull String parentAgentId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(tenantId),
+                conn -> {
+                    List<CapAgentChildRef> rows = new ArrayList<>();
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_BY_PARENT_AGENT)) {
+                        ps.setString(1, tenantId);
+                        ps.setString(2, parentAgentId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                rows.add(map(rs));
+                            }
+                        }
+                    }
+                    return rows;
+                });
+    }
+
+    @Override
+    public @NonNull List<CapAgentChildRef> listByChildAgent(@NonNull String tenantId,
+                                                              @NonNull String childAgentId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(tenantId),
+                conn -> {
+                    List<CapAgentChildRef> rows = new ArrayList<>();
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_BY_CHILD)) {
+                        ps.setString(1, tenantId);
+                        ps.setString(2, childAgentId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                rows.add(map(rs));
+                            }
+                        }
+                    }
+                    return rows;
+                });
+    }
+
+    @Override
+    public @NonNull List<CapAgentChildRef> listByTenant(@NonNull String tenantId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(tenantId),
+                conn -> {
+                    List<CapAgentChildRef> rows = new ArrayList<>();
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_BY_TENANT)) {
+                        ps.setString(1, tenantId);
                         try (ResultSet rs = ps.executeQuery()) {
                             while (rs.next()) {
                                 rows.add(map(rs));

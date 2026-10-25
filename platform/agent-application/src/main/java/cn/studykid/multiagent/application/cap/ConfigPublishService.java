@@ -2,6 +2,7 @@ package cn.studykid.multiagent.application.cap;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -697,25 +698,50 @@ public class ConfigPublishService {
     }
 
     /**
-     * 写入父子关系投影（06 变更补充「关系数据」）。
+     * 写入父子关系投影（06 变更补充「关系数据」· 评审前置决策 4：<b>存储</b>）。
      *
      * <p>⚠️ <b>投影不是权威来源</b>：权威定义是 release 里的 {@code childAgentRefs}，
      * 本表只是把边投影出来便于查询与分析，可重建。
      *
      * <p>⚠️ 写入幂等：同一父 release 重复投影同一子 release 不产生第二行。
+     *
+     * <p>⚠️ <b>决策 4 落地：投影未装配即 fail-closed</b>（2026-10-25 · zhouwei 批准
+     * 「{@code cap_agent_child_ref} 存储」）。此前这里是
+     * {@code childRefs == null → 直接 return}（静默跳过），
+     * 后果是「Agent 声明了子 Agent、发布成功、但关系边一条没落」——
+     * <b>关系真相缺失</b>：影响分析与删除守卫都靠这张表回答
+     * 「谁依赖我」，表是空的就等于「没人依赖我」，
+     * 于是「被引用对象被抽走」的事故一路畅通。
+     * ⚠️ <b>判据是「本次发布是否带了子引用」，不是「仓储有没有装配」</b>：
+     * 没有子引用就没什么可投影（不该因此拒绝一次纯 Agent 发布），
+     * 但**带了**子引用却落不了库 = 必须拒绝。
      */
     private void projectChildRefs(@NonNull ConfigPublishCommand command, @NonNull Instant now) {
-        if (childRefs == null) {
-            return;
-        }
+        // ⚠️ 先把本次要投影的边**全部**算出来，再决定能不能落库 ——
+        //    「有没有边」与「能不能落库」是两个问题，混在一起判就会出现
+        //    「仓储没装配 → 一条边都不投影 → 看起来发布成功了」的静默失败。
+        List<CapAgentChildRef> edges = new ArrayList<>();
         for (CapAgentDef agent : command.agents()) {
             AgentOrchestration orchestration = parseOrchestration(agent);
             int ordinal = 0;
             for (ChildAgentRef ref : orchestration.childAgentRefs()) {
-                childRefs.insert(new CapAgentChildRef(command.tenantId(), agent.agentId(),
+                edges.add(new CapAgentChildRef(command.tenantId(), agent.agentId(),
                         agent.version(), ref.agentId(), ref.releaseVersion(),
                         ordinal++, ref.required(), now));
             }
+        }
+        if (edges.isEmpty()) {
+            return;
+        }
+        if (childRefs == null) {
+            throw new ConfigPublishRejectedException(ReasonCode.ORCHESTRATION_INVALID,
+                    "orchestration",
+                    "父子关系投影未装配（关系投影仓储缺失），拒绝发布带子 Agent 引用的 Agent："
+                            + "关系边落不了库，「谁依赖谁」就查不出来，"
+                            + "影响分析与删除守卫会因此放行「被引用对象被抽走」的事故");
+        }
+        for (CapAgentChildRef edge : edges) {
+            childRefs.insert(edge);
         }
     }
 
