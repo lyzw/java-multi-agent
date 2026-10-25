@@ -84,6 +84,10 @@ public enum DenySeverity {
             case MCP_OP_NOT_ALLOWED -> CRITICAL;
             case MCP_TOOL_DRIFTED -> CRITICAL;
             case RESOURCE_VERSION_MISMATCH -> CRITICAL;
+            // ⚠️ 多级 Agent：委派目标未声明 = 越出父 Agent 声明的委派边界。
+            //    这与「角色不足」同类 —— 有东西在试探边界，必须立刻看
+            //    （典型来源：路由模型被注入后指向未声明的 Agent，MA-T05）。
+            case DELEGATION_TARGET_NOT_DECLARED -> CRITICAL;
             // ⚠️ EXEC_UNKNOWN 是「副作用结果不确定」——§7.4 唯一需要进人工对账的码。
             //    它不是「没成功」，而是「不知道成没成」：自动重试会造成重复副作用，
             //    只能由人工判定。故与越权同级，不能落 INFO。
@@ -95,6 +99,18 @@ public enum DenySeverity {
             case RESOURCE_UNKNOWN -> WARNING;
             case EXEC_ADMISSION_STALE -> WARNING;
             case EXECUTION_PERSISTENCE_FAILED -> WARNING;
+            // 多级 Agent：发布期配置缺陷（未发布引用 / 成环 / 编排声明非法）
+            // 与「子 Agent 边界越界」——都需要走常规变更流程修正。
+            case AGENT_REF_NOT_PUBLISHED -> WARNING;
+            case AGENT_REF_CYCLE -> WARNING;
+            case ORCHESTRATION_INVALID -> WARNING;
+            // ⚠️ 输出契约引用未发布：与「子 Agent 引用未发布」同类 ——
+            //    都是「引用了一个还没生效的固定版本」，走常规变更流程修正。
+            case RESULT_CONTRACT_NOT_PUBLISHED -> WARNING;
+            case DELEGATION_NOT_ALLOWED -> WARNING;
+            case DELEGATION_DEPTH_EXCEEDED -> WARNING;
+            case DELEGATION_TIMEOUT -> WARNING;
+            case CHILD_RESULT_INVALID -> WARNING;
 
             // ── 业务节流与流程性拒绝：常态 ───────────────────────
             case SUCCESS -> INFO;
@@ -110,6 +126,9 @@ public enum DenySeverity {
             case IDEMPOTENCY_IN_PROGRESS -> INFO;
             case RUN_CANCELLED -> INFO;
             case TOOL_EXECUTION_FAILED -> INFO;
+            // 多级 Agent：子调用次数上限与发布 CAS 冲突都是<b>预期内</b>的节流/并发结果
+            case CHILD_INVOCATION_LIMIT_EXCEEDED -> INFO;
+            case AGENT_RELEASE_CONFLICT -> INFO;
         };
     }
 }

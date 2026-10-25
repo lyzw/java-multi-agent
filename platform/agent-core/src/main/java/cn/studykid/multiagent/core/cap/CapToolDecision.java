@@ -16,14 +16,34 @@ import org.jspecify.annotations.Nullable;
  * {@code authorizationDecision / executionDecision / executionStatus / reasonCode}
  * 必须是该次调用的<b>终态</b>，不得是中途值。
  *
+ * <p>⚠️ <b>{@code output} 是「工具结果回灌」的载体</b>：工具输出若只写进
+ * {@code result_events} 却不回传给调用方，模型就<b>看不到</b>自己刚调了什么，
+ * 多轮工具协作无法成立（子 Agent 调完工具即结束，等于工具调用无意义）。
+ * 故成功时把输出带出；<b>拒绝/失败时为空</b>（没有可回灌的结果）。
+ *
  * @param toolName    工具名（与 {@code ToolHandler.toolName()} 同源）
  * @param operationId 账本操作标识（账本登记之前为 {@code null}）
  * @param decision    四字段决策结论
+ * @param output      工具输出（成功时；<b>不可信数据</b>，回灌时须标记）
  */
 public record CapToolDecision(
         @NonNull String toolName,
         @Nullable String operationId,
-        @NonNull AuthorizationDecision decision) {
+        @NonNull AuthorizationDecision decision,
+        @Nullable String output) {
+
+    /**
+     * 兼容构造器：<b>无输出</b>的决策（拒绝 / 失败 / 未执行）。
+     *
+     * @param toolName    工具名
+     * @param operationId 账本操作标识
+     * @param decision    四字段决策结论
+     */
+    public CapToolDecision(@NonNull String toolName,
+                            @Nullable String operationId,
+                            @NonNull AuthorizationDecision decision) {
+        this(toolName, operationId, decision, null);
+    }
 
     public CapToolDecision {
         if (toolName == null || toolName.isBlank()) {
@@ -32,6 +52,13 @@ public record CapToolDecision(
         if (decision == null) {
             throw new IllegalArgumentException("decision 不能为空");
         }
+    }
+
+    /**
+     * @return 是否有可回灌的工具输出
+     */
+    public boolean hasOutput() {
+        return output != null && !output.isBlank();
     }
 
     /**

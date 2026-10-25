@@ -32,6 +32,8 @@ import org.jspecify.annotations.Nullable;
  * @param skillBundles     V1 忽略语义（预留）
  * @param capabilityTags   V1 忽略语义（预留）
  * @param overrides        收紧覆盖（仅移除/调低）
+ * @param orchestration    编排声明（JSON 文本）—— 缺省 {@code "{}"} 解析为 {@code LEAF}；
+ *                         多级 Agent v1.1 新增，<b>旧行不改写</b>（兼容读）
  * @param configFingerprint 本 Agent 定义版本的内容指纹
  * @param schemaVersion    行格式版本
  * @param createdAt        创建时间
@@ -48,11 +50,38 @@ public record CapAgentDef(
         @NonNull List<String> skillBundles,
         @NonNull List<String> capabilityTags,
         @NonNull String overrides,
+        @NonNull String orchestration,
         @NonNull String configFingerprint,
         int schemaVersion,
         @NonNull Instant createdAt,
         @Nullable Instant publishedAt
 ) {
+
+    /**
+     * 兼容构造器：<b>无编排声明</b>的 Agent 定义行（多级 Agent 之前的历史行）。
+     *
+     * <p>⚠️ 缺省 {@code "{}"} 表示「按 LEAF 解析」（MA-T01），
+     * <b>不是</b>「解析失败」也不是「不限制」——
+     * 没有编排声明的 Agent 一律不能被委派。
+     */
+    public CapAgentDef(@NonNull String tenantId,
+                       @NonNull String agentId,
+                       int version,
+                       @Nullable String name,
+                       @Nullable String description,
+                       @NonNull List<String> roles,
+                       @NonNull List<String> enabledSkills,
+                       @NonNull List<String> skillBundles,
+                       @NonNull List<String> capabilityTags,
+                       @NonNull String overrides,
+                       @NonNull String configFingerprint,
+                       int schemaVersion,
+                       @NonNull Instant createdAt,
+                       @Nullable Instant publishedAt) {
+        this(tenantId, agentId, version, name, description, roles, enabledSkills,
+                skillBundles, capabilityTags, overrides, "{}", configFingerprint,
+                schemaVersion, createdAt, publishedAt);
+    }
 
     public CapAgentDef {
         if (tenantId == null || tenantId.isBlank()) {
@@ -69,6 +98,11 @@ public record CapAgentDef(
         }
         if (overrides == null || overrides.isBlank()) {
             throw new IllegalArgumentException("overrides 不能为空");
+        }
+        if (orchestration == null || orchestration.isBlank()) {
+            // ⚠️ 空编排声明按缺省 LEAF 处理，但不能是 null/空白 ——
+            //    那说明写入路径把「没填」和「填坏了」混为一谈。
+            throw new IllegalArgumentException("orchestration 不能为空（缺省用 {} 表示 LEAF）");
         }
         roles = roles == null ? List.of() : List.copyOf(roles);
         enabledSkills = enabledSkills == null ? List.of() : List.copyOf(enabledSkills);

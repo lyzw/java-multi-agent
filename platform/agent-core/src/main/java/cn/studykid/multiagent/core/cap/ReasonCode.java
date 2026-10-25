@@ -24,6 +24,11 @@ import org.jspecify.annotations.Nullable;
  * 「幂等存储不可用 → fail-closed」与「确定失败 → 稳定失败码」。
  * 按 §5.7「变更须版本化并保持兼容策略」，此处采取<b>只追加、不改写</b>的方式补齐：
  * 已发布常量一律不改名、不复用、不改语义。三个新增码的缺口分析见各常量注释。
+ *
+ * <p>⚠️ <b>多级 Agent 又追加了八个常量</b>（{@code AGENT_REF_NOT_PUBLISHED} 起）：
+ * 覆盖发布闭包判定（未发布引用 / 环 / CAS 冲突）与运行期委派判定
+ * （深度、次数、目标未声明、不允许委派、输出契约违约）。
+ * 同样遵循「只追加、不改写」策略。
  */
 public enum ReasonCode {
 
@@ -161,7 +166,108 @@ public enum ReasonCode {
      * 会把「确定失败」误报成「结果不确定」并凭空造出待对账的幽灵操作
      * （§5.1 明令 UNKNOWN 仅表示副作用结果不确定）。
      */
-    TOOL_EXECUTION_FAILED("执行后");
+    TOOL_EXECUTION_FAILED("执行后"),
+
+    // ── 多级 Agent 追加（v1.1 · §5.7 兼容策略下的向后兼容新增）────────
+    // ⚠️ 同样遵循「只追加、不改写」：已发布常量一律不改名、不复用、不改语义。
+    //    下列码覆盖多级 Agent 的发布闭包与运行期委派判定（06/07 变更补充）。
+
+    /**
+     * 子 Agent 引用指向<b>未发布</b>的版本（发布期拒绝）。
+     *
+     * <p>MA-T02：「子 Agent 引用 latest/未发布版本 → 拒绝发布」。
+     * ⚠️ 与 {@link #RESOURCE_UNKNOWN}（引用根本不存在）严格区分：
+     * 前者是「存在但没发布」，后者是「查不到」。运维处置方向不同 ——
+     * 后者查引用数据，前者查发布流程。
+     */
+    AGENT_REF_NOT_PUBLISHED("发布期"),
+
+    /**
+     * 子 Agent 引用形成<b>环</b>（自环或间接环）。
+     *
+     * <p>MA-T03：「自环、间接环、超过静态深度 → 拒绝发布并给稳定 reasonCode」。
+     * ⚠️ 环必须在<b>发布期</b>拦住：运行期才发现环，意味着已经在无限递归里烧预算了。
+     */
+    AGENT_REF_CYCLE("发布期"),
+
+    /**
+     * 超出最大委派深度（静态闭包深度或运行期深度上限）。
+     *
+     * <p>MA-T09：「超深度、超调用数、超时、预算耗尽 → 在新增子调用前拒绝」。
+     */
+    DELEGATION_DEPTH_EXCEEDED("A"),
+
+    /**
+     * 超出最大子调用次数。
+     *
+     * <p>⚠️ 计数范围是<b>整棵调用树共享</b>的 Run 级上限（MA-T17），
+     * 不是单个 Agent 的局部计数 —— 否则嵌套 Agent 可以把额度重置。
+     */
+    CHILD_INVOCATION_LIMIT_EXCEEDED("A"),
+
+    /**
+     * 委派目标<b>未在</b>父 Agent 的 {@code childAgentRefs} 中声明。
+     *
+     * <p>MA-T05：「模型输出未声明目标 Agent → 拒绝委派，不触发子执行」。
+     * ⚠️ 这是路由模型的<b>候选输出</b>被服务端否决的稳定码，
+     * 与「声明了但无权」是两件事。
+     */
+    DELEGATION_TARGET_NOT_DECLARED("A"),
+
+    /**
+     * 父 Agent 不允许委派（LEAF 模式或未声明编排）。
+     *
+     * <p>⚠️ 缺省等价于 LEAF（MA-T01）：没有编排声明的 Agent 一律不得被委派，
+     * 不能因为「没配置」就当成「没限制」。
+     */
+    DELEGATION_NOT_ALLOWED("A"),
+
+    /**
+     * 发布并发冲突（CAS 失败）。
+     *
+     * <p>06「发布闭包算法」第 5 条：「通过 CAS 更新发布指针；并发修改冲突返回
+     * {@code RELEASE_CONFLICT}」。
+     */
+    AGENT_RELEASE_CONFLICT("发布期"),
+
+    /**
+     * 子 Agent 输出<b>不符合</b>声明的输出契约。
+     *
+     * <p>MA-T16：「子 Agent 输出不符合声明 Schema → 不作为成功结果交给父 Agent」。
+     * ⚠️ 与 {@link #PARAM_SCHEMA_FAIL}（入参结构校验失败）分开：
+     * 前者是<b>跨 Agent 边界</b>的结果契约违约，后者是入参不合法。
+     */
+    CHILD_RESULT_INVALID("A"),
+
+    /**
+     * 编排声明本身<b>非法</b>（配置缺陷）。
+     *
+     * <p>⚠️ 与「缺少 {@code orchestration} 字段」严格区分：缺字段按 LEAF 兼容读
+     * （MA-T01），而<b>字段存在但内容非法</b>（未知模式、latest 版本、LEAF 却带子引用）
+     * 是配置缺陷 —— 不得降级成 LEAF 照常发布，那会让作者以为多级已生效、
+     * 实际所有委派被静默丢弃。
+     */
+    ORCHESTRATION_INVALID("发布期"),
+
+    /**
+     * 委派链路<b>超时</b>（剩余时间耗尽或与本级预算不一致）。
+     *
+     * <p>MA-T09：「超深度、超调用数、超时、预算耗尽 → 在新增子调用前拒绝」。
+     * ⚠️ 与 {@link #TOOL_EXECUTION_FAILED} 严格区分：委派超时发生在<b>子执行启动前</b>，
+     * 没有任何副作用发生；把它报成执行失败会凭空造出待对账的幽灵操作。
+     */
+    DELEGATION_TIMEOUT("A"),
+
+    /**
+     * 输出契约引用指向<b>未发布</b>的版本（发布期拒绝）。
+     *
+     * <p>⚠️ 与 {@link #AGENT_REF_NOT_PUBLISHED}（子 Agent 引用未发布）分列：
+     * 二者的<b>被引用对象</b>不同（子 Agent 定义行 vs 输出契约定义行），
+     * 排查方向也不同（前者查 Agent 发布流程，后者查契约登记流程）。
+     * ⚠️ 与 {@link #RESOURCE_UNKNOWN}（契约根本不存在）也分列：
+     * 「存在但没发布」查发布流程，「查不到」查引用数据。
+     */
+    RESULT_CONTRACT_NOT_PUBLISHED("发布期");
 
     private final String phase;
 

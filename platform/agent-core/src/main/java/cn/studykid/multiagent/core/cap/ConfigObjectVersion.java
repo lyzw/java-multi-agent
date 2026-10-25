@@ -32,6 +32,16 @@ public record ConfigObjectVersion(@NonNull String type, @NonNull String id, int 
     /** Agent 类型标识（租户级对象）。 */
     public static final String TYPE_AGENT = "agent";
 
+    /**
+     * 输出契约类型标识（租户级对象 · 多级 Agent v1.1）。
+     *
+     * <p>⚠️ <b>必须独立成一个 type</b>：契约与 Agent 的 id 命名空间相互独立
+     * （一个名为 {@code "profile"} 的契约与一个名为 {@code "profile"} 的 Agent 可以并存）。
+     * 沿用 {@code TYPE_AGENT} 会让「Agent 的 id」解析成「同名契约的版本」——
+     * 与 {@code TYPE_TOOL} 同构的静默越权路径。
+     */
+    public static final String TYPE_RESULT_CONTRACT = "result_contract";
+
     public ConfigObjectVersion {
         if (type == null || type.isBlank()) {
             throw new IllegalArgumentException("type 不能为空");
@@ -78,5 +88,14 @@ public record ConfigObjectVersion(@NonNull String type, @NonNull String id, int 
      */
     public static @NonNull ConfigObjectVersion agent(@NonNull String id, int version) {
         return new ConfigObjectVersion(TYPE_AGENT, id, version);
+    }
+
+    /**
+     * @param id      对象逻辑 id
+     * @param version 版本号
+     * @return 输出契约引用
+     */
+    public static @NonNull ConfigObjectVersion resultContract(@NonNull String id, int version) {
+        return new ConfigObjectVersion(TYPE_RESULT_CONTRACT, id, version);
     }
 }

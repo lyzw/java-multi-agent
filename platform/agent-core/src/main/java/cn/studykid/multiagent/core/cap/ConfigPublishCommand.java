@@ -35,6 +35,7 @@ import org.jspecify.annotations.Nullable;
  * @param mcpServers           本次发布的 MCP Server 版本行
  * @param agents               本次发布的 Agent 版本行（仅 TENANT 作用域）
  * @param effectiveAt          生效时间
+ * @param resultContracts      本次发布的输出契约版本行（仅 TENANT 作用域 · 多级 Agent v1.1）
  */
 public record ConfigPublishCommand(
         ConfigRelease.@NonNull Scope scope,
@@ -47,7 +48,30 @@ public record ConfigPublishCommand(
         @NonNull List<CapSkillDef> skills,
         @NonNull List<CapMcpServerDef> mcpServers,
         @NonNull List<CapAgentDef> agents,
-        @Nullable Instant effectiveAt) {
+        @Nullable Instant effectiveAt,
+        @NonNull List<CapResultContractDef> resultContracts) {
+
+    /**
+     * 兼容构造器：<b>无输出契约</b>的发布命令（多级 Agent 之前的形态）。
+     *
+     * <p>⚠️ 缺省 = <b>本次发布不含契约</b>，不是「契约随意」——
+     * 命令里没有契约就没有契约可发布，Agent 的 {@code resultContractRef}
+     * 只能指向**此前已发布**的契约。
+     */
+    public ConfigPublishCommand(ConfigRelease.@NonNull Scope scope,
+                                 @Nullable String tenantId,
+                                 @Nullable Long expectedPublishSeq,
+                                 @Nullable String requesterId,
+                                 @Nullable String approverId,
+                                 @Nullable String aggregateFingerprint,
+                                 @NonNull List<CapToolDef> tools,
+                                 @NonNull List<CapSkillDef> skills,
+                                 @NonNull List<CapMcpServerDef> mcpServers,
+                                 @NonNull List<CapAgentDef> agents,
+                                 @Nullable Instant effectiveAt) {
+        this(scope, tenantId, expectedPublishSeq, requesterId, approverId, aggregateFingerprint,
+                tools, skills, mcpServers, agents, effectiveAt, List.of());
+    }
 
     public ConfigPublishCommand {
         if (scope == null) {
@@ -66,6 +90,7 @@ public record ConfigPublishCommand(
         skills = skills == null ? List.of() : List.copyOf(skills);
         mcpServers = mcpServers == null ? List.of() : List.copyOf(mcpServers);
         agents = agents == null ? List.of() : List.copyOf(agents);
+        resultContracts = resultContracts == null ? List.of() : List.copyOf(resultContracts);
     }
 
     /**
@@ -86,6 +111,11 @@ public record ConfigPublishCommand(
         for (CapAgentDef agent : agents) {
             refs.add(ConfigObjectVersion.agent(agent.agentId(), agent.version()));
         }
+        // ⚠️ 契约必须进发布头：发布头是「这次发布了哪些精确版本」的权威清单。
+        //    契约不在清单里 → 回滚/追溯时无法确定「当时生效的是哪份 Schema」。
+        for (CapResultContractDef contract : resultContracts) {
+            refs.add(ConfigObjectVersion.resultContract(contract.contractId(), contract.version()));
+        }
         return List.copyOf(refs);
     }
 
@@ -93,7 +123,8 @@ public record ConfigPublishCommand(
      * @return 本次发布涉及的对象总数
      */
     public int objectCount() {
-        return tools.size() + skills.size() + mcpServers.size() + agents.size();
+        return tools.size() + skills.size() + mcpServers.size() + agents.size()
+                + resultContracts.size();
     }
 
     /**
