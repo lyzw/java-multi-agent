@@ -1006,6 +1006,21 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 路由策略提供端口（多级 Agent v1.1 第十四批 · MA-T05 / MA-T15）。
+     *
+     * <p>⚠️ <b>只认已发布的固定版本</b>：引用 {@code id@version} 解析不到
+     * 已发布策略时返回 {@code null}，调用方按 fail-closed 拒绝这次委派
+     * （{@code ROUTING_POLICY_UNAVAILABLE}）——
+     * 「策略写了却无法应用」等于策略没生效。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.orchestration.RoutingPolicyProvider routingPolicyProvider(
+            cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort policies) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcRoutingPolicyProvider(policies);
+    }
+
+    /**
      * 委派执行器（多级 Agent v1.1 · P2-MA-01）。
      *
      * <p>⚠️ <b>子执行端口必须显式指定 {@code childAgentRunner}</b>：
@@ -1027,10 +1042,14 @@ public class ApplicationConfiguration {
             @org.springframework.beans.factory.annotation.Qualifier("childAgentRunner")
             cn.studykid.multiagent.ports.orchestration.ChildAgentRunner childRunner,
             cn.studykid.multiagent.ports.orchestration.ResultContractProvider contracts,
+            cn.studykid.multiagent.ports.orchestration.RoutingPolicyProvider routingPolicies,
             java.time.Clock clock) {
+        // ⚠️ 路由策略提供端口必须注入（第十四批）：
+        //    未装配时 ROUTER 模式的委派一律 fail-closed（ROUTING_POLICY_UNAVAILABLE），
+        //    绝不降级成「按父声明的子 Agent 随便选一个」。
         return new cn.studykid.multiagent.application.orchestration.DelegationExecutor(
                 guard, agentDefs, closureResolver, snapshots, authzVersions, invocations,
-                childRunner, contracts, clock);
+                childRunner, contracts, routingPolicies, clock);
     }
 
     /**

@@ -16,6 +16,7 @@ import cn.studykid.multiagent.application.cap.ClosureResolutionException;
 import cn.studykid.multiagent.application.cap.ClosureResolver;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
+import cn.studykid.multiagent.core.cap.CapRoutingPolicyDef;
 import cn.studykid.multiagent.core.cap.ExecutionScope;
 import cn.studykid.multiagent.core.cap.ReasonCode;
 import cn.studykid.multiagent.core.orchestration.AgentInvocation;
@@ -23,9 +24,12 @@ import cn.studykid.multiagent.core.orchestration.AgentInvocationStatus;
 import cn.studykid.multiagent.core.orchestration.AgentOrchestration;
 import cn.studykid.multiagent.core.orchestration.ChildAgentRef;
 import cn.studykid.multiagent.core.orchestration.DelegationFailurePolicy;
+import cn.studykid.multiagent.core.orchestration.OrchestrationMode;
+import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.orchestration.ChildAgentRunner;
 import cn.studykid.multiagent.ports.orchestration.ResultContractProvider;
+import cn.studykid.multiagent.ports.orchestration.RoutingPolicyProvider;
 import cn.studykid.multiagent.ports.persistence.AgentInvocationPort;
 import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
@@ -67,8 +71,17 @@ public class DelegationExecutor {
     private final AgentInvocationPort invocations;
     private final ChildAgentRunner runner;
     private final ResultContractProvider contracts;
+    private final RoutingPolicyProvider routingPolicies;
     private final Clock clock;
 
+    /**
+     * 兼容构造器：<b>无路由策略能力</b>（第十四批之前的形态）。
+     *
+     * <p>⚠️ 此构造器下 <b>ROUTER 模式的委派一律 fail-closed</b>
+     * （{@code ROUTING_POLICY_UNAVAILABLE}）—— 这是刻意的：
+     * 「没有策略能力却让 ROUTER 照常委派」等于让
+     * 「路由策略写了但没生效」变成常态，而外部观察不到任何差异。
+     */
     public DelegationExecutor(@NonNull DelegationGuard guard,
                               @NonNull CapAgentDefPort agentDefs,
                               @NonNull ClosureResolver closureResolver,
@@ -78,6 +91,28 @@ public class DelegationExecutor {
                               @NonNull ChildAgentRunner runner,
                               @NonNull ResultContractProvider contracts,
                               @NonNull Clock clock) {
+        this(guard, agentDefs, closureResolver, snapshots, authzVersions, invocations, runner,
+                contracts, null, clock);
+    }
+
+    /**
+     * 最完整构造器（多级 Agent v1.1 第十四批）：额外注入路由策略提供端口。
+     *
+     * <p>⚠️ {@code routingPolicies} 为 {@code null} 表示「路由策略能力未装配」：
+     * 此时 ROUTER 模式的委派 <b>fail-closed</b>，绝不降级成
+     * 「按父声明的子 Agent 随便选一个」——
+     * 那会让「路由策略写了但没生效」变成常态，且外部观察不到任何差异。
+     */
+    public DelegationExecutor(@NonNull DelegationGuard guard,
+                              @NonNull CapAgentDefPort agentDefs,
+                              @NonNull ClosureResolver closureResolver,
+                              @NonNull CapabilitySnapshotPort snapshots,
+                              @NonNull AuthzVersionPort authzVersions,
+                              @NonNull AgentInvocationPort invocations,
+                              @NonNull ChildAgentRunner runner,
+                              @NonNull ResultContractProvider contracts,
+                              @Nullable RoutingPolicyProvider routingPolicies,
+                              @NonNull Clock clock) {
         this.guard = guard;
         this.agentDefs = agentDefs;
         this.closureResolver = closureResolver;
@@ -86,7 +121,101 @@ public class DelegationExecutor {
         this.invocations = invocations;
         this.runner = runner;
         this.contracts = contracts;
+        this.routingPolicies = routingPolicies;
         this.clock = clock;
+    }
+
+    /**
+     * 路由选择结果（第十四批）。
+     *
+     * @param targetAgentId 实际生效的目标 Agent 标识（被拒时为 {@code null}）
+     * @param reasonCode    被拒时的原因码（被拒时非空）
+     */
+    private record RoutingSelection(@Nullable String targetAgentId,
+                                    @Nullable ReasonCode reasonCode) {
+
+        static @NonNull RoutingSelection selected(@NonNull String targetAgentId) {
+            return new RoutingSelection(targetAgentId, null);
+        }
+
+        static @NonNull RoutingSelection rejected(@NonNull ReasonCode reasonCode) {
+            return new RoutingSelection(null, reasonCode);
+        }
+
+        boolean rejected() {
+            return reasonCode != null;
+        }
+    }
+
+    /**
+     * 按路由策略选择实际生效的委派目标（第十四批 · MA-T05 / MA-T15）。
+     *
+     * <p>⚠️ <b>这是 ROUTER 模式的准入前提，缺一不可</b>：
+     * <ol>
+     *   <li><b>策略必须取得到</b>：取不到（不存在 / 未发布 / 读失败 / 能力未装配）
+     *       → {@code ROUTING_POLICY_UNAVAILABLE}，fail-closed。
+     *       绝不降级成「按父声明的子 Agent 随便选一个」——
+     *       那会让「路由策略写了但没生效」变成常态，而外部观察不到任何差异；</li>
+     *   <li><b>候选必须落在策略允许的目标集合内</b>：
+     *       {@code EXPLICIT_TARGETS} 下不命中即拒绝
+     *       （{@code ROUTING_TARGET_NOT_ALLOWED}）；
+     *       {@code ORDERED_FALLBACK} 下不命中则按声明顺序降级到第一个目标。</li>
+     * </ol>
+     *
+     * <p>⚠️ <b>降级只作用于「选择」，不作用于「准入」</b>：
+     * 降级选中的目标仍须通过「父声明包含 → 版本固定 → 逐跳授权 →
+     * 深度/次数/超时/预算」的全部判定（由调用方在返回后继续执行）。
+     * 任何一项不通过就是失败，<b>不会</b>继续尝试下一个候选 ——
+     * 逐个试下去会让「一次委派」变成「一串委派」，次数与预算的上限被绕过。
+     *
+     * @param tenantId          租户标识
+     * @param orchestration     父 Agent 的编排声明
+     * @param candidateAgentId  模型给出的候选目标标识
+     * @return 选择结果（被拒时带稳定原因码）
+     */
+    private @NonNull RoutingSelection selectByRoutingPolicy(
+            @NonNull String tenantId,
+            @NonNull AgentOrchestration orchestration,
+            @NonNull String candidateAgentId) {
+        String policyRef = orchestration.routingPolicyRef();
+        if (policyRef == null || policyRef.isBlank()) {
+            // ⚠️ ROUTER 必带策略引用 —— 编排构造期与解析期都已强制。
+            //    走到这里说明配置层坏了，一律 fail-closed。
+            log.error("ROUTER 编排声明缺少 routingPolicyRef，fail-closed: policy={}",
+                    policyRef);
+            return RoutingSelection.rejected(ReasonCode.ROUTING_POLICY_UNAVAILABLE);
+        }
+        if (routingPolicies == null) {
+            // ⚠️ 能力未装配 → 显式告警 + fail-closed，绝不静默降级。
+            log.error("路由策略能力未装配，ROUTER 委派 fail-closed: policy={}", policyRef);
+            return RoutingSelection.rejected(ReasonCode.ROUTING_POLICY_UNAVAILABLE);
+        }
+        CapRoutingPolicyDef policy;
+        try {
+            policy = routingPolicies.policyFor(tenantId, policyRef);
+        } catch (RuntimeException e) {
+            // ⚠️ 读失败 ≠ 「没有策略」：无法证明「这条委派符合路由规则」→ fail-closed。
+            log.error("路由策略读取失败，fail-closed: policy={}", policyRef, e);
+            return RoutingSelection.rejected(ReasonCode.ROUTING_POLICY_UNAVAILABLE);
+        }
+        if (policy == null) {
+            log.warn("路由策略不可用（不存在 / 未发布），fail-closed: policy={}", policyRef);
+            return RoutingSelection.rejected(ReasonCode.ROUTING_POLICY_UNAVAILABLE);
+        }
+        if (policy.allows(candidateAgentId)) {
+            return RoutingSelection.selected(candidateAgentId);
+        }
+        if (policy.strategy() == RoutingStrategy.ORDERED_FALLBACK) {
+            // ⚠️ 降级目标是策略作者**显式写下**的已发布固定版本配置，不是运行期推断的结果
+            //    → 降级后的委派仍然可复核（MA-T05 / MA-T15）。
+            String fallback = policy.targets().get(0);
+            log.info("路由候选未命中策略允许集，按 ORDERED_FALLBACK 降级: candidate={},"
+                    + " fallback={}, policy={}", candidateAgentId, fallback, policyRef);
+            return RoutingSelection.selected(fallback);
+        }
+        log.info("路由候选未命中策略允许集，拒绝委派: candidate={}, policy={}, allowed={}",
+                candidateAgentId, policyRef, policy.targets());
+        return RoutingSelection.rejected(ReasonCode.ROUTING_TARGET_NOT_ALLOWED);
     }
 
     /**
@@ -234,18 +363,55 @@ public class DelegationExecutor {
             return DelegationOutcome.denied(ReasonCode.DELEGATION_NOT_ALLOWED,
                     command.invocationId());
         }
-        Optional<ChildAgentRef> declared = orchestration.child(command.targetAgentId());
-        if (declared.isEmpty()) {
+        // ── 3.1 委派拓扑：候选目标必须在父的声明内（MA-T05）──────────────
+        //    ⚠️ <b>拓扑检查必须先于路由收窄</b>：两者是「两层收窄」，先后顺序决定
+        //    原因码的精确性。策略允许集是拓扑的**子集**（发布期强制），
+        //    若先判路由，「越出委派边界」会被报成「越出路由允许集」，
+        //    MA-T05 既有语义（DELEGATION_TARGET_NOT_DECLARED = 越界试探）就被改写了。
+        Optional<ChildAgentRef> candidateDeclared = orchestration.child(command.targetAgentId());
+        if (candidateDeclared.isEmpty()) {
             // ⚠️ 模型给出的目标不在父的声明内 → 拒绝，且**不触发子执行**（MA-T05）
             log.info("委派目标未声明: parent={}, target={}", parent.agentId(),
                     command.targetAgentId());
             return DelegationOutcome.denied(ReasonCode.DELEGATION_TARGET_NOT_DECLARED,
                     command.invocationId());
         }
+        // ── 3.2 ROUTER：按路由策略收窄候选目标（第十四批 · MA-T05）──────
+        //    ⚠️ 这是 ROUTER 与其它模式**唯一的运行期差别**：
+        //    此前三种模式的行为完全相同，routingPolicyRef 是纯悬空引用。
+        //    现在 ROUTER 的委派必须落在**路由策略允许的目标集合**内 ——
+        //    策略是「委派拓扑之内的一层收窄」，不是拓扑的替代品。
+        String effectiveTargetId = command.targetAgentId();
+        if (orchestration.mode() == OrchestrationMode.ROUTER) {
+            RoutingSelection selection = selectByRoutingPolicy(command.tenantId(), orchestration,
+                    effectiveTargetId);
+            if (selection.rejected()) {
+                // ⚠️ 策略不可用 / 候选越出允许集 → 拒绝且**不触发子执行**。
+                return DelegationOutcome.denied(selection.reasonCode(),
+                        command.invocationId());
+            }
+            effectiveTargetId = selection.targetAgentId();
+        }
+        // ⚠️ 降级后的目标仍须落在**父的委派拓扑**内：
+        //    降级只作用于「选择」，不作用于「准入」——
+        //    策略里藏一个父根本没打算交给谁的目标，是配置错误，不是运行期该默默接受的事。
+        Optional<ChildAgentRef> declared = candidateDeclared;
+        if (!effectiveTargetId.equals(command.targetAgentId())) {
+            declared = orchestration.child(effectiveTargetId);
+            if (declared.isEmpty()) {
+                log.info("路由降级目标不在父的声明内: parent={}, target={}", parent.agentId(),
+                        effectiveTargetId);
+                return DelegationOutcome.denied(ReasonCode.DELEGATION_TARGET_NOT_DECLARED,
+                        command.invocationId());
+            }
+        }
         int targetVersion = declared.get().releaseVersion();
         if (command.targetAgentVersion() != null
                 && command.targetAgentVersion() != targetVersion) {
-            // ⚠️ 调用方要求的版本与父声明的固定版本不一致 → 拒绝（防漂移）
+            // ⚠️ 调用方要求的版本与父声明的固定版本不一致 → 拒绝（防漂移）。
+            //    ⚠️ 降级后目标变了，调用方钉的版本自然对不上 → 这里同样拒绝：
+            //    「调用方说好的版本」与「实际要跑的目标」必须一致，
+            //    否则钉版本这件事在降级路径上就形同虚设。
             return DelegationOutcome.denied(ReasonCode.RESOURCE_VERSION_MISMATCH,
                     command.invocationId());
         }
@@ -261,7 +427,9 @@ public class DelegationExecutor {
         try {
             verdict = guard.evaluateWithBudget(new DelegationGuard.DelegationRequest(
                     context, command.runId(), parent.agentId(), parent.agentVersion(),
-                    command.targetAgentId(), targetVersion,
+                    // ⚠️ 授权的是**实际生效的目标**（可能经路由策略降级后与模型候选不同），
+                    //    不是模型给出的候选 —— 否则降级路径等于「授权了一个没被审的目标」。
+                    effectiveTargetId, targetVersion,
                     childDepth, soFar, command.remainingMillis()));
         } catch (RuntimeException e) {
             // ⚠️ 守卫内部异常（如父定义读取失败）→ fail-closed，且**不得**让异常
@@ -286,8 +454,8 @@ public class DelegationExecutor {
         ExecutionScope scope;
         try {
             var childClosure = closureResolver.resolve(command.tenantId(),
-                    command.targetAgentId(), targetVersion);
-            scope = new ExecutionScope(command.targetAgentId(), targetVersion,
+                    effectiveTargetId, targetVersion);
+            scope = new ExecutionScope(effectiveTargetId, targetVersion,
                     ClosureFingerprint.of(childClosure));
         } catch (ClosureResolutionException e) {
             return DelegationOutcome.denied(e.reasonCode(), command.invocationId());
@@ -304,7 +472,9 @@ public class DelegationExecutor {
                 command.parentInvocationId(),
                 parent.agentId(),
                 parent.agentVersion(),
-                command.targetAgentId(),
+                // ⚠️ 记录里写**实际生效**的目标：委派记录是「谁真的被调用了」的权威事实，
+                //    写模型候选等于让审计看到一份「并非事实」的委派。
+                effectiveTargetId,
                 targetVersion,
                 AgentInvocationStatus.RUNNING,
                 childDepth,
@@ -341,7 +511,10 @@ public class DelegationExecutor {
             result = runner.run(new ChildAgentRunner.ChildAgentRequest(
                     command.tenantId(), command.runId(), command.invocationId(),
                     command.traceId(), parent.agentId(), parent.agentVersion(),
-                    command.targetAgentId(), targetVersion,
+                    // ⚠️ 委派记录与子执行都用**实际生效的目标**：
+                    //    记录里写的是「真正跑了的那个 Agent」，
+                    //    否则审计看到的会是模型候选而非事实。
+                    effectiveTargetId, targetVersion,
                     command.input(), childDepth, scope,
                     // ⚠️ 逐跳下传的是**有效预算**（min(根 Run 剩余, 本级 timeout)），
                     //    不是本级声明值：子执行据此实施**墙钟截止时间**，
