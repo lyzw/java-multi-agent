@@ -22,6 +22,7 @@ import cn.studykid.multiagent.core.cap.CapObjectType;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.CapToolKind;
+import cn.studykid.multiagent.core.cap.ConfigLifecycleState;
 import cn.studykid.multiagent.core.cap.ConfigObjectVersion;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
 import cn.studykid.multiagent.core.cap.CapabilityRiskLevel;
@@ -316,6 +317,35 @@ final class CapFixture {
     }
 
     /**
+     * 登记一个输出契约定义行（<b>显式指定生命周期状态</b> · 第二十五批 A5）。
+     *
+     * <p>⚠️ <b>为什么需要显式指定</b>：「已停用」是发布期引用校验的一道防线，
+     * 而「停用」在数据上就是 {@code lifecycle_state = 'DEPRECATED'}。
+     * 若夹具造不出这一态，那条防线就<b>永远测不到</b> ——
+     * 用例会「测了一个不存在的正确性」。
+     *
+     * @param tenantId       租户标识
+     * @param contractId     契约标识
+     * @param version        契约版本号
+     * @param schemaJson     契约定义（JSON Schema 文本）
+     * @param published      是否已发布
+     * @param lifecycleState 生命周期状态（{@code null} = 未记录）
+     * @return 本夹具
+     */
+    @NonNull CapFixture withContract(@NonNull String tenantId, @NonNull String contractId,
+                                     int version, @NonNull String schemaJson, boolean published,
+                                     @Nullable ConfigLifecycleState lifecycleState) {
+        resultContracts.put(tenantId + "/" + contractId + "@" + version,
+                new CapResultContractDef(
+                tenantId, contractId, version, schemaJson,
+                "fp-contract-" + contractId + "-" + version, 1,
+                Instant.EPOCH,
+                published ? Instant.EPOCH : null,
+                lifecycleState));
+        return this;
+    }
+
+    /**
      * 登记一个路由策略定义行。
      *
      * @param tenantId  租户标识
@@ -329,12 +359,32 @@ final class CapFixture {
     @NonNull CapFixture withRoutingPolicy(@NonNull String tenantId, @NonNull String policyId,
                                           int version, @NonNull RoutingStrategy strategy,
                                           @NonNull List<String> targets, boolean published) {
+        return withRoutingPolicy(tenantId, policyId, version, strategy, targets, published, null);
+    }
+
+    /**
+     * 登记一个路由策略定义行（<b>显式指定生命周期状态</b> · 第二十五批 A5）。
+     *
+     * @param tenantId       租户标识
+     * @param policyId       策略标识
+     * @param version        策略版本号
+     * @param strategy       路由策略
+     * @param targets        有序目标列表
+     * @param published      是否已发布
+     * @param lifecycleState 生命周期状态（{@code null} = 未记录）
+     * @return 本夹具
+     */
+    @NonNull CapFixture withRoutingPolicy(@NonNull String tenantId, @NonNull String policyId,
+                                          int version, @NonNull RoutingStrategy strategy,
+                                          @NonNull List<String> targets, boolean published,
+                                          @Nullable ConfigLifecycleState lifecycleState) {
         routingPolicies.put(tenantId + "/" + policyId + "@" + version,
                 new CapRoutingPolicyDef(
                 tenantId, policyId, version, strategy, targets,
                 "fp-policy-" + policyId + "-" + version, 1,
                 Instant.EPOCH,
-                published ? Instant.EPOCH : null));
+                published ? Instant.EPOCH : null,
+                lifecycleState));
         return this;
     }
 

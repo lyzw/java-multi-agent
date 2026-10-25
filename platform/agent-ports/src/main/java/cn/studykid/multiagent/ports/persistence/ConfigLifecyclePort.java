@@ -25,8 +25,9 @@ public interface ConfigLifecyclePort {
     /**
      * 迁移对象版本行的生命周期状态。
      *
-     * @param type        对象类型标识（{@code tool} / {@code skill} / {@code mcp_server} / {@code agent}）
-     * @param tenantId    租户标识；仅 {@code agent} 需要
+     * @param type        对象类型标识（{@code tool} / {@code skill} / {@code mcp_server} /
+     *                     {@code agent} / {@code result_contract} / {@code routing_policy}）
+     * @param tenantId    租户标识；租户级对象（agent / result_contract / routing_policy）需要
      * @param objectId    对象逻辑 id
      * @param version     版本号
      * @param expectedFrom 期望的原状态（CAS 前置条件）
@@ -43,8 +44,8 @@ public interface ConfigLifecyclePort {
     /**
      * 读取对象版本行当前的生命周期状态。
      *
-     * @param type     对象类型标识
-     * @param tenantId 租户标识；仅 {@code agent} 需要
+     * @param type     对象类型标识（见 {@link #transition}）
+     * @param tenantId 租户标识；租户级对象（agent / result_contract / routing_policy）需要
      * @param objectId 对象逻辑 id
      * @param version  版本号
      * @return 当前状态；对象不存在时为 {@link Optional#empty()}

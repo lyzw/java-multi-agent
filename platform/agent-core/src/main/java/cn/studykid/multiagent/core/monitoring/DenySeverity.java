@@ -119,6 +119,12 @@ public enum DenySeverity {
             // ⚠️ 路由策略引用未发布（第十四批）：与「输出契约引用未发布」同类 ——
             //    都是「引用了一个还没生效的固定版本」，走常规变更流程修正。
             case ROUTING_POLICY_NOT_PUBLISHED -> WARNING;
+            // ⚠️ 输出契约 / 路由策略**已停用**（第二十五批）：与「引用未发布」同类 ——
+            //    都是「发布期的配置缺陷」，走常规变更流程修正。
+            //    ⚠️ 与「未发布」必须分档到<b>不同原因码</b>（不是不同档位）：
+            //    两者排查方向相反（查发布流程 vs 查停用记录），分档相同、码不同。
+            case RESULT_CONTRACT_DEPRECATED -> WARNING;
+            case ROUTING_POLICY_DEPRECATED -> WARNING;
             case DELEGATION_NOT_ALLOWED -> WARNING;
             case DELEGATION_DEPTH_EXCEEDED -> WARNING;
             case DELEGATION_TIMEOUT -> WARNING;

@@ -12,11 +12,13 @@ import java.util.Set;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 import cn.studykid.multiagent.core.cap.CapRoutingPolicyDef;
+import cn.studykid.multiagent.core.cap.ConfigLifecycleState;
 import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
@@ -57,14 +59,16 @@ public class JdbcCapRoutingPolicyRepository implements CapRoutingPolicyPort {
 
     private static final String SQL_FIND = """
             SELECT tenant_id::text, policy_id::text, version, strategy, targets::text,
-                   config_fingerprint, schema_version, created_at, published_at
+                   config_fingerprint, schema_version, created_at, published_at,
+                   lifecycle_state::text
             FROM cap_routing_policy
             WHERE tenant_id = ?::uuid AND policy_id = ? AND version = ?
             """;
 
     private static final String SQL_FIND_LATEST_PUBLISHED = """
             SELECT tenant_id::text, policy_id::text, version, strategy, targets::text,
-                   config_fingerprint, schema_version, created_at, published_at
+                   config_fingerprint, schema_version, created_at, published_at,
+                   lifecycle_state::text
             FROM cap_routing_policy
             WHERE tenant_id = ?::uuid AND policy_id = ?
               AND published_at IS NOT NULL
@@ -80,7 +84,8 @@ public class JdbcCapRoutingPolicyRepository implements CapRoutingPolicyPort {
      */
     private static final String SQL_FIND_LATEST = """
             SELECT tenant_id::text, policy_id::text, version, strategy, targets::text,
-                   config_fingerprint, schema_version, created_at, published_at
+                   config_fingerprint, schema_version, created_at, published_at,
+                   lifecycle_state::text
             FROM cap_routing_policy
             WHERE tenant_id = ?::uuid AND policy_id = ?
             ORDER BY version DESC
@@ -184,7 +189,28 @@ public class JdbcCapRoutingPolicyRepository implements CapRoutingPolicyPort {
                 rs.getString("config_fingerprint"),
                 rs.getInt("schema_version"),
                 created,
-                publishedAt == null ? null : publishedAt.toInstant());
+                publishedAt == null ? null : publishedAt.toInstant(),
+                lifecycleState(rs));
+    }
+
+
+    /**
+     * 读取生命周期状态（§6.6）。
+     *
+     * <p>⚠️ <b>「读不到状态」绝不能被降级成「没有停用」</b>：
+     * 本方法<b>不吞异常</b> —— 查询语句显式选择了 {@code lifecycle_state::text}，
+     * 列不存在（迁移 V26 未应用）时 SQL 直接失败，
+     * 而不是返回 {@code null} 让调用方以为「这行没被停用」。
+     * 后者会让「停用」这道防线<b>看起来在、其实不在</b>：
+     * 发布期引用校验读不到 DEPRECATED 状态 → 停用过的契约照样能被新发布引用。
+     * 数据层失败必须<b>显式炸出来</b>（fail-closed），由迁移纪律保证列一定存在。
+     *
+     * @param rs 结果集
+     * @return 生命周期状态；值为空时为 {@code null}（= 未记录）
+     */
+    private static @Nullable ConfigLifecycleState lifecycleState(ResultSet rs) throws SQLException {
+        String raw = rs.getString("lifecycle_state");
+        return raw == null ? null : ConfigLifecycleState.valueOf(raw);
     }
 
     private static TenantContext tenantContext(String tenantId) {

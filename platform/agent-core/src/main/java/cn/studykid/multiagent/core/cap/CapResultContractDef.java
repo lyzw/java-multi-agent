@@ -24,6 +24,7 @@ import org.jspecify.annotations.Nullable;
  * @param schemaVersion    行格式版本
  * @param createdAt        创建时间
  * @param publishedAt      发布时间；{@code null} = 草稿（<b>不可被引用</b>）
+ * @param lifecycleState   生命周期状态（§6.6）；{@code null} = <b>未记录</b>（≠ 不是 DEPRECATED）
  */
 public record CapResultContractDef(
         @NonNull String tenantId,
@@ -33,7 +34,29 @@ public record CapResultContractDef(
         @NonNull String configFingerprint,
         int schemaVersion,
         @NonNull Instant createdAt,
-        @Nullable Instant publishedAt) {
+        @Nullable Instant publishedAt,
+        @Nullable ConfigLifecycleState lifecycleState) {
+
+    /**
+     * 兼容构造器：<b>不带生命周期状态</b>的契约定义行（第二十五批之前的形态）。
+     *
+     * <p>⚠️ 缺省 = {@code lifecycleState == null}，语义是「<b>未记录</b>」，
+     * <b>不是</b>「不是 DEPRECATED」—— 它与「已停用」是<b>两个不同的事实</b>，
+     * 混为一谈会让「读不到状态」被当成「可以放心引用」。
+     * 未记录时 {@link #isDeprecated()} 返回 {@code false}（存量行口径不变），
+     * 但**引用判定仍以 {@code publishedAt} 为准**（见 {@link #isPublished()}）。
+     */
+    public CapResultContractDef(@NonNull String tenantId,
+                                 @NonNull String contractId,
+                                 int version,
+                                 @NonNull String schemaJson,
+                                 @NonNull String configFingerprint,
+                                 int schemaVersion,
+                                 @NonNull Instant createdAt,
+                                 @Nullable Instant publishedAt) {
+        this(tenantId, contractId, version, schemaJson, configFingerprint, schemaVersion,
+                createdAt, publishedAt, null);
+    }
 
     public CapResultContractDef {
         if (tenantId == null || tenantId.isBlank()) {
@@ -63,6 +86,20 @@ public record CapResultContractDef(
      */
     public boolean isPublished() {
         return publishedAt != null;
+    }
+
+    /**
+     * @return 是否已被<b>停用</b>（{@code DEPRECATED}）
+     *
+     * <p>⚠️ <b>「未记录」不等于「未停用」，但也不等于「已停用」</b>：
+     * {@code lifecycleState == null} 表示「这条记录没有携带生命周期状态」
+     * （兼容构造器造出来的行、迁移前的老数据）。
+     * 它<b>不能</b>被读成「可以放心引用」——
+     * 引用判定必须同时看 {@link #isPublished()} 与本方法，
+     * 两者的合取才是「可被新发布引用」。
+     */
+    public boolean isDeprecated() {
+        return lifecycleState == ConfigLifecycleState.DEPRECATED;
     }
 
     /**

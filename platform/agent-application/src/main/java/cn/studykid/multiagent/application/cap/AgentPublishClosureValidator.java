@@ -174,6 +174,17 @@ public class AgentPublishClosureValidator {
                     "orchestration",
                     "路由策略引用未发布: policy=" + policyId + ", version=" + version);
         }
+        if (policy.isDeprecated()) {
+            // ⚠️ **停用只挡「新引用」，不追溯存量**（06 §3.2）：
+            //    理由与输出契约同构 —— 「停用」若挡不住新发布引用，
+            //    那它只是给人看的告示牌，而不是一道防线。
+            throw new ConfigPublishRejectedException(ReasonCode.ROUTING_POLICY_DEPRECATED,
+                    "orchestration",
+                    "路由策略引用已停用（DEPRECATED）: policy=" + policyId
+                            + ", version=" + version
+                            + "。已停用的策略不得被新发布引用（06 §3.2）；"
+                            + "存量引用按版本继续过渡");
+        }
         for (String target : policy.targets()) {
             if (orchestration.child(target).isEmpty()) {
                 // ⚠️ 策略允许的目标不在父声明的委派拓扑内 → 拒绝发布。
@@ -236,6 +247,19 @@ public class AgentPublishClosureValidator {
                     "orchestration",
                     "输出契约引用未发布: contract=" + contractId
                             + ", version=" + version);
+        }
+        if (contract.isDeprecated()) {
+            // ⚠️ **停用只挡「新引用」，不追溯存量**（06 §3.2）：
+            //    已被停用的契约仍可被「停用之前就发布」的 Agent 按固定版本引用，
+            //    那是存量 Run 的过渡口径（发布期已校验过，引用在发布那一刻就已成立）。
+            //    但**新的发布**不得再引用它 —— 否则「停用」只是给人看的，
+            //    任何人都能立刻发布一个新 Agent 把已停用的契约重新挂上去。
+            throw new ConfigPublishRejectedException(ReasonCode.RESULT_CONTRACT_DEPRECATED,
+                    "orchestration",
+                    "输出契约引用已停用（DEPRECATED）: contract=" + contractId
+                            + ", version=" + version
+                            + "。已停用的契约不得被新发布引用（06 §3.2）；"
+                            + "存量引用按版本继续过渡");
         }
     }
 

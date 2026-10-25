@@ -305,7 +305,33 @@ public enum ReasonCode {
      * 本码是「候选目标<b>在拓扑内、但不在路由策略允许的子集内</b>」
      * （拓扑过了、路由收窄没过）。前者查子 Agent 声明，后者查路由策略内容。
      */
-    ROUTING_TARGET_NOT_ALLOWED("A");
+    ROUTING_TARGET_NOT_ALLOWED("A"),
+
+    // ── 第二十五批追加：输出契约 / 路由策略获得独立生命周期（可被停用）──
+    // ⚠️ 同样遵循「只追加、不改写」：已发布常量一律不改名、不复用、不改语义。
+
+    /**
+     * 输出契约引用指向<b>已停用</b>（{@code DEPRECATED}）的版本（发布期拒绝）。
+     *
+     * <p>⚠️ 与 {@link #RESULT_CONTRACT_NOT_PUBLISHED} <b>必须分列</b>：
+     * 「未发布」是「还没生效」（查发布流程），
+     * 「已停用」是「曾经生效、现在被显式停用」（查停用记录与停用时间）。
+     * 两者都表现为「引用不可用」，但排查方向完全相反 ——
+     * 混用会让运维去查「为什么没发布」，而真因是「上周有人把它停了」。
+     *
+     * <p>⚠️ <b>停用只挡「新引用」</b>：存量 Run 按固定版本引用继续生效
+     * （06 §3.2「存量 Run 按版本过渡」）。
+     */
+    RESULT_CONTRACT_DEPRECATED("发布期"),
+
+    /**
+     * 路由策略引用指向<b>已停用</b>（{@code DEPRECATED}）的版本（发布期拒绝）。
+     *
+     * <p>⚠️ 与 {@link #ROUTING_POLICY_NOT_PUBLISHED} <b>必须分列</b>，理由与
+     * {@link #RESULT_CONTRACT_DEPRECATED} 同构：「没发布」与「被停用」
+     * 的排查方向相反（查发布流程 vs 查停用记录）。
+     */
+    ROUTING_POLICY_DEPRECATED("发布期");
 
     private final String phase;
 

@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -61,6 +62,22 @@ public class ConfigPublishWorkflowService {
 
     /** 本通道可管理的对象类型（平台级对象不在此列）。 */
     public static final String TENANT_OBJECT_TYPE = "agent";
+
+    /**
+     * 本通道可做<b>生命周期迁移</b>的租户级对象类型（第二十五批 · A5）。
+     *
+     * <p>⚠️ <b>为什么扩到三个类型</b>：
+     * 输出契约（{@code result_contract}）与路由策略（{@code routing_policy}）此前
+     * <b>没有任何生命周期迁移通道</b> —— 它们只能「随 Agent 一起发布」，
+     * 于是「停用一份被引用的契约/策略」在治理层<b>无法表达</b>，
+     * 而 06 §3.2 明确要求「被引用对象禁止物理删除 → 改 DEPRECATED」。
+     * 现在三者共用同一条生命周期迁移通道与同一套 CAS 语义。
+     *
+     * <p>⚠️ <b>平台级对象（tool / skill / mcp_server）仍不在此列</b>：
+     * 它们无 {@code tenant_id}，其生命周期由平台运维通道管理。
+     */
+    public static final Set<String> TENANT_LIFECYCLE_OBJECT_TYPES =
+            Set.of(TENANT_OBJECT_TYPE, "result_contract", "routing_policy");
 
     private final ConfigPublishRequestPort requests;
     private final ConfigPublishService publisher;
@@ -577,12 +594,20 @@ public class ConfigPublishWorkflowService {
         }
     }
 
-    /** 对象类型闸门：平台级对象（tool / skill / mcp_server）不在本通道允许范围。 */
+    /**
+     * 对象类型闸门：只有<b>租户级</b>对象可在本通道做生命周期迁移。
+     *
+     * <p>⚠️ <b>平台级对象（tool / skill / mcp_server）一律拒绝</b>：
+     * 它们无 {@code tenant_id}，走平台运维通道（BYPASSRLS 凭据 + 带外运维工具）。
+     * 把它们挂到租户身份上，等于让任一租户管理员自授角色就能改全平台配置。
+     */
     private void requireTenantObjectType(String type) {
-        if (!TENANT_OBJECT_TYPE.equalsIgnoreCase(type)) {
+        boolean allowed = TENANT_LIFECYCLE_OBJECT_TYPES.stream()
+                .anyMatch(candidate -> candidate.equalsIgnoreCase(type));
+        if (!allowed) {
             throw new ConfigPublishScopeNotAllowedException(
-                    "本通道只管理租户级对象（" + TENANT_OBJECT_TYPE + "）；平台级对象类型「" + type
-                            + "」走平台运维通道");
+                    "本通道只管理租户级对象（" + String.join(" / ", TENANT_LIFECYCLE_OBJECT_TYPES)
+                            + "）；平台级对象类型「" + type + "」走平台运维通道");
         }
     }
 
