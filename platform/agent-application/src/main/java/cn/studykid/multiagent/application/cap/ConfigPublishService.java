@@ -10,8 +10,11 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.application.orchestration.AgentOrchestrationParser;
+import cn.studykid.multiagent.application.orchestration.OrchestrationConfigException;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
+import cn.studykid.multiagent.core.cap.CapResultContractDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.ConfigObjectVersion;
@@ -22,8 +25,13 @@ import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.ConfigRollbackCommand;
 import cn.studykid.multiagent.core.cap.DecisionAuditEntry;
 import cn.studykid.multiagent.core.cap.ReasonCode;
+import cn.studykid.multiagent.core.orchestration.AgentOrchestration;
+import cn.studykid.multiagent.core.orchestration.CapAgentChildRef;
+import cn.studykid.multiagent.core.orchestration.ChildAgentRef;
+import cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
+import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
 import cn.studykid.multiagent.ports.persistence.CapSkillDefPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPointerPort;
@@ -73,6 +81,34 @@ public class ConfigPublishService {
     private final Clock clock;
     private final int maxAttempts;
 
+    /**
+     * 多级 Agent 发布期闭包校验器（FR-023）。
+     *
+     * <p>⚠️ <b>可为空 = 多级校验未装配</b>：此时只有<b>声明了编排</b>的 Agent 会被拒
+     * （fail-closed，见 {@link #validateMultiAgentClosure}），
+     * 单 Agent 发布路径完全不受影响。
+     */
+    private final AgentPublishClosureValidator closureValidator;
+
+    /**
+     * 父子关系投影写入端口（06 变更补充「关系数据」）。
+     *
+     * <p>⚠️ <b>可为空 = 投影未装配</b>：投影表是<b>可选的关系投影</b>，
+     * 权威来源始终是 release 里的 {@code childAgentRefs}。
+     */
+    private final CapAgentChildRefPort childRefs;
+
+    /**
+     * 输出契约仓储（多级 Agent v1.1 · FR-027 · MA-T16）。
+     *
+     * <p>⚠️ <b>可为空 = 输出契约登记能力未装配</b>：
+     * 此时发布命令里若带契约 → <b>直接拒绝</b>（fail-closed）。
+     * 静默跳过等于「发布成功但契约没落库」——
+     * Agent 引用了一个从未生效的 Schema，运行期每次委派都 fail-closed，
+     * 而运维看到的是「发布成功」。
+     */
+    private final CapResultContractPort contracts;
+
     public ConfigPublishService(@NonNull ConfigPublishTransaction tx,
                                 @NonNull ConfigPointerPort pointers,
                                 @NonNull ConfigReleasePort releases,
@@ -98,6 +134,58 @@ public class ConfigPublishService {
                                 @NonNull ConfigValidationGate gate,
                                 @NonNull Clock clock,
                                 int maxAttempts) {
+        this(tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate,
+                clock, maxAttempts, null, null);
+    }
+
+    /**
+     * 最完整构造器（多级 Agent v1.1）：额外注入发布期闭包校验器与关系投影端口。
+     *
+     * <p>⚠️ 两者为 {@code null} 表示「多级能力未装配」：
+     * 此时声明了编排的 Agent 会在发布时被拒（fail-closed），
+     * 单 Agent 发布路径行为不变。
+     */
+    public ConfigPublishService(@NonNull ConfigPublishTransaction tx,
+                                @NonNull ConfigPointerPort pointers,
+                                @NonNull ConfigReleasePort releases,
+                                @NonNull CapToolDefPort toolDefs,
+                                @NonNull CapSkillDefPort skillDefs,
+                                @NonNull CapMcpServerDefPort serverDefs,
+                                @NonNull CapAgentDefPort agentDefs,
+                                @NonNull DecisionAuditPort audit,
+                                @NonNull ConfigValidationGate gate,
+                                @NonNull Clock clock,
+                                int maxAttempts,
+                                @Nullable AgentPublishClosureValidator closureValidator,
+                                @Nullable CapAgentChildRefPort childRefs) {
+        this(tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate,
+                clock, maxAttempts, closureValidator, childRefs, null);
+    }
+
+    /**
+     * 最完整构造器（多级 Agent v1.1）：额外注入发布期闭包校验器、关系投影端口与输出契约仓储。
+     *
+     * <p>⚠️ 三者为 {@code null} 表示「多级能力未装配」：
+     * 此时声明了编排的 Agent 会在发布时被拒（fail-closed），
+     * 单 Agent 发布路径行为不变。
+     *
+     * <p>⚠️ {@code contracts} 为 {@code null} 且发布命令带契约 → <b>拒绝发布</b>：
+     * 「契约登记能力没接上」不等于「契约可以随便发」。
+     */
+    public ConfigPublishService(@NonNull ConfigPublishTransaction tx,
+                                @NonNull ConfigPointerPort pointers,
+                                @NonNull ConfigReleasePort releases,
+                                @NonNull CapToolDefPort toolDefs,
+                                @NonNull CapSkillDefPort skillDefs,
+                                @NonNull CapMcpServerDefPort serverDefs,
+                                @NonNull CapAgentDefPort agentDefs,
+                                @NonNull DecisionAuditPort audit,
+                                @NonNull ConfigValidationGate gate,
+                                @NonNull Clock clock,
+                                int maxAttempts,
+                                @Nullable AgentPublishClosureValidator closureValidator,
+                                @Nullable CapAgentChildRefPort childRefs,
+                                @Nullable CapResultContractPort contracts) {
         if (maxAttempts < 1) {
             throw new IllegalArgumentException("maxAttempts 必须为正数，收到: " + maxAttempts);
         }
@@ -112,6 +200,9 @@ public class ConfigPublishService {
         this.gate = gate;
         this.clock = clock;
         this.maxAttempts = maxAttempts;
+        this.closureValidator = closureValidator;
+        this.childRefs = childRefs;
+        this.contracts = contracts;
     }
 
     // ── 原子发布 ────────────────────────────────────────────────
@@ -219,6 +310,26 @@ public class ConfigPublishService {
                                 .map(CapMcpServerDef::configFingerprint));
             }
         }
+        // ⚠️ 输出契约必须**在 Agent 之前**登记（多级 Agent v1.1 · FR-027）：
+        //    同一次发布里新登记的契约要能被本次发布的 Agent 引用 ——
+        //    若契约排在后面，闭包校验器查不到它，
+        //    「一次发布同时交付契约与引用它的 Agent」就永远做不到。
+        //    ⚠️ 未装配契约仓储却带契约 → 拒绝（fail-closed），绝不静默跳过。
+        if (!command.resultContracts().isEmpty() && contracts == null) {
+            throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_UNKNOWN,
+                    "resultContracts",
+                    "输出契约登记能力未装配（契约仓储缺失），拒绝发布: count="
+                            + command.resultContracts().size());
+        }
+        for (CapResultContractDef contract : command.resultContracts()) {
+            CapResultContractDef published = withPublished(contract, now);
+            if (!contracts.insert(published)) {
+                verifySameContentOnConflict("result_contract", contract.contractId(),
+                        contract.version(), published.configFingerprint(),
+                        contracts.find(command.tenantId(), contract.contractId(),
+                                contract.version()).map(CapResultContractDef::configFingerprint));
+            }
+        }
         for (CapAgentDef agent : command.agents()) {
             CapAgentDef published = withPublished(agent, now);
             if (!agentDefs.insert(published)) {
@@ -228,6 +339,12 @@ public class ConfigPublishService {
                                 .map(CapAgentDef::configFingerprint));
             }
         }
+
+        // ── 1b. 多级 Agent：发布期闭包校验 + 父子关系投影 ────────────────
+        //    ⚠️ 校验与投影都在**同一事务**内：任一子 Agent 引用不合法 → 抛异常 →
+        //    整事务回滚 → 不留下半发布的子图或部分更新的指针（06 发布闭包算法第 6 条）。
+        validateMultiAgentClosure(command);
+        projectChildRefs(command, now);
 
         // ── 2. 插入发布头（序号由 DB 序列分配，§6.3 第 2 条）──
         List<ConfigObjectVersion> refs = command.objectVersions();
@@ -477,13 +594,98 @@ public class ConfigPublishService {
                 def.credentialRef(), def.schemaVersion(), def.createdAt(), publishedAt);
     }
 
-    private static CapAgentDef withPublished(CapAgentDef def, Instant publishedAt) {
+    // ── 多级 Agent（v1.1）────────────────────────────────────────
+
+    /**
+     * 多级 Agent 的发布期闭包校验（FR-023 · MA-T02～T04）。
+     *
+     * <p>⚠️ <b>未装配校验器却要发布多级 Agent → 直接拒绝</b>（fail-closed）：
+     * 「校验器没接上」不等于「校验通过」。放行等于让未校验的委派图上线，
+     * 环与未发布引用会一直留到运行期才爆。
+     */
+    private void validateMultiAgentClosure(@NonNull ConfigPublishCommand command) {
+        for (CapAgentDef agent : command.agents()) {
+            AgentOrchestration orchestration = parseOrchestration(agent);
+            // ⚠️ 跳过条件是「**纯 LEAF 且不声明输出契约**」，
+            //    不是「LEAF」：
+            //    LEAF 也可以声明 resultContractRef（约束自身输出），
+            //    而契约引用同样必须在发布期校验 ——
+            //    否则「引用了根本不存在 / 未发布契约的 Agent」可以被发布出去，
+            //    运行期每次委派都因「取不到契约」fail-closed，
+            //    而运维看到的是「发布成功、Agent 已生效」。
+            boolean declaresContract = orchestration.resultContractRef() != null;
+            if (orchestration.isLeaf() && !declaresContract) {
+                continue;
+            }
+            if (closureValidator == null) {
+                throw new ConfigPublishRejectedException(ReasonCode.ORCHESTRATION_INVALID,
+                        "orchestration",
+                        "多级 Agent 发布能力未装配（发布期闭包校验器缺失），拒绝发布: agent="
+                                + agent.agentId() + " v" + agent.version());
+            }
+            closureValidator.validate(command.tenantId(), agent);
+        }
+    }
+
+    /**
+     * 写入父子关系投影（06 变更补充「关系数据」）。
+     *
+     * <p>⚠️ <b>投影不是权威来源</b>：权威定义是 release 里的 {@code childAgentRefs}，
+     * 本表只是把边投影出来便于查询与分析，可重建。
+     *
+     * <p>⚠️ 写入幂等：同一父 release 重复投影同一子 release 不产生第二行。
+     */
+    private void projectChildRefs(@NonNull ConfigPublishCommand command, @NonNull Instant now) {
+        if (childRefs == null) {
+            return;
+        }
+        for (CapAgentDef agent : command.agents()) {
+            AgentOrchestration orchestration = parseOrchestration(agent);
+            int ordinal = 0;
+            for (ChildAgentRef ref : orchestration.childAgentRefs()) {
+                childRefs.insert(new CapAgentChildRef(command.tenantId(), agent.agentId(),
+                        agent.version(), ref.agentId(), ref.releaseVersion(),
+                        ordinal++, ref.required(), now));
+            }
+        }
+    }
+
+    private static @NonNull AgentOrchestration parseOrchestration(@NonNull CapAgentDef agent) {
+        try {
+            return AgentOrchestrationParser.parse(agent.orchestration());
+        } catch (OrchestrationConfigException e) {
+            throw new ConfigPublishRejectedException(ReasonCode.ORCHESTRATION_INVALID,
+                    "orchestration",
+                    "Agent " + agent.agentId() + " v" + agent.version() + " 的编排声明非法: "
+                            + e.getMessage());
+        }
+    }
+
+    /**
+     * 补上输出契约的发布时间（草稿 → 已发布）。
+     *
+     * <p>⚠️ <b>发布时间是发布流给的，不是登记流给的</b>：
+     * 契约与 Agent 一样，走「申请 → 审批 → 执行」三步，
+     * 「已发布」这个事实必须由**发布事务**授予 ——
+     * 否则「先登记成已发布、再补审批」就绕过了发布流程。
+     */
+    private static CapResultContractDef withPublished(CapResultContractDef def,
+                                                      Instant publishedAt) {
         if (def.publishedAt() != null) {
+            return def;
+        }
+        return new CapResultContractDef(def.tenantId(), def.contractId(), def.version(),
+                def.schemaJson(), def.configFingerprint(), def.schemaVersion(),
+                def.createdAt(), publishedAt);
+    }
+
+    private static CapAgentDef withPublished(CapAgentDef def, Instant publishedAt) {        if (def.publishedAt() != null) {
             return def;
         }
         return new CapAgentDef(def.tenantId(), def.agentId(), def.version(), def.name(),
                 def.description(), def.roles(), def.enabledSkills(), def.skillBundles(),
-                def.capabilityTags(), def.overrides(), def.configFingerprint(),
+                def.capabilityTags(), def.overrides(), def.orchestration(),
+                def.configFingerprint(),
                 def.schemaVersion(), def.createdAt(), publishedAt);
     }
 }

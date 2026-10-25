@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.cap.CapAgentDef;
+import cn.studykid.multiagent.core.cap.CapResultContractDef;
 import cn.studykid.multiagent.core.cap.ConfigLifecycleState;
 import cn.studykid.multiagent.core.cap.ConfigPointer;
 import cn.studykid.multiagent.core.cap.ConfigPublishCommand;
@@ -19,6 +20,7 @@ import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.ConfigRollbackCommand;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
+import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPointerPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort.Decision;
@@ -63,6 +65,7 @@ public class ConfigPublishWorkflowService {
     private final CapAgentDefPort agentDefs;
     private final ConfigPointerPort pointers;
     private final ConfigReleasePort releases;
+    private final CapResultContractPort contracts;
     private final Clock clock;
 
     public ConfigPublishWorkflowService(@NonNull ConfigPublishRequestPort requests,
@@ -72,12 +75,31 @@ public class ConfigPublishWorkflowService {
                                         @NonNull ConfigPointerPort pointers,
                                         @NonNull ConfigReleasePort releases,
                                         @NonNull Clock clock) {
+        this(requests, publisher, lifecycle, agentDefs, pointers, releases, null, clock);
+    }
+
+    /**
+     * 最完整构造器（多级 Agent v1.1）：额外注入输出契约仓储。
+     *
+     * <p>⚠️ {@code contracts} 为 {@code null} 表示「输出契约登记能力未装配」：
+     * 此时提交带契约的发布申请 → <b>直接拒绝</b>（fail-closed）。
+     * 静默忽略等于让「申请里写了契约」看起来像生效了，实际根本没登记。
+     */
+    public ConfigPublishWorkflowService(@NonNull ConfigPublishRequestPort requests,
+                                        @NonNull ConfigPublishService publisher,
+                                        @NonNull ConfigLifecycleService lifecycle,
+                                        @NonNull CapAgentDefPort agentDefs,
+                                        @NonNull ConfigPointerPort pointers,
+                                        @NonNull ConfigReleasePort releases,
+                                        @Nullable CapResultContractPort contracts,
+                                        @NonNull Clock clock) {
         this.requests = requests;
         this.publisher = publisher;
         this.lifecycle = lifecycle;
         this.agentDefs = agentDefs;
         this.pointers = pointers;
         this.releases = releases;
+        this.contracts = contracts;
         this.clock = clock;
     }
 
@@ -100,11 +122,46 @@ public class ConfigPublishWorkflowService {
             Long expectedPublishSeq,
             @NonNull String reason,
             @NonNull String requesterId) {
+        return requestPublish(tenantId, scope, agents, List.of(), expectedPublishSeq, reason,
+                requesterId);
+    }
+
+    /**
+     * 提交发布申请（Agent 定义 + 输出契约）。
+     *
+     * <p>⚠️ <b>契约与 Agent 同批申请</b>：输出契约是「子 Agent 输出按什么 Schema 校验」的
+     * 判定依据，若契约与引用它的 Agent 分两次审批，
+     * 「批的」与「生效的」就不是同一件事了。
+     *
+     * @param tenantId          租户标识
+     * @param scope             作用域
+     * @param agents            Agent 定义草稿
+     * @param resultContracts   输出契约草稿
+     * @param expectedPublishSeq CAS 基线（客户端读到的当前发布序号；可空）
+     * @param reason            变更理由
+     * @param requesterId       申请人主体标识
+     * @return 申请单（PENDING）
+     */
+    public @NonNull ConfigPublishRequest requestPublish(
+            @NonNull String tenantId,
+            ConfigRelease.@NonNull Scope scope,
+            @NonNull List<ConfigPublishPayload.@NonNull AgentSpec> agents,
+            @NonNull List<ConfigPublishPayload.@NonNull ResultContractSpec> resultContracts,
+            Long expectedPublishSeq,
+            @NonNull String reason,
+            @NonNull String requesterId) {
         requireTenantScope(scope);
-        if (agents.isEmpty()) {
+        if (agents.isEmpty() && resultContracts.isEmpty()) {
             throw new IllegalArgumentException("发布申请不得为空");
         }
-        ConfigPublishPayload payload = ConfigPublishPayload.publish(agents, expectedPublishSeq);
+        // ⚠️ 未装配契约仓储却申请登记契约 → 拒绝（fail-closed）：
+        //    否则申请单看起来带了契约，实际执行时会被静默丢掉。
+        if (!resultContracts.isEmpty() && contracts == null) {
+            throw new IllegalArgumentException(
+                    "输出契约登记能力未装配（契约仓储缺失），拒绝提交带契约的发布申请");
+        }
+        ConfigPublishPayload payload = ConfigPublishPayload.publish(agents, resultContracts,
+                expectedPublishSeq);
         // ⚠️ 申请阶段就跑一次门禁预检：非法方案在**申请时**就该被拒，
         //    而不是先占住一个审批名额，等审批通过后执行才失败。
         //    （执行时仍会再跑一次权威门禁 —— 两次之间配置可能已变。）
@@ -346,6 +403,7 @@ public class ConfigPublishWorkflowService {
                                                      String requesterId, String approverId,
                                                      boolean resolveBaseline) {
         List<CapAgentDef> defs = new ArrayList<>();
+        List<CapResultContractDef> contractDefs = new ArrayList<>();
         Instant now = clock.instant();
         for (ConfigPublishPayload.AgentSpec spec : payload.agents()) {
             int version = agentDefs.findLatest(tenantId, spec.agentId())
@@ -353,18 +411,33 @@ public class ConfigPublishWorkflowService {
             CapAgentDef draft = new CapAgentDef(tenantId, spec.agentId(), version,
                     spec.name(), spec.description(), spec.roles(), spec.enabledSkills(),
                     spec.skillBundles(), spec.capabilityTags(), spec.overrides(),
+                    spec.orchestration(),
                     // ⚠️ 占位指纹：内容指纹**不包含**自身，故可先占位再算
                     "pending", 1, now, null);
             String fingerprint = CapObjectFingerprint.of(draft);
             defs.add(new CapAgentDef(tenantId, spec.agentId(), version,
                     spec.name(), spec.description(), spec.roles(), spec.enabledSkills(),
                     spec.skillBundles(), spec.capabilityTags(), spec.overrides(),
+                    spec.orchestration(),
                     fingerprint, 1, now, null));
+        }
+        // ⚠️ 契约的版本号与内容指纹**同样由服务端决定**（与 Agent 同口径）：
+        //    客户端提交这两者等于让客户端指定「内容没变」这个证明。
+        for (ConfigPublishPayload.ResultContractSpec spec : payload.resultContracts()) {
+            int version = contracts.findLatest(tenantId, spec.contractId())
+                    .map(CapResultContractDef::version).orElse(0) + 1;
+            CapResultContractDef draft = new CapResultContractDef(tenantId, spec.contractId(),
+                    version, spec.schemaJson(),
+                    // ⚠️ 占位指纹：内容指纹**不包含**自身，故可先占位再算
+                    "pending", 1, now, null);
+            String fingerprint = CapObjectFingerprint.of(draft);
+            contractDefs.add(new CapResultContractDef(tenantId, spec.contractId(), version,
+                    spec.schemaJson(), fingerprint, 1, now, null));
         }
         Long baseline = resolveBaseline ? resolveBaseline(tenantId, payload) : null;
         return new ConfigPublishCommand(ConfigRelease.Scope.TENANT, tenantId, baseline,
                 requesterId, approverId, null,
-                List.of(), List.of(), List.of(), defs, null);
+                List.of(), List.of(), List.of(), defs, null, contractDefs);
     }
 
     /**

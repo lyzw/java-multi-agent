@@ -191,8 +191,10 @@ class CapConfigPublishControllerTest {
     @DisplayName("平台级作用域申请 → 403")
     void request_platformScopeRejected() {
         CapConfigPublishController c = controller();
+        // ⚠️ 必须 mock **带契约列表**的那个重载：控制器走的是 7 参版本，
+        //    只 mock 6 参版本会命中不到 → mock 返回 null → 抛 NPE 而非预期的 403。
         when(workflow.requestPublish(eq(TENANT), eq(ConfigRelease.Scope.PLATFORM), any(), any(),
-                eq("reason"), eq(PRINCIPAL)))
+                any(), eq("reason"), eq(PRINCIPAL)))
                 .thenThrow(new ConfigPublishScopeNotAllowedException("platform scope"));
 
         assertThatThrownBy(() -> c.request(new CapConfigPublishController.PublishRequest(
@@ -203,6 +205,51 @@ class CapConfigPublishControllerTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(e -> assertThat(
                         ((ResponseStatusException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    @DisplayName("✅ 编排声明与输出契约随申请提交（多级 Agent 可经治理通道发布）")
+    void request_carriesOrchestrationAndResultContracts() {
+        CapConfigPublishController c = controller();
+        when(workflow.requestPublish(eq(TENANT), eq(ConfigRelease.Scope.TENANT), any(), any(),
+                any(), eq("reason"), eq(PRINCIPAL)))
+                .thenReturn(sampleRequest());
+
+        c.request(new CapConfigPublishController.PublishRequest(
+                "PUBLISH", "TENANT", null,
+                List.of(new CapConfigPublishController.AgentRequest(
+                        "a-1", "教师 Agent", "desc", null, null, null, null, null,
+                        "{\"mode\":\"SEQUENTIAL\",\"childAgentRefs\":[{\"id\":\"c-1\",\"version\":1}]}")),
+                null, null,
+                List.of(new CapConfigPublishController.ResultContractRequest(
+                        "answer-contract", "{\"type\":\"object\"}")),
+                "reason"));
+
+        // ⚠️ 治理通道若不暴露编排声明，多级 Agent 就**根本无法发布** ——
+        //    契约引用同理（引用了却登记不了 = 引用了一个不生效的事实）。
+        var agentCaptor = org.mockito.ArgumentCaptor
+                .forClass(java.util.List.class);
+        var contractCaptor = org.mockito.ArgumentCaptor
+                .forClass(java.util.List.class);
+        org.mockito.Mockito.verify(workflow).requestPublish(eq(TENANT),
+                eq(ConfigRelease.Scope.TENANT), agentCaptor.capture(), contractCaptor.capture(),
+                any(), eq("reason"), eq(PRINCIPAL));
+
+        @SuppressWarnings("unchecked")
+        java.util.List<cn.studykid.multiagent.application.cap.ConfigPublishPayload.AgentSpec>
+                agentSpecs = agentCaptor.getValue();
+        assertThat(agentSpecs).hasSize(1);
+        assertThat(agentSpecs.get(0).orchestration())
+                .as("⛔ 编排声明未被治理通道透传：多级 Agent 无法发布")
+                .contains("SEQUENTIAL")
+                .contains("childAgentRefs");
+
+        @SuppressWarnings("unchecked")
+        java.util.List<cn.studykid.multiagent.application.cap.ConfigPublishPayload
+                .ResultContractSpec> contractSpecs = contractCaptor.getValue();
+        assertThat(contractSpecs).hasSize(1);
+        assertThat(contractSpecs.get(0).contractId()).isEqualTo("answer-contract");
+        assertThat(contractSpecs.get(0).schemaJson()).isEqualTo("{\"type\":\"object\"}");
     }
 
     @Test

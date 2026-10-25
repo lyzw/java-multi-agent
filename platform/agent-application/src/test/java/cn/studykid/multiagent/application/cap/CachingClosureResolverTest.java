@@ -128,10 +128,28 @@ class CachingClosureResolverTest {
         }
     }
 
+    @Test
+    @DisplayName("⛔ 同一 Agent 版本行的编排声明被改写 → 缓存必须失效（否则陈旧闭包藏住漂移）")
+    void changedOrchestrationInvalidatesCache() {
+        EffectiveClosure before = caching.resolve(TENANT, AGENT, 1);
+
+        // ⚠️ 版本号不变、Agent 不变，只是编排声明被就地改写
+        cap.withAgent(TENANT, AGENT, 1, List.of(SKILL), "{}",
+                "{\"mode\":\"SEQUENTIAL\",\"resultContractRef\":\"contract@1\"}");
+
+        EffectiveClosure after = caching.resolve(TENANT, AGENT, 1);
+
+        assertThat(after.orchestration().resultContractRef())
+                .as("⛔ 编排声明被改写却仍供出陈旧闭包：漂移在缓存层就被抹平了")
+                .isEqualTo("contract@1");
+        assertThat(ClosureFingerprint.of(after))
+                .as("⛔ 陈旧闭包会让指纹不变：漂移在指纹层面不可察")
+                .isNotEqualTo(ClosureFingerprint.of(before));
+    }
+
     @Nested
     @DisplayName("缓存可运维性")
     class Operability {
-
         @Test
         @DisplayName("✅ 显式失效可清空指定 Agent 的条目")
         void invalidateRemovesEntries() {

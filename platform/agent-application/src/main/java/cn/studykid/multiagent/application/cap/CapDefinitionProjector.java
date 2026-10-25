@@ -12,6 +12,9 @@ import tools.jackson.databind.ObjectMapper;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import cn.studykid.multiagent.application.orchestration.AgentOrchestrationParser;
+import cn.studykid.multiagent.application.orchestration.OrchestrationConfigException;
+
 /**
  * 把<b>自由 JSONB</b> 的 {@code agent_version.definition} 投影为
  * <b>结构化</b>的 {@code cap_agent_def}（06 §1.4 / §3.3 迁移期双写）。
@@ -85,6 +88,7 @@ public final class CapDefinitionProjector {
             @NonNull List<String> skillBundles,
             @NonNull List<String> capabilityTags,
             @NonNull String overrides,
+            @NonNull String orchestration,
             @NonNull String configFingerprint
     ) {
         public CapAgentDefView {
@@ -93,6 +97,9 @@ public final class CapDefinitionProjector {
             skillBundles = skillBundles == null ? List.of() : List.copyOf(skillBundles);
             capabilityTags = capabilityTags == null ? List.of() : List.copyOf(capabilityTags);
             overrides = overrides == null ? "{}" : overrides;
+            // ⚠️ 缺省 LEAF（MA-T01）：缺字段 ≠ 不限制，而是「不允许委派」。
+            orchestration = orchestration == null || orchestration.isBlank()
+                    ? "{}" : orchestration;
         }
     }
 
@@ -159,18 +166,41 @@ public final class CapDefinitionProjector {
             }
         }
 
+        // ⚠️ 编排声明（多级 Agent v1.1）：缺失 → LEAF（MA-T01）；存在但非法 → 拒绝投影。
+        //    绝不能「丢掉 orchestration 字段照常投影」—— 那会让两套表示语义不一致
+        //    却看起来迁移成功，读路径切到结构化真源后委派能力被无声清空。
+        String orchestration = "{}";
+        Object rawOrchestration = root.get("orchestration");
+        if (rawOrchestration != null) {
+            if (!(rawOrchestration instanceof Map)) {
+                return Projection.rejected("orchestration 必须是对象");
+            }
+            try {
+                orchestration = MAPPER.writeValueAsString(rawOrchestration);
+            } catch (JacksonException e) {
+                return Projection.rejected("orchestration 序列化失败: " + e.getMessage());
+            }
+            try {
+                // 复用编排解析器的校验口径：非法编排在配置期就拒，不进库。
+                AgentOrchestrationParser.parse(orchestration);
+            } catch (OrchestrationConfigException e) {
+                return Projection.rejected("orchestration 非法: " + e.getMessage());
+            }
+        }
+
         String fingerprint = ProvisionalFingerprint.of(List.of(
                 ProvisionalFingerprint.canonicalList(roles),
                 ProvisionalFingerprint.canonicalList(enabledSkills),
                 ProvisionalFingerprint.canonicalList(skillBundles),
                 ProvisionalFingerprint.canonicalList(capabilityTags),
                 overrides,
+                orchestration,
                 name == null ? "" : name,
                 description == null ? "" : description));
 
         return Projection.ok(new CapAgentDefView(
                 name, description, roles, enabledSkills, skillBundles, capabilityTags,
-                overrides, fingerprint));
+                overrides, orchestration, fingerprint));
     }
 
     @Nullable

@@ -98,9 +98,16 @@ public class CapConfigPublishController {
 
         try {
             ConfigPublishRequest.Operation operation = parseOperation(request.operation());
+            List<ConfigPublishPayload.AgentSpec> agentSpecs = agentSpecs(request.agents());
+            List<ConfigPublishPayload.ResultContractSpec> contractSpecs =
+                    resultContractSpecs(request.resultContracts());
+            if (agentSpecs.isEmpty() && contractSpecs.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "PUBLISH 必须携带 agents 或 resultContracts");
+            }
             ConfigPublishRequest created = switch (operation) {
                 case PUBLISH -> workflow.requestPublish(context.tenantId(), scope,
-                        agentSpecs(request.agents()), request.expectedPublishSeq(),
+                        agentSpecs, contractSpecs, request.expectedPublishSeq(),
                         reason, currentPrincipal.principalId());
                 case ROLLBACK -> workflow.requestRollback(context.tenantId(), scope,
                         request.targetReleaseId() == null ? 0L : request.targetReleaseId(),
@@ -317,8 +324,7 @@ public class CapConfigPublishController {
     private static List<ConfigPublishPayload.AgentSpec> agentSpecs(
             @Nullable List<AgentRequest> agents) {
         if (agents == null || agents.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "PUBLISH 必须携带 agents");
+            return List.of();
         }
         return agents.stream().map(a -> new ConfigPublishPayload.AgentSpec(
                 a.agentId(), a.name(), a.description(),
@@ -326,7 +332,27 @@ public class CapConfigPublishController {
                 a.enabledSkills() == null ? List.of() : a.enabledSkills(),
                 a.skillBundles() == null ? List.of() : a.skillBundles(),
                 a.capabilityTags() == null ? List.of() : a.capabilityTags(),
-                a.overrides() == null ? "{}" : a.overrides())).toList();
+                a.overrides() == null ? "{}" : a.overrides(),
+                // ⚠️ 编排声明必须由客户端提交（多级 Agent v1.1）：
+                //    缺省 "{}" = LEAF，与「显式声明 LEAF」不可区分 ——
+                //    治理通道若不暴露这个字段，多级 Agent 根本无法发布。
+                a.orchestration() == null ? "{}" : a.orchestration())).toList();
+    }
+
+    /**
+     * 输出契约草稿映射。
+     *
+     * <p>⚠️ 空列表 = 本次发布不登记契约（≠「契约随意」）——
+     * 没有契约可登记时，Agent 的 {@code resultContractRef}
+     * 只能指向<b>此前已发布</b>的契约。
+     */
+    private static List<ConfigPublishPayload.ResultContractSpec> resultContractSpecs(
+            @Nullable List<ResultContractRequest> contracts) {
+        if (contracts == null || contracts.isEmpty()) {
+            return List.of();
+        }
+        return contracts.stream().map(c -> new ConfigPublishPayload.ResultContractSpec(
+                c.contractId(), c.schemaJson())).toList();
     }
 
     private static ConfigPublishPayload.LifecycleSpec lifecycleSpec(
@@ -359,7 +385,22 @@ public class CapConfigPublishController {
             @Nullable List<AgentRequest> agents,
             @Nullable Long targetReleaseId,
             @Nullable LifecycleRequest lifecycle,
+            @Nullable List<ResultContractRequest> resultContracts,
             @Nullable String reason) {
+
+        /**
+         * 兼容构造器：<b>无输出契约</b>的发布申请（多级 Agent 之前的形态）。
+         */
+        public PublishRequest(@Nullable String operation,
+                              @Nullable String scope,
+                              @Nullable Long expectedPublishSeq,
+                              @Nullable List<AgentRequest> agents,
+                              @Nullable Long targetReleaseId,
+                              @Nullable LifecycleRequest lifecycle,
+                              @Nullable String reason) {
+            this(operation, scope, expectedPublishSeq, agents, targetReleaseId, lifecycle, null,
+                    reason);
+        }
     }
 
     /** Agent 定义草稿（<b>不含版本号与内容指纹</b> —— 二者由服务端决定）。 */
@@ -371,7 +412,36 @@ public class CapConfigPublishController {
             @Nullable List<String> enabledSkills,
             @Nullable List<String> skillBundles,
             @Nullable List<String> capabilityTags,
-            @Nullable String overrides) {
+            @Nullable String overrides,
+            @Nullable String orchestration) {
+
+        /**
+         * 兼容构造器：<b>无编排声明</b>的 Agent 草稿（多级 Agent 之前的提交形态）。
+         *
+         * <p>⚠️ 缺省 {@code "{}"} = LEAF（MA-T01）：不是「不限制」，而是「不允许委派」。
+         */
+        public AgentRequest(@Nullable String agentId,
+                             @Nullable String name,
+                             @Nullable String description,
+                             @Nullable List<String> roles,
+                             @Nullable List<String> enabledSkills,
+                             @Nullable List<String> skillBundles,
+                             @Nullable List<String> capabilityTags,
+                             @Nullable String overrides) {
+            this(agentId, name, description, roles, enabledSkills, skillBundles, capabilityTags,
+                    overrides, null);
+        }
+    }
+
+    /**
+     * 输出契约草稿（<b>不含版本号与内容指纹</b> —— 二者由服务端决定）。
+     *
+     * <p>⚠️ 与 Agent 草稿同口径：客户端若能指定版本号或内容指纹，
+     * 就等于能指定「内容没变」这个证明。
+     */
+    public record ResultContractRequest(
+            @Nullable String contractId,
+            @Nullable String schemaJson) {
     }
 
     /** 生命周期迁移参数。 */

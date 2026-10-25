@@ -89,7 +89,7 @@ public class CapDualWriteService implements CapDualWritePort {
                     view.name(), view.description(),
                     view.roles(), view.enabledSkills(),
                     view.skillBundles(), view.capabilityTags(),
-                    view.overrides(), view.configFingerprint(),
+                    view.overrides(), view.orchestration(), view.configFingerprint(),
                     1, clock.instant(), publishedAt);
             if (!agentDefs.insert(def)) {
                 // ⚠️ 已存在同版本行：不可变版本行<b>不覆盖</b>（06 §1.1）。

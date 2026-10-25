@@ -31,6 +31,7 @@ import cn.studykid.multiagent.core.cap.ConfigRelease;
  * @param agents             本次发布的 Agent 定义草稿（仅 {@code PUBLISH} 用）
  * @param targetReleaseId    回滚目标发布（仅 {@code ROLLBACK} 用）
  * @param lifecycle          生命周期迁移参数（仅 {@code LIFECYCLE_TRANSITION} 用）
+ * @param resultContracts    本次发布的输出契约草稿（仅 {@code PUBLISH} 用 · 多级 Agent v1.1）
  */
 public record ConfigPublishPayload(
         ConfigPublishRequest.@NonNull Operation operation,
@@ -38,9 +39,22 @@ public record ConfigPublishPayload(
         @Nullable Long expectedPublishSeq,
         @NonNull List<AgentSpec> agents,
         @Nullable Long targetReleaseId,
-        @Nullable LifecycleSpec lifecycle) {
+        @Nullable LifecycleSpec lifecycle,
+        @NonNull List<ResultContractSpec> resultContracts) {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /**
+     * 兼容构造器：<b>无输出契约</b>的变更方案（多级 Agent 之前的形态）。
+     */
+    public ConfigPublishPayload(ConfigPublishRequest.@NonNull Operation operation,
+                                ConfigRelease.@NonNull Scope scope,
+                                @Nullable Long expectedPublishSeq,
+                                @NonNull List<AgentSpec> agents,
+                                @Nullable Long targetReleaseId,
+                                @Nullable LifecycleSpec lifecycle) {
+        this(operation, scope, expectedPublishSeq, agents, targetReleaseId, lifecycle, List.of());
+    }
 
     public ConfigPublishPayload {
         if (operation == null) {
@@ -50,6 +64,34 @@ public record ConfigPublishPayload(
             throw new IllegalArgumentException("scope 不能为空");
         }
         agents = agents == null ? List.of() : List.copyOf(agents);
+        resultContracts = resultContracts == null ? List.of() : List.copyOf(resultContracts);
+    }
+
+    /**
+     * 输出契约草稿（<b>只含客户端可提交的语义字段</b>）。
+     *
+     * <p>⚠️ <b>刻意不含 version / configFingerprint / createdAt / publishedAt</b>：
+     * 与 Agent 草稿同口径 —— 版本号由服务端按「现有最大版本 + 1」分配，
+     * 内容指纹由服务端计算（{@link CapObjectFingerprint}），
+     * 时间戳由服务端填写。
+     * 客户端若能指定这些，就等于能指定「内容没变」这个证明。
+     *
+     * @param contractId 契约标识
+     * @param schemaJson 契约定义（JSON Schema 文本）
+     */
+    public record ResultContractSpec(@NonNull String contractId,
+                                      @NonNull String schemaJson) {
+
+        public ResultContractSpec {
+            if (contractId == null || contractId.isBlank()) {
+                throw new IllegalArgumentException("contractId 不能为空");
+            }
+            if (schemaJson == null || schemaJson.isBlank()) {
+                // ⚠️ 空契约 ≠ 任意结构：契约必须**显式**声明「允许任意」，
+                //    否则「填坏了」与「没填」在存储层就分不开。
+                throw new IllegalArgumentException("schemaJson 不能为空");
+            }
+        }
     }
 
     /**
@@ -77,7 +119,25 @@ public record ConfigPublishPayload(
                             @NonNull List<String> enabledSkills,
                             @NonNull List<String> skillBundles,
                             @NonNull List<String> capabilityTags,
-                            @NonNull String overrides) {
+                            @NonNull String overrides,
+                            @NonNull String orchestration) {
+
+        /**
+         * 兼容构造器：<b>无编排声明</b>的 Agent 草稿（多级 Agent 之前的提交形态）。
+         *
+         * <p>⚠️ 缺省 {@code "{}"} = LEAF（MA-T01）：不是「不限制」，而是「不允许委派」。
+         */
+        public AgentSpec(@NonNull String agentId,
+                         @Nullable String name,
+                         @Nullable String description,
+                         @NonNull List<String> roles,
+                         @NonNull List<String> enabledSkills,
+                         @NonNull List<String> skillBundles,
+                         @NonNull List<String> capabilityTags,
+                         @NonNull String overrides) {
+            this(agentId, name, description, roles, enabledSkills, skillBundles,
+                    capabilityTags, overrides, "{}");
+        }
 
         public AgentSpec {
             if (agentId == null || agentId.isBlank()) {
@@ -85,6 +145,10 @@ public record ConfigPublishPayload(
             }
             if (overrides == null || overrides.isBlank()) {
                 throw new IllegalArgumentException("overrides 不能为空");
+            }
+            if (orchestration == null || orchestration.isBlank()) {
+                throw new IllegalArgumentException(
+                        "orchestration 不能为空（缺省用 {} 表示 LEAF）");
             }
             roles = roles == null ? List.of() : List.copyOf(roles);
             enabledSkills = enabledSkills == null ? List.of() : List.copyOf(enabledSkills);
@@ -161,7 +225,8 @@ public record ConfigPublishPayload(
     public static @NonNull ConfigPublishPayload rollback(long targetReleaseId,
                                                           @Nullable Long expectedPublishSeq) {
         return new ConfigPublishPayload(ConfigPublishRequest.Operation.ROLLBACK,
-                ConfigRelease.Scope.TENANT, expectedPublishSeq, List.of(), targetReleaseId, null);
+                ConfigRelease.Scope.TENANT, expectedPublishSeq, List.of(), targetReleaseId, null,
+                List.of());
     }
 
     /**
@@ -172,7 +237,7 @@ public record ConfigPublishPayload(
      */
     public static @NonNull ConfigPublishPayload lifecycle(@NonNull LifecycleSpec spec) {
         return new ConfigPublishPayload(ConfigPublishRequest.Operation.LIFECYCLE_TRANSITION,
-                ConfigRelease.Scope.TENANT, null, List.of(), null, spec);
+                ConfigRelease.Scope.TENANT, null, List.of(), null, spec, List.of());
     }
 
     /**
@@ -185,7 +250,28 @@ public record ConfigPublishPayload(
     public static @NonNull ConfigPublishPayload publish(@NonNull List<AgentSpec> agents,
                                                          @Nullable Long expectedPublishSeq) {
         return new ConfigPublishPayload(ConfigPublishRequest.Operation.PUBLISH,
-                ConfigRelease.Scope.TENANT, expectedPublishSeq, agents, null, null);
+                ConfigRelease.Scope.TENANT, expectedPublishSeq, agents, null, null, List.of());
+    }
+
+    /**
+     * 生成一个「发布」方案（同时登记输出契约）。
+     *
+     * <p>⚠️ <b>契约与 Agent 在同一次发布里</b>：这是「同发布闭包」的完整性要求 ——
+     * 否则「先发契约、再发引用它的 Agent」会横跨两个发布批次，
+     * 契约的审批与 Agent 的审批就不是同一件事了。
+     *
+     * @param agents             Agent 定义草稿
+     * @param resultContracts    输出契约草稿
+     * @param expectedPublishSeq CAS 基线
+     * @return 变更方案
+     */
+    public static @NonNull ConfigPublishPayload publish(
+            @NonNull List<AgentSpec> agents,
+            @NonNull List<ResultContractSpec> resultContracts,
+            @Nullable Long expectedPublishSeq) {
+        return new ConfigPublishPayload(ConfigPublishRequest.Operation.PUBLISH,
+                ConfigRelease.Scope.TENANT, expectedPublishSeq, agents, null, null,
+                resultContracts);
     }
 
     /**
@@ -197,6 +283,7 @@ public record ConfigPublishPayload(
         ObjectNode node = MAPPER.createObjectNode();
         node.put("operation", operation.name());
         node.put("agentCount", agents.size());
+        node.put("resultContractCount", resultContracts.size());
         node.put("hasExpectedPublishSeq", expectedPublishSeq != null);
         node.put("hasTargetReleaseId", targetReleaseId != null);
         node.put("hasLifecycle", lifecycle != null);

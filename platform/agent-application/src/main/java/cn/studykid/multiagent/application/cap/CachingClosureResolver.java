@@ -11,6 +11,7 @@ import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapObjectType;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
 import cn.studykid.multiagent.ports.mcp.McpManifestPort;
@@ -128,7 +129,7 @@ public class CachingClosureResolver implements ClosureResolver {
         }
         misses.incrementAndGet();
         EffectiveClosure closure = delegate.resolve(tenantId, agentId, agentVersion);
-        cache.put(key, newEntry(closure, agentVersion, true));
+        cache.put(key, newEntry(tenantId, closure, agentVersion, true));
         return closure;
     }
 
@@ -143,7 +144,7 @@ public class CachingClosureResolver implements ClosureResolver {
         }
         misses.incrementAndGet();
         EffectiveClosure closure = delegate.resolveCurrent(tenantId, agentId);
-        cache.put(key, newEntry(closure, closure.agentVersion(), false));
+        cache.put(key, newEntry(tenantId, closure, closure.agentVersion(), false));
         log.debug("闭包缓存未命中，回源重解析: tenant={}, agent={}", tenantId, agentId);
         return closure;
     }
@@ -206,6 +207,20 @@ public class CachingClosureResolver implements ClosureResolver {
             if (current.isEmpty() || current.get() != entry.agentVersion()) {
                 return false;
             }
+        }
+
+        // ── Agent 内容指纹（同一版本行被就地改写 → 闭包必须重解析）──
+        // ⚠️ 只比版本号不够：版本行按约定不可变，但**约定不是机制**。
+        //    内容指纹覆盖编排声明（路由策略引用、输出契约引用、超时/深度/次数），
+        //    它变了就意味着本 Agent 的行为性内容变了（MA-T15）。
+        //    ⚠️ 读不到定义行 → 无法确认新鲜度 → 判定为不新鲜（fail-closed）。
+        String currentAgentFingerprint = agentDefs
+                .find(tenantId, entry.agentId(), entry.agentVersion())
+                .map(CapAgentDef::configFingerprint)
+                .orElse("");
+        if (currentAgentFingerprint.isEmpty()
+                || !currentAgentFingerprint.equals(entry.agentConfigFingerprint())) {
+            return false;
         }
 
         // ── 依赖对象版本 ──────────────────────────────────────────
@@ -276,7 +291,8 @@ public class CachingClosureResolver implements ClosureResolver {
 
     // ── 条目构造 ────────────────────────────────────────────────────
 
-    private @NonNull Entry newEntry(@NonNull EffectiveClosure closure, int agentVersion,
+    private @NonNull Entry newEntry(@NonNull String tenantId,
+                                    @NonNull EffectiveClosure closure, int agentVersion,
                                     boolean agentIsFixed) {
         List<Dependency> dependencies = new ArrayList<>();
         for (EffectiveClosure.SkillBinding skill : closure.skills()) {
@@ -294,8 +310,16 @@ public class CachingClosureResolver implements ClosureResolver {
             dependencies.add(Dependency.pointer(CapObjectType.MCP_SERVER,
                     binding.serverId(), binding.version()));
         }
+        // ⚠️ Agent 自身的**内容指纹**必须记进条目：
+        //    只比版本号的话，「同一版本行被就地改写」（例如编排声明被改）
+        //    不会被察觉 —— 缓存会继续供出陈旧闭包，
+        //    于是「指纹说没变，行为却变了」在缓存层就被抹平了（MA-T15）。
+        String agentConfigFingerprint = agentDefs
+                .find(tenantId, closure.agentId(), agentVersion)
+                .map(CapAgentDef::configFingerprint)
+                .orElse("");
         return new Entry(closure, closure.agentId(), agentVersion,
-                List.copyOf(dependencies));
+                List.copyOf(dependencies), agentConfigFingerprint);
     }
 
     private static @NonNull String key(@NonNull String tenantId, @NonNull String agentId,
@@ -347,9 +371,20 @@ public class CachingClosureResolver implements ClosureResolver {
      * @param agentVersion Agent 版本
      * @param dependencies  依赖对象及其版本（新鲜度校验的判据）
      */
+    /**
+     * 一条缓存条目。
+     *
+     * @param closure                缓存的闭包
+     * @param agentId                Agent 标识
+     * @param agentVersion           解析时的 Agent 版本
+     * @param dependencies           依赖对象及其权威版本
+     * @param agentConfigFingerprint 解析时 Agent 版本行的<b>内容指纹</b> ——
+     *                             与版本号一起构成新鲜度判据（版本行被就地改写时内容指纹变）
+     */
     record Entry(@NonNull EffectiveClosure closure,
                  @NonNull String agentId,
                  int agentVersion,
-                 @NonNull List<Dependency> dependencies) {
+                 @NonNull List<Dependency> dependencies,
+                 @NonNull String agentConfigFingerprint) {
     }
 }

@@ -52,6 +52,22 @@ public final class ClosureFingerprint {
      */
     public static final String FORCED_SAFETY_POLICY_VERSION = "forced_safety_v1";
 
+    /**
+     * 编排绑定算法版本（v1.1 · MA-T15 / MA-T18）。
+     *
+     * <p>⚠️ <b>为什么编排声明入指纹是一次「显式版本化」的变更</b>：
+     * 本常量入哈希，意味着「编排声明参与指纹」这件事本身被固化下来。
+     * 它带来一个<b>必须知悉的副作用</b>：本次变更后，
+     * <b>变更前创建的在途 Run 快照指纹一律与新算出的指纹不一致</b>
+     * → 运行期落到 {@code CONFIG_FINGERPRINT_STALE}，Run 被拒。
+     *
+     * <p>⚠️ <b>这是预期行为，不是回归</b>：
+     * 旧指纹<b>没有</b>覆盖编排声明，那份快照的「内容没变」证明是<b>不完整</b>的 ——
+     * 继续放行等于让「配置变了但指纹说没变」继续成立（MA-T15 的核心命题）。
+     * fail-closed 优先于「让在途 Run 跑完」。
+     */
+    public static final String ORCHESTRATION_BINDING_VERSION = "orchestration_binding_v1";
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private ClosureFingerprint() {
@@ -131,8 +147,59 @@ public final class ClosureFingerprint {
             binding.allowedOps().forEach(allowed::add);
         }
 
+        // ⚠️ 多级 Agent 的后代维度（v1.1）：子 Agent 边及其<b>自身闭包指纹</b>入哈希。
+        //    子 Agent 的闭包指纹是递归的 —— 它已覆盖其 Skill/Tool/MCP 与更深层后代，
+        //    所以这里只需把「直接子代的闭包指纹」列进去，就能让
+        //    「任意后代的任意行为性变化」传导到本闭包指纹（MA-T15）。
+        //    ⚠️ 不并入子 Agent 的工具清单：委派不是授权，
+        //    父 Agent 的工具面不能因「能委派给 X」而扩大。
+        ArrayNode childAgents = root.putArray("childAgents");
+        for (EffectiveClosure.ChildAgentBinding child : canonical.childAgents()) {
+            ObjectNode node = childAgents.addObject();
+            node.put("id", child.agentId());
+            node.put("version", child.releaseVersion());
+            node.put("fingerprint", child.configFingerprint());
+            node.put("closureFingerprint", child.closureFingerprint());
+            node.put("mode", child.mode().name());
+            node.put("depth", child.depth());
+        }
+
         root.put("forcedSafetyPolicyVersion", FORCED_SAFETY_POLICY_VERSION);
+
+        // ⚠️ 多级 Agent 的编排声明（v1.1 · MA-T15 / MA-T18）：
+        //    编排声明决定「委派给谁 / 按什么 Schema 校验子输出 / 能跑多久多久深」，
+        //    是**行为性**内容 —— 不入指纹就会出现「指纹说没变，行为却变了」：
+        //    在途 Run 不失效、绑定了旧指纹的审批被继续复用。
+        //    ⚠️ 空值必须写成显式 null（putNull），不能省略字段 ——
+        //    省略会让「没有该字段」与「该字段为空」两种闭包算出同一个哈希。
+        ObjectNode orchestration = root.putObject("orchestration");
+        orchestration.put("mode", canonical.orchestration().mode().name());
+        putNullable(orchestration, "routingPolicyRef", canonical.orchestration().routingPolicyRef());
+        putNullable(orchestration, "resultContractRef", canonical.orchestration().resultContractRef());
+        orchestration.put("maxDelegationDepth", canonical.orchestration().maxDelegationDepth());
+        orchestration.put("maxChildInvocations", canonical.orchestration().maxChildInvocations());
+        orchestration.put("timeoutMs", canonical.orchestration().timeoutMs());
+        orchestration.put("failurePolicy", canonical.orchestration().failurePolicy().name());
+        root.put("orchestrationBindingVersion", ORCHESTRATION_BINDING_VERSION);
         return MAPPER.writeValueAsString(root);
+    }
+
+    /**
+     * 写入可空字段：{@code null} 写成显式 {@code null}，而不是省略字段。
+     *
+     * <p>⚠️ <b>为什么不能省略</b>：省略会让
+     * 「根本没有这个字段的闭包」与「这个字段为空的闭包」产出同一个哈希，
+     * 于是「引用被撤掉了」与「引用一直是空的」无法区分 ——
+     * 而这两者对「这次委派到底校验什么」的影响完全不同。
+     */
+    private static void putNullable(@NonNull ObjectNode node,
+                                    @NonNull String field,
+                                    @Nullable String value) {
+        if (value == null) {
+            node.putNull(field);
+        } else {
+            node.put(field, value);
+        }
     }
 
     /**

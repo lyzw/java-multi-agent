@@ -9,6 +9,9 @@ import org.junit.jupiter.api.Test;
 import cn.studykid.multiagent.core.cap.CapToolKind;
 import cn.studykid.multiagent.core.cap.CapabilityRiskLevel;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
+import cn.studykid.multiagent.core.orchestration.DelegationFailurePolicy;
+import cn.studykid.multiagent.core.orchestration.OrchestrationBinding;
+import cn.studykid.multiagent.core.orchestration.OrchestrationMode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -167,5 +170,80 @@ class ClosureFingerprintTest {
         assertThat(ClosureFingerprint.isProvisional("pending_v1:abc")).isTrue();
         assertThat(ClosureFingerprint.isProvisional(ClosureFingerprint.PREFIX + "abc")).isFalse();
         assertThat(ClosureFingerprint.isProvisional(null)).isFalse();
+    }
+
+    // ── 编排声明入指纹（多级 Agent v1.1 · MA-T15 / MA-T18）────────────
+
+    @Test
+    @DisplayName("✅ 编排声明入规范化 JSON（路由策略 / 输出契约 / 上限 / 失败策略）")
+    void orchestrationBindingEntersCanonicalJson() {
+        String canonical = ClosureFingerprint.canonicalJson(
+                new EffectiveClosure("agent-1", 1, List.of(), List.of(), List.of(), List.of(),
+                        new OrchestrationBinding(OrchestrationMode.ROUTER, "policy@1",
+                                "contract@1", 3, 5, 45_000L, DelegationFailurePolicy.CONTINUE_ON_ERROR)));
+
+        assertThat(canonical)
+                .as("⛔ 编排声明不在规范化闭包里：编排漂移将无法被指纹察觉")
+                .contains("\"orchestration\"")
+                .contains("policy@1")
+                .contains("contract@1")
+                .contains("ROUTER")
+                .contains("CONTINUE_ON_ERROR")
+                .contains(ClosureFingerprint.ORCHESTRATION_BINDING_VERSION);
+    }
+
+    @Test
+    @DisplayName("⛔ 编排声明任一字段变化 → 指纹必变（否则「指纹说没变，行为却变了」）")
+    void orchestrationChangeChangesFingerprint() {
+        OrchestrationBinding base = new OrchestrationBinding(OrchestrationMode.ROUTER,
+                "policy@1", "contract@1", 3, 5, 45_000L, DelegationFailurePolicy.FAIL_FAST);
+
+        assertThat(fingerprintOf(base))
+                .as("⛔ 路由策略引用变化却指纹不变：换策略不会被感知")
+                .isNotEqualTo(fingerprintOf(new OrchestrationBinding(OrchestrationMode.ROUTER,
+                        "policy@2", "contract@1", 3, 5, 45_000L, DelegationFailurePolicy.FAIL_FAST)));
+        assertThat(fingerprintOf(base))
+                .as("⛔ 输出契约引用变化却指纹不变：换 Schema 不会被感知")
+                .isNotEqualTo(fingerprintOf(new OrchestrationBinding(OrchestrationMode.ROUTER,
+                        "policy@1", "contract@2", 3, 5, 45_000L, DelegationFailurePolicy.FAIL_FAST)));
+        assertThat(fingerprintOf(base))
+                .as("⛔ 超时预算变化却指纹不变：共享超时上限被放宽不会被感知")
+                .isNotEqualTo(fingerprintOf(new OrchestrationBinding(OrchestrationMode.ROUTER,
+                        "policy@1", "contract@1", 3, 5, 90_000L, DelegationFailurePolicy.FAIL_FAST)));
+        assertThat(fingerprintOf(base))
+                .as("⛔ 最大委派深度变化却指纹不变：共享深度上限被放宽不会被感知")
+                .isNotEqualTo(fingerprintOf(new OrchestrationBinding(OrchestrationMode.ROUTER,
+                        "policy@1", "contract@1", 9, 5, 45_000L, DelegationFailurePolicy.FAIL_FAST)));
+        assertThat(fingerprintOf(base))
+                .as("⛔ 最大子调用次数变化却指纹不变：共享次数上限被放宽不会被感知")
+                .isNotEqualTo(fingerprintOf(new OrchestrationBinding(OrchestrationMode.ROUTER,
+                        "policy@1", "contract@1", 3, 99, 45_000L, DelegationFailurePolicy.FAIL_FAST)));
+        assertThat(fingerprintOf(base))
+                .as("⛔ 失败策略变化却指纹不变：失败后行为改变不会被感知")
+                .isNotEqualTo(fingerprintOf(new OrchestrationBinding(OrchestrationMode.ROUTER,
+                        "policy@1", "contract@1", 3, 5, 45_000L,
+                        DelegationFailurePolicy.CONTINUE_ON_ERROR)));
+        assertThat(fingerprintOf(base))
+                .as("⛔ 编排模式变化却指纹不变：LEAF ↔ ROUTER 的切换不会被感知")
+                .isNotEqualTo(fingerprintOf(new OrchestrationBinding(OrchestrationMode.SEQUENTIAL,
+                        "policy@1", "contract@1", 3, 5, 45_000L, DelegationFailurePolicy.FAIL_FAST)));
+    }
+
+    @Test
+    @DisplayName("✅ 缺省 LEAF 与显式 LEAF 同指纹（MA-T01 兼容读不得制造无谓失效）")
+    void defaultLeafMatchesExplicitLeaf() {
+        EffectiveClosure defaulted = new EffectiveClosure("agent-1", 1, List.of(), List.of(),
+                List.of());
+        EffectiveClosure explicitLeaf = new EffectiveClosure("agent-1", 1, List.of(), List.of(),
+                List.of(), List.of(), OrchestrationBinding.leaf());
+
+        assertThat(ClosureFingerprint.of(defaulted))
+                .as("⛔ 缺省闭包与显式 LEAF 闭包指纹不同：历史行会被误判为失效")
+                .isEqualTo(ClosureFingerprint.of(explicitLeaf));
+    }
+
+    private static String fingerprintOf(OrchestrationBinding binding) {
+        return ClosureFingerprint.of(new EffectiveClosure("agent-1", 1, List.of(), List.of(),
+                List.of(), List.of(), binding));
     }
 }

@@ -1,6 +1,8 @@
 package cn.studykid.multiagent.application.cap;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -11,6 +13,8 @@ import java.util.TreeSet;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import cn.studykid.multiagent.application.orchestration.AgentOrchestrationParser;
+import cn.studykid.multiagent.application.orchestration.OrchestrationConfigException;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapObjectType;
@@ -19,6 +23,9 @@ import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.CapabilityRiskLevel;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
 import cn.studykid.multiagent.core.cap.ReasonCode;
+import cn.studykid.multiagent.core.orchestration.AgentOrchestration;
+import cn.studykid.multiagent.core.orchestration.ChildAgentRef;
+import cn.studykid.multiagent.core.orchestration.OrchestrationBinding;
 import cn.studykid.multiagent.ports.mcp.McpManifestPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
@@ -45,6 +52,15 @@ import cn.studykid.multiagent.ports.persistence.PublishedVersionPort;
  * 那会让越权被伪装成「工具未声明」。
  */
 public class PermissionResolver implements ClosureResolver {
+
+    /**
+     * 发布闭包的<b>静态最大深度</b>（平台级护栏）。
+     *
+     * <p>⚠️ 这是<b>配置期</b>护栏，与运行期 {@code maxDelegationDepth} 无关：
+     * 运行期上限防「跑太深」，本上限防「发布出一张理论上能无限递归的图」。
+     * 环检测拦的是「确定成环」，本上限拦的是「还没成环但深到不可运维」。
+     */
+    public static final int MAX_STATIC_CLOSURE_DEPTH = 8;
 
     private final CapAgentDefPort agentDefs;
     private final CapSkillDefPort skillDefs;
@@ -87,7 +103,8 @@ public class PermissionResolver implements ClosureResolver {
                 .orElseThrow(() -> new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
                         "Agent 定义不存在: tenant=" + tenantId + ", agent=" + agentId
                                 + ", version=" + agentVersion));
-        return build(agentId, agentVersion, agentDef);
+        return build(tenantId, agentId, agentVersion, agentDef,
+                new ArrayDeque<>(List.of(agentId + "@" + agentVersion)), 0);
     }
 
     /**
@@ -121,14 +138,18 @@ public class PermissionResolver implements ClosureResolver {
                         ReasonCode.RESOURCE_VERSION_MISMATCH,
                         "Agent 版本行缺失: tenant=" + tenantId + ", agent=" + agentId
                                 + ", version=" + agentVersion));
-        return build(agentId, agentVersion, agentDef);
+        return build(tenantId, agentId, agentVersion, agentDef,
+                new ArrayDeque<>(List.of(agentId + "@" + agentVersion)), 0);
     }
 
     // ── 闭包构建 ──────────────────────────────────────────────────
 
-    private @NonNull EffectiveClosure build(@NonNull String agentId,
+    private @NonNull EffectiveClosure build(@NonNull String tenantId,
+                                             @NonNull String agentId,
                                              int agentVersion,
-                                             @NonNull CapAgentDef agentDef) {
+                                             @NonNull CapAgentDef agentDef,
+                                             @NonNull Deque<String> path,
+                                             int depth) {
         // ⚠️ overrides 解析抽至 AgentOverrides（全仓唯一实现）：授权路径与管理面
         //    图谱共用同一份解析，避免「图谱显示与实际收紧不一致」。
         AgentOverrides overrides = AgentOverrides.parse(agentDef.overrides());
@@ -207,8 +228,116 @@ public class PermissionResolver implements ClosureResolver {
                     declaredTools, skill.paramPolicies()));
         }
 
+        // ⚠️ 编排声明在**闭包构建期**解析一次，并固化进闭包（MA-T15 / MA-T18）：
+        //    它决定「委派给谁 / 按什么 Schema 校验输出 / 能跑多久多久深」，
+        //    是行为性内容 —— 不固化就会出现「指纹说没变，行为却变了」。
+        //    解析失败一律 fail-closed（配置缺陷不得降级成 LEAF 照常跑）。
+        AgentOrchestration own = parseOrchestration(agentDef);
+
+        List<EffectiveClosure.ChildAgentBinding> children =
+                expandChildren(tenantId, agentDef, own, path, depth);
+
         return new EffectiveClosure(agentId, agentVersion, skills,
-                new ArrayList<>(tools.values()), mcpBindings).canonicalized();
+                new ArrayList<>(tools.values()), mcpBindings, children,
+                OrchestrationBinding.of(own)).canonicalized();
+    }
+
+    /**
+     * 解析某个 Agent 版本行的编排声明（fail-closed）。
+     *
+     * <p>⚠️ <b>为什么单独抽出来</b>：编排声明要被解析<b>两处</b> ——
+     * 一处是「本 Agent 自己的编排声明」（固化进闭包），
+     * 一处是「本 Agent 声明了哪些子 Agent」（展开子闭包）。
+     * 两处各写一遍解析，等于两处可能对同一份声明给出不同解读，
+     * 而「指纹固化的编排」与「实际展开的子边」一旦不是同一份，
+     * 闭包就自相矛盾了 —— 那是最难查的一类缺陷。
+     */
+    private @NonNull AgentOrchestration parseOrchestration(@NonNull CapAgentDef agentDef) {
+        try {
+            return AgentOrchestrationParser.parse(agentDef.orchestration());
+        } catch (OrchestrationConfigException e) {
+            // ⚠️ 配置缺陷不得降级成 LEAF：那会让作者以为多级已生效，
+            //    实际所有委派都被静默丢弃（MA-T01 只允许「字段缺失」兼容读）。
+            throw new ClosureResolutionException(ReasonCode.ORCHESTRATION_INVALID,
+                    "Agent 编排声明非法: agent=" + agentDef.agentId()
+                            + ", version=" + agentDef.version() + ", 原因: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 递归展开子 Agent（多级 Agent v1.1 · 06「发布闭包算法」）。
+     *
+     * <p>算法（06 变更补充 §发布闭包算法）：
+     * <ol>
+     *   <li>检查目标 release <b>已发布</b>、租户/命名空间一致、引用固定；</li>
+     *   <li>用 DFS 访问栈拒绝自环与间接环；限制最大静态深度；</li>
+     *   <li>规范化排序所有节点/边与版本，计算 {@code configFingerprint}。</li>
+     * </ol>
+     *
+     * <p>⚠️ <b>子 Agent 的能力不并入父闭包的工具集</b>：委派关系不是授权关系。
+     * 这里只把「子 Agent 边 + 子 Agent 自身闭包指纹」放进父闭包，
+     * 使后代的行为性变化能传导到父指纹（MA-T15）。
+     *
+     * <p>⚠️ <b>跨租户引用不泄漏存在性</b>：子 Agent 查询按本租户进行，
+     * 查不到时统一报「引用不存在」，不区分「不存在」与「在别的租户」（MA-T04）。
+     */
+    private @NonNull List<EffectiveClosure.ChildAgentBinding> expandChildren(
+            @NonNull String tenantId,
+            @NonNull CapAgentDef agentDef,
+            @NonNull AgentOrchestration orchestration,
+            @NonNull Deque<String> path,
+            int depth) {
+
+        if (orchestration.isLeaf() || !orchestration.hasChildren()) {
+            return List.of();
+        }
+        if (depth + 1 > MAX_STATIC_CLOSURE_DEPTH) {
+            throw new ClosureResolutionException(ReasonCode.DELEGATION_DEPTH_EXCEEDED,
+                    "子 Agent 闭包超过最大静态深度 " + MAX_STATIC_CLOSURE_DEPTH
+                            + ": agent=" + agentDef.agentId() + ", depth=" + depth);
+        }
+
+        List<EffectiveClosure.ChildAgentBinding> children = new ArrayList<>();
+        for (ChildAgentRef ref : orchestration.childAgentRefs()) {
+            String key = ref.key();
+            if (path.contains(key)) {
+                // ⚠️ 自环与间接环在此拦下（MA-T03）。运行期才发现环意味着
+                //    已经在无限递归里烧预算了。
+                throw new ClosureResolutionException(ReasonCode.AGENT_REF_CYCLE,
+                        "子 Agent 引用形成环: " + key + "（路径: " + String.join(" → ", path) + "）");
+            }
+            CapAgentDef childDef = agentDefs.find(tenantId, ref.agentId(), ref.releaseVersion())
+                    .orElseThrow(() -> new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
+                            "子 Agent 引用不存在: agent=" + ref.agentId()
+                                    + ", version=" + ref.releaseVersion()));
+            if (!childDef.isPublished()) {
+                throw new ClosureResolutionException(ReasonCode.AGENT_REF_NOT_PUBLISHED,
+                        "子 Agent 引用未发布: agent=" + ref.agentId()
+                                + ", version=" + ref.releaseVersion());
+            }
+
+            path.push(key);
+            EffectiveClosure childClosure;
+            try {
+                childClosure = build(tenantId, ref.agentId(), ref.releaseVersion(), childDef,
+                        path, depth + 1);
+            } finally {
+                path.pop();
+            }
+
+            // ⚠️ 子 Agent 的编排模式取自**子闭包固化的编排绑定**，
+            //    不再单独解析一次子 Agent 的声明 ——
+            //    「父闭包固化的编排」与「实际展开的子边」必须出自同一次解析，
+            //    否则闭包会自相矛盾（指纹说 A、实际按 B 展开）。
+            children.add(new EffectiveClosure.ChildAgentBinding(
+                    ref.agentId(),
+                    ref.releaseVersion(),
+                    childDef.configFingerprint(),
+                    ClosureFingerprint.of(childClosure),
+                    childClosure.orchestration().mode(),
+                    depth + 1));
+        }
+        return children;
     }
 
     private EffectiveClosure.@NonNull ToolBinding toBinding(@NonNull CapToolDef tool, int version) {

@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.application.cap;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -14,6 +15,7 @@ import org.jspecify.annotations.Nullable;
 import cn.studykid.multiagent.core.cap.AuthzVersion;
 import cn.studykid.multiagent.core.cap.AuthzUnavailableException;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
+import cn.studykid.multiagent.core.cap.CapResultContractDef;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapObjectType;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
@@ -28,6 +30,7 @@ import cn.studykid.multiagent.ports.mcp.McpManifestPort;
 import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
+import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
 import cn.studykid.multiagent.ports.persistence.CapSkillDefPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 import cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort;
@@ -50,6 +53,8 @@ final class CapFixture {
     final Map<String, CapToolDef> tools = new LinkedHashMap<>();
     final Map<String, CapMcpServerDef> servers = new LinkedHashMap<>();
     final Map<String, CapAgentDef> agents = new LinkedHashMap<>();
+    /** 输出契约定义行（多级 Agent v1.1 · FR-027）。 */
+    final Map<String, CapResultContractDef> resultContracts = new LinkedHashMap<>();
     final Map<String, Set<String>> manifests = new LinkedHashMap<>();
     /** 标记为「清单不可用」的 server（运行故障态，与「清单为空」语义不同）。 */
     final Set<String> unavailableManifests = new LinkedHashSet<>();
@@ -84,8 +89,8 @@ final class CapFixture {
                                    @NonNull String paramPolicies) {
         skills.put(key(id, version), new CapSkillDef(id, version, id, id + " desc",
                 declaredTools, declaredMcp, ceiling, paramPolicies, List.of(),
-                "fp-skill-" + id + "-" + version, 1, java.time.Instant.EPOCH,
-                java.time.Instant.EPOCH));
+                "fp-skill-" + id + "-" + version, 1, Instant.EPOCH,
+                Instant.EPOCH));
         return this;
     }
 
@@ -103,8 +108,8 @@ final class CapFixture {
                                   @NonNull String paramPolicies) {
         tools.put(key(id, version), new CapToolDef(id, version, id, kind, risk,
                 mcpServerId, mcpToolName, "{}", paramPolicies,
-                "fp-tool-" + id + "-" + version, 1, java.time.Instant.EPOCH,
-                java.time.Instant.EPOCH));
+                "fp-tool-" + id + "-" + version, 1, Instant.EPOCH,
+                Instant.EPOCH));
         return this;
     }
 
@@ -135,7 +140,7 @@ final class CapFixture {
                 CapMcpServerDef.AuthKind.TOKEN, tier,
                 exposedToolAllowlist, CapabilityRiskLevel.WRITE_EXTERNAL, false,
                 "fp-server-" + id + "-" + version, "cred-ref-" + id, 1,
-                java.time.Instant.EPOCH, java.time.Instant.EPOCH));
+                Instant.EPOCH, Instant.EPOCH));
         return this;
     }
 
@@ -193,12 +198,100 @@ final class CapFixture {
     @NonNull CapFixture withAgent(@NonNull String tenantId, @NonNull String agentId, int version,
                                    @NonNull List<String> enabledSkills,
                                    @NonNull String overrides) {
+        return withAgent(tenantId, agentId, version, enabledSkills, overrides, "{}");
+    }
+
+    /**
+     * 登记一个 Agent 定义行（带编排声明）。
+     *
+     * @param tenantId     租户标识
+     * @param agentId      Agent 标识
+     * @param version      版本号
+     * @param enabledSkills 启用的 Skill id
+     * @param overrides    收紧覆盖（JSON 文本）
+     * @param orchestration 编排声明（JSON 文本；{@code "{}"} = LEAF）
+     */
+    @NonNull CapFixture withAgent(@NonNull String tenantId, @NonNull String agentId, int version,
+                                   @NonNull List<String> enabledSkills,
+                                   @NonNull String overrides,
+                                   @NonNull String orchestration) {
         agents.put(tenantId + "/" + agentId + "@" + version,
-                new CapAgentDef(
-                        tenantId, agentId, version, agentId, agentId + " desc",
-                        List.of("TEACHER"), enabledSkills, List.of(), List.of(),
-                        overrides, "fp-agent-" + agentId + "-" + version, 1,
-                        java.time.Instant.EPOCH, java.time.Instant.EPOCH));
+                agentDef(tenantId, agentId, version, enabledSkills, overrides, orchestration,
+                        Instant.EPOCH));
+        return this;
+    }
+
+    /**
+     * 构造 Agent 定义行，<b>内容指纹按真实算法计算</b>。
+     *
+     * <p>⚠️ <b>为什么不能用假的固定指纹</b>（如 {@code "fp-agent-" + id}）：
+     * 真实链路里 {@code config_fingerprint} 是「这一行内容没变」的证明，
+     * 且它<b>覆盖编排声明</b>（见 {@link CapObjectFingerprint#of}）。
+     * 夹具若给一个与内容无关的固定值，则「同一版本行的编排声明被改写」
+     * 这类漂移在测试里<b>根本不可见</b> ——
+     * 用例会「测了一个不存在的正确性」。
+     */
+    @NonNull
+    private static CapAgentDef agentDef(@NonNull String tenantId,
+                                        @NonNull String agentId,
+                                        int version,
+                                        @NonNull List<String> enabledSkills,
+                                        @NonNull String overrides,
+                                        @NonNull String orchestration,
+                                        @Nullable Instant publishedAt) {
+        // ⚠️ 内容指纹不含自身（否则自引用无法计算），
+        //    故先用占位值构造一行，再按内容算出真实指纹，最后重建该行。
+        CapAgentDef provisional = new CapAgentDef(
+                tenantId, agentId, version, agentId, agentId + " desc",
+                List.of("TEACHER"), enabledSkills, List.of(), List.of(),
+                overrides, orchestration, "pending", 1,
+                Instant.EPOCH, publishedAt);
+        return new CapAgentDef(
+                tenantId, agentId, version, agentId, agentId + " desc",
+                List.of("TEACHER"), enabledSkills, List.of(), List.of(),
+                overrides, orchestration, CapObjectFingerprint.of(provisional), 1,
+                Instant.EPOCH, publishedAt);
+    }
+
+    /**
+     * 登记一个<b>未发布</b>的 Agent 定义行（草稿）。
+     *
+     * <p>用于验证「子 Agent 引用未发布版本 → 拒绝」（MA-T02）。
+     *
+     * @param tenantId     租户标识
+     * @param agentId      Agent 标识
+     * @param version      版本号
+     * @param enabledSkills 启用的 Skill id
+     * @param overrides    收紧覆盖（JSON 文本）
+     * @param orchestration 编排声明（JSON 文本）
+     */
+    @NonNull CapFixture withUnpublishedAgent(@NonNull String tenantId, @NonNull String agentId,
+                                              int version, @NonNull List<String> enabledSkills,
+                                              @NonNull String overrides,
+                                              @NonNull String orchestration) {
+        agents.put(tenantId + "/" + agentId + "@" + version,
+                agentDef(tenantId, agentId, version, enabledSkills, overrides, orchestration,
+                        null));
+        return this;
+    }
+
+    /**
+     * 登记一个输出契约定义行。
+     *
+     * @param contractId 契约标识
+     * @param version    契约版本号
+     * @param schemaJson 契约定义（JSON Schema 文本）
+     * @param published  是否已发布（未发布不可被 Agent 引用）
+     * @return 本夹具
+     */
+    @NonNull CapFixture withContract(@NonNull String tenantId, @NonNull String contractId,
+                                     int version, @NonNull String schemaJson, boolean published) {
+        resultContracts.put(tenantId + "/" + contractId + "@" + version,
+                new CapResultContractDef(
+                tenantId, contractId, version, schemaJson,
+                "fp-contract-" + contractId + "-" + version, 1,
+                Instant.EPOCH,
+                published ? Instant.EPOCH : null));
         return this;
     }
 
@@ -255,6 +348,44 @@ final class CapFixture {
                     String tenantId, String agentId) {
                 return agents.values().stream()
                         .filter(a -> tenantId.equals(a.tenantId()) && agentId.equals(a.agentId()))
+                        .max((a, b) -> Integer.compare(a.version(), b.version()));
+            }
+        };
+    }
+
+    @NonNull CapResultContractPort resultContracts() {
+        return new CapResultContractPort() {
+            @Override
+            public boolean insert(@NonNull CapResultContractDef def) {
+                String key = def.tenantId() + "/" + def.contractId() + "@" + def.version();
+                return resultContracts.putIfAbsent(key, def) == null;
+            }
+
+            @Override
+            public @NonNull Optional<CapResultContractDef> find(@NonNull String tenantId,
+                                                                 @NonNull String contractId,
+                                                                 int version) {
+                return Optional.ofNullable(resultContracts.get(
+                        tenantId + "/" + contractId + "@" + version));
+            }
+
+            @Override
+            public @NonNull Optional<CapResultContractDef> findLatestPublished(
+                    @NonNull String tenantId, @NonNull String contractId) {
+                return resultContracts.values().stream()
+                        .filter(c -> tenantId.equals(c.tenantId()))
+                        .filter(c -> contractId.equals(c.contractId()))
+                        .filter(CapResultContractDef::isPublished)
+                        .max((a, b) -> Integer.compare(a.version(), b.version()));
+            }
+
+            @Override
+            public @NonNull Optional<CapResultContractDef> findLatest(
+                    @NonNull String tenantId, @NonNull String contractId) {
+                // ⚠️ 含草稿：草稿也占用版本号，只看已发布版本会分配出撞号的版本
+                return resultContracts.values().stream()
+                        .filter(c -> tenantId.equals(c.tenantId()))
+                        .filter(c -> contractId.equals(c.contractId()))
                         .max((a, b) -> Integer.compare(a.version(), b.version()));
             }
         };
@@ -413,7 +544,7 @@ final class CapFixture {
                 return version == null
                         ? Optional.empty()
                         : Optional.of(new AuthzVersion(tenantId, principalId, version,
-                                java.time.Instant.EPOCH));
+                                Instant.EPOCH));
             }
 
             @Override
@@ -433,7 +564,7 @@ final class CapFixture {
                                                     @NonNull String principalId) {
                 return find(tenantId, principalId).orElseGet(() -> {
                     AuthzVersion created = new AuthzVersion(tenantId, principalId,
-                            AuthzVersion.INITIAL_VERSION, java.time.Instant.EPOCH);
+                            AuthzVersion.INITIAL_VERSION, Instant.EPOCH);
                     authzVersions.put(tenantId + "/" + principalId, created.authzVersion());
                     return created;
                 });
@@ -464,7 +595,7 @@ final class CapFixture {
                     max = Math.max(max, entry.getValue());
                 }
                 return new AuthzWatermark(tenantId, subjects, revoked, max, null,
-                        java.time.Instant.EPOCH);
+                        Instant.EPOCH);
             }
         };
     }
