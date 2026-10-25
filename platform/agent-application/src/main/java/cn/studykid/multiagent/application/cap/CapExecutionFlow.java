@@ -563,7 +563,7 @@ public class CapExecutionFlow {
         ExecutionAdmissionChecker.AdmissionOutcome admissionOutcome = admission.check(
                 new ExecutionAdmissionChecker.AdmissionRequest(
                         tenantId, principalId, phaseA.agentId(), task.runId(),
-                        phaseA.authzVersion(), phaseA.fingerprint()));
+                        phaseA.authzVersion(), phaseA.fingerprint(), phaseA.agentVersion()));
         if (!admissionOutcome.admitted()) {
             // ⚠️ 准入失效 → 取消审批 + 释放预算 + PRE 标失败，阻断新副作用（§5.3 步骤 13）。
             //    §5.3.5「准入失败 → CANCELLED / 释放 / PRE 取消」。
@@ -764,11 +764,23 @@ public class CapExecutionFlow {
      * @param fingerprint  Phase A 算出的闭包指纹（准入比对基线）
      * @param toolVersion 目标 Tool 的版本（写执行意图用）
      */
+    /**
+     * Phase A 的判定结果（授权结论 + 准入比对基线）。
+     *
+     * @param denial       授权拒绝结论；通过时为 {@code null}
+     * @param agentId      执行主体（子 Agent 路径 = 子 Agent 自己）
+     * @param authzVersion 准入比对的授权版本基线
+     * @param fingerprint  准入比对的闭包指纹基线
+     * @param toolVersion  目标 Tool 的版本（写执行意图用）
+     * @param agentVersion 执行主体的<b>固定 release 版本</b>；
+     *                     {@code null} = 单 Agent 路径（当前已发布版本）
+     */
     private record PhaseA(@Nullable AuthorizationDecision denial,
                            @Nullable String agentId,
                            long authzVersion,
                            @NonNull String fingerprint,
-                           @Nullable Integer toolVersion) {
+                           @Nullable Integer toolVersion,
+                           @Nullable Integer agentVersion) {
     }
 
     private @NonNull PhaseA phaseA(@NonNull String tenantId,
@@ -809,12 +821,18 @@ public class CapExecutionFlow {
         //    指纹期望值也来自子 Agent 的闭包 —— 绝不沿用根 Agent 的闭包。
         String expectedFingerprint = null;
         int fixedVersion = 0;
+        // ⚠️⚠️ 固定版本必须**一路带到底**（第十八批）：
+        //    校验器与准入检查各自解析一次闭包，若它们按「当前已发布版本」解析，
+        //    而 Phase A 按固定版本解析 → 三处比的是三个不同的东西。
+        //    {@code null} = 单 Agent 路径（当前已发布版本）；非 null = 子 Agent 的固定 release。
+        Integer agentVersion = null;
 
         EffectiveClosure closure;
         try {
             if (scope != null) {
                 agentId = scope.agentId();
                 fixedVersion = scope.agentVersion();
+                agentVersion = fixedVersion;
                 expectedFingerprint = scope.expectedFingerprint();
                 closure = closureResolver.resolve(tenantId, agentId, fixedVersion);
             } else {
@@ -840,7 +858,7 @@ public class CapExecutionFlow {
         for (String skillId : candidateSkills) {
             AuthorizationDecision decision = validator.validate(new InvocationValidator.InvocationRequest(
                     context, agentId, skillId, call.toolName(), call.arguments(),
-                    task.runId(), mcpTarget, expectedFingerprint));
+                    task.runId(), mcpTarget, expectedFingerprint, agentVersion));
             if (!decision.isAllowed()) {
                 // ⚠️ 多个 Skill 声明同一工具时，<b>全部通过</b>才算通过 ——
                 //    风险上限取最严者（§4.4「Skill 只能收紧」）。
@@ -855,11 +873,11 @@ public class CapExecutionFlow {
         Integer toolVersion = closure.tool(call.toolName()).map(EffectiveClosure.ToolBinding::version)
                 .orElse(null);
         return new PhaseA(null, agentId, authzVersion,
-                ClosureFingerprint.of(closure), toolVersion);
+                ClosureFingerprint.of(closure), toolVersion, agentVersion);
     }
 
     private static @NonNull PhaseA deny(@NonNull ReasonCode reasonCode) {
-        return new PhaseA(AuthorizationDecision.deny(reasonCode), null, 0L, "", null);
+        return new PhaseA(AuthorizationDecision.deny(reasonCode), null, 0L, "", null, null);
     }
 
     /**

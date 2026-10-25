@@ -712,4 +712,163 @@ class CapExecutionFlowTest {
                     .isEqualTo("tool.invoke:" + RUN_ID + "/" + TOOL + "/call-1");
         }
     }
+
+    // ── 第十八批：CAP 链路的子 Agent 路径必须真正可用 ────────────
+
+    /**
+     * 第十八批：CAP 链路的子 Agent 路径。
+     *
+     * <p>⚠️ <b>本组用例针对的是「子 Agent 能不能真的调到工具」</b>，
+     * 不是幂等键。修复前该路径**每一次调用都在步骤 13 被拒**
+     * （{@code EXEC_ADMISSION_STALE}）—— 详见 00 文档「历批修正的设计缺陷」。
+     */
+    @Nested
+    @DisplayName("第十八批 CAP 链路的子 Agent 路径")
+    class ChildAgentPath {
+
+        /** 子 Agent 标识（与根 Agent 同 Skill、异身份）。 */
+        private static final String CHILD = "child_tutor";
+
+        /** 子 Agent **新 release** 专用的 Skill（刻意不声明 TOOL）。 */
+        private static final String SKILL_V2 = "profile_skill_v2";
+
+        /**
+         * 构造子 Agent 的执行作用域（固定 release + 真实闭包指纹）。
+         */
+        private ExecutionScope childScope(int version) {
+            cap.withAgent(TENANT, CHILD, version, List.of(SKILL), "{}");
+            return new ExecutionScope(CHILD, version,
+                    ClosureFingerprint.of(resolver.resolve(TENANT, CHILD, version)));
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 子 Agent 的工具调用必须成功（此前被准入检查整体拒绝）")
+        void childToolCallSucceeds() {
+            CapExecutionFlow flow = flow();
+
+            CapToolDecision decision = flow.invoke(TENANT, task(), call(),
+                    exec.tool(TOOL), childScope(1));
+
+            assertThat(decision.decision().reasonCode())
+                    .as("⚠️⚠️ 子 Agent 的调用不得被准入检查拒绝 —— "
+                            + "准入拿「Run 快照里的**根 Agent** 闭包指纹」去比"
+                            + "「Phase A 的**子 Agent** 闭包指纹」，两者必然不等")
+                    .isEqualTo(ReasonCode.SUCCESS);
+            assertThat(decision.decision().status())
+                    .isEqualTo(AuthorizationDecision.Status.SUCCEEDED);
+            assertThat(exec.toolExecutions)
+                    .as("⚠️⚠️ 子 Agent 的工具必须真的执行 —— "
+                            + "「被拒」与「执行失败」必须分开记账")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 父子各调一次同名工具 → 各自都执行")
+        void parentAndChildBothExecute() {
+            CapExecutionFlow flow = flow();
+
+            flow.invoke(TENANT, task(), call(), exec.tool(TOOL));
+            flow.invoke(TENANT, task(), call(), exec.tool(TOOL), childScope(1));
+
+            assertThat(exec.toolExecutions)
+                    .as("⚠️⚠️ 父子两次调用必须真的执行两次 —— "
+                            + "只执行一次意味着子 Agent 的那次副作用从未发生")
+                    .isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("✅ 子 Agent 发布新 release 后，在途委派仍按固定 release 授权")
+        void childDoesNotDriftToNewRelease() {
+            // ⚠️ 子 Agent 的 release 在**委派时固定**（不可妥协约束）：
+            //    别人给子 Agent 发布新版本，**不得**让在途委派漂移到新版本，
+            //    更不得让在途委派因此被拒。
+            //    v2 启用另一个 Skill（刻意不声明 TOOL）→ 一旦漂移到 v2，
+            //    TOOL 就会变成「未声明」→ 被拒 —— 那是最容易被忽略的漂移形态。
+            cap.withSkill(SKILL_V2, 1, CapabilityRiskLevel.READ, List.of("get_profile_v2"));
+            cap.withTool("get_profile_v2", 1, CapabilityRiskLevel.READ, "[]");
+            cap.withAgent(TENANT, CHILD, 2, List.of(SKILL_V2), "{}");
+
+            CapExecutionFlow flow = flow();
+            CapToolDecision decision = flow.invoke(TENANT, task(), call(),
+                    exec.tool(TOOL), childScope(1));
+
+            assertThat(decision.decision().reasonCode())
+                    .as("⚠️⚠️ 子 Agent 发布新版本不得影响在途委派 —— "
+                            + "固定 release 漂移会让在途子调用全挂")
+                    .isEqualTo(ReasonCode.SUCCESS);
+            assertThat(exec.toolExecutions).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("⚠️ 根 Agent 的闭包漂移 → 子路径仍被拒（不得放宽既有防线）")
+        void rootClosureDriftStillBlocksChildPath() {
+            // ⚠️ 修「子路径被误拒」**不得**顺带把「根的依赖集漂移」也放行：
+            //    Run 快照是根的闭包的固化证据，根的闭包变了 → 在途 Run 失效
+            //    （与根路径同口径，见「编排声明入指纹导致在途 Run 一次性失效」）。
+            cap.withAgent(TENANT, AGENT, 2, List.of(SKILL), "{}");
+            cap.withPublishedAgentVersion(TENANT, AGENT, 2);
+
+            CapExecutionFlow flow = flow();
+            CapToolDecision decision = flow.invoke(TENANT, task(), call(),
+                    exec.tool(TOOL), childScope(1));
+
+            assertThat(decision.decision().reasonCode())
+                    .as("⚠️⚠️ 根的闭包漂移必须仍然阻断子路径的新副作用")
+                    .isEqualTo(ReasonCode.EXEC_ADMISSION_STALE);
+            assertThat(exec.toolExecutions)
+                    .as("⚠️⚠️ 被准入拒绝的调用不得有任何副作用")
+                    .isEqualTo(0);
+        }
+    }
+
+    // ── 第十八批：根路径的既有防线不得被放宽（回归保护）──────────
+
+    /**
+     * 第十八批：根路径的回归保护。
+     *
+     * <p>⚠️ <b>本组用例的存在理由</b>：第十八批动了执行准入的
+     * 「Run 快照指纹复核」口径（改为按<b>快照自己的 Agent</b>比对），
+     * 而该口径在<b>根路径</b>上<b>必须保持等价</b> ——
+     * 根的闭包漂移仍然要阻断新副作用。
+     * <br>⚠️ 此前这条防线<b>没有</b>回归保护：既有用例只覆盖「撤权」路径
+     * （授权版本递增），闭包漂移路径没人钉 —— 口径一改就可能悄悄放松。
+     */
+    @Nested
+    @DisplayName("第十八批 根路径的既有防线（回归保护）")
+    class RootPathRegression {
+
+        @Test
+        @DisplayName("⚠️⚠️ 根 Agent 的闭包漂移 → 根路径的工具调用仍被拒")
+        void rootClosureDriftStillBlocksRootPath() {
+            cap.withAgent(TENANT, AGENT, 2, List.of(SKILL), "{}");
+            cap.withPublishedAgentVersion(TENANT, AGENT, 2);
+
+            CapExecutionFlow flow = flow();
+            CapToolDecision decision = flow.invoke(TENANT, task(), call(), exec.tool(TOOL));
+
+            // ⚠️ 根路径的漂移在 **Phase A 步骤 7** 就被拦（指纹与 Run 快照不符），
+            //    根本走不到步骤 13 的准入复核 —— 拦截点更早是好事（fail-closed 且更早）。
+            //    步骤 13 的快照复核是**第二道**防线：它只在「Phase A 之后、
+            //    准入之前闭包又变了」这个窄窗口里才有意义。
+            assertThat(decision.decision().reasonCode())
+                    .as("⚠️⚠️ 根的闭包漂移必须仍然阻断新副作用 —— "
+                            + "快照是「根的依赖集没变」的固化证据")
+                    .isEqualTo(ReasonCode.CONFIG_FINGERPRINT_STALE);
+            assertThat(exec.toolExecutions)
+                    .as("⚠️⚠️ 被拒的调用不得有任何副作用")
+                    .isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("✅ 根路径未被改动时照常放行（口径没变 ≠ 一律拒绝）")
+        void rootPathStillWorksWhenNothingChanged() {
+            CapExecutionFlow flow = flow();
+            CapToolDecision decision = flow.invoke(TENANT, task(), call(), exec.tool(TOOL));
+
+            assertThat(decision.decision().status())
+                    .as("⚠️⚠️ 修复不得把根路径一并拒了 —— 那等于把单 Agent 链路也打死")
+                    .isEqualTo(AuthorizationDecision.Status.SUCCEEDED);
+            assertThat(exec.toolExecutions).isEqualTo(1);
+        }
+    }
 }

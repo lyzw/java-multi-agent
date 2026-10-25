@@ -84,6 +84,13 @@ public class InvocationValidator {
      *                             读 Run 快照比对（单 Agent 路径），
      *                             非空时直接与之比对（<b>子 Agent 路径</b>，
      *                             见 {@link cn.studykid.multiagent.core.cap.ExecutionScope}）
+     * @param agentVersion <b>执行主体的固定 release 版本</b>（第十八批）：
+     *                    {@code null} = 单 Agent 路径（按「当前已发布版本」解析）；
+     *                    非空 = 子 Agent 路径，闭包<b>只能</b>按这个固定版本解析。
+     *                    ⚠️ 子 Agent 的 release 在委派时已固定，
+     *                    按「当前已发布版本」解析会让<b>别人给它发布新版本</b>
+     *                    时的在途委派漂移 —— 那既违反「子 Agent 固定 release」，
+     *                    也会让在途委派莫名其妙地变成「工具未声明」而被拒。
      */
     public record InvocationRequest(
             @NonNull TenantContext context,
@@ -93,7 +100,23 @@ public class InvocationValidator {
             @NonNull Map<String, Object> arguments,
             @Nullable String runId,
             @Nullable McpTarget mcpTarget,
-            @Nullable String expectedFingerprint) {
+            @Nullable String expectedFingerprint,
+            @Nullable Integer agentVersion) {
+
+        /**
+         * 兼容构造器：单 Agent 路径（指纹按 Run 快照比对，闭包按当前已发布版本解析）。
+         */
+        public InvocationRequest(@NonNull TenantContext context,
+                                 @NonNull String agentId,
+                                 @NonNull String skillId,
+                                 @NonNull String toolId,
+                                 @NonNull Map<String, Object> arguments,
+                                 @Nullable String runId,
+                                 @Nullable McpTarget mcpTarget,
+                                 @Nullable String expectedFingerprint) {
+            this(context, agentId, skillId, toolId, arguments, runId, mcpTarget,
+                    expectedFingerprint, null);
+        }
 
         /**
          * 兼容构造器：单 Agent 路径（指纹按 Run 快照比对）。
@@ -105,7 +128,7 @@ public class InvocationValidator {
                                  @NonNull Map<String, Object> arguments,
                                  @Nullable String runId,
                                  @Nullable McpTarget mcpTarget) {
-            this(context, agentId, skillId, toolId, arguments, runId, mcpTarget, null);
+            this(context, agentId, skillId, toolId, arguments, runId, mcpTarget, null, null);
         }
     }
 
@@ -123,9 +146,17 @@ public class InvocationValidator {
         }
 
         // ── 步骤 3：PermissionResolver → EffectiveClosure ─────────────
+        // ⚠️⚠️ 闭包解析口径必须与「执行主体的 release 口径」一致（第十八批）：
+        //    子 Agent 的 release 在委派时**固定** → 闭包只能按那个固定版本解析。
+        //    按「当前已发布版本」解析会让「别人给子 Agent 发布新版本」时的
+        //    在途委派漂移到新版本 —— 那既违反「子 Agent 固定 release」，
+        //    也会让在途委派变成「工具未声明 / Skill 未启用」而被拒。
         EffectiveClosure closure;
         try {
-            closure = resolver.resolveCurrent(request.context().tenantId(), request.agentId());
+            closure = request.agentVersion() != null
+                    ? resolver.resolve(request.context().tenantId(), request.agentId(),
+                            request.agentVersion())
+                    : resolver.resolveCurrent(request.context().tenantId(), request.agentId());
         } catch (ClosureResolutionException e) {
             return AuthorizationDecision.deny(e.reasonCode());
         }

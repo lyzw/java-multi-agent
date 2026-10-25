@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,10 +63,16 @@ public class ExecutionAdmissionChecker {
      *
      * @param tenantId             租户
      * @param principalId          主体（Worker 服务账号）
-     * @param agentId              目标 Agent
+     * @param agentId              目标 Agent（<b>执行主体</b>：子 Agent 路径 = 子 Agent 自己）
      * @param runId                所属 Run
      * @param authzVersionAtPhaseA Phase A 判定时读到的授权版本（准入比对的基线）
      * @param fingerprintAtPhaseA  Phase A 判定时算出的闭包指纹（准入比对的基线）
+     * @param agentVersion         执行主体的<b>固定 release 版本</b>（第十八批）：
+     *                             {@code null} = 单 Agent 路径（当前已发布版本）；
+     *                             非空 = 子 Agent 路径，闭包<b>只能</b>按这个固定版本重算。
+     *                             ⚠️ 漂移到「当前已发布版本」会让「别人给子 Agent 发布新版本」
+     *                             时的在途委派被判失效 —— 那是把「发布」变成了
+     *                             「打断在途执行」，与「子 Agent 固定 release」直接冲突。
      */
     public record AdmissionRequest(
             @NonNull String tenantId,
@@ -73,7 +80,21 @@ public class ExecutionAdmissionChecker {
             @NonNull String agentId,
             @NonNull String runId,
             long authzVersionAtPhaseA,
-            @NonNull String fingerprintAtPhaseA) {
+            @NonNull String fingerprintAtPhaseA,
+            @Nullable Integer agentVersion) {
+
+        /**
+         * 兼容构造器：单 Agent 路径（闭包按当前已发布版本重算）。
+         */
+        public AdmissionRequest(@NonNull String tenantId,
+                                @NonNull String principalId,
+                                @NonNull String agentId,
+                                @NonNull String runId,
+                                long authzVersionAtPhaseA,
+                                @NonNull String fingerprintAtPhaseA) {
+            this(tenantId, principalId, agentId, runId, authzVersionAtPhaseA,
+                    fingerprintAtPhaseA, null);
+        }
     }
 
     /**
@@ -135,10 +156,15 @@ public class ExecutionAdmissionChecker {
         }
 
         // ── 闭包指纹新鲜度 ─────────────────────────────────────────
+        // ⚠️⚠️ 重算口径必须与 Phase A **一致**（第十八批）：
+        //    子 Agent 路径按**固定 release** 重算（不得漂移到「当前已发布版本」——
+        //    那会让「别人给子 Agent 发布新版本」把在途委派打断）。
         String currentFingerprint;
         try {
-            EffectiveClosure closure = closureResolver.resolveCurrent(
-                    request.tenantId(), request.agentId());
+            EffectiveClosure closure = request.agentVersion() != null
+                    ? closureResolver.resolve(request.tenantId(), request.agentId(),
+                            request.agentVersion())
+                    : closureResolver.resolveCurrent(request.tenantId(), request.agentId());
             currentFingerprint = ClosureFingerprint.of(closure);
         } catch (RuntimeException e) {
             // ⚠️ 闭包解析不出 → 无法确认指纹新鲜 → fail-closed
@@ -165,11 +191,35 @@ public class ExecutionAdmissionChecker {
             return AdmissionOutcome.rejected(ReasonCode.EXEC_ADMISSION_STALE,
                     currentVersion, currentFingerprint, now);
         }
-        if (!snapshot.get().configFingerprint().equals(request.fingerprintAtPhaseA())) {
-            log.warn("准入检查：Run 快照指纹与 Phase A 基线不一致，阻断新副作用: tenant={}, run={}",
-                    request.tenantId(), request.runId());
+        // ⚠️⚠️ 快照复核必须按「**快照自己的 Agent**」比对（第十八批）：
+        //    Run 快照存的是**根 Agent** 的闭包指纹，而子 Agent 路径的 Phase A 基线
+        //    是**子 Agent** 的闭包指纹 —— 两者是**不同主体**，
+        //    拿它们互相比必然不等 → 子 Agent 的每一次工具调用都被判失效
+        //    （EXEC_ADMISSION_STALE），多级路径在 CAP 链路上整体不可用。
+        //    正确的口径：快照证明的是「**根**的依赖集没变」，
+        //    就该拿**根**的当前闭包指纹去比；子 Agent 自己的新鲜性由上面那一步保证。
+        String snapshotAgentId = snapshot.get().agentId();
+        String snapshotFingerprint;
+        if (snapshotAgentId.equals(request.agentId())) {
+            // 同一执行主体（根路径的常见情形）→ 复用刚算出的当前指纹，不重复解析。
+            snapshotFingerprint = currentFingerprint;
+        } else {
+            try {
+                snapshotFingerprint = ClosureFingerprint.of(
+                        closureResolver.resolveCurrent(request.tenantId(), snapshotAgentId));
+            } catch (RuntimeException e) {
+                log.warn("准入检查：快照 Agent 的闭包不可解析，fail-closed: tenant={}, run={}, "
+                        + "snapshotAgent={}, err={}", request.tenantId(), request.runId(),
+                        snapshotAgentId, e.getMessage());
+                return AdmissionOutcome.rejected(ReasonCode.EXEC_ADMISSION_STALE,
+                        currentVersion, currentFingerprint, now);
+            }
+        }
+        if (!snapshot.get().configFingerprint().equals(snapshotFingerprint)) {
+            log.warn("准入检查：Run 快照指纹与当前闭包不一致，阻断新副作用: tenant={}, run={}, "
+                    + "snapshotAgent={}", request.tenantId(), request.runId(), snapshotAgentId);
             return AdmissionOutcome.rejected(ReasonCode.EXEC_ADMISSION_STALE,
-                    currentVersion, currentFingerprint, now);
+                    currentVersion, snapshotFingerprint, now);
         }
 
         return AdmissionOutcome.admitted(currentVersion, currentFingerprint, now);
