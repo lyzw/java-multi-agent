@@ -94,6 +94,17 @@ public class WorkerExecutionConfig {
     String workerId;
 
     /**
+     * 上下文 token 预算（第二十六批 · A7）。
+     *
+     * <p>⚠️ <b>默认值是「本批自定」的保守值</b>：
+     * 本仓**没有**「模型上下文窗口」的权威来源，
+     * 故只能给一个「足够宽松、但能拦住极端膨胀」的默认。
+     * ⚠️ 该值**只约束发给模型的消息序列**，不含系统提示与工具 Schema。
+     */
+    @Value("${agent.worker.context-token-budget:16000}")
+    int contextTokenBudget;
+
+    /**
      * 模型网关（P4-D01 / L-4）。
      *
      * <p>⚠️ <b>当前为占位实现</b>：真实供应商接入依赖 <b>D-002</b>
@@ -272,7 +283,9 @@ public class WorkerExecutionConfig {
         return new cn.studykid.multiagent.worker.execute.WorkerChildAgentRunner(
                 modelGateway, gate, configs,
                 cn.studykid.multiagent.worker.execute.WorkerChildAgentRunner.DEFAULT_MAX_CHILD_STEPS,
-                cancellation);
+                cancellation, System::nanoTime,
+                java.time.Clock.systemUTC(),
+                contextTokenBudget);
     }
 
     /**
@@ -326,7 +339,8 @@ public class WorkerExecutionConfig {
         //    （新世代 token 不匹配、旧世代已被接管），
         //    真实原因（Worker 崩溃）会被掩盖成一次普通的子调用失败。
         return new RunExecutionLoop(modelGateway, claimPort, gate,
-                Duration.ofSeconds(leaseSeconds), workerId, promptGuard, eventPort, adopter);
+                Duration.ofSeconds(leaseSeconds), workerId, promptGuard, eventPort, adopter,
+                contextTokenBudget);
     }
 
     /**

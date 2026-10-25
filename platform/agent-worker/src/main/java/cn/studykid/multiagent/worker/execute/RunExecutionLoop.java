@@ -88,6 +88,15 @@ public class RunExecutionLoop {
      */
     private final PromptGuard promptGuard;
 
+    /**
+     * 上下文 token 预算（第二十六批 · A7）。
+     *
+     * <p>⚠️ <b>只约束「发给模型的消息序列」</b>：系统提示与工具 Schema
+     * <b>不计入</b>本预算 —— 它们的长度由 Agent 配置决定，
+     * 不由运行期的轮次增长决定，混进来会让「预算」这个数字失去可解释性。
+     */
+    private final int contextTokenBudget;
+
     public RunExecutionLoop(@NonNull ModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
@@ -137,6 +146,24 @@ public class RunExecutionLoop {
                              @NonNull PromptGuard promptGuard,
                              @Nullable RunEventPort eventPort,
                              @Nullable InFlightDelegationAdopter adopter) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
+                promptGuard, eventPort, adopter, ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET);
+    }
+
+    /**
+     * 最完整构造器（含上下文 token 预算 · 第二十六批 · A7）。
+     *
+     * @param contextTokenBudget 上下文 token 预算；必须为正数
+     */
+    public RunExecutionLoop(@NonNull ModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             @NonNull PromptGuard promptGuard,
+                             @Nullable RunEventPort eventPort,
+                             @Nullable InFlightDelegationAdopter adopter,
+                             int contextTokenBudget) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
@@ -148,6 +175,11 @@ public class RunExecutionLoop {
         this.workerId = workerId;
         this.promptGuard = promptGuard;
         this.adopter = adopter;
+        if (contextTokenBudget <= 0) {
+            throw new IllegalArgumentException("上下文 token 预算必须为正数，收到: "
+                    + contextTokenBudget);
+        }
+        this.contextTokenBudget = contextTokenBudget;
         if (adopter == null) {
             log.warn("未装配在途委派接管器：Worker 接管后 RUNNING 的委派记录"
                     + "将无法收敛（一直悬着），真实原因会被掩盖成普通子调用失败");
@@ -233,16 +265,40 @@ public class RunExecutionLoop {
                 //    运行约束（maxSteps）来自 Run 创建时的快照。
                 //    两者不可混用：改 Agent 影响新 Run，改配置快照也影响新 Run，
                 //    但已创建的 Run 必须按创建时的约束执行。
+                //
+                // ⚠️ 上下文裁剪（第二十六批 · A7）：消息序列随轮次线性增长，
+                //    不裁就会顶爆上下文窗口。裁剪**只影响发给模型的内容**，
+                //    累积序列本身不删 —— 否则裁一次就永久丢历史。
+                ContextBudgetTrimmer.Trimmed trimmed =
+                        ContextBudgetTrimmer.trim(messages, contextTokenBudget);
+                if (trimmed.trimmed()) {
+                    log.info("上下文按 token 预算裁剪: runId={}, 丢弃轮数={}, 丢弃 token≈{}",
+                            task.runId(), trimmed.droppedRounds(), trimmed.droppedTokens());
+                }
+                if (!trimmed.withinBudget()) {
+                    // ⚠️ 连「只留原始输入」都超预算 → 预算本身小于单条输入。
+                    //    此时**不得静默截断用户输入**（那是任务本身），
+                    //    也不得假装裁剪成功 —— 显式告警，让运维知道预算配错了。
+                    log.warn("⚠️ 上下文预算({})小于原始输入本身，裁剪无法满足预算: runId={}",
+                            contextTokenBudget, task.runId());
+                }
+                String systemPrompt = agentConfig.systemPrompt();
+                if (trimmed.notice() != null) {
+                    // ⚠️ 裁剪说明走**系统提示**（可信指令载体）：
+                    //    混进消息序列会引入角色交替问题，
+                    //    而伪装成用户输入等于把系统事实交给不可信通道。
+                    systemPrompt = systemPrompt + "\n\n" + trimmed.notice();
+                }
                 ModelRequest request = new ModelRequest(
                         agentConfig.modelId(),
-                        agentConfig.systemPrompt(),
+                        systemPrompt,
                         renderInput(input),
                         agentConfig.temperature(),
                         agentConfig.maxTokens(),
                         agentConfig.timeout(),
                         agentConfig.toolSchemas(),
                         // ⚠️ 带消息历史：非空时以 messages 为准（userContent 仅冗余保留）
-                        messages);
+                        trimmed.messages());
 
                 ModelResponse response = modelGateway.complete(request);
 

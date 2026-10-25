@@ -1234,6 +1234,123 @@ class RunExecutionLoopTest {
         }
     }
 
+    @Nested
+    @DisplayName("上下文按 token 预算裁剪（第二十六批 · A7）")
+    class ContextBudget {
+
+        /** 回显工具：输出足够大，便于把上下文顶过预算。 */
+        private static class BigEchoTool implements ToolHandler {
+            @Override public String toolName() { return "recording_tool"; }
+            @Override public String inputSchema() { return "{}"; }
+            @Override public ToolRiskLevel riskLevel() { return ToolRiskLevel.READ; }
+            @Override public void validate(Map<String, Object> arguments) { }
+            @Override public ToolResult execute(ToolExecutionContext ctx, Map<String, Object> a) {
+                return ToolResult.of("工具输出 ".repeat(400));
+            }
+        }
+
+        /** 预算极小的执行循环（让上下文必然超预算）。 */
+        private static RunExecutionLoop tightBudgetLoop(ModelGateway gw, RunClaimPort port) {
+            return new RunExecutionLoop(gw, port,
+                    new ToolInvocationGate(List.of(new BigEchoTool()), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    Duration.ofSeconds(30), "w-1",
+                    new cn.studykid.multiagent.application.prompt.PromptGuard(),
+                    null, null, 300);
+        }
+
+        @Test
+        @DisplayName("✅ 上下文超预算 → 发给模型的是**裁剪后**的消息，且系统提示带裁剪留痕")
+        void oversizedContextIsTrimmedBeforeModelCall() {
+            FakeClaimPort port = new FakeClaimPort();
+            List<ModelRequest> requests = new java.util.ArrayList<>();
+            ModelGateway gw = request -> {
+                requests.add(request);
+                if (requests.size() <= 2) {
+                    return new ModelResponse("", Map.of(
+                            "c" + requests.size(), new ModelResponse.ToolCallRequest(
+                                    "recording_tool", Map.of(), "c" + requests.size())),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            };
+
+            tightBudgetLoop(gw, port).execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(requests).hasSizeGreaterThanOrEqualTo(3);
+            ModelRequest third = requests.get(2);
+            int estimated = ContextBudgetTrimmer.estimateTokens(third.effectiveMessages());
+            assertThat(estimated)
+                    .as("⛔ 发给模型的上下文仍然超预算：裁剪没接线（或预算没生效）")
+                    .isLessThanOrEqualTo(300);
+            assertThat(third.systemPrompt())
+                    .as("⛔ 系统提示里没有裁剪留痕：模型会以为前面那些工具**根本没调用过**，"
+                            + "从而重复调用 → 重复副作用（重复写库 / 重复扣款）= Sev-0")
+                    .contains("裁剪");
+        }
+
+        @Test
+        @DisplayName("✅ 裁剪**只改发给模型的内容**：累积序列不删（否则裁一次就永久丢历史）")
+        void trimmingDoesNotDestroyTheAccumulatedSequence() {
+            FakeClaimPort port = new FakeClaimPort();
+            List<ModelRequest> requests = new java.util.ArrayList<>();
+            ModelGateway gw = request -> {
+                requests.add(request);
+                if (requests.size() <= 2) {
+                    return new ModelResponse("", Map.of(
+                            "c" + requests.size(), new ModelResponse.ToolCallRequest(
+                                    "recording_tool", Map.of(), "c" + requests.size())),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            };
+
+            tightBudgetLoop(gw, port).execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            ModelRequest third = requests.get(2);
+            assertThat(third.effectiveMessages().get(0).content())
+                    .as("⛔ 原始输入被裁掉了：裁掉它等于改了任务本身")
+                    .contains("q");
+            assertThat(third.effectiveMessages())
+                    .as("⛔ 裁剪后一条工具结果都不剩：连最近的上下文也丢了，模型无从继续")
+                    .isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("✅ 未超预算 → 不裁剪，系统提示保持原样（不得无条件注入说明）")
+        void withinBudgetIsNotTrimmed() {
+            FakeClaimPort port = new FakeClaimPort();
+            List<ModelRequest> requests = new java.util.ArrayList<>();
+            ModelGateway gw = request -> {
+                requests.add(request);
+                if (requests.size() == 1) {
+                    return new ModelResponse("", Map.of(
+                            "c1", new ModelResponse.ToolCallRequest(
+                                    "recording_tool", Map.of(), "c1")),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            };
+
+            loop(gw, port,
+                    new ToolInvocationGate(List.of(new RecordingTool()), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()))
+                    .execute(TENANT, task(), agentConfig(), snapshot(5), Map.of("q", "x"));
+
+            assertThat(requests).hasSizeGreaterThanOrEqualTo(2);
+            assertThat(requests.get(1).systemPrompt())
+                    .as("⛔ 未裁剪却注入了裁剪说明：模型被无谓地告知「有东西被移除了」")
+                    .doesNotContain("裁剪");
+        }
+    }
+
     // ── 授权替身 ────────────────────────────────────────────────────
 
     private static AuthorizationService allowAll() {

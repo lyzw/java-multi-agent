@@ -92,6 +92,14 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
      */
     private final java.time.Clock clock;
 
+    /**
+     * 上下文 token 预算（第二十六批 · A7）。
+     *
+     * <p>⚠️ <b>与根循环同一口径、同一实现</b>（{@link ContextBudgetTrimmer}）：
+     * 父子各写一套裁剪口径必然漂移，而漂移落在「根裁了子不裁」这类两套语义上。
+     */
+    private final int contextTokenBudget;
+
     public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
                                    @NonNull ChildAgentModelConfigProvider configs) {
@@ -141,8 +149,29 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
                                    CancellationProbe cancellation,
                                    java.util.function.LongSupplier nanoTime,
                                    java.time.Clock clock) {
+        this(modelGateway, toolGate, configs, maxChildSteps, cancellation, nanoTime, clock,
+                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET);
+    }
+
+    /**
+     * 最完整构造器（含上下文 token 预算 · 第二十六批 · A7）。
+     *
+     * @param contextTokenBudget 上下文 token 预算；必须为正数
+     */
+    public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
+                                   @NonNull ToolInvocationGate toolGate,
+                                   @NonNull ChildAgentModelConfigProvider configs,
+                                   int maxChildSteps,
+                                   CancellationProbe cancellation,
+                                   java.util.function.LongSupplier nanoTime,
+                                   java.time.Clock clock,
+                                   int contextTokenBudget) {
         if (maxChildSteps < 1) {
             throw new IllegalArgumentException("maxChildSteps 必须为正数，收到: " + maxChildSteps);
+        }
+        if (contextTokenBudget <= 0) {
+            throw new IllegalArgumentException("上下文 token 预算必须为正数，收到: "
+                    + contextTokenBudget);
         }
         this.modelGateway = modelGateway;
         this.toolGate = toolGate;
@@ -151,6 +180,7 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
         this.cancellation = cancellation;
         this.nanoTime = nanoTime;
         this.clock = clock;
+        this.contextTokenBudget = contextTokenBudget;
     }
 
     @Override
@@ -220,9 +250,25 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
 
             ModelResponse response;
             try {
+                // ⚠️ 上下文裁剪（第二十六批 · A7）：与根循环**共用同一份实现**
+                //    （ContextBudgetTrimmer）—— 父子两套裁剪口径必然漂移，
+                //    而漂移落在「根裁了子不裁」这类两套语义上。
+                //    裁剪**只影响发给模型的内容**，累积序列本身不删。
+                ContextBudgetTrimmer.Trimmed trimmed =
+                        ContextBudgetTrimmer.trim(messages, contextTokenBudget);
+                if (trimmed.trimmed()) {
+                    log.info("子执行上下文按 token 预算裁剪: agent={}, 丢弃轮数={}, 丢弃 token≈{}",
+                            request.targetAgentId(), trimmed.droppedRounds(),
+                            trimmed.droppedTokens());
+                }
+                String systemPrompt = modelConfig.systemPrompt();
+                if (trimmed.notice() != null) {
+                    // ⚠️ 裁剪说明走**系统提示**（可信指令载体），与根循环同口径。
+                    systemPrompt = systemPrompt + "\n\n" + trimmed.notice();
+                }
                 response = modelGateway.complete(new ModelRequest(
                         modelConfig.modelId(),
-                        modelConfig.systemPrompt(),
+                        systemPrompt,
                         input,
                         modelConfig.temperature(),
                         modelConfig.maxTokens(),
@@ -230,7 +276,7 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
                         //    否则一次卡住的模型调用就能吃掉整条链路的预算。
                         capTimeout(modelConfig.timeout(), remainingNanos),
                         modelConfig.toolSchemas(),
-                        messages));
+                        trimmed.messages()));
             } catch (ModelGateway.ModelGatewayException e) {
                 if (e.kind() == ModelGateway.ModelErrorKind.TIMEOUT) {
                     return ChildAgentResult.timedOut(ReasonCode.DELEGATION_TIMEOUT.name());

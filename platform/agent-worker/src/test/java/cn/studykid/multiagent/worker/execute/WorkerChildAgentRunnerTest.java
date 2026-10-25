@@ -376,6 +376,35 @@ class WorkerChildAgentRunnerTest {
                 .contains("原始长度");
     }
 
+    @Test
+    @DisplayName("✅ 子路径同样按 token 预算裁剪（与根路径共用同一份实现与口径）")
+    void childContextIsAlsoTrimmedByTokenBudget() {
+        ScriptedGateway gateway = new ScriptedGateway();
+        gateway.sequence.add(new ModelResponse("", Map.of("call-1",
+                new ModelResponse.ToolCallRequest("record_weakness",
+                        Map.of("studentId", "stu_1"), "call-1")),
+                new ModelResponse.ModelUsage(10, 5), ModelResponse.FinishReason.TOOL_CALLS));
+        gateway.sequence.add(new ModelResponse("已记录", Map.of(),
+                new ModelResponse.ModelUsage(20, 5), ModelResponse.FinishReason.STOP));
+
+        // ⚠️ 预算极小：子路径的上下文必然超预算。
+        //    若子路径没接裁剪（父子两套语义），这里的断言会红。
+        new WorkerChildAgentRunner(gateway, gateWith(List.of(new BigOutputTool())),
+                configs(Duration.ofSeconds(30)), 4, null, System::nanoTime,
+                java.time.Clock.systemUTC(), 200)
+                .run(request(30_000L));
+
+        assertThat(gateway.requests).hasSizeGreaterThanOrEqualTo(2);
+        ModelRequest second = gateway.requests.get(1);
+        assertThat(ContextBudgetTrimmer.estimateTokens(second.effectiveMessages()))
+                .as("⛔ 子路径的上下文仍然超预算：父子两套语义（根裁了子不裁）")
+                .isLessThanOrEqualTo(200);
+        assertThat(second.systemPrompt())
+                .as("⛔ 子路径没有裁剪留痕：模型会以为前面那些工具**根本没调用过**，"
+                        + "从而重复调用 → 重复副作用")
+                .contains("裁剪");
+    }
+
     /** 返回固定文本的工具替身。 */
     private static class StubTool
             implements cn.studykid.multiagent.ports.tool.ToolHandler {
