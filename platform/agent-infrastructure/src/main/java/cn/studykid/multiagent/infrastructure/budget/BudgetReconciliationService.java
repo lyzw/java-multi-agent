@@ -3,9 +3,11 @@ package cn.studykid.multiagent.infrastructure.budget;
 import java.util.List;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.application.orchestration.DelegationBudgetReconciliationService;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
@@ -45,10 +47,26 @@ public class BudgetReconciliationService {
     private final BudgetPort budget;
     private final JdbcBudgetRepository repository;
 
+    /**
+     * 委派侧的预算对账通道（第二十二批 · C22-1）。
+     *
+     * <p>⚠️ <b>可空</b>：未装配时<b>显式告警</b>而非静默跳过 ——
+     * 静默跳过等于让「委派额度泄漏」这件事<b>永远不被发现</b>。
+     */
+    private final DelegationBudgetReconciliationService delegationReconciliation;
+
     public BudgetReconciliationService(@NonNull BudgetPort budget,
                                        @NonNull JdbcBudgetRepository repository) {
+        this(budget, repository, null);
+    }
+
+    public BudgetReconciliationService(@NonNull BudgetPort budget,
+                                       @NonNull JdbcBudgetRepository repository,
+                                       @Nullable DelegationBudgetReconciliationService
+                                               delegationReconciliation) {
         this.budget = budget;
         this.repository = repository;
+        this.delegationReconciliation = delegationReconciliation;
     }
 
     /** 对账结果统计。 */
@@ -56,11 +74,24 @@ public class BudgetReconciliationService {
                                  int settled,
                                  int released,
                                  int unknownHeld,
-                                 boolean consistent) {
+                                 boolean consistent,
+                                 int delegationHeld,
+                                 int delegationUnknownHeld,
+                                 int delegationUnanchored) {
 
-        /** @return 是否存在需要人工介入的项。 */
+        /**
+         * @return 是否存在需要人工介入的项。
+         *
+         * <p>⚠️ <b>委派侧的 UNKNOWN 与无锚点也必须算进来</b>（第二十二批 · C22-1）：
+         * 委派的预留记在 {@code agent_invocation} 里，<b>没有</b>对应的
+         * {@code tool_operation} 行 → 工具侧的两条查询（{@code findOrphaned} /
+         * {@code findUnknownHeld}）用 INNER JOIN，<b>看不见它们</b>。
+         * 若这里也不计，运维看到的永远是「一切正常」，
+         * 而实际上额度正被一批看不见的委派预留长期占着。
+         */
         public boolean needsAttention() {
-            return unknownHeld > 0 || !consistent;
+            return unknownHeld > 0 || !consistent
+                    || delegationUnknownHeld > 0 || delegationUnanchored > 0;
         }
     }
 
@@ -105,6 +136,28 @@ public class BudgetReconciliationService {
         // ⚠️ UNKNOWN 预留只统计，绝不处置（R-007）
         int unknownHeld = repository.findUnknownHeld(tenantId).size();
 
+        // ⚠️ 委派侧（第二十二批 · C22-1）：委派的预留记在 agent_invocation 里，
+        //    工具侧的两条查询 INNER JOIN tool_operation → **看不见它们**。
+        //    这里补上反查通道：终态的自动结算，UNKNOWN 与无锚点的只统计。
+        int delegationHeld = 0;
+        int delegationUnknownHeld = 0;
+        int delegationUnanchored = 0;
+        if (delegationReconciliation != null) {
+            // ⚠️ 终态委派的悬挂预留：子执行已启动 → 成本可能已发生 → 结算
+            delegationReconciliation.settleTerminalHeld(tenantId);
+            DelegationBudgetReconciliationService.ScanResult delegationScan =
+                    delegationReconciliation.scan(tenantId);
+            delegationHeld = delegationScan.heldCount();
+            delegationUnknownHeld = delegationScan.unknown().size();
+            delegationUnanchored = delegationScan.unanchored().size();
+        } else {
+            // ⚠️ **未装配委派对账通道 → 显式告警，绝不静默跳过**：
+            //    静默跳过 = 委派侧的额度泄漏永远不会被发现，
+            //    而运维看到的仍然是「预算一切正常」。
+            log.warn("⚠️ 委派预算对账通道未装配 → 委派侧的悬挂/UNKNOWN 预留"
+                    + "**不可见**（额度可能长期被占用且无人发现）: tenant={}", tenantId);
+        }
+
         boolean consistent = budget.isConsistent(tenantId, CURRENCY);
         if (!consistent) {
             log.error("⚠️⚠️ 预算账实不符（reserved/settled 与明细不符），"
@@ -112,11 +165,14 @@ public class BudgetReconciliationService {
         }
 
         if (log.isInfoEnabled()) {
-            log.info("预算对账完成: tenant={}, 扫描={}, 结算={}, 释放={}, UNKNOWN持有={}, 账实一致={}",
-                    tenantId, orphaned.size(), settled, released, unknownHeld, consistent);
+            log.info("预算对账完成: tenant={}, 扫描={}, 结算={}, 释放={}, UNKNOWN持有={}, "
+                            + "委派持有={}, 委派UNKNOWN={}, 委派无锚点={}, 账实一致={}",
+                    tenantId, orphaned.size(), settled, released, unknownHeld,
+                    delegationHeld, delegationUnknownHeld, delegationUnanchored, consistent);
         }
         return new ReconcileStats(orphaned.size(), settled, released,
-                unknownHeld, consistent);
+                unknownHeld, consistent,
+                delegationHeld, delegationUnknownHeld, delegationUnanchored);
     }
 
     /**

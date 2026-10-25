@@ -498,9 +498,39 @@ public class ApplicationConfiguration {
     public cn.studykid.multiagent.infrastructure.budget.BudgetReconciliationService
             budgetReconciliationService(
                     cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort,
-                    cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository repo) {
+                    cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository repo,
+                    cn.studykid.multiagent.application.orchestration
+                            .DelegationBudgetReconciliationService delegationReconciliation) {
         return new cn.studykid.multiagent.infrastructure.budget.BudgetReconciliationService(
-                budgetPort, repo);
+                budgetPort, repo, delegationReconciliation);
+    }
+
+    /**
+     * 委派预算预留的反查端口（第二十二批 · C22-1 · A2）。
+     *
+     * <p>⚠️ <b>为什么必须单独装配</b>：委派的预留记在 {@code agent_invocation} 里，
+     * <b>没有</b>对应的 {@code tool_operation} 行 —— 工具侧的对账查询
+     * （{@code findOrphaned} / {@code findUnknownHeld}）用 INNER JOIN，
+     * <b>看不见委派的预留</b>。不装配这个端口 = 委派侧的额度泄漏永远不被发现。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.DelegationBudgetPort
+            delegationBudgetPort(DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcDelegationBudgetRepository(dataSource);
+    }
+
+    /**
+     * 委派预算对账服务（第二十二批 · C22-1 · A2）。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.orchestration.DelegationBudgetReconciliationService
+            delegationBudgetReconciliationService(
+                    cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort,
+                    cn.studykid.multiagent.ports.persistence.DelegationBudgetPort
+                            delegationBudgetPort) {
+        return new cn.studykid.multiagent.application.orchestration
+                .DelegationBudgetReconciliationService(budgetPort, delegationBudgetPort);
     }
 
     /**
