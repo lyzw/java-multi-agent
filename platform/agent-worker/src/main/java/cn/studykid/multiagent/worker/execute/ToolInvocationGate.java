@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import cn.studykid.multiagent.application.orchestration.RunBudgetProbe;
 import cn.studykid.multiagent.core.cap.CapToolDecision;
 import cn.studykid.multiagent.core.cap.ExecutionScope;
+import cn.studykid.multiagent.core.orchestration.DelegationContext;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.ports.model.ModelResponse;
@@ -438,9 +439,35 @@ public class ToolInvocationGate {
             RunClaimPort.LeasedTask task,
             Map<String, ModelResponse.ToolCallRequest> calls,
             @Nullable ExecutionScope scope) {
+        return invokeAll(tenantId, task, calls, scope, null);
+    }
+
+    /**
+     * 带<b>委派上下文</b>的工具调用（多级 Agent v1.1 · 第十五批）。
+     *
+     * <p>⚠️ <b>子 Agent 发起委派时必须带本重载</b>：
+     * {@code delegationContext} 说明「当前执行中的 Agent 是谁、处在调用树的哪一层」。
+     * 缺失它（传 {@code null}）时，委派会被按 <b>Run 快照里的根 Agent</b> 判定 ——
+     * 于是子 Agent 能借根 Agent 的编排声明，越权委派给「根声明过、而自己没声明」的 Agent，
+     * 且「最大委派深度」在嵌套路径上完全失效。
+     *
+     * <p>⚠️ <b>与 {@code scope} 的一致性会被校验</b>：两者同时存在时，
+     * Agent 标识与版本必须一致 —— 不一致说明上下文串了（多半是调用方拼错了），
+     * 此时<b>委派一律拒绝</b>（fail-closed），不猜哪个是对的。
+     *
+     * @param scope             执行作用域；{@code null} = 根 Agent（单 Agent 路径）
+     * @param delegationContext 委派上下文；{@code null} = 根 Agent（按 Run 快照解析父）
+     * @return 汇总结果
+     */
+    public ToolInvocationResult invokeAll(
+            String tenantId,
+            RunClaimPort.LeasedTask task,
+            Map<String, ModelResponse.ToolCallRequest> calls,
+            @Nullable ExecutionScope scope,
+            @Nullable DelegationContext delegationContext) {
 
         if (capFlow != null && capFlow.isEnabled()) {
-            return invokeAllCap(tenantId, task, calls, scope);
+            return invokeAllCap(tenantId, task, calls, scope, delegationContext);
         }
         return invokeAllLegacy(tenantId, task, calls);
     }
@@ -456,12 +483,20 @@ public class ToolInvocationGate {
             String tenantId,
             RunClaimPort.LeasedTask task,
             Map<String, ModelResponse.ToolCallRequest> calls,
-            @Nullable ExecutionScope scope) {
+            @Nullable ExecutionScope scope,
+            @Nullable DelegationContext delegationContext) {
 
         ToolInvocationResult result = new ToolInvocationResult();
         // ⚠️ 父声明的失败策略（FAIL_FAST / CONTINUE_ON_ERROR）决定：
         //    本轮里某个子调用失败后，**后续的委派调用**还跑不跑。
         boolean delegationHalted = false;
+        // ⚠️ 上下文一致性校验（第十五批）：scope 与 delegationContext 同时存在时，
+        //    Agent 标识与版本必须一致 —— 不一致说明上下文串了。
+        //    此时**委派一律拒绝**（fail-closed）：猜哪个是对的，等于在越权路径上
+        //    替调用方做决定。
+        boolean contextMismatch = scope != null && delegationContext != null
+                && (!scope.agentId().equals(delegationContext.agentId())
+                        || scope.agentVersion() != delegationContext.agentVersion());
 
         for (ModelResponse.ToolCallRequest call : calls.values()) {
             // ── 委派分支（多级 Agent v1.1）──────────────────────────
@@ -480,7 +515,22 @@ public class ToolInvocationGate {
                                     .name());
                     continue;
                 }
-                if (invokeDelegation(tenantId, task, call, result)) {
+                if (contextMismatch) {
+                    // ⚠️ 上下文串了 → 拒绝委派（不猜哪个是对的）
+                    log.error("执行作用域与委派上下文不一致，拒绝委派: runId={}, scopeAgent={},"
+                                    + " ctxAgent={}", task.runId(), scope.agentId(),
+                            delegationContext.agentId());
+                    result.recordRejected(call.toolName(),
+                            cn.studykid.multiagent.core.cap.ReasonCode.ORCHESTRATION_INVALID
+                                    .name());
+                    result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                            call.toolName(), null,
+                            cn.studykid.multiagent.core.cap.AuthorizationDecision.deny(
+                                    cn.studykid.multiagent.core.cap.ReasonCode
+                                            .ORCHESTRATION_INVALID)));
+                    continue;
+                }
+                if (invokeDelegation(tenantId, task, call, result, delegationContext)) {
                     delegationHalted = true;
                 }
                 continue;
@@ -546,7 +596,8 @@ public class ToolInvocationGate {
     private boolean invokeDelegation(String tenantId,
                                      RunClaimPort.LeasedTask task,
                                      ModelResponse.ToolCallRequest call,
-                                     ToolInvocationResult result) {
+                                     ToolInvocationResult result,
+                                     @Nullable DelegationContext delegationContext) {
         if (cancelGuard.isCancelled(tenantId, task.runId())) {
             log.info("Run 已取消，拒绝发起委派: runId={}", task.runId());
             result.recordRejected(call.toolName(),
@@ -574,8 +625,15 @@ public class ToolInvocationGate {
             return false;
         }
 
+        // ⚠️ 父调用标识参与 invocationId 派生（第十五批）：
+        //    派生材料的定义是「同一 Run + **同一父调用** + 同一模型 tool call」，
+        //    而此处此前恒传 null → 嵌套路径下，不同子 Agent 的**同名** tool call
+        //    （例如各自的 call_1）会派生出**同一个** invocationId
+        //    → 后者被当成前者的幂等重放，第二次委派**根本没发生**。
         String invocationId = cn.studykid.multiagent.application.orchestration
-                .DelegationInvocationId.derive(task.runId(), null, call.callId());
+                .DelegationInvocationId.derive(task.runId(),
+                        delegationContext == null ? null : delegationContext.invocationId(),
+                        call.callId());
         // ⚠️ 根 Run 的**真实**剩余时间：来自 Run 的业务截止时间（run.deadline_at）。
         //    「全调用树共享超时上限」要求根 Run 的剩余时间是整棵树的共同上界，
         //    任何一跳都不得重置它 —— 此前这里传的是上界 Long.MAX_VALUE，
@@ -598,15 +656,34 @@ public class ToolInvocationGate {
                             cn.studykid.multiagent.core.cap.ReasonCode.DELEGATION_TIMEOUT)));
             return false;
         }
+        // ── 父身份与深度（第十五批）────────────────────────────────
+        // ⚠️ 有委派上下文 → 父就是**当前执行中的 Agent**（嵌套委派）；
+        //    无委派上下文 → 父由 Run 能力快照解析（根 Agent），深度为 1。
+        String parentAgentId = null;
+        Integer parentAgentVersion = null;
+        String parentInvocationId = null;
+        int parentDepth = 1;
+        if (delegationContext != null) {
+            parentAgentId = delegationContext.agentId();
+            parentAgentVersion = delegationContext.agentVersion();
+            parentInvocationId = delegationContext.invocationId();
+            parentDepth = delegationContext.depth();
+        }
         var outcome = delegation.delegate(
                 new cn.studykid.multiagent.application.orchestration.DelegationExecutor
                         .DelegationCommand(
                         tenantId,
                         task.runId(),
-                        null,
-                        null,
-                        null,
-                        1,
+                        // ⚠️⚠️ 父身份必须来自**当前执行中的 Agent**（第十五批），
+                        //    不能恒为 null（= 按 Run 快照解析根 Agent）：
+                        //    恒为 null 时，子 Agent 发起的委派会被按**根 Agent** 的
+                        //    编排声明判定 → 子 Agent 能借根的声明把工作交给
+                        //    「根声明过、而自己没声明」的 Agent —— 越权路径。
+                        //    深度同理：恒为 1 会让「最大委派深度」在嵌套路径上失效。
+                        parentAgentId,
+                        parentAgentVersion,
+                        parentInvocationId,
+                        parentDepth,
                         parsed.targetAgentId(),
                         null,
                         parsed.input(),

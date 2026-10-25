@@ -201,8 +201,17 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
             }
 
             // ⚠️ 子 Agent 的工具调用走同一闸门，但带**自己的执行作用域**
+            //    ⚠️ 同时必须带**委派上下文**（第十五批）：它说明「当前执行中的
+            //    Agent 是谁、处在调用树的哪一层、本次调用是谁发起的」。
+            //    缺失它 → 闸门按 **Run 快照里的根 Agent** 判定委派 →
+            //    子 Agent 能借根的编排声明越权委派，且深度上限在嵌套路径上失效。
+            cn.studykid.multiagent.core.orchestration.DelegationContext delegationContext =
+                    new cn.studykid.multiagent.core.orchestration.DelegationContext(
+                            request.targetAgentId(), request.targetAgentVersion(),
+                            request.depth(), request.invocationId());
             ToolInvocationGate.ToolInvocationResult toolResult = toolGate.invokeAll(
-                    request.tenantId(), task, response.toolCalls(), request.scope());
+                    request.tenantId(), task, response.toolCalls(), request.scope(),
+                    delegationContext);
 
             if (toolResult.unknownResultOccurred()) {
                 // ⚠️ 结果不确定 → 不盲目重试（MA-T13）
