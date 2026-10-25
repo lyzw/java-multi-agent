@@ -375,7 +375,8 @@ class MultiAgentPersistenceIT extends CapITBase {
             List<CapAgentChildRef> refs = childRefs.listByParentRelease(tenantA, parent, 1);
             assertThat(refs).hasSize(2);
             assertThat(refs.get(0).childAgentId())
-                    .as("⚠️ 必须按 ordinal 顺序返回（SEQUENTIAL 按声明顺序执行）")
+                    .as("⚠️ 必须按 ordinal 顺序返回（父 Agent 的声明次序要保真 —— "
+                            + "⚠️ 框架**不**按此顺序代为执行子 Agent，见 OrchestrationMode#SEQUENTIAL）")
                     .isEqualTo(childA);
             assertThat(refs.get(1).ordinal()).isEqualTo(1);
         }

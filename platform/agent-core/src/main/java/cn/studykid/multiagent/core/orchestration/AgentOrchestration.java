@@ -24,7 +24,10 @@ import org.jspecify.annotations.Nullable;
  * @param maxChildInvocations 单个父 Agent 允许发起的最大子调用次数
  * @param timeoutMs           本级委派链路的总超时预算（毫秒）
  * @param failurePolicy       子调用失败策略
- * @param resultContractRef   固定版本的输出契约引用（可空）
+ * @param resultContractRef   固定版本的<b>链接契约</b>引用（可空）：约束的是
+ *                            <b>本 Agent 的子 Agent 的输出</b>（本 Agent 作为
+ *                            调用方时的期望形状），不是本 Agent 自己的输出 ——
+ *                            每一跳的契约都由**调用方**声明
  */
 public record AgentOrchestration(
         @NonNull OrchestrationMode mode,

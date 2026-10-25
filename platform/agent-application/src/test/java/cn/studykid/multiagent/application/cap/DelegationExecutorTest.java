@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jspecify.annotations.NonNull;
@@ -48,10 +49,25 @@ class DelegationExecutorTest {
     private static final String RUN = "run-1";
     private static final String PARENT = "parent-agent";
     private static final String CHILD = "child-agent";
+    /** 父声明的**第二个**子 Agent（决策 1 的语义钉桩用）。 */
+    private static final String CHILD_2 = "child-agent-2";
     private static final Clock CLOCK = Clock.fixed(Instant.EPOCH, ZoneOffset.UTC);
 
     private static final String PARENT_ORCHESTRATION = """
             {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}],
+             "maxDelegationDepth":2,"maxChildInvocations":3,"timeoutMs":30000,
+             "failurePolicy":"FAIL_FAST"}
+            """;
+
+    /**
+     * 父声明**两个**子 Agent 的编排。
+     *
+     * <p>⚠️ 用于钉住评审前置决策 1 的语义：声明了多个子 Agent，
+     * <b>一次委派仍然只跑被选中的那一个</b> —— 框架不代劳多子结果聚合。
+     */
+    private static final String PARENT_ORCHESTRATION_TWO_CHILDREN = """
+            {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1},
+             {"id":"child-agent-2","version":1}],
              "maxDelegationDepth":2,"maxChildInvocations":3,"timeoutMs":30000,
              "failurePolicy":"FAIL_FAST"}
             """;
@@ -147,6 +163,8 @@ row.requestedTargetAgentId(),
     /** 记录调用次数与**实际收到的预算**的子执行器。 */
     private static final class CountingRunner implements ChildAgentRunner {
         final AtomicInteger calls = new AtomicInteger();
+        /** 每次子执行实际收到的目标（用于断言「没被选中的那个子」没被执行）。 */
+        final List<String> targets = new CopyOnWriteArrayList<>();
         ChildAgentResult result = ChildAgentResult.succeeded("{\"answer\":\"ok\"}");
         /** 最近一次子执行收到的墙钟预算（毫秒）。 */
         long lastTimeoutMs = -1L;
@@ -154,6 +172,7 @@ row.requestedTargetAgentId(),
         @Override
         public @NonNull ChildAgentResult run(@NonNull ChildAgentRequest request) {
             calls.incrementAndGet();
+            targets.add(request.targetAgentId());
             lastTimeoutMs = request.timeoutMs();
             return result;
         }
@@ -172,6 +191,20 @@ row.requestedTargetAgentId(),
                 .withTool("tool-a", 1, CapabilityRiskLevel.READ, "[]")
                 .withAgent(TENANT, PARENT, 1, List.of(), "{}", parentOrchestration)
                 .withAgent(TENANT, CHILD, 1, List.of("skill-a"), "{}", "{}")
+                // ⚠️ 主体固定为 Worker 服务账号：授权版本取权威源，缺记录即 fail-closed
+                .withAuthzVersion(TENANT, "worker", 1L)
+                .withSnapshot(new CapabilitySnapshot(RUN, TENANT, PARENT, "{}", 1, 1L,
+                        "cap_fp_v1:parent", 1L, Instant.EPOCH));
+    }
+
+    /** 父声明**两个**子 Agent 的夹具（两个子都必须已发布，否则父的闭包展开失败）。 */
+    private static CapFixture fixtureWithTwoChildren() {
+        return new CapFixture()
+                .withSkill("skill-a", 1, CapabilityRiskLevel.READ, List.of("tool-a"))
+                .withTool("tool-a", 1, CapabilityRiskLevel.READ, "[]")
+                .withAgent(TENANT, PARENT, 1, List.of(), "{}", PARENT_ORCHESTRATION_TWO_CHILDREN)
+                .withAgent(TENANT, CHILD, 1, List.of("skill-a"), "{}", "{}")
+                .withAgent(TENANT, CHILD_2, 1, List.of("skill-a"), "{}", "{}")
                 // ⚠️ 主体固定为 Worker 服务账号：授权版本取权威源，缺记录即 fail-closed
                 .withAuthzVersion(TENANT, "worker", 1L)
                 .withSnapshot(new CapabilitySnapshot(RUN, TENANT, PARENT, "{}", 1, 1L,
@@ -220,6 +253,50 @@ row.requestedTargetAgentId(),
     }
 
     // ── 用例 ──────────────────────────────────────────────────────
+
+    /**
+     * 父声明**多个**子 Agent 时，一次委派**只**执行被选中的那一个。
+     *
+     * <p>⚠️ <b>为什么必须有这条用例</b>：评审前置决策 1 已拍板 ——
+     * `SEQUENTIAL` <b>不纳入 P2</b>，多子结果聚合<b>不由框架代劳</b>，
+     * 语义收敛为「父 Agent 自己串行并聚合」。
+     * 那么「框架会不会偷偷把声明的子 Agent 全跑一遍、再把结果合成一份交父」
+     * 就必须是<b>可执行的事实</b>，而不是文档里的一句话：
+     * <ul>
+     *   <li><b>一次委派 = 一个目标 = 一条调用记录 = 一次子执行</b>；</li>
+     *   <li>父声明了第二个子 Agent，它<b>不会</b>被这次委派捎上执行。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>反证</b>：若实现改成「一次委派把声明的子 Agent 都跑一遍并聚合」，
+     * 本用例会红（子执行次数与记录条数都会变）。
+     */
+    @Test
+    @DisplayName("✅ 父声明多个子 Agent 时，一次委派仍只执行被选中的那一个"
+            + "（决策 1：框架不代劳多子结果聚合）")
+    void multipleDeclaredChildrenStillRunOnePerDelegation() {
+        CapFixture fixture = fixtureWithTwoChildren();
+        RecordingInvocations invocations = new RecordingInvocations();
+        CountingRunner runner = new CountingRunner();
+
+        var outcome = executor(fixture, invocations, runner, NO_CONTRACT)
+                .delegate(command(CHILD));
+
+        assertThat(outcome.status()).isEqualTo(AgentInvocationStatus.SUCCEEDED);
+        assertThat(runner.calls.get())
+                .as("⚠️ 一次委派只跑**一个**子 Agent —— 框架不代为串行执行全部"
+                        + "（评审前置决策 1）")
+                .isEqualTo(1);
+        assertThat(runner.targets)
+                .as("⚠️ 被委派的那个子必须真的跑了")
+                .containsExactly(CHILD);
+        assertThat(invocations.rows)
+                .as("⚠️ 一次委派只落**一条**调用记录（聚合是父 Agent 的事，不是框架的）")
+                .hasSize(1);
+        AgentInvocation record = invocations.rows.get("inv-1");
+        assertThat(record.targetAgentId())
+                .as("记录的是**真正跑了的**那个子 Agent")
+                .isEqualTo(CHILD);
+    }
 
     @Test
     @DisplayName("目标未在父的声明内 → 拒绝且不执行子 Agent（MA-T05）")

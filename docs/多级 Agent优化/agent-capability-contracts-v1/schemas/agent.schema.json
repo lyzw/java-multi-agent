@@ -232,7 +232,7 @@
           "$ref": "common.schema.json#/$defs/delegationFailurePolicy"
         },
         "resultContractRef": {
-          "description": "固定版本的委派结果输出契约引用。父子输出不同构时须经该契约做映射。",
+          "description": "固定版本的委派结果**链接契约**引用：由**调用方**声明，约束**被调方**的输出形状（父子输出不同构时须经该契约做映射）。每一跳的契约都由调用方声明。",
           "$ref": "common.schema.json#/$defs/fixedVersionRef"
         }
       }

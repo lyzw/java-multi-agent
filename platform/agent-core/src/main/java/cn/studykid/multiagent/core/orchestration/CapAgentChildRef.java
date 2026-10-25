@@ -17,7 +17,9 @@ import org.jspecify.annotations.NonNull;
  * @param parentReleaseVersion 父 Agent 的固定版本号
  * @param childAgentId        子 Agent 标识
  * @param childReleaseVersion 子 Agent 的固定版本号
- * @param ordinal             声明顺序（SEQUENTIAL 模式按此顺序执行）
+ * @param ordinal             声明顺序（父 Agent 的声明次序；⚠️ 框架<b>不</b>按此顺序
+ *                            代为执行子 Agent —— 一次委派只跑被选中的那一个，
+ *                            见 {@link OrchestrationMode#SEQUENTIAL}）
  * @param required            是否为必选子 Agent
  * @param createdAt           创建时间
  */

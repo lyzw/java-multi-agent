@@ -23,7 +23,7 @@
     },
     "orchestrationMode": {
       "type": "string",
-      "description": "编排模式。LEAF = 不委派；ROUTER = 按路由策略选择子 Agent；SEQUENTIAL = 按声明顺序串行执行子 Agent（V1 有界串行）。",
+      "description": "编排模式。LEAF = 不委派；ROUTER = 按路由策略选择子 Agent；SEQUENTIAL = 父 Agent 可在其声明的子 Agent 集合内逐次委派 —— 串行与聚合由父 Agent 自己完成，框架不代劳（一次委派 = 一个目标 = 一条调用记录 = 一次子执行；评审前置决策 1 已拍板：不纳入 P2，多子结果聚合不由框架代做）。",
       "enum": [
         "LEAF",
         "ROUTER",
@@ -32,7 +32,7 @@
     },
     "delegationFailurePolicy": {
       "type": "string",
-      "description": "子调用失败策略。FAIL_FAST = 首个失败即停止后续委派；CONTINUE_ON_ERROR = 继续执行剩余子调用并按输出契约聚合失败。",
+      "description": "子调用失败策略，作用在同一轮的多个工具调用之间。FAIL_FAST = 首个失败即停止后续委派；CONTINUE_ON_ERROR = 继续执行剩余子调用，失败结果照常回灌给父 Agent（不由框架聚合）。",
       "enum": [
         "FAIL_FAST",
         "CONTINUE_ON_ERROR"

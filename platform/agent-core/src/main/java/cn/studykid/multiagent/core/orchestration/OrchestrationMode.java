@@ -29,10 +29,32 @@ public enum OrchestrationMode {
     ROUTER,
 
     /**
-     * 串行编排 Agent：按 {@code childAgentRefs} 声明顺序依次执行子 Agent，
-     * 并按输出契约聚合结果（FR-027）。
+     * 串行编排 Agent：父 Agent 可在其声明的子 Agent 集合内<b>逐次委派</b>。
      *
-     * <p>V1 为<b>有界串行</b>：不开放并行委派与动态发现（00 修订说明「本次修订原则」）。
+     * <p>⚠️ <b>「串行」与「聚合」由父 Agent 自己完成，框架不代劳</b>
+     * （评审前置决策 1 · 2026-10-25 拍板：`SEQUENTIAL` <b>不纳入 P2</b>）：
+     * <ul>
+     *   <li>框架提供的只有三件事：<b>子 Agent 集合</b>（委派拓扑）、
+     *       <b>逐跳重新授权</b>（每一跳独立判定授权）、<b>逐跳资源封顶</b>
+     *       （深度 / 次数 / 超时 / 预算）。</li>
+     *   <li>父 Agent 本身是<b>多轮执行体</b>：它可以在不同轮次依次委派给
+     *       不同子 Agent，并把各轮结果合成一份输出 —— 这是父 Agent 的
+     *       <b>模型行为</b>，不是框架的功能。</li>
+     *   <li>框架<b>不会</b>因为声明了多个子 Agent 就替父把子 Agent 全部跑一遍
+     *       再合成：<b>一次委派 = 一个目标 = 一条调用记录 = 一次子执行</b>
+     *       （见 {@code DelegationExecutorTest#multipleDeclaredChildrenStillRunOnePerDelegation}）。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>不要再写「按输出契约聚合结果」这类承诺</b>：框架<b>没有</b>多子结果聚合
+     * 这个动作（FR-027 的聚合部分<b>明确不做</b>）。此前 javadoc 承诺了它而实现没有，
+     * 那与第十四批之前 ROUTER「名不副实」是同构缺陷 —— 名字许诺了做不到的事，
+     * 配置方就会按那个许诺来设计。
+     *
+     * <p>⚠️ <b>聚合结果的校验点在哪</b>：父 Agent 合成后的输出，是它<b>被调用时</b>
+     * 的返回值，由<b>调用方声明的链接契约</b>（{@code resultContractRef}，见
+     * {@link AgentOrchestration}）校验 —— 每一跳的契约都由**调用方**声明。
+     *
+     * <p>V1 不开放并行委派与动态发现（00 修订说明「本次修订原则」）。
      */
     SEQUENTIAL
 }
