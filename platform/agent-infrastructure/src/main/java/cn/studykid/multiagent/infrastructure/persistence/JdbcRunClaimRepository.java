@@ -108,7 +108,7 @@ public class JdbcRunClaimRepository implements RunClaimPort {
                     LIMIT ?
                     FOR UPDATE SKIP LOCKED
                 )
-                RETURNING run_id, fencing_token, lease_expires_at, attempt
+                RETURNING run_id, fencing_token, lease_expires_at, attempt, deadline_at
                 """;
         List<LeasedTask> tasks = new ArrayList<>();
         try (Connection conn = dataSource.getConnection()) {
@@ -128,7 +128,11 @@ public class JdbcRunClaimRepository implements RunClaimPort {
                                     rs.getString("run_id"),
                                     rs.getLong("fencing_token"),
                                     exp.toInstant(),
-                                    rs.getInt("attempt")));
+                                    rs.getInt("attempt"),
+                                    // ⚠️ deadline_at 可空（NULL = 不限时）：
+                                    //    rs.getTimestamp 返回 null 时不能调 toInstant()，
+                                    //    那会 NPE 把「不限时」变成「领取失败」。
+                                    deadlineOf(rs)));
                         }
                     }
                 }
@@ -170,7 +174,7 @@ public class JdbcRunClaimRepository implements RunClaimPort {
                   AND (state = 'QUEUED'
                        OR (state = 'RUNNING'
                            AND (lease_expires_at IS NULL OR lease_expires_at < now())))
-                RETURNING run_id, fencing_token, lease_expires_at, attempt
+                RETURNING run_id, fencing_token, lease_expires_at, attempt, deadline_at
                 """;
         return execReturning(conn -> {
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -188,10 +192,25 @@ public class JdbcRunClaimRepository implements RunClaimPort {
                             rs.getString("run_id"),
                             rs.getLong("fencing_token"),
                             exp.toInstant(),
-                            rs.getInt("attempt")));
+                            rs.getInt("attempt"),
+                            deadlineOf(rs)));
                 }
             }
         }, tenantId);
+    }
+
+    /**
+     * 读取 Run 的业务截止时间。
+     *
+     * <p>⚠️ <b>NULL = 不限时</b>：{@code rs.getTimestamp} 返回 {@code null} 时
+     * <b>不得</b>调 {@code toInstant()}（NPE），必须原样返回 {@code null}。
+     *
+     * @param rs 结果集（已定位到当前行）
+     * @return 业务截止时刻；无截止时间时为 {@code null}
+     */
+    private static java.time.Instant deadlineOf(ResultSet rs) throws SQLException {
+        Timestamp deadline = rs.getTimestamp("deadline_at");
+        return deadline == null ? null : deadline.toInstant();
     }
 
     /** 读取当前 token（用于乐观校验，避免领取到已被接管的世代）。 */

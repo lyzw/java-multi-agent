@@ -24,6 +24,7 @@ import cn.studykid.multiagent.core.idempotency.RequestDigest;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
+import cn.studykid.multiagent.ports.persistence.RunLimits;
 import org.springframework.stereotype.Repository;
 import org.springframework.stereotype.Service;
 
@@ -94,6 +95,23 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                                                 @NonNull Map<String, Object> inputPayload,
                                                 @NonNull String correlationId,
                                                 @NonNull OutboxMessage agentPayload) {
+        // ⚠️ 兼容入口：语义等价于「不限制」→ 委托带资源上限的重载。
+        //    绝不另写一份 SQL —— 两份 SQL 会各自漂移，而漂移会让
+        //    「有截止时间的 Run」与「没截止时间的 Run」走出两条不同的列口径。
+        return insertRunAtomically(tenantId, runId, snapshotId, key, digest, inputPayload,
+                correlationId, agentPayload, RunLimits.UNLIMITED);
+    }
+
+    @Override
+    public @NonNull String insertRunAtomically(@NonNull String tenantId,
+                                                @NonNull String runId,
+                                                @NonNull String snapshotId,
+                                                @NonNull IdempotencyKey key,
+                                                @NonNull RequestDigest digest,
+                                                @NonNull Map<String, Object> inputPayload,
+                                                @NonNull String correlationId,
+                                                @NonNull OutboxMessage agentPayload,
+                                                @NonNull RunLimits limits) {
         // 消息体安全校验：即便调用方误传敏感字段，也在入库前拦下
         OutboxMessage.assertPayloadSafe(agentPayload.toPayload());
 
@@ -106,7 +124,7 @@ public class JdbcRunCreationRepository implements RunCreationPort {
             Connection outer = TransactionalConnectionHolder.current();
             try {
                 insertAll(outer, tenantId, runId, snapshotId, key, digest,
-                        inputPayload, correlationId, agentPayload);
+                        inputPayload, correlationId, agentPayload, limits);
                 // ⚠️ 不在此处 commit —— 外层事务尚未结束，
                 //    提前提交会让外层后续失败时无法回滚本次写入。
                 return runId;
@@ -127,7 +145,7 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                 TenantSessionBinder.bind(conn, systemContext(tenantId));
 
                 insertAll(conn, tenantId, runId, snapshotId, key, digest,
-                        inputPayload, correlationId, agentPayload);
+                        inputPayload, correlationId, agentPayload, limits);
 
                 conn.commit();
                 if (log.isDebugEnabled()) {
@@ -166,9 +184,12 @@ public class JdbcRunCreationRepository implements RunCreationPort {
     private void insertAll(Connection conn, String tenantId, String runId, String snapshotId,
                            IdempotencyKey key, RequestDigest digest,
                            Map<String, Object> inputPayload, String correlationId,
-                           OutboxMessage agentPayload) throws SQLException {
+                           OutboxMessage agentPayload,
+                           RunLimits limits)
+            throws SQLException {
         // 1) Run
-        insertRun(conn, tenantId, runId, snapshotId, key, digest, inputPayload, correlationId);
+        insertRun(conn, tenantId, runId, snapshotId, key, digest, inputPayload, correlationId,
+                limits);
         // 2) 初始事件（SSE 续传起点，sequence_no 从 1 开始）
         insertInitialEvent(conn, tenantId, runId, correlationId);
         // 3) 幂等记录
@@ -179,14 +200,16 @@ public class JdbcRunCreationRepository implements RunCreationPort {
 
     private void insertRun(Connection conn, String tenantId, String runId, String snapshotId,
                            IdempotencyKey key, RequestDigest digest,
-                           Map<String, Object> inputPayload, String correlationId)
+                           Map<String, Object> inputPayload, String correlationId,
+                           RunLimits limits)
             throws SQLException {
         // ⚠️ run_id / snapshot_id / tenant_id 均为 uuid 列，必须显式 ::uuid 转换，
         //    否则 setString 传入的 varchar 会被 PG 拒绝（类型不匹配）。
         String sql = """
                 INSERT INTO run (run_id, tenant_id, snapshot_id, idempotency_key, request_digest,
-                                 state, attempt, fencing_token, input_payload, correlation_id)
-                VALUES (?::uuid, ?::uuid, ?::uuid, ?, ?, 'QUEUED', 0, 0, ?::jsonb, ?)
+                                 state, attempt, fencing_token, input_payload, correlation_id,
+                                 deadline_at, budget_amount)
+                VALUES (?::uuid, ?::uuid, ?::uuid, ?, ?, 'QUEUED', 0, 0, ?::jsonb, ?, ?, ?)
                 ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -197,6 +220,20 @@ public class JdbcRunCreationRepository implements RunCreationPort {
             ps.setString(5, digest.value());
             ps.setString(6, toJson(inputPayload));
             ps.setString(7, correlationId);
+            // ⚠️ deadline_at / budget_amount 可空（NULL = 不限制）：
+            //    用 setNull 而非 setTimestamp(null) / setBigDecimal(null)，
+            //    后者在部分驱动上会写入「epoch」/「0」而非 NULL ——
+            //    那会把不限时不限额的 Run 变成「1970 年就截止、额度为 0」的僵尸 Run。
+            if (limits.deadlineAt() == null) {
+                ps.setNull(8, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+            } else {
+                ps.setTimestamp(8, Timestamp.from(limits.deadlineAt()));
+            }
+            if (limits.budgetAmount() == null) {
+                ps.setNull(9, java.sql.Types.NUMERIC);
+            } else {
+                ps.setBigDecimal(9, limits.budgetAmount());
+            }
             ps.executeUpdate();
         }
     }

@@ -130,16 +130,58 @@ public interface RunClaimPort {
      */
     boolean isCancelled(@NonNull String tenantId, @NonNull String runId);
 
-    /** 已建立租约的任务。 */
+    /**
+     * 已建立租约的任务。
+     *
+     * @param runId         Run 标识
+     * @param fencingToken  租约世代（接管递增）
+     * @param leaseExpiresAt <b>租约</b>到期时刻（worker 换手用）
+     * @param attempt       尝试次数
+     * @param deadlineAt    <b>业务</b>截止时刻（{@code null} = 不限时）
+     */
     record LeasedTask(
             @NonNull String runId,
             long fencingToken,
             @NonNull Instant leaseExpiresAt,
-            int attempt
+            int attempt,
+            @Nullable Instant deadlineAt
     ) {
+
+        /**
+         * 兼容构造：<b>无业务截止时间</b>（不限时）。
+         *
+         * <p>⚠️ 存量 Run 与未声明截止时间的 Run 走此路径 —— 行为与此前完全一致。
+         */
+        public LeasedTask(@NonNull String runId,
+                          long fencingToken,
+                          @NonNull Instant leaseExpiresAt,
+                          int attempt) {
+            this(runId, fencingToken, leaseExpiresAt, attempt, null);
+        }
+
         /** @return 租约是否已过期。 */
         public boolean isLeaseExpired(@NonNull Instant now) {
             return now.isAfter(leaseExpiresAt);
+        }
+
+        /**
+         * 根 Run 的<b>剩余业务时间</b>。
+         *
+         * <p>⚠️ <b>租约到期 ≠ 业务截止</b>：租约过期只说明「这个 worker 该换手了」，
+         * 另一个 worker 会接手继续跑；而业务截止是「这个 Run 该结束了」——
+         * 两者混用会把「换手」误判成「超时」，或让已超时的 Run 因租约续期而
+         * 无限跑下去（这正是多级 Agent「全调用树共享超时上限」要防的事）。
+         *
+         * @param now 当前时刻
+         * @return 剩余毫秒数；<b>无截止时间时为 {@link Long#MAX_VALUE}（不限时）</b>；
+         *         已过期时为 {@code 0}（不返回负数）
+         */
+        public long remainingMillis(@NonNull Instant now) {
+            if (deadlineAt == null) {
+                return Long.MAX_VALUE;
+            }
+            long remaining = deadlineAt.toEpochMilli() - now.toEpochMilli();
+            return Math.max(remaining, 0L);
         }
     }
 }
