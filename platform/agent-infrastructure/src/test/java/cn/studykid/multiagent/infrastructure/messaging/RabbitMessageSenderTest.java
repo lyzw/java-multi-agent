@@ -124,4 +124,83 @@ class RabbitMessageSenderTest {
                     .isInstanceOf(MessagePublishException.class);
         }
     }
+
+    // ── P-3：拓扑名必须由构造参数决定（第二十八批 · C28-1 · A9）──────
+
+    /**
+     * <p><b>⚠️ 本组要防的是一个具体的失效形态</b>：
+     * 此前 {@code RabbitMessageSender} 把 {@code agent.run.dispatch} /
+     * {@code agent.run.execute} <b>硬编码</b>在方法里，
+     * 而队列名却来自配置（{@code agent.mq.queues.execute.name}）——
+     * 于是「队列名可配」是<b>假的</b>：改了队列名，队列建在新名字上，
+     * 发送器仍往老路由键发消息，<b>没有任何队列订阅那个路由键</b>
+     * → 消息全部丢失，而症状是「API 返回 201、无报错、无告警、Run 永远 QUEUED」。
+     */
+    @Nested
+    @DisplayName("P-3 拓扑名由构造参数决定")
+    class TopologyIsConfigurable {
+
+        /** 造一个会立刻确认的 mock 模板，并捕获实际发布目标。 */
+        private RabbitTemplate capturingTemplate(AtomicReference<String> exchange,
+                                                 AtomicReference<String> routingKey) {
+            RabbitTemplate template = mock(RabbitTemplate.class);
+            doAnswer(inv -> {
+                exchange.set(inv.getArgument(0));
+                routingKey.set(inv.getArgument(1));
+                CorrelationData data = inv.getArgument(4);
+                data.getFuture().complete(new CorrelationData.Confirm(true, null));
+                return null;
+            }).when(template).convertAndSend(anyString(), anyString(), any(),
+                    any(MessagePostProcessor.class), any(CorrelationData.class));
+            return template;
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 必须发布到**构造传入**的交换机与路由键（不得用硬编码默认值）")
+        void publishesToConfiguredTopology() {
+            AtomicReference<String> usedExchange = new AtomicReference<>();
+            AtomicReference<String> usedRoutingKey = new AtomicReference<>();
+            RabbitTemplate template = capturingTemplate(usedExchange, usedRoutingKey);
+
+            new RabbitMessageSender(template, "my.exchange", "my.routing.key")
+                    .send("RUN_DISPATCH", sample());
+
+            assertThat(usedExchange.get())
+                    .as("⚠️⚠️ 必须发到构造传入的交换机 —— 用硬编码默认值的话，"
+                            + "改了队列名就会把消息发到没人订阅的路由键上，消息静默丢失")
+                    .isEqualTo("my.exchange");
+            assertThat(usedRoutingKey.get())
+                    .as("⚠️⚠️ 必须发到构造传入的路由键")
+                    .isEqualTo("my.routing.key");
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 拓扑名为空必须被拒绝（不得静默发到默认拓扑）")
+        void blankTopologyNameIsRejected() {
+            RabbitTemplate template = mock(RabbitTemplate.class);
+
+            assertThatThrownBy(() -> new RabbitMessageSender(template, "  ", "rk"))
+                    .as("⚠️⚠️ 空拓扑名必须 fail-closed —— 空路由键会让消息发到"
+                            + "无人订阅的路由键，症状与「消息丢失」完全同形")
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new RabbitMessageSender(template, "ex", null))
+                    .as("⚠️⚠️ 空拓扑名必须 fail-closed")
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("⚠️ 兼容构造器的拓扑仍是当前生产默认值（行为不得漂移）")
+        void compatConstructorKeepsProductionDefaults() {
+            AtomicReference<String> usedExchange = new AtomicReference<>();
+            AtomicReference<String> usedRoutingKey = new AtomicReference<>();
+            RabbitTemplate template = capturingTemplate(usedExchange, usedRoutingKey);
+
+            new RabbitMessageSender(template).send("RUN_DISPATCH", sample());
+
+            assertThat(usedExchange.get())
+                    .as("⚠️ 兼容构造器必须保持改动前的生产行为（不得漂移）")
+                    .isEqualTo("agent.run.dispatch");
+            assertThat(usedRoutingKey.get()).isEqualTo("agent.run.execute");
+        }
+    }
 }

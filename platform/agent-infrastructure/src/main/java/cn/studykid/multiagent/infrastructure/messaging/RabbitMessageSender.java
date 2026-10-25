@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.infrastructure.messaging;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 
 import org.jspecify.annotations.NonNull;
@@ -30,15 +31,84 @@ import cn.studykid.multiagent.ports.persistence.OutboxMessage;
  *
  * <p><b>持久化</b>：消息标记为 {@code PERSISTENT}，
  * 否则 broker 重启后队列消息全部丢失（内存队列不落盘）。
+ *
+ * <p><b>⚠️ 交换机与路由键由构造参数决定（第二十八批 · C28-1 · A9）</b>：
+ * 此前本类把 {@code agent.run.dispatch} / {@code agent.run.execute}
+ * <b>硬编码</b>在方法里，而队列名却来自配置
+ * （{@code agent.mq.queues.execute.name}）——
+ * 于是「队列名可配」这件事<b>是假的</b>：把队列改成别的名字后，
+ * 队列建在新名字上，而本发送器仍往老路由键发消息，
+ * <b>没有任何队列订阅那个路由键 → 消息全部丢失</b>，
+ * 且症状是「API 返回 201、无报错、无告警、Run 永远 QUEUED」。
  */
 public class RabbitMessageSender implements MessageSender {
 
     private static final Logger log = LoggerFactory.getLogger(RabbitMessageSender.class);
 
+    /**
+     * 兼容构造器使用的默认交换机 = 改动前的硬编码值。
+     *
+     * <p>⚠️ 仅供<b>兼容</b>：它让拓扑**不跟随配置**。
+     */
+    public static final String DEFAULT_EXCHANGE = "agent.run.dispatch";
+
+    /**
+     * 兼容构造器使用的默认路由键 = 改动前的硬编码值。
+     *
+     * <p>⚠️ 仅供<b>兼容</b>：它让拓扑**不跟随配置**。
+     */
+    public static final String DEFAULT_ROUTING_KEY = "agent.run.execute";
+
     private final RabbitTemplate template;
 
+    /** 发布用的交换机名。 */
+    private final String exchange;
+
+    /** 发布用的路由键。 */
+    private final String routingKey;
+
+    /**
+     * 兼容构造器：拓扑固定为**改动前的生产默认值**。
+     *
+     * <p>⚠️ <b>新增装配路径必须用三参构造器</b>：
+     * 本构造器让发送器<b>不跟随配置</b> —— 部署改了队列名之后，
+     * 用本构造器装配的发送器仍往旧拓扑发消息，
+     * 症状是「消息发出去没人收」且<b>不报错</b>。
+     */
     public RabbitMessageSender(RabbitTemplate template) {
-        this.template = template;
+        this(template, DEFAULT_EXCHANGE, DEFAULT_ROUTING_KEY);
+    }
+
+    /**
+     * 完整构造器：交换机与路由键由装配方给出。
+     *
+     * <p>⚠️ <b>名称为空即拒绝</b>（fail-closed）：
+     * 空名会被拼成「往默认 exchange 发消息」或「路由到无订阅者的路由键」，
+     * 症状是<b>消息静默丢失</b> —— 与「消息发到不存在的队列」完全同形。
+     */
+    public RabbitMessageSender(RabbitTemplate template, String exchange, String routingKey) {
+        this.template = Objects.requireNonNull(template, "template 不能为空");
+        this.exchange = requireTopologyName(exchange, "exchange");
+        this.routingKey = requireTopologyName(routingKey, "routingKey");
+    }
+
+    /** 交换机名（供装配校验与排障使用）。 */
+    public String exchange() {
+        return exchange;
+    }
+
+    /** 路由键（供装配校验与排障使用）。 */
+    public String routingKey() {
+        return routingKey;
+    }
+
+    private static String requireTopologyName(String value, String what) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(
+                    "MQ 拓扑名不能为空（" + what + "）—— 空名会让消息发到无订阅者的路由键，"
+                            + "症状是消息静默丢失且不报错");
+        }
+        return value.trim();
     }
 
     @Override
@@ -52,7 +122,7 @@ public class RabbitMessageSender implements MessageSender {
         CorrelationData correlation = new CorrelationData(
                 message.runId() + "#" + message.attempt());
 
-        template.convertAndSend(exchange(), routingKey(), payload, m -> {
+        template.convertAndSend(exchange, routingKey, payload, m -> {
             m.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
             m.getMessageProperties().setMessageId(correlation.getId());
             // ⚠️ 标记来源，便于消费端排障（不含任何业务数据）
@@ -84,13 +154,5 @@ public class RabbitMessageSender implements MessageSender {
             log.debug("消息已确认: runId={}, attempt={}",
                     message.runId(), message.attempt());
         }
-    }
-
-    private String exchange() {
-        return "agent.run.dispatch";
-    }
-
-    private String routingKey() {
-        return "agent.run.execute";
     }
 }

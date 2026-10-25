@@ -11,6 +11,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.core.TopicExchange;
@@ -22,6 +24,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 import cn.studykid.multiagent.application.backpressure.BackpressureController;
 import cn.studykid.multiagent.application.config.BackpressurePolicy;
@@ -101,24 +104,36 @@ public class WorkerLoopConfig {
      * 但不会有任何消费者连接它们——Rabbit 队列深度为 0，不影响背压。
      */
     @Bean
-    public TopicExchange runDispatchExchange() {
-        return new TopicExchange("agent.run.dispatch", true, false);
+    public TopicExchange runDispatchExchange(
+            @Value("${agent.mq.exchange}") String exchange) {
+        // ⚠️ 此前这里是硬编码的 "agent.run.dispatch"，而 application.yml 里的
+        //    `agent.mq.exchange` 配置项**没有任何读取方** —— 配置形同虚设。
+        //    改动后配置才真正生效（第二十八批 · C28-1 · A9）。
+        return new TopicExchange(exchange, true, false);
     }
 
     @Bean
-    public TopicExchange runDeadLetterExchange() {
-        return new TopicExchange("agent.run.dlx", true, false);
+    public TopicExchange runDeadLetterExchange(
+            @Value("${agent.mq.dead-letter-exchange}") String deadLetterExchange) {
+        // ⚠️ 同上：此前硬编码 "agent.run.dlx"，配置项 `agent.mq.dead-letter-exchange`
+        //    是**摆设**。改动后配置才真正生效。
+        return new TopicExchange(deadLetterExchange, true, false);
     }
 
     @Bean
     public Queue runExecuteQueue(
             @Value("${agent.mq.queues.execute.name}") String name,
-            @Value("${agent.mq.queues.execute.delivery-limit}") int deliveryLimit) {
+            @Value("${agent.mq.queues.execute.delivery-limit}") int deliveryLimit,
+            @Value("${agent.mq.queues.execute.dead-letter-exchange}") String deadLetterExchange,
+            @Value("${agent.mq.queues.execute.dead-letter-routing-key}") String deadLetterRoutingKey) {
+        // ⚠️ 死信交换机与死信路由键此前也是硬编码的 —— 配置项
+        //    `agent.mq.queues.execute.dead-letter-*` 是**摆设**。
+        //    改动后配置才真正生效。
         return QueueBuilder.durable(name)
                 .quorum()
                 .deliveryLimit(deliveryLimit)
-                .deadLetterExchange("agent.run.dlx")
-                .deadLetterRoutingKey("agent.run.dead")
+                .deadLetterExchange(deadLetterExchange)
+                .deadLetterRoutingKey(deadLetterRoutingKey)
                 .build();
     }
 
@@ -127,6 +142,38 @@ public class WorkerLoopConfig {
             @Value("${agent.mq.queues.dead.name}") String name) {
         // ⚠️ 死信队列自身**不挂 DLX**，避免死信循环
         return QueueBuilder.durable(name).quorum().build();
+    }
+
+    /**
+     * 执行队列与发布交换机的<b>绑定</b>（第二十八批 · C28-1 · A9）。
+     *
+     * <p><b>⚠️ 本 Bean 此前根本不存在 —— 而这是本批修掉的一处 Sev-0 级缺陷</b>：
+     * 生产代码只声明了「交换机」与「队列」，<b>从未声明两者之间的绑定</b>。
+     * 没有绑定就没有路由：{@code RabbitMessageSender} 按路由键
+     * {@code agent.run.execute} 发布，而**没有任何队列订阅这个路由键**
+     * → 消息<b>无处可去</b>（broker 以 unroutable 丢弃），
+     * 消费者 {@code @RabbitListener(queues = "agent.run.execute")} 永远收不到消息，
+     * Run 永远停在 QUEUED，而 <b>API 照常返回 201、无报错、无告警</b>。
+     *
+     * <p>⚠️ <b>为什么一直没被发现</b>：集成测试 {@code RealBrokerEndToEndIT}
+     * <b>自己调了 {@code admin.declareBinding(...)}</b>，
+     * 于是测试路径上拓扑是完整的 —— <b>测试替生产兜底</b>。
+     * 本机 RabbitMQ 里那个绑定就是 IT 跑出来的副产物，
+     * 换环境（CI / 新部署）就没有 → 缺陷只在真部署时暴露。
+     *
+     * <p>⚠️ <b>路由键与队列名同源</b>：交换机、队列、路由键是三个概念，
+     * 若各自独立配置，失配的症状是「消息发出去没人收」且<b>不报错</b>。
+     * 让路由键取<b>同一个配置项</b>，就把「三处引用同一个值」变成结构上的必然，
+     * 而不是靠人记着改三遍。
+     */
+    @Bean
+    public Binding runExecuteBinding(
+            Queue runExecuteQueue,
+            TopicExchange runDispatchExchange,
+            @Value("${agent.mq.queues.execute.name}") String routingKey) {
+        return BindingBuilder.bind(runExecuteQueue)
+                .to(runDispatchExchange)
+                .with(routingKey);
     }
 
     /**
@@ -192,6 +239,17 @@ public class WorkerLoopConfig {
         // ⚠️ publisher confirms：quorum queue 只有在消息被多数派复制后
         //   才返回 ack。不开这个，RabbitMessageSender 的「等待确认」会立即返回。
         template.setMandatory(true);
+        // ⚠️ **不可路由消息必须显式告警**（第二十八批 · C28-1 · A9）：
+        //   mandatory=true 时 broker 会把「无队列订阅该路由键」的消息退回来。
+        //   此前**没有注册任何回调**，于是这类消息**无声无息地消失** ——
+        //   而它恰恰是「拓扑配错」最典型的症状（队列改名 / 绑定缺失 / 路由键写错）。
+        //   拓扑改成配置驱动后，失配的可能性变高，故这里把它变成**显式 ERROR 日志**：
+        //   拿不到 ack 不代表「没人收」，只代表「**没有队列订阅这个路由键**」。
+        template.setReturnsCallback(returned -> log.error(
+                "⚠️⚠️ 消息被 broker 退回：没有任何队列订阅该路由键（消息未入队，已丢失）"
+                        + " exchange={} routingKey={} replyCode={} replyText={}",
+                returned.getExchange(), returned.getRoutingKey(),
+                returned.getReplyCode(), returned.getReplyText()));
         // ⚠️ Jackson 3 / Spring AMQP 4：确认类型设在 CachingConnectionFactory 上，
         //    RabbitTemplate 无此 setter。
         template.setObservationEnabled(true);
@@ -235,11 +293,39 @@ public class WorkerLoopConfig {
      * <p>⚠️ <b>路由而非二选一</b>：全局模式是默认，按租户覆盖可做「小客群灰度」——
      * 试运营阶段让几个租户先走 DB 通道，其余仍走 RabbitMQ。
      */
+    /**
+     * RabbitMQ 发送器（第二十八批 · C28-1 · A9）。
+     *
+     * <p>⚠️ <b>提成独立 Bean</b>：此前发送器在 {@link #messageSender} 方法内部
+     * {@code new} 出来，因而<b>无法被装配断言直接读到</b> ——
+     * 「拓扑名到底有没有跟随配置」只能靠推测，不能被钉死。
+     * 提成 Bean 后，装配测试可以直接断言它持有的是配置值。
+     */
     @Bean
+    public RabbitMessageSender rabbitMessageSender(
+            RabbitTemplate template,
+            @Value("${agent.mq.exchange}") String exchange,
+            @Value("${agent.mq.queues.execute.name}") String routingKey) {
+        // ⚠️ 交换机与路由键**必须来自配置**（第二十八批 · C28-1 · A9）：
+        //    此前发送器把这两个名字硬编码在方法里，而队列名来自配置 ——
+        //    于是「队列名可配」是**假的**：改了队列名，队列建在新名字上，
+        //    发送器仍往老路由键发消息，没有任何队列订阅它 → 消息全部丢失。
+        //    ⚠️ 路由键与队列名**同源**：交换机 / 队列 / 路由键三者若各自独立配置，
+        //    失配的症状是「消息发出去没人收」且不报错。
+        return new RabbitMessageSender(template, exchange, routingKey);
+    }
+
+    @Bean
+    @Primary
     public MessageSender messageSender(MessagingChannels channels,
-                                      RabbitTemplate template,
+                                      RabbitMessageSender rabbit,
                                       PgQueueRepository pgRepository) {
-        MessageSender rabbit = new RabbitMessageSender(template);
+        // ⚠️ **@Primary 是必需的**（第二十八批 · C28-1 · A9）：
+        //    发送器提成独立 Bean 后，容器里出现了**两个** MessageSender 候选
+        //    （rabbitMessageSender 与本 Bean）→
+        //    `getBean(MessageSender.class)` 会抛 NoUniqueBeanDefinitionException。
+        //    对外的消息发送端只能是**按租户路由**的那个（本 Bean），
+        //    裸的 RabbitMessageSender 只是它的内部实现。
         MessageSender database = new PgQueueMessageSender(pgRepository);
 
         Map<String, MessageSender> overrides = new LinkedHashMap<>();
