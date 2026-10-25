@@ -62,7 +62,7 @@ export const NAV_NODES: NavNode[] = [
     path: '/tools',
     icon: <ToolOutlined />,
     requiredRoles: TENANT_SCOPE_ROLES,
-    description: '平台级 Tool 目录（只读，含风险等级 / MCP 绑定）；变更经带外运维通道。',
+    description: '平台级 Tool：目录 / 详情 / 关系（所属 MCP Server）、登记 / 改版 / 停用（平台级配置 · 需 PLATFORM_ADMIN，走三步工作流）。',
     phase: 'P1',
   },
   {
@@ -71,7 +71,7 @@ export const NAV_NODES: NavNode[] = [
     path: '/skills',
     icon: <BulbOutlined />,
     requiredRoles: TENANT_SCOPE_ROLES,
-    description: '平台级 Skill 目录（只读，呈现声明工具 / MCP 与 null≠[] 语义）；变更经带外运维通道。',
+    description: '平台级 Skill：目录 / 详情 / 关系（声明的 Tool 与 MCP，缺失项标红）、登记 / 改版 / 停用（平台级配置 · 需 PLATFORM_ADMIN）。',
     phase: 'P1',
   },
   {
@@ -80,7 +80,7 @@ export const NAV_NODES: NavNode[] = [
     path: '/mcp',
     icon: <ApiOutlined />,
     requiredRoles: TENANT_SCOPE_ROLES,
-    description: '平台级 MCP Server 目录（只读，信任分级 / 连接风险）；连接测试与清单采集后续前置。',
+    description: '平台级 MCP Server：目录 / 详情 / 关系（允许集与实际登记分开呈现）、登记 / 改版 / 停用（平台级配置 · 需 PLATFORM_ADMIN）。凭据仅存引用。',
     phase: 'P1',
   },
   {
@@ -98,7 +98,7 @@ export const NAV_NODES: NavNode[] = [
     path: '/publish',
     icon: <SendOutlined />,
     requiredRoles: TENANT_SCOPE_ROLES,
-    description: '三步工作流（申请→双人复核→执行）：申请队列、审批、发布时间线与回滚。平台级对象发布走带外运维通道。',
+    description: '三步工作流（申请→双人复核→执行）：申请队列、审批、发布时间线与回滚。租户级对象走此队列；平台级对象（Tool / Skill / MCP）的申请在各自详情页闭环（需 PLATFORM_ADMIN）。',
     phase: 'P2',
   },
   {
@@ -107,8 +107,17 @@ export const NAV_NODES: NavNode[] = [
     path: '/dependencies',
     icon: <ShareAltOutlined />,
     requiredRoles: TENANT_SCOPE_ROLES,
-    description: '能力闭包图谱与影响分析（只读）：Agent→Skill→Tool/MCP 依赖全景、变更前影响判据与悬空引用告警。',
+    description: '能力闭包图谱与影响分析（只读）：Agent→Skill→Tool/MCP 依赖全景、变更前影响判据与悬空引用告警。委派拓扑（父子 Agent 边）见「委派拓扑」页。',
     phase: 'P3',
+  },
+  {
+    key: 'delegations',
+    label: '委派拓扑',
+    path: '/delegations',
+    icon: <ShareAltOutlined />,
+    requiredRoles: TENANT_SCOPE_ROLES,
+    description: '父子 Agent 委派边（只读）：谁把工作交给谁。入向边提示「停用它会让那个父悬空」—— ⚠️ 只是提示，当前**无自动拦截**。',
+    phase: 'C34-3',
   },
   {
     key: 'monitoring',

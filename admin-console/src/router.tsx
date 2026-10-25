@@ -13,12 +13,16 @@ import { AgentDetailPage } from '@/pages/AgentDetailPage'
 import { ToolCatalogPage } from '@/pages/catalog/ToolCatalogPage'
 import { SkillCatalogPage } from '@/pages/catalog/SkillCatalogPage'
 import { McpCatalogPage } from '@/pages/catalog/McpCatalogPage'
+import { ToolDetailPage } from '@/pages/catalog/ToolDetailPage'
+import { SkillDetailPage } from '@/pages/catalog/SkillDetailPage'
+import { McpDetailPage } from '@/pages/catalog/McpDetailPage'
 import { ResultContractPage } from '@/pages/catalog/ResultContractPage'
 import { PublishCenterPage } from '@/pages/publish/PublishCenterPage'
 import { PublishRequestDetailPage } from '@/pages/publish/PublishRequestDetailPage'
 import { PublishReleasesPage } from '@/pages/publish/PublishReleasesPage'
 import { DependencyGraphPage } from '@/pages/dependencies/DependencyGraphPage'
 import { ImpactAnalysisPage } from '@/pages/dependencies/ImpactAnalysisPage'
+import { DelegationTopologyPage } from '@/pages/dependencies/DelegationTopologyPage'
 import { MonitoringHealthPage } from '@/pages/monitoring/MonitoringHealthPage'
 import { MonitoringDeniesPage } from '@/pages/monitoring/MonitoringDeniesPage'
 import { AuditLogsPage } from '@/pages/audit/AuditLogsPage'
@@ -85,6 +89,17 @@ export const router = createBrowserRouter(
           ),
         },
         {
+          // ⚠️ 平台级 Tool 详情（第三十四批 · C34-3）：读 = 租户级可见，
+          //    写（登记 / 改版 / 停用）= PLATFORM_ADMIN 闸门，由后端强制。
+          //    ⚠️ `new` 是保留段：登记新对象与详情共用同一张草稿表单。
+          path: 'tools/:id',
+          element: (
+            <RequireRole roles={TENANT_SCOPE_ROLES}>
+              <ToolDetailPage />
+            </RequireRole>
+          ),
+        },
+        {
           path: 'skills',
           element: (
             <RequireRole roles={TENANT_SCOPE_ROLES}>
@@ -93,10 +108,26 @@ export const router = createBrowserRouter(
           ),
         },
         {
+          path: 'skills/:id',
+          element: (
+            <RequireRole roles={TENANT_SCOPE_ROLES}>
+              <SkillDetailPage />
+            </RequireRole>
+          ),
+        },
+        {
           path: 'mcp',
           element: (
             <RequireRole roles={TENANT_SCOPE_ROLES}>
               <McpCatalogPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'mcp/:id',
+          element: (
+            <RequireRole roles={TENANT_SCOPE_ROLES}>
+              <McpDetailPage />
             </RequireRole>
           ),
         },
@@ -149,6 +180,15 @@ export const router = createBrowserRouter(
           element: (
             <RequireRole roles={TENANT_SCOPE_ROLES}>
               <ImpactAnalysisPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 委派拓扑（第三十四批 · C34-3）：父子 Agent 边的只读拓扑
+          path: 'delegations',
+          element: (
+            <RequireRole roles={TENANT_SCOPE_ROLES}>
+              <DelegationTopologyPage />
             </RequireRole>
           ),
         },

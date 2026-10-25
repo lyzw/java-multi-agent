@@ -153,6 +153,14 @@ export interface ToolCatalogItem {
   schemaVersion: number
   published: boolean
   publishedAt: string | null
+  /**
+   * ⚠️ 生命周期状态（PUBLISHED / DEPRECATED / …；读失败时为 null）。
+   *
+   * <p>⚠️ **不能硬编码 `expectedFrom=PUBLISHED`**：对象可能**早已停用**，
+   * 再提交一次迁移只会得到一个「原状态不符」的报错 —— 那读起来像
+   * 「有人跟我抢」，而真实原因是「它早就停了」。故前端必须**如实读取**。
+   */
+  lifecycleState: string | null
 }
 
 /**
@@ -178,6 +186,8 @@ export interface SkillCatalogItem {
   schemaVersion: number
   published: boolean
   publishedAt: string | null
+  /** ⚠️ 生命周期状态（PUBLISHED / DEPRECATED / …；读失败时为 null）—— 不硬编码 CAS 原状态 */
+  lifecycleState: string | null
 }
 
 /** MCP Server 目录项（GET /api/cap/catalog/mcps · McpResponse；⚠️ 不含 credentialRef，凭据永不入响应） */
@@ -197,6 +207,8 @@ export interface McpCatalogItem {
   publishedAt: string | null
   /** ⚠️ 仅布尔标识「是否登记了凭据引用」；定位符与凭据材料永不入响应（P5-T3） */
   hasCredentialRef: boolean
+  /** ⚠️ 生命周期状态（PUBLISHED / DEPRECATED / …；读失败时为 null）—— 不硬编码 CAS 原状态 */
+  lifecycleState: string | null
 }
 
 /* ── P2 发布审批（复用既有 /api/cap/config/publishes 三步工作流） ──
@@ -289,6 +301,13 @@ export interface SubmitPublishRequest {
   agents?: PublishAgentSpec[]
   /** 输出契约草稿（多级 Agent v1.1 · 第二十九批 · C29-1 · A6） */
   resultContracts?: PublishResultContractSpec[]
+  /**
+   * 路由策略草稿（第十四批）。
+   *
+   * ⚠️ 空列表 = 本次发布**不登记策略**（≠「策略随意」）——
+   * 没有策略可登记时，ROUTER Agent 的 `routingPolicyRef` 只能指向**此前已发布**的策略。
+   */
+  routingPolicies?: PublishRoutingPolicySpec[]
   targetReleaseId?: number | null
   lifecycle?: PublishLifecycleSpec
   reason: string
@@ -298,6 +317,242 @@ export interface SubmitPublishRequest {
 export interface PublishDecision {
   decision: 'APPROVE' | 'REJECT'
   note?: string
+}
+
+/**
+ * 路由策略草稿（RoutingPolicyRequest · 第十四批）。
+ *
+ * ⚠️ 与 Agent 草稿、输出契约草稿同口径：**不含版本号与内容指纹** —— 二者由服务端决定。
+ */
+export interface PublishRoutingPolicySpec {
+  /** 策略标识（可读字符串） */
+  policyId: string
+  /** 选择策略 */
+  strategy: 'EXPLICIT_TARGETS' | 'ORDERED_FALLBACK'
+  /** 允许的目标 Agent 标识（有序） */
+  targets?: string[]
+}
+
+/* ── C34-3：平台级能力对象写通道（第三十四批 · C34-2 后端契约） ── */
+
+/**
+ * 风险等级取值域（§5.6）。
+ *
+ * ⚠️ **没有「未知」这一档** —— 判不出风险就等于「无法判定」，
+ * 不允许把它当成「无限制」（后端 `ConfigValidationGate` 会以 RISK_LEVEL_UNKNOWN 拒）。
+ */
+export type CapabilityRiskLevel = 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'
+
+/** Tool 类型：NATIVE = 内置（不绑定任何 MCP Server）；MCP = 绑定到某个 Server。 */
+export type PlatformToolKind = 'NATIVE' | 'MCP'
+
+/** MCP 传输方式（V1 只支持 HTTP / SSE，后端 `isSupportedInV1` 之外一律拒）。 */
+export type PlatformMcpTransport = 'HTTP' | 'SSE'
+
+/** MCP 认证方式。 */
+export type PlatformMcpAuthKind = 'TOKEN' | 'OAUTH' | 'NONE'
+
+/** MCP 信任分级。 */
+export type PlatformMcpTrustTier = 'INTERNAL' | 'PARTNER' | 'PUBLIC'
+
+/**
+ * 平台级 Tool 定义草稿（PlatformToolSpec）。
+ *
+ * ⚠️ **kind 与 MCP 绑定字段是互斥且成对的两组事实**：
+ * `kind=MCP` 时 `mcpServerId` + `mcpToolName` **必须都给**，
+ * `kind=NATIVE` 时**两者都不能给** —— 后端 400（DB 层也有 CHECK 兜底）。
+ */
+export interface PlatformToolSpec {
+  toolId: string
+  name?: string
+  kind: PlatformToolKind
+  riskLevel: CapabilityRiskLevel
+  /** ⚠️ 仅 kind=MCP 时可给 */
+  mcpServerId?: string
+  /** ⚠️ 仅 kind=MCP 时可给 */
+  mcpToolName?: string
+  inputSchema?: string
+  paramPolicies?: string
+}
+
+/**
+ * Skill 对 MCP Server 的声明草稿（PlatformMcpDeclarationSpec）。
+ *
+ * ⚠️ **`toolAllowlist` 的 `null` 与 `[]` 语义不同**：
+ * `null` = 未配置（取该 Server 允许集**全集**），
+ * `[]` = 显式**不允许任何操作**。把 `[]` 归一成 `null` 等于权限放宽。
+ */
+export interface PlatformMcpDeclarationSpec {
+  serverId: string
+  toolAllowlist?: string[] | null
+}
+
+/** 平台级 Skill 定义草稿（PlatformSkillSpec）。 */
+export interface PlatformSkillSpec {
+  skillId: string
+  name?: string
+  description?: string
+  declaredTools?: string[]
+  declaredMcp?: PlatformMcpDeclarationSpec[]
+  riskCeiling: CapabilityRiskLevel
+  paramPolicies?: string
+  requiredCaps?: string[]
+}
+
+/**
+ * 平台级 MCP Server 定义草稿（PlatformMcpServerSpec）。
+ *
+ * ⚠️ **`exposedToolAllowlist` 同样 `null` ≠ `[]`**（三态：未配置 / 显式空 / 指定清单）。
+ * ⚠️ `credentialRef` 是**凭据库定位符**（不是凭据材料）；目录接口**从不回显**它，
+ * 只给 `hasCredentialRef` 布尔 —— 所以「改一个别的字段」也可能把凭据引用丢掉。
+ */
+export interface PlatformMcpServerSpec {
+  serverId: string
+  transport: PlatformMcpTransport
+  endpoint?: string
+  command?: string
+  authKind: PlatformMcpAuthKind
+  trustTier: PlatformMcpTrustTier
+  exposedToolAllowlist?: string[] | null
+  connectionRisk: CapabilityRiskLevel
+  credentialRef?: string
+}
+
+/** 平台级发布申请体（POST /api/cap/platform/publish-requests）。 */
+export interface PlatformPublishRequest {
+  tools?: PlatformToolSpec[]
+  skills?: PlatformSkillSpec[]
+  mcpServers?: PlatformMcpServerSpec[]
+  /** CAS 基线（客户端读到的当前发布序号）；缺省 = 不做基线校验 */
+  expectedPublishSeq?: number
+  /** ⚠️ 必填，空串 → 后端 400 */
+  reason: string
+}
+
+/** 平台级生命周期迁移申请体（POST /api/cap/platform/lifecycle-requests）。 */
+export interface PlatformLifecycleRequest {
+  /** ⚠️ 平台通道只管理平台级对象：tool / skill / mcp_server */
+  type: 'tool' | 'skill' | 'mcp_server'
+  objectId: string
+  /** ⚠️ 必须是对象**当前版本号**（详情页里有） */
+  version: number
+  /** CAS 前置条件：停用通道固定 PUBLISHED */
+  expectedFrom: string
+  /** 目标状态（停用 = DEPRECATED，单向终态） */
+  to: string
+  reason: string
+}
+
+/** 平台级变更申请视图（RequestResponse）。 */
+export interface PlatformRequestItem {
+  requestId: string
+  scope: string
+  operation: string
+  state: 'PENDING' | 'APPROVED' | 'REJECTED' | 'APPLIED' | 'FAILED'
+  requesterId: string
+  approverId?: string
+  decisionNote?: string
+  failureReason?: string
+  requestedAt: string
+  decidedAt?: string
+  appliedAt?: string
+}
+
+/** 平台级审批决定体（PlatformDecisionRequest）。 */
+export interface PlatformDecision {
+  decision: 'APPROVE' | 'REJECT'
+  note?: string
+}
+
+/* ── C34-3：能力目录关系视图 ── */
+
+/** Tool 紧凑摘要（关系视图用）。 */
+export interface ToolSummary {
+  toolId: string
+  name?: string
+  kind: string
+  riskLevel: string
+  version: number
+  published: boolean
+}
+
+/** MCP Server 紧凑摘要（关系视图用）。 */
+export interface McpSummary {
+  serverId: string
+  transport: string
+  trustTier: string
+  connectionRisk: string
+  version: number
+  published: boolean
+}
+
+/** Tool 的关系视图（GET /api/cap/catalog/tools/{toolId}/relations）。 */
+export interface ToolRelations {
+  toolId: string
+  /** ⚠️ null = 内置 Tool（合法状态，不是「查不到」） */
+  mcpServer: McpSummary | null
+}
+
+/** Skill 的关系视图（GET /api/cap/catalog/skills/{skillId}/relations）。 */
+export interface SkillRelations {
+  skillId: string
+  tools: ToolSummary[]
+  /** ⚠️ 「声明了但对象不存在」的 Tool id —— 必须如实呈现 */
+  missingTools: string[]
+  mcpServers: McpSummary[]
+  /** ⚠️ 「声明了但对象不存在」的 MCP Server id —— 必须如实呈现 */
+  missingMcpServers: string[]
+}
+
+/** MCP Server 的关系视图（GET /api/cap/catalog/mcps/{serverId}/relations）。 */
+export interface McpRelations {
+  serverId: string
+  /** ⚠️ 允许集（null≠[]），与 `tools`（实际登记）是两回事 */
+  exposedToolAllowlist: string[] | null
+  /** 实际登记在该 Server 上的 Tool 定义 */
+  tools: ToolSummary[]
+}
+
+/* ── C34-3：多级 Agent 的权威定义（cap_agent_def） ── */
+
+/**
+ * Agent 的权威定义（GET /api/cap/agents/{agentId}/definition）。
+ *
+ * ⚠️ `overrides` 与 `orchestration` 都是 **JSON 原文字符串**（不是对象）——
+ * 解析失败必须**显式报错**，不能静默当空。
+ */
+export interface AgentDefinition {
+  agentId: string
+  version: number
+  name?: string
+  description?: string
+  roles: string[]
+  enabledSkills: string[]
+  skillBundles: string[]
+  capabilityTags: string[]
+  /** 收紧覆盖（JSON 原文）—— ⚠️ **不是**整份 definition */
+  overrides: string
+  /** 编排声明（JSON 原文） */
+  orchestration: string
+  published: boolean
+}
+
+/* ── C34-3：委派拓扑（cap_agent_child_ref 投影） ── */
+
+/**
+ * 一条委派边（DelegationEdgeResponse）。
+ *
+ * ⚠️ 这是**发布关系投影**，不是权威定义 —— 边的唯一来源是发布期投影。
+ */
+export interface DelegationEdge {
+  parentAgentId: string
+  parentReleaseVersion: number
+  childAgentId: string
+  childReleaseVersion: number
+  /** 父的声明次序（⚠️ 框架**不**按此顺序代为执行） */
+  ordinal: number
+  required: boolean
+  createdAt: string
 }
 
 /* ── P3 关系视图（GET /api/admin/dependencies/*） ── */

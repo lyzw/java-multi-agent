@@ -348,3 +348,111 @@ export function parseOrchestrationJson(
     raw: text,
   }
 }
+
+/** 严格解析的结果：失败时给出**可展示给人看**的原因。 */
+export type OrchestrationParseResult =
+  | { ok: true; values: OrchestrationFormValues; raw: string }
+  | { ok: false; error: string; raw: string }
+
+/**
+ * 严格解析编排声明 JSON —— **解析失败必须显式报错**，不静默当空。
+ *
+ * <p>⚠️ <b>为什么需要严格版</b>：{@link parseOrchestrationJson} 对解析失败
+ * 的处理是「回落到 LEAF 并保留原文」，这对<b>只读展示</b>是对的
+ * （页面不崩、用户能看到原文）；但对<b>回填表单</b>是危险的 ——
+ * 回填失败若静默当空，保存时就会把一份合法的编排声明
+ * **覆盖成 LEAF**（= 取消全部委派）。
+ * 「看不出来地改坏」比「报错」危险得多，所以回填路径必须用严格版。
+ *
+ * <p>⚠️ 严格版只多判两件事：JSON 本身不合法、以及 {@code mode} 取值未知。
+ * 缺省 {@code mode} 仍按 LEAF 处理（与后端一致：缺省 = LEAF = 不允许委派）。
+ */
+export function parseOrchestrationJsonStrict(
+  raw: string | null | undefined,
+): OrchestrationParseResult {
+  const text = (raw ?? '').trim()
+  if (text === '') {
+    const { values } = parseOrchestrationJson('')
+    return { ok: true, values, raw: text }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (e) {
+    return {
+      ok: false,
+      error: `编排声明不是合法 JSON：${(e as Error).message}`,
+      raw: text,
+    }
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, error: '编排声明必须是 JSON 对象', raw: text }
+  }
+  const obj = parsed as Record<string, unknown>
+  const rawMode = obj.mode
+  if (rawMode !== undefined && rawMode !== null && !ORCHESTRATION_MODES.includes(rawMode as OrchestrationMode)) {
+    return {
+      ok: false,
+      error: `编排模式非法：${String(rawMode)}（合法值 ${ORCHESTRATION_MODES.join(' / ')}）`,
+      raw: text,
+    }
+  }
+  const { values } = parseOrchestrationJson(text)
+  return { ok: true, values, raw: text }
+}
+
+/* ── 发布闸门判据（第三十四批 · C34-3） ── */
+
+/** 发布闸门的输入状态。 */
+export interface PublishGateInput {
+  /** 编排声明解析失败的原因（null = 正常） */
+  orchestrationError: string | null
+  /** 权威定义（cap_agent_def）取不到 —— 关系字段无从回填 */
+  definitionUnavailable: boolean
+  /** 用户已显式确认「本次保存会清空关系」 */
+  acknowledgeClearRelations: boolean
+}
+
+/**
+ * 发布闸门的结果。
+ *
+ * <p>⚠️ {@code blocked} 决定**两件事**，且必须是**同一个判据**：
+ * 提交按钮的 `disabled` 属性、以及提交函数内部的提前 `return`。
+ * 二者若各写一份判据，迟早漂移 —— 漂移的后果是「按钮可点了，但提交被静默拦下」
+ * （用户只看到「点了没反应」，不知道为什么），或反过来
+ * （按钮禁用了，但程序化调用仍能把空关系提交上去）。
+ */
+export interface PublishGateResult {
+  /** 是否阻止本次发布 */
+  blocked: boolean
+  /** 阻止原因（blocked=false 时为 null）—— 可直接展示给人看 */
+  reason: string | null
+}
+
+/**
+ * 计算发布闸门。
+ *
+ * <p>⚠️ **闸门 2（回填不全 ⇒ 静默清空关系）是本批修复的核心**：
+ * 权威定义取不到时，关系字段（角色 / 启用技能 / 技能包 / 能力标签 / 编排声明）
+ * 无从回填；若此时允许保存，等于把一份**合法声明覆盖成空**
+ * （对非 LEAF 而言就是「取消全部委派」），而用户**看不出来**。
+ * 故必须由用户**显式确认**才放行 —— 知情才允许，不知情就拦住。
+ *
+ * <p>⚠️ **编排声明解析失败也是硬拦**：回填失败时表单里的编排字段是「空」的，
+ * 照此提交就等于把合法编排**覆盖成 LEAF**。同理必须显式报错，不静默当空。
+ */
+export function evaluatePublishGate(input: PublishGateInput): PublishGateResult {
+  if (input.orchestrationError !== null) {
+    return {
+      blocked: true,
+      reason: `编排声明解析失败，已阻止提交：${input.orchestrationError}`,
+    }
+  }
+  if (input.definitionUnavailable && !input.acknowledgeClearRelations) {
+    return {
+      blocked: true,
+      reason: '该 Agent 尚无多级定义（cap_agent_def）：保存会清空关系字段，请先显式确认',
+    }
+  }
+  return { blocked: false, reason: null }
+}

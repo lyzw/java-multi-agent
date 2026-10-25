@@ -95,6 +95,7 @@ const mcpFixture: McpCatalogItem[] = [
     createdAt: '2026-10-01T00:00:00Z',
     publishedAt: '2026-10-01T00:00:00Z',
     hasCredentialRef: true,
+  lifecycleState: 'PUBLISHED',
   },
   {
     serverId: 'srv-open',
@@ -111,6 +112,7 @@ const mcpFixture: McpCatalogItem[] = [
     createdAt: null,
     publishedAt: null,
     hasCredentialRef: false,
+  lifecycleState: 'PUBLISHED',
   },
 ]
 

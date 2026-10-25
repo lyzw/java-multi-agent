@@ -1,24 +1,33 @@
 import { useCallback } from 'react'
-import { Link } from 'react-router-dom'
-import { Tag, Typography } from 'antd'
-import { ApiOutlined } from '@ant-design/icons'
+import { Link, useNavigate } from 'react-router-dom'
+import { Button, Space, Tag, Typography } from 'antd'
+import { ApiOutlined, PlusOutlined } from '@ant-design/icons'
 import { ReadOnlyCatalogPage } from './ReadOnlyCatalogPage'
 import { riskTag, allowlistCell } from './displayBits'
 import { getMcpCatalog } from '@/api/adminApi'
 import type { McpCatalogItem } from '@/api/types'
 
-/** MCP Server 目录（P1 · 平台级只读，复用 /api/cap/catalog/mcps） */
+/** MCP Server 目录（P1 · 平台级；C34-3 起可进入详情登记 / 改版 / 停用） */
 export function McpCatalogPage(): JSX.Element {
+  const navigate = useNavigate()
   const fetcher = useCallback(() => getMcpCatalog(), [])
   return (
     <ReadOnlyCatalogPage<McpCatalogItem>
       title={<><ApiOutlined /> MCP 服务目录</>}
-      notice="平台级 MCP Server 目录（只读）"
-      noticeDesc="MCP Server 是平台级对象。连接测试 / 清单采集端点留待后续阶段前置；变更须经带外运维通道。凭据仅存定位符，本目录不暴露任何凭据材料。点「影响」查看谁引用了该 Server。"
+      notice="平台级 MCP Server 目录"
+      noticeDesc="MCP Server 是平台级对象。连接测试 / 清单采集端点留待后续阶段前置；登记 / 改版 / 停用走平台级三步工作流（需 PLATFORM_ADMIN）。凭据仅存定位符，本目录不暴露任何凭据材料。"
+      cardExtra={
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/mcp/new')}>
+          登记 MCP Server
+        </Button>
+      }
       fetcher={fetcher}
       rowKey={(r) => r.serverId}
       actions={(r) => (
-        <Link to={`/dependencies/impact?type=mcp_server&id=${encodeURIComponent(r.serverId)}`}>影响</Link>
+        <Space size="small">
+          <Link to={`/mcp/${encodeURIComponent(r.serverId)}`}>详情</Link>
+          <Link to={`/dependencies/impact?type=mcp_server&id=${encodeURIComponent(r.serverId)}`}>影响</Link>
+        </Space>
       )}
       columns={[
         { title: 'ID', dataIndex: 'serverId', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },

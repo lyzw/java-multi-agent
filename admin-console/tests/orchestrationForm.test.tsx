@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildOrchestrationJson,
+  evaluatePublishGate,
   parseOrchestrationJson,
   validateOrchestration,
   validatePinnedRef,
@@ -264,5 +265,68 @@ describe('编排声明表单 · 回显解析', () => {
     expect(parseOrchestrationJson('').values.mode).toBe('LEAF')
     expect(parseOrchestrationJson('{}').values.mode).toBe('LEAF')
     expect(parseOrchestrationJson(null).values.mode).toBe('LEAF')
+  })
+})
+
+/**
+ * 发布闸门判据（第三十四批 · C34-3）。
+ *
+ * <p>⚠️ **为什么要单独测纯函数而不是只测页面**：按钮的 `disabled` 与提交函数内的
+ * 提前 `return` **必须共用同一判据**。一旦各写一份，漂移后会出现两种难查的故障：
+ * 「按钮可点了却被静默拦下」（用户只看到「点了没反应」），
+ * 或「按钮禁用了但程序化调用仍能提交空关系」。
+ * 把判据抽成纯函数后，可以**直接断言判据本身**，也能保证两处调用的是同一个。
+ */
+describe('发布闸门 · evaluatePublishGate', () => {
+  const ok = { orchestrationError: null, definitionUnavailable: false, acknowledgeClearRelations: false }
+
+  it('✅ 一切正常 → 放行（blocked=false）', () => {
+    const r = evaluatePublishGate(ok)
+    expect(r.blocked).toBe(false)
+    expect(r.reason).toBeNull()
+  })
+
+  it('⛔ 编排声明解析失败 → 硬拦（不得把合法编排静默覆盖成 LEAF）', () => {
+    const r = evaluatePublishGate({ ...ok, orchestrationError: '编排声明不是合法 JSON' })
+    expect(r.blocked).toBe(true)
+    expect(r.reason).toContain('编排声明解析失败')
+  })
+
+  it('⛔ 取不到权威定义且未确认 → 硬拦（关系不得被静默清空）', () => {
+    const r = evaluatePublishGate({ ...ok, definitionUnavailable: true })
+    expect(r.blocked).toBe(true)
+    expect(r.reason).toContain('保存会清空关系')
+  })
+
+  it('✅ 取不到权威定义但**已显式确认** → 放行（用户知情，故允许）', () => {
+    const r = evaluatePublishGate({
+      ...ok,
+      definitionUnavailable: true,
+      acknowledgeClearRelations: true,
+    })
+    expect(r.blocked).toBe(false)
+  })
+
+  it('⛔ 编排解析失败**优先于**回填确认（两个问题同时存在时也必须拦）', () => {
+    const r = evaluatePublishGate({
+      orchestrationError: '编排模式非法',
+      definitionUnavailable: true,
+      acknowledgeClearRelations: true,
+    })
+    expect(r.blocked).toBe(true)
+    expect(r.reason).toContain('编排声明解析失败')
+  })
+
+  it('⛔ 已确认**不能**掩盖编排解析失败（确认只对「回填不全」有效）', () => {
+    // ⚠️ 反证：确认勾选框只解决「关系无从回填」，
+    //    若实现把它当成「万能放行」，那么编排解析失败就会被一起放过 ——
+    //    那等于「勾一下就能把坏编排提交上去」。
+    const r = evaluatePublishGate({
+      orchestrationError: '编排声明不是合法 JSON',
+      definitionUnavailable: true,
+      acknowledgeClearRelations: true,
+    })
+    expect(r.blocked).toBe(true)
+    expect(r.reason).not.toContain('保存会清空关系')
   })
 })

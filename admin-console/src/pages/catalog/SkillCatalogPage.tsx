@@ -1,24 +1,33 @@
 import { useCallback } from 'react'
-import { Link } from 'react-router-dom'
-import { Typography } from 'antd'
-import { BulbOutlined } from '@ant-design/icons'
+import { Link, useNavigate } from 'react-router-dom'
+import { Button, Space, Typography } from 'antd'
+import { BulbOutlined, PlusOutlined } from '@ant-design/icons'
 import { ReadOnlyCatalogPage } from './ReadOnlyCatalogPage'
 import { riskTag, tagList } from './displayBits'
 import { getSkillCatalog } from '@/api/adminApi'
 import type { SkillCatalogItem, McpDeclaration } from '@/api/types'
 
-/** Skill 目录（P1 · 平台级只读，复用 /api/cap/catalog/skills） */
+/** Skill 目录（P1 · 平台级；C34-3 起可进入详情登记 / 改版 / 停用） */
 export function SkillCatalogPage(): JSX.Element {
+  const navigate = useNavigate()
   const fetcher = useCallback(() => getSkillCatalog(), [])
   return (
     <ReadOnlyCatalogPage<SkillCatalogItem>
       title={<><BulbOutlined /> Skill 目录</>}
-      notice="平台级 Skill 目录（只读）"
-      noticeDesc="Skill 定义是平台级对象。其声明的工具 / MCP 关系与风险上限在下方呈现；变更须经带外运维通道。点「影响」查看谁引用了该 Skill。"
+      notice="平台级 Skill 目录"
+      noticeDesc="Skill 定义是平台级对象。其声明的工具 / MCP 关系与风险上限在下方呈现；登记 / 改版 / 停用走平台级三步工作流（需 PLATFORM_ADMIN）。点「详情」查看关系与操作区。"
+      cardExtra={
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/skills/new')}>
+          登记 Skill
+        </Button>
+      }
       fetcher={fetcher}
       rowKey={(r) => r.skillId}
       actions={(r) => (
-        <Link to={`/dependencies/impact?type=skill&id=${encodeURIComponent(r.skillId)}`}>影响</Link>
+        <Space size="small">
+          <Link to={`/skills/${encodeURIComponent(r.skillId)}`}>详情</Link>
+          <Link to={`/dependencies/impact?type=skill&id=${encodeURIComponent(r.skillId)}`}>影响</Link>
+        </Space>
       )}
       columns={[
         { title: 'ID', dataIndex: 'skillId', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },

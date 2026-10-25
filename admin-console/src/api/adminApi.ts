@@ -7,6 +7,9 @@
  * P1 真实对接：Agent CRUD（/api/agents）+ Tool/Skill/MCP 只读目录（/api/cap/catalog）。
  * P2 真实对接：发布审批三步工作流（/api/cap/config/publishes）。
  * P3 真实对接：依赖图谱与影响分析（/api/admin/dependencies/*，只读）。
+ * C34-3 真实对接：平台级能力对象写通道（/api/cap/platform/*，PLATFORM_ADMIN 闸门）、
+ *   目录关系视图（/api/cap/catalog 下的 relations 端点）、多级 Agent 权威定义
+ *   （/api/cap/agents/{id}/definition）、委派拓扑（/api/cap/delegations）。
  */
 
 import { request } from '@/api/client'
@@ -40,6 +43,15 @@ import type {
   MonitoringHealth,
   DenyAlert,
   AuditLogEntry,
+  ToolRelations,
+  SkillRelations,
+  McpRelations,
+  AgentDefinition,
+  DelegationEdge,
+  PlatformPublishRequest,
+  PlatformLifecycleRequest,
+  PlatformRequestItem,
+  PlatformDecision,
 } from '@/api/types'
 
 /** POST /api/auth/token —— 无需鉴权 */
@@ -171,7 +183,9 @@ export function publishAgentVersion(
 }
 
 /* ── P1 实体管理：Tool / Skill / MCP（平台级，复用 /api/cap/catalog 只读目录） ──
-   ⚠️ 平台级对象变更走带外运维通道（与 P0.5 作用域红线一致），本控制台只读。 */
+   ⚠️ 目录**读取**仍是对全体租户可见的（能力清单是攻击面枚举素材，故读取同样鉴权）；
+   但**变更**从 C34-3 起不再走带外运维通道，而是接平台级三步工作流
+   （PLATFORM_ADMIN 闸门 + 运维通道），见本文件末尾「平台级能力对象写通道」。 */
 
 /** GET /api/cap/catalog/tools —— Tool 目录（只读） */
 export function getToolCatalog(): Promise<ToolCatalogItem[]> {
@@ -363,4 +377,133 @@ export function getAuditLogs(params?: {
   if (params?.cursor) qs.set('cursor', params.cursor)
   const q = qs.toString()
   return request<CursorPage<AuditLogEntry>>(`/audit${q ? `?${q}` : ''}`, { method: 'GET' })
+}
+
+/* ── C34-3：能力目录关系视图（只读，第三十四批） ──
+   ⚠️ 关系视图把「声明了但对象不存在」的 id **显式列为 missing**，
+   而不是悄悄从清单里消失 —— 悄悄消失会让运维以为「没有这个依赖」。 */
+
+/** GET /api/cap/catalog/tools/{id}/relations —— Tool 的关系（所属 MCP Server；null = 内置 Tool） */
+export function getToolRelations(id: string): Promise<ToolRelations> {
+  return request<ToolRelations>(`/cap/catalog/tools/${id}/relations`, { method: 'GET' })
+}
+
+/** GET /api/cap/catalog/skills/{id}/relations —— Skill 的关系（声明的 Tool / MCP + 缺失项） */
+export function getSkillRelations(id: string): Promise<SkillRelations> {
+  return request<SkillRelations>(`/cap/catalog/skills/${id}/relations`, { method: 'GET' })
+}
+
+/**
+ * GET /api/cap/catalog/mcps/{id}/relations —— MCP Server 的关系。
+ *
+ * ⚠️ `exposedToolAllowlist`（允许集）与 `tools`（实际登记）是**两回事**，
+ * 允许集可以更宽、登记可以更窄 —— 页面必须分开呈现。
+ */
+export function getMcpRelations(id: string): Promise<McpRelations> {
+  return request<McpRelations>(`/cap/catalog/mcps/${id}/relations`, { method: 'GET' })
+}
+
+/* ── C34-3：多级 Agent 的权威定义（只读） ── */
+
+/**
+ * GET /api/cap/agents/{id}/definition —— Agent 的权威定义（cap_agent_def 最新版本）。
+ *
+ * ⚠️ 与 `GET /api/agents/{id}` 的 `latestDefinition` **不是同一份东西**：
+ * 后者是旧体系（agent / agent_version）的自由 JSON 快照，取不到关系字段。
+ */
+export function getAgentDefinition(id: string): Promise<AgentDefinition> {
+  return request<AgentDefinition>(`/cap/agents/${id}/definition`, { method: 'GET' })
+}
+
+/* ── C34-3：委派拓扑（只读，cap_agent_child_ref 投影） ── */
+
+/** GET /api/cap/delegations —— 本租户全部委派边（拓扑图用） */
+export function getDelegations(): Promise<DelegationEdge[]> {
+  return request<DelegationEdge[]>('/cap/delegations', { method: 'GET' })
+}
+
+/** GET /api/cap/delegations/parents/{id}/children —— 某父 Agent 的出向边（我依赖谁） */
+export function getDelegationChildren(id: string): Promise<DelegationEdge[]> {
+  return request<DelegationEdge[]>(`/cap/delegations/parents/${id}/children`, { method: 'GET' })
+}
+
+/**
+ * GET /api/cap/delegations/children/{id}/parents —— 某子 Agent 的入向边（谁依赖我）。
+ *
+ * ⚠️ 不限子版本：停用的是那个 **Agent**，不是某一版 ——
+ * 任何父引用了它的任何一版，都构成「抽走它会让那个父悬空」的事实。
+ */
+export function getDelegationParents(id: string): Promise<DelegationEdge[]> {
+  return request<DelegationEdge[]>(`/cap/delegations/children/${id}/parents`, { method: 'GET' })
+}
+
+/* ── C34-3：平台级能力对象写通道（第三十四批 · C34-2 后端契约） ──
+   ⚠️ 两道闸门缺一不可：PLATFORM_ADMIN 身份（403 默认拒绝）+ 平台运维通道（503 = 环境未接入）。
+   ⚠️ 仍是「申请 → 审批 → 执行」三步：把申请人与审批人放进一次请求，双人复核就退化成自证。 */
+
+/** POST /api/cap/platform/publish-requests —— 提交平台级发布申请（不写配置表） */
+export function submitPlatformPublishRequest(
+  payload: PlatformPublishRequest,
+): Promise<PlatformRequestItem> {
+  return request<PlatformRequestItem>('/cap/platform/publish-requests', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** POST /api/cap/platform/publish-requests/{requestId}/decision —— 审批（不写配置表） */
+export function decidePlatformPublishRequest(
+  requestId: string,
+  payload: PlatformDecision,
+): Promise<PlatformRequestItem> {
+  return request<PlatformRequestItem>(`/cap/platform/publish-requests/${requestId}/decision`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** POST /api/cap/platform/publish-requests/{requestId}/apply —— 执行（此步才真正写入） */
+export function applyPlatformPublishRequest(requestId: string): Promise<PlatformRequestItem> {
+  return request<PlatformRequestItem>(`/cap/platform/publish-requests/${requestId}/apply`, {
+    method: 'POST',
+  })
+}
+
+/**
+ * POST /api/cap/platform/lifecycle-requests —— 提交平台级生命周期迁移申请（停用）。
+ *
+ * ⚠️ **这是「停用」通道，不是物理删除**：已发布行不可变（DB 触发器），
+ * 物理删除不做 —— 正确语义是迁移到 DEPRECATED（单向终态）。
+ */
+export function submitPlatformLifecycleRequest(
+  payload: PlatformLifecycleRequest,
+): Promise<PlatformRequestItem> {
+  return request<PlatformRequestItem>('/cap/platform/lifecycle-requests', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** GET /api/cap/platform/publish-requests —— 平台级变更申请队列（游标分页） */
+export function getPlatformPublishRequests(params?: {
+  state?: string
+  limit?: number
+  cursor?: string
+}): Promise<CursorPage<PlatformRequestItem>> {
+  const qs = new URLSearchParams()
+  if (params?.state) qs.set('state', params.state)
+  if (params?.limit) qs.set('limit', String(params.limit))
+  if (params?.cursor) qs.set('cursor', params.cursor)
+  const q = qs.toString()
+  return request<CursorPage<PlatformRequestItem>>(
+    `/cap/platform/publish-requests${q ? `?${q}` : ''}`,
+    { method: 'GET' },
+  )
+}
+
+/** GET /api/cap/platform/publish-requests/{requestId} —— 单条平台级变更申请 */
+export function getPlatformPublishRequest(requestId: string): Promise<PlatformRequestItem> {
+  return request<PlatformRequestItem>(`/cap/platform/publish-requests/${requestId}`, {
+    method: 'GET',
+  })
 }
