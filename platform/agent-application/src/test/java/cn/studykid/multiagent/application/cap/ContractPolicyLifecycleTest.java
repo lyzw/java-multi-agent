@@ -222,7 +222,8 @@ class ContractPolicyLifecycleTest {
 
         assertThatThrownBy(() -> validator().validate(TENANT, leafDraft("""
                 {"mode":"ROUTER","routingPolicyRef":"orders-router@1",
-                 "childAgentRefs":[{"id":"child-agent","version":1}]}
+                 "childAgentRefs":[{"id":"child-agent","version":1}],
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """)))
                 .as("⛔ 已停用的策略竟能被新发布引用")
                 .isInstanceOf(ConfigPublishRejectedException.class)
@@ -245,7 +246,8 @@ class ContractPolicyLifecycleTest {
 
         assertThatCode(() -> validator().validate(TENANT, leafDraft("""
                 {"mode":"ROUTER","routingPolicyRef":"orders-router@1",
-                 "childAgentRefs":[{"id":"child-agent","version":1}]}
+                 "childAgentRefs":[{"id":"child-agent","version":1}],
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """))).doesNotThrowAnyException();
     }
 

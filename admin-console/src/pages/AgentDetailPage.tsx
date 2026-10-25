@@ -480,18 +480,22 @@ export function AgentDetailPage(): JSX.Element {
                       <Form.Item
                         name="maxDelegationDepth"
                         label="最大委派深度"
-                        extra="留空 = 服务端默认值"
+                        extra="非 LEAF 必填；平台不提供默认值"
                       >
                         <InputNumber min={1} precision={0} style={{ width: 140 }} />
                       </Form.Item>
                       <Form.Item
                         name="maxChildInvocations"
                         label="最大子调用次数"
-                        extra="留空 = 服务端默认值"
+                        extra="非 LEAF 必填；0 = 不允许发起任何子调用"
                       >
                         <InputNumber min={0} precision={0} style={{ width: 140 }} />
                       </Form.Item>
-                      <Form.Item name="timeoutMs" label="委派超时（毫秒）" extra="留空 = 服务端默认值">
+                      <Form.Item
+                        name="timeoutMs"
+                        label="委派超时（毫秒）"
+                        extra="非 LEAF 必填；平台不提供默认值"
+                      >
                         <InputNumber min={1} precision={0} style={{ width: 160 }} />
                       </Form.Item>
                       <Form.Item name="failurePolicy" label="失败策略">

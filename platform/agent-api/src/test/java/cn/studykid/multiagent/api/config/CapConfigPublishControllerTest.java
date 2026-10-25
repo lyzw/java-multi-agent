@@ -219,7 +219,7 @@ class CapConfigPublishControllerTest {
                 "PUBLISH", "TENANT", null,
                 List.of(new CapConfigPublishController.AgentRequest(
                         "a-1", "教师 Agent", "desc", null, null, null, null, null,
-                        "{\"mode\":\"SEQUENTIAL\",\"childAgentRefs\":[{\"id\":\"c-1\",\"version\":1}]}")),
+                        "{\"mode\":\"SEQUENTIAL\",\"childAgentRefs\":[{\"id\":\"c-1\",\"version\":1}],\"maxDelegationDepth\":3,\"maxChildInvocations\":8,\"timeoutMs\":30000}")),
                 null, null,
                 List.of(new CapConfigPublishController.ResultContractRequest(
                         "answer-contract", "{\"type\":\"object\"}")),

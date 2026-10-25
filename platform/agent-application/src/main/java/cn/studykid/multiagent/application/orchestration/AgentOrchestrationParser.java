@@ -84,12 +84,15 @@ public final class AgentOrchestrationParser {
         }
         String resultContractRef = parsePinnedRef(root.get("resultContractRef"), "resultContractRef");
 
-        int maxDepth = intOrDefault(root.get("maxDelegationDepth"),
-                AgentOrchestration.DEFAULT_MAX_DELEGATION_DEPTH, "maxDelegationDepth");
-        int maxInvocations = intOrDefault(root.get("maxChildInvocations"),
-                AgentOrchestration.DEFAULT_MAX_CHILD_INVOCATIONS, "maxChildInvocations");
-        long timeoutMs = longOrDefault(root.get("timeoutMs"),
-                AgentOrchestration.DEFAULT_TIMEOUT_MS, "timeoutMs");
+        // ⚠️ **平台默认值已取消**（评审前置决策 2 · 2026-10-25）：
+        //    这三个字段**不再有兜底** —— 缺失就是缺失，由
+        //    {@link AgentOrchestration} 的构造器判定「非 LEAF 必须显式声明」，
+        //    不满足即抛异常 → 本层包成 {@link OrchestrationConfigException}
+        //    → 发布期**拒绝发布**（fail-closed）。
+        //    ⚠️ 判据放在领域模型而不是这里：任何构造路径都得过这一关。
+        Integer maxDepth = intOrNull(root.get("maxDelegationDepth"), "maxDelegationDepth");
+        Integer maxInvocations = intOrNull(root.get("maxChildInvocations"), "maxChildInvocations");
+        Long timeoutMs = longOrNull(root.get("timeoutMs"), "timeoutMs");
         DelegationFailurePolicy failurePolicy = parseFailurePolicy(root.get("failurePolicy"));
 
         try {
@@ -121,9 +124,18 @@ public final class AgentOrchestrationParser {
         if (orchestration.routingPolicyRef() != null) {
             root.put("routingPolicyRef", orchestration.routingPolicyRef());
         }
-        root.put("maxDelegationDepth", orchestration.maxDelegationDepth());
-        root.put("maxChildInvocations", orchestration.maxChildInvocations());
-        root.put("timeoutMs", orchestration.timeoutMs());
+        // ⚠️ **未声明就不写**（LEAF 的三个限制为 null）：
+        //    写进去一个 0 或某个默认值，会让「LEAF 没有限制」与
+        //    「LEAF 限制为 0」在规范化 JSON 里长得一样。
+        if (orchestration.maxDelegationDepth() != null) {
+            root.put("maxDelegationDepth", orchestration.maxDelegationDepth().intValue());
+        }
+        if (orchestration.maxChildInvocations() != null) {
+            root.put("maxChildInvocations", orchestration.maxChildInvocations().intValue());
+        }
+        if (orchestration.timeoutMs() != null) {
+            root.put("timeoutMs", orchestration.timeoutMs().longValue());
+        }
         root.put("failurePolicy", orchestration.failurePolicy().name());
         if (orchestration.resultContractRef() != null) {
             root.put("resultContractRef", orchestration.resultContractRef());
@@ -259,9 +271,16 @@ public final class AgentOrchestrationParser {
         return trimmed;
     }
 
-    private static int intOrDefault(@Nullable Object raw, int defaultValue, @NonNull String field) {
+    /**
+     * 解析一个<b>可缺省</b>的整数限制。
+     *
+     * <p>⚠️ 缺失返回 {@code null}（**不是默认值**）——
+     * 「没有声明」与「声明成某个默认值」是两件必须能区分的事，
+     * 否则上限就会被悄悄继承（评审前置决策 2）。
+     */
+    private static @Nullable Integer intOrNull(@Nullable Object raw, @NonNull String field) {
         if (raw == null) {
-            return defaultValue;
+            return null;
         }
         if (!(raw instanceof Number number)) {
             throw new OrchestrationConfigException(field + " 必须是整数");
@@ -269,9 +288,10 @@ public final class AgentOrchestrationParser {
         return number.intValue();
     }
 
-    private static long longOrDefault(@Nullable Object raw, long defaultValue, @NonNull String field) {
+    /** 解析一个<b>可缺省</b>的长整数限制（缺失 → {@code null}）。 */
+    private static @Nullable Long longOrNull(@Nullable Object raw, @NonNull String field) {
         if (raw == null) {
-            return defaultValue;
+            return null;
         }
         if (!(raw instanceof Number number)) {
             throw new OrchestrationConfigException(field + " 必须是整数");

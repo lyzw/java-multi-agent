@@ -27,6 +27,13 @@ describe('编排声明表单 · 校验', () => {
     failurePolicy: null,
   }
 
+  /** 非 LEAF 的**合法**限制组合（三个限制必须齐全）。 */
+  const limits = {
+    maxDelegationDepth: 3,
+    maxChildInvocations: 8,
+    timeoutMs: 30000,
+  }
+
   it('✅ LEAF 且无子引用 → 合法', () => {
     expect(validateOrchestration(base)).toEqual({ ok: true })
   })
@@ -43,7 +50,7 @@ describe('编排声明表单 · 校验', () => {
   })
 
   it('⛔ ROUTER 缺路由策略引用 → 必须被拒', () => {
-    const check = validateOrchestration({ ...base, mode: 'ROUTER' })
+    const check = validateOrchestration({ ...base, mode: 'ROUTER', ...limits })
     expect(check.ok).toBe(false)
     if (!check.ok) {
       expect(check.error).toContain('ROUTER')
@@ -54,9 +61,13 @@ describe('编排声明表单 · 校验', () => {
     const check = validateOrchestration({
       ...base,
       mode: 'SEQUENTIAL',
+      ...limits,
       childAgentRefs: [{ id: 'a-1', version: null, required: true }],
     })
     expect(check.ok).toBe(false)
+    if (!check.ok) {
+      expect(check.error).toContain('版本')
+    }
   })
 
   it('⛔ 数值字段非正整数 → 必须被拒', () => {
@@ -68,7 +79,7 @@ describe('编排声明表单 · 校验', () => {
     ).toBe(false)
   })
 
-  it('✅ 留空的数值字段合法（由服务端默认值兜底）', () => {
+  it('✅ LEAF 留空的数值字段合法（不适用，而非「用默认值」）', () => {
     expect(
       validateOrchestration({
         ...base,
@@ -77,6 +88,60 @@ describe('编排声明表单 · 校验', () => {
         timeoutMs: null,
       }).ok,
     ).toBe(true)
+  })
+
+  // ── 决策 2：非 LEAF 必须显式声明三个委派限制 ──────────────────────
+
+  it('⛔ SEQUENTIAL 缺任一委派限制 → 逐个都被拒（缺一个 = 少一道上限）', () => {
+    const incomplete: OrchestrationFormValues[] = [
+      { ...base, mode: 'SEQUENTIAL', maxChildInvocations: 8, timeoutMs: 30000 },
+      { ...base, mode: 'SEQUENTIAL', maxDelegationDepth: 3, timeoutMs: 30000 },
+      { ...base, mode: 'SEQUENTIAL', maxDelegationDepth: 3, maxChildInvocations: 8 },
+    ]
+    for (const values of incomplete) {
+      const check = validateOrchestration(values)
+      expect(check.ok).toBe(false)
+      if (!check.ok) {
+        expect(check.error).toContain('必填')
+      }
+    }
+  })
+
+  it('⛔ ROUTER 缺任一委派限制 → 同样被拒（决策不区分模式）', () => {
+    const check = validateOrchestration({
+      ...base,
+      mode: 'ROUTER',
+      routingPolicyRef: 'policy-a@1',
+      maxDelegationDepth: 3,
+      maxChildInvocations: 8,
+    })
+    expect(check.ok).toBe(false)
+    if (!check.ok) {
+      expect(check.error).toContain('必填')
+    }
+  })
+
+  it('✅ 非 LEAF 三个限制齐全 → 合法', () => {
+    expect(validateOrchestration({ ...base, mode: 'SEQUENTIAL', ...limits }).ok).toBe(true)
+    expect(
+      validateOrchestration({
+        ...base,
+        mode: 'ROUTER',
+        routingPolicyRef: 'policy-a@1',
+        ...limits,
+      }).ok,
+    ).toBe(true)
+  })
+
+  it('✅ maxChildInvocations = 0 合法（真实上限，与后端一致）', () => {
+    const check = validateOrchestration({
+      ...base,
+      mode: 'SEQUENTIAL',
+      maxDelegationDepth: 3,
+      maxChildInvocations: 0,
+      timeoutMs: 30000,
+    })
+    expect(check.ok).toBe(true)
   })
 })
 
@@ -120,8 +185,8 @@ describe('编排声明表单 · 序列化', () => {
         failurePolicy: null,
       }),
     )
-    // ⚠️ **不得**出现数值字段：留空 = 用服务端默认值，
-    //    前端预填默认值就等于替评审先定了一套口径（决策项 2 尚未闭环）。
+    // ⚠️ **不得**出现数值字段：LEAF 不参与委派 ⇒ 三个限制**不适用**
+    //    （不是「用默认值」—— 平台已取消默认值，决策 2）。
     expect(Object.keys(json)).toEqual(['mode'])
     expect(json.mode).toBe('LEAF')
   })
@@ -161,9 +226,9 @@ describe('编排声明表单 · 序列化', () => {
         ],
         routingPolicyRef: null,
         resultContractRef: null,
-        maxDelegationDepth: null,
-        maxChildInvocations: null,
-        timeoutMs: null,
+        maxDelegationDepth: 3,
+        maxChildInvocations: 8,
+        timeoutMs: 30000,
         failurePolicy: null,
       }),
     )

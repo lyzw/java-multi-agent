@@ -31,12 +31,14 @@ class ReferencedContentFingerprintTest {
     private static final String TENANT = "tenant-ref";
 
     private static final String WITH_CONTRACT = """
-            {"mode":"SEQUENTIAL","resultContractRef":"contract@1"}
+            {"mode":"SEQUENTIAL","resultContractRef":"contract@1",
+             "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
             """;
 
     private static final String WITH_POLICY = """
             {"mode":"ROUTER","childAgentRefs":[{"id":"child-agent","version":1}],
-             "routingPolicyRef":"policy@1"}
+             "routingPolicyRef":"policy@1",
+             "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
             """;
 
     // ── M-1 ────────────────────────────────────────────────────────

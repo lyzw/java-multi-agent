@@ -138,7 +138,7 @@ class CachingClosureResolverTest {
         // ⚠️ 版本号不变、Agent 不变，只是编排声明被就地改写
         cap.withContract(TENANT, "contract", 1, "{}", true)
                 .withAgent(TENANT, AGENT, 1, List.of(SKILL), "{}",
-                "{\"mode\":\"SEQUENTIAL\",\"resultContractRef\":\"contract@1\"}");
+                "{\"mode\":\"SEQUENTIAL\",\"resultContractRef\":\"contract@1\",\"maxDelegationDepth\":3,\"maxChildInvocations\":8,\"timeoutMs\":30000}");
 
         EffectiveClosure after = caching.resolve(TENANT, AGENT, 1);
 

@@ -62,7 +62,8 @@ class PermissionResolverMultiLevelTest {
     void selfCycleIsRejected() {
         CapFixture fixture = new CapFixture()
                 .withAgent(TENANT, "loop-agent", 1, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"loop-agent","version":1}]}
+                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"loop-agent","version":1}],
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """);
 
         assertThatThrownBy(() -> resolver(fixture).resolve(TENANT, "loop-agent", 1))
@@ -76,10 +77,12 @@ class PermissionResolverMultiLevelTest {
     void indirectCycleIsRejected() {
         CapFixture fixture = new CapFixture()
                 .withAgent(TENANT, "a-agent", 1, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"b-agent","version":1}]}
+                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"b-agent","version":1}],
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """)
                 .withAgent(TENANT, "b-agent", 1, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"a-agent","version":1}]}
+                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"a-agent","version":1}],
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """);
 
         assertThatThrownBy(() -> resolver(fixture).resolve(TENANT, "a-agent", 1))
@@ -121,7 +124,8 @@ class PermissionResolverMultiLevelTest {
         for (int i = 0; i < depth; i++) {
             String childId = "chain-agent-" + (i + 1);
             fixture.withAgent(TENANT, "chain-agent-" + i, 1, List.of(), "{}", """
-                    {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"%s","version":1}]}
+                    {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"%s","version":1}],
+                     "maxDelegationDepth":8,"maxChildInvocations":8,"timeoutMs":30000}
                     """.formatted(childId));
         }
         fixture.withAgent(TENANT, "chain-agent-" + (depth - 1), 1, List.of(), "{}", "{}");
@@ -181,7 +185,8 @@ class PermissionResolverMultiLevelTest {
                 .withContract(TENANT, "contract", 1, "{}", true)
                 .withAgent(TENANT, "router-agent", 1, List.of(), "{}", """
                         {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}],
-                         "resultContractRef":"contract@1"}
+                         "resultContractRef":"contract@1",
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", "{}");
 
@@ -189,7 +194,8 @@ class PermissionResolverMultiLevelTest {
                 .withContract(TENANT, "contract", 2, "{}", true)
                 .withAgent(TENANT, "router-agent", 1, List.of(), "{}", """
                         {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}],
-                         "resultContractRef":"contract@2"}
+                         "resultContractRef":"contract@2",
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", "{}");
 
@@ -209,12 +215,14 @@ class PermissionResolverMultiLevelTest {
         CapFixture before = new CapFixture()
                 .withContract(TENANT, "contract", 1, "{}", true)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","resultContractRef":"contract@1"}
+                        {"mode":"SEQUENTIAL","resultContractRef":"contract@1",
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """);
         CapFixture after = new CapFixture()
                 .withContract(TENANT, "contract", 2, "{}", true)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","resultContractRef":"contract@2"}
+                        {"mode":"SEQUENTIAL","resultContractRef":"contract@2",
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """);
 
         String beforeFingerprint = ClosureFingerprint.of(
@@ -234,13 +242,15 @@ class PermissionResolverMultiLevelTest {
                 .withContract(TENANT, "contract", 1, "{}", true)
                 .withAgent(TENANT, "parent-agent", 1, List.of(), "{}", SEQUENTIAL_TO_CHILD)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","resultContractRef":"contract@1"}
+                        {"mode":"SEQUENTIAL","resultContractRef":"contract@1",
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """);
         CapFixture after = new CapFixture()
                 .withContract(TENANT, "contract", 2, "{}", true)
                 .withAgent(TENANT, "parent-agent", 1, List.of(), "{}", SEQUENTIAL_TO_CHILD)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","resultContractRef":"contract@2"}
+                        {"mode":"SEQUENTIAL","resultContractRef":"contract@2",
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """);
 
         String beforeFingerprint = ClosureFingerprint.of(

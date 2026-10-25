@@ -194,9 +194,15 @@ public final class ClosureFingerprint {
         orchestration.put("mode", canonical.orchestration().mode().name());
         putNullable(orchestration, "routingPolicyRef", canonical.orchestration().routingPolicyRef());
         putNullable(orchestration, "resultContractRef", canonical.orchestration().resultContractRef());
-        orchestration.put("maxDelegationDepth", canonical.orchestration().maxDelegationDepth());
-        orchestration.put("maxChildInvocations", canonical.orchestration().maxChildInvocations());
-        orchestration.put("timeoutMs", canonical.orchestration().timeoutMs());
+        // ⚠️ 三个限制值**可空**（LEAF 无意义 · 评审前置决策 2）：
+        //    空值必须写成**显式 null**（putNull），不能省略字段 ——
+        //    省略会让「未声明该限制」与「该限制为空」算出同一个哈希。
+        putNullableInt(orchestration, "maxDelegationDepth",
+                canonical.orchestration().maxDelegationDepth());
+        putNullableInt(orchestration, "maxChildInvocations",
+                canonical.orchestration().maxChildInvocations());
+        putNullableLong(orchestration, "timeoutMs",
+                canonical.orchestration().timeoutMs());
         orchestration.put("failurePolicy", canonical.orchestration().failurePolicy().name());
         root.put("orchestrationBindingVersion", ORCHESTRATION_BINDING_VERSION);
 
@@ -235,6 +241,28 @@ public final class ClosureFingerprint {
             node.putNull(field);
         } else {
             node.put(field, value);
+        }
+    }
+
+    /** 写入一个<b>可空</b>整数（空值 → 显式 null，不省略字段）。 */
+    private static void putNullableInt(@NonNull ObjectNode node,
+                                       @NonNull String field,
+                                       @Nullable Integer value) {
+        if (value == null) {
+            node.putNull(field);
+        } else {
+            node.put(field, value.intValue());
+        }
+    }
+
+    /** 写入一个<b>可空</b>长整数（空值 → 显式 null，不省略字段）。 */
+    private static void putNullableLong(@NonNull ObjectNode node,
+                                        @NonNull String field,
+                                        @Nullable Long value) {
+        if (value == null) {
+            node.putNull(field);
+        } else {
+            node.put(field, value.longValue());
         }
     }
 

@@ -90,7 +90,7 @@ class RoutingPolicyPublishFlowTest {
     /** ROUTER 父 Agent 的编排声明（声明拓扑 = childAgentRefs）。 */
     private static String routerOrchestration(String policyRef, String childId) {
         return "{\"mode\":\"ROUTER\",\"routingPolicyRef\":\"" + policyRef
-                + "\",\"childAgentRefs\":[{\"id\":\"" + childId + "\",\"version\":1}]}";
+                + "\",\"childAgentRefs\":[{\"id\":\"" + childId + "\",\"version\":1}],\"maxDelegationDepth\":3,\"maxChildInvocations\":8,\"timeoutMs\":30000}";
     }
 
     private ConfigPublishService service(boolean withPolicies, boolean withValidator) {

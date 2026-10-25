@@ -38,9 +38,12 @@ import org.jspecify.annotations.Nullable;
  * @param mode                编排模式（LEAF / ROUTER / SEQUENTIAL）
  * @param routingPolicyRef    固定版本的路由策略引用（可空）
  * @param resultContractRef   固定版本的输出契约引用（可空）
- * @param maxDelegationDepth  最大委派深度（含根 Agent 计为 1）
- * @param maxChildInvocations 单个父 Agent 允许发起的最大子调用次数
- * @param timeoutMs           本级委派链路的总超时预算（毫秒）
+ * @param maxDelegationDepth  最大委派深度（含根 Agent 计为 1）——
+ *                            <b>非 LEAF 必填</b>；LEAF 为 {@code null}（无意义）
+ * @param maxChildInvocations 单个父 Agent 允许发起的最大子调用次数 ——
+ *                            <b>非 LEAF 必填</b>；LEAF 为 {@code null}（无意义）
+ * @param timeoutMs           本级委派链路的总超时预算（毫秒）——
+ *                            <b>非 LEAF 必填</b>；LEAF 为 {@code null}（无意义）
  * @param failurePolicy       子调用失败策略
  * @param routingPolicyFingerprint 被引用的<b>路由策略行</b>的内容指纹（可空；
  *                                {@code null} = 未声明引用，或引用行<b>解析不出</b>）
@@ -51,9 +54,9 @@ public record OrchestrationBinding(
         @NonNull OrchestrationMode mode,
         @Nullable String routingPolicyRef,
         @Nullable String resultContractRef,
-        int maxDelegationDepth,
-        int maxChildInvocations,
-        long timeoutMs,
+        @Nullable Integer maxDelegationDepth,
+        @Nullable Integer maxChildInvocations,
+        @Nullable Long timeoutMs,
         @NonNull DelegationFailurePolicy failurePolicy,
         @Nullable String routingPolicyFingerprint,
         @Nullable String resultContractFingerprint) {
@@ -65,13 +68,23 @@ public record OrchestrationBinding(
         if (failurePolicy == null) {
             throw new IllegalArgumentException("失败策略不能为空");
         }
-        if (maxDelegationDepth <= 0) {
+        // ⚠️ 与 {@link AgentOrchestration} **同一口径**：非 LEAF 必须显式声明
+        //    三个委派限制（评审前置决策 2）；LEAF 为 null（无意义）。
+        //    ⚠️ 这里是**闭包固化视图** —— 它进指纹，所以口径必须与源对象一致，
+        //    否则会出现「源对象有一份限制、固化视图没有」的两种真相。
+        if (mode != OrchestrationMode.LEAF
+                && (maxDelegationDepth == null || maxChildInvocations == null || timeoutMs == null)) {
+            throw new IllegalArgumentException(
+                    "非 LEAF 模式必须显式声明 maxDelegationDepth / maxChildInvocations / timeoutMs"
+                            + "（平台不提供默认值）：mode=" + mode);
+        }
+        if (maxDelegationDepth != null && maxDelegationDepth <= 0) {
             throw new IllegalArgumentException("最大委派深度必须为正数，收到: " + maxDelegationDepth);
         }
-        if (maxChildInvocations < 0) {
+        if (maxChildInvocations != null && maxChildInvocations < 0) {
             throw new IllegalArgumentException("最大子调用次数不能为负数，收到: " + maxChildInvocations);
         }
-        if (timeoutMs <= 0) {
+        if (timeoutMs != null && timeoutMs <= 0) {
             throw new IllegalArgumentException("委派超时必须为正数，收到: " + timeoutMs);
         }
     }
@@ -88,9 +101,9 @@ public record OrchestrationBinding(
             @NonNull OrchestrationMode mode,
             @Nullable String routingPolicyRef,
             @Nullable String resultContractRef,
-            int maxDelegationDepth,
-            int maxChildInvocations,
-            long timeoutMs,
+            @Nullable Integer maxDelegationDepth,
+            @Nullable Integer maxChildInvocations,
+            @Nullable Long timeoutMs,
             @NonNull DelegationFailurePolicy failurePolicy) {
         this(mode, routingPolicyRef, resultContractRef, maxDelegationDepth,
                 maxChildInvocations, timeoutMs, failurePolicy, null, null);
@@ -138,9 +151,11 @@ public record OrchestrationBinding(
     /**
      * 缺省语义（LEAF）的固化视图。
      *
-     * <p>⚠️ 缺省值与 {@link AgentOrchestration#leaf()} <b>同源</b>，
+     * <p>⚠️ 与 {@link AgentOrchestration#leaf()} <b>同源</b>，
      * 不在此处另写一份常量 —— 两份常量必然会漂移，
      * 而漂移会让「历史行按 LEAF 解析」与「闭包里固化的 LEAF」对不上。
+     * ⚠️ 平台默认值已取消（评审前置决策 2），故 LEAF 的三个限制一律为
+     * {@code null}（不适用），**不是** 0 或任何默认值。
      *
      * @return LEAF 编排的固化视图
      */

@@ -27,7 +27,8 @@ class AgentPublishClosureValidatorTest {
     void publishedChildPasses() {
         CapFixture fixture = new CapFixture()
                 .withAgent(TENANT, "parent-agent", 1, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}]}
+                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}],
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", "{}");
 
@@ -35,7 +36,8 @@ class AgentPublishClosureValidatorTest {
                 fixture.agentDefs(), fixture.resultContracts());
 
         assertThatCode(() -> validator.validate(TENANT, draft("parent-agent", """
-                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}]}
+                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}],
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """))).doesNotThrowAnyException();
     }
 
@@ -49,7 +51,8 @@ class AgentPublishClosureValidatorTest {
                 fixture.agentDefs(), fixture.resultContracts());
 
         assertThatThrownBy(() -> validator.validate(TENANT, draft("parent-agent", """
-                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}]}
+                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}],
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """)))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())
@@ -65,7 +68,8 @@ class AgentPublishClosureValidatorTest {
                 fixture.agentDefs(), fixture.resultContracts());
 
         assertThatThrownBy(() -> validator.validate(TENANT, draft("parent-agent", """
-                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}]}
+                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}],
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """)))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())
@@ -79,17 +83,20 @@ class AgentPublishClosureValidatorTest {
         //    因此子 Agent 可以引用「正在发布的这个版本」，环得以被检出。
         CapFixture fixture = new CapFixture()
                 .withAgent(TENANT, "a-agent", 2, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"b-agent","version":1}]}
+                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"b-agent","version":1}],
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """)
                 .withAgent(TENANT, "b-agent", 1, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"a-agent","version":2}]}
+                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"a-agent","version":2}],
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """);
 
         AgentPublishClosureValidator validator = new AgentPublishClosureValidator(
                 fixture.agentDefs(), fixture.resultContracts());
 
         assertThatThrownBy(() -> validator.validate(TENANT, draft("a-agent", """
-                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"b-agent","version":1}]}
+                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"b-agent","version":1}],
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """)))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())
@@ -101,10 +108,12 @@ class AgentPublishClosureValidatorTest {
     void descendingVersionChainIsNotCycle() {
         CapFixture fixture = new CapFixture()
                 .withAgent(TENANT, "a-agent", 2, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"b-agent","version":1}]}
+                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"b-agent","version":1}],
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """)
                 .withAgent(TENANT, "b-agent", 1, List.of(), "{}", """
-                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"a-agent","version":1}]}
+                        {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"a-agent","version":1}],
+                         "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                         """)
                 .withAgent(TENANT, "a-agent", 1, List.of(), "{}", "{}");
 
@@ -112,7 +121,8 @@ class AgentPublishClosureValidatorTest {
                 fixture.agentDefs(), fixture.resultContracts());
 
         assertThatCode(() -> validator.validate(TENANT, draft("a-agent", """
-                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"b-agent","version":1}]}
+                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"b-agent","version":1}],
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """))).doesNotThrowAnyException();
     }
 
@@ -125,7 +135,7 @@ class AgentPublishClosureValidatorTest {
                 fixture.agentDefs(), fixture.resultContracts());
 
         assertThatThrownBy(() -> validator.validate(TENANT, draft("parent-agent",
-                "{\"mode\":\"SEQUENTIAL\",\"childAgentRefs\":[{\"id\":\"c\",\"version\":\"latest\"}]}")))
+                "{\"mode\":\"SEQUENTIAL\",\"childAgentRefs\":[{\"id\":\"c\",\"version\":\"latest\"}],\"maxDelegationDepth\":3,\"maxChildInvocations\":8,\"timeoutMs\":30000}")))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())
                         .isEqualTo(ReasonCode.ORCHESTRATION_INVALID));
@@ -154,7 +164,8 @@ class AgentPublishClosureValidatorTest {
                 fixture.agentDefs(), fixture.resultContracts());
 
         assertThatCode(() -> validator.validate(TENANT, draft("parent-agent", """
-                {"mode":"SEQUENTIAL","resultContractRef":"answer-contract@1"}
+                {"mode":"SEQUENTIAL","resultContractRef":"answer-contract@1",
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """))).doesNotThrowAnyException();
     }
 
@@ -169,7 +180,8 @@ class AgentPublishClosureValidatorTest {
                 fixture.agentDefs(), fixture.resultContracts());
 
         assertThatThrownBy(() -> validator.validate(TENANT, draft("parent-agent", """
-                {"mode":"SEQUENTIAL","resultContractRef":"answer-contract@1"}
+                {"mode":"SEQUENTIAL","resultContractRef":"answer-contract@1",
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """)))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())
@@ -185,7 +197,8 @@ class AgentPublishClosureValidatorTest {
                 fixture.agentDefs(), fixture.resultContracts());
 
         assertThatThrownBy(() -> validator.validate(TENANT, draft("parent-agent", """
-                {"mode":"SEQUENTIAL","resultContractRef":"answer-contract@1"}
+                {"mode":"SEQUENTIAL","resultContractRef":"answer-contract@1",
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """)))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())
@@ -201,7 +214,8 @@ class AgentPublishClosureValidatorTest {
                 fixture.agentDefs(), fixture.resultContracts());
 
         assertThatThrownBy(() -> validator.validate(TENANT, draft("parent-agent", """
-                {"mode":"SEQUENTIAL","resultContractRef":"answer-contract@latest"}
+                {"mode":"SEQUENTIAL","resultContractRef":"answer-contract@latest",
+                 "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
                 """)))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())

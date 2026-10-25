@@ -2,6 +2,8 @@ package cn.studykid.multiagent.application.orchestration;
 
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -39,6 +41,8 @@ import cn.studykid.multiagent.ports.security.AuthorizationService;
  * 若据此拒绝，所有合法委派都会被判超时 —— 本级 timeout 仍作为上界生效。
  */
 public class DelegationGuard {
+
+    private static final Logger log = LoggerFactory.getLogger(DelegationGuard.class);
 
     /**
      * 预算探针（Run 级剩余额度）。
@@ -173,11 +177,23 @@ public class DelegationGuard {
         }
 
         // ── 4. 边界：深度 / 次数 / 超时 / 预算 ──────────────────────
-        if (request.depth() > orchestration.maxDelegationDepth()) {
+        // ⚠️ 三个限制值**可空**（LEAF 无意义 · 评审前置决策 2）。
+        //    走到这里说明父的编排声明**非 LEAF 却缺限制** ——
+        //    正常路径不可能（构造器已强制非 LEAF 必填），但守卫是**安全边界**：
+        //    读不到上限时必须 fail-closed，**绝不**当成「不限制」。
+        Integer maxDepth = orchestration.maxDelegationDepth();
+        Integer maxInvocations = orchestration.maxChildInvocations();
+        Long levelTimeoutMs = orchestration.timeoutMs();
+        if (maxDepth == null || maxInvocations == null || levelTimeoutMs == null) {
+            log.warn("父 Agent 编排声明缺少委派限制，fail-closed: parent={}",
+                    request.parentAgentId());
+            return new Verdict(AuthorizationDecision.deny(ReasonCode.ORCHESTRATION_INVALID), 0L);
+        }
+        if (request.depth() > maxDepth) {
             return new Verdict(
                     AuthorizationDecision.deny(ReasonCode.DELEGATION_DEPTH_EXCEEDED), 0L);
         }
-        if (request.childInvocationsSoFar() + 1 > orchestration.maxChildInvocations()) {
+        if (request.childInvocationsSoFar() + 1 > maxInvocations) {
             return new Verdict(
                     AuthorizationDecision.deny(ReasonCode.CHILD_INVOCATION_LIMIT_EXCEEDED), 0L);
         }
@@ -191,8 +207,8 @@ public class DelegationGuard {
         //    本级 timeout 永远是**上界**（配置里的 timeout 不得形同虚设）；
         //    而「根 Run 剩余时间比本级预算长」是常态（子预算本就是子集），
         //    不能因此拒绝 —— 那会让所有合法委派都被判超时。
-        //    （timeoutMs 在 AgentOrchestration 构造期已保证为正数。）
-        long effectiveTimeoutMs = Math.min(request.remainingMillis(), orchestration.timeoutMs());
+        //    （timeoutMs 在 AgentOrchestration 构造期已保证为正数且非空。）
+        long effectiveTimeoutMs = Math.min(request.remainingMillis(), levelTimeoutMs);
         if (!budget.hasRemaining(request.context().tenantId(), request.runId())) {
             return new Verdict(AuthorizationDecision.deny(ReasonCode.BUDGET_EXCEEDED), 0L);
         }

@@ -188,10 +188,52 @@
     },
     "orchestration": {
       "type": "object",
-      "description": "多级 Agent 编排声明。缺省等价于 LEAF（旧配置兼容解析，MA-T01）。字段受 additionalProperties=false 约束，不得为规避迁移而关闭额外字段校验。",
+      "description": "多级 Agent 编排声明。缺省等价于 LEAF（旧配置兼容解析，MA-T01）。字段受 additionalProperties=false 约束，不得为规避迁移而关闭额外字段校验。⚠️ 非 LEAF（ROUTER / SEQUENTIAL）必须显式声明 maxDelegationDepth / maxChildInvocations / timeoutMs —— 平台不提供默认值，缺失即拒绝发布（评审前置决策 2 · fail-closed）。LEAF 不参与委派，三个限制不适用，予以省略。",
       "additionalProperties": false,
       "required": [
         "mode"
+      ],
+      "allOf": [
+        {
+          "$comment": "ROUTER 必须显式声明三个委派限制（决策 2）。缺一个上限就等于「这一跳没有上限」，在多级场景里会指数放大。",
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "ROUTER"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "maxDelegationDepth",
+              "maxChildInvocations",
+              "timeoutMs"
+            ]
+          }
+        },
+        {
+          "$comment": "SEQUENTIAL 必须显式声明三个委派限制（决策 2）。",
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "SEQUENTIAL"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "maxDelegationDepth",
+              "maxChildInvocations",
+              "timeoutMs"
+            ]
+          }
+        }
       ],
       "properties": {
         "mode": {
@@ -212,19 +254,19 @@
         },
         "maxDelegationDepth": {
           "type": "integer",
-          "description": "最大委派深度（含根 Agent 计为 1）。",
+          "description": "最大委派深度（含根 Agent 计为 1）。⚠️ 非 LEAF 必填（决策 2：平台不提供默认值）；LEAF 不适用，予以省略。",
           "minimum": 1,
           "maximum": 8
         },
         "maxChildInvocations": {
           "type": "integer",
-          "description": "单个父 Agent 允许发起的最大子调用次数。全调用树共享根 Run 的总上限，不能通过嵌套重置（MA-T17）。",
+          "description": "单个父 Agent 允许发起的最大子调用次数。全调用树共享根 Run 的总上限，不能通过嵌套重置（MA-T17）。⚠️ 非 LEAF 必填（决策 2）；LEAF 不适用，予以省略。",
           "minimum": 0,
           "maximum": 64
         },
         "timeoutMs": {
           "type": "integer",
-          "description": "本级委派链路的总超时预算（毫秒）。",
+          "description": "本级委派链路的总超时预算（毫秒）。⚠️ 非 LEAF 必填（决策 2）；LEAF 不适用，予以省略。",
           "minimum": 100,
           "maximum": 3600000
         },

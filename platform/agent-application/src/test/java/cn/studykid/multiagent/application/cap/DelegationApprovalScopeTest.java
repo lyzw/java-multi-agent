@@ -38,11 +38,13 @@ class DelegationApprovalScopeTest {
     private static final long AUTHZ_VERSION = 7L;
 
     private static final String PARENT_WITH_CHILD_A = """
-            {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-a","version":1}]}
+            {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-a","version":1}],
+             "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
             """;
 
     private static final String PARENT_WITH_CHILD_B = """
-            {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-b","version":1}]}
+            {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-b","version":1}],
+             "maxDelegationDepth":3,"maxChildInvocations":8,"timeoutMs":30000}
             """;
 
     private CapExecutionFixture exec;
@@ -117,7 +119,7 @@ class DelegationApprovalScopeTest {
     @DisplayName("✅ 闭包未变 → 旧审批仍可用（正向：否则本类「全都拒」也能全绿）")
     void unchangedClosureKeepsApprovalUsable() {
         String fingerprint = childFingerprint("{\"mode\":\"SEQUENTIAL\","
-                + "\"resultContractRef\":\"contract@1\"}");
+                + "\"resultContractRef\":\"contract@1\",\"maxDelegationDepth\":3,\"maxChildInvocations\":8,\"timeoutMs\":30000}");
         grant(fingerprint);
 
         ApprovalStateMachine.Acquisition acquisition =
@@ -132,9 +134,9 @@ class DelegationApprovalScopeTest {
     @DisplayName("⛔ 闭包变化（子 Agent 编排漂移）后复用旧审批 → APPROVAL_SCOPE_MISMATCH")
     void staleApprovalCannotBeReusedAfterClosureChange() {
         String before = childFingerprint("{\"mode\":\"SEQUENTIAL\","
-                + "\"resultContractRef\":\"contract@1\"}");
+                + "\"resultContractRef\":\"contract@1\",\"maxDelegationDepth\":3,\"maxChildInvocations\":8,\"timeoutMs\":30000}");
         String after = childFingerprint("{\"mode\":\"SEQUENTIAL\","
-                + "\"resultContractRef\":\"contract@2\"}");
+                + "\"resultContractRef\":\"contract@2\",\"maxDelegationDepth\":3,\"maxChildInvocations\":8,\"timeoutMs\":30000}");
         grant(before);
 
         ApprovalStateMachine.Acquisition acquisition =

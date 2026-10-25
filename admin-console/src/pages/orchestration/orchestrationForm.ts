@@ -39,17 +39,49 @@ export interface OrchestrationFormValues {
   routingPolicyRef?: string | null
   /** 固定版本的输出契约引用（`id@version`） */
   resultContractRef?: string | null
-  /** 最大委派深度（含根 Agent 计为 1）—— **留空 = 用服务端默认值** */
+  /**
+   * 最大委派深度（含根 Agent 计为 1）。
+   *
+   * ⚠️ **非 LEAF 必填**（评审前置决策 2）：平台**不提供默认值** ——
+   * 缺一个上限就等于「这一跳没有上限」。LEAF 不参与委派 ⇒ 不适用，可留空。
+   */
   maxDelegationDepth?: number | null
-  /** 单个父 Agent 允许发起的最大子调用次数 —— **留空 = 用服务端默认值** */
+  /**
+   * 单个父 Agent 允许发起的最大子调用次数。
+   *
+   * ⚠️ **非 LEAF 必填**（评审前置决策 2）。下限是 **0**（不是 1）——
+   * 「允许发起 0 次子调用」是一个**真实且合法**的上限，与后端一致。
+   */
   maxChildInvocations?: number | null
-  /** 本级委派链路的总超时预算（毫秒）—— **留空 = 用服务端默认值** */
+  /**
+   * 本级委派链路的总超时预算（毫秒）。
+   *
+   * ⚠️ **非 LEAF 必填**（评审前置决策 2）。LEAF 不参与委派 ⇒ 不适用，可留空。
+   */
   timeoutMs?: number | null
   failurePolicy?: FailurePolicy | null
 }
 
 /** 校验结果：`ok=false` 时 `error` 给出**可直接展示给人看**的原因。 */
 export type ValidationResult = { ok: true } | { ok: false; error: string }
+
+/**
+ * 三个委派限制的**取值规则**（与后端 `AgentOrchestration` 构造器逐条对齐）。
+ *
+ * ⚠️ **下限为什么各不相同**：
+ * - `maxDelegationDepth` 下限 1 —— 深度为 0 意味着「连自己这一层都不算」，
+ *   而口径是「含根 Agent 计为 1」；
+ * - `maxChildInvocations` 下限 **0** —— 「允许发起 0 次子调用」是一个**真实的
+ *   上限**（这个父 Agent 声明了拓扑但一次也不许调用），后端与 schema 都接受 0；
+ *   ⚠️ 此前本模块用「正整数」一刀切，把 0 判成非法 —— 与后端、与
+ *   `AgentDetailPage` 里 `InputNumber min={0}` 的控件口径**互相打架**。
+ * - `timeoutMs` 下限 1 —— 超时为 0 意味着「一提交就超时」。
+ */
+const LIMIT_FIELDS: ReadonlyArray<readonly [field: string, min: number]> = [
+  ['maxDelegationDepth', 1],
+  ['maxChildInvocations', 0],
+  ['timeoutMs', 1],
+]
 
 /**
  * 引用分隔符（`id@version`），与后端一致。
@@ -104,7 +136,8 @@ export function validatePinnedRef(
  * 校验编排声明表单取值。
  *
  * <p>⚠️ 校验的是**结构性**问题（mode 必填、LEAF 不得有子引用、
- * ROUTER 必须有路由策略引用、版本必须固定正整数）。
+ * ROUTER 必须有路由策略引用、版本必须固定正整数、
+ * **非 LEAF 必须显式声明三个委派限制**）。
  * 这些都是后端会拒的形状 —— 前端先拒，只是让作者当场看到。
  */
 export function validateOrchestration(
@@ -149,16 +182,41 @@ export function validateOrchestration(
     return contract
   }
 
-  for (const [name, value] of [
-    ['maxDelegationDepth', values.maxDelegationDepth],
-    ['maxChildInvocations', values.maxChildInvocations],
-    ['timeoutMs', values.timeoutMs],
-  ] as const) {
+  const limitValues: Record<string, number | null | undefined> = {
+    maxDelegationDepth: values.maxDelegationDepth,
+    maxChildInvocations: values.maxChildInvocations,
+    timeoutMs: values.timeoutMs,
+  }
+
+  // ⚠️ **非 LEAF 必须显式声明三个委派限制**（评审前置决策 2 · 2026-10-25）：
+  //    平台**不提供默认值** —— 原先那三个数字（深度 2 / 次数 8 / 超时 60s）
+  //    从未经容量与业务风险评估，只是示例值；一旦以「默认值」的形式存在，
+  //    就会被配置方**默默继承**，然后在没人评审的情况下成为生产口径。
+  //    现在缺失即**拒绝**（fail-closed），与后端 `AgentOrchestration`
+  //    构造器的判据逐条对齐。
+  //    ⚠️ **LEAF 不参与委派** ⇒ 这三个限制对它**不适用** ⇒ 留空合法。
+  if (values.mode !== 'LEAF') {
+    for (const [field] of LIMIT_FIELDS) {
+      const value = limitValues[field]
+      if (value === null || value === undefined) {
+        return {
+          ok: false,
+          error: `${field} 必填：非 LEAF 模式必须显式声明委派限制（平台不提供默认值）`,
+        }
+      }
+    }
+  }
+
+  for (const [field, min] of LIMIT_FIELDS) {
+    const value = limitValues[field]
     if (value === null || value === undefined) {
       continue
     }
-    if (!Number.isInteger(value) || value <= 0) {
-      return { ok: false, error: `${name} 必须是正整数` }
+    if (!Number.isInteger(value) || value < min) {
+      return {
+        ok: false,
+        error: min === 0 ? `${field} 必须是大于等于 0 的整数` : `${field} 必须是正整数`,
+      }
     }
   }
 
@@ -178,10 +236,13 @@ export function validateOrchestration(
 /**
  * 把编排声明表单取值**序列化成 JSON 文本**（提交给服务端）。
  *
- * <p>⚠️ **数值字段留空即不写入** —— 由服务端用自己的默认值兜底。
- * 这不是偷懒，而是**刻意的**：默认值口径属于**评审前置决策 2**
- * （最大深度与预算默认值，尚未闭环），
- * 前端一旦预填了默认值，就等于替评审**先定了**一套口径，
+ * <p>⚠️ **数值字段留空即不写入** —— 但理由已经变了：
+ * 原先是因为「服务端会用自己的默认值兜底」；评审前置决策 2 落地后
+ * **平台不再提供默认值**，所以留空只有一种合法含义：**LEAF 不适用**。
+ * 非 LEAF 留空会被 {@link validateOrchestration} **当场拒掉**
+ * （服务端 `AgentOrchestration` 构造器同样 fail-closed），
+ * 根本走不到这里。
+ * ⚠️ 前端**不预填**默认值 —— 预填等于替评审先定了一套口径，
  * 而且会成为「第二个默认值来源」（前后端各有一份，迟早漂移）。
  */
 export function buildOrchestrationJson(values: OrchestrationFormValues): string {
