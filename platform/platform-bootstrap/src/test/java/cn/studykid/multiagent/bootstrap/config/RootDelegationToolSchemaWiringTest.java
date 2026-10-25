@@ -204,6 +204,14 @@ class RootDelegationToolSchemaWiringTest {
                                     public @NonNull List<CapToolDef> listAll() {
                                         return List.of();
                                     }
+
+                                    @Override
+                                    public @NonNull List<CapToolDef>
+                                            listByMcpServer(@NonNull String mcpServerId) {
+                                        // ⚠️ 夹具里没有 MCP 绑定关系 —— 显式返回空，
+                                        //    而不是留一个默认实现（默认返回空 = 撒谎）。
+                                        return List.of();
+                                    }
                                 }),
                         new cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler(defs)));
     }

@@ -582,6 +582,15 @@ final class CapFixture {
             }
 
             @Override
+            public List<CapToolDef> listByMcpServer(String mcpServerId) {
+                // ⚠️ 夹具里**有** MCP 绑定的 Tool —— 必须按绑定真实过滤，
+                //    返回空会让「这个 Server 下没有 Tool」变成一句谎话。
+                return latestPerId(tools).stream()
+                        .filter(t -> mcpServerId.equals(t.mcpServerId()))
+                        .toList();
+            }
+
+            @Override
             public @NonNull List<CapToolDef> listAll() {
                 return latestPerId(tools);
             }

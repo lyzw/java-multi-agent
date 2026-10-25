@@ -788,6 +788,7 @@ public class ApplicationConfiguration {
 
     /** 配置发布头仓储（P0-T4；CAS 属 P5）。 */
     @Bean
+    @org.springframework.context.annotation.Primary
     public cn.studykid.multiagent.ports.persistence.ConfigReleasePort configReleasePort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcConfigReleaseRepository(
@@ -890,6 +891,7 @@ public class ApplicationConfiguration {
      * 这是刻意的隔离：任一租户都能改写全局当前指针 = 任一租户单方面替换全平台生效配置。
      */
     @Bean
+    @org.springframework.context.annotation.Primary
     public cn.studykid.multiagent.ports.persistence.ConfigPointerPort configPointerPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcConfigPointerRepository(
@@ -906,6 +908,7 @@ public class ApplicationConfiguration {
 
     /** 四字段决策日志仓储（P5-T6 · §5.1 / 08 §7）。 */
     @Bean
+    @org.springframework.context.annotation.Primary
     public cn.studykid.multiagent.ports.persistence.DecisionAuditPort decisionAuditPort(
             DataSource dataSource,
             @org.springframework.beans.factory.annotation.Value(
@@ -1091,6 +1094,7 @@ public class ApplicationConfiguration {
      * 剩余的运营前置（平台运维角色的 DB 凭据接入）见 P5 交付说明。
      */
     @Bean
+    @org.springframework.context.annotation.Primary
     public cn.studykid.multiagent.application.cap.ConfigPublishService configPublishService(
             @org.springframework.beans.factory.annotation.Qualifier("configPublishTransaction")
             cn.studykid.multiagent.ports.persistence.ConfigPublishTransaction tx,
@@ -1197,6 +1201,129 @@ public class ApplicationConfiguration {
         return new cn.studykid.multiagent.application.cap.PlatformOpsPublishService(
                 platformOpsPublishTransaction, pointers, releases, toolDefs, skillDefs,
                 serverDefs, agentDefs, audit, gate, clock);
+    }
+
+    // ── 平台通道（第三十四批 · C34-2）────────────────────────────────
+    //
+    // ⚠️ **下面是另一条通道，与上面的租户通道彻底分开**：
+    //   · 租户通道：应用角色连接，PLATFORM 行会被 RLS 拒写（刻意的隔离）；
+    //   · 平台通道：平台运维角色连接（BYPASSRLS），是唯一能写 PLATFORM 行与
+    //     PLATFORM 申请单的通道。
+    // ⚠️ **不得合并为「按 scope 自动选池」**：那会让「调用方把 scope 写成 PLATFORM」
+    //   等价于「拿到运维凭据」，把 DB 层的越权防线降级成应用层的一行判断。
+    // ⚠️ 平台通道的端口一律用**受会话守卫**的运维数据源 ——
+    //   裸运维数据源一旦被装配到业务读路径上，租户隔离就整体失效。
+
+    /** 平台通道的当前发布指针仓储（运维连接）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ConfigPointerPort
+            platformOpsConfigPointerPort(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
+                    platformOps) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcConfigPointerRepository(platformOps.guardedOrUnavailableDataSource());
+    }
+
+    /** 平台通道的发布头仓储（运维连接）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ConfigReleasePort
+            platformOpsConfigReleasePort(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
+                    platformOps) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcConfigReleaseRepository(platformOps.guardedOrUnavailableDataSource());
+    }
+
+    /** 平台通道的决策日志仓储（运维连接；平台级审计行的 tenant_id 为 NULL）。 */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.DecisionAuditPort
+            platformOpsDecisionAuditPort(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
+                    platformOps) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcDecisionAuditRepository(platformOps.guardedOrUnavailableDataSource());
+    }
+
+    /**
+     * 平台通道的变更申请单仓储（运维连接）。
+     *
+     * <p>⚠️ **必须是运维连接**：本表的 RLS 读写策略是严格相等
+     * （{@code tenant_id = current_tenant_id()}），
+     * 平台申请单（{@code tenant_id IS NULL}）对应用角色连接<b>天然不可见</b> ——
+     * 用应用连接实现，读不到也写不进。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort
+            platformOpsConfigPublishRequestPort(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
+                    platformOps) {
+        return new cn.studykid.multiagent.infrastructure.persistence
+                .JdbcConfigPublishRequestRepository(
+                        platformOps.guardedOrUnavailableDataSource(),
+                        new cn.studykid.multiagent.infrastructure.persistence.JdbcAuditRepository(
+                                platformOps.guardedOrUnavailableDataSource()));
+    }
+
+    /**
+     * 平台通道的发布服务（运维事务 + 运维通道的发布端口）。
+     *
+     * <p>⚠️ **与租户版的 {@code configPublishService} 是两个独立实例** ——
+     * 事务边界不同（应用角色 vs BYPASSRLS）、端口连接不同。
+     * 刻意**不**做成「按 scope 自动选池」的单实例。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ConfigPublishService
+            platformOpsConfigPublishService(
+            @org.springframework.beans.factory.annotation.Qualifier("platformOpsPublishTransaction")
+            cn.studykid.multiagent.ports.persistence.ConfigPublishTransaction
+                    platformOpsPublishTransaction,
+            @org.springframework.beans.factory.annotation.Qualifier("platformOpsConfigPointerPort")
+            cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
+            @org.springframework.beans.factory.annotation.Qualifier("platformOpsConfigReleasePort")
+            cn.studykid.multiagent.ports.persistence.ConfigReleasePort releases,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.ports.persistence.CapSkillDefPort skillDefs,
+            cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort serverDefs,
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
+            @org.springframework.beans.factory.annotation.Qualifier("platformOpsDecisionAuditPort")
+            cn.studykid.multiagent.ports.persistence.DecisionAuditPort audit,
+            cn.studykid.multiagent.application.cap.ConfigValidationGate gate,
+            java.time.Clock clock) {
+        // ⚠️ 闭包校验器 / 关系投影 / 契约 / 策略一律**不装配**（null）：
+        //    PLATFORM 作用域的发布**不含**租户级对象，装配它们只会让人
+        //    「误以为平台通道也能发 Agent」—— 真发了会被配置期门禁拒。
+        return new cn.studykid.multiagent.application.cap.ConfigPublishService(
+                platformOpsPublishTransaction, pointers, releases, toolDefs, skillDefs,
+                serverDefs, agentDefs, audit, gate, clock);
+    }
+
+    /**
+     * 平台级能力对象（Tool / Skill / MCP Server）的登记与生命周期服务（第三十四批）。
+     *
+     * <p>⚠️ <b>本服务是平台级写入口的唯一后端</b>：管理台的 Tool / Skill / MCP
+     * 页此前是只读目录，变更只能靠手写 SQL 或带外运维工具。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.PlatformCapabilityPublishService
+            platformCapabilityPublishService(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
+                    platformOps,
+            @org.springframework.beans.factory.annotation.Qualifier(
+                    "platformOpsConfigPublishRequestPort")
+            cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort requests,
+            @org.springframework.beans.factory.annotation.Qualifier(
+                    "platformOpsConfigPublishService")
+            cn.studykid.multiagent.application.cap.ConfigPublishService publisher,
+            cn.studykid.multiagent.application.cap.ConfigLifecycleService lifecycle,
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.ports.persistence.CapSkillDefPort skillDefs,
+            cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort serverDefs,
+            @org.springframework.beans.factory.annotation.Qualifier("platformOpsConfigPointerPort")
+            cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.cap.PlatformCapabilityPublishService(
+                platformOps, requests, publisher, lifecycle, toolDefs, skillDefs, serverDefs,
+                pointers, clock);
     }
 
     /**

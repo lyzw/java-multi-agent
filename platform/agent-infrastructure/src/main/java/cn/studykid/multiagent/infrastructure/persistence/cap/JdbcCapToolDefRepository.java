@@ -73,6 +73,17 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
     private static final String SQL_LIST_ALL = "SELECT DISTINCT ON (id) " + COLUMNS
             + " FROM cap_tool_def ORDER BY id, version DESC";
 
+    /**
+     * 按 MCP Server 反查其下挂的 Tool（第三十四批）。
+     *
+     * <p>⚠️ 用 {@code DISTINCT ON (mcp_tool_name)} 取「每个远端工具名的最高版本」——
+     * 与 {@link #SQL_LIST_ALL} 同款口径（关系按对象维度，不按版本维度）。
+     */
+    private static final String SQL_LIST_BY_MCP_SERVER = "SELECT DISTINCT ON (mcp_tool_name) "
+            + COLUMNS
+            + " FROM cap_tool_def WHERE mcp_server_id = ?"
+            + " ORDER BY mcp_tool_name, version DESC";
+
     private final DataSource dataSource;
 
     public JdbcCapToolDefRepository(@NonNull DataSource dataSource) {
@@ -129,6 +140,24 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
             ps.setString(1, mcpServerId);
             ps.setString(2, mcpToolName);
         });
+    }
+
+    @Override
+    public @NonNull List<CapToolDef> listByMcpServer(@NonNull String mcpServerId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_BY_MCP_SERVER)) {
+                        ps.setString(1, mcpServerId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            List<CapToolDef> out = new java.util.ArrayList<>();
+                            while (rs.next()) {
+                                out.add(map(rs));
+                            }
+                            return List.copyOf(out);
+                        }
+                    }
+                });
     }
 
     private @NonNull Optional<CapToolDef> query(@NonNull String sql,

@@ -88,4 +88,21 @@ public interface CapToolDefPort {
      * @return 全部 Tool 定义（每个逻辑 id 取其最高版本行），按 id 升序
      */
     @NonNull List<CapToolDef> listAll();
+
+    /**
+     * 列出绑定到某个 MCP Server 的全部 Tool（<b>不限版本</b> · 第三十四批）。
+     *
+     * <p>⚠️ <b>为什么需要它</b>：MCP Server 的「暴露工具清单」有两种来源 ——
+     * ① Server 自身的 {@code exposedToolAllowlist}（连接级允许集）；
+     * ② 实际登记在该 Server 上的 Tool 定义（{@code mcp_server_id + mcp_tool_name} 绑定）。
+     * 管理台要维护「Server ↔ Tool」这层关系，就必须能**反查**「这个 Server 下挂了哪些 Tool」——
+     * 否则前端只能逐个 Tool 试，没有可枚举的清单。
+     *
+     * <p>⚠️ <b>不限版本</b>：与「出向/入向关系按 Agent 维度」的同款口径 ——
+     * 关系问的是「这个 Server 与哪些 Tool 有关」，不是「某个版本版本」。
+     *
+     * @param mcpServerId MCP Server 标识
+     * @return 该 Server 下的 Tool 定义行；无绑定时为空列表
+     */
+    @NonNull List<CapToolDef> listByMcpServer(@NonNull String mcpServerId);
 }

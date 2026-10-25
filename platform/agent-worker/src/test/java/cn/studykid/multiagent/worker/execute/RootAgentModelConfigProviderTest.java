@@ -133,6 +133,14 @@ class RootAgentModelConfigProviderTest {
         }
 
         @Override
+        public List<CapToolDef> listByMcpServer(String mcpServerId) {
+            // ⚠️ 夹具里没有 MCP 绑定关系 —— 显式返回空，
+            //    而不是留一个默认实现（默认返回空 = 撒谎「这个 Server 下没有 Tool」）。
+            return List.of();
+        }
+
+        @Override
+
         public @NonNull List<CapToolDef> listAll() {
             return List.of();
         }

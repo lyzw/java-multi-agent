@@ -106,4 +106,79 @@ class CapabilityCatalogControllerTest {
                         ((org.springframework.web.server.ResponseStatusException) e).getStatusCode())
                         .isEqualTo(HttpStatus.NOT_FOUND));
     }
+
+    // ── 关系查询（第三十四批）────────────────────────────────────────
+
+    @Test
+    @DisplayName("✅ Skill 关系：声明的 Tool / MCP 与「声明了但不存在」分列")
+    void skillRelationsSeparateMissingOnes() {
+        CapabilityCatalogController c = controller();
+        when(skillDefs.findLatestPublished("skill-1")).thenReturn(Optional.of(
+                new cn.studykid.multiagent.core.cap.CapSkillDef(
+                        "skill-1", 1, "技能", "描述",
+                        List.of("tool-1", "tool-missing"),
+                        List.of(new cn.studykid.multiagent.core.cap.CapSkillDef.McpDeclaration(
+                                "mcp-1", null),
+                                new cn.studykid.multiagent.core.cap.CapSkillDef.McpDeclaration(
+                                        "mcp-missing", List.of())),
+                        CapabilityRiskLevel.READ, "{}", List.of(),
+                        "fp", 1, Instant.now(), Instant.now())));
+        when(toolDefs.findLatestPublished("tool-1")).thenReturn(Optional.of(
+                new cn.studykid.multiagent.core.cap.CapToolDef(
+                        "tool-1", 1, "工具", cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
+                        CapabilityRiskLevel.READ, null, null, "{}", "{}", "fp", 1,
+                        Instant.now(), Instant.now())));
+        when(toolDefs.findLatestPublished("tool-missing")).thenReturn(Optional.empty());
+        when(serverDefs.findLatestPublished("mcp-1")).thenReturn(Optional.of(sampleServer()));
+        when(serverDefs.findLatestPublished("mcp-missing")).thenReturn(Optional.empty());
+
+        var resp = c.skillRelations("skill-1");
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var body = resp.getBody();
+        assertThat(body.tools()).hasSize(1);
+        assertThat(body.mcpServers()).hasSize(1);
+        // ⚠️ 「声明了但对象不存在」必须**显式列出** ——
+        //    悄悄从清单里消失会让运维以为「没有这个依赖」。
+        assertThat(body.missingTools()).containsExactly("tool-missing");
+        assertThat(body.missingMcpServers()).containsExactly("mcp-missing");
+    }
+
+    @Test
+    @DisplayName("✅ Tool 关系：kind=native 的 Tool 没有绑定 MCP（合法状态，不是 404）")
+    void nativeToolHasNoMcpBinding() {
+        CapabilityCatalogController c = controller();
+        when(toolDefs.findLatestPublished("tool-native")).thenReturn(Optional.of(
+                new cn.studykid.multiagent.core.cap.CapToolDef(
+                        "tool-native", 1, "原生工具",
+                        cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
+                        CapabilityRiskLevel.READ, null, null, "{}", "{}", "fp", 1,
+                        Instant.now(), Instant.now())));
+
+        var resp = c.toolRelations("tool-native");
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().mcpServer())
+                .as("⚠️ 原生工具不绑定 MCP 是**合法状态**，不得报成「资源不存在」")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("✅ MCP 关系：允许集（exposedToolAllowlist）与实际登记（tools）分列，不合并")
+    void mcpRelationsKeepAllowlistAndToolsApart() {
+        CapabilityCatalogController c = controller();
+        when(serverDefs.findLatestPublished(SERVER_ID)).thenReturn(Optional.of(sampleServer()));
+        when(toolDefs.listByMcpServer(SERVER_ID)).thenReturn(List.of(
+                new cn.studykid.multiagent.core.cap.CapToolDef(
+                        "tool-1", 1, "远端工具",
+                        cn.studykid.multiagent.core.cap.CapToolKind.MCP,
+                        CapabilityRiskLevel.READ, SERVER_ID, "remote-op",
+                        "{}", "{}", "fp", 1, Instant.now(), Instant.now())));
+
+        var resp = c.mcpRelations(SERVER_ID);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().tools()).hasSize(1);
+        // ⚠️ sampleServer 的 exposedToolAllowlist 是 null（= 仅连接级授权）
+        assertThat(resp.getBody().exposedToolAllowlist())
+                .as("⚠️ null（未配置）与 []（显式空清单）语义不同，不得归一化")
+                .isNull();
+    }
 }

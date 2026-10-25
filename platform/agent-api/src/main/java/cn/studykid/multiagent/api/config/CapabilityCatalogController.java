@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.api.config;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.jspecify.annotations.NonNull;
@@ -37,6 +38,15 @@ import cn.studykid.multiagent.ports.security.AuthorizationService;
  * <p>因此本端点<b>刻意不提供</b> POST/PUT/DELETE：把「目录可读」与
  * 「定义可写」分成两个信任域，比在同一个端点上加权限判断更不容易出错。
  * 前端据此把 Tool / Skill 页做成<b>只读目录</b>，并明示变更入口在运维通道。
+ *
+ * <p>⚠️ <b>第三十四批起：写入口挪到平台通道，读入口留在本类</b> ——
+ * 写走 {@link PlatformCapabilityController}（PLATFORM_ADMIN 闸门 + 运维通道），
+ * 读仍是普通的 {@code AGENT_MANAGE} 鉴权（平台对象无租户维度，
+ * 任何已授权主体都可读目录）。
+ * 本类同时补上<b>关系查询</b>端点（第三十四批）——
+ * 管理台要维护「Skill ↔ Tool / MCP」「MCP ↔ Tool」这层关系，
+ * 就必须能<b>反查</b>「这个对象关联了哪些对象」，
+ * 否则前端只能逐个试，没有可枚举的清单。
  *
  * <p>⚠️ <b>读取同样要鉴权</b>：能力目录揭示「平台上有哪些工具 / 技能、
  * 各自的风险等级与 MCP 绑定」，是攻击面枚举的素材，
@@ -127,6 +137,92 @@ public class CapabilityCatalogController {
         return ResponseEntity.ok(McpResponse.of(def));
     }
 
+    // ── 关系（第三十四批）───────────────────────────────────────────
+
+    /**
+     * Tool 的关系：它绑定在哪个 MCP Server 上。
+     *
+     * <p>⚠️ <b>「没有绑定」是合法状态</b>：{@code kind=native} 的 Tool 不属于任何
+     * MCP Server（DB 层有 CHECK 兜底）。此时返回 {@code mcpServer=null}，
+     * 而不是 404 —— 404 会把「这是合法的原生工具」说成「资源不存在」。
+     */
+    @GetMapping("/tools/{toolId}/relations")
+    public ResponseEntity<ToolRelationsResponse> toolRelations(@PathVariable String toolId) {
+        authorize();
+        CapToolDef def = toolDefs.findLatestPublished(toolId)
+                .or(() -> toolDefs.find(toolId, Integer.MAX_VALUE))
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在"));
+        McpSummary server = null;
+        if (def.mcpServerId() != null) {
+            server = serverDefs.findLatestPublished(def.mcpServerId())
+                    .or(() -> serverDefs.find(def.mcpServerId(), Integer.MAX_VALUE))
+                    .map(McpSummary::of)
+                    .orElse(null);
+        }
+        return ResponseEntity.ok(new ToolRelationsResponse(toolId, server));
+    }
+
+    /**
+     * Skill 的关系：它声明了哪些 Tool、哪些 MCP Server。
+     *
+     * <p>⚠️ <b>「声明了但对象不存在」必须如实呈现</b>：
+     * {@code declaredTools} 里可以出现尚未登记的 id（草稿态 Skill 的正常情形）。
+     * 这里把找不到的对象**显式列为 {@code missing}**，
+     * 而不是悄悄从清单里消失 —— 悄悄消失会让运维以为「没有这个依赖」。
+     */
+    @GetMapping("/skills/{skillId}/relations")
+    public ResponseEntity<SkillRelationsResponse> skillRelations(@PathVariable String skillId) {
+        authorize();
+        CapSkillDef def = skillDefs.findLatestPublished(skillId)
+                .or(() -> skillDefs.find(skillId, Integer.MAX_VALUE))
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在"));
+
+        List<ToolSummary> tools = new ArrayList<>();
+        List<String> missingTools = new ArrayList<>();
+        for (String toolId : def.declaredTools()) {
+            toolDefs.findLatestPublished(toolId)
+                    .or(() -> toolDefs.find(toolId, Integer.MAX_VALUE))
+                    .map(t -> tools.add(ToolSummary.of(t)))
+                    .orElseGet(() -> missingTools.add(toolId));
+        }
+
+        List<McpSummary> servers = new ArrayList<>();
+        List<String> missingServers = new ArrayList<>();
+        for (McpDeclaration declaration : def.declaredMcp()) {
+            serverDefs.findLatestPublished(declaration.serverId())
+                    .or(() -> serverDefs.find(declaration.serverId(), Integer.MAX_VALUE))
+                    .map(s -> servers.add(McpSummary.of(s)))
+                    .orElseGet(() -> missingServers.add(declaration.serverId()));
+        }
+
+        return ResponseEntity.ok(new SkillRelationsResponse(
+                skillId, tools, missingTools, servers, missingServers));
+    }
+
+    /**
+     * MCP Server 的关系：它下面挂了哪些 Tool。
+     *
+     * <p>⚠️ <b>与 {@code exposedToolAllowlist} 是两回事</b>：
+     * 前者是「这个 Server <b>允许</b>哪些远端工具」，这里是「实际登记在它上面的
+     * Tool <b>定义</b>」。两者可以不一致（允许集更宽、登记更窄），
+     * 刻意分开呈现，避免运维把「没登记」误读成「不允许」。
+     */
+    @GetMapping("/mcps/{serverId}/relations")
+    public ResponseEntity<McpRelationsResponse> mcpRelations(@PathVariable String serverId) {
+        authorize();
+        CapMcpServerDef def = serverDefs.findLatestPublished(serverId)
+                .or(() -> serverDefs.find(serverId, Integer.MAX_VALUE))
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在"));
+        List<ToolSummary> tools = toolDefs.listByMcpServer(serverId).stream()
+                .map(ToolSummary::of)
+                .toList();
+        return ResponseEntity.ok(new McpRelationsResponse(serverId, def.exposedToolAllowlist(),
+                tools));
+    }
+
     // ── 内部 ────────────────────────────────────────────────────────
 
     /**
@@ -215,6 +311,61 @@ public class CapabilityCatalogController {
         static McpDeclarationResponse of(McpDeclaration d) {
             return new McpDeclarationResponse(d.serverId(), d.toolAllowlist());
         }
+    }
+
+    /** Tool 紧凑摘要（关系视图用）。 */
+    public record ToolSummary(
+            @NonNull String toolId,
+            @Nullable String name,
+            @NonNull String kind,
+            @NonNull String riskLevel,
+            int version,
+            boolean published
+    ) {
+        static ToolSummary of(CapToolDef def) {
+            return new ToolSummary(def.id(), def.name(), def.kind().name(),
+                    def.riskLevel().name(), def.version(), def.isPublished());
+        }
+    }
+
+    /** MCP Server 紧凑摘要（关系视图用）。 */
+    public record McpSummary(
+            @NonNull String serverId,
+            @NonNull String transport,
+            @NonNull String trustTier,
+            @NonNull String connectionRisk,
+            int version,
+            boolean published
+    ) {
+        static McpSummary of(CapMcpServerDef def) {
+            return new McpSummary(def.id(), def.transport().name(), def.trustTier().name(),
+                    def.connectionRisk().name(), def.version(), def.isPublished());
+        }
+    }
+
+    /** Tool 的关系视图。 */
+    public record ToolRelationsResponse(
+            @NonNull String toolId,
+            @Nullable McpSummary mcpServer
+    ) {
+    }
+
+    /** Skill 的关系视图。 */
+    public record SkillRelationsResponse(
+            @NonNull String skillId,
+            @NonNull List<ToolSummary> tools,
+            @NonNull List<String> missingTools,
+            @NonNull List<McpSummary> mcpServers,
+            @NonNull List<String> missingMcpServers
+    ) {
+    }
+
+    /** MCP Server 的关系视图。 */
+    public record McpRelationsResponse(
+            @NonNull String serverId,
+            @Nullable List<String> exposedToolAllowlist,
+            @NonNull List<ToolSummary> tools
+    ) {
     }
 
     /**
