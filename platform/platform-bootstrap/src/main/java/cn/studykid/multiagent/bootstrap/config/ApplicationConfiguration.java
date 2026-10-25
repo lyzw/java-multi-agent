@@ -638,6 +638,24 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 委派调用记录仓储（多级 Agent v1.1 · FR-022 · MA-T12）。
+     *
+     * <p>⚠️ <b>本 Bean 缺失会让平台起不来</b>：
+     * {@code delegationExecutor} 与 {@code inFlightDelegationAdopter}
+     * 都注入 {@code AgentInvocationPort}，却没有生产者 →
+     * Spring 上下文加载失败（{@code NoSuchBeanDefinitionException}）。
+     * <p>⚠️ 该缺口此前被「bootstrap 的集成测试从未真实运行」掩盖 ——
+     * 单测不加载完整 Spring 上下文，看不到缺 Bean；
+     * 接入真实 PG 跑 IT 后立刻暴露。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.AgentInvocationPort agentInvocationPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcAgentInvocationRepository(dataSource);
+    }
+
+    /**
      * 多级 Agent 发布期闭包校验器（FR-023 · MA-T02～T04）。
      *
      * <p>⚠️ 装配它意味着「声明了子 Agent 引用但引用不合法」在<b>发布期</b>就被拒，
@@ -970,6 +988,14 @@ public class ApplicationConfiguration {
 
     /**
      * 委派执行器（多级 Agent v1.1 · P2-MA-01）。
+     *
+     * <p>⚠️ <b>子执行端口必须显式指定 {@code childAgentRunner}</b>：
+     * 容器里有两个 {@code ChildAgentRunner} 候选 ——
+     * 懒解析的端口 Bean（{@code childAgentRunner}）与它的真实实现 Bean
+     * （{@code workerChildAgentRunner}，其返回类型是子类型，同样按类型匹配）。
+     * 不加限定符则 Spring 无法决定注入哪一个 →
+     * {@code NoUniqueBeanDefinitionException} → <b>平台起不来</b>。
+     * 且必须选<b>懒解析</b>的那个：直接注入真实实现会与闸门形成构造期环。
      */
     @Bean
     public cn.studykid.multiagent.application.orchestration.DelegationExecutor delegationExecutor(
@@ -979,6 +1005,7 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
             cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersions,
             cn.studykid.multiagent.ports.persistence.AgentInvocationPort invocations,
+            @org.springframework.beans.factory.annotation.Qualifier("childAgentRunner")
             cn.studykid.multiagent.ports.orchestration.ChildAgentRunner childRunner,
             cn.studykid.multiagent.ports.orchestration.ResultContractProvider contracts,
             java.time.Clock clock) {
