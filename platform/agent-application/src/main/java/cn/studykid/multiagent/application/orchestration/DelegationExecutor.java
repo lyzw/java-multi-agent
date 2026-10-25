@@ -514,6 +514,12 @@ public class DelegationExecutor {
                 //    写模型候选等于让审计看到一份「并非事实」的委派。
                 effectiveTargetId,
                 targetVersion,
+                // ⚠️ **同时**记下「模型给出的原始候选」（第二十二批 · A3）：
+                //    只记生效目标的话，路由降级在数据上**看不出来** ——
+                //    事后无法回答「这次是不是降级了、模型原本想选谁」。
+                //    两列并存：「实际生效」回答「谁真的跑了」，
+                //    「原始候选」回答「模型本来想要谁」，两者<b>不互相替代</b>。
+                command.targetAgentId(),
                 AgentInvocationStatus.RUNNING,
                 childDepth,
                 command.traceId(),

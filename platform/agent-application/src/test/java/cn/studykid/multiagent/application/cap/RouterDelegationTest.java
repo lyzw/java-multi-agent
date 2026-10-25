@@ -115,6 +115,7 @@ class RouterDelegationTest {
             rows.put(invocationId, new AgentInvocation(row.invocationId(), row.tenantId(),
                     row.runId(), row.parentInvocationId(), row.parentAgentId(),
                     row.parentAgentVersion(), row.targetAgentId(), row.targetAgentVersion(),
+row.requestedTargetAgentId(),
                     status, row.depth(), row.traceId(), row.inputDigest(), outputDigest,
                     row.startedAt(), finishedAt, reasonCode, fencingToken));
             return TerminalWriteOutcome.WRITTEN;
@@ -214,6 +215,12 @@ class RouterDelegationTest {
         assertThat(runner.calls.get()).isEqualTo(1);
         assertThat(runner.lastTargetAgentId).isEqualTo(CHILD);
         assertThat(invocations.rows.get("inv-1").targetAgentId()).isEqualTo(CHILD);
+        assertThat(invocations.rows.get("inv-1").requestedTargetAgentId())
+                .as("未降级时「模型原始候选」= 实际生效目标")
+                .isEqualTo(CHILD);
+        assertThat(invocations.rows.get("inv-1").routedFallback())
+                .as("未降级不得被记成降级")
+                .isFalse();
     }
 
     @Test
@@ -328,6 +335,59 @@ class RouterDelegationTest {
                 .isEqualTo(CHILD_B);
         assertThat(invocations.rows.get("inv-1").targetAgentId())
                 .as("委派记录必须写**实际生效**的目标，否则审计看到的是模型候选而非事实")
+                .isEqualTo(CHILD_B);
+        // ⚠️ 第二十三批 A3：降级发生过，就**必须**能从数据上看出来。
+        //    只记生效目标的话，「这次是不是降级了、模型原本想选谁」就只剩日志 ——
+        //    日志会轮转、会丢，事后无法复核。
+        assertThat(invocations.rows.get("inv-1").requestedTargetAgentId())
+                .as("模型给出的原始候选必须单独落库（降级的审计线索）")
+                .isEqualTo(CHILD);
+        assertThat(invocations.rows.get("inv-1").routedFallback())
+                .as("原始候选 ≠ 生效目标 = 发生了路由降级")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("✅ 第二十三批 A3：「模型原始候选」与「实际生效目标」并存 —— 两者都不丢")
+    void modelCandidateAndEffectiveTargetAreBothRecorded() {
+        CapFixture fixture = fixture(ROUTER_ORCHESTRATION);
+        RecordingInvocations invocations = new RecordingInvocations();
+        RecordingRunner runner = new RecordingRunner();
+
+        var outcome = executor(fixture, invocations, runner,
+                (tenantId, ref) -> policy(RoutingStrategy.ORDERED_FALLBACK,
+                        List.of(CHILD_B, CHILD_C)))
+                .delegate(command(CHILD));
+
+        var row = invocations.rows.get("inv-1");
+        assertThat(outcome.status()).isEqualTo(AgentInvocationStatus.SUCCEEDED);
+        // ⚠️ **成对断言**：「看得见降级」与「不该丢的事实」必须同时成立 ——
+        //    只记候选 → 审计看到的是「并非事实」的委派；
+        //    只记生效目标 → 降级这件事消失。
+        assertThat(row.targetAgentId())
+                .as("实际生效的目标（谁真的被调用了）—— 权威事实，不能被候选覆盖")
+                .isEqualTo(CHILD_B);
+        assertThat(row.requestedTargetAgentId())
+                .as("模型原始候选（模型本来想要谁）—— 审计线索")
+                .isEqualTo(CHILD);
+    }
+
+    @Test
+    @DisplayName("✅ 第二十三批 A3：「未记录」不得被当成「没有降级」")
+    void unrecordedCandidateIsNotAssertedAsNoFallback() {
+        // ⚠️ 存量行（迁移前写入的）没有这一列 → NULL 的语义是「**当时未记录**」，
+        //    不是「没有降级」。据此断言「这次没降级」就是**无中生有**。
+        var row = new cn.studykid.multiagent.core.orchestration.AgentInvocation(
+                "inv-x", TENANT, RUN, null, PARENT, 1, CHILD_B, 1,
+                cn.studykid.multiagent.core.orchestration.AgentInvocationStatus.SUCCEEDED,
+                1, "trace-x", null, null, Instant.EPOCH, Instant.EPOCH, null, 1L);
+
+        assertThat(row.requestedTargetAgentId()).isNull();
+        assertThat(row.routedFallback())
+                .as("NULL 只意味着「无从判断」，不得据此断言「没降级」")
+                .isFalse();
+        assertThat(row.targetAgentId())
+                .as("但「实际生效的目标」始终可读 —— 那一列从未缺过")
                 .isEqualTo(CHILD_B);
     }
 

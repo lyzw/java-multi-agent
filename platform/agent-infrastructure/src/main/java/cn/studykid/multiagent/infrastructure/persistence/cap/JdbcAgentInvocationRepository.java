@@ -38,9 +38,10 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
                 (invocation_id, tenant_id, run_id, parent_invocation_id,
                  parent_agent_id, parent_agent_version,
                  target_agent_id, target_agent_version,
+                 requested_target_agent_id,
                  status, depth, trace_id, input_digest, output_digest, reason_code,
                  fencing_token, started_at, finished_at)
-            VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?::uuid, ?, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (tenant_id, invocation_id) DO NOTHING
             """;
 
@@ -48,6 +49,7 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
             SELECT invocation_id::text, tenant_id::text, run_id::text,
                    parent_invocation_id::text, parent_agent_id::text, parent_agent_version,
                    target_agent_id::text, target_agent_version,
+                   requested_target_agent_id::text,
                    status, depth, trace_id, input_digest, output_digest, reason_code,
                    fencing_token, started_at, finished_at
             FROM agent_invocation
@@ -58,6 +60,7 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
             SELECT invocation_id::text, tenant_id::text, run_id::text,
                    parent_invocation_id::text, parent_agent_id::text, parent_agent_version,
                    target_agent_id::text, target_agent_version,
+                   requested_target_agent_id::text,
                    status, depth, trace_id, input_digest, output_digest, reason_code,
                    fencing_token, started_at, finished_at
             FROM agent_invocation
@@ -126,22 +129,29 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
                         ps.setInt(6, invocation.parentAgentVersion());
                         ps.setString(7, invocation.targetAgentId());
                         ps.setInt(8, invocation.targetAgentVersion());
-                        ps.setString(9, invocation.status().name());
-                        ps.setInt(10, invocation.depth());
-                        ps.setString(11, invocation.traceId());
-                        ps.setString(12, invocation.inputDigest());
-                        ps.setString(13, invocation.outputDigest());
-                        ps.setString(14, invocation.reasonCode());
-                        ps.setLong(15, invocation.fencingToken());
-                        if (invocation.startedAt() == null) {
-                            ps.setNull(16, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                        // ⚠️ 「模型原始候选」可空：存量行的回填口径是「不回填」
+                        //    （当时只有日志留痕，没有可靠副本 —— 见 V25 迁移脚本）。
+                        if (invocation.requestedTargetAgentId() == null) {
+                            ps.setNull(9, java.sql.Types.OTHER);
                         } else {
-                            ps.setTimestamp(16, Timestamp.from(invocation.startedAt()));
+                            ps.setString(9, invocation.requestedTargetAgentId());
                         }
-                        if (invocation.finishedAt() == null) {
+                        ps.setString(10, invocation.status().name());
+                        ps.setInt(11, invocation.depth());
+                        ps.setString(12, invocation.traceId());
+                        ps.setString(13, invocation.inputDigest());
+                        ps.setString(14, invocation.outputDigest());
+                        ps.setString(15, invocation.reasonCode());
+                        ps.setLong(16, invocation.fencingToken());
+                        if (invocation.startedAt() == null) {
                             ps.setNull(17, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
                         } else {
-                            ps.setTimestamp(17, Timestamp.from(invocation.finishedAt()));
+                            ps.setTimestamp(17, Timestamp.from(invocation.startedAt()));
+                        }
+                        if (invocation.finishedAt() == null) {
+                            ps.setNull(18, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                        } else {
+                            ps.setTimestamp(18, Timestamp.from(invocation.finishedAt()));
                         }
                         return ps.executeUpdate() > 0;
                     }
@@ -291,6 +301,7 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
                 rs.getInt("parent_agent_version"),
                 rs.getString("target_agent_id"),
                 rs.getInt("target_agent_version"),
+                rs.getString("requested_target_agent_id"),
                 AgentInvocationStatus.valueOf(rs.getString("status")),
                 rs.getInt("depth"),
                 rs.getString("trace_id"),

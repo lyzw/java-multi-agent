@@ -333,6 +333,7 @@ class DelegationBudgetChargeTest {
             rows.put(invocationId, new AgentInvocation(row.invocationId(), row.tenantId(),
                     row.runId(), row.parentInvocationId(), row.parentAgentId(),
                     row.parentAgentVersion(), row.targetAgentId(), row.targetAgentVersion(),
+row.requestedTargetAgentId(),
                     status, row.depth(), row.traceId(), row.inputDigest(), outputDigest,
                     row.startedAt(), finishedAt, reasonCode, row.fencingToken()));
             return TerminalWriteOutcome.WRITTEN;

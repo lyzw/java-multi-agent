@@ -283,6 +283,75 @@ class MultiAgentPersistenceIT extends CapITBase {
                     .isEmpty();
             assertThat(invocations.listByRun(tenantB, runId)).isEmpty();
         }
+
+        @Test
+        @DisplayName("M-8 ✅ 第二十三批 A3：「模型原始候选」可写入、可读回，且与「实际生效目标」并存")
+        void modelCandidateRoundTripsAlongsideEffectiveTarget() {
+            String runId = uuid();
+            String id = uuid();
+            String candidate = uuid();
+
+            // ⚠️ 用**完整构造器**写入「原始候选 ≠ 生效目标」这一形态：
+            //    这正是路由降级后 DB 里应有的样子。
+            assertThat(invocations.insert(new AgentInvocation(
+                    id, tenantA, runId, null, uuid(), 1, uuid(), 1, candidate,
+                    AgentInvocationStatus.RUNNING, 1, "trace-" + id,
+                    "in-digest", null, Instant.now(), null, null, 1L)))
+                    .as("带原始候选的委派记录应写入成功")
+                    .isTrue();
+
+            var row = invocations.find(tenantA, id).orElseThrow();
+            assertThat(row.requestedTargetAgentId())
+                    .as("模型原始候选必须能读回（否则降级在数据上就消失了）")
+                    .isEqualTo(candidate);
+            assertThat(row.targetAgentId())
+                    .as("实际生效的目标同样不能丢（两者并存，互不替代）")
+                    .isNotEqualTo(candidate);
+            assertThat(row.routedFallback()).isTrue();
+        }
+
+        @Test
+        @DisplayName("M-8b ✅ 第二十三批 A3：存量行语义为「当时未记录」（NULL 可落库、可读回）")
+        void legacyRowKeepsNullCandidate() {
+            String runId = uuid();
+            String id = uuid();
+            // ⚠️ 走**兼容构造器**（不含原始候选）—— 模拟迁移前写入的行
+            assertThat(invocations.insert(invocation(tenantA, runId, id, null, 1, 1L,
+                    AgentInvocationStatus.RUNNING)))
+                    .isTrue();
+
+            var row = invocations.find(tenantA, id).orElseThrow();
+            assertThat(row.requestedTargetAgentId())
+                    .as("未记录的原始候选必须是 NULL，而不是被填成「生效目标」冒充")
+                    .isNull();
+            assertThat(row.routedFallback())
+                    .as("NULL 只意味着「无从判断」")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("M-8c ✅ 第二十三批 A3：降级索引的谓词必须排除存量行（NULL）")
+        void fallbackIndexExcludesLegacyRows() {
+            // ⚠️ **结构断言**：降级索引的谓词若漏掉 `IS NOT NULL`，
+            //    存量行（requested 为 NULL）在 `IS DISTINCT FROM` 下会被判为「不同」——
+            //    于是**从未发生降级**的历史行被算进降级集合，
+            //    恰恰制造出本列要消除的那种噪音。
+            String predicate = adminQuery(
+                    "SELECT pg_get_expr(indpred, indrelid) FROM pg_index "
+                  + "WHERE indexrelid = 'idx_agent_invocation_routed_fallback'::regclass");
+
+            assertThat(predicate)
+                    .as("降级索引谓词必须显式排除 NULL（存量行 ≠ 降级）")
+                    .contains("IS NOT NULL")
+                    .contains("IS DISTINCT FROM");
+
+            assertThat(adminQuery(
+                    "SELECT is_nullable FROM information_schema.columns "
+                  + "WHERE table_name = 'agent_invocation' "
+                  + "AND column_name = 'requested_target_agent_id'"))
+                    .as("该列必须可空 —— 存量行没有这个事实，强行 NOT NULL 会让迁移失败")
+                    .isEqualTo("YES");
+        }
     }
 
     // ── cap_agent_child_ref ─────────────────────────────────────────
