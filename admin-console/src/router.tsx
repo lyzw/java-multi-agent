@@ -13,6 +13,7 @@ import { AgentDetailPage } from '@/pages/AgentDetailPage'
 import { ToolCatalogPage } from '@/pages/catalog/ToolCatalogPage'
 import { SkillCatalogPage } from '@/pages/catalog/SkillCatalogPage'
 import { McpCatalogPage } from '@/pages/catalog/McpCatalogPage'
+import { ResultContractPage } from '@/pages/catalog/ResultContractPage'
 import { PublishCenterPage } from '@/pages/publish/PublishCenterPage'
 import { PublishRequestDetailPage } from '@/pages/publish/PublishRequestDetailPage'
 import { PublishReleasesPage } from '@/pages/publish/PublishReleasesPage'
@@ -96,6 +97,16 @@ export const router = createBrowserRouter(
           element: (
             <RequireRole roles={TENANT_SCOPE_ROLES}>
               <McpCatalogPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 输出契约登记（多级 Agent v1.1 · 第二十九批 · C29-1 · A6）：
+          // 契约是独立对象（不属于任何 Agent），故单独成页。
+          path: 'contracts',
+          element: (
+            <RequireRole roles={TENANT_SCOPE_ROLES}>
+              <ResultContractPage />
             </RequireRole>
           ),
         },

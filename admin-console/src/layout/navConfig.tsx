@@ -8,6 +8,7 @@ import {
   ApiOutlined,
   SendOutlined,
   ShareAltOutlined,
+  FileTextOutlined,
   MonitorOutlined,
   FileProtectOutlined,
   SettingOutlined,
@@ -81,6 +82,15 @@ export const NAV_NODES: NavNode[] = [
     requiredRoles: TENANT_SCOPE_ROLES,
     description: '平台级 MCP Server 目录（只读，信任分级 / 连接风险）；连接测试与清单采集后续前置。',
     phase: 'P1',
+  },
+  {
+    key: 'contracts',
+    label: '输出契约',
+    path: '/contracts',
+    icon: <FileTextOutlined />,
+    requiredRoles: TENANT_SCOPE_ROLES,
+    description: '租户级输出契约登记（多级 Agent v1.1）：按「标识 + 固定版本」寻址，变更经三步工作流（申请→双人复核→执行）。',
+    phase: 'P2',
   },
   {
     key: 'publish',

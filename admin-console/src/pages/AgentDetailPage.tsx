@@ -13,6 +13,7 @@ import {
   Alert,
   Form,
   Input,
+  InputNumber,
   Select,
   Collapse,
   App as AntApp,
@@ -21,6 +22,16 @@ import { RobotOutlined, SendOutlined } from '@ant-design/icons'
 import { ApiError } from '@/api/client'
 import { getAgent, getAgentVersions, publishAgentVersion, submitPublishRequest } from '@/api/adminApi'
 import { isValidJson } from './agentDefinition'
+import {
+  buildOrchestrationJson,
+  ORCHESTRATION_MODES,
+  FAILURE_POLICIES,
+  validateOrchestration,
+  type ChildRefFormValue,
+  type FailurePolicy,
+  type OrchestrationFormValues,
+  type OrchestrationMode,
+} from './orchestration/orchestrationForm'
 import { AgentDependenciesTab } from './AgentDependenciesTab'
 import type { AgentItem, AgentVersion, PublishAgentSpec } from '@/api/types'
 
@@ -67,6 +78,14 @@ export function AgentDetailPage(): JSX.Element {
     skillBundles?: string[]
     capabilityTags?: string[]
     overrides?: string
+    orchestrationMode: OrchestrationMode
+    orchestrationChildren: ChildRefFormValue[]
+    routingPolicyRef?: string
+    resultContractRef?: string
+    maxDelegationDepth?: number
+    maxChildInvocations?: number
+    timeoutMs?: number
+    failurePolicy?: FailurePolicy
     reason: string
   }>()
 
@@ -139,6 +158,14 @@ export function AgentDetailPage(): JSX.Element {
       skillBundles?: string[]
       capabilityTags?: string[]
       overrides?: string
+      orchestrationMode: OrchestrationMode
+      orchestrationChildren: ChildRefFormValue[]
+      routingPolicyRef?: string
+      resultContractRef?: string
+      maxDelegationDepth?: number
+      maxChildInvocations?: number
+      timeoutMs?: number
+      failurePolicy?: FailurePolicy
       reason: string
     }
     try {
@@ -160,6 +187,26 @@ export function AgentDetailPage(): JSX.Element {
       message.error('overrides 不是合法 JSON')
       return
     }
+    // ⚠️ 编排声明：先本地校验再提交 —— 让作者**当场**看到错误，
+    //    而不是提交后才被服务端的 fail-closed 门禁拒。
+    //    ⚠️ 本地校验**不是防线**：服务端 `AgentOrchestrationParser` 才是权威
+    //    （配置期 fail-closed，绝不「降级成 LEAF 照常发布」）。
+    const orchestrationValues: OrchestrationFormValues = {
+      mode: values.orchestrationMode ?? 'LEAF',
+      childAgentRefs: values.orchestrationChildren ?? [],
+      routingPolicyRef: values.routingPolicyRef ?? null,
+      resultContractRef: values.resultContractRef ?? null,
+      maxDelegationDepth: values.maxDelegationDepth ?? null,
+      maxChildInvocations: values.maxChildInvocations ?? null,
+      timeoutMs: values.timeoutMs ?? null,
+      failurePolicy: values.failurePolicy ?? null,
+    }
+    const orchestrationCheck = validateOrchestration(orchestrationValues)
+    if (!orchestrationCheck.ok) {
+      message.error(`编排声明非法：${orchestrationCheck.error}`)
+      return
+    }
+    spec.orchestration = buildOrchestrationJson(orchestrationValues)
     setDrawerSubmitting(true)
     try {
       const req = await submitPublishRequest({
@@ -351,6 +398,110 @@ export function AgentDetailPage(): JSX.Element {
                         style={{ fontFamily: 'monospace', fontSize: 12 }}
                       />
                     </Form.Item>
+                    {/* ── 编排声明（多级 Agent v1.1 · 第二十九批 · C29-1 · A6）── */}
+                    <Form.Item
+                      name="orchestrationMode"
+                      label="编排模式（orchestration.mode）"
+                      initialValue="LEAF"
+                      extra="LEAF = 不允许委派（缺省）；ROUTER = 按路由策略择一；SEQUENTIAL = 按声明顺序依次执行"
+                    >
+                      <Select
+                        options={ORCHESTRATION_MODES.map((m) => ({
+                          value: m,
+                          label: m,
+                        }))}
+                      />
+                    </Form.Item>
+                    <Form.List name="orchestrationChildren">
+                      {(fields, { add, remove }) => (
+                        <>
+                          {fields.map((field) => (
+                            <Space key={field.key} align="baseline">
+                              <Form.Item
+                                {...field}
+                                name={[field.name, 'id']}
+                                label="子 Agent id"
+                                rules={[{ required: true, message: '请输入子 Agent id' }]}
+                              >
+                                <Input placeholder="子 Agent 标识（UUID）" style={{ width: 260 }} />
+                              </Form.Item>
+                              <Form.Item
+                                {...field}
+                                name={[field.name, 'version']}
+                                label="版本"
+                                rules={[{ required: true, message: '必须固定版本' }]}
+                              >
+                                <InputNumber min={1} precision={0} placeholder="固定 release 版本" />
+                              </Form.Item>
+                              <Form.Item
+                                {...field}
+                                name={[field.name, 'required']}
+                                label="必需"
+                                initialValue
+                              >
+                                <Select
+                                  style={{ width: 96 }}
+                                  options={[
+                                    { value: true, label: '是' },
+                                    { value: false, label: '否' },
+                                  ]}
+                                />
+                              </Form.Item>
+                              <Button danger onClick={() => remove(field.name)}>
+                                移除
+                              </Button>
+                            </Space>
+                          ))}
+                          <Button
+                            onClick={() =>
+                              add({ id: '', version: null, required: true })
+                            }
+                          >
+                            添加子 Agent 引用
+                          </Button>
+                        </>
+                      )}
+                    </Form.List>
+                    <Form.Item
+                      name="routingPolicyRef"
+                      label="路由策略引用（routingPolicyRef · id@version）"
+                      extra="ROUTER 模式必填；版本必须固定，不得用 latest"
+                    >
+                      <Input placeholder="如 policy-a@1" />
+                    </Form.Item>
+                    <Form.Item
+                      name="resultContractRef"
+                      label="输出契约引用（resultContractRef · id@version）"
+                      extra="版本必须固定，不得用 latest；契约需先在「输出契约」页登记"
+                    >
+                      <Input placeholder="如 answer-contract@1" />
+                    </Form.Item>
+                    <Space size="large" wrap>
+                      <Form.Item
+                        name="maxDelegationDepth"
+                        label="最大委派深度"
+                        extra="留空 = 服务端默认值"
+                      >
+                        <InputNumber min={1} precision={0} style={{ width: 140 }} />
+                      </Form.Item>
+                      <Form.Item
+                        name="maxChildInvocations"
+                        label="最大子调用次数"
+                        extra="留空 = 服务端默认值"
+                      >
+                        <InputNumber min={0} precision={0} style={{ width: 140 }} />
+                      </Form.Item>
+                      <Form.Item name="timeoutMs" label="委派超时（毫秒）" extra="留空 = 服务端默认值">
+                        <InputNumber min={1} precision={0} style={{ width: 160 }} />
+                      </Form.Item>
+                      <Form.Item name="failurePolicy" label="失败策略">
+                        <Select
+                          allowClear
+                          placeholder="留空 = 服务端默认值"
+                          options={FAILURE_POLICIES.map((p) => ({ value: p, label: p }))}
+                        />
+                      </Form.Item>
+                    </Space>
                     <Form.Item
                       name="reason"
                       label="变更理由"

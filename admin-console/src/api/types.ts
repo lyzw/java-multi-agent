@@ -249,6 +249,27 @@ export interface PublishAgentSpec {
   skillBundles?: string[]
   capabilityTags?: string[]
   overrides?: string
+  /**
+   * 编排声明（多级 Agent v1.1 · 第二十九批 · C29-1 · A6）。
+   *
+   * ⚠️ 缺省 = `{}` = **LEAF**（MA-T01）：不是「不限制」，而是「不允许委派」。
+   * ⚠️ 形态是 **JSON 文本**（与后端 `AgentRequest.orchestration` 一致），
+   * 由管理台的编排声明表单生成。
+   */
+  orchestration?: string
+}
+
+/**
+ * 输出契约草稿（ResultContractRequest · 多级 Agent v1.1 · 第二十九批 · C29-1 · A6）。
+ *
+ * ⚠️ **不含版本号与内容指纹** —— 二者由服务端决定。
+ * 客户端若能指定版本号或内容指纹，就等于能指定「内容没变」这个证明。
+ */
+export interface PublishResultContractSpec {
+  /** 契约标识（可读字符串，如 `answer-contract`，**不是 UUID**） */
+  contractId: string
+  /** 契约定义本身（JSON Schema 文本）—— 不是契约实例 */
+  schemaJson: string
 }
 
 /** 生命周期迁移参数（LifecycleRequest） */
@@ -266,6 +287,8 @@ export interface SubmitPublishRequest {
   scope?: 'TENANT' | 'PLATFORM'
   expectedPublishSeq?: number | null
   agents?: PublishAgentSpec[]
+  /** 输出契约草稿（多级 Agent v1.1 · 第二十九批 · C29-1 · A6） */
+  resultContracts?: PublishResultContractSpec[]
   targetReleaseId?: number | null
   lifecycle?: PublishLifecycleSpec
   reason: string
