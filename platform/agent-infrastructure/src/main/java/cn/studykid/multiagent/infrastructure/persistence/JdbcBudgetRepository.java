@@ -43,13 +43,23 @@ import cn.studykid.multiagent.ports.persistence.BudgetPort;
  * <p><b>为何不用 {@code SELECT ... FOR UPDATE}</b>：行锁会把并发预留
  * 串行化，而条件更新在 PG 行级 MVCC 下已经原子，失败方无需等待即可返回。
  * 加锁只是把「并发拒绝」换成「并发排队」，在 DoS 场景下更糟（D-2 限流）。
+ *
+ * <p>⚠️ <b>但 Run 级上限必须加行锁</b>（两者不矛盾）：
+ * 租户级上限是<b>单行</b>条件更新，判定与扣减天然在同一原子操作内；
+ * 而 Run 级上限的判定口径是<b>多行聚合</b>
+ * （{@code budget_reservation} 按 {@code run_id} 汇总），
+ * 多行聚合<b>没有</b>「单条条件 UPDATE」可写 ——
+ * 聚合读到的永远是已提交快照，并发预留会同时读到同一份旧聚合而全部通过判定。
+ * 故 Run 级判定必须<b>先锁 {@code run} 行</b>（把同一 Run 的预留串行化），
+ * 再在<b>同一事务</b>内聚合、判定、扣减。
+ * 锁序固定为「run 行 → 账户行」，与预留写入的 FK 键共享锁不冲突（无死锁环）。
  */
 public class JdbcBudgetRepository implements BudgetPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcBudgetRepository.class);
 
     /** 本平台只结算人民币；跨币种折算属 P4（L-6）。 */
-    private static final String DEFAULT_CURRENCY = "CNY";
+    private static final String DEFAULT_CURRENCY = BudgetPort.SETTLEMENT_CURRENCY;
 
     private final DataSource dataSource;
 
@@ -83,20 +93,39 @@ public class JdbcBudgetRepository implements BudgetPort {
                 }
             }
 
-            // ② 账户存在性判定（D-2：与「额度不足」语义不同）
+            // ② Run 级封顶（原子 · 多级 Agent v1.1 · FR-024 · MA-T17）
+            //    ⚠️ 这一步**必须在扣减之前**，且与扣减同事务：
+            //      Run 级上限的判定口径是多行聚合，没有单条条件 UPDATE 可用；
+            //      不加锁则并发预留会同时读到同一份旧聚合而全部通过判定 → 突破上限。
+            //    ⚠️ 未声明 Run 级额度（run.budget_amount IS NULL）= 不额外限制，
+            //      **不是**「额度为 0」—— 两者混淆会双向出事。
+            Optional<BigDecimal> runCap = lockRunBudgetCap(conn, tenantId, runId);
+            if (runCap.isPresent()) {
+                BigDecimal cap = runCap.get();
+                BigDecimal occupied = RunBudgetAggregate.occupied(conn, tenantId, runId);
+                if (occupied.add(amount).compareTo(cap) > 0) {
+                    // ⚠️ 拒绝时**不扣减任何额度**：Run 级与租户级是两道独立闸门，
+                    //    这里过不去就不该动租户额度（否则会出现「钱被占了但没干活」）。
+                    log.warn("Run 级预算不足，拒绝预留: tenant={}, run={}, 额度={}, 已占用={}, 本次={}",
+                            tenantId, runId, cap, occupied, amount);
+                    return ReserveOutcome.RUN_BUDGET_EXHAUSTED;
+                }
+            }
+
+            // ③ 账户存在性判定（D-2：与「额度不足」语义不同）
             if (!accountExists(conn, tenantId)) {
                 log.warn("租户未开通预算账户，fail-closed 拒绝: tenant={}", tenantId);
                 return ReserveOutcome.NO_ACCOUNT;
             }
 
-            // ③ 原子条件更新（D-1）：判定与扣减在同一语句内
+            // ④ 原子条件更新（D-1）：判定与扣减在同一语句内
             boolean reserved = tryAtomicReserve(conn, tenantId, amount);
             if (!reserved) {
                 log.warn("预算额度不足，拒绝预留: tenant={}, 请求={}", tenantId, amount);
                 return ReserveOutcome.INSUFFICIENT;
             }
 
-            // ④ 写预留行。并发下唯一索引可能让本行插入失败 →
+            // ⑤ 写预留行。并发下唯一索引可能让本行插入失败 →
             //    账户已扣的额度必须退回，否则「扣了额度没记录」= 永久泄漏
             String reservationId = insertReservation(conn, tenantId, runId, operationId, amount);
             if (reservationId == null) {
@@ -114,6 +143,75 @@ public class JdbcBudgetRepository implements BudgetPort {
             }
             return ReserveOutcome.RESERVED;
         });
+    }
+
+    /**
+     * 锁定该 Run 的预算上限行并读取额度（多级 Agent v1.1 · FR-024 · MA-T17）。
+     *
+     * <p>⚠️ <b>为什么这里必须加行锁，而租户级不加</b>：
+     * 租户级上限是<b>单行</b>条件更新（{@code reserved + settled + ? <= total_limit}），
+     * 判定与扣减在同一原子操作内完成；Run 级上限的判定口径是<b>多行聚合</b>，
+     * 聚合读到的永远是<b>已提交快照</b> ——
+     * 并发预留会同时读到同一份旧聚合而全部通过判定，直接突破 Run 上限。
+     * 锁 {@code run} 行把同一 Run 的预留串行化，聚合才有意义。
+     *
+     * <p>⚠️ <b>锁序固定为「run 行 → 账户行」</b>：
+     * 所有预留写入都先取 run 行锁再动账户，且写入预留行时的 FK 键共享锁
+     * 由本事务自己已持有的行锁满足 → 不存在死锁环。
+     *
+     * <p>⚠️ <b>未声明额度 → 不加锁</b>：{@code run.budget_amount IS NULL}
+     * 表示「不额外限制」，没有上限就没有可突破的东西，无需串行化。
+     * 这条快路径避免了「没配预算的 Run 也被行锁串行」的无谓竞争。
+     *
+     * @param conn     连接（须处于事务内）
+     * @param tenantId 租户标识
+     * @param runId    Run 标识
+     * @return Run 级额度；该 Run 未声明额度时为空（= 不额外限制）
+     * @throws SQLException 查询失败
+     * @throws IllegalStateException Run 不存在（数据不可信 → 调用方 fail-closed）
+     */
+    private @NonNull Optional<BigDecimal> lockRunBudgetCap(Connection conn,
+                                                           @NonNull String tenantId,
+                                                           @NonNull String runId)
+            throws SQLException {
+        // ① 快路径：无上限声明则不加锁
+        Optional<BigDecimal> declared = readRunBudgetCap(conn, tenantId, runId, false);
+        if (declared.isEmpty()) {
+            return Optional.empty();
+        }
+        // ② 有上限：加行锁后**重读**（锁内读才是权威值）
+        return readRunBudgetCap(conn, tenantId, runId, true);
+    }
+
+    /**
+     * 读取 Run 级额度（可选加行锁）。
+     *
+     * @param forUpdate true = {@code SELECT ... FOR UPDATE}
+     * @return 额度；未声明额度或 Run 不存在时为空
+     */
+    private @NonNull Optional<BigDecimal> readRunBudgetCap(Connection conn,
+                                                            @NonNull String tenantId,
+                                                            @NonNull String runId,
+                                                            boolean forUpdate)
+            throws SQLException {
+        String sql = "SELECT budget_amount FROM run WHERE tenant_id = ?::uuid AND run_id = ?::uuid"
+                + (forUpdate ? " FOR UPDATE" : "");
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, runId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    if (forUpdate) {
+                        // ⚠️ Run 不存在 = 数据不可信 → 抛异常，由调用方 fail-closed。
+                        //    静默当成「无上限」会让一个不存在的 Run 无限花钱。
+                        throw new IllegalStateException(
+                                "Run 不存在，无法判定 Run 级预算: run=" + runId);
+                    }
+                    return Optional.empty();
+                }
+                return Optional.ofNullable(rs.getBigDecimal("budget_amount"));
+            }
+        }
     }
 
     /**

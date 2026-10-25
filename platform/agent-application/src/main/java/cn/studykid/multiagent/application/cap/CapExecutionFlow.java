@@ -13,6 +13,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.application.orchestration.RunBudgetProbe;
 import cn.studykid.multiagent.core.cap.AuthorizationDecision;
 import cn.studykid.multiagent.core.cap.CapCompensationTask;
 import cn.studykid.multiagent.core.cap.CapToolDecision;
@@ -134,7 +135,7 @@ public class CapExecutionFlow {
      * 生产装配<b>必须</b>传入 —— 否则「这一棵调用树最多花多少」在
      * CAP 链路（生产主链路）上没有任何约束。
      */
-    private final cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudget;
+    private final RunBudgetProbe runBudget;
 
     public CapExecutionFlow(@NonNull InvocationValidator validator,
                              @NonNull ClosureResolver closureResolver,
@@ -267,7 +268,7 @@ public class CapExecutionFlow {
                              @NonNull String principalId,
                              @NonNull CapEnforcementSwitch enforcementSwitch,
                              @NonNull DecisionAuditService audit,
-                             cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudget) {
+                             RunBudgetProbe runBudget) {
         if (reserveAmountPerToolCall == null || reserveAmountPerToolCall.signum() <= 0) {
             // ⚠️ 构造期校验：缺失/非法配置在装配时就失败，
             //    而不是等某个工具调用时才被拒 —— 那会让「预算闸门形同虚设」。
@@ -469,13 +470,20 @@ public class CapExecutionFlow {
         //    所有深度的工具调用都记在同一个 run_id 下（budget_reservation.run_id），
         //    因此这一道判定就是「这一整棵树还能花多少」的守门人 ——
         //    嵌套 Agent 无法通过「自己再开一份额度」绕过它。
-        if (runBudget != null && !runBudget.hasRemaining(tenantId, task.runId())) {
-            log.warn("Run 级预算已用尽，拒绝工具调用: tool={}, run={}",
-                    call.toolName(), task.runId());
-            recordLedgerFailed(tenantId, operationId, task.fencingToken(),
-                    "run-budget-exhausted");
-            return new CapToolDecision(call.toolName(), operationId,
-                    AuthorizationDecision.executionDeny(ReasonCode.BUDGET_EXCEEDED));
+        //    ⚠️ 按**量**判（剩余额度 ≥ 本次预留额），不是按方向判：
+        //    只判「还有没有余额」时，剩余 10 元的 Run 仍能预留 50 元 ——
+        //    单次调用就能突破上限，「共享上限」名存实亡。
+        if (runBudget != null) {
+            RunBudgetProbe.Verdict verdict = runBudget.check(
+                    tenantId, task.runId(), reserveAmountPerToolCall);
+            if (!verdict.allowed()) {
+                log.warn("Run 级预算不足，拒绝工具调用: tool={}, run={}, reason={}",
+                        call.toolName(), task.runId(), verdict.denial());
+                recordLedgerFailed(tenantId, operationId, task.fencingToken(),
+                        verdict.reasonCode());
+                return new CapToolDecision(call.toolName(), operationId,
+                        AuthorizationDecision.executionDeny(ReasonCode.BUDGET_EXCEEDED));
+            }
         }
 
         // ══ 步骤 12：BudgetOk ═════════════════════════════════════

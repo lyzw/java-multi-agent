@@ -8,11 +8,14 @@ import java.util.UUID;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyDecision;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.ports.persistence.BudgetPort;
 import cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
@@ -36,19 +39,48 @@ import org.springframework.stereotype.Service;
 @Service
 public class RunCreationService {
 
+    private static final Logger log = LoggerFactory.getLogger(RunCreationService.class);
+
     private final RunCreationPort runCreation;
     private final ExecutionSnapshotPort snapshots;
     private final TransactionRunner tx;
     private final Clock clock;
+    /**
+     * 预算端口（用于校验 Run 级额度声明与租户额度的<b>创建时一致性</b>）。
+     *
+     * <p>⚠️ <b>可为空 = 未装配</b>：此时「声明了 Run 额度」的创建请求会被
+     * <b>拒绝</b>（fail-closed）——
+     * 校验缺席若静默放行，等于「Run 级上限可以大于租户总额度」，
+     * 那样的上限<b>永远不会被触发</b>，形同虚设。
+     */
+    private final BudgetPort budget;
 
     public RunCreationService(@NonNull RunCreationPort runCreation,
                               @NonNull ExecutionSnapshotPort snapshots,
                               @NonNull TransactionRunner tx,
                               @NonNull Clock clock) {
+        this(runCreation, snapshots, tx, clock, null);
+    }
+
+    /**
+     * 最完整构造器：含预算端口（可校验 Run 额度与租户额度的一致性）。
+     *
+     * @param budget 预算端口；{@code null} = 未装配（带额度声明的创建请求将被拒绝）
+     */
+    public RunCreationService(@NonNull RunCreationPort runCreation,
+                              @NonNull ExecutionSnapshotPort snapshots,
+                              @NonNull TransactionRunner tx,
+                              @NonNull Clock clock,
+                              @Nullable BudgetPort budget) {
         this.runCreation = runCreation;
         this.snapshots = snapshots;
         this.tx = tx;
         this.clock = clock;
+        this.budget = budget;
+        if (budget == null) {
+            log.warn("未装配预算端口：Run 级额度与租户额度的一致性校验不生效，"
+                    + "「声明了 Run 额度」的创建请求将被拒绝（fail-closed）");
+        }
     }
 
     /**
@@ -147,6 +179,13 @@ public class RunCreationService {
                 runId, context.tenantId(), 0, 0L, clock.instant());
         OutboxMessage.assertPayloadSafe(message.toPayload());
 
+        // ⚠️⚠️ 创建时一致性（FR-024 · MA-T17）：Run 级额度必须 ≤ 租户账户总额度。
+        //    否则 Run 级上限<b>永远不会被触发</b>（租户级先耗尽），
+        //    「这一棵调用树最多花多少」就成了一句没人能兑现的承诺。
+        //    ⚠️ 放在写入之前：拒绝一个矛盾的额度声明不该留下半成品 Run。
+        //    ⚠️ 幂等重放已在上面返回：重放不产生新的副作用，不该被本次校验拦下。
+        assertRunBudgetWithinAccount(context, limits);
+
         return tx.execute(tenantId(context), () -> {
             // ⚠️⚠️ 快照解析**必须在写事务内**（P4-D18 修复）：
             //   此前由调用方传入的 snapshotId() 恒为随机 UUID，
@@ -172,6 +211,59 @@ public class RunCreationService {
                     limits);
             return new CreateRunResult(actualRunId, false);
         });
+    }
+
+    /**
+     * 校验 Run 级额度声明与租户账户额度的一致性（创建时）。
+     *
+     * <p>⚠️ <b>只在声明了 Run 级额度时才校验</b>：
+     * 未声明额度 = 不额外限制，与租户额度无冲突，不该给无额度的创建请求
+     * 增加「预算系统必须可用」这一新的失败面。
+     *
+     * <p>⚠️ <b>失败一律 fail-closed</b>：
+     * <ul>
+     *   <li>未装配预算端口 → 拒绝（校验缺席不能等于校验通过）；</li>
+     *   <li>租户未开通预算账户 → 拒绝（没有账户就没有「租户总额度」可比）；</li>
+     *   <li>读不到账户 → 拒绝（基础设施故障时不能放行一个无法验证的上限）；</li>
+     *   <li>声明额度 &gt; 租户总额度 → 拒绝（该上限永远不会被触发）。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>已知窗口</b>：本校验读的是<b>独立事务</b>里的账户快照，
+     * 与随后的 Run 写入之间、以及与账户后续变更之间存在时间差。
+     * 彻底消除需要「在创建事务内读 {@code budget_account}」，
+     * 那要求预算端口暴露连接作用域的读接口（本次未做）。
+     * 窗口的后果是「额度声明与账户快照短暂不一致」，
+     * 真正的硬底线仍是租户级的 DB 原子条件更新（不会超发）。
+     */
+    private void assertRunBudgetWithinAccount(@NonNull TenantContext context,
+                                              @NonNull RunLimits limits) {
+        BigDecimal declared = limits.budgetAmount();
+        if (declared == null) {
+            return;
+        }
+        if (budget == null) {
+            throw new RunBudgetLimitInvalidException(context.tenantId(), declared, null,
+                    "未装配预算端口，无法校验 Run 级额度与租户额度的一致性（fail-closed 拒绝）");
+        }
+        BudgetPort.AccountSnapshot account;
+        try {
+            account = budget.accountSnapshot(context.tenantId(), BudgetPort.SETTLEMENT_CURRENCY)
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            throw new RunBudgetLimitInvalidException(context.tenantId(), declared, null,
+                    "读取租户预算账户失败，无法校验 Run 级额度（fail-closed 拒绝）: "
+                            + e.getMessage());
+        }
+        if (account == null) {
+            throw new RunBudgetLimitInvalidException(context.tenantId(), declared, null,
+                    "租户未开通预算账户，无法声明 Run 级额度（fail-closed 拒绝）");
+        }
+        if (declared.compareTo(account.totalLimit()) > 0) {
+            throw new RunBudgetLimitInvalidException(context.tenantId(), declared,
+                    account.totalLimit(),
+                    "声明的 Run 级额度大于租户账户总额度，该上限永远不会被触发: 声明="
+                            + declared + ", 租户总额度=" + account.totalLimit());
+        }
     }
 
     /**

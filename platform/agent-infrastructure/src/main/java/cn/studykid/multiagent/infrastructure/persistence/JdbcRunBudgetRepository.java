@@ -55,20 +55,22 @@ public class JdbcRunBudgetRepository implements RunBudgetPort {
                 conn -> {
                     // ⚠️ 单条 SQL 取齐额度与已用量：分两次查会看到**不一致**的两个快照
                     //    （额度读到了、预留还没算进去 → 误判「还有额度」）。
+                    //    ⚠️ 占用口径来自 RunBudgetAggregate（全仓唯一实现）：
+                    //    判定侧与观测侧必须用同一份定义，否则「上限」有两个解释。
                     String sql = """
                             SELECT r.budget_amount,
-                                   COALESCE(SUM(CASE WHEN b.state = 'RESERVED'
-                                                     THEN b.reserved_amount ELSE 0 END), 0)
+                                   %s
                                        AS reserved_amount,
-                                   COALESCE(SUM(CASE WHEN b.state = 'SETTLED'
-                                                     THEN b.settled_amount ELSE 0 END), 0)
+                                   %s
                                        AS settled_amount
                             FROM run r
                             LEFT JOIN budget_reservation b
                                    ON b.tenant_id = r.tenant_id AND b.run_id = r.run_id
                             WHERE r.tenant_id = ?::uuid AND r.run_id = ?::uuid
                             GROUP BY r.run_id, r.budget_amount
-                            """;
+                            """.formatted(
+                            RunBudgetAggregate.RESERVED_AMOUNT_EXPRESSION,
+                            RunBudgetAggregate.SETTLED_AMOUNT_EXPRESSION);
                     try (PreparedStatement ps = conn.prepareStatement(sql)) {
                         ps.setString(1, tenantId);
                         ps.setString(2, runId);

@@ -197,8 +197,11 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.RunCreationPort port,
             cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort snapshots,
             RunCreationService.TransactionRunner tx,
-            Clock clock) {
-        return new RunCreationService(port, snapshots, tx, clock);
+            Clock clock,
+            cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort) {
+        // ⚠️ 预算端口必须装配：缺了它，「声明了 Run 级额度」的创建请求会被
+        //    fail-closed 拒绝（校验缺席 ≠ 校验通过）。
+        return new RunCreationService(port, snapshots, tx, clock, budgetPort);
     }
 
     /**

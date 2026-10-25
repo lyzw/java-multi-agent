@@ -15,6 +15,7 @@ import cn.studykid.multiagent.api.security.CurrentPrincipal.UnauthenticatedExcep
 import cn.studykid.multiagent.application.config.ConfigTighteningPolicy;
 import cn.studykid.multiagent.application.monitoring.MonitoringViewService;
 import cn.studykid.multiagent.application.run.ExecutionSnapshotUnavailableException;
+import cn.studykid.multiagent.application.run.RunBudgetLimitInvalidException;
 import cn.studykid.multiagent.core.compliance.ZeroRetentionViolationException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
@@ -85,6 +86,26 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new ErrorResponse("IDEMPOTENCY_CONFLICT",
                         "该幂等键已被一个不同的请求占用"));
+    }
+
+    /**
+     * Run 级额度声明不可用 → 400。
+     *
+     * <p>⚠️ <b>为什么是 400 而不是 500</b>：
+     * 触发条件是「声明与现实不一致」（声明的 Run 额度大于租户总额度 /
+     * 租户未开通预算账户）—— 属<b>客户端请求</b>问题，且有确定解法
+     * （调小额度声明 / 开通账户）。
+     *
+     * <p>⚠️ <b>消息不回显具体金额</b>：租户额度属敏感经营数据，
+     * 回显等于把「这个租户还剩多少钱」暴露给能构造请求的一方。
+     */
+    @ExceptionHandler(RunBudgetLimitInvalidException.class)
+    public ResponseEntity<ErrorResponse> handleRunBudgetLimitInvalid(
+            RunBudgetLimitInvalidException e) {
+        log.warn("Run 级额度声明被拒: tenant={}, 声明={}", e.tenantId(), e.declaredAmount());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(new ErrorResponse("RUN_BUDGET_LIMIT_INVALID",
+                        "声明的 Run 级额度不可用（须不超过租户账户总额度，且租户已开通预算账户）"));
     }
 
     /**

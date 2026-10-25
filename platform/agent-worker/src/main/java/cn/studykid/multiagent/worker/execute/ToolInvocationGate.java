@@ -11,6 +11,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.application.orchestration.RunBudgetProbe;
 import cn.studykid.multiagent.core.cap.CapToolDecision;
 import cn.studykid.multiagent.core.cap.ExecutionScope;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
@@ -131,7 +132,7 @@ public class ToolInvocationGate {
      * 生产装配<b>必须</b>传入 —— 否则「全调用树共享预算上限」在
      * <b>工具调用路径</b>上是空的（子 Agent 可以把 Run 额度烧穿）。
      */
-    private final cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudget;
+    private final RunBudgetProbe runBudget;
 
     /** 默认审批桩：恒返回 NO_APPROVAL（审批权威接入前的 fail-closed 占位）。 */
     private static final ApprovalPort NO_APPROVAL_PORT = new ApprovalPort() {
@@ -367,7 +368,7 @@ public class ToolInvocationGate {
                               cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers,
                               cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation,
                               @NonNull Clock clock,
-                              cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudget) {
+                              RunBudgetProbe runBudget) {
         this.handlers = List.copyOf(handlers);
         this.authorization = authorization;
         this.approvalPolicy = approvalPolicy;
@@ -883,13 +884,20 @@ public class ToolInvocationGate {
             //    「先花钱再检查」。所有深度的工具调用都记在同一个 run_id 下，
             //    因此这一道判定就是「这一整棵树还能花多少」的守门人；
             //    嵌套 Agent 无法通过「自己再开一份额度」来绕过它。
-            if (runBudget != null && !runBudget.hasRemaining(tenantId, task.runId())) {
-                log.warn("Run 级预算已用尽，拒绝工具调用: tool={}, runId={}",
-                        call.toolName(), task.runId());
-                recordFailed(tenantId, registration.operationId(), task.fencingToken(),
-                        "run-budget-exhausted");
-                result.recordRejected(call.toolName(), "Run 级预算已用尽");
-                continue;
+            //    ⚠️ 按**量**判（剩余额度 ≥ 本次预留额）：只判「还有没有余额」时，
+            //    剩余 10 元的 Run 仍能预留 50 元 —— 单次调用就能突破上限。
+            if (runBudget != null) {
+                RunBudgetProbe.Verdict verdict = runBudget.check(
+                        tenantId, task.runId(), reserveAmountPerToolCall);
+                if (!verdict.allowed()) {
+                    log.warn("Run 级预算不足，拒绝工具调用: tool={}, runId={}, reason={}",
+                            call.toolName(), task.runId(), verdict.denial());
+                    recordFailed(tenantId, registration.operationId(), task.fencingToken(),
+                            verdict.reasonCode());
+                    result.recordRejected(call.toolName(),
+                            "Run 级预算不足:" + verdict.denial());
+                    continue;
+                }
             }
 
             // ⑥ ⚠️ 预算预留（P3-D04）：失败即拒绝执行（fail-closed）。

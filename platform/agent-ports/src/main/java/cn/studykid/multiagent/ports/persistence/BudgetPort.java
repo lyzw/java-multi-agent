@@ -31,10 +31,34 @@ import cn.studykid.multiagent.core.run.ToolOperationState;
 public interface BudgetPort {
 
     /**
+     * 本平台的<b>结算币种</b>（预留与结算都记在这个币种的账户上）。
+     *
+     * <p>⚠️ <b>为什么必须显式存在</b>：预留行本身<b>不带币种</b>
+     * （币种在 {@code budget_account} 上），因此「某 Run 的额度」
+     * 与「某租户的额度」必须落在<b>同一个币种</b>上才有可比性。
+     * 跨币种折算属 P4（L-6），当前只结算人民币。
+     */
+    String SETTLEMENT_CURRENCY = "CNY";
+
+    /**
      * 预留额度（原子）。
      *
      * <p>⚠️ 实现必须用<b>单条条件 UPDATE</b>，禁止「先 SELECT 检查再 UPDATE」——
      * 后者的检查与扣减之间存在窗口，并发下可超发。
+     *
+     * <p>⚠️ <b>两级上限都必须在这次预留里原子生效</b>：
+     * <ol>
+     *   <li><b>租户级</b>（{@code budget_account.total_limit}）：
+     *       单条条件 UPDATE 天然原子；</li>
+     *   <li><b>Run 级</b>（{@code run.budget_amount}）：该上限的判定口径是
+     *       <b>多行聚合</b>（{@code budget_reservation} 按 {@code run_id} 汇总），
+     *       多行聚合<b>没有单条条件 UPDATE 可用</b> ——
+     *       实现必须用<b>行锁把同一 Run 的预留串行化</b>
+     *       （锁 {@code run} 行），再在同一事务内判定与扣减。
+     *       读聚合再扣减（check-then-act）会让并发预留同时通过判定 → 突破 Run 上限。</li>
+     * </ol>
+     * 实现若只做租户级，Run 级上限就<b>形同虚设</b>：
+     * 「这一棵调用树最多花多少」会退化成「只要租户还有钱就能一直花」。
      *
      * @param operationId 关联的 ToolOperation；<b>为 null 时不做唯一性约束</b>
      *                    （部分唯一索引仅对非空 operation_id 生效）
@@ -116,6 +140,18 @@ public interface BudgetPort {
 
         /** 账户存在但额度不足。 */
         INSUFFICIENT(false),
+
+        /**
+         * ⚠️ <b>该 Run 的 Run 级额度不足</b>：本次预留会突破 {@code run.budget_amount}。
+         *
+         * <p>⚠️ <b>与 {@link #INSUFFICIENT} 必须可区分</b>：
+         * {@code INSUFFICIENT} 是「<b>租户账户</b>余额不足」——
+         * 处置方向是「给租户加额度」；
+         * 本值是「<b>这一棵调用树</b>自己的上限不够」——
+         * 处置方向是「调小该 Run 的额度声明 / 减少本次开销」。
+         * 两者混报，运维会往错误方向排查（给租户加钱后问题依旧）。
+         */
+        RUN_BUDGET_EXHAUSTED(false),
 
         /** ⚠️ 该租户未开通预算账户 —— fail-closed 拒绝，<b>不是</b>额度不足。 */
         NO_ACCOUNT(false),

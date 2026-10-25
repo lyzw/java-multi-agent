@@ -173,6 +173,21 @@ class ToolInvocationGateRunBudgetTest {
                 (tenantId, runId) -> Optional.empty());
     }
 
+    /**
+     * Run 级额度<b>还剩一点</b>但装不下本次预留的探针（额度 10，已用 9.5）。
+     *
+     * <p>⚠️ 单次预留额为 {@code BigDecimal.ONE}，故剩余 0.5 &lt; 1。
+     * 方向性判定（「还有没有余额」）会<b>放行</b>，量级判定才拒绝。
+     */
+    private static cn.studykid.multiagent.application.orchestration.RunBudgetProbe
+            insufficientRunBudget() {
+        return new cn.studykid.multiagent.application.orchestration.RunBudgetProbe(
+                (tenantId, runId) -> Optional.of(
+                        new cn.studykid.multiagent.ports.persistence.RunBudgetPort.RunBudget(
+                                runId, new BigDecimal("10"), new BigDecimal("9.5"),
+                                BigDecimal.ZERO)));
+    }
+
     private static ToolInvocationGate gate(RunToolLedgerPort ledger,
                                            ToolHandler tool,
                                            cn.studykid.multiagent.application.orchestration
@@ -241,5 +256,29 @@ class ToolInvocationGateRunBudgetTest {
                 .as("未声明额度 = 没配预算，不得把工具全拦掉")
                 .isEqualTo(1);
         assertThat(result.succeededTools()).containsExactly("record_weakness");
+    }
+
+    @Test
+    @DisplayName("⛔⚠️ Run 级剩余额度<b>装不下本次预留</b> → 必须拒绝（方向性判定会漏放）")
+    void remainingBudgetSmallerThanReservationBlocksToolExecution() {
+        // ⚠️⚠️ 本用例是「量级封顶」的核心判据：
+        //    额度 10、已用 9.5 → 还剩 0.5（方向上「还有余额」），
+        //    但本次单次预留额是 1 → 装不下。
+        //    只判方向的实现会放行 → 单次调用就把 Run 用量推到 10.5 > 10，上限被突破。
+        RecordingLedger ledger = new RecordingLedger();
+        CountingTool tool = new CountingTool();
+
+        var result = gate(ledger, tool, insufficientRunBudget())
+                .invokeAll(TENANT, task(), oneCall("call-1"));
+
+        assertThat(tool.executions.get())
+                .as("⚠️⚠️ 剩余额度装不下本次预留 → 绝不能再产生副作用")
+                .isZero();
+        assertThat(result.rejectedTools())
+                .as("该次调用必须留痕（不得静默丢弃）")
+                .containsExactly("record_weakness");
+        assertThat(ledger.recorded)
+                .as("账本必须记 FAILED（工具根本没发出 = 确定失败）")
+                .containsExactly(ToolOperationState.FAILED);
     }
 }
