@@ -24,6 +24,7 @@ import cn.studykid.multiagent.core.orchestration.AgentInvocationStatus;
 import cn.studykid.multiagent.core.orchestration.AgentOrchestration;
 import cn.studykid.multiagent.core.orchestration.ChildAgentRef;
 import cn.studykid.multiagent.core.orchestration.DelegationFailurePolicy;
+import cn.studykid.multiagent.core.orchestration.DelegationToolSchema;
 import cn.studykid.multiagent.core.orchestration.OrchestrationMode;
 import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
 import cn.studykid.multiagent.core.tenant.TenantContext;
@@ -60,8 +61,16 @@ public class DelegationExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(DelegationExecutor.class);
 
-    /** 委派保留工具名（模型用它表达「把工作交给某个 Agent」的意图）。 */
-    public static final String DELEGATION_TOOL_NAME = "delegate_to_agent";
+    /**
+     * 委派保留工具名（模型用它表达「把工作交给某个 Agent」的意图）。
+     *
+     * ⚠️ <b>唯一定义在 {@link DelegationToolSchema#TOOL_NAME}</b>（第二十批）：
+     * 工具名要同时出现在「模型可见的 Schema」与「闸门的委派分支」两处 ——
+     * 两处各写一遍必然漂移，而漂移的后果是
+     * 「模型看得见的委派工具」与「闸门认得的委派调用」对不上，
+     * 于是模型发起的委派被当成「未登记的工具」拒绝。
+     */
+    public static final String DELEGATION_TOOL_NAME = DelegationToolSchema.TOOL_NAME;
 
     private final DelegationGuard guard;
     private final CapAgentDefPort agentDefs;

@@ -224,16 +224,36 @@ public class WorkerExecutionConfig {
     }
 
     /**
+     * 委派工具 Schema 装配器（第二十批 · FR-035）。
+     *
+     * <p>⚠️ <b>根路径与子路径共用这一份</b>：两处各写一份必然漂移，
+     * 而漂移的后果是「根能委派、子不能」（或反之）—— 那正是「两套语义」本身。
+     */
+    @Bean
+    public cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
+            delegationToolSchemaAssembler(
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs) {
+        return new cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler(agentDefs);
+    }
+
+    /**
      * 子 Agent 模型配置装配（多级 Agent v1.1 · P2-MA-02）。
+     *
+     * <p>⚠️ <b>必须注入委派工具 Schema 装配器（第二十批）</b>：
+     * 委派工具<b>不进</b> Skill→Tool 能力闭包 → 闭包解析给不出它，
+     * 必须按 Agent <b>自己</b>的编排声明<b>显式装配</b> ——
+     * 否则模型看不见委派工具，运行期<b>物理上不可能</b>发起委派。
      */
     @Bean
     public cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider
             childAgentModelConfigProvider(
             cn.studykid.multiagent.ports.persistence.AgentQueryPort agentQuery,
             cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
-            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs) {
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
+                    delegationToolSchemaAssembler) {
         return new cn.studykid.multiagent.worker.execute.WorkerChildAgentModelConfigProvider(
-                agentQuery, closureResolver, toolDefs);
+                agentQuery, closureResolver, toolDefs, delegationToolSchemaAssembler);
     }
 
     /**
@@ -325,7 +345,7 @@ public class WorkerExecutionConfig {
         return new RunDispatchConsumer(claimPort, Duration.ofSeconds(leaseSeconds),
                 (tenantId, task) -> {
                     RunExecutionLoop.ExecutionOutcome outcome = loop.execute(
-                            tenantId, task, inputs.agentConfig(),
+                            tenantId, task, inputs.agentConfig(tenantId, task.runId()),
                             inputs.snapshotFor(task, tenantId), inputs.runInput(task));
                     return switch (outcome.kind()) {
                         case SUCCEEDED -> RunDispatchConsumer.Outcome.SUCCEEDED;
@@ -351,14 +371,18 @@ public class WorkerExecutionConfig {
     @Bean
     public RunExecutionInputs runExecutionInputs(
             @org.springframework.beans.factory.annotation.Autowired(required = false)
-            cn.studykid.multiagent.ports.persistence.ConfigOverridePort configOverridePort) {
+            cn.studykid.multiagent.ports.persistence.ConfigOverridePort configOverridePort,
+            cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
+                    delegationToolSchemaAssembler,
+            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots) {
         // ⚠️ P4-D15：ConfigOverridePort 可选注入——缺失时本 Bean 与改动前完全等价，
         //    使配置表尚未迁移的环境也能启动（fail-open 于**装配**，
         //    但**收紧校验与审计**仍在写入路径 fail-closed）。
         EffectiveConfigResolver resolver =
                 configOverridePort == null ? null : new EffectiveConfigResolver(configOverridePort);
         return new RunExecutionInputs(resolver, maxCostPerRun, maxLlmCalls, maxSteps,
-                configMaps.toolRiskLevelMap(), configMaps.approvalRequiredByRisk());
+                configMaps.toolRiskLevelMap(), configMaps.approvalRequiredByRisk(),
+                delegationToolSchemaAssembler, snapshots);
     }
 
     /**
@@ -386,24 +410,123 @@ public class WorkerExecutionConfig {
         private final Map<String, ToolRiskLevel> toolRiskLevelMap;
         private final Map<ToolRiskLevel, ApprovalRequirement> approvalRequiredByRisk;
 
+        /**
+         * 委派工具 Schema 装配器（第二十批 · FR-035）。
+         *
+         * <p>⚠️ <b>可为空</b>：未装配时根路径<b>不装配委派工具</b> ——
+         * 无从判断根 Agent 有没有委派能力时，宁可不给。
+         */
+        private final cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
+                delegationToolSchemaAssembler;
+
+        /**
+         * Run 能力快照仓储（根 Agent 身份的权威来源）。
+         *
+         * <p>⚠️ <b>可为空</b>：未装配时根路径<b>不装配委派工具</b> ——
+         * 读不到快照就不知道根 Agent 是谁。
+         */
+        private final cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots;
+
         RunExecutionInputs(EffectiveConfigResolver effectiveResolver,
                            String maxCostPerRun, String maxLlmCalls, String maxSteps,
                            Map<String, ToolRiskLevel> toolRiskLevelMap,
                            Map<ToolRiskLevel, ApprovalRequirement> approvalRequiredByRisk) {
+            this(effectiveResolver, maxCostPerRun, maxLlmCalls, maxSteps,
+                    toolRiskLevelMap, approvalRequiredByRisk, null, null);
+        }
+
+        /**
+         * 最完整构造器（第二十批 · 增加委派工具装配）。
+         *
+         * @param delegationToolSchemaAssembler 委派工具 Schema 装配器（可空）
+         * @param snapshots                    Run 能力快照仓储（可空）
+         */
+        RunExecutionInputs(EffectiveConfigResolver effectiveResolver,
+                           String maxCostPerRun, String maxLlmCalls, String maxSteps,
+                           Map<String, ToolRiskLevel> toolRiskLevelMap,
+                           Map<ToolRiskLevel, ApprovalRequirement> approvalRequiredByRisk,
+                           cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
+                                   delegationToolSchemaAssembler,
+                           cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort
+                                   snapshots) {
             this.effectiveResolver = effectiveResolver;
             this.maxCostPerRun = maxCostPerRun;
             this.maxLlmCalls = maxLlmCalls;
             this.maxSteps = maxSteps;
             this.toolRiskLevelMap = toolRiskLevelMap;
             this.approvalRequiredByRisk = approvalRequiredByRisk;
+            this.delegationToolSchemaAssembler = delegationToolSchemaAssembler;
+            this.snapshots = snapshots;
         }
 
-        /** Agent 模型配置（占位）。 */
+        /**
+         * Agent 模型配置（占位）。
+         *
+         * <p>⚠️ <b>L-4</b>：模型标识、提示词、<b>普通工具表</b>均为占位
+         * （真实实现须读 Agent 配置表）。
+         */
         public RunExecutionLoop.AgentModelConfig agentConfig() {
             return new RunExecutionLoop.AgentModelConfig(
                     "fake-model",
                     "你是初中数学辅导助手。请用初中生能懂的语言讲解，不要编造教材出处。",
                     0.7d, 2048, Duration.ofSeconds(30), java.util.Map.of());
+        }
+
+        /**
+         * Agent 模型配置（<b>按 Run 装配委派工具</b> · 第二十批）。
+         *
+         * <p>⚠️ <b>为什么必须按 Run</b>：根 Agent 的身份来自
+         * <b>Run 能力快照</b>（{@code snapshot.agentId()} / {@code agentVersion()}）——
+         * 同一个租户的不同 Run 可能由不同根 Agent 执行，
+         * 按全局装配会让 A 的 Run 拿到 B 的委派目标。
+         *
+         * <p>⚠️ <b>读不到快照 → 不装配委派工具</b>（fail-closed）：
+         * 不知道根 Agent 是谁，就不知道它有没有委派能力。
+         *
+         * @param tenantId 租户标识
+         * @param runId    Run 标识
+         * @return Agent 模型配置（委派工具按根 Agent 自己的编排声明装配）
+         */
+        public RunExecutionLoop.AgentModelConfig agentConfig(@NonNull String tenantId,
+                                                              @NonNull String runId) {
+            RunExecutionLoop.AgentModelConfig base = agentConfig();
+            java.util.Map<String, Object> schemas = base.toolSchemas();
+            java.util.Map<String, Object> delegation =
+                    delegationToolSchema(tenantId, runId);
+            if (delegation.isEmpty()) {
+                return base;
+            }
+            java.util.Map<String, Object> merged = new java.util.LinkedHashMap<>(schemas);
+            merged.putAll(delegation);
+            return new RunExecutionLoop.AgentModelConfig(
+                    base.modelId(), base.systemPrompt(), base.temperature(),
+                    base.maxTokens(), base.timeout(), merged);
+        }
+
+        /**
+         * 装配根 Agent 的委派工具 Schema。
+         *
+         * <p>⚠️ <b>与子路径共用同一份实现</b>（{@code DelegationToolSchemaAssembler}）：
+         * 两处各写一份必然漂移，而漂移的后果是
+         * 「根能委派、子不能」（或反之）—— 那正是「两套语义」本身。
+         */
+        private java.util.Map<String, Object> delegationToolSchema(
+                @NonNull String tenantId, @NonNull String runId) {
+            if (delegationToolSchemaAssembler == null || snapshots == null) {
+                return java.util.Map.of();
+            }
+            cn.studykid.multiagent.core.cap.CapabilitySnapshot snapshot;
+            try {
+                snapshot = snapshots.find(tenantId, runId).orElse(null);
+            } catch (RuntimeException e) {
+                log.warn("Run 能力快照读取失败，根路径不装配委派工具: run={}", runId, e);
+                return java.util.Map.of();
+            }
+            if (snapshot == null) {
+                return java.util.Map.of();
+            }
+            return delegationToolSchemaAssembler.assemble(tenantId, snapshot.agentId(),
+                    snapshot.agentVersion());
         }
 
         /**
