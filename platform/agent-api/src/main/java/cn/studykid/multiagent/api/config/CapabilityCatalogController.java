@@ -15,10 +15,12 @@ import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.api.governance.GovernanceSupport;
 import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
+import cn.studykid.multiagent.application.cap.ConfigLifecycleService;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef.McpDeclaration;
 import cn.studykid.multiagent.core.cap.CapToolDef;
+import cn.studykid.multiagent.core.cap.ConfigLifecycleState;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
 import cn.studykid.multiagent.ports.persistence.CapSkillDefPort;
@@ -59,6 +61,7 @@ public class CapabilityCatalogController {
     private final CapToolDefPort toolDefs;
     private final CapSkillDefPort skillDefs;
     private final CapMcpServerDefPort serverDefs;
+    private final ConfigLifecycleService lifecycle;
     private final AuthorizationService authorization;
     private final RateLimitPort rateLimiter;
     private final CurrentPrincipal currentPrincipal;
@@ -66,15 +69,43 @@ public class CapabilityCatalogController {
     public CapabilityCatalogController(CapToolDefPort toolDefs,
                                        CapSkillDefPort skillDefs,
                                        CapMcpServerDefPort serverDefs,
+                                       ConfigLifecycleService lifecycle,
                                        AuthorizationService authorization,
                                        RateLimitPort rateLimiter,
                                        CurrentPrincipal currentPrincipal) {
         this.toolDefs = toolDefs;
         this.skillDefs = skillDefs;
         this.serverDefs = serverDefs;
+        this.lifecycle = lifecycle;
         this.authorization = authorization;
         this.rateLimiter = rateLimiter;
         this.currentPrincipal = currentPrincipal;
+    }
+
+    /**
+     * 读取平台对象的生命周期状态。
+     *
+     * <p>⚠️ <b>为什么目录视图要带它</b>：停用（{@code PUBLISHED → DEPRECATED}）
+     * 是<strong>CAS 迁移</strong> —— 它要求「期望的原状态」与实际一致。
+     * 前端若硬编码 {@code expectedFrom=PUBLISHED}，那么对一个**已停用**的对象
+     * 再点停用，会得到「原状态不符」这种**并发竞争**式的报错，
+     * 读起来像是「有人跟我抢」—— 实际是「它早就停了」。
+     * 带上真实状态后，前端能区分「真被并发改动」与「本来就是这个状态」。
+     *
+     * <p>⚠️ <b>取不到时返回 {@code null}</b>（不抛异常）：
+     * 生命周期状态读不出来**不该**让整个目录页挂掉；
+     * 前端据此<strong>禁用</strong>停用按钮即可（fail-closed 在 UI 层）。
+     */
+    private @Nullable String lifecycleStateOf(String type, String objectId, int version) {
+        try {
+            ConfigLifecycleState state = lifecycle.stateOf(type, null, objectId, version)
+                    .orElse(null);
+            return state == null ? null : state.name();
+        } catch (RuntimeException e) {
+            // ⚠️ 生命周期状态读不出来 → 返回 null（前端禁用停用按钮），
+            //    **不**把它升级成整页失败 —— 目录仍可读。
+            return null;
+        }
     }
 
     // ── Tool ────────────────────────────────────────────────────────
@@ -83,7 +114,9 @@ public class CapabilityCatalogController {
     @GetMapping("/tools")
     public ResponseEntity<List<ToolResponse>> listTools() {
         authorize();
-        return ResponseEntity.ok(toolDefs.listAll().stream().map(ToolResponse::of).toList());
+        return ResponseEntity.ok(toolDefs.listAll().stream()
+                .map(def -> ToolResponse.of(def, lifecycleStateOf("tool", def.id(), def.version())))
+                .toList());
     }
 
     /** 读取单个 Tool 定义（最高版本）。 */
@@ -94,7 +127,8 @@ public class CapabilityCatalogController {
                 .or(() -> toolDefs.find(toolId, Integer.MAX_VALUE))
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在"));
-        return ResponseEntity.ok(ToolResponse.of(def));
+        return ResponseEntity.ok(ToolResponse.of(def,
+                lifecycleStateOf("tool", def.id(), def.version())));
     }
 
     // ── Skill ───────────────────────────────────────────────────────
@@ -103,7 +137,10 @@ public class CapabilityCatalogController {
     @GetMapping("/skills")
     public ResponseEntity<List<SkillResponse>> listSkills() {
         authorize();
-        return ResponseEntity.ok(skillDefs.listAll().stream().map(SkillResponse::of).toList());
+        return ResponseEntity.ok(skillDefs.listAll().stream()
+                .map(def -> SkillResponse.of(def,
+                        lifecycleStateOf("skill", def.id(), def.version())))
+                .toList());
     }
 
     /** 读取单个 Skill 定义（最高版本）。 */
@@ -114,7 +151,8 @@ public class CapabilityCatalogController {
                 .or(() -> skillDefs.find(skillId, Integer.MAX_VALUE))
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在"));
-        return ResponseEntity.ok(SkillResponse.of(def));
+        return ResponseEntity.ok(SkillResponse.of(def,
+                lifecycleStateOf("skill", def.id(), def.version())));
     }
 
     // ── MCP Server ─────────────────────────────────────────────────
@@ -123,7 +161,10 @@ public class CapabilityCatalogController {
     @GetMapping("/mcps")
     public ResponseEntity<List<McpResponse>> listMcps() {
         authorize();
-        return ResponseEntity.ok(serverDefs.listAll().stream().map(McpResponse::of).toList());
+        return ResponseEntity.ok(serverDefs.listAll().stream()
+                .map(def -> McpResponse.of(def,
+                        lifecycleStateOf("mcp_server", def.id(), def.version())))
+                .toList());
     }
 
     /** 读取单个 MCP Server 定义（最高版本）。 */
@@ -134,7 +175,8 @@ public class CapabilityCatalogController {
                 .or(() -> serverDefs.find(serverId, Integer.MAX_VALUE))
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在"));
-        return ResponseEntity.ok(McpResponse.of(def));
+        return ResponseEntity.ok(McpResponse.of(def,
+                lifecycleStateOf("mcp_server", def.id(), def.version())));
     }
 
     // ── 关系（第三十四批）───────────────────────────────────────────
@@ -259,15 +301,16 @@ public class CapabilityCatalogController {
             int version,
             int schemaVersion,
             boolean published,
-            @Nullable Instant publishedAt
+            @Nullable Instant publishedAt,
+            @Nullable String lifecycleState
     ) {
-        static ToolResponse of(CapToolDef def) {
+        static ToolResponse of(CapToolDef def, @Nullable String lifecycleState) {
             return new ToolResponse(
                     def.id(), def.name(), def.kind().name(), def.riskLevel().name(),
                     def.mcpServerId(), def.mcpToolName(),
                     def.inputSchema(), def.paramPolicies(),
                     def.version(), def.schemaVersion(),
-                    def.isPublished(), def.publishedAt());
+                    def.isPublished(), def.publishedAt(), lifecycleState);
         }
     }
 
@@ -284,16 +327,17 @@ public class CapabilityCatalogController {
             int version,
             int schemaVersion,
             boolean published,
-            @Nullable Instant publishedAt
+            @Nullable Instant publishedAt,
+            @Nullable String lifecycleState
     ) {
-        static SkillResponse of(CapSkillDef def) {
+        static SkillResponse of(CapSkillDef def, @Nullable String lifecycleState) {
             return new SkillResponse(
                     def.id(), def.name(), def.description(),
                     def.declaredTools(),
                     def.declaredMcp().stream().map(McpDeclarationResponse::of).toList(),
                     def.riskCeiling().name(), def.paramPolicies(), def.requiredCaps(),
                     def.version(), def.schemaVersion(),
-                    def.isPublished(), def.publishedAt());
+                    def.isPublished(), def.publishedAt(), lifecycleState);
         }
     }
 
@@ -389,15 +433,16 @@ public class CapabilityCatalogController {
             int schemaVersion,
             @Nullable Instant createdAt,
             @Nullable Instant publishedAt,
-            boolean hasCredentialRef
+            boolean hasCredentialRef,
+            @Nullable String lifecycleState
     ) {
-        static McpResponse of(CapMcpServerDef def) {
+        static McpResponse of(CapMcpServerDef def, @Nullable String lifecycleState) {
             return new McpResponse(
                     def.id(), def.version(), def.transport().name(), def.endpoint(),
                     def.authKind().name(), def.trustTier().name(), def.exposedToolAllowlist(),
                     def.connectionRisk().name(), def.dynamicDiscovery(), def.configFingerprint(),
                     def.schemaVersion(), def.createdAt(), def.publishedAt(),
-                    def.credentialRef() != null);
+                    def.credentialRef() != null, lifecycleState);
         }
     }
 }

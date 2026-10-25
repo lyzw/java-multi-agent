@@ -46,6 +46,8 @@ class CapabilityCatalogControllerTest {
     private final CapToolDefPort toolDefs = mock(CapToolDefPort.class);
     private final CapSkillDefPort skillDefs = mock(CapSkillDefPort.class);
     private final CapMcpServerDefPort serverDefs = mock(CapMcpServerDefPort.class);
+    private final cn.studykid.multiagent.application.cap.ConfigLifecycleService lifecycle =
+            mock(cn.studykid.multiagent.application.cap.ConfigLifecycleService.class);
     private final AuthorizationService authorization = mock(AuthorizationService.class);
     private final RateLimitPort rateLimiter = mock(RateLimitPort.class);
     private final CurrentPrincipal currentPrincipal = mock(CurrentPrincipal.class);
@@ -55,7 +57,7 @@ class CapabilityCatalogControllerTest {
         TenantContext ctx = new TenantContext("tenant-1", "principal-1", Set.of("TENANT_ADMIN"), 1L);
         when(currentPrincipal.context()).thenReturn(ctx);
         return new CapabilityCatalogController(toolDefs, skillDefs, serverDefs,
-                authorization, rateLimiter, currentPrincipal);
+                lifecycle, authorization, rateLimiter, currentPrincipal);
     }
 
     private CapMcpServerDef sampleServer() {
@@ -179,6 +181,39 @@ class CapabilityCatalogControllerTest {
         // ⚠️ sampleServer 的 exposedToolAllowlist 是 null（= 仅连接级授权）
         assertThat(resp.getBody().exposedToolAllowlist())
                 .as("⚠️ null（未配置）与 []（显式空清单）语义不同，不得归一化")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("✅ 目录视图带生命周期状态（停用是 CAS 迁移，前端需要真实原状态）")
+    void catalogCarriesLifecycleState() {
+        CapabilityCatalogController c = controller();
+        when(serverDefs.listAll()).thenReturn(List.of(sampleServer()));
+        when(lifecycle.stateOf("mcp_server", null, SERVER_ID, 1))
+                .thenReturn(Optional.of(
+                        cn.studykid.multiagent.core.cap.ConfigLifecycleState.PUBLISHED));
+
+        var resp = c.listMcps();
+        assertThat(resp.getBody().get(0).lifecycleState())
+                .as("⛔ 目录视图没有生命周期状态：前端停用时只能硬编码 "
+                        + "expectedFrom=PUBLISHED，对象早就是 DEPRECATED 时"
+                        + "会得到「原状态不符」这种像并发竞争的报错")
+                .isEqualTo("PUBLISHED");
+    }
+
+    @Test
+    @DisplayName("✅ 生命周期状态读不出来 → 该字段为 null，目录仍可读（不整页失败）")
+    void lifecycleStateFailureDegradesToNull() {
+        CapabilityCatalogController c = controller();
+        when(serverDefs.listAll()).thenReturn(List.of(sampleServer()));
+        when(lifecycle.stateOf("mcp_server", null, SERVER_ID, 1))
+                .thenThrow(new IllegalStateException("生命周期状态读不到"));
+
+        var resp = c.listMcps();
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().get(0).lifecycleState())
+                .as("⚠️ 生命周期状态读不出来**不得**让整个目录页挂掉；"
+                        + "前端据此禁用停用按钮即可（fail-closed 在 UI 层）")
                 .isNull();
     }
 }
