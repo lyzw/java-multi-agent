@@ -1,7 +1,8 @@
 # Agent 管理控制台（admin-console）
 
 统一管理整个工程中 **Agent / Tool / Skill / MCP / Tenant** 配置与运行状态的**独立前端工程**。
-后端复用既有共享项目 `platform/agent-api`（不新建后端工程），仅在其内按需扩展只读聚合/查询端点。
+后端复用既有共享项目 `platform/agent-api`（不新建后端工程），仅在其内按需扩展只读聚合/查询端点，
+以及**平台级能力对象的写端点**（第三十四批 C34-2 起：`/api/cap/platform/*`）。
 
 > 设计依据：`docs/管理后台系统设计方案.html`、《管理后台开发计划》（`docs/管理后台开发计划/`）。
 
@@ -124,7 +125,10 @@ npm test
 - 角色回补：`GET /api/auth/roles`（登录响应缺 `roles` 时前端自动回补，幂等）。
 - 令牌：存 `sessionStorage['admin.session']`（独立键，与 `frontend/` 隔离）；**无 refresh token**，到期硬跳登录。
 - 角色用途：**仅前端导航显隐**。真实权限由后端在每次请求时重新授权（红线 9），前端不做安全闸门。
-- 作用域：平台级（租户管理、配置中心）需 `SUPER_ADMIN/PLATFORM_ADMIN`；租户级（Agent/Tool/Skill/MCP、发布、监控、审计）需含 `TENANT_ADMIN`。
+  ⚠️ 第三十四批起前端**多了一条「平台级写入口」**（Tool / Skill / MCP 的登记 / 改版 / 停用），
+  但**前端仍然不做安全闸门** —— `PLATFORM_ADMIN` 闸门与平台运维通道由后端强制
+  （403 默认拒绝 / 运维通道未接入即 503，绝不回落应用角色）。前端只负责**呈现**闸门结论。
+- 作用域：平台级（租户管理、配置中心、**平台级能力对象的写入口**）需 `SUPER_ADMIN/PLATFORM_ADMIN`；租户级（Agent/Tool/Skill/MCP、发布、监控、审计）需含 `TENANT_ADMIN`。
 
 ---
 

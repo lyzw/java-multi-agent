@@ -384,12 +384,69 @@
         <strong>RLS 策略一个字都不改</strong>（平台行对应用角色连接天然不可见）</td></tr>
   </table>
 
+  <h3>3.5.2 管理台前端的落地状态（第三十四批 C34-3）</h3>
+  <div class="callout c-info">
+    <strong>📌 本节只登记<strong>前端</strong>这一半</strong>：
+    后端能力见 §3.5.1（第三十四批 C34-2）。
+    前端<strong>不改变运行期的任何判定口径</strong> ——
+    授权 / 闭包 / 委派准入均不变。
+  </div>
+
+  <table>
+    <tr><th>批次项</th><th>本批状态</th><th>说明</th></tr>
+    <tr><td><strong>平台级对象详情页（Tool / Skill / MCP）</strong></td>
+      <td><span class="badge b-done">已落地</span></td>
+      <td>三页共用 <code>PlatformDetailShell</code>（概览 / 关系 / 操作）与
+        <code>PlatformPublishPanel</code>（申请 → 审批 → 执行）。
+        <strong>登记与修改共用同一张草稿表单</strong>（<code>new</code> 是保留路由段）。</td></tr>
+    <tr><td><strong>「删除」= 停用</strong></td>
+      <td><span class="badge b-done">已落地</span></td>
+      <td>物理删除<strong>不做</strong>（已发布行不可变）；停用走
+        <code>lifecycle-requests</code>，CAS 原状态<strong>如实读取</strong>
+        <code>lifecycleState</code>（不硬编码 <code>PUBLISHED</code>）。</td></tr>
+    <tr><td><strong>关系维护视图</strong></td>
+      <td><span class="badge b-done">已落地</span></td>
+      <td>Skill 的声明 Tool / MCP、Tool 的所属 MCP、MCP 的<strong>允许集与实际登记分开呈现</strong>；
+        「声明了但对象不存在」显式列为 missing（<code>error</code> 级）。</td></tr>
+    <tr><td><strong>委派拓扑视图</strong></td>
+      <td><span class="badge b-done">已落地</span></td>
+      <td><code>GET /api/cap/delegations</code> 三端点的只读视图。
+        ⚠️ 入向边非空只是<strong>停用风险的提示</strong>，<strong>不是拦截</strong> ——
+        当前没有任何自动守卫会因此阻止停用。</td></tr>
+    <tr><td><strong>Agent 详情的关系字段回填修复</strong></td>
+      <td><span class="badge b-done">已落地</span></td>
+      <td>此前只回填 name/description ⇒ 关系字段落空 ⇒
+        <strong>保存一次就把合法编排覆盖成空</strong>。现在独立加载权威定义
+        <code>cap_agent_def</code> 并<strong>完整回填</strong>；
+        <code>overrides</code> 取自权威定义的该字段（不是旧体系快照全文）；
+        取不到时<strong>绝不静默清空</strong>（显式告警 + 显式确认）。</td></tr>
+    <tr><td><strong>闭包补齐的 fail-closed</strong></td>
+      <td><span class="badge b-done">已落地</span></td>
+      <td>带凭据引用的 MCP Server <strong>一律拦截并点名</strong> ——
+        目录接口从不回显凭据定位符，重发会<strong>丢掉凭据引用</strong>（全平台认证失效）；
+        并补齐<strong>传递闭包</strong>（MCP 型 Tool 绑定的 Server 也要进发布集合）。</td></tr>
+    <tr><td><strong>平台级申请队列列表页</strong></td>
+      <td><span class="badge b-plan">未做</span></td>
+      <td>接口已备好（<code>getPlatformPublishRequests</code>），未做列表 UI。</td></tr>
+  </table>
+
+  <div class="callout c-warn">
+    <strong>⚠️ 本批修掉的一个<strong>空断言</strong>：</strong>
+    「页面不提供任何物理删除入口」原先写的是
+    <code>queryByRole('button', { name: /^删除/ })</code> —— antd 会给
+    <strong>两字中文</strong>按钮名<strong>插空格</strong>（「删除」渲染成「删 除」），
+    正则<strong>永远匹配不上</strong>：即使真有删除按钮，那条用例也照样绿。
+    已改为「扫全部按钮、取归一化文本」，并附证「停用入口在」。
+    <strong>空断言比没有断言更危险</strong> —— 它让人以为这条性质被守着。
+  </div>
+
   <div class="callout c-warn">
     <strong>⚠️ 一条被本批推翻的旧口径：</strong>「运维通道由带外运维工具驱动，<strong>不接在租户可达的 HTTP 路径上</strong>」——
     对<strong>平台级对象</strong>这一支<strong>已不再成立</strong>（本批接上了）。
     但它背后的理由（平台身份表是租户内的，没有跨租户主体）<strong>依然成立</strong>，
     所以闸门被搬到 HTTP 路径的<strong>最前面</strong>，而不是被取消。
   </div>
+<!-- C34-3 前端 -->
 </section>
 
 <section id="s4">
