@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,6 +66,16 @@ public class CachingClosureResolver implements ClosureResolver {
     private final CapToolDefPort toolDefs;
     private final CapAgentDefPort agentDefs;
     private final McpManifestPort manifest;
+
+    /**
+     * 被引用行内容指纹解析器（第二十四批 · A4）。
+     *
+     * <p>⚠️ <b>可空</b>：未装配时，<b>凡是有被引用行的缓存条目一律作废</b> ——
+     * 绝不「没有解析器就认为内容没变」。那正是缓存层的 fail-open：
+     * 被引用行被就地改写后，缓存继续供出旧闭包 → 指纹不变 → 防线形同虚设。
+     */
+    private final ReferencedContentResolver referencedContent;
+
     private final int maxEntries;
 
     /** 命中计数（可观测）。 */
@@ -82,7 +93,8 @@ public class CachingClosureResolver implements ClosureResolver {
                                   @NonNull CapToolDefPort toolDefs,
                                   @NonNull CapAgentDefPort agentDefs,
                                   @NonNull McpManifestPort manifest) {
-        this(delegate, publishedVersions, toolDefs, agentDefs, manifest, DEFAULT_MAX_ENTRIES);
+        this(delegate, publishedVersions, toolDefs, agentDefs, manifest,
+                DEFAULT_MAX_ENTRIES, null);
     }
 
     public CachingClosureResolver(@NonNull ClosureResolver delegate,
@@ -91,6 +103,16 @@ public class CachingClosureResolver implements ClosureResolver {
                                   @NonNull CapAgentDefPort agentDefs,
                                   @NonNull McpManifestPort manifest,
                                   int maxEntries) {
+        this(delegate, publishedVersions, toolDefs, agentDefs, manifest, maxEntries, null);
+    }
+
+    public CachingClosureResolver(@NonNull ClosureResolver delegate,
+                                  @NonNull PublishedVersionPort publishedVersions,
+                                  @NonNull CapToolDefPort toolDefs,
+                                  @NonNull CapAgentDefPort agentDefs,
+                                  @NonNull McpManifestPort manifest,
+                                  int maxEntries,
+                                  @Nullable ReferencedContentResolver referencedContent) {
         if (maxEntries <= 0) {
             throw new IllegalArgumentException("maxEntries 必须为正数，收到: " + maxEntries);
         }
@@ -100,6 +122,7 @@ public class CachingClosureResolver implements ClosureResolver {
         this.agentDefs = agentDefs;
         this.manifest = manifest;
         this.maxEntries = maxEntries;
+        this.referencedContent = referencedContent;
         this.cache = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
             /**
              * ⚠️ **必须写全限定名 {@code CachingClosureResolver.Entry}**：
@@ -236,6 +259,57 @@ public class CachingClosureResolver implements ClosureResolver {
         // ── MCP 固定清单（07 §4「含 MCP 固定清单变更」）─────────────
         if (!isManifestFresh(entry)) {
             return false;
+        }
+
+        // ── 被引用行（输出契约 / 路由策略）的内容指纹（第二十四批 · A4）──
+        if (!isReferencedContentFresh(tenantId, entry)) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 被引用行的新鲜度判定。
+     *
+     * <p>⚠️ <b>为什么缓存必须查这一项</b>：
+     * 闭包绑定承载了被引用行的<b>内容指纹</b>（第二十四批 · A4），
+     * 而缓存条目是<b>闭包的旧副本</b> —— 被引用行被就地改写后，
+     * 缓存若继续供出旧闭包，指纹就不会变，
+     * 「第二道防线」会被缓存<b>自己架空</b>。
+     *
+     * <p>⚠️ <b>三条 fail-closed 口径</b>：
+     * <ul>
+     *   <li>解析器未装配 → 有一被引用行的条目<b>一律作废</b>；</li>
+     *   <li>读不到被引用行（读失败 / 行不存在 / 未发布）→ <b>一律作废</b>
+     *       （读不到 ≠ 没变）；</li>
+     *   <li>指纹与缓存里固化的不一致 → <b>作废</b>（内容确实变了）。</li>
+     * </ul>
+     */
+    private boolean isReferencedContentFresh(@NonNull String tenantId,
+                                             @NonNull Entry entry) {
+        var binding = entry.closure().orchestration();
+        if (!binding.hasReferencedRows()) {
+            // ⚠️ 没有被引用行 → 本就与被引用内容无关（零额外读）
+            return true;
+        }
+        if (referencedContent == null) {
+            log.warn("被引用行内容指纹解析能力未装配，含被引用行的闭包缓存一律作废: "
+                    + "tenant={}, agent={}", tenantId, entry.agentId());
+            return false;
+        }
+        String policyRef = binding.routingPolicyRef();
+        if (policyRef != null && !policyRef.isBlank()) {
+            String live = referencedContent.routingPolicyFingerprint(tenantId, policyRef);
+            if (live == null || !live.equals(binding.routingPolicyFingerprint())) {
+                return false;
+            }
+        }
+        String contractRef = binding.resultContractRef();
+        if (contractRef != null && !contractRef.isBlank()) {
+            String live = referencedContent.resultContractFingerprint(tenantId, contractRef);
+            if (live == null || !live.equals(binding.resultContractFingerprint())) {
+                return false;
+            }
         }
         return true;
     }

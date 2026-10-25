@@ -68,6 +68,24 @@ public final class ClosureFingerprint {
      */
     public static final String ORCHESTRATION_BINDING_VERSION = "orchestration_binding_v1";
 
+    /**
+     * 被引用行内容绑定算法版本（第二十四批 · A4）。
+     *
+     * <p>⚠️ <b>为什么是「独立的一段」而不是直接改 {@link #ORCHESTRATION_BINDING_VERSION}</b>：
+     * 本段只在该 Agent <b>确实声明了被引用行</b>时才写入闭包指纹。
+     * 于是：
+     * <ul>
+     *   <li><b>没有</b>被引用行的闭包 → 指纹<b>完全不变</b> →
+     *       在途 Run 不会被无故判失效（那不是 fail-closed，只是无谓的返工）；</li>
+     *   <li><b>有</b>被引用行的闭包 → 指纹<b>必然变化</b> →
+     *       此前那份「内容没变」的证明是<b>不完整</b>的（它没覆盖被引用行的内容），
+     *       故在途 Run 必须失效（MA-T15 / MA-T18 的核心命题）。</li>
+     * </ul>
+     * ⚠️ 若把它并进编排绑定版本号，则<b>所有</b>闭包的指纹都会变 ——
+     * 包括那些根本不引用任何契约/策略的闭包（它们的旧指纹本就是完整证明）。
+     */
+    public static final String REFERENCED_CONTENT_BINDING_VERSION = "referenced_content_binding_v1";
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private ClosureFingerprint() {
@@ -181,6 +199,24 @@ public final class ClosureFingerprint {
         orchestration.put("timeoutMs", canonical.orchestration().timeoutMs());
         orchestration.put("failurePolicy", canonical.orchestration().failurePolicy().name());
         root.put("orchestrationBindingVersion", ORCHESTRATION_BINDING_VERSION);
+
+        // ⚠️ **被引用行的内容指纹**（第二十四批 · A4）：
+        //    编排绑定固化的是「依赖哪个固定版本」，而「那一行自己的内容」
+        //    若被就地改写（运维直接 UPDATE），引用与版本号都没变 ——
+        //    只承载引用就挡不住这一支。承载**内容指纹**才是第二道防线。
+        //    ⚠️ 本段**只在确实声明了被引用行时**才写入：
+        //    没有被引用行的闭包，其旧指纹本就是完整证明，
+        //    让它也变一变只是无谓地让在途 Run 失效（不是 fail-closed，只是返工）。
+        if (canonical.orchestration().hasReferencedRows()) {
+            ObjectNode referenced = orchestration.putObject("referencedContent");
+            referenced.put("version", REFERENCED_CONTENT_BINDING_VERSION);
+            // ⚠️ 段内必须写成显式 null（putNullable），不能省略字段 ——
+            //    省略会让「引用了但指纹没解析出来」与「压根没引用」算出同一个哈希。
+            putNullable(referenced, "routingPolicyFingerprint",
+                    canonical.orchestration().routingPolicyFingerprint());
+            putNullable(referenced, "resultContractFingerprint",
+                    canonical.orchestration().resultContractFingerprint());
+        }
         return MAPPER.writeValueAsString(root);
     }
 

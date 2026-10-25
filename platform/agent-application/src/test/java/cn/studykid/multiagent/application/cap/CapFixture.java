@@ -16,6 +16,7 @@ import cn.studykid.multiagent.core.cap.AuthzVersion;
 import cn.studykid.multiagent.core.cap.AuthzUnavailableException;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapResultContractDef;
+import cn.studykid.multiagent.core.cap.CapRoutingPolicyDef;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapObjectType;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
@@ -25,12 +26,14 @@ import cn.studykid.multiagent.core.cap.ConfigObjectVersion;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
 import cn.studykid.multiagent.core.cap.CapabilityRiskLevel;
 import cn.studykid.multiagent.core.cap.McpTrustTier;
+import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
 import cn.studykid.multiagent.core.monitoring.AuthzWatermark;
 import cn.studykid.multiagent.ports.mcp.McpManifestPort;
 import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
 import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
+import cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort;
 import cn.studykid.multiagent.ports.persistence.CapSkillDefPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 import cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort;
@@ -55,6 +58,7 @@ final class CapFixture {
     final Map<String, CapAgentDef> agents = new LinkedHashMap<>();
     /** 输出契约定义行（多级 Agent v1.1 · FR-027）。 */
     final Map<String, CapResultContractDef> resultContracts = new LinkedHashMap<>();
+    final Map<String, CapRoutingPolicyDef> routingPolicies = new LinkedHashMap<>();
     final Map<String, Set<String>> manifests = new LinkedHashMap<>();
     /** 标记为「清单不可用」的 server（运行故障态，与「清单为空」语义不同）。 */
     final Set<String> unavailableManifests = new LinkedHashSet<>();
@@ -286,13 +290,99 @@ final class CapFixture {
      */
     @NonNull CapFixture withContract(@NonNull String tenantId, @NonNull String contractId,
                                      int version, @NonNull String schemaJson, boolean published) {
+        return withContract(tenantId, contractId, version, schemaJson, published,
+                "fp-contract-" + contractId + "-" + version);
+    }
+
+    /**
+     * 登记一个输出契约定义行（<b>显式指定内容指纹</b>）。
+     *
+     * <p>⚠️ <b>为什么需要显式指定</b>：第二十四批要验证的是
+     * 「<b>同一版本行被就地改写</b> → 闭包指纹必变」——
+     * 而「被改写」在数据上就是<b>内容指纹变了</b>（版本号与引用都没变）。
+     * 若指纹由夹具按 id@version 派生，就<b>永远改不出来</b>，
+     * 那条用例会「测了一个不存在的正确性」。
+     */
+    @NonNull CapFixture withContract(@NonNull String tenantId, @NonNull String contractId,
+                                     int version, @NonNull String schemaJson, boolean published,
+                                     @NonNull String fingerprint) {
         resultContracts.put(tenantId + "/" + contractId + "@" + version,
                 new CapResultContractDef(
                 tenantId, contractId, version, schemaJson,
-                "fp-contract-" + contractId + "-" + version, 1,
+                fingerprint, 1,
                 Instant.EPOCH,
                 published ? Instant.EPOCH : null));
         return this;
+    }
+
+    /**
+     * 登记一个路由策略定义行。
+     *
+     * @param tenantId  租户标识
+     * @param policyId  策略标识
+     * @param version   策略版本号
+     * @param strategy  路由策略
+     * @param targets   有序目标列表
+     * @param published 是否已发布（未发布不可被 Agent 引用）
+     * @return 本夹具
+     */
+    @NonNull CapFixture withRoutingPolicy(@NonNull String tenantId, @NonNull String policyId,
+                                          int version, @NonNull RoutingStrategy strategy,
+                                          @NonNull List<String> targets, boolean published) {
+        routingPolicies.put(tenantId + "/" + policyId + "@" + version,
+                new CapRoutingPolicyDef(
+                tenantId, policyId, version, strategy, targets,
+                "fp-policy-" + policyId + "-" + version, 1,
+                Instant.EPOCH,
+                published ? Instant.EPOCH : null));
+        return this;
+    }
+
+    /**
+     * 被引用行（输出契约 / 路由策略）的内容指纹解析器（第二十四批 · A4）。
+     *
+     * <p>⚠️ 闭包构建与缓存新鲜度判定<b>共用这一份</b>：
+     * 两处各写一遍，就有了「两处可能对同一行给出不同解读」的裂缝。
+     */
+    @NonNull ReferencedContentResolver referencedContent() {
+        return new ReferencedContentResolver(routingPolicies(), resultContracts());
+    }
+
+    @NonNull CapRoutingPolicyPort routingPolicies() {
+        return new CapRoutingPolicyPort() {
+            @Override
+            public boolean insert(@NonNull CapRoutingPolicyDef def) {
+                String key = def.tenantId() + "/" + def.policyId() + "@" + def.version();
+                return routingPolicies.putIfAbsent(key, def) == null;
+            }
+
+            @Override
+            public @NonNull Optional<CapRoutingPolicyDef> find(@NonNull String tenantId,
+                                                                @NonNull String policyId,
+                                                                int version) {
+                return Optional.ofNullable(routingPolicies.get(
+                        tenantId + "/" + policyId + "@" + version));
+            }
+
+            @Override
+            public @NonNull Optional<CapRoutingPolicyDef> findLatestPublished(
+                    @NonNull String tenantId, @NonNull String policyId) {
+                return routingPolicies.values().stream()
+                        .filter(c -> tenantId.equals(c.tenantId()))
+                        .filter(c -> policyId.equals(c.policyId()))
+                        .filter(CapRoutingPolicyDef::isPublished)
+                        .max((a, b) -> Integer.compare(a.version(), b.version()));
+            }
+
+            @Override
+            public @NonNull Optional<CapRoutingPolicyDef> findLatest(
+                    @NonNull String tenantId, @NonNull String policyId) {
+                return routingPolicies.values().stream()
+                        .filter(c -> tenantId.equals(c.tenantId()))
+                        .filter(c -> policyId.equals(c.policyId()))
+                        .max((a, b) -> Integer.compare(a.version(), b.version()));
+            }
+        };
     }
 
     // ── 端口工厂 ──────────────────────────────────────────────────

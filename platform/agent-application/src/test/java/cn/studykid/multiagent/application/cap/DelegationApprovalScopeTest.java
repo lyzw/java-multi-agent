@@ -98,6 +98,8 @@ class DelegationApprovalScopeTest {
     /** 子 Agent 的闭包指纹（被委派方；审批就绑在它上面）。 */
     private String childFingerprint(String childOrchestration) {
         CapFixture fixture = new CapFixture()
+                .withContract(TENANT, "contract", 1, "{}", true)
+                .withContract(TENANT, "contract", 2, "{}", true)
                 .withAgent(TENANT, "child-a", 1, List.of(), "{}", childOrchestration);
         EffectiveClosure closure = resolver(fixture).resolve(TENANT, "child-a", 1);
         return ClosureFingerprint.of(closure);
@@ -106,7 +108,7 @@ class DelegationApprovalScopeTest {
     private static PermissionResolver resolver(CapFixture fixture) {
         return new PermissionResolver(fixture.agentDefs(), fixture.skillDefs(),
                 fixture.toolDefs(), fixture.serverDefs(), fixture.publishedVersions(),
-                fixture.manifest());
+                fixture.manifest(), fixture.referencedContent());
     }
 
     // ── 用例 ──────────────────────────────────────────────────────

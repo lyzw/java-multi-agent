@@ -178,6 +178,7 @@ class PermissionResolverMultiLevelTest {
     @DisplayName("⛔ Agent 自身编排声明被改写 → 其闭包指纹必变（否则「指纹说没变，行为却变了」）")
     void ownOrchestrationChangeChangesFingerprint() {
         CapFixture before = new CapFixture()
+                .withContract(TENANT, "contract", 1, "{}", true)
                 .withAgent(TENANT, "router-agent", 1, List.of(), "{}", """
                         {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}],
                          "resultContractRef":"contract@1"}
@@ -185,6 +186,7 @@ class PermissionResolverMultiLevelTest {
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", "{}");
 
         CapFixture after = new CapFixture()
+                .withContract(TENANT, "contract", 2, "{}", true)
                 .withAgent(TENANT, "router-agent", 1, List.of(), "{}", """
                         {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-agent","version":1}],
                          "resultContractRef":"contract@2"}
@@ -205,10 +207,12 @@ class PermissionResolverMultiLevelTest {
     @DisplayName("⛔ 子 Agent 编排声明被改写 → 子闭包自身指纹必变（审批就绑在这个指纹上）")
     void childOrchestrationChangeChangesChildClosureFingerprint() {
         CapFixture before = new CapFixture()
+                .withContract(TENANT, "contract", 1, "{}", true)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", """
                         {"mode":"SEQUENTIAL","resultContractRef":"contract@1"}
                         """);
         CapFixture after = new CapFixture()
+                .withContract(TENANT, "contract", 2, "{}", true)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", """
                         {"mode":"SEQUENTIAL","resultContractRef":"contract@2"}
                         """);
@@ -227,11 +231,13 @@ class PermissionResolverMultiLevelTest {
     @DisplayName("⛔ 子 Agent 编排声明被改写 → 父闭包指纹随之变化（MA-T15 传导）")
     void childOrchestrationChangePropagatesToParentFingerprint() {
         CapFixture before = new CapFixture()
+                .withContract(TENANT, "contract", 1, "{}", true)
                 .withAgent(TENANT, "parent-agent", 1, List.of(), "{}", SEQUENTIAL_TO_CHILD)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", """
                         {"mode":"SEQUENTIAL","resultContractRef":"contract@1"}
                         """);
         CapFixture after = new CapFixture()
+                .withContract(TENANT, "contract", 2, "{}", true)
                 .withAgent(TENANT, "parent-agent", 1, List.of(), "{}", SEQUENTIAL_TO_CHILD)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", """
                         {"mode":"SEQUENTIAL","resultContractRef":"contract@2"}
@@ -265,6 +271,6 @@ class PermissionResolverMultiLevelTest {
     private static PermissionResolver resolver(CapFixture fixture) {
         return new PermissionResolver(fixture.agentDefs(), fixture.skillDefs(),
                 fixture.toolDefs(), fixture.serverDefs(), fixture.publishedVersions(),
-                fixture.manifest());
+                fixture.manifest(), fixture.referencedContent());
     }
 }

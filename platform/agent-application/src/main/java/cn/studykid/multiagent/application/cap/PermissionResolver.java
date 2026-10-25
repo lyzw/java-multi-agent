@@ -69,18 +69,38 @@ public class PermissionResolver implements ClosureResolver {
     private final PublishedVersionPort publishedVersions;
     private final McpManifestPort manifest;
 
+    /**
+     * 被引用行内容指纹解析器（第二十四批 · A4）。
+     *
+     * <p>⚠️ <b>可空</b>：未装配时，声明了被引用行的 Agent 一律 <b>fail-closed</b>
+     * （拒绝构建闭包）—— 绝不「没有解析器就当没有指纹」：
+     * 那等于让「引用行的内容改了」这件事<b>静默失效</b>。
+     */
+    private final ReferencedContentResolver referencedContent;
+
     public PermissionResolver(@NonNull CapAgentDefPort agentDefs,
                               @NonNull CapSkillDefPort skillDefs,
                               @NonNull CapToolDefPort toolDefs,
                               @NonNull CapMcpServerDefPort serverDefs,
                               @NonNull PublishedVersionPort publishedVersions,
                               @NonNull McpManifestPort manifest) {
+        this(agentDefs, skillDefs, toolDefs, serverDefs, publishedVersions, manifest, null);
+    }
+
+    public PermissionResolver(@NonNull CapAgentDefPort agentDefs,
+                              @NonNull CapSkillDefPort skillDefs,
+                              @NonNull CapToolDefPort toolDefs,
+                              @NonNull CapMcpServerDefPort serverDefs,
+                              @NonNull PublishedVersionPort publishedVersions,
+                              @NonNull McpManifestPort manifest,
+                              @Nullable ReferencedContentResolver referencedContent) {
         this.agentDefs = agentDefs;
         this.skillDefs = skillDefs;
         this.toolDefs = toolDefs;
         this.serverDefs = serverDefs;
         this.publishedVersions = publishedVersions;
         this.manifest = manifest;
+        this.referencedContent = referencedContent;
     }
 
     /**
@@ -239,7 +259,58 @@ public class PermissionResolver implements ClosureResolver {
 
         return new EffectiveClosure(agentId, agentVersion, skills,
                 new ArrayList<>(tools.values()), mcpBindings, children,
-                OrchestrationBinding.of(own)).canonicalized();
+                bindReferencedContent(tenantId, own)).canonicalized();
+    }
+
+    /**
+     * 把被引用行（输出契约 / 路由策略）的<b>内容指纹</b>绑定进编排绑定（第二十四批 · A4）。
+     *
+     * <p>⚠️ <b>为什么必须 fail-closed</b>：
+     * 编排绑定固化的是「依赖哪个固定版本」，
+     * 而「那一行自己的内容被就地改写」这一支，
+     * 只有把<b>内容指纹</b>承载进来才挡得住。
+     * 若解析不出指纹还继续构建闭包，就等于「悄悄放弃这道防线」——
+     * 而外观上一切正常（在途 Run 不失效、旧审批被继续复用）。
+     * 宁可拒绝建 Run，也不要一道防线**看起来在、其实不在**。
+     *
+     * <p>⚠️ **没有声明引用时不做任何解析**：
+     * LEAF / 未声明契约与策略的 Agent 完全不受影响（不产生额外读）。
+     *
+     * @param tenantId     租户标识
+     * @param orchestration 本 Agent 的编排声明
+     * @return 携带被引用行内容指纹的编排绑定
+     * @throws ClosureResolutionException 引用行解析不出（fail-closed）
+     */
+    private @NonNull OrchestrationBinding bindReferencedContent(
+            @NonNull String tenantId, @NonNull AgentOrchestration orchestration) {
+        String policyRef = orchestration.routingPolicyRef();
+        String contractRef = orchestration.resultContractRef();
+        boolean hasPolicy = policyRef != null && !policyRef.isBlank();
+        boolean hasContract = contractRef != null && !contractRef.isBlank();
+        if (!hasPolicy && !hasContract) {
+            // ⚠️ 没有被引用行 → 不做任何解析（LEAF 场景零额外开销）
+            return OrchestrationBinding.of(orchestration);
+        }
+        if (referencedContent == null) {
+            // ⚠️ 解析能力未装配 → fail-closed（与发布期「校验器未装配即拒绝」同口径）
+            throw new ClosureResolutionException(ReasonCode.ORCHESTRATION_INVALID,
+                    "被引用行内容指纹解析能力未装配，拒绝构建闭包: agent="
+                            + orchestration.mode() + ", policyRef=" + policyRef
+                            + ", contractRef=" + contractRef);
+        }
+        String policyFingerprint = hasPolicy
+                ? referencedContent.routingPolicyFingerprint(tenantId, policyRef) : null;
+        String contractFingerprint = hasContract
+                ? referencedContent.resultContractFingerprint(tenantId, contractRef) : null;
+        if (hasPolicy && policyFingerprint == null) {
+            throw new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
+                    "被引用的路由策略解析不出（无法承载其内容指纹）: ref=" + policyRef);
+        }
+        if (hasContract && contractFingerprint == null) {
+            throw new ClosureResolutionException(ReasonCode.RESOURCE_UNKNOWN,
+                    "被引用的输出契约解析不出（无法承载其内容指纹）: ref=" + contractRef);
+        }
+        return OrchestrationBinding.of(orchestration, policyFingerprint, contractFingerprint);
     }
 
     /**

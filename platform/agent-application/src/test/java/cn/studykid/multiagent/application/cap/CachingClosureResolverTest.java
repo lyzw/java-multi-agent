@@ -39,9 +39,11 @@ class CachingClosureResolverTest {
                 .withTool(TOOL, 1, CapabilityRiskLevel.READ, "[]")
                 .withAgent(TENANT, AGENT, 1, List.of(SKILL), "{}");
         delegate = new PermissionResolver(cap.agentDefs(), cap.skillDefs(), cap.toolDefs(),
-                cap.serverDefs(), cap.publishedVersions(), cap.manifest());
+                cap.serverDefs(), cap.publishedVersions(), cap.manifest(),
+                cap.referencedContent());
         caching = new CachingClosureResolver(delegate, cap.publishedVersions(), cap.toolDefs(),
-                cap.agentDefs(), cap.manifest());
+                cap.agentDefs(), cap.manifest(),
+                CachingClosureResolver.DEFAULT_MAX_ENTRIES, cap.referencedContent());
     }
 
     @Nested
@@ -134,7 +136,8 @@ class CachingClosureResolverTest {
         EffectiveClosure before = caching.resolve(TENANT, AGENT, 1);
 
         // ⚠️ 版本号不变、Agent 不变，只是编排声明被就地改写
-        cap.withAgent(TENANT, AGENT, 1, List.of(SKILL), "{}",
+        cap.withContract(TENANT, "contract", 1, "{}", true)
+                .withAgent(TENANT, AGENT, 1, List.of(SKILL), "{}",
                 "{\"mode\":\"SEQUENTIAL\",\"resultContractRef\":\"contract@1\"}");
 
         EffectiveClosure after = caching.resolve(TENANT, AGENT, 1);
@@ -169,7 +172,8 @@ class CachingClosureResolverTest {
                 cap.withAgent(TENANT, agent, 1, List.of(SKILL), "{}");
             }
             CachingClosureResolver bounded = new CachingClosureResolver(delegate,
-                    cap.publishedVersions(), cap.toolDefs(), cap.agentDefs(), cap.manifest(), 2);
+                    cap.publishedVersions(), cap.toolDefs(), cap.agentDefs(), cap.manifest(), 2,
+                    cap.referencedContent());
 
             bounded.resolveCurrent(TENANT, "agent-a");
             bounded.resolveCurrent(TENANT, "agent-b");

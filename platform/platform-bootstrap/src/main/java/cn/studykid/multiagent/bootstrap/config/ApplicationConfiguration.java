@@ -1316,9 +1316,26 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
             cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort serverDefs,
             cn.studykid.multiagent.ports.persistence.PublishedVersionPort publishedVersions,
-            cn.studykid.multiagent.ports.mcp.McpManifestPort manifest) {
+            cn.studykid.multiagent.ports.mcp.McpManifestPort manifest,
+            cn.studykid.multiagent.application.cap.ReferencedContentResolver referencedContent) {
         return new cn.studykid.multiagent.application.cap.PermissionResolver(
-                agentDefs, skillDefs, toolDefs, serverDefs, publishedVersions, manifest);
+                agentDefs, skillDefs, toolDefs, serverDefs, publishedVersions, manifest,
+                referencedContent);
+    }
+
+    /**
+     * 被引用行（输出契约 / 路由策略）的内容指纹解析器（第二十四批 · A4）。
+     *
+     * <p>⚠️ <b>为什么必须装配</b>：不装配时，声明了被引用行的 Agent
+     * 会在构建闭包时被 <b>fail-closed 拒绝</b>（而不是「悄悄放弃这道防线」）。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ReferencedContentResolver
+            referencedContentResolver(
+                    cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort policies,
+                    cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts) {
+        return new cn.studykid.multiagent.application.cap.ReferencedContentResolver(
+                policies, contracts);
     }
 
     /**
@@ -1389,9 +1406,12 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.PublishedVersionPort publishedVersions,
             cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
             cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
-            cn.studykid.multiagent.ports.mcp.McpManifestPort manifest) {
+            cn.studykid.multiagent.ports.mcp.McpManifestPort manifest,
+            cn.studykid.multiagent.application.cap.ReferencedContentResolver referencedContent) {
         return new cn.studykid.multiagent.application.cap.CachingClosureResolver(
-                resolver, publishedVersions, toolDefs, agentDefs, manifest);
+                resolver, publishedVersions, toolDefs, agentDefs, manifest,
+                cn.studykid.multiagent.application.cap.CachingClosureResolver.DEFAULT_MAX_ENTRIES,
+                referencedContent);
     }
 
     /**
