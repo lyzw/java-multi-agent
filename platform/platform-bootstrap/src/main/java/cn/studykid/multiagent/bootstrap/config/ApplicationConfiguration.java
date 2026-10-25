@@ -641,6 +641,16 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 路由策略仓储（多级 Agent v1.1 第十四批 · MA-T05 / MA-T15）。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort capRoutingPolicyPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcCapRoutingPolicyRepository(dataSource);
+    }
+
+    /**
      * 委派调用记录仓储（多级 Agent v1.1 · FR-022 · MA-T12）。
      *
      * <p>⚠️ <b>本 Bean 缺失会让平台起不来</b>：
@@ -667,14 +677,20 @@ public class ApplicationConfiguration {
      * <p>⚠️ <b>契约仓储必须一并装配</b>：声明了 {@code resultContractRef} 的 Agent
      * 若在发布期不校验契约，运行期每次委派都会因「取不到契约」fail-closed ——
      * 配置看起来生效了，实际委派全废。
+     *
+     * <p>⚠️ <b>路由策略仓储同样必须一并装配</b>（第十四批）：声明了
+     * {@code routingPolicyRef} 的 ROUTER Agent 若在发布期不校验策略，
+     * 运行期每次委派都会因「取不到策略」fail-closed ——
+     * 而此前该引用根本就是<b>悬空</b>的（全仓无人持有被引用的对象）。
      */
     @Bean
     public cn.studykid.multiagent.application.cap.AgentPublishClosureValidator
             agentPublishClosureValidator(
             cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
-            cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts) {
+            cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts,
+            cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort routingPolicies) {
         return new cn.studykid.multiagent.application.cap.AgentPublishClosureValidator(
-                agentDefs, contracts);
+                agentDefs, contracts, routingPolicies);
     }
 
     /**
@@ -1040,13 +1056,15 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.application.cap.AgentPublishClosureValidator closureValidator,
             cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort childRefs,
             cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts,
+            cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort routingPolicies,
             java.time.Clock clock) {
         // ⚠️ 输出契约仓储必须注入：未装配时「发布命令带契约」会被拒（fail-closed），
         //    绝不静默跳过 —— 那等于「发布成功但契约没落库」。
+        // ⚠️ 路由策略仓储同理（第十四批）：未装配时「发布命令带策略」会被拒。
         return new cn.studykid.multiagent.application.cap.ConfigPublishService(
                 tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate,
                 clock, cn.studykid.multiagent.application.cap.ConfigPublishService.DEFAULT_MAX_ATTEMPTS,
-                closureValidator, childRefs, contracts);
+                closureValidator, childRefs, contracts, routingPolicies);
     }
 
     /**
@@ -1070,11 +1088,14 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
             cn.studykid.multiagent.ports.persistence.ConfigReleasePort releases,
             cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts,
+            cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort routingPolicies,
             java.time.Clock clock) {
         // ⚠️ 输出契约仓储必须注入：未装配时「提交带契约的发布申请」会被拒，
         //    免得申请单看起来带了契约、执行时却被静默丢掉。
+        // ⚠️ 路由策略仓储同理（第十四批）。
         return new cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService(
-                requests, publisher, lifecycle, agentDefs, pointers, releases, contracts, clock);
+                requests, publisher, lifecycle, agentDefs, pointers, releases, contracts,
+                routingPolicies, clock);
     }
 
     /**

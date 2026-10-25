@@ -15,6 +15,7 @@ import cn.studykid.multiagent.application.orchestration.OrchestrationConfigExcep
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapResultContractDef;
+import cn.studykid.multiagent.core.cap.CapRoutingPolicyDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.ConfigObjectVersion;
@@ -32,6 +33,7 @@ import cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
 import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
+import cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort;
 import cn.studykid.multiagent.ports.persistence.CapSkillDefPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPointerPort;
@@ -108,6 +110,17 @@ public class ConfigPublishService {
      * 而运维看到的是「发布成功」。
      */
     private final CapResultContractPort contracts;
+
+    /**
+     * 路由策略仓储（多级 Agent v1.1 第十四批）。
+     *
+     * <p>⚠️ <b>可为空 = 路由策略登记能力未装配</b>：
+     * 此时发布命令里若带策略 → <b>直接拒绝</b>（fail-closed）。
+     * 静默跳过等于「发布成功但策略没落库」——
+     * ROUTER Agent 引用了一个从未生效的路由规则，运行期每次委派都 fail-closed，
+     * 而运维看到的是「发布成功」。
+     */
+    private final CapRoutingPolicyPort routingPolicies;
 
     public ConfigPublishService(@NonNull ConfigPublishTransaction tx,
                                 @NonNull ConfigPointerPort pointers,
@@ -186,6 +199,37 @@ public class ConfigPublishService {
                                 @Nullable AgentPublishClosureValidator closureValidator,
                                 @Nullable CapAgentChildRefPort childRefs,
                                 @Nullable CapResultContractPort contracts) {
+        this(tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate,
+                clock, maxAttempts, closureValidator, childRefs, contracts, null);
+    }
+
+    /**
+     * 最完整构造器（多级 Agent v1.1 第十四批）：额外注入发布期闭包校验器、关系投影端口、
+     * 输出契约仓储与路由策略仓储。
+     *
+     * <p>⚠️ 四者为 {@code null} 表示「对应能力未装配」：
+     * 此时声明了编排的 Agent 会在发布时被拒（fail-closed），
+     * 单 Agent 发布路径行为不变。
+     *
+     * <p>⚠️ {@code contracts} / {@code routingPolicies} 为 {@code null}
+     * 且发布命令带对应对象 → <b>拒绝发布</b>：
+     * 「登记能力没接上」不等于「对象可以随便发」。
+     */
+    public ConfigPublishService(@NonNull ConfigPublishTransaction tx,
+                                @NonNull ConfigPointerPort pointers,
+                                @NonNull ConfigReleasePort releases,
+                                @NonNull CapToolDefPort toolDefs,
+                                @NonNull CapSkillDefPort skillDefs,
+                                @NonNull CapMcpServerDefPort serverDefs,
+                                @NonNull CapAgentDefPort agentDefs,
+                                @NonNull DecisionAuditPort audit,
+                                @NonNull ConfigValidationGate gate,
+                                @NonNull Clock clock,
+                                int maxAttempts,
+                                @Nullable AgentPublishClosureValidator closureValidator,
+                                @Nullable CapAgentChildRefPort childRefs,
+                                @Nullable CapResultContractPort contracts,
+                                @Nullable CapRoutingPolicyPort routingPolicies) {
         if (maxAttempts < 1) {
             throw new IllegalArgumentException("maxAttempts 必须为正数，收到: " + maxAttempts);
         }
@@ -203,6 +247,7 @@ public class ConfigPublishService {
         this.closureValidator = closureValidator;
         this.childRefs = childRefs;
         this.contracts = contracts;
+        this.routingPolicies = routingPolicies;
     }
 
     // ── 原子发布 ────────────────────────────────────────────────
@@ -328,6 +373,26 @@ public class ConfigPublishService {
                         contract.version(), published.configFingerprint(),
                         contracts.find(command.tenantId(), contract.contractId(),
                                 contract.version()).map(CapResultContractDef::configFingerprint));
+            }
+        }
+        // ⚠️ 路由策略必须**在 Agent 之前**登记（多级 Agent v1.1 第十四批）：
+        //    同一次发布里新登记的策略要能被本次发布的 ROUTER Agent 引用 ——
+        //    若策略排在后面，闭包校验器查不到它，
+        //    「一次发布同时交付策略与引用它的 Agent」就永远做不到。
+        //    ⚠️ 未装配策略仓储却带策略 → 拒绝（fail-closed），绝不静默跳过。
+        if (!command.routingPolicies().isEmpty() && routingPolicies == null) {
+            throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_UNKNOWN,
+                    "routingPolicies",
+                    "路由策略登记能力未装配（策略仓储缺失），拒绝发布: count="
+                            + command.routingPolicies().size());
+        }
+        for (CapRoutingPolicyDef policy : command.routingPolicies()) {
+            CapRoutingPolicyDef published = withPublished(policy, now);
+            if (!routingPolicies.insert(published)) {
+                verifySameContentOnConflict("routing_policy", policy.policyId(),
+                        policy.version(), published.configFingerprint(),
+                        routingPolicies.find(command.tenantId(), policy.policyId(),
+                                policy.version()).map(CapRoutingPolicyDef::configFingerprint));
             }
         }
         for (CapAgentDef agent : command.agents()) {
@@ -606,15 +671,19 @@ public class ConfigPublishService {
     private void validateMultiAgentClosure(@NonNull ConfigPublishCommand command) {
         for (CapAgentDef agent : command.agents()) {
             AgentOrchestration orchestration = parseOrchestration(agent);
-            // ⚠️ 跳过条件是「**纯 LEAF 且不声明输出契约**」，
+            // ⚠️ 跳过条件是「**纯 LEAF 且不声明输出契约 / 路由策略**」，
             //    不是「LEAF」：
             //    LEAF 也可以声明 resultContractRef（约束自身输出），
             //    而契约引用同样必须在发布期校验 ——
             //    否则「引用了根本不存在 / 未发布契约的 Agent」可以被发布出去，
             //    运行期每次委派都因「取不到契约」fail-closed，
             //    而运维看到的是「发布成功、Agent 已生效」。
+            //    ⚠️ 路由策略同理（第十四批）：LEAF 声明 routingPolicyRef 是配置缺陷
+            //    （策略对 LEAF 毫无作用），也必须在发布期被拒 ——
+            //    若这里漏掉，LEAF 就能带着一条永不生效的「路由规则」发布出去。
             boolean declaresContract = orchestration.resultContractRef() != null;
-            if (orchestration.isLeaf() && !declaresContract) {
+            boolean declaresPolicy = orchestration.routingPolicyRef() != null;
+            if (orchestration.isLeaf() && !declaresContract && !declaresPolicy) {
                 continue;
             }
             if (closureValidator == null) {
@@ -676,6 +745,25 @@ public class ConfigPublishService {
         }
         return new CapResultContractDef(def.tenantId(), def.contractId(), def.version(),
                 def.schemaJson(), def.configFingerprint(), def.schemaVersion(),
+                def.createdAt(), publishedAt);
+    }
+
+    /**
+     * 补上路由策略的发布时间（草稿 → 已发布）。
+     *
+     * <p>⚠️ <b>发布时间是发布流给的，不是登记流给的</b>：
+     * 策略与 Agent、契约一样，走「申请 → 审批 → 执行」三步，
+     * 「已发布」这个事实必须由<b>发布事务</b>授予 ——
+     * 否则「先登记成已发布、再补审批」就绕过了发布流程，
+     * 而「已发布」正是「可被引用」的前置条件。
+     */
+    private static CapRoutingPolicyDef withPublished(CapRoutingPolicyDef def,
+                                                     Instant publishedAt) {
+        if (def.publishedAt() != null) {
+            return def;
+        }
+        return new CapRoutingPolicyDef(def.tenantId(), def.policyId(), def.version(),
+                def.strategy(), def.targets(), def.configFingerprint(), def.schemaVersion(),
                 def.createdAt(), publishedAt);
     }
 

@@ -191,10 +191,10 @@ class CapConfigPublishControllerTest {
     @DisplayName("平台级作用域申请 → 403")
     void request_platformScopeRejected() {
         CapConfigPublishController c = controller();
-        // ⚠️ 必须 mock **带契约列表**的那个重载：控制器走的是 7 参版本，
-        //    只 mock 6 参版本会命中不到 → mock 返回 null → 抛 NPE 而非预期的 403。
+        // ⚠️ 必须 mock **带契约与策略列表**的那个重载：控制器走的是 8 参版本，
+        //    只 mock 旧的重载会命中不到 → mock 返回 null → 抛 NPE 而非预期的 403。
         when(workflow.requestPublish(eq(TENANT), eq(ConfigRelease.Scope.PLATFORM), any(), any(),
-                any(), eq("reason"), eq(PRINCIPAL)))
+                any(), any(), eq("reason"), eq(PRINCIPAL)))
                 .thenThrow(new ConfigPublishScopeNotAllowedException("platform scope"));
 
         assertThatThrownBy(() -> c.request(new CapConfigPublishController.PublishRequest(
@@ -208,11 +208,11 @@ class CapConfigPublishControllerTest {
     }
 
     @Test
-    @DisplayName("✅ 编排声明与输出契约随申请提交（多级 Agent 可经治理通道发布）")
+    @DisplayName("✅ 编排声明、输出契约与路由策略随申请提交（多级 Agent 可经治理通道发布）")
     void request_carriesOrchestrationAndResultContracts() {
         CapConfigPublishController c = controller();
         when(workflow.requestPublish(eq(TENANT), eq(ConfigRelease.Scope.TENANT), any(), any(),
-                any(), eq("reason"), eq(PRINCIPAL)))
+                any(), any(), eq("reason"), eq(PRINCIPAL)))
                 .thenReturn(sampleRequest());
 
         c.request(new CapConfigPublishController.PublishRequest(
@@ -223,17 +223,23 @@ class CapConfigPublishControllerTest {
                 null, null,
                 List.of(new CapConfigPublishController.ResultContractRequest(
                         "answer-contract", "{\"type\":\"object\"}")),
+                List.of(new CapConfigPublishController.RoutingPolicyRequest(
+                        "orders-router", "EXPLICIT_TARGETS", List.of("c-1"))),
                 "reason"));
 
         // ⚠️ 治理通道若不暴露编排声明，多级 Agent 就**根本无法发布** ——
         //    契约引用同理（引用了却登记不了 = 引用了一个不生效的事实）。
+        //    路由策略同理（第十四批）：ROUTER Agent 引用了却登记不了 =
+        //    引用了一个从未生效的路由规则。
         var agentCaptor = org.mockito.ArgumentCaptor
                 .forClass(java.util.List.class);
         var contractCaptor = org.mockito.ArgumentCaptor
                 .forClass(java.util.List.class);
+        var policyCaptor = org.mockito.ArgumentCaptor
+                .forClass(java.util.List.class);
         org.mockito.Mockito.verify(workflow).requestPublish(eq(TENANT),
                 eq(ConfigRelease.Scope.TENANT), agentCaptor.capture(), contractCaptor.capture(),
-                any(), eq("reason"), eq(PRINCIPAL));
+                policyCaptor.capture(), any(), eq("reason"), eq(PRINCIPAL));
 
         @SuppressWarnings("unchecked")
         java.util.List<cn.studykid.multiagent.application.cap.ConfigPublishPayload.AgentSpec>
@@ -250,6 +256,16 @@ class CapConfigPublishControllerTest {
         assertThat(contractSpecs).hasSize(1);
         assertThat(contractSpecs.get(0).contractId()).isEqualTo("answer-contract");
         assertThat(contractSpecs.get(0).schemaJson()).isEqualTo("{\"type\":\"object\"}");
+
+        @SuppressWarnings("unchecked")
+        java.util.List<cn.studykid.multiagent.application.cap.ConfigPublishPayload
+                .RoutingPolicySpec> policySpecs = policyCaptor.getValue();
+        assertThat(policySpecs)
+                .as("⛔ 路由策略未被治理通道透传：ROUTER Agent 引用了一个无法登记的策略")
+                .hasSize(1);
+        assertThat(policySpecs.get(0).policyId()).isEqualTo("orders-router");
+        assertThat(policySpecs.get(0).strategy()).isEqualTo("EXPLICIT_TARGETS");
+        assertThat(policySpecs.get(0).targets()).containsExactly("c-1");
     }
 
     @Test

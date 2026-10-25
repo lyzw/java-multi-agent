@@ -60,6 +60,18 @@ public final class ConfigValidationGate {
                                 + " 个）：平台发布头若带租户 Agent 结构，会把租户结构泄漏给所有租户"
                                 + "（06 §2 平台级 vs 租户级引用）");
             }
+            // ⚠️ 输出契约与路由策略同样是**租户级**对象：
+            //    PLATFORM 作用域没有 tenant_id，这两类行要么写不进去（NOT NULL 违例），
+            //    要么在补一个 tenant_id 后变成「平台级发布的租户对象」——
+            //    两种都是结构泄漏。在门禁这里显式拒绝，别让 DB 的 NOT NULL 当成校验。
+            int tenantLevelObjects = command.resultContracts().size()
+                    + command.routingPolicies().size();
+            if (tenantLevelObjects > 0) {
+                throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_UNKNOWN, "scope",
+                        "PLATFORM 作用域的发布不得包含租户级输出契约 / 路由策略（"
+                                + tenantLevelObjects + " 个）：它们按 tenant_id 寻址，"
+                                + "平台发布头承载它们会造成结构泄漏");
+            }
         } else {
             int platformObjects = command.tools().size() + command.skills().size()
                     + command.mcpServers().size();

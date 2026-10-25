@@ -101,13 +101,15 @@ public class CapConfigPublishController {
             List<ConfigPublishPayload.AgentSpec> agentSpecs = agentSpecs(request.agents());
             List<ConfigPublishPayload.ResultContractSpec> contractSpecs =
                     resultContractSpecs(request.resultContracts());
-            if (agentSpecs.isEmpty() && contractSpecs.isEmpty()) {
+            List<ConfigPublishPayload.RoutingPolicySpec> policySpecs =
+                    routingPolicySpecs(request.routingPolicies());
+            if (agentSpecs.isEmpty() && contractSpecs.isEmpty() && policySpecs.isEmpty()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "PUBLISH 必须携带 agents 或 resultContracts");
+                        "PUBLISH 必须携带 agents / resultContracts / routingPolicies");
             }
             ConfigPublishRequest created = switch (operation) {
                 case PUBLISH -> workflow.requestPublish(context.tenantId(), scope,
-                        agentSpecs, contractSpecs, request.expectedPublishSeq(),
+                        agentSpecs, contractSpecs, policySpecs, request.expectedPublishSeq(),
                         reason, currentPrincipal.principalId());
                 case ROLLBACK -> workflow.requestRollback(context.tenantId(), scope,
                         request.targetReleaseId() == null ? 0L : request.targetReleaseId(),
@@ -355,6 +357,23 @@ public class CapConfigPublishController {
                 c.contractId(), c.schemaJson())).toList();
     }
 
+    /**
+     * 路由策略草稿映射。
+     *
+     * <p>⚠️ 空列表 = 本次发布不登记策略（≠「策略随意」）——
+     * 没有策略可登记时，ROUTER Agent 的 {@code routingPolicyRef}
+     * 只能指向<b>此前已发布</b>的策略。
+     */
+    private static List<ConfigPublishPayload.RoutingPolicySpec> routingPolicySpecs(
+            @Nullable List<RoutingPolicyRequest> policies) {
+        if (policies == null || policies.isEmpty()) {
+            return List.of();
+        }
+        return policies.stream().map(p -> new ConfigPublishPayload.RoutingPolicySpec(
+                p.policyId(), p.strategy(),
+                p.targets() == null ? List.of() : p.targets())).toList();
+    }
+
     private static ConfigPublishPayload.LifecycleSpec lifecycleSpec(
             @Nullable LifecycleRequest lifecycle) {
         if (lifecycle == null) {
@@ -386,6 +405,7 @@ public class CapConfigPublishController {
             @Nullable Long targetReleaseId,
             @Nullable LifecycleRequest lifecycle,
             @Nullable List<ResultContractRequest> resultContracts,
+            @Nullable List<RoutingPolicyRequest> routingPolicies,
             @Nullable String reason) {
 
         /**
@@ -399,7 +419,22 @@ public class CapConfigPublishController {
                               @Nullable LifecycleRequest lifecycle,
                               @Nullable String reason) {
             this(operation, scope, expectedPublishSeq, agents, targetReleaseId, lifecycle, null,
-                    reason);
+                    null, reason);
+        }
+
+        /**
+         * 兼容构造器：<b>有输出契约、无路由策略</b>的发布申请（第十四批之前的形态）。
+         */
+        public PublishRequest(@Nullable String operation,
+                              @Nullable String scope,
+                              @Nullable Long expectedPublishSeq,
+                              @Nullable List<AgentRequest> agents,
+                              @Nullable Long targetReleaseId,
+                              @Nullable LifecycleRequest lifecycle,
+                              @Nullable List<ResultContractRequest> resultContracts,
+                              @Nullable String reason) {
+            this(operation, scope, expectedPublishSeq, agents, targetReleaseId, lifecycle,
+                    resultContracts, null, reason);
         }
     }
 
@@ -442,6 +477,22 @@ public class CapConfigPublishController {
     public record ResultContractRequest(
             @Nullable String contractId,
             @Nullable String schemaJson) {
+    }
+
+    /**
+     * 路由策略草稿（<b>不含版本号与内容指纹</b> —— 二者由服务端决定）。
+     *
+     * <p>⚠️ 与 Agent 草稿、输出契约草稿同口径：客户端若能指定版本号或内容指纹，
+     * 就等于能指定「内容没变」这个证明。
+     *
+     * @param policyId 策略标识（可读字符串）
+     * @param strategy 选择策略（{@code EXPLICIT_TARGETS} / {@code ORDERED_FALLBACK}）
+     * @param targets  允许的目标 Agent 标识（有序）
+     */
+    public record RoutingPolicyRequest(
+            @Nullable String policyId,
+            @Nullable String strategy,
+            @Nullable List<String> targets) {
     }
 
     /** 生命周期迁移参数。 */

@@ -32,6 +32,7 @@ import cn.studykid.multiagent.core.cap.ConfigRelease;
  * @param targetReleaseId    回滚目标发布（仅 {@code ROLLBACK} 用）
  * @param lifecycle          生命周期迁移参数（仅 {@code LIFECYCLE_TRANSITION} 用）
  * @param resultContracts    本次发布的输出契约草稿（仅 {@code PUBLISH} 用 · 多级 Agent v1.1）
+ * @param routingPolicies    本次发布的路由策略草稿（仅 {@code PUBLISH} 用 · 多级 Agent v1.1 第十四批）
  */
 public record ConfigPublishPayload(
         ConfigPublishRequest.@NonNull Operation operation,
@@ -40,12 +41,13 @@ public record ConfigPublishPayload(
         @NonNull List<AgentSpec> agents,
         @Nullable Long targetReleaseId,
         @Nullable LifecycleSpec lifecycle,
-        @NonNull List<ResultContractSpec> resultContracts) {
+        @NonNull List<ResultContractSpec> resultContracts,
+        @NonNull List<RoutingPolicySpec> routingPolicies) {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /**
-     * 兼容构造器：<b>无输出契约</b>的变更方案（多级 Agent 之前的形态）。
+     * 兼容构造器：<b>无输出契约、无路由策略</b>的变更方案（多级 Agent 之前的形态）。
      */
     public ConfigPublishPayload(ConfigPublishRequest.@NonNull Operation operation,
                                 ConfigRelease.@NonNull Scope scope,
@@ -53,7 +55,22 @@ public record ConfigPublishPayload(
                                 @NonNull List<AgentSpec> agents,
                                 @Nullable Long targetReleaseId,
                                 @Nullable LifecycleSpec lifecycle) {
-        this(operation, scope, expectedPublishSeq, agents, targetReleaseId, lifecycle, List.of());
+        this(operation, scope, expectedPublishSeq, agents, targetReleaseId, lifecycle, List.of(),
+                List.of());
+    }
+
+    /**
+     * 兼容构造器：<b>有输出契约、无路由策略</b>的变更方案（第十四批之前的形态）。
+     */
+    public ConfigPublishPayload(ConfigPublishRequest.@NonNull Operation operation,
+                                ConfigRelease.@NonNull Scope scope,
+                                @Nullable Long expectedPublishSeq,
+                                @NonNull List<AgentSpec> agents,
+                                @Nullable Long targetReleaseId,
+                                @Nullable LifecycleSpec lifecycle,
+                                @NonNull List<ResultContractSpec> resultContracts) {
+        this(operation, scope, expectedPublishSeq, agents, targetReleaseId, lifecycle,
+                resultContracts, List.of());
     }
 
     public ConfigPublishPayload {
@@ -65,6 +82,47 @@ public record ConfigPublishPayload(
         }
         agents = agents == null ? List.of() : List.copyOf(agents);
         resultContracts = resultContracts == null ? List.of() : List.copyOf(resultContracts);
+        routingPolicies = routingPolicies == null ? List.of() : List.copyOf(routingPolicies);
+    }
+
+    /**
+     * 路由策略草稿（<b>只含客户端可提交的语义字段</b>）。
+     *
+     * <p>⚠️ <b>刻意不含 version / configFingerprint / createdAt / publishedAt</b>：
+     * 与 Agent 草稿、输出契约草稿同口径 —— 版本号由服务端按「现有最大版本 + 1」分配，
+     * 内容指纹由服务端计算（{@link CapObjectFingerprint}），
+     * 时间戳由服务端填写。客户端若能指定这些，就等于能指定「内容没变」这个证明。
+     *
+     * <p>⚠️ <b>策略枚举由客户端提交</b>：这是<b>内容</b>而非「证明」——
+     * 客户端当然可以决定自己的路由规则长什么样（那是它要发布的东西）；
+     * 但服务端仍会校验目标集合的合法性（非空、不重复）并计算指纹。
+     *
+     * @param policyId 策略标识（可读字符串）
+     * @param strategy 选择策略名（{@code EXPLICIT_TARGETS} / {@code ORDERED_FALLBACK}）
+     * @param targets  允许的目标 Agent 标识（有序）
+     */
+    public record RoutingPolicySpec(@NonNull String policyId,
+                                     @NonNull String strategy,
+                                     @NonNull List<String> targets) {
+
+        public RoutingPolicySpec {
+            if (policyId == null || policyId.isBlank()) {
+                throw new IllegalArgumentException("policyId 不能为空");
+            }
+            if (strategy == null || strategy.isBlank()) {
+                throw new IllegalArgumentException("strategy 不能为空");
+            }
+            targets = targets == null ? List.of() : List.copyOf(targets);
+            if (targets.isEmpty()) {
+                // ⚠️ 空目标集合 ≠ 「允许任意」：策略必须**显式**声明允许哪些目标。
+                throw new IllegalArgumentException("targets 不能为空（策略必须显式声明允许的目标）");
+            }
+            for (String target : targets) {
+                if (target == null || target.isBlank()) {
+                    throw new IllegalArgumentException("targets 元素不能为空");
+                }
+            }
+        }
     }
 
     /**
@@ -226,7 +284,7 @@ public record ConfigPublishPayload(
                                                           @Nullable Long expectedPublishSeq) {
         return new ConfigPublishPayload(ConfigPublishRequest.Operation.ROLLBACK,
                 ConfigRelease.Scope.TENANT, expectedPublishSeq, List.of(), targetReleaseId, null,
-                List.of());
+                List.of(), List.of());
     }
 
     /**
@@ -237,7 +295,7 @@ public record ConfigPublishPayload(
      */
     public static @NonNull ConfigPublishPayload lifecycle(@NonNull LifecycleSpec spec) {
         return new ConfigPublishPayload(ConfigPublishRequest.Operation.LIFECYCLE_TRANSITION,
-                ConfigRelease.Scope.TENANT, null, List.of(), null, spec, List.of());
+                ConfigRelease.Scope.TENANT, null, List.of(), null, spec, List.of(), List.of());
     }
 
     /**
@@ -250,7 +308,8 @@ public record ConfigPublishPayload(
     public static @NonNull ConfigPublishPayload publish(@NonNull List<AgentSpec> agents,
                                                          @Nullable Long expectedPublishSeq) {
         return new ConfigPublishPayload(ConfigPublishRequest.Operation.PUBLISH,
-                ConfigRelease.Scope.TENANT, expectedPublishSeq, agents, null, null, List.of());
+                ConfigRelease.Scope.TENANT, expectedPublishSeq, agents, null, null, List.of(),
+                List.of());
     }
 
     /**
@@ -271,7 +330,30 @@ public record ConfigPublishPayload(
             @Nullable Long expectedPublishSeq) {
         return new ConfigPublishPayload(ConfigPublishRequest.Operation.PUBLISH,
                 ConfigRelease.Scope.TENANT, expectedPublishSeq, agents, null, null,
-                resultContracts);
+                resultContracts, List.of());
+    }
+
+    /**
+     * 生成一个「发布」方案（同时登记输出契约与路由策略）。
+     *
+     * <p>⚠️ <b>策略与 Agent 也在同一次发布里</b>：与契约同理 ——
+     * ROUTER Agent 的 {@code routingPolicyRef} 指向的策略若不在本批次，
+     * 「批的」与「生效的」就不是同一件事。
+     *
+     * @param agents             Agent 定义草稿
+     * @param resultContracts    输出契约草稿
+     * @param routingPolicies    路由策略草稿
+     * @param expectedPublishSeq CAS 基线
+     * @return 变更方案
+     */
+    public static @NonNull ConfigPublishPayload publish(
+            @NonNull List<AgentSpec> agents,
+            @NonNull List<ResultContractSpec> resultContracts,
+            @NonNull List<RoutingPolicySpec> routingPolicies,
+            @Nullable Long expectedPublishSeq) {
+        return new ConfigPublishPayload(ConfigPublishRequest.Operation.PUBLISH,
+                ConfigRelease.Scope.TENANT, expectedPublishSeq, agents, null, null,
+                resultContracts, routingPolicies);
     }
 
     /**
@@ -284,6 +366,7 @@ public record ConfigPublishPayload(
         node.put("operation", operation.name());
         node.put("agentCount", agents.size());
         node.put("resultContractCount", resultContracts.size());
+        node.put("routingPolicyCount", routingPolicies.size());
         node.put("hasExpectedPublishSeq", expectedPublishSeq != null);
         node.put("hasTargetReleaseId", targetReleaseId != null);
         node.put("hasLifecycle", lifecycle != null);

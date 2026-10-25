@@ -13,14 +13,17 @@ import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapResultContractDef;
+import cn.studykid.multiagent.core.cap.CapRoutingPolicyDef;
 import cn.studykid.multiagent.core.cap.ConfigLifecycleState;
 import cn.studykid.multiagent.core.cap.ConfigPointer;
 import cn.studykid.multiagent.core.cap.ConfigPublishCommand;
 import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.ConfigRollbackCommand;
+import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
+import cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPointerPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort.Decision;
@@ -66,6 +69,7 @@ public class ConfigPublishWorkflowService {
     private final ConfigPointerPort pointers;
     private final ConfigReleasePort releases;
     private final CapResultContractPort contracts;
+    private final CapRoutingPolicyPort routingPolicies;
     private final Clock clock;
 
     public ConfigPublishWorkflowService(@NonNull ConfigPublishRequestPort requests,
@@ -93,6 +97,27 @@ public class ConfigPublishWorkflowService {
                                         @NonNull ConfigReleasePort releases,
                                         @Nullable CapResultContractPort contracts,
                                         @NonNull Clock clock) {
+        this(requests, publisher, lifecycle, agentDefs, pointers, releases, contracts, null, clock);
+    }
+
+    /**
+     * 最完整构造器（多级 Agent v1.1 第十四批）：额外注入输出契约仓储与路由策略仓储。
+     *
+     * <p>⚠️ 两者为 {@code null} 表示「对应登记能力未装配」：
+     * 此时提交带契约 / 带策略的发布申请 → <b>直接拒绝</b>（fail-closed）。
+     * 静默忽略等于让「申请里写了路由策略」看起来像生效了，实际根本没登记 ——
+     * 而 ROUTER Agent 的运行期路由会因此每次 fail-closed，
+     * 运维看到的却是「发布成功、Agent 已生效」。
+     */
+    public ConfigPublishWorkflowService(@NonNull ConfigPublishRequestPort requests,
+                                        @NonNull ConfigPublishService publisher,
+                                        @NonNull ConfigLifecycleService lifecycle,
+                                        @NonNull CapAgentDefPort agentDefs,
+                                        @NonNull ConfigPointerPort pointers,
+                                        @NonNull ConfigReleasePort releases,
+                                        @Nullable CapResultContractPort contracts,
+                                        @Nullable CapRoutingPolicyPort routingPolicies,
+                                        @NonNull Clock clock) {
         this.requests = requests;
         this.publisher = publisher;
         this.lifecycle = lifecycle;
@@ -100,6 +125,7 @@ public class ConfigPublishWorkflowService {
         this.pointers = pointers;
         this.releases = releases;
         this.contracts = contracts;
+        this.routingPolicies = routingPolicies;
         this.clock = clock;
     }
 
@@ -122,8 +148,8 @@ public class ConfigPublishWorkflowService {
             Long expectedPublishSeq,
             @NonNull String reason,
             @NonNull String requesterId) {
-        return requestPublish(tenantId, scope, agents, List.of(), expectedPublishSeq, reason,
-                requesterId);
+        return requestPublish(tenantId, scope, agents, List.of(), List.of(), expectedPublishSeq,
+                reason, requesterId);
     }
 
     /**
@@ -165,6 +191,54 @@ public class ConfigPublishWorkflowService {
         // ⚠️ 申请阶段就跑一次门禁预检：非法方案在**申请时**就该被拒，
         //    而不是先占住一个审批名额，等审批通过后执行才失败。
         //    （执行时仍会再跑一次权威门禁 —— 两次之间配置可能已变。）
+        precheck(tenantId, payload, requesterId);
+        return insert(tenantId, payload, reason, requesterId);
+    }
+
+    /**
+     * 提交发布申请（Agent 定义 + 输出契约 + 路由策略）。
+     *
+     * <p>⚠️ <b>路由策略与 Agent 同批申请</b>：ROUTER Agent 的路由行为完全由
+     * {@code routingPolicyRef} 指向的策略决定，策略与 Agent 分两次审批，
+     * 「批的策略」与「生效的策略」就不是同一件事 ——
+     * 而路由结果恰恰是最需要复核的那部分（MA-T05 / MA-T15）。
+     *
+     * @param tenantId          租户标识
+     * @param scope             作用域
+     * @param agents            Agent 定义草稿
+     * @param resultContracts   输出契约草稿
+     * @param routingPolicies   路由策略草稿
+     * @param expectedPublishSeq CAS 基线
+     * @param reason            变更理由
+     * @param requesterId       申请人主体标识
+     * @return 申请单（PENDING）
+     */
+    public @NonNull ConfigPublishRequest requestPublish(
+            @NonNull String tenantId,
+            ConfigRelease.@NonNull Scope scope,
+            @NonNull List<ConfigPublishPayload.@NonNull AgentSpec> agents,
+            @NonNull List<ConfigPublishPayload.@NonNull ResultContractSpec> resultContracts,
+            @NonNull List<ConfigPublishPayload.@NonNull RoutingPolicySpec> routingPolicies,
+            Long expectedPublishSeq,
+            @NonNull String reason,
+            @NonNull String requesterId) {
+        requireTenantScope(scope);
+        if (agents.isEmpty() && resultContracts.isEmpty() && routingPolicies.isEmpty()) {
+            throw new IllegalArgumentException("发布申请不得为空");
+        }
+        // ⚠️ 未装配契约仓储却申请登记契约 → 拒绝（fail-closed）：
+        //    否则申请单看起来带了契约，实际执行时会被静默丢掉。
+        if (!resultContracts.isEmpty() && contracts == null) {
+            throw new IllegalArgumentException(
+                    "输出契约登记能力未装配（契约仓储缺失），拒绝提交带契约的发布申请");
+        }
+        // ⚠️ 路由策略同口径：未装配策略仓储却申请登记策略 → 拒绝。
+        if (!routingPolicies.isEmpty() && routingPolicies == null) {
+            throw new IllegalArgumentException(
+                    "路由策略登记能力未装配（策略仓储缺失），拒绝提交带策略的发布申请");
+        }
+        ConfigPublishPayload payload = ConfigPublishPayload.publish(agents, resultContracts,
+                routingPolicies, expectedPublishSeq);
         precheck(tenantId, payload, requesterId);
         return insert(tenantId, payload, reason, requesterId);
     }
@@ -404,6 +478,7 @@ public class ConfigPublishWorkflowService {
                                                      boolean resolveBaseline) {
         List<CapAgentDef> defs = new ArrayList<>();
         List<CapResultContractDef> contractDefs = new ArrayList<>();
+        List<CapRoutingPolicyDef> policyDefs = new ArrayList<>();
         Instant now = clock.instant();
         for (ConfigPublishPayload.AgentSpec spec : payload.agents()) {
             int version = agentDefs.findLatest(tenantId, spec.agentId())
@@ -434,10 +509,45 @@ public class ConfigPublishWorkflowService {
             contractDefs.add(new CapResultContractDef(tenantId, spec.contractId(), version,
                     spec.schemaJson(), fingerprint, 1, now, null));
         }
+        // ⚠️ 路由策略的版本号与内容指纹**同样由服务端决定**（与 Agent / 契约同口径）：
+        //    客户端提交这两者等于让客户端指定「内容没变」这个证明。
+        for (ConfigPublishPayload.RoutingPolicySpec spec : payload.routingPolicies()) {
+            int version = routingPolicies.findLatest(tenantId, spec.policyId())
+                    .map(CapRoutingPolicyDef::version).orElse(0) + 1;
+            RoutingStrategy strategy = parseStrategy(spec.strategy());
+            CapRoutingPolicyDef draft = new CapRoutingPolicyDef(tenantId, spec.policyId(),
+                    version, strategy, spec.targets(),
+                    // ⚠️ 占位指纹：内容指纹**不包含**自身，故可先占位再算
+                    "pending", 1, now, null);
+            String fingerprint = CapObjectFingerprint.of(draft);
+            policyDefs.add(new CapRoutingPolicyDef(tenantId, spec.policyId(), version, strategy,
+                    spec.targets(), fingerprint, 1, now, null));
+        }
         Long baseline = resolveBaseline ? resolveBaseline(tenantId, payload) : null;
         return new ConfigPublishCommand(ConfigRelease.Scope.TENANT, tenantId, baseline,
                 requesterId, approverId, null,
-                List.of(), List.of(), List.of(), defs, null, contractDefs);
+                List.of(), List.of(), List.of(), defs, null, contractDefs, policyDefs);
+    }
+
+    /**
+     * 解析路由策略的选择策略名。
+     *
+     * <p>⚠️ <b>大小写不敏感但不接受别名</b>：只认
+     * {@code EXPLICIT_TARGETS} / {@code ORDERED_FALLBACK} 两个枚举名。
+     * 「宽容地猜一个相近的名字」会让「策略写错了」变成「策略静默换了语义」——
+     * 路由行为随之改变，而作者以为自己写的是另一个。
+     *
+     * @param raw 策略名
+     * @return 选择策略
+     * @throws IllegalArgumentException 策略名非法
+     */
+    private static @NonNull RoutingStrategy parseStrategy(@NonNull String raw) {
+        try {
+            return RoutingStrategy.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("未知的路由策略选择策略: " + raw
+                    + "（合法值: EXPLICIT_TARGETS / ORDERED_FALLBACK）", e);
+        }
     }
 
     /**

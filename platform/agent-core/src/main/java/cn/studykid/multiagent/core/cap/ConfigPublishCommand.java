@@ -36,6 +36,7 @@ import org.jspecify.annotations.Nullable;
  * @param agents               本次发布的 Agent 版本行（仅 TENANT 作用域）
  * @param effectiveAt          生效时间
  * @param resultContracts      本次发布的输出契约版本行（仅 TENANT 作用域 · 多级 Agent v1.1）
+ * @param routingPolicies      本次发布的路由策略版本行（仅 TENANT 作用域 · 多级 Agent v1.1 第十四批）
  */
 public record ConfigPublishCommand(
         ConfigRelease.@NonNull Scope scope,
@@ -49,14 +50,15 @@ public record ConfigPublishCommand(
         @NonNull List<CapMcpServerDef> mcpServers,
         @NonNull List<CapAgentDef> agents,
         @Nullable Instant effectiveAt,
-        @NonNull List<CapResultContractDef> resultContracts) {
+        @NonNull List<CapResultContractDef> resultContracts,
+        @NonNull List<CapRoutingPolicyDef> routingPolicies) {
 
     /**
-     * 兼容构造器：<b>无输出契约</b>的发布命令（多级 Agent 之前的形态）。
+     * 兼容构造器：<b>无输出契约、无路由策略</b>的发布命令（多级 Agent 之前的形态）。
      *
-     * <p>⚠️ 缺省 = <b>本次发布不含契约</b>，不是「契约随意」——
-     * 命令里没有契约就没有契约可发布，Agent 的 {@code resultContractRef}
-     * 只能指向**此前已发布**的契约。
+     * <p>⚠️ 缺省 = <b>本次发布不含契约与策略</b>，不是「契约/策略随意」——
+     * 命令里没有就没有可发布的，Agent 的 {@code resultContractRef} /
+     * {@code routingPolicyRef} 只能指向<b>此前已发布</b>的对应对象。
      */
     public ConfigPublishCommand(ConfigRelease.@NonNull Scope scope,
                                  @Nullable String tenantId,
@@ -70,7 +72,26 @@ public record ConfigPublishCommand(
                                  @NonNull List<CapAgentDef> agents,
                                  @Nullable Instant effectiveAt) {
         this(scope, tenantId, expectedPublishSeq, requesterId, approverId, aggregateFingerprint,
-                tools, skills, mcpServers, agents, effectiveAt, List.of());
+                tools, skills, mcpServers, agents, effectiveAt, List.of(), List.of());
+    }
+
+    /**
+     * 兼容构造器：<b>有输出契约、无路由策略</b>的发布命令（第十四批之前的形态）。
+     */
+    public ConfigPublishCommand(ConfigRelease.@NonNull Scope scope,
+                                 @Nullable String tenantId,
+                                 @Nullable Long expectedPublishSeq,
+                                 @Nullable String requesterId,
+                                 @Nullable String approverId,
+                                 @Nullable String aggregateFingerprint,
+                                 @NonNull List<CapToolDef> tools,
+                                 @NonNull List<CapSkillDef> skills,
+                                 @NonNull List<CapMcpServerDef> mcpServers,
+                                 @NonNull List<CapAgentDef> agents,
+                                 @Nullable Instant effectiveAt,
+                                 @NonNull List<CapResultContractDef> resultContracts) {
+        this(scope, tenantId, expectedPublishSeq, requesterId, approverId, aggregateFingerprint,
+                tools, skills, mcpServers, agents, effectiveAt, resultContracts, List.of());
     }
 
     public ConfigPublishCommand {
@@ -91,6 +112,7 @@ public record ConfigPublishCommand(
         mcpServers = mcpServers == null ? List.of() : List.copyOf(mcpServers);
         agents = agents == null ? List.of() : List.copyOf(agents);
         resultContracts = resultContracts == null ? List.of() : List.copyOf(resultContracts);
+        routingPolicies = routingPolicies == null ? List.of() : List.copyOf(routingPolicies);
     }
 
     /**
@@ -116,6 +138,11 @@ public record ConfigPublishCommand(
         for (CapResultContractDef contract : resultContracts) {
             refs.add(ConfigObjectVersion.resultContract(contract.contractId(), contract.version()));
         }
+        // ⚠️ 路由策略必须进发布头：发布头是「这次发布了哪些精确版本」的权威清单。
+        //    策略不在清单里 → 回滚/追溯时无法确定「当时生效的是哪份路由规则」。
+        for (CapRoutingPolicyDef policy : routingPolicies) {
+            refs.add(ConfigObjectVersion.routingPolicy(policy.policyId(), policy.version()));
+        }
         return List.copyOf(refs);
     }
 
@@ -124,7 +151,7 @@ public record ConfigPublishCommand(
      */
     public int objectCount() {
         return tools.size() + skills.size() + mcpServers.size() + agents.size()
-                + resultContracts.size();
+                + resultContracts.size() + routingPolicies.size();
     }
 
     /**
