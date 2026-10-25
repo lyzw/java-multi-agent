@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "id": "orders-router",
+  "tenantId": "tenant_001",
+  "name": "订单路由策略",
+  "description": "订单类请求的路由规则：先按显式目标命中，未命中则按降级顺序取第一个。",
+  "status": "DRAFT",
+  "strategy": "ORDERED_FALLBACK",
+  "targets": [
+    "agent_order_query",
+    "agent_order_refund"
+  ],
+  "revision": 1
+}

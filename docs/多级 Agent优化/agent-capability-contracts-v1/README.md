@@ -10,6 +10,7 @@ Schema 方言：JSON Schema Draft 2020-12
 - `schemas/skill.schema.json`：Skill 定义契约
 - `schemas/tool.schema.json`：Tool 定义契约
 - `schemas/mcp-server.schema.json`：MCP Server 定义契约
+- `schemas/routing-policy.schema.json`：路由策略契约（多级 Agent v1.1 第十四批 · ⚠️ **内容模型是本批取舍，非评审冻结模型**）
 - `examples/*.json`：各实体示例
 - `CONTRACT_RULES.md`：JSON Schema 之外必须实现的跨对象/运行期规则
 - `README.md`：本文件

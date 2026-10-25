@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.invalid/agent-platform/routing-policy.schema.json",
+  "title": "RoutingPolicy",
+  "description": "路由策略（多级 Agent v1.1 第十四批）。\n\n⚠️ 本 Schema 的内容模型是「本批取舍」，不是评审冻结的模型：\n06/07/08 原文只规定「ROUTER 模式按固定版本路由策略选择子 Agent」，\n从未规定策略的内容模型。此处刻意取最小可扩展的一档 —— 一个策略枚举 + 一个有序目标列表，\n不引入条件表达式 DSL（可配置判定逻辑一旦进配置，就同时欠下求值确定性、发布期校验、\n求值失败语义三件事，那属于评审未决范围）。评审若冻结了不同模型，本 Schema 需相应调整。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "tenantId",
+    "status",
+    "strategy",
+    "targets",
+    "revision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "id": {
+      "$ref": "common.schema.json#/$defs/id",
+      "description": "策略标识（可读字符串，与 cap_tool_def.id / cap_skill_def.id 同构）。⚠️ 不可改为 UUID：对外 schema 契约把 fixedVersionRef.id 定义为可读字符串，治理通道也按字符串接收。"
+    },
+    "tenantId": {
+      "$ref": "common.schema.json#/$defs/id",
+      "description": "租户标识。必须来自可信服务端上下文，不能信任请求体自行指定的租户。"
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "status": {
+      "$ref": "common.schema.json#/$defs/lifecycleStatus",
+      "description": "生命周期状态。⚠️ DRAFT / VALIDATED 的策略不可被 ROUTER Agent 引用（先引用再发布是绕过发布流程的后门）。"
+    },
+    "strategy": {
+      "type": "string",
+      "description": "选择策略。EXPLICIT_TARGETS = 候选必须命中 targets，否则拒绝委派（不降级）；ORDERED_FALLBACK = 候选未命中时按 targets 的声明顺序取第一个目标。",
+      "enum": [
+        "EXPLICIT_TARGETS",
+        "ORDERED_FALLBACK"
+      ]
+    },
+    "targets": {
+      "type": "array",
+      "description": "允许的目标 Agent 标识（有序）。\n\n⚠️ 顺序在 ORDERED_FALLBACK 下就是路由语义的一部分，同一组目标换个次序是另一种路由行为 —— 内容指纹按声明顺序计算。\n⚠️ 不含版本号：目标的固定版本由父 Agent 的 childAgentRefs 提供（版本真相只有一份）。\n⚠️ 必须显式声明：空数组不是「允许任意」。",
+      "uniqueItems": true,
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "$ref": "common.schema.json#/$defs/id"
+      }
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "configFingerprint": {
+      "type": "string",
+      "description": "内容指纹。⚠️ 必须由服务端按内容计算（客户端若能指定，就等于能指定「内容没变」这个证明，而路由策略正是「路由行为是什么」的判定依据）。",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "createdBy": {
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedBy": {
+      "$ref": "common.schema.json#/$defs/id"
+    }
+  }
+}
