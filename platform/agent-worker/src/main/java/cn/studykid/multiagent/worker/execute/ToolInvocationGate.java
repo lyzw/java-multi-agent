@@ -691,7 +691,14 @@ public class ToolInvocationGate {
                         task.runId(),
                         remainingMillis,
                         task.fencingToken(),
-                        task.attempt()));
+                        task.attempt(),
+                        // ⚠️ 根 Run 的业务截止时刻**逐跳下传**（第十五批 · C15-2）：
+                        //    task.deadlineAt 在根路径上就是 run.deadline_at，
+                        //    在嵌套路径上由 WorkerChildAgentRunner 原样传下来 ——
+                        //    它是整棵调用树共享的**绝对**时间上界。
+                        //    只传「本跳剩余毫秒数」的话，每跳都会按自己的声明重新起算，
+                        //    根 Run 的剩余时间在嵌套路径上会被重置。
+                        task.deadlineAt()));
 
         var reasonCode = cn.studykid.multiagent.core.cap.ReasonCode
                 .parse(outcome.reasonCode());

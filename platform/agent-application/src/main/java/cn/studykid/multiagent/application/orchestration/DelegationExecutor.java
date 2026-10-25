@@ -235,6 +235,8 @@ public class DelegationExecutor {
      * @param remainingMillis     根 Run 剩余可用时间
      * @param fencingToken        根 Run 的世代令牌（子执行与根 Run 同世代）
      * @param attempt             根 Run 的尝试号
+     * @param rootDeadlineAt      <b>根 Run 的业务截止时刻</b>（绝对时刻）；
+     *                            {@code null} = 根 Run 未声明截止时间（不限时）
      */
     public record DelegationCommand(
             @NonNull String tenantId,
@@ -250,7 +252,34 @@ public class DelegationExecutor {
             @NonNull String traceId,
             long remainingMillis,
             long fencingToken,
-            int attempt) {
+            int attempt,
+            @Nullable Instant rootDeadlineAt) {
+
+        /**
+         * 兼容构造：<b>不知根 Run 的业务截止时刻</b>（第十五批之前的形态）。
+         *
+         * <p>⚠️ {@code rootDeadlineAt = null} 的语义是「根 Run 未声明截止时间 → 不限时」，
+         * <b>不是</b>「跳过检查」。这与根路径下
+         * {@code RunClaimPort.LeasedTask.deadlineAt = null} 的语义完全一致。
+         */
+        public DelegationCommand(@NonNull String tenantId,
+                                 @NonNull String runId,
+                                 @Nullable String parentAgentId,
+                                 @Nullable Integer parentAgentVersion,
+                                 @Nullable String parentInvocationId,
+                                 int parentDepth,
+                                 @NonNull String targetAgentId,
+                                 @Nullable Integer targetAgentVersion,
+                                 @NonNull Map<String, Object> input,
+                                 @NonNull String invocationId,
+                                 @NonNull String traceId,
+                                 long remainingMillis,
+                                 long fencingToken,
+                                 int attempt) {
+            this(tenantId, runId, parentAgentId, parentAgentVersion, parentInvocationId,
+                    parentDepth, targetAgentId, targetAgentVersion, input, invocationId,
+                    traceId, remainingMillis, fencingToken, attempt, null);
+        }
     }
 
     /**
@@ -521,7 +550,12 @@ public class DelegationExecutor {
                     //    否则「超时」只是一句判定，没有任何强制力（MA-T09），
                     //    且根 Run 的剩余时间对子执行毫无约束力。
                     effectiveTimeoutMs,
-                    command.fencingToken(), command.attempt()));
+                    command.fencingToken(), command.attempt(),
+                    // ⚠️ 根 Run 的业务截止时刻**逐跳下传**（第十五批 · C15-2）：
+                    //    它是整棵调用树**共享**的时间上界，必须以**绝对时刻**传递 ——
+                    //    只传「本级剩余毫秒数」的话，每一跳都会重新按自己的声明起算，
+                    //    根 Run 的剩余时间在嵌套路径上被重置成无限。
+                    command.rootDeadlineAt()));
         } catch (RuntimeException e) {
             log.error("子 Agent 执行异常: invocation={}", command.invocationId(), e);
             result = ChildAgentRunner.ChildAgentResult.failed(

@@ -82,6 +82,15 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
      * 注入时钟源后，「时间到了」是<b>确定</b>的事实。
      */
     private final java.util.function.LongSupplier nanoTime;
+    /**
+     * 墙钟（用于把根 Run 的<b>绝对</b>业务截止时刻换算成剩余毫秒）。
+     *
+     * <p>⚠️ <b>与 {@link #nanoTime} 分工</b>：{@code nanoTime} 是<b>单调</b>时钟，
+     * 适合测「本级预算还剩多少」；而根 Run 的业务截止时刻是<b>绝对时刻</b>
+     * （{@code run.deadline_at}），必须用墙钟比对 ——
+     * 两者混用会把「绝对上界」变成「相对时长」，等于把上界丢掉。
+     */
+    private final java.time.Clock clock;
 
     public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
@@ -104,22 +113,34 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
         this(modelGateway, toolGate, configs, maxChildSteps, cancellation, System::nanoTime);
     }
 
-    /**
-     * 完整构造器（注入时钟源，供确定性测试使用）。
-     *
-     * @param modelGateway   模型网关
-     * @param toolGate       工具闸门
-     * @param configs        子 Agent 模型配置来源
-     * @param maxChildSteps  子执行最大轮次
-     * @param cancellation   取消探针（{@code null} = 永不取消）
-     * @param nanoTime       纳秒时钟源
-     */
     public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
                                    @NonNull ChildAgentModelConfigProvider configs,
                                    int maxChildSteps,
                                    CancellationProbe cancellation,
                                    java.util.function.LongSupplier nanoTime) {
+        this(modelGateway, toolGate, configs, maxChildSteps, cancellation, nanoTime,
+                java.time.Clock.systemUTC());
+    }
+
+    /**
+     * 完整构造器（注入时钟源与墙钟，供确定性测试使用）。
+     *
+     * @param modelGateway   模型网关
+     * @param toolGate       工具闸门
+     * @param configs        子 Agent 模型配置来源
+     * @param maxChildSteps  子执行最大轮次
+     * @param cancellation   取消探针（{@code null} = 永不取消）
+     * @param nanoTime       纳秒时钟源（单调）
+     * @param clock          墙钟（用于比对根 Run 的绝对业务截止时刻）
+     */
+    public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
+                                   @NonNull ToolInvocationGate toolGate,
+                                   @NonNull ChildAgentModelConfigProvider configs,
+                                   int maxChildSteps,
+                                   CancellationProbe cancellation,
+                                   java.util.function.LongSupplier nanoTime,
+                                   java.time.Clock clock) {
         if (maxChildSteps < 1) {
             throw new IllegalArgumentException("maxChildSteps 必须为正数，收到: " + maxChildSteps);
         }
@@ -129,6 +150,7 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
         this.maxChildSteps = maxChildSteps;
         this.cancellation = cancellation;
         this.nanoTime = nanoTime;
+        this.clock = clock;
     }
 
     @Override
@@ -145,12 +167,32 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
         ChildAgentModelConfigProvider.ChildModelConfig modelConfig = config.get();
 
         String input = renderInput(request.input());
+        // ⚠️ 根 Run 的业务截止时刻（第十五批 · C15-2）：
+        //    它是整棵调用树**共享**的**绝对**时间上界。
+        //    此前这里恒传 {@code null}（= 不限时）→ 子 Agent 再发起嵌套委派时，
+        //    闸门算出的剩余时间是 {@link Long#MAX_VALUE} →
+        //    根 Run 的剩余时间在嵌套路径上**彻底失效**，
+        //    「全调用树共享超时上限」被架空。
+        Instant rootDeadline = request.rootDeadlineAt();
         RunClaimPort.LeasedTask task = new RunClaimPort.LeasedTask(
-                request.runId(), request.fencingToken(), Instant.MAX, request.attempt());
+                request.runId(), request.fencingToken(), Instant.MAX, request.attempt(),
+                rootDeadline);
 
-        // ⚠️ 墙钟截止时间：本级声明的链路预算从这里开始计时。
-        //    子执行**自己**实施它，而不是只做一次判定（MA-T09）。
-        long deadlineNanos = nanoTime.getAsLong() + request.timeoutMs() * 1_000_000L;
+        // ⚠️ 墙钟截止时间 = min(父给的链路预算, 根 Run 的剩余时间)，从**子执行启动
+        //    那一刻**起计时。子执行**自己**实施它，而不是只做一次判定（MA-T09）。
+        long effectiveTimeoutMs = request.timeoutMs();
+        if (rootDeadline != null) {
+            long rootRemainingMs = rootDeadline.toEpochMilli() - clock.millis();
+            if (rootRemainingMs <= 0) {
+                // ⚠️ 根 Run 的业务截止时刻已过 → 子执行**不得启动**：
+                //    再跑下去就是「明知会超时还要先花钱」。
+                log.warn("根 Run 业务截止时刻已过，子执行不启动: agent={}, deadline={}",
+                        request.targetAgentId(), rootDeadline);
+                return ChildAgentResult.timedOut(ReasonCode.DELEGATION_TIMEOUT.name());
+            }
+            effectiveTimeoutMs = Math.min(effectiveTimeoutMs, rootRemainingMs);
+        }
+        long deadlineNanos = nanoTime.getAsLong() + effectiveTimeoutMs * 1_000_000L;
 
         // ⚠️ 对话消息序列：首轮是委派输入，之后每轮追加
         //    「模型意图 + 工具结果」—— 没有它，模型看不到自己刚调了什么，
@@ -172,7 +214,7 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
             long remainingNanos = deadlineNanos - nanoTime.getAsLong();
             if (remainingNanos <= 0) {
                 log.warn("子执行超时: agent={}, budgetMs={}",
-                        request.targetAgentId(), request.timeoutMs());
+                        request.targetAgentId(), effectiveTimeoutMs);
                 return ChildAgentResult.timedOut(ReasonCode.DELEGATION_TIMEOUT.name());
             }
 

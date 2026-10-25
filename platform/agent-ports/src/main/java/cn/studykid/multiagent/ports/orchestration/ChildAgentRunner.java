@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.ports.orchestration;
 
+import java.time.Instant;
 import java.util.Map;
 
 import org.jspecify.annotations.NonNull;
@@ -48,6 +49,8 @@ public interface ChildAgentRunner {
      *                         否则「超时」只是判定而没有强制力
      * @param fencingToken      根 Run 的世代令牌（子执行与根 Run 同世代）
      * @param attempt           根 Run 的尝试号
+     * @param rootDeadlineAt    <b>根 Run 的业务截止时刻</b>（绝对时刻）；
+     *                          {@code null} = 根 Run 未声明截止时间（不限时）
      */
     record ChildAgentRequest(
             @NonNull String tenantId,
@@ -63,7 +66,8 @@ public interface ChildAgentRunner {
             @NonNull ExecutionScope scope,
             long timeoutMs,
             long fencingToken,
-            int attempt) {
+            int attempt,
+            @Nullable Instant rootDeadlineAt) {
 
         public ChildAgentRequest {
             if (timeoutMs <= 0) {
@@ -71,6 +75,33 @@ public interface ChildAgentRunner {
                 //    那会让子执行永远无法开始，且失败原因难以分辨。
                 throw new IllegalArgumentException("子执行时间预算必须为正数，收到: " + timeoutMs);
             }
+        }
+
+        /**
+         * 兼容构造：<b>不知根 Run 的业务截止时刻</b>（第十五批之前的形态）。
+         *
+         * <p>⚠️ {@code rootDeadlineAt = null} 的语义是「根 Run 未声明截止时间 → 不限时」，
+         * <b>不是</b>「跳过检查」——两者在行为上等价，但必须写清楚：
+         * 否则调用方会以为「传 null = 跳过超时约束」，从而把一个
+         * <b>没有强制力</b>的超时当成有强制力的。
+         */
+        public ChildAgentRequest(@NonNull String tenantId,
+                                 @NonNull String runId,
+                                 @NonNull String invocationId,
+                                 @NonNull String traceId,
+                                 @NonNull String parentAgentId,
+                                 int parentAgentVersion,
+                                 @NonNull String targetAgentId,
+                                 int targetAgentVersion,
+                                 @NonNull Map<String, Object> input,
+                                 int depth,
+                                 @NonNull ExecutionScope scope,
+                                 long timeoutMs,
+                                 long fencingToken,
+                                 int attempt) {
+            this(tenantId, runId, invocationId, traceId, parentAgentId, parentAgentVersion,
+                    targetAgentId, targetAgentVersion, input, depth, scope, timeoutMs,
+                    fencingToken, attempt, null);
         }
     }
 
