@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>admin-console 重新规划 · 对齐「多级 Agent 优化」</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f7f9fc; --ink:#1f2733; --muted:#5b6675;
+    --line:#e3e8ef; --brand:#2f6fed; --brand-soft:#eaf1ff;
+    --done:#1f9d55; --done-soft:#e7f6ed;
+    --gap:#d9821b; --gap-soft:#fdf2e2;
+    --plan:#7a5af0; --plan-soft:#f1edff;
+    --danger:#d64545; --danger-soft:#fdeaea;
+    --code:#0f3d6b; --code-bg:#eef4fb;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    line-height:1.65;font-size:15px}
+  header{background:linear-gradient(120deg,#2f6fed,#5a8bff);color:#fff;padding:34px 40px}
+  header h1{margin:0 0 6px;font-size:25px;letter-spacing:.3px}
+  header .sub{opacity:.92;font-size:14px}
+  header .meta{margin-top:14px;font-size:12.5px;opacity:.9;display:flex;flex-wrap:wrap;gap:8px}
+  header .meta span{background:rgba(255,255,255,.16);padding:3px 10px;border-radius:20px}
+  nav{position:sticky;top:0;background:#fff;border-bottom:1px solid var(--line);padding:10px 40px;
+    display:flex;flex-wrap:wrap;gap:6px;z-index:20;font-size:13px}
+  nav a{color:var(--brand);text-decoration:none;padding:4px 10px;border-radius:6px}
+  nav a:hover{background:var(--brand-soft)}
+  main{max-width:1080px;margin:0 auto;padding:30px 40px 80px}
+  section{margin:34px 0;scroll-margin-top:56px}
+  h2{font-size:20px;border-left:4px solid var(--brand);padding-left:12px;margin:28px 0 14px}
+  h3{font-size:16.5px;margin:22px 0 8px;color:#2a3340}
+  p{margin:8px 0}
+  .lead{color:var(--muted);font-size:14.5px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef2f8;font-weight:600;color:#2a3340}
+  tr:nth-child(even) td{background:#fafcff}
+  code{font-family:"SFMono-Regular",Consolas,Menlo,monospace;color:var(--code);background:var(--code-bg);
+    padding:1px 6px;border-radius:5px;font-size:12.5px}
+  .badge{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:20px;white-space:nowrap}
+  .b-done{background:var(--done-soft);color:var(--done)}
+  .b-gap{background:var(--gap-soft);color:var(--gap)}
+  .b-plan{background:var(--plan-soft);color:var(--plan)}
+  .b-danger{background:var(--danger-soft);color:var(--danger)}
+  .b-doc{background:#eef2f8;color:#3a485c}
+  ul,ol{margin:8px 0 8px 4px;padding-left:20px}
+  li{margin:5px 0}
+  .callout{border-radius:10px;padding:12px 16px;margin:14px 0;font-size:14px;border:1px solid}
+  .c-warn{background:var(--gap-soft);border-color:#f0d2a6;color:#8a5a14}
+  .c-info{background:var(--brand-soft);border-color:#c9dcff;color:#1f4ba8}
+  .c-danger{background:var(--danger-soft);border-color:#f0c2c2;color:#a32727}
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.twocol{grid-template-columns:1fr}nav{padding:10px 16px}main{padding:20px 16px}header{padding:24px 18px}}
+  .kpi{display:flex;gap:14px;flex-wrap:wrap;margin:12px 0}
+  .kpi div{flex:1;min-width:140px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .kpi b{font-size:22px;display:block;color:var(--brand)}
+  .kpi span{font-size:12.5px;color:var(--muted)}
+  .foot{margin-top:50px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:12.5px}
+  .tag{font-size:11px;color:var(--muted);border:1px dashed var(--line);padding:1px 7px;border-radius:6px;margin-left:4px}
+  .mono{font-family:"SFMono-Regular",Consolas,Menlo,monospace;font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>admin-console 重新规划</h1>
+  <div class="sub">对齐「多级 Agent 优化」（Agent Multi-Agent Orchestration Change Set v1.1）</div>
+  <div class="meta">
+    <span>修订批次基线：v3.1</span>
+    <span>现行计划：W-ADMIN-P0 ~ P5（已完成）</span>
+    <span>最新代码落地：第二十九批 C29-1（A6）</span>
+    <span>编制日期：2026-10-25</span>
+    <span>编制人：WorkBuddy</span>
+  </div>
+</header>
+
+<nav>
+  <a href="#s0">修订说明</a>
+  <a href="#s1">现状基线</a>
+  <a href="#s2">能力映射</a>
+  <a href="#s3">重新规划 · 增量批次</a>
+  <a href="#s34">3.5 第三十四批落地</a>
+  <a href="#s4">后端 API 依赖</a>
+  <a href="#s5">验收矩阵</a>
+  <a href="#s6">风险登记</a>
+  <a href="#s7">工作量与排期</a>
+  <a href="#s8">退出门禁</a>
+</nav>
+
+<main>
+
+<!-- 0. 修订说明 -->
+<section id="s0">
+  <h2>0. 修订说明与范围</h2>
+  <p class="lead">
+    本文件是 <code>docs/管理后台开发计划/</code>（W-ADMIN-P0~P5，已于 2026-10-24 收官）的<strong>补充性重新规划</strong>，
+    专门把《多级 Agent 优化》变更集（<code>docs/多级 Agent优化/</code>）对管理台前端提出的能力要求，
+    系统地落到 admin-console 的交付计划里。
+  </p>
+  <div class="callout c-info">
+    <strong>原则（沿用 00_修订说明）：</strong>保留现有架构、命名与 P0–P5 阶段，不另建并行体系。
+    admin-console 继续是「独立前端工程 + 共享后端 <code>platform/agent-api</code>」的纯 API 消费方；
+    领域规则（闭包、指纹、CAS、双复核、RLS）一律复用，不在前端重写安全语义。
+  </div>
+  <h3>0.1 已落地的三条评审前置决策（直接约束前端表单口径）</h3>
+  <table>
+    <thead><tr><th>决策</th><th>结论</th><th>对 admin-console 的约束</th><th>落地状态</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>决策 1</strong><br/>SEQUENTIAL 是否纳入 P2</td>
+        <td><code>SEQUENTIAL</code> <b>不纳入 P2</b>：语义收敛为「父 Agent 自己串行并聚合，框架不代劳」</td>
+        <td>前端编排模式枚举<strong>保留</strong> <code>SEQUENTIAL</code> 选项（供声明），但不得暗示框架做聚合；表单提示「聚合由父 Agent 自行实现」</td>
+        <td><span class="badge b-doc">第三十二批 C32-1 已落地</span></td>
+      </tr>
+      <tr>
+        <td><strong>决策 2</strong><br/>平台默认值</td>
+        <td><b>取消平台默认值</b>：非 <code>LEAF</code> 发布时<strong>必须显式声明</strong>最大深度 / 子调用数 / 超时，缺失即拒发布；深度<strong>不级联</strong></td>
+        <td>编排表单：非 LEAF 三个上限<strong>必填、不预填默认</strong>（与 <code>AgentOrchestrationParser</code> 对齐）</td>
+        <td><span class="badge b-gap">第三十三批 C33 待落地</span></td>
+      </tr>
+      <tr>
+        <td><strong>决策 3</strong><br/>状态机 / 取消 / 重试 / UNKNOWN</td>
+        <td>已<strong>冻结</strong> → ADR-012（状态枚举 / 父子取消语义 / 重试 / UNKNOWN 条件）</td>
+        <td>监控页状态机：七态封闭集合、终态不可覆盖；<strong>不得</strong>展示「补偿 / 重试」等 V1 不支持的动作</td>
+        <td><span class="badge b-doc">ADR-012 已冻结</span></td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn">
+    <strong>⚠️ 口径提醒：</strong>「已决策」≠「已落地」。决策 1/2 的落地分别落在第三十二 / 三十三批，
+    在那之前前端表单<strong>不得</strong>按「已实现」口径引用；决策 2 的 fail-closed 校验当前由后端 <code>AgentOrchestration</code> 构造器执行，前端仅做体验层预校验。
+  </div>
+</section>
+
+<!-- 1. 现状基线 -->
+<section id="s1">
+  <h2>1. 现状基线盘点</h2>
+  <div class="kpi">
+    <div><b>P0–P5</b><span>管理后台基础闭环（2026-10-24 收官）</span></div>
+    <div><b>71</b><span>admin-console Vitest 用例（29 批 +22）</span></div>
+    <div><b>3</b><span>已识别管理台缺口</span></div>
+    <div><b>1</b><span>枚举不一致缺陷（见 §1.3）</span></div>
+  </div>
+
+  <h3>1.1 已交付（W-ADMIN-P0~P5 全部完成）</h3>
+  <table>
+    <thead><tr><th>阶段</th><th>能力</th><th>落点（前端页面 / 模块）</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>P0 脚手架</td><td>独立 Vite+React18+TS 工程、布局/路由/<code>TENANT_ADMIN</code> 守卫、API client、令牌、仪表盘骨架、与共享后端 dev proxy/鉴权打通</td><td><code>src/layout</code> <code>src/auth</code> <code>src/api</code> <code>DashboardPage.tsx</code></td><td><span class="badge b-done">已完成</span></td></tr>
+      <tr><td>P0.5 租户管理</td><td>租户生命周期、配置覆盖（收紧棘轮）、主体与角色、RLS 隔离</td><td><code>pages/Tenant*.tsx</code> <code>PrincipalMatrixPage.tsx</code></td><td><span class="badge b-done">已完成</span></td></tr>
+      <tr><td>P1 实体管理</td><td>Agent/Tool/Skill/MCP 列表+详情+草稿 CRUD+版本历史；目录只读</td><td><code>AgentRegistryPage</code> <code>AgentDetailPage</code> <code>catalog/*</code></td><td><span class="badge b-done">已完成</span></td></tr>
+      <tr><td>P2 发布审批</td><td>发布中心、三步工作流 UI、双复核、回滚、生命周期迁移</td><td><code>pages/publish/*</code></td><td><span class="badge b-done">已完成</span></td></tr>
+      <tr><td>P3 关系视图</td><td>能力闭包图谱、影响分析、删除守卫</td><td><code>pages/dependencies/*</code> <code>AgentDependenciesTab.tsx</code></td><td><span class="badge b-done">已完成</span></td></tr>
+      <tr><td>P4 运行监控</td><td>authzVersion 水位、MCP 健康、DENY 告警、运行日志（<strong>平台级对象监控</strong>）</td><td><code>pages/monitoring/*</code></td><td><span class="badge b-done">已完成</span></td></tr>
+      <tr><td>P5 审计配置</td><td>操作日志视图、角色矩阵、凭据引用登记（仅布尔，明文不入响应）</td><td><code>pages/audit/*</code> <code>pages/settings/*</code></td><td><span class="badge b-done">已完成</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3>1.2 第二十九批（C29-1 · A6）已交付的多级 Agent 能力</h3>
+  <table>
+    <thead><tr><th>能力</th><th>落点</th><th>验收证据</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>编排声明<strong>结构化表单</strong>（进入 Agent 发布抽屉）</td>
+        <td><code>src/pages/orchestration/orchestrationForm.ts</code>（纯逻辑模块）</td>
+        <td><code>orchestrationForm.test.tsx</code> 17 例</td>
+        <td><span class="badge b-done">已完成</span></td>
+      </tr>
+      <tr>
+        <td>输出契约<strong>独立登记页</strong>（契约是独立对象，复用三步工作流，不开旁路）</td>
+        <td><code>src/pages/catalog/ResultContractPage.tsx</code></td>
+        <td><code>resultContractPage.test.tsx</code> 5 例</td>
+        <td><span class="badge b-done">已完成</span></td>
+      </tr>
+      <tr>
+        <td>前端类型补齐 <code>orchestration</code> 与 <code>resultContracts</code>（不含版本号与内容指纹，二者由服务端决定）</td>
+        <td><code>src/api/types</code></td>
+        <td>—</td>
+        <td><span class="badge b-done">已完成</span></td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="lead">A6 后端治理通道（<code>AgentRequest.orchestration</code> + <code>PublishRequest.resultContracts</code>）早在第十一批端到端打通，A6 是把前端补齐，不改后端。</p>
+
+  <h3>1.3 已识别的缺口与缺陷 <span class="tag">必须在本重规划中闭环</span></h3>
+  <table>
+    <thead><tr><th>#</th><th>缺口 / 缺陷</th><th>说明</th><th>严重度</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>G-1</strong></td>
+        <td>路由策略<strong>登记表单</strong>未做</td>
+        <td>后端 <code>PublishRequest.routingPolicies</code> 已支持并随发布事务登记，但前端 ROUTER 模式下的策略引用只能手填 <code>id@version</code>，<strong>无登记 UI</strong></td>
+        <td><span class="badge b-gap">缺口</span></td>
+      </tr>
+      <tr>
+        <td><strong>G-2</strong></td>
+        <td>契约<strong>目录 / 查看页</strong>尚无</td>
+        <td><code>ResultContractPage</code> 只支持「登记」，尚无「列表目录 / 详情查看 / 生命周期状态」页；且契约 <code>DRAFT→VALIDATED</code> 当前无写入路径（数据层可表达但无入口）</td>
+        <td><span class="badge b-gap">缺口</span></td>
+      </tr>
+      <tr>
+        <td><strong>G-3</strong></td>
+        <td>编排声明的<strong>子 Agent 候选列表未接</strong></td>
+        <td><code>childAgentRefs[].id</code> 当前为<strong>手填 UUID</strong>，需后端提供「按租户的 Agent 列表接口」供下拉选择（同时是 MA-T04 跨租户引用在 UI 层的第一道过滤）</td>
+        <td><span class="badge b-gap">缺口</span></td>
+      </tr>
+      <tr>
+        <td><strong>D-1</strong></td>
+        <td><code>failurePolicy</code> 枚举<strong>前后端不一致</strong></td>
+        <td><code>orchestrationForm.ts</code> 定义 <code>FAILURE_POLICIES = ['FAIL_FAST','CONTINUE','COMPENSATE']</code>，但后端 schema / ADR-012 仅支持 <code>FAIL_FAST</code> / <code>CONTINUE_ON_ERROR</code>；<code>COMPENSATE</code> 是 V1 明确<strong>不支持</strong>的补偿语义，<code>CONTINUE</code> 应为 <code>CONTINUE_ON_ERROR</code>。表单当前会放行一个后端会拒的值</td>
+        <td><span class="badge b-danger">缺陷</span></td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 2. 能力映射 -->
+<section id="s2">
+  <h2>2. 多级 Agent 对管理台的能力映射</h2>
+  <p class="lead">下表把《多级 Agent 优化》的需求编号，逐条映射到 admin-console 的页面落点与当前状态。状态图例：
+    <span class="badge b-done">已交付</span> <span class="badge b-gap">缺口</span> <span class="badge b-plan">规划中</span>。</p>
+  <table>
+    <thead><tr><th>需求编号</th><th>需求</th><th>admin-console 责任</th><th>落点页面 / 模块</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>FR-021</td><td>编排模式与子 Agent 固定引用</td><td>编排声明表单（mode / childAgentRefs，禁止 latest）</td><td><code>orchestrationForm.ts</code></td><td><span class="badge b-done">已交付</span></td></tr>
+      <tr><td>FR-022</td><td>AgentInvocation 调用契约与记录</td><td>运行监控：委派调用七态记录</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>FR-023</td><td>递归发布闭包 + 环检测 + 深度上限</td><td>发布校验失败提示（自环/间接环/超深 → 稳定 reasonCode）</td><td>发布页（复用 P2）</td><td><span class="badge b-done">已交付</span><span class="tag">后端</span></td></tr>
+      <tr><td>FR-024</td><td>委派深度/次数/超时/预算约束</td><td>编排表单三上限字段（非 LEAF 必填）</td><td><code>orchestrationForm.ts</code></td><td><span class="badge b-done">已交付</span></td></tr>
+      <tr><td>FR-025</td><td>逐跳授权与 authzVersion</td><td>逐跳授权可视化（<code>ExecutionScope</code> vs <code>DelegationContext</code>）</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>FR-026</td><td>父子调用可观测、取消与恢复</td><td>监控：取消传播 <code>CANCELLED</code>、状态机</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>FR-027</td><td>输出契约校验（链接契约）</td><td>契约登记 + 目录查看 + 停用审批</td><td><code>ResultContractPage</code>（+ 目录页）</td><td><span class="badge b-done">登记已交付</span> <span class="badge b-gap">目录缺口 G-2</span></td></tr>
+      <tr><td>FR-029</td><td>路由策略独立治理对象</td><td><strong>路由策略登记表单</strong>（缺口 G-1）</td><td>新增 <code>RoutingPolicyPage</code></td><td><span class="badge b-gap">缺口</span></td></tr>
+      <tr><td>FR-030</td><td>多级递归按「当前执行中的 Agent」判定</td><td>监控：嵌套层级 / 当前 Agent 上下文展示</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>FR-031</td><td>委派计入 Run 级预算</td><td>预算监控：Run 级占用、UNKNOWN 对账</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>FR-033</td><td>子 Agent 路径按固定 release</td><td>监控：固定 release 绑定展示</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>FR-037</td><td>委派预算预留 UNKNOWN 对账通道</td><td>对账处置 UI（当前无对外入口）</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>FR-038</td><td>委派记录补「模型原始候选」</td><td><strong>降级可视化</strong>（requested vs target）</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>FR-039</td><td>编排绑定承载被引用行内容指纹</td><td>影响分析展示（契约/策略指纹）</td><td>关系视图（扩展 P3）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>FR-040</td><td>输出契约/路由策略独立生命周期迁移</td><td>停用审批 UI（申请→审批→执行）</td><td>目录页（复用 P2 三步）</td><td><span class="badge b-gap">缺口 G-2/G-1</span></td></tr>
+      <tr><td>FR-044</td><td><strong>管理台前端：编排声明与契约登记</strong></td><td>直接责任：结构化编排表单 + 契约独立登记页</td><td>A6（C29-1）</td><td><span class="badge b-done">已交付</span></td></tr>
+      <tr><td>FR-045</td><td>委派调用状态机与取消语义冻结</td><td>状态展示（七态封闭、终态不可覆盖）</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>MA-T04</td><td>跨租户 childAgentRef 拒绝</td><td>候选列表按租户过滤（缺口 G-3 根因）</td><td>编排表单 + 后端列表接口</td><td><span class="badge b-gap">缺口 G-3</span></td></tr>
+      <tr><td>MA-T15</td><td>指纹漂移（编排绑定入闭包指纹）</td><td>影响分析、闭包指纹展示</td><td>关系视图（扩展 P3）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>MA-T16</td><td>输出契约校验 + 生命周期</td><td>契约目录 / 停用审批 UI</td><td>目录页</td><td><span class="badge b-gap">缺口 G-2</span></td></tr>
+      <tr><td>MA-T17</td><td>预算 + UNKNOWN 对账</td><td>预算监控、对账处置 UI</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+      <tr><td>MA-T23a~h</td><td><strong>直接 admin-console 用例</strong></td><td>编排表单可达/预检/固定版本/不预填默认/契约登记可达/合法性/留痕/不越权</td><td>A6 + 本重规划修复</td><td><span class="badge b-done">A6 已覆盖</span></td></tr>
+      <tr><td>MA-T24a~i</td><td>状态机七态/终态/取消/接管/UNKNOWN</td><td>监控与状态展示</td><td>监控页（扩展 P4）</td><td><span class="badge b-plan">规划中</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 3. 重新规划：增量批次 -->
+<section id="s3">
+  <h2>3. 重新规划：增量批次（A6 已交付，A7–A10 规划）</h2>
+  <p class="lead">沿用「可验证增量」原则，把多级 Agent 的剩余管理台工作拆成 4 个批次。A6 已交付，A7 闭环 3 缺口 + 1 缺陷，A8/A9 在既有 P3/P4 上做能力增强，A10 是横切的安全展示纪律。</p>
+
+  <div class="card">
+    <h3>A7 · 多级 Agent 配置闭环（缺口闭环） <span class="badge b-gap">规划中 · 最高优先</span></h3>
+    <p><strong>目标：</strong>把 G-1 / G-2 / G-3 / D-1 一次性闭环，使「编排声明 + 路由策略 + 输出契约」三类多级 Agent 配置在管理台<strong>可登记、可查看、可引用</strong>。</p>
+    <h4>任务拆解</h4>
+    <ul>
+      <li><strong>A7-1 路由策略登记表单</strong>（G-1）：新增 <code>src/pages/catalog/RoutingPolicyPage.tsx</code>，字段对齐 <code>routing-policy.schema.json</code>：<code>id</code>（可读字符串，非 UUID）、<code>name/description</code>、<code>strategy</code>（<code>EXPLICIT_TARGETS</code> / <code>ORDERED_FALLBACK</code>）、<code>targets</code>（有序 Agent id 列表，<strong>不含版本号</strong>）。复用三步工作流，不开旁路。</li>
+      <li><strong>A7-2 契约目录 / 查看页</strong>（G-2）：新增 <code>src/pages/catalog/ResultContractCatalogPage.tsx</code>，列表展示契约（id / 版本 / lifecycle_state / fingerprint / published_at）；详情展示 <code>schemaJson</code> 与生命周期（DRAFT→VALIDATED→PUBLISHED→DEPRECATED）。</li>
+      <li><strong>A7-3 子 Agent 候选下拉</strong>（G-3）：编排表单 <code>childAgentRefs[].id</code> 由手填改为<strong>按租户 Agent 列表下拉</strong>（依赖后端 B-1 接口）；下拉仅列出同租户已发布 Agent，从 UI 层阻断跨租户引用（MA-T04）。</li>
+      <li><strong>A7-4 修复 failurePolicy 枚举</strong>（D-1）：<code>orchestrationForm.ts</code> 的 <code>FAILURE_POLICIES</code> 改为 <code>['FAIL_FAST','CONTINUE_ON_ERROR']</code>，<strong>移除 <code>COMPENSATE</code></strong>（V1 不支持），并补充对应单测断言后端仅接受两种值。</li>
+      <li><strong>A7-5 契约草稿写入路径</strong>（G-2 根因）：与后端协同打通 <code>DRAFT→VALIDATED</code> 写入通道（数据层已可表达，缺入口）。</li>
+    </ul>
+    <p><strong>落点：</strong>前端 <code>src/pages/catalog/*</code> + <code>orchestrationForm.ts</code>；后端 <code>platform/agent-api</code> 扩展只读聚合与生命周期迁移端点。</p>
+    <p><strong>验收：</strong>路由策略可登记并被 ROUTER 引用；契约可列表/查看/停用；子 Agent 候选下拉按租户过滤；表单不再放行 <code>COMPENSATE</code>。Vitest 新增 ≥ 12 例。</p>
+    <p><strong>工作量：</strong>≈ 1.5 周（前端 1 周 + 后端协同 0.5 周）。</p>
+  </div>
+
+  <div class="card">
+    <h3>A8 · 多级 Agent 关系视图增强 <span class="badge b-plan">规划中</span></h3>
+    <p><strong>目标：</strong>在既有 P3 闭包图谱 / 影响分析之上，显式呈现<strong>委派拓扑</strong>与<strong>被引用行指纹传导</strong>。</p>
+    <ul>
+      <li><strong>A8-1 委派拓扑图</strong>：在 <code>AgentDependenciesTab</code> 增加「委派视图」：展示 <code>cap_agent_child_ref</code> 的 父→子 固定 release 边、<code>ordinal</code> 顺序、<code>required</code> 标记（纯 SVG 分层渲染，零新依赖，沿用 P3 约定）。</li>
+      <li><strong>A8-2 闭包指纹展示</strong>：Agent 详情展示其 <code>configFingerprint</code> 与「编排绑定段」（mode / 策略指纹 / 契约指纹），让作者直观看到「编排漂移会改变指纹」。</li>
+      <li><strong>A8-3 影响分析增强</strong>（FR-039 / MA-T15）：被引用行（契约 / 策略）内容变化 → 父闭包指纹变化 → 在途 Run 失效，在影响分析页显式列出「谁依赖了这份契约 / 策略」。</li>
+    </ul>
+    <p><strong>落点：</strong><code>AgentDependenciesTab.tsx</code> + 关系视图模块；依赖后端提供闭包/指纹只读聚合（B-2）。</p>
+    <p><strong>验收：</strong>委派拓扑图可渲染父子固定 release 边；影响分析能列出契约/策略的下游依赖 Agent。</p>
+    <p><strong>工作量：</strong>≈ 1 周。</p>
+  </div>
+
+  <div class="card">
+    <h3>A9 · 多级委派运行监控增强 <span class="badge b-plan">规划中</span></h3>
+    <p><strong>目标：</strong>在既有 P4 平台级监控之上，新增<strong>委派执行</strong>的可观测面板（数据来源 <code>agent_invocation</code>）。</p>
+    <ul>
+      <li><strong>A9-1 委派调用记录查询</strong>（FR-022 / MA-T24）：按 Run / 父 invocation / 子 Agent / 状态过滤；展示<strong>七态</strong> <code>QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELLED/TIMED_OUT/UNKNOWN</code> 与 <code>reason_code</code>（非笼统 DENY，审计 100% 可分类）。</li>
+      <li><strong>A9-2 降级可视化</strong>（FR-038 / MA-T05v）：并排展示 <code>requested_target_agent_id</code> vs <code>target_agent_id</code>，标注「曾降级」（<code>NULL ≠ 没降级</code>）。</li>
+      <li><strong>A9-3 预算 / UNKNOWN 对账</strong>（FR-031 / FR-037 / MA-T17）：展示根 Run <code>deadline_at</code>、委派占用 Run 预算；<code>UNKNOWN</code> / 无锚点预留计入「需关注」（人工收敛入口）。</li>
+      <li><strong>A9-4 接管 / fencing 可视化</strong>（MA-T11/T12）：展示 <code>fencing_token</code> 世代、标记「已接管 / 世代过期」。</li>
+      <li><strong>A9-5 逐跳授权可视化</strong>（FR-025 / FR-033）：展示 <code>authzVersion</code> 逐跳重授权、<code>ExecutionScope</code>（按哪个 release 授权）vs <code>DelegationContext</code>（当前在树哪层）。</li>
+      <li><strong>A9-6 取消传播</strong>（FR-026）：父 Run 取消 → 子执行 <code>CANCELLED</code> 的链路呈现。</li>
+    </ul>
+    <p><strong>落点：</strong>新增 <code>src/pages/monitoring/DelegationMonitorPage.tsx</code>；依赖后端 <code>agent_invocation</code> 只读聚合（B-3，含分页 / 过滤）。</p>
+    <p><strong>验收：</strong>委派七态与 reason_code 可查；降级/接管/预算-UNKNOWN 可可视化；credentialRef 不进响应。</p>
+    <p><strong>工作量：</strong>≈ 1.5 周（前端 1 周 + 后端聚合 0.5 周）。</p>
+  </div>
+
+  <div class="card">
+    <h3>A10 · 安全展示纪律（横切） <span class="badge b-plan">规划中</span></h3>
+    <p><strong>目标：</strong>把 08 安全验收对管理台的硬性要求，固化为前端展示纪律（不新增业务逻辑，只规范呈现）。</p>
+    <ul>
+      <li><strong>A10-1 fail-closed 显式原因码</strong>：配置校验 / 运行拒绝必须<strong>显式展示稳定 reasonCode</strong>（如 <code>DELEGATION_TARGET_NOT_DECLARED</code> / <code>ROUTING_POLICY_DEPRECATED</code> / <code>ORCHESTRATION_INVALID</code>），不得静默降级成「看起来生效」。</li>
+      <li><strong>A10-2 credentialRef 不进响应</strong>：MCP server 凭据引用明文禁止入库；前端展示凭据项时<strong>只显示引用标识布尔</strong>（沿用 P5 纪律）。</li>
+      <li><strong>A10-3 已发布行不可变</strong>：契约 / 策略 <code>PUBLISHED</code> 行内容冻结（不可变触发器），前端改已发布行应<strong>被后端拒</strong>并给出明确提示。</li>
+      <li><strong>A10-4 租户隔离</strong>：所有列表按当前租户上下文过滤，跨租户不可见（RLS 已生效）。</li>
+    </ul>
+    <p><strong>落点：</strong>横切覆盖 A7/A8/A9 各页；以单测钉住「原因码展示 / 凭据布尔 / 不可变提示」。</p>
+    <p><strong>工作量：</strong>≈ 0.5 周（含进各批次，不单列）。</p>
+  </div>
+</section>
+
+<!-- 4. 后端 API 依赖 -->
+<section id="s34">
+  <h2>3.5 第三十四批落地状态：四类对象的 CRUD + 关系维护 <span class="badge b-done">本批已落地</span></h2>
+  <p class="lead">用户于 2026-10-25 拍板「Agent / Skill / Tool / MCP 的详细数据增删改查 + 相关关系维护」<strong>本轮全量交付</strong>；
+  并拍板平台级对象的写入口走<strong>平台作用域发布端点</strong>（<code>PLATFORM_ADMIN</code> 闸门 + 运维通道）。
+  本节登记该批的<strong>实际落地状态</strong>，含<strong>刻意未做</strong>的部分。</p>
+
+  <div class="callout c-info">
+    <strong>📌 与 A7–A10 的关系：</strong>本批<strong>不是</strong> A7–A10 的全部，而是<strong>另起一条线</strong>——
+    A7–A10 面向「多级 Agent 的配置闭环 / 关系视图 / 运行监控」，
+    本批面向「四类对象的<strong>管理面</strong>读写」。两者有交集（A8-1 委派拓扑），但
+    <strong>A7-1 / A7-2 / A7-5 / A9 全部仍未落地</strong>，不得据本批判定 A7–A10 已闭环。
+  </div>
+
+  <table>
+    <tr><th>批次项</th><th>本批状态</th><th>说明</th></tr>
+    <tr><td><strong>A8-1 委派拓扑图</strong></td><td><span class="badge b-done">已落地</span></td>
+      <td>后端三端点已提供：<code>GET /api/cap/delegations</code>（全量）、
+        <code>/parents/{id}/children</code>（出向）、<code>/children/{id}/parents</code>（入向反查）；
+        边含 <code>parentReleaseVersion</code> / <code>childReleaseVersion</code> / <code>ordinal</code> / <code>required</code>。
+        数据源是 <code>cap_agent_child_ref</code> 投影表（评审前置决策 4 已把它改为<strong>必落库</strong>）。</td></tr>
+    <tr><td><strong>A8-2 闭包指纹展示</strong></td><td><span class="badge b-plan">未做</span></td>
+      <td>本批交付的是<strong>结构化定义</strong>回填（<code>GET /api/cap/agents/{id}/definition</code>），
+        <strong>不包含</strong>闭包指纹与被引用行的内容指纹展示 —— 那依赖 B-2。</td></tr>
+    <tr><td><strong>A7-1 路由策略登记表单</strong></td><td><span class="badge b-plan">未做</span></td>
+      <td>本批前端已补齐 <code>SubmitPublishRequest.routingPolicies</code> 的<strong>类型缺口</strong>，
+        但<strong>登记表单页面</strong>仍未做。</td></tr>
+    <tr><td><strong>A7-2 契约目录 / 查看页</strong></td><td><span class="badge b-plan">未做</span></td>
+      <td>未做。</td></tr>
+    <tr><td><strong>A7-3 子 Agent 候选下拉</strong></td><td><span class="badge b-plan">未做</span></td>
+      <td>未做（B-1 未提供）。</td></tr>
+    <tr><td><strong>A7-5 契约草稿写入路径</strong></td><td><span class="badge b-plan">未做</span></td>
+      <td>未做（B-5 未提供）。</td></tr>
+    <tr><td><strong>A9-1～A9-6 委派运行监控</strong></td><td><span class="badge b-plan">未做</span></td>
+      <td>整块未做（B-3 未提供）。</td></tr>
+    <tr><td><strong>A10-2 credentialRef 不进响应</strong></td><td><span class="badge b-done">已落地</span></td>
+      <td>目录视图只回 <code>hasCredentialRef</code> 布尔；<strong>平台发布草稿</strong>可提交
+        <code>credentialRef</code>，但它<strong>不参与内容指纹</strong>（凭据轮换不得让在途 Run 集体失效）。</td></tr>
+    <tr><td><strong>A10-1 / A10-3 / A10-4</strong></td><td><span class="badge b-plan">未做</span></td>
+      <td>本批未系统化铺开（部分随既有错误处理顺带满足）。</td></tr>
+  </table>
+
+  <h3>3.5.1 本批新增/变更的后端能力（第三十四批 C34-2）</h3>
+  <table>
+    <tr><th>能力</th><th>端点 / 落点</th><th>闸门</th></tr>
+    <tr><td>平台级发布（三步）</td>
+      <td><code>POST /api/cap/platform/publish-requests</code> →
+        <code>/{id}/decision</code> → <code>/{id}/apply</code></td>
+      <td><code>PLATFORM_ADMIN</code>（403 默认拒绝）+ 平台运维通道（未接入即 503）</td></tr>
+    <tr><td>平台级停用</td><td><code>POST /api/cap/platform/lifecycle-requests</code></td>
+      <td>同上；<strong>物理删除不做</strong>（已发布行不可变）</td></tr>
+    <tr><td>平台级申请单读</td><td><code>GET /api/cap/platform/publish-requests</code>、<code>/{id}</code></td>
+      <td>同上</td></tr>
+    <tr><td>Tool 关系查询</td><td><code>GET /api/cap/catalog/tools/{id}/relations</code></td>
+      <td><code>AGENT_MANAGE</code></td></tr>
+    <tr><td>Skill 关系查询</td><td><code>GET /api/cap/catalog/skills/{id}/relations</code></td>
+      <td><code>AGENT_MANAGE</code></td></tr>
+    <tr><td>MCP 关系查询</td><td><code>GET /api/cap/catalog/mcps/{id}/relations</code></td>
+      <td><code>AGENT_MANAGE</code></td></tr>
+    <tr><td>多级 Agent 结构化定义</td><td><code>GET /api/cap/agents/{id}/definition</code></td>
+      <td><code>AGENT_MANAGE</code></td></tr>
+    <tr><td>委派拓扑</td><td><code>GET /api/cap/delegations</code> + 出向 / 入向</td>
+      <td><code>AGENT_MANAGE</code></td></tr>
+    <tr><td>DDL</td><td><code>V27__cap_config_publish_request_platform_scope.sql</code></td>
+      <td><code>tenant_id</code> 可空 + <code>scope</code> 列 + 一致性 CHECK；
+        <strong>RLS 策略一个字都不改</strong>（平台行对应用角色连接天然不可见）</td></tr>
+  </table>
+
+  <div class="callout c-warn">
+    <strong>⚠️ 一条被本批推翻的旧口径：</strong>「运维通道由带外运维工具驱动，<strong>不接在租户可达的 HTTP 路径上</strong>」——
+    对<strong>平台级对象</strong>这一支<strong>已不再成立</strong>（本批接上了）。
+    但它背后的理由（平台身份表是租户内的，没有跨租户主体）<strong>依然成立</strong>，
+    所以闸门被搬到 HTTP 路径的<strong>最前面</strong>，而不是被取消。
+  </div>
+</section>
+
+<section id="s4">
+  <h2>4. 后端 API 依赖清单</h2>
+  <p class="lead">下列能力需要后端在共享工程 <code>platform/agent-api</code> 内扩展（只读聚合 / 生命周期迁移），admin-console 不写安全决策。</p>
+  <table>
+    <thead><tr><th>编号</th><th>依赖</th><th>消费方（前端）</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><strong>B-1</strong></td><td>按租户的 Agent 列表接口</td><td>A7-3 子 Agent 候选下拉</td><td>返回当前租户下「已发布 Agent（id + 名称 + 最新固定版本）」，供 <code>childAgentRefs[].id</code> 下拉；从源头过滤跨租户引用（MA-T04）。</td></tr>
+      <tr><td><strong>B-2</strong></td><td>闭包 / 指纹只读聚合</td><td>A8-2 / A8-3 影响分析</td><td>返回 Agent 的 <code>configFingerprint</code>、编排绑定段、被引用行（契约/策略）的下游依赖列表。</td></tr>
+      <tr><td><strong>B-3</strong></td><td><code>agent_invocation</code> 只读聚合</td><td>A9 委派监控</td><td>分页 + 过滤（run / 父 invocation / 子 Agent / 状态 / 时间），返回七态、reason_code、requested vs target、fencing_token、deadline、预算占用。严格 RLS。</td></tr>
+      <tr><td><strong>B-4</strong></td><td>路由策略登记 / 查看端点</td><td>A7-1 路由策略表单</td><td>复用 <code>/api/cap/config/publishes</code> 三步工作流，类型闸门已放开 <code>type=routing_policy</code>；补列表/详情只读端点。</td></tr>
+      <tr><td><strong>B-5</strong></td><td>契约草稿写入通道</td><td>A7-5</td><td>打通 <code>DRAFT→VALIDATED</code> 写入路径（数据层可表达但当前无入口）。</td></tr>
+      <tr><td><strong>B-6</strong></td><td>UNKNOWN 预留对账处置入口</td><td>A9-3</td><td>当前人工收敛只能由应用层调服务方法，需对外 HTTP 处置入口（FR-037 剩余缺口）。</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 5. 验收矩阵 -->
+<section id="s5">
+  <h2>5. 验收矩阵（admin-console 维度）</h2>
+  <table>
+    <thead><tr><th>验收项</th><th>来源</th><th>验收判据</th><th>对应批次</th></tr></thead>
+    <tbody>
+      <tr><td>编排表单结构性预校验</td><td>MA-T23a~h</td><td>mode 必填 / LEAF 不得有子引用 / ROUTER 必有策略引用 / 版本固定正整数 / 非 LEAF 三上限必填不预填默认 / 契约登记合法性 / 留痕 / 不越权</td><td>A6（已交付）+ A7-4</td></tr>
+      <tr><td>failurePolicy 前后端一致</td><td>D-1 / ADR-012</td><td>前端仅允许 <code>FAIL_FAST</code> / <code>CONTINUE_ON_ERROR</code>；<code>COMPENSATE</code> 被移除且单测钉死</td><td>A7-4</td></tr>
+      <tr><td>路由策略可登记可引用</td><td>FR-029 / FR-040</td><td>策略登记经三步工作流；ROUTER 可引用固定版本策略；已停用策略不得被新发布引用</td><td>A7-1 / B-4</td></tr>
+      <tr><td>契约可查看可停用</td><td>FR-027 / MA-T16 / FR-040</td><td>契约目录列表 + 详情 + 生命周期迁移（DRAFT→…→DEPRECATED 终态单向）</td><td>A7-2 / A7-5</td></tr>
+      <tr><td>子 Agent 引用按租户隔离</td><td>MA-T04</td><td>下拉仅列同租户已发布 Agent；手填跨租户 id 在提交前即被前端拦截</td><td>A7-3 / B-1</td></tr>
+      <tr><td>委派七态与原因码可查</td><td>MA-T24a~i / FR-022</td><td>监控页可过滤并展示七态 + reason_code；终态不可被前端覆盖</td><td>A9-1</td></tr>
+      <tr><td>降级可视化</td><td>FR-038 / MA-T05v</td><td>requested vs target 并排；NULL 明确标注「当时未记录」而非「未降级」</td><td>A9-2</td></tr>
+      <tr><td>预算 / UNKNOWN 对账</td><td>MA-T17 / FR-037</td><td>Run 级预算占用可视化；UNKNOWN 计入需关注并提供处置入口</td><td>A9-3 / B-6</td></tr>
+      <tr><td>接管 / fencing 可视化</td><td>MA-T11 / MA-T12</td><td>展示 fencing_token 世代；标记「已接管 / 世代过期」</td><td>A9-4</td></tr>
+      <tr><td>影响分析覆盖被引用行指纹</td><td>FR-039 / MA-T15</td><td>契约/策略内容变化 → 下游 Agent 列表可查</td><td>A8-3 / B-2</td></tr>
+      <tr><td>安全展示纪律</td><td>08 §安全验收</td><td>fail-closed 显式原因码；credentialRef 仅布尔；已发布行不可变提示</td><td>A10</td></tr>
+      <tr><td>工程门禁</td><td>W-ADMIN 冻结门禁</td><td>前端 <code>npm ci && npm run build</code> + Vitest 通过；后端 <code>mvn -o clean verify</code> 全绿；E2E 冒烟通过</td><td>全批次</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 6. 风险登记 -->
+<section id="s6">
+  <h2>6. 风险登记</h2>
+  <table>
+    <thead><tr><th>风险</th><th>影响</th><th>缓解（落点）</th></tr></thead>
+    <tbody>
+      <tr><td>决策 2（取消默认值）尚未落地（C33）</td><td>非 LEAF 三上限的「缺失即拒」在后端未完全生效，前端预校验先行但非权威</td><td>A7 期间持续对齐 C33；前端保持与 <code>AgentOrchestrationParser</code> 同口径，服务端为权威</td></tr>
+      <tr><td>路由策略内容模型仍是「本批取舍」未评审冻结</td><td>若评审冻结不同模型，A7-1 表单需调整</td><td>扩展点留在枚举上；表单字段以 schema 为准，评审结论一出即调</td></tr>
+      <tr><td>契约 / 策略无草稿写入路径（数据层可表达无入口）</td><td>G-2 的「DRAFT→VALIDATED」不可达，目录页状态不全</td><td>A7-5 与后端协同打通 B-5</td></tr>
+      <tr><td>UNKNOWN 对账无对外处置入口</td><td>委派预算对账只能由应用层调服务方法，无前端入口</td><td>A9-3 / B-6 提供 HTTP 处置入口（FR-037 剩余缺口）</td></tr>
+      <tr><td>跨进程接管演练 / 故障注入缺失</td><td>监控页「接管」状态的真实可观测性依赖演练环境</td><td>监控页展示基于 <code>fencing_token</code> 的派生状态；跨进程演练单列环境任务</td></tr>
+      <tr><td>降级「为什么降级」未解释</td><td>监控降级可视化只记录不解释</td><td>A9-2 标注「当时未记录」；解释需结合策略配置 + 日志，单列</td></tr>
+      <tr><td>fail-closed 被静默成「看起来生效」</td><td>配置/运行拒绝若不在前端显式提示，作者误判多级已生效</td><td>A10-1 强制显式原因码展示</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 7. 工作量与排期 -->
+<section id="s7">
+  <h2>7. 工作量与排期</h2>
+  <table>
+    <thead><tr><th>批次</th><th>内容</th><th>前端</th><th>后端协同</th><th>合计</th><th>依赖</th></tr></thead>
+    <tbody>
+      <tr><td><strong>A6</strong></td><td>编排声明 + 契约登记</td><td>—</td><td>—</td><td><span class="badge b-done">已交付</span></td><td>—</td></tr>
+      <tr><td><strong>A7</strong></td><td>路由策略表单 + 契约目录 + 子 Agent 下拉 + 修复 D-1 + 草稿通道</td><td>1.0 周</td><td>0.5 周</td><td><strong>≈ 1.5 周</strong></td><td>无（仅 B-1/B-4/B-5）</td></tr>
+      <tr><td><strong>A8</strong></td><td>委派拓扑图 + 闭包指纹 + 影响分析增强</td><td>0.7 周</td><td>0.3 周</td><td><strong>≈ 1.0 周</strong></td><td>B-2</td></tr>
+      <tr><td><strong>A9</strong></td><td>委派运行监控（七态/降级/预算/接管/逐跳授权）</td><td>1.0 周</td><td>0.5 周</td><td><strong>≈ 1.5 周</strong></td><td>B-3 / B-6</td></tr>
+      <tr><td><strong>A10</strong></td><td>安全展示纪律（横切）</td><td>0.5 周</td><td>—</td><td><strong>≈ 0.5 周</strong></td><td>并入 A7–A9</td></tr>
+    </tbody>
+  </table>
+  <p class="lead">
+    <strong>关键路径：</strong>A7 → A8 / A9（A8 与 A9 可在 A7 完成后并行）。A7 是多级 Agent 配置闭环的硬前置，优先级最高。
+    合计新增 ≈ <strong>4.5 周</strong>（前端 ≈ 3.2 周 + 后端协同 ≈ 1.3 周），A6 已交付不计入。
+    排期随人数与后端 B-* 就绪节奏调整；所有批次沿用 W-ADMIN 冻结门禁（构建 / IT / E2E 全绿方可冻结）。
+  </p>
+</section>
+
+<!-- 8. 退出门禁 -->
+<section id="s8">
+  <h2>8. 退出门禁（多级 Agent 管理台闭环）</h2>
+  <div class="callout c-info">
+    以下全部满足，方视为 admin-console 对齐「多级 Agent 优化」的规划落地完成（不改变 W-ADMIN-P0~P5 既有的基础闭环门禁）：
+  </div>
+  <ol>
+    <li><strong>配置闭环：</strong>编排声明、路由策略、输出契约三类多级 Agent 配置均可在管理台<strong>登记、查看、被引用</strong>；子 Agent 候选按租户下拉、跨租户引用在 UI 层被拦。</li>
+    <li><strong>缺陷清零：</strong>D-1（<code>COMPENSATE</code> 枚举不一致）已修复并单测钉死；三上限不预填默认、与后端同口径。</li>
+    <li><strong>关系可视：</strong>委派拓扑图可渲染父子固定 release 边；影响分析能列出契约/策略的下游依赖 Agent。</li>
+    <li><strong>运行可观测：</strong>委派七态 + reason_code 可查；降级 / 接管 / 预算-UNKNOWN / 逐跳授权均可视化。</li>
+    <li><strong>安全纪律：</strong>fail-closed 显式原因码、credentialRef 仅布尔、已发布行不可变提示均落地。</li>
+    <li><strong>工程门禁：</strong>前端 <code>npm ci && npm run build</code> + Vitest（含 A7–A10 新增用例）通过；后端 <code>mvn -o clean verify</code> 全绿；E2E 冒烟通过；文档与实现同版本。</li>
+    <li><strong>硬约束：</strong>平台既有 cap_* 自动化与 RLS 夹具<strong>不被</strong>管理台改动破坏；Demo ≠ 验收。</li>
+  </ol>
+  <div class="callout c-warn">
+    <strong>⚠️ 上线前置：</strong>编排声明入指纹导致在途 Run 一次性失效（旧指纹未覆盖编排声明）——上线前须评估在途 Run 存量；
+    且 P3 安全与恢复验收（08 MA-T01~T18）全部通过前，多级 Agent 不得标记为生产可用（00 评审前置决策 5）。
+  </div>
+</section>
+
+<div class="foot">
+  <p>本文件为 <code>docs/管理后台开发计划/</code> 的补充重规划，与 <code>docs/多级 Agent优化/00_修订说明与评审决议项.md</code> 同源对齐。
+  所有需求编号（FR-/MA-T-/Pn-MA）与评审决策均引自该变更集。admin-console 不重写安全语义，仅消费与呈现。</p>
+  <p>编制：WorkBuddy · 2026-10-25 · 对应代码落地批次：第二十九批 C29-1（A6）之后；
+    第三十四批 C34-1 / C34-2 已追加 §3.5（四类对象的 CRUD + 关系维护）。</p>
+</div>
+
+</main>
+</body>
+</html>
