@@ -327,7 +327,7 @@ public class CapExecutionFlow {
                                             RunClaimPort.@NonNull LeasedTask task,
                                             ModelResponse.@NonNull ToolCallRequest call,
                                            @NonNull ToolHandler handler) {
-        CapToolDecision decision = decide(tenantId, task, call, handler, null);
+        CapToolDecision decision = decide(tenantId, task, call, handler, null, null);
         auditDecision(tenantId, task, call, decision);
         return decision;
     }
@@ -350,7 +350,37 @@ public class CapExecutionFlow {
                                             ModelResponse.@NonNull ToolCallRequest call,
                                            @NonNull ToolHandler handler,
                                            cn.studykid.multiagent.core.cap.@Nullable ExecutionScope scope) {
-        CapToolDecision decision = decide(tenantId, task, call, handler, scope);
+        // ⚠️ Agent 维度默认由作用域派生（第十七批）：本重载是「调用方自带作用域」的口径，
+        //    作用域就是执行主体 → 键里必须带它。
+        return invoke(tenantId, task, call, handler, scope,
+                scope == null ? null : scope.agentRef());
+    }
+
+    /**
+     * 带<b>显式 Agent 维度</b>的工具调用（多级 Agent v1.1 · 第十七批）。
+     *
+     * <p>⚠️ <b>为什么幂等键的 Agent 维度要由调用方显式传入</b>：
+     * 幂等键必须按「<b>当前执行中的 Agent</b>」分域，而「当前 Agent 是谁」在两条链路上
+     * 来源不同 —— CAP 链路看执行作用域，既有链路看委派上下文。
+     * 若本类自行派生，就只覆盖了其中一条链路；
+     * 由闸门算一次再透传，两条链路才是同一个值。
+     *
+     * <p>⚠️ 缺 Agent 维度的后果不是「多记一行账」，而是
+     * <b>父 Agent 与子 Agent（或两个兄弟子 Agent）调用同名工具 + 同名 model call id
+     * 时撞键</b> → 账本命中重复键 → <b>复用既有 operation、不再次执行工具</b> →
+     * 后者那次调用<b>根本没发生</b>，模型拿到的还是<b>另一个 Agent 的结果</b>。
+     *
+     * @param agentRef 当前执行中的 Agent 引用（{@code agentId@version}）；
+     *                 {@code null} = 单 Agent 路径（键值与历史一致）
+     * @return 四字段决策结论
+     */
+    public @NonNull CapToolDecision invoke(@NonNull String tenantId,
+                                            RunClaimPort.@NonNull LeasedTask task,
+                                            ModelResponse.@NonNull ToolCallRequest call,
+                                           @NonNull ToolHandler handler,
+                                           cn.studykid.multiagent.core.cap.@Nullable ExecutionScope scope,
+                                           @Nullable String agentRef) {
+        CapToolDecision decision = decide(tenantId, task, call, handler, scope, agentRef);
         auditDecision(tenantId, task, call, decision);
         return decision;
     }
@@ -394,7 +424,8 @@ public class CapExecutionFlow {
                                             RunClaimPort.@NonNull LeasedTask task,
                                             ModelResponse.@NonNull ToolCallRequest call,
                                            @NonNull ToolHandler handler,
-                                           cn.studykid.multiagent.core.cap.@Nullable ExecutionScope scope) {
+                                           cn.studykid.multiagent.core.cap.@Nullable ExecutionScope scope,
+                                           @Nullable String agentRef) {
 
         // ══ 步骤 1–7：Phase A（授权）══════════════════════════════
         PhaseA phaseA = phaseA(tenantId, task, call, scope);
@@ -403,7 +434,9 @@ public class CapExecutionFlow {
         }
 
         // ══ 步骤 8：幂等键校验 ════════════════════════════════════
-        String idempotencyKey = buildIdempotencyKey(task.runId(), call);
+        // ⚠️⚠️ Agent 维度（第十七批）：键缺 Agent 维度 → 父子/兄弟 Agent
+        //    同名工具 + 同名 call id 撞键 → 后者被当成重放 → **那次调用没发生**。
+        String idempotencyKey = buildIdempotencyKey(task.runId(), call, agentRef);
         // ⚠️⚠️ 参数摘要全链路<b>同源</b>（P3 决策）：
         //    审批绑定的有效参数哈希、账本的请求摘要、执行意图的参数指纹
         //    全部取这一个值（args_norm_v1）。若各算各的，
@@ -1214,12 +1247,22 @@ public class CapExecutionFlow {
      * 于是<b>任何</b>带这两个参数的工具都被塞进 {@code tool.record_weakness} 命名空间 ——
      * 两个不同工具算出同一个键 → 后者被判「同键不同参数」而拒绝执行，
      * 或被判「重放」而静默不执行。
+     *
+     * <p>⚠️⚠️ <b>必须带 Agent 维度</b>（第十七批 · 多级 Agent）：
+     * 键缺 Agent 维度时，父 Agent 与子 Agent（或两个兄弟子 Agent）调用
+     * <b>同名工具 + 同名 model call id</b>会算出同一个键 →
+     * 账本命中重复键 → <b>复用既有 operation、不再次执行工具</b> →
+     * 后者那次调用<b>根本没发生</b>，且模型拿到的是<b>另一个 Agent 的结果</b>。
+     *
+     * @param agentRef 当前执行中的 Agent 引用；{@code null} = 单 Agent 路径
+     *                 （键值与历史完全一致，在途 {@code tool_operation} 行不受影响）
      */
     private static @NonNull String buildIdempotencyKey(@NonNull String runId,
-                                                       ModelResponse.@NonNull ToolCallRequest call) {
+                                                       ModelResponse.@NonNull ToolCallRequest call,
+                                                       @Nullable String agentRef) {
         Object studentId = call.arguments().get("studentId");
         Object knowledgePoint = call.arguments().get("knowledgePoint");
-        return IdempotencyKey.forToolCall(runId, call.toolName(), call.callId(),
+        return IdempotencyKey.forToolCall(runId, agentRef, call.toolName(), call.callId(),
                         studentId == null ? null : String.valueOf(studentId),
                         knowledgePoint == null ? null : String.valueOf(knowledgePoint))
                 .composite();

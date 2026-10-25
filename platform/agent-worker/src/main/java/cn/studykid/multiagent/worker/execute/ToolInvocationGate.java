@@ -469,7 +469,34 @@ public class ToolInvocationGate {
         if (capFlow != null && capFlow.isEnabled()) {
             return invokeAllCap(tenantId, task, calls, scope, delegationContext);
         }
-        return invokeAllLegacy(tenantId, task, calls);
+        // ⚠️ 既有链路也必须带 Agent 维度（第十七批）：幂等键是**两条链路共用**的账本键，
+        //    只在 CAP 链路加分域的话，迁移开关一关就退回「父子互相吞调用」。
+        return invokeAllLegacy(tenantId, task, calls, resolveAgentRef(scope, delegationContext));
+    }
+
+    /**
+     * 解析「当前执行中的 Agent 引用」（幂等键的 Agent 维度 · 第十七批）。
+     *
+     * <p>⚠️ <b>取值优先级：执行作用域 → 委派上下文 → 无</b>。
+     * 两者都存在时闸门已校验二者标识与版本一致（不一致 → 拒绝委派），
+     * 故这里取哪个都一样；只有一个存在时取那一个；
+     * 都没有 = 根 Agent（单 Agent 路径）→ <b>不带 Agent 维度</b>，
+     * 键值与历史完全一致（在途的 {@code tool_operation} 行因此不受影响）。
+     *
+     * @param scope            执行作用域；{@code null} = 根 Agent
+     * @param delegationContext 委派上下文；{@code null} = 根 Agent
+     * @return Agent 引用；{@code null} = 无（单 Agent 路径）
+     */
+    private static @Nullable String resolveAgentRef(
+            @Nullable ExecutionScope scope,
+            @Nullable DelegationContext delegationContext) {
+        if (scope != null) {
+            return scope.agentRef();
+        }
+        if (delegationContext != null) {
+            return delegationContext.agentRef();
+        }
+        return null;
     }
 
     /**
@@ -487,6 +514,13 @@ public class ToolInvocationGate {
             @Nullable DelegationContext delegationContext) {
 
         ToolInvocationResult result = new ToolInvocationResult();
+        // ⚠️⚠️ Agent 维度（第十七批）：幂等键必须按「当前执行中的 Agent」分域，
+        //    否则父 Agent 与子 Agent（或两个兄弟子 Agent）调用
+        //    **同名工具 + 同名 model call id**（模型通常都叫 call_1）会算出同一个键
+        //    → 账本命中重复键 → 后者被当成前者的重放 → **那次工具调用根本没发生**，
+        //    且模型拿到的还是**另一个 Agent 的结果**。
+        //    键在这里算一次，透传给 CAP 执行流 —— 两条链路不得各算各的。
+        String agentRef = resolveAgentRef(scope, delegationContext);
         // ⚠️ 父声明的失败策略（FAIL_FAST / CONTINUE_ON_ERROR）决定：
         //    本轮里某个子调用失败后，**后续的委派调用**还跑不跑。
         boolean delegationHalted = false;
@@ -560,7 +594,7 @@ public class ToolInvocationGate {
             }
 
             cn.studykid.multiagent.core.cap.CapToolDecision decision =
-                    capFlow.invoke(tenantId, task, call, handler, scope);
+                    capFlow.invoke(tenantId, task, call, handler, scope, agentRef);
             result.recordDecision(decision);
             applyDecision(result, decision);
 
@@ -898,7 +932,8 @@ public class ToolInvocationGate {
     private ToolInvocationResult invokeAllLegacy(
             String tenantId,
             RunClaimPort.LeasedTask task,
-            Map<String, ModelResponse.ToolCallRequest> calls) {
+            Map<String, ModelResponse.ToolCallRequest> calls,
+            @Nullable String agentRef) {
 
         ToolInvocationResult result = new ToolInvocationResult();
 
@@ -942,7 +977,8 @@ public class ToolInvocationGate {
 
             // ③ 幂等键（ADR-003）
             // ⚠️ 必须传真实 runId：键缺 run 维度会跨 Run 撞键（P4-D08 R-2）
-            String idemKey = buildIdempotencyKey(task.runId(), call);
+            // ⚠️ 必须传 Agent 维度（第十七批）：键缺 Agent 维度会父子/兄弟 Agent 互相吞调用
+            String idemKey = buildIdempotencyKey(task.runId(), call, agentRef);
 
             // ④ ⚠️ 账本登记（P3-D03）：失败即拒绝执行（fail-closed）。
             //    无账可对的调用，其 UNKNOWN 无处安放——对账无从做起。
@@ -1369,11 +1405,21 @@ public class ToolInvocationGate {
      * 于是<b>任意</b>带这两个参数的工具都被塞进 {@code tool.record_weakness} 命名空间 ——
      * 两个不同工具算出同一个键 → 后者被判「同键不同参数」而拒绝执行，
      * 或被判「重放」而静默不执行。
+     *
+     * <p>⚠️⚠️ <b>必须带 Agent 维度</b>（第十七批 · 多级 Agent）：
+     * 键缺 Agent 维度时，父 Agent 与子 Agent（或两个兄弟子 Agent）调用
+     * <b>同名工具 + 同名 model call id</b>会算出同一个键 →
+     * 账本命中重复键 → <b>复用既有 operation、不再次执行工具</b> →
+     * 后者那次调用<b>根本没发生</b>，且模型拿到的是<b>另一个 Agent 的结果</b>。
+     *
+     * @param agentRef 当前执行中的 Agent 引用；{@code null} = 单 Agent 路径
+     *                 （键值与历史完全一致，在途 {@code tool_operation} 行不受影响）
      */
-    private String buildIdempotencyKey(String runId, ModelResponse.ToolCallRequest call) {
+    private String buildIdempotencyKey(String runId, ModelResponse.ToolCallRequest call,
+                                        @Nullable String agentRef) {
         Object studentId = call.arguments().get("studentId");
         Object knowledgePoint = call.arguments().get("knowledgePoint");
-        return IdempotencyKey.forToolCall(runId, call.toolName(), call.callId(),
+        return IdempotencyKey.forToolCall(runId, agentRef, call.toolName(), call.callId(),
                         studentId == null ? null : String.valueOf(studentId),
                         knowledgePoint == null ? null : String.valueOf(knowledgePoint))
                 .composite();

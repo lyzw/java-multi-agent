@@ -46,6 +46,14 @@ final class CapExecutionFixture {
 
     /** 账本：幂等键 → 操作。 */
     final Map<String, LedgerEntry> ledger = new LinkedHashMap<>();
+    /**
+     * ⚠️ 幂等键<b>查询</b>记录（第十七批）。
+     *
+     * <p>用途：观察「链路实际拿去查账本的幂等键」——
+     * 当调用在准入阶段（步骤 13）被拒时，账本里不会留下行，
+     * 但键已经算出来并送进幂等守卫了。
+     */
+    final List<String> lookedUpKeys = new ArrayList<>();
     /** 预算预留。 */
     final Map<String, BudgetPort.Reservation> reservations = new LinkedHashMap<>();
     /** 审批消费记录。 */
@@ -141,6 +149,7 @@ final class CapExecutionFixture {
             @Override
             public @NonNull Optional<Registration> findByIdempotencyKey(
                     @NonNull String tenantId, @NonNull String idempotencyKey) {
+                lookedUpKeys.add(idempotencyKey);
                 LedgerEntry entry = ledger.get(idempotencyKey);
                 return entry == null
                         ? Optional.empty()

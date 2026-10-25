@@ -22,7 +22,9 @@ import org.jspecify.annotations.Nullable;
  *   <tr><td>{@code record_weakness}</td><td>{@code tool.record_weakness}</td>
  *       <td>{@code student_id + run_id + knowledge_point}</td></tr>
  *   <tr><td>其他工具调用</td><td>{@code tool.invoke}（P4-D08）</td>
- *       <td>{@code run_id + tool_name + call_id}</td></tr>
+ *       <td>{@code run_id + [agent_ref + '/'] + tool_name + call_id}
+ *           （{@code agent_ref} 为<b>可省略</b>段，见
+ *           {@link #forToolInvoke}）</td></tr>
  * </table>
  *
  * <p><b>分隔符用 {@code '/'} 而非 {@code '|'}</b>：管道符在日志、SQL LIKE、
@@ -119,9 +121,9 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
     }
 
     /**
-     * 工具调用的键（P4-D08）。
+     * 工具调用的键（P4-D08 · 第十七批增补 Agent 维度）。
      *
-     * <p><b>键 = {@code run_id + tool_name + call_id}</b>。
+     * <p><b>键 = {@code run_id + [agent_ref + '/'] + tool_name + call_id}</b>。
      *
      * <p>⚠️ <b>runId 必须参与</b>：{@code tool_operation} 的唯一约束是
      * {@code UNIQUE (tenant_id, idempotency_key)}——<b>租户级</b>，不含 run 维度。
@@ -129,18 +131,72 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
      * 而账本命中重复键时**复用既有 operation**（不新建），
      * 于是新 Run 的调用被记到旧 Run 的 operation 上——对账链路与副作用语义同时破裂。
      *
+     * <p>⚠️ <b>agent_ref 必须参与（第十七批 · 多级 Agent）</b>：
+     * 账本命中重复键时**复用既有 operation、<b>不再次执行工具</b>** ——
+     * 而「谁在调用」原本不在键里，于是
+     * <b>父 Agent 与子 Agent</b>（或两个兄弟子 Agent）调用
+     * <b>同名工具 + 同名 model call id</b>（模型通常都叫 {@code call_1}）时
+     * 会算出<b>同一个</b>键 → 后者被当成前者的重放 → <b>那次工具调用根本没发生</b>，
+     * 且模型拿到的还是<b>另一个 Agent 的结果</b>。
+     * <br>⚠️ {@code agent_ref} 为 {@code null} 表示「单 Agent 路径（无执行作用域）」——
+     * 该路径下只有一个 Agent 在跑，不会与谁撞键，**键值保持原样不变**
+     * （在途的 {@code tool_operation} 行因此不受影响）。
+     *
      * @param runId    所属 Run
+     * @param agentRef 当前执行中的 Agent 引用（{@code agentId@version}）；
+     *                 {@code null} = 单 Agent 路径
      * @param toolName 工具名
      * @param callId   模型返回的调用标识（缺失时由调用方填占位值）
      */
     public static @NonNull IdempotencyKey forToolInvoke(@NonNull String runId,
-                                                        @NonNull String toolName,
-                                                        @NonNull String callId) {
+                                                         @Nullable String agentRef,
+                                                         @NonNull String toolName,
+                                                         @NonNull String callId) {
         requirePart(runId, "runId");
         requirePart(toolName, "toolName");
         requirePart(callId, "callId");
+        // ⚠️ Agent 段为**可省略**的一段：单 Agent 路径（agentRef == null）不写这一段，
+        //    键值与历史完全一致 —— 在途的 tool_operation 行因此不受影响。
+        String agentPart = agentRef == null || agentRef.isBlank()
+                ? ""
+                : requireAgentRef(agentRef) + SEPARATOR;
         return new IdempotencyKey(NS_TOOL_INVOKE,
-                runId + SEPARATOR + toolName + SEPARATOR + callId);
+                runId + SEPARATOR + agentPart + toolName + SEPARATOR + callId);
+    }
+
+    /**
+     * 渲染「当前执行中的 Agent 引用」（幂等键的 Agent 维度 · 第十七批）。
+     *
+     * <p>⚠️ <b>格式定义只有这一处</b>：{@code ExecutionScope}（按哪个 release 授权）
+     * 与 {@code DelegationContext}（当前 Agent 是谁）都通过本方法渲染 ——
+     * 两条链路各自拼一份字符串的话，格式一旦漂移就会撞键，
+     * 而撞键的后果是「一次工具调用被静默吞掉」，不是报错。
+     *
+     * <p>⚠️ <b>版本必须参与</b>：同一个 {@code agent_id} 的不同 release 是
+     * <b>不同的执行主体</b>（闭包、工具集都可能不同），键上必须能区分开；
+     * 只写 {@code agent_id} 会让「同一 Agent 的新 release」继承旧 release 的幂等记录。
+     *
+     * @param agentId      当前执行中的 Agent 标识
+     * @param agentVersion 当前 Agent 的<b>固定版本号</b>
+     * @return Agent 引用（{@code agentId@version}）
+     */
+    public static @NonNull String agentRefOf(@NonNull String agentId, int agentVersion) {
+        requirePart(agentId, "agentId");
+        if (agentVersion <= 0) {
+            throw new IllegalArgumentException("agentVersion 必须为正数，收到: " + agentVersion);
+        }
+        return agentId + "@" + agentVersion;
+    }
+
+    /**
+     * 校验 Agent 引用：非空且不含分隔符。
+     *
+     * <p>⚠️ 不含分隔符是<b>可分解性</b>要求：{@code (a/b, c)} 与 {@code (a, b/c)}
+     * 会产生相同的键 —— 那会让不同 Agent 的调用错误地复用同一逻辑操作。
+     */
+    private static @NonNull String requireAgentRef(@NonNull String agentRef) {
+        requirePart(agentRef, "agentRef");
+        return agentRef;
     }
 
     /**
@@ -160,7 +216,16 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
      * <p>⚠️ <b>只有 {@link #RECORD_WEAKNESS_TOOL} 走 record_weakness 形状</b>：
      * 其余工具一律走 {@link #forToolInvoke}（键里含工具名）。
      *
+     * <p>⚠️ <b>record_weakness 的键**不含 Agent 维度</b>（第十七批刻意如此）：
+     * 它记的是「某个学生的某个知识点」这条<b>业务事实</b>，
+     * 全局<b>唯一</b> —— 父 Agent 与子 Agent 记同一个学生的同一个知识点，
+     * 本就该只有一条记录，后写的那次被幂等拦下是<b>正确</b>的。
+     * <br>⚠️ 代价：子 Agent 想<b>订正</b>同一知识点（参数相同、语义不同）也会被吞 ——
+     * 那是<b>既有</b>的幂等口径（ADR-003），非多级引入 → 登记为缺口，不在本批改。
+     *
      * @param runId          所属 Run
+     * @param agentRef       当前执行中的 Agent 引用（{@code agentId@version}）；
+     *                       {@code null} = 单 Agent 路径
      * @param toolName       工具名
      * @param callId         模型返回的调用标识（可空 → 填占位值）
      * @param studentId      学生标识参数（可空）
@@ -168,6 +233,7 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
      * @return 幂等键
      */
     public static @NonNull IdempotencyKey forToolCall(@NonNull String runId,
+                                                       @Nullable String agentRef,
                                                        @NonNull String toolName,
                                                        @Nullable String callId,
                                                        @Nullable String studentId,
@@ -178,7 +244,7 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
                 && studentId != null && knowledgePoint != null) {
             return forRecordWeakness(studentId, runId, knowledgePoint);
         }
-        return forToolInvoke(runId, toolName,
+        return forToolInvoke(runId, agentRef, toolName,
                 callId == null || callId.isBlank() ? "no-call-id" : callId);
     }
 

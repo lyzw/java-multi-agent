@@ -3,6 +3,8 @@ package cn.studykid.multiagent.core.orchestration;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
+
 /**
  * 当前执行中的 Agent 在<b>委派调用树</b>里的位置（多级 Agent v1.1 · 第十五批）。
  *
@@ -39,6 +41,15 @@ public record DelegationContext(
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("委派上下文的 agentId 不能为空");
         }
+        if (agentId.contains(IdempotencyKey.SEPARATOR)) {
+            // ⚠️⚠️ Agent 标识会进入幂等键（第十七批）：键是「run/agent/tool/call」，
+            //    成分里含分隔符就无法唯一分解 —— (a/b, c) 与 (a, b/c) 会撞键，
+            //    而撞键的后果是「一次工具调用被静默吞掉」。
+            //    在**构造期**拒绝：委派上下文在子执行开始前就构造好了，
+            //    那时失败还能定位到是哪个 Agent 的标识有问题。
+            throw new IllegalArgumentException("委派上下文的 agentId 不得包含分隔符 '"
+                    + IdempotencyKey.SEPARATOR + "'，否则幂等键无法唯一分解: " + agentId);
+        }
         if (agentVersion <= 0) {
             throw new IllegalArgumentException("委派上下文的 agentVersion 必须为正数，收到: "
                     + agentVersion);
@@ -48,6 +59,19 @@ public record DelegationContext(
             //    （例如 depth=0 时任何上限都判不出超限）。
             throw new IllegalArgumentException("委派上下文的 depth 必须为正数，收到: " + depth);
         }
+    }
+
+    /**
+     * 当前执行中的 Agent 引用（幂等键的 Agent 维度 · 第十七批）。
+     *
+     * <p>⚠️ 格式定义在 {@link IdempotencyKey#agentRefOf}：
+     * 本上下文与执行作用域必须渲染出<b>同一个</b>字符串，
+     * 否则同一次调用在两条链路上会算出两个不同的键。
+     *
+     * @return Agent 引用（{@code agentId@version}）
+     */
+    public @NonNull String agentRef() {
+        return IdempotencyKey.agentRefOf(agentId, agentVersion);
     }
 
     /**

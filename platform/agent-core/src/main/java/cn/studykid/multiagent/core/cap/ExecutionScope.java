@@ -2,6 +2,8 @@ package cn.studykid.multiagent.core.cap;
 
 import org.jspecify.annotations.NonNull;
 
+import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
+
 /**
  * 执行作用域（多级 Agent v1.1 · FR-025）。
  *
@@ -35,6 +37,16 @@ public record ExecutionScope(
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("执行作用域的 agentId 不能为空");
         }
+        if (agentId.contains(IdempotencyKey.SEPARATOR)) {
+            // ⚠️⚠️ Agent 标识会进入幂等键（第十七批）：键是「run/agent/tool/call」，
+            //    成分里含分隔符就无法唯一分解 —— (a/b, c) 与 (a, b/c) 会撞键，
+            //    而撞键的后果是「一次工具调用被静默吞掉」。
+            //    在**构造期**拒绝，而不是等到拼键时才炸：
+            //    前者发生在装配/委派阶段（能定位到是谁），
+            //    后者发生在工具执行中途（Run 崩掉，且现场难辨）。
+            throw new IllegalArgumentException("执行作用域的 agentId 不得包含分隔符 '"
+                    + IdempotencyKey.SEPARATOR + "'，否则幂等键无法唯一分解: " + agentId);
+        }
         if (agentVersion <= 0) {
             throw new IllegalArgumentException("执行作用域的 agentVersion 必须为正数，收到: "
                     + agentVersion);
@@ -42,5 +54,18 @@ public record ExecutionScope(
         if (expectedFingerprint == null || expectedFingerprint.isBlank()) {
             throw new IllegalArgumentException("执行作用域的闭包指纹不能为空");
         }
+    }
+
+    /**
+     * 当前执行主体的引用（幂等键的 Agent 维度 · 第十七批）。
+     *
+     * <p>⚠️ 格式定义在 {@link IdempotencyKey#agentRefOf}：
+     * 本作用域与委派上下文必须渲染出<b>同一个</b>字符串，
+     * 否则同一次调用在两条链路上会算出两个不同的键。
+     *
+     * @return Agent 引用（{@code agentId@version}）
+     */
+    public @NonNull String agentRef() {
+        return IdempotencyKey.agentRefOf(agentId, agentVersion);
     }
 }

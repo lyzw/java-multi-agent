@@ -159,7 +159,7 @@ class IdempotencyProtocolTest {
         @DisplayName("✅ record_weakness 自己仍用 record_weakness 命名空间")
         void recordWeaknessKeepsItsOwnShape() {
             IdempotencyKey k = IdempotencyKey.forToolCall(
-                    "run-1", IdempotencyKey.RECORD_WEAKNESS_TOOL, "call-1",
+                    "run-1", null, IdempotencyKey.RECORD_WEAKNESS_TOOL, "call-1",
                     "stu-1", "一元二次方程");
             assertThat(k.namespace()).isEqualTo("tool.record_weakness");
             assertThat(k.keyValue()).isEqualTo("stu-1/run-1/一元二次方程");
@@ -172,7 +172,7 @@ class IdempotencyProtocolTest {
             //    于是任意带这两个参数的工具都被塞进 tool.record_weakness 命名空间 ——
             //    两个不同工具算出同一个键（UNIQUE(tenant_id, idempotency_key)）。
             IdempotencyKey k = IdempotencyKey.forToolCall(
-                    "run-1", "generate_explanation", "call-1",
+                    "run-1", null, "generate_explanation", "call-1",
                     "stu-1", "一元二次方程");
 
             assertThat(k.namespace())
@@ -188,9 +188,9 @@ class IdempotencyProtocolTest {
         @DisplayName("⚠️⚠️ 两个不同工具 + 相同参数 → 不同键（P1-9 反证）")
         void differentToolsWithSameArgumentsProduceDifferentKeys() {
             IdempotencyKey a = IdempotencyKey.forToolCall(
-                    "run-1", "record_weakness", "call-1", "stu-1", "KP");
+                    "run-1", null, "record_weakness", "call-1", "stu-1", "KP");
             IdempotencyKey b = IdempotencyKey.forToolCall(
-                    "run-1", "generate_explanation", "call-1", "stu-1", "KP");
+                    "run-1", null, "generate_explanation", "call-1", "stu-1", "KP");
 
             assertThat(a.composite())
                     .as("⚠️⚠️ 工具不同必须产生不同键 —— "
@@ -203,7 +203,7 @@ class IdempotencyProtocolTest {
         @DisplayName("✅ 缺 callId 时仍产生带工具名的键")
         void missingCallIdStillCarriesToolName() {
             IdempotencyKey k = IdempotencyKey.forToolCall(
-                    "run-1", "get_student_profile", null, "stu-1", null);
+                    "run-1", null, "get_student_profile", null, "stu-1", null);
             assertThat(k.keyValue()).isEqualTo("run-1/get_student_profile/no-call-id");
         }
     }
@@ -246,7 +246,7 @@ class IdempotencyProtocolTest {
         @DisplayName("✅ 工具调用键 = runId + toolName + callId，命名空间 tool.invoke")
         void toolInvokeKeyShape() {
             IdempotencyKey k = IdempotencyKey.forToolInvoke(
-                    "run-1", "get_student_profile", "call-7");
+                    "run-1", null, "get_student_profile", "call-7");
             assertThat(k.namespace())
                     .as("⚠️ 工具调用不得复用 run.create 命名空间"
                             + "（否则日志与排障无法区分来源，且违背 ADR-003 隔离意图）")
@@ -257,8 +257,8 @@ class IdempotencyProtocolTest {
         @Test
         @DisplayName("⚠️⚠️ 工具调用键跨 Run 不撞键（同工具名 + 同 callId）")
         void toolInvokeDoesNotCollideAcrossRuns() {
-            IdempotencyKey runA = IdempotencyKey.forToolInvoke("run-a", "t", "call-1");
-            IdempotencyKey runB = IdempotencyKey.forToolInvoke("run-b", "t", "call-1");
+            IdempotencyKey runA = IdempotencyKey.forToolInvoke("run-a", null, "t", "call-1");
+            IdempotencyKey runB = IdempotencyKey.forToolInvoke("run-b", null, "t", "call-1");
             assertThat(runA.composite())
                     .as("⚠️⚠️ 同工具名 + 同 callId 跨 Run 必须产生不同键")
                     .isNotEqualTo(runB.composite());
@@ -268,7 +268,7 @@ class IdempotencyProtocolTest {
         @DisplayName("⚠️ 工具调用键与 Run 创建键不同命名空间")
         void toolInvokeNamespaceIsolated() {
             IdempotencyKey runKey = IdempotencyKey.forRunCreate("shared");
-            IdempotencyKey toolKey = IdempotencyKey.forToolInvoke("shared", "shared", "shared");
+            IdempotencyKey toolKey = IdempotencyKey.forToolInvoke("shared", null, "shared", "shared");
             assertThat(runKey.composite())
                     .as("⚠️ 跨用途撞值会导致错误复用")
                     .isNotEqualTo(toolKey.composite());
@@ -277,12 +277,141 @@ class IdempotencyProtocolTest {
         @Test
         @DisplayName("⚠️ 组成部分含分隔符被拒（同 record_weakness 规则）")
         void toolInvokeRejectsSeparator() {
-            assertThatThrownBy(() -> IdempotencyKey.forToolInvoke("run/1", "t", "c"))
+            assertThatThrownBy(() -> IdempotencyKey.forToolInvoke("run/1", null, "t", "c"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("runId");
-            assertThatThrownBy(() -> IdempotencyKey.forToolInvoke("run-1", "t", ""))
+            assertThatThrownBy(() -> IdempotencyKey.forToolInvoke("run-1", null, "t", ""))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("callId");
+        }
+    }
+
+    // ── 第十七批：幂等键必须按「当前执行中的 Agent」分域 ──────────
+
+    @Nested
+    @DisplayName("第十七批 幂等键含 Agent 维度（多级 Agent）")
+    class AgentDimensionPresent {
+
+        @Test
+        @DisplayName("⚠️⚠️ 父子 Agent 同名工具 + 同名 call id → 不同键")
+        void parentAndChildDoNotCollide() {
+            // ⚠️ 修复前键里没有 Agent 维度 → 父子算出同一个键 →
+            //    账本命中重复键 → **复用既有 operation、不再次执行工具** →
+            //    子 Agent 那次调用**根本没发生**，模型拿到的还是父的结果。
+            IdempotencyKey parent = IdempotencyKey.forToolInvoke(
+                    "run-1", "agent-parent@1", "get_student_profile", "call-1");
+            IdempotencyKey child = IdempotencyKey.forToolInvoke(
+                    "run-1", "agent-child@1", "get_student_profile", "call-1");
+
+            assertThat(parent.composite())
+                    .as("⚠️⚠️ 父子撞键 = 子 Agent 的调用被静默吞掉 = Sev-0")
+                    .isNotEqualTo(child.composite());
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 兄弟子 Agent 同名工具 + 同名 call id → 不同键")
+        void siblingAgentsDoNotCollide() {
+            IdempotencyKey left = IdempotencyKey.forToolInvoke(
+                    "run-1", "agent-left@1", "get_student_profile", "call-1");
+            IdempotencyKey right = IdempotencyKey.forToolInvoke(
+                    "run-1", "agent-right@1", "get_student_profile", "call-1");
+
+            assertThat(left.composite())
+                    .as("⚠️⚠️ 兄弟撞键 = 第二个子 Agent 的调用被第一个的记录吞掉")
+                    .isNotEqualTo(right.composite());
+        }
+
+        @Test
+        @DisplayName("✅ 同一 Agent 重复投递 → 键相同（幂等语义未被破坏）")
+        void sameAgentRepeatDeliveryStaysIdempotent() {
+            // ⚠️ 这是本次修复的**反面**：加了 Agent 维度之后，
+            //    同一 Agent 的同一次调用重投**必须**仍是同一个键，
+            //    否则「重复投递」会变成「重复副作用」——那是比吞调用更糟的失效方向。
+            IdempotencyKey first = IdempotencyKey.forToolInvoke(
+                    "run-1", "agent-child@1", "get_student_profile", "call-1");
+            IdempotencyKey replay = IdempotencyKey.forToolInvoke(
+                    "run-1", "agent-child@1", "get_student_profile", "call-1");
+
+            assertThat(replay.composite())
+                    .as("⚠️⚠️ 同一 Agent 重复投递必须仍是同一个键 —— "
+                            + "键若每次都变，幂等就退化成「每次都执行一遍」")
+                    .isEqualTo(first.composite());
+        }
+
+        @Test
+        @DisplayName("✅ 无 Agent 维度（单 Agent 路径）→ 键值与历史完全一致")
+        void nullAgentRefKeepsHistoricalKeyShape() {
+            // ⚠️ 在途的 tool_operation 行是按旧键写的：
+            //    单 Agent 路径若改了键形状，那些行就再也匹配不上 →
+            //    重放会被当成新调用 → **重复副作用**。
+            IdempotencyKey k = IdempotencyKey.forToolInvoke(
+                    "run-1", null, "get_student_profile", "call-7");
+
+            assertThat(k.keyValue())
+                    .as("⚠️⚠️ 单 Agent 路径的键必须与历史逐字符一致")
+                    .isEqualTo("run-1/get_student_profile/call-7");
+            assertThat(k.namespace()).isEqualTo("tool.invoke");
+        }
+
+        @Test
+        @DisplayName("✅ 同一 agentId 的不同 release → 不同键")
+        void differentVersionsOfSameAgentDoNotCollide() {
+            IdempotencyKey v1 = IdempotencyKey.forToolInvoke(
+                    "run-1", "agent-child@1", "get_student_profile", "call-1");
+            IdempotencyKey v2 = IdempotencyKey.forToolInvoke(
+                    "run-1", "agent-child@2", "get_student_profile", "call-1");
+
+            assertThat(v1.composite())
+                    .as("⚠️⚠️ 不同 release 是不同的执行主体（闭包/工具集可能不同），"
+                            + "键若不区分版本，新 release 会继承旧 release 的幂等记录")
+                    .isNotEqualTo(v2.composite());
+        }
+
+        @Test
+        @DisplayName("✅ record_weakness 的键不含 Agent 维度（业务事实全局唯一）")
+        void recordWeaknessIgnoresAgentDimension() {
+            // ⚠️ record_weakness 记的是「某学生的某知识点」这条**业务事实**，
+            //    全局唯一：父 Agent 与子 Agent 记同一条，后写的那次被幂等拦下是**正确**的。
+            //    因此这一形状**刻意**不加 Agent 维度。
+            IdempotencyKey withAgent = IdempotencyKey.forToolCall(
+                    "run-1", "agent-child@1", IdempotencyKey.RECORD_WEAKNESS_TOOL, "call-1",
+                    "stu-1", "一元二次方程");
+            IdempotencyKey withoutAgent = IdempotencyKey.forToolCall(
+                    "run-1", null, IdempotencyKey.RECORD_WEAKNESS_TOOL, "call-1",
+                    "stu-1", "一元二次方程");
+
+            assertThat(withAgent.composite())
+                    .as("✅ record_weakness 是业务事实，不按 Agent 分域")
+                    .isEqualTo(withoutAgent.composite());
+            assertThat(withAgent.keyValue()).isEqualTo("stu-1/run-1/一元二次方程");
+        }
+
+        @Test
+        @DisplayName("⚠️ Agent 引用含分隔符被拒（键必须可唯一分解）")
+        void agentRefWithSeparatorIsRejected() {
+            // ⚠️ (a/b, c) 与 (a, b/c) 会算出同一个键 →
+            //    不同 Agent 的调用互相吞掉 —— 那正是本次要修的缺陷换个方向复发。
+            assertThatThrownBy(() -> IdempotencyKey.forToolInvoke(
+                    "run-1", "agent/child@1", "t", "call-1"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("agentRef");
+        }
+
+        @Test
+        @DisplayName("✅ Agent 引用格式 = agentId@version（唯一一处定义）")
+        void agentRefFormat() {
+            assertThat(IdempotencyKey.agentRefOf("agent-child", 3))
+                    .as("⚠️ 格式定义必须唯一：执行作用域与委派上下文都从这里渲染，"
+                            + "各自拼一份的话格式一旦漂移就会撞键")
+                    .isEqualTo("agent-child@3");
+        }
+
+        @Test
+        @DisplayName("⚠️ Agent 引用的版本必须为正数")
+        void agentRefRejectsNonPositiveVersion() {
+            assertThatThrownBy(() -> IdempotencyKey.agentRefOf("agent-child", 0))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("agentVersion");
         }
     }
 

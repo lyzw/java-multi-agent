@@ -19,6 +19,7 @@ import cn.studykid.multiagent.core.cap.AuthorizationDecision;
 import cn.studykid.multiagent.core.cap.CapToolDecision;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
 import cn.studykid.multiagent.core.cap.CapabilityRiskLevel;
+import cn.studykid.multiagent.core.cap.ExecutionScope;
 import cn.studykid.multiagent.core.cap.ReasonCode;
 import cn.studykid.multiagent.core.config.ToolRiskLevel;
 import cn.studykid.multiagent.ports.model.ModelResponse;
@@ -618,6 +619,97 @@ class CapExecutionFlowTest {
         void switchOffReportsDisabled() {
             assertThat(flow(new CapEnforcementSwitch(false)).isEnabled()).isFalse();
             assertThat(flow(new CapEnforcementSwitch(true)).isEnabled()).isTrue();
+        }
+    }
+
+    // ── 第十七批：幂等键按「当前执行中的 Agent」分域 ──────────────
+
+    /**
+     * 第十七批：幂等键按当前 Agent 分域。
+     *
+     * <p>⚠️ <b>本组用例断言的是「幂等键」，不是「执行结果」</b>：
+     * 幂等键在 §5.3 <b>步骤 8</b>算出并送进幂等守卫，
+     * 而子 Agent 的调用目前会在<b>步骤 13（执行准入）</b>被拒 ——
+     * 原因是准入检查拿「Run 快照里的<b>根 Agent</b>闭包指纹」
+     * 去比「Phase A 的<b>子 Agent</b>闭包指纹」，两者必然不等
+     * （指纹含 {@code agent.id}）→ {@code EXEC_ADMISSION_STALE}。
+     * <br>⚠️ 那是<b>另一个</b>真实缺陷（CAP 链路的子 Agent 路径整体不可用），
+     * 已登记为待修缺口，<b>不在本批修</b>（它要动的是准入语义，不是幂等键）。
+     * <br>⚠️ 正因为如此，本组断言<b>不能</b>写「子 Agent 的调用必须成功」——
+     * 那会把一个尚未修复的缺陷固化成「预期行为」。
+     */
+    @Nested
+    @DisplayName("第十七批 幂等键按当前 Agent 分域")
+    class AgentDimension {
+
+        /** 子 Agent 标识（与根 Agent 同 Skill、异身份）。 */
+        private static final String CHILD = "child_tutor";
+
+        /**
+         * 构造子 Agent 的执行作用域（固定 release + 真实闭包指纹）。
+         */
+        private ExecutionScope childScope() {
+            cap.withAgent(TENANT, CHILD, 1, List.of(SKILL), "{}");
+            return new ExecutionScope(CHILD, 1,
+                    ClosureFingerprint.of(resolver.resolve(TENANT, CHILD, 1)));
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 父 Agent 与子 Agent 的幂等键不同（键带 Agent 维度）")
+        void parentAndChildUseDifferentKeys() {
+            // ⚠️ 修复前键里没有 Agent 维度 → 父子算出同一个键 →
+            //    后者被幂等守卫判「已完成 / 进行中」→ **子 Agent 那次调用没发生**，
+            //    且模型拿到的还是父的结果。
+            CapExecutionFlow flow = flow();
+
+            flow.invoke(TENANT, task(), call(), exec.tool(TOOL));                    // 根路径
+            flow.invoke(TENANT, task(), call(), exec.tool(TOOL), childScope());      // 子路径
+
+            assertThat(exec.lookedUpKeys)
+                    .as("⚠️ 两次调用都必须走幂等校验")
+                    .hasSize(2);
+            assertThat(exec.lookedUpKeys.get(0))
+                    .as("✅ 根路径的键不含 Agent 维度（与历史逐字符一致，"
+                            + "在途 tool_operation 行按旧键写入，改形状会让重放变新调用）")
+                    .isEqualTo("tool.invoke:" + RUN_ID + "/" + TOOL + "/call-1");
+            assertThat(exec.lookedUpKeys.get(1))
+                    .as("⚠️⚠️ 子 Agent 的键必须带自己的身份（agentId@version）")
+                    .contains(CHILD + "@1");
+            assertThat(exec.lookedUpKeys.get(0))
+                    .as("⚠️⚠️ 父子撞键 = 子 Agent 的调用被父的幂等记录吞掉")
+                    .isNotEqualTo(exec.lookedUpKeys.get(1));
+        }
+
+        @Test
+        @DisplayName("✅ 同一 Agent 重复调用 → 同一个键（幂等未被破坏）")
+        void sameAgentRepeatUsesSameKey() {
+            // ⚠️ 这是本次修复的**反面**：加了 Agent 维度之后，
+            //    同一 Agent 的同一次调用重投**必须**仍是同一个键，
+            //    否则「重复投递」会变成「重复副作用」——那比吞调用更糟。
+            CapExecutionFlow flow = flow();
+            ExecutionScope scope = childScope();
+
+            flow.invoke(TENANT, task(), call(), exec.tool(TOOL), scope);
+            flow.invoke(TENANT, task(), call(), exec.tool(TOOL), scope);
+
+            assertThat(exec.lookedUpKeys).hasSize(2);
+            assertThat(exec.lookedUpKeys.get(0))
+                    .as("⚠️⚠️ 同一 Agent 的重复调用必须是同一个键 —— "
+                            + "键若每次都变，幂等就退化成「每次都执行一遍」")
+                    .isEqualTo(exec.lookedUpKeys.get(1));
+        }
+
+        @Test
+        @DisplayName("✅ 根路径（无作用域）的键与历史完全一致")
+        void rootPathKeyShapeUnchanged() {
+            CapExecutionFlow flow = flow();
+            flow.invoke(TENANT, task(), call(), exec.tool(TOOL));
+
+            assertThat(exec.lookedUpKeys).hasSize(1);
+            assertThat(exec.lookedUpKeys.get(0))
+                    .as("⚠️⚠️ 单 Agent 路径的键必须与历史逐字符一致"
+                            + "（在途 tool_operation 行按旧键写入，改形状会导致重放变新调用）")
+                    .isEqualTo("tool.invoke:" + RUN_ID + "/" + TOOL + "/call-1");
         }
     }
 }
