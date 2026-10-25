@@ -142,7 +142,10 @@ class NestedDeadlinePropagationTest {
 
         @Override
         public Optional<Reservation> findByOperation(String tenantId, String operationId) {
-            return Optional.empty();
+            // ⚠️ 预留成功后**必须能查到预留记录**：闸门靠它拿 reservationId
+            //    去结算 / 释放；查不到即 fail-closed 拒绝执行（不得静默丢弃该次调用）
+            return Optional.of(new Reservation("res-1", RUN, operationId,
+                    BigDecimal.ONE, null, "RESERVED", "CNY"));
         }
 
         @Override

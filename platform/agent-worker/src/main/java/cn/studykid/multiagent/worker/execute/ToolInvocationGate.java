@@ -669,6 +669,23 @@ public class ToolInvocationGate {
             parentInvocationId = delegationContext.invocationId();
             parentDepth = delegationContext.depth();
         }
+        // ⚠️⚠️ Run 级预算（第十六批 · MA-T17 · 全调用树共享上限）：
+        //    委派**必须**与工具调用走同一套预算口径。
+        //    修复前委派分支直接绕过「Run 级金额判定 + 预算预留」——
+        //    一次委派会启动子 Agent 的模型调用（**真实成本**）却**不占任何额度**，
+        //    于是「全调用树共享预算上限」对委派完全失效：
+        //    `maxChildInvocations` 是**每父 Agent** 的（8 × 8 × 8 = 512 次子调用），
+        //    Run 额度本是唯一的兜底，而它恰好对委派不管用。
+        //
+        //    ⚠️ **判在预留之前**：预留成功即已占额，判晚了就是「先花钱再检查」。
+        String reservationId = reserveDelegationQuota(tenantId, task, invocationId,
+                call.toolName(), result);
+        if (reservationId == null) {
+            // ⚠️ 预算不足 / 预留失败 → **零子执行**：
+            //    子 Agent 一旦启动就是真实成本，而它注定会被预算拒绝。
+            return false;
+        }
+
         var outcome = delegation.delegate(
                 new cn.studykid.multiagent.application.orchestration.DelegationExecutor
                         .DelegationCommand(
@@ -708,6 +725,9 @@ public class ToolInvocationGate {
 
         switch (outcome.status()) {
             case SUCCEEDED -> {
+                // ⚠️ 成本已发生 → **结算**预留（第十六批）：
+                //    子 Agent 跑过了，模型调用的钱已经花出去，不能退回额度。
+                settleQuietly(tenantId, reservationId, call.toolName());
                 result.recordSucceeded(call.toolName());
                 result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
                         call.toolName(), outcome.invocationId(),
@@ -719,6 +739,9 @@ public class ToolInvocationGate {
                 // ⚠️ 结果不确定 → 走对账，不盲目重放（MA-T13）
                 //    ⚠️ 且**立即停止本轮后续调用**：可能已有副作用发生，
                 //    继续启动新动作会扩大不确定面（与普通工具路径同口径）。
+                //    ⚠️ **预留既不结算也不释放**（R-007 红线）：
+                //    成本是否发生**未知** → 既不能认定已花（结算），
+                //    也不能当没花（释放 = 白送额度）。留在 RESERVED 待对账。
                 result.recordUnknown(call.toolName(), outcome.invocationId());
                 result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
                         call.toolName(), outcome.invocationId(),
@@ -731,6 +754,9 @@ public class ToolInvocationGate {
                 if (!outcome.childStarted()) {
                     // ⚠️ 子执行**从未启动** → 这是授权/边界拒绝（Phase A），
                     //    不是「子调用失败」，故**不触发** failurePolicy。
+                    //    ⚠️ **释放**预留（第十六批）：子 Agent 从未运行 → 零成本 →
+                    //        额度必须原样退回（与工具「确定失败 → 释放」同口径）。
+                    releaseQuietly(tenantId, reservationId, "delegation-rejected");
                     result.recordRejected(call.toolName(), reasonCode.name());
                     result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
                             call.toolName(), outcome.invocationId(),
@@ -739,6 +765,10 @@ public class ToolInvocationGate {
                 }
                 // ⚠️ 子执行**已启动但失败** → 执行失败（Phase B）：
                 //    授权已通过，失败发生在执行阶段（§5.1）。
+                //    ⚠️ **结算**预留：子 Agent 已经跑过（模型调用已发生）→
+                //    成本是真的，不能退回额度（与工具「确定失败 → 释放」**刻意不同**：
+                //    工具的确定失败 = 工具没产生副作用；子执行的失败 = 子 Agent 已运行）。
+                settleQuietly(tenantId, reservationId, call.toolName());
                 result.recordFailed(call.toolName(), reasonCode.name());
                 result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
                         call.toolName(), outcome.invocationId(),
@@ -750,6 +780,71 @@ public class ToolInvocationGate {
                 return shouldHaltAfterFailure(tenantId, task.runId());
             }
         }
+    }
+
+    /**
+     * 委派路径的预算预留（第十六批 · MA-T17）。
+     *
+     * <p>⚠️ <b>为什么委派也必须占额度</b>：
+     * 一次委派会启动子 Agent，子 Agent 会调模型 —— 那是<b>真实成本</b>，
+     * 且多级场景下它能<b>指数放大</b>（每层 Agent 各自的 {@code maxChildInvocations}
+     * 相乘）。Run 额度是唯一的 Run 级上限，若委派不占额，
+     * 「这一棵调用树最多花多少」在多级场景下就是<b>一句空话</b>。
+     *
+     * <p>⚠️ <b>预留额取「一次调用当量」</b>：与工具调用同额
+     * （{@code reserveAmountPerToolCall}）。
+     * <b>这是本批取舍，非评审冻结的定价模型</b>：预算体系当前按「调用当量」计量，
+     * 真实成本由 {@code usage_record} 独立记录（P3-D04 §6 L-5）；
+     * 一次委派的真实成本（子 Agent 的多轮模型调用）**高于**一次工具调用当量，
+     * 因此本口径是<b>保守下界</b>，不是精确计价。
+     * ⚠️ **模型调用本身仍未计入 Run 额度** —— 那需要冻结成本模型（token 计价），
+     * 属未闭环范围 → 已登记为缺口。
+     *
+     * @param tenantId    租户标识
+     * @param task        根 Run 任务
+     * @param invocationId 委派调用标识（<b>幂等键</b>：重复投递复用同一笔预留）
+     * @param toolName    委派工具名（仅用于日志与拒绝原因）
+     * @param result      汇总结果；被拒时已写入拒绝原因
+     * @return 预留 ID；<b>null 表示已被拒绝</b>（此时已写入拒绝原因，且<b>零子执行</b>）
+     */
+    private @Nullable String reserveDelegationQuota(String tenantId,
+                                                    RunClaimPort.LeasedTask task,
+                                                    String invocationId,
+                                                    String toolName,
+                                                    ToolInvocationResult result) {
+        // ⚠️ ① Run 级**金额**判定（先判、后预留）：
+        //    只判「还有没有余额」时，剩余 10 元的 Run 仍能预留 50 元 ——
+        //    单次委派即突破上限，共享上限名存实亡。
+        if (runBudget != null) {
+            RunBudgetProbe.Verdict verdict = runBudget.check(tenantId, task.runId(),
+                    reserveAmountPerToolCall);
+            if (!verdict.allowed()) {
+                log.warn("Run 级预算不足，拒绝委派: runId={}, reason={}",
+                        task.runId(), verdict.denial());
+                result.recordRejected(toolName, "Run 级预算不足:" + verdict.denial());
+                result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                        toolName, null,
+                        cn.studykid.multiagent.core.cap.AuthorizationDecision.deny(
+                                cn.studykid.multiagent.core.cap.ReasonCode.BUDGET_EXCEEDED)));
+                return null;
+            }
+        }
+        // ⚠️ ② 权威预留（与工具调用同一份核心）：Run 级上限在 reserve 的同一事务里
+        //    原子生效（锁 run 行 → 聚合 → 判定 → 扣减）。
+        QuotaOutcome outcome = reserveQuota(tenantId, task.runId(), invocationId, toolName);
+        if (!outcome.granted()) {
+            // ⚠️ 委派**不记账本**（委派有独立的 agent_invocation 记录），
+            //    但拒绝原因必须留痕（否则这次委派会从系统里彻底消失）。
+            log.warn("委派预算预留被拒，零子执行: runId={}, operation={}, reason={}",
+                    task.runId(), invocationId, outcome.resultReason());
+            result.recordRejected(toolName, outcome.resultReason());
+            result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                    toolName, null,
+                    cn.studykid.multiagent.core.cap.AuthorizationDecision.deny(
+                            cn.studykid.multiagent.core.cap.ReasonCode.BUDGET_EXCEEDED)));
+            return null;
+        }
+        return outcome.reservationId();
     }
 
     /**
@@ -1063,7 +1158,76 @@ public class ToolInvocationGate {
     // ── 预算辅助（P3-D04）──────────────────────────────────────────
 
     /**
-     * 预留预算。
+     * 预算预留核心（<b>工具调用与委派共用同一份</b> · 第十六批）。
+     *
+     * <p>⚠️ <b>为什么必须共用一份</b>：委派与工具调用消耗的是<b>同一个 Run 的同一笔额度</b>
+     * （{@code budget_reservation.run_id}），口径一旦分叉就会出现
+     * 「工具算一次、委派不算」的裂缝 —— 那正是本批修掉的缺陷。
+     * 两份实现必然漂移，而漂移就是「两个真相」本身。
+     *
+     * <p>⚠️ <b>本方法不记账本</b>：账本只登记<b>工具操作</b>，
+     * 委派有独立的 {@code agent_invocation} 记录 —— 记账与否由调用方决定。
+     *
+     * @param tenantId    租户标识
+     * @param runId       根 Run 标识（额度共享域）
+     * @param operationId 幂等键（工具用账本 operationId，委派用 invocationId）
+     * @param toolName    工具/委派名（仅用于日志与拒绝原因）
+     * @return 预留结论
+     */
+    private @NonNull QuotaOutcome reserveQuota(String tenantId, String runId,
+                                                String operationId, String toolName) {
+        BudgetPort.ReserveOutcome outcome = budget.reserve(
+                tenantId, runId, operationId, reserveAmountPerToolCall);
+
+        if (outcome == BudgetPort.ReserveOutcome.RESERVED
+                || outcome == BudgetPort.ReserveOutcome.REPLAYED) {
+            // ⚠️ REPLAYED 也返回预留 ID：同 operation 重复调用复用既有预留，
+            //    这是「预留有唯一记录」在执行链上的体现
+            Optional<BudgetPort.Reservation> reservation =
+                    budget.findByOperation(tenantId, operationId);
+            if (reservation.isPresent()) {
+                return new QuotaOutcome(true, reservation.get().reservationId(), null, null);
+            }
+            // ⚠️⚠️ **预留已生效却查不到预留记录 → 不得静默丢弃这次调用**
+            //
+            //    没有预留 ID 就无法结算/释放，执行了必然留下一笔无人认领的成本；
+            //    故 fail-closed：调用**不执行**，并留下明确的拒绝原因。
+            //    若预留行确实已落库，它会变成悬挂预留，由对账（findOrphaned）释放。
+            log.error("预算预留已生效但查不到预留记录，fail-closed 拒绝执行: tool={}, runId={}, operation={}",
+                    toolName, runId, operationId);
+            return new QuotaOutcome(false, null,
+                    "预算预留记录缺失（预留已生效但不可见）", "预算预留记录缺失");
+        }
+
+        log.warn("预算预留被拒: tool={}, runId={}, outcome={}",
+                toolName, runId, outcome);
+        // ⚠️ INSUFFICIENT 与 NO_ACCOUNT 严格区分：
+        //    前者要加额度，后者要**开通账户** —— 运维处置方向完全不同
+        String reason = switch (outcome) {
+            case INSUFFICIENT -> "预算不足";
+            case NO_ACCOUNT -> "未开通预算账户";
+            case FAIL_CLOSED -> "预算配置缺失";
+            default -> "预算预留被拒";
+        };
+        return new QuotaOutcome(false, null, reason, "预算预留被拒:" + outcome);
+    }
+
+    /**
+     * 预算预留结论。
+     *
+     * @param granted        是否已获得额度
+     * @param reservationId  预留 ID（获得额度时非空）
+     * @param resultReason   面向调用方/模型的拒绝原因（拒绝时非空）
+     * @param ledgerReason   面向工具账本的拒绝原因（拒绝时非空；委派路径不用）
+     */
+    private record QuotaOutcome(boolean granted,
+                                @Nullable String reservationId,
+                                @Nullable String resultReason,
+                                @Nullable String ledgerReason) {
+    }
+
+    /**
+     * 预留预算（工具调用路径）。
      *
      * @param result 汇总结果；被拒时已写入拒绝原因
      * @return 预留 ID；<b>null 表示已被拒绝</b> —— 且此时<b>必然已</b>写入拒绝原因
@@ -1075,51 +1239,16 @@ public class ToolInvocationGate {
                                  RunToolLedgerPort.Registration registration,
                                  String toolName,
                                  ToolInvocationResult result) {
-        BudgetPort.ReserveOutcome outcome = budget.reserve(
-                tenantId, task.runId(), registration.operationId(), reserveAmountPerToolCall);
-
-        if (outcome == BudgetPort.ReserveOutcome.RESERVED
-                || outcome == BudgetPort.ReserveOutcome.REPLAYED) {
-            // ⚠️ REPLAYED 也返回预留 ID：同 operation 重复调用复用既有预留，
-            //    这是「预留有唯一记录」在执行链上的体现
-            Optional<BudgetPort.Reservation> reservation =
-                    budget.findByOperation(tenantId, registration.operationId());
-            if (reservation.isPresent()) {
-                return reservation.get().reservationId();
-            }
-            // ⚠️⚠️ **预留已生效却查不到预留记录 → 不得静默丢弃这次调用**
-            //
-            //    修复前这里是 `.orElse(null)`，而调用方把 null 一律当成
-            //    「已记录拒绝」直接 continue —— 结果是：工具没执行、
-            //    账本行永远停在 IN_FLIGHT、拒绝原因与拒绝记录都没有、
-            //    模型也收不到任何反馈，这次调用**从系统里彻底消失**：
-            //    既不可见、不可对账，也无人知道它曾经发生过。
-            //
-            //    处置（fail-closed）：工具**不执行**（没有预留 ID 就无法结算/释放，
-            //    执行了必然留下一笔无人认领的成本）；账本记 FAILED
-            //    （工具根本没发出 = 确定失败，不是结果未知）；并留下明确的拒绝原因。
-            //    若预留行确实已落库，它会变成悬挂预留，由对账（findOrphaned）释放。
-            log.error("预算预留已生效但查不到预留记录，fail-closed 拒绝执行: tool={}, runId={}, operation={}",
-                    toolName, task.runId(), registration.operationId());
-            recordFailed(tenantId, registration.operationId(), task.fencingToken(),
-                    "预算预留记录缺失");
-            result.recordRejected(toolName, "预算预留记录缺失（预留已生效但不可见）");
-            return null;
+        QuotaOutcome outcome = reserveQuota(tenantId, task.runId(),
+                registration.operationId(), toolName);
+        if (outcome.granted()) {
+            return outcome.reservationId();
         }
-
-        log.warn("预算预留被拒: tool={}, runId={}, outcome={}",
-                toolName, task.runId(), outcome);
-        // ⚠️ INSUFFICIENT 与 NO_ACCOUNT 严格区分：
-        //    前者要加额度，后者要**开通账户** —— 运维处置方向完全不同
-        String reason = switch (outcome) {
-            case INSUFFICIENT -> "预算不足";
-            case NO_ACCOUNT -> "未开通预算账户";
-            case FAIL_CLOSED -> "预算配置缺失";
-            default -> "预算预留被拒";
-        };
+        // ⚠️ 工具路径必须记账本：工具**根本没有发出**，结果是确定的「未执行」，
+        //    记 UNKNOWN 会造出待对账的幽灵操作（见 recordFailed 的契约）。
         recordFailed(tenantId, registration.operationId(), task.fencingToken(),
-                "预算预留被拒:" + outcome);
-        result.recordRejected(toolName, reason);
+                outcome.ledgerReason());
+        result.recordRejected(toolName, outcome.resultReason());
         return null;
     }
 
