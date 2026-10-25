@@ -1,10 +1,13 @@
 package cn.studykid.multiagent.application.run;
 
+import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyDecision;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
@@ -13,6 +16,7 @@ import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
+import cn.studykid.multiagent.ports.persistence.RunLimits;
 import org.springframework.stereotype.Service;
 
 /**
@@ -61,6 +65,66 @@ public class RunCreationService {
                                                @NonNull String agentId,
                                                @NonNull IdempotencyKey key,
                                                @NonNull Map<String, Object> inputPayload) {
+        return createRun(context, agentId, key, inputPayload, RunLimits.UNLIMITED);
+    }
+
+    /**
+     * 创建 Run（原子提交），并声明本次 Run 的<b>资源上限</b>。
+     *
+     * <p>⚠️ <b>资源上限 = 整棵调用树的共同上界</b>（多级 Agent v1.1 · FR-024）：
+     * 委派链路的有效预算是 {@code min(根 Run 剩余时间, 本级 timeoutMs)}，
+     * 预算同理按 Run 聚合 —— 逐跳只能收窄、不得放宽。
+     * 因此根 Run 的截止时间与预算额度必须<b>随 Run 一起落库</b>，
+     * 否则「共享上限」在根层就是一句空话。
+     *
+     * <p>⚠️ <b>子类覆写请覆写本方法</b>（带 {@link RunLimits} 的重载）：
+     * 4 参版本只是「不限制」的兼容入口，覆写它<b>不会</b>被调用方命中 ——
+     * 调用方一律走本方法。
+     *
+     * @param context      认证上下文；<b>tenantId 取自此处，不得取自请求参数</b>
+     * @param agentId      Agent ID（来自请求体）；执行快照由本用例<b>在写事务内</b>解析
+     * @param key          幂等键
+     * @param inputPayload 输入载荷（不含可识别学生信息）
+     * @param limits       本次 Run 的资源上限（{@link RunLimits#UNLIMITED} = 不限制）
+     * @return 创建结果
+     * @throws ExecutionSnapshotUnavailableException 该 Agent 未发布或无执行快照（→ 404）
+     */
+    public @NonNull CreateRunResult createRun(@NonNull TenantContext context,
+                                               @NonNull String agentId,
+                                               @NonNull IdempotencyKey key,
+                                               @NonNull Map<String, Object> inputPayload,
+                                               @Nullable Long timeoutMs,
+                                               @Nullable BigDecimal budgetAmount) {
+        // ⚠️ 截止时刻在**幂等判定之前**算出：它只依赖时钟与预算，
+        //    与是否命中既有 Run 无关；命中重放时该值直接丢弃（不写库）。
+        //    ⚠️ 换算必须在这里做（服务层持有注入的 Clock）——
+        //    调用方自己取 Instant.now() 会引入**第二个时间源**，
+        //    二者漂移时截止时刻与实际不符。
+        Instant deadlineAt = timeoutMs == null ? null
+                : clock.instant().plusMillis(timeoutMs);
+        return createRun(context, agentId, key, inputPayload,
+                new RunLimits(deadlineAt, budgetAmount));
+    }
+
+    /**
+     * 创建 Run（原子提交），并声明本次 Run 的<b>资源上限</b>。
+     *
+     * <p>⚠️ <b>子类覆写请覆写带资源上限的重载</b>（本方法或 6 参版本）：
+     * 4 参版本只是「不限制」的兼容入口，覆写它<b>不会</b>被调用方命中。
+     *
+     * @param context      认证上下文；<b>tenantId 取自此处，不得取自请求参数</b>
+     * @param agentId      Agent ID（来自请求体）；执行快照由本用例<b>在写事务内</b>解析
+     * @param key          幂等键
+     * @param inputPayload 输入载荷（不含可识别学生信息）
+     * @param limits       本次 Run 的资源上限（{@link RunLimits#UNLIMITED} = 不限制）
+     * @return 创建结果
+     * @throws ExecutionSnapshotUnavailableException 该 Agent 未发布或无执行快照（→ 404）
+     */
+    public @NonNull CreateRunResult createRun(@NonNull TenantContext context,
+                                               @NonNull String agentId,
+                                               @NonNull IdempotencyKey key,
+                                               @NonNull Map<String, Object> inputPayload,
+                                               @NonNull RunLimits limits) {
         RequestDigest digest = RequestDigest.of(inputPayload);
         String correlationId = UUID.randomUUID().toString();
 
@@ -104,7 +168,8 @@ public class RunCreationService {
                     digest,
                     inputPayload,
                     correlationId,
-                    message);
+                    message,
+                    limits);
             return new CreateRunResult(actualRunId, false);
         });
     }

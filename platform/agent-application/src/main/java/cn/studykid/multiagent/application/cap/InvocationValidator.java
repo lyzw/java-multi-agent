@@ -80,6 +80,10 @@ public class InvocationValidator {
      * @param arguments 实际入参（供参数策略求值）
      * @param runId     所属 Run（用于读取闭包快照；<b>为空则无法校验指纹 → 拒绝</b>）
      * @param mcpTarget MCP 操作目标；原生工具传 {@code null}
+     * @param expectedFingerprint <b>期望的闭包指纹</b>；为 {@code null} 时按 {@code runId}
+     *                             读 Run 快照比对（单 Agent 路径），
+     *                             非空时直接与之比对（<b>子 Agent 路径</b>，
+     *                             见 {@link cn.studykid.multiagent.core.cap.ExecutionScope}）
      */
     public record InvocationRequest(
             @NonNull TenantContext context,
@@ -88,7 +92,21 @@ public class InvocationValidator {
             @NonNull String toolId,
             @NonNull Map<String, Object> arguments,
             @Nullable String runId,
-            @Nullable McpTarget mcpTarget) {
+            @Nullable McpTarget mcpTarget,
+            @Nullable String expectedFingerprint) {
+
+        /**
+         * 兼容构造器：单 Agent 路径（指纹按 Run 快照比对）。
+         */
+        public InvocationRequest(@NonNull TenantContext context,
+                                 @NonNull String agentId,
+                                 @NonNull String skillId,
+                                 @NonNull String toolId,
+                                 @NonNull Map<String, Object> arguments,
+                                 @Nullable String runId,
+                                 @Nullable McpTarget mcpTarget) {
+            this(context, agentId, skillId, toolId, arguments, runId, mcpTarget, null);
+        }
     }
 
     /**
@@ -305,6 +323,15 @@ public class InvocationValidator {
      */
     private @Nullable AuthorizationDecision checkFingerprint(@NonNull InvocationRequest request,
                                                             @NonNull EffectiveClosure closure) {
+        String current = ClosureFingerprint.of(closure);
+        // ⚠️ 子 Agent 路径：期望指纹由**委派时算出的子 Agent 闭包**给出，
+        //    直接比对，不读 Run 快照（Run 快照是根 Agent 的）。
+        if (request.expectedFingerprint() != null) {
+            if (!current.equals(request.expectedFingerprint())) {
+                return AuthorizationDecision.deny(ReasonCode.CONFIG_FINGERPRINT_STALE);
+            }
+            return null;
+        }
         if (request.runId() == null || request.runId().isBlank()) {
             // 没有 Run 就没有可校验的闭包快照 → 无法证明指纹有效 → 拒绝
             return AuthorizationDecision.deny(ReasonCode.CONFIG_FINGERPRINT_STALE);
@@ -314,7 +341,6 @@ public class InvocationValidator {
         if (snapshot.isEmpty()) {
             return AuthorizationDecision.deny(ReasonCode.RESOURCE_UNKNOWN);
         }
-        String current = ClosureFingerprint.of(closure);
         if (!current.equals(snapshot.get().configFingerprint())) {
             return AuthorizationDecision.deny(ReasonCode.CONFIG_FINGERPRINT_STALE);
         }

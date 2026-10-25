@@ -14,6 +14,7 @@ import tools.jackson.databind.node.ObjectNode;
 import cn.studykid.multiagent.application.prompt.PromptGuard;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
 import cn.studykid.multiagent.ports.model.ModelGateway;
+import cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
@@ -56,6 +57,16 @@ public class RunExecutionLoop {
      * （P3-D02 §2 F-1）。
      */
     private final String workerId;
+
+    /**
+     * 在途委派接管器（第九批 · MA-T12 · P3-MA-02）。
+     *
+     * <p>⚠️ <b>可为空 = 未装配</b>：此时接管不会收敛在途委派，
+     * 那些记录将<b>一直悬在 RUNNING</b>（无人能写终态），
+     * 重放时只能拿到「既有 RUNNING 状态」→ 父 Agent 收到「执行失败」，
+     * 而真实原因（Worker 崩溃）被掩盖。生产装配<b>必须</b>传入。
+     */
+    private final InFlightDelegationAdopter adopter;
 
     /**
      * 执行事件写入（P4-D12 / G4）。
@@ -108,6 +119,24 @@ public class RunExecutionLoop {
                              @NonNull String workerId,
                              @NonNull PromptGuard promptGuard,
                              @Nullable RunEventPort eventPort) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
+                promptGuard, eventPort, null);
+    }
+
+    /**
+     * 最完整构造器（含事件写入与在途委派接管）。
+     *
+     * @param eventPort 事件写入端口；{@code null} 表示**不写事件**（默认）
+     * @param adopter    在途委派接管器；{@code null} = 不做接管收敛
+     */
+    public RunExecutionLoop(@NonNull ModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             @NonNull PromptGuard promptGuard,
+                             @Nullable RunEventPort eventPort,
+                             @Nullable InFlightDelegationAdopter adopter) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
@@ -118,6 +147,11 @@ public class RunExecutionLoop {
         }
         this.workerId = workerId;
         this.promptGuard = promptGuard;
+        this.adopter = adopter;
+        if (adopter == null) {
+            log.warn("未装配在途委派接管器：Worker 接管后 RUNNING 的委派记录"
+                    + "将无法收敛（一直悬着），真实原因会被掩盖成普通子调用失败");
+        }
     }
 
     /**
@@ -141,6 +175,38 @@ public class RunExecutionLoop {
         }
 
         int steps = 0;
+
+        // ── 接管收敛（第九批 · MA-T12 · P3-MA-02）────────────────────
+        //    ⚠️ 必须在**世代检查通过之后**：世代已失效说明这个 Run
+        //    已被别人接管，我们没有任何写权限。
+        //    ⚠️ 首次领取时没有任何在途记录，影响 0 行 → 无需区分首次/接管。
+        if (adopter != null) {
+            try {
+                int converged = adopter.adopt(tenantId, task.runId(), task.fencingToken());
+                if (converged > 0) {
+                    log.warn("接管收敛在途委派 {} 条（结果不可知，交对账）: runId={}",
+                            converged, task.runId());
+                }
+            } catch (RuntimeException e) {
+                // ⚠️ 接管收敛失败**不得**中断本次执行：本次执行仍可正常推进，
+                //    失败的只是「旧记录不再悬着」这件事 —— 交由对账兜底。
+                log.error("接管收敛在途委派失败（不影响本次执行）: runId={}",
+                        task.runId(), e);
+            }
+        }
+
+        // ⚠️⚠️ 对话消息序列（第八批 · 消除「父子两套语义」）：
+        //    首轮是用户输入，之后每轮追加「模型意图 + 工具结果」。
+        //    修复前每轮都用**同一份** renderInput(input) ——
+        //    模型在第 2 轮看到的上下文与第 1 轮完全相同，
+        //    于是「调完工具」之后无法基于结果继续推理，
+        //    多轮工具协作根本不成立（工具调用等于白调）。
+        //    现在与子 Agent 执行器**共用同一套渲染口径**
+        //    （ToolOutcomeRenderer：不可信标记 / 长度封顶 / 失败也回灌）。
+        java.util.List<cn.studykid.multiagent.ports.model.ModelMessage> messages =
+                new java.util.ArrayList<>();
+        messages.add(cn.studykid.multiagent.ports.model.ModelMessage.user(
+                renderInput(input)));
 
         // ⚠️ P4-D12 / G4：开始执行 → RUN_STARTED
         appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_STARTED,
@@ -174,7 +240,9 @@ public class RunExecutionLoop {
                         agentConfig.temperature(),
                         agentConfig.maxTokens(),
                         agentConfig.timeout(),
-                        agentConfig.toolSchemas());
+                        agentConfig.toolSchemas(),
+                        // ⚠️ 带消息历史：非空时以 messages 为准（userContent 仅冗余保留）
+                        messages);
 
                 ModelResponse response = modelGateway.complete(request);
 
@@ -236,6 +304,13 @@ public class RunExecutionLoop {
                     log.info("工具调用全部被拒: runId={}", task.runId());
                     return commitFailure(tenantId, task, "工具调用被拒绝");
                 }
+
+                // ── 回灌：把「模型意图 + 工具结果」并入下一轮上下文 ──────
+                // ⚠️ 与子 Agent 执行器**共用**渲染口径：不可信标记、长度封顶、
+                //    失败与被拒也回灌 —— 三条规则逐字一致，杜绝父子语义漂移。
+                messages.add(cn.studykid.multiagent.ports.model.ModelMessage.assistant(
+                        ToolOutcomeRenderer.describeIntent(response.toolCalls())));
+                messages.addAll(ToolOutcomeRenderer.renderToolOutcomes(toolResult));
 
                 // ── §5 续租（长任务必须，否则会被接管）──────────────────
                 // ⚠️ 身份必须是构造时的 workerId（与领取时一致），

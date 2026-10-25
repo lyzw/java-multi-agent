@@ -50,11 +50,18 @@ public class RoleBasedAuthorizationService implements AuthorizationService {
                     //    ⚠️ 平台级对象（Tool / Skill / MCP Server）**不在此列** ——
                     //    平台身份表是租户内的，没有跨租户主体；
                     //    若把平台级发布挂到租户角色上，任一租户管理员自授角色即可改全平台配置。
-                    Actions.CONFIG_PUBLISH, Actions.CONFIG_ROLLBACK),
+                    Actions.CONFIG_PUBLISH, Actions.CONFIG_ROLLBACK,
+                    // ⚠️ **委派到子 Agent（多级 Agent v1.1 · FR-025）**：
+                    //    授予集合与 TOOL_INVOKE 对齐（管理员 / 作者 / Worker）——
+                    //    能驱动 Agent 执行的人，才允许把工作交给子 Agent。
+                    //    ⚠️ 刻意不给 VIEWER / APPROVER：只读与审批角色不产生委派。
+                    Actions.AGENT_DELEGATE),
             Roles.AGENT_AUTHOR, Set.of(
                     Actions.RUN_CREATE, Actions.RUN_READ, Actions.RUN_CANCEL,
                     Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ,
                     Actions.TOOL_INVOKE, Actions.AGENT_MANAGE,
+                    // ⚠️ 委派权限（同 TOOL_INVOKE 口径）：作者可以驱动自己的 Agent 编排子 Agent
+                    Actions.AGENT_DELEGATE,
                     // ⚠️ **只能申请、不能审批**（P4-D16 / C7）：
                     //    作者负责准备变更，审批权在管理员。
                     //    这使双人复核在**权限层面**就有落点，
@@ -73,7 +80,13 @@ public class RoleBasedAuthorizationService implements AuthorizationService {
             //    且画像是学生维度数据，给服务账号开这个口子会扩大数据可见面。
             Roles.WORKER, Set.of(
                     Actions.RUN_READ, Actions.RUN_CANCEL, Actions.TOOL_INVOKE,
-                    Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ),
+                    Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ,
+                    // ⚠️ **委派权限**：委派动作由执行侧发起，
+                    //    没有它则多级 Agent 在 Worker 链路上无法落地。
+                    //    ⚠️ 注意这只是「执行侧」的动作许可，
+                    //    真正的<b>逐跳授权</b>还要过 DelegationGuard 的
+                    //    目标声明 / 深度 / 次数 / 预算 / authzVersion 判定。
+                    Actions.AGENT_DELEGATE),
             // ⚠️ **平台级管理员（PLATFORM_ADMIN）**：
             //    平台/运维级治理角色，可覆盖全部动作（含平台级端点）。
             //    默认不授予任何主体 —— 仅在 out-of-band 授权通道（bootstrap）授予后才生效，

@@ -92,6 +92,18 @@ class CapExecutionFlowTest {
     }
 
     private CapExecutionFlow flow(CapEnforcementSwitch capSwitch, ApprovalPolicy approvalPolicy) {
+        return flow(capSwitch, approvalPolicy, null);
+    }
+
+    /**
+     * 带 Run 级预算探针的装配（第七批 · MA-T17）。
+     *
+     * @param runBudget Run 级预算探针；{@code null} = 未装配（不做 Run 级判定）
+     */
+    private CapExecutionFlow flow(CapEnforcementSwitch capSwitch,
+                                  ApprovalPolicy approvalPolicy,
+                                  cn.studykid.multiagent.application.orchestration.RunBudgetProbe
+                                          runBudget) {
         InvocationValidator validator = new InvocationValidator(authz, cap.rolePermissions(),
                 resolver, cap.snapshots(), cap.manifest());
         ExecutionAdmissionChecker admission = new ExecutionAdmissionChecker(authz, resolver,
@@ -106,7 +118,9 @@ class CapExecutionFlowTest {
                 validator, resolver, admission, idempotency, authz, cap.rolePermissions(),
                 cap.snapshots(), approvalPolicy, stateMachine, compensation, cap.toolDefs(),
                 exec.budgetPort(), exec.ledgerPort(), exec.intentPort(),
-                exec.resultEventPort(), BigDecimal.ONE, capSwitch, DecisionAuditService.noop());
+                exec.resultEventPort(), BigDecimal.ONE,
+                cn.studykid.multiagent.application.cap.CapExecutionFlow.DEFAULT_PRINCIPAL_ID,
+                capSwitch, DecisionAuditService.noop(), runBudget);
     }
 
     /**
@@ -139,6 +153,59 @@ class CapExecutionFlowTest {
     // ── S1 ────────────────────────────────────────────────────────
 
     @Nested
+    @DisplayName("Run 级预算（MA-T17 · 全调用树共享上限）")
+    class RunBudget {
+
+        @Test
+        @DisplayName("⛔ Run 级额度用尽 → 工具零执行 + BUDGET_EXCEEDED（CAP 链路）")
+        void exhaustedRunBudgetBlocksToolExecution() {
+            // ⚠️ CAP 链路是**生产主链路**：这里漏了 Run 级判定，
+            //    「全调用树共享预算上限」在生产上就是空的。
+            var exhausted = new cn.studykid.multiagent.application.orchestration.RunBudgetProbe(
+                    (tenantId, runId) -> java.util.Optional.of(
+                            new cn.studykid.multiagent.ports.persistence.RunBudgetPort.RunBudget(
+                                    runId, BigDecimal.TEN, BigDecimal.valueOf(6),
+                                    BigDecimal.valueOf(4))));
+
+            CapToolDecision decision = flow(new CapEnforcementSwitch(true),
+                    handler -> ApprovalPolicy.ApprovalDecision.notRequired(), exhausted)
+                    .invoke(TENANT, task(), call(), exec.tool(TOOL));
+
+            assertThat(exec.toolExecutions)
+                    .as("⚠️⚠️ Run 额度用尽 → 绝不能产生副作用")
+                    .isZero();
+            assertThat(decision.decision().reasonCode())
+                    .as("⚠️ 必须报预算超限（而不是笼统的执行失败）")
+                    .isEqualTo(ReasonCode.BUDGET_EXCEEDED);
+            assertThat(decision.decision().status())
+                    .as("⚠️ 工具根本没发出 → 未开始（NOT_STARTED），"
+                            + "不是「执行了但失败」，更不是结果未知")
+                    .isEqualTo(AuthorizationDecision.Status.NOT_STARTED);
+            assertThat(decision.decision().authorization())
+                    .as("⚠️ Phase B 拒绝时授权仍为 ALLOW（08 §1 S6/S7："
+                            + "不得笼统记为授权 DENY）")
+                    .isEqualTo(AuthorizationDecision.Authorization.ALLOW);
+            assertThat(decision.decision().execution())
+                    .isEqualTo(AuthorizationDecision.Execution.DENY);
+        }
+
+        @Test
+        @DisplayName("✅ Run 级额度未声明 → 不额外限制（≠「余额为 0」）")
+        void undeclaredRunBudgetDoesNotBlock() {
+            var undeclared = new cn.studykid.multiagent.application.orchestration.RunBudgetProbe(
+                    (tenantId, runId) -> java.util.Optional.empty());
+
+            CapToolDecision decision = flow(new CapEnforcementSwitch(true),
+                    handler -> ApprovalPolicy.ApprovalDecision.notRequired(), undeclared)
+                    .invoke(TENANT, task(), call(), exec.tool(TOOL));
+
+            assertThat(exec.toolExecutions).isEqualTo(1);
+            assertThat(decision.decision().status())
+                    .isEqualTo(AuthorizationDecision.Status.SUCCEEDED);
+        }
+    }
+
+    @Nested
     @DisplayName("S1 已授权成功")
     class AuthorizedSuccess {
 
@@ -163,6 +230,20 @@ class CapExecutionFlowTest {
                     .as("§7.4：结果事件与账本均已落盘 → RECORDED")
                     .isEqualTo(AuthorizationDecision.Ledger.RECORDED);
             assertThat(exec.toolExecutions).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("✅ 成功路径必须回填工具输出（没有输出就无法回灌给模型）")
+        void successCarriesToolOutputForFeedback() {
+            CapToolDecision decision = flow().invoke(TENANT, task(), call(), exec.tool(TOOL));
+
+            assertThat(decision.hasOutput())
+                    .as("⚠️ 工具输出若只写进 result_events 却不回传，模型就看不到自己刚调了什么，"
+                            + "多轮工具协作不成立")
+                    .isTrue();
+            assertThat(decision.output())
+                    .as("回灌的必须是工具的真实输出")
+                    .isEqualTo("ok");
         }
 
         @Test

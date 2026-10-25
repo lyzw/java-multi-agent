@@ -129,10 +129,25 @@ public interface AuthorizationService {
          */
         public static final String CONFIG_ROLLBACK = "config:rollback";
 
+        /**
+         * 委派到子 Agent（多级 Agent v1.1 · FR-025）。
+         *
+         * <p>⚠️ <b>与 {@link #TOOL_INVOKE} 分开</b>：委派是「把工作交给另一个 Agent」，
+         * 调用工具是「在当前 Agent 内执行一个动作」。
+         * 二者的资源粒度不同（前者是目标 Agent，后者是 Tool），
+         * 风险模型也不同（委派会引入新的执行主体与新的失败面）。
+         * 共用一个动作会让「能调工具的人」自动获得「能委派给任意 Agent」的能力。
+         *
+         * <p>⚠️ <b>每跳都要判</b>：委派关系不是授权关系，
+         * 父 Agent 的委派权限不传递给子 Agent（子 Agent 的子委派要重新判）。
+         */
+        public static final String AGENT_DELEGATE = "agent:delegate";
+
         private static final Set<String> ALL = Set.of(
                 RUN_CREATE, RUN_READ, RUN_CANCEL, EVENT_SUBSCRIBE, RESULT_READ,
                 TOOL_INVOKE, APPROVAL_CONSUME, UNKNOWN_DISPOSE, AUDIT_READ, AGENT_MANAGE,
-                PROFILE_READ, CONFIG_REQUEST, CONFIG_APPROVE, CONFIG_PUBLISH, CONFIG_ROLLBACK);
+                PROFILE_READ, CONFIG_REQUEST, CONFIG_APPROVE, CONFIG_PUBLISH, CONFIG_ROLLBACK,
+                AGENT_DELEGATE);
 
         /** @return 全部受控动作，供启动期自检使用。 */
         public static @NonNull Set<String> all() {

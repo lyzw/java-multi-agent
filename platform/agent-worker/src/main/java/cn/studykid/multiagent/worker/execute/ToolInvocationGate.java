@@ -1,12 +1,18 @@
 package cn.studykid.multiagent.worker.execute;
 
+import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.core.cap.CapToolDecision;
+import cn.studykid.multiagent.core.cap.ExecutionScope;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.ports.model.ModelResponse;
@@ -101,6 +107,31 @@ public class ToolInvocationGate {
      * 否则八道闸门对 MCP 全部失效。
      */
     private final cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers;
+
+    /**
+     * 委派执行器（多级 Agent v1.1 · P2-MA-02）。
+     *
+     * <p>⚠️ <b>可为空 = 多级委派未装配</b>：此时模型若请求委派，
+     * 会按「未登记的工具」被拒 —— 不存在「静默放行委派」的路径。
+     */
+    private final cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation;
+
+    /**
+     * 时钟源（用于计算根 Run 的剩余业务时间）。
+     *
+     * <p>⚠️ <b>可注入是为了可测</b>：「剩余时间已耗尽 → 在新增子调用前拒绝」
+     * 这条分支若用 {@code Instant.now()} 就无法被稳定覆盖。
+     */
+    private final Clock clock;
+
+    /**
+     * Run 级预算探针（第七批 · MA-T17）。
+     *
+     * <p>⚠️ <b>可为空 = 未装配</b>：此时不做 Run 级判定（仅租户级预算生效）。
+     * 生产装配<b>必须</b>传入 —— 否则「全调用树共享预算上限」在
+     * <b>工具调用路径</b>上是空的（子 Agent 可以把 Run 额度烧穿）。
+     */
+    private final cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudget;
 
     /** 默认审批桩：恒返回 NO_APPROVAL（审批权威接入前的 fail-closed 占位）。 */
     private static final ApprovalPort NO_APPROVAL_PORT = new ApprovalPort() {
@@ -261,6 +292,82 @@ public class ToolInvocationGate {
                               RiskBasedApprovalPolicy.ApprovalSource approvalSource,
                               cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow,
                               cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                reserveAmountPerToolCall, cancelGuard, approvalSource, capFlow, mcpHandlers,
+                null);
+    }
+
+    /**
+     * 最完整构造器（多级 Agent v1.1）：额外注入委派执行器。
+     *
+     * <p>⚠️ 委派分支就在<b>本类内部</b>：所有工具调用（含委派）共用这一个入口，
+     * 不存在第二条路径（ADR-011 防绕过）。
+     */
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall,
+                              @NonNull CancelGuard cancelGuard,
+                              RiskBasedApprovalPolicy.ApprovalSource approvalSource,
+                              cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow,
+                              cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers,
+                              cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                reserveAmountPerToolCall, cancelGuard, approvalSource, capFlow, mcpHandlers,
+                delegation, Clock.systemUTC(), null);
+    }
+
+    /**
+     * 兼容构造器（第六批）：带时钟源，但<b>未装配</b> Run 级预算探针。
+     *
+     * <p>⚠️ 走此路径时「全调用树共享预算上限」在工具调用路径上不生效
+     * （仅租户级预算有效）—— 生产装配走 14 参版本。
+     */
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall,
+                              @NonNull CancelGuard cancelGuard,
+                              RiskBasedApprovalPolicy.ApprovalSource approvalSource,
+                              cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow,
+                              cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers,
+                              cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation,
+                              @NonNull Clock clock) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                reserveAmountPerToolCall, cancelGuard, approvalSource, capFlow, mcpHandlers,
+                delegation, clock, null);
+    }
+
+    /**
+     * 最完整构造器（多级 Agent v1.1 · 第六批）：额外注入时钟源。
+     *
+     * <p>⚠️ <b>时钟必须可注入</b>：委派分支要用「根 Run 的真实剩余时间」
+     * 决定是否允许新增子调用。若直接调 {@code Instant.now()}，
+     * 「剩余时间已耗尽」这个分支就<b>没法被测试覆盖</b> ——
+     * 用例只能靠「睡一会儿」去撞时间窗，那类测试要么慢、要么不稳定。
+     *
+     * @param clock 时钟源（生产用 {@code Clock.systemUTC()}）
+     */
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall,
+                              @NonNull CancelGuard cancelGuard,
+                              RiskBasedApprovalPolicy.ApprovalSource approvalSource,
+                              cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow,
+                              cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers,
+                              cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation,
+                              @NonNull Clock clock,
+                              cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudget) {
         this.handlers = List.copyOf(handlers);
         this.authorization = authorization;
         this.approvalPolicy = approvalPolicy;
@@ -271,6 +378,15 @@ public class ToolInvocationGate {
         this.approvalSource = approvalSource;
         this.capFlow = capFlow;
         this.mcpHandlers = mcpHandlers;
+        this.delegation = delegation;
+        this.clock = clock;
+        this.runBudget = runBudget;
+        if (runBudget == null) {
+            // ⚠️ 明确告警：未装配 Run 级预算 = 工具调用路径上没有「这一棵树」的额度约束。
+            //    这不是错误（测试与旧装配走此路径），但生产必须装配。
+            log.warn("未装配 Run 级预算探针：工具调用路径只受**租户级**预算约束，"
+                    + "「全调用树共享预算上限」在该路径上不生效");
+        }
         if (reserveAmountPerToolCall == null
                 || reserveAmountPerToolCall.signum() <= 0) {
             throw new IllegalArgumentException(
@@ -303,9 +419,27 @@ public class ToolInvocationGate {
             String tenantId,
             RunClaimPort.LeasedTask task,
             Map<String, ModelResponse.ToolCallRequest> calls) {
+        return invokeAll(tenantId, task, calls, null);
+    }
+
+    /**
+     * 带<b>执行作用域</b>的工具调用（多级 Agent v1.1 · FR-025）。
+     *
+     * <p>⚠️ <b>子 Agent 的工具调用必须走本重载</b>：默认路径按 Run 快照里的
+     * <b>根 Agent</b> 解析闭包 —— 若子 Agent 沿用该口径，
+     * 它就能调用父 Agent 的工具（权限下放 = Sev-0）。
+     *
+     * @param scope 执行作用域；{@code null} = 根 Agent（单 Agent 路径）
+     * @return 汇总结果
+     */
+    public ToolInvocationResult invokeAll(
+            String tenantId,
+            RunClaimPort.LeasedTask task,
+            Map<String, ModelResponse.ToolCallRequest> calls,
+            @Nullable ExecutionScope scope) {
 
         if (capFlow != null && capFlow.isEnabled()) {
-            return invokeAllCap(tenantId, task, calls);
+            return invokeAllCap(tenantId, task, calls, scope);
         }
         return invokeAllLegacy(tenantId, task, calls);
     }
@@ -320,11 +454,36 @@ public class ToolInvocationGate {
     private ToolInvocationResult invokeAllCap(
             String tenantId,
             RunClaimPort.LeasedTask task,
-            Map<String, ModelResponse.ToolCallRequest> calls) {
+            Map<String, ModelResponse.ToolCallRequest> calls,
+            @Nullable ExecutionScope scope) {
 
         ToolInvocationResult result = new ToolInvocationResult();
+        // ⚠️ 父声明的失败策略（FAIL_FAST / CONTINUE_ON_ERROR）决定：
+        //    本轮里某个子调用失败后，**后续的委派调用**还跑不跑。
+        boolean delegationHalted = false;
 
         for (ModelResponse.ToolCallRequest call : calls.values()) {
+            // ── 委派分支（多级 Agent v1.1）──────────────────────────
+            //    ⚠️ 委派**不是**普通工具：它不进 Skill→Tool 能力闭包，
+            //    授权走 DelegationGuard（逐跳授权 + 深度/次数/超时/预算）。
+            //    但它仍在本类内部执行 —— 保持「唯一执行入口」不变。
+            if (delegation != null
+                    && cn.studykid.multiagent.application.orchestration.DelegationExecutor
+                            .DELEGATION_TOOL_NAME.equals(call.toolName())) {
+                // ⚠️ FAIL_FAST 之后不再发起后续委派（父声明的失败策略）
+                if (delegationHalted) {
+                    log.info("失败策略 FAIL_FAST：跳过本轮后续委派: tool={}, runId={}",
+                            call.toolName(), task.runId());
+                    result.recordRejected(call.toolName(),
+                            cn.studykid.multiagent.core.cap.ReasonCode.DELEGATION_NOT_ALLOWED
+                                    .name());
+                    continue;
+                }
+                if (invokeDelegation(tenantId, task, call, result)) {
+                    delegationHalted = true;
+                }
+                continue;
+            }
             ToolHandler handler = findHandler(call.toolName());
             if (handler == null) {
                 // 未登记工具：拒绝并把错误回给模型让它自我纠正。
@@ -350,7 +509,7 @@ public class ToolInvocationGate {
             }
 
             cn.studykid.multiagent.core.cap.CapToolDecision decision =
-                    capFlow.invoke(tenantId, task, call, handler);
+                    capFlow.invoke(tenantId, task, call, handler, scope);
             result.recordDecision(decision);
             applyDecision(result, decision);
 
@@ -365,6 +524,171 @@ public class ToolInvocationGate {
     }
 
     /**
+     * 委派分支（多级 Agent v1.1 · P2-MA-02 · FR-024 / FR-025 / FR-026）。
+     *
+     * <p>⚠️ <b>委派不是普通工具</b>：它不进 Skill→Tool 能力闭包，
+     * 授权与边界由 {@code DelegationGuard} 判定（逐跳授权 + 深度/次数/超时/预算），
+     * 幂等与可追溯由 {@code agent_invocation} 承担。
+     *
+     * <p>⚠️ <b>取消检查在委派之前</b>：取消后不得发起新的子执行
+     * （与工具动作同一口径，MA-T11）。
+     *
+     * <p>⚠️ <b>被拒的委派不产生任何子执行</b>：不调度子 Agent、不写副作用。
+     *
+     * <p>⚠️ <b>「拒绝」与「执行失败」必须分开记账</b>（§5.1 四字段）：
+     * 子执行<b>从未启动</b> → 授权/边界拒绝（{@code authorizationDecision=DENY}）；
+     * 子执行<b>已启动但失败</b> → 执行失败（{@code authorizationDecision=ALLOW +
+     * executionDecision=DENY}）。混为一谈会让审计把「执行失败」说成「越权被拒」。
+     *
+     * @return 是否应当停止本轮的后续委派（失败策略生效 / 结果不确定）
+     */
+    private boolean invokeDelegation(String tenantId,
+                                     RunClaimPort.LeasedTask task,
+                                     ModelResponse.ToolCallRequest call,
+                                     ToolInvocationResult result) {
+        if (cancelGuard.isCancelled(tenantId, task.runId())) {
+            log.info("Run 已取消，拒绝发起委派: runId={}", task.runId());
+            result.recordRejected(call.toolName(),
+                    cn.studykid.multiagent.core.cap.ReasonCode.RUN_CANCELLED.name());
+            result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                    call.toolName(), null,
+                    cn.studykid.multiagent.core.cap.AuthorizationDecision.deny(
+                            cn.studykid.multiagent.core.cap.ReasonCode.RUN_CANCELLED)));
+            return false;
+        }
+
+        cn.studykid.multiagent.application.orchestration.DelegationArguments.Parsed parsed;
+        try {
+            parsed = cn.studykid.multiagent.application.orchestration.DelegationArguments
+                    .parse(call.arguments());
+        } catch (IllegalArgumentException e) {
+            // ⚠️ 参数非法 → 与普通工具同码（结构校验失败），不预占任何资源
+            log.info("委派参数非法，拒绝执行: runId={}, err={}", task.runId(), e.getMessage());
+            result.recordRejected(call.toolName(),
+                    cn.studykid.multiagent.core.cap.ReasonCode.PARAM_SCHEMA_FAIL.name());
+            result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                    call.toolName(), null,
+                    cn.studykid.multiagent.core.cap.AuthorizationDecision.executionDeny(
+                            cn.studykid.multiagent.core.cap.ReasonCode.PARAM_SCHEMA_FAIL)));
+            return false;
+        }
+
+        String invocationId = cn.studykid.multiagent.application.orchestration
+                .DelegationInvocationId.derive(task.runId(), null, call.callId());
+        // ⚠️ 根 Run 的**真实**剩余时间：来自 Run 的业务截止时间（run.deadline_at）。
+        //    「全调用树共享超时上限」要求根 Run 的剩余时间是整棵树的共同上界，
+        //    任何一跳都不得重置它 —— 此前这里传的是上界 Long.MAX_VALUE，
+        //    于是该约束在根层从未真正生效：父 Agent 可以无限次委派，
+        //    每一跳的子 Agent 都能跑满自己的 timeoutMs。
+        //    有效预算 = min(根 Run 剩余时间, 本级声明的 timeoutMs)，
+        //    由守卫计算并**逐跳下传**给子执行实施墙钟截止。
+        long remainingMillis = task.remainingMillis(clock.instant());
+        if (remainingMillis <= 0) {
+            // ⚠️⚠️ 根 Run 的时间已耗尽 → **在新增子调用前**拒绝（MA-T09）。
+            //    此时不得调度子 Agent：子执行一旦启动就会产生真实副作用与成本，
+            //    而它注定跑不完 —— 那是「明知会超时还要先花钱」。
+            log.warn("根 Run 剩余时间已耗尽，拒绝新增子调用: runId={}, tool={}",
+                    task.runId(), call.toolName());
+            result.recordRejected(call.toolName(),
+                    cn.studykid.multiagent.core.cap.ReasonCode.DELEGATION_TIMEOUT.name());
+            result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                    call.toolName(), null,
+                    cn.studykid.multiagent.core.cap.AuthorizationDecision.deny(
+                            cn.studykid.multiagent.core.cap.ReasonCode.DELEGATION_TIMEOUT)));
+            return false;
+        }
+        var outcome = delegation.delegate(
+                new cn.studykid.multiagent.application.orchestration.DelegationExecutor
+                        .DelegationCommand(
+                        tenantId,
+                        task.runId(),
+                        null,
+                        null,
+                        null,
+                        1,
+                        parsed.targetAgentId(),
+                        null,
+                        parsed.input(),
+                        invocationId,
+                        task.runId(),
+                        remainingMillis,
+                        task.fencingToken(),
+                        task.attempt()));
+
+        var reasonCode = cn.studykid.multiagent.core.cap.ReasonCode
+                .parse(outcome.reasonCode());
+        if (reasonCode == null) {
+            reasonCode = cn.studykid.multiagent.core.cap.ReasonCode.TOOL_EXECUTION_FAILED;
+        }
+
+        switch (outcome.status()) {
+            case SUCCEEDED -> {
+                result.recordSucceeded(call.toolName());
+                result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                        call.toolName(), outcome.invocationId(),
+                        cn.studykid.multiagent.core.cap.AuthorizationDecision.executionSucceeded(
+                                cn.studykid.multiagent.core.cap.AuthorizationDecision.Ledger.RECORDED)));
+                return false;
+            }
+            case UNKNOWN -> {
+                // ⚠️ 结果不确定 → 走对账，不盲目重放（MA-T13）
+                //    ⚠️ 且**立即停止本轮后续调用**：可能已有副作用发生，
+                //    继续启动新动作会扩大不确定面（与普通工具路径同口径）。
+                result.recordUnknown(call.toolName(), outcome.invocationId());
+                result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                        call.toolName(), outcome.invocationId(),
+                        cn.studykid.multiagent.core.cap.AuthorizationDecision.executionUnknown(
+                                cn.studykid.multiagent.core.cap.AuthorizationDecision.Ledger.RECORDED,
+                                cn.studykid.multiagent.core.cap.ReasonCode.EXEC_UNKNOWN)));
+                return true;
+            }
+            default -> {
+                if (!outcome.childStarted()) {
+                    // ⚠️ 子执行**从未启动** → 这是授权/边界拒绝（Phase A），
+                    //    不是「子调用失败」，故**不触发** failurePolicy。
+                    result.recordRejected(call.toolName(), reasonCode.name());
+                    result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                            call.toolName(), outcome.invocationId(),
+                            cn.studykid.multiagent.core.cap.AuthorizationDecision.deny(reasonCode)));
+                    return false;
+                }
+                // ⚠️ 子执行**已启动但失败** → 执行失败（Phase B）：
+                //    授权已通过，失败发生在执行阶段（§5.1）。
+                result.recordFailed(call.toolName(), reasonCode.name());
+                result.recordDecision(new cn.studykid.multiagent.core.cap.CapToolDecision(
+                        call.toolName(), outcome.invocationId(),
+                        cn.studykid.multiagent.core.cap.AuthorizationDecision.executionFailed(
+                                cn.studykid.multiagent.core.cap.AuthorizationDecision.Ledger.RECORDED,
+                                reasonCode)));
+                // ⚠️ 失败策略（07 第 6 步）：FAIL_FAST 时本轮后续委派不再发起；
+                //    CONTINUE_ON_ERROR 时继续（由调用方汇总）。
+                return shouldHaltAfterFailure(tenantId, task.runId());
+            }
+        }
+    }
+
+    /**
+     * 判断子调用失败后是否应停止本轮的后续委派。
+     *
+     * <p>⚠️ <b>读不到策略时按 FAIL_FAST</b>（最保守）：
+     * 「继续跑」意味着失败被静默吞掉，父 Agent 拿到的是残缺聚合结果，
+     * 却以为那是完整的 —— 那比直接失败更危险。
+     *
+     * @param tenantId 租户标识
+     * @param runId    根 Run 标识
+     * @return 是否停止后续委派
+     */
+    private boolean shouldHaltAfterFailure(String tenantId, String runId) {
+        var policy = delegation.failurePolicyOf(tenantId, runId);
+        boolean halt = policy == cn.studykid.multiagent.core.orchestration.DelegationFailurePolicy
+                .FAIL_FAST;
+        if (halt) {
+            log.info("失败策略 FAIL_FAST：停止本轮后续委派: runId={}", runId);
+        }
+        return halt;
+    }
+
+    /**
      * 把四字段决策落到汇总结果。
      *
      * <p>⚠️ 映射规则与 §5.1 一致：
@@ -375,7 +699,8 @@ public class ToolInvocationGate {
                                       cn.studykid.multiagent.core.cap.CapToolDecision decision) {
         var status = decision.decision().status();
         switch (status) {
-            case SUCCEEDED -> result.recordSucceeded(decision.toolName());
+            // ⚠️ 成功时把工具输出一并记下（回灌用）；拒绝/失败没有可回灌的结果
+            case SUCCEEDED -> result.recordSucceeded(decision.toolName(), decision.output());
             case FAILED -> result.recordFailed(decision.toolName(),
                     decision.decision().reasonCode().name());
             case UNKNOWN -> result.recordUnknown(decision.toolName(), decision.operationId());
@@ -553,6 +878,20 @@ public class ToolInvocationGate {
                 }
             }
 
+            // ⑥ ⚠️⚠️ Run 级预算判定（MA-T17 · 全调用树共享上限）：
+            //    必须在**预留之前**判 —— 预留成功即已占额，判晚了就等于
+            //    「先花钱再检查」。所有深度的工具调用都记在同一个 run_id 下，
+            //    因此这一道判定就是「这一整棵树还能花多少」的守门人；
+            //    嵌套 Agent 无法通过「自己再开一份额度」来绕过它。
+            if (runBudget != null && !runBudget.hasRemaining(tenantId, task.runId())) {
+                log.warn("Run 级预算已用尽，拒绝工具调用: tool={}, runId={}",
+                        call.toolName(), task.runId());
+                recordFailed(tenantId, registration.operationId(), task.fencingToken(),
+                        "run-budget-exhausted");
+                result.recordRejected(call.toolName(), "Run 级预算已用尽");
+                continue;
+            }
+
             // ⑥ ⚠️ 预算预留（P3-D04）：失败即拒绝执行（fail-closed）。
             //    预留失败 ≠ 结果未知 —— 工具**根本没有发出**，
             //    故账本记 FAILED 而非 UNKNOWN（后者会凭空造出待对账的幽灵操作）。
@@ -570,7 +909,8 @@ public class ToolInvocationGate {
                 continue;
             }
             if (reservationId == null) {
-                // ⚠️ 已记录拒绝原因与账本状态，继续下一个工具
+                // ⚠️ 已记录拒绝原因与账本状态（见 reserveBudget 的契约），
+                //    继续下一个工具；不得在此静默丢弃该次调用。
                 continue;
             }
 
@@ -634,7 +974,9 @@ public class ToolInvocationGate {
      * 预留预算。
      *
      * @param result 汇总结果；被拒时已写入拒绝原因
-     * @return 预留 ID；<b>null 表示已被拒绝</b>（此时账本已记 FAILED）
+     * @return 预留 ID；<b>null 表示已被拒绝</b> —— 且此时<b>必然已</b>写入拒绝原因
+     *         并把账本记为 FAILED（工具根本没发出），调用方只需停止该次调用，
+     *         不得再执行；⚠️ 绝不允许「返回 null 却不留痕」（那次调用会凭空消失）
      * @throws RuntimeException 预留层异常 —— 调用方按 fail-closed 处理
      */
     private String reserveBudget(String tenantId, RunClaimPort.LeasedTask task,
@@ -648,9 +990,29 @@ public class ToolInvocationGate {
                 || outcome == BudgetPort.ReserveOutcome.REPLAYED) {
             // ⚠️ REPLAYED 也返回预留 ID：同 operation 重复调用复用既有预留，
             //    这是「预留有唯一记录」在执行链上的体现
-            return budget.findByOperation(tenantId, registration.operationId())
-                    .map(BudgetPort.Reservation::reservationId)
-                    .orElse(null);
+            Optional<BudgetPort.Reservation> reservation =
+                    budget.findByOperation(tenantId, registration.operationId());
+            if (reservation.isPresent()) {
+                return reservation.get().reservationId();
+            }
+            // ⚠️⚠️ **预留已生效却查不到预留记录 → 不得静默丢弃这次调用**
+            //
+            //    修复前这里是 `.orElse(null)`，而调用方把 null 一律当成
+            //    「已记录拒绝」直接 continue —— 结果是：工具没执行、
+            //    账本行永远停在 IN_FLIGHT、拒绝原因与拒绝记录都没有、
+            //    模型也收不到任何反馈，这次调用**从系统里彻底消失**：
+            //    既不可见、不可对账，也无人知道它曾经发生过。
+            //
+            //    处置（fail-closed）：工具**不执行**（没有预留 ID 就无法结算/释放，
+            //    执行了必然留下一笔无人认领的成本）；账本记 FAILED
+            //    （工具根本没发出 = 确定失败，不是结果未知）；并留下明确的拒绝原因。
+            //    若预留行确实已落库，它会变成悬挂预留，由对账（findOrphaned）释放。
+            log.error("预算预留已生效但查不到预留记录，fail-closed 拒绝执行: tool={}, runId={}, operation={}",
+                    toolName, task.runId(), registration.operationId());
+            recordFailed(tenantId, registration.operationId(), task.fencingToken(),
+                    "预算预留记录缺失");
+            result.recordRejected(toolName, "预算预留记录缺失（预留已生效但不可见）");
+            return null;
         }
 
         log.warn("预算预留被拒: tool={}, runId={}, outcome={}",
@@ -819,26 +1181,84 @@ public class ToolInvocationGate {
         private final java.util.List<String> rejected = new java.util.ArrayList<>();
         private final java.util.List<String> failed = new java.util.ArrayList<>();
         /**
+         * 成功工具的输出（工具名 → 输出文本）。
+         *
+         * <p>⚠️ <b>这是「工具结果回灌」的载体</b>：模型必须能看到自己刚调了什么，
+         * 否则多轮工具协作不成立（子 Agent 调完工具即结束，等于工具调用无意义）。
+         * <p>⚠️ 输出是<b>不可信数据</b>：回灌进上下文时必须标记边界，
+         * 不得让工具输出被当成系统/开发者指令（MA-T14）。
+         */
+        private final java.util.Map<String, String> outputs = new java.util.LinkedHashMap<>();
+        /**
+         * 拒绝原因（工具名 → 原因文本）。
+         *
+         * <p>⚠️ <b>拒绝原因必须留痕</b>：08 §4 要求「非笼统 DENY 占比 100%」——
+         * 只记「哪个工具被拒」而不记「为什么」，审计就只能说「被拒了」，
+         * 既无法分类，也无法分诊。
+         */
+        private final java.util.Map<String, String> rejectionReasons =
+                new java.util.LinkedHashMap<>();
+
+        void recordSucceeded(String tool, ToolHandler.ToolResult r) {
+            recordSucceeded(tool, r == null ? null : r.output());
+        }
+
+        void recordSucceeded(String tool, String output) {
+            succeeded.add(tool);
+            if (output != null && !output.isBlank()) {
+                outputs.put(tool, output);
+            }
+        }
+
+        void recordSucceeded(String tool) {
+            recordSucceeded(tool, (String) null);
+        }
+
+        /**
+         * @param tool 工具名
+         * @return 该工具的输出（成功且有输出时）；否则为空
+         */
+        public @NonNull Optional<String> outputOf(String tool) {
+            return Optional.ofNullable(outputs.get(tool));
+        }
+
+        /**
+         * @return 成功工具的输出（不可变副本，工具名 → 输出）
+         */
+        public @NonNull Map<String, String> outputs() {
+            return Map.copyOf(outputs);
+        }
+
+        /**
          * 每次调用的四字段决策（P2 · §5.1）。
          *
          * <p>⚠️ <b>既有链路下为空</b>：既有链路不产出结构化决策，
          * 只有 CAP 链路才按 §9.1 逐字段断言。
          */
-        private final java.util.List<cn.studykid.multiagent.core.cap.CapToolDecision> decisions =
-                new java.util.ArrayList<>();
+        private final List<CapToolDecision> decisions = new ArrayList<>();
         private String unknownTool;
         private String unknownOperationId;
 
-        void recordSucceeded(String tool, ToolHandler.ToolResult r) {
-            succeeded.add(tool);
-        }
-
-        void recordSucceeded(String tool) {
-            succeeded.add(tool);
-        }
-
         void recordRejected(String tool, String reason) {
             rejected.add(tool);
+            if (reason != null && !reason.isBlank()) {
+                rejectionReasons.put(tool, reason);
+            }
+        }
+
+        /**
+         * @param tool 工具名
+         * @return 该工具被拒的原因；无记录时为空
+         */
+        public @NonNull Optional<String> rejectionReasonOf(String tool) {
+            return Optional.ofNullable(rejectionReasons.get(tool));
+        }
+
+        /**
+         * @return 拒绝原因（不可变副本，工具名 → 原因）
+         */
+        public @NonNull Map<String, String> rejectionReasons() {
+            return Map.copyOf(rejectionReasons);
         }
 
         void recordFailed(String tool, String reason) {

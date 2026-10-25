@@ -22,6 +22,7 @@ import cn.studykid.multiagent.core.config.ToolRiskLevel;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.model.ModelGateway;
+import cn.studykid.multiagent.ports.model.ModelMessage;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
 import cn.studykid.multiagent.ports.persistence.ApprovalPort;
@@ -927,6 +928,137 @@ class RunExecutionLoopTest {
             assertThat(laterTool.executeCount.get())
                     .as("⚠️ UNKNOWN 后不得继续执行其他工具（状态已不可信）")
                     .isZero();
+        }
+    }
+
+    @Nested
+    @DisplayName("工具结果回灌（第八批 · 消除父子两套语义）")
+    class ToolFeedback {
+
+        /**
+         * 回显工具：返回可辨识的内容，便于断言「结果确实进了上下文」。
+         */
+        private static class EchoTool implements ToolHandler {
+            final String output;
+            EchoTool(String output) { this.output = output; }
+            @Override public String toolName() { return "recording_tool"; }
+            @Override public String inputSchema() { return "{}"; }
+            @Override public ToolRiskLevel riskLevel() { return ToolRiskLevel.READ; }
+            @Override public void validate(Map<String, Object> arguments) { }
+            @Override public ToolResult execute(ToolExecutionContext ctx, Map<String, Object> a) {
+                return ToolResult.of(output);
+            }
+        }
+
+        @Test
+        @DisplayName("✅ 第 2 轮模型必须看到第 1 轮的工具结果（否则工具调用白调）")
+        void toolResultIsFedBackIntoNextRound() {
+            // ⚠️ 修复前每轮都用**同一份** renderInput(input)：
+            //    第 2 轮的上下文与第 1 轮完全相同 → 模型看不到自己刚调了什么，
+            //    多轮工具协作根本不成立。
+            FakeClaimPort port = new FakeClaimPort();
+            List<ModelRequest> requests = new java.util.ArrayList<>();
+            ModelGateway gw = request -> {
+                requests.add(request);
+                if (requests.size() == 1) {
+                    return new ModelResponse("", Map.of(
+                            "c1", new ModelResponse.ToolCallRequest(
+                                    "recording_tool", Map.of(), "c1")),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            };
+
+            var outcome = loop(gw, port,
+                    new ToolInvocationGate(List.of(
+                            new EchoTool("学生 stu_1 薄弱点：二次函数")), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()))
+                    .execute(TENANT, task(), agentConfig(), snapshot(5), Map.of("q", "x"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+            assertThat(requests).as("应当有第二轮（看到工具结果后继续推理）").hasSizeGreaterThanOrEqualTo(2);
+
+            var toolMessages = requests.get(1).effectiveMessages().stream()
+                    .filter(m -> m.role() == ModelMessage.Role.TOOL)
+                    .toList();
+            assertThat(toolMessages).as("必须有一条工具结果消息").hasSize(1);
+            assertThat(toolMessages.get(0).toolName()).isEqualTo("recording_tool");
+            assertThat(toolMessages.get(0).content())
+                    .as("工具输出必须被回灌")
+                    .contains("薄弱点：二次函数")
+                    .as("工具输出是不可信数据，必须显式标记")
+                    .contains("不可信数据");
+        }
+
+        @Test
+        @DisplayName("✅ 超长工具输出 → 回灌时截断且留痕（防止顶爆上下文）")
+        void oversizedToolOutputIsTruncated() {
+            FakeClaimPort port = new FakeClaimPort();
+            List<ModelRequest> requests = new java.util.ArrayList<>();
+            ModelGateway gw = request -> {
+                requests.add(request);
+                if (requests.size() == 1) {
+                    return new ModelResponse("", Map.of(
+                            "c1", new ModelResponse.ToolCallRequest(
+                                    "recording_tool", Map.of(), "c1")),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            };
+
+            loop(gw, port,
+                    new ToolInvocationGate(List.of(
+                            new EchoTool("x".repeat(20_000))), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()))
+                    .execute(TENANT, task(), agentConfig(), snapshot(5), Map.of("q", "x"));
+
+            var toolMessage = requests.get(1).effectiveMessages().stream()
+                    .filter(m -> m.role() == ModelMessage.Role.TOOL)
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(toolMessage.content())
+                    .as("截断必须留痕，否则模型会以为工具只返回了这些")
+                    .contains("输出已截断")
+                    .contains("原始长度");
+        }
+
+        @Test
+        @DisplayName("✅ 工具确定失败 → 也要回灌（模型得知道「这个工具没成」）")
+        void failedToolIsAlsoFedBack() {
+            FakeClaimPort port = new FakeClaimPort();
+            List<ModelRequest> requests = new java.util.ArrayList<>();
+            ModelGateway gw = request -> {
+                requests.add(request);
+                if (requests.size() == 1) {
+                    return new ModelResponse("", Map.of(
+                            "c1", new ModelResponse.ToolCallRequest(
+                                    "flaky_tool", Map.of(), "c1")),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            };
+
+            loop(gw, port,
+                    new ToolInvocationGate(List.of(new DefinitelyFailedTool()), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()))
+                    .execute(TENANT, task(), agentConfig(), snapshot(5), Map.of("q", "x"));
+
+            var toolMessages = requests.get(1).effectiveMessages().stream()
+                    .filter(m -> m.role() == ModelMessage.Role.TOOL)
+                    .toList();
+            assertThat(toolMessages)
+                    .as("⚠️ 失败也要回灌 —— 否则模型只会重复同一个必然失败的动作")
+                    .hasSize(1);
+            assertThat(toolMessages.get(0).content())
+                    .contains("执行失败")
+                    .contains("不得重试同一动作");
         }
     }
 

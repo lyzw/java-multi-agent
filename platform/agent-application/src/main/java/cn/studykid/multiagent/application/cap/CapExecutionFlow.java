@@ -127,6 +127,14 @@ public class CapExecutionFlow {
     private final CapEnforcementSwitch enforcementSwitch;
     /** 四字段决策日志（P5-T6 · §5.1 / 08 §7）。 */
     private final DecisionAuditService audit;
+    /**
+     * Run 级预算探针（第七批 · MA-T17 · 全调用树共享上限）。
+     *
+     * <p>⚠️ <b>可为空 = 未装配</b>：此时 CAP 链路只受<b>租户级</b>预算约束。
+     * 生产装配<b>必须</b>传入 —— 否则「这一棵调用树最多花多少」在
+     * CAP 链路（生产主链路）上没有任何约束。
+     */
+    private final cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudget;
 
     public CapExecutionFlow(@NonNull InvocationValidator validator,
                              @NonNull ClosureResolver closureResolver,
@@ -148,7 +156,7 @@ public class CapExecutionFlow {
                 snapshots, approvalPolicy, approvalStateMachine, compensation, toolDefs,
                 budget, ledger, intents, resultEvents, reserveAmountPerToolCall,
                 DEFAULT_PRINCIPAL_ID, new CapEnforcementSwitch(false),
-                DecisionAuditService.noop());
+                DecisionAuditService.noop(), null);
     }
 
     /**
@@ -177,7 +185,7 @@ public class CapExecutionFlow {
         this(validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
                 snapshots, approvalPolicy, approvalStateMachine, compensation, toolDefs,
                 budget, ledger, intents, resultEvents, reserveAmountPerToolCall,
-                DEFAULT_PRINCIPAL_ID, enforcementSwitch, audit);
+                DEFAULT_PRINCIPAL_ID, enforcementSwitch, audit, null);
     }
 
     public CapExecutionFlow(@NonNull InvocationValidator validator,
@@ -201,7 +209,38 @@ public class CapExecutionFlow {
         this(validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
                 snapshots, approvalPolicy, approvalStateMachine, compensation, toolDefs,
                 budget, ledger, intents, resultEvents, reserveAmountPerToolCall, principalId,
-                new CapEnforcementSwitch(false), audit);
+                new CapEnforcementSwitch(false), audit, null);
+    }
+
+    /**
+     * 兼容构造器：带迁移开关，但<b>未装配</b> Run 级预算探针（第七批）。
+     *
+     * <p>⚠️ 走此路径时「全调用树共享预算上限」在 CAP 链路不生效
+     * （仅租户级预算有效）—— 生产装配走带 {@code RunBudgetProbe} 的版本。
+     */
+    public CapExecutionFlow(@NonNull InvocationValidator validator,
+                             @NonNull ClosureResolver closureResolver,
+                             @NonNull ExecutionAdmissionChecker admission,
+                             @NonNull IdempotencyGuard idempotency,
+                             @NonNull AuthzVersionPort authzVersions,
+                             @NonNull RolePermissionPort rolePermissions,
+                             @NonNull CapabilitySnapshotPort snapshots,
+                             @NonNull ApprovalPolicy approvalPolicy,
+                             @NonNull ApprovalStateMachine approvalStateMachine,
+                             @NonNull CompensationFramework compensation,
+                             @NonNull CapToolDefPort toolDefs,
+                             @NonNull BudgetPort budget,
+                             @NonNull RunToolLedgerPort ledger,
+                             @NonNull ExecutionIntentPort intents,
+                             @NonNull ResultEventPort resultEvents,
+                             @NonNull BigDecimal reserveAmountPerToolCall,
+                             @NonNull String principalId,
+                             @NonNull CapEnforcementSwitch enforcementSwitch,
+                             @NonNull DecisionAuditService audit) {
+        this(validator, closureResolver, admission, idempotency, authzVersions, rolePermissions,
+                snapshots, approvalPolicy, approvalStateMachine, compensation, toolDefs,
+                budget, ledger, intents, resultEvents, reserveAmountPerToolCall, principalId,
+                enforcementSwitch, audit, null);
     }
 
     /**
@@ -227,7 +266,8 @@ public class CapExecutionFlow {
                              @NonNull BigDecimal reserveAmountPerToolCall,
                              @NonNull String principalId,
                              @NonNull CapEnforcementSwitch enforcementSwitch,
-                             @NonNull DecisionAuditService audit) {
+                             @NonNull DecisionAuditService audit,
+                             cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudget) {
         if (reserveAmountPerToolCall == null || reserveAmountPerToolCall.signum() <= 0) {
             // ⚠️ 构造期校验：缺失/非法配置在装配时就失败，
             //    而不是等某个工具调用时才被拒 —— 那会让「预算闸门形同虚设」。
@@ -253,6 +293,12 @@ public class CapExecutionFlow {
         this.principalId = principalId;
         this.enforcementSwitch = enforcementSwitch;
         this.audit = audit;
+        this.runBudget = runBudget;
+        if (runBudget == null) {
+            // ⚠️ 明确告警：未装配 Run 级预算 = CAP 链路没有「这一棵树」的额度约束。
+            log.warn("未装配 Run 级预算探针：CAP 链路只受**租户级**预算约束，"
+                    + "「全调用树共享预算上限」在该路径上不生效");
+        }
     }
 
     /**
@@ -280,7 +326,30 @@ public class CapExecutionFlow {
                                             RunClaimPort.@NonNull LeasedTask task,
                                             ModelResponse.@NonNull ToolCallRequest call,
                                            @NonNull ToolHandler handler) {
-        CapToolDecision decision = decide(tenantId, task, call, handler);
+        CapToolDecision decision = decide(tenantId, task, call, handler, null);
+        auditDecision(tenantId, task, call, decision);
+        return decision;
+    }
+
+    /**
+     * 带<b>执行作用域</b>的工具调用（多级 Agent v1.1 · FR-025）。
+     *
+     * <p>⚠️ <b>子 Agent 的工具调用必须走本重载</b>：默认路径按
+     * <b>Run 快照里的根 Agent</b> 解析闭包，若子 Agent 沿用该口径，
+     * 它就能调用父 Agent 的工具（权限被下放 = Sev-0），
+     * 且自己的工具反而全部被拒。
+     * 本重载按 {@code scope} 的<b>固定版本</b>解析闭包，
+     * 并与委派时算出的闭包指纹比对（防子 Agent 版本漂移）。
+     *
+     * @param scope 执行作用域；{@code null} = 根 Agent（单 Agent 路径）
+     * @return 四字段决策结论
+     */
+    public @NonNull CapToolDecision invoke(@NonNull String tenantId,
+                                            RunClaimPort.@NonNull LeasedTask task,
+                                            ModelResponse.@NonNull ToolCallRequest call,
+                                           @NonNull ToolHandler handler,
+                                           cn.studykid.multiagent.core.cap.@Nullable ExecutionScope scope) {
+        CapToolDecision decision = decide(tenantId, task, call, handler, scope);
         auditDecision(tenantId, task, call, decision);
         return decision;
     }
@@ -323,10 +392,11 @@ public class CapExecutionFlow {
     private @NonNull CapToolDecision decide(@NonNull String tenantId,
                                             RunClaimPort.@NonNull LeasedTask task,
                                             ModelResponse.@NonNull ToolCallRequest call,
-                                           @NonNull ToolHandler handler) {
+                                           @NonNull ToolHandler handler,
+                                           cn.studykid.multiagent.core.cap.@Nullable ExecutionScope scope) {
 
         // ══ 步骤 1–7：Phase A（授权）══════════════════════════════
-        PhaseA phaseA = phaseA(tenantId, task, call);
+        PhaseA phaseA = phaseA(tenantId, task, call, scope);
         if (phaseA.denial() != null) {
             return new CapToolDecision(call.toolName(), null, phaseA.denial());
         }
@@ -392,6 +462,20 @@ public class CapExecutionFlow {
             recordLedgerFailed(tenantId, operationId, task.fencingToken(),
                     "approval:" + approvalGate.denial().reasonCode());
             return new CapToolDecision(call.toolName(), operationId, approvalGate.denial());
+        }
+
+        // ══ 步骤 11.5：Run 级预算（MA-T17 · 全调用树共享上限）═════
+        //    ⚠️ 必须在**预留之前**判：预留成功即已占额，判晚了等于「先花钱再检查」。
+        //    所有深度的工具调用都记在同一个 run_id 下（budget_reservation.run_id），
+        //    因此这一道判定就是「这一整棵树还能花多少」的守门人 ——
+        //    嵌套 Agent 无法通过「自己再开一份额度」绕过它。
+        if (runBudget != null && !runBudget.hasRemaining(tenantId, task.runId())) {
+            log.warn("Run 级预算已用尽，拒绝工具调用: tool={}, run={}",
+                    call.toolName(), task.runId());
+            recordLedgerFailed(tenantId, operationId, task.fencingToken(),
+                    "run-budget-exhausted");
+            return new CapToolDecision(call.toolName(), operationId,
+                    AuthorizationDecision.executionDeny(ReasonCode.BUDGET_EXCEEDED));
         }
 
         // ══ 步骤 12：BudgetOk ═════════════════════════════════════
@@ -518,9 +602,12 @@ public class CapExecutionFlow {
                     // 结局已存进补偿任务 → 恢复流程补写事件再落账；本进程不落账。
                     // ⚠️ 成本已发生（工具确实成功）→ 结算而非释放。
                     settleQuietly(tenantId, reservationId, call.toolName());
+                    // ⚠️ 工具**确实执行成功**（只是落盘待重试）→ 输出是确定结果，
+                    //    仍须带出供模型消费；只是账本状态为 RETRYING。
                     return new CapToolDecision(call.toolName(), operationId,
                             AuthorizationDecision.executionSucceeded(
-                                    AuthorizationDecision.Ledger.RETRYING));
+                                    AuthorizationDecision.Ledger.RETRYING),
+                            toolResult.output());
                 }
                 // 结局彻底丢失（补偿任务也落不下去）→ 只能按 UNKNOWN 进对账，
                 // 绝不谎报成功（§7.4：UNKNOWN 是唯一需要人工确认的状态）。
@@ -557,8 +644,12 @@ public class CapExecutionFlow {
             // ⚠️ 结算放在落账之后（§5.3 §7.4）：账本是事实源，
             //    结算失败不能反过来改写「工具已成功」这一事实。
             settleQuietly(tenantId, reservationId, call.toolName());
+            // ⚠️ 工具输出**带出**：模型必须能看到自己刚调了什么，
+            //    否则多轮工具协作不成立（子 Agent 调完工具即结束，等于工具调用无意义）。
+            //    输出是**不可信数据**，回灌时由调用方标记。
             return new CapToolDecision(call.toolName(), operationId,
-                    AuthorizationDecision.executionSucceeded(ledgerStatus));
+                    AuthorizationDecision.executionSucceeded(ledgerStatus),
+                    toolResult.output());
 
         } catch (ToolExecutionException e) {
             if (e.isResultUnknown()) {
@@ -641,7 +732,8 @@ public class CapExecutionFlow {
 
     private @NonNull PhaseA phaseA(@NonNull String tenantId,
                                     RunClaimPort.@NonNull LeasedTask task,
-                                    ModelResponse.@NonNull ToolCallRequest call) {
+                                    ModelResponse.@NonNull ToolCallRequest call,
+                                    cn.studykid.multiagent.core.cap.@Nullable ExecutionScope scope) {
 
         // ── 步骤 1：构建可信上下文 ─────────────────────────────────
         // ⚠️ 租户来自消息 + DB 上下文，主体是 Worker 服务账号，
@@ -672,10 +764,21 @@ public class CapExecutionFlow {
             return deny(ReasonCode.RESOURCE_UNKNOWN);
         }
         String agentId = snapshot.agentId();
+        // ⚠️ 子 Agent 路径：执行主体是**子 Agent 自己**，闭包按其固定 release 解析，
+        //    指纹期望值也来自子 Agent 的闭包 —— 绝不沿用根 Agent 的闭包。
+        String expectedFingerprint = null;
+        int fixedVersion = 0;
 
         EffectiveClosure closure;
         try {
-            closure = closureResolver.resolveCurrent(tenantId, agentId);
+            if (scope != null) {
+                agentId = scope.agentId();
+                fixedVersion = scope.agentVersion();
+                expectedFingerprint = scope.expectedFingerprint();
+                closure = closureResolver.resolve(tenantId, agentId, fixedVersion);
+            } else {
+                closure = closureResolver.resolveCurrent(tenantId, agentId);
+            }
         } catch (ClosureResolutionException e) {
             return deny(e.reasonCode());
         } catch (RuntimeException e) {
@@ -696,7 +799,7 @@ public class CapExecutionFlow {
         for (String skillId : candidateSkills) {
             AuthorizationDecision decision = validator.validate(new InvocationValidator.InvocationRequest(
                     context, agentId, skillId, call.toolName(), call.arguments(),
-                    task.runId(), mcpTarget));
+                    task.runId(), mcpTarget, expectedFingerprint));
             if (!decision.isAllowed()) {
                 // ⚠️ 多个 Skill 声明同一工具时，<b>全部通过</b>才算通过 ——
                 //    风险上限取最严者（§4.4「Skill 只能收紧」）。
