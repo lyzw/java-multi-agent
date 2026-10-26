@@ -11,6 +11,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -31,6 +32,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.security.AuthenticationService;
+import cn.studykid.multiagent.ports.security.IdentityDomains;
+import cn.studykid.multiagent.infrastructure.security.PlatformAuthenticationService;
+import cn.studykid.multiagent.ports.security.PlatformPrincipal;
 
 /**
  * Spring Security 过滤链（D-001）。
@@ -68,6 +72,13 @@ public class SecurityConfiguration {
     public static final String TENANT_CONTEXT_ATTRIBUTE =
             "cn.studykid.multiagent.tenantContext";
 
+    /** 请求属性名：已验签的可信 {@link PlatformPrincipal}（平台管理链写入）。 */
+    public static final String PLATFORM_PRINCIPAL_ATTRIBUTE =
+            IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE;
+
+    /** 平台管理 API 路径前缀（独立安全链，令牌层隔离）。 */
+    private static final String PLATFORM_API_PREFIX = "/api/platform/";
+
     /**
      * 无需认证即可访问的端点。
      *
@@ -88,6 +99,52 @@ public class SecurityConfiguration {
     }
 
     @Bean
+    public PlatformBearerTokenFilter platformBearerTokenFilter(
+            PlatformAuthenticationService platformAuthenticationService) {
+        return new PlatformBearerTokenFilter(platformAuthenticationService);
+    }
+
+    /**
+     * 平台管理 API 安全链（重规划 §7）。
+     *
+     * <p><b>最高优先级（{@code @Order(0)}）</b>，仅匹配 {@code /api/platform/**}。
+     * 使用平台专属令牌服务，校验 {@code aud=admin-console-api} 与
+     * {@code principal_type=PLATFORM_USER}；租户令牌（{@code aud=agent-platform}）
+     * 在此链被拒，从令牌层实现身份隔离。
+     */
+    @Bean
+    @Order(0)
+    public SecurityFilterChain platformSecurityFilterChain(HttpSecurity http,
+                                                            PlatformBearerTokenFilter tokenFilter)
+            throws Exception {
+
+        http
+                .securityMatcher(PLATFORM_API_PREFIX + "**")
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .csrf(csrf -> csrf.disable())
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/platform/v1/auth/**").permitAll()
+                        .anyRequest().authenticated())
+                .addFilterBefore(tokenFilter, UsernamePasswordAuthenticationFilter.class)
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(jsonUnauthorized())
+                        .accessDeniedHandler(jsonForbidden()))
+                .httpBasic(basic -> basic.disable())
+                .formLogin(form -> form.disable())
+                .logout(logout -> logout.disable())
+                .cors(cors -> cors.disable())
+                .headers(headers -> headers
+                        .httpStrictTransportSecurity(hsts -> hsts
+                                .includeSubDomains(true)
+                                .maxAgeInSeconds(31536000))
+                        .frameOptions(frame -> frame.deny()));
+
+        return http.build();
+    }
+
+    @Bean
+    @Order(1)
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                      BearerTokenFilter tokenFilter)
             throws Exception {
@@ -239,5 +296,81 @@ public class SecurityConfiguration {
             response.setCharacterEncoding("UTF-8");
             response.getWriter().write("{\"error\":\"forbidden\"}");
         };
+    }
+
+    /**
+     * 平台令牌过滤器：验签后写入 Security 上下文与请求属性。
+     *
+     * <p>与 {@link BearerTokenFilter} 同构，但只接受平台专属令牌
+     * （{@code aud=admin-console-api} + {@code principal_type=PLATFORM_USER}）。
+     * 租户令牌在此被 {@link PlatformAuthenticationService} 拒，令牌层隔离成立。
+     */
+    public static class PlatformBearerTokenFilter extends OncePerRequestFilter {
+
+        private final PlatformAuthenticationService authenticationService;
+
+        PlatformBearerTokenFilter(PlatformAuthenticationService authenticationService) {
+            this.authenticationService = authenticationService;
+        }
+
+        @Override
+        protected void doFilterInternal(HttpServletRequest request,
+                                        HttpServletResponse response,
+                                        FilterChain chain)
+                throws ServletException, IOException {
+
+            String header = request.getHeader(AUTH_HEADER);
+            if (header != null && !header.isBlank()) {
+                try {
+                    String token = header.startsWith(BEARER_PREFIX)
+                            ? header.substring(BEARER_PREFIX.length()).trim()
+                            : header.trim();
+
+                    PlatformPrincipal principal =
+                            authenticationService.authenticateToken(token, Instant.now());
+
+                    SecurityContextHolder.getContext().setAuthentication(
+                            new PlatformPrincipalAuthentication(principal));
+                    request.setAttribute(PLATFORM_PRINCIPAL_ATTRIBUTE, principal);
+
+                } catch (RuntimeException e) {
+                    // ⚠️ 令牌无效（含跨域令牌）：清空上下文，让后续走 401。
+                    SecurityContextHolder.clearContext();
+                }
+            }
+
+            chain.doFilter(request, response);
+        }
+    }
+
+    /**
+     * 平台认证主体，携带可信平台主体。
+     */
+    public static class PlatformPrincipalAuthentication extends AbstractAuthenticationToken {
+
+        private final PlatformPrincipal principal;
+
+        PlatformPrincipalAuthentication(PlatformPrincipal principal) {
+            super(principal.roles().stream()
+                    .map(role -> (GrantedAuthority) new SimpleGrantedAuthority("ROLE_" + role))
+                    .toList());
+            this.principal = principal;
+            setAuthenticated(true);
+        }
+
+        /** 可信平台主体。 */
+        public PlatformPrincipal principal() {
+            return principal;
+        }
+
+        @Override
+        public Object getPrincipal() {
+            return principal.userId();
+        }
+
+        @Override
+        public Object getCredentials() {
+            return "";
+        }
     }
 }

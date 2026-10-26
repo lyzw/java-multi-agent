@@ -16,7 +16,13 @@ import org.springframework.core.env.Environment;
 
 import cn.studykid.multiagent.infrastructure.security.AuthenticationService;
 import cn.studykid.multiagent.infrastructure.security.JwtTokenService;
+import cn.studykid.multiagent.infrastructure.security.JdbcPlatformPrincipalRepository;
+import cn.studykid.multiagent.infrastructure.security.PlatformAuthenticationService;
+import cn.studykid.multiagent.infrastructure.security.PlatformAuthorizationServiceImpl;
+import cn.studykid.multiagent.infrastructure.security.PlatformCredentialAuthenticationService;
+import cn.studykid.multiagent.infrastructure.security.PlatformJwtTokenService;
 import cn.studykid.multiagent.infrastructure.security.PrincipalRepository;
+import cn.studykid.multiagent.ports.security.PlatformPrincipalRepository;
 
 /**
  * D-001 认证装配。
@@ -162,5 +168,63 @@ public class AuthConfiguration {
     @ConditionalOnMissingBean
     public Clock authClock() {
         return Clock.systemUTC();
+    }
+
+    // ── 平台身份域（重规划 §4 / §7）：独立令牌、独立受众、独立密钥 ──
+
+    @Bean
+    public PlatformJwtTokenService platformJwtTokenService(
+            @Value("${auth.jwt.issuer}") String issuer,
+            @Value("${auth.platform-jwt.audience:admin-console-api}") String audience,
+            @Value("${auth.platform-jwt.token-ttl-seconds:900}") long tokenTtlSeconds,
+            @Value("${auth.platform-jwt.private-key:}") String privateKeyBase64,
+            Environment environment) {
+
+        if (issuer == null || issuer.isBlank()) {
+            throw new IllegalStateException("auth.jwt.issuer 不得为空");
+        }
+        if (audience == null || audience.isBlank()) {
+            throw new IllegalStateException("auth.platform-jwt.audience 不得为空");
+        }
+        if (tokenTtlSeconds < MIN_TTL_SECONDS || tokenTtlSeconds > MAX_TTL_SECONDS) {
+            throw new IllegalStateException(
+                    "auth.platform-jwt.token-ttl-seconds 须在 " + MIN_TTL_SECONDS
+                            + "~" + MAX_TTL_SECONDS + " 之间，当前 " + tokenTtlSeconds);
+        }
+
+        KeyPair keyPair = resolveKeyPair(privateKeyBase64, environment);
+        return new PlatformJwtTokenService(
+                keyPair.getPrivate(), keyPair.getPublic(),
+                issuer, audience, Duration.ofSeconds(tokenTtlSeconds), null);
+    }
+
+    @Bean
+    public PlatformAuthenticationService platformAuthenticationService(
+            PlatformJwtTokenService tokens,
+            @Value("${auth.platform.login.known-roles:"
+                    + "PLATFORM_SUPER_ADMIN,PLATFORM_RESOURCE_ADMIN,PLATFORM_SECURITY_ADMIN,"
+                    + "PLATFORM_AUDITOR,PLATFORM_SUPPORT,TENANT_LIFECYCLE_ADMIN}") String knownRoles) {
+        return new PlatformAuthenticationService(tokens, parseRoles(knownRoles));
+    }
+
+    // ── 平台身份仓储 / 授权 / 登录（重规划 §2.1 / §4 / §7）──
+
+    @Bean
+    public PlatformPrincipalRepository platformPrincipalRepository(DataSource dataSource) {
+        return new JdbcPlatformPrincipalRepository(dataSource);
+    }
+
+    @Bean
+    public PlatformAuthorizationServiceImpl platformAuthorizationService() {
+        // 矩阵驱动、默认拒绝；SoD 规则内置。无需数据库依赖。
+        return new PlatformAuthorizationServiceImpl();
+    }
+
+    @Bean
+    public PlatformCredentialAuthenticationService platformCredentialAuthenticationService(
+            PlatformPrincipalRepository platformUsers,
+            PlatformJwtTokenService platformTokens,
+            Clock clock) {
+        return new PlatformCredentialAuthenticationService(platformUsers, platformTokens, clock);
     }
 }

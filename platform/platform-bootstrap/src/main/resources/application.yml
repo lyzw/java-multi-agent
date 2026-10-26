@@ -303,6 +303,27 @@ auth:
     #    写入 principal_role 权威表后生效。
     known-roles: "STUDENT,PARENT,TEACHER,TENANT_ADMIN,VIEWER,APPROVER,AGENT_AUTHOR,WORKER,PLATFORM_ADMIN"
 
+  # ── 平台身份域（重规划 §4 / §7）：与租户令牌完全独立的受众与密钥 ──
+  # ⚠️ 关键：platform-jwt.audience 必须与租户 audience（agent-platform）不同，
+  #    否则两套令牌无法在令牌层互相拒绝。
+  platform-jwt:
+    # 平台管理 API 令牌受众（admin-console 专用）
+    audience: "${PLATFORM_JWT_AUDIENCE:admin-console-api}"
+    # 平台令牌有效期（秒）。可与租户令牌不同
+    token-ttl-seconds: "900"
+    # ⚠️ 平台专属 RS256 私钥（Base64 的 PKCS#8 DER）。
+    #    建议与租户 private-key 使用不同密钥对，独立轮转。
+    #    缺省为空：仅 dev profile 允许启动时生成；
+    #    其余环境为空即启动失败（fail-closed，与租户密钥同纪律）。
+    private-key: "${PLATFORM_JWT_PRIVATE_KEY:}"
+  platform:
+    login:
+      # 平台角色白名单（最小特权 + 职责分离，见重规划 §3.1）。
+      # 与租户 known-roles 物理隔离，互不可混。
+      # ⚠️ 平台角色仍须经 out-of-band 运维通道（升级版 04_platform_admin_grant.sql）
+      #    写入 platform.platform_user_role 权威表后生效；应用层不提供自授端点。
+      known-roles: "PLATFORM_SUPER_ADMIN,PLATFORM_RESOURCE_ADMIN,PLATFORM_SECURITY_ADMIN,PLATFORM_AUDITOR,PLATFORM_SUPPORT,TENANT_LIFECYCLE_ADMIN"
+
   # ── 告警外发（P5 · 真实告警分发通道最小实现）────────────────────
   alerts:
     # ⚠️ 默认关闭（空白 = NoopAlertWebhook）：不配置目标就不外发，
