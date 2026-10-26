@@ -457,6 +457,206 @@ class RunExecutionLoopTest {
     }
 
     @Nested
+    @DisplayName("租户生命周期再验证（重规划 §14 / 验收矩阵 #4）")
+    class TenantLifecycleRevalidation {
+
+        /** 可顺序返回预设状态的探针（用于模拟「运行中租户被暂停」）。 */
+        private static class FakeTenantLifecycleProbe
+                implements cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe {
+            private final java.util.List<String> states;
+            private int idx;
+            @SuppressWarnings("unused")
+            private int callCount;
+
+            FakeTenantLifecycleProbe(String... states) {
+                this.states = java.util.List.of(states);
+            }
+
+            @Override
+            public java.util.Optional<String> lifecycleState(String tenantId) {
+                callCount++;
+                int i = Math.min(idx, states.size() - 1);
+                idx++;
+                return java.util.Optional.of(states.get(i));
+            }
+        }
+
+        /** 缺失租户的探针。 */
+        private static class MissingTenantProbe
+                implements cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe {
+            @Override
+            public java.util.Optional<String> lifecycleState(String tenantId) {
+                return java.util.Optional.empty();
+            }
+        }
+
+        private static RunExecutionLoop loopWithProbe(ModelGateway gw, RunClaimPort port,
+                                                      ToolInvocationGate gate,
+                                                      cn.studykid.multiagent.ports.persistence
+                                                              .TenantLifecycleProbe probe) {
+            return new RunExecutionLoop(gw, port, gate, Duration.ofSeconds(30), "w-1",
+                    new cn.studykid.multiagent.application.prompt.PromptGuard(), null, null,
+                    ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, probe);
+        }
+
+        @Test
+        @DisplayName("✅ ACTIVE → 正常执行并 SUCCEEDED")
+        void activeTenantExecutes() {
+            FakeClaimPort port = new FakeClaimPort();
+            var loop = loopWithProbe(modelReturning(textResponse("x=2 或 x=3")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeTenantLifecycleProbe(
+                            cn.studykid.multiagent.ports.tenant.TenantLifecycle.ACTIVE));
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+            assertThat(port.committedState).isEqualTo("SUCCEEDED");
+        }
+
+        @Test
+        @DisplayName("⚠️ SUSPENDED 执行前 → 拒绝新执行，不调模型、不提交")
+        void suspendedAtStartRejected() {
+            MODEL_CALLS.set(0);
+            FakeClaimPort port = new FakeClaimPort();
+            var loop = loopWithProbe(modelReturning(textResponse("应被拒绝")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeTenantLifecycleProbe(
+                            cn.studykid.multiagent.ports.tenant.TenantLifecycle.SUSPENDED));
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.TENANT_BLOCKED);
+            assertThat(outcome.retryable())
+                    .as("暂停态不可重试（重投只会再次被拒）")
+                    .isFalse();
+            assertThat(MODEL_CALLS.get())
+                    .as("⚠️ 暂停租户仍调模型 = 越权执行 + 白花钱")
+                    .isZero();
+            assertThat(port.commitCount).isZero();
+        }
+
+        @Test
+        @DisplayName("⚠️ DECOMMISSIONED 执行前 → 拒绝新执行")
+        void decommissionedAtStartRejected() {
+            FakeClaimPort port = new FakeClaimPort();
+            var loop = loopWithProbe(modelReturning(textResponse("应被拒绝")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeTenantLifecycleProbe(
+                            cn.studykid.multiagent.ports.tenant.TenantLifecycle.DECOMMISSIONED));
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.TENANT_BLOCKED);
+            assertThat(port.commitCount).isZero();
+        }
+
+        @Test
+        @DisplayName("⚠️ PENDING_SETUP 执行前 → 拒绝（未激活不可执行）")
+        void pendingSetupAtStartRejected() {
+            FakeClaimPort port = new FakeClaimPort();
+            var loop = loopWithProbe(modelReturning(textResponse("应被拒绝")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeTenantLifecycleProbe(
+                            cn.studykid.multiagent.ports.tenant.TenantLifecycle.PENDING_SETUP));
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.TENANT_BLOCKED);
+        }
+
+        @Test
+        @DisplayName("⚠️ 租户不存在 → 拒绝（fail-closed）")
+        void missingTenantRejected() {
+            FakeClaimPort port = new FakeClaimPort();
+            var loop = loopWithProbe(modelReturning(textResponse("应被拒绝")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new MissingTenantProbe());
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.TENANT_BLOCKED);
+        }
+
+        @Test
+        @DisplayName("⚠️ 运行中租户被 SUSPENDED → 及时停止，不再发起新一轮模型调用")
+        void suspendedMidRunStopsInFlight() {
+            MODEL_CALLS.set(0);
+            int[] step = {0};
+            ModelGateway gw = request -> {
+                MODEL_CALLS.incrementAndGet();
+                if (step[0]++ == 0) {
+                    return new ModelResponse("", Map.of(
+                            "c1", new ModelResponse.ToolCallRequest(
+                                    "recording_tool", Map.of(), "c1")),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            };
+            FakeClaimPort port = new FakeClaimPort();
+            // 第 1 次 = 执行前检查（ACTIVE 通过）；第 2 次 = 第 1 轮迭代前（ACTIVE 通过，发起模型调用）；
+            // 第 3 次 = 第 2 轮迭代前（SUSPENDED 拦截，及时停止，不再发起新一轮模型调用）。
+            var loop = loopWithProbe(gw, port,
+                    new ToolInvocationGate(List.of(new RecordingTool()), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeTenantLifecycleProbe(
+                            cn.studykid.multiagent.ports.tenant.TenantLifecycle.ACTIVE,
+                            cn.studykid.multiagent.ports.tenant.TenantLifecycle.ACTIVE,
+                            cn.studykid.multiagent.ports.tenant.TenantLifecycle.SUSPENDED));
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.TENANT_BLOCKED);
+            assertThat(MODEL_CALLS.get())
+                    .as("⚠️ 暂停后不应再发起新一轮模型调用（已在第 1 轮后停止）")
+                    .isEqualTo(1);
+            assertThat(port.committedState)
+                    .as("被暂停的任务不应提交为 SUCCEEDED")
+                    .isNotEqualTo("SUCCEEDED");
+        }
+
+        @Test
+        @DisplayName("⚠️ 未装配探针（null）→ 不拦截（向后兼容，仅告警）")
+        void noProbeMeansNoRejection() {
+            FakeClaimPort port = new FakeClaimPort();
+            var loop = loop(modelReturning(textResponse("x=2")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()));
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+        }
+    }
+
+    @Nested
     @DisplayName("执行事件写入（P4-D12 / G4）")
     class ExecutionEvents {
 
@@ -1257,7 +1457,7 @@ class RunExecutionLoopTest {
                             budget(), ledger()),
                     Duration.ofSeconds(30), "w-1",
                     new cn.studykid.multiagent.application.prompt.PromptGuard(),
-                    null, null, 300);
+                    null, null, 300, null);
         }
 
         @Test

@@ -19,6 +19,8 @@ import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunEventPort;
+import cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe;
+import cn.studykid.multiagent.ports.tenant.TenantLifecycle;
 import cn.studykid.multiagent.ports.tool.ToolExecutionException;
 
 /**
@@ -97,6 +99,16 @@ public class RunExecutionLoop {
      */
     private final int contextTokenBudget;
 
+    /**
+     * 租户生命周期运行时探针（重规划 §14 / 验收矩阵 #4）。
+     *
+     * <p>⚠️ <b>可为空 = 未装配</b>：此时跳过租户状态再验证（默认），
+     * 但生产装配<b>必须</b>传入——否则平台暂停/退役租户后，
+     * Worker 仍会执行该租户的新任务与在跑任务（Sev-1 越权执行）。
+     * 装配纪律同事件端口/接管器：空值不报错但等于「忘记防护也能跑」。
+     */
+    private final TenantLifecycleProbe lifecycleProbe;
+
     public RunExecutionLoop(@NonNull ModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
@@ -129,7 +141,8 @@ public class RunExecutionLoop {
                              @NonNull PromptGuard promptGuard,
                              @Nullable RunEventPort eventPort) {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
-                promptGuard, eventPort, null);
+                promptGuard, eventPort, null,
+                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null);
     }
 
     /**
@@ -147,13 +160,16 @@ public class RunExecutionLoop {
                              @Nullable RunEventPort eventPort,
                              @Nullable InFlightDelegationAdopter adopter) {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
-                promptGuard, eventPort, adopter, ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET);
+                promptGuard, eventPort, adopter,
+                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null);
     }
 
     /**
      * 最完整构造器（含上下文 token 预算 · 第二十六批 · A7）。
      *
      * @param contextTokenBudget 上下文 token 预算；必须为正数
+     * @param lifecycleProbe     租户生命周期运行时探针；{@code null} 表示**不验证**
+     *                           （默认），生产装配<b>必须</b>传入
      */
     public RunExecutionLoop(@NonNull ModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
@@ -163,7 +179,8 @@ public class RunExecutionLoop {
                              @NonNull PromptGuard promptGuard,
                              @Nullable RunEventPort eventPort,
                              @Nullable InFlightDelegationAdopter adopter,
-                             int contextTokenBudget) {
+                             int contextTokenBudget,
+                             @Nullable TenantLifecycleProbe lifecycleProbe) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
@@ -180,9 +197,14 @@ public class RunExecutionLoop {
                     + contextTokenBudget);
         }
         this.contextTokenBudget = contextTokenBudget;
+        this.lifecycleProbe = lifecycleProbe;
         if (adopter == null) {
             log.warn("未装配在途委派接管器：Worker 接管后 RUNNING 的委派记录"
                     + "将无法收敛（一直悬着），真实原因会被掩盖成普通子调用失败");
+        }
+        if (lifecycleProbe == null) {
+            log.warn("未装配租户生命周期探针：Worker 不会在执行前/中再验证租户状态，"
+                    + "平台暂停/退役租户后仍可能执行其任务（验收矩阵 #4 不满足）");
         }
     }
 
@@ -204,6 +226,14 @@ public class RunExecutionLoop {
             // 租约已过期并被接管。此时执行模型 = 白花钱，提交也会被拒
             log.info("世代已失效，放弃执行以节省成本: runId={}", task.runId());
             return ExecutionOutcome.skippedStaleGeneration();
+        }
+
+        // ── §2.1.1 执行前租户生命周期再验证（重规划 §14 / 验收矩阵 #4）──
+        // ⚠️ 平台暂停/退役租户后，不能只信入队时的检查：必须在真正执行前
+        //    以 DB 当前状态确认租户仍可执行。缺失/非 ACTIVE 一律拒绝新执行。
+        ExecutionOutcome blocked = rejectIfTenantBlocked(tenantId, task.runId());
+        if (blocked != null) {
+            return blocked;
         }
 
         int steps = 0;
@@ -247,6 +277,14 @@ public class RunExecutionLoop {
         try {
             while (steps < snapshot.maxSteps()) {
                 steps++;
+
+                // ── §2.1.2 每轮迭代前租户生命周期再验证（验收矩阵 #4）────
+                // ⚠️ 运行中租户被暂停/退役：及时停止，不再发起新一轮模型调用
+                //    与工具动作（避免白白消耗成本、产生副作用）。
+                ExecutionOutcome midBlocked = rejectIfTenantBlocked(tenantId, task.runId());
+                if (midBlocked != null) {
+                    return midBlocked;
+                }
 
                 // ── §2.2 取消检查（协作式，P3-D06 / FR-011）─────────────
                 // ⚠️ 每轮迭代开头（模型调用前）即查取消。一旦观察到取消，
@@ -421,6 +459,36 @@ public class RunExecutionLoop {
      * @param type     事件类型
      * @param payload  载荷（只含白名单标量）
      */
+    /**
+     * 租户生命周期再验证（重规划 §14 / 验收矩阵 #4）。
+     *
+     * <p>⚠️ 以 DB 当前状态为准（不信任消息体）。仅 {@link TenantLifecycle#ACTIVE}
+     * 允许执行；其余状态（SUSPENDED/DECOMMISSIONED/DECOMMISSIONING/
+     * PENDING_SETUP/CANCELLED）与「租户不存在」一律拒绝。
+     *
+     * <p>⚠️ {@code lifecycleProbe == null} 时跳过（未装配，向后兼容），
+     * 但生产<b>必须</b>装配，否则本方法恒返回 {@code null}（不拦截）。
+     *
+     * @return 应被拒绝时返回 {@link ExecutionOutcome#tenantBlocked()}；
+     *         可继续执行时返回 {@code null}
+     */
+    private @Nullable ExecutionOutcome rejectIfTenantBlocked(String tenantId, String runId) {
+        if (lifecycleProbe == null) {
+            return null;
+        }
+        String state = lifecycleProbe.lifecycleState(tenantId).orElse(null);
+        if (state == null) {
+            log.warn("租户不存在，拒绝执行: tenantId={}, runId={}", tenantId, runId);
+            return ExecutionOutcome.tenantBlocked("租户不存在");
+        }
+        if (!TenantLifecycle.isActive(state)) {
+            log.info("租户状态不可执行({})，拒绝执行: tenantId={}, runId={}",
+                    state, tenantId, runId);
+            return ExecutionOutcome.tenantBlocked("租户状态=" + state);
+        }
+        return null;
+    }
+
     private void appendEvent(String tenantId, String runId, String type,
                              java.util.Map<String, Object> payload) {
         if (eventPort == null) {
@@ -565,7 +633,13 @@ public class RunExecutionLoop {
             /** 世代已失效：已被接管，不重试。 */
             SKIPPED_STALE_GENERATION,
             /** ⚠️ 用户取消：协作式停止，不再启动新动作。 */
-            CANCELLED
+            CANCELLED,
+            /**
+             * ⚠️ 租户生命周期不可执行（SUSPENDED/DECOMMISSIONED/未激活或不存在）。
+             * 重规划 §14 / 验收矩阵 #4：平台暂停/退役租户后拒绝新执行与在跑任务。
+             * <b>不可重试</b>——重试只会再次被拒，且暂停态重投无意义。
+             */
+            TENANT_BLOCKED
         }
 
         public ExecutionOutcome {
@@ -596,6 +670,11 @@ public class RunExecutionLoop {
 
         public static ExecutionOutcome cancelled() {
             return new ExecutionOutcome(Kind.CANCELLED, null);
+        }
+
+        /** 租户生命周期不可执行（暂停/退役/未激活/不存在）。不可重试。 */
+        public static ExecutionOutcome tenantBlocked(String reason) {
+            return new ExecutionOutcome(Kind.TENANT_BLOCKED, reason);
         }
 
         /** @return 是否允许重新投递重试。UNKNOWN 与世代失效均**不允许**。 */

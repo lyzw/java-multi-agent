@@ -220,18 +220,19 @@ public class WorkerExecutionConfig {
             BigDecimal reserveAmount,
             cn.studykid.multiagent.application.cap.CapExecutionFlow capExecutionFlow,
             cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlerProvider,
+            cn.studykid.multiagent.ports.http.HttpToolHandlerProvider httpToolHandlerProvider,
             cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation,
             java.time.Clock clock,
             cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudgetProbe) {
         log.info("装配工具闸门: 工具 {} 个，审批策略=按风险等级，审批来源=策略引擎，"
-                        + "CAP 授权链路={}，多级委派={}，Run 级预算={}",
+                        + "CAP 授权链路={}，多级委派={}，Run 级预算={}，HTTP 出站={}",
                 tools.size(), capExecutionFlow.isEnabled(), delegation != null,
-                runBudgetProbe != null);
+                runBudgetProbe != null, httpToolHandlerProvider != null);
         return new ToolInvocationGate(
                 tools, authorization, approvalPolicy, budget, ledger, approvalPort,
                 BudgetPolicy.requireReserveAmount(reserveAmount),
                 cancelGuard, approvalSource, capExecutionFlow, mcpHandlerProvider, delegation,
-                clock, runBudgetProbe);
+                clock, runBudgetProbe, httpToolHandlerProvider);
     }
 
     /**
@@ -333,14 +334,17 @@ public class WorkerExecutionConfig {
             ToolInvocationGate gate,
             PromptGuard promptGuard,
             cn.studykid.multiagent.ports.persistence.RunEventPort eventPort,
-            cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter adopter) {
+            cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter adopter,
+            cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe lifecycleProbe) {
         // ⚠️⚠️ **接管器必须在这里真实注入**（第九批 · MA-T12）：
         //    不注入时，Worker 接管后 RUNNING 的委派记录**永远无人能收敛**
         //    （新世代 token 不匹配、旧世代已被接管），
         //    真实原因（Worker 崩溃）会被掩盖成一次普通的子调用失败。
+        // ⚠️⚠️ **租户生命周期探针必须在这里真实注入**（重规划 §14 / 验收矩阵 #4）：
+        //    不注入时，平台暂停/退役租户后 Worker 仍会执行其任务（越权执行，Sev-1）。
         return new RunExecutionLoop(modelGateway, claimPort, gate,
                 Duration.ofSeconds(leaseSeconds), workerId, promptGuard, eventPort, adopter,
-                contextTokenBudget);
+                contextTokenBudget, lifecycleProbe);
     }
 
     /**
@@ -380,6 +384,8 @@ public class WorkerExecutionConfig {
                         case UNKNOWN_RESULT -> RunDispatchConsumer.Outcome.UNKNOWN_RESULT;
                         case SKIPPED_STALE_GENERATION ->
                                 RunDispatchConsumer.Outcome.STALE_GENERATION;
+                        // ⚠️ 租户暂停/退役 → 终态失败，不重投（重投只会再次被拒）
+                        case TENANT_BLOCKED -> RunDispatchConsumer.Outcome.FAILED;
                     };
                 });
     }

@@ -46,6 +46,17 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
  * <p>⚠️ <b>端点默认受 {@code anyRequest().authenticated()} 保护</b>
  * （见 SecurityConfiguration）：漏配 PUBLIC_ENDPOINTS 时是拒绝而非放行。
  */
+/**
+ * ⚠️ <b>已弃用（P4）</b>：本控制器基于「租户令牌持 {@code PLATFORM_ADMIN} 角色」
+ * 的单一身份模型，与重规划「平台身份 / 租户身份分离」冲突。
+ * 平台级租户管理请迁移至 {@code /api/platform/v1/tenants}
+ * （独立平台令牌 {@code aud=admin-console-api} + {@code PlatformSecurity} 授权闸门）。
+ * 在本端点下线前仍保留可用，以避免影响既有 admin-console 前端，
+ * 但<b>新功能不应再接入此路径</b>。
+ *
+ * @deprecated 迁移至 {@code /api/platform/v1/tenants}（平台身份域）。
+ */
+@Deprecated(since = "P4", forRemoval = false)
 @RestController
 @RequestMapping("/api/admin/tenants")
 public class AdminTenantController {
