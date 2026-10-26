@@ -764,6 +764,78 @@ export interface AuditLogEntry {
 
 /* ── 平台身份域（重规划 §7 / §9 · /api/platform/v1/*） ── */
 
+/* ── 平台用户/角色/权限管理写端点（第三十九批 · /api/platform/v1/users/*） ── */
+
+/** 平台用户（详情口径；含邮箱与审计元信息与角色集合；绝不返回 password_hash） */
+export interface PlatformUserDetail {
+  id: string
+  username: string
+  displayName: string | null
+  email: string | null
+  status: string
+  authSource: string
+  mfaRequired: boolean
+  authzVersion: number
+  lastLoginAt: string | null
+  createdAt: string | null
+  updatedAt: string | null
+  roles: string[]
+}
+
+/** 创建平台账号请求体（LOCAL 认证源） */
+export interface CreatePlatformUserRequest {
+  username: string
+  password: string
+  displayName?: string
+  email?: string
+  mfaRequired?: boolean
+  roles?: string[]
+}
+
+/** 更新平台用户请求体（null 语义 = 不变，由前端展开时省略） */
+export interface UpdatePlatformUserRequest {
+  displayName?: string
+  email?: string
+  status?: 'ACTIVE' | 'DISABLED'
+  mfaRequired?: boolean
+}
+
+export interface UserRolesResponse {
+  roles: string[]
+}
+
+/* ── 平台控制台 · 能力目录（平台链 /api/platform/v1/capabilities/*） ── */
+
+/**
+ * 跨租户 Agent 注册表条目（平台控制台只读盘点）。
+ *
+ * ⚠️ 只有管理元数据：definition 正文、运行输出、会话内容永不出现（禁区红线）。
+ */
+export interface PlatformAgentRegistryItem {
+  tenantId: string
+  agentId: string
+  name: string | null
+  description: string | null
+  versionCount: number
+  latestVersionNumber: number | null
+  latestPublishedAt: string | null
+  /** 权威定义（cap_agent_def）版本；无定义时为 null */
+  defVersion: number | null
+  /** 生命周期状态（PUBLISHED / DEPRECATED / …）；无定义时为 null */
+  lifecycleState: string | null
+  roles: string[]
+  enabledSkills: string[]
+  capabilityTags: string[]
+  /** 收紧覆盖（overrides）是否非空 */
+  hasOverrides: boolean
+}
+
+/** 平台链上的目录项形状与租户链 /api/cap/catalog/* 完全一致（复用旧契约类型）。 */
+export type ConsoleToolItem = ToolCatalogItem
+export type ConsoleSkillItem = SkillCatalogItem
+export type ConsoleMcpItem = McpCatalogItem
+
+
 /** 平台登录响应（POST /api/platform/v1/auth/login · TokenResponse）。
  *
  * ⛔ 无 tenantId：平台主体不属于任何租户；失败统一 401（防账号枚举）。

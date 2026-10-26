@@ -1,10 +1,11 @@
-# Agent 管理控制台（admin-console）
+# 平台管理控制台（admin-console）
 
-统一管理整个工程中 **Agent / Tool / Skill / MCP / Tenant** 配置与运行状态的**独立前端工程**。
-后端复用既有共享项目 `platform/agent-api`（不新建后端工程），仅在其内按需扩展只读聚合/查询端点，
-以及**平台级能力对象的写端点**（第三十四批 C34-2 起：`/api/cap/platform/*`）。
+**纯平台控制台**：平台用户与角色管理、租户生命周期、平台级能力对象（**Agent / Tool / Skill / MCP**）的
+登记-审批-发布管控、平台审计。登录走平台身份域（`aud=admin-console-api`）、令牌层与租户身份互拒：
+本工程**只持平台令牌**，一切端点走 `/api/platform/v1/*` 平台链。
 
-> 设计依据：`docs/管理后台系统设计方案.html`、《管理后台开发计划》（`docs/管理后台开发计划/`）。
+> 设计依据：《重规划/平台身份与租户身份分离改造方案.md》（§10-§14 · 平台身份域）、
+> `docs/管理后台系统设计方案.html`、《管理后台开发计划》（`docs/管理后台开发计划/`）。
 
 ---
 
@@ -57,37 +58,20 @@ server {
 
 ---
 
-## 3. 目录结构
+## 3. 导航与路由（纯平台身份域 + 平台能力目录）
 
-```
-admin-console/
-├── index.html
-├── package.json
-├── tsconfig.json
-├── vite.config.ts            # base=/admin/ + 同源 /api 代理
-├── src/
-│   ├── config/constants.ts    # 基路径、API 前缀、角色常量、作用域角色组
-│   ├── auth/
-│   │   ├── tokenStorage.ts    # sessionStorage 令牌存取（复用既有契约）
-│   │   ├── session.tsx        # SessionProvider（signIn/signOut/refreshRoles）
-│   │   ├── RequireAuth.tsx    # 未登录 → 跳登录
-│   │   └── RequireRole.tsx    # 角色守卫（仅导航显隐，安全以后端重授权为准）
-│   ├── api/
-│   │   ├── types.ts           # 后端契约类型
-│   │   ├── client.ts          # fetch 封装：令牌注入 + 401 兜底 + 错误归一
-│   │   └── adminApi.ts        # login/getRoles/getDashboard（真实）+ 占位
-│   ├── layout/
-│   │   ├── navConfig.tsx      # 导航树（与设计方案 §4 对齐）
-│   │   └── AdminLayout.tsx    # antd 侧栏 + 顶栏 + 路由出口
-│   ├── pages/
-│   │   ├── LoginPage.tsx
-│   │   ├── DashboardPage.tsx  # 对接 /api/auth/roles 展示角色 + 模块卡片
-│   │   └── PlaceholderPage.tsx# 后续阶段模块占位（"规划中"）
-│   ├── App.tsx                # ConfigProvider(zhCN) + AntApp + Session + Router
-│   ├── main.tsx
-│   └── styles/global.css
-└── tests/                     # Vitest
-```
+| 菜单 | 路由 | 数据源端点 | 说明 |
+|---|---|---|---|
+| 平台用户 | `/users` | `GET/POST /api/platform/v1/users`、`PUT …/{id}`、`PUT …/{id}/password`、`POST/DELETE …/{id}/roles[/{role}]` | **可写**：建号 / 启停 / 重置密码 / 赋撤角色 |
+| 角色权限矩阵 | `/roles` | `GET /api/platform/v1/roles` | **只读冻结矩阵**（后端 `PlatformRolePermissionMatrix`，6 角色 23 权限），按命名空间 Tabs（user/role/tenant/capability/resource/policy/audit/support） |
+| Agent 注册表 | `/agents` | `GET /api/platform/v1/capabilities/agents` | **只读盘点**：跨租户元数据（BYPASSRLS 数据源 + 平台运营会话窗），按租户 Tabs；未接入会话时 503 fail-closed |
+| Tool | `/tools` | `GET /api/platform/v1/capabilities/tools` + 三步写端点 | 生命周期 Tabs（全部/已发布/草稿/已停用）+ 申请队列 + 登记 + 停用申请 |
+| Skill | `/skills` | `…/capabilities/skills` | 同上（含 Tool/MCP 闭包声明） |
+| MCP Server | `/mcps` | `…/capabilities/mcps` | 同上（transport 列；凭据定位符**永不回显**） |
+| 租户管理 | `/tenants` | `/api/platform/v1/tenants*` | 租户生命周期 / 配额 / 能力授权 |
+| 平台审计 | `/audit` | `GET /api/platform/v1/audit-events` | 仅 SUPER_ADMIN / AUDITOR 可见 |
+
+后台的旧租户链端点（`/api/cap/*`、`/api/admin/*`）对平台令牌不可达；原租户域页面文件暂留仓库但已不在路由中。
 
 ---
 
@@ -119,77 +103,50 @@ npm test
 
 ---
 
-## 5. 鉴权约定（复用共享后端）
+## 5. 鉴权约定（平台身份域）
 
-- 登录：`POST /api/auth/token`，请求体 `{ tenantId, loginName, password }`，返回 `accessToken / expiresIn / tenantId / principalId / roles?`。
-- 角色回补：`GET /api/auth/roles`（登录响应缺 `roles` 时前端自动回补，幂等）。
-- 令牌：存 `sessionStorage['admin.session']`（独立键，与 `frontend/` 隔离）；**无 refresh token**，到期硬跳登录。
-- 角色用途：**仅前端导航显隐**。真实权限由后端在每次请求时重新授权（红线 9），前端不做安全闸门。
-  ⚠️ 第三十四批起前端**多了一条「平台级写入口」**（Tool / Skill / MCP 的登记 / 改版 / 停用），
-  但**前端仍然不做安全闸门** —— `PLATFORM_ADMIN` 闸门与平台运维通道由后端强制
-  （403 默认拒绝 / 运维通道未接入即 503，绝不回落应用角色）。前端只负责**呈现**闸门结论。
-- 作用域：平台级（租户管理、配置中心、**平台级能力对象的写入口**）需 `SUPER_ADMIN/PLATFORM_ADMIN`；租户级（Agent/Tool/Skill/MCP、发布、监控、审计）需含 `TENANT_ADMIN`。
-
----
-
-## 6. Agent 管理（新增 / 修改 / 详情 · 全字段）
-
-Agent 是**租户级**对象，走应用层 `/api/agents` + `/api/cap/config/publishes`（三步工作流）。
-
-| 入口 | 路由 | 说明 |
-|---|---|---|
-| 列表 | `/admin/agents` | 名称 / Agent 标识 / 版本 / 最近发布；行内「编辑」「详情」 |
-| **新增** | `/admin/agents/new` | `new` 是**保留路由段**（同平台级 `NEW_OBJECT_SEGMENT`） |
-| **详情** | `/admin/agents/{id}` | 页签：概览 / 编辑 / 版本历史 / 依赖 / 委派拓扑 / 发布与生命周期 |
-| **修改** | `/admin/agents/{id}?tab=edit` | 与新增**共用同一张草稿表单** |
-
-**「所有 Agent 信息」= 两个模型的全集**（概览页**并列**呈现，不合并成一份）：
-
-- **租户实体行**（`agent` 表 / `GET /api/agents/{id}`）：标识 / 名称 / 描述 / 版本数 / 当前版本号 / 最近发布 / 版本快照；
-- **多级定义**（`cap_agent_def` 表 / `GET /api/cap/agents/{id}/definition`）：定义版本 / 发布状态 / 名称 / 描述 /
-  **角色 / 启用技能 / 技能包 / 能力标签 / 收紧覆盖（overrides）/ 编排声明（orchestration）**。
-
-⚠️ **三处必须守住的约定**（改动本页时勿破坏）：
-
-1. **新增与修改共用一张草稿表单**（`src/pages/agents/AgentDraftPanel.tsx`）——
-   分两张表单迟早漂移；`new` 必须是 `:id` 参数里的**保留段**（静态路由 `agents/new`
-   取不到 `:id` ⇒ `useParams()` 拿不到 `'new'` ⇒ 登记分支永不触发）。
-2. **回填只认权威定义**（`cap_agent_def`）——`overrides` 取自它的 `overrides` 字段，
-   **不是**旧体系 `latestDefinition` 全文（语义完全错位）。
-   ⚠️ **取不到权威定义时绝不静默清空关系**：显式告警 + 用户显式确认才放行。
-3. **登记的顺序不可颠倒**：`cap_agent_def` 对 `agent` 表有复合外键 ⇒ 必须先有 Agent 行；
-   但**校验必须在建行之前**完成，否则会留下一个「没有多级定义的孤儿 Agent 行」。
+- 登录：`POST /api/platform/v1/auth/login`（平台用户名/密码），返回 `accessToken / userId / roles`；
+  ⛔ 无 tenantId —— 平台主体不属于任何租户；失败统一 401（防账号枚举）。
+- 令牌：存 `sessionStorage['admin-console.platform.session']`（独立键）；**无 refresh token**，到期硬跳登录。
+- 平台 JWT 验签**无状态**（不查库）⇒ 角色变更至多在一个令牌周期（900s）内生效；
+  上下文里的 `authz_version` 失效可提前拒绝（fail-closed）。
+- 6 个最小特权角色（`PLATFORM_SUPER_ADMIN` 等，与后端 `PlatformRoles` / known-roles 一致）。
+- 角色用途：**仅前端导航显隐**。真实权限由后端 `PlatformSecurity.require(...)
+  _（默认拒绝、矩阵驱动）`在每次写请求强制；前端不做安全闸门。
+- ❗ **SoD / 自身保护**（后端强制，前端如实呈现）：
+  - 授予/撤销 `PLATFORM_SUPER_ADMIN` 仅超管本人可操作；
+  - 不可对自己执行 停用/重置密码/角色增删；
+  - 撤销最后一个超管被拒（409）。用户页对上述场景禁用对应按钮并注明原因。
 
 ---
 
-## 7. 与《管理后台开发计划》的映射
+## 6. 平台能力目录（/api/platform/v1/capabilities/*）
 
-| 计划阶段 | 本工程落地情况 |
-|---------|--------------|
-| P0 脚手架 | ✅ 本工程即 P0 产出：`/admin` 路由骨架、AdminLayout、RequireAuth、RequireRole、adminApi、Dashboard |
-| P0.5 租户管理 | ⏳ 路由占位 `/tenants`（RequireRole 平台作用域），后端端点后续接入 |
-| P1 实体管理 | ✅ `/agents` **全字段**（新增 / 修改 / 详情，见 §6）；`/tools` `/skills` `/mcp` 目录页已接入 |
-| P2 发布审批 | ⏳ `/publish` 占位 |
-| P3 关系视图 | ⏳ `/dependencies` 占位 |
-| P4 运行监控 | ⏳ `/monitoring` 占位 |
-| P5 审计配置 | ⏳ `/audit` `/settings` 占位 |
+复用 C34-2 **三步工作流**（`PlatformCapabilityPublishService`）：**申请 → 审批 → 执行**，
+执行那一步才真正写配置表。Tool / Skill / MCP 三类对象同一模板：
 
-后端聚合端点（如 `GET /api/admin/dashboard`）由后续阶段在 `platform/agent-api` 内实现；当前 Dashboard 在其缺失时优雅降级为空态。
+1. **登记**：目录页「登记」→ `PlatformRegistrationModal`（构造 `PlatformPublishRequest`，提交即产生 PENDING 申请；
+   注意闭包自洽：Tool kind=MCP 或 Skill 的声明会**连带重发被引用对象**；
+   凭据定位符目录接口不回显 ⇒ 重发必须显式重填，前端 fail-closed 拦截「静默丢凭据」）。
+2. **审批/执行**：页头「申请队列」抽屉列出变更申请（PENDING 可「通过 / 执行」）。
+3. **停用**：已发布行的「停用」→ `PlatformDeprecateModal`，构造 `PlatformLifecycleRequest`
+   （`expectedFrom:'PUBLISHED'`、`to:'DEPRECATED'`，单向终态，不做物理删除）。
+
+**Agent 注册表是只读红线**：跨租户盘点只回管理元数据（租户/标识/名称/版本/角色/技能/能力标签等），
+定义正文与运行输出**不出平台边界**，平台不提供任何 Agent 写端点。
+
+**目录数据为空 / 503 / 403** 的呈现：页头 Alert 区分三种失败
+（权限不足 403；平台运营会话窗未接入 503 —— 平台治理会话以 `platform-ops` 显式开启，不回落，绝不静默）。
 
 ---
 
-## 8. 已知事项
+## 7. 已知事项
 
-- 打包体积：antd 全量引入导致主包 ~892KB（gzip 287KB），后续可按路由 `import()` 拆包或配置 `manualChunks`（属优化，非阻塞）。
-- `getDashboard` 端点尚未在后端实现，Dashboard 统计卡在后端就绪前不展示数字（已做空态降级）。
-- 角色常量（`SUPER_ADMIN/PLATFORM_ADMIN/TENANT_ADMIN`）以字符串与后端登记值对齐；若后端实际角色名不同，仅需调整 `src/config/constants.ts`。
-- ⚠️ **`navigate` / `<Navigate to>` 的目标是 basename **相对**路径**（Router 的 basename 已是 `/admin`）：
-  写成 `${APP_BASE_PATH}/xxx` 会被**再拼一次**前缀 ⇒ `/admin/admin/xxx` ⇒ 404。
-  涉及 `RequireAuth`（跳登录页）与 `LoginPage`（登录后回跳）；回归测试见 `tests/loginRedirect.test.tsx`。
-- **Tool 管理（第三十六批 · C36-1）**：登记 / 修改 / 详情三处**共用** `src/pages/catalog/ToolDefinitionView.tsx`
-  呈现**全部** Tool 字段（定义字段 + 版本与生命周期元信息）。其中 `configFingerprint` / `createdAt`
-  依赖后端 `ToolResponse` 回显（后端已补齐）；**老后端不回显时前端按「未提供」呈现，不得臆造**。
-- **三个目录列表（第三十六批 · C36-1）**：Tool / Skill / MCP Server 目录同步补列，
-  且「状态」列**合并** `lifecycleState` 与 `published`（`lifecycleStateCell`）——
-  ⚠️ 停用是**单向终态**，只看 `published` 会把**已停用**的对象显示成「已发布」。
-  MCP 目录的「凭据引用」列只给**布尔**，定位符与凭据材料**永不入响应**。
+- 打包体积：antd 全量引入导致主包 ~1.3MB（gzip ~409KB），后续可按路由 `import()` 拆包（属优化，非阻塞）。
+- **导航相对路径红线**：`navigate` / `<Navigate to>` 的目标是 basename **相对**路径
+  （Router 的 basename 已是 `/admin`）⇒ 写 `${APP_BASE_PATH}/xxx` 会拼出 `/admin/admin/xxx` ⇒ 404。
+  回归测试见 `tests/loginRedirect.test.tsx`。
+- 「状态」列合并 `lifecycleState` 与 `published`（`lifecycleStateCell`）——
+  ⚠️ 停用是**单向终态**，只看 `published` 会把已停用对象显示成「已发布」。
+- MCP 的「凭据引用」只给布尔 `hasCredentialRef`，定位符与凭据材料**永不入 DOM**。
+- 平台令牌读写端点的前端错误兜底：后端 `ApiError(status, message)` 已归一，页面按 403/400/503 分文案。

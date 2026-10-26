@@ -4,7 +4,6 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import type {
   McpCatalogItem,
   PlatformAuditEvent,
-  PlatformUserSummary,
   PlatformRoleSummary,
 } from '@/api/types'
 
@@ -22,11 +21,10 @@ import {
   getMyPrincipals,
   getMcpCatalog,
   getPlatformAuditEvents,
-  getPlatformUsers,
   getPlatformRoles,
 } from '@/api/adminApi'
 import { AuditLogsPage } from '@/pages/audit/AuditLogsPage'
-import { PrincipalMatrixPage } from '@/pages/PrincipalMatrixPage'
+import { RoleMatrixPage } from '@/pages/roles/RoleMatrixPage'
 import { SettingsPage } from '@/pages/settings/SettingsPage'
 
 // antd v5 渲染期读 matchMedia；jsdom 默认没有，补一个最小桩
@@ -50,7 +48,6 @@ beforeEach(() => {
   vi.mocked(getMyPrincipals).mockResolvedValue([])
   vi.mocked(getMcpCatalog).mockResolvedValue([])
   vi.mocked(getPlatformAuditEvents).mockResolvedValue([])
-  vi.mocked(getPlatformUsers).mockResolvedValue([])
   vi.mocked(getPlatformRoles).mockResolvedValue([])
 })
 
@@ -81,29 +78,6 @@ const auditFixture: PlatformAuditEvent[] = [
     correlationId: null,
     ip: '10.0.0.2',
     occurredAt: '2026-10-24T11:00:00Z',
-  },
-]
-
-const usersFixture: PlatformUserSummary[] = [
-  {
-    id: 'u-1',
-    username: 'admin',
-    displayName: '平台超级管理员',
-    status: 'ACTIVE',
-    authSource: 'LOCAL',
-    mfaRequired: true,
-    authzVersion: 2,
-    lastLoginAt: '2026-10-24T09:00:00Z',
-  },
-  {
-    id: 'u-2',
-    username: 'auditor',
-    displayName: null,
-    status: 'ACTIVE',
-    authSource: 'LOCAL',
-    mfaRequired: false,
-    authzVersion: 1,
-    lastLoginAt: null,
   },
 ]
 
@@ -178,23 +152,23 @@ describe('P5 平台审计页（/audit · 平台身份域）', () => {
   })
 })
 
-describe('P5 平台用户与角色页（/roles · 平台身份域）', () => {
-  it('渲染平台用户与冻结角色矩阵，被撤权用户给出水位告警', async () => {
-    vi.mocked(getPlatformUsers).mockResolvedValue(usersFixture)
+describe('角色权限矩阵页（/roles · 平台身份域）', () => {
+  it('只读呈现冻结角色矩阵（按权限命名空间分组）', async () => {
     vi.mocked(getPlatformRoles).mockResolvedValue(rolesFixture)
-    render(<PrincipalMatrixPage />)
+    render(<RoleMatrixPage />)
 
     await waitFor(() => {
-      expect(screen.getByText('admin')).toBeInTheDocument()
+      expect(screen.getByText('平台超级管理员')).toBeInTheDocument()
     })
-    expect(screen.getByText('auditor')).toBeInTheDocument()
-    // 冻结角色矩阵呈现（角色 Tag 渲染中文名；权限清单呈现原始 permission 名，
-    // platform.audit.read 同时出现在 SUPER_ADMIN 与 AUDITOR 的权限清单 → 用 *AllBy*）
-    expect(screen.getByText('平台角色权限矩阵（冻结）')).toBeInTheDocument()
-    expect(screen.getByText('平台审计员')).toBeInTheDocument()
-    expect(screen.getAllByText('platform.audit.read').length).toBeGreaterThanOrEqual(1)
-    // authzVersion=2 的用户触发撤权告警
-    expect(screen.getByText('1 个平台用户被撤权过')).toBeInTheDocument()
+    // 冻结矩阵语义：权限以原始 permission 名呈现，
+    // platform.audit.read 同时出现在 SUPER_ADMIN 与 AUDITOR 两列 → 用 *AllBy*
+    // 行标签格式「末段（完整权限名）」；antd Tabs 惰性渲染——默认只挂 active 面板（user 组），
+    // 故断言 user 权限行的完整权限名，并断言其余分组 Tab 标签存在
+    expect(screen.getAllByText(/platform\.user\.read/).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('审计权限')).toBeInTheDocument()
+    expect(screen.getByText('租户权限')).toBeInTheDocument()
+    // 只读红旗：矩阵页不允许出现「授予/撤销」类写入口
+    expect(screen.queryByRole('button', { name: '赋予角色' })).not.toBeInTheDocument()
   })
 })
 

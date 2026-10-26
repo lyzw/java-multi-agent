@@ -11,7 +11,7 @@
  * <p>故本模块是<b>唯一一份</b>构造逻辑，弹窗与详情页都调它。
  */
 
-import { getMcp, getTool } from '@/api/adminApi'
+import { getConsoleMcp, getConsoleTool } from '@/api/adminApi'
 import type {
   CapabilityRiskLevel,
   McpCatalogItem,
@@ -104,7 +104,7 @@ export async function buildToolPublishRequest(
     const serverId = built.spec.mcpServerId as string
     let server: McpCatalogItem
     try {
-      server = await getMcp(serverId)
+      server = await getConsoleMcp(serverId)
     } catch {
       return {
         error: `所属 MCP Server「${serverId}」不存在或不可读 —— 发布集合必须自洽闭包，无法只发 Tool`,
@@ -154,7 +154,7 @@ export async function buildSkillPublishRequest(
     Promise.all(
       declaredTools.map(async (toolId) => {
         try {
-          return { toolId, item: (await getTool(toolId)) as ToolCatalogItem | null }
+          return { toolId, item: (await getConsoleTool(toolId)) as ToolCatalogItem | null }
         } catch {
           return { toolId, item: null as ToolCatalogItem | null }
         }
@@ -163,7 +163,7 @@ export async function buildSkillPublishRequest(
     Promise.all(
       declaredServers.map(async (serverId) => {
         try {
-          return { serverId, item: (await getMcp(serverId)) as McpCatalogItem | null }
+          return { serverId, item: (await getConsoleMcp(serverId)) as McpCatalogItem | null }
         } catch {
           return { serverId, item: null as McpCatalogItem | null }
         }

@@ -5,21 +5,41 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { App as AntApp } from 'antd'
 
 // ---- mock API 层（页面本身不触网） ----
-vi.mock('@/api/adminApi', () => ({
-  getTool: vi.fn(),
-  getToolRelations: vi.fn(),
-  getSkill: vi.fn(),
-  getSkillRelations: vi.fn(),
-  getMcp: vi.fn(),
-  getMcpRelations: vi.fn(),
-  getToolCatalog: vi.fn(),
-  getSkillCatalog: vi.fn(),
-  getMcpCatalog: vi.fn(),
-  submitPlatformPublishRequest: vi.fn(),
-  decidePlatformPublishRequest: vi.fn(),
-  applyPlatformPublishRequest: vi.fn(),
-  submitPlatformLifecycleRequest: vi.fn(),
-}))
+vi.mock('@/api/adminApi', () => {
+  const getTool = vi.fn()
+  const getToolRelations = vi.fn()
+  const getSkill = vi.fn()
+  const getSkillRelations = vi.fn()
+  const getMcp = vi.fn()
+  const getMcpRelations = vi.fn()
+  return {
+    getTool,
+    getToolRelations,
+    // 三步工作流构造器已切到平台链 console 读函数（/api/platform/v1/capabilities/*），
+    // 与旧租户链读接口共用同一份 mock（页面收到的数据一致）
+    getConsoleTool: getTool,
+    getConsoleToolRelations: getToolRelations,
+    getSkill,
+    getSkillRelations,
+    getConsoleSkill: getSkill,
+    getConsoleSkillRelations: getSkillRelations,
+    getMcp,
+    getMcpRelations,
+    getConsoleMcp: getMcp,
+    getConsoleMcpRelations: getMcpRelations,
+    getToolCatalog: vi.fn(),
+    getSkillCatalog: vi.fn(),
+    getMcpCatalog: vi.fn(),
+    getConsoleToolCatalog: vi.fn(),
+    getConsoleSkillCatalog: vi.fn(),
+    getConsoleMcpCatalog: vi.fn(),
+    submitPlatformPublishRequest: vi.fn(),
+    decidePlatformPublishRequest: vi.fn(),
+    applyPlatformPublishRequest: vi.fn(),
+    submitPlatformLifecycleRequest: vi.fn(),
+    listPlatformCapabilityRequests: vi.fn(),
+  }
+})
 import {
   applyPlatformPublishRequest,
   decidePlatformPublishRequest,
