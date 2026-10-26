@@ -18,6 +18,7 @@ import cn.studykid.multiagent.application.run.ExecutionSnapshotUnavailableExcept
 import cn.studykid.multiagent.application.run.RunBudgetLimitInvalidException;
 import cn.studykid.multiagent.core.compliance.ZeroRetentionViolationException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
+import cn.studykid.multiagent.ports.persistence.PlatformOpsUnavailableException;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
 
 /**
@@ -190,6 +191,29 @@ public class ApiExceptionHandler {
      *
      * <p>⚠️ 响应同样不含 {@code getMessage()} —— 它会回显请求体的媒体类型细节。
      */
+    /**
+     * 平台运维角色（BYPASSRLS）未接入 → 503（fail-closed，重规划 §11 / P6R1）。
+     *
+     * <p>⚠️ <b>必须是专用处理器，而不是让控制器包一条
+     * {@code ResponseStatusException(503)}</b>：
+     * {@link #handleResponseStatus(ResponseStatusException)} 会把「控制器声明的
+     * 5xx」一律吞成 500（P4-D09 护栏，防 404/403 语义被 5xx 误吞时顺带产生）。
+     * 平台能力目录（/api/platform/v1/capabilities/*）曾因此把本应 fail-closed
+     * 的 503 呈现成了 {@code INTERNAL_ERROR}。
+     *
+     * <p>与监控不可用同口径：<b>不静默空态</b>（目录页空表会让运维误以为
+     * 「平台没有这些对象」），<b>不用 500</b>（重试无用，缺的是运维配置）。
+     * 响应体同样不回显 {@link Exception#getMessage()}——
+     * 它含有缺失的配置项名与底层异常摘要。
+     */
+    @ExceptionHandler(PlatformOpsUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handlePlatformOpsUnavailable(
+            PlatformOpsUnavailableException e) {
+        log.error("平台运维角色未接入（fail-closed）: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new ErrorResponse("PLATFORM_OPS_UNAVAILABLE", "平台运维通道未接入"));
+    }
+
     @ExceptionHandler(org.springframework.web.HttpMediaTypeNotSupportedException.class)
     public ResponseEntity<ErrorResponse> handleUnsupportedMediaType(
             org.springframework.web.HttpMediaTypeNotSupportedException e) {

@@ -11,6 +11,8 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import cn.studykid.multiagent.api.run.RunController.ErrorResponse;
+import cn.studykid.multiagent.ports.persistence.PlatformOpsUnavailableException;
+import cn.studykid.multiagent.ports.persistence.PlatformOpsUnavailableException;
 
 /**
  * 全局异常处理器的状态码语义（P4-D09 同族缺陷的第 3 例 · 2026-10-23 全栈 E2E 实测）。
@@ -120,5 +122,24 @@ class ApiExceptionHandlerTest {
                 .as("⛔ 内部结构不得出现在返回给客户端的消息里")
                 .doesNotContain("principal_secret")
                 .doesNotContain("relation");
+    }
+
+    @Test
+    @DisplayName("✅ 平台运维角色未接入 → 503（fail-closed）不得被吞成 500")
+    void platformOpsUnavailableIs503() {
+        // 回归背景（2026-10-26 实测）：PlatformCapabilityConsoleController 曾把本异常
+        // 包装成 ResponseStatusException(503)，被 P4-D09 护栏（控制器声明的 5xx → 500）
+        // 一律吞成 INTERNAL_ERROR，导致「凭据未配置」被误读为「服务端故障」。
+        ResponseEntity<ErrorResponse> resp = handler.handlePlatformOpsUnavailable(
+                new PlatformOpsUnavailableException(
+                        "AGENT_PLATFORM_OPS_DATASOURCE_*", "平台运维角色未接入"));
+
+        assertThat(resp.getStatusCode())
+                .as("⛔ 运维未接入是可解的配置缺失，必须 503 指向配置项；报 500 会诱导无意义的重试")
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(resp.getBody()).isNotNull();
+        assertThat(resp.getBody().code()).isEqualTo("PLATFORM_OPS_UNAVAILABLE");
+        // 消息固定，不回显 missingConfiguration（防配置项名/凭据线索入响应）
+        assertThat(resp.getBody().message()).isEqualTo("平台运维通道未接入");
     }
 }
