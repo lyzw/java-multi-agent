@@ -5,17 +5,16 @@ import {
   Table,
   Tag,
   Button,
+  Modal,
   Space,
   Typography,
-  Modal,
-  Form,
-  Input,
   App as AntApp,
 } from 'antd'
-import { PlusOutlined, RobotOutlined } from '@ant-design/icons'
-import { ApiError } from '@/api/client'
-import { getAgentList, createAgent } from '@/api/adminApi'
+import { PlusOutlined, RobotOutlined, EditOutlined } from '@ant-design/icons'
+import { getAgentList } from '@/api/adminApi'
 import type { AgentItem } from '@/api/types'
+import { AgentDraftPanel } from './agents/AgentDraftPanel'
+import { useRegistrationModal } from './catalog/useRegistrationModal'
 
 /**
  * Agent 管理 · 列表（P1 · 租户级，复用 /api/agents）。
@@ -23,6 +22,14 @@ import type { AgentItem } from '@/api/types'
  * <p>⚠️ 租户级实体：本页 CRUD 真实走应用层（{@code /api/agents}），
  * 与平台级 Tool/Skill/MCP（只读目录 + 带外运维）形成对照。
  * 发布版本属「不可变快照」模型，编辑入口在详情页（要改只能再发一个版本）。
+ *
+ * <p><b>⚠️ 「新建」改用弹窗</b>（第三十七批 · C37-3）：
+ * 新建要采集**全字段**（角色 / 启用技能 / 技能包 / 能力标签 / 收紧覆盖 / 编排声明），
+ * 装在一个弹窗里确实紧张 —— 但**紧张不是保留整页的理由**：
+ * 字段已按主题分成页签（基本信息 / 能力声明 / 收紧覆盖 / 编排声明），
+ * 每个页签只讲一件事，弹窗（可滚动、够宽）完全装得下。
+ * 而「新建在整页、修改在详情页」这两个宿主共用<b>同一张草稿表单</b>
+ * （{@code AgentDraftPanel}），所以不会漂移。
  */
 export function AgentRegistryPage(): JSX.Element {
   const navigate = useNavigate()
@@ -30,9 +37,7 @@ export function AgentRegistryPage(): JSX.Element {
   const [data, setData] = useState<AgentItem[]>([])
   const [loading, setLoading] = useState(true)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
-  const [createOpen, setCreateOpen] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [form] = Form.useForm<{ name: string; description?: string }>()
+  const registration = useRegistrationModal()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -51,34 +56,6 @@ export function AgentRegistryPage(): JSX.Element {
     void load()
   }, [load])
 
-  const submitCreate = async (): Promise<void> => {
-    let values: { name: string; description?: string }
-    try {
-      values = await form.validateFields()
-    } catch {
-      return // 表单校验未过
-    }
-    setSubmitting(true)
-    try {
-      await createAgent({
-        name: values.name,
-        description: values.description?.trim() ? values.description : null,
-      })
-      message.success('Agent 已创建，可前往详情发布首个版本')
-      setCreateOpen(false)
-      form.resetFields()
-      void load()
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        message.error('同名 Agent 已存在（409）')
-      } else {
-        message.error(e instanceof Error ? e.message : '创建失败')
-      }
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
   return (
     <div>
       <Typography.Title level={3}>
@@ -89,7 +66,11 @@ export function AgentRegistryPage(): JSX.Element {
       <Card
         styles={{ body: { paddingBottom: 12 } }}
         extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={registration.openModal}
+          >
             新建 Agent
           </Button>
         }
@@ -117,6 +98,15 @@ export function AgentRegistryPage(): JSX.Element {
               ),
             },
             {
+              title: 'Agent 标识',
+              dataIndex: 'agentId',
+              render: (v: string) => (
+                <Typography.Text code style={{ fontSize: 12 }}>
+                  {v}
+                </Typography.Text>
+              ),
+            },
+            {
               title: '版本',
               dataIndex: 'versionCount',
               render: (_: unknown, r) =>
@@ -135,9 +125,27 @@ export function AgentRegistryPage(): JSX.Element {
               title: '操作',
               key: 'actions',
               render: (_, r) => (
-                <Button size="small" onClick={(e) => { e.stopPropagation(); navigate(`/agents/${r.agentId}`) }}>
-                  详情 / 发布
-                </Button>
+                <Space size="small">
+                  <Button
+                    size="small"
+                    icon={<EditOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      navigate(`/agents/${r.agentId}?tab=edit`)
+                    }}
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      navigate(`/agents/${r.agentId}`)
+                    }}
+                  >
+                    详情
+                  </Button>
+                </Space>
               ),
             },
           ]}
@@ -149,30 +157,29 @@ export function AgentRegistryPage(): JSX.Element {
         )}
       </Card>
 
+      {/* ⚠️ 新建走弹窗，但表单仍是**同一张** AgentDraftPanel ——
+          「新建」与「修改」共用一张草稿表单，字段不会漂移。 */}
       <Modal
-        open={createOpen}
-        title="新建 Agent"
-        confirmLoading={submitting}
-        onOk={() => void submitCreate()}
-        onCancel={() => setCreateOpen(false)}
-        okText="创建"
-        cancelText="取消"
+        open={registration.open}
+        title="新建 Agent（全字段草稿 · 申请 → 双人复核 → 执行）"
+        onCancel={registration.closeModal}
+        width={960}
+        footer={null}
+        styles={{ body: { maxHeight: '74vh', overflowY: 'auto' } }}
+        destroyOnClose
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
-          <Form.Item
-            name="name"
-            label="名称"
-            rules={[
-              { required: true, message: '请输入 Agent 名称' },
-              { max: 200, message: '名称过长（>200）' },
-            ]}
-          >
-            <Input placeholder="例如：错题归因助手" />
-          </Form.Item>
-          <Form.Item name="description" label="描述（可选）">
-            <Input.TextArea rows={2} placeholder="用途说明（可留空）" />
-          </Form.Item>
-        </Form>
+        <AgentDraftPanel
+          registration
+          definition={null}
+          definitionUnavailable={false}
+          onSubmitted={(r) => {
+            registration.closeModal()
+            void load()
+            // ⚠️ 无论成功与否都跳到详情页：失败时那里能直接重试发布申请，
+            //    成功时那里能看到刚建出来的 Agent（弹窗会消失，信息不该跟着消失）。
+            navigate(`/agents/${r.agentId}`)
+          }}
+        />
       </Modal>
     </div>
   )

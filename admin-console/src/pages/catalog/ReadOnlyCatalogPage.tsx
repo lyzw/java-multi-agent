@@ -95,6 +95,10 @@ export function ReadOnlyCatalogPage<T>({
           loading={loading}
           dataSource={data}
           pagination={false}
+          size="small"
+          // ⚠️ 目录列多（Tool / Skill / MCP 各 9～11 列），不横向滚动就得把
+          //    每列压到读不了的宽度 —— 目录是用来**扫**的，压窄等于扫不动。
+          scroll={{ x: 'max-content' }}
           locale={{ emptyText: '暂无数据' }}
           columns={allColumns}
         />

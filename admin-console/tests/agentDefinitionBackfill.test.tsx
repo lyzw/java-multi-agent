@@ -14,9 +14,13 @@ vi.mock('@/api/adminApi', () => ({
   getDelegationParents: vi.fn(),
   publishAgentVersion: vi.fn(),
   submitPublishRequest: vi.fn(),
+  createAgent: vi.fn(),
+  getAgentList: vi.fn(),
 }))
 import {
+  createAgent,
   getAgent,
+  getAgentList,
   getAgentDefinition,
   getAgentVersions,
   getDelegationChildren,
@@ -26,6 +30,7 @@ import {
 import { ApiError } from '@/api/client'
 
 import { AgentDetailPage } from '@/pages/AgentDetailPage'
+import { AgentRegistryPage } from '@/pages/AgentRegistryPage'
 import { evaluatePublishGate } from '@/pages/orchestration/orchestrationForm'
 
 beforeAll(() => {
@@ -79,9 +84,22 @@ const DEFINITION = {
   published: true,
 }
 
-function renderAgentPage() {
+/** 一份已通过复核的申请单（页面只关心 requestId）。 */
+const REQUEST = {
+  requestId: 'req-1234567890',
+  operation: 'PUBLISH',
+  state: 'PENDING',
+  requesterId: 'u-1',
+  approverId: null,
+  decisionNote: null,
+  requestedAt: '2026-10-25T00:00:00Z',
+  decidedAt: null,
+  appliedAt: null,
+}
+
+function renderAgentPage(path = '/agents/agent-1') {
   return render(
-    <MemoryRouter initialEntries={['/agents/agent-1']}>
+    <MemoryRouter initialEntries={[path]}>
       <AntApp>
         <Routes>
           <Route path="/agents/:id" element={<AgentDetailPage />} />
@@ -91,43 +109,66 @@ function renderAgentPage() {
   )
 }
 
-/** 打开「发布」页签（antd Tabs 默认只渲染活动页签，表单在里面）。 */
-async function openPublishTab(): Promise<void> {
-  const tab = await screen.findByRole('tab', { name: /^发布/ })
+/**
+ * 渲染 Agent 管理页并**自动打开新建弹窗**（第三十七批 · C37-3）。
+ *
+ * ⚠️ 「新建」已改为弹窗：`/agents/new` 现在只是深链入口，
+ *    真正的新建表单在弹窗里（与详情页的「修改」共用同一张 AgentDraftPanel）。
+ */
+function renderAgentRegistry(path = '/agents?register=1') {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <AntApp>
+        <Routes>
+          <Route path="/agents" element={<AgentRegistryPage />} />
+        </Routes>
+      </AntApp>
+    </MemoryRouter>,
+  )
+}
+
+/**
+ * 打开「编辑」页签（草稿表单所在处）。
+ *
+ * ⚠️ antd Tabs 默认只渲染活动页签，表单在里面。
+ */
+async function openEditTab(): Promise<void> {
+  const tab = await screen.findByRole('tab', { name: /^编辑/ })
   fireEvent.click(tab)
   await waitFor(() => expect(screen.getByLabelText(/变更理由/)).toBeTruthy())
 }
 
+/** 打开「发布与生命周期」页签（停用 / 直接发布快照所在处）。 */
+async function openLifecycleTab(): Promise<void> {
+  const tab = await screen.findByRole('tab', { name: /^发布与生命周期/ })
+  fireEvent.click(tab)
+  await waitFor(() => expect(screen.getByLabelText(/停用理由/)).toBeTruthy())
+}
+
 /**
- * 读出 Select 标签模式里的当前值。
- *
- * ⚠️ antd Select 的隐藏 input 承载的是**搜索词**而不是选中值，
- * 选中值渲染在 `.ant-select-selection-item` 里 —— 断言必须看后者。
- */
-/**
- * 定位「发布抽屉」表单容器。
+ * 定位草稿表单容器。
  *
  * ⚠️ 刻意在表单内查找：页面别处也有「版本」等同名标签
  * （概览的 Descriptions 就有），不限定范围会拿错字段。
  */
-function publishForm(): HTMLElement {
-  const form = document.getElementById('agent-publish')
-  if (!form) throw new Error('发布抽屉表单未挂载')
+function draftForm(): HTMLElement {
+  const form = document.getElementById('agent-draft')
+  if (!form) throw new Error('草稿表单未挂载')
   return form
 }
 
 /** 按标签读取输入框当前值（Input / InputNumber 渲染真实 input，可用 id 定位）。 */
 function inputValueByLabel(label: RegExp): string {
-  const labelEl = within(publishForm()).getByText(label)
+  const labelEl = within(draftForm()).getByText(label)
   const id = labelEl.getAttribute('for')
-  const input = publishForm().querySelector(`#${CSS.escape(id ?? '')}`) as HTMLInputElement | null
+  const input = draftForm().querySelector(`#${CSS.escape(id ?? '')}`) as HTMLInputElement | null
   return input?.value ?? ''
 }
 
 function selectValues(label: RegExp): string[] {
-  const labelEl = within(publishForm()).getByText(label)
+  const labelEl = within(draftForm()).getByText(label)
   const id = labelEl.getAttribute('for')
-  const input = publishForm().querySelector(`#${CSS.escape(id ?? '')}`)
+  const input = draftForm().querySelector(`#${CSS.escape(id ?? '')}`)
   const holder = input?.closest('.ant-select') ?? null
   if (!holder) return []
   return Array.from(holder.querySelectorAll('.ant-select-selection-item')).map(
@@ -156,7 +197,7 @@ describe('Agent 详情页 · 关系字段回填（第三十四批 · C34-3 修�
   it('✅ 编辑表单回填全部关系字段（不是只回填 name/description）', async () => {
     renderAgentPage()
     await waitFor(() => expect(screen.getByText(/多级定义（cap_agent_def）/)).toBeTruthy())
-    await openPublishTab()
+    await openEditTab()
 
     // 角色 / 启用技能 / 技能包 / 能力标签：Select 的值落在隐藏 input 上
     expect(selectValues(/角色（roles）/)).toEqual(['TEACHER', 'REVIEWER'])
@@ -168,7 +209,7 @@ describe('Agent 详情页 · 关系字段回填（第三十四批 · C34-3 修�
   it('✅ overrides 回填自权威定义的 overrides（⛔ 不是 latestDefinition 全文）', async () => {
     renderAgentPage()
     await waitFor(() => expect(screen.getByText(/多级定义（cap_agent_def）/)).toBeTruthy())
-    await openPublishTab()
+    await openEditTab()
 
     const overrides = screen.getByLabelText(/配置覆盖（overrides/) as HTMLTextAreaElement
     expect(overrides.value).toBe('{"removedSkills":["skill-old"]}')
@@ -180,7 +221,7 @@ describe('Agent 详情页 · 关系字段回填（第三十四批 · C34-3 修�
   it('✅ 编排声明回填为结构化表单（mode / 子 Agent / 限制）', async () => {
     renderAgentPage()
     await waitFor(() => expect(screen.getByText(/多级定义（cap_agent_def）/)).toBeTruthy())
-    await openPublishTab()
+    await openEditTab()
 
     expect(selectValues(/编排模式（orchestration.mode）/)).toEqual(['SEQUENTIAL'])
     expect(screen.getByDisplayValue('child-1')).toBeTruthy()
@@ -194,21 +235,11 @@ describe('Agent 详情页 · 关系字段回填（第三十四批 · C34-3 修�
 
   it('✅ 提交时把回填到的关系原样送出（改一下不会清空关系）', async () => {
     vi.mocked(submitPublishRequest).mockReset()
-    vi.mocked(submitPublishRequest).mockResolvedValue({
-      requestId: 'req-1234567890',
-      operation: 'PUBLISH',
-      state: 'PENDING',
-      requesterId: 'u-1',
-      approverId: null,
-      decisionNote: null,
-      requestedAt: '2026-10-25T00:00:00Z',
-      decidedAt: null,
-      appliedAt: null,
-    } as never)
+    vi.mocked(submitPublishRequest).mockResolvedValue(REQUEST as never)
 
     renderAgentPage()
     await waitFor(() => expect(screen.getByText(/多级定义（cap_agent_def）/)).toBeTruthy())
-    await openPublishTab()
+    await openEditTab()
     fireEvent.change(screen.getByLabelText(/变更理由/), { target: { value: '微调描述' } })
     fireEvent.click(screen.getByRole('button', { name: /提交变更申请/ }))
 
@@ -241,14 +272,28 @@ describe('Agent 详情页 · 回填不全时绝不静默清空关系', () => {
     vi.mocked(getDelegationParents).mockResolvedValue([] as never)
   })
 
-  it('⛔ 权威定义 404 → 明确提示「尚无多级定义，保存会清空关系」，并要求显式确认', async () => {
+  it('✅ 权威定义取不到时，名称 / 描述仍从旧体系实体行回填（不得对着空表单）', async () => {
     vi.mocked(getAgentDefinition).mockReset()
+    vi.mocked(getAgentDefinition).mockRejectedValue(new ApiError(404, 'not found'))
+
+    renderAgentPage()
+    await waitFor(() => expect(screen.getByText(/该 Agent 尚无多级定义/)).toBeTruthy())
+    await openEditTab()
+
+    // ⚠️ 名称 / 描述**不依赖**多级定义 —— 取不到定义时也拿得到。
+    //    回填只跑一次（按「对象 + 定义版本 + 旧体系实体行」去重），
+    //    但**必须在实体行到达后仍然生效**，否则用户面对的是连名字都空着的表单。
+    expect((screen.getByLabelText(/^名称/) as HTMLInputElement).value).toBe('错题归因助手')
+    expect((screen.getByLabelText(/^描述/) as HTMLTextAreaElement).value).toBe('旧体系描述')
+  })
+
+  it('⛔ 权威定义 404 → 明确提示「尚无多级定义，保存会清空关系」，并要求显式确认', async () => {    vi.mocked(getAgentDefinition).mockReset()
     vi.mocked(getAgentDefinition).mockRejectedValue(new ApiError(404, 'not found'))
     vi.mocked(submitPublishRequest).mockReset()
 
     renderAgentPage()
     await waitFor(() => expect(screen.getByText(/该 Agent 尚无多级定义/)).toBeTruthy())
-    await openPublishTab()
+    await openEditTab()
 
     // ⚠️ 必须有显式告警与显式确认框
     expect(screen.getAllByText(/保存会清空关系/).length).toBeGreaterThan(0)
@@ -265,7 +310,7 @@ describe('Agent 详情页 · 回填不全时绝不静默清空关系', () => {
 
     renderAgentPage()
     await waitFor(() => expect(screen.getByText(/该 Agent 尚无多级定义/)).toBeTruthy())
-    await openPublishTab()
+    await openEditTab()
     fireEvent.change(screen.getByLabelText(/变更理由/), { target: { value: '改个名字' } })
 
     // 按钮是禁用的，点击无效
@@ -281,7 +326,7 @@ describe('Agent 详情页 · 回填不全时绝不静默清空关系', () => {
 
     renderAgentPage()
     await waitFor(() => expect(screen.getByText(/该 Agent 尚无多级定义/)).toBeTruthy())
-    await openPublishTab()
+    await openEditTab()
     fireEvent.change(screen.getByLabelText(/变更理由/), { target: { value: '改个名字' } })
 
     // ⚠️ 上一条只验了「按钮 disabled」这一层（UI 层的拦截）。
@@ -306,21 +351,11 @@ describe('Agent 详情页 · 回填不全时绝不静默清空关系', () => {
     vi.mocked(getAgentDefinition).mockReset()
     vi.mocked(getAgentDefinition).mockRejectedValue(new ApiError(404, 'not found'))
     vi.mocked(submitPublishRequest).mockReset()
-    vi.mocked(submitPublishRequest).mockResolvedValue({
-      requestId: 'req-1234567890',
-      operation: 'PUBLISH',
-      state: 'PENDING',
-      requesterId: 'u-1',
-      approverId: null,
-      decisionNote: null,
-      requestedAt: '2026-10-25T00:00:00Z',
-      decidedAt: null,
-      appliedAt: null,
-    } as never)
+    vi.mocked(submitPublishRequest).mockResolvedValue(REQUEST as never)
 
     renderAgentPage()
     await waitFor(() => expect(screen.getByText(/该 Agent 尚无多级定义/)).toBeTruthy())
-    await openPublishTab()
+    await openEditTab()
     fireEvent.click(screen.getByRole('checkbox'))
     await waitFor(() => expect(screen.getByRole('button', { name: /提交变更申请/ })).toHaveProperty('disabled', false))
 
@@ -348,7 +383,7 @@ describe('Agent 详情页 · 编排声明解析失败必须显式报错', () => 
 
     renderAgentPage()
     await waitFor(() => expect(screen.getByText(/多级定义（cap_agent_def）/)).toBeTruthy())
-    await openPublishTab()
+    await openEditTab()
 
     expect(screen.getAllByText(/编排声明解析失败/).length).toBeGreaterThan(0)
     // ⛔ 提交按钮禁用：回填失败时表单里的编排字段是空的，
@@ -370,20 +405,13 @@ describe('Agent 详情页 · 停用（生命周期迁移）', () => {
   it('✅ 停用走 LIFECYCLE_TRANSITION（不是物理删除，也不是 PUBLISH）', async () => {
     vi.mocked(submitPublishRequest).mockReset()
     vi.mocked(submitPublishRequest).mockResolvedValue({
-      requestId: 'req-1234567890',
+      ...REQUEST,
       operation: 'LIFECYCLE_TRANSITION',
-      state: 'PENDING',
-      requesterId: 'u-1',
-      approverId: null,
-      decisionNote: null,
-      requestedAt: '2026-10-25T00:00:00Z',
-      decidedAt: null,
-      appliedAt: null,
     } as never)
 
     renderAgentPage()
     await waitFor(() => expect(screen.getByText(/多级定义（cap_agent_def）/)).toBeTruthy())
-    await openPublishTab()
+    await openLifecycleTab()
 
     fireEvent.change(screen.getByLabelText(/停用理由/), { target: { value: '下线该 Agent' } })
     fireEvent.click(screen.getByRole('button', { name: /提交停用申请/ }))
@@ -396,5 +424,132 @@ describe('Agent 详情页 · 停用（生命周期迁移）', () => {
     expect(body.lifecycle?.expectedFrom).toBe('PUBLISHED')
     expect(body.lifecycle?.to).toBe('DEPRECATED')
     expect(body.lifecycle?.version).toBe(5)
+  })
+})
+
+/* ══════════════════════════════════════════════════════════════
+   第三十五批：新增 / 修改 / 详情 呈现**全部** Agent 信息
+   ══════════════════════════════════════════════════════════════ */
+
+describe('Agent 新建（弹窗 · 第三十七批 · C37-3）· 全字段草稿', () => {
+  beforeAll(() => {
+    vi.mocked(createAgent).mockReset()
+    vi.mocked(createAgent).mockResolvedValue({
+      ...AGENT,
+      agentId: 'agent-new',
+      versionCount: 0,
+      latestVersionNumber: 0,
+    } as never)
+    vi.mocked(submitPublishRequest).mockReset()
+    vi.mocked(submitPublishRequest).mockResolvedValue(REQUEST as never)
+    // ⚠️ 弹窗提交成功后会刷新列表 —— 列表接口必须给一个合法形状
+    vi.mocked(getAgentList).mockResolvedValue({ items: [], nextCursor: null } as never)
+  })
+
+  it('✅ 新建页给出**全部** Agent 字段（不只有名称与描述）', async () => {
+    renderAgentRegistry()
+    await waitFor(() => expect(screen.getAllByText(/新建 Agent（全字段草稿/).length).toBeGreaterThan(0))
+
+    // 基础信息
+    expect(screen.getByLabelText(/^名称/)).toBeTruthy()
+    expect(screen.getByLabelText(/^描述/)).toBeTruthy()
+    // 关系字段
+    expect(screen.getByLabelText(/角色（roles）/)).toBeTruthy()
+    expect(screen.getByLabelText(/启用技能（enabledSkills）/)).toBeTruthy()
+    expect(screen.getByLabelText(/技能包（skillBundles）/)).toBeTruthy()
+    expect(screen.getByLabelText(/能力标签（capabilityTags）/)).toBeTruthy()
+    // 收紧覆盖 + 编排声明
+    expect(screen.getByLabelText(/配置覆盖（overrides/)).toBeTruthy()
+    expect(screen.getByLabelText(/编排模式（orchestration.mode）/)).toBeTruthy()
+    expect(screen.getByText(/添加子 Agent 引用/)).toBeTruthy()
+    expect(screen.getByLabelText(/路由策略引用/)).toBeTruthy()
+    expect(screen.getByLabelText(/输出契约引用/)).toBeTruthy()
+    expect(screen.getByLabelText(/最大委派深度/)).toBeTruthy()
+    expect(screen.getByLabelText(/最大子调用次数/)).toBeTruthy()
+    expect(screen.getByLabelText(/委派超时/)).toBeTruthy()
+    expect(screen.getByLabelText(/失败策略/)).toBeTruthy()
+    // 变更理由
+    expect(screen.getByLabelText(/变更理由/)).toBeTruthy()
+  })
+
+  it('✅ 新建提交：先建 Agent 行，再提交全字段发布申请', async () => {
+    renderAgentRegistry()
+    await waitFor(() => expect(screen.getAllByText(/新建 Agent（全字段草稿/).length).toBeGreaterThan(0))
+
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: '新 Agent' } })
+    fireEvent.change(screen.getByLabelText(/变更理由/), { target: { value: '首次登记' } })
+    fireEvent.click(screen.getByRole('button', { name: /创建 Agent 并提交发布申请/ }))
+
+    await waitFor(() => expect(submitPublishRequest).toHaveBeenCalledTimes(1))
+    // ⚠️ 顺序不可颠倒：cap_agent_def 对 agent 表有外键 ⇒ 必须先有 Agent 行
+    expect(createAgent).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(createAgent).mock.calls[0]![0]).toMatchObject({ name: '新 Agent' })
+
+    const body = vi.mocked(submitPublishRequest).mock.calls[0]![0]
+    expect(body.operation).toBe('PUBLISH')
+    expect(body.scope).toBe('TENANT')
+    expect(body.reason).toBe('首次登记')
+    const spec = body.agents?.[0]
+    // ⚠️ agentId 必须是**刚创建**的那个
+    expect(spec?.agentId).toBe('agent-new')
+    // ⚠️ 关系字段即便没填也必须是**显式的空数组**（不是 undefined）
+    expect(spec?.roles).toEqual([])
+    expect(spec?.enabledSkills).toEqual([])
+    expect(spec?.skillBundles).toEqual([])
+    expect(spec?.capabilityTags).toEqual([])
+    // ⚠️ 缺省编排声明 = LEAF（= 不允许委派），不是「不限制」
+    expect(spec?.orchestration).toContain('LEAF')
+    expect(spec?.overrides).toBe('{}')
+  })
+
+  it('⛔ 表单校验未过 → 不得建 Agent 行（不得留下孤儿行）', async () => {
+    vi.mocked(createAgent).mockClear()
+    vi.mocked(submitPublishRequest).mockClear()
+
+    renderAgentRegistry()
+    await waitFor(() => expect(screen.getAllByText(/新建 Agent（全字段草稿/).length).toBeGreaterThan(0))
+
+    // 名称留空（必填未过）+ 理由填好 —— 只有「名称」这一项非法
+    fireEvent.change(screen.getByLabelText(/变更理由/), { target: { value: '试试' } })
+    fireEvent.click(screen.getByRole('button', { name: /创建 Agent 并提交发布申请/ }))
+
+    await waitFor(() => expect(screen.getByText(/请输入名称/)).toBeTruthy())
+    // ⛔ 校验发生在**建行之前** ⇒ 不得留下一个没有多级定义的孤儿 Agent
+    expect(createAgent).not.toHaveBeenCalled()
+    expect(submitPublishRequest).not.toHaveBeenCalled()
+  })
+})
+
+describe('Agent 详情 · 概览呈现全部信息', () => {
+  beforeAll(() => {
+    vi.mocked(getAgent).mockResolvedValue(AGENT as never)
+    vi.mocked(getAgentVersions).mockResolvedValue([] as never)
+    vi.mocked(getAgentDefinition).mockResolvedValue(DEFINITION as never)
+    vi.mocked(getDelegationChildren).mockResolvedValue([] as never)
+    vi.mocked(getDelegationParents).mockResolvedValue([] as never)
+  })
+
+  it('✅ 旧体系实体行与权威定义**并列**呈现（不是合并成一份）', async () => {
+    renderAgentPage()
+    await waitFor(() => expect(screen.getByText(/多级定义（cap_agent_def）/)).toBeTruthy())
+
+    // 旧体系实体行
+    expect(screen.getByText(/租户实体行（agent 表 · 旧体系）/)).toBeTruthy()
+    expect(screen.getAllByText('旧体系描述').length).toBeGreaterThan(0)
+    // 权威定义
+    expect(screen.getByText(/多级定义字段（cap_agent_def）/)).toBeTruthy()
+    expect(screen.getByText('权威描述')).toBeTruthy()
+  })
+
+  it('✅ 编排声明按结构展开（模式 / 子 Agent / 限制 / 策略引用）', async () => {
+    renderAgentPage()
+    await waitFor(() => expect(screen.getByText(/多级定义（cap_agent_def）/)).toBeTruthy())
+
+    expect(screen.getByText('SEQUENTIAL')).toBeTruthy()
+    expect(screen.getByText('child-1')).toBeTruthy()
+    expect(screen.getByText('FAIL_FAST')).toBeTruthy()
+    expect(screen.getByText('30000')).toBeTruthy()
+    // 收紧覆盖原文可见
+    expect(screen.getAllByText(/removedSkills/).length).toBeGreaterThan(0)
   })
 })

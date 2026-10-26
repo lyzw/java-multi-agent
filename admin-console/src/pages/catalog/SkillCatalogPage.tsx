@@ -1,23 +1,29 @@
 import { useCallback } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { Button, Space, Typography } from 'antd'
+import { Link } from 'react-router-dom'
+import { Button, Form, InputNumber, Space, Tooltip, Typography } from 'antd'
 import { BulbOutlined, PlusOutlined } from '@ant-design/icons'
 import { ReadOnlyCatalogPage } from './ReadOnlyCatalogPage'
-import { riskTag, tagList } from './displayBits'
+import { riskTag, tagList, lifecycleStateCell, timeCell } from './displayBits'
 import { getSkillCatalog } from '@/api/adminApi'
 import type { SkillCatalogItem, McpDeclaration } from '@/api/types'
+import { PlatformRegistrationModal } from './PlatformRegistrationModal'
+import { SkillFormFields } from './SkillFormFields'
+import { type SkillFormValues } from './platformObjectForm'
+import { buildSkillPublishRequest } from './platformPublishRequests'
+import { useRegistrationModal } from './useRegistrationModal'
 
-/** Skill 目录（P1 · 平台级；C34-3 起可进入详情登记 / 改版 / 停用） */
+/** Skill 目录（P1 · 平台级；C34-3 起可进入详情改版 / 停用；C37-3 起「登记」走弹窗） */
 export function SkillCatalogPage(): JSX.Element {
-  const navigate = useNavigate()
   const fetcher = useCallback(() => getSkillCatalog(), [])
+  const registration = useRegistrationModal()
   return (
+    <>
     <ReadOnlyCatalogPage<SkillCatalogItem>
       title={<><BulbOutlined /> Skill 目录</>}
       notice="平台级 Skill 目录"
       noticeDesc="Skill 定义是平台级对象。其声明的工具 / MCP 关系与风险上限在下方呈现；登记 / 改版 / 停用走平台级三步工作流（需 PLATFORM_ADMIN）。点「详情」查看关系与操作区。"
       cardExtra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/skills/new')}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={registration.openModal}>
           登记 Skill
         </Button>
       }
@@ -32,6 +38,20 @@ export function SkillCatalogPage(): JSX.Element {
       columns={[
         { title: 'ID', dataIndex: 'skillId', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
         { title: '名称', dataIndex: 'name', render: (v: string | null) => v ?? '-' },
+        {
+          // ⚠️ 描述是「这 Skill 干什么」的第一手信息 —— 目录扫一眼就该知道，
+          //    不必点进详情。故给一列（过长省略 + tooltip 给全）。
+          title: '描述',
+          dataIndex: 'description',
+          render: (v: string | null) =>
+            v ? (
+              <Tooltip title={v}>
+                <Typography.Text ellipsis style={{ maxWidth: 220 }}>{v}</Typography.Text>
+              </Tooltip>
+            ) : (
+              <Typography.Text type="secondary">-</Typography.Text>
+            ),
+        },
         { title: '风险上限', dataIndex: 'riskCeiling', render: (v: string) => riskTag(v) },
         { title: '声明工具', dataIndex: 'declaredTools', render: (v: string[]) => tagList(v) },
         {
@@ -55,12 +75,36 @@ export function SkillCatalogPage(): JSX.Element {
         { title: '必需能力', dataIndex: 'requiredCaps', render: (v: string[]) => tagList(v, '（无）', 'geekblue') },
         { title: '版本', dataIndex: 'version', render: (v: number) => <Typography.Text>v{v}</Typography.Text> },
         {
+          // ⚠️ 同 Tool 目录：生命周期与发布状态合并 —— 只看 published
+          //    会把「已停用」的 Skill 显示成「已发布」。
           title: '状态',
-          dataIndex: 'published',
-          render: (p: boolean) => (p ? <Typography.Text type="success">已发布</Typography.Text> : <Typography.Text type="secondary">未发布</Typography.Text>),
+          dataIndex: 'lifecycleState',
+          render: (state: string | null, r: SkillCatalogItem) => lifecycleStateCell(state, r.published),
         },
+        { title: '发布时间', dataIndex: 'publishedAt', render: (v: string | null) => timeCell(v) },
       ]}
     />
+
+      {/* ⚠️ 登记与详情页**共用同一份字段组件**（SkillFormFields）。 */}
+      <PlatformRegistrationModal<SkillFormValues & { reason: string; expectedPublishSeq?: number }>
+        open={registration.open}
+        title="登记 Skill（申请 → 审批 → 执行）"
+        onClose={registration.closeModal}
+        buildRequest={buildSkillPublishRequest}
+        renderFields={() => (
+          <>
+            <SkillFormFields isRegistration />
+            <Form.Item
+              name="expectedPublishSeq"
+              label="发布基线（expectedPublishSeq · 可选）"
+              extra="填入你读到的当前发布序号；不一致时后端 409（防止覆盖别人改过的配置）"
+            >
+              <InputNumber min={0} precision={0} style={{ width: 200 }} />
+            </Form.Item>
+          </>
+        )}
+      />
+    </>
   )
 }
 

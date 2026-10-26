@@ -12,6 +12,9 @@ vi.mock('@/api/adminApi', () => ({
   getSkillRelations: vi.fn(),
   getMcp: vi.fn(),
   getMcpRelations: vi.fn(),
+  getToolCatalog: vi.fn(),
+  getSkillCatalog: vi.fn(),
+  getMcpCatalog: vi.fn(),
   submitPlatformPublishRequest: vi.fn(),
   decidePlatformPublishRequest: vi.fn(),
   applyPlatformPublishRequest: vi.fn(),
@@ -25,6 +28,7 @@ import {
   getSkill,
   getSkillRelations,
   getTool,
+  getToolCatalog,
   getToolRelations,
   submitPlatformLifecycleRequest,
   submitPlatformPublishRequest,
@@ -34,6 +38,7 @@ import { ApiError } from '@/api/client'
 import { ToolDetailPage } from '@/pages/catalog/ToolDetailPage'
 import { SkillDetailPage } from '@/pages/catalog/SkillDetailPage'
 import { McpDetailPage } from '@/pages/catalog/McpDetailPage'
+import { ToolCatalogPage } from '@/pages/catalog/ToolCatalogPage'
 
 // antd v5 渲染期读 matchMedia；jsdom 默认没有，补一个最小桩
 beforeAll(() => {
@@ -166,6 +171,24 @@ function renderAt(path: string, element: JSX.Element) {
       <AntApp>
         <Routes>
           <Route path={path.split('/').slice(0, 2).join('/') + '/:id'} element={element} />
+        </Routes>
+      </AntApp>
+    </MemoryRouter>,
+  )
+}
+
+/**
+ * 渲染目录页（第三十七批 · C37-3：「登记」已改为弹窗，弹窗挂在目录页上）。
+ *
+ * @param path 初始路径（带 `?register=1` 即自动打开登记弹窗）
+ * @param element 目录页组件
+ */
+function renderCatalog(path: string, element: JSX.Element) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <AntApp>
+        <Routes>
+          <Route path={path.split('?')[0]!.split('/')[1]!} element={element} />
         </Routes>
       </AntApp>
     </MemoryRouter>,
@@ -445,28 +468,51 @@ describe('三态闭环（页面级接线 · 第三十四批 · C34-3 补测 G1/G
   })
 })
 
-describe('登记模式 · 与「修改」共用同一张草稿表单', () => {
+describe('登记模式 · 「新增」改用弹窗（第三十七批 · C37-3）', () => {
   beforeAll(() => {
     vi.mocked(getTool).mockReset()
     vi.mocked(getToolRelations).mockReset()
     vi.mocked(getMcp).mockReset()
+    vi.mocked(getSkill).mockReset()
+    vi.mocked(getToolCatalog).mockResolvedValue([] as never)
   })
 
-  it('✅ /tools/new 不加载既有对象，标识可编辑，关系区提示「尚不存在」', async () => {
+  it('✅ /tools/new 只作深链入口 → 不读既有对象（登记改在弹窗里做）', async () => {
     renderAt('/tools/new', <ToolDetailPage />)
-    await waitFor(() => expect(screen.getAllByText(/登记 Tool/).length).toBeGreaterThan(0))
-    // ⚠️ 登记模式不得去读一个不存在的对象
+    // ⚠️ 登记不得去读一个不存在的对象
     expect(getTool).not.toHaveBeenCalled()
     expect(getToolRelations).not.toHaveBeenCalled()
-    expect(screen.getByText(/登记模式：对象尚不存在/)).toBeTruthy()
+    // ⚠️ 也不再有「整页登记」：页面本身不再渲染登记表单
+    expect(screen.queryByLabelText(/Tool 标识/)).toBeNull()
+  })
+
+  it('✅ 目录页点「登记 Tool」→ 弹窗打开，标识可编辑', async () => {
+    renderCatalog('/tools', <ToolCatalogPage />)
+    const button = await screen.findByRole('button', { name: /登记 Tool/ })
+    fireEvent.click(button)
+
+    await waitFor(() =>
+      expect(screen.getAllByText(/登记 Tool（申请/).length).toBeGreaterThan(0),
+    )
     // 标识在登记模式下**可编辑**（登记新对象才需要填）
+    expect(screen.getByLabelText(/Tool 标识/)).toHaveProperty('disabled', false)
+    // ⚠️ 登记弹窗不得去读一个不存在的对象
+    expect(getTool).not.toHaveBeenCalled()
+    expect(getToolRelations).not.toHaveBeenCalled()
+  })
+
+  it('✅ 深链 /tools?register=1 → 目录页自动打开登记弹窗', async () => {
+    renderCatalog('/tools?register=1', <ToolCatalogPage />)
+    await waitFor(() =>
+      expect(screen.getAllByText(/登记 Tool（申请/).length).toBeGreaterThan(0),
+    )
     expect(screen.getByLabelText(/Tool 标识/)).toHaveProperty('disabled', false)
   })
 
-  it('✅ /skills/new 与 /mcp/new 同样进入登记模式', async () => {
+  it('✅ /skills/new 同样只作深链入口（不再有整页登记）', async () => {
     renderAt('/skills/new', <SkillDetailPage />)
-    await waitFor(() => expect(screen.getAllByText(/登记 Skill/).length).toBeGreaterThan(0))
-    expect(screen.getByLabelText(/Skill 标识/)).toHaveProperty('disabled', false)
+    expect(getSkill).not.toHaveBeenCalled()
+    expect(screen.queryByLabelText(/Skill 标识/)).toBeNull()
   })
 })
 

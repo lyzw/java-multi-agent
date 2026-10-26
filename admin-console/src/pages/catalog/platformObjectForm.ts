@@ -59,14 +59,34 @@ export function fromAllowlistTriState(
 
 /* ── Tool ── */
 
+/**
+ * 远程 HTTP 工具允许的请求方法（第三十七批）。
+ *
+ * ⚠️ 与后端 `CapHttpToolConfig.ALLOWED_METHODS` **逐字对齐** ——
+ * 前端放行一个后端拒的方法，只会让作者填完理由、走到审批才被拒。
+ */
+export const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as const
+
+/** 远程 HTTP 工具的单次请求超时上限（毫秒；与后端 `CapHttpToolConfig.MAX_TIMEOUT_MS` 对齐）。 */
+export const HTTP_MAX_TIMEOUT_MS = 300_000
+
+/** 远程 HTTP 工具的默认超时（毫秒；与后端 `CapHttpToolConfig.DEFAULT_TIMEOUT_MS` 对齐）。 */
+export const HTTP_DEFAULT_TIMEOUT_MS = 10_000
+
 /** Tool 表单取值。 */
 export interface ToolFormValues {
   toolId: string
   name?: string
-  kind: 'NATIVE' | 'MCP'
+  kind: 'NATIVE' | 'MCP' | 'HTTP'
   riskLevel: 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'
   mcpServerId?: string
   mcpToolName?: string
+  /** ⚠️ 仅 kind=HTTP 时可填 */
+  httpMethod?: string
+  /** ⚠️ 仅 kind=HTTP 时可填 */
+  httpUrl?: string
+  /** ⚠️ 仅 kind=HTTP 时可填 */
+  httpTimeoutMs?: number | null
   inputSchema?: string
   paramPolicies?: string
 }
@@ -86,18 +106,23 @@ function isJsonText(raw: string | null | undefined): boolean {
 /**
  * 构造平台级 Tool spec。
  *
- * <p>⚠️ <b>kind 与 MCP 绑定字段是成对互斥的两组事实</b>：
+ * <p>⚠️ <b>kind 与各自的专属字段是成对互斥的三组事实</b>：
  * {@code kind=MCP} 时 {@code mcpServerId} + {@code mcpToolName} **必须都给**；
- * {@code kind=NATIVE} 时**两者都不能给**。后端 400（DB 层有 CHECK 兜底），
+ * {@code kind=HTTP} 时 {@code httpMethod} + {@code httpUrl} + {@code httpTimeoutMs}
+ * **必须三者齐全**；
+ * 其余 kind **一律不能带**别种的字段。后端 400（DB 层有 CHECK 兜底），
  * 但那时理由已经填完、走到了审批 —— 反馈太晚。
  */
 export function buildToolSpec(values: ToolFormValues): SpecResult<{
   toolId: string
   name?: string
-  kind: 'NATIVE' | 'MCP'
+  kind: 'NATIVE' | 'MCP' | 'HTTP'
   riskLevel: 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'
   mcpServerId?: string
   mcpToolName?: string
+  httpMethod?: string
+  httpUrl?: string
+  httpTimeoutMs?: number
   inputSchema?: string
   paramPolicies?: string
 }> {
@@ -107,6 +132,13 @@ export function buildToolSpec(values: ToolFormValues): SpecResult<{
 
   const serverId = (values.mcpServerId ?? '').trim()
   const toolName = (values.mcpToolName ?? '').trim()
+  const httpMethod = (values.httpMethod ?? '').trim().toUpperCase()
+  const httpUrl = (values.httpUrl ?? '').trim()
+  const httpTimeout = values.httpTimeoutMs
+  const hasHttpTimeout = httpTimeout !== undefined && httpTimeout !== null
+  const hasHttpFields = httpMethod !== '' || httpUrl !== '' || hasHttpTimeout
+  const hasMcpFields = serverId !== '' || toolName !== ''
+
   if (values.kind === 'MCP') {
     if (serverId === '' || toolName === '') {
       return {
@@ -114,11 +146,50 @@ export function buildToolSpec(values: ToolFormValues): SpecResult<{
         error: 'kind=MCP 时必须同时填写「所属 MCP Server」与「远端操作名」（两者缺一即 400）',
       }
     }
-  } else if (serverId !== '' || toolName !== '') {
+    if (hasHttpFields) {
+      return { ok: false, error: 'kind=MCP 时不得填写 HTTP 配置（目标必须唯一）' }
+    }
+  } else if (values.kind === 'HTTP') {
+    if (httpMethod === '' || httpUrl === '' || !hasHttpTimeout) {
+      return {
+        ok: false,
+        error: 'kind=HTTP 时必须同时填写「请求方法」「目标 URL」与「超时」（三者缺一即 400）',
+      }
+    }
+    if (!(HTTP_METHODS as readonly string[]).includes(httpMethod)) {
+      return {
+        ok: false,
+        error: `请求方法只允许 ${HTTP_METHODS.join(' / ')}，收到「${httpMethod}」`,
+      }
+    }
+    if (!Number.isInteger(httpTimeout) || httpTimeout <= 0 || httpTimeout > HTTP_MAX_TIMEOUT_MS) {
+      return {
+        ok: false,
+        error: `超时必须是 1 ~ ${HTTP_MAX_TIMEOUT_MS} 毫秒之间的整数，收到「${httpTimeout}」`,
+      }
+    }
+    let parsed: URL | null = null
+    try {
+      parsed = new URL(httpUrl)
+    } catch {
+      return { ok: false, error: '目标 URL 不是合法的绝对地址' }
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { ok: false, error: '目标 URL 仅允许 http / https 协议' }
+    }
+    if (parsed.username !== '' || parsed.password !== '') {
+      return { ok: false, error: '目标 URL 不得内嵌用户名 / 口令（凭据仅引用）' }
+    }
+    if (hasMcpFields) {
+      return { ok: false, error: 'kind=HTTP 时不得填写 MCP 绑定字段（目标必须唯一）' }
+    }
+  } else if (hasMcpFields) {
     return {
       ok: false,
       error: 'kind=NATIVE（内置）时不得填写 MCP 绑定字段（两者必须同时为空）',
     }
+  } else if (hasHttpFields) {
+    return { ok: false, error: 'kind=NATIVE（内置）时不得填写 HTTP 配置' }
   }
 
   const inputSchema = (values.inputSchema ?? '').trim()
@@ -133,10 +204,13 @@ export function buildToolSpec(values: ToolFormValues): SpecResult<{
   const spec: {
     toolId: string
     name?: string
-    kind: 'NATIVE' | 'MCP'
+    kind: 'NATIVE' | 'MCP' | 'HTTP'
     riskLevel: 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'
     mcpServerId?: string
     mcpToolName?: string
+    httpMethod?: string
+    httpUrl?: string
+    httpTimeoutMs?: number
     inputSchema?: string
     paramPolicies?: string
   } = {
@@ -149,6 +223,11 @@ export function buildToolSpec(values: ToolFormValues): SpecResult<{
   if (values.kind === 'MCP') {
     spec.mcpServerId = serverId
     spec.mcpToolName = toolName
+  }
+  if (values.kind === 'HTTP') {
+    spec.httpMethod = httpMethod
+    spec.httpUrl = httpUrl
+    spec.httpTimeoutMs = httpTimeout as number
   }
   // ⚠️ 后端把 null 归一成 '{}'（JSONB NOT NULL DEFAULT '{}'），空串原样送过去会被拒，
   //    故这里统一补 '{}'。
@@ -473,7 +552,7 @@ export function credentialRefLossBlocker(serverIds: string[]): string | null {
  */
 export interface ClosurePlan {
   /** 需要一并发布的 Tool spec（按声明顺序去重） */
-  tools: { toolId: string; name?: string; kind: 'NATIVE' | 'MCP'; riskLevel: 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'; mcpServerId?: string; mcpToolName?: string; inputSchema?: string; paramPolicies?: string }[]
+  tools: { toolId: string; name?: string; kind: 'NATIVE' | 'MCP' | 'HTTP'; riskLevel: 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'; mcpServerId?: string; mcpToolName?: string; httpMethod?: string; httpUrl?: string; httpTimeoutMs?: number; inputSchema?: string; paramPolicies?: string }[]
   /** 需要一并发布的 MCP Server spec */
   servers: { serverId: string; transport: 'HTTP' | 'SSE'; endpoint?: string; command?: string; authKind: 'TOKEN' | 'OAUTH' | 'NONE'; trustTier: 'INTERNAL' | 'PARTNER' | 'PUBLIC'; exposedToolAllowlist?: string[] | null; connectionRisk: 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'; credentialRef?: string }[]
   /** ⚠️ 声明了但**取不到定义**的 Tool id —— 必须如实呈现，不能悄悄丢弃 */

@@ -132,13 +132,43 @@ npm test
 
 ---
 
-## 6. 与《管理后台开发计划》的映射
+## 6. Agent 管理（新增 / 修改 / 详情 · 全字段）
+
+Agent 是**租户级**对象，走应用层 `/api/agents` + `/api/cap/config/publishes`（三步工作流）。
+
+| 入口 | 路由 | 说明 |
+|---|---|---|
+| 列表 | `/admin/agents` | 名称 / Agent 标识 / 版本 / 最近发布；行内「编辑」「详情」 |
+| **新增** | `/admin/agents/new` | `new` 是**保留路由段**（同平台级 `NEW_OBJECT_SEGMENT`） |
+| **详情** | `/admin/agents/{id}` | 页签：概览 / 编辑 / 版本历史 / 依赖 / 委派拓扑 / 发布与生命周期 |
+| **修改** | `/admin/agents/{id}?tab=edit` | 与新增**共用同一张草稿表单** |
+
+**「所有 Agent 信息」= 两个模型的全集**（概览页**并列**呈现，不合并成一份）：
+
+- **租户实体行**（`agent` 表 / `GET /api/agents/{id}`）：标识 / 名称 / 描述 / 版本数 / 当前版本号 / 最近发布 / 版本快照；
+- **多级定义**（`cap_agent_def` 表 / `GET /api/cap/agents/{id}/definition`）：定义版本 / 发布状态 / 名称 / 描述 /
+  **角色 / 启用技能 / 技能包 / 能力标签 / 收紧覆盖（overrides）/ 编排声明（orchestration）**。
+
+⚠️ **三处必须守住的约定**（改动本页时勿破坏）：
+
+1. **新增与修改共用一张草稿表单**（`src/pages/agents/AgentDraftPanel.tsx`）——
+   分两张表单迟早漂移；`new` 必须是 `:id` 参数里的**保留段**（静态路由 `agents/new`
+   取不到 `:id` ⇒ `useParams()` 拿不到 `'new'` ⇒ 登记分支永不触发）。
+2. **回填只认权威定义**（`cap_agent_def`）——`overrides` 取自它的 `overrides` 字段，
+   **不是**旧体系 `latestDefinition` 全文（语义完全错位）。
+   ⚠️ **取不到权威定义时绝不静默清空关系**：显式告警 + 用户显式确认才放行。
+3. **登记的顺序不可颠倒**：`cap_agent_def` 对 `agent` 表有复合外键 ⇒ 必须先有 Agent 行；
+   但**校验必须在建行之前**完成，否则会留下一个「没有多级定义的孤儿 Agent 行」。
+
+---
+
+## 7. 与《管理后台开发计划》的映射
 
 | 计划阶段 | 本工程落地情况 |
 |---------|--------------|
-| P0 脚手架 | ✅ 本工程即 P0 产出：`/admin` 路由骨架、AdminLayout、RequireAuth/RequireRole、adminApi、Dashboard |
+| P0 脚手架 | ✅ 本工程即 P0 产出：`/admin` 路由骨架、AdminLayout、RequireAuth、RequireRole、adminApi、Dashboard |
 | P0.5 租户管理 | ⏳ 路由占位 `/tenants`（RequireRole 平台作用域），后端端点后续接入 |
-| P1 实体管理 | ⏳ `/agents` `/tools` `/skills` `/mcp` 占位（RequireRole 租户作用域） |
+| P1 实体管理 | ✅ `/agents` **全字段**（新增 / 修改 / 详情，见 §6）；`/tools` `/skills` `/mcp` 目录页已接入 |
 | P2 发布审批 | ⏳ `/publish` 占位 |
 | P3 关系视图 | ⏳ `/dependencies` 占位 |
 | P4 运行监控 | ⏳ `/monitoring` 占位 |
@@ -148,8 +178,18 @@ npm test
 
 ---
 
-## 7. 已知事项
+## 8. 已知事项
 
 - 打包体积：antd 全量引入导致主包 ~892KB（gzip 287KB），后续可按路由 `import()` 拆包或配置 `manualChunks`（属优化，非阻塞）。
 - `getDashboard` 端点尚未在后端实现，Dashboard 统计卡在后端就绪前不展示数字（已做空态降级）。
 - 角色常量（`SUPER_ADMIN/PLATFORM_ADMIN/TENANT_ADMIN`）以字符串与后端登记值对齐；若后端实际角色名不同，仅需调整 `src/config/constants.ts`。
+- ⚠️ **`navigate` / `<Navigate to>` 的目标是 basename **相对**路径**（Router 的 basename 已是 `/admin`）：
+  写成 `${APP_BASE_PATH}/xxx` 会被**再拼一次**前缀 ⇒ `/admin/admin/xxx` ⇒ 404。
+  涉及 `RequireAuth`（跳登录页）与 `LoginPage`（登录后回跳）；回归测试见 `tests/loginRedirect.test.tsx`。
+- **Tool 管理（第三十六批 · C36-1）**：登记 / 修改 / 详情三处**共用** `src/pages/catalog/ToolDefinitionView.tsx`
+  呈现**全部** Tool 字段（定义字段 + 版本与生命周期元信息）。其中 `configFingerprint` / `createdAt`
+  依赖后端 `ToolResponse` 回显（后端已补齐）；**老后端不回显时前端按「未提供」呈现，不得臆造**。
+- **三个目录列表（第三十六批 · C36-1）**：Tool / Skill / MCP Server 目录同步补列，
+  且「状态」列**合并** `lifecycleState` 与 `published`（`lifecycleStateCell`）——
+  ⚠️ 停用是**单向终态**，只看 `published` 会把**已停用**的对象显示成「已发布」。
+  MCP 目录的「凭据引用」列只给**布尔**，定位符与凭据材料**永不入响应**。
