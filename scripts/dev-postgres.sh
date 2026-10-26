@@ -145,7 +145,8 @@ cmd_migrate() {
     say "执行 V${version}：$(basename "$f")"
     docker cp "$f" "$CONTAINER_NAME":/tmp/migrate_v${version}.sql >/dev/null
     local errs
-    errs=$(psql_super -v ON_ERROR_STOP=1 -f /tmp/migrate_v${version}.sql 2>&1 | grep -c "^ERROR" || true)
+    # ⚠️ 先钉死 search_path，防止未限定表名因连接角色默认 schema 非 public 而建错位置
+    errs=$(psql_super -v ON_ERROR_STOP=1 -c "SET search_path TO public;" -f /tmp/migrate_v${version}.sql 2>&1 | grep -c "^ERROR" || true)
     [ "$errs" -eq 0 ] || die "V${version} 执行失败（$errs 个错误），请查看日志"
   done
 

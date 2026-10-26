@@ -11,6 +11,19 @@ spring:
   application:
     name: java-saas-agent-platform
 
+  # ── Flyway / 数据源 schema 钉死（防 agent 等业务表漂到非 public schema）──
+  # 迁移脚本全部使用未限定表名；default-schema 明确指向 public，与
+  # deploy/sql/platform/05_platform_identity_ddl.sql 的设计一致：
+  #   public = 租户业务表（带 RLS）；platform = 平台身份域（无 RLS）。
+  # connection-init-sql 让 HikariCP 每条连接先 SET search_path TO public，
+  # 即使连接角色默认 schema 不是 public，也不会把表建错位置（避免 platform 下
+  # 出现 agent/run 等重复表）。
+  flyway:
+    default-schema: public
+  datasource:
+    hikari:
+      connection-init-sql: SET search_path TO public
+
   # ── RabbitMQ（DEC-12 / ADR-001）──────────────────────────────────
   # 本地实例：./scripts/dev-rabbitmq.sh start
   rabbitmq:

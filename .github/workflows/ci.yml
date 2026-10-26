@@ -190,7 +190,8 @@ jobs:
           #    排序用 sort -t_ -k1.2 -n（按 V 后面的数字），不依赖字典序。
           for f in $(ls V*.sql | sort -t_ -k1.2 -n); do
             echo "--- $f ---"
-            psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 -q -f "$f"
+            # ⚠️ 先钉死 search_path，防止未限定表名因连接角色默认 schema 非 public 而建错位置
+            psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 -q -c "SET search_path TO public;" -f "$f"
           done
           # ⚠️ 种子必须在**管理角色**下跑：以非特权角色执行会被 RLS 拒
           # （new row violates row-level security policy）——种子层与测试层必须分层。
