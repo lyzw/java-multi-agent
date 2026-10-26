@@ -5,6 +5,7 @@ import java.util.List;
 
 import jakarta.validation.Valid;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -112,16 +113,28 @@ public class RagManagementController {
     private final CorpusIndexingPort indexingPort;
     private final DictionaryPort dictionaryPort;
 
-    public RagManagementController(CorpusManagementPort managementPort,
-                                   CorpusIndexingPort indexingPort) {
-        this(managementPort, indexingPort, null);
-    }
-
+    /**
+     * 构造器注入。
+     *
+     * <p><b>⚠️ 必须显式 {@code @Autowired}</b>：本控制器历史上只有单个构造器时，
+     * Spring 会**自动选中**该构造器做注入；但 47d891a 引入 {@code DictionaryPort}
+     * 后，类内同时存在两个 public 构造器，Spring 不再自动选参，而是回退去找
+     * <b>无参构造器</b>——类里没有无参构造器 → 启动期报错
+     * {@code BeanInstantiationException: No default constructor found}
+     * （底层是 {@code NoSuchMethodException: RagManagementController.<init>()}）。
+     * 因此把依赖收敛到单构造器并显式 {@code @Autowired}，杜绝多构造器的二义性。
+     *
+     * <p><b>⚠️ 不再有「dictionaryPort 传 null」的旧 2 参构造器</b>：字典端点
+     * （{@code /dictionaries*}）依赖 {@code dictionaryPort}，null 会在调用期 NPE。
+     * 既然 {@link DictionaryPort} 已是 {@code RagManagementConfig} 装配的 bean，
+     * 就不该保留允许其为 null 的入口——否则管理台字典块静默 500。
+     */
+    @Autowired
     public RagManagementController(CorpusManagementPort managementPort,
                                    CorpusIndexingPort indexingPort,
                                    DictionaryPort dictionaryPort) {
-        if (managementPort == null || indexingPort == null) {
-            throw new IllegalArgumentException("managementPort / indexingPort 不能为空");
+        if (managementPort == null || indexingPort == null || dictionaryPort == null) {
+            throw new IllegalArgumentException("managementPort / indexingPort / dictionaryPort 不能为空");
         }
         this.managementPort = managementPort;
         this.indexingPort = indexingPort;
