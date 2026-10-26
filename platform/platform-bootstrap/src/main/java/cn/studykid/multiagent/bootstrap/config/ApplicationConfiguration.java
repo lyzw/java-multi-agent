@@ -1422,6 +1422,38 @@ public class ApplicationConfiguration {
                 toolDefs, serverDefs, publishedVersions, transport);
     }
 
+    /**
+     * 远程 HTTP 工具的出站执行器（第三十七批 · 设计文档 §13.1）。
+     *
+     * <p>⚠️ <b>复用 {@code McpEndpointGuard} 是刻意的</b>：
+     * MCP 端点与 HTTP 工具的出站防线必须<b>同口径</b> ——
+     * 「DNS 解析后按实际 IP 判定」「两次解析比对防 rebinding」
+     * 这两条一旦在两处各写一遍，迟早有一处漏掉，
+     * 而漏掉的那处就是「MCP 挡了、HTTP 没挡」的缺口。
+     */
+    @Bean
+    public cn.studykid.multiagent.infrastructure.http.HttpToolExecutor httpToolExecutor(
+            cn.studykid.multiagent.infrastructure.mcp.McpEndpointGuard guard) {
+        return new cn.studykid.multiagent.infrastructure.http.HttpToolExecutor(
+                guard,
+                cn.studykid.multiagent.infrastructure.http.HttpToolOptions.defaults());
+    }
+
+    /**
+     * HTTP-backed 工具解析器（第三十七批 · ADR-011 / 07 §3）。
+     *
+     * <p>⚠️ HTTP 工具<b>不另开执行入口</b>：它们与原生工具、MCP-backed 工具
+     * 共用 {@code ToolInvocationGate} 这一条路径。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.http.HttpToolHandlerProvider httpToolHandlerProvider(
+            cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
+            cn.studykid.multiagent.ports.persistence.PublishedVersionPort publishedVersions,
+            cn.studykid.multiagent.infrastructure.http.HttpToolExecutor executor) {
+        return new cn.studykid.multiagent.infrastructure.http.DbHttpToolHandlerProvider(
+                toolDefs, publishedVersions, executor);
+    }
+
     /** 角色→动作权限端口（P1-T3）。 */
     @Bean
     public cn.studykid.multiagent.ports.security.RolePermissionPort rolePermissionPort() {
