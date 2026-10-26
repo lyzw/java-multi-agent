@@ -1,9 +1,9 @@
 import { useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Button, Form, InputNumber, Space, Tooltip, Typography } from 'antd'
+import { Button, Form, InputNumber, Space, Typography } from 'antd'
 import { BulbOutlined, PlusOutlined } from '@ant-design/icons'
 import { ReadOnlyCatalogPage } from './ReadOnlyCatalogPage'
-import { riskTag, tagList, lifecycleStateCell, timeCell } from './displayBits'
+import { riskTag, tagList, lifecycleStateCell, timeCell, skillPurposeCell } from './displayBits'
 import { getSkillCatalog } from '@/api/adminApi'
 import type { SkillCatalogItem, McpDeclaration } from '@/api/types'
 import { PlatformRegistrationModal } from './PlatformRegistrationModal'
@@ -39,18 +39,10 @@ export function SkillCatalogPage(): JSX.Element {
         { title: 'ID', dataIndex: 'skillId', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
         { title: '名称', dataIndex: 'name', render: (v: string | null) => v ?? '-' },
         {
-          // ⚠️ 描述是「这 Skill 干什么」的第一手信息 —— 目录扫一眼就该知道，
-          //    不必点进详情。故给一列（过长省略 + tooltip 给全）。
-          title: '描述',
+          // ⚠️ 两级描述：1级 purpose 目录扫一眼就该知道（过长省略 + tooltip 给完整两级）。
+          title: '描述用途（1级）',
           dataIndex: 'description',
-          render: (v: string | null) =>
-            v ? (
-              <Tooltip title={v}>
-                <Typography.Text ellipsis style={{ maxWidth: 220 }}>{v}</Typography.Text>
-              </Tooltip>
-            ) : (
-              <Typography.Text type="secondary">-</Typography.Text>
-            ),
+          render: (v: SkillCatalogItem['description']) => skillPurposeCell(v),
         },
         { title: '风险上限', dataIndex: 'riskCeiling', render: (v: string) => riskTag(v) },
         { title: '声明工具', dataIndex: 'declaredTools', render: (v: string[]) => tagList(v) },

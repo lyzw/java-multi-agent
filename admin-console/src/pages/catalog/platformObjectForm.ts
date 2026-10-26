@@ -249,7 +249,11 @@ export interface McpDeclarationFormValue {
 export interface SkillFormValues {
   skillId: string
   name?: string
-  description?: string
+  /** 两级描述（1级 purpose + 2级 usage）—— 表单内部用结构化形态，提交时去空白。 */
+  description?: {
+    purpose?: string
+    usage?: { when?: string; how?: string }[]
+  }
   declaredTools?: string[]
   declaredMcp?: McpDeclarationFormValue[]
   riskCeiling: 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'
@@ -261,7 +265,10 @@ export interface SkillFormValues {
 export function buildSkillSpec(values: SkillFormValues): SpecResult<{
   skillId: string
   name?: string
-  description?: string
+  description?: {
+    purpose: string
+    usage?: { when: string; how: string }[]
+  }
   declaredTools?: string[]
   declaredMcp?: { serverId: string; toolAllowlist?: string[] | null }[]
   riskCeiling: 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'
@@ -303,7 +310,10 @@ export function buildSkillSpec(values: SkillFormValues): SpecResult<{
   const spec: {
     skillId: string
     name?: string
-    description?: string
+    description?: {
+      purpose: string
+      usage?: { when: string; how: string }[]
+    }
     declaredTools?: string[]
     declaredMcp?: { serverId: string; toolAllowlist?: string[] | null }[]
     riskCeiling: 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'
@@ -319,8 +329,36 @@ export function buildSkillSpec(values: SkillFormValues): SpecResult<{
   }
   const name = (values.name ?? '').trim()
   if (name !== '') spec.name = name
-  const description = (values.description ?? '').trim()
-  if (description !== '') spec.description = description
+
+  // 两级描述：purpose 必填（写了一半也要填完才提交）；usage 只收齐 when+how 的条目。
+  const purpose = (values.description?.purpose ?? '').trim()
+  if (purpose !== '') {
+    if (purpose.length > 200) {
+      return { ok: false, error: `描述用途（purpose）超过 200 字上限：${purpose.length} 字` }
+    }
+    const usage: { when: string; how: string }[] = []
+    for (const [i, entry] of (values.description?.usage ?? []).entries()) {
+      const when = (entry.when ?? '').trim()
+      const how = (entry.how ?? '').trim()
+      if (when === '' && how === '') continue // 整行空白 = 用户误点的空行，静默丢弃
+      if (when === '' || how === '') {
+        return { ok: false, error: `使用指引第 ${i + 1} 条：「什么情况」与「用何种操作」必须成对填写` }
+      }
+      if (when.length > 200) {
+        return { ok: false, error: `使用指引第 ${i + 1} 条的「什么情况」超过 200 字上限` }
+      }
+      if (how.length > 1000) {
+        return { ok: false, error: `使用指引第 ${i + 1} 条的「用何种操作」超过 1000 字上限` }
+      }
+      usage.push({ when, how })
+    }
+    if (usage.length > 20) {
+      return { ok: false, error: '使用指引超过 20 条上限' }
+    }
+    spec.description = { purpose, ...(usage.length > 0 ? { usage } : {}) }
+  } else if ((values.description?.usage ?? []).some((e) => `${e.when ?? ''}${e.how ?? ''}`.trim() !== '')) {
+    return { ok: false, error: '填写了使用指引但缺「描述用途」：1级用途清明才谈得上指引' }
+  }
   return { ok: true, spec }
 }
 

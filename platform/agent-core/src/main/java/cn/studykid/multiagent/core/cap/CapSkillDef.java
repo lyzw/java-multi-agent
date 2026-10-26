@@ -13,6 +13,9 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>⚠️ <b>不可变版本行</b>：{@code (id, version)} 为主键。
  *
+ * <p>⚠️ <b>{@code description} 是两级描述</b>（{@link SkillDescription}）：
+ * 1级 purpose 供路由/选型，2级 usage 供选中后执行 —— 描述不是授权。
+ *
  * <p>⚠️ <b>{@code inherits} 在 V1 写入即拒</b>（N1）：DB 层有
  * {@code CHECK (inherits IS NULL)} 兜底；本模型不承载该字段 ——
  * 能读到 {@code inherits IS NULL} 的行说明它本就不存在，
@@ -22,7 +25,7 @@ public record CapSkillDef(
         @NonNull String id,
         int version,
         @Nullable String name,
-        @Nullable String description,
+        @Nullable SkillDescription description,
         @NonNull List<String> declaredTools,
         @NonNull List<McpDeclaration> declaredMcp,
         @NonNull CapabilityRiskLevel riskCeiling,

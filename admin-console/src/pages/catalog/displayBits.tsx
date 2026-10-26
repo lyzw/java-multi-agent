@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { Tag, Tooltip, Typography } from 'antd'
+import { Space, Tag, Tooltip, Typography } from 'antd'
+import type { SkillDescription } from '../../api/types'
 
 /** 风险等级配色（READ 只读 / WRITE_PROFILE 内部写 / WRITE_EXTERNAL 外部写 / UNKNOWN 不可判定） */
 export function riskTag(level: string): ReactNode {
@@ -109,5 +110,61 @@ export function tagList(list: string[], emptyText = '（无）', color?: string)
         <Tag key={v} color={color}>{v}</Tag>
       ))}
     </>
+  )
+}
+
+/**
+ * Skill 两级描述的<b>完整视图</b>（详情页 / 抽屉）。
+ *
+ * <p>1级 purpose = 选型信号（路由为什么选中它）；2级 usage = 执行指引
+ * （命中后按 when → how 操作）。⚠️ <b>描述不是授权</b> —— 这里是给人看的，
+ * 真正进模型上下文的正是这两级（契约 §3.1）。
+ */
+export function skillDescriptionView(
+  description: SkillDescription | null | undefined,
+): ReactNode {
+  const purpose = (description?.purpose ?? '').trim()
+  if (purpose === '') {
+    return <Typography.Text type="secondary">未提供</Typography.Text>
+  }
+  const usage = description?.usage ?? []
+  return (
+    <Space direction="vertical" size="small">
+      <div>
+        <Typography.Text type="secondary">用途（1级）： </Typography.Text>
+        <Typography.Text>{purpose}</Typography.Text>
+      </div>
+      {usage.length > 0 && (
+        <div>
+          <Typography.Text type="secondary">使用指引（2级 · {usage.length} 条）：</Typography.Text>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {usage.map((u, i) => (
+              <li key={i}>
+                当：{u.when}
+                <br />
+                用：{u.how}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Space>
+  )
+}
+
+/**
+ * 目录列表里的「描述用途」列：只展示 1级 purpose（省略 + tooltip 完整两级）。
+ */
+export function skillPurposeCell(
+  description: SkillDescription | null | undefined,
+): ReactNode {
+  const purpose = (description?.purpose ?? '').trim()
+  if (purpose === '') {
+    return <Typography.Text type="secondary">-</Typography.Text>
+  }
+  return (
+    <Tooltip title={<div style={{ minWidth: 240 }}>{skillDescriptionView(description)}</div>}>
+      <Typography.Text ellipsis style={{ maxWidth: 220 }}>{purpose}</Typography.Text>
+    </Tooltip>
   )
 }

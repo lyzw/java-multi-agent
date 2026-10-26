@@ -26,7 +26,7 @@ import { PlatformDeprecateCard } from './PlatformDeprecateCard'
 import { SkillFormFields } from './SkillFormFields'
 import { NEW_OBJECT_SEGMENT, toAllowlistTriState, type SkillFormValues } from './platformObjectForm'
 import { buildSkillPublishRequest } from './platformPublishRequests'
-import { riskTag } from './displayBits'
+import { skillDescriptionView, riskTag } from './displayBits'
 
 /**
  * Skill 详情（第三十四批 · C34-3 · 平台级写通道 · 第三十七批改为「新增走弹窗」）。
@@ -65,7 +65,11 @@ export function SkillDetailPage(): JSX.Element {
       form.setFieldsValue({
         skillId: s.skillId,
         name: s.name ?? '',
-        description: s.description ?? '',
+        // ⚠️ 两级描述按结构回填：1级 purpose 一段；2级 usage 逐条 when→how。
+        description: {
+          purpose: s.description?.purpose ?? '',
+          usage: (s.description?.usage ?? []).map((u) => ({ when: u.when, how: u.how })),
+        },
         declaredTools: [...s.declaredTools],
         // ⚠️ 回填时按三态还原：null ≠ []，不能都塞成 []。
         declaredMcp: s.declaredMcp.map((d) => ({
@@ -180,7 +184,7 @@ export function SkillDetailPage(): JSX.Element {
         <Descriptions bordered column={2} size="small" items={[
           { key: 'id', label: '标识', children: <Typography.Text code>{skill?.skillId ?? id}</Typography.Text> },
           { key: 'name', label: '名称', children: skill?.name ?? '-' },
-          { key: 'desc', label: '描述', children: skill?.description ?? '-' },
+          { key: 'desc', label: '两级描述', children: skillDescriptionView(skill?.description) },
           { key: 'risk', label: '风险上限', children: riskTag(skill?.riskCeiling ?? '') },
           { key: 'caps', label: '必需能力', children: (skill?.requiredCaps ?? []).join('、') || '-' },
           { key: 'version', label: '当前版本', children: <Tag color="blue">v{skill?.version ?? 0}</Tag> },

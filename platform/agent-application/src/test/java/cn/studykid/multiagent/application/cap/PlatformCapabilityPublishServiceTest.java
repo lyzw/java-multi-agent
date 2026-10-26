@@ -190,8 +190,19 @@ class PlatformCapabilityPublishServiceTest {
     }
 
     private static ConfigPublishPayload.SkillSpec skillSpec(String id) {
-        return new ConfigPublishPayload.SkillSpec(id, "技能 " + id, "描述",
+        return new ConfigPublishPayload.SkillSpec(id, "技能 " + id, twoLevelDescription(),
                 List.of("tool-1"), List.of(), "READ", "{}", List.of());
+    }
+
+    /**
+     * 两级描述样例（1级 purpose + 2级 usage 的 when→how），
+     * 用于断言「两级描述随申请单成对透传」。
+     */
+    private static ConfigPublishPayload.SkillDescriptionSpec twoLevelDescription() {
+        return new ConfigPublishPayload.SkillDescriptionSpec("只读查询客户资料",
+                List.of(new ConfigPublishPayload.SkillDescriptionSpec.SkillUsageSpec(
+                        "用户提供客户识别信息",
+                        "调用 tool-1；id 取自用户原文，查无结果如实告知")));
     }
 
     private static ConfigPublishPayload.McpServerSpec mcpSpec(String id) {

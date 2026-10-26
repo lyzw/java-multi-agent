@@ -123,6 +123,11 @@ public record EffectiveClosure(
      * @param paramPolicies  该 Skill 的参数策略（JSON 文本）——
      *                       §4.3「Skill 参数策略仅可进一步收紧」，
      *                       求值时与 Tool 策略取交集
+     * @param description    两级描述（{@link SkillDescription}）——
+     *                       1级 purpose 供路由注入（Tool 列表的选型信号），
+     *                       2级 usage 供执行注入（分场景 when→how 指引）。
+     *                       ⚠️ 可空（存量版本行无结构化描述），
+     *                       闭包固化它是为了「描述改了 = 行为变了」随指纹失效
      */
     public record SkillBinding(
             @NonNull String skillId,
@@ -130,7 +135,21 @@ public record EffectiveClosure(
             @NonNull CapabilityRiskLevel riskCeiling,
             @NonNull String configFingerprint,
             @NonNull List<String> declaredTools,
-            @NonNull String paramPolicies) {
+            @NonNull String paramPolicies,
+            @Nullable SkillDescription description) {
+
+        /**
+         * 兼容构造器（无两级描述）—— 既有构造点不必逐个补参数。
+         */
+        public SkillBinding(@NonNull String skillId,
+                            int version,
+                            @NonNull CapabilityRiskLevel riskCeiling,
+                            @NonNull String configFingerprint,
+                            @NonNull List<String> declaredTools,
+                            @NonNull String paramPolicies) {
+            this(skillId, version, riskCeiling, configFingerprint,
+                    declaredTools, paramPolicies, null);
+        }
     }
 
     /**

@@ -19,8 +19,10 @@ import org.springframework.web.server.ResponseStatusException;
 import cn.studykid.multiagent.api.governance.GovernanceSupport;
 import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
 import cn.studykid.multiagent.application.cap.ConfigPublishPayload;
+import cn.studykid.multiagent.application.cap.ConfigPublishPayload.SkillDescriptionSpec;
 import cn.studykid.multiagent.application.cap.PlatformCapabilityPublishService;
 import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
+import cn.studykid.multiagent.core.cap.SkillDescription;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort;
 import cn.studykid.multiagent.ports.persistence.Page;
@@ -269,13 +271,32 @@ public class PlatformCapabilityController {
                                     d.serverId(), d.toolAllowlist()))
                             .toList();
             return new ConfigPublishPayload.SkillSpec(
-                    spec.skillId(), spec.name(), spec.description(),
+                    spec.skillId(), spec.name(), skillDescription(spec.description()),
                     spec.declaredTools() == null ? List.of() : spec.declaredTools(),
                     declarations,
                     spec.riskCeiling(),
                     spec.paramPolicies() == null ? "{}" : spec.paramPolicies(),
                     spec.requiredCaps() == null ? List.of() : spec.requiredCaps());
         }).toList();
+    }
+
+    /**
+     * API 视图的两级描述 → 载荷草稿（契约 {@code $defs.skillDescription}）。
+     *
+     * <p>⚠️ 约束校验（字数/条数上限）发生在
+     * {@link ConfigPublishPayload.SkillDescriptionSpec} —— 这里只做形状搬运。
+     */
+    private static @Nullable SkillDescriptionSpec skillDescription(
+            SkillDescription description) {
+        if (description == null) {
+            return null;
+        }
+        return new ConfigPublishPayload.SkillDescriptionSpec(
+                description.purpose(),
+                description.usage().stream()
+                        .map(u -> new ConfigPublishPayload.SkillDescriptionSpec.SkillUsageSpec(
+                                u.when(), u.how()))
+                        .toList());
     }
 
     private static List<ConfigPublishPayload.McpServerSpec> mcpServerSpecs(
@@ -324,7 +345,7 @@ public class PlatformCapabilityController {
     public record PlatformSkillSpec(
             @NonNull String skillId,
             @Nullable String name,
-            @Nullable String description,
+            @Nullable SkillDescription description,
             @Nullable List<String> declaredTools,
             @Nullable List<PlatformMcpDeclarationSpec> declaredMcp,
             @NonNull String riskCeiling,

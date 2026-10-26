@@ -381,7 +381,7 @@ public record ConfigPublishPayload(
      */
     public record SkillSpec(@NonNull String skillId,
                              @Nullable String name,
-                             @Nullable String description,
+                             @Nullable SkillDescriptionSpec description,
                              @NonNull List<String> declaredTools,
                              @NonNull List<McpDeclarationSpec> declaredMcp,
                              @NonNull String riskCeiling,
@@ -401,6 +401,55 @@ public record ConfigPublishPayload(
             declaredTools = declaredTools == null ? List.of() : List.copyOf(declaredTools);
             declaredMcp = declaredMcp == null ? List.of() : List.copyOf(declaredMcp);
             requiredCaps = requiredCaps == null ? List.of() : List.copyOf(requiredCaps);
+        }
+    }
+
+    /**
+     * Skill 两级描述草稿（契约 {@code $defs.skillDescription}）。
+     *
+     * <p>⚠️ <b>约束即发布闸门</b>（与 schema 同源）：
+     * purpose ≤200 字（1级，选型信号必须是一句话）；usage ≤20 条，
+     * 每条 when ≤200 字 / how ≤1000 字 ——的超限在这里<b>拒绝发布</b>，不在面上放行。
+     */
+    public record SkillDescriptionSpec(@NonNull String purpose,
+                                       @NonNull List<SkillUsageSpec> usage) {
+
+        public SkillDescriptionSpec {
+            if (purpose == null || purpose.isBlank()) {
+                throw new IllegalArgumentException("description.purpose 不能为空");
+            }
+            purpose = purpose.trim();
+            if (purpose.length() > 200) {
+                throw new IllegalArgumentException(
+                        "description.purpose 超过 200 字上限: " + purpose.length() + " 字");
+            }
+            usage = usage == null ? List.of() : List.copyOf(usage);
+            if (usage.size() > 20) {
+                throw new IllegalArgumentException("description.usage 超过 20 条上限: " + usage.size() + " 条");
+            }
+        }
+
+        /** 一条分场景操作指引：when = 什么情况，how = 用何种操作。 */
+        public record SkillUsageSpec(@NonNull String when, @NonNull String how) {
+
+            public SkillUsageSpec {
+                if (when == null || when.isBlank()) {
+                    throw new IllegalArgumentException("description.usage[].when 不能为空");
+                }
+                when = when.trim();
+                if (when.length() > 200) {
+                    throw new IllegalArgumentException(
+                            "description.usage[].when 超过 200 字上限: " + when.length() + " 字");
+                }
+                if (how == null || how.isBlank()) {
+                    throw new IllegalArgumentException("description.usage[].how 不能为空");
+                }
+                how = how.trim();
+                if (how.length() > 1000) {
+                    throw new IllegalArgumentException(
+                            "description.usage[].how 超过 1000 字上限: " + how.length() + " 字");
+                }
+            }
         }
     }
 

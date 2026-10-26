@@ -192,11 +192,40 @@ export interface McpDeclaration {
   toolAllowlist: string[] | null
 }
 
+/**
+ * Skill 两级描述的一条分场景操作指引（2级）。
+ *
+ * 1级 purpose 是「选型信号」（路由/挑工具首先看到），
+ * 2级 usage 是「被命中后注入上下文的操作指引」（when = 什么情况，how = 用何种操作）。
+ * ⚠️ 条目间应互斥或有明确优先级，禁止「其他情况都用这条」式兜底条目。
+ */
+export interface SkillUsageItem {
+  /** 触发条件（≤200 字，可被模型从对话上下文直接判断）。 */
+  when: string
+  /** 操作步骤（≤1000 字，仅允许引导已声明能力；外部写入须写明确认与回报）。 */
+  how: string
+}
+
+/**
+ * Skill 两级描述（契约 $defs.skillDescription）。
+ *
+ * ⚠️ **描述不是授权**：两级内容只引导 `declaredTools` / `declaredMcp`
+ * 已声明的能力，授权真相只有声明列表与 `riskCeiling`；
+ * 描述与声明冲突时按声明执行（fail-closed）。
+ */
+export interface SkillDescription {
+  /** 1级 · 用途简述（≤200 字，一句话说清做什么、适用什么请求）。 */
+  purpose: string
+  /** 2级 · 分场景操作指引（≤20 条，可空）。 */
+  usage?: SkillUsageItem[]
+}
+
 /** Skill 目录项（GET /api/cap/catalog/skills · SkillResponse，平台级只读） */
 export interface SkillCatalogItem {
   skillId: string
   name: string | null
-  description: string | null
+  /** 两级描述（1级 purpose + 2级 usage）；存量行可能为 null。 */
+  description: SkillDescription | null
   declaredTools: string[]
   declaredMcp: McpDeclaration[]
   riskCeiling: string
@@ -427,7 +456,8 @@ export interface PlatformMcpDeclarationSpec {
 export interface PlatformSkillSpec {
   skillId: string
   name?: string
-  description?: string
+  /** 两级描述（1级 purpose + 2级 usage）——改描述 = 内容变更（重算指纹）。 */
+  description?: SkillDescription
   declaredTools?: string[]
   declaredMcp?: PlatformMcpDeclarationSpec[]
   riskCeiling: CapabilityRiskLevel

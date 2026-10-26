@@ -81,6 +81,25 @@ class McpBinding:
 
 
 @dataclass(frozen=True)
+class SkillUsage:
+    """一条分场景操作指引（2级）：when = 什么情况，how = 用何种操作。"""
+    when: str
+    how: str
+
+
+@dataclass(frozen=True)
+class SkillDescription:
+    """两级描述（与契约 skill.schema.json 的 skillDescription 同构）。
+
+    purpose（1级）供路由/选型；usage（2级）供选中后注入上下文执行。
+    描述不是授权：usage 只能引导 declaredTools / declaredMcp 已声明的能力，
+    与声明冲突时以声明为准（fail-closed）。
+    """
+    purpose: str
+    usage: tuple = field(default_factory=tuple)   # tuple[SkillUsage]，可空
+
+
+@dataclass(frozen=True)
 class McpServer:
     id: str
     transport: str
@@ -101,6 +120,7 @@ class Skill:
     inherits: tuple = field(default_factory=tuple)
     required_caps: tuple = field(default_factory=tuple)
     namespace: str = "platform"
+    description: Optional[SkillDescription] = None
 
 
 @dataclass(frozen=True)

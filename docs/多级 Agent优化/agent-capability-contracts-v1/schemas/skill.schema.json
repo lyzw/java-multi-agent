@@ -36,8 +36,8 @@
       "maxLength": 200
     },
     "description": {
-      "type": "string",
-      "maxLength": 4000
+      "$ref": "#/$defs/skillDescription",
+      "description": "两级描述（Skill 的核心配置，不是可有可无的注释）。\n\n⚠️ 描述不是授权：两级内容都只能引导模型使用 declaredTools / declaredMcp 已声明的能力，不得引入新权限；与实际声明冲突时以声明为准（fail-closed）。\n⚠️ purpose 与 usage 均计入 configFingerprint：改描述 = 改内容，需要重算指纹。"
     },
     "status": {
       "$ref": "common.schema.json#/$defs/lifecycleStatus"
@@ -107,6 +107,47 @@
     "updatedAt": {
       "type": "string",
       "format": "date-time"
+    }
+  },
+  "$defs": {
+    "skillDescription": {
+      "title": "SkillDescription",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purpose"],
+      "properties": {
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "1级 · 用途简述。消费者是路由/选择环节：Agent 或路由策略靠这句话判断「这类任务该不该选中本 Skill」。必须一句说清做什么、适用于什么请求；禁止在此展开操作步骤、参数细节或安全承诺（选型阶段既看不到也不需要）。保持主动语态、点名关键实体；不要写成营销文案或堆砌关键词。"
+        },
+        "usage": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["when", "how"],
+            "properties": {
+              "when": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "触发条件（2级之一）。输入条件应可被模型从对话/任务上下文中直接判断，如「用户提供了明确的客户姓名或工单号」「请求涉及修改资料」。禁止把 when 写成泛化兜底（如「其他情况都用这条」）——兜底交给模型判断，不废条目。"
+              },
+              "how": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000,
+                "description": "操作步骤（2级之二）。给出 when 命中后的具体动作：调用哪个 declaredTools / declaredMcp 工具、按什么顺序、参数从哪来（如 id 取自上一步结果而非用户原文）、结果如何回汇报给用户。仅允许引导已声明能力；涉及外部写入（WRITE_PROFILE / WRITE_EXTERNAL）时必须写明确认与回报告要求。"
+              }
+            },
+            "description": "一条分场景操作指引：when 描述「什么情况」，how 描述「用何种操作」。条目之间应互斥或给出优先顺序，避免模型自选时产生歧义。"
+          }
+        }
+      }
     }
   }
 }

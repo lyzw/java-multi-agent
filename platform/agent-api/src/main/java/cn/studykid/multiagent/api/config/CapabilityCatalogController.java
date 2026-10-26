@@ -22,6 +22,7 @@ import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef.McpDeclaration;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.ConfigLifecycleState;
+import cn.studykid.multiagent.core.cap.SkillDescription;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
 import cn.studykid.multiagent.ports.persistence.CapSkillDefPort;
@@ -342,7 +343,8 @@ public class CapabilityCatalogController {
     public record SkillResponse(
             @NonNull String skillId,
             @Nullable String name,
-            @Nullable String description,
+            /** 两级描述（1级 purpose + 2级 usage）—— 描述不是授权。 */
+            @Nullable SkillDescription description,
             @NonNull List<String> declaredTools,
             @NonNull List<McpDeclarationResponse> declaredMcp,
             @NonNull String riskCeiling,

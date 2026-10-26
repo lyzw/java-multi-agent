@@ -23,6 +23,7 @@ import cn.studykid.multiagent.core.cap.ConfigLifecycleState;
 import cn.studykid.multiagent.core.cap.ConfigPointer;
 import cn.studykid.multiagent.core.cap.ConfigPublishCommand;
 import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
+import cn.studykid.multiagent.core.cap.SkillDescription;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.McpTrustTier;
 import cn.studykid.multiagent.core.cap.ReasonCode;
@@ -352,13 +353,14 @@ public class PlatformCapabilityPublishService {
                 declarations.add(new CapSkillDef.McpDeclaration(
                         declaration.serverId(), declaration.toolAllowlist()));
             }
+            SkillDescription desc = skillDescription(spec.description());
             CapSkillDef draft = new CapSkillDef(spec.skillId(), version, spec.name(),
-                    spec.description(), spec.declaredTools(), declarations,
+                    desc, spec.declaredTools(), declarations,
                     parseRisk(spec.riskCeiling()), spec.paramPolicies(), spec.requiredCaps(),
                     "pending", 1, now, null);
             String fingerprint = CapObjectFingerprint.of(draft);
             skillRows.add(new CapSkillDef(spec.skillId(), version, spec.name(),
-                    spec.description(), spec.declaredTools(), declarations,
+                    desc, spec.declaredTools(), declarations,
                     parseRisk(spec.riskCeiling()), spec.paramPolicies(), spec.requiredCaps(),
                     fingerprint, 1, now, null));
         }
@@ -383,6 +385,23 @@ public class PlatformCapabilityPublishService {
         return new ConfigPublishCommand(ConfigRelease.Scope.PLATFORM, null, baseline,
                 requesterId, approverId, null,
                 toolRows, skillRows, serverRows, List.of(), null, List.of(), List.of());
+    }
+
+    /**
+     * 载荷草稿两级描述 → 领域模型（形状搬运；字数/条数约束已在
+     * {@link ConfigPublishPayload.SkillDescriptionSpec} 发布闸门处执行）。
+     *
+     * @param spec 载荷草稿（可为 null = 未配置两级描述）
+     */
+    private static @Nullable SkillDescription skillDescription(
+            ConfigPublishPayload.SkillDescriptionSpec spec) {
+        if (spec == null) {
+            return null;
+        }
+        return new SkillDescription(spec.purpose(),
+                spec.usage().stream()
+                        .map(u -> new SkillDescription.SkillUsage(u.when(), u.how()))
+                        .toList());
     }
 
     /**

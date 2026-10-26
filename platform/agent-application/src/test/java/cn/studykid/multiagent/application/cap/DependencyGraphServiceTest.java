@@ -110,7 +110,7 @@ class DependencyGraphServiceTest {
 
     private static CapSkillDef skill(String id, List<String> declaredTools,
                                      List<McpDeclaration> declaredMcp, boolean published) {
-        return new CapSkillDef(id, 2, id + "-name", id + " desc", declaredTools, declaredMcp,
+        return new CapSkillDef(id, 2, id + "-name", null, declaredTools, declaredMcp,
                 CapabilityRiskLevel.READ, "{}", List.of(), "fp-" + id, 1, NOW,
                 published ? NOW : null);
     }

@@ -245,7 +245,7 @@ public class PermissionResolver implements ClosureResolver {
 
             skills.add(new EffectiveClosure.SkillBinding(
                     skillId, skillVersion, ceiling, skill.configFingerprint(),
-                    declaredTools, skill.paramPolicies()));
+                    declaredTools, skill.paramPolicies(), skill.description()));
         }
 
         // ⚠️ 编排声明在**闭包构建期**解析一次，并固化进闭包（MA-T15 / MA-T18）：

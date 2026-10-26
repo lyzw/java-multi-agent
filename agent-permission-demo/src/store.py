@@ -11,7 +11,8 @@ import os
 from typing import Dict, Optional
 
 from .model import (
-    Agent, McpBinding, McpServer, ParamPolicy, RiskLevel, Skill, Tool,
+    Agent, McpBinding, McpServer, ParamPolicy, RiskLevel, Skill,
+    SkillDescription, SkillUsage, Tool,
 )
 
 
@@ -84,6 +85,13 @@ class ConfigStore:
                     inherits=tuple(s.get("inherits", [])),
                     required_caps=tuple(s.get("requiredCaps", [])),
                     namespace=s.get("namespace", "platform"),
+                    description=(
+                        SkillDescription(
+                            purpose=d["purpose"],
+                            usage=tuple(SkillUsage(u["when"], u["how"]) for u in d.get("usage", [])),
+                        )
+                        if (d := s.get("description")) else None
+                    ),
                 )
         with open(os.path.join(config_dir, "agents.json"), encoding="utf-8") as f:
             for a in json.load(f)["agents"]:
@@ -128,11 +136,17 @@ class ConfigStore:
                           sorted(agent.capability_tags), json.dumps(agent.overrides, sort_keys=True)))
         skill = self.skills.get(skill_id)
         if skill is not None:
+            # 两级描述计入指纹（契约 §3.1：改描述 = 内容变更）
+            desc = skill.description
             parts.append(("skill", skill.id, skill.risk_ceiling.value,
                           sorted(skill.declared_tools),
                           [(b.server_id, sorted(b.tool_allowlist) if b.tool_allowlist else None)
                            for b in skill.declared_mcp],
-                          sorted(skill.inherits), sorted(skill.required_caps)))
+                          sorted(skill.inherits), sorted(skill.required_caps),
+                          desc.purpose if desc is not None else None,
+                          json.dumps([(u.when, u.how) for u in desc.usage],
+                                     ensure_ascii=False, sort_keys=True)
+                          if desc is not None else None))
         if tool_id is not None:
             t = self.tools.get(tool_id)
             if t is not None:

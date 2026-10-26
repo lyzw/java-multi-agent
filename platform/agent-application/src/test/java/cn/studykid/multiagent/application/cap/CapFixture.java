@@ -92,7 +92,7 @@ final class CapFixture {
                                    @NonNull List<String> declaredTools,
                                    @NonNull List<CapSkillDef.McpDeclaration> declaredMcp,
                                    @NonNull String paramPolicies) {
-        skills.put(key(id, version), new CapSkillDef(id, version, id, id + " desc",
+                        skills.put(key(id, version), new CapSkillDef(id, version, id, null,
                 declaredTools, declaredMcp, ceiling, paramPolicies, List.of(),
                 "fp-skill-" + id + "-" + version, 1, Instant.EPOCH,
                 Instant.EPOCH));

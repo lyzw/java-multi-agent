@@ -22,6 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.api.security.PlatformSecurity;
 import cn.studykid.multiagent.application.cap.ConfigPublishPayload;
+import cn.studykid.multiagent.application.cap.ConfigPublishPayload.SkillDescriptionSpec;
 import cn.studykid.multiagent.application.cap.ConfigPublishRejectedException;
 import cn.studykid.multiagent.application.cap.PlatformCapabilityPublishService;
 import cn.studykid.multiagent.core.cap.CapHttpToolConfig;
@@ -30,6 +31,7 @@ import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.ConfigPointer;
 import cn.studykid.multiagent.core.cap.ConfigLifecycleState;
+import cn.studykid.multiagent.core.cap.SkillDescription;
 import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
 import cn.studykid.multiagent.application.cap.ConfigLifecycleService;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort;
@@ -493,7 +495,9 @@ public class PlatformCapabilityConsoleController {
     }
 
     public record SkillDto(@NonNull String skillId, @Nullable String name,
-                           @Nullable String description, @NonNull List<String> declaredTools,
+                           /** 两级描述（1级 purpose + 2级 usage）—— 描述不是授权。 */
+                           @Nullable SkillDescription description,
+                           @NonNull List<String> declaredTools,
                            @NonNull List<McpDeclarationDto> declaredMcp,
                            @NonNull String riskCeiling, @NonNull String paramPolicies,
                            @NonNull List<String> requiredCaps, int version, int schemaVersion,
@@ -631,9 +635,24 @@ public class PlatformCapabilityConsoleController {
                 @Nullable List<SkillSpecView> views) {
             if (views == null) return List.of();
             return views.stream().map(v -> new ConfigPublishPayload.SkillSpec(
-                    v.skillId(), v.name(), v.description(), v.declaredTools(),
+                    v.skillId(), v.name(), skillDescriptionSpec(v.description()),
+                    v.declaredTools(),
                     declaredMcpOf(v.declaredMcp()), v.riskCeiling(), v.paramPolicies(),
                     v.requiredCaps())).toList();
+        }
+
+        /** API 视图两级描述 → 载荷草稿（约束校验在 {@code SkillDescriptionSpec}）。 */
+        private static @Nullable SkillDescriptionSpec
+        skillDescriptionSpec(SkillDescription d) {
+            if (d == null) {
+                return null;
+            }
+            return new ConfigPublishPayload.SkillDescriptionSpec(
+                    d.purpose(),
+                    d.usage().stream()
+                            .map(u -> new ConfigPublishPayload.SkillDescriptionSpec.SkillUsageSpec(
+                                    u.when(), u.how()))
+                            .toList());
         }
 
         private static List<ConfigPublishPayload.McpDeclarationSpec> declaredMcpOf(
@@ -662,7 +681,8 @@ public class PlatformCapabilityConsoleController {
     }
 
     public record SkillSpecView(@Nullable String skillId, @Nullable String name,
-                                @Nullable String description, @Nullable List<String> declaredTools,
+                                @Nullable SkillDescription description,
+                                @Nullable List<String> declaredTools,
                                 @Nullable List<McpDeclarationSpecView> declaredMcp,
                                 @Nullable String riskCeiling, @Nullable String paramPolicies,
                                 @Nullable List<String> requiredCaps) {

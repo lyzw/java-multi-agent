@@ -117,7 +117,7 @@ class CapabilityCatalogControllerTest {
         CapabilityCatalogController c = controller();
         when(skillDefs.findLatestPublished("skill-1")).thenReturn(Optional.of(
                 new cn.studykid.multiagent.core.cap.CapSkillDef(
-                        "skill-1", 1, "技能", "描述",
+                        "skill-1", 1, "技能", null,
                         List.of("tool-1", "tool-missing"),
                         List.of(new cn.studykid.multiagent.core.cap.CapSkillDef.McpDeclaration(
                                 "mcp-1", null),

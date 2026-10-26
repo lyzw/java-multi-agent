@@ -49,9 +49,7 @@ export function SkillFormFields({ isRegistration }: SkillFormFieldsProps): JSX.E
       <Form.Item name="name" label="名称">
         <Input placeholder="可读名称（可选）" />
       </Form.Item>
-      <Form.Item name="description" label="描述">
-        <Input.TextArea rows={2} />
-      </Form.Item>
+      <DescriptionTwoLevelFields />
       <Form.Item name="riskCeiling" label="风险上限（riskCeiling）" rules={[{ required: true }]}>
         <Select
           options={[
@@ -99,6 +97,114 @@ export function SkillFormFields({ isRegistration }: SkillFormFieldsProps): JSX.E
         <PolicyListEditor value={policies.value} onChange={policies.onChange} />
       </Form.Item>
     </>
+  )
+}
+
+/**
+ * 两级描述字段区（契约 $defs.skillDescription）。
+ *
+ * <p><b>1级 purpose</b> 是「选型信号」：Agent 靠这句话判断该不该用本 Skill，
+ * 必须一句话讲清做什么、适用什么请求（≤200 字）。
+ * <b>2级 usage</b> 是「执行指引」：分场景条目 when → how，
+ * 写明调用哪个已声明工具、什么顺序、参数从哪来（≤20 条）。
+ *
+ * <p>⚠️ **描述不是授权**：usage 只能引导已声明能力（declaredTools / declaredMcp）。
+ * ⚠️ 禁止「其他情况都用这条」式兜底条目 —— 兜底交给模型判断。
+ */
+function DescriptionTwoLevelFields(): JSX.Element {
+  return (
+    <>
+      <Form.Item
+        name={['description', 'purpose']}
+        label="描述用途（1级 purpose）"
+        rules={[
+          {
+            validator: (_rule, value: string | undefined) => {
+              const text = (value ?? '').trim()
+              if (text.length > 200) {
+                return Promise.reject(`超过 200 字上限（当前 ${text.length} 字）`)
+              }
+              return Promise.resolve()
+            },
+          },
+        ]}
+        extra="一句话说清做什么、适用什么请求（≤200 字）。描述不是授权：只能引导已声明能力。"
+      >
+        <Input.TextArea
+          rows={2}
+          placeholder="如：只读查询学生画像与薄弱点，不做任何写入"
+          maxLength={200}
+          showCount
+        />
+      </Form.Item>
+      <Form.Item
+        label="使用指引（2级 usage · 可选）"
+        extra="分场景条目：当〈什么情况〉→〈用何种操作〉。条目间应互斥或有明确优先级，禁止兜底条目。"
+        style={{ marginBottom: 0 }}
+      />
+      <Form.List name={['description', 'usage']}>
+        {(fields, { add, remove }) => (
+          <div style={{ margin: '0 0 24px' }}>
+            {fields.map((field) => (
+              <SkillUsageRow
+                key={field.key}
+                field={field}
+                onRemove={() => remove(field.name)}
+              />
+            ))}
+            <Button
+              onClick={() => add({ when: '', how: '' })}
+              disabled={fields.length >= 20}
+            >
+              添加使用指引（{fields.length}/20）
+            </Button>
+          </div>
+        )}
+      </Form.List>
+    </>
+  )
+}
+
+/** 一条 2级使用指引（when + how 成对编辑）。 */
+function SkillUsageRow({
+  field,
+  onRemove,
+}: {
+  field: { name: number; key: number }
+  onRemove: () => void
+}): JSX.Element {
+  return (
+    <Space align="baseline" wrap style={{ margin: '8px 0' }}>
+      <Form.Item
+        {...field}
+        name={[field.name, 'when']}
+        label="当（什么情况）"
+        extra="≤200 字，须可从对话上下文直接判断"
+        rules={[{ whitespace: true, message: '不能全是空白' }]}
+      >
+        <Input.TextArea
+          rows={1}
+          placeholder="如：需要回答学生当前水平或薄弱知识点"
+          maxLength={200}
+          style={{ width: 320 }}
+        />
+      </Form.Item>
+      <Form.Item
+        {...field}
+        name={[field.name, 'how']}
+        label="用（何种操作）"
+        extra="≤1000 字：调用哪个已声明工具、什么顺序、参数从哪来、结果如何汇报"
+        rules={[{ whitespace: true, message: '不能全是空白' }]}
+      >
+        <Input.TextArea
+          rows={2}
+          placeholder="如：调用 get_student_profile；studentId 以对话中确认过的 id 为准，查无结果如实告知"
+          maxLength={1000}
+          style={{ width: 480 }}
+        />
+      </Form.Item>
+      <Button danger onClick={onRemove}>移除</Button>
+    </Space>
   )
 }
 

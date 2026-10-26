@@ -3,7 +3,15 @@
   "id": "skill_customer_lookup",
   "tenantId": "tenant_001",
   "name": "Customer Lookup",
-  "description": "只读查询客户资料",
+  "description": {
+    "purpose": "只读查询客户资料",
+    "usage": [
+      {
+        "when": "用户提供客户姓名、手机号或工单号且明确想查该客户信息",
+        "how": "调用 tool_customer_get；id 一律取自对话中用户给出的标识原文，不得凭上下文猜测补全；查无结果时如实告知，不携带任何历史记录重查。"
+      }
+    ]
+  },
   "status": "DRAFT",
   "namespace": "tenant",
   "declaredTools": [

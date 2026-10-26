@@ -3,6 +3,15 @@
     {
       "id": "student_profile_reader",
       "name": "学生画像读取",
+      "description": {
+        "purpose": "只读查询学生画像与薄弱点，不做任何写入",
+        "usage": [
+          {
+            "when": "需要回答学生当前水平、薄弱知识点或画像概览的问题",
+            "how": "调用 get_student_profile；studentId 以对话中确认过的 id 为准，不得从历史上下文推测；无画像时如实告知无数据，不降级到其他来源。"
+          }
+        ]
+      },
       "declaredTools": ["get_student_profile"],
       "declaredMcp": [],
       "riskCeiling": "READ",
@@ -14,6 +23,15 @@
     {
       "id": "weakness_recorder",
       "name": "薄弱点记录",
+      "description": {
+        "purpose": "向学生资料写入薄弱点记录",
+        "usage": [
+          {
+            "when": "对话中明确出现新的知识掌握不足，且确需更新学生画像",
+            "how": "调用 record_weakness，参数须来自本条对话中可核实的依据；写入前向用户复述将要记录的薄弱点并获确认；已存在的等价记录不重复写入，结果回报用户。"
+          }
+        ]
+      },
       "declaredTools": ["record_weakness"],
       "declaredMcp": [],
       "riskCeiling": "WRITE_PROFILE",
@@ -25,6 +43,15 @@
     {
       "id": "notifier",
       "name": "通知",
+      "description": {
+        "purpose": "经 notify_mcp 对外发送邮件通知",
+        "usage": [
+          {
+            "when": "用户明确要求通知（如发给家长或老师），且收件信息已在对话中给出",
+            "how": "调用 send_mail；收件人与正文以用户确认为准，正文涉及学生画像摘要时先脱敏并请用户确认内容；发送结果须回报用户，失败时如实说明不再重发。"
+          }
+        ]
+      },
       "declaredMcp": [{ "serverId": "notify_mcp", "toolAllowlist": ["send_mail"] }],
       "declaredTools": [],
       "riskCeiling": "WRITE_EXTERNAL",
@@ -35,7 +62,16 @@
     },
     {
       "id": "composite_tutor",
-      "name": "组合导师（继承 student_profile_reader）",
+      "name": "组合导师",
+      "description": {
+        "purpose": "组合导师：先读学生画像，再按画像结论记录薄弱点",
+        "usage": [
+          {
+            "when": "辅导过程中需要先了解学生画像，之后才决定是否记录薄弱点",
+            "how": "先用继承自 student_profile_reader 的 get_student_profile 读取画像，再视结论决定是否调用 record_weakness；两步须针对同一 studentId，不得混用不同学生的数据。"
+          }
+        ]
+      },
       "declaredTools": ["record_weakness"],
       "declaredMcp": [],
       "riskCeiling": "WRITE_PROFILE",

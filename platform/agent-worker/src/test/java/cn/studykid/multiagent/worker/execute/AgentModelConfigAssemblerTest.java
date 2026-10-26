@@ -2,6 +2,7 @@ package cn.studykid.multiagent.worker.execute;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
@@ -58,15 +59,16 @@ class AgentModelConfigAssemblerTest {
         }
     }
 
-    /** 闭包替身：可指定该 Agent 自己的工具绑定。 */
+    /** 闭包替身：可指定该 Agent 自己的工具绑定与 Skill 绑定（含两级描述）。 */
     private static final class ScriptedClosureResolver implements ClosureResolver {
         List<EffectiveClosure.ToolBinding> tools = List.of();
+        List<EffectiveClosure.SkillBinding> skills = List.of();
 
         @Override
         public @NonNull EffectiveClosure resolve(@NonNull String tenantId,
                                                  @NonNull String agentId,
                                                  int agentVersion) {
-            return new EffectiveClosure(agentId, agentVersion, List.of(), tools,
+            return new EffectiveClosure(agentId, agentVersion, skills, tools,
                     List.of());
         }
 
@@ -242,5 +244,97 @@ class AgentModelConfigAssemblerTest {
                 .as("⚠️ 闭包坏掉只是「模型看不到那些工具」，不该让整个 Agent 全瘫")
                 .isPresent();
         assertThat(settings.get().toolSchemas()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("✅ 两级描述落地：1级 purpose 进工具 description，2级 usage 进系统提示")
+    void twoLevelDescriptionFlowsIntoToolsAndPrompt() {
+        ScriptedAgentQuery query = new ScriptedAgentQuery();
+        query.definition = """
+                {"modelRef":"model-1","systemPrompt":"你是辅导助手"}
+                """;
+        ScriptedClosureResolver closure = new ScriptedClosureResolver();
+        closure.skills = List.of(new EffectiveClosure.SkillBinding(
+                "skill-a", 1,
+                cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
+                "fp-skill-a", List.of("tool-a"), "[]",
+                new cn.studykid.multiagent.core.cap.SkillDescription("只读查询学生画像",
+                        List.of(new cn.studykid.multiagent.core.cap.SkillDescription.SkillUsage(
+                                "用户提供了学生标识",
+                                "调用 tool-a；id 取自用户原文，不得凭上下文补全")))));
+        closure.tools = List.of(new EffectiveClosure.ToolBinding(
+                "tool-a", 1, cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
+                cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
+                "fp", "{}", null, null));
+
+        var settings = assembler(query, closure).assemble(TENANT, AGENT, 1);
+
+        assertThat(settings).isPresent();
+        // 1级：模型在「挑工具」时首先看到的是所属 Skill 的 purpose（选型信号）
+        @SuppressWarnings("unchecked")
+        Map<String, Object> toolSchema =
+                (Map<String, Object>) settings.get().toolSchemas().get("tool-a");
+        assertThat(toolSchema.get("description"))
+                .as("1级 purpose = 工具的模型可见选型信号（不再只给工具名）")
+                .isEqualTo("只读查询学生画像");
+        // 2级：Skill 被命中后指令注入系统提示（when → how）
+        String prompt = settings.get().systemPrompt();
+        assertThat(prompt)
+                .startsWith("你是辅导助手")
+                .contains("技能使用指引")
+                .contains("当 用户提供了学生标识")
+                .contains("调用 tool-a；id 取自用户原文，不得凭上下文补全");    }
+
+    @Test
+    @DisplayName("✅ 没有 2级 usage 的 Skill → 提示词一字不改（向后兼容存量行）")
+    void skillsWithoutUsageLeavePromptUntouched() {
+        ScriptedAgentQuery query = new ScriptedAgentQuery();
+        query.definition = """
+                {"modelRef":"model-1","systemPrompt":"你是辅导助手"}
+                """;
+        ScriptedClosureResolver closure = new ScriptedClosureResolver();
+        closure.skills = List.of(new EffectiveClosure.SkillBinding(
+                "skill-a", 1,
+                cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
+                "fp-skill-a", List.of("tool-a"), "[]",
+                new cn.studykid.multiagent.core.cap.SkillDescription(
+                        "只读查询学生画像", List.of())));
+        closure.tools = List.of(new EffectiveClosure.ToolBinding(
+                "tool-a", 1, cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
+                cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
+                "fp", "{}", null, null));
+
+        var settings = assembler(query, closure).assemble(TENANT, AGENT, 1);
+
+        assertThat(settings).isPresent();
+        assertThat(settings.get().systemPrompt()).isEqualTo("你是辅导助手");
+        // 1级照样进工具 description
+        @SuppressWarnings("unchecked")
+        Map<String, Object> toolSchema =
+                (Map<String, Object>) settings.get().toolSchemas().get("tool-a");
+        assertThat(toolSchema.get("description")).isEqualTo("只读查询学生画像");
+    }
+
+    @Test
+    @DisplayName("✅ Skill 无两级描述（存量行）→ 工具描述回退工具名（旧行为）")
+    void legacySkillFallsBackToToolName() {
+        ScriptedClosureResolver closure = new ScriptedClosureResolver();
+        closure.skills = List.of(new EffectiveClosure.SkillBinding(
+                "skill-a", 1,
+                cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
+                "fp-skill-a", List.of("tool-a"), "[]"));
+        closure.tools = List.of(new EffectiveClosure.ToolBinding(
+                "tool-a", 1, cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
+                cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
+                "fp", "{}", null, null));
+
+        var settings = assembler(new ScriptedAgentQuery(), closure)
+                .assemble(TENANT, AGENT, 1);
+
+        assertThat(settings).isPresent();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> toolSchema =
+                (Map<String, Object>) settings.get().toolSchemas().get("tool-a");
+        assertThat(toolSchema.get("description")).isEqualTo("工具");
     }
 }

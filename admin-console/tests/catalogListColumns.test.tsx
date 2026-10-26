@@ -82,7 +82,7 @@ const SKILLS = [
   {
     skillId: 'sk-live',
     name: '订单分析',
-    description: '分析订单并给出结论',
+    description: { purpose: '分析订单并给出结论', usage: [] },
     declaredTools: ['tool-live'],
     declaredMcp: [{ serverId: 'srv-1', toolAllowlist: null }],
     riskCeiling: 'READ',
@@ -97,7 +97,7 @@ const SKILLS = [
   {
     skillId: 'sk-dead',
     name: '旧的对账技能',
-    description: '历史遗留',
+    description: { purpose: '历史遗留', usage: [] },
     declaredTools: [],
     declaredMcp: [],
     riskCeiling: 'WRITE_EXTERNAL',
@@ -192,7 +192,7 @@ describe('Skill 目录 · 列表列', () => {
     renderPage(<SkillCatalogPage />)
     await waitFor(() => expect(screen.getAllByText('sk-live').length).toBeGreaterThan(0))
 
-    expect(screen.getAllByText('描述').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('描述用途（1级）').length).toBeGreaterThan(0)
     expect(screen.getAllByText('状态').length).toBeGreaterThan(0)
     expect(screen.getAllByText('发布时间').length).toBeGreaterThan(0)
     // ⚠️ 描述是「这 Skill 干什么」的第一手信息，扫目录就该看到
