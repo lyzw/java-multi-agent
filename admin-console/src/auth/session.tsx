@@ -14,7 +14,7 @@ import {
   willExpireSoon,
   type StoredSession,
 } from '@/auth/tokenStorage'
-import { getRoles } from '@/api/adminApi'
+import { getPlatformMe } from '@/api/adminApi'
 
 export type RolesStatus = 'unknown' | 'known'
 
@@ -88,8 +88,9 @@ export function SessionProvider({ children }: { children: ReactNode }): JSX.Elem
     if (!force && backfillRef.current === cur.accessToken) return
     backfillRef.current = cur.accessToken
     try {
-      const resp = await getRoles()
-      const next: StoredSession = { ...cur, roles: resp.roles }
+      // 平台身份域：角色回补走 GET /api/platform/v1/auth/me（MeResponse.roles）
+      const me = await getPlatformMe()
+      const next: StoredSession = { ...cur, roles: me.roles }
       storeSession(next)
       setSession(next)
       setRolesStatus('known')

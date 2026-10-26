@@ -1,20 +1,10 @@
 import type { ReactNode } from 'react'
 import {
-  DashboardOutlined,
   ApartmentOutlined,
-  RobotOutlined,
-  ToolOutlined,
-  BulbOutlined,
-  ApiOutlined,
-  SendOutlined,
-  ShareAltOutlined,
-  FileTextOutlined,
-  MonitorOutlined,
   FileProtectOutlined,
-  SettingOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
-import { PLATFORM_SCOPE_ROLES, TENANT_SCOPE_ROLES, type Role } from '@/config/constants'
+import { PLATFORM_SCOPE_ROLES, ROLES, type Role } from '@/config/constants'
 
 export interface NavNode {
   key: string
@@ -23,136 +13,46 @@ export interface NavNode {
   icon: ReactNode
   requiredRoles: Role[]
   description: string
-  /** 对应《管理后台开发计划》阶段 */
+  /** 对应阶段 */
   phase: string
 }
 
-/** 控制台导航树（与设计方案 §4 页面结构对齐） */
+/**
+ * 平台控制台导航树（重规划 §7 · 纯平台身份域）。
+ *
+ * ⚠️ 租户域节点（Agent/Tool/Skill/MCP/发布/依赖/监控/配置中心）已随
+ *    「平台身份与租户身份分离」摘除——那些页面属租户身份域，
+ *    将迁移至租户控制台。角色仅用于导航显隐，安全边界以执行时后端重授权为准。
+ */
 export const NAV_NODES: NavNode[] = [
-  {
-    key: 'dashboard',
-    label: '概览仪表盘',
-    path: '/dashboard',
-    icon: <DashboardOutlined />,
-    requiredRoles: [],
-    description: '全局实体数量、生命周期分布、待审批队列、运行健康与最近变更。',
-    phase: 'P0',
-  },
   {
     key: 'tenants',
     label: '租户管理',
     path: '/tenants',
     icon: <ApartmentOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '租户生命周期、配置覆盖、主体与角色、RLS 隔离校验（平台/运营级）。当前账号无平台权限时呈现「我的租户」自服务视图。',
-    phase: 'P0.5',
-  },
-  {
-    key: 'agents',
-    label: 'Agent 管理',
-    path: '/agents',
-    icon: <RobotOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '租户级 Agent：列表 / 详情 / 创建 / 发布版本（definition 为不可变快照）。',
-    phase: 'P1',
-  },
-  {
-    key: 'tools',
-    label: 'Tool 管理',
-    path: '/tools',
-    icon: <ToolOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '平台级 Tool：目录 / 详情 / 关系（所属 MCP Server）、登记 / 改版 / 停用（平台级配置 · 需 PLATFORM_ADMIN，走三步工作流）。',
-    phase: 'P1',
-  },
-  {
-    key: 'skills',
-    label: 'Skill 管理',
-    path: '/skills',
-    icon: <BulbOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '平台级 Skill：目录 / 详情 / 关系（声明的 Tool 与 MCP，缺失项标红）、登记 / 改版 / 停用（平台级配置 · 需 PLATFORM_ADMIN）。',
-    phase: 'P1',
-  },
-  {
-    key: 'mcp',
-    label: 'MCP 服务',
-    path: '/mcp',
-    icon: <ApiOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '平台级 MCP Server：目录 / 详情 / 关系（允许集与实际登记分开呈现）、登记 / 改版 / 停用（平台级配置 · 需 PLATFORM_ADMIN）。凭据仅存引用。',
-    phase: 'P1',
-  },
-  {
-    key: 'contracts',
-    label: '输出契约',
-    path: '/contracts',
-    icon: <FileTextOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '租户级输出契约登记（多级 Agent v1.1）：按「标识 + 固定版本」寻址，变更经三步工作流（申请→双人复核→执行）。',
-    phase: 'P2',
-  },
-  {
-    key: 'publish',
-    label: '发布与审批',
-    path: '/publish',
-    icon: <SendOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '三步工作流（申请→双人复核→执行）：申请队列、审批、发布时间线与回滚。租户级对象走此队列；平台级对象（Tool / Skill / MCP）的申请在各自详情页闭环（需 PLATFORM_ADMIN）。',
-    phase: 'P2',
-  },
-  {
-    key: 'dependencies',
-    label: '关系与依赖',
-    path: '/dependencies',
-    icon: <ShareAltOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '能力闭包图谱与影响分析（只读）：Agent→Skill→Tool/MCP 依赖全景、变更前影响判据与悬空引用告警。委派拓扑（父子 Agent 边）见「委派拓扑」页。',
-    phase: 'P3',
-  },
-  {
-    key: 'delegations',
-    label: '委派拓扑',
-    path: '/delegations',
-    icon: <ShareAltOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '父子 Agent 委派边（只读）：谁把工作交给谁。入向边提示「停用它会让那个父悬空」—— ⚠️ 只是提示，当前**无自动拦截**。',
-    phase: 'C34-3',
-  },
-  {
-    key: 'monitoring',
-    label: '运行监控',
-    path: '/monitoring',
-    icon: <MonitorOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '健康总览、authzVersion 撤权水位、拒绝告警分诊（只读）：严重/警告/提示三级分档，数据源不可用时显式告警而非显示为空。',
-    phase: 'P4',
-  },
-  {
-    key: 'audit',
-    label: '审计日志',
-    path: '/audit',
-    icon: <FileProtectOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '操作日志 ledger 维度筛选与详情、双人复核留痕。',
-    phase: 'P5',
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    description:
+      '租户生命周期状态机（PENDING_SETUP→ACTIVE→SUSPENDED→DECOMMISSIONING…）、配额、能力授权。开通/启停需 TENANT_LIFECYCLE_ADMIN 或 SUPER_ADMIN。',
+    phase: '平台域',
   },
   {
     key: 'roles',
-    label: '角色矩阵',
+    label: '用户与角色',
     path: '/roles',
     icon: <TeamOutlined />,
-    requiredRoles: TENANT_SCOPE_ROLES,
-    description: '主体-角色矩阵与授权版本水位（只读）：谁有什么角色、谁被撤权过；授权变更走带外运维通道。',
-    phase: 'P5',
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    description:
+      '平台用户（绝不返回 password_hash）与 6 个最小特权角色的冻结权限矩阵。角色赋权走带外运维通道，应用层不自授。',
+    phase: '平台域',
   },
   {
-    key: 'settings',
-    label: '配置中心',
-    path: '/settings',
-    icon: <SettingOutlined />,
-    requiredRoles: PLATFORM_SCOPE_ROLES,
-    description: '全局参数、凭据引用登记（仅引用标识，不接触明文）。',
-    phase: 'P5',
+    key: 'audit',
+    label: '平台审计',
+    path: '/audit',
+    icon: <FileProtectOutlined />,
+    requiredRoles: [ROLES.SUPER_ADMIN, ROLES.AUDITOR],
+    description:
+      '平台管理动作审计（登录/租户生命周期/配额/能力授权），读 platform_audit_event，与租户业务审计物理分域。仅追加、只读。',
+    phase: '平台域',
   },
 ]

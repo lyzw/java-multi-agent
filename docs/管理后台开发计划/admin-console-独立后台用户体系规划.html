@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>admin-console 独立后台用户体系重规划（v2）</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --line:#2a2f3a;
+    --txt:#e6e9ef; --muted:#9aa4b2; --accent:#4ea1ff; --accent2:#7ee787;
+    --warn:#ffb454; --danger:#ff6b6b; --tag:#263041; --code:#0b0e13;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.65;font-size:15px}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 80px}
+  h1{font-size:26px;margin:0 0 6px}
+  h2{font-size:20px;margin:38px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:26px 0 8px;color:var(--accent)}
+  p{margin:8px 0}
+  .sub{color:var(--muted);font-size:13px;margin-top:0}
+  .meta{color:var(--muted);font-size:13px;margin-bottom:24px}
+  code{background:var(--code);padding:1px 6px;border-radius:5px;font-family:"SF Mono",Consolas,monospace;font-size:13px;color:#ffd479}
+  pre{background:var(--code);padding:14px 16px;border-radius:10px;overflow:auto;font-size:13px;
+    border:1px solid var(--line);font-family:"SF Mono",Consolas,monospace;line-height:1.5}
+  pre .k{color:#7ee787}.pre .c{color:var(--muted)}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--accent)}
+  tr:nth-child(even){background:rgba(255,255,255,.02)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .tag{display:inline-block;background:var(--tag);border:1px solid var(--line);color:var(--muted);
+    border-radius:999px;padding:1px 10px;font-size:12px;margin-right:6px}
+  .ok{color:var(--accent2)} .warn{color:var(--warn)} .bad{color:var(--danger)}
+  .callout{border-left:4px solid var(--accent);background:var(--panel2);padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0}
+  .callout.danger{border-left-color:var(--danger)}
+  .callout.warn{border-left-color:var(--warn)}
+  .num{color:var(--accent);font-weight:700}
+  svg{width:100%;height:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;margin:12px 0}
+  ul{margin:8px 0 8px 4px;padding-left:20px} li{margin:4px 0}
+  .kbd{font-family:monospace;background:#222a36;border:1px solid var(--line);border-radius:5px;padding:0 5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>admin-console 独立后台用户体系重规划（v2）</h1>
+<p class="sub">把管理后台的运维身份与「租户用户体系」彻底解耦 —— 引入独立的 <code>platform_operator</code> 身份域</p>
+<p class="meta">文档版本 v2 · 2026-10-25 · 取代《admin-console-登录免租户规划.html》（v1）<br/>
+前置依据：<code>00_修订说明与评审决议项.md</code> · 已读码确认的架构（见 §1 约束清单）</p>
+
+<div class="callout">
+<b>与 v1 的关系：</b> v1 提出「免租户登录 / 固定哨兵租户 <code>-1</code>」，本质仍是<b>复用租户用户体系</b>（从 <code>loginName</code> 反查 <code>tenantId</code> 再派生上下文）。
+本版（v2）按用户最新要求转向：<b>后台用一套完全不同的用户系统维护</b>，与租户主体表 <code>principal</code> 物理隔离、互不信任、互不越界。
+v1 的派生 tenantId 思路作废；本文给出 v2 的完整接口与交互逻辑。
+</div>
+
+<h2>1. 已读码确认的五条硬约束</h2>
+<p>以下结论来自实际源码，决定了方案走向，非假设：</p>
+<table>
+<tr><th>#</th><th>事实（源文件）</th><th>对方案的含义</th></tr>
+<tr>
+<td class="num">C1</td>
+<td><code>TenantContext.tenantId</code> 为 <code>@NonNull</code>，空值直接抛异常（<code>core/tenant/TenantContext.java:34</code>）。每个主体都是 <code>(tenantId, principalId)</code>。</td>
+<td>「无租户」不能是「上下文无租户」。平台操作员也须解析出<b>可信的</b> tenantId，但可用<b>哨兵值</b>表示「非租户主体」。</td>
+</tr>
+<tr>
+<td class="num">C2</td>
+<td>JWT 当前声明仅 <code>iss/sub/aud/iat/exp/jti/tenant_id/roles/authz_version</code>，<b>无身份域字段</b>（<code>JwtTokenService.issue/verify</code>）。</td>
+<td>需新增 <code>domain</code> 声明（<code>TENANT</code> / <code>PLATFORM</code>）来区分两套身份体系。</td>
+</tr>
+<tr>
+<td class="num">C3</td>
+<td>已存在 <b><code>BYPASSRLS</code> 平台运维数据源</b> <code>PlatformOpsDataSourceProvider</code> + <code>GuardedPlatformOpsDataSource</code> + <code>PlatformOpsSessionGuard</code>，仅限 PLATFORM 作用域发布事务内交出连接。</td>
+<td>平台级写入已有现成越权通道；后台操作员身份可复用其「平台身份」语义，但<b>读路径仍需按目标租户绑定</b>（见 C5）。</td>
+</tr>
+<tr>
+<td class="num">C4</td>
+<td>租户主体表 <code>principal(principal_id, tenant_id NOT NULL, ...)</code> 与 <code>principal_role</code> 均 <code>FORCE ROW LEVEL SECURITY</code>（<code>01_platform_ddl.sql:1641/1677</code>）。全局表 <code>tenant</code> <b>无 RLS</b>（<code>AdminTenantRepository</code> 注释）。</td>
+<td>新后台身份表应仿照 <code>tenant</code>：<b>全局、不挂 RLS</b>，从而无需在每次登录读时绑定租户上下文。</td>
+</tr>
+<tr>
+<td class="num">C5</td>
+<td>后台跨租户读（如 <code>listPrincipals(id)</code>）通过 <code>openTenant(目标租户id)</code> 把连接<b>绑定到目标租户</b>的 RLS 上下文，而非操作员的自身租户（<code>AdminTenantRepository:288</code>）。</td>
+<td>数据访问层<b>几乎无需改动</b>：操作员自身的 tenantId 哨兵值不参与跨租户读取，读取仍以路径参数里的目标租户为准。</td>
+</tr>
+</table>
+
+<h2>2. 架构总览：两套用户体系</h2>
+<svg viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg" font-family="monospace" font-size="12">
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#9aa4b2"/>
+    </marker>
+  </defs>
+  <rect x="14" y="20" width="300" height="120" rx="10" fill="#171a21" stroke="#2a2f3a"/>
+  <text x="28" y="42" fill="#7ee787">域 T · 租户用户体系（既有）</text>
+  <text x="28" y="66" fill="#e6e9ef">登录 /api/auth/token</text>
+  <text x="28" y="86" fill="#e6e9ef">表 principal / principal_role (RLS)</text>
+  <text x="28" y="106" fill="#e6e9ef">角色: TENANT_ADMIN/AUTHOR/</text>
+  <text x="28" y="124" fill="#e6e9ef">VIEWER/APPROVER/WORKER</text>
+
+  <rect x="366" y="20" width="300" height="120" rx="10" fill="#171a21" stroke="#4ea1ff"/>
+  <text x="380" y="42" fill="#4ea1ff">域 P · 后台操作员体系（新增）</text>
+  <text x="380" y="66" fill="#e6e9ef">登录 /api/console/auth/login</text>
+  <text x="380" y="86" fill="#e6e9ef">表 platform_operator（全局/无RLS）</text>
+  <text x="380" y="106" fill="#e6e9ef">角色: PLATFORM_ADMIN /</text>
+  <text x="380" y="124" fill="#e6e9ef">PLATFORM_OPERATOR / PLATFORM_VIEWER</text>
+
+  <rect x="14" y="170" width="652" height="110" rx="10" fill="#1d212b" stroke="#2a2f3a"/>
+  <text x="28" y="192" fill="#ffb454">共享后端 platform/agent-api（同一 Spring Security 过滤链）</text>
+  <text x="28" y="214" fill="#e6e9ef">· Bearer 令牌解析 → TenantContext(domain, tenantId, roles)</text>
+  <text x="28" y="234" fill="#e6e9ef">· 域T: domain=TENANT，tenantId=真实租户UUID，经 RLS 访问本租户数据</text>
+  <text x="28" y="254" fill="#e6e9ef">· 域P: domain=PLATFORM，tenantId=哨兵"__platform__"，跨租户读经 openTenant(目标租户)；平台写经 PlatformOpsSessionGuard</text>
+
+  <line x1="164" y1="140" x2="164" y2="170" stroke="#7ee787" marker-end="url(#arr)"/>
+  <line x1="516" y1="140" x2="516" y2="170" stroke="#4ea1ff" marker-end="url(#arr)"/>
+</svg>
+<p class="sub">两套体系共享同一后端与同一套 JWT 验签基础设施，靠 <code>domain</code> 声明在「可信上下文」层分流；数据库层靠 <b>物理分表</b>（<code>principal</code> vs <code>platform_operator</code>）与 <b>RLS 策略</b>双重隔离。</p>
+
+<h2>3. 身份域模型对比</h2>
+<table>
+<tr><th>维度</th><th>域 T · 租户用户（既有）</th><th>域 P · 后台操作员（新增）</th></tr>
+<tr><td>登录端点</td><td><code>POST /api/auth/token</code></td><td><code>POST /api/console/auth/login</code></td></tr>
+<tr><td>存储表</td><td><code>principal</code> + <code>principal_role</code>（RLS 强制）</td><td><code>platform_operator</code>（全局、无 RLS）</td></tr>
+<tr><td>是否含 tenant_id</td><td>必填、NOT NULL</td><td><b>无</b>（平台级身份，不属于任何租户）</td></tr>
+<tr><td>JWT domain 声明</td><td><code>TENANT</code></td><td><code>PLATFORM</code></td></tr>
+<tr><td>上下文 tenantId</td><td>真实租户 UUID</td><td>哨兵 <code>__platform__</code>（永不匹配真实租户）</td></tr>
+<tr><td>数据访问</td><td>连接绑定自身租户 RLS</td><td>跨租户读 <code>openTenant(目标租户)</code>；平台写经 <code>PlatformOpsSessionGuard</code></td></tr>
+<tr><td>授权闸门</td><td>租户内角色 + 红线9 重授权</td><td><code>requirePlatformScope()</code>：<code>domain==PLATFORM</code> 且含 <code>PLATFORM_ADMIN</code></td></tr>
+<tr><td>使用的前端</td><td>面向师生的主应用（非 admin-console）</td><td><b>admin-console（/admin）专用</b></td></tr>
+</table>
+<div class="callout warn"><b>关键边界：</b>admin-console 自 v2 起<b>只接受域 P 令牌</b>。即使某租户主体持有 <code>PLATFORM_ADMIN</code>，其域 T 令牌也无法进入后台（守卫要求 <code>domain==PLATFORM</code>）。租户用户体系与后台运维体系在登录入口即分叉，互不越界。</div>
+
+<h2>4. 后端设计</h2>
+
+<h3>4.1 数据库：新增 <code>platform_operator</code> 表（DDL 增量）</h3>
+<pre><span class="k">CREATE TABLE</span> public.platform_operator (
+    operator_id   uuid DEFAULT gen_random_uuid() NOT NULL,
+    login_name    text NOT NULL,
+    password_hash text NOT NULL,
+    display_name  text,
+    status        text DEFAULT 'ACTIVE' NOT NULL,
+    failed_attempts integer DEFAULT 0 NOT NULL,
+    locked_until  timestamp with time zone,
+    authz_version bigint DEFAULT 1 NOT NULL,
+    created_at    timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at    timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT platform_operator_pk PRIMARY KEY (operator_id),
+    CONSTRAINT platform_operator_login_unique UNIQUE (login_name),
+    CONSTRAINT platform_operator_login_format
+        CHECK (login_name ~ '^[a-z0-9][a-z0-9._-]{2,63}$'),
+    CONSTRAINT platform_operator_hash_present
+        CHECK (password_hash ~~ '$pbkdf2-sha256$i=%$%'),
+    CONSTRAINT platform_operator_status_enum
+        CHECK (status = ANY (ARRAY['ACTIVE','DISABLED','LOCKED'])),
+    CONSTRAINT platform_operator_authz_positive CHECK (authz_version >= 1)
+);
+<span class="c">-- 刻意不 FORCE ROW LEVEL SECURITY：该表是平台级身份，无租户维度；</span>
+<span class="c">-- 仿 tenant 表，登录读路径用系统身份(openSystem)而非租户绑定。</span>
+
+<span class="k">CREATE TABLE</span> public.platform_operator_role (
+    operator_id uuid NOT NULL REFERENCES platform_operator(operator_id),
+    role        text NOT NULL,
+    granted_at  timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT platform_operator_role_role_fmt CHECK (role ~ '^PLATFORM_[A-Z_]{1,28}$')
+);</pre>
+<p class="sub">角色名强制 <code>PLATFORM_*</code> 前缀，从源头杜绝把租户角色错挂到平台身份上。</p>
+
+<h3>4.2 新增 <code>PlatformOperatorRepository</code></h3>
+<p>复用既有 <code>PasswordHasher</code>（PBKDF2 600k 迭代，常量耗时、防枚举、防爆破、rehash-on-success）。
+与 <code>PrincipalRepository</code> 唯一区别：登录读走 <code>TenantSessionBinder.clear(conn)</code>（系统身份，不绑定任何租户），因 <code>platform_operator</code> 无 RLS。提供：<code>findByLoginName</code> / <code>verifyPassword</code> / <code>findRoles</code> / <code>recordFailure</code> / <code>recordSuccess</code> / <code>revokeAuthorization</code>（与现有接口同构，照搬安全注释与 dummy-hash 逻辑）。</p>
+
+<h3>4.3 新增 <code>PlatformOperatorAuthenticationService</code></h3>
+<p>与 <code>AuthenticationService</code> 同构，但使用 <code>PlatformOperatorRepository</code>，并签发<b>带 <code>domain=PLATFORM</code></b> 的令牌。保持三条铁律：不区分失败原因、恒定耗时、失败计数持久化。</p>
+
+<h3>4.4 改造 <code>TenantContext</code> 与 <code>JwtTokenService</code>（最小侵入）</h3>
+<p><code>TenantContext</code> 增加字段 <code>IDENTITY_DOMAIN domain</code>（枚举 <code>TENANT / PLATFORM</code>，缺省 <code>TENANT</code>），并新增工厂：</p>
+<pre>public static TenantContext platformOperator(String operatorId,
+        Set&lt;String&gt; roles, long authzVersion) {
+    return new TenantContext("__platform__", operatorId, roles, authzVersion,
+            IDENTITY_DOMAIN.PLATFORM);
+}</pre>
+<p><code>JwtTokenService.issue()</code> 在 payload 增加 <code>"domain":"&lt;domain&gt;"</code>；<code>verify()</code> 读取 <code>domain</code> 声明并据此构造 <code>TenantContext</code>（缺省 <code>TENANT</code> 以向后兼容既有租户令牌）。<b>既有租户令牌无需重签。</b></p>
+
+<h3>4.5 新登录端点 <code>/api/console/auth/login</code></h3>
+<pre><span class="k">POST</span> /api/console/auth/login
+{ "loginName": "ops-zhang", "password": "***" }   // 无 tenantId
+→ 200 { accessToken, tokenType:"Bearer", expiresIn:900,
+        operatorId, roles:[ "PLATFORM_ADMIN" ], domain:"PLATFORM" }
+→ 401 { "error":"unauthorized" }   // 统一，不区分原因</pre>
+<p>加入 <code>SecurityConfiguration.PUBLIC_ENDPOINTS</code>。响应<b>不返回</b> tenantId（哨兵值无业务意义），不返回任何凭据字段。</p>
+
+<h3>4.6 控制器守卫改造 <code>requirePlatformScope()</code></h3>
+<p>所有后台平台级端点（<code>AdminTenantController</code> 的 <code>/</code>、<code>/{id}</code>、<code>/{id}/principals</code>、<code>rls-verify</code>，以及 P0–P5 的管理端点）统一改为：</p>
+<pre>private void requirePlatformScope() {
+    TenantContext ctx = currentPrincipal.context();
+    if (ctx.domain() != IDENTITY_DOMAIN.PLATFORM
+            || !ctx.hasRole("PLATFORM_ADMIN")) {
+        throw new ResponseStatusException(FORBIDDEN,
+            "后台运维仅限 PLATFORM 域操作员");
+    }
+}</pre>
+<p>跨租户读取逻辑（<code>openTenant(目标租户id)</code>）保持不变 —— 操作员自身哨兵 tenantId 不参与读取，读取仍以路径里的目标租户为准（满足约束 C5）。</p>
+
+<h3>4.7 RLS 与数据访问影响评估</h3>
+<table>
+<tr><th>访问类型</th><th>是否需要改</th><th>说明</th></tr>
+<tr><td>操作员登录读 <code>platform_operator</code></td><td>新增</td><td>走 <code>openSystem</code>（clear 上下文），表无 RLS，正常读</td></tr>
+<tr><td>后台列租户 <code>tenant</code> 表</td><td class="ok">不改</td><td>全局表无 RLS，域 P 与域 T 同路径</td></tr>
+<tr><td>后台跨租户读 <code>principal/agent</code></td><td class="ok">不改</td><td>仍 <code>openTenant(目标租户)</code>，与操作员自身租户无关</td></tr>
+<tr><td>PLATFORM 作用域配置发布写</td><td class="ok">不改</td><td>仍经 <code>PlatformOpsSessionGuard</code></td></tr>
+<tr><td><code>/self</code> 租户内自服务</td><td>前端隐藏</td><td>仅域 T 有意义，后台操作员不应见（见 §5.3）</td></tr>
+</table>
+
+<h2>5. 前端 admin-console 设计</h2>
+
+<h3>5.1 登录页（仅操作员）</h3>
+<p>移除「租户 ID」输入框与 <code>tenantId</code> 字段，仅保留 <code>loginName + password</code>，POST 到 <code>/api/console/auth/login</code>。<code>session.tsx</code> 把响应里的 <code>domain</code> 一并持久化（localStorage / 内存）。</p>
+
+<h3>5.2 类型与请求层</h3>
+<pre><span class="c">// src/api/types.ts</span>
+export interface LoginRequest { loginName: string; password: string }   // 去掉 tenantId
+export interface TokenResponse {
+  accessToken: string; tokenType: string; expiresIn: number;
+  operatorId?: string; roles: string[]; domain: "TENANT" | "PLATFORM";
+}
+<span class="c">// src/api/adminApi.ts / client.ts</span>
+const resp = await client.post("/api/console/auth/login", { loginName, password });</pre>
+
+<h3>5.3 路由与导航按 domain 分流</h3>
+<ul>
+<li><code>RequireAuth</code>：仅校验 token 存在 → <span class="ok">零改动</span>。</li>
+<li><code>RequireRole</code>：校验 <code>roles</code> → <span class="ok">零改动</span>（域 P 角色是 <code>PLATFORM_*</code>）。</li>
+<li>新增 <code>useDomain()</code>：从 session 取 <code>domain</code>。</li>
+<li>导航显隐：<code>domain==="PLATFORM"</code> 时<b>隐藏</b>租户自服务页（<code>/tenants/self</code>、<code>/agents/self</code> 等），展示平台级导航（租户注册表、跨租户主体、配置发布、监控）。</li>
+<li>401（token 失效/域不符）→ 自动跳登录页。守卫在后端硬拒绝域 T 令牌，前端无需额外判断。</li>
+</ul>
+<div class="callout"><b>为何前端无需感知租户选择：</b>后台操作员经 <code>openTenant(目标租户)</code> 显式指定目标租户，所有跨租户操作都在请求路径/参数里带目标租户 id（与现在一致），前端不必维护「当前租户」概念。</div>
+
+<h2>6. 接口契约与交互时序</h2>
+
+<h3>6.1 契约清单</h3>
+<table>
+<tr><th>接口</th><th>方法 / 路径</th><th>请求</th><th>响应（成功）</th><th>失败</th></tr>
+<tr>
+<td>操作员登录</td><td><code>POST /api/console/auth/login</code></td>
+<td><code>{loginName,password}</code></td>
+<td><code>{accessToken,tokenType,expiresIn,operatorId,roles,domain:PLATFORM}</code></td>
+<td><code>401 {"error":"unauthorized"}</code></td>
+</tr>
+<tr>
+<td>租户登录（既有）</td><td><code>POST /api/auth/token</code></td>
+<td><code>{tenantId,loginName,password}</code></td>
+<td><code>{accessToken,...,tenantId,roles,domain:TENANT}</code></td>
+<td><code>401</code></td>
+</tr>
+<tr>
+<td>平台级租户注册表（既有）</td><td><code>GET /api/admin/tenants</code></td>
+<td>Bearer(域P)</td>
+<td><code>{items:[TenantResponse],nextCursor}</code></td>
+<td><code>403</code>（域不符/缺角色）</td>
+</tr>
+<tr>
+<td>跨租户列主体（既有）</td><td><code>GET /api/admin/tenants/{id}/principals</code></td>
+<td>Bearer(域P)</td>
+<td><code>[PrincipalResponse]</code></td>
+<td><code>403 / 404</code></td>
+</tr>
+</table>
+
+<h3>6.2 时序：操作员登录 → 跨租户读取</h3>
+<svg viewBox="0 0 680 260" xmlns="http://www.w3.org/2000/svg" font-family="monospace" font-size="11">
+  <defs><marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9aa4b2"/></marker></defs>
+  <rect x="20" y="14" width="120" height="34" rx="6" fill="#1d212b" stroke="#2a2f3a"/><text x="34" y="36" fill="#e6e9ef">admin-console</text>
+  <rect x="200" y="14" width="130" height="34" rx="6" fill="#1d212b" stroke="#4ea1ff"/><text x="214" y="36" fill="#4ea1ff">ConsoleAuthCtrl</text>
+  <rect x="390" y="14" width="130" height="34" rx="6" fill="#1d212b" stroke="#7ee787"/><text x="404" y="36" fill="#7ee787">OperatorAuthSvc</text>
+  <rect x="560" y="14" width="110" height="34" rx="6" fill="#1d212b" stroke="#2a2f3a"/><text x="572" y="36" fill="#e6e9ef">platform_operator</text>
+
+  <rect x="200" y="170" width="130" height="34" rx="6" fill="#1d212b" stroke="#4ea1ff"/><text x="218" y="192" fill="#4ea1ff">AdminTenantCtrl</text>
+  <rect x="390" y="170" width="130" height="34" rx="6" fill="#1d212b" stroke="#7ee787"/><text x="404" y="192" fill="#7ee787">AdminTenantRepo</text>
+  <rect x="560" y="170" width="110" height="34" rx="6" fill="#1d212b" stroke="#2a2f3a"/><text x="576" y="192" fill="#e6e9ef">principal(RLS)</text>
+
+  <line x1="140" y1="31" x2="198" y2="31" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="142" y="26" fill="#9aa4b2">1 {loginName,pwd}</text>
+  <line x1="330" y1="31" x2="388" y2="31" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="332" y="26" fill="#9aa4b2">2 auth</text>
+  <line x1="520" y1="31" x2="562" y2="31" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="470" y="26" fill="#9aa4b2">3 findByLoginName(clear ctx)</text>
+  <line x1="562" y1="48" x2="520" y2="60" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="470" y="60" fill="#9aa4b2">4 hash 校验</text>
+  <line x1="388" y1="60" x2="330" y2="72" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="332" y="74" fill="#9aa4b2">5 JWT(domain=PLATFORM)</text>
+  <line x1="198" y1="72" x2="140" y2="84" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="120" y="86" fill="#9aa4b2">6 token+domain</text>
+
+  <line x1="140" y1="100" x2="198" y2="150" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="60" y="130" fill="#9aa4b2">7 GET /admin/tenants/{id}/principals + Bearer</text>
+  <line x1="330" y1="187" x2="388" y2="187" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="332" y="182" fill="#9aa4b2">8 requirePlatformScope()</text>
+  <line x1="520" y1="187" x2="562" y2="187" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="470" y="182" fill="#9aa4b2">9 openTenant(目标租户)</text>
+  <line x1="562" y1="204" x2="520" y2="216" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="470" y="218" fill="#9aa4b2">10 仅目标租户行</text>
+  <line x1="388" y1="216" x2="330" y2="228" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="332" y="230" fill="#9aa4b2">11 [PrincipalResponse]</text>
+  <line x1="198" y1="228" x2="140" y2="240" stroke="#9aa4b2" marker-end="url(#a2)"/>
+  <text x="60" y="242" fill="#9aa4b2">12 渲染跨租户主体列表</text>
+</svg>
+
+<h2>7. 向后兼容与迁移</h2>
+<ul>
+<li><b>既有租户令牌零失效：</b><code>JwtTokenService.verify</code> 对缺省 <code>domain</code> 声明按 <code>TENANT</code> 处理，旧令牌继续可用。</li>
+<li><b>旧 PLATFORM_ADMIN 越权授权路径：</b>当前 <code>04_platform_admin_grant.sql</code> 把 <code>PLATFORM_ADMIN</code> 授予某租户主体（域 T）。迁移期：<code>requirePlatformScope()</code> 同时接受 <code>domain==PLATFORM</code> <b>或</b> <code>domain==TENANT 且 hasRole(PLATFORM_ADMIN)</code>；待 <code>platform_operator</code> 账户建好后，删除该 SQL、显式撤销租户主体上的 <code>PLATFORM_ADMIN</code>，关闭域 T 进入后台的口子。</li>
+<li><b>操作员开通：</b>新增 <code>05_platform_operator_seed.sql</code>（带外运维通道），插入首名 <code>platform_operator</code> + <code>PLATFORM_ADMIN</code> 角色，口令走受控发号（同租户主体，无自助注册）。</li>
+<li><b>admin-console 部署：</b>已是独立 SPA（<code>/admin</code> 同源反向代理），无需新建工程；仅改登录入口与路由显隐。</li>
+</ul>
+
+<h2>8. 安全边界与风险登记</h2>
+<table>
+<tr><th>风险</th><th>等级</th><th>处置</th></tr>
+<tr>
+<td>操作员账户被爆破（高价值目标）</td><td class="bad">高</td>
+<td>复用 PBKDF2 600k + 持久化失败计数 + 锁定；口令经受控发号；后续可加 MFA（<code>platform_operator.mfa_secret</code> 预留列）。</td>
+</tr>
+<tr>
+<td>域 P 令牌误用于租户业务接口</td><td class="warn">中</td>
+<td>业务接口按 <code>tenantId</code> RLS 访问，哨兵 <code>__platform__</code> 不匹配任何租户 → 0 行；且租户接口无 <code>PLATFORM_ADMIN</code> 语义。纵深防御成立。</td>
+</tr>
+<tr>
+<td>误把平台身份接上租户 RLS 读路径</td><td class="warn">中</td>
+<td><code>platform_operator</code> 表<b>不挂 RLS</b>，登录读走 <code>openSystem</code>；且 <code>requirePlatformScope</code> 强制 <code>domain==PLATFORM</code>。</td>
+</tr>
+<tr>
+<td>迁移期双路径（域T持PLATFORM_ADMIN）残留</td><td class="warn">中</td>
+<td>设明确关闭清单：删 <code>04</code> SQL + 撤销租户主体角色 + 守卫移除兼容分支；纳入退出门禁。</td>
+</tr>
+<tr>
+<td>JWT <code>domain</code> 声明被伪造</td><td class="ok">低</td>
+<td>RS256 验签 + <code>iss/aud</code> 校验；<code>domain</code> 与 <code>roles</code> 同属签名载荷，伪造即验签失败。</td>
+</tr>
+</table>
+
+<h2>9. 验收矩阵</h2>
+<table>
+<tr><th>项</th><th>验收标准</th></tr>
+<tr><td>隔离性</td><td>域 T 令牌（含旧 PLATFORM_ADMIN）调用 <code>POST /api/console/auth/login</code> 失败；域 P 令牌访问租户业务接口返回 0 行或 403。</td></tr>
+<tr><td>操作员登录</td><td><code>/api/console/auth/login</code> 成功返回 <code>domain=PLATFORM</code>；失败统一 401 不区分原因；错误口令不计入不存在账号。</td></tr>
+<tr><td>跨租户读</td><td>操作员列任意租户主体/agent 成功；<code>verifyIsolation</code> 对目标租户仍可判定隔离。</td></tr>
+<tr><td>守卫</td><td>域 P 但缺 <code>PLATFORM_ADMIN</code> → 403；域 T → 403。</td></tr>
+<tr><td>前端</td><td>登录页无租户字段；<code>domain==PLATFORM</code> 时自服务页隐藏；401 跳登录。</td></tr>
+<tr><td>回归</td><td>既有租户令牌登录主应用、RLS 读本租户数据全部不变；单测/IT 零回归。</td></tr>
+</table>
+
+<h2>10. 工作量排期（估算）</h2>
+<table>
+<tr><th>模块</th><th>改动点</th><th>估时</th></tr>
+<tr><td>后端 · schema</td><td><code>platform_operator</code> + role 表 DDL、seed SQL</td><td>0.5 人日</td></tr>
+<tr><td>后端 · 认证</td><td><code>PlatformOperatorRepository</code> + <code>PlatformOperatorAuthenticationService</code> + 登录端点</td><td>1.0 人日</td></tr>
+<tr><td>后端 · 上下文/JWT</td><td><code>TenantContext.domain</code> + 工厂 + <code>JwtTokenService</code> issue/verify + <code>SecurityConfiguration</code> 白名单</td><td>0.5 人日</td></tr>
+<tr><td>后端 · 守卫</td><td>各管理端点 <code>requirePlatformScope</code> 改造（约 8 处控制器）</td><td>0.5 人日</td></tr>
+<tr><td>前端</td><td>登录页去租户字段、types、client、useDomain 路由显隐</td><td>0.5 人日</td></tr>
+<tr><td>测试</td><td>登录 UT、守卫 IT、跨租户读 IT、前端路由断言</td><td>1.0 人日</td></tr>
+<tr><td colspan="2"><b>合计</b></td><td><b>≈ 4.5 人日</b></td></tr>
+</table>
+
+<div class="callout"><b>退出门禁：</b>① 迁移期双路径关闭清单执行并验证；② 操作员账户无自助注册、口令受控发号；③ 域 T 令牌无法进入后台的集成测试通过；④ 既有租户体系回归零失败。</div>
+
+<p class="meta">— 文档结束 · 本规划取代 v1《admin-console-登录免租户规划.html》—</p>
+
+</div>
+</body>
+</html>

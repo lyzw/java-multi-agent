@@ -1,15 +1,30 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
-import type { AuditLogEntry, McpCatalogItem, PrincipalResponse } from '@/api/types'
+import type {
+  McpCatalogItem,
+  PlatformAuditEvent,
+  PlatformUserSummary,
+  PlatformRoleSummary,
+} from '@/api/types'
 
 // ---- mock API 层 ----
 vi.mock('@/api/adminApi', () => ({
   getAuditLogs: vi.fn(),
   getMyPrincipals: vi.fn(),
   getMcpCatalog: vi.fn(),
+  getPlatformAuditEvents: vi.fn(),
+  getPlatformUsers: vi.fn(),
+  getPlatformRoles: vi.fn(),
 }))
-import { getAuditLogs, getMyPrincipals, getMcpCatalog } from '@/api/adminApi'
+import {
+  getAuditLogs,
+  getMyPrincipals,
+  getMcpCatalog,
+  getPlatformAuditEvents,
+  getPlatformUsers,
+  getPlatformRoles,
+} from '@/api/adminApi'
 import { AuditLogsPage } from '@/pages/audit/AuditLogsPage'
 import { PrincipalMatrixPage } from '@/pages/PrincipalMatrixPage'
 import { SettingsPage } from '@/pages/settings/SettingsPage'
@@ -34,48 +49,74 @@ beforeEach(() => {
   vi.mocked(getAuditLogs).mockResolvedValue({ items: [], nextCursor: null })
   vi.mocked(getMyPrincipals).mockResolvedValue([])
   vi.mocked(getMcpCatalog).mockResolvedValue([])
+  vi.mocked(getPlatformAuditEvents).mockResolvedValue([])
+  vi.mocked(getPlatformUsers).mockResolvedValue([])
+  vi.mocked(getPlatformRoles).mockResolvedValue([])
 })
 
-// ---- 夹具 ----
-const auditFixture: AuditLogEntry[] = [
+// ---- 夹具（平台身份域） ----
+const auditFixture: PlatformAuditEvent[] = [
   {
-    auditId: 'a-1',
-    actorId: 'p-admin',
-    action: 'CONFIG_APPROVE',
-    resourceType: 'config_publish_request',
-    resourceId: 'r-9',
-    createdAt: '2026-10-24T10:00:00Z',
+    id: 'a-1',
+    actorId: '11111111-1111-1111-1111-111111111111',
+    actorType: 'PLATFORM_USER',
+    action: 'TENANT_SUSPEND',
+    targetType: 'tenant',
+    targetId: 't-9',
+    decision: 'ALLOW',
+    reasonCode: null,
     correlationId: 'corr-1',
-    detail: { decision: 'APPROVE', approverId: 'p-admin', requesterId: 'p-author' },
+    ip: '10.0.0.1',
+    occurredAt: '2026-10-24T10:00:00Z',
   },
   {
-    auditId: 'a-2',
-    actorId: 'p-admin',
-    action: 'AUDIT_READ',
-    resourceType: 'audit_record',
-    resourceId: null,
-    createdAt: '2026-10-24T11:00:00Z',
+    id: 'a-2',
+    actorId: '22222222-2222-2222-2222-222222222222',
+    actorType: 'PLATFORM_USER',
+    action: 'PLATFORM_LOGIN',
+    targetType: 'platform_session',
+    targetId: null,
+    decision: 'ALLOW',
+    reasonCode: null,
     correlationId: null,
-    detail: { count: 7 },
+    ip: '10.0.0.2',
+    occurredAt: '2026-10-24T11:00:00Z',
   },
 ]
 
-const principalsFixture: PrincipalResponse[] = [
+const usersFixture: PlatformUserSummary[] = [
   {
-    principalId: 'p-1',
-    loginName: 'admin',
-    displayName: '租户管理员',
+    id: 'u-1',
+    username: 'admin',
+    displayName: '平台超级管理员',
     status: 'ACTIVE',
+    authSource: 'LOCAL',
+    mfaRequired: true,
     authzVersion: 2,
-    roles: ['TENANT_ADMIN'],
+    lastLoginAt: '2026-10-24T09:00:00Z',
   },
   {
-    principalId: 'p-2',
-    loginName: 'author',
+    id: 'u-2',
+    username: 'auditor',
     displayName: null,
     status: 'ACTIVE',
+    authSource: 'LOCAL',
+    mfaRequired: false,
     authzVersion: 1,
-    roles: ['AGENT_AUTHOR'],
+    lastLoginAt: null,
+  },
+]
+
+const rolesFixture: PlatformRoleSummary[] = [
+  {
+    name: 'PLATFORM_SUPER_ADMIN',
+    description: '平台超级管理员（最高权限，敏感操作强 MFA/重认证）',
+    permissions: ['platform.tenant.write', 'platform.user.read', 'platform.audit.read'],
+  },
+  {
+    name: 'PLATFORM_AUDITOR',
+    description: '平台审计员（只读平台审计与脱敏租户生命周期）',
+    permissions: ['platform.audit.read'],
   },
 ]
 
@@ -94,6 +135,7 @@ const mcpFixture: McpCatalogItem[] = [
     schemaVersion: 1,
     createdAt: '2026-10-01T00:00:00Z',
     publishedAt: '2026-10-01T00:00:00Z',
+    published: true,
     hasCredentialRef: true,
   lifecycleState: 'PUBLISHED',
   },
@@ -111,45 +153,48 @@ const mcpFixture: McpCatalogItem[] = [
     schemaVersion: 1,
     createdAt: null,
     publishedAt: null,
+    published: false,
     hasCredentialRef: false,
   lifecycleState: 'PUBLISHED',
   },
 ]
 
-describe('P5 审计日志页（/audit）', () => {
-  it('渲染审计条目与不可篡改提示，且不含任何写入口', async () => {
-    vi.mocked(getAuditLogs).mockResolvedValue({ items: auditFixture, nextCursor: null })
+describe('P5 平台审计页（/audit · 平台身份域）', () => {
+  it('渲染平台审计条目与分域提示，且不含任何写入口', async () => {
+    vi.mocked(getPlatformAuditEvents).mockResolvedValue(auditFixture)
     render(<AuditLogsPage />)
 
-    // 不可篡改 + 查询留痕双提示
-    expect(screen.getByText('审计记录不可篡改，查询行为本身亦留痕')).toBeInTheDocument()
+    // 平台/租户审计分域提示
+    expect(screen.getByText('平台域审计（与租户业务审计分域）')).toBeInTheDocument()
 
     await waitFor(() => {
-      expect(screen.getByText('CONFIG_APPROVE')).toBeInTheDocument()
+      expect(screen.getByText('TENANT_SUSPEND')).toBeInTheDocument()
     })
-    expect(screen.getByText('config_publish_request')).toBeInTheDocument()
-    expect(screen.getByText('AUDIT_READ')).toBeInTheDocument()
-    // 游标分页提示：无跳页
-    expect(screen.getByText('游标分页（追加只读，无跳页）')).toBeInTheDocument()
-    // 页面上不存在任何删除/修改按钮
+    expect(screen.getByText('PLATFORM_LOGIN')).toBeInTheDocument()
+    expect(screen.getByText('tenant')).toBeInTheDocument()
+    // 只读红线：页面上不存在任何删除/修改按钮
     expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '修改' })).not.toBeInTheDocument()
   })
 })
 
-describe('P5 角色矩阵页（/roles）', () => {
-  it('渲染主体-角色矩阵，被撤权主体给出水位告警', async () => {
-    vi.mocked(getMyPrincipals).mockResolvedValue(principalsFixture)
+describe('P5 平台用户与角色页（/roles · 平台身份域）', () => {
+  it('渲染平台用户与冻结角色矩阵，被撤权用户给出水位告警', async () => {
+    vi.mocked(getPlatformUsers).mockResolvedValue(usersFixture)
+    vi.mocked(getPlatformRoles).mockResolvedValue(rolesFixture)
     render(<PrincipalMatrixPage />)
 
     await waitFor(() => {
       expect(screen.getByText('admin')).toBeInTheDocument()
     })
-    // 角色分布
-    expect(screen.getByText('租户管理员 · 1')).toBeInTheDocument()
-    expect(screen.getByText('Agent 作者 · 1')).toBeInTheDocument()
-    // authzVersion=2 的主体触发撤权告警
-    expect(screen.getByText('租户内 1 个主体被撤权过')).toBeInTheDocument()
+    expect(screen.getByText('auditor')).toBeInTheDocument()
+    // 冻结角色矩阵呈现（角色 Tag 渲染中文名；权限清单呈现原始 permission 名，
+    // platform.audit.read 同时出现在 SUPER_ADMIN 与 AUDITOR 的权限清单 → 用 *AllBy*）
+    expect(screen.getByText('平台角色权限矩阵（冻结）')).toBeInTheDocument()
+    expect(screen.getByText('平台审计员')).toBeInTheDocument()
+    expect(screen.getAllByText('platform.audit.read').length).toBeGreaterThanOrEqual(1)
+    // authzVersion=2 的用户触发撤权告警
+    expect(screen.getByText('1 个平台用户被撤权过')).toBeInTheDocument()
   })
 })
 

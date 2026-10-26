@@ -507,3 +507,154 @@ export function getPlatformPublishRequest(requestId: string): Promise<PlatformRe
     method: 'GET',
   })
 }
+
+/* ══ 平台身份域（重规划 §7 / §9 · /api/platform/v1/*）══
+   ⚠️ 本段全部端点仅接受 aud=admin-console-api 的平台令牌；
+      与上方租户链端点（aud=agent-platform）令牌层互拒。
+      admin-console 已转型为纯平台控制台，登录走 platformLogin。 */
+
+import type {
+  PlatformLoginResponse,
+  PlatformMe,
+  PlatformUserSummary,
+  PlatformRoleSummary,
+  PlatformTenant,
+  PlatformQuota,
+  PlatformCapability,
+  PlatformAuditEvent,
+} from '@/api/types'
+
+/** POST /api/platform/v1/auth/login —— 平台登录（公开端点；失败统一 401 防枚举） */
+export function platformLogin(payload: {
+  username: string
+  password: string
+}): Promise<PlatformLoginResponse> {
+  return request<PlatformLoginResponse>('/platform/v1/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, false)
+}
+
+/** GET /api/platform/v1/auth/me —— 当前平台主体（角色回补用） */
+export function getPlatformMe(): Promise<PlatformMe> {
+  return request<PlatformMe>('/platform/v1/auth/me', { method: 'GET' })
+}
+
+/** GET /api/platform/v1/users —— 平台用户列表（需 platform.user.read） */
+export function getPlatformUsers(): Promise<PlatformUserSummary[]> {
+  return request<PlatformUserSummary[]>('/platform/v1/users', { method: 'GET' })
+}
+
+/** GET /api/platform/v1/roles —— 平台角色目录（需 platform.role.read） */
+export function getPlatformRoles(): Promise<PlatformRoleSummary[]> {
+  return request<PlatformRoleSummary[]>('/platform/v1/roles', { method: 'GET' })
+}
+
+/** GET /api/platform/v1/tenants —— 租户列表（简单分页，非游标） */
+export function getPlatformTenants(params?: {
+  status?: string
+  limit?: number
+}): Promise<PlatformTenant[]> {
+  const qs = new URLSearchParams()
+  if (params?.status) qs.set('status', params.status)
+  if (params?.limit) qs.set('limit', String(params.limit))
+  const q = qs.toString()
+  return request<PlatformTenant[]>(`/platform/v1/tenants${q ? `?${q}` : ''}`, { method: 'GET' })
+}
+
+/** POST /api/platform/v1/tenants —— 开通租户（进入 PENDING_SETUP，不自动建租户管理员） */
+export function createPlatformTenant(payload: {
+  slug: string
+  name: string
+  plan?: string
+}): Promise<PlatformTenant> {
+  return request<PlatformTenant>('/platform/v1/tenants', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** GET /api/platform/v1/tenants/{id} —— 租户详情 */
+export function getPlatformTenant(id: string): Promise<PlatformTenant> {
+  return request<PlatformTenant>(`/platform/v1/tenants/${id}`, { method: 'GET' })
+}
+
+/** POST /api/platform/v1/tenants/{id}/suspend —— 暂停（非法迁移 → 409） */
+export function suspendPlatformTenant(id: string): Promise<PlatformTenant> {
+  return request<PlatformTenant>(`/platform/v1/tenants/${id}/suspend`, { method: 'POST' })
+}
+
+/** POST /api/platform/v1/tenants/{id}/resume —— 恢复 */
+export function resumePlatformTenant(id: string): Promise<PlatformTenant> {
+  return request<PlatformTenant>(`/platform/v1/tenants/${id}/resume`, { method: 'POST' })
+}
+
+/** POST /api/platform/v1/tenants/{id}/decommission —— 退役（进入 DECOMMISSIONING） */
+export function decommissionPlatformTenant(id: string): Promise<PlatformTenant> {
+  return request<PlatformTenant>(`/platform/v1/tenants/${id}/decommission`, { method: 'POST' })
+}
+
+/** GET /api/platform/v1/tenants/{id}/quota —— 读取配额 */
+export function getPlatformQuota(id: string): Promise<PlatformQuota> {
+  return request<PlatformQuota>(`/platform/v1/tenants/${id}/quota`, { method: 'GET' })
+}
+
+/** PUT /api/platform/v1/tenants/{id}/quota —— 更新配额 */
+export function updatePlatformQuota(
+  id: string,
+  payload: PlatformQuota,
+): Promise<PlatformQuota> {
+  return request<PlatformQuota>(`/platform/v1/tenants/${id}/quota`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** GET /api/platform/v1/tenants/{id}/capabilities —— 列出租户能力授权 */
+export function getPlatformCapabilities(id: string): Promise<PlatformCapability[]> {
+  return request<PlatformCapability[]>(`/platform/v1/tenants/${id}/capabilities`, {
+    method: 'GET',
+  })
+}
+
+/** POST /api/platform/v1/tenants/{id}/capabilities —— 授予能力 */
+export function grantPlatformCapability(
+  id: string,
+  payload: { resourceCode: string; scope: string },
+): Promise<PlatformCapability> {
+  return request<PlatformCapability>(`/platform/v1/tenants/${id}/capabilities`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** DELETE /api/platform/v1/tenants/{id}/capabilities/{code} —— 撤销能力 */
+export function revokePlatformCapability(id: string, code: string): Promise<void> {
+  return request<void>(`/platform/v1/tenants/${id}/capabilities/${encodeURIComponent(code)}`, {
+    method: 'DELETE',
+  })
+}
+
+/** GET /api/platform/v1/audit-events —— 平台审计（需 platform.audit.read；与租户审计分域） */
+export function getPlatformAuditEvents(params?: {
+  actorId?: string
+  action?: string
+  targetType?: string
+  targetId?: string
+  from?: string
+  to?: string
+  limit?: number
+}): Promise<PlatformAuditEvent[]> {
+  const qs = new URLSearchParams()
+  if (params?.actorId) qs.set('actorId', params.actorId)
+  if (params?.action) qs.set('action', params.action)
+  if (params?.targetType) qs.set('targetType', params.targetType)
+  if (params?.targetId) qs.set('targetId', params.targetId)
+  if (params?.from) qs.set('from', params.from)
+  if (params?.to) qs.set('to', params.to)
+  if (params?.limit) qs.set('limit', String(params.limit))
+  const q = qs.toString()
+  return request<PlatformAuditEvent[]>(`/platform/v1/audit-events${q ? `?${q}` : ''}`, {
+    method: 'GET',
+  })
+}

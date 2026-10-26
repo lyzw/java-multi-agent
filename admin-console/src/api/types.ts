@@ -147,6 +147,17 @@ export interface ToolCatalogItem {
   riskLevel: string
   mcpServerId: string | null
   mcpToolName: string | null
+  /**
+   * 远程 HTTP 请求方法（仅 kind=HTTP 时非空）。
+   *
+   * ⚠️ 老版本后端**不回显**该字段，故声明为可选：
+   * 缺失时按「未提供」呈现，**不得**由前端臆造。
+   */
+  httpMethod?: string | null
+  /** 远程 HTTP 请求目标 URL（仅 kind=HTTP 时非空）；老版本后端不回显。 */
+  httpUrl?: string | null
+  /** 远程 HTTP 请求超时（毫秒；仅 kind=HTTP 时非空）；老版本后端不回显。 */
+  httpTimeoutMs?: number | null
   inputSchema: string
   paramPolicies: string
   version: number
@@ -161,6 +172,15 @@ export interface ToolCatalogItem {
    * 「有人跟我抢」，而真实原因是「它早就停了」。故前端必须**如实读取**。
    */
   lifecycleState: string | null
+  /**
+   * 配置指纹（cap_tool_def.config_fingerprint）—— 该版本定义内容的指纹。
+   *
+   * <p>⚠️ 老版本后端**不回显**该字段，故声明为可选：
+   * 缺失时按「未提供」呈现，**不得**由前端臆造。
+   */
+  configFingerprint?: string | null
+  /** 版本行创建时间（cap_tool_def.created_at）；老版本后端不回显。 */
+  createdAt?: string | null
 }
 
 /**
@@ -205,6 +225,8 @@ export interface McpCatalogItem {
   schemaVersion: number
   createdAt: string | null
   publishedAt: string | null
+  /** 发布状态（= publishedAt 非空）；⚠️ 与 lifecycleState 是**两件事**（停用是单向终态） */
+  published: boolean
   /** ⚠️ 仅布尔标识「是否登记了凭据引用」；定位符与凭据材料永不入响应（P5-T3） */
   hasCredentialRef: boolean
   /** ⚠️ 生命周期状态（PUBLISHED / DEPRECATED / …；读失败时为 null）—— 不硬编码 CAS 原状态 */
@@ -343,8 +365,16 @@ export interface PublishRoutingPolicySpec {
  */
 export type CapabilityRiskLevel = 'READ' | 'WRITE_PROFILE' | 'WRITE_EXTERNAL'
 
-/** Tool 类型：NATIVE = 内置（不绑定任何 MCP Server）；MCP = 绑定到某个 Server。 */
-export type PlatformToolKind = 'NATIVE' | 'MCP'
+/**
+ * Tool 类型：NATIVE = 内置（不绑定任何 MCP Server）；MCP = 绑定到某个 Server；
+ * HTTP = 远程 HTTP 请求（直接打一个配置里的 URL）。
+ *
+ * ⚠️ **HTTP 与 MCP 的关键差别**（第三十七批）：
+ * MCP 工具的目标由 MCP Server 的**固定清单**约束（远端操作名必须在清单内），
+ * 而 HTTP 工具的目标**就是配置里的那个 URL** ——
+ * 它绕开了固定清单，因此**自带 SSRF 防线是它的固有义务**（设计文档 §13.1）。
+ */
+export type PlatformToolKind = 'NATIVE' | 'MCP' | 'HTTP'
 
 /** MCP 传输方式（V1 只支持 HTTP / SSE，后端 `isSupportedInV1` 之外一律拒）。 */
 export type PlatformMcpTransport = 'HTTP' | 'SSE'
@@ -371,6 +401,12 @@ export interface PlatformToolSpec {
   mcpServerId?: string
   /** ⚠️ 仅 kind=MCP 时可给 */
   mcpToolName?: string
+  /** ⚠️ 仅 kind=HTTP 时可给：请求方法（GET/POST/PUT/PATCH/DELETE/HEAD） */
+  httpMethod?: string
+  /** ⚠️ 仅 kind=HTTP 时可给：目标 URL（绝对地址，http/https） */
+  httpUrl?: string
+  /** ⚠️ 仅 kind=HTTP 时可给：单次请求超时（毫秒，正整数，上限 300000） */
+  httpTimeoutMs?: number
   inputSchema?: string
   paramPolicies?: string
 }
@@ -724,4 +760,93 @@ export interface AuditLogEntry {
   correlationId: string | null
   /** 事件细节（后端 Map<String,Object>，键集随 action 变化，原样呈现） */
   detail: Record<string, unknown>
+}
+
+/* ── 平台身份域（重规划 §7 / §9 · /api/platform/v1/*） ── */
+
+/** 平台登录响应（POST /api/platform/v1/auth/login · TokenResponse）。
+ *
+ * ⛔ 无 tenantId：平台主体不属于任何租户；失败统一 401（防账号枚举）。
+ */
+export interface PlatformLoginResponse {
+  accessToken: string
+  tokenType: string
+  expiresIn: number
+  userId: string
+  roles: string[]
+}
+
+/** 当前平台主体（GET /api/platform/v1/auth/me · MeResponse） */
+export interface PlatformMe {
+  userId: string
+  roles: string[]
+  authzVersion: number
+  mfaVerified: boolean
+}
+
+/** 平台用户摘要（GET /api/platform/v1/users · UserSummary，绝不返回 password_hash） */
+export interface PlatformUserSummary {
+  id: string
+  username: string
+  displayName: string | null
+  status: string
+  authSource: string
+  mfaRequired: boolean
+  authzVersion: number
+  lastLoginAt: string | null
+}
+
+/** 平台角色摘要（GET /api/platform/v1/roles · RoleSummary，来自冻结矩阵） */
+export interface PlatformRoleSummary {
+  name: string
+  description: string
+  permissions: string[]
+}
+
+/** 平台租户摘要（GET/POST /api/platform/v1/tenants · TenantSummary）。
+ *
+ * ⚠️ lifecycleState 为状态机值（PENDING_SETUP/ACTIVE/SUSPENDED/
+ * DECOMMISSIONING/DECOMMISSIONED/CANCELLED），非旧 status 三值。
+ */
+export interface PlatformTenant {
+  tenantId: string
+  slug: string
+  name: string
+  lifecycleState: string
+  plan: string | null
+  effectivePolicyVersion: number
+  tenantAuthzVersion: number
+}
+
+/** 平台租户配额（GET/PUT /api/platform/v1/tenants/{id}/quota） */
+export interface PlatformQuota {
+  agentLimit: number
+  runConcurrencyLimit: number
+  budgetLimit: string | null
+}
+
+/** 平台租户能力授权（GET/POST/DELETE /api/platform/v1/tenants/{id}/capabilities） */
+export interface PlatformCapability {
+  id: string
+  tenantId: string
+  resourceCode: string
+  scope: string
+  status: string
+  version: number
+}
+
+/** 平台审计事件（GET /api/platform/v1/audit-events · AuditSummary，
+ *  读 platform.platform_audit_event，与租户审计分域、无 tenant_id） */
+export interface PlatformAuditEvent {
+  id: string
+  actorId: string
+  actorType: string
+  action: string
+  targetType: string
+  targetId: string | null
+  decision: string
+  reasonCode: string | null
+  correlationId: string | null
+  ip: string | null
+  occurredAt: string
 }

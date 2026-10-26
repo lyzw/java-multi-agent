@@ -32,8 +32,8 @@ export function RequireRole({
         title="403"
         subTitle={`当前账号无权访问「${location.pathname}」（需后端重授权）。`}
         extra={
-          <Button type="primary" onClick={() => navigate(`${APP_BASE_PATH}/dashboard`)}>
-            返回概览
+          <Button type="primary" onClick={() => navigate(`${APP_BASE_PATH}/tenants`)}>
+            返回租户管理
           </Button>
         }
       />

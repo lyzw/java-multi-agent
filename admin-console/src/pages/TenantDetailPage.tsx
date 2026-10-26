@@ -10,93 +10,130 @@ import {
   Typography,
   Alert,
   Spin,
-  Row,
-  Col,
-  Statistic,
   Descriptions,
+  InputNumber,
+  Input,
+  Popconfirm,
   App as AntApp,
 } from 'antd'
-import { SafetyCertificateOutlined } from '@ant-design/icons'
-import { ApiError } from '@/api/client'
 import {
-  getTenantDetail,
-  verifyTenantRls,
+  getPlatformTenant,
+  getPlatformQuota,
+  updatePlatformQuota,
+  getPlatformCapabilities,
+  grantPlatformCapability,
+  revokePlatformCapability,
 } from '@/api/adminApi'
 import type {
-  PrincipalResponse,
-  RlsVerifyResponse,
+  PlatformTenant,
+  PlatformQuota,
+  PlatformCapability,
 } from '@/api/types'
 
-const STATUS_COLOR: Record<string, string> = {
+/** 生命周期状态机配色（与 TenantLifecycle 一致） */
+const LIFECYCLE_COLOR: Record<string, string> = {
+  PENDING_SETUP: 'blue',
   ACTIVE: 'green',
   SUSPENDED: 'gold',
+  DECOMMISSIONING: 'volcano',
   DECOMMISSIONED: 'red',
+  CANCELLED: 'default',
 }
 
+/**
+ * 租户详情（平台身份域 · /api/platform/v1/tenants/{id}）。
+ *
+ * 三个页签：基本信息 / 配额（读写）/ 能力授权（授予·撤销）。
+ * ⛔ 无「主体列表」「RLS 校验」页签：平台主体不查租户内数据（跨域隔离）；
+ *    RLS 校验属租户运维通道，不在平台控制台暴露。
+ */
 export function TenantDetailPage(): JSX.Element {
   const { id = '' } = useParams()
   const { message } = AntApp.useApp()
-  const [detail, setDetail] = useState<{
-    tenant: { tenantId: string; slug: string; name: string; status: string; createdAt: string | null }
-    principalsCount: number
-    agentsCount: number
-    overridesCount: number
-    principals: PrincipalResponse[]
-  } | null>(null)
+  const [detail, setDetail] = useState<PlatformTenant | null>(null)
   const [loading, setLoading] = useState(true)
-  const [forbidden, setForbidden] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const [principals, setPrincipals] = useState<PrincipalResponse[]>([])
-  const [verify, setVerify] = useState<RlsVerifyResponse | null>(null)
-  const [verifying, setVerifying] = useState(false)
+  // ── 配额 ──
+  const [quota, setQuota] = useState<PlatformQuota | null>(null)
+  const [quotaSaving, setQuotaSaving] = useState(false)
+
+  // ── 能力授权 ──
+  const [caps, setCaps] = useState<PlatformCapability[]>([])
+  const [newResource, setNewResource] = useState('')
+  const [newScope, setNewScope] = useState('TENANT')
+  const [granting, setGranting] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
-    setForbidden(false)
+    setError(null)
     try {
-      const d = await getTenantDetail(id)
-      setDetail(d)
-      setPrincipals(d.principals)
+      const [t, q, c] = await Promise.all([
+        getPlatformTenant(id),
+        getPlatformQuota(id).catch(() => null),
+        getPlatformCapabilities(id).catch(() => []),
+      ])
+      setDetail(t)
+      setQuota(q)
+      setCaps(c)
     } catch (e) {
-      if (e instanceof ApiError && e.status === 403) {
-        setForbidden(true)
-      } else {
-        message.error(e instanceof Error ? e.message : '加载租户详情失败')
-      }
+      setError(e instanceof Error ? e.message : '加载租户详情失败')
     } finally {
       setLoading(false)
     }
-  }, [id, message])
+  }, [id])
 
   useEffect(() => {
     if (id) void load()
   }, [id, load])
 
-  const runVerify = async (): Promise<void> => {
-    setVerifying(true)
+  const saveQuota = async (): Promise<void> => {
+    if (!quota) return
+    setQuotaSaving(true)
     try {
-      const r = await verifyTenantRls(id)
-      setVerify(r)
-      if (r.ok) message.success('RLS 隔离校验通过')
-      else message.error('RLS 隔离校验未通过，可能存在越权风险')
+      const next = await updatePlatformQuota(id, quota)
+      setQuota(next)
+      message.success('配额已更新')
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '校验失败')
+      message.error(e instanceof Error ? e.message : '配额更新失败')
     } finally {
-      setVerifying(false)
+      setQuotaSaving(false)
+    }
+  }
+
+  const grant = async (): Promise<void> => {
+    const code = newResource.trim()
+    if (!code) return
+    setGranting(true)
+    try {
+      await grantPlatformCapability(id, {
+        resourceCode: code,
+        scope: newScope.trim().toUpperCase(),
+      })
+      message.success(`能力 ${code} 已授予`)
+      setNewResource('')
+      setCaps(await getPlatformCapabilities(id))
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '授予失败')
+    } finally {
+      setGranting(false)
+    }
+  }
+
+  const revoke = async (code: string): Promise<void> => {
+    try {
+      await revokePlatformCapability(id, code)
+      message.success(`能力 ${code} 已撤销`)
+      setCaps(await getPlatformCapabilities(id))
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '撤销失败')
     }
   }
 
   if (loading) return <Spin spinning style={{ width: '100%', marginTop: 80 }} />
 
-  if (forbidden) {
-    return (
-      <Alert
-        type="warning"
-        showIcon
-        message="无权限访问租户详情"
-        description="租户详情为平台级操作，须经 PLATFORM_ADMIN 作用域。当前账号不持有该角色。"
-      />
-    )
+  if (error) {
+    return <Alert type="error" showIcon message="加载失败" description={error} />
   }
 
   if (!detail) {
@@ -105,112 +142,172 @@ export function TenantDetailPage(): JSX.Element {
 
   return (
     <div>
-      <Typography.Title level={3}>租户详情 · {detail.tenant.slug}</Typography.Title>
+      <Typography.Title level={3}>租户详情 · {detail.slug}</Typography.Title>
       <Descriptions
         bordered
         size="small"
         style={{ marginBottom: 16 }}
         column={2}
         items={[
-          { key: 'slug', label: 'Slug', children: <Typography.Text code>{detail.tenant.slug}</Typography.Text> },
-          { key: 'name', label: '名称', children: detail.tenant.name },
+          { key: 'slug', label: 'Slug', children: <Typography.Text code>{detail.slug}</Typography.Text> },
+          { key: 'name', label: '名称', children: detail.name },
           {
-            key: 'status',
-            label: '状态',
-            children: <Tag color={STATUS_COLOR[detail.tenant.status] ?? 'default'}>{detail.tenant.status}</Tag>,
+            key: 'lifecycle',
+            label: '生命周期',
+            children: (
+              <Tag color={LIFECYCLE_COLOR[detail.lifecycleState] ?? 'default'}>
+                {detail.lifecycleState}
+              </Tag>
+            ),
           },
-          { key: 'created', label: '创建时间', children: detail.tenant.createdAt ?? '-' },
+          { key: 'plan', label: '套餐', children: detail.plan ?? '-' },
+          { key: 'policyVer', label: '生效策略版本', children: detail.effectivePolicyVersion },
+          { key: 'authzVer', label: '租户授权版本', children: detail.tenantAuthzVersion },
         ]}
       />
 
       <Tabs
         items={[
           {
-            key: 'overview',
-            label: '概览',
-            children: (
-              <Row gutter={16}>
-                <Col span={8}>
-                  <Card><Statistic title="主体数" value={detail.principalsCount} /></Card>
-                </Col>
-                <Col span={8}>
-                  <Card><Statistic title="Agent 定义" value={detail.agentsCount} /></Card>
-                </Col>
-                <Col span={8}>
-                  <Card><Statistic title="配置覆盖" value={detail.overridesCount} /></Card>
-                </Col>
-              </Row>
+            key: 'quota',
+            label: '配额',
+            children: quota ? (
+              <Card title="资源配额（平台级上限）">
+                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                  <Space wrap align="end">
+                    <div>
+                      <Typography.Text type="secondary">Agent 数上限</Typography.Text>
+                      <div>
+                        <InputNumber
+                          min={0}
+                          value={quota.agentLimit}
+                          onChange={(v) =>
+                            setQuota({ ...quota, agentLimit: typeof v === 'number' ? v : 0 })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Typography.Text type="secondary">Run 并发上限</Typography.Text>
+                      <div>
+                        <InputNumber
+                          min={0}
+                          value={quota.runConcurrencyLimit}
+                          onChange={(v) =>
+                            setQuota({
+                              ...quota,
+                              runConcurrencyLimit: typeof v === 'number' ? v : 0,
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Typography.Text type="secondary">预算上限（可空）</Typography.Text>
+                      <div>
+                        <Input
+                          style={{ width: 160 }}
+                          placeholder="如 100.00"
+                          value={quota.budgetLimit ?? ''}
+                          onChange={(e) =>
+                            setQuota({ ...quota, budgetLimit: e.target.value || null })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <Button type="primary" loading={quotaSaving} onClick={() => void saveQuota()}>
+                      保存配额
+                    </Button>
+                  </Space>
+                  <Typography.Paragraph type="secondary">
+                    配额为平台侧硬上限（platform.tenant.quota）；执行侧按租户生效值拦截。
+                  </Typography.Paragraph>
+                </Space>
+              </Card>
+            ) : (
+              <Alert type="info" showIcon message="配额信息不可用" />
             ),
           },
           {
-            key: 'principals',
-            label: `主体 (${detail.principalsCount})`,
+            key: 'capabilities',
+            label: `能力授权 (${caps.length})`,
             children: (
-              <Table<PrincipalResponse>
-                rowKey="principalId"
-                size="small"
-                dataSource={principals}
-                pagination={false}
-                locale={{ emptyText: '暂无主体' }}
-                columns={[
-                  { title: '登录名', dataIndex: 'loginName' },
-                  { title: '显示名', dataIndex: 'displayName', render: (v: string | null) => v ?? '-' },
-                  {
-                    title: '状态',
-                    dataIndex: 'status',
-                    render: (s: string) => <Tag color={s === 'ACTIVE' ? 'green' : 'default'}>{s}</Tag>,
-                  },
-                  {
-                    title: '角色',
-                    dataIndex: 'roles',
-                    render: (rs: string[]) => (
-                      <Space wrap>
-                        {rs.map((r) => (
-                          <Tag key={r}>{r}</Tag>
-                        ))}
-                        {rs.length === 0 && <Typography.Text type="secondary">（无）</Typography.Text>}
-                      </Space>
-                    ),
-                  },
-                  { title: '授权版本', dataIndex: 'authzVersion' },
-                ]}
-              />
-            ),
-          },
-          {
-            key: 'rls',
-            label: (
-              <Space>
-                <SafetyCertificateOutlined /> RLS 校验
-              </Space>
-            ),
-            children: (
-              <Card>
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <Button type="primary" loading={verifying} onClick={() => void runVerify()}>
-                    执行 RLS 隔离校验
-                  </Button>
-                  {verify && (
-                    <Alert
-                      type={verify.ok ? 'success' : 'error'}
-                      showIcon
-                      message={verify.ok ? 'RLS 隔离有效' : 'RLS 隔离存在风险'}
-                      description={
-                        <Space direction="vertical">
-                          <span>会话上下文已绑定目标租户：{verify.contextBound ? '是' : '否'}</span>
-                          <span>无法越界读取其他租户数据：{verify.isolated ? '是' : '否'}</span>
-                          <span>越界泄漏行数：{verify.leakedRows}</span>
-                          <span>绑定租户：{verify.boundTenantId ?? '-'}</span>
-                        </Space>
-                      }
-                    />
-                  )}
-                  {!verify && (
-                    <Typography.Paragraph type="secondary">
-                      以目标租户身份绑定连接后断言：会话上下文已绑定为目标租户，且无法读取其他租户的主体数据。
-                      若隔离被破坏（泄漏行数 &gt; 0），说明当前连接带 BYPASSRLS 或策略失效。
-                    </Typography.Paragraph>
-                  )}
+              <Card title="租户能力授权（平台资源可用范围）">
+                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                  <Space wrap align="end">
+                    <div>
+                      <Typography.Text type="secondary">资源编码</Typography.Text>
+                      <div>
+                        <Input
+                          style={{ width: 240 }}
+                          placeholder="tool:web-search / mcp:db-reader"
+                          value={newResource}
+                          onChange={(e) => setNewResource(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Typography.Text type="secondary">作用域</Typography.Text>
+                      <div>
+                        <Input
+                          style={{ width: 120 }}
+                          value={newScope}
+                          onChange={(e) => setNewScope(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <Button
+                      type="primary"
+                      loading={granting}
+                      disabled={!newResource.trim()}
+                      onClick={() => void grant()}
+                    >
+                      授予
+                    </Button>
+                  </Space>
+                  <Table<PlatformCapability>
+                    rowKey="id"
+                    size="small"
+                    dataSource={caps}
+                    pagination={false}
+                    locale={{ emptyText: '未授予任何平台能力' }}
+                    columns={[
+                      {
+                        title: '资源编码',
+                        dataIndex: 'resourceCode',
+                        render: (v: string) => <Typography.Text code>{v}</Typography.Text>,
+                      },
+                      { title: '作用域', dataIndex: 'scope', width: 100 },
+                      {
+                        title: '状态',
+                        dataIndex: 'status',
+                        width: 100,
+                        render: (s: string) => (
+                          <Tag color={s === 'ACTIVE' ? 'green' : 'default'}>{s}</Tag>
+                        ),
+                      },
+                      { title: '版本', dataIndex: 'version', width: 80 },
+                      {
+                        title: '操作',
+                        key: 'actions',
+                        width: 100,
+                        render: (_, c) => (
+                          <Popconfirm
+                            title={`撤销能力 ${c.resourceCode}？`}
+                            onConfirm={() => void revoke(c.resourceCode)}
+                          >
+                            <Button size="small" danger>
+                              撤销
+                            </Button>
+                          </Popconfirm>
+                        ),
+                      },
+                    ]}
+                  />
+                  <Typography.Paragraph type="secondary">
+                    ⚠️ 授予能力 = 平台资源进入租户<b>可用范围</b>；不替代租户内的调用授权
+                    （租户侧仍需自行配置 Agent 引用与权限）。
+                  </Typography.Paragraph>
                 </Space>
               </Card>
             ),

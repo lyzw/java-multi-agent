@@ -69,7 +69,7 @@ export function AdminLayout(): JSX.Element {
             whiteSpace: 'nowrap',
           }}
         >
-          {collapsed ? 'AC' : 'Agent 控制台'}
+          {collapsed ? 'PC' : '平台管理控制台'}
         </div>
         <Menu
           theme="dark"
