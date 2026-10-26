@@ -40,7 +40,7 @@ public class JdbcPlatformAuditRepository implements PlatformAuditPort {
                 INSERT INTO platform.platform_audit_event
                     (id, actor_id, actor_type, action, target_type, target_id,
                      decision, reason_code, correlation_id, ip, occurred_at)
-                VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::uuid, ?, ?, ?::uuid, ?, ?)
+                VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::uuid, ?, ?, ?::uuid, ?::inet, ?)
                 """;
         try (Connection conn = openSystem();
              PreparedStatement ps = conn.prepareStatement(sql)) {

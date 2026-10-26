@@ -81,6 +81,9 @@ public class PlatformTenantController {
                     request.name().trim(), request.plan());
             return ResponseEntity.status(HttpStatus.CREATED).body(TenantSummary.of(row));
         } catch (IllegalStateException e) {
+            // ⚠️ 必须留痕：把真实失败原因吞进泛化 409 会让运维无从排查（实测教训）
+            org.slf4j.LoggerFactory.getLogger(PlatformTenantController.class)
+                    .warn("开通租户被拒（409）: slug={}, 原因={}", slug, e.getMessage(), e);
             throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
         }
     }

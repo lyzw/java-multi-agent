@@ -47,7 +47,7 @@ public class JdbcPlatformTenantRepository implements PlatformTenantPort {
     @Override
     public List<PlatformTenantRow> listTenants(@Nullable String statusFilter, int limit) {
         StringBuilder sql = new StringBuilder(
-                "SELECT tenant_id, slug, name, lifecycle_state, plan, "
+                "SELECT id AS tenant_id, slug, name, lifecycle_state, plan, "
                         + "effective_policy_version, tenant_authz_version, created_at, updated_at "
                         + "FROM platform.tenant");
         List<Object> params = new ArrayList<>();
@@ -55,7 +55,7 @@ public class JdbcPlatformTenantRepository implements PlatformTenantPort {
             sql.append(" WHERE lifecycle_state = ?");
             params.add(statusFilter);
         }
-        sql.append(" ORDER BY created_at DESC, tenant_id LIMIT ?");
+        sql.append(" ORDER BY created_at DESC, id LIMIT ?");
         params.add(limit + 1);
 
         List<PlatformTenantRow> out = new ArrayList<>();
@@ -79,9 +79,9 @@ public class JdbcPlatformTenantRepository implements PlatformTenantPort {
     @Override
     public @Nullable PlatformTenantRow findTenant(@NonNull String tenantId) {
         String sql = """
-                SELECT tenant_id, slug, name, lifecycle_state, plan,
+                SELECT id AS tenant_id, slug, name, lifecycle_state, plan,
                        effective_policy_version, tenant_authz_version, created_at, updated_at
-                FROM platform.tenant WHERE tenant_id = ?::uuid
+                FROM platform.tenant WHERE id = ?::uuid
                 """;
         try (Connection conn = openSystem();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -127,7 +127,7 @@ public class JdbcPlatformTenantRepository implements PlatformTenantPort {
         String insertPlatform = """
                 INSERT INTO platform.tenant (slug, name, plan, status, lifecycle_state)
                 VALUES (?, ?, ?, 'PENDING_SETUP', 'PENDING_SETUP')
-                RETURNING tenant_id, created_at, updated_at
+                RETURNING id AS tenant_id, created_at, updated_at
                 """;
         try (Connection conn = openSystem()) {
             try {
@@ -182,8 +182,8 @@ public class JdbcPlatformTenantRepository implements PlatformTenantPort {
         String sql = """
                 UPDATE platform.tenant
                 SET lifecycle_state = ?, status = ?, updated_at = now()
-                WHERE tenant_id = ?::uuid
-                RETURNING tenant_id, slug, name, lifecycle_state, plan,
+                WHERE id = ?::uuid
+                RETURNING id AS tenant_id, slug, name, lifecycle_state, plan,
                           effective_policy_version, tenant_authz_version, created_at, updated_at
                 """;
         try (Connection conn = openSystem()) {
