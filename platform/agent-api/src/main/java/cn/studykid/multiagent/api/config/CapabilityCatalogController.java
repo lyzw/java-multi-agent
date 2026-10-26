@@ -16,6 +16,7 @@ import org.springframework.web.server.ResponseStatusException;
 import cn.studykid.multiagent.api.governance.GovernanceSupport;
 import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
 import cn.studykid.multiagent.application.cap.ConfigLifecycleService;
+import cn.studykid.multiagent.core.cap.CapHttpToolConfig;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef.McpDeclaration;
@@ -288,7 +289,15 @@ public class CapabilityCatalogController {
 
     // ── DTO ─────────────────────────────────────────────────────────
 
-    /** Tool 目录视图。 */
+    /**
+     * Tool 目录视图。
+     *
+     * <p>⚠️ <b>刻意给全 Tool 定义行的全部字段</b>（含
+     * {@code configFingerprint} / {@code createdAt}）：管理台的
+     * 「登记 / 修改 / 详情」三处都要求**如实呈现全部 Tool 信息** ——
+     * 少回显一个字段，运维就只能靠猜（例如「这份 Tool 到底改过没有」
+     * 就只能靠比对配置指纹）。字段缺失不得由前端**臆造**默认值。
+     */
     public record ToolResponse(
             @NonNull String toolId,
             @Nullable String name,
@@ -296,21 +305,36 @@ public class CapabilityCatalogController {
             @NonNull String riskLevel,
             @Nullable String mcpServerId,
             @Nullable String mcpToolName,
+            /** 远程 HTTP 请求方法（仅 kind=http 时非空） */
+            @Nullable String httpMethod,
+            /** 远程 HTTP 请求目标 URL（仅 kind=http 时非空） */
+            @Nullable String httpUrl,
+            /** 远程 HTTP 请求超时（毫秒；仅 kind=http 时非空） */
+            @Nullable Integer httpTimeoutMs,
             @NonNull String inputSchema,
             @NonNull String paramPolicies,
             int version,
             int schemaVersion,
             boolean published,
             @Nullable Instant publishedAt,
-            @Nullable String lifecycleState
+            @Nullable String lifecycleState,
+            /** 配置指纹（cap_tool_def.config_fingerprint）—— 该版本定义内容的指纹 */
+            @NonNull String configFingerprint,
+            /** 版本行创建时间（cap_tool_def.created_at） */
+            @NonNull Instant createdAt
     ) {
         static ToolResponse of(CapToolDef def, @Nullable String lifecycleState) {
+            CapHttpToolConfig http = def.httpConfig();
             return new ToolResponse(
                     def.id(), def.name(), def.kind().name(), def.riskLevel().name(),
                     def.mcpServerId(), def.mcpToolName(),
+                    http == null ? null : http.method(),
+                    http == null ? null : http.url(),
+                    http == null ? null : http.timeoutMs(),
                     def.inputSchema(), def.paramPolicies(),
                     def.version(), def.schemaVersion(),
-                    def.isPublished(), def.publishedAt(), lifecycleState);
+                    def.isPublished(), def.publishedAt(), lifecycleState,
+                    def.configFingerprint(), def.createdAt());
         }
     }
 
@@ -419,6 +443,14 @@ public class CapabilityCatalogController {
      * 凭据材料永不入响应（§4.2 / §6.4）；目录页只呈现连接形态与风险画像。
      * 仅暴露 {@code hasCredentialRef} 布尔，告知「是否存在凭据引用」而不回显任何定位符。
      */
+    /**
+     * MCP Server 目录视图。
+     *
+     * <p>⚠️ {@code published} 显式回显（Tool / Skill 侧都有）：管理台的目录页要
+     * 把「**发布状态**」与「**生命周期状态**」**合并成一列**呈现 ——
+     * 停用是**单向终态**，已发布过的对象停用后 {@code published} 仍为 true，
+     * 只看这一个布尔会把「已停用」显示成「已发布」。
+     */
     public record McpResponse(
             @NonNull String serverId,
             int version,
@@ -433,6 +465,7 @@ public class CapabilityCatalogController {
             int schemaVersion,
             @Nullable Instant createdAt,
             @Nullable Instant publishedAt,
+            boolean published,
             boolean hasCredentialRef,
             @Nullable String lifecycleState
     ) {
@@ -441,7 +474,7 @@ public class CapabilityCatalogController {
                     def.id(), def.version(), def.transport().name(), def.endpoint(),
                     def.authKind().name(), def.trustTier().name(), def.exposedToolAllowlist(),
                     def.connectionRisk().name(), def.dynamicDiscovery(), def.configFingerprint(),
-                    def.schemaVersion(), def.createdAt(), def.publishedAt(),
+                    def.schemaVersion(), def.createdAt(), def.publishedAt(), def.isPublished(),
                     def.credentialRef() != null, lifecycleState);
         }
     }

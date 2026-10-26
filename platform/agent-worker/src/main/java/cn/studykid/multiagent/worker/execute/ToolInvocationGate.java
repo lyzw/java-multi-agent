@@ -111,6 +111,17 @@ public class ToolInvocationGate {
     private final cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers;
 
     /**
+     * HTTP-backed 工具处理器的动态解析器（第三十七批 · 设计文档 §13.1 · ADR-011）。
+     *
+     * <p>⚠️ <b>可为空 = HTTP 出站未装配</b>：此时 HTTP 工具<b>解析不到</b>，
+     * 会被记为 {@code TOOL_NOT_DECLARED} 而拒绝 —— 不存在「静默放行」。
+     *
+     * <p>⚠️ <b>同样不另开执行入口</b>：它与原生工具、MCP-backed 工具共用
+     * 本类这一条路径，否则八道闸门对 HTTP 工具全部失效。
+     */
+    private final cn.studykid.multiagent.ports.http.HttpToolHandlerProvider httpToolHandlers;
+
+    /**
      * 委派执行器（多级 Agent v1.1 · P2-MA-02）。
      *
      * <p>⚠️ <b>可为空 = 多级委派未装配</b>：此时模型若请求委派，
@@ -370,6 +381,40 @@ public class ToolInvocationGate {
                               cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation,
                               @NonNull Clock clock,
                               RunBudgetProbe runBudget) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                reserveAmountPerToolCall, cancelGuard, approvalSource, capFlow, mcpHandlers,
+                delegation, clock, runBudget, null);
+    }
+
+    /**
+     * 最完整构造器（第三十七批）：额外注入 HTTP-backed 工具解析器。
+     *
+     * <p>⚠️ <b>HTTP 工具同样不另开执行入口</b>（ADR-011 / 07 §3）：
+     * 它与原生工具、MCP-backed 工具共用本类这一条路径，
+     * 八道闸门（Schema 校验 / 执行时重授权 / 审批 / 预算 / 账本 /
+     * 执行准入 / 执行意图 / 结果落盘）一视同仁。
+     *
+     * <p>⚠️ <b>新增依赖只加在这一个构造器上</b>（项目既有纪律）：
+     * 其余构造器保持不变并委托 —— 否则构造器数量继续膨胀，
+     * 而 Spring 在多个同形构造器之间无法选择（F-6）。
+     *
+     * @param httpToolHandlers HTTP 工具解析器（可为 null = 未装配 → HTTP 工具一律解析不到）
+     */
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall,
+                              @NonNull CancelGuard cancelGuard,
+                              RiskBasedApprovalPolicy.ApprovalSource approvalSource,
+                              cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow,
+                              cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers,
+                              cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation,
+                              @NonNull Clock clock,
+                              RunBudgetProbe runBudget,
+                              cn.studykid.multiagent.ports.http.HttpToolHandlerProvider httpToolHandlers) {
         this.handlers = List.copyOf(handlers);
         this.authorization = authorization;
         this.approvalPolicy = approvalPolicy;
@@ -383,6 +428,7 @@ public class ToolInvocationGate {
         this.delegation = delegation;
         this.clock = clock;
         this.runBudget = runBudget;
+        this.httpToolHandlers = httpToolHandlers;
         if (runBudget == null) {
             // ⚠️ 明确告警：未装配 Run 级预算 = 工具调用路径上没有「这一棵树」的额度约束。
             //    这不是错误（测试与旧装配走此路径），但生产必须装配。
@@ -1440,10 +1486,19 @@ public class ToolInvocationGate {
         // ⚠️ MCP 工具走**同一条**路径（ADR-011）：这里只做「解析」，
         //    后续的 Schema 校验 / 重授权 / 审批 / 预算 / 账本 / 准入 / 意图 / 落盘
         //    与原生工具完全一致 —— 不为 MCP 开任何旁路。
-        if (mcpHandlers == null) {
-            return null;
+        if (mcpHandlers != null) {
+            ToolHandler mcp = mcpHandlers.resolve(toolName).orElse(null);
+            if (mcp != null) {
+                return mcp;
+            }
         }
-        return mcpHandlers.resolve(toolName).orElse(null);
+        // ⚠️ HTTP 工具同样走**同一条**路径（第三十七批 · ADR-011）：
+        //    「远程 HTTP 请求」只是 Tool 的一种种类，不是另一条执行链路。
+        //    把它放到闸门之外，等于让八道闸门对全部 HTTP 工具失效。
+        if (httpToolHandlers != null) {
+            return httpToolHandlers.resolve(toolName).orElse(null);
+        }
+        return null;
     }
 
     /**

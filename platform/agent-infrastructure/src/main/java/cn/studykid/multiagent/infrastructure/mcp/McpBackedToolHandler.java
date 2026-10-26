@@ -16,6 +16,7 @@ import cn.studykid.multiagent.application.cap.McpUntrustedOutput;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.config.ToolRiskLevel;
+import cn.studykid.multiagent.infrastructure.tool.ToolInputSchemaValidator;
 import cn.studykid.multiagent.ports.mcp.McpTransportException;
 import cn.studykid.multiagent.ports.mcp.McpTransportPort;
 import cn.studykid.multiagent.ports.tool.ToolExecutionException;
@@ -90,41 +91,10 @@ public class McpBackedToolHandler implements ToolHandler {
         // ⚠️ Schema 错误必须拒绝，不得「尽力解析」（ToolHandler 契约）。
         //    MCP 的远端 schema 来自清单（可变），**不可信**；
         //    这里以版本化的 cap_tool_def.inputSchema 为准（§6.1 版本行不可变）。
-        JsonNode schema;
-        try {
-            schema = MAPPER.readTree(toolDef.inputSchema());
-        } catch (RuntimeException e) {
-            throw new IllegalArgumentException("工具输入 Schema 不是合法 JSON");
-        }
-        if (schema == null || !schema.isObject()) {
-            return;
-        }
-        JsonNode required = schema.get("required");
-        if (required != null && required.isArray()) {
-            for (JsonNode item : required) {
-                String name = item.asString();
-                if (!arguments.containsKey(name)) {
-                    throw new IllegalArgumentException("缺少必填参数: " + name);
-                }
-            }
-        }
-        JsonNode additional = schema.get("additionalProperties");
-        boolean closed = additional != null && additional.isBoolean()
-                && !additional.asBoolean(Boolean.TRUE);
-        if (closed) {
-            List<String> accepted = new ArrayList<>();
-            JsonNode properties = schema.get("properties");
-            if (properties != null && properties.isObject()) {
-                for (Map.Entry<String, JsonNode> entry : properties.properties()) {
-                    accepted.add(entry.getKey());
-                }
-            }
-            for (String key : arguments.keySet()) {
-                if (!accepted.contains(key)) {
-                    throw new IllegalArgumentException("不被接受的参数: " + key);
-                }
-            }
-        }
+        //    ⚠️ 校验实现与 HTTP-backed 工具共用一处（ToolInputSchemaValidator）——
+        //    两处各写一遍，迟早漂移，而漂移的方向通常是
+        //    「某一处忘了校验 additionalProperties:false」，那会让未声明的参数被放行。
+        ToolInputSchemaValidator.validate(toolDef.inputSchema(), arguments);
     }
 
     @Override

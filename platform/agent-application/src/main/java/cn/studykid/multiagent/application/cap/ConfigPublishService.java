@@ -636,7 +636,8 @@ public class ConfigPublishService {
             return def;
         }
         return new CapToolDef(def.id(), def.version(), def.name(), def.kind(), def.riskLevel(),
-                def.mcpServerId(), def.mcpToolName(), def.inputSchema(), def.paramPolicies(),
+                def.mcpServerId(), def.mcpToolName(), def.httpConfig(),
+                def.inputSchema(), def.paramPolicies(),
                 def.configFingerprint(), def.schemaVersion(), def.createdAt(), publishedAt);
     }
 

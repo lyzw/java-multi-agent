@@ -251,6 +251,7 @@ public class PlatformCapabilityController {
         return specs.stream().map(spec -> new ConfigPublishPayload.ToolSpec(
                 spec.toolId(), spec.name(), spec.kind(), spec.riskLevel(),
                 spec.mcpServerId(), spec.mcpToolName(),
+                spec.httpMethod(), spec.httpUrl(), spec.httpTimeoutMs(),
                 spec.inputSchema() == null ? "{}" : spec.inputSchema(),
                 spec.paramPolicies() == null ? "{}" : spec.paramPolicies())).toList();
     }
@@ -299,7 +300,12 @@ public class PlatformCapabilityController {
             @Nullable String reason) {
     }
 
-    /** Tool 定义草稿。 */
+    /**
+     * Tool 定义草稿。
+     *
+     * <p>⚠️ <b>HTTP 三件套仅 {@code kind=http} 时有效</b>（第三十七批）：
+     * 其余 kind 携带它们会被 {@link ConfigPublishPayload.ToolSpec} 拒绝。
+     */
     public record PlatformToolSpec(
             @NonNull String toolId,
             @Nullable String name,
@@ -307,6 +313,9 @@ public class PlatformCapabilityController {
             @NonNull String riskLevel,
             @Nullable String mcpServerId,
             @Nullable String mcpToolName,
+            @Nullable String httpMethod,
+            @Nullable String httpUrl,
+            @Nullable Integer httpTimeoutMs,
             @Nullable String inputSchema,
             @Nullable String paramPolicies) {
     }

@@ -8,6 +8,7 @@ import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
+import cn.studykid.multiagent.core.cap.CapHttpToolConfig;
 import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 
@@ -259,6 +260,15 @@ public record ConfigPublishPayload(
      * {@code kind=mcp} 必须同时给出 {@code mcpServerId} 与 {@code mcpToolName}，
      * {@code kind=native} 必须两者都不给 —— DB 层有同款 CHECK 兜底
      * （{@code cap_tool_def_mcp_binding_ck}）。
+     *
+     * <p>⚠️ <b>{@code kind=http} 与 HTTP 配置必须自洽</b>（第三十七批）：
+     * {@code kind=http} 必须同时给出 {@code httpMethod} / {@code httpUrl} / {@code httpTimeoutMs}；
+     * 其余 kind 必须三者都不给。DB 层有同款 CHECK 兜底
+     * （{@code cap_tool_def_http_binding_ck}）。
+     *
+     * @param httpMethod    远程 HTTP 请求方法（仅 kind=http 时非空）
+     * @param httpUrl       远程 HTTP 请求目标 URL（仅 kind=http 时非空）
+     * @param httpTimeoutMs 远程 HTTP 请求超时（毫秒；仅 kind=http 时非空）
      */
     public record ToolSpec(@NonNull String toolId,
                             @Nullable String name,
@@ -266,6 +276,9 @@ public record ConfigPublishPayload(
                             @NonNull String riskLevel,
                             @Nullable String mcpServerId,
                             @Nullable String mcpToolName,
+                            @Nullable String httpMethod,
+                            @Nullable String httpUrl,
+                            @Nullable Integer httpTimeoutMs,
                             @NonNull String inputSchema,
                             @NonNull String paramPolicies) {
 
@@ -288,16 +301,71 @@ public record ConfigPublishPayload(
                 throw new IllegalArgumentException("paramPolicies 不能为空");
             }
             boolean mcp = "mcp".equalsIgnoreCase(kind);
+            boolean http = "http".equalsIgnoreCase(kind);
             boolean hasBinding = mcpServerId != null && !mcpServerId.isBlank();
-            if (mcp && !(hasBinding && mcpToolName != null && !mcpToolName.isBlank())) {
+            boolean hasToolName = mcpToolName != null && !mcpToolName.isBlank();
+            if (mcp && !(hasBinding && hasToolName)) {
                 throw new IllegalArgumentException(
                         "kind=mcp 的 Tool 必须同时声明 mcpServerId 与 mcpToolName");
             }
-            if (!mcp && (hasBinding
-                    || (mcpToolName != null && !mcpToolName.isBlank()))) {
+            if (!mcp && (hasBinding || hasToolName)) {
+                // ⚠️ kind=http 也走这一支 —— HTTP 工具携带 MCP 绑定 = 「目标不唯一」。
                 throw new IllegalArgumentException(
-                        "kind=native 的 Tool 不得携带 MCP 绑定（那会绕过 MCP 固定清单与 SSRF 防线）");
+                        "kind=" + kind + " 的 Tool 不得携带 MCP 绑定"
+                                + "（MCP 目标由固定清单约束，HTTP 目标由配置给出，两者同时存在则目标不唯一）");
             }
+            // ⚠️ HTTP 三件套：要么齐全，要么全无。
+            boolean hasHttpMethod = httpMethod != null && !httpMethod.isBlank();
+            boolean hasHttpUrl = httpUrl != null && !httpUrl.isBlank();
+            boolean hasHttpTimeout = httpTimeoutMs != null;
+            if (http && !(hasHttpMethod && hasHttpUrl && hasHttpTimeout)) {
+                throw new IllegalArgumentException(
+                        "kind=http 的 Tool 必须同时声明 httpMethod、httpUrl 与 httpTimeoutMs");
+            }
+            if (!http && (hasHttpMethod || hasHttpUrl || hasHttpTimeout)) {
+                throw new IllegalArgumentException(
+                        "kind=" + kind + " 的 Tool 不得携带 HTTP 配置");
+            }
+            if (http) {
+                // ⚠️ 形状合法不等于取值合法 —— 取值校验交给 CapHttpToolConfig
+                //    （方法白名单 / 超时上下限），此处只挡住明显非法的形态。
+                if (!CapHttpToolConfig.ALLOWED_METHODS.contains(
+                        httpMethod.trim().toUpperCase(java.util.Locale.ROOT))) {
+                    throw new IllegalArgumentException(
+                            "不允许的 HTTP 方法: " + httpMethod
+                                    + "（合法值: " + CapHttpToolConfig.ALLOWED_METHODS.stream()
+                                            .sorted().toList() + "）");
+                }
+                if (httpTimeoutMs <= 0 || httpTimeoutMs > CapHttpToolConfig.MAX_TIMEOUT_MS) {
+                    throw new IllegalArgumentException(
+                            "HTTP 超时必须在 1 ~ " + CapHttpToolConfig.MAX_TIMEOUT_MS
+                                    + " 毫秒之间: " + httpTimeoutMs);
+                }
+            }
+        }
+
+        /**
+         * 兼容构造器（<b>非 HTTP 工具</b>）—— 既有构造点不必逐个补参数。
+         *
+         * @param toolId Tool 标识
+         * @param name 显示名
+         * @param kind Tool 种类
+         * @param riskLevel 风险等级
+         * @param mcpServerId MCP Server 标识（仅 kind=mcp）
+         * @param mcpToolName MCP 远端操作名（仅 kind=mcp）
+         * @param inputSchema 入参 JSON Schema 文本
+         * @param paramPolicies 参数策略 JSON 文本
+         */
+        public ToolSpec(@NonNull String toolId,
+                        @Nullable String name,
+                        @NonNull String kind,
+                        @NonNull String riskLevel,
+                        @Nullable String mcpServerId,
+                        @Nullable String mcpToolName,
+                        @NonNull String inputSchema,
+                        @NonNull String paramPolicies) {
+            this(toolId, name, kind, riskLevel, mcpServerId, mcpToolName,
+                    null, null, null, inputSchema, paramPolicies);
         }
     }
 

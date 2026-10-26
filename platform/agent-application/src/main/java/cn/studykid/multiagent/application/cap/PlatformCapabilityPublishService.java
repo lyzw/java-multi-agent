@@ -13,6 +13,7 @@ import java.util.Set;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import cn.studykid.multiagent.core.cap.CapHttpToolConfig;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
@@ -316,16 +317,29 @@ public class PlatformCapabilityPublishService {
         List<CapToolDef> toolRows = new ArrayList<>();
         for (ConfigPublishPayload.ToolSpec spec : payload.tools()) {
             int version = toolVersions.getOrDefault(spec.toolId(), 0) + 1;
+            CapToolKind kind = parseKind(spec.kind());
+            // ⚠️ HTTP 配置只在 kind=http 时构造；其余 kind 必须传 null ——
+            //    CapToolDef 的紧凑构造器会拒绝「非 HTTP 却带 http 配置」。
+            CapHttpToolConfig http = null;
+            if (kind == CapToolKind.HTTP) {
+                if (spec.httpMethod() == null || spec.httpUrl() == null
+                        || spec.httpTimeoutMs() == null) {
+                    throw new IllegalArgumentException(
+                            "kind=http 的 Tool 必须同时声明 httpMethod、httpUrl 与 httpTimeoutMs");
+                }
+                http = new CapHttpToolConfig(spec.httpMethod(), spec.httpUrl(),
+                        spec.httpTimeoutMs());
+            }
             CapToolDef draft = new CapToolDef(spec.toolId(), version, spec.name(),
-                    parseKind(spec.kind()), parseRisk(spec.riskLevel()),
-                    spec.mcpServerId(), spec.mcpToolName(),
+                    kind, parseRisk(spec.riskLevel()),
+                    spec.mcpServerId(), spec.mcpToolName(), http,
                     spec.inputSchema(), spec.paramPolicies(),
                     // ⚠️ 占位指纹：内容指纹**不包含**自身，故可先占位再算
                     "pending", 1, now, null);
             String fingerprint = CapObjectFingerprint.of(draft);
             toolRows.add(new CapToolDef(spec.toolId(), version, spec.name(),
-                    parseKind(spec.kind()), parseRisk(spec.riskLevel()),
-                    spec.mcpServerId(), spec.mcpToolName(),
+                    kind, parseRisk(spec.riskLevel()),
+                    spec.mcpServerId(), spec.mcpToolName(), http,
                     spec.inputSchema(), spec.paramPolicies(),
                     fingerprint, 1, now, null));
         }
@@ -424,7 +438,7 @@ public class PlatformCapabilityPublishService {
             return CapToolKind.valueOf(raw.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("未知的 Tool kind: " + raw
-                    + "（合法值: NATIVE / MCP）", e);
+                    + "（合法值: NATIVE / MCP / HTTP）", e);
         }
     }
 

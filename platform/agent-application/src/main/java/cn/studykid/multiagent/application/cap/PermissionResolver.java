@@ -415,7 +415,7 @@ public class PermissionResolver implements ClosureResolver {
         return new EffectiveClosure.ToolBinding(
                 tool.id(), version, tool.kind(), tool.riskLevel(),
                 tool.configFingerprint(), tool.paramPolicies(),
-                tool.mcpServerId(), tool.mcpToolName());
+                tool.mcpServerId(), tool.mcpToolName(), tool.httpConfig());
     }
 
     private int resolveVersion(@NonNull CapObjectType type, @NonNull String objectId) {

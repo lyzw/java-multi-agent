@@ -65,6 +65,9 @@ class ToolBypassArchitectureTest {
      *   <li>装配配置 —— 声明工具 Bean 与把工具集合注入闸门；</li>
      *   <li>MCP-backed 工具与其解析器（P4）—— <b>提供</b> MCP 工具的执行器，
      *       但<b>不执行</b>：真正的执行只发生在闸门内（它们只被闸门取得并调用）。</li>
+     *   <li>HTTP-backed 工具与其解析器（C37-1）—— 与 MCP 同构：
+ *       <b>提供</b>「远程 HTTP 请求」工具的执行器，但<b>不执行</b>：
+ *       真正的出站调用只发生在闸门内（它们只被闸门取得并调用）。</li>
      * </ul>
      */
     private static final Set<String> READERS = Set.of(
@@ -76,6 +79,9 @@ class ToolBypassArchitectureTest {
             "agent-ports/src/main/java/cn/studykid/multiagent/ports/mcp/McpHandlerProvider.java",
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/mcp/McpBackedToolHandler.java",
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/mcp/DbMcpHandlerProvider.java",
+            "agent-ports/src/main/java/cn/studykid/multiagent/ports/http/HttpToolHandlerProvider.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/http/HttpBackedToolHandler.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/http/DbHttpToolHandlerProvider.java",
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/WorkerExecutionConfig.java",
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ApplicationConfiguration.java",
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ToolRiskLevelConsistencyGuard.java");

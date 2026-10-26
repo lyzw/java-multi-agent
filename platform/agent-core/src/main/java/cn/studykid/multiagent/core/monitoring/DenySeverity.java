@@ -101,6 +101,12 @@ public enum DenySeverity {
             //    它不是「没成功」，而是「不知道成没成」：自动重试会造成重复副作用，
             //    只能由人工判定。故与越权同级，不能落 INFO。
             case EXEC_UNKNOWN -> CRITICAL;
+            // ⚠️ 远程 HTTP 出站被拦截（第三十七批）：这是**安全边界**被触碰 ——
+            //    目标解析后落在 loopback / 私网 / 链路本地 / 云元数据地址。
+            //    与「配置期形态非法」（HTTP_ENDPOINT_INVALID → WARNING）必须分档：
+            //    前者是「有人在请求内网」，后者是「配置填错了」，
+            //    排查方向相反，混档会让安全事件被当成普通配置缺陷放过。
+            case HTTP_EGRESS_BLOCKED -> CRITICAL;
 
             // ── 配置与治理：声明/漂移 ─────────────────────────────
             case SKILL_NOT_ENABLED -> WARNING;
@@ -125,6 +131,12 @@ public enum DenySeverity {
             //    两者排查方向相反（查发布流程 vs 查停用记录），分档相同、码不同。
             case RESULT_CONTRACT_DEPRECATED -> WARNING;
             case ROUTING_POLICY_DEPRECATED -> WARNING;
+            // ⚠️ HTTP 目标**形态**非法（第三十七批）：发布期配置缺陷 ——
+            //    方法不在白名单 / 协议非法 / URL 内嵌凭据 / 超时越界。
+            //    这是「配置填错了」，走常规变更流程修正，不惊动安全值班。
+            //    ⚠️ 与「出站被拦截」（HTTP_EGRESS_BLOCKED → CRITICAL）分档，
+            //    两者排查方向相反。
+            case HTTP_ENDPOINT_INVALID -> WARNING;
             case DELEGATION_NOT_ALLOWED -> WARNING;
             case DELEGATION_DEPTH_EXCEEDED -> WARNING;
             case DELEGATION_TIMEOUT -> WARNING;

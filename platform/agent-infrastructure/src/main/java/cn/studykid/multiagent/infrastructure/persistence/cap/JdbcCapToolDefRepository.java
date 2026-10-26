@@ -15,6 +15,7 @@ import tools.jackson.databind.ObjectMapper;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import cn.studykid.multiagent.core.cap.CapHttpToolConfig;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.CapToolKind;
 import cn.studykid.multiagent.core.cap.CapabilityRiskLevel;
@@ -32,6 +33,7 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
 
     private static final String COLUMNS = """
             id, version, name, kind, risk_level, mcp_server_id, mcp_tool_name,
+            http_method, http_url, http_timeout_ms,
             input_schema::text, param_policies::text, config_fingerprint,
             schema_version, created_at, published_at
             """;
@@ -49,9 +51,10 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
     private static final String SQL_INSERT = """
             INSERT INTO cap_tool_def
                 (id, version, name, kind, risk_level, mcp_server_id, mcp_tool_name,
+                 http_method, http_url, http_timeout_ms,
                  input_schema, param_policies, namespace, config_fingerprint,
                  schema_version, created_at, updated_at, published_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, 'platform', ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, 'platform', ?, ?, ?, ?, ?)
             ON CONFLICT (id, version) DO NOTHING
             """;
 
@@ -99,21 +102,34 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
                         ps.setString(1, def.id());
                         ps.setInt(2, def.version());
                         ps.setString(3, def.name());
-                        // ⚠️ DB 的 kind 取值域是小写（'native' / 'mcp'）
+                        // ⚠️ DB 的 kind 取值域是小写（'native' / 'mcp' / 'http'）
                         ps.setString(4, def.kind().name().toLowerCase(java.util.Locale.ROOT));
                         ps.setString(5, def.riskLevel().name());
                         ps.setString(6, def.mcpServerId());
                         ps.setString(7, def.mcpToolName());
-                        ps.setString(8, def.inputSchema());
-                        ps.setString(9, def.paramPolicies());
-                        ps.setString(10, def.configFingerprint());
-                        ps.setInt(11, def.schemaVersion());
-                        ps.setTimestamp(12, Timestamp.from(def.createdAt()));
-                        ps.setTimestamp(13, Timestamp.from(def.createdAt()));
-                        if (def.publishedAt() == null) {
-                            ps.setNull(14, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                        // ⚠️ HTTP 三件套：非 HTTP 工具必须写 NULL，
+                        //    绝不能写空串或 0 —— DB 的 CHECK 会拒绝「非 HTTP 却带 http 配置」，
+                        //    而空串/0 能骗过「是否为空」的判断。
+                        CapHttpToolConfig http = def.httpConfig();
+                        if (http == null) {
+                            ps.setNull(8, java.sql.Types.VARCHAR);
+                            ps.setNull(9, java.sql.Types.VARCHAR);
+                            ps.setNull(10, java.sql.Types.INTEGER);
                         } else {
-                            ps.setTimestamp(14, Timestamp.from(def.publishedAt()));
+                            ps.setString(8, http.method());
+                            ps.setString(9, http.url());
+                            ps.setInt(10, http.timeoutMs());
+                        }
+                        ps.setString(11, def.inputSchema());
+                        ps.setString(12, def.paramPolicies());
+                        ps.setString(13, def.configFingerprint());
+                        ps.setInt(14, def.schemaVersion());
+                        ps.setTimestamp(15, Timestamp.from(def.createdAt()));
+                        ps.setTimestamp(16, Timestamp.from(def.createdAt()));
+                        if (def.publishedAt() == null) {
+                            ps.setNull(17, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                        } else {
+                            ps.setTimestamp(17, Timestamp.from(def.publishedAt()));
                         }
                         return ps.executeUpdate() > 0;
                     }
@@ -200,12 +216,42 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
                 CapabilityRiskLevel.parse(rs.getString("risk_level")),
                 rs.getString("mcp_server_id"),
                 rs.getString("mcp_tool_name"),
+                mapHttpConfig(rs),
                 rs.getString("input_schema"),
                 rs.getString("param_policies"),
                 rs.getString("config_fingerprint"),
                 rs.getInt("schema_version"),
                 rs.getTimestamp("created_at").toInstant(),
                 publishedAt == null ? null : publishedAt.toInstant());
+    }
+
+    /**
+     * 读取 HTTP 配置列。
+     *
+     * <p>⚠️ <b>以 method 列为准</b>：三列要么齐全要么全空（DB 有 CHECK 兜底），
+     * 所以读 {@code http_method} 是否为 NULL 就足以判定「这是不是 HTTP 工具」。
+     * 若三列残缺（例如绕过约束写进来的脏数据），这里<b>抛异常</b>而不是补默认值 ——
+     * 补默认值会造出一个「能跑但目标错了」的 Tool，那比读不出来更危险。
+     */
+    private static @Nullable CapHttpToolConfig mapHttpConfig(ResultSet rs) throws SQLException {
+        String method = rs.getString("http_method");
+        String url = rs.getString("http_url");
+        // ⚠️ 用 getObject 判空而不是「getInt + wasNull」：
+        //    wasNull() 只反映**最后一次**读，调用顺序一变就静默读错 ——
+        //    这里宁可多一次装箱，也要让「这一列到底是不是 NULL」与读取动作绑在一起。
+        Integer timeout = (Integer) rs.getObject("http_timeout_ms");
+        if (method == null) {
+            if (url != null || timeout != null) {
+                throw new IllegalStateException(
+                        "Tool 定义含残缺的 HTTP 配置（缺方法）：URL/超时必须同时为空");
+            }
+            return null;
+        }
+        if (url == null || timeout == null) {
+            throw new IllegalStateException(
+                    "Tool 定义含残缺的 HTTP 配置：方法/URL/超时必须三者齐全");
+        }
+        return new CapHttpToolConfig(method, url, timeout);
     }
 
     /**

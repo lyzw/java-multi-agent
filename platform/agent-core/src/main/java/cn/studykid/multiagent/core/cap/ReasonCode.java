@@ -331,7 +331,41 @@ public enum ReasonCode {
      * {@link #RESULT_CONTRACT_DEPRECATED} 同构：「没发布」与「被停用」
      * 的排查方向相反（查发布流程 vs 查停用记录）。
      */
-    ROUTING_POLICY_DEPRECATED("发布期");
+    ROUTING_POLICY_DEPRECATED("发布期"),
+
+    /**
+     * 远程 HTTP 工具的目标配置非法（发布期拒绝）。
+     *
+     * <p>⚠️ <b>第三十七批追加</b>（{@code kind=http} 落地）：
+     * 覆盖「方法不在白名单 / URL 协议非法 / URL 内嵌凭据 / 超时越界 /
+     * HTTP 配置与 kind 不自洽」这几类<b>配置期</b>可判定的形态缺陷。
+     *
+     * <p>⚠️ <b>本码只管形态，不管目标安不安全</b>：
+     * 「这个 URL 会不会解析到内网 / 云元数据地址」必须等 DNS 解析后才能判定，
+     * 那是<b>运行期</b>的出站防护（设计文档 §13.1）。
+     * 配置期硬判 IP 会引入两难：写死 IP 段会误伤合法内网部署，
+     * 而在配置期做一次 DNS 解析又会与运行期解析结果不一致（TOCTOU）——
+     * 那种「看起来在挡 SSRF、实际挡不住」的检查比没有检查更危险。
+     */
+    HTTP_ENDPOINT_INVALID("发布期"),
+
+    /**
+     * 远程 HTTP 请求被出站防线拦截（运行期拒绝）。
+     *
+     * <p>⚠️ <b>第三十七批追加</b>：与 {@link #HTTP_ENDPOINT_INVALID} <b>必须分列</b>，
+     * 理由与「未发布 / 已停用」同类 —— 两者的<b>排查方向相反</b>：
+     * <ul>
+     *   <li>{@code HTTP_ENDPOINT_INVALID} = 「你填的目标形态不合法」→ 改配置；</li>
+     *   <li>{@code HTTP_EGRESS_BLOCKED} = 「这个目标解析到了不允许去的地方」
+     *       → 查谁在请求内网 / 云元数据地址，<b>这是安全事件</b>。</li>
+     * </ul>
+     * 合成一个码会让「改配置」和「查攻击」两种截然不同的动作都指向同一个原因码，
+     * 告警分诊就废了。
+     *
+     * <p>触发条件（设计文档 §13.1）：目标解析后的<b>实际 IP</b>落在
+     * loopback / 私网 / 链路本地 / 云元数据地址段，或重定向后命中上述任一条。
+     */
+    HTTP_EGRESS_BLOCKED("执行后");
 
     private final String phase;
 

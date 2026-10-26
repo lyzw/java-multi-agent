@@ -68,7 +68,7 @@ class PlatformCapabilityControllerTest {
 
         var resp = c.requestPublish(new PlatformCapabilityController.PlatformPublishRequest(
                 List.of(new PlatformCapabilityController.PlatformToolSpec(
-                        "tool-1", "工具", "NATIVE", "READ", null, null, "{}", "{}")),
+                        "tool-1", "工具", "NATIVE", "READ", null, null, null, null, null, "{}", "{}")),
                 List.of(), List.of(), null, "登记一个工具"));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -83,7 +83,7 @@ class PlatformCapabilityControllerTest {
         assertThatThrownBy(() -> c.requestPublish(
                 new PlatformCapabilityController.PlatformPublishRequest(
                         List.of(new PlatformCapabilityController.PlatformToolSpec(
-                                "tool-1", "工具", "NATIVE", "READ", null, null, "{}", "{}")),
+                                "tool-1", "工具", "NATIVE", "READ", null, null, null, null, null, "{}", "{}")),
                         List.of(), List.of(), null, "登记")))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
@@ -113,7 +113,7 @@ class PlatformCapabilityControllerTest {
         assertThatThrownBy(() -> c.requestPublish(
                 new PlatformCapabilityController.PlatformPublishRequest(
                         List.of(new PlatformCapabilityController.PlatformToolSpec(
-                                "tool-1", "工具", "NATIVE", "READ", null, null, "{}", "{}")),
+                                "tool-1", "工具", "NATIVE", "READ", null, null, null, null, null, "{}", "{}")),
                         List.of(), List.of(), null, "   ")))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
@@ -134,7 +134,7 @@ class PlatformCapabilityControllerTest {
         assertThatThrownBy(() -> c.requestPublish(
                 new PlatformCapabilityController.PlatformPublishRequest(
                         List.of(new PlatformCapabilityController.PlatformToolSpec(
-                                "tool-1", "工具", "NATIVE", "READ", null, null, "{}", "{}")),
+                                "tool-1", "工具", "NATIVE", "READ", null, null, null, null, null, "{}", "{}")),
                         List.of(), List.of(), null, "登记")))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())

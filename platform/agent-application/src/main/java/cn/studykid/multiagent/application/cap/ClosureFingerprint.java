@@ -149,6 +149,15 @@ public final class ClosureFingerprint {
             if (tool.mcpToolName() != null) {
                 node.put("mcpToolName", tool.mcpToolName());
             }
+            // ⚠️ HTTP 工具的目标入闭包指纹：「目标 URL 变了」就是行为变了，
+            //    必须能被失效检测（§6.4）看见。
+            //    （内容指纹里已含 http 字段，这里与 mcpServerId/mcpToolName 同款处理：
+            //    把「行为相关的定位信息」显式摊开，便于排查指纹差异。）
+            if (tool.httpConfig() != null) {
+                node.put("httpMethod", tool.httpConfig().method());
+                node.put("httpUrl", tool.httpConfig().url());
+                node.put("httpTimeoutMs", tool.httpConfig().timeoutMs());
+            }
         }
 
         ArrayNode mcpServers = root.putArray("mcpServers");

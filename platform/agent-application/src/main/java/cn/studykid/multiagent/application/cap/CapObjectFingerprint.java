@@ -13,6 +13,7 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import cn.studykid.multiagent.core.cap.CapAgentDef;
+import cn.studykid.multiagent.core.cap.CapHttpToolConfig;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapResultContractDef;
 import cn.studykid.multiagent.core.cap.CapRoutingPolicyDef;
@@ -179,6 +180,20 @@ public final class CapObjectFingerprint {
         root.put("riskLevel", def.riskLevel().name());
         root.put("mcpServerId", def.mcpServerId());
         root.put("mcpToolName", def.mcpToolName());
+        // ⚠️ **HTTP 配置必须入指纹**：目标 URL / 方法 / 超时是 Tool 的**行为定义**。
+        //    改了 URL 却指纹不变 → 闭包指纹失效检测（§6.4）就检测不到这次变化，
+        //    在途 Run 不会被判为失效 —— 那正是本指纹要防的事。
+        //    ⚠️ 凭据不进指纹（HTTP 工具本轮不提供明文凭据字段，见 CapHttpToolConfig）。
+        CapHttpToolConfig http = def.httpConfig();
+        if (http == null) {
+            root.putNull("httpMethod");
+            root.putNull("httpUrl");
+            root.putNull("httpTimeoutMs");
+        } else {
+            root.put("httpMethod", http.method());
+            root.put("httpUrl", http.url());
+            root.put("httpTimeoutMs", http.timeoutMs());
+        }
         root.put("inputSchema", def.inputSchema());
         root.put("paramPolicies", def.paramPolicies());
         root.put("schemaVersion", def.schemaVersion());

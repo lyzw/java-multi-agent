@@ -6,6 +6,7 @@ import java.util.Set;
 
 import org.jspecify.annotations.NonNull;
 
+import cn.studykid.multiagent.core.cap.CapHttpToolConfig;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
@@ -47,6 +48,7 @@ public final class ConfigValidationGate {
         validateTwoPersonReview(command);
         validateRiskLevels(command);
         validateMcpServers(command);
+        validateHttpTools(command);
         validateReferences(command);
     }
 
@@ -133,8 +135,110 @@ public final class ConfigValidationGate {
         }
     }
 
-    // ── 引用完整性（§6.4：缺失对象 → 发布校验失败）────────────────
+    // ── 远程 HTTP 工具配置（第三十七批 · §4.2 / §13.1）──────────
 
+    /**
+     * 校验远程 HTTP 工具的目标配置。
+     *
+     * <p>⚠️ <b>本门禁只判「形态」，不判「目标安不安全」</b>：
+     * 「这个 URL 会不会解析到内网 / 云元数据地址」必须<b>等 DNS 解析之后</b>才能判定，
+     * 那是<b>运行期</b>的出站防护（设计文档 §13.1）。
+     * 配置期硬判 IP 有两个害处：写死 IP 段会误伤合法的内网部署；
+     * 而在配置期做一次 DNS 解析，又必然与运行期的解析结果不一致（TOCTOU）——
+     * 那种「看起来在挡 SSRF、实际挡不住」的检查比没有检查更危险，
+     * 因为它会让人以为防线已经在了。
+     *
+     * <p>⚠️ <b>配置期能判的必须判干净</b>，否则这些非法配置会一路活到运行期，
+     * 在那里变成「工具突然全员不可用」——配置已经生效，真因却是提交那一刻就已知。
+     */
+    private void validateHttpTools(@NonNull ConfigPublishCommand command) {
+        for (CapToolDef tool : command.tools()) {
+            CapHttpToolConfig http = tool.httpConfig();
+            if (tool.isHttp() && http == null) {
+                throw new ConfigPublishRejectedException(ReasonCode.HTTP_ENDPOINT_INVALID, "http",
+                        "HTTP 工具 " + tool.id() + " v" + tool.version()
+                                + " 缺少 HTTP 配置：方法 / URL / 超时必须齐全，"
+                                + "缺一项就是一个能发布但永远跑不起来的 Tool");
+            }
+            if (!tool.isHttp() && http != null) {
+                throw new ConfigPublishRejectedException(ReasonCode.HTTP_ENDPOINT_INVALID, "http",
+                        "非 HTTP 工具 " + tool.id() + " v" + tool.version()
+                                + " 携带了 HTTP 配置：目标不唯一");
+            }
+            if (http == null) {
+                continue;
+            }
+            if (!CapHttpToolConfig.ALLOWED_METHODS.contains(http.method())) {
+                throw new ConfigPublishRejectedException(ReasonCode.HTTP_ENDPOINT_INVALID,
+                        "httpMethod",
+                        "HTTP 工具 " + tool.id() + " 的方法不在白名单内: " + http.method()
+                                + "（合法值: "
+                                + CapHttpToolConfig.ALLOWED_METHODS.stream().sorted().toList() + "）");
+            }
+            if (http.timeoutMs() <= 0 || http.timeoutMs() > CapHttpToolConfig.MAX_TIMEOUT_MS) {
+                throw new ConfigPublishRejectedException(ReasonCode.HTTP_ENDPOINT_INVALID,
+                        "httpTimeoutMs",
+                        "HTTP 工具 " + tool.id() + " 的超时必须在 1 ~ "
+                                + CapHttpToolConfig.MAX_TIMEOUT_MS + " 毫秒之间: "
+                                + http.timeoutMs());
+            }
+            validateHttpUrl(tool, http);
+        }
+    }
+
+    /**
+     * 校验 HTTP 目标 URL 的形态。
+     *
+     * <p>⚠️ <b>为什么拒绝 URL 内嵌凭据</b>（{@code https://user:pass@host/}）：
+     * 凭据明文禁入库（§4.2）。内嵌在 URL 里的口令会随 URL 一起进 DB、
+     * 进内容指纹、进目录回显 —— 等于把口令抄送到了好几个不该看见它的地方。
+     * 需要鉴权的 HTTP 工具应当走凭据引用（KMS 注入），而不是把口令写进地址。
+     */
+    private static void validateHttpUrl(@NonNull CapToolDef tool, @NonNull CapHttpToolConfig http) {
+        String url = http.url();
+        for (int i = 0; i < url.length(); i++) {
+            char c = url.charAt(i);
+            if (c < 0x20 || c == 0x7f) {
+                throw new ConfigPublishRejectedException(ReasonCode.HTTP_ENDPOINT_INVALID,
+                        "httpUrl",
+                        "HTTP 工具 " + tool.id() + " 的目标 URL 含控制字符（位置 " + i + "）");
+            }
+        }
+        java.net.URI parsed;
+        try {
+            parsed = java.net.URI.create(url);
+        } catch (IllegalArgumentException e) {
+            throw new ConfigPublishRejectedException(ReasonCode.HTTP_ENDPOINT_INVALID, "httpUrl",
+                    "HTTP 工具 " + tool.id() + " 的目标 URL 无法解析: " + url);
+        }
+        String scheme = parsed.getScheme();
+        if (scheme == null
+                || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+            // ⚠️ 只允许 http/https：file:// gopher:// ftp:// 这类协议是 SSRF 的经典载体，
+            //    在配置期就挡掉（运行期还会再挡一次，两处都要有）。
+            throw new ConfigPublishRejectedException(ReasonCode.HTTP_ENDPOINT_INVALID, "httpUrl",
+                    "HTTP 工具 " + tool.id() + " 的目标协议只允许 http / https，实际为: " + scheme);
+        }
+        // ⚠️ getHost() 对下划线主机名等非 RFC 主机名会返回 null，
+        //    那不代表「没有主机」—— 退回 authority 判空，避免误伤合法地址。
+        String host = parsed.getHost() != null ? parsed.getHost() : parsed.getAuthority();
+        if (host == null || host.isBlank()) {
+            throw new ConfigPublishRejectedException(ReasonCode.HTTP_ENDPOINT_INVALID, "httpUrl",
+                    "HTTP 工具 " + tool.id() + " 的目标 URL 缺少主机名: " + url);
+        }
+        int port = parsed.getPort();
+        if (port != -1 && (port < 1 || port > 65535)) {
+            throw new ConfigPublishRejectedException(ReasonCode.HTTP_ENDPOINT_INVALID, "httpUrl",
+                    "HTTP 工具 " + tool.id() + " 的目标端口越界: " + port);
+        }
+        if (parsed.getUserInfo() != null) {
+            throw new ConfigPublishRejectedException(ReasonCode.HTTP_ENDPOINT_INVALID, "httpUrl",
+                    "HTTP 工具 " + tool.id() + " 的目标 URL 不得内嵌凭据"
+                            + "（凭据明文禁入库 · §4.2；需要鉴权请走凭据引用）");
+        }
+    }
+
+    // ── 引用完整性（§6.4：缺失对象 → 发布校验失败）────────────────
     private void validateReferences(@NonNull ConfigPublishCommand command) {
         if (!command.isPlatformScope()) {
             // 租户级发布只含 Agent；Agent 引用的平台 Skill 由平台级发布保证版本。

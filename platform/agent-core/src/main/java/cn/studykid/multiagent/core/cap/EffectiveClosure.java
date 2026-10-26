@@ -138,13 +138,16 @@ public record EffectiveClosure(
      *
      * @param toolId        Tool 标识（逻辑 id）
      * @param version       固定版本号
-     * @param kind          Tool 种类（native / mcp）
+     * @param kind          Tool 种类（native / mcp / http）
      * @param riskLevel     Tool 的实际风险等级（未知即 {@link CapabilityRiskLevel#UNKNOWN}）
      * @param configFingerprint 该 Tool 版本行的内容指纹
      * @param paramPolicies 该 Tool 的参数策略（JSON 文本，原样保留以参与指纹）
      * @param mcpServerId   MCP Server 标识（仅 kind=mcp 时非空）
      * @param mcpToolName   MCP 远端操作名（仅 kind=mcp 时非空）——
      *                       它就是 §4.4 意义下的「操作（op）」
+     * @param httpConfig    远程 HTTP 请求配置（<b>仅 kind=http 时非空</b>）——
+     *                       闭包要固化它，因为「目标 URL 变了」就是行为变了，
+     *                       运行期执行器据此决定打哪里
      */
     public record ToolBinding(
             @NonNull String toolId,
@@ -154,13 +157,58 @@ public record EffectiveClosure(
             @NonNull String configFingerprint,
             @NonNull String paramPolicies,
             @Nullable String mcpServerId,
-            @Nullable String mcpToolName) {
+            @Nullable String mcpToolName,
+            @Nullable CapHttpToolConfig httpConfig) {
+
+        /**
+         * 兼容构造器（<b>非 HTTP 工具</b>）——
+         * 让既有构造点不必逐个补参数；传 {@code kind=HTTP} 会被拒
+         * （{@code httpConfig == null}）。
+         *
+         * @param toolId Tool 标识
+         * @param version 版本号
+         * @param kind Tool 种类
+         * @param riskLevel 风险等级
+         * @param configFingerprint 内容指纹
+         * @param paramPolicies 参数策略 JSON 文本
+         * @param mcpServerId MCP Server 标识（仅 kind=mcp）
+         * @param mcpToolName MCP 远端操作名（仅 kind=mcp）
+         */
+        public ToolBinding(@NonNull String toolId,
+                           int version,
+                           @NonNull CapToolKind kind,
+                           @NonNull CapabilityRiskLevel riskLevel,
+                           @NonNull String configFingerprint,
+                           @NonNull String paramPolicies,
+                           @Nullable String mcpServerId,
+                           @Nullable String mcpToolName) {
+            this(toolId, version, kind, riskLevel, configFingerprint, paramPolicies,
+                    mcpServerId, mcpToolName, null);
+        }
+
+        public ToolBinding {
+            if (kind == CapToolKind.HTTP && httpConfig == null) {
+                throw new IllegalArgumentException(
+                        "kind=http 的 Tool 绑定必须携带完整的 HTTP 配置");
+            }
+            if (kind != CapToolKind.HTTP && httpConfig != null) {
+                throw new IllegalArgumentException(
+                        "kind=" + kind.name() + " 的 Tool 绑定不得携带 HTTP 配置");
+            }
+        }
 
         /**
          * @return 是否为 MCP 工具
          */
         public boolean isMcp() {
             return kind == CapToolKind.MCP;
+        }
+
+        /**
+         * @return 是否为远程 HTTP 请求工具
+         */
+        public boolean isHttp() {
+            return kind == CapToolKind.HTTP;
         }
     }
 

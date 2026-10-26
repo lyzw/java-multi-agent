@@ -1,7 +1,5 @@
 package cn.studykid.multiagent.application.cap;
 
-import java.nio.charset.StandardCharsets;
-
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -85,42 +83,14 @@ public final class McpUntrustedOutput {
         if (maxBytes <= 0) {
             throw new IllegalArgumentException("maxBytes 必须为正数");
         }
-        String content = raw == null ? "" : raw;
-        int originalLength = content.length();
-
-        // ⚠️ 先按<b>字节预算</b>、<b>字符边界</b>截断再拼信封：
-        //    · 按字节：信封本身也占体积，若按字符数截断，中文按 UTF-8 编码后可能超限；
-        //    · 按字符边界：直接砍字节数组会把多字节字符砍成半个 →
-        //      解码出替换字符 U+FFFD，载荷内容被悄悄改坏。
-        int envelopeBudget = Math.max(0, maxBytes
-                - (HEADER.length() + FOOTER.length() + TRUNCATED.length() + serverId.length()
-                + op.length() + 16));
-        int used = 0;
-        int end = 0;
-        while (end < content.length()) {
-            int codePoint = content.codePointAt(end);
-            int charCount = Character.charCount(codePoint);
-            int byteLength = new String(Character.toChars(codePoint))
-                    .getBytes(StandardCharsets.UTF_8).length;
-            if (used + byteLength > envelopeBudget) {
-                break;
-            }
-            used += byteLength;
-            end += charCount;
-        }
-        boolean truncated = end < content.length();
-        String body = truncated
-                ? content.substring(0, end) + TRUNCATED
-                : content;
-
-        StringBuilder payload = new StringBuilder(body.length() + 64);
-        payload.append(HEADER).append(" server=").append(serverId)
-                .append(" op=").append(op).append("]\n");
-        payload.append(body);
-        if (!body.endsWith("\n")) {
-            payload.append('\n');
-        }
-        payload.append(FOOTER);
-        return new Guarded(payload.toString(), truncated, originalLength);
+        // ⚠️ 截断与信封的**唯一实现**在 {@link UntrustedOutputEnvelope}：
+        //    远程 HTTP 响应（{@link HttpUntrustedOutput}）共用同一份 ——
+        //    两处各写一遍，迟早漂移，而漂移的方向通常是「某一处忘了按字节截断」。
+        String headerLine = HEADER + " server=" + serverId + " op=" + op + "]\n";
+        int reserved = HEADER.length() + FOOTER.length() + TRUNCATED.length()
+                + serverId.length() + op.length() + 16;
+        UntrustedOutputEnvelope.Guarded guarded = UntrustedOutputEnvelope.wrap(
+                headerLine, FOOTER, TRUNCATED, raw, maxBytes, reserved);
+        return new Guarded(guarded.payload(), guarded.truncated(), guarded.originalLength());
     }
 }
