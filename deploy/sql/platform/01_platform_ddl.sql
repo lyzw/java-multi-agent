@@ -1,70 +1,15 @@
--- =====================================================================
--- platform 完整 DDL —— 生产环境初始化用
--- =====================================================================
---
--- 【用途】
---   把 platform 模块的**全部**数据库对象一次性建出来（表 / 类型 / 函数 /
---   触发器 / 索引 / 约束 / RLS 策略 / 注释 / 序列），用于生产环境的
---   空库初始化，或用于与线上库做结构比对（漂移核对）。
---
--- 【来源与可信度】
---   本文件**不是手写的**，也不是从线上脏库导出的：
---   取自远程 RDS（rm-cn-hhf50fbhh0001uzo.rwlb.rds.aliyuncs.com:5432，
---   PostgreSQL 18.6），做法是——
---     ① 在该实例上建**空库** agent_ddl_build；
---     ② 顺序执行仓库迁移脚本 platform/agent-infrastructure/src/main/
---        resources/db/migration/V1 … V18（全部 18 个，均零报错通过）；
---     ③ pg_dump --schema-only --schema=public 导出。
---   故本文件与仓库迁移脚本**严格同源**——迁移脚本变了，本文件必须重新导出。
---
---   ⚠️ **零漂移已核验**：导出结果与线上 agent_dev 的 28 张既有业务表逐列比对，
---      差异为 0；本文件多出的 14 张表（13 张 cap_* + execution_capability_snapshot）
---      正是线上尚未执行的 V15–V18。线上 agent_dev 当前 flyway 基线停在 V13。
---
--- 【对象清单（2026-10-23 远程空库实跑核验，非估算）】
---   表 42 张 · 索引 119 个（其中本文件内显式 CREATE INDEX 53 个）
---   枚举类型 13 个 · 函数 14 个 · 触发器 19 个 · 检查约束 89 个
---   RLS 策略 46 条 · 启用且 FORCE ROW LEVEL SECURITY 的表 38 张
---
--- 【前置条件】
---   1. PostgreSQL 17+（文件含 SET transaction_timeout，需 PG 17）。
---   2. 目标库必须为空库（或至少不含同名对象）。本文件**不做** DROP，
---      重复执行会因对象已存在而报错——这是刻意的（见下方「幂等性」）。
---   3. 数据库角色（app_agent / platform_ops）需**先**执行
---      03_platform_roles.sql 建好；本文件已用 --no-owner --no-privileges
---      导出，不含任何 GRANT。
---
--- 【与 Flyway 的关系 —— 二选一，勿混用】
---   ⚠️⚠️ platform 的迁移脚本由 Flyway 管理（ADR-011）。本文件是**平铺快照**，
---      用途是「空库一次性初始化」与「结构漂移比对」。
---      * 若生产环境用 Flyway 迁移 → **不要**执行本文件，
---        让 Flyway 按 V1→V18 建库，避免两套版本管理打架。
---      * 若生产环境要手工/离线初始化（无 Flyway）→ 执行本文件，
---        并自行记录版本基线。
---      混用的后果：Flyway 看到 flyway_schema_history 为空，会认为「未迁移」，
---      于是重跑 V1，而 V1 的 CREATE TYPE 冲突直接失败。
---
--- 【幂等性】
---   本文件**不是**幂等的（无 IF NOT EXISTS / DROP 保护）。
---   这是刻意的：初始化脚本若在「已有数据的库」上静默跳过，
---   会出现「表在但结构是旧的」——比直接报错更难排查。
---   要重复执行请先 DROP DATABASE 重建。
---
--- 【执行方式】
---   psql -h <host> -p <port> -U <owner> -d <target_db> \
---        -v ON_ERROR_STOP=1 -f 01_platform_ddl.sql
---
---   ⚠️ ON_ERROR_STOP=1 必加：否则 psql 遇错继续跑后续语句，
---      最终报「成功」但库里缺表——这类「谎报成功」本项目已多次踩坑。
---
--- 【执行后校验】
---   见文件末尾的「══ 校验 ══」小节（已内联在下方）。
--- =====================================================================
-
 --
 -- PostgreSQL database dump
 --
 
+-- ⚠️⚠️ 本文件是**派生快照**，由 Flyway 迁移（空库跑 V1→V28）经 pg_dump 生成。
+--    **唯一权威来源**是 platform/agent-infrastructure/.../db/migration/ 下的 Flyway 迁移。
+--    **禁止**在已由 Flyway 管理的库上执行本文件（会触发「类型已存在」等冲突，详见 deploy/sql/README.md）。
+--    仅用于：① 离线空库手工初始化；② 与线上库做结构漂移比对。
+--    重新生成步骤见 deploy/sql/README.md「重新生成」章节（--schema-only --schema=public）。
+--    所有表均位于 public schema（带 RLS 的租户业务表）；platform schema 仅放平台身份域，不含 agent 表。
+
+\restrict xrHb83R07HmdnvXH8oWBtN6MMo17rh2HwFF6yVqEoUdfCduc3zZd5HaXw6rdy9h
 
 -- Dumped from database version 18.6
 -- Dumped by pg_dump version 18.6
@@ -84,12 +29,7 @@ SET row_security = off;
 --
 -- Name: public; Type: SCHEMA; Schema: -; Owner: -
 --
--- ⚠️ **已移除 `CREATE SCHEMA public;`**（2026-10-23 远程实测）：
---    public schema 在**每个** PostgreSQL 数据库中都已存在，
---    pg_dump 因 --schema=public 而把它一并导出，
---    直接执行会报 `ERROR: schema "public" already exists`，
---    且该错误发生在文件开头 —— 后续所有语句都不会被执行。
---    故此处删去该语句（public 本就存在，无需创建）。
+
 
 --
 -- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
@@ -639,6 +579,53 @@ ALTER TABLE ONLY public.agent FORCE ROW LEVEL SECURITY;
 
 
 --
+-- Name: agent_invocation; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_invocation (
+    invocation_id uuid NOT NULL,
+    tenant_id uuid NOT NULL,
+    run_id uuid NOT NULL,
+    parent_invocation_id uuid,
+    parent_agent_id uuid NOT NULL,
+    parent_agent_version integer NOT NULL,
+    target_agent_id uuid NOT NULL,
+    target_agent_version integer NOT NULL,
+    status text NOT NULL,
+    depth integer NOT NULL,
+    trace_id text NOT NULL,
+    input_digest text,
+    output_digest text,
+    reason_code text,
+    fencing_token bigint NOT NULL,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    requested_target_agent_id uuid,
+    CONSTRAINT agent_invocation_depth_ck CHECK ((depth > 0)),
+    CONSTRAINT agent_invocation_fencing_ck CHECK ((fencing_token > 0)),
+    CONSTRAINT agent_invocation_parent_ck CHECK ((((depth = 1) AND (parent_invocation_id IS NULL)) OR ((depth > 1) AND (parent_invocation_id IS NOT NULL)))),
+    CONSTRAINT agent_invocation_status_ck CHECK ((status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text, 'SUCCEEDED'::text, 'FAILED'::text, 'CANCELLED'::text, 'TIMED_OUT'::text, 'UNKNOWN'::text]))),
+    CONSTRAINT agent_invocation_version_ck CHECK (((parent_agent_version > 0) AND (target_agent_version > 0)))
+);
+
+ALTER TABLE ONLY public.agent_invocation FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: TABLE agent_invocation; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.agent_invocation IS '委派调用运行记录（06 变更补充 v1.1 / FR-022）。只存摘要不存明文；重复投递不创建重复逻辑调用（MA-T10）；终态写入用 fencing_token 做 CAS（MA-T12）。';
+
+
+--
+-- Name: COLUMN agent_invocation.requested_target_agent_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.agent_invocation.requested_target_agent_id IS '模型给出的原始候选目标（路由降级**前**）。与 target_agent_id（实际生效的目标）并存：两者不同即说明发生了 ORDERED_FALLBACK 路由降级。⚠️ 存量行为 NULL：当时模型原始候选只在日志里留痕、没有任何持久化副本，无法可靠回填（据日志回填 = 用猜测冒充事实，比空值更有害）——NULL 的语义是「**当时未记录**」，**不是**「没有降级」。';
+
+
+--
 -- Name: agent_message_dead_letter; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -853,6 +840,33 @@ COMMENT ON CONSTRAINT reservation_state_valid ON public.budget_reservation IS '�
 
 
 --
+-- Name: cap_agent_child_ref; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cap_agent_child_ref (
+    tenant_id uuid NOT NULL,
+    parent_agent_id uuid NOT NULL,
+    parent_release_version integer NOT NULL,
+    child_agent_id uuid NOT NULL,
+    child_release_version integer NOT NULL,
+    ordinal integer NOT NULL,
+    required boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT cap_agent_child_ref_ordinal_ck CHECK ((ordinal >= 0)),
+    CONSTRAINT cap_agent_child_ref_version_ck CHECK (((parent_release_version > 0) AND (child_release_version > 0)))
+);
+
+ALTER TABLE ONLY public.cap_agent_child_ref FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: TABLE cap_agent_child_ref; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.cap_agent_child_ref IS '父子 Agent 关系的发布投影（06 变更补充 v1.1）。权威来源是 Agent release 中的 childAgentRefs；本表可重建，release 不可改写。';
+
+
+--
 -- Name: cap_agent_def; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -874,6 +888,7 @@ CREATE TABLE public.cap_agent_def (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     published_at timestamp with time zone,
     lifecycle_state public.cap_lifecycle_state DEFAULT 'DRAFT'::public.cap_lifecycle_state NOT NULL,
+    orchestration jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT cap_agent_def_no_inherits_ck CHECK ((inherits IS NULL)),
     CONSTRAINT cap_agent_def_version_positive CHECK ((version > 0))
 );
@@ -893,6 +908,13 @@ COMMENT ON TABLE public.cap_agent_def IS 'Agent 结构化定义（租户级，§
 --
 
 COMMENT ON COLUMN public.cap_agent_def.lifecycle_state IS '生命周期状态（§6.6）：DRAFT/VALIDATED/PUBLISHED/DEPRECATED。';
+
+
+--
+-- Name: COLUMN cap_agent_def.orchestration; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_agent_def.orchestration IS '多级 Agent 编排声明（06 变更补充 · v1.1）。{} = 缺省 LEAF；子 Agent 引用必须固定 release（禁止 latest）。';
 
 
 --
@@ -1060,7 +1082,7 @@ COMMENT ON TABLE public.cap_config_pointer IS '当前发布指针（§6.3）。�
 
 CREATE TABLE public.cap_config_publish_request (
     request_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    tenant_id uuid NOT NULL,
+    tenant_id uuid,
     operation text NOT NULL,
     payload jsonb NOT NULL,
     reason text NOT NULL,
@@ -1072,7 +1094,9 @@ CREATE TABLE public.cap_config_publish_request (
     decided_at timestamp with time zone,
     applied_at timestamp with time zone,
     failure_reason text,
+    scope text DEFAULT 'TENANT'::text NOT NULL,
     CONSTRAINT cap_config_publish_request_operation_ck CHECK ((operation = ANY (ARRAY['PUBLISH'::text, 'ROLLBACK'::text, 'LIFECYCLE_TRANSITION'::text]))),
+    CONSTRAINT cap_config_publish_request_scope_ck CHECK ((((scope = 'TENANT'::text) AND (tenant_id IS NOT NULL)) OR ((scope = 'PLATFORM'::text) AND (tenant_id IS NULL)))),
     CONSTRAINT cap_config_publish_request_state_ck CHECK ((state = ANY (ARRAY['PENDING'::text, 'APPROVED'::text, 'REJECTED'::text, 'APPLIED'::text, 'FAILED'::text]))),
     CONSTRAINT cap_config_publish_request_two_person_ck CHECK (((approver_id IS NULL) OR (approver_id <> requester_id)))
 );
@@ -1084,7 +1108,7 @@ ALTER TABLE ONLY public.cap_config_publish_request FORCE ROW LEVEL SECURITY;
 -- Name: TABLE cap_config_publish_request; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.cap_config_publish_request IS '配置变更申请单（P6R4 管理端点）：承载**待审批**的发布 / 回滚 / 生命周期迁移方案。双人复核的载体 —— 申请与审批是两次独立的、带身份的调用。';
+COMMENT ON TABLE public.cap_config_publish_request IS '配置变更申请单（P6R4 管理端点 · 第三十四批起亦承载平台级变更）：承载**待审批**的发布 / 回滚 / 生命周期迁移方案。双人复核的载体 —— 申请与审批是两次独立的、带身份的调用。第三十四批起支持 PLATFORM 作用域（平台级 Tool / Skill / MCP Server 的变更）。';
 
 
 --
@@ -1092,6 +1116,13 @@ COMMENT ON TABLE public.cap_config_publish_request IS '配置变更申请单（P
 --
 
 COMMENT ON COLUMN public.cap_config_publish_request.state IS '审批流程状态（PENDING/APPROVED/REJECTED/APPLIED/FAILED）；**不是**配置对象自身的生命周期（见 cap_*_def.lifecycle_state）。';
+
+
+--
+-- Name: COLUMN cap_config_publish_request.scope; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_config_publish_request.scope IS '变更作用域：TENANT（租户级对象，tenant_id 必填）/ PLATFORM（平台级对象，tenant_id 必为 NULL）。PLATFORM 行对应用角色连接不可见（RLS 严格相等），只能经平台运维角色（BYPASSRLS）读写。';
 
 
 --
@@ -1272,6 +1303,55 @@ COMMENT ON COLUMN public.cap_mcp_server_def.lifecycle_state IS '生命周期状�
 
 
 --
+-- Name: cap_result_contract; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cap_result_contract (
+    tenant_id uuid NOT NULL,
+    contract_id text NOT NULL,
+    version integer NOT NULL,
+    schema_json jsonb NOT NULL,
+    config_fingerprint text NOT NULL,
+    schema_version integer DEFAULT 1 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    published_at timestamp with time zone,
+    lifecycle_state public.cap_lifecycle_state DEFAULT 'DRAFT'::public.cap_lifecycle_state NOT NULL,
+    CONSTRAINT cap_result_contract_fingerprint_ck CHECK (((config_fingerprint IS NOT NULL) AND (length(config_fingerprint) > 0))),
+    CONSTRAINT cap_result_contract_version_ck CHECK ((version > 0))
+);
+
+ALTER TABLE ONLY public.cap_result_contract FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: TABLE cap_result_contract; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.cap_result_contract IS '委派输出契约（06 变更补充 v1.1 · MA-T16）。按 (tenant_id, contract_id, version) 寻址；Agent 的 resultContractRef 必须指向已发布的固定版本。';
+
+
+--
+-- Name: COLUMN cap_result_contract.contract_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_result_contract.contract_id IS '输出契约标识（可读字符串，与 cap_tool_def.id / cap_skill_def.id 同构）。⚠️ 不可改为 UUID：对外 schema 契约（common.schema.json#/$defs/id）把契约 id 定义为可读字符串，治理通道也按字符串接收；曾声明为 UUID 导致发布事务在 非 UUID id 上整笔回滚（V23 修复）。';
+
+
+--
+-- Name: COLUMN cap_result_contract.schema_json; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_result_contract.schema_json IS '契约定义本身（JSON Schema），不是契约实例。发布期固化，运行期只读。';
+
+
+--
+-- Name: COLUMN cap_result_contract.lifecycle_state; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_result_contract.lifecycle_state IS '生命周期状态（§6.6）：DRAFT/VALIDATED/PUBLISHED/DEPRECATED。DEPRECATED = 已停用：新发布不可再引用（06 §3.2），存量引用按版本过渡。';
+
+
+--
 -- Name: cap_result_event; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1295,6 +1375,62 @@ ALTER TABLE ONLY public.cap_result_event FORCE ROW LEVEL SECURITY;
 --
 
 COMMENT ON TABLE public.cap_result_event IS '工具调用的确定结果事件（§6.1）。UNIQUE(tenant_id, invocation_id) 是"只重试落账不重执行"的存储层保障。';
+
+
+--
+-- Name: cap_routing_policy; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cap_routing_policy (
+    tenant_id uuid NOT NULL,
+    policy_id text NOT NULL,
+    version integer NOT NULL,
+    strategy text NOT NULL,
+    targets jsonb NOT NULL,
+    config_fingerprint text NOT NULL,
+    schema_version integer DEFAULT 1 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    published_at timestamp with time zone,
+    lifecycle_state public.cap_lifecycle_state DEFAULT 'DRAFT'::public.cap_lifecycle_state NOT NULL,
+    CONSTRAINT cap_routing_policy_fingerprint_ck CHECK (((config_fingerprint IS NOT NULL) AND (length(config_fingerprint) > 0))),
+    CONSTRAINT cap_routing_policy_strategy_ck CHECK ((strategy = ANY (ARRAY['EXPLICIT_TARGETS'::text, 'ORDERED_FALLBACK'::text]))),
+    CONSTRAINT cap_routing_policy_targets_ck CHECK (
+CASE
+    WHEN (jsonb_typeof(targets) = 'array'::text) THEN (jsonb_array_length(targets) > 0)
+    ELSE false
+END),
+    CONSTRAINT cap_routing_policy_version_ck CHECK ((version > 0))
+);
+
+ALTER TABLE ONLY public.cap_routing_policy FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: TABLE cap_routing_policy; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.cap_routing_policy IS '路由策略（多级 Agent v1.1 第十四批 · MA-T05/MA-T15）。按 (tenant_id, policy_id, version) 寻址；Agent 的 routingPolicyRef 必须指向已发布的固定版本。';
+
+
+--
+-- Name: COLUMN cap_routing_policy.strategy; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_routing_policy.strategy IS '选择策略。EXPLICIT_TARGETS = 候选必须命中集合，否则拒绝（不降级）；ORDERED_FALLBACK = 候选未命中时按 targets 顺序取第一个。';
+
+
+--
+-- Name: COLUMN cap_routing_policy.targets; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_routing_policy.targets IS '允许的目标 Agent 标识（有序）。顺序在 ORDERED_FALLBACK 下降级语义下有意义。⚠️ 不含版本号：目标的固定版本由父 Agent 的 childAgentRefs 提供 —— 版本真相只有一份。';
+
+
+--
+-- Name: COLUMN cap_routing_policy.lifecycle_state; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_routing_policy.lifecycle_state IS '生命周期状态（§6.6）：DRAFT/VALIDATED/PUBLISHED/DEPRECATED。DEPRECATED = 已停用：新发布不可再引用（06 §3.2），存量引用按版本过渡。';
 
 
 --
@@ -1361,8 +1497,12 @@ CREATE TABLE public.cap_tool_def (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     published_at timestamp with time zone,
     lifecycle_state public.cap_lifecycle_state DEFAULT 'DRAFT'::public.cap_lifecycle_state NOT NULL,
-    CONSTRAINT cap_tool_def_kind_ck CHECK ((kind = ANY (ARRAY['native'::text, 'mcp'::text]))),
-    CONSTRAINT cap_tool_def_mcp_binding_ck CHECK ((((kind = 'mcp'::text) AND (mcp_server_id IS NOT NULL) AND (mcp_tool_name IS NOT NULL)) OR ((kind = 'native'::text) AND (mcp_server_id IS NULL) AND (mcp_tool_name IS NULL)))),
+    http_method text,
+    http_url text,
+    http_timeout_ms integer,
+    CONSTRAINT cap_tool_def_http_binding_ck CHECK ((((kind = 'http'::text) AND (http_method IS NOT NULL) AND (http_url IS NOT NULL) AND (http_timeout_ms IS NOT NULL) AND (http_method = ANY (ARRAY['GET'::text, 'POST'::text, 'PUT'::text, 'PATCH'::text, 'DELETE'::text, 'HEAD'::text])) AND (http_timeout_ms > 0) AND (http_timeout_ms <= 300000) AND (http_url ~* '^https?://[^[:space:]]+$'::text)) OR ((kind <> 'http'::text) AND (http_method IS NULL) AND (http_url IS NULL) AND (http_timeout_ms IS NULL)))),
+    CONSTRAINT cap_tool_def_kind_ck CHECK ((kind = ANY (ARRAY['native'::text, 'mcp'::text, 'http'::text]))),
+    CONSTRAINT cap_tool_def_mcp_binding_ck CHECK ((((kind = 'mcp'::text) AND (mcp_server_id IS NOT NULL) AND (mcp_tool_name IS NOT NULL)) OR ((kind = 'native'::text) AND (mcp_server_id IS NULL) AND (mcp_tool_name IS NULL)) OR ((kind = 'http'::text) AND (mcp_server_id IS NULL) AND (mcp_tool_name IS NULL)))),
     CONSTRAINT cap_tool_def_namespace_ck CHECK ((namespace = 'platform'::text)),
     CONSTRAINT cap_tool_def_risk_ck CHECK ((risk_level = ANY (ARRAY['READ'::text, 'WRITE_PROFILE'::text, 'WRITE_EXTERNAL'::text]))),
     CONSTRAINT cap_tool_def_version_positive CHECK ((version > 0))
@@ -1381,6 +1521,41 @@ COMMENT ON TABLE public.cap_tool_def IS 'Tool 定义（platform 级，§6.1）�
 --
 
 COMMENT ON COLUMN public.cap_tool_def.lifecycle_state IS '生命周期状态（§6.6）：DRAFT/VALIDATED/PUBLISHED/DEPRECATED。';
+
+
+--
+-- Name: COLUMN cap_tool_def.http_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_tool_def.http_method IS '远程 HTTP 请求工具的方法（GET/POST/PUT/PATCH/DELETE/HEAD）。仅 kind=http 时非空。';
+
+
+--
+-- Name: COLUMN cap_tool_def.http_url; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_tool_def.http_url IS '远程 HTTP 请求工具的目标 URL（绝对地址，http/https）。仅 kind=http 时非空。';
+
+
+--
+-- Name: COLUMN cap_tool_def.http_timeout_ms; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_tool_def.http_timeout_ms IS '远程 HTTP 请求工具的单次请求超时（毫秒，正整数，上限 300000）。仅 kind=http 时非空。';
+
+
+--
+-- Name: CONSTRAINT cap_tool_def_http_binding_ck ON cap_tool_def; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT cap_tool_def_http_binding_ck ON public.cap_tool_def IS 'HTTP 工具的形状一致性：kind=http 时方法/URL/超时必须齐全且合法；kind≠http 时三者必须全空。⚠️ 这不是 SSRF 防线 —— 运行期出站防护见设计文档 §13.1。';
+
+
+--
+-- Name: CONSTRAINT cap_tool_def_kind_ck ON cap_tool_def; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT cap_tool_def_kind_ck ON public.cap_tool_def IS 'Tool 种类取值域：native（内置）/ mcp（绑定 MCP Server）/ http（远程 HTTP 请求）。';
 
 
 --
@@ -1732,6 +1907,8 @@ CREATE TABLE public.run (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     completed_at timestamp with time zone,
+    deadline_at timestamp with time zone,
+    budget_amount numeric(18,6),
     CONSTRAINT run_attempt_non_negative CHECK ((attempt >= 0)),
     CONSTRAINT run_completed_at_consistent CHECK ((((state = ANY (ARRAY['QUEUED'::public.run_state, 'RUNNING'::public.run_state])) AND (completed_at IS NULL)) OR ((state = ANY (ARRAY['CANCELLED'::public.run_state, 'SUCCEEDED'::public.run_state, 'FAILED'::public.run_state, 'TIMED_OUT'::public.run_state])) AND (completed_at IS NOT NULL)))),
     CONSTRAINT run_fencing_non_negative CHECK ((fencing_token >= 0)),
@@ -1739,6 +1916,20 @@ CREATE TABLE public.run (
 );
 
 ALTER TABLE ONLY public.run FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: COLUMN run.deadline_at; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.run.deadline_at IS 'Run 业务截止时刻（NULL = 不限时）。多级 Agent 的「全调用树共享超时上限」以此为根上界；与 lease_expires_at（租约到期）语义不同，不得混用。';
+
+
+--
+-- Name: COLUMN run.budget_amount; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.run.budget_amount IS 'Run 级预算额度（NULL = 不额外限制；非空时按 budget_reservation.run_id 聚合判定）。与租户级 budget_account 是两个独立口径：前者约束单棵调用树，后者约束租户总量。';
 
 
 --
@@ -1999,6 +2190,14 @@ COMMENT ON TABLE public.weakness_record IS '薄弱点记录。首期唯一的有
 
 
 --
+-- Name: agent_invocation agent_invocation_pk; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_invocation
+    ADD CONSTRAINT agent_invocation_pk PRIMARY KEY (tenant_id, invocation_id);
+
+
+--
 -- Name: agent_message_dead_letter agent_message_dead_letter_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2118,6 +2317,14 @@ ALTER TABLE ONLY public.budget_reservation
 
 
 --
+-- Name: cap_agent_child_ref cap_agent_child_ref_pk; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cap_agent_child_ref
+    ADD CONSTRAINT cap_agent_child_ref_pk PRIMARY KEY (tenant_id, parent_agent_id, parent_release_version, child_agent_id, child_release_version);
+
+
+--
 -- Name: cap_agent_def cap_agent_def_pk; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2230,6 +2437,14 @@ ALTER TABLE ONLY public.cap_mcp_server_def
 
 
 --
+-- Name: cap_result_contract cap_result_contract_pk; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cap_result_contract
+    ADD CONSTRAINT cap_result_contract_pk PRIMARY KEY (tenant_id, contract_id, version);
+
+
+--
 -- Name: cap_result_event cap_result_event_invocation_unique; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2243,6 +2458,14 @@ ALTER TABLE ONLY public.cap_result_event
 
 ALTER TABLE ONLY public.cap_result_event
     ADD CONSTRAINT cap_result_event_pkey PRIMARY KEY (event_id);
+
+
+--
+-- Name: cap_routing_policy cap_routing_policy_pk; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cap_routing_policy
+    ADD CONSTRAINT cap_routing_policy_pk PRIMARY KEY (tenant_id, policy_id, version);
 
 
 --
@@ -2562,6 +2785,55 @@ ALTER TABLE ONLY public.weakness_record
 
 
 --
+-- Name: idx_agent_invocation_parent; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_agent_invocation_parent ON public.agent_invocation USING btree (tenant_id, parent_invocation_id);
+
+
+--
+-- Name: idx_agent_invocation_requested_target; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_agent_invocation_requested_target ON public.agent_invocation USING btree (tenant_id, requested_target_agent_id) WHERE (requested_target_agent_id IS NOT NULL);
+
+
+--
+-- Name: INDEX idx_agent_invocation_requested_target; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_agent_invocation_requested_target IS '按「模型原始候选」反查委派记录 —— 用于统计某个 Agent 被路由降级掉的频次。';
+
+
+--
+-- Name: idx_agent_invocation_routed_fallback; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_agent_invocation_routed_fallback ON public.agent_invocation USING btree (tenant_id, started_at DESC) WHERE ((requested_target_agent_id IS NOT NULL) AND (requested_target_agent_id IS DISTINCT FROM target_agent_id));
+
+
+--
+-- Name: INDEX idx_agent_invocation_routed_fallback; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_agent_invocation_routed_fallback IS '只索引「确实发生过路由降级」的委派记录：requested_target_agent_id 非空且与 target_agent_id 不同。降级记录是全部委派里的一小撮，这个索引让「哪些委派发生了降级」成为一次廉价的范围扫描，而不是全表过滤。';
+
+
+--
+-- Name: idx_agent_invocation_run; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_agent_invocation_run ON public.agent_invocation USING btree (tenant_id, run_id, started_at DESC);
+
+
+--
+-- Name: idx_agent_invocation_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_agent_invocation_status ON public.agent_invocation USING btree (tenant_id, status, started_at DESC);
+
+
+--
 -- Name: idx_agent_message_dead_tenant; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2622,6 +2894,20 @@ CREATE INDEX idx_audit_tenant_time ON public.audit_record USING btree (tenant_id
 --
 
 CREATE INDEX idx_audit_tenant_time_id ON public.audit_record USING btree (tenant_id, created_at DESC, audit_id DESC);
+
+
+--
+-- Name: idx_cap_agent_child_ref_child; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_cap_agent_child_ref_child ON public.cap_agent_child_ref USING btree (tenant_id, child_agent_id, child_release_version);
+
+
+--
+-- Name: idx_cap_agent_child_ref_parent; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_cap_agent_child_ref_parent ON public.cap_agent_child_ref USING btree (tenant_id, parent_agent_id, parent_release_version, ordinal);
 
 
 --
@@ -3010,6 +3296,34 @@ CREATE TRIGGER trg_cap_mcp_server_def_immutable BEFORE UPDATE ON public.cap_mcp_
 
 
 --
+-- Name: cap_result_contract trg_cap_result_contract_align_state; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_cap_result_contract_align_state BEFORE INSERT OR UPDATE ON public.cap_result_contract FOR EACH ROW EXECUTE FUNCTION public.align_cap_lifecycle_state();
+
+
+--
+-- Name: cap_result_contract trg_cap_result_contract_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_cap_result_contract_immutable BEFORE UPDATE ON public.cap_result_contract FOR EACH ROW EXECUTE FUNCTION public.forbid_published_def_mutation();
+
+
+--
+-- Name: cap_routing_policy trg_cap_routing_policy_align_state; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_cap_routing_policy_align_state BEFORE INSERT OR UPDATE ON public.cap_routing_policy FOR EACH ROW EXECUTE FUNCTION public.align_cap_lifecycle_state();
+
+
+--
+-- Name: cap_routing_policy trg_cap_routing_policy_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_cap_routing_policy_immutable BEFORE UPDATE ON public.cap_routing_policy FOR EACH ROW EXECUTE FUNCTION public.forbid_published_def_mutation();
+
+
+--
 -- Name: cap_skill_def trg_cap_skill_def_align_state; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -3140,6 +3454,22 @@ ALTER TABLE ONLY public.approval
 
 ALTER TABLE ONLY public.budget_account
     ADD CONSTRAINT budget_account_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenant(tenant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: cap_agent_child_ref cap_agent_child_ref_child_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cap_agent_child_ref
+    ADD CONSTRAINT cap_agent_child_ref_child_fk FOREIGN KEY (tenant_id, child_agent_id, child_release_version) REFERENCES public.cap_agent_def(tenant_id, agent_id, version) ON DELETE CASCADE;
+
+
+--
+-- Name: cap_agent_child_ref cap_agent_child_ref_parent_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cap_agent_child_ref
+    ADD CONSTRAINT cap_agent_child_ref_parent_fk FOREIGN KEY (tenant_id, parent_agent_id, parent_release_version) REFERENCES public.cap_agent_def(tenant_id, agent_id, version) ON DELETE CASCADE;
 
 
 --
@@ -3373,6 +3703,19 @@ ALTER TABLE ONLY public.weakness_record
 ALTER TABLE public.agent ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: agent_invocation; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.agent_invocation ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: agent_invocation agent_invocation_tenant_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY agent_invocation_tenant_isolation ON public.agent_invocation USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
+
+
+--
 -- Name: agent_message_dead_letter; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -3475,6 +3818,19 @@ ALTER TABLE public.budget_reservation ENABLE ROW LEVEL SECURITY;
 --
 
 CREATE POLICY budget_reservation_tenant_isolation ON public.budget_reservation USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
+
+
+--
+-- Name: cap_agent_child_ref; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.cap_agent_child_ref ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: cap_agent_child_ref cap_agent_child_ref_tenant_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY cap_agent_child_ref_tenant_isolation ON public.cap_agent_child_ref USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
 
 
 --
@@ -3693,6 +4049,19 @@ CREATE POLICY cap_execution_intent_tenant_isolation ON public.cap_execution_inte
 
 
 --
+-- Name: cap_result_contract; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.cap_result_contract ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: cap_result_contract cap_result_contract_tenant_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY cap_result_contract_tenant_isolation ON public.cap_result_contract USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
+
+
+--
 -- Name: cap_result_event; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -3703,6 +4072,19 @@ ALTER TABLE public.cap_result_event ENABLE ROW LEVEL SECURITY;
 --
 
 CREATE POLICY cap_result_event_tenant_isolation ON public.cap_result_event USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
+
+
+--
+-- Name: cap_routing_policy; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.cap_routing_policy ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: cap_routing_policy cap_routing_policy_tenant_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY cap_routing_policy_tenant_isolation ON public.cap_routing_policy USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
 
 
 --
@@ -3983,46 +4365,5 @@ CREATE POLICY weakness_record_tenant_isolation ON public.weakness_record USING (
 -- PostgreSQL database dump complete
 --
 
+\unrestrict xrHb83R07HmdnvXH8oWBtN6MMo17rh2HwFF6yVqEoUdfCduc3zZd5HaXw6rdy9h
 
-
--- =====================================================================
--- ══ 校验 ══
--- 以下查询全部应返回预期值；不符即说明初始化不完整。
--- =====================================================================
-
--- ① 表数量应为 42
-SELECT count(*) AS 表数量
-  FROM pg_tables WHERE schemaname = 'public';
-
--- ② RLS：启用的表应 = 38，强制（FORCE）应 = 38，策略应 = 46
---    （策略少于 10 条即说明迁移未全量应用）
-SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE c.relkind = 'r' AND n.nspname = 'public' AND c.relrowsecurity)       AS 启用RLS的表,
-       (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE c.relkind = 'r' AND n.nspname = 'public' AND c.relforcerowsecurity) AS 强制RLS的表,
-       (SELECT count(*) FROM pg_policies WHERE schemaname = 'public')                AS 策略数;
-
--- ③ 枚举类型应为 13 个
-SELECT count(*) AS 枚举类型数 FROM pg_type t
-  JOIN pg_namespace n ON n.oid = t.typnamespace
- WHERE n.nspname = 'public' AND t.typtype = 'e';
-
--- ④ 触发器应为 19 个（审计追加不可改 / 审批状态守卫 / 限流桶清理等不变量）
-SELECT count(*) AS 触发器数 FROM pg_trigger WHERE NOT tgisinternal;
-
--- ⑤ 检查约束应为 89 个
-SELECT count(*) AS 检查约束数 FROM pg_constraint c
-  JOIN pg_namespace n ON n.oid = c.connamespace
- WHERE n.nspname = 'public' AND c.contype = 'c';
-
--- ⑤ 关键函数必须在（缺任一 → RLS 上下文取不到租户）
-SELECT proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
- WHERE n.nspname = 'public'
-   AND proname IN ('current_tenant_id','forbid_audit_mutation','enforce_approval_state_transition')
- ORDER BY 1;
-
--- ⚠️ **红线检查（必做）**：当前连接角色若带 BYPASSRLS，
---    上面所有「隔离生效」的结论都是假的（超级用户能绕过 RLS）。
---    验证隔离必须用 app_agent（NOSUPERUSER + NOBYPASSRLS）另开连接执行。
-SELECT current_user, rolsuper, rolbypassrls
-  FROM pg_roles WHERE rolname = current_user;

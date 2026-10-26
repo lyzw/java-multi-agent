@@ -5,6 +5,9 @@
 >
 > **来源**：远程 RDS（`rm-cn-hhf50fbhh0001uzo.rwlb.rds.aliyuncs.com:5432`，PostgreSQL 18.6）。
 > 全部文件均**在远程库上实跑验证通过**（2026-10-23），非静态推断。
+> ⚠️ 2026-10-26：`platform/01_platform_ddl.sql` 已按「空库跑完 V1→V28 → pg_dump」重新导出并空库复放验证
+> （0 错误）——旧快照缺 V19-V28 的对象（`agent_invocation` / `cap_agent_child_ref` /
+> `cap_routing_policy` 指纹约束 / `cap_config_publish_request` PLATFORM scope / Tool 的 http 三件套+三约束）。
 
 ---
 
@@ -14,9 +17,10 @@
 deploy/sql/
 ├── README.md                        ← 本文件
 ├── platform/
-│   ├── 01_platform_ddl.sql          完整 DDL（42 表 / 13 枚举 / 14 函数 / 19 触发器 / 46 RLS 策略）
+│   ├── 01_platform_ddl.sql          完整 DDL（46 表 / 13 枚举 / 14 函数 / 23 触发器 / 50 RLS 策略）
 │   ├── 02_platform_seed.sql         种子数据（租户 / 预算账户 / 管理员 / 可选基线 Agent）
-│   └── 03_platform_roles.sql        数据库角色 + 授权（集群级，需超管）
+│   ├── 03_platform_roles.sql        数据库角色 + 授权（集群级，需超管）
+│   └── 04_capability_seed.sql       能力目录种子（MCP×2 / Tool×6 / Skill×4 + 平台发布 + 租户 Agent×3）
 └── rag/
     ├── 01_rag_ddl.sql               完整 DDL（11 表 / 9 枚举 / 2 函数 / 11 RLS 策略 + vector/pgcrypto 扩展）
     ├── 02_rag_seed.sql              种子数据（演示语料，tenant_id 必填）
@@ -52,6 +56,12 @@ psql -h <host> -p 5432 -U <超管> -d agent_prod -v ON_ERROR_STOP=1 \
      -v app_password='<app_agent 口令>' \
      -v ops_password='<platform_ops 口令>' \
      -f deploy/sql/platform/03_platform_roles.sql
+
+# ⑤ 能力目录种子（⚠️ 必须**平台运维角色**执行 —— release/pointer 的 PLATFORM 行
+#    由 BYPASSRLS 写入；tenant_slug 需与应用侧 AGENT_TENANT_SLUGS 一致）
+psql -h <host> -p 5432 -U platform_ops -d agent_prod -v ON_ERROR_STOP=1 \
+     -v tenant_slug='t-prod' \
+     -f deploy/sql/platform/04_capability_seed.sql
 ```
 
 > ⚠️ **角色必须在 DDL 之后建**：授权语句针对「已存在的表」，
@@ -123,6 +133,7 @@ V1 的 `CREATE TYPE` 直接因类型已存在而失败 → **整个迁移链断�
 | rag DDL 与线上 `study_rag` 逐列比对 | ✅ 差异 0（线上 10 表全部一致）；多出 1 表为线上**尚未执行**的 V6 `rag_dictionary` |
 | rag 种子 | ✅ 0 错误 → 来源 3 / 版本坐标 3 / 载体 7 / 片段 8 |
 | rag RLS 实测 | ✅ 未设上下文→0 行；正确租户→3 行；错误租户→0 行；跨租户写入→被拒 |
+| 能力目录种子（04，platform_ops 执行，远程 `agent_dev@t-a`，2026-10-26）| ✅ MCP=2 / Tool=6 / Skill=4 全部 v1 PUBLISHED；PLATFORM release(seq=1)+指针+PUBLISH 决策日志在位；租户 Agent ×3（2 LEAF + 1 SEQUENTIAL 父级，子引用边 2）；**幂等复跑 0 重复插入**（release 仍 1，agent 表 92→95 恰增 3） |
 | 清理 | ✅ 验证库与临时角色已全部删除，线上 `agent_dev` / `study_rag` 零改动 |
 
 ---
