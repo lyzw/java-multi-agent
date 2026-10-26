@@ -1224,6 +1224,21 @@ public class ApplicationConfiguration {
                 .JdbcConfigPointerRepository(platformOps.guardedOrUnavailableDataSource());
     }
 
+    /**
+     * 平台控制台的跨租户 Agent 注册表（只读 · 第三十九批）。
+     *
+     * <p>⚠️ 与上面平台通道的端口同一纪律：运维连接 + 会话窗（调用方负责包会话）。
+     * 仅管理元数据，绝无业务指令正文（禁区红线）。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort
+            platformAgentDirectoryPort(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
+                    platformOps) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcPlatformAgentDirectoryRepository(platformOps.guardedOrUnavailableDataSource());
+    }
+
     /** 平台通道的发布头仓储（运维连接）。 */
     @Bean
     public cn.studykid.multiagent.ports.persistence.ConfigReleasePort
