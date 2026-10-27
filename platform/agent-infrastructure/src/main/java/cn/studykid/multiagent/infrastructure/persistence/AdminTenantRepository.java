@@ -126,28 +126,9 @@ public class AdminTenantRepository implements AdminTenantPort {
         }
     }
 
-    /** 租户生命周期：置状态（ACTIVE / SUSPENDED / DECOMMISSIONED）。 */
-    @Override
-    public @Nullable TenantRow updateStatus(@NonNull String tenantId, @NonNull String status) {
-        String sql = """
-                UPDATE tenant SET status = ?, updated_at = now()
-                WHERE tenant_id = ?::uuid
-                RETURNING tenant_id, slug, name, status, created_at, updated_at
-                """;
-        try (Connection conn = openSystem()) {
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, status);
-                ps.setString(2, tenantId);
-                try (ResultSet rs = ps.executeQuery()) {
-                    TenantRow row = rs.next() ? mapTenant(rs) : null;
-                    conn.commit();
-                    return row;
-                }
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException("更新租户状态失败", e);
-        }
-    }
+    /* ⛔ updateStatus（生命周期直改）已随 PUT /api/admin/tenants/{id}/status 下线
+       （评审 P0-4）。生命周期变更一律走 JdbcPlatformTenantRepository.transitionLifecycle
+       （TenantLifecycle 状态机 + CAS + 镜像同步）。 */
 
     // ── 受 RLS 的表（须绑定目标租户上下文） ────────────────
 

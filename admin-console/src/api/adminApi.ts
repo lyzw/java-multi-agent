@@ -121,16 +121,8 @@ export function provisionTenant(payload: { slug: string; name: string }): Promis
   })
 }
 
-/** PUT /api/admin/tenants/{id}/status —— 生命周期置状态（平台级） */
-export function updateTenantStatus(
-  id: string,
-  status: 'ACTIVE' | 'SUSPENDED' | 'DECOMMISSIONED',
-): Promise<TenantResponse> {
-  return request<TenantResponse>(`/admin/tenants/${id}/status`, {
-    method: 'PUT',
-    body: JSON.stringify({ status }),
-  })
-}
+/* ⛔ updateTenantStatus（PUT /api/admin/tenants/{id}/status）已随 P0-4 下线：
+   直改镜像无迁移校验；生命周期变更走平台三态迁移端点（状态机 + CAS）。 */
 
 /** POST /api/admin/tenants/{id}/rls-verify —— RLS 隔离校验（平台级） */
 export function verifyTenantRls(id: string): Promise<RlsVerifyResponse> {

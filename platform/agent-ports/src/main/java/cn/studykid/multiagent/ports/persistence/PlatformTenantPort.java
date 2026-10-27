@@ -51,10 +51,18 @@ public interface PlatformTenantPort {
     /**
      * 迁移租户生命周期状态（须由调用方先经 {@link TenantLifecycle#canTransition} 校验）。
      *
-     * @return 更新后的租户行；租户不存在返回 {@code null}
+     * <p>⚠️ <b>CAS 前置条件（评审 P0-4）</b>：{@code expectedCurrentState} 是调用方
+     * 校验迁移合法性时所依据的状态——UPDATE 必须带
+     * {@code WHERE lifecycle_state = expectedCurrentState}，
+     * 把「校验所依据的状态」与「写入时的状态」绑定成同一事实。
+     * 否则读/写间隙里他人先行迁移，本迁移就会基于过期前提落库（TOCTOU 绕过状态机）。
+     *
+     * @return 更新后的租户行；租户不存在<b>或当前状态已非预期</b>（并发迁移冲突）返回 {@code null}
      */
     @Nullable
-    PlatformTenantRow transitionLifecycle(@NonNull String tenantId, @NonNull String newState);
+    PlatformTenantRow transitionLifecycle(@NonNull String tenantId,
+                                          @NonNull String expectedCurrentState,
+                                          @NonNull String newState);
 
     /** 更新租户配额。 */
     @Nullable

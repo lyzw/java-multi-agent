@@ -11,7 +11,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -64,10 +63,6 @@ public class AdminTenantController {
     /** 租户 slug 格式（与 V1__baseline_schema 的 CHECK 约束一致）。 */
     private static final Pattern SLUG_PATTERN =
             Pattern.compile("^[a-z0-9][a-z0-9-]{1,62}$");
-
-    /** 允许的租户生命周期状态。 */
-    private static final java.util.Set<String> VALID_STATUS =
-            java.util.Set.of("ACTIVE", "SUSPENDED", "DECOMMISSIONED");
 
     private final AdminTenantPort tenants;
     private final CurrentPrincipal currentPrincipal;
@@ -175,25 +170,15 @@ public class AdminTenantController {
                 tenants.listPrincipals(id).stream().map(PrincipalResponse::of).toList()));
     }
 
-    /** 租户生命周期：置状态。 */
-    @PutMapping("/{id}/status")
-    public ResponseEntity<TenantResponse> updateStatus(@PathVariable String id,
-                                                      @RequestBody StatusRequest request) {
-        requirePlatformAdmin();
-        TenantContext context = currentPrincipal.context();
-        rateLimit(context);
-        String status = request == null || request.status() == null
-                ? null : request.status().trim().toUpperCase(java.util.Locale.ROOT);
-        if (status == null || !VALID_STATUS.contains(status)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "status 仅接受 ACTIVE / SUSPENDED / DECOMMISSIONED");
-        }
-        TenantRow row = tenants.updateStatus(id, status);
-        if (row == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "租户不存在");
-        }
-        return ResponseEntity.ok(TenantResponse.of(row));
-    }
+    /**
+     * ⛔ 已下线（评审 P0-4 · 2026-10-27）：{@code PUT /{id}/status} 生命周期直改通道。
+     *
+     * <p>旧通道只做取值白名单（ACTIVE/SUSPENDED/DECOMMISSIONED），
+     * <b>无迁移合法性校验</b>（ACTIVE→DECOMMISSIONED 跳过退役中、终态复活均可），
+     * 且只写 public.tenant.status 镜像、<b>不更新权威的 platform.tenant.lifecycle_state</b>
+     * —— 两条写路径并存必然漂移。租户生命周期变更一律走
+     * {@code PlatformTenantController}（TenantLifecycle 状态机 + CAS + 审计 + 镜像同步）。
+     */
 
     /** 跨租户列出某租户的主体及其角色。 */
     @GetMapping("/{id}/principals")
@@ -288,9 +273,7 @@ public class AdminTenantController {
     public record ProvisionRequest(@Nullable String slug, @Nullable String name) {
     }
 
-    /** 状态变更请求。 */
-    public record StatusRequest(@Nullable String status) {
-    }
+    /* ⛔ StatusRequest 已随 PUT /{id}/status 直改通道下线（评审 P0-4）。 */
 
     /** RLS 校验响应。 */
     public record RlsVerifyResponse(boolean contextBound, boolean isolated,

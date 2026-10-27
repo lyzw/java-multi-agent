@@ -59,15 +59,9 @@ public interface AdminTenantPort {
     @NonNull
     TenantRow provisionTenant(@NonNull String slug, @NonNull String name);
 
-    /**
-     * 变更租户生命周期状态。
-     *
-     * @param tenantId 租户标识
-     * @param status   新状态
-     * @return 更新后的租户行；租户不存在时为 {@code null}
-     */
-    @Nullable
-    TenantRow updateStatus(@NonNull String tenantId, @NonNull String status);
+    /* ⛔ updateStatus（生命周期直改）已随 PUT /api/admin/tenants/{id}/status 下线
+       （评审 P0-4）：无迁移合法性校验、只写镜像不写权威表。生命周期变更一律走
+       PlatformTenantPort.transitionLifecycle（TenantLifecycle 状态机 + CAS）。 */
 
     /**
      * 统计租户下的主体数。

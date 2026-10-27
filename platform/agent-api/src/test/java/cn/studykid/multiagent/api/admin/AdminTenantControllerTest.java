@@ -88,14 +88,8 @@ class AdminTenantControllerTest {
                 new AdminTenantController.ProvisionRequest("slug", "name")));
     }
 
-    @Test
-    @DisplayName("非 PLATFORM_ADMIN 置租户状态 → 403")
-    void updateStatus_forbidden_when_not_platform_admin() {
-        stubContext(Set.of("TENANT_ADMIN"));
-        controller();
-        assertForbidden(() -> controller().updateStatus("any-id",
-                new AdminTenantController.StatusRequest("SUSPENDED")));
-    }
+    /* ⛔ updateStatus 403 用例已随 PUT /{id}/status 直改通道下线（评审 P0-4）：
+       端点本身已移除，生命周期变更收敛到 PlatformTenantController（状态机 + CAS）。 */
 
     @Test
     @DisplayName("非 PLATFORM_ADMIN 执行 RLS 校验 → 403")

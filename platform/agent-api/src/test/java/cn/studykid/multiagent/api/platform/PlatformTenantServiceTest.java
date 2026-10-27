@@ -158,9 +158,11 @@ class PlatformTenantServiceTest {
 
         @Override
         public @Nullable PlatformTenantRow transitionLifecycle(@NonNull String tenantId,
+                                                              @NonNull String expectedCurrentState,
                                                               @NonNull String newState) {
+            // ⚠️ 与生产实现同纪律：CAS —— 当前状态非预期即冲突（null）
             PlatformTenantRow old = map.get(tenantId);
-            if (old == null) {
+            if (old == null || !old.lifecycleState().equals(expectedCurrentState)) {
                 return null;
             }
             PlatformTenantRow updated = new PlatformTenantRow(old.tenantId(), old.slug(), old.name(),

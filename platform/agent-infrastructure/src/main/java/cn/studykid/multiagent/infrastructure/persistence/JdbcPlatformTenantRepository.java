@@ -178,11 +178,15 @@ public class JdbcPlatformTenantRepository implements PlatformTenantPort {
 
     @Override
     public @Nullable PlatformTenantRow transitionLifecycle(@NonNull String tenantId,
+                                                          @NonNull String expectedCurrentState,
                                                           @NonNull String newState) {
+        // ⚠️ CAS 前置（评审 P0-4）：WHERE 带校验时所依据的当前状态。
+        //    状态机守卫的权威在 DB 触发器（V34），这里保证「校验与写入看到同一状态」，
+        //    并发迁移冲突影响 0 行 → 返回 null，由服务层映射 409。
         String sql = """
                 UPDATE platform.tenant
                 SET lifecycle_state = ?, status = ?, updated_at = now()
-                WHERE id = ?::uuid
+                WHERE id = ?::uuid AND lifecycle_state = ?
                 RETURNING id AS tenant_id, slug, name, lifecycle_state, plan,
                           effective_policy_version, tenant_authz_version, created_at, updated_at
                 """;
@@ -193,6 +197,7 @@ public class JdbcPlatformTenantRepository implements PlatformTenantPort {
                     ps.setString(1, newState);
                     ps.setString(2, newState);
                     ps.setString(3, tenantId);
+                    ps.setString(4, expectedCurrentState);
                     try (ResultSet rs = ps.executeQuery()) {
                         if (!rs.next()) {
                             conn.rollback();

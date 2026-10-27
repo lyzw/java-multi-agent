@@ -161,9 +161,13 @@ public class PlatformTenantService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "非法状态迁移：" + current.lifecycleState() + " → " + target);
         }
-        PlatformTenantRow row = tenants.transitionLifecycle(id, target);
+        // ⚠️ CAS（评审 P0-4）：expectedCurrentState 把「校验依据」与「写入前提」绑定。
+        //    读/写间隙他人先行迁移时返回 null —— 这是**并发冲突（409）**而非不存在（404）。
+        PlatformTenantRow row = tenants.transitionLifecycle(
+                id, current.lifecycleState(), target);
         if (row == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "租户不存在");
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "租户生命周期已被并发变更，请刷新后重试");
         }
         return row;
     }
