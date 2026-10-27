@@ -131,9 +131,19 @@ public class RagInfrastructureConfig {
                 embeddingPort, indexerBatchSize);
     }
 
+    /**
+     * 检索仓储（评审 P0-7）：显式注入租户权威门槛（G-3）。
+     *
+     * <p>⚠️ 门槛是<b>部署级服务端策略</b>（{@code rag.retrieval.min-trust-tier}），
+     * 默认 {@code OFFICIAL_TUTORIAL}（RAG-R07 生产下限）——
+     * 绝不读调用方请求头（可伪造）。逐租户差异化待 RAG-R23 落地。
+     */
     @Bean
-    public RetrievalPort retrievalPort(JdbcTemplate jdbcTemplate, EmbeddingPort embeddingPort) {
-        return new JdbcRetrievalRepository(jdbcTemplate, embeddingPort);
+    public RetrievalPort retrievalPort(JdbcTemplate jdbcTemplate, EmbeddingPort embeddingPort,
+                                      @Value("${rag.retrieval.min-trust-tier:OFFICIAL_TUTORIAL}")
+                                      String minTrustTier) {
+        return new JdbcRetrievalRepository(jdbcTemplate, embeddingPort,
+                cn.studykid.rag.core.source.TrustTier.valueOf(minTrustTier.trim()));
     }
 
     @Bean

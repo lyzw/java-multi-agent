@@ -40,6 +40,10 @@ rag:
     # 分数门禁：低于此值的命中视为「未找到依据」，
     # 使「找不到」成为合法输出，阻断 RAG 自信地胡说（RAG-D05 §⑦）。
     min-score: ${RAG_RETRIEVAL_MIN_SCORE:0.2}
+    # ── 评审 P0-7（G-3）：允许检索的最低权威等级（部署级服务端策略）──
+    # ⚠️ 默认 OFFICIAL_TUTORIAL（RAG-R07 生产下限）。绝不读调用方请求头；
+    #    逐租户差异化门槛待 platform 侧字段落地（RAG-R23）后随请求下发。
+    min-trust-tier: ${RAG_RETRIEVAL_MIN_TRUST_TIER:OFFICIAL_TUTORIAL}
   security:
     # ── 评审 P0-2：JWT 鉴权 + X-Tenant-Id 归属绑定 ──────────────────
     # ⚠️ fail-closed：公钥未配置时「启用」组合在启动即失败；

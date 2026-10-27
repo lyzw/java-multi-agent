@@ -76,6 +76,11 @@ class RetrievalRepositoryIT {
     private static final String E5 = "cccccccc-cccc-cccc-cccc-ccccccccccc2";
     private static final String D5 = "cccccccc-cccc-cccc-cccc-ccccccccccc3";
     private static final String C6 = "cccccccc-cccc-cccc-cccc-ccccccccccc4";
+    // G-3 权威门槛夹具（来源低于门槛：同行评审论文等级，其余轴全部合格）
+    private static final String S6 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa8";
+    private static final String E6 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa9";
+    private static final String D6 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    private static final String C7 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb7";
 
     private static final EditionCoordinate E_PEP = new EditionCoordinate(
             Subject.MATH, GradeBand.GRADE_8, Term.FIRST, Publisher.PEP, "2024修订");
@@ -292,6 +297,35 @@ class RetrievalRepositoryIT {
     }
 
     // ---------------------------------------------------------------------
+    // G-3 权威门槛：方向钉死（PG 枚举比较按声明序，与权威语义相反——
+    // 曾把 `>=` 写反导致全部正常语料被滤空，此测试与上一条合起来双向锁定）
+    // ---------------------------------------------------------------------
+
+    /**
+     * ⚠️⚠️ 本用例与 {@link #retrievableCarrierIsRetrieved()} 构成 G-3 的<b>双向钉死</b>：
+     * 同一谓词下，{@code OFFICIAL_PUBLISHER}（门槛之上）的 C1 必须能取回，
+     * 而 {@code PEER_REVIEWED_PAPER}（门槛之下、其余轴全部合格）的 C7 必须取不到。
+     *
+     * <p><b>为什么必须双向</b>：{@code rag_trust_tier} 的 PG 声明序
+     * （OFFICIAL_PUBLISHER → UNVERIFIED）与权威语义<b>相反</b>，
+     * 若谓词方向写反（如 {@code trust_tier >= 门槛}），所有正常语料被滤空、
+     * 反而只有 UNVERIFIED 能通过——只断言「取不到」的测试抓不住这种反转。
+     * 2026-10-27 线上 RDS 实测踩坑后补此回归。
+     */
+    @Test
+    @DisplayName("⛔ 低于权威门槛的来源（同行评审论文）即使全部校验合格也不可作为依据取回")
+    void belowThresholdSourceIsNotRetrieved() {
+        seedBelowThresholdSource();
+        List<Chunk> loaded = loadByIdsAs(T, List.of(C1, C7));
+        List<String> ids = loaded.stream().map(Chunk::id).toList();
+        assertTrue(ids.contains(C1),
+                "门槛之上的正常语料（OFFICIAL_PUBLISHER）必须能取回——双向钉死，防谓词方向反转");
+        assertFalse(ids.contains(C7),
+                "PEER_REVIEWED_PAPER 低于默认门槛 OFFICIAL_TUTORIAL，"
+                        + "即使 ver_status/license/新鲜度全部合格也不得作为依据取回（G-3）");
+    }
+
+    // ---------------------------------------------------------------------
     // 夹具：在同一事务内 set_config 模拟主平台传入的租户上下文
     // ---------------------------------------------------------------------
 
@@ -355,20 +389,22 @@ class RetrievalRepositoryIT {
      * 撤回语义必须与「正常 VERIFIED 语料」在同一个测试里对比才有意义。
      * 若把 C1 的来源改成 REVOKED，就再也验证不了「VERIFIED 的能取到」。
      *
-     * <p>⚠️ 为什么版本坐标必须与 {@link #seedTenantT()} 错开（北师大版而非人教版）：
+     * <p>⚠️ 为什么版本坐标必须与 {@link #seedTenantT()}、{@link #seedWithdrawnCarrier()}
+     * 错开（华东师大版而非人教版/北师大版）：
      * {@code rag_edition_unique} 是 {@code (tenant_id, subject, grade, term, publisher,
      * revision_code)}——**不含 source_id**。同一租户内「人教版数学八年级上册2024修订」
      * 只能存在一个 edition，与它挂在哪个 source 下无关（版本坐标标识的是「那个版本」
-     * 本身，不是每个来源各存一份副本）。若复用人教版，INSERT 会撞 {@code rag_edition_unique}，
+     * 本身，不是每个来源各存一份副本）。若复用他人坐标，INSERT 会撞 {@code rag_edition_unique}，
      * 而 {@code ON CONFLICT (tenant_id, edition_id)} 只覆盖主键冲突，自然键冲突直接报错
-     * （2026-10-23 线上 RDS 首跑实测）。
+     * （2026-10-23 线上 RDS 首跑实测；2026-10-27 二次修正：E4 原用北师大版，
+     * 与载体撤回夹具 E5 撞同一自然键——两条夹具都必须各自独占坐标）。
      */
     private void seedRevokedSource() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, T);
-            insertSourceWithStatus(S4, T, "北师大版", "ISBN-R", "REVOKED");
-            insertEdition(E4, T, S4, "北师大版");
+            insertSourceWithStatus(S4, T, "华东师大版", "ISBN-R", "REVOKED");
+            insertEdition(E4, T, S4, "华东师大版");
             insertDocument(D4, T, S4, E4);
             insertChunk(C5, T, D4, E4, "EXPLANATION", "已撤回的讲解内容");
             return null;
@@ -403,6 +439,40 @@ class RetrievalRepositoryIT {
                     D5, T, S5, E5);
             insertChunk(C6, T, D5, E5, "EXPLANATION",
                     "已撤回载体里的二次函数顶点讲解内容");
+            return null;
+        });
+    }
+
+    /**
+     * 造一条「来源等级低于权威门槛、其余轴全部合格」的语料（G-3 双向钉死的反向侧）。
+     *
+     * <p>ver_status=VERIFIED / license=LICENSED / 新鲜（verified_at=now()），
+     * 只有 {@code trust_tier='PEER_REVIEWED_PAPER'} 低于部署门槛
+     * {@code OFFICIAL_TUTORIAL}——据此把 G-3 从其余轴中独立出来。
+     *
+     * <p>⚠️ 版本坐标用沪科版：与既有夹具（人教/苏教/华东师大/北师大）全部错开，
+     * 避开 {@code rag_edition_unique}（见 {@link #seedRevokedSource()} 说明）。
+     */
+    private void seedBelowThresholdSource() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, T);
+            // ⚠️ rag_source_identifier_chk：论文等级必须提供 DOI（isbn 为 NULL），
+            //    教材/教辅等级必须提供 ISBN——权威等级与出版标识必须自洽。
+            jdbcTemplate.update(
+                    "INSERT INTO rag_source (source_id, tenant_id, source_type, title, publisher, "
+                            + "trust_tier, ver_status, ver_evidence, verified_at, license_status, doi) "
+                            + "VALUES (?::uuid, ?::uuid, 'PAPER', 'fixture-paper', '某学术期刊', "
+                            + "'PEER_REVIEWED_PAPER'::rag_trust_tier, 'VERIFIED'::rag_verification_status, "
+                            + "'fixture', now(), 'LICENSED', ?) "
+                            + "ON CONFLICT (tenant_id, source_id) DO UPDATE SET "
+                            + "trust_tier = EXCLUDED.trust_tier, ver_status = EXCLUDED.ver_status, "
+                            + "license_status = EXCLUDED.license_status, verified_at = EXCLUDED.verified_at",
+                    S6, T, "10.1000/fixture-g3");
+            insertEdition(E6, T, S6, "沪科版");
+            insertDocument(D6, T, S6, E6);
+            insertChunk(C7, T, D6, E6, "EXPLANATION",
+                    "低权威来源的二次函数顶点讲解内容");
             return null;
         });
     }
@@ -455,7 +525,15 @@ class RetrievalRepositoryIT {
                         + "parse_status, ver_status, retrievable) "
                         + "VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, 'fixture', 'CHUNKED', "
                         + "'VERIFIED'::rag_verification_status, TRUE) "
-                        + "ON CONFLICT (tenant_id, document_id) DO NOTHING",
+                        // ⚠️ DO UPDATE 而非 DO NOTHING（评审 P0-7 期间实测）：
+                        //    共享 IT 库可能残留旧版本夹具的行（当年不写准入标记，
+                        //    ver_status=PENDING / retrievable=FALSE）——DO NOTHING 会被
+                        //    旧行压住，检索谓词（现在真的读这两列）把它们全滤掉，
+                        //    表现为「正常语料召回不到」。更新才是幂等语义。
+                        + "ON CONFLICT (tenant_id, document_id) DO UPDATE SET "
+                        + "parse_status = EXCLUDED.parse_status, "
+                        + "ver_status = EXCLUDED.ver_status, "
+                        + "retrievable = EXCLUDED.retrievable",
                 documentId, tenantId, sourceId, editionId);
     }
 
@@ -468,12 +546,14 @@ class RetrievalRepositoryIT {
                         + "embed_model, index_generation) VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, "
                         + "?::rag_chunk_role, ?, "
                         + "45, 'chapter', 0, ?, '{}'::uuid[], 'h', 'local-deterministic-v1', 1) "
-                        + "ON CONFLICT (tenant_id, chunk_id) DO NOTHING",
+                        + "ON CONFLICT (tenant_id, chunk_id) DO UPDATE SET "
+                        + "role = EXCLUDED.role, text = EXCLUDED.text, "
+                        + "index_generation = EXCLUDED.index_generation",
                 chunkId, tenantId, documentId, editionId, role, text, text.length());
         jdbcTemplate.update(
                 "INSERT INTO rag_chunk_embedding (chunk_id, tenant_id, index_generation, embed_model, "
                         + "embedding) VALUES (?::uuid, ?::uuid, 1, 'local-deterministic-v1', ?::vector) "
-                        + "ON CONFLICT (chunk_id) DO NOTHING",
+                        + "ON CONFLICT (chunk_id) DO UPDATE SET embedding = EXCLUDED.embedding",
                 chunkId, tenantId, vec);
     }
 

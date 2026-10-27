@@ -22,6 +22,7 @@ import cn.studykid.rag.core.retrieval.RetrievalRequest;
 import cn.studykid.rag.core.retrieval.RetrievalResult.HitReason;
 import cn.studykid.rag.core.retrieval.RetrievalResult.RetrievalChannel;
 import cn.studykid.rag.core.retrieval.RetrievalResult.ScoredChunk;
+import cn.studykid.rag.core.source.TrustTier;
 import cn.studykid.rag.core.version.EditionCoordinate;
 import cn.studykid.rag.core.version.EditionCoordinate.GradeBand;
 import cn.studykid.rag.core.version.EditionCoordinate.Publisher;
@@ -103,30 +104,87 @@ public class JdbcRetrievalRepository implements RetrievalPort {
      * 两者都要通过才可检索 —— 同一版本下「官方电子版」可留、
      * 「第三方扫描版」可单独撤回。
      *
-     * <p>⚠️ 本谓词刻意<b>只含</b>「来源已校验」与「载体已校验且未被撤回」两轴。
-     * 版权状态（{@code license_status}）与校验有效期目前**不在**检索口径内
-     * —— 那属于「检索与管理台口径不一致」的另一项缺口，
-     * 需连同租户信任等级（检索 API 当前没有该请求头）一并处理，
-     * 不在此处半途改动。
+     * <p>⚠️ <b>四轴齐备（评审 P0-7 · RAG-D07 §701 D2 的查询期硬过滤）</b>：
+     * <ol>
+     *   <li><b>G-0 两级校验</b>：来源与载体都 VERIFIED，且载体未被撤回；</li>
+     *   <li><b>G-4 版权</b>：来源与载体的 {@code license_status} 都不是 RESTRICTED
+     *       （两个独立轴，任一禁止即整体不可检索）；</li>
+     *   <li><b>staleness 校验有效期</b>：{@code verified_at + ver_valid_days} 过期即失效
+     *       （须重新校验；VERIFIED 行必有 verified_at，DDL 约束保证）；</li>
+     *   <li><b>G-3 权威门槛</b>：来源等级达到服务端配置的门槛（含等于）。
+     *       ⚠️⚠️ <b>绝不能写 {@code trust_tier >= ?}</b>：PG 枚举的 {@code >=}
+     *       按<b>声明顺序</b>比较，而 {@code rag_trust_tier} 声明序
+     *       （{@code OFFICIAL_PUBLISHER} → UNVERIFIED）与权威语义<b>相反</b>——
+     *       枚举序数上 {@code UNVERIFIED} 最大，恰恰最不权威（2026-10-27
+     *       线上 RDS 实测踩坑：{@code >=} 写反导致全部正常语料被滤空，
+     *       详见 {@code JdbcCorpusManagementRepository#trustTierFilterArgs}
+     *       同款注释——同一个坑踩了两次）。故这里在构造期用
+     *       {@link TrustTier#meets} 展开<b>达标等级 IN 列表</b>，
+     *       与应用层判定语义一致，不依赖声明顺序这种隐式约定。
+     *       门槛来自<b>服务端配置</b>（{@code rag.retrieval.min-trust-tier}，
+     *       默认 OFFICIAL_TUTORIAL = RAG-R07 生产下限），
+     *       <b>绝不读请求头</b>——调用方可伪造的 {@code X-Tenant-Min-Trust-Tier}
+     *       从此只影响管理台展示口径，<b>不再参与检索准入</b>。
+     *       逐租户差异化门槛待 platform 侧字段落地（RAG-R23），落地后改为随请求下发。</li>
+     * </ol>
+     *
+     * <p>本谓词刻意<b>只含</b>检索准入轴；「未校验但审核员要看」走管理台
+     * （其口径由 {@code RagTenantContext} 控制并显式标注），不与检索口径混用。
      */
-    private static final String ADMISSIBLE_PREDICATE = """
+    private static final String ADMISSIBLE_TEMPLATE = """
                   AND src.ver_status = 'VERIFIED'
                   AND doc.ver_status = 'VERIFIED'
                   AND doc.retrievable
+                  AND src.license_status <> 'RESTRICTED'
+                  AND doc.license_status <> 'RESTRICTED'
+                  AND src.verified_at + make_interval(days => src.ver_valid_days) >= now()
+                  AND src.trust_tier IN (%s)
             """;
+
+    /** 构造期定格的可准入谓词（门槛是部署级策略，不是每查询可变的输入）。 */
+    private final String admissiblePredicate;
 
     private final JdbcTemplate jdbcTemplate;
     private final EmbeddingPort embeddingPort;
 
     public JdbcRetrievalRepository(JdbcTemplate jdbcTemplate, EmbeddingPort embeddingPort) {
+        this(jdbcTemplate, embeddingPort,
+                cn.studykid.rag.core.source.TrustTier.OFFICIAL_TUTORIAL);
+    }
+
+    /**
+     * 完整构造器：显式指定租户权威门槛（评审 P0-7 · G-3）。
+     *
+     * <p>⚠️ 门槛是<b>部署级服务端策略</b>（RAG-R07：生产下限 OFFICIAL_TUTORIAL），
+     * 构造期定格——不是调用方可传、可伪造的输入。
+     *
+     * @param minTrustTier 允许检索的最低权威等级（含：等于门槛的也可检索）
+     */
+    public JdbcRetrievalRepository(JdbcTemplate jdbcTemplate, EmbeddingPort embeddingPort,
+                                   cn.studykid.rag.core.source.TrustTier minTrustTier) {
         if (jdbcTemplate == null) {
             throw new IllegalArgumentException("jdbcTemplate 不能为空");
         }
         if (embeddingPort == null) {
             throw new IllegalArgumentException("embeddingPort 不能为空");
         }
+        if (minTrustTier == null) {
+            throw new IllegalArgumentException("minTrustTier 不能为空");
+        }
         this.jdbcTemplate = jdbcTemplate;
         this.embeddingPort = embeddingPort;
+        // ⚠️⚠️ 门槛展开为「达标等级 IN 列表」而非 `trust_tier >= ?`：
+        //    PG 枚举按声明序比较，rag_trust_tier 声明序与权威语义**相反**
+        //    （UNVERIFIED 序数最大却最不权威）——`>=` 会整体反转语义，
+        //    把 UNVERIFIED 放进来、把 OFFICIAL_PUBLISHER 滤掉
+        //    （2026-10-27 线上 RDS 实测踩坑；同款修复见
+        //    JdbcCorpusManagementRepository#trustTierFilterArgs）。
+        //    这里用 TrustTier.meets() 展开，语义与应用层判定完全一致。
+        String qualifyingTiers = java.util.Arrays.stream(TrustTier.values())
+                .filter(t -> t.meets(minTrustTier))
+                .map(t -> "'" + t.name() + "'")
+                .collect(java.util.stream.Collectors.joining(", "));
+        this.admissiblePredicate = ADMISSIBLE_TEMPLATE.formatted(qualifyingTiers);
     }
 
     @Override
@@ -175,7 +233,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 WHERE c.tenant_id = rag_current_tenant()
 %s
                   AND c.kp_ids @> CAST(ARRAY[?::uuid] AS uuid[])
-                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
+                """.formatted(SELECT_COLUMNS, admissiblePredicate);
         List<Chunk> chunks = jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs), knowledgePointId);
         // 版本过滤在 SQL 之外做：edition 坐标需 domain 对象比较。
         return chunks.stream()
@@ -213,7 +271,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 WHERE c.tenant_id = rag_current_tenant()
 %s
                   AND c.kp_ids && ?::uuid[]
-                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
+                """.formatted(SELECT_COLUMNS, admissiblePredicate);
         List<Chunk> chunks = jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs), arr.toString());
         return chunks.stream()
                 .filter(c -> editionScope.admits(c.edition()))
@@ -234,7 +292,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                   AND c.chunk_id <> ?
                 ORDER BY abs(c.page_number - ?), c.char_start
                 LIMIT ?
-                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
+                """.formatted(SELECT_COLUMNS, admissiblePredicate);
         return jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs),
                 chunk.documentId(), chunk.id(), chunk.locator().pageNumber(), limit);
     }
@@ -283,7 +341,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 WHERE c.tenant_id = rag_current_tenant()
 %s
                   AND c.chunk_id = ANY(?::uuid[])
-                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
+                """.formatted(SELECT_COLUMNS, admissiblePredicate);
         return jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs), arr.toString());
     }
 
@@ -332,7 +390,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
 %s
                 ORDER BY e.embedding <=> ?::vector
                 LIMIT ?
-                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
+                """.formatted(SELECT_COLUMNS, admissiblePredicate);
         return jdbcTemplate.query(sql, (rs, i) -> toScoredChunk(rs,
                 RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH), vec, vec, limit);
     }
@@ -362,7 +420,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                   AND to_tsvector('simple', c.text_jieba) @@ to_tsquery('simple', ?)
                 ORDER BY score DESC
                 LIMIT ?
-                """.formatted(SELECT_COLUMNS, ADMISSIBLE_PREDICATE);
+                """.formatted(SELECT_COLUMNS, admissiblePredicate);
         return jdbcTemplate.query(sql, (rs, i) -> toScoredChunk(rs,
                 RetrievalChannel.LEXICAL, HitReason.ALIAS_MATCH), tsQuery, tsQuery, limit);
     }
