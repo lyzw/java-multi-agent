@@ -9,7 +9,8 @@ import cn.studykid.rag.core.generation.GenerationResult;
  * 租户作用域生成端口（RAG-D00 §2.7 / B5）。
  *
  * <p><b>为什么需要这一层</b>（与 {@link TenantScopedRetrieval} 完全同构）：
- * 生成期的依据取回 SQL 同样以 {@code tenant_id = rag_current_tenant()} 收口，
+ * 生成期的依据取回 SQL 同样以
+ * {@code tenant_id IN (rag_current_tenant(), rag_global_tenant_id())} 收口，
  * 而该函数读的会话变量 {@code app.tenant_id} <b>只在事务内有效</b>。
  * RAG 独立对外提供 HTTP 端点时，主平台的事务上下文跨进程丢失，
  * 若不显式重建，RLS 会把全部行过滤掉——表现为「依据永远取不到」，

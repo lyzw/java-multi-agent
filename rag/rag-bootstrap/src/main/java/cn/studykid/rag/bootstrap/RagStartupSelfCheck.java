@@ -22,10 +22,14 @@ import org.springframework.stereotype.Component;
  *       且<b>不得</b>具有 {@code BYPASSRLS} 权限；否则租户隔离 RLS 会被静默绕过，
  *       这是教辅多租户的唯一隔离底线；</li>
  *   <li><b>RLS 上下文函数存在</b>——{@code rag_current_tenant()} 必须可调用，
- *       否则租户上下文无法建立；</li>
+ *       否则租户上下文无法建立；{@code rag_global_tenant_id()} 同样必须在
+ *       （V8 全局作用域的权威定义）；</li>
  *   <li><b>RLS 已在 rag_chunk 启用</b>——表级行级安全必须开启；</li>
- *   <li><b>语料为空时 fail-closed</b>——未建立租户上下文时直接查询 rag_chunk
- *       必须返回 0 行（RLS 阻断一切），证明「无租户 = 不可见」而非「泄露全库」。</li>
+ *   <li><b>无租户上下文时 fail-closed</b>——未建立租户上下文直接查 rag_chunk，
+ *       可见集合必须<b>只含</b>全局语料（{@code scope = 'PLATFORM'}）；
+ *       只要混进一行租户私有语料，就是「无租户即可读某租户私有内容」的泄漏。
+ *       （V8 双作用域前的表述是「必须返回 0 行」，见
+ *       {@link #checkFailClosedEmptyCorpus} 的重述理由。）</li>
  * </ol>
  *
  * <p>任何一项失败都会抛出 {@link IllegalStateException} 中止启动，
@@ -58,7 +62,7 @@ public class RagStartupSelfCheck implements ApplicationRunner {
                     "RAG 启动自检未通过：" + String.join("; ", failures));
         }
         log.info("RAG 启动自检全部通过：pgvector 就绪 / 连接角色非特权 / RLS 生效 / "
-                + "空语料 fail-closed。");
+                + "无租户上下文只见全局语料。");
     }
 
     private void checkPgVector(List<String> failures) {
@@ -104,6 +108,14 @@ public class RagStartupSelfCheck implements ApplicationRunner {
             if (count == null || count == 0) {
                 failures.add("租户上下文函数 rag_current_tenant() 不存在（迁移 V1 未执行？）");
             }
+            // V8 起全局作用域由 rag_global_tenant_id() 定义；缺它说明迁移没跟上，
+            // 而读策略与 scope CHECK 都引用它——半应用的库会让全局语料静默不可见。
+            Integer globalFn = jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM pg_proc WHERE proname = 'rag_global_tenant_id'",
+                    Integer.class);
+            if (globalFn == null || globalFn == 0) {
+                failures.add("全局作用域函数 rag_global_tenant_id() 不存在（迁移 V8 未执行？）");
+            }
         } catch (Exception e) {
             failures.add("检查租户上下文函数失败：" + e.getMessage());
         }
@@ -123,22 +135,32 @@ public class RagStartupSelfCheck implements ApplicationRunner {
     }
 
     /**
-     * 空语料 / 无租户上下文时的 fail-closed 探针。
+     * 无租户上下文时的 fail-closed 探针（V8 双作用域下重述）。
      *
-     * <p>⚠️ 不设置任何租户上下文，直接查询：RLS 应阻断一切，返回 0 行。
-     * 若返回 > 0，说明存在「无租户即可见全库」的泄漏
-     * （通常是特权角色或 RLS 失效），这正是教辅多租户最危险的事故。
+     * <p><b>底线从「可见 0 行」改成「只见全局行」</b>：
+     * V8 把语料表读策略放开成 {@code tenant_id IN (本租户, 全局哨兵)}，
+     * 所以无租户会话看到的不再是空集，而是平台主动发布的全局语料——
+     * 这是全局共享的定义本身，不是泄漏。
+     *
+     * <p>⚠️ 因此判定条件必须是「<b>可见集合里混进了租户私有行吗</b>」，
+     * 而不是「可见集合为空吗」。沿用旧断言的表象是
+     * 「一导入全局语料，服务就启动失败」——看似更安全，实则是假警报，
+     * 会让人把自检关掉。真正要防的泄漏（无租户能读到某租户的私有语料）
+     * 由 {@code scope <> 'PLATFORM'} 这条计数抓住。
+     *
+     * <p>SQL 与 {@code scripts/rag-corpus-scope-counterproof.sh} 的 P3-2 逐字同构，
+     * 两处若漂移，反证脚本会先失败。
      */
     private void checkFailClosedEmptyCorpus(List<String> failures) {
         try {
-            Integer count = jdbcTemplate.queryForObject(
-                    "SELECT count(*) FROM rag_chunk", Integer.class);
-            if (count != null && count > 0) {
-                failures.add("未建租户上下文即能读取 rag_chunk（" + count
-                        + " 行）——fail-closed 不成立，存在全库泄漏风险");
+            Integer leaked = jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM rag_chunk WHERE scope <> 'PLATFORM'", Integer.class);
+            if (leaked != null && leaked > 0) {
+                failures.add("未建租户上下文即能读取租户私有语料（" + leaked
+                        + " 行 rag_chunk）——fail-closed 不成立，存在跨租户泄漏风险");
             }
         } catch (Exception e) {
-            failures.add("空语料 fail-closed 探针失败：" + e.getMessage());
+            failures.add("无租户 fail-closed 探针失败：" + e.getMessage());
         }
     }
 }

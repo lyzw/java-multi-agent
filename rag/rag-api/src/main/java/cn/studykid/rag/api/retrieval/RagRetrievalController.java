@@ -154,6 +154,14 @@ public class RagRetrievalController {
                     org.springframework.http.HttpStatus.BAD_REQUEST,
                     "缺少租户上下文：请提供 " + TENANT_HEADER + " 请求头（主平台在调用时注入）");
         }
+        // ⚠️ 全局哨兵不是租户：把它当会话身份 = 试图以平台身份检索/写入全局语料。
+        //    数据库侧 rag_current_tenant() 同样拒绝（V8 §1），这里挡在入口，
+        //    给出 400 而不是让下游抛一个看起来像数据库故障的异常。
+        if (cn.studykid.rag.core.scope.RagScope.isGlobalTenant(tenantId)) {
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "租户标识不得使用平台全局作用域的保留值");
+        }
         try {
             return java.util.UUID.fromString(tenantId.trim()).toString();
         } catch (IllegalArgumentException e) {

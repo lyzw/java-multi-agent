@@ -51,10 +51,23 @@ import cn.studykid.rag.ports.RetrievalPort;
  * {@code RetrievalPolicy.allowsRole} 角色过滤——答案类内容不进应用层内存。
  * （编排层 {@code RetrievalOrchestrator} 会再做一次，幂等。）
  *
- * <p><b>⚠️ 租户隔离</b>：依赖 V1 的 RLS 策略，由调用方在事务内
- * {@code set_config('app.tenant_id', ..., true)} 提供当前租户；
- * 本类不自行解析令牌、不硬编码租户。SQL 中显式写 {@code c.tenant_id = rag_current_tenant()}
- * 仅用于提示优化器，<b>真正隔离由 RLS FORCE 保证</b>。
+ * <p><b>⚠️ 租户隔离（双作用域，迁移 V8 起）</b>：依赖 RLS 的读策略
+ * {@code tenant_id IN (rag_current_tenant(), rag_global_tenant_id())}，
+ * 由调用方在事务内 {@code set_config('app.tenant_id', ..., true)} 提供当前租户；
+ * 本类不自行解析令牌、不硬编码租户。
+ *
+ * <p>⚠️⚠️ <b>SQL 里的显式租户谓词是功能性的，不是「优化器提示」</b>
+ * （旧注释这么写过，是错的，且错得很危险）：RLS 读策略放开全局后，
+ * 若这里仍写 {@code c.tenant_id = rag_current_tenant()}，
+ * 全局语料会被这层 AND 条件<b>静默滤空</b>——实测同一份数据、同一个会话，
+ * 老写法返回 1 行（只有自己）、新写法返回 2 行（全局 + 自己），
+ * 见 {@code scripts/rag-corpus-scope-counterproof.sh} 的 P1-4/P1-1。
+ * 「策略放开了但谓词没跟上」的表现是<b>全局语料召回不到且不报错</b>，
+ * 与「语料库里确实没有」完全无法区分，所以两层必须同步改。
+ *
+ * <p><b>⚠️ JOIN 侧刻意不改</b>：全局行的 {@code tenant_id} 是哨兵值而非 NULL，
+ * 于是 {@code ON c.tenant_id = ed.tenant_id} 这类等值 JOIN 天然成立
+ * （若改成「tenant_id 可空」的表示法，这里会全部连不上，实测 0 行）。
  *
  * <p><b>⚠️ source 的关联路径</b>：V1 的三层模型是
  * {@code source（作品）→ document（载体）→ chunk（片段）}，
@@ -230,7 +243,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id = rag_current_tenant()
+                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
 %s
                   AND c.kp_ids @> CAST(ARRAY[?::uuid] AS uuid[])
                 """.formatted(SELECT_COLUMNS, admissiblePredicate);
@@ -247,7 +260,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         String prereqSql = """
                 SELECT prerequisites
                 FROM rag_knowledge_point
-                WHERE tenant_id = rag_current_tenant() AND kp_id = ?::uuid
+                WHERE tenant_id IN (rag_current_tenant(), rag_global_tenant_id()) AND kp_id = ?::uuid
                 """;
         UUID[] prereqs = queryForUuidArray(
                 jdbcTemplate, prereqSql, knowledgePointId);
@@ -268,7 +281,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id = rag_current_tenant()
+                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
 %s
                   AND c.kp_ids && ?::uuid[]
                 """.formatted(SELECT_COLUMNS, admissiblePredicate);
@@ -286,7 +299,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id = rag_current_tenant()
+                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
 %s
                   AND c.document_id = ?
                   AND c.chunk_id <> ?
@@ -338,7 +351,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id = rag_current_tenant()
+                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
 %s
                   AND c.chunk_id = ANY(?::uuid[])
                 """.formatted(SELECT_COLUMNS, admissiblePredicate);
@@ -351,7 +364,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         String sql = """
                 SELECT kp_id, subject, grade, canonical_name, aliases, prerequisites, facets
                 FROM rag_knowledge_point
-                WHERE tenant_id = rag_current_tenant()
+                WHERE tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
                 """ + (subject == null ? "" : " AND subject = ?");
         List<KnowledgePoint> all = jdbcTemplate.query(
                 sql, (rs, i) -> mapKnowledgePoint(rs),
@@ -386,7 +399,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                      ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src
                      ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id = rag_current_tenant()
+                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
 %s
                 ORDER BY e.embedding <=> ?::vector
                 LIMIT ?
@@ -415,7 +428,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                      ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src
                      ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id = rag_current_tenant()
+                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
 %s
                   AND to_tsvector('simple', c.text_jieba) @@ to_tsquery('simple', ?)
                 ORDER BY score DESC

@@ -1164,7 +1164,7 @@ rag_source ──DELETE──► rag_edition ──DELETE──► rag_document 
 | AT-RAG-015 | `rag_access_audit` 的 UPDATE / DELETE 被触发器拒绝 | DDL 反证 | ✅ **已实测**（D00 §5，触发器反证 PASS） | FR-RAG-010 |
 | AT-RAG-016 | 5 种 action 各在规定时机写入；`REVOKE` 先于状态变更 | 集成 | 🔴 未实现 | FR-RAG-009 |
 | AT-RAG-017 | 审计表中不出现 `verbatim_quote` / `chunk.text` / query 原文 | DDL + 集成 | 🟡 DDL 天然满足；写入侧未实现 | FR-RAG-010 |
-| AT-RAG-018 | 非特权角色跨租户读/写隔离 | 集成 | ✅ **已实测**（D00 §5，`app_agent`） | FR-RAG-014 |
+| AT-RAG-018 | 非特权角色跨租户读/写隔离 | 集成 | ✅ **已实测**（D00 §5，`app_agent`）；V8 双作用域后口径改为「跨租户**私有行**读为 0 + 全局桶写/改/删被拒 + 哨兵不能作会话身份」，由 `scripts/rag-corpus-scope-counterproof.sh` 重测（RAG-D11） | FR-RAG-014 |
 | AT-RAG-019 | 连接角色为超级用户 → 应用**拒绝启动** | 启动自检 | 🔴 未实现 | FR-RAG-014 |
 | AT-RAG-020 | 缺 `vector` 扩展 → 应用**拒绝启动** | 启动自检 | 🔴 未实现（D00 §5.2 已实测镜像缺陷） | FR-RAG-015 |
 | AT-RAG-021 | `content_hash` 失配 → 检出语料被静默替换 | 集成 | 🔴 未实现（整册哈希口径未定义） | FR-RAG-008 |

@@ -45,8 +45,13 @@ import cn.studykid.rag.management.ports.CorpusManagementPort.BulkRegistrationRes
  *   <li>租户上下文与业务 SQL 落在<b>同一事务、同一条连接</b>上
  *       （{@code is_local=true} 表示「仅在当前事务有效」，
  *       脱离事务则立即失效，表现为「查不到任何行」且不报错）；</li>
- *   <li>V1 的 RLS FORCE 策略对本次读写生效——<b>真正隔离由 RLS 保证</b>，
- *       SQL 里的 {@code tenant_id = rag_current_tenant()} 只是给优化器的提示。</li>
+ *   <li>V8 的 RLS FORCE 策略对本次读写生效——<b>真正隔离由 RLS 保证</b>。
+ *       SQL 里的 {@code tenant_id = rag_current_tenant()} 是<b>功能性的</b>谓词，
+ *       且这里<b>刻意不含全局哨兵分支</b>：管理面只治理本租户语料，
+ *       平台全局语料的治理入口属第四刀（需独立运维数据源）。
+ *       ⚠️ 因此全局语料在管理台「看不见」是设计，不是缺陷；
+ *       但检索面必须能召回它（见 {@code JdbcRetrievalRepository} 的
+ *       {@code IN (rag_current_tenant(), rag_global_tenant_id())} 写法）。</li>
  * </ol>
  *
  * <p><b>⚠️ 审计与状态变更必须同事务</b>（RAG-D07 §2.5）：

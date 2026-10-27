@@ -1,6 +1,7 @@
 package cn.studykid.rag.management.infrastructure;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,7 @@ import cn.studykid.rag.core.source.TrustTier;
 import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.ports.DictionaryPort;
 import cn.studykid.rag.management.ports.DictionaryPort.DictEntry;
+import cn.studykid.rag.management.ports.DictionaryPort.Scope;
 
 /**
  * 字典的 JDBC 实现（Point 2）。
@@ -24,8 +26,19 @@ import cn.studykid.rag.management.ports.DictionaryPort.DictEntry;
  * 业务 SQL 落在同一事务、同一条连接，RLS 策略对本次读写生效。
  *
  * <p><b>⚠️ 动态 vs 派生</b>：{@link DictionaryPort#TYPE_SOURCE_TYPE} 走
- * {@code rag_dictionary} 表（租户隔离、可维护）；其余类型由 Java 枚举派生（只读），
+ * {@code rag_dictionary} 表，可维护；其余类型由 Java 枚举派生（只读），
  * 不触碰数据库，也不受租户隔离影响（枚举取值对所有租户一致）。
+ *
+ * <p><b>⚠️ 读写不对称是刻意的</b>（V7 双作用域）：
+ * <ul>
+ *   <li><b>读</b>：平台全局项（{@code tenant_id = rag_global_tenant_id()} 哨兵）∪ 本租户项，
+ *       同 code 租户覆盖全局；</li>
+ *   <li><b>写/删</b>：<b>恒只作用于本租户</b>——租户发布的每一项都是租户级私有项，
+ *       永远产不出全局项。全局项只能由平台侧通道（超级用户/运维角色）写入。</li>
+ * </ul>
+ * 这不是能力缺失，而是越权闸门：若写路径放行全局哨兵租户，
+ * 任一租户都能把字典项发布给全平台（详见 {@code rag_dictionary_write} 策略
+ * 与 {@code scripts/rag-dict-scope-counterproof.sh} 的 P8 反证）。
  */
 public class JdbcDictionaryRepository implements DictionaryPort {
 
@@ -58,14 +71,23 @@ public class JdbcDictionaryRepository implements DictionaryPort {
         if (DERIVED.containsKey(type)) {
             return DERIVED.get(type);
         }
-        // 动态类型：从 rag_dictionary 读取（RLS 已按租户过滤）
-        return transactionTemplate.execute(status -> {
+        // 动态类型：平台全局项 ∪ 本租户项（RLS 的 _read 策略已把范围收在这两类里）。
+        //
+        // ⚠️ 这里的谓词<b>不能只靠 RLS</b>，也不能写成等值：
+        //   · 写 `tenant_id = rag_current_tenant()` 会把全局行**静默滤掉**
+        //     ——策略放开了、SQL 没跟上，表现是「字典没变化」而非报错。
+        //   · 全局行的 tenant_id 是哨兵值（迁移 V8 把 V7 的 NULL 表示法统一成哨兵，
+        //     语料链的复合外键与含 tenant_id 的主键决定了只能用哨兵），
+        //     所以判别写成 `= rag_global_tenant_id()`，与策略、CHECK 三处同一个权威。
+        List<DictEntry> rows = transactionTemplate.execute(status -> {
             setTenant(context.tenantId());
             return jdbcTemplate.query(
                     """
-                    SELECT code, label, sort_order, enabled
+                    SELECT code, label, sort_order, enabled,
+                           (tenant_id = rag_global_tenant_id()) AS is_global
                     FROM rag_dictionary
-                    WHERE tenant_id = rag_current_tenant() AND dict_type = ?
+                    WHERE tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
+                      AND dict_type = ?
                     ORDER BY sort_order, code
                     """,
                     (rs, i) -> new DictEntry(
@@ -73,9 +95,40 @@ public class JdbcDictionaryRepository implements DictionaryPort {
                             rs.getString("code"),
                             rs.getString("label"),
                             rs.getInt("sort_order"),
-                            rs.getBoolean("enabled")),
+                            rs.getBoolean("enabled"),
+                            rs.getBoolean("is_global") ? Scope.PLATFORM : Scope.TENANT),
                     type);
         });
+        return mergeOverride(rows == null ? List.of() : rows);
+    }
+
+    /**
+     * 同 code 的「全局项 + 租户覆盖项」合并为一条，<b>租户项胜出</b>。
+     *
+     * <p>⚠️ **合并不依赖行的到达顺序**（此处曾被 IT 抓到真 bug）：
+     * 【历史坑，V7 时期】早先用「全局在前、租户在后 + put 覆盖」实现，
+     * 而 {@code ORDER BY (tenant_id IS NULL)} 在 PG 里把 FALSE 排在 TRUE 前——
+     * 真实顺序是**租户在前**，于是全局项反过来覆盖了租户项，
+     * 表现为「租户改了标签但界面纹丝不动」。
+     * 靠 ORDER BY 的方向去承载一条业务规则，是把它藏在最容易被改错的地方；
+     * 现在规则写在 merge 里，SQL 只管取数。
+     *
+     * <p>⚠️ 为什么在应用层合并而不是 SQL 层 {@code DISTINCT ON}：
+     * 两者结果一致，但 {@code DISTINCT ON} 的取值顺序同样依赖 ORDER BY 前缀，
+     * 同一个坑换个地方再踩一次；字典量级是每类型几十条，在 Java 里写明白更值。
+     *
+     * <p>包内可见仅为可测：合并规则（同 code 租户胜出 + 按 sort_order 重排）
+     * 是纯函数，不该被「必须连库」的 IT 才覆盖到。
+     */
+    static List<DictEntry> mergeOverride(List<DictEntry> rows) {
+        Map<String, DictEntry> byCode = new LinkedHashMap<>();
+        for (DictEntry row : rows) {
+            byCode.merge(row.code(), row,
+                    (existing, incoming) -> existing.scope() == Scope.TENANT ? existing : incoming);
+        }
+        return byCode.values().stream()
+                .sorted(Comparator.comparingInt(DictEntry::sortOrder).thenComparing(DictEntry::code))
+                .toList();
     }
 
     @Override
@@ -137,7 +190,7 @@ public class JdbcDictionaryRepository implements DictionaryPort {
         List<DictEntry> tiers = new ArrayList<>();
         for (TrustTier t : TrustTier.values()) {
             tiers.add(new DictEntry(TYPE_TRUST_TIER, t.name(),
-                    tierLabels.getOrDefault(t.name(), t.name()), 0, true));
+                    tierLabels.getOrDefault(t.name(), t.name()), 0, true, Scope.PLATFORM));
         }
         map.put(TYPE_TRUST_TIER, tiers);
 
@@ -150,7 +203,7 @@ public class JdbcDictionaryRepository implements DictionaryPort {
         List<DictEntry> methods = new ArrayList<>();
         for (VerificationMethod m : VerificationMethod.values()) {
             methods.add(new DictEntry(TYPE_VERIFICATION_METHOD, m.name(),
-                    methodLabels.getOrDefault(m.name(), m.name()), 0, true));
+                    methodLabels.getOrDefault(m.name(), m.name()), 0, true, Scope.PLATFORM));
         }
         map.put(TYPE_VERIFICATION_METHOD, methods);
 
@@ -161,7 +214,8 @@ public class JdbcDictionaryRepository implements DictionaryPort {
                 "RESTRICTED", "禁止使用");
         List<DictEntry> licenses = new ArrayList<>();
         for (Map.Entry<String, String> e : licenseLabels.entrySet()) {
-            licenses.add(new DictEntry(TYPE_LICENSE_STATUS, e.getKey(), e.getValue(), 0, true));
+            licenses.add(new DictEntry(TYPE_LICENSE_STATUS, e.getKey(), e.getValue(),
+                    0, true, Scope.PLATFORM));
         }
         map.put(TYPE_LICENSE_STATUS, licenses);
 

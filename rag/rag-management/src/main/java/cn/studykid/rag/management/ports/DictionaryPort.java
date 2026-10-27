@@ -21,6 +21,15 @@ import cn.studykid.rag.management.core.RagTenantContext;
  *
  * <p><b>⚠️ 派生字典的标签是后端权威源</b>：前端展示也可用自身标签表，
  * 但「有哪些合法值」以本端口返回为准，避免前后端各维护一份枚举值导致漂移。
+ *
+ * <p><b>全局 / 租户双作用域（V7 起）</b>：动态字典的读取集合 =
+ * 平台全局项（{@link Scope#PLATFORM}，{@code tenant_id} 为 NULL）
+ * ∪ 本租户私有项（{@link Scope#TENANT}）；<b>同 code 时租户项覆盖全局项</b>，
+ * 与 {@code tenant_config_override}「只存覆盖项、缺省回落全局」同一套语义。
+ * 写入与删除<b>恒为本租户</b>——全局项由平台侧通道发布，
+ * 租户改不动也删不掉（{@code rag_dictionary} 的读写分策略；
+ * 由 {@code scripts/rag-dict-scope-counterproof.sh} 的 P6/P7/P8 实测，
+ * 不是推断）。
  */
 public interface DictionaryPort {
 
@@ -33,7 +42,26 @@ public interface DictionaryPort {
     /** 派生：版权状态。 */
     String TYPE_LICENSE_STATUS = "LICENSE_STATUS";
 
-    /** 列出某类型的全部字典项（动态类型按 sort_order 升序）。 */
+    /**
+     * 字典项的作用域。
+     *
+     * <p>与 {@code rag_dictionary.scope} 列取值一一对应，
+     * 沿用 platform 侧 {@code cap_config_release} 的同名约定（PLATFORM/TENANT），
+     * 不另立第二套词汇。
+     *
+     * <p><b>⚠️ 为什么不用 {@code tenant_id = -1} 表示全局</b>：
+     * 该列是 {@code UUID}，-1 无法表示；且「用一个真实存在的取值冒充无主」
+     * 会被任何按租户等值过滤的 SQL 当成一个普通租户。
+     * 全局的表示法是「租户维度不适用」= NULL + 判别列，见 V7 迁移头注释。
+     */
+    enum Scope {
+        /** 平台全局：对所有租户只读可见，租户不可写、不可改、不可删。 */
+        PLATFORM,
+        /** 租户私有：严格隔离，且同 code 时覆盖全局项。 */
+        TENANT
+    }
+
+    /** 列出某类型的全部字典项（动态类型返回「全局 ∪ 本租户」，同 code 租户优先）。 */
     @NonNull
     List<DictEntry> entriesOf(@NonNull RagTenantContext context, @NonNull String type);
 
@@ -46,12 +74,34 @@ public interface DictionaryPort {
     /** 删除一项（仅对可编辑类型生效）。 */
     void deleteEntry(@NonNull RagTenantContext context, @NonNull String type, @NonNull String code);
 
-    /** 字典项。 */
+    /**
+     * 字典项。
+     *
+     * @param type 字典类型
+     * @param code 稳定编码（写入业务表的实际取值）
+     * @param label 展示名
+     * @param sortOrder 排序（合并后按此升序呈现）
+     * @param enabled 是否启用
+     * @param scope 作用域；<b>写入路径恒为 {@link Scope#TENANT}</b>，
+     *              {@code PLATFORM} 只可能出现在读取结果里
+     */
     record DictEntry(
             @NonNull String type,
             @NonNull String code,
             @NonNull String label,
             int sortOrder,
-            boolean enabled) {
+            boolean enabled,
+            @NonNull Scope scope) {
+
+        /** 写入用的便捷构造：作用域只可能是租户级。 */
+        public DictEntry(@NonNull String type, @NonNull String code, @NonNull String label,
+                         int sortOrder, boolean enabled) {
+            this(type, code, label, sortOrder, enabled, Scope.TENANT);
+        }
+
+        /** 是否为平台全局项（租户侧只读）。 */
+        public boolean global() {
+            return scope == Scope.PLATFORM;
+        }
     }
 }

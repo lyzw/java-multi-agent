@@ -17,7 +17,9 @@ import cn.studykid.rag.ports.CorpusRepository;
  *
  * <p><b>⚠️ 租户隔离</b>：方法在事务内 {@code set_config('app.tenant_id', tenantId, true)}，
  * 使 V1 的 RLS FORCE 策略对本次写入生效（含子资源外键的复合租户约束）。
- * SQL 中显式写 {@code rag_current_tenant()} 仅用于提示优化器，隔离由 RLS 保证。
+ * SQL 中显式取 {@code rag_current_tenant()} 做写入值是**功能性的**（不是优化器提示）：
+ * 它把写入牢牢钉在「本租户」这一档，全局哨兵租户因此永远写不出来
+ * （即便有人直连改 {@code app.tenant_id}，也会先被 {@code rag_current_tenant()} 抛错拦住）。
  */
 public class JdbcCorpusRepository implements CorpusRepository {
 

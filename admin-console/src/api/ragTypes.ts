@@ -364,6 +364,16 @@ export const RAG_PARSE_STATUS_LABELS: Record<string, string> = {
  */
 export type RagDictionaryType = 'SOURCE_TYPE' | 'TRUST_TIER' | 'VERIFICATION_METHOD' | 'LICENSE_STATUS'
 
+/**
+ * 字典项作用域（对齐后端 `DictionaryPort.Scope`）。
+ *
+ * - `PLATFORM`：平台全局项（含派生枚举），对租户**只读**——
+ *   后端 RLS 的写/删策略不放行 `tenant_id IS NULL`，
+ *   所以编辑/删除按钮点了也只会拿到拒绝，UI 不该提供这两个入口；
+ * - `TENANT`：本租户私有项，可维护；同 `code` 时**覆盖**同名的全局项。
+ */
+export type RagDictionaryScope = 'PLATFORM' | 'TENANT'
+
 /** 字典项（动态 / 派生类型共用）。 */
 export interface RagDictionaryEntry {
   type: RagDictionaryType
@@ -371,6 +381,7 @@ export interface RagDictionaryEntry {
   label: string
   sortOrder: number
   enabled: boolean
+  scope: RagDictionaryScope
 }
 
 /** 字典类型视图（含是否可维护、该类型下的全部条目）。 */

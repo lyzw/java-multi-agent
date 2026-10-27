@@ -93,11 +93,22 @@
 
 | ID | 级别 | 需求 | 验收条件 | 测试 ID |
 |---|---|---|---|---|
-| FR-RAG-060 | MUST | 全部语料表启用 RLS + FORCE | 非特权角色下跨租户读为 0 | AT-RAG-060 |
-| FR-RAG-061 | MUST | 跨租户写入须被拒绝 | 跨租户 INSERT 被 RLS 拒绝 | AT-RAG-061 |
+| FR-RAG-060 | MUST | 全部语料表启用 RLS + FORCE | 非特权角色下跨租户读为 0（平台全局行除外，见下方注） | AT-RAG-060 |
+| FR-RAG-061 | MUST | 跨租户写入须被拒绝 | 跨租户 INSERT 被 RLS 拒绝；**写入全局作用域桶同样被拒** | AT-RAG-061 |
 | FR-RAG-062 | MUST | 应用连接须为非特权角色；启动时自检 | 特权角色启动被拒绝 | AT-RAG-062 |
 | FR-RAG-063 | MUST | 教材全文不入数据库 | `rag_chunk.text` 仅存片段；整册正文在对象存储 | AT-RAG-063 |
 | FR-RAG-064 | MUST | 语料访问须写审计且审计不可篡改 | 审计表 UPDATE/DELETE 被触发器拒绝 | AT-RAG-064 |
+
+> **FR-RAG-060/061 的 V8 修订（2026-10-27，RAG-D11）**：语料与字典引入
+> 「平台全局 / 租户私有」双作用域后，这两条的验收口径从
+> 「跨租户读为 0」精确化为「**跨租户的私有行读为 0**」。
+> 全局行（`scope='PLATFORM'`、`tenant_id = 哨兵`）对所有租户只读可见，
+> 这是全局共享的定义本身，不是隔离失效；反向的越权通道新增一条：
+> **任何租户都不得写/改/删全局桶**，也**不得把哨兵值当作自己的会话租户**
+> （`rag_current_tenant()` 对此直接抛错）。
+> 两条口径的实测证据：`scripts/rag-corpus-scope-counterproof.sh`（75 项）、
+> `scripts/rag-dict-scope-counterproof.sh`（39 项）、
+> `scripts/rag-v7-to-v8-retrofit-check.sh`（11 项，升级路径）。
 
 ---
 

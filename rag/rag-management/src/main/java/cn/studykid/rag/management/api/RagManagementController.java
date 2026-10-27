@@ -577,7 +577,10 @@ public class RagManagementController {
                 type, request.code(), request.label(), request.sortOrder(), request.enabled());
         dictionaryPort.upsertEntry(context, entry);
         return new ManagementDtos.DictionaryEntryDto(
-                entry.type(), entry.code(), entry.label(), entry.sortOrder(), entry.enabled());
+                entry.type(), entry.code(), entry.label(), entry.sortOrder(), entry.enabled(),
+                // 租户侧写出来的恒为租户私有项——不存在「租户发布全局项」这条路，
+                // 全局项只能由平台侧通道写（rag_dictionary_write 策略不放行 NULL 租户）。
+                entry.scope());
     }
 
     /**
@@ -613,7 +616,7 @@ public class RagManagementController {
             RagTenantContext context, String type) {
         return dictionaryPort.entriesOf(context, type).stream()
                 .map(e -> new ManagementDtos.DictionaryEntryDto(
-                        e.type(), e.code(), e.label(), e.sortOrder(), e.enabled()))
+                        e.type(), e.code(), e.label(), e.sortOrder(), e.enabled(), e.scope()))
                 .toList();
     }
 

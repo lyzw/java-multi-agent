@@ -76,7 +76,7 @@ public interface RetrievalPort {
      *
      * <p><b>⚠️ 租户隔离与检索路径完全同构</b>：依赖调用方在事务内
      * {@code set_config('app.tenant_id', ..., true)} 建立的上下文，
-     * SQL 中 {@code c.tenant_id = rag_current_tenant()} 与
+     * SQL 中 {@code c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())} 与
      * {@code src.ver_status = 'VERIFIED'} 双条件收口。
      * 因此传进来的 ID 若属于其他租户，结果就是「取不到」——
      * 上层据此显式报错，而不是静默给一个空回答。

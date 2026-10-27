@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Size;
 import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
+import cn.studykid.rag.management.ports.DictionaryPort;
 
 /**
  * 管理端点的请求/响应契约。
@@ -747,18 +748,25 @@ public final class ManagementDtos {
     /**
      * 字典项响应（动态/派生类型共用）。
      *
+     * <p><b>⚠️ {@code scope} 决定前端能不能给这一行放按钮</b>：
+     * {@code PLATFORM} 是平台全局项（或派生枚举），对租户<b>只读</b>——
+     * 删除/编辑点了也没用（后端 RLS 会拒），所以按钮本就不该出现。
+     * {@code TENANT} 才是本租户自有、可维护的项。
+     *
      * @param type 字典类型（SOURCE_TYPE / TRUST_TIER / VERIFICATION_METHOD / LICENSE_STATUS）
      * @param code 字典项编码（稳定标识，存库与表单提交都用它）
      * @param label 展示名
      * @param sortOrder 排序权重（升序）
      * @param enabled 是否启用
+     * @param scope 作用域：PLATFORM=平台全局/派生（只读），TENANT=本租户（可维护）
      */
     public record DictionaryEntryDto(
             @NotBlank String type,
             @NotBlank String code,
             @NotBlank String label,
             int sortOrder,
-            boolean enabled
+            boolean enabled,
+            @NotNull DictionaryPort.Scope scope
     ) {
     }
 

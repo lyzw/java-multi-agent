@@ -2,6 +2,7 @@ package cn.studykid.rag.management.core;
 
 import org.jspecify.annotations.NonNull;
 
+import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.core.source.TrustTier;
 
 /**
@@ -34,6 +35,13 @@ public record RagTenantContext(
     public RagTenantContext {
         if (tenantId == null || tenantId.isBlank()) {
             throw new IllegalArgumentException("tenantId 不能为空");
+        }
+        // ⚠️ 全局哨兵不是租户。数据库侧 rag_current_tenant() 也会拒绝同一个值
+        //    （迁移 V8 §1），两层各自独立成立：应用层给出可读的 4xx，
+        //    数据库层兜住任何绕过应用直连的连接。
+        if (RagScope.isGlobalTenant(tenantId)) {
+            throw new IllegalArgumentException(
+                    "tenantId 是平台全局作用域的保留值，不能作为会话租户身份");
         }
         if (minTrustTier == null) {
             throw new IllegalArgumentException("minTrustTier 不能为空");

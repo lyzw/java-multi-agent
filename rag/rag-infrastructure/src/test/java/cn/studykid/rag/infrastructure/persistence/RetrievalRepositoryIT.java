@@ -1,6 +1,8 @@
 package cn.studykid.rag.infrastructure.persistence;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -16,6 +18,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.core.chunk.Chunk;
+import cn.studykid.rag.core.scope.RagScope;
 // ⚠️ RetrievalMode 是 RetrievalRequest 的**嵌套**枚举，
 //    直接 import ...core.retrieval.RetrievalMode 找不到符号（2026-10-22 编译实测）。
 import cn.studykid.rag.core.retrieval.RetrievalRequest.RetrievalMode;
@@ -54,6 +57,17 @@ class RetrievalRepositoryIT {
     private static final String PG_USER_ENV = "IT_RAG_PG_USERNAME";
     private static final String PG_PASSWORD_ENV = "IT_RAG_PG_PASSWORD";
 
+    /**
+     * 管理员（超级用户）连接：仅用于播种/清理<b>全局桶</b>的语料，不参与业务断言。
+     *
+     * <p>⚠️ 这不是偷懒，而是被测性质本身：应用角色的 {@code rag_*_write} 策略
+     * 刻意不放行哨兵租户（V8 §2），所以「用应用连接 seed 全局语料」<b>必然失败</b>。
+     * 未配置管理员连接时全局用例逐个跳过（不是失败）。
+     */
+    private static final String PG_ADMIN_URL_ENV = "IT_RAG_PG_ADMIN_URL";
+    private static final String PG_ADMIN_USER_ENV = "IT_RAG_PG_ADMIN_USERNAME";
+    private static final String PG_ADMIN_PASSWORD_ENV = "IT_RAG_PG_ADMIN_PASSWORD";
+
     private static final String T = "11111111-1111-1111-1111-111111111111";
     private static final String U = "22222222-2222-2222-2222-222222222222";
     private static final String S = "33333333-3333-3333-3333-333333333333";
@@ -82,6 +96,16 @@ class RetrievalRepositoryIT {
     private static final String D6 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     private static final String C7 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb7";
 
+    // 平台全局语料夹具（tenant_id = 全局哨兵，scope='PLATFORM'）
+    private static final String GS = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeee01";
+    private static final String GE = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeee02";
+    private static final String GD = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeee03";
+    private static final String GC = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeee04";
+    // 越权写用例的两个临时 chunk_id：chunk_id 是**全表主键**（非租户内唯一），
+    // 不能复用 C1..C7 —— 那会撞别人的行而不是撞策略。
+    private static final String CG_OK = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeee05";
+    private static final String CG_BAD = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeee06";
+
     private static final EditionCoordinate E_PEP = new EditionCoordinate(
             Subject.MATH, GradeBand.GRADE_8, Term.FIRST, Publisher.PEP, "2024修订");
 
@@ -92,6 +116,8 @@ class RetrievalRepositoryIT {
     private JdbcTemplate jdbcTemplate;
     private TransactionTemplate transactionTemplate;
     private RetrievalPort repository;
+    /** 管理员连接（可为 null：未配置时全局用例跳过）。 */
+    private JdbcTemplate adminJdbcTemplate;
     private final LocalDeterministicEmbeddingPort embedder = new LocalDeterministicEmbeddingPort();
 
     @BeforeAll
@@ -116,6 +142,22 @@ class RetrievalRepositoryIT {
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds));
         repository = new JdbcRetrievalRepository(jdbcTemplate, embedder);
         seedTenantT();
+
+        // 管理员连接（仅用于全局桶的 seed / 清理；业务断言一律走应用连接）。
+        String adminUrl = System.getenv(PG_ADMIN_URL_ENV);
+        if (adminUrl != null && !adminUrl.isBlank()) {
+            DriverManagerDataSource adminDs = new DriverManagerDataSource();
+            adminDs.setUrl(withRagSearchPath(adminUrl));
+            adminDs.setUsername(envOrDefault(PG_ADMIN_USER_ENV, extractUserFromUrl(adminUrl)));
+            adminDs.setPassword(envOrDefault(PG_ADMIN_PASSWORD_ENV, null));
+            adminJdbcTemplate = new JdbcTemplate(adminDs);
+        }
+    }
+
+    /** 需要管理员连接的用例的前置：没有就跳过，不算失败。 */
+    private void requireAdminConnection() {
+        Assumptions.assumeTrue(adminJdbcTemplate != null,
+                "skipped: " + PG_ADMIN_URL_ENV + " 未设置（全局语料的 seed 无法经应用角色完成）");
     }
 
     /** 读取环境变量，未设置时回落到默认值。 */
@@ -326,6 +368,189 @@ class RetrievalRepositoryIT {
     }
 
     // ---------------------------------------------------------------------
+    // 第三刀：平台全局语料（哨兵租户 + scope='PLATFORM'）的双作用域读路径
+    //
+    // 与 scripts/rag-corpus-scope-counterproof.sh 的分工：
+    //   · 脚本在 psql 直连层面证明「数据库允不允许越权语句」；
+    //   · 本节证明「应用代码这条路走对了没有」——尤其是最容易被漏掉的那层：
+    //     RLS 放开了全局行，但 Java SQL 里还写着 `= rag_current_tenant()`，
+    //     表现是全局语料召回不到且**不报错**（P 组里唯一的「功能」断言）。
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("全局语料被每个租户召回，且不带走任何租户私有语料")
+    void globalChainIsRecalledByEveryTenant() {
+        requireAdminConnection();
+        seedGlobalChain();
+        try {
+            seedTenantU();
+            RetrievalRequest req = new RetrievalRequest(
+                    "二次函数的顶点", RetrievalMode.EXPLAIN, EditionScope.strict(E_PEP),
+                    null, null, null, 10);
+            List<String> asT = searchAs(T, req).stream().map(s -> s.chunk().id()).toList();
+            List<String> asU = searchAs(U, req).stream().map(s -> s.chunk().id()).toList();
+
+            assertTrue(asT.contains(GC), "租户 T 应召回到平台全局片段 GC");
+            assertTrue(asU.contains(GC), "租户 U 应召回到**同一条**全局片段 GC");
+            assertTrue(asT.contains(C1), "放开全局可见性不得影响本租户私有语料的召回");
+            assertFalse(asU.contains(C1), "T 的私有片段不得因「全局可见」而顺带漏给 U");
+            assertFalse(asT.contains(C4), "U 的私有片段同理（这是本 IT 既有的隔离底线）");
+        } finally {
+            retireGlobalChain();
+        }
+    }
+
+    /**
+     * ⚠️⚠️ 本节最关键的一条：钉住<b>两层过滤必须同步</b>。
+     *
+     * <p>同一个会话、同一份数据，只改 SQL 谓词的写法，行数就差 1。
+     * 若只写「全局能召回」的正向断言，把谓词改回 {@code = rag_current_tenant()}
+     * 后 RLS 仍然放开，但这条断言会失败——它就是那层的守门人
+     * （对应反证脚本 P1-4/P1-1；脚本给出的是同一个 1 vs 2 的差值）。
+     */
+    @Test
+    @DisplayName("两层过滤：RLS 放开而 SQL 谓词没跟上 = 全局语料静默滤空")
+    void sqlPredicateLayerMustKeepPaceWithRls() {
+        requireAdminConnection();
+        seedGlobalChain();
+        try {
+            int oldShape = countChunksAs(T, "c.tenant_id = rag_current_tenant()");
+            int newShape = countChunksAs(T,
+                    "c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())");
+            assertEquals(oldShape + 1, newShape,
+                    "全局那条 chunk 只能被新谓词看到：老谓词把它静默滤空（差值必须是 1，"
+                            + "老=" + oldShape + " 新=" + newShape + "）");
+        } finally {
+            retireGlobalChain();
+        }
+    }
+
+    @Test
+    @DisplayName("生成期取依据与检索通道口径一致：全局片段两个租户都能取回")
+    void loadByIdsReturnsGlobalChunkForEveryTenant() {
+        requireAdminConnection();
+        seedGlobalChain();
+        try {
+            assertTrue(loadByIdsAs(T, List.of(GC)).stream().map(Chunk::id).toList().contains(GC),
+                    "引用全局语料生成答案时，依据必须取得回来（否则答案带一条取不到的引用）");
+            assertTrue(loadByIdsAs(U, List.of(GC)).stream().map(Chunk::id).toList().contains(GC),
+                    "取回的是同一条全局行，不是每个租户各一份副本");
+        } finally {
+            retireGlobalChain();
+        }
+    }
+
+    /**
+     * 租户写不进全局桶。
+     *
+     * <p>⚠️ 带<b>反自证对照</b>：同一条 INSERT 语句形状，租户桶写成功、
+     * 全局桶被拒——否则「写失败」可能只是 SQL 本身有问题（假绿的反面：假红）。
+     */
+    @Test
+    @DisplayName("⛔ 应用角色写不出全局语料：RLS 写策略只放行本租户桶")
+    void tenantCannotInsertGlobalChunk() {
+        requireAdminConnection();
+        // 全局夹具先行：让被拒的那条 INSERT 在 FK/CHECK 上都**合法**，
+        // 否则报错可能来自复合外键或 scope 不变式，测的就不是 RLS 这一层了。
+        seedGlobalChain();
+        try {
+            int before = globalChunkCount();
+            String g = RagScope.GLOBAL_TENANT_ID;
+
+            // ① 反自证对照：完全相同的语句形状，写进自己的桶必须成功。
+            //    （少了这条，「写失败」可能只是 SQL 本身写错了。）
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                        String.class, T);
+                return jdbcTemplate.update(CHUNK_INSERT,
+                        CG_OK, T, D, E, "对照", "h-control", "TENANT");
+            });
+            cleanChunk(T, CG_OK);
+
+            // ② 被测：把 tenant_id 换成全局哨兵 —— 会话身份是 T，
+            //    写策略 WITH CHECK (tenant_id = rag_current_tenant() AND scope='TENANT') 必须拒绝。
+            Throwable rejected = catchThrowable(() -> transactionTemplate.execute(status -> {
+                jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                        String.class, T);
+                return jdbcTemplate.update(CHUNK_INSERT,
+                        CG_BAD, g, GD, GE, "冒充全局", "h-smuggle", "PLATFORM");
+            }));
+            assertNotNull(rejected,
+                    "写全局桶没被拒 = 任一租户可发布全局语料，影响所有租户（直接越权）");
+            String message = rootMessage(rejected);
+            assertTrue(message.contains("row-level security"),
+                    "必须是 RLS 拒绝，不能拿 CHECK/FK/语法错误冒充「挡住了」。实际：" + message);
+            assertEquals(before, globalChunkCount(),
+                    "被拒的写入不得在库里留下任何全局行");
+        } finally {
+            adminJdbcTemplate.update("DELETE FROM rag_chunk WHERE chunk_id = ?::uuid", CG_BAD);
+            retireGlobalChain();
+        }
+    }
+
+    /** 一条形状合法的 chunk INSERT；租户与 scope 由参数决定，供「对照/被测」共用同一形状。 */
+    private static final String CHUNK_INSERT =
+            "INSERT INTO rag_chunk (chunk_id, tenant_id, document_id, edition_id, role, text,"
+                    + " page_number, section_path, char_start, char_end, kp_ids, content_hash,"
+                    + " embed_model, index_generation, scope)"
+                    + " VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, 'EXPLANATION'::rag_chunk_role,"
+                    + " ?, 1, 'x', 0, 2, '{}'::uuid[], ?, 'm', 1, ?::text)";
+
+    /** 按主键清掉本用例临时造的 chunk。 */
+    private void cleanChunk(String tenantId, String chunkId) {
+        // ⚠️ 必须带租户上下文：删除策略是 `tenant_id = rag_current_tenant()`，
+        //    不建上下文时 rag_current_tenant() 为 NULL，DELETE 匹配 0 行且**不报错**——
+        //    夹具会永久残留在共享 IT 库里。
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
+            return jdbcTemplate.update("DELETE FROM rag_chunk WHERE chunk_id = ?::uuid", chunkId);
+        });
+    }
+
+    /** 全局桶里的 chunk 条数（走管理员连接，绕过 RLS 看真实值）。 */
+    private int globalChunkCount() {
+        Integer n = adminJdbcTemplate.queryForObject(
+                "SELECT count(*) FROM rag_chunk WHERE tenant_id = rag_global_tenant_id()",
+                Integer.class);
+        return n == null ? 0 : n;
+    }
+
+    /** 在指定租户上下文下，按给定谓词数 rag_chunk（复刻检索仓库的三表 JOIN 形状）。 */
+    private int countChunksAs(String tenantId, String predicate) {
+        Integer n = transactionTemplate.execute(status -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
+            return jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM rag_chunk c"
+                            + " JOIN rag_document doc ON c.document_id = doc.document_id"
+                            + "                              AND c.tenant_id = doc.tenant_id"
+                            + " JOIN rag_source src ON doc.source_id = src.source_id"
+                            + "                             AND c.tenant_id = src.tenant_id"
+                            + " WHERE " + predicate,
+                    Integer.class);
+        });
+        return n == null ? 0 : n;
+    }
+
+    private static Throwable catchThrowable(Runnable action) {
+        try {
+            action.run();
+            return null;
+        } catch (Throwable t) {
+            return t;
+        }
+    }
+
+    private static String rootMessage(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable c = t; c != null && c != c.getCause(); c = c.getCause()) {
+            sb.append(c.getMessage()).append(' ');
+        }
+        return sb.toString();
+    }
+
+    // ---------------------------------------------------------------------
     // 夹具：在同一事务内 set_config 模拟主平台传入的租户上下文
     // ---------------------------------------------------------------------
 
@@ -477,6 +702,43 @@ class RetrievalRepositoryIT {
         });
     }
 
+    /**
+     * 平台全局语料夹具：一条完整的 source → edition → document → chunk(+embedding) 链，
+     * 落在<b>全局桶</b>（{@code tenant_id = 哨兵}、{@code scope='PLATFORM'}）。
+     *
+     * <p>⚠️ 走 {@code adminJdbcTemplate} 而非租户上下文：写策略
+     * （{@code WITH CHECK (tenant_id = rag_current_tenant() AND scope='TENANT')}）
+     * 按设计拒绝全局桶，用应用连接 seed 会得到 RLS 报错而不是全局行。
+     *
+     * <p>⚠️ 版本坐标刻意<b>复用「人教版」</b>（与租户 T 的 {@code E_PEP} 同坐标）：
+     * {@code rag_edition_unique} 含 {@code tenant_id}，全局桶与租户桶是两个命名空间，
+     * 同坐标不冲突——这正是「全局教辅版本」能与各租户私有版本共存的结构性前提。
+     * 也正因坐标相同，租户 T 检索 {@code strict(E_PEP)} 时才会<b>同时</b>命中
+     * 自己的 C1 与全局的 GC，从而能测到「两层过滤里 SQL 谓词那层有没有跟上」。
+     */
+    private void seedGlobalChain() {
+        String g = RagScope.GLOBAL_TENANT_ID;
+        insertSource(adminJdbcTemplate, GS, g, "人教版", "ISBN-GLOBAL", "PLATFORM");
+        insertEdition(adminJdbcTemplate, GE, g, GS, "人教版", "PLATFORM");
+        insertDocument(adminJdbcTemplate, GD, g, GS, GE, "PLATFORM");
+        insertChunk(adminJdbcTemplate, GC, g, GD, GE, "EXPLANATION",
+                "全局讲解：二次函数的顶点是抛物线的最高点或最低点", "PLATFORM");
+    }
+
+    /**
+     * 清理全局夹具（按 FK 反序）。
+     *
+     * <p>⚠️ 按<b>夹具主键</b>删，不按 {@code tenant_id = 哨兵} 删：
+     * 后者会连带删掉库里真实发布的全局语料（共享 IT 库上跑过 seed 脚本时就是数据事故）。
+     */
+    private void retireGlobalChain() {
+        adminJdbcTemplate.update("DELETE FROM rag_chunk_embedding WHERE chunk_id = ?::uuid", GC);
+        adminJdbcTemplate.update("DELETE FROM rag_chunk WHERE chunk_id = ?::uuid", GC);
+        adminJdbcTemplate.update("DELETE FROM rag_document WHERE document_id = ?::uuid", GD);
+        adminJdbcTemplate.update("DELETE FROM rag_edition WHERE edition_id = ?::uuid", GE);
+        adminJdbcTemplate.update("DELETE FROM rag_source WHERE source_id = ?::uuid", GS);
+    }
+
     private void insertSourceWithStatus(String sourceId, String tenantId, String publisher,
                                         String isbn, String verStatus) {
         // ⚠️ ver_status 必须显式转型 `?::rag_verification_status`（2026-10-23 线上 RDS 实测）：
@@ -487,44 +749,69 @@ class RetrievalRepositoryIT {
         //    （同文件 insertChunk 对 role 用 `?::rag_chunk_role` 正是同理。）
         jdbcTemplate.update(
                 "INSERT INTO rag_source (source_id, tenant_id, source_type, title, publisher, "
-                        + "trust_tier, ver_status, ver_evidence, verified_at, license_status, isbn) "
+                        + "trust_tier, ver_status, ver_evidence, verified_at, license_status, isbn, scope) "
                         + "VALUES (?::uuid, ?::uuid, 'TEXTBOOK', 'fixture', ?, 'OFFICIAL_PUBLISHER', "
                         + "?::rag_verification_status, "
-                        + "'fixture', now(), 'LICENSED', ?) "
+                        + "'fixture', now(), 'LICENSED', ?, 'TENANT') "
                         + "ON CONFLICT (tenant_id, source_id) DO NOTHING",
                 sourceId, tenantId, publisher, verStatus, isbn);
     }
 
 
     private void insertSource(String sourceId, String tenantId, String publisher, String isbn) {
-        jdbcTemplate.update(
+        insertSource(jdbcTemplate, sourceId, tenantId, publisher, isbn, "TENANT");
+    }
+
+    /**
+     * 同一份来源夹具，可按<b>作用域</b>落到不同桶。
+     *
+     * <p>⚠️ {@code scope} 必须显式给：V8 的 CHECK 要求「{@code scope='PLATFORM'} 当且仅当
+     * {@code tenant_id} 是全局哨兵」，而列默认值是 {@code 'TENANT'}——
+     * 只改租户不改 scope 会得到一条 CHECK 违规，看起来像「哨兵值不能用」的错误结论。
+     */
+    private void insertSource(JdbcTemplate jdbc, String sourceId, String tenantId,
+                              String publisher, String isbn, String scope) {
+        jdbc.update(
                 "INSERT INTO rag_source (source_id, tenant_id, source_type, title, publisher, "
-                        + "trust_tier, ver_status, ver_evidence, verified_at, license_status, isbn) "
+                        + "trust_tier, ver_status, ver_evidence, verified_at, license_status, isbn, scope) "
                         + "VALUES (?::uuid, ?::uuid, 'TEXTBOOK', 'fixture', ?, 'OFFICIAL_PUBLISHER', 'VERIFIED', "
-                        + "'fixture', now(), 'LICENSED', ?) "
-                        + "ON CONFLICT (tenant_id, source_id) DO NOTHING",
-                sourceId, tenantId, publisher, isbn);
+                        + "'fixture', now(), 'LICENSED', ?, ?) "
+                        + "ON CONFLICT (tenant_id, source_id) DO UPDATE SET "
+                        + "ver_status = EXCLUDED.ver_status, license_status = EXCLUDED.license_status, "
+                        + "verified_at = EXCLUDED.verified_at, scope = EXCLUDED.scope",
+                sourceId, tenantId, publisher, isbn, scope);
     }
 
     private void insertEdition(String editionId, String tenantId, String sourceId, String publisher) {
-        jdbcTemplate.update(
+        insertEdition(jdbcTemplate, editionId, tenantId, sourceId, publisher, "TENANT");
+    }
+
+    private void insertEdition(JdbcTemplate jdbc, String editionId, String tenantId,
+                               String sourceId, String publisher, String scope) {
+        jdbc.update(
                 "INSERT INTO rag_edition (edition_id, tenant_id, source_id, subject, grade, term, "
-                        + "publisher, revision_code) VALUES (?::uuid, ?::uuid, ?::uuid, '数学', '八年级', '上册', ?, '2024修订') "
-                        + "ON CONFLICT (tenant_id, edition_id) DO NOTHING",
-                editionId, tenantId, sourceId, publisher);
+                        + "publisher, revision_code, scope) "
+                        + "VALUES (?::uuid, ?::uuid, ?::uuid, '数学', '八年级', '上册', ?, '2024修订', ?) "
+                        + "ON CONFLICT (tenant_id, edition_id) DO UPDATE SET scope = EXCLUDED.scope",
+                editionId, tenantId, sourceId, publisher, scope);
     }
 
     private void insertDocument(String documentId, String tenantId, String sourceId, String editionId) {
+        insertDocument(jdbcTemplate, documentId, tenantId, sourceId, editionId, "TENANT");
+    }
+
+    private void insertDocument(JdbcTemplate jdbc, String documentId, String tenantId,
+                                String sourceId, String editionId, String scope) {
         // ⚠️⚠️ **必须显式置位载体级准入标记**（修复前此处不写，依赖默认值）：
         //    rag_document.ver_status 默认 'PENDING'、retrievable 默认 FALSE，
         //    而检索侧现在**会**过滤这两列（载体级撤回此前在检索侧完全无效）。
         //    不置位则所有夹具文档都不可检索 —— 那正是修复要达成的效果，
-        //    但会让本 IT 测不到「正常语料能召回」这件事。
-        jdbcTemplate.update(
+        //    但会让本 IT 测不到「正常语料能召回」。
+        jdbc.update(
                 "INSERT INTO rag_document (document_id, tenant_id, source_id, edition_id, title, "
-                        + "parse_status, ver_status, retrievable) "
+                        + "parse_status, ver_status, retrievable, scope) "
                         + "VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, 'fixture', 'CHUNKED', "
-                        + "'VERIFIED'::rag_verification_status, TRUE) "
+                        + "'VERIFIED'::rag_verification_status, TRUE, ?) "
                         // ⚠️ DO UPDATE 而非 DO NOTHING（评审 P0-7 期间实测）：
                         //    共享 IT 库可能残留旧版本夹具的行（当年不写准入标记，
                         //    ver_status=PENDING / retrievable=FALSE）——DO NOTHING 会被
@@ -533,28 +820,35 @@ class RetrievalRepositoryIT {
                         + "ON CONFLICT (tenant_id, document_id) DO UPDATE SET "
                         + "parse_status = EXCLUDED.parse_status, "
                         + "ver_status = EXCLUDED.ver_status, "
-                        + "retrievable = EXCLUDED.retrievable",
-                documentId, tenantId, sourceId, editionId);
+                        + "retrievable = EXCLUDED.retrievable, "
+                        + "scope = EXCLUDED.scope",
+                documentId, tenantId, sourceId, editionId, scope);
     }
 
     private void insertChunk(String chunkId, String tenantId, String documentId, String editionId,
                              String role, String text) {
+        insertChunk(jdbcTemplate, chunkId, tenantId, documentId, editionId, role, text, "TENANT");
+    }
+
+    private void insertChunk(JdbcTemplate jdbc, String chunkId, String tenantId, String documentId,
+                             String editionId, String role, String text, String scope) {
         String vec = vectorToString(embedder.embed(List.of(text)).get(0));
-        jdbcTemplate.update(
+        jdbc.update(
                 "INSERT INTO rag_chunk (chunk_id, tenant_id, document_id, edition_id, role, text, "
                         + "page_number, section_path, char_start, char_end, kp_ids, content_hash, "
-                        + "embed_model, index_generation) VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, "
+                        + "embed_model, index_generation, scope) VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, "
                         + "?::rag_chunk_role, ?, "
-                        + "45, 'chapter', 0, ?, '{}'::uuid[], 'h', 'local-deterministic-v1', 1) "
+                        + "45, 'chapter', 0, ?, '{}'::uuid[], 'h', 'local-deterministic-v1', 1, ?) "
                         + "ON CONFLICT (tenant_id, chunk_id) DO UPDATE SET "
                         + "role = EXCLUDED.role, text = EXCLUDED.text, "
-                        + "index_generation = EXCLUDED.index_generation",
-                chunkId, tenantId, documentId, editionId, role, text, text.length());
-        jdbcTemplate.update(
+                        + "index_generation = EXCLUDED.index_generation, scope = EXCLUDED.scope",
+                chunkId, tenantId, documentId, editionId, role, text, text.length(), scope);
+        jdbc.update(
                 "INSERT INTO rag_chunk_embedding (chunk_id, tenant_id, index_generation, embed_model, "
-                        + "embedding) VALUES (?::uuid, ?::uuid, 1, 'local-deterministic-v1', ?::vector) "
-                        + "ON CONFLICT (chunk_id) DO UPDATE SET embedding = EXCLUDED.embedding",
-                chunkId, tenantId, vec);
+                        + "embedding, scope) VALUES (?::uuid, ?::uuid, 1, 'local-deterministic-v1', ?::vector, ?) "
+                        + "ON CONFLICT (chunk_id) DO UPDATE SET embedding = EXCLUDED.embedding, "
+                        + "scope = EXCLUDED.scope",
+                chunkId, tenantId, vec, scope);
     }
 
     /** 把 float[] 序列化为 pgvector 文本格式（与 JdbcRetrievalRepository 同算法）。 */

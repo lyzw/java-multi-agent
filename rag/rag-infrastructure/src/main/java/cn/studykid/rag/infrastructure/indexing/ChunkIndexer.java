@@ -194,7 +194,8 @@ public class ChunkIndexer {
 
     /**
      * 待索引片段扫描 SQL（键集分页 + VERIFIED 来源 + 缺失判定）。
-     * RLS 下 {@code c.tenant_id = rag_current_tenant()} 由 set_config 满足。
+     * RLS 下 {@code c.tenant_id = rag_current_tenant()} 由 set_config 满足
+     * （扫描<b>只针对本租户</b>：全局语料不由租户通道索引，见 ReindexRunner）。
      *
      * <p>⚠️ <b>2026-10-22 修复</b>：原实现写的是 {@code JOIN rag_source src
      * ON c.source_id = src.source_id}，但 {@code rag_chunk} 表<b>没有 source_id 列</b>

@@ -9,7 +9,8 @@ import cn.studykid.rag.core.retrieval.RetrievalResult;
  * 租户作用域检索端口（RAG-D02 §3.2 补充 / RAG-D00 §2.8）。
  *
  * <p><b>为什么需要这一层</b>：检索 SQL 一律以
- * {@code WHERE tenant_id = rag_current_tenant()} 收口，而
+ * {@code WHERE tenant_id IN (rag_current_tenant(), rag_global_tenant_id())} 收口
+ * （本租户 ∪ 平台全局，V8 双作用域），而
  * {@code rag_current_tenant()} 读的是会话变量 {@code app.tenant_id}。
  * 该变量<b>只能在事务内</b>用 {@code set_config('app.tenant_id', ?, true)} 设定，
  * 且必须在任何业务 SQL 之前设定。
