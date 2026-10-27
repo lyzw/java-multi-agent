@@ -17,10 +17,17 @@ CREATE SCHEMA IF NOT EXISTS platform;
 -- ── 枚举类型 ───────────────────────────────────────────────────────
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'platform_user_status') THEN
+  -- ⚠️ 守卫必须按 (typname, namespace) 判断：CREATE TYPE platform.user_status 落库后
+  --    typname 是 'user_status' 而非 'platform_user_status'——旧的守卫写法永不命中，
+  --    二次执行（Flyway 迁移重放/带外重跑）必然报 type already exists（评审 P0-1 实测）。
+  IF NOT EXISTS (SELECT 1 FROM pg_type t
+                 JOIN pg_namespace n ON n.oid = t.typnamespace
+                 WHERE t.typname = 'user_status' AND n.nspname = 'platform') THEN
     CREATE TYPE platform.user_status AS ENUM ('ACTIVE','DISABLED','LOCKED');
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'platform_auth_source') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_type t
+                 JOIN pg_namespace n ON n.oid = t.typnamespace
+                 WHERE t.typname = 'auth_source' AND n.nspname = 'platform') THEN
     CREATE TYPE platform.auth_source AS ENUM ('LOCAL','OIDC','SSO');
   END IF;
 END$$;
@@ -53,9 +60,15 @@ CREATE TABLE IF NOT EXISTS platform.platform_role (
 );
 
 CREATE TABLE IF NOT EXISTS platform.platform_permission (
-    id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    code VARCHAR(128) NOT NULL UNIQUE
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code        VARCHAR(128) NOT NULL UNIQUE,
+    -- ⚠️ 中文说明（权限矩阵的治理副本；与代码 PlatformRolePermissionMatrix.PERMISSION_DESCRIPTIONS 严格一致）。
+    --    运行期权限矩阵以代码冻结矩阵为准，本列仅作持久化/审计用途。
+    description VARCHAR(256)
 );
+
+-- ⚠️ 幂等：已存在该列时不报错（适用于已初始化库的补列）。
+ALTER TABLE platform.platform_permission ADD COLUMN IF NOT EXISTS description VARCHAR(256);
 
 CREATE TABLE IF NOT EXISTS platform.platform_role_permission (
     role_id       UUID NOT NULL REFERENCES platform.platform_role(id),
@@ -160,19 +173,71 @@ INSERT INTO platform.platform_role (name, description, built_in) VALUES
 ON CONFLICT (name) DO NOTHING;
 
 -- ── 平台权限全集（与代码 PlatformRolePermissionMatrix.allPlatformPermissions() 严格一致）──
-INSERT INTO platform.platform_permission (code) VALUES
-  ('platform.user.read'), ('platform.user.manage'),
-  ('platform.role.read'), ('platform.role.assign'), ('platform.role.revoke'),
-  ('platform.tenant.create'), ('platform.tenant.read'), ('platform.tenant.update'),
-  ('platform.tenant.suspend'), ('platform.tenant.resume'), ('platform.tenant.decommission'),
-  ('platform.tenant.quota.read'), ('platform.tenant.quota.update'),
-  ('platform.tenant.capability.grant'), ('platform.tenant.capability.revoke'),
-  ('platform.tenant.capability.read'),
-  ('platform.resource.read'), ('platform.resource.manage'),
-  ('platform.policy.read'), ('platform.policy.publish'),
-  ('platform.audit.read'), ('platform.audit.export'),
-  ('platform.support.diagnostics.read')
+-- ⚠️ description 与代码 PERMISSION_DESCRIPTIONS 严格一致（权限矩阵中文说明的治理副本）。
+INSERT INTO platform.platform_permission (code, description) VALUES
+  ('platform.user.read',             '查看平台用户基本信息（脱敏）'),
+  ('platform.user.manage',           '管理平台用户（创建/禁用/重置凭据等写操作）'),
+  ('platform.role.read',             '查看平台角色与权限矩阵'),
+  ('platform.role.assign',           '授予平台角色'),
+  ('platform.role.revoke',           '撤销平台角色'),
+  ('platform.tenant.create',         '创建新租户'),
+  ('platform.tenant.read',           '查看租户生命周期与配置（脱敏）'),
+  ('platform.tenant.update',         '修改租户配置与套餐'),
+  ('platform.tenant.suspend',        '停用（暂停）租户'),
+  ('platform.tenant.resume',         '恢复（启用）租户'),
+  ('platform.tenant.decommission',   '退役（销毁）租户'),
+  ('platform.tenant.quota.read',     '查看租户配额'),
+  ('platform.tenant.quota.update',   '调整租户配额'),
+  ('platform.tenant.capability.grant',   '授予租户能力（如 Tool/Skill/MCP 授权）'),
+  ('platform.tenant.capability.revoke',  '撤销租户能力授权'),
+  ('platform.tenant.capability.read',    '查看租户已授权能力'),
+  ('platform.resource.read',         '查看全局资源目录（Tool/MCP/模型等）'),
+  ('platform.resource.manage',       '管理全局资源目录可用性'),
+  ('platform.policy.read',           '查看平台安全/访问策略'),
+  ('platform.policy.publish',        '发布平台安全/访问策略'),
+  ('platform.audit.read',            '查看平台审计日志'),
+  ('platform.audit.export',          '导出平台审计日志'),
+  ('platform.support.diagnostics.read', '查看脱敏诊断与运维信息')
 ON CONFLICT (code) DO NOTHING;
+
+-- ⚠️ 幂等回填：已存在行（早期仅 code 无 description）补全中文说明；重复执行安全。
+UPDATE platform.platform_permission SET description = CASE code
+    WHEN 'platform.user.read'              THEN '查看平台用户基本信息（脱敏）'
+    WHEN 'platform.user.manage'            THEN '管理平台用户（创建/禁用/重置凭据等写操作）'
+    WHEN 'platform.role.read'              THEN '查看平台角色与权限矩阵'
+    WHEN 'platform.role.assign'            THEN '授予平台角色'
+    WHEN 'platform.role.revoke'            THEN '撤销平台角色'
+    WHEN 'platform.tenant.create'          THEN '创建新租户'
+    WHEN 'platform.tenant.read'            THEN '查看租户生命周期与配置（脱敏）'
+    WHEN 'platform.tenant.update'          THEN '修改租户配置与套餐'
+    WHEN 'platform.tenant.suspend'         THEN '停用（暂停）租户'
+    WHEN 'platform.tenant.resume'          THEN '恢复（启用）租户'
+    WHEN 'platform.tenant.decommission'    THEN '退役（销毁）租户'
+    WHEN 'platform.tenant.quota.read'      THEN '查看租户配额'
+    WHEN 'platform.tenant.quota.update'    THEN '调整租户配额'
+    WHEN 'platform.tenant.capability.grant'   THEN '授予租户能力（如 Tool/Skill/MCP 授权）'
+    WHEN 'platform.tenant.capability.revoke'  THEN '撤销租户能力授权'
+    WHEN 'platform.tenant.capability.read'    THEN '查看租户已授权能力'
+    WHEN 'platform.resource.read'          THEN '查看全局资源目录（Tool/MCP/模型等）'
+    WHEN 'platform.resource.manage'        THEN '管理全局资源目录可用性'
+    WHEN 'platform.policy.read'            THEN '查看平台安全/访问策略'
+    WHEN 'platform.policy.publish'         THEN '发布平台安全/访问策略'
+    WHEN 'platform.audit.read'             THEN '查看平台审计日志'
+    WHEN 'platform.audit.export'           THEN '导出平台审计日志'
+    WHEN 'platform.support.diagnostics.read' THEN '查看脱敏诊断与运维信息'
+    ELSE description END
+WHERE code IN (
+    'platform.user.read', 'platform.user.manage',
+    'platform.role.read', 'platform.role.assign', 'platform.role.revoke',
+    'platform.tenant.create', 'platform.tenant.read', 'platform.tenant.update',
+    'platform.tenant.suspend', 'platform.tenant.resume', 'platform.tenant.decommission',
+    'platform.tenant.quota.read', 'platform.tenant.quota.update',
+    'platform.tenant.capability.grant', 'platform.tenant.capability.revoke',
+    'platform.tenant.capability.read',
+    'platform.resource.read', 'platform.resource.manage',
+    'platform.policy.read', 'platform.policy.publish',
+    'platform.audit.read', 'platform.audit.export',
+    'platform.support.diagnostics.read');
 
 -- ⚠️ 角色→权限映射（与 PlatformRolePermissionMatrix.ROLE_PERMISSIONS 严格一致）。
 --    以下 INSERT 为权限矩阵的 DB 落地（审计/自检用）；运行时授权以代码矩阵为准。

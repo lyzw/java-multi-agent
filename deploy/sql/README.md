@@ -117,6 +117,17 @@ V1 的 `CREATE TYPE` 直接因类型已存在而失败 → **整个迁移链断�
 > 应用启动时**自动**执行 V1→V5。手工建好表但不写 flyway 历史，
 > 应用启动就会炸。
 
+### ✅ 2026-10-27 起的双源收编（评审 P0-1）
+
+`05_platform_identity_ddl.sql` / `07_platform_dictionary_ddl.sql` / `08_platform_agent_metrics_ddl.sql`
+已**逐字收编**进 Flyway：`V31__platform_identity_domain` / `V32__platform_dictionary` /
+`V33__platform_agent_metrics`（`platform/agent-infrastructure/src/main/resources/db/migration/`）。
+
+- **变更纪律**：三份文件的任何改动必须**同步**到对应 V31–V33（反之亦然）；
+- 05 的枚举守卫已修正为按 `(typname, namespace)` 判断（旧写法 `typname='platform_user_status'`
+  永不命中，二次执行必报 `type already exists`——已在 agent_dev 真库两轮实测确认并修复）；
+- 三份迁移均幂等（IF NOT EXISTS / ON CONFLICT DO NOTHING），对已带外应用过对象的库重放安全。
+
 ---
 
 ## 实测记录（2026-10-23，远程 RDS）
