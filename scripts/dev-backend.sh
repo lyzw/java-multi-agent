@@ -11,7 +11,7 @@ source "$(dirname "$0")/../config.env"
 set +a
 
 JAVA_HOME=${JAVA_HOME:-/Users/zhouwei/software/Java/jdk-21.0.12.jdk/Contents/Home}
-JAR="$(dirname "$0")/../platform/platform-bootstrap/target/platform-bootstrap-0.1.0-SNAPSHOT-exec.jar"
+JAR="$(dirname "$0")/../platform/platform-bootstrap/target/platform-bootstrap-1.0.1-SNAPSHOT-exec.jar"
 
 if [ ! -f "$JAR" ]; then
   echo "缺少产物 $JAR —— 请先执行：mvn -o -pl platform-bootstrap -am package -DskipTests" >&2

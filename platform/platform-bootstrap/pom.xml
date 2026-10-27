@@ -7,7 +7,7 @@
   <parent>
     <groupId>cn.studykid.multiagent</groupId>
     <artifactId>java-saas-agent-platform</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>1.0.1-SNAPSHOT</version>
   </parent>
 
   <artifactId>platform-bootstrap</artifactId>
@@ -94,7 +94,7 @@
                 极易被误判为「测试写得不对」而改测试代码。
 
                 修法：加 <classifier>exec</classifier>，
-                使 repackage 产出 `platform-bootstrap-0.1.0-SNAPSHOT-exec.jar`（可执行胖包），
+                使 repackage 产出 `platform-bootstrap-1.0.1-SNAPSHOT-exec.jar`（可执行胖包），
                 主构件保持 thin jar（类在根目录，可被普通 classloader 读取）。
                 这是 Spring Boot 官方文档给出的标准做法。
                 部署时使用带 `exec` 后缀的包，见 docs/本地启动指南.md。
