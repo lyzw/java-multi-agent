@@ -26,6 +26,7 @@ async function _request<T>(
   path: string,
   init: RequestInit = {},
   auth = true,
+  extraHeaders?: Record<string, string>,
 ): Promise<T> {
   const headers = new Headers(init.headers)
   if (auth) {
@@ -34,9 +35,18 @@ async function _request<T>(
   }
   if (init.body !== undefined) headers.set('Content-Type', 'application/json')
   headers.set('Accept', 'application/json')
+  // ⚠️ 额外头（如 RAG 管理端点强制要求的 X-Tenant-Id）。
+  //    必须显式携带：跨进程 HTTP 调用时主平台事务上下文不会随之而来，
+  //    后端须按此头显式重建租户上下文，缺失即 400（而非静默空列表）。
+  if (extraHeaders) {
+    for (const [key, value] of Object.entries(extraHeaders)) {
+      headers.set(key, value)
+    }
+  }
 
   let res: Response
   try {
+    // ⚠️ 透传 init.signal：调用方可借 AbortController 实现超时（RAG 管理端点）。
     res = await fetch(`${API_BASE}${path}`, { ...init, headers })
   } catch (e) {
     throw new ApiError(0, `网络错误：${(e as Error).message}`)
@@ -61,7 +71,17 @@ async function _request<T>(
   return data as T
 }
 
-/** 通用请求入口（auth 默认开启） */
-export function request<T>(path: string, init?: RequestInit, auth = true): Promise<T> {
-  return _request<T>(path, init, auth)
+/**
+ * 通用请求入口（auth 默认开启）。
+ *
+ * @param extraHeaders 额外请求头（如 RAG 管理端点的 `X-Tenant-Id`）。
+ *   透传至底层 fetch；调用方亦可在 `init.signal` 传 AbortSignal 实现超时。
+ */
+export function request<T>(
+  path: string,
+  init?: RequestInit,
+  auth = true,
+  extraHeaders?: Record<string, string>,
+): Promise<T> {
+  return _request<T>(path, init, auth, extraHeaders)
 }

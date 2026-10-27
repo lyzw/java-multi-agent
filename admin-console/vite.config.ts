@@ -23,6 +23,13 @@ export default defineConfig({
   server: {
     port: 5180,
     proxy: {
+      // ⚠️ RAG 是**独立服务**（默认 8081），其端点前缀为 `/api/v1`。
+      //    必须排在 `/api` **之前**：Vite 按声明顺序匹配，若先命中前缀更短的
+      //    `/api`，RAG 请求会被错误地代理到平台后端 8080 → 404。
+      '/api/v1': {
+        target: process.env.VITE_DEV_RAG_TARGET ?? 'http://127.0.0.1:8081',
+        changeOrigin: true,
+      },
       // 与现有前端一致：同源代理到共享后端 agent-api（本地 8080）
       '/api': {
         target: process.env.VITE_DEV_API_TARGET ?? 'http://127.0.0.1:8080',
