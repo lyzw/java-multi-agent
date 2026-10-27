@@ -6,7 +6,7 @@
 
   <groupId>cn.studykid.rag</groupId>
   <artifactId>java-saas-rag</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>1.0.1-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <name>Java SaaS RAG Platform</name>
