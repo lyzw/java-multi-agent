@@ -282,6 +282,53 @@ agent:
       # 临期告警提前天数。避免条款静默过期导致业务突然中断。
       expiry-warn-days: "30"
 
+  # ── 告警外发（P5 · 真实告警分发通道最小实现）────────────────────
+  alerts:
+    # ⚠️ 默认关闭（空白 = NoopAlertWebhook）：不配置目标就不外发，
+    #    避免「悄悄把审计内容发给一个没人审过的地址」。
+    #    配置后仅 DENY 且定档 CRITICAL 的拒绝才 best-effort POST 外发，
+    #    载荷只含定位字段（租户/主体/工具/原因码/调用标识/时刻），无凭据无参数。
+    #
+    # ⚠️⚠️ **本段必须挂在 agent: 下**：配置键是 agent.alerts.webhook-url，
+    #   由 ApplicationConfiguration 的 @Value 逐字读取。挂到别的父键下
+    #   （如 auth:）不会报错，只会让读取静默落回默认值（空串 = 通道关闭）——
+    #   表现为「配了也不发」，真因离现场极远。
+    webhook-url: "${AGENT_ALERT_WEBHOOK_URL:}"
+
+  # ── 平台运维角色（BYPASSRLS · 平台级发布接入点）──────────────────
+  # ⚠️ **这是平台级发布（PLATFORM 作用域）的唯一合法写入通道**：
+  #   cap_config_release / cap_config_pointer / cap_decision_log 的写策略
+  #   只放行「本租户的 TENANT 行」（V15/V17 注释），
+  #   PLATFORM 行必须由带 BYPASSRLS 的平台运维角色写入 ——
+  #   否则**任一租户都能单方面替换全平台生效配置**，那是直接的越权。
+  #
+  # ⚠️ **默认不启用**（enabled=false）：未接入时 PLATFORM 作用域发布
+  #   **明确失败**（PlatformOpsUnavailableException），**不会**静默回落到
+  #   应用角色去写、再被 RLS 拒掉 —— 后者的失败现场是「RLS 策略拒写」，
+  #   离「这个环境没配运维凭据」这一真因极远。
+  #
+  # ⚠️ **enabled=true 但缺 url/username → 拒绝启动**（fail-closed）：
+  #   声明了要用却没给凭据还继续启动，等于「以为平台运维已接入、实际没接入」。
+  #
+  # ⚠️ **凭据刻意与主数据源分开配置**（主数据源用 SPRING_DATASOURCE_*）：
+  #   运维凭据应单独轮换、单独授权、单独审计；
+  #   混在一个配置段里会让「轮换应用口令」顺手把运维口令也换了。
+  #
+  # ⚠️⚠️ **本段必须挂在 agent: 下**：配置键是 agent.platform-ops.datasource.*，
+  #   由 PlatformOpsDataSourceConfiguration 的 KEY_* 常量逐字读取。
+  #   挂到别的父键下（如 config:）不会报错，只会让读取静默落回默认值 false
+  #   —— 表现为「配了环境变量也永远 fail-closed」，真因离现场极远。
+  #   守卫见 ApplicationConfigKeyAlignmentTest。
+  platform-ops:
+    datasource:
+      enabled: "${AGENT_PLATFORM_OPS_ENABLED:false}"
+      url: "${AGENT_PLATFORM_OPS_DATASOURCE_URL:}"
+      username: "${AGENT_PLATFORM_OPS_DATASOURCE_USERNAME:}"
+      password: "${AGENT_PLATFORM_OPS_DATASOURCE_PASSWORD:}"
+      # ⚠️ 池很小是刻意的：平台运维通道只服务「平台级发布」这一条低频路径，
+      #    不该占用与主业务池相当的连接额度。
+      max-pool-size: "2"
+
 
 # ── 部署与试点 ────────────────────────────────────────────────────
 deployment:
@@ -337,13 +384,10 @@ auth:
       #    写入 platform.platform_user_role 权威表后生效；应用层不提供自授端点。
       known-roles: "PLATFORM_SUPER_ADMIN,PLATFORM_RESOURCE_ADMIN,PLATFORM_SECURITY_ADMIN,PLATFORM_AUDITOR,PLATFORM_SUPPORT,TENANT_LIFECYCLE_ADMIN"
 
-  # ── 告警外发（P5 · 真实告警分发通道最小实现）────────────────────
-  alerts:
-    # ⚠️ 默认关闭（空白 = NoopAlertWebhook）：不配置目标就不外发，
-    #    避免「悄悄把审计内容发给一个没人审过的地址」。
-    #    配置后仅 DENY 且定档 CRITICAL 的拒绝才 best-effort POST 外发，
-    #    载荷只含定位字段（租户/主体/工具/原因码/调用标识/时刻），无凭据无参数。
-    webhook-url: "${AGENT_ALERT_WEBHOOK_URL:}"
+  # ── 告警外发（P5）─────────────────────────────────────────────────
+# ⚠️ 本段原挂在 auth: 下（键 auth.alerts.webhook-url），与代码读取的
+#    agent.alerts.webhook-url 不一致 → 读取静默落回默认值（通道永远关闭）。
+#    已移至 agent: 下，见 ApplicationConfigKeyAlignmentTest 的守卫。
 
 
 # ── 灾备（P4 演练后确认）──────────────────────────────────────────
@@ -370,33 +414,9 @@ config:
     #    （P1 已在 delivery-limit 上踩过该坑）。
     cap-dual-write: "false"
 
-  # ── 平台运维角色（BYPASSRLS · 平台级发布接入点）──────────────────
-  # ⚠️ **这是平台级发布（PLATFORM 作用域）的唯一合法写入通道**：
-  #   cap_config_release / cap_config_pointer / cap_decision_log 的写策略
-  #   只放行「本租户的 TENANT 行」（V15/V17 注释），
-  #   PLATFORM 行必须由带 BYPASSRLS 的平台运维角色写入 ——
-  #   否则**任一租户都能单方面替换全平台生效配置**，那是直接的越权。
-  #
-  # ⚠️ **默认不启用**（enabled=false）：未接入时 PLATFORM 作用域发布
-  #   **明确失败**（PlatformOpsUnavailableException），**不会**静默回落到
-  #   应用角色去写、再被 RLS 拒掉 —— 后者的失败现场是「RLS 策略拒写」，
-  #   离「这个环境没配运维凭据」这一真因极远。
-  #
-  # ⚠️ **enabled=true 但缺 url/username → 拒绝启动**（fail-closed）：
-  #   声明了要用却没给凭据还继续启动，等于「以为平台运维已接入、实际没接入」。
-  #
-  # ⚠️ **凭据刻意与主数据源分开配置**（主数据源用 SPRING_DATASOURCE_*）：
-  #   运维凭据应单独轮换、单独授权、单独审计；
-  #   混在一个配置段里会让「轮换应用口令」顺手把运维口令也换了。
-  platform-ops:
-    datasource:
-      enabled: "${AGENT_PLATFORM_OPS_ENABLED:false}"
-      url: "${AGENT_PLATFORM_OPS_DATASOURCE_URL:}"
-      username: "${AGENT_PLATFORM_OPS_DATASOURCE_USERNAME:}"
-      password: "${AGENT_PLATFORM_OPS_DATASOURCE_PASSWORD:}"
-      # ⚠️ 池很小是刻意的：平台运维通道只服务「平台级发布」这一条低频路径，
-      #    不该占用与主业务池相当的连接额度。
-      max-pool-size: "2"
+# ⚠️ 平台运维角色（BYPASSRLS）配置段原挂在本节之下（键 config.platform-ops.datasource.*），
+#    与代码读取的 agent.platform-ops.datasource.* 不一致 → 运维通道永远 disabled，
+#    PLATFORM 作用域发布永远 fail-closed。已移至 agent: 下。
 
 
 # ── 健康检查（D-001 端到端 / SRE 探针）────────────────────────────
