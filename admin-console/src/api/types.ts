@@ -905,6 +905,14 @@ export interface PlatformRoleSummary {
   permissions: string[]
 }
 
+/** GET /api/platform/v1/permissions —— 平台权限及其中文说明（需 platform.role.read） */
+export interface PlatformPermissionSummary {
+  /** 权限码，如 platform.user.read */
+  code: string
+  /** 中文说明 */
+  description: string
+}
+
 /** 平台租户摘要（GET/POST /api/platform/v1/tenants · TenantSummary）。
  *
  * ⚠️ lifecycleState 为状态机值（PENDING_SETUP/ACTIVE/SUSPENDED/

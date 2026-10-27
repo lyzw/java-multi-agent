@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Card, Spin, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
-import { getPlatformRoles } from '@/api/adminApi'
-import type { PlatformRoleSummary } from '@/api/types'
+import { Alert, Card, Descriptions, Spin, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import { getPlatformPermissions, getPlatformRoles } from '@/api/adminApi'
+import type { PlatformPermissionSummary, PlatformRoleSummary } from '@/api/types'
 import { PLATFORM_SCOPE_ROLES } from '@/config/constants'
 import { ROLE_LABELS, ROLE_COLORS } from '@/pages/roleShared'
 
@@ -55,6 +55,8 @@ export function RoleMatrixPage(): JSX.Element {
   const [roles, setRoles] = useState<PlatformRoleSummary[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** 权限码 → 中文说明（来自 GET /api/platform/v1/permissions，非关键数据，失败留空） */
+  const [permDesc, setPermDesc] = useState<Record<string, string>>({})
 
   const load = useCallback(() => {
     setLoading(true)
@@ -71,6 +73,20 @@ export function RoleMatrixPage(): JSX.Element {
   useEffect(() => {
     load()
   }, [load])
+
+  // ⚠️ 权限中文说明为只读增强项，失败不影响矩阵渲染；测试环境若未注入该 mock 则跳过。
+  useEffect(() => {
+    if (typeof getPlatformPermissions !== 'function') return
+    getPlatformPermissions()
+      .then((list: PlatformPermissionSummary[]) => {
+        const m: Record<string, string> = {}
+        for (const p of list) m[p.code] = p.description
+        setPermDesc(m)
+      })
+      .catch(() => {
+        /* 非关键：保持空映射，矩阵仍按原始权限名呈现 */
+      })
+  }, [])
 
   /** 固定列序：6 个平台角色 */
   const columns = PLATFORM_SCOPE_ROLES.map((r) => ({
@@ -125,6 +141,22 @@ export function RoleMatrixPage(): JSX.Element {
         />
       )}
 
+      {/* 角色中文说明图例：列头已用中文标签，此处补全各角色的职责释义 */}
+      {roles.length > 0 && (
+        <Descriptions
+          size="small"
+          column={1}
+          bordered
+          style={{ marginBottom: 16 }}
+          title="角色说明"
+          items={roles.map((r) => ({
+            key: r.name,
+            label: <Tag color={ROLE_COLORS[r.name] ?? 'default'}>{ROLE_LABELS[r.name] ?? r.name}</Tag>,
+            children: <Text>{r.description || '—'}</Text>,
+          }))}
+        />
+      )}
+
       <Spin spinning={loading}>
         <Tabs
           items={groups.map((g) => ({
@@ -147,6 +179,14 @@ export function RoleMatrixPage(): JSX.Element {
                           {lastSegment(perm)}
                         </Paragraph>
                       </Tooltip>
+                    ),
+                  },
+                  {
+                    title: '说明',
+                    key: 'desc',
+                    width: 280,
+                    render: (_: unknown, perm: string) => (
+                      <Text type="secondary">{permDesc[perm] ?? '—'}</Text>
                     ),
                   },
                   ...columns,

@@ -43,6 +43,46 @@ public final class PlatformRolePermissionMatrix {
                 Platform.SUPPORT_DIAGNOSTICS_READ);
     }
 
+    /**
+     * 平台权限中文说明（与 {@link Platform} 常量一一对应）。
+     *
+     * <p>权限矩阵是<b>代码冻结</b>的单一事实源；此处中文说明供 admin-console「权限矩阵」
+     * 页渲染、并作为 {@code platform.platform_permission.description} 列的播种文案
+     * （数据库为该字段的治理副本，运行期不以 DB 读回为准）。
+     *
+     * <p>⚠️ 与 {@link #allPlatformPermissions()} 严格对齐：新增/移除权限时必须同步维护，
+     * 否则 {@link #verifyDescribed()} 自检会失败。
+     */
+    public static final Map<String, String> PERMISSION_DESCRIPTIONS = Map.ofEntries(
+            Map.entry(Platform.USER_READ, "查看平台用户基本信息（脱敏）"),
+            Map.entry(Platform.USER_MANAGE, "管理平台用户（创建/禁用/重置凭据等写操作）"),
+            Map.entry(Platform.ROLE_READ, "查看平台角色与权限矩阵"),
+            Map.entry(Platform.ROLE_ASSIGN, "授予平台角色"),
+            Map.entry(Platform.ROLE_REVOKE, "撤销平台角色"),
+            Map.entry(Platform.TENANT_CREATE, "创建新租户"),
+            Map.entry(Platform.TENANT_READ, "查看租户生命周期与配置（脱敏）"),
+            Map.entry(Platform.TENANT_UPDATE, "修改租户配置与套餐"),
+            Map.entry(Platform.TENANT_SUSPEND, "停用（暂停）租户"),
+            Map.entry(Platform.TENANT_RESUME, "恢复（启用）租户"),
+            Map.entry(Platform.TENANT_DECOMMISSION, "退役（销毁）租户"),
+            Map.entry(Platform.TENANT_QUOTA_READ, "查看租户配额"),
+            Map.entry(Platform.TENANT_QUOTA_UPDATE, "调整租户配额"),
+            Map.entry(Platform.TENANT_CAPABILITY_GRANT, "授予租户能力（如 Tool/Skill/MCP 授权）"),
+            Map.entry(Platform.TENANT_CAPABILITY_REVOKE, "撤销租户能力授权"),
+            Map.entry(Platform.TENANT_CAPABILITY_READ, "查看租户已授权能力"),
+            Map.entry(Platform.RESOURCE_READ, "查看全局资源目录（Tool/MCP/模型等）"),
+            Map.entry(Platform.RESOURCE_MANAGE, "管理全局资源目录可用性"),
+            Map.entry(Platform.POLICY_READ, "查看平台安全/访问策略"),
+            Map.entry(Platform.POLICY_PUBLISH, "发布平台安全/访问策略"),
+            Map.entry(Platform.AUDIT_READ, "查看平台审计日志"),
+            Map.entry(Platform.AUDIT_EXPORT, "导出平台审计日志"),
+            Map.entry(Platform.SUPPORT_DIAGNOSTICS_READ, "查看脱敏诊断与运维信息"));
+
+    /** 取某权限的中文说明（只读；未登记时返回空串）。 */
+    public static @NonNull String descriptionOf(@NonNull String code) {
+        return PERMISSION_DESCRIPTIONS.getOrDefault(code, "");
+    }
+
     /** 角色 → 允许的动作集合。 */
     public static final Map<String, Set<String>> ROLE_PERMISSIONS = Map.of(
             // 超级管理员：持有全部平台权限（含敏感操作），但受 SoD 与 MFA/重认证约束
@@ -99,6 +139,21 @@ public final class PlatformRolePermissionMatrix {
                 .collect(java.util.stream.Collectors.toSet());
         if (!missing.isEmpty()) {
             throw new IllegalStateException("平台权限矩阵存在缺口，以下动作无任何角色可执行: " + missing);
+        }
+    }
+
+    /**
+     * 启动期自检：确认 {@link #allPlatformPermissions()} 中的每一项都有中文说明。
+     *
+     * <p>避免新增权限时遗漏 {@link #PERMISSION_DESCRIPTIONS}，导致矩阵页出现空说明。
+     */
+    public static void verifyDescribed() {
+        Set<String> undescribed = allPlatformPermissions().stream()
+                .filter(p -> !PERMISSION_DESCRIPTIONS.containsKey(p)
+                        || PERMISSION_DESCRIPTIONS.get(p).isBlank())
+                .collect(java.util.stream.Collectors.toSet());
+        if (!undescribed.isEmpty()) {
+            throw new IllegalStateException("平台权限存在未登记中文说明的条目: " + undescribed);
         }
     }
 }

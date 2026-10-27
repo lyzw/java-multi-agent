@@ -56,6 +56,7 @@ import type {
   UpdatePlatformUserRequest,
   UserRolesResponse,
   PlatformAgentRegistryItem,
+  PlatformPermissionSummary,
 } from '@/api/types'
 
 /** POST /api/auth/token —— 无需鉴权 */
@@ -657,6 +658,11 @@ export function revokePlatformUserRole(id: string, role: string): Promise<UserRo
 /** GET /api/platform/v1/roles —— 平台角色目录（需 platform.role.read） */
 export function getPlatformRoles(): Promise<PlatformRoleSummary[]> {
   return request<PlatformRoleSummary[]>('/platform/v1/roles', { method: 'GET' })
+}
+
+/** GET /api/platform/v1/permissions —— 平台权限及中文说明（需 platform.role.read） */
+export function getPlatformPermissions(): Promise<PlatformPermissionSummary[]> {
+  return request<PlatformPermissionSummary[]>('/platform/v1/permissions', { method: 'GET' })
 }
 
 /** GET /api/platform/v1/tenants —— 租户列表（简单分页，非游标） */

@@ -15,6 +15,7 @@ vi.mock('@/api/adminApi', () => ({
   getPlatformAuditEvents: vi.fn(),
   getPlatformUsers: vi.fn(),
   getPlatformRoles: vi.fn(),
+  getPlatformPermissions: vi.fn(),
 }))
 import {
   getAuditLogs,
@@ -22,6 +23,7 @@ import {
   getMcpCatalog,
   getPlatformAuditEvents,
   getPlatformRoles,
+  getPlatformPermissions,
 } from '@/api/adminApi'
 import { AuditLogsPage } from '@/pages/audit/AuditLogsPage'
 import { RoleMatrixPage } from '@/pages/roles/RoleMatrixPage'
@@ -49,6 +51,7 @@ beforeEach(() => {
   vi.mocked(getMcpCatalog).mockResolvedValue([])
   vi.mocked(getPlatformAuditEvents).mockResolvedValue([])
   vi.mocked(getPlatformRoles).mockResolvedValue([])
+  vi.mocked(getPlatformPermissions).mockResolvedValue([])
 })
 
 // ---- 夹具（平台身份域） ----
