@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Card, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Card, Col, Input, Row, Statistic, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
 import type { TableColumnsType, TabsProps } from 'antd'
-import { TeamOutlined } from '@ant-design/icons'
+import { SearchOutlined, TeamOutlined } from '@ant-design/icons'
 import { getConsoleAgentRegistry } from '@/api/adminApi'
 import type { PlatformAgentRegistryItem } from '@/api/types'
 import { lifecycleTag, tagList, timeCell } from '@/pages/catalog/displayBits'
+import { CatalogDetailDrawer, AgentRegistryDetail } from './platformDetailDrawer'
 import { describeCatalogLoadError } from './platformRequestBits'
 
 /**
@@ -55,10 +56,54 @@ function registryColumns(): TableColumnsType<PlatformAgentRegistryItem> {
   ]
 }
 
+/** 行尾「详情」列（注册表纯只读盘点；与行双击等价 —— 双击是入口，链接是可发现性）。 */
+function agentDetailColumn(onOpen: (r: PlatformAgentRegistryItem) => void): TableColumnsType<PlatformAgentRegistryItem>[number] {
+  return {
+    title: '操作',
+    key: 'actions',
+    fixed: 'right',
+    width: 90,
+    render: (_: unknown, r: PlatformAgentRegistryItem) => (
+      <Button size="small" onClick={() => onOpen(r)}>
+        详情
+      </Button>
+    ),
+  }
+}
+
 export function AgentRegistryPage(): JSX.Element {
   const [rows, setRows] = useState<PlatformAgentRegistryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // ⚠️ 双击详情：Agent 注册表**没有单条详情端点**（定义正文不出租户边界），
+  //    详情只渲染行内已有字段 —— 抽屉开合不触发任何请求、不卸载列表。
+  const [detailItem, setDetailItem] = useState<PlatformAgentRegistryItem | null>(null)
+  // ⚠️ 本地搜索（不触网）：按 agentId / 名称 / 租户 / 角色 / 启用技能 / 能力标签过滤。
+  const [search, setSearch] = useState('')
+
+  // ⚠️ 统计卡：直接基于全量数据。
+  const stats = useMemo(() => {
+    return {
+      total: rows.length,
+      published: rows.filter((r) => r.lifecycleState === 'PUBLISHED').length,
+      deprecated: rows.filter((r) => r.lifecycleState === 'DEPRECATED').length,
+      noDef: rows.filter((r) => r.defVersion === null).length,
+    }
+  }, [rows])
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (q === '') return rows
+    return rows.filter((r) => {
+      if (r.agentId.toLowerCase().includes(q)) return true
+      if ((r.name ?? '').toLowerCase().includes(q)) return true
+      if (r.tenantId.toLowerCase().includes(q)) return true
+      if (r.roles.some((x) => x.toLowerCase().includes(q))) return true
+      if (r.enabledSkills.some((x) => x.toLowerCase().includes(q))) return true
+      if (r.capabilityTags.some((x) => x.toLowerCase().includes(q))) return true
+      return false
+    })
+  }, [rows, search])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -77,8 +122,11 @@ export function AgentRegistryPage(): JSX.Element {
   }, [load])
 
   // ⚠️ 每个 tab 只做**前端过滤**，不重复请求（一份全量数据当所有 tab 的源）。
-  const tenantIds = useMemo(() => [...new Set(rows.map((r) => r.tenantId))], [rows])
-  const columns = useMemo(() => registryColumns(), [])
+  const tenantIds = useMemo(() => [...new Set(filtered.map((r) => r.tenantId))], [filtered])
+  const columns = useMemo(
+    () => [...registryColumns(), agentDetailColumn(setDetailItem)],
+    [],
+  )
   const renderTable = (data: PlatformAgentRegistryItem[]): JSX.Element => (
     <Table<PlatformAgentRegistryItem>
       rowKey={(r) => `${r.tenantId}::${r.agentId}`}
@@ -89,15 +137,18 @@ export function AgentRegistryPage(): JSX.Element {
       size="small"
       scroll={{ x: 'max-content' }}
       locale={{ emptyText: '暂无数据' }}
+      onRow={(r) => ({
+        onDoubleClick: () => setDetailItem(r),
+      })}
     />
   )
 
   const items: TabsProps['items'] = [
-    { key: 'ALL', label: <span>全部租户<span style={{ marginLeft: 4, opacity: 0.6 }}>({rows.length})</span></span>, children: renderTable(rows) },
+    { key: 'ALL', label: <span>全部租户<span style={{ marginLeft: 4, opacity: 0.6 }}>({filtered.length})</span></span>, children: renderTable(filtered) },
     ...tenantIds.map((tenantId) => ({
       key: tenantId,
-      label: <span>{tenantId}<span style={{ marginLeft: 4, opacity: 0.6 }}>({rows.filter((r) => r.tenantId === tenantId).length})</span></span>,
-      children: renderTable(rows.filter((r) => r.tenantId === tenantId)),
+      label: <span>{tenantId}<span style={{ marginLeft: 4, opacity: 0.6 }}>({filtered.filter((r) => r.tenantId === tenantId).length})</span></span>,
+      children: renderTable(filtered.filter((r) => r.tenantId === tenantId)),
     })),
   ]
 
@@ -122,9 +173,50 @@ export function AgentRegistryPage(): JSX.Element {
           description={error}
         />
       )}
+
+      <Row gutter={12} style={{ marginBottom: 16 }}>
+        <Col span={6}>
+          <Card size="small" variant="borderless" style={{ background: '#fafafa' }}>
+            <Statistic title="Agent 总数" value={stats.total} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small" variant="borderless" style={{ background: '#f6ffed' }}>
+            <Statistic title="已发布" value={stats.published} valueStyle={{ color: '#389e0d' }} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small" variant="borderless" style={{ background: '#fff1f0' }}>
+            <Statistic title="已停用" value={stats.deprecated} valueStyle={{ color: '#cf1322' }} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small" variant="borderless" style={{ background: '#f0f5ff' }}>
+            <Statistic title="无定义" value={stats.noDef} valueStyle={{ color: '#2f54eb' }} />
+          </Card>
+        </Col>
+      </Row>
+
       <Card>
+        <Input
+          allowClear
+          prefix={<SearchOutlined />}
+          placeholder="搜索 agentId / 名称 / 租户 / 角色 / 技能 / 标签"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ maxWidth: 360, marginBottom: 16 }}
+        />
         <Tabs defaultActiveKey="ALL" items={items} />
       </Card>
+
+      {/* ⚠️ 详情走**抽屉**：内容全部来自行内字段（不发请求），开合不打扰列表。 */}
+      <CatalogDetailDrawer
+        title={<Typography.Text code>{detailItem ? `${detailItem.tenantId} :: ${detailItem.agentId}` : 'Agent 详情'}</Typography.Text>}
+        open={detailItem !== null}
+        onClose={() => setDetailItem(null)}
+      >
+        {detailItem !== null ? <AgentRegistryDetail item={detailItem} /> : null}
+      </CatalogDetailDrawer>
     </div>
   )
 }

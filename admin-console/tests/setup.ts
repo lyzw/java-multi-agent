@@ -16,3 +16,26 @@ import { afterEach } from 'vitest'
 afterEach(() => {
   cleanup()
 })
+
+/**
+ * ⚠️ jsdom 不实现 `window.matchMedia`，而 antd 的 `Row` / `Col` 响应式栅格
+ *    （`useBreakpoint` → `responsiveObserver`）在挂载时就会调用它。
+ *    缺了这个桩，任何用到栅格的页面测试都会以
+ *    `TypeError: window.matchMedia is not a function` 崩在渲染阶段——
+ *    症状像「组件写错了」，实际是测试环境缺件。
+ *
+ *    返回值刻意固定为「不匹配任何断点」：栅格在测试里退化为最窄布局，
+ *    不影响任何文本断言。
+ */
+if (typeof window.matchMedia !== 'function') {
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
+}

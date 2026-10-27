@@ -1,7 +1,22 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Alert, App as AntApp, Button, Card, Form, InputNumber, Space, Table, Tag, Typography } from 'antd'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  Alert,
+  App as AntApp,
+  Button,
+  Card,
+  Col,
+  Form,
+  Input,
+  InputNumber,
+  Row,
+  Space,
+  Statistic,
+  Table,
+  Tag,
+  Typography,
+} from 'antd'
 import type { TableColumnsType } from 'antd'
-import { ApiOutlined, PlusOutlined } from '@ant-design/icons'
+import { ApiOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { getConsoleMcpCatalog } from '@/api/adminApi'
 import type { McpCatalogItem } from '@/api/types'
 import {
@@ -17,10 +32,12 @@ import { type McpServerFormValues } from '@/pages/catalog/platformObjectForm'
 import { buildMcpPublishRequest } from '@/pages/catalog/platformPublishRequests'
 import { useRegistrationModal } from '@/pages/catalog/useRegistrationModal'
 import { PlatformDeprecateModal } from './PlatformDeprecateModal'
+import { CatalogDetailDrawer, McpCatalogDetail } from './platformDetailDrawer'
 import {
   LifecycleTabs,
   PlatformRequestQueueButton,
   describeCatalogLoadError,
+  inLifecycleTab,
 } from './platformRequestBits'
 
 /** MCP Server 目录（平台链 /api/platform/v1/capabilities/mcps · 按生命周期分组；transport 用列呈现） */
@@ -34,6 +51,34 @@ export function McpCatalogPage(): JSX.Element {
     serverId: string
     version: number
   } | null>(null)
+  // ⚠️ 双击详情的「开合 + 看哪一条」都是本页状态：抽屉在列表上方开合，
+  //    关闭后列表不卸载、不重新请求。
+  const [detailId, setDetailId] = useState<string | null>(null)
+  // ⚠️ 本地搜索（不触网）：按 serverId / 传输 / endpoint / 信任分级 / 认证方式过滤。
+  const [search, setSearch] = useState('')
+
+  // ⚠️ 统计卡：直接基于全量数据，与下方 Tab 口径一致（inLifecycleTab）。
+  const stats = useMemo(() => {
+    return {
+      total: rows.length,
+      published: rows.filter((r) => inLifecycleTab(r, 'PUBLISHED')).length,
+      draft: rows.filter((r) => inLifecycleTab(r, 'DRAFT')).length,
+      deprecated: rows.filter((r) => inLifecycleTab(r, 'DEPRECATED')).length,
+    }
+  }, [rows])
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (q === '') return rows
+    return rows.filter((r) => {
+      if (r.serverId.toLowerCase().includes(q)) return true
+      if (r.transport.toLowerCase().includes(q)) return true
+      if ((r.endpoint ?? '').toLowerCase().includes(q)) return true
+      if (r.trustTier.toLowerCase().includes(q)) return true
+      if (r.authKind.toLowerCase().includes(q)) return true
+      return false
+    })
+  }, [rows, search])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -96,12 +141,19 @@ export function McpCatalogPage(): JSX.Element {
       key: 'actions',
       fixed: 'right',
       width: 90,
-      render: (_: unknown, r: McpCatalogItem) =>
-        r.lifecycleState === 'PUBLISHED' ? (
-          <Button size="small" onClick={() => setDeprecateTarget({ serverId: r.serverId, version: r.version })}>
-            停用
+      // ⚠️ 「详情」与「停用」都在行内点：双击行同样可开详情（等价入口）。
+      render: (_: unknown, r: McpCatalogItem) => (
+        <Space size="small">
+          <Button size="small" onClick={() => setDetailId(r.serverId)}>
+            详情
           </Button>
-        ) : null,
+          {r.lifecycleState === 'PUBLISHED' ? (
+            <Button size="small" onClick={() => setDeprecateTarget({ serverId: r.serverId, version: r.version })}>
+              停用
+            </Button>
+          ) : null}
+        </Space>
+      ),
     },
   ]
 
@@ -115,6 +167,9 @@ export function McpCatalogPage(): JSX.Element {
       size="small"
       scroll={{ x: 'max-content' }}
       locale={{ emptyText: '暂无数据' }}
+      onRow={(r) => ({
+        onDoubleClick: () => setDetailId(r.serverId),
+      })}
     />
   )
 
@@ -128,7 +183,7 @@ export function McpCatalogPage(): JSX.Element {
         showIcon
         style={{ marginBottom: 16 }}
         message="平台级 MCP Server 目录（/api/platform/v1/capabilities/*）"
-        description="MCP Server 是平台级对象。登记 / 改版 / 停用走平台级三步工作流（申请 → 审批 → 执行，需 PLATFORM_ADMIN）。凭据仅存定位符，本目录不回显任何凭据定位符或凭据材料。"
+        description="MCP Server 是平台级对象。登记 / 改版 / 停用走平台级三步工作流（申请 → 审批 → 执行，需 PLATFORM_ADMIN）。凭据仅存定位符，本目录不回显任何凭据定位符或凭据材料。双击行（或点「详情」）可只读查看全字段与登记关系——抽屉，不离开列表。"
       />
       {error && (
         <Alert
@@ -149,8 +204,39 @@ export function McpCatalogPage(): JSX.Element {
           </Space>
         }
       >
+        <Row gutter={12} style={{ marginBottom: 16 }}>
+          <Col span={6}>
+            <Card size="small" variant="borderless" style={{ background: '#fafafa' }}>
+              <Statistic title="MCP 总数" value={stats.total} />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card size="small" variant="borderless" style={{ background: '#f6ffed' }}>
+              <Statistic title="已发布" value={stats.published} valueStyle={{ color: '#389e0d' }} />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card size="small" variant="borderless" style={{ background: '#fffbe6' }}>
+              <Statistic title="草稿 / 非终态" value={stats.draft} valueStyle={{ color: '#d48806' }} />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card size="small" variant="borderless" style={{ background: '#fff1f0' }}>
+              <Statistic title="已停用" value={stats.deprecated} valueStyle={{ color: '#cf1322' }} />
+            </Card>
+          </Col>
+        </Row>
+
+        <Input
+          allowClear
+          prefix={<SearchOutlined />}
+          placeholder="搜索 serverId / 传输 / endpoint / 信任分级 / 认证"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ maxWidth: 360, marginBottom: 16 }}
+        />
         <LifecycleTabs<McpCatalogItem>
-          items={rows}
+          items={filtered}
           renderPane={(data) => renderTable(data)}
         />
       </Card>
@@ -163,6 +249,16 @@ export function McpCatalogPage(): JSX.Element {
         onClose={() => setDeprecateTarget(null)}
         onSubmitted={() => message.success('已在申请队列，可在页头「申请队列」查看/跟进')}
       />
+
+      {/* ⚠️ 双击详情走**抽屉**而不是整页详情：看完就该回到原列表状态，
+          不允许「返回」把目录 list 再打一遍。 */}
+      <CatalogDetailDrawer
+        title={<><ApiOutlined /> MCP Server 详情{detailId ? ` · ${detailId}` : ''}</>}
+        open={detailId !== null}
+        onClose={() => setDetailId(null)}
+      >
+        {detailId !== null ? <McpCatalogDetail id={detailId} /> : null}
+      </CatalogDetailDrawer>
 
       <PlatformRegistrationModal<McpServerFormValues & { reason: string; expectedPublishSeq?: number }>
         open={registration.open}

@@ -8,6 +8,7 @@ import {
 } from './platformObjectForm'
 import { ParamListEditor } from './ParamListEditor'
 import { PolicyListEditor } from './PolicyListEditor'
+import { useDictOptions } from '@/features/dictionaries/useDictionaries'
 
 /**
  * Tool 定义草稿的**字段区**（第三十七批 · C37-3）。
@@ -43,26 +44,32 @@ export interface ToolFormFieldsProps {
  */
 export function ToolFormFields({ isRegistration }: ToolFormFieldsProps): JSX.Element {
   const form = Form.useFormInstance()
+  // 风险等级取值来自字典表；字典不可达时 useDictOptions 自动回落静态兜底
+  const { options: riskLevelOptions } = useDictOptions('tool.risk_level')
   const kind = Form.useWatch('kind', form) as ToolFormValues['kind'] | undefined
   const inputSchema = Form.useWatch('inputSchema', form) as string | undefined
   const paramPolicies = Form.useWatch('paramPolicies', form) as string | undefined
 
-  const [activeKind, setActiveKind] = useState<KindTab>(
-    kind === 'MCP' || kind === 'HTTP' ? kind : 'NATIVE',
-  )
+  /**
+   * ⚠️ Tab 选中态**直接由 kind 推导**，而非「useState 初值 + useEffect 同步」。
+   *
+   * 用 effect 同步会慢一拍：表单被既有定义回填（kind 由空变成 MCP）时，
+   * 第一次渲染仍是 NATIVE 页签，要等 effect 跑完才切过去。
+   * 后果不只是「闪一下」——回填后立刻读取表单的代码会读到**另一组字段**，
+   * 而 antd Tabs 默认不挂载非活动页签，那些字段此刻根本还不存在。
+   * `manual` 只记录用户的手动切换，kind 一变就失效（让位给真实取值）。
+   */
+  const [manual, setManual] = useState<KindTab | null>(null)
+  const derivedKind: KindTab = kind === 'MCP' || kind === 'HTTP' ? kind : 'NATIVE'
+  const activeKind: KindTab = manual ?? derivedKind
 
-  // ⚠️ 外部改动 kind（回填既有定义）时同步 Tab ——
-  //    否则 Tab 会停在旧类型上，而表单里的 kind 已经是新类型，
-  //    作者看到的是「HTTP 的字段却显示在 MCP 页签里」。
   useEffect(() => {
-    if (kind === 'MCP' || kind === 'HTTP' || kind === 'NATIVE') {
-      setActiveKind(kind)
-    }
+    setManual(null)
   }, [kind])
 
   const onTabChange = (key: string): void => {
     const next = key as KindTab
-    setActiveKind(next)
+    setManual(next)
     // ⚠️ 切换类型必须**清空其它类型的字段** ——
     //    三组专属字段互斥，残留值会让后端以「目标不唯一」拒（400），
     //    而错误信息指向的字段在当前 Tab 里根本看不见。
@@ -94,13 +101,8 @@ export function ToolFormFields({ isRegistration }: ToolFormFieldsProps): JSX.Ele
         <Input placeholder="可读名称（可选）" />
       </Form.Item>
       <Form.Item name="riskLevel" label="风险等级（riskLevel）" rules={[{ required: true }]}>
-        <Select
-          options={[
-            { value: 'READ', label: 'READ（只读）' },
-            { value: 'WRITE_PROFILE', label: 'WRITE_PROFILE（内部写）' },
-            { value: 'WRITE_EXTERNAL', label: 'WRITE_EXTERNAL（外部写）' },
-          ]}
-        />
+        {/* ⚠️ 取值来自字典表 tool.risk_level（不可达时自动回落到静态兜底） */}
+        <Select options={riskLevelOptions} />
       </Form.Item>
 
       {/* ⚠️ kind 用隐藏字段承载：真正的类型选择器是下面的 Tab。

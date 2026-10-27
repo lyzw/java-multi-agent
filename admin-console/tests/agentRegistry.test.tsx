@@ -19,7 +19,6 @@ import { getConsoleAgentRegistry } from '@/api/adminApi'
 import { ApiError } from '@/api/client'
 
 import { AgentRegistryPage } from '@/pages/console/AgentRegistryPage'
-
 beforeAll(() => {
   if (!window.matchMedia) {
     window.matchMedia = ((query: string) => ({
@@ -140,14 +139,42 @@ describe('平台控制台 · Agent 注册表 /agents（只读盘点 · 按租户
     expect(screen.queryByRole('button', { name: /申请队列/ })).toBeNull()
   })
 
-  it('✅ 只读性质：整页无任何写入口按钮（停用/删除/编辑都不该有）', async () => {
+  it('✅ 只读盘点：行尾只有「详情」（只读入口）；停用/删除/编辑等写入口不该有', async () => {
     vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
     const { container } = renderRegistry()
     await waitFor(() => expect(screen.getByText('beta-1')).toBeTruthy())
     const buttonTexts = Array.from(container.querySelectorAll('td button, .ant-card-extra button')).map(
       (b) => (b.textContent ?? '').replace(/\s+/g, ''),
-    )
-    expect(buttonTexts.filter((t) => t.length > 0)).toHaveLength(0)
+    ).filter((t) => t.length > 0)
+    // ⚠️ 注册表是纯只读盘点：行内按钮允许且只允许「详情」（读取），
+    //    停用 / 编辑 / 删除 / 登记这类写入口一个都不许出现。
+    expect(buttonTexts).toHaveLength(ENTRIES.length)
+    expect(buttonTexts.every((t) => t === '详情')).toBe(true)
+  })
+
+  it('✅ 双击行打开详情抽屉：内容来自行内字段，注册表**零新请求**', async () => {
+    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+    const { container } = renderRegistry()
+    await waitFor(() => expect(screen.getByText('alpha-1')).toBeTruthy())
+    expect(getConsoleAgentRegistry).toHaveBeenCalledTimes(1)
+
+    fireEvent.dblClick(container.querySelector<HTMLElement>('.ant-table-tbody td')!)
+    // 抽屉标题 = 租户 :: agentId；关键字段与红线声明都在
+    await waitFor(() => expect(screen.getByText('tenant-alpha :: alpha-1')).toBeTruthy())
+    const drawer = screen.getByText('tenant-alpha :: alpha-1').closest('.ant-drawer') as HTMLElement
+    // ⚠️ 同名文本（order-reader）也在列表行里 —— 字段断言须限定在抽屉内。
+    expect(within(drawer).getByText('order-reader')).toBeTruthy()
+    expect(within(drawer).getByText('跨租户只读盘点')).toBeTruthy()
+    // ⚠️ 详情不发任何请求（无单条端点，渲染行内数据），更不允许把注册表 list 再打一遍
+    expect(getConsoleAgentRegistry).toHaveBeenCalledTimes(1)
+  })
+
+  it('✅ 行尾「详情」按钮与双击等价', async () => {
+    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+    const { container } = renderRegistry()
+    await waitFor(() => expect(screen.getByText('beta-1')).toBeTruthy())
+    fireEvent.click(within(container.querySelector<HTMLElement>('.ant-table-tbody')!).getAllByRole('button', { name: /详\s*情/ })[2]!)
+    await waitFor(() => expect(screen.getByText('tenant-beta :: beta-1')).toBeTruthy())
   })
 
   it('⛔ 503（platform-ops 数据源未配置）→ 展示「平台运营会话窗未接入」Alert，跨租户盘点如实声明不可用', async () => {

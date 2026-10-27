@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { Form, Modal } from 'antd'
 import type { PlatformPublishRequest } from '@/api/types'
 import { PlatformPublishPanel } from './PlatformPublishPanel'
@@ -40,6 +40,13 @@ export interface PlatformRegistrationModalProps<TValues> {
   renderFields: () => ReactNode
   /** 关闭弹窗 */
   onClose: () => void
+  /**
+   * 打开时回填的初值（改版用）。
+   *
+   * ⚠️ **向后兼容**：未传时行为与原来完全一致（空白表单）。
+   * 仅「登记」传它来预填既有定义（如改版），且不影响 Tool / MCP 页面的既有用法。
+   */
+  initialValues?: Partial<TValues>
 }
 
 /**
@@ -54,10 +61,22 @@ export function PlatformRegistrationModal<TValues>({
   buildRequest,
   renderFields,
   onClose,
+  initialValues,
 }: PlatformRegistrationModalProps<TValues>): JSX.Element {
   // ⚠️ **弹窗持有自己的表单实例**：与详情页的表单分开 ——
   //    否则「登记」里填了一半的值会出现在「修改」表单里（反之亦然）。
   const [form] = Form.useForm<TValues>()
+
+  // ⚠️ 打开即回填初值（改版）：弹窗 destroyOnClose 关闭时卸载，
+  //    重新打开时表单为空，这里统一 reset 后再 setFieldsValue，
+  //    避免上一次改版的内容幽灵般残留。
+  useEffect(() => {
+    if (!open) return
+    form.resetFields()
+    if (initialValues) {
+      form.setFieldsValue(initialValues as unknown as Parameters<typeof form.setFieldsValue>[0])
+    }
+  }, [open, initialValues, form])
 
   return (
     <Modal

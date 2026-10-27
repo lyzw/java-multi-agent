@@ -223,11 +223,13 @@ describe('Tool 全量信息 · 修改（发新版本）', () => {
     expect(values).toContain('srv-1')
     expect(values).toContain('query_order')
 
-    // JSON 字段落在 textarea 里
-    const areas = Array.from(container.querySelectorAll('textarea')) as HTMLTextAreaElement[]
-    const areaValues = areas.map((a) => a.value)
-    expect(areaValues.some((v) => v.includes('orderId'))).toBe(true)
-    expect(areaValues.some((v) => v.includes('maxLength'))).toBe(true)
+    // ⚠️ 入参结构 / 参数策略已改为**结构化编辑器**（参数列表 / 策略列表），
+    //    不再是「一整块 JSON 塞进 textarea」。故断言改为：参数名与策略键
+    //    必须出现在编辑器里 —— 判据仍是「字段没漏」，只是落点从 textarea
+    //    变成结构化行。
+    const bodyText = container.textContent ?? ''
+    expect(bodyText).toContain('orderId')
+    expect(bodyText).toContain('maxLength')
   })
 
   it('✅ 表单旁给出当前生效版本的**基线**（v 几 / 是否发布 / 生命周期 / 指纹）', async () => {

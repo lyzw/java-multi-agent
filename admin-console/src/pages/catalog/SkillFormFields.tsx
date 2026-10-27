@@ -1,4 +1,5 @@
-import { Button, Form, Input, Select, Space, type FormInstance } from 'antd'
+import { Button, Form, Input, Select, Space, Typography, type FormInstance } from 'antd'
+import { PlusOutlined } from '@ant-design/icons'
 import type { McpDeclarationFormValue, SkillFormValues } from './platformObjectForm'
 import { useTextBridge } from './formFieldBridge'
 import { PolicyListEditor } from './PolicyListEditor'
@@ -137,30 +138,41 @@ function DescriptionTwoLevelFields(): JSX.Element {
           showCount
         />
       </Form.Item>
+      {/* ⚠️ 2级 usage 必须是「可见可录入」的字段：把 Form.List 收进带 label 的
+          Form.Item 内部（vertical 布局下 label 在上、编辑区在下），避免只留一个空 label
+          让人以为「没有录入框」。点「添加使用指引」即生成一对「情况 / 操作」文本框。 */}
       <Form.Item
         label="使用指引（2级 usage · 可选）"
-        extra="分场景条目：当〈什么情况〉→〈用何种操作〉。条目间应互斥或有明确优先级，禁止兜底条目。"
-        style={{ marginBottom: 0 }}
-      />
-      <Form.List name={['description', 'usage']}>
-        {(fields, { add, remove }) => (
-          <div style={{ margin: '0 0 24px' }}>
-            {fields.map((field) => (
-              <SkillUsageRow
-                key={field.key}
-                field={field}
-                onRemove={() => remove(field.name)}
-              />
-            ))}
-            <Button
-              onClick={() => add({ when: '', how: '' })}
-              disabled={fields.length >= 20}
-            >
-              添加使用指引（{fields.length}/20）
-            </Button>
-          </div>
-        )}
-      </Form.List>
+        extra="分场景条目：当〈什么情况〉→〈用何种操作〉。条目间应互斥或有明确优先级，禁止兜底条目。每点一次「添加使用指引」即可录入一对「情况 / 操作」（最多 20 条）。"
+      >
+        <Form.List name={['description', 'usage']}>
+          {(fields, { add, remove }) => (
+            <div>
+              {fields.length === 0 ? (
+                <Typography.Text type="secondary">尚未录入使用指引（可选）。</Typography.Text>
+              ) : (
+                fields.map((field) => (
+                  <SkillUsageRow
+                    key={field.key}
+                    field={field}
+                    onRemove={() => remove(field.name)}
+                  />
+                ))
+              )}
+              <Button
+                type="dashed"
+                block
+                icon={<PlusOutlined />}
+                onClick={() => add({ when: '', how: '' })}
+                disabled={fields.length >= 20}
+                style={{ marginTop: fields.length ? 8 : 4 }}
+              >
+                添加使用指引（{fields.length}/20）
+              </Button>
+            </div>
+          )}
+        </Form.List>
+      </Form.Item>
     </>
   )
 }

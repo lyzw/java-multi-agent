@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { App as AntApp } from 'antd'
@@ -8,6 +8,7 @@ import { App as AntApp } from 'antd'
 vi.mock('@/api/adminApi', () => ({
   getConsoleToolCatalog: vi.fn(),
   getConsoleTool: vi.fn(),
+  getConsoleToolRelations: vi.fn(),
   getConsoleSkillCatalog: vi.fn(),
   getConsoleSkill: vi.fn(),
   getConsoleMcpCatalog: vi.fn(),
@@ -19,7 +20,7 @@ vi.mock('@/api/adminApi', () => ({
   submitPlatformPublishRequest: vi.fn(),
   submitPlatformLifecycleRequest: vi.fn(),
 }))
-import { getConsoleToolCatalog } from '@/api/adminApi'
+import { getConsoleToolCatalog, getConsoleTool, getConsoleToolRelations } from '@/api/adminApi'
 
 import { ToolCatalogPage } from '@/pages/console/ToolCatalogPage'
 
@@ -100,8 +101,16 @@ function renderCatalog() {
 }
 
 describe('平台控制台 · Tool 目录页（/tools · 生命周期分组）', () => {
-  beforeAll(() => {
-    vi.mocked(getConsoleToolCatalog).mockResolvedValue(TOOLS as never)
+  beforeEach(() => {
+    // ⚠️ 每个用例从零开始：调用计数的断言（「目录 list 只打一次」）要求计数干净。
+    vi.mocked(getConsoleToolCatalog).mockReset().mockResolvedValue(TOOLS as never)
+    // 详情抽屉的取数（只读详情不触目录 list）
+    vi.mocked(getConsoleTool).mockReset().mockImplementation(
+      (id: string) => Promise.resolve(TOOLS.find((t) => t.toolId === id) as never),
+    )
+    vi.mocked(getConsoleToolRelations).mockReset().mockImplementation(
+      (id: string) => Promise.resolve({ toolId: id, mcpServer: null } as never),
+    )
   })
 
   it('✅ Tabs 按生命周期分组：全部 / 已发布 / 草稿 / 已停用都出现', async () => {
@@ -161,5 +170,36 @@ describe('平台控制台 · Tool 目录页（/tools · 生命周期分组）', 
     renderCatalog()
     await waitFor(() => expect(screen.getByRole('button', { name: /登记 Tool/ })).toBeTruthy())
     expect(screen.getByRole('button', { name: /申请队列/ })).toBeTruthy()
+  })
+
+  it('✅ 双击行打开详情抽屉：只读详情取数，目录 list **不再**被调用', async () => {
+    const { container } = renderCatalog()
+    await waitFor(() => expect(screen.getByText('tool-published')).toBeTruthy())
+    // 列表请求恰一次（渲染时一次；之后任何交互都不允许再打目录 list）
+    expect(getConsoleToolCatalog).toHaveBeenCalledTimes(1)
+
+    const cell = container.querySelector<HTMLElement>('td')! // 第一行的第一列（toolId）
+    fireEvent.dblClick(cell)
+    await waitFor(() => expect(screen.getByText('Tool 详情 · tool-published')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('版本与生命周期')).toBeTruthy())
+    // 关系区如实呈现「内置 Tool」三态
+    await waitFor(() => expect(screen.getByText(/内置 Tool/)).toBeTruthy())
+    // 详情取的是**单条 + 关系**，而不是把整个目录再拉一遍
+    expect(getConsoleTool).toHaveBeenCalledWith('tool-published')
+    expect(getConsoleToolRelations).toHaveBeenCalledWith('tool-published')
+    expect(getConsoleToolCatalog).toHaveBeenCalledTimes(1)
+  })
+
+  it('✅ 行尾「详情」按钮 = 双击的等价入口（可发现性）', async () => {
+    const { container } = renderCatalog()
+    await waitFor(() => expect(screen.getByText('tool-draft')).toBeTruthy())
+    expect(getConsoleToolCatalog).toHaveBeenCalledTimes(1)
+
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('.ant-table-row'))
+    const draftRow = rows.find((r) => (r.textContent ?? '').includes('tool-draft'))!
+    fireEvent.click(within(draftRow).getByRole('button', { name: /详\s*情/ }))
+    await waitFor(() => expect(screen.getByText('Tool 详情 · tool-draft')).toBeTruthy())
+    expect(getConsoleTool).toHaveBeenCalledWith('tool-draft')
+    expect(getConsoleToolCatalog).toHaveBeenCalledTimes(1)
   })
 })
