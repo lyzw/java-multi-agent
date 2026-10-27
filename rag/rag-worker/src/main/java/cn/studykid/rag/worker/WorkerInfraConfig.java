@@ -41,8 +41,26 @@ import org.springframework.context.annotation.Import;
 @Import(LocalRagPortsConfig.class)
 public class WorkerInfraConfig {
 
+    /**
+     * 占位端口显式启用开关（评审 P0-6，缺省 {@code false} = fail-closed）。
+     * 与 {@link LocalRagPortsConfig} 共用同一属性：嵌入/解析/蕴含三处占位
+     * 要么全部显式放行，要么全部拒绝装配，不存在半开状态。
+     */
+    @org.springframework.beans.factory.annotation.Value("${rag.local-ports.enabled:false}")
+    private boolean localPortsEnabled;
+
+    /**
+     * 嵌入端口（评审 P0-6 fail-closed）。
+     *
+     * <p>⚠️ 当前实现是本地确定性占位（bigram 哈希，非 BGE-M3）——
+     * 占位向量只用于链路验证，索引出的「语义」是假的。默认<b>拒绝装配</b>；
+     * 仅本地开发时显式设置 {@code rag.local-ports.enabled=true} 放行
+     * （见 {@code LocalPortGate}）。
+     */
     @Bean
     public EmbeddingPort embeddingPort() {
+        cn.studykid.rag.infrastructure.LocalPortGate.requireEnabled(localPortsEnabled,
+                "EmbeddingPort → LocalDeterministicEmbeddingPort (rag-worker)");
         return new LocalDeterministicEmbeddingPort();
     }
 

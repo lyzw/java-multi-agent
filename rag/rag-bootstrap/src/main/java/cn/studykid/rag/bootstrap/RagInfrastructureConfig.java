@@ -65,8 +65,26 @@ public class RagInfrastructureConfig {
     @Value("${rag.indexer.batch-size:200}")
     private int indexerBatchSize;
 
+    /**
+     * 占位端口显式启用开关（评审 P0-6，缺省 {@code false} = fail-closed）。
+     * 与 {@code LocalRagPortsConfig} 共用同一属性：三处占位实现
+     * （嵌入/解析/蕴含）要么全部显式放行，要么全部拒绝装配，不存在半开状态。
+     */
+    @Value("${rag.local-ports.enabled:false}")
+    private boolean localPortsEnabled;
+
+    /**
+     * 嵌入端口（评审 P0-6 fail-closed）。
+     *
+     * <p>⚠️ 当前实现是本地确定性占位（bigram 哈希，非 BGE-M3）——
+     * 用它检索会把「二次函数」与「反二次函数」判为强相关（串知识点）。
+     * 因此默认<b>拒绝装配</b>（应用拒绝启动）；仅本地开发/链路验证时
+     * 显式设置 {@code rag.local-ports.enabled=true} 放行（见 {@link LocalPortGate}）。
+     */
     @Bean
     public EmbeddingPort embeddingPort() {
+        cn.studykid.rag.infrastructure.LocalPortGate.requireEnabled(localPortsEnabled,
+                "EmbeddingPort → LocalDeterministicEmbeddingPort (rag-bootstrap)");
         return new LocalDeterministicEmbeddingPort();
     }
 

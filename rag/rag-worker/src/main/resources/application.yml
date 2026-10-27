@@ -28,6 +28,10 @@ spring:
       fetch-size: 100
 
 rag:
+  # ── 评审 P0-6（fail-closed）：本地占位端口显式启用开关 ──
+  # 占位解析/嵌入/蕴含实现默认拒绝装配（应用拒绝启动）；仅本地开发/链路验证时置 true。
+  local-ports:
+    enabled: ${RAG_LOCAL_PORTS_ENABLED:false}
   indexer:
     # 启动即触发重索引（仅本 Worker 应用默认开启）。
     auto-start: true
