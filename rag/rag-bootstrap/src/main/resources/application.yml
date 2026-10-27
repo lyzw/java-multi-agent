@@ -35,6 +35,21 @@ rag:
     # 分数门禁：低于此值的命中视为「未找到依据」，
     # 使「找不到」成为合法输出，阻断 RAG 自信地胡说（RAG-D05 §⑦）。
     min-score: ${RAG_RETRIEVAL_MIN_SCORE:0.2}
+  security:
+    # ── 评审 P0-2：JWT 鉴权 + X-Tenant-Id 归属绑定 ──────────────────
+    # ⚠️ fail-closed：公钥未配置时「启用」组合在启动即失败；
+    #    enabled=false 是仅限本地开发的显式逃生门（启动打 ERROR 横幅）。
+    enabled: ${RAG_SECURITY_ENABLED:true}
+    tenant:
+      # 租户令牌域（aud=agent-platform）：强制 X-Tenant-Id == 令牌 tenant_id
+      public-key: ${RAG_TENANT_JWT_PUBLIC_KEY:}
+      issuer: ${RAG_TENANT_JWT_ISSUER:https://auth.studykid.cn}
+      audience: ${RAG_TENANT_JWT_AUDIENCE:agent-platform}
+    platform:
+      # 平台令牌域（aud=admin-console-api）：跨租户治理属设计内（平台自身有权限闸门）
+      public-key: ${RAG_PLATFORM_JWT_PUBLIC_KEY:}
+      issuer: ${RAG_PLATFORM_JWT_ISSUER:https://auth.studykid.cn}
+      audience: ${RAG_PLATFORM_JWT_AUDIENCE:admin-console-api}
 
 server:
   # RAG 是独立服务，默认 8081 以与主平台（platform，8080）避让。

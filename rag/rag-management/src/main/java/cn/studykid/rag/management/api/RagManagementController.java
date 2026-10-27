@@ -685,6 +685,11 @@ public class RagManagementController {
     /**
      * 校验并归一租户上下文（租户 ID + 权威门槛）。
      *
+     * <p>⚠️ <b>归属绑定（评审 P0-2）</b>：租户域令牌（aud=agent-platform）的
+     * {@code X-Tenant-Id} 已由 {@code RagJwtAuthFilter} 与令牌 {@code tenant_id}
+     * claim 强制比对（不一致 → 403）；本方法保留形态校验，作为平台域令牌
+     * （aud=admin-console-api，跨租户治理属设计内）路径上的最后一道形态闸门。
+     *
      * <p>⚠️ 缺失租户 ID 时<b>显式报错</b>而不是静默返回空结果：
      * 「没有租户上下文」是调用方配置错误，必须立刻暴露；
      * 若静默返回空，运维会误判为「租户确实没有语料」。

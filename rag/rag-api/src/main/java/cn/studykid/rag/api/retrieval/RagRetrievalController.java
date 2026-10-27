@@ -59,6 +59,10 @@ public class RagRetrievalController {
      * 跨进程 HTTP 调用时主平台的事务上下文<b>不会随之而来</b>；
      * 若不在此重建租户上下文，RLS 会把全部行过滤掉，
      * 表现为「检索永远返回空」且不报任何错。
+     *
+     * <p>⚠️ <b>归属绑定（评审 P0-2）</b>：本服务整体受 {@code RagJwtAuthFilter} 保护——
+     * 租户域令牌的 {@code X-Tenant-Id} 必须与令牌 {@code tenant_id} claim 一致（否则 403），
+     * 无令牌一律 401；不再存在「能触达 8081 即可检索任意租户」的裸奔面。
      */
     public static final String TENANT_HEADER = "X-Tenant-Id";
 
