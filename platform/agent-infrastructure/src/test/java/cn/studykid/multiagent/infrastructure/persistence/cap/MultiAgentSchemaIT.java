@@ -1,8 +1,5 @@
 package cn.studykid.multiagent.infrastructure.persistence.cap;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -15,8 +12,9 @@ import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import cn.studykid.multiagent.infrastructure.PlatformDdl;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * 多级 Agent 三张表的<b>实际库结构</b>断言（多级 Agent v1.1 · 第二十七批 · A8）。
@@ -40,14 +38,6 @@ class MultiAgentSchemaIT extends CapITBase {
     /** 三张被门禁覆盖的表。 */
     private static final List<String> GUARDED_TABLES =
             List.of("agent_invocation", "cap_agent_child_ref", "cap_result_contract");
-
-    /** 覆盖这三张表的迁移脚本（按版本顺序）。 */
-    private static final List<String> RELEVANT_MIGRATIONS = List.of(
-            "V19__multi_agent_orchestration.sql",
-            "V20__result_contract.sql",
-            "V23__result_contract_text_id.sql",
-            "V25__agent_invocation_requested_target.sql",
-            "V26__contract_policy_lifecycle_state.sql");
 
     // ------------------------------------------------------------------
     // 1. 表与列的实际类型
@@ -195,80 +185,35 @@ class MultiAgentSchemaIT extends CapITBase {
     }
 
     // ------------------------------------------------------------------
-    // 5. 迁移脚本可重放（幂等）
+    // 5. 库结构 ⇄ 结构权威源等价
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("⚠️ 覆盖三张表的迁移脚本必须可**重复执行**而不报错")
-    void migrationsAreReplayable() {
-        for (String migration : RELEVANT_MIGRATIONS) {
-            String sql = readMigration(migration);
-            assertThatCode(() -> replay(sql))
-                    .as("迁移脚本 %s 重复执行时报错 → 新环境重放会失败", migration)
-                    .doesNotThrowAnyException();
+    @DisplayName("⚠️ 库里的列集合必须与结构权威源声明的完全一致")
+    void liveColumnsMatchSnapshot() {
+        // ⚠️ 原「迁移脚本可重放（幂等）」两条用例已随迁移链一起退役：
+        //    幂等是「增量脚本」的性质，终态快照只在<b>空库</b>上执行一次，
+        //    它的「能建出一个库」改由 CI 的空库建库步骤保证。
+        //    这里换成同样防「新环境中招」的另一半：已建好的库必须就是权威源声明的那张表，
+        //    多一列（手工改库）或少一列（导出被截断）都会红。
+        for (String table : GUARDED_TABLES) {
+            assertThat(columnNames(table))
+                    .as("%s 的库结构与 %s 不一致 —— 要么库是手工改出来的，"
+                            + "要么权威源变了而环境还停在旧结构",
+                            table, PlatformDdl.SNAPSHOT_RELATIVE_PATH)
+                    .containsExactlyInAnyOrderElementsOf(PlatformDdl.columnNames(table));
         }
-    }
-
-    @Test
-    @DisplayName("⚠️ 重放迁移脚本后，三张表的结构必须**不变**")
-    void replayDoesNotAlterStructure() {
-        String before = structureFingerprint();
-        for (String migration : RELEVANT_MIGRATIONS) {
-            replay(readMigration(migration));
-        }
-        assertThat(structureFingerprint())
-                .as("重放迁移改变了三张表的结构 → 脚本不是幂等的")
-                .isEqualTo(before);
     }
 
     // ------------------------------------------------------------------
     // 辅助
     // ------------------------------------------------------------------
 
-    /**
-     * 在一个<b>事务</b>里执行迁移脚本，然后回滚。
-     *
-     * <p>⚠️ <b>必须回滚</b>：PostgreSQL 的 DDL 是事务性的，
-     * 所以重放既验证了「能执行」，又不会把共享的 IT 库留在被改动的状态。
-     * 万一脚本执行到一半报错，回滚同样把现场复原。
-     */
-    private static void replay(String sql) {
-        try (Connection c = adminPool.getConnection()) {
-            boolean autoCommit = c.getAutoCommit();
-            c.setAutoCommit(false);
-            try (Statement st = c.createStatement()) {
-                st.execute(sql);
-            } finally {
-                c.rollback();
-                c.setAutoCommit(autoCommit);
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException("重放迁移脚本失败: " + e.getMessage(), e);
-        }
-    }
-
-    /** 三张表的结构指纹（列 + 约束 + 触发器 + 索引 + RLS），用于「重放前后是否变化」。 */
-    private String structureFingerprint() {
-        StringBuilder sb = new StringBuilder();
-        for (String table : GUARDED_TABLES) {
-            sb.append(table).append("|").append(adminQueryList(
-                    "SELECT a.attname || ':' || format_type(a.atttypid, a.atttypmod)"
-                            + " || ':' || a.attnotnull"
-                            + " FROM pg_attribute a WHERE a.attrelid = '" + table + "'::regclass"
-                            + " AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attname"))
-                    .append("|");
-            sb.append(adminQueryList(
-                    "SELECT conname FROM pg_constraint WHERE conrelid = '" + table
-                            + "'::regclass ORDER BY conname")).append("|");
-            sb.append(triggerNames(table)).append("|");
-            sb.append(adminQueryList(
-                    "SELECT indexname FROM pg_indexes WHERE tablename = '"
-                            + table + "' ORDER BY indexname")).append("|");
-            sb.append(adminQueryLong("SELECT relrowsecurity::int + relforcerowsecurity::int"
-                    + " FROM pg_class WHERE relname = '" + table + "'"
-                    + " AND relnamespace = current_schema()::regnamespace"));
-        }
-        return sb.toString();
+    /** 库里某张表的列名（按声明顺序）。 */
+    private static List<String> columnNames(String table) {
+        return adminQueryList("SELECT a.attname FROM pg_attribute a"
+                + " WHERE a.attrelid = '" + table + "'::regclass"
+                + " AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum");
     }
 
     private static Set<String> triggerNames(String table) {
@@ -320,17 +265,6 @@ class MultiAgentSchemaIT extends CapITBase {
                         + " WHERE c.conrelid = '" + table + "'::regclass AND c.contype = 'f'"
                         + " ORDER BY c.conname");
         return rows;
-    }
-
-    /** 读取迁移脚本原文（classpath 上：{@code db/migration/<name>}）。 */
-    private static String readMigration(String name) {
-        String path = "db/migration/" + name;
-        try (InputStream in = MultiAgentSchemaIT.class.getClassLoader().getResourceAsStream(path)) {
-            assertThat(in).as("迁移脚本不在 classpath 上: %s", path).isNotNull();
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new IllegalStateException("读取迁移脚本失败: " + path, e);
-        }
     }
 
     /** 查一列 SQL，返回所有结果行（每行一个字符串）。 */

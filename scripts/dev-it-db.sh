@@ -14,7 +14,7 @@
 # 正解：IT 用**自己的库**，与运行实例彻底隔离。
 #
 # 用法：
-#   ./scripts/dev-it-db.sh            # 建库 + 应用迁移 + 播种
+#   ./scripts/dev-it-db.sh            # 建库 + 应用结构快照 + 播种
 #   IT_DB=agent_it_test ./scripts/dev-it-db.sh
 #
 # ⚠️ 幂等：重复执行不会重复插入，也不会清空既有数据。
@@ -27,7 +27,8 @@ PG_DB="${IT_DB:-agent_it}"
 PG_SUPERUSER="${PG_SUPERUSER:-agent}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MIGRATION_DIR="$SCRIPT_DIR/../platform/agent-infrastructure/src/main/resources/db/migration"
+# 结构唯一权威源（2026-10-27 收口：Flyway 迁移链已删除，改为终态快照）
+SNAPSHOT="$SCRIPT_DIR/../deploy/sql/platform/01_platform_ddl.sql"
 
 echo "▶ 隔离 IT 库: ${PG_DB}（容器 ${PG_CONTAINER}:${PG_PORT}）"
 
@@ -46,37 +47,19 @@ psql_it() {
       -v ON_ERROR_STOP=1 "$@"
 }
 
-# ── 2. 应用迁移（自动发现 V*.sql，按版本号顺序）────────────────
-echo "  · 应用迁移"
-for f in "$MIGRATION_DIR"/V[0-9]*__*.sql; do
-  name="$(basename "$f")"
-  if psql_it -tAc "SELECT 1 FROM pg_class WHERE relname='run' LIMIT 1" | grep -q 1; then
-    # V1 已应用过：只应用后续版本
-    case "$name" in V1__*) continue ;; esac
-  fi
-  if psql_it -tAc "SELECT 1 FROM flyway_schema_history WHERE version LIKE '$(echo "$name" | cut -d_ -f1 | tr -d 'V')%'" | grep -q 1; then
-    continue
-  fi
-  psql_it -q -f - < "$f" >/dev/null 2>&1 || {
-    echo "  ⚠️ 迁移 $name 应用失败（可能已应用或语法差异），继续"
-  }
-done
-
-# 记录版本，便于幂等判断
-psql_it -q -c "
-CREATE TABLE IF NOT EXISTS flyway_schema_history (
-  version VARCHAR(50) PRIMARY KEY,
-  description VARCHAR(200),
-  installed_on TIMESTAMPTZ DEFAULT now()
-);" >/dev/null 2>&1 || true
-
-for f in "$MIGRATION_DIR"/V[0-9]*__*.sql; do
-  name="$(basename "$f")"
-  ver="$(echo "$name" | cut -d_ -f1 | tr -d 'V')"
-  psql_it -q -c "INSERT INTO flyway_schema_history(version, description)
-      SELECT '$ver', '$name' WHERE NOT EXISTS
-      (SELECT 1 FROM flyway_schema_history WHERE version='$ver');" >/dev/null 2>&1 || true
-done
+# ── 2. 应用结构快照（一次性，已建库则跳过）───────────────────────
+# ⚠️ 快照不是幂等的迁移：它按「空库」导出，重复执行会在 CREATE TABLE 上报错。
+#    因此这里以「run 表是否已存在」判定结构是否已建 —— 与 IT 只关心
+#    「库里有没有这套结构」的语义一致。
+# ⚠️ 快照头尾的 \restrict / \unrestrict 是 pg_dump 17 的注入防护行，
+#    低版本 psql 不认（配合 ON_ERROR_STOP=1 会直接判死），这里过滤掉：
+#    仓库内的文件是可信来源，不需要那层防护。
+if psql_it -tAc "SELECT 1 FROM pg_class WHERE relname='run' LIMIT 1" | grep -q 1; then
+  echo "  · 结构已存在，跳过快照（要重建请先 DROP SCHEMA public CASCADE）"
+else
+  echo "  · 应用结构快照 $(basename "$SNAPSHOT")"
+  grep -v '^\\\(un\)\?restrict ' "$SNAPSHOT" | psql_it -q -v ON_ERROR_STOP=1 -f -
+fi
 
 # ── 2.5 清理测试残留 ─────────────────────────────────────────────
 # ⚠️⚠️ 为什么必须清（P4-D10 实测）：
@@ -196,13 +179,13 @@ done
 psql_it -q -c "GRANT USAGE ON SCHEMA public TO app_agent" >/dev/null 2>&1 || true
 psql_it -q -c "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO app_agent" >/dev/null 2>&1 || true
 
-# ⚠️ RLS 策略随迁移建表时一并创建（V1–V8 内含 CREATE POLICY），
+# ⚠️ RLS 策略随结构快照一并创建（01_platform_ddl.sql 内含 CREATE POLICY），
 #    此处只做兜底核对：策略缺失会导致「应用侧 tenant_id 条件」成为唯一防线。
 enabled=$(psql_it -tAc "SELECT count(*) FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity")
 policies=$(psql_it -tAc "SELECT count(*) FROM pg_policies WHERE schemaname='public'")
 echo "    RLS 启用的表: ${enabled} | 策略数: ${policies}"
 if [ "$policies" -lt 10 ]; then
-  echo "    ⚠️ 策略数偏少，请核对迁移是否全部应用"
+  echo "    ⚠️ 策略数偏少，请核对结构快照是否完整应用"
 fi
 
 echo "✅ 隔离 IT 库就绪: $PG_DB"

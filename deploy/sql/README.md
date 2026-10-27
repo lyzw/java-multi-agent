@@ -149,7 +149,21 @@ psql -h <host> -p 5432 -U <超管> -d study_rag -v ON_ERROR_STOP=1 \
 
 **应用侧现状**：`spring.flyway.locations` 指向 `classpath:db/migration`，该目录现已清空 →
 启动时 Flyway 无脚本可跑（no-op）；全部 IT 早已显式 `spring.flyway.enabled=false`，
-因此删除迁移脚本**不影响测试**。集成测试库由 `scripts/dev-it-db.sh` 准备（该脚本已容忍空迁移目录）。
+因此运行期与 IT 都不受影响。
+
+> ⚠️ **但「不影响测试」这句 2026-10-27 说早了**：有四类**构建期结构门禁**
+> （`SchemaStructureTest` / `CapCoreSchemaStructureTest` / `MultiAgentSchemaStructureTest` /
+> `TutoringVocabularySchemaTest`）直接读迁移脚本原文做断言，删脚本时它们当场变红。
+> 这类守卫的价值恰恰在于「不连库也能拦住被改坏的定义」，所以正确的收尾不是删掉它们，
+> 而是把取数源换成本目录 —— 现由
+> `platform/agent-infrastructure/src/test/java/.../PlatformDdl.java` 统一指向
+> `deploy/sql/platform/01_platform_ddl.sql`（见该类 javadoc：`pg_dump` 输出的四处解析形状差异）。
+> 同步退役的还有「迁移脚本可重放（幂等）」两条 IT 用例：
+> 幂等是**增量脚本**的性质，终态快照只在空库上执行一次，
+> 这条保证改由 CI 的「空库应用快照」步骤承担。
+
+**环境准备脚本**：`scripts/dev-it-db.sh`（隔离 IT 库）与 `scripts/dev-postgres.sh`（本机容器）
+已改为**应用本目录快照**，并因快照不幂等而加了「结构已存在则跳过」的判断。
 
 ---
 
@@ -157,10 +171,10 @@ psql -h <host> -p 5432 -U <超管> -d study_rag -v ON_ERROR_STOP=1 \
 
 | 脚本 | 用途 |
 |---|---|
-| `scripts/apply-migrations.sh <库> <迁移目录>` | 按**版本号数值序**应用迁移（shell 通配会把 V10 排在 V2 前） |
+| `scripts/apply-migrations.sh <库> <迁移目录>` | 按**版本号数值序**应用迁移。⚠️ 迁移链已删，本脚本仅用于临时/历史目录 |
 | `scripts/compare-db-schema.sh <A> <B> [schema]` | 比对两库结构/索引/RLS/函数/触发器/约束/枚举是否等价 |
-| `scripts/dev-it-db.sh` | 建隔离 IT 库并播种 |
-| `scripts/dev-postgres.sh` | 本机 PG 容器 |
+| `scripts/dev-it-db.sh` | 建隔离 IT 库（应用快照 + 播种 + 授权） |
+| `scripts/dev-postgres.sh` | 本机 PG 容器（start 时应用快照，幂等跳过） |
 
 ## 版本
 

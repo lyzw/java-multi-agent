@@ -178,24 +178,23 @@ jobs:
       - name: 安装 PostgreSQL 客户端
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: 执行迁移（V1~V12 全量按序）+ 种子
+      - name: 应用结构权威快照 + 种子
         env:
           PGPASSWORD: ci_only_not_a_secret
         run: |
-          cd platform/agent-infrastructure/src/main/resources/db/migration
-          # ⚠️⚠️ 必须**全量按序**（2026-10-22 修复）：原先只跑 V1__baseline_schema.sql，
-          #    而 IT 用到的 V7 rate_limit_bucket、V8 retention/erasure、
-          #    V11 tenant_config_override、V12 config_change_request 全不存在——
-          #    该 job 从未在 Runner 上真实跑过，所以缺陷一直没暴露。
-          #    排序用 sort -t_ -k1.2 -n（按 V 后面的数字），不依赖字典序。
-          for f in $(ls V*.sql | sort -t_ -k1.2 -n); do
-            echo "--- $f ---"
-            # ⚠️ 先钉死 search_path，防止未限定表名因连接角色默认 schema 非 public 而建错位置
-            psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 -q -c "SET search_path TO public;" -f "$f"
-          done
+          # ⚠️⚠️ 2026-10-27 收口：db/migration 下的 V1~V34 已删除，
+          #    结构唯一权威源是 deploy/sql/platform/01_platform_ddl.sql（终态快照）。
+          #    本步骤因此也就是「空库能不能被建出来」的证明 —— 别把它精简掉。
+          # ⚠️ 快照是 pg_dump 17 的输出，头尾各有一行 \restrict / \unrestrict；
+          #    ubuntu 自带的 client 17 以下不认这两个反斜杠命令，
+          #    配上 ON_ERROR_STOP=1 会直接把 job 判死。这里剥掉再喂给 psql：
+          #    这对注入防护是 pg_dump 给「不可信对象名」用的，仓库里的文件是可信来源。
+          grep -v '^\\\(un\)\?restrict ' deploy/sql/platform/01_platform_ddl.sql \
+            | psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 -q -f -
           # ⚠️ 种子必须在**管理角色**下跑：以非特权角色执行会被 RLS 拒
           # （new row violates row-level security policy）——种子层与测试层必须分层。
-          psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 -q -f verify/V1_seed.sql
+          psql -h 127.0.0.1 -U postgres -d agent_ci -v ON_ERROR_STOP=1 -q \
+            -f platform/agent-infrastructure/src/main/resources/db/migration/verify/V1_seed.sql
 
       - name: 创建非特权验证角色
         env:

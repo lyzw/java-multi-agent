@@ -29,7 +29,11 @@ NETWORK="${PG_NETWORK:-agent-local}"
 DB_NAME="${PG_DB:-agent_dev}"
 DB_USER="${PG_USER:-agent}"
 PORT="${PG_PORT:-5433}"
-MIGRATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/agent-infrastructure/src/main/resources/db/migration" && pwd)"
+# 结构唯一权威源（2026-10-27 收口：Flyway 迁移链 V1~V34 已删除，改为终态快照）
+SQL_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../deploy/sql/platform" && pwd)"
+SNAPSHOT="$SQL_REPO_DIR/01_platform_ddl.sql"
+# 校验/种子脚本仍在原位置（它们不是迁移，是验证夹具）
+VERIFY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/agent-infrastructure/src/main/resources/db/migration/verify" && pwd)"
 
 # 非特权验证角色（验证 RLS 必须用它——超级用户会绕过策略）
 APP_ROLE="${PG_APP_ROLE:-app_agent}"
@@ -125,33 +129,34 @@ cmd_start() {
 
 cmd_migrate() {
   container_running || die "容器未运行"
-  # ⚠️ 必须按版本号顺序应用**全部**迁移，不能只跑 V1。
-  #    V2（画像）/ V3（账号）/ V4（预算预留唯一性）/ V5（审批状态守卫）/
-  #    V6（审计追加约束）/ V7（限流桶）缺失时，
-  #    集成测试会因「表不存在」失败，而报错点离真正的缺失原因很远
-  #    ——本项目已因此误判过「约束全部失效」。
+  # ⚠️ 结构源已收编为**一份终态快照**（deploy/sql/platform/01_platform_ddl.sql），
+  #    原 V1~V34 迁移链删除后不再有「按版本顺序应用」这件事，
+  #    也就没有「脚本清单与现实脱节」的老问题 —— 快照本身就是现实。
   #
-  # ⚠️⚠️ 迁移清单**必须自动发现**，不得硬编码版本号列表（P4-D10 实测教训）：
-  #    本函数曾硬编码 `for version in 1 2 3 4 5 6 7`，
-  #    结果 **V8（保留期与删除）/ V9（结果读取索引）从未被本脚本应用**——
-  #    新建环境会缺这两项，而集成测试的报错点（表不存在 / 全表扫）
-  #    离真正的缺失原因很远。
-  #    与 P4-D08 的 R-1（工具未注册为 Bean）同源：
-  #    *清单与现实脱节，且系统表面正常*。
-  #    改为扫描迁移目录并按版本号排序 → 新增迁移**自动生效**，不会有人忘记改脚本。
-  local version
-  for f in $(ls "$MIGRATION_DIR"/V*__*.sql 2>/dev/null | sort -t'V' -k2 -n); do
-    version=$(basename "$f" | sed -E 's/^V([0-9]+)__.*/\1/')
-    say "执行 V${version}：$(basename "$f")"
-    docker cp "$f" "$CONTAINER_NAME":/tmp/migrate_v${version}.sql >/dev/null
+  # ⚠️⚠️ 快照**不幂等**：它按空库导出，重复执行会在 CREATE TABLE 上报错。
+  #    原实现允许每次 start 都跑一遍，靠的是「迁移脚本自身幂等」这个前提；
+  #    前提没了，所以这里改成先判断结构是否已建（以 run 表为准）。
+  #    要重建请执行 '$0 destroy' 后重跑 start。
+  if psql_super -tAc "SELECT 1 FROM pg_class WHERE relname='run' LIMIT 1" | grep -q 1; then
+    say "结构已存在于 $DB_NAME，跳过快照"
+  else
+    say "应用结构快照：$(basename "$SNAPSHOT")"
+    local tmp
+    # ⚠️ 剥掉 pg_dump 17 的 \restrict / \unrestrict 头尾行：
+    #    低版本 psql 不认这个反斜杠命令，配 ON_ERROR_STOP=1 会直接判死。
+    #    那是给「不可信对象名」用的注入防护，仓库内的文件是可信来源。
+    tmp="$(mktemp)"
+    grep -v '^\\\(un\)\?restrict ' "$SNAPSHOT" > "$tmp"
+    docker cp "$tmp" "$CONTAINER_NAME":/tmp/snapshot.sql >/dev/null
+    rm -f "$tmp"
     local errs
-    # ⚠️ 先钉死 search_path，防止未限定表名因连接角色默认 schema 非 public 而建错位置
-    errs=$(psql_super -v ON_ERROR_STOP=1 -c "SET search_path TO public;" -f /tmp/migrate_v${version}.sql 2>&1 | grep -c "^ERROR" || true)
-    [ "$errs" -eq 0 ] || die "V${version} 执行失败（$errs 个错误），请查看日志"
-  done
+    errs=$(psql_super -v ON_ERROR_STOP=1 -q -f /tmp/snapshot.sql 2>&1 | grep -c "^ERROR" || true)
+    [ "$errs" -eq 0 ] || die "结构快照执行失败（$errs 个错误），请查看日志"
+    say "结构快照应用完成"
+  fi
 
   say "执行种子数据（幂等）"
-  docker cp "$MIGRATION_DIR/verify/V1_seed.sql" "$CONTAINER_NAME":/tmp/seed.sql >/dev/null
+  docker cp "$VERIFY_DIR/V1_seed.sql" "$CONTAINER_NAME":/tmp/seed.sql >/dev/null
   local errs
   errs=$(psql_super -f /tmp/seed.sql 2>&1 | grep -c "^ERROR" || true)
   [ "$errs" -eq 0 ] || warn "种子数据有 $errs 个错误（可重复执行，通常可忽略）"
@@ -186,7 +191,7 @@ cmd_grant() {
 
 cmd_verify() {
   container_running || die "容器未运行，请先执行 '$0 start'"
-  docker cp "$MIGRATION_DIR/verify/V1_constraint_check.sql" "$CONTAINER_NAME":/tmp/check.sql >/dev/null
+  docker cp "$VERIFY_DIR/V1_constraint_check.sql" "$CONTAINER_NAME":/tmp/check.sql >/dev/null
   say "以 ${APP_ROLE} 身份验证安全约束"
   echo ""
   docker exec "$CONTAINER_NAME" psql -U "$APP_ROLE" -d "$DB_NAME" -f /tmp/check.sql 2>&1 \

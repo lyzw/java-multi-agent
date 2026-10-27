@@ -95,18 +95,19 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_agent;
 
 ### 4.2 远端 PG（RDS / 无 Docker 环境）
 
-本机无 Docker 守护进程时，用 JDBC 探针代替 `psql` 完成建库与迁移，**步骤等价**：
+本机无 Docker 守护进程时，用 JDBC 探针代替 `psql` 完成建库与建结构，**步骤等价**：
 
 1. 建管理角色 + 建库（`CREATE DATABASE`）；
-2. 按版本号顺序应用 `agent-infrastructure/src/main/resources/db/migration/V*.sql`
-   （排序按 `V` 后面的数字，不用字典序）；
+2. 应用结构权威源 `deploy/sql/platform/01_platform_ddl.sql`
+   （2026-10-27 收口：`db/migration/V1…V34` 迁移链已删除，只剩这一份终态快照；
+   它是 `pg_dump` 输出，**只适用于空库**，重复执行会在 `CREATE TABLE` 上报错，
+   头尾两行 `\restrict` / `\unrestrict` 需先过滤 —— 低于 17 的 psql 不认）；
 3. `GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO app_agent`；
 4. 用**管理角色**应用 `migration/verify/V1_seed.sql`（种子层与测试层必须分层：
    以非特权角色执行会被 RLS 拒 → `new row violates row-level security policy`）。
 
-> ⚠️ **迁移必须全量按序**：只跑 `V1__baseline_schema.sql` 而漏掉
-> `V7 rate_limit_bucket` / `V8 retention` / `V11 tenant_config_override` /
-> `V12 config_change_request` 时，IT 会在「表不存在」上炸，而**根因在迁移没跑全**。
+> ⚠️ **结构必须整体应用**：快照缺任何一段（例如只跑了 `public` 的前半部分），
+> IT 会在「表不存在」上炸，而**根因在结构没建全**。
 
 ### 4.3 种子数据
 
@@ -272,10 +273,12 @@ mvn verify -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \
 | 文件 | 作用 |
 |---|---|
 | `platform/pom.xml` | failsafe 注册（`*IT.java` 才进 integration-test 阶段） |
-| `scripts/dev-it-db.sh` | 建隔离库 + 迁移 + 清残留 + 播种 + 授权 |
+| `scripts/dev-it-db.sh` | 建隔离库 + 应用结构快照 + 清残留 + 播种 + 授权 |
 | `platform/agent-infrastructure/src/main/resources/db/migration/verify/V1_seed.sql` | 种子租户 `t-a` / `t-b` |
 | `platform/agent-infrastructure/src/main/resources/db/migration/verify/V1_constraint_check.sql` | 15 项约束校验（**用非特权角色跑**） |
 | `.github/workflows/ci.yml` | integration-test job 的真实配置与防假绿断言 |
+| `deploy/sql/platform/01_platform_ddl.sql` | **结构唯一权威源**（IT 库就是它建出来的） |
+| `.../agent-infrastructure/src/test/java/.../PlatformDdl.java` | 构建期结构门禁的取数入口（指向上一行那个文件） |
 | `docs/项目进度台账.md` | 权威台账：IT 缺口、污染记录、实测数字 |
 
 ---
