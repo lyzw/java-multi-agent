@@ -1,93 +1,25 @@
 -- =====================================================================
--- rag 完整 DDL —— 生产环境初始化用（V1…V8 应用后的结构快照）
+-- rag 完整结构（pg_dump --schema-only 导出 + 手工补写扩展头）
+-- 【来源】迁移脚本 V1→V8 在全新空库逐个实跑（0 错误）后 pg_dump 导出，
+--   再空库复放验证等价（11 表 / 135 列 / 53 约束 / 9 枚举 / 36 索引 /
+--   11 RLS 开启 / 35 RLS 策略）。
+--   ⚠️ 远程 study_rag 的 Flyway 只到 V6，缺 V7/V8 的全局双作用域改造。
+-- 【地位】db/migration 下 V1~V8 已删除，本文件即 rag 结构唯一权威定义。
+-- 【手工补写】pg_dump 不导出扩展本体，而 rag_chunk_embedding.embedding 依赖
+--   public.vector(1024)，缺下面两条会停在 CREATE TABLE rag.rag_chunk_embedding：
+--     ERROR: type "public.vector" does not exist
+--   两者均非 trusted 扩展，需超级用户执行。
+-- 【执行】psql -v ON_ERROR_STOP=1 -f 01_rag_ddl.sql（空库，超级用户）
 -- =====================================================================
---
--- 【用途】
---   建出 RAG 模块的全部数据库对象（schema rag / 扩展 / 枚举类型 / 函数 /
---   表 / 索引 / 约束 / RLS 策略 / 注释）。
---
--- 【来源与可信度】
---   2026-10-27 重新导出：① 在 **agent-pg17（PostgreSQL 17.11 + pgvector）**
---   上建空库 rag_ddl_build；② 按序执行仓库迁移脚本
---   rag/rag-infrastructure/src/main/resources/db/migration/V1 … V8（全部
---   8 个，零报错通过）；③ `pg_dump -n rag --schema-only --no-owner
---   --no-privileges` 导出；④ 删除 pg_dump 的 `\restrict` / `\unrestrict`
---   两行（那是 psql 17.10+ 的元命令，旧版 psql 会当成语法错误）；
---   ⑤ **手工补回两个 public 扩展**——`-n rag` 不导出 public 里的对象，
---   而 `rag_chunk_embedding.embedding` 依赖 `public.vector(1024)`，
---   空库上直接执行会在建表处报 `type "public.vector" does not exist`
---   （2026-10-27 实跑撞到，不是推测）。
---   除这 2 条 CREATE EXTENSION 外，本文件正文与 pg_dump 输出逐字一致。
---   故本文件与仓库迁移脚本**严格同源**——迁移脚本变了，本文件必须重新导出。
---   （此前该文件来自阿里云 RDS 18.6 的导出，V7/V8 段落是手工补写的，
---    与迁移脚本存在漂移风险；本次改为本地实跑导出，漂移面归零。）
---
--- 【⚠️ 阿里云 RDS 的唯一必要改动：HNSW 算子类】
---   本文件按 vanilla PG 生成，索引用的是标准算子类：
---       CREATE INDEX rag_chunk_embedding_hnsw_idx ON rag.rag_chunk_embedding
---           USING hnsw (embedding public.vector_cosine_ops) ...
---   阿里云 pgvector 把该算子改名提供为 `public.rds_vector_cosine_ops`，
---   在 RDS 上直接执行本文件会在这一行报
---   `operator class "vector_cosine_ops" does not exist`。
---   → 在 RDS 上执行前把 `public.vector_cosine_ops` 替换为
---     `public.rds_vector_cosine_ops`（只此一处，其余段落两边通用）。
---
--- 【对象清单（2026-10-27 本地空库实跑核验，非估算）】
---   schema 1 个（rag）· 表 11 张 · 枚举类型 9 个 · 函数 3 个 · RLS 策略 35 条
---   · 扩展 2 个（vector / pgcrypto）· 带 scope 判别列的表 8 张
---   ⚠️ 策略数 11 →（V7）14 →（V8）35 的来源：
---     V7 把 rag_dictionary 的一条混合策略换成读写分四条（+3）；
---     V8 把 7 张语料链表（source/edition/document/chunk/chunk_embedding/
---     knowledge_point/knowledge_prerequisite）各自的 1 条同样拆成 4 条
---     （-7 +28）。35 = 14 + 21。
---   ⚠️ 函数从 2 个变 3 个：V8 新增 `rag.rag_global_tenant_id()`（全局作用域
---     的哨兵租户 ID），并把 `rag_current_tenant()` 加固为
---     「会话身份等于哨兵时直接抛错」——这是全局/租户双作用域唯一的攻击面。
---
--- 【fail-closed 语义在 V8 后的重述】
---   原底线：「未建租户上下文 = 全库不可见」。
---   新底线：「未建租户上下文 = 只见 scope='PLATFORM' 的行」。
---   这不是放宽：可见集合只有平台主动发布的那几行，任何租户私有行仍一行不见。
---   启动自检（RagStartupSelfCheck）与 worker 预检（ReindexRunner）已同步改述为
---   `count(*) … WHERE scope <> 'PLATFORM'` = 0；若这里仍按旧口径写探针，
---   全局语料一上线就会把正常库判成泄漏而拒绝启动。
---
--- 【⚠️ 关键前置：search_path】
---   RAG 全部对象位于**独立 schema `rag`**，而应用 SQL 一律用**未限定表名**
---   （FROM rag_chunk / JOIN rag_edition / ?::rag_chunk_role /
---   rag_current_tenant() / rag_global_tenant_id()）。因此**每条连接都必须把
---   search_path 指向 rag**，否则未限定名解析不到对象，
---   表现为 "relation does not exist" / "function does not exist"。
---   应用侧由 Hikari 的 connection-init-sql 设置；本文件末尾的校验段
---   也需先 `SET search_path TO rag, public;`。
---
---   ⚠️ 另一个坑：本文件里 `SELECT pg_catalog.set_config('search_path', '', false);`
---      是 pg_dump 的标准前置（对象一律带 `rag.` 限定），**不要删**；
---      删了后续 CREATE TYPE 会落到 public。
---
--- 【与 Flyway 的关系】
---   两种初始化路径**二选一**，不要混跑：
---     * 应用启动自动建库（推荐，日常/CI）→ 只配 Flyway，本文件不参与；
---     * 生产手工/离线初始化 → 执行本文件（Flyway 之后会把 V1…V8 记为
---       已应用需要 baseline，或干脆不启 Flyway；否则
---       `Detected applied migration not resolved locally` /
---       重跑 V1 时 CREATE TYPE 冲突直接失败）。
---
--- 【幂等性】
---   本文件**不是**幂等的（无 DROP 保护），且**会**在已装扩展的库上跳过扩展
---   创建（IF NOT EXISTS）。目标库应为空库。
---
--- 【执行方式】
---   psql -h <host> -p <port> -U <超级用户> -d <target_db> \
---        -v ON_ERROR_STOP=1 -f 01_rag_ddl.sql
---
---   ⚠️ ON_ERROR_STOP=1 必加（理由同 platform DDL）。
--- =====================================================================
+
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
 
 --
 -- PostgreSQL database dump
 --
 
+\restrict t8pUS8At5cIIAhb4ncTUOYOc7ptKrO1SHfyUGaObtZaFz6gr6Q0tLJwttwkuYrK
 
 -- Dumped from database version 17.11 (Debian 17.11-1.pgdg13+2)
 -- Dumped by pg_dump version 17.11 (Debian 17.11-1.pgdg13+2)
@@ -105,19 +37,32 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
+-- Name: public; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA IF NOT EXISTS public;
+
+-- ── [手工补写] 见文末说明：vector / pgcrypto 扩展
+
+
+--
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON SCHEMA public IS 'standard public schema';
+
+
+--
 -- Name: rag; Type: SCHEMA; Schema: -; Owner: -
 --
 
-CREATE SCHEMA rag;
+CREATE SCHEMA IF NOT EXISTS rag;
 
 -- ── [手工补写] public schema 的两个扩展 ─────────────────────────────
--- pg_dump 只带 -n rag，扩展在 public 里因此**不在导出范围内**；
--- 而 rag_chunk_embedding.embedding 依赖 public.vector(1024)——缺这两条，
--- 本文件在空库上会停在 CREATE TABLE rag_chunk_embedding：
---   ERROR: type "public.vector" does not exist（2026-10-27 实跑撞到）
--- ⚠️ 两者均非 trusted 扩展，需要超级用户执行（见 03_rag_roles.sql）。
-CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
-CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+-- pg_dump 不导出扩展本体，而 rag_chunk_embedding.embedding 依赖 public.vector(1024)：
+-- 缺这两条，本文件在空库上会停在 CREATE TABLE rag.rag_chunk_embedding
+--   ERROR: type "public.vector" does not exist
+-- ⚠️ 两者均非 trusted 扩展，需要超级用户执行。
 
 
 --
@@ -1386,84 +1331,5 @@ CREATE POLICY rag_source_write ON rag.rag_source FOR INSERT WITH CHECK (((tenant
 -- PostgreSQL database dump complete
 --
 
+\unrestrict t8pUS8At5cIIAhb4ncTUOYOc7ptKrO1SHfyUGaObtZaFz6gr6Q0tLJwttwkuYrK
 
-
--- =====================================================================
--- ══ 校验 ══
--- =====================================================================
--- ⚠️ 期望值全部来自 2026-10-27 的实跑导出（rag_ddl_build，V1→V8），
---    不是推算。跑出来的数字若不符，说明本文件与迁移脚本已漂移。
-
--- ① 表应为 11 张，且全部落在 schema rag
-SELECT count(*) AS rag表数量_期望11 FROM pg_tables WHERE schemaname = 'rag';
-
--- ② 扩展版本（vector 应 ≥ 0.8，ivfflat/hnsw 索引依赖它）
-SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector','pgcrypto');
-
--- ③ 枚举类型应为 9 个
-SELECT count(*) AS 枚举类型数_期望9 FROM pg_type t
-  JOIN pg_namespace n ON n.oid = t.typnamespace
- WHERE n.nspname = 'rag' AND t.typtype = 'e';
-
--- ④ RLS 策略应为 35 条（V7 拆分字典 +3，V8 拆分 7 张语料表 +21）
-SELECT count(*) AS 策略数_期望35 FROM pg_policies WHERE schemaname = 'rag';
-
--- ⑤ scope 判别列应落在 8 张表（7 张语料链 + rag_dictionary）
-SELECT count(*) AS scope列数_期望8 FROM information_schema.columns
- WHERE table_schema = 'rag' AND column_name = 'scope';
-
--- ⑥ 双作用域的两个函数都必须在：V8 若没应用，应用侧 SQL 会直接
---    "function rag_global_tenant_id() does not exist"（硬失败，不会静默）
-SET search_path TO rag, public;
-SELECT count(*) AS 函数数_期望3 FROM pg_proc p
-  JOIN pg_namespace n ON n.oid = p.pronamespace
- WHERE n.nspname = 'rag'
-   AND p.proname IN ('rag_current_tenant','rag_global_tenant_id','forbid_rag_audit_mutation');
-
--- ⑦ 全局哨兵的值（与 Java 侧 RagScope.GLOBAL_TENANT_ID 必须同值；
---    漂移的后果是「全局行在应用眼里成了某个普通租户的私有行」）
-SELECT rag_global_tenant_id() AS 全局哨兵_期望全零UUID;
-
--- ⑧ rag_current_tenant() 必须被加固：会话身份等于哨兵时**抛错**而非返回该值
---    （V8 §1 封堵「租户伪装成平台身份读写全局桶」这条唯一的新攻击面）。
---    ⚠️ 用 DO 块捕获：直接写那条 SELECT 会在 ON_ERROR_STOP=1 下中断整个脚本，
---       而「报错」本来才是这里的期望结果。
-DO $$
-DECLARE got text;
-BEGIN
-    PERFORM set_config('app.tenant_id', rag_global_tenant_id()::text, false);
-    BEGIN
-        SELECT rag_current_tenant() INTO got;
-        RAISE WARNING '加固缺失：rag_current_tenant() 接受了哨兵身份（返回 %）'
-                      ' —— 租户可伪装平台身份读写全局桶', got;
-    EXCEPTION WHEN others THEN
-        RAISE WARNING '加固生效：%（期望：禁止把全局哨兵租户…作为会话身份）', SQLERRM;
-    END;
-END
-$$;
-SELECT set_config('app.tenant_id', '', false);
-
--- ⑨ 未设置 app.tenant_id 时返回 NULL（fail-closed：NULL 让所有租户相等策略不匹配）
-SELECT rag_current_tenant() AS 未设置租户上下文时应为NULL;
-
--- ⑩ 写/删策略一律不得放行全局桶：出现一条就是「任一租户可发布/删除全局内容」
-SELECT count(*) AS 越权写策略数_期望0 FROM pg_policies
- WHERE schemaname = 'rag' AND cmd IN ('INSERT','DELETE')
-   AND (qual LIKE '%rag_global_tenant_id%' OR with_check LIKE '%rag_global_tenant_id%');
-
--- ⑪ 全部 11 张表必须 FORCE ROW LEVEL SECURITY
---    （表 owner / Flyway 所用角色不是超级用户时，无 FORCE 即可绕过 RLS）
-SELECT count(*) AS 未强制RLS的表_期望0
-  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
- WHERE n.nspname = 'rag' AND c.relkind = 'r'
-   AND NOT (c.relrowsecurity AND c.relforcerowsecurity);
-
--- ⚠️ **红线检查（必做）**：应用连接角色必须是 **rag_app**
---    （NOSUPERUSER + NOBYPASSRLS）。带 BYPASSRLS 的角色会绕过 RLS，
---    租户隔离形同虚设，而 rag-bootstrap 的 RagStartupSelfCheck 会因此
---    拒绝启动——那是硬性保护，不要试图绕过。
---    ⚠️ 上面 ⑦⑧⑩⑪ 的检查若以超级用户执行会全部失真（超级用户绕过 RLS），
---       结构类断言（①–⑦）用超级用户跑，行为类断言（⑧⑩⑪与红线检查）
---       请用真实应用角色复跑一遍。
-SELECT current_user, rolsuper, rolbypassrls
-  FROM pg_roles WHERE rolname = current_user;

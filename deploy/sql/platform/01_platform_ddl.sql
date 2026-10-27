@@ -1,18 +1,24 @@
+-- =====================================================================
+-- platform 完整结构（pg_dump --schema-only 导出）
+-- 【来源】迁移脚本 V1→V34 在全新空库上逐个实跑（0 错误）后 pg_dump 导出，
+--   再在第二个空库复放验证结构等价（65 表 / 680 列 / 255 约束 / 15 枚举 /
+--   15 函数 / 172 索引 / 33 触发器 / 42 RLS 开启 / 50 RLS 策略）。
+--   ⚠️ 不是从远程 agent_dev 导的 —— 远程 Flyway 只到 V27，
+--   缺 V31 platform 身份域 / V32 字典 / V33 指标 / V34 状态守卫的对象；
+--   以远程为源会把这四个版本的对象从仓库里永久丢掉。
+-- 【地位】db/migration 下 V1~V34 已随本次收口删除，本文件即结构唯一权威定义。
+-- 【扩展】platform 用的 gen_random_uuid() 是 PG13+ 内置，无需 pgcrypto。
+-- 【执行】psql -v ON_ERROR_STOP=1 -f 01_platform_ddl.sql（空库，owner 身份）
+-- =====================================================================
+
 --
 -- PostgreSQL database dump
 --
 
--- ⚠️⚠️ 本文件是**派生快照**，由 Flyway 迁移（空库跑 V1→V28）经 pg_dump 生成。
---    **唯一权威来源**是 platform/agent-infrastructure/.../db/migration/ 下的 Flyway 迁移。
---    **禁止**在已由 Flyway 管理的库上执行本文件（会触发「类型已存在」等冲突，详见 deploy/sql/README.md）。
---    仅用于：① 离线空库手工初始化；② 与线上库做结构漂移比对。
---    重新生成步骤见 deploy/sql/README.md「重新生成」章节（--schema-only --schema=public）。
---    所有表均位于 public schema（带 RLS 的租户业务表）；platform schema 仅放平台身份域，不含 agent 表。
+\restrict 7n5BwTLQ98SyQlJI9AzRgvd5zufib8dfScFR50w7nO6vxha9QwBmqtNtVUeYEMc
 
-\restrict xrHb83R07HmdnvXH8oWBtN6MMo17rh2HwFF6yVqEoUdfCduc3zZd5HaXw6rdy9h
-
--- Dumped from database version 18.6
--- Dumped by pg_dump version 18.6
+-- Dumped from database version 17.11 (Debian 17.11-1.pgdg13+2)
+-- Dumped by pg_dump version 17.11 (Debian 17.11-1.pgdg13+2)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -27,8 +33,17 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
+-- Name: platform; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA IF NOT EXISTS platform;
+
+
+--
 -- Name: public; Type: SCHEMA; Schema: -; Owner: -
 --
+
+CREATE SCHEMA IF NOT EXISTS public;
 
 
 --
@@ -36,6 +51,28 @@ SET row_security = off;
 --
 
 COMMENT ON SCHEMA public IS 'standard public schema';
+
+
+--
+-- Name: auth_source; Type: TYPE; Schema: platform; Owner: -
+--
+
+CREATE TYPE platform.auth_source AS ENUM (
+    'LOCAL',
+    'OIDC',
+    'SSO'
+);
+
+
+--
+-- Name: user_status; Type: TYPE; Schema: platform; Owner: -
+--
+
+CREATE TYPE platform.user_status AS ENUM (
+    'ACTIVE',
+    'DISABLED',
+    'LOCKED'
+);
 
 
 --
@@ -406,10 +443,51 @@ CREATE FUNCTION public.enforce_run_state_transition() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    IF OLD.state IN ('CANCELLED', 'SUCCEEDED', 'FAILED', 'TIMED_OUT')
-       AND NEW.state <> OLD.state THEN
-        RAISE EXCEPTION 'Run 终态 % 不可迁移到 %（run_id=%）',
+    IF NEW.state IS DISTINCT FROM OLD.state THEN
+        IF OLD.state = 'QUEUED'
+           AND NEW.state IN ('RUNNING', 'CANCELLED') THEN
+            RETURN NEW;
+        END IF;
+        IF OLD.state = 'RUNNING'
+           AND NEW.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT') THEN
+            RETURN NEW;
+        END IF;
+        RAISE EXCEPTION 'Run 非法状态迁移 % → %（run_id=%）',
             OLD.state, NEW.state, OLD.run_id USING ERRCODE = 'restrict_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: enforce_tenant_lifecycle_transition(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.enforce_tenant_lifecycle_transition() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF NEW.lifecycle_state IS DISTINCT FROM OLD.lifecycle_state THEN
+        IF OLD.lifecycle_state = 'PENDING_SETUP'
+           AND NEW.lifecycle_state IN ('ACTIVE', 'CANCELLED') THEN
+            RETURN NEW;
+        END IF;
+        IF OLD.lifecycle_state = 'ACTIVE'
+           AND NEW.lifecycle_state IN ('SUSPENDED', 'DECOMMISSIONING') THEN
+            RETURN NEW;
+        END IF;
+        IF OLD.lifecycle_state = 'SUSPENDED'
+           AND NEW.lifecycle_state = 'ACTIVE' THEN
+            RETURN NEW;
+        END IF;
+        IF OLD.lifecycle_state = 'DECOMMISSIONING'
+           AND NEW.lifecycle_state = 'DECOMMISSIONED' THEN
+            RETURN NEW;
+        END IF;
+        RAISE EXCEPTION '租户非法生命周期迁移 % → %（tenant_id=%）',
+            OLD.lifecycle_state, NEW.lifecycle_state, OLD.id
+            USING ERRCODE = 'restrict_violation';
     END IF;
     RETURN NEW;
 END;
@@ -561,6 +639,486 @@ $$;
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
+
+--
+-- Name: agent_eval_sample; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.agent_eval_sample (
+    sample_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    trace_id text NOT NULL,
+    tenant_id uuid NOT NULL,
+    verdict text NOT NULL,
+    hallucination boolean,
+    instruction_followed boolean,
+    note text,
+    sampler text NOT NULL,
+    sampled_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT agent_eval_sample_verdict_ck CHECK ((verdict = ANY (ARRAY['SUCCESS'::text, 'PARTIAL'::text, 'FAIL'::text])))
+);
+
+
+--
+-- Name: TABLE agent_eval_sample; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON TABLE platform.agent_eval_sample IS '人工/标注平台抽检打标（L2 黄金基线）。⚠️ 样本量 n < 30 时不得显示为百分比 —— 用 2 条样本算出的 50% 幻觉率是噪声，不是指标。此时一律展示「样本不足」。';
+
+
+--
+-- Name: agent_risk_event; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.agent_risk_event (
+    risk_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    trace_id text NOT NULL,
+    tenant_id uuid NOT NULL,
+    event_type text NOT NULL,
+    detail_digest text,
+    occurred_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT agent_risk_event_type_ck CHECK ((event_type = ANY (ARRAY['SAFETY_BLOCK'::text, 'UNAUTHORIZED_CALL'::text, 'SENSITIVE_OUTPUT'::text])))
+);
+
+
+--
+-- Name: TABLE agent_risk_event; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON TABLE platform.agent_risk_event IS '安全事件明细。⚠️ **合规红线：只存摘要，绝不落原文**。命中敏感信息的原文一旦入库就构成二次泄露，等于把「拦截住了」变成「存下来了」。';
+
+
+--
+-- Name: COLUMN agent_risk_event.detail_digest; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON COLUMN platform.agent_risk_event.detail_digest IS '事件摘要（如命中模式的类型代号 + 哈希前 8 位），不含任何原文片段。';
+
+
+--
+-- Name: agent_task_outcome; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.agent_task_outcome (
+    outcome_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    trace_id text NOT NULL,
+    tenant_id uuid NOT NULL,
+    checker_code text NOT NULL,
+    external_ref text,
+    verified boolean NOT NULL,
+    evidence_digest text,
+    checked_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE agent_task_outcome; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON TABLE platform.agent_task_outcome IS '外部终态校验回执（L1）：工单是否真创建、数据是否真写入、文件是否真生成、查询结果是否合规。⚠️ 自动校验成功率必须**并排显示覆盖率** —— 只校验了 3% 的任务时，「成功率 99%」这句话本身就是误导。';
+
+
+--
+-- Name: agent_trace_feedback; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.agent_trace_feedback (
+    feedback_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    trace_id text NOT NULL,
+    tenant_id uuid NOT NULL,
+    kind text NOT NULL,
+    occurred_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT agent_trace_feedback_kind_ck CHECK ((kind = ANY (ARRAY['THUMB_UP'::text, 'THUMB_DOWN'::text, 'RETRY'::text, 'ABANDON'::text])))
+);
+
+
+--
+-- Name: TABLE agent_trace_feedback; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON TABLE platform.agent_trace_feedback IS '用户显式反馈与行为信号（L3）。⚠️ **不能单独当真值**：下游工具故障、网络抖动、UI 卡顿都会导致差评。差评率上涨的处置是**触发抽样复核**，而不是直接判定 Agent 劣化。';
+
+
+--
+-- Name: agent_trace_metric; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.agent_trace_metric (
+    trace_id text NOT NULL,
+    tenant_id uuid NOT NULL,
+    run_id uuid NOT NULL,
+    agent_id uuid,
+    agent_version integer,
+    scenario text,
+    model_id text,
+    started_at timestamp with time zone NOT NULL,
+    ended_at timestamp with time zone,
+    duration_ms bigint,
+    terminal_state text NOT NULL,
+    termination_reason text NOT NULL,
+    input_tokens bigint,
+    output_tokens bigint,
+    cost_amount numeric(18,6),
+    currency text,
+    tool_rounds integer,
+    tool_call_total integer,
+    tool_call_failed integer,
+    tool_call_invalid integer,
+    tool_call_duplicate integer,
+    loop_suspected_count integer,
+    max_rounds_reached boolean,
+    clarification_count integer,
+    think_ms_total bigint,
+    tool_ms_total bigint,
+    auto_checked boolean,
+    auto_verified boolean,
+    sampled boolean,
+    human_verdict text,
+    hallucination boolean,
+    instruction_followed boolean,
+    feedback_up integer,
+    feedback_down integer,
+    retry_count integer,
+    abandoned boolean,
+    safety_blocked_count integer,
+    unauthorized_attempt_count integer,
+    sensitive_output_hits integer,
+    trace_id_source text NOT NULL,
+    metric_version integer DEFAULT 1 NOT NULL,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT agent_trace_metric_reason_ck CHECK ((termination_reason = ANY (ARRAY['COMPLETED'::text, 'USER_CANCELLED'::text, 'MODEL_ERROR'::text, 'TOOL_TIMEOUT'::text, 'TOOL_5XX'::text, 'MAX_ROUNDS'::text, 'SAFETY_BLOCK'::text, 'TOKEN_BUDGET'::text, 'OTHER'::text]))),
+    CONSTRAINT agent_trace_metric_source_ck CHECK ((trace_id_source = ANY (ARRAY['RUN_TRACE_ID'::text, 'INVOCATION_TRACE_ID'::text, 'CORRELATION_FALLBACK'::text]))),
+    CONSTRAINT agent_trace_metric_state_ck CHECK ((terminal_state = ANY (ARRAY['SUCCEEDED'::text, 'FAILED'::text, 'CANCELLED'::text, 'TIMED_OUT'::text]))),
+    CONSTRAINT agent_trace_metric_verdict_ck CHECK (((human_verdict IS NULL) OR (human_verdict = ANY (ARRAY['SUCCESS'::text, 'PARTIAL'::text, 'FAIL'::text]))))
+);
+
+
+--
+-- Name: TABLE agent_trace_metric; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON TABLE platform.agent_trace_metric IS 'P7 指标宽表：一条 Trace 一行。指标是事实表的**确定函数** —— 重复采集必须得到同一结果，故写入一律 INSERT ... ON CONFLICT (trace_id) DO UPDATE（幂等）。';
+
+
+--
+-- Name: COLUMN agent_trace_metric.terminal_state; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON COLUMN platform.agent_trace_metric.terminal_state IS '⚠️ 链路终态 **≠ 任务成功**。SUCCEEDED 只说明框架没崩、走完了终止逻辑，是否真的达成了用户目标由 human_verdict / auto_verified 回答。两者绝不可混用。';
+
+
+--
+-- Name: COLUMN agent_trace_metric.termination_reason; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON COLUMN platform.agent_trace_metric.termination_reason IS '归一化终止原因（9 值，P7 §3.1 映射规则为唯一权威）。⚠️ 兜底必须是 OTHER 而不是丢弃 —— 丢弃未识别原因会让「终止原因分布」的合计小于总数，看板上出现「不知道哪去了」的黑洞。';
+
+
+--
+-- Name: COLUMN agent_trace_metric.tool_rounds; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON COLUMN platform.agent_trace_metric.tool_rounds IS 'P7-2 起为**真实口径**：取自 run_step 的 TOOL 步骤计数（JdbcRunStepRepository 已补全写入方）。历史未埋点的旧 Run 查不到步骤行 → 如实为 NULL（未采集），绝不退回退化近似。注意：run_step 仅覆盖 P7-2 之后执行的 Run；此前数据的步数类指标显示「未采集」。';
+
+
+--
+-- Name: agent_trace_tool_call; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.agent_trace_tool_call (
+    trace_id text NOT NULL,
+    tenant_id uuid NOT NULL,
+    tool_name text NOT NULL,
+    call_count integer NOT NULL,
+    failed_count integer DEFAULT 0 NOT NULL,
+    invalid_count integer DEFAULT 0 NOT NULL,
+    duplicate_count integer DEFAULT 0 NOT NULL,
+    total_duration_ms bigint,
+    max_duration_ms bigint,
+    started_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: TABLE agent_trace_tool_call; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON TABLE platform.agent_trace_tool_call IS '工具维度指标（按 Trace × 工具名）。⚠️ 不存 P95 —— 分位数无法从计数与求和还原，强行用 max 冒充 P95 会让尾部延迟被高估。看板呈现均值 + 最大值。';
+
+
+--
+-- Name: mv_agent_metric_hourly; Type: MATERIALIZED VIEW; Schema: platform; Owner: -
+--
+
+CREATE MATERIALIZED VIEW platform.mv_agent_metric_hourly AS
+ SELECT date_trunc('hour'::text, started_at) AS bucket_start,
+    tenant_id,
+    agent_id,
+    agent_version,
+    scenario,
+    count(*) AS trace_count,
+    count(*) FILTER (WHERE (terminal_state = 'SUCCEEDED'::text)) AS succeeded_count,
+    count(*) FILTER (WHERE (terminal_state = 'FAILED'::text)) AS failed_count,
+    count(*) FILTER (WHERE (terminal_state = 'CANCELLED'::text)) AS cancelled_count,
+    count(*) FILTER (WHERE (terminal_state = 'TIMED_OUT'::text)) AS timed_out_count,
+    count(*) FILTER (WHERE (termination_reason = 'COMPLETED'::text)) AS reason_completed,
+    count(*) FILTER (WHERE (termination_reason = 'USER_CANCELLED'::text)) AS reason_user_cancelled,
+    count(*) FILTER (WHERE (termination_reason = 'MODEL_ERROR'::text)) AS reason_model_error,
+    count(*) FILTER (WHERE (termination_reason = 'TOOL_TIMEOUT'::text)) AS reason_tool_timeout,
+    count(*) FILTER (WHERE (termination_reason = 'TOOL_5XX'::text)) AS reason_tool_5xx,
+    count(*) FILTER (WHERE (termination_reason = 'MAX_ROUNDS'::text)) AS reason_max_rounds,
+    count(*) FILTER (WHERE (termination_reason = 'SAFETY_BLOCK'::text)) AS reason_safety_block,
+    count(*) FILTER (WHERE (termination_reason = 'TOKEN_BUDGET'::text)) AS reason_token_budget,
+    count(*) FILTER (WHERE (termination_reason = 'OTHER'::text)) AS reason_other,
+    COALESCE(sum(input_tokens), (0)::numeric) AS input_tokens,
+    COALESCE(sum(output_tokens), (0)::numeric) AS output_tokens,
+    COALESCE(sum(cost_amount), (0)::numeric) AS cost_amount,
+    count(*) FILTER (WHERE ((COALESCE(input_tokens, (0)::bigint) + COALESCE(output_tokens, (0)::bigint)) > 20000)) AS oversized_token_traces,
+    COALESCE(sum(tool_call_total), (0)::bigint) AS tool_call_total,
+    COALESCE(sum(tool_call_failed), (0)::bigint) AS tool_call_failed,
+    COALESCE(sum(tool_call_invalid), (0)::bigint) AS tool_call_invalid,
+    COALESCE(sum(tool_call_duplicate), (0)::bigint) AS tool_call_duplicate,
+    COALESCE(sum(loop_suspected_count), (0)::bigint) AS loop_suspected_total,
+    count(*) FILTER (WHERE max_rounds_reached) AS max_rounds_traces,
+    COALESCE(sum(duration_ms), (0)::numeric) AS duration_ms_sum,
+    count(*) FILTER (WHERE auto_checked) AS auto_checked_count,
+    count(*) FILTER (WHERE auto_verified) AS auto_verified_count,
+    count(*) FILTER (WHERE sampled) AS sampled_count,
+    count(*) FILTER (WHERE (human_verdict = 'SUCCESS'::text)) AS human_success_count,
+    count(*) FILTER (WHERE hallucination) AS hallucination_count,
+    count(*) FILTER (WHERE (safety_blocked_count > 0)) AS safety_blocked_traces,
+    count(*) FILTER (WHERE (unauthorized_attempt_count > 0)) AS unauthorized_traces,
+    count(*) FILTER (WHERE (sensitive_output_hits > 0)) AS sensitive_output_traces
+   FROM platform.agent_trace_metric
+  GROUP BY (date_trunc('hour'::text, started_at)), tenant_id, agent_id, agent_version, scenario
+  WITH NO DATA;
+
+
+--
+-- Name: MATERIALIZED VIEW mv_agent_metric_hourly; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON MATERIALIZED VIEW platform.mv_agent_metric_hourly IS '小时桶聚合，供 Grafana 时序面板直读。⚠️ 刷新期间会读到上一版数据 —— 查询响应体必须带上 refreshed_at，前端展示数据时效，不能假装是实时的。刷新：REFRESH MATERIALIZED VIEW CONCURRENTLY platform.mv_agent_metric_hourly;';
+
+
+--
+-- Name: platform_audit_event; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.platform_audit_event (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    actor_id uuid NOT NULL,
+    actor_type character varying(32) DEFAULT 'PLATFORM_USER'::character varying NOT NULL,
+    action character varying(128) NOT NULL,
+    target_type character varying(64),
+    target_id uuid,
+    decision character varying(16) NOT NULL,
+    reason_code character varying(64),
+    correlation_id uuid,
+    ip inet,
+    occurred_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: platform_mfa_credential; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.platform_mfa_credential (
+    id uuid NOT NULL,
+    platform_user_id uuid NOT NULL,
+    type character varying(32) NOT NULL,
+    ext_subject character varying(256),
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: platform_permission; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.platform_permission (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    code character varying(128) NOT NULL,
+    description character varying(256)
+);
+
+
+--
+-- Name: platform_role; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.platform_role (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name character varying(64) NOT NULL,
+    description character varying(256),
+    built_in boolean DEFAULT true NOT NULL
+);
+
+
+--
+-- Name: platform_role_permission; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.platform_role_permission (
+    role_id uuid NOT NULL,
+    permission_id uuid NOT NULL
+);
+
+
+--
+-- Name: platform_session; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.platform_session (
+    id uuid NOT NULL,
+    platform_user_id uuid NOT NULL,
+    revoked boolean DEFAULT false NOT NULL,
+    mfa_verified boolean DEFAULT false NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: platform_user; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.platform_user (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    username character varying(128) NOT NULL,
+    email character varying(256),
+    display_name character varying(128),
+    status platform.user_status DEFAULT 'ACTIVE'::platform.user_status NOT NULL,
+    auth_source platform.auth_source NOT NULL,
+    password_hash character varying(256),
+    mfa_required boolean DEFAULT false NOT NULL,
+    last_login_at timestamp with time zone,
+    authz_version bigint DEFAULT 1 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    version bigint DEFAULT 0 NOT NULL
+);
+
+
+--
+-- Name: platform_user_role; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.platform_user_role (
+    platform_user_id uuid NOT NULL,
+    role_id uuid NOT NULL,
+    granted_by uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: sys_dictionary; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.sys_dictionary (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    dict_code character varying(64) NOT NULL,
+    dict_name character varying(128) NOT NULL,
+    description character varying(512),
+    built_in boolean DEFAULT false NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    sort_order integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    version bigint DEFAULT 0 NOT NULL
+);
+
+
+--
+-- Name: TABLE sys_dictionary; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON TABLE platform.sys_dictionary IS '字典类型：一组取值的命名容器（如 http.method）';
+
+
+--
+-- Name: COLUMN sys_dictionary.built_in; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON COLUMN platform.sys_dictionary.built_in IS 'TRUE=与代码枚举强绑定，禁止删除与改 code；FALSE=纯业务数据，可自由维护';
+
+
+--
+-- Name: sys_dictionary_item; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.sys_dictionary_item (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    dict_code character varying(64) NOT NULL,
+    item_code character varying(128) NOT NULL,
+    item_label character varying(256) NOT NULL,
+    sort_order integer DEFAULT 0 NOT NULL,
+    built_in boolean DEFAULT false NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    version bigint DEFAULT 0 NOT NULL
+);
+
+
+--
+-- Name: COLUMN sys_dictionary_item.item_code; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON COLUMN platform.sys_dictionary_item.item_code IS '写入业务表的实际取值（后端枚举校验的就是它）';
+
+
+--
+-- Name: COLUMN sys_dictionary_item.item_label; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON COLUMN platform.sys_dictionary_item.item_label IS '展示给人的中文标签（可改，不影响已落库数据）';
+
+
+--
+-- Name: tenant; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.tenant (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name character varying(128) NOT NULL,
+    slug character varying(64) NOT NULL,
+    status character varying(32) NOT NULL,
+    plan character varying(32),
+    lifecycle_state character varying(32) NOT NULL,
+    effective_policy_version bigint DEFAULT 1 NOT NULL,
+    tenant_authz_version bigint DEFAULT 1 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: tenant_capability_grant; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.tenant_capability_grant (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id uuid NOT NULL,
+    resource_code character varying(128) NOT NULL,
+    scope character varying(32) NOT NULL,
+    status character varying(32) DEFAULT 'ACTIVE'::character varying NOT NULL,
+    version bigint DEFAULT 1 NOT NULL
+);
+
+
+--
+-- Name: tenant_quota; Type: TABLE; Schema: platform; Owner: -
+--
+
+CREATE TABLE platform.tenant_quota (
+    tenant_id uuid NOT NULL,
+    agent_limit integer,
+    run_concurrency_limit integer,
+    budget_limit numeric(14,2)
+);
+
 
 --
 -- Name: agent; Type: TABLE; Schema: public; Owner: -
@@ -1455,6 +2013,8 @@ CREATE TABLE public.cap_skill_def (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     published_at timestamp with time zone,
     lifecycle_state public.cap_lifecycle_state DEFAULT 'DRAFT'::public.cap_lifecycle_state NOT NULL,
+    purpose text,
+    usage jsonb,
     CONSTRAINT cap_skill_def_namespace_ck CHECK ((namespace = 'platform'::text)),
     CONSTRAINT cap_skill_def_no_inherits_ck CHECK ((inherits IS NULL)),
     CONSTRAINT cap_skill_def_risk_ck CHECK ((risk_ceiling = ANY (ARRAY['READ'::text, 'WRITE_PROFILE'::text, 'WRITE_EXTERNAL'::text]))),
@@ -1909,6 +2469,7 @@ CREATE TABLE public.run (
     completed_at timestamp with time zone,
     deadline_at timestamp with time zone,
     budget_amount numeric(18,6),
+    trace_id text,
     CONSTRAINT run_attempt_non_negative CHECK ((attempt >= 0)),
     CONSTRAINT run_completed_at_consistent CHECK ((((state = ANY (ARRAY['QUEUED'::public.run_state, 'RUNNING'::public.run_state])) AND (completed_at IS NULL)) OR ((state = ANY (ARRAY['CANCELLED'::public.run_state, 'SUCCEEDED'::public.run_state, 'FAILED'::public.run_state, 'TIMED_OUT'::public.run_state])) AND (completed_at IS NOT NULL)))),
     CONSTRAINT run_fencing_non_negative CHECK ((fencing_token >= 0)),
@@ -1930,6 +2491,13 @@ COMMENT ON COLUMN public.run.deadline_at IS 'Run 业务截止时刻（NULL = 不
 --
 
 COMMENT ON COLUMN public.run.budget_amount IS 'Run 级预算额度（NULL = 不额外限制；非空时按 budget_reservation.run_id 聚合判定）。与租户级 budget_account 是两个独立口径：前者约束单棵调用树，后者约束租户总量。';
+
+
+--
+-- Name: COLUMN run.trace_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.run.trace_id IS '一次用户 Agent 会话任务的唯一标识（P7）。⚠️ 存量行为 NULL —— 当时的会话标识只落在 agent_invocation.trace_id（仅覆盖有委派的链路）或以 correlation_id 代用。采集器对存量 Run 降级取 correlation_id，并在指标行标记 trace_id_source，NULL 的语义是「当时未记录」，不是「不存在这条 Trace」。';
 
 
 --
@@ -2187,6 +2755,230 @@ ALTER TABLE ONLY public.weakness_record FORCE ROW LEVEL SECURITY;
 --
 
 COMMENT ON TABLE public.weakness_record IS '薄弱点记录。首期唯一的有副作用工具 record_weakness 的落点，用于实证验证红线 4/5/7（Attempt 区分、fencing、UNKNOWN 对账）。';
+
+
+--
+-- Name: agent_eval_sample agent_eval_sample_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.agent_eval_sample
+    ADD CONSTRAINT agent_eval_sample_pkey PRIMARY KEY (sample_id);
+
+
+--
+-- Name: agent_risk_event agent_risk_event_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.agent_risk_event
+    ADD CONSTRAINT agent_risk_event_pkey PRIMARY KEY (risk_id);
+
+
+--
+-- Name: agent_task_outcome agent_task_outcome_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.agent_task_outcome
+    ADD CONSTRAINT agent_task_outcome_pkey PRIMARY KEY (outcome_id);
+
+
+--
+-- Name: agent_task_outcome agent_task_outcome_trace_checker_uq; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.agent_task_outcome
+    ADD CONSTRAINT agent_task_outcome_trace_checker_uq UNIQUE (trace_id, checker_code);
+
+
+--
+-- Name: agent_trace_feedback agent_trace_feedback_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.agent_trace_feedback
+    ADD CONSTRAINT agent_trace_feedback_pkey PRIMARY KEY (feedback_id);
+
+
+--
+-- Name: agent_trace_metric agent_trace_metric_pk; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.agent_trace_metric
+    ADD CONSTRAINT agent_trace_metric_pk PRIMARY KEY (trace_id);
+
+
+--
+-- Name: agent_trace_tool_call agent_trace_tool_call_pk; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.agent_trace_tool_call
+    ADD CONSTRAINT agent_trace_tool_call_pk PRIMARY KEY (trace_id, tool_name);
+
+
+--
+-- Name: platform_audit_event platform_audit_event_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_audit_event
+    ADD CONSTRAINT platform_audit_event_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: platform_mfa_credential platform_mfa_credential_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_mfa_credential
+    ADD CONSTRAINT platform_mfa_credential_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: platform_permission platform_permission_code_key; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_permission
+    ADD CONSTRAINT platform_permission_code_key UNIQUE (code);
+
+
+--
+-- Name: platform_permission platform_permission_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_permission
+    ADD CONSTRAINT platform_permission_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: platform_role platform_role_name_key; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_role
+    ADD CONSTRAINT platform_role_name_key UNIQUE (name);
+
+
+--
+-- Name: platform_role_permission platform_role_permission_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_role_permission
+    ADD CONSTRAINT platform_role_permission_pkey PRIMARY KEY (role_id, permission_id);
+
+
+--
+-- Name: platform_role platform_role_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_role
+    ADD CONSTRAINT platform_role_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: platform_session platform_session_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_session
+    ADD CONSTRAINT platform_session_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: platform_user platform_user_email_key; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_user
+    ADD CONSTRAINT platform_user_email_key UNIQUE (email);
+
+
+--
+-- Name: platform_user platform_user_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_user
+    ADD CONSTRAINT platform_user_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: platform_user_role platform_user_role_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_user_role
+    ADD CONSTRAINT platform_user_role_pkey PRIMARY KEY (platform_user_id, role_id);
+
+
+--
+-- Name: platform_user platform_user_username_key; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_user
+    ADD CONSTRAINT platform_user_username_key UNIQUE (username);
+
+
+--
+-- Name: sys_dictionary sys_dictionary_dict_code_key; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.sys_dictionary
+    ADD CONSTRAINT sys_dictionary_dict_code_key UNIQUE (dict_code);
+
+
+--
+-- Name: sys_dictionary_item sys_dictionary_item_code_unique; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.sys_dictionary_item
+    ADD CONSTRAINT sys_dictionary_item_code_unique UNIQUE (dict_code, item_code);
+
+
+--
+-- Name: sys_dictionary_item sys_dictionary_item_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.sys_dictionary_item
+    ADD CONSTRAINT sys_dictionary_item_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sys_dictionary sys_dictionary_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.sys_dictionary
+    ADD CONSTRAINT sys_dictionary_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tenant_capability_grant tenant_capability_grant_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.tenant_capability_grant
+    ADD CONSTRAINT tenant_capability_grant_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tenant_capability_grant tenant_capability_grant_tenant_id_resource_code_key; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.tenant_capability_grant
+    ADD CONSTRAINT tenant_capability_grant_tenant_id_resource_code_key UNIQUE (tenant_id, resource_code);
+
+
+--
+-- Name: tenant tenant_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.tenant
+    ADD CONSTRAINT tenant_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tenant_quota tenant_quota_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.tenant_quota
+    ADD CONSTRAINT tenant_quota_pkey PRIMARY KEY (tenant_id);
+
+
+--
+-- Name: tenant tenant_slug_key; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.tenant
+    ADD CONSTRAINT tenant_slug_key UNIQUE (slug);
 
 
 --
@@ -2785,6 +3577,97 @@ ALTER TABLE ONLY public.weakness_record
 
 
 --
+-- Name: idx_agent_metric_agent_time; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_agent_metric_agent_time ON platform.agent_trace_metric USING btree (agent_id, agent_version, started_at DESC);
+
+
+--
+-- Name: idx_agent_metric_reason; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_agent_metric_reason ON platform.agent_trace_metric USING btree (started_at DESC, termination_reason);
+
+
+--
+-- Name: idx_agent_metric_tenant_time; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_agent_metric_tenant_time ON platform.agent_trace_metric USING btree (tenant_id, started_at DESC);
+
+
+--
+-- Name: idx_agent_trace_tool_time; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_agent_trace_tool_time ON platform.agent_trace_tool_call USING btree (started_at DESC, tool_name);
+
+
+--
+-- Name: idx_platform_audit_actor; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_platform_audit_actor ON platform.platform_audit_event USING btree (actor_id, occurred_at);
+
+
+--
+-- Name: idx_platform_cap_grant_tenant; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_platform_cap_grant_tenant ON platform.tenant_capability_grant USING btree (tenant_id);
+
+
+--
+-- Name: idx_platform_session_user; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_platform_session_user ON platform.platform_session USING btree (platform_user_id);
+
+
+--
+-- Name: idx_platform_tenant_status; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_platform_tenant_status ON platform.tenant USING btree (status);
+
+
+--
+-- Name: idx_platform_user_role_role; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_platform_user_role_role ON platform.platform_user_role USING btree (role_id);
+
+
+--
+-- Name: idx_platform_user_role_user; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_platform_user_role_user ON platform.platform_user_role USING btree (platform_user_id);
+
+
+--
+-- Name: idx_platform_user_status; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_platform_user_status ON platform.platform_user USING btree (status);
+
+
+--
+-- Name: idx_sys_dict_item_dict; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_sys_dict_item_dict ON platform.sys_dictionary_item USING btree (dict_code, sort_order, item_code);
+
+
+--
+-- Name: mv_agent_metric_hourly_uq; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE UNIQUE INDEX mv_agent_metric_hourly_uq ON platform.mv_agent_metric_hourly USING btree (bucket_start, tenant_id, COALESCE(agent_id, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(agent_version, 0), COALESCE(scenario, ''::text));
+
+
+--
 -- Name: idx_agent_invocation_parent; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3128,6 +4011,13 @@ CREATE INDEX idx_run_tenant_created ON public.run USING btree (tenant_id, create
 
 
 --
+-- Name: idx_run_tenant_trace; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_run_tenant_trace ON public.run USING btree (tenant_id, trace_id) WHERE (trace_id IS NOT NULL);
+
+
+--
 -- Name: idx_tool_attempt_operation; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3237,6 +4127,20 @@ CREATE UNIQUE INDEX uq_principal_login_name ON public.principal USING btree (log
 --
 
 CREATE UNIQUE INDEX uq_principal_role ON public.principal_role USING btree (tenant_id, principal_id, role);
+
+
+--
+-- Name: tenant trg_platform_tenant_lifecycle_guard; Type: TRIGGER; Schema: platform; Owner: -
+--
+
+CREATE TRIGGER trg_platform_tenant_lifecycle_guard BEFORE UPDATE ON platform.tenant FOR EACH ROW EXECUTE FUNCTION public.enforce_tenant_lifecycle_transition();
+
+
+--
+-- Name: TRIGGER trg_platform_tenant_lifecycle_guard ON tenant; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON TRIGGER trg_platform_tenant_lifecycle_guard ON platform.tenant IS '评审 P0-4：lifecycle_state 合法迁移守卫（权威口径 = ports TenantLifecycle.ALLOWED_TRANSITIONS）。同状态的其他列更新不受影响（IS DISTINCT FROM 判定）。';
 
 
 --
@@ -3394,10 +4298,89 @@ CREATE TRIGGER trg_run_state_guard BEFORE UPDATE ON public.run FOR EACH ROW EXEC
 
 
 --
+-- Name: run_step trg_run_step_fencing_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_run_step_fencing_guard BEFORE UPDATE ON public.run_step FOR EACH ROW EXECUTE FUNCTION public.enforce_fencing_on_write();
+
+
+--
 -- Name: execution_snapshot trg_snapshot_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER trg_snapshot_immutable BEFORE DELETE OR UPDATE ON public.execution_snapshot FOR EACH ROW EXECUTE FUNCTION public.forbid_snapshot_mutation();
+
+
+--
+-- Name: platform_mfa_credential platform_mfa_credential_platform_user_id_fkey; Type: FK CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_mfa_credential
+    ADD CONSTRAINT platform_mfa_credential_platform_user_id_fkey FOREIGN KEY (platform_user_id) REFERENCES platform.platform_user(id);
+
+
+--
+-- Name: platform_role_permission platform_role_permission_permission_id_fkey; Type: FK CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_role_permission
+    ADD CONSTRAINT platform_role_permission_permission_id_fkey FOREIGN KEY (permission_id) REFERENCES platform.platform_permission(id);
+
+
+--
+-- Name: platform_role_permission platform_role_permission_role_id_fkey; Type: FK CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_role_permission
+    ADD CONSTRAINT platform_role_permission_role_id_fkey FOREIGN KEY (role_id) REFERENCES platform.platform_role(id);
+
+
+--
+-- Name: platform_session platform_session_platform_user_id_fkey; Type: FK CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_session
+    ADD CONSTRAINT platform_session_platform_user_id_fkey FOREIGN KEY (platform_user_id) REFERENCES platform.platform_user(id);
+
+
+--
+-- Name: platform_user_role platform_user_role_platform_user_id_fkey; Type: FK CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_user_role
+    ADD CONSTRAINT platform_user_role_platform_user_id_fkey FOREIGN KEY (platform_user_id) REFERENCES platform.platform_user(id);
+
+
+--
+-- Name: platform_user_role platform_user_role_role_id_fkey; Type: FK CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.platform_user_role
+    ADD CONSTRAINT platform_user_role_role_id_fkey FOREIGN KEY (role_id) REFERENCES platform.platform_role(id);
+
+
+--
+-- Name: sys_dictionary_item sys_dictionary_item_dict_code_fkey; Type: FK CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.sys_dictionary_item
+    ADD CONSTRAINT sys_dictionary_item_dict_code_fkey FOREIGN KEY (dict_code) REFERENCES platform.sys_dictionary(dict_code) ON DELETE RESTRICT;
+
+
+--
+-- Name: tenant_capability_grant tenant_capability_grant_tenant_id_fkey; Type: FK CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.tenant_capability_grant
+    ADD CONSTRAINT tenant_capability_grant_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES platform.tenant(id);
+
+
+--
+-- Name: tenant_quota tenant_quota_tenant_id_fkey; Type: FK CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.tenant_quota
+    ADD CONSTRAINT tenant_quota_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES platform.tenant(id);
 
 
 --
@@ -4365,5 +5348,5 @@ CREATE POLICY weakness_record_tenant_isolation ON public.weakness_record USING (
 -- PostgreSQL database dump complete
 --
 
-\unrestrict xrHb83R07HmdnvXH8oWBtN6MMo17rh2HwFF6yVqEoUdfCduc3zZd5HaXw6rdy9h
+\unrestrict 7n5BwTLQ98SyQlJI9AzRgvd5zufib8dfScFR50w7nO6vxha9QwBmqtNtVUeYEMc
 
