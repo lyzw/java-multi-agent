@@ -58,6 +58,7 @@ import type {
   RagUpsertDictionaryEntryRequest,
   CapToolCatalogItem,
   CapSkillCatalogItem,
+  RunFeedbackKind,
 } from './types'
 
 /** 401 时通知上层（SessionProvider）清理会话并跳登录 */
@@ -1121,5 +1122,32 @@ export function deleteRagDictionaryEntry(
     true,
     timeoutMs,
     tenantHeaders(tenantId),
+  )
+}
+
+/* ── 租户侧用户反馈（P7-3 / P7-4）───────────────────────── */
+
+/**
+ * POST /api/metrics/feedback —— 录入一条用户反馈（L3 有噪信号）。
+ *
+ * ⚠️ **请求体只有 `runId` 与 `kind`**：租户身份由服务端从**已验签令牌**派生，
+ *    浏览器**不传** tenantId（传了也会被忽略）。
+ *    traceId 同样由服务端解析（前端不知道内部会话标识，也无权断言）。
+ *
+ * ⚠️ **与平台侧端点的区别**：平台侧
+ *    `POST /api/platform/v1/metrics/agent/feedback` 需要 `platform.resource.manage`
+ *    权限（平台令牌），租户令牌直调必 403——所以租户前台必须走本端点。
+ *
+ * ⚠️ 404 表示「这次运行不存在 / 不属于本租户 / 尚未产生可反馈的记录」，
+ *    三者**不区分**：前端不得据此推断归属，也不得提示「换一个运行试试」。
+ */
+export function recordRunFeedback(
+  runId: string,
+  kind: RunFeedbackKind,
+): Promise<void> {
+  return _request<void>(
+    '/api/metrics/feedback',
+    { method: 'POST', body: JSON.stringify({ runId, kind }) },
+    true,
   )
 }

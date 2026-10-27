@@ -1210,3 +1210,15 @@ export interface RagDailyImportCount {
   /** 可检索片段数 */
   chunks: number
 }
+
+/**
+ * 用户反馈类型（L3 有噪信号 · P7-3/P7-4）。
+ *
+ * ⚠️ 取值与后端 `AgentMetricPort.FeedbackEvent.FeedbackKind` **逐字一致**：
+ *    THUMB_UP / THUMB_DOWN / RETRY / ABANDON。
+ *    后端按 `valueOf(kind.toUpperCase())` 解析，非法值返 400。
+ *
+ * ⚠️ **这是「有噪信号」不是真值**：差评可能来自网络抖动、UI 卡顿，
+ *    不能据此判定 Agent 劣化，只能触发抽样复核。
+ */
+export type RunFeedbackKind = 'THUMB_UP' | 'THUMB_DOWN' | 'RETRY' | 'ABANDON'

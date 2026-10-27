@@ -22,6 +22,7 @@ import { useParams, Link } from 'react-router-dom'
 import { Sheet, Empty, Loading, ErrorState, Breadcrumbs } from '@/shared/states'
 import { scanText } from '@/features/compliance/scan'
 import { useRunResult } from '@/features/run/useRunResult'
+import { RunFeedback } from '@/features/run/RunFeedback'
 import { stateLabel } from '@/features/run/runState'
 import { PageHead, StatusPill } from '@/components/ui'
 import { Icon } from '@/components/Icon'
@@ -217,6 +218,9 @@ export function RunResultPage(): JSX.Element {
           <p style={{ margin: 0 }}>{explanation}</p>
         )}
       </Sheet>
+
+      {/* 讲解质量反馈（P7-3/P7-4）：紧跟讲解之后——问的是「这段讲解有没有用」 */}
+      <RunFeedback runId={result.runId} />
 
       <Sheet title="解题步骤">
         {result.steps.length === 0 ? (

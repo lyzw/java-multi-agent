@@ -21,10 +21,18 @@ import type { ProfileResponse, RunResultResponse } from '@/api/types'
 
 const getRunResultMock = vi.hoisted(() => vi.fn())
 const getProfileMock = vi.hoisted(() => vi.fn())
+// ⚠️ 结果页已接入反馈按钮（P7-3/P7-4）：显式 mock 掉反馈接口，
+//    免得本类（不点反馈）时若有人误触发就真的发起 fetch。
+const recordRunFeedbackMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/client', async (importActual) => {
   const actual = await importActual<typeof import('@/api/client')>()
-  return { ...actual, getRunResult: getRunResultMock, getProfile: getProfileMock }
+  return {
+    ...actual,
+    getRunResult: getRunResultMock,
+    getProfile: getProfileMock,
+    recordRunFeedback: recordRunFeedbackMock,
+  }
 })
 
 function renderAt(path: string, element: ReactElement, pattern: string): void {
@@ -42,6 +50,8 @@ function renderAt(path: string, element: ReactElement, pattern: string): void {
 beforeEach(() => {
   getRunResultMock.mockReset()
   getProfileMock.mockReset()
+  recordRunFeedbackMock.mockReset()
+  recordRunFeedbackMock.mockResolvedValue(undefined)
 })
 
 /** 标准成功结果：有讲解、错因与步骤各一条、无待核对。 */
