@@ -102,6 +102,25 @@ agent:
     #   ⚠️ 清单长度受 deployment.pilot.max-tenants 约束（灰度控制不得被绕过）。
     #   ⚠️ 同为保留期清理（P4-D04）的租户来源：两套来源迟早不一致。
     tenant-slugs: "${AGENT_TENANT_SLUGS:t-a}"
+    # 租约时长（秒）：须与 RunClaimPort.DEFAULT_LEASE 同源。
+    # 显式声明，避免与代码默认值静默漂移。
+    lease-seconds: "30"
+    # 本 Worker 实例身份（生产应为实例唯一标识）。
+    id: "worker-local"
+
+  # ── 崩溃恢复扫描（第二十一批 · 接通 claimTasks 生产调用方）────
+  # ⚠️ 周期性枚举活跃租户、调用 claimTasks 接管过期 RUNNING 租约，
+  #    驱动与 MQ 主路径相同的执行器，避免 worker 崩溃后 Run 永久卡死。
+  # ⚠️ 数值必须加引号（YamlPropertiesFactoryBean 丢弃裸标量）。
+  recovery:
+    # 总开关。关闭则不扫描（fail-closed 于「显式禁用」）。
+    enabled: "true"
+    # 扫描间隔（秒）：上轮结束后再等该时长。下限 5s。
+    interval-seconds: "30"
+    # 单租户单轮接管上限（防一次捞空、压垮执行）。
+    batch-size: "50"
+    # 单轮枚举活跃租户上限（防租户爆炸）。
+    tenant-limit: "200"
 
   # ── 背压护栏（P4-D05 / 关闭 L-6）──────────────────────────────
   # ⚠️ 三项**全部必填**，缺失或越界即拒绝启动（fail-closed）。

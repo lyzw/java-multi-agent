@@ -329,6 +329,21 @@ public class RunExecutionLoop {
                     return ExecutionOutcome.cancelled();
                 }
 
+                // ── §2.1.3 根层业务超时检查（FR-024 整树共享超时上限）──
+                // ⚠️ 业务 deadline（run.deadline_at）与租约（lease_expires_at）是两回事：
+                //    租约过期只意味着「该换手」，业务 deadline 过期意味着「这个 Run 该结束了」。
+                //    若只靠租约续期，已超时的 Run 会被无限续租跑下去，违背 FR-024
+                //    （声明了 timeoutMs 的 Run 跑到 maxSteps 才 MAX_STEPS 失败）。
+                //    每轮开头即查，超时立即 commitFailure(TIMEOUT) 并停止。
+                if (task.deadlineAt() != null
+                        && java.time.Instant.now().isAfter(task.deadlineAt())) {
+                    log.warn("根 Run 业务超时，停止执行: runId={}, deadline={}",
+                            task.runId(), task.deadlineAt());
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
+                            java.util.Map.of("state", "TIMED_OUT"));
+                    return commitFailure(tenantId, task, "业务超时", "TIMEOUT");
+                }
+
                 // ── §2 循环体 ────────────────────────────────────────────
                 // ⚠️ 模型参数来自 Agent 配置（Run 关联的 Agent），
                 //    运行约束（maxSteps）来自 Run 创建时的快照。
@@ -751,6 +766,22 @@ public class RunExecutionLoop {
     private static String jsonPayload(@NonNull String field, @Nullable String value) {
         ObjectNode root = JSON.createObjectNode();
         root.put(field, value == null ? "" : value);
+        return JSON.writeValueAsString(root);
+    }
+
+    /**
+     * 构造一条合法的失败结果载荷（jsonb）。
+     *
+     * <p>⚠️ 统一走 Jackson 序列化，禁止手工拼字符串——
+     * 手写转义表迟早漏项（见 {@link #jsonPayload} 的教训）。
+     * 供孤儿 Run 兜底收敛等场景复用，避免各处重复拼 JSON。
+     *
+     * @param reason 失败原因摘要（内部常量，非用户输入）
+     * @return 合法 JSON 文本，如 {@code {"reason":"config_unavailable"}}
+     */
+    public static String failurePayload(@NonNull String reason) {
+        ObjectNode root = JSON.createObjectNode();
+        root.put("reason", reason == null ? "" : reason);
         return JSON.writeValueAsString(root);
     }
 

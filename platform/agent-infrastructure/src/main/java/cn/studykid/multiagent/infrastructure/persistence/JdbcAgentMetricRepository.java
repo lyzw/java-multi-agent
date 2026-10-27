@@ -439,7 +439,7 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                     human_verdict = ?,
                     hallucination = ?,
                     instruction_followed = ?
-                WHERE trace_id = ?
+                WHERE trace_id = ? AND tenant_id = ?::uuid
                 """;
         try (Connection conn = openSystem()) {
             try (PreparedStatement ps = conn.prepareStatement(insert)) {
@@ -457,6 +457,7 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                 setNullableBoolean(ps, 2, s.hallucination());
                 setNullableBoolean(ps, 3, s.instructionFollowed());
                 ps.setString(4, s.traceId());
+                ps.setString(5, s.tenantId());
                 ps.executeUpdate();
             }
             conn.commit();
@@ -515,6 +516,8 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                 INSERT INTO platform.agent_risk_event (trace_id, tenant_id, event_type, detail_digest)
                 VALUES (?, ?::uuid, ?, ?)
                 """;
+        // ⚠️ 回填**必须带租户谓词**（与 recordFeedback 同纪律）：本连接是 openSystem
+        //    （不受 RLS 约束），只按 trace_id 更新会触发跨租户写入。
         String backfill = """
                 UPDATE platform.agent_trace_metric SET
                     safety_blocked_count = coalesce(safety_blocked_count, 0)
@@ -523,7 +526,7 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                                            + CASE WHEN ? = 'UNAUTHORIZED_CALL' THEN 1 ELSE 0 END,
                     sensitive_output_hits = coalesce(sensitive_output_hits, 0)
                                            + CASE WHEN ? = 'SENSITIVE_OUTPUT' THEN 1 ELSE 0 END
-                WHERE trace_id = ?
+                WHERE trace_id = ? AND tenant_id = ?::uuid
                 """;
         String type = e.eventType().name();
         try (Connection conn = openSystem()) {
@@ -539,6 +542,7 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                 ps.setString(2, type);
                 ps.setString(3, type);
                 ps.setString(4, e.traceId());
+                ps.setString(5, e.tenantId());
                 ps.executeUpdate();
             }
             conn.commit();
@@ -559,14 +563,18 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                     evidence_digest = EXCLUDED.evidence_digest,
                     checked_at = now()
                 """;
-        // ⚠️ 多 checker 时以「全部通过才算通过」收敛，避免任一 checker 通过就冒领成功
+        // ⚠️ 多 checker 时以「全部通过才算通过」收敛，避免任一 checker 通过就冒领成功。
+        //    ⚠️ 回填**必须带租户谓词**：本连接是 openSystem（不受 RLS 约束），
+        //    只按 trace_id 更新会触发跨租户写入；子查询内的 task_outcome 也须按
+        //    tenant_id 收窄，否则不同租户同 trace_id 会被错误聚合。
         String backfill = """
                 UPDATE platform.agent_trace_metric m SET
                     auto_checked  = TRUE,
                     auto_verified = (SELECT bool_and(verified)
                                      FROM platform.agent_task_outcome
-                                     WHERE trace_id = m.trace_id)
-                WHERE trace_id = ?
+                                     WHERE trace_id = m.trace_id
+                                       AND tenant_id = m.tenant_id)
+                WHERE trace_id = ? AND tenant_id = ?::uuid
                 """;
         try (Connection conn = openSystem()) {
             try (PreparedStatement ps = conn.prepareStatement(insert)) {
@@ -580,6 +588,7 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
             }
             try (PreparedStatement ps = conn.prepareStatement(backfill)) {
                 ps.setString(1, o.traceId());
+                ps.setString(2, o.tenantId());
                 ps.executeUpdate();
             }
             conn.commit();

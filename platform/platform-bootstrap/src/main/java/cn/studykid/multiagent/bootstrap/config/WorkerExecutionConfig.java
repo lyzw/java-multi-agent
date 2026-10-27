@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 import cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy;
 import cn.studykid.multiagent.application.config.BudgetPolicy;
@@ -53,6 +54,7 @@ import cn.studykid.multiagent.worker.execute.RunExecutionLoop;import cn.studykid
  * 批量轮询 / 优雅停机 / 并发度控制属后续切片。
  */
 @Configuration
+@EnableScheduling
 public class WorkerExecutionConfig {
 
     private static final Logger log = LoggerFactory.getLogger(WorkerExecutionConfig.class);
@@ -358,6 +360,62 @@ public class WorkerExecutionConfig {
     }
 
     /**
+     * 单任务执行器（第二十一批 · 抽离供崩溃恢复复用）。
+     *
+     * <p>⚠️ 本执行器同时被 MQ 消费路径（{@link #runDispatchConsumer}）与
+     * 崩溃恢复扫描器（{@code RunRecoverySweeper}）复用——
+     * 两者拿到 {@code LeasedTask} 后走完全相同的执行与兜底收敛逻辑，
+     * 避免「恢复路径」与「主路径」两套语义漂移。
+     *
+     * <p>⚠️ fail-closed：拿不到根 Agent 模型配置 → 拒绝执行并兜底收敛终态，
+     * 绝不回落硬编码占位模型（回落 = 把「配置缺失」伪装成「配置正常」）。
+     */
+    @Bean
+    public RunDispatchConsumer.RunExecutor runTaskExecutor(
+            RunClaimPort claimPort, RunExecutionLoop loop, RunExecutionInputs inputs) {
+        return (tenantId, task) -> {
+            // ⚠️⚠️ **fail-closed（第二十一批）**：拿不到根 Agent 的模型配置
+            // → **拒绝执行该 Run**，绝不回落硬编码占位模型。
+            // 回落等于让「配置缺失」被伪装成「配置正常」——
+            // 根 Agent 会拿着假模型跑完整个 Run，而日志里看不出任何异常。
+            java.util.Optional<RunExecutionLoop.AgentModelConfig> config =
+                    inputs.agentConfig(tenantId, task.runId());
+            if (config.isEmpty()) {
+                // ⚠️⚠️ 孤儿 Run 兜底（第二十一批 · 高危修复）：
+                // Run 此刻已是 RUNNING（已被 claimSpecificRun 置位），
+                // 若只 return FAILED 让消息被 ack 丢弃，Run 永久卡死。
+                // 先 best-effort commit FAILED（终态），再返回 FAILED。
+                log.warn("根 Agent 模型配置不可用，Run 拒绝执行并收敛终态: run={}",
+                        task.runId());
+                try {
+                    claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
+                            "FAILED", RunExecutionLoop.failurePayload("config_unavailable"),
+                            "CONFIG_UNAVAILABLE");
+                } catch (RuntimeException ce) {
+                    log.warn("孤儿 Run 兜底收敛失败（可能已被接管）: run={}, cause={}",
+                            task.runId(), ce.toString());
+                }
+                return RunDispatchConsumer.Outcome.FAILED;
+            }
+            RunExecutionLoop.ExecutionOutcome outcome = loop.execute(
+                    tenantId, task, config.get(),
+                    inputs.snapshotFor(task, tenantId), inputs.runInput(task));
+            return switch (outcome.kind()) {
+                case SUCCEEDED -> RunDispatchConsumer.Outcome.SUCCEEDED;
+                case FAILED -> RunDispatchConsumer.Outcome.FAILED;
+                case CANCELLED -> RunDispatchConsumer.Outcome.CANCELLED;
+                case RETRYABLE_FAILURE -> RunDispatchConsumer.Outcome.RETRYABLE_FAILURE;
+                // ⚠️⚠️ UNKNOWN 必须映射为「丢弃」——重投 = 重复副作用 = Sev-0
+                case UNKNOWN_RESULT -> RunDispatchConsumer.Outcome.UNKNOWN_RESULT;
+                case SKIPPED_STALE_GENERATION ->
+                        RunDispatchConsumer.Outcome.STALE_GENERATION;
+                // ⚠️ 租户暂停/退役 → 终态失败，不重投（重投只会再次被拒）
+                case TENANT_BLOCKED -> RunDispatchConsumer.Outcome.FAILED;
+            };
+        };
+    }
+
+    /**
      * MQ 消费者（P4-D01 断链修复点）。
      *
      * <p>⚠️ 这里把 {@code RunExecutionLoop} 适配为 {@code RunExecutor}：
@@ -366,38 +424,9 @@ public class WorkerExecutionConfig {
     @Bean
     public RunDispatchConsumer runDispatchConsumer(
             RunClaimPort claimPort,
-            RunExecutionLoop loop,
-            RunExecutionInputs inputs) {
-        log.info("装配 Worker 消费者: workerId={}, 租约={}s（执行器已接入）",
-                workerId, leaseSeconds);
-        return new RunDispatchConsumer(claimPort, Duration.ofSeconds(leaseSeconds),
-                (tenantId, task) -> {
-                    // ⚠️⚠️ **fail-closed（第二十一批）**：拿不到根 Agent 的模型配置
-                    // → **拒绝执行该 Run**，绝不回落硬编码占位模型。
-                    // 回落等于让「配置缺失」被伪装成「配置正常」——
-                    // 根 Agent 会拿着假模型跑完整个 Run，而日志里看不出任何异常。
-                    java.util.Optional<RunExecutionLoop.AgentModelConfig> config =
-                            inputs.agentConfig(tenantId, task.runId());
-                    if (config.isEmpty()) {
-                        log.warn("根 Agent 模型配置不可用，Run 拒绝执行: run={}", task.runId());
-                        return RunDispatchConsumer.Outcome.FAILED;
-                    }
-                    RunExecutionLoop.ExecutionOutcome outcome = loop.execute(
-                            tenantId, task, config.get(),
-                            inputs.snapshotFor(task, tenantId), inputs.runInput(task));
-                    return switch (outcome.kind()) {
-                        case SUCCEEDED -> RunDispatchConsumer.Outcome.SUCCEEDED;
-                        case FAILED -> RunDispatchConsumer.Outcome.FAILED;
-                        case CANCELLED -> RunDispatchConsumer.Outcome.CANCELLED;
-                        case RETRYABLE_FAILURE -> RunDispatchConsumer.Outcome.RETRYABLE_FAILURE;
-                        // ⚠️⚠️ UNKNOWN 必须映射为「丢弃」——重投 = 重复副作用 = Sev-0
-                        case UNKNOWN_RESULT -> RunDispatchConsumer.Outcome.UNKNOWN_RESULT;
-                        case SKIPPED_STALE_GENERATION ->
-                                RunDispatchConsumer.Outcome.STALE_GENERATION;
-                        // ⚠️ 租户暂停/退役 → 终态失败，不重投（重投只会再次被拒）
-                        case TENANT_BLOCKED -> RunDispatchConsumer.Outcome.FAILED;
-                    };
-                });
+            RunDispatchConsumer.RunExecutor executor) {
+        log.info("装配 Worker 消费者: 租约={}s（执行器已接入）", leaseSeconds);
+        return new RunDispatchConsumer(claimPort, Duration.ofSeconds(leaseSeconds), executor);
     }
 
     /**

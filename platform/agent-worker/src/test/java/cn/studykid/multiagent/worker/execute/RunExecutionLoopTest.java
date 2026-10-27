@@ -91,6 +91,8 @@ class RunExecutionLoopTest {
         String committedState;
         long committedToken = -1;
         int commitCount;
+        /** ⚠️ 记录 6 参 commitResult 的结构化错误码（P7-2 / 超时 / 兜底收敛）。 */
+        String committedErrorCode;
         /** ⚠️ 记录续租传入的身份，供「身份一致性」断言（P3-D02 F-1）。 */
         String lastRenewWorkerId;
         int renewCount;
@@ -112,6 +114,12 @@ class RunExecutionLoopTest {
             committedState = s;
             committedToken = f;
             return commitSucceeds;
+        }
+        /** 6 参版本：记录结构化错误码（超时 / 兜底收敛）后委托 5 参。 */
+        @Override public boolean commitResult(String t, String r, long f, String s, String p,
+                                              String ec) {
+            committedErrorCode = ec;
+            return commitResult(t, r, f, s, p);
         }
         @Override public boolean isCurrentGeneration(String t, String r, long f) {
             return generationValid;
@@ -221,6 +229,48 @@ class RunExecutionLoopTest {
             recordCount++;
             eventTypes.add(eventType);
             digests.add(detailDigest);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // 根层业务超时回归（第二十一批 · 缺陷③修复 · FR-024 整树共享超时）
+    // ══════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("根层业务超时（FR-024 · 整树共享超时上限）")
+    class 根层超时 {
+        @Test
+        @DisplayName("⚠️⚠️ deadline 已过期：不调模型、不进循环，直接 commitFailure(TIMEOUT)")
+        void expiredDeadlineFailsWithTimeout() {
+            int[] modelCalls = {0};
+            ModelGateway gw = request -> {
+                modelCalls[0]++;
+                return textResponse("不该被调用");
+            };
+            FakeClaimPort claim = new FakeClaimPort();
+            RunClaimPort.LeasedTask expired = new RunClaimPort.LeasedTask(
+                    RUN_ID, 1L, Instant.now().plusSeconds(30), 1,
+                    Instant.now().minusSeconds(10));
+            RunExecutionLoop loop = loop(gw, claim,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()));
+
+            RunExecutionLoop.ExecutionOutcome outcome = loop.execute(TENANT, expired, agentConfig(), snapshot(20),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(claim.commitCount)
+                    .as("已过期 Run 必须收敛到终态，避免永久 RUNNING（孤儿 Run）")
+                    .isGreaterThan(0);
+            assertThat(claim.committedState).isEqualTo("FAILED");
+            assertThat(claim.committedErrorCode)
+                    .as("必须写结构化错误码 TIMEOUT，供 P7 做终止原因归因")
+                    .isEqualTo("TIMEOUT");
+            assertThat(modelCalls[0])
+                    .as("超时 Run 不应再调用模型（白花钱）")
+                    .isZero();
         }
     }
 

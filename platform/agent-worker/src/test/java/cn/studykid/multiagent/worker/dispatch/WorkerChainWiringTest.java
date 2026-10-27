@@ -42,6 +42,11 @@ class WorkerChainWiringTest {
         final AtomicInteger claimCount = new AtomicInteger();
         volatile boolean claimable = true;
 
+        /** 提交计数（用于断言孤儿 Run 已被收敛到终态，而非永久 RUNNING）。 */
+        int commitCount;
+        String committedState;
+        String committedErrorCode;
+
         @Override public java.util.List<LeasedTask> claimTasks(
                 String t, String w, java.time.Duration d, int l) {
             return java.util.List.of();
@@ -60,6 +65,15 @@ class WorkerChainWiringTest {
                 java.time.Duration d) { return true; }
         @Override public boolean releaseLease(String t, String r, String w, long f) { return true; }
         @Override public boolean commitResult(String t, String r, long f, String s, String p) {
+            commitCount++;
+            committedState = s;
+            return true;
+        }
+        @Override public boolean commitResult(String t, String r, long f, String s,
+                String p, String ec) {
+            commitCount++;
+            committedState = s;
+            committedErrorCode = ec;
             return true;
         }
         @Override public boolean isCurrentGeneration(String t, String r, long f) { return true; }
@@ -194,7 +208,7 @@ class WorkerChainWiringTest {
         }
 
         @Test
-        @DisplayName("⚠️ 执行器抛异常 → REJECTED（进死信，不静默吞掉）")
+        @DisplayName("⚠️ 执行器抛异常 → REJECTED 且孤儿 Run 收敛为 FAILED（缺陷①修复）")
         void executorExceptionRejected() {
             var claim = new FakeClaimPort();
             var consumer = new RunDispatchConsumer(claim, java.time.Duration.ofSeconds(30),
@@ -208,6 +222,15 @@ class WorkerChainWiringTest {
             assertThat(result)
                     .as("⚠️ 执行异常不得被吞掉——必须走死信便于排查")
                     .isEqualTo(RunDispatchConsumer.ConsumeResult.REJECTED);
+            assertThat(claim.commitCount)
+                    .as("⚠️⚠️ 异常路径必须把 Run 收敛到终态，否则永久 RUNNING（孤儿 Run）")
+                    .isGreaterThan(0);
+            assertThat(claim.committedState)
+                    .as("⚠️ 孤儿 Run 必须以 FAILED 收口，而非停在 RUNNING")
+                    .isEqualTo("FAILED");
+            assertThat(claim.committedErrorCode)
+                    .as("⚠️ 必须写结构化错误码 INTERNAL_ERROR 供 P7 归因")
+                    .isEqualTo("INTERNAL_ERROR");
         }
     }
 }

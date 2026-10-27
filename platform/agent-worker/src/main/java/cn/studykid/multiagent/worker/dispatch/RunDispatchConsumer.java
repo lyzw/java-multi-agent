@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import cn.studykid.multiagent.ports.messaging.MessageHandler;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
+import cn.studykid.multiagent.worker.execute.RunExecutionLoop;
 
 /**
  * MQ 消费者骨架（P2-D02 §4 / FR-005）。
@@ -110,6 +111,30 @@ public class RunDispatchConsumer implements MessageHandler {
         };
     }
 
+    /**
+     * 孤儿 Run 兜底收敛（第二十一批 · 高危修复）。
+     *
+     * <p>⚠️ 当 executor 在执行<b>期间</b>抛未捕获异常、或执行器在调用
+     * {@code RunExecutionLoop.execute} 之前就决定拒绝（配置不可用）时，
+     * Run 此刻已是 {@code RUNNING}（已被 claimSpecificRun 置位）；
+     * 若只把 MQ 消息丢弃而不 {@code commitResult} 终态，Run 会
+     * <b>永久卡死</b>（无人再领取，消息已 ack/拒绝）。
+     * 故在丢弃前 best-effort 收敛为 FAILED。
+     *
+     * <p>⚠️ 收敛失败（如世代已失效、已被其他 worker 接管）= 有人正在处理，
+     * 记 WARN 即可，<b>不在此重试</b>——重试会把消息打回队列引发重复副作用。
+     */
+    private static void tryFailRunAsOrphan(RunClaimPort claimPort, String tenantId,
+            RunClaimPort.LeasedTask task, String errorCode) {
+        try {
+            claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
+                    "FAILED", RunExecutionLoop.failurePayload(errorCode), errorCode);
+        } catch (RuntimeException ce) {
+            log.warn("孤儿 Run 兜底收敛失败（可能已被接管，交由崩溃恢复调度）: runId={}, cause={}",
+                    task.runId(), ce.toString());
+        }
+    }
+
     public enum ConsumeResult {
         /** 已领取租约并执行完毕（含终态与 UNKNOWN——<b>均不得重投</b>）。 */
         CLAIMED,
@@ -199,9 +224,13 @@ public class RunDispatchConsumer implements MessageHandler {
         try {
             outcome = executor.execute(message.tenantId(), task);
         } catch (RuntimeException e) {
-            // ⚠️ 执行异常按「可重试」处理，但**不得吞掉**——
-            //    异常消息会走死信，便于排查。
-            log.error("执行循环抛出未捕获异常，按可重试处理: runId={}", task.runId(), e);
+            // ⚠️⚠️ 孤儿 Run 兜底（第二十一批 · 高危修复）：
+            // executor 在执行期间抛未捕获异常时，Run 此刻已是 RUNNING（已领取），
+            // 若只把消息按 REJECTED 丢弃，Run 永久卡死（无人再领取，消息已丢弃）。
+            // 先 best-effort commit FAILED（终态），再按「拒绝丢弃」便于排查。
+            log.error("执行循环抛出未捕获异常，兜底收敛孤儿 Run 后丢弃消息: runId={}",
+                    task.runId(), e);
+            tryFailRunAsOrphan(claimPort, message.tenantId(), task, "INTERNAL_ERROR");
             return ConsumeResult.REJECTED;
         }
         return toConsumeResult(outcome);

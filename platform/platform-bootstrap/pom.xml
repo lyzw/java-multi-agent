@@ -39,6 +39,16 @@
       <artifactId>agent-infrastructure</artifactId>
     </dependency>
     <!--
+      显式声明：本模块测试（RunRecoverySweeperTest 等）直接引用
+      cn.studykid.multiagent.ports.persistence.*（如 PlatformTenantPort）。
+      此前仅经 agent-infrastructure 间接传递引入，离线 -am 构建下偶发
+      测试 classpath 缺失该类（NoClassDefFoundError），故显式锁定。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-ports</artifactId>
+    </dependency>
+    <!--
       健康检查端点 /actuator/health。
       ⚠️ SecurityConfiguration 已将其列为匿名白名单，但此前缺依赖导致
          该端点不存在，请求落入静态资源处理器抛 500（NoResourceFoundException）。
