@@ -13,9 +13,11 @@ import java.util.List;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.core.run.RunState;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.AuditPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
@@ -307,13 +309,28 @@ public class JdbcRunClaimRepository implements RunClaimPort {
     public boolean commitResult(@NonNull String tenantId, @NonNull String runId,
                                 long expectedFencingToken, @NonNull String state,
                                 @NonNull String resultPayload) {
+        return commitResult(tenantId, runId, expectedFencingToken, state, resultPayload, null);
+    }
+
+    @Override
+    public boolean commitResult(@NonNull String tenantId, @NonNull String runId,
+                                long expectedFencingToken, @NonNull String state,
+                                @NonNull String resultPayload, @Nullable String errorCode) {
+        // ⚠️ 状态机前置校验（评审 P0-4）：目标状态必须合法且 RUNNING 可达。
+        //    此前合法流转全靠 SQL WHERE 偶然挡住；DB 触发器（V34 起为完整迁移表）
+        //    是「法律」，这里是 fail-fast 的「礼仪」——把领域异常而不是 SQL 异常抛给调用方。
+        //    未知状态串在此直接抛 IAE，不再等到 ?::run_state 转型失败。
+        RunState.RUNNING.requireTransitionTo(RunState.valueOf(state));
         // ⚠️ 两道防线：
         //   1) WHERE fencing_token = ? —— 旧世代影响 0 行
         //   2) 数据库触发器 enforce_fencing_on_write —— 拒绝 token 回退
+        // ⚠️ error_code（P7-2）：FAILED 时写结构化错误码，供指标做终止原因归因。
+        //    setString(i, null) 即把列置 SQL NULL（成功提交无需错误码）。
         String sql = """
                 UPDATE run
                 SET state = ?::run_state,
                     result_payload = ?::jsonb,
+                    error_code = ?,
                     completed_at = now(),
                     lease_owner = NULL,
                     lease_expires_at = NULL,
@@ -326,9 +343,10 @@ public class JdbcRunClaimRepository implements RunClaimPort {
                 ps -> {
                     ps.setString(1, state);
                     ps.setString(2, resultPayload);
-                    ps.setString(3, tenantId);
-                    ps.setString(4, runId);
-                    ps.setLong(5, expectedFencingToken);
+                    ps.setString(3, errorCode);
+                    ps.setString(4, tenantId);
+                    ps.setString(5, runId);
+                    ps.setLong(6, expectedFencingToken);
                 },
                 tenantId) > 0;
     }

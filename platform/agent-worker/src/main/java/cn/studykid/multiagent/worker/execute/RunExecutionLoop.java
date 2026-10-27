@@ -12,6 +12,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import cn.studykid.multiagent.application.prompt.PromptGuard;
+import cn.studykid.multiagent.core.compliance.DataClassification;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter;
@@ -19,6 +20,8 @@ import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunEventPort;
+import cn.studykid.multiagent.ports.persistence.RunStepPort;
+import cn.studykid.multiagent.ports.persistence.RiskEventPort;
 import cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe;
 import cn.studykid.multiagent.ports.tenant.TenantLifecycle;
 import cn.studykid.multiagent.ports.tool.ToolExecutionException;
@@ -83,6 +86,25 @@ public class RunExecutionLoop {
     private final RunEventPort eventPort;
 
     /**
+     * 执行步骤写入端口（P7-2）。
+     *
+     * <p>⚠️ <b>默认「不写」而非「默认写」</b>：与 {@link #eventPort} 同纪律——
+     * 未注入时步骤不落库（{@code run_step} 历史上即零写入方），但<b>不报错</b>。
+     * 生产装配由 {@code WorkerExecutionConfig} 传入（与事件端口一并强制注入）。
+     */
+    private RunStepPort stepPort;
+
+    /**
+     * 安全事件写入端口（P7-4 · SEC-2/SEC-3 明细事实）。
+     *
+     * <p>⚠️ <b>默认「不写」而非「默认写」</b>：与 {@link #eventPort} / {@link #stepPort}
+     * 同纪律——未注入时不落 {@code platform.agent_risk_event}，但<b>不报错</b>。
+     * 发射点：SAFETY_BLOCK（编造出处拦截）· UNAUTHORIZED_CALL（越权工具拒绝）·
+     * SENSITIVE_OUTPUT（输出命中隐私模式）。
+     */
+    private RiskEventPort riskEventPort;
+
+    /**
      * Prompt 注入防护（P3-D09 / FR-016）。
      *
      * <p>⚠️ <b>默认用标准上限</b>：不设「无防护」默认值——
@@ -142,7 +164,7 @@ public class RunExecutionLoop {
                              @Nullable RunEventPort eventPort) {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
                 promptGuard, eventPort, null,
-                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null);
+                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null, null, null);
     }
 
     /**
@@ -161,15 +183,17 @@ public class RunExecutionLoop {
                              @Nullable InFlightDelegationAdopter adopter) {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
                 promptGuard, eventPort, adopter,
-                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null);
+                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null, null, null);
     }
 
     /**
-     * 最完整构造器（含上下文 token 预算 · 第二十六批 · A7）。
+     * 最完整构造器（含上下文 token 预算 · 第二十六批 · A7；步骤/安全事件端口 · P7）。
      *
      * @param contextTokenBudget 上下文 token 预算；必须为正数
      * @param lifecycleProbe     租户生命周期运行时探针；{@code null} 表示**不验证**
      *                           （默认），生产装配<b>必须</b>传入
+     * @param stepPort           执行步骤写入端口（P7-2）；{@code null} 表示不写步骤
+     * @param riskEventPort      安全事件写入端口（P7-4）；{@code null} 表示不写安全事件
      */
     public RunExecutionLoop(@NonNull ModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
@@ -180,12 +204,16 @@ public class RunExecutionLoop {
                              @Nullable RunEventPort eventPort,
                              @Nullable InFlightDelegationAdopter adopter,
                              int contextTokenBudget,
-                             @Nullable TenantLifecycleProbe lifecycleProbe) {
+                             @Nullable TenantLifecycleProbe lifecycleProbe,
+                             @Nullable RunStepPort stepPort,
+                             @Nullable RiskEventPort riskEventPort) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
         this.leaseDuration = leaseDuration;
         this.eventPort = eventPort;
+        this.stepPort = stepPort;
+        this.riskEventPort = riskEventPort;
         if (workerId == null || workerId.isBlank()) {
             throw new IllegalArgumentException("workerId 不能为空（fencing 续租身份）");
         }
@@ -237,6 +265,9 @@ public class RunExecutionLoop {
         }
 
         int steps = 0;
+        // ⚠️ P7-2：步骤序号（单调递增，供 run_step.step_number）。与 steps 不同——
+        //    steps 是循环轮次上限计数器，stepSeq 是「已落库步骤」的序号。
+        int stepSeq = 0;
 
         // ── 接管收敛（第九批 · MA-T12 · P3-MA-02）────────────────────
         //    ⚠️ 必须在**世代检查通过之后**：世代已失效说明这个 Run
@@ -338,7 +369,13 @@ public class RunExecutionLoop {
                         // ⚠️ 带消息历史：非空时以 messages 为准（userContent 仅冗余保留）
                         trimmed.messages());
 
+                // ── §2 P7-2：记录 THINK 步骤（模型推理耗时）──
+                //    started/completed 同时取，单条 INSERT 落库；失败不影响主流程。
+                java.time.Instant thinkStart = java.time.Instant.now();
                 ModelResponse response = modelGateway.complete(request);
+                java.time.Instant thinkEnd = java.time.Instant.now();
+                appendStep(tenantId, task, ++stepSeq, RunStepPort.Types.THINK,
+                        thinkStart, thinkEnd);
 
                 if (response.toolCalls().isEmpty()) {
                     // ⚠️ 编造出处检查（P3-D11 / FR-020 / I-5）：
@@ -346,6 +383,11 @@ public class RunExecutionLoop {
                     //    因此「提到出处」本身就是编造，必须在提交前拦截。
                     //    这是 Sev-0 级失败判据（P0-D00 §3.4），不可降级为警告。
                     String content = response.content();
+                    // ── §2 P7-4：敏感信息输出命中检测（SEC-3 明细事实）──
+                    //    只观测不阻断：SEC-3 是合规计数器（命中次数），
+                    //    拦截策略属内容安全层职责，不在此处偷偷扩大语义。
+                    //    摘要只含模式代号与命中数，绝不落原文（合规红线）。
+                    emitSensitiveOutputIfHit(tenantId, task, content);
                     try {
                         cn.studykid.multiagent.application.evaluation
                                 .HallucinationDetector.assertNoFabricatedSource(content);
@@ -353,15 +395,23 @@ public class RunExecutionLoop {
                             .HallucinatedSourceException e) {
                         log.error("⚠️⚠️ 输出涉嫌编造出处，拒绝提交: runId={}, rule={}",
                                 task.runId(), e.rule());
-                        return commitFailure(tenantId, task, "输出涉嫌编造资料出处");
+                        // P7-4：SEC-1/SEC-2 之外的明细事实——安全拦截落一条 SAFETY_BLOCK
+                        emitRiskEvent(tenantId, task, RiskEventPort.SAFETY_BLOCK,
+                                "FABRICATED_SOURCE:" + e.rule());
+                        return commitFailure(tenantId, task, "输出涉嫌编造资料出处",
+                                "SAFETY_FABRICATED_SOURCE");
                     }
                     // 无工具调用 → 生成结果，正常完成
                     return commitSuccess(tenantId, task, content);
                 }
 
                 // ── §4 工具调用（逐个走完整闸门）───────────────────────
+                java.time.Instant toolStart = java.time.Instant.now();
                 ToolInvocationGate.ToolInvocationResult toolResult = toolGate.invokeAll(
                         tenantId, task, response.toolCalls());
+                java.time.Instant toolEnd = java.time.Instant.now();
+                appendStep(tenantId, task, ++stepSeq, RunStepPort.Types.TOOL,
+                        toolStart, toolEnd);
 
                 // ⚠️ P4-D12 / G4：工具调用后记录事件（含 UNKNOWN）
                 //    operationState 取工具账本状态：SUCCEEDED / FAILED / REJECTED / UNKNOWN。
@@ -377,6 +427,16 @@ public class RunExecutionLoop {
                 for (String tool : toolResult.rejectedTools()) {
                     appendEvent(tenantId, task.runId(), RunEventPort.Types.TOOL_INVOKED,
                             java.util.Map.of("toolName", tool, "operationState", "REJECTED"));
+                    // ── §4 P7-4：越权调用尝试（SEC-2 明细事实）──
+                    //    拒绝原因须区分「越权」（无权/审批拒绝 → SEC-2）与
+                    //    「无效调用」（未登记/Schema 非法 → BEH-3），
+                    //    把 Schema 拒绝也算越权会让安全告警被噪声淹没。
+                    //    ⚠️ 摘要只含工具名与原因码，不含参数原文。
+                    String reason = toolResult.rejectionReasonOf(tool).orElse("");
+                    if (isAuthorizationDenial(reason)) {
+                        emitRiskEvent(tenantId, task, RiskEventPort.UNAUTHORIZED_CALL,
+                                "TOOL:" + tool + ":" + reason);
+                    }
                 }
                 if (toolResult.unknownToolName() != null) {
                     appendEvent(tenantId, task.runId(), RunEventPort.Types.TOOL_INVOKED,
@@ -396,7 +456,7 @@ public class RunExecutionLoop {
                 if (toolResult.allRejected()) {
                     // 工具全被拒（如授权失败）→ 交由模型重新决策或失败
                     log.info("工具调用全部被拒: runId={}", task.runId());
-                    return commitFailure(tenantId, task, "工具调用被拒绝");
+                    return commitFailure(tenantId, task, "工具调用被拒绝", "TOOL_REJECTED");
                 }
 
                 // ── 回灌：把「模型意图 + 工具结果」并入下一轮上下文 ──────
@@ -419,7 +479,7 @@ public class RunExecutionLoop {
             // ── §5.1 步数超限 ──────────────────────────────────────────
             log.warn("步数超限: runId={}, steps={}, max={}",
                     task.runId(), steps, snapshot.maxSteps());
-            return commitFailure(tenantId, task, "步数超限");
+            return commitFailure(tenantId, task, "步数超限", "MAX_STEPS");
 
         } catch (ModelGateway.ModelGatewayException e) {
             // ── §3 三种异常语义 ────────────────────────────────────────
@@ -430,17 +490,18 @@ public class RunExecutionLoop {
             }
             log.info("模型调用不可重试失败: runId={}, kind={}",
                     task.runId(), e.kind());
-            return commitFailure(tenantId, task, "模型调用失败：" + e.kind());
+            return commitFailure(tenantId, task, "模型调用失败：" + e.kind(),
+                    "MODEL_" + e.kind().name());
 
         } catch (ToolExecutionException e) {
             // ⚠️ 能走到这里说明工具闸门没有正确处理 UNKNOWN ——
             //    闸门应在内部转为 unknownResultOccurred()，而非抛出
             log.error("工具异常逃逸出闸门（不应发生）: runId={}", task.runId(), e);
-            return commitFailure(tenantId, task, "工具执行异常");
+            return commitFailure(tenantId, task, "工具执行异常", "TOOL_INTERNAL");
 
         } catch (RuntimeException e) {
             log.error("执行过程未预期异常: runId={}", task.runId(), e);
-            return commitFailure(tenantId, task, "执行异常");
+            return commitFailure(tenantId, task, "执行异常", "INTERNAL_ERROR");
         }
     }
 
@@ -502,6 +563,87 @@ public class RunExecutionLoop {
         }
     }
 
+    /**
+     * 追加一条执行步骤（P7-2 事实写入）。
+     *
+     * <p>⚠️ <b>与 {@link #appendEvent} 同纪律</b>：步骤是 P7 指标与结果页的真实数据源，
+     * 但写入失败（DB 抖动 / 未注入端口 / fencing 拦截）<b>绝不冒泡到主流程</b>——
+     * 一次本可成功的 Run 不能因「步骤没记下」而变成失败。异常在此吞掉并记 WARN。
+     *
+     * <p>⚠️ 幂等：{@code stepPort.append} 按 {@code (tenant, run, step_number)} 冲突覆盖，
+     * 重放不重复造步骤。
+     */
+    private void appendStep(String tenantId, RunClaimPort.LeasedTask task,
+                            int stepNumber, String stepType,
+                            java.time.Instant startedAt, java.time.Instant completedAt) {
+        if (stepPort == null) {
+            return;
+        }
+        try {
+            stepPort.append(tenantId, task.runId(), task.fencingToken(),
+                    stepNumber, stepType, startedAt, completedAt);
+        } catch (RuntimeException e) {
+            log.warn("⚠️ 写入执行步骤失败（不影响本次执行结果）: runId={}, step={}, type={}, cause={}",
+                    task.runId(), stepNumber, stepType, e.toString());
+        }
+    }
+
+    /**
+     * 发射一条安全事件（P7-4 事实写入）。
+     *
+     * <p>⚠️ <b>与 {@link #appendStep} 同纪律</b>：端口未注入（{@code null}）直接跳过；
+     * 写入失败绝不冒泡到主流程——安全明细缺一条是可接受的观测损失，
+     * 让一次本可成功的 Run 失败不可接受。
+     */
+    private void emitRiskEvent(String tenantId, RunClaimPort.LeasedTask task,
+                               String eventType, String detailDigest) {
+        if (riskEventPort == null) {
+            return;
+        }
+        try {
+            riskEventPort.record(tenantId, task.runId(), eventType, detailDigest);
+        } catch (RuntimeException e) {
+            log.warn("⚠️ 写入安全事件失败（不影响本次执行结果）: runId={}, type={}, cause={}",
+                    task.runId(), eventType, e.toString());
+        }
+    }
+
+    /**
+     * 敏感信息输出命中检测（SEC-3 · 只观测不阻断）。
+     *
+     * <p>复用 {@code DataClassification.IdentifyingPattern} 既有合规正则
+     * （身份证 / 手机号 / 学号 / 邮箱）。摘要只含模式代号与命中数，
+     * <b>绝不把命中的原文片段写进任何观测通道</b>（合规红线）。
+     */
+    private void emitSensitiveOutputIfHit(String tenantId, RunClaimPort.LeasedTask task,
+                                          String content) {
+        if (content == null || content.isBlank() || riskEventPort == null) {
+            return;
+        }
+        for (DataClassification.IdentifyingPattern pattern
+                : DataClassification.IdentifyingPattern.values()) {
+            if (pattern.detect(content)) {
+                emitRiskEvent(tenantId, task, RiskEventPort.SENSITIVE_OUTPUT,
+                        "PATTERN:" + pattern.label());
+            }
+        }
+    }
+
+    /**
+     * 判定工具拒绝原因是否属于「越权 / 审批拒绝」（SEC-2）。
+     *
+     * <p>⚠️ 既有链路的拒绝原因是文本（非结构化码），此处按已知文案匹配；
+     * 误判的代价是 SEC-2 少计（fail-open 于观测），而不是把无效调用误报成
+     * 安全事件（fail-noisy 于告警）——两个方向的代价不对称，选前者。
+     */
+    private static boolean isAuthorizationDenial(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return false;
+        }
+        return reason.contains("无权") || reason.contains("权限")
+                || reason.startsWith("审批未");
+    }
+
     private ExecutionOutcome commitSuccess(String tenantId, RunClaimPort.LeasedTask task,
                                           String content) {
         boolean ok = claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
@@ -518,15 +660,16 @@ public class RunExecutionLoop {
     }
 
     private ExecutionOutcome commitFailure(String tenantId, RunClaimPort.LeasedTask task,
-                                           String reason) {
+                                           String reason, String errorCode) {
         boolean ok = claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
-                "FAILED", jsonPayload("reason", reason));
+                "FAILED", jsonPayload("reason", reason), errorCode);
         if (ok) {
             // ⚠️ 失败载荷**只放 state**，不放 reason 原文：
             //    reason 是内部错误细节（如「模型调用失败：TIMEOUT」），
             //    白名单里的 errorCode 要求是**码**而非原文。
-            //    ⚠️ 且当前 run.error_code 列**根本没被写入**
-            //    （commitResult 只写 state + result_payload）→ 记为已知缺口。
+            //    ⚠️ P7-2：error_code 现在随 commitResult 真实写入 run 表，
+            //    供指标做终止原因归因（SAFETY_BLOCK / MAX_ROUNDS / MODEL_ERROR …），
+            //    不再永远兜底成 OTHER。
             appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
                     java.util.Map.of("state", "FAILED"));
         }

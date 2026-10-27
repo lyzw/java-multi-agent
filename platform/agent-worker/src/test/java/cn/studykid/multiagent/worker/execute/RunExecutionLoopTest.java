@@ -30,6 +30,7 @@ import cn.studykid.multiagent.ports.persistence.ApprovalPort.ApprovalOutcome;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunEventPort;
+import cn.studykid.multiagent.ports.persistence.RunStepPort;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
 import cn.studykid.multiagent.ports.security.ApprovalPolicy;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
@@ -170,6 +171,76 @@ class RunExecutionLoopTest {
             types.add(eventType);
             payloads.add(payload);
         }
+    }
+
+    /**
+     * 记录型步骤端口（P7-2 事实写入）。
+     *
+     * <p>⚠️ 同 {@link RecordingEventPort} 的纪律：步骤写入若只「类里有个方法」会静默不写，
+     * 故必须让 {@code append} 真的被调用、且参数可被证伪（stepNumber / stepType）。
+     */
+    private static final class FakeRunStepPort implements RunStepPort {
+        final List<Integer> stepNumbers = new java.util.ArrayList<>();
+        final List<String> stepTypes = new java.util.ArrayList<>();
+        final List<Long> fencingTokens = new java.util.ArrayList<>();
+        boolean failOnAppend = false;
+        int appendCount;
+
+        @Override
+        public void append(String tenantId, String runId, long fencingToken,
+                          int stepNumber, String stepType,
+                          Instant startedAt, Instant completedAt) {
+            if (failOnAppend) {
+                throw new IllegalStateException("步骤写入失败（模拟）");
+            }
+            appendCount++;
+            fencingTokens.add(fencingToken);
+            stepNumbers.add(stepNumber);
+            stepTypes.add(stepType);
+        }
+    }
+
+    /**
+     * 记录型安全事件端口（P7-4 事实写入）。
+     *
+     * <p>⚠️ 同 {@link RecordingEventPort} 纪律：安全事件若只「类里有个方法」会静默不写，
+     * 必须让 {@code record} 真的被调用、且类型/摘要可被证伪。
+     */
+    private static final class FakeRiskEventPort
+            implements cn.studykid.multiagent.ports.persistence.RiskEventPort {
+        final List<String> eventTypes = new java.util.ArrayList<>();
+        final List<String> digests = new java.util.ArrayList<>();
+        boolean failOnRecord = false;
+        int recordCount;
+
+        @Override
+        public void record(String tenantId, String runId, String eventType, String detailDigest) {
+            if (failOnRecord) {
+                throw new IllegalStateException("安全事件写入失败（模拟）");
+            }
+            recordCount++;
+            eventTypes.add(eventType);
+            digests.add(detailDigest);
+        }
+    }
+
+    /** 带步骤写入的循环（P7-2）：默认带安全事件替身（多数用例不关心安全事件）。 */    private static RunExecutionLoop loopWithSteps(ModelGateway gw, RunClaimPort port,
+                                                 ToolInvocationGate gate,
+                                                 RunStepPort stepPort) {
+        return loopWithSteps(gw, port, gate, stepPort, new FakeRiskEventPort());
+    }
+
+    /** 带步骤 + 安全事件写入的循环（P7-2 / P7-4）。 */
+    private static RunExecutionLoop loopWithSteps(ModelGateway gw, RunClaimPort port,
+                                                 ToolInvocationGate gate,
+                                                 RunStepPort stepPort,
+                                                 FakeRiskEventPort riskPort) {
+        return new RunExecutionLoop(gw, port, gate, Duration.ofSeconds(30), "w-1",
+                new cn.studykid.multiagent.application.prompt.PromptGuard(),
+                null, null,
+                cn.studykid.multiagent.worker.execute.ContextBudgetTrimmer
+                        .DEFAULT_CONTEXT_TOKEN_BUDGET,
+                null, stepPort, riskPort);
     }
 
     /** 内存账本替身（P3-D03）。每个用例独立实例，互不污染。 */
@@ -362,6 +433,243 @@ class RunExecutionLoopTest {
     // ── 测试 ────────────────────────────────────────────────────────
 
     @Nested
+    @DisplayName("P7-2 执行步骤事实写入（run_step 真实埋点）")
+    class StepWriting {
+
+        @Test
+        @DisplayName("✅ 纯文本 Run → 恰好 1 条 THINK 步骤，step_number=1，携带 fencingToken")
+        void textOnlyRunWritesOneThinkStep() {
+            FakeClaimPort port = new FakeClaimPort();
+            FakeRunStepPort steps = new FakeRunStepPort();
+
+            var loop = loopWithSteps(modelReturning(textResponse("x=2 或 x=3")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    steps);
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+            assertThat(steps.appendCount)
+                    .as("⚠️ P7-2 退化近似缺口：纯文本 Run 也必须落一条 THINK 步骤")
+                    .isEqualTo(1);
+            assertThat(steps.stepTypes)
+                    .containsExactly(RunStepPort.Types.THINK);
+            assertThat(steps.stepNumbers)
+                    .containsExactly(1);
+            assertThat(steps.fencingTokens)
+                    .containsExactly(task().fencingToken());
+        }
+
+        @Test
+        @DisplayName("✅ 含一次工具调用 → THINK(1) + TOOL(2) 两步，序号连续")
+        void toolCallRunWritesThinkAndToolSteps() {
+            FakeClaimPort port = new FakeClaimPort();
+            FakeRunStepPort steps = new FakeRunStepPort();
+
+            // 第一轮：模型请求调用 record_weakness；第二轮：直接给最终答案（无工具）。
+            MODEL_CALLS.set(0);
+            ModelGateway gw = request -> {
+                MODEL_CALLS.incrementAndGet();
+                boolean first = MODEL_CALLS.get() == 1;
+                return first
+                        ? new ModelResponse("", Map.of("recording_tool",
+                                new ModelResponse.ToolCallRequest("recording_tool",
+                                        Map.of(), "c1")),
+                                new ModelResponse.ModelUsage(10, 5),
+                                ModelResponse.FinishReason.TOOL_CALLS)
+                        : textResponse("完成");
+            };
+
+            var loop = loopWithSteps(gw, port,
+                    new ToolInvocationGate(
+                            List.of(new RecordingTool()), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    steps);
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+            assertThat(steps.appendCount)
+                    .as("⚠️ 首轮思考 + 工具 + 末轮思考 = THINK + TOOL + THINK 三条步骤")
+                    .isEqualTo(3);
+            assertThat(steps.stepTypes)
+                    .containsExactly(RunStepPort.Types.THINK, RunStepPort.Types.TOOL,
+                            RunStepPort.Types.THINK);
+            assertThat(steps.stepNumbers)
+                    .containsExactly(1, 2, 3);
+        }
+
+        @Test
+        @DisplayName("⚠️ 步骤写入失败绝不冒泡：端口抛异常时 Run 仍 SUCCEEDED")
+        void stepWriteFailureDoesNotFailRun() {
+            FakeClaimPort port = new FakeClaimPort();
+            FakeRunStepPort steps = new FakeRunStepPort();
+            steps.failOnAppend = true;
+
+            var loop = loopWithSteps(modelReturning(textResponse("ok")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    steps);
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .as("⚠️ 步骤没记下不能让本可成功的 Run 变失败")
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+            assertThat(port.committedState)
+                    .isEqualTo("SUCCEEDED");
+        }
+    }
+
+    @Nested
+    @DisplayName("P7-4 安全事件事实写入（agent_risk_event 真实埋点）")
+    class RiskEvents {
+
+        @Test
+        @DisplayName("✅ 编造出处拦截 → 落一条 SAFETY_BLOCK，Run 仍 FAILED")
+        void fabricatedSourceEmitsSafetyBlock() {
+            FakeClaimPort port = new FakeClaimPort();
+            FakeRiskEventPort risks = new FakeRiskEventPort();
+
+            var loop = loopWithSteps(modelReturning(
+                    textResponse("根据人教版教材第三章，答案如下")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeRunStepPort(), risks);
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(risks.eventTypes)
+                    .as("⚠️ SEC-1 明细事实：安全拦截必须落 agent_risk_event（SAFETY_BLOCK）")
+                    .containsExactly(RiskEventPortTypes.SAFETY_BLOCK);
+            assertThat(risks.digests.get(0))
+                    .as("⚠️ 摘要含拦截规则，但绝不含输出原文")
+                    .startsWith("FABRICATED_SOURCE:")
+                    .doesNotContain("人教版");
+        }
+
+        @Test
+        @DisplayName("✅ 越权调用（授权拒绝）→ 落 UNAUTHORIZED_CALL；未登记工具（BEH-3）不误报")
+        void unauthorizedCallVsInvalidCall() {
+            // 越权：工具已登记但授权拒绝（denyAll）→ 「无权调用该工具」→ SEC-2
+            FakeClaimPort port = new FakeClaimPort();
+            FakeRiskEventPort risks = new FakeRiskEventPort();
+            ModelGateway gw = modelReturning(toolCallResponse("recording_tool"));
+
+            var loop = loopWithSteps(gw, port,
+                    new ToolInvocationGate(List.of(new RecordingTool()), denyAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeRunStepPort(), risks);
+            loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(risks.eventTypes)
+                    .as("⚠️ SEC-2 明细事实：授权拒绝必须落 UNAUTHORIZED_CALL")
+                    .containsExactly(RiskEventPortTypes.UNAUTHORIZED_CALL);
+            assertThat(risks.digests.get(0))
+                    .startsWith("TOOL:recording_tool:")
+                    .contains("无权");
+
+            // 无效调用：工具未登记（allowAll 也无济于事）→ 「未登记的工具」→ BEH-3，不是 SEC-2
+            FakeRiskEventPort invalidRisks = new FakeRiskEventPort();
+            var loop2 = loopWithSteps(
+                    modelReturning(toolCallResponse("unknown_tool")), new FakeClaimPort(),
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeRunStepPort(), invalidRisks);
+            var outcome2 = loop2.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome2.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(invalidRisks.recordCount)
+                    .as("⚠️ Schema/未登记拒绝属 BEH-3 无效调用，算进 SEC-2 会淹没安全告警")
+                    .isZero();
+        }
+
+        @Test
+        @DisplayName("✅ 输出命中隐私模式 → 落 SENSITIVE_OUTPUT；摘要只含模式代号不含原文")
+        void sensitiveOutputEmitsRiskEvent() {
+            FakeClaimPort port = new FakeClaimPort();
+            FakeRiskEventPort risks = new FakeRiskEventPort();
+
+            var loop = loopWithSteps(modelReturning(
+                    textResponse("如需帮助请联系 teacher@example.com")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeRunStepPort(), risks);
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .as("⚠️ SEC-3 只观测不阻断：命中不影响本次执行结果")
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+            assertThat(risks.eventTypes)
+                    .containsExactly(RiskEventPortTypes.SENSITIVE_OUTPUT);
+            assertThat(risks.digests.get(0))
+                    .as("⚠️ 合规红线：摘要绝不落命中原文")
+                    .isEqualTo("PATTERN:邮箱");
+        }
+
+        @Test
+        @DisplayName("⚠️ 安全事件写入失败绝不冒泡：Run 仍 SUCCEEDED")
+        void riskWriteFailureDoesNotFailRun() {
+            FakeClaimPort port = new FakeClaimPort();
+            FakeRiskEventPort risks = new FakeRiskEventPort();
+            risks.failOnRecord = true;
+
+            var loop = loopWithSteps(modelReturning(
+                    textResponse("请联系 teacher@example.com")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeRunStepPort(), risks);
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+            assertThat(port.committedState).isEqualTo("SUCCEEDED");
+        }
+    }
+
+    /** 模型返回「调用指定工具」的响应。 */
+    private static ModelResponse toolCallResponse(String toolName) {
+        return new ModelResponse("", Map.of(toolName,
+                new ModelResponse.ToolCallRequest(toolName, Map.of(), "c1")),
+                new ModelResponse.ModelUsage(10, 5),
+                ModelResponse.FinishReason.TOOL_CALLS);
+    }
+
+    /** {@link cn.studykid.multiagent.ports.persistence.RiskEventPort} 常量的短别名。 */
+    private static final class RiskEventPortTypes {
+        static final String SAFETY_BLOCK =
+                cn.studykid.multiagent.ports.persistence.RiskEventPort.SAFETY_BLOCK;
+        static final String UNAUTHORIZED_CALL =
+                cn.studykid.multiagent.ports.persistence.RiskEventPort.UNAUTHORIZED_CALL;
+        static final String SENSITIVE_OUTPUT =
+                cn.studykid.multiagent.ports.persistence.RiskEventPort.SENSITIVE_OUTPUT;
+    }
+
+    @Nested
     @DisplayName("执行前检查（§2.1）")
     class PreExecutionCheck {
 
@@ -496,7 +804,7 @@ class RunExecutionLoopTest {
                                                               .TenantLifecycleProbe probe) {
             return new RunExecutionLoop(gw, port, gate, Duration.ofSeconds(30), "w-1",
                     new cn.studykid.multiagent.application.prompt.PromptGuard(), null, null,
-                    ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, probe);
+                    ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, probe, null, null);
         }
 
         @Test
@@ -1457,7 +1765,7 @@ class RunExecutionLoopTest {
                             budget(), ledger()),
                     Duration.ofSeconds(30), "w-1",
                     new cn.studykid.multiagent.application.prompt.PromptGuard(),
-                    null, null, 300, null);
+                    null, null, 300, null, null, null);
         }
 
         @Test

@@ -261,6 +261,34 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 执行步骤写入端口（P7-2 事实写入方）。
+     *
+     * <p>⚠️ 沿用 P4-D07 装配惯例：显式 {@code @Bean} 注册（repository 不挂 {@code @Repository}，
+     * 组件扫描选不到），否则 {@link RunStepPort} 在生产环境恒为 {@code null}，
+     * {@code RunExecutionLoop.appendStep} 静默跳过，P7-2 真实埋点缺口不闭合。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.RunStepPort runStepPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcRunStepRepository(
+                dataSource);
+    }
+
+    /**
+     * 安全事件写入端口（P7-4 · SEC-2/SEC-3 明细事实）。
+     *
+     * <p>⚠️ 沿用 P4-D07 装配惯例：显式 {@code @Bean} 注册，与 {@link #runStepPort} 同理——
+     * 不注册则 Worker 执行循环里的发射点静默跳过，{@code agent_risk_event}
+     * 永远没有行，SEC-2/SEC-3 看板永远显示「未采集」而<b>没有任何报错</b>。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.RiskEventPort riskEventPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcRiskEventRepository(
+                dataSource);
+    }
+
+    /**
      * SSE 长连接推送器（P3-D10 / FR-014 部分）。
      *
      * <p>⚠️ 轮询 500ms / 最大存活 30 分钟：最大存活是<b>防连接泄漏的兜底</b>——

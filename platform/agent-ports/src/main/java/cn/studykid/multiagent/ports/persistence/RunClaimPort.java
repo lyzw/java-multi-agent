@@ -108,6 +108,26 @@ public interface RunClaimPort {
                                 long fencingToken);
 
     /**
+     * 以指定世代提交结果，并附带<b>结构化错误码</b>（P7-2）。
+     *
+     * <p><b>为什么需要错误码</b>：P7 终止原因归一化（{@code SAFETY_BLOCK /
+     * TOKEN_BUDGET / MAX_ROUNDS / MODEL_ERROR …}）依赖它做归因，
+     * 否则所有 FAILED 都兜底成 {@code OTHER}，BEH-2（最大轮次触达率）与
+     * SEC-1（安全拦截占比）永远为空。
+     *
+     * <p><b>默认实现</b>忽略 {@code errorCode} 并委托五参版本——
+     * 旧调用方与测试桩无需改动；实现层（{@code JdbcRunClaimRepository}）覆盖它以真正写入。
+     *
+     * @param errorCode 结构化错误码（如 {@code MAX_STEPS} / {@code SAFETY_FABRICATED_SOURCE}）；
+     *                 成功提交或不需要时为 {@code null}
+     */
+    default boolean commitResult(@NonNull String tenantId, @NonNull String runId,
+                                 long expectedFencingToken, @NonNull String state,
+                                 @NonNull String resultPayload, @Nullable String errorCode) {
+        return commitResult(tenantId, runId, expectedFencingToken, state, resultPayload);
+    }
+
+    /**
      * 协作式取消（P3-D06 / FR-011）。
      *
      * <p><b>原子</b>将 {@code RUNNING/QUEUED → CANCELLED} 并置 {@code cancel_requested_at}。

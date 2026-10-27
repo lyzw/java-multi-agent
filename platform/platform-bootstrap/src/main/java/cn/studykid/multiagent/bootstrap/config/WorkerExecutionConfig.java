@@ -335,16 +335,26 @@ public class WorkerExecutionConfig {
             PromptGuard promptGuard,
             cn.studykid.multiagent.ports.persistence.RunEventPort eventPort,
             cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter adopter,
-            cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe lifecycleProbe) {
+            cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe lifecycleProbe,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.ports.persistence.RunStepPort runStepPort,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.ports.persistence.RiskEventPort riskEventPort) {
         // ⚠️⚠️ **接管器必须在这里真实注入**（第九批 · MA-T12）：
         //    不注入时，Worker 接管后 RUNNING 的委派记录**永远无人能收敛**
         //    （新世代 token 不匹配、旧世代已被接管），
         //    真实原因（Worker 崩溃）会被掩盖成一次普通的子调用失败。
         // ⚠️⚠️ **租户生命周期探针必须在这里真实注入**（重规划 §14 / 验收矩阵 #4）：
         //    不注入时，平台暂停/退役租户后 Worker 仍会执行其任务（越权执行，Sev-1）。
+        // ⚠️ **执行步骤写入端口（P7-2）**：可选注入（required=false）——
+        //    缺失时循环不写 run_step（向后兼容旧环境），但指标步数类会显示「未采集」。
+        //    生产环境必须装配（infrastructure 的 JdbcRunStepRepository），否则 P7-2 退化近似缺口不闭合。
+        // ⚠️ **安全事件写入端口（P7-4）**：可选注入（required=false）——
+        //    缺失时不落 agent_risk_event（SEC-2/SEC-3 明细显示「未采集」）。
+        //    生产环境必须装配（infrastructure 的 JdbcRiskEventRepository）。
         return new RunExecutionLoop(modelGateway, claimPort, gate,
                 Duration.ofSeconds(leaseSeconds), workerId, promptGuard, eventPort, adopter,
-                contextTokenBudget, lifecycleProbe);
+                contextTokenBudget, lifecycleProbe, runStepPort, riskEventPort);
     }
 
     /**
