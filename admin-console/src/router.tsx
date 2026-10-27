@@ -12,6 +12,12 @@ import { AgentRegistryPage } from '@/pages/console/AgentRegistryPage'
 import { ToolCatalogPage } from '@/pages/console/ToolCatalogPage'
 import { SkillCatalogPage } from '@/pages/console/SkillCatalogPage'
 import { McpCatalogPage } from '@/pages/console/McpCatalogPage'
+import { RagManagementPage } from '@/pages/rag/RagManagementPage'
+import { DictionaryAdminPage } from '@/pages/dictionaries/DictionaryAdminPage'
+import { AgentLabPage } from '@/pages/agentlab/AgentLabPage'
+import { AgentMetricsPage } from '@/pages/metrics/AgentMetricsPage'
+import { MetricEntryPage } from '@/pages/metrics/MetricEntryPage'
+import { NotFoundPage } from '@/pages/NotFoundPage'
 import { APP_BASE_PATH, ROLES, PLATFORM_SCOPE_ROLES, type Role } from '@/config/constants'
 
 /**
@@ -122,6 +128,56 @@ export const router = createBrowserRouter(
               <AuditLogsPage />
             </RequireRole>
           ),
+        },
+        {
+          // RAG 语料治理（独立服务 /api/v1，须带 X-Tenant-Id，页内显式选租户）
+          path: 'rag',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagManagementPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 字典配置（枚举下拉的数据源；内置项禁止物理删除）
+          path: 'dictionaries',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <DictionaryAdminPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 观测度量 · Agent 效果指标（六大类；未采集显示「未采集」而非 0）
+          path: 'metrics',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <AgentMetricsPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 观测度量 · 效果数据录入（L1/L2 回填 + 风险事件 + 用户反馈；平台资源写权限）
+          path: 'metrics-entry',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <MetricEntryPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // AI 实验室 · Agent 效果测试（发起执行 + 观察事件流与消耗）
+          path: 'agent-lab',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <AgentLabPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 404 兜底（评审 §1.2 P0）：未知路径不再白屏，给真实去向
+          path: '*',
+          element: <NotFoundPage />,
         },
       ],
     },
