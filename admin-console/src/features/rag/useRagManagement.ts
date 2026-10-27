@@ -144,6 +144,8 @@ export interface UseRagManagementResult {
   resetAction: () => void
   /** 清空批量导入结果 */
   resetBulk: () => void
+  /** 清空全部租户作用域状态（切换租户时调用） */
+  resetAll: () => void
 }
 
 /** 批量导入状态。 */
@@ -303,6 +305,14 @@ export function useRagManagement(): UseRagManagementResult {
     setBulk(IDLE_BULK)
   }, [])
 
+  const resetAll = useCallback(() => {
+    setSources(IDLE_LIST)
+    setStats(IDLE_STATS)
+    setAction(IDLE_ACTION)
+    setBulk(IDLE_BULK)
+    lastQuery.current = {}
+  }, [])
+
   return {
     sources,
     stats,
@@ -317,6 +327,7 @@ export function useRagManagement(): UseRagManagementResult {
     retryStats,
     resetAction,
     resetBulk,
+    resetAll,
   }
 }
 

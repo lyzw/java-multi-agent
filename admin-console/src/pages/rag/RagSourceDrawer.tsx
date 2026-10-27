@@ -36,7 +36,7 @@ import type {
   RagSource,
   RagVerificationRequest,
 } from '@/api/ragTypes'
-import { RAG_CHUNK_ROLE_LABELS, RAG_PARSE_STATUS_LABELS } from '@/api/ragTypes'
+import { RAG_CHUNK_ROLE_LABELS, RAG_PARSE_STATUS_LABELS, RAG_VERIFICATION_LABELS } from '@/api/ragTypes'
 import { allowedVerificationTargets } from '@/features/rag/useRagManagement'
 import { currentPrincipalId, TrustTierTag, VerificationTag } from './ragUi'
 import { RagVerificationForm } from './RagVerificationForm'
@@ -72,6 +72,9 @@ export function RagSourceDrawer({
   const [chunksLoading, setChunksLoading] = useState(false)
   const [activeDoc, setActiveDoc] = useState<RagDocument | null>(null)
   const [docError, setDocError] = useState<string | null>(null)
+  /** 载体级校验的提交态与成功提示（与来源级 `action*` 分开，避免两套流转互相盖掉）。 */
+  const [docSubmitting, setDocSubmitting] = useState(false)
+  const [docNotice, setDocNotice] = useState<string | null>(null)
 
   const sourceId = source?.sourceId ?? null
 
@@ -117,11 +120,18 @@ export function RagSourceDrawer({
 
   const verifyDoc = async (doc: RagDocument, payload: RagVerificationRequest): Promise<void> => {
     setDocError(null)
+    setDocNotice(null)
+    setDocSubmitting(true)
     try {
       await applyRagDocumentVerification(tenantId, doc.documentId, payload)
       // 就地刷新载体列表
       const list = await listRagDocuments(tenantId, doc.sourceId)
       setDocs(list.length === 0 ? { kind: 'empty' } : { kind: 'ok', docs: list })
+      // ⚠️ 成功也要出声：原先只清空错误，界面看不出「点过了没有」，
+      //    审核员会重复提交同一个流转（第二次多半吃一个 409）。
+      setDocNotice(
+        `载体「${doc.title}」已流转到「${RAG_VERIFICATION_LABELS[payload.targetStatus] ?? payload.targetStatus}」。`,
+      )
     } catch (cause) {
       setDocError(
         cause instanceof ApiError && cause.status === 409
@@ -130,6 +140,8 @@ export function RagSourceDrawer({
             ? cause.message
             : '载体校验失败',
       )
+    } finally {
+      setDocSubmitting(false)
     }
   }
 
@@ -315,6 +327,7 @@ export function RagSourceDrawer({
                   )}
 
                   {docError && <Alert type="error" showIcon message={docError} />}
+                  {docNotice && <Alert type="success" showIcon message={docNotice} />}
 
                   {chunksLoading && <Spin />}
                   {chunks && (
@@ -336,7 +349,7 @@ export function RagSourceDrawer({
                         </Typography.Title>
                         <RagVerificationForm
                           currentStatus={activeDoc.verificationStatus}
-                          submitting={false}
+                          submitting={docSubmitting}
                           onSubmitted={(payload) => void verifyDoc(activeDoc, payload)}
                         />
                       </>

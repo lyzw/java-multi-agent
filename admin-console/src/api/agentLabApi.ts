@@ -84,7 +84,8 @@ export const RUN_STATE_COLORS: Record<RunState, string> = {
 
 /** POST /api/runs —— 发起一次执行。 */
 export function createRun(payload: CreateRunRequest): Promise<CreateRunResponse> {
-  return request<CreateRunResponse>('/api/runs', {
+  // ⚠️ 路径不含 `/api`：`request()` 已统一拼 API_BASE，自带前缀会拼成 `/api/api/runs`。
+  return request<CreateRunResponse>('/runs', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -92,7 +93,7 @@ export function createRun(payload: CreateRunRequest): Promise<CreateRunResponse>
 
 /** GET /api/runs/{runId} —— 查询状态（不含执行输出正文）。 */
 export function getRunStatus(runId: string): Promise<RunStatus> {
-  return request<RunStatus>(`/api/runs/${encodeURIComponent(runId)}`)
+  return request<RunStatus>(`/runs/${encodeURIComponent(runId)}`)
 }
 
 /**

@@ -51,7 +51,10 @@ export interface UpsertItemRequest {
   enabled?: boolean | null
 }
 
-const BASE = '/api/platform/v1/dictionaries'
+// ⚠️ 路径**不含** `/api` 前缀：`request()` 会统一拼 API_BASE（见 api/client.ts）。
+//    自带前缀会拼成 `/api/api/...` → 后端返回 401 → 401 兜底清空会话并跳登录，
+//    表现为「点菜单就被登出」。测试 mock 的是本模块函数，测不出这层拼接。
+const BASE = '/platform/v1/dictionaries'
 
 /** GET /api/platform/v1/dictionaries —— 全部字典及其取值。 */
 export function getDictionaries(enabledOnly = false): Promise<DictionaryView[]> {

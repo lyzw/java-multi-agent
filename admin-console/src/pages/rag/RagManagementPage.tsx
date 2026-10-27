@@ -42,6 +42,13 @@ export function RagManagementPage(): JSX.Element {
   const [tenantId, setTenantId] = useState<string>('')
   const [selected, setSelected] = useState<RagSource | null>(null)
   const [registerOpen, setRegisterOpen] = useState(false)
+  /**
+   * 维护面板的 remount key。
+   *
+   * ⚠️ 面板内部状态（问题清单 / 重跑结果 / 探针命中）是**租户作用域**的，
+   *    组件自己不知道租户换了；靠换 key 重挂，才不会把 A 租户的结论当成 B 租户的。
+   */
+  const [maintenanceKey, setMaintenanceKey] = useState(0)
 
   const [searches, setSearches] = useState<RagDailySearchCount[]>([])
   const [imports, setImports] = useState<RagDailyImportCount[]>([])
@@ -57,6 +64,7 @@ export function RagManagementPage(): JSX.Element {
     retrySources,
     retryStats,
     resetAction,
+    resetAll,
   } = useRagManagement()
 
   useEffect(() => {
@@ -76,6 +84,21 @@ export function RagManagementPage(): JSX.Element {
       cancelled = true
     }
   }, [])
+
+  /**
+   * 切租户即清空上一个租户的数据。
+   *
+   * ⚠️ 不这么做，右侧详情抽屉、校验动作提示、维护面板结果会**留在页面上**，
+   *    看起来像是新租户的数据——治理结论张冠李戴，比空列表危险得多。
+   *    首渲染的 tenantId 为空串，清空是 no-op，故无需跳过。
+   */
+  useEffect(() => {
+    setSelected(null)
+    setMaintenanceKey((k) => k + 1)
+    resetAll()
+    setSearches([])
+    setImports([])
+  }, [tenantId, resetAll])
 
   /** 选择租户即触发首次加载（列表 + 统计 + 每日报表）。 */
   useEffect(() => {
@@ -159,8 +182,8 @@ export function RagManagementPage(): JSX.Element {
         </Space>
         {tenantId.trim() === '' && (
           <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-            未选择租户时不会发起任何 RAG 请求——缺租户头后端会返回 400，
-            这是本地配置问题，不该被伪装成后端故障。
+            未选择租户时不会发起任何 RAG 请求，下方相关入口已一并置灰——
+            缺租户头后端会返回 400，这是本地配置问题，不该被伪装成后端故障。
           </Paragraph>
         )}
       </Card>
@@ -175,6 +198,7 @@ export function RagManagementPage(): JSX.Element {
               <>
                 <RagSourceTable
                   state={sources}
+                  tenantId={tenantId}
                   onQuery={onQuery}
                   onRefresh={retrySources}
                   onSelect={setSelected}
@@ -226,7 +250,7 @@ export function RagManagementPage(): JSX.Element {
           {
             key: 'maintenance',
             label: '维护',
-            children: <RagMaintenancePanel tenantId={tenantId} />,
+            children: <RagMaintenancePanel key={maintenanceKey} tenantId={tenantId} />,
           },
         ]}
       />

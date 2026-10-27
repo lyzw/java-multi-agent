@@ -96,7 +96,8 @@ export function AgentLabPage(): JSX.Element {
     'none',
   )
   const [errorText, setErrorText] = useState<string | null>(null)
-  const [trace, setTrace] = useState<{ at: string; state: RunState }[]>([])
+  /** 状态轨迹：同值合并（`count` = 该状态被采到的次数），避免 2s 一条刷屏。 */
+  const [trace, setTrace] = useState<{ at: string; state: RunState; count: number }[]>([])
 
   const pollTimer = useRef<number | null>(null)
 
@@ -184,6 +185,8 @@ export function AgentLabPage(): JSX.Element {
     (runId: string, agent: string, agentName: string, prompt: string) => {
       stopPolling()
       let n = 0
+      /** 连续失败计数：只在「一直读不到」时说明，单次抖动不打扰。 */
+      let fails = 0
       pollTimer.current = window.setInterval(() => {
         n += 1
         if (n > MAX_POLLS) {
@@ -195,7 +198,17 @@ export function AgentLabPage(): JSX.Element {
         void (async () => {
           try {
             const status = await getRunStatus(runId)
-            setTrace((prev) => [...prev, { at: new Date().toLocaleTimeString(), state: status.state }])
+            fails = 0
+            // ⚠️ 同值合并：轮询每 2s 一次，状态没变就不该多出一条——
+            //    原先每次都 push，「等了 60s 还在 RUNNING」会被摊成 30 行噪音，
+            //    真正需要的信息（在这个状态待了多久）反而看不见。
+            setTrace((prev) => {
+              const last = prev[prev.length - 1]
+              if (last !== undefined && last.state === status.state) {
+                return [...prev.slice(0, -1), { ...last, count: last.count + 1 }]
+              }
+              return [...prev, { at: new Date().toLocaleTimeString(), state: status.state, count: 1 }]
+            })
             const record = toRecord(status, agent, agentName, prompt)
             setCurrent(record)
             if (isTerminal(status.state)) {
@@ -208,6 +221,19 @@ export function AgentLabPage(): JSX.Element {
               stopPolling()
               setErrorKind('channel')
               setErrorText('查询状态时被拒绝（401/403）：平台令牌对租户域端点不可达。')
+              return
+            }
+            // ⚠️ 其它错误原先被完全吞掉：界面停在「执行中」，看不出是
+            //    还在跑还是根本没在跑。连续 3 次读不到就如实说明并停止轮询。
+            fails += 1
+            if (fails >= 3) {
+              stopPolling()
+              setErrorKind('other')
+              setErrorText(
+                `连续 ${fails} 次读取状态失败：` +
+                  (cause instanceof ApiError ? cause.message : '网络未能返回结果') +
+                  '。轮询已停止，请在运行列表确认最终状态。',
+              )
             }
           }
         })()
@@ -244,7 +270,7 @@ export function AgentLabPage(): JSX.Element {
         elapsedMs: null,
       }
       setCurrent(record)
-      setTrace([{ at: new Date().toLocaleTimeString(), state: 'QUEUED' }])
+      setTrace([{ at: new Date().toLocaleTimeString(), state: 'QUEUED', count: 1 }])
       poll(res.runId, agentId, record.agentName, input)
     } catch (cause) {
       if (isTenantChannelBlocked(cause)) {
@@ -475,6 +501,11 @@ export function AgentLabPage(): JSX.Element {
                   <Space>
                     <Text type="secondary">{t.at}</Text>
                     <Tag color={RUN_STATE_COLORS[t.state]}>{RUN_STATE_LABELS[t.state] ?? t.state}</Tag>
+                    {t.count > 1 && (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        在此状态停留约 {(t.count * POLL_INTERVAL_MS) / 1000}s
+                      </Text>
+                    )}
                   </Space>
                 ),
               }))}

@@ -13,3 +13,14 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }
+
+/* 表格「当前选中行」：左列列表点谁，右列详情就是谁——没有这层高亮，
+   两侧就对不上号。色值取主题主色 #2f6df6（见 App.tsx）的浅底，
+   后一条是为了压过 antd 自带的 hover 背景，否则鼠标一扫就看不出选中。 */
+.row-selected > td {
+  background-color: rgba(47, 109, 246, 0.1) !important;
+}
+
+.row-selected:hover > td {
+  background-color: rgba(47, 109, 246, 0.16) !important;
+}

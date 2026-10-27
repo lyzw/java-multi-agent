@@ -28,6 +28,7 @@ import {
   Statistic,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -139,6 +140,10 @@ export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX
     primaryEdition: string
   } | null>(null)
 
+  /** 未选租户时禁用所有会发请求的入口（缺 X-Tenant-Id 后端直接 400）。 */
+  const tenantReady = tenantId.trim() !== ''
+  const needTenantTip = '请先在上方选择租户'
+
   const loadIssues = async (): Promise<void> => {
     setIssues({ kind: 'loading' })
     try {
@@ -194,9 +199,15 @@ export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX
       <Card
         title="问题清单"
         extra={
-          <Button onClick={() => void loadIssues()} loading={issues.kind === 'loading'}>
-            加载问题清单
-          </Button>
+          <Tooltip title={tenantReady ? '' : needTenantTip}>
+            <Button
+              onClick={() => void loadIssues()}
+              loading={issues.kind === 'loading'}
+              disabled={!tenantReady}
+            >
+              加载问题清单
+            </Button>
+          </Tooltip>
         }
       >
         {issues.kind === 'idle' && <Empty description="点击右上角加载，定位「哪里坏了」" />}
@@ -276,9 +287,16 @@ export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX
         <Space>
           <Text>单次上限</Text>
           <InputNumber min={1} max={2000} value={indexLimit} onChange={(v) => setIndexLimit(v ?? 500)} />
-          <Button type="primary" loading={reindexing} onClick={() => void runReindex()}>
-            重跑索引
-          </Button>
+          <Tooltip title={tenantReady ? '' : needTenantTip}>
+            <Button
+              type="primary"
+              loading={reindexing}
+              disabled={!tenantReady}
+              onClick={() => void runReindex()}
+            >
+              重跑索引
+            </Button>
+          </Tooltip>
         </Space>
         {reindexError && (
           <Alert style={{ marginTop: 12 }} type="error" showIcon message={reindexError} />
@@ -363,9 +381,11 @@ export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX
             placeholder="检索问题，如：一元一次方程移项要注意什么"
           />
         </Space>
-        <Button type="primary" loading={probing} onClick={() => void runProbe()}>
-          执行检索
-        </Button>
+        <Tooltip title={tenantReady ? '' : needTenantTip}>
+          <Button type="primary" loading={probing} disabled={!tenantReady} onClick={() => void runProbe()}>
+            执行检索
+          </Button>
+        </Tooltip>
 
         {probeError && (
           <Alert style={{ marginTop: 12 }} type="error" showIcon message={probeError} />

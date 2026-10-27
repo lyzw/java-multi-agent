@@ -3,6 +3,11 @@
  *
  * 单一数据源：`/api/v1/management/**`（rag-management 模块，独立服务，默认 8081）。
  *
+ * ⚠️ **路径写法**：本模块的 path 一律写成 `/v1/...`（**不带** `/api`）——
+ *    `request()` 会统一拼 API_BASE=`/api`，自带 `/api` 会拼成 `/api/api/v1/...`，
+ *    被 vite 的 `/api` 规则代理到平台后端 8080 并返回 401 → 会话被清、跳登录页。
+ *    带 `/api` 的完整路径只出现在下面的文档注释与后端契约里。
+ *
  * ⚠️ **必须携带 `X-Tenant-Id`**：管理 SQL 一律以
  *    `tenant_id = rag_current_tenant()` 收口。跨进程 HTTP 调用时，主平台的事务上下文
  *    不会随之而来，后端须显式重建租户上下文；缺失该头后端返回 **400**
@@ -118,7 +123,7 @@ export function getRagStatistics(
   tenantId: string,
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagStatistics> {
-  return ragRequest<RagStatistics>('/api/v1/management/statistics', { method: 'GET' }, tenantId, timeoutMs)
+  return ragRequest<RagStatistics>('/v1/management/statistics', { method: 'GET' }, tenantId, timeoutMs)
 }
 
 /** GET /api/v1/management/sources —— 列出来源。 */
@@ -128,7 +133,7 @@ export function listRagSources(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagSource[]> {
   return ragRequest<RagSource[]>(
-    `/api/v1/management/sources${toQuery({
+    `/v1/management/sources${toQuery({
       status: query.status,
       trustTier: query.trustTier,
       keyword: query.keyword,
@@ -149,7 +154,7 @@ export function getRagSource(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagSource> {
   return ragRequest<RagSource>(
-    `/api/v1/management/sources/${encodeURIComponent(sourceId)}`,
+    `/v1/management/sources/${encodeURIComponent(sourceId)}`,
     { method: 'GET' },
     tenantId,
     timeoutMs,
@@ -163,7 +168,7 @@ export function registerRagSource(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagSource> {
   return ragRequest<RagSource>(
-    '/api/v1/management/sources',
+    '/v1/management/sources',
     { method: 'POST', body: JSON.stringify(payload) },
     tenantId,
     timeoutMs,
@@ -178,7 +183,7 @@ export function bulkRegisterRagSources(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagBulkImportResponse> {
   return ragRequest<RagBulkImportResponse>(
-    '/api/v1/management/sources/batch',
+    '/v1/management/sources/batch',
     { method: 'POST', body: JSON.stringify({ registeredBy, sources: items }) },
     tenantId,
     timeoutMs,
@@ -193,7 +198,7 @@ export function applyRagVerification(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagSource> {
   return ragRequest<RagSource>(
-    `/api/v1/management/sources/${encodeURIComponent(sourceId)}/verification`,
+    `/v1/management/sources/${encodeURIComponent(sourceId)}/verification`,
     { method: 'POST', body: JSON.stringify(payload) },
     tenantId,
     timeoutMs,
@@ -207,7 +212,7 @@ export function listRagDocuments(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagDocument[]> {
   return ragRequest<RagDocument[]>(
-    `/api/v1/management/sources/${encodeURIComponent(sourceId)}/documents`,
+    `/v1/management/sources/${encodeURIComponent(sourceId)}/documents`,
     { method: 'GET' },
     tenantId,
     timeoutMs,
@@ -222,7 +227,7 @@ export function listRagChunks(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagChunk[]> {
   return ragRequest<RagChunk[]>(
-    `/api/v1/management/documents/${encodeURIComponent(documentId)}/chunks${toQuery({ limit })}`,
+    `/v1/management/documents/${encodeURIComponent(documentId)}/chunks${toQuery({ limit })}`,
     { method: 'GET' },
     tenantId,
     timeoutMs,
@@ -237,7 +242,7 @@ export function applyRagDocumentVerification(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagDocument> {
   return ragRequest<RagDocument>(
-    `/api/v1/management/documents/${encodeURIComponent(documentId)}/verification`,
+    `/v1/management/documents/${encodeURIComponent(documentId)}/verification`,
     { method: 'POST', body: JSON.stringify(payload) },
     tenantId,
     timeoutMs,
@@ -250,7 +255,7 @@ export function getRagIssues(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagMaintenanceIssues> {
   return ragRequest<RagMaintenanceIssues>(
-    '/api/v1/management/issues',
+    '/v1/management/issues',
     { method: 'GET' },
     tenantId,
     timeoutMs,
@@ -264,7 +269,7 @@ export function reindexRagCorpus(
   timeoutMs: number = DEFAULT_RAG_REINDEX_TIMEOUT_MS,
 ): Promise<RagReindexResult> {
   return ragRequest<RagReindexResult>(
-    '/api/v1/management/reindex',
+    '/v1/management/reindex',
     { method: 'POST', body: JSON.stringify({ limit }) },
     tenantId,
     timeoutMs,
@@ -278,7 +283,7 @@ export function getRagDailySearches(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagDailySearchStatistics> {
   return ragRequest<RagDailySearchStatistics>(
-    `/api/v1/management/statistics/daily-searches${toQuery({ days })}`,
+    `/v1/management/statistics/daily-searches${toQuery({ days })}`,
     { method: 'GET' },
     tenantId,
     timeoutMs,
@@ -292,7 +297,7 @@ export function getRagDailyImports(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagDailyImportStatistics> {
   return ragRequest<RagDailyImportStatistics>(
-    `/api/v1/management/statistics/daily-imports${toQuery({ days })}`,
+    `/v1/management/statistics/daily-imports${toQuery({ days })}`,
     { method: 'GET' },
     tenantId,
     timeoutMs,
@@ -307,7 +312,7 @@ export function getRagDictionaries(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagDictionaryTypeView[]> {
   return ragRequest<RagDictionaryTypeView[]>(
-    '/api/v1/management/dictionaries',
+    '/v1/management/dictionaries',
     { method: 'GET' },
     tenantId,
     timeoutMs,
@@ -322,7 +327,7 @@ export function upsertRagDictionaryEntry(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagDictionaryEntry> {
   return ragRequest<RagDictionaryEntry>(
-    `/api/v1/management/dictionaries/${encodeURIComponent(type)}/entries`,
+    `/v1/management/dictionaries/${encodeURIComponent(type)}/entries`,
     { method: 'POST', body: JSON.stringify(payload) },
     tenantId,
     timeoutMs,
@@ -337,7 +342,7 @@ export function deleteRagDictionaryEntry(
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<void> {
   return ragRequest<void>(
-    `/api/v1/management/dictionaries/${encodeURIComponent(type)}/entries/${encodeURIComponent(code)}`,
+    `/v1/management/dictionaries/${encodeURIComponent(type)}/entries/${encodeURIComponent(code)}`,
     { method: 'DELETE' },
     tenantId,
     timeoutMs,
@@ -353,7 +358,7 @@ export function retrieveRagChunks(
   timeoutMs: number = DEFAULT_RAG_RETRIEVAL_TIMEOUT_MS,
 ): Promise<RagRetrievalResponse> {
   return ragRequest<RagRetrievalResponse>(
-    '/api/v1/retrieval',
+    '/v1/retrieval',
     { method: 'POST', body: JSON.stringify(payload) },
     tenantId,
     timeoutMs,

@@ -9,7 +9,7 @@
  *    · `stale` / `admissible` 直接渲染服务端返回值，前端不推算。
  */
 
-import { Alert, Button, Card, Form, Input, Select, Space, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Form, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type {
   RagSource,
@@ -26,6 +26,8 @@ const { Text } = Typography
 
 export interface RagSourceTableProps {
   state: RagSourceListState
+  /** 当前租户；空串时所有会发请求的入口一律禁用（后端缺 X-Tenant-Id 直接 400）。 */
+  tenantId: string
   onQuery: (query: RagSourceQuery) => void
   onRefresh: () => void
   onSelect: (source: RagSource) => void
@@ -104,6 +106,7 @@ const columns: ColumnsType<RagSource> = [
 
 export function RagSourceTable({
   state,
+  tenantId,
   onQuery,
   onRefresh,
   onSelect,
@@ -123,17 +126,33 @@ export function RagSourceTable({
     })
   }
 
+  /**
+   * 未选租户时把**会发请求的入口**全部禁用。
+   *
+   * ⚠️ 只写一行说明文字、按钮照旧可点，等于让管理员点一次就吃一个 400；
+   *    禁用 + tooltip 才把「为什么不能点」说清楚，也不会有人把它当成故障上报。
+   */
+  const tenantReady = tenantId.trim() !== ''
+  const needTenantTip = '请先在上方选择租户'
+
   return (
     <Card
       title="语料来源"
       extra={
         <Space>
-          <Button onClick={onRefresh} disabled={state.status === 'loading'}>
-            刷新
-          </Button>
-          <Button type="primary" onClick={onRegister}>
-            登记来源
-          </Button>
+          <Tooltip title={tenantReady ? '' : needTenantTip}>
+            <Button
+              onClick={onRefresh}
+              disabled={!tenantReady || state.status === 'loading'}
+            >
+              刷新
+            </Button>
+          </Tooltip>
+          <Tooltip title={tenantReady ? '' : needTenantTip}>
+            <Button type="primary" onClick={onRegister} disabled={!tenantReady}>
+              登记来源
+            </Button>
+          </Tooltip>
         </Space>
       }
     >
@@ -172,10 +191,18 @@ export function RagSourceTable({
         </Form.Item>
         <Form.Item>
           <Space>
-            <Button type="primary" htmlType="submit" loading={state.status === 'loading'}>
-              查询
-            </Button>
+            <Tooltip title={tenantReady ? '' : needTenantTip}>
+              <Button
+                type="primary"
+                htmlType="submit"
+                disabled={!tenantReady}
+                loading={state.status === 'loading'}
+              >
+                查询
+              </Button>
+            </Tooltip>
             <Button
+              disabled={!tenantReady}
               onClick={() => {
                 form.resetFields()
                 onQuery({ includeStale: true, limit: 100 })

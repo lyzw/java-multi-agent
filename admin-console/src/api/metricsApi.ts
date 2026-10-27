@@ -109,34 +109,111 @@ function query(params: Record<string, string | undefined>): string {
   return s === '' ? '' : `?${s}`
 }
 
+// ⚠️ 路径**不含** `/api` 前缀：`request()` 会统一拼 API_BASE（见 api/client.ts）。
+//    自带前缀会拼成 `/api/api/...` → 401 → 会话被清并跳登录。
+const BASE = '/platform/v1/metrics/agent'
+
 export function fetchAgentMetricOverview(hours: number, tenantId?: string): Promise<AgentMetricOverview> {
   return request<AgentMetricOverview>(
-    `/api/platform/v1/metrics/agent/overview${query({ hours: String(hours), tenantId })}`,
+    `${BASE}/overview${query({ hours: String(hours), tenantId })}`,
   )
 }
 
 export function fetchTerminationDistribution(hours: number, tenantId?: string): Promise<ReasonCount[]> {
   return request<ReasonCount[]>(
-    `/api/platform/v1/metrics/agent/terminations${query({ hours: String(hours), tenantId })}`,
+    `${BASE}/terminations${query({ hours: String(hours), tenantId })}`,
   )
 }
 
 export function fetchLatency(hours: number, tenantId?: string): Promise<LatencyPercentiles> {
   return request<LatencyPercentiles>(
-    `/api/platform/v1/metrics/agent/latency${query({ hours: String(hours), tenantId })}`,
+    `${BASE}/latency${query({ hours: String(hours), tenantId })}`,
   )
 }
 
 export function fetchToolBreakdown(hours: number, tenantId?: string): Promise<ToolMetric[]> {
   return request<ToolMetric[]>(
-    `/api/platform/v1/metrics/agent/tools${query({ hours: String(hours), tenantId })}`,
+    `${BASE}/tools${query({ hours: String(hours), tenantId })}`,
   )
 }
 
 export function fetchAnomalies(hours: number, limit = 20): Promise<AnomalyTrace[]> {
   return request<AnomalyTrace[]>(
-    `/api/platform/v1/metrics/agent/anomalies${query({ hours: String(hours), limit: String(limit) })}`,
+    `${BASE}/anomalies${query({ hours: String(hours), limit: String(limit) })}`,
   )
+}
+
+/** ⚠️ 与后端 `AgentMetricPort.TraceMetric` 逐字段对齐；可空字段一律 `| null`。 */
+export type TraceIdSource = 'RUN_TRACE_ID' | 'INVOCATION_TRACE_ID' | 'CORRELATION_FALLBACK'
+
+/** 单条 Trace 的指标明细（异常下钻用；后端不返回对话正文，这里也不会有）。 */
+export interface TraceMetric {
+  traceId: string
+  tenantId: string
+  runId: string
+  agentId: string | null
+  agentVersion: number | null
+  scenario: string | null
+  modelId: string | null
+  startedAt: string
+  endedAt: string | null
+  durationMs: number | null
+  terminalState: string
+  terminationReason: TerminationReason
+  inputTokens: number | null
+  outputTokens: number | null
+  costAmount: number | null
+  currency: string | null
+  toolRounds: number | null
+  toolCallTotal: number | null
+  toolCallFailed: number | null
+  toolCallInvalid: number | null
+  toolCallDuplicate: number | null
+  loopSuspectedCount: number | null
+  maxRoundsReached: boolean | null
+  clarificationCount: number | null
+  thinkMsTotal: number | null
+  toolMsTotal: number | null
+  autoChecked: boolean | null
+  autoVerified: boolean | null
+  sampled: boolean | null
+  humanVerdict: string | null
+  hallucination: boolean | null
+  instructionFollowed: boolean | null
+  feedbackUp: number | null
+  feedbackDown: number | null
+  retryCount: number | null
+  abandoned: boolean | null
+  safetyBlockedCount: number | null
+  unauthorizedAttemptCount: number | null
+  sensitiveOutputHits: number | null
+  traceIdSource: TraceIdSource
+}
+
+export const TRACE_ID_SOURCE_LABELS: Record<TraceIdSource, string> = {
+  RUN_TRACE_ID: 'Run 主键直连（最可信）',
+  INVOCATION_TRACE_ID: '调用侧 traceId 对齐',
+  CORRELATION_FALLBACK: '时间窗关联推断（可能与真实 Run 不符）',
+}
+
+/** 取单条 Trace 的指标明细；后端 404 = 该 Trace 没有指标行。 */
+export function fetchTraceMetric(traceId: string): Promise<TraceMetric> {
+  return request<TraceMetric>(`${BASE}/trace/${encodeURIComponent(traceId)}`)
+}
+
+/**
+ * 手动补算一条 Run 的指标。
+ *
+ * ⚠️ **409 不是故障**：后端对「尚未收敛的 Run」返回 409 NOT_CONVERGED——
+ *    此刻算不出，而不是服务挂了。调用方须按 `ApiError.status` 分流文案，
+ *    把它写成「采集失败，请重试」会诱导管理员反复重试一个注定无果的操作。
+ *    这是运维补算入口，正常路径由 Run 收敛事件驱动。
+ */
+export function collectTraceMetric(
+  tenantId: string,
+  runId: string,
+): Promise<{ traceId: string; status: string }> {
+  return postJson<{ traceId: string; status: string }>(`${BASE}/collect`, { tenantId, runId })
 }
 
 /** 终止原因中文标签 + 排序（与后端 9 值一一对应）。 */
@@ -232,19 +309,19 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export function recordEvalSample(payload: EvalSampleRequest): Promise<void> {
-  return postJson<void>('/api/platform/v1/metrics/agent/eval-samples', payload)
+  return postJson<void>(`${BASE}/eval-samples`, payload)
 }
 
 export function recordTaskOutcome(payload: TaskOutcomeRequest): Promise<void> {
-  return postJson<void>('/api/platform/v1/metrics/agent/task-outcomes', payload)
+  return postJson<void>(`${BASE}/task-outcomes`, payload)
 }
 
 export function recordRiskEvent(payload: RiskEventRequest): Promise<void> {
-  return postJson<void>('/api/platform/v1/metrics/agent/risk-events', payload)
+  return postJson<void>(`${BASE}/risk-events`, payload)
 }
 
 export function recordFeedback(payload: FeedbackRequest): Promise<void> {
-  return postJson<void>('/api/platform/v1/metrics/agent/feedback', payload)
+  return postJson<void>(`${BASE}/feedback`, payload)
 }
 
 /** L2 抽样标注结论中文标签。 */
