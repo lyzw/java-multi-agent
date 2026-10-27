@@ -52,9 +52,10 @@ import cn.studykid.multiagent.ports.persistence.RunClaimPort;
  * 回灌内容带<b>不可信数据</b>标记并做<b>长度封顶</b>
  * （{@link ToolOutputLimiter}），防止外部内容注入指令或顶爆上下文。
  *
- * <p>⚠️ <b>已知缺口</b>：根 Agent 的主循环（{@code RunExecutionLoop}）
- * 仍未回灌工具结果 —— 那是既有系统的缺口，不在多级 Agent 范围内，
- * 但意味着「父子两套语义」：子 Agent 多轮协作，根 Agent 仍是单轮。
+ * <p>⚠️ <b>父子回灌口径必须共用同一份实现</b>（第八批消除了「父子两套语义」）：
+ * 本类与 {@code RunExecutionLoop} 都经 {@link ToolOutcomeRenderer} 渲染「模型意图 + 工具结果」，
+ * 三条规则（不可信标记 / 长度封顶 / 失败与被拒也回灌）逐字一致。
+ * 两处各写一份就是漂移的入口——根能协作、子不能（或反之）从外部观察不到差异。
  */
 public class WorkerChildAgentRunner implements ChildAgentRunner {
 
