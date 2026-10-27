@@ -12,19 +12,16 @@ import {
   Alert,
   Form,
   Input,
-  Collapse,
   App as AntApp,
 } from 'antd'
-import { RobotOutlined, SendOutlined, StopOutlined, ArrowLeftOutlined } from '@ant-design/icons'
+import { RobotOutlined, StopOutlined, ArrowLeftOutlined } from '@ant-design/icons'
 import { ApiError } from '@/api/client'
 import {
   getAgent,
   getAgentDefinition,
   getAgentVersions,
-  publishAgentVersion,
   submitPublishRequest,
 } from '@/api/adminApi'
-import { isValidJson } from './agentDefinition'
 import { AgentDependenciesTab } from './AgentDependenciesTab'
 import { DelegationTab } from './dependencies/DelegationTab'
 import { AgentDraftPanel } from './agents/AgentDraftPanel'
@@ -35,7 +32,7 @@ import type { AgentDefinition, AgentItem, AgentVersion } from '@/api/types'
 /**
  * Agent 详情 / 新建（第三十五批 · 管理台 Agent 全字段增改查）。
  *
- * <p>概览 / 版本历史 / 依赖（P3）/ 委派拓扑（C34-3）/ 编辑（发新版本）/ 停用（C34-3）/ 直接发布（旧通道）。
+ * <p>概览 / 版本历史 / 依赖（P3）/ 委派拓扑（C34-3）/ 编辑（发新版本）/ 停用（C34-3）。
  *
  * <p>⚠️ <b>「新建」与「修改」共用同一张草稿表单</b>（{@code /agents/new} 是保留路由段）——
  * 分两条路由就会有两份表单，迟早漂移。差别只在「对象是否已存在」。
@@ -43,13 +40,9 @@ import type { AgentDefinition, AgentItem, AgentVersion } from '@/api/types'
  * <p>⚠️ <b>definition 是不可变快照</b>（FR-002）：本页不提供「编辑已发布版本」，
  * 要改只能再发一个版本。
  *
- * <p>⚠️ <b>两条发布路径刻意并存</b>：
- * <ul>
- *   <li><b>编辑页签</b>：走 {@code /api/cap/config/publishes} 三步工作流
- *       （申请→双人复核→执行），结构化 spec 进 {@code cap_agent_def}；</li>
- *   <li><b>直接发布</b>（P1 既有）：{@code POST /api/agents/{id}/versions} 立即落
- *       {@code agent_version} 快照，无审批 —— 供运维/自动化通道使用。</li>
- * </ul>
+ * <p>⛔ <b>「直接发布」旧通道已下线（评审 P0-5 · 2026-10-27）</b>：
+ * 原 {@code POST /api/agents/{id}/versions} 直发快照无审批，与三步发布矛盾，
+ * 后端端点与前端面板已同步摘除。版本变更一律走「编辑」页签三步工作流。
  *
  * <p>⚠️ <b>关系字段回填必须用权威定义</b>（C34-3 修复）：
  * {@code GET /api/cap/agents/{id}/definition}（{@code cap_agent_def}）才是多级 Agent
@@ -82,12 +75,8 @@ export function AgentDetailPage(): JSX.Element {
    * 故必须显式提示并要求用户确认（见草稿面板里的确认勾选框）。
    */
   const [definitionUnavailable, setDefinitionUnavailable] = useState(false)
-  /** 「直接发布版本快照」用的 definition 原文（与上面的权威定义**不是**同一份东西） */
-  const [definitionText, setDefinitionText] = useState('')
-  const [submitting, setSubmitting] = useState(false)
   const [deprecateSubmitting, setDeprecateSubmitting] = useState(false)
   const [deprecateForm] = Form.useForm<{ reason: string }>()
-  const [form] = Form.useForm<{ definition: string }>()
 
   const load = useCallback(async () => {
     if (isRegistration) return
@@ -135,38 +124,6 @@ export function AgentDetailPage(): JSX.Element {
   useEffect(() => {
     void load()
   }, [load])
-
-  const submitPublish = async (): Promise<void> => {
-    let raw: string
-    try {
-      raw = await form.validateFields().then((v) => v.definition)
-    } catch {
-      return
-    }
-    // 客户端 JSON 预校验（后端 400 兜底）
-    if (!isValidJson(raw)) {
-      message.error('definition 不是合法 JSON')
-      return
-    }
-    setSubmitting(true)
-    try {
-      const v = await publishAgentVersion(id, { definition: raw })
-      message.success(`已发布 v${v.versionNumber}`)
-      form.resetFields()
-      setDefinitionText('')
-      void load()
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        message.error('版本号并发冲突（409），请刷新后重试')
-      } else if (e instanceof ApiError && e.status === 400) {
-        message.error('definition 不是合法 JSON（400）')
-      } else {
-        message.error(e instanceof Error ? e.message : '发布失败')
-      }
-    } finally {
-      setSubmitting(false)
-    }
-  }
 
   /**
    * 停用提交：Agent 的生命周期迁移（LIFECYCLE_TRANSITION）。
@@ -357,7 +314,7 @@ export function AgentDetailPage(): JSX.Element {
                   type="info"
                   showIcon
                   message="日常变更请走「编辑」页签（三步工作流 · 双人复核）"
-                  description="本页是生命周期与运维通道：停用走「申请 → 双人复核 → 执行」；直接发布版本快照是旧通道，无审批。"
+                  description="本页是生命周期与运维通道：停用走「申请 → 双人复核 → 执行」。"
                 />
 
                 {/* ── 停用（生命周期迁移，不是物理删除） ── */}
@@ -397,46 +354,11 @@ export function AgentDetailPage(): JSX.Element {
                   )}
                 </Card>
 
-                <Collapse
-                  items={[{
-                    key: 'direct',
-                    label: '高级：直接发布版本快照（不经审批 · 运维/自动化通道）',
-                    children: (
-                      <div>
-                        <Alert
-                          type="warning"
-                          showIcon
-                          style={{ marginBottom: 16 }}
-                          message="此路径立即生效，无双人复核"
-                          description="POST /api/agents/{id}/versions 直接写入 agent_version 快照。日常变更请走「编辑」页签。"
-                        />
-                        <Form form={form} name="agent-snapshot" layout="vertical">
-                          <Form.Item
-                            name="definition"
-                            label="definition（JSON）"
-                            rules={[{ required: true, message: '请输入 definition JSON' }]}
-                            extra={<Typography.Text type="secondary">当前将发布 v{(agent?.latestVersionNumber ?? 0) + 1}</Typography.Text>}
-                          >
-                            <Input.TextArea
-                              rows={14}
-                              placeholder='{"goal":"…","steps":[…]}'
-                              value={definitionText}
-                              onChange={(e) => setDefinitionText(e.target.value)}
-                              style={{ fontFamily: 'monospace', fontSize: 12 }}
-                            />
-                          </Form.Item>
-                          <Button
-                            icon={<SendOutlined />}
-                            loading={submitting}
-                            onClick={() => void submitPublish()}
-                          >
-                            直接发布
-                          </Button>
-                        </Form>
-                      </div>
-                    ),
-                  }]}
-                />
+                {/* ── 直接发布通道已下线（评审 P0-5 · 2026-10-27） ──
+                    原「高级：直接发布版本快照」折叠面板调用
+                    POST /api/agents/{id}/versions 直写 definition 快照，
+                    无门禁无复核，与三步发布矛盾；后端端点已下线（POST → 405），
+                    前端通道同步摘除。任何版本变更必须走「编辑」页签三步工作流。 */}
               </Space>
             ),
           },

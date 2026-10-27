@@ -28,7 +28,6 @@ import type {
   AgentItem,
   AgentVersion,
   CreateAgentRequest,
-  PublishVersionRequest,
   ToolCatalogItem,
   SkillCatalogItem,
   McpCatalogItem,
@@ -168,16 +167,8 @@ export function createAgent(payload: CreateAgentRequest): Promise<AgentItem> {
   })
 }
 
-/** POST /api/agents/{id}/versions —— 发布新版本（definition 为不可变快照） */
-export function publishAgentVersion(
-  id: string,
-  payload: PublishVersionRequest,
-): Promise<AgentVersion> {
-  return request<AgentVersion>(`/agents/${id}/versions`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
+/* ⛔ publishAgentVersion（POST /api/agents/{id}/versions）已随 P0-5 下线：
+   直发 definition 快照无门禁无复核，与三步发布矛盾；后端端点已摘除（POST → 405）。 */
 
 /* ── P1 实体管理：Tool / Skill / MCP（平台级，复用 /api/cap/catalog 只读目录） ──
    ⚠️ 目录**读取**仍是对全体租户可见的（能力清单是攻击面枚举素材，故读取同样鉴权）；

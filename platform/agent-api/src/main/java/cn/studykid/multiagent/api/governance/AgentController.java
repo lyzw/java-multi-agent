@@ -28,16 +28,24 @@ import cn.studykid.multiagent.ports.security.AuthorizationService;
 /**
  * Agent 配置与发布端点（P4-D14 / G2 · FE-01 §P18）。
  *
- * <p>⚠️ <b>三个端点共享 {@code GOVERNANCE_QUERY} 限流桶</b>（与审批/审计同桶，按租户限流）。
+ * <p>⚠️ <b>端点共享 {@code GOVERNANCE_QUERY} 限流桶</b>（与审批/审计同桶，按租户限流）。
  *
- * <p>⚠️ <b>创建人 / 发布人只来自令牌</b>（{@code currentPrincipal.principalId()}），
+ * <p>⚠️ <b>创建人只来自令牌</b>（{@code currentPrincipal.principalId()}），
  * 绝不取自请求体——否则任何人都能冒充创建人留痕。
  *
- * <p>⚠️ <b>definition 是不可变快照</b>（FR-002）：本端点<b>不提供</b>「编辑已发布版本」，
- * 要改只能再发一个版本（{@code POST /api/agents/{id}/versions}）。
+ * <p>⛔ <b>「发布新版本」写端点已下线（评审 P0-5 · 2026-10-27）</b>：
+ * 原 {@code POST /api/agents/{id}/versions} 允许 {@code AGENT_MANAGE} 单权限直写
+ * 自由 JSONB definition 并经 {@code DualWriteAgentManagePort} 进入权威表，
+ * <b>无门禁无复核</b>——与平台对象（Tool/Skill/MCP）的「草稿→审批→发布」
+ * 三步发布自相矛盾，构成本项目 SoD 纪律的唯旁路。该端点唯一的 UI 消费方
+ * 是从未注册进路由的孤儿页（AgentDetailPage）。发布能力恢复前，任何 Agent
+ * 版本变更必须走三步发布工作流；端口方法 {@code publishVersion} 保留
+ * （基础设施契约 IT 与未来纳入门禁后的工作流复用），但生产 API 面不再暴露。
+ *
+ * <p>⚠️ <b>definition 是不可变快照</b>（FR-002）：不存在「编辑已发布版本」。
  *
  * <p>⚠️ <b>异常映射沿用审批台约定</b>：
- * 不存在 → 404（与「无权限」同码，避免存在性探测）；重名 / 版本竞态 → 409。
+ * 不存在 → 404（与「无权限」同码，避免存在性探测）；重名 → 409。
  */
 @RestController
 @RequestMapping("/api/agents")
@@ -163,44 +171,16 @@ public class AgentController {
     }
 
     /**
-     * 发布新版本（definition 为不可变快照）。
+     * ⛔ 已下线（评审 P0-5 · 2026-10-27）：{@code POST /{agentId}/versions} 直发端点。
      *
-     * <p>⚠️ 版本号 = 该 agent 当前最大版本号 + 1；并发发布竞态 → 409。
+     * <p>同路径的 {@code POST} 现在落回 Spring 默认的 405 Method Not Allowed
+     * （GET 仍映射）——fail-closed：不存在「绕过三步发布的静默通道」。
+     * 版本发布恢复时必须经三步发布工作流（草稿→审批→发布），不得直接复原本端点。
      */
-    @PostMapping("/{agentId}/versions")
-    public ResponseEntity<AgentVersionItemResponse> publishVersion(
-            @PathVariable String agentId,
-            @RequestBody PublishVersionRequest request) {
-
-        TenantContext context = currentPrincipal.context();
-        authorization.requireAuthorized(context,
-                AuthorizationService.Actions.AGENT_MANAGE, agentId);
-
-        if (GovernanceSupport.rateLimited(rateLimiter, context,
-                RateLimitPort.Buckets.GOVERNANCE_QUERY)) {
-            return GovernanceSupport.tooManyRequests();
-        }
-
-        try {
-            var version = agentManage.publishVersion(
-                    context.tenantId(), agentId, request.definition(),
-                    currentPrincipal.principalId());
-            return ResponseEntity.ok(AgentVersionItemResponse.of(version));
-        } catch (AgentQueryPort.AgentNotFoundException e) {
-            // ⚠️ 404 不区分「不存在」与「无权限」——区分即存在性探测通道
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "资源不存在");
-        } catch (AgentManagePort.VersionConflictException e) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "资源与当前状态冲突");
-        }
-    }
 
     /** 创建 Agent 请求体。 */
     public record CreateAgentRequest(@NonNull String name,
                                      @Nullable String description) {
-    }
-
-    /** 发布版本请求体。 */
-    public record PublishVersionRequest(@NonNull String definition) {
     }
 
     /** Agent 视图（与端口 {@code AgentItem} 同构）。 */
