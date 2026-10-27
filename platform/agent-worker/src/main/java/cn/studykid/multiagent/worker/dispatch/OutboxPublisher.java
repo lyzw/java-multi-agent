@@ -60,6 +60,11 @@ public class OutboxPublisher {
         this.maxAttempts = maxAttempts;
     }
 
+    /** 本发布器绑定的租户（供中继按租户写日志上下文；包内可见，不对外暴露）。 */
+    String tenantId() {
+        return tenantId;
+    }
+
     /**
      * 执行一轮发布。
      *

@@ -11,6 +11,7 @@ import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.ports.messaging.MessageSender;
 import cn.studykid.multiagent.ports.messaging.MessageSender.MessagePublishException;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
@@ -122,11 +123,17 @@ public class RabbitMessageSender implements MessageSender {
         CorrelationData correlation = new CorrelationData(
                 message.runId() + "#" + message.attempt());
 
+        // 链路号走消息头（不进消息体，见 LogContext.TRACE_HEADER 的白名单约束说明）。
+        // 中继线程通常没有请求上下文，ensureTraceId() 会就地生成并写回 MDC，
+        // 于是「本条发布日志」与「消费端日志」是同一个 traceId。
+        String traceId = LogContext.ensureTraceId();
+
         template.convertAndSend(exchange, routingKey, payload, m -> {
             m.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
             m.getMessageProperties().setMessageId(correlation.getId());
             // ⚠️ 标记来源，便于消费端排障（不含任何业务数据）
             m.getMessageProperties().setHeader("x-agent-event-type", eventType);
+            m.getMessageProperties().setHeader(LogContext.TRACE_HEADER, traceId);
             return m;
         }, correlation);
 

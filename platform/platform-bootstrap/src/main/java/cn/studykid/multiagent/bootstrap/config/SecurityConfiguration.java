@@ -30,6 +30,7 @@ import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.security.AuthenticationService;
 import cn.studykid.multiagent.ports.security.IdentityDomains;
@@ -214,6 +215,9 @@ public class SecurityConfiguration {
                     SecurityContextHolder.getContext().setAuthentication(
                             new TenantContextAuthentication(context));
                     request.setAttribute(TENANT_CONTEXT_ATTRIBUTE, context);
+                    // 日志上下文：只在验签成功后写入。失败时保持入口过滤器给的 "-"，
+                    // 绝不把令牌里未经验证的字段当身份打印（日志会被当成可信证据）。
+                    LogContext.setIdentity(context.tenantId(), context.principalId());
 
                 } catch (RuntimeException e) {
                     // ⚠️ 令牌无效：清空上下文，让后续走 401。
@@ -332,6 +336,9 @@ public class SecurityConfiguration {
                     SecurityContextHolder.getContext().setAuthentication(
                             new PlatformPrincipalAuthentication(principal));
                     request.setAttribute(PLATFORM_PRINCIPAL_ATTRIBUTE, principal);
+                    // 平台主体不持有租户（PlatformPrincipal 刻意无 tenantId）：
+                    // 日志里租户位保持 "-"，比伪造一个默认租户更诚实。
+                    LogContext.setIdentity(null, principal.userId());
 
                 } catch (RuntimeException e) {
                     // ⚠️ 令牌无效（含跨域令牌）：清空上下文，让后续走 401。

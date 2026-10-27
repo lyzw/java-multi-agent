@@ -14,6 +14,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 
 /**
  * 基于 PG {@code LISTEN/NOTIFY} 的事件订阅（P4-D02 / D-1）。
@@ -133,7 +134,9 @@ public class RunEventNotifier implements AutoCloseable {
             poller.run();
             return;
         }
-        Thread listener = new Thread(() -> {
+        // 订阅线程由「发起订阅的请求线程」创建：wrap 在那里抓快照，
+        // 使这条连接上的通知日志与请求日志同一条链路（池/裸线程默认没有 MDC）。
+        Thread listener = new Thread(LogContext.wrap(() -> {
             long lastSeen = fromSequence;
             try {
                 while (!Thread.currentThread().isInterrupted()) {
@@ -166,7 +169,7 @@ public class RunEventNotifier implements AutoCloseable {
             } finally {
                 closeQuietly(conn);
             }
-        }, "run-event-listener-" + runId);
+        }), "run-event-listener-" + runId);
         listener.setDaemon(true);
         listener.start();
     }

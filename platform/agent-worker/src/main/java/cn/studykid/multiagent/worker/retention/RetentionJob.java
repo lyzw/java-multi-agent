@@ -9,6 +9,7 @@ import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.application.retention.RetentionPurgeService;
 import cn.studykid.multiagent.application.retention.RetentionPurgeService.PurgeReport;
 
@@ -92,32 +93,44 @@ public class RetentionJob {
             log.debug("清理任务已停止，跳过本轮");
             return EMPTY_REPORT;
         }
-        PurgeReport merged = EMPTY_REPORT;
-        for (String tenantId : tenantIds) {
-            try {
-                PurgeReport report = purgeService.runOnce(tenantId);
-                merged = aggregate(merged, report);
-                if (report.failedCategories() > 0) {
-                    // ⚠️ 消费失败类别——否则该字段只是装饰。
-                    //    「清理失败」必须可见：静默失败等于长期合规违约。
-                    failedCategories.addAndGet(report.failedCategories());
-                    log.warn("清理类别失败: tenant={}, failedCategories={}",
-                            tenantId, report.failedCategories());
+        // 一轮清理 = 一条系统链路；本轮所有租户的日志共享同一个 traceId，
+        // 租户位在每个租户的作用域内切换（汇总行不属于任何单个租户，保持 "-"）。
+        try (LogContext.Scope round = LogContext.push(new LogContext.Snapshot(
+                LogContext.newTraceId(), null, LogContext.SYSTEM))) {
+
+            PurgeReport merged = EMPTY_REPORT;
+            for (String tenantId : tenantIds) {
+                // ⚠️ catch 在租户作用域**内部**：作用域先于 catch 关闭，
+                //    写在外的话「某租户清理失败」这条最需要的日志反而丢掉租户字段。
+                try (LogContext.Scope ignored = LogContext.push(new LogContext.Snapshot(
+                        LogContext.traceId(), tenantId, LogContext.SYSTEM))) {
+                    try {
+                        PurgeReport report = purgeService.runOnce(tenantId);
+                        merged = aggregate(merged, report);
+                        if (report.failedCategories() > 0) {
+                            // ⚠️ 消费失败类别——否则该字段只是装饰。
+                            //    「清理失败」必须可见：静默失败等于长期合规违约。
+                            failedCategories.addAndGet(report.failedCategories());
+                            log.warn("清理类别失败: tenant={}, failedCategories={}",
+                                    tenantId, report.failedCategories());
+                        }
+                    } catch (RuntimeException e) {
+                        // ⚠️ 单租户失败不终止整轮：一个租户的坏数据不应拖累其余租户履约。
+                        failedCategories.incrementAndGet();
+                        log.error("租户清理整轮失败（继续处理其余租户）: tenant={}",
+                                tenantId, e);
+                    }
                 }
-            } catch (RuntimeException e) {
-                // ⚠️ 单租户失败不终止整轮：一个租户的坏数据不应拖累其余租户履约。
-                failedCategories.incrementAndGet();
-                log.error("租户清理整轮失败（继续处理其余租户）: tenant={}", tenantId, e);
             }
+            rounds.incrementAndGet();
+            if (merged.hasChanges()) {
+                log.info("清理本轮完成: profiles={}, prompts={}, traces={}, audits={}, withdrawals={}",
+                        merged.profilesDeleted(), merged.promptsBlanked(),
+                        merged.tracesDeleted(), merged.auditsDeleted(),
+                        merged.withdrawalsErased());
+            }
+            return merged;
         }
-        rounds.incrementAndGet();
-        if (merged.hasChanges()) {
-            log.info("清理本轮完成: profiles={}, prompts={}, traces={}, audits={}, withdrawals={}",
-                    merged.profilesDeleted(), merged.promptsBlanked(),
-                    merged.tracesDeleted(), merged.auditsDeleted(),
-                    merged.withdrawalsErased());
-        }
-        return merged;
     }
 
     public void start() {

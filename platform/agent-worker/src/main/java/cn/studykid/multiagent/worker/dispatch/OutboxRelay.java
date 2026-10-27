@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.application.backpressure.BackpressureController;
+import cn.studykid.multiagent.application.observability.LogContext;
 
 /**
  * Outbox 中继（P4-D03 / D-1，P4-D05 扩展为多租户 + 背压）。
@@ -105,25 +106,38 @@ public class OutboxRelay {
             return 0;
         }
 
-        int published = 0;
-        for (OutboxPublisher publisher : publishers) {
-            try {
-                published += publisher.publishOnce();
-            } catch (RuntimeException e) {
-                // ⚠️⚠️ 单租户失败**不得**终止本轮其他租户，也不得终止循环。
-                //    否则一个租户的坏消息会让所有租户停摆——
-                //    这是多租户下「隔离」的硬要求，而非可用性优化。
-                log.error("租户发布器本轮失败（继续下一个租户，不终止循环）: {}",
-                        e.getMessage(), e);
+        // 一轮中继 = 一条系统链路。同一个 traceId 贯穿本轮所有发布日志，
+        // 并由 RabbitMessageSender 写入消息头 → 消费端日志能与「哪一轮发的」对上。
+        try (LogContext.Scope round = LogContext.push(
+                new LogContext.Snapshot(LogContext.newTraceId(), null, LogContext.SYSTEM))) {
+
+            int published = 0;
+            for (OutboxPublisher publisher : publishers) {
+                // 按租户切换上下文：本轮跨多个租户，日志不带租户等于「谁的消息发不出去」无从判断。
+                try (LogContext.Scope ignored = LogContext.push(new LogContext.Snapshot(
+                        LogContext.traceId(), publisher.tenantId(), LogContext.SYSTEM))) {
+                    // ⚠️ catch 刻意放在作用域**内部**：
+                    //    try-with-resources 的关闭发生在 catch 之前，
+                    //    写在外的 catch 会让这条 error 日志丢掉租户字段。
+                    try {
+                        published += publisher.publishOnce();
+                    } catch (RuntimeException e) {
+                        // ⚠️⚠️ 单租户失败**不得**终止本轮其他租户，也不得终止循环。
+                        //    否则一个租户的坏消息会让所有租户停摆——
+                        //    这是多租户下「隔离」的硬要求，而非可用性优化。
+                        log.error("租户发布器本轮失败（继续下一个租户，不终止循环）: {}",
+                                e.getMessage(), e);
+                    }
+                }
             }
-        }
-        if (published > 0) {
-            totalPublished += published;
-            if (log.isDebugEnabled()) {
-                log.debug("Outbox 中继发布 {} 条，累计 {}", published, totalPublished);
+            if (published > 0) {
+                totalPublished += published;
+                if (log.isDebugEnabled()) {
+                    log.debug("Outbox 中继发布 {} 条，累计 {}", published, totalPublished);
+                }
             }
+            return published;
         }
-        return published;
     }
 
     /**

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    日志格式：在 Spring Boot 默认控制台输出上插入「链路三要素」段
+        [traceId tenantId principalId]
+
+    三个字段的唯一写入点是 LogContext（SLF4J MDC）：
+      · traceId    —— 一次调用链标识，HTTP 入口生成或沿用上游 X-Trace-Id，MQ 侧沿用消息头
+      · tenantId   —— 当前租户；平台管理链打印平台侧身份
+      · principalId—— 当前登录主体 id
+
+    出现 "-" 就意味着「这一段日志没有上下文」，是排障时必须看见的事实。
+    ⚠️ 键的默认值（logback 的 X{key: 冒号短横} 语法）不能省：LogContext 只保证
+    **走过它的作用域**的日志三个键必有值；启动期、Bean 初始化、
+    以及任何还没接上链路上下文的代码路径，MDC 里根本**没有这三个键**。
+    不写默认值时那一段渲染成空方括号 "[  ]" —— 视觉上像「有个空值」，
+    grep 也永远匹配不到；写成 "-" 才能和 LogContext 的占位口径对齐。
+
+    级别仍由 application.yml 的 logging.level.* 控制（Spring Boot 在本文件加载后套用）。
+-->
+<configuration>
+
+  <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+  <property name="LOG_CONTEXT_PATTERN"
+            value="%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr(${LOG_LEVEL_PATTERN:-%5p}) %clr([%15.15t]){faint} %clr([%X{traceId:--} %X{tenantId:--} %X{principalId:--}]){yellow} %clr(%-40.40logger{39}){cyan} %clr(:){faint} %m%n${LOG_EXCEPTION_CONVERSION_WORD:-%wEx}"/>
+
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>${LOG_CONTEXT_PATTERN}</pattern>
+      <charset>${CONSOLE_LOG_CHARSET}</charset>
+    </encoder>
+  </appender>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+
+</configuration>

@@ -23,6 +23,8 @@ import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
+import cn.studykid.rag.application.observability.LogContext;
+
 /**
  * RAG 服务 JWT 鉴权过滤器（评审 P0-2 · §5.1）。
  *
@@ -124,6 +126,9 @@ public final class RagJwtAuthFilter implements Filter {
         }
         if (!enabled) {
             // 显式逃生门（仅限本地开发）：放行但绝不静默
+            // 日志身份取自 X-Tenant-Id —— 这不是「已验证的身份」，
+            // 但下游确实按它执行（业务端点自己读该头），日志要反映实际生效的租户。
+            LogContext.setIdentity(req.getHeader("X-Tenant-Id"), null);
             chain.doFilter(request, response);
             return;
         }
@@ -148,6 +153,9 @@ public final class RagJwtAuthFilter implements Filter {
                 return;
             }
         }
+        // 日志上下文：只写验签通过后的 claim，不写请求头。
+        // 平台域令牌无租户 claim（跨租户治理是设计内行为）→ 日志租户位保持 "-"。
+        LogContext.setIdentity(auth.tenantId(), auth.principalId());
         chain.doFilter(request, response);
     }
 

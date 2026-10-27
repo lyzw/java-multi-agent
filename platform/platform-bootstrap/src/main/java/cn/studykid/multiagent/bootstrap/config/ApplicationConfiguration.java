@@ -631,6 +631,13 @@ public class ApplicationConfiguration {
                     if (id != null) {
                         return String.valueOf(id);
                     }
+                    // 退化到入口链路号：落库的 correlation_id 与日志里的 traceId
+                    // 是同一个值，排障时可以拿其中一个直接查到另一侧。
+                    Object trace = attrs.getRequest()
+                            .getAttribute(RequestLoggingConfiguration.TRACE_ID_ATTRIBUTE);
+                    if (trace != null) {
+                        return String.valueOf(trace);
+                    }
                 }
                 return UUID.randomUUID().toString();
             }

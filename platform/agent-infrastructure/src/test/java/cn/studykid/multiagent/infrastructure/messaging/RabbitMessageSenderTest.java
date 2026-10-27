@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,7 @@ import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.ports.messaging.MessageSender.MessagePublishException;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 
@@ -48,6 +50,12 @@ class RabbitMessageSenderTest {
 
     private static final String EXCHANGE = "agent.run.dispatch";
     private static final String ROUTING_KEY = "agent.run.execute";
+
+    @AfterEach
+    void clearLogContext() {
+        // 发送器会就地生成链路号并写回 MDC：不清会把上下文带进同线程的下一个用例。
+        LogContext.clear();
+    }
 
     private RabbitMessageSender senderUnderTest(RabbitTemplate template) {
         return new RabbitMessageSender(template);
@@ -98,6 +106,41 @@ class RabbitMessageSenderTest {
             assertThat((String) processed.getMessageProperties().getHeader("x-agent-event-type"))
                     .as("⚠️ 事件类型头必须带（且不含业务数据）")
                     .isEqualTo("RUN_DISPATCH");
+        }
+
+        @Test
+        @DisplayName("链路号走消息头：沿用当前上下文，无上下文则就地生成并写回")
+        void carriesTraceIdHeader() {
+            RabbitTemplate template = mock(RabbitTemplate.class);
+            AtomicReference<MessagePostProcessor> mpp = new AtomicReference<>();
+            doAnswer(inv -> {
+                mpp.set(inv.getArgument(3));
+                CorrelationData data = inv.getArgument(4);
+                data.getFuture().complete(new CorrelationData.Confirm(true, null));
+                return null;
+            }).when(template).convertAndSend(anyString(), anyString(), any(),
+                    any(MessagePostProcessor.class), any(CorrelationData.class));
+
+            RabbitMessageSender sender = senderUnderTest(template);
+
+            LogContext.setTraceId("relay-round-1");
+            sender.send("RUN_DISPATCH", sample());
+            String fromContext = (String) mpp.get().postProcessMessage(
+                    MessageBuilder.withBody("{}".getBytes(StandardCharsets.UTF_8)).build())
+                    .getMessageProperties().getHeader(LogContext.TRACE_HEADER);
+            assertThat(fromContext)
+                    .as("消费端要能用同一个 id 接上这条链路")
+                    .isEqualTo("relay-round-1");
+
+            LogContext.clear();
+            sender.send("RUN_DISPATCH", sample());
+            String generated = (String) mpp.get().postProcessMessage(
+                    MessageBuilder.withBody("{}".getBytes(StandardCharsets.UTF_8)).build())
+                    .getMessageProperties().getHeader(LogContext.TRACE_HEADER);
+            assertThat(generated).matches("[0-9a-f]{32}");
+            assertThat(LogContext.traceId())
+                    .as("交出去的值必须同时写回本线程 MDC，否则发送日志与消息头不是同一个 id")
+                    .isEqualTo(generated);
         }
     }
 

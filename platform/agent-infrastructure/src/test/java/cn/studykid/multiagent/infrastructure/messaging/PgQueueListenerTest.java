@@ -6,10 +6,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.ports.messaging.MessageHandler;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -114,6 +116,31 @@ class PgQueueListenerTest {
                 .as("⚠️⚠️ 必须直接进死信（死信表是「只进不出」的最终出口）")
                 .containsExactly(msg.queueId());
         assertThat(processed).isZero();
+    }
+
+    @Test
+    @DisplayName("消费端日志上下文：处理线程能看到本条消息的租户与 system 主体，轮次结束即还原")
+    void handlerSeesLogContext() {
+        FakeQueueRepository repository = new FakeQueueRepository();
+        repository.toDeliver.add(message(1));
+
+        AtomicReference<Map<String, String>> seen = new AtomicReference<>();
+        MessageHandler handler = (eventType, payload, workerId) -> {
+            seen.set(LogContext.snapshot().asMap());
+            return MessageHandler.Outcome.CLAIMED;
+        };
+
+        listener(repository, handler, 3).pollOnce();
+
+        // DB 队列没有 MQ 消息头可沿用，链路号就地生成；主体固定 system（Worker 不是登录用户）。
+        assertThat(seen.get()).containsEntry(LogContext.TENANT_ID, TENANT)
+                .containsEntry(LogContext.PRINCIPAL_ID, LogContext.SYSTEM);
+        assertThat(seen.get().get(LogContext.TRACE_ID)).matches("[0-9a-f]{32}");
+
+        // ⚠️ 反串号：作用域关闭后本线程不再有上一条消息的租户。
+        //    这条断言守的是「pollOnce 有多条 return 分支，clear 不能靠手写」。
+        assertThat(LogContext.snapshot().asMap())
+                .containsEntry(LogContext.TENANT_ID, LogContext.NONE);
     }
 
     @Test

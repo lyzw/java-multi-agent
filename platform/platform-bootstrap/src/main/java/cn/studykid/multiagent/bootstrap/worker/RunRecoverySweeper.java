@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.ports.persistence.PlatformTenantPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.worker.dispatch.RunDispatchConsumer;
@@ -78,6 +79,16 @@ public class RunRecoverySweeper {
      */
     @Scheduled(fixedDelayString = "${agent.worker.recovery.interval-seconds:30}000")
     public void sweep() {
+        // 定时线程既没有 HTTP 过滤器也没有 MQ 消息头，MDC 全空。
+        // 这里补一条「本轮扫描」的系统链路：恢复执行会走完整 Agent 调用路径，
+        // 没有它，崩溃恢复产生的日志与真实请求日志在链路维度上是两类无法区分的东西。
+        try (LogContext.Scope round = LogContext.push(new LogContext.Snapshot(
+                LogContext.newTraceId(), null, LogContext.SYSTEM))) {
+            doSweep();
+        }
+    }
+
+    private void doSweep() {
         if (!enabled) {
             log.debug("崩溃恢复扫描已禁用（agent.worker.recovery.enabled=false），跳过本轮");
             return;
@@ -97,23 +108,28 @@ public class RunRecoverySweeper {
         int recovered = 0;
         for (PlatformTenantPort.PlatformTenantRow tenant : tenants) {
             String tenantId = tenant.tenantId();
-            try {
-                List<RunClaimPort.LeasedTask> tasks =
-                        claimPort.claimTasks(tenantId, workerId, lease, batchSize);
-                for (RunClaimPort.LeasedTask task : tasks) {
-                    recovered++;
-                    try {
-                        executor.execute(tenantId, task);
-                    } catch (RuntimeException e) {
-                        // ⚠️ 执行器已内部兜底收敛（commit 失败=白干，不抛），
-                        // 此处仅记录，不中断其他租户的恢复。
-                        log.error("恢复执行异常（已接管，交由对账/重投）: runId={}, tenant={}",
-                                task.runId(), tenantId, e);
+            // 按租户切上下文：恢复执行是整条 Agent 调用链，日志必须说清在为哪个租户跑。
+            // ⚠️ catch 在作用域内部（作用域先于 catch 关闭，写在外会丢租户字段）。
+            try (LogContext.Scope ignored = LogContext.push(new LogContext.Snapshot(
+                    LogContext.traceId(), tenantId, LogContext.SYSTEM))) {
+                try {
+                    List<RunClaimPort.LeasedTask> tasks =
+                            claimPort.claimTasks(tenantId, workerId, lease, batchSize);
+                    for (RunClaimPort.LeasedTask task : tasks) {
+                        recovered++;
+                        try {
+                            executor.execute(tenantId, task);
+                        } catch (RuntimeException e) {
+                            // ⚠️ 执行器已内部兜底收敛（commit 失败=白干，不抛），
+                            // 此处仅记录，不中断其他租户的恢复。
+                            log.error("恢复执行异常（已接管，交由对账/重投）: runId={}, tenant={}",
+                                    task.runId(), tenantId, e);
+                        }
                     }
+                } catch (RuntimeException e) {
+                    log.warn("恢复扫描单租户失败（跳过该租户）: tenant={}, cause={}",
+                            tenantId, e.toString());
                 }
-            } catch (RuntimeException e) {
-                log.warn("恢复扫描单租户失败（跳过该租户）: tenant={}, cause={}",
-                        tenantId, e.toString());
             }
         }
         if (recovered > 0) {

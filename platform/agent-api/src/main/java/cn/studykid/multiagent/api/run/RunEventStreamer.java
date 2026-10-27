@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.ports.persistence.RunEventQueryPort;
 
 /**
@@ -145,26 +146,32 @@ public class RunEventStreamer {
         //    每个泄漏的连接都在持续查 DB。
         // ⚠️ emitter 可为 null（单测注入记录型 FrameSender 时）——
         //    真正的连接生命周期回调由 MVC 负责，这里只做防御。
+        // 生命周期回调在 MVC 线程上触发，不包装的话这几行日志带的是「那个线程当时恰好属于谁」，
+        // 而不是这条连接的上下文——错标的租户比缺失的租户更误导人。
         if (emitter != null) {
-            emitter.onCompletion(() -> {
+            emitter.onCompletion(LogContext.wrap(() -> {
                 closed.set(true);
                 log.debug("SSE 连接完成: runId={}", runId);
-            });
-            emitter.onTimeout(() -> {
+            }));
+            emitter.onTimeout(LogContext.wrap(() -> {
                 closed.set(true);
                 log.debug("SSE 连接超时（已清理轮询）: runId={}", runId);
                 sender.complete();
-            });
-            emitter.onError(t -> {
+            }));
+            Runnable onErrorCleanup = LogContext.wrap(() -> {
                 closed.set(true);
                 log.debug("SSE 连接出错（已清理轮询）: runId={}", runId);
             });
+            emitter.onError(t -> onErrorCleanup.run());
         }
 
         long[] currentCursor = {cursor};
 
         ScheduledFuture<?>[] taskHolder = new ScheduledFuture<?>[1];
-        taskHolder[0] = scheduler.scheduleAtFixedRate(() -> {
+        // 调度线程是共享池（2 线程、跨连接复用），MDC 不会自动带过去：
+        // 不包装的话 SSE 轮询日志既没有链路号，还可能读到上一条连接遗留的租户（串号）。
+        // wrap() 在<b>提交线程</b>（发起 SSE 的请求线程）抓快照，执行时套用到池线程。
+        Runnable pollTask = LogContext.wrap(() -> {
             if (closed.get()) {
                 // 自我取消：避免 scheduleAtFixedRate 在连接关闭后继续执行
                 taskHolder[0].cancel(false);
@@ -206,18 +213,20 @@ public class RunEventStreamer {
                     emitter.completeWithError(e);
                 }
             }
-        }, 0, pollIntervalMillis, TimeUnit.MILLISECONDS);
+        });
+        taskHolder[0] = scheduler.scheduleAtFixedRate(pollTask, 0, pollIntervalMillis,
+                TimeUnit.MILLISECONDS);
 
         // ⚠️ 最大存活兜底：即便 Run 永不终结（如 Worker 全挂），
         //    连接也不会无限占用资源。
-        scheduler.schedule(() -> {
+        scheduler.schedule(LogContext.wrap(() -> {
             if (!closed.get()) {
                 closed.set(true);
                 log.warn("SSE 连接达到最大存活时长，强制结束: runId={}, max={}ms",
                         runId, maxLifetimeMillis);
                 sender.complete();
             }
-        }, maxLifetimeMillis, TimeUnit.MILLISECONDS);
+        }), maxLifetimeMillis, TimeUnit.MILLISECONDS);
     }
 
     @SuppressWarnings("unchecked")

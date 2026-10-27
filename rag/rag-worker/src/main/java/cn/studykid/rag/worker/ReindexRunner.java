@@ -10,6 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import cn.studykid.rag.application.observability.LogContext;
 import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
 
@@ -66,6 +67,16 @@ public class ReindexRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        // 启动重索引跑在 main 线程上（没有 HTTP 过滤器给它写上下文）：
+        // 这里补一条系统链路，否则本次启动的全部日志都是 [- - -]，
+        // 出问题时既查不到「哪一次启动」也看不出是谁在做。
+        try (LogContext.Scope startup = LogContext.push(new LogContext.Snapshot(
+                LogContext.newTraceId(), null, LogContext.SYSTEM))) {
+            doRun();
+        }
+    }
+
+    private void doRun() {
         if (!failClosedPreflight()) {
             log.error("[reindex] fail-closed 探针失败：未设租户仍可读取租户私有 rag_chunk，"
                     + " RLS FORCE 疑似未生效。中止启动重索引以避免跨租户泄漏。");
@@ -94,10 +105,15 @@ public class ReindexRunner implements ApplicationRunner {
                         + " 现阶段由平台侧预灌语料即可。", t);
                 continue;
             }
-            try {
-                grandTotal += chunkIndexer.indexTenant(t);
-            } catch (RuntimeException ex) {
-                log.error("[reindex] 租户 {} 索引失败：{}", t, ex.getMessage(), ex);
+            try (LogContext.Scope ignored = LogContext.push(new LogContext.Snapshot(
+                    LogContext.newTraceId(), t, LogContext.SYSTEM))) {
+                // ⚠️ catch 在作用域内部：作用域先于 catch 关闭，
+                //    写在外的话「某租户索引失败」这条日志会丢掉租户字段。
+                try {
+                    grandTotal += chunkIndexer.indexTenant(t);
+                } catch (RuntimeException ex) {
+                    log.error("[reindex] 租户 {} 索引失败：{}", t, ex.getMessage(), ex);
+                }
             }
         }
         log.info("[reindex] 启动重索引结束，累计处理 {} 个片段", grandTotal);

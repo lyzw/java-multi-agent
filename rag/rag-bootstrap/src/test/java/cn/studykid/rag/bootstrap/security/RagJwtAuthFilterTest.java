@@ -11,13 +11,17 @@ import java.security.interfaces.RSAPublicKey;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
+import cn.studykid.rag.application.observability.LogContext;
 import cn.studykid.rag.bootstrap.security.RagJwtAuthFilter.TokenDomain;
 
 /**
@@ -215,5 +219,79 @@ class RagJwtAuthFilterTest {
         var res = new MockHttpServletResponse();
         assertThat(through(f, request(forged, TENANT_A), res)).isFalse();
         assertThat(res.getStatus()).isEqualTo(401);
+    }
+
+    // ── 日志上下文（评审 P0-2 的身份只能来自已验签 claim）────────────
+
+    @Test
+    @DisplayName("验签通过的租户令牌 → 日志身份取令牌 claim（租户 + sub）")
+    void verifiedTenantTokenWritesLogIdentity() throws Exception {
+        var ok = token("https://auth.studykid.cn", "agent-platform", EXP_FUTURE,
+                TENANT_A, tenantKeys.getPrivate());
+        AtomicReference<Map<String, String>> seen = new AtomicReference<>();
+
+        filter(tenantDomain).doFilter(request(ok, TENANT_A), new MockHttpServletResponse(),
+                (rq, rs) -> seen.set(LogContext.snapshot().asMap()));
+
+        assertThat(seen.get())
+                .containsEntry(LogContext.TENANT_ID, TENANT_A)
+                .containsEntry(LogContext.PRINCIPAL_ID, "u-1");
+    }
+
+    @Test
+    @DisplayName("⚠️ 401/403 拒绝路径不得写入任何身份：未验证的 claim 不是证据")
+    void rejectedRequestKeepsIdentityUnknown() throws Exception {
+        var forged = token("https://auth.studykid.cn", "agent-platform", EXP_FUTURE,
+                TENANT_B, otherKeys.getPrivate());
+        AtomicReference<Map<String, String>> seen = new AtomicReference<>();
+
+        var res = new MockHttpServletResponse();
+        filter(tenantDomain).doFilter(request(forged, TENANT_A), res,
+                (rq, rs) -> seen.set(LogContext.snapshot().asMap()));
+
+        assertThat(res.getStatus()).isEqualTo(401);
+        assertThat(seen.get())
+                .as("被拒绝的请求不进入链上，也就没有「链上看到谁」这回事；"
+                        + "这里守的是：过滤器不得在验签失败时先把头值写进日志")
+                .isNull();
+        assertThat(LogContext.snapshot().asMap())
+                .containsEntry(LogContext.TENANT_ID, LogContext.NONE);
+    }
+
+    @Test
+    @DisplayName("平台域令牌跨租户治理 → 主体是平台用户，租户位保持未知")
+    void platformTokenWritesPrincipalWithoutTenant() throws Exception {
+        var ok = token("https://auth.studykid.cn", "admin-console-api", EXP_FUTURE,
+                null, tenantKeys.getPrivate());
+        AtomicReference<Map<String, String>> seen = new AtomicReference<>();
+
+        filter(tenantDomain, platformDomain)
+                .doFilter(request(ok, TENANT_B), new MockHttpServletResponse(),
+                        (rq, rs) -> seen.set(LogContext.snapshot().asMap()));
+
+        assertThat(seen.get())
+                .containsEntry(LogContext.PRINCIPAL_ID, "u-1")
+                .containsEntry(LogContext.TENANT_ID, LogContext.NONE);
+    }
+
+    @Test
+    @DisplayName("显式关闭鉴权（本地开发逃生门）→ 日志反映实际生效的 X-Tenant-Id")
+    void disabledModeLogsEffectiveTenantFromHeader() throws Exception {
+        AtomicReference<Map<String, String>> seen = new AtomicReference<>();
+        var f = new RagJwtAuthFilter(false, List.of());
+
+        f.doFilter(request(null, TENANT_A), new MockHttpServletResponse(),
+                (rq, rs) -> seen.set(LogContext.snapshot().asMap()));
+
+        // 这不是「已验证身份」，但下游确实按这个租户执行（业务端点自己读该头）；
+        // 日志要反映实际生效的租户，否则本地排障会看到与行为不符的上下文。
+        assertThat(seen.get())
+                .containsEntry(LogContext.TENANT_ID, TENANT_A)
+                .containsEntry(LogContext.PRINCIPAL_ID, LogContext.NONE);
+    }
+
+    @AfterEach
+    void clearLogContext() {
+        LogContext.clear();
     }
 }

@@ -10,6 +10,7 @@ import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.ports.messaging.MessageHandler;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 
@@ -163,6 +164,16 @@ public class PgQueueListener {
 
     /** @return 本条消息是否已完成（CLAIMED） */
     private boolean handleOne(String tenantId, PgQueueRepository.QueuedMessage message) {
+        // 一条消息 = 一条系统链路（DB 队列模式没有 MQ 消息头可沿用，就地生成）。
+        // ⚠️ 作用域必须包住整个方法体包括错误分支：本方法有多个 return，
+        //    逐个手动 clear 迟早漏一条路径。
+        try (LogContext.Scope ignored = LogContext.push(new LogContext.Snapshot(
+                LogContext.newTraceId(), tenantId, LogContext.SYSTEM))) {
+            return doHandle(tenantId, message);
+        }
+    }
+
+    private boolean doHandle(String tenantId, PgQueueRepository.QueuedMessage message) {
         Map<String, Object> payload = message.payload();
 
         // ⚠️⚠️ **已达上限则直接进死信**（P1-13 修复的完整化）：

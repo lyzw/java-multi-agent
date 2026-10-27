@@ -3,6 +3,7 @@ package cn.studykid.multiagent.infrastructure.messaging;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
@@ -11,6 +12,7 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 
 import tools.jackson.databind.ObjectMapper;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.ports.messaging.MessageHandler;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 
@@ -76,58 +78,76 @@ public class RabbitExecutionListener {
             throws Exception {
         long tag = raw.getMessageProperties().getDeliveryTag();
 
-        Map<String, Object> body;
+        // 链路上下文：traceId 来自消息头（发送端写入），租户来自消息体。
+        // ⚠️ 容器线程会被复用，finally 的 clear() 不是可选的——
+        //    漏清会把上一条消息的租户带进下一条消息的日志（跨请求串号）。
+        LogContext.setTraceId(traceHeader(raw));
         try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> parsed = mapper.readValue(raw.getBody(), Map.class);
-            // ⚠️ I-1 纵深防御：消费侧也校验，堵住「绕过 Publisher 直接投消息」的路径
-            OutboxMessage.assertPayloadSafe(parsed);
-            body = parsed;
-        } catch (RuntimeException e) {
-            deadLettered.incrementAndGet();
-            log.error("消息不可解析/不安全，直接进死信: queue={}",
-                    raw.getMessageProperties().getConsumerQueue(), e);
-            channel.basicNack(tag, false, false);
-            return;
-        }
-
-        MessageHandler.Outcome outcome;
-        try {
-            outcome = handler.handle("RUN_DISPATCH", body, workerId());
-        } catch (RuntimeException e) {
-            // ⚠️ 处理器异常 → 重投（可重试故障）。
-            //    注意：**不是** UNKNOWN 语义——UNKNOWN 由 handler 显式返回，
-            //    异常路径无法判定副作用，故按可重试处理并留日志。
-            retried.incrementAndGet();
-            log.error("消费处理异常，nack 重投: {}", e.getMessage(), e);
-            channel.basicNack(tag, false, true);
-            return;
-        }
-
-        switch (outcome) {
-            case CLAIMED -> {
-                acked.incrementAndGet();
-                channel.basicAck(tag, false);
-            }
-            case RETRY -> {
-                retried.incrementAndGet();
-                log.warn("可重试失败，nack 重投");
-                channel.basicNack(tag, false, true);
-            }
-            case REJECTED -> {
+            Map<String, Object> body;
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> parsed = mapper.readValue(raw.getBody(), Map.class);
+                // ⚠️ I-1 纵深防御：消费侧也校验，堵住「绕过 Publisher 直接投消息」的路径
+                OutboxMessage.assertPayloadSafe(parsed);
+                body = parsed;
+            } catch (RuntimeException e) {
                 deadLettered.incrementAndGet();
-                log.error("消费被拒，进死信");
+                log.error("消息不可解析/不安全，直接进死信: queue={}",
+                        raw.getMessageProperties().getConsumerQueue(), e);
                 channel.basicNack(tag, false, false);
+                return;
             }
-            default -> {
-                // ⚠️ 枚举新增值时的兜底：**默认丢弃而非重投**。
-                // 新增枚举值若忘记映射，「重投」会造成重复副作用（Sev-0），
-                // 「丢弃」只是丢一次执行——安全方向的默认值。
-                deadLettered.incrementAndGet();
-                log.error("未知 Outcome={}，按丢弃处理（安全默认值）", outcome);
-                channel.basicAck(tag, false);
+
+            // 租户取自消息体（权威来源）；主体固定为 system —— Worker 不是登录用户，
+            // 把 run 的属主当执行主体打印会让人误以为「这个人正在操作」。
+            LogContext.setIdentity(String.valueOf(body.get("tenantId")), LogContext.SYSTEM);
+
+            MessageHandler.Outcome outcome;
+            try {
+                outcome = handler.handle("RUN_DISPATCH", body, workerId());
+            } catch (RuntimeException e) {
+                // ⚠️ 处理器异常 → 重投（可重试故障）。
+                //    注意：**不是** UNKNOWN 语义——UNKNOWN 由 handler 显式返回，
+                //    异常路径无法判定副作用，故按可重试处理并留日志。
+                retried.incrementAndGet();
+                log.error("消费处理异常，nack 重投: {}", e.getMessage(), e);
+                channel.basicNack(tag, false, true);
+                return;
             }
+
+            switch (outcome) {
+                case CLAIMED -> {
+                    acked.incrementAndGet();
+                    channel.basicAck(tag, false);
+                }
+                case RETRY -> {
+                    retried.incrementAndGet();
+                    log.warn("可重试失败，nack 重投");
+                    channel.basicNack(tag, false, true);
+                }
+                case REJECTED -> {
+                    deadLettered.incrementAndGet();
+                    log.error("消费被拒，进死信");
+                    channel.basicNack(tag, false, false);
+                }
+                default -> {
+                    // ⚠️ 枚举新增值时的兜底：**默认丢弃而非重投**。
+                    // 新增枚举值若忘记映射，「重投」会造成重复副作用（Sev-0），
+                    // 「丢弃」只是丢一次执行——安全方向的默认值。
+                    deadLettered.incrementAndGet();
+                    log.error("未知 Outcome={}，按丢弃处理（安全默认值）", outcome);
+                    channel.basicAck(tag, false);
+                }
+            }
+        } finally {
+            LogContext.clear();
         }
+    }
+
+    /** 消息头里的链路号；缺失返回 {@code null}（由 {@link LogContext} 就地生成）。 */
+    private static @Nullable String traceHeader(Message raw) {
+        Object value = raw.getMessageProperties().getHeaders().get(LogContext.TRACE_HEADER);
+        return value == null ? null : String.valueOf(value);
     }
 
     /** Worker 标识（进程内唯一即可；多实例部署时应含实例 ID）。 */
