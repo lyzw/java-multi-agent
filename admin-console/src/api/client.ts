@@ -22,6 +22,27 @@ function redirectLogin(): void {
   }
 }
 
+/**
+ * 本控制台**自身会话**的端点前缀。
+ *
+ * ⚠️ 只有这些路径返回 401 才说明「平台令牌失效」，值得清会话并跳登录。
+ *    其余端点（`/runs`、`/cap/**`、`/admin/**`、`/config/**`、`/agents`）属
+ *    **租户身份域**：平台令牌（`aud=admin-console-api`）打过去必然 401 ——
+ *    那是身份域隔离按设计生效，与会话有效性无关。
+ *
+ * 此前一律按「登录失效」处理，实测后果是路由策略页与 AI 实验室页刚写好的
+ * 「通道不可达」提示**永远走不到**：用户点「试跑」或「发起执行」被直接踢回
+ * 登录页，草稿与会话一起丢失（2026-10-28 前端端到端测试）。
+ *
+ * 本控制台的会话域只有 `/platform/v1/**`（登录为 `/platform/v1/auth/login`）；
+ * `/auth/token`、`/auth/roles` 属租户身份域，不在其中。
+ */
+const PLATFORM_SESSION_PREFIX = '/platform/'
+
+function isPlatformSessionPath(path: string): boolean {
+  return path.startsWith(PLATFORM_SESSION_PREFIX)
+}
+
 async function _request<T>(
   path: string,
   init: RequestInit = {},
@@ -53,9 +74,15 @@ async function _request<T>(
   }
 
   if (res.status === 401) {
-    clearSession()
-    redirectLogin()
-    throw new ApiError(401, '登录已失效，请重新登录')
+    if (isPlatformSessionPath(path)) {
+      clearSession()
+      redirectLogin()
+      throw new ApiError(401, '登录已失效，请重新登录')
+    }
+    // ⚠️ 跨身份域端点的 401 是**预期的通道边界**，不是会话失效：
+    //    不清会话、不跳登录，原样抛出交给调用方
+    //    （`isTenantChannelBlocked`）呈现「需租户级令牌通道」。
+    throw new ApiError(401, '平台令牌对该端点不可达（身份域隔离）')
   }
   if (res.status === 204) return undefined as T
 
