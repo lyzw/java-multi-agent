@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import cn.studykid.multiagent.api.platform.PlatformExecutionTicketService;
 import cn.studykid.multiagent.api.run.RunController.ErrorResponse;
 import cn.studykid.multiagent.ports.persistence.PlatformOpsUnavailableException;
 import cn.studykid.multiagent.ports.persistence.PlatformOpsUnavailableException;
@@ -141,5 +142,26 @@ class ApiExceptionHandlerTest {
         assertThat(resp.getBody().code()).isEqualTo("PLATFORM_OPS_UNAVAILABLE");
         // 消息固定，不回显 missingConfiguration（防配置项名/凭据线索入响应）
         assertThat(resp.getBody().message()).isEqualTo("平台运维通道未接入");
+    }
+
+    @Test
+    @DisplayName("✅ 票证闸门拒绝 → 用闸门自己声明的码，不被 handleResponseStatus 归一成「资源不存在」")
+    void ticketRejectionKeepsItsOwnReasonCode() {
+        // 回归背景（2026-10-29 实测）：八道闸门曾一律抛 ResponseStatusException，
+        // 被本类的归一逻辑按状态码改写成通用文案 —— 库里写着 TENANT_NOT_FOUND，
+        // 响应却只有「资源不存在」，两份记录对不上号，操作者只能进库查审计。
+        ResponseEntity<ErrorResponse> resp = handler.handleTicketRejected(
+                new PlatformExecutionTicketService.TicketRejectedException(
+                        HttpStatus.NOT_FOUND, "TENANT_NOT_FOUND",
+                        "租户未在 platform.tenant 登记，无法签发执行票证：2187ffed"));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(resp.getBody()).isNotNull();
+        assertThat(resp.getBody().code())
+                .as("⛔ code 必须就是 platform_audit_event.reason_code 的取值，否则界面与审计无法互相定位")
+                .isEqualTo("TENANT_NOT_FOUND");
+        assertThat(resp.getBody().message())
+                .as("文案要给出可行动信息（哪个租户、去哪儿补登记），不能是一句通用废话")
+                .contains("2187ffed");
     }
 }
