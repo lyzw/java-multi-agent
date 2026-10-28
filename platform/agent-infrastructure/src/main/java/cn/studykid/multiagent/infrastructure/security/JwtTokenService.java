@@ -131,11 +131,42 @@ public final class JwtTokenService {
      *                执行时据此识别陈旧上下文（P0-D03 §4 红线 9）
      */
     public String issue(TenantContext context, java.time.Instant now) {
+        return issueDetailed(context, now, tokenTtl).token();
+    }
+
+    /**
+     * 以<b>指定有效期</b>签发令牌（构造器默认 TTL 之外的短时票证通道）。
+     *
+     * <p><b>为什么需要重载</b>：登录令牌用 15 分钟是「人坐在浏览器前」的时长；
+     * 跨域执行票证要短得多（分钟级），因为它是<b>平台权限换来的临时租户身份</b>。
+     * 用一个独立 bean 承载 60s 会分裂出「两套同 audience 的签发器」，
+     * 密钥/issuer/audience 三处配置各写一遍，漂移只在生产暴露；
+     * 重载把差异收敛到<b>唯一变量（TTL）</b>上。
+     *
+     * @param ttl 本次令牌的有效期；必须为正
+     */
+    public String issue(TenantContext context, java.time.Instant now, java.time.Duration ttl) {
+        return issueDetailed(context, now, ttl).token();
+    }
+
+    /**
+     * 签发并回带<b>可审计定位字段</b>（{@code jti} 与 {@code exp}）。
+     *
+     * <p>签发类操作必须留痕「签出了哪一张票」——只给令牌字符串，
+     * 审计里就记不下 {@code jti}，事后无法把一张泄露的票对应到签发记录。
+     */
+    public Issued issueDetailed(TenantContext context,
+                                java.time.Instant now,
+                                java.time.Duration ttl) {
         if (context == null || now == null) {
             throw new IllegalArgumentException("签发参数不能为空");
         }
+        if (ttl == null || ttl.isNegative() || ttl.isZero()) {
+            throw new IllegalArgumentException("本次签发的有效期必须为正");
+        }
         long iat = now.getEpochSecond();
-        long exp = now.plus(tokenTtl).getEpochSecond();
+        long exp = now.plus(ttl).getEpochSecond();
+        String jti = java.util.UUID.randomUUID().toString();
 
         String header = "{\"alg\":\"" + ALGORITHM + "\",\"typ\":\"JWT\",\"kid\":\"" + kid + "\"}";
         String payload = "{"
@@ -144,7 +175,7 @@ public final class JwtTokenService {
                 + "\"aud\":\"" + escape(audience) + "\","
                 + "\"iat\":" + iat + ","
                 + "\"exp\":" + exp + ","
-                + "\"jti\":\"" + java.util.UUID.randomUUID() + "\","
+                + "\"jti\":\"" + jti + "\","
                 + "\"tenant_id\":\"" + escape(context.tenantId()) + "\","
                 + "\"roles\":[" + joinRoles(context.roles()) + "],"
                 + "\"authz_version\":" + context.authzVersion()
@@ -154,7 +185,14 @@ public final class JwtTokenService {
                 header.getBytes(StandardCharsets.UTF_8)) + "."
                 + ENCODER.encodeToString(payload.getBytes(StandardCharsets.UTF_8));
 
-        return signingInput + "." + ENCODER.encodeToString(sign(signingInput));
+        return new Issued(
+                signingInput + "." + ENCODER.encodeToString(sign(signingInput)),
+                jti,
+                java.time.Instant.ofEpochSecond(exp));
+    }
+
+    /** 一次签发的结果：令牌本体 + 审计所需的定位字段。 */
+    public record Issued(String token, String jti, java.time.Instant expiresAt) {
     }
 
     // ── 校验 ────────────────────────────────────────────────────

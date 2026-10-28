@@ -84,6 +84,47 @@ class JwtAndAuthenticationTest {
 
     // ════════════════════════════════════════════════════════════
     @Nested
+    @DisplayName("短时票证：有效期由调用方逐次指定")
+    class ShortLivedTicket {
+
+        @Test
+        @DisplayName("✅ 60 秒票证在窗口内可验通、超窗即拒（登录令牌的 15 分钟不适用）")
+        void perCallTtlIsHonoured() {
+            JwtTokenService.Issued issued =
+                    service.issueDetailed(context(), NOW, Duration.ofSeconds(60));
+
+            assertThat(issued.jti()).isNotBlank();
+            assertThat(issued.expiresAt()).isEqualTo(NOW.plusSeconds(60));
+            assertThat(service.verify(issued.token(), NOW.plusSeconds(30), KNOWN_ROLES))
+                    .isNotNull();
+
+            assertThatThrownBy(() -> service.verify(issued.token(), NOW.plusSeconds(61), KNOWN_ROLES))
+                    .as("票证超过自身 TTL 必须失效 —— 它比登录令牌短，正是因为能被平台侧签发")
+                    .isInstanceOf(JwtTokenService.JwtValidationException.class)
+                    .hasMessageContaining("过期");
+        }
+
+        @Test
+        @DisplayName("✅ 未指定 TTL 时沿用构造器默认值（登录路径行为不变）")
+        void defaultTtlUnchanged() {
+            String token = service.issue(context(), NOW);
+            assertThat(service.verify(token, NOW.plusSeconds(14 * 60), KNOWN_ROLES)).isNotNull();
+            assertThatThrownBy(() -> service.verify(token, NOW.plusSeconds(16 * 60), KNOWN_ROLES))
+                    .isInstanceOf(JwtTokenService.JwtValidationException.class);
+        }
+
+        @Test
+        @DisplayName("⛔ TTL 为非正值一律拒绝签发（不得静默签出永不过期的票）")
+        void nonPositiveTtlRefusesToIssue() {
+            assertThatThrownBy(() -> service.issueDetailed(context(), NOW, Duration.ZERO))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> service.issueDetailed(context(), NOW, Duration.ofSeconds(-1)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    @Nested
     @DisplayName("🔴 证伪尝试：令牌伪造")
     class Falsification {
 

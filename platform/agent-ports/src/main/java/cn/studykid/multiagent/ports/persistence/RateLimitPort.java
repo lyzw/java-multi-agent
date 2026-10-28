@@ -59,6 +59,20 @@ public interface RateLimitPort {
          * 处置即关闭对账通道），必须比查询更严格。
          */
         public static final String GOVERNANCE_DECIDE = "GOVERNANCE_DECIDE";
+
+        /**
+         * 平台侧<b>执行票证签发</b>（跨身份域执行通道）。
+         *
+         * <p>⚠️ 这是平台域第一次使用限流器：此前所有桶都服务租户内的动作。
+         * 计量键仍用<b>目标租户 ID</b>而非平台用户 ID，理由是威胁模型
+         * 「一个平台账号被窃 → 对全部租户逐轮签发」。按租户计量时，
+         * 攻击者横扫 100 个租户会在每个桶上各自消耗；按平台用户计量时，
+         * 他横扫的速度不受任何约束。前者才是想拦的那件事。
+         * 限额沿用<b>全局档</b>（30 次/60 秒）而不做桶级覆盖：签发是人工点击驱动的
+         * 低频动作，前端只在票证临近过期时续取（约每分钟 1 次/运行），
+         * 30 次/分留出的余量足够多人共用同一租户。
+         */
+        public static final String PLATFORM_EXECUTION_TICKET = "PLATFORM_EXECUTION_TICKET";
     }
 
     /**

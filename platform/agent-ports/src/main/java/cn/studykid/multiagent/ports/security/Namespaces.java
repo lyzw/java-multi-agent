@@ -38,6 +38,16 @@ public final class Namespaces {
         public static final String TENANT_CAPABILITY_REVOKE = "platform.tenant.capability.revoke";
         public static final String TENANT_CAPABILITY_READ = "platform.tenant.capability.read";
 
+        /**
+         * 为某租户签发<b>短时执行票证</b>（跨身份域执行通道）。
+         *
+         * <p>⚠️ 这是本清单里<b>唯一「跨域」的平台权限</b>：持有它等于
+         * 「可扮演任意租户的一个成员发起执行」。它不读写租户业务数据，
+         * 但它<b>造出</b>一个能读写租户业务数据的租户令牌，
+         * 因此风险全部集中在签发这一次调用上（授权 + 审计 + 限流都必须在它前面）。
+         */
+        public static final String TENANT_EXECUTION_TICKET = "platform.tenant.execution_ticket";
+
         public static final String RESOURCE_READ = "platform.resource.read";
         public static final String RESOURCE_MANAGE = "platform.resource.manage";
 

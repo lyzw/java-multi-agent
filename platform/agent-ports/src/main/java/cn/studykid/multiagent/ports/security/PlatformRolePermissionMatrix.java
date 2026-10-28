@@ -37,6 +37,7 @@ public final class PlatformRolePermissionMatrix {
                 Platform.TENANT_QUOTA_READ, Platform.TENANT_QUOTA_UPDATE,
                 Platform.TENANT_CAPABILITY_GRANT, Platform.TENANT_CAPABILITY_REVOKE,
                 Platform.TENANT_CAPABILITY_READ,
+                Platform.TENANT_EXECUTION_TICKET,
                 Platform.RESOURCE_READ, Platform.RESOURCE_MANAGE,
                 Platform.POLICY_READ, Platform.POLICY_PUBLISH,
                 Platform.AUDIT_READ, Platform.AUDIT_EXPORT,
@@ -70,6 +71,8 @@ public final class PlatformRolePermissionMatrix {
             Map.entry(Platform.TENANT_CAPABILITY_GRANT, "授予租户能力（如 Tool/Skill/MCP 授权）"),
             Map.entry(Platform.TENANT_CAPABILITY_REVOKE, "撤销租户能力授权"),
             Map.entry(Platform.TENANT_CAPABILITY_READ, "查看租户已授权能力"),
+            Map.entry(Platform.TENANT_EXECUTION_TICKET,
+                    "为租户成员签发短时执行票证（跨身份域执行，可扮演租户发起 Run）"),
             Map.entry(Platform.RESOURCE_READ, "查看全局资源目录（Tool/MCP/模型等）"),
             Map.entry(Platform.RESOURCE_MANAGE, "管理全局资源目录可用性"),
             Map.entry(Platform.POLICY_READ, "查看平台安全/访问策略"),
@@ -86,6 +89,8 @@ public final class PlatformRolePermissionMatrix {
     /** 角色 → 允许的动作集合。 */
     public static final Map<String, Set<String>> ROLE_PERMISSIONS = Map.of(
             // 超级管理员：持有全部平台权限（含敏感操作），但受 SoD 与 MFA/重认证约束
+            // ⚠️ TENANT_EXECUTION_TICKET 刻意<b>只</b>落在这里：票证签发即「扮演租户执行」，
+            //    生命周期管理员能启停租户不等于能替租户成员发起 Run。其余角色一律不含该码。
             PlatformRoles.SUPER_ADMIN, allPlatformPermissions(),
 
             // 租户生命周期管理员：租户创建/配置/启停/退役 + 配额 + 能力授权
