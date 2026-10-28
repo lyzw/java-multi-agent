@@ -88,10 +88,18 @@ public final class RagJwtAuthFilter implements Filter {
     }
 
     /**
-     * 从 Base64（标准编码，X.509 SubjectPublicKeyInfo DER）解析 RSA 公钥。
+     * 从 Base64（X.509 SubjectPublicKeyInfo DER）解析 RSA 公钥。
+     *
+     * <p>⚠️ **标准字母表与 URL-safe 字母表都接受**：唯一喂这个配置的上游是平台的
+     * JWKS 端点（{@code GET /api/auth/jwks}、{@code GET /api/platform/v1/auth/jwks}），
+     * 它回带的 {@code publicKeyBase64} 是 base64url（含 {@code -}／{@code _}）。
+     * 2026-10-28 端到端实测：只认标准字母表时 RAG 服务**根本起不来**，
+     * 报「令牌域 tenant 公钥不是合法 Base64 / Illegal base64 character 5f」——
+     * 运维只能自己转码，等于把可用性问题藏在配置里。两种字母表在字符集上互斥，
+     * 归一化不会引入歧义。
      *
      * @param name   域名（用于错误定位）
-     * @param base64 公钥 Base64 串
+     * @param base64 公钥 Base64 串（标准或 URL-safe，可缺尾填充）
      * @param issuer 期望 iss
      * @param audience 期望 aud
      */
@@ -101,7 +109,7 @@ public final class RagJwtAuthFilter implements Filter {
             throw new IllegalArgumentException("令牌域 " + name + " 的公钥为空");
         }
         try {
-            byte[] der = Base64.getDecoder().decode(base64.replaceAll("\\s", ""));
+            byte[] der = Base64.getDecoder().decode(toStandardBase64(base64));
             var key = KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(der));
             return new TokenDomain(name, (RSAPublicKey) key, issuer, audience);
         } catch (IllegalArgumentException e) {
@@ -109,6 +117,17 @@ public final class RagJwtAuthFilter implements Filter {
         } catch (Exception e) {
             throw new IllegalArgumentException("令牌域 " + name + " 公钥解析失败（须为 X.509 SPKI 的 RSA 公钥）", e);
         }
+    }
+
+    /** 去掉空白；含 URL-safe 字符时换成标准字母表并补齐尾部填充。 */
+    private static String toStandardBase64(String raw) {
+        String s = raw.replaceAll("\\s", "");
+        if (s.indexOf('-') < 0 && s.indexOf('_') < 0) {
+            return s;
+        }
+        String std = s.replace('-', '+').replace('_', '/');
+        int pad = (4 - std.length() % 4) % 4;
+        return std + "=".repeat(pad);
     }
 
     @Override

@@ -114,6 +114,25 @@ class RagJwtAuthFilterTest {
         new RagJwtAuthFilter(false, List.of());
     }
 
+    // ── 公钥字母表（2026-10-28 端到端实测：只认标准 Base64 时服务根本起不来）──
+
+    @Test
+    @DisplayName("⛔ 公钥标准 / URL-safe / 无填充三种写法都要能解析")
+    void parseKeyAcceptsBothAlphabets() {
+        byte[] der = tenantKeys.getPublic().getEncoded();
+        String standard = Base64.getEncoder().encodeToString(der);
+        String urlSafe = Base64.getUrlEncoder().encodeToString(der);
+        String urlSafeNoPad = Base64.getUrlEncoder().withoutPadding().encodeToString(der);
+
+        // 平台 JWKS（/api/auth/jwks、/api/platform/v1/auth/jwks）回带的是后两种
+        for (String candidate : new String[] {standard, urlSafe, urlSafeNoPad}) {
+            assertThat(RagJwtAuthFilter.parseKey("tenant", candidate,
+                            "https://auth.studykid.cn", "agent-platform").publicKey())
+                    .as("字母表写法不应影响解析结果：%s", candidate.substring(0, 8))
+                    .isEqualTo(tenantKeys.getPublic());
+        }
+    }
+
     @Test
     @DisplayName("缺 Authorization 头 → 401")
     void missingTokenRejected() throws Exception {
