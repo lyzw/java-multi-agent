@@ -100,12 +100,17 @@ gen_pair; PLATFORM_PRIV="$PRIV"; PLATFORM_PUB="$PUB"
 ( umask 077
   {
     echo "# 由 scripts/gen-jwt-keys.sh 生成于 $(date '+%F %T')。本文件含私钥，已被 .gitignore 忽略，切勿提交。"
+    echo "#"
+    echo "# ⚠️ 值一律不加引号：本文件既要被 shell source，也要被 IDEA 的 EnvFile 插件解析。"
+    echo "#    引号对 shell 无害，但插件会把引号当作密钥内容的一部分，"
+    echo "#    结果是大台登录正常、调 RAG 全 401（Base64 校验失败）。"
+    echo "#    base64url 字母表（A-Za-z0-9-_ 与点）本身不含空格，无需引用。"
     echo "# 平台侧（source 进 platform-bootstrap 的环境）："
-    echo "JWT_PRIVATE_KEY='${TENANT_PRIV}.${TENANT_PUB}'"
-    echo "PLATFORM_JWT_PRIVATE_KEY='${PLATFORM_PRIV}.${PLATFORM_PUB}'"
+    echo "JWT_PRIVATE_KEY=${TENANT_PRIV}.${TENANT_PUB}"
+    echo "PLATFORM_JWT_PRIVATE_KEY=${PLATFORM_PRIV}.${PLATFORM_PUB}"
     echo "# RAG 侧（source 进 rag-bootstrap / rag-worker 的环境；公钥，非机密）："
-    echo "RAG_TENANT_JWT_PUBLIC_KEY='${TENANT_PUB}'"
-    echo "RAG_PLATFORM_JWT_PUBLIC_KEY='${PLATFORM_PUB}'"
+    echo "RAG_TENANT_JWT_PUBLIC_KEY=${TENANT_PUB}"
+    echo "RAG_PLATFORM_JWT_PUBLIC_KEY=${PLATFORM_PUB}"
   } > "$OUT" )
 
 echo "已写入 $OUT（0600）"
