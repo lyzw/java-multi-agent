@@ -251,7 +251,7 @@ export function AgentLabPage(): JSX.Element {
     try {
       const res = await createRun({
         agentId,
-        input,
+        userMessage: input,
         timeoutMs,
         budgetAmount,
         idempotencyKey: newIdempotencyKey(),

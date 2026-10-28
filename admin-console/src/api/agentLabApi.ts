@@ -15,11 +15,24 @@
 
 import { request, ApiError } from '@/api/client'
 
-/** 创建 Run 请求体（⚠️ 不含 tenantId：租户来自验签令牌）。 */
+/**
+ * 创建 Run 请求体（调用方视角：一段自由文本）。
+ *
+ * ⚠️ **`input` 在服务端是 `Map<String,Object>`，不是字符串**
+ * （`platform/agent-api/.../run/CreateRunRequest.java` 的组件声明，实测 2026-10-28）：
+ * 直接把 `"input":"一段文本"` 发出去得到的是 **400 INVALID_REQUEST**
+ * （Jackson 绑定失败 → `ApiExceptionHandler` 归一），
+ * 换成 `"input":{"userMessage":"一段文本"}` 得到 **201 QUEUED**。
+ * 故本类型刻意**不**把字段叫 `input`：让调用点写不出「input 是字符串」这种误导性代码，
+ * 封装线格式是 `createRun` 的责任。
+ *
+ * ⚠️ 不含 tenantId：租户来自验签令牌，请求体里出现 tenantId 会被
+ *    服务端 KNOWN_FIELDS 白名单拒收（越权尝试要留痕，不是静默丢弃）。
+ */
 export interface CreateRunRequest {
   agentId: string
   /** 用户输入（会被 Prompt 防护做长度/深度/元素数校验） */
-  input: string
+  userMessage: string
   timeoutMs?: number | null
   budgetAmount?: number | null
   /** 幂等键：同一键重复提交返回 200 重放，而非新建 */
@@ -85,9 +98,10 @@ export const RUN_STATE_COLORS: Record<RunState, string> = {
 /** POST /api/runs —— 发起一次执行。 */
 export function createRun(payload: CreateRunRequest): Promise<CreateRunResponse> {
   // ⚠️ 路径不含 `/api`：`request()` 已统一拼 API_BASE，自带前缀会拼成 `/api/api/runs`。
+  const { userMessage, ...rest } = payload
   return request<CreateRunResponse>('/runs', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...rest, input: { userMessage } }),
   })
 }
 
