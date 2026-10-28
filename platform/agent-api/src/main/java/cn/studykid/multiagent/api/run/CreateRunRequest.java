@@ -3,6 +3,9 @@ package cn.studykid.multiagent.api.run;
 import java.math.BigDecimal;
 import java.util.Map;
 
+import com.fasterxml.jackson.annotation.JsonAnySetter;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -11,9 +14,14 @@ import org.jspecify.annotations.Nullable;
  *
  * <p><b>⚠️ 刻意不包含 tenantId</b>：租户标识一律取自认证上下文，
  * <b>永不信赖客户端输入</b>（P0-D02 NFR-001 / 威胁模型 S-1）。
- * 若请求体中出现 {@code tenantId}，Jackson 会因
- * {@link #UNKNOWN_PROPERTIES_REJECTED} 策略直接拒绝——
+ * 请求体中出现 {@code tenantId}（或任何未声明字段）时，由
+ * {@link #fromJson} 结合 {@link #KNOWN_FIELDS} 直接拒绝 ——
  * 这比「悄悄忽略」更好，后者会让人误以为参数生效了。
+ *
+ * <p>⚠️ <b>拒收靠的是 {@link #fromJson}，不是注解开关</b>：本项目的 JSON 栈是 Jackson 3
+ * （Spring Boot 4.1.1），实测 {@code @JsonIgnoreProperties(ignoreUnknown = false)}
+ * 在 {@code FAIL_ON_UNKNOWN_PROPERTIES} 关闭（Jackson 3 默认即关闭）时<b>不会</b>报错，
+ * 只有带 {@code @JsonAnySetter} 的显式 Creator 能把「多出来的字段」真正看见并拒掉。
  *
  * @param idempotencyKey 幂等键
  * @param agentId        目标 Agent 标识
@@ -32,13 +40,44 @@ public record CreateRunRequest(
 ) {
 
     /**
-     * 拒绝未知字段。
+     * 请求体<b>允许</b>出现的字段名 —— 未知字段拒收的<b>唯一权威清单</b>。
      *
      * <p><b>为何严格</b>：若宽松忽略，客户端传 {@code tenantId=别人的租户}
-     * 会被静默丢弃，看似「安全」实则**掩盖了攻击尝试**。
+     * 会被静默丢弃，看似「安全」实则<b>掩盖了攻击尝试</b>。
      * 明确报错才能让越权尝试留下痕迹。
+     *
+     * <p>⚠️ 新增组件时必须同步本清单，否则新字段会被 {@link #fromJson} 自己拒收
+     * （失败方向是「拒绝」而非「放行」，不会造成静默放行）。
      */
-    public static final boolean UNKNOWN_PROPERTIES_REJECTED = true;
+    public static final java.util.Set<String> KNOWN_FIELDS = java.util.Set.of(
+            "idempotencyKey", "agentId", "input", "requestedBy", "timeoutMs", "budgetAmount");
+
+    /**
+     * JSON 绑定入口：先拒收未知字段，再走紧凑构造器的取值校验。
+     *
+     * <p>{@code unknown} 由 Jackson 收集所有<b>不在参数列表里</b>的字段；
+     * 非空即拒 —— 抛出的 {@link IllegalArgumentException} 会被 Jackson 包成
+     * {@code ValueInstantiationException}，Spring 再转成
+     * {@code HttpMessageNotReadableException}，最终由
+     * {@code ApiExceptionHandler} 归一为 <b>400 + INVALID_REQUEST</b>。
+     */
+    @JsonCreator
+    static @NonNull CreateRunRequest fromJson(
+            @JsonProperty("idempotencyKey") String idempotencyKey,
+            @JsonProperty("agentId") String agentId,
+            @JsonProperty("input") Map<String, Object> input,
+            @JsonProperty("requestedBy") String requestedBy,
+            @JsonProperty("timeoutMs") Long timeoutMs,
+            @JsonProperty("budgetAmount") BigDecimal budgetAmount,
+            @JsonAnySetter Map<String, Object> unknown) {
+        if (!unknown.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "请求包含不被接受的字段: " + unknown.keySet() + "（允许的字段: "
+                            + KNOWN_FIELDS + "）");
+        }
+        return new CreateRunRequest(idempotencyKey, agentId, input, requestedBy,
+                timeoutMs, budgetAmount);
+    }
 
     /**
      * 时间预算的硬上限（毫秒 = 24 小时）。

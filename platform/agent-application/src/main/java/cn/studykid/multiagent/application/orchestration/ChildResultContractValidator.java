@@ -11,6 +11,8 @@ import tools.jackson.databind.ObjectMapper;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import cn.studykid.multiagent.core.orchestration.ContractSchemaKeywords;
+
 /**
  * 委派结果的输出契约校验（多级 Agent v1.1 · P2-MA-04 · MA-T16 · FR-027）。
  *
@@ -30,11 +32,6 @@ import org.jspecify.annotations.Nullable;
 public final class ChildResultContractValidator {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-
-    /** 支持的关键字白名单（其余关键字视为不支持 → 拒绝契约）。 */
-    private static final List<String> SUPPORTED_KEYWORDS = List.of(
-            "type", "required", "properties", "additionalProperties", "items", "enum",
-            "description", "title", "$schema", "$id");
 
     private ChildResultContractValidator() {
     }
@@ -80,7 +77,14 @@ public final class ChildResultContractValidator {
         }
 
         List<String> violations = new ArrayList<>();
-        check(schema, value, "$", violations);
+        List<String> schemaErrors = new ArrayList<>();
+        check(schema, value, "$", violations, schemaErrors);
+        if (!schemaErrors.isEmpty()) {
+            // ⚠️ 报错方向必须是「契约不合法」，而不是「输出不符合契约」：
+            //    后者会把**配置缺陷**伪装成**子 Agent 的产出问题**，
+            //    排查的人从此去查子 Agent，而真相是这份契约写错了。
+            return Result.invalid("输出契约不合法: " + schemaErrors);
+        }
         if (!violations.isEmpty()) {
             return Result.invalid("子 Agent 输出不符合输出契约: " + violations);
         }
@@ -90,7 +94,7 @@ public final class ChildResultContractValidator {
     // ── 递归校验 ────────────────────────────────────────────────
 
     private static void check(JsonNode schema, JsonNode value, String path,
-                              List<String> violations) {
+                              List<String> violations, List<String> schemaErrors) {
         String type = schema.path("type").asText(null);
         if (type != null && !matchesType(type, value)) {
             violations.add(path + " 类型应为 " + type + "，实际 " + typeOf(value));
@@ -125,13 +129,19 @@ public final class ChildResultContractValidator {
                 properties.properties().forEach(entry -> {
                     JsonNode child = value.get(entry.getKey());
                     if (child != null) {
-                        check(entry.getValue(), child, path + '.' + entry.getKey(), violations);
+                        check(entry.getValue(), child, path + '.' + entry.getKey(),
+                                violations, schemaErrors);
                     }
                 });
             }
             // ⚠️ additionalProperties=false：多传字段必须拒绝
             //    （否则「多传了越界字段」会被静默忽略，看起来无害实则掩盖越界输入）
-            if ("false".equals(schema.path("additionalProperties").asText(null))) {
+            //    ⚠️ 必须是**布尔判定**，不能是字符串比较（10 号文档 §8 · G-5）：
+            //    旧写法 `"false".equals(asText(null))` 会把 {@code "FALSE"}、{@code 0}
+            //    一律读成「没写 false」→ **静默放弃这条约束**。契约写错却不报错，
+            //    正是本项目反复消除的「看起来生效、实际不生效」形态。
+            if (rejectsAdditionalProperties(schema.get("additionalProperties"),
+                    path, schemaErrors)) {
                 List<String> allowed = properties.isObject()
                         ? properties.properties().stream().map(java.util.Map.Entry::getKey).toList()
                         : List.of();
@@ -146,10 +156,45 @@ public final class ChildResultContractValidator {
             JsonNode items = schema.get("items");
             int index = 0;
             for (JsonNode element : value) {
-                check(items, element, path + '[' + index + ']', violations);
+                check(items, element, path + '[' + index + ']', violations, schemaErrors);
                 index++;
             }
         }
+    }
+
+    /**
+     * 本层契约是否要求「拒绝未声明的字段」，并把<b>写法歧义</b>记进 {@code schemaErrors}。
+     *
+     * <p>口径（10 号文档 §8 · G-5）：
+     * <ul>
+     *   <li>缺省 / {@code true} / {@code "true"} → 不约束；</li>
+     *   <li>{@code false}（JSON 布尔，规范写法）与 {@code "false"}（字符串，
+     *       兼容 {@code cap_result_contract} 存量契约的写法）→ 约束；</li>
+     *   <li>其余写法（{@code "FALSE"}、{@code "0"}、{@code 0}、对象…）→ <b>契约不合法</b>，
+     *       记错而不是猜一个语义。</li>
+     * </ul>
+     */
+    private static boolean rejectsAdditionalProperties(JsonNode node, String path,
+                                                       List<String> schemaErrors) {
+        if (node == null || node.isMissingNode()) {
+            return false;
+        }
+        if (node.isBoolean()) {
+            return !node.booleanValue();
+        }
+        if (node.isString()) {
+            String text = node.textValue();
+            if ("false".equals(text)) {
+                return true;
+            }
+            if ("true".equals(text)) {
+                return false;
+            }
+            schemaErrors.add(path + " 的 additionalProperties 不是合法布尔写法: \"" + text + "\"");
+            return false;
+        }
+        schemaErrors.add(path + " 的 additionalProperties 必须是布尔值，实际 " + typeOf(node));
+        return false;
     }
 
     private static boolean matchesType(String type, JsonNode value) {
@@ -193,14 +238,16 @@ public final class ChildResultContractValidator {
         return "unknown";
     }
 
+    /**
+     * 顶层关键字白名单口径来自 {@link ContractSchemaKeywords}：
+     * 子输出契约与父侧 {@code routingContract.inputContract} 共用同一份，
+     * 两份白名单必然分叉 —— 而分叉的现场是
+     * 「模型按父的 Schema 填了字段，运行期校验器不认识它」。
+     */
     private static @NonNull List<String> unsupportedKeywords(JsonNode schema) {
-        List<String> unsupported = new ArrayList<>();
-        schema.properties().forEach(entry -> {
-            if (!SUPPORTED_KEYWORDS.contains(entry.getKey())) {
-                unsupported.add(entry.getKey());
-            }
-        });
-        return unsupported;
+        List<String> names = new ArrayList<>();
+        schema.properties().forEach(entry -> names.add(entry.getKey()));
+        return ContractSchemaKeywords.unsupported(names);
     }
 
     /**

@@ -11,11 +11,14 @@ import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
+import cn.studykid.multiagent.core.cap.ConfigPointer;
+import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
 import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapDualWritePort;
 import cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort;
+import cn.studykid.multiagent.ports.persistence.ConfigPointerPort;
 
 /**
  * 迁移双写实现（P0-T6 · 06 §3.3）。
@@ -37,9 +40,17 @@ public class CapDualWriteService implements CapDualWritePort {
 
     private final CapDualWriteSwitch dualWriteSwitch;
     private final CapAgentDefPort agentDefs;
-    private final PermissionResolver resolver;
+    private final ClosureResolver resolver;
     private final AuthzVersionPort authzVersions;
     private final CapabilitySnapshotPort snapshots;
+    /**
+     * 当前发布指针（{@code config_version} 的唯一权威来源，§6.3 第 3/5 条）。
+     *
+     * <p>⚠️ 可为 {@code null} = 未装配：此时快照的 {@code config_version} 写 0
+     * 并计数 —— 0 的语义是「<b>无</b>可追溯的发布序号」，
+     * 与「查到了序号」是两种可区分的现场。
+     */
+    private final @Nullable ConfigPointerPort configPointers;
     private final Clock clock;
 
     /** 双写失败计数（可观测）。 */
@@ -48,19 +59,38 @@ public class CapDualWriteService implements CapDualWritePort {
     private final AtomicLong deferredSnapshots = new AtomicLong();
     /** 因投影被拒（V1 硬边界）而跳过的计数。 */
     private final AtomicLong rejectedProjections = new AtomicLong();
+    /** 因「读不到当前发布指针」而写入 {@code config_version=0} 的快照计数。 */
+    private final AtomicLong unknownConfigVersions = new AtomicLong();
 
     public CapDualWriteService(@NonNull CapDualWriteSwitch dualWriteSwitch,
                                 @NonNull CapAgentDefPort agentDefs,
-                                @NonNull PermissionResolver resolver,
+                                @NonNull ClosureResolver resolver,
                                 @NonNull AuthzVersionPort authzVersions,
                                 @NonNull CapabilitySnapshotPort snapshots,
                                 @NonNull Clock clock) {
+        this(dualWriteSwitch, agentDefs, resolver, authzVersions, snapshots, clock, null);
+    }
+
+    /**
+     * 最完整构造器：含当前发布指针（用于回填 {@code config_version}）。
+     *
+     * @param configPointers 当前发布指针端口；{@code null} = 未装配（快照的
+     *                       {@code config_version} 只能记 0，即「无可追溯序号」）
+     */
+    public CapDualWriteService(@NonNull CapDualWriteSwitch dualWriteSwitch,
+                                @NonNull CapAgentDefPort agentDefs,
+                                @NonNull ClosureResolver resolver,
+                                @NonNull AuthzVersionPort authzVersions,
+                                @NonNull CapabilitySnapshotPort snapshots,
+                                @NonNull Clock clock,
+                                @Nullable ConfigPointerPort configPointers) {
         this.dualWriteSwitch = dualWriteSwitch;
         this.agentDefs = agentDefs;
         this.resolver = resolver;
         this.authzVersions = authzVersions;
         this.snapshots = snapshots;
         this.clock = clock;
+        this.configPointers = configPointers;
     }
 
     @Override
@@ -130,12 +160,11 @@ public class CapDualWriteService implements CapDualWritePort {
             String fingerprint = ClosureFingerprint.of(closure);
             String closureJson = ClosureFingerprint.canonicalJson(closure);
             long authzVersion = authzVersions.require(tenantId, principalId).authzVersion();
+            long configVersion = currentConfigVersion(tenantId);
 
             CapabilitySnapshot snapshot = new CapabilitySnapshot(
                     runId, tenantId, agentId, closureJson, agentVersion,
-                    // ⚠️ configVersion 仅作**追溯**用（P0 交付说明的决策 3.3），
-                    //    不参与任何授权判定；P5 的发布流程落地后由发布序号回填。
-                    0L, fingerprint, authzVersion, clock.instant());
+                    configVersion, fingerprint, authzVersion, clock.instant());
             if (!snapshots.save(snapshot)) {
                 // 幂等：同一 runId 的快照已存在 → 不覆盖（先写入者为准）
                 log.debug("执行快照双写跳过：快照已存在（tenant={}, run={}）", tenantId, runId);
@@ -146,6 +175,44 @@ public class CapDualWriteService implements CapDualWritePort {
             log.debug("执行快照双写挂起（闭包不可解析或版本源不可用）: tenant={}, run={}, agent={}, 原因={}",
                     tenantId, runId, agentId, e.getMessage());
         }
+    }
+
+    /**
+     * 读取本租户<b>当前生效</b>的配置发布序号（G-3 修复）。
+     *
+     * <p>⚠️ <b>唯一来源是当前发布指针</b>（§6.3 第 3/5 条）：
+     * <b>不得</b>用 {@code max(config_publish_seq)}（那会选中 PREPARING /
+     * 已回滚的行），<b>不得</b>扫历史发布头，<b>不得</b>取序列的
+     * {@code last_value}（那是<b>全局</b>计数，别的租户发布会让它凭空跳格，
+     * 于是「configVersion 递增」不再等价于「本租户的配置变过」）。
+     *
+     * <p>⚠️ <b>指针为空 → 0，并计数 + WARN</b>：
+     * 0 的语义是「该租户尚未经 CAS 发布过任何配置，<b>无</b>发布序号可追溯」，
+     * 这是<b>如实记录读不到的原因</b>，与修复前那句「无条件写 0」有本质区别：
+     * 修复前的 0 在<b>已经发布过</b>的租户身上照样出现，
+     * 于是「策略变了没有」的判据永远不成立（G-3 的核心缺陷）。
+     *
+     * <p>⚠️ <b>指针读取抛异常则整条快照都不写</b>（走外层 fail-soft）：
+     * 序号缺失只是追溯字段缺一列，而「凭一个来路不明的序号写一份不可变快照」
+     * 会让这份历史永久失真 —— 快照<b>不可覆盖</b>，宁缺毋滥。
+     */
+    private long currentConfigVersion(@NonNull String tenantId) {
+        if (configPointers == null) {
+            unknownConfigVersions.incrementAndGet();
+            log.warn("未装配当前发布指针：执行快照的 config_version 记 0（无发布序号可追溯）"
+                    + "（tenant={}）", tenantId);
+            return 0L;
+        }
+        Long seq = configPointers.current(ConfigRelease.Scope.TENANT, tenantId)
+                .map(ConfigPointer::currentPublishSeq)
+                .orElse(null);
+        if (seq == null) {
+            unknownConfigVersions.incrementAndGet();
+            log.warn("本租户当前发布指针为空（尚未经 CAS 发布过配置）："
+                    + "执行快照的 config_version 记 0（tenant={}）", tenantId);
+            return 0L;
+        }
+        return seq;
     }
 
     /**
@@ -167,5 +234,13 @@ public class CapDualWriteService implements CapDualWritePort {
      */
     public long deferredSnapshotCount() {
         return deferredSnapshots.get();
+    }
+
+    /**
+     * @return 因「读不到当前发布指针」而把 {@code config_version} 记为 0 的快照累计次数
+     *         （可观测：该值持续增长说明发布链路没接上，快照的追溯字段形同虚设）
+     */
+    public long unknownConfigVersionCount() {
+        return unknownConfigVersions.get();
     }
 }

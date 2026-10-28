@@ -29,11 +29,37 @@ class DelegationArgumentsTest {
     }
 
     @Test
-    @DisplayName("省略 input → 输入为空（不得报错，委派可以不带上下文）")
-    void missingInputYieldsEmptyMap() {
-        var parsed = DelegationArguments.parse(Map.of("targetAgentId", "child-agent"));
+    @DisplayName("省略 input → 拒绝（不得兜底成空 Map）")
+    void missingInputIsRejected() {
+        // ⚠️ 旧行为是兜底成空 Map（10 号文档 §8 · G-4）：
+        //    「模型根本没产出输入」与「产出了一份空输入」在兜底下**长得一样**，
+        //    规则引擎对两者一律 NO_MATCH，于是配置缺陷被伪装成「规则没命中」——
+        //    现场看不到任何异常，只有路由静默退化成「全部走兜底」。
+        assertThatThrownBy(() -> DelegationArguments.parse(
+                Map.of("targetAgentId", "child-agent")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("input");
+    }
+
+    @Test
+    @DisplayName("显式传空对象 input → 接受（那是「确实没有业务输入」的真实声明）")
+    void explicitEmptyInputIsAccepted() {
+        var parsed = DelegationArguments.parse(
+                Map.of("targetAgentId", "child-agent", "input", Map.of()));
 
         assertThat(parsed.input()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("input 显式为 null → 与省略同样拒绝（null 不是「空输入」）")
+    void nullInputIsRejected() {
+        java.util.Map<String, Object> args = new java.util.LinkedHashMap<>();
+        args.put("targetAgentId", "child-agent");
+        args.put("input", null);
+
+        assertThatThrownBy(() -> DelegationArguments.parse(args))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("input");
     }
 
     @Test

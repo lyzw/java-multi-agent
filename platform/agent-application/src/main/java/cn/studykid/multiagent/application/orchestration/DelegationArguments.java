@@ -42,13 +42,19 @@ public final class DelegationArguments {
             throw new IllegalArgumentException("缺少必填参数 " + TARGET);
         }
         Object rawInput = arguments.get(INPUT);
-        if (rawInput != null && !(rawInput instanceof Map)) {
+        if (rawInput == null) {
+            // ⚠️ **不得**兜底成空 Map（10 号文档 §8 · G-4）：
+            //    缺 input 时兜底 = 让「模型没产出路由输入」看起来像
+            //    「产出了一个空输入」—— 规则引擎对两者都会 NO_MATCH，
+            //    于是配置缺陷被伪装成「规则没命中」，现场无人察觉。
+            //    允许显式传空对象 {@code {}}（那是「确实没有业务输入」的真实声明）。
+            throw new IllegalArgumentException("缺少必填参数 " + INPUT);
+        }
+        if (!(rawInput instanceof Map)) {
             throw new IllegalArgumentException(INPUT + " 必须是对象");
         }
         @SuppressWarnings("unchecked")
-        Map<String, Object> input = rawInput instanceof Map
-                ? (Map<String, Object>) rawInput
-                : Map.of();
+        Map<String, Object> input = (Map<String, Object>) rawInput;
         return new Parsed(String.valueOf(rawTarget).trim(), input);
     }
 

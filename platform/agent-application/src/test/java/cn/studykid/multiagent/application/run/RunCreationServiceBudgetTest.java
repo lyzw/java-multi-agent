@@ -121,7 +121,8 @@ class RunCreationServiceBudgetTest {
 
     /** 恒解析出快照的替身。 */
     private static final ExecutionSnapshotPort SNAPSHOT =
-            (tenantId, agentId) -> Optional.of("11111111-1111-1111-1111-111111111111");
+            (tenantId, agentId) -> Optional.of(new ExecutionSnapshotPort.SnapshotRef(
+                    "11111111-1111-1111-1111-111111111111", 1));
 
     /** 恒「首次执行」的极简事务器（不引入真实事务语义）。 */
     private static final RunCreationService.TransactionRunner TX =

@@ -16,6 +16,7 @@ import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
+import cn.studykid.multiagent.ports.persistence.CapDualWritePort;
 import cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
@@ -55,11 +56,33 @@ public class RunCreationService {
      */
     private final BudgetPort budget;
 
+    /**
+     * 迁移双写端口（{@code execution_capability_snapshot} 的<b>唯一生产写入点</b>）。
+     *
+     * <p>⚠️ <b>可为空 = 未装配</b>：此时 Run 照常创建，但<b>没有</b>能力快照。
+     * 该缺失是<b>可观测</b>的（构造时 WARN），因为快照的六个读方
+     * 一律 fail-closed —— 缺快照的后果是「运行期拒跑」，
+     * 而不是「悄悄按默认配置跑」。
+     *
+     * <p>⚠️ <b>与 Run 同事务写（2026-10-28 改，此前在提交之后）</b>：
+     * Outbox 消息与 Run 同事务提交，Worker 拿到任务的最晚时间比提交时间只多几十毫秒；
+     * 而快照写在事务外要<b>实测晚约 1.15s</b>（闭包解析要串三次库查询），
+     * 于是「消息先到、快照后到」，执行侧按 fail-closed 直接把 Run 判死。
+     * 闭包越复杂、解析越慢，失败越确定 —— 这个顺序错在根上，不是调参数能绕开的。
+     *
+     * <p>⚠️ <b>代价（刻意接受）</b>：同一事务里做不到 fail-soft ——
+     * PostgreSQL 语句一旦报错，事务进入 aborted 态，即便 Java 侧吞掉异常，
+     * commit 仍会失败。因此「双写失败」现在升级为「Run 创建失败」。
+     * 取舍理由：能力快照是执行侧<b>唯一的根 Agent 身份来源</b>，
+     * 一份「创建成功但永远跑不起来」的 Run 比一次明确的 5xx 更坏。
+     */
+    private final @Nullable CapDualWritePort dualWrite;
+
     public RunCreationService(@NonNull RunCreationPort runCreation,
                               @NonNull ExecutionSnapshotPort snapshots,
                               @NonNull TransactionRunner tx,
                               @NonNull Clock clock) {
-        this(runCreation, snapshots, tx, clock, null);
+        this(runCreation, snapshots, tx, clock, null, null);
     }
 
     /**
@@ -72,14 +95,34 @@ public class RunCreationService {
                               @NonNull TransactionRunner tx,
                               @NonNull Clock clock,
                               @Nullable BudgetPort budget) {
+        this(runCreation, snapshots, tx, clock, budget, null);
+    }
+
+    /**
+     * 完整构造器：含预算端口与迁移双写端口。
+     *
+     * @param budget    预算端口；{@code null} = 未装配（带额度声明的创建请求将被拒绝）
+     * @param dualWrite 双写端口；{@code null} = 未装配（Run 有能力快照缺失的已知后果）
+     */
+    public RunCreationService(@NonNull RunCreationPort runCreation,
+                              @NonNull ExecutionSnapshotPort snapshots,
+                              @NonNull TransactionRunner tx,
+                              @NonNull Clock clock,
+                              @Nullable BudgetPort budget,
+                              @Nullable CapDualWritePort dualWrite) {
         this.runCreation = runCreation;
         this.snapshots = snapshots;
         this.tx = tx;
         this.clock = clock;
         this.budget = budget;
+        this.dualWrite = dualWrite;
         if (budget == null) {
             log.warn("未装配预算端口：Run 级额度与租户额度的一致性校验不生效，"
                     + "「声明了 Run 额度」的创建请求将被拒绝（fail-closed）");
+        }
+        if (dualWrite == null) {
+            log.warn("未装配迁移双写端口：Run 创建后不会生成 execution_capability_snapshot，"
+                    + "依赖该快照的执行准入将一律 fail-closed 拒绝");
         }
     }
 
@@ -186,7 +229,7 @@ public class RunCreationService {
         //    ⚠️ 幂等重放已在上面返回：重放不产生新的副作用，不该被本次校验拦下。
         assertRunBudgetWithinAccount(context, limits);
 
-        return tx.execute(tenantId(context), () -> {
+        ProvisionedRun provisioned = tx.execute(tenantId(context), () -> {
             // ⚠️⚠️ 快照解析**必须在写事务内**（P4-D18 修复）：
             //   此前由调用方传入的 snapshotId() 恒为随机 UUID，
             //   必然违反 run_snapshot_fk → 端点恒 500。
@@ -194,23 +237,58 @@ public class RunCreationService {
             //   解析与写入落在同一个快照下。
             //   ⚠️ 不可解析属**客户端错误**（4xx），必须显式抛出而非让
             //   外键以 PSQLException 的形式冒泡成 500。
-            String snapshotId = snapshots
-                    .resolveSnapshotId(context.tenantId(), agentId)
+            ExecutionSnapshotPort.SnapshotRef snapshot = snapshots
+                    .resolveSnapshot(context.tenantId(), agentId)
                     .orElseThrow(() -> new ExecutionSnapshotUnavailableException(
                             context.tenantId(), agentId));
 
             String actualRunId = runCreation.insertRunAtomically(
                     context.tenantId(),
                     runId,
-                    snapshotId,
+                    snapshot.snapshotId(),
                     key,
                     digest,
                     inputPayload,
                     correlationId,
                     message,
                     limits);
-            return new CreateRunResult(actualRunId, false);
+            // ⚠️⚠️ 双写必须在<b>本事务之内</b>（2026-10-28 实测竞态后修正）：
+            //   Outbox 消息与本事务一起提交，Worker 最迟在提交后几十毫秒就能领到任务；
+            //   而放在事务外的双写<b>实测晚约 1.15s 才落库</b>
+            //   （闭包解析要串「指针 → 发布头 → 对象版本」三段查询）。
+            //   于是顺序变成「消息先可见、快照后可见」，执行侧读不到根 Agent 身份，
+            //   按 fail-closed 把 Run 判成 CONFIG_UNAVAILABLE ——
+            //   闭包越复杂、解析越慢，失败越确定。
+            //   ⚠️ 副作用：双写SQL报错会连带回滚 Run 创建（PG 事务内做不到 fail-soft），
+            //   这是刻意接受的代价，理由见 {@link #dualWrite} 字段注释。
+            dualWriteCapabilitySnapshot(context, agentId,
+                    new ProvisionedRun(actualRunId, snapshot.agentVersion()));
+            return new ProvisionedRun(actualRunId, snapshot.agentVersion());
         });
+
+        return new CreateRunResult(provisioned.runId(), false);
+    }
+
+    /**
+     * Run 写入事务<b>之内</b>的能力快照双写（G-3 · 快照写入入口）。
+     *
+     * <p>⚠️ <b>只有首次执行才调用</b>：幂等重放返回的是首次的 Run，
+     * 首那次已经把快照写过了；重放再写一遍是重复副作用
+     * （虽然仓储用 {@code ON CONFLICT DO NOTHING} 兜住了覆盖，
+     * 但「重放不产生副作用」这条不变式不该靠下游的宽容维持）。
+     *
+     * <p>⚠️ <b>{@code agentVersion} 取写事务内解析出的那一个</b>，
+     * 不是「此刻 Agent 的最新版本」：后者与 Run 实际绑定的快照可能已经不同，
+     * 那会让快照描述了一份<b>本 Run 并未使用过</b>的配置。
+     */
+    private void dualWriteCapabilitySnapshot(@NonNull TenantContext context,
+                                              @NonNull String agentId,
+                                              @NonNull ProvisionedRun provisioned) {
+        if (dualWrite == null) {
+            return;
+        }
+        dualWrite.onExecutionSnapshotCreated(context.tenantId(), provisioned.runId(),
+                agentId, provisioned.agentVersion(), context.principalId());
     }
 
     /**
@@ -296,6 +374,19 @@ public class RunCreationService {
                 throw new IllegalArgumentException("runId 不能为空");
             }
         }
+    }
+
+    /**
+     * 写事务的产出：落库的 Run 标识 + 该 Run 绑定的 Agent 版本号。
+     *
+     * <p>⚠️ 版本号必须<b>随事务一起带出来</b>，不能在事务外「再查一次当前版本」：
+     * 两次读之间 Agent 可以改版，于是能力快照会记录一个
+     * <b>本 Run 从未使用过</b>的版本，而快照不可覆盖 —— 失真无法事后修正。
+     *
+     * @param runId        实际写入的 Run 标识
+     * @param agentVersion {@code run.snapshot_id} 所属版本的 {@code version_number}
+     */
+    private record ProvisionedRun(@NonNull String runId, int agentVersion) {
     }
 
     /**

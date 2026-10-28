@@ -826,7 +826,17 @@ public class ToolInvocationGate {
                         null,
                         parsed.input(),
                         invocationId,
-                        task.runId(),
+                        // ⚠️ traceId 是**每次调用**的串链标识，不是 Run 标识（10 号文档 §8 · G-2）：
+                        //    此前恒写 task.runId()，于是一次多跳 Run 里所有委派的 trace_id
+                        //    全都相同 —— 事后无法把一条委派归因到具体的模型 tool call，
+                        //    「路由冲突发生在哪一跳」这类问题在库里问不出来。
+                        //    优先用模型给的 callId（它正是 invocationId 的派生材料，:754-757）；
+                        //    callId 可空（{@code ToolCallRequest.callId} 是 @Nullable），
+                        //    缺失时退回**按调用派生**的 invocationId —— 仍是逐调用唯一，
+                        //    绝不退回 runId（那等于回到本次修复前的形态）。
+                        call.callId() == null || call.callId().isBlank()
+                                ? invocationId
+                                : call.callId(),
                         remainingMillis,
                         task.fencingToken(),
                         task.attempt(),
@@ -1066,8 +1076,11 @@ public class ToolInvocationGate {
             try {
                 handler.validate(call.arguments());
             } catch (RuntimeException e) {
-                log.info("Schema 校验失败，拒绝执行: tool={}, err={}",
-                        call.toolName(), e.getMessage());
+                // ⚠️ 必须带上模型实际提交的参数名（2026-10-28 真实模型实测后补）：
+                //    只有校验器的报错时，「模型传错参数名」与
+                //    「网关把参数解析成了空表」两种真因在现场完全同形，无法定位。
+                log.warn("Schema 校验失败，拒绝执行: tool={}, err={}, 实收参数={}",
+                        call.toolName(), e.getMessage(), call.arguments().keySet());
                 result.recordRejected(call.toolName(), "Schema 校验失败");
                 continue;
             }

@@ -497,8 +497,9 @@ class RunControllerTest {
         }
 
         @Override
-        public java.util.Optional<String> resolveSnapshotId(String tenantId, String agentId) {
-            return java.util.Optional.ofNullable(snapshotId);
+        public java.util.Optional<SnapshotRef> resolveSnapshot(String tenantId, String agentId) {
+            return java.util.Optional.ofNullable(snapshotId)
+                    .map(id -> new SnapshotRef(id, 1));
         }
     }
 
