@@ -151,6 +151,7 @@ public record EditionCoordinate(
         SUEP("苏教版"),
         BEISHIDA("北师大版"),
         HUAJIAO("华师大版"),
+        HUJIAO("沪教版"),
         LUJIAO("鲁教版"),
         HUBEI("鄂教版"),
         OTHER("其他");

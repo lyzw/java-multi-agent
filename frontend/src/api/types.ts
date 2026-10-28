@@ -534,7 +534,14 @@ export interface RagRetrievalHit {
   text: string
   /** 片段角色（EXPLANATION / EXERCISE_HINT / EXERCISE_ANSWER …） */
   role: string
-  /** 综合得分 0~1（低于门禁已被编排层过滤） */
+  /**
+   * 相关性分 0~1（低于门禁的已被编排层过滤）。
+   *
+   * ⚠️ **它不是排序依据**：命中顺序由内部 RRF 融合排名决定
+   *   （`RetrievalResultDto.HitDto` 的 javadoc 同款说明）。
+   *   因此「相关度 57%」出现在「48%」之后是正常的，
+   *   不要在前端按 score 重排——那会破坏与后端引用编号的对应关系。
+   */
   score: number
   /** 版本展示名 */
   edition: string
@@ -622,7 +629,7 @@ export const RAG_GRADES = [
 export const RAG_TERMS = ['上册', '下册', '全一册'] as const
 
 export const RAG_PUBLISHERS = [
-  '人教版', '苏教版', '北师大版', '华师大版', '鲁教版', '鄂教版', '其他',
+  '人教版', '苏教版', '北师大版', '华师大版', '沪教版', '鲁教版', '鄂教版', '其他',
 ] as const
 
 /** 检索模式的可读标签（界面展示用，值仍用枚举原名）。 */
@@ -1019,6 +1026,31 @@ export interface CapToolCatalogItem {
 }
 
 /**
+ * Skill 两级描述的一条分场景操作指引（2级），对齐后端契约 `$defs.skillDescription.usage[]`。
+ */
+export interface CapSkillUsageItem {
+  /** 触发条件 */
+  when: string
+  /** 操作步骤 */
+  how: string
+}
+
+/**
+ * Skill 两级描述（对齐后端契约 `$defs.skillDescription`）。
+ *
+ * ⚠️ **描述不是字符串**：后端 `GET /api/cap/catalog/skills` 的 `description`
+ * 是 `{purpose, usage[]}` 对象（或 null）。把它当字符串渲染会让 React
+ * 抛「Objects are not valid as a React child」，而本页没有错误边界 ——
+ * 后果是整个应用白屏（连导航和「退出」都点不到），不是某格显示难看。
+ */
+export interface CapSkillDescription {
+  /** 1级 · 用途简述 */
+  purpose: string
+  /** 2级 · 分场景操作指引（可空） */
+  usage?: CapSkillUsageItem[] | null
+}
+
+/**
  * Skill 目录项（对齐后端 `CapabilityCatalogController.SkillResponse`）。
  *
  * ⚠️ **只读数据**：同 {@link CapToolCatalogItem} —— Skill 定义是 platform 级对象。
@@ -1026,7 +1058,8 @@ export interface CapToolCatalogItem {
 export interface CapSkillCatalogItem {
   skillId: string
   name: string | null
-  description: string | null
+  /** 两级描述（1级 purpose + 2级 usage）；存量行可为 null */
+  description: CapSkillDescription | null
   /** 声明的平台原生工具 id 清单 */
   declaredTools: string[]
   /** 声明的 MCP server 及其操作白名单 */

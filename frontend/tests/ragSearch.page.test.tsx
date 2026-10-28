@@ -15,7 +15,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { SessionProvider } from '@/auth/session'
 import { RagSearchPage } from '@/pages/rag/RagSearchPage'
 import { ApiError } from '@/api/client'
-import type { RagRetrievalResponse, RagGenerateResponse } from '@/api/types'
+import type { RagRetrievalResponse, RagGenerateResponse, RagRetrievalHit } from '@/api/types'
 
 const retrieveChunksMock = vi.hoisted(() => vi.fn())
 const generateRagAnswerMock = vi.hoisted(() => vi.fn())
@@ -224,6 +224,79 @@ describe('知识检索页（FE-RAG 接线）', () => {
     expect(await screen.findByText(/二次函数 y=ax²\+bx\+c 的顶点坐标为/)).toBeTruthy()
     expect(screen.getByText('来源 1')).toBeTruthy()
     expect(screen.getByText(/八年级上册 第 3 章 第 45 页/)).toBeTruthy()
+  })
+
+  it('⛔ 「依据 N」与「来源 N」必须逐条对齐，未引用的降级为参考召回', async () => {
+    const hit = (chunkId: string, text: string): RagRetrievalHit => ({
+      chunkId,
+      text,
+      role: 'EXPLANATION',
+      score: 0.5,
+      edition: '人教版·八年级上册·2024',
+      locator: `${chunkId} 引用位置`,
+      channel: 'DENSE_VECTOR',
+      reason: 'DIRECT_MATCH',
+    })
+    // 召回顺序 c-1 → c-2 → c-3；后端装配依据的顺序却是 c-3 → c-1（c-2 未进依据）
+    retrieveChunksMock.mockResolvedValue(
+      sampleRetrieval({ hits: [hit('c-1', '甲句'), hit('c-2', '乙句'), hit('c-3', '丙句')] }),
+    )
+    generateRagAnswerMock.mockResolvedValue(
+      sampleGeneration({ citations: [hit('c-3', '丙句'), hit('c-1', '甲句')] }),
+    )
+
+    renderPage()
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('你的问题'), '顶点怎么求')
+    await fillTenant(user)
+    await user.click(screen.getByRole('button', { name: /检索并生成/ }))
+
+    await waitFor(() => expect(document.querySelectorAll('.source').length).toBe(3))
+    const labels = Array.from(document.querySelectorAll('.source')).map(
+      (card) =>
+        `${card.querySelector('.source__no')?.textContent}=${card.querySelector('.source__text')?.textContent}`,
+    )
+    // ⛔ 编号跟着依据走：学生按「依据 2」回查，必须落到同一段原文
+    expect(labels).toEqual(['来源 1=丙句', '来源 2=甲句', '参考召回=乙句'])
+  })
+
+  it('⛔ 生成期依据不显示相关度：后端 score 恒为 0，显示「0%」会被读成「不相关」', async () => {
+    const basis = (chunkId: string, text: string): RagRetrievalHit => ({
+      chunkId,
+      text,
+      role: 'EXPLANATION',
+      // ⚠️ 与后端契约一致：GenerationResultDto.toHit 把 score 置 0.0
+      score: 0,
+      edition: '人教版·八年级上册·2024',
+      locator: `${chunkId} 引用位置`,
+      channel: 'GENERATION_BASIS',
+      reason: 'CITED_AS_BASIS',
+    })
+    const recalled: RagRetrievalHit = {
+      ...basis('c-9', '乙句'),
+      score: 0.42,
+      channel: 'DENSE_VECTOR',
+      reason: 'DIRECT_MATCH',
+    }
+    retrieveChunksMock.mockResolvedValue(
+      sampleRetrieval({ hits: [basis('c-1', '甲句'), recalled] }),
+    )
+    generateRagAnswerMock.mockResolvedValue(
+      sampleGeneration({ citations: [basis('c-1', '甲句')] }),
+    )
+
+    renderPage()
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('你的问题'), '顶点怎么求')
+    await fillTenant(user)
+    await user.click(screen.getByRole('button', { name: /检索并生成/ }))
+
+    await waitFor(() => expect(document.querySelectorAll('.source').length).toBe(2))
+    const scores = Array.from(document.querySelectorAll('.source')).map(
+      (card) => card.querySelector('.source__score')?.textContent ?? null,
+    )
+    // 依据卡片不给分数；未进依据的召回候选仍给真实相关性分
+    expect(scores).toEqual([null, '相关度 42%'])
   })
 
   it('⛔ 生成成功：渲染模型回答正文', async () => {

@@ -46,22 +46,35 @@ function formatScore(score: number): string {
   return `${Math.round(score * 100)}%`
 }
 
+/**
+ * 生成期依据不显示相关度：`GenerationResultDto.toHit` 不重新打分，score 恒为 0.0
+ * （后端契约里写明「分数置 0 并在前端说明」，目的是避免学生把 0 读成「不相关」）。
+ */
+function isGenerationBasis(hit: RagRetrievalHit): boolean {
+  return hit.channel === 'GENERATION_BASIS'
+}
+
 /** 单个来源卡片（可溯源的召回片段）。 */
 function SourceCard({
   hit,
   index,
+  cited,
 }: {
   hit: RagRetrievalHit
   index: number
+  /** false = 这条只是召回候选，没有进入上方那段讲解的依据，不能编「依据 N」 */
+  cited: boolean
 }): JSX.Element {
   return (
     <article className="source">
       <header className="source__head">
-        <span className="source__no">来源 {index}</span>
+        <span className="source__no">{cited ? `来源 ${index}` : '参考召回'}</span>
         <span className="chip">{hit.edition}</span>
         <span className="chip">{hit.channel}</span>
         <span className="chip chip--settled">{hit.role}</span>
-        <span className="source__score">相关度 {formatScore(hit.score)}</span>
+        {isGenerationBasis(hit) ? null : (
+          <span className="source__score">相关度 {formatScore(hit.score)}</span>
+        )}
       </header>
       <p className="source__text hand">{hit.text}</p>
       <dl className="source__meta">
@@ -160,6 +173,20 @@ export function RagSearchPage(): JSX.Element {
     () => retrieval.response?.answerContentSuppressed ?? false,
     [retrieval.response],
   )
+
+  /** 来源卡的排序与编号：生成成功后与回答里的「依据 N」逐条对齐。 */
+  const orderedHits = useMemo(() => {
+    const hits = retrieval.status === 'success' ? retrieval.hits : []
+    const citations = generation.status === 'success' ? generation.citations : []
+    if (citations.length === 0) {
+      return hits.map((hit, i) => ({ hit, index: i + 1, cited: true }))
+    }
+    const cited = new Set(citations.map((c) => c.chunkId))
+    return [
+      ...citations.map((hit, i) => ({ hit, index: i + 1, cited: true })),
+      ...hits.filter((h) => !cited.has(h.chunkId)).map((hit) => ({ hit, index: 0, cited: false })),
+    ]
+  }, [retrieval.status, retrieval.hits, generation.status, generation.citations])
 
   return (
     <>
@@ -445,7 +472,7 @@ export function RagSearchPage(): JSX.Element {
       <Panel
         title="检索来源"
         icon="layers"
-        note="每个来源都带册/章/页/题引用，可回溯到具体教材位置。"
+        note="每个来源都带册/章/页/题引用，可回溯到具体教材位置；编号与上方讲解的「依据 N」一一对应。"
       >
         {retrieval.status === 'idle' ? (
           <p className="muted" style={{ margin: 0 }}>
@@ -481,8 +508,14 @@ export function RagSearchPage(): JSX.Element {
               </p>
             ) : null}
             <div className="source-list">
-              {retrieval.hits.map((hit, index) => (
-                <SourceCard key={hit.chunkId} hit={hit} index={index + 1} />
+              {/*
+                ⚠️ 编号必须与回答里的「依据 N」同源。回答由 generation.citations 的顺序装配，
+                  此前来源卡按 retrieval.hits 排序，实测出现「依据 2 = 练习 / 来源 2 = 章前语」——
+                  按编号回查会跳到另一段原文，而「可回溯到具体出处」正是这个页面的全部意义（RAG-D06）。
+                  生成成功后按 citations 排序，其余召回降级为「参考召回」，不占依据编号。
+              */}
+              {orderedHits.map(({ hit, index, cited }) => (
+                <SourceCard key={hit.chunkId} hit={hit} index={index} cited={cited} />
               ))}
             </div>
           </>

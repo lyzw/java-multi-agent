@@ -1877,7 +1877,7 @@ export function RagManagementPage(): JSX.Element {
       <Panel
         title="租户"
         icon="search"
-        note="检索与管理均按租户隔离：租户由主平台在调用时注入，此处需手填一次。填错不会报错，只会查不到数据。"
+        note="检索与管理均按租户隔离：RAG 服务是独立进程，读不到主平台的事务上下文，故租户要在下方显式带上。"
       >
         <div className="field" style={{ margin: 0, maxWidth: 460 }}>
           <label htmlFor="rag-mgmt-tenant">租户标识</label>
