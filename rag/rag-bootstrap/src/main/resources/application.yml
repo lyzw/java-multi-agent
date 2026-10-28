@@ -14,18 +14,17 @@ spring:
       #    而应用 SQL 一律用**未限定表名**（FROM rag_chunk / JOIN rag_edition / ?::rag_chunk_role /
       #    rag_current_tenant()）。因此每条连接都必须把 search_path 指向 rag，
       #    否则未限定名解析不到对象（表现为 relation does not exist）。
-      #    public 保留在末尾：pgvector 的 vector 类型与 Flyway 历史表都在 public。
+      #    public 保留在末尾：pgvector 的 vector 类型在 public。
       connection-init-sql: SET search_path TO rag, public
   flyway:
-    # 迁移脚本位于 rag-infrastructure 的 classpath:db/migration（V1/V2）。
-    enabled: true
-    locations: classpath:db/migration
-    # 不允许对未纳管库自动基线，确保迁移历史可追溯。
-    baseline-on-migrate: false
-    # ⚠️ 历史表必须固定在 public：连接 search_path 的首元素是 rag，若不显式指定，
-    #    Flyway 会把历史表定位/创建到 rag schema，从而「看不到」public 里已有的历史记录，
-    #    并误判为未迁移而重复执行 V1（CREATE TYPE 冲突直接失败）。
-    default-schema: public
+    # ⛔ 迁移链 V1~V8 的脚本已从仓库删除，`classpath:db/migration` 现在是空目录。
+    #    结构唯一权威源是 deploy/sql/rag/01_rag_ddl.sql（由库 owner 线下执行，
+    #    与 V1→V8 实跑库 pg_dump 逐字同源、零漂移）。
+    #    保持 true 只有副作用：启动打「No migrations found」告警，
+    #    并在共享业务库里凭空建出一张 0 行的 public.flyway_schema_history。
+    #    若日后恢复迁移脚本，改回 true 即可（历史表须继续固定在 public，
+    #    否则连接 search_path 首元素 rag 会让它误判未迁移而重跑）。
+    enabled: false
   jdbc:
     template:
       fetch-size: 100
@@ -36,6 +35,22 @@ rag:
   # 置 true 会被启动横幅以 ERROR 级记录，不会被静默忽略。
   local-ports:
     enabled: ${RAG_LOCAL_PORTS_ENABLED:false}
+  # ── 嵌入模型（OpenAI 兼容 /embeddings）────────────────────────
+  # base-url 为空 = 不接真实模型，退回本地确定性占位并受上面的 fail-closed 闸门约束。
+  # ⚠️ 密钥只从环境变量注入，绝不写进本文件（也不提交任何本地网关的 key）。
+  # ⚠️ dimension 必须与 rag_chunk_embedding.embedding 列的维度一致，
+  #    不一致时嵌入适配器在<b>取回第一条向量</b>时就失败，而不是写库时才炸。
+  embedding:
+    base-url: ${RAG_EMBEDDING_BASE_URL:}
+    api-key: ${RAG_EMBEDDING_API_KEY:}
+    model: ${RAG_EMBEDDING_MODEL:}
+    dimension: ${RAG_EMBEDDING_DIMENSION:1024}
+    batch-size: ${RAG_EMBEDDING_BATCH_SIZE:16}
+    timeout-seconds: ${RAG_EMBEDDING_TIMEOUT_SECONDS:120}
+    # 向量列类型（只能 vector / halfvec，白名单校验）。
+    # HNSW 索引的维度上限：vector 2000、halfvec 4000；超上限只能存储、建不了 ANN 索引。
+    # 维度不在这里配：取自嵌入端口的 dimension()，两处只允许有一个权威源。
+    vector-type: ${RAG_EMBEDDING_VECTOR_TYPE:vector}
   retrieval:
     # 分数门禁：低于此值的命中视为「未找到依据」，
     # 使「找不到」成为合法输出，阻断 RAG 自信地胡说（RAG-D05 §⑦）。

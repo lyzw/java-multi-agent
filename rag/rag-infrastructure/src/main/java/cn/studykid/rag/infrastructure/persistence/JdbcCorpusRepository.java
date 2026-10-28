@@ -15,6 +15,10 @@ import cn.studykid.rag.ports.CorpusRepository;
  * <p><b>⚠️ 原子性</b>：{@link #saveChunkAndEmbedding} 在同事务内写入
  * {@code rag_chunk} 与 {@code rag_chunk_embedding}——两者缺一不可。
  *
+ * <p><b>⚠️ 向量列形态不写死</b>：cast 与维度校验都来自 {@link VectorColumn}
+ * （由装配层用 {@code EmbeddingPort.dimension()} 构造）——
+ * 换嵌入模型时不会出现「SQL 还按 1024 维写、模型已返回 4096 维」。
+ *
  * <p><b>⚠️ 租户隔离</b>：方法在事务内 {@code set_config('app.tenant_id', tenantId, true)}，
  * 使 V1 的 RLS FORCE 策略对本次写入生效（含子资源外键的复合租户约束）。
  * SQL 中显式取 {@code rag_current_tenant()} 做写入值是**功能性的**（不是优化器提示）：
@@ -24,12 +28,17 @@ import cn.studykid.rag.ports.CorpusRepository;
 public class JdbcCorpusRepository implements CorpusRepository {
 
     private final JdbcTemplate jdbcTemplate;
+    private final VectorColumn vectorColumn;
 
-    public JdbcCorpusRepository(JdbcTemplate jdbcTemplate) {
+    public JdbcCorpusRepository(JdbcTemplate jdbcTemplate, VectorColumn vectorColumn) {
         if (jdbcTemplate == null) {
             throw new IllegalArgumentException("jdbcTemplate 不能为空");
         }
+        if (vectorColumn == null) {
+            throw new IllegalArgumentException("vectorColumn 不能为空");
+        }
         this.jdbcTemplate = jdbcTemplate;
+        this.vectorColumn = vectorColumn;
     }
 
     @Override
@@ -37,6 +46,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
     public void saveChunkAndEmbedding(@NonNull String tenantId, @NonNull Chunk chunk,
                                      @NonNull String editionId, float[] embedding,
                                      @NonNull String embedModel) {
+        vectorColumn.requireDimension(embedding);
         // ⚠️ 必须用 queryForObject() 而非 update()：set_config 是 SELECT，会返回一行，
         //    update() 期望「无结果集」，否则抛 DataIntegrityViolation
         //    （A result was returned when none was expected）。
@@ -58,8 +68,8 @@ public class JdbcCorpusRepository implements CorpusRepository {
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, index_generation, embed_model, embedding)
-                VALUES (?::uuid, rag_current_tenant(), 1, ?, ?::vector)
-                """,
+                VALUES (?::uuid, rag_current_tenant(), 1, ?, %s)
+                """.formatted(vectorColumn.castPlaceholder()),
                 chunk.id(), embedModel, vectorToString(embedding));
     }
 
@@ -84,6 +94,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
     @Transactional
     public void upsertEmbedding(@NonNull String tenantId, @NonNull String chunkId,
                                 @NonNull float[] embedding, @NonNull String embedModel) {
+        vectorColumn.requireDimension(embedding);
         // ⚠️ 必须用 queryForObject() 而非 update()：set_config 是 SELECT，会返回一行，
         //    update() 期望「无结果集」，否则抛 DataIntegrityViolation
         //    （A result was returned when none was expected）。
@@ -98,12 +109,12 @@ public class JdbcCorpusRepository implements CorpusRepository {
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, index_generation, embed_model, embedding)
-                VALUES (?::uuid, rag_current_tenant(), 1, ?, ?::vector)
+                VALUES (?::uuid, rag_current_tenant(), 1, ?, %s)
                 ON CONFLICT (chunk_id) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     embed_model = EXCLUDED.embed_model,
                     index_generation = 1
-                """,
+                """.formatted(vectorColumn.castPlaceholder()),
                 chunkId, embedModel, vectorToString(embedding));
     }
 

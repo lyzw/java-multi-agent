@@ -140,7 +140,10 @@ class RetrievalRepositoryIT {
         jdbcTemplate = new JdbcTemplate(ds);
         transactionTemplate = new TransactionTemplate(
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds));
-        repository = new JdbcRetrievalRepository(jdbcTemplate, embedder);
+        // 列形态与 V1 DDL 一致：vector(1024)，正是占位嵌入端口报告的维度。
+        repository = new JdbcRetrievalRepository(jdbcTemplate, embedder,
+                cn.studykid.rag.core.source.TrustTier.OFFICIAL_TUTORIAL,
+                new VectorColumn(VectorColumn.TYPE_VECTOR, LocalDeterministicEmbeddingPort.DIM));
         seedTenantT();
 
         // 管理员连接（仅用于全局桶的 seed / 清理；业务断言一律走应用连接）。

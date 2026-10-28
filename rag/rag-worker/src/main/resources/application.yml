@@ -14,15 +14,10 @@ spring:
       #    每条连接必须把 search_path 指向 rag，否则解析不到对象。
       connection-init-sql: SET search_path TO rag, public
   flyway:
-    # 迁移脚本位于 rag-infrastructure 的 classpath:db/migration（V1/V2）。
-    # 与 rag-bootstrap 共用同一 flyway_schema_history（不指定 schemas，沿用默认），
-    # 确保两者对迁移历史认知一致、可幂等重跑。
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: false
-    # ⚠️ 历史表固定在 public（与 bootstrap 一致）：连接 search_path 首元素为 rag，
-    #    不显式指定会误定位到 rag schema 而重复执行已应用的迁移。
-    default-schema: public
+    # ⛔ 同 rag-bootstrap：迁移脚本已删除，结构以 deploy/sql/rag/01_rag_ddl.sql 为准。
+    #    保持 true 会在共享库凭空建出一张 0 行的 public.flyway_schema_history，
+    #    并让启动日志打出「No migrations found」告警。
+    enabled: false
   jdbc:
     template:
       fetch-size: 100
@@ -32,6 +27,20 @@ rag:
   # 占位解析/嵌入/蕴含实现默认拒绝装配（应用拒绝启动）；仅本地开发/链路验证时置 true。
   local-ports:
     enabled: ${RAG_LOCAL_PORTS_ENABLED:false}
+  # 嵌入模型（OpenAI 兼容 /embeddings）——属性名与 rag-bootstrap 完全一致：
+  # 索引向量与查询向量必须同源同模型，两处配置项一旦漂移就是「检索恒低分且不报错」。
+  # ⚠️ 密钥只从环境变量注入。
+  embedding:
+    base-url: ${RAG_EMBEDDING_BASE_URL:}
+    api-key: ${RAG_EMBEDDING_API_KEY:}
+    model: ${RAG_EMBEDDING_MODEL:}
+    dimension: ${RAG_EMBEDDING_DIMENSION:1024}
+    batch-size: ${RAG_EMBEDDING_BATCH_SIZE:16}
+    timeout-seconds: ${RAG_EMBEDDING_TIMEOUT_SECONDS:120}
+    # 向量列类型（只能 vector / halfvec，白名单校验）。
+    # HNSW 索引的维度上限：vector 2000、halfvec 4000；超上限只能存储、建不了 ANN 索引。
+    # 维度不在这里配：取自嵌入端口的 dimension()，两处只允许有一个权威源。
+    vector-type: ${RAG_EMBEDDING_VECTOR_TYPE:vector}
   indexer:
     # 启动即触发重索引（仅本 Worker 应用默认开启）。
     auto-start: true

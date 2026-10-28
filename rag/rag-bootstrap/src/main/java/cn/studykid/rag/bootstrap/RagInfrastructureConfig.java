@@ -10,12 +10,14 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.application.generation.GroundedGenerationService;
 import cn.studykid.rag.application.retrieval.RetrievalOrchestrator;
+import cn.studykid.rag.infrastructure.embedding.EmbeddingPorts;
 import cn.studykid.rag.infrastructure.embedding.LocalDeterministicEmbeddingPort;
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
 import cn.studykid.rag.infrastructure.persistence.JdbcCorpusRepository;
 import cn.studykid.rag.infrastructure.persistence.JdbcRetrievalRepository;
 import cn.studykid.rag.infrastructure.persistence.JdbcTenantScopedGeneration;
 import cn.studykid.rag.infrastructure.persistence.JdbcTenantScopedRetrieval;
+import cn.studykid.rag.infrastructure.persistence.VectorColumn;
 import cn.studykid.rag.ports.CorpusRepository;
 import cn.studykid.rag.ports.EmbeddingPort;
 import cn.studykid.rag.ports.RetrievalPort;
@@ -42,10 +44,10 @@ import cn.studykid.rag.ports.TenantScopedRetrieval;
  * <p>{@link JdbcTemplate} 由 Spring Boot 基于 {@code spring.datasource.*} 自动装配，
  * 此处仅消费。
  *
- * <p>⚠️ 诚实边界：当前 {@link EmbeddingPort} 由本地确定性占位实现
- * （{@link LocalDeterministicEmbeddingPort}）提供，<b>非</b>生产级 BGE-M3。
- * 真实嵌入模型接入前，稠密通道<b>仅</b>用于链路验证，<b>不可</b>作为语义相关性结论
- * （与生产「语义相关性判定」之间隔着 RAG-D08 评测集标定）。
+ * <p>⚠️ 诚实边界：{@link EmbeddingPort} 的实现<b>由配置决定</b>（见 {@link EmbeddingPorts}）——
+ * 配了 {@code rag.embedding.base-url} 走真实模型；没配则退回本地确定性占位
+ * （{@link LocalDeterministicEmbeddingPort}）。占位向量<b>仅</b>用于链路验证，
+ * <b>不可</b>作为语义相关性结论（与生产「语义相关性判定」之间隔着 RAG-D08 评测集标定）。
  */
 @Configuration
 public class RagInfrastructureConfig {
@@ -73,19 +75,40 @@ public class RagInfrastructureConfig {
     @Value("${rag.local-ports.enabled:false}")
     private boolean localPortsEnabled;
 
+    @Value("${rag.embedding.base-url:}")
+    private String embeddingBaseUrl;
+
+    @Value("${rag.embedding.api-key:}")
+    private String embeddingApiKey;
+
+    @Value("${rag.embedding.model:}")
+    private String embeddingModel;
+
+    /** ⚠️ 必须与 {@code rag_chunk_embedding.embedding} 列的维度一致，见 {@link EmbeddingPorts}。 */
+    @Value("${rag.embedding.dimension:1024}")
+    private int embeddingDimension;
+
+    @Value("${rag.embedding.batch-size:16}")
+    private int embeddingBatchSize;
+
+    @Value("${rag.embedding.timeout-seconds:120}")
+    private int embeddingTimeoutSeconds;
+
     /**
-     * 嵌入端口（评审 P0-6 fail-closed）。
+     * 嵌入端口。
      *
-     * <p>⚠️ 当前实现是本地确定性占位（bigram 哈希，非 BGE-M3）——
-     * 用它检索会把「二次函数」与「反二次函数」判为强相关（串知识点）。
-     * 因此默认<b>拒绝装配</b>（应用拒绝启动）；仅本地开发/链路验证时
-     * 显式设置 {@code rag.local-ports.enabled=true} 放行（见 {@link LocalPortGate}）。
+     * <p>配置了 {@code rag.embedding.base-url} → 走真实模型（OpenAI 兼容 {@code /embeddings}）；
+     * 未配置 → 退回本地确定性占位，此时受评审 P0-6 fail-closed 闸门约束
+     * （占位向量把「二次函数」与「反二次函数」判为强相关，默认<b>拒绝装配</b>，
+     * 仅本地开发时显式设置 {@code rag.local-ports.enabled=true} 放行）。
+     *
+     * <p>选择逻辑与 rag-worker 共用 {@link EmbeddingPorts}，保证查询向量与索引向量同源。
      */
     @Bean
     public EmbeddingPort embeddingPort() {
-        cn.studykid.rag.infrastructure.LocalPortGate.requireEnabled(localPortsEnabled,
-                "EmbeddingPort → LocalDeterministicEmbeddingPort (rag-bootstrap)");
-        return new LocalDeterministicEmbeddingPort();
+        return EmbeddingPorts.create(localPortsEnabled, embeddingBaseUrl, embeddingApiKey,
+                embeddingModel, embeddingDimension, embeddingBatchSize, embeddingTimeoutSeconds,
+                "rag-bootstrap");
     }
 
     /**
@@ -102,8 +125,8 @@ public class RagInfrastructureConfig {
      * @return 语料持久化端口
      */
     @Bean
-    public CorpusRepository corpusRepository(JdbcTemplate jdbcTemplate) {
-        return new JdbcCorpusRepository(jdbcTemplate);
+    public CorpusRepository corpusRepository(JdbcTemplate jdbcTemplate, VectorColumn vectorColumn) {
+        return new JdbcCorpusRepository(jdbcTemplate, vectorColumn);
     }
 
     /**
@@ -132,6 +155,23 @@ public class RagInfrastructureConfig {
     }
 
     /**
+     * 向量列形态（类型 + 维度）。
+     *
+     * <p>维度<b>取自 {@link EmbeddingPort#dimension()}</b>而不是另配一个属性：
+     * 配置里两个「维度」迟早会漂移，而列维度与模型维度不一致是最隐蔽的故障形态
+     * （稠密通道恒报错或恒零命中）。类型只能取 {@code vector} / {@code halfvec}，
+     * 由白名单校验——它会被拼进 SQL 的 cast，不接受任意字符串。
+     *
+     * <p>⚠️ 迁列（如 {@code vector(1024) → halfvec(4096)}）之后必须改
+     * {@code rag.embedding.vector-type} 并<b>全量重建索引</b>。
+     */
+    @Bean
+    public VectorColumn vectorColumn(EmbeddingPort embeddingPort,
+                                     @Value("${rag.embedding.vector-type:vector}") String type) {
+        return new VectorColumn(type.trim(), embeddingPort.dimension());
+    }
+
+    /**
      * 检索仓储（评审 P0-7）：显式注入租户权威门槛（G-3）。
      *
      * <p>⚠️ 门槛是<b>部署级服务端策略</b>（{@code rag.retrieval.min-trust-tier}），
@@ -141,9 +181,10 @@ public class RagInfrastructureConfig {
     @Bean
     public RetrievalPort retrievalPort(JdbcTemplate jdbcTemplate, EmbeddingPort embeddingPort,
                                       @Value("${rag.retrieval.min-trust-tier:OFFICIAL_TUTORIAL}")
-                                      String minTrustTier) {
+                                      String minTrustTier,
+                                      VectorColumn vectorColumn) {
         return new JdbcRetrievalRepository(jdbcTemplate, embeddingPort,
-                cn.studykid.rag.core.source.TrustTier.valueOf(minTrustTier.trim()));
+                cn.studykid.rag.core.source.TrustTier.valueOf(minTrustTier.trim()), vectorColumn);
     }
 
     @Bean

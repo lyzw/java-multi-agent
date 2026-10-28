@@ -7,9 +7,10 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.infrastructure.LocalRagPortsConfig;
-import cn.studykid.rag.infrastructure.embedding.LocalDeterministicEmbeddingPort;
+import cn.studykid.rag.infrastructure.embedding.EmbeddingPorts;
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
 import cn.studykid.rag.infrastructure.persistence.JdbcCorpusRepository;
+import cn.studykid.rag.infrastructure.persistence.VectorColumn;
 import cn.studykid.rag.ports.CorpusRepository;
 import cn.studykid.rag.ports.EmbeddingPort;
 
@@ -49,24 +50,53 @@ public class WorkerInfraConfig {
     @org.springframework.beans.factory.annotation.Value("${rag.local-ports.enabled:false}")
     private boolean localPortsEnabled;
 
+    @org.springframework.beans.factory.annotation.Value("${rag.embedding.base-url:}")
+    private String embeddingBaseUrl;
+
+    @org.springframework.beans.factory.annotation.Value("${rag.embedding.api-key:}")
+    private String embeddingApiKey;
+
+    @org.springframework.beans.factory.annotation.Value("${rag.embedding.model:}")
+    private String embeddingModel;
+
+    @org.springframework.beans.factory.annotation.Value("${rag.embedding.dimension:1024}")
+    private int embeddingDimension;
+
+    @org.springframework.beans.factory.annotation.Value("${rag.embedding.batch-size:16}")
+    private int embeddingBatchSize;
+
+    @org.springframework.beans.factory.annotation.Value("${rag.embedding.timeout-seconds:120}")
+    private int embeddingTimeoutSeconds;
+
     /**
-     * 嵌入端口（评审 P0-6 fail-closed）。
+     * 嵌入端口。
      *
-     * <p>⚠️ 当前实现是本地确定性占位（bigram 哈希，非 BGE-M3）——
-     * 占位向量只用于链路验证，索引出的「语义」是假的。默认<b>拒绝装配</b>；
-     * 仅本地开发时显式设置 {@code rag.local-ports.enabled=true} 放行
-     * （见 {@code LocalPortGate}）。
+     * <p>与 rag-bootstrap 共用 {@link EmbeddingPorts}：配置了 {@code rag.embedding.base-url}
+     * 走真实模型，否则退回本地确定性占位并受 fail-closed 闸门约束。
+     * 两处必须同源——索引向量与查询向量来自不同模型时，检索会恒低分且不报错。
      */
     @Bean
     public EmbeddingPort embeddingPort() {
-        cn.studykid.rag.infrastructure.LocalPortGate.requireEnabled(localPortsEnabled,
-                "EmbeddingPort → LocalDeterministicEmbeddingPort (rag-worker)");
-        return new LocalDeterministicEmbeddingPort();
+        return EmbeddingPorts.create(localPortsEnabled, embeddingBaseUrl, embeddingApiKey,
+                embeddingModel, embeddingDimension, embeddingBatchSize, embeddingTimeoutSeconds,
+                "rag-worker");
+    }
+
+    /**
+     * 向量列形态：维度取自嵌入端口，类型由 {@code rag.embedding.vector-type} 决定。
+     * 与 rag-bootstrap 同口径（同一属性名），保证索引写入与检索读取按同一列形态。
+     */
+    @Bean
+    public VectorColumn vectorColumn(
+            EmbeddingPort embeddingPort,
+            @org.springframework.beans.factory.annotation.Value("${rag.embedding.vector-type:vector}")
+            String type) {
+        return new VectorColumn(type.trim(), embeddingPort.dimension());
     }
 
     @Bean
-    public CorpusRepository corpusRepository(JdbcTemplate jdbcTemplate) {
-        return new JdbcCorpusRepository(jdbcTemplate);
+    public CorpusRepository corpusRepository(JdbcTemplate jdbcTemplate, VectorColumn vectorColumn) {
+        return new JdbcCorpusRepository(jdbcTemplate, vectorColumn);
     }
 
     @Bean

@@ -159,22 +159,24 @@ public class JdbcRetrievalRepository implements RetrievalPort {
 
     private final JdbcTemplate jdbcTemplate;
     private final EmbeddingPort embeddingPort;
-
-    public JdbcRetrievalRepository(JdbcTemplate jdbcTemplate, EmbeddingPort embeddingPort) {
-        this(jdbcTemplate, embeddingPort,
-                cn.studykid.rag.core.source.TrustTier.OFFICIAL_TUTORIAL);
-    }
+    private final VectorColumn vectorColumn;
 
     /**
-     * 完整构造器：显式指定租户权威门槛（评审 P0-7 · G-3）。
+     * 完整构造器：显式指定租户权威门槛（评审 P0-7 · G-3）与向量列形态。
      *
      * <p>⚠️ 门槛是<b>部署级服务端策略</b>（RAG-R07：生产下限 OFFICIAL_TUTORIAL），
      * 构造期定格——不是调用方可传、可伪造的输入。
      *
+     * <p>⚠️ {@code vectorColumn} 的维度<b>必须</b>与 {@code embeddingPort.dimension()} 一致：
+     * 装配层直接用端口报告的维度构造它，这样「模型换维度」与「列迁维度」两处
+     * 在启动时就是同一个数字，不会出现查询向量与列维度不符。
+     *
      * @param minTrustTier 允许检索的最低权威等级（含：等于门槛的也可检索）
+     * @param vectorColumn {@code rag_chunk_embedding.embedding} 的类型与维度
      */
     public JdbcRetrievalRepository(JdbcTemplate jdbcTemplate, EmbeddingPort embeddingPort,
-                                   cn.studykid.rag.core.source.TrustTier minTrustTier) {
+                                   cn.studykid.rag.core.source.TrustTier minTrustTier,
+                                   VectorColumn vectorColumn) {
         if (jdbcTemplate == null) {
             throw new IllegalArgumentException("jdbcTemplate 不能为空");
         }
@@ -184,8 +186,21 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         if (minTrustTier == null) {
             throw new IllegalArgumentException("minTrustTier 不能为空");
         }
+        if (vectorColumn == null) {
+            throw new IllegalArgumentException("vectorColumn 不能为空");
+        }
+        if (vectorColumn.dimension() != embeddingPort.dimension()) {
+            throw new IllegalStateException("""
+                    向量列维度 %d（%s）与嵌入模型 %s 的维度 %d 不符。
+                    这会让每次稠密检索都在 PG 侧报「expected %d dimensions, not %d」，
+                    故直接拒绝装配。请改 rag.embedding.dimension 或迁列，并全量重建索引。"""
+                    .formatted(vectorColumn.dimension(), vectorColumn.type(),
+                            embeddingPort.modelVersion(), embeddingPort.dimension(),
+                            vectorColumn.dimension(), embeddingPort.dimension()));
+        }
         this.jdbcTemplate = jdbcTemplate;
         this.embeddingPort = embeddingPort;
+        this.vectorColumn = vectorColumn;
         // ⚠️⚠️ 门槛展开为「达标等级 IN 列表」而非 `trust_tier >= ?`：
         //    PG 枚举按声明序比较，rag_trust_tier 声明序与权威语义**相反**
         //    （UNVERIFIED 序数最大却最不权威）——`>=` 会整体反转语义，
@@ -385,11 +400,13 @@ public class JdbcRetrievalRepository implements RetrievalPort {
 
     private List<ScoredChunk> denseSearch(RetrievalRequest request) {
         float[] queryVector = embeddingPort.embed(List.of(request.query())).get(0);
+        vectorColumn.requireDimension(queryVector);
         String vec = vectorToString(queryVector);
+        String cast = vectorColumn.castPlaceholder();
         int limit = request.topK() * CANDIDATE_MULTIPLIER;
         String sql = """
                 SELECT %s,
-                       (1 - (e.embedding <=> ?::vector)) AS score
+                       (1 - (e.embedding <=> %s)) AS score
                 FROM rag_chunk c
                 JOIN rag_chunk_embedding e
                      ON c.chunk_id = e.chunk_id AND c.tenant_id = e.tenant_id
@@ -401,9 +418,9 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                      ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
                 WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
 %s
-                ORDER BY e.embedding <=> ?::vector
+                ORDER BY e.embedding <=> %s
                 LIMIT ?
-                """.formatted(SELECT_COLUMNS, admissiblePredicate);
+                """.formatted(SELECT_COLUMNS, cast, admissiblePredicate, cast);
         return jdbcTemplate.query(sql, (rs, i) -> toScoredChunk(rs,
                 RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH), vec, vec, limit);
     }

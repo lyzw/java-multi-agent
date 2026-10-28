@@ -16,7 +16,8 @@ import org.springframework.stereotype.Component;
  * <p>在上下文刷新完成后、对外服务前执行<b>失败即终止</b>的安全检查，
  * 防止在不满足安全前提的数据库配置下启动并对外暴露：
  * <ol>
- *   <li><b>pgvector 扩展存在</b>——检索 SQL 使用 {@code <=>} 与 {@code ::vector}，
+ *   <li><b>pgvector 扩展存在</b>——检索 SQL 使用 {@code <=>} 与向量 cast
+ *       （{@code ?::vector} / {@code ?::halfvec}，见 {@code VectorColumn}），
  *       缺扩展则整条稠密链路不可用；</li>
  *   <li><b>连接角色非特权</b>——当前数据库用户<b>不得</b>是超级用户，
  *       且<b>不得</b>具有 {@code BYPASSRLS} 权限；否则租户隔离 RLS 会被静默绕过，
