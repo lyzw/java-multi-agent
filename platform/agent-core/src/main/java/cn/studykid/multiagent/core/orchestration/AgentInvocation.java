@@ -12,6 +12,11 @@ import org.jspecify.annotations.Nullable;
  * {@code inputDigest} / {@code outputDigest}（摘要），不保存 Prompt、工具入参、
  * 子 Agent 输出的原文。需要原文时引用受控存储，并按原读取授权规则处理。
  *
+ * <p>⚠️ <b>决策快照同样受这条红线约束</b>（B4 · 10 号设计 §6.1）：
+ * {@code routingDecision} 里存的是规范化输入的 <b>SHA-256</b> 而不是输入本身 ——
+ * 重放不变式 {@code (policyRef, canonicalInputSha256) → finalTarget}
+ * 只需要哈希；把 {@code in.*} 字段抄进 jsonb 等于为本表新开一条明文旁路。
+ *
  * <p>⚠️ <b>fencingToken 是接管安全的线性化依据</b>：Worker 崩溃后由新世代接管，
  * 旧世代带着过期 token 提交结果必须失败（MA-T12）。
  *
@@ -35,6 +40,12 @@ import org.jspecify.annotations.Nullable;
  * @param finishedAt          结束时间；未结束时为 {@code null}
  * @param reasonCode          失败/终止原因码（稳定机器可读）
  * @param fencingToken        世代令牌（接管安全）
+ * @param routingDecision     <b>路由决策快照</b>（10 号设计 §6.1 的 JSON 文本）；
+ *                            {@code null} = 本次委派<b>没做路由决策</b>（非 ROUTER 模式）
+ *                            或存量行（当时未记录）
+ * @param policyRef           决策所用的策略固定版本引用（{@code id@version}）；
+ *                            与 {@code routingDecision} 同批写入，可空口径相同
+ * @param policyFingerprint   决策<b>当时</b>那份策略的内容指纹（冻结副本，非外键）
  */
 public record AgentInvocation(
         @NonNull String invocationId,
@@ -54,7 +65,10 @@ public record AgentInvocation(
         @Nullable Instant startedAt,
         @Nullable Instant finishedAt,
         @Nullable String reasonCode,
-        long fencingToken
+        long fencingToken,
+        @Nullable String routingDecision,
+        @Nullable String policyRef,
+        @Nullable String policyFingerprint
 ) {
 
     public AgentInvocation {
@@ -114,7 +128,39 @@ public record AgentInvocation(
         this(invocationId, tenantId, runId, parentInvocationId, parentAgentId,
                 parentAgentVersion, targetAgentId, targetAgentVersion, null,
                 status, depth, traceId, inputDigest, outputDigest,
-                startedAt, finishedAt, reasonCode, fencingToken);
+                startedAt, finishedAt, reasonCode, fencingToken, null, null, null);
+    }
+
+    /**
+     * 兼容构造器（<b>不含决策快照</b>）。
+     *
+     * <p>⚠️ <b>为什么保留</b>：{@code routing_decision} / {@code policy_ref} /
+     * {@code policy_fingerprint} 是 B4（10 号设计 §6.1）才补上的三列，
+     * 走本构造器的记录它们为 {@code null} —— 语义同样是「<b>当时未记录</b>」。
+     */
+    public AgentInvocation(
+            @NonNull String invocationId,
+            @NonNull String tenantId,
+            @NonNull String runId,
+            @Nullable String parentInvocationId,
+            @NonNull String parentAgentId,
+            int parentAgentVersion,
+            @NonNull String targetAgentId,
+            int targetAgentVersion,
+            @Nullable String requestedTargetAgentId,
+            @NonNull AgentInvocationStatus status,
+            int depth,
+            @NonNull String traceId,
+            @Nullable String inputDigest,
+            @Nullable String outputDigest,
+            @Nullable Instant startedAt,
+            @Nullable Instant finishedAt,
+            @Nullable String reasonCode,
+            long fencingToken) {
+        this(invocationId, tenantId, runId, parentInvocationId, parentAgentId,
+                parentAgentVersion, targetAgentId, targetAgentVersion, requestedTargetAgentId,
+                status, depth, traceId, inputDigest, outputDigest,
+                startedAt, finishedAt, reasonCode, fencingToken, null, null, null);
     }
 
     /**

@@ -2,6 +2,8 @@ package cn.studykid.multiagent.application.orchestration;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -19,6 +21,7 @@ import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapRoutingPolicyDef;
 import cn.studykid.multiagent.core.cap.ExecutionScope;
 import cn.studykid.multiagent.core.cap.ReasonCode;
+import cn.studykid.multiagent.core.idempotency.RequestDigest;
 import cn.studykid.multiagent.core.orchestration.AgentInvocation;
 import cn.studykid.multiagent.core.orchestration.AgentInvocationStatus;
 import cn.studykid.multiagent.core.orchestration.AgentOrchestration;
@@ -26,7 +29,6 @@ import cn.studykid.multiagent.core.orchestration.ChildAgentRef;
 import cn.studykid.multiagent.core.orchestration.DelegationFailurePolicy;
 import cn.studykid.multiagent.core.orchestration.DelegationToolSchema;
 import cn.studykid.multiagent.core.orchestration.OrchestrationMode;
-import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.orchestration.ChildAgentRunner;
 import cn.studykid.multiagent.ports.orchestration.ResultContractProvider;
@@ -36,6 +38,13 @@ import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
+import cn.studykid.multiagent.routing.DecisionSnapshot;
+import cn.studykid.multiagent.routing.PolicyCodec;
+import cn.studykid.multiagent.routing.PolicySpec;
+import cn.studykid.multiagent.routing.RoutingConfigException;
+import cn.studykid.multiagent.routing.RoutingDecision;
+import cn.studykid.multiagent.routing.RoutingEngine;
+import cn.studykid.multiagent.routing.RoutingInput;
 
 /**
  * 委派执行器（多级 Agent v1.1 · P2-MA-01 / P2-MA-02 · FR-022 / FR-024 / FR-025）。
@@ -135,20 +144,31 @@ public class DelegationExecutor {
     }
 
     /**
-     * 路由选择结果（第十四批）。
+     * 路由选择结果（B4 · 10 号设计 §6 两阶段）。
      *
      * @param targetAgentId 实际生效的目标 Agent 标识（被拒时为 {@code null}）
      * @param reasonCode    被拒时的原因码（被拒时非空）
+     * @param snapshot      决策快照（<b>被拒时同样有</b> —— 「为什么没选出目标」
+     *                      正是最需要复核的那一次）；
+     *                      {@code null} = 走的是 fail-closed 的「策略根本没拿到」分支，
+     *                      那种情形没有任何决策可记
      */
     private record RoutingSelection(@Nullable String targetAgentId,
-                                    @Nullable ReasonCode reasonCode) {
+                                    @Nullable ReasonCode reasonCode,
+                                    @Nullable DecisionSnapshot snapshot) {
 
-        static @NonNull RoutingSelection selected(@NonNull String targetAgentId) {
-            return new RoutingSelection(targetAgentId, null);
+        static @NonNull RoutingSelection selected(@NonNull String targetAgentId,
+                                                  @NonNull DecisionSnapshot snapshot) {
+            return new RoutingSelection(targetAgentId, null, snapshot);
         }
 
         static @NonNull RoutingSelection rejected(@NonNull ReasonCode reasonCode) {
-            return new RoutingSelection(null, reasonCode);
+            return new RoutingSelection(null, reasonCode, null);
+        }
+
+        static @NonNull RoutingSelection rejected(@NonNull ReasonCode reasonCode,
+                                                  @NonNull DecisionSnapshot snapshot) {
+            return new RoutingSelection(null, reasonCode, snapshot);
         }
 
         boolean rejected() {
@@ -157,35 +177,39 @@ public class DelegationExecutor {
     }
 
     /**
-     * 按路由策略选择实际生效的委派目标（第十四批 · MA-T05 / MA-T15）。
+     * 按路由策略选择实际生效的委派目标（B4 · 10 号设计 §6 两阶段决策）。
      *
-     * <p>⚠️ <b>这是 ROUTER 模式的准入前提，缺一不可</b>：
+     * <p><b>五个阶段的落点</b>（①②③④ 在本方法，⑤ 在调用方）：
      * <ol>
-     *   <li><b>策略必须取得到</b>：取不到（不存在 / 未发布 / 读失败 / 能力未装配）
-     *       → {@code ROUTING_POLICY_UNAVAILABLE}，fail-closed。
-     *       绝不降级成「按父声明的子 Agent 随便选一个」——
-     *       那会让「路由策略写了但没生效」变成常态，而外部观察不到任何差异；</li>
-     *   <li><b>候选必须落在策略允许的目标集合内</b>：
-     *       {@code EXPLICIT_TARGETS} 下不命中即拒绝
-     *       （{@code ROUTING_TARGET_NOT_ALLOWED}）；
-     *       {@code ORDERED_FALLBACK} 下不命中则按声明顺序降级到第一个目标。</li>
+     *   <li><b>① 抽取规范化输入</b>：{@code in} 只取 {@code input_schema} 声明过的字段
+     *       （G-6：多传的字段不进求值视野），{@code ctx} 全部由服务端注入
+     *       （模型无法伪造 —— 尤其 {@code ctx.tenantId}）；</li>
+     *   <li><b>② 规则引擎</b>：按 {@code ordinal} 升序短路求值，首个 {@code TRUE} 命中；
+     *       {@code ERROR} <b>永不等于命中</b>，只按 {@code onError} 走（§6.2 铁律）；</li>
+     *   <li><b>③ 语义引擎</b>：仅 {@code RULE_FIRST}/{@code SEMANTIC} 且②未命中时启用，
+     *       候选来自模型；{@code RULES_ONLY} 下<b>连候选都不消费</b>（引擎里收口，不在这里再判）；</li>
+     *   <li><b>④ 冲突裁决</b>：②命中且与模型候选不同 → 按 {@code on_conflict} 选一侧
+     *       并记 {@code conflict}（默认 {@code RULE_WINS} —— <b>不改判定，只改采纳谁</b>）；</li>
+     *   <li><b>⑤ 准入校验</b>：拓扑包含 → 版本固定 → 逐跳授权 → 深度/次数/超时/预算，
+     *       由调用方对<b>本方法返回的目标</b>执行，兜底/降级目标同样走完。</li>
      * </ol>
      *
-     * <p>⚠️ <b>降级只作用于「选择」，不作用于「准入」</b>：
-     * 降级选中的目标仍须通过「父声明包含 → 版本固定 → 逐跳授权 →
-     * 深度/次数/超时/预算」的全部判定（由调用方在返回后继续执行）。
-     * 任何一项不通过就是失败，<b>不会</b>继续尝试下一个候选 ——
-     * 逐个试下去会让「一次委派」变成「一串委派」，次数与预算的上限被绕过。
+     * <p><b>策略读取的 fail-closed 纪律一条不减</b>（第十四批就有，B4 只加不减）：
+     * 取不到（不存在 / 未发布 / 读失败 / 能力未装配 / 已发布文本判不出来）
+     * 一律 {@code ROUTING_POLICY_UNAVAILABLE}，绝不降级成「按候选放行」——
+     * 那会让「路由策略写了但没生效」变成常态，而外部观察不到任何差异。
      *
-     * @param tenantId          租户标识
-     * @param orchestration     父 Agent 的编排声明
-     * @param candidateAgentId  模型给出的候选目标标识
-     * @return 选择结果（被拒时带稳定原因码）
+     * @param tenantId         租户标识
+     * @param orchestration    父 Agent 的编排声明
+     * @param candidateAgentId 模型给出的候选目标标识
+     * @param command          委派请求（规范化输入的 {@code ctx} 来源）
+     * @return 选择结果（被拒时带稳定原因码；能做出决策时带快照）
      */
     private @NonNull RoutingSelection selectByRoutingPolicy(
             @NonNull String tenantId,
             @NonNull AgentOrchestration orchestration,
-            @NonNull String candidateAgentId) {
+            @NonNull String candidateAgentId,
+            @NonNull DelegationCommand command) {
         String policyRef = orchestration.routingPolicyRef();
         if (policyRef == null || policyRef.isBlank()) {
             // ⚠️ ROUTER 必带策略引用 —— 编排构造期与解析期都已强制。
@@ -211,20 +235,85 @@ public class DelegationExecutor {
             log.warn("路由策略不可用（不存在 / 未发布），fail-closed: policy={}", policyRef);
             return RoutingSelection.rejected(ReasonCode.ROUTING_POLICY_UNAVAILABLE);
         }
-        if (policy.allows(candidateAgentId)) {
-            return RoutingSelection.selected(candidateAgentId);
+        // ⚠️ 这里**故意不把父的 childAgentRefs 当 allowedTargets 传进去**：
+        //    V2「策略派给的目标必须 ∈ 拓扑」是<b>发布期</b>的闭包校验
+        //    （AgentPublishClosureValidator），版本行不可变 + 改拓扑必须重新发布，
+        //    所以运行期不可能出现「策略与拓扑不一致」而需要在这里拦。
+        //    若在运行期重复这道判，症状是「拓扑检查被抢跑」：
+        //    本该报 DELEGATION_TARGET_NOT_DECLARED（查子 Agent 声明），
+        //    却报成 ROUTING_POLICY_UNAVAILABLE（查策略可用性）—— 排查方向被带偏。
+        //    引擎选出的目标（含兜底）照样要过调用方的拓扑准入，一道都没少。
+        //    ⚠️ 但**策略自己点名的目标集**由引擎判（C38-2 · 10 号设计 §6.2.1）：
+        //    上面 3.1 已保证候选在拓扑内，引擎再判「候选 ∈ 规则 target ∪ default_target」，
+        //    越界报 ROUTING_TARGET_NOT_ALLOWED —— 两层收窄各判各的，顺序不可倒。
+        PolicySpec spec;
+        try {
+            spec = PolicyCodec.parseStandalone(policy.definitionJson());
+        } catch (RoutingConfigException e) {
+            // ⚠️ 已发布的内容此刻判不出来 = 库里的行与引擎不同版本，属配置缺陷 → fail-closed。
+            //    绝不降级成「按候选放行」：那会让坏策略表现得像好策略。
+            log.error("路由策略解析失败，fail-closed: policy={} where={}", policyRef, e.where(), e);
+            return RoutingSelection.rejected(ReasonCode.ROUTING_POLICY_UNAVAILABLE);
         }
-        if (policy.strategy() == RoutingStrategy.ORDERED_FALLBACK) {
-            // ⚠️ 降级目标是策略作者**显式写下**的已发布固定版本配置，不是运行期推断的结果
-            //    → 降级后的委派仍然可复核（MA-T05 / MA-T15）。
-            String fallback = policy.targets().get(0);
-            log.info("路由候选未命中策略允许集，按 ORDERED_FALLBACK 降级: candidate={},"
-                    + " fallback={}, policy={}", candidateAgentId, fallback, policyRef);
-            return RoutingSelection.selected(fallback);
+        RoutingInput input = RoutingInput.of(spec.inputSchema(), command.input(), tenantId,
+                null, null, command.attempt(), command.parentDepth(), utcToday());
+        RoutingDecision decision;
+        try {
+            decision = RoutingEngine.decide(spec, input, candidateAgentId);
+        } catch (RuntimeException e) {
+            // ⚠️ 引擎是纯函数、设计上不抛配置错误（能构造出 PolicySpec 就说明 V1-V10 过了）。
+            //    真抛了就是代码缺陷：此处必须 fail-closed 且**留下日志**，
+            //    绝不能让异常逃出委派 —— 那会把「一次该被拒的委派」变成「整个 Run 崩掉」。
+            log.error("路由引擎异常，fail-closed: policy={}", policyRef, e);
+            return RoutingSelection.rejected(ReasonCode.ROUTING_POLICY_UNAVAILABLE);
         }
-        log.info("路由候选未命中策略允许集，拒绝委派: candidate={}, policy={}, allowed={}",
-                candidateAgentId, policyRef, policy.targets());
-        return RoutingSelection.rejected(ReasonCode.ROUTING_TARGET_NOT_ALLOWED);
+        DecisionSnapshot snapshot = DecisionSnapshot.of(policy.ref(),
+                policy.configFingerprint(), input, decision);
+        if (decision.resolution().isFailure()) {
+            ReasonCode reason = decision.resolution().reasonCode();
+            // ⚠️ reason 在 isFailure() 为真时必非空（映射只在 Resolution.reasonCode() 写一遍）。
+            log.info("路由未产生目标，拒绝委派: candidate={}, resolution={}, policy={},"
+                    + " reason={}", candidateAgentId, decision.resolution(), policyRef,
+                    decision.error());
+            return new RoutingSelection(null,
+                    reason == null ? ReasonCode.ROUTING_POLICY_UNAVAILABLE : reason, snapshot);
+        }
+        if (decision.conflict()) {
+            // ⚠️ 冲突必须留痕：它是「规则与模型不一致」的唯一现场证据，
+            //    而 on_conflict 默认 RULE_WINS 会让这个不一致<b>不体现在结果上</b>
+            //    （结果一直是规则的目标），没有这条日志和快照里的 conflict 键就无人察觉。
+            log.info("路由冲突（已按 on_conflict={} 裁决）: rule={} → {},"
+                    + " candidate={}, policy={}", spec.conflictPolicy(),
+                    decision.matchedRuleId(), decision.finalTarget(),
+                    candidateAgentId, policyRef);
+        }
+        String target = decision.finalTarget();
+        if (target == null) {
+            // 不可达：RoutingDecision 的构造收口已保证「成功必带目标」。
+            // 留一条稳定码而不是 NPE，是为了让「策略不可得」与「代码崩了」在指标上分得开。
+            log.error("路由成功出口却没有目标，fail-closed: policy={}, resolution={}",
+                    policyRef, decision.resolution());
+            return RoutingSelection.rejected(ReasonCode.ROUTING_POLICY_UNAVAILABLE, snapshot);
+        }
+        if (!target.equals(candidateAgentId)) {
+            log.info("路由改判: candidate={} → target={}, resolution={}, rule={},"
+                    + " policy={}", candidateAgentId, target, decision.resolution(),
+                    decision.matchedRuleId(), policyRef);
+        }
+        return RoutingSelection.selected(target, snapshot);
+    }
+
+    /**
+     * 决策用的 UTC 自然日（{@code ctx.now.utcDate} 的口径）。
+     *
+     * <p>⚠️ 时钟由<b>调用方注入</b>而不是引擎读系统时间：决策必须是纯函数，
+     * 否则「同输入重放必得同目标」在实现层就不成立（10 号设计 §6.1）。
+     * 因此引用了 {@code ctx.now.utcDate} 的策略，其重放口径是
+     * <b>同一 UTC 自然日内</b>可重放 —— 该取舍由快照的
+     * {@code canonicalInputSha256} 承载（日期进摘要）。
+     */
+    private @NonNull LocalDate utcToday() {
+        return LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC);
     }
 
     /**
@@ -414,24 +503,26 @@ public class DelegationExecutor {
             return DelegationOutcome.denied(ReasonCode.DELEGATION_TARGET_NOT_DECLARED,
                     command.invocationId());
         }
-        // ── 3.2 ROUTER：按路由策略收窄候选目标（第十四批 · MA-T05）──────
-        //    ⚠️ 这是 ROUTER 与其它模式**唯一的运行期差别**：
-        //    此前三种模式的行为完全相同，routingPolicyRef 是纯悬空引用。
-        //    现在 ROUTER 的委派必须落在**路由策略允许的目标集合**内 ——
-        //    策略是「委派拓扑之内的一层收窄」，不是拓扑的替代品。
+        // ── 3.2 ROUTER：两阶段决策 —— 规则先跑，模型只在 RULE_FIRST/SEMANTIC 下参与 ──
+        //    ⚠️ 这是 ROUTER 与其它模式**唯一的运行期差别**（B4 · 10 号设计 §6）：
+        //    策略不再是「候选 ∈ 目标集」的一层存在性检查，而是真正的选择函数。
+        //    策略是「委派拓扑之内的一层收窄」，不是拓扑的替代品 ——
+        //    下面 ⑤（版本固定、逐跳授权、深度/次数/超时/预算）对**引擎选出的目标**照跑不误。
         String effectiveTargetId = command.targetAgentId();
+        DecisionSnapshot routingSnapshot = null;
         if (orchestration.mode() == OrchestrationMode.ROUTER) {
             RoutingSelection selection = selectByRoutingPolicy(command.tenantId(), orchestration,
-                    effectiveTargetId);
+                    effectiveTargetId, command);
             if (selection.rejected()) {
-                // ⚠️ 策略不可用 / 候选越出允许集 → 拒绝且**不触发子执行**。
+                // ⚠️ 策略不可用 / 规则未产生目标 → 拒绝且**不触发子执行**。
                 return DelegationOutcome.denied(selection.reasonCode(),
                         command.invocationId());
             }
             effectiveTargetId = selection.targetAgentId();
+            routingSnapshot = selection.snapshot();
         }
-        // ⚠️ 降级后的目标仍须落在**父的委派拓扑**内：
-        //    降级只作用于「选择」，不作用于「准入」——
+        // ⚠️ 引擎改判后的目标仍须落在**父的委派拓扑**内：
+        //    收窄只作用于「选择」，不作用于「准入」——
         //    策略里藏一个父根本没打算交给谁的目标，是配置错误，不是运行期该默默接受的事。
         Optional<ChildAgentRef> declared = candidateDeclared;
         if (!effectiveTargetId.equals(command.targetAgentId())) {
@@ -523,7 +614,12 @@ public class DelegationExecutor {
                 AgentInvocationStatus.RUNNING,
                 childDepth,
                 command.traceId(),
-                null,
+                // ⚠️ 委派**输入**也必须留摘要（10 号文档 §8 · G-1）：
+                //    此前这里恒传 null，于是「这次委派到底带进去了什么」在库里
+                //    没有任何可复核的痕迹 —— 只有输出有摘要的表，
+                //    回答不了「同输入是否同结论」这类复核问题。
+                //    摘要而非明文：既满足可复核，也不违反零保留。
+                RequestDigest.of(command.input()).value(),
                 null,
                 startedAt,
                 null,
@@ -531,7 +627,16 @@ public class DelegationExecutor {
                 // ⚠️ 世代令牌必须写**真实的** fencing token：
                 //    写死常量会让「旧世代带过期 token 提交必须失败」（MA-T12）形同虚设 ——
                 //    任何世代都能写成功，接管安全就没了。
-                command.fencingToken());
+                command.fencingToken(),
+                // ── 决策快照（B4 · 10 号设计 §6.1）─────────────────────
+                //    ⚠️ 目标与「为什么是这个目标」必须**同批落库**：只写生效目标的话，
+                //    「这次是规则命中、兜底降级，还是采纳了模型候选」在库里问不出来，
+                //    而重放不变式 (policyRef, canonicalInputSha256) → finalTarget
+                //    根本没有可查的持久副本。
+                //    ⚠️ 非 ROUTER 模式为 null —— 语义是「当时没做路由决策」，不是「决策失败」。
+                routingSnapshot == null ? null : routingSnapshot.toJson(),
+                routingSnapshot == null ? null : routingSnapshot.policyRef(),
+                routingSnapshot == null ? null : routingSnapshot.policyFingerprint());
         try {
             if (!invocations.insert(record)) {
                 // ⚠️ 并发投递：另一条线程已写入同一 invocationId → 不重复执行
@@ -834,10 +939,19 @@ public class DelegationExecutor {
         return null;
     }
 
+    /**
+     * 输出摘要（<b>内容</b>摘要，不是标识派生）。
+     *
+     * <p>⚠️ 此前借用 {@link DelegationInvocationId#derive} 生成摘要，那是<b>误用</b>：
+     * 派生函数为了落进 {@code uuid} 列会改写 version/variant 位、并只取哈希的前 128 位，
+     * 它是「可重算的 id」而非「内容指纹」—— 既不能与 {@code input_digest} 的口径对齐，
+     * 也让「同内容必同摘要」这条复核性质打折扣。
+     * 摘要一律走 {@link RequestDigest}：同一算法、同一口径，输入侧与输出侧可互相佐证。
+     */
     private static @Nullable String digest(@NonNull String output) {
         if (output.isBlank()) {
             return null;
         }
-        return DelegationInvocationId.derive(output, null, null);
+        return RequestDigest.ofText(output).value();
     }
 }

@@ -59,9 +59,13 @@ public class JdbcExecutionSnapshotResolver implements ExecutionSnapshotPort {
      *
      * <p>⚠️ 内连接 {@code execution_snapshot}：版本已发布但尚未生成快照，
      * 同样属「不可用」，必须当 empty 返回（否则又回到外键报错）。
+     *
+     * <p>⚠️ {@code v.version_number} 与快照<b>同一条语句读出</b>（G-3）：
+     * 拆成两次读会让「快照来自 v3、版本号来自 v4」的错配写进能力快照，
+     * 而能力快照一旦落库就不可变 —— 失真无法事后修正。
      */
     private static final String SQL_RESOLVE = """
-            SELECT es.snapshot_id::text
+            SELECT es.snapshot_id::text, v.version_number
             FROM agent a
             JOIN agent_version v
               ON v.agent_id = a.agent_id AND v.tenant_id = a.tenant_id
@@ -82,7 +86,8 @@ public class JdbcExecutionSnapshotResolver implements ExecutionSnapshotPort {
 
     @Override
     @NonNull
-    public Optional<String> resolveSnapshotId(@NonNull String tenantId, @NonNull String agentId) {
+    public Optional<SnapshotRef> resolveSnapshot(@NonNull String tenantId,
+                                                  @NonNull String agentId) {
         // ⚠️ 非法 UUID 在 PostgreSQL 里会报 PSQLException（22P02）。
         //    那是**客户端**给的坏值，应落到 4xx；在此提前拦下，
         //    绝不能让一个明显的 400 冒泡成 500。
@@ -96,13 +101,16 @@ public class JdbcExecutionSnapshotResolver implements ExecutionSnapshotPort {
                 conn -> doResolve(conn, tenantId, agentId));
     }
 
-    private Optional<String> doResolve(Connection conn, String tenantId, String agentId)
+    private Optional<SnapshotRef> doResolve(Connection conn, String tenantId, String agentId)
             throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(SQL_RESOLVE)) {
             ps.setString(1, tenantId);
             ps.setString(2, agentId);
             try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? Optional.ofNullable(rs.getString(1)) : Optional.empty();
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new SnapshotRef(rs.getString(1), rs.getInt(2)));
             }
         }
     }

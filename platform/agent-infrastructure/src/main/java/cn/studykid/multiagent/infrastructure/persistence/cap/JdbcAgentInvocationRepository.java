@@ -33,6 +33,22 @@ import cn.studykid.multiagent.ports.persistence.AgentInvocationPort;
  */
 public class JdbcAgentInvocationRepository implements AgentInvocationPort {
 
+    /**
+     * 查询列清单（{@code find} 与 {@code listByRun} 共用）。
+     *
+     * <p>⚠️ 两处各写一遍迟早漏一列，而漏列的症状不是报错、
+     * 是 {@code map()} 把该列读成 {@code null} ——「快照看起来没落库」的假象。
+     */
+    private static final String COLUMNS = """
+            invocation_id::text, tenant_id::text, run_id::text,
+                   parent_invocation_id::text, parent_agent_id::text, parent_agent_version,
+                   target_agent_id::text, target_agent_version,
+                   requested_target_agent_id::text,
+                   status, depth, trace_id, input_digest, output_digest, reason_code,
+                   fencing_token, started_at, finished_at,
+                   routing_decision::text, policy_ref, policy_fingerprint
+            """;
+
     private static final String SQL_INSERT = """
             INSERT INTO agent_invocation
                 (invocation_id, tenant_id, run_id, parent_invocation_id,
@@ -40,29 +56,18 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
                  target_agent_id, target_agent_version,
                  requested_target_agent_id,
                  status, depth, trace_id, input_digest, output_digest, reason_code,
-                 fencing_token, started_at, finished_at)
-            VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?::uuid, ?, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 fencing_token, started_at, finished_at,
+                 routing_decision, policy_ref, policy_fingerprint)
+            VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?::uuid, ?, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?)
             ON CONFLICT (tenant_id, invocation_id) DO NOTHING
             """;
 
-    private static final String SQL_FIND = """
-            SELECT invocation_id::text, tenant_id::text, run_id::text,
-                   parent_invocation_id::text, parent_agent_id::text, parent_agent_version,
-                   target_agent_id::text, target_agent_version,
-                   requested_target_agent_id::text,
-                   status, depth, trace_id, input_digest, output_digest, reason_code,
-                   fencing_token, started_at, finished_at
+    private static final String SQL_FIND = "SELECT \s" + COLUMNS + """
             FROM agent_invocation
             WHERE tenant_id = ?::uuid AND invocation_id = ?::uuid
             """;
 
-    private static final String SQL_LIST_BY_RUN = """
-            SELECT invocation_id::text, tenant_id::text, run_id::text,
-                   parent_invocation_id::text, parent_agent_id::text, parent_agent_version,
-                   target_agent_id::text, target_agent_version,
-                   requested_target_agent_id::text,
-                   status, depth, trace_id, input_digest, output_digest, reason_code,
-                   fencing_token, started_at, finished_at
+    private static final String SQL_LIST_BY_RUN = "SELECT \s" + COLUMNS + """
             FROM agent_invocation
             WHERE tenant_id = ?::uuid AND run_id = ?::uuid
             ORDER BY started_at ASC, invocation_id ASC
@@ -153,6 +158,17 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
                         } else {
                             ps.setTimestamp(18, Timestamp.from(invocation.finishedAt()));
                         }
+                        // ⚠️ 决策快照走 jsonb 而不是 text：库要能按 ->>'resolution' 直接问
+                        //    「这批委派有多少走了兜底」，而 text 列只能靠字符串匹配。
+                        //    null 的语义是「当时没做路由决策」（非 ROUTER 模式 / 存量行），
+                        //    与「决策失败」（那不会有记录）不同 —— 见列注释。
+                        if (invocation.routingDecision() == null) {
+                            ps.setNull(19, java.sql.Types.OTHER);
+                        } else {
+                            ps.setString(19, invocation.routingDecision());
+                        }
+                        ps.setString(20, invocation.policyRef());
+                        ps.setString(21, invocation.policyFingerprint());
                         return ps.executeUpdate() > 0;
                     }
                 });
@@ -310,7 +326,10 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
                 startedAt == null ? null : startedAt.toInstant(),
                 finishedAt == null ? null : finishedAt.toInstant(),
                 rs.getString("reason_code"),
-                rs.getLong("fencing_token"));
+                rs.getLong("fencing_token"),
+                rs.getString("routing_decision"),
+                rs.getString("policy_ref"),
+                rs.getString("policy_fingerprint"));
     }
 
     private static TenantContext tenantContext(String tenantId) {
