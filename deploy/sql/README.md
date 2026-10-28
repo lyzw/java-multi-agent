@@ -239,7 +239,7 @@ README「执行顺序」里写的「② 结构 ⚠️ 需超级用户」在 RDS 
 ### 📌 遗留（重置**未**引入，但下次动库时要一并决定）
 
 1. **`ai_agent` 带 `BYPASSRLS`，而它就是应用主数据源用的角色**
-   （`config.env` 的 `SPRING_DATASOURCE_USERNAME=ai_agent`）。
+   （`platform.env` 的 `SPRING_DATASOURCE_USERNAME=ai_agent`）。
    这意味着**主链路连接绕过一切 RLS**，租户隔离在该环境里不发生 ——
    `03_platform_roles.sql` 特意规定 `app_agent` 必须 `NOBYPASSRLS`，而应用实际没用那个角色。
    要么让主数据源改连 `app_agent`，要么去掉 `ai_agent` 的 `BYPASSRLS`；

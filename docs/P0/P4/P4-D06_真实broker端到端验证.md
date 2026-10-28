@@ -82,13 +82,13 @@ D05 也明确指出：**L-1 仍是本片最重要的诚实声明：不得把「�
 正确做法是把「生产者设 PERSISTENT」移到生产者行为测试（P-1），把「队列总落盘」
 交给 quorum 拓扑保证。这避免了「为了过测而把断言改成恒真」或「误以为生产端没设 PERSISTENT」。
 
-### 3.2 本机 broker 凭据需从 `config.env` 注入
+### 3.2 本机 broker 凭据需从 `platform.env` 注入
 
 D03 L-1 原文提到「本机 RabbitMQ 的凭据与配置默认值不一致（`ACCESS_REFUSED`）」。
 本片实测确认：IT 的缺省值 `RABBITMQ_USER=agent / RABBITMQ_PASSWORD= / RABBITMQ_VHOST=agent`
-与生产 `application.yml` 一致；但要真正连上，必须在运行环境 `source config.env`
+与生产 `application.yml` 一致；但要真正连上，必须在运行环境 `source platform.env`
 （其导出的 `RABBITMQ_*` 覆盖了缺省值）。未 source 时才会 `ACCESS_REFUSED`。
-本片已在运行命令中固化 `set -a && . ./config.env` 的步骤，避免后来者重蹈。
+本片已在运行命令中固化 `set -a && . ./platform.env` 的步骤，避免后来者重蹈。
 
 ---
 
