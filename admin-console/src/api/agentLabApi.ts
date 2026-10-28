@@ -3,17 +3,23 @@
  *
  * ⚠️ **通道现实（必须如实告知）**：`POST /api/runs` 与 `GET /api/runs/{id}` 是
  *    **租户域**端点，租户上下文取自已验签令牌，请求体里**没有也不该有** tenantId。
- *    admin-console 持有的是**平台令牌**（aud=admin-console-api），
- *    对租户域端点可能不可达（401/403）。故本模块刻意**不吞掉**这类响应：
- *    由页面明确提示「需租户级令牌通道」，而不是伪装成「执行成功但没有结果」。
+ *    admin-console 持有的是**平台令牌**（aud=admin-console-api），直接打过去
+ *    必然 401 —— 那是受众隔离按设计生效，不是缺陷。
+ *    现已接通合法通道：平台侧用
+ *    `POST /api/platform/v1/tenants/{id}/execution-ticket` 换一张 **60 秒租户票证**
+ *    （见 `executionTicketApi.ts`），本模块的每个租户域调用**强制**要求传入票证，
+ *    类型层面就写不出「拿平台令牌打 /runs」这种代码。
+ *    票证不可用时（未选身份/取票被拒）由页面明确提示，
+ *    而不是伪装成「执行成功但没有结果」。
  *
- * ⚠️ **为什么用轮询而不是 SSE**：`GET /api/runs/{id}/events` 是 SSE，
+ * ⚠️ **为什么仍用轮询而不是 SSE**：`GET /api/runs/{id}/events` 是 SSE，
  *    但浏览器 `EventSource` **无法携带 Authorization 头**（只能走 query 参数，
- *    而令牌入 query 会落进访问日志与 Referer）。在后端提供一次性票证之前，
- *    轮询是唯一不牺牲凭据安全性的做法——这个取舍写在代码里，不藏在文档里。
+ *    而令牌入 query 会落进访问日志与 Referer）。票证解决的是「能不能拿到租户身份」，
+ *    **不解决**「凭据不落 URL」——所以这里依旧轮询，不要把 SSE 说成已支持。
  */
 
 import { request, ApiError } from '@/api/client'
+import { ticketAuthHeader, type ExecutionTicket } from '@/api/executionTicketApi'
 
 /**
  * 创建 Run 请求体（调用方视角：一段自由文本）。
@@ -95,26 +101,46 @@ export const RUN_STATE_COLORS: Record<RunState, string> = {
   TIMED_OUT: 'warning',
 }
 
-/** POST /api/runs —— 发起一次执行。 */
-export function createRun(payload: CreateRunRequest): Promise<CreateRunResponse> {
+/** POST /api/runs —— 发起一次执行（必须携带租户票证）。 */
+export function createRun(
+  payload: CreateRunRequest,
+  ticket: ExecutionTicket,
+): Promise<CreateRunResponse> {
   // ⚠️ 路径不含 `/api`：`request()` 已统一拼 API_BASE，自带前缀会拼成 `/api/api/runs`。
+  // ⚠️ `auth=false`：`client.ts` 在合并完 extraHeaders 之后会用平台会话令牌
+  //    覆盖 Authorization，用 `auth=true` 等于把票证扔掉 —— 那正是原始 401 的成因。
   const { userMessage, ...rest } = payload
-  return request<CreateRunResponse>('/runs', {
-    method: 'POST',
-    body: JSON.stringify({ ...rest, input: { userMessage } }),
-  })
+  return request<CreateRunResponse>(
+    '/runs',
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...rest, input: { userMessage } }),
+    },
+    false,
+    ticketAuthHeader(ticket),
+  )
 }
 
-/** GET /api/runs/{runId} —— 查询状态（不含执行输出正文）。 */
-export function getRunStatus(runId: string): Promise<RunStatus> {
-  return request<RunStatus>(`/runs/${encodeURIComponent(runId)}`)
+/** GET /api/runs/{runId} —— 查询状态（不含执行输出正文；同样必须带票证）。 */
+export function getRunStatus(
+  runId: string,
+  ticket: ExecutionTicket,
+): Promise<RunStatus> {
+  return request<RunStatus>(
+    `/runs/${encodeURIComponent(runId)}`,
+    { method: 'GET' },
+    false,
+    ticketAuthHeader(ticket),
+  )
 }
 
 /**
- * 是否为「平台令牌打不通租户域端点」的通道问题。
+ * 是否为「票证不被租户域接受」的通道问题。
  *
- * ⚠️ 单独建模：401/403 意味着**通道不对**，重试一万次也不会变对；
- *    把它和 5xx 混为一谈会诱导用户反复点「重试」。
+ * ⚠️ 单独建模：401/403 意味着**这张票不行**（过期、受众不符、角色被闸门拒），
+ *    重试一万次也不会变对；把它和 5xx 混为一谈会诱导用户反复点「重试」。
+ *    401 的一个合法子类是**票证自然过期**（60 秒），调用方应先续票再判失败 ——
+ *    见 `ensureExecutionTicket` 的提前续取余量。
  */
 export function isTenantChannelBlocked(cause: unknown): boolean {
   return cause instanceof ApiError && (cause.status === 401 || cause.status === 403)
