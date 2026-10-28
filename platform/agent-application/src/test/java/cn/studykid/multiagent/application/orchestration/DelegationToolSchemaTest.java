@@ -56,12 +56,23 @@ class DelegationToolSchemaTest {
         var properties = (java.util.Map<String, Object>) inputSchema.get("properties");
 
         // 闸门接受这些参数（多传即拒）
-        assertThat(DelegationArguments.parse(
-                        java.util.Map.of("targetAgentId", "child-a")))
-                .isNotNull();
+        // ⚠️ 只给 targetAgentId **不再**是合法参数（10 号文档 §8 · G-4）：
+        //    Schema 的 required 里已声明 input，闸门也必须拒省略 input 的调用 ——
+        //    否则「按 Schema 合法发出」这句话就换了含义，而没人会察觉。
         assertThat(DelegationArguments.parse(
                         java.util.Map.of("targetAgentId", "child-a",
                                 "input", java.util.Map.of("q", "x"))))
+                .isNotNull();
+
+        @SuppressWarnings("unchecked")
+        var required = (java.util.List<String>) inputSchema.get("required");
+        assertThat(required)
+                .as("⚠️ Schema 声明的必填集必须与闸门的必填集一致（两侧都要有 input）")
+                .containsExactlyInAnyOrder("targetAgentId", "input");
+        assertThat(org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class,
+                () -> DelegationArguments.parse(java.util.Map.of("targetAgentId", "child-a"))))
+                .as("Schema 标注必填的 input 缺失时，闸门必须拒收")
                 .isNotNull();
 
         assertThat(properties.keySet())
