@@ -427,7 +427,8 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
     }
 
     private static String quote(String s) {
+        // ⚠️ 制表符同 \n/\r：模型生成的工具参数里极常见，PG 的 jsonb 一律拒绝裸控制字符。
         return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "\\r") + "\"";
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\"";
     }
 }

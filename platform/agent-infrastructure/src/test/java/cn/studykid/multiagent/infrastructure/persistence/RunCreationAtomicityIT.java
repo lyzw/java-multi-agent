@@ -339,6 +339,28 @@ class RunCreationAtomicityIT {
     }
 
     @Test
+    @DisplayName("✅ 多行输入能落进 jsonb（回归：手写转义漏掉 0x0a，整批 Run 创建回滚）")
+    void multilineInputSurvivesJsonb() throws Exception {
+        String runId = UUID.randomUUID().toString();
+        String question = "一元二次方程的定义\n第二行含\t制表符、\"引号\"与 \\反斜杠";
+
+        repo.insertRunAtomically(tenantA, runId, snapshotId,
+                new IdempotencyKey("run.create", "multiline-" + runId),
+                RequestDigest.ofText("d-multi"),
+                Map.of("userMessage", question),
+                "corr-" + runId,
+                new OutboxMessage(runId, tenantA, 0, 0L, CLOCK.instant()));
+
+        // ⚠️ 用 ->> 而不是 ::text：该运算符要求列里存的是合法 JSON，
+        //    坏了会在 SQL 层直接报错，等于让 PG 自己出具合法性证明。
+        assertThat(queryString(tenantA,
+                "SELECT input_payload->>'userMessage' FROM run"
+                        + " WHERE tenant_id=?::uuid AND run_id=?::uuid", tenantA, runId))
+                .as("逐字回读：转义既不能破坏 JSON，也不能吃掉字符")
+                .isEqualTo(question);
+    }
+
+    @Test
     @DisplayName("✅ Outbox 发布状态流转：PENDING → PUBLISHED，且标记幂等")
     void outboxPublishMarking() throws Exception {
         String runId = createRun(tenantA, "pub", RequestDigest.ofText("d5"));

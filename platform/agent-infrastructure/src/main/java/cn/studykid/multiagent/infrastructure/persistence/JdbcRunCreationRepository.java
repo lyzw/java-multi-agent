@@ -27,6 +27,8 @@ import cn.studykid.multiagent.ports.persistence.RunCreationPort;
 import cn.studykid.multiagent.ports.persistence.RunLimits;
 import org.springframework.stereotype.Repository;
 import org.springframework.stereotype.Service;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * {@link RunCreationPort} 的 JDBC 实现。
@@ -42,6 +44,12 @@ import org.springframework.stereotype.Service;
 public class JdbcRunCreationRepository implements RunCreationPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcRunCreationRepository.class);
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final TypeReference<Map<String, Object>> MAP_TYPE =
+            new TypeReference<>() {
+            };
 
     private final DataSource dataSource;
 
@@ -476,54 +484,24 @@ public class JdbcRunCreationRepository implements RunCreationPort {
         return new TenantContext(tenantId, "system", java.util.Set.of(), 0L);
     }
 
-    /** 最小化 JSON 序列化（避免引入完整 JSON 库到基础设施层）。 */
+    /**
+     * {@code Map} → JSONB 文本。
+     *
+     * <p>⚠️ 这里曾是一把手写转义（只处理 {@code \} 与 {@code "}），
+     * 于是多行用户输入把裸 {@code 0x0a} 写进 jsonb，PG 直接报
+     * {@code invalid input syntax for type json}，Run 创建整批回滚。
+     * 本模块早已依赖 Jackson（{@code JdbcRunInputRepository} 等同类都在用），
+     * 没有理由自己再造一个 JSON 写出器。
+     */
     private static String toJson(Map<String, Object> map) {
-        StringBuilder sb = new StringBuilder("{");
-        boolean first = true;
-        for (Map.Entry<String, Object> e : map.entrySet()) {
-            if (!first) {
-                sb.append(',');
-            }
-            first = false;
-            sb.append('"').append(e.getKey()).append("\":");
-            Object v = e.getValue();
-            if (v instanceof Number || v instanceof Boolean) {
-                sb.append(v);
-            } else if (v == null) {
-                sb.append("null");
-            } else {
-                String s = String.valueOf(v)
-                        .replace("\\", "\\\\").replace("\"", "\\\"");
-                sb.append('"').append(s).append('"');
-            }
-        }
-        return sb.append('}').toString();
+        return MAPPER.writeValueAsString(map == null ? Map.of() : map);
     }
 
     private static Map<String, Object> parseJsonObject(String json) {
-        Map<String, Object> out = new LinkedHashMap<>();
         if (json == null || json.isBlank()) {
-            return out;
+            return new LinkedHashMap<>();
         }
-        String body = json.trim();
-        if (body.startsWith("{")) {
-            body = body.substring(1);
-        }
-        if (body.endsWith("}")) {
-            body = body.substring(0, body.length() - 1);
-        }
-        for (String pair : body.split(",")) {
-            int idx = pair.indexOf(':');
-            if (idx <= 0) {
-                continue;
-            }
-            String k = pair.substring(0, idx).trim().replace("\"", "");
-            String v = pair.substring(idx + 1).trim();
-            if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
-                v = v.substring(1, v.length() - 1);
-            }
-            out.put(k, v);
-        }
-        return out;
+        Map<String, Object> parsed = MAPPER.readValue(json, MAP_TYPE);
+        return parsed == null ? new LinkedHashMap<>() : parsed;
     }
 }
