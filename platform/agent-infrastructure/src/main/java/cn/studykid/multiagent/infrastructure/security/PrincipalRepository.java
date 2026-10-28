@@ -166,8 +166,13 @@ public class PrincipalRepository {
                 } else {
                     ps.setInt(1, attempts);
                 }
-                ps.setString(shouldLock ? 2 : 3, record.tenantId());
-                ps.setString(shouldLock ? 3 : 4, record.principalId());
+                // ⚠️ 两条 SQL 的占位符**排布相同**（1=值，2=租户，3=主体），
+                //    此前按分支写成 2/3 与 3/4，非锁定分支多绑了一位 →
+                //    PSQLException「参数数值多于参数占位元 #4」，
+                //    又被下面的 catch 吞成一句 WARN：
+                //    于是**每一次普通密码错误都不增计数，锁定阈值永远达不到**（防爆破失效）。
+                ps.setString(2, record.tenantId());
+                ps.setString(3, record.principalId());
                 ps.executeUpdate();
             }
             conn.commit();
@@ -175,7 +180,10 @@ public class PrincipalRepository {
             // ⚠️ 记录失败本身失败**不应放行登录**，但也不能让登录端点崩掉。
             //    此处只记日志：攻击者可通过制造 DB 压力让计数不准，
             //    属于已知残余风险（设计文档 §7 限制 6 的前置问题）。
-            log.warn("记录登录失败计数时出错: loginName={}", record.loginName());
+            //    ⚠️ 必须带上异常原文：只打「出错」不打 cause，
+            //    参数绑定这类**编码错误**会被伪装成「DB 压力」，永不被发现。
+            log.warn("记录登录失败计数时出错: loginName={}, cause={}",
+                    record.loginName(), e.toString());
         }
     }
 
