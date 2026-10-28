@@ -641,19 +641,26 @@ public class RagManagementController {
      * 与 worker 的启动重索引<b>同一口径</b>（同一份 SQL）——
      * 未校验语料不会因为「点了重跑索引」就进索引。
      *
+     * <p><b>⚠️ {@code limit} 有两种给法</b>：请求体 {@code {"limit":n}}（前端两个调用点的用法）
+     * 或查询参数 {@code ?limit=n}（运维手工 curl 的直觉用法）。
+     * 此前只认请求体，查询参数会被<b>静默忽略</b>并回落到默认 {@value #DEFAULT_REINDEX_LIMIT}——
+     * 调用方以为「只跑了 4 条」，实际跑了 500 条。两处同时给以<b>请求体为准</b>，
+     * 因为它是带 Bean Validation 的正式契约；查询参数只作为「body 缺席时」的补充入口，
+     * 且非整数要显式报 400（放行到端口层会变成不可读的 500）。
+     *
      * @param tenantId 租户 ID
-     * @param request 重索引请求（可空 → 用默认上限）
+     * @param request 重索引请求（可空 → 用查询参数或默认上限）
+     * @param limitParam 查询参数形式的 limit（可空）
      * @return 重索引结果
      */
     @PostMapping("/reindex")
     public ManagementDtos.ReindexResponse reindex(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
-            @Valid @RequestBody(required = false) ManagementDtos.ReindexRequest request) {
+            @Valid @RequestBody(required = false) ManagementDtos.ReindexRequest request,
+            @RequestParam(name = "limit", required = false) String limitParam) {
         RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
-        int limit = request == null || request.limit() == null
-                ? DEFAULT_REINDEX_LIMIT
-                : request.limit();
+        int limit = resolveReindexLimit(request, limitParam);
         // ⚠️ 上限在这里再压一道：Bean Validation 只在**请求体存在**时生效，
         //    而 body 可空 → 默认值分支也要过同一道闸。
         if (limit <= 0 || limit > MAX_REINDEX_LIMIT) {
@@ -663,6 +670,28 @@ public class RagManagementController {
         CorpusIndexingPort.ReindexOutcome outcome = indexingPort.reindex(tenant.tenantId(), limit);
         return new ManagementDtos.ReindexResponse(
                 outcome.indexedChunks(), outcome.scannedChunks(), outcome.durationMs());
+    }
+
+    /**
+     * 归并 {@code limit} 的两个来源：请求体优先，其次是查询参数，最后才是默认上限。
+     *
+     * @param request 重索引请求体（可空）
+     * @param limitParam 查询参数 {@code ?limit=}（可空）
+     * @return 生效的片段数上限
+     */
+    private int resolveReindexLimit(ManagementDtos.ReindexRequest request, String limitParam) {
+        if (request != null && request.limit() != null) {
+            return request.limit();
+        }
+        if (limitParam == null || limitParam.isBlank()) {
+            return DEFAULT_REINDEX_LIMIT;
+        }
+        try {
+            return Integer.parseInt(limitParam.trim());
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "查询参数 limit 必须是整数：" + limitParam);
+        }
     }
 
     /**

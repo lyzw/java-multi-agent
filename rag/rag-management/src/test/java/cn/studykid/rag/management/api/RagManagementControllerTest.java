@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -389,7 +390,7 @@ class RagManagementControllerTest {
     @DisplayName("重跑索引缺租户头返回 400")
     void reindexWithoutTenantIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(null, null, null));
+                () -> controller.reindex(null, null, null, null));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -397,7 +398,7 @@ class RagManagementControllerTest {
     @DisplayName("重跑索引 limit 越界返回 400（防止一次 HTTP 请求跑太久）")
     void reindexLimitOutOfRangeIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(TENANT, null, new ManagementDtos.ReindexRequest(2001)));
+                () -> controller.reindex(TENANT, null, new ManagementDtos.ReindexRequest(2001), null));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -407,7 +408,7 @@ class RagManagementControllerTest {
         when(indexingPort.reindex(any(), anyInt()))
                 .thenReturn(new CorpusIndexingPort.ReindexOutcome(12, 12, 340));
         ManagementDtos.ReindexResponse response =
-                controller.reindex(TENANT, null, new ManagementDtos.ReindexRequest(500));
+                controller.reindex(TENANT, null, new ManagementDtos.ReindexRequest(500), null);
         assertEquals(12, response.indexedChunks());
         assertEquals(12, response.scannedChunks());
         assertEquals(340, response.durationMs());
@@ -419,8 +420,47 @@ class RagManagementControllerTest {
     void reindexWithoutBodyUsesDefaultLimit() {
         when(indexingPort.reindex(any(), anyInt()))
                 .thenReturn(new CorpusIndexingPort.ReindexOutcome(0, 0, 5));
-        controller.reindex(TENANT, null, null);
+        controller.reindex(TENANT, null, null, null);
         verify(indexingPort).reindex(eq(TENANT), eq(500));
+    }
+
+    @Test
+    @DisplayName("重跑索引的 ?limit= 查询参数生效（此前被静默忽略，回落成 500）")
+    void reindexHonoursQueryParameterLimit() {
+        when(indexingPort.reindex(any(), anyInt()))
+                .thenReturn(new CorpusIndexingPort.ReindexOutcome(4, 4, 80));
+        controller.reindex(TENANT, null, null, "4");
+        verify(indexingPort).reindex(eq(TENANT), eq(4));
+    }
+
+    @Test
+    @DisplayName("重跑索引的查询参数 limit 同样受 1～2000 闸门约束")
+    void reindexQueryParameterLimitOutOfRangeIsBadRequest() {
+        ResponseStatusException tooBig = assertThrows(ResponseStatusException.class,
+                () -> controller.reindex(TENANT, null, null, "2001"));
+        assertEquals(HttpStatus.BAD_REQUEST, tooBig.getStatusCode());
+        ResponseStatusException tooSmall = assertThrows(ResponseStatusException.class,
+                () -> controller.reindex(TENANT, null, null, "0"));
+        assertEquals(HttpStatus.BAD_REQUEST, tooSmall.getStatusCode());
+        verifyNoInteractions(indexingPort);
+    }
+
+    @Test
+    @DisplayName("重跑索引的查询参数 limit 非整数返回 400，而不是把脏值放进端口层")
+    void reindexNonNumericQueryParameterLimitIsBadRequest() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.reindex(TENANT, null, null, "abc"));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        verifyNoInteractions(indexingPort);
+    }
+
+    @Test
+    @DisplayName("重跑索引同时给请求体与查询参数时以请求体为准")
+    void reindexPrefersBodyLimitOverQueryParameter() {
+        when(indexingPort.reindex(any(), anyInt()))
+                .thenReturn(new CorpusIndexingPort.ReindexOutcome(7, 7, 90));
+        controller.reindex(TENANT, null, new ManagementDtos.ReindexRequest(7), "99");
+        verify(indexingPort).reindex(eq(TENANT), eq(7));
     }
 
     private ManagementDtos.DocumentVerificationRequest documentRequest(VerificationStatus target) {
