@@ -3,13 +3,15 @@
 -- 【来源】由 02_platform_seed / 04_capability_seed 灌入基准库后导出，再空库复放验证。
 --   ⚠️ 不是从远程 agent_dev 导的：远程有 11 个租户（9 个是 stat-it-* / probe-* 测试残留）、
 --   95 行 agent，直接导会把测试垃圾当基线固化进生产初始化。
--- 【内容】1 租户 + 1 预算账户 + 3 agent/agent_version + 能力目录
+-- 【内容】1 租户（**平台侧登记 + 配额 + 业务侧镜像**三处齐）+ 1 预算账户
+--   + 3 agent/agent_version + 能力目录
 --   （Tool 6 / Skill 4 / MCP 2 / cap_agent_def 3 / 子引用边 2）
 --   + 平台权限矩阵（角色 6 / 权限 24 / 绑定 53）+ 系统字典（类 12 / 项 61）
 --   ⚠️ 权限矩阵的运行期权威源是代码（PlatformRolePermissionMatrix），本表只是治理副本；
 --   两边必须同步 —— 新增 platform.tenant.execution_ticket（执行票证，仅超级管理员）
 --   时，代码与本文件同批改，否则「权限矩阵」页与审计检索会各说一套。
--- 【插入序】按 FK 依赖排好：tenant → agent → agent_version → cap_agent_def → cap_agent_child_ref
+-- 【插入序】按 FK 依赖排好：platform.tenant → platform.tenant_quota → public.tenant
+--   → agent → agent_version → cap_agent_def → cap_agent_child_ref
 -- 【不含】principal / 管理员口令哈希 —— 属环境相关，见 04_platform_admin_grant.sql
 --   平台账号（platform_user + platform_user_role）本文件一律不含：口令哈希只能由
 --   服务端同一 PasswordHasher 现场计算，绝不入库。安装通道见
@@ -222,6 +224,23 @@ INSERT INTO platform.sys_dictionary_item VALUES ('9c3abda0-4af2-4f41-b9ab-f55560
 INSERT INTO platform.sys_dictionary_item VALUES ('3f3c4a8f-73a1-4e0a-9b21-2323188b0495', 'rag.publisher', 'HJ', '沪教版', 40, false, true, '2026-10-27 14:39:23.533329+00', '2026-10-27 14:39:23.533329+00', 0);
 INSERT INTO platform.sys_dictionary_item VALUES ('a4f4bf6d-8c6d-4ba7-91bd-30acf5420d35', 'rag.publisher', 'ZJ', '浙教版', 50, false, true, '2026-10-27 14:39:23.533329+00', '2026-10-27 14:39:23.533329+00', 0);
 INSERT INTO platform.sys_dictionary_item VALUES ('f43f3a45-366d-4396-9e79-b3098a66dc23', 'rag.publisher', 'WY', '外研版', 60, false, true, '2026-10-27 14:39:23.533329+00', '2026-10-27 14:39:23.533329+00', 0);
+
+
+--
+-- Data for Name: tenant; Type: TABLE DATA; Schema: platform; Owner: -
+--
+
+-- ⚠️ **本段是手写补录，不是 pg_dump 导出产物**：租户的**平台侧权威行 + 配额**。
+--   运行期「这个租户能不能执行」有两处读点：票证闸门读 platform.tenant.lifecycle_state，
+--   worker 探针读 public.tenant.status —— 后者是前者在 JdbcPlatformTenantRepository
+--   provisionTenant(:150) / transitionLifecycle(:209) 里的**同事务镜像**。
+--   本文件原先只灌 public.tenant（下一段），于是空库复放出来的种子租户
+--   「业务侧 ACTIVE、平台侧无登记」：worker 认它，取执行票证得 404 TENANT_NOT_FOUND
+--   （2026-10-29 实测，见 docs/RAG检索与端到端实测问题记录_20261028.md §9）。
+--   这两行按 provisionTenant 的形状补齐；plan 留 NULL（不为演示数据编造计费套餐）。
+--   ⚠️ 顺序：platform.tenant 必须在 public.tenant 之前（tenant_quota 外键指向它）。
+INSERT INTO platform.tenant (id, name, slug, status, plan, lifecycle_state, created_at, updated_at) VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '某某教育科技', 't-a', 'ACTIVE', NULL, 'ACTIVE', '2026-10-27 14:40:18.458157+00', '2026-10-27 14:40:18.458157+00');
+INSERT INTO platform.tenant_quota (tenant_id, agent_limit, run_concurrency_limit) VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 50, 10);
 
 
 --
