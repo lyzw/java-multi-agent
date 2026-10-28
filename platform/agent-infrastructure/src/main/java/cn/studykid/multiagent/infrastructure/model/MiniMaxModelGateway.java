@@ -34,10 +34,13 @@ import cn.studykid.multiagent.ports.model.ModelResponse;
  * 供应商响应体（可能回显请求头）在入日志前一律过
  * {@link CredentialRedactor}。
  *
- * <p><b>工具回灌的多轮口径</b>：领域侧 {@link ModelMessage} 不携带
- * OpenAI 的 {@code tool_call_id}，只有 {@code toolName}。本适配器按
- * 「工具名即 call id」重组 —— 与执行循环的回灌顺序一致，
- * 同名工具并发调用的场景由 {@code ToolOutcomeRenderer} 合并为一条。
+ * <p><b>工具回灌的多轮口径</b>：{@link ModelMessage} 携带
+ * {@code toolCallId}（tool 消息）与 {@code toolCalls}（assistant 消息），
+ * 本适配器原样组成 OpenAI 的 {@code tool_calls} / {@code tool_call_id} 成对结构。
+ * ⚠️ 旧实现按「工具名即 call id」重组且只发 tool 消息，
+ * 供应商在自己的 assistant 里找不到该标识即以
+ * {@code 400 invalid params, tool result's tool id(...) not found (2013)}
+ * 拒收<b>整次请求</b>（2026-10-28 真实 MiniMax 端到端实测）。
  */
 public final class MiniMaxModelGateway extends AbstractModelGateway {
 
