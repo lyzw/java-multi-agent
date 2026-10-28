@@ -40,7 +40,7 @@ import cn.studykid.multiagent.ports.persistence.OutboxMessage;
  * 与 `RabbitQueueDepthProbe` 实现），直连本机开发 broker。
  *
  * <p><b>⚠️ 连接参数来自环境变量，缺省值匹配本机 dev broker</b>
- * （见 `scripts/dev-rabbitmq.sh` 与 `config.env`）。
+ * （见 `scripts/dev-rabbitmq.sh` 与 `platform.env`）。
  * 没有 broker 的环境跑此 IT 会失败——这是 IT 的正确行为，
  * 因为它本就要在真实基建上验证（与 14 个需要 `IT_PG_URL` 的 IT 同类）。
  *
@@ -178,7 +178,7 @@ class RealBrokerEndToEndIT {
         if (v != null && !v.isBlank()) {
             return v;
         }
-        // ⚠️ 也读 config.env 常见的 RABBITMQ_* 之外，支持 SPRING 风格缺省
+        // ⚠️ 也读 platform.env 常见的 RABBITMQ_* 之外，支持 SPRING 风格缺省
         return def;
     }
 

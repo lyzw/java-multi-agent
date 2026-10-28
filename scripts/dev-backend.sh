@@ -7,12 +7,12 @@
 #    本脚本跑最新打包产物（platform-bootstrap-*-exec.jar）。
 set -a
 # shellcheck disable=SC1091
-source "$(dirname "$0")/../config.env"
+source "$(dirname "$0")/../platform.env"
 # JWT 密钥对单独一个文件（scripts/gen-jwt-keys.sh 生成，含私钥，被 .gitignore 忽略）。
-# 不写在 config.env 里是因为那两个文件也要能被 IDEA 的 EnvFile 插件解析，
-# 而插件不认 source/if —— 这里的加载只走 shell 通道。
+# 不并进 platform.env 是因为两个文件都要能被 IDEA 的 EnvFile 插件解析，
+# 而插件不认 source/if —— 这里的合并只走 shell 通道。
 # 缺它 = dev profile 每次启动生成新密钥 → 平台一重启，RAG 配的验签公钥就作废。
-[ -f "$(dirname "$0")/../jwt-keys.env" ] && source "$(dirname "$0")/../jwt-keys.env"
+[ -f "$(dirname "$0")/../jwt.env" ] && source "$(dirname "$0")/../jwt.env"
 set +a
 
 JAVA_HOME=${JAVA_HOME:-/Users/zhouwei/software/Java/jdk-21.0.12.jdk/Contents/Home}

@@ -23,7 +23,7 @@
 #   RAG 配的公钥就作废。所以本地也要持久化一份。
 #
 # 【产物】
-#   $JWT_KEYS_FILE（默认 <repo>/jwt-keys.env，被 .gitignore 的 *.env 忽略）
+#   $JWT_KEYS_FILE（默认 <repo>/jwt.env，被 .gitignore 的 *.env 忽略）
 #     JWT_PRIVATE_KEY / PLATFORM_JWT_PRIVATE_KEY      ← 平台侧，机密
 #     RAG_TENANT_JWT_PUBLIC_KEY / RAG_PLATFORM_JWT_PUBLIC_KEY ← RAG 侧，公开
 #
@@ -37,7 +37,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${JWT_KEYS_FILE:-$REPO/jwt-keys.env}"
+OUT="${JWT_KEYS_FILE:-$REPO/jwt.env}"
 PLATFORM_BASE="${PLATFORM_BASE_URL:-http://127.0.0.1:8080}"
 
 # DER → base64url（无填充）：平台 JWKS 与 JWT 段用的都是这个字母表。
@@ -77,9 +77,9 @@ if [ "$mode" = "--check" ]; then
   live="$(cat /tmp/.jwks_pub.$$)"; rm -f /tmp/.jwks_pub.$$
   if [ -z "$live" ]; then echo "JWKS 响应里没有 publicKeyBase64" >&2; exit 1; fi
   echo "  运行中公钥指纹 : $(fp "$live")"
-  echo "  jwt-keys.env   : $(fp "$t_key")"
+  echo "  jwt.env   : $(fp "$t_key")"
   if [ "$(fp "$live")" = "$(fp "$t_key")" ]; then
-    echo "✅ 配套：平台当前正是用 jwt-keys.env 里的私钥在签租户令牌。"
+    echo "✅ 配套：平台当前正是用 jwt.env 里的私钥在签租户令牌。"
   else
     echo "⛔ 不配套：平台用的是另一把私钥（多半仍在「启动生成」）。"
     echo "   处置：把 $OUT 的 JWT_PRIVATE_KEY 注入平台环境后重启平台。"
