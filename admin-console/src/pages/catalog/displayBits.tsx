@@ -75,10 +75,25 @@ export function fingerprintCell(value: string | null | undefined): ReactNode {
   )
 }
 
-/** 时间列（无值时如实呈现「-」，不得补默认值）。 */
+/**
+ * 时间列（无值时如实呈现「-」，不得补默认值）。
+ *
+ * <p>⚠️ 列表里显示**本地可读时刻**，原始 ISO 收进 tooltip 且可复制：
+ * 后端给的是带微秒的 UTC（`2026-10-27T14:40:18.500564Z`），
+ * 直接铺在表格里既读不出秒级顺序，也和审计页的显示口径不一致
+ * （同一控制台两种时间格式，用户会以为不是同一个系统）。
+ */
 export function timeCell(value: string | null | undefined): ReactNode {
-  const v = (value ?? '').trim()
-  return v === '' ? <Typography.Text type="secondary">-</Typography.Text> : v
+  const raw = (value ?? '').trim()
+  if (raw === '') return <Typography.Text type="secondary">-</Typography.Text>
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return raw
+  const formatted = d.toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-')
+  return (
+    <Tooltip title={<Typography.Text code>{raw}</Typography.Text>}>
+      <Typography.Text copyable={{ text: raw }}>{formatted}</Typography.Text>
+    </Tooltip>
+  )
 }
 
 /**

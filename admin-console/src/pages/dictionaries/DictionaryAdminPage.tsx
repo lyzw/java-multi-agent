@@ -377,7 +377,7 @@ export function DictionaryAdminPage(): JSX.Element {
         open={dictModalOpen}
         onCancel={() => setDictModalOpen(false)}
         footer={null}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={dictForm} layout="vertical" onFinish={(v) => void submitDictionary(v)}>
           <Form.Item
@@ -425,7 +425,7 @@ export function DictionaryAdminPage(): JSX.Element {
           setEditingItem(null)
         }}
         footer={null}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={itemForm} layout="vertical" onFinish={(v) => void submitItem(v)}>
           <Form.Item

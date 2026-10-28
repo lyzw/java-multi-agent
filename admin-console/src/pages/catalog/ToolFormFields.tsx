@@ -182,7 +182,7 @@ export function ToolFormFields({ isRegistration }: ToolFormFieldsProps): JSX.Ele
                   name="httpTimeoutMs"
                   label="超时（httpTimeoutMs · 毫秒）"
                   rules={[{ required: true, message: 'kind=HTTP 时必须填写超时' }]}
-                  extra={`1 ~ ${HTTP_MAX_TIMEOUT_MS} 毫秒。超时是**总时限**：超时的请求按「结果未知」处理，需人工对账。`}
+                  extra={`1 ~ ${HTTP_MAX_TIMEOUT_MS} 毫秒。超时是「总时限」：超时的请求按「结果未知」处理，需人工对账。`}
                   initialValue={HTTP_DEFAULT_TIMEOUT_MS}
                 >
                   <InputNumber min={1} max={HTTP_MAX_TIMEOUT_MS} precision={0} style={{ width: 220 }} />

@@ -93,7 +93,7 @@ export function SkillFormFields({ isRegistration }: SkillFormFieldsProps): JSX.E
       </Form.Item>
       <Form.Item
         label="参数策略（paramPolicies）"
-        extra="Skill 的参数策略只能**进一步收紧** Tool 的策略：允许清单或数值上限"
+        extra="Skill 的参数策略只能「进一步收紧」 Tool 的策略：允许清单或数值上限"
       >
         <PolicyListEditor value={policies.value} onChange={policies.onChange} />
       </Form.Item>

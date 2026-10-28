@@ -67,7 +67,7 @@ export function PlatformRegistrationModal<TValues>({
   //    否则「登记」里填了一半的值会出现在「修改」表单里（反之亦然）。
   const [form] = Form.useForm<TValues>()
 
-  // ⚠️ 打开即回填初值（改版）：弹窗 destroyOnClose 关闭时卸载，
+  // ⚠️ 打开即回填初值（改版）：弹窗 destroyOnHidden 关闭时卸载，
   //    重新打开时表单为空，这里统一 reset 后再 setFieldsValue，
   //    避免上一次改版的内容幽灵般残留。
   useEffect(() => {
@@ -88,7 +88,7 @@ export function PlatformRegistrationModal<TValues>({
       styles={{ body: { maxHeight: '72vh', overflowY: 'auto' } }}
       // ⚠️ 关闭即销毁：下一次「登记」必须是**干净**的表单，
       //    否则上一次填了一半的内容会幽灵般地出现在新表单里。
-      destroyOnClose
+      destroyOnHidden
     >
       <PlatformPublishPanel<TValues>
         form={form}

@@ -92,7 +92,7 @@ export function PlatformDeprecateModal({
       confirmLoading={submitting}
       onOk={() => void submit()}
       okText="提交停用申请"
-      destroyOnClose
+      destroyOnHidden
     >
       {/* ⚠️ 刻意给 Form 命名：避免与其他弹窗表单的 reason 字段撞 DOM id。 */}
       <Form form={form} name={`platform-deprecate-${objectType}`} layout="vertical">

@@ -220,7 +220,7 @@ export function RagManagementPage(): JSX.Element {
                   open={registerOpen}
                   onCancel={() => setRegisterOpen(false)}
                   footer={null}
-                  destroyOnClose
+                  destroyOnHidden
                 >
                   <RagRegisterForm
                     submitting={action.status === 'submitting'}

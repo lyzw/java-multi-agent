@@ -27,7 +27,7 @@ import {
 } from '@ant-design/icons'
 import { getConsoleSkillCatalog } from '@/api/adminApi'
 import type { SkillCatalogItem } from '@/api/types'
-import { riskTag, lifecycleStateCell, skillPurposeCell } from '@/pages/catalog/displayBits'
+import { riskTag, lifecycleStateCell, skillPurposeCell, timeCell } from '@/pages/catalog/displayBits'
 import { PlatformRegistrationModal } from '@/pages/catalog/PlatformRegistrationModal'
 import { SkillFormFields } from '@/pages/catalog/SkillFormFields'
 import { type SkillFormValues, type McpDeclarationFormValue, toAllowlistTriState } from '@/pages/catalog/platformObjectForm'
@@ -174,7 +174,7 @@ export function SkillCatalogPage(): JSX.Element {
       title: '发布时间',
       dataIndex: 'publishedAt',
       width: 170,
-      render: (v: string | null) => formatPublishTime(v),
+      render: (v: string | null) => timeCell(v),
     },
     {
       title: '操作',
@@ -366,23 +366,6 @@ function SkillReviseNotice(): JSX.Element {
       message="改版：基于下方预填的既有定义提交新版本"
       description="skillId 不可改（改标识等于登记另一个对象）。提交后走三步工作流，审批执行后指针移向新版本；既有版本保留为历史。"
     />
-  )
-}
-
-/** 发布时间：列表里显示「YYYY-MM-DD HH:mm」，tooltip + 可复制原始 ISO。 */
-function formatPublishTime(v: string | null | undefined): JSX.Element {
-  const raw = (v ?? '').trim()
-  if (raw === '') return <Typography.Text type="secondary">-</Typography.Text>
-  const d = new Date(raw)
-  const formatted = Number.isNaN(d.getTime())
-    ? raw
-    : d
-        .toLocaleString('zh-CN', { hour12: false })
-        .replace(/\//g, '-')
-  return (
-    <Tooltip title={<Typography.Text code>{raw}</Typography.Text>}>
-      <Typography.Text copyable={{ text: raw }}>{formatted}</Typography.Text>
-    </Tooltip>
   )
 }
 

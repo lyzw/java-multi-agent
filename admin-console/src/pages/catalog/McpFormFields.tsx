@@ -120,7 +120,7 @@ export function McpFormFields({
         <Form.Item
           label="暴露操作清单"
           rules={[{ required: true, message: '指定清单不能为空（请改选「显式空」）' }]}
-          extra="这是「这个 Server **允许**哪些远端操作」—— 与「实际登记在它上面的 Tool」是两回事"
+          extra="这是「这个 Server 允许哪些远端操作」—— 与「实际登记在它上面的 Tool」是两回事"
         >
           <StringListEditor
             value={exposed.value}
@@ -144,7 +144,7 @@ export function McpFormFields({
           showIcon
           style={{ marginBottom: 16 }}
           message="该 Server 已登记凭据引用，但目录接口不回显定位符"
-          description="若本次发布不重新填写「凭据引用」，新版本将**不带**凭据引用 —— 运行时连接会因此失败。请一并填写。"
+          description="若本次发布不重新填写「凭据引用」，新版本将「不带」凭据引用 —— 运行时连接会因此失败。请一并填写。"
         />
       )}
     </>

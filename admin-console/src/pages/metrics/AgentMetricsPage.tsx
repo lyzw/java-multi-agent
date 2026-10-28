@@ -708,7 +708,7 @@ export function AgentMetricsPage(): JSX.Element {
         width={720}
         open={drillTraceId !== ''}
         onClose={() => setDrillTraceId('')}
-        destroyOnClose
+        destroyOnHidden
       >
         {drillLoading && <Spin tip="加载明细…" />}
         {drillError !== null && (

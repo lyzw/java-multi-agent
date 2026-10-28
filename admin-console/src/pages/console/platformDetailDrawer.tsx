@@ -45,7 +45,7 @@ export function CatalogDetailDrawer({
   children: ReactNode
 }): JSX.Element {
   return (
-    <Drawer open={open} onClose={onClose} title={title} width={760} destroyOnClose>
+    <Drawer open={open} onClose={onClose} title={title} width={760} destroyOnHidden>
       {children}
     </Drawer>
   )

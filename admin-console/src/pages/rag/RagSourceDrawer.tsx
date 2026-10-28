@@ -224,7 +224,7 @@ export function RagSourceDrawer({
       open={source !== null}
       onClose={onClose}
       title={source ? `语料来源 · ${source.title}` : '语料来源'}
-      destroyOnClose
+      destroyOnHidden
     >
       {source && (
         <Tabs

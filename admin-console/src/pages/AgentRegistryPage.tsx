@@ -166,7 +166,7 @@ export function AgentRegistryPage(): JSX.Element {
         width={960}
         footer={null}
         styles={{ body: { maxHeight: '74vh', overflowY: 'auto' } }}
-        destroyOnClose
+        destroyOnHidden
       >
         <AgentDraftPanel
           registration

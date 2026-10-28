@@ -173,7 +173,10 @@ describe('Tool 目录 · 列表列', () => {
     expect(screen.getAllByText('发布时间').length).toBeGreaterThan(0)
     expect(screen.getAllByText('配置指纹').length).toBeGreaterThan(0)
     expect(screen.getAllByText('fp-tool-live').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('2026-10-20T00:00:00Z').length).toBeGreaterThan(0)
+    // 时间列一律显示本地可读时刻（原始 ISO 收进 tooltip）——
+    // ⚠️ 这里断言**形状**而不是某个具体时刻：写死字符串等于把断言绑死在跑测试的时区上。
+    expect(screen.getAllByText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/).length).toBeGreaterThan(0)
+    expect(screen.queryAllByText('2026-10-20T00:00:00Z')).toHaveLength(0)
   })
 
   it('⛔ 已停用（DEPRECATED）的 Tool 不得显示成「已发布」', async () => {

@@ -4,6 +4,7 @@ import { RequireAuth } from '@/auth/RequireAuth'
 import { RequireRole } from '@/auth/RequireRole'
 import { LoginPage } from '@/pages/LoginPage'
 import { TenantRegistryPage } from '@/pages/TenantRegistryPage'
+import { TenantNewPage } from '@/pages/TenantNewPage'
 import { TenantDetailPage } from '@/pages/TenantDetailPage'
 import { AuditLogsPage } from '@/pages/audit/AuditLogsPage'
 import { RoleMatrixPage } from '@/pages/roles/RoleMatrixPage'
@@ -52,10 +53,12 @@ export const router = createBrowserRouter(
           element: <TenantRegistryPage />,
         },
         {
+          // 深链 /tenants/new 不是第二个表单宿主：跳回租户页并带 ?register=1，
+          // 由页面自己的 useRegistrationModal 消费后打开「开通租户」弹窗。
           path: 'tenants/new',
           element: (
             <RequireRole roles={LIFECYCLE_SCOPE}>
-              <TenantRegistryPage />
+              <TenantNewPage />
             </RequireRole>
           ),
         },

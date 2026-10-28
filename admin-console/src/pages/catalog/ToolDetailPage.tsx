@@ -164,8 +164,8 @@ export function ToolDetailPage(): JSX.Element {
                 (tool.configFingerprint ? ` · 配置指纹 ${tool.configFingerprint}` : '')
               }
               description={
-                '修改 = 发一个新版本：已发布行不可变，下方草稿提交并执行后成为**新版本**，当前行原样保留。' +
-                '本对象的**全部字段**见上方「概览」。'
+                '修改 = 发一个新版本：已发布行不可变，下方草稿提交并执行后成为「新版本」，当前行原样保留。' +
+                '本对象的全部字段见上方「概览」。'
               }
             />
           )}

@@ -387,7 +387,7 @@ export function UsersManagePage(): JSX.Element {
             })
             .catch(() => undefined)
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={editForm} layout="vertical">
           <Form.Item name="displayName" label="显示名">
@@ -423,7 +423,7 @@ export function UsersManagePage(): JSX.Element {
             })
             .catch(() => undefined)
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <Alert
           type="info"
@@ -462,7 +462,7 @@ export function UsersManagePage(): JSX.Element {
             )
             .catch(() => undefined)
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={createForm} layout="vertical">
           <Form.Item
@@ -503,7 +503,7 @@ export function UsersManagePage(): JSX.Element {
           setRoleTarget(null)
         }}
         width={440}
-        destroyOnClose
+        destroyOnHidden
       >
         {roleTarget && (
           <>

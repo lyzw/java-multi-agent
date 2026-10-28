@@ -223,7 +223,7 @@ export function TenantRegistryPage(): JSX.Element {
         title="开通租户"
         onCancel={registration.closeModal}
         footer={null}
-        destroyOnClose
+        destroyOnHidden
       >
         <TenantProvisionForm
           onProvisioned={(t) => {
