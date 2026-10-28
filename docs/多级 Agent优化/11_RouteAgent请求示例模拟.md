@@ -475,7 +475,7 @@ locale: zh-CN
   "defaultTargetUsed": true }
 ```
 
-→ 兜底目标**仍须走完整准入链**（延续 [RoutingStrategy.java:42-46](../platform/agent-core/src/main/java/cn/studykid/multiagent/core/orchestration/RoutingStrategy.java#L42-L46)「降级只作用于选择，不作用于准入」）。
+→ 兜底目标**仍须走完整准入链**（延续「降级只作用于选择，不作用于准入」：原 `RoutingStrategy.java:42-46`，该枚举已随 S4 删除，纪律现见 [`RoutingEngine` 类头 javadoc](../platform/agent-routing/src/main/java/cn/studykid/multiagent/routing/RoutingEngine.java#L14-L35)）。
 
 ### B4 — 谓词求值出错（两种语义）
 

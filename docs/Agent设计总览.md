@@ -91,7 +91,7 @@ V28 同时把 MCP 绑定约束改成**三种 kind 各写各的分支**，理由�
 
 | 模块 | 职责 | Agent 相关的关键内容 |
 |---|---|---|
-| `agent-core` | **纯领域**（无 Spring、无 DB） | `core.cap`（`CapAgentDef`/`CapToolDef`/`CapSkillDef`/`CapMcpServerDef`/`CapabilitySnapshot`/`EffectiveClosure`/`ExecutionScope`/`CapToolDecision`/`AuthorizationDecision`）、`core.orchestration`（`AgentOrchestration`/`OrchestrationMode`/`RoutingStrategy`/`DelegationFailurePolicy`/`AgentInvocation`/`DelegationToolSchema`）、`core.run.RunState`、`core.config.RunConfigSnapshot`、`core.tenant.TenantContext`、`core.compliance.ZeroRetentionGate` |
+| `agent-core` | **纯领域**（无 Spring、无 DB） | `core.cap`（`CapAgentDef`/`CapToolDef`/`CapSkillDef`/`CapMcpServerDef`/`CapabilitySnapshot`/`EffectiveClosure`/`ExecutionScope`/`CapToolDecision`/`AuthorizationDecision`）、`core.orchestration`（`AgentOrchestration`/`OrchestrationMode`/`RoutingMode`/`NoMatchAction`/`ConflictPolicy`/`DelegationFailurePolicy`/`AgentInvocation`/`DelegationToolSchema`）、`core.run.RunState`、`core.config.RunConfigSnapshot`、`core.tenant.TenantContext`、`core.compliance.ZeroRetentionGate` |
 | `agent-ports` | 出站端口 | `persistence.*`（`CapAgentDefPort`/`CapAgentChildRefPort`/`AgentInvocationPort`/`CapabilitySnapshotPort`/`ExecutionSnapshotPort`…）、`security.AuthorizationService`/`ApprovalPolicy`、`model.ModelGateway`、`tool.ToolHandler`、`mcp.*`、`orchestration.ChildAgentRunner`/`RoutingPolicyProvider`/`ResultContractProvider` |
 | `agent-application` | 用例与治理 | `cap`（**`PermissionResolver`**、`CachingClosureResolver`、**`CapExecutionFlow`**、**`ExecutionAdmissionChecker`**、`InvocationValidator`、`ConfigPublishService`、`AgentPublishClosureValidator`、`DualWriteAgentManagePort`、`CapDefinitionProjector`）、`orchestration`（**`DelegationExecutor`**、`DelegationGuard`、`AgentOrchestrationParser`、`ChildResultContractValidator`）、`run.RunCreationService`、`prompt.PromptGuard`、`metrics.AgentMetricCollector` |
 | `agent-infrastructure` | 持久化与安全实现 | `persistence.cap.*`（Jdbc 仓储）、`security.RoleBasedAuthorizationService`、`model.`（**只有 `AbstractModelGateway` + `FakeModelGateway`**）、`tool.`（`GetStudentProfileTool`/`RecordWeaknessTool`/`ToolInputSchemaValidator`/`ToolOperationReconciliationService`） |
@@ -194,11 +194,20 @@ Run、初始事件、幂等记录、Outbox **四者同事务**（事务边界由
 | `ROUTER` | 按**固定版本**路由策略选目标 | 模型输出**只是候选**，必须落在父声明内且服务端复核 |
 | `SEQUENTIAL` | 父可在声明集合内**逐次**委派 | ⚠️ 框架**不代劳串行与聚合**（评审前置决策 1 · 2026-10-25：不纳入 P2）。框架只给三件事：子集合、逐跳重新授权、逐跳资源封顶。**一次委派 = 一个目标 = 一条调用记录 = 一次子执行** |
 
-[`RoutingStrategy`](file:///Users/zhouwei/code-workspace/ai-tech/java-multi-agent/platform/agent-core/src/main/java/cn/studykid/multiagent/core/orchestration/RoutingStrategy.java#L26)：
-`EXPLICIT_TARGETS`（候选不命中即**真实路由失败，不降级**——静默换一个目标会让父收到「不是我点的那个」的结果）
-/ `ORDERED_FALLBACK`（按声明顺序取第一个；⚠️ **降级只作用于「选择」，不作用于「准入」**，
-降级选中的目标仍须通过父声明包含→版本固定→逐跳授权→深度/次数/超时/预算的全部判定，
-任一不过就是失败，**不会继续试下一个候选**——逐个试下去会让「一次委派」变成「一串委派」，绕过次数上限）。
+路由内容模型（原 `RoutingStrategy`，**已随未上线的旧形态删除**；现行口径见 [10 号设计](多级%20Agent优化/10_RouteAgent规则转发设计.md) §4，
+`mode` / `no_match_action` / `on_conflict` 三个维度取代了旧的一个枚举）：
+
+- `mode` —— **谁选目标**：`RULES_ONLY`（推荐默认，模型零参与，Schema 连 `candidates` 都不发）/ `RULE_FIRST`（规则优先，无命中再兜底或语义）/ `SEMANTIC`（模型按父侧路由契约选）。
+- `no_match_action` —— **没有规则命中时怎么办**：`REJECT`（真实路由失败，不降级 —— 静默换一个目标会让父收到「不是我点的那个」的结果）/ `DEFAULT_TARGET`（降级到**显式声明的** `default_target`，不再是「取列表首元」那种隐式口径）。
+- ⚠️ **降级只作用于「选择」，不作用于「准入」**：降级选中的目标仍须通过父声明包含→版本固定→逐跳授权→深度/次数/超时/预算的全部判定，任一不过就是失败，**不会继续试下一个候选**（逐个试下去会让「一次委派」变成「一串委派」，绕过次数上限）。
+- `on_conflict`（`RULE_WINS` / `CANDIDATE_WINS`）—— 规则命中且与模型候选不同时的裁决；⚠️ **不改判定**，只改采纳哪一侧。
+- **策略可以比拓扑更窄**：**拓扑检查在引擎之前**（先判候选在不在父声明内），
+  进引擎后采纳**任何**模型候选前再判它 ∈ 策略点名的目标集（规则 `target` ∪ `default_target`），
+  越界报 `ROUTING_TARGET_NOT_ALLOWED` —— 准确读法是「**拓扑过了、策略没收**」，
+  与越出拓扑的 `DELEGATION_TARGET_NOT_DECLARED` 分列，排查方向相反。
+  采纳候选只有一个收口点（`CANDIDATE_WINS` 的改判同判）；**策略没点名任何目标**（纯 `SEMANTIC`）时不设收窄，只剩拓扑一道关。
+- 确定性由**封闭谓词文法 + 有界 DNF + `onError ∈ {SKIP, REJECT}` + ERROR 永不等于 MATCH** 保证；
+  每次决策产出**决策快照**（`agent_invocation.routing_decision`），使「同输入重放必得同目标」成为可测性质。
 
 [`DelegationFailurePolicy`](file:///Users/zhouwei/code-workspace/ai-tech/java-multi-agent/platform/agent-core/src/main/java/cn/studykid/multiagent/core/orchestration/DelegationFailurePolicy.java#L10)：
 `FAIL_FAST`（缺省）/ `CONTINUE_ON_ERROR`（只作用于**同一轮**的多个工具调用之间，失败结果**照常回灌**、不由框架聚合）。

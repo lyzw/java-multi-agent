@@ -262,7 +262,7 @@
     <p><strong>目标：</strong>把 G-1 / G-2 / G-3 / D-1 一次性闭环，使「编排声明 + 路由策略 + 输出契约」三类多级 Agent 配置在管理台<strong>可登记、可查看、可引用</strong>。</p>
     <h4>任务拆解</h4>
     <ul>
-      <li><strong>A7-1 路由策略登记表单</strong>（G-1）：新增 <code>src/pages/catalog/RoutingPolicyPage.tsx</code>，字段对齐 <code>routing-policy.schema.json</code>：<code>id</code>（可读字符串，非 UUID）、<code>name/description</code>、<code>strategy</code>（<code>EXPLICIT_TARGETS</code> / <code>ORDERED_FALLBACK</code>）、<code>targets</code>（有序 Agent id 列表，<strong>不含版本号</strong>）。复用三步工作流，不开旁路。</li>
+      <li><strong>A7-1 路由策略登记表单</strong>（G-1）：新增 <code>src/pages/catalog/RoutingPolicyPage.tsx</code>，字段对齐 <code>routing-policy.schema.json</code> 的<strong>规则引擎形态</strong>（10 号设计 §4；原 <code>strategy</code> / <code>targets</code> 两字段已随旧内容模型删除）：<code>id</code>（可读字符串，非 UUID）、<code>name/description</code>、<code>mode</code>（<code>RULES_ONLY</code> / <code>RULE_FIRST</code> / <code>SEMANTIC</code>）、<code>inputSchema</code>（词汇表，JSON 文本）、<code>evaluation</code>（有序规则列表，JSON 文本，<strong>次序即求值次序</strong>）、<code>noMatchAction</code> + <code>defaultTarget</code>、<code>onConflict</code>、<code>sampleSet</code>（回放样本，JSON 文本）。⚠️ 三个 JSON 文本字段<strong>原样透传、不在入口重新序列化</strong>（改写空白与键序等于每次发布都说「你改过」）；文法与守卫 V1-V10 只由后端 <code>agent-routing</code> 判定，前端仅做结构性预检。复用三步工作流，不开旁路。<br><strong>A7-1b 样本回放面板（dry-run）</strong>：新增按输入试跑一条策略并回显 <code>evaluationTrace</code> + <code>resolution</code> 的面板 —— ⚠️ <strong>必须走后端同一份引擎实现</strong>，不得在前端另写一份求值器，否则「界面显示会命中」与「运行期实际命中」迟早分叉。<br><strong>状态（已完成）</strong>：表单与试跑面板均已落在 <code>RoutingPolicyPage.tsx</code>，端点 <code>/routing-policies</code> 已进路由与导航；面板回显 <code>parsed</code> / 守卫 <code>violations+warnings</code> / 逐探针 <code>resolution</code>+<code>finalTarget</code>+<code>matchedRuleId</code>+<strong>投影后的输入</strong>（词汇表外的字段在这里看不见，是「字段名写错」唯一的可见证据）+ <code>evaluationTrace</code> + <code>replayDate</code>；前端只透传 JSON 原文，未复刻任何文法或求值。结论边界已写在界面上：dry-run 判<strong>选择</strong>，不判<strong>准入</strong>。</li>
       <li><strong>A7-2 契约目录 / 查看页</strong>（G-2）：新增 <code>src/pages/catalog/ResultContractCatalogPage.tsx</code>，列表展示契约（id / 版本 / lifecycle_state / fingerprint / published_at）；详情展示 <code>schemaJson</code> 与生命周期（DRAFT→VALIDATED→PUBLISHED→DEPRECATED）。</li>
       <li><strong>A7-3 子 Agent 候选下拉</strong>（G-3）：编排表单 <code>childAgentRefs[].id</code> 由手填改为<strong>按租户 Agent 列表下拉</strong>（依赖后端 B-1 接口）；下拉仅列出同租户已发布 Agent，从 UI 层阻断跨租户引用（MA-T04）。</li>
       <li><strong>A7-4 修复 failurePolicy 枚举</strong>（D-1）：<code>orchestrationForm.ts</code> 的 <code>FAILURE_POLICIES</code> 改为 <code>['FAIL_FAST','CONTINUE_ON_ERROR']</code>，<strong>移除 <code>COMPENSATE</code></strong>（V1 不支持），并补充对应单测断言后端仅接受两种值。</li>
@@ -458,7 +458,7 @@
       <tr><td><strong>B-1</strong></td><td>按租户的 Agent 列表接口</td><td>A7-3 子 Agent 候选下拉</td><td>返回当前租户下「已发布 Agent（id + 名称 + 最新固定版本）」，供 <code>childAgentRefs[].id</code> 下拉；从源头过滤跨租户引用（MA-T04）。</td></tr>
       <tr><td><strong>B-2</strong></td><td>闭包 / 指纹只读聚合</td><td>A8-2 / A8-3 影响分析</td><td>返回 Agent 的 <code>configFingerprint</code>、编排绑定段、被引用行（契约/策略）的下游依赖列表。</td></tr>
       <tr><td><strong>B-3</strong></td><td><code>agent_invocation</code> 只读聚合</td><td>A9 委派监控</td><td>分页 + 过滤（run / 父 invocation / 子 Agent / 状态 / 时间），返回七态、reason_code、requested vs target、fencing_token、deadline、预算占用。严格 RLS。</td></tr>
-      <tr><td><strong>B-4</strong></td><td>路由策略登记 / 查看端点</td><td>A7-1 路由策略表单</td><td>复用 <code>/api/cap/config/publishes</code> 三步工作流，类型闸门已放开 <code>type=routing_policy</code>；补列表/详情只读端点。</td></tr>
+      <tr><td><strong>B-4</strong></td><td>路由策略登记 / 查看端点</td><td>A7-1 路由策略表单</td><td>复用 <code>/api/cap/config/publishes</code> 三步工作流，类型闸门已放开 <code>type=routing_policy</code>；补列表/详情只读端点。<br><strong>状态（部分）</strong>：登记通道与 <strong>dry-run</strong> 端点 <code>POST /api/cap/config/routing-policies/dry-run</code> 已交付（草稿原文进后端同一引擎，零副作用、纳入治理限流、授权沿用 <code>config:publish</code>）；<strong>列表/详情只读端点仍缺</strong>，故 A7-1 表单只能登记与试跑，看不到「本租户已有哪些策略版本」。</td></tr>
       <tr><td><strong>B-5</strong></td><td>契约草稿写入通道</td><td>A7-5</td><td>打通 <code>DRAFT→VALIDATED</code> 写入路径（数据层可表达但当前无入口）。</td></tr>
       <tr><td><strong>B-6</strong></td><td>UNKNOWN 预留对账处置入口</td><td>A9-3</td><td>当前人工收敛只能由应用层调服务方法，需对外 HTTP 处置入口（FR-037 剩余缺口）。</td></tr>
     </tbody>
@@ -494,7 +494,8 @@
     <thead><tr><th>风险</th><th>影响</th><th>缓解（落点）</th></tr></thead>
     <tbody>
       <tr><td>决策 2（取消默认值）尚未落地（C33）</td><td>非 LEAF 三上限的「缺失即拒」在后端未完全生效，前端预校验先行但非权威</td><td>A7 期间持续对齐 C33；前端保持与 <code>AgentOrchestrationParser</code> 同口径，服务端为权威</td></tr>
-      <tr><td>路由策略内容模型仍是「本批取舍」未评审冻结</td><td>若评审冻结不同模型，A7-1 表单需调整</td><td>扩展点留在枚举上；表单字段以 schema 为准，评审结论一出即调</td></tr>
+      <tr><td><del>路由策略内容模型仍是「本批取舍」未评审冻结</del>（已闭：模型随 10 号 S2/S4 冻结进 <code>routing-policy.schema.json</code>、有界 DNF 文法与 DDL CHECK，A7-1 表单字段以其为准）</td><td>—</td><td>不再作为风险；若后续评审改模型，改动点只剩 schema 与表单字段名</td></tr>
+      <tr><td><strong>新增</strong>：策略登记与 dry-run 端点属<strong>租户域</strong>链（<code>SecurityConfiguration</code> 的 <code>@Order(0)</code> 只匹配 <code>/api/platform/**</code>，其余走租户验签），admin-console 持平台令牌会 401/403</td><td>策略页能建、能发请求，但在纯平台控制台里可能拿不到结论 —— 正是「看起来交付了、实际调不通」的形态</td><td>沿用 AI 实验室（租户域 <code>/api/runs</code>）已评审口径：页面<strong>如实提示「需租户级令牌通道」</strong>，绝不把「没跑成」渲染成「没问题」；租户级通道接入属交付前提，不在本批</td></tr>
       <tr><td>契约 / 策略无草稿写入路径（数据层可表达无入口）</td><td>G-2 的「DRAFT→VALIDATED」不可达，目录页状态不全</td><td>A7-5 与后端协同打通 B-5</td></tr>
       <tr><td>UNKNOWN 对账无对外处置入口</td><td>委派预算对账只能由应用层调服务方法，无前端入口</td><td>A9-3 / B-6 提供 HTTP 处置入口（FR-037 剩余缺口）</td></tr>
       <tr><td>跨进程接管演练 / 故障注入缺失</td><td>监控页「接管」状态的真实可观测性依赖演练环境</td><td>监控页展示基于 <code>fencing_token</code> 的派生状态；跨进程演练单列环境任务</td></tr>
