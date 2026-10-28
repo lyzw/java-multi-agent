@@ -5,7 +5,10 @@
 --   95 行 agent，直接导会把测试垃圾当基线固化进生产初始化。
 -- 【内容】1 租户 + 1 预算账户 + 3 agent/agent_version + 能力目录
 --   （Tool 6 / Skill 4 / MCP 2 / cap_agent_def 3 / 子引用边 2）
---   + 平台权限矩阵（角色 6 / 权限 23 / 绑定 52）+ 系统字典（类 12 / 项 61）
+--   + 平台权限矩阵（角色 6 / 权限 24 / 绑定 53）+ 系统字典（类 12 / 项 61）
+--   ⚠️ 权限矩阵的运行期权威源是代码（PlatformRolePermissionMatrix），本表只是治理副本；
+--   两边必须同步 —— 新增 platform.tenant.execution_ticket（执行票证，仅超级管理员）
+--   时，代码与本文件同批改，否则「权限矩阵」页与审计检索会各说一套。
 -- 【插入序】按 FK 依赖排好：tenant → agent → agent_version → cap_agent_def → cap_agent_child_ref
 -- 【不含】principal / 管理员口令哈希 —— 属环境相关，见 04_platform_admin_grant.sql
 --   平台账号（platform_user + platform_user_role）本文件一律不含：口令哈希只能由
@@ -54,6 +57,7 @@ INSERT INTO platform.platform_permission VALUES ('562dc2e1-264d-422e-b9d2-dc647a
 INSERT INTO platform.platform_permission VALUES ('d53e6582-feb4-4863-a33e-c04c85df0056', 'platform.tenant.capability.grant', '授予租户能力（如 Tool/Skill/MCP 授权）');
 INSERT INTO platform.platform_permission VALUES ('028714d2-b4c2-406e-8815-5472509abfd2', 'platform.tenant.capability.revoke', '撤销租户能力授权');
 INSERT INTO platform.platform_permission VALUES ('433881fc-afe9-430c-b630-0e2d394fe097', 'platform.tenant.capability.read', '查看租户已授权能力');
+INSERT INTO platform.platform_permission VALUES ('e77d46fa-c981-40fd-8b97-9d54bc136a70', 'platform.tenant.execution_ticket', '为租户成员签发短时执行票证（跨身份域执行，可扮演租户发起 Run）');
 INSERT INTO platform.platform_permission VALUES ('a4a7467f-28a4-44cc-8737-6109749afcf1', 'platform.resource.read', '查看全局资源目录（Tool/MCP/模型等）');
 INSERT INTO platform.platform_permission VALUES ('e3144eda-784f-46c3-8a1b-8ff5b3691c71', 'platform.resource.manage', '管理全局资源目录可用性');
 INSERT INTO platform.platform_permission VALUES ('130d41a3-178a-4f08-8ea8-68a4a0753538', 'platform.policy.read', '查看平台安全/访问策略');
@@ -102,6 +106,8 @@ INSERT INTO platform.platform_role_permission VALUES ('2730a4bb-4d53-43cb-8da1-2
 INSERT INTO platform.platform_role_permission VALUES ('2730a4bb-4d53-43cb-8da1-2aa5f89f09d3', '54fd41f9-4409-4d97-a149-157406b4dc68');
 INSERT INTO platform.platform_role_permission VALUES ('2730a4bb-4d53-43cb-8da1-2aa5f89f09d3', '606f53f6-6198-4d31-94ab-bf8dc4faa372');
 INSERT INTO platform.platform_role_permission VALUES ('2730a4bb-4d53-43cb-8da1-2aa5f89f09d3', '915763a4-3628-4505-9aca-adb06ef4af0f');
+-- ⚠️ 执行票证**只**绑定超级管理员：其余角色能看租户、能启停租户，但不等于能扮演租户成员发起执行。
+INSERT INTO platform.platform_role_permission VALUES ('2730a4bb-4d53-43cb-8da1-2aa5f89f09d3', 'e77d46fa-c981-40fd-8b97-9d54bc136a70');
 INSERT INTO platform.platform_role_permission VALUES ('fd3d06b4-ffe2-418f-947a-4cdc381c29aa', 'f1b1c6cd-925f-4f34-a660-f86b091c51e4');
 INSERT INTO platform.platform_role_permission VALUES ('fd3d06b4-ffe2-418f-947a-4cdc381c29aa', 'e2fc870e-b478-4a86-95ac-07cef1fccf58');
 INSERT INTO platform.platform_role_permission VALUES ('fd3d06b4-ffe2-418f-947a-4cdc381c29aa', '03692592-276b-47be-83be-a4505d788a25');
