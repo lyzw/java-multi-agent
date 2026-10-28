@@ -6,7 +6,8 @@
 --   ⚠️ 远程 study_rag 的 Flyway 只到 V6，缺 V7/V8 的全局双作用域改造。
 -- 【地位】db/migration 下 V1~V8 已删除，本文件即 rag 结构唯一权威定义。
 -- 【手工补写】pg_dump 不导出扩展本体，而 rag_chunk_embedding.embedding 依赖
---   public.vector(1024)，缺下面两条会停在 CREATE TABLE rag.rag_chunk_embedding：
+--   public.halfvec(4096)（同一 vector 扩展提供的半精度类型），缺下面两条会停在
+--   CREATE TABLE rag.rag_chunk_embedding：
 --     ERROR: type "public.vector" does not exist
 --   两者均非 trusted 扩展，需超级用户执行。
 -- 【执行】psql -v ON_ERROR_STOP=1 -f 01_rag_ddl.sql（空库，超级用户）
@@ -59,7 +60,7 @@ COMMENT ON SCHEMA public IS 'standard public schema';
 CREATE SCHEMA IF NOT EXISTS rag;
 
 -- ── [手工补写] public schema 的两个扩展 ─────────────────────────────
--- pg_dump 不导出扩展本体，而 rag_chunk_embedding.embedding 依赖 public.vector(1024)：
+-- pg_dump 不导出扩展本体，而 rag_chunk_embedding.embedding 依赖 public.halfvec(4096)：
 -- 缺这两条，本文件在空库上会停在 CREATE TABLE rag.rag_chunk_embedding
 --   ERROR: type "public.vector" does not exist
 -- ⚠️ 两者均非 trusted 扩展，需要超级用户执行。
@@ -361,7 +362,7 @@ CREATE TABLE rag.rag_chunk_embedding (
     tenant_id uuid NOT NULL,
     index_generation integer DEFAULT 1 NOT NULL,
     embed_model text NOT NULL,
-    embedding public.vector(1024) NOT NULL,
+    embedding public.halfvec(4096) NOT NULL,
     scope text DEFAULT 'TENANT'::text NOT NULL,
     CONSTRAINT rag_chunk_embedding_scope_ck CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
 );
@@ -842,7 +843,13 @@ CREATE INDEX rag_chunk_document_idx ON rag.rag_chunk USING btree (tenant_id, doc
 -- Name: rag_chunk_embedding_hnsw_idx; Type: INDEX; Schema: rag; Owner: -
 --
 
-CREATE INDEX rag_chunk_embedding_hnsw_idx ON rag.rag_chunk_embedding USING hnsw (embedding public.vector_cosine_ops) WITH (m='16', ef_construction='64');
+-- ⚠️ 本索引在 halfvec(4096) 下**刻意不存在**（2026-10-28 换真实嵌入模型）：
+--   pgvector 的 HNSW/IVFFlat 对 halfvec 只支持到 4000 维（vector 2000 维），
+--   4096 维能存不能建 ANN 索引，稠密检索退化为全表精确扫描。
+--   当前语料量级（数百片段）下精确扫描既快又无召回损失；
+--   规模化后再二选一：MRL 截断到 ≤4000 维，或改用二进制量化（bit 可到 64000 维）。
+--   旧定义留档：USING hnsw (embedding public.vector_cosine_ops) WITH (m='16', ef_construction='64')
+-- CREATE INDEX rag_chunk_embedding_hnsw_idx ON rag.rag_chunk_embedding USING hnsw (embedding public.halfvec_cosine_ops) WITH (m='16', ef_construction='64');
 
 
 --

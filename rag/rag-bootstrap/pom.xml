@@ -34,8 +34,10 @@
     </dependency>
     <!--
       ⚠️ Spring Boot 4.x 把 Flyway/Liquibase 自动配置从核心 autoconfigure 模块
-      移到了各自 starter（见 Boot 4.0 迁移指南）。仅引入 flyway-core 不会触发
-      迁移；必须引入本 starter 才能恢复 FlywayAutoConfiguration 自动执行 V1/V2。
+      移到了各自 starter（见 Boot 4.0 迁移指南）——只引 flyway-core 不会自动迁移。
+      ⛔ 当前 application.yml 里 `spring.flyway.enabled=false`：V1~V8 脚本已删除，
+      结构改由 deploy/sql/rag/01_rag_ddl.sql 线下建（本 starter 因此不再产生动作）。
+      保留依赖是为了恢复迁移时不必再踩 Boot 4.x 的这个坑。
     -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

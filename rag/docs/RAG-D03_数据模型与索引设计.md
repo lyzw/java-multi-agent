@@ -55,7 +55,7 @@ erDiagram
 | `rag_knowledge_point` | 知识点本体 | 规范名唯一；别名数组 |
 | `rag_knowledge_prerequisite` | 先修关系 | 禁止自我先修 |
 | `rag_chunk` | 语料片段 | 定位信息完整；跨租户外键 |
-| `rag_chunk_embedding` | 向量索引 | `vector(1024)`；与 chunk 复合外键 |
+| `rag_chunk_embedding` | 向量索引 | `halfvec(4096)`（2026-10-28 起；原 `vector(1024)` 是本地占位嵌入的列形）；与 chunk 复合外键 |
 | `rag_ingest_job` | 入库任务 | 工具版本留痕（可复现） |
 | `rag_access_audit` | 访问审计 | **追加不可改**（触发器） |
 | `rag_answer_citation` | 引用溯源 | 逐字引文非空；版本快照 |
@@ -157,7 +157,7 @@ chunk_id        UUID PRIMARY KEY,
 tenant_id       UUID NOT NULL,
 index_generation INT NOT NULL DEFAULT 1,
 embed_model     TEXT NOT NULL,
-embedding       vector(1024) NOT NULL,
+embedding       halfvec(4096) NOT NULL,
 CONSTRAINT rag_embedding_chunk_fk
     FOREIGN KEY (tenant_id, chunk_id)
     REFERENCES rag_chunk (tenant_id, chunk_id) ON DELETE CASCADE
@@ -167,6 +167,13 @@ CREATE INDEX rag_chunk_embedding_hnsw_idx
     ON rag_chunk_embedding USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 ```
+
+> ⚠️ **上面的 HNSW 语句在当前 4096 维下不成立**（2026-10-28 换真实嵌入模型后）：
+> pgvector 的 HNSW/IVFFlat 对 `vector` 只到 2000 维、对 `halfvec` 只到 4000 维，
+> 所以 `halfvec(4096)` **建不了 ANN 索引**，稠密通道退化为全表精确扫描。
+> 数百片段量级下这更快且无召回损失；规模化后二选一——
+> 把向量按 MRL 截断到 ≤4000 维，或改用二进制量化（`bit` 可到 64000 维）。
+> 迁移脚本：`deploy/sql/rag/04_migrate_embedding_halfvec_4096.sql`。
 
 > ⚠️ **为什么代际是复合主键的一部分而不是列**：
 > 换嵌入模型时，向量空间**完全不可比**（不同模型的余弦距离没有共同语义）。
@@ -267,6 +274,7 @@ flowchart LR
 |---|---|---|
 | 完整 DDL 可执行 | 真实 PG 17.11 + pgvector 0.8.7 | ✅ 11 表 + 全部约束 + 10 条策略 + HNSW 索引 |
 | `vector(1024)` 列 | `pg_attribute` 查询 | ✅ 类型正确 |
+| **线上 `study_rag` 实际形态**（2026-10-28 复核） | JDBC 查 `pg_attribute` + `pg_extension` + `pg_stat_user_tables` | PG **18.6** / pgvector **0.8.1**；列仍是 `vector(1024)`、HNSW 仍在、285 行占位向量 ⇒ `halfvec(4096)` 迁移**尚未执行**（`rag_app` 非表 owner，`SET ROLE ai_agent` 被拒；owner 通道当时不可用） |
 | HNSW 索引创建 | `pg_indexes` 查询 | ✅ `rag_chunk_embedding_hnsw_idx` |
 | 教材等级缺 ISBN 被拒 | `check_violation` | ✅ |
 | `VERIFIED` 缺证据被拒 | `check_violation` | ✅ |
