@@ -224,7 +224,10 @@ class CapConfigPublishControllerTest {
                 List.of(new CapConfigPublishController.ResultContractRequest(
                         "answer-contract", "{\"type\":\"object\"}")),
                 List.of(new CapConfigPublishController.RoutingPolicyRequest(
-                        "orders-router", "EXPLICIT_TARGETS", List.of("c-1"))),
+                        "orders-router", "RULES_ONLY", "{\"c-1\":{\"type\":\"string\"}}",
+                        "[{\"ordinal\":1,\"ruleId\":\"r-1\",\"target\":\"c-1\","
+                                + "\"when\":{\"const\":true}}]",
+                        null, "REJECT", "RULE_WINS", "[]")),
                 "reason"));
 
         // ⚠️ 治理通道若不暴露编排声明，多级 Agent 就**根本无法发布** ——
@@ -264,8 +267,14 @@ class CapConfigPublishControllerTest {
                 .as("⛔ 路由策略未被治理通道透传：ROUTER Agent 引用了一个无法登记的策略")
                 .hasSize(1);
         assertThat(policySpecs.get(0).policyId()).isEqualTo("orders-router");
-        assertThat(policySpecs.get(0).strategy()).isEqualTo("EXPLICIT_TARGETS");
-        assertThat(policySpecs.get(0).targets()).containsExactly("c-1");
+        assertThat(policySpecs.get(0).mode()).isEqualTo("RULES_ONLY");
+        assertThat(policySpecs.get(0).noMatchAction()).isEqualTo("REJECT");
+        // ⚠️ 三段结构必须以<b>原文</b>透传（不重排、不重新序列化）：
+        //    申请单要能证明「审批人批的就是这份文本」，
+        //    而内容指纹判定的正是这段文本变没变。
+        assertThat(policySpecs.get(0).evaluation()).contains("\"target\":\"c-1\"");
+        assertThat(policySpecs.get(0).inputSchema()).isEqualTo("{\"c-1\":{\"type\":\"string\"}}");
+        assertThat(policySpecs.get(0).sampleSet()).isEqualTo("[]");
     }
 
     @Test

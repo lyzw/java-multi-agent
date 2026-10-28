@@ -198,10 +198,13 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort snapshots,
             RunCreationService.TransactionRunner tx,
             Clock clock,
-            cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort) {
+            cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort,
+            cn.studykid.multiagent.ports.persistence.CapDualWritePort dualWritePort) {
         // ⚠️ 预算端口必须装配：缺了它，「声明了 Run 级额度」的创建请求会被
         //    fail-closed 拒绝（校验缺席 ≠ 校验通过）。
-        return new RunCreationService(port, snapshots, tx, clock, budgetPort);
+        // ⚠️ 双写端口必须装配：Run 创建是 execution_capability_snapshot 的
+        //    <b>唯一生产写入点</b>（G-3）。缺了它六个 fail-closed 读方一律拒跑。
+        return new RunCreationService(port, snapshots, tx, clock, budgetPort, dualWritePort);
     }
 
     /**
@@ -772,9 +775,11 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.application.cap.PermissionResolver resolver,
             cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersions,
             cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
+            cn.studykid.multiagent.ports.persistence.ConfigPointerPort configPointers,
             Clock clock) {
         return new cn.studykid.multiagent.application.cap.CapDualWriteService(
-                dualWriteSwitch, agentDefs, resolver, authzVersions, snapshots, clock);
+                dualWriteSwitch, agentDefs, resolver, authzVersions, snapshots, clock,
+                configPointers);
     }
 
     /**
@@ -1184,6 +1189,20 @@ public class ApplicationConfiguration {
         return new cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService(
                 requests, publisher, lifecycle, agentDefs, pointers, releases, contracts,
                 routingPolicies, clock);
+    }
+
+    /**
+     * 路由策略 dry-run 用例（10 号设计 §7 债 5 · 管理台试跑面板的后端入口）。
+     *
+     * <p>⚠️ <b>无仓储依赖</b>：试跑不落库、不占版本号，因此它不需要发布通道的那些端口 ——
+     * 也正因为它不碰库，接入面可以放在租户可达的 HTTP 路径上而不触碰运维通道。
+     * 时钟仍然注入：回放用的 UTC 日影响引用 {@code ctx.now.utcDate} 的规则，
+     * 引擎不读系统时钟（同 {@code RoutingEngine} 的纯函数口径）。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.cap.RoutingPolicyDryRunService
+            routingPolicyDryRunService(java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.cap.RoutingPolicyDryRunService(clock);
     }
 
     /**

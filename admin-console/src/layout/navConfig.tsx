@@ -146,6 +146,19 @@ export const NAV_GROUPS: NavGroup[] = [
           '平台级 MCP Server 目录与三步发布工作流。凭据定位符从不回显，重发必须显式重新填写（fail-closed）。',
         phase: '能力目录',
       },
+      {
+        key: 'routing-policies',
+        label: '路由策略',
+        path: '/routing-policies',
+        icon: <MergeCellsOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '有界规则引擎的策略登记与试跑。试跑把草稿原样交给后端 agent-routing 的同一个引擎与守卫'
+          + '（前端无第二份求值器，故界面结论与运行期一致）。'
+          + '⚠️ 端点属租户域（/api/cap/config/**，租户来自验签令牌），平台令牌可能 401/403；'
+          + '此时页面明示「需租户级令牌通道」，不会把「没跑成」显示成「没问题」。',
+        phase: '能力目录',
+      },
     ],
   },
   {

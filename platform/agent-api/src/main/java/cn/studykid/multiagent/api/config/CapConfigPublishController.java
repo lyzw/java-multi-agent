@@ -369,9 +369,7 @@ public class CapConfigPublishController {
         if (policies == null || policies.isEmpty()) {
             return List.of();
         }
-        return policies.stream().map(p -> new ConfigPublishPayload.RoutingPolicySpec(
-                p.policyId(), p.strategy(),
-                p.targets() == null ? List.of() : p.targets())).toList();
+        return policies.stream().map(RoutingPolicyRequest::toSpec).toList();
     }
 
     private static ConfigPublishPayload.LifecycleSpec lifecycleSpec(
@@ -485,14 +483,47 @@ public class CapConfigPublishController {
      * <p>⚠️ 与 Agent 草稿、输出契约草稿同口径：客户端若能指定版本号或内容指纹，
      * 就等于能指定「内容没变」这个证明。
      *
-     * @param policyId 策略标识（可读字符串）
-     * @param strategy 选择策略（{@code EXPLICIT_TARGETS} / {@code ORDERED_FALLBACK}）
-     * @param targets  允许的目标 Agent 标识（有序）
+     * <p>⚠️ <b>{@code inputSchema / evaluation / sampleSet} 是 JSON <b>原文字符串</b></b>
+     * （与 {@code ResultContractRequest.schemaJson} 同口径）：
+     * 治理通道传的是一段可审计的文本，服务端在<b>发布执行期</b>才由
+     * {@code agent-routing} 的 {@code PolicyCodec} 解析成对象。
+     * 在传输层就绑成对象树等于把「申请单原文」交给 Jackson 的字段顺序决定，
+     * 而指纹要判定的正是「这段文本变没变」。
+     *
+     * @param policyId      策略标识（可读字符串）
+     * @param mode          谁选目标（{@code RULES_ONLY / RULE_FIRST / SEMANTIC}）
+     * @param inputSchema   路由输入词汇表（JSON 对象原文）
+     * @param evaluation    有序规则列表（JSON 数组原文）
+     * @param defaultTarget 兜底目标；{@code noMatchAction=DEFAULT_TARGET} 时必填
+     * @param noMatchAction 无命中处置（{@code REJECT / DEFAULT_TARGET}）
+     * @param onConflict    冲突裁决（{@code RULE_WINS / CANDIDATE_WINS}，可缺省）
+     * @param sampleSet     发布期回放样本（JSON 数组原文，可为 {@code "[]"}）
      */
     public record RoutingPolicyRequest(
             @Nullable String policyId,
-            @Nullable String strategy,
-            @Nullable List<String> targets) {
+            @Nullable String mode,
+            @Nullable String inputSchema,
+            @Nullable String evaluation,
+            @Nullable String defaultTarget,
+            @Nullable String noMatchAction,
+            @Nullable String onConflict,
+            @Nullable String sampleSet) {
+
+        /**
+         * 请求草稿 → 应用层草稿对象。
+         *
+         * <p>⚠️ <b>发布申请与 dry-run 共用这一个映射</b>：dry-run 校验的必须是
+         * 「真提交后那一版」，两处各写一遍映射早晚会有一处漏字段 ——
+         * 而漏掉的那一格正是配置者以为自己在测的东西。
+         *
+         * @return 草稿对象
+         * @throws IllegalArgumentException 行级必填项缺失或为空文本
+         */
+        public ConfigPublishPayload.@NonNull RoutingPolicySpec toSpec() {
+            return new ConfigPublishPayload.RoutingPolicySpec(
+                    policyId, mode, inputSchema, evaluation,
+                    defaultTarget, noMatchAction, onConflict, sampleSet);
+        }
     }
 
     /** 生命周期迁移参数。 */

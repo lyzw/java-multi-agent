@@ -12,6 +12,7 @@ import { AgentRegistryPage } from '@/pages/console/AgentRegistryPage'
 import { ToolCatalogPage } from '@/pages/console/ToolCatalogPage'
 import { SkillCatalogPage } from '@/pages/console/SkillCatalogPage'
 import { McpCatalogPage } from '@/pages/console/McpCatalogPage'
+import { RoutingPolicyPage } from '@/pages/catalog/RoutingPolicyPage'
 import { RagManagementPage } from '@/pages/rag/RagManagementPage'
 import { DictionaryAdminPage } from '@/pages/dictionaries/DictionaryAdminPage'
 import { AgentLabPage } from '@/pages/agentlab/AgentLabPage'
@@ -117,6 +118,15 @@ export const router = createBrowserRouter(
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>
               <McpCatalogPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 路由策略登记 + 试跑（dry-run 走后端同一引擎；端点属租户域，见页面诚实边界）
+          path: 'routing-policies',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RoutingPolicyPage />
             </RequireRole>
           ),
         },

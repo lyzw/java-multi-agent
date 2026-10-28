@@ -371,17 +371,39 @@ export interface PublishDecision {
 }
 
 /**
- * 路由策略草稿（RoutingPolicyRequest · 第十四批）。
+ * 路由策略草稿（RoutingPolicyRequest）。
  *
  * ⚠️ 与 Agent 草稿、输出契约草稿同口径：**不含版本号与内容指纹** —— 二者由服务端决定。
+ *
+ * ⚠️ 字段形态已从第十四批的「一个枚举 + 一个有序目标列表」换成**有界规则引擎**
+ * （10 号设计 §4）：`mode` 说「谁选目标」，`evaluation` 说「凭什么交给它」。
+ * 旧形态只回答「允许交给谁」，配了规则也证不了规则判过 —— 那正是被删掉的原因。
+ *
+ * ⚠️ `inputSchema` / `evaluation` / `sampleSet` 是 **JSON 文本**而不是嵌套对象：
+ * 入口只做原样透传，**不得在前端重新序列化** —— 重新序列化会改写空白与键序，
+ * 而内容指纹按「这一行内容没变」计算，入口改写等于每次发布都说「你改过」。
+ * 文法、上限与守卫 V1-V10 由后端 `agent-routing` 判定，前端只能做**结构性**预检。
+ *
+ * ⚠️ 命名差异是后端的，不是笔误：治理通道 DTO 用 `policyId`，
+ * 对外契约 `routing-policy.schema.json` 用 `id`（`common.schema.json#/$defs/id`）。
  */
 export interface PublishRoutingPolicySpec {
-  /** 策略标识（可读字符串） */
+  /** 策略标识（可读字符串，**不是** UUID） */
   policyId: string
-  /** 选择策略 */
-  strategy: 'EXPLICIT_TARGETS' | 'ORDERED_FALLBACK'
-  /** 允许的目标 Agent 标识（有序） */
-  targets?: string[]
+  /** 谁选目标：`RULES_ONLY` 为推荐默认（模型零参与，Schema 连 candidates 都不发） */
+  mode: 'RULES_ONLY' | 'RULE_FIRST' | 'SEMANTIC'
+  /** 路由输入词汇表（JSON 文本，顶层 `type=object`）；规则里的 `in.*` 只能引用它声明过的字段 */
+  inputSchema: string
+  /** 有序规则列表（JSON 文本，Rule 数组）；数组次序即求值次序（首个命中即止） */
+  evaluation: string
+  /** 兜底目标。⚠️ `noMatchAction=DEFAULT_TARGET` 时必须非空 */
+  defaultTarget?: string
+  /** 无命中处置：`REJECT` = 拒绝委派（不降级）；`DEFAULT_TARGET` = 交给 `defaultTarget` */
+  noMatchAction: 'REJECT' | 'DEFAULT_TARGET'
+  /** 规则与模型候选不一致时的裁决（仅 RULE_FIRST / SEMANTIC 有意义）；⚠️ 不改判定，只改采纳哪一侧 */
+  onConflict?: 'RULE_WINS' | 'CANDIDATE_WINS'
+  /** 发布期回放样本（JSON 文本，Sample 数组）；守卫 V9 要求每条规则的目标至少被一个样本命中 */
+  sampleSet?: string
 }
 
 /* ── C34-3：平台级能力对象写通道（第三十四批 · C34-2 后端契约） ── */
