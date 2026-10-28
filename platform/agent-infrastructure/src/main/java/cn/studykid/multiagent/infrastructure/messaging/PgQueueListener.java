@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -75,6 +76,21 @@ public class PgQueueListener {
     /** 退避上限。 */
     private final Duration retryBackoffMax;
 
+    /**
+     * 本进程的 Worker 身份。
+     *
+     * <p>⚠️ 这个字符串会被 {@code RunDispatchConsumer} 原样写进
+     * {@code run.lease_owner}，而后续续租与提交终态由
+     * {@code RunExecutionLoop} 用它<b>自己</b>构造时的身份去匹配
+     * ——两者必须来自<b>同一个配置源</b>（{@code agent.worker.id}）。
+     *
+     * <p><b>历史事故</b>（2026-10-28 真实模型端到端实测）：本字段曾固定为
+     * 「{@code pg-worker-<pid>}」，而执行循环用配置值「worker-local」，
+     * 于是每一次续租的 {@code WHERE lease_owner = ?} 都匹配 0 行，
+     * 任何带工具调用的 Run（≥2 轮）都在第一个工具<b>执行成功之后</b>
+     * 被判成「已被接管」而放弃提交 —— Run 永久卡在 RUNNING，
+     * 副作用却已经落地。故身份必须由装配层显式注入，不得在本类自造。
+     */
     private final String workerId;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -99,6 +115,24 @@ public class PgQueueListener {
                             @NonNull Duration visibilityTimeout,
                             @NonNull Duration retryBackoffBase,
                             @NonNull Duration retryBackoffMax) {
+        this(tenantIds, repository, handler, interval, batchSize, maxAttempts,
+                visibilityTimeout, retryBackoffBase, retryBackoffMax, null);
+    }
+
+    /**
+     * @param workerIdOverride 本进程的 Worker 身份；{@code null}/空白时退回
+     *                         「{@code pg-worker-<pid>}」占位（仅供单测与遗留装配）
+     */
+    public PgQueueListener(@NonNull List<String> tenantIds,
+                            @NonNull PgQueueRepository repository,
+                            @NonNull MessageHandler handler,
+                            @NonNull Duration interval,
+                            int batchSize,
+                            int maxAttempts,
+                            @NonNull Duration visibilityTimeout,
+                            @NonNull Duration retryBackoffBase,
+                            @NonNull Duration retryBackoffMax,
+                            @Nullable String workerIdOverride) {
         if (tenantIds == null) {
             throw new IllegalArgumentException("PG 队列监听器租户清单不得为 null");
         }
@@ -127,7 +161,9 @@ public class PgQueueListener {
         this.visibilityTimeout = visibilityTimeout;
         this.retryBackoffBase = retryBackoffBase;
         this.retryBackoffMax = retryBackoffMax;
-        this.workerId = "pg-worker-" + ProcessHandle.current().pid();
+        this.workerId = workerIdOverride == null || workerIdOverride.isBlank()
+                ? "pg-worker-" + ProcessHandle.current().pid()
+                : workerIdOverride.trim();
     }
 
     /**

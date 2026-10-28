@@ -460,11 +460,15 @@ public class WorkerLoopConfig {
      *
      * <p>⚠️ DB 通道下容器<b>不会启动</b>（auto-startup 与「Rabbit 是否活动」求与），
      * 但 Bean 仍存在——它是 {@code @RabbitListener} 端点的宿主。
+     *
+     * <p>⚠️ 身份必须注入 {@code agent.worker.id}（与执行循环、崩溃恢复同源），
+     * 理由见 {@code pgQueueListener} 的说明。
      */
     @Bean
     public RabbitExecutionListener rabbitExecutionListener(
-            RunDispatchConsumer consumer, ObjectMapper mapper) {
-        return new RabbitExecutionListener(consumer, mapper);
+            RunDispatchConsumer consumer, ObjectMapper mapper,
+            @Value("${agent.worker.id:worker-local}") String workerId) {
+        return new RabbitExecutionListener(consumer, mapper, workerId);
     }
 
     /**
@@ -472,6 +476,13 @@ public class WorkerLoopConfig {
      *
      * <p>⚠️ <b>仅在存在 DB 模式租户时启动</b>：纯 Rabbit 部署下没有 DB 队列，
      * 起一个空转的轮询线程只会白白打库。
+     *
+     * <p>⚠️ <b>Worker 身份必须与执行循环同源</b>（{@code agent.worker.id}）：
+     * 本监听器的身份会被消费者原样写成 {@code run.lease_owner}，
+     * 而 {@code RunExecutionLoop} 的续租与终态提交按自己的身份匹配该行。
+     * 此前监听器自造「{@code pg-worker-<pid>}」，循环用「worker-local」，
+     * 于是每个带工具调用的 Run 都在第一个工具执行<b>成功之后</b>
+     * 被误判「已被接管」、永久卡在 RUNNING（2026-10-28 真实模型端到端实测）。
      */
     @Bean
     public PgQueueListener pgQueueListener(MessagingChannels channels,
@@ -488,7 +499,9 @@ public class WorkerLoopConfig {
                                            @Value("${" + MessagingPolicy.KEY_RETRY_BACKOFF_MS + "}")
                                                    String retryBackoffMs,
                                            @Value("${" + MessagingPolicy.KEY_RETRY_BACKOFF_MAX_MS + "}")
-                                                   String retryBackoffMaxMs) {
+                                                   String retryBackoffMaxMs,
+                                           @Value("${agent.worker.id:worker-local}")
+                                                   String workerId) {
         List<String> databaseTenants = channels.databaseTenantIds();
         PgQueueListener listener = new PgQueueListener(
                 databaseTenants, pgRepository, consumer,
@@ -503,7 +516,9 @@ public class WorkerLoopConfig {
                 Duration.ofMillis(MessagingPolicy.requireMillis(
                         retryBackoffMs, MessagingPolicy.KEY_RETRY_BACKOFF_MS, 10)),
                 Duration.ofMillis(MessagingPolicy.requireMillis(
-                        retryBackoffMaxMs, MessagingPolicy.KEY_RETRY_BACKOFF_MAX_MS, 10)));
+                        retryBackoffMaxMs, MessagingPolicy.KEY_RETRY_BACKOFF_MAX_MS, 10)),
+                workerId);
+        log.info("PG 队列消费身份: workerId={}", workerId);
         if (channels.databaseActive()) {
             listener.start();
         } else {

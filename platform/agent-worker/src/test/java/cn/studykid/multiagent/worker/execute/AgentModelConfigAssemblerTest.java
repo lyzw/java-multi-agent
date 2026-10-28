@@ -81,6 +81,9 @@ class AgentModelConfigAssemblerTest {
 
     /** 工具定义替身。 */
     private static final class ScriptedToolDefs implements CapToolDefPort {
+        /** 夹具的输入 Schema（默认最小，各用例按需覆盖）。 */
+        String inputSchema = "{}";
+
         @Override
         public boolean insert(@NonNull CapToolDef def) {
             return true;
@@ -91,7 +94,7 @@ class AgentModelConfigAssemblerTest {
             return Optional.of(new CapToolDef(toolId, version, "工具",
                     cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
                     cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
-                    null, null, "{}", "{}", "fp", 1,
+                    null, null, inputSchema, "{}", "fp", 1,
                     java.time.Instant.EPOCH, java.time.Instant.EPOCH));
         }
 
@@ -219,6 +222,53 @@ class AgentModelConfigAssemblerTest {
         assertThat(settings.get().toolSchemas())
                 .as("⚠️ 模型能看到的工具 = 它被授权的工具")
                 .containsOnlyKeys("tool-a");
+    }
+
+    /**
+     * 跨模块契约测试：登记表的 {@code inputSchema} 必须是 {@code Map}。
+     *
+     * <p><b>为什么单独立一条</b>：2026-10-28 接真实模型端到端实测时，
+     * 装配侧把 Schema 存成了 {@code JsonNode}，而模型网关按 {@code Map} 取值，
+     * 于是<b>每个工具的参数定义都被静默替换成空 Schema</b>。
+     * 症状是「模型照提示词喊出工具名、却交不出参数」，报错却只有一句
+     * 「缺少必填参数」—— 现场离真因隔了三个模块。上面那些用例只断言
+     * {@code containsOnlyKeys("tool-a")} 与 {@code description}，
+     * 对这个形态漂移<b>完全无感</b>，所以一直没抓到。
+     */
+    @Test
+    @DisplayName("⛔ 工具登记的 inputSchema 必须是 Map（网关按 Map 取值，JsonNode = 参数全丢）")
+    void toolSchemaValueIsMapNotJsonNode() {
+        ScriptedAgentQuery query = new ScriptedAgentQuery();
+        query.definition = """
+                {"modelRef":"model-1","systemPrompt":"你是辅导助手"}
+                """;
+        ScriptedClosureResolver closure = new ScriptedClosureResolver();
+        closure.tools = List.of(new EffectiveClosure.ToolBinding(
+                "tool-a", 1, cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
+                cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
+                "fp", "{}", null, null));
+        ScriptedToolDefs toolDefs = new ScriptedToolDefs();
+        toolDefs.inputSchema = """
+                {"type":"object","required":["studentId"],
+                 "properties":{"studentId":{"type":"string"}}}
+                """;
+
+        var settings = new AgentModelConfigAssembler(query, closure, toolDefs)
+                .assemble(TENANT, AGENT, 1);
+
+        assertThat(settings).isPresent();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> toolSchema =
+                (Map<String, Object>) settings.get().toolSchemas().get("tool-a");
+        assertThat(toolSchema.get("inputSchema"))
+                .as("⛔ 不是 Map → 网关 instanceof Map 判假 → 参数表发空")
+                .isInstanceOf(Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> inputSchema = (Map<String, Object>) toolSchema.get("inputSchema");
+        assertThat(inputSchema)
+                .as("参数定义必须原样送达，不能只剩一个空对象")
+                .containsEntry("required", List.of("studentId"))
+                .containsKey("properties");
     }
 
     @Test

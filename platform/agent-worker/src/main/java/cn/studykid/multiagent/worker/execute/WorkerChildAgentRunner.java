@@ -313,9 +313,8 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
             }
 
             // ── 回灌：把「模型意图 + 工具结果」并入下一轮上下文 ──
-            messages.add(ModelMessage.assistant(
-                    ToolOutcomeRenderer.describeIntent(response.toolCalls())));
-            messages.addAll(ToolOutcomeRenderer.renderToolOutcomes(toolResult));
+            messages.addAll(ToolOutcomeRenderer.renderRound(
+                    response.toolCalls(), toolResult));
             log.info("子 Agent 工具调用完成: agent={}, step={}",
                     request.targetAgentId(), step + 1);
         }

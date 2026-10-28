@@ -93,6 +93,28 @@ class PgQueueListenerTest {
     }
 
     @Test
+    @DisplayName("⛔ Worker 身份取自注入的配置值，不得自造（run.lease_owner 与续租必须同源）")
+    void injectedWorkerIdIsTheIdentityHandedToTheHandler() {
+        FakeQueueRepository repository = new FakeQueueRepository();
+        repository.toDeliver.add(message(0));
+        AtomicReference<String> seen = new AtomicReference<>();
+        MessageHandler handler = (eventType, payload, workerId) -> {
+            seen.set(workerId);
+            return MessageHandler.Outcome.CLAIMED;
+        };
+
+        new PgQueueListener(List.of(TENANT), repository, handler,
+                Duration.ofMillis(50), 10, 3, Duration.ofSeconds(60),
+                Duration.ofMillis(100), Duration.ofSeconds(5), "worker-local")
+                .pollOnce();
+
+        // ⚠️ 消费者拿这个身份写 run.lease_owner，执行循环用**配置里的**同一个值续租；
+        //    本类自造 pg-worker-<pid> 就等于让每一次续租都匹配 0 行。
+        assertThat(seen).hasValue("worker-local");
+        assertThat(repository.ackedBy).containsExactly("worker-local");
+    }
+
+    @Test
     @DisplayName("⚠️⚠️ 回收次数已达上限 → 直接进死信，不再投递（P1-13 反证）")
     void reclaimedBeyondLimitGoesStraightToDeadLetter() {
         FakeQueueRepository repository = new FakeQueueRepository();

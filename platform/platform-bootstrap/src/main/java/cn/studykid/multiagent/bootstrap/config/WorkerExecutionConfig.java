@@ -106,20 +106,35 @@ public class WorkerExecutionConfig {
     @Value("${agent.worker.context-token-budget:16000}")
     int contextTokenBudget;
 
+    /** MiniMax 真实调用：api-key 非空即启用（仅环境变量注入，不得写死或入库）。 */
+    @Value("${agent.model.minimax.api-key:}")
+    String minimaxApiKey;
+
+    @Value("${agent.model.minimax.base-url:https://api.minimax.cn/v1}")
+    String minimaxBaseUrl;
+
+    @Value("${agent.model.minimax.default-model:MiniMax-M2.5}")
+    String minimaxDefaultModel;
+
     /**
      * 模型网关（P4-D01 / L-4）。
      *
-     * <p>⚠️ <b>当前为占位实现</b>：真实供应商接入依赖 <b>D-002</b>
-     * （API 访问、配额、零保留确认）。此处用 {@code FakeModelGateway}
-     * 以保证链路<b>结构完整、可端到端跑通</b>，
-     * 但它<b>不是</b>真实模型调用。
+     * <p><b>配置了 {@code agent.model.minimax.api-key} 时走真实 MiniMax 调用</b>；
+     * 未配置时回落 {@code FakeModelGateway} 占位，保证链路结构完整。
      *
-     * <p>⚠️ <b>不得</b>把本占位实现当作「模型已接通」的证据：
-     * 真实接入须替换本 Bean 并复核 {@code ZeroRetentionGate} 按供应商判定。
+     * <p>⚠️ <b>不得</b>把 Fake 占位当作「模型已接通」的证据：
+     * {@code ZeroRetentionGate} 仍按供应商判定，真实学生数据须供应商
+     * 在确认清单（{@code agent.compliance.zero-retention.confirmed-providers}）内。
      */
     @Bean
     public ModelGateway modelGateway() {
-        log.warn("⚠️⚠️ 使用 FakeModelGateway 占位（D-002 未提供真实模型服务）——"
+        if (minimaxApiKey != null && !minimaxApiKey.isBlank()) {
+            log.info("装配 MiniMaxModelGateway: 真实模型调用已启用, defaultModel={}",
+                    minimaxDefaultModel);
+            return new cn.studykid.multiagent.infrastructure.model.MiniMaxModelGateway(
+                    minimaxBaseUrl, minimaxApiKey, minimaxDefaultModel);
+        }
+        log.warn("⚠️⚠️ 使用 FakeModelGateway 占位（未配置 agent.model.minimax.api-key）——"
                 + "链路可跑通，但**不是真实模型调用**");
         return new cn.studykid.multiagent.infrastructure.model.FakeModelGateway(
                 cn.studykid.multiagent.infrastructure.model.FakeModelGateway.FaultMode.NONE,
@@ -369,10 +384,18 @@ public class WorkerExecutionConfig {
      *
      * <p>⚠️ fail-closed：拿不到根 Agent 模型配置 → 拒绝执行并兜底收敛终态，
      * 绝不回落硬编码占位模型（回落 = 把「配置缺失」伪装成「配置正常」）。
+     *
+     * <p>⚠️ <b>Run 输入同样 fail-closed</b>（L-4 闭合）：输入取自
+     * {@code run.input_payload}（创建事务内落库，不可变）。
+     * 此前这里传的是<b>装配层写死的占位问题</b>，后果不是「参数不准」而是
+     * <b>用户提交的内容根本没进过模型上下文</b> —— Run 表面成功、
+     * 结果与用户问的东西毫无关系。读不到输入就拒绝执行，
+     * 绝不用假问题换一次「看起来跑通了」。
      */
     @Bean
     public RunDispatchConsumer.RunExecutor runTaskExecutor(
-            RunClaimPort claimPort, RunExecutionLoop loop, RunExecutionInputs inputs) {
+            RunClaimPort claimPort, RunExecutionLoop loop, RunExecutionInputs inputs,
+            cn.studykid.multiagent.ports.persistence.RunInputPort runInputPort) {
         return (tenantId, task) -> {
             // ⚠️⚠️ **fail-closed（第二十一批）**：拿不到根 Agent 的模型配置
             // → **拒绝执行该 Run**，绝不回落硬编码占位模型。
@@ -397,9 +420,24 @@ public class WorkerExecutionConfig {
                 }
                 return RunDispatchConsumer.Outcome.FAILED;
             }
+            // ── L-4：Run 输入取自 run.input_payload（不再用占位问题）──────
+            java.util.Map<String, Object> runInput =
+                    runInputPort.inputOf(tenantId, task.runId());
+            if (runInput.isEmpty()) {
+                log.warn("Run 输入不可用，拒绝执行并收敛终态: run={}", task.runId());
+                try {
+                    claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
+                            "FAILED", RunExecutionLoop.failurePayload("input_unavailable"),
+                            "INPUT_UNAVAILABLE");
+                } catch (RuntimeException ce) {
+                    log.warn("孤儿 Run 兜底收敛失败（可能已被接管）: run={}, cause={}",
+                            task.runId(), ce.toString());
+                }
+                return RunDispatchConsumer.Outcome.FAILED;
+            }
             RunExecutionLoop.ExecutionOutcome outcome = loop.execute(
                     tenantId, task, config.get(),
-                    inputs.snapshotFor(task, tenantId), inputs.runInput(task));
+                    inputs.snapshotFor(task, tenantId), runInput);
             return switch (outcome.kind()) {
                 case SUCCEEDED -> RunDispatchConsumer.Outcome.SUCCEEDED;
                 case FAILED -> RunDispatchConsumer.Outcome.FAILED;
@@ -432,10 +470,9 @@ public class WorkerExecutionConfig {
     /**
      * 执行输入供给（Agent 配置 + Run 快照）。
      *
-     * <p>⚠️ <b>L-4 已知限制</b>：当前返回**占位**配置。
-     * 真实实现须从 {@code run.input_payload} 与 {@code agent} 表读取
-     * （快照不可变由 {@code forbid_snapshot_mutation} 触发器保证）。
-     * 占位配置使链路<b>结构上完整</b>，但不代表真实业务参数已接通。
+     * <p>⚠️ <b>L-4 已闭合</b>：Run 输入由 {@code runTaskExecutor} 经
+     * {@link cn.studykid.multiagent.ports.persistence.RunInputPort}
+     * 从 {@code run.input_payload} 读取（创建事务内落库，不可变）。
      */
     @Bean
     public RunExecutionInputs runExecutionInputs(
@@ -626,17 +663,6 @@ public class WorkerExecutionConfig {
                     .map(c -> new RunExecutionLoop.AgentModelConfig(
                             c.modelId(), c.systemPrompt(), c.temperature(),
                             c.maxTokens(), c.timeout(), c.toolSchemas()));
-        }
-
-        /**
-         * Run 输入（占位）。
-         *
-         * <p>⚠️ <b>L-4</b>：真实实现须读 {@code run.input_payload}
-         *（Run 创建事务内落库，不可变）。
-         */
-        public java.util.Map<String, Object> runInput(
-                RunClaimPort.LeasedTask task) {
-            return java.util.Map.of("q", "解方程 x²-5x+6=0");
         }
 
         /**

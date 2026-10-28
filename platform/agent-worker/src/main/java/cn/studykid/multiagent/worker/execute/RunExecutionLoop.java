@@ -477,9 +477,8 @@ public class RunExecutionLoop {
                 // ── 回灌：把「模型意图 + 工具结果」并入下一轮上下文 ──────
                 // ⚠️ 与子 Agent 执行器**共用**渲染口径：不可信标记、长度封顶、
                 //    失败与被拒也回灌 —— 三条规则逐字一致，杜绝父子语义漂移。
-                messages.add(cn.studykid.multiagent.ports.model.ModelMessage.assistant(
-                        ToolOutcomeRenderer.describeIntent(response.toolCalls())));
-                messages.addAll(ToolOutcomeRenderer.renderToolOutcomes(toolResult));
+                messages.addAll(ToolOutcomeRenderer.renderRound(
+                        response.toolCalls(), toolResult));
 
                 // ── §5 续租（长任务必须，否则会被接管）──────────────────
                 // ⚠️ 身份必须是构造时的 workerId（与领取时一致），

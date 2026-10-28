@@ -54,9 +54,25 @@ public class RabbitExecutionListener {
     private final AtomicLong retried = new AtomicLong();
     private final AtomicLong deadLettered = new AtomicLong();
 
+    /**
+     * 本进程的 Worker 身份。⚠️ 与 {@code run.lease_owner} 的写入同源，
+     * 约束与踩坑记录见 {@link PgQueueListener} 的同名字段。
+     */
+    private final @Nullable String workerIdOverride;
+
     public RabbitExecutionListener(MessageHandler handler, ObjectMapper mapper) {
+        this(handler, mapper, null);
+    }
+
+    /**
+     * @param workerIdOverride Worker 身份；{@code null}/空白时退回
+     *                         「{@code worker-<pid>}」占位（仅供单测与遗留装配）
+     */
+    public RabbitExecutionListener(MessageHandler handler, ObjectMapper mapper,
+                                   @Nullable String workerIdOverride) {
         this.handler = handler;
         this.mapper = mapper;
+        this.workerIdOverride = workerIdOverride;
     }
 
     /**
@@ -150,8 +166,11 @@ public class RabbitExecutionListener {
         return value == null ? null : String.valueOf(value);
     }
 
-    /** Worker 标识（进程内唯一即可；多实例部署时应含实例 ID）。 */
+    /** Worker 标识（生产由装配层注入 {@code agent.worker.id}；缺失才按进程号兜底）。 */
     private String workerId() {
+        if (workerIdOverride != null && !workerIdOverride.isBlank()) {
+            return workerIdOverride.trim();
+        }
         return "worker-" + ProcessHandle.current().pid();
     }
 

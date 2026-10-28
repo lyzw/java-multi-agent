@@ -243,9 +243,23 @@ public class AgentModelConfigAssembler {
         return flat == null ? "" : flat;
     }
 
-    private static @NonNull Object parseSchema(@NonNull String raw) {
+    /**
+     * 工具输入 Schema 的文本 → 登记表值。
+     *
+     * <p>⚠️ <b>必须返回 {@code Map}，不能返回 {@code JsonNode}</b>
+     * （2026-10-28 真实模型端到端实测后修正）：登记表的下游消费者
+     * （模型网关的 {@code tools[].function.parameters}）按 {@code Map} 取值，
+     * 拿到 {@code JsonNode} 会走「形态不符」分支，
+     * 于是<b>每个工具的参数定义都被静默替换成空 Schema</b> ——
+     * 症状是模型照提示词喊出工具名、却交不出任何参数，
+     * 而现场只看到一句「缺少必填参数」。
+     */
+    private static @NonNull Map<String, Object> parseSchema(@NonNull String raw) {
         try {
-            return MAPPER.readTree(raw);
+            Map<String, Object> parsed = MAPPER.readValue(raw,
+                    new TypeReference<Map<String, Object>>() {
+                    });
+            return parsed == null ? Map.of() : parsed;
         } catch (JacksonException e) {
             // ⚠️ Schema 解析不了 → 退回空对象（工具侧会拒绝参数），不静默放行
             return Map.of();
