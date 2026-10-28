@@ -20,7 +20,8 @@ import {
   type FormEvent,
 } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createRun, ApiError, getDictionaries } from '@/api/client'
+import { createRun, ApiError, getDictionaries, listAgents } from '@/api/client'
+import type { AgentItem } from '@/api/types'
 import { isIdempotencyConflict, type NormalizedError } from '@/api/errors'
 import {
   resolveIdempotencyKey,
@@ -34,11 +35,14 @@ import { PageHead, Panel } from '@/components/ui'
 import { Icon } from '@/components/Icon'
 
 /**
- * ⚠️ agentId 为占位配置。
- * 后端无 Agent 管理接口（G2），此处由环境变量注入。
- * 真实多 Agent 切换需后端补 GET /api/agents。
+ * 默认 Agent（环境变量注入）。
+ *
+ * ⚠️ 这里**只作预选**：本租户实际有哪些可用 Agent 由 `GET /api/agents` 决定
+ * （2026-10-28 端到端实测：写死 'default-agent' 时，提交恒得 404
+ * 「该 Agent 尚无可用的已发布版本」——用户看到的是一个怎么填都提交不了的表单）。
+ * 列表可用时以列表为准；不可用时才回落到此常量，让表单仍可提交（不阻断）。
  */
-const AGENT_ID = import.meta.env['VITE_AGENT_ID'] ?? 'default-agent'
+const DEFAULT_AGENT_ID = import.meta.env['VITE_AGENT_ID'] ?? 'default-agent'
 
 /**
  * ⚠️ B3：学科/年级改为后端 `/api/reference` 词表单一真相源（见 getDictionaries）。
@@ -100,6 +104,36 @@ export function NewRunPage(): JSX.Element {
   // ⚠️ B3：运行时从后端拉取业务词表，作为下拉单一真相源；失败回退硬编码兜底。
   const [subjects, setSubjects] = useState<string[]>([...FALLBACK_SUBJECTS])
   const [grades, setGrades] = useState<string[]>([...FALLBACK_GRADES])
+
+  /**
+   * 本租户可用的已发布 Agent（`GET /api/agents`）。
+   *
+   * ⚠️ 列表拿不到时**不阻断表单**：仍用 `DEFAULT_AGENT_ID` 提交，
+   * 由后端的 404 说明真实原因 —— 比让用户面对一个没有下拉框、
+   * 也不知道能不能提交的表单要好。
+   */
+  const [agents, setAgents] = useState<AgentItem[]>([])
+  const [agentId, setAgentId] = useState<string>(DEFAULT_AGENT_ID)
+
+  useEffect(() => {
+    let cancelled = false
+    listAgents({ limit: 50 })
+      .then((page) => {
+        if (cancelled) return
+        const published = page.items.filter((a) => a.latestPublishedAt !== null)
+        setAgents(published)
+        // 预选：环境变量指定的仍在册就保留它，否则取列表首个（后端按最新发布排序）
+        setAgentId((prev) =>
+          published.some((a) => a.agentId === prev) ? prev : published[0]?.agentId ?? prev,
+        )
+      })
+      .catch(() => {
+        /* 端点不可达 → 保持默认 agentId，不阻断表单 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -237,10 +271,10 @@ export function NewRunPage(): JSX.Element {
     }
 
     try {
-      const idempotencyKey = resolveIdempotencyKey({ agentId: AGENT_ID, input })
+      const idempotencyKey = resolveIdempotencyKey({ agentId, input })
       const response = await createRun({
         idempotencyKey,
-        agentId: AGENT_ID,
+        agentId,
         input,
       })
       clearIdempotencyKey()
@@ -293,6 +327,31 @@ export function NewRunPage(): JSX.Element {
             violations={violations['studentId']}
             hint="请填写平台生成的匿名编号，不要填姓名"
           />
+
+          {/*
+            ⚠️ 只有列到 Agent 才渲染这个下拉：列表为空/不可达时表单保持原样，
+            提交仍带默认 agentId —— 由后端的 404 说明真实原因，
+            比凭空长出一个只有唯一选项的下拉更诚实。
+          */}
+          {agents.length > 0 ? (
+            <div className="field">
+              <label htmlFor="agentId">辅导 Agent</label>
+              <select
+                id="agentId"
+                value={agentId}
+                onChange={(e) => setAgentId(e.target.value)}
+              >
+                {agents.map((a) => (
+                  <option key={a.agentId} value={a.agentId}>
+                    {a.name ?? a.agentId}（v{a.latestVersionNumber}）
+                  </option>
+                ))}
+              </select>
+              <p className="field__hint">
+                切换 Agent 只影响<b>接下来</b>发起的分析；已发出的分析继续用它开始时的那份配置。
+              </p>
+            </div>
+          ) : null}
 
           <div className="toolbar">
             <div className="field" style={{ minWidth: 160 }}>

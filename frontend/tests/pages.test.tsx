@@ -266,6 +266,135 @@ describe('发起辅导页', () => {
     expect(screen.getByText(/不要填姓名/)).toBeInTheDocument()
   })
 
+  /**
+   * ⚠️ 回归（2026-10-28 端到端实测）。
+   *
+   * 此前页面写死 `agentId = 'default-agent'`，而后端的 Agent 标识是 UUID：
+   * 提交恒得 404「该 Agent 尚无可用的已发布版本」——
+   * 表单每个字段都填对了却提交不了，用户无从知道是「哪个 Agent」的问题。
+   * `GET /api/agents` 已经存在，故页面改为**列出口里的已发布 Agent 供选择**。
+   */
+  describe('辅导 Agent 选择（来自 GET /api/agents）', () => {
+    const agentsPayload = {
+      items: [
+        {
+          agentId: '11111111-1111-1111-1111-111111111111',
+          name: '数学辅导',
+          description: null,
+          versionCount: 2,
+          latestVersionNumber: 2,
+          latestDefinition: null,
+          latestPublishedAt: '2026-10-28T00:00:00Z',
+        },
+        {
+          agentId: '22222222-2222-2222-2222-222222222222',
+          name: '从未发布',
+          description: null,
+          versionCount: 1,
+          latestVersionNumber: 1,
+          latestDefinition: null,
+          latestPublishedAt: null,
+        },
+      ],
+      nextCursor: null,
+    }
+
+    function stubAgentsAndRuns(fetchMock: ReturnType<typeof vi.fn>): void {
+      fetchMock.mockImplementation((url: string) => {
+        if (typeof url === 'string' && url.includes('/api/agents')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify(agentsPayload),
+          } as unknown as Response)
+        }
+        if (typeof url === 'string' && url.includes('/api/runs')) {
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            text: async () =>
+              JSON.stringify({
+                runId: 'run-1',
+                replayed: false,
+                state: 'QUEUED',
+                correlationId: 'c-1',
+              }),
+          } as unknown as Response)
+        }
+        return Promise.resolve({ ok: false, status: 404, text: async () => '{}' } as unknown as Response)
+      })
+    }
+
+    async function fillRequired(): Promise<void> {
+      // ⚠️ 匿名编号刻意避开 8~12 位连续数字：S-3 预检会把长数字串判成学号并阻断提交
+      //    （那是合规防线在正常工作，不是本用例要测的东西）。
+      await userEvent.type(screen.getByLabelText(/学生匿名编号/), 'S-E2E-FE')
+      await userEvent.type(screen.getByLabelText(/题目内容/), '2x + 5 = 13，求 x')
+      await userEvent.type(screen.getByLabelText(/我的解题过程/), '2x = 7，x = 3.5')
+      await userEvent.type(screen.getByLabelText(/已知正确答案/), 'x = 4')
+    }
+
+    it('只列已发布的 Agent，并以默认预选第一个', async () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      stubAgentsAndRuns(fetchMock)
+
+      renderWithProviders(<NewRunPage />)
+
+      const select = await screen.findByLabelText(/辅导 Agent/)
+      expect(select).toHaveValue('11111111-1111-1111-1111-111111111111')
+      expect(screen.getByText('数学辅导（v2）')).toBeInTheDocument()
+      // ⛔ 未发布的版本不能出现在可提交的选择里
+      expect(screen.queryByText(/从未发布/)).toBeNull()
+    })
+
+    it('提交时带上选中的 agentId（而不是写死的占位串）', async () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      stubAgentsAndRuns(fetchMock)
+
+      renderWithProviders(<NewRunPage />)
+      const select = await screen.findByLabelText(/辅导 Agent/)
+      await userEvent.selectOptions(select, '11111111-1111-1111-1111-111111111111')
+      await fillRequired()
+      await userEvent.click(screen.getByRole('button', { name: '开始分析' }))
+
+      await waitFor(() => {
+        const call = fetchMock.mock.calls.find(
+          (c) =>
+            typeof c[0] === 'string' &&
+            c[0].includes('/api/runs') &&
+            (c[1] as { method?: string }).method === 'POST',
+        )
+        expect(call).toBeDefined()
+        if (call === undefined) throw new Error('未发起 POST /api/runs')
+        const init = call[1] as { body: string }
+        const body = JSON.parse(init.body) as { agentId: string }
+        expect(body.agentId).toBe('11111111-1111-1111-1111-111111111111')
+      })
+    })
+
+    it('Agent 列表读不到时不阻断表单（仍按默认值提交，由后端说明原因）', async () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => '{"code":"INTERNAL","message":"boom"}',
+      } as unknown as Response)
+
+      renderWithProviders(<NewRunPage />)
+
+      await waitFor(() => {
+        expect(
+          fetchMock.mock.calls.some((c) => typeof c[0] === 'string' && c[0].includes('/api/agents')),
+        ).toBe(true)
+      })
+      expect(screen.queryByLabelText(/辅导 Agent/)).toBeNull()
+      expect(screen.getByRole('button', { name: '开始分析' })).toBeInTheDocument()
+    })
+  })
+
   describe('⛔ 敏感信息阻断', () => {
     it('输入手机号后应显示违规提示且不发请求', async () => {
       const fetchSpy = vi.fn()

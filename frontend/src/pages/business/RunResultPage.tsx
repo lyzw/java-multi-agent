@@ -23,6 +23,7 @@ import { Sheet, Empty, Loading, ErrorState, Breadcrumbs } from '@/shared/states'
 import { scanText } from '@/features/compliance/scan'
 import { useRunResult } from '@/features/run/useRunResult'
 import { RunFeedback } from '@/features/run/RunFeedback'
+import { ModelText } from '@/shared/ModelText'
 import { stateLabel } from '@/features/run/runState'
 import { PageHead, StatusPill } from '@/components/ui'
 import { Icon } from '@/components/Icon'
@@ -215,7 +216,7 @@ export function RunResultPage(): JSX.Element {
             hint="换一个匿名编号再试，或联系辅导老师确认。"
           />
         ) : (
-          <p style={{ margin: 0 }}>{explanation}</p>
+          <ModelText text={explanation} />
         )}
       </Sheet>
 

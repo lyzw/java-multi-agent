@@ -282,9 +282,9 @@ export function SkillCatalogPanel(): JSX.Element {
                       <td>
                         <code>{s.skillId}</code>
                         <div className="muted">{s.name ?? s.skillId}</div>
-                        {s.description != null ? (
+                        {s.description?.purpose ? (
                           <div className="muted" style={{ fontSize: 'var(--t-note)' }}>
-                            {s.description}
+                            {s.description.purpose}
                           </div>
                         ) : null}
                       </td>

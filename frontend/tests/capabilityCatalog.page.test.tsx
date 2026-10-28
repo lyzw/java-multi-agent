@@ -66,7 +66,7 @@ function sampleSkill(overrides?: Partial<CapSkillCatalogItem>): CapSkillCatalogI
   return {
     skillId: 'error-attribution',
     name: '错题归因',
-    description: '定位薄弱知识点',
+    description: { purpose: '定位薄弱知识点', usage: [] },
     declaredTools: ['rag.grounding', 'profile.read'],
     declaredMcp: [
       { serverId: 'mcp.registry', toolAllowlist: ['lookup'] },
@@ -232,6 +232,35 @@ describe('Skill 目录（Point 3）', () => {
     for (const t of tables) {
       expect(t.parentElement?.classList.contains('table-wrap')).toBe(true)
     }
+  })
+
+  // ⚠️ 回归（2026-10-28 端到端实测）：后端 `description` 是 `{purpose, usage[]}` **对象**，
+  //   而本页曾把它当字符串直接渲染 → React 抛
+  //   「Objects are not valid as a React child」→ **整棵应用树被卸载**（白屏，
+  //   连导航和「退出」都点不到）。夹具原本是字符串，所以这个崩溃在测试里永不出现。
+  it('后端真实形状：对象描述渲染 purpose，不得抛错白屏', async () => {
+    listCapabilitySkillsMock.mockResolvedValue([
+      sampleSkill({
+        description: {
+          purpose: '当需要学生的年级、学科或薄弱知识点时调用它',
+          usage: [{ when: '学生只问思路', how: '先读档案，再逐题讲解' }],
+        },
+      }),
+    ])
+    renderPanel(<SkillCatalogPanel />)
+
+    expect(
+      await screen.findByText('当需要学生的年级、学科或薄弱知识点时调用它'),
+    ).toBeInTheDocument()
+    // 仍在同一棵树里（白屏时整个面板都不存在）
+    expect(screen.getByText('error-attribution')).toBeInTheDocument()
+  })
+
+  it('存量行描述为 null 时不渲染描述行，也不报错', async () => {
+    listCapabilitySkillsMock.mockResolvedValue([sampleSkill({ description: null })])
+    renderPanel(<SkillCatalogPanel />)
+
+    expect(await screen.findByText('error-attribution')).toBeInTheDocument()
   })
 })
 

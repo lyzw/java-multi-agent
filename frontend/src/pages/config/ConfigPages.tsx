@@ -877,7 +877,9 @@ export function AgentsPage(): JSX.Element {
                   />
                 </div>
                 <div className="field">
-                  <label htmlFor="agent-spec-overrides">覆盖参数（JSON，留空表示 {}）</label>
+                  {/* ⚠️ {} 必须写成字符串表达式：裸 JSX 里它是空表达式容器，会被静默吃掉，
+                      用户看到的是「留空表示 ）」。 */}
+                  <label htmlFor="agent-spec-overrides">覆盖参数（JSON，{'留空表示 {}'}）</label>
                   <textarea
                     id="agent-spec-overrides"
                     rows={4}

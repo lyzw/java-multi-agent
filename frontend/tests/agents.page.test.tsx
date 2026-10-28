@@ -170,6 +170,16 @@ describe('Agent 配置页：结构化发布表单（Point 3）', () => {
     expect(publishAgentVersionMock).not.toHaveBeenCalled()
   })
 
+  it('⛔ 覆盖参数 label 里的 {} 必须原样可见（JSX 会吃掉裸 {}）', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await openPublish(user)
+
+    // getByLabelText 返回的是控件本身，这里要看的是 <label> 的文案
+    const label = document.querySelector('label[for="agent-spec-overrides"]')
+    expect(label?.textContent).toBe('覆盖参数（JSON，留空表示 {}）')
+  })
+
   it('⛔ 反证：可切回「JSON 原文」模式（高级用户不被堵死）', async () => {
     const user = userEvent.setup()
     renderPage()

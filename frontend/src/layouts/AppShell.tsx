@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useSession } from '@/auth/session'
+import { ContentErrorBoundary } from '@/shared/ErrorBoundary'
 import { hasRoleAccess } from '@/auth/RequireRole'
 import { Icon, type IconName } from '@/components/Icon'
 
@@ -348,7 +349,9 @@ export function AppShell(): JSX.Element {
         <main className="main">
           {/* skip link 的焦点靶：tabIndex=-1 让锚点跳转能把焦点也带进来 */}
           <span id="main-content" className="sr-only" tabIndex={-1} />
-          <Outlet />
+          <ContentErrorBoundary resetKey={location.pathname}>
+            <Outlet />
+          </ContentErrorBoundary>
         </main>
       </div>
     </div>
