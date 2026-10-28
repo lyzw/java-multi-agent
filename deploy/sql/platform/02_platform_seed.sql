@@ -8,6 +8,9 @@
 --   + 平台权限矩阵（角色 6 / 权限 23 / 绑定 52）+ 系统字典（类 12 / 项 61）
 -- 【插入序】按 FK 依赖排好：tenant → agent → agent_version → cap_agent_def → cap_agent_child_ref
 -- 【不含】principal / 管理员口令哈希 —— 属环境相关，见 04_platform_admin_grant.sql
+--   平台账号（platform_user + platform_user_role）本文件一律不含：口令哈希只能由
+--   服务端同一 PasswordHasher 现场计算，绝不入库。安装通道见
+--   scripts/dev-seed-platform-users.sh（幂等，dry-run 默认）。
 -- =====================================================================
 
 --
