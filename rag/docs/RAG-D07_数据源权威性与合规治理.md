@@ -249,7 +249,7 @@ SELECT count(*) FROM pg_namespace WHERE nspname = 'rag';
 | G-3 | 权威等级达到租户门槛 | `trust_tier.weight() >= min_trust_tier.weight()` | 查询期（对应 `TrustTier.meets`） |
 | G-4 | 版权状态允许使用 | `license_status != 'RESTRICTED'` | 查询期（`PENDING` 亦不放行，见 §4.2） |
 | G-5 | 片段角色允许进入当前检索模式 | `rag_chunk.role` | 已有：`RetrievalPolicy.allowsRole`（RAG-D05，待撰写） |
-| G-6 | 检索分数达门禁 | 分数 | 已有：`RetrievalOrchestrator` `minScore`（默认 0.35，RD-Q2 待标定） |
+| G-6 | 检索分数达门禁 | 分数 | 已有：`RetrievalOrchestrator` `minScore`（**0.38**，2026-10-28 首次标定，样本不足档，见 RAG-D08 §4.6.1） |
 | G-7 | 版本坐标匹配 | `rag_chunk.edition_id` | 已有：`EditionScope.admits` |
 
 > ⚠️ **G-1～G-4 当前均未在检索路径上实现**（§8 RAG-R01）。

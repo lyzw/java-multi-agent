@@ -52,8 +52,12 @@ import cn.studykid.rag.ports.TenantScopedRetrieval;
 @Configuration
 public class RagInfrastructureConfig {
 
-    /** 分数门禁阈值：低于此值的命中判为「未找到依据」（RAG-D05 §⑦）。 */
-    @Value("${rag.retrieval.min-score:0.2}")
+    /**
+     * 分数门禁阈值：低于此值的命中判为「未找到依据」（RAG-D05 §⑦）。
+     *
+     * <p>兜底值 0.38 与 {@code application.yml} 同源，标定依据见那里的注释（RAG-D08 §4）。
+     */
+    @Value("${rag.retrieval.min-score:0.38}")
     private double minScore;
 
     /**
