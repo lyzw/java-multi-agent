@@ -120,6 +120,20 @@ function remainingSeconds(expiresAt: string): number {
   return Math.floor((Date.parse(expiresAt) - Date.now()) / 1000)
 }
 
+/**
+ * 服务端拒绝的归一呈现：`原因码：文案`。
+ *
+ * ⚠️ 原因码要显式出现在界面上：它与 `platform_audit_event.reason_code` 同源
+ *    （如 `TENANT_NOT_FOUND` / `TICKET_ROLE_NOT_HELD`），运维拿它直接查审计就知道
+ *    是哪道闸门拦的。2026-10-29 的现场教训是界面只显示「资源不存在」，
+ *    而库里写的是 `TENANT_NOT_FOUND`，两边对不上号。
+ */
+function describeRejection(cause: unknown, fallback: string): string {
+  if (!(cause instanceof ApiError)) return fallback
+  const code = (cause.data as { code?: unknown } | undefined)?.code
+  return typeof code === 'string' && code !== '' ? `${code}：${cause.message}` : cause.message
+}
+
 function newIdempotencyKey(): string {
   return `lab-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
@@ -337,7 +351,7 @@ export function AgentLabPage(): JSX.Element {
             setErrorKind('ticket')
             setErrorText(
               '续取票证失败，轮询已停止：' +
-                (cause instanceof ApiError ? cause.message : '网络未能返回票证'),
+                describeRejection(cause, '网络未能返回票证'),
             )
             return
           }
@@ -407,7 +421,7 @@ export function AgentLabPage(): JSX.Element {
         setErrorKind('ticket')
         setErrorText(
           '取票证失败：' +
-            (cause instanceof ApiError ? cause.message : '网络未能返回票证') +
+            describeRejection(cause, '网络未能返回票证') +
             '。票证由平台侧签发，每次取票都会写一条平台审计并计入该租户的限流（30 次/60 秒）。',
         )
         return

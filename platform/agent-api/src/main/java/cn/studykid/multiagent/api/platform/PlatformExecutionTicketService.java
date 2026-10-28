@@ -7,12 +7,12 @@ import java.util.Set;
 import java.util.UUID;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
-import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.api.security.PlatformSecurity;
 import cn.studykid.multiagent.core.tenant.TenantContext;
@@ -130,13 +130,58 @@ public class PlatformExecutionTicketService {
     }
 
     /**
+     * 票证闸门拒绝：客户端可见的<b>状态码 + 原因码 + 可读文案</b>三件套。
+     *
+     * <p>⚠️ <b>为什么不走 {@code ResponseStatusException}</b>：本项目的
+     * {@code ApiExceptionHandler.handleResponseStatus} 按既有约定<b>刻意不回显 reason</b>
+     * （防止新端点把内部结构写进消息）。对「资源不存在」这类无差别 404 是对的，
+     * 但票证有<b>八种语义不同、行动建议也不同</b>的拒绝：
+     * 「租户没登记」要去建租户，「状态不是 ACTIVE」要走生命周期迁移，
+     * 「主体没这个角色」要去授权，「限流」要等一分钟 —— 全塌成
+     * {@code NOT_FOUND / 资源不存在} 之后，真原因只留在审计表里，
+     * 操作者得会查库才知道下一步（实测：前端只见 404「资源不存在」，
+     * 而库里同一时刻写着 {@code TENANT_NOT_FOUND}）。
+     *
+     * <p>与 {@code ConfigOverrideController.ApprovalRequiredException} 同一先例：
+     * 语义不同的拒绝必须有独立的异常类型与稳定的码，不走通用归一。
+     *
+     * <p>{@code reasonCode} 与该次 DENY 审计的 {@code reason_code} <b>同源同值</b>
+     * （由 {@code denyAndReject} 单点产出）：响应里读到的码就是库里查到的码。
+     * 消息只含<b>操作者本就知道的</b>入参（租户 ID / 登录名 / 当前状态），
+     * 不给 SQL、不给令牌；出现表名只为了说清「去哪儿补登记」。
+     */
+    public static final class TicketRejectedException extends RuntimeException {
+
+        private final transient @NonNull HttpStatus status;
+        private final @NonNull String reasonCode;
+
+        public TicketRejectedException(@NonNull HttpStatus status,
+                                       @NonNull String reasonCode,
+                                       @NonNull String message) {
+            super(message);
+            this.status = status;
+            this.reasonCode = reasonCode;
+        }
+
+        public @NonNull HttpStatus status() {
+            return status;
+        }
+
+        /** 与平台审计 {@code reason_code} 同值的稳定码（前端据此给行动建议）。 */
+        public @NonNull String reasonCode() {
+            return reasonCode;
+        }
+    }
+
+    /**
      * 为指定租户的指定成员签发一枚短时执行票证。
      *
      * @param tenantId  目标租户（UUID）
      * @param loginName 该租户下的登录名（<b>由操作者显式指名</b>，不自动挑选 ——
      *                  归属必须是真的，不能是服务端猜的）
-     * @throws ResponseStatusException 503 通道关闭 / 429 限流 /
-     *                                 404 租户或主体不存在 / 409 状态或角色不允许签发
+     * @throws TicketRejectedException 400 参数非法 / 503 通道关闭 / 429 限流（含 fail-closed）/
+     *                                 404 租户或主体不存在 / 409 状态或角色不允许签发；
+     *                                 除 400 外每种拒绝都已写一条 DENY 审计
      */
     public ExecutionTicket issue(@NonNull PlatformPrincipal principal,
                                  @NonNull String tenantId,
@@ -149,17 +194,19 @@ public class PlatformExecutionTicketService {
         // 闸门 2：配置开关。关闭时不签发票证，但把「有权限的人尝试了」写进审计——
         // 一个应当存在的通道反复被使用，本身是运维需要知道的事。
         if (!enabled) {
-            deny(principal, tenantId, null, "CHANNEL_DISABLED");
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+            throw denyAndReject(principal, tenantId, null, HttpStatus.SERVICE_UNAVAILABLE,
+                    "CHANNEL_DISABLED",
                     "执行票证通道未启用（platform.security.execution-ticket.enabled=false）");
         }
         // 目标必须是 UUID：platform_audit_event.target_id 是 uuid 列，
         // 非 UUID 会让审计写入抛 SQLException → 500，把「参数错」伪装成「服务坏」。
         if (!isUuid(tenantId)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantId 须为 UUID");
+            throw new TicketRejectedException(HttpStatus.BAD_REQUEST, "INVALID_TENANT_ID",
+                    "tenantId 须为 UUID");
         }
         if (loginName.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "loginName 必填");
+            throw new TicketRejectedException(HttpStatus.BAD_REQUEST, "MISSING_LOGIN_NAME",
+                    "loginName 必填：票证必须指名一个真实的租户成员（审计与计费归属要指向真人）");
         }
 
         // 闸门 3：限流（按目标租户）。⚠️ FAIL_CLOSED 与 REJECTED 一律拒绝：
@@ -167,49 +214,50 @@ public class PlatformExecutionTicketService {
         RateLimitPort.Decision decision =
                 rateLimiter.check(tenantId, RateLimitPort.Buckets.PLATFORM_EXECUTION_TICKET);
         if (decision != RateLimitPort.Decision.ALLOWED) {
-            deny(principal, tenantId, null,
-                    decision == RateLimitPort.Decision.REJECTED
-                            ? "RATE_LIMITED" : "RATE_LIMIT_UNAVAILABLE");
-            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
-                    decision == RateLimitPort.Decision.REJECTED
-                            ? "票证签发过于频繁，请一分钟后再试"
-                            : "限流组件不可用，票证签发已按 fail-closed 拒绝");
+            throw decision == RateLimitPort.Decision.REJECTED
+                    ? denyAndReject(principal, tenantId, null, HttpStatus.TOO_MANY_REQUESTS,
+                            "RATE_LIMITED", "票证签发过于频繁，请一分钟后再试")
+                    : denyAndReject(principal, tenantId, null, HttpStatus.TOO_MANY_REQUESTS,
+                            "RATE_LIMIT_UNAVAILABLE", "限流组件不可用，票证签发已按 fail-closed 拒绝");
         }
 
         // 闸门 4a：租户存在且生命周期允许承接新业务
         PlatformTenantRow tenant = tenants.findTenant(tenantId);
         if (tenant == null) {
-            deny(principal, tenantId, null, "TENANT_NOT_FOUND");
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "租户不存在");
+            throw denyAndReject(principal, tenantId, null, HttpStatus.NOT_FOUND,
+                    "TENANT_NOT_FOUND",
+                    "租户未在 platform.tenant 登记，无法签发执行票证：" + tenantId);
         }
         if (!TenantLifecycle.isActive(tenant.lifecycleState())) {
-            deny(principal, tenantId, null, "TENANT_NOT_ACTIVE");
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "租户当前状态不允许发起执行：" + tenant.lifecycleState());
+            throw denyAndReject(principal, tenantId, null, HttpStatus.CONFLICT,
+                    "TENANT_NOT_ACTIVE",
+                    "租户 " + tenantId + " 当前状态不允许发起执行：" + tenant.lifecycleState()
+                            + "（需 ACTIVE；worker 侧同口径，签发一枚跑不起来的票没有意义）");
         }
 
         // 闸门 4b：主体真实存在且 ACTIVE —— 审计与计费归属指向真人
         Optional<PrincipalRepository.PrincipalRecord> found =
                 principals.findByLogin(tenantId, loginName);
         if (found.isEmpty()) {
-            deny(principal, tenantId, null, "PRINCIPAL_NOT_FOUND");
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                    "该租户下不存在登录名 " + loginName);
+            throw denyAndReject(principal, tenantId, null, HttpStatus.NOT_FOUND,
+                    "PRINCIPAL_NOT_FOUND", "该租户下不存在登录名 " + loginName);
         }
         PrincipalRepository.PrincipalRecord record = found.get();
         if (!"ACTIVE".equals(record.status())) {
-            deny(principal, tenantId, record.principalId(), "PRINCIPAL_NOT_ACTIVE");
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "主体状态不允许签发票证：" + record.status());
+            throw denyAndReject(principal, tenantId, record.principalId(), HttpStatus.CONFLICT,
+                    "PRINCIPAL_NOT_ACTIVE",
+                    "主体 " + loginName + " 当前状态为 " + record.status() + "，不允许签发票证");
         }
 
         // 闸门 4c：角色取交集（见类注释）。authz_version 用库中当前值：
         // 陈旧版本会被执行时重授权拒绝（红线 9），这里没有理由自己造一个。
         Set<String> granted = principals.findRoles(tenantId, record.principalId());
         if (!granted.contains(TICKET_ROLE)) {
-            deny(principal, tenantId, record.principalId(), "TICKET_ROLE_NOT_HELD");
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "主体未持有 " + TICKET_ROLE + " 角色，无最小执行权限可签发");
+            throw denyAndReject(principal, tenantId, record.principalId(), HttpStatus.CONFLICT,
+                    "TICKET_ROLE_NOT_HELD",
+                    "主体 " + loginName + " 未持有 " + TICKET_ROLE + " 角色，"
+                            + "无最小执行权限可签发（当前角色："
+                            + (granted.isEmpty() ? "无" : String.join("/", granted)) + "）");
         }
         Set<String> roles = Set.of(TICKET_ROLE);
 
@@ -227,6 +275,20 @@ public class PlatformExecutionTicketService {
     }
 
     // ── 审计 ───────────────────────────────────────────────
+
+    /**
+     * 写一条 DENY 审计，并返回（不抛出）对应的拒绝异常。
+     *
+     * <p>返回而非抛出是为了让调用点写成 {@code throw denyAndReject(...)}：
+     * 控制流一眼可见，且<b>审计与响应同处一行</b> —— 拆成「先 audit 再 throw」
+     * 早晚会出现某一处忘了留痕。
+     */
+    private TicketRejectedException denyAndReject(PlatformPrincipal principal, String tenantId,
+                                                  @Nullable String principalId, HttpStatus status,
+                                                  String reasonCode, String message) {
+        deny(principal, tenantId, principalId, reasonCode);
+        return new TicketRejectedException(status, reasonCode, message);
+    }
 
     private void allow(PlatformPrincipal principal, String tenantId,
                        String principalId, String jti) {

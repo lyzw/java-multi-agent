@@ -11,8 +11,8 @@ import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
+import cn.studykid.multiagent.api.platform.PlatformExecutionTicketService.TicketRejectedException;
 import cn.studykid.multiagent.api.platform.PlatformTenantServiceTest.FakeAuditPort;
 import cn.studykid.multiagent.api.platform.PlatformTenantServiceTest.FakeTenantPort;
 import cn.studykid.multiagent.api.security.PlatformSecurity;
@@ -124,15 +124,79 @@ class PlatformExecutionTicketServiceTest {
     }
 
     @Test
+    @DisplayName("⚠️ 租户没在 platform.tenant 登记 → 404 + TENANT_NOT_FOUND（2026-10-29 现场：app 侧有租户、平台侧没有）")
+    void unregisteredTenantIsNotFoundWithItsOwnCode() {
+        Harness h = new Harness(true, 60L);
+        // 刻意不 seedTenant：这就是「public.tenant 有、platform.tenant 没有」的漂移形态
+        h.seedPrincipal("lab-user", "ACTIVE", Set.of("AGENT_AUTHOR"));
+
+        TicketRejectedException ex = assertThrows(TicketRejectedException.class,
+                () -> h.service.issue(superAdmin(), TENANT_ID, "lab-user"));
+        assertEquals(HttpStatus.NOT_FOUND, ex.status());
+        assertEquals("TENANT_NOT_FOUND", ex.reasonCode());
+        assertEquals(1, h.rateLimit.calls, "登记校验排在限流之后，令牌该消耗");
+    }
+
+    @Test
+    @DisplayName("⚠️⚠️ 每条拒绝的响应码与审计 reason_code 同源同值（否则前端读不到真原因）")
+    void responseCodeAndAuditReasonCodeAreTheSameValue() {
+        // 缺陷现场：审计里写着 TENANT_NOT_FOUND，HTTP 响应却只有归一化的「资源不存在」，
+        // 操作者必须会查库才知道下一步。这条断言把「响应码 == 审计码」钉住。
+        assertSameCodeAsAudit(HttpStatus.SERVICE_UNAVAILABLE, "CHANNEL_DISABLED", h -> {
+            h.seedTenant(TenantLifecycle.ACTIVE);
+            h.seedPrincipal("lab-user", "ACTIVE", Set.of("AGENT_AUTHOR"));
+        }, false);
+        assertSameCodeAsAudit(HttpStatus.NOT_FOUND, "TENANT_NOT_FOUND", h -> {
+            h.seedPrincipal("lab-user", "ACTIVE", Set.of("AGENT_AUTHOR"));
+        }, true);
+        assertSameCodeAsAudit(HttpStatus.CONFLICT, "TENANT_NOT_ACTIVE", h -> {
+            h.seedTenant(TenantLifecycle.SUSPENDED);
+            h.seedPrincipal("lab-user", "ACTIVE", Set.of("AGENT_AUTHOR"));
+        }, true);
+        assertSameCodeAsAudit(HttpStatus.NOT_FOUND, "PRINCIPAL_NOT_FOUND", h -> {
+            h.seedTenant(TenantLifecycle.ACTIVE);
+        }, true);
+        assertSameCodeAsAudit(HttpStatus.CONFLICT, "PRINCIPAL_NOT_ACTIVE", h -> {
+            h.seedTenant(TenantLifecycle.ACTIVE);
+            h.seedPrincipal("lab-user", "LOCKED", Set.of("AGENT_AUTHOR"));
+        }, true);
+        assertSameCodeAsAudit(HttpStatus.CONFLICT, "TICKET_ROLE_NOT_HELD", h -> {
+            h.seedTenant(TenantLifecycle.ACTIVE);
+            h.seedPrincipal("lab-user", "ACTIVE", Set.of("STUDENT"));
+        }, true);
+    }
+
+    /** 断言某个闸门：抛出的状态/原因码与它自己写进审计的 reason_code 一致。 */
+    private static void assertSameCodeAsAudit(HttpStatus expectedStatus, String expectedCode,
+                                              java.util.function.Consumer<Harness> seed,
+                                              boolean enabled) {
+        Harness h = new Harness(enabled, 60L);
+        seed.accept(h);
+        TicketRejectedException ex = assertThrows(TicketRejectedException.class,
+                () -> h.service.issue(superAdmin(), TENANT_ID, "lab-user"),
+                "闸门 " + expectedCode + " 应当拒绝");
+        assertEquals(expectedStatus, ex.status(), expectedCode + " 的状态码不该漂");
+        assertEquals(expectedCode, ex.reasonCode());
+        assertEquals(expectedCode, h.audit.events.get(0).reasonCode(),
+                expectedCode + "：响应里读到的码必须是审计里查到的码");
+        // 文案必须带得动下一步：不含令牌，且把操作者需要的标识说出来
+        assertTrue(ex.getMessage().contains("lab-user")
+                        || ex.getMessage().contains(TENANT_ID)
+                        || ex.getMessage().contains(expectedCode)
+                        || ex.getMessage().contains("execution-ticket"),
+                expectedCode + " 的文案没给出任何可行动信息：" + ex.getMessage());
+    }
+
+    @Test
     @DisplayName("通道关闭（enabled=false）→ 503，且仍然留痕")
     void disabledChannelRejectsButStillAudits() {
         Harness h = new Harness(false, 60L);
         h.seedTenant(TenantLifecycle.ACTIVE);
         h.seedPrincipal("lab-user", "ACTIVE", Set.of("AGENT_AUTHOR"));
 
-        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+        TicketRejectedException ex = assertThrows(TicketRejectedException.class,
                 () -> h.service.issue(superAdmin(), TENANT_ID, "lab-user"));
-        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatusCode());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.status());
 
         PlatformAuditEvent event = h.audit.events.stream().findFirst().orElseThrow();
         assertEquals("DENY", event.decision());
@@ -140,7 +204,7 @@ class PlatformExecutionTicketServiceTest {
     }
 
     @Test
-    @DisplayName("被限流与限流故障都拒绝（fail-closed）")
+    @DisplayName("被限流与限流故障都拒绝（fail-closed），且两个码可区分")
     void rateLimitRejectionAndFailureBothRefuse() {
         Harness h = new Harness(true, 60L);
         h.seedTenant(TenantLifecycle.ACTIVE);
@@ -148,15 +212,18 @@ class PlatformExecutionTicketServiceTest {
 
         h.rateLimit.decision = RateLimitPort.Decision.REJECTED;
         assertEquals(HttpStatus.TOO_MANY_REQUESTS,
-                assertThrows(ResponseStatusException.class,
+                assertThrows(TicketRejectedException.class,
                         () -> h.service.issue(superAdmin(), TENANT_ID, "lab-user"))
-                        .getStatusCode());
+                        .status());
 
         h.rateLimit.decision = RateLimitPort.Decision.FAIL_CLOSED;
-        assertThrows(ResponseStatusException.class,
+        assertThrows(TicketRejectedException.class,
                 () -> h.service.issue(superAdmin(), TENANT_ID, "lab-user"));
         assertEquals(2, h.audit.events.stream()
                 .filter(e -> "DENY".equals(e.decision())).count());
+        // 两个码不同：「你调太快」与「限流组件坏了」是两份不同的运维动作
+        assertEquals("RATE_LIMITED", h.audit.events.get(0).reasonCode());
+        assertEquals("RATE_LIMIT_UNAVAILABLE", h.audit.events.get(1).reasonCode());
     }
 
     @Test
@@ -168,11 +235,15 @@ class PlatformExecutionTicketServiceTest {
             h.seedTenant(state);
             h.seedPrincipal("lab-user", "ACTIVE", Set.of("AGENT_AUTHOR"));
 
-            ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+            TicketRejectedException ex = assertThrows(TicketRejectedException.class,
                     () -> h.service.issue(superAdmin(), TENANT_ID, "lab-user"),
                     "状态 " + state + " 不应允许签发");
-            assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
+            assertEquals(HttpStatus.CONFLICT, ex.status());
+            assertEquals("TENANT_NOT_ACTIVE", ex.reasonCode());
             assertEquals("TENANT_NOT_ACTIVE", h.audit.events.get(0).reasonCode());
+            // 当前状态要出现在文案里：否则「为什么被拒」还得再查一次租户
+            assertTrue(ex.getMessage().contains(state),
+                    "文案应说明被拒的当前状态，实际：" + ex.getMessage());
         }
     }
 
@@ -181,15 +252,19 @@ class PlatformExecutionTicketServiceTest {
     void principalMustExistAndBeActive() {
         Harness missing = new Harness(true, 60L);
         missing.seedTenant(TenantLifecycle.ACTIVE);
-        assertEquals(HttpStatus.NOT_FOUND, assertThrows(ResponseStatusException.class,
-                () -> missing.service.issue(superAdmin(), TENANT_ID, "ghost")).getStatusCode());
+        TicketRejectedException notFound = assertThrows(TicketRejectedException.class,
+                () -> missing.service.issue(superAdmin(), TENANT_ID, "ghost"));
+        assertEquals(HttpStatus.NOT_FOUND, notFound.status());
+        assertEquals("PRINCIPAL_NOT_FOUND", notFound.reasonCode());
         assertEquals("PRINCIPAL_NOT_FOUND", missing.audit.events.get(0).reasonCode());
 
         Harness locked = new Harness(true, 60L);
         locked.seedTenant(TenantLifecycle.ACTIVE);
         locked.seedPrincipal("lab-user", "LOCKED", Set.of("AGENT_AUTHOR"));
-        assertEquals(HttpStatus.CONFLICT, assertThrows(ResponseStatusException.class,
-                () -> locked.service.issue(superAdmin(), TENANT_ID, "lab-user")).getStatusCode());
+        TicketRejectedException inactive = assertThrows(TicketRejectedException.class,
+                () -> locked.service.issue(superAdmin(), TENANT_ID, "lab-user"));
+        assertEquals(HttpStatus.CONFLICT, inactive.status());
+        assertEquals("PRINCIPAL_NOT_ACTIVE", inactive.reasonCode());
         assertEquals("PRINCIPAL_NOT_ACTIVE", locked.audit.events.get(0).reasonCode());
     }
 
@@ -200,9 +275,10 @@ class PlatformExecutionTicketServiceTest {
         h.seedTenant(TenantLifecycle.ACTIVE);
         h.seedPrincipal("lab-user", "ACTIVE", Set.of("STUDENT"));
 
-        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+        TicketRejectedException ex = assertThrows(TicketRejectedException.class,
                 () -> h.service.issue(superAdmin(), TENANT_ID, "lab-user"));
-        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
+        assertEquals(HttpStatus.CONFLICT, ex.status());
+        assertEquals("TICKET_ROLE_NOT_HELD", ex.reasonCode());
         assertEquals("TICKET_ROLE_NOT_HELD", h.audit.events.get(0).reasonCode());
         assertTrue(h.rateLimit.ticketTokens() > 0);
     }
@@ -211,9 +287,23 @@ class PlatformExecutionTicketServiceTest {
     @DisplayName("非 UUID 的 tenantId 先拒：否则审计写入会把 400 伪装成 500")
     void nonUuidTenantIdIsBadRequest() {
         Harness h = new Harness(true, 60L);
-        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+        TicketRejectedException ex = assertThrows(TicketRejectedException.class,
                 () -> h.service.issue(superAdmin(), "not-a-uuid", "lab-user"));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST, ex.status());
+        assertEquals("INVALID_TENANT_ID", ex.reasonCode());
+        assertTrue(h.audit.events.isEmpty(), "非 UUID 连审计都写不了，不该留半条记录");
+    }
+
+    @Test
+    @DisplayName("缺 loginName → 400 MISSING_LOGIN_NAME：票证不许匿名")
+    void blankLoginNameIsRejectedBeforeRateLimit() {
+        Harness h = new Harness(true, 60L);
+        h.seedTenant(TenantLifecycle.ACTIVE);
+        TicketRejectedException ex = assertThrows(TicketRejectedException.class,
+                () -> h.service.issue(superAdmin(), TENANT_ID, "  "));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.status());
+        assertEquals("MISSING_LOGIN_NAME", ex.reasonCode());
+        assertEquals(0, h.rateLimit.calls, "参数不合法不该消耗该租户的限流令牌");
     }
 
     @Test

@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.api.config.ConfigOverrideController;
+import cn.studykid.multiagent.api.platform.PlatformExecutionTicketService;
 import cn.studykid.multiagent.api.run.RunController.ErrorResponse;
 import cn.studykid.multiagent.api.security.CurrentPrincipal.UnauthenticatedException;
 import cn.studykid.multiagent.application.config.ConfigTighteningPolicy;
@@ -36,6 +37,27 @@ import cn.studykid.multiagent.ports.security.AccessDeniedException;
 public class ApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    /**
+     * 执行票证闸门拒绝 → 由闸门自己声明的状态码 + <b>稳定原因码</b>。
+     *
+     * <p>这是 {@link #handleResponseStatus(ResponseStatusException)} 的<b>刻意例外</b>：
+     * 那条归一按码给固定文案，对「资源不存在」是对的，但票证的八种拒绝
+     * 行动建议各不相同（去登记租户 / 走生命周期迁移 / 去授权 / 等一分钟），
+     * 塌成一句「资源不存在」就等于把原因只留在审计表里。
+     * 详见 {@code PlatformExecutionTicketService.TicketRejectedException} 的取舍。
+     *
+     * <p>消息内容由闸门生成，只含操作者本就知道的入参（租户 ID / 登录名 / 当前状态），
+     * 不含 SQL 与任何令牌。
+     */
+    @ExceptionHandler(PlatformExecutionTicketService.TicketRejectedException.class)
+    public ResponseEntity<ErrorResponse> handleTicketRejected(
+            PlatformExecutionTicketService.TicketRejectedException e) {
+        log.info("执行票证签发被拒: code={} status={} msg={}",
+                e.reasonCode(), e.status().value(), e.getMessage());
+        return ResponseEntity.status(e.status())
+                .body(new ErrorResponse(e.reasonCode(), e.getMessage()));
+    }
 
     /**
      * 授权拒绝 → 403。
