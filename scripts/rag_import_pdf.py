@@ -22,7 +22,8 @@ RAG 服务没有文件上传通道（`object_ref` 只存引用，正文不入库
 只有「正文从第几页起、附录从第几页起」需要按册给一次。
 
 幂等：UUID 由 (isbn, page) 经 uuid5 派生，重复执行同参数得到同 ID；
-生成的 SQL 全量 `ON CONFLICT DO NOTHING`，可反复跑。
+生成的 SQL 用 `ON CONFLICT DO UPDATE` 覆盖片段正文并把 `text_jieba` 清空，
+所以**改切分规则后重跑同一命令即可重灌**（旧正文/旧向量不会留在库里），可反复跑。
 """
 
 from __future__ import annotations
@@ -159,6 +160,102 @@ def section_of(printed: int, units: list[tuple[int, str, int]],
     return label or starter_label
 
 
+# ── 附录切分：按单元重切词表 ─────────────────────────────────────────
+# 整页一片段时，Unit 5 的词表埋在附录 p.134~139 那几片 1900 字里，
+# 同页还混着 Unit 4/Unit 6，section_path 只能给一个「附录」——
+# 学生查「第五单元的单词」时，这一片的表征被稀释到查不出来。
+WORDLIST_HEAD = "Words and expressions in each unit"
+WORDLIST_ALPHA = "Words and expressions in alphabetical order"
+UNIT_MARK_RE = re.compile(r"\bUnit\s+(\d{1,2})\b(?!\s*\(p)|\bStarter\b")
+# 附录里其它栏目的标题：出现即说明已经离开词表区。
+# ⚠️ 列表**按特异性排序**，先匹配到的算数——「Notes: …」这类页眉在拼写/读音规则页里
+# 也会复现，若让泛用的「Notes」先判，整页会被错标成「附录 · 注释」。
+APPENDIX_HEADS = [
+    ("Spelling rules", "语音"),
+    ("Pronunciation rules", "语音"),
+    ("Irregular verbs", "不规则动词表"),
+    ("Irreg ular verbs", "不规则动词表"),
+    ("Months and days", "月份与星期"),
+    ("Numbers Cardinal", "数字"),
+    ("Word partner", "词汇拓展"),
+    ("Word study", "词汇拓展"),
+    ("Word group", "词汇拓展"),
+    ("Sound file", "语音"),
+    ("My learning notes", "学习笔记"),
+    ("Grammar file", "语法"),
+    ("Proper nouns", "专有名词"),
+    ("Glossary", "术语表"),
+    ("Culture corner", "文化角"),
+    ("Notes", "注释"),
+]
+# 封底/版权页混进附录的情况：整页只有一句出版信息，却能在检索里拿到 top1（见 10-28 记录）。
+BACK_COVER_RE = re.compile(r"定价[:：]\s*\d|义务教育教科书\s*（|本套教材根据|编写团队")
+_CN_NUM = "零一二三四五六七八九十"
+
+
+def cn_unit(no: int) -> str:
+    """单元号的中文写法（1~12 够用；词表标题里要同时给中英两种形）。"""
+    if no <= 10:
+        return _CN_NUM[no]
+    if no < 20:
+        return "十" + _CN_NUM[no - 10]
+    return "十" + _CN_NUM[no // 10] + _CN_NUM[no % 10]
+
+
+def wordlist_section(no, units: list[tuple[int, str, int]]) -> str:
+    """词表片段的栏目路径，与正文的 `Unit N <标题>` 命名保持同一形状。"""
+    if no is None:
+        return "Starter 词表"
+    title = next((t for n, t, _start in units if n == no), "")
+    return ("Unit %d %s 词表" % (no, title)).strip()
+
+
+def wordlist_prefix(no) -> str:
+    """片段开头补一行标题：让「第五单元」这种中文问法也能命中。"""
+    if no is None:
+        return "Starter 单词表："
+    return "Unit %d（第%s单元）单词表：" % (no, cn_unit(no))
+
+
+def appendix_pieces(flat: str, units: list[tuple[int, str, int]], state: dict) -> list[tuple[str, str]]:
+    """把一页附录切成若干「按单元 / 按栏目」的片段。
+
+    状态机跨页延续：词表起始页之后的续页**不再重复** `Unit N` 标题，
+    所以当前单元记在 `state` 里，续页整页归给上一页留下的那个单元。
+    遇到 `Words and expressions in alphabetical order` 或其它栏目标题即退出词表区。
+
+    返回 (section_path, text) 列表；非词表页只返回一片，但栏目名比「附录」具体。
+    """
+    if WORDLIST_HEAD in flat:
+        state["in_wordlist"] = True
+    elif WORDLIST_ALPHA in flat or any(head in flat for head, _kind in APPENDIX_HEADS):
+        state["in_wordlist"] = False
+        state["unit"] = None
+    if not state.get("in_wordlist"):
+        kind = next((k for head, k in APPENDIX_HEADS if head in flat), None)
+        return [("附录 · " + kind, flat)] if kind else [("附录", flat)]
+
+    marks = list(UNIT_MARK_RE.finditer(flat))
+    pieces = []
+
+    def emit(label, body: str):
+        body = body.strip()
+        # 只丢「还没进任何单元」的栏目抬头行；已归属单元的内容一律保留，哪怕只剩几十字。
+        if not body or (label is None and len(body) < 40):
+            return
+        prefix = wordlist_prefix(label)
+        pieces.append((wordlist_section(label, units), prefix + " " + body))
+
+    cursor = 0
+    for m in marks:
+        # 标题行（页码 + 栏目名）归上一个单元；词表首页之前没有上一个单元，直接丢。
+        emit(state.get("unit"), flat[cursor:m.start()])
+        state["unit"] = None if m.group(0) == "Starter" else int(m.group(1))
+        cursor = m.start() + len(m.group(0))
+    emit(state.get("unit"), flat[cursor:])
+    return pieces or [("附录 · 词表", flat)]
+
+
 def build(args: argparse.Namespace) -> str:
     path = Path(args.pdf)
     file_hash = sha256_file(path)
@@ -178,6 +275,7 @@ def build(args: argparse.Namespace) -> str:
     chunks = []
     skipped = 0
     seen_pages: dict[int, int] = {}
+    wordlist_state: dict = {"in_wordlist": False, "unit": None}
     for idx, text in enumerate(pages, start=1):
         if idx <= args.skip_pages:
             continue
@@ -187,23 +285,28 @@ def build(args: argparse.Namespace) -> str:
             continue
         head = body[:400]
         markers = {m.group(0) for m in BOILERPLATE_RE.finditer(head)}
-        if len(markers) >= 2:
+        if len(markers) >= 2 or BACK_COVER_RE.search(body):
+            # 封底/版权页整页只有一句出版信息，却能拿到检索 top1（2026-10-28 实测），一律不入语料。
             skipped += 1
             continue
         flat = re.sub(r"\s+", " ", body)
-        # 页序标定偶尔失准会撞页码，同页第 2 个片段起加序号，否则派生 UUID 重复会被静默丢弃
-        part = seen_pages.get(pno, 0)
-        seen_pages[pno] = part + 1
-        chunks.append(
-            {
-                "id": derive(f"chunk|{args.isbn or args.title}|{pno}" + (f"#{part}" if part else "")),
-                "page": pno,
-                "section": section_of(pno, units, args.starter_label, args.appendix_page),
-                "role": classify(flat),
-                "text": flat,
-                "hash": hashlib.sha256(flat.encode()).hexdigest(),
-            }
-        )
+        section = section_of(pno, units, args.starter_label, args.appendix_page)
+        pieces = appendix_pieces(flat, units, wordlist_state) if section == "附录" \
+            else [(section, flat)]
+        for sec, text in pieces:
+            # 页序标定偶尔失准会撞页码，同页第 2 个片段起加序号，否则派生 UUID 重复会被静默丢弃
+            part = seen_pages.get(pno, 0)
+            seen_pages[pno] = part + 1
+            chunks.append(
+                {
+                    "id": derive(f"chunk|{args.isbn or args.title}|{pno}" + (f"#{part}" if part else "")),
+                    "page": pno,
+                    "section": sec,
+                    "role": classify(text),
+                    "text": text,
+                    "hash": hashlib.sha256(text.encode()).hexdigest(),
+                }
+            )
 
     w = []
     w.append("-- 由 scripts/rag_import_pdf.py 生成：%s（%d 页 → %d 片段；页序偏移 %d、目录解析出 %d 个单元，"
@@ -271,7 +374,27 @@ ON CONFLICT (document_id) DO NOTHING;"""
                    c["page"], sql_str(c["section"]), len(c["text"]), sql_str(c["hash"]))
             )
         w.append(",\n".join(rows))
-        w.append("ON CONFLICT (chunk_id) DO NOTHING;")
+        # ⚠️ DO UPDATE 而不是 DO NOTHING：重切片会改写同一片段（第 1 片的派生 UUID 不变），
+        #    DO NOTHING 会让旧正文留在库里、旧向量继续被召回——表现为「改了脚本但检索没变」的假象。
+        #    text_jieba 清成 '' 是**功能性**的：ChunkIndexer 的待索引判据是
+        #    `text_jieba='' OR 无向量行`，不清它则改了正文的片段永远不会重新嵌入（静默陈旧）。
+        w.append("""ON CONFLICT (chunk_id) DO UPDATE SET
+    role = EXCLUDED.role, text = EXCLUDED.text, page_number = EXCLUDED.page_number,
+    section_path = EXCLUDED.section_path, char_end = EXCLUDED.char_end,
+    content_hash = EXCLUDED.content_hash, text_jieba = '';"""
+        )
+        # 剪掉本次不再产出的旧片段（改切分规则后被拆走、或被判为封底而丢弃的那些页）。
+        # ⚠️ 判据必须是「不在本次产出的 ID 集合里」，不能写成「属于本文档」——
+        #    后者会在同一事务里把刚 INSERT 进来的片段一并删光（2026-10-28 实测踩过，两册清零后重灌）。
+        # ⚠️ 只删**没被引用过**的：rag_answer_citation 是 ON DELETE CASCADE，
+        #    删掉被引用的片段会连带抹掉历史答案的证据链。
+        keep = ",".join("'%s'" % c["id"] for c in chunks)
+        w.append("""
+DELETE FROM rag.rag_chunk c
+WHERE c.document_id = %s::uuid AND c.tenant_id = rag_current_tenant()
+  AND c.chunk_id <> ALL(ARRAY[%s]::uuid[])
+  AND NOT EXISTS (SELECT 1 FROM rag_answer_citation ac WHERE ac.chunk_id = c.chunk_id);"""
+        % (sql_str(str(document_id)), keep))
 
     w.append("COMMIT;")
     w.append("")
