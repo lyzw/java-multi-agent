@@ -298,7 +298,11 @@ public enum ReasonCode {
     ROUTING_POLICY_UNAVAILABLE("A"),
 
     /**
-     * 路由模型给出的候选目标<b>不在路由策略允许的目标集合内</b>（运行期拒绝委派）。
+     * 路由模型给出的候选目标<b>不在路由策略点名的目标集合内</b>（运行期拒绝委派）。
+     *
+     * <p>「策略点名的目标集」= 规则 {@code target} ∪ {@code default_target}
+     * （`PolicySpec.declaredTargets()`），由引擎在<b>采纳任何候选之前</b>判，
+     * {@code on_conflict=CANDIDATE_WINS} 的改判同样要判（否则是一条绕过收窄的后门）。
      *
      * <p>⚠️ 与 {@link #DELEGATION_TARGET_NOT_DECLARED} 严格分列：
      * 后者是「候选目标<b>不在父声明的委派拓扑</b>内」（连拓扑都没过），
@@ -306,6 +310,40 @@ public enum ReasonCode {
      * （拓扑过了、路由收窄没过）。前者查子 Agent 声明，后者查路由策略内容。
      */
     ROUTING_TARGET_NOT_ALLOWED("A"),
+
+    // ── S3 追加：运行期规则引擎（10 号设计 §6）──────────────────────
+    // ⚠️ 本批只补**失败出口**，不把 §6.1 的九个稳定码逐个抄进 ReasonCode：
+    //    RULE_MATCH / SEMANTIC_MATCH / DEFAULT_TARGET / ROUTING_CONFLICT / EVAL_ERROR_SKIPPED
+    //    是「决策成功、委派照走」的出口，它们的事实落在
+    //    {@code agent_invocation.routing_decision} 的 {@code resolution} 键里，
+    //    而 reason_code 的契约是「失败/终止原因」。
+    //    把成功码写进 reason_code 会让「委派成功」在指标上被统计成一次拒绝，
+    //    而两套真相迟早不一致（与 §7 债 5 同一个理由）。
+
+    /**
+     * 全部规则未命中且策略声明 {@code no_match_action=REJECT}（运行期拒绝委派）。
+     *
+     * <p>⚠️ 与 {@link #ROUTING_TARGET_NOT_ALLOWED} <b>必须分列</b>，两者排查方向相反：
+     * <ul>
+     *   <li>{@code ROUTING_TARGET_NOT_ALLOWED} = 「<b>模型选的那个</b>策略不许」
+     *       → 查为什么模型会指向它（含被注入的可能）；</li>
+     *   <li>本码 = 「<b>没有任何规则命中这次输入</b>」（{@code RULES_ONLY} 下模型的候选
+     *       根本不参与判定）→ 查规则的覆盖面，这是<b>配置缺口</b>不是越界试探。</li>
+     * </ul>
+     * 合成一个码会让「补一条规则」和「查谁在试探边界」指向同一个原因码，告警分诊就废了。
+     */
+    ROUTING_NO_MATCH_REJECTED("A"),
+
+    /**
+     * 某条规则求值异常且其 {@code onError=REJECT}，整次路由中止（运行期拒绝委派）。
+     *
+     * <p>⚠️ <b>这是「配置缺陷」而不是「业务结果」</b>（10 号设计 §6.2 铁律
+     * 「ERROR 永不等于 MATCH」的落点）：已发布的策略在运行期判不出来，
+     * 意味着库里的行与引擎口径不一致，或输入出现了规则未预期的形态。
+     * ⚠️ 与 {@link #ROUTING_POLICY_UNAVAILABLE} 分列：后者是「策略<b>读不到</b>」，
+     * 本码是「策略<b>读到了但判不动</b>」—— 前者查发布与引用，后者查规则内容与 {@code onError}。
+     */
+    ROUTING_EVAL_ERROR_REJECTED("A"),
 
     // ── 第二十五批追加：输出契约 / 路由策略获得独立生命周期（可被停用）──
     // ⚠️ 同样遵循「只追加、不改写」：已发布常量一律不改名、不复用、不改语义。
@@ -365,7 +403,27 @@ public enum ReasonCode {
      * <p>触发条件（设计文档 §13.1）：目标解析后的<b>实际 IP</b>落在
      * loopback / 私网 / 链路本地 / 云元数据地址段，或重定向后命中上述任一条。
      */
-    HTTP_EGRESS_BLOCKED("执行后");
+    HTTP_EGRESS_BLOCKED("执行后"),
+
+    /**
+     * 路由策略<b>自身</b>不合法（发布期拒绝）。
+     *
+     * <p>⚠️ <b>S4 追加</b>（10 号设计 §4.5）：与既有三个路由码<b>全部分列</b> ——
+     * <ul>
+     *   <li>{@code ROUTING_POLICY_NOT_PUBLISHED} = 内容没问题，只是没走发布流程；</li>
+     *   <li>{@code ROUTING_POLICY_DEPRECATED} = 内容没问题，是被停用；</li>
+     *   <li>{@code ROUTING_POLICY_UNAVAILABLE} = <b>运行期</b>读不到依据；</li>
+     *   <li>本码 = <b>内容本身判不过</b>（谓词文法越界、V3 词汇表对不上、
+     *       V4 自相矛盾、V8 样本回放与预期不符……）。</li>
+     * </ul>
+     * 合并的后果是「排查方向被带偏」：拿着「未发布」去查发布流程，
+     * 而真因是规则里把 {@code in.orderId} 拼成了 {@code in.oderId}。
+     *
+     * <p>⚠️ <b>这是「配置缺陷」而不是「业务结果」</b>：策略判不过就<b>拒发</b>，
+     * 绝不降级成「先收下、跑起来再说」—— 后者正是本仓库反复出现的
+     * 「看起来生效、实际不生效」缺陷类。
+     */
+    ROUTING_POLICY_INVALID("发布期");
 
     private final String phase;
 

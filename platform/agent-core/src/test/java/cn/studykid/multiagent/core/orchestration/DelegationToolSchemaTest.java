@@ -87,22 +87,72 @@ class DelegationToolSchemaTest {
                         + "否则模型按 Schema 合法发出的字段被闸门拒 —— 那是两套语义")
                 .isEqualTo(false);
         assertThat(inputSchema.get("required"))
-                .as("targetAgentId 是必填（缺失即 PARAM_SCHEMA_FAIL）")
-                .isEqualTo(List.of("targetAgentId"));
+                .as("targetAgentId 与 input 同为必填（缺失即 PARAM_SCHEMA_FAIL · 10 号文档 §8 · G-4）")
+                .isEqualTo(List.of("targetAgentId", "input"));
     }
 
     @Test
-    @DisplayName("⚠️ 版本不得出现在 Schema 里（目标版本由服务端按父声明解析）")
-    void schemaMustNotExposeTargetVersion() {
+    @DisplayName("⚠️ 版本不得出现在**入参**里（目标版本由服务端按父声明解析）")
+    void parameterSchemaMustNotExposeTargetVersion() {
         // ⚠️ 模型若能指定版本，就能要求漂移到别的 release ——
         //    与「委派目标固定 release」直接冲突。
+        //    ⚠️ 禁止的是**入参**字段，不是候选里的说明：
+        //    candidates 展示的是父**已经固定**的 release，模型改不了它（10 号设计 §4）。
         Map<String, Object> rendered = DelegationToolSchema
                 .forOrchestration(sequential("child-a")).orElseThrow().render();
-        String text = rendered.toString();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> schema = (Map<String, Object>) rendered.get(
+                DelegationToolSchema.TOOL_NAME);
 
-        assertThat(text)
-                .as("⚠️⚠️ Schema 里不得出现版本字段（模型无权指定 release）")
+        assertThat(schema.get("inputSchema").toString())
+                .as("⚠️⚠️ 参数 Schema 里不得出现版本字段（模型无权指定 release）")
                 .doesNotContain("releaseVersion", "version", "agentVersion");
+    }
+
+    @Test
+    @DisplayName("⚠️⚠️ 富候选：契约里的职责/场景/能力必须进模型可见的 candidates")
+    void contractFieldsBecomeRichCandidates() {
+        AgentOrchestration orchestration = new AgentOrchestration(OrchestrationMode.ROUTER,
+                List.of(new ChildAgentRef("child-a", 7, true, contract(
+                        "按订单号查询订单状态、发货与物流进度",
+                        List.of("用户询问单个订单的状态/物流/发货时间"),
+                        List.of("批量统计、报表、财务对账"),
+                        List.of("order.read"), 10)),
+                        ChildAgentRef.required("child-b", 1)),
+                "policy@1", 2, 3, 30_000L, DelegationFailurePolicy.FAIL_FAST, null);
+
+        List<Map<String, Object>> candidates = candidatesOf(DelegationToolSchema
+                .forOrchestration(orchestration).orElseThrow().render());
+
+        assertThat(candidates).hasSize(2);
+        assertThat(candidates.get(0))
+                .as("⚠️ 只有裸 id 的 enum 等于让模型凭标识符字面意思猜目标")
+                .containsEntry("id", "child-a")
+                .containsEntry("version", 7)
+                .containsEntry("description", "按订单号查询订单状态、发货与物流进度")
+                .containsEntry("useWhen", List.of("用户询问单个订单的状态/物流/发货时间"))
+                .containsEntry("avoidWhen", List.of("批量统计、报表、财务对账"))
+                .containsEntry("capabilities", List.of("order.read"))
+                .containsEntry("priority", 10);
+
+        assertThat(candidates.get(1))
+                .as("⚠️ 无契约的候选只给 id 与版本：拿 Agent 名字拼一段「像职责」的文案，"
+                        + "模型会把它当成父的正式声明来依赖")
+                .containsOnlyKeys("id", "version");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> candidatesOf(Map<String, Object> rendered) {
+        Map<String, Object> schema = (Map<String, Object>) rendered.get(
+                DelegationToolSchema.TOOL_NAME);
+        return (List<Map<String, Object>>) schema.get("candidates");
+    }
+
+    private static RoutingContract contract(String intent, List<String> useWhen,
+                                            List<String> avoidWhen, List<String> capabilities,
+                                            int priority) {
+        return new RoutingContract(intent, useWhen, avoidWhen, capabilities,
+                Map.of("type", "object"), priority, RoutingContract.Source.INHERITED);
     }
 
     @Test

@@ -26,6 +26,17 @@
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-ports</artifactId>
     </dependency>
+    <!--
+      10 号设计 §7 债 5：路由策略的**文法与守卫**只允许有一份实现。
+      应用层（发布期校验）与 worker（运行期决策）与 api（管理台 dry-run）
+      都调用 agent-routing 的同一个 PolicyCodec / PublishGuards / RoutingEngine；
+      任何一侧自建解析器，就会出现「发布时说合法、跑起来判不同」。
+      ⚠️ agent-routing 只认识 agent-core，因此这不引入任何反向依赖。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-routing</artifactId>
+    </dependency>
     <!-- 配置属性绑定（Spring Boot 4.1 模块化 starter，按需显式引入） -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

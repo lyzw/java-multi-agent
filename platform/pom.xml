@@ -29,10 +29,17 @@
     <!-- 版本基线集中管理，禁止子模块覆盖 -->
     <spring-boot.version>4.1.1</spring-boot.version>
     <jspecify.version>1.0.0</jspecify.version>
+    <!-- 路由引擎的正则求值器：线性时间、无回溯（10 号设计 §4.4「防 ReDoS」）。 -->
+    <re2j.version>1.8</re2j.version>
   </properties>
 
   <modules>
     <module>agent-core</module>
+    <!--
+      路由规则引擎紧跟 agent-core：它只认识领域层（+ JSON 解析与 RE2/J），
+      方向由 ModuleDependencyDirectionTest 守住。
+    -->
+    <module>agent-routing</module>
     <module>agent-ports</module>
     <!--
       ⚠️ **顺序有意**：测试支撑件排在 agent-application 之前，
@@ -62,6 +69,11 @@
       <dependency>
         <groupId>cn.studykid.multiagent</groupId>
         <artifactId>agent-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.multiagent</groupId>
+        <artifactId>agent-routing</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

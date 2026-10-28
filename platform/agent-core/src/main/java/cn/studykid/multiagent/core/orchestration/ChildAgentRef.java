@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.core.orchestration;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 固定版本的子 Agent 引用（06 变更补充「AgentDefinition 增补」· {@code childAgentRefs[]}）。
@@ -17,11 +18,16 @@ import org.jspecify.annotations.NonNull;
  * @param agentId        子 Agent 标识（<b>同租户</b>，跨租户引用一律拒绝）
  * @param releaseVersion 子 Agent 的<b>固定版本号</b>（>0）
  * @param required       是否为必选子 Agent（false = 可选，失败不必然导致父失败）
+ * @param routingContract 父在本路由语境下为该子声明的<b>路由契约</b>（10 §3.1）；
+ *                        {@code null} = 尚未声明 —— 仅 {@code EXPLICIT} 拓扑（无路由）
+ *                        允许，一旦策略要按语义/规则选目标，缺契约就是
+ *                        「Router 只看见一个 id」的老毛病（S1 要治它）
  */
 public record ChildAgentRef(
         @NonNull String agentId,
         int releaseVersion,
-        boolean required
+        boolean required,
+        @Nullable RoutingContract routingContract
 ) {
 
     public ChildAgentRef {
@@ -33,6 +39,17 @@ public record ChildAgentRef(
             throw new IllegalArgumentException(
                     "子 Agent 引用必须固定版本号（禁止 latest），收到: " + releaseVersion);
         }
+    }
+
+    /**
+     * 无路由契约的引用（S1 之前的形态）。
+     *
+     * <p>⚠️ 保留它不是为了兼容旧代码，而是因为<b>「不路由」确实是一种合法拓扑</b>：
+     * 只有顺序/显式委派才需要契约，纯 LEAF 之外声明子 Agent 但不做路由选择时，
+     * 缺契约不是缺陷。
+     */
+    public ChildAgentRef(@NonNull String agentId, int releaseVersion, boolean required) {
+        this(agentId, releaseVersion, required, null);
     }
 
     /**
@@ -51,6 +68,20 @@ public record ChildAgentRef(
      */
     public static @NonNull ChildAgentRef optional(@NonNull String agentId, int releaseVersion) {
         return new ChildAgentRef(agentId, releaseVersion, false);
+    }
+
+    /**
+     * @param agentId        子 Agent 标识
+     * @param releaseVersion 固定版本号
+     * @param required       是否必选
+     * @param contract       父侧路由契约
+     * @return 带路由契约的引用
+     */
+    public static @NonNull ChildAgentRef withContract(@NonNull String agentId,
+                                                      int releaseVersion,
+                                                      boolean required,
+                                                      @NonNull RoutingContract contract) {
+        return new ChildAgentRef(agentId, releaseVersion, required, contract);
     }
 
     /**

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.multiagent</groupId>
+    <artifactId>java-saas-agent-platform</artifactId>
+    <version>1.0.1-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>agent-routing</artifactId>
+  <name>agent-routing :: 路由规则引擎</name>
+  <description>
+    RouteAgent 的规则转发引擎（10 号设计）：封闭谓词文法 + 确定性求值 +
+    有界 DNF 规范化 + 发布期静态守卫 V1-V10。
+
+    ⚠️ **独立成模块的理由**：同一份实现必须同时被三方使用 ——
+    发布期校验（application）、运行期决策（worker）、管理台 dry-run（api）。
+    任何一方各写一份，就出现「发布时说合法、跑起来判不同」，
+    而 dry-run 面板给出的结论也不再是运行期的结论（§7 债 5）。
+
+    ⚠️ **零框架依赖**：无 Spring、无持久层、无网络。
+    决策必须是纯函数 f(策略版本, 规范化输入, 拓扑) —— 一旦引入外部调用或时钟，
+    §6.1 的「同输入重放必得同目标」就无法成立。
+    唯一的例外是 RE2/J（线性时间正则，防 ReDoS，见 §4.4 硬限制）。
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-core</artifactId>
+    </dependency>
+    <!-- 策略 JSON 的解析（谓词文法的唯一入口）。Jackson 3，随 Spring Boot 4.1 基线。 -->
+    <dependency>
+      <groupId>tools.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <!--
+      ⚠️ 正则是本引擎唯一允许「看起来无穷」的地方：Java 原生 Pattern 有回溯爆炸，
+      一个恶意/失手写的模式就能让一次委派卡住。RE2/J 是线性时间自动机，
+      代价是不支持反向引用等个别语法 —— 那些语法在**解析期**就被拒。
+    -->
+    <dependency>
+      <groupId>com.google.re2j</groupId>
+      <artifactId>re2j</artifactId>
+      <version>${re2j.version}</version>
+    </dependency>
+  </dependencies>
+</project>

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.example.invalid/agent-platform/routing-policy.schema.json",
   "title": "RoutingPolicy",
-  "description": "路由策略（多级 Agent v1.1 第十四批）。\n\n⚠️ 本 Schema 的内容模型是「本批取舍」，不是评审冻结的模型：\n06/07/08 原文只规定「ROUTER 模式按固定版本路由策略选择子 Agent」，\n从未规定策略的内容模型。此处刻意取最小可扩展的一档 —— 一个策略枚举 + 一个有序目标列表，\n不引入条件表达式 DSL（可配置判定逻辑一旦进配置，就同时欠下求值确定性、发布期校验、\n求值失败语义三件事，那属于评审未决范围）。评审若冻结了不同模型，本 Schema 需相应调整。",
+  "description": "路由策略（多级 Agent v1.1 · 10 号设计 §4）。\n\n内容模型已从「一个策略枚举 + 一个有序目标列表」换成**有界规则引擎**：\nmode 决定「谁选目标」，evaluation 是有序规则列表，input_schema 是规则唯一能引用的词汇表。\n旧的 EXPLICIT_TARGETS / ORDERED_FALLBACK 随未上线的旧模型一并删除，映射为\nSEMANTIC + no_match_action=REJECT / SEMANTIC + DEFAULT_TARGET。\n\n⚠️ 文法、上限与守卫 V1-V10 由服务端 agent-routing 模块判定，本 Schema 只表达结构 ——\n能在这里表达的只有枚举与必填，节点数 / 嵌套深度 / 正则长度 / DNF 展开积都查不出来。\n\n⚠️ 传输形态：inputSchema / evaluation / sampleSet 是**JSON 文本**而不是嵌套对象 ——\nAPI 层只做原样透传，不在入口重新序列化（重新序列化会改写空白与键序，\n而内容指纹按「这一行内容没变」计算，入口改写等于每次发布都说「你改过」）。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,8 +10,10 @@
     "id",
     "tenantId",
     "status",
-    "strategy",
-    "targets",
+    "mode",
+    "inputSchema",
+    "evaluation",
+    "noMatchAction",
     "revision"
   ],
   "properties": {
@@ -38,23 +40,50 @@
       "$ref": "common.schema.json#/$defs/lifecycleStatus",
       "description": "生命周期状态。⚠️ DRAFT / VALIDATED 的策略不可被 ROUTER Agent 引用（先引用再发布是绕过发布流程的后门）。"
     },
-    "strategy": {
+    "mode": {
       "type": "string",
-      "description": "选择策略。EXPLICIT_TARGETS = 候选必须命中 targets，否则拒绝委派（不降级）；ORDERED_FALLBACK = 候选未命中时按 targets 的声明顺序取第一个目标。",
+      "description": "谁选目标（差别必须写进 javadoc 与 admin 文案 —— 名字许诺了做不到的事，配置方就会按那个许诺来设计）。\nRULES_ONLY = 只由规则决定，模型零参与（推荐默认，确定性最强，Schema 不含 candidates）；\nRULE_FIRST = 规则优先，无命中再走 default_target / 语义；\nSEMANTIC = 由模型按 §3 路由契约选目标。",
       "enum": [
-        "EXPLICIT_TARGETS",
-        "ORDERED_FALLBACK"
+        "RULES_ONLY",
+        "RULE_FIRST",
+        "SEMANTIC"
       ]
     },
-    "targets": {
-      "type": "array",
-      "description": "允许的目标 Agent 标识（有序）。\n\n⚠️ 顺序在 ORDERED_FALLBACK 下就是路由语义的一部分，同一组目标换个次序是另一种路由行为 —— 内容指纹按声明顺序计算。\n⚠️ 不含版本号：目标的固定版本由父 Agent 的 childAgentRefs 提供（版本真相只有一份）。\n⚠️ 必须显式声明：空数组不是「允许任意」。",
-      "uniqueItems": true,
-      "minItems": 1,
-      "maxItems": 16,
-      "items": {
-        "$ref": "common.schema.json#/$defs/id"
-      }
+    "inputSchema": {
+      "type": "string",
+      "description": "路由输入词汇表（JSON 文本，顶层必须 type=object）。规则里的 in.* 只能引用它声明过的字段 —— 词汇表外的字段连报错的机会都没有，只会永远不命中。\n⚠️ 字段名写错不会让策略求值失败：守卫 V3 在发布期比对 in.* 路径 ∈ 本词汇表且类型相容，就是拦这一类缺陷。",
+      "minLength": 1
+    },
+    "evaluation": {
+      "type": "string",
+      "description": "有序规则列表（JSON 文本，Rule 数组）。\n⚠️ 数组次序就是求值次序（首个命中即止），所以它进内容指纹且不重排；ordinal 由服务端按数组顺序重排后回填，不信任传入值。\n⚠️ RULES_ONLY / RULE_FIRST 下必须非空（无规则的策略在这两种 mode 下无从选择目标）；SEMANTIC 允许空。",
+      "minLength": 1
+    },
+    "defaultTarget": {
+      "type": "string",
+      "description": "兜底目标。⚠️ noMatchAction=DEFAULT_TARGET 时必须非空 —— 否则「降级」降到哪里去是一个未定义值。",
+      "maxLength": 128
+    },
+    "noMatchAction": {
+      "type": "string",
+      "description": "无任何规则命中时的处置。REJECT = 拒绝委派（不降级）；DEFAULT_TARGET = 交给 defaultTarget。\n⚠️ 兜底目标同样必须走完运行期准入校验（拓扑包含 → 版本固定 → 逐跳授权 → 深度/次数/超时/预算）：降级只作用于选择，不作用于准入。",
+      "enum": [
+        "REJECT",
+        "DEFAULT_TARGET"
+      ]
+    },
+    "onConflict": {
+      "type": "string",
+      "description": "规则命中与模型候选不一致时的裁决（仅 RULE_FIRST / SEMANTIC 有意义）。RULE_WINS = 规则优先（默认）；CANDIDATE_WINS = 模型候选优先。",
+      "enum": [
+        "RULE_WINS",
+        "CANDIDATE_WINS"
+      ]
+    },
+    "sampleSet": {
+      "type": "string",
+      "description": "发布期回放样本（JSON 文本，Sample 数组）。⚠️ 样本走的是与运行期同一个引擎实现，不是另一份镜像 —— 「样本回放通过」与「运行期命中」必须是同一句话。守卫 V8 逐条回放、V9 要求每个有规则指向的目标至少被一条样本命中。",
+      "minLength": 2
     },
     "revision": {
       "type": "integer",
@@ -62,7 +91,7 @@
     },
     "configFingerprint": {
       "type": "string",
-      "description": "内容指纹。⚠️ 必须由服务端按内容计算（客户端若能指定，就等于能指定「内容没变」这个证明，而路由策略正是「路由行为是什么」的判定依据）。",
+      "description": "内容指纹。⚠️ 必须由服务端按内容计算（客户端若能指定，就等于能指定「内容没变」这个证明，而路由策略正是「路由行为是什么」的判定依据）。\n⚠️ 键序不参与计算（PG 的 jsonb 会重排对象键），数组次序参与计算（规则次序是路由语义）。",
       "minLength": 1,
       "maxLength": 128
     },
@@ -79,6 +108,392 @@
     },
     "updatedBy": {
       "$ref": "common.schema.json#/$defs/id"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "noMatchAction": {
+            "const": "DEFAULT_TARGET"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "defaultTarget"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "enum": [
+              "RULES_ONLY",
+              "RULE_FIRST"
+            ]
+          }
+        }
+      },
+      "then": {
+        "description": "非空规则数组（JSON 文本）：只拦「[]」这一种空形态，其余交给服务端守卫 V1。"
+      }
+    }
+  ],
+  "$defs": {
+    "Rule": {
+      "type": "object",
+      "description": "一条规则（evaluation 数组的元素）。这里列出的是文法而不是传输结构 —— evaluation 以 JSON 文本承载，本 $defs 供阅读与工具复用。",
+      "additionalProperties": false,
+      "required": [
+        "ruleId",
+        "target",
+        "when"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "⚠️ 服务端按数组顺序重排后回填，传入值不采信（两份序号不一致的策略文本无从解释）。"
+        },
+        "ruleId": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "可读标识，进决策日志与守卫报告。"
+        },
+        "target": {
+          "$ref": "common.schema.json#/$defs/id",
+          "description": "委派目标。⚠️ 必须 ∈ 父 Agent 的 childAgentRefs（守卫 V2，发布期闭包校验）。"
+        },
+        "when": {
+          "$ref": "#/$defs/Predicate"
+        },
+        "onError": {
+          "type": "string",
+          "description": "求值出错（词汇表缺字段、类型不符）时的处置。SKIP = 跳过本条继续判下一条；REJECT = 整次路由失败。⚠️ ERROR ≠ MATCH —— 把求值错误当成不命中会让「字段写错」伪装成「规则没匹配上」。",
+          "enum": [
+            "SKIP",
+            "REJECT"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "给人看的注释，不参与求值。"
+        }
+      }
+    },
+    "Predicate": {
+      "description": "封闭文法（10 号设计 §4.4）：没有脚本、没有模板、没有插值、没有外部调用。每个节点都是**单键对象**，未知算子与未知键一律拒绝 —— 宽松解析会把「算子名写错」变成「这个条件恒不成立」。\n取值位置：字符串 \"in.a.b\" / \"ctx.channel\" 是引用，其它字符串是字面量；要把恰好长成引用形状的字符串当字面量，写 {\"lit\":\"in.topic\"}。",
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "const"
+          ],
+          "properties": {
+            "const": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "and"
+          ],
+          "properties": {
+            "and": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/Predicate"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "or"
+          ],
+          "properties": {
+            "or": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/Predicate"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/Predicate"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "eq"
+          ],
+          "properties": {
+            "eq": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "$ref": "#/$defs/Value"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "in"
+          ],
+          "properties": {
+            "in": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "左值是标量引用，右值只能是字面量数组（不允许「取另一个输入字段当集合」）。数组字段做成员判断请用 anyOf。",
+              "items": [
+                {
+                  "$ref": "#/$defs/Value"
+                },
+                {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "null"
+          ],
+          "properties": {
+            "null": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "$ref": "#/$defs/Value"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "startsWith"
+          ],
+          "properties": {
+            "startsWith": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "$ref": "#/$defs/Value"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "endsWith"
+          ],
+          "properties": {
+            "endsWith": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "$ref": "#/$defs/Value"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "contains"
+          ],
+          "properties": {
+            "contains": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "字符串子串，非集合语义。",
+              "items": {
+                "$ref": "#/$defs/Value"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "anyOf"
+          ],
+          "properties": {
+            "anyOf": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "两侧皆集合，交集非空。左值必须是数组字段。",
+              "items": [
+                {
+                  "$ref": "#/$defs/Value"
+                },
+                {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "re"
+          ],
+          "properties": {
+            "re": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "⚠️ 由 RE2/J 求值，不是 Java 原生 Pattern —— 原生正则的回溯爆炸（ReDoS）会让「一条规则」变成一次不可预算的线上故障。长度 ≤128，超限即拒而非降级。",
+              "items": [
+                {
+                  "$ref": "#/$defs/Value"
+                },
+                {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Value": {
+      "description": "取值位置：in.* / ctx.* 引用，JSON 标量字面量，或 {\"lit\":\"...\"} 转义。",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lit"
+          ],
+          "properties": {
+            "lit": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "CtxName": {
+      "type": "string",
+      "description": "ctx.* 的封闭词汇表。⚠️ tenantId 只来自服务端，样本无权声明它（身份注入的口子不在测试装置里重开）；now.utcDate 是唯一的时间词汇，只允许日粒度比较且必须进决策快照。",
+      "enum": [
+        "tenantId",
+        "channel",
+        "locale",
+        "run.attempt",
+        "run.depth",
+        "now.utcDate"
+      ]
+    },
+    "Sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "input",
+        "expectTarget"
+      ],
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "input": {
+          "type": "object",
+          "description": "路由输入样例（in.* 的来源）；input_schema 之外的字段在投影阶段就丢掉。"
+        },
+        "expectTarget": {
+          "$ref": "common.schema.json#/$defs/id"
+        },
+        "via": {
+          "type": "string",
+          "description": "期望的出口码，默认 RULE_MATCH。⚠️ 只能期望这四种成功态；期望一个失败态码等于把「引擎报错」当成通过条件。",
+          "enum": [
+            "RULE_MATCH",
+            "SEMANTIC_MATCH",
+            "DEFAULT_TARGET",
+            "NO_MATCH_REJECTED"
+          ]
+        },
+        "ctx": {
+          "type": "object",
+          "description": "固定的上下文（不含租户）：不固定 channel / run.attempt / now.utcDate，同一条样本在不同日子会回放成不同结果，V8 就退化成一个时灵时不时的检查。"
+        }
+      }
     }
   }
 }

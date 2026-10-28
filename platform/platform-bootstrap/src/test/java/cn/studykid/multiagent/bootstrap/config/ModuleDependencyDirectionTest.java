@@ -49,9 +49,27 @@ class ModuleDependencyDirectionTest {
     private static final Set<String> PORTS_ALLOWED_PLATFORM_DEPS = Set.of(
             "agent-core", "agent-test-support");
 
-    /** 允许 agent-application 依赖的平台模块（应用层不认识基础设施层）。 */
+    /**
+     * 允许 agent-application 依赖的平台模块（应用层不认识基础设施层）。
+     *
+     * <p>⚠️ <b>{@code agent-routing} 是正向依赖，不是例外</b>：
+     * 路由引擎位于 {@code agent-core} 之上、应用层之下，它不认识任何外层模块
+     * （由 {@link #ROUTING_ALLOWED_PLATFORM_DEPS} 单独锁死）。
+     * 发布期守卫必须与运行期决策用<b>同一份</b>实现 —— 否则「发布时判合法、
+     * 跑起来判不同」，而 dry-run 面板给出的结论也不再是运行期的结论（10 号设计 §7 债 5）。
+     */
     private static final Set<String> APPLICATION_ALLOWED_PLATFORM_DEPS = Set.of(
-            "agent-core", "agent-ports", "agent-test-support");
+            "agent-core", "agent-ports", "agent-routing", "agent-test-support");
+
+    /**
+     * 允许 agent-routing 依赖的平台模块（<b>只有领域层</b>）。
+     *
+     * <p>⚠️ 路由引擎必须同时服务发布校验、运行期决策与管理台 dry-run，
+     * 这三处分布在三个模块里；引擎一旦被任何一侧的实现拖住，
+     * 另一侧就只能再造一份 —— 而「两套引擎迟早漂移」正是 10 号设计 §7 债 5 要避免的事。
+     * 因此它只能认识领域层，外加 JDK 与 JSON/RE2 这类纯技术库。
+     */
+    private static final Set<String> ROUTING_ALLOWED_PLATFORM_DEPS = Set.of("agent-core");
 
     /**
      * 允许外层模块引用的 infrastructure 包前缀。
@@ -109,6 +127,22 @@ class ModuleDependencyDirectionTest {
     }
 
     @Test
+    @DisplayName("✅ 路由引擎（agent-routing）只认识领域层")
+    void routingEngineDependsOnCoreOnly() {
+        List<String> violations = new ArrayList<>();
+        for (String dep : compileScopePlatformDeps("agent-routing")) {
+            if (!ROUTING_ALLOWED_PLATFORM_DEPS.contains(dep)) {
+                violations.add("agent-routing → " + dep);
+            }
+        }
+
+        assertThat(violations)
+                .as("⛔ 路由引擎依赖了平台外层模块：同一份引擎要服务发布校验、运行期决策与 dry-run，"
+                        + "被任何一侧实现拖住，另一侧就只再造一份 —— 两套引擎迟早漂移")
+                .isEmpty();
+    }
+
+    @Test
     @DisplayName("✅ 应用层（agent-application）不依赖基础设施层")
     void applicationDoesNotDependOnInfrastructure() {
         List<String> violations = new ArrayList<>();
@@ -154,6 +188,26 @@ class ModuleDependencyDirectionTest {
 
         assertThat(violations)
                 .as("⛔ 端口层引用了外层实现")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("✅ 路由引擎主源码不引用外层任何类")
+    void routingSourcesDoNotReferenceOuterLayers() {
+        List<String> violations = new ArrayList<>();
+        for (String imported : importsOf("agent-routing")) {
+            if (imported.startsWith("cn.studykid.multiagent.application.")
+                    || imported.startsWith("cn.studykid.multiagent.infrastructure.")
+                    || imported.startsWith("cn.studykid.multiagent.worker.")
+                    || imported.startsWith("cn.studykid.multiagent.api.")) {
+                violations.add("agent-routing → " + imported);
+            }
+        }
+
+        assertThat(violations)
+                .as("⛔ 路由引擎引用了外层：pom 里没有该依赖时，这类 import 只能靠"
+                        + "「传递依赖碰巧带进来」成立 —— 那比直接依赖更隐蔽，"
+                        + "因为它会在某天换一个上游版本时突然编译失败")
                 .isEmpty();
     }
 

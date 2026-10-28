@@ -3,12 +3,13 @@
   "id": "orders-router",
   "tenantId": "tenant_001",
   "name": "订单路由策略",
-  "description": "订单类请求的路由规则：先按显式目标命中，未命中则按降级顺序取第一个。",
+  "description": "订单类请求先按规则分派：带单号的状态查询给 order-query，退款给 order-refund；无命中拒绝委派，不降级。",
   "status": "DRAFT",
-  "strategy": "ORDERED_FALLBACK",
-  "targets": [
-    "agent_order_query",
-    "agent_order_refund"
-  ],
+  "mode": "RULES_ONLY",
+  "inputSchema": "{\"type\": \"object\", \"properties\": {\"topic\": {\"type\": \"string\", \"enum\": [\"order_status\", \"order_refund\"]}, \"orderId\": {\"type\": \"string\"}}, \"required\": [\"topic\"]}",
+  "evaluation": "[{\"ruleId\": \"r-order-status\", \"target\": \"agent_order_query\", \"when\": {\"and\": [{\"eq\": [\"in.topic\", \"order_status\"]}, {\"not\": {\"null\": [\"in.orderId\"]}}]}, \"onError\": \"SKIP\", \"note\": \"带单号查状态\"}, {\"ruleId\": \"r-order-refund\", \"target\": \"agent_order_refund\", \"when\": {\"eq\": [\"in.topic\", \"order_refund\"]}, \"onError\": \"SKIP\", \"note\": \"退款\"}]",
+  "noMatchAction": "REJECT",
+  "onConflict": "RULE_WINS",
+  "sampleSet": "[{\"label\": \"带单号查状态\", \"input\": {\"topic\": \"order_status\", \"orderId\": \"SO-1\"}, \"expectTarget\": \"agent_order_query\"}, {\"label\": \"退款\", \"input\": {\"topic\": \"order_refund\"}, \"expectTarget\": \"agent_order_refund\"}]",
   "revision": 1
 }
