@@ -133,12 +133,20 @@ class RunClaimFencingIT {
         T apply(Connection conn) throws Exception;
     }
 
-    /** 重置所有非终态 Run，避免多轮测试互相干扰。 */
+    /**
+     * 清掉上一例留下的非终态 Run，避免多轮测试互相干扰。
+     *
+     * <p>⚠️ <b>只能删，不能「改回 QUEUED」</b>：{@code trg_run_state_guard} 只放行
+     * {@code QUEUED → RUNNING/CANCELLED} 与 {@code RUNNING → 终态}，
+     * 把已领取的 Run 就地写回 QUEUED 会被状态机判非法迁移 ——
+     * 而「接管」恰恰是这条守卫要保护的场景，改库口径等于把被测约束自己拆掉。
+     * 删除也不破坏不变式：Run 及其子行（{@code ON DELETE CASCADE}）本就是测试产物。
+     */
     @BeforeEach
     void resetPendingRuns() throws Exception {
         inTenantScope(conn -> {
             try (var ps = conn.prepareStatement(
-                    "UPDATE run SET state='QUEUED', lease_owner=NULL, lease_expires_at=NULL "
+                    "DELETE FROM run "
                   + "WHERE tenant_id=?::uuid AND state IN ('QUEUED','RUNNING')")) {
                 ps.setString(1, tenantId);
                 ps.executeUpdate();

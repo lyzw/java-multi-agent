@@ -66,11 +66,19 @@ class FencingTakeoverIT {
         snapshotId = FaultInjectionSupport.snapshotIdBySlug(adminPool, "t-a");
     }
 
+    /**
+     * 清掉上一例留下的非终态 Run。
+     *
+     * <p>⚠️ <b>只能删，不能「改回 QUEUED」</b>：{@code trg_run_state_guard} 只放行
+     * {@code QUEUED → RUNNING/CANCELLED} 与 {@code RUNNING → 终态}，
+     * 把已领取的 Run 写回 QUEUED 会被判非法迁移 ——
+     * 本类测的正是「旧 fencing token 不得再写」，用改库绕过状态机等于拆掉被测约束。
+     */
     @BeforeEach
     void resetPendingRuns() throws Exception {
         inTenant(conn -> {
             try (var ps = conn.prepareStatement(
-                    "UPDATE run SET state='QUEUED', lease_owner=NULL, lease_expires_at=NULL "
+                    "DELETE FROM run "
                   + "WHERE tenant_id=?::uuid AND state IN ('QUEUED','RUNNING')")) {
                 ps.setString(1, tenantId);
                 ps.executeUpdate();
@@ -182,13 +190,16 @@ class FencingTakeoverIT {
     void terminalRunCannotBeTakenOver() throws Exception {
         for (String terminal : List.of("SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT")) {
             String runId = createQueuedRun();
-            // QUEUED → 终态（合法迁移），并留下已过期租约（模拟残留）
+            // ⚠️ 必须先领取再进终态：状态机只放行 QUEUED → RUNNING/CANCELLED 与
+            //    RUNNING → 终态，「QUEUED 直接成功」本身就是非法迁移 ——
+            //    绕不过去正是这条守卫的意义（夹具不能假设它有旁路）。
+            claimRepo.claimSpecificRun(tenantId, runId, "w-old", Duration.ofSeconds(30));
+            // RUNNING → 终态，并留下已过期租约（模拟残留）
             inTenant(conn -> {
                 try (var ps = conn.prepareStatement(
                         "UPDATE run SET state=?::run_state, completed_at=now(), "
                       + "result_payload='{\"terminal\":true}'::jsonb, "
-                      + "lease_owner='w-ghost', "
-                      + "lease_expires_at=now() - interval '1 hour' "
+                      + "lease_expires_at = now() - interval '1 hour' "
                       + "WHERE tenant_id=?::uuid AND run_id=?::uuid")) {
                     ps.setString(1, terminal);
                     ps.setString(2, tenantId);
@@ -217,7 +228,7 @@ class FencingTakeoverIT {
             }))
                     .as("终态 %s 迁出必须被 enforce_run_state_transition 拒绝", terminal)
                     .isInstanceOf(Exception.class)
-                    .hasMessageContaining("终态");
+                    .hasMessageContaining("非法状态迁移");
         }
     }
 

@@ -406,7 +406,8 @@ public class PermissionResolver implements ClosureResolver {
                     childDef.configFingerprint(),
                     ClosureFingerprint.of(childClosure),
                     childClosure.orchestration().mode(),
-                    depth + 1));
+                    depth + 1,
+                    ref.routingContract()));
         }
         return children;
     }

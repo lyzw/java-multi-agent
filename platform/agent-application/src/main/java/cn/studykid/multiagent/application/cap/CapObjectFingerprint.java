@@ -136,7 +136,7 @@ public final class CapObjectFingerprint {
     }
 
     /**
-     * 计算路由策略的内容指纹（多级 Agent v1.1 · 第十四批）。
+     * 计算路由策略的内容指纹（10 号设计 §4.2）。
      *
      * <p>⚠️ <b>为什么策略也必须由服务端算</b>：与 Agent / Tool / Skill / 契约同理 ——
      * {@code config_fingerprint} 是「这一行内容没变」的证明；
@@ -145,9 +145,16 @@ public final class CapObjectFingerprint {
      * 而路由策略恰恰是「路由行为是什么」的判定依据 ——
      * 它的内容变了却指纹不变，等于「路由输出悄悄换了一套规则」。
      *
-     * <p>⚠️ <b>targets 的顺序必须参与计算</b>：{@code ORDERED_FALLBACK} 的降级
-     * 语义依赖声明顺序，同一组目标换个次序就是<b>另一种路由行为</b>。
-     * 若按集合计算指纹，改顺序会被读成「内容没变」—— 那正是本指纹要防的事。
+     * <p>⚠️ <b>规则数组的<b>顺序必须参与计算</b>（与参数策略指纹相反）：
+     * {@code evaluation} 的语义就是「按 ordinal 升序求值、首个成立即命中」，
+     * 同一组规则换个次序写就是<b>另一种路由行为</b>。
+     * 故这里用 {@link #canonicalJsonTree}（只规范键序与空白、<b>不排数组</b>），
+     * 而不是 {@code ClosureFingerprint} 那种「顶层数组排序」的规范化 ——
+     * 后者对「同参数多策略取交集」是对的，对有序规则是<b>错的</b>。
+     *
+     * <p>⚠️ <b>键序与空白要规范掉</b>：这三段文本会经 {@code jsonb} 往返，
+     * PostgreSQL 重排对象键并调整空白；若不规范化，「从库里读回来重算指纹」
+     * 就会和「发布时算的指纹」不一致，把没变的内容读成变了。
      *
      * <p>⚠️ <b>不包含时间戳</b>：理由与其他对象一致。
      */
@@ -156,12 +163,52 @@ public final class CapObjectFingerprint {
         root.put("type", "routing_policy");
         root.put("id", def.policyId());
         root.put("version", def.version());
-        root.put("strategy", def.strategy().name());
-        // ⚠️ 按**声明顺序**逐个写入，不用集合：顺序是路由语义的一部分。
-        ArrayNode targets = root.putArray("targets");
-        def.targets().forEach(targets::add);
+        root.put("mode", def.mode().name());
+        root.put("inputSchema", canonicalJsonTree(def.inputSchema()));
+        root.put("evaluation", canonicalJsonTree(def.evaluation()));
+        root.put("defaultTarget", def.defaultTarget() == null ? "" : def.defaultTarget());
+        root.put("noMatchAction", def.noMatchAction().name());
+        root.put("onConflict", def.onConflict().name());
+        root.put("sampleSet", canonicalJsonTree(def.sampleSet()));
         root.put("schemaVersion", def.schemaVersion());
         return PREFIX + sha256Hex(MAPPER.writeValueAsString(root));
+    }
+
+    /**
+     * 把一段 JSON 文本规范化成「键按字典序、空白固定、<b>数组保持原序</b>」的等价文本。
+     *
+     * <p>不合法 JSON <b>不抛异常</b>：原样返回 —— 指纹层不是校验层，
+     * 在此抛异常会把「配置缺陷」变成「指纹计算失败」，掩盖真正的原因码。
+     *
+     * @param raw 原始 JSON 文本
+     * @return 规范化文本；不合法时原样返回
+     */
+    private static @NonNull String canonicalJsonTree(@NonNull String raw) {
+        try {
+            JsonNode parsed = MAPPER.readTree(raw);
+            if (parsed == null || parsed.isMissingNode()) {
+                return raw;
+            }
+            return MAPPER.writeValueAsString(sortObjectKeys(parsed));
+        } catch (RuntimeException e) {
+            return raw;
+        }
+    }
+
+    private static @NonNull JsonNode sortObjectKeys(@NonNull JsonNode node) {
+        if (node.isArray()) {
+            ArrayNode kept = MAPPER.createArrayNode();
+            node.forEach(child -> kept.add(sortObjectKeys(child)));
+            return kept;
+        }
+        if (node.isObject()) {
+            ObjectNode sorted = MAPPER.createObjectNode();
+            node.properties().stream()
+                    .sorted((a, b) -> a.getKey().compareTo(b.getKey()))
+                    .forEach(entry -> sorted.set(entry.getKey(), sortObjectKeys(entry.getValue())));
+            return sorted;
+        }
+        return node;
     }
 
     /**

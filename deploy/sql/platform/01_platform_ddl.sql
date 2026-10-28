@@ -1159,6 +1159,9 @@ CREATE TABLE public.agent_invocation (
     started_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
     requested_target_agent_id uuid,
+    routing_decision jsonb,
+    policy_ref text,
+    policy_fingerprint text,
     CONSTRAINT agent_invocation_depth_ck CHECK ((depth > 0)),
     CONSTRAINT agent_invocation_fencing_ck CHECK ((fencing_token > 0)),
     CONSTRAINT agent_invocation_parent_ck CHECK ((((depth = 1) AND (parent_invocation_id IS NULL)) OR ((depth > 1) AND (parent_invocation_id IS NOT NULL)))),
@@ -1180,7 +1183,28 @@ COMMENT ON TABLE public.agent_invocation IS '委派调用运行记录（06 变�
 -- Name: COLUMN agent_invocation.requested_target_agent_id; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.agent_invocation.requested_target_agent_id IS '模型给出的原始候选目标（路由降级**前**）。与 target_agent_id（实际生效的目标）并存：两者不同即说明发生了 ORDERED_FALLBACK 路由降级。⚠️ 存量行为 NULL：当时模型原始候选只在日志里留痕、没有任何持久化副本，无法可靠回填（据日志回填 = 用猜测冒充事实，比空值更有害）——NULL 的语义是「**当时未记录**」，**不是**「没有降级」。';
+COMMENT ON COLUMN public.agent_invocation.requested_target_agent_id IS '模型给出的原始候选目标（路由降级**前**）。与 target_agent_id（实际生效的目标）并存：两者不同即说明发生了降级（no_match_action=DEFAULT_TARGET 降到兜底目标，或 on_conflict=CANDIDATE_WINS 采纳了模型候选）。⚠️ 存量行为 NULL：当时模型原始候选只在日志里留痕、没有任何持久化副本，无法可靠回填（据日志回填 = 用猜测冒充事实，比空值更有害）——NULL 的语义是「**当时未记录**」，**不是**「没有降级」。';
+
+
+--
+-- Name: COLUMN agent_invocation.routing_decision; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.agent_invocation.routing_decision IS '路由**决策快照**（10 号设计 §6.1）：policyRef / policyFingerprint / mode / canonicalInputSha256 / evaluationTrace / resolution（稳定码）/ matchedRuleId / matchedRuleSha256 / candidateFromModel / finalTarget。⚠️ **不存 canonicalInput 明文**：重放不变式只需要它的 SHA-256，而本表的红线是「只存摘要不存明文」（与 input_digest 同口径）——把路由输入抄进 jsonb 等于新开一条明文旁路。⚠️ 非 ROUTER 模式（LEAF/ORCHESTRATE）与存量行为 NULL，语义是「当时未做路由决策」；据此判断降级与否要看 requested_target_agent_id，不要用本列 IS NULL。';
+
+
+--
+-- Name: COLUMN agent_invocation.policy_ref; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.agent_invocation.policy_ref IS '本次决策所用的路由策略**固定版本引用**（id@version，与 routing_decision->>policyRef 同值）。⚠️ 单列存储是因为重放不变式的主键半边（policyRef, canonicalInputSha256）要能**直接查询/建索引**，不该依赖 jsonb 里的一个键 —— 键名一改，历史查询就静默返回 0 行（本项目反复出现的「看起来在查、实际查不到」缺陷类）。';
+
+
+--
+-- Name: COLUMN agent_invocation.policy_fingerprint; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.agent_invocation.policy_fingerprint IS '决策当时那份策略的**内容指纹**（cap_routing_policy.config_fingerprint 的副本）。⚠️ 是副本而非外键：策略版本行不可发布后修改（forbid_published_def_mutation），指纹理论上不会漂移；但「策略后来被 DEPRECATED / 治理侧回填」这类变更仍会改变读到的元数据，运行记录必须冻结**当时**看到的值，否则历史 Run 的复核结论会随治理动作变。';
 
 
 --
@@ -1943,20 +1967,28 @@ CREATE TABLE public.cap_routing_policy (
     tenant_id uuid NOT NULL,
     policy_id text NOT NULL,
     version integer NOT NULL,
-    strategy text NOT NULL,
-    targets jsonb NOT NULL,
+    mode text NOT NULL,
+    input_schema jsonb NOT NULL,
+    evaluation jsonb NOT NULL,
+    default_target text,
+    no_match_action text NOT NULL,
+    on_conflict text NOT NULL,
+    sample_set jsonb DEFAULT '[]'::jsonb NOT NULL,
     config_fingerprint text NOT NULL,
     schema_version integer DEFAULT 1 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     published_at timestamp with time zone,
     lifecycle_state public.cap_lifecycle_state DEFAULT 'DRAFT'::public.cap_lifecycle_state NOT NULL,
-    CONSTRAINT cap_routing_policy_fingerprint_ck CHECK (((config_fingerprint IS NOT NULL) AND (length(config_fingerprint) > 0))),
-    CONSTRAINT cap_routing_policy_strategy_ck CHECK ((strategy = ANY (ARRAY['EXPLICIT_TARGETS'::text, 'ORDERED_FALLBACK'::text]))),
-    CONSTRAINT cap_routing_policy_targets_ck CHECK (
+    CONSTRAINT cap_routing_policy_conflict_ck CHECK ((on_conflict = ANY (ARRAY['RULE_WINS'::text, 'CANDIDATE_WINS'::text]))),
+    CONSTRAINT cap_routing_policy_default_target_ck CHECK (((no_match_action <> 'DEFAULT_TARGET'::text) OR (default_target IS NOT NULL))),
+    CONSTRAINT cap_routing_policy_eval_ck CHECK (
 CASE
-    WHEN (jsonb_typeof(targets) = 'array'::text) THEN (jsonb_array_length(targets) > 0)
-    ELSE false
+    WHEN (mode = ANY (ARRAY['RULES_ONLY'::text, 'RULE_FIRST'::text])) THEN ((jsonb_typeof(evaluation) = 'array'::text) AND (jsonb_array_length(evaluation) > 0))
+    ELSE (jsonb_typeof(evaluation) = 'array'::text)
 END),
+    CONSTRAINT cap_routing_policy_fingerprint_ck CHECK (((config_fingerprint IS NOT NULL) AND (length(config_fingerprint) > 0))),
+    CONSTRAINT cap_routing_policy_mode_ck CHECK ((mode = ANY (ARRAY['RULES_ONLY'::text, 'RULE_FIRST'::text, 'SEMANTIC'::text]))),
+    CONSTRAINT cap_routing_policy_nomatch_ck CHECK ((no_match_action = ANY (ARRAY['REJECT'::text, 'DEFAULT_TARGET'::text]))),
     CONSTRAINT cap_routing_policy_version_ck CHECK ((version > 0))
 );
 
@@ -1967,21 +1999,56 @@ ALTER TABLE ONLY public.cap_routing_policy FORCE ROW LEVEL SECURITY;
 -- Name: TABLE cap_routing_policy; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.cap_routing_policy IS '路由策略（多级 Agent v1.1 第十四批 · MA-T05/MA-T15）。按 (tenant_id, policy_id, version) 寻址；Agent 的 routingPolicyRef 必须指向已发布的固定版本。';
+COMMENT ON TABLE public.cap_routing_policy IS '路由策略（10 号设计 §4.2 · 取代第十四批的「策略枚举 + 有序目标列表」）。按 (tenant_id, policy_id, version) 寻址；Agent 的 routingPolicyRef 必须指向已发布的固定版本。文法与守卫由 agent-routing 的 PolicyCodec/PublishGuards 判定，本表只存文本与行级一致性。';
 
 
 --
--- Name: COLUMN cap_routing_policy.strategy; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN cap_routing_policy.mode; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.cap_routing_policy.strategy IS '选择策略。EXPLICIT_TARGETS = 候选必须命中集合，否则拒绝（不降级）；ORDERED_FALLBACK = 候选未命中时按 targets 顺序取第一个。';
+COMMENT ON COLUMN public.cap_routing_policy.mode IS '谁选目标。RULES_ONLY = 只由规则决定，模型零参与（推荐默认，确定性最强）；RULE_FIRST = 规则优先，无命中再走 default_target/语义；SEMANTIC = 由模型按 §3 契约选目标。⚠️ 旧的 EXPLICIT_TARGETS / ORDERED_FALLBACK 已随未上线的旧模型删除。';
 
 
 --
--- Name: COLUMN cap_routing_policy.targets; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN cap_routing_policy.input_schema; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.cap_routing_policy.targets IS '允许的目标 Agent 标识（有序）。顺序在 ORDERED_FALLBACK 下降级语义下有意义。⚠️ 不含版本号：目标的固定版本由父 Agent 的 childAgentRefs 提供 —— 版本真相只有一份。';
+COMMENT ON COLUMN public.cap_routing_policy.input_schema IS '路由输入词汇表（JSON 对象）。规则里的每个 in.<path> 必须在此声明且类型相容（守卫 V3）—— 字段名拼错的规则不会报错，只会永远不命中，于是「写了不生效」在线上表现为「经常走兜底」。';
+
+
+--
+-- Name: COLUMN cap_routing_policy.evaluation; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_routing_policy.evaluation IS '有序规则列表（JSON 数组）。⚠️ 数组顺序是路由语义（首个命中即止），因此内容指纹计算时**保留数组顺序**，只递归排序对象键 —— 与 ClosureFingerprint 的做法刻意不同。';
+
+
+--
+-- Name: COLUMN cap_routing_policy.default_target; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_routing_policy.default_target IS '兜底目标；no_match_action=DEFAULT_TARGET 时必填（与代码侧 CapRoutingPolicyDef 同口径，两处都得拒才不会出现库能存、代码造不出）。⚠️ 不含版本号：目标的固定版本由父 Agent 的 childAgentRefs 提供 —— 版本真相只有一份。';
+
+
+--
+-- Name: COLUMN cap_routing_policy.no_match_action; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_routing_policy.no_match_action IS '无命中处置。REJECT = 拒绝委派（不猜）；DEFAULT_TARGET = 降级到 default_target。兜底必须指名道姓，「取列表第一个」已删除。';
+
+
+--
+-- Name: COLUMN cap_routing_policy.on_conflict; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_routing_policy.on_conflict IS '规则命中与模型候选不一致时的裁决。RULE_WINS = 规则赢（默认）；CANDIDATE_WINS = 候选赢。仅在 mode 让模型参与时有意义。';
+
+
+--
+-- Name: COLUMN cap_routing_policy.sample_set; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_routing_policy.sample_set IS '发布期回放样本（JSON 数组，可为 []）。守卫 V8/V9 用它把「策略实际会怎么路由」变成发布期就能看到的证据。⚠️ 样本不得声明 ctx.tenantId：租户只来自服务端（G-6）。';
 
 
 --

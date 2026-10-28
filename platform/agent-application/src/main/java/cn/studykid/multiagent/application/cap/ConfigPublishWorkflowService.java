@@ -21,7 +21,7 @@ import cn.studykid.multiagent.core.cap.ConfigPublishCommand;
 import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.ConfigRollbackCommand;
-import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
+import cn.studykid.multiagent.core.cap.ReasonCode;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
 import cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort;
@@ -30,6 +30,10 @@ import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort.Decision;
 import cn.studykid.multiagent.ports.persistence.ConfigReleasePort;
 import cn.studykid.multiagent.ports.persistence.Page;
+import cn.studykid.multiagent.routing.PolicyCodec;
+import cn.studykid.multiagent.routing.PolicySpec;
+import cn.studykid.multiagent.routing.PublishGuards;
+import cn.studykid.multiagent.routing.RoutingConfigException;
 
 /**
  * 权威配置变更的三步工作流（P6R4 · 管理端点）。
@@ -531,14 +535,12 @@ public class ConfigPublishWorkflowService {
         for (ConfigPublishPayload.RoutingPolicySpec spec : payload.routingPolicies()) {
             int version = routingPolicies.findLatest(tenantId, spec.policyId())
                     .map(CapRoutingPolicyDef::version).orElse(0) + 1;
-            RoutingStrategy strategy = parseStrategy(spec.strategy());
-            CapRoutingPolicyDef draft = new CapRoutingPolicyDef(tenantId, spec.policyId(),
-                    version, strategy, spec.targets(),
-                    // ⚠️ 占位指纹：内容指纹**不包含**自身，故可先占位再算
-                    "pending", 1, now, null);
+            CapRoutingPolicyDef draft = toPolicyDef(tenantId, spec, version, now);
             String fingerprint = CapObjectFingerprint.of(draft);
-            policyDefs.add(new CapRoutingPolicyDef(tenantId, spec.policyId(), version, strategy,
-                    spec.targets(), fingerprint, 1, now, null));
+            policyDefs.add(new CapRoutingPolicyDef(tenantId, spec.policyId(), version,
+                    draft.mode(), draft.inputSchema(), draft.evaluation(), draft.defaultTarget(),
+                    draft.noMatchAction(), draft.onConflict(), draft.sampleSet(),
+                    fingerprint, 1, now, null, null));
         }
         Long baseline = resolveBaseline ? resolveBaseline(tenantId, payload) : null;
         return new ConfigPublishCommand(ConfigRelease.Scope.TENANT, tenantId, baseline,
@@ -547,24 +549,50 @@ public class ConfigPublishWorkflowService {
     }
 
     /**
-     * 解析路由策略的选择策略名。
+     * 策略草稿 → 定义行，并在<b>申请阶段</b>就把文法与守卫跑完。
      *
-     * <p>⚠️ <b>大小写不敏感但不接受别名</b>：只认
-     * {@code EXPLICIT_TARGETS} / {@code ORDERED_FALLBACK} 两个枚举名。
-     * 「宽容地猜一个相近的名字」会让「策略写错了」变成「策略静默换了语义」——
-     * 路由行为随之改变，而作者以为自己写的是另一个。
+     * <p>⚠️ <b>为什么在这里就判，而不是等到父 Agent 发布时</b>：
+     * 策略文本进了库才被发现不合法，就等于允许一份「永远跑不通」的配置存在 ——
+     * 引用它的 Agent 会在<b>运行期</b>报 {@code NO_MATCH}，
+     * 而排查的人看到的是「路由经常走兜底」，不会想到是规则里把字段名拼错了。
+     * 这正是本仓库反复出现的「看起来生效、实际不生效」缺陷类。
      *
-     * @param raw 策略名
-     * @return 选择策略
-     * @throws IllegalArgumentException 策略名非法
+     * <p>⚠️ <b>此处只判 V3~V10，V2/V6 是退化的</b>：
+     * 策略<b>单独发布</b>时没有父声明，{@code allowedTargets} 只能取「策略自己提到的目标」
+     * （见 {@link PolicyCodec#parseStandalone}）。父声明的 {@code childAgentRefs}
+     * 由 {@code AgentPublishClosureValidator} 在父 Agent 发布时判 —— 那里 V2/V6 才有意义。
+     * 两处都判、各判各的那几项，缺一处就会漏（父侧漏「策略根本发布不进来」，
+     * 本侧漏「库里一堆跑不通的策略」）。
+     *
+     * @param tenantId 租户
+     * @param spec     客户端提交的策略草稿
+     * @param version  服务端分配的版本号
+     * @param now      服务端时间
+     * @return 定义行（内容为占位指纹，由调用方替换）
+     * @throws cn.studykid.multiagent.core.cap.ConfigPublishRejectedException 文法或守卫不过
      */
-    private static @NonNull RoutingStrategy parseStrategy(@NonNull String raw) {
+    private static @NonNull CapRoutingPolicyDef toPolicyDef(
+            @NonNull String tenantId, ConfigPublishPayload.@NonNull RoutingPolicySpec spec,
+            int version, @NonNull Instant now) {
+        // 构造与解析都走 RoutingPolicyDrafts —— dry-run 面板拼的是同一段文本，
+        // 两处若各写一遍，「试跑通过的草稿」与「发布受理的草稿」就会分叉。
+        CapRoutingPolicyDef draft = RoutingPolicyDrafts.toDef(tenantId, spec, version, now);
+        PolicySpec parsed;
         try {
-            return RoutingStrategy.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("未知的路由策略选择策略: " + raw
-                    + "（合法值: EXPLICIT_TARGETS / ORDERED_FALLBACK）", e);
+            parsed = RoutingPolicyDrafts.parse(draft);
+        } catch (RoutingConfigException e) {
+            throw new ConfigPublishRejectedException(ReasonCode.ROUTING_POLICY_INVALID,
+                    "routingPolicy", "路由策略 " + spec.policyId() + " v" + version + " 不合法："
+                            + e.where() + " → " + e.getMessage());
         }
+        PublishGuards.Report report = PublishGuards.check(parsed, tenantId,
+            java.time.LocalDate.now(java.time.ZoneOffset.UTC));
+        if (!report.publishable()) {
+            throw new ConfigPublishRejectedException(ReasonCode.ROUTING_POLICY_INVALID,
+                    "routingPolicy", "路由策略 " + spec.policyId() + " v" + version + " 未通过发布期守卫："
+                            + PublishGuards.render(report));
+        }
+        return draft;
     }
 
     /**

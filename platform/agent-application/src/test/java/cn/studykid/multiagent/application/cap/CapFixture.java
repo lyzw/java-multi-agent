@@ -27,7 +27,9 @@ import cn.studykid.multiagent.core.cap.ConfigObjectVersion;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
 import cn.studykid.multiagent.core.cap.CapabilityRiskLevel;
 import cn.studykid.multiagent.core.cap.McpTrustTier;
-import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
+import cn.studykid.multiagent.core.orchestration.ConflictPolicy;
+import cn.studykid.multiagent.core.orchestration.NoMatchAction;
+import cn.studykid.multiagent.core.orchestration.RoutingMode;
 import cn.studykid.multiagent.core.monitoring.AuthzWatermark;
 import cn.studykid.multiagent.ports.mcp.McpManifestPort;
 import cn.studykid.multiagent.ports.persistence.AuthzVersionPort;
@@ -348,18 +350,31 @@ final class CapFixture {
     /**
      * 登记一个路由策略定义行。
      *
-     * @param tenantId  租户标识
-     * @param policyId  策略标识
-     * @param version   策略版本号
-     * @param strategy  路由策略
-     * @param targets   有序目标列表
-     * @param published 是否已发布（未发布不可被 Agent 引用）
+     * <p>⚠️ <b>夹具把「目标列表」翻译成策略文本</b>（10 号设计 §4.1 之后的新形态）：
+     * 每个目标一条<b>可满足</b>规则（{@code in.topic == case-N}）<b>加一条命中它的样本</b> ——
+     * 目标因此出现在策略文本里，受 V2「目标 ∈ 父声明」约束。
+     * 之所以必须给样本：V9 拒「有规则指向但没有任何样本命中」的目标，
+     * V4 拒永假条件；用 {@code {"const":false}} 之类的占位条件搭夹具，
+     * 发布期守卫会把每一个用例都拦掉，那样夹具就等于不能用。
+     * 这样旧夹具的意图（「这条策略允许这几个子」）不用改语义就能表达，
+     * 而<b>不用在每个测试里手抄一段谓词 JSON</b>（手抄的样本迟早和引擎口径分叉）。
+     *
+     * <p><b>取值词法</b>：{@code eq} 的两个操作数是<b>裸字符串</b> ——
+     * {@code "in.topic"} 是输入引用、{@code "case-1"} 是字面量（见 {@link PredicateCodec}）。
+     *
+     * @param tenantId      租户标识
+     * @param policyId      策略标识
+     * @param version       策略版本号
+     * @param noMatchAction 无命中处置（{@code DEFAULT_TARGET} = 降级到列表首元，等价旧的有序降级）
+     * @param targets       目标列表
+     * @param published     是否已发布（未发布不可被 Agent 引用）
      * @return 本夹具
      */
     @NonNull CapFixture withRoutingPolicy(@NonNull String tenantId, @NonNull String policyId,
-                                          int version, @NonNull RoutingStrategy strategy,
+                                          int version, @NonNull NoMatchAction noMatchAction,
                                           @NonNull List<String> targets, boolean published) {
-        return withRoutingPolicy(tenantId, policyId, version, strategy, targets, published, null);
+        return withRoutingPolicy(tenantId, policyId, version, noMatchAction, targets,
+                published, null);
     }
 
     /**
@@ -368,25 +383,106 @@ final class CapFixture {
      * @param tenantId       租户标识
      * @param policyId       策略标识
      * @param version        策略版本号
-     * @param strategy       路由策略
-     * @param targets        有序目标列表
+     * @param noMatchAction  无命中处置
+     * @param targets        目标列表
      * @param published      是否已发布
      * @param lifecycleState 生命周期状态（{@code null} = 未记录）
      * @return 本夹具
      */
     @NonNull CapFixture withRoutingPolicy(@NonNull String tenantId, @NonNull String policyId,
-                                          int version, @NonNull RoutingStrategy strategy,
+                                          int version, @NonNull NoMatchAction noMatchAction,
                                           @NonNull List<String> targets, boolean published,
                                           @Nullable ConfigLifecycleState lifecycleState) {
         routingPolicies.put(tenantId + "/" + policyId + "@" + version,
-                new CapRoutingPolicyDef(
-                tenantId, policyId, version, strategy, targets,
-                "fp-policy-" + policyId + "-" + version, 1,
-                Instant.EPOCH,
-                published ? Instant.EPOCH : null,
-                lifecycleState));
+                routingPolicy(tenantId, policyId, version, noMatchAction, targets,
+                        "fp-policy-" + policyId + "-" + version,
+                        published ? Instant.EPOCH : null, lifecycleState));
         return this;
     }
+
+    /**
+     * 由目标列表构造一条策略行（夹具内所有路由策略的<b>唯一</b>造法）。
+     *
+     * @param tenantId       租户标识
+     * @param policyId       策略标识
+     * @param version        版本号
+     * @param noMatchAction  无命中处置
+     * @param targets        目标列表
+     * @param fingerprint    内容指纹
+     * @param publishedAt    发布时间（{@code null} = 草稿）
+     * @param lifecycleState 生命周期状态
+     * @return 策略行
+     */
+    static @NonNull CapRoutingPolicyDef routingPolicy(@NonNull String tenantId,
+                                                      @NonNull String policyId, int version,
+                                                      @NonNull NoMatchAction noMatchAction,
+                                                      @NonNull List<String> targets,
+                                                      @NonNull String fingerprint,
+                                                      @Nullable Instant publishedAt,
+                                                      @Nullable ConfigLifecycleState lifecycleState) {
+        return routingPolicy(tenantId, policyId, version, noMatchAction, targets, fingerprint,
+                publishedAt, lifecycleState, RoutingMode.RULES_ONLY, ConflictPolicy.RULE_WINS);
+    }
+
+    /**
+     * 由目标列表构造一条策略行（<b>显式指定模式与冲突裁决</b> · B4）。
+     *
+     * <p>B4 之后运行期真的会跑规则，所以「哪个目标被选中」由<b>输入的 {@code topic}</b> 决定：
+     * 第 N 个目标对应 {@code topic == "case-N"}。测 {@code RULE_FIRST} 的冲突裁决、
+     * {@code SEMANTIC} 的纯语义出口时用本重载，不要在测试里手抄策略文本。
+     *
+     * @param tenantId       租户标识
+     * @param policyId       策略标识
+     * @param version        版本号
+     * @param noMatchAction  无命中处置
+     * @param targets        目标列表
+     * @param fingerprint    内容指纹
+     * @param publishedAt    发布时间（{@code null} = 草稿）
+     * @param lifecycleState 生命周期状态
+     * @param mode           路由模式
+     * @param onConflict     规则与模型候选冲突时的裁决
+     * @return 策略行
+     */
+    static @NonNull CapRoutingPolicyDef routingPolicy(@NonNull String tenantId,
+                                                      @NonNull String policyId, int version,
+                                                      @NonNull NoMatchAction noMatchAction,
+                                                      @NonNull List<String> targets,
+                                                      @NonNull String fingerprint,
+                                                      @Nullable Instant publishedAt,
+                                                      @Nullable ConfigLifecycleState lifecycleState,
+                                                      @NonNull RoutingMode mode,
+                                                      @NonNull ConflictPolicy onConflict) {
+        StringBuilder evaluation = new StringBuilder("[");
+        StringBuilder sampleSet = new StringBuilder("[");
+        for (int i = 0; i < targets.size(); i++) {
+            String topic = "case-" + (i + 1);
+            if (i > 0) {
+                evaluation.append(',');
+                sampleSet.append(',');
+            }
+            evaluation.append("{\"ordinal\":").append(i + 1)
+                    .append(",\"ruleId\":\"r-").append(i + 1)
+                    .append("\",\"target\":\"").append(targets.get(i))
+                    .append("\",\"when\":{\"eq\":[\"in.topic\",\"").append(topic)
+                    .append("\"]}}");
+            sampleSet.append("{\"label\":\"s-").append(i + 1)
+                    .append("\",\"input\":{\"topic\":\"").append(topic)
+                    .append("\"},\"expectTarget\":\"").append(targets.get(i))
+                    .append("\"}");
+        }
+        evaluation.append(']');
+        sampleSet.append(']');
+        return new CapRoutingPolicyDef(tenantId, policyId, version,
+                mode, ROUTING_INPUT_SCHEMA, evaluation.toString(),
+                noMatchAction == NoMatchAction.DEFAULT_TARGET && !targets.isEmpty()
+                        ? targets.get(0) : null,
+                noMatchAction, onConflict, sampleSet.toString(),
+                fingerprint, 1, Instant.EPOCH, publishedAt, lifecycleState);
+    }
+
+    /** 路由输入词汇表：声明 {@code topic}，够夹具用（真文法由 agent-routing 判）。 */
+    static final String ROUTING_INPUT_SCHEMA =
+            "{\"type\":\"object\",\"properties\":{\"topic\":{\"type\":\"string\"}}}";
 
     /**
      * 被引用行（输出契约 / 路由策略）的内容指纹解析器（第二十四批 · A4）。

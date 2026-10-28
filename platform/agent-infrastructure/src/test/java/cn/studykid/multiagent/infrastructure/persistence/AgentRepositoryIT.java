@@ -200,7 +200,7 @@ class AgentRepositoryIT {
         // ⚠️ 走真实解析器（内连接 agent/version/snapshot + published_at 硬过滤），
         //    不直接查表 —— 否则测的是「我写的 SQL 对不对」而非「链路通不通」。
         var resolver = new JdbcExecutionSnapshotResolver(appPool);
-        assertThat(resolver.resolveSnapshotId(tenantA, agent.agentId()))
+        assertThat(resolver.resolveSnapshot(tenantA, agent.agentId()))
                 .as("⛔ 解析器取不到快照 = 该 Agent 不可运行 = 缺陷未修复")
                 .isPresent();
     }
@@ -219,7 +219,7 @@ class AgentRepositoryIT {
                 .isEqualTo(2);
 
         var resolver = new JdbcExecutionSnapshotResolver(appPool);
-        String latest = resolver.resolveSnapshotId(tenantA, agent.agentId()).orElseThrow();
+        var resolved = resolver.resolveSnapshot(tenantA, agent.agentId()).orElseThrow();
         // ⚠️ .formatted() 必须作用在**整段拼接**上：
         //    方法调用的优先级高于 +，写成 "...sql " + "...".formatted(...) 会只格式化最后一段。
         String expected = adminQuery(
@@ -229,9 +229,14 @@ class AgentRepositoryIT {
                         + "WHERE es.tenant_id='%s'::uuid AND v.agent_id='%s'::uuid "
                         + "ORDER BY v.version_number DESC LIMIT 1")
                         .formatted(tenantA, agent.agentId()));
-        assertThat(latest)
+        assertThat(resolved.snapshotId())
                 .as("⛔ 解析器须取最新已发布版本的快照（ORDER BY version_number DESC）")
                 .isEqualTo(expected);
+        // G-3：版本号与快照**同一次读**带出，且必须是同一条版本行。
+        //      取到旧版本号 = 能力快照记录了一份本 Run 没用过的配置，且快照不可覆盖。
+        assertThat(resolved.agentVersion())
+                .as("⛔ agentVersion 必须是快照所属的那一条版本行的 version_number")
+                .isEqualTo(2);
     }
 
     @Test
@@ -242,11 +247,11 @@ class AgentRepositoryIT {
         manage.publishVersion(tenantA, agent.agentId(), "{\"kind\":\"tutor\"}", "publisher-1");
 
         var resolver = new JdbcExecutionSnapshotResolver(appPool);
-        assertThat(resolver.resolveSnapshotId(tenantB, agent.agentId()))
+        assertThat(resolver.resolveSnapshot(tenantB, agent.agentId()))
                 .as("⛔⛔ B 不得解析到 A 的快照")
                 .isEmpty();
         // 控制组：A 自己能解析到
-        assertThat(resolver.resolveSnapshotId(tenantA, agent.agentId()))
+        assertThat(resolver.resolveSnapshot(tenantA, agent.agentId()))
                 .as("控制组：A 应当能解析到自己的快照")
                 .isPresent();
     }

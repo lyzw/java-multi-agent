@@ -127,34 +127,55 @@ public record ConfigPublishPayload(
      * 内容指纹由服务端计算（{@link CapObjectFingerprint}），
      * 时间戳由服务端填写。客户端若能指定这些，就等于能指定「内容没变」这个证明。
      *
-     * <p>⚠️ <b>策略枚举由客户端提交</b>：这是<b>内容</b>而非「证明」——
-     * 客户端当然可以决定自己的路由规则长什么样（那是它要发布的东西）；
-     * 但服务端仍会校验目标集合的合法性（非空、不重复）并计算指纹。
+     * <p>⚠️ <b>语义字段由客户端提交，文法字段不由客户端提交</b>：
+     * {@code mode / inputSchema / evaluation / sampleSet} 是「作者想让路由怎么跑」，
+     * 当然由客户端写；但<b>文法与守卫</b>（谓词是否合法、V3~V10）在服务端由
+     * {@code agent-routing} 的 {@code PolicyCodec} + {@code PublishGuards} 判定 ——
+     * 这里只做「非空」级别的检查，因为空文本与空集合是两件事
+     * （{@code evaluation="[]"} 是「声明了零条规则」，缺省是「这行没写」）。
      *
-     * @param policyId 策略标识（可读字符串）
-     * @param strategy 选择策略名（{@code EXPLICIT_TARGETS} / {@code ORDERED_FALLBACK}）
-     * @param targets  允许的目标 Agent 标识（有序）
+     * <p>⚠️ <b>三段 JSON 以<b>原文字符串</b>传输</b>（与 {@code ResultContractSpec.schemaJson}
+     * 同口径）：申请单要存原文、审批人要看原文、执行时要按原文算指纹。
+     * 若在这里绑成对象树，Jackson 的字段顺序就成了指纹的一部分，
+     * 「内容没变」这个证明会随客户端库版本变化。
+     *
+     * @param policyId      策略标识（可读字符串）
+     * @param mode          谁选目标（{@code RULES_ONLY / RULE_FIRST / SEMANTIC}）
+     * @param inputSchema   路由输入词汇表（JSON 对象原文）
+     * @param evaluation    有序规则列表（JSON 数组原文）
+     * @param defaultTarget 兜底目标；{@code noMatchAction=DEFAULT_TARGET} 时必填
+     * @param noMatchAction 无命中处置（{@code REJECT / DEFAULT_TARGET}）
+     * @param onConflict    规则与模型候选冲突时的裁决（{@code RULE_WINS / CANDIDATE_WINS}）
+     * @param sampleSet     发布期回放样本（JSON 数组原文，可为 {@code []}）
      */
     public record RoutingPolicySpec(@NonNull String policyId,
-                                     @NonNull String strategy,
-                                     @NonNull List<String> targets) {
+                                     @NonNull String mode,
+                                     @NonNull String inputSchema,
+                                     @NonNull String evaluation,
+                                     @Nullable String defaultTarget,
+                                     @NonNull String noMatchAction,
+                                     @Nullable String onConflict,
+                                     @NonNull String sampleSet) {
 
         public RoutingPolicySpec {
             if (policyId == null || policyId.isBlank()) {
                 throw new IllegalArgumentException("policyId 不能为空");
             }
-            if (strategy == null || strategy.isBlank()) {
-                throw new IllegalArgumentException("strategy 不能为空");
+            if (mode == null || mode.isBlank()) {
+                throw new IllegalArgumentException("mode 不能为空");
             }
-            targets = targets == null ? List.of() : List.copyOf(targets);
-            if (targets.isEmpty()) {
-                // ⚠️ 空目标集合 ≠ 「允许任意」：策略必须**显式**声明允许哪些目标。
-                throw new IllegalArgumentException("targets 不能为空（策略必须显式声明允许的目标）");
+            if (noMatchAction == null || noMatchAction.isBlank()) {
+                throw new IllegalArgumentException("noMatchAction 不能为空（缺省就得由代码猜兜底行为）");
             }
-            for (String target : targets) {
-                if (target == null || target.isBlank()) {
-                    throw new IllegalArgumentException("targets 元素不能为空");
-                }
+            // ⚠️ 空文本 ≠ 空集合：无样本要显式写 "[]"，不能留空。
+            if (inputSchema == null || inputSchema.isBlank()) {
+                throw new IllegalArgumentException("inputSchema 不能为空（无词汇表就是 V3 无从判定）");
+            }
+            if (evaluation == null || evaluation.isBlank()) {
+                throw new IllegalArgumentException("evaluation 不能为空（无规则要显式写 []）");
+            }
+            if (sampleSet == null || sampleSet.isBlank()) {
+                throw new IllegalArgumentException("sampleSet 不能为空（无样本要显式写 []）");
             }
         }
     }

@@ -113,10 +113,14 @@ class ContractPolicyLifecycleIT extends CapITBase {
     }
 
     private void seedPublishedPolicy() {
-        adminExec("INSERT INTO cap_routing_policy (tenant_id, policy_id, version, strategy, targets,"
+        adminExec("INSERT INTO cap_routing_policy (tenant_id, policy_id, version, mode,"
+                + " input_schema, evaluation, no_match_action, on_conflict, sample_set,"
                 + " config_fingerprint, schema_version, created_at, published_at)"
-                + " VALUES ('" + tenantA + "'::uuid, '" + POLICY_ID + "', 1, 'EXPLICIT_TARGETS',"
-                + " '[\"child-agent\"]'::jsonb, 'fp-policy', 1, now(), now())");
+                + " VALUES ('" + tenantA + "'::uuid, '" + POLICY_ID + "', 1, 'RULES_ONLY',"
+                + " '{}'::jsonb,"
+                + " '[{\"ordinal\":1,\"ruleId\":\"r-1\",\"target\":\"child-agent\","
+                + "\"when\":{\"const\":true}}]'::jsonb,"
+                + " 'REJECT', 'RULE_WINS', '[]'::jsonb, 'fp-policy', 1, now(), now())");
     }
 
     // ── 结构断言 ──────────────────────────────────────────────────

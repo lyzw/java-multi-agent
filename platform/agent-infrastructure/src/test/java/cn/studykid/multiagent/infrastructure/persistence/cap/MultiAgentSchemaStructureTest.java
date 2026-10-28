@@ -110,6 +110,30 @@ class MultiAgentSchemaStructureTest {
         assertThat(s.columnType("requested_target_agent_id"))
                 .as("「模型原始候选」列丢失 → 路由降级再次无法审计")
                 .isEqualToIgnoringCase("UUID");
+
+        // ── B4 · S3 决策快照（10 号设计 §6.1）──────────────────────
+        // ⚠️ 三列全部<b>可空</b>：迁移前的存量行没有它们，而「当时未记录」
+        //    不能写成 NOT NULL —— 那会让整个多级 Agent 链路的写入在回填前全挂。
+        assertThat(s.columns().keySet())
+                .as("agent_invocation 缺少决策快照列")
+                .contains("routing_decision", "policy_ref", "policy_fingerprint");
+        assertThat(s.notNullColumns())
+                .as("决策快照三列必须可空（存量行为「当时未记录」）")
+                .doesNotContain("routing_decision", "policy_ref", "policy_fingerprint");
+
+        // ⚠️ 快照必须是 <b>jsonb</b> 而非 TEXT：
+        //    降级排查问的是「哪条规则命中了」（`@>` / `->`），文本列只能全表扫 + 应用侧解析，
+        //    而那份解析正是「看起来有数据、实际查不出来」的温床。
+        assertThat(s.columnType("routing_decision"))
+                .as("routing_decision 必须是 jsonb，否则决策轨迹在库里不可查询")
+                .isEqualToIgnoringCase("JSONB");
+
+        // ⚠️ `policy_ref` 单独成列（不进快照 JSON）：重放的主键是
+        //    (policy_ref, canonicalInputSha256)，埋在 JSON 里就只能靠约定俗成的表达式取，
+        //    键名一改历史查询静默返回 0 行。
+        assertThat(s.columnType("policy_ref"))
+                .as("policy_ref 必须是文本列（重放主键的一半，可索引、可直接查）")
+                .isEqualToIgnoringCase("TEXT");
     }
 
     @Test

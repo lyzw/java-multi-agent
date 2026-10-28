@@ -15,6 +15,7 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
+import cn.studykid.multiagent.core.orchestration.RoutingContract;
 
 /**
  * 闭包指纹（§6.4）。
@@ -85,6 +86,16 @@ public final class ClosureFingerprint {
      * 包括那些根本不引用任何契约/策略的闭包（它们的旧指纹本就是完整证明）。
      */
     public static final String REFERENCED_CONTENT_BINDING_VERSION = "referenced_content_binding_v1";
+
+    /**
+     * 子 Agent 路由契约绑定算法版本（多级 Agent v1.1 · 10 号设计 S1）。
+     *
+     * <p>与 {@link #REFERENCED_CONTENT_BINDING_VERSION} 同样的分段口径：
+     * 本段只在委派边<b>确实声明了路由契约</b>时写入闭包 JSON，
+     * 于是「从未声明契约」的既有闭包<b>指纹完全不变</b>，
+     * 而一旦声明，契约内容就随指纹失效（改了选型依据 = 行为变了）。
+     */
+    public static final String CHILD_CONTRACT_BINDING_VERSION = "child_routing_contract_binding_v1";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -189,6 +200,18 @@ public final class ClosureFingerprint {
             node.put("closureFingerprint", child.closureFingerprint());
             node.put("mode", child.mode().name());
             node.put("depth", child.depth());
+            // ⚠️ 父侧声明的路由契约入指纹（10 号设计 §3.1 / S1）。
+            //    契约决定「什么样的请求会派给这个子 Agent」—— 改 intent / useWhen /
+            //    inputContract 都会改变委派目标，是行为性内容；不入指纹就会出现
+            //    「Router 的选型依据变了但闭包指纹说没变」（MA-T15 的同一命题）。
+            //    ⚠️ 与 {@link #REFERENCED_CONTENT_BINDING_VERSION} 同款口径：
+            //    本段<b>只在该边确实声明了契约时</b>写入 ——
+            //    没有契约的闭包其旧指纹是完整证明，让它变一变只是无谓返工。
+            //    ⚠️ 但「声明了空 inputContract」与「没声明契约」必须可区分：
+            //    故段内字段一律显式写入，不做空值省略。
+            if (child.routingContract() != null) {
+                node.set("routingContract", routingContractNode(child.routingContract()));
+            }
         }
 
         root.put("forcedSafetyPolicyVersion", FORCED_SAFETY_POLICY_VERSION);
@@ -273,6 +296,30 @@ public final class ClosureFingerprint {
         } else {
             node.put(field, value.longValue());
         }
+    }
+
+    /**
+     * 把一条委派边的路由契约摊开成规范化 JSON 节点。
+     *
+     * <p>⚠️ <b>字段一律显式写入，不做空值省略</b>：
+     * {@code useWhen} 写了 0 条与压根没写，对「什么样的请求会派给它」是两个答案，
+     * 省略会让二者塌成同一个哈希。
+     *
+     * <p>⚠️ {@code inputContract} 走 {@link #canonicalize}：Schema 的键序与
+     * {@code required} 的书写顺序都是<b>表述差异而非语义差异</b>，
+     * 若对顺序敏感就会把「换个写法」误判成「改了契约」。
+     */
+    private static @NonNull ObjectNode routingContractNode(@NonNull RoutingContract contract) {
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("version", CHILD_CONTRACT_BINDING_VERSION);
+        node.put("intent", contract.intent());
+        node.set("useWhen", canonicalize(MAPPER.valueToTree(contract.useWhen())));
+        node.set("avoidWhen", canonicalize(MAPPER.valueToTree(contract.avoidWhen())));
+        node.set("capabilities", canonicalize(MAPPER.valueToTree(contract.capabilities())));
+        node.set("inputContract", canonicalize(MAPPER.valueToTree(contract.inputContract())));
+        node.put("priority", contract.priority());
+        node.put("source", contract.source().name());
+        return node;
     }
 
     /**

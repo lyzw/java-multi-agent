@@ -1,8 +1,12 @@
 package cn.studykid.multiagent.application.cap;
 
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -19,6 +23,10 @@ import cn.studykid.multiagent.core.orchestration.OrchestrationMode;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
 import cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort;
+import cn.studykid.multiagent.routing.PolicyCodec;
+import cn.studykid.multiagent.routing.PolicySpec;
+import cn.studykid.multiagent.routing.PublishGuards;
+import cn.studykid.multiagent.routing.RoutingConfigException;
 
 /**
  * 多级 Agent 的<b>发布期</b>闭包校验（多级 Agent v1.1 · FR-023 · MA-T02～T04）。
@@ -185,18 +193,37 @@ public class AgentPublishClosureValidator {
                             + "。已停用的策略不得被新发布引用（06 §3.2）；"
                             + "存量引用按版本继续过渡");
         }
-        for (String target : policy.targets()) {
-            if (orchestration.child(target).isEmpty()) {
-                // ⚠️ 策略允许的目标不在父声明的委派拓扑内 → 拒绝发布。
-                //    放行的话运行期只能报「目标未声明」，而真因是「策略与声明不一致」，
-                //    排查方向会被带偏；更糟的是策略里可以藏着一个「父根本没打算交给谁」的目标。
-                throw new ConfigPublishRejectedException(ReasonCode.ORCHESTRATION_INVALID,
-                        "orchestration",
-                        "路由策略 " + policy.ref() + " 允许的目标 " + target
-                                + " 不在 Agent " + draft.agentId() + " v" + draft.version()
-                                + " 的 childAgentRefs 内：委派拓扑与路由允许集必须两层收窄，"
-                                + "否则「允许交给谁」有两个真相");
+        // ⚠️ 这里传入的是父**真实**的 childAgentRefs —— V2（「策略派给的目标必须 ∈ 拓扑」）
+        //    只有在这一层才有意义：策略单独发布时根本没有父，只能自反地放行自己提到的目标
+        //    （见 ConfigPublishWorkflowService#toPolicyDef）。
+        //    放行的话运行期只能报「目标未声明」，而真因是「策略与声明不一致」，
+        //    排查方向会被带偏；更糟的是策略里可以藏着一个「父根本没打算交给谁」的目标。
+        Set<String> allowedTargets = new LinkedHashSet<>();
+        Set<String> requiredTargets = new LinkedHashSet<>();
+        for (ChildAgentRef ref : orchestration.childAgentRefs()) {
+            allowedTargets.add(ref.agentId());
+            if (ref.required()) {
+                requiredTargets.add(ref.agentId());
             }
+        }
+        PolicySpec parsed;
+        try {
+            parsed = PolicyCodec.parse(policy.definitionJson(), allowedTargets, requiredTargets);
+        } catch (RoutingConfigException e) {
+            throw new ConfigPublishRejectedException(ReasonCode.ROUTING_POLICY_INVALID,
+                    "orchestration",
+                    "路由策略 " + policy.ref() + " 与 Agent " + draft.agentId() + " v"
+                            + draft.version() + " 的委派拓扑不兼容: " + e.where()
+                            + " → " + e.getMessage()
+                            + "（可委派目标 = " + allowedTargets + "）");
+        }
+        PublishGuards.Report report = PublishGuards.check(parsed, tenantId,
+                LocalDate.now(ZoneOffset.UTC));
+        if (!report.publishable()) {
+            throw new ConfigPublishRejectedException(ReasonCode.ROUTING_POLICY_INVALID,
+                    "orchestration",
+                    "路由策略 " + policy.ref() + " 未通过发布期守卫（Agent " + draft.agentId()
+                            + " v" + draft.version() + "）：" + PublishGuards.render(report));
         }
     }
 

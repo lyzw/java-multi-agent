@@ -10,7 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
-import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
+import cn.studykid.multiagent.core.orchestration.NoMatchAction;
 
 /**
  * 被引用行内容指纹入闭包的测试（第二十四批 · C24-1 · A4）。
@@ -82,26 +82,24 @@ class ReferencedContentFingerprintTest {
     @DisplayName("M-2b ⛔⚠️ 被引用的路由策略行被就地改写 → 闭包指纹必变")
     void inPlaceRewriteOfRoutingPolicyChangesClosureFingerprint() {
         CapFixture before = new CapFixture()
-                .withRoutingPolicy(TENANT, "policy", 1, RoutingStrategy.EXPLICIT_TARGETS,
+                .withRoutingPolicy(TENANT, "policy", 1, NoMatchAction.REJECT,
                         List.of("child-agent"), true)
                 .withAgent(TENANT, "agent-a", 1, List.of(), "{}", WITH_POLICY)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", "{}");
         CapFixture after = new CapFixture()
-                .withRoutingPolicy(TENANT, "policy", 1, RoutingStrategy.EXPLICIT_TARGETS,
+                .withRoutingPolicy(TENANT, "policy", 1, NoMatchAction.REJECT,
                         List.of("child-agent"), true)
                 .withAgent(TENANT, "agent-a", 1, List.of(), "{}", WITH_POLICY)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", "{}");
         // ⚠️ 直接改同一版本行的内容指纹（模拟 DB 侧就地 UPDATE）
         before.routingPolicies.put(TENANT + "/policy@1",
-                new cn.studykid.multiagent.core.cap.CapRoutingPolicyDef(
-                        TENANT, "policy", 1, RoutingStrategy.EXPLICIT_TARGETS,
-                        List.of("child-agent"), "fp-policy-before", 1,
-                        java.time.Instant.EPOCH, java.time.Instant.EPOCH));
+                CapFixture.routingPolicy(TENANT, "policy", 1, NoMatchAction.REJECT,
+                        List.of("child-agent"), "fp-policy-before",
+                        java.time.Instant.EPOCH, null));
         after.routingPolicies.put(TENANT + "/policy@1",
-                new cn.studykid.multiagent.core.cap.CapRoutingPolicyDef(
-                        TENANT, "policy", 1, RoutingStrategy.EXPLICIT_TARGETS,
-                        List.of("child-agent"), "fp-policy-after", 1,
-                        java.time.Instant.EPOCH, java.time.Instant.EPOCH));
+                CapFixture.routingPolicy(TENANT, "policy", 1, NoMatchAction.REJECT,
+                        List.of("child-agent"), "fp-policy-after",
+                        java.time.Instant.EPOCH, null));
 
         String beforeFingerprint = ClosureFingerprint.of(
                 resolver(before).resolve(TENANT, "agent-a", 1));

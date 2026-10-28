@@ -314,6 +314,91 @@ row.requestedTargetAgentId(),
         assertThat(invocations.rows).as("被拒的委派不落调用记录").isEmpty();
     }
 
+    /**
+     * 委派摘要必须真的落库（10 号文档 §8 · G-1）。
+     *
+     * <p><b>为什么必须有这条用例</b>：此前 {@code input_digest} 恒为 NULL、
+     * {@code output_digest} 借用「派生 id」生成 —— 那意味着库里
+     * 没有任何能回答「这次委派带进去了什么、产出是什么」的证据，
+     * 「同输入必同结论」这类复核性质<b>既无法证实也无法证伪</b>。
+     * 后续路由决策快照要建在这两块地基上，所以先把它们钉住：
+     * <ul>
+     *   <li>同一输入两次委派 → 摘要相同；不同输入 → 摘要不同；</li>
+     *   <li>两侧摘要<b>同一算法、同一口径</b>（SHA-256 十六进制 64 位），
+     *       且都不是明文（零保留）。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>反证</b>：把 {@code input_digest} 改回 {@code null} → 第 1 条断言红；
+     * 把 {@code digest(...)} 改回 {@code DelegationInvocationId.derive} → 长度断言红
+     * （派生 id 是 36 位 UUID 形态，且只取哈希前 128 位）。
+     */
+    @Test
+    @DisplayName("✅ input/output 摘要落库、同输入同摘要、格式为 SHA-256 十六进制（G-1）")
+    void delegationDigestsAreWrittenAndDeterministic() {
+        CapFixture fixture = fixture();
+        RecordingInvocations invocations = new RecordingInvocations();
+        CountingRunner runner = new CountingRunner();
+        DelegationExecutor executor = executor(fixture, invocations, runner, NO_CONTRACT);
+
+        executor.delegate(commandWithInput("inv-a", Map.of("question", "q1")));
+        executor.delegate(commandWithInput("inv-b", Map.of("question", "q1")));
+        executor.delegate(commandWithInput("inv-c", Map.of("question", "q2")));
+
+        String digestA = invocations.rows.get("inv-a").inputDigest();
+        String digestB = invocations.rows.get("inv-b").inputDigest();
+        String digestC = invocations.rows.get("inv-c").inputDigest();
+
+        assertThat(digestA)
+                .as("⚠️ input_digest 不得为 NULL —— 那是「复核无证据」的起点")
+                .isNotBlank();
+        assertThat(digestA)
+                .as("同一输入的两次委派必须得到同一摘要（规范化后才哈希，键序无关）")
+                .isEqualTo(digestB);
+        assertThat(digestC)
+                .as("不同输入必须得到不同摘要，否则摘要没有判别力")
+                .isNotEqualTo(digestA);
+        assertThat(digestA)
+                .as("⚠️ 只存摘要不存明文（零保留红线）")
+                .doesNotContain("q1");
+
+        String outputDigest = invocations.rows.get("inv-a").outputDigest();
+        assertThat(outputDigest)
+                .as("输出摘要与输入摘要必须是**同一口径**：SHA-256 十六进制 64 位")
+                .hasSize(64)
+                .matches("[0-9a-f]{64}");
+        assertThat(digestA).hasSize(64);
+    }
+
+    @Test
+    @DisplayName("✅ 键序不同的同一逻辑输入 → 摘要相同（规范化，不是哈希原文）")
+    void keyOrderDoesNotChangeInputDigest() {
+        CapFixture fixture = fixture();
+        RecordingInvocations invocations = new RecordingInvocations();
+        CountingRunner runner = new CountingRunner();
+        DelegationExecutor executor = executor(fixture, invocations, runner, NO_CONTRACT);
+
+        Map<String, Object> first = new LinkedHashMap<>();
+        first.put("a", 1);
+        first.put("b", 2);
+        Map<String, Object> second = new LinkedHashMap<>();
+        second.put("b", 2);
+        second.put("a", 1);
+
+        executor.delegate(commandWithInput("inv-1", first));
+        executor.delegate(commandWithInput("inv-2", second));
+
+        assertThat(invocations.rows.get("inv-1").inputDigest())
+                .as("字段书写顺序不得影响摘要 —— 否则「同输入」判不出来")
+                .isEqualTo(invocations.rows.get("inv-2").inputDigest());
+    }
+
+    private static DelegationExecutor.DelegationCommand commandWithInput(
+            String invocationId, Map<String, Object> input) {
+        return new DelegationExecutor.DelegationCommand(
+                TENANT, RUN, null, null, null, 1, CHILD, null,
+                input, invocationId, "trace-" + invocationId, 10_000L, 1L, 1);
+    }
+
     @Test
     @DisplayName("父为 LEAF（无编排声明）→ 拒绝委派（DELEGATION_NOT_ALLOWED）")
     void leafParentCannotDelegate() {

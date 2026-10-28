@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.application.cap;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
@@ -12,6 +13,7 @@ import cn.studykid.multiagent.core.cap.EffectiveClosure;
 import cn.studykid.multiagent.core.orchestration.DelegationFailurePolicy;
 import cn.studykid.multiagent.core.orchestration.OrchestrationBinding;
 import cn.studykid.multiagent.core.orchestration.OrchestrationMode;
+import cn.studykid.multiagent.core.orchestration.RoutingContract;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -245,5 +247,135 @@ class ClosureFingerprintTest {
     private static String fingerprintOf(OrchestrationBinding binding) {
         return ClosureFingerprint.of(new EffectiveClosure("agent-1", 1, List.of(), List.of(),
                 List.of(), List.of(), binding));
+    }
+
+    // ── 子 Agent 路由契约入指纹（多级 Agent v1.1 · 10 号设计 S1）───────
+
+    @Test
+    @DisplayName("✅ 未声明契约的委派边：规范化闭包里没有 routingContract 段（旧指纹不受扰动）")
+    void edgeWithoutContractKeepsCanonicalShape() {
+        String canonical = ClosureFingerprint.canonicalJson(closureWithChild(null));
+
+        assertThat(canonical)
+                .as("⛔ 没有契约的闭包也被写入了契约段：所有多级闭包指纹集体变化，"
+                        + "在途 Run 无谓失效")
+                .doesNotContain("routingContract")
+                .doesNotContain(ClosureFingerprint.CHILD_CONTRACT_BINDING_VERSION);
+    }
+
+    @Test
+    @DisplayName("⛔ 契约任一字段变化 → 指纹必变（否则 Router 的选型依据变了却不被察觉）")
+    void contractChangeChangesFingerprint() {
+        RoutingContract base = contract("解数学题");
+
+        assertThat(fingerprintWith(base))
+                .as("⛔ intent 变化却指纹不变")
+                .isNotEqualTo(fingerprintWith(contract("解几何题")));
+        assertThat(fingerprintWith(base))
+                .as("⛔ useWhen 变化却指纹不变")
+                .isNotEqualTo(fingerprintWith(withUseWhen(List.of("学生问计算题"))));
+        assertThat(fingerprintWith(base))
+                .as("⛔ avoidWhen 变化却指纹不变")
+                .isNotEqualTo(fingerprintWith(withAvoidWhen(List.of("非题目类闲聊"))));
+        assertThat(fingerprintWith(base))
+                .as("⛔ capabilities 变化却指纹不变")
+                .isNotEqualTo(fingerprintWith(withCapabilities(List.of("geometry"))));
+        assertThat(fingerprintWith(base))
+                .as("⛔ inputContract 变化却指纹不变")
+                .isNotEqualTo(fingerprintWith(withInputContract(
+                        Map.of("type", "object", "required", List.of("question")))));
+        assertThat(fingerprintWith(base))
+                .as("⛔ priority 变化却指纹不变：同分决胜顺序被改动不会被感知")
+                .isNotEqualTo(fingerprintWith(withPriority(3)));
+        assertThat(fingerprintWith(base))
+                .as("⛔ source 变化却指纹不变：继承底稿被改成父覆盖不会被感知")
+                .isNotEqualTo(fingerprintWith(withSource(RoutingContract.Source.OVERRIDE)));
+    }
+
+    @Test
+    @DisplayName("⛔ 声明契约与不声明契约必须可区分（空声明 ≠ 没声明）")
+    void declaredEmptyContractDiffersFromNoContract() {
+        RoutingContract bare = new RoutingContract("解数学题", List.of(), List.of(), List.of(),
+                Map.of(), RoutingContract.MIN_PRIORITY, RoutingContract.Source.INHERITED);
+
+        assertThat(fingerprintWith(bare))
+                .as("⛔ 「声明了一个不加约束的契约」与「压根没声明」指纹相同："
+                        + "撤掉契约会被误认为从未有过契约")
+                .isNotEqualTo(fingerprintWith(null));
+    }
+
+    @Test
+    @DisplayName("✅ 契约的表述差异不改指纹：Schema 键序、场景条目书写顺序无关")
+    void contractWordingOrderDoesNotAffectFingerprint() {
+        RoutingContract a = withInputContract(Map.of(
+                "type", "object",
+                "required", List.of("stem", "grade"),
+                "properties", Map.of("stem", Map.of("type", "string"),
+                        "grade", Map.of("type", "string"))));
+        // 同样的 Schema，键序与数组序全部颠倒（Map.of 的迭代序本就不可依赖，
+        // 这里断言的正是「指纹不靠输入顺序」）
+        RoutingContract b = withInputContract(Map.of(
+                "properties", Map.of("grade", Map.of("type", "string"),
+                        "stem", Map.of("type", "string")),
+                "required", List.of("grade", "stem"),
+                "type", "object"));
+
+        assertThat(fingerprintWith(a))
+                .as("⛔ 契约内容没变、只是写法顺序不同就改了指纹：在途 Run 无故失效")
+                .isEqualTo(fingerprintWith(b));
+        assertThat(fingerprintWith(withUseWhen(List.of("甲", "乙"))))
+                .isEqualTo(fingerprintWith(withUseWhen(List.of("乙", "甲"))));
+    }
+
+    private static EffectiveClosure closureWithChild(RoutingContract contract) {
+        return new EffectiveClosure("agent-1", 1, List.of(), List.of(), List.of(),
+                List.of(new EffectiveClosure.ChildAgentBinding("child-1", 1, "fp-child",
+                        ClosureFingerprint.PREFIX + "child", OrchestrationMode.LEAF, 1, contract)));
+    }
+
+    private static String fingerprintWith(RoutingContract contract) {
+        return ClosureFingerprint.of(closureWithChild(contract));
+    }
+
+    private static RoutingContract contract(String intent) {
+        return new RoutingContract(intent, List.of("学生提出题目"), List.of("纯闲聊"),
+                List.of("math"), Map.of("type", "object", "required", List.of("stem")),
+                RoutingContract.MIN_PRIORITY, RoutingContract.Source.INHERITED);
+    }
+
+    private static RoutingContract withUseWhen(List<String> useWhen) {
+        return new RoutingContract("解数学题", useWhen, List.of("纯闲聊"),
+                List.of("math"), Map.of("type", "object", "required", List.of("stem")),
+                RoutingContract.MIN_PRIORITY, RoutingContract.Source.INHERITED);
+    }
+
+    private static RoutingContract withAvoidWhen(List<String> avoidWhen) {
+        return new RoutingContract("解数学题", List.of("学生提出题目"), avoidWhen,
+                List.of("math"), Map.of("type", "object", "required", List.of("stem")),
+                RoutingContract.MIN_PRIORITY, RoutingContract.Source.INHERITED);
+    }
+
+    private static RoutingContract withCapabilities(List<String> capabilities) {
+        return new RoutingContract("解数学题", List.of("学生提出题目"), List.of("纯闲聊"),
+                capabilities, Map.of("type", "object", "required", List.of("stem")),
+                RoutingContract.MIN_PRIORITY, RoutingContract.Source.INHERITED);
+    }
+
+    private static RoutingContract withInputContract(Map<String, Object> inputContract) {
+        return new RoutingContract("解数学题", List.of("学生提出题目"), List.of("纯闲聊"),
+                List.of("math"), inputContract,
+                RoutingContract.MIN_PRIORITY, RoutingContract.Source.INHERITED);
+    }
+
+    private static RoutingContract withPriority(int priority) {
+        return new RoutingContract("解数学题", List.of("学生提出题目"), List.of("纯闲聊"),
+                List.of("math"), Map.of("type", "object", "required", List.of("stem")),
+                priority, RoutingContract.Source.INHERITED);
+    }
+
+    private static RoutingContract withSource(RoutingContract.Source source) {
+        return new RoutingContract("解数学题", List.of("学生提出题目"), List.of("纯闲聊"),
+                List.of("math"), Map.of("type", "object", "required", List.of("stem")),
+                RoutingContract.MIN_PRIORITY, source);
     }
 }

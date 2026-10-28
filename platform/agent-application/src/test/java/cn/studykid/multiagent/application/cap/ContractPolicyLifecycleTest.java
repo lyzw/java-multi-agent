@@ -20,7 +20,7 @@ import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.DecisionAuditEntry;
 import cn.studykid.multiagent.core.cap.ReasonCode;
-import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
+import cn.studykid.multiagent.core.orchestration.NoMatchAction;
 import cn.studykid.multiagent.ports.persistence.ConfigLifecyclePort;
 import cn.studykid.multiagent.ports.persistence.ConfigPointerPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort;
@@ -217,7 +217,7 @@ class ContractPolicyLifecycleTest {
     @Test
     @DisplayName("⛔ 引用已停用的路由策略 → 拒绝发布（ROUTING_POLICY_DEPRECATED）")
     void deprecatedRoutingPolicyCannotBeReferenced() {
-        fixture.withRoutingPolicy(TENANT, POLICY_ID, 1, RoutingStrategy.EXPLICIT_TARGETS,
+        fixture.withRoutingPolicy(TENANT, POLICY_ID, 1, NoMatchAction.REJECT,
                 List.of("child-agent"), true, ConfigLifecycleState.DEPRECATED);
 
         assertThatThrownBy(() -> validator().validate(TENANT, leafDraft("""
@@ -236,7 +236,7 @@ class ContractPolicyLifecycleTest {
     void activeContractAndPolicyRemainReferenceable() {
         fixture.withContract(TENANT, CONTRACT_ID, 1, "{\"type\":\"object\"}", true,
                         ConfigLifecycleState.PUBLISHED)
-                .withRoutingPolicy(TENANT, POLICY_ID, 1, RoutingStrategy.EXPLICIT_TARGETS,
+                .withRoutingPolicy(TENANT, POLICY_ID, 1, NoMatchAction.REJECT,
                         List.of("child-agent"), true, ConfigLifecycleState.PUBLISHED)
                 .withAgent(TENANT, "child-agent", 1, List.of(), "{}", "{}");
 
@@ -292,7 +292,7 @@ class ContractPolicyLifecycleTest {
     }
 
     private void seedPublishedPolicy() {
-        fixture.withRoutingPolicy(TENANT, POLICY_ID, 1, RoutingStrategy.EXPLICIT_TARGETS,
+        fixture.withRoutingPolicy(TENANT, POLICY_ID, 1, NoMatchAction.REJECT,
                 List.of("child-agent"), true, ConfigLifecycleState.PUBLISHED);
         states.put(key("routing_policy", POLICY_ID, 1), ConfigLifecycleState.PUBLISHED);
     }

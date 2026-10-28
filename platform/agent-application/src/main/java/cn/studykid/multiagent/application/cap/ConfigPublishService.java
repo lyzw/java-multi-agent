@@ -790,8 +790,10 @@ public class ConfigPublishService {
             return def;
         }
         return new CapRoutingPolicyDef(def.tenantId(), def.policyId(), def.version(),
-                def.strategy(), def.targets(), def.configFingerprint(), def.schemaVersion(),
-                def.createdAt(), publishedAt);
+                def.mode(), def.inputSchema(), def.evaluation(), def.defaultTarget(),
+                def.noMatchAction(), def.onConflict(), def.sampleSet(),
+                def.configFingerprint(), def.schemaVersion(), def.createdAt(), publishedAt,
+                def.lifecycleState());
     }
 
     private static CapAgentDef withPublished(CapAgentDef def, Instant publishedAt) {        if (def.publishedAt() != null) {

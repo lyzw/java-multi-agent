@@ -28,7 +28,7 @@ import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.DecisionAuditEntry;
 import cn.studykid.multiagent.core.cap.ReasonCode;
 import cn.studykid.multiagent.core.orchestration.CapAgentChildRef;
-import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
+import cn.studykid.multiagent.core.orchestration.NoMatchAction;
 import cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
@@ -71,12 +71,12 @@ class RoutingPolicyPublishFlowTest {
 
     // ── 夹具 ──────────────────────────────────────────────────────
 
-    private static CapRoutingPolicyDef policy(int version, RoutingStrategy strategy,
+    private static CapRoutingPolicyDef policy(int version, NoMatchAction noMatchAction,
                                               List<String> targets, Instant publishedAt) {
-        return new CapRoutingPolicyDef(TENANT, POLICY_ID, version, strategy, targets,
-                CapObjectFingerprint.of(new CapRoutingPolicyDef(TENANT, POLICY_ID, version,
-                        strategy, targets, "pending", 1, CLOCK.instant(), null)),
-                1, CLOCK.instant(), publishedAt);
+        return CapFixture.routingPolicy(TENANT, POLICY_ID, version, noMatchAction, targets,
+                CapObjectFingerprint.of(CapFixture.routingPolicy(TENANT, POLICY_ID, version,
+                        noMatchAction, targets, "pending", null, null)),
+                publishedAt, null);
     }
 
     private static CapAgentDef agent(String agentId, String orchestration) {
@@ -129,7 +129,7 @@ class RoutingPolicyPublishFlowTest {
         ConfigPublishService service = service(true, true);
 
         service.publish(commandWith(routerAndChild(POLICY_ID + "@1"),
-                List.of(policy(1, RoutingStrategy.EXPLICIT_TARGETS, List.of(CHILD_ID), null))));
+                List.of(policy(1, NoMatchAction.REJECT, List.of(CHILD_ID), null))));
 
         CapRoutingPolicyDef stored = world.routingPolicies
                 .find(TENANT, POLICY_ID, 1).orElseThrow();
@@ -138,9 +138,8 @@ class RoutingPolicyPublishFlowTest {
                 .isTrue();
         assertThat(stored.configFingerprint())
                 .as("⛔ 策略内容指纹不是服务端算的：路由规则变了但指纹没变将无法察觉")
-                .isEqualTo(CapObjectFingerprint.of(new CapRoutingPolicyDef(TENANT, POLICY_ID, 1,
-                        RoutingStrategy.EXPLICIT_TARGETS, List.of(CHILD_ID), "pending",
-                        1, CLOCK.instant(), null)));
+                .isEqualTo(CapObjectFingerprint.of(CapFixture.routingPolicy(TENANT, POLICY_ID, 1,
+                        NoMatchAction.REJECT, List.of(CHILD_ID), "pending", null, null)));
         assertThat(world.releaseRows.get(0).objectVersions())
                 .as("⛔ 策略未进发布头清单：回滚与追溯无法确定「当时生效的是哪套路由规则」")
                 .contains("routing_policy")
@@ -153,7 +152,7 @@ class RoutingPolicyPublishFlowTest {
         ConfigPublishService service = service(true, true);
 
         service.publish(commandWith(routerAndChild(POLICY_ID + "@1"),
-                List.of(policy(1, RoutingStrategy.EXPLICIT_TARGETS, List.of(CHILD_ID), null))));
+                List.of(policy(1, NoMatchAction.REJECT, List.of(CHILD_ID), null))));
 
         assertThat(world.agents).containsKey(TENANT + "/router-1@1");
     }
@@ -182,7 +181,7 @@ class RoutingPolicyPublishFlowTest {
         //    本次发布事务里的策略一律会被标记为已发布（withPublished），
         //    所以必须**绕过发布事务**直接写进仓储，才造得出草稿状态。
         world.routingPolicies.insert(
-                policy(1, RoutingStrategy.EXPLICIT_TARGETS, List.of(CHILD_ID), null));
+                policy(1, NoMatchAction.REJECT, List.of(CHILD_ID), null));
 
         assertThatThrownBy(() -> service.publish(commandWith(
                 routerAndChild(POLICY_ID + "@1"), List.of())))
@@ -198,11 +197,15 @@ class RoutingPolicyPublishFlowTest {
 
         assertThatThrownBy(() -> service.publish(commandWith(
                 routerAndChild(POLICY_ID + "@1"),
-                List.of(policy(1, RoutingStrategy.EXPLICIT_TARGETS,
+                List.of(policy(1, NoMatchAction.REJECT,
                         List.of("never-declared"), null)))))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())
-                        .isEqualTo(ReasonCode.ORCHESTRATION_INVALID));
+                        // ⚠️ 原因码是 ROUTING_POLICY_INVALID，不是 ORCHESTRATION_INVALID：
+                        //    不合法的是**策略指向了一个父没声明的子**（守卫 V2），
+                        //    编排块本身的结构与上限都没问题。
+                        //    把「策略越界」报成「编排写错了」会把排查者支到错的文本上去改 mode。
+                        .isEqualTo(ReasonCode.ROUTING_POLICY_INVALID));
 
         assertThat(world.agents)
                 .as("⛔ 策略与拓扑不一致的 Agent 仍被写入")
@@ -217,7 +220,7 @@ class RoutingPolicyPublishFlowTest {
         assertThatThrownBy(() -> service.publish(commandWith(
                 List.of(agent("leaf-agent",
                         "{\"mode\":\"LEAF\",\"routingPolicyRef\":\"" + POLICY_ID + "@1\"}")),
-                List.of(policy(1, RoutingStrategy.EXPLICIT_TARGETS, List.of(CHILD_ID), null)))))
+                List.of(policy(1, NoMatchAction.REJECT, List.of(CHILD_ID), null)))))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())
                         .isEqualTo(ReasonCode.ORCHESTRATION_INVALID));
@@ -230,7 +233,7 @@ class RoutingPolicyPublishFlowTest {
 
         assertThatThrownBy(() -> service.publish(commandWith(
                 routerAndChild(POLICY_ID + "@1"),
-                List.of(policy(1, RoutingStrategy.EXPLICIT_TARGETS, List.of(CHILD_ID), null)))))
+                List.of(policy(1, NoMatchAction.REJECT, List.of(CHILD_ID), null)))))
                 .isInstanceOf(ConfigPublishRejectedException.class);
 
         assertThat(world.routingPolicies.find(TENANT, POLICY_ID, 1))                .as("⛔ 策略仓储未装配却落了策略行")
@@ -244,7 +247,7 @@ class RoutingPolicyPublishFlowTest {
 
         assertThatThrownBy(() -> service.publish(commandWith(
                 routerAndChild(POLICY_ID + "@1"),
-                List.of(policy(1, RoutingStrategy.EXPLICIT_TARGETS, List.of(CHILD_ID), null)))))
+                List.of(policy(1, NoMatchAction.REJECT, List.of(CHILD_ID), null)))))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())
                         .isEqualTo(ReasonCode.ORCHESTRATION_INVALID));

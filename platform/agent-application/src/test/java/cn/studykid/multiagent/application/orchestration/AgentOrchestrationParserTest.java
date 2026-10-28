@@ -1,11 +1,15 @@
 package cn.studykid.multiagent.application.orchestration;
 
+import java.util.List;
+
+import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import cn.studykid.multiagent.core.orchestration.AgentOrchestration;
 import cn.studykid.multiagent.core.orchestration.DelegationFailurePolicy;
 import cn.studykid.multiagent.core.orchestration.OrchestrationMode;
+import cn.studykid.multiagent.core.orchestration.RoutingContract;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -207,5 +211,168 @@ class AgentOrchestrationParserTest {
                 AgentOrchestrationParser.toJson(parsed));
 
         assertThat(reparsed).isEqualTo(parsed);
+    }
+
+    // ── 父侧路由契约（10 号设计 §3.1 · S1）────────────────────────────
+
+    /** 「没写契约」是合法状态（拓扑照旧），字段缺省按空列表 / 空 Schema / INHERITED / 0 补齐。 */
+    @Test
+    @DisplayName("✅ 只声明 intent 的契约：其余字段取空值而不是 null")
+    void minimalContractIsParsed() {
+        AgentOrchestration orchestration = AgentOrchestrationParser.parse(
+                contractJson("""
+                        "intent":"负责把应用题拆成算式"
+                        """));
+
+        RoutingContract contract = orchestration.child("child-a")
+                .orElseThrow().routingContract();
+        assertThat(contract).isNotNull();
+        assertThat(contract.intent()).isEqualTo("负责把应用题拆成算式");
+        assertThat(contract.useWhen()).isEmpty();
+        assertThat(contract.avoidWhen()).isEmpty();
+        assertThat(contract.capabilities()).isEmpty();
+        assertThat(contract.inputContract())
+                .as("⚠️ 空 Schema 是「不加约束」的显式声明，不能是 null")
+                .isEmpty();
+        assertThat(contract.priority()).isEqualTo(RoutingContract.MIN_PRIORITY);
+        assertThat(contract.source()).isEqualTo(RoutingContract.Source.INHERITED);
+    }
+
+    @Test
+    @DisplayName("✅ 完整契约逐字段解析")
+    void fullContractIsParsed() {
+        AgentOrchestration orchestration = AgentOrchestrationParser.parse(
+                contractJson("""
+                        "intent":"负责几何题的作图与证明",
+                        "useWhen":["学生给出图形或要求证明"],
+                        "avoidWhen":["纯代数计算"],
+                        "capabilities":["geometry","proof"],
+                        "inputContract":{"type":"object","required":["stem"]},
+                        "priority":3,"source":"OVERRIDE"
+                        """));
+
+        RoutingContract contract = orchestration.child("child-a")
+                .orElseThrow().routingContract();
+        assertThat(contract.intent()).isEqualTo("负责几何题的作图与证明");
+        assertThat(contract.useWhen()).containsExactly("学生给出图形或要求证明");
+        assertThat(contract.avoidWhen()).containsExactly("纯代数计算");
+        assertThat(contract.capabilities()).containsExactly("geometry", "proof");
+        assertThat(contract.inputContract())
+                .containsEntry("type", "object")
+                .containsEntry("required", List.of("stem"));
+        assertThat(contract.priority()).isEqualTo(3);
+        assertThat(contract.source()).isEqualTo(RoutingContract.Source.OVERRIDE);
+    }
+
+    /**
+     * ⚠️ <b>写了但写错，绝不降级成「没写契约」</b>。
+     *
+     * <p>降级会让 Router 安静地回到「只看见一个 id」，而配置者以为契约已生效 ——
+     * 这正是本项目反复出现的「看起来生效、实际不生效」。
+     */
+    @Test
+    @DisplayName("⛔ 非法契约逐个被拒，不会被当成「没有契约」")
+    void malformedContractIsRejectedNotIgnored() {
+        String[] illegal = {
+            // 缺 intent
+            "\"useWhen\":[\"题目\"]",
+            // intent 空白
+            "\"intent\":\"  \"",
+            // 能力标签不符合词表（大写）
+            "\"intent\":\"解题\",\"capabilities\":[\"Math\"]",
+            // Schema 用了白名单外的关键字
+            "\"intent\":\"解题\",\"inputContract\":{\"type\":\"object\",\"minLength\":3}",
+            // 场景条目含空白项
+            "\"intent\":\"解题\",\"useWhen\":[\"甲\",\"\"]",
+            // priority 为负
+            "\"intent\":\"解题\",\"priority\":-1",
+            // priority 非整数
+            "\"intent\":\"解题\",\"priority\":1.5",
+            // source 未知
+            "\"intent\":\"解题\",\"source\":\"INVENTED\"",
+            // inputContract 不是对象
+            "\"intent\":\"解题\",\"inputContract\":\"object\"",
+        };
+        for (String body : illegal) {
+            assertThatThrownBy(() -> AgentOrchestrationParser.parse(contractJson(body)))
+                    .as("⚠️ 非法契约必须拒绝发布，收到: %s", body)
+                    .isInstanceOf(OrchestrationConfigException.class);
+        }
+
+        // 契约整体不是对象
+        assertThatThrownBy(() -> AgentOrchestrationParser.parse("""
+                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-a","version":1,
+                 "routingContract":"负责解题"}],
+                 "maxDelegationDepth":3,"maxChildInvocations":5,"timeoutMs":15000}
+                """))
+                .isInstanceOf(OrchestrationConfigException.class)
+                .hasMessageContaining("必须是对象");
+    }
+
+    /**
+     * 键名写错 = 该字段没写？—— 不允许。
+     *
+     * <p>宽松解析会让 {@code use_when} 这类拼写错误变成「useWhen 为空」，
+     * 于是路由少了一批判据且<b>没有任何一步会报错</b>。
+     */
+    @Test
+    @DisplayName("⛔ 契约与子引用对象里的未知键 → 配置期拒绝")
+    void unknownKeysAreRejected() {
+        assertThatThrownBy(() -> AgentOrchestrationParser.parse(
+                contractJson("\"intent\":\"解题\",\"use_when\":[\"题目\"]")))
+                .as("⛔ use_when 被当成「没写 useWhen」：拼写错误必须报错，不能静默吞掉")
+                .isInstanceOf(OrchestrationConfigException.class)
+                .hasMessageContaining("use_when");
+        assertThatThrownBy(() -> AgentOrchestrationParser.parse(
+                contractJson("\"intent\":\"解题\"").replace(
+                        "\"routingContract\":{", "\"routingContractX\":{")))
+                .isInstanceOf(OrchestrationConfigException.class)
+                .hasMessageContaining("routingContractX");
+    }
+
+    /**
+     * ⚠️ 契约必须<b>回写</b>：只解析不回写，管理台「读出来 → 保存回去」
+     * 就会把契约抹掉 —— 编辑一次等于删掉路由语义，且看起来是正常保存。
+     */
+    @Test
+    @DisplayName("✅ 契约随 toJson 往返（编辑一轮不会丢路由语义）")
+    void contractSurvivesRoundTrip() {
+        AgentOrchestration parsed = AgentOrchestrationParser.parse(contractJson("""
+                "intent":"负责几何题的作图与证明",
+                "useWhen":["学生给出图形或要求证明"],
+                "avoidWhen":["纯代数计算"],
+                "capabilities":["geometry"],
+                "inputContract":{"type":"object","required":["stem"]},
+                "priority":2,"source":"OVERRIDE"
+                """));
+
+        String json = AgentOrchestrationParser.toJson(parsed);
+        assertThat(json)
+                .as("⛔ toJson 不回写契约：管理台保存一次就把路由契约抹了")
+                .contains("routingContract")
+                .contains("geometry")
+                .contains("OVERRIDE");
+        assertThat(AgentOrchestrationParser.parse(json)).isEqualTo(parsed);
+    }
+
+    /** 未声明契约的子引用保持 null（历史 Agent 的定义行不因新字段而改写）。 */
+    @Test
+    @DisplayName("✅ 未声明契约 → routingContract 为 null（兼容读）")
+    void absentContractStaysNull() {
+        AgentOrchestration orchestration = AgentOrchestrationParser.parse("""
+                {"mode":"SEQUENTIAL","childAgentRefs":[{"id":"child-a","version":1}],
+                 "maxDelegationDepth":2,"maxChildInvocations":3,"timeoutMs":30000}
+                """);
+
+        assertThat(orchestration.child("child-a").orElseThrow().routingContract()).isNull();
+    }
+
+    private static final String CONTRACT_TAIL =
+            ",\"maxDelegationDepth\":3,\"maxChildInvocations\":5,\"timeoutMs\":15000}";
+
+    /** 把一段契约体拼进 SEQUENTIAL 声明的 {@code childAgentRefs[0].routingContract}。 */
+    private static @NonNull String contractJson(@NonNull String contractBody) {
+        return "{\"mode\":\"SEQUENTIAL\",\"childAgentRefs\":[{\"id\":\"child-a\",\"version\":1,"
+                + "\"routingContract\":{" + contractBody + "}}]" + CONTRACT_TAIL;
     }
 }

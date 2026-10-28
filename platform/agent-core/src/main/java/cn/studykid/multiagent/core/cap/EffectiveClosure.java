@@ -9,6 +9,7 @@ import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.orchestration.OrchestrationBinding;
 import cn.studykid.multiagent.core.orchestration.OrchestrationMode;
+import cn.studykid.multiagent.core.orchestration.RoutingContract;
 
 /**
  * 有效能力闭包（§6.2「Run 快照：固定版本集 + 闭包指纹」）。
@@ -100,6 +101,11 @@ public record EffectiveClosure(
      *                          故任何后代的任何行为性变化都会传导到父闭包指纹
      * @param mode               子 Agent 的编排模式
      * @param depth              该子 Agent 相对本闭包根的深度（直接子 = 1）
+     * @param routingContract    <b>父侧声明</b>的路由契约（10 号设计 §3.1：
+     *                           契约的权威源在父侧，随委派边固化）——
+     *                           可空 = 父 Agent 未为该子 Agent 声明路由语义。
+     *                           ⚠️ 入闭包指纹：路由语义决定「什么样的请求会派给它」，
+     *                           改了它委派目标就会变，属行为性内容（MA-T15）
      */
     public record ChildAgentBinding(
             @NonNull String agentId,
@@ -107,7 +113,25 @@ public record EffectiveClosure(
             @NonNull String configFingerprint,
             @NonNull String closureFingerprint,
             @NonNull OrchestrationMode mode,
-            int depth) {
+            int depth,
+            @Nullable RoutingContract routingContract) {
+
+        /**
+         * 兼容构造器（<b>未声明路由契约</b>）—— 既有构造点不必逐个补参数。
+         *
+         * <p>⚠️ 语义是「没有契约」而不是「契约等价于空」：见
+         * {@link RoutingContract} 对 {@code inputContract} 空值口径的说明，
+         * 「没写」与「写了但为空」在指纹里必须是两个不同的值。
+         */
+        public ChildAgentBinding(@NonNull String agentId,
+                                 int releaseVersion,
+                                 @NonNull String configFingerprint,
+                                 @NonNull String closureFingerprint,
+                                 @NonNull OrchestrationMode mode,
+                                 int depth) {
+            this(agentId, releaseVersion, configFingerprint, closureFingerprint,
+                    mode, depth, null);
+        }
     }
 
     /**

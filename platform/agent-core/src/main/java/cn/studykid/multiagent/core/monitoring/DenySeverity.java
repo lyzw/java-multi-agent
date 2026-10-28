@@ -91,12 +91,30 @@ public enum DenySeverity {
             // ⚠️ 路由候选越出**策略允许的子集**（第十四批）：与「越出父声明的委派拓扑」
             //    同类 —— 都是「有东西在试探边界」。典型来源同样是路由模型被注入后
             //    指向了一个存在但策略不允许的 Agent（MA-T05）。必须立刻看。
+            // ⚠️ <b>S3 后一度不可达，C38-2 恢复</b>（10 号设计 §6.2.1）：
+            //    规则引擎把「允许集」拆成了「规则 target ⊆ 拓扑」（发布期 V2）+
+            //    「候选 ∈ 拓扑」（运行期），中间那层「策略自己点名的目标集」没人判了。
+            //    现在引擎在<b>采纳候选</b>前判它（`RoutingEngine.adoptCandidate`），
+            //    本码重新成为「候选越出策略、但未越出拓扑」的唯一出口 ——
+            //    与上一条的分工随之回到设计口径：这条查策略内容，那条查子 Agent 声明。
             case ROUTING_TARGET_NOT_ALLOWED -> CRITICAL;
+            // ⚠️ 全部规则未命中且 no_match_action=REJECT（10 号设计 §6.2 · S3）：
+            //    与上一条<b>故意不同档</b>。ROUTING_TARGET_NOT_ALLOWED 是
+            //    「模型指向了一个策略不许的目标」= 有人在试探边界；
+            //    本码是「<b>策略没为这类输入写规则</b>」= 配置覆盖面缺口，
+            //    处置动作是补规则或改兜底，不是查攻击。
+            //    合成 CRITICAL 会让每次「规则没写全」都叫安全值班。
+            case ROUTING_NO_MATCH_REJECTED -> WARNING;
             // ⚠️ 路由策略**不可用**（第十四批）：这是「路由依据失效」，
             //    与 AUTHZ_UNAVAILABLE 同类 —— 判据拿不到，就无法做路由决策。
             //    若落 INFO/WARNING，会被当成「偶发一次」，而实际后果是
             //    「引用它的每个 ROUTER Agent 的每次委派都在 fail-closed」。
             case ROUTING_POLICY_UNAVAILABLE -> CRITICAL;
+            // ⚠️ 规则求值异常且 onError=REJECT（10 号设计 §6.2 · S3）：与「路由依据失效」同级。
+            //    已发布的策略在运行期判不出来 = 库里的行与引擎口径不一致，
+            //    而它发生时<b>引用该策略的每个 ROUTER 的每次委派都在失败</b>，
+            //    不是「偶发一次」。落 WARNING 会被趋势告警吞掉。
+            case ROUTING_EVAL_ERROR_REJECTED -> CRITICAL;
             // ⚠️ EXEC_UNKNOWN 是「副作用结果不确定」——§7.4 唯一需要进人工对账的码。
             //    它不是「没成功」，而是「不知道成没成」：自动重试会造成重复副作用，
             //    只能由人工判定。故与越权同级，不能落 INFO。
@@ -137,6 +155,12 @@ public enum DenySeverity {
             //    ⚠️ 与「出站被拦截」（HTTP_EGRESS_BLOCKED → CRITICAL）分档，
             //    两者排查方向相反。
             case HTTP_ENDPOINT_INVALID -> WARNING;
+            // ⚠️ 路由策略**自身**不合法（S4 · 10 号设计 §4.5）：发布期配置缺陷 ——
+            //    谓词文法越界 / V3 词汇表对不上 / V4 自相矛盾 / V8 样本回放不符。
+            //    与「引用未发布」（ROUTING_POLICY_NOT_PUBLISHED）同为 WARNING：
+            //    两者都是「改配置」，不惊动安全值班；但**原因码不同**，
+            //    因为排查方向相反（查规则内容 vs 查发布流程）。
+            case ROUTING_POLICY_INVALID -> WARNING;
             case DELEGATION_NOT_ALLOWED -> WARNING;
             case DELEGATION_DEPTH_EXCEEDED -> WARNING;
             case DELEGATION_TIMEOUT -> WARNING;

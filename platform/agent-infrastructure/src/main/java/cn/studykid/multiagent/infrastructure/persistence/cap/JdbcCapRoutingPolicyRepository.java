@@ -5,7 +5,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -14,12 +13,11 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
-import tools.jackson.core.type.TypeReference;
-import tools.jackson.databind.ObjectMapper;
-
 import cn.studykid.multiagent.core.cap.CapRoutingPolicyDef;
 import cn.studykid.multiagent.core.cap.ConfigLifecycleState;
-import cn.studykid.multiagent.core.orchestration.RoutingStrategy;
+import cn.studykid.multiagent.core.orchestration.ConflictPolicy;
+import cn.studykid.multiagent.core.orchestration.NoMatchAction;
+import cn.studykid.multiagent.core.orchestration.RoutingMode;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
 import cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort;
@@ -41,34 +39,45 @@ import cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort;
  * 参见 V23 的教训：把新概念的 id 声明成 UUID 会让整笔发布事务在非 UUID id 上回滚，
  * 而这种缺陷在 mock 连接的单元测试里<b>永远不会暴露</b>。
  *
- * <p>⚠️ <b>{@code targets} 存 JSONB</b>：顺序在 {@code ORDERED_FALLBACK}
- * 下降级语义下有意义，故用数组而非集合。读回时按 JSON 语义解析，
- * 不按字节比较（PG 的 {@code jsonb::text} 会规范化空白）。
+ * <p>⚠️ <b>三段结构存 JSONB，读回的是 PG 规范化后的文本，不是提交时的原文</b>：
+ * PG 的 {@code jsonb} 会重排对象键、压缩空白，但<b>保留数组顺序</b> ——
+ * 而数组顺序恰好是路由语义（{@code evaluation} 的规则次序、{@code in} 的字面量集合）。
+ * 于是产生一个隐蔽的要求：<b>内容指纹必须对规范化后的形态稳定</b>，
+ * 否则「写进去一行、读出来指纹变了」会让 {@code config_fingerprint}
+ * 失去「这行没变」的证明力（这正是它唯一的用途）。
+ * {@link cn.studykid.multiagent.application.cap.CapObjectFingerprint} 因此
+ * 对 JSON 列<b>递归排序对象键、保留数组顺序</b>后再哈希。
+ * 注意这与 {@code ClosureFingerprint} 的做法<b>刻意不同</b>：后者对顶层数组也排序，
+ * 因为参数策略的数组无序 —— 两处若写成同一个方法，路由的规则次序就会被悄悄抹平。
  */
 public class JdbcCapRoutingPolicyRepository implements CapRoutingPolicyPort {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    /** 三条查询共用的投影列（与 {@code JdbcCapApprovalRepository} 同写法：拼接点前用 {@code \s} 保空格）。 */
+    private static final String COLUMNS = """
+            tenant_id::text, policy_id::text, version, mode,
+                   input_schema::text, evaluation::text, default_target,
+                   no_match_action, on_conflict, sample_set::text,
+                   config_fingerprint, schema_version, created_at, published_at,
+                   lifecycle_state::text
+            """;
 
     private static final String SQL_INSERT = """
             INSERT INTO cap_routing_policy
-                (tenant_id, policy_id, version, strategy, targets, config_fingerprint,
+                (tenant_id, policy_id, version, mode, input_schema, evaluation, default_target,
+                 no_match_action, on_conflict, sample_set, config_fingerprint,
                  schema_version, created_at, published_at)
-            VALUES (?::uuid, ?, ?, ?, ?::jsonb, ?, ?, ?, ?)
+            VALUES (?::uuid, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?::jsonb, ?, ?, ?, ?)
             ON CONFLICT (tenant_id, policy_id, version) DO NOTHING
             """;
 
     private static final String SQL_FIND = """
-            SELECT tenant_id::text, policy_id::text, version, strategy, targets::text,
-                   config_fingerprint, schema_version, created_at, published_at,
-                   lifecycle_state::text
+            SELECT \s""" + COLUMNS + """
             FROM cap_routing_policy
             WHERE tenant_id = ?::uuid AND policy_id = ? AND version = ?
             """;
 
     private static final String SQL_FIND_LATEST_PUBLISHED = """
-            SELECT tenant_id::text, policy_id::text, version, strategy, targets::text,
-                   config_fingerprint, schema_version, created_at, published_at,
-                   lifecycle_state::text
+            SELECT \s""" + COLUMNS + """
             FROM cap_routing_policy
             WHERE tenant_id = ?::uuid AND policy_id = ?
               AND published_at IS NOT NULL
@@ -83,9 +92,7 @@ public class JdbcCapRoutingPolicyRepository implements CapRoutingPolicyPort {
      * 插入被 {@code ON CONFLICT DO NOTHING} 静默丢弃 → 「发布成功但策略没生效」。
      */
     private static final String SQL_FIND_LATEST = """
-            SELECT tenant_id::text, policy_id::text, version, strategy, targets::text,
-                   config_fingerprint, schema_version, created_at, published_at,
-                   lifecycle_state::text
+            SELECT \s""" + COLUMNS + """
             FROM cap_routing_policy
             WHERE tenant_id = ?::uuid AND policy_id = ?
             ORDER BY version DESC
@@ -107,15 +114,20 @@ public class JdbcCapRoutingPolicyRepository implements CapRoutingPolicyPort {
                         ps.setString(1, def.tenantId());
                         ps.setString(2, def.policyId());
                         ps.setInt(3, def.version());
-                        ps.setString(4, def.strategy().name());
-                        ps.setString(5, MAPPER.writeValueAsString(def.targets()));
-                        ps.setString(6, def.configFingerprint());
-                        ps.setInt(7, def.schemaVersion());
-                        ps.setTimestamp(8, Timestamp.from(def.createdAt()));
+                        ps.setString(4, def.mode().name());
+                        ps.setString(5, def.inputSchema());
+                        ps.setString(6, def.evaluation());
+                        ps.setString(7, def.defaultTarget());
+                        ps.setString(8, def.noMatchAction().name());
+                        ps.setString(9, def.onConflict().name());
+                        ps.setString(10, def.sampleSet());
+                        ps.setString(11, def.configFingerprint());
+                        ps.setInt(12, def.schemaVersion());
+                        ps.setTimestamp(13, Timestamp.from(def.createdAt()));
                         if (def.publishedAt() == null) {
-                            ps.setNull(9, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                            ps.setNull(14, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
                         } else {
-                            ps.setTimestamp(9, Timestamp.from(def.publishedAt()));
+                            ps.setTimestamp(14, Timestamp.from(def.publishedAt()));
                         }
                         return ps.executeUpdate() > 0;
                     }
@@ -176,16 +188,17 @@ public class JdbcCapRoutingPolicyRepository implements CapRoutingPolicyPort {
     private static CapRoutingPolicyDef map(ResultSet rs) throws SQLException {
         Timestamp publishedAt = rs.getTimestamp("published_at");
         Instant created = rs.getTimestamp("created_at").toInstant();
-        List<String> targets = MAPPER.readValue(rs.getString("targets"),
-                new TypeReference<List<String>>() {
-                });
-        RoutingStrategy strategy = RoutingStrategy.valueOf(rs.getString("strategy"));
         return new CapRoutingPolicyDef(
                 rs.getString("tenant_id"),
                 rs.getString("policy_id"),
                 rs.getInt("version"),
-                strategy,
-                targets,
+                RoutingMode.valueOf(rs.getString("mode")),
+                rs.getString("input_schema"),
+                rs.getString("evaluation"),
+                rs.getString("default_target"),
+                NoMatchAction.valueOf(rs.getString("no_match_action")),
+                ConflictPolicy.valueOf(rs.getString("on_conflict")),
+                rs.getString("sample_set"),
                 rs.getString("config_fingerprint"),
                 rs.getInt("schema_version"),
                 created,
