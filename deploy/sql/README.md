@@ -19,7 +19,9 @@ deploy/sql/
 │   ├── 02_platform_seed.sql               种子数据（pg_dump --inserts 导出）
 │   ├── 03_platform_roles.sql              数据库角色 + 授权（集群级，需 CREATEROLE）
 │   ├── 04_platform_admin_grant.sql        PLATFORM_ADMIN 带外赋权模板
-│   └── 06_platform_grant.sql              平台角色绑定（带外运维通道）
+│   ├── 06_platform_grant.sql              平台角色绑定（带外运维通道）
+│   ├── patch_execution_ticket_permission.sql  权限码补录（治理副本，幂等）
+│   └── patch_platform_tenant_registration.sql 租户平台侧登记补录（幂等，默认只 dry-run）
 └── rag/
     ├── 01_rag_ddl.sql                     完整结构（11 表 / 135 列 / 53 约束 / 9 枚举 /
     │                                      36 索引 / 11 RLS 开启 + 35 RLS 策略）
@@ -126,12 +128,19 @@ psql -h <host> -p 5432 -U <超管> -d study_rag -v ON_ERROR_STOP=1 \
 参考数据行数已逐项核对一致：字典 12/61、权限矩阵 23/6/52、`cap_agent_def` 3 ——
 差异仅在「应当剔除的垃圾」。
 
-**导出时的两处人工补写**（pg_dump 的已知盲区，均已实测撞到）：
+**导出时的人工补写**（pg_dump 的已知盲区，均已实测撞到）：
 
 1. `CREATE SCHEMA public/rag/platform` → 改为 `IF NOT EXISTS`：空库自带 public，否则复放即停。
 2. rag 的 `CREATE EXTENSION vector / pgcrypto`：pg_dump 不导出扩展本体，
    而 `rag_chunk_embedding.embedding` 依赖 `public.vector(1024)`，缺则报
    `ERROR: type "public.vector" does not exist`。
+3. `02_platform_seed.sql` 里 `platform.tenant` + `platform.tenant_quota` 两段（2026-10-29 补）：
+   **不是 DDL 盲区，是数据盲区** —— 导出时基准库里根本没有平台侧租户行，
+   于是复放出来的种子租户「业务侧 ACTIVE、平台侧无登记」：worker 照常执行，
+   但取执行票证得 404 `TENANT_NOT_FOUND`（症状指向票证，根因在夹具）。
+   这两行按 `JdbcPlatformTenantRepository.provisionTenant` 的形状手写补齐，顺序在 `public.tenant` 之前。
+   **灌完种子后请跑一次巡检**：`scripts/check-tenant-registry.sh`（只读，退出码 0 才算一致；
+   它同时是今后任何「手写 SQL 造租户」的兜底守卫）。
 
 ---
 
