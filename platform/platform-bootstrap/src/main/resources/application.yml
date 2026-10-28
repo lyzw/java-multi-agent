@@ -415,6 +415,31 @@ dr:
   rto: 4h
 
 
+# ── 平台安全：跨域执行票证通道 ─────────────────────────────────────
+# 平台侧为「指定租户的指定成员」签发一枚短时租户令牌，
+# 供 admin-console AI 实验室走真实执行链路（/api/runs 是租户域端点，
+# 平台令牌打过去必然 401 —— 受众隔离按设计生效，不是缺陷）。
+#
+# ⚠️⚠️ **本段必须是顶层 platform:**：配置键是
+#   platform.security.execution-ticket.enabled，由 PlatformExecutionTicketService
+#   的 @Value 逐字读取。挂到 auth: 或 agent: 下**不会报错**，
+#   只会让读取落回默认值 —— 与 platform-ops 误挂 config: 同一类事故
+#   （守卫见 ApplicationConfigKeyAlignmentTest，platform. 已纳入命名空间白名单）。
+#
+# ⚠️ **默认开启是明确决策**（2026-10-28）：任何环境都会暴露这个「可扮演
+#    任意租户执行」的端点。补偿控制全在签发这一次调用上，且缺一不可：
+#    权限码 platform.tenant.execution_ticket **仅**超级管理员持有（矩阵驱动、默认拒绝）、
+#    每次签发写一条平台审计（含目标租户、被扮演主体、票证 jti）、按目标租户限流、
+#    TTL 60 秒。关掉本开关只用于「暂不接受跨域执行」的部署：
+#    关闭后请求得到 503，**仍然留痕**。
+platform:
+  security:
+    execution-ticket:
+      enabled: "${PLATFORM_EXECUTION_TICKET_ENABLED:true}"
+      # 票证有效期（秒）。下界 60 与登录令牌同源，小于即拒绝启动。
+      ttl-seconds: "60"
+
+
 # ── 统一配置与权限管控（W-PERM-P0 迁移期开关）──────────────────────
 config:
   flag:

@@ -50,7 +50,11 @@ class ApplicationConfigKeyAlignmentTest {
 
     /** 配置键的合法命名空间（其余命名空间不算配置键，忽略）。 */
     private static final List<String> NAMESPACES = List.of(
-            "agent.", "auth.", "config.", "dr.", "deployment.", "management.", "spring.");
+            "agent.", "auth.", "config.", "dr.", "deployment.", "management.", "spring.",
+            // ⚠️ platform. 是「跨域执行票证」段的命名空间（顶层 platform.security.*）。
+            //    不列进来这个守卫就**看不见**它 —— 键写错父级时依旧静默落回默认值，
+            //    正是本类要拦的那一类故障。
+            "platform.");
 
     /**
      * 由环境变量提供、不在 yml 中声明的键。
@@ -109,6 +113,28 @@ class ApplicationConfigKeyAlignmentTest {
         assertThat(keys)
                 .as("⚠️ yml 里仍存在 auth.alerts.webhook-url —— 误挂在 auth: 下的残留")
                 .noneMatch(k -> k.startsWith("auth.alerts."));
+    }
+
+    @Test
+    @DisplayName("⚠️⚠️ 执行票证开关必须挂在顶层 platform: 下")
+    void executionTicketKeysLiveAtTopLevel() {
+        Set<String> keys = yamlKeys();
+
+        for (String key : List.of(
+                "platform.security.execution-ticket.enabled",
+                "platform.security.execution-ticket.ttl-seconds")) {
+            assertThat(keys)
+                    .as("⚠️⚠️ yml 缺少 %s —— 该键无默认值时启动失败，"
+                            + "有默认值时「配了也不生效」且无任何报错", key)
+                    .contains(key);
+        }
+
+        assertThat(keys)
+                .as("⚠️ 执行票证段被误挂进 auth./agent./config. —— "
+                        + "代码读的是顶层 platform.security.execution-ticket.*")
+                .noneMatch(k -> k.startsWith("auth.security.execution-ticket")
+                        || k.startsWith("agent.security.execution-ticket")
+                        || k.startsWith("config.security.execution-ticket"));
     }
 
     @Test
