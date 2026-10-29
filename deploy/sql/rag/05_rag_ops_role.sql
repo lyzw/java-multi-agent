@@ -105,9 +105,19 @@ SELECT format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA rag FROM %I', :'rag_ops_rol
 -- ⚠️ 刻意**不设** app.tenant_id 的角色级默认值：连接是池化的，
 --    角色级默认租户会把上一个持有连接者的作用域伪装成当前请求的作用域
 --    （RagSessionScope 的注释记录了同一个坑）。
+-- ⚠️⚠️ search_path 这条**不能用 %L**（实测踩到，反证 P13-5 就是为此而钉的）：
+--    format('... SET search_path = %L', 'rag, public') 会写成
+--      ALTER ROLE rag_ops SET search_path = 'rag, public'
+--    引号包住整个列表时，PG 把它存成**一个**标识符 `"rag, public"`（含逗号的名字），
+--    于是角色级默认看似设上了、实际解析不到任何表：
+--      SHOW search_path → "rag, public"（带引号，实测）
+--      to_regclass('rag_source') → NULL（实测；不带引号时为 rag.rag_source）
+--    而**没有任何报错**。应用侧不受影响（HikariCP 的 connection-init-sql 是会话内
+--    `SET search_path TO rag, public`，走的是列表语法），受害的是带外 psql 运维——
+--    恰恰是这个角色默认值存在的理由。列表型 GUC 必须逐元素给：
 SELECT format('ALTER ROLE %I SET statement_timeout = %L', :'rag_ops_role', '30s') \gexec
 SELECT format('ALTER ROLE %I SET idle_in_transaction_session_timeout = %L', :'rag_ops_role', '15s') \gexec
-SELECT format('ALTER ROLE %I SET search_path = %L', :'rag_ops_role', 'rag, public') \gexec
+SELECT format('ALTER ROLE %I SET search_path = %s', :'rag_ops_role', 'rag, public') \gexec
 
 
 -- =====================================================================
