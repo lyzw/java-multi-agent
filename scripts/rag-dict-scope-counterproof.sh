@@ -41,7 +41,11 @@ PROBE_DB="${PROBE_DB:-rag_scope_probe}"
 APP_ROLE="${PROBE_APP_ROLE:-rag_probe_app}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MIGRATION_DIR="$SCRIPT_DIR/../rag/rag-infrastructure/src/main/resources/db/migration"
+# ⚠️ 库结构权威源：Flyway 迁移链已于 commit 826d77b 整体删除（V1→V8 不再存在），
+#    本脚本此前仍在扫 rag-infrastructure/src/main/resources/db/migration/ ——
+#    那个目录现在是空的，glob 匹配不到文件、循环只跑一次「不存在的文件名」，
+#    实测第一行就 die（不会假绿，但字典反证从那天起**一条都没测过**）。
+DDL_FILE="$SCRIPT_DIR/../deploy/sql/rag/01_rag_ddl.sql"
 
 T_TENANT="11111111-1111-1111-1111-111111111111"
 U_TENANT="22222222-2222-2222-2222-222222222222"
@@ -118,18 +122,15 @@ docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d postgres -q -c \
 docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d postgres -q -c \
     "CREATE DATABASE $PROBE_DB" >/dev/null 2>&1 || die "建库失败"
 
-say "按序应用迁移 V1 → 最新（自动发现，不硬编码清单）"
-for f in "$MIGRATION_DIR"/V[0-9]*__*.sql; do
-    name="$(basename "$f")"
-    # ⚠️ 迁移必须带 search_path：V*.sql 内部用未限定表名，且依赖 public 里的扩展。
-    { printf 'SET search_path TO rag, public;\n'; cat "$f"; } \
-        | docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d "$PROBE_DB" \
-              -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 \
-        || { printf '\033[0;31m[PROBE] ✗ 迁移 %s 应用失败\033[0m\n' "$name"; exit 1; }
-    say "  · $name 已应用"
-done
+say "应用权威库结构 $(basename "$DDL_FILE")"
+[ -f "$DDL_FILE" ] || die "找不到库结构权威源：$DDL_FILE"
+{ printf 'SET search_path TO rag, public;\n'; cat "$DDL_FILE"; } \
+    | docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d "$PROBE_DB" \
+          -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 \
+    || die "库结构应用失败（临时库可能残留旧对象，可 DROP DATABASE $PROBE_DB 后重跑）"
+say "  · 结构已应用（含 RLS 策略、CHECK、唯一索引）"
 
-say "创建非特权应用角色 $APP_ROLE（对齐 03_rag_roles.sql 的授权面）"
+say "创建非特权应用角色 $APP_ROLE（对齐 deploy/sql/rag/03_rag_roles.sql 的授权面）"
 docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d "$PROBE_DB" -q >/dev/null <<EOF
 DO \$\$
 BEGIN
