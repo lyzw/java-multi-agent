@@ -18,6 +18,8 @@ import type {
   RagVerificationStatus,
 } from '@/api/ragTypes'
 import { RAG_VERIFICATION_LABELS, RAG_LICENSE_LABELS } from '@/api/ragTypes'
+import { isRagTargetReady, isRagWriteTarget } from '@/api/ragClient'
+import type { RagTarget } from '@/api/ragClient'
 import type { RagSourceListState } from '@/features/rag/useRagManagement'
 import { useDictOptions } from '@/features/dictionaries/useDictionaries'
 import { TrustTierTag, VerificationTag } from './ragUi'
@@ -26,8 +28,8 @@ const { Text } = Typography
 
 export interface RagSourceTableProps {
   state: RagSourceListState
-  /** 当前租户；空串时所有会发请求的入口一律禁用（后端缺 X-Tenant-Id 直接 400）。 */
-  tenantId: string
+  /** 当前作用域目标；租户档未选租户时所有会发请求的入口一律禁用（后端缺 X-Tenant-Id 直接 400）。 */
+  target: RagTarget
   onQuery: (query: RagSourceQuery) => void
   onRefresh: () => void
   onSelect: (source: RagSource) => void
@@ -106,7 +108,7 @@ const columns: ColumnsType<RagSource> = [
 
 export function RagSourceTable({
   state,
-  tenantId,
+  target,
   onQuery,
   onRefresh,
   onSelect,
@@ -132,24 +134,29 @@ export function RagSourceTable({
    * ⚠️ 只写一行说明文字、按钮照旧可点，等于让管理员点一次就吃一个 400；
    *    禁用 + tooltip 才把「为什么不能点」说清楚，也不会有人把它当成故障上报。
    */
-  const tenantReady = tenantId.trim() !== ''
-  const needTenantTip = '请先在上方选择租户'
+  const ready = isRagTargetReady(target)
+  /** 写入口（登记）在平台全局档禁用——本刀全局语料只读。 */
+  const writable = isRagWriteTarget(target)
+  const needTenantTip =
+    target.scope === 'TENANT'
+      ? '请先在上方选择租户'
+      : '平台全局语料在本刀只读：写通道需独立运维数据源（RAG-D11 第四刀·第二刀）'
 
   return (
     <Card
       title="语料来源"
       extra={
         <Space>
-          <Tooltip title={tenantReady ? '' : needTenantTip}>
+          <Tooltip title={ready ? '' : needTenantTip}>
             <Button
               onClick={onRefresh}
-              disabled={!tenantReady || state.status === 'loading'}
+              disabled={!ready || state.status === 'loading'}
             >
               刷新
             </Button>
           </Tooltip>
-          <Tooltip title={tenantReady ? '' : needTenantTip}>
-            <Button type="primary" onClick={onRegister} disabled={!tenantReady}>
+          <Tooltip title={writable ? '' : needTenantTip}>
+            <Button type="primary" onClick={onRegister} disabled={!writable}>
               登记来源
             </Button>
           </Tooltip>
@@ -191,18 +198,18 @@ export function RagSourceTable({
         </Form.Item>
         <Form.Item>
           <Space>
-            <Tooltip title={tenantReady ? '' : needTenantTip}>
+            <Tooltip title={ready ? '' : needTenantTip}>
               <Button
                 type="primary"
                 htmlType="submit"
-                disabled={!tenantReady}
+                disabled={!ready}
                 loading={state.status === 'loading'}
               >
                 查询
               </Button>
             </Tooltip>
             <Button
-              disabled={!tenantReady}
+              disabled={!ready}
               onClick={() => {
                 form.resetFields()
                 onQuery({ includeStale: true, limit: 100 })

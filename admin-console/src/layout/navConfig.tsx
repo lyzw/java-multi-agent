@@ -174,7 +174,7 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: <FileSearchOutlined />,
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
-          '教辅语料治理：登记 → 校验流转 → 可检索。独立 RAG 服务（默认 8081，/api/v1/management/*），必须携带 X-Tenant-Id，故平台控制台需显式选择租户。撤回是终态、无删除入口。',
+          '教辅语料治理：登记 → 校验流转 → 可检索。独立 RAG 服务（默认 8081，/api/v1/management/*），作用域由 X-Rag-Scope 显式声明：本租户语料需选租户（读写俱全），平台全局语料不选租户（本刀只读）。撤回是终态、无删除入口。',
         phase: '知识与数据',
       },
     ],

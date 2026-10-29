@@ -32,7 +32,15 @@ import {
   Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { getRagIssues, reindexRagCorpus, retrieveRagChunks, ApiError } from '@/api/ragClient'
+import {
+  getRagIssues,
+  reindexRagCorpus,
+  retrieveRagChunks,
+  isRagTargetReady,
+  isRagWriteTarget,
+  ApiError,
+} from '@/api/ragClient'
+import type { RagTarget } from '@/api/ragClient'
 import type {
   RagIssueDocument,
   RagIssueSource,
@@ -105,10 +113,11 @@ const hitColumns: ColumnsType<RagRetrievalHit> = [
 ]
 
 export interface RagMaintenancePanelProps {
-  tenantId: string
+  /** 当前作用域目标（平台全局档下只开放只读的问题清单） */
+  target: RagTarget
 }
 
-export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX.Element {
+export function RagMaintenancePanel({ target }: RagMaintenancePanelProps): JSX.Element {
   const [issues, setIssues] = useState<IssuesState>({ kind: 'idle' })
   const [reindex, setReindex] = useState<RagReindexResult | null>(null)
   const [reindexing, setReindexing] = useState(false)
@@ -141,13 +150,22 @@ export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX
   } | null>(null)
 
   /** 未选租户时禁用所有会发请求的入口（缺 X-Tenant-Id 后端直接 400）。 */
-  const tenantReady = tenantId.trim() !== ''
-  const needTenantTip = '请先在上方选择租户'
+  const ready = isRagTargetReady(target)
+  /**
+   * 重跑索引与检索探针都**只在租户档**可用：
+   * 前者是写操作（平台档后端 409），后者按租户上下文召回（平台档没有租户）。
+   * 问题清单是只读的，平台全局档照常可看。
+   */
+  const tenantOnly = isRagWriteTarget(target)
+  const needTenantTip =
+    target.scope === 'TENANT'
+      ? '请先在上方选择租户'
+      : '平台全局语料在本档只读：重跑索引与检索探针需要租户上下文（写通道属 RAG-D11 第四刀·第二刀）'
 
   const loadIssues = async (): Promise<void> => {
     setIssues({ kind: 'loading' })
     try {
-      const data = await getRagIssues(tenantId)
+      const data = await getRagIssues(target)
       setIssues({ kind: 'ok', data })
     } catch (cause) {
       setIssues({ kind: 'error', message: cause instanceof ApiError ? cause.message : '读取失败' })
@@ -159,7 +177,7 @@ export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX
     setReindexError(null)
     setReindex(null)
     try {
-      const result = await reindexRagCorpus(tenantId, indexLimit)
+      const result = await reindexRagCorpus(target, indexLimit)
       setReindex(result)
     } catch (cause) {
       setReindexError(cause instanceof ApiError ? cause.message : '重跑索引失败')
@@ -174,7 +192,7 @@ export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX
     setHits(null)
     setProbeMeta(null)
     try {
-      const res = await retrieveRagChunks(tenantId, {
+      const res = await retrieveRagChunks(target, {
         query,
         mode,
         edition: { subject, grade, term, publisher, revisionCode },
@@ -199,11 +217,11 @@ export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX
       <Card
         title="问题清单"
         extra={
-          <Tooltip title={tenantReady ? '' : needTenantTip}>
+          <Tooltip title={ready ? '' : needTenantTip}>
             <Button
               onClick={() => void loadIssues()}
               loading={issues.kind === 'loading'}
-              disabled={!tenantReady}
+              disabled={!ready}
             >
               加载问题清单
             </Button>
@@ -287,11 +305,11 @@ export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX
         <Space>
           <Text>单次上限</Text>
           <InputNumber min={1} max={2000} value={indexLimit} onChange={(v) => setIndexLimit(v ?? 500)} />
-          <Tooltip title={tenantReady ? '' : needTenantTip}>
+          <Tooltip title={tenantOnly ? '' : needTenantTip}>
             <Button
               type="primary"
               loading={reindexing}
-              disabled={!tenantReady}
+              disabled={!tenantOnly}
               onClick={() => void runReindex()}
             >
               重跑索引
@@ -381,8 +399,8 @@ export function RagMaintenancePanel({ tenantId }: RagMaintenancePanelProps): JSX
             placeholder="检索问题，如：一元一次方程移项要注意什么"
           />
         </Space>
-        <Tooltip title={tenantReady ? '' : needTenantTip}>
-          <Button type="primary" loading={probing} disabled={!tenantReady} onClick={() => void runProbe()}>
+        <Tooltip title={tenantOnly ? '' : needTenantTip}>
+          <Button type="primary" loading={probing} disabled={!tenantOnly} onClick={() => void runProbe()}>
             执行检索
           </Button>
         </Tooltip>

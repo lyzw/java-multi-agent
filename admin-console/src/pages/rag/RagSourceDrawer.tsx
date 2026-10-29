@@ -28,8 +28,11 @@ import {
   applyRagDocumentVerification,
   listRagChunks,
   listRagDocuments,
+  isRagTargetReady,
+  isRagWriteTarget,
   ApiError,
 } from '@/api/ragClient'
+import type { RagTarget } from '@/api/ragClient'
 import type {
   RagChunk,
   RagDocument,
@@ -45,7 +48,8 @@ const { Text } = Typography
 
 export interface RagSourceDrawerProps {
   source: RagSource | null
-  tenantId: string
+  /** 当前作用域目标（平台全局档下载体流转只读） */
+  target: RagTarget
   onClose: () => void
   onVerified: (sourceId: string, payload: RagVerificationRequest) => void
   actionStatus: string
@@ -61,7 +65,7 @@ type DocsState =
 
 export function RagSourceDrawer({
   source,
-  tenantId,
+  target,
   onClose,
   onVerified,
   actionStatus,
@@ -78,8 +82,17 @@ export function RagSourceDrawer({
 
   const sourceId = source?.sourceId ?? null
 
+  /**
+   * 平台全局档只读（本刀）：写通道需独立运维数据源。
+   *
+   * ⚠️ 在这里收口成**一个**旗标，让「来源流转」「载体流转」「载体列表的校验按钮」
+   *    三处入口一起消失。若只禁一处，管理员会在另外两处点到 409，
+   *    而后端的 409 文案讲的是架构原因，不像「这个按钮不该出现」。
+   */
+  const writable = isRagWriteTarget(target)
+
   useEffect(() => {
-    if (!sourceId || !tenantId) return
+    if (!sourceId || !isRagTargetReady(target)) return
     let cancelled = false
     setDocs({ kind: 'loading' })
     setChunks(null)
@@ -87,7 +100,7 @@ export function RagSourceDrawer({
     setDocError(null)
     const run = async (): Promise<void> => {
       try {
-        const list = await listRagDocuments(tenantId, sourceId)
+        const list = await listRagDocuments(target, sourceId)
         if (cancelled) return
         setDocs(list.length === 0 ? { kind: 'empty' } : { kind: 'ok', docs: list })
       } catch (cause) {
@@ -102,14 +115,14 @@ export function RagSourceDrawer({
     return () => {
       cancelled = true
     }
-  }, [sourceId, tenantId])
+  }, [sourceId, target])
 
   const openChunks = async (doc: RagDocument): Promise<void> => {
     setActiveDoc(doc)
     setChunksLoading(true)
     setChunks(null)
     try {
-      const list = await listRagChunks(tenantId, doc.documentId, 100)
+      const list = await listRagChunks(target, doc.documentId, 100)
       setChunks(list)
     } catch (cause) {
       setDocError(cause instanceof ApiError ? cause.message : '读取片段失败')
@@ -123,9 +136,9 @@ export function RagSourceDrawer({
     setDocNotice(null)
     setDocSubmitting(true)
     try {
-      await applyRagDocumentVerification(tenantId, doc.documentId, payload)
+      await applyRagDocumentVerification(target, doc.documentId, payload)
       // 就地刷新载体列表
-      const list = await listRagDocuments(tenantId, doc.sourceId)
+      const list = await listRagDocuments(target, doc.sourceId)
       setDocs(list.length === 0 ? { kind: 'empty' } : { kind: 'ok', docs: list })
       // ⚠️ 成功也要出声：原先只清空错误，界面看不出「点过了没有」，
       //    审核员会重复提交同一个流转（第二次多半吃一个 409）。
@@ -188,7 +201,7 @@ export function RagSourceDrawer({
           <Button size="small" onClick={() => void openChunks(row)}>
             片段
           </Button>
-          {row.verificationStatus && allowedVerificationTargets(row.verificationStatus).length > 0 ? (
+          {writable && row.verificationStatus && allowedVerificationTargets(row.verificationStatus).length > 0 ? (
             <Button
               size="small"
               type="link"
@@ -273,7 +286,14 @@ export function RagSourceDrawer({
                     <Descriptions.Item label="有效期">{source.validDays} 天</Descriptions.Item>
                   </Descriptions>
 
-                  {allowedVerificationTargets(source.verificationStatus).length === 0 ? (
+                  {!writable ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="平台全局语料：本档只读"
+                      description="全局语料的写通道需独立运维数据源（RAG-D11 第四刀·第二刀）。本页可查状态、载体与片段，不在此处流转校验状态。"
+                    />
+                  ) : allowedVerificationTargets(source.verificationStatus).length === 0 ? (
                     <Alert
                       type="warning"
                       showIcon
@@ -341,7 +361,8 @@ export function RagSourceDrawer({
                     />
                   )}
 
-                  {activeDoc?.verificationStatus &&
+                  {writable &&
+                    activeDoc?.verificationStatus &&
                     allowedVerificationTargets(activeDoc.verificationStatus).length > 0 && (
                       <>
                         <Typography.Title level={5} style={{ marginBottom: 0 }}>

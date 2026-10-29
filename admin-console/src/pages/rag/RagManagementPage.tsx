@@ -1,10 +1,18 @@
 /**
  * RAG 语料数据管理（admin-console 平台侧）。
  *
- * ⚠️ **为什么必须有租户选择器**：RAG 管理端点全部要求 `X-Tenant-Id`，
- *    缺失返回 400（fail-closed，不静默空列表）。admin-console 本身是
- *    **平台控制台**（无自己的租户上下文），所以租户必须显式选择——
- *    这不是 UI 冗余，而是后端契约的必然结果。
+ * ⚠️ **三档作用域**（RAG-D11 第四刀·第一刀）：语料由谁维护决定了这里能看什么——
+ *    `TENANT`（本租户私有语料，需选租户，读写俱全）、
+ *    `PLATFORM`（平台维护的全局语料，**不选租户**，本刀只读）、
+ *    `ALL`（跨租户盘点，需运维数据源，后端 501，入口先占位）。
+ *
+ *    作用域**由分段控件显式声明**并落到 `X-Rag-Scope` 头，
+ *    刻意不由「有没有选租户」隐式推断：那样「忘记选租户」会静默变成
+ *    一次跨租户或全局查询，把本地配置错误伪装成正常结果。
+ *
+ * ⚠️ `TENANT` 档仍必须选租户：该档的管理端点缺 `X-Tenant-Id` 返回 400
+ *    （fail-closed，不静默空列表）。admin-console 本身是**平台控制台**
+ *    （无自己的租户上下文），所以租户档里的租户必须显式选择。
  *
  * ⚠️ **通道差异**：RAG 是独立服务（默认 8081），与平台 API（8080）不同源。
  *    开发态靠 vite 代理 `/api/v1` → 8081（**必须排在 `/api` 之前**，
@@ -12,14 +20,17 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Card, Modal, Select, Space, Tabs, Typography } from 'antd'
+import { Alert, Card, Modal, Segmented, Select, Space, Tabs, Typography } from 'antd'
 import { getPlatformTenants } from '@/api/adminApi'
 import type { PlatformTenant } from '@/api/types'
 import {
   getRagDailyImports,
   getRagDailySearches,
+  isRagTargetReady,
+  tenantTarget,
   ApiError,
 } from '@/api/ragClient'
+import type { RagCorpusScope, RagTarget } from '@/api/ragClient'
 import type {
   RagDailyImportCount,
   RagDailySearchCount,
@@ -40,6 +51,8 @@ export function RagManagementPage(): JSX.Element {
   const [tenants, setTenants] = useState<PlatformTenant[]>([])
   const [tenantError, setTenantError] = useState<string | null>(null)
   const [tenantId, setTenantId] = useState<string>('')
+  /** 作用域档位（缺省租户档——与本刀之前的行为逐字节一致）。 */
+  const [scope, setScope] = useState<RagCorpusScope>('TENANT')
   const [selected, setSelected] = useState<RagSource | null>(null)
   const [registerOpen, setRegisterOpen] = useState(false)
   /**
@@ -52,6 +65,19 @@ export function RagManagementPage(): JSX.Element {
 
   const [searches, setSearches] = useState<RagDailySearchCount[]>([])
   const [imports, setImports] = useState<RagDailyImportCount[]>([])
+
+  /**
+   * 一次页面上的「查哪一批行」。
+   *
+   * ⚠️ 用 `useMemo` 固定引用：子组件（抽屉 / 维护面板）把它放进 effect 依赖，
+   *    每次渲染换引用会让它们反复重发请求。
+   * ⚠️ 平台档**刻意不带租户 ID**：后端同时收到 `X-Rag-Scope: PLATFORM` 与
+   *    `X-Tenant-Id` 时返回 400——两种身份互斥，同时给出说明调用方自己不清楚要看什么。
+   */
+  const target = useMemo<RagTarget>(
+    () => (scope === 'TENANT' ? tenantTarget(tenantId) : { scope }),
+    [scope, tenantId],
+  )
 
   const {
     sources,
@@ -86,10 +112,10 @@ export function RagManagementPage(): JSX.Element {
   }, [])
 
   /**
-   * 切租户即清空上一个租户的数据。
+   * 切租户**或切作用域档**即清空上一批数据。
    *
    * ⚠️ 不这么做，右侧详情抽屉、校验动作提示、维护面板结果会**留在页面上**，
-   *    看起来像是新租户的数据——治理结论张冠李戴，比空列表危险得多。
+   *    看起来像是新租户／全局语料的数据——治理结论张冠李戴，比空列表危险得多。
    *    首渲染的 tenantId 为空串，清空是 no-op，故无需跳过。
    */
   useEffect(() => {
@@ -98,19 +124,19 @@ export function RagManagementPage(): JSX.Element {
     resetAll()
     setSearches([])
     setImports([])
-  }, [tenantId, resetAll])
+  }, [tenantId, scope, resetAll])
 
-  /** 选择租户即触发首次加载（列表 + 统计 + 每日报表）。 */
+  /** 选定作用域（租户档还需选租户）即触发首次加载：列表 + 统计 + 每日报表。 */
   useEffect(() => {
-    if (tenantId.trim() === '') return
-    loadSources(tenantId, { includeStale: true, limit: 100 })
-    loadStats(tenantId)
+    if (!isRagTargetReady(target)) return
+    loadSources(target, { includeStale: true, limit: 100 })
+    loadStats(target)
     let cancelled = false
     const run = async (): Promise<void> => {
       try {
         const [s, i] = await Promise.all([
-          getRagDailySearches(tenantId, 30),
-          getRagDailyImports(tenantId, 30),
+          getRagDailySearches(target, 30),
+          getRagDailyImports(target, 30),
         ])
         if (cancelled) return
         setSearches(s.searchesByDay)
@@ -126,20 +152,20 @@ export function RagManagementPage(): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [tenantId, loadSources, loadStats])
+  }, [target, loadSources, loadStats])
 
   const onQuery = useCallback(
     (query: RagSourceQuery) => {
-      loadSources(tenantId, query)
+      loadSources(target, query)
     },
-    [tenantId, loadSources],
+    [target, loadSources],
   )
 
   const onVerified = useCallback(
     (sourceId: string, payload: RagVerificationRequest) => {
-      verify(tenantId, sourceId, payload)
+      verify(target, sourceId, payload)
     },
-    [tenantId, verify],
+    [target, verify],
   )
 
   const tenantOptions = useMemo(
@@ -167,12 +193,28 @@ export function RagManagementPage(): JSX.Element {
 
       <Card size="small">
         <Space wrap>
+          <Text>作用域</Text>
+          <Segmented<RagCorpusScope>
+            value={scope}
+            onChange={(v) => setScope(v)}
+            options={[
+              { label: '本租户语料', value: 'TENANT' },
+              { label: '平台全局语料', value: 'PLATFORM', title: '平台维护、全部租户共享的语料（本档只读）' },
+              {
+                label: '跨租户盘点',
+                value: 'ALL',
+                disabled: true,
+                title: '需平台运维数据源（BYPASSRLS 只读角色），属第四刀·第三档',
+              },
+            ]}
+          />
           <Text>租户</Text>
           <Select
             showSearch
             style={{ width: 320 }}
-            placeholder="选择租户（RAG 管理端点要求 X-Tenant-Id）"
-            value={tenantId || undefined}
+            disabled={scope !== 'TENANT'}
+            placeholder={scope === 'TENANT' ? '选择租户（本档管理端点要求 X-Tenant-Id）' : '平台全局语料不属于任何租户'}
+            value={scope === 'TENANT' ? tenantId || undefined : undefined}
             onChange={(v) => setTenantId(v ?? '')}
             options={tenantOptions}
             filterOption={(input, option) =>
@@ -180,11 +222,20 @@ export function RagManagementPage(): JSX.Element {
             }
           />
         </Space>
-        {tenantId.trim() === '' && (
+        {scope === 'TENANT' && tenantId.trim() === '' && (
           <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-            未选择租户时不会发起任何 RAG 请求，下方相关入口已一并置灰——
+            租户档未选择租户时不会发起任何 RAG 请求，下方相关入口已一并置灰——
             缺租户头后端会返回 400，这是本地配置问题，不该被伪装成后端故障。
           </Paragraph>
+        )}
+        {scope === 'PLATFORM' && (
+          <Alert
+            style={{ marginTop: 8 }}
+            type="info"
+            showIcon
+            message="平台全局语料：本档只读"
+            description="这里看的是平台自己维护、全部租户共享的那批语料（租户列等于全局哨兵）。登记、校验流转、重跑索引仍只作用于租户档——全局语料的写通道需要独立运维数据源（RAG-D11 第四刀·第二刀），不是把这个开关打开就行。"
+          />
         )}
       </Card>
 
@@ -198,7 +249,7 @@ export function RagManagementPage(): JSX.Element {
               <>
                 <RagSourceTable
                   state={sources}
-                  tenantId={tenantId}
+                  target={target}
                   onQuery={onQuery}
                   onRefresh={retrySources}
                   onSelect={setSelected}
@@ -206,7 +257,7 @@ export function RagManagementPage(): JSX.Element {
                 />
                 <RagSourceDrawer
                   source={selected}
-                  tenantId={tenantId}
+                  target={target}
                   onClose={() => {
                     setSelected(null)
                     resetAction()
@@ -226,7 +277,7 @@ export function RagManagementPage(): JSX.Element {
                     submitting={action.status === 'submitting'}
                     registeredBy={currentPrincipalId()}
                     onSubmit={(payload) => {
-                      register(tenantId, payload)
+                      register(target, payload)
                       setRegisterOpen(false)
                       retrySources()
                     }}
@@ -250,7 +301,7 @@ export function RagManagementPage(): JSX.Element {
           {
             key: 'maintenance',
             label: '维护',
-            children: <RagMaintenancePanel key={maintenanceKey} tenantId={tenantId} />,
+            children: <RagMaintenancePanel key={maintenanceKey} target={target} />,
           },
         ]}
       />

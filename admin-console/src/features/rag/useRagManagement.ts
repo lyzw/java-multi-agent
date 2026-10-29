@@ -25,8 +25,10 @@ import {
   registerRagSource,
   bulkRegisterRagSources,
   isRagTimeout,
+  isRagTargetReady,
   ApiError,
 } from '@/api/ragClient'
+import type { RagTarget } from '@/api/ragClient'
 import type {
   RagSource,
   RagStatistics,
@@ -127,15 +129,15 @@ export interface UseRagManagementResult {
   /** 批量导入状态（独立的五态，避免与单条审核动作互相干扰） */
   bulk: RagBulkState
   /** 加载来源列表（可带筛选条件） */
-  loadSources: (tenantId: string, query?: RagSourceQuery) => void
+  loadSources: (target: RagTarget, query?: RagSourceQuery) => void
   /** 加载统计 */
-  loadStats: (tenantId: string) => void
+  loadStats: (target: RagTarget) => void
   /** 执行一次校验状态流转 */
-  verify: (tenantId: string, sourceId: string, payload: RagVerificationRequest) => void
+  verify: (target: RagTarget, sourceId: string, payload: RagVerificationRequest) => void
   /** 登记新的语料来源 */
-  register: (tenantId: string, payload: RagRegisterSourceRequest) => void
+  register: (target: RagTarget, payload: RagRegisterSourceRequest) => void
   /** 批量登记语料来源（数据导入） */
-  bulkRegister: (tenantId: string, registeredBy: string, items: RagBulkSourceItem[]) => void
+  bulkRegister: (target: RagTarget, registeredBy: string, items: RagBulkSourceItem[]) => void
   /** 重跑最近一次列表查询 */
   retrySources: () => void
   /** 重跑最近一次统计查询 */
@@ -144,7 +146,7 @@ export interface UseRagManagementResult {
   resetAction: () => void
   /** 清空批量导入结果 */
   resetBulk: () => void
-  /** 清空全部租户作用域状态（切换租户时调用） */
+  /** 清空全部作用域状态（切换租户或作用域档位时调用） */
   resetAll: () => void
 }
 
@@ -172,20 +174,22 @@ export function useRagManagement(): UseRagManagementResult {
   const [statsNonce, setStatsNonce] = useState(0)
   /** 最近一次查询参数：retry 复用，避免把表单状态塞进 effect 依赖 */
   const lastQuery = useRef<RagSourceQuery>({})
-  const lastTenant = useRef<string>('')
+  const lastTarget = useRef<RagTarget>({ scope: 'TENANT', tenantId: '' })
 
   useEffect(() => {
     if (listNonce === 0) return
-    const tenantId = lastTenant.current
-    // ⚠️ 无租户不发请求：后端会返回 400，"没填租户"是本地配置问题，不该伪装成后端故障。
-    if (tenantId.trim() === '') return
+    const target = lastTarget.current
+    // ⚠️ 租户档没选租户就不发请求：后端会返回 400，
+    //    「没填租户」是本地配置问题，不该伪装成后端故障。
+    //    平台全局档不需要租户，因此始终可发。
+    if (!isRagTargetReady(target)) return
 
     let cancelled = false
     setSources({ status: 'loading', sources: [], error: null })
 
     const run = async (): Promise<void> => {
       try {
-        const list = await listRagSources(tenantId, lastQuery.current)
+        const list = await listRagSources(target, lastQuery.current)
         if (cancelled) return
         setSources({
           status: list.length === 0 ? 'empty' : 'success',
@@ -205,15 +209,15 @@ export function useRagManagement(): UseRagManagementResult {
 
   useEffect(() => {
     if (statsNonce === 0) return
-    const tenantId = lastTenant.current
-    if (tenantId.trim() === '') return
+    const target = lastTarget.current
+    if (!isRagTargetReady(target)) return
 
     let cancelled = false
     setStats({ status: 'loading', stats: null, error: null })
 
     const run = async (): Promise<void> => {
       try {
-        const data = await getRagStatistics(tenantId)
+        const data = await getRagStatistics(target)
         if (cancelled) return
         setStats({ status: 'success', stats: data, error: null })
       } catch (cause) {
@@ -227,23 +231,23 @@ export function useRagManagement(): UseRagManagementResult {
     }
   }, [statsNonce])
 
-  const loadSources = useCallback((tenantId: string, query: RagSourceQuery = {}) => {
-    lastTenant.current = tenantId
+  const loadSources = useCallback((target: RagTarget, query: RagSourceQuery = {}) => {
+    lastTarget.current = target
     lastQuery.current = query
     setListNonce((n) => n + 1)
   }, [])
 
-  const loadStats = useCallback((tenantId: string) => {
-    lastTenant.current = tenantId
+  const loadStats = useCallback((target: RagTarget) => {
+    lastTarget.current = target
     setStatsNonce((n) => n + 1)
   }, [])
 
   const verify = useCallback(
-    (tenantId: string, sourceId: string, payload: RagVerificationRequest) => {
+    (target: RagTarget, sourceId: string, payload: RagVerificationRequest) => {
       setAction({ status: 'submitting', message: null, updated: null })
       const run = async (): Promise<void> => {
         try {
-          const updated = await applyRagVerification(tenantId, sourceId, payload)
+          const updated = await applyRagVerification(target, sourceId, payload)
           setAction({ status: 'success', message: null, updated })
         } catch (cause) {
           setAction(toActionState(cause))
@@ -254,11 +258,11 @@ export function useRagManagement(): UseRagManagementResult {
     [],
   )
 
-  const register = useCallback((tenantId: string, payload: RagRegisterSourceRequest) => {
+  const register = useCallback((target: RagTarget, payload: RagRegisterSourceRequest) => {
     setAction({ status: 'submitting', message: null, updated: null })
     const run = async (): Promise<void> => {
       try {
-        const created = await registerRagSource(tenantId, payload)
+        const created = await registerRagSource(target, payload)
         setAction({ status: 'success', message: null, updated: created })
       } catch (cause) {
         setAction(toActionState(cause))
@@ -268,11 +272,11 @@ export function useRagManagement(): UseRagManagementResult {
   }, [])
 
   const bulkRegister = useCallback(
-    (tenantId: string, registeredBy: string, items: RagBulkSourceItem[]) => {
+    (target: RagTarget, registeredBy: string, items: RagBulkSourceItem[]) => {
       setBulk({ status: 'submitting', response: null, error: null })
       const run = async (): Promise<void> => {
         try {
-          const response = await bulkRegisterRagSources(tenantId, registeredBy, items)
+          const response = await bulkRegisterRagSources(target, registeredBy, items)
           setBulk({ status: 'success', response, error: null })
         } catch (cause) {
           if (cause instanceof ApiError && isRagTimeout(cause)) {
