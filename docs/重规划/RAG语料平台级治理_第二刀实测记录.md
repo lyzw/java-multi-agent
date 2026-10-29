@@ -147,7 +147,7 @@ javadoc 改为陈述这个事实，而不是留一句看着像承诺的话。
 | U-1 | `RetrievalRepositoryIT` 既有失败（第一刀 U-1，本刀复现） | **15 / 15 errors：`expected 4096 dimensions, not 1024`** —— 夹具仍 1024 维，列是 `halfvec(4096)`。与本刀无关，但 `-am` 的 reactor `verify` 会被它拖红。 | 独立收口 |
 | ~~U-6~~ **已关闭** | ~~共享远程 RDS 上的 `rag_ops` 仍带坏 `search_path`~~ | 2026-10-29 经用户授权后由库 owner 重跑 `05_rag_ops_role.sql`（`study_rag`，幂等、不动口令）修复：巡检 **13/0 · exit 0**、应用侧 IT **45/0 跳过**。前后 `rolconfig` 与授权面打印见 §3 末「远程开发库修复」。 | 已完成 |
 | ~~U-7~~ **已关闭（定案退役）** | ~~`rag-v7-to-v8-retrofit-check.sh` 仍指向已删除的迁移目录~~ | 2026-10-29 用户定案「退役 + 教训写入注释」，`git rm` 执行。**删前先只读实测确认被测对象真的不存在**（不是靠推断）：远程 `study_rag` 的 `rag.*.tenant_id` **可空列数 = 0**、`scope` 列 8 张、全局字典 4 行在哨兵桶、`information_schema.tables` 里**已无 `flyway_schema_history`** → 「V7 的 NULL 表示法库」在这条链上不可能再出现。教训去向：① 升级路径纪律 → `deploy/sql/rag/01_rag_ddl.sql` 头注释【存量库改动纪律】段；② 同类存量库迁移的执行纪律 → `04_migrate_embedding_halfvec_4096.sql` 头注释；③ RLS 静默 0 行 / NULL 上下文两条 → 已在 `rag-dict-scope-counterproof.sh`（`super_val` 注释 + P7-1）与 `JdbcTenantScopedGeneration` 类注释里，**逐条 grep 核对过确实还在**才写进注释。 | 已完成 |
-| ~~U-8~~ **已关闭（同日追加）** | ~~平台审计表没有**票据档位**列~~ | 2026-10-29 落列 + CHECK + 回填 + 读写链贯通，A4「谁、哪档」从推断变成查询。全过程与实测数字见 **§7**。⚠️ 尚欠一步：**共享远程 RDS 的 `platform` schema 还没打 patch**（须用户授权、库 owner 执行），未打之前新版本 jar 在该库上审计读写会失败。 | 已完成（远程 patch 待授权） |
+| ~~U-8~~ **已关闭（含远程）** | ~~平台审计表没有**票据档位**列~~ | 2026-10-29 落列 + CHECK + 回填 + 读写链贯通，A4「谁、哪档」从推断变成查询。全过程与实测数字见 **§7**。共享远程 RDS `agent_dev` 的 patch 已按「只读预检 → dry-run → 授权后 COMMIT」执行完毕，远程复查数字见 **§7.7**。 | 已完成 |
 | U-9 | ALL（跨租户盘点）档 | 仍 `501` + 前端置灰；能否读**语料正文**未定案（默认只元数据）。 | 第三刀 |
 | U-10 | 票据四道闸门**反证脚本测不到** | 脚本无法签发合法票据（票据由平台应用签、需平台身份 JWT）。钉在三处：`PlatformRagGovernanceTicketServiceTest` 10、`RagManagementControllerTest` 57、`admin-console/tests/ragGovernanceTicket.test.tsx`。这是**如实边界**，不是遗漏。 | 记录 |
 
@@ -233,6 +233,7 @@ cd admin-console && npx tsc --noEmit && npx vitest run --testTimeout=60000   # 3
 | 平台审计往返 IT（新建） | `mvn -o -pl agent-infrastructure -am verify -Dit.test=PlatformAuditTicketScopeIT`（`IT_PG_URL` 指本机 `agent_it`，身份 `app_agent`） | **6 / 0 失败 / 0 跳过**：全字段逐一对账（防按位串列）、三档都可落、非票据行读回 NULL、CHECK 拒 `'platform'` 与带引号的注入文本、列与约束在 `pg_catalog` 里确实在位 |
 | 票据闸门单测 | `mvn -o -pl agent-api -am test -Dtest=PlatformRagGovernanceTicketServiceTest` | **11 / 0 失败**（第二刀 10 → +1：垃圾 scope 不入列） |
 | 平台侧全量单测 | `mvn -o -pl agent-api,agent-infrastructure -am test` | **agent-api 218 / agent-infrastructure 250 · 0 失败 0 错误 0 跳过 · BUILD SUCCESS** |
+| 共享远程 RDS 打 patch | 预检 → dry-run → 授权后 `-f` 原文件 → 复查（**§7.7**） | **列数 0→1、约束数 0→1、12 行零改动**；dry-run 回滚后复查确认零痕迹 |
 | 前端 | `npx tsc --noEmit` / `npx vitest run tests/p5Governance.test.tsx --testTimeout=60000` | **tsc clean** / **5 tests 全绿**（新增「票据档位单独成列，非票据行为空」） |
 
 ### 7.4 本刀新踩到的坑（都已写进文件注释）
@@ -252,14 +253,41 @@ cd admin-console && npx tsc --noEmit && npx vitest run --testTimeout=60000   # 3
    `permission denied for schema platform`。已扩到 `public platform` 两个 schema（表权限 + USAGE + 序列）。
 5. 反证脚本回填断言第一版把 `action` 当成 `reason_code` 比对，对照组（`reason_code` 本就是 NULL 的
    `TENANT_SUSPEND`）报「无此行」——**谓词按行的来历选**，已改为显式 SQL 谓词表。
+6. **取列注释是 `col_description(table_oid, attnum::int)`，不是 `shobj_description(relid,…)`**
+   （后者签名不匹配，`ON_ERROR_STOP=1` 下当场中止整段）。远程复查 SQL 连撞两次才改对——
+   教训：**共享库上的只读预检也要带 `ON_ERROR_STOP`，写错的语句会吞掉后面的断言**，
+   我这次就是前三条已经打印、第四条报错，容易看成「检查通过了」。
+7. **`pg_dump` 的随机 `\restrict` 令牌只在差分里有影响**；远程复查用的是 `pg_attribute` 目录视图，
+   不经 `pg_dump`，所以 §7.7 的列序是**从目录直接读的**，比 dump 文本更接近权威源。
 
 ### 7.5 部署耦合（必须如实声明，不是「以后再补」）
 
 新 jar 的 INSERT/SELECT 都点 `ticket_scope`。
 **存量库若没先打 patch，平台审计的写入与读取会直接失败**（不是降级、是报错）。
 顺序因此是硬性的：**先打 patch → 再启动新版本**。
-本机 `agent_it` 已实测；⚠️ **共享远程 RDS 的 `platform` schema 尚未执行**（须用户授权 + 库 owner 执行，
-patch 头【执行】段写了 dry-run 通道：把末尾 `COMMIT` 改成 `ROLLBACK` 先跑一遍）。
+本机 `agent_it` 与**共享远程 RDS `agent_dev` 均已执行**（远程过程与复查数字见 §7.7）；
+patch 头【执行】段保留了这条通道的用法：`-v ON_ERROR_STOP=1 -f` 原文件即真提交，
+把末尾 `COMMIT` 换成 `ROLLBACK` 即 dry-run（预检/试跑/提交三步都要留痕，别只留最后一步）。
+
+### 7.7 共享远程 RDS 的执行过程（2026-10-29，三段式）
+
+远程写库的纪律是「**只读预检 → dry-run → 用户授权后才 COMMIT**」，三步各有独立的证据，
+任何一步和预测不符就停下来，而不是靠 patch 幂等兜底。身份始终是**库 owner `ai_agent`**
+（`information_schema` 里对 `platform.platform_audit_event` 的权限实测 = owner），
+口令只进 `PGPASSWORD` 环境变量、不落文件、不回显。
+
+| 步 | 动作 | 实测 |
+| --- | --- | --- |
+| ① 只读预检 | 连 `agent_dev`（**PG 18.6**）查形状 / 约束 / 触发器 / 行数 / 持锁 | **11 列且 `has_ticket_scope_col=0`**；7 条既有约束（不含目标 ck）；**触发器 0 / 规则 0**（平台审计表**没有** append-only 保护，「只追加」目前只靠应用层不提供改删端点）；表 48 kB、**12 行**；`action='platform.rag.governance_ticket'` = **0 行**（其余 12 行 = `platform.tenant.execution_ticket` 11 + `platform.tenant.create` 1）；无其他事务持锁 |
+| ② dry-run | `sed 's/^COMMIT;$/ROLLBACK;/'` 后执行，再复查形状 | rc=0；`ALTER TABLE` / **`UPDATE 0` ×2** / `DO` / `COMMENT` 全部命中却**一行没改**——与预检「票据行 0 行」的预测逐字一致；自证 `档位分布 <NULL> = 12`（12 行对照组一条没被误填）；**回滚后复查：`ticket_scope` 列数=0、约束数=0、行数=12（零痕迹）** |
+| ③ COMMIT（授权后） | 直接 `-f deploy/sql/platform/patch_audit_ticket_scope.sql` | rc=0；同一串 `ALTER TABLE / UPDATE 0 / UPDATE 0 / DO / COMMENT` + `COMMIT` |
+| ④ 只读复查 | 独立会话重新查目录 | **列数=1**（`可空=YES`、`character varying(32)`）；**约束数=1**，`pg_get_constraintdef` 与快照里的定义**逐字一致**；**总行数=12 / 档位 NULL=12 / 非 NULL=0**（旧行未被动过）；**列序** `id,actor_id,…,occurred_at,ticket_scope` 与 Java INSERT 清单按位对齐（串列风险就地排除） |
+
+⚠️ **这次远程执行只证明了「加列 + 加约束 + 不动存量行」**。②③ 里的两次 `UPDATE 0` 意味着
+**回填映射在远程库上不可测**（远程压根没有治理票据行可回填）——那一半证据仍然只在本机
+`platform-audit-ticket-scope-retrofit-check.sh` 的播种断言上（§7.3 的 5/5 ✓）。
+这不是遗漏，是这台库的当前数据决定的**如实边界**；等远程出现第一条 `governance_ticket`
+审计行后，A4 的追溯口径（`actor_id` + `ticket_scope` + `decision` + `occurred_at`）才在这台库上真正可用。
 
 ### 7.6 复现配方（补 §6）
 
@@ -272,4 +300,15 @@ patch 头【执行】段写了 dry-run 通道：把末尾 `COMMIT` 改成 `ROLLB
 cd platform && IT_PG_URL=jdbc:postgresql://127.0.0.1:5433/agent_it IT_PG_USER=app_agent \
   mvn -o -pl agent-infrastructure -am verify -Dit.test=PlatformAuditTicketScopeIT \
      -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false -Dfailsafe.failIfNoSpecifiedTests=false
+
+# ⑥c 共享远程 RDS 的档位列 patch（⚠️ 写共享库：须先 §7.7 的只读预检 + dry-run，再经用户授权）
+set -a; source platform.env; set +a
+# 先 dry-run（末尾 COMMIT 换 ROLLBACK，跑完复查形状应回到列数 0）
+sed 's/^COMMIT;$/ROLLBACK;/' deploy/sql/platform/patch_audit_ticket_scope.sql \
+  | PGPASSWORD="$SPRING_DATASOURCE_PASSWORD" /opt/homebrew/opt/libpq/bin/psql \
+      "${SPRING_DATASOURCE_URL#jdbc:}" -U "$SPRING_DATASOURCE_USERNAME" -v ON_ERROR_STOP=1 -P pager=off -f -
+# 授权后真提交（口令只进环境变量，不进命令行历史、不打印）
+PGPASSWORD="$SPRING_DATASOURCE_PASSWORD" /opt/homebrew/opt/libpq/bin/psql \
+  "${SPRING_DATASOURCE_URL#jdbc:}" -U "$SPRING_DATASOURCE_USERNAME" \
+  -v ON_ERROR_STOP=1 -P pager=off -f deploy/sql/platform/patch_audit_ticket_scope.sql
 ```
