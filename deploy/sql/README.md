@@ -17,9 +17,11 @@ deploy/sql/
 │   │                                      15 枚举 / 15 函数 / 172 索引 / 33 触发器 /
 │   │                                      42 RLS 开启 + 50 RLS 策略）
 │   ├── 02_platform_seed.sql               种子数据（pg_dump --inserts 导出）
+│   │                                      + 末尾非 dump 附录：发布头 + 当前指针
 │   ├── 03_platform_roles.sql              数据库角色 + 授权（集群级，需 CREATEROLE）
 │   ├── 04_platform_admin_grant.sql        PLATFORM_ADMIN 带外赋权模板
 │   ├── 06_platform_grant.sql              平台角色绑定（带外运维通道）
+│   ├── patch_cap_release_head.sql         能力目录发布头 + 指针补齐（幂等，与 02 附录同源）
 │   ├── patch_execution_ticket_permission.sql  权限码补录（治理副本，幂等）
 │   └── patch_platform_tenant_registration.sql 租户平台侧登记补录（幂等，默认只 dry-run）
 └── rag/
@@ -68,6 +70,20 @@ psql -h <host> -p 5432 -U <超管> -d <库名> -v ON_ERROR_STOP=1 \
 
 > ⚠️ **角色必须在结构之后建**：`ALTER DEFAULT PRIVILEGES` 只覆盖**此后**新建的表，
 > 顺序颠倒会导致应用角色对全部表都没有权限。
+>
+> ⚠️ **种子复放 ≠ 可执行**：`02_platform_seed.sql` 末尾自带发布头 + 指针附录，
+> 但如果一个库只灌过旧版种子（或灌完后重新导过种子），它会是
+> 「目录里 14 个已发布对象、发布头只有 2 个、TENANT 指针一条都没有」——
+> 运行期只按 **指针 → 发布头 → object_versions → id@精确版本** 解析，
+> **不读 `lifecycle_state`**，于是除 e2e-minimax 之外的每个 Agent 都算不出闭包 →
+> Run 没有能力快照 → `CONFIG_UNAVAILABLE`。补齐通道（幂等，按指纹判等）：
+> ```bash
+> psql -h <host> -p 5432 -U <owner> -d <库名> -v ON_ERROR_STOP=1 -1 \
+>      -f deploy/sql/platform/patch_cap_release_head.sql
+> ```
+> ⚠️ 必须用**库 owner**：`platform_ops` 对 `cap_config_publish_seq` 只有 USAGE+SELECT、
+> 没有 UPDATE，而 `nextval()` 要推进序列 → `permission denied for sequence`（2026-10-29 实测）。
+> 本文件不含 BEGIN/COMMIT，由执行方包事务（pgjdbc 通道天然在事务里，故 dry-run 用 `-f` 那份）。
 >
 > ⚠️ **平台级发布依赖 `platform_ops`**：应用侧必须配好，否则平台级发布会**明确失败**（不会静默回落）：
 > ```
@@ -141,6 +157,15 @@ psql -h <host> -p 5432 -U <超管> -d study_rag -v ON_ERROR_STOP=1 \
    这两行按 `JdbcPlatformTenantRepository.provisionTenant` 的形状手写补齐，顺序在 `public.tenant` 之前。
    **灌完种子后请跑一次巡检**：`scripts/check-tenant-registry.sh`（只读，退出码 0 才算一致；
    它同时是今后任何「手写 SQL 造租户」的兜底守卫）。
+4. `02_platform_seed.sql` 末尾的**发布头 + 指针附录**（2026-10-29 补）：也是数据盲区，
+   而且比第 3 条更隐蔽 —— pg_dump 会导出 `cap_config_release` / `cap_config_pointer`，
+   但导出时开发库里那两张表**本来就是错的**（PLATFORM 头只有 2 个对象、TENANT 指针缺失），
+   于是「复放 0 错误」和「空库等价比对」两道校验都放行，因为它们比对的是**一致性**，
+   不是**可执行性**。附录不写死对象清单，而是从定义表推导
+   （`max(version) WHERE lifecycle_state='PUBLISHED'`）并按产品 codec 的字节形态算指纹，
+   所以目录增删后复放会自动跟上。
+   ⚠️ 重新 `pg_dump` 本文件会**丢掉这段附录** —— 复放后须核对
+   `cap_config_pointer` 有 PLATFORM 行、其发布头对象数 = 目录已发布对象数。
 
 ---
 

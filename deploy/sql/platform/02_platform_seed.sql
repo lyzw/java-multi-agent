@@ -16,6 +16,10 @@
 --   平台账号（platform_user + platform_user_role）本文件一律不含：口令哈希只能由
 --   服务端同一 PasswordHasher 现场计算，绝不入库。安装通道见
 --   scripts/dev-seed-platform-users.sh（幂等，dry-run 默认）。
+-- 【非 dump 内容】文件末尾有一段时间性附录（发布头 + 指针），**不是 pg_dump 导出**：
+--   定义表的 lifecycle_state='PUBLISHED' 不等于运行期可用，运行期只认
+--   指针 → 发布头 → object_versions。少了那段，复放出来的库「有目录、不能跑」。
+--   ⚠️ 重新导出本文件会丢掉它 —— 附录里注明了与 patch_cap_release_head.sql 同源。
 -- =====================================================================
 
 --
@@ -339,4 +343,210 @@ INSERT INTO public.cap_tool_def VALUES ('tool-mcp-schedule', 1, '课程表查询
 --
 
 \unrestrict 41TLVhigOe5lQmRdbPsgLPeZN8wrjMog2DCAZIV1YKh5a6eYzhYlxffWYxZ5eyi
+
+
+-- =====================================================================
+-- 【附录 · 非 pg_dump 内容】能力目录的「发布头 + 当前指针」
+--
+-- 为什么放在种子里：定义表里的 lifecycle_state='PUBLISHED' **不等于运行期可用**。
+-- 运行期只按 指针 → 发布头 → object_versions → id@精确版本 解析
+-- （JdbcPublishedVersionPort.resolveFromPointer）。只灌定义的种子会留下
+-- 「目录有 14 个已发布对象、发布头只有 2 个、TENANT 指针一条都没有」的库，
+-- 于是除 e2e-minimax 之外的每个 Agent 在双写打开后都算不出闭包 →
+-- 该 Run 没有能力快照 → 执行准入判 CONFIG_UNAVAILABLE（2026-10-29 现场）。
+-- 这一段与 deploy/sql/platform/patch_cap_release_head.sql **同源**，
+-- 差异只在头部注释；**两份必须一起改**（另见该文件的「指纹为什么在 SQL 里逐字拼」）。
+-- 对本文件的影响：前面是 pg_dump 导出，重导会丢这一段 —— 复放后请核对
+-- cap_config_pointer 有 PLATFORM 行且其发布头对象数 = 目录已发布对象数。
+-- 执行身份同 patch：须为库 owner（platform_ops 缺序列 UPDATE，实测报
+-- permission denied for sequence cap_config_publish_seq）。
+-- 幂等：按 aggregate_fingerprint 判等，重复执行写 0 行。
+-- =====================================================================
+
+-- ── 0. 校正发布序号序列（本补丁的前置，实测必需）───────────────────
+-- ⚠️ 现场：cap_config_release 已有 config_publish_seq=1 的行（release_id=4），
+--    而序列 cap_config_publish_seq 的 last_value 也还是 1 ——
+--    说明那条手写发布头**没有从序列取号**（§6.3 第 2 条要求序号由序列分配）。
+--    不校正的话本补丁第一次 nextval 就撞 unique 约束（dry-run 实测报错）。
+--    这里只把序列**追到已有行的最大值**，不改任何历史行、不回拨、不跳号复用。
+SELECT setval('public.cap_config_publish_seq',
+              (SELECT coalesce(max(config_publish_seq), 0) FROM public.cap_config_release),
+              true);
+
+-- ── 1. PLATFORM 发布头：覆盖目录里全部已发布平台对象 ──────────────────
+INSERT INTO public.cap_config_release
+    (config_publish_seq, scope, tenant_id, object_versions, aggregate_fingerprint,
+     status, requester_id, approver_id, effective_at, created_at)
+SELECT nextval('public.cap_config_publish_seq'), 'PLATFORM', NULL,
+       d.json_text::jsonb,
+       'cfg_agg_v1:' || encode(sha256(d.json_text::bytea), 'hex'),
+       'PUBLISHED', 'seed-replay', NULL, now(), now()
+FROM (
+    SELECT '[' || string_agg(
+               '{"type":"' || o.object_type || '","id":"' || o.id
+                   || '","version":' || o.version || '}',
+               ',' ORDER BY o.object_type, o.id, o.version) || ']' AS json_text
+    FROM (
+        SELECT 'mcp_server' AS object_type, id, max(version) AS version
+          FROM public.cap_mcp_server_def
+         WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+        UNION ALL
+        SELECT 'skill', id, max(version)
+          FROM public.cap_skill_def
+         WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+        UNION ALL
+        SELECT 'tool', id, max(version)
+          FROM public.cap_tool_def
+         WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+    ) o
+    WHERE o.id ~ '^[A-Za-z0-9_.:@-]+$'
+) d
+WHERE d.json_text IS NOT NULL
+  AND NOT EXISTS (
+        SELECT 1
+        FROM public.cap_config_pointer p
+        JOIN public.cap_config_release r ON r.release_id = p.current_release_id
+        WHERE p.pointer_key = 'PLATFORM'
+          AND r.aggregate_fingerprint =
+              'cfg_agg_v1:' || encode(sha256(d.json_text::bytea), 'hex'));
+
+-- ── 2. PLATFORM 指针：缺失则创建 ──────────────────────────────────────
+-- ⚠️ 空库复放时这一步是**必需**的：deploy/sql 下没有任何脚本写过 cap_config_pointer，
+--    开发库那条 PLATFORM 行是应用首次发布时 JdbcConfigPointerRepository
+--    的 INSERT ... ON CONFLICT DO NOTHING 惰性建出来的。
+--    只靠下一步的 UPDATE，在干净库里会「发布头写成功、指针 0 行」→
+--    运行期照旧 RESOURCE_UNKNOWN。
+INSERT INTO public.cap_config_pointer
+    (pointer_key, scope, tenant_id, current_release_id, current_publish_seq, updated_at)
+SELECT 'PLATFORM', 'PLATFORM', NULL, h.release_id, h.config_publish_seq, now()
+FROM (
+        SELECT r.release_id, r.config_publish_seq
+        FROM public.cap_config_release r
+        WHERE r.scope = 'PLATFORM' AND r.status = 'PUBLISHED'
+        ORDER BY r.config_publish_seq DESC
+        LIMIT 1
+) h
+WHERE NOT EXISTS (SELECT 1 FROM public.cap_config_pointer p
+                   WHERE p.pointer_key = 'PLATFORM');
+
+-- ── 3. PLATFORM 指针：CAS 到内容等于当前目录的那份发布头 ─────────────
+UPDATE public.cap_config_pointer p
+   SET current_release_id    = h.release_id,
+       current_publish_seq   = h.config_publish_seq,
+       updated_at            = now()
+  FROM (
+        SELECT r.release_id, r.config_publish_seq
+        FROM public.cap_config_release r
+        WHERE r.scope = 'PLATFORM'
+          AND r.status = 'PUBLISHED'
+          AND r.aggregate_fingerprint = (
+              SELECT 'cfg_agg_v1:' || encode(sha256(
+                       ('[' || string_agg(
+                            '{"type":"' || o.object_type || '","id":"' || o.id
+                                || '","version":' || o.version || '}',
+                            ',' ORDER BY o.object_type, o.id, o.version) || ']')::bytea),
+                       'hex')
+              FROM (
+                  SELECT 'mcp_server' AS object_type, id, max(version) AS version
+                    FROM public.cap_mcp_server_def
+                   WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+                  UNION ALL
+                  SELECT 'skill', id, max(version)
+                    FROM public.cap_skill_def
+                   WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+                  UNION ALL
+                  SELECT 'tool', id, max(version)
+                    FROM public.cap_tool_def
+                   WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+              ) o
+              WHERE o.id ~ '^[A-Za-z0-9_.:@-]+$')
+        ORDER BY r.config_publish_seq DESC
+        LIMIT 1
+  ) h
+ WHERE p.pointer_key = 'PLATFORM'
+   AND p.current_release_id IS DISTINCT FROM h.release_id;
+
+-- ── 4. TENANT 发布头：每个有已发布 Agent 的租户一份（按该租户全部已发布 Agent）──
+INSERT INTO public.cap_config_release
+    (config_publish_seq, scope, tenant_id, object_versions, aggregate_fingerprint,
+     status, requester_id, approver_id, effective_at, created_at)
+SELECT nextval('public.cap_config_publish_seq'), 'TENANT', a.tenant_id,
+       a.json_text::jsonb,
+       'cfg_agg_v1:' || encode(sha256(a.json_text::bytea), 'hex'),
+       'PUBLISHED', 'seed-replay', NULL, now(), now()
+FROM (
+    SELECT g.tenant_id,
+           '[' || string_agg(
+                      '{"type":"agent","id":"' || g.id || '","version":' || g.version || '}',
+                      ',' ORDER BY g.id, g.version) || ']' AS json_text
+    FROM (
+        SELECT tenant_id, agent_id::text AS id, max(version) AS version
+          FROM public.cap_agent_def
+         WHERE lifecycle_state = 'PUBLISHED'
+         GROUP BY tenant_id, agent_id
+    ) g
+    WHERE g.id ~ '^[A-Za-z0-9_.:@-]+$'
+    GROUP BY g.tenant_id
+) a
+WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.cap_config_pointer p
+        JOIN public.cap_config_release r ON r.release_id = p.current_release_id
+        WHERE p.pointer_key = 'TENANT:' || a.tenant_id::text
+          AND r.aggregate_fingerprint =
+              'cfg_agg_v1:' || encode(sha256(a.json_text::bytea), 'hex'));
+
+-- ── 5. 每个租户一行 TENANT 指针（缺失则插入，已存在则 CAS）──────────────
+INSERT INTO public.cap_config_pointer
+    (pointer_key, scope, tenant_id, current_release_id, current_publish_seq, updated_at)
+SELECT 'TENANT:' || t.tenant_id::text, 'TENANT', t.tenant_id,
+       h.release_id, h.config_publish_seq, now()
+FROM (SELECT DISTINCT tenant_id FROM public.cap_agent_def
+       WHERE lifecycle_state = 'PUBLISHED') t
+JOIN LATERAL (
+        SELECT r.release_id, r.config_publish_seq
+        FROM public.cap_config_release r
+        WHERE r.scope = 'TENANT' AND r.status = 'PUBLISHED' AND r.tenant_id = t.tenant_id
+          AND r.aggregate_fingerprint = (
+              SELECT 'cfg_agg_v1:' || encode(sha256(
+                       ('[' || string_agg(
+                            '{"type":"agent","id":"' || g.id || '","version":' || g.version || '}',
+                            ',' ORDER BY g.id, g.version) || ']')::bytea), 'hex')
+              FROM (SELECT agent_id::text AS id, max(version) AS version
+                      FROM public.cap_agent_def
+                     WHERE lifecycle_state = 'PUBLISHED' AND tenant_id = t.tenant_id
+                     GROUP BY agent_id) g
+              WHERE g.id ~ '^[A-Za-z0-9_.:@-]+$')
+        ORDER BY r.config_publish_seq DESC
+        LIMIT 1
+) h ON true
+WHERE NOT EXISTS (SELECT 1 FROM public.cap_config_pointer p
+                   WHERE p.pointer_key = 'TENANT:' || t.tenant_id::text);
+
+UPDATE public.cap_config_pointer p
+   SET current_release_id  = h.release_id,
+       current_publish_seq = h.config_publish_seq,
+       updated_at          = now()
+  FROM (
+        SELECT r.tenant_id, r.release_id, r.config_publish_seq
+        FROM public.cap_config_release r
+        WHERE r.scope = 'TENANT' AND r.status = 'PUBLISHED'
+          AND r.aggregate_fingerprint = (
+              SELECT 'cfg_agg_v1:' || encode(sha256(
+                       ('[' || string_agg(
+                            '{"type":"agent","id":"' || g.id || '","version":' || g.version || '}',
+                            ',' ORDER BY g.id, g.version) || ']')::bytea), 'hex')
+              FROM (SELECT agent_id::text AS id, max(version) AS version
+                      FROM public.cap_agent_def
+                     WHERE lifecycle_state = 'PUBLISHED' AND tenant_id = r.tenant_id
+                     GROUP BY agent_id) g
+              WHERE g.id ~ '^[A-Za-z0-9_.:@-]+$')
+          AND r.config_publish_seq = (
+              SELECT max(r2.config_publish_seq) FROM public.cap_config_release r2
+               WHERE r2.scope = 'TENANT' AND r2.status = 'PUBLISHED'
+                 AND r2.tenant_id = r.tenant_id
+                 AND r2.aggregate_fingerprint = r.aggregate_fingerprint)
+  ) h
+ WHERE p.pointer_key = 'TENANT:' || h.tenant_id::text
+   AND p.current_release_id IS DISTINCT FROM h.release_id;
 
