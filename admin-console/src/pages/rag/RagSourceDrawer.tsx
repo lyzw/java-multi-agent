@@ -83,11 +83,11 @@ export function RagSourceDrawer({
   const sourceId = source?.sourceId ?? null
 
   /**
-   * 平台全局档只读（本刀）：写通道需独立运维数据源。
+   * 平台全局档写要治理票据（第二刀）：没有票就是只读视图。
    *
    * ⚠️ 在这里收口成**一个**旗标，让「来源流转」「载体流转」「载体列表的校验按钮」
-   *    三处入口一起消失。若只禁一处，管理员会在另外两处点到 409，
-   *    而后端的 409 文案讲的是架构原因，不像「这个按钮不该出现」。
+   *    三处入口一起消失。若只禁一处，管理员会在另外两处点到 403，
+   *    而后端的 403 文案讲的是授权模型，不像「这个按钮不该出现」。
    */
   const writable = isRagWriteTarget(target)
 
@@ -290,8 +290,16 @@ export function RagSourceDrawer({
                     <Alert
                       type="info"
                       showIcon
-                      message="平台全局语料：本档只读"
-                      description="全局语料的写通道需独立运维数据源（RAG-D11 第四刀·第二刀）。本页可查状态、载体与片段，不在此处流转校验状态。"
+                      message={
+                        target.scope === 'PLATFORM'
+                          ? '平台全局语料：未领取治理票据，本档只读'
+                          : '未选择租户，本档只读'
+                      }
+                      description={
+                        target.scope === 'PLATFORM'
+                          ? '全局语料影响所有租户的检索结果，改动它要一张短时治理票据（在页面上方「作用域」卡片里领取）。本页此刻只查状态、载体与片段。'
+                          : '租户档的管理端点要求 X-Tenant-Id；请先在上方选择租户。'
+                      }
                     />
                   ) : allowedVerificationTargets(source.verificationStatus).length === 0 ? (
                     <Alert

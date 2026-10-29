@@ -135,19 +135,25 @@ export function RagSourceTable({
    *    禁用 + tooltip 才把「为什么不能点」说清楚，也不会有人把它当成故障上报。
    */
   const ready = isRagTargetReady(target)
-  /** 写入口（登记）在平台全局档禁用——本刀全局语料只读。 */
+  /**
+   * 写入口（登记）在平台全局档要求**治理票据**。
+   *
+   * ⚠️ 不是「平台档不能写」——第二刀起能写，只是登录令牌不够格：
+   *    后端写闸门除平台域身份外还校验票据的 `rag_scope`，缺票是 403。
+   *    前端据此在没票时不给按钮，而不是让人点一次吃一个「需要治理票据」。
+   */
   const writable = isRagWriteTarget(target)
-  const needTenantTip =
+  const blockedTip =
     target.scope === 'TENANT'
       ? '请先在上方选择租户'
-      : '平台全局语料在本刀只读：写通道需独立运维数据源（RAG-D11 第四刀·第二刀）'
+      : '平台全局语料要先领取治理票据才能写：登录令牌只证明你进了控制台，不证明你被授权改动所有租户共享的那批语料'
 
   return (
     <Card
       title="语料来源"
       extra={
         <Space>
-          <Tooltip title={ready ? '' : needTenantTip}>
+          <Tooltip title={ready ? '' : blockedTip}>
             <Button
               onClick={onRefresh}
               disabled={!ready || state.status === 'loading'}
@@ -155,7 +161,7 @@ export function RagSourceTable({
               刷新
             </Button>
           </Tooltip>
-          <Tooltip title={writable ? '' : needTenantTip}>
+          <Tooltip title={writable ? '' : blockedTip}>
             <Button type="primary" onClick={onRegister} disabled={!writable}>
               登记来源
             </Button>
@@ -198,7 +204,7 @@ export function RagSourceTable({
         </Form.Item>
         <Form.Item>
           <Space>
-            <Tooltip title={ready ? '' : needTenantTip}>
+            <Tooltip title={ready ? '' : blockedTip}>
               <Button
                 type="primary"
                 htmlType="submit"
@@ -227,7 +233,7 @@ export function RagSourceTable({
         <Alert
           type="info"
           showIcon
-          message="本租户还没有语料来源"
+          message={target.scope === 'PLATFORM' ? '全局语料桶还没有来源' : '本租户还没有语料来源'}
           description="登记来源后一律进入「待校验」，须经审核通过且未过期才会真正可检索。"
         />
       )}

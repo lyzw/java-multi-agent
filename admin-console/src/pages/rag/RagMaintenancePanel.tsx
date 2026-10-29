@@ -38,9 +38,11 @@ import {
   retrieveRagChunks,
   isRagTargetReady,
   isRagWriteTarget,
+  isRagRetrievalTarget,
   ApiError,
 } from '@/api/ragClient'
 import type { RagTarget } from '@/api/ragClient'
+import { TICKET_REQUIRED_HINT } from '@/api/ragTicket'
 import type {
   RagIssueDocument,
   RagIssueSource,
@@ -113,7 +115,10 @@ const hitColumns: ColumnsType<RagRetrievalHit> = [
 ]
 
 export interface RagMaintenancePanelProps {
-  /** 当前作用域目标（平台全局档下只开放只读的问题清单） */
+  /**
+   * 当前作用域目标。
+   * 问题清单任何档位可看；重跑索引在平台档需治理票据；检索探针只在租户档（检索面不认平台档）。
+   */
   target: RagTarget
 }
 
@@ -152,15 +157,19 @@ export function RagMaintenancePanel({ target }: RagMaintenancePanelProps): JSX.E
   /** 未选租户时禁用所有会发请求的入口（缺 X-Tenant-Id 后端直接 400）。 */
   const ready = isRagTargetReady(target)
   /**
-   * 重跑索引与检索探针都**只在租户档**可用：
-   * 前者是写操作（平台档后端 409），后者按租户上下文召回（平台档没有租户）。
-   * 问题清单是只读的，平台全局档照常可看。
+   * 「重跑索引」与「执行检索」的闸门**刻意是两个旗标**，不是一个「平台档能不能操作」：
+   * · 重跑索引是写操作（第二刀起平台档带治理票据可写全局桶，缺票 403）；
+   * · 检索探针走检索面 `rag-api`，它按租户上下文召回、不认平台档（第四刀不动检索面）。
+   * 合成一个旗标的后果是：全局语料写完之后管理员以为能当场验召回，
+   * 点下去只会拿到一个和本页档位无关的 400。
+   * 问题清单是只读的，任何档位照常可看。
    */
-  const tenantOnly = isRagWriteTarget(target)
-  const needTenantTip =
+  const reindexable = isRagWriteTarget(target)
+  const probeable = isRagRetrievalTarget(target)
+  const blockedTip =
     target.scope === 'TENANT'
       ? '请先在上方选择租户'
-      : '平台全局语料在本档只读：重跑索引与检索探针需要租户上下文（写通道属 RAG-D11 第四刀·第二刀）'
+      : '平台全局语料的重跑索引要先领取治理票据（缺票后端 403）；检索探针不在平台档提供——它按租户上下文召回，属检索面，本刀不动'
 
   const loadIssues = async (): Promise<void> => {
     setIssues({ kind: 'loading' })
@@ -180,7 +189,14 @@ export function RagMaintenancePanel({ target }: RagMaintenancePanelProps): JSX.E
       const result = await reindexRagCorpus(target, indexLimit)
       setReindex(result)
     } catch (cause) {
-      setReindexError(cause instanceof ApiError ? cause.message : '重跑索引失败')
+      // 403 在平台档只有一种解释（缺票 / 票过期）；503 后端已带「缺哪个配置键」，原样转达。
+      setReindexError(
+        cause instanceof ApiError
+          ? cause.status === 403 && target.scope === 'PLATFORM'
+            ? TICKET_REQUIRED_HINT
+            : cause.message
+          : '重跑索引失败',
+      )
     } finally {
       setReindexing(false)
     }
@@ -217,7 +233,7 @@ export function RagMaintenancePanel({ target }: RagMaintenancePanelProps): JSX.E
       <Card
         title="问题清单"
         extra={
-          <Tooltip title={ready ? '' : needTenantTip}>
+          <Tooltip title={ready ? '' : blockedTip}>
             <Button
               onClick={() => void loadIssues()}
               loading={issues.kind === 'loading'}
@@ -301,15 +317,22 @@ export function RagMaintenancePanel({ target }: RagMaintenancePanelProps): JSX.E
         <Paragraph type="secondary" style={{ marginBottom: 12 }}>
           为「已切分但没有向量」的片段补写向量。这是<b>真实的算力消耗</b>，不是刷新页面；
           结果会给出扫描数、写入数与耗时。
+          {target.scope === 'PLATFORM' && (
+            <>
+              <br />
+              本档索引的是<b>全局语料桶</b>：写入走独立的运维数据源（<code>rag_ops</code>），
+              该进程没接这个数据源时后端返回 <b>503</b> 而不是「悄悄写成 0 行」。
+            </>
+          )}
         </Paragraph>
         <Space>
           <Text>单次上限</Text>
           <InputNumber min={1} max={2000} value={indexLimit} onChange={(v) => setIndexLimit(v ?? 500)} />
-          <Tooltip title={tenantOnly ? '' : needTenantTip}>
+          <Tooltip title={reindexable ? '' : blockedTip}>
             <Button
               type="primary"
               loading={reindexing}
-              disabled={!tenantOnly}
+              disabled={!reindexable}
               onClick={() => void runReindex()}
             >
               重跑索引
@@ -399,8 +422,8 @@ export function RagMaintenancePanel({ target }: RagMaintenancePanelProps): JSX.E
             placeholder="检索问题，如：一元一次方程移项要注意什么"
           />
         </Space>
-        <Tooltip title={tenantOnly ? '' : needTenantTip}>
-          <Button type="primary" loading={probing} disabled={!tenantOnly} onClick={() => void runProbe()}>
+        <Tooltip title={probeable ? '' : blockedTip}>
+          <Button type="primary" loading={probing} disabled={!probeable} onClick={() => void runProbe()}>
             执行检索
           </Button>
         </Tooltip>

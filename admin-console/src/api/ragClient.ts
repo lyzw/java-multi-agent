@@ -17,16 +17,27 @@
  *    `TENANT` 档缺 `X-Tenant-Id` 时后端返回 **400**（而非静默空列表）：
  *    「没选租户」是本地配置问题，不该伪装成后端故障。
  *
+ * ⚠️ **平台档写要治理票据**（第四刀·第二刀）：写请求（登记 / 批量登记 /
+ *    来源与载体校验流转 / 重跑索引）在平台档把 `Authorization` **换成票据**，
+ *    读请求不换。缺票据时后端是 **403**（登录令牌不够格），
+ *    所以界面按 {@link isRagWriteTarget} 提前不给入口。
+ *
  * ⚠️ **超时纪律**：管理面是人工操作，每次都是显式点击触发。普通管理端点给
  *    30s，重跑索引（批量）给 120s；超时归一为 `ApiError(RAG_TIMEOUT_STATUS)`，
  *    与「网络层失败」（status 0）区分——文案不同，混为一谈会误导管理员。
  */
 
 import { request, ApiError } from '@/api/client'
+import { ticketAuthHeader } from '@/api/ragTicket'
+import type { RagGovernanceTicket } from '@/api/ragTicket'
 
 /** ⚠️ 再导出：调用方要用 `instanceof ApiError` 区分「超时」与「网络层失败」，
  *    若各自去 `@/api/client` 导入固然可行，但会散成两个来源；统一从本模块取。 */
 export { ApiError }
+/** ⚠️ 再导出**类型**（不是函数）：`RagTarget.ticket` 就是这个形状，
+ *    页面构造目标时必然需要它。票据的**取／清／看**只在 `@/api/ragTicket` 里，
+ *    不在这里重复导出——凭据的持有处必须只有一个。 */
+export type { RagGovernanceTicket }
 import type {
   RagStatistics,
   RagSource,
@@ -66,15 +77,20 @@ const DEFAULT_RAG_RETRIEVAL_TIMEOUT_MS = 30000
 export type RagCorpusScope = 'TENANT' | 'PLATFORM' | 'ALL'
 
 /**
- * 一次 RAG 管理调用的目标：作用域 + （仅租户档）租户 ID。
+ * 一次 RAG 管理调用的目标：作用域 + （仅租户档）租户 ID + （仅平台档写）治理票据。
  *
  * ⚠️ 平台档**刻意不携带租户 ID**：后端在收到 `X-Rag-Scope: PLATFORM` 且同时收到
  *    `X-Tenant-Id` 时返回 400——「以平台身份看全局」与「指定要看哪个租户」互斥，
  *    同时给出说明调用方自己不清楚要看什么。
+ *
+ * ⚠️ `ticket` 是**内存态凭据**（见 `@/api/ragTicket` 的头注）：只有写请求会把它
+ *    放进 `Authorization`，读请求一律沿用会话令牌——后端读闸门只查「是不是平台域」，
+ *    把票据挂在读请求上会让「哪些调用动过全局语料」失去区分度。
  */
 export interface RagTarget {
   readonly scope: RagCorpusScope
   readonly tenantId?: string
+  readonly ticket?: RagGovernanceTicket
 }
 
 /** 租户档目标（缺省档，行为与改造前一致）。 */
@@ -82,8 +98,13 @@ export function tenantTarget(tenantId: string): RagTarget {
   return { scope: 'TENANT', tenantId }
 }
 
-/** 平台全局档目标（只读；写端点会被后端 409 拒绝）。 */
+/** 平台全局档目标（**不带票据 = 只读视图**；写入口由 {@link isRagWriteTarget} 收口）。 */
 export const PLATFORM_TARGET: RagTarget = { scope: 'PLATFORM' }
+
+/** 平台全局档目标（带治理票据）：登记 / 校验流转 / 重跑索引据此放开。 */
+export function platformTarget(ticket?: RagGovernanceTicket | null): RagTarget {
+  return ticket ? { scope: 'PLATFORM', ticket } : PLATFORM_TARGET
+}
 
 /** 目标是否足以发起租户档请求（未选租户时前端不发请求，避免把配置问题伪装成 400）。 */
 export function isRagTargetReady(target: RagTarget): boolean {
@@ -93,11 +114,31 @@ export function isRagTargetReady(target: RagTarget): boolean {
 /**
  * 目标档是否可写。
  *
- * ⚠️ 平台全局档**只读**：后端写端点对非 TENANT 作用域返回 409
- *    （全局语料的写通道要独立运维数据源，属 RAG-D11 第四刀·第二刀）。
- *    前端据此不渲染写入口，而不是让人点一次吃一个 409。
+ * <p>⚠️ **平台档可写的前提是「手里有一张没过期且档位一致的治理票据」**：
+ * 后端写闸门（`requireWriteContext`）除平台域身份外还校验票据的 `rag_scope` claim，
+ * 缺票据是 **403**（不是 409）。前端据此不渲染写入口，
+ * 而不是让管理员点一次吃一个「需要治理票据」。
+ *
+ * <p>⚠️ 过期票据按「没有票据」处理：后端按 `exp` 判定，这里用同一判据的本地近似，
+ * 差别只会在临界秒出现，而那恰好是「操作员看着按钮能用、点了却 401」的区间。
+ *
+ * <p>`ALL`（跨租户盘点）永不可写：「同时往 N 个租户写」不是任何一档的定义。
  */
 export function isRagWriteTarget(target: RagTarget): boolean {
+  if (target.scope === 'TENANT') return isRagTargetReady(target)
+  if (target.scope !== 'PLATFORM') return false
+  const ticket = target.ticket
+  return ticket !== undefined && Date.parse(ticket.expiresAt) > Date.now()
+}
+
+/**
+ * 检索探针档是否可用。
+ *
+ * <p>⚠️ 刻意**不等于** {@link isRagWriteTarget}：探针按租户上下文召回（检索面 `rag-api`
+ * 不认平台档，第四刀·第二刀不动它），平台全局档没有租户可比，因此全局语料能不能写，
+ * 与「能不能在这里发一次检索」是两件事。合成一个旗标会让人以为写完就能立刻验召回。
+ */
+export function isRagRetrievalTarget(target: RagTarget): boolean {
   return target.scope === 'TENANT' && isRagTargetReady(target)
 }
 
@@ -105,6 +146,20 @@ export function isRagWriteTarget(target: RagTarget): boolean {
 function scopeHeaders(target: RagTarget): Record<string, string> {
   const headers: Record<string, string> = { 'X-Rag-Scope': target.scope }
   if (target.scope === 'TENANT') headers['X-Tenant-Id'] = (target.tenantId ?? '').trim()
+  return headers
+}
+
+/**
+ * 写端点的头：作用域头 + （平台档）治理票据覆盖会话令牌。
+ *
+ * <p>⚠️ 只有平台档替换 `Authorization`：租户档的写与第一刀逐字节一致，
+ * 仍走会话令牌 + `X-Tenant-Id`。
+ */
+function writeHeaders(target: RagTarget): Record<string, string> {
+  const headers = scopeHeaders(target)
+  if (target.scope === 'PLATFORM' && target.ticket) {
+    Object.assign(headers, ticketAuthHeader(target.ticket))
+  }
   return headers
 }
 
@@ -123,12 +178,15 @@ function toQuery(params: Record<string, string | number | boolean | null | undef
  *
  * ⚠️ 超时判定用 `timedOut` 旗标而非只看异常类型：AbortController 中断后
  *    `request` 会抛网络层 `ApiError(0)`，须由本层覆盖成超时语义。
+ *
+ * @param headers 本次请求的额外头（缺省 = 只带作用域头；写请求传 {@link writeHeaders}）
  */
 async function ragRequest<T>(
   path: string,
   init: RequestInit,
   target: RagTarget,
   timeoutMs: number,
+  headers: Record<string, string> = scopeHeaders(target),
 ): Promise<T> {
   const controller = new AbortController()
   let timedOut = false
@@ -141,7 +199,7 @@ async function ragRequest<T>(
       path,
       { ...init, signal: controller.signal },
       true,
-      scopeHeaders(target),
+      headers,
     )
   } catch (cause) {
     if (timedOut) {
@@ -154,6 +212,21 @@ async function ragRequest<T>(
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * 写请求入口：与 {@link ragRequest} 同一套超时纪律，唯一区别是平台档会带上治理票据。
+ *
+ * ⚠️ 刻意**不**让读路径复用这个头集合：票据是「动过全局语料」的凭据，
+ *    读操作拿它去发请求，等于让审计与日志里两类调用长得一样。
+ */
+function ragWriteRequest<T>(
+  path: string,
+  init: RequestInit,
+  target: RagTarget,
+  timeoutMs: number,
+): Promise<T> {
+  return ragRequest<T>(path, init, target, timeoutMs, writeHeaders(target))
 }
 
 /** 是否为 RAG 请求超时（区别于网络层 status 0）。 */
@@ -212,7 +285,7 @@ export function registerRagSource(
   payload: RagRegisterSourceRequest,
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagSource> {
-  return ragRequest<RagSource>(
+  return ragWriteRequest<RagSource>(
     '/v1/management/sources',
     { method: 'POST', body: JSON.stringify(payload) },
     target,
@@ -227,7 +300,7 @@ export function bulkRegisterRagSources(
   items: RagBulkSourceItem[],
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagBulkImportResponse> {
-  return ragRequest<RagBulkImportResponse>(
+  return ragWriteRequest<RagBulkImportResponse>(
     '/v1/management/sources/batch',
     { method: 'POST', body: JSON.stringify({ registeredBy, sources: items }) },
     target,
@@ -242,7 +315,7 @@ export function applyRagVerification(
   payload: RagVerificationRequest,
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagSource> {
-  return ragRequest<RagSource>(
+  return ragWriteRequest<RagSource>(
     `/v1/management/sources/${encodeURIComponent(sourceId)}/verification`,
     { method: 'POST', body: JSON.stringify(payload) },
     target,
@@ -286,7 +359,7 @@ export function applyRagDocumentVerification(
   payload: RagDocumentVerificationRequest,
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
 ): Promise<RagDocument> {
-  return ragRequest<RagDocument>(
+  return ragWriteRequest<RagDocument>(
     `/v1/management/documents/${encodeURIComponent(documentId)}/verification`,
     { method: 'POST', body: JSON.stringify(payload) },
     target,
@@ -313,7 +386,7 @@ export function reindexRagCorpus(
   limit = 500,
   timeoutMs: number = DEFAULT_RAG_REINDEX_TIMEOUT_MS,
 ): Promise<RagReindexResult> {
-  return ragRequest<RagReindexResult>(
+  return ragWriteRequest<RagReindexResult>(
     '/v1/management/reindex',
     { method: 'POST', body: JSON.stringify({ limit }) },
     target,

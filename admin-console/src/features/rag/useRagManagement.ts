@@ -29,6 +29,7 @@ import {
   ApiError,
 } from '@/api/ragClient'
 import type { RagTarget } from '@/api/ragClient'
+import { TICKET_REQUIRED_HINT } from '@/api/ragTicket'
 import type {
   RagSource,
   RagStatistics,
@@ -108,7 +109,13 @@ function toStatsState(cause: unknown): RagStatsState {
 const CONFLICT_MESSAGE =
   '这一步不被允许：校验状态只能按既定流程流转（撤回是终态，不能复活；已拒绝的来源须先重新认领才能再判定）。请按提示选择合法的下一步。'
 
-function toActionState(cause: unknown): RagActionState {
+/**
+ * 动作态归一。
+ *
+ * @param cause 捕获的错误
+ * @param target 本次调用的目标档（只有平台档需要把 403 翻译成「去领票据」）
+ */
+function toActionState(cause: unknown, target: RagTarget): RagActionState {
   if (cause instanceof ApiError) {
     if (isRagTimeout(cause)) {
       return { status: 'timeout', message: cause.message, updated: null }
@@ -116,6 +123,10 @@ function toActionState(cause: unknown): RagActionState {
     // ⚠️ 409 = 非法状态转移（治理规则被违反），单独成态。
     if (cause.status === 409) {
       return { status: 'conflict', message: CONFLICT_MESSAGE, updated: null }
+    }
+    // ⚠️ 平台档的 403 只有一个可执行的下一步：领票据（见 TICKET_REQUIRED_HINT）。
+    if (cause.status === 403 && target.scope === 'PLATFORM') {
+      return { status: 'error', message: TICKET_REQUIRED_HINT, updated: null }
     }
     return { status: 'error', message: cause.message, updated: null }
   }
@@ -250,7 +261,7 @@ export function useRagManagement(): UseRagManagementResult {
           const updated = await applyRagVerification(target, sourceId, payload)
           setAction({ status: 'success', message: null, updated })
         } catch (cause) {
-          setAction(toActionState(cause))
+          setAction(toActionState(cause, target))
         }
       }
       void run()
@@ -265,7 +276,7 @@ export function useRagManagement(): UseRagManagementResult {
         const created = await registerRagSource(target, payload)
         setAction({ status: 'success', message: null, updated: created })
       } catch (cause) {
-        setAction(toActionState(cause))
+        setAction(toActionState(cause, target))
       }
     }
     void run()
@@ -282,7 +293,14 @@ export function useRagManagement(): UseRagManagementResult {
           if (cause instanceof ApiError && isRagTimeout(cause)) {
             setBulk({ status: 'timeout', response: null, error: cause.message })
           } else if (cause instanceof ApiError) {
-            setBulk({ status: 'error', response: null, error: cause.message })
+            setBulk({
+              status: 'error',
+              response: null,
+              error:
+                cause.status === 403 && target.scope === 'PLATFORM'
+                  ? TICKET_REQUIRED_HINT
+                  : cause.message,
+            })
           } else {
             setBulk({ status: 'error', response: null, error: '导入失败，请稍后重试' })
           }
