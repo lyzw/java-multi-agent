@@ -15,6 +15,15 @@
   <description>Spring Boot 启动装配、配置绑定、可执行制品</description>
 
   <dependencies>
+    <!--
+      ⚠️ 显式声明 rag-core：鉴权过滤器要把「令牌域」写进 request attribute
+      （RagCallerAttributes），这是跨检索面/管理面的通用约定，不该靠 rag-api
+      的传递依赖拿进来——上游哪天调整自己的依赖，这里会莫名编译失败。
+    -->
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-core</artifactId>
+    </dependency>
     <dependency>
       <groupId>cn.studykid.rag</groupId>
       <artifactId>rag-api</artifactId>

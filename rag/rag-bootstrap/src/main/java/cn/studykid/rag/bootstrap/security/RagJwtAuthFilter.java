@@ -24,6 +24,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import cn.studykid.rag.application.observability.LogContext;
+import cn.studykid.rag.core.security.RagCallerAttributes;
 
 /**
  * RAG 服务 JWT 鉴权过滤器（评审 P0-2 · §5.1）。
@@ -148,6 +149,11 @@ public final class RagJwtAuthFilter implements Filter {
             // 日志身份取自 X-Tenant-Id —— 这不是「已验证的身份」，
             // 但下游确实按它执行（业务端点自己读该头），日志要反映实际生效的租户。
             LogContext.setIdentity(req.getHeader("X-Tenant-Id"), null);
+            // ⚠️ 逃生门下把域标成「未验证」而不是留空：留空会让下游把
+            //    「属性不存在」误解成缺省值，而「未验证」是一个明确的、
+            //    平台级作用域必须拒绝的取值（见 RagCallerAttributes#DOMAIN_UNVERIFIED）。
+            req.setAttribute(RagCallerAttributes.DOMAIN_ATTRIBUTE,
+                    RagCallerAttributes.DOMAIN_UNVERIFIED);
             chain.doFilter(request, response);
             return;
         }
@@ -172,6 +178,12 @@ public final class RagJwtAuthFilter implements Filter {
                 return;
             }
         }
+        // ⚠️ 令牌域必须落到 request attribute（评审 P0-2 的延伸 / 第四刀 B1）：
+        //    过去这里只写日志，「调用方是租户域还是平台域」在 doFilter 返回时就丢失了，
+        //    于是业务端点没有任何闸门可挂 —— 任何持平台令牌者都能改任意租户语料。
+        //    attribute 不是 header：它只能由本过滤器在验签通过后写入，调用方伪造不了。
+        req.setAttribute(RagCallerAttributes.DOMAIN_ATTRIBUTE, auth.domain());
+        req.setAttribute(RagCallerAttributes.PRINCIPAL_ATTRIBUTE, auth.principalId());
         // 日志上下文：只写验签通过后的 claim，不写请求头。
         // 平台域令牌无租户 claim（跨租户治理是设计内行为）→ 日志租户位保持 "-"。
         LogContext.setIdentity(auth.tenantId(), auth.principalId());
@@ -210,7 +222,9 @@ public final class RagJwtAuthFilter implements Filter {
             return new AuthenticatedToken(
                     text(claims, "sub"),
                     tenantDomain ? text(claims, "tenant_id") : null,
-                    tenantDomain);
+                    tenantDomain,
+                    tenantDomain ? RagCallerAttributes.DOMAIN_TENANT
+                            : RagCallerAttributes.DOMAIN_PLATFORM);
         }
         return null;
     }
@@ -249,7 +263,13 @@ public final class RagJwtAuthFilter implements Filter {
         res.getWriter().write("{\"error\":\"" + status + "\",\"message\":\"" + message + "\"}");
     }
 
-    /** 验签通过的调用方身份（域 + 可绑定租户）。 */
-    record AuthenticatedToken(String principalId, String tenantId, boolean tenantBinding) {
+    /**
+     * 验签通过的调用方身份（域 + 可绑定租户）。
+     *
+     * @param domain 令牌域（{@code RagCallerAttributes.DOMAIN_TENANT} / {@code DOMAIN_PLATFORM}）；
+     *               必须随身份一起向下传，否则端点无从判定调用方能否使用平台级作用域
+     */
+    record AuthenticatedToken(String principalId, String tenantId, boolean tenantBinding,
+                              String domain) {
     }
 }

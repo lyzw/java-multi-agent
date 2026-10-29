@@ -23,6 +23,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
 
 import cn.studykid.rag.application.observability.LogContext;
 import cn.studykid.rag.bootstrap.security.RagJwtAuthFilter.TokenDomain;
+import cn.studykid.rag.core.security.RagCallerAttributes;
 
 /**
  * 评审 P0-2 过滤器行为测试：fail-closed、验签、iss/aud/exp、租户归属绑定。
@@ -238,6 +239,72 @@ class RagJwtAuthFilterTest {
         var res = new MockHttpServletResponse();
         assertThat(through(f, request(forged, TENANT_A), res)).isFalse();
         assertThat(res.getStatus()).isEqualTo(401);
+    }
+
+    // ── 令牌域下传（第四刀 B1：端点要能判定「能不能用平台级作用域」）────
+
+    @Test
+    @DisplayName("✅ 租户域令牌 → request attribute 落 tenant 域与 principal")
+    void tenantTokenWritesTenantDomainAttribute() throws Exception {
+        var ok = token("https://auth.studykid.cn", "agent-platform", EXP_FUTURE,
+                TENANT_A, tenantKeys.getPrivate());
+        MockHttpServletRequest req = request(ok, TENANT_A);
+
+        assertThat(through(filter(tenantDomain), req, new MockHttpServletResponse())).isTrue();
+        assertThat(req.getAttribute(RagCallerAttributes.DOMAIN_ATTRIBUTE))
+                .isEqualTo(RagCallerAttributes.DOMAIN_TENANT);
+        assertThat(req.getAttribute(RagCallerAttributes.PRINCIPAL_ATTRIBUTE)).isEqualTo("u-1");
+    }
+
+    @Test
+    @DisplayName("✅ 平台域令牌 → request attribute 落 platform 域")
+    void platformTokenWritesPlatformDomainAttribute() throws Exception {
+        var ok = token("https://auth.studykid.cn", "admin-console-api", EXP_FUTURE,
+                null, tenantKeys.getPrivate());
+        MockHttpServletRequest req = request(ok, null);
+
+        assertThat(through(filter(tenantDomain, platformDomain), req,
+                new MockHttpServletResponse())).isTrue();
+        assertThat(req.getAttribute(RagCallerAttributes.DOMAIN_ATTRIBUTE))
+                .isEqualTo(RagCallerAttributes.DOMAIN_PLATFORM);
+    }
+
+    @Test
+    @DisplayName("⛔ 被拒绝的请求不得写入任何域属性（attribute 只能是验签的产物）")
+    void rejectedRequestWritesNoDomainAttribute() throws Exception {
+        var forged = token("https://auth.studykid.cn", "agent-platform", EXP_FUTURE,
+                TENANT_A, otherKeys.getPrivate());
+        MockHttpServletRequest req = request(forged, TENANT_A);
+
+        var res = new MockHttpServletResponse();
+        assertThat(through(filter(tenantDomain), req, res)).isFalse();
+        assertThat(res.getStatus()).isEqualTo(401);
+        assertThat(req.getAttribute(RagCallerAttributes.DOMAIN_ATTRIBUTE)).isNull();
+    }
+
+    @Test
+    @DisplayName("⚠️ 鉴权逃生门 → 域标记为 unverified，而不是留空")
+    void disabledModeMarksUnverifiedDomain() throws Exception {
+        MockHttpServletRequest req = request(null, TENANT_A);
+
+        assertThat(through(new RagJwtAuthFilter(false, List.of()), req,
+                new MockHttpServletResponse())).isTrue();
+        assertThat(req.getAttribute(RagCallerAttributes.DOMAIN_ATTRIBUTE))
+                .as("留空会被下游误解成缺省值；unverified 是平台级作用域必须拒绝的明确取值")
+                .isEqualTo(RagCallerAttributes.DOMAIN_UNVERIFIED);
+    }
+
+    @Test
+    @DisplayName("域归一化：空白/非字符串一律落 unverified（不接受「差不多就行」的域值）")
+    void normalizeDomainIsFailClosed() {
+        assertThat(RagCallerAttributes.normalizeDomain(null))
+                .isEqualTo(RagCallerAttributes.DOMAIN_UNVERIFIED);
+        assertThat(RagCallerAttributes.normalizeDomain("  "))
+                .isEqualTo(RagCallerAttributes.DOMAIN_UNVERIFIED);
+        assertThat(RagCallerAttributes.normalizeDomain(42))
+                .isEqualTo(RagCallerAttributes.DOMAIN_UNVERIFIED);
+        assertThat(RagCallerAttributes.normalizeDomain(RagCallerAttributes.DOMAIN_PLATFORM))
+                .isEqualTo(RagCallerAttributes.DOMAIN_PLATFORM);
     }
 
     // ── 日志上下文（评审 P0-2 的身份只能来自已验签 claim）────────────
