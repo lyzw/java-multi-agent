@@ -91,6 +91,19 @@ public class RagManagementController {
      * <p>缺省为 {@code OFFICIAL_TUTORIAL}（RAG-D00 RD-Q7 决议的默认值）——
      * platform 侧字段尚未落地时，RAG 以该默认值行事，
      * <b>不</b>因为「拿不到」就放宽到 UNVERIFIED。
+     *
+     * <p><b>⚠️ 平台全局档没有「本租户门槛」这回事（R-4 未解，第二刀不装 solved）</b>：
+     * 全局语料对所有租户可见，而门槛是<b>逐租户</b>的概念，于是平台档的准入判定
+     * 只能沿用<b>部署级</b>门槛（本头的缺省值）。这留了两个未解问题，
+     * 明确记在这里而不是代码里：
+     * <ul>
+     *   <li>「对甲租户够格、对乙租户不够格」的全局语料没有表达方式——
+     *       要么全放行要么全挡住，缺按租户差异化；</li>
+     *   <li>平台档写侧读的是<b>调用方传的头</b>（控制台当前不传，走缺省），
+     *       所以「全局语料的准入线由谁定」在契约上仍是空白。</li>
+     * </ul>
+     * 现状可接受的理由：门槛只影响<b>可见性判定</b>，不影响隔离；
+     * 真要收口得等 platform 侧的逐租户门槛落地（RAG-R23），不在本片范围。
      */
     public static final String MIN_TRUST_TIER_HEADER = "X-Tenant-Min-Trust-Tier";
 
