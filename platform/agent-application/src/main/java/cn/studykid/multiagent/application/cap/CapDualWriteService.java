@@ -91,6 +91,12 @@ public class CapDualWriteService implements CapDualWritePort {
         this.snapshots = snapshots;
         this.clock = clock;
         this.configPointers = configPointers;
+        if (!dualWriteSwitch.isEnabled()) {
+            // ⚠️ 一次性告知，而不是每个 Run 静默跳过：
+            // 关双写 = Run 不再有能力快照，而执行准入读的就是它。
+            log.warn("迁移双写开关处于关闭状态：不写 execution_capability_snapshot，"
+                    + "依赖该快照的执行准入将把每个 Run 判为 CONFIG_UNAVAILABLE");
+        }
     }
 
     @Override
@@ -171,9 +177,13 @@ public class CapDualWriteService implements CapDualWritePort {
             }
         } catch (RuntimeException e) {
             // ⚠️ fail-soft：闭包算不出来时**不写**快照（旧路径继续生效），只计数 + 记日志。
+            // ⚠️ <b>必须是 WARN</b>：这里跳过 = 该 Run 没有能力快照 = 执行准入把它判成
+            //    CONFIG_UNAVAILABLE。曾经记在 debug 级，线上等价于「静默地把配置缺陷
+            //    伪装成运行期偶发失败」，排查时只能靠猜。
             deferredSnapshots.incrementAndGet();
-            log.debug("执行快照双写挂起（闭包不可解析或版本源不可用）: tenant={}, run={}, agent={}, 原因={}",
-                    tenantId, runId, agentId, e.getMessage());
+            log.warn("执行快照双写挂起（闭包不可解析或版本源不可用），该 Run 将无能力快照: "
+                            + "tenant={}, run={}, agent={}, version={}, 原因={}",
+                    tenantId, runId, agentId, agentVersion, e.getMessage(), e);
         }
     }
 

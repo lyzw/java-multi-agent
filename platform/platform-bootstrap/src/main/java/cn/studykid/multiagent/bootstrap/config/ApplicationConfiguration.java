@@ -666,14 +666,15 @@ public class ApplicationConfiguration {
     /**
      * 迁移双写开关（P0-T6）。
      *
-     * <p>⚠️ <b>默认 false</b>：双写会增加旧路径的写放大与延迟，
-     * 未经验证的灰度不应直接作用于生产写路径。
-     * 回退路径：运行时置 false 即让旧读/写路径完全接管，且不删除任何已写数据。
+     * <p>⚠️ <b>默认 true</b>：写出的 {@code execution_capability_snapshot} 是执行准入的
+     * <b>前置条件</b>（{@code RootAgentModelConfigProvider} 靠它确定根 Agent 是谁），
+     * 默认关等于默认跑不了任何 Run。回退仍可用：置 false 即让旧读/写路径完全接管，
+     * 且不删除任何已写数据 —— 但要知道回退同时关闭了执行准入。
      */
     @Bean
     public cn.studykid.multiagent.application.cap.CapDualWriteSwitch capDualWriteSwitch(
             @Value("${" + cn.studykid.multiagent.application.cap.CapDualWriteSwitch.KEY
-                    + ":false}") boolean enabled) {
+                    + ":true}") boolean enabled) {
         return new cn.studykid.multiagent.application.cap.CapDualWriteSwitch(enabled);
     }
 
