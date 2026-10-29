@@ -97,6 +97,11 @@ DDL 早就支持全局语料，但**管理面既看不见也写不出**，四处
    要看某租户正文，必须显式切到 T 档并指名租户——这条在控制器与 SQL 两层同时收口，不只写在注释里。
 4. **T 档行为零变化**：现有 75 项语料反证（`scripts/rag-corpus-scope-counterproof.sh`）与字典反证 39 项
    必须**原样保持绿**；本片只新增断言，不放宽任何一条既有断言。
+   > ⚠️ 2026-10-29 第二刀实测：这条红线当时**无法被验证**——两个脚本仍在扫 commit `826d77b` 删掉的
+   > `db/migration/`（空目录），实跑第一步就 `die`。「75 项」是 2026-10-27 的数字，「39 项」也同批。
+   > 已把两处重指向库结构权威源 `deploy/sql/rag/01_rag_ddl.sql` 后实测：**语料反证 102 项 / 0 失败**
+   > （76 项既有 + 新增 P13 组 26 条）、**字典反证 39 项 / 0 失败**。数字以运行输出为准，见
+   > [第二刀实测记录](RAG语料平台级治理_第二刀实测记录.md) §2、§4-1。
 5. **不改检索面**（`rag-api`）：本片只动管理面。租户检索时「本租户 ∪ 全局」的既有可见性（RLS 读策略）不动。
 
 ### 2.3 A 档只读的取舍（需要用户确认的一处）
@@ -131,6 +136,17 @@ DDL 早就支持全局语料，但**管理面既看不见也写不出**，四处
 | 2.6 | 全局语料的准入判定沿用部署级门槛（R-4 未解，本片不装 solved） | `RagManagementController.java:89` |
 | 2.7 | 前端 G 档放开「登记 / 校验 / 撤回 / 重索引」四组入口 + 票据内存态纪律 + 换作用域即作废 | `RagManagementPage.tsx`、`RagSourceTable.tsx:135`、`RagMaintenancePanel.tsx:143` |
 | 2.8 | 反证脚本扩展：`P4/P5/P6` 三条既有断言保持（`rag_app` 仍写不出全局），新增 ops 角色可写 / 非票据调用被拒 / 票据过期被拒 | `scripts/rag-corpus-scope-counterproof.sh` |
+
+> **实测交付与原表的三处偏差（2026-10-29 第二刀，见 [`第二刀实测记录`](RAG语料平台级治理_第二刀实测记录.md)）**：
+> ① **2.2 落点不同**：运维数据源五件套在 `rag-infrastructure/.../infrastructure/ops/`
+> （`RagOpsDataSourceProvider` / `GuardedRagOpsDataSource` / `RagOpsSessionGuard` / `RagOpsSessionPort` /
+> `RagOpsUnavailableException`），不是计划写的 `rag-bootstrap/.../RagOpsDataSourceConfiguration.java`；
+> `rag-bootstrap` 只承接启动自检。**2.8 的「非票据调用被拒 / 票据过期被拒」不在反证脚本里**——
+> 脚本无法签发合法票据（票据由平台应用签、需平台身份 JWT），这两条钉在
+> `PlatformRagGovernanceTicketServiceTest`（10）与 `RagManagementControllerTest`（57）；
+> 脚本侧新增的是**库侧能力与代价**（P13 组 26 条：ops 写得进哨兵桶 / 删不动任何行 / 读得到全部租户私有行）。
+> ③ 附带两条从未被写进计划、但实测必须钉的守卫：`scripts/check-rag-ops-role.sh`（真库只读巡检，退出码可挂 CI）
+> 与「反证脚本改跑**权威源本身**」这次改造。
 
 > ⚠️ **2.1 与 2.4 触碰共享库**（远程 RDS `agent_dev` / RAG 库；`rag_ops` 需 owner 执行）。
 > 本刀开工前单独取得授权，执行方式沿用「owner 凭据 + 补丁 SQL + 巡检脚本退出码」的既有纪律。
@@ -177,6 +193,16 @@ DDL 早就支持全局语料，但**管理面既看不见也写不出**，四处
 | A5 | `rag_app` 角色**仍然**写不出全局行（闸门未被本片打开） | 反证脚本新增断言 |
 | A6 | ops 数据源未接入时 G/A 档 503 fail-closed，不回落应用角色、不伪装成空列表 | IT |
 | A7 | 票据不落 `sessionStorage`/`localStorage`，换作用域即作废 | 前端单测断言 |
+
+> **实测状态（2026-10-29 第二刀，数字来自运行输出）**：
+> A1 ✅（IT `JdbcCorpusManagementRepositoryIT` 27/0 跳过 + 反证 P13）；
+> A2 ✅ 但**验收口径要更正**：本表原先写的「75+39 项」测于 2026-10-27，那两个脚本自 `826d77b`
+> 起已失效（扫空目录、第一步 `die`）；重指向权威源后实测**语料 102 项 / 字典 39 项，0 失败**；
+> A3 ⚠️ **交付形态与预期码不同**：无票据的 G 档写是 **403**（`requireWriteContext`：票据声明档位 ≠ 请求档位），
+> `503` 只用于 ops 通道未接入，`401` 只用于鉴权失败——本节按实现为准；
+> A5 ✅（反证 P13-10/P13-26 + 巡检 ⑩⑪⑫）；A6 ✅（`RagOpsChannelTest` 7 + IT）；A7 ✅（`ragGovernanceTicket.test.tsx`）；
+> **A4 ⚠️ 未达成**：审计能记录签发事件，但表上**没有票据档位/作用域列**，「谁、哪档」查不出来（第二刀 U-8）。
+> 全文见 [第二刀实测记录](RAG语料平台级治理_第二刀实测记录.md) §2/§4/§5。
 
 ---
 
