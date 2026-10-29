@@ -182,6 +182,6 @@ public class PlatformTenantService {
                        String targetId, String decision, String reason) {
         audit.record(new PlatformAuditEvent(
                 UUID.randomUUID(), principal.userId(), "PLATFORM_USER",
-                action, targetType, targetId, decision, reason, null, null, Instant.now()));
+                action, targetType, targetId, decision, reason, null, null, Instant.now(), null));
     }
 }

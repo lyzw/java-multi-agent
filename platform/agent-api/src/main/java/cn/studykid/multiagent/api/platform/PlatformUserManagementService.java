@@ -278,7 +278,7 @@ public class PlatformUserManagementService {
         audit.record(new PlatformAuditEvent(
                 UUID.randomUUID(), actor.userId(), "PLATFORM_USER",
                 detail != null ? detail : action,
-                targetType, targetId, "ALLOW", detail, null, null, Instant.now()));
+                targetType, targetId, "ALLOW", detail, null, null, Instant.now(), null));
     }
 
     /** 用户详情（含角色集合；无敏感字段）。 */

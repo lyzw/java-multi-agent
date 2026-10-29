@@ -467,7 +467,7 @@ public class PlatformCapabilityConsoleController {
                              @Nullable String detail) {
         audit.record(new PlatformAuditEvent(UUID.randomUUID(), actor.userId(),
                 "PLATFORM_USER", detail != null ? detail : action,
-                targetType, targetId, "ALLOW", detail, null, null, Instant.now()));
+                targetType, targetId, "ALLOW", detail, null, null, Instant.now(), null));
     }
 
     // ── DTO ───────────────────────────────────────────────

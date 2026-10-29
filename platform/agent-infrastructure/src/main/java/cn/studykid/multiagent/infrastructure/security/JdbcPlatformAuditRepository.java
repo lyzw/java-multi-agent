@@ -36,11 +36,15 @@ public class JdbcPlatformAuditRepository implements PlatformAuditPort {
 
     @Override
     public void record(@NonNull PlatformAuditEvent event) {
+        // ⚠️ 列清单与 ?:: 占位符**按位置**一一对应（PlatformAuditEvent 的组件顺序即列顺序）。
+        //    加一列只改这里一处、漏改另一处的表现不是报错，而是**整行往后串一列**——
+        //    uuid 列接到文本会炸，但 varchar 列接到文本不会，于是 decision 里存着 reason、
+        //    reason 里存着 ip，审计还在、证据已经换过人。改完必须跑真库往返（见 IT）。
         String sql = """
                 INSERT INTO platform.platform_audit_event
                     (id, actor_id, actor_type, action, target_type, target_id,
-                     decision, reason_code, correlation_id, ip, occurred_at)
-                VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::uuid, ?, ?, ?::uuid, ?::inet, ?)
+                     decision, reason_code, correlation_id, ip, occurred_at, ticket_scope)
+                VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::uuid, ?, ?, ?::uuid, ?::inet, ?, ?)
                 """;
         try (Connection conn = openSystem();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -55,6 +59,7 @@ public class JdbcPlatformAuditRepository implements PlatformAuditPort {
             ps.setString(9, event.correlationId() == null ? null : event.correlationId().toString());
             ps.setString(10, event.ip());
             ps.setTimestamp(11, Timestamp.from(event.occurredAt()));
+            ps.setString(12, event.ticketScope());
             ps.executeUpdate();
             conn.commit();
         } catch (SQLException e) {
@@ -66,7 +71,7 @@ public class JdbcPlatformAuditRepository implements PlatformAuditPort {
     public @NonNull List<PlatformAuditEvent> query(@NonNull PlatformAuditQuery query) {
         StringBuilder sql = new StringBuilder(
                 "SELECT id, actor_id, actor_type, action, target_type, target_id, "
-                        + "decision, reason_code, correlation_id, ip, occurred_at "
+                        + "decision, reason_code, correlation_id, ip, occurred_at, ticket_scope "
                         + "FROM platform.platform_audit_event WHERE 1=1");
         List<Object> params = new ArrayList<>();
         if (query.actorId() != null && !query.actorId().isBlank()) {
@@ -135,6 +140,7 @@ public class JdbcPlatformAuditRepository implements PlatformAuditPort {
                 rs.getString("reason_code"),
                 correlation,
                 rs.getString("ip"),
-                ts == null ? Instant.EPOCH : ts.toInstant());
+                ts == null ? Instant.EPOCH : ts.toInstant(),
+                rs.getString("ticket_scope"));
     }
 }

@@ -27,7 +27,21 @@ public interface PlatformAuditPort {
     @NonNull
     List<PlatformAuditEvent> query(@NonNull PlatformAuditQuery query);
 
-    /** 平台审计事件（不可变表示）。 */
+    /**
+     * 平台审计事件（不可变表示）。
+     *
+     * <p><b>组件顺序与 {@code platform.platform_audit_event} 的列顺序一致</b>：
+     * JDBC 实现按位置绑定占位符，让两者同序可以避免「加一列就要重排全部构造点」的漂移，
+     * 也让带外 psql 里读到的行序与代码里的参数序可互相核对。
+     *
+     * @param ticketScope 治理票据声明的<b>档位</b>（{@code PLATFORM} / {@code TENANT} / {@code ALL}，
+     *                    与 RAG 侧 {@code RagCorpusScope} 同一根轴；{@code null} = 本条审计与票据无关，
+     *                    这是多数行的常态）。
+     *                    ⚠️ <b>只准落这三个规范值</b>：被拒请求里的档位是调用方可控文本，
+     *                    规范集之外一律写 {@code null} —— 库侧有 CHECK，
+     *                    未校验文本会让一次审计写入抛 SQLException，
+     *                    把「503 拒绝」变成「500 故障」，即闸门自己制造事故（U-8 / 方案 §5 A4）。
+     */
     record PlatformAuditEvent(
             @NonNull UUID id,
             @NonNull String actorId,
@@ -39,7 +53,8 @@ public interface PlatformAuditPort {
             @Nullable String reasonCode,
             @Nullable UUID correlationId,
             @Nullable String ip,
-            @NonNull Instant occurredAt
+            @NonNull Instant occurredAt,
+            @Nullable String ticketScope
     ) {
     }
 

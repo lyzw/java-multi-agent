@@ -78,15 +78,25 @@ public class PlatformAuditController {
         }
     }
 
+    /**
+     * 审计事件的对外视图。
+     *
+     * <p>{@code ticketScope} = 治理票据声明的档位（{@code PLATFORM/TENANT/ALL}，
+     * 与票据 JWT 的 {@code rag_scope} claim 同值），无关的行是 {@code null}。
+     * A4「回溯谁、哪档」的读法就是 {@code actorId + ticketScope + decision + occurredAt}；
+     * 本轮**只加读出的字段，没加按档位过滤的查询参数**（可用 {@code action} 收窄），
+     * 免得前端为了一个还没有界面的维度先去改查询契约。
+     */
     public record AuditSummary(String id, String actorId, String actorType, String action,
                               String targetType, String targetId, String decision,
-                              String reasonCode, String correlationId, String ip, String occurredAt) {
+                              String reasonCode, String correlationId, String ip, String occurredAt,
+                              String ticketScope) {
         static AuditSummary of(PlatformAuditEvent e) {
             return new AuditSummary(
                     e.id().toString(), e.actorId(), e.actorType(), e.action(),
                     e.targetType(), e.targetId(), e.decision(), e.reasonCode(),
                     e.correlationId() == null ? null : e.correlationId().toString(),
-                    e.ip(), e.occurredAt().toString());
+                    e.ip(), e.occurredAt().toString(), e.ticketScope());
         }
     }
 }

@@ -308,7 +308,7 @@ public class PlatformExecutionTicketService {
                 decision, reasonCode,
                 principalId == null || !isUuid(principalId)
                         ? null : UUID.fromString(principalId),
-                null, Instant.now()));
+                null, Instant.now(), null));
     }
 
     private static boolean isUuid(String value) {
