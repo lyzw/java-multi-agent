@@ -60,8 +60,10 @@
 -- 把参数传入会话变量，供 DO 块读取
 -- ⚠️ psql 变量无法在 DO 块内直接引用（:'x' 是客户端语法），
 --    故先用 set_config 放入会话变量，再由 DO 块 current_setting() 取回。
+-- ⚠️ 结果集必须丢弃（`\g /dev/null`）：set_config **会原样回显写入的值**，
+--    传了 rag_password 时等于把口令印进执行日志/终端历史。
 SELECT set_config('my.rag_role', :'rag_role', false),
-       set_config('my.rag_password', :'rag_password', false);
+       set_config('my.rag_password', :'rag_password', false) \g /dev/null
 
 
 -- =====================================================================
