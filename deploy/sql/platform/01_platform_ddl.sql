@@ -915,8 +915,16 @@ CREATE TABLE platform.platform_audit_event (
     reason_code character varying(64),
     correlation_id uuid,
     ip inet,
-    occurred_at timestamp with time zone DEFAULT now() NOT NULL
+    occurred_at timestamp with time zone DEFAULT now() NOT NULL,
+    ticket_scope character varying(32),
+    CONSTRAINT platform_audit_event_ticket_scope_ck CHECK (((ticket_scope IS NULL) OR (ticket_scope = ANY (ARRAY['PLATFORM'::character varying, 'TENANT'::character varying, 'ALL'::character varying]))))
 );
+
+
+-- ⚠️ COMMENT ON ... IS 只接受**单个字符串字面量**，不接受 || 拼接表达式
+--    （实测：psql 在 `|| '非票据类…'` 处报 syntax error at or near "||"，
+--     整个快照在空库上直接建不起来）。要分行只能靠 psql 的续行，不能靠表达式。
+COMMENT ON COLUMN platform.platform_audit_event.ticket_scope IS '治理票据声明的档位＝作用域（同一根轴的两个说法：票据只带 rag_scope 一个声明，值域即 RAG 侧 RagCorpusScope 三档）。非票据类审计行为 NULL，这是常态而不是缺失。⚠️ 写入方只准落这三个规范值：被拒请求里的档位是调用方可控文本，规范集之外一律写 NULL —— 把未校验文本塞进带 CHECK 的列，表现是「审计写入 SQLException 把一次 503 拒绝变成 500」，即闸门自己制造故障。追责口径（方案 §5 A4）= actor_id（谁）+ 本列（哪档）+ decision + occurred_at。';
 
 
 --
