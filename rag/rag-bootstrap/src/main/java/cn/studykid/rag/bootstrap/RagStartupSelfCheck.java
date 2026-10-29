@@ -2,9 +2,11 @@ package cn.studykid.rag.bootstrap;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -31,6 +33,11 @@ import org.springframework.stereotype.Component;
  *       只要混进一行租户私有语料，就是「无租户即可读某租户私有内容」的泄漏。
  *       （V8 双作用域前的表述是「必须返回 0 行」，见
  *       {@link #checkFailClosedEmptyCorpus} 的重述理由。）</li>
+ *   <li><b>运维角色与主数据源角色互斥</b>——{@code rag_ops} 带 BYPASSRLS（平台
+ *       全局语料写通道需要，见 RAG-D11 第二刀），一旦它出现在主数据源配置里、
+ *       或当前连接的正是它，整条租户隔离会被静默作废；而 {@link #checkNonPrivilegedRole}
+ *       只能检出「连上的角色有 BYPASSRLS」，检不出「配置把两个角色写成了同一个」。
+ *       所以既要比配置名，也要比运行期 {@code current_user}。</li>
  * </ol>
  *
  * <p>任何一项失败都会抛出 {@link IllegalStateException} 中止启动，
@@ -43,8 +50,24 @@ public class RagStartupSelfCheck implements ApplicationRunner {
 
     private final JdbcTemplate jdbcTemplate;
 
-    public RagStartupSelfCheck(JdbcTemplate jdbcTemplate) {
+    /** 运维通道是否接入（仅用于日志与提示；角色互检不受它影响，见 {@link #checkOpsRoleSeparation}）。 */
+    private final boolean opsEnabled;
+
+    /** 运维数据源用户名（{@code rag.ops.datasource.username}）；空 = 未配置，不参与互检。 */
+    private final String opsUsername;
+
+    /** 主数据源用户名（{@code spring.datasource.username}）。 */
+    private final String mainUsername;
+
+    public RagStartupSelfCheck(
+            JdbcTemplate jdbcTemplate,
+            @Value("${rag.ops.enabled:true}") boolean opsEnabled,
+            @Value("${rag.ops.datasource.username:}") String opsUsername,
+            @Value("${spring.datasource.username:}") String mainUsername) {
         this.jdbcTemplate = jdbcTemplate;
+        this.opsEnabled = opsEnabled;
+        this.opsUsername = opsUsername == null ? "" : opsUsername.trim();
+        this.mainUsername = mainUsername == null ? "" : mainUsername.trim();
     }
 
     @Override
@@ -56,6 +79,7 @@ public class RagStartupSelfCheck implements ApplicationRunner {
         checkTenantContextFunction(failures);
         checkRlsEnabled(failures);
         checkFailClosedEmptyCorpus(failures);
+        checkOpsRoleSeparation(failures);
 
         if (!failures.isEmpty()) {
             log.error("RAG 启动自检未通过（{} 项）：{}", failures.size(), failures);
@@ -63,7 +87,8 @@ public class RagStartupSelfCheck implements ApplicationRunner {
                     "RAG 启动自检未通过：" + String.join("; ", failures));
         }
         log.info("RAG 启动自检全部通过：pgvector 就绪 / 连接角色非特权 / RLS 生效 / "
-                + "无租户上下文只见全局语料。");
+                + "无租户上下文只见全局语料 / 运维角色与主数据源角色互斥"
+                + "（运维通道 " + (opsEnabled ? "已接入" : "显式关闭") + "）。");
     }
 
     private void checkPgVector(List<String> failures) {
@@ -162,6 +187,64 @@ public class RagStartupSelfCheck implements ApplicationRunner {
             }
         } catch (Exception e) {
             failures.add("无租户 fail-closed 探针失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 运维角色与主数据源角色互斥检查（RAG-D11 第二刀 §2.2）。
+     *
+     * <p><b>为什么 {@link #checkNonPrivilegedRole} 不够</b>：它检的是「连上来的这个角色
+     * 有没有 BYPASSRLS」。而第二刀引入的 {@code rag_ops} <b>本身就是</b>带 BYPASSRLS 的角色
+     * （平台全局语料写通道的设计前提），所以「主数据源误填成 rag_ops」这件事有两种形态：
+     * <ul>
+     *   <li>配置层面两个键写成同一个名字 —— 靠字符串比对检出；</li>
+     *   <li>配置没写、被环境变量覆盖、或大小写/引号差异导致实际连上的正是它 ——
+     *       只有运行期 {@code current_user} 能检出。</li>
+     * </ul>
+     * 两种都要，漏一种的后果都是「租户隔离静默作废」：RLS 策略还在、
+     * 只是对被绕过的角色不再起作用，而这类事故在日志里没有任何异常。
+     *
+     * <p><b>不受 {@code rag.ops.enabled} 影响</b>：只要配了运维角色名就互检。
+     * 理由是「今天关着」不是「这个名字无害」——把 rag_ops 填进主数据源、
+     * 同时临时关掉运维通道，恰好是最危险的一种组合（通道没了、绕过还在）。
+     */
+    private void checkOpsRoleSeparation(List<String> failures) {
+        if (opsUsername.isEmpty()) {
+            return;
+        }
+        String currentUser;
+        try {
+            currentUser = jdbcTemplate.queryForObject("SELECT current_user", String.class);
+        } catch (Exception e) {
+            failures.add("检查运维角色互斥失败：" + e.getMessage());
+            return;
+        }
+        assessOpsRoleSeparation(failures, currentUser);
+    }
+
+    /**
+     * 互斥判定的纯函数部分（不碰库，因此能被单测钉住）。
+     *
+     * @param failures   收集失败项
+     * @param currentUser 运行期 {@code current_user} 读数（可为 null → 只比配置）
+     */
+    void assessOpsRoleSeparation(List<String> failures, String currentUser) {
+        if (opsUsername.isEmpty()) {
+            return;
+        }
+        String normalizedOps = opsUsername.toLowerCase(Locale.ROOT);
+        if (!mainUsername.isEmpty()
+                && mainUsername.toLowerCase(Locale.ROOT).equals(normalizedOps)) {
+            failures.add("主数据源与运维数据源配置成了同一个角色 " + opsUsername
+                    + "（运维角色按设计带 BYPASSRLS，作主连接角色会让租户隔离静默失效）"
+                    + " → 主数据源必须是 rag_app（NOSUPERUSER + NOBYPASSRLS），"
+                    + " 运维通道只能走 rag.ops.datasource.*");
+        }
+        if (currentUser != null
+                && currentUser.trim().toLowerCase(Locale.ROOT).equals(normalizedOps)) {
+            failures.add("当前数据库连接角色正是运维角色 " + opsUsername
+                    + "（BYPASSRLS 会绕过全部租户 RLS 策略，且不会留下任何异常日志）"
+                    + " → 请用 rag_app 启动主数据源");
         }
     }
 }

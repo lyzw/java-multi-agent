@@ -27,6 +27,31 @@ rag:
   # 占位解析/嵌入/蕴含实现默认拒绝装配（应用拒绝启动）；仅本地开发/链路验证时置 true。
   local-ports:
     enabled: ${RAG_LOCAL_PORTS_ENABLED:false}
+  # ── 平台全局语料运维通道（RAG-D11 第四刀·第二刀）──────────────────
+  # 平台档（X-Rag-Scope: PLATFORM）的<b>写</b>动作走这条独立角色 + 独立连接池，
+  # 而不是放宽所有租户共用的 rag_app：rag_app 的写策略含 scope='TENANT'，
+  # 那正是「应用角色写不出全局行」的越权闸门（反证 P4 钉着它）。
+  #
+  # ⚠️ 默认<b>开</b>（用户定案：默认开 + 常驻补偿控制，不用「先关掉」当护栏）。
+  #    enabled=true 而 url/username 缺失时<b>拒绝启动</b>，不静默降级成哑通道：
+  #    后者的表现是一辈子 503，看起来像后端故障，谁也查不到是配置问题。
+  #    本地不接运维库的部署要显式写 RAG_OPS_ENABLED=false（此时平台档写 → 503，
+  #    租户档与检索链路完全不受影响）。
+  #
+  # ⚠️ 必须用 <b>非主数据源角色</b>：rag_ops 带 BYPASSRLS，
+  #    若与 spring.datasource 同一个角色，租户隔离整体失效
+  #    （启动自检会断言两者用户名不同）。
+  #    角色与授权见 deploy/sql/rag/05_rag_ops_role.sql。
+  # ⚠️ 口令只从环境变量注入，绝不写进本文件。
+  ops:
+    enabled: ${RAG_OPS_ENABLED:true}
+    datasource:
+      url: ${RAG_OPS_DATASOURCE_URL:}
+      username: ${RAG_OPS_DATASOURCE_USERNAME:}
+      password: ${RAG_OPS_DATASOURCE_PASSWORD:}
+      # 池上限刻意小：全局语料写是<b>低频治理动作</b>，
+      # 给一个大池只会让「控制台被当成导入工具」成为可能。
+      max-pool-size: ${RAG_OPS_DATASOURCE_MAX_POOL_SIZE:2}
   # 嵌入模型（OpenAI 兼容 /embeddings）——属性名与 rag-bootstrap 完全一致：
   # 索引向量与查询向量必须同源同模型，两处配置项一旦漂移就是「检索恒低分且不报错」。
   # ⚠️ 密钥只从环境变量注入。
