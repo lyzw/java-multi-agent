@@ -121,7 +121,6 @@ public final class PlatformJwtTokenService {
         long iat = now.getEpochSecond();
         long exp = now.plus(tokenTtl).getEpochSecond();
 
-        String header = "{\"alg\":\"" + ALGORITHM + "\",\"typ\":\"JWT\",\"kid\":\"" + kid + "\"}";
         String payload = "{"
                 + "\"iss\":\"" + escape(issuer) + "\","
                 + "\"sub\":\"" + escape(principal.userId()) + "\","
@@ -134,7 +133,102 @@ public final class PlatformJwtTokenService {
                 + "\"authz_version\":" + principal.authzVersion() + ","
                 + "\"mfa\":" + principal.mfaVerified()
                 + "}";
+        return mint(payload);
+    }
 
+    /**
+     * 治理票据的作用域 claim 名。
+     *
+     * <p>⚠️ 与 RAG 侧 {@code RagJwtAuthFilter#TICKET_SCOPE_CLAIM} <b>同名同义、各存一份</b>：
+     * 两个 reactor 之间没有共享编译产物（RAG 不依赖平台 jar），
+     * 因此这条契约只能靠命名与注释钉住。改一处不改另一处的表现是
+     * 「票据签出来了、RAG 说不认识」，而那条 403 读起来像权限不足。
+     */
+    public static final String RAG_SCOPE_CLAIM = "rag_scope";
+
+    /**
+     * 一张刚签出的令牌。
+     *
+     * <p>{@code token} 是<b>凭据本身</b>：只准即时交付给调用方，
+     * 绝不写日志、绝不进审计正文（事后回溯用 {@code jti}）。
+     */
+    public record Issued(@NonNull String token,
+                         @NonNull String jti,
+                         @NonNull Instant expiresAt) {
+    }
+
+    /**
+     * 签出一枚 RAG 全局语料<b>治理票据</b>（RAG-D11 第四刀·第二刀 §2.3）。
+     *
+     * <p><b>为什么不能直接把登录令牌当票据用</b>：RAG 管理面能区分「调用方是平台域」，
+     * 但平台域身份本身不等于「被授权改动全局语料」。票据多带的正是这一格授权声明。
+     *
+     * <p><b>⚠️ {@code roles} 刻意签成空集合</b>：票据若带上持有者的角色，
+     * 它就同时是一枚<b>有效期内的平台登录态</b>——泄露到 RAG 侧访问日志里，
+     * 等于把「改全局语料」的授权扩成「持票者角色所能做的全部平台动作」。
+     * 带上空角色后，这枚令牌在平台域内<b>任何端点都过不了授权矩阵</b>（默认拒绝），
+     * 只在 RAG 管理面被认（那里不看角色，只看域 + 票据声明）。
+     *
+     * <p><b>受众与登录令牌一致</b>（{@code aud=admin-console-api}）：
+     * 这是 RAG 侧平台域的既有判据，不是新开的口子——RAG 从不校验平台角色的权限码，
+     * 它只校验签名、iss/aud、有效期与这一格 claim。
+     *
+     * @param principal 持票的平台主体（票据的 {@code sub} 仍指向真人，审计才能归因）
+     * @param now       签发时刻
+     * @param ttl       票据有效期；由调用方的配置闸门给出，本方法只校验为正
+     * @param scope     票据声明的作用域（{@code PLATFORM}／{@code ALL}），须为大写标识符形态
+     * @return 票据（含 token、jti、过期时刻）
+     * @throws IllegalArgumentException {@code scope} 形态非法（防手写 JSON 的注入面）
+     */
+    public @NonNull Issued issueRagGovernanceTicket(@NonNull PlatformPrincipal principal,
+                                                    @NonNull Instant now,
+                                                    @NonNull Duration ttl,
+                                                    @NonNull String scope) {
+        if (ttl.isZero() || ttl.isNegative()) {
+            throw new IllegalArgumentException("治理票据有效期必须为正，当前 " + ttl);
+        }
+        String claim = requireScopeShape(scope);
+        String jti = UUID.randomUUID().toString();
+        long iat = now.getEpochSecond();
+        long exp = now.plus(ttl).getEpochSecond();
+
+        String payload = "{"
+                + "\"iss\":\"" + escape(issuer) + "\","
+                + "\"sub\":\"" + escape(principal.userId()) + "\","
+                + "\"aud\":\"" + escape(audience) + "\","
+                + "\"iat\":" + iat + ","
+                + "\"exp\":" + exp + ","
+                + "\"jti\":\"" + jti + "\","
+                + "\"principal_type\":\"" + IdentityDomains.PRINCIPAL_TYPE_PLATFORM + "\","
+                + "\"roles\":[],"
+                + "\"authz_version\":" + principal.authzVersion() + ","
+                + "\"mfa\":" + principal.mfaVerified() + ","
+                + "\"" + RAG_SCOPE_CLAIM + "\":\"" + claim + "\""
+                + "}";
+        return new Issued(mint(payload), jti, Instant.ofEpochSecond(exp));
+    }
+
+    /**
+     * 票据作用域的形态闸门：大写字母开头的 {@code [A-Z0-9_]} 标识符，长度 ≤ 32。
+     *
+     * <p><b>为什么在签发器里再校验一遍</b>：payload 是手写拼接的 JSON 串，
+     * 值里出现引号就是声明注入。调用链上游当然也该校验，
+     * 但「不能拼出第二条声明」这件事必须由<b>唯一能签名的地方</b>兜住。
+     */
+    private static String requireScopeShape(String scope) {
+        if (scope == null || !SCOPE_SHAPE.matcher(scope).matches()) {
+            throw new IllegalArgumentException(
+                    "治理票据作用域形态非法（须为大写字母开头的 [A-Z0-9_]，长度 ≤ 32）：" + scope);
+        }
+        return scope;
+    }
+
+    private static final java.util.regex.Pattern SCOPE_SHAPE =
+            java.util.regex.Pattern.compile("[A-Z][A-Z0-9_]{0,31}");
+
+    /** 拼头、签名、组装三段式（登录令牌与治理票据共用同一条签名路径，避免两处漂移）。 */
+    private String mint(String payload) {
+        String header = "{\"alg\":\"" + ALGORITHM + "\",\"typ\":\"JWT\",\"kid\":\"" + kid + "\"}";
         String signingInput = ENCODER.encodeToString(header.getBytes(StandardCharsets.UTF_8))
                 + "." + ENCODER.encodeToString(payload.getBytes(StandardCharsets.UTF_8));
         return signingInput + "." + ENCODER.encodeToString(sign(signingInput));

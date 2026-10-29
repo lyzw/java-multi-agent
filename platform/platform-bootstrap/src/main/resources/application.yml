@@ -438,6 +438,22 @@ platform:
       enabled: "${PLATFORM_EXECUTION_TICKET_ENABLED:true}"
       # 票证有效期（秒）。下界 60 与登录令牌同源，小于即拒绝启动。
       ttl-seconds: "60"
+    # ── RAG 全局语料治理票据（RAG-D11 第四刀 · 第二刀）─────────────
+    # admin-console 要在控制台维护平台全局语料，但「平台域身份」不等于
+    # 「被授权改动全局语料」。这里签出一枚短时效、**roles 为空**的独立凭据，
+    # 带 rag_scope claim；RAG 管理面只认「域=平台 + 票据声明=PLATFORM」。
+    #
+    # ⚠️ 同样必须是顶层 platform: 下（键由 @Value 逐字读取，挂错父键只会落回默认值）。
+    # ⚠️ **默认开**（用户定案：默认开 + 常驻补偿控制）。护栏不是「先关掉」，而是：
+    #    授权码 platform.resource.manage 打在资源 rag_corpus 上（矩阵驱动、默认拒绝）、
+    #    每次签发/拒绝都写一条平台审计（ALLOW 记 jti、DENY 记原因码）、
+    #    按平台主体限流、TTL 上下界 60~900 秒（越界**拒绝启动**，不静默截断）。
+    #    签出的票据在平台域内没有任何权限（空角色过不了授权矩阵），
+    #    只在 RAG 管理面被认——这是它区别于「把登录令牌当票据用」的地方。
+    #    关闭本开关后请求得到 503，**仍然留痕**。
+    rag-governance-ticket:
+      enabled: "${PLATFORM_RAG_GOVERNANCE_TICKET_ENABLED:true}"
+      ttl-seconds: "${PLATFORM_RAG_GOVERNANCE_TICKET_TTL_SECONDS:300}"
 
 
 # ── 统一配置与权限管控（W-PERM-P0 迁移期开关）──────────────────────

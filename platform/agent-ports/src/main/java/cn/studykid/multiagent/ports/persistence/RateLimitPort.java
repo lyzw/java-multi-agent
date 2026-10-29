@@ -73,6 +73,22 @@ public interface RateLimitPort {
          * 30 次/分留出的余量足够多人共用同一租户。
          */
         public static final String PLATFORM_EXECUTION_TICKET = "PLATFORM_EXECUTION_TICKET";
+
+        /**
+         * 平台侧 <b>RAG 全局语料治理票据</b>签发（RAG-D11 第四刀 · 第二刀）。
+         *
+         * <p>⚠️ <b>计量键与执行票证不同源</b>：{@link #PLATFORM_EXECUTION_TICKET} 按
+         * <b>目标租户</b>计量，因为它的威胁模型是「一个平台账号被窃 → 对全部租户逐轮签发」。
+         * 治理票据只针对<b>一个</b>资源（平台全局语料桶），没有「被横扫的租户」这一维度；
+         * 按资源计量会退化成全局单桶，让多个运维互相限流（同 {@link #GOVERNANCE_QUERY}
+         * 当年踩过的坑）。因此这里按<b>平台主体</b>计量：拦住的是
+         * 「单张被窃凭据无限签发」，而不会让同事之间互相打挂。
+         * 落库形态：{@code rate_limit_bucket.tenant_id} 里放的是<b>平台用户 ID</b>
+         * ——该列无外键，且 RLS 策略是 {@code tenant_id = current_setting('app.tenant_id')}
+         * 的自洽形式，写入时绑定的正是同一个值，所以照常成立；
+         * 桶键本身提供命名空间隔离，不会与任何租户的 {@code RUN_CREATE} 计数互相干扰。
+         */
+        public static final String PLATFORM_RAG_GOVERNANCE_TICKET = "PLATFORM_RAG_GOVERNANCE_TICKET";
     }
 
     /**

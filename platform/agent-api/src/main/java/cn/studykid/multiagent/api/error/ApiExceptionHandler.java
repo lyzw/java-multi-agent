@@ -11,6 +11,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.api.config.ConfigOverrideController;
 import cn.studykid.multiagent.api.platform.PlatformExecutionTicketService;
+import cn.studykid.multiagent.api.platform.PlatformRagGovernanceTicketService;
 import cn.studykid.multiagent.api.run.RunController.ErrorResponse;
 import cn.studykid.multiagent.api.security.CurrentPrincipal.UnauthenticatedException;
 import cn.studykid.multiagent.application.config.ConfigTighteningPolicy;
@@ -54,6 +55,22 @@ public class ApiExceptionHandler {
     public ResponseEntity<ErrorResponse> handleTicketRejected(
             PlatformExecutionTicketService.TicketRejectedException e) {
         log.info("执行票证签发被拒: code={} status={} msg={}",
+                e.reasonCode(), e.status().value(), e.getMessage());
+        return ResponseEntity.status(e.status())
+                .body(new ErrorResponse(e.reasonCode(), e.getMessage()));
+    }
+
+    /**
+     * RAG 治理票据闸门拒绝 → 与执行票证同一处理：状态码由闸门自己声明 + 稳定原因码。
+     *
+     * <p>不并入 {@link #handleTicketRejected} 是因为那是另一服务的嵌套类型，
+     * 但取舍完全同源：这里四种拒绝（通道关闭 / 档位没带 / 档位未知 / ALL 不可签 / 限流）
+     * 的行动建议各不相同，塌成归一文案就只剩审计表里有原因。
+     */
+    @ExceptionHandler(PlatformRagGovernanceTicketService.GovernanceTicketRejectedException.class)
+    public ResponseEntity<ErrorResponse> handleGovernanceTicketRejected(
+            PlatformRagGovernanceTicketService.GovernanceTicketRejectedException e) {
+        log.info("治理票据签发被拒: code={} status={} msg={}",
                 e.reasonCode(), e.status().value(), e.getMessage());
         return ResponseEntity.status(e.status())
                 .body(new ErrorResponse(e.reasonCode(), e.getMessage()));
