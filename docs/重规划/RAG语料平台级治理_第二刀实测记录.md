@@ -39,7 +39,8 @@
 | 前端全量 | `npx vitest run --testTimeout=60000` | **34 文件 / 379 tests 全绿**（第一刀 33/360） |
 | 库结构反证（含 P13 运维通道组） | `./scripts/rag-corpus-scope-counterproof.sh` | **102 项通过 / 0 失败**（P13 组 26 条；第一刀记录里的是 76 项） |
 | 字典反证（修好之后） | `./scripts/rag-dict-scope-counterproof.sh` | **39 项通过 / 0 失败** |
-| 运维通道带外巡检（远程 RDS，连接身份 `rag_ops`） | `./scripts/check-rag-ops-role.sh` | 12 项版 **12/0** → 加 ⑬ 后 **13 项 / 1 违规 / exit 1**（违规 = 真库上那个坏 `search_path`，见 §5 U-6） |
+| 运维通道带外巡检（远程 RDS，连接身份 `rag_ops`） | `./scripts/check-rag-ops-role.sh` | 修复前 **13 项 / 1 违规 / exit 1**（⑬ = 真库上那个坏 `search_path`，§5 U-6）→ 重跑 05 后 **13 项 / 0 违规 / exit 0** |
+| 修复后回归（同一台远程 RDS） | `mvn -o -pl rag-management verify`（给 admin + ops 凭据） | **45 IT / 0 失败 / 0 跳过**（重授权没有动坏应用侧通道） |
 
 ---
 
@@ -87,6 +88,17 @@ javadoc 改为陈述这个事实，而不是留一句看着像承诺的话。
   于是 P13 测的是「我以为的形状」，而生产上的 `rag_ops` 是另一个形状。
 - [scripts/check-rag-ops-role.sh](../../scripts/check-rag-ops-role.sh) + [scripts/tools/CheckRagOpsRole.java](../../scripts/tools/CheckRagOpsRole.java)（新）—— 真库、**只读**、13 项、退出码 0/1/2。分工明确：能力面形状 = 本巡检；**写动作与代价** = P13 组；**票据闸门** = Java/前端单测。三者互不冒充。
 
+**远程开发库修复（原 U-6；用户 2026-10-29 授权后执行，写的是共享 RDS）**
+- 落点确认（先只读预检再动手）：`current_database() = study_rag`、连接身份 = 库 owner `ai_agent`、PG 18.6。
+  ⚠️ 只碰 `study_rag`，`agent_dev` / `growth_planet` 未涉及，也没有任何 `DROP`。
+- 修复前 `pg_roles.rolconfig`：`{statement_timeout=30s, idle_in_transaction_session_timeout=15s, "search_path=\"rag, public\""}`
+  —— 那个引号包整串就是 §4-5 的缺陷本体。
+- 执行：`psql … -v ON_ERROR_STOP=1 -v rag_ops_role=rag_ops -f deploy/sql/rag/05_rag_ops_role.sql`
+  （**不提供 `rag_ops_password`** → 05 走「跳过口令设置」分支，既有凭据不动）。
+- 修复后：`rolconfig` = `… "search_path=rag, public"`（列表语法）；
+  授权面逐条打印 = 11 张 SELECT / 6 张可写 / **无一行 DELETE**；`pg_policies` 的 8 条写类策略 `with_check` 仍含 `scope = 'TENANT'`；
+  巡检 **13 项 / 0 违规 / exit 0**；应用侧回归 `mvn -o -pl rag-management verify` = **45 IT / 0 跳过**。
+
 ---
 
 ## 4. 证伪（本刀推翻的 6 条，全部有实测输出）
@@ -118,7 +130,7 @@ javadoc 改为陈述这个事实，而不是留一句看着像承诺的话。
    **受害的是带外 psql 运维**——而这正是运维通道的主要使用方式。
 6. **「巡检 12 项 0 违规 = 这条通道健康」——测不到的东西不会变绿，只会缺席。**
    加上 ⑬（未限定名在运维会话里必须解析得到）之后，同一台远程 RDS 立刻 **1 违规 / exit 1**：
-   那里的 `rag_ops` 角色还带着修复前那个坏 `search_path`。→ 见 §5 U-6。
+   那里的 `rag_ops` 角色还带着修复前那个坏 `search_path`。→ 已在同日经授权修复（§3 末 + §5 U-6 关闭）。
    另附一条跑法陷阱：`mvn -o -pl agent-api test`（不带 `-am`）会解析本地仓库里的**旧 SNAPSHOT jar**，
    报 `NoSuchMethodError: PlatformJwtTokenService.issueRagGovernanceTicket(...)` ——看着像产品缺陷，
    实际是 5 个用例全红的构建假象；带 `-am` 复跑 **10/0 全绿**。（与 rag 那条「跑 IT 勿加 `-am`」相反，
@@ -131,7 +143,7 @@ javadoc 改为陈述这个事实，而不是留一句看着像承诺的话。
 | # | 事项 | 实测状态 | 归属 |
 | --- | --- | --- | --- |
 | U-1 | `RetrievalRepositoryIT` 既有失败（第一刀 U-1，本刀复现） | **15 / 15 errors：`expected 4096 dimensions, not 1024`** —— 夹具仍 1024 维，列是 `halfvec(4096)`。与本刀无关，但 `-am` 的 reactor `verify` 会被它拖红。 | 独立收口 |
-| U-6 | **共享远程 RDS 上的 `rag_ops` 仍带坏 `search_path`** | 巡检 ⑬ 违规（`search_path="rag, public"` → `rag_source` 解析不到），exit 1。修法 = 库 owner 重跑 `05_rag_ops_role.sql`（幂等）或那一条 `ALTER ROLE ... SET search_path = rag, public`。**写共享库需用户显式授权**，本刀只读未动。 | 待授权 |
+| ~~U-6~~ **已关闭** | ~~共享远程 RDS 上的 `rag_ops` 仍带坏 `search_path`~~ | 2026-10-29 经用户授权后由库 owner 重跑 `05_rag_ops_role.sql`（`study_rag`，幂等、不动口令）修复：巡检 **13/0 · exit 0**、应用侧 IT **45/0 跳过**。前后 `rolconfig` 与授权面打印见 §3 末「远程开发库修复」。 | 已完成 |
 | U-7 | `rag-v7-to-v8-retrofit-check.sh` 仍指向已删除的迁移目录 | 实跑第一步 `die`（同 §4-1）。它的**被测对象本身已不存在**——权威源化后没有「V7 库 + 应用 V8」这条升级路径了。两个去向：改写为「旧表示法库 → `01_rag_ddl.sql` 收编」的校验，或退役并把它钉住的教训（升级路径在全新库上测不出来）搬进 `01` 的头注释。**不擅自删。** | 待定案 |
 | U-8 | 平台审计表没有**票据档位**列 | 谁签的票、签来写哪一档、TTL 多长，审计里查不到；现在只有签发事件本身。第三刀开工前须补，否则「平台改过全局语料」无法追溯到凭证。 | 第三刀前 |
 | U-9 | ALL（跨租户盘点）档 | 仍 `501` + 前端置灰；能否读**语料正文**未定案（默认只元数据）。 | 第三刀 |
@@ -160,7 +172,14 @@ export IT_RAG_OPS_URL="$RAG_OPS_DATASOURCE_URL" IT_RAG_OPS_USERNAME="$RAG_OPS_DA
 mvn -o -pl rag-management verify                 # 126 单测 + 45 IT / 0 跳过
 
 # ④ 运维通道带外巡检（连接身份 = rag_ops 本身；只读；口令只走环境变量，不打印）
-cd .. && ./scripts/check-rag-ops-role.sh         # 当前真库：13 项 / 1 违规（U-6）/ exit 1
+cd .. && ./scripts/check-rag-ops-role.sh         # 期望：13 项 / 0 违规 / exit 0（U-6 已修复）
+
+# ④b 远程库的角色修复通道（仅在巡检报 ⑬/③/④/⑤ 漂移时使用；⚠️ 写共享库，需用户授权）
+set -a; source rag.env; source platform.env; set +a
+export PGPASSWORD="$SPRING_DATASOURCE_PASSWORD"                 # 只进环境变量，不进命令行
+/opt/homebrew/opt/libpq/bin/psql "${RAG_PG_URL#jdbc:}" -U "$SPRING_DATASOURCE_USERNAME" \
+    -v ON_ERROR_STOP=1 -v rag_ops_role=rag_ops -f deploy/sql/rag/05_rag_ops_role.sql
+unset PGPASSWORD
 
 # ⑤ 前端
 cd admin-console && npx tsc --noEmit && npx vitest run --testTimeout=60000   # 34 文件 / 379 全绿
