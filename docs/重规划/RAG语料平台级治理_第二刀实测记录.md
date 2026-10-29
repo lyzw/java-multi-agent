@@ -34,7 +34,7 @@
 | └ G 档写路径真库实测 | 同上 | `JdbcCorpusManagementRepositoryIT` 第一刀 19 → **27**（+8：ops 写进哨兵桶、租户读得到、`rag_app` 照样写不进、通道缺失 503） |
 | 运维通道单测 | `cd rag && mvn -o test` | `RagOpsChannelTest` **7**、`ChunkIndexerGlobalScopeTest` **6**、`ReindexRunnerRoutingTest` **3**、`RagStartupSelfCheckOpsRoleTest` **7** |
 | 管理闸门单测 | 同上 | `RagManagementControllerTest` **57**（第一刀 46 → +11：票据 + 档位 + 哨兵护栏） |
-| 平台票据签发单测 | `cd platform && mvn -o -pl agent-api -am test -Dtest=PlatformRagGovernanceTicketServiceTest` | **10 / 0 失败**（⚠️ 必须带 `-am`，见 §4-6） |
+| 平台票据签发单测 | `cd platform && mvn -o -pl agent-api -am test -Dtest=PlatformRagGovernanceTicketServiceTest` | **10 / 0 失败**（⚠️ 必须带 `-am`，见 §4-6）（U-8 补列后为 **11**，见 §7.3） |
 | 前端类型检查 | `cd admin-console && npx tsc --noEmit` | **clean（exit 0）** |
 | 前端全量 | `npx vitest run --testTimeout=60000` | **34 文件 / 379 tests 全绿**（第一刀 33/360） |
 | 库结构反证（含 P13 运维通道组） | `./scripts/rag-corpus-scope-counterproof.sh` | **102 项通过 / 0 失败**（P13 组 26 条；第一刀记录里的是 76 项） |
@@ -147,7 +147,7 @@ javadoc 改为陈述这个事实，而不是留一句看着像承诺的话。
 | U-1 | `RetrievalRepositoryIT` 既有失败（第一刀 U-1，本刀复现） | **15 / 15 errors：`expected 4096 dimensions, not 1024`** —— 夹具仍 1024 维，列是 `halfvec(4096)`。与本刀无关，但 `-am` 的 reactor `verify` 会被它拖红。 | 独立收口 |
 | ~~U-6~~ **已关闭** | ~~共享远程 RDS 上的 `rag_ops` 仍带坏 `search_path`~~ | 2026-10-29 经用户授权后由库 owner 重跑 `05_rag_ops_role.sql`（`study_rag`，幂等、不动口令）修复：巡检 **13/0 · exit 0**、应用侧 IT **45/0 跳过**。前后 `rolconfig` 与授权面打印见 §3 末「远程开发库修复」。 | 已完成 |
 | ~~U-7~~ **已关闭（定案退役）** | ~~`rag-v7-to-v8-retrofit-check.sh` 仍指向已删除的迁移目录~~ | 2026-10-29 用户定案「退役 + 教训写入注释」，`git rm` 执行。**删前先只读实测确认被测对象真的不存在**（不是靠推断）：远程 `study_rag` 的 `rag.*.tenant_id` **可空列数 = 0**、`scope` 列 8 张、全局字典 4 行在哨兵桶、`information_schema.tables` 里**已无 `flyway_schema_history`** → 「V7 的 NULL 表示法库」在这条链上不可能再出现。教训去向：① 升级路径纪律 → `deploy/sql/rag/01_rag_ddl.sql` 头注释【存量库改动纪律】段；② 同类存量库迁移的执行纪律 → `04_migrate_embedding_halfvec_4096.sql` 头注释；③ RLS 静默 0 行 / NULL 上下文两条 → 已在 `rag-dict-scope-counterproof.sh`（`super_val` 注释 + P7-1）与 `JdbcTenantScopedGeneration` 类注释里，**逐条 grep 核对过确实还在**才写进注释。 | 已完成 |
-| U-8 | 平台审计表没有**票据档位**列 | 谁签的票、签来写哪一档、TTL 多长，审计里查不到；现在只有签发事件本身。第三刀开工前须补，否则「平台改过全局语料」无法追溯到凭证。 | 第三刀前 |
+| ~~U-8~~ **已关闭（同日追加）** | ~~平台审计表没有**票据档位**列~~ | 2026-10-29 落列 + CHECK + 回填 + 读写链贯通，A4「谁、哪档」从推断变成查询。全过程与实测数字见 **§7**。⚠️ 尚欠一步：**共享远程 RDS 的 `platform` schema 还没打 patch**（须用户授权、库 owner 执行），未打之前新版本 jar 在该库上审计读写会失败。 | 已完成（远程 patch 待授权） |
 | U-9 | ALL（跨租户盘点）档 | 仍 `501` + 前端置灰；能否读**语料正文**未定案（默认只元数据）。 | 第三刀 |
 | U-10 | 票据四道闸门**反证脚本测不到** | 脚本无法签发合法票据（票据由平台应用签、需平台身份 JWT）。钉在三处：`PlatformRagGovernanceTicketServiceTest` 10、`RagManagementControllerTest` 57、`admin-console/tests/ragGovernanceTicket.test.tsx`。这是**如实边界**，不是遗漏。 | 记录 |
 
@@ -190,3 +190,86 @@ cd admin-console && npx tsc --noEmit && npx vitest run --testTimeout=60000   # 3
 > ⚠️ `check-rag-ops-role.sh` 的退出码是**给 CI 用的**：它连的身份必须是运维角色本身，
 > 换身份（例如用 owner）测的就是别人，13 条断言全部失真。
 > ⚠️ 反证脚本全程 `docker exec`，**不接受外部 PG 连接串**——临时库必须能自建自删，共享实例没这个前提。
+
+---
+
+## 7. U-8 补记（同日追加）：平台审计加「票据档位」列
+
+方案 §5 的 **A4** 原话是「回溯谁、哪档」，第二刀交付时只做到了「谁」——
+`platform_audit_event` 里没有档位的落点，「哪档」得从 `reason_code` 反推。
+本轮之前可签档位唯一（`PLATFORM`），所以那一档**恰好没有丢**；
+但第三刀放开 `ALL` 之后，同一张表里会同时出现两种档位的签发与拒绝，
+**推断出来的审计不能作为追责证据**，所以补列。
+
+### 7.1 形状
+
+| 落点 | 内容 |
+| --- | --- |
+| [deploy/sql/platform/01_platform_ddl.sql](../../deploy/sql/platform/01_platform_ddl.sql) | `ticket_scope varchar(32)` 可空 + 内联 `CHECK (IS NULL OR ∈ {PLATFORM,TENANT,ALL})` + 列注释（值域＝RAG 侧 `RagCorpusScope` 三档，档位与作用域是同一根轴，**只需一列**） |
+| [deploy/sql/platform/patch_audit_ticket_scope.sql](../../deploy/sql/platform/patch_audit_ticket_scope.sql) | 存量库通道，按 U-7 立下的纪律 **先加可空列 → 回填 → 最后加 CHECK**；幂等；只回填**能从已存数据证明**的行 |
+| `PlatformAuditPort.PlatformAuditEvent` | 末位加 `@Nullable String ticketScope`（组件顺序＝列顺序，见该 record javadoc） |
+| `JdbcPlatformAuditRepository` | INSERT 列清单 + 第 12 个占位符、SELECT 列表 + `mapEvent` 读回 |
+| `PlatformRagGovernanceTicketService` | 5 个留痕点全部带上请求档位；`AUDITABLE_SCOPES` 规范集 + `auditableScope()` 折成「规范值或 NULL」 |
+| `PlatformAuditController.AuditSummary` | 暴露 `ticketScope`（**不加过滤参数**：按 `action` 收窄已够用） |
+| `admin-console` | `PlatformAuditEvent.ticketScope` + 审计页「票据档位」列 + Drawer 行 |
+
+### 7.2 两个不是风格问题的取舍
+
+- **⚠️ 档位必须先过规范集再入库**。被拒请求里的 `scope` 是**调用方可控文本**
+  （闸门 2「通道开关」排在闸门 3「档位合法性」**之前**），而列上有 CHECK。
+  直接写原文的后果不是脏数据而是**审计写入抛 SQLException**——
+  一次 `?scope=<随意编>` 的取票请求会把 503 变成 500，**闸门自己制造故障**。
+  所以规范集之外一律 `NULL`，而「档位不可知」本身就是可查的事实。
+  钉在 `PlatformRagGovernanceTicketServiceTest` 新增的第 11 个用例上。
+- **回填不过度推断**。`CHANNEL_DISABLED` 的行**留 NULL**：闸门 2 在档位校验之前，
+  历史行里调用方到底要哪档确实无从证明。这一条不是靠注释自证的——
+  反证脚本第 3 组断言就是「该行档位仍必须是 NULL」，谁将来把它「补齐」都会红。
+
+### 7.3 实测（2026-10-29）
+
+| 项 | 命令 | 结果 |
+| --- | --- | --- |
+| 结构等价性反证（新建） | `./scripts/platform-audit-ticket-scope-retrofit-check.sh` | **exit 0**：`pg_dump --schema-only -n platform` 两侧各 **994 行完全一致（零漂移）**；回填分布 **5/5 ✓**（ALLOW→PLATFORM、`SCOPE_NOT_MINTABLE`→ALL、`RATE_LIMITED`→PLATFORM、`CHANNEL_DISABLED`→NULL、对照组 `TENANT_SUSPEND`→NULL）；CHECK 在**两条路径**上都拒非规范值、放行 `TENANT` 与 `NULL`；patch **重跑第二遍通过且 NULL 行数不变**（幂等） |
+| 平台审计往返 IT（新建） | `mvn -o -pl agent-infrastructure -am verify -Dit.test=PlatformAuditTicketScopeIT`（`IT_PG_URL` 指本机 `agent_it`，身份 `app_agent`） | **6 / 0 失败 / 0 跳过**：全字段逐一对账（防按位串列）、三档都可落、非票据行读回 NULL、CHECK 拒 `'platform'` 与带引号的注入文本、列与约束在 `pg_catalog` 里确实在位 |
+| 票据闸门单测 | `mvn -o -pl agent-api -am test -Dtest=PlatformRagGovernanceTicketServiceTest` | **11 / 0 失败**（第二刀 10 → +1：垃圾 scope 不入列） |
+| 平台侧全量单测 | `mvn -o -pl agent-api,agent-infrastructure -am test` | **agent-api 218 / agent-infrastructure 250 · 0 失败 0 错误 0 跳过 · BUILD SUCCESS** |
+| 前端 | `npx tsc --noEmit` / `npx vitest run tests/p5Governance.test.tsx --testTimeout=60000` | **tsc clean** / **5 tests 全绿**（新增「票据档位单独成列，非票据行为空」） |
+
+### 7.4 本刀新踩到的坑（都已写进文件注释）
+
+1. **`COMMENT ON … IS` 只接受单个字符串字面量，不接受 `||` 拼接**。
+   第一版把长注释写成多段 `||`，`psql -v ON_ERROR_STOP=1` 在空库复放快照时
+   直接 `syntax error at or near "||"`（第 928 行）——**整个 platform 快照建不起库**。
+   这是反证脚本第一次运行就撞出来的，不是读出来的。
+2. **`pg_dump` 每次导出随机生成 `\restrict` 防护令牌**，不过滤的话结构差分**永远命中这两行**，
+   真漂移会被埋掉；差分函数里过滤 + 内层 `|| true`（某些导出没有防护行时 grep 返回 1，
+   别让 `pipefail` 误判成脚本失败）。
+3. **`scripts/dev-it-db.sh` 的「结构已存在则跳过快照」是个幂等保护，代价是老 IT 库停在旧形状上**。
+   快照加了列而老库没有 → 新 jar 的审计读写直接失败，现场长得像「代码改坏了」。
+   已补 §2.5「无条件重放 `patch_audit_ticket_scope.sql`」，本机 `agent_it` 实测由旧形状升到新形状
+   （这正是**存量库路径**，比空库复放更接近真实升级）。
+4. **`dev-it-db.sh` 的授权循环原来只枚举 `schemaname='public'`** → 平台仓储的 IT 撞
+   `permission denied for schema platform`。已扩到 `public platform` 两个 schema（表权限 + USAGE + 序列）。
+5. 反证脚本回填断言第一版把 `action` 当成 `reason_code` 比对，对照组（`reason_code` 本就是 NULL 的
+   `TENANT_SUSPEND`）报「无此行」——**谓词按行的来历选**，已改为显式 SQL 谓词表。
+
+### 7.5 部署耦合（必须如实声明，不是「以后再补」）
+
+新 jar 的 INSERT/SELECT 都点 `ticket_scope`。
+**存量库若没先打 patch，平台审计的写入与读取会直接失败**（不是降级、是报错）。
+顺序因此是硬性的：**先打 patch → 再启动新版本**。
+本机 `agent_it` 已实测；⚠️ **共享远程 RDS 的 `platform` schema 尚未执行**（须用户授权 + 库 owner 执行，
+patch 头【执行】段写了 dry-run 通道：把末尾 `COMMIT` 改成 `ROLLBACK` 先跑一遍）。
+
+### 7.6 复现配方（补 §6）
+
+```bash
+# ⑥ U-8：存量库升级路径 ≡ 全新库快照（本机容器，自建自删两个一次性库）
+./scripts/platform-audit-ticket-scope-retrofit-check.sh   # 期望：exit 0 / 零漂移 / 回填 5✓
+
+# ⑥b 平台审计往返 IT（先刷新 IT 库，脚本内含 patch 重放与 platform 授权）
+./scripts/dev-it-db.sh
+cd platform && IT_PG_URL=jdbc:postgresql://127.0.0.1:5433/agent_it IT_PG_USER=app_agent \
+  mvn -o -pl agent-infrastructure -am verify -Dit.test=PlatformAuditTicketScopeIT \
+     -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false -Dfailsafe.failIfNoSpecifiedTests=false
+```
