@@ -26,6 +26,7 @@ import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.management.core.CorpusStatistics;
 import cn.studykid.rag.management.core.DocumentVerification;
 import cn.studykid.rag.management.core.DocumentVerificationDecision;
+import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
@@ -39,19 +40,19 @@ import cn.studykid.rag.management.ports.CorpusManagementPort.BulkRegistrationRes
  * 语料数据管理的 JDBC 实现（RAG-D07 §2 准入流程 / RAG-D03 §2 数据模型）。
  *
  * <p><b>⚠️ 租户隔离铁律</b>：本类的<b>每个</b>方法都在
- * {@link TransactionTemplate} 内执行「{@code set_config('app.tenant_id', ?, true)}
- * → 业务 SQL」两步，确保：
+ * {@link TransactionTemplate} 内执行「建立作用域会话 → 业务 SQL」两步，确保：
  * <ol>
- *   <li>租户上下文与业务 SQL 落在<b>同一事务、同一条连接</b>上
+ *   <li>会话变量与业务 SQL 落在<b>同一事务、同一条连接</b>上
  *       （{@code is_local=true} 表示「仅在当前事务有效」，
  *       脱离事务则立即失效，表现为「查不到任何行」且不报错）；</li>
- *   <li>V8 的 RLS FORCE 策略对本次读写生效——<b>真正隔离由 RLS 保证</b>。
- *       SQL 里的 {@code tenant_id = rag_current_tenant()} 是<b>功能性的</b>谓词，
- *       且这里<b>刻意不含全局哨兵分支</b>：管理面只治理本租户语料，
- *       平台全局语料的治理入口属第四刀（需独立运维数据源）。
- *       ⚠️ 因此全局语料在管理台「看不见」是设计，不是缺陷；
- *       但检索面必须能召回它（见 {@code JdbcRetrievalRepository} 的
- *       {@code IN (rag_current_tenant(), rag_global_tenant_id())} 写法）。</li>
+ *   <li>V8 的 RLS FORCE 策略对本次读写生效——<b>真正隔离由 RLS 保证</b>，
+ *       SQL 里的租户谓词是<b>功能性的</b>第二层。读侧按作用域绑定
+ *       （{@link RagManagementContext#queryTenantId()}：租户档取该租户、
+ *       平台档取全局哨兵），写侧继续只认会话租户。
+ *       ⚠️ 因此「平台全局语料在管理台可见」自第一刀起成立，
+ *       但<b>可写</b>不成立——全局写需要独立运维数据源（第二刀）：
+ *       应用角色 {@code rag_app} 的 INSERT/UPDATE 策略含
+ *       {@code scope='TENANT'}，写不出全局行，那正是越权闸门本身。</li>
  * </ol>
  *
  * <p><b>⚠️ 审计与状态变更必须同事务</b>（RAG-D07 §2.5）：
@@ -123,7 +124,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             //    与 INSERT 同事务——审计写不进去则登记整体回滚，
             //    避免出现「库里有来源但无登记审计」的无痕数据。
             appendAuditWithinTenant(context.tenantId(), principalId, "INGEST", sourceId);
-            return findSourceWithinTenant(sourceId);
+            return findSourceWithinTenant(context.tenantId(), sourceId);
         });
     }
 
@@ -170,19 +171,24 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
 
     @Override
     @NonNull
-    public List<CorpusSource> listSources(@NonNull RagTenantContext context,
+    public List<CorpusSource> listSources(@NonNull RagManagementContext context,
                                              @NonNull SourceQuery query) {
         return transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
+            applyReadScope(context);
             List<Object> args = new ArrayList<>();
+            // ⚠️ 租户谓词绑的是「作用域声明的那一批行」而非 rag_current_tenant()：
+            //    平台档不建立会话租户，rag_current_tenant() 为 NULL，
+            //    等值比较会把全局行一律过滤掉（表现为「管理台看不到平台语料」且不报错）。
+            //    RLS 那一层仍按会话租户 ∪ 全局放行，两层同向。
             StringBuilder sql = new StringBuilder("""
                     SELECT source_id, source_type, title, publisher, isbn, doi,
                            trust_tier, ver_status, ver_method, ver_evidence, verified_at,
                            verified_by, ver_valid_days, license_status, object_ref,
                            content_hash, created_at, updated_at
                     FROM rag_source
-                    WHERE tenant_id = rag_current_tenant()
+                    WHERE tenant_id = ?::uuid
                     """);
+            args.add(context.queryTenantId());
             if (query.verificationStatus() != null) {
                 sql.append(" AND ver_status = ?::rag_verification_status");
                 args.add(query.verificationStatus().name());
@@ -217,11 +223,11 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
 
     @Override
     @Nullable
-    public CorpusSource findSource(@NonNull RagTenantContext context,
+    public CorpusSource findSource(@NonNull RagManagementContext context,
                                        @NonNull String sourceId) {
         return transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
-            return findSourceWithinTenant(sourceId);
+            applyReadScope(context);
+            return findSourceWithinTenant(context.queryTenantId(), sourceId);
         });
     }
 
@@ -232,7 +238,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                                           @NonNull VerificationDecision decision) {
         return transactionTemplate.execute(status -> {
             setTenant(context.tenantId());
-            CorpusSource current = findSourceWithinTenant(sourceId);
+            CorpusSource current = findSourceWithinTenant(context.tenantId(), sourceId);
             if (current == null) {
                 return null;
             }
@@ -323,7 +329,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             appendAuditWithinTenant(context.tenantId(), decision.decidedBy(),
                     auditActionFor(decision.targetStatus()), sourceId);
 
-            return findSourceWithinTenant(sourceId);
+            return findSourceWithinTenant(context.tenantId(), sourceId);
         });
     }
 
@@ -353,10 +359,10 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
 
     @Override
     @NonNull
-    public List<CorpusDocument> listDocuments(@NonNull RagTenantContext context,
+    public List<CorpusDocument> listDocuments(@NonNull RagManagementContext context,
                                                 @NonNull String sourceId) {
         return transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
+            applyReadScope(context);
             // ⚠️ 载体级状态列（ver_status / retrievable / revoked_* / license_status）
             //    必须一并选出：管理台要按载体展示「这份扫描件是否可检索、
             //    是否已被撤回」，缺列会让前端只能看到解析状态而看不到治理结论。
@@ -370,10 +376,10 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                              WHERE c.tenant_id = d.tenant_id AND c.document_id = d.document_id)
                                AS chunk_count
                     FROM rag_document d
-                    WHERE d.tenant_id = rag_current_tenant() AND d.source_id = ?::uuid
+                    WHERE d.tenant_id = ?::uuid AND d.source_id = ?::uuid
                     ORDER BY d.created_at DESC, d.document_id
                     """,
-                    (rs, i) -> mapDocument(rs), sourceId);
+                    (rs, i) -> mapDocument(rs), context.queryTenantId(), sourceId);
         });
     }
 
@@ -384,7 +390,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                                                      @NonNull DocumentVerificationDecision decision) {
         return transactionTemplate.execute(status -> {
             setTenant(context.tenantId());
-            CorpusDocument current = findDocumentWithinTenant(documentId);
+            CorpusDocument current = findDocumentWithinTenant(context.tenantId(), documentId);
             if (current == null) {
                 return null;
             }
@@ -397,7 +403,8 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             // ⚠️ 载体不得高于来源：来源没过校验，载体不能自称 VERIFIED。
             //    来源状态必须在**同一事务**内读取——否则并发撤回来源时，
             //    可能读到「来源仍 VERIFIED」的旧快照而放行载体。
-            String sourceStatus = querySourceVerificationStatus(current.sourceId());
+            String sourceStatus = querySourceVerificationStatus(context.tenantId(),
+                    current.sourceId());
             if (sourceStatus == null) {
                 throw new IllegalStateException("载体所属来源不存在：" + current.sourceId()
                         + "（来源缺失意味着无法判定「载体不得高于来源」）");
@@ -435,15 +442,16 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                     DocumentVerification.auditActionFor(decision.targetStatus()),
                     current.sourceId());
 
-            return findDocumentWithinTenant(documentId);
+            return findDocumentWithinTenant(context.tenantId(), documentId);
         });
     }
 
     @Override
     @NonNull
-    public CorpusIssues listIssues(@NonNull RagTenantContext context) {
+    public CorpusIssues listIssues(@NonNull RagManagementContext context) {
         return transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
+            applyReadScope(context);
+            String tenant = context.queryTenantId();
 
             // ⚠️ 缺向量的载体：用 LEFT JOIN + FILTER 一次算出
             //    「片段总数」与「其中缺向量的个数」，再 HAVING 掉缺向量数为 0 的载体。
@@ -461,7 +469,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                            ON c.document_id = d.document_id AND c.tenant_id = d.tenant_id
                     LEFT JOIN rag_chunk_embedding e
                            ON e.chunk_id = c.chunk_id AND e.tenant_id = c.tenant_id
-                    WHERE d.tenant_id = rag_current_tenant()
+                    WHERE d.tenant_id = ?::uuid
                     GROUP BY d.document_id, d.source_id, d.title, d.carrier, d.parse_status
                     HAVING count(*) FILTER (WHERE c.chunk_id IS NOT NULL AND e.chunk_id IS NULL) > 0
                     ORDER BY d.created_at DESC, d.document_id
@@ -473,7 +481,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                             rs.getString("carrier"),
                             rs.getString("parse_status"),
                             rs.getLong("chunk_count"),
-                            rs.getLong("missing_embedding_count")));
+                            rs.getLong("missing_embedding_count")), tenant);
 
             List<CorpusIssues.DocumentParseFailure> failedParse = jdbcTemplate.query("""
                     SELECT d.document_id, d.source_id, d.title, d.carrier, d.parse_status,
@@ -481,7 +489,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                              WHERE c.tenant_id = d.tenant_id AND c.document_id = d.document_id)
                                AS chunk_count
                     FROM rag_document d
-                    WHERE d.tenant_id = rag_current_tenant() AND d.parse_status = 'FAILED'
+                    WHERE d.tenant_id = ?::uuid AND d.parse_status = 'FAILED'
                     ORDER BY d.created_at DESC, d.document_id
                     """,
                     (rs, i) -> new CorpusIssues.DocumentParseFailure(
@@ -490,7 +498,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                             rs.getString("title"),
                             rs.getString("carrier"),
                             rs.getString("parse_status"),
-                            rs.getLong("chunk_count")));
+                            rs.getLong("chunk_count")), tenant);
 
             // ⚠️ stale 必须在 SQL 里算：它是「结论是否已过期」的计算属性
             //    （verified_at + ver_valid_days < now()），前端没有租户门槛上下文，
@@ -506,7 +514,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                                  OR verified_at + (ver_valid_days || ' days')::interval < now()))
                                AS stale
                     FROM rag_source
-                    WHERE tenant_id = rag_current_tenant()
+                    WHERE tenant_id = ?::uuid
                       AND ver_status IN ('PENDING', 'IN_REVIEW')
                     ORDER BY created_at DESC, source_id
                     """,
@@ -515,7 +523,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                             rs.getString("title"),
                             rs.getString("verification_status"),
                             rs.getBoolean("stale"),
-                            rs.getString("trust_tier")));
+                            rs.getString("trust_tier")), tenant);
 
             return new CorpusIssues(missingEmbedding, failedParse, pendingReview);
         });
@@ -523,14 +531,14 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
 
     @Override
     @NonNull
-    public List<ChunkSummary> listChunks(@NonNull RagTenantContext context,
+    public List<ChunkSummary> listChunks(@NonNull RagManagementContext context,
                                             @NonNull String documentId,
                                          int limit) {
         if (limit <= 0) {
             throw new IllegalArgumentException("limit 必须 > 0");
         }
         return transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
+            applyReadScope(context);
             return jdbcTemplate.query("""
                     SELECT c.chunk_id, c.role, c.page_number, c.section_path, c.exercise_no,
                            length(c.text) AS char_length, c.content_hash,
@@ -538,7 +546,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                     FROM rag_chunk c
                     LEFT JOIN rag_chunk_embedding e
                            ON c.chunk_id = e.chunk_id AND c.tenant_id = e.tenant_id
-                    WHERE c.tenant_id = rag_current_tenant() AND c.document_id = ?::uuid
+                    WHERE c.tenant_id = ?::uuid AND c.document_id = ?::uuid
                     ORDER BY c.page_number, c.char_start, c.chunk_id
                     LIMIT ?
                     """,
@@ -551,7 +559,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                             rs.getInt("char_length"),
                             rs.getBoolean("has_embedding"),
                             rs.getString("content_hash")),
-                    documentId, limit);
+                    context.queryTenantId(), documentId, limit);
         });
     }
 
@@ -561,33 +569,34 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
 
     @Override
     @NonNull
-    public CorpusStatistics statistics(@NonNull RagTenantContext context) {
+    public CorpusStatistics statistics(@NonNull RagManagementContext context) {
         return transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
+            applyReadScope(context);
+            String tenant = context.queryTenantId();
             // ⚠️ 租户权威门槛（G-3）**由 platform 下发**（RagTenantContext.minTrustTier）。
             //    RAG 库不存租户信息（V4 迁移已移除 rag_tenant 副本），
             //    门槛的权威源是 platform（RAG-D07 §3.3）。
             TrustTier minTrustTier = context.minTrustTier();
 
             long totalSources = countLong("SELECT count(*) FROM rag_source"
-                    + " WHERE tenant_id = rag_current_tenant()");
+                    + " WHERE tenant_id = ?::uuid", tenant);
             long verifiedSources = countLong("SELECT count(*) FROM rag_source"
-                    + " WHERE tenant_id = rag_current_tenant() AND ver_status = 'VERIFIED'");
+                    + " WHERE tenant_id = ?::uuid AND ver_status = 'VERIFIED'", tenant);
             long admissibleSources = countLong("""
                     SELECT count(*) FROM rag_source
-                    WHERE tenant_id = rag_current_tenant()
+                    WHERE tenant_id = ?::uuid
                       AND ver_status = 'VERIFIED'
                       AND %s
                       AND license_status IN ('LICENSED', 'FAIR_USE_QUOTATION')
                       AND NOT (verified_at IS NULL
                            OR verified_at + (ver_valid_days || ' days')::interval < now())
                     """.formatted(trustTierInClause(minTrustTier)),
-                    trustTierFilterArgs(minTrustTier).toArray());
+                    scopedArgs(tenant, trustTierFilterArgs(minTrustTier)));
 
             long totalDocuments = countLong("SELECT count(*) FROM rag_document"
-                    + " WHERE tenant_id = rag_current_tenant()");
+                    + " WHERE tenant_id = ?::uuid", tenant);
             long totalChunks = countLong("SELECT count(*) FROM rag_chunk"
-                    + " WHERE tenant_id = rag_current_tenant()");
+                    + " WHERE tenant_id = ?::uuid", tenant);
             long retrievableChunks = countLong("""
                     SELECT count(*)
                     FROM rag_chunk c
@@ -595,33 +604,33 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                          ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                     JOIN rag_source src
                          ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                    WHERE c.tenant_id = rag_current_tenant()
+                    WHERE c.tenant_id = ?::uuid
                       AND src.ver_status = 'VERIFIED'
                       AND src.%s
                       AND src.license_status IN ('LICENSED', 'FAIR_USE_QUOTATION')
                       AND NOT (src.verified_at IS NULL
                            OR src.verified_at + (src.ver_valid_days || ' days')::interval < now())
                     """.formatted(trustTierInClause(minTrustTier)),
-                    trustTierFilterArgs(minTrustTier).toArray());
+                    scopedArgs(tenant, trustTierFilterArgs(minTrustTier)));
             long missingEmbedding = countLong("""
                     SELECT count(*) FROM rag_chunk c
-                    WHERE c.tenant_id = rag_current_tenant()
+                    WHERE c.tenant_id = ?::uuid
                       AND NOT EXISTS (SELECT 1 FROM rag_chunk_embedding e
                                        WHERE e.chunk_id = c.chunk_id AND e.tenant_id = c.tenant_id)
-                    """);
+                    """, tenant);
 
             Map<String, Long> chunksByRole = groupCount("""
                     SELECT role::text AS k, count(*) AS c FROM rag_chunk
-                    WHERE tenant_id = rag_current_tenant() GROUP BY role
-                    """);
+                    WHERE tenant_id = ?::uuid GROUP BY role
+                    """, tenant);
             Map<String, Long> sourcesByStatus = groupCount("""
                     SELECT ver_status::text AS k, count(*) AS c FROM rag_source
-                    WHERE tenant_id = rag_current_tenant() GROUP BY ver_status
-                    """);
+                    WHERE tenant_id = ?::uuid GROUP BY ver_status
+                    """, tenant);
             Map<String, Long> documentsByParseStatus = groupCount("""
                     SELECT parse_status AS k, count(*) AS c FROM rag_document
-                    WHERE tenant_id = rag_current_tenant() GROUP BY parse_status
-                    """);
+                    WHERE tenant_id = ?::uuid GROUP BY parse_status
+                    """, tenant);
 
             return new CorpusStatistics(totalSources, verifiedSources, admissibleSources,
                     totalDocuments, totalChunks, retrievableChunks, missingEmbedding,
@@ -656,22 +665,22 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
      */
     @Override
     @NonNull
-    public DailySearchStatistics dailySearchStatistics(@NonNull RagTenantContext context, int days) {
+    public DailySearchStatistics dailySearchStatistics(@NonNull RagManagementContext context, int days) {
         int safeDays = clampDays(days);
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
         LocalDate start = today.minusDays(safeDays - 1L);
         Map<String, Long> countsByDay = transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
+            applyReadScope(context);
             return dailyCount("""
                     SELECT to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS k,
                            count(*) AS c
                     FROM rag_access_audit
-                    WHERE tenant_id = rag_current_tenant()
+                    WHERE tenant_id = ?::uuid
                       AND action = 'RETRIEVE'
                       AND occurred_at >= ?
                       AND occurred_at < ?
                     GROUP BY 1
-                    """, start, today.plusDays(1));
+                    """, context.queryTenantId(), start, today.plusDays(1));
         });
         List<DailySearchCount> byDay = new ArrayList<>();
         for (LocalDate date = start; !date.isAfter(today); date = date.plusDays(1)) {
@@ -692,45 +701,45 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
      */
     @Override
     @NonNull
-    public DailyImportStatistics dailyImportStatistics(@NonNull RagTenantContext context, int days) {
+    public DailyImportStatistics dailyImportStatistics(@NonNull RagManagementContext context, int days) {
         int safeDays = clampDays(days);
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
         LocalDate start = today.minusDays(safeDays - 1L);
         Map<String, Long> sourcesByDay = transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
+            applyReadScope(context);
             return dailyCount("""
                     SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS k,
                            count(*) AS c
                     FROM rag_source
-                    WHERE tenant_id = rag_current_tenant()
+                    WHERE tenant_id = ?::uuid
                       AND created_at >= ?
                       AND created_at < ?
                     GROUP BY 1
-                    """, start, today.plusDays(1));
+                    """, context.queryTenantId(), start, today.plusDays(1));
         });
         Map<String, Long> documentsByDay = transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
+            applyReadScope(context);
             return dailyCount("""
                     SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS k,
                            count(*) AS c
                     FROM rag_document
-                    WHERE tenant_id = rag_current_tenant()
+                    WHERE tenant_id = ?::uuid
                       AND created_at >= ?
                       AND created_at < ?
                     GROUP BY 1
-                    """, start, today.plusDays(1));
+                    """, context.queryTenantId(), start, today.plusDays(1));
         });
         Map<String, Long> chunksByDay = transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
+            applyReadScope(context);
             return dailyCount("""
                     SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS k,
                            count(*) AS c
                     FROM rag_chunk
-                    WHERE tenant_id = rag_current_tenant()
+                    WHERE tenant_id = ?::uuid
                       AND created_at >= ?
                       AND created_at < ?
                     GROUP BY 1
-                    """, start, today.plusDays(1));
+                    """, context.queryTenantId(), start, today.plusDays(1));
         });
         List<DailyImportCount> byDay = new ArrayList<>();
         for (LocalDate date = start; !date.isAfter(today); date = date.plusDays(1)) {
@@ -751,14 +760,18 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
      * 与 timestamptz 比较依赖隐式转换，显式转 Timestamp 最稳。
      */
     @NonNull
-    private Map<String, Long> dailyCount(@NonNull String sql, @NonNull LocalDate fromInclusive,
+    private Map<String, Long> dailyCount(@NonNull String sql, @NonNull String tenantId,
+                                         @NonNull LocalDate fromInclusive,
                                          @NonNull LocalDate toExclusive) {
         Timestamp from = Timestamp.from(fromInclusive.atStartOfDay(ZoneOffset.UTC).toInstant());
         Timestamp to = Timestamp.from(toExclusive.atStartOfDay(ZoneOffset.UTC).toInstant());
         Map<String, Long> result = new LinkedHashMap<>();
         jdbcTemplate.query(sql, ps -> {
-            ps.setTimestamp(1, from);
-            ps.setTimestamp(2, to);
+            // ⚠️ 参数序号与 SQL 里的占位符顺序严格对应（租户 → 起 → 止）：
+            //    这里用的是显式 setXxx 而非可变参数，错位不会报错、只会静默算错日期区间。
+            ps.setString(1, tenantId);
+            ps.setTimestamp(2, from);
+            ps.setTimestamp(3, to);
         }, rs -> {
             result.put(rs.getString("k"), rs.getLong("c"));
         });
@@ -787,6 +800,30 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
     }
 
     /**
+     * 读侧按作用域建立会话上下文（平台全局档见 {@link RagSessionScope}）。
+     *
+     * <p>⚠️ 会话租户建好之后，租户谓词<b>仍按作用域显式绑定</b>
+     * （{@link RagManagementContext#queryTenantId()}）：
+     * 平台档的 {@code rag_current_tenant()} 是 NULL，
+     * 沿用 {@code tenant_id = rag_current_tenant()} 会把全局行<b>一律滤掉</b>，
+     * 表现为「管理台看不到平台语料」且不报错——正是本刀要关的那道静默。
+     */
+    private void applyReadScope(@NonNull RagManagementContext context) {
+        RagSessionScope.apply(jdbcTemplate, context);
+    }
+
+    /** 租户谓词在前、其余参数在后的参数表（统计类查询的可读租户维度恒为第一位）。 */
+    @NonNull
+    private static Object[] scopedArgs(@NonNull String tenantId, @NonNull List<String> rest) {
+        Object[] args = new Object[rest.size() + 1];
+        args[0] = tenantId;
+        for (int i = 0; i < rest.size(); i++) {
+            args[i + 1] = rest.get(i);
+        }
+        return args;
+    }
+
+    /**
      * 在<b>已建立租户上下文</b>的事务内查询来源。
      *
      * <p>⚠️ 该方法<b>不</b>自己开事务——它假定调用方已在
@@ -794,16 +831,17 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
      * 表现为「来源不存在」这类难以定位的静默失败）。
      */
     @Nullable
-    private CorpusSource findSourceWithinTenant(@NonNull String sourceId) {
+    private CorpusSource findSourceWithinTenant(@NonNull String tenantId,
+                                                @NonNull String sourceId) {
         List<CorpusSource> rows = jdbcTemplate.query("""
                 SELECT source_id, source_type, title, publisher, isbn, doi,
                        trust_tier, ver_status, ver_method, ver_evidence, verified_at,
                        verified_by, ver_valid_days, license_status, object_ref,
                        content_hash, created_at, updated_at
                 FROM rag_source
-                WHERE tenant_id = rag_current_tenant() AND source_id = ?::uuid
+                WHERE tenant_id = ?::uuid AND source_id = ?::uuid
                 """,
-                (rs, i) -> mapSource(rs), sourceId);
+                (rs, i) -> mapSource(rs), tenantId, sourceId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -815,7 +853,8 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
      * 表现为「载体不存在」这类难以定位的静默失败）。
      */
     @Nullable
-    private CorpusDocument findDocumentWithinTenant(@NonNull String documentId) {
+    private CorpusDocument findDocumentWithinTenant(@NonNull String tenantId,
+                                                    @NonNull String documentId) {
         List<CorpusDocument> rows = jdbcTemplate.query("""
                 SELECT d.document_id, d.source_id, d.edition_id, d.carrier, d.title,
                        d.page_count, d.object_ref, d.parse_status, d.parser_version,
@@ -826,9 +865,9 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                          WHERE c.tenant_id = d.tenant_id AND c.document_id = d.document_id)
                            AS chunk_count
                 FROM rag_document d
-                WHERE d.tenant_id = rag_current_tenant() AND d.document_id = ?::uuid
+                WHERE d.tenant_id = ?::uuid AND d.document_id = ?::uuid
                 """,
-                (rs, i) -> mapDocument(rs), documentId);
+                (rs, i) -> mapDocument(rs), tenantId, documentId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -841,11 +880,12 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
      * @return 校验状态名；来源不存在返回 {@code null}
      */
     @Nullable
-    private String querySourceVerificationStatus(@NonNull String sourceId) {
+    private String querySourceVerificationStatus(@NonNull String tenantId,
+                                                 @NonNull String sourceId) {
         List<String> rows = jdbcTemplate.query(
                 "SELECT ver_status::text FROM rag_source"
-                        + " WHERE tenant_id = rag_current_tenant() AND source_id = ?::uuid",
-                (rs, i) -> rs.getString(1), sourceId);
+                        + " WHERE tenant_id = ?::uuid AND source_id = ?::uuid",
+                (rs, i) -> rs.getString(1), tenantId, sourceId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -914,11 +954,11 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
         return sb.append(")").toString();
     }
 
-    private Map<String, Long> groupCount(String sql) {
+    private Map<String, Long> groupCount(String sql, Object... args) {
         Map<String, Long> result = new LinkedHashMap<>();
         jdbcTemplate.query(sql, rs -> {
             result.put(rs.getString("k"), rs.getLong("c"));
-        });
+        }, args);
         return result;
     }
 

@@ -18,9 +18,14 @@ import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
+import cn.studykid.rag.core.scope.RagCorpusScope;
+import cn.studykid.rag.core.scope.RagScope;
+import cn.studykid.rag.core.security.RagCallerAttributes;
+import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
@@ -55,6 +60,21 @@ class RagManagementControllerTest {
     private static final String DOCUMENT_ID = "55555555-5555-5555-5555-555555555555";
     private static final String REVIEWER = "33333333-3333-3333-3333-333333333333";
 
+    /**
+     * 作用域头的三个取值（缺省档写成字面量 {@code null}，
+     * 与「调用方没带头」的真实形态一致）。
+     */
+    private static final String SCOPE_TENANT = "TENANT";
+    private static final String SCOPE_PLATFORM = "PLATFORM";
+    private static final String SCOPE_ALL = "ALL";
+
+    /** 调用方域：管理台令牌（{@code aud=admin-console-api}）解析出的平台域。 */
+    private static final String PLATFORM_CALLER = RagCallerAttributes.DOMAIN_PLATFORM;
+    /** 调用方域：租户令牌解析出的租户域。 */
+    private static final String TENANT_CALLER = RagCallerAttributes.DOMAIN_TENANT;
+    /** 调用方域：鉴权逃生门（未验证）——既不是租户也不是平台。 */
+    private static final String UNVERIFIED_CALLER = RagCallerAttributes.DOMAIN_UNVERIFIED;
+
     private final CorpusManagementPort port = mock(CorpusManagementPort.class);
     private final CorpusIndexingPort indexingPort = mock(CorpusIndexingPort.class);
     private final DictionaryPort dictionaryPort = mock(DictionaryPort.class);
@@ -88,7 +108,7 @@ class RagManagementControllerTest {
     @DisplayName("缺租户头时返回 400 而不是静默返回空（fail-closed）")
     void missingTenantHeaderIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.listSources(null, null, null, null, null, false, 50, 0));
+                () -> controller.listSources(null, null, null, PLATFORM_CALLER, null, null, null, false, 50, 0));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
         assertNotNull(ex.getReason());
     }
@@ -97,7 +117,7 @@ class RagManagementControllerTest {
     @DisplayName("非法租户 UUID 返回 400")
     void malformedTenantIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.listSources("not-a-uuid", null, null, null, null, false, 50, 0));
+                () -> controller.listSources("not-a-uuid", null, null, PLATFORM_CALLER, null, null, null, false, 50, 0));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -106,7 +126,7 @@ class RagManagementControllerTest {
     void missingSourceIsNotFound() {
         when(port.findSource(any(), eq(SOURCE_ID))).thenReturn(null);
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.getSource(TENANT, null, SOURCE_ID));
+                () -> controller.getSource(TENANT, null, null, PLATFORM_CALLER, SOURCE_ID));
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
     }
 
@@ -119,7 +139,7 @@ class RagManagementControllerTest {
                 VerificationStatus.VERIFIED, "ISBN:ref@2026-01-01", REVIEWER,
                 VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365);
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyVerification(TENANT, null, SOURCE_ID, request));
+                () -> controller.applyVerification(TENANT, null, SCOPE_TENANT, SOURCE_ID, request));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
     }
 
@@ -127,7 +147,7 @@ class RagManagementControllerTest {
     @DisplayName("片段 limit 越界返回 400（防止一次性拉走整册）")
     void chunkLimitOutOfRangeIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.listChunks(TENANT, null, SOURCE_ID, 9999));
+                () -> controller.listChunks(TENANT, null, null, PLATFORM_CALLER, SOURCE_ID, 9999));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -139,7 +159,7 @@ class RagManagementControllerTest {
         ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
                 "教材", "人教版八年级上册数学", "人民教育出版社",
                 "9787100000000", null, "obj://book.pdf", "b".repeat(64), REVIEWER);
-        ManagementDtos.SourceResponse response = controller.registerSource(TENANT, null, request);
+        ManagementDtos.SourceResponse response = controller.registerSource(TENANT, null, SCOPE_TENANT, request);
         assertNotNull(response);
         assertEquals(SOURCE_ID, response.sourceId());
         assertEquals("VERIFIED", response.verificationStatus());
@@ -151,7 +171,7 @@ class RagManagementControllerTest {
     void listSourcesReturnsStaleFlag() {
         when(port.listSources(any(), any())).thenReturn(List.of(sampleSource()));
         List<ManagementDtos.SourceResponse> responses =
-                controller.listSources(TENANT, null, null, null, null, false, 50, 0);
+                controller.listSources(TENANT, null, null, PLATFORM_CALLER, null, null, null, false, 50, 0);
         assertEquals(1, responses.size());
         assertEquals(false, responses.get(0).stale());
         assertEquals(true, responses.get(0).admissible(),
@@ -182,7 +202,7 @@ class RagManagementControllerTest {
                         new ManagementDtos.BulkSourceItem(
                                 "教材", "无标识来源", "人民教育出版社", null, null, null, null)));
         ManagementDtos.BulkRegisterResponse response =
-                controller.bulkRegisterSources(TENANT, null, request);
+                controller.bulkRegisterSources(TENANT, null, SCOPE_TENANT, request);
         assertEquals(2, response.total());
         assertEquals(1, response.succeeded());
         assertEquals(1, response.failed());
@@ -197,7 +217,7 @@ class RagManagementControllerTest {
     @DisplayName("批量导入缺租户头返回 400")
     void bulkImportWithoutTenantIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.bulkRegisterSources(null, null,
+                () -> controller.bulkRegisterSources(null, null, SCOPE_TENANT,
                         new ManagementDtos.BulkRegisterRequest(REVIEWER, List.of(bulkItem()))));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
@@ -219,7 +239,7 @@ class RagManagementControllerTest {
                                 "教材", "哈希非法的来源", "人民教育出版社",
                                 "9787100000001", null, "obj://book2.pdf", "NOT-A-HASH")));
         ManagementDtos.BulkRegisterResponse response =
-                controller.bulkRegisterSources(TENANT, null, request);
+                controller.bulkRegisterSources(TENANT, null, SCOPE_TENANT, request);
 
         assertEquals(2, response.total());
         assertEquals(1, response.succeeded(),
@@ -243,7 +263,7 @@ class RagManagementControllerTest {
                 java.util.Map.of("VERIFIED", 3L, "PENDING", 2L),
                 java.util.Map.of("CHUNKED", 4L));
         when(port.statistics(any())).thenReturn(stats);
-        ManagementDtos.StatisticsResponse response = controller.statistics(TENANT, null);
+        ManagementDtos.StatisticsResponse response = controller.statistics(TENANT, null, null, PLATFORM_CALLER);
         assertEquals(100, response.totalChunks());
         assertEquals(60, response.retrievableChunks());
         assertEquals(0.1, response.missingEmbeddingRatio(), 1e-9);
@@ -259,7 +279,7 @@ class RagManagementControllerTest {
     void missingDocumentIsNotFound() {
         when(port.applyDocumentVerification(any(), eq(DOCUMENT_ID), any())).thenReturn(null);
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(TENANT, null, DOCUMENT_ID,
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID,
                         documentRequest(VerificationStatus.IN_REVIEW)));
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
     }
@@ -270,7 +290,7 @@ class RagManagementControllerTest {
         when(port.applyDocumentVerification(any(), eq(DOCUMENT_ID), any()))
                 .thenThrow(new IllegalStateException("非法的校验状态转移：REVOKED → VERIFIED"));
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(TENANT, null, DOCUMENT_ID,
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID,
                         documentRequest(VerificationStatus.VERIFIED)));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
     }
@@ -282,7 +302,7 @@ class RagManagementControllerTest {
                 .thenThrow(new IllegalStateException("载体不得高于来源：来源当前校验状态为 PENDING，"
                         + "未通过校验的来源下的载体不允许置为 VERIFIED"));
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(TENANT, null, DOCUMENT_ID,
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID,
                         documentRequest(VerificationStatus.VERIFIED)));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
         assertNotNull(ex.getReason());
@@ -294,7 +314,7 @@ class RagManagementControllerTest {
     @DisplayName("目标状态 PENDING 属于入参形态问题 → 400")
     void pendingTargetIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(TENANT, null, DOCUMENT_ID,
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID,
                         documentRequest(VerificationStatus.PENDING)));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
@@ -303,7 +323,7 @@ class RagManagementControllerTest {
     @DisplayName("非法 documentId 返回 400（而不是让 PG 的 uuid 转换报 500）")
     void malformedDocumentIdIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(TENANT, null, "not-a-uuid",
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, "not-a-uuid",
                         documentRequest(VerificationStatus.IN_REVIEW)));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
@@ -312,7 +332,7 @@ class RagManagementControllerTest {
     @DisplayName("载体缺租户头返回 400")
     void documentVerificationWithoutTenantIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(null, null, DOCUMENT_ID,
+                () -> controller.applyDocumentVerification(null, null, SCOPE_TENANT, DOCUMENT_ID,
                         documentRequest(VerificationStatus.IN_REVIEW)));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
@@ -323,7 +343,7 @@ class RagManagementControllerTest {
         when(port.applyDocumentVerification(any(), eq(DOCUMENT_ID), any()))
                 .thenReturn(sampleDocument(VerificationStatus.VERIFIED, true));
         ManagementDtos.DocumentResponse response = controller.applyDocumentVerification(
-                TENANT, null, DOCUMENT_ID, documentRequest(VerificationStatus.VERIFIED));
+                TENANT, null, SCOPE_TENANT, DOCUMENT_ID, documentRequest(VerificationStatus.VERIFIED));
         assertEquals(DOCUMENT_ID, response.documentId());
         assertEquals("VERIFIED", response.verificationStatus());
         assertTrue(response.retrievable(), "VERIFIED 的载体必须可检索");
@@ -337,7 +357,7 @@ class RagManagementControllerTest {
         when(port.applyDocumentVerification(any(), eq(DOCUMENT_ID), any()))
                 .thenReturn(sampleDocument(VerificationStatus.REVOKED, false));
         ManagementDtos.DocumentResponse response = controller.applyDocumentVerification(
-                TENANT, null, DOCUMENT_ID, documentRequest(VerificationStatus.REVOKED));
+                TENANT, null, SCOPE_TENANT, DOCUMENT_ID, documentRequest(VerificationStatus.REVOKED));
         assertEquals("REVOKED", response.verificationStatus());
         assertEquals(false, response.retrievable());
         assertNotNull(response.revokedAt());
@@ -353,7 +373,7 @@ class RagManagementControllerTest {
     @DisplayName("问题清单缺租户头返回 400")
     void issuesWithoutTenantIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.issues(null, null));
+                () -> controller.issues(null, null, null, null));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -369,7 +389,7 @@ class RagManagementControllerTest {
                         SOURCE_ID, "待审教材", "PENDING", false, "UNVERIFIED")));
         when(port.listIssues(any())).thenReturn(issues);
 
-        ManagementDtos.IssuesResponse response = controller.issues(TENANT, null);
+        ManagementDtos.IssuesResponse response = controller.issues(TENANT, null, null, PLATFORM_CALLER);
 
         assertEquals(1, response.documentsMissingEmbedding().size());
         assertEquals(12, response.documentsMissingEmbedding().get(0).missingEmbeddingCount());
@@ -390,7 +410,7 @@ class RagManagementControllerTest {
     @DisplayName("重跑索引缺租户头返回 400")
     void reindexWithoutTenantIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(null, null, null, null));
+                () -> controller.reindex(null, null, SCOPE_TENANT, null, null));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -398,7 +418,7 @@ class RagManagementControllerTest {
     @DisplayName("重跑索引 limit 越界返回 400（防止一次 HTTP 请求跑太久）")
     void reindexLimitOutOfRangeIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(TENANT, null, new ManagementDtos.ReindexRequest(2001), null));
+                () -> controller.reindex(TENANT, null, SCOPE_TENANT, new ManagementDtos.ReindexRequest(2001), null));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -408,7 +428,7 @@ class RagManagementControllerTest {
         when(indexingPort.reindex(any(), anyInt()))
                 .thenReturn(new CorpusIndexingPort.ReindexOutcome(12, 12, 340));
         ManagementDtos.ReindexResponse response =
-                controller.reindex(TENANT, null, new ManagementDtos.ReindexRequest(500), null);
+                controller.reindex(TENANT, null, SCOPE_TENANT, new ManagementDtos.ReindexRequest(500), null);
         assertEquals(12, response.indexedChunks());
         assertEquals(12, response.scannedChunks());
         assertEquals(340, response.durationMs());
@@ -420,7 +440,7 @@ class RagManagementControllerTest {
     void reindexWithoutBodyUsesDefaultLimit() {
         when(indexingPort.reindex(any(), anyInt()))
                 .thenReturn(new CorpusIndexingPort.ReindexOutcome(0, 0, 5));
-        controller.reindex(TENANT, null, null, null);
+        controller.reindex(TENANT, null, SCOPE_TENANT, null, null);
         verify(indexingPort).reindex(eq(TENANT), eq(500));
     }
 
@@ -429,7 +449,7 @@ class RagManagementControllerTest {
     void reindexHonoursQueryParameterLimit() {
         when(indexingPort.reindex(any(), anyInt()))
                 .thenReturn(new CorpusIndexingPort.ReindexOutcome(4, 4, 80));
-        controller.reindex(TENANT, null, null, "4");
+        controller.reindex(TENANT, null, SCOPE_TENANT, null, "4");
         verify(indexingPort).reindex(eq(TENANT), eq(4));
     }
 
@@ -437,10 +457,10 @@ class RagManagementControllerTest {
     @DisplayName("重跑索引的查询参数 limit 同样受 1～2000 闸门约束")
     void reindexQueryParameterLimitOutOfRangeIsBadRequest() {
         ResponseStatusException tooBig = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(TENANT, null, null, "2001"));
+                () -> controller.reindex(TENANT, null, SCOPE_TENANT, null, "2001"));
         assertEquals(HttpStatus.BAD_REQUEST, tooBig.getStatusCode());
         ResponseStatusException tooSmall = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(TENANT, null, null, "0"));
+                () -> controller.reindex(TENANT, null, SCOPE_TENANT, null, "0"));
         assertEquals(HttpStatus.BAD_REQUEST, tooSmall.getStatusCode());
         verifyNoInteractions(indexingPort);
     }
@@ -449,7 +469,7 @@ class RagManagementControllerTest {
     @DisplayName("重跑索引的查询参数 limit 非整数返回 400，而不是把脏值放进端口层")
     void reindexNonNumericQueryParameterLimitIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(TENANT, null, null, "abc"));
+                () -> controller.reindex(TENANT, null, SCOPE_TENANT, null, "abc"));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
         verifyNoInteractions(indexingPort);
     }
@@ -459,7 +479,7 @@ class RagManagementControllerTest {
     void reindexPrefersBodyLimitOverQueryParameter() {
         when(indexingPort.reindex(any(), anyInt()))
                 .thenReturn(new CorpusIndexingPort.ReindexOutcome(7, 7, 90));
-        controller.reindex(TENANT, null, new ManagementDtos.ReindexRequest(7), "99");
+        controller.reindex(TENANT, null, SCOPE_TENANT, new ManagementDtos.ReindexRequest(7), "99");
         verify(indexingPort).reindex(eq(TENANT), eq(7));
     }
 
@@ -492,7 +512,7 @@ class RagManagementControllerTest {
                         SOURCE_TYPE, "TEXTBOOK", "教材", 0, true)));
 
         List<ManagementDtos.DictionaryTypeDto> types =
-                controller.listDictionaries(TENANT, null);
+                controller.listDictionaries(TENANT, null, null, PLATFORM_CALLER);
 
         assertEquals(4, types.size());
         ManagementDtos.DictionaryTypeDto source = types.stream()
@@ -508,7 +528,7 @@ class RagManagementControllerTest {
     void derivedDictionaryUpsertIsConflict() {
         when(dictionaryPort.isEditable(DictionaryPort.TYPE_TRUST_TIER)).thenReturn(false);
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.upsertDictionaryEntry(TENANT, null,
+                () -> controller.upsertDictionaryEntry(TENANT, null, SCOPE_TENANT,
                         DictionaryPort.TYPE_TRUST_TIER, entryRequest()));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
     }
@@ -518,7 +538,7 @@ class RagManagementControllerTest {
     void derivedDictionaryDeleteIsConflict() {
         when(dictionaryPort.isEditable(DictionaryPort.TYPE_TRUST_TIER)).thenReturn(false);
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.deleteDictionaryEntry(TENANT, null,
+                () -> controller.deleteDictionaryEntry(TENANT, null, SCOPE_TENANT,
                         DictionaryPort.TYPE_TRUST_TIER, "ISBN"));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
     }
@@ -528,7 +548,7 @@ class RagManagementControllerTest {
     void editableDictionaryUpsertReturnsEntry() {
         when(dictionaryPort.isEditable(SOURCE_TYPE)).thenReturn(true);
         ManagementDtos.DictionaryEntryDto dto = controller.upsertDictionaryEntry(
-                TENANT, null, SOURCE_TYPE, entryRequest());
+                TENANT, null, SCOPE_TENANT, SOURCE_TYPE, entryRequest());
         assertEquals("TEXTBOOK", dto.code());
         assertEquals("教材", dto.label());
         verify(dictionaryPort).upsertEntry(any(), argThat(e ->
@@ -539,7 +559,7 @@ class RagManagementControllerTest {
     @DisplayName("字典端点缺租户头返回 400")
     void dictionaryWithoutTenantIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.listDictionaries(null, null));
+                () -> controller.listDictionaries(null, null, null, null));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -547,7 +567,154 @@ class RagManagementControllerTest {
     @DisplayName("空字典类型返回 400（防止 SQL 误删/误查全表）")
     void blankDictionaryTypeIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.listDictionaryEntries(TENANT, null, "  "));
+                () -> controller.listDictionaryEntries(TENANT, null, null, PLATFORM_CALLER, "  "));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+    }
+
+    // ---------------------------------------------------------------------
+    // 作用域与平台域闸门（RAG-D11 第四刀 · 第一刀 1.2）
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("非法作用域头返回 400（不静默回落 TENANT）")
+    void malformedScopeHeaderIsBadRequest() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.listSources(null, null, "PLATFORME", PLATFORM_CALLER,
+                        null, null, null, false, 50, 0));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(ex.getReason() != null && ex.getReason().contains("PLATFORME"),
+                "400 消息要带回原始错值，否则调用方无从定位");
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("平台全局档拒绝租户域令牌（403，不是 400）")
+    void platformScopeRejectsTenantCaller() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.listSources(null, null, SCOPE_PLATFORM, TENANT_CALLER,
+                        null, null, null, false, 50, 0));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode(),
+                "身份不够格是授权问题（403），不是入参形态问题（400）");
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("平台全局档拒绝未验证域（鉴权逃生门不够格）")
+    void platformScopeRejectsUnverifiedCaller() {
+        for (String domain : java.util.Arrays.asList(UNVERIFIED_CALLER, null, "  ", "PLATFORM-guess")) {
+            ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                    () -> controller.listSources(null, null, SCOPE_PLATFORM, domain,
+                            null, null, null, false, 50, 0),
+                    "域值「" + domain + "」不该被当作平台域放行");
+            assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        }
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("平台全局档不收租户头，下传哨兵查询批次且不建立会话租户")
+    void platformScopeQueriesSentinelWithoutSessionTenant() {
+        when(port.listSources(any(), any())).thenReturn(List.of());
+        controller.listSources(null, null, SCOPE_PLATFORM, PLATFORM_CALLER,
+                null, null, null, false, 50, 0);
+
+        ArgumentCaptor<RagManagementContext> captor =
+                ArgumentCaptor.forClass(RagManagementContext.class);
+        verify(port).listSources(captor.capture(), any());
+        RagManagementContext ctx = captor.getValue();
+        assertEquals(RagCorpusScope.PLATFORM, ctx.scope());
+        assertEquals(null, ctx.tenant(), "平台档不携带租户上下文");
+        assertEquals(RagScope.GLOBAL_TENANT_ID, ctx.queryTenantId(),
+                "读侧谓词绑定全局哨兵——这就是「这一批行是平台全局语料」的声明");
+        assertEquals(null, ctx.sessionTenantId(),
+                "会话租户必须保持未设置：把哨兵写进 app.tenant_id 会让 rag_current_tenant() 抛 42501");
+    }
+
+    @Test
+    @DisplayName("平台全局档同时提供租户头返回 400（两种身份互斥）")
+    void platformScopeWithTenantHeaderIsBadRequest() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.listSources(TENANT, null, SCOPE_PLATFORM, PLATFORM_CALLER,
+                        null, null, null, false, 50, 0));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("跨租户盘点档返回 501（需运维数据源，属第三刀）")
+    void allScopeIsNotImplemented() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.listSources(null, null, SCOPE_ALL, PLATFORM_CALLER,
+                        null, null, null, false, 50, 0));
+        assertEquals(HttpStatus.NOT_IMPLEMENTED, ex.getStatusCode());
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("写端点收到非 TENANT 作用域返回 409（写通道不借道全局档）")
+    void writeEndpointRejectsNonTenantScope() {
+        ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
+                "教材", "人教版八年级上册数学", "人民教育出版社",
+                "9787100000000", null, "obj://book.pdf", "b".repeat(64), REVIEWER);
+        for (String scope : List.of(SCOPE_PLATFORM, SCOPE_ALL)) {
+            ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                    () -> controller.registerSource(TENANT, null, scope, request));
+            assertEquals(HttpStatus.CONFLICT, ex.getStatusCode(), scope + " 档的写请求必须被拒");
+        }
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("租户档即使带平台域令牌仍要求租户头（缺租户 400 的既有纪律不变）")
+    void tenantScopeStillRequiresTenantHeader() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.listSources(null, null, SCOPE_TENANT, PLATFORM_CALLER,
+                        null, null, null, false, 50, 0));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode(),
+                "平台身份不等于「知道了要查哪个租户」，缺租户头不能静默变成全局查询");
+    }
+
+    @Test
+    @DisplayName("租户档的会话租户与查询批次同为该租户（与本刀之前一致）")
+    void tenantScopeBindsTheSameTenantForSessionAndQuery() {
+        when(port.listSources(any(), any())).thenReturn(List.of());
+        controller.listSources(TENANT, null, SCOPE_TENANT, PLATFORM_CALLER,
+                null, null, null, false, 50, 0);
+
+        ArgumentCaptor<RagManagementContext> captor =
+                ArgumentCaptor.forClass(RagManagementContext.class);
+        verify(port).listSources(captor.capture(), any());
+        RagManagementContext ctx = captor.getValue();
+        assertEquals(RagCorpusScope.TENANT, ctx.scope());
+        assertEquals(TENANT, ctx.sessionTenantId());
+        assertEquals(TENANT, ctx.queryTenantId());
+        assertEquals(ctx.requireTenant().tenantId(), TENANT, "租户档的写入口照常可用");
+    }
+
+    @Test
+    @DisplayName("字典读端点走同一道闸门（平台档可看全局字典）")
+    void dictionaryReadSharesTheScopeGate() {
+        when(dictionaryPort.entriesOf(any(), any())).thenReturn(List.of());
+        controller.listDictionaryEntries(null, null, SCOPE_PLATFORM, PLATFORM_CALLER,
+                DictionaryPort.TYPE_SOURCE_TYPE);
+        ArgumentCaptor<RagManagementContext> captor =
+                ArgumentCaptor.forClass(RagManagementContext.class);
+        verify(dictionaryPort).entriesOf(captor.capture(), eq(DictionaryPort.TYPE_SOURCE_TYPE));
+        assertEquals(RagScope.GLOBAL_TENANT_ID, captor.getValue().queryTenantId());
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.listDictionaryEntries(null, null, SCOPE_PLATFORM, TENANT_CALLER,
+                        DictionaryPort.TYPE_SOURCE_TYPE));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("字典写端点同样拒绝非租户作用域")
+    void dictionaryWriteRejectsNonTenantScope() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.upsertDictionaryEntry(TENANT, null, SCOPE_PLATFORM,
+                        DictionaryPort.TYPE_SOURCE_TYPE, entryRequest()));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
+        verifyNoInteractions(dictionaryPort);
     }
 }

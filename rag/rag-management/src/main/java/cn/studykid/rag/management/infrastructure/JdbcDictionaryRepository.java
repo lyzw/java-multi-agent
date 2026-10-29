@@ -12,6 +12,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.TrustTier;
+import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.ports.DictionaryPort;
 import cn.studykid.rag.management.ports.DictionaryPort.DictEntry;
@@ -67,7 +68,7 @@ public class JdbcDictionaryRepository implements DictionaryPort {
 
     @Override
     @NonNull
-    public List<DictEntry> entriesOf(@NonNull RagTenantContext context, @NonNull String type) {
+    public List<DictEntry> entriesOf(@NonNull RagManagementContext context, @NonNull String type) {
         if (DERIVED.containsKey(type)) {
             return DERIVED.get(type);
         }
@@ -80,7 +81,10 @@ public class JdbcDictionaryRepository implements DictionaryPort {
         //     语料链的复合外键与含 tenant_id 的主键决定了只能用哨兵），
         //     所以判别写成 `= rag_global_tenant_id()`，与策略、CHECK 三处同一个权威。
         List<DictEntry> rows = transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
+            // ⚠️ 平台全局档不建立会话租户：谓词里的 rag_current_tenant() 退化为 NULL，
+            //    `IN (NULL, 哨兵)` 只剩全局项——正是「平台侧看到平台字典」的口径。
+            //    这一句是**显式清空**而不是跳过（连接池/角色默认值会伪装成租户档）。
+            RagSessionScope.apply(jdbcTemplate, context);
             return jdbcTemplate.query(
                     """
                     SELECT code, label, sort_order, enabled,

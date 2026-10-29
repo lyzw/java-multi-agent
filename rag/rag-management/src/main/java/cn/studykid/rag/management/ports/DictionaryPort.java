@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.jspecify.annotations.NonNull;
 
+import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.RagTenantContext;
 
 /**
@@ -61,9 +62,19 @@ public interface DictionaryPort {
         TENANT
     }
 
-    /** 列出某类型的全部字典项（动态类型返回「全局 ∪ 本租户」，同 code 租户优先）。 */
+    /**
+     * 列出某类型的全部字典项（动态类型返回「全局 ∪ 本租户」，同 code 租户优先）。
+     *
+     * <p>平台全局档（{@code scope=PLATFORM}）不建立会话租户，
+     * 于是 {@code rag_current_tenant()} 为 NULL、读策略只放行全局项——
+     * 「∪ 本租户」在后半段自然退化为空集，无需第二条 SQL。
+     *
+     * @param context 作用域上下文（租户档／平台全局档）
+     * @param type 字典类型
+     * @return 字典项列表
+     */
     @NonNull
-    List<DictEntry> entriesOf(@NonNull RagTenantContext context, @NonNull String type);
+    List<DictEntry> entriesOf(@NonNull RagManagementContext context, @NonNull String type);
 
     /** 该类型是否允许前端维护（动态字典可写；派生字典只读）。 */
     boolean isEditable(@NonNull String type);

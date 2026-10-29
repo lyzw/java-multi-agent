@@ -20,6 +20,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.core.source.TrustTier;
 import cn.studykid.rag.management.core.RagTenantContext;
+import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.ports.DictionaryPort;
 import cn.studykid.rag.management.ports.DictionaryPort.DictEntry;
 import cn.studykid.rag.management.ports.DictionaryPort.Scope;
@@ -179,7 +180,7 @@ class JdbcDictionaryRepositoryIT {
     void sourceTypeUpsertRoundTrip() {
         repository.upsertEntry(ctxT, new DictEntry(
                 DictionaryPort.TYPE_SOURCE_TYPE, "TEXTBOOK", "教材", 0, true));
-        List<DictEntry> entries = repository.entriesOf(ctxT, DictionaryPort.TYPE_SOURCE_TYPE);
+        List<DictEntry> entries = repository.entriesOf(RagManagementContext.forTenant(ctxT), DictionaryPort.TYPE_SOURCE_TYPE);
         assertTrue(entries.stream().anyMatch(e ->
                 "TEXTBOOK".equals(e.code()) && "教材".equals(e.label())),
                 "本租户应能读回刚写入的字典项");
@@ -191,7 +192,7 @@ class JdbcDictionaryRepositoryIT {
         repository.upsertEntry(ctxT, new DictEntry(
                 DictionaryPort.TYPE_SOURCE_TYPE, "T_ONLY", "仅T可见", 0, true));
         List<DictEntry> tenantUEntries =
-                repository.entriesOf(ctxU, DictionaryPort.TYPE_SOURCE_TYPE);
+                repository.entriesOf(RagManagementContext.forTenant(ctxU), DictionaryPort.TYPE_SOURCE_TYPE);
         assertTrue(tenantUEntries.stream().noneMatch(e -> "T_ONLY".equals(e.code())),
                 "租户 U 不应看到租户 T 的字典项");
     }
@@ -210,12 +211,12 @@ class JdbcDictionaryRepositoryIT {
     @Test
     @DisplayName("派生字典由后端枚举派生，返回全部合法值")
     void derivedDictionariesReturned() {
-        List<DictEntry> tiers = repository.entriesOf(ctxT, DictionaryPort.TYPE_TRUST_TIER);
+        List<DictEntry> tiers = repository.entriesOf(RagManagementContext.forTenant(ctxT), DictionaryPort.TYPE_TRUST_TIER);
         // TrustTier 枚举共 5 个值
         assertEquals(5, tiers.size());
         assertTrue(tiers.stream().anyMatch(e -> "OFFICIAL_PUBLISHER".equals(e.code())));
 
-        List<DictEntry> licenses = repository.entriesOf(ctxT, DictionaryPort.TYPE_LICENSE_STATUS);
+        List<DictEntry> licenses = repository.entriesOf(RagManagementContext.forTenant(ctxT), DictionaryPort.TYPE_LICENSE_STATUS);
         assertTrue(licenses.stream().anyMatch(e -> "LICENSED".equals(e.code())));
     }
 
@@ -232,7 +233,7 @@ class JdbcDictionaryRepositoryIT {
         repository.upsertEntry(ctxT, new DictEntry(
                 DictionaryPort.TYPE_SOURCE_TYPE, "TO_DELETE", "待删", 0, true));
         repository.deleteEntry(ctxT, DictionaryPort.TYPE_SOURCE_TYPE, "TO_DELETE");
-        List<DictEntry> entries = repository.entriesOf(ctxT, DictionaryPort.TYPE_SOURCE_TYPE);
+        List<DictEntry> entries = repository.entriesOf(RagManagementContext.forTenant(ctxT), DictionaryPort.TYPE_SOURCE_TYPE);
         assertTrue(entries.stream().noneMatch(e -> "TO_DELETE".equals(e.code())));
     }
 
@@ -246,9 +247,9 @@ class JdbcDictionaryRepositoryIT {
         requireAdminConnection();
         publishGlobal("G_SHARED", "全局共有", 5);
         try {
-            DictEntry inT = find(repository.entriesOf(ctxT, DictionaryPort.TYPE_SOURCE_TYPE),
+            DictEntry inT = find(repository.entriesOf(RagManagementContext.forTenant(ctxT), DictionaryPort.TYPE_SOURCE_TYPE),
                     "G_SHARED");
-            DictEntry inU = find(repository.entriesOf(ctxU, DictionaryPort.TYPE_SOURCE_TYPE),
+            DictEntry inU = find(repository.entriesOf(RagManagementContext.forTenant(ctxU), DictionaryPort.TYPE_SOURCE_TYPE),
                     "G_SHARED");
             assertNotNull(inT, "租户 T 应读到平台全局项");
             assertNotNull(inU, "租户 U 应读到同一条平台全局项");
@@ -268,9 +269,9 @@ class JdbcDictionaryRepositoryIT {
             repository.upsertEntry(ctxT, new DictEntry(
                     DictionaryPort.TYPE_SOURCE_TYPE, "G_OVR", "租户改写", 5, true));
 
-            DictEntry inT = find(repository.entriesOf(ctxT, DictionaryPort.TYPE_SOURCE_TYPE),
+            DictEntry inT = find(repository.entriesOf(RagManagementContext.forTenant(ctxT), DictionaryPort.TYPE_SOURCE_TYPE),
                     "G_OVR");
-            DictEntry inU = find(repository.entriesOf(ctxU, DictionaryPort.TYPE_SOURCE_TYPE),
+            DictEntry inU = find(repository.entriesOf(RagManagementContext.forTenant(ctxU), DictionaryPort.TYPE_SOURCE_TYPE),
                     "G_OVR");
             assertNotNull(inT);
             assertNotNull(inU);
@@ -296,7 +297,7 @@ class JdbcDictionaryRepositoryIT {
             repository.deleteEntry(ctxT, DictionaryPort.TYPE_SOURCE_TYPE, "G_UNDELETABLE");
             assertEquals(1, globalRowCount("G_UNDELETABLE"),
                     "全局项必须存活：租户没有发布/撤回全局内容的权力");
-            assertNotNull(find(repository.entriesOf(ctxU, DictionaryPort.TYPE_SOURCE_TYPE),
+            assertNotNull(find(repository.entriesOf(RagManagementContext.forTenant(ctxU), DictionaryPort.TYPE_SOURCE_TYPE),
                     "G_UNDELETABLE"), "其他租户仍应看到该全局项");
         } finally {
             retireGlobal("G_UNDELETABLE");
@@ -312,7 +313,7 @@ class JdbcDictionaryRepositoryIT {
                     DictionaryPort.TYPE_SOURCE_TYPE, "G_SMUGGLE", "想冒充全局", 5, true));
             assertEquals(0, globalRowCount("G_SMUGGLE"),
                     "应用角色写出全局桶的行 = 越权发布全局配置");
-            DictEntry inT = find(repository.entriesOf(ctxT, DictionaryPort.TYPE_SOURCE_TYPE),
+            DictEntry inT = find(repository.entriesOf(RagManagementContext.forTenant(ctxT), DictionaryPort.TYPE_SOURCE_TYPE),
                     "G_SMUGGLE");
             assertNotNull(inT);
             assertEquals(Scope.TENANT, inT.scope());
@@ -330,7 +331,7 @@ class JdbcDictionaryRepositoryIT {
         try {
             repository.upsertEntry(ctxT, new DictEntry(
                     DictionaryPort.TYPE_SOURCE_TYPE, "T_PRIVATE", "仅 T", 6, true));
-            assertTrue(repository.entriesOf(ctxU, DictionaryPort.TYPE_SOURCE_TYPE).stream()
+            assertTrue(repository.entriesOf(RagManagementContext.forTenant(ctxU), DictionaryPort.TYPE_SOURCE_TYPE).stream()
                             .noneMatch(e -> "T_PRIVATE".equals(e.code())),
                     "放开全局可见性之后，租户私有行仍必须一行不漏");
         } finally {
@@ -363,7 +364,7 @@ class JdbcDictionaryRepositoryIT {
     }
 
     private int countByCode(RagTenantContext context, String code) {
-        return (int) repository.entriesOf(context, DictionaryPort.TYPE_SOURCE_TYPE).stream()
+        return (int) repository.entriesOf(RagManagementContext.forTenant(context), DictionaryPort.TYPE_SOURCE_TYPE).stream()
                 .filter(e -> code.equals(e.code())).count();
     }
 }

@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -18,11 +19,14 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import cn.studykid.rag.core.scope.RagCorpusScope;
+import cn.studykid.rag.core.security.RagCallerAttributes;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
 import cn.studykid.rag.management.core.CorpusDocument;
 import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.management.core.DocumentVerificationDecision;
+import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
@@ -35,16 +39,30 @@ import cn.studykid.rag.management.ports.DictionaryPort;
 /**
  * RAG 数据管理 REST 端点（RAG-D07 §2 准入流程的管理面入口）。
  *
- * <p><b>⚠️ 租户上下文</b>：与检索端点同构，必须携带 {@code X-Tenant-Id} 请求头。
- * 原因相同——管理 SQL 一律以 {@code rag_current_tenant()} 收口，
- * 而它读的是<b>会话变量</b> {@code app.tenant_id}，
- * 只在事务内有效。跨进程 HTTP 调用时若不重建租户上下文，
+ * <p><b>⚠️ 租户上下文</b>：{@code TENANT} 档（缺省）与检索端点同构，
+ * 必须携带 {@code X-Tenant-Id} 请求头。
+ * 原因相同——管理 SQL 的租户谓词收的是<b>作用域声明的那一批行</b>，
+ * 而会话变量 {@code app.tenant_id} 只在事务内有效。
+ * 跨进程 HTTP 调用时若不重建租户上下文，
  * RLS 会把全部行过滤掉，表现为「管理台永远是空的」且不报错。
+ *
+ * <p><b>⚠️ 三档作用域（{@code X-Rag-Scope}，RAG-D11 第四刀·第一刀）</b>：
+ * <ul>
+ *   <li>{@code TENANT}（缺省，不传头即本档，行为与既往逐字节一致）：本租户语料，
+ *       读与写都可；</li>
+ *   <li>{@code PLATFORM}：平台全局语料桶（{@code tenant_id} 为全局哨兵）。
+ *       <b>只读</b>，且必须持<b>平台域令牌</b>——
+ *       {@code X-Tenant-Id} 此时<b>不允许</b>出现（两个作用域信号并存不选边，直接 400）；</li>
+ *   <li>{@code ALL}：跨租户盘点。本刀返回 <b>501</b>，
+ *       它需要独立运维数据源（第三刀），刻意<b>不</b>退化成租户档。</li>
+ * </ul>
  *
  * <p><b>⚠️ 信任边界</b>：本端点不解析令牌、不自建用户体系
  * （RAG-D02 §1.1 单向调用约定）。它必须部署在主平台鉴权边界之后，
  * 不应直接暴露给终端用户——管理面包含<b>权威等级判定</b>与<b>撤回</b>能力，
  * 误暴露的代价远高于检索面。
+ * 平台档的调用方身份取自 {@code RagJwtAuthFilter} 写入的 request attribute，
+ * <b>不是</b>请求头：租户域令牌拿不到这个属性，因此冒充不了平台域。
  */
 @RestController
 @RequestMapping("/api/v1/management")
@@ -75,6 +93,15 @@ public class RagManagementController {
      * <b>不</b>因为「拿不到」就放宽到 UNVERIFIED。
      */
     public static final String MIN_TRUST_TIER_HEADER = "X-Tenant-Min-Trust-Tier";
+
+    /**
+     * 语料作用域头（RAG-D11 第四刀·第一刀）：{@code PLATFORM} / {@code TENANT} / {@code ALL}。
+     *
+     * <p>缺省 {@code TENANT}，因此<b>不传这个头的调用方行为与本刀之前逐字节一致</b>；
+     * 平台档与盘点档额外要求平台域令牌（见
+     * {@link #requireManagementContext(String, String, String, String)}）。
+     */
+    public static final String SCOPE_HEADER = RagCorpusScope.HEADER;
 
     /** 默认返回条数上限。 */
     private static final int DEFAULT_LIMIT = 50;
@@ -152,8 +179,9 @@ public class RagManagementController {
     public ManagementDtos.SourceResponse registerSource(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
             @Valid @RequestBody ManagementDtos.RegisterSourceRequest request) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
         SourceRegistration registration = new SourceRegistration(
                 request.sourceType(), request.title(), request.publisher(),
                 request.isbn(), request.doi(), request.objectRef(), request.contentHash());
@@ -188,8 +216,9 @@ public class RagManagementController {
     public ManagementDtos.BulkRegisterResponse bulkRegisterSources(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
             @Valid @RequestBody ManagementDtos.BulkRegisterRequest request) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
 
         // ⚠️ 构造期校验：把「ISBN/DOI 至少一」「内容哈希格式」等前置错误
         //    逐条归入响应失败列表，而不是抛 400 让整批报废。
@@ -238,6 +267,7 @@ public class RagManagementController {
      * 列出来源（支持按状态/等级/关键词筛选）。
      *
      * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头（缺省 TENANT；PLATFORM 需平台域令牌）
      * @param status 按校验状态筛选
      * @param trustTier 按权威等级筛选
      * @param keyword 标题/ISBN/DOI 模糊匹配
@@ -250,15 +280,18 @@ public class RagManagementController {
     public List<ManagementDtos.SourceResponse> listSources(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
             @RequestParam(value = "status", required = false) VerificationStatus status,
             @RequestParam(value = "trustTier", required = false) TrustTier trustTier,
             @RequestParam(value = "keyword", required = false) String keyword,
             @RequestParam(value = "includeStale", defaultValue = "false") boolean includeStale,
             @RequestParam(value = "limit", defaultValue = "" + DEFAULT_LIMIT) int limit,
             @RequestParam(value = "offset", defaultValue = "0") int offset) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
         SourceQuery query = new SourceQuery(status, trustTier, keyword, includeStale, limit, offset);
-        List<CorpusSource> sources = managementPort.listSources(tenant, query);
+        List<CorpusSource> sources = managementPort.listSources(ctx, query);
         Instant now = Instant.now();
         // ⚠️ 准入结论需租户权威门槛（G-3），该门槛由 platform 经
         //    X-Tenant-Min-Trust-Tier 头下发（不在 RAG 库中存租户信息）。
@@ -273,6 +306,7 @@ public class RagManagementController {
      * 查询单个来源。
      *
      * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头（缺省 TENANT；PLATFORM 需平台域令牌）
      * @param sourceId 来源 ID
      * @return 来源视图
      */
@@ -280,9 +314,12 @@ public class RagManagementController {
     public ManagementDtos.SourceResponse getSource(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
             @PathVariable("sourceId") String sourceId) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
-        CorpusSource source = managementPort.findSource(tenant, sourceId);
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        CorpusSource source = managementPort.findSource(ctx, sourceId);
         if (source == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "来源不存在：" + sourceId);
         }
@@ -301,9 +338,10 @@ public class RagManagementController {
     public ManagementDtos.SourceResponse applyVerification(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
             @PathVariable("sourceId") String sourceId,
             @Valid @RequestBody ManagementDtos.VerificationRequest request) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
         VerificationDecision decision = new VerificationDecision(
                 request.targetStatus(), request.evidenceRef(), request.decidedBy(),
                 request.verificationMethod(), request.trustTier(),
@@ -326,6 +364,7 @@ public class RagManagementController {
      * 列出某来源下的文档载体。
      *
      * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头（缺省 TENANT；PLATFORM 需平台域令牌）
      * @param sourceId 来源 ID
      * @return 文档列表
      */
@@ -333,16 +372,20 @@ public class RagManagementController {
     public List<ManagementDtos.DocumentResponse> listDocuments(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
             @PathVariable("sourceId") String sourceId) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
         return ManagementDtos.toDocumentResponses(
-                managementPort.listDocuments(tenant, sourceId));
+                managementPort.listDocuments(ctx, sourceId));
     }
 
     /**
      * 列出某文档下的片段摘要。
      *
      * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头（缺省 TENANT；PLATFORM 需平台域令牌）
      * @param documentId 文档 ID
      * @param limit 条数上限
      * @return 片段摘要列表
@@ -351,14 +394,17 @@ public class RagManagementController {
     public List<ManagementDtos.ChunkResponse> listChunks(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
             @PathVariable("documentId") String documentId,
             @RequestParam(value = "limit", defaultValue = "" + DEFAULT_LIMIT) int limit) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
         if (limit <= 0 || limit > MAX_CHUNK_LIMIT) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "limit 必须在 1～" + MAX_CHUNK_LIMIT + " 之间");
         }
-        List<ChunkSummary> chunks = managementPort.listChunks(tenant, documentId, limit);
+        List<ChunkSummary> chunks = managementPort.listChunks(ctx, documentId, limit);
         return ManagementDtos.toChunkResponses(chunks);
     }
 
@@ -366,14 +412,18 @@ public class RagManagementController {
      * 统计租户语料与索引状况。
      *
      * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头（缺省 TENANT；PLATFORM 需平台域令牌）
      * @return 统计视图
      */
     @GetMapping("/statistics")
     public ManagementDtos.StatisticsResponse statistics(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
-            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
-        var stats = managementPort.statistics(tenant);
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain) {
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        var stats = managementPort.statistics(ctx);
         return new ManagementDtos.StatisticsResponse(
                 stats.totalSources(), stats.verifiedSources(), stats.admissibleSources(),
                 stats.totalDocuments(), stats.totalChunks(), stats.retrievableChunks(),
@@ -391,6 +441,7 @@ public class RagManagementController {
      * 这是数据起点，不是接口缺陷。
      *
      * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头（缺省 TENANT；PLATFORM 需平台域令牌）
      * @param days 最近天数（缺省 30，钳制在 1～90）
      * @return 连续日期的每日检索次数
      */
@@ -398,9 +449,12 @@ public class RagManagementController {
     public ManagementDtos.DailySearchResponse dailySearches(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
             @RequestParam(value = "days", defaultValue = "30") int days) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
-        var stats = managementPort.dailySearchStatistics(tenant, days);
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        var stats = managementPort.dailySearchStatistics(ctx, days);
         return ManagementDtos.toDailySearchResponse(stats);
     }
 
@@ -411,6 +465,7 @@ public class RagManagementController {
      * 文档载体（导入了多少物理文件）、片段（切出了多少可检索片段）。
      *
      * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头（缺省 TENANT；PLATFORM 需平台域令牌）
      * @param days 最近天数（缺省 30，钳制在 1～90）
      * @return 连续日期的每日导入量
      */
@@ -418,9 +473,12 @@ public class RagManagementController {
     public ManagementDtos.DailyImportResponse dailyImports(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
             @RequestParam(value = "days", defaultValue = "30") int days) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
-        var stats = managementPort.dailyImportStatistics(tenant, days);
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        var stats = managementPort.dailyImportStatistics(ctx, days);
         return ManagementDtos.toDailyImportResponse(stats);
     }
 
@@ -456,9 +514,10 @@ public class RagManagementController {
     public ManagementDtos.DocumentResponse applyDocumentVerification(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
             @PathVariable("documentId") String documentId,
             @Valid @RequestBody ManagementDtos.DocumentVerificationRequest request) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
         // ⚠️ 路径参数先做形态校验：非 UUID 的 document_id 会被 PG 的
         //    `?::uuid` 转换拒绝，那会变成一条 500 的 SQL 错误——
         //    而它其实是调用方传参错误，应当是 400。
@@ -495,14 +554,18 @@ public class RagManagementController {
      * 自己推算出来的结论必然与服务端口径漂移。
      *
      * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头（缺省 TENANT；PLATFORM 需平台域令牌）
      * @return 问题清单视图
      */
     @GetMapping("/issues")
     public ManagementDtos.IssuesResponse issues(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
-            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
-        return ManagementDtos.toIssuesResponse(managementPort.listIssues(tenant));
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain) {
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        return ManagementDtos.toIssuesResponse(managementPort.listIssues(ctx));
     }
 
     /**
@@ -515,26 +578,31 @@ public class RagManagementController {
      * 无需为两类字典写两套渲染逻辑。
      *
      * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头（缺省 TENANT；PLATFORM 需平台域令牌）
      * @return 全部字典类型视图
      */
     @GetMapping("/dictionaries")
     public List<ManagementDtos.DictionaryTypeDto> listDictionaries(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
-            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader) {
-        RagTenantContext context = requireTenantContext(tenantId, minTrustTierHeader);
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain) {
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
         List<String> types = List.of(
                 DictionaryPort.TYPE_SOURCE_TYPE,
                 DictionaryPort.TYPE_TRUST_TIER,
                 DictionaryPort.TYPE_VERIFICATION_METHOD,
                 DictionaryPort.TYPE_LICENSE_STATUS);
         return types.stream().map(type -> new ManagementDtos.DictionaryTypeDto(
-                type, dictionaryPort.isEditable(type), toEntryDtos(context, type))).toList();
+                type, dictionaryPort.isEditable(type), toEntryDtos(ctx, type))).toList();
     }
 
     /**
      * 列出某字典类型的全部条目。
      *
      * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头（缺省 TENANT；PLATFORM 需平台域令牌）
      * @param type 字典类型
      * @return 该类型下的条目（动态类型按 sort_order 升序）
      */
@@ -542,10 +610,13 @@ public class RagManagementController {
     public List<ManagementDtos.DictionaryEntryDto> listDictionaryEntries(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
             @PathVariable("type") String type) {
-        RagTenantContext context = requireTenantContext(tenantId, minTrustTierHeader);
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
         requireNonBlankType(type);
-        return toEntryDtos(context, type);
+        return toEntryDtos(ctx, type);
     }
 
     /**
@@ -565,9 +636,10 @@ public class RagManagementController {
     public ManagementDtos.DictionaryEntryDto upsertDictionaryEntry(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
             @PathVariable("type") String type,
             @Valid @RequestBody ManagementDtos.UpsertDictionaryEntryRequest request) {
-        RagTenantContext context = requireTenantContext(tenantId, minTrustTierHeader);
+        RagTenantContext context = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
         requireNonBlankType(type);
         if (!dictionaryPort.isEditable(type)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -594,9 +666,10 @@ public class RagManagementController {
     public void deleteDictionaryEntry(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
             @PathVariable("type") String type,
             @PathVariable("code") String code) {
-        RagTenantContext context = requireTenantContext(tenantId, minTrustTierHeader);
+        RagTenantContext context = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
         requireNonBlankType(type);
         if (!dictionaryPort.isEditable(type)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -613,7 +686,7 @@ public class RagManagementController {
      * @return 响应条目列表
      */
     private List<ManagementDtos.DictionaryEntryDto> toEntryDtos(
-            RagTenantContext context, String type) {
+            RagManagementContext context, String type) {
         return dictionaryPort.entriesOf(context, type).stream()
                 .map(e -> new ManagementDtos.DictionaryEntryDto(
                         e.type(), e.code(), e.label(), e.sortOrder(), e.enabled(), e.scope()))
@@ -657,9 +730,10 @@ public class RagManagementController {
     public ManagementDtos.ReindexResponse reindex(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
             @Valid @RequestBody(required = false) ManagementDtos.ReindexRequest request,
             @RequestParam(name = "limit", required = false) String limitParam) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader);
+        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
         int limit = resolveReindexLimit(request, limitParam);
         // ⚠️ 上限在这里再压一道：Bean Validation 只在**请求体存在**时生效，
         //    而 body 可空 → 默认值分支也要过同一道闸。
@@ -737,9 +811,21 @@ public class RagManagementController {
      *
      * @param tenantId 租户 ID 头
      * @param minTrustTier 门槛头（可空 → 用默认门槛）
+     * @param scopeHeader 作用域头（可空 → 租户档）
      * @return 归一后的租户上下文
+     * @throws ResponseStatusException 作用域不是租户档 → 409（写通道只服务本租户语料）
      */
-    private RagTenantContext requireTenantContext(String tenantId, String minTrustTier) {
+    private RagTenantContext requireTenantContext(String tenantId, String minTrustTier,
+                                                  String scopeHeader) {
+        RagCorpusScope scope = parseScope(scopeHeader);
+        if (scope != RagCorpusScope.TENANT) {
+            // ⚠️ 不是「忽略这个头」，而是明确拒绝：静默按租户档处理，
+            //    会让调用方以为「带 PLATFORM 头登记的那条已经进了全局桶」，
+            //    实际落进了请求头里那个租户——两种解释差一个租户的数据归属。
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "语料写通道只接受 " + RagCorpusScope.TENANT + " 作用域，当前 " + scope
+                            + "。平台全局语料的写入需独立运维数据源（RAG-D11 第四刀·第二刀）");
+        }
         if (tenantId == null || tenantId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "缺少租户上下文：请提供 " + TENANT_HEADER + " 请求头（主平台在调用时注入）");
@@ -752,6 +838,78 @@ public class RagManagementController {
                     "租户标识不是合法 UUID：" + tenantId);
         }
         return new RagTenantContext(normalizedTenant, parseMinTrustTier(minTrustTier));
+    }
+
+    /**
+     * 校验并归一<b>读侧作用域上下文</b>（RAG-D11 第四刀·第一刀）。
+     *
+     * <p><b>⚠️ 作用域只认显式声明</b>：{@code X-Rag-Scope} 缺省为
+     * {@link RagCorpusScope#TENANT}，<b>不</b>由「有没有传 {@code X-Tenant-Id}」推断。
+     * 隐式推断会让「忘记传租户」这类本地配置错误静默变成一次全局查询，
+     * 而既有纪律是「缺租户头就 400，绝不静默返回空」。
+     *
+     * <p><b>⚠️ 平台档必须是平台域令牌</b>（评审 P0-2 的延伸 / 第四刀 B1）：
+     * {@code callerDomain} 取自 request attribute，只能由
+     * {@code RagJwtAuthFilter} 在<b>验签通过后</b>写入——它是 header 伪造不了的证据。
+     * 缺属性（鉴权逃生门）或非平台域一律 403：
+     * 租户管理员不该看见「平台语料库的全量清单」，
+     * 更不该从条目数反推出平台侧的采集进度。
+     *
+     * <p><b>⚠️ 平台档禁止同时传租户头</b>：两个作用域信号并存时按哪个算没有正确答案，
+     * 所以不选——直接 400，让调用方把自己的意图说清楚。
+     *
+     * <p><b>⚠️ 跨租户盘点档本刀返回 501</b>：它的实现需要独立运维数据源（第三刀）。
+     * 这里刻意不「退化成租户档」——那会让前端以为「全部租户的清单」已经出来了。
+     *
+     * @param tenantId 租户 ID 头
+     * @param minTrustTier 门槛头（可空 → 用默认门槛）
+     * @param scopeHeader 作用域头（可空 → 租户档）
+     * @param callerDomain 令牌域（由鉴权过滤器写入的 request attribute）
+     * @return 归一后的作用域上下文
+     */
+    private RagManagementContext requireManagementContext(String tenantId, String minTrustTier,
+                                                          String scopeHeader, String callerDomain) {
+        RagCorpusScope scope = parseScope(scopeHeader);
+        if (scope.requiresPlatformCaller()) {
+            String domain = RagCallerAttributes.normalizeDomain(callerDomain);
+            if (!RagCallerAttributes.DOMAIN_PLATFORM.equals(domain)) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "作用域 " + scope + " 只受理平台域令牌，当前调用方域：" + domain
+                                + "（租户域令牌与鉴权逃生门都不够格）");
+            }
+        }
+        return switch (scope) {
+            case TENANT -> RagManagementContext.forTenant(
+                    requireTenantContext(tenantId, minTrustTier, scopeHeader));
+            case PLATFORM -> {
+                if (tenantId != null && !tenantId.isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "作用域 " + RagCorpusScope.PLATFORM + " 表示平台全局语料，"
+                                    + "不应同时提供 " + TENANT_HEADER + "（=" + tenantId + "）");
+                }
+                yield RagManagementContext.forPlatform(parseMinTrustTier(minTrustTier));
+            }
+            case ALL -> throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    "跨租户盘点视图尚未开放：它需要平台运维数据源（BYPASSRLS 只读角色），"
+                            + "属 RAG-D11 第四刀·第三档");
+        };
+    }
+
+    /**
+     * 解析作用域头。
+     *
+     * <p>⚠️ 非法值报 400 而非回落缺省：传了 {@code PLATFORME} 说明契约被破坏，
+     * 静默按租户档处理会让「以为在看全局、实际在看租户」完全不可见。
+     *
+     * @param raw 原始头值（可空 → {@link RagCorpusScope#TENANT}）
+     * @return 作用域档位
+     */
+    private static RagCorpusScope parseScope(String raw) {
+        try {
+            return RagCorpusScope.parse(raw);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
     }
 
     /**

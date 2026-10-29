@@ -10,6 +10,7 @@ import cn.studykid.rag.management.core.CorpusIssues;
 import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.management.core.CorpusStatistics;
 import cn.studykid.rag.management.core.DocumentVerificationDecision;
+import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
@@ -33,6 +34,13 @@ import cn.studykid.rag.management.core.VerificationDecision;
  * 撤回的唯一手段是 {@code ver_status='REVOKED'}
  * （RAG-D07 §8 INV-4-a：禁止把物理 DELETE 当作撤回手段，
  * 因为 DELETE 会级联抹除历史引用，破坏可溯源性）。
+ *
+ * <p><b>⚠️ 读方法收 {@link RagManagementContext}、写方法收 {@link RagTenantContext}</b>
+ * （RAG-D11 第四刀·第一刀）：这不是风格不统一，而是<b>能力差异写进了类型</b>——
+ * 读可以按三档作用域走（租户 / 平台全局 / 跨租户盘点），
+ * 写<b>只可能对某个租户成立</b>。平台全局语料的写通道要落在独立运维数据源上
+ * （第二刀），因此这里<b>刻意不给</b>「接收作用域的写方法」：
+ * 全局写不存在入口，而不是「有入口但被 if 拦住」。
  */
 public interface CorpusManagementPort {
 
@@ -58,21 +66,21 @@ public interface CorpusManagementPort {
     /**
      * 按查询条件列出来源。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档）
      * @param query 查询条件
      * @return 匹配的来源列表
      */
-    @NonNull List<CorpusSource> listSources(@NonNull RagTenantContext context,
+    @NonNull List<CorpusSource> listSources(@NonNull RagManagementContext context,
                                              @NonNull SourceQuery query);
 
     /**
      * 按 ID 查询单个来源。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档）
      * @param sourceId 来源 ID
      * @return 来源视图；不存在返回 {@code null}
      */
-    @Nullable CorpusSource findSource(@NonNull RagTenantContext context,
+    @Nullable CorpusSource findSource(@NonNull RagManagementContext context,
                                        @NonNull String sourceId);
 
     /**
@@ -94,11 +102,11 @@ public interface CorpusManagementPort {
     /**
      * 列出某来源下的文档载体。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档）
      * @param sourceId 来源 ID
      * @return 文档列表
      */
-    @NonNull List<CorpusDocument> listDocuments(@NonNull RagTenantContext context,
+    @NonNull List<CorpusDocument> listDocuments(@NonNull RagManagementContext context,
                                                 @NonNull String sourceId);
 
     /**
@@ -134,30 +142,30 @@ public interface CorpusManagementPort {
      * 依赖校验有效期与当前时刻，前端没有租户权威门槛上下文，
      * 推算出来的结论与服务端口径必然不一致。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档）
      * @return 问题清单
      */
-    @NonNull CorpusIssues listIssues(@NonNull RagTenantContext context);
+    @NonNull CorpusIssues listIssues(@NonNull RagManagementContext context);
 
     /**
      * 列出某文档下的片段摘要（管理面浏览用）。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档）
      * @param documentId 文档 ID
      * @param limit 返回条数上限
      * @return 片段摘要列表
      */
-    @NonNull List<ChunkSummary> listChunks(@NonNull RagTenantContext context,
+    @NonNull List<ChunkSummary> listChunks(@NonNull RagManagementContext context,
                                             @NonNull String documentId,
                                             int limit);
 
     /**
      * 统计租户语料与索引状况。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档）
      * @return 统计视图
      */
-    @NonNull CorpusStatistics statistics(@NonNull RagTenantContext context);
+    @NonNull CorpusStatistics statistics(@NonNull RagManagementContext context);
 
     /**
      * 每日检索次数（报表中心 · 每日搜索的问题数）。
@@ -166,11 +174,11 @@ public interface CorpusManagementPort {
      * 检索链路在每次检索后落审计（见 {@code JdbcTenantScopedRetrieval}）。
      * 系统发起的检索无人类主体（principal_id 为 NULL），不计入任何个人。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档）
      * @param days    最近天数（1～90）
      * @return 连续日期的每日检索次数
      */
-    @NonNull DailySearchStatistics dailySearchStatistics(@NonNull RagTenantContext context, int days);
+    @NonNull DailySearchStatistics dailySearchStatistics(@NonNull RagManagementContext context, int days);
 
     /**
      * 每日导入语料量（报表中心 · 每日导入 RAG 的资料数）。
@@ -179,11 +187,11 @@ public interface CorpusManagementPort {
      * 三者是 V1 三层模型的不同层级，分别反映「登记了多少资料」「导入了多少文件」
      * 「切出了多少可检索片段」。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档）
      * @param days    最近天数（1～90）
      * @return 连续日期的每日导入量
      */
-    @NonNull DailyImportStatistics dailyImportStatistics(@NonNull RagTenantContext context, int days);
+    @NonNull DailyImportStatistics dailyImportStatistics(@NonNull RagManagementContext context, int days);
 
     /**
      * 写入语料访问审计（追加写，不可改）。

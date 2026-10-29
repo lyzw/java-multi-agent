@@ -18,6 +18,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.management.core.RagTenantContext;
+import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.SourceRegistration;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort.DailyImportCount;
@@ -101,7 +102,7 @@ class JdbcCorpusManagementDailyStatisticsIT {
         seedAudit(ctx, "INGEST", 5);   // 采集动作**不是**搜索
         seedAudit(ctx, "CITE", 7);     // 引用动作**不是**搜索
 
-        DailySearchStatistics stats = repository.dailySearchStatistics(ctx, 7);
+        DailySearchStatistics stats = repository.dailySearchStatistics(RagManagementContext.forTenant(ctx), 7);
 
         long today = stats.searchesByDay().stream()
                 .filter(d -> d.date().equals(LocalDate.now(ZoneOffset.UTC).toString()))
@@ -119,7 +120,7 @@ class JdbcCorpusManagementDailyStatisticsIT {
         // 只在「今天」写审计；前 6 天应全部补 0
         seedAudit(ctx, "RETRIEVE", 2);
 
-        DailySearchStatistics stats = repository.dailySearchStatistics(ctx, 7);
+        DailySearchStatistics stats = repository.dailySearchStatistics(RagManagementContext.forTenant(ctx), 7);
 
         assertEquals(7, stats.searchesByDay().size(), "连续 7 天，一天都不能少");
         for (DailySearchCount d : stats.searchesByDay()) {
@@ -140,11 +141,11 @@ class JdbcCorpusManagementDailyStatisticsIT {
         seedAudit(ctxA, "RETRIEVE", 4);
         seedAudit(ctxB, "RETRIEVE", 9);
 
-        long sumA = repository.dailySearchStatistics(ctxA, 7).searchesByDay().stream()
+        long sumA = repository.dailySearchStatistics(RagManagementContext.forTenant(ctxA), 7).searchesByDay().stream()
                 .mapToLong(DailySearchCount::searches).sum();
         assertEquals(4, sumA, "租户 A 只应看到自己的 4 次检索");
 
-        long sumB = repository.dailySearchStatistics(ctxB, 7).searchesByDay().stream()
+        long sumB = repository.dailySearchStatistics(RagManagementContext.forTenant(ctxB), 7).searchesByDay().stream()
                 .mapToLong(DailySearchCount::searches).sum();
         assertEquals(9, sumB, "租户 B 只应看到自己的 9 次检索");
     }
@@ -165,7 +166,7 @@ class JdbcCorpusManagementDailyStatisticsIT {
         seedDocument(ctx, sourceId, editionId);
         seedChunk(ctx, documentId, editionId);
 
-        DailyImportStatistics stats = repository.dailyImportStatistics(ctx, 7);
+        DailyImportStatistics stats = repository.dailyImportStatistics(RagManagementContext.forTenant(ctx), 7);
 
         String today = LocalDate.now(ZoneOffset.UTC).toString();
         DailyImportCount todayCount = stats.importsByDay().stream()
@@ -186,7 +187,7 @@ class JdbcCorpusManagementDailyStatisticsIT {
         RagTenantContext ctxB = newTenant();
         seedSource(ctxB);
 
-        DailyImportStatistics stats = repository.dailyImportStatistics(ctxA, 7);
+        DailyImportStatistics stats = repository.dailyImportStatistics(RagManagementContext.forTenant(ctxA), 7);
         long sumA = stats.importsByDay().stream().mapToLong(DailyImportCount::sources).sum();
         assertEquals(0, sumA, "租户 A 不应看到租户 B 的来源");
         assertEquals(7, stats.importsByDay().size(), "连续日期轴不能因为没数据而变短");

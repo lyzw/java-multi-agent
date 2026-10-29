@@ -22,6 +22,7 @@ import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
 import cn.studykid.rag.management.core.CorpusDocument;
+import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.CorpusIssues;
 import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.management.core.CorpusStatistics;
@@ -52,6 +53,19 @@ class JdbcCorpusManagementRepositoryIT {
     private static final String PG_URL_ENV = "IT_RAG_PG_URL";
 
     /**
+     * 管理员（库 owner）连接环境变量名。
+     *
+     * <p><b>只有全局档的用例需要它</b>：应用角色 {@code rag_app} 写不出全局行
+     * （写策略要求 {@code tenant_id = rag_current_tenant()}，而全局行的租户列是哨兵），
+     * 这<b>正是</b> RAG-D11 §2.1 的越权闸门。所以「先有一条全局语料」这一步
+     * 只能由 owner 完成——与 {@code JdbcDictionaryRepositoryIT} 同一套办法。
+     * 未配置时相关用例<b>跳过而非失败</b>。
+     */
+    private static final String PG_ADMIN_URL_ENV = "IT_RAG_PG_ADMIN_URL";
+    private static final String PG_ADMIN_USER_ENV = "IT_RAG_PG_ADMIN_USERNAME";
+    private static final String PG_ADMIN_PASSWORD_ENV = "IT_RAG_PG_ADMIN_PASSWORD";
+
+    /**
      * 数据库账号/口令环境变量名。
      *
      * <p>⚠️ 必须与 URL **分开**提供——见 {@link #setup()} 的说明。
@@ -67,6 +81,9 @@ class JdbcCorpusManagementRepositoryIT {
     private JdbcTemplate jdbcTemplate;
     private TransactionTemplate transactionTemplate;
     private CorpusManagementPort repository;
+
+    /** 管理员连接（可为 null：未配置时全局用例跳过）。 */
+    private JdbcTemplate adminJdbcTemplate;
 
     /**
      * 租户 T 的上下文（由 platform 下发）。
@@ -128,6 +145,16 @@ class JdbcCorpusManagementRepositoryIT {
         transactionTemplate = new TransactionTemplate(
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds));
         repository = new JdbcCorpusManagementRepository(jdbcTemplate, transactionTemplate);
+
+        // 管理员连接仅用于 seed 全局行，不参与任何业务断言。
+        String adminUrl = System.getenv(PG_ADMIN_URL_ENV);
+        if (adminUrl != null && !adminUrl.isBlank()) {
+            DriverManagerDataSource adminDs = new DriverManagerDataSource();
+            adminDs.setUrl(withRagSearchPath(adminUrl));
+            adminDs.setUsername(envOrDefault(PG_ADMIN_USER_ENV, extractUserFromUrl(adminUrl)));
+            adminDs.setPassword(envOrDefault(PG_ADMIN_PASSWORD_ENV, null));
+            adminJdbcTemplate = new JdbcTemplate(adminDs);
+        }
         // ⚠️ 不再 seed 租户：RAG 库里**没有**租户表（V4 迁移已移除 rag_tenant 副本）。
         //    租户上下理由 platform 下发（见 RagTenantContext）。
         //    跨租户隔离改由「两个不同的 tenantId 上下文」验证。
@@ -203,9 +230,9 @@ class JdbcCorpusManagementRepositoryIT {
                         "9787100000002", null, "obj://book.pdf", "b".repeat(64)),
                 REVIEWER);
         assertNotNull(source);
-        assertNull(repository.findSource(ctxT, source.sourceId()),
+        assertNull(repository.findSource(RagManagementContext.forTenant(ctxT), source.sourceId()),
                 "租户 T 不应看到租户 U 的来源");
-        List<CorpusSource> list = repository.listSources(ctxT,
+        List<CorpusSource> list = repository.listSources(RagManagementContext.forTenant(ctxT),
                 SourceQuery.of(VerificationStatus.PENDING));
         assertTrue(list.stream().noneMatch(s -> s.sourceId().equals(source.sourceId())),
                 "租户 T 的列表不应包含租户 U 的来源");
@@ -233,7 +260,7 @@ class JdbcCorpusManagementRepositoryIT {
                         "ISBN:ref@2026-01-01", REVIEWER, 365)));
 
         // ⚠️ 关键断言：状态必须仍是 REJECTED——非法转移不能留下任何写入痕迹。
-        CorpusSource after = repository.findSource(ctxT, id);
+        CorpusSource after = repository.findSource(RagManagementContext.forTenant(ctxT), id);
         assertNotNull(after);
         assertEquals(VerificationStatus.REJECTED, after.verificationStatus(),
                 "非法转移后状态必须保持不变");
@@ -248,7 +275,7 @@ class JdbcCorpusManagementRepositoryIT {
         String id = source.sourceId();
 
         repository.applyVerification(ctxT, id, VerificationDecision.revoke("权利人通知", LEGAL));
-        CorpusSource revoked = repository.findSource(ctxT, id);
+        CorpusSource revoked = repository.findSource(RagManagementContext.forTenant(ctxT), id);
         assertNotNull(revoked);
         assertEquals(VerificationStatus.REVOKED, revoked.verificationStatus());
         assertEquals("RESTRICTED", revoked.licenseStatus(),
@@ -258,7 +285,7 @@ class JdbcCorpusManagementRepositoryIT {
                 new VerificationDecision(VerificationStatus.IN_REVIEW, "复活尝试", REVIEWER,
                         VerificationMethod.NONE, null, 365)));
         assertEquals(VerificationStatus.REVOKED,
-                repository.findSource(ctxT, id).verificationStatus());
+                repository.findSource(RagManagementContext.forTenant(ctxT), id).verificationStatus());
     }
 
     @Test
@@ -333,12 +360,12 @@ class JdbcCorpusManagementRepositoryIT {
                     """, id);
         });
 
-        List<CorpusSource> withoutStale = repository.listSources(ctxT,
+        List<CorpusSource> withoutStale = repository.listSources(RagManagementContext.forTenant(ctxT),
                 new SourceQuery(VerificationStatus.VERIFIED, null, null, false, 50, 0));
         assertTrue(withoutStale.stream().noneMatch(s -> s.sourceId().equals(id)),
                 "过期来源不应出现在默认列表中");
 
-        List<CorpusSource> withStale = repository.listSources(ctxT,
+        List<CorpusSource> withStale = repository.listSources(RagManagementContext.forTenant(ctxT),
                 new SourceQuery(VerificationStatus.VERIFIED, null, null, true, 50, 0));
         assertTrue(withStale.stream().anyMatch(s -> s.sourceId().equals(id)),
                 "includeStale=true 时过期来源应出现");
@@ -364,7 +391,7 @@ class JdbcCorpusManagementRepositoryIT {
                     """, id);
         });
 
-        CorpusStatistics stats = repository.statistics(ctxT);
+        CorpusStatistics stats = repository.statistics(RagManagementContext.forTenant(ctxT));
         assertTrue(stats.totalSources() >= 1);
         // 过期源不计入 admissible
         assertTrue(stats.admissibleSources() <= stats.verifiedSources());
@@ -519,7 +546,7 @@ class JdbcCorpusManagementRepositoryIT {
         seedChunk(ctxM, documentId, editionId, "片段一");
         seedChunk(ctxM, documentId, editionId, "片段二");
 
-        CorpusIssues issues = repository.listIssues(ctxM);
+        CorpusIssues issues = repository.listIssues(RagManagementContext.forTenant(ctxM));
 
         CorpusIssues.DocumentEmbeddingGap gap = issues.documentsMissingEmbedding().stream()
                 .filter(g -> g.documentId().equals(documentId))
@@ -538,7 +565,7 @@ class JdbcCorpusManagementRepositoryIT {
         approveSource(ctxM, source.sourceId());
         String documentId = seedDocument(ctxM, source.sourceId(), "解析失败载体", "PDF", "FAILED");
 
-        CorpusIssues issues = repository.listIssues(ctxM);
+        CorpusIssues issues = repository.listIssues(RagManagementContext.forTenant(ctxM));
 
         assertTrue(issues.documentsMissingEmbedding().stream()
                         .noneMatch(g -> g.documentId().equals(documentId)),
@@ -557,7 +584,7 @@ class JdbcCorpusManagementRepositoryIT {
     void issuesReportPendingSourcesWithServerComputedStale() {
         CorpusSource source = registerIn(ctxM, "9787100000016", "待审教材");
         // 来源登记后恒为 PENDING
-        CorpusIssues issues = repository.listIssues(ctxM);
+        CorpusIssues issues = repository.listIssues(RagManagementContext.forTenant(ctxM));
 
         CorpusIssues.SourcePendingReview pending = issues.sourcesPendingReview().stream()
                 .filter(s -> s.sourceId().equals(source.sourceId()))
@@ -680,5 +707,102 @@ class JdbcCorpusManagementRepositoryIT {
                     "SELECT edition_id FROM rag_document WHERE document_id = ?::uuid",
                     String.class, documentId);
         });
+    }
+
+    // ---------------------------------------------------------------------
+    // 平台全局档读取（RAG-D11 第四刀 · 第一刀）
+    //
+    // 这一段证明的是「只有真 DB 才能证明」的两件事：
+    //   ① 会话租户被**显式清空**后，RLS 读策略确实只剩全局行——
+    //      若实现把哨兵写进 app.tenant_id，rag_current_tenant() 会抛
+    //      SQLSTATE 42501，用例会以一条难读的 500 形态失败；
+    //   ② 读侧谓词绑定的是**查询批次**（哨兵／该租户），
+    //      不是会话身份——两层独立成立，任一层写错都漏不出对方租户的行。
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("平台全局档看不见租户行（会话租户清空后 RLS 只放行全局行）")
+    void platformScopeDoesNotSeeTenantRows() {
+        CorpusSource inT = register("9787100000021", "只属于租户T的教材");
+        String id = inT.sourceId();
+        RagManagementContext platform =
+                RagManagementContext.forPlatform(TrustTier.OFFICIAL_TUTORIAL);
+
+        assertNull(repository.findSource(platform, id),
+                "全局档按哨兵租户查询，租户 T 的来源不在这一批行里");
+        List<CorpusSource> global = repository.listSources(platform,
+                new SourceQuery(null, null, null, true, 50, 0));
+        assertTrue(global.stream().noneMatch(src -> src.sourceId().equals(id)),
+                "全局档列表不得混入租户行——混入即跨租户泄漏");
+
+        // 对照组：同一行在租户档里确实可见（否则上面的断言是「查不到任何东西」的假绿）
+        assertNotNull(repository.findSource(RagManagementContext.forTenant(ctxT), id),
+                "租户档必须能查到刚登记的行");
+    }
+
+    @Test
+    @DisplayName("平台全局档的统计口径只覆盖全局行")
+    void platformScopeStatisticsIgnoreTenantRows() {
+        register("9787100000022", "租户T另一本");
+        RagManagementContext platform =
+                RagManagementContext.forPlatform(TrustTier.OFFICIAL_TUTORIAL);
+        CorpusStatistics globalStats = repository.statistics(platform);
+        CorpusStatistics tenantStats = repository.statistics(RagManagementContext.forTenant(ctxT));
+        assertTrue(tenantStats.totalSources() > 0,
+                "租户 T 此刻应有夹具来源；若为 0 说明租户档也查不到东西，对照失效");
+        assertTrue(globalStats.totalSources() <= tenantStats.totalSources(),
+                "全局档的统计不得把租户行算进来");
+    }
+
+    @Test
+    @DisplayName("全局行只在平台档可见：租户档看不到（需 owner 连接播种）")
+    void globalRowIsVisibleOnlyInPlatformScope() {
+        requireAdminConnection();
+        String globalSourceId = seedGlobalSource("9787100000023", "平台维护的全局教材");
+        try {
+            RagManagementContext platform =
+                    RagManagementContext.forPlatform(TrustTier.OFFICIAL_TUTORIAL);
+            assertNotNull(repository.findSource(platform, globalSourceId),
+                    "平台全局语料必须能在管理台被看到（第一刀要关闭的 R-1）");
+            assertNull(repository.findSource(RagManagementContext.forTenant(ctxT), globalSourceId),
+                    "租户档仍受 RLS 与谓词双重限制，看不到全局行");
+
+            List<CorpusSource> globalList = repository.listSources(platform,
+                    new SourceQuery(null, null, null, true, 50, 0));
+            assertTrue(globalList.stream().anyMatch(src -> src.sourceId().equals(globalSourceId)),
+                    "列表侧同样要能召回全局行");
+            assertEquals(1, globalList.size(),
+                    "全局档的这一批行应恰好只有刚播种的那一条全局来源");
+        } finally {
+            adminJdbcTemplate.update("DELETE FROM rag_source WHERE source_id = ?::uuid",
+                    globalSourceId);
+        }
+    }
+
+    /** 需要 owner 连接的用例的前置：没有就跳过，不算失败。 */
+    private void requireAdminConnection() {
+        Assumptions.assumeTrue(adminJdbcTemplate != null,
+                "skipped: " + PG_ADMIN_URL_ENV + " 未设置（全局行无法经应用角色写入）");
+    }
+
+    /**
+     * 以库 owner 播一条平台全局来源。
+     *
+     * <p>⚠️ 这一步<b>刻意不用</b> {@code repository}：应用角色写全局行会被写策略拒绝，
+     * 那是设计内的闸门（第二刀要开的是「独立运维数据源」，不是放宽它）。
+     * 夹具要绕开它，只能借 owner 连接。
+     */
+    private String seedGlobalSource(String isbn, String title) {
+        String sourceId = java.util.UUID.randomUUID().toString();
+        adminJdbcTemplate.update("""
+                INSERT INTO rag_source
+                    (source_id, tenant_id, scope, source_type, title, publisher, isbn,
+                     trust_tier, ver_status, ver_method, ver_valid_days, license_status)
+                VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM',
+                        '教材', ?, '人民教育出版社', ?,
+                        'UNVERIFIED', 'PENDING', 'NONE', 365, 'PENDING'::rag_license_status)
+                ON CONFLICT (source_id) DO NOTHING
+                """, sourceId, title, isbn);
+        return sourceId;
     }
 }
