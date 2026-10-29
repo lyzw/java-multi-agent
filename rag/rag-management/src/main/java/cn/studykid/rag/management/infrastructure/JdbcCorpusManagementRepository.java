@@ -11,15 +11,20 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import cn.studykid.rag.core.scope.RagCorpusScope;
+import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
+import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
+import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
 import cn.studykid.rag.management.core.CorpusDocument;
 import cn.studykid.rag.management.core.CorpusIssues;
 import cn.studykid.rag.management.core.CorpusSource;
@@ -48,11 +53,12 @@ import cn.studykid.rag.management.ports.CorpusManagementPort.BulkRegistrationRes
  *   <li>V8 的 RLS FORCE 策略对本次读写生效——<b>真正隔离由 RLS 保证</b>，
  *       SQL 里的租户谓词是<b>功能性的</b>第二层。读侧按作用域绑定
  *       （{@link RagManagementContext#queryTenantId()}：租户档取该租户、
- *       平台档取全局哨兵），写侧继续只认会话租户。
- *       ⚠️ 因此「平台全局语料在管理台可见」自第一刀起成立，
- *       但<b>可写</b>不成立——全局写需要独立运维数据源（第二刀）：
- *       应用角色 {@code rag_app} 的 INSERT/UPDATE 策略含
- *       {@code scope='TENANT'}，写不出全局行，那正是越权闸门本身。</li>
+ *       平台档取全局哨兵），写侧按<b>写通道</b>收口：
+ *       租户档仍走应用连接 + {@code rag_current_tenant()}（行为与第一刀逐字节一致），
+ *       平台档走独立运维通道 + {@code rag_global_tenant_id()} <b>字面函数</b>。
+ *       ⚠️ 平台档的租户不是参数：SQL 文本里根本没有可绑定租户的位置，
+ *       所以「把别的桶写进去」这句话在实现层拼不出来——
+ *       这是全局写唯一的护栏（{@code rag_ops} 带 BYPASSRLS，RLS 对它不设防）。</li>
  * </ol>
  *
  * <p><b>⚠️ 审计与状态变更必须同事务</b>（RAG-D07 §2.5）：
@@ -72,6 +78,15 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
     private final TransactionTemplate transactionTemplate;
 
     /**
+     * 平台全局语料的写通道（可为 null = 未接入）。
+     *
+     * <p>⚠️ null 时平台档写动作抛 {@link RagOpsUnavailableException}（503 fail-closed），
+     * <b>不</b>回落到应用连接：回落的结果不是「写得差一点」，而是
+     * RLS 把全局写静默滤成 0 行、控制台却报告成功。
+     */
+    private final RagOpsSessionPort opsSession;
+
+    /**
      * 合法审计动作白名单（与 V3 迁移的 {@code rag_access_audit_action_chk} 一致）。
      *
      * <p>⚠️ ADMIT / REJECT 为 V3 新增——此前审核动作被迫借道 INGEST，
@@ -82,11 +97,126 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
 
     public JdbcCorpusManagementRepository(@NonNull JdbcTemplate jdbcTemplate,
                                           @NonNull TransactionTemplate transactionTemplate) {
+        this(jdbcTemplate, transactionTemplate, null);
+    }
+
+    public JdbcCorpusManagementRepository(@NonNull JdbcTemplate jdbcTemplate,
+                                          @NonNull TransactionTemplate transactionTemplate,
+                                          @Nullable RagOpsSessionPort opsSession) {
         if (jdbcTemplate == null || transactionTemplate == null) {
             throw new IllegalArgumentException("依赖不能为空");
         }
         this.jdbcTemplate = jdbcTemplate;
         this.transactionTemplate = transactionTemplate;
+        this.opsSession = opsSession;
+    }
+
+    // ---------------------------------------------------------------------
+    // 写通道
+    // ---------------------------------------------------------------------
+
+    /**
+     * 一次写动作落在哪条连接、以什么租户表达式收口。
+     *
+     * <p><b>三个表达式字段是一体的，且都不是参数</b>：{@code tenantExpr} 与
+     * {@code scopeExpr} 只可能由通道决定，不由调用方传入——
+     * 这正是「平台档结构性写不到租户桶」的实现方式：SQL 文本里
+     * 根本没有可以填「另一个桶」的问号位置。
+     *
+     * <p>⚠️ {@code scopeExpr} 不是冗余的：{@code rag_source}/{@code rag_document}
+     * 的 {@code scope} 列默认 {@code 'TENANT'}，且有
+     * {@code *_scope_ck} 约束「{@code scope='PLATFORM' ⇔ tenant_id=哨兵}」。
+     * 全局写若只换租户列而不换 scope 列，会被该约束<b>直接拒绝</b>
+     * （约束不是策略，BYPASSRLS 也绕不过去）。
+     *
+     * @param tenantExpr SQL 里的租户表达式（{@code rag_current_tenant()} 或
+     *                   {@code rag_global_tenant_id()}）
+     * @param scopeExpr  SQL 里的作用域字面量（{@code 'TENANT'} 或 {@code 'PLATFORM'}）
+     * @param tenantId   回读时绑定的租户（平台档为哨兵常量，非入参）
+     * @param global     true = 运维通道（不设置会话租户）
+     */
+    private record WriteChannel(String tenantExpr,
+                                @NonNull String scopeExpr,
+                                @NonNull String tenantId,
+                                boolean global,
+                                JdbcTemplate template,
+                                TransactionTemplate tx) {
+
+        /** 应用通道：会话租户由 {@code app.tenant_id} 决定，RLS 同时兜底。 */
+        static WriteChannel ofTenant(JdbcTemplate jdbcTemplate, TransactionTemplate tx,
+                                     @NonNull String tenantId) {
+            return new WriteChannel("rag_current_tenant()", "'TENANT'", tenantId,
+                    false, jdbcTemplate, tx);
+        }
+
+        /** 运维通道：租户在 SQL 文本里就是全局哨兵函数，没有可替换的位置。 */
+        static WriteChannel ofGlobal(JdbcTemplate template, TransactionTemplate tx) {
+            return new WriteChannel("rag_global_tenant_id()", "'PLATFORM'",
+                    RagScope.GLOBAL_TENANT_ID, true, template, tx);
+        }
+
+        /**
+         * 事务内的先决步骤。
+         *
+         * <p>⚠️ 平台档<b>什么都不做</b>，而且<b>不能</b>改成「把哨兵写进会话变量」：
+         * {@code rag_current_tenant()} 撞哨兵直接 RAISE（SQLSTATE 42501），
+         * 那是迁移 V8 的越权封堵，属承重设计。
+         */
+        void open() {
+            if (global) {
+                return;
+            }
+            // ⚠️ 必须用 queryForObject() 而非 update()：set_config 是 SELECT（返回一行），
+            //    update() 期望「无结果集」，否则抛 DataIntegrityViolation
+            //    （A result was returned when none was expected）。
+            template.queryForObject(
+                    "SELECT set_config('app.tenant_id', ?, true)", String.class, tenantId);
+        }
+    }
+
+    /**
+     * 按作用域解析写通道，<b>并在通道的事务里</b>执行写动作。
+     *
+     * <p>事务与「会话窗」都由本方法负责，写站点只写业务 SQL——
+     * 因为「忘记开事务」的失败方式是静默的（会话变量立即失效、
+     * RLS 滤掉所有行、报告 0 行成功），不能指望每个站点各写一遍。
+     *
+     * <p>平台档整段动作包在 {@link RagOpsSessionPort#inGlobalCorpusSession} 内：
+     * 窗口外取不到连接，所以「忘了开窗口」的失败方式是异常而不是静默写错桶。
+     *
+     * @param context 管理上下文（作用域 + 可空租户）
+     * @param action  以通道为参数的写动作
+     * @param <T>     返回值
+     */
+    private <T> T writeVia(@NonNull RagManagementContext context,
+                           @NonNull Function<WriteChannel, T> action) {
+        if (context.scope() == RagCorpusScope.TENANT) {
+            return inTransaction(WriteChannel.ofTenant(
+                    jdbcTemplate, transactionTemplate,
+                    context.requireTenant().tenantId()), action);
+        }
+        if (context.scope() == RagCorpusScope.ALL) {
+            throw new IllegalStateException("跨租户盘点档不允许任何写动作（只读视图）");
+        }
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局语料写通道未接入：需要运维数据源（rag_ops），不回落应用角色");
+        }
+        return opsSession.inGlobalCorpusSession(
+                (opsTemplate, opsTx) -> inTransaction(
+                        WriteChannel.ofGlobal(opsTemplate, opsTx), action));
+    }
+
+    /**
+     * 「开事务 → {@link WriteChannel#open()} → 执行」三步；
+     * ⚠️ 三步顺序是承重结构：会话变量只在当前事务内有效。
+     */
+    private <T> T inTransaction(@NonNull WriteChannel channel,
+                                @NonNull Function<WriteChannel, T> action) {
+        return channel.tx().execute(status -> {
+            channel.open();
+            return action.apply(channel);
+        });
     }
 
     // ---------------------------------------------------------------------
@@ -95,7 +225,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
 
     @Override
     @NonNull
-    public CorpusSource registerSource(@NonNull RagTenantContext context,
+    public CorpusSource registerSource(@NonNull RagManagementContext context,
                                         @NonNull SourceRegistration registration,
                                         @NonNull String principalId) {
         // ⚠️ 登记态固定为 UNVERIFIED / PENDING / NONE：
@@ -105,17 +235,16 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
         //    「插入后按 created_at DESC 取最新一条」在并发登记下会取错行——
         //    两条登记的 created_at 可能相同，取到别人的记录。
         String sourceId = UUID.randomUUID().toString();
-        return transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
-            jdbcTemplate.update("""
+        return writeVia(context, ch -> {
+            ch.template().update("""
                     INSERT INTO rag_source
-                        (source_id, tenant_id, source_type, title, publisher, isbn, doi,
+                        (source_id, tenant_id, scope, source_type, title, publisher, isbn, doi,
                          trust_tier, ver_status, ver_method, ver_evidence, verified_at,
                          verified_by, ver_valid_days, license_status, object_ref, content_hash)
-                    VALUES (?::uuid, rag_current_tenant(), ?, ?, ?, ?, ?,
+                    VALUES (?::uuid, %s, %s, ?, ?, ?, ?, ?,
                             'UNVERIFIED', 'PENDING', 'NONE', NULL, NULL,
                             NULL, 365, 'PENDING'::rag_license_status, ?, ?)
-                    """,
+                    """.formatted(ch.tenantExpr(), ch.scopeExpr()),
                     sourceId, registration.sourceType(), registration.title(),
                     registration.publisher(),
                     blankToNull(registration.isbn()), blankToNull(registration.doi()),
@@ -123,8 +252,8 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             // ⚠️ 登记也必须留痕（RAG-D07 §2.5：「至少 INGEST（登记）必须落审计」）。
             //    与 INSERT 同事务——审计写不进去则登记整体回滚，
             //    避免出现「库里有来源但无登记审计」的无痕数据。
-            appendAuditWithinTenant(context.tenantId(), principalId, "INGEST", sourceId);
-            return findSourceWithinTenant(context.tenantId(), sourceId);
+            appendAuditWithinTenant(ch, principalId, "INGEST", sourceId);
+            return findSourceWithinTenant(ch.template(), ch.tenantId(), sourceId);
         });
     }
 
@@ -138,7 +267,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
      */
     @Override
     @NonNull
-    public BulkRegistrationResult registerSources(@NonNull RagTenantContext context,
+    public BulkRegistrationResult registerSources(@NonNull RagManagementContext context,
                                                 @NonNull List<SourceRegistration> registrations,
                                                 @NonNull String principalId) {
         List<BulkItemResult> items = new ArrayList<>(registrations.size());
@@ -227,18 +356,17 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                                        @NonNull String sourceId) {
         return transactionTemplate.execute(status -> {
             applyReadScope(context);
-            return findSourceWithinTenant(context.queryTenantId(), sourceId);
+            return findSourceWithinTenant(jdbcTemplate, context.queryTenantId(), sourceId);
         });
     }
 
     @Override
     @Nullable
-    public CorpusSource applyVerification(@NonNull RagTenantContext context,
+    public CorpusSource applyVerification(@NonNull RagManagementContext context,
                                           @NonNull String sourceId,
                                           @NonNull VerificationDecision decision) {
-        return transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
-            CorpusSource current = findSourceWithinTenant(context.tenantId(), sourceId);
+        return writeVia(context, ch -> {
+            CorpusSource current = findSourceWithinTenant(ch.template(), ch.tenantId(), sourceId);
             if (current == null) {
                 return null;
             }
@@ -276,7 +404,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                 licenseStatus = "RESTRICTED";
             }
 
-            jdbcTemplate.update("""
+            ch.template().update("""
                     UPDATE rag_source
                     SET ver_status = ?::rag_verification_status,
                         ver_method = ?::rag_verification_method,
@@ -293,8 +421,8 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                         review_started_at = CASE WHEN ?::rag_verification_status = 'IN_REVIEW'
                                                  THEN now() ELSE review_started_at END,
                         updated_at = now()
-                    WHERE tenant_id = rag_current_tenant() AND source_id = ?::uuid
-                    """,
+                    WHERE tenant_id = %s AND source_id = ?::uuid
+                    """.formatted(ch.tenantExpr()),
                     decision.targetStatus().name(), decision.verificationMethod().name(),
                     decision.evidenceRef(),
                     decision.targetStatus() == VerificationStatus.REJECTED
@@ -310,7 +438,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             //    若只改来源状态而留下载体 retrievable=TRUE，
             //    任何只看载体级标记的检索路径仍会召回已撤回语料。
             if (decision.targetStatus() == VerificationStatus.REVOKED) {
-                jdbcTemplate.update("""
+                ch.template().update("""
                         UPDATE rag_document
                         SET ver_status = 'REVOKED'::rag_verification_status,
                             retrievable = FALSE,
@@ -318,18 +446,18 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                             revoked_reason = ?,
                             license_status = 'RESTRICTED'::rag_license_status,
                             updated_at = now()
-                        WHERE tenant_id = rag_current_tenant() AND source_id = ?::uuid
-                        """, decision.evidenceRef(), sourceId);
+                        WHERE tenant_id = %s AND source_id = ?::uuid
+                        """.formatted(ch.tenantExpr()), decision.evidenceRef(), sourceId);
             }
 
             // ⚠️ 审计与状态变更同事务（RAG-D07 §2.5）。
             //    V3 迁移后 rag_access_audit 允许 ADMIT / REJECT 动作，
             //    使「审核员的判定行为」有独立事件流，而不必借道 INGEST
             //    （RAG-D07 §7 记载的缺口）。
-            appendAuditWithinTenant(context.tenantId(), decision.decidedBy(),
+            appendAuditWithinTenant(ch, decision.decidedBy(),
                     auditActionFor(decision.targetStatus()), sourceId);
 
-            return findSourceWithinTenant(context.tenantId(), sourceId);
+            return findSourceWithinTenant(ch.template(), ch.tenantId(), sourceId);
         });
     }
 
@@ -385,12 +513,12 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
 
     @Override
     @Nullable
-    public CorpusDocument applyDocumentVerification(@NonNull RagTenantContext context,
+    public CorpusDocument applyDocumentVerification(@NonNull RagManagementContext context,
                                                      @NonNull String documentId,
                                                      @NonNull DocumentVerificationDecision decision) {
-        return transactionTemplate.execute(status -> {
-            setTenant(context.tenantId());
-            CorpusDocument current = findDocumentWithinTenant(context.tenantId(), documentId);
+        return writeVia(context, ch -> {
+            CorpusDocument current = findDocumentWithinTenant(ch.template(),
+                    ch.tenantId(), documentId);
             if (current == null) {
                 return null;
             }
@@ -403,8 +531,8 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             // ⚠️ 载体不得高于来源：来源没过校验，载体不能自称 VERIFIED。
             //    来源状态必须在**同一事务**内读取——否则并发撤回来源时，
             //    可能读到「来源仍 VERIFIED」的旧快照而放行载体。
-            String sourceStatus = querySourceVerificationStatus(context.tenantId(),
-                    current.sourceId());
+            String sourceStatus = querySourceVerificationStatus(ch.template(),
+                    ch.tenantId(), current.sourceId());
             if (sourceStatus == null) {
                 throw new IllegalStateException("载体所属来源不存在：" + current.sourceId()
                         + "（来源缺失意味着无法判定「载体不得高于来源」）");
@@ -417,7 +545,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             boolean retrievable = DocumentVerification.retrievableAfter(decision.targetStatus());
             boolean revoked = decision.targetStatus() == VerificationStatus.REVOKED;
 
-            jdbcTemplate.update("""
+            ch.template().update("""
                     UPDATE rag_document
                     SET ver_status = ?::rag_verification_status,
                         retrievable = ?,
@@ -429,8 +557,8 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                                               THEN 'RESTRICTED'::rag_license_status
                                               ELSE license_status END,
                         updated_at = now()
-                    WHERE tenant_id = rag_current_tenant() AND document_id = ?::uuid
-                    """,
+                    WHERE tenant_id = %s AND document_id = ?::uuid
+                    """.formatted(ch.tenantExpr()),
                     decision.targetStatus().name(), retrievable,
                     decision.targetStatus().name(), decision.targetStatus().name(),
                     decision.evidenceRef(), decision.targetStatus().name(), documentId);
@@ -438,11 +566,11 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             // ⚠️ 审计与状态变更同事务（RAG-D07 §2.5）。
             //    载体级动作记在**来源**上：审计表没有「文档」维度，
             //    而「这个来源下的语料发生过什么」正是审计要回答的问题。
-            appendAuditWithinTenant(context.tenantId(), decision.decidedBy(),
+            appendAuditWithinTenant(ch, decision.decidedBy(),
                     DocumentVerification.auditActionFor(decision.targetStatus()),
                     current.sourceId());
 
-            return findDocumentWithinTenant(context.tenantId(), documentId);
+            return findDocumentWithinTenant(ch.template(), ch.tenantId(), documentId);
         });
     }
 
@@ -643,11 +771,11 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
     // ---------------------------------------------------------------------
 
     @Override
-    public void appendAudit(@NonNull RagTenantContext context, @NonNull String principalId,
+    public void appendAudit(@NonNull RagManagementContext context, @NonNull String principalId,
                              @NonNull String action, @Nullable String sourceId) {
-        transactionTemplate.executeWithoutResult(status -> {
-            setTenant(context.tenantId());
-            appendAuditWithinTenant(context.tenantId(), principalId, action, sourceId);
+        writeVia(context, ch -> {
+            appendAuditWithinTenant(ch, principalId, action, sourceId);
+            return null;
         });
     }
 
@@ -788,18 +916,6 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
     // ---------------------------------------------------------------------
 
     /**
-     * 建立租户上下文。
-     *
-     * <p>⚠️ 必须用 {@code queryForObject()} 而非 {@code update()}：
-     * {@code set_config} 是 SELECT（返回一行），{@code update()} 期望「无结果集」，
-     * 否则抛 {@code DataIntegrityViolation}（A result was returned when none was expected）。
-     */
-    private void setTenant(@NonNull String tenantId) {
-        jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
-                String.class, tenantId);
-    }
-
-    /**
      * 读侧按作用域建立会话上下文（平台全局档见 {@link RagSessionScope}）。
      *
      * <p>⚠️ 会话租户建好之后，租户谓词<b>仍按作用域显式绑定</b>
@@ -824,16 +940,21 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
     }
 
     /**
-     * 在<b>已建立租户上下文</b>的事务内查询来源。
+     * 在<b>已建立作用域会话</b>的事务内查询来源。
      *
      * <p>⚠️ 该方法<b>不</b>自己开事务——它假定调用方已在
      * {@code set_config} 之后调用（否则 RLS 会把它过滤成空，
      * 表现为「来源不存在」这类难以定位的静默失败）。
+     *
+     * <p>⚠️ {@code template} 必须由调用方给出：全局写回读走的是运维连接，
+     * 用字段里的应用连接去回读，会在窗口外取连接而抛错——
+     * 「查不到刚写入的那一行」这种表现，比直接报错更难查。
      */
     @Nullable
-    private CorpusSource findSourceWithinTenant(@NonNull String tenantId,
+    private CorpusSource findSourceWithinTenant(@NonNull JdbcTemplate template,
+                                                @NonNull String tenantId,
                                                 @NonNull String sourceId) {
-        List<CorpusSource> rows = jdbcTemplate.query("""
+        List<CorpusSource> rows = template.query("""
                 SELECT source_id, source_type, title, publisher, isbn, doi,
                        trust_tier, ver_status, ver_method, ver_evidence, verified_at,
                        verified_by, ver_valid_days, license_status, object_ref,
@@ -846,16 +967,17 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
     }
 
     /**
-     * 在<b>已建立租户上下文</b>的事务内查询载体。
+     * 在<b>已建立作用域会话</b>的事务内查询载体。
      *
      * <p>⚠️ 该方法<b>不</b>自己开事务——它假定调用方已在
      * {@code set_config} 之后调用（否则 RLS 会把它过滤成空，
      * 表现为「载体不存在」这类难以定位的静默失败）。
      */
     @Nullable
-    private CorpusDocument findDocumentWithinTenant(@NonNull String tenantId,
+    private CorpusDocument findDocumentWithinTenant(@NonNull JdbcTemplate template,
+                                                    @NonNull String tenantId,
                                                     @NonNull String documentId) {
-        List<CorpusDocument> rows = jdbcTemplate.query("""
+        List<CorpusDocument> rows = template.query("""
                 SELECT d.document_id, d.source_id, d.edition_id, d.carrier, d.title,
                        d.page_count, d.object_ref, d.parse_status, d.parser_version,
                        d.content_hash, d.created_at, d.updated_at,
@@ -880,16 +1002,29 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
      * @return 校验状态名；来源不存在返回 {@code null}
      */
     @Nullable
-    private String querySourceVerificationStatus(@NonNull String tenantId,
+    private String querySourceVerificationStatus(@NonNull JdbcTemplate template,
+                                                 @NonNull String tenantId,
                                                  @NonNull String sourceId) {
-        List<String> rows = jdbcTemplate.query(
+        List<String> rows = template.query(
                 "SELECT ver_status::text FROM rag_source"
                         + " WHERE tenant_id = ?::uuid AND source_id = ?::uuid",
                 (rs, i) -> rs.getString(1), tenantId, sourceId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    private void appendAuditWithinTenant(@NonNull String tenantId, @NonNull String principalId,
+    /**
+     * 在<b>已建立作用域会话</b>的事务内追加一条审计。
+     *
+     * <p>⚠️ 租户列取 {@link WriteChannel#tenantExpr()} 而非 {@code rag_current_tenant()}：
+     * 运维通道<b>不设置</b>会话租户（设哨兵会 RAISE 42501），
+     * 沿用会话函数的结果是 {@code tenant_id = NULL} → NOT NULL 违约，
+     * 整笔「状态变更 + 审计」回滚，表现为「全局语料谁都改不动」。
+     *
+     * <p>⚠️ 全局改动的<b>留痕同样不可省</b>：平台语料被谁放行、谁撤回，
+     * 影响的是所有租户，比单租户的审计更该有事件流（RAG-D07 §2.5 不因作用域而豁免）。
+     */
+    private void appendAuditWithinTenant(@NonNull WriteChannel channel,
+                                         @NonNull String principalId,
                                          @NonNull String action, @Nullable String sourceId) {
         // ⚠️ action 受 rag_access_audit_action_chk 约束
         //    （V3 迁移后：RETRIEVE/INGEST/CITE/EXPORT/REVOKE/ADMIT/REJECT），
@@ -898,11 +1033,11 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
         if (!AUDIT_ACTIONS.contains(action)) {
             throw new IllegalArgumentException("未知的审计动作：" + action);
         }
-        jdbcTemplate.update("""
+        channel.template().update("""
                 INSERT INTO rag_access_audit
                     (audit_id, tenant_id, principal_id, action, source_id)
-                VALUES (gen_random_uuid(), rag_current_tenant(), ?::uuid, ?, ?::uuid)
-                """,
+                VALUES (gen_random_uuid(), %s, ?::uuid, ?, ?::uuid)
+                """.formatted(channel.tenantExpr()),
                 principalId, action, sourceId);
     }
 

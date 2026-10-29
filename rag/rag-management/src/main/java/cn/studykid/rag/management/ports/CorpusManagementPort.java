@@ -11,7 +11,6 @@ import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.management.core.CorpusStatistics;
 import cn.studykid.rag.management.core.DocumentVerificationDecision;
 import cn.studykid.rag.management.core.RagManagementContext;
-import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
 import cn.studykid.rag.management.core.VerificationDecision;
@@ -24,10 +23,9 @@ import cn.studykid.rag.management.core.VerificationDecision;
  * 二者<b>不能合并</b>——检索面是 fail-closed 的自动闸门，
  * 管理面是带留痕与双人复核的<b>人工闸门</b>。
  *
- * <p><b>⚠️ 租户上下文的来源</b>：本端口的所有方法接收 {@link RagTenantContext}
- * 而非裸 {@code tenantId}——租户信息（含 G-3 权威门槛）的<b>权威源是 platform</b>
- * （RAG-D00 §4），RAG 库里<b>不存</b>租户清单（V4 迁移已移除 {@code rag_tenant}）。
- * 实现方在事务内 {@code set_config('app.tenant_id', ..., true)}，
+ * <p><b>⚠️ 租户上下文的来源</b>：本端口接收的租户信息（身份、G-3 权威门槛）
+ * 的<b>权威源是 platform</b>（RAG-D00 §4），RAG 库里<b>不存</b>租户清单（V4 迁移已移除
+ * {@code rag_tenant}）。实现方在事务内 {@code set_config('app.tenant_id', ..., true)}，
  * 使 V1 的 RLS FORCE 策略生效。
  *
  * <p><b>⚠️ 写入禁令</b>：本端口<b>不提供</b>物理删除语料的方法。
@@ -35,12 +33,17 @@ import cn.studykid.rag.management.core.VerificationDecision;
  * （RAG-D07 §8 INV-4-a：禁止把物理 DELETE 当作撤回手段，
  * 因为 DELETE 会级联抹除历史引用，破坏可溯源性）。
  *
- * <p><b>⚠️ 读方法收 {@link RagManagementContext}、写方法收 {@link RagTenantContext}</b>
- * （RAG-D11 第四刀·第一刀）：这不是风格不统一，而是<b>能力差异写进了类型</b>——
- * 读可以按三档作用域走（租户 / 平台全局 / 跨租户盘点），
- * 写<b>只可能对某个租户成立</b>。平台全局语料的写通道要落在独立运维数据源上
- * （第二刀），因此这里<b>刻意不给</b>「接收作用域的写方法」：
- * 全局写不存在入口，而不是「有入口但被 if 拦住」。
+ * <p><b>⚠️ 读写方法都收 {@link RagManagementContext}</b>（RAG-D11 第四刀·第一刀读、
+ * 第二刀写）：作用域是「这次动作落在哪一批行」的唯一答案，
+ * 租户档与平台档的区别<b>不在端口签名上表达成两个方法</b>，
+ * 而是由实现侧的<b>写通道</b>收口——
+ * 租户档走应用连接（{@code rag_current_tenant()}，RLS 兜底），
+ * 平台档走独立运维数据源（{@code rag_global_tenant_id()} 字面函数，
+ * 见 {@code RagOpsSessionPort}）。
+ *
+ * <p><b>⚠️ 跨租户盘点档（ALL）在任何写方法上都是错误</b>：
+ * 「同时往 N 个租户里写」不是本端口的能力，实现侧直接拒绝。
+ * 该拒绝的位置在实现层而不是控制器，因为控制器之外还有批量与工单入口。
  */
 public interface CorpusManagementPort {
 
@@ -54,12 +57,12 @@ public interface CorpusManagementPort {
      * 故本方法要求显式传入登记人——{@code rag_access_audit.principal_id}
      * 是 NOT NULL，且「谁采集的」是后续争议追溯的第一问。
      *
-     * @param context 租户上下文（由 platform 下发）
+     * @param context 作用域上下文（租户身份与门槛由 platform 下发；盘点档拒绝写）
      * @param registration 登记信息
      * @param principalId 登记人（UUID）
      * @return 登记后的来源视图
      */
-    @NonNull CorpusSource registerSource(@NonNull RagTenantContext context,
+    @NonNull CorpusSource registerSource(@NonNull RagManagementContext context,
                                          @NonNull SourceRegistration registration,
                                          @NonNull String principalId);
 
@@ -90,12 +93,12 @@ public interface CorpusManagementPort {
      * （{@code VerificationTransition.requireAllowed}），
      * 非法转移必须拒绝而非静默执行。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档；盘点档拒绝写）
      * @param sourceId 来源 ID
      * @param decision 校验决定（含证据与决定人）
      * @return 转移后的来源视图；来源不存在返回 {@code null}
      */
-    @Nullable CorpusSource applyVerification(@NonNull RagTenantContext context,
+    @Nullable CorpusSource applyVerification(@NonNull RagManagementContext context,
                                              @NonNull String sourceId,
                                              @NonNull VerificationDecision decision);
 
@@ -126,12 +129,12 @@ public interface CorpusManagementPort {
      * （{@code VerificationTransition.requireAllowed}），
      * 非法转移必须拒绝而非静默执行。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档；盘点档拒绝写）
      * @param documentId 载体 ID
      * @param decision 校验决定（含证据与决定人）
      * @return 转移后的载体视图；载体不存在返回 {@code null}
      */
-    @Nullable CorpusDocument applyDocumentVerification(@NonNull RagTenantContext context,
+    @Nullable CorpusDocument applyDocumentVerification(@NonNull RagManagementContext context,
                                                          @NonNull String documentId,
                                                          @NonNull DocumentVerificationDecision decision);
 
@@ -198,12 +201,12 @@ public interface CorpusManagementPort {
      *
      * <p>⚠️ RAG-D07 §2.5：「转移必须写审计」。审计表由 DB 触发器强制只追加。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档；盘点档拒绝写）
      * @param principalId 操作人
      * @param action 动作（RETRIEVE / INGEST / CITE / EXPORT / REVOKE / ADMIT / REJECT）
      * @param sourceId 关联来源（可为 null）
      */
-    void appendAudit(@NonNull RagTenantContext context, @NonNull String principalId,
+    void appendAudit(@NonNull RagManagementContext context, @NonNull String principalId,
                      @NonNull String action, @Nullable String sourceId);
 
     /** 单日检索次数。 */
@@ -315,13 +318,13 @@ public interface CorpusManagementPort {
      * 都发生在领域命令构造期——逐条调用能精确到「第几行为什么失败」，
      * 否则整批失败只会给出一个无指向的错误。
      *
-     * @param context 租户上下文
+     * @param context 作用域上下文（租户档／平台全局档；盘点档拒绝写）
      * @param registrations 登记命令列表（已是合法领域对象，构造期校验通过）
      * @param principalId 登记人（UUID），对整批统一留痕
      * @return 逐条结果（与入参同序同长）
      */
     @NonNull
-    BulkRegistrationResult registerSources(@NonNull RagTenantContext context,
+    BulkRegistrationResult registerSources(@NonNull RagManagementContext context,
                                            @NonNull List<SourceRegistration> registrations,
                                            @NonNull String principalId);
 }

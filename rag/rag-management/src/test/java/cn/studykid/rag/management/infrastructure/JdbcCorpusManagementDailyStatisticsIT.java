@@ -214,7 +214,7 @@ class JdbcCorpusManagementDailyStatisticsIT {
 
     /** 种一个来源（走管理端口，状态恒为 PENDING）。 */
     private String seedSource(RagTenantContext ctx) {
-        return repository.registerSource(ctx,
+        return repository.registerSource(RagManagementContext.forTenant(ctx),
                 new SourceRegistration(
                         "教材", "统计夹具教材-" + UUID.randomUUID(), "测试出版社",
                         "ISBN-" + UUID.randomUUID(), null, null, null),

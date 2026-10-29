@@ -2,6 +2,7 @@ package cn.studykid.rag.management.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -139,7 +140,7 @@ class RagManagementControllerTest {
                 VerificationStatus.VERIFIED, "ISBN:ref@2026-01-01", REVIEWER,
                 VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365);
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyVerification(TENANT, null, SCOPE_TENANT, SOURCE_ID, request));
+                () -> controller.applyVerification(TENANT, null, SCOPE_TENANT, SOURCE_ID, PLATFORM_CALLER, null, request));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
     }
 
@@ -159,7 +160,7 @@ class RagManagementControllerTest {
         ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
                 "教材", "人教版八年级上册数学", "人民教育出版社",
                 "9787100000000", null, "obj://book.pdf", "b".repeat(64), REVIEWER);
-        ManagementDtos.SourceResponse response = controller.registerSource(TENANT, null, SCOPE_TENANT, request);
+        ManagementDtos.SourceResponse response = controller.registerSource(TENANT, null, SCOPE_TENANT, PLATFORM_CALLER, null, request);
         assertNotNull(response);
         assertEquals(SOURCE_ID, response.sourceId());
         assertEquals("VERIFIED", response.verificationStatus());
@@ -202,7 +203,7 @@ class RagManagementControllerTest {
                         new ManagementDtos.BulkSourceItem(
                                 "教材", "无标识来源", "人民教育出版社", null, null, null, null)));
         ManagementDtos.BulkRegisterResponse response =
-                controller.bulkRegisterSources(TENANT, null, SCOPE_TENANT, request);
+                controller.bulkRegisterSources(TENANT, null, SCOPE_TENANT, PLATFORM_CALLER, null, request);
         assertEquals(2, response.total());
         assertEquals(1, response.succeeded());
         assertEquals(1, response.failed());
@@ -217,7 +218,7 @@ class RagManagementControllerTest {
     @DisplayName("批量导入缺租户头返回 400")
     void bulkImportWithoutTenantIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.bulkRegisterSources(null, null, SCOPE_TENANT,
+                () -> controller.bulkRegisterSources(null, null, SCOPE_TENANT, PLATFORM_CALLER, null,
                         new ManagementDtos.BulkRegisterRequest(REVIEWER, List.of(bulkItem()))));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
@@ -239,7 +240,7 @@ class RagManagementControllerTest {
                                 "教材", "哈希非法的来源", "人民教育出版社",
                                 "9787100000001", null, "obj://book2.pdf", "NOT-A-HASH")));
         ManagementDtos.BulkRegisterResponse response =
-                controller.bulkRegisterSources(TENANT, null, SCOPE_TENANT, request);
+                controller.bulkRegisterSources(TENANT, null, SCOPE_TENANT, PLATFORM_CALLER, null, request);
 
         assertEquals(2, response.total());
         assertEquals(1, response.succeeded(),
@@ -279,7 +280,7 @@ class RagManagementControllerTest {
     void missingDocumentIsNotFound() {
         when(port.applyDocumentVerification(any(), eq(DOCUMENT_ID), any())).thenReturn(null);
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID,
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID, PLATFORM_CALLER, null,
                         documentRequest(VerificationStatus.IN_REVIEW)));
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
     }
@@ -290,7 +291,7 @@ class RagManagementControllerTest {
         when(port.applyDocumentVerification(any(), eq(DOCUMENT_ID), any()))
                 .thenThrow(new IllegalStateException("非法的校验状态转移：REVOKED → VERIFIED"));
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID,
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID, PLATFORM_CALLER, null,
                         documentRequest(VerificationStatus.VERIFIED)));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
     }
@@ -302,7 +303,7 @@ class RagManagementControllerTest {
                 .thenThrow(new IllegalStateException("载体不得高于来源：来源当前校验状态为 PENDING，"
                         + "未通过校验的来源下的载体不允许置为 VERIFIED"));
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID,
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID, PLATFORM_CALLER, null,
                         documentRequest(VerificationStatus.VERIFIED)));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
         assertNotNull(ex.getReason());
@@ -314,7 +315,7 @@ class RagManagementControllerTest {
     @DisplayName("目标状态 PENDING 属于入参形态问题 → 400")
     void pendingTargetIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID,
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, DOCUMENT_ID, PLATFORM_CALLER, null,
                         documentRequest(VerificationStatus.PENDING)));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
@@ -323,7 +324,7 @@ class RagManagementControllerTest {
     @DisplayName("非法 documentId 返回 400（而不是让 PG 的 uuid 转换报 500）")
     void malformedDocumentIdIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, "not-a-uuid",
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT, "not-a-uuid", PLATFORM_CALLER, null,
                         documentRequest(VerificationStatus.IN_REVIEW)));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
@@ -332,7 +333,7 @@ class RagManagementControllerTest {
     @DisplayName("载体缺租户头返回 400")
     void documentVerificationWithoutTenantIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyDocumentVerification(null, null, SCOPE_TENANT, DOCUMENT_ID,
+                () -> controller.applyDocumentVerification(null, null, SCOPE_TENANT, DOCUMENT_ID, PLATFORM_CALLER, null,
                         documentRequest(VerificationStatus.IN_REVIEW)));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
@@ -343,7 +344,7 @@ class RagManagementControllerTest {
         when(port.applyDocumentVerification(any(), eq(DOCUMENT_ID), any()))
                 .thenReturn(sampleDocument(VerificationStatus.VERIFIED, true));
         ManagementDtos.DocumentResponse response = controller.applyDocumentVerification(
-                TENANT, null, SCOPE_TENANT, DOCUMENT_ID, documentRequest(VerificationStatus.VERIFIED));
+                TENANT, null, SCOPE_TENANT, DOCUMENT_ID, PLATFORM_CALLER, null, documentRequest(VerificationStatus.VERIFIED));
         assertEquals(DOCUMENT_ID, response.documentId());
         assertEquals("VERIFIED", response.verificationStatus());
         assertTrue(response.retrievable(), "VERIFIED 的载体必须可检索");
@@ -357,7 +358,7 @@ class RagManagementControllerTest {
         when(port.applyDocumentVerification(any(), eq(DOCUMENT_ID), any()))
                 .thenReturn(sampleDocument(VerificationStatus.REVOKED, false));
         ManagementDtos.DocumentResponse response = controller.applyDocumentVerification(
-                TENANT, null, SCOPE_TENANT, DOCUMENT_ID, documentRequest(VerificationStatus.REVOKED));
+                TENANT, null, SCOPE_TENANT, DOCUMENT_ID, PLATFORM_CALLER, null, documentRequest(VerificationStatus.REVOKED));
         assertEquals("REVOKED", response.verificationStatus());
         assertEquals(false, response.retrievable());
         assertNotNull(response.revokedAt());
@@ -651,17 +652,90 @@ class RagManagementControllerTest {
     }
 
     @Test
-    @DisplayName("写端点收到非 TENANT 作用域返回 409（写通道不借道全局档）")
-    void writeEndpointRejectsNonTenantScope() {
+    @DisplayName("⛔ 盘点档（ALL）写请求返回 409：没有「往全部租户写」这种动作")
+    void allScopeWriteIsConflict() {
         ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
                 "教材", "人教版八年级上册数学", "人民教育出版社",
                 "9787100000000", null, "obj://book.pdf", "b".repeat(64), REVIEWER);
-        for (String scope : List.of(SCOPE_PLATFORM, SCOPE_ALL)) {
-            ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                    () -> controller.registerSource(TENANT, null, scope, request));
-            assertEquals(HttpStatus.CONFLICT, ex.getStatusCode(), scope + " 档的写请求必须被拒");
-        }
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.registerSource(TENANT, null, SCOPE_ALL,
+                        PLATFORM_CALLER, "ALL", request));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode(),
+                "即使票据授权了 ALL，写端点也不该受理——那是语义错误，不是缺授权");
         verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("⛔ 平台档写：租户域令牌 403（域都不够格，与有没有票据无关）")
+    void platformWriteWithTenantCallerIsForbidden() {
+        ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
+                "教材", "人教版八年级上册数学", "人民教育出版社",
+                "9787100000000", null, "obj://book.pdf", "b".repeat(64), REVIEWER);
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.registerSource(null, null, SCOPE_PLATFORM,
+                        TENANT_CALLER, SCOPE_PLATFORM, request));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("⛔ 平台档写：平台域<b>登录</b>令牌（无票据声明）403")
+    void platformWriteWithoutTicketIsForbidden() {
+        ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
+                "教材", "人教版八年级上册数学", "人民教育出版社",
+                "9787100000000", null, "obj://book.pdf", "b".repeat(64), REVIEWER);
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.registerSource(null, null, SCOPE_PLATFORM,
+                        PLATFORM_CALLER, null, request));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("治理票据"),
+                "403 必须说清缺的是票据而不是身份：" + ex.getReason());
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("⛔ 平台档写：票据档位不符（拿 TENANT 票写全局）403")
+    void platformWriteWithMismatchedTicketIsForbidden() {
+        ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
+                "教材", "人教版八年级上册数学", "人民教育出版社",
+                "9787100000000", null, "obj://book.pdf", "b".repeat(64), REVIEWER);
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.registerSource(null, null, SCOPE_PLATFORM,
+                        PLATFORM_CALLER, SCOPE_TENANT, request));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("⛔ 平台档写同时带租户头返回 400（两种身份互斥，写侧同读侧纪律）")
+    void platformWriteWithTenantHeaderIsBadRequest() {
+        ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
+                "教材", "人教版八年级上册数学", "人民教育出版社",
+                "9787100000000", null, "obj://book.pdf", "b".repeat(64), REVIEWER);
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.registerSource(TENANT, null, SCOPE_PLATFORM,
+                        PLATFORM_CALLER, SCOPE_PLATFORM, request));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("✅ 平台档写：票据齐备时下传 PLATFORM 作用域且不带会话租户")
+    void platformWriteWithTicketReachesPort() {
+        when(port.registerSource(any(), any(), eq(REVIEWER))).thenReturn(sampleSource());
+        ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
+                "教材", "平台公共教材索引", "平台", 
+                "9787100000000", null, "obj://global.pdf", "b".repeat(64), REVIEWER);
+        controller.registerSource(null, null, SCOPE_PLATFORM,
+                PLATFORM_CALLER, SCOPE_PLATFORM, request);
+
+        ArgumentCaptor<RagManagementContext> captor =
+                ArgumentCaptor.forClass(RagManagementContext.class);
+        verify(port).registerSource(captor.capture(), any(), eq(REVIEWER));
+        RagManagementContext ctx = captor.getValue();
+        assertEquals(RagCorpusScope.PLATFORM, ctx.scope());
+        assertNull(ctx.sessionTenantId(),
+                "平台档绝不能带会话租户：带上了就是把全局语料写进某个租户的桶");
     }
 
     @Test

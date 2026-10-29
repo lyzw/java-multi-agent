@@ -26,6 +26,22 @@ public final class RagCallerAttributes {
     /** 请求属性名：验签通过的主体 ID（{@code sub} claim）。 */
     public static final String PRINCIPAL_ATTRIBUTE = "rag.caller.principal";
 
+    /**
+     * 请求属性名：治理票据声明的作用域（{@code rag_scope} claim）。
+     *
+     * <p><b>为什么单独一个属性而不是复用 {@link #DOMAIN_ATTRIBUTE}</b>：
+     * 「是平台域」与「被授权动全局语料」是两件事。平台控制台<b>登录</b>令牌
+     * 已经是平台域（能读自己的控制台），但任何平台域账号都能改全局语料
+     * 就是把「控制台账号」等同于「语料治理权」——
+     * 而全局语料影响的是<b>所有租户</b>的检索结果。
+     * 所以票据必须是一张<b>单独的短 TTL 令牌</b>，由平台在权限闸门之后签发，
+     * claim 里写明授权到哪一档（第四刀 §1.2）。
+     *
+     * <p>⚠️ 缺该属性 = 无票据（不是「票据内容为空字符串」）。
+     * 端点侧据此拒绝，且<b>绝不</b>回退去看请求头里自报的票据值。
+     */
+    public static final String TICKET_SCOPE_ATTRIBUTE = "rag.caller.ticket.scope";
+
     /** 租户域令牌（{@code aud=agent-platform}）：已强制与 {@code X-Tenant-Id} 归属绑定。 */
     public static final String DOMAIN_TENANT = "tenant";
 

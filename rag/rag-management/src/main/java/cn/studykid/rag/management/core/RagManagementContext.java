@@ -67,7 +67,12 @@ public record RagManagementContext(
     }
 
     /**
-     * 平台全局档：只允许读（写通道属第二刀）。
+     * 平台全局档：读走 {@code rag_app} + 哨兵谓词；写走独立运维数据源。
+     *
+     * <p>⚠️ 读写是<b>两条物理隔离的连接</b>，不是同一连接上的两个分支：
+     * 应用角色按设计写不出全局行（RLS 的 INSERT 策略含 {@code scope='TENANT'}），
+     * 那正是 RAG-D11 §2.1 的越权闸门，第二刀没有把它撬开——
+     * 全局写换的是<b>另一个角色</b>（{@code rag_ops}），不是同一角色放宽策略。
      *
      * @param minTrustTier 门槛（缺省由控制器按 {@code OFFICIAL_TUTORIAL} 回落）
      * @return 平台全局作用域上下文
@@ -115,10 +120,11 @@ public record RagManagementContext(
     /**
      * 写路径取租户上下文。
      *
-     * <p>⚠️ 平台档调用本方法会抛 {@link IllegalStateException} ——
-     * 这是<b>刻意的入口缺失</b>而非疏漏：全局语料的写通道必须走独立运维数据源
-     * （第二刀），不能借道 {@code rag_app} 连接，否则会同时打开 RAG-D11 §2.1
-     * 那条「应用角色写不出全局行 = 越权闸门」。
+     * <p>⚠️ 非租户档调用本方法会抛 {@link IllegalStateException}：
+     * 本方法<b>只回答「会话租户是谁」</b>，平台全局写的通道不在此处
+     * （那条路走独立的运维数据源，见 {@code RagOpsSessionPort}）。
+     * 因此「用平台档冒充某个租户写数据」在这里没有形态：
+     * 拿不到租户上下文，就拼不出带租户参数的 SQL。
      *
      * @return 租户上下文
      */
@@ -126,8 +132,8 @@ public record RagManagementContext(
     public RagTenantContext requireTenant() {
         if (tenant == null) {
             throw new IllegalStateException(
-                    "平台全局语料的写通道尚未开放（需独立运维数据源，属第四刀第二档）；"
-                            + "当前 " + scope + " 作用域只读");
+                    "只有租户档携带会话租户；当前 " + scope
+                            + " 作用域不接受租户上下文（平台全局写走运维通道）");
         }
         return tenant;
     }

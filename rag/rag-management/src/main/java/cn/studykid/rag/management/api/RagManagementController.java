@@ -180,8 +180,11 @@ public class RagManagementController {
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
             @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
             @Valid @RequestBody ManagementDtos.RegisterSourceRequest request) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
+        RagManagementContext tenant = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
         SourceRegistration registration = new SourceRegistration(
                 request.sourceType(), request.title(), request.publisher(),
                 request.isbn(), request.doi(), request.objectRef(), request.contentHash());
@@ -217,8 +220,11 @@ public class RagManagementController {
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
             @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
             @Valid @RequestBody ManagementDtos.BulkRegisterRequest request) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
+        RagManagementContext tenant = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
 
         // ⚠️ 构造期校验：把「ISBN/DOI 至少一」「内容哈希格式」等前置错误
         //    逐条归入响应失败列表，而不是抛 400 让整批报废。
@@ -340,8 +346,11 @@ public class RagManagementController {
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
             @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
             @PathVariable("sourceId") String sourceId,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
             @Valid @RequestBody ManagementDtos.VerificationRequest request) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
+        RagManagementContext tenant = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
         VerificationDecision decision = new VerificationDecision(
                 request.targetStatus(), request.evidenceRef(), request.decidedBy(),
                 request.verificationMethod(), request.trustTier(),
@@ -516,8 +525,11 @@ public class RagManagementController {
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
             @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
             @PathVariable("documentId") String documentId,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
             @Valid @RequestBody ManagementDtos.DocumentVerificationRequest request) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
+        RagManagementContext tenant = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
         // ⚠️ 路径参数先做形态校验：非 UUID 的 document_id 会被 PG 的
         //    `?::uuid` 转换拒绝，那会变成一条 500 的 SQL 错误——
         //    而它其实是调用方传参错误，应当是 400。
@@ -893,6 +905,62 @@ public class RagManagementController {
                     "跨租户盘点视图尚未开放：它需要平台运维数据源（BYPASSRLS 只读角色），"
                             + "属 RAG-D11 第四刀·第三档");
         };
+    }
+
+    /**
+     * 校验并归一<b>写侧作用域上下文</b>（RAG-D11 第四刀·第二刀）。
+     *
+     * <p><b>⚠️ 与读侧 {@link #requireManagementContext} 的差别只有一处：{@code ALL}</b>。
+     * 读侧对盘点档给 501（视图未开放），写侧对它是<b>语义错误</b>而非未实现——
+     * 「同时往 N 个租户里写」不是任何一档的定义，所以它不复用 501，
+     * 免得日后 A 档实现后这里被误当成「已经能写了」。
+     *
+     * <p><b>⚠️ 平台档写必须持治理票据</b>（第四刀 §1.2 / 红线 B1）：
+     * 平台域<b>登录令牌</b>本身不够——它能进控制台不代表能改全局语料。
+     * 票据由 platform 在权限闸门（{@code RESOURCE_MANAGE / rag_corpus}）之后签发，
+     * 由 {@code RagJwtAuthFilter} 验签后写入 request attribute；
+     * 缺该属性即 403，<b>不看</b>请求头里有没有自报票据（头是调用方可控的）。
+     *
+     * <p><b>⚠️ 票据档位必须与请求档位一致</b>：拿「盘点票据」来写全局语料
+     * 说明契约被误用；静默按请求头走会让「票据到底授权了什么」失去意义。
+     *
+     * @param tenantId 租户 ID 头
+     * @param minTrustTier 门槛头（可空 → 用默认门槛）
+     * @param scopeHeader 作用域头（可空 → 租户档）
+     * @param callerDomain 令牌域（由鉴权过滤器写入的 request attribute）
+     * @param ticketScope 治理票据声明的作用域（同上；缺省 null = 无票据）
+     * @return 归一后的作用域上下文
+     */
+    private RagManagementContext requireWriteContext(String tenantId, String minTrustTier,
+                                                     String scopeHeader, String callerDomain,
+                                                     String ticketScope) {
+        RagCorpusScope scope = parseScope(scopeHeader);
+        if (scope == RagCorpusScope.TENANT) {
+            return RagManagementContext.forTenant(
+                    requireTenantContext(tenantId, minTrustTier, scopeHeader));
+        }
+        if (scope == RagCorpusScope.ALL) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "跨租户盘点档是只读视图，不存在「往全部租户写」这种动作");
+        }
+        String domain = RagCallerAttributes.normalizeDomain(callerDomain);
+        if (!RagCallerAttributes.DOMAIN_PLATFORM.equals(domain)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "作用域 " + scope + " 只受理平台域令牌，当前调用方域：" + domain
+                            + "（租户域令牌与鉴权逃生门都不够格）");
+        }
+        RagCorpusScope granted = RagCorpusScope.parseTicket(ticketScope);
+        if (granted != scope) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "平台全局语料的写动作需要治理票据（scope=" + scope + "），当前票据声明："
+                            + (granted == null ? "无票据（登录令牌不含 rag_scope 声明）" : granted));
+        }
+        if (tenantId != null && !tenantId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "作用域 " + scope + " 表示平台全局语料，不应同时提供 "
+                            + TENANT_HEADER + "（=" + tenantId + "）");
+        }
+        return RagManagementContext.forPlatform(parseMinTrustTier(minTrustTier));
     }
 
     /**

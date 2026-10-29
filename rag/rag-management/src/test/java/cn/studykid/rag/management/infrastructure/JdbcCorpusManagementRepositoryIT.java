@@ -225,7 +225,7 @@ class JdbcCorpusManagementRepositoryIT {
     @Test
     @DisplayName("RLS 隔离：租户 T 看不到租户 U 的来源")
     void crossTenantIsolationEnforced() {
-        CorpusSource source = repository.registerSource(ctxU,
+        CorpusSource source = repository.registerSource(RagManagementContext.forTenant(ctxU),
                 new SourceRegistration("教材", "租户U的教材", "人民教育出版社",
                         "9787100000002", null, "obj://book.pdf", "b".repeat(64)),
                 REVIEWER);
@@ -249,13 +249,13 @@ class JdbcCorpusManagementRepositoryIT {
         String id = source.sourceId();
 
         // 先走到 REJECTED
-        repository.applyVerification(ctxT, id, new VerificationDecision(
+        repository.applyVerification(RagManagementContext.forTenant(ctxT), id, new VerificationDecision(
                 VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
-        repository.applyVerification(ctxT, id, new VerificationDecision(
+        repository.applyVerification(RagManagementContext.forTenant(ctxT), id, new VerificationDecision(
                 VerificationStatus.REJECTED, "证据不足", REVIEWER, VerificationMethod.NONE, null, 365));
 
         // 试图 REJECTED → VERIFIED（禁止）
-        assertThrows(IllegalStateException.class, () -> repository.applyVerification(ctxT, id,
+        assertThrows(IllegalStateException.class, () -> repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
                         "ISBN:ref@2026-01-01", REVIEWER, 365)));
 
@@ -274,14 +274,14 @@ class JdbcCorpusManagementRepositoryIT {
         CorpusSource source = register("9787100000004", "待撤回教材");
         String id = source.sourceId();
 
-        repository.applyVerification(ctxT, id, VerificationDecision.revoke("权利人通知", LEGAL));
+        repository.applyVerification(RagManagementContext.forTenant(ctxT), id, VerificationDecision.revoke("权利人通知", LEGAL));
         CorpusSource revoked = repository.findSource(RagManagementContext.forTenant(ctxT), id);
         assertNotNull(revoked);
         assertEquals(VerificationStatus.REVOKED, revoked.verificationStatus());
         assertEquals("RESTRICTED", revoked.licenseStatus(),
                 "撤回必须同时关闭版权轴（G-4），否则只看版权轴的路径仍可能放行");
 
-        assertThrows(IllegalStateException.class, () -> repository.applyVerification(ctxT, id,
+        assertThrows(IllegalStateException.class, () -> repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 new VerificationDecision(VerificationStatus.IN_REVIEW, "复活尝试", REVIEWER,
                         VerificationMethod.NONE, null, 365)));
         assertEquals(VerificationStatus.REVOKED,
@@ -294,9 +294,9 @@ class JdbcCorpusManagementRepositoryIT {
         CorpusSource source = register("9787100000005", "正常审核教材");
         String id = source.sourceId();
 
-        repository.applyVerification(ctxT, id, new VerificationDecision(
+        repository.applyVerification(RagManagementContext.forTenant(ctxT), id, new VerificationDecision(
                 VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
-        CorpusSource verified = repository.applyVerification(ctxT, id,
+        CorpusSource verified = repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
                         "ISBN:https://example/9787100000005@2026-10-22", REVIEWER, 365));
         assertNotNull(verified);
@@ -324,11 +324,11 @@ class JdbcCorpusManagementRepositoryIT {
         CorpusSource source = register("9787100000006", "申诉教材");
         String id = source.sourceId();
 
-        repository.applyVerification(ctxT, id, new VerificationDecision(
+        repository.applyVerification(RagManagementContext.forTenant(ctxT), id, new VerificationDecision(
                 VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
-        repository.applyVerification(ctxT, id, new VerificationDecision(
+        repository.applyVerification(RagManagementContext.forTenant(ctxT), id, new VerificationDecision(
                 VerificationStatus.REJECTED, "证据不足", REVIEWER, VerificationMethod.NONE, null, 365));
-        CorpusSource appealed = repository.applyVerification(ctxT, id,
+        CorpusSource appealed = repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 new VerificationDecision(VerificationStatus.IN_REVIEW, "补充证据后重审",
                         REVIEWER, VerificationMethod.NONE, null, 365));
         assertNotNull(appealed);
@@ -344,9 +344,9 @@ class JdbcCorpusManagementRepositoryIT {
     void staleSourcesExcludedByDefault() {
         CorpusSource source = register("9787100000007", "过期教材");
         String id = source.sourceId();
-        repository.applyVerification(ctxT, id, new VerificationDecision(
+        repository.applyVerification(RagManagementContext.forTenant(ctxT), id, new VerificationDecision(
                 VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
-        repository.applyVerification(ctxT, id,
+        repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
                         "ISBN:ref@2026-01-01", REVIEWER, 1));
 
@@ -376,9 +376,9 @@ class JdbcCorpusManagementRepositoryIT {
     void statisticsDistinguishStoredFromRetrievable() {
         CorpusSource source = register("9787100000008", "统计教材");
         String id = source.sourceId();
-        repository.applyVerification(ctxT, id, new VerificationDecision(
+        repository.applyVerification(RagManagementContext.forTenant(ctxT), id, new VerificationDecision(
                 VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
-        repository.applyVerification(ctxT, id,
+        repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
                         "ISBN:ref@2026-01-01", REVIEWER, 1));
 
@@ -405,12 +405,12 @@ class JdbcCorpusManagementRepositoryIT {
         // ⚠️ 必须用**租户 U 的上下文**登记来源，再用 T 的上下文去审核——
         //    若用 T 登记却期望 T 查不到，断言本身就是矛盾的
         //    （2026-10-22 实测踩中：批量替换把 register(U,…) 改成了固定 ctxT）。
-        CorpusSource source = repository.registerSource(ctxU,
+        CorpusSource source = repository.registerSource(RagManagementContext.forTenant(ctxU),
                 new SourceRegistration("教材", "租户U教材", "人民教育出版社",
                         "9787100000009", null, "obj://book.pdf", "b".repeat(64)),
                 REVIEWER);
         String id = source.sourceId();
-        CorpusSource result = repository.applyVerification(ctxT, id,
+        CorpusSource result = repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
                         "ISBN:ref@2026-01-01", REVIEWER, 365));
         assertNull(result, "跨租户审核应查无此源（RLS 过滤）");
@@ -423,7 +423,7 @@ class JdbcCorpusManagementRepositoryIT {
      * 租户上下文由 platform 下发（{@link RagTenantContext}）。
      */
     private CorpusSource register(String isbn, String title) {
-        return repository.registerSource(ctxT,
+        return repository.registerSource(RagManagementContext.forTenant(ctxT),
                 new SourceRegistration("教材", title, "人民教育出版社", isbn, null,
                         "obj://book.pdf", "b".repeat(64)),
                 REVIEWER);
@@ -433,7 +433,7 @@ class JdbcCorpusManagementRepositoryIT {
      * 在指定租户下登记一条来源（供载体级夹具使用）。
      */
     private CorpusSource registerIn(RagTenantContext ctx, String isbn, String title) {
-        return repository.registerSource(ctx,
+        return repository.registerSource(RagManagementContext.forTenant(ctx),
                 new SourceRegistration("教材", title, "人民教育出版社", isbn, null,
                         "obj://book.pdf", "b".repeat(64)),
                 REVIEWER);
@@ -452,11 +452,11 @@ class JdbcCorpusManagementRepositoryIT {
         // ⚠️ 载体初始态是 PENDING（DB 默认），必须先认领才能谈「通过」——
         //    否则被拒的原因是「PENDING 直通 VERIFIED 非法」，
         //    而<b>不是</b>本用例要验的「载体不得高于来源」，断言就落空了。
-        repository.applyDocumentVerification(ctxM, documentId,
+        repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM), documentId,
                 new DocumentVerificationDecision(VerificationStatus.IN_REVIEW, "认领", REVIEWER,
                         VerificationMethod.NONE, null, 365));
 
-        assertThrows(IllegalStateException.class, () -> repository.applyDocumentVerification(ctxM,
+        assertThrows(IllegalStateException.class, () -> repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM),
                 documentId, DocumentVerificationDecision.approve(VerificationMethod.ISBN,
                         "ISBN:ref@2026-10-23", REVIEWER, 365)),
                 "来源未通过校验时载体不得自称 VERIFIED");
@@ -477,10 +477,10 @@ class JdbcCorpusManagementRepositoryIT {
 
         // ⚠️ 载体初始态是 PENDING：必须走 PENDING → IN_REVIEW → VERIFIED
         //    （载体复用来源级转移表，T-12 禁止跳过 IN_REVIEW 直通 VERIFIED）。
-        repository.applyDocumentVerification(ctxM, documentId,
+        repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM), documentId,
                 new DocumentVerificationDecision(VerificationStatus.IN_REVIEW, "认领", REVIEWER,
                         VerificationMethod.NONE, null, 365));
-        CorpusDocument updated = repository.applyDocumentVerification(ctxM, documentId,
+        CorpusDocument updated = repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM), documentId,
                 DocumentVerificationDecision.approve(VerificationMethod.ISBN,
                         "ISBN:ref@2026-10-23", REVIEWER, 365));
         assertNotNull(updated);
@@ -497,7 +497,7 @@ class JdbcCorpusManagementRepositoryIT {
         approveSource(ctxM, source.sourceId());
         String documentId = seedDocument(ctxM, source.sourceId(), "第三方扫描版", "SCAN", "CHUNKED");
 
-        CorpusDocument revoked = repository.applyDocumentVerification(ctxM, documentId,
+        CorpusDocument revoked = repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM), documentId,
                 DocumentVerificationDecision.revoke("权利人要求下架", LEGAL));
         assertNotNull(revoked);
         assertEquals(VerificationStatus.REVOKED, revoked.verificationStatus());
@@ -523,10 +523,10 @@ class JdbcCorpusManagementRepositoryIT {
         CorpusSource source = registerIn(ctxM, "9787100000013", "终态教材");
         approveSource(ctxM, source.sourceId());
         String documentId = seedDocument(ctxM, source.sourceId(), "被撤回载体", "PDF", "CHUNKED");
-        repository.applyDocumentVerification(ctxM, documentId,
+        repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM), documentId,
                 DocumentVerificationDecision.revoke("权利人要求下架", LEGAL));
 
-        assertThrows(IllegalStateException.class, () -> repository.applyDocumentVerification(ctxM,
+        assertThrows(IllegalStateException.class, () -> repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM),
                 documentId, DocumentVerificationDecision.approve(VerificationMethod.ISBN,
                         "ISBN:ref@2026-10-23", REVIEWER, 365)),
                 "REVOKED 是终态（T-10）");
@@ -604,9 +604,9 @@ class JdbcCorpusManagementRepositoryIT {
      * 把来源推进到 VERIFIED。
      */
     private void approveSource(RagTenantContext ctx, String sourceId) {
-        repository.applyVerification(ctxM, sourceId, new VerificationDecision(
+        repository.applyVerification(RagManagementContext.forTenant(ctxM), sourceId, new VerificationDecision(
                 VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
-        repository.applyVerification(ctxM, sourceId,
+        repository.applyVerification(RagManagementContext.forTenant(ctxM), sourceId,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
                         "ISBN:ref@2026-10-23", REVIEWER, 365));
     }

@@ -70,4 +70,35 @@ public enum RagCorpusScope {
     public boolean requiresPlatformCaller() {
         return this != TENANT;
     }
+
+    /**
+     * 解析<b>治理票据</b>里声明的作用域（RAG-D11 第四刀·第二刀）。
+     *
+     * <p><b>与 {@link #parse} 的两处刻意差别</b>：
+     * <ol>
+     *   <li><b>空值不回落 {@link #TENANT}</b>。请求头缺省是「租户档」，
+     *       但票据缺省必须是「没授权」——
+     *       若空白解析成 TENANT，则「平台域登录令牌（根本没带 rag_scope）」
+     *       会被当成「授权了租户档」，而平台档写闸门比对的正是这个值。</li>
+     *   <li><b>非法值不抛异常</b>。头的错值是调用方的请求错误（400）；
+     *       票据的错值是「这张票不授权任何档」，真实语义是 403。
+     *       在这里抛异常会把授权问题伪装成格式问题。</li>
+     * </ol>
+     *
+     * @param raw 票据 claim 的原始值（可为 null／空白／非法值 → {@code null}）
+     * @return 档位；无有效声明时 {@code null}
+     */
+    @Nullable
+    public static RagCorpusScope parseTicket(@Nullable String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String normalized = raw.trim().toUpperCase(Locale.ROOT);
+        for (RagCorpusScope scope : values()) {
+            if (scope.name().equals(normalized)) {
+                return scope;
+            }
+        }
+        return null;
+    }
 }

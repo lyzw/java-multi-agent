@@ -1,5 +1,6 @@
 package cn.studykid.rag.management.infrastructure;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -8,6 +9,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
+import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
 import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 import cn.studykid.rag.management.ports.DictionaryPort;
@@ -67,8 +69,16 @@ public class RagManagementConfig {
     public CorpusManagementPort corpusManagementPort(
             JdbcTemplate jdbcTemplate,
             @Qualifier("ragManagementTransactionTemplate")
-            TransactionTemplate transactionTemplate) {
-        return new JdbcCorpusManagementRepository(jdbcTemplate, transactionTemplate);
+            TransactionTemplate transactionTemplate,
+            ObjectProvider<RagOpsSessionPort> opsSessionProvider) {
+        // ⚠️ 用 ObjectProvider 而不是直接注入 RagOpsSessionPort：
+        //    运维通道是<b>可选装配</b>（裁剪掉 ops 配置时管理面仍要能启动、
+        //    租户档仍要能写），但「缺失」绝不能变成「平台档也悄悄能跑」——
+        //     repository 里对 null 的处置是抛 RagOpsUnavailableException（503）。
+        //    若改成 required 注入，被裁掉 ops 的部署会在<b>启动期</b>失败，
+        //    那是比「全局写不可用」大得多的影响面。
+        return new JdbcCorpusManagementRepository(
+                jdbcTemplate, transactionTemplate, opsSessionProvider.getIfAvailable());
     }
 
     /**

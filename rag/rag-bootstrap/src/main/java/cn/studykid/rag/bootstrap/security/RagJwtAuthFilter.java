@@ -67,6 +67,15 @@ public final class RagJwtAuthFilter implements Filter {
     /** 时钟偏移容忍（秒）：公网 NTP 漂移不应造成误杀。 */
     private static final long CLOCK_LEEWAY_SECONDS = 30;
 
+    /**
+     * 治理票据里声明作用域的 claim 名（RAG-D11 第四刀·第二刀）。
+     *
+     * <p>与平台侧签发处（{@code PlatformRagGovernanceTicketService}）<b>同名同义</b>：
+     * 两侧各写一份字符串，改一处必改另一处，否则表现为「票据签了但 RAG 不认」，
+     * 而那条 403 消息看起来像权限不足。
+     */
+    static final String TICKET_SCOPE_CLAIM = "rag_scope";
+
     private final ObjectMapper mapper = new ObjectMapper();
     private final List<TokenDomain> domains;
     private final boolean enabled;
@@ -184,6 +193,13 @@ public final class RagJwtAuthFilter implements Filter {
         //    attribute 不是 header：它只能由本过滤器在验签通过后写入，调用方伪造不了。
         req.setAttribute(RagCallerAttributes.DOMAIN_ATTRIBUTE, auth.domain());
         req.setAttribute(RagCallerAttributes.PRINCIPAL_ATTRIBUTE, auth.principalId());
+        // 票据声明：只在<b>真有值</b>时写属性。
+        // ⚠️ 不写「空串」——空串在属性里是「存在且为空」，
+        //    而端点要区分的是「这张票声明了某档」与「压根没带票」；
+        //    缺失由 RagCorpusScope#parseTicket 归一成 null（没授权），语义唯一。
+        if (auth.ticketScope() != null && !auth.ticketScope().isBlank()) {
+            req.setAttribute(RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, auth.ticketScope());
+        }
         // 日志上下文：只写验签通过后的 claim，不写请求头。
         // 平台域令牌无租户 claim（跨租户治理是设计内行为）→ 日志租户位保持 "-"。
         LogContext.setIdentity(auth.tenantId(), auth.principalId());
@@ -224,7 +240,10 @@ public final class RagJwtAuthFilter implements Filter {
                     tenantDomain ? text(claims, "tenant_id") : null,
                     tenantDomain,
                     tenantDomain ? RagCallerAttributes.DOMAIN_TENANT
-                            : RagCallerAttributes.DOMAIN_PLATFORM);
+                            : RagCallerAttributes.DOMAIN_PLATFORM,
+                    // 票据声明只认 claim，不认任何请求头：头的值是调用方可控的，
+                    // claim 的值受签名保护——把两者混为一谈等于没有闸门。
+                    tenantDomain ? null : text(claims, TICKET_SCOPE_CLAIM));
         }
         return null;
     }
@@ -264,12 +283,15 @@ public final class RagJwtAuthFilter implements Filter {
     }
 
     /**
-     * 验签通过的调用方身份（域 + 可绑定租户）。
+     * 验签通过的调用方身份（域 + 可绑定租户 + 治理票据声明）。
      *
      * @param domain 令牌域（{@code RagCallerAttributes.DOMAIN_TENANT} / {@code DOMAIN_PLATFORM}）；
      *               必须随身份一起向下传，否则端点无从判定调用方能否使用平台级作用域
+     * @param ticketScope 平台域令牌里的 {@code rag_scope} claim（租户域恒为 null，
+     *                    因为「用租户身份换全局治理票据」不是这条路；
+     *                    登录令牌没这个 claim → 同样是 null，即「够格但没授权」）
      */
     record AuthenticatedToken(String principalId, String tenantId, boolean tenantBinding,
-                              String domain) {
+                              String domain, String ticketScope) {
     }
 }

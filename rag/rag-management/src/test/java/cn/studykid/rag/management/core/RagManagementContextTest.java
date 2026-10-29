@@ -55,13 +55,17 @@ class RagManagementContextTest {
     }
 
     @Test
-    @DisplayName("⛔ 平台档拿不到租户上下文：全局写通道在本刀根本不存在入口")
-    void platformScopeHasNoWriteEntry() {
+    @DisplayName("⛔ 平台档拿不到「会话租户」：全局写不借道租户身份，连第二刀也不借")
+    void platformScopeHasNoTenantSession() {
         RagManagementContext ctx = RagManagementContext.forPlatform(TrustTier.OFFICIAL_TUTORIAL);
         IllegalStateException ex =
                 assertThrows(IllegalStateException.class, ctx::requireTenant);
-        assertTrue(ex.getMessage().contains("运维数据源"),
-                "异常要指向第二刀的解法，而不是让人以为换个参数就能写：" + ex.getMessage());
+        // ⚠️ 第二刀把全局写通道接通了，但 requireTenant() <b>仍然</b>抛：
+        //    通道的形状是「另一条连接 + SQL 里的哨兵字面量」，不是「一个租户身份」。
+        //    如果这里改成返回哨兵，rag_current_tenant() 会撞 V8 的越权封堵直接 RAISE 42501，
+        //    等于把「全局写」伪装成「以平台这个租户的身份写」——两条路必须继续分开。
+        assertTrue(ex.getMessage().contains("运维通道"),
+                "异常要指向全局写的真实解法，而不是让人以为换个参数就能写：" + ex.getMessage());
     }
 
     @Test
