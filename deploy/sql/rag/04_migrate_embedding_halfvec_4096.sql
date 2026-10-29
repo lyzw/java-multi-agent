@@ -13,6 +13,13 @@
 -- 执行方式：由库 owner 在 agent-pg17 容器内对 study_rag 执行。
 --   ⚠️ 先在事务里 dry-run（结尾 ROLLBACK），确认 ALTER/DELETE 都能过，再原样改成 COMMIT 跑第二遍。
 --   ⚠️ 共享业务库：禁止 DROP DATABASE / DROP SCHEMA，本脚本只做列级 ALTER 与行级 DELETE。
+--
+-- ⚠️ 顺序纪律（存量库改动是**正确性**要求，不是风格问题；教训来自已退役的
+--   scripts/rag-v7-to-v8-retrofit-check.sh，全文记在 01_rag_ddl.sql 头注释）：
+--   改表示法时恒为 **先摘约束 → 再回填数据 → 最后收 NOT NULL / 重建约束**。
+--   全新库里回填影响 0 行、旧 CHECK 永不被触发，顺序反了照样全绿 ——
+--   所以「01 空库复放通过」不能作为「存量库能升上来」的证据，本类脚本才是。
+--   本脚本用的是同一纪律的另一种形态：旧向量全部作废，先 TRUNCATE 再 ALTER TYPE。
 
 SET search_path TO rag, public;
 -- 共享库上 ALTER 要拿 ACCESS EXCLUSIVE 锁；拿不到就快速失败，

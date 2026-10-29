@@ -3,8 +3,32 @@
 -- 【来源】迁移脚本 V1→V8 在全新空库逐个实跑（0 错误）后 pg_dump 导出，
 --   再空库复放验证等价（11 表 / 135 列 / 53 约束 / 9 枚举 / 36 索引 /
 --   11 RLS 开启 / 35 RLS 策略）。
---   ⚠️ 远程 study_rag 的 Flyway 只到 V6，缺 V7/V8 的全局双作用域改造。
+--   远程 study_rag 已按本形状就地收敛（2026-10-29 只读实测：rag 11 张基表、
+--   8 张有 scope 列、rag.*.tenant_id 无一条可空、全局字典 4 行在哨兵桶、
+--   rag_chunk_embedding_hnsw_idx 不存在、库里已无 flyway_schema_history 表）。
 -- 【地位】db/migration 下 V1~V8 已删除，本文件即 rag 结构唯一权威定义。
+--
+-- 【存量库改动纪律 —— 原 scripts/rag-v7-to-v8-retrofit-check.sh 的教训，脚本已退役】
+--   「空库复放全绿」只证明**新库**能得到这个形状，不证明**已有数据的库**升得上来：
+--   新库里回填 UPDATE 影响 0 行，被旧表示法钉住的那条 CHECK 根本不会被触发，
+--   顺序写错了也测不出来。这个坑实测存在过 —— V8 的字典收敛段先执行
+--   `UPDATE … SET tenant_id = 哨兵 WHERE tenant_id IS NULL`、后删 V7 的
+--   rag_dictionary_scope_ck（PLATFORM ⇒ tenant_id IS NULL），
+--   在已发布 V7 全局字典的库上 ERROR: violates check constraint，在全新库上全绿。
+--   ⇒ 要改存量库**不要重放本文件**（它是 CREATE TABLE，不是幂等 ALTER）；
+--     按 04_migrate_embedding_halfvec_4096.sql 写列级迁移，顺序恒为
+--     **先摘约束 → 再回填数据 → 最后收 NOT NULL / 重建约束**（顺序是正确性要求，不是风格问题），
+--     并沿用它的两条：事务内先 dry-run（结尾 ROLLBACK）、共享库禁止 DROP DATABASE/SCHEMA。
+--   ⚠️ 退役理由如实记录：它的被测对象（V7→V8 迁移路径）随 826d77b 删迁移链一起消失，
+--     且现库已不可能处于 NULL 表示法（tenant_id 全表 NOT NULL），脚本实跑第一步就 die。
+--     它另外两条仍然有效的教训不丢（已核对确实还在被使用，不是「我以为写过了」）：
+--       ① 跨桶 UPDATE/DELETE 被 RLS 挡住的表现是**影响 0 行、不报错**（只有 INSERT 才抛），
+--          所以断言要核对真实状态、别断言错误文案 —— 落在
+--          scripts/rag-dict-scope-counterproof.sh 的 super_val() 注释与 P7-1 用例；
+--       ② 无租户上下文时 rag_current_tenant() 返回 NULL 且**不报错**（自动提交会话里 set_config
+--          随即失效），夹具清理/断言前必须先在同一事务内 set_config('app.tenant_id', …, true) ——
+--          落在 JdbcTenantScopedGeneration 的类注释与 rag-dict 脚本的 app_psql_as()。
+--
 -- 【手工补写】pg_dump 不导出扩展本体，而 rag_chunk_embedding.embedding 依赖
 --   public.halfvec(4096)（同一 vector 扩展提供的半精度类型），缺下面两条会停在
 --   CREATE TABLE rag.rag_chunk_embedding：
