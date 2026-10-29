@@ -9,18 +9,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
+import cn.studykid.rag.infrastructure.ops.RagOpsDataSourceProvider;
+import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
 import cn.studykid.rag.management.core.CorpusDocument;
 import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.CorpusIssues;
@@ -40,12 +45,14 @@ import cn.studykid.rag.management.ports.CorpusManagementPort;
  * （指向已应用 {@code rag} 迁移的 PostgreSQL 17 + pgvector 实例）。
  * 未设置则整类跳过——避免在无 DB 的 CI/本地环境报红。
  *
- * <p><b>⚠️ 覆盖重点</b>：本 IT 验证三件<b>只有真 DB 才能证明</b>的事：
+ * <p><b>⚠️ 覆盖重点</b>：本 IT 验证四件<b>只有真 DB 才能证明</b>的事：
  * <ol>
  *   <li><b>RLS 跨租户隔离</b>：租户 T 看不到租户 U 的来源；</li>
  *   <li><b>状态机在落库路径上真正生效</b>：非法转移被拒且<b>库中状态未变</b>
  *       （仅断言「抛异常」不够——必须断言「没写进去」）；</li>
- *   <li><b>审计与状态变更同事务</b>：状态变更后审计表确有对应行。</li>
+ *   <li><b>审计与状态变更同事务</b>：状态变更后审计表确有对应行；</li>
+ *   <li><b>全局桶的读与写分属两条连接</b>（第二刀）：G 档写只能经运维角色落进哨兵桶，
+ *       而应用角色<b>即使绕过管理台</b>也写不进那一桶。</li>
  * </ol>
  */
 class JdbcCorpusManagementRepositoryIT {
@@ -66,6 +73,19 @@ class JdbcCorpusManagementRepositoryIT {
     private static final String PG_ADMIN_PASSWORD_ENV = "IT_RAG_PG_ADMIN_PASSWORD";
 
     /**
+     * 运维通道（{@code rag_ops}）连接环境变量名。
+     *
+     * <p><b>G 档写路径只有它能证明</b>：{@code RagOpsDataSourceProvider} 第一次进窗
+     * 会查实角色（须 BYPASSRLS、须非超级用户），这是「配错了不会立刻报错」的那类属性，
+     * 用替身连一次就什么都没验到。未配置时 G-1/G-2 跳过，
+     * 而 G-3～G-6（未接入 fail-closed、A 档拒写、{@code rag_app} 写不了全局行）
+     * <b>不需要</b>它，照常运行——那几条恰恰是「通道存在也没把闸门打开」的证据。
+     */
+    private static final String PG_OPS_URL_ENV = "IT_RAG_OPS_URL";
+    private static final String PG_OPS_USER_ENV = "IT_RAG_OPS_USERNAME";
+    private static final String PG_OPS_PASSWORD_ENV = "IT_RAG_OPS_PASSWORD";
+
+    /**
      * 数据库账号/口令环境变量名。
      *
      * <p>⚠️ 必须与 URL **分开**提供——见 {@link #setup()} 的说明。
@@ -84,6 +104,9 @@ class JdbcCorpusManagementRepositoryIT {
 
     /** 管理员连接（可为 null：未配置时全局用例跳过）。 */
     private JdbcTemplate adminJdbcTemplate;
+
+    /** 本用例创建的运维通道（池必须随用例关闭，否则 IT 之间会留下持 BYPASSRLS 的连接）。 */
+    private RagOpsDataSourceProvider opsProvider;
 
     /**
      * 租户 T 的上下文（由 platform 下发）。
@@ -158,6 +181,14 @@ class JdbcCorpusManagementRepositoryIT {
         // ⚠️ 不再 seed 租户：RAG 库里**没有**租户表（V4 迁移已移除 rag_tenant 副本）。
         //    租户上下理由 platform 下发（见 RagTenantContext）。
         //    跨租户隔离改由「两个不同的 tenantId 上下文」验证。
+    }
+
+    @AfterEach
+    void closeOpsChannel() {
+        if (opsProvider != null) {
+            opsProvider.close();
+            opsProvider = null;
+        }
     }
 
 
@@ -771,8 +802,13 @@ class JdbcCorpusManagementRepositoryIT {
                     new SourceQuery(null, null, null, true, 50, 0));
             assertTrue(globalList.stream().anyMatch(src -> src.sourceId().equals(globalSourceId)),
                     "列表侧同样要能召回全局行");
-            assertEquals(1, globalList.size(),
-                    "全局档的这一批行应恰好只有刚播种的那一条全局来源");
+            // ⚠️ 这里<b>不能</b>断言「全局档恰好只有这一条」：全局桶从第二刀起是
+            //    多用例共写的桶（G-1/G-2 也往里登记），精确条数会把别的夹具读成失败。
+            //    本用例要守的是「列表里没有租户行」，那才是泄漏 —— 于是逐条回库查证。
+            assertEquals(globalList.size(),
+                    countRowsInGlobalBucket(globalList.stream()
+                            .map(CorpusSource::sourceId).toList()),
+                    "全局档列表的每一条都必须真的躺在哨兵桶里");
         } finally {
             adminJdbcTemplate.update("DELETE FROM rag_source WHERE source_id = ?::uuid",
                     globalSourceId);
@@ -804,5 +840,289 @@ class JdbcCorpusManagementRepositoryIT {
                 ON CONFLICT (source_id) DO NOTHING
                 """, sourceId, title, isbn);
         return sourceId;
+    }
+
+    // ---------------------------------------------------------------------
+    // 平台全局档<b>写</b>路径（RAG-D11 §1.3 / 第二刀 2.4）
+    //
+    // 这一段证明的是「写全局桶的那条路」和「读全局桶的那条路」是两条连接，
+    // 且第二刀<b>没有</b>为此放宽应用角色：
+    //   G-1/G-2 需要运维角色（IT_RAG_OPS_*）——它们验的是角色体检、
+    //          哨兵桶落点、审计同事务，这三件事替身连接一件都验不到；
+    //   G-3～G-6 只需要普通连接——它们验的是「闸门还开着」，
+    //          没有运维角色也必须照样跑，否则第二刀的红线就成了未测事项。
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("G-1 平台档登记经运维通道落进哨兵桶：scope='PLATFORM'、租户档一行都看不到")
+    void platformRegistrationThroughOpsChannelLandsInSentinelBucket() {
+        CorpusManagementPort opsRepository = repositoryWithOpsChannel();
+        requireAdminConnection();
+        String isbn = "9787100000031";
+
+        CorpusSource created = opsRepository.registerSource(
+                RagManagementContext.forPlatform(TrustTier.OFFICIAL_TUTORIAL),
+                new SourceRegistration("教材", "平台全局教材（运维通道写入）", "人民教育出版社",
+                        isbn, null, "obj://global.pdf", "c".repeat(64)),
+                REVIEWER);
+        String id = created.sourceId();
+        try {
+            // 落点：哨兵桶 + PLATFORM，两者必须<b>同时</b>成立——
+            // 库层 CHECK 约束（scope='PLATFORM' ⇔ tenant_id=哨兵）本来就拦得住单边写错，
+            // 但断言里只查一个列，就无法区分「实现写对了」和「实现被绕过」。
+            assertEquals(1, countInSentinelBucket(id),
+                    "运维通道登记的行必须落在全局桶且 scope='PLATFORM'");
+            assertEquals(0, countOutsideSentinelBucket(id),
+                    "同一行不得出现在任何租户桶");
+
+            // 审计与登记同事务、且落在同一个桶（全局语料影响所有租户，留痕更不该缺）
+            assertEquals(1, countAuditInSentinelBucket(id, "INGEST"),
+                    "全局登记必须留一条 INGEST 审计，且租户列同为哨兵");
+
+            // 读侧闭环：平台档（走 rag_app）能召回刚写进行；租户档看不到
+            assertNotNull(repository.findSource(
+                            RagManagementContext.forPlatform(TrustTier.OFFICIAL_TUTORIAL), id),
+                    "写完必须能被平台档读到，否则运维通道写进的是一个没人能读的桶");
+            assertNull(repository.findSource(RagManagementContext.forTenant(ctxT), id),
+                    "租户档不得看到全局行——看到即跨桶泄漏");
+        } finally {
+            deleteGlobalSource(id);
+        }
+    }
+
+    @Test
+    @DisplayName("G-2 平台档审核流转也走运维通道：UPDATE 落在哨兵桶并与判定审计同事务")
+    void platformVerificationThroughOpsChannelUpdatesGlobalRow() {
+        CorpusManagementPort opsRepository = repositoryWithOpsChannel();
+        requireAdminConnection();
+        RagManagementContext platform =
+                RagManagementContext.forPlatform(TrustTier.OFFICIAL_TUTORIAL);
+
+        String id = opsRepository.registerSource(platform,
+                new SourceRegistration("教材", "待审全局教材", "人民教育出版社",
+                        "9787100000032", null, "obj://global.pdf", "c".repeat(64)),
+                REVIEWER).sourceId();
+        try {
+            // ⚠️ 必须走 PENDING → IN_REVIEW → VERIFIED：T-12 禁止直通 VERIFIED，
+            //    少一步认领的话被拒原因就是「非法转移」而不是本用例要验的写通道。
+            opsRepository.applyVerification(platform, id, new VerificationDecision(
+                    VerificationStatus.IN_REVIEW, "认领", REVIEWER,
+                    VerificationMethod.NONE, null, 365));
+            opsRepository.applyVerification(platform, id, VerificationDecision.approve(
+                    TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
+                    "ISBN:global@2026-10-29", REVIEWER, 365));
+
+            // ⚠️ 断言读的是<b>库里的真实状态</b>，不是返回值：
+            //    跨桶 UPDATE 被策略挡住的表现是「影响 0 行、不报错」（第一刀实测），
+            //    只看返回值会把「什么都没改成」读成「改成功了」。
+            assertEquals(1, countWith(id,
+                            "ver_status = 'VERIFIED' AND trust_tier = 'OFFICIAL_PUBLISHER'"),
+                    "全局来源的审核结论必须真的落库");
+            assertEquals(1, countAuditInSentinelBucket(id, "ADMIT"),
+                    "放行必须留 ADMIT 审计，且落在哨兵桶（全局改动的影响面是所有租户）");
+
+            assertNull(repository.findSource(RagManagementContext.forTenant(ctxT), id),
+                    "租户档依旧看不到");
+        } finally {
+            deleteGlobalSource(id);
+        }
+    }
+
+    @Test
+    @DisplayName("G-3 运维通道未接入 → fail-closed（503），不回落应用角色、全局桶不留痕迹")
+    void globalWriteWithoutOpsChannelFailsClosedAndWritesNothing() {
+        // repository 由 setup() 用「不带 ops 通道」的构造器建出——正是生产上
+        // rag.ops.enabled=false 或配置不齐时的形状。
+        RagOpsUnavailableException ex = assertThrows(RagOpsUnavailableException.class,
+                () -> repository.registerSource(
+                        RagManagementContext.forPlatform(TrustTier.OFFICIAL_TUTORIAL),
+                        new SourceRegistration("教材", "通道未接入时的登记尝试", "人民教育出版社",
+                                "9787100000033", null, "obj://global.pdf", "c".repeat(64)),
+                        REVIEWER),
+                "缺运维通道必须拒绝服务；回落到 rag_app 的结果是静默 0 行 + 报告成功");
+        assertEquals("rag.ops.datasource", ex.missingConfiguration(),
+                "告警要直指该补的配置键，而不是让人去翻堆栈");
+
+        if (adminJdbcTemplate != null) {
+            assertEquals(0, adminJdbcTemplate.queryForObject(
+                            "SELECT count(*) FROM rag_source WHERE isbn = ?",
+                            Integer.class, "9787100000033"),
+                    "拒绝必须是「什么都没写」，不是「写了一半」");
+        }
+    }
+
+    @Test
+    @DisplayName("G-4 ⚠️ 红线：应用角色 rag_app 直接拼 SQL 也写不进全局桶（第二刀未放宽它）")
+    void appRoleCannotInsertGlobalRowEvenWithHandWrittenSql() {
+        // 第二刀开的是「另一个角色」，不是给 rag_app 的写策略松绑。
+        // 这条用例就是那句承诺的实测：绕过管理台、手写 INSERT，仍被 RLS 拒绝。
+        String sourceId = java.util.UUID.randomUUID().toString();
+        String isbn = "9787100000034";
+        // ⚠️ 刻意<b>不</b>设置 app.tenant_id：设成哨兵会先在 rag_current_tenant() 撞 RAISE
+        //    （G-5 单验那条），而这里要验的是写策略本身对全局行的态度。
+        DataAccessException ex = assertThrows(DataAccessException.class,
+                () -> jdbcTemplate.update("""
+                        INSERT INTO rag_source
+                            (source_id, tenant_id, scope, source_type, title, publisher, isbn,
+                             trust_tier, ver_status, ver_method, ver_valid_days, license_status)
+                        VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM',
+                                '教材', '应用角色伪装全局的尝试', '人民教育出版社', ?,
+                                'UNVERIFIED', 'PENDING', 'NONE', 365, 'PENDING'::rag_license_status)
+                        """, sourceId, isbn),
+                "rag_app 写全局行必须被拒（WITH CHECK 里的 scope='TENANT' 是闸门本身）");
+        assertTrue(causeChainContains(ex, "row-level security"),
+                "拒绝的原因必须是 RLS 而不是权限/语法问题，实际：" + ex.getMessage());
+
+        if (adminJdbcTemplate != null) {
+            assertEquals(0, adminJdbcTemplate.queryForObject(
+                            "SELECT count(*) FROM rag_source WHERE source_id = ?::uuid",
+                            Integer.class, sourceId),
+                    "被拒的 INSERT 不该留下任何行");
+        }
+    }
+
+    @Test
+    @DisplayName("G-5 把哨兵当会话身份：rag_current_tenant() 在真库上直接 RAISE（V8 §1 封堵）")
+    void sentinelAsSessionTenantIsRefusedByDatabase() {
+        // WriteChannel.open() 对平台档「什么都不做」的理由就在这条：
+        // 一旦有人把它「优化」成 set_config(哨兵)，得到的不是便利而是一条 SQLSTATE 42501。
+        DataAccessException ex = assertThrows(DataAccessException.class,
+                () -> transactionTemplate.executeWithoutResult(st -> {
+                    jdbcTemplate.queryForObject(
+                            "SELECT set_config('app.tenant_id', ?, true)",
+                            String.class, RagScope.GLOBAL_TENANT_ID);
+                    jdbcTemplate.queryForObject(
+                            "SELECT rag_current_tenant()::text", String.class);
+                }));
+        assertTrue(causeChainContains(ex, "42501") || causeChainContains(ex, "越权"),
+                "应当是 V8 的越权封堵在报错，实际：" + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("G-6 A 档（跨租户盘点）任何写动作先被拒：只读视图不是「暂时没接通」的写通道")
+    void allScopeWriteIsRefusedBeforeTouchingAnyConnection() {
+        // 本用例<b>不需要</b>运维通道也要跑：拒的是档位，不是「通道还没配好」。
+        // 若只在有通道时断言，通道缺席的环境就把这条红线测成了跳过。
+        String isbn = "9787100000035";
+        RagManagementContext allCtx = RagManagementContext.forAll(TrustTier.OFFICIAL_TUTORIAL);
+        SourceRegistration attempt = new SourceRegistration("教材", "盘点档的写尝试",
+                "人民教育出版社", isbn, null, "obj://global.pdf", "c".repeat(64));
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> repository.registerSource(allCtx, attempt, REVIEWER));
+        assertTrue(ex.getMessage().contains("跨租户盘点档"),
+                "文案要说清被拒的档位，实际：" + ex.getMessage());
+
+        // 装了运维通道同样拒（否则「接上通道」会变成「A 档也能写」）
+        if (System.getenv(PG_OPS_URL_ENV) != null && !System.getenv(PG_OPS_URL_ENV).isBlank()) {
+            CorpusManagementPort opsRepository = repositoryWithOpsChannel();
+            assertThrows(IllegalStateException.class,
+                    () -> opsRepository.registerSource(allCtx, attempt, REVIEWER),
+                    "运维通道不改变档位规则");
+        }
+
+        if (adminJdbcTemplate != null) {
+            assertEquals(0, adminJdbcTemplate.queryForObject(
+                            "SELECT count(*) FROM rag_source WHERE isbn = ?",
+                            Integer.class, isbn),
+                    "A 档写尝试不该在任何桶里留下行");
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 全局写用例的夹具
+    // ---------------------------------------------------------------------
+
+    /**
+     * 装配一条<b>真的</b>接入运维通道的仓库（IT_RAG_OPS_* 未配置时跳过用例）。
+     *
+     * <p>⚠️ 走的是生产同一个 {@link RagOpsDataSourceProvider}：角色体检
+     * （须 BYPASSRLS、须非超级用户）和「窗口外取不到连接」都只有真池 + 真角色才验得到。
+     */
+    private CorpusManagementPort repositoryWithOpsChannel() {
+        String url = System.getenv(PG_OPS_URL_ENV);
+        Assumptions.assumeTrue(url != null && !url.isBlank(),
+                "skipped: " + PG_OPS_URL_ENV + " 未设置（全局写需要 rag_ops 角色）");
+        opsProvider = RagOpsDataSourceProvider.connected(url,
+                envOrDefault(PG_OPS_USER_ENV, extractUserFromUrl(url)),
+                envOrDefault(PG_OPS_PASSWORD_ENV, null), 2);
+        return new JdbcCorpusManagementRepository(jdbcTemplate, transactionTemplate, opsProvider);
+    }
+
+    /** 该行是否恰好落在「哨兵桶 + scope='PLATFORM'」这一处。 */
+    private int countInSentinelBucket(String sourceId) {
+        return countWith(sourceId, "tenant_id = rag_global_tenant_id() AND scope = 'PLATFORM'");
+    }
+
+    /** 该行是否同时出现在了别的租户桶（应为 0）。 */
+    private int countOutsideSentinelBucket(String sourceId) {
+        return countWith(sourceId, "tenant_id <> rag_global_tenant_id()");
+    }
+
+    /** 哨兵桶里该行的审计条数（action 为 null = 不限动作）。 */
+    private int countAuditInSentinelBucket(String sourceId, String action) {
+        String sql = """
+                SELECT count(*) FROM rag_access_audit
+                WHERE source_id = ?::uuid AND tenant_id = rag_global_tenant_id()
+                """ + (action == null ? "" : "  AND action = ?");
+        Integer count = action == null
+                ? adminJdbcTemplate.queryForObject(sql, Integer.class, sourceId)
+                : adminJdbcTemplate.queryForObject(sql, Integer.class, sourceId, action);
+        return count == null ? 0 : count;
+    }
+
+    /** owner 视角按条件统计 rag_source（断言读的是库，不是返回值）。 */
+    private int countWith(String sourceId, String predicate) {
+        Integer count = adminJdbcTemplate.queryForObject(
+                "SELECT count(*) FROM rag_source WHERE source_id = ?::uuid AND " + predicate,
+                Integer.class, sourceId);
+        return count == null ? 0 : count;
+    }
+
+    /** 这批来源里<b>确实躺在哨兵桶</b>的条数（读侧列表的泄漏检查）。 */
+    private int countRowsInGlobalBucket(List<String> sourceIds) {
+        if (sourceIds.isEmpty()) {
+            return 0;
+        }
+        // ⚠️ 用逐个占位符而不是 {@code = ANY(?::uuid[])}：
+        //    pgjdbc 会把 String[] 按**标量**送出，服务端报 malformed array literal
+        //    （实测 2026-10-29），得手工拼 "{...}" 才行——占位符展开更直白。
+        String placeholders = String.join(", ",
+                java.util.Collections.nCopies(sourceIds.size(), "?::uuid"));
+        Integer count = adminJdbcTemplate.queryForObject(
+                "SELECT count(*) FROM rag_source WHERE tenant_id = rag_global_tenant_id()"
+                        + " AND source_id IN (" + placeholders + ")",
+                Integer.class, sourceIds.toArray());
+        return count == null ? 0 : count;
+    }
+
+    /**
+     * 清掉全局夹具：只删 {@code rag_source}，<b>审计行留着</b>。
+     *
+     * <p>⚠️ 实测（2026-10-29）：{@code rag_access_audit} 上有
+     * {@code forbid_rag_audit_mutation()} 触发器 —— 「追加写表，不允许 UPDATE/DELETE」，
+     * <b>库 owner 也删不动</b>。第一版夹具按「审计有外键、先删子表」的顺序来，
+     * 结果是异常先抛在审计上、{@code rag_source} 反而没删掉，
+     * 把全局桶留成了脏数据（并让 {@link #globalRowIsVisibleOnlyInPlatformScope}
+     * 的精确条数断言当场变红）。
+     *
+     * <p>审计表和 {@code rag_source} <b>没有</b>外键（治理留痕要能活得比语料久），
+     * 所以删来源不会被挡。代价是每个用例留几条一次性审计——
+     * 这正是本类里全局审计断言都按「新 UUID + 精确条数」而不是「总数」写的原因。
+     */
+    private void deleteGlobalSource(String sourceId) {
+        adminJdbcTemplate.update(
+                "DELETE FROM rag_source WHERE source_id = ?::uuid", sourceId);
+    }
+
+    /** 异常因果链里是否出现过该片段（Spring 会把 SQLSTATE 包在多层 message 里）。 */
+    private static boolean causeChainContains(Throwable ex, String fragment) {
+        for (Throwable t = ex; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            String message = t.getMessage();
+            if (message != null && message.contains(fragment)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
