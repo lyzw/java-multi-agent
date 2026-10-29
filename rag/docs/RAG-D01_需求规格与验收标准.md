@@ -106,9 +106,11 @@
 > 这是全局共享的定义本身，不是隔离失效；反向的越权通道新增一条：
 > **任何租户都不得写/改/删全局桶**，也**不得把哨兵值当作自己的会话租户**
 > （`rag_current_tenant()` 对此直接抛错）。
-> 两条口径的实测证据：`scripts/rag-corpus-scope-counterproof.sh`（75 项）、
-> `scripts/rag-dict-scope-counterproof.sh`（39 项）、
-> `scripts/rag-v7-to-v8-retrofit-check.sh`（11 项，升级路径）。
+> 两条口径的实测证据：`scripts/rag-corpus-scope-counterproof.sh`（102 项）、
+> `scripts/rag-dict-scope-counterproof.sh`（39 项）。
+> ~~`scripts/rag-v7-to-v8-retrofit-check.sh`（11 项，升级路径）~~ 已于 2026-10-29 退役：
+> 它测的是「V7 老库应用 V8」这条迁移路径，迁移链被 `826d77b` 删除后已无被测对象；
+> 教训（空库复放全绿 ≠ 存量库能升上来）保留在 `deploy/sql/rag/01_rag_ddl.sql` 头注释。
 
 ---
 

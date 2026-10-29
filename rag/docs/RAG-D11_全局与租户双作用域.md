@@ -182,10 +182,11 @@ RLS 读策略放开全局后，SQL 里若仍写 `c.tenant_id = rag_current_tenan
 
 | 证据 | 位置 | 覆盖 |
 |---|---|---|
-| 语料侧反证 | `scripts/rag-corpus-scope-counterproof.sh` | 75 项：两层过滤、跨租户不可见、fail-closed 新口径、全局桶写/改/删拒绝、哨兵身份拒绝、CHECK 双向、复合外键、引用全局片段、全局先决边、字典收敛、系统表自证 |
+| 语料侧反证 | `scripts/rag-corpus-scope-counterproof.sh` | 102 项：两层过滤、跨租户不可见、fail-closed 新口径、全局桶写/改/删拒绝、哨兵身份拒绝、CHECK 双向、复合外键、引用全局片段、全局先决边、字典收敛、系统表自证 + P13 运维通道组 26 条（第二刀） |
 | 字典侧反证 | `scripts/rag-dict-scope-counterproof.sh` | 39 项：读写分策略交互、越权写、不变式、upsert 幂等、系统表 |
-| **升级路径** | `scripts/rag-v7-to-v8-retrofit-check.sh` | 11 项：V7 已发布全局字典的库上应用 V8（新库跑不出这个坑）|
+| ~~升级路径~~ | ~~`scripts/rag-v7-to-v8-retrofit-check.sh`~~ **已退役（2026-10-29）** | 被测对象是「V7 老库上应用 V8」这条迁移路径，`826d77b` 删迁移链后它不存在了，脚本实跑第一步即 `die`；现库也不可能再处于 NULL 表示法（`rag.*.tenant_id` 全表 NOT NULL，2026-10-29 远程实测）。它钉住的教训（**空库复放全绿 ≠ 存量库能升上来**；改表示法须**先摘约束 → 回填 → 再收 NOT NULL/重建约束**）搬进 `deploy/sql/rag/01_rag_ddl.sql` 头注释，并在 `04_migrate_embedding_halfvec_4096.sql` 写明同类存量库迁移的执行纪律。 |
 | 语料 IT | `RetrievalRepositoryIT`（15 项） | 全局链两租户召回、两层过滤差值、取依据一致、越权写被拒（带反自证对照）|
 | 字典 IT | `JdbcDictionaryRepositoryIT`（13 项） | 全局可见、覆盖只在本地、删不动、写不出、哨兵常量与 DB 同源 |
 | 单元 | `RagScopeTest` / `DictionaryGlobalScopeMergeTest` / `RagTenantContextTest` | 表示法常量、合并语义与顺序无关、上下文拒绝哨兵 |
-| 生产初始化 | `deploy/sql/rag/01_rag_ddl.sql` | 2026-10-27 由 V1→V8 实跑库 `pg_dump` 重新导出；与迁移链产物逐列/逐策略/逐索引零漂移 |
+| 运维通道巡检 | `scripts/check-rag-ops-role.sh` + `scripts/tools/CheckRagOpsRole.java` | 13 项：真库、只读、以 `rag_ops` 身份实测能力面形状，退出码 0/1/2（第二刀）|
+| 生产初始化 | `deploy/sql/rag/01_rag_ddl.sql` | 2026-10-27 由 V1→V8 实跑库 `pg_dump` 重新导出；与迁移链产物逐列/逐策略/逐索引零漂移。迁移链删除后本文件即**唯一权威源**，空库复放是它唯一的机械校验 |

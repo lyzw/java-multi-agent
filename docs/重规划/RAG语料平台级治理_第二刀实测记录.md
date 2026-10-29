@@ -109,6 +109,8 @@ javadoc 改为陈述这个事实，而不是留一句看着像承诺的话。
    `rag/rag-infrastructure/src/main/resources/db/migration/`——那目录现在是**空的**。
    实跑输出：`cat: .../V[0-9]*__*.sql: No such file or directory` → 第一步 `die`。
    → 字典反证从 10-27 起**一条都没测过**（本刀已修，39/0；第一刀记录 §1.5 同步更正）。
+   同批扫空的第三个 `rag-v7-to-v8-retrofit-check.sh` **没有可修的对象**（它测的正是被删掉的那条迁移路径），
+   已于同日定案退役，见 §5 U-7。
 2. **「运维通道该有 `rag_chunk` 的 INSERT 权」——探针的假设错了，05 是对的。**
    代码里全局写路径从不插片段：片段由 worker 产生，全局索引只 `UPDATE rag_chunk` + `INSERT rag_chunk_embedding`。
    首跑 4 条失败正是这个假设造成的 → 判定「测的是想象，不是代码」，把 P13-7 改写为
@@ -144,7 +146,7 @@ javadoc 改为陈述这个事实，而不是留一句看着像承诺的话。
 | --- | --- | --- | --- |
 | U-1 | `RetrievalRepositoryIT` 既有失败（第一刀 U-1，本刀复现） | **15 / 15 errors：`expected 4096 dimensions, not 1024`** —— 夹具仍 1024 维，列是 `halfvec(4096)`。与本刀无关，但 `-am` 的 reactor `verify` 会被它拖红。 | 独立收口 |
 | ~~U-6~~ **已关闭** | ~~共享远程 RDS 上的 `rag_ops` 仍带坏 `search_path`~~ | 2026-10-29 经用户授权后由库 owner 重跑 `05_rag_ops_role.sql`（`study_rag`，幂等、不动口令）修复：巡检 **13/0 · exit 0**、应用侧 IT **45/0 跳过**。前后 `rolconfig` 与授权面打印见 §3 末「远程开发库修复」。 | 已完成 |
-| U-7 | `rag-v7-to-v8-retrofit-check.sh` 仍指向已删除的迁移目录 | 实跑第一步 `die`（同 §4-1）。它的**被测对象本身已不存在**——权威源化后没有「V7 库 + 应用 V8」这条升级路径了。两个去向：改写为「旧表示法库 → `01_rag_ddl.sql` 收编」的校验，或退役并把它钉住的教训（升级路径在全新库上测不出来）搬进 `01` 的头注释。**不擅自删。** | 待定案 |
+| ~~U-7~~ **已关闭（定案退役）** | ~~`rag-v7-to-v8-retrofit-check.sh` 仍指向已删除的迁移目录~~ | 2026-10-29 用户定案「退役 + 教训写入注释」，`git rm` 执行。**删前先只读实测确认被测对象真的不存在**（不是靠推断）：远程 `study_rag` 的 `rag.*.tenant_id` **可空列数 = 0**、`scope` 列 8 张、全局字典 4 行在哨兵桶、`information_schema.tables` 里**已无 `flyway_schema_history`** → 「V7 的 NULL 表示法库」在这条链上不可能再出现。教训去向：① 升级路径纪律 → `deploy/sql/rag/01_rag_ddl.sql` 头注释【存量库改动纪律】段；② 同类存量库迁移的执行纪律 → `04_migrate_embedding_halfvec_4096.sql` 头注释；③ RLS 静默 0 行 / NULL 上下文两条 → 已在 `rag-dict-scope-counterproof.sh`（`super_val` 注释 + P7-1）与 `JdbcTenantScopedGeneration` 类注释里，**逐条 grep 核对过确实还在**才写进注释。 | 已完成 |
 | U-8 | 平台审计表没有**票据档位**列 | 谁签的票、签来写哪一档、TTL 多长，审计里查不到；现在只有签发事件本身。第三刀开工前须补，否则「平台改过全局语料」无法追溯到凭证。 | 第三刀前 |
 | U-9 | ALL（跨租户盘点）档 | 仍 `501` + 前端置灰；能否读**语料正文**未定案（默认只元数据）。 | 第三刀 |
 | U-10 | 票据四道闸门**反证脚本测不到** | 脚本无法签发合法票据（票据由平台应用签、需平台身份 JWT）。钉在三处：`PlatformRagGovernanceTicketServiceTest` 10、`RagManagementControllerTest` 57、`admin-console/tests/ragGovernanceTicket.test.tsx`。这是**如实边界**，不是遗漏。 | 记录 |
