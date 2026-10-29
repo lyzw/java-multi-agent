@@ -3,6 +3,7 @@ package cn.studykid.multiagent.api.platform;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 import org.jspecify.annotations.NonNull;
@@ -54,8 +55,10 @@ import cn.studykid.multiagent.ports.security.PlatformPrincipal;
  * <p><b>审计字段落位</b>（{@code platform_audit_event} 无租户列）：
  * {@code target_type=rag_governance_ticket}、{@code target_id=NULL}
  * （全局语料桶不是某一行资源，哨兵租户 ID 又属于 RAG 库，塞进平台的 uuid 列是假的归因）、
- * {@code reason_code=} 票据 {@code jti}（ALLOW）或拒绝码（DENY）。
- * 事后凭 jti 可把一张泄露的票对回到「谁、哪档、何时签的」。
+ * {@code reason_code=} 票据 {@code jti}（ALLOW）或拒绝码（DENY）、
+ * {@code ticket_scope=} 票据声明的档位（规范集之外为 NULL，见 {@link #auditableScope}）。
+ * 事后凭 jti 可把一张泄露的票对回到「谁、哪档、何时签的」——
+ * 其中「哪档」是 U-8 补列之后才成立的事，此前只能由 reason_code 反推。
  */
 @Component
 public class PlatformRagGovernanceTicketService {
@@ -80,6 +83,15 @@ public class PlatformRagGovernanceTicketService {
 
     /** 第三刀才有语义的档位：跨租户盘点（只读）。 */
     static final String SCOPE_ALL = "ALL";
+
+    /**
+     * 可入审计的档位<b>规范集</b>（U-8）：与库侧 CHECK
+     * {@code platform_audit_event_ticket_scope_ck} 逐值同源，见 {@link #auditableScope}。
+     * 含 {@code TENANT} 不是因为本轮会给它签票（{@code issue} 对它一律 400），
+     * 而是因为<b>值域的定义权在库</b>：Java 侧维护一份比 CHECK 更小的集合，
+     * 将来给 400 分支补留痕时会出现「库里允许、代码里写不进去」的静默降级。
+     */
+    private static final Set<String> AUDITABLE_SCOPES = Set.of("PLATFORM", "TENANT", "ALL");
 
     /** TTL 下界：与执行票证同源（低于此值等于每次写操作都要重新点一次「取票」）。 */
     static final long MIN_TTL_SECONDS = 60L;
@@ -180,10 +192,13 @@ public class PlatformRagGovernanceTicketService {
         security.require(principal, REQUIRED_PERMISSION, RESOURCE_TYPE, scope);
 
         // 闸门 2：配置开关。关闭也要留痕（见类注释）。
+        // 传 scope 而不是省略：此刻档位还没经过合法性校验，调用方可以送任意文本，
+        // 由 record() 里的规范集把它折成「规范值或 NULL」——「NULL＝档位不可知」本身就是可查的事实。
         if (!enabled) {
             throw denyAndReject(principal, HttpStatus.SERVICE_UNAVAILABLE,
                     "CHANNEL_DISABLED",
-                    "治理票据通道未启用（platform.security.rag-governance-ticket.enabled=false）");
+                    "治理票据通道未启用（platform.security.rag-governance-ticket.enabled=false）",
+                    scope);
         }
 
         // 闸门 3：档位。先判空再判未知，是为了让「前端没带 scope」这种集成缺陷
@@ -200,7 +215,8 @@ public class PlatformRagGovernanceTicketService {
             throw denyAndReject(principal, HttpStatus.CONFLICT,
                     "SCOPE_NOT_MINTABLE",
                     "ALL（跨租户盘点）是第三刀的只读档位，本轮不存在「拿票据往全部租户写」"
-                            + "这条通道；要治理平台全局语料请签 PLATFORM");
+                            + "这条通道；要治理平台全局语料请签 PLATFORM",
+                    scope);
         }
 
         // 闸门 4：限流（按平台主体，见常量注释）。FAIL_CLOSED 与 REJECTED 一律拒绝。
@@ -209,14 +225,14 @@ public class PlatformRagGovernanceTicketService {
         if (decision != RateLimitPort.Decision.ALLOWED) {
             throw decision == RateLimitPort.Decision.REJECTED
                     ? denyAndReject(principal, HttpStatus.TOO_MANY_REQUESTS,
-                            "RATE_LIMITED", "治理票据签发过于频繁，请稍后再试")
+                            "RATE_LIMITED", "治理票据签发过于频繁，请稍后再试", scope)
                     : denyAndReject(principal, HttpStatus.TOO_MANY_REQUESTS,
-                            "RATE_LIMIT_UNAVAILABLE", "限流组件不可用，票据签发已按 fail-closed 拒绝");
+                            "RATE_LIMIT_UNAVAILABLE", "限流组件不可用，票据签发已按 fail-closed 拒绝", scope);
         }
 
         PlatformJwtTokenService.Issued issued =
                 tokens.issueRagGovernanceTicket(principal, Instant.now(), ttl, scope);
-        allow(principal, issued.jti());
+        allow(principal, issued.jti(), scope);
         log.info("签发 RAG 治理票据: platformUser={}, scope={}, jti={}, expiresAt={}",
                 principal.userId(), scope, issued.jti(), issued.expiresAt());
 
@@ -234,32 +250,51 @@ public class PlatformRagGovernanceTicketService {
      */
     private GovernanceTicketRejectedException denyAndReject(PlatformPrincipal principal,
                                                             HttpStatus status,
-                                                            String reasonCode, String message) {
-        record(principal, "DENY", reasonCode);
+                                                            String reasonCode, String message,
+                                                            @Nullable String requestedScope) {
+        record(principal, "DENY", reasonCode, requestedScope);
         return new GovernanceTicketRejectedException(status, reasonCode, message);
     }
 
-    private void allow(PlatformPrincipal principal, String jti) {
-        record(principal, "ALLOW", jti);
+    private void allow(PlatformPrincipal principal, String jti, @Nullable String scope) {
+        record(principal, "ALLOW", jti, scope);
     }
 
     /**
-     * 落一条平台审计。
+     * 落一条平台审计（档位入列，U-8 / 方案 §5 A4）。
      *
      * <p>{@code reason_code} 同时承载「ALLOW 的 jti」与「DENY 的原因码」两种语义，
      * 与执行票证通道完全同构（靠 {@code decision} 区分读法）。
+     * 这两者语义不同但<b>不互相挤占</b>：档位有独立的 {@code ticket_scope} 列，
+     * 「谁签的（actor_id）+ 哪档（ticket_scope）+ 结果（decision）+ 何时（occurred_at）」
+     * 是一条查询就能读出的完整追责口径，不需要再靠 reason_code 反推。
      *
-     * <p>⚠️ <b>档位（scope）本轮不入列</b>：{@code platform_audit_event} 没有可用的
-     * 自由文本列——{@code ip} 是 {@code inet}、{@code target_id}/{@code correlation_id}
-     * 是 {@code uuid}、{@code reason_code} 已被 jti／拒绝码占用。
-     * 本轮可签档位唯一（PLATFORM），所以「哪档」不丢失；
-     * <b>第三刀放开 ALL 之前必须先给审计补一列</b>（或补 action 约定），
-     * 否则「签了哪档」只能靠推断，而推断出来的审计不能作为追责证据。
+     * <p>⚠️ 档位必须先过 {@link #auditableScope} 再入库：被拒请求里的 {@code scope}
+     * 是<b>调用方可控文本</b>（{@code闸门 2 就排在档位合法性之前}），
+     * 而库侧 {@code platform_audit_event_ticket_scope_ck} 只承认三个规范值。
+     * 直接把原文写进去的后果不是「脏数据」而是<b>审计写入抛 SQLException</b> ——
+     * 一次 {@code ?scope=%E4%BD%A0%E8%87%AA%E5%B7%B1%E7%BC%96} 的取票请求会把 503 变成 500，
+     * 即闸门自己制造故障。规范集之外一律写 {@code null}（＝「档位不可知」），
+     * 而「不可知」本身是可查的事实，好过一次为了填满列而编造的归因。
      */
-    private void record(PlatformPrincipal principal, String decision, String reasonCode) {
+    private void record(PlatformPrincipal principal, String decision,
+                        String reasonCode, @Nullable String requestedScope) {
         audit.record(new PlatformAuditEvent(
                 UUID.randomUUID(), principal.userId(), "PLATFORM_USER",
                 AUDIT_ACTION, TARGET_TYPE, null, decision, reasonCode,
-                null, null, Instant.now()));
+                null, null, Instant.now(), auditableScope(requestedScope)));
+    }
+
+    /**
+     * 档位 → 可入库的规范值；规范集之外一律 {@code null}。
+     *
+     * <p>值域与库侧 CHECK（{@code patch_audit_ticket_scope.sql} /
+     * {@code 01_platform_ddl.sql}）同源：{@code PLATFORM / TENANT / ALL}，
+     * 即 RAG 侧 {@code RagCorpusScope} 的三档 —— 两个 reactor 之间没有共享编译产物
+     * （平台不依赖 rag 的 jar），所以这条契约只能靠值与注释钉住，
+     * 加一档时必须同时改这里与库侧 CHECK。
+     */
+    private static @Nullable String auditableScope(@Nullable String raw) {
+        return raw != null && AUDITABLE_SCOPES.contains(raw) ? raw : null;
     }
 }

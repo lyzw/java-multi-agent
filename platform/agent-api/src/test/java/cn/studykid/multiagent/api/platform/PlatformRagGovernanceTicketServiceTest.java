@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.api.platform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -81,6 +82,8 @@ class PlatformRagGovernanceTicketServiceTest {
         assertEquals("platform.rag.governance_ticket", event.action());
         assertEquals("rag_governance_ticket", event.targetType());
         assertEquals("ALLOW", event.decision());
+        assertEquals("PLATFORM", event.ticketScope(),
+                "方案 §5 A4 的「哪档」必须是列上的事实，不是 reason_code 的反推（U-8）");
         assertEquals(ticket.jti(), event.reasonCode(),
                 "事后要能凭 jti 把一张泄露的票对回到签发记录");
         assertTrue(h.audit.events.stream().noneMatch(e -> ticket.accessToken().equals(e.reasonCode())),
@@ -118,6 +121,8 @@ class PlatformRagGovernanceTicketServiceTest {
         Harness h = new Harness(true, TTL);
 
         assertEquals("PLATFORM", h.service.issue(superAdmin(), " platform ").scope());
+        assertEquals("PLATFORM", h.audit.events.get(0).ticketScope(),
+                "审计记的是规范化之后的档位，否则同一档在库里写成两种值，按档位统计会漏");
     }
 
     // ── 闸门顺序与留痕 ─────────────────────────────────────
@@ -148,6 +153,20 @@ class PlatformRagGovernanceTicketServiceTest {
     }
 
     @Test
+    @DisplayName("⚠️ 闸门 2 早于档位合法性：调用方送任意文本时，档位列只能落 NULL")
+    void unvalidatedScopeNeverReachesTheAuditColumn() {
+        Harness h = new Harness(false, TTL);
+
+        // 闸门 2 在闸门 3 之前，所以这里的 scope 还没被证明合法——它是调用方可控文本。
+        GovernanceTicketRejectedException ex = assertThrows(
+                GovernanceTicketRejectedException.class,
+                () -> h.service.issue(superAdmin(), "你*自己#编"));
+        assertEquals("CHANNEL_DISABLED", ex.reasonCode());
+        assertEquals(null, h.audit.events.get(0).ticketScope(),
+                "非规范值直接入列会被 platform_audit_event_ticket_scope_ck 拒绝：" +
+                        "审计写入抛 SQLException 等于让闸门把 503 变成 500，自己制造故障");
+    }
+    @Test
     @DisplayName("⚠️ ALL 本轮不可签 → 409：它是第三刀的只读盘点档，签出去没人能正确解释")
     void allScopeIsRefusedWithItsOwnCode() {
         Harness h = new Harness(true, TTL);
@@ -159,6 +178,8 @@ class PlatformRagGovernanceTicketServiceTest {
         assertEquals("SCOPE_NOT_MINTABLE", ex.reasonCode());
         assertEquals("SCOPE_NOT_MINTABLE", h.audit.events.get(0).reasonCode(),
                 "响应里读到的码必须就是库里查到的码");
+        assertEquals("ALL", h.audit.events.get(0).ticketScope(),
+                "被拒的请求也要带上它申请的档位：A4 要回溯的是「谁想拿哪档、被拒了」");
         assertTrue(ex.getMessage().contains("PLATFORM"),
                 "文案要给出可行动的下一步（改签 PLATFORM）：" + ex.getMessage());
     }
@@ -197,6 +218,10 @@ class PlatformRagGovernanceTicketServiceTest {
         h.rateLimit.decision = RateLimitPort.Decision.FAIL_CLOSED;
         assertEquals("RATE_LIMIT_UNAVAILABLE", assertThrows(GovernanceTicketRejectedException.class,
                 () -> h.service.issue(caller, "PLATFORM")).reasonCode());
+
+        assertEquals(List.of("PLATFORM", "PLATFORM"), h.audit.events.stream()
+                .map(PlatformAuditEvent::ticketScope).toList(),
+                "限流拒绝同样要留档位：申请的本来就是全局语料这一档");
 
         // 计量键是平台主体而不是租户（见 Buckets 注释）：桶键负责命名空间隔离。
         h.rateLimit.decision = RateLimitPort.Decision.ALLOWED;
