@@ -61,7 +61,20 @@ else
   grep -v '^\\\(un\)\?restrict ' "$SNAPSHOT" | psql_it -q -v ON_ERROR_STOP=1 -f -
 fi
 
-# ── 2.5 清理测试残留 ─────────────────────────────────────────────
+# ── 2.5 列级补丁：把**已存在**的 IT 库补到快照的最新形状 ──────────
+# ⚠️ 上面那段「结构已存在则跳过」是幂等保护，代价是老库会停在旧形状上：
+#    快照加了 ticket_scope（U-8）之后，旧 IT 库没有这一列，
+#    而新 jar 的 INSERT/SELECT 都点它 → 审计写入与读取直接失败，
+#    失败现场长得像「代码改坏了」，真因是库没跟上（共享远程库同理会踩，见 patch 头【执行】段）。
+#    patch 本身可空加列 + 幂等，空库与存量库都能跑，所以这里无条件重放一遍。
+for patch in "$SCRIPT_DIR/../deploy/sql/platform/patch_audit_ticket_scope.sql"; do
+  [ -e "$patch" ] || continue
+  echo "  · 重放列级补丁 $(basename "$patch")"
+  # ⚠️ 走 stdin（-f -）而不是传路径：psql 跑在**容器里**，宿主机路径在它眼里不存在。
+  psql_it -q -v ON_ERROR_STOP=1 -f - < "$patch" >/dev/null
+done
+
+# ── 2.6 清理测试残留 ─────────────────────────────────────────────
 # ⚠️⚠️ 为什么必须清（P4-D10 实测）：
 #   多个 agent-infrastructure 集成测试**没有 @AfterEach 清理**
 #   （如 RunClaimFencingIT 只创建不删除），每跑一轮全量构建就残留 ~50 行 run。
@@ -165,19 +178,24 @@ SQL
 # ⚠️ **必须做**：IT 用**非特权角色** `app_agent`（记忆铁律：验 RLS 必须用非特权，
 #    超级用户能绕过 RLS，会得到「隔离失效」的反向结论）。
 #    新建库时 `app_agent` 无任何表权限 → 报 permission denied。
+# ⚠️ 授权范围含 **platform** schema：平台身份域与平台审计的对象都在那儿。
+#    下面的循环原来只枚举 schemaname='public'，于是平台仓储的 IT 会撞
+#    「permission denied for schema platform」（PlatformAuditTicketScopeIT 实测需要）。
 echo "  · 授权 app_agent 并启用 RLS"
 
 psql_it -q <<'SQL' >/dev/null
 -- 表级权限（逐条 GRANT；整段事务失败会连带回滚，故分条）
 SQL
 
-for tbl in $(psql_it -tAc "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"); do
-  for priv in SELECT INSERT UPDATE DELETE; do
-    psql_it -q -c "GRANT $priv ON public.$tbl TO app_agent" >/dev/null 2>&1 || true
+for sch in public platform; do
+  for tbl in $(psql_it -tAc "SELECT tablename FROM pg_tables WHERE schemaname='$sch' ORDER BY tablename"); do
+    for priv in SELECT INSERT UPDATE DELETE; do
+      psql_it -q -c "GRANT $priv ON $sch.$tbl TO app_agent" >/dev/null 2>&1 || true
+    done
   done
+  psql_it -q -c "GRANT USAGE ON SCHEMA $sch TO app_agent" >/dev/null 2>&1 || true
+  psql_it -q -c "GRANT ALL ON ALL SEQUENCES IN SCHEMA $sch TO app_agent" >/dev/null 2>&1 || true
 done
-psql_it -q -c "GRANT USAGE ON SCHEMA public TO app_agent" >/dev/null 2>&1 || true
-psql_it -q -c "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO app_agent" >/dev/null 2>&1 || true
 
 # ⚠️ RLS 策略随结构快照一并创建（01_platform_ddl.sql 内含 CREATE POLICY），
 #    此处只做兜底核对：策略缺失会导致「应用侧 tenant_id 条件」成为唯一防线。
