@@ -34,6 +34,23 @@
 #       ⑧ 8 张表各恰好 4 条分策略、写/删策略不含哨兵、FORCE RLS 在、
 #          tenant_id 仍 NOT NULL、citations 外键已单列化。
 #
+#     E 类 · 运维通道（RAG-D11 第二刀·P13）
+#       ⑨ 独立角色 rag_ops **真的能写哨兵桶**（否则控制台的 G 档写是空头承诺），
+#          且它写出来的全局行租户在应用上下文里读得到（通道与读策略接得上）。
+#       ⑩ 它的授权面仍比 rag_app 窄：一张表都不给 DELETE、未授权的表不能 UPDATE、
+#          没有 schema 建对象权、不是任何角色的成员。
+#       ⑪ 开了这道门**没有**把原来那道关上：rag_app 写全局行仍被 RLS 拒；
+#          且 BYPASSRLS 绕不掉库内 CHECK（半全局行插不进去）。
+#       ⑫ BYPASSRLS 的代价如实测出：ops 角色无租户上下文时跨租户读得到私有行
+#          —— 这是 §1.3 记录的既有取舍，不是本次发现的新漏洞，钉成断言免得
+#          日后有人以为 ops 角色「只碰得到全局桶」。
+#
+# 【E 类不覆盖的部分（别误以为这里全测了）】
+#   治理票据的四种拒绝（无票据 / 档位不符 / 租户域令牌 / 带租户头）**是应用层闸门**，
+#   数据库里根本没有「票据」这个概念，本脚本测不到。它们钉在
+#   RagManagementControllerTest（403/400 与「一次连接都不发起」）和
+#   PlatformRagGovernanceTicketServiceTest（签票四道闸门 + 审计原因码）里。
+#
 # 【为什么单独一个脚本，而不是只靠 IT】
 #   IT 的断言只覆盖「应用代码怎么用」；本脚本覆盖「数据库允不允许」，
 #   包括应用根本不该发出的语句（直连 psql 注入）。越权路径只有这里测得到。
@@ -41,6 +58,11 @@
 # 用法：
 #   ./scripts/rag-corpus-scope-counterproof.sh
 #   PROBE_DB=xxx ./scripts/rag-corpus-scope-counterproof.sh
+#   PG_CONTAINER=xxx PROBE_OPS_ROLE=yyy ./scripts/rag-corpus-scope-counterproof.sh
+#
+# ⚠️ 需要 Docker 里有跑着的 PG17 容器（默认 agent-pg17，见 scripts/dev-postgres.sh）：
+#    本脚本全程用 docker exec 连库，**不接受外部 PG 连接串**——
+#    临时库必须能自建自删，而共享实例上没有这个前提。
 #
 # ⚠️ 本脚本**只动** PROBE_DB（默认 rag_corpus_scope_probe，自建自删）。
 #    绝不碰 agent_dev / agent_it / rag_it / study_rag。
@@ -52,9 +74,17 @@ CONTAINER="${PG_CONTAINER:-agent-pg17}"
 SUPER_USER="${PG_SUPERUSER:-agent}"
 PROBE_DB="${PROBE_DB:-rag_corpus_scope_probe}"
 APP_ROLE="${PROBE_APP_ROLE:-rag_probe_app}"
+# 运维通道角色（P13）：属性对齐 deploy/sql/rag/05_rag_ops_role.sql。
+# ⚠️ **不设口令**：本容器走 trust 登录，探针只需要「以该身份连库」；
+#    写死一个口令进脚本文件只会让人以为它是凭据（真实部署的口令由密钥管理注入）。
+OPS_ROLE="${PROBE_OPS_ROLE:-rag_probe_ops}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MIGRATION_DIR="$SCRIPT_DIR/../rag/rag-infrastructure/src/main/resources/db/migration"
+# 权威库结构（826d77b 之后：Flyway V1→V8 已删，deploy/sql/rag/01_rag_ddl.sql 是唯一源）。
+# ⚠️ 本脚本**只灌结构、不灌 02_rag_seed.sql**：种子是真实教材语料，
+#    会把 P0-4/P1/P3 那批「全局 1 + 私有 1」的精确计数打成随机数。
+#    夹具本来就从零播种，结构才是这里要复用的东西。
+DDL_FILE="$SCRIPT_DIR/../deploy/sql/rag/01_rag_ddl.sql"
 
 GLOBAL_TENANT="00000000-0000-0000-0000-000000000000"
 T_TENANT="11111111-1111-1111-1111-111111111111"
@@ -88,6 +118,12 @@ app_psql_as() {
            "'app.tenant_id'" "'$tid'" "$sql" | app_psql
 }
 
+# 运维通道角色连库（P13 的执行者）。
+# ⚠️ 不带租户上下文：这条通道的身份就是「平台」，应用侧也不给它设 app.tenant_id
+#    （角色级默认租户会把上一个持有连接者的作用域伪装成当前请求的作用域）。
+ops_psql() { docker exec -i "$CONTAINER" psql -U "$OPS_ROLE" -d "$PROBE_DB" -q -tA \
+                -v ON_ERROR_STOP=0 -f - 2>&1; }
+
 expect_eq() {
     if [ "$2" = "$3" ]; then
         printf '  ✅ %s（= %s）\n' "$1" "$3"; PASS=$((PASS + 1))
@@ -112,6 +148,11 @@ RLS_REJECT='violates row-level security policy|row-level security'
 CHECK_REJECT='violates check constraint'
 FK_REJECT='violates foreign key constraint|foreign key constraint'
 SENTINEL_REJECT='禁止把全局哨兵租户'
+# 运维通道被拒的原因**必须是权限**，不是 RLS：它带 BYPASSRLS，RLS 策略对它不生效。
+# ⚠️ 断言里区分这两种拒因有实际用处：若这里出现的是 RLS 报错，说明夹具没把
+#    BYPASSRLS 配上（那 P13 整组测的就不是运维通道，而是又一个 rag_app），
+#    越权结论会一路假绿到线上。
+PERM_REJECT='permission denied'
 
 # ── 0. 准备临时库 ─────────────────────────────────────────
 docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" \
@@ -123,15 +164,13 @@ docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d postgres -q -c \
 docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d postgres -q -c \
     "CREATE DATABASE $PROBE_DB" >/dev/null 2>&1 || die "建库失败"
 
-say "按序应用迁移（自动发现 V1 → 最新，不硬编码清单）"
-for f in "$MIGRATION_DIR"/V[0-9]*__*.sql; do
-    name="$(basename "$f")"
-    { printf 'SET search_path TO rag, public;\n'; cat "$f"; } \
-        | docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d "$PROBE_DB" \
-              -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 \
-        || { printf '\033[0;31m[PROBE] ✗ 迁移 %s 应用失败\033[0m\n' "$name"; exit 1; }
-    say "  · $name 已应用"
-done
+say "应用权威库结构 $(basename "$DDL_FILE")"
+[ -f "$DDL_FILE" ] || die "找不到库结构权威源：$DDL_FILE"
+{ printf 'SET search_path TO rag, public;\n'; cat "$DDL_FILE"; } \
+    | docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d "$PROBE_DB" \
+          -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 \
+    || die "库结构应用失败（临时库可能残留旧对象，可手动 DROP DATABASE $PROBE_DB 后重跑）"
+say "  · 结构已应用（含 RLS 策略、CHECK、复合外键）"
 
 say "创建非特权应用角色 $APP_ROLE（对齐 deploy/sql/rag/03_rag_roles.sql 的授权面）"
 docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d "$PROBE_DB" -q >/dev/null <<EOF
@@ -149,6 +188,23 @@ GRANT USAGE ON SCHEMA public TO $APP_ROLE;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA rag TO $APP_ROLE;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA rag TO $APP_ROLE;
 EOF
+
+# 运维通道角色（P13 的主角）—— **直接执行真实发布脚本** 05_rag_ops_role.sql。
+# ⚠️ 不照抄授权清单：照抄的版本会跟 05 漂移，于是 P13 测的是「我以为的形状」，
+#    而生产上的 rag_ops 是另一个形状。让反证跑权威源本身，漂移就不可能存在。
+#    （05 是幂等的：先 REVOKE ALL 再 GRANT，且角色名由 -v 传入，不会撞上真库角色。）
+OPS_DDL="$SCRIPT_DIR/../deploy/sql/rag/05_rag_ops_role.sql"
+[ -f "$OPS_DDL" ] || die "找不到运维通道发布脚本：$OPS_DDL"
+say "以发布脚本建运维通道：deploy/sql/rag/$(basename "$OPS_DDL") -v rag_ops_role=$OPS_ROLE"
+# ⚠️ 口令变量刻意不传：05 的 \if :{?rag_ops_password} 走「不设口令」分支
+#    （本容器 trust 登录，探针只需要身份；把口令写进脚本只会让人以为它是凭据）。
+if ! OPS_SETUP="$(docker exec -i "$CONTAINER" psql -U "$SUPER_USER" -d "$PROBE_DB" \
+        -v rag_ops_role="$OPS_ROLE" -f - 2>&1 <<< "$(cat "$OPS_DDL")")"; then
+    printf '%s\n' "$OPS_SETUP"
+    die "运维通道发布脚本执行失败（见上方 psql 输出）"
+fi
+say "  · 05 的三段校验输出（授权面证据，人读用）："
+printf '%s\n' "$OPS_SETUP" | sed 's/^/      /' | tail -32
 
 # =====================================================================
 # 夹具：全局语料链 + 两个租户各自的链
@@ -511,6 +567,151 @@ expect_eq "P12 未建租户上下文时 rag_current_tenant() 为 NULL（不是�
     "$(app_psql_as '' "SELECT coalesce(rag_current_tenant()::text, '<null>')")"
 
 # =====================================================================
+# P13 运维通道（rag_ops）：全局桶的唯一写入口 —— E 类
+# ⚠️ 第二刀新加。P4/P5/P10 钉的是「应用角色写不出全局行」，
+#    第二刀不是去放宽它（放宽它 = 给每个租户都发一条够得着全局桶的写路径），
+#    而是**另开一个带 BYPASSRLS 的独立角色**。于是必须同时钉住三件事：
+#      ① 新通道真的能写哨兵桶，且写出来的行租户在应用上下文里读得到；
+#      ② 新通道的授权面比 rag_app 还窄（无 DELETE、无未授权表的 UPDATE、
+#         无 schema 建对象权、无成员关系）；
+#      ③ 原闸门一处没动（rag_app 写全局仍被 RLS 拒、CHECK 仍绕不掉）。
+#    BYPASSRLS 的**代价**也在这一组如实测出来（P13-18，范围量在 P13-19~22）：
+#    它跨租户读得到私有行。这是方案 §1.3 记录的既有取舍，不是本次新发现的漏洞，
+#    把它钉成断言是为了让「ops 角色只碰得到全局桶」这种误解无法成立。
+# =====================================================================
+say "P13 运维通道 rag_ops"
+seed_fixture
+
+# ── 13.1 通道身份自证（属性错则整组结论假） ──
+expect_eq "P13-1 ops 连接身份非超级用户" "off" "$(ops_psql <<< "SELECT current_setting('is_superuser')")"
+expect_eq "P13-2 ops 连接身份确实带 BYPASSRLS" "t" \
+    "$(ops_psql <<< "SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user")"
+expect_eq "P13-3 ops 连接身份就是运维角色" "$OPS_ROLE" "$(ops_psql <<< "SELECT current_user")"
+expect_eq "P13-4 ops 不是任何角色的成员（能力不能靠继承拿到）" "0" \
+    "$(super_val "SELECT count(*) FROM pg_auth_members am
+        JOIN pg_roles m ON m.oid = am.roleid
+        WHERE am.member = (SELECT oid FROM pg_roles WHERE rolname = '$OPS_ROLE')")"
+expect_eq "P13-5 ops 带角色级 search_path（未限定名解析得到，反假绿）" "1" \
+    "$(ops_psql <<< "SELECT count(*) FROM rag_chunk WHERE chunk_id='aaaaaaaa-0000-0000-0000-0000000000c1'")"
+
+# ── 13.6 通道真的能写全局桶（否则控制台的 G 档写是空头承诺） ──
+# ⚠️ 写面按**代码里真实的全局写路径**对账，不是按「运维大概要写哪些表」想象：
+#    JdbcCorpusManagementRepository 的全局 WriteChannel 写 rag_source / rag_document /
+#    rag_dictionary，JdbcCorpusRepository 的全局索引路径只 UPDATE rag_chunk
+#    + INSERT rag_chunk_embedding。片段的**产生**不在治理通道里，所以
+#    ops 对 rag_chunk 只有 UPDATE 没有 INSERT —— P13-7 专门钉这条差异：
+#    它既证明授权面贴着代码，也证明「全局片段由治理通道凭空插入」不成立。
+OPS_SRC="$(ops_psql <<< "INSERT INTO rag_source (source_id, tenant_id, source_type, title, publisher,
+    trust_tier, isbn, scope, ver_status, license_status)
+    VALUES ('90909090-0000-0000-0000-000000000001', '$GLOBAL_TENANT', 'TEXTBOOK',
+            '运维登记的全局教材', '人教', 'OFFICIAL_PUBLISHER', 'ISBN-OPS-1',
+            'PLATFORM', 'PENDING', 'LICENSED')")"
+expect_eq "P13-6 ops 写全局 rag_source 成功（1 行）" "1" \
+    "$(super_val "SELECT count(*) FROM rag_source WHERE source_id='90909090-0000-0000-0000-000000000001'")"
+[ -z "$OPS_SRC" ] || printf '  ⚠️ ops 写来源的回显：%s\n' "$(printf '%s' "$OPS_SRC" | tr '\n' ' ' | head -c 200)"
+
+P13I="$(ops_psql <<< "INSERT INTO rag_chunk (chunk_id, tenant_id, document_id, edition_id, role,
+    text, page_number, section_path, char_start, char_end, content_hash, scope)
+    VALUES ('90909090-0000-0000-0000-0000000000c1', '$GLOBAL_TENANT',
+            'aaaaaaaa-0000-0000-0000-0000000000d1', 'aaaaaaaa-0000-0000-0000-0000000000e1',
+            'EXPLANATION', '运维凭空造一个全局片段', 1, '/1', 0, 3, '$HASH64', 'PLATFORM')")"
+expect_rejected "P13-7 ops 对 rag_chunk 只有 UPDATE，插不出新片段（写面贴代码，不是按想象给权）" "$P13I" "$PERM_REJECT"
+
+# ops 改得动已有的全局片段（这是治理通道对 rag_chunk 的真实能力）
+P13U="$(ops_psql <<< "UPDATE rag_chunk SET text='运维改写的全局片段'
+        WHERE chunk_id='aaaaaaaa-0000-0000-0000-0000000000c1'")"
+expect_eq "P13-8 ops 改得动全局片段（UPDATE 在授权面内）" "运维改写的全局片段" \
+    "$(super_val "SELECT text FROM rag_chunk WHERE chunk_id='aaaaaaaa-0000-0000-0000-0000000000c1'")"
+
+# 闭环：ops 的改写必须能被租户在**应用上下文**里读到，
+# 否则「平台在控制台维护全局语料」只是写进去了而已，检索面拿不到。
+expect_eq "P13-9 ✅ 闭环：租户 T 应用上下文读到 ops 改写后的文本" "运维改写的全局片段" \
+    "$(app_psql_as "$T_TENANT" "SELECT text FROM rag_chunk
+        WHERE chunk_id='aaaaaaaa-0000-0000-0000-0000000000c1'")"
+
+# ── 13.10 原闸门一处没动 ──
+P13B="$(app_psql_as "$T_TENANT" "INSERT INTO rag_chunk (chunk_id, tenant_id, document_id, edition_id,
+        role, text, page_number, section_path, char_start, char_end, content_hash, scope)
+        VALUES ('90909090-0000-0000-0000-0000000000c2', '$GLOBAL_TENANT',
+                'aaaaaaaa-0000-0000-0000-0000000000d1', 'aaaaaaaa-0000-0000-0000-0000000000e1',
+                'EXPLANATION', '第二刀后仍能偷渡吗', 1, '/1', 0, 3, '$HASH64', 'PLATFORM')")"
+expect_rejected "P13-10 ⛔ 第二刀没有放宽 rag_app：应用角色写哨兵桶仍被 RLS 拒" "$P13B" "$RLS_REJECT"
+expect_eq "P13-11 偷渡行确实不存在" "0" \
+    "$(super_val "SELECT count(*) FROM rag_chunk WHERE chunk_id='90909090-0000-0000-0000-0000000000c2'")"
+
+# BYPASSRLS 绕不掉 CHECK：半全局行仍然插不进去（用 ops **有** INSERT 权的表测，
+# 否则先撞权限错、根本走不到 CHECK —— 上一版就错在这里，实测看到的是
+# 「permission denied」而不是「violates check constraint」）
+P13C="$(ops_psql <<< "INSERT INTO rag_source (source_id, tenant_id, source_type, title, publisher,
+    trust_tier, isbn, scope, ver_status, license_status)
+    VALUES ('90909090-0000-0000-0000-000000000002', '$T_TENANT', 'TEXTBOOK',
+            '运维把租户来源升全局', '人教', 'OFFICIAL_PUBLISHER', 'ISBN-OPS-2',
+            'PLATFORM', 'PENDING', 'LICENSED')")"
+expect_rejected "P13-12 BYPASSRLS 绕不掉库内 CHECK（scope 与租户必须同向）" "$P13C" "$CHECK_REJECT"
+
+# ── 13.13 ops 的授权面比 rag_app 还窄 ──
+P13D="$(ops_psql <<< "DELETE FROM rag_chunk WHERE chunk_id='aaaaaaaa-0000-0000-0000-0000000000c1'")"
+expect_rejected "P13-13 ops 无 DELETE（全局桶没有删除语义）" "$P13D" "$PERM_REJECT"
+P13E="$(ops_psql <<< "DELETE FROM rag_access_audit WHERE 1=0")"
+expect_rejected "P13-14 ops 删不动审计行（append-only）" "$P13E" "$PERM_REJECT"
+P13F="$(ops_psql <<< "UPDATE rag_knowledge_point SET canonical_name='运维改写'
+        WHERE kp_id='aaaaaaaa-0000-0000-0000-0000000000f1'")"
+expect_rejected "P13-15 ops 对未授权表无 UPDATE（知识点不在治理写面内）" "$P13F" "$PERM_REJECT"
+P13G="$(ops_psql <<< "CREATE TABLE rag.probe_should_fail (id int)")"
+expect_rejected "P13-16 ops 无 schema 建对象权" "$P13G" "$PERM_REJECT"
+# 反假绿：同一连接对**已授权**的表写成功，说明上面四条拒因真是权限而不是连接坏了
+expect_eq "P13-17 同连接写已授权表仍成功（反假绿：拒因是权限，不是环境）" "1" \
+    "$(ops_psql <<< "UPDATE rag_source SET title='运维改过的全局教材标题'
+            WHERE source_id='90909090-0000-0000-0000-000000000001';
+            SELECT count(*) FROM rag_source
+            WHERE source_id='90909090-0000-0000-0000-000000000001'
+              AND title='运维改过的全局教材标题'" | tail -1)"
+
+# ── 13.18 BYPASSRLS 的代价（如实记录，不是新发现的漏洞） ──
+expect_eq "P13-18 ⚠️ 代价：ops 无租户上下文也读得到租户私有行（RLS 对它不生效）" "1" \
+    "$(ops_psql <<< "SELECT count(*) FROM rag_chunk
+        WHERE chunk_id='cccccccc-0000-0000-0000-0000000000c1'")"
+# P13-19~21 把上面那条的**范围**量出来：读=全库 11 张、写=6 张、删=0 张。
+# ⚠️ 用 has_table_privilege 而不是 information_schema.role_table_grants：
+#    后者受「当前用户可见性」过滤 —— 实测（本临时库）：超级用户查得到别人的授权
+#    （05 的 §3.2 就是靠它打印证据的），但非超级用户查别人的 grantee 得 **0 行**，
+#    看着像「授权面比设计更窄」，其实是视图根本不给你看。
+#    has_table_privilege 按**角色名**判定，与谁来问无关，两种身份下同一口径。
+expect_eq "P13-19 ops 读面 = 11 张表全库（跨租户读得到，限长只能在应用侧）" "11" \
+    "$(super_val "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname='rag' AND c.relkind='r'
+          AND has_table_privilege('$OPS_ROLE', c.oid, 'SELECT')")"
+expect_eq "P13-20 ops 写面恰好 6 张表（全局治理真正要写的，不多一张）" "6" \
+    "$(super_val "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname='rag' AND c.relkind='r'
+          AND (has_table_privilege('$OPS_ROLE', c.oid, 'INSERT')
+            OR has_table_privilege('$OPS_ROLE', c.oid, 'UPDATE'))")"
+expect_eq "P13-21 ops 删除面 = 0 张表（一条都不给）" "0" \
+    "$(super_val "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname='rag' AND c.relkind='r'
+          AND has_table_privilege('$OPS_ROLE', c.oid, 'DELETE')")"
+# 对照：应用角色的删除面是**满的**（租户语料要能撤回/清理）。
+# ⚠️ 这条不是冗余：它证明「P13-21 的 0」来自授权差异，而不是整个库都没 DELETE 权。
+expect_eq "P13-22 对照：rag_app 仍有删除权（差异来自授权面，不是全局没收权）" "11" \
+    "$(super_val "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname='rag' AND c.relkind='r'
+          AND has_table_privilege('$APP_ROLE', c.oid, 'DELETE')")"
+
+# ── 13.23 角色级默认值（05 的三条护栏 + 一条刻意不设） ──
+expect_eq "P13-23 ops 的角色级默认里**没有** app.tenant_id（连接池不能继承上一个持有者的作用域）" "0" \
+    "$(super_val "SELECT count(*) FROM pg_roles WHERE rolname='$OPS_ROLE'
+        AND array_to_string(rolconfig, ',') LIKE '%app.tenant_id%'")"
+expect_eq "P13-24 ops 带 statement_timeout（长事务卡全局桶由库层打断）" "1" \
+    "$(super_val "SELECT count(*) FROM pg_roles WHERE rolname='$OPS_ROLE'
+        AND array_to_string(rolconfig, ',') LIKE '%statement_timeout%'")"
+expect_eq "P13-25 ops 带 idle_in_transaction_session_timeout" "1" \
+    "$(super_val "SELECT count(*) FROM pg_roles WHERE rolname='$OPS_ROLE'
+        AND array_to_string(rolconfig, ',') LIKE '%idle_in_transaction%'")"
+# 同一道门的另一半：主数据源角色绝不能有 BYPASSRLS（否则 ops 通道形同虚设）
+expect_eq "P13-26 应用角色仍无 BYPASSRLS（两条通道的身份不可互换）" "f" \
+    "$(super_val "SELECT rolbypassrls FROM pg_roles WHERE rolname='$APP_ROLE'")"
+
+# =====================================================================
 # 汇总
 # =====================================================================
 echo
@@ -520,6 +721,8 @@ if [ "$FAIL" -gt 0 ]; then
     exit 1
 fi
 printf '\033[0;32m✓ 全部通过：全局语料整链可被任一租户召回，私有语料严格隔离，\033[0m\n'
-printf '\033[0;32m  应用角色既写不出也改不动全局行，且无法把会话身份伪装成哨兵。\033[0m\n'
+printf '\033[0;32m  应用角色既写不出也改不动全局行，且无法把会话身份伪装成哨兵；\033[0m\n'
+printf '\033[0;32m  运维通道写得进哨兵桶、删不动任何行、读得到全部（代价已量出），\033[0m\n'
+printf '\033[0;32m  且它的存在没有让 rag_app 的闸门松一分。\033[0m\n'
 printf '  临时库 %s 保留供复查，可执行：\n' "$PROBE_DB"
 printf '    docker exec -it %s psql -U %s -d %s\n' "$CONTAINER" "$APP_ROLE" "$PROBE_DB"
