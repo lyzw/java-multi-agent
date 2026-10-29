@@ -978,6 +978,9 @@ export interface PlatformAuditEvent {
   targetId: string | null
   decision: string
   reasonCode: string | null
+  /** 治理票据声明的档位＝作用域（PLATFORM/TENANT/ALL）；非票据动作或与档位无关的
+   *  拒绝（如通道开关关闭）为 null —— 不是「丢失」，是「服务端当时无法证明调用方要哪档」。 */
+  ticketScope: string | null
   correlationId: string | null
   ip: string | null
   occurredAt: string

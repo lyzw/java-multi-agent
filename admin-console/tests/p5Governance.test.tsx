@@ -65,6 +65,7 @@ const auditFixture: PlatformAuditEvent[] = [
     targetId: 't-9',
     decision: 'ALLOW',
     reasonCode: null,
+    ticketScope: null,
     correlationId: 'corr-1',
     ip: '10.0.0.1',
     occurredAt: '2026-10-24T10:00:00Z',
@@ -78,9 +79,24 @@ const auditFixture: PlatformAuditEvent[] = [
     targetId: null,
     decision: 'ALLOW',
     reasonCode: null,
+    ticketScope: null,
     correlationId: null,
     ip: '10.0.0.2',
     occurredAt: '2026-10-24T11:00:00Z',
+  },
+  {
+    id: 'a-3',
+    actorId: '33333333-3333-3333-3333-333333333333',
+    actorType: 'PLATFORM_USER',
+    action: 'platform.rag.governance_ticket',
+    targetType: 'rag_governance_ticket',
+    targetId: 'jti-1',
+    decision: 'DENY',
+    reasonCode: 'SCOPE_NOT_MINTABLE',
+    ticketScope: 'ALL',
+    correlationId: null,
+    ip: null,
+    occurredAt: '2026-10-24T12:00:00Z',
   },
 ]
 
@@ -152,6 +168,17 @@ describe('P5 平台审计页（/audit · 平台身份域）', () => {
     // 只读红线：页面上不存在任何删除/修改按钮
     expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '修改' })).not.toBeInTheDocument()
+  })
+
+  // 方案 §5 A4「回溯谁、哪档」：档位是审计行上的一列，不是靠 reason_code 反推。
+  it('票据档位单独成列，非票据行为空', async () => {
+    vi.mocked(getPlatformAuditEvents).mockResolvedValue(auditFixture)
+    render(<AuditLogsPage />)
+
+    expect(await screen.findByText('票据档位')).toBeInTheDocument()
+    // a-3 声明 ALL 档被拒 → 直接读到 ALL；a-1/a-2 与档位无关 → '-'
+    expect(screen.getByText('ALL')).toBeInTheDocument()
+    expect(screen.getAllByText('-').length).toBeGreaterThanOrEqual(2)
   })
 })
 

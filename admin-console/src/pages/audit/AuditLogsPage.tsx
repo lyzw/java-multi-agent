@@ -164,6 +164,13 @@ export function AuditLogsPage(): JSX.Element {
                 ),
               },
               {
+                title: '票据档位',
+                dataIndex: 'ticketScope',
+                width: 100,
+                // 空值不是「数据丢了」：非票据动作、或与档位无关的拒绝（通道开关关闭）本就没有档位。
+                render: (v: string | null) => v ?? '-',
+              },
+              {
                 title: '原因码',
                 dataIndex: 'reasonCode',
                 render: (v: string | null) => v ?? '-',
@@ -202,6 +209,11 @@ export function AuditLogsPage(): JSX.Element {
                 children: <Tag color={DECISION_COLOR[selected.decision] ?? 'default'}>{selected.decision}</Tag>,
               },
               { key: 'reason', label: '原因码', children: selected.reasonCode ?? '-' },
+              {
+                key: 'ticketScope',
+                label: '票据档位',
+                children: selected.ticketScope ?? '-',
+              },
               {
                 key: 'corr',
                 label: '关联 ID',
