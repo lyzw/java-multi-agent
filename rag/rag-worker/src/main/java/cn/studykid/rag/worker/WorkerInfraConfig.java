@@ -1,5 +1,6 @@
 package cn.studykid.rag.worker;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -9,6 +10,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import cn.studykid.rag.infrastructure.LocalRagPortsConfig;
 import cn.studykid.rag.infrastructure.embedding.EmbeddingPorts;
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
+import cn.studykid.rag.infrastructure.ops.RagOpsConfiguration;
+import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
 import cn.studykid.rag.infrastructure.persistence.JdbcCorpusRepository;
 import cn.studykid.rag.infrastructure.persistence.VectorColumn;
 import cn.studykid.rag.ports.CorpusRepository;
@@ -34,12 +37,19 @@ import org.springframework.context.annotation.Import;
  * G1/G3 的本地占位切片（解析/蕴含/入库用例/接地用例），为未来「完整入库执行器」
  * 预留装配基础——但占位实现<b>不代表</b> G1/G3 已生产就绪（仍受 A-008 阻断）。
  *
+ * <p><b>⚠️ 运维通道（{@link RagOpsConfiguration}）在此显式导入</b>：
+ * 本应用只扫描 {@code cn.studykid.rag.worker}，而该配置住在
+ * {@code cn.studykid.rag.infrastructure.ops}——不导入就没有 {@link RagOpsSessionPort} bean，
+ * 全局桶重索引会永久 503（应用照常启动、租户档照常索引，故障形态完全静默）。
+ * 它同样是<b>可选</b>消费：{@code rag.ops.enabled=false} 时通道为 fail-closed 占位，
+ * 只有全局档受影响。
+ *
  * <p>⚠️ 诚实边界：{@link EmbeddingPort} 当前为本地确定性占位
  *   （{@code LocalDeterministicEmbeddingPort}），非生产级 BGE-M3。
  *   真实嵌入模型接入前，索引出的向量仅用于链路验证（见端口类标注）。
  */
 @Configuration
-@Import(LocalRagPortsConfig.class)
+@Import({LocalRagPortsConfig.class, RagOpsConfiguration.class})
 public class WorkerInfraConfig {
 
     /**
@@ -94,9 +104,19 @@ public class WorkerInfraConfig {
         return new VectorColumn(type.trim(), embeddingPort.dimension());
     }
 
+    /**
+     * 语料持久化端口。
+     *
+     * <p>⚠️ {@link RagOpsSessionPort} 用 {@link ObjectProvider} 而非直接注入：
+     * 未接入运维通道的部署（{@code rag.ops.enabled=false}）仍要能启动并索引租户桶，
+     * 缺口的处置是全局桶写入抛 503，<b>不</b>回落到应用角色——回落的失败形态是
+     * 「扫到行、写 0 行、报告成功」，比报错难发现。
+     */
     @Bean
-    public CorpusRepository corpusRepository(JdbcTemplate jdbcTemplate, VectorColumn vectorColumn) {
-        return new JdbcCorpusRepository(jdbcTemplate, vectorColumn);
+    public CorpusRepository corpusRepository(JdbcTemplate jdbcTemplate, VectorColumn vectorColumn,
+                                             ObjectProvider<RagOpsSessionPort> opsSessionProvider) {
+        return new JdbcCorpusRepository(jdbcTemplate, vectorColumn,
+                opsSessionProvider.getIfAvailable());
     }
 
     @Bean
@@ -104,13 +124,21 @@ public class WorkerInfraConfig {
         return new TransactionTemplate(txManager);
     }
 
+    /**
+     * 片段索引器。
+     *
+     * <p>⚠️ 这里的 {@link RagOpsSessionPort} 必须与 {@link #corpusRepository} 拿到的是
+     * <b>同一个 bean</b>：扫描窗与落库窗由同一线程的会话深度计数保护，
+     * 两个实例会让「在窗内」的判断与实际取连接的池脱节。
+     */
     @Bean
     public ChunkIndexer chunkIndexer(JdbcTemplate jdbcTemplate,
                                      TransactionTemplate transactionTemplate,
                                      CorpusRepository corpusRepository,
                                      EmbeddingPort embeddingPort,
-                                     RagIndexerProperties properties) {
+                                     RagIndexerProperties properties,
+                                     ObjectProvider<RagOpsSessionPort> opsSessionProvider) {
         return new ChunkIndexer(jdbcTemplate, transactionTemplate, corpusRepository,
-                embeddingPort, properties.getBatchSize());
+                embeddingPort, properties.getBatchSize(), opsSessionProvider.getIfAvailable());
     }
 }

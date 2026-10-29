@@ -3,10 +3,13 @@ package cn.studykid.rag.infrastructure.persistence;
 import java.util.List;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import cn.studykid.rag.core.chunk.Chunk;
+import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
+import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
 import cn.studykid.rag.ports.CorpusRepository;
 
 /**
@@ -30,7 +33,22 @@ public class JdbcCorpusRepository implements CorpusRepository {
     private final JdbcTemplate jdbcTemplate;
     private final VectorColumn vectorColumn;
 
+    /**
+     * 全局桶写通道（可为 null = 未接入）。
+     *
+     * <p>⚠️ null 时全局写方法抛 {@link RagOpsUnavailableException}（呈现 503），
+     * <b>不</b>回落应用连接：回落的结果不是「写得差一点」，而是
+     * RLS 对跨桶写入静默滤成 0 行、重索引却报告成功。
+     */
+    @Nullable
+    private final RagOpsSessionPort opsSession;
+
     public JdbcCorpusRepository(JdbcTemplate jdbcTemplate, VectorColumn vectorColumn) {
+        this(jdbcTemplate, vectorColumn, null);
+    }
+
+    public JdbcCorpusRepository(JdbcTemplate jdbcTemplate, VectorColumn vectorColumn,
+                                @Nullable RagOpsSessionPort opsSession) {
         if (jdbcTemplate == null) {
             throw new IllegalArgumentException("jdbcTemplate 不能为空");
         }
@@ -39,6 +57,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
         }
         this.jdbcTemplate = jdbcTemplate;
         this.vectorColumn = vectorColumn;
+        this.opsSession = opsSession;
     }
 
     @Override
@@ -116,6 +135,72 @@ public class JdbcCorpusRepository implements CorpusRepository {
                     index_generation = 1
                 """.formatted(vectorColumn.castPlaceholder()),
                 chunkId, embedModel, vectorToString(embedding));
+    }
+
+    // ---------------------------------------------------------------------
+    // 全局桶写入（第二刀 2.5）
+    // ---------------------------------------------------------------------
+
+    /**
+     * 回填全局桶片段的词法分词列。
+     *
+     * <p>⚠️ <b>不标 {@code @Transactional}</b>：那个注解绑定的是<b>主</b>事务管理器，
+     * 而本方法跑在运维连接上——注解只会白借一条应用连接，
+     * 对运维连接上的原子性毫无作用（还会在窗口外触发 guarded 数据源的拒绝）。
+     *
+     * <p>⚠️ {@code AND tenant_id = rag_global_tenant_id()} <b>不是冗余</b>：
+     * 租户版那条 UPDATE 靠 RLS 的 USING 谓词把行范围限在本租户，
+     * 而运维角色带 BYPASSRLS、策略对它不设防 —— 去掉这个谓词，
+     * 一个传错的 chunk_id 就会改到<b>别的租户</b>的词法列且无人拦。
+     */
+    @Override
+    public void updateJiebaTokensInGlobalBucket(@NonNull String chunkId,
+                                                @NonNull String jiebaTokens) {
+        requireOpsSession().inGlobalCorpusSession((template, tx) -> template.update(
+                "UPDATE rag_chunk SET text_jieba = ?"
+                        + " WHERE chunk_id = ?::uuid AND tenant_id = rag_global_tenant_id()",
+                jiebaTokens, chunkId));
+    }
+
+    /**
+     * 写入或更新全局桶片段的向量。
+     *
+     * <p>⚠️ {@code ON CONFLICT ... DO UPDATE ... WHERE} 里那句租户判据同上是承重的：
+     * {@code chunk_id} 是<b>全表</b>主键，冲突可能来自任意租户的行；
+     * 不加 WHERE，冲突分支就成了一条「经 chunk_id 写进别人桶」的旁路。
+     *
+     * <p>⚠️ {@code scope} 必须<b>显式</b>写 {@code 'PLATFORM'}：该列 NOT NULL 且默认
+     * {@code 'TENANT'}，而 {@code rag_chunk_embedding_scope_ck} 要求
+     * 「{@code scope='PLATFORM' ⇔ tenant_id=哨兵}」——照租户版那样省略这一列，
+     * 全局插入会因为「租户是哨兵、作用域却是 TENANT」被 CHECK <b>恒拒</b>
+     * （2026-10-29 对空 DDL 逐列核对时发现；租户路径不踩这条，因为它的
+     * {@code rag_current_tenant()} 永远不是哨兵，默认值恰好自洽）。
+     */
+    @Override
+    public void upsertEmbeddingInGlobalBucket(@NonNull String chunkId,
+                                              @NonNull float[] embedding,
+                                              @NonNull String embedModel) {
+        vectorColumn.requireDimension(embedding);
+        requireOpsSession().inGlobalCorpusSession((template, tx) -> template.update("""
+                INSERT INTO rag_chunk_embedding
+                    (chunk_id, tenant_id, scope, index_generation, embed_model, embedding)
+                VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM', 1, ?, %s)
+                ON CONFLICT (chunk_id) DO UPDATE SET
+                    embedding = EXCLUDED.embedding,
+                    embed_model = EXCLUDED.embed_model,
+                    index_generation = 1
+                WHERE rag_chunk_embedding.tenant_id = rag_global_tenant_id()
+                """.formatted(vectorColumn.castPlaceholder()),
+                chunkId, embedModel, vectorToString(embedding)));
+    }
+
+    /** 全局写的前置：通道未接入就拒绝服务，绝不回落到应用角色。 */
+    private RagOpsSessionPort requireOpsSession() {
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "全局语料写通道未接入：索引全局桶需要运维数据源（rag_ops），不回落应用角色");
+        }
+        return opsSession;
     }
 
     /** 把 UUID 列表格式化为 PostgreSQL 数组字面量 {@code {uuid,...}}。 */

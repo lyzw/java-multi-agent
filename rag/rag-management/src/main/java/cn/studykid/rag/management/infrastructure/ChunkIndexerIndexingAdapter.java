@@ -45,6 +45,26 @@ public class ChunkIndexerIndexingAdapter implements CorpusIndexingPort {
     public ReindexOutcome reindex(@NonNull String tenantId, int limit) {
         long startedAt = System.nanoTime();
         ChunkIndexer.IndexingSummary summary = chunkIndexer.indexTenant(tenantId, limit);
+        return outcome(summary, startedAt);
+    }
+
+    /**
+     * 全局档重索引：同样只是委托，<b>不加</b>自己的事务或租户设置。
+     *
+     * <p>⚠️ 本层尤其不能替它「补一个租户」：全局桶的会话租户必须是<b>未设置</b>，
+     * 填哨兵会让 {@code rag_current_tenant()} 直接 RAISE（V8 的越权封堵）。
+     * 会话窗由 {@link ChunkIndexer#indexGlobalCorpus} 自己开、自己关。
+     */
+    @Override
+    @NonNull
+    public ReindexOutcome reindexGlobalCorpus(int limit) {
+        long startedAt = System.nanoTime();
+        ChunkIndexer.IndexingSummary summary = chunkIndexer.indexGlobalCorpus(limit);
+        return outcome(summary, startedAt);
+    }
+
+    /** 端口语义转换：把基础设施的摘要加上耗时，包成管理面的返回。 */
+    private static ReindexOutcome outcome(ChunkIndexer.IndexingSummary summary, long startedAt) {
         long durationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
         return new ReindexOutcome(summary.indexedChunks(), summary.scannedChunks(), durationMs);
     }

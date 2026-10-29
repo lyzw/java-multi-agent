@@ -1,5 +1,6 @@
 package cn.studykid.rag.bootstrap;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -13,6 +14,7 @@ import cn.studykid.rag.application.retrieval.RetrievalOrchestrator;
 import cn.studykid.rag.infrastructure.embedding.EmbeddingPorts;
 import cn.studykid.rag.infrastructure.embedding.LocalDeterministicEmbeddingPort;
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
+import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
 import cn.studykid.rag.infrastructure.persistence.JdbcCorpusRepository;
 import cn.studykid.rag.infrastructure.persistence.JdbcRetrievalRepository;
 import cn.studykid.rag.infrastructure.persistence.JdbcTenantScopedGeneration;
@@ -122,15 +124,22 @@ public class RagInfrastructureConfig {
      * 但管理面新增的「重跑索引」端点需要它（补齐切词与向量），
      * 故此处补上装配。
      *
-     * <p>⚠️ {@link JdbcCorpusRepository} 的写入方法自带 {@code @Transactional}
-     * 与 {@code set_config('app.tenant_id', ...)}，租户隔离由它保证。
+     * <p>⚠️ {@link JdbcCorpusRepository} 的租户写入自带
+     * {@code set_config('app.tenant_id', ...)}，租户隔离由它保证；
+     * <b>全局桶写入走另一个角色</b>——故注入 {@link RagOpsSessionPort}
+     * （用 {@link ObjectProvider}：不接运维库的部署照样能启动，代价是平台档重索引 503，
+     * 租户档与检索链路不受影响）。
      *
      * @param jdbcTemplate JDBC 模板
+     * @param vectorColumn 向量列形态
+     * @param opsSessionProvider 平台运维通道（可选装配）
      * @return 语料持久化端口
      */
     @Bean
-    public CorpusRepository corpusRepository(JdbcTemplate jdbcTemplate, VectorColumn vectorColumn) {
-        return new JdbcCorpusRepository(jdbcTemplate, vectorColumn);
+    public CorpusRepository corpusRepository(JdbcTemplate jdbcTemplate, VectorColumn vectorColumn,
+                                             ObjectProvider<RagOpsSessionPort> opsSessionProvider) {
+        return new JdbcCorpusRepository(jdbcTemplate, vectorColumn,
+                opsSessionProvider.getIfAvailable());
     }
 
     /**
@@ -146,6 +155,7 @@ public class RagInfrastructureConfig {
      * @param transactionTemplate 事务模板（租户上下文必须在事务内建立）
      * @param corpusRepository 语料持久化端口
      * @param embeddingPort 嵌入端口
+     * @param opsSessionProvider 平台运维通道（全局桶索引用它；可选装配，缺失时全局档抛 503）
      * @return 片段索引器
      */
     @Bean
@@ -153,9 +163,10 @@ public class RagInfrastructureConfig {
                                      @Qualifier("ragTransactionTemplate")
                                      TransactionTemplate transactionTemplate,
                                      CorpusRepository corpusRepository,
-                                     EmbeddingPort embeddingPort) {
+                                     EmbeddingPort embeddingPort,
+                                     ObjectProvider<RagOpsSessionPort> opsSessionProvider) {
         return new ChunkIndexer(jdbcTemplate, transactionTemplate, corpusRepository,
-                embeddingPort, indexerBatchSize);
+                embeddingPort, indexerBatchSize, opsSessionProvider.getIfAvailable());
     }
 
     /**

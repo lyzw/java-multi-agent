@@ -40,13 +40,14 @@ import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
  *   V8 前这里的表述是「期望 0 行」；全局语料上线后那个判据会把正常库判死，
  *   理由见 {@link #failClosedPreflight()}。
  *
- * <p><b>⚠️ 全局语料不在本 worker 的重索引范围内</b>：
- * 配置的租户列表里<b>不允许</b>出现全局哨兵租户——
- * {@code set_config('app.tenant_id', 哨兵)} 会让 {@code rag_current_tenant()}
- * 直接抛错（这是 V8 封堵「租户伪装成平台身份」的承重设计，不是 bug）。
- * 全局语料的索引通道需要一条独立的运维数据源与写策略，属第四刀；
- * 在那之前，全局语料只能由超级用户通道预先灌入
- * （可运行样例见 {@code scripts/rag-corpus-scope-counterproof.sh} 的 seed 段）。
+ * <p><b>⚠️ 全局桶是这份列表里可选的一项，但不是租户通道能做的事</b>：
+ * 列表里出现全局哨兵租户时，本类走 {@link ChunkIndexer#indexGlobalCorpus}
+ * ——一条包在运维数据源会话窗里、桶谓词写死 {@code rag_global_tenant_id()} 的通道。
+ * <b>不能</b>把它当普通租户喂给 {@code indexTenant}：{@code set_config} 填哨兵后
+ * {@code rag_current_tenant()} 直接抛错（V8 封堵「租户伪装成平台身份」的承重设计），
+ * 那会以「数据库异常」的面目出现在启动日志里，看不出是该走哪条通道。
+ * 运维通道未接入时该条目得到 503 语义的失败记录并<b>继续</b>处理其余租户——
+ * 全局语料索引缺失是可控的降级，不是让整个 worker 起不来的理由。
  */
 @Component
 @ConditionalOnProperty(name = "rag.indexer.auto-start", havingValue = "true")
@@ -97,22 +98,18 @@ public class ReindexRunner implements ApplicationRunner {
             if (t.isEmpty()) {
                 continue;
             }
-            // 全局哨兵不是租户：set_config 后 rag_current_tenant() 会直接抛错（V8 的封堵）。
-            // 与其让它以「数据库异常」的面目出现，不如在这里说明该走哪条通道。
-            if (RagScope.isGlobalTenant(t)) {
-                log.error("[reindex] 跳过 {}：这是平台全局作用域的保留值，不是租户。"
-                        + " 全局语料的索引通道需独立的运维数据源（第四刀），"
-                        + " 现阶段由平台侧预灌语料即可。", t);
-                continue;
-            }
             try (LogContext.Scope ignored = LogContext.push(new LogContext.Snapshot(
                     LogContext.newTraceId(), t, LogContext.SYSTEM))) {
                 // ⚠️ catch 在作用域内部：作用域先于 catch 关闭，
                 //    写在外的话「某租户索引失败」这条日志会丢掉租户字段。
                 try {
-                    grandTotal += chunkIndexer.indexTenant(t);
+                    // 全局桶换通道，其余照旧：两条通道共用同一份「待索引」口径，
+                    // 差别只在连接与桶谓词（见 ChunkIndexer#GLOBAL_PENDING_SQL）。
+                    grandTotal += RagScope.isGlobalTenant(t)
+                            ? chunkIndexer.indexGlobalCorpus(Integer.MAX_VALUE).indexedChunks()
+                            : chunkIndexer.indexTenant(t);
                 } catch (RuntimeException ex) {
-                    log.error("[reindex] 租户 {} 索引失败：{}", t, ex.getMessage(), ex);
+                    log.error("[reindex] {} 索引失败：{}", t, ex.getMessage(), ex);
                 }
             }
         }

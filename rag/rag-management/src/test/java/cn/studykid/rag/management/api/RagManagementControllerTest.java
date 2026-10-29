@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -411,7 +412,7 @@ class RagManagementControllerTest {
     @DisplayName("重跑索引缺租户头返回 400")
     void reindexWithoutTenantIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(null, null, SCOPE_TENANT, null, null));
+                () -> controller.reindex(null, null, SCOPE_TENANT, null, null, null, null));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -419,7 +420,8 @@ class RagManagementControllerTest {
     @DisplayName("重跑索引 limit 越界返回 400（防止一次 HTTP 请求跑太久）")
     void reindexLimitOutOfRangeIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(TENANT, null, SCOPE_TENANT, new ManagementDtos.ReindexRequest(2001), null));
+                () -> controller.reindex(TENANT, null, SCOPE_TENANT, null, null,
+                        new ManagementDtos.ReindexRequest(2001), null));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -429,7 +431,8 @@ class RagManagementControllerTest {
         when(indexingPort.reindex(any(), anyInt()))
                 .thenReturn(new CorpusIndexingPort.ReindexOutcome(12, 12, 340));
         ManagementDtos.ReindexResponse response =
-                controller.reindex(TENANT, null, SCOPE_TENANT, new ManagementDtos.ReindexRequest(500), null);
+                controller.reindex(TENANT, null, SCOPE_TENANT, null, null,
+                        new ManagementDtos.ReindexRequest(500), null);
         assertEquals(12, response.indexedChunks());
         assertEquals(12, response.scannedChunks());
         assertEquals(340, response.durationMs());
@@ -441,7 +444,7 @@ class RagManagementControllerTest {
     void reindexWithoutBodyUsesDefaultLimit() {
         when(indexingPort.reindex(any(), anyInt()))
                 .thenReturn(new CorpusIndexingPort.ReindexOutcome(0, 0, 5));
-        controller.reindex(TENANT, null, SCOPE_TENANT, null, null);
+        controller.reindex(TENANT, null, SCOPE_TENANT, null, null, null, null);
         verify(indexingPort).reindex(eq(TENANT), eq(500));
     }
 
@@ -450,7 +453,7 @@ class RagManagementControllerTest {
     void reindexHonoursQueryParameterLimit() {
         when(indexingPort.reindex(any(), anyInt()))
                 .thenReturn(new CorpusIndexingPort.ReindexOutcome(4, 4, 80));
-        controller.reindex(TENANT, null, SCOPE_TENANT, null, "4");
+        controller.reindex(TENANT, null, SCOPE_TENANT, null, null, null, "4");
         verify(indexingPort).reindex(eq(TENANT), eq(4));
     }
 
@@ -458,10 +461,10 @@ class RagManagementControllerTest {
     @DisplayName("重跑索引的查询参数 limit 同样受 1～2000 闸门约束")
     void reindexQueryParameterLimitOutOfRangeIsBadRequest() {
         ResponseStatusException tooBig = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(TENANT, null, SCOPE_TENANT, null, "2001"));
+                () -> controller.reindex(TENANT, null, SCOPE_TENANT, null, null, null, "2001"));
         assertEquals(HttpStatus.BAD_REQUEST, tooBig.getStatusCode());
         ResponseStatusException tooSmall = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(TENANT, null, SCOPE_TENANT, null, "0"));
+                () -> controller.reindex(TENANT, null, SCOPE_TENANT, null, null, null, "0"));
         assertEquals(HttpStatus.BAD_REQUEST, tooSmall.getStatusCode());
         verifyNoInteractions(indexingPort);
     }
@@ -470,7 +473,7 @@ class RagManagementControllerTest {
     @DisplayName("重跑索引的查询参数 limit 非整数返回 400，而不是把脏值放进端口层")
     void reindexNonNumericQueryParameterLimitIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.reindex(TENANT, null, SCOPE_TENANT, null, "abc"));
+                () -> controller.reindex(TENANT, null, SCOPE_TENANT, null, null, null, "abc"));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
         verifyNoInteractions(indexingPort);
     }
@@ -480,8 +483,83 @@ class RagManagementControllerTest {
     void reindexPrefersBodyLimitOverQueryParameter() {
         when(indexingPort.reindex(any(), anyInt()))
                 .thenReturn(new CorpusIndexingPort.ReindexOutcome(7, 7, 90));
-        controller.reindex(TENANT, null, SCOPE_TENANT, new ManagementDtos.ReindexRequest(7), "99");
+        controller.reindex(TENANT, null, SCOPE_TENANT, null, null,
+                new ManagementDtos.ReindexRequest(7), "99");
         verify(indexingPort).reindex(eq(TENANT), eq(7));
+    }
+
+    // ----- 平台全局档重索引（第二刀 2.5：换通道，不换口径）---------------------
+
+    /** 平台档写所需的最小参数组：域=平台、票据=PLATFORM、不带租户头。 */
+    private static final String PLATFORM_TICKET = SCOPE_PLATFORM;
+
+    @Test
+    @DisplayName("平台档重索引走全局通道，且不再按租户调用端口")
+    void reindexInPlatformScopeRoutesToGlobalChannel() {
+        when(indexingPort.reindexGlobalCorpus(anyInt()))
+                .thenReturn(new CorpusIndexingPort.ReindexOutcome(9, 9, 120));
+
+        ManagementDtos.ReindexResponse response = controller.reindex(
+                null, null, SCOPE_PLATFORM, PLATFORM_CALLER, PLATFORM_TICKET,
+                new ManagementDtos.ReindexRequest(64), null);
+
+        assertEquals(9, response.indexedChunks());
+        verify(indexingPort).reindexGlobalCorpus(eq(64));
+        verify(indexingPort, never()).reindex(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("⛔ 平台档重索引无治理票据 403，且一次连接都不发起")
+    void reindexInPlatformScopeWithoutTicketIsForbidden() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.reindex(null, null, SCOPE_PLATFORM, PLATFORM_CALLER, null,
+                        new ManagementDtos.ReindexRequest(64), null));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("治理票据"), ex.getReason());
+        verifyNoInteractions(indexingPort);
+    }
+
+    @Test
+    @DisplayName("⛔ 平台档重索引拒绝租户域令牌（登录身份不够格）")
+    void reindexInPlatformScopeRejectsTenantCaller() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.reindex(null, null, SCOPE_PLATFORM, TENANT_CALLER,
+                        PLATFORM_TICKET, null, "64"));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        verifyNoInteractions(indexingPort);
+    }
+
+    @Test
+    @DisplayName("⛔ 平台档重索引不收租户头（「索引全局桶的某个租户」不是任何一档的定义）")
+    void reindexInPlatformScopeWithTenantHeaderIsBadRequest() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.reindex(TENANT, null, SCOPE_PLATFORM, PLATFORM_CALLER,
+                        PLATFORM_TICKET, null, "64"));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        verifyNoInteractions(indexingPort);
+    }
+
+    @Test
+    @DisplayName("⛔ 盘点档（ALL）重索引返回 409：不存在「往全部租户写」这种动作")
+    void reindexInAllScopeIsConflict() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.reindex(null, null, SCOPE_ALL, PLATFORM_CALLER, SCOPE_ALL,
+                        null, "64"));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
+        verifyNoInteractions(indexingPort);
+    }
+
+    @Test
+    @DisplayName("租户档重索引不受平台通道影响：域/票据属性缺席时行为零变化")
+    void reindexInTenantScopeIgnoresCallerDomainAndTicket() {
+        when(indexingPort.reindex(any(), anyInt()))
+                .thenReturn(new CorpusIndexingPort.ReindexOutcome(1, 1, 3));
+
+        controller.reindex(TENANT, null, SCOPE_TENANT, PLATFORM_CALLER, PLATFORM_TICKET,
+                null, "8");
+
+        verify(indexingPort).reindex(eq(TENANT), eq(8));
+        verify(indexingPort, never()).reindexGlobalCorpus(anyInt());
     }
 
     private ManagementDtos.DocumentVerificationRequest documentRequest(VerificationStatus target) {

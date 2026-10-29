@@ -719,11 +719,18 @@ public class RagManagementController {
     /**
      * 重跑索引（补齐缺切词或缺向量的片段）。
      *
-     * <p><b>⚠️ 只索引本租户</b>：租户上下文来自请求头，
-     * 索引实现全程在设置了 {@code app.tenant_id} 的事务内操作。
+     * <p><b>⚠️ 这是写动作，按写侧闸门收</b>：它改的是 {@code rag_chunk.text_jieba} 与
+     * {@code rag_chunk_embedding}，所以走 {@link #requireWriteContext} 而不是读侧档位解析——
+     * 平台全局桶的重索引同样需要治理票据，租户域令牌与「没带票据的平台登录令牌」都不够格。
      *
-     * <p><b>⚠️ fail-closed</b>：只处理「来源已 VERIFIED」的片段，
-     * 与 worker 的启动重索引<b>同一口径</b>（同一份 SQL）——
+     * <p><b>⚠️ 两档是两条连接</b>（第二刀 2.5）：租户档全程在设置了
+     * {@code app.tenant_id} 的事务内操作；平台档整段跑在运维数据源会话里、
+     * <b>不</b>设置会话租户（填哨兵会被 {@code rag_current_tenant()} 直接 RAISE）。
+     * 档位到此为止，端口方法名收口桶——{@code reindexGlobalCorpus} 没有租户参数，
+     * 「用平台档索引某个租户」这句调用在签名上就拼不出来。
+     *
+     * <p><b>⚠️ fail-closed</b>：只处理「来源与载体均已 VERIFIED、载体可检索」的片段，
+     * 与 worker 的启动重索引<b>同一口径</b>（同一份 SQL 派生）——
      * 未校验语料不会因为「点了重跑索引」就进索引。
      *
      * <p><b>⚠️ {@code limit} 有两种给法</b>：请求体 {@code {"limit":n}}（前端两个调用点的用法）
@@ -743,9 +750,12 @@ public class RagManagementController {
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
             @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
             @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
             @Valid @RequestBody(required = false) ManagementDtos.ReindexRequest request,
             @RequestParam(name = "limit", required = false) String limitParam) {
-        RagTenantContext tenant = requireTenantContext(tenantId, minTrustTierHeader, scopeHeader);
+        RagManagementContext context = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
         int limit = resolveReindexLimit(request, limitParam);
         // ⚠️ 上限在这里再压一道：Bean Validation 只在**请求体存在**时生效，
         //    而 body 可空 → 默认值分支也要过同一道闸。
@@ -753,7 +763,9 @@ public class RagManagementController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "limit 必须在 1～" + MAX_REINDEX_LIMIT + " 之间");
         }
-        CorpusIndexingPort.ReindexOutcome outcome = indexingPort.reindex(tenant.tenantId(), limit);
+        CorpusIndexingPort.ReindexOutcome outcome = context.scope() == RagCorpusScope.PLATFORM
+                ? indexingPort.reindexGlobalCorpus(limit)
+                : indexingPort.reindex(context.requireTenant().tenantId(), limit);
         return new ManagementDtos.ReindexResponse(
                 outcome.indexedChunks(), outcome.scannedChunks(), outcome.durationMs());
     }

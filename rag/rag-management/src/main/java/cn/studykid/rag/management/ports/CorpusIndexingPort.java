@@ -12,9 +12,10 @@ import org.jspecify.annotations.NonNull;
  * 混在一起会让「审核一次来源」与「重算一遍向量」共用同一套失败语义，
  * 而二者的失败原因完全不同（治理冲突 vs 资源不足）。
  *
- * <p><b>⚠️ 租户隔离由实现方保证</b>：本端口只接收 {@code tenantId}，
+ * <p><b>⚠️ 租户隔离由实现方保证</b>：租户档方法只接收 {@code tenantId}，
  * 实现必须在设置了 {@code app.tenant_id} 的事务内操作
- * （否则 RLS 会把全部行过滤掉，表现为「重索引跑了但一条没处理」且不报错）。
+ * （否则 RLS 会把全部行过滤掉，表现为「重索引跑了但一条没处理」且不报错）；
+ * 全局档方法<b>不收</b>租户参数，实现必须走运维数据源会话且<b>不</b>设置会话租户。
  *
  * <p><b>⚠️ 诚实边界</b>：当前嵌入模型为本地确定性占位
  * （{@code LocalDeterministicEmbeddingPort}），
@@ -30,6 +31,21 @@ public interface CorpusIndexingPort {
      * @return 重索引结果
      */
     @NonNull ReindexOutcome reindex(@NonNull String tenantId, int limit);
+
+    /**
+     * 重跑<b>平台全局桶</b>的索引（第二刀 2.5）。
+     *
+     * <p>⚠️ <b>没有租户参数</b>：与 {@code RagOpsSessionPort} 同一理由——
+     * 全局桶的写通道跑在 BYPASSRLS 的运维角色上，
+     * 留一个租户位就等于把「写进别人的桶」变成一句合法的调用。
+     *
+     * <p>实现须在运维通道未接入时抛 503（{@code RagOpsUnavailableException}），
+     * 不得回落到应用角色：回落会扫到行、写不进、却报告成功。
+     *
+     * @param limit 本次最多处理的片段数（必须 &gt; 0）
+     * @return 重索引结果
+     */
+    @NonNull ReindexOutcome reindexGlobalCorpus(int limit);
 
     /**
      * 重索引结果。

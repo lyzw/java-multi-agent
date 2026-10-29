@@ -60,4 +60,37 @@ public interface CorpusRepository {
      */
     void upsertEmbedding(@NonNull String tenantId, @NonNull String chunkId,
                          @NonNull float[] embedding, @NonNull String embedModel);
+
+    // ---------------------------------------------------------------------
+    // 平台全局桶（RAG-D11 §1.3 / 第二刀 2.5）
+    //
+    // ⚠️⚠️ 下面两个方法<b>刻意没有 tenantId 参数</b>：
+    //   全局桶的写通道跑在 BYPASSRLS 的运维角色上，数据库层不再限制它写哪个桶。
+    //   若这里留一个租户参数，「把别的桶写进去」就是一句合法的调用；
+    //   现在它在方法签名上就没有形态——桶由方法名决定，不由入参决定。
+    //   （与 RagOpsSessionPort#inGlobalCorpusSession 同一个结构性护栏思路。）
+    // ---------------------------------------------------------------------
+
+    /**
+     * 回填<b>全局桶</b>片段的词法分词列。
+     *
+     * <p>实现必须走运维数据源会话（{@code rag_ops}）：应用角色 {@code rag_app}
+     * 对全局行是「静默 0 行」而非报错，用它写会把「索引成功」变成假报告。
+     *
+     * @param chunkId 片段 ID（须属全局桶；租户片段不受影响）
+     * @param jiebaTokens 应用层预分词结果（空格分隔）
+     */
+    void updateJiebaTokensInGlobalBucket(@NonNull String chunkId,
+                                         @NonNull String jiebaTokens);
+
+    /**
+     * 写入或更新<b>全局桶</b>片段的向量。
+     *
+     * @param chunkId 片段 ID（须属全局桶）
+     * @param embedding 向量（维度须与 embedModel 一致）
+     * @param embedModel 嵌入模型标识
+     */
+    void upsertEmbeddingInGlobalBucket(@NonNull String chunkId,
+                                       @NonNull float[] embedding,
+                                       @NonNull String embedModel);
 }

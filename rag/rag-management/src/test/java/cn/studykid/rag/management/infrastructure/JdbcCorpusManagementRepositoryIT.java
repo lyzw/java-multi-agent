@@ -24,8 +24,11 @@ import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
+import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
 import cn.studykid.rag.infrastructure.ops.RagOpsDataSourceProvider;
 import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
+import cn.studykid.rag.infrastructure.persistence.JdbcCorpusRepository;
+import cn.studykid.rag.infrastructure.persistence.VectorColumn;
 import cn.studykid.rag.management.core.CorpusDocument;
 import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.CorpusIssues;
@@ -37,6 +40,8 @@ import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
 import cn.studykid.rag.management.core.VerificationDecision;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
+import cn.studykid.rag.ports.CorpusRepository;
+import cn.studykid.rag.ports.EmbeddingPort;
 
 /**
  * 语料管理仓库集成测试（RAG-D07 §2 准入流程 / RAG-D03 §2 数据模型）。
@@ -1030,6 +1035,84 @@ class JdbcCorpusManagementRepositoryIT {
     }
 
     // ---------------------------------------------------------------------
+    // 全局桶<b>索引</b>通道（RAG-D11 §1.3 / 第二刀 2.5）
+    //
+    // 这一段补的是 G-1/G-2 没覆盖的那半条路：治理动作（登记/审核）之后，
+    // 语料还得<b>可被召回</b>——切词与向量是另一批 SQL、另一张写表。
+    // 单测能钉住「走的是哪个方法名」，钉不住「那条 SQL 在真库里跑得动吗」：
+    // 本仓的扫描 SQL 已两次因「uuid 游标未转换」「列不存在」在真库上翻车
+    // （见 ChunkIndexer#PENDING_SQL 的两条修复注释），而它在被真正调用前从未跑过。
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("G-7 全局桶重索引在真库跑通：扫描 SQL 可执行，切词与向量只落哨兵桶")
+    void globalBucketReindexRunsOnRealDatabaseThroughOpsWindow() {
+        RagOpsDataSourceProvider session = opsChannelSession();
+        requireAdminConnection();
+        // ⚠️ 前置条件（不是装饰）：本用例会替「全局桶里所有待索引片段」重算向量，
+        //    而这里的嵌入端口是测试替身。全局桶非空时它会覆盖生产代际的向量，
+        //    所以宁可不跑，也不能跑。
+        assertEquals(0, countGlobalChunks(),
+                "全局桶已有片段时不得跑本用例：占位向量会替真实语料重算索引");
+
+        GlobalChain chain = seedGlobalChain("9787100000036", "全局重索引夹具教材");
+        int tenantUntokenizedBefore = countTenantUntokenizedChunks();
+        try {
+            VectorColumn column = readEmbeddingColumnShape();
+            CorpusRepository corpus = new JdbcCorpusRepository(jdbcTemplate, column, session);
+            ChunkIndexer indexer = new ChunkIndexer(jdbcTemplate, transactionTemplate, corpus,
+                    new FixedDimensionEmbeddingPort(column.dimension()), 200, session);
+
+            ChunkIndexer.IndexingSummary summary = indexer.indexGlobalCorpus(50);
+
+            assertEquals(1, summary.indexedChunks(),
+                    "种下的那条全局片段必须被全局通道扫到并索引，否则 GLOBAL_PENDING_SQL 等于没跑过");
+            // ⚠️ 断言读的是<b>库</b>：运维角色带 BYPASSRLS，「影响 0 行且不报错」
+            //    在这条通道上不会再由 RLS 兜住，只有查库能区分「写对了桶」和「什么都没写」。
+            assertEquals(1, adminJdbcTemplate.queryForObject("""
+                            SELECT count(*) FROM rag_chunk
+                            WHERE chunk_id = ?::uuid AND tenant_id = rag_global_tenant_id()
+                              AND text_jieba <> ''
+                            """,
+                    Integer.class, chain.chunkId()),
+                    "词法通道必须真的补齐哨兵桶里那一行");
+            assertEquals(1, adminJdbcTemplate.queryForObject("""
+                            SELECT count(*) FROM rag_chunk_embedding
+                            WHERE chunk_id = ?::uuid AND tenant_id = rag_global_tenant_id()
+                              AND scope = 'PLATFORM'
+                            """,
+                    Integer.class, chain.chunkId()),
+                    "稠密通道写入的全局向量行必须带 scope='PLATFORM'（漏写该列会撞 CHECK，实测 2026-10-29）");
+            // 桶边界的反证：全局通道跑完后，租户桶里「缺切词」的条数一条都不能少
+            assertEquals(tenantUntokenizedBefore, countTenantUntokenizedChunks(),
+                    "全局通道动了租户桶 = BYPASSRLS 下无人能拦的跨桶写");
+        } finally {
+            deleteGlobalChain(chain);
+        }
+    }
+
+    @Test
+    @DisplayName("G-8 索引通道的全局写同样 fail-closed：未接运维数据源就 503，不回落应用角色")
+    void globalIndexWritesFailClosedWithoutOpsChannel() {
+        // 本用例<b>不需要</b>运维角色：验的是「通道缺席时的拒法」。
+        VectorColumn column = readEmbeddingColumnShape();
+        CorpusRepository corpus = new JdbcCorpusRepository(jdbcTemplate, column);
+        String chunkId = java.util.UUID.randomUUID().toString();
+
+        RagOpsUnavailableException jieba = assertThrows(RagOpsUnavailableException.class,
+                () -> corpus.updateJiebaTokensInGlobalBucket(chunkId, "二次 函数"));
+        assertEquals("rag.ops.datasource", jieba.missingConfiguration());
+        RagOpsUnavailableException dense = assertThrows(RagOpsUnavailableException.class,
+                () -> corpus.upsertEmbeddingInGlobalBucket(
+                        chunkId, new float[column.dimension()], "it-probe"));
+        assertEquals("rag.ops.datasource", dense.missingConfiguration());
+
+        ChunkIndexer indexer = new ChunkIndexer(jdbcTemplate, transactionTemplate, corpus,
+                new FixedDimensionEmbeddingPort(column.dimension()), 200);
+        assertThrows(RagOpsUnavailableException.class, () -> indexer.indexGlobalCorpus(10));
+    }
+
+    // ---------------------------------------------------------------------
     // 全局写用例的夹具
     // ---------------------------------------------------------------------
 
@@ -1040,13 +1123,156 @@ class JdbcCorpusManagementRepositoryIT {
      * （须 BYPASSRLS、须非超级用户）和「窗口外取不到连接」都只有真池 + 真角色才验得到。
      */
     private CorpusManagementPort repositoryWithOpsChannel() {
+        return new JdbcCorpusManagementRepository(
+                jdbcTemplate, transactionTemplate, opsChannelSession());
+    }
+
+    /** 与 {@link #repositoryWithOpsChannel()} 共用：建出真运维池（未配置 IT_RAG_OPS_URL 时跳过）。 */
+    private RagOpsDataSourceProvider opsChannelSession() {
         String url = System.getenv(PG_OPS_URL_ENV);
         Assumptions.assumeTrue(url != null && !url.isBlank(),
                 "skipped: " + PG_OPS_URL_ENV + " 未设置（全局写需要 rag_ops 角色）");
         opsProvider = RagOpsDataSourceProvider.connected(url,
                 envOrDefault(PG_OPS_USER_ENV, extractUserFromUrl(url)),
                 envOrDefault(PG_OPS_PASSWORD_ENV, null), 2);
-        return new JdbcCorpusManagementRepository(jdbcTemplate, transactionTemplate, opsProvider);
+        return opsProvider;
+    }
+
+    /**
+     * 读出库里向量列的真实形态（类型 + 维度）。
+     *
+     * <p>⚠️ <b>不写死</b>：本地探针库是 {@code vector(1024)}，远程开发库已迁到
+     * {@code halfvec(4096)}（见 {@code deploy/sql/rag/04_migrate_embedding_halfvec_4096.sql}）。
+     * 写死任一值都会让另一种部署上「维度校验先炸，测不到被测的东西」。
+     */
+    private VectorColumn readEmbeddingColumnShape() {
+        String formatted = jdbcTemplate.queryForObject("""
+                SELECT format_type(a.atttypid, a.atttypmod)
+                FROM pg_attribute a
+                JOIN pg_class c ON c.oid = a.attrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'rag' AND c.relname = 'rag_chunk_embedding'
+                  AND a.attname = 'embedding'
+                """, String.class);
+        java.util.regex.Matcher matcher =
+                java.util.regex.Pattern.compile("([a-z_]+)\\((\\d+)\\)").matcher(formatted);
+        assertTrue(matcher.find(), "读不出向量列形态：" + formatted);
+        return new VectorColumn(matcher.group(1), Integer.parseInt(matcher.group(2)));
+    }
+
+    /** 哨兵桶里的片段数（{@link #globalBucketReindexRunsOnRealDatabaseThroughOpsWindow} 的安全前置）。 */
+    private int countGlobalChunks() {
+        Integer count = adminJdbcTemplate.queryForObject(
+                "SELECT count(*) FROM rag_chunk WHERE tenant_id = rag_global_tenant_id()",
+                Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    /** 租户桶里「还没切词」的片段数——全局通道一条都不该动它们。 */
+    private int countTenantUntokenizedChunks() {
+        Integer count = adminJdbcTemplate.queryForObject(
+                "SELECT count(*) FROM rag_chunk WHERE scope = 'TENANT' AND text_jieba = ''",
+                Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    /** 一条可被索引的全局语料链（source → edition → document → chunk）。 */
+    private record GlobalChain(String sourceId, String editionId, String documentId, String chunkId) {
+    }
+
+    /**
+     * 由<b>库 owner</b> 种一条已校验的全局语料链，片段刻意「未切词、无向量」。
+     *
+     * <p>⚠️ 走 owner 而不是运维角色：这里要造的是「待索引的输入」，
+     * 而 {@code rag_ops} 的授权面（见 {@code deploy/sql/rag/05_rag_ops_role.sql}）
+     * 只覆盖治理动作要写的列。用另一条通道铺夹具，才不会让「被测通道」同时充当「铺路通道」。
+     */
+    private GlobalChain seedGlobalChain(String isbn, String title) {
+        String sourceId = java.util.UUID.randomUUID().toString();
+        String editionId = java.util.UUID.randomUUID().toString();
+        String documentId = java.util.UUID.randomUUID().toString();
+        String chunkId = java.util.UUID.randomUUID().toString();
+        adminJdbcTemplate.update("""
+                INSERT INTO rag_source
+                    (source_id, tenant_id, scope, source_type, title, publisher, isbn,
+                     trust_tier, ver_status, ver_method, ver_valid_days, license_status,
+                     ver_evidence, verified_at)
+                VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM',
+                        '教材', ?, '人民教育出版社', ?,
+                        'OFFICIAL_PUBLISHER', 'VERIFIED', 'ISBN', 365,
+                        'LICENSED'::rag_license_status, ?, now())
+                """, sourceId, title, isbn, "ISBN:" + isbn + "@it-global-reindex");
+        adminJdbcTemplate.update("""
+                INSERT INTO rag_edition
+                    (edition_id, tenant_id, source_id, subject, grade, term, publisher,
+                     revision_code, scope)
+                VALUES (?::uuid, rag_global_tenant_id(), ?::uuid, '数学', '八年级', '上册',
+                        '人教版', ?, 'PLATFORM')
+                """, editionId, sourceId, editionId);
+        adminJdbcTemplate.update("""
+                INSERT INTO rag_document
+                    (document_id, tenant_id, source_id, edition_id, carrier, title,
+                     parse_status, ver_status, retrievable, license_status, scope)
+                VALUES (?::uuid, rag_global_tenant_id(), ?::uuid, ?::uuid, 'PDF', ?,
+                        'CHUNKED', 'VERIFIED', true, 'LICENSED', 'PLATFORM')
+                """, documentId, sourceId, editionId, title + "（载体）");
+        adminJdbcTemplate.update("""
+                INSERT INTO rag_chunk
+                    (chunk_id, tenant_id, document_id, edition_id, role, text, page_number,
+                     section_path, char_start, char_end, content_hash, scope)
+                VALUES (?::uuid, rag_global_tenant_id(), ?::uuid, ?::uuid,
+                        'EXPLANATION'::rag_chunk_role, ?, 1, '第一章', 0, ?, ?, 'PLATFORM')
+                """, chunkId, documentId, editionId, "二次函数顶点坐标公式",
+                "二次函数顶点坐标公式".length(), "f".repeat(64));
+        return new GlobalChain(sourceId, editionId, documentId, chunkId);
+    }
+
+    /**
+     * 清理全局语料链：子表先删，最后删来源。
+     *
+     * <p>⚠️ 走 owner：{@code rag_ops} 在整个授权面里<b>没有任何 DELETE</b>
+     * （见 05 号脚本），夹具清理本来就不该是它能做的事。
+     */
+    private void deleteGlobalChain(GlobalChain chain) {
+        adminJdbcTemplate.update(
+                "DELETE FROM rag_chunk_embedding WHERE chunk_id = ?::uuid", chain.chunkId());
+        adminJdbcTemplate.update(
+                "DELETE FROM rag_chunk WHERE chunk_id = ?::uuid", chain.chunkId());
+        adminJdbcTemplate.update(
+                "DELETE FROM rag_document WHERE document_id = ?::uuid", chain.documentId());
+        adminJdbcTemplate.update(
+                "DELETE FROM rag_edition WHERE edition_id = ?::uuid", chain.editionId());
+        deleteGlobalSource(chain.sourceId());
+    }
+
+    /**
+     * 维度可配的嵌入端口替身：只用于「把向量写进真实列」这一步。
+     *
+     * <p>⚠️ 它<b>不是</b>语义质量的一部分——本用例断言的是链路（写进去、落在对的桶、
+     * 作用域对得上），不是相似度。生产口径见 {@code EmbeddingPorts}。
+     */
+    private static final class FixedDimensionEmbeddingPort implements EmbeddingPort {
+
+        private final int dimension;
+
+        FixedDimensionEmbeddingPort(int dimension) {
+            this.dimension = dimension;
+        }
+
+        @Override
+        public java.util.List<float[]> embed(java.util.List<String> texts) {
+            return texts.stream().map(t -> new float[dimension]).toList();
+        }
+
+        @Override
+        public String modelVersion() {
+            return "it-probe-vector";
+        }
+
+        @Override
+        public int dimension() {
+            return dimension;
+        }
     }
 
     /** 该行是否恰好落在「哨兵桶 + scope='PLATFORM'」这一处。 */
