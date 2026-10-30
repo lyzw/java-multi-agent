@@ -304,10 +304,18 @@ public class ApiExceptionHandler {
         HttpStatus status = HttpStatus.resolve(e.getStatusCode().value());
         // ⚠️ 未映射到 HttpStatus 的状态码按 500 处理：
         //    它意味着控制器声明了一个不存在的状态，属编程错误，不能当 4xx 放行。
-        if (status == null || status.is5xxServerError()) {
-            log.error("控制器声明了非法或服务端错误状态: code={}", e.getStatusCode(), e);
+        if (status == null) {
+            log.error("控制器声明了非法状态码: code={}", e.getStatusCode(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ErrorResponse("INTERNAL_ERROR", "服务暂时不可用"));
+        }
+        // ⚠️ 控制器显式声明的 5xx 状态码保持原样，不转换为 500：
+        //    例如 503 SERVICE_UNAVAILABLE 表示服务暂时不可用，
+        //    转换为 500 会丢失语义，让客户端无法区分「服务故障」与「服务不可用」。
+        if (status.is5xxServerError()) {
+            log.warn("控制器声明了服务端错误状态: code={}", e.getStatusCode());
+            return ResponseEntity.status(status)
+                    .body(new ErrorResponse(codeOf(status), messageOf(status)));
         }
         log.info("控制器声明的状态: code={}", e.getStatusCode());
         return ResponseEntity.status(status)
