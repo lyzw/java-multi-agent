@@ -288,14 +288,21 @@ public class PlatformCapabilityPublishService {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("生命周期状态非法: " + e.getMessage(), e);
         }
-        boolean moved = lifecycle.transition(spec.type(), null, spec.objectId(),
-                spec.version(), from, to);
-        if (!moved) {
-            // ⚠️ 原状态不符 = 并发竞争（CAS 前置条件不满足），
-            //    这不是「迁移非法」，而是「别人先动了」—— 两者必须能分开。
-            throw new ConfigPublishBaselineConflictException(
-                    "生命周期迁移的原状态不符：期望 " + from + "，对象 " + spec.objectId()
-                            + " v" + spec.version() + " 当前不在该状态");
+        try {
+            boolean moved = lifecycle.transition(spec.type(), null, spec.objectId(),
+                    spec.version(), from, to);
+            if (!moved) {
+                // ⚠️ 原状态不符 = 并发竞争（CAS 前置条件不满足），
+                //    这不是「迁移非法」，而是「别人先动了」—— 两者必须能分开。
+                throw new ConfigPublishBaselineConflictException(
+                        "生命周期迁移的原状态不符：期望 " + from + "，对象 " + spec.objectId()
+                                + " v" + spec.version() + " 当前不在该状态");
+            }
+        } catch (RuntimeException e) {
+            // ⚠️ 保留原始异常信息，避免丢失堆栈
+            log.error("平台级生命周期迁移失败: type={}, objectId={}, version={}",
+                    spec.type(), spec.objectId(), spec.version(), e);
+            throw e;
         }
     }
 
