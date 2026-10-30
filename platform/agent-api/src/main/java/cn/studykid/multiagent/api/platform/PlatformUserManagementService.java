@@ -258,7 +258,12 @@ public class PlatformUserManagementService {
         }
     }
 
-    /** 平台超管数量（撤销最后一员防护用）。 */
+    /** 平台超管数量（撤销最后一员防护用）。
+     *
+     * ⚠️ <b>注意</b>：此方法使用 {@code rolesByUser()} 获取角色数据，
+     *    该方法可能返回缓存数据。在并发场景下，计数可能不准确。
+     *    如需精确计数，应使用实时查询（如 {@code countUsersWithRole}）。
+     */
     private long countSuperAdmins() {
         return users.rolesByUser().values().stream()
                 .filter(roles -> roles.contains(PlatformRoles.SUPER_ADMIN))
