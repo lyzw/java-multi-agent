@@ -191,11 +191,21 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
     /**
      * 校验 Agent 引用：非空且不含分隔符。
      *
-     * <p>⚠️ 不含分隔符是<b>可分解性</b>要求：{@code (a/b, c)} 与 {@code (a, b/c)}
-     * 会产生相同的键 —— 那会让不同 Agent 的调用错误地复用同一逻辑操作。
+     * <p>⚠️ <b>额外校验组成部分</b>：agentRef 格式为 {@code agentId@version}，
+     * 拆分后分别校验 agentId 和 version 不含分隔符，
+     * 否则 {@code agentId=a/b} 与 {@code version=c} 会与
+     * {@code agentId=a} 与 {@code version=b/c} 产生相同的键。
      */
     private static @NonNull String requireAgentRef(@NonNull String agentRef) {
         requirePart(agentRef, "agentRef");
+        int atPos = agentRef.indexOf('@');
+        if (atPos <= 0 || atPos == agentRef.length() - 1) {
+            throw new IllegalArgumentException("agentRef 格式非法（必须为 agentId@version）: " + agentRef);
+        }
+        String agentId = agentRef.substring(0, atPos);
+        String version = agentRef.substring(atPos + 1);
+        requirePart(agentId, "agentRef.agentId");
+        requirePart(version, "agentRef.version");
         return agentRef;
     }
 

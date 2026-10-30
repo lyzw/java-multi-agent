@@ -204,10 +204,15 @@ public class SecurityConfiguration {
 
             String header = request.getHeader(AUTH_HEADER);
             if (header != null && !header.isBlank()) {
+                // ⚠️ 严格匹配 Bearer 前缀：非 Bearer 格式（Basic/Token 等）直接放行，
+                //    不尝试验证 —— 避免给攻击者提供格式探测的侧信道
+                if (!header.startsWith(BEARER_PREFIX)) {
+                    SecurityContextHolder.clearContext();
+                    chain.doFilter(request, response);
+                    return;
+                }
                 try {
-                    String token = header.startsWith(BEARER_PREFIX)
-                            ? header.substring(BEARER_PREFIX.length()).trim()
-                            : header.trim();
+                    String token = header.substring(BEARER_PREFIX.length()).trim();
 
                     TenantContext context =
                             authenticationService.authenticateToken(token, Instant.now());

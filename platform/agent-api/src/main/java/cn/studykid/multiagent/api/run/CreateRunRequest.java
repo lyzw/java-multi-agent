@@ -176,17 +176,38 @@ public record CreateRunRequest(
     /** 取出所有字符串值（递归）。 */
     private static java.util.List<String> flatten(Map<String, Object> map) {
         java.util.List<String> out = new java.util.ArrayList<>();
-        map.forEach((k, v) -> collect(v, out));
+        map.forEach((k, v) -> collect(v, out, 0, new java.util.concurrent.atomic.AtomicInteger()));
         return out;
     }
 
+    /** 最大递归深度（防 StackOverflow）。 */
+    private static final int MAX_FLATTEN_DEPTH = 50;
+    /** 最大收集节点数（防 OOM）。 */
+    private static final int MAX_FLATTEN_VALUES = 10000;
+
     @SuppressWarnings("unchecked")
-    private static void collect(Object value, java.util.List<String> out) {
+    private static void collect(Object value, java.util.List<String> out,
+                                int depth, java.util.concurrent.atomic.AtomicInteger count) {
+        if (depth > MAX_FLATTEN_DEPTH) {
+            throw new IllegalArgumentException("输入结构嵌套过深（超过 " + MAX_FLATTEN_DEPTH + " 层），请扁平化后重试");
+        }
         if (value instanceof Map<?, ?> m) {
-            m.forEach((k, v) -> collect(v, out));
+            // ⚠️ 同时检查 key 和 value：key 本身可能是可识别信息（如手机号）
+            m.forEach((k, v) -> {
+                if (k != null) {
+                    if (count.incrementAndGet() > MAX_FLATTEN_VALUES) {
+                        throw new IllegalArgumentException("输入结构包含过多节点（超过 " + MAX_FLATTEN_VALUES + " 个），请精简后重试");
+                    }
+                    out.add(String.valueOf(k));
+                }
+                collect(v, out, depth + 1, count);
+            });
         } else if (value instanceof Iterable<?> it) {
-            it.forEach(v -> collect(v, out));
+            it.forEach(v -> collect(v, out, depth + 1, count));
         } else if (value != null) {
+            if (count.incrementAndGet() > MAX_FLATTEN_VALUES) {
+                throw new IllegalArgumentException("输入结构包含过多节点（超过 " + MAX_FLATTEN_VALUES + " 个），请精简后重试");
+            }
             out.add(String.valueOf(value));
         }
     }

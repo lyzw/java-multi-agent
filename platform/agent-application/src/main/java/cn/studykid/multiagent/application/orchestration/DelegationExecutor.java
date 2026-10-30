@@ -16,6 +16,8 @@ import org.slf4j.LoggerFactory;
 import cn.studykid.multiagent.application.cap.ClosureFingerprint;
 import cn.studykid.multiagent.application.cap.ClosureResolutionException;
 import cn.studykid.multiagent.application.cap.ClosureResolver;
+import cn.studykid.multiagent.core.cap.AuthzUnavailableException;
+import cn.studykid.multiagent.core.cap.AuthzVersion;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapRoutingPolicyDef;
@@ -525,6 +527,12 @@ public class DelegationExecutor {
         //    收窄只作用于「选择」，不作用于「准入」——
         //    策略里藏一个父根本没打算交给谁的目标，是配置错误，不是运行期该默默接受的事。
         Optional<ChildAgentRef> declared = candidateDeclared;
+        if (effectiveTargetId == null) {
+            // ⚠️ 防御性：引擎返回 null 目标 = 策略不可用 → fail-closed
+            log.error("路由引擎返回 null 目标，fail-closed: policy={}, invocation={}",
+                    orchestration.routingPolicyRef(), command.invocationId());
+            return DelegationOutcome.denied(ReasonCode.ROUTING_POLICY_UNAVAILABLE, command.invocationId());
+        }
         if (!effectiveTargetId.equals(command.targetAgentId())) {
             declared = orchestration.child(effectiveTargetId);
             if (declared.isEmpty()) {
@@ -873,16 +881,27 @@ public class DelegationExecutor {
      * @return 读不到权威授权版本时为 {@code null}
      */
     private @Nullable TenantContext buildContext(@NonNull DelegationCommand command) {
-        long authzVersion;
         try {
-            authzVersion = authzVersions.require(command.tenantId(),
-                    "worker").authzVersion();
+            AuthzVersionPort.AuthzVersion authz = authzVersions.require(command.tenantId(), "worker");
+            if (authz == null || authz.authzVersion() < AuthzVersion.INITIAL_VERSION) {
+                // ⚠️ 防御性校验：require() 返回 null 或无效版本号 → fail-closed
+                //    正常路径下 require() 抛 AuthzUnavailableException，
+                //    此处兜住「实现返回 null 或哨兵值」的边界情况
+                log.error("权威授权版本不可用（返回 null 或无效版本），fail-closed: tenant={}",
+                        command.tenantId());
+                return null;
+            }
+            return new TenantContext(command.tenantId(), "worker",
+                    Set.of(AuthorizationService.Roles.WORKER), authz.authzVersion());
+        } catch (AuthzUnavailableException e) {
+            // ⚠️ 权威源不可读 → 无法证明「该主体有权委派」→ fail-closed
+            log.warn("权威授权版本读取失败，委派 fail-closed: tenant={}", command.tenantId(), e);
+            return null;
         } catch (RuntimeException e) {
-            log.warn("授权版本不可用，委派 fail-closed: tenant={}", command.tenantId(), e);
+            // ⚠️ 兜底：任何未预期的运行时异常同样 fail-closed
+            log.error("授权版本读取异常，委派 fail-closed: tenant={}", command.tenantId(), e);
             return null;
         }
-        return new TenantContext(command.tenantId(), "worker",
-                Set.of(AuthorizationService.Roles.WORKER), authzVersion);
     }
 
     /**

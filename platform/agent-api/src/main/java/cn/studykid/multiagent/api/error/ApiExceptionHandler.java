@@ -149,17 +149,18 @@ public class ApiExceptionHandler {
     }
 
     /**
-     * 零保留闸门拦截 → 451 或 403。
+     * 零保留闸门拦截 → 451（Legal Obstacle）。
      *
-     * <p>用 451（Legal Obstacle）表达合规阻断：
-     * 它比 403 更准确地说明「不是权限不足，是法律合规不允许」。
+     * <p>用 451（Unavailable For Legal Reasons）表达合规阻断：
+     * 它比 403/422 更准确地说明「不是权限不足，是法律合规不允许」。
+     * RFC 7725 为此场景专门定义的状态码。
      */
     @ExceptionHandler(ZeroRetentionViolationException.class)
     public ResponseEntity<ErrorResponse> handleZeroRetention(ZeroRetentionViolationException e) {
         // ⚠️ 合规事件需留痕，但**不记录被拦截的数据内容**
         log.error("零保留闸门拦截: state={}, provider={}, classification={}",
                 e.state(), e.providerId(), e.classification());
-        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+        return ResponseEntity.status(HttpStatus.UNAVAILABLE_FOR_LEGAL_REASONS)
                 .body(new ErrorResponse("COMPLIANCE_BLOCKED",
                         "当前合规状态不允许该请求"));
     }
@@ -180,11 +181,16 @@ public class ApiExceptionHandler {
 
     /**
      * 参数校验失败 → 400。
+     *
+     * <p>⚠️ <b>不回传 {@code e.getMessage()}</b>：IllegalArgumentException 可能被
+     * 第三方库或未来代码触发，其消息可能含 SQL 片段、表名、内部路径等敏感信息。
+     * 仅记日志，返回固定文案。
      */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ErrorResponse> handleInvalidArgument(IllegalArgumentException e) {
+        log.warn("参数校验失败: {}", e.getMessage());
         return ResponseEntity.badRequest()
-                .body(new ErrorResponse("INVALID_REQUEST", e.getMessage()));
+                .body(new ErrorResponse("INVALID_REQUEST", "请求参数不合法"));
     }
 
     /**
@@ -305,7 +311,7 @@ public class ApiExceptionHandler {
         // ⚠️ 未映射到 HttpStatus 的状态码按 500 处理：
         //    它意味着控制器声明了一个不存在的状态，属编程错误，不能当 4xx 放行。
         if (status == null) {
-            log.error("控制器声明了非法状态码: code={}", e.getStatusCode(), e);
+            log.error("控制器声明了非法状态码: code={}", e.getStatusCode().value());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ErrorResponse("INTERNAL_ERROR", "服务暂时不可用"));
         }

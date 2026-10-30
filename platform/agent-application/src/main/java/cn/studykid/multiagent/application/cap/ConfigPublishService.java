@@ -306,9 +306,7 @@ public class ConfigPublishService {
                 log.info("发布 CAS 冲突，变基重试（attempt={}, 新基线={}）", attempt, expected);
             }
         }
-        throw lastConflict == null
-                ? new ConfigPublishConflictException(expected, "发布失败：CAS 持续冲突")
-                : lastConflict;
+        throw lastConflict; // lastConflict 在循环体执行后必然非 null（失败时赋值，成功时 return）
     }
 
     private ConfigPublishResult doPublish(ConfigPublishCommand command, Long expected, int attempt) {
@@ -548,7 +546,7 @@ public class ConfigPublishService {
                 "release:" + rollbackRelease.configPublishSeq(),
                 DecisionAuditEntry.Kind.ROLLBACK,
                 rollbackRelease.configPublishSeq(), rollbackRelease.releaseId(),
-                command.requesterId(), "发布", now));
+                command.requesterId(), "回滚", now));
 
         ConfigPointer pointer = new ConfigPointer(
                 ConfigPointer.pointerKey(command.scope(), command.tenantId()),

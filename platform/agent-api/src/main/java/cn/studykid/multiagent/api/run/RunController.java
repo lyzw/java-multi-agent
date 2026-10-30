@@ -62,30 +62,11 @@ public class RunController {
     private final cn.studykid.multiagent.application.prompt.PromptGuard promptGuard;
 
     /**
-     * ⚠️ <b>测试与「限流未装配」场景的便捷构造器</b>（P3-D08）。
+     * 完整构造器（唯一注入点）：含限流器与 Prompt 防护。
      *
-     * <p>本类被 {@code @RestController} 组件扫描注册，<b>有两个构造器时
-     * Spring 无法选择</b> → {@code No default constructor found} →
-     * 上下文启动失败（与 P3-D07 F-6 同源）。
-     * 故必须用 {@link org.springframework.beans.factory.annotation.Autowired}
-     * 显式标记注入用的那个。
+     * <p>⚠️ 此前有 4 参 / 5 参 / 6 参三个构造器，Spring 无法选择 → 歧义。
+     *    现收口为唯一构造器，测试场景通过装配 {@link #NEVER_LIMIT} 桩实现。
      */
-    public RunController(RunCreationService runCreation,
-                         AuthorizationService authorization,
-                         ZeroRetentionGate retentionGate,
-                         CurrentPrincipal currentPrincipal) {
-        this(runCreation, authorization, retentionGate, currentPrincipal, NEVER_LIMIT);
-    }
-
-    public RunController(RunCreationService runCreation,
-                         AuthorizationService authorization,
-                         ZeroRetentionGate retentionGate,
-                         CurrentPrincipal currentPrincipal,
-                         RateLimitPort rateLimiter) {
-        this(runCreation, authorization, retentionGate, currentPrincipal, rateLimiter,
-                new cn.studykid.multiagent.application.prompt.PromptGuard());
-    }
-
     @org.springframework.beans.factory.annotation.Autowired
     public RunController(RunCreationService runCreation,
                          AuthorizationService authorization,

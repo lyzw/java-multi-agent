@@ -178,9 +178,29 @@ public class AgentController {
      * 版本发布恢复时必须经三步发布工作流（草稿→审批→发布），不得直接复原本端点。
      */
 
-    /** 创建 Agent 请求体。 */
+    /**
+     * 创建 Agent 请求体。
+     *
+     * <p>⚠️ <b>输入校验</b>：name 长度限制 + 格式校验，防止 SQL 注入字符进入 DB。
+     *    虽然唯一约束兜底重名，但参数校验应在入库前完成。
+     */
     public record CreateAgentRequest(@NonNull String name,
                                      @Nullable String description) {
+        public CreateAgentRequest {
+            if (name == null || name.isBlank()) {
+                throw new IllegalArgumentException("name 不能为空");
+            }
+            if (name.length() > 128) {
+                throw new IllegalArgumentException("name 长度不能超过 128 个字符");
+            }
+            // ⚠️ 防止 SQL 注入字符：仅允许中文、英文、数字、下划线、连字符
+            if (!name.matches("[\\u4e00-\\u9fa5a-zA-Z0-9_\\-\\s]+")) {
+                throw new IllegalArgumentException("name 只能包含中文、英文、数字、下划线和连字符");
+            }
+            if (description != null && description.length() > 1024) {
+                throw new IllegalArgumentException("description 长度不能超过 1024 个字符");
+            }
+        }
     }
 
     /** Agent 视图（与端口 {@code AgentItem} 同构）。 */

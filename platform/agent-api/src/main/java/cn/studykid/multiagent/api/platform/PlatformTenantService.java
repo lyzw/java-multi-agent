@@ -167,7 +167,7 @@ public class PlatformTenantService {
                 id, current.lifecycleState(), target);
         if (row == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "租户生命周期已被并发变更，请刷新后重试");
+                    "租户生命周期已被并发变更，请等待 1 秒后刷新重试（活锁防护）");
         }
         return row;
     }
