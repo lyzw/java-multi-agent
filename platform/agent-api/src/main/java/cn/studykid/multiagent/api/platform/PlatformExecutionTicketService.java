@@ -302,12 +302,22 @@ public class PlatformExecutionTicketService {
 
     private void record(PlatformPrincipal principal, String tenantId,
                         String principalId, String decision, String reasonCode) {
+        // ⚠️ 解析 principalId 为 UUID：若为 null 或非法格式，则传 null 给审计事件。
+        //    避免重复调用 UUID.fromString（isUuid 已校验过格式）。
+        UUID principalUuid = null;
+        if (principalId != null && isUuid(principalId)) {
+            try {
+                principalUuid = UUID.fromString(principalId);
+            } catch (IllegalArgumentException e) {
+                // 日志记录，但不抛出异常：审计记录不应因 principalId 格式问题而失败
+                log.debug("principalId 不是有效 UUID: {}", principalId, e);
+            }
+        }
         audit.record(new PlatformAuditEvent(
                 UUID.randomUUID(), principal.userId(), "PLATFORM_USER",
                 AUDIT_ACTION, TARGET_TYPE, isUuid(tenantId) ? tenantId : null,
                 decision, reasonCode,
-                principalId == null || !isUuid(principalId)
-                        ? null : UUID.fromString(principalId),
+                principalUuid,
                 null, Instant.now(), null));
     }
 
