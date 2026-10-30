@@ -126,8 +126,14 @@ public class WorkerExecutionConfig {
      * {@code ZeroRetentionGate} 仍按供应商判定，真实学生数据须供应商
      * 在确认清单（{@code agent.compliance.zero-retention.confirmed-providers}）内。
      */
+    /**
+     * 原始模型网关（非 Primary，由 ObservableModelGateway 包装）。
+     *
+     * <p>配置了 {@code agent.model.minimax.api-key} 时走真实 MiniMax 调用；
+     * 未配置时回落 {@code FakeModelGateway} 占位，保证链路结构完整。
+     */
     @Bean
-    public ModelGateway modelGateway() {
+    public cn.studykid.multiagent.ports.model.ModelGateway rawModelGateway() {
         if (minimaxApiKey != null && !minimaxApiKey.isBlank()) {
             log.info("装配 MiniMaxModelGateway: 真实模型调用已启用, defaultModel={}",
                     minimaxDefaultModel);
@@ -294,7 +300,7 @@ public class WorkerExecutionConfig {
      */
     @Bean
     public cn.studykid.multiagent.worker.execute.WorkerChildAgentRunner workerChildAgentRunner(
-            cn.studykid.multiagent.ports.model.ModelGateway modelGateway,
+            cn.studykid.multiagent.ports.observer.ObservableModelGateway modelGateway,
             ToolInvocationGate gate,
             cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider configs,
             cn.studykid.multiagent.ports.orchestration.CancellationProbe cancellation) {
@@ -346,7 +352,7 @@ public class WorkerExecutionConfig {
      */
     @Bean
     public RunExecutionLoop runExecutionLoop(
-            ModelGateway modelGateway,
+            cn.studykid.multiagent.ports.observer.ObservableModelGateway modelGateway,
             RunClaimPort claimPort,
             ToolInvocationGate gate,
             PromptGuard promptGuard,
@@ -356,7 +362,9 @@ public class WorkerExecutionConfig {
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             cn.studykid.multiagent.ports.persistence.RunStepPort runStepPort,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
-            cn.studykid.multiagent.ports.persistence.RiskEventPort riskEventPort) {
+            cn.studykid.multiagent.ports.persistence.RiskEventPort riskEventPort,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.ports.observer.ExecutionObserverChain observerChain) {
         // ⚠️⚠️ **接管器必须在这里真实注入**（第九批 · MA-T12）：
         //    不注入时，Worker 接管后 RUNNING 的委派记录**永远无人能收敛**
         //    （新世代 token 不匹配、旧世代已被接管），
@@ -371,7 +379,7 @@ public class WorkerExecutionConfig {
         //    生产环境必须装配（infrastructure 的 JdbcRiskEventRepository）。
         return new RunExecutionLoop(modelGateway, claimPort, gate,
                 Duration.ofSeconds(leaseSeconds), workerId, promptGuard, eventPort, adopter,
-                contextTokenBudget, lifecycleProbe, runStepPort, riskEventPort);
+                contextTokenBudget, lifecycleProbe, runStepPort, riskEventPort, observerChain);
     }
 
     /**

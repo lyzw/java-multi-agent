@@ -15,6 +15,9 @@ import cn.studykid.multiagent.application.prompt.PromptGuard;
 import cn.studykid.multiagent.core.compliance.DataClassification;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
 import cn.studykid.multiagent.ports.model.ModelGateway;
+import cn.studykid.multiagent.ports.observer.ExecutionObserver;
+import cn.studykid.multiagent.ports.observer.ExecutionObserverChain;
+import cn.studykid.multiagent.ports.observer.ObservableModelGateway;
 import cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
@@ -50,7 +53,7 @@ public class RunExecutionLoop {
      */
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    private final ModelGateway modelGateway;
+    private final ObservableModelGateway modelGateway;
     private final RunClaimPort claimPort;
     private final ToolInvocationGate toolGate;
     private final Duration leaseDuration;
@@ -131,7 +134,15 @@ public class RunExecutionLoop {
      */
     private final TenantLifecycleProbe lifecycleProbe;
 
-    public RunExecutionLoop(@NonNull ModelGateway modelGateway,
+    /**
+     * 执行观测者链（可选装配）。
+     *
+     * <p>⚠️ 可为空 = 未装配：此时不触发观测，但<b>不报错</b>。
+     * 生产装配应传入，用于实时观测执行循环各阶段。
+     */
+    private final ExecutionObserverChain observerChain;
+
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
                              @NonNull Duration leaseDuration,
@@ -140,7 +151,7 @@ public class RunExecutionLoop {
                 new PromptGuard(), null);
     }
 
-    public RunExecutionLoop(@NonNull ModelGateway modelGateway,
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
                              @NonNull Duration leaseDuration,
@@ -155,7 +166,7 @@ public class RunExecutionLoop {
      *
      * @param eventPort 事件写入端口；{@code null} 表示**不写事件**（默认）
      */
-    public RunExecutionLoop(@NonNull ModelGateway modelGateway,
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
                              @NonNull Duration leaseDuration,
@@ -164,7 +175,7 @@ public class RunExecutionLoop {
                              @Nullable RunEventPort eventPort) {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
                 promptGuard, eventPort, null,
-                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null, null, null);
+                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null, null, null, null);
     }
 
     /**
@@ -173,7 +184,7 @@ public class RunExecutionLoop {
      * @param eventPort 事件写入端口；{@code null} 表示**不写事件**（默认）
      * @param adopter    在途委派接管器；{@code null} = 不做接管收敛
      */
-    public RunExecutionLoop(@NonNull ModelGateway modelGateway,
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
                              @NonNull Duration leaseDuration,
@@ -183,7 +194,7 @@ public class RunExecutionLoop {
                              @Nullable InFlightDelegationAdopter adopter) {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
                 promptGuard, eventPort, adopter,
-                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null, null, null);
+                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null, null, null, null);
     }
 
     /**
@@ -195,7 +206,7 @@ public class RunExecutionLoop {
      * @param stepPort           执行步骤写入端口（P7-2）；{@code null} 表示不写步骤
      * @param riskEventPort      安全事件写入端口（P7-4）；{@code null} 表示不写安全事件
      */
-    public RunExecutionLoop(@NonNull ModelGateway modelGateway,
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
                              @NonNull Duration leaseDuration,
@@ -206,7 +217,8 @@ public class RunExecutionLoop {
                              int contextTokenBudget,
                              @Nullable TenantLifecycleProbe lifecycleProbe,
                              @Nullable RunStepPort stepPort,
-                             @Nullable RiskEventPort riskEventPort) {
+                             @Nullable RiskEventPort riskEventPort,
+                             @Nullable ExecutionObserverChain observerChain) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
@@ -226,6 +238,7 @@ public class RunExecutionLoop {
         }
         this.contextTokenBudget = contextTokenBudget;
         this.lifecycleProbe = lifecycleProbe;
+        this.observerChain = observerChain;
         if (adopter == null) {
             log.warn("未装配在途委派接管器：Worker 接管后 RUNNING 的委派记录"
                     + "将无法收敛（一直悬着），真实原因会被掩盖成普通子调用失败");
@@ -253,6 +266,8 @@ public class RunExecutionLoop {
         if (!claimPort.isCurrentGeneration(tenantId, task.runId(), task.fencingToken())) {
             // 租约已过期并被接管。此时执行模型 = 白花钱，提交也会被拒
             log.info("世代已失效，放弃执行以节省成本: runId={}", task.runId());
+            notifyLoopComplete(tenantId, task.runId(),
+                    ExecutionOutcome.skippedStaleGeneration(), 0);
             return ExecutionOutcome.skippedStaleGeneration();
         }
 
@@ -305,6 +320,11 @@ public class RunExecutionLoop {
         appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_STARTED,
                 java.util.Map.of("state", "RUNNING", "attempt", task.attempt()));
 
+        // 观测者：执行循环开始
+        if (observerChain != null) {
+            observerChain.onLoopStart(tenantId, task.runId(), snapshot.maxSteps());
+        }
+
         try {
             while (steps < snapshot.maxSteps()) {
                 steps++;
@@ -326,6 +346,7 @@ public class RunExecutionLoop {
                     log.info("检测到取消请求，停止执行: runId={}", task.runId());
                     appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_CANCELLED,
                             java.util.Map.of("state", "CANCELLED"));
+                    notifyLoopComplete(tenantId, task.runId(), ExecutionOutcome.cancelled(), steps);
                     return ExecutionOutcome.cancelled();
                 }
 
@@ -341,6 +362,8 @@ public class RunExecutionLoop {
                             task.runId(), task.deadlineAt());
                     appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
                             java.util.Map.of("state", "TIMED_OUT"));
+                    notifyLoopComplete(tenantId, task.runId(),
+                            commitFailure(tenantId, task, "业务超时", "TIMEOUT"), steps);
                     return commitFailure(tenantId, task, "业务超时", "TIMEOUT");
                 }
 
@@ -373,6 +396,17 @@ public class RunExecutionLoop {
                     //    而伪装成用户输入等于把系统事实交给不可信通道。
                     systemPrompt = systemPrompt + "\n\n" + trimmed.notice();
                 }
+
+                // 观测者：步骤开始 + 裁剪事件
+                if (observerChain != null) {
+                    observerChain.onStepStart(tenantId, task.runId(), steps);
+                    if (trimmed.trimmed()) {
+                        observerChain.onContextTrimmed(tenantId, task.runId(),
+                                trimmed.droppedRounds(), trimmed.droppedTokens(),
+                                trimmed.droppedTools());
+                    }
+                }
+
                 ModelRequest request = new ModelRequest(
                         agentConfig.modelId(),
                         systemPrompt,
@@ -387,10 +421,18 @@ public class RunExecutionLoop {
                 // ── §2 P7-2：记录 THINK 步骤（模型推理耗时）──
                 //    started/completed 同时取，单条 INSERT 落库；失败不影响主流程。
                 java.time.Instant thinkStart = java.time.Instant.now();
-                ModelResponse response = modelGateway.complete(request);
+                ModelResponse response = modelGateway.complete(
+                        tenantId, task.runId(), steps, request);
                 java.time.Instant thinkEnd = java.time.Instant.now();
                 appendStep(tenantId, task, ++stepSeq, RunStepPort.Types.THINK,
                         thinkStart, thinkEnd);
+
+                // 观测者：模型调用完成
+                if (observerChain != null) {
+                    observerChain.onModelCallComplete(
+                            tenantId, task.runId(), steps, response,
+                            java.time.Duration.between(thinkStart, thinkEnd));
+                }
 
                 if (response.toolCalls().isEmpty()) {
                     // ⚠️ 编造出处检查（P3-D11 / FR-020 / I-5）：
@@ -413,11 +455,15 @@ public class RunExecutionLoop {
                         // P7-4：SEC-1/SEC-2 之外的明细事实——安全拦截落一条 SAFETY_BLOCK
                         emitRiskEvent(tenantId, task, RiskEventPort.SAFETY_BLOCK,
                                 "FABRICATED_SOURCE:" + e.rule());
-                        return commitFailure(tenantId, task, "输出涉嫌编造资料出处",
-                                "SAFETY_FABRICATED_SOURCE");
+                        ExecutionOutcome outcome = commitFailure(tenantId, task,
+                                "输出涉嫌编造资料出处", "SAFETY_FABRICATED_SOURCE");
+                        notifyLoopComplete(tenantId, task.runId(), outcome, steps);
+                        return outcome;
                     }
                     // 无工具调用 → 生成结果，正常完成
-                    return commitSuccess(tenantId, task, content);
+                    ExecutionOutcome succ = commitSuccess(tenantId, task, content);
+                    notifyLoopComplete(tenantId, task.runId(), succ, steps);
+                    return succ;
                 }
 
                 // ── §4 工具调用（逐个走完整闸门）───────────────────────
@@ -427,6 +473,14 @@ public class RunExecutionLoop {
                 java.time.Instant toolEnd = java.time.Instant.now();
                 appendStep(tenantId, task, ++stepSeq, RunStepPort.Types.TOOL,
                         toolStart, toolEnd);
+
+                // 观测者：工具调用完成
+                if (observerChain != null) {
+                    observerChain.onToolCallComplete(
+                            tenantId, task.runId(), steps,
+                            adaptToolResult(toolResult),
+                            java.time.Duration.between(toolStart, toolEnd));
+                }
 
                 // ⚠️ P4-D12 / G4：工具调用后记录事件（含 UNKNOWN）
                 //    operationState 取工具账本状态：SUCCEEDED / FAILED / REJECTED / UNKNOWN。
@@ -465,13 +519,17 @@ public class RunExecutionLoop {
                     //    不释放预算预留（成本可能已发生）
                     log.warn("工具结果未知，停止执行并转对账: runId={}, operation={}",
                             task.runId(), toolResult.unknownOperationId());
-                    return ExecutionOutcome.unknownResult(toolResult.unknownOperationId());
+                    ExecutionOutcome unknown = ExecutionOutcome.unknownResult(toolResult.unknownOperationId());
+                    notifyLoopComplete(tenantId, task.runId(), unknown, steps);
+                    return unknown;
                 }
 
                 if (toolResult.allRejected()) {
                     // 工具全被拒（如授权失败）→ 交由模型重新决策或失败
                     log.info("工具调用全部被拒: runId={}", task.runId());
-                    return commitFailure(tenantId, task, "工具调用被拒绝", "TOOL_REJECTED");
+                    ExecutionOutcome rejected = commitFailure(tenantId, task, "工具调用被拒绝", "TOOL_REJECTED");
+                    notifyLoopComplete(tenantId, task.runId(), rejected, steps);
+                    return rejected;
                 }
 
                 // ── 回灌：把「模型意图 + 工具结果」并入下一轮上下文 ──────
@@ -486,6 +544,8 @@ public class RunExecutionLoop {
                 if (!claimPort.renewLease(tenantId, task.runId(),
                         workerId, task.fencingToken(), leaseDuration)) {
                     log.info("续租失败（已被接管），停止执行: runId={}", task.runId());
+                    notifyLoopComplete(tenantId, task.runId(),
+                            ExecutionOutcome.skippedStaleGeneration(), steps);
                     return ExecutionOutcome.skippedStaleGeneration();
                 }
             }
@@ -493,6 +553,8 @@ public class RunExecutionLoop {
             // ── §5.1 步数超限 ──────────────────────────────────────────
             log.warn("步数超限: runId={}, steps={}, max={}",
                     task.runId(), steps, snapshot.maxSteps());
+            notifyLoopComplete(tenantId, task.runId(),
+                    commitFailure(tenantId, task, "步数超限", "MAX_STEPS"), steps);
             return commitFailure(tenantId, task, "步数超限", "MAX_STEPS");
 
         } catch (ModelGateway.ModelGatewayException e) {
@@ -500,21 +562,29 @@ public class RunExecutionLoop {
             if (e.kind().retryable()) {
                 log.info("模型调用可重试失败: runId={}, kind={}",
                         task.runId(), e.kind());
+                notifyLoopComplete(tenantId, task.runId(),
+                        ExecutionOutcome.retryableFailure(e.kind().name()), steps);
                 return ExecutionOutcome.retryableFailure(e.kind().name());
             }
             log.info("模型调用不可重试失败: runId={}, kind={}",
                     task.runId(), e.kind());
-            return commitFailure(tenantId, task, "模型调用失败：" + e.kind(),
-                    "MODEL_" + e.kind().name());
+            ExecutionOutcome modelErr = commitFailure(tenantId, task,
+                    "模型调用失败：" + e.kind(), "MODEL_" + e.kind().name());
+            notifyLoopComplete(tenantId, task.runId(), modelErr, steps);
+            return modelErr;
 
         } catch (ToolExecutionException e) {
             // ⚠️ 能走到这里说明工具闸门没有正确处理 UNKNOWN ——
             //    闸门应在内部转为 unknownResultOccurred()，而非抛出
             log.error("工具异常逃逸出闸门（不应发生）: runId={}", task.runId(), e);
+            notifyLoopComplete(tenantId, task.runId(),
+                    commitFailure(tenantId, task, "工具执行异常", "TOOL_INTERNAL"), steps);
             return commitFailure(tenantId, task, "工具执行异常", "TOOL_INTERNAL");
 
         } catch (RuntimeException e) {
             log.error("执行过程未预期异常: runId={}", task.runId(), e);
+            notifyLoopComplete(tenantId, task.runId(),
+                    commitFailure(tenantId, task, "执行异常", "INTERNAL_ERROR"), steps);
             return commitFailure(tenantId, task, "执行异常", "INTERNAL_ERROR");
         }
     }
@@ -554,11 +624,15 @@ public class RunExecutionLoop {
         String state = lifecycleProbe.lifecycleState(tenantId).orElse(null);
         if (state == null) {
             log.warn("租户不存在，拒绝执行: tenantId={}, runId={}", tenantId, runId);
+            notifyLoopComplete(tenantId, runId,
+                    ExecutionOutcome.tenantBlocked("租户不存在"), 0);
             return ExecutionOutcome.tenantBlocked("租户不存在");
         }
         if (!TenantLifecycle.isActive(state)) {
             log.info("租户状态不可执行({})，拒绝执行: tenantId={}, runId={}",
                     state, tenantId, runId);
+            notifyLoopComplete(tenantId, runId,
+                    ExecutionOutcome.tenantBlocked("租户状态=" + state), 0);
             return ExecutionOutcome.tenantBlocked("租户状态=" + state);
         }
         return null;
@@ -853,6 +927,46 @@ public class RunExecutionLoop {
         /** @return 是否允许重新投递重试。UNKNOWN 与世代失效均**不允许**。 */
         public boolean retryable() {
             return kind == Kind.RETRYABLE_FAILURE;
+        }
+    }
+
+    // ── 观测者适配器（将 worker 模块类型转为 ports 层中性类型） ──────────
+
+    /**
+     * 从 ToolInvocationGate.ToolInvocationResult 适配为 ToolCallSummary。
+     */
+    private static ExecutionObserver.ToolCallSummary adaptToolResult(
+            ToolInvocationGate.ToolInvocationResult result) {
+        return new ExecutionObserver.ToolCallSummary(
+                result.succeededTools(),
+                result.failedTools(),
+                result.rejectedTools(),
+                result.unknownResultOccurred(),
+                result.unknownOperationId());
+    }
+
+    /**
+     * 从 ExecutionOutcome 适配为 LoopOutcome。
+     */
+    private static ExecutionObserver.LoopOutcome adaptOutcome(
+            ExecutionOutcome outcome) {
+        return new ExecutionObserver.LoopOutcome(
+                ExecutionObserver.LoopOutcome.Kind.valueOf(outcome.kind().name()),
+                outcome.detail());
+    }
+
+    /**
+     * 触发 onLoopComplete 观测事件。
+     *
+     * @param tenantId   租户标识
+     * @param runId      Run 标识
+     * @param outcome    执行结局
+     * @param totalSteps 已执行的总轮次
+     */
+    private void notifyLoopComplete(@NonNull String tenantId, @NonNull String runId,
+                                    @NonNull ExecutionOutcome outcome, int totalSteps) {
+        if (observerChain != null) {
+            observerChain.onLoopComplete(tenantId, runId, adaptOutcome(outcome), totalSteps);
         }
     }
 }

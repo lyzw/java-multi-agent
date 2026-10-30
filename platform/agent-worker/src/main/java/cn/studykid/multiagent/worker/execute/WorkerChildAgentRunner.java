@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import cn.studykid.multiagent.core.cap.ReasonCode;
 import cn.studykid.multiagent.core.orchestration.AgentInvocationStatus;
 import cn.studykid.multiagent.ports.model.ModelGateway;
+import cn.studykid.multiagent.ports.observer.ObservableModelGateway;
 import cn.studykid.multiagent.ports.model.ModelMessage;
 import cn.studykid.multiagent.worker.execute.ToolInvocationGate.ToolInvocationResult;
 import cn.studykid.multiagent.ports.model.ModelRequest;
@@ -64,7 +65,7 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
     /** 平台默认的子执行最大轮次。 */
     public static final int DEFAULT_MAX_CHILD_STEPS = 4;
 
-    private final ModelGateway modelGateway;
+    private final ObservableModelGateway modelGateway;
     private final ToolInvocationGate toolGate;
     private final ChildAgentModelConfigProvider configs;
     private final int maxChildSteps;
@@ -101,20 +102,20 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
      */
     private final int contextTokenBudget;
 
-    public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
+    public WorkerChildAgentRunner(@NonNull ObservableModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
                                    @NonNull ChildAgentModelConfigProvider configs) {
         this(modelGateway, toolGate, configs, DEFAULT_MAX_CHILD_STEPS, null);
     }
 
-    public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
+    public WorkerChildAgentRunner(@NonNull ObservableModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
                                    @NonNull ChildAgentModelConfigProvider configs,
                                    int maxChildSteps) {
         this(modelGateway, toolGate, configs, maxChildSteps, null);
     }
 
-    public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
+    public WorkerChildAgentRunner(@NonNull ObservableModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
                                    @NonNull ChildAgentModelConfigProvider configs,
                                    int maxChildSteps,
@@ -122,7 +123,7 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
         this(modelGateway, toolGate, configs, maxChildSteps, cancellation, System::nanoTime);
     }
 
-    public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
+    public WorkerChildAgentRunner(@NonNull ObservableModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
                                    @NonNull ChildAgentModelConfigProvider configs,
                                    int maxChildSteps,
@@ -143,7 +144,7 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
      * @param nanoTime       纳秒时钟源（单调）
      * @param clock          墙钟（用于比对根 Run 的绝对业务截止时刻）
      */
-    public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
+    public WorkerChildAgentRunner(@NonNull ObservableModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
                                    @NonNull ChildAgentModelConfigProvider configs,
                                    int maxChildSteps,
@@ -159,7 +160,7 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
      *
      * @param contextTokenBudget 上下文 token 预算；必须为正数
      */
-    public WorkerChildAgentRunner(@NonNull ModelGateway modelGateway,
+    public WorkerChildAgentRunner(@NonNull ObservableModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
                                    @NonNull ChildAgentModelConfigProvider configs,
                                    int maxChildSteps,
@@ -267,17 +268,19 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
                     // ⚠️ 裁剪说明走**系统提示**（可信指令载体），与根循环同口径。
                     systemPrompt = systemPrompt + "\n\n" + trimmed.notice();
                 }
-                response = modelGateway.complete(new ModelRequest(
-                        modelConfig.modelId(),
-                        systemPrompt,
-                        input,
-                        modelConfig.temperature(),
-                        modelConfig.maxTokens(),
-                        // ⚠️ 单次模型调用的超时**不得超过**剩余预算：
-                        //    否则一次卡住的模型调用就能吃掉整条链路的预算。
-                        capTimeout(modelConfig.timeout(), remainingNanos),
-                        modelConfig.toolSchemas(),
-                        trimmed.messages()));
+                response = modelGateway.complete(
+                        request.tenantId(), request.runId(), step + 1,
+                        new ModelRequest(
+                                modelConfig.modelId(),
+                                systemPrompt,
+                                input,
+                                modelConfig.temperature(),
+                                modelConfig.maxTokens(),
+                                // ⚠️ 单次模型调用的超时**不得超过**剩余预算：
+                                //    否则一次卡住的模型调用就能吃掉整条链路的预算。
+                                capTimeout(modelConfig.timeout(), remainingNanos),
+                                modelConfig.toolSchemas(),
+                                trimmed.messages()));
             } catch (ModelGateway.ModelGatewayException e) {
                 if (e.kind() == ModelGateway.ModelErrorKind.TIMEOUT) {
                     return ChildAgentResult.timedOut(ReasonCode.DELEGATION_TIMEOUT.name());
