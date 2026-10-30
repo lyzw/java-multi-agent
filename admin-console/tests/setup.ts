@@ -15,6 +15,10 @@ import { afterEach } from 'vitest'
  */
 afterEach(() => {
   cleanup()
+  // ⚠️ 同理清 sessionStorage：共享 fork 下，谁存的会话都会残留给下一个文件。
+  //    后果不是报错而是**假失败**——某个文件断言「请求不带 Authorization」，
+  //    隔壁文件恰好存过会话就会翻车，且随执行顺序时好时坏（2026-10-30 修复 P0/P1 时实测）。
+  window.sessionStorage.clear()
 })
 
 /**

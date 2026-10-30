@@ -208,7 +208,9 @@ async function ragRequest<T>(
         '请求超时，后端没有在规定时间内返回。可以稍后重试，或缩小本次操作范围。',
       )
     }
-    throw cause
+    // ⚠️ 错误文案按 4xx/5xx 分流（评测 P0-2）：通用层的 401 归因
+    //    「身份域隔离」对 RAG 是错的——RAG 的 401 意味着「没验过平台令牌签名」。
+    throw toRagApiError(cause)
   } finally {
     clearTimeout(timer)
   }
@@ -232,6 +234,67 @@ function ragWriteRequest<T>(
 /** 是否为 RAG 请求超时（区别于网络层 status 0）。 */
 export function isRagTimeout(cause: unknown): boolean {
   return cause instanceof ApiError && cause.status === RAG_TIMEOUT_STATUS
+}
+
+/**
+ * RAG 通道错误的面向管理员文案（按 4xx / 5xx 分流）。
+ *
+ * <p>⚠️ **为什么不能直接透传通用层的 message**：通用 fetch 层对「非平台会话前缀」的 401
+ * 一律给「平台令牌对该端点不可达（身份域隔离）」——那是给**租户身份域**端点
+ * （`/runs`、`/admin/**` 等）准备的归因，搬到 RAG 管理面上是**错的**：
+ * RAG 的 401 只有一个含义——**它没验过平台令牌的签名**。
+ * 归因错了，运维就会往「权限/身份域」方向查，而真因往往是
+ * 「平台与 RAG 用的不是同一把 JWT 密钥」（评测 P0-2 实测：两端公钥指纹不一致，
+ * RAG 管理面 401，而控制台把它显示成身份域隔离）。
+ *
+ * <p>⚠️ **5xx 必须说清「这不是控制台能修的」**：RAG 侧 500 意味着服务端故障，
+ * 反复点重试没有意义，提示应直接指向 RAG 服务日志。
+ *
+ * @param cause 捕获的错误
+ * @returns 面向管理员的一句话说明
+ */
+export function ragErrorMessage(cause: unknown): string {
+  if (!(cause instanceof ApiError)) return '操作失败，请稍后重试'
+  const status = cause.status
+  const detail = cause.message
+
+  // ⚠️ status 0 = 网络层失败（连不上/被中断），不是 HTTP 错误码。
+  if (status === 0) {
+    return `连不上 RAG 服务：${detail}。请确认 RAG 服务已启动（默认端口 8081）。`
+  }
+  if (status === 400) {
+    // 400 多半是「没选租户」「缺 X-Tenant-Id」这类本地配置问题，后端文案本身就具体，保留它。
+    return `RAG 服务拒绝了这次请求：${detail}`
+  }
+  if (status === 401) {
+    return 'RAG 服务拒绝了平台令牌（验签未通过：令牌无效、过期或受众不符）。' +
+      '这通常意味着平台与 RAG 没有共用同一套 JWT 密钥——请核对 jwt.env 中 ' +
+      'PLATFORM_JWT_PRIVATE_KEY 与 RAG_PLATFORM_JWT_PUBLIC_KEY 是否同源。'
+  }
+  if (status === 403) {
+    return `RAG 服务拒绝执行：${detail}`
+  }
+  if (status === 404) {
+    return `RAG 服务上找不到该端点（${detail}）。多半是 RAG 服务与控制台版本不匹配。`
+  }
+  if (status === 409) {
+    return `RAG 服务拒绝这次状态流转：${detail}`
+  }
+  if (status >= 500) {
+    return `RAG 服务内部错误（HTTP ${status}）。这是服务端故障，控制台侧无法修复，请查看 RAG 服务日志。`
+  }
+  return `请求失败（${status}）：${detail}`
+}
+
+/**
+ * 把通用层的错误翻译成 RAG 专用文案。
+ *
+ * <p>⚠️ 保持 status 不变：调用方按 status 分流（超时 408 / 冲突 409 / 票据 403），
+ * 只换文案，不换语义。
+ */
+function toRagApiError(cause: unknown): unknown {
+  if (!(cause instanceof ApiError)) return cause
+  return new ApiError(cause.status, ragErrorMessage(cause), cause.data)
 }
 
 /* ── 统计与列表 ───────────────────────────────────────── */

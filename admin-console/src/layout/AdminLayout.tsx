@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Layout, Menu, Avatar, Dropdown, Typography, Grid } from 'antd'
+import { Layout, Menu, Avatar, Dropdown, Typography, Grid, Alert, Button, Space } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   MenuFoldOutlined,
@@ -9,15 +9,18 @@ import {
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { NAV_GROUPS, NAV_NODES } from '@/layout/navConfig'
+import { Breadcrumb } from '@/layout/Breadcrumb'
 import { useSession } from '@/auth/session'
+import { clearSession } from '@/auth/tokenStorage'
 import { APP_BASE_PATH, type Role } from '@/config/constants'
+import { usePageTitle } from '@/shared/usePageTitle'
 
 const { Header, Sider, Content } = Layout
 const { useBreakpoint } = Grid
 
 export function AdminLayout(): JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
-  const { roles, signOut } = useSession()
+  const { roles, signOut, expiringSoon, expiresInSeconds } = useSession()
   const location = useLocation()
   const navigate = useNavigate()
   const screens = useBreakpoint()
@@ -62,6 +65,8 @@ export function AdminLayout(): JSX.Element {
     (n) => visiblePaths.has(n.path) && location.pathname.startsWith(n.path),
   )
   const selectedKey = matched?.path ?? '/tenants'
+  const pageTitle = matched?.label ?? '平台管理控制台'
+  usePageTitle(pageTitle)
 
   /** 展开态：选中项所在分组必须展开，其余保留用户手动折叠的选择。 */
   const [openKeys, setOpenKeys] = useState<string[]>([])
@@ -147,15 +152,65 @@ export function AdminLayout(): JSX.Element {
           </Dropdown>
         </Header>
         <Content style={{ margin: 16 }}>
+          {/* ⚠️ **即将过期提示必须渲染出来**（评测 P1-5）：`expiringSoon` 此前
+              每秒算一次却没有任何组件消费 —— 平台令牌 15 分钟硬过期，
+              用户毫无预兆地被踢回登录页且现场全丢。这里把「还剩多少秒」摆出来，
+              并给一个**保住现场**的续期入口（重新登录后回到当前页）。 */}
+          {expiringSoon && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={`平台会话即将过期（剩余约 ${expiresInSeconds} 秒）`}
+              description="平台令牌有效期 15 分钟且不可续期。为避免操作中断，请尽快完成当前操作并重新登录——重新登录后会回到当前页面。"
+              action={
+                <Space>
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      // 带上原因与回跳目标：登录页据此提示「为什么被踢出」并回跳本页
+                      const rel = location.pathname.startsWith(APP_BASE_PATH)
+                        ? location.pathname.slice(APP_BASE_PATH.length)
+                        : location.pathname
+                      // ⚠️ **这里不能用 signOut()**：它会翻转认证态，而此时还在受保护路由上，
+                      //    RequireAuth 随即渲染 `<Navigate to="/login" replace>` 兜底 ——
+                      //    那条兜底**不带 reason/next**，会把「为什么被踢出」和「回哪去」
+                      //    一起抹掉（实测 URL 变成裸 /admin/login）。
+                      //    根因是优先级：React Router 的导航是 transition（低优先级），
+                      //    而认证态更新是同步的，先落地的永远是后者。
+                      //    故这里只清存储、不动 React 态：登录成功后 signIn 会整体替换。
+                      clearSession()
+                      navigate(
+                        `${APP_BASE_PATH}/login?reason=expired&next=${encodeURIComponent(rel)}`,
+                      )
+                    }}
+                  >
+                    重新登录
+                  </Button>
+                </Space>
+              }
+            />
+          )}
+          <Breadcrumb />
           <div
             style={{
               padding: 24,
               background: '#fff',
               borderRadius: 8,
-              minHeight: 'calc(100vh - 140px)',
+              minHeight: 'calc(100vh - 176px)',
             }}
           >
             <Outlet />
+          </div>
+          <div
+            style={{
+              textAlign: 'center',
+              padding: '16px 0',
+              color: '#888',
+              fontSize: 12,
+            }}
+          >
+            © 2026 Agent Platform · 平台管理控制台
           </div>
         </Content>
       </Layout>

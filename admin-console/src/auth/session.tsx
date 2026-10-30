@@ -26,6 +26,8 @@ export interface SessionState {
   rolesStatus: RolesStatus
   /** 是否处于「即将过期」窗口 */
   expiringSoon: boolean
+  /** 距令牌过期的秒数（无会话时为 0） */
+  expiresInSeconds: number
   signIn: (session: StoredSession) => void
   signOut: () => void
   /** 由 API 层 401 触发 */
@@ -50,15 +52,21 @@ export function SessionProvider({ children }: { children: ReactNode }): JSX.Elem
     return stored !== null && (stored.roles ?? []).length > 0 ? 'known' : 'unknown'
   })
   const [expiringSoon, setExpiringSoon] = useState(false)
+  /** 距令牌过期的秒数（给界面显示倒计时） */
+  const [expiresInSeconds, setExpiresInSeconds] = useState(0)
   /** 已尝试回补角色的令牌；保证同一令牌只回补一次（防无限循环） */
   const backfillRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (session === null) {
       setExpiringSoon(false)
+      setExpiresInSeconds(0)
       return
     }
-    const tick = () => setExpiringSoon(willExpireSoon(session))
+    const tick = () => {
+      setExpiringSoon(willExpireSoon(session))
+      setExpiresInSeconds(Math.max(0, Math.ceil((session.expiresAt - Date.now()) / 1000)))
+    }
     tick()
     const id = window.setInterval(tick, 1000)
     return () => window.clearInterval(id)
@@ -76,6 +84,7 @@ export function SessionProvider({ children }: { children: ReactNode }): JSX.Elem
     setSession(null)
     setRolesStatus('unknown')
     setExpiringSoon(false)
+    setExpiresInSeconds(0)
   }
 
   const onUnauthorized = (): void => {
@@ -106,6 +115,7 @@ export function SessionProvider({ children }: { children: ReactNode }): JSX.Elem
     roles,
     rolesStatus,
     expiringSoon,
+    expiresInSeconds,
     signIn,
     signOut,
     onUnauthorized,

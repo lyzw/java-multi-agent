@@ -709,6 +709,21 @@ export function decommissionPlatformTenant(id: string): Promise<PlatformTenant> 
   return request<PlatformTenant>(`/platform/v1/tenants/${id}/decommission`, { method: 'POST' })
 }
 
+/**
+ * POST /api/platform/v1/tenants/{id}/finalize-decommission —— 退役收尾（进入 DECOMMISSIONED 终态）。
+ *
+ * ⚠️ 没有这条路径时，租户一旦退役就停在 DECOMMISSIONING：状态机与 DB 触发器都允许
+ * DECOMMISSIONING → DECOMMISSIONED，却没有端点能执行，控制台既无法终态化也无法回收。
+ */
+export function finalizeDecommissionPlatformTenant(id: string): Promise<PlatformTenant> {
+  return request<PlatformTenant>(`/platform/v1/tenants/${id}/finalize-decommission`, { method: 'POST' })
+}
+
+/** POST /api/platform/v1/tenants/{id}/cancel —— 取消未完成初始化的租户（进入 CANCELLED 终态） */
+export function cancelPlatformTenant(id: string): Promise<PlatformTenant> {
+  return request<PlatformTenant>(`/platform/v1/tenants/${id}/cancel`, { method: 'POST' })
+}
+
 /** GET /api/platform/v1/tenants/{id}/quota —— 读取配额 */
 export function getPlatformQuota(id: string): Promise<PlatformQuota> {
   return request<PlatformQuota>(`/platform/v1/tenants/${id}/quota`, { method: 'GET' })

@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Card, Table, Alert, Typography, App as AntApp } from 'antd'
 import type { TableColumnsType } from 'antd'
+import { emptyTextWhileLoading } from '@/shared/loadingState'
+import { scrollXOf } from '@/shared/tableLayout'
 
 interface ReadOnlyCatalogPageProps<T> {
   title: ReactNode
@@ -98,8 +100,10 @@ export function ReadOnlyCatalogPage<T>({
           size="small"
           // ⚠️ 目录列多（Tool / Skill / MCP 各 9～11 列），不横向滚动就得把
           //    每列压到读不了的宽度 —— 目录是用来**扫**的，压窄等于扫不动。
-          scroll={{ x: 'max-content' }}
-          locale={{ emptyText: '暂无数据' }}
+          //    ⚠️ 必须是**各列宽度之和**而不是 'max-content'：固定操作列是独立 sticky 层，
+          //    不参与 max-content 的测量，会永远压在最后一列上（评测 P1-3）。
+          scroll={{ x: scrollXOf(allColumns) }}
+          locale={{ emptyText: emptyTextWhileLoading(loading, '暂无数据') }}
           columns={allColumns}
         />
       </Card>

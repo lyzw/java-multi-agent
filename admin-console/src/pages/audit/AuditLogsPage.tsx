@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Button,
@@ -13,10 +13,14 @@ import {
   Tag,
   Typography,
 } from 'antd'
+import type { TableColumnsType } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { getPlatformAuditEvents } from '@/api/adminApi'
 import type { PlatformAuditEvent } from '@/api/types'
 import { formatTime } from '@/pages/monitoring/monitoringFormat'
+import { usePageTitle } from '@/shared/usePageTitle'
+import { emptyTextWhileLoading } from '@/shared/loadingState'
+import { scrollXOf } from '@/shared/tableLayout'
 
 const { Text } = Typography
 
@@ -58,6 +62,8 @@ export function AuditLogsPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<PlatformAuditEvent | null>(null)
 
+  usePageTitle('平台审计')
+
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -80,6 +86,46 @@ export function AuditLogsPage(): JSX.Element {
   useEffect(() => {
     void load()
   }, [load])
+
+  // ⚠️ 列宽显式声明：表格按列宽求和定横向滚动宽（见 scrollXOf 的说明）。
+  const columns = useMemo<TableColumnsType<PlatformAuditEvent>>(() => [
+              {
+                title: '时刻',
+                dataIndex: 'occurredAt',
+                width: 170,
+                render: (v: string) => formatTime(v),
+              },
+              {
+                title: '操作者',
+                dataIndex: 'actorId',
+                width: 200,
+                render: (v: string) => <Text copyable={{ text: v }} code>{v.slice(0, 18)}{v.length > 18 ? '…' : ''}</Text>,
+              },
+              { title: '操作者类型', dataIndex: 'actorType', width: 110 },
+              { title: '动作', dataIndex: 'action', width: 200 },
+              { title: '目标', dataIndex: 'targetType', width: 120 },
+              {
+                title: '决策',
+                dataIndex: 'decision',
+                width: 90,
+                render: (v: string) => (
+                  <Tag color={DECISION_COLOR[v] ?? 'default'}>{v}</Tag>
+                ),
+              },
+              {
+                title: '票据档位',
+                dataIndex: 'ticketScope',
+                width: 100,
+                // 空值不是「数据丢了」：非票据动作、或与档位无关的拒绝（通道开关关闭）本就没有档位。
+                render: (v: string | null) => v ?? '-',
+              },
+              {
+                title: '原因码',
+                dataIndex: 'reasonCode',
+                width: 260,
+                render: (v: string | null) => v ?? '-',
+              },
+  ], [])
 
   return (
     <div>
@@ -137,45 +183,11 @@ export function AuditLogsPage(): JSX.Element {
             size="small"
             dataSource={rows}
             pagination={{ pageSize: 50, showSizeChanger: false }}
-            locale={{ emptyText: '窗口内无平台审计事件' }}
+            locale={{ emptyText: emptyTextWhileLoading(loading, '窗口内无平台审计事件') }}
             onRow={(r) => ({ onClick: () => setSelected(r), style: { cursor: 'pointer' } })}
-            columns={[
-              {
-                title: '时刻',
-                dataIndex: 'occurredAt',
-                width: 170,
-                render: (v: string) => formatTime(v),
-              },
-              {
-                title: '操作者',
-                dataIndex: 'actorId',
-                width: 200,
-                render: (v: string) => <Text copyable={{ text: v }} code>{v.slice(0, 18)}{v.length > 18 ? '…' : ''}</Text>,
-              },
-              { title: '操作者类型', dataIndex: 'actorType', width: 110 },
-              { title: '动作', dataIndex: 'action', width: 200 },
-              { title: '目标', dataIndex: 'targetType', width: 120 },
-              {
-                title: '决策',
-                dataIndex: 'decision',
-                width: 90,
-                render: (v: string) => (
-                  <Tag color={DECISION_COLOR[v] ?? 'default'}>{v}</Tag>
-                ),
-              },
-              {
-                title: '票据档位',
-                dataIndex: 'ticketScope',
-                width: 100,
-                // 空值不是「数据丢了」：非票据动作、或与档位无关的拒绝（通道开关关闭）本就没有档位。
-                render: (v: string | null) => v ?? '-',
-              },
-              {
-                title: '原因码',
-                dataIndex: 'reasonCode',
-                render: (v: string | null) => v ?? '-',
-              },
-            ]}
+            // ⚠️ 8 列不设 scroll.x，AntD 会把列挤进容器宽度，「原因码」表头被压成竖排 3 行。
+            scroll={{ x: scrollXOf(columns) }}
+            columns={columns}
           />
         </Spin>
       </Card>

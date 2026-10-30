@@ -33,6 +33,8 @@ import { SkillFormFields } from '@/pages/catalog/SkillFormFields'
 import { type SkillFormValues, type McpDeclarationFormValue, toAllowlistTriState } from '@/pages/catalog/platformObjectForm'
 import { buildSkillPublishRequest } from '@/pages/catalog/platformPublishRequests'
 import { useRegistrationModal } from '@/pages/catalog/useRegistrationModal'
+import { emptyTextWhileLoading } from '@/shared/loadingState'
+import { scrollXOf } from '@/shared/tableLayout'
 import { PlatformDeprecateModal } from './PlatformDeprecateModal'
 import { CatalogDetailDrawer, SkillCatalogDetail } from './platformDetailDrawer'
 import {
@@ -213,8 +215,10 @@ export function SkillCatalogPage(): JSX.Element {
       columns={columns}
       pagination={false}
       size="small"
-      scroll={{ x: 'max-content' }}
-      locale={{ emptyText: search.trim() !== '' ? '没有匹配的 Skill' : '暂无数据' }}
+      // ⚠️ 必须是**各列宽度之和**而不是 'max-content'：固定操作列是独立 sticky 层，
+      //    不参与 max-content 的测量，会永远压在最后一列上（评测 P1-3）。
+      scroll={{ x: scrollXOf(columns) }}
+      locale={{ emptyText: emptyTextWhileLoading(loading, search.trim() !== '' ? '没有匹配的 Skill' : '暂无数据') }}
       onRow={(r) => ({
         onDoubleClick: () => setDetailId(r.skillId),
       })}
@@ -246,22 +250,22 @@ export function SkillCatalogPage(): JSX.Element {
       <Row gutter={12} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <Card size="small" variant="borderless" style={{ background: '#fafafa' }}>
-            <Statistic title="Skill 总数" value={stats.total} />
+            <Statistic loading={loading} title="Skill 总数" value={stats.total} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small" variant="borderless" style={{ background: '#f6ffed' }}>
-            <Statistic title="已发布" value={stats.published} valueStyle={{ color: '#389e0d' }} />
+            <Statistic loading={loading} title="已发布" value={stats.published} valueStyle={{ color: '#389e0d' }} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small" variant="borderless" style={{ background: '#fffbe6' }}>
-            <Statistic title="草稿 / 非终态" value={stats.draft} valueStyle={{ color: '#d48806' }} />
+            <Statistic loading={loading} title="草稿 / 非终态" value={stats.draft} valueStyle={{ color: '#d48806' }} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small" variant="borderless" style={{ background: '#fff1f0' }}>
-            <Statistic title="已停用" value={stats.deprecated} valueStyle={{ color: '#cf1322' }} />
+            <Statistic loading={loading} title="已停用" value={stats.deprecated} valueStyle={{ color: '#cf1322' }} />
           </Card>
         </Col>
       </Row>

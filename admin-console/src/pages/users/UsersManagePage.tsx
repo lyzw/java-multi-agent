@@ -33,6 +33,8 @@ import type { PlatformRoleSummary, PlatformUserDetail } from '@/api/types'
 import { useSession } from '@/auth/session'
 import { ROLES } from '@/config/constants'
 import { ROLE_LABELS, ROLE_COLORS, isSuperAdmin } from '@/pages/roleShared'
+import { usePageTitle } from '@/shared/usePageTitle'
+import { emptyTextWhileLoading } from '@/shared/loadingState'
 
 const { Text } = Typography
 
@@ -89,6 +91,8 @@ export function UsersManagePage(): JSX.Element {
   const { message } = App.useApp()
   const currentUserId = session?.principalId ?? null
   const iAmSuper = isSuperAdmin(currentRoles)
+
+  usePageTitle('平台用户')
 
   const [users, setUsers] = useState<PlatformUserDetail[]>([])
   const [roleCatalog, setRoleCatalog] = useState<PlatformRoleSummary[]>([])
@@ -360,7 +364,11 @@ export function UsersManagePage(): JSX.Element {
           size="small"
           dataSource={users}
           pagination={false}
-          locale={{ emptyText: '没有平台用户' }}
+          // ⚠️ 10 列不加 scroll.x，AntD 会把各列挤到容器宽度内（实测显示名被压成逐字竖排、
+          //    表头竖排 3 行、行高涨到 3~5 倍）。列宽已按内容定好，这里声明横向滚动总宽，
+          //    让列保持自身宽度、由表格横向滚动承载。
+          scroll={{ x: 1430 }}
+          locale={{ emptyText: emptyTextWhileLoading(loading, '没有平台用户') }}
           columns={columns}
         />
       </Spin>
@@ -468,12 +476,22 @@ export function UsersManagePage(): JSX.Element {
           <Form.Item
             name="username"
             label="用户名"
-            rules={[{ required: true, message: '请输入用户名' }]}
+            extra="4-20 位字母、数字或下划线，以字母开头"
+            rules={[
+              { required: true, message: '请输入用户名' },
+              {
+                pattern: /^[a-zA-Z][a-zA-Z0-9_]{3,19}$/,
+                message: '格式非法：4-20 位字母/数字/下划线，以字母开头',
+              },
+            ]}
           >
-            <Input />
+            <Input placeholder="如：zhangshan" />
           </Form.Item>
           <Form.Item name="password" label="初始密码" rules={passwordRules}>
-            <Input.Password autoComplete="new-password" />
+            <Input.Password
+              autoComplete="new-password"
+              placeholder={`至少 ${PASSWORD_MIN_LEN} 位，含大小写字母和数字`}
+            />
           </Form.Item>
           <Form.Item name="displayName" label="显示名">
             <Input />
@@ -489,7 +507,12 @@ export function UsersManagePage(): JSX.Element {
             <Checkbox>强制 MFA</Checkbox>
           </Form.Item>
           <Form.Item name="roles" label="初始角色">
-            <Select mode="multiple" placeholder="可留空" options={roleCatalogOptions} allowClear />
+            <Select
+              mode="multiple"
+              placeholder="请选择角色（可选，留空则无角色）"
+              options={roleCatalogOptions}
+              allowClear
+            />
           </Form.Item>
         </Form>
       </Modal>

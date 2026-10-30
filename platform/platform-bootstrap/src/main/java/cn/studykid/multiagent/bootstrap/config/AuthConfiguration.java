@@ -7,6 +7,8 @@ import java.util.Set;
 
 import javax.sql.DataSource;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -38,6 +40,8 @@ import cn.studykid.multiagent.ports.security.PlatformPrincipalRepository;
 @Configuration
 public class AuthConfiguration {
 
+    private static final Logger log = LoggerFactory.getLogger(AuthConfiguration.class);
+
     /** 令牌有效期的允许范围。超出即视为配置错误。 */
     private static final int MIN_TTL_SECONDS = 60;
     private static final int MAX_TTL_SECONDS = 3600;
@@ -65,7 +69,8 @@ public class AuthConfiguration {
                             + "~" + MAX_TTL_SECONDS + " 之间，当前 " + tokenTtlSeconds);
         }
 
-        KeyPair keyPair = resolveKeyPair(privateKeyBase64, environment);
+        KeyPair keyPair = resolveKeyPair(privateKeyBase64, environment,
+                "auth.jwt.private-key", "RAG_TENANT_JWT_PUBLIC_KEY");
         return new JwtTokenService(
                 keyPair.getPrivate(), keyPair.getPublic(),
                 issuer, audience, Duration.ofSeconds(tokenTtlSeconds), null);
@@ -76,8 +81,14 @@ public class AuthConfiguration {
      *
      * <p>⚠️ <b>生产不允许启动生成</b>：每次启动生成新密钥会使所有已签发令牌失效，
      * 滚动重启即等于全员掉线。仅 dev/local/test profile 允许。
+     *
+     * @param privateKeyBase64 配置的「私钥.公钥」串（空 = 未配置）
+     * @param environment 运行环境（判定是否 dev/local/test）
+     * @param propertyName 出问题的配置键名（写进告警，指明该补哪个键）
+     * @param counterpartKeyName 对端服务用来验签本实例令牌的配置键名（告警里点名它）
      */
-    private KeyPair resolveKeyPair(String privateKeyBase64, Environment environment) {
+    private KeyPair resolveKeyPair(String privateKeyBase64, Environment environment,
+                                   String propertyName, String counterpartKeyName) {
         if (privateKeyBase64 != null && !privateKeyBase64.isBlank()) {
             // ⚠️ 格式为「私钥.公钥」（Base64URL 的 PKCS#8 与 X.509，以点分隔）。
             //    刻意要求**成对**提供：若允许只配私钥，运维需另配公钥，
@@ -101,6 +112,24 @@ public class AuthConfiguration {
                     "auth.jwt.private-key 未配置。当前 profile 非 dev/local/test —— "
                             + "生产环境禁止启动生成密钥（会导致已签发令牌全部失效）");
         }
+        // ⚠️ **必须把「静默降级」变成响亮告警**：本仓 2026-10-30 实测踩过一次——
+        //    平台实例没加载 jwt.env，于是走了这条分支临时生成密钥对，
+        //    而 RAG 服务配的验签公钥来自 jwt.env，两端**公钥指纹不一致** →
+        //    RAG 管理面每个端点都 401，而控制台把它显示成「身份域隔离」，
+        //    排查方向被整个带偏（真正的现场是「平台 JWKS 公钥 ≠ jwt.env 公钥」）。
+        //    这类故障在 dev profile 下不报错、只表现为「别的服务连不上」，
+        //    所以必须在此处明说它会让**跨服务验签**失效。
+        log.warn("""
+
+                ┌─ [JWT 密钥未配置] 本次启动临时生成密钥对 ─────────────────────────────
+                │ 配置项 {} 为空，当前 profile 允许启动生成。
+                │ ⚠️ 后果 1：本实例签发的令牌在进程重启后**全部验签失败**。
+                │ ⚠️ 后果 2：与本实例互验的服务（{} 来自 jwt.env）
+                │           公钥**必然不一致** → RAG 管理面 401，跨服务链路整体不可用。
+                │ ✅ 修法：加载 jwt.env（scripts/dev-backend.sh 已自动 source；
+                │          IDEA 直启需在运行配置里挂 EnvFile=platform.env + jwt.env）。
+                └───────────────────────────────────────────────────────────────────────""",
+                propertyName, counterpartKeyName);
         return JwtTokenService.generateKeyPair();
     }
 
@@ -192,7 +221,8 @@ public class AuthConfiguration {
                             + "~" + MAX_TTL_SECONDS + " 之间，当前 " + tokenTtlSeconds);
         }
 
-        KeyPair keyPair = resolveKeyPair(privateKeyBase64, environment);
+        KeyPair keyPair = resolveKeyPair(privateKeyBase64, environment,
+                "auth.platform-jwt.private-key", "RAG_PLATFORM_JWT_PUBLIC_KEY");
         return new PlatformJwtTokenService(
                 keyPair.getPrivate(), keyPair.getPublic(),
                 issuer, audience, Duration.ofSeconds(tokenTtlSeconds), null);

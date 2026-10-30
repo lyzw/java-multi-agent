@@ -7,6 +7,8 @@ import type { PlatformAgentRegistryItem } from '@/api/types'
 import { lifecycleTag, tagList, timeCell } from '@/pages/catalog/displayBits'
 import { CatalogDetailDrawer, AgentRegistryDetail } from './platformDetailDrawer'
 import { describeCatalogLoadError } from './platformRequestBits'
+import { emptyTextWhileLoading } from '@/shared/loadingState'
+import { scrollXOf } from '@/shared/tableLayout'
 
 /**
  * 跨租户 Agent 注册表（平台链 /api/platform/v1/capabilities/agents · 只读盘点）。
@@ -16,26 +18,29 @@ import { describeCatalogLoadError } from './platformRequestBits'
  */
 function registryColumns(): TableColumnsType<PlatformAgentRegistryItem> {
   return [
-    { title: 'agentId', dataIndex: 'agentId', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
-    { title: '名称', dataIndex: 'name', render: (v: string | null) => v ?? '-' },
+    { title: 'agentId', dataIndex: 'agentId', width: 280, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
+    { title: '名称', dataIndex: 'name', width: 170, render: (v: string | null) => v ?? '-' },
     // ⚠️ 状态读不到（null）时如实呈现「未提供」—— 不得回落成「已发布」。
-    { title: '生命周期', dataIndex: 'lifecycleState', render: (v: string | null) => lifecycleTag(v) },
+    { title: '生命周期', dataIndex: 'lifecycleState', width: 110, render: (v: string | null) => lifecycleTag(v) },
     {
       title: '定义版本',
       dataIndex: 'defVersion',
+      width: 100,
       render: (v: number | null) => (v === null ? <Typography.Text type="secondary">无定义</Typography.Text> : <Tag color="blue">v{v}</Tag>),
     },
-    { title: '版本数', dataIndex: 'versionCount' },
+    { title: '版本数', dataIndex: 'versionCount', width: 80 },
     {
       title: '最新版本',
       dataIndex: 'latestVersionNumber',
+      width: 90,
       render: (v: number | null) => (v === null ? <Typography.Text type="secondary">-</Typography.Text> : `v${v}`),
     },
-    { title: '最新发布时间', dataIndex: 'latestPublishedAt', render: (v: string | null) => timeCell(v) },
-    { title: '角色', dataIndex: 'roles', render: (v: string[]) => tagList(v, '（无）', 'geekblue') },
+    { title: '最新发布时间', dataIndex: 'latestPublishedAt', width: 170, render: (v: string | null) => timeCell(v) },
+    { title: '角色', dataIndex: 'roles', width: 150, render: (v: string[]) => tagList(v, '（无）', 'geekblue') },
     {
       title: '启用技能',
       dataIndex: 'enabledSkills',
+      width: 100,
       // ⚠️ 列里只给数量；清单悬浮查看 —— 列是拿来「扫」的，不是拿来读清单的。
       render: (v: string[]) =>
         v.length === 0 ? (
@@ -46,10 +51,11 @@ function registryColumns(): TableColumnsType<PlatformAgentRegistryItem> {
           </Tooltip>
         ),
     },
-    { title: '能力标签', dataIndex: 'capabilityTags', render: (v: string[]) => tagList(v, '（无）') },
+    { title: '能力标签', dataIndex: 'capabilityTags', width: 140, render: (v: string[]) => tagList(v, '（无）') },
     {
       title: '收紧覆盖',
       dataIndex: 'hasOverrides',
+      width: 100,
       render: (b: boolean) =>
         b ? <Tag color="gold">有覆盖</Tag> : <Typography.Text type="secondary">无</Typography.Text>,
     },
@@ -135,8 +141,8 @@ export function AgentRegistryPage(): JSX.Element {
       columns={columns}
       pagination={false}
       size="small"
-      scroll={{ x: 'max-content' }}
-      locale={{ emptyText: '暂无数据' }}
+      scroll={{ x: scrollXOf(columns) }}
+      locale={{ emptyText: emptyTextWhileLoading(loading, '暂无数据') }}
       onRow={(r) => ({
         onDoubleClick: () => setDetailItem(r),
       })}
@@ -177,22 +183,22 @@ export function AgentRegistryPage(): JSX.Element {
       <Row gutter={12} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <Card size="small" variant="borderless" style={{ background: '#fafafa' }}>
-            <Statistic title="Agent 总数" value={stats.total} />
+            <Statistic loading={loading} title="Agent 总数" value={stats.total} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small" variant="borderless" style={{ background: '#f6ffed' }}>
-            <Statistic title="已发布" value={stats.published} valueStyle={{ color: '#389e0d' }} />
+            <Statistic loading={loading} title="已发布" value={stats.published} valueStyle={{ color: '#389e0d' }} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small" variant="borderless" style={{ background: '#fff1f0' }}>
-            <Statistic title="已停用" value={stats.deprecated} valueStyle={{ color: '#cf1322' }} />
+            <Statistic loading={loading} title="已停用" value={stats.deprecated} valueStyle={{ color: '#cf1322' }} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small" variant="borderless" style={{ background: '#f0f5ff' }}>
-            <Statistic title="无定义" value={stats.noDef} valueStyle={{ color: '#2f54eb' }} />
+            <Statistic loading={loading} title="无定义" value={stats.noDef} valueStyle={{ color: '#2f54eb' }} />
           </Card>
         </Col>
       </Row>

@@ -35,6 +35,18 @@ import cn.studykid.multiagent.ports.tenant.TenantLifecycle;
 @Component
 public class PlatformTenantService {
 
+    /**
+     * 审计动作：退役收尾（{@code DECOMMISSIONING → DECOMMISSIONED}）。
+     *
+     * <p>⚠️ 与授权命名空间<b>刻意不同</b>：授权用 {@code platform.tenant.decommission}
+     * （冻结矩阵里的既有条目），审计动作则要能区分「启动退役」与「退役收尾」——
+     * 否则事后追溯分不清租户是「被退役」还是「退役已完结」。
+     */
+    public static final String ACTION_DECOMMISSION_FINALIZE = "platform.tenant.decommission.finalize";
+
+    /** 审计动作：取消未完成初始化的租户（{@code PENDING_SETUP → CANCELLED}）。 */
+    public static final String ACTION_DECOMMISSION_CANCEL = "platform.tenant.decommission.cancel";
+
     private final PlatformTenantPort tenants;
     private final PlatformSecurity security;
     private final PlatformAuditPort audit;
@@ -114,6 +126,46 @@ public class PlatformTenantService {
         PlatformTenantRow row = transition(principal, id, TenantLifecycle.DECOMMISSIONING,
                 Namespaces.Platform.TENANT_DECOMMISSION);
         record(principal, Namespaces.Platform.TENANT_DECOMMISSION, "tenant", id, "ALLOW", null);
+        return row;
+    }
+
+    /**
+     * 退役收尾：{@code DECOMMISSIONING → DECOMMISSIONED}（终态）。
+     *
+     * <p>⚠️ <b>为什么必须有这一步</b>：状态机（{@link TenantLifecycle}）与 DB 触发器
+     * （{@code enforce_tenant_lifecycle_transition}）都允许 {@code DECOMMISSIONING → DECOMMISSIONED}，
+     * 但此前 API 只暴露了 suspend/resume/decommission —— 没有端点能执行这条迁移。
+     * 结果：租户一旦进入 {@code DECOMMISSIONING} 就**停在半路**，控制台既无法把它推到终态，
+     * 也无法回收（终态不可删是设计，终态不可达是缺陷）。
+     *
+     * <p>⚠️ <b>授权复用</b> {@link Namespaces.Platform#TENANT_DECOMMISSION} 而不新增命名空间：
+     * 角色权限矩阵是<b>代码冻结</b>的（运行期不可改），「退役收尾」与「退役启动」属同一类
+     * 终止操作，复用既有命名空间可让超管与租户生命周期管理员立即获得该能力，且不触碰冻结矩阵。
+     */
+    public PlatformTenantRow finalizeDecommissionTenant(@NonNull PlatformPrincipal principal,
+                                                        @NonNull String id) {
+        security.require(principal, Namespaces.Platform.TENANT_DECOMMISSION, "tenant", id);
+        PlatformTenantRow row = transition(principal, id, TenantLifecycle.DECOMMISSIONED,
+                Namespaces.Platform.TENANT_DECOMMISSION);
+        record(principal, ACTION_DECOMMISSION_FINALIZE, "tenant", id, "ALLOW", null);
+        return row;
+    }
+
+    /**
+     * 取消未完成初始化的租户：{@code PENDING_SETUP → CANCELLED}（终态）。
+     *
+     * <p>与 {@link #finalizeDecommissionTenant} 同理——状态机与 DB 触发器都允许这条迁移，
+     * 但此前没有端点能执行它，「从未启用过的租户」在控制台里既不能取消也不能删除。
+     *
+     * <p>⚠️ 仅允许从 {@code PENDING_SETUP} 出发：已启用过的租户必须走退役流程
+     * （{@code ACTIVE → DECOMMISSIONING → DECOMMISSIONED}），否则会绕过计费/审计的处置语义。
+     */
+    public PlatformTenantRow cancelTenant(@NonNull PlatformPrincipal principal,
+                                          @NonNull String id) {
+        security.require(principal, Namespaces.Platform.TENANT_DECOMMISSION, "tenant", id);
+        PlatformTenantRow row = transition(principal, id, TenantLifecycle.CANCELLED,
+                Namespaces.Platform.TENANT_DECOMMISSION);
+        record(principal, ACTION_DECOMMISSION_CANCEL, "tenant", id, "ALLOW", null);
         return row;
     }
 

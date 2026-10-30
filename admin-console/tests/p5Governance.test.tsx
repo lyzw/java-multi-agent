@@ -175,7 +175,10 @@ describe('P5 平台审计页（/audit · 平台身份域）', () => {
     vi.mocked(getPlatformAuditEvents).mockResolvedValue(auditFixture)
     render(<AuditLogsPage />)
 
-    expect(await screen.findByText('票据档位')).toBeInTheDocument()
+    // ⚠️ 用 role 查询而非 findByText：表格设了 scroll.x 之后，AntD 会额外渲染一条
+    //    **隐藏测量行**（.ant-table-measure-row）复制表头文本用于测宽，
+    //    findByText 会因「匹配到两个」而抛错。columnheader 只落在真实表头上。
+    expect(await screen.findByRole('columnheader', { name: '票据档位' })).toBeInTheDocument()
     // a-3 声明 ALL 档被拒 → 直接读到 ALL；a-1/a-2 与档位无关 → '-'
     expect(screen.getByText('ALL')).toBeInTheDocument()
     expect(screen.getAllByText('-').length).toBeGreaterThanOrEqual(2)

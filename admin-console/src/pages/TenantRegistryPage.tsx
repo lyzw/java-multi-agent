@@ -19,10 +19,14 @@ import {
   suspendPlatformTenant,
   resumePlatformTenant,
   decommissionPlatformTenant,
+  finalizeDecommissionPlatformTenant,
+  cancelPlatformTenant,
 } from '@/api/adminApi'
 import type { PlatformTenant } from '@/api/types'
 import { TenantProvisionForm } from './TenantProvisionForm'
 import { useRegistrationModal } from './catalog/useRegistrationModal'
+import { usePageTitle } from '@/shared/usePageTitle'
+import { emptyTextWhileLoading } from '@/shared/loadingState'
 
 /**
  * 生命周期状态机配色（与后端 TenantLifecycle 一致）。
@@ -35,6 +39,42 @@ const LIFECYCLE_COLOR: Record<string, string> = {
   DECOMMISSIONING: 'volcano',
   DECOMMISSIONED: 'red',
   CANCELLED: 'default',
+}
+
+/**
+ * 当前状态下允许的生命周期迁移（与后端 TenantLifecycle 状态机 + DB 触发器
+ * {@code enforce_tenant_lifecycle_transition} 一致）。
+ *
+ * ⚠️ **不要把 DECOMMISSIONING 当成终态**：状态机与 DB 触发器都允许
+ *    {@code DECOMMISSIONING → DECOMMISSIONED}，此前本函数漏了这一条，
+ *    导致租户退役后停在半路——控制台既无法终态化也无法回收。
+ *    同样地 {@code PENDING_SETUP → CANCELLED} 也是合法迁移，此前一并被漏掉。
+ *
+ * ⚠️ 长期做法：让后端下发 allowed-transitions（见评测报告 P0-1），
+ *    前端不再硬编码第二份状态机——前后端各写一份，漂移是必然的。
+ */
+function nextActions(t: PlatformTenant): Array<{ value: string; label: string }> {
+  switch (t.lifecycleState) {
+    case 'PENDING_SETUP':
+      return [
+        { value: 'ACTIVE', label: 'ACTIVE（启用上线）' },
+        { value: 'CANCELLED', label: 'CANCELLED（取消开通）' },
+      ]
+    case 'ACTIVE':
+      return [
+        { value: 'SUSPENDED', label: 'SUSPENDED（暂停，拒新任务）' },
+        { value: 'DECOMMISSIONING', label: 'DECOMMISSIONING（退役处置）' },
+      ]
+    case 'SUSPENDED':
+      return [
+        { value: 'ACTIVE', label: 'ACTIVE（恢复）' },
+        { value: 'DECOMMISSIONING', label: 'DECOMMISSIONING（退役处置）' },
+      ]
+    case 'DECOMMISSIONING':
+      return [{ value: 'DECOMMISSIONED', label: 'DECOMMISSIONED（退役完成，终态）' }]
+    default:
+      return [] // DECOMMISSIONED / CANCELLED：终态，无出边
+  }
 }
 
 /**
@@ -58,6 +98,8 @@ export function TenantRegistryPage(): JSX.Element {
   /** 开通租户弹窗（C37-3：「新增」用弹窗） */
   const registration = useRegistrationModal()
 
+  usePageTitle('租户管理')
+
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -75,26 +117,6 @@ export function TenantRegistryPage(): JSX.Element {
     void load()
   }, [load])
 
-  /** 当前状态下允许的生命周期迁移（与 TenantLifecycle 状态机一致） */
-  function nextActions(t: PlatformTenant): Array<{ value: string; label: string }> {
-    switch (t.lifecycleState) {
-      case 'PENDING_SETUP':
-        return [{ value: 'ACTIVE', label: 'ACTIVE（启用上线）' }]
-      case 'ACTIVE':
-        return [
-          { value: 'SUSPENDED', label: 'SUSPENDED（暂停，拒新任务）' },
-          { value: 'DECOMMISSIONING', label: 'DECOMMISSIONING（退役处置）' },
-        ]
-      case 'SUSPENDED':
-        return [
-          { value: 'ACTIVE', label: 'ACTIVE（恢复）' },
-          { value: 'DECOMMISSIONING', label: 'DECOMMISSIONING（退役处置）' },
-        ]
-      default:
-        return [] // DECOMMISSIONING / DECOMMISSIONED / CANCELLED：无前端动作
-    }
-  }
-
   const openLifecycle = (t: PlatformTenant): void => {
     const actions = nextActions(t)
     setTarget(t)
@@ -107,6 +129,9 @@ export function TenantRegistryPage(): JSX.Element {
       if (nextState === 'SUSPENDED') await suspendPlatformTenant(target.tenantId)
       else if (nextState === 'ACTIVE') await resumePlatformTenant(target.tenantId)
       else if (nextState === 'DECOMMISSIONING') await decommissionPlatformTenant(target.tenantId)
+      // ⚠️ 终态迁移必须各走各的端点：没有通用的「设置状态」入口。
+      else if (nextState === 'DECOMMISSIONED') await finalizeDecommissionPlatformTenant(target.tenantId)
+      else if (nextState === 'CANCELLED') await cancelPlatformTenant(target.tenantId)
       message.success(`租户 ${target.slug} → ${nextState}`)
       setTarget(null)
       void load()
@@ -153,7 +178,7 @@ export function TenantRegistryPage(): JSX.Element {
           loading={loading}
           dataSource={data}
           pagination={false}
-          locale={{ emptyText: '暂无租户' }}
+          locale={{ emptyText: emptyTextWhileLoading(loading, '暂无租户') }}
           columns={[
             { title: 'Slug', dataIndex: 'slug', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
             { title: '名称', dataIndex: 'name' },

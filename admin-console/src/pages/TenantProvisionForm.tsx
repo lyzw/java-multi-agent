@@ -78,12 +78,12 @@ export function TenantProvisionForm({ onProvisioned }: TenantProvisionFormProps)
       <Form.Item
         label="Slug"
         name="slug"
-        extra="2-63 位小写字母/数字/连字符，不以连字符开头或结尾（后端校验一致）"
+        extra="2-63 位，仅限小写字母、数字和连字符（-），不能以连字符开头或结尾"
         rules={[
           { required: true, message: '请输入 slug' },
           {
             pattern: /^[a-z0-9][a-z0-9-]{1,62}$/,
-            message: '格式非法',
+            message: '格式非法：2-63 位小写字母/数字/连字符，不以连字符开头或结尾',
           },
         ]}
       >
@@ -99,7 +99,7 @@ export function TenantProvisionForm({ onProvisioned }: TenantProvisionFormProps)
       <Form.Item
         label="套餐（可选）"
         name="plan"
-        extra="留空使用平台默认套餐"
+        extra="留空使用平台默认套餐；如需指定，请输入套餐标识"
       >
         <Input placeholder="standard" />
       </Form.Item>

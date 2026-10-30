@@ -79,6 +79,12 @@ function onlyCall(): FetchCall {
 }
 
 beforeEach(() => {
+  // ⚠️ 本工程 vitest 配的是 `pool: 'forks', singleFork: true`：**所有测试文件共享同一个
+  //    fork**，jsdom 的 sessionStorage 会跨文件残留。隔壁文件若存过会话，
+  //    本文件的请求就会带上 `Authorization: Bearer <会话令牌>`，
+  //    而下面「读请求不带票据」的断言恰好要求 header 为空 —— 顺序一变就假失败。
+  //    这里显式清空，让本文件与执行顺序无关。
+  window.sessionStorage.clear()
   calls.length = 0
   stubFetch()
 })

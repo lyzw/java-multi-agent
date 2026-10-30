@@ -173,7 +173,9 @@ describe('字典配置页 · 治理纪律', () => {
     await waitFor(() => expect(screen.getAllByText('HTTP 方法').length).toBeGreaterThan(0))
 
     // 切到 rag.subject：其中 ENGLISH 已停用
-    const subjectRow = Array.from(container.querySelectorAll('.ant-table-row')).find((r) =>
+    // ⚠️ 左栏已从 Table 改为 List（评测 P1-4：窄栏里表格会把字典名压成逐字竖排），
+    //    故左栏条目用 .ant-list-item 定位；右栏的条目表仍是 Table。
+    const subjectRow = Array.from(container.querySelectorAll('.ant-list-item')).find((r) =>
       (r.textContent ?? '').includes('rag.subject'),
     )
     expect(subjectRow).toBeTruthy()

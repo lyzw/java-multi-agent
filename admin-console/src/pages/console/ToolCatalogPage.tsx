@@ -30,6 +30,8 @@ import { ToolFormFields } from '@/pages/catalog/ToolFormFields'
 import { type ToolFormValues } from '@/pages/catalog/platformObjectForm'
 import { buildToolPublishRequest } from '@/pages/catalog/platformPublishRequests'
 import { useRegistrationModal } from '@/pages/catalog/useRegistrationModal'
+import { emptyTextWhileLoading } from '@/shared/loadingState'
+import { scrollXOf } from '@/shared/tableLayout'
 import { PlatformDeprecateModal } from './PlatformDeprecateModal'
 import { CatalogDetailDrawer, ToolCatalogDetail } from './platformDetailDrawer'
 import {
@@ -93,26 +95,28 @@ export function ToolCatalogPage(): JSX.Element {
   }, [load])
 
   const columns: TableColumnsType<ToolCatalogItem> = [
-    { title: 'ID', dataIndex: 'toolId', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
-    { title: '名称', dataIndex: 'name', render: (v: string | null) => v ?? '-' },
+    { title: 'ID', dataIndex: 'toolId', width: 180, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
+    { title: '名称', dataIndex: 'name', width: 160, render: (v: string | null) => v ?? '-' },
     {
       title: '类型', // ← 二级维度：不单独开 Tab，用列呈现
       dataIndex: 'kind',
+      width: 90,
       render: (v: string) => (
         <Tag color={v === 'MCP' ? 'purple' : v === 'HTTP' ? 'blue' : 'default'}>{v}</Tag>
       ),
     },
-    { title: '风险等级', dataIndex: 'riskLevel', render: (v: string) => riskTag(v) },
-    { title: '版本', dataIndex: 'version', render: (v: number) => <Tag color="blue">v{v}</Tag> },
+    { title: '风险等级', dataIndex: 'riskLevel', width: 130, render: (v: string) => riskTag(v) },
+    { title: '版本', dataIndex: 'version', width: 80, render: (v: number) => <Tag color="blue">v{v}</Tag> },
     {
       // ⚠️ 「状态」列 = 生命周期 + 发布状态合并 —— 只看 published 会把
       //    「已停用」（停用是单向终态，停用后 published 仍为 true）显示成「已发布」。
       title: '状态',
       dataIndex: 'lifecycleState',
+      width: 120,
       render: (state: string | null, r: ToolCatalogItem) => lifecycleStateCell(state, r.published),
     },
-    { title: '发布时间', dataIndex: 'publishedAt', render: (v: string | null) => timeCell(v) },
-    { title: '配置指纹', dataIndex: 'configFingerprint', render: (v: string | null | undefined) => fingerprintCell(v) },
+    { title: '发布时间', dataIndex: 'publishedAt', width: 170, render: (v: string | null) => timeCell(v) },
+    { title: '配置指纹', dataIndex: 'configFingerprint', width: 160, render: (v: string | null | undefined) => fingerprintCell(v) },
     {
       title: '操作',
       key: 'actions',
@@ -143,8 +147,10 @@ export function ToolCatalogPage(): JSX.Element {
       columns={columns}
       pagination={false}
       size="small"
-      scroll={{ x: 'max-content' }}
-      locale={{ emptyText: '暂无数据' }}
+      // ⚠️ 必须是**各列宽度之和**而不是 'max-content'：固定操作列是独立 sticky 层，
+      //    不参与 max-content 的测量，会永远压在最后一列上（评测 P1-3）。
+      scroll={{ x: scrollXOf(columns) }}
+      locale={{ emptyText: emptyTextWhileLoading(loading, '暂无数据') }}
       onRow={(r) => ({
         onDoubleClick: () => setDetailId(r.toolId),
       })}
@@ -185,22 +191,22 @@ export function ToolCatalogPage(): JSX.Element {
         <Row gutter={12} style={{ marginBottom: 16 }}>
           <Col span={6}>
             <Card size="small" variant="borderless" style={{ background: '#fafafa' }}>
-              <Statistic title="Tool 总数" value={stats.total} />
+              <Statistic loading={loading} title="Tool 总数" value={stats.total} />
             </Card>
           </Col>
           <Col span={6}>
             <Card size="small" variant="borderless" style={{ background: '#f6ffed' }}>
-              <Statistic title="已发布" value={stats.published} valueStyle={{ color: '#389e0d' }} />
+              <Statistic loading={loading} title="已发布" value={stats.published} valueStyle={{ color: '#389e0d' }} />
             </Card>
           </Col>
           <Col span={6}>
             <Card size="small" variant="borderless" style={{ background: '#fffbe6' }}>
-              <Statistic title="草稿 / 非终态" value={stats.draft} valueStyle={{ color: '#d48806' }} />
+              <Statistic loading={loading} title="草稿 / 非终态" value={stats.draft} valueStyle={{ color: '#d48806' }} />
             </Card>
           </Col>
           <Col span={6}>
             <Card size="small" variant="borderless" style={{ background: '#fff1f0' }}>
-              <Statistic title="已停用" value={stats.deprecated} valueStyle={{ color: '#cf1322' }} />
+              <Statistic loading={loading} title="已停用" value={stats.deprecated} valueStyle={{ color: '#cf1322' }} />
             </Card>
           </Col>
         </Row>

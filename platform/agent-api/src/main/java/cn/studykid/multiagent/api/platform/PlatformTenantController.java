@@ -149,6 +149,29 @@ public class PlatformTenantController {
         return ResponseEntity.ok(TenantSummary.of(service.decommissionTenant(principal, id)));
     }
 
+    /**
+     * 退役收尾（{@code DECOMMISSIONING → DECOMMISSIONED}，终态）。
+     *
+     * <p>⚠️ 此前缺少这条路径：状态机与 DB 触发器都允许该迁移，却没有对应端点，
+     * 租户一旦退役就停在 {@code DECOMMISSIONING} 无法终态化。
+     */
+    @PostMapping("/{id}/finalize-decommission")
+    public ResponseEntity<TenantSummary> finalizeDecommission(
+            @RequestAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE)
+            PlatformPrincipal principal,
+            @PathVariable String id) {
+        return ResponseEntity.ok(TenantSummary.of(service.finalizeDecommissionTenant(principal, id)));
+    }
+
+    /** 取消未完成初始化的租户（{@code PENDING_SETUP → CANCELLED}，终态）。 */
+    @PostMapping("/{id}/cancel")
+    public ResponseEntity<TenantSummary> cancel(
+            @RequestAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE)
+            PlatformPrincipal principal,
+            @PathVariable String id) {
+        return ResponseEntity.ok(TenantSummary.of(service.cancelTenant(principal, id)));
+    }
+
     /** 列出租户能力授权。 */
     @GetMapping("/{id}/capabilities")
     public ResponseEntity<List<CapabilitySummary>> capabilities(

@@ -18,6 +18,8 @@ import {
   Typography,
 } from 'antd'
 import type { TableColumnsType, TabsProps } from 'antd'
+import { emptyTextWhileLoading } from '@/shared/loadingState'
+import { scrollXOf } from '@/shared/tableLayout'
 import { OrderedListOutlined } from '@ant-design/icons'
 import {
   applyPlatformPublishRequest,
@@ -250,8 +252,10 @@ export function PlatformRequestQueueButton(): JSX.Element {
           columns={columns}
           pagination={false}
           size="small"
-          scroll={{ x: 'max-content' }}
-          locale={{ emptyText: '暂无申请' }}
+          // ⚠️ 必须是**各列宽度之和**而不是 'max-content'：固定操作列是独立 sticky 层，
+          //    不参与 max-content 的测量，会永远压在最后一列上（评测 P1-3）。
+          scroll={{ x: scrollXOf(columns) }}
+          locale={{ emptyText: emptyTextWhileLoading(loading, '暂无申请') }}
         />
       </Drawer>
     </>

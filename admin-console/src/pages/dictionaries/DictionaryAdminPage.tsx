@@ -19,6 +19,7 @@ import {
   Form,
   Input,
   InputNumber,
+  List,
   Modal,
   Row,
   Space,
@@ -29,6 +30,7 @@ import {
   message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { emptyTextWhileLoading } from '@/shared/loadingState'
 import {
   createDictionary,
   disableDictionaryItem,
@@ -36,7 +38,6 @@ import {
   upsertDictionaryItem,
   updateDictionaryItem,
   type DictionaryItem,
-  type DictionaryView,
 } from '@/api/dictionaryApi'
 import { ApiError } from '@/api/client'
 import { useDictionaries } from '@/features/dictionaries/useDictionaries'
@@ -65,41 +66,6 @@ export function DictionaryAdminPage(): JSX.Element {
 
   const [dictForm] = Form.useForm()
   const [itemForm] = Form.useForm()
-
-  const dictColumns: ColumnsType<DictionaryView> = [
-    {
-      title: '字典',
-      dataIndex: 'dictName',
-      render: (_: unknown, row) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{row.dictName}</Text>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {row.dictCode}
-          </Text>
-        </Space>
-      ),
-    },
-    {
-      title: '类型',
-      key: 'builtIn',
-      width: 90,
-      render: (_: unknown, row) =>
-        row.builtIn ? <Tag color="blue">内置</Tag> : <Tag>业务</Tag>,
-    },
-    {
-      title: '项数',
-      key: 'count',
-      width: 70,
-      render: (_: unknown, row) => row.items.length,
-    },
-    {
-      title: '状态',
-      key: 'enabled',
-      width: 80,
-      render: (_: unknown, row) =>
-        row.enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>,
-    },
-  ]
 
   const itemColumns: ColumnsType<DictionaryItem> = [
     {
@@ -312,18 +278,45 @@ export function DictionaryAdminPage(): JSX.Element {
               </Space>
             }
           >
-            <Table<DictionaryView>
-              rowKey="dictCode"
+            {/* ⚠️ 左栏是**选择器**不是数据表：用 List 而非 Table —— 表格在窄栏里
+                会把「字典名」压成逐字竖排（实测「Agent 编排模式」竖成 4 行）。
+                List 不设固定列宽，名字与编码各自整行显示，窄栏也读得下去。 */}
+            <List
               size="small"
               loading={loading}
-              columns={dictColumns}
               dataSource={list}
-              pagination={false}
-              rowClassName={(row) => (row.dictCode === selectedCode ? 'row-selected' : '')}
-              onRow={(row) => ({
-                onClick: () => setSelectedCode(row.dictCode),
-                style: { cursor: 'pointer' },
-              })}
+              locale={{ emptyText: emptyTextWhileLoading(loading, '暂无字典') }}
+              renderItem={(row) => {
+                const selected = row.dictCode === selectedCode
+                return (
+                  <List.Item
+                    onClick={() => setSelectedCode(row.dictCode)}
+                    style={{
+                      cursor: 'pointer',
+                      padding: '6px 8px',
+                      background: selected ? '#e6f4ff' : undefined,
+                    }}
+                  >
+                    <List.Item.Meta
+                      title={
+                        <Space size={4} wrap>
+                          <Text strong>{row.dictName}</Text>
+                          {row.builtIn ? <Tag color="blue">内置</Tag> : <Tag>业务</Tag>}
+                        </Space>
+                      }
+                      description={
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {row.dictCode}
+                        </Text>
+                      }
+                    />
+                    <Space size={4}>
+                      <Text type="secondary">{row.items.length} 项</Text>
+                      {row.enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>}
+                    </Space>
+                  </List.Item>
+                )
+              }}
             />
           </Card>
         </Col>

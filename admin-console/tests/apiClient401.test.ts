@@ -34,27 +34,40 @@ beforeEach(() => {
     expiresAt: Date.now() + 60_000,
   } as never)
   // jsdom 的 window.location 不可写：换成可断言的桩（跳登录靠写 href）
+  // ⚠️ 桩必须带 pathname/search：跳登录要靠它们算出「回哪去」（评测 P1-5）。
+  //    只给 href 的旧桩会让 pathname 变 undefined，回跳目标算不出来。
   Object.defineProperty(window, 'location', {
     configurable: true,
     writable: true,
-    value: { href: 'http://localhost:5199/admin/tools' },
+    value: {
+      href: 'http://localhost:5199/admin/tools',
+      pathname: '/admin/tools',
+      search: '',
+    },
   })
 })
 
 afterEach(() => {
+  // ⚠️ 必须清掉本文件存的会话：所有测试文件共享同一个 fork（singleFork），
+  //    sessionStorage 会残留给后续文件，害得隔壁对「请求不带 Authorization」
+  //    的断言随执行顺序时好时坏。本文件只负责造会话，不该把状态留给别人。
+  window.sessionStorage.clear()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
 describe('会话域 401 · 令牌确实失效', () => {
-  it('✅ /platform/** 返 401 → 清会话并跳登录页（带 basename，不是 /login）', async () => {
+  it('✅ /platform/** 返 401 → 清会话并跳登录页（带 basename + 过期原因 + 回跳目标）', async () => {
     reply(401)
     const cleared = vi.spyOn(tokenStorage, 'clearSession')
 
     await expect(request('/platform/v1/users')).rejects.toThrow(/登录已失效/)
 
     expect(cleared).toHaveBeenCalled()
-    expect(window.location.href).toBe('/admin/login')
+    // ⚠️ 评测 P1-5：裸跳 '/admin/login' 会让用户以为是自己点的，
+    //    重新登录完又被送回默认页（/tenants），刚才的操作现场全丢。
+    //    跳登录必须带**为什么**（reason=expired）与**回哪去**（next=当前路径）。
+    expect(window.location.href).toBe('/admin/login?reason=expired&next=%2Ftools')
   })
 })
 
