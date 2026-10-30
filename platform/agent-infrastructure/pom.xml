@@ -74,5 +74,10 @@
       <artifactId>agent-test-support</artifactId>
       <scope>test</scope>
     </dependency>
-</dependencies>
+      <!-- Micrometer 指标采集（观测者层） -->
+      <dependency>
+        <groupId>io.micrometer</groupId>
+        <artifactId>micrometer-core</artifactId>
+      </dependency>
+    </dependencies>
 </project>
