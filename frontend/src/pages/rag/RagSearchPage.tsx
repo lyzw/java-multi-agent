@@ -92,11 +92,26 @@ function SourceCard({
 }
 
 const TENANT_STORAGE_KEY = 'rag.tenantId'
+const TENANT_STORAGE_TTL = 7 * 24 * 60 * 60 * 1000 // 7 天
+
+/** 存储结构 */
+interface StoredTenant {
+  value: string
+  timestamp: number
+}
 
 /** 读取上次使用的租户标识（仅本地记忆，不涉及任何凭据）。 */
 function readStoredTenantId(): string {
   try {
-    return window.localStorage.getItem(TENANT_STORAGE_KEY) ?? ''
+    const stored = window.localStorage.getItem(TENANT_STORAGE_KEY)
+    if (stored === null) return ''
+    const parsed: StoredTenant = JSON.parse(stored)
+    // ⚠️ 7 天后自动过期，避免永久存储
+    if (Date.now() - parsed.timestamp > TENANT_STORAGE_TTL) {
+      window.localStorage.removeItem(TENANT_STORAGE_KEY)
+      return ''
+    }
+    return parsed.value
   } catch {
     // ⚠️ 隐私模式/禁用存储时 localStorage 可能抛错——此时退回空串，让用户手填。
     return ''
@@ -105,8 +120,14 @@ function readStoredTenantId(): string {
 
 function rememberTenantId(tenantId: string): void {
   try {
-    if (tenantId === '') window.localStorage.removeItem(TENANT_STORAGE_KEY)
-    else window.localStorage.setItem(TENANT_STORAGE_KEY, tenantId)
+    if (tenantId === '') {
+      window.localStorage.removeItem(TENANT_STORAGE_KEY)
+    } else {
+      window.localStorage.setItem(
+        TENANT_STORAGE_KEY,
+        JSON.stringify({ value: tenantId, timestamp: Date.now() }),
+      )
+    }
   } catch {
     // 记忆失败不影响检索本身，静默忽略。
   }

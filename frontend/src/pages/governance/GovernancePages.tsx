@@ -25,6 +25,7 @@ import {
 } from '@/api/client'
 import { useGovernancePage } from '@/features/governance/useGovernancePage'
 import { PageHead, Panel, Toolbar } from '@/components/ui'
+import { downloadCsv } from '@/features/reports/csv'
 import type {
   ApprovalItem,
   OperationItem,
@@ -659,6 +660,30 @@ export function AuditPage(): JSX.Element {
       </Panel>
 
       <Sheet title="审计记录">
+        {/* ⚠️ 导出 CSV 按钮 */}
+        {items.length > 0 && (
+          <div className="toolbar" style={{ marginBottom: 'var(--s-2)' }}>
+            <button
+              type="button"
+              className="btn btn--quiet"
+              onClick={() => {
+                const headers = ['时间', '操作者', '动作', '资源', '明细']
+                const rows = items.map((entry) => [
+                  formatTime(entry.createdAt),
+                  entry.actorId,
+                  AUDIT_ACTION_LABELS[entry.action] ?? entry.action,
+                  `${entry.resourceType}${entry.resourceId !== null ? '/' + entry.resourceId : ''}`,
+                  renderDetail(entry.detail),
+                ])
+                downloadCsv('审计记录', headers, rows)
+              }}
+            >
+              导出 CSV
+            </button>
+            <span className="muted">导出的数字与下方表格逐格一致（同源数据）。</span>
+          </div>
+        )}
+
         {loading ? (
           <LoadingRows
             columns={['时间', '操作者', '动作', '资源', '明细']}

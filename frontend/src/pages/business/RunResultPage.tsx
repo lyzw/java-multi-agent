@@ -96,9 +96,12 @@ export function RunResultPage(): JSX.Element {
 
   // ⚠️ C6 扫描只针对**模型产出的文本**（explanation）。
   //    结构性字段（状态、题号）不来自模型，扫描它们只会制造误报。
+  // ⚠️ 性能优化：限制扫描文本长度，避免长文本阻塞渲染
   const leakedFields: string[] = useMemo(() => {
     if (result === null || result.explanation === null) return []
-    return findLeakedFields({ explanation: result.explanation })
+    // ⚠️ 只扫描前 10000 字符，避免长文本阻塞渲染
+    const text = result.explanation.slice(0, 10000)
+    return findLeakedFields({ explanation: text })
   }, [result])
 
   if (loading) {

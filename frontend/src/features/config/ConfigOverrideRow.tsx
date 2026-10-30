@@ -81,6 +81,14 @@ export function ConfigOverrideRow({
 
   function submit(): void {
     if (!submittable) return
+    // ⚠️ 变更确认：当值确实改变时，要求用户确认
+    const valueChanged = nextText !== current
+    if (valueChanged) {
+      const confirmed = window.confirm(
+        `确认要将「${item.key}」从「${current || '—'}」修改为「${nextText}」吗？\n\n变更理由：${reason}`,
+      )
+      if (!confirmed) return
+    }
     onSubmit(item.key, isMatrix ? formatApprovalMatrix(matrix) : nextValue, reason)
     setEditing(false)
   }

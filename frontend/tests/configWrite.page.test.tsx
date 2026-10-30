@@ -92,6 +92,8 @@ beforeEach(() => {
   clearConfigOverrideMock.mockReset()
   getConfigMock.mockReset()
   getConfigMock.mockResolvedValue(EMPTY_CONFIG)
+  // ⚠️ Mock window.confirm to return true (accept changes)
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 
 /* ── 连通性 ──────────────────────────────────────────────── */

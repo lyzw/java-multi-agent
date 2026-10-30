@@ -37,8 +37,15 @@ export function LoginPage(): JSX.Element {
   const [error, setError] = useState<NormalizedError | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  // ⚠️ 表单完整性检查：所有字段都非空才算完整
+  const isComplete = tenantId.trim().length > 0 && loginName.trim().length > 0 && password.length > 0
+
   const handleSubmit = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
+    // ⛔ 缺项防线：按钮不再原生禁用，缺项拦截的责任落到这里
+    if (!isComplete) {
+      return
+    }
     setError(null)
     setSubmitting(true)
     try {
@@ -162,7 +169,20 @@ export function LoginPage(): JSX.Element {
 
           {error !== null ? <ErrorView error={error} /> : null}
 
-          <button type="submit" className="btn btn--block" disabled={submitting} aria-busy={submitting}>
+          {/* ⚠️ 缺项提示：按钮不可用时告诉用户为什么 */}
+          {!isComplete && (
+            <p className="field__hint" style={{ color: 'var(--mark)', textAlign: 'center' }}>
+              请填写所有必填字段
+            </p>
+          )}
+
+          <button
+            type="submit"
+            className="btn btn--block"
+            disabled={submitting || !isComplete}
+            aria-busy={submitting}
+            aria-disabled={!isComplete}
+          >
             {submitting ? '登录中…' : '登录'}
           </button>
         </form>

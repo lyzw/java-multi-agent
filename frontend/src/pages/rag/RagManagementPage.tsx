@@ -1211,6 +1211,8 @@ function BulkImportPanel({ tenantId }: { tenantId: string }): JSX.Element {
   const [rows, setRows] = useState<ImportRow[] | null>(null)
   const [rowErrors, setRowErrors] = useState<(string[] | null)[]>([])
   const [parseError, setParseError] = useState<string | null>(null)
+  // ⚠️ 导入进度状态
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null)
   // ⚠️ 文件 input 本身不可见（sr-only），键盘操作要靠外层 label 转发点击，故留引用。
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -1319,7 +1321,38 @@ function BulkImportPanel({ tenantId }: { tenantId: string }): JSX.Element {
       )
       return
     }
-    bulkRegister(tenantId.trim(), registeredBy.trim(), submittedItems)
+    // ⚠️ 显示进度
+    setImportProgress({ current: 0, total: submittedItems.length })
+
+    // ⚠️ 分批导入，每批 10 行，避免单次请求过大
+    const batchSize = 10
+    let processed = 0
+
+    const processBatch = async (): Promise<void> => {
+      const batch = submittedItems.slice(processed, processed + batchSize)
+      if (batch.length === 0) {
+        setImportProgress(null)
+        return
+      }
+
+      try {
+        await bulkRegister(tenantId.trim(), registeredBy.trim(), batch)
+        processed += batch.length
+        setImportProgress({ current: processed, total: submittedItems.length })
+
+        // 继续处理下一批
+        if (processed < submittedItems.length) {
+          await processBatch()
+        } else {
+          setImportProgress(null)
+        }
+      } catch (cause) {
+        setImportProgress(null)
+        setParseError(`导入失败：${cause instanceof Error ? cause.message : '未知错误'}`)
+      }
+    }
+
+    void processBatch()
   }, [tenantReady, registeredBy, submittedItems, bulkRegister, tenantId])
 
   const resultTable = (items: RagBulkImportItemResult[]): JSX.Element => (
@@ -1451,6 +1484,21 @@ function BulkImportPanel({ tenantId }: { tenantId: string }): JSX.Element {
         <div className="marked" role="alert" style={{ marginTop: 'var(--s-3)' }}>
           <p className="marked__label">没能解析</p>
           <p style={{ margin: 0 }}>{parseError}</p>
+        </div>
+      ) : null}
+
+      {/* ⚠️ 导入进度提示 */}
+      {importProgress !== null ? (
+        <div className="marked marked--calm" style={{ marginTop: 'var(--s-3)' }}>
+          <p className="marked__label">导入进度</p>
+          <p style={{ margin: 0 }}>
+            已处理 {importProgress.current} / {importProgress.total} 行
+          </p>
+          <progress
+            value={importProgress.current}
+            max={importProgress.total}
+            style={{ width: '100%', marginTop: 'var(--s-2)' }}
+          />
         </div>
       ) : null}
 

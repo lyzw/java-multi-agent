@@ -351,7 +351,15 @@ export function NewRunPage(): JSX.Element {
                 切换 Agent 只影响<b>接下来</b>发起的分析；已发出的分析继续用它开始时的那份配置。
               </p>
             </div>
-          ) : null}
+          ) : (
+            // ⚠️ 没有可用 Agent 时显示警告
+            <div className="marked marked--calm">
+              <p className="marked__label">没有可用的 Agent</p>
+              <p style={{ margin: 0 }}>
+                当前租户下没有已发布的 Agent。请联系管理员创建并发布 Agent 后再发起辅导。
+              </p>
+            </div>
+          )}
 
           <div className="toolbar">
             <div className="field" style={{ minWidth: 160 }}>

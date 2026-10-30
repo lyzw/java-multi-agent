@@ -17,6 +17,7 @@ interface HealthState {
   httpStatus: number
   checkedAt: string
   detail?: string
+  jwksStatus?: 'UP' | 'DOWN'
 }
 
 export function HealthPage(): JSX.Element {
@@ -42,6 +43,17 @@ export function HealthPage(): JSX.Element {
         parsed !== null &&
         'status' in (parsed as Record<string, unknown>)
 
+      // ⚠️ 同时检查 /api/auth/jwks 作为替代健康检查
+      let jwksStatus: 'UP' | 'DOWN' = 'DOWN'
+      try {
+        const jwksResponse = await fetch('/api/auth/jwks')
+        if (jwksResponse.ok) {
+          jwksStatus = 'UP'
+        }
+      } catch {
+        jwksStatus = 'DOWN'
+      }
+
       setHealth({
         status: isHealth && (parsed as { status: string }).status === 'UP' ? 'UP' : 'DOWN',
         httpStatus: response.status,
@@ -49,6 +61,7 @@ export function HealthPage(): JSX.Element {
         detail: isHealth
           ? undefined
           : `返回的不是健康结果（HTTP ${response.status}），实际内容是接口错误`,
+        jwksStatus,
       })
     } catch (cause) {
       setHealth({
@@ -99,6 +112,14 @@ export function HealthPage(): JSX.Element {
             <span className="muted">响应码</span>
             <code>{health?.httpStatus ?? '—'}</code>
 
+            {/* ⚠️ JWKS 端点状态作为替代健康检查 */}
+            <span className="muted">JWKS</span>
+            {health?.jwksStatus === 'UP' ? (
+              <StatusPill tone="success">可达</StatusPill>
+            ) : (
+              <StatusPill tone="warn">不可达</StatusPill>
+            )}
+
             <span className="muted">检测时间</span>
             {/* ⚠️ datetime 给机器可读值：toLocaleString 的本地化字符串
                 人能读，程序解析不了。 */}
@@ -115,8 +136,9 @@ export function HealthPage(): JSX.Element {
         <Marked label="后端没有正常响应" tone="error">
           <p style={{ margin: 0 }}>{health.detail ?? '检查失败'}</p>
           <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
-            先确认后端进程在跑。要快速判断后端是否存活，可以用 <code>GET /api/auth/jwks</code> ——
-            它不依赖健康探针。
+            {health.jwksStatus === 'UP'
+              ? '健康探针返回异常，但 /api/auth/jwks 可达——后端进程在跑，可能是健康探针配置问题。'
+              : '健康探针与 /api/auth/jwks 都不可达——后端进程可能未启动。'}
           </p>
           <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
             健康检查当前只返回总状态，不暴露组件明细，因此本页<b>看不出是哪个组件异常</b>——

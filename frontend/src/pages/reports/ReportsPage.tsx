@@ -1021,6 +1021,12 @@ export function ReportsPage(): JSX.Element {
                   </option>
                 ))}
               </select>
+              {/* ⚠️ 当选择最大区间时，提示后端可能静默截断 */}
+              {days === 90 ? (
+                <p className="field__hint" style={{ color: 'var(--warn)' }}>
+                  已选择最大区间，后端可能静默截断
+                </p>
+              ) : null}
             </div>
             <div className="toolbar__spacer" />
             <span className="muted">

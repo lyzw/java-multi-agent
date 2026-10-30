@@ -63,8 +63,11 @@ export function RunProgressPage(): JSX.Element {
     pollerRef.current = poller
     // ⛔ 必须清理，否则定时器泄漏
     return () => {
-      poller.stop()
-      pollerRef.current = null
+      // ⚠️ 确保 poller 存在且已初始化（createRunEventPoller 内部立即启动）
+      if (pollerRef.current) {
+        pollerRef.current.stop()
+        pollerRef.current = null
+      }
     }
   }, [runId, onUnauthorized])
 
@@ -87,8 +90,9 @@ export function RunProgressPage(): JSX.Element {
   // ⚠️ 到达终态即停一切轮询：SSE 流在本项目**永远收不到终态事件**
   //    （run_event 只有 RUN_CREATED），故若只靠 SSE，本页会一直打后端。
   useEffect(() => {
-    if (statusDone) {
-      pollerRef.current?.stop()
+    if (statusDone && pollerRef.current) {
+      pollerRef.current.stop()
+      pollerRef.current = null
     }
   }, [statusDone])
 
