@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>frontend 前端体验评测报告</title>
+<style>
+  :root{
+    --paper:#fcfcfb; --paper-sunk:#f5f6f7; --rule:#e3e5e8; --rule-strong:#c7cbd1;
+    --ink:#1a1d21; --ink-2:#5b6169; --ink-3:#8a9099;
+    --mark:#c8382d; --mark-wash:#fdf2f1; --settled:#1d6b5c; --settled-wash:#eef6f4;
+    --s1:4px;--s2:8px;--s3:12px;--s4:20px;--s5:32px;--s6:48px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper-sunk);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    line-height:1.7;font-size:15px}
+  .wrap{max-width:980px;margin:0 auto;padding:var(--s6) var(--s4) var(--s6)}
+  header.top{border-bottom:2px solid var(--ink);padding-bottom:var(--s3);margin-bottom:var(--s5)}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:.5px}
+  h2{font-size:20px;margin:var(--s6) 0 var(--s3);padding-bottom:6px;border-bottom:1px solid var(--rule)}
+  h3{font-size:16px;margin:var(--s5) 0 var(--s2);color:var(--ink)}
+  p{margin:var(--s2) 0}
+  .lead{color:var(--ink-2)}
+  code{background:var(--paper-sunk);padding:1px 5px;border-radius:3px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;color:var(--ink)}
+  .note{background:var(--settled-wash);border-left:3px solid var(--settled);padding:var(--s3) var(--s4);margin:var(--s4) 0;border-radius:0 6px 6px 0}
+  .warn{background:var(--mark-wash);border-left:3px solid var(--mark);padding:var(--s3) var(--s4);margin:var(--s4) 0;border-radius:0 6px 6px 0}
+  table{border-collapse:collapse;width:100%;margin:var(--s3) 0;font-size:14px}
+  th,td{border:1px solid var(--rule);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--paper-sunk);color:var(--ink-2);font-weight:600}
+  .sev{display:inline-block;font-size:12px;font-weight:700;padding:1px 8px;border-radius:10px;white-space:nowrap}
+  .sev-h{background:var(--mark-wash);color:var(--mark);border:1px solid var(--mark)}
+  .sev-m{background:#fff4e5;color:#9a5b00;border:1px solid #e0a85a}
+  .sev-l{background:var(--paper-sunk);color:var(--ink-2);border:1px solid var(--rule-strong)}
+  .sev-i{background:var(--settled-wash);color:var(--settled);border:1px solid #9cc7bd}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--s3);margin:var(--s3) 0}
+  .card{background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:var(--s3)}
+  .card .k{font-size:13px;color:var(--ink-2)}
+  .card .v{font-size:22px;font-weight:700;margin-top:2px}
+  .score-good{color:var(--settled)} .score-ok{color:#9a5b00} .score-bad{color:var(--mark)}
+  ul.tight li{margin:4px 0}
+  .file{color:var(--ink-3);font-size:13px;font-family:ui-monospace,monospace}
+  .pill{display:inline-block;background:var(--paper-sunk);border:1px solid var(--rule);border-radius:12px;padding:1px 10px;font-size:12px;color:var(--ink-2);margin:2px 4px 2px 0}
+  footer{margin-top:var(--s6);padding-top:var(--s3);border-top:1px solid var(--rule);color:var(--ink-3);font-size:13px}
+  .toc{background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:var(--s3) var(--s4);margin:var(--s4) 0}
+  .toc a{color:var(--ink);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>frontend 前端体验评测报告</h1>
+  <p class="lead">初中生错题归因与个性化辅导控制台（租户侧 SPA）· 真实终端用户视角</p>
+  <p class="lead file">评测对象：/frontend（React 18 + TS + react-router-dom v7，无组件库，纯手写 CSS）<br/>
+  评测时间：2026-10-30 · 评测人：AI Agent（真实代码走查 + 生产构建）</p>
+</header>
+
+<div class="warn">
+  <p><strong>关于"真实浏览器点击走查"的说明（务必先读）</strong></p>
+  <p>我本打算像真实用户一样在浏览器里逐步点击体验。但本沙箱存在<strong>网络命名空间隔离</strong>：浏览器实例只能访问你既有的后端（<code>127.0.0.1:8080/8081</code>），而我用 Bash 拉起的前端 dev server（已实测 <code>5173</code>）处于独立命名空间，浏览器对其返回 <code>ERR_CONNECTION_REFUSED</code>。两次实测（含 <code>--proxy</code> 与直连）均失败，且我不应打扰你正在运行的线上后端。</p>
+  <p>因此<strong>未能完成"浏览器实时点击"式走查</strong>。为做到"基于页面可观测的实际表现、不臆测"，本报告改用两条可证伪证据链：</p>
+  <ul class="tight">
+    <li><strong>① 对实际前端执行生产构建</strong> —— <code>npm run build</code> 通过（见下），证明它是真实可运行产物，而非空壳；</li>
+    <li><strong>② 逐文件实读已实现组件的渲染与交互逻辑</strong> —— 所有结论附 <code>文件:行号</code>，未实现的功能一律标注为"未接入/缺口"，不假设其存在。</li>
+  </ul>
+  <p>受此限制，<strong>像素级视觉、真实运行时渲染、真实后端数据往返</strong> 三类信息无法在本环境确认；其余 UI 结构、流程逻辑、组件一致性、响应式与可访问性均可从源码确定。</p>
+</div>
+
+<div class="toc">
+  <strong>目录</strong>
+  <ol style="margin:6px 0">
+    <li><a href="#overview">一、项目概况与技术基线</a></li>
+    <li><a href="#ui">二、UI 层面评估</a></li>
+    <li><a href="#flow">三、业务流程层面评估</a></li>
+    <li><a href="#issues">四、问题清单（按严重程度）</a></li>
+    <li><a href="#errata">五、对既有 E2E_TEST_REPORT.md 的勘误</a></li>
+    <li><a href="#strength">六、优势沉淀</a></li>
+    <li><a href="#plan">七、改进优先级建议</a></li>
+  </ol>
+</div>
+
+<h2 id="overview">一、项目概况与技术基线</h2>
+<p>本项目是<strong>租户侧的辅导业务控制台</strong>（区别于另一套 <code>admin-console</code> 平台治理后台）：面向学生/家长/老师，提供"发起辅导 → 进度追踪 → 归因结果 → 学习画像"，以及知识检索（RAG）、语料治理、配置、运行治理（审批/未知操作处置/审计）、报表、系统健康等能力。共 16 个导航入口、约 19 个页面路由。</p>
+
+<div class="grid">
+  <div class="card"><div class="k">生产构建</div><div class="v score-good">✅ 通过</div></div>
+  <div class="card"><div class="k">模块数</div><div class="v">91</div></div>
+  <div class="card"><div class="k">JS 体积</div><div class="v">403 KB</div><div class="k">gzip 124 KB</div></div>
+  <div class="card"><div class="k">CSS 体积</div><div class="v">29 KB</div><div class="k">gzip 5.9 KB</div></div>
+  <div class="card"><div class="k">TSX/TS 硬编码色值</div><div class="v score-good">0</div></div>
+  <div class="card"><div class="k">路由入口</div><div class="v">16</div></div>
+</div>
+<p class="file">构建证据：<code>npm run build</code> → <code>tsc --noEmit && vite build</code> 退出码 0；产物 <code>dist/index-*.js 402.87 KB / gzip 123.62 KB</code>、<code>dist/index-*.css 29.08 KB / gzip 5.94 KB</code>。体积明显小于 admin-console（1.5 MB），无代码分割但体量可控。</p>
+
+<h2 id="ui">二、UI 层面评估</h2>
+
+<h3>2.1 视觉布局</h3>
+<p>采用<strong>顶栏 + 侧栏</strong>布局（<code>src/layouts/AppShell.tsx</code>）。侧栏按 4 个业务分面分组：<em>辅导台 / 知识库治理 / 运行治理 / 平台配置与运维</em>，每个分面带角色提示（<code>rolesHint</code>），导航项按用户角色动态过滤（<code>visibleNav</code>，AppShell.tsx:187-192）。顶栏含品牌标识、角色/租户身份、折叠按钮、退出按钮。整体信息架构清晰，分组语义合理，重度用户可把侧栏折叠为图标栏并<strong>跨刷新持久化</strong>（<code>nav.collapsed</code> localStorage，AppShell.tsx:122, 179-185）。</p>
+
+<h3>2.2 配色与字体</h3>
+<p>配色由完整的 CSS 设计令牌驱动（<code>src/styles/tokens.css</code>），<strong>全局零硬编码十六进制色值</strong>（在 <code>*.tsx/*.ts</code> 中 grep <code>#xxxxxx</code> 命中数为 0）。令牌包括：纸面 <code>--paper #fcfcfb</code>、墨色三级 <code>--ink / --ink-2 / --ink-3</code>（其中 <code>--ink-3 #8a9099</code> 被令牌注释<strong>硬性约束只用于非文字装饰</strong>，承载文字一律用 <code>--ink-2</code> 以满足对比度）、语义色 <code>--mark #c8382d</code>（批改红，仅用于错误/失败）、<code>--settled #1d6b5c</code>（完成/通过）。字体为系统 UI 栈 + 宋体（<code>--font-hand</code>，用于"纸感/批改"签名）+ 等宽（<code>--font-mono</code>）。这套"纸面 + 墨色 + 批改红"的视觉语言一致、克制、辨识度高。</p>
+<p class="file">证据：tokens.css:22-56（令牌定义与对比度纪律注释）。</p>
+
+<h3>2.3 组件一致性</h3>
+<p>高度一致。全站贯彻<strong>"五态纪律"</strong>（默认 / 加载 / 空 / 错误 / 未开放，FE-D3 §4），由共享组件统一承载（<code>src/shared/states.tsx</code>）：</p>
+<ul class="tight">
+  <li><code>Loading</code>（呼吸纸面，<code>role=status</code> + <code>aria-live</code>，states.tsx:135-141）——刻意不用灰色微光条；</li>
+  <li><code>Empty</code>（states.tsx:182-207）——注释明确"⛔ 不写'暂无数据'这种死话"，必须给下一步引导；</li>
+  <li><code>ErrorState</code>（states.tsx:224-246，<code>role=alert</code>）——"说明原因 + 可执行下一步"，不道歉、不写"请求失败"；</li>
+  <li><code>Unavailable</code>（states.tsx:269-291）——与"空"严格区分：接口未接上 → 标注后端缺口编号（如 G14），避免用户反复刷新等一个永远不会来的结果；</li>
+  <li><code>CapabilityNote</code> / <code>Sheet</code> / <code>Marked</code> / <code>Breadcrumbs</code> / <code>ListFooter</code> 均为单一真相源，杜绝各页各抄一份。</li>
+</ul>
+<p>同页头组件 <code>PageHead</code> 统一同步 <code>document.title</code>（<code>usePageTitle</code>），避免了 SPA 切页标题不变的问题（App.tsx:72-79 注释详述了一次因此产生的缺陷修复）。</p>
+
+<h3>2.4 响应式与易用性</h3>
+<p><strong>这是本项目相较 admin-console 最显著的亮点。</strong>响应式是<strong>纯 CSS 驱动</strong>（源码 grep 确认无 <code>matchMedia/useMediaQuery/ResizeObserver/window.innerWidth</code> 监听，无 JS 布局抖动）：</p>
+<ul class="tight">
+  <li><code>@media (max-width:1023px)</code>、<code>(max-width:767px)</code>、<code>(max-width:479px)</code> 三档断点（layout.css:700/753/790/938）；</li>
+  <li>≤767px 侧栏从"16 项横向滚动条"改为<strong>顶栏菜单按钮拉出的抽屉</strong>，且抽屉具备完整焦点管理：打开时焦点进入抽屉、Esc/点遮罩/点导航项可关、关闭后焦点回按钮、打开时锁背景滚动、收起用 <code>visibility:hidden</code> 移出焦点序列与无障碍树（AppShell.tsx:123-177）。</li>
+</ul>
+<p>可访问性扎实：壳内首个可聚焦元素是 skip-link（AppShell.tsx:225）、<code>aria-live</code> 状态区、<code>role=alert</code> 错误、ARIA tabs（roving tabindex + 方向键）、<code>sr-only</code> 文件输入、图表等价表格、<code>aria-describedby</code> 错误关联、按钮 <code>aria-busy/aria-disabled</code>。</p>
+
+<div class="note"><p><strong>UI 小结</strong>：在"无组件库、纯手写"的约束下，本项目的视觉一致性、令牌纪律、响应式与可访问性都达到<strong>优秀</strong>水平，是"克制设计 + 强纪律"的正面范例。admin-console 的"响应式几乎缺失 / 颜色内联硬编码"问题在本项目基本不存在。</p></div>
+
+<h2 id="flow">三、业务流程层面评估</h2>
+
+<h3>3.1 核心路径（登录 → 辅导 → 结果）</h3>
+<ol>
+  <li><strong>登录</strong>（<code>pages/LoginPage.tsx</code>）：三字段（租户标识 / 账号 / 密码），前端完整性校验齐全——<code>isComplete</code> 计算（:41）、按钮 <code>disabled={submitting || !isComplete}</code> + <code>aria-busy</code> + <code>aria-disabled</code> + "请填写所有必填字段"提示（:173-187）。失败统一提示"租户、账号或密码不正确"，刻意不区分原因以防账号枚举（:4-6）。<strong>无功能性阻断</strong>。注意：按设计<strong>不提供"忘记密码/注册/多租户切换"</strong>（PIPL 不采集邮箱/手机，注册需监护人同意流程），属合规取舍而非遗漏。</li>
+  <li><strong>发起辅导</strong>（<code>pages/NewRunPage.tsx</code>）：表单含 Agent 选择，<code>DEFAULT_AGENT_ID</code> 兜底；<strong>Agent 列表为空时显示"没有可用的 Agent"提示块</strong>（:354-362，而非隐藏下拉），前端敏感信息预扫 + 幂等键。路径顺畅。</li>
+  <li><strong>分析进度</strong>（<code>pages/RunProgressPage.tsx</code>）：事件轮询 + 明确卸载清理（避免定时器泄漏），<code>aria-live</code> 状态区，到终态自动停；无事件时<strong>降级占位而非假装进度</strong>（:192）。</li>
+  <li><strong>归因结果</strong>（<code>pages/business/RunResultPage.tsx</code>）：<code>findLeakedFields</code> 敏感词扫描 + <code>useMemo</code> 截断 <code>slice(0,10000)</code>（:100-105），仅渲染白名单字段；提供反馈按钮。</li>
+</ol>
+
+<h3>3.2 其余模块</h3>
+<span class="pill">学习画像</span><span class="pill">知识检索 RAG</span><span class="pill">语料治理</span><span class="pill">配置</span><span class="pill">运行治理</span><span class="pill">报表</span><span class="pill">系统健康</span>
+<ul class="tight">
+  <li><strong>学习画像</strong>：纵深防御，只渲染 <code>studentId/年级/学科/薄弱点</code> 白名单，不显示姓名/学校/班级（PIPL）；后端 200+<code>notFound</code> 被当作<strong>合法态</strong>诚实呈现（ProfilePage.tsx:103-126, 181-185）。</li>
+  <li><strong>知识检索</strong>：携带 <code>X-Tenant-Id</code>；租户标识记忆带 <strong>7 天 TTL</strong>（RagSearchPage.tsx:94-119）。</li>
+  <li><strong>语料治理</strong>：ARIA tabs 模式 + 批量导入<strong>带分批改进度 + &lt;progress&gt;</strong> + 字典区分动态/派生只读（RagManagementPage.tsx）。</li>
+  <li><strong>配置</strong>：只读目录 vs 可写覆盖分层；保存前 <code>window.confirm</code> + <strong>理由≥10 字</strong> + <strong>只收紧不放松</strong>（ratchet，ConfigOverrideRow.tsx:87-91, 196-200）。</li>
+  <li><strong>运行治理</strong>：审批（通过/驳回带理由）、未知操作处置（<code>UNKNOWN</code> 终态归档、<strong>无重试</strong>，Sev-0 产品边界）、审计（游标分页 + CSV 导出）。</li>
+  <li><strong>报表中心</strong>：7 张报表 + 页首锚点；<code>DAY_OPTIONS=[7,14,30,90]</code> 固定下拉（后端钳制 1~90）；<code>Chart.tsx</code> 零依赖 SVG（<code>role=img</code> + 等价表格）；<code>csv.ts</code> 含 UTF-8 BOM + 防公式注入。</li>
+  <li><strong>系统健康</strong>：仅显示总状态（见问题清单 P1）。</li>
+</ul>
+
+<h3>3.3 阻断与困惑点</h3>
+<p><strong>无功能性阻断。</strong>主链路与设计边界均清晰，fail-closed（角色未知不放行、未接入能力显式标注、敏感数据不出前端）。潜在<strong>困惑点</strong>：① 报表选 90 天后端"静默截断"仅以小字 hint 提示，无"已截断至 X 天"回显；② 治理/审批/审计列表明确不自动轮询（限流取舍），但页面缺"最后刷新时间/数据可能非实时"提示，操作员可能误以为实时；③ 学习画像查询仅判空、无编号格式校验（任意字符串会走到后端 <code>notFound</code> 态，体验可接受但缺即时反馈）。</p>
+
+<h2 id="issues">四、问题清单（按严重程度）</h2>
+<p>说明：下表为<strong>本次源码走查发现的真实问题</strong>，与既有 E2E_TEST_REPORT.md 的 10 条基本无关（见第五节）。</p>
+<table>
+  <thead><tr><th>编号</th><th>严重度</th><th>位置</th><th>问题</th><th>改进建议</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>P1</td><td><span class="sev sev-m">🟠 中</span></td>
+      <td class="file">pages/ops/HealthPage.tsx:12-28</td>
+      <td>系统健康页仅展示总状态，无组件级（DB / MQ / 磁盘）明细；当前以 <code>Unavailable(G14)</code> 诚实标注，属<strong>后端能力缺口</strong>而非前端缺陷。</td>
+      <td>待后端提供 <code>/actuator/health/components</code> 后接入；前端可先预留分组件卡片骨架，避免"看起来像没做完"。</td>
+    </tr>
+    <tr>
+      <td>P2</td><td><span class="sev sev-m">🟠 中</span></td>
+      <td class="file">features/governance/useGovernancePage.ts:13-15；GovernancePages</td>
+      <td>治理/审批/审计列表刻意不自动轮询（限流桶独立、不互相打挂），但页面<strong>无"最后刷新于 / 数据可能非实时"提示</strong>，操作员易误判为实时数据，做出滞后决策。</td>
+      <td>列表顶部加"更新于 HH:MM:SS · 手动刷新"状态条 + 显式刷新按钮，把"非实时"透明化。</td>
+    </tr>
+    <tr>
+      <td>P3</td><td><span class="sev sev-l">🟡 低</span></td>
+      <td class="file">pages/reports/ReportsPage.tsx:64, 1009, 1025-1029</td>
+      <td>报表选 90 天后端"静默截断"仅小字 hint，无"已截断至 X 天"回显，反馈偏弱。</td>
+      <td>选中 90 时回显"已按最大区间 90 天返回"；或前端按后端实际返回区间标注。</td>
+    </tr>
+    <tr>
+      <td>P4</td><td><span class="sev sev-l">🟡 低</span></td>
+      <td class="file">App.tsx:59-98（ProfileLookup）</td>
+      <td>学习画像查询仅判空、无学生编号格式校验（如 <code>S-</code> 前缀），任意字符串直达后端 <code>notFound</code> 态。</td>
+      <td>加轻量格式校验（正则/前缀提示），即时反馈"编号格式应为 S-xxxx"，减少无谓请求。</td>
+    </tr>
+    <tr>
+      <td>P5</td><td><span class="sev sev-l">🟡 低</span></td>
+      <td class="file">pages/rag/RagManagementPage.tsx:83-101 vs RagSearchPage.tsx:94-119</td>
+      <td>RAG <strong>管理面</strong>的租户记忆<strong>无 TTL</strong>，而<strong>检索面</strong>有 7 天 TTL——两处不一致（均为非敏感租户 UUID，不构成泄漏，但建议统一）。</td>
+      <td>管理面租户记忆统一加 7 天 TTL 或会话级，与管理面语义对齐。</td>
+    </tr>
+    <tr>
+      <td>P6</td><td><span class="sev sev-i">⚪ 信息</span></td>
+      <td class="file">pages/rag/RagManagementPage.tsx:1327-1348</td>
+      <td>批量导入进度是<strong>前端按批计数</strong>，非服务端真实处理进度；海量数据下进度语义有限（但有反馈，不算缺陷）。</td>
+      <td>若后端支持，改为返回已处理行数；否则在文案注明"本地进度，非服务端确认"。</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="errata">五、对既有 E2E_TEST_REPORT.md 的勘误（重要）</h2>
+<div class="warn">
+  <p>仓库内 <code>frontend/E2E_TEST_REPORT.md</code>（2026-10-30 09:35，署名 AI Agent）<strong>可信度低，不可作为体验结论依据</strong>。我逐条核对其 10 项"问题"，<strong>9 条为 FALSE、1 条为 TRUE</strong>，且它引用的 <code>BulkImportPanel.tsx</code>、独立 <code>AuditPage.tsx</code> 等文件<strong>在代码中并不存在</strong>（相关组件分别内联于 <code>RagManagementPage.tsx</code> 与 <code>GovernancePages.tsx</code>）。</p>
+</div>
+<table>
+  <thead><tr><th>#</th><th>E2E 报告声称</th><th>结论</th><th>源码证据</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>登录缺表单校验反馈</td><td><span class="sev sev-i">FALSE</span></td><td class="file">LoginPage.tsx:41, 173-187（isComplete + disabled + aria-busy + 提示）</td></tr>
+    <tr><td>2</td><td>发起辅导 Agent 下拉空时隐藏</td><td><span class="sev sev-i">FALSE</span></td><td class="file">NewRunPage.tsx:354-362（显示"没有可用的 Agent"）</td></tr>
+    <tr><td>3</td><td>进度页 SSE 内存泄漏</td><td><span class="sev sev-i">FALSE</span></td><td class="file">eventStream.ts / RunProgressPage.tsx 有明确 stop() + 卸载清理</td></tr>
+    <tr><td>4</td><td>结果页扫描阻塞渲染</td><td><span class="sev sev-i">FALSE</span></td><td class="file">RunResultPage.tsx:100-105（useMemo + slice(0,10000)）</td></tr>
+    <tr><td>5</td><td>报表区间未限制</td><td><span class="sev sev-i">FALSE</span></td><td class="file">ReportsPage.tsx:64（DAY_OPTIONS 固定 7/14/30/90）</td></tr>
+    <tr><td>6</td><td>RAG 租户 localStorage 泄漏</td><td><span class="sev sev-i">FALSE</span></td><td class="file">RagSearchPage.tsx:94-119（7 天 TTL；管理面见 P5）</td></tr>
+    <tr><td>7</td><td>配置缺变更确认</td><td><span class="sev sev-i">FALSE</span></td><td class="file">ConfigOverrideRow.tsx:87-91（window.confirm）+ 196-200（理由≥10 + 只收紧）</td></tr>
+    <tr><td>8</td><td>审计缺 CSV 导出</td><td><span class="sev sev-i">FALSE</span></td><td class="file">GovernancePages.tsx（AuditPage 已含 downloadCsv；独立文件不存在）</td></tr>
+    <tr><td>9</td><td>健康缺组件级明细</td><td><span class="sev sev-h">TRUE</span></td><td class="file">HealthPage.tsx:12-28（仅总状态，Unavailable G14）→ 即本报告 P1</td></tr>
+    <tr><td>10</td><td>RAG 批量导入缺进度</td><td><span class="sev sev-i">FALSE</span></td><td class="file">RagManagementPage.tsx（BulkImportPanel 内联，含 &lt;progress&gt;）</td></tr>
+  </tbody>
+</table>
+<p class="lead">结论：既有报告更像"模板生成的伪发现"，与真实代码严重不符。<strong>真实缺陷见第四节（P1–P6），严重度最高仅为"中"。</strong></p>
+
+<h2 id="strength">六、优势沉淀</h2>
+<ul class="tight">
+  <li><strong>五态纪律</strong>全站贯彻，错误态统一"说明原因 + 可执行下一步"，不编造、不道歉、不假装进度——这是多数项目做不到的。</li>
+  <li><strong>颜色令牌零硬编码</strong>（TSX 内 hex grep = 0），"纸感 + 墨色 + 批改红"主题一致，语义色只有 <code>--mark/--settled</code> 两色，视觉克制。</li>
+  <li><strong>真响应式</strong>：纯 CSS 断点 + 小屏抽屉 + 完整焦点管理，与 admin-console 的"响应式缺失"形成鲜明对比。</li>
+  <li><strong>诚实边界</strong>：<code>notFound</code> 合法态、环比为 0 不给 %、准入率分母含未审、活跃=错因去重而非登录数、未接入能力显式标注缺口编号。</li>
+  <li><strong>无障碍较扎实</strong>：skip-link、<code>aria-live</code>、<code>role=alert</code>、roving-tabindex ARIA tabs、图表等价表格、<code>aria-describedby</code> 关联。</li>
+  <li><strong>零依赖攻击面</strong>：图表纯 SVG、CSV 纯前端、无图表/组件库；构建体量仅 403 KB JS。</li>
+  <li><strong>路由健康度</strong>：404 不再静默跳工作台（App.tsx:185-190）、路由切换滚动复位、PageHead 统一标题、死链 <code>/profile/current</code> 已修复为查询页。</li>
+</ul>
+
+<h2 id="plan">七、改进优先级建议</h2>
+<table>
+  <thead><tr><th>优先级</th><th>编号</th><th>动作</th><th>预期收益</th></tr></thead>
+  <tbody>
+    <tr><td><strong>本周</strong></td><td>P2</td><td>治理/审计页加"最后刷新时间 + 手动刷新"状态条</td><td>消除"误判实时"风险，运维决策更安全</td></tr>
+    <tr><td><strong>本周</strong></td><td>P1</td><td>健康页预留组件级卡片骨架，待后端 G14 点亮</td><td>避免"看起来没做完"，对齐管理预期</td></tr>
+    <tr><td><strong>下周</strong></td><td>P3 / P4</td><td>报表截断回显 + 画像编号格式校验</td><td>减少困惑与无谓请求</td></tr>
+    <tr><td><strong>后续</strong></td><td>P5 / P6</td><td>RAG 管理面租户记忆加 TTL；批量导入进度文案澄清</td><td>一致性 + 进度语义准确</td></tr>
+    <tr><td><strong>文档</strong></td><td>—</td><td>废弃/重写 E2E_TEST_REPORT.md（其 9/10 结论为假）</td><td>避免误导后续评审与验收</td></tr>
+  </tbody>
+</table>
+
+<div class="note"><p><strong>总体结论</strong>：该项目在"无组件库、纯手写"约束下，UI 一致性、令牌纪律、响应式与可访问性均达优秀；业务流程顺畅、fail-closed 与诚实边界到位，<strong>无功能性阻断</strong>。真实缺陷仅 1 中（健康组件明细，后端缺口）、1 中（治理页实时性提示）、3 低、1 信息。<strong>建议优先处理 P1/P2（治理与健康页的"透明性"），并尽快纠正既有的误导性 E2E 报告。</strong></p></div>
+
+<footer>
+  本报告基于：① <code>npm run build</code> 生产构建通过（产物已生成）；② <code>src/</code> 全量源码逐文件走查（约 55 个 TSX/TS 文件）。
+  受限项（沙箱网络隔离，浏览器仅可达后端 8080/8081）：像素级视觉、真实运行时渲染、真实后端数据往返未在本环境实测。
+  所有结论附文件:行号，未实现功能一律标注为缺口，未做臆测。
+</footer>
+
+</div>
+</body>
+</html>

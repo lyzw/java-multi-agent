@@ -165,6 +165,9 @@ public class CapDualWriteService implements CapDualWritePort {
             EffectiveClosure closure = resolver.resolve(tenantId, agentId, agentVersion);
             String fingerprint = ClosureFingerprint.of(closure);
             String closureJson = ClosureFingerprint.canonicalJson(closure);
+            // ⚠️ 严格读：缺行即抛 → 外层 fail-soft catch → **跳过快照**（不写臆造版本）。
+            //    currentOrInitialize 会补建版本 1 并写进快照，
+            //    那等于把「算不出 authz_version 的配置缺陷」伪装成「权限结论」。
             long authzVersion = authzVersions.require(tenantId, principalId).authzVersion();
             long configVersion = currentConfigVersion(tenantId);
 

@@ -15,6 +15,7 @@ import com.zaxxer.hikari.HikariDataSource;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -233,6 +234,12 @@ class AgentEndpointIT {
     }
 
     @Test
+    @Disabled("⚠️ 目标端点 POST /api/agents/{id}/versions 已于 P0-5（2026-10-27）下线直发端点，"
+            + "现仅保留 GET（列出版本）。本用例验收的「直发发布并返回 versionId + 执行快照」"
+            + "属于被刻意移除的能力；按 P0-5 评审结论，版本发布须改走三步发布工作流"
+            + "（草稿→审批→发布）的专用端点，而非复原本端点。该端点尚未实现，"
+            + "故本用例在端点落地后须**重指向**新端点，而非恢复被下线的直发通道。"
+            + "当前只是显式挂起，非静默跳过。")
     @DisplayName("✅ G2-6 发布新版本 → 200，versionNumber=1")
     void publishVersionReturns200() {
         initTenants();
@@ -249,6 +256,9 @@ class AgentEndpointIT {
     }
 
     @Test
+    @Disabled("⚠️ 同 G2-6：目标端点 POST /api/agents/{id}/versions 已按 P0-5 下线直发能力，"
+            + "仅保留 GET。本用例验收的「发布到不存在 Agent → 404」依赖被移除的直发通道，"
+            + "须待三步发布工作流端点落地后重指向。当前显式挂起。")
     @DisplayName("⛔ G2-7 发布到不存在的 Agent → 404")
     void publishToUnknownAgentReturns404() {
         initTenants();
@@ -260,6 +270,9 @@ class AgentEndpointIT {
     }
 
     @Test
+    @Disabled("⚠️ 同 G2-6/7：目标端点 POST /api/agents/{id}/versions 已按 P0-5 下线直发能力，"
+            + "仅保留 GET。本用例验收的「非法 definition → 400」依赖被移除的直发通道，"
+            + "须待三步发布工作流端点落地后重指向。当前显式挂起。")
     @DisplayName("⛔ G2-8 非法 definition（非 JSON）→ 400")
     void publishInvalidDefinitionReturns400() {
         initTenants();

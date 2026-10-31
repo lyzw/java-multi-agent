@@ -9,6 +9,13 @@
  *    · 找回密码需邮箱/手机号，而 PIPL 要求我们**不采集**这些（D-001 §7）
  *    · 注册涉及监护人同意流程，本期只做受控发号
  *    · 多租户切换会扩大一次登录可访问的范围（架构上亦不存在）
+ *
+ * ⚠️ 视觉改造（2026-10-31 · UI 现代化）
+ *    登录页此前是一张「裸表单」：单栏、无品牌面、无层级，读起来像后台内部工具。
+ *    现改为**双栏登录布局**——左栏讲清产品价值（批改纸的产品叙事），
+ *    右栏是聚焦的表单卡；窄屏自动折叠为单栏。
+ *    ⛔ 仍守「批改纸」纪律：不用彩色主按钮（主按钮仍为墨色）、不用阴影、
+ *       批改红只留给错误 —— 现代化不等于换一套设计语言。
  */
 
 import { useState, type FormEvent } from 'react'
@@ -24,6 +31,13 @@ interface LocationState {
   from?: string
 }
 
+/** 左栏产品叙事的三条价值点 —— 只讲产品做什么，不讲技术实现。 */
+const VALUE_POINTS = [
+  { icon: 'gauge', title: '看得到失分在哪', body: '按知识点拆解每道错题的失分原因，不只给一个分数。' },
+  { icon: 'book', title: '补得上有章法', body: '从薄弱点出发排学习顺序，一步一步补，而不是刷题海。' },
+  { icon: 'shield', title: '收得少、放心用', body: '只采集匿名编号、年级、学科和薄弱点，不收姓名、学校、班级。' },
+] as const
+
 export function LoginPage(): JSX.Element {
   const { signIn, expiredNotice } = useSession()
   const navigate = useNavigate()
@@ -36,6 +50,8 @@ export function LoginPage(): JSX.Element {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<NormalizedError | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // 密码明文开关：⛔ 不做「记住我」——令牌寿命与合规口径见文件头注释
+  const [passwordVisible, setPasswordVisible] = useState(false)
 
   // ⚠️ 表单完整性检查：所有字段都非空才算完整
   const isComplete = tenantId.trim().length > 0 && loginName.trim().length > 0 && password.length > 0
@@ -91,106 +107,164 @@ export function LoginPage(): JSX.Element {
 
   return (
     <main className="login">
-      <div className="login__panel">
-        <div className="brand login__brand">
-          <span className="brand__mark">
-            <Icon name="book" />
-          </span>
-          <h1 className="brand__text">错题归因辅导</h1>
-        </div>
-        <p className="login__lead">
-          用学校发的账号登录。
-          <br />
-          我们只采集匿名编号、年级、学科和薄弱点，不收姓名、学校、班级。
-        </p>
+      <div className="login__grid">
+        {/* ── 左栏：产品叙事 ─────────────────────────────── */}
+        <section className="login__aside" aria-hidden="false">
+          <div className="login__aside-inner">
+            <div className="brand login__brand">
+              <span className="brand__mark">
+                <Icon name="book" />
+              </span>
+              <span className="brand__text">错题归因辅导</span>
+            </div>
 
-        {expiredNotice ? (
-          <p role="status" className="marked marked--calm">
-            <span className="marked__label" style={{ color: 'var(--ink-2)' }}>
-              会话已结束
-            </span>
-            重新登录即可继续
-          </p>
-        ) : null}
-
-        <form onSubmit={(e) => void handleSubmit(e)} noValidate>
-          {/*
-            ⚠️ 2026-10-24：三个输入框不再随全局错误一起标 aria-invalid。
-                旧写法 `aria-invalid={error !== null}` 会在**任何**失败
-                （网络断了、服务端 500、凭据错误）时把三个框全判"非法"——
-                对屏幕阅读器用户等于同时断言"租户是错的、账号是错的、
-                密码也是错的"，而真相可能只是网线掉了。
-                后端归一化从不回 fieldErrors（见 api/errors.ts），
-                故这里只在真有字段级错误时才标（为将来到来保留正确语义），
-                全局失败由下方 ErrorView 的 role="alert" 播报。
-          */}
-          <div className="field">
-            <label htmlFor="tenantId">租户标识</label>
-            <input
-              id="tenantId"
-              name="tenantId"
-              type="text"
-              value={tenantId}
-              onChange={(e) => setTenantId(e.target.value)}
-              autoComplete="organization"
-              aria-invalid={error?.fieldErrors['tenantId'] !== undefined}
-              required
-              autoFocus
-            />
-          </div>
-
-          <div className="field">
-            <label htmlFor="loginName">账号</label>
-            <input
-              id="loginName"
-              name="loginName"
-              type="text"
-              value={loginName}
-              onChange={(e) => setLoginName(e.target.value)}
-              autoComplete="username"
-              aria-invalid={error?.fieldErrors['loginName'] !== undefined}
-              required
-            />
-          </div>
-
-          <div className="field">
-            <label htmlFor="password">密码</label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              aria-invalid={error?.fieldErrors['password'] !== undefined}
-              required
-            />
-          </div>
-
-          {error !== null ? <ErrorView error={error} /> : null}
-
-          {/* ⚠️ 缺项提示：按钮不可用时告诉用户为什么 */}
-          {!isComplete && (
-            <p className="field__hint" style={{ color: 'var(--mark)', textAlign: 'center' }}>
-              请填写所有必填字段
+            <h1 className="login__headline">把错题变成<br />下一次的分数</h1>
+            <p className="login__sub">
+              不只知道错了，还知道为什么错，以及下一步先补哪一块。
             </p>
-          )}
 
-          <button
-            type="submit"
-            className="btn btn--block"
-            disabled={submitting || !isComplete}
-            aria-busy={submitting}
-            aria-disabled={!isComplete}
-          >
-            {submitting ? '登录中…' : '登录'}
-          </button>
-        </form>
+            <ul className="login__points">
+              {VALUE_POINTS.map((point) => (
+                <li className="login__point" key={point.title}>
+                  <span className="login__point-icon">
+                    <Icon name={point.icon} />
+                  </span>
+                  <span className="login__point-body">
+                    <strong className="login__point-title">{point.title}</strong>
+                    <span className="login__point-text">{point.body}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
 
-        {/*
-          ⛔ 刻意不提供：忘记密码、注册、多租户切换
-          理由见文件头注释，非遗漏。
-        */}
+        {/* ── 右栏：登录表单 ─────────────────────────────── */}
+        <section className="login__panel">
+          <div className="login__card">
+            <header className="login__card-head">
+              <h2 className="login__card-title">登录</h2>
+              <p className="login__card-lead">用学校发的账号登录。</p>
+            </header>
+
+            {expiredNotice ? (
+              <p role="status" className="login__notice">
+                <Icon name="clock" className="login__notice-icon" />
+                <span>会话已结束，重新登录即可继续。</span>
+              </p>
+            ) : null}
+
+            <form onSubmit={(e) => void handleSubmit(e)} noValidate>
+              {/*
+                ⚠️ 2026-10-24：三个输入框不再随全局错误一起标 aria-invalid。
+                    旧写法 `aria-invalid={error !== null}` 会在**任何**失败
+                    （网络断了、服务端 500、凭据错误）时把三个框全判"非法"——
+                    对屏幕阅读器用户等于同时断言"租户是错的、账号是错的、
+                    密码也是错的"，而真相可能只是网线掉了。
+                    后端归一化从不回 fieldErrors（见 api/errors.ts），
+                    故这里只在真有字段级错误时才标（为将来到来保留正确语义），
+                    全局失败由下方 ErrorView 的 role="alert" 播报。
+              */}
+              <div className="field login__field">
+                <label htmlFor="tenantId">租户标识</label>
+                <div className="login__control">
+                  <Icon name="panel" className="login__control-icon" />
+                  <input
+                    id="tenantId"
+                    name="tenantId"
+                    type="text"
+                    value={tenantId}
+                    onChange={(e) => setTenantId(e.target.value)}
+                    autoComplete="organization"
+                    aria-invalid={error?.fieldErrors['tenantId'] !== undefined}
+                    required
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              <div className="field login__field">
+                <label htmlFor="loginName">账号</label>
+                <div className="login__control">
+                  <Icon name="profile" className="login__control-icon" />
+                  <input
+                    id="loginName"
+                    name="loginName"
+                    type="text"
+                    value={loginName}
+                    onChange={(e) => setLoginName(e.target.value)}
+                    autoComplete="username"
+                    aria-invalid={error?.fieldErrors['loginName'] !== undefined}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="field login__field">
+                <label htmlFor="password">密码</label>
+                <div className="login__control">
+                  <Icon name="lock" className="login__control-icon" />
+                  <input
+                    id="password"
+                    name="password"
+                    type={passwordVisible ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    autoComplete="current-password"
+                    aria-invalid={error?.fieldErrors['password'] !== undefined}
+                    required
+                  />
+                  {/*
+                    ⚠️ 可访问名用**视觉隐藏文本**而不是 aria-label：
+                        aria-label="显示密码" 会被 `getByLabelText(/密码/)`
+                        一并命中（testing-library 同时匹配 label 与 aria-label），
+                        于是密码**输入框**的断言会被这个按钮抢走。
+                        隐藏文本只落在按钮内，不参与 label 匹配。
+                  */}
+                  <button
+                    type="button"
+                    className="login__toggle"
+                    onClick={() => setPasswordVisible((v) => !v)}
+                    aria-pressed={passwordVisible}
+                  >
+                    <Icon name={passwordVisible ? 'eye-off' : 'eye'} />
+                    <span className="sr-only">
+                      {passwordVisible ? '隐藏密码' : '显示密码'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {error !== null ? <ErrorView error={error} /> : null}
+
+              {/* ⚠️ 缺项提示：按钮不可用时告诉用户为什么 */}
+              {!isComplete && (
+                <p className="login__hint" role="status">
+                  请填写所有必填字段
+                </p>
+              )}
+
+              <button
+                type="submit"
+                className="btn btn--block btn--lg login__submit"
+                disabled={submitting || !isComplete}
+                aria-busy={submitting}
+                aria-disabled={!isComplete}
+              >
+                {submitting ? '登录中…' : '登录'}
+              </button>
+            </form>
+
+            {/*
+              ⛔ 刻意不提供：忘记密码、注册、多租户切换
+              理由见文件头注释，非遗漏。
+            */}
+            <p className="login__foot">
+              <Icon name="shield" className="login__foot-icon" />
+              <span>不采集姓名、学校、班级等身份信息</span>
+            </p>
+          </div>
+        </section>
       </div>
     </main>
   )

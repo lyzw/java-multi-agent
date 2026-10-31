@@ -249,10 +249,11 @@ export interface McpDeclarationFormValue {
 export interface SkillFormValues {
   skillId: string
   name?: string
-  /** 两级描述（1级 purpose + 2级 usage）—— 表单内部用结构化形态，提交时去空白。 */
+  /** 三级描述（1级 purpose + 2级 usage + 3级 content）—— 表单内部用结构化形态，提交时去空白。 */
   description?: {
     purpose?: string
     usage?: { when?: string; how?: string }[]
+    content?: string
   }
   declaredTools?: string[]
   declaredMcp?: McpDeclarationFormValue[]
@@ -313,6 +314,7 @@ export function buildSkillSpec(values: SkillFormValues): SpecResult<{
     description?: {
       purpose: string
       usage?: { when: string; how: string }[]
+      content?: string
     }
     declaredTools?: string[]
     declaredMcp?: { serverId: string; toolAllowlist?: string[] | null }[]
@@ -330,7 +332,7 @@ export function buildSkillSpec(values: SkillFormValues): SpecResult<{
   const name = (values.name ?? '').trim()
   if (name !== '') spec.name = name
 
-  // 两级描述：purpose 必填（写了一半也要填完才提交）；usage 只收齐 when+how 的条目。
+  // 三级描述：purpose 必填（写了一半也要填完才提交）；usage 只收齐 when+how 的条目；content 可选。
   const purpose = (values.description?.purpose ?? '').trim()
   if (purpose !== '') {
     if (purpose.length > 200) {
@@ -355,7 +357,15 @@ export function buildSkillSpec(values: SkillFormValues): SpecResult<{
     if (usage.length > 20) {
       return { ok: false, error: '使用指引超过 20 条上限' }
     }
-    spec.description = { purpose, ...(usage.length > 0 ? { usage } : {}) }
+    const description: { purpose: string; usage?: { when: string; how: string }[]; content?: string } = { purpose, ...(usage.length > 0 ? { usage } : {}) }
+    const content = (values.description?.content ?? '').trim()
+    if (content !== '') {
+      if (content.length > 2000) {
+        return { ok: false, error: `详细描述（content）超过 2000 字上限：${content.length} 字` }
+      }
+      description.content = content
+    }
+    spec.description = description
   } else if ((values.description?.usage ?? []).some((e) => `${e.when ?? ''}${e.how ?? ''}`.trim() !== '')) {
     return { ok: false, error: '填写了使用指引但缺「描述用途」：1级用途清明才谈得上指引' }
   }

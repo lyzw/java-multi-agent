@@ -58,5 +58,7 @@ public interface RunEventPort {
         public static final String RUN_FAILED = "RUN_FAILED";
         /** 已取消。 */
         public static final String RUN_CANCELLED = "RUN_CANCELLED";
+        /** 挂起等待人工审批（M1-4 / G2 · PARK）。 */
+        public static final String RUN_PARKED = "RUN_PARKED";
     }
 }

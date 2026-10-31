@@ -308,9 +308,40 @@ public class JdbcBudgetRepository implements BudgetPort {
                           @NonNull String reservationId,
                           @NonNull BigDecimal actualAmount,
                           @Nullable String modelId) {
+        return settleInternal(tenantId, reservationId, actualAmount, modelId, 0L, 0L);
+    }
+
+    /**
+     * 结算预留并写入<b>真实 token 用量</b>（P0-3b）。
+     *
+     * <p>⚠️ 模型调用走本重载：工具调用没有 token 概念，
+     * 模型调用有 —— 两者写进同一张计量表，但 token 只有模型行才非零。
+     */
+    @Override
+    public boolean settle(@NonNull String tenantId,
+                          @NonNull String reservationId,
+                          @NonNull BigDecimal actualAmount,
+                          @Nullable String modelId,
+                          long inputTokens,
+                          long outputTokens) {
+        return settleInternal(tenantId, reservationId, actualAmount, modelId,
+                inputTokens, outputTokens);
+    }
+
+    private boolean settleInternal(@NonNull String tenantId,
+                                   @NonNull String reservationId,
+                                   @NonNull BigDecimal actualAmount,
+                                   @Nullable String modelId,
+                                   long inputTokens,
+                                   long outputTokens) {
         if (actualAmount.signum() < 0) {
             log.warn("结算金额为负，fail-closed 拒绝: reservation={}, amount={}",
                     reservationId, actualAmount);
+            return false;
+        }
+        if (inputTokens < 0 || outputTokens < 0) {
+            log.warn("结算 token 数为负，fail-closed 拒绝: reservation={}, in={}, out={}",
+                    reservationId, inputTokens, outputTokens);
             return false;
         }
 
@@ -337,7 +368,8 @@ public class JdbcBudgetRepository implements BudgetPort {
             // ② 计量写入：ON CONFLICT DO NOTHING + RETURNING（D-5 的原子幂等）
             //    ⚠️ 与账户更新同事务：本方法整体在一个事务里，任一步失败整体回滚
             //    返回 false = 该操作已有计量记录（重复结算），此时**不得**重复累加
-            boolean usageWritten = insertUsageOnce(conn, tenantId, r, actualAmount, modelId);
+            boolean usageWritten = insertUsageOnce(conn, tenantId, r, actualAmount, modelId,
+                    inputTokens, outputTokens);
 
             // ③ 账户更新：预留额全额扣回，实际结算额计入
             moveReservedToSettled(conn, tenantId, r.reservedAmount(), actualAmount);
@@ -364,11 +396,31 @@ public class JdbcBudgetRepository implements BudgetPort {
     private boolean insertUsageOnce(Connection conn, String tenantId, Reservation r,
                                     BigDecimal actualAmount, @Nullable String modelId)
             throws SQLException {
+        return insertUsageOnce(conn, tenantId, r, actualAmount, modelId, 0L, 0L);
+    }
+
+    /**
+     * 计量幂等写入（D-5），<b>并写入真实 token 用量</b>（P0-3b）。
+     *
+     * <p>⚠️ <b>为什么 token 必须在这里落库</b>：
+     * {@code usage_record.input_tokens} / {@code output_tokens} 两列此前
+     * <b>无任何写入方</b> —— 表建好了、列也在、指标口径（P7 COST-1/2）
+     * 也写了，但数据永远为 0，于是「单任务 token」这类指标是空的。
+     * 现在模型调用走本重载，token 才有真实来源。
+     *
+     * @param inputTokens  输入 token 数（工具调用为 0）
+     * @param outputTokens 输出 token 数（工具调用为 0）
+     * @return true=本次新写入；false=已存在（重复结算）
+     */
+    private boolean insertUsageOnce(Connection conn, String tenantId, Reservation r,
+                                    BigDecimal actualAmount, @Nullable String modelId,
+                                    long inputTokens, long outputTokens)
+            throws SQLException {
         String sql = """
                 INSERT INTO usage_record
                     (tenant_id, run_id, operation_id, reservation_id,
-                     model_id, cost_amount, currency)
-                VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?, ?)
+                     model_id, input_tokens, output_tokens, cost_amount, currency)
+                VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?)
                 ON CONFLICT (tenant_id, operation_id) WHERE operation_id IS NOT NULL
                     DO NOTHING
                 RETURNING usage_id::text
@@ -383,12 +435,70 @@ public class JdbcBudgetRepository implements BudgetPort {
             }
             ps.setString(4, r.reservationId());
             ps.setString(5, modelId == null ? "unknown" : modelId);
-            ps.setBigDecimal(6, actualAmount);
-            ps.setString(7, DEFAULT_CURRENCY);
+            ps.setLong(6, inputTokens);
+            ps.setLong(7, outputTokens);
+            ps.setBigDecimal(8, actualAmount);
+            ps.setString(9, DEFAULT_CURRENCY);
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next();
             }
         }
+    }
+
+    /**
+     * 记录一次模型调用的真实用量与成本（P0-3b · <b>无预留</b>的计量路径）。
+     *
+     * <p>⚠️ <b>为什么 {@code operation_id} 存的是「模型调用标识」</b>：
+     * 模型调用<b>没有工具操作</b>，但计量行仍需要一个幂等键 ——
+     * {@code idx_usage_operation_once (tenant_id, operation_id)} 正是靠它保证
+     * 「同一次模型调用只记一次」。该列<b>无外键</b>（不像 {@code run_id}），
+     * 故放模型调用标识不会破坏引用完整性。
+     *
+     * <p>⚠️ <b>本路径不扣额度</b>：调用它说明<b>模型单价查不到</b>，
+     * 成本无法估算、也就无法预留额度。此时<b>只计量不扣款</b>：
+     * token 是事实（必须记），金额按 0 记（没有价格就没有金额），
+     * 绝不因为「不知道价格」就悄悄放行一大笔未计量的开销。
+     *
+     * @return true=本次新写入；false=已存在（幂等命中）
+     */
+    @Override
+    public boolean recordModelUsage(@NonNull String tenantId,
+                                    @NonNull String runId,
+                                    @NonNull String modelId,
+                                    long inputTokens,
+                                    long outputTokens,
+                                    @NonNull BigDecimal costAmount,
+                                    @NonNull String modelCallId) {
+        if (costAmount.signum() < 0 || inputTokens < 0 || outputTokens < 0) {
+            log.warn("模型用量参数非法，拒绝记账: tenant={}, run={}, model={}, "
+                            + "in={}, out={}, cost={}",
+                    tenantId, runId, modelId, inputTokens, outputTokens, costAmount);
+            return false;
+        }
+        return inTenantTx(tenantId, conn -> {
+            String sql = """
+                    INSERT INTO usage_record
+                        (tenant_id, run_id, operation_id, reservation_id,
+                         model_id, input_tokens, output_tokens, cost_amount, currency)
+                    VALUES (?::uuid, ?::uuid, ?::uuid, NULL, ?, ?, ?, ?, ?)
+                    ON CONFLICT (tenant_id, operation_id) WHERE operation_id IS NOT NULL
+                        DO NOTHING
+                    RETURNING usage_id::text
+                    """;
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, tenantId);
+                ps.setString(2, runId);
+                ps.setString(3, modelCallId);
+                ps.setString(4, modelId);
+                ps.setLong(5, inputTokens);
+                ps.setLong(6, outputTokens);
+                ps.setBigDecimal(7, costAmount);
+                ps.setString(8, DEFAULT_CURRENCY);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next();
+                }
+            }
+        });
     }
 
     /** 账户金额迁移：预留额扣回，实际结算额计入。 */

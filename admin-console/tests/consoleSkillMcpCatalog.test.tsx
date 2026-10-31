@@ -55,7 +55,7 @@ beforeAll(() => {
 const SKILL: SkillCatalogItem = {
   skillId: 'skill-published',
   name: '查询技能',
-  description: { purpose: '只读查询技能', usage: [] },
+  description: { purpose: '只读查询技能', usage: [], content: '' },
   riskCeiling: 'READ',
   paramPolicies: '{"args":{}}',
   requiredCaps: [],

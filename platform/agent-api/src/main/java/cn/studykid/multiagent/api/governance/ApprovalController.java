@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.ApprovalQueryPort;
+import cn.studykid.multiagent.ports.persistence.ApprovalWakeupPort;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 
@@ -30,6 +31,9 @@ import cn.studykid.multiagent.ports.security.AuthorizationService;
 @RestController
 public class ApprovalController {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(ApprovalController.class);
+
     private static final Set<String> APPROVAL_STATES = Set.of(
             "PENDING", "APPROVED", "REJECTED", "EXPIRED", "CONSUMED");
 
@@ -37,15 +41,54 @@ public class ApprovalController {
     private final AuthorizationService authorization;
     private final RateLimitPort rateLimiter;
     private final CurrentPrincipal currentPrincipal;
+    /**
+     * 审批决定唤醒器（M1-6 / G2）。
+     *
+     * <p>⚠️ <b>可为空 = 未装配</b>：此时决定仍会落库（人批了就是批了），
+     * 但挂起的 Run 不会被立即拉回执行 —— 由恢复扫描器的超时兜底收敛为
+     * FAILED（工具未执行，无副作用）。<b>绝不</b>因为「没人唤醒」
+     * 而把决定当成失败回滚。
+     */
+    private final @Nullable ApprovalWakeupPort wakeup;
 
     public ApprovalController(ApprovalQueryPort approvals,
                               AuthorizationService authorization,
                               RateLimitPort rateLimiter,
                               CurrentPrincipal currentPrincipal) {
+        // ⚠️ 显式转型消歧：null 同时匹配 ObjectProvider 版与 ApprovalWakeupPort 版
+        //    的第 5 参，不转型则编译期「引用不明确」。
+        this(approvals, authorization, rateLimiter, currentPrincipal,
+                (ApprovalWakeupPort) null);
+    }
+
+    /**
+     * 生产装配构造器（M1-6 / G2）。
+     *
+     * @param wakeupProvider 审批决定唤醒器；<b>可缺失</b>（仅加载 API 模块的测试、
+     *                       或未装配 worker 的部署）—— 用 {@code ObjectProvider}
+     *                       而非直接依赖，避免「可选能力」变成「启动硬依赖」。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public ApprovalController(ApprovalQueryPort approvals,
+                              AuthorizationService authorization,
+                              RateLimitPort rateLimiter,
+                              CurrentPrincipal currentPrincipal,
+                              org.springframework.beans.factory.ObjectProvider<ApprovalWakeupPort>
+                                      wakeupProvider) {
+        this(approvals, authorization, rateLimiter, currentPrincipal,
+                wakeupProvider.getIfAvailable());
+    }
+
+    public ApprovalController(ApprovalQueryPort approvals,
+                              AuthorizationService authorization,
+                              RateLimitPort rateLimiter,
+                              CurrentPrincipal currentPrincipal,
+                              @Nullable ApprovalWakeupPort wakeup) {
         this.approvals = approvals;
         this.authorization = authorization;
         this.rateLimiter = rateLimiter;
         this.currentPrincipal = currentPrincipal;
+        this.wakeup = wakeup;
     }
 
     @GetMapping("/api/approvals")
@@ -96,6 +139,19 @@ public class ApprovalController {
             var decision = approvals.decide(
                     context.tenantId(), approvalId, request.approve(),
                     currentPrincipal.principalId(), request.reason());
+            // ⚠️ M1-6 / G2：决定落库成功后<b>立即唤醒</b>挂起的 Run。
+            //    没有这一步，审批台显示「已批准」而工具永远不执行（G2 的最后一环）。
+            //    ⚠️ 唤醒失败**不得**影响本次接口响应（决定已落库，是既成事实），
+            //    也不得回滚决定 —— 回滚等于「人批了但系统说没批」。
+            //    崩溃窗口由恢复扫描器的 WAITING_APPROVAL 超时兜底收敛。
+            if (wakeup != null) {
+                try {
+                    wakeup.wakeup(context.tenantId(), decision.approvalId());
+                } catch (RuntimeException e) {
+                    log.warn("审批决定已落库但唤醒失败（不影响本次响应）: approvalId={}, cause={}",
+                            approvalId, e.toString());
+                }
+            }
             return ResponseEntity.ok(new DecisionResponse(
                     decision.approvalId(), decision.newState()));
         } catch (ApprovalQueryPort.ApprovalNotFoundException e) {

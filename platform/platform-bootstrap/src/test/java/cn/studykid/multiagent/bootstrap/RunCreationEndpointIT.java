@@ -17,6 +17,7 @@ import com.zaxxer.hikari.HikariDataSource;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -333,6 +334,11 @@ class RunCreationEndpointIT {
     }
 
     @Test
+    @Disabled("⚠️ 本用例第 2 步 POST /api/agents/{id}/versions 依赖已被 P0-5（2026-10-27）"
+            + "下线的直发发布端点（现仅保留 GET），故无法产出 versionId 与执行快照，"
+            + "其锁定的「发布即产执行快照」真实缺陷仍是有效需求。"
+            + "须待三步发布工作流端点落地后，将「创建 Agent → 发布版本 → 断言快照」整条链路"
+            + "重指向新端点。当前显式挂起，非静默跳过。")
     @DisplayName("✅ E2E 回归：经 API 发布的 Agent 可直接建 Run（发布即产执行快照）")
     void apiPublishedAgentCanCreateRun() {
         // ⚠️⚠️ 本条锁定 2026-10-23 全栈 E2E 实测发现的真实缺陷：

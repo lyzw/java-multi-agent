@@ -1036,10 +1036,10 @@ export interface CapSkillUsageItem {
 }
 
 /**
- * Skill 两级描述（对齐后端契约 `$defs.skillDescription`）。
+ * Skill 三级描述（对齐后端契约 `$defs.skillDescription`）。
  *
  * ⚠️ **描述不是字符串**：后端 `GET /api/cap/catalog/skills` 的 `description`
- * 是 `{purpose, usage[]}` 对象（或 null）。把它当字符串渲染会让 React
+ * 是 `{purpose, usage[], content}` 对象（或 null）。把它当字符串渲染会让 React
  * 抛「Objects are not valid as a React child」，而本页没有错误边界 ——
  * 后果是整个应用白屏（连导航和「退出」都点不到），不是某格显示难看。
  */
@@ -1048,6 +1048,8 @@ export interface CapSkillDescription {
   purpose: string
   /** 2级 · 分场景操作指引（可空） */
   usage?: CapSkillUsageItem[] | null
+  /** 3级 · 详细描述（内容，可空）：用于大模型判断后续工具调用的完整上下文。 */
+  content?: string | null
 }
 
 /**

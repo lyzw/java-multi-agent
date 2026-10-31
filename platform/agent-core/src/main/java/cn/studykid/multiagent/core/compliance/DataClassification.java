@@ -3,6 +3,7 @@ package cn.studykid.multiagent.core.compliance;
 import java.util.regex.Pattern;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 数据分级（DEC-10 GATE-1 / P0-D00 §4 白名单）。
@@ -36,6 +37,47 @@ public enum DataClassification {
     /** @return 是否包含真实学生数据。 */
     public boolean containsRealStudentData() {
         return containsRealStudentData;
+    }
+
+    /**
+     * 从请求内容推导数据分级（P0-3 修复：杜绝硬编码 {@code SYNTHETIC} 导致
+     * 零保留闸门的真实数据分支永不触发、供应商确认检查形同虚设）。
+     *
+     * <p><b>判定优先级（fail-closed）</b>：
+     * <ol>
+     *   <li>若内容命中任一可识别学生信息模式 → {@link #REAL_STUDENT}
+     *       （<b>内容优先</b>，调用方不得降级绕过）；</li>
+     *   <li>否则若调用方显式声明 → 采用其声明；</li>
+     *   <li>否则 → {@link #SYNTHETIC}（兼容 P2 合成数据工作模式）。</li>
+     * </ol>
+     *
+     * <p>⚠️ <b>内容优先</b>：即便调用方声明为 {@code SYNTHETIC}，只要内容含可识别信息，
+     * 仍按真实数据处置——否则「声明 SYNTHETIC + 夹带身份证号」即可绕过闸门
+     * （{@code ZeroRetentionGate} 对 SYNTHETIC 提前 return，不再检查可识别内容）。
+     *
+     * @param text     将进入 Prompt 的内容（可为 null）
+     * @param declared 调用方显式声明（可为 null）
+     * @return 推导后的分级
+     */
+    public static @NonNull DataClassification fromContent(
+            @Nullable String text, @Nullable DataClassification declared) {
+        if (text != null && containsIdentifyingContent(text)) {
+            return REAL_STUDENT;
+        }
+        if (declared != null) {
+            return declared;
+        }
+        return SYNTHETIC;
+    }
+
+    /** 内容是否含可识别学生信息（任一模式命中即 true）。 */
+    private static boolean containsIdentifyingContent(@NonNull String text) {
+        for (IdentifyingPattern pattern : IdentifyingPattern.values()) {
+            if (pattern.detect(text)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -76,19 +118,33 @@ public enum DataClassification {
 
         private final String label;
         private final String regex;
+        /** 编译结果缓存（构造期一次性编译，避免每次检测重复编译）。 */
+        private final Pattern compiled;
 
         IdentifyingPattern(String label, String regex) {
             this.label = label;
             this.regex = regex;
+            this.compiled = Pattern.compile(regex);
         }
 
         public @NonNull String label() {
             return label;
         }
 
+        /**
+         * 编译后的正则（唯一判据来源）。
+         *
+         * <p>⚠️ <b>检测与脱敏必须共用同一份正则</b>：若输出侧的掩码各自再写一遍，
+         * 两边迟早漂移成「检测到 A 模式、却按 B 模式去抹」——
+         * 而这份黑名单本身就是为使 §4 的判断与处置<b>逐字一致</b>而存在的。
+         */
+        public @NonNull Pattern pattern() {
+            return compiled;
+        }
+
         /** 在文本中检测本模式。 */
         public boolean detect(@NonNull String text) {
-            return java.util.regex.Pattern.compile(regex).matcher(text).find();
+            return compiled.matcher(text).find();
         }
     }
 }

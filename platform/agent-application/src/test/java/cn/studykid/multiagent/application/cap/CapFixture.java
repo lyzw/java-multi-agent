@@ -785,6 +785,15 @@ final class CapFixture {
             @Override
             public @NonNull Optional<AuthzVersion> find(@NonNull String tenantId,
                                                          @NonNull String principalId) {
+                // ⚠️ P0-3b：生产读路径改为 currentOrInitialize（先 find、缺行才 initialize），
+                //    故「版本存储不可用」必须体现在 **find** 上 ——
+                //    只让 require 抛异常，等于替身与真实存储不一致
+                //    （真实存储不可用时，读与写同样失败）。
+                //    否则「存储不可用 → fail-closed」这条契约会被测成另一条分支。
+                if (authzUnavailable) {
+                    throw new AuthzUnavailableException(tenantId, principalId,
+                            "版本服务不可用", null);
+                }
                 Long version = authzVersions.get(tenantId + "/" + principalId);
                 return version == null
                         ? Optional.empty()
@@ -807,6 +816,10 @@ final class CapFixture {
             @Override
             public @NonNull AuthzVersion initialize(@NonNull String tenantId,
                                                     @NonNull String principalId) {
+                if (authzUnavailable) {
+                    throw new AuthzUnavailableException(tenantId, principalId,
+                            "版本服务不可用", null);
+                }
                 return find(tenantId, principalId).orElseGet(() -> {
                     AuthzVersion created = new AuthzVersion(tenantId, principalId,
                             AuthzVersion.INITIAL_VERSION, Instant.EPOCH);

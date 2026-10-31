@@ -49,6 +49,16 @@ public class RetentionPurgeService {
     private final String actor;
     private final Clock clock;
 
+    /**
+     * 停机标志（由 {@link #beginShutdown()} 在应用停机时置位）。
+     *
+     * <p>⚠️ 用途：停机窗口内 DataSource 会先于本服务关闭，
+     * 此时在途清理类别会抛出 {@code HikariDataSource has been closed}。
+     * 这<b>不是</b>真实的合规清理失败（数据仍在、只是停机），
+     * 故应降级为 DEBUG 而非 ERROR，避免污染告警与「清理失败」计数。
+     */
+    private volatile boolean shuttingDown = false;
+
     public RetentionPurgeService(@NonNull ErasurePort erasurePort,
                                  @NonNull RetentionSettings settings,
                                  @NonNull String actor,
@@ -62,6 +72,18 @@ public class RetentionPurgeService {
         this.settings = settings;
         this.actor = actor;
         this.clock = clock;
+    }
+
+    /**
+     * 声明进入停机窗口。
+     *
+     * <p>⚠️ 由 {@code RetentionJob.stop()} 调用：此后发生的类别清理失败
+     * （典型为 DataSource 已关闭）将被降级为 DEBUG 日志，
+     * 不再计入失败类别、不再告警——因为那只是停机的预期后果，
+     * 而非「数据未按要求删除」的合规违约。
+     */
+    public void beginShutdown() {
+        this.shuttingDown = true;
     }
 
     /**
@@ -160,13 +182,18 @@ public class RetentionPurgeService {
                 erased++;
                 log.info("撤回同意删除完成: tenant={}, student={}, rows={}",
                         tenantId, w.studentId(), rows);
-            } catch (RuntimeException e) {
-                // ⚠️ 单个学生失败必须继续处理其余学生：
-                //    否则一个坏数据会拖过其余人的 30 天期限 → 集体违约。
-                erasurePort.markWithdrawalFailed(tenantId, w.studentId());
+        } catch (RuntimeException e) {
+            // ⚠️ 单个学生失败必须继续处理其余学生：
+            //    否则一个坏数据会拖过其余人的 30 天期限 → 集体违约。
+            erasurePort.markWithdrawalFailed(tenantId, w.studentId());
+            if (shuttingDown) {
+                log.debug("停机窗口内撤回删除失败（忽略，DataSource 正在关闭）: "
+                        + "tenant={}, student={}", tenantId, w.studentId(), e);
+            } else {
                 log.error("单个撤回删除失败（已标记 FAILED，继续处理其余）: tenant={}, student={}",
                         tenantId, w.studentId(), e);
             }
+        }
         }
         return erased;
     }
@@ -184,7 +211,13 @@ public class RetentionPurgeService {
             }
             return rows;
         } catch (RuntimeException e) {
-            log.error("清理类别失败: category={}", label, e);
+            if (shuttingDown) {
+                // ⚠️ 停机窗口内 DataSource 已关闭，此类失败是停机的预期后果，
+                //    降级为 DEBUG，不伪装成真实合规失败。
+                log.debug("清理类别失败（停机窗口内，忽略）: category={}", label, e);
+            } else {
+                log.error("清理类别失败: category={}", label, e);
+            }
             return -1;
         }
     }

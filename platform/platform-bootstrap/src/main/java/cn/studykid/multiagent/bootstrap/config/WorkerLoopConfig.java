@@ -541,9 +541,12 @@ public class WorkerLoopConfig {
             org.springframework.beans.factory.ObjectProvider<AmqpAdmin> rabbitAdmin,
             @Value("${spring.rabbitmq.host:}") String rabbitHost,
             @Value("${spring.rabbitmq.port:5672}") int rabbitPort,
-            @Value("${agent.mq.queues.execute.name}") String queueName) {
+            @Value("${agent.mq.queues.execute.name}") String queueName,
+            @Value("${agent.messaging.switch-guard.rabbit-residual-check:true}")
+            boolean checkRabbitResidual) {
         MessagingSwitchGuard.verify(channels, pgRepository,
-                rabbitAdmin.getIfAvailable(), rabbitHost, rabbitPort, queueName);
+                rabbitAdmin.getIfAvailable(), rabbitHost, rabbitPort, queueName,
+                checkRabbitResidual);
         return new MessagingSwitchGuard();
     }
 

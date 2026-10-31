@@ -53,6 +53,48 @@ public interface AuthzVersionPort {
     @NonNull AuthzVersion initialize(@NonNull String tenantId, @NonNull String principalId);
 
     /**
+     * 读取当前授权版本；<b>缺行时按需补建</b>（P0-1b · 首次见到主体）。
+     *
+     * <p>⚠️ <b>为什么需要它</b>：{@link #initialize} 此前<b>零生产调用方</b> ——
+     * 「授权版本记录」没有任何写入方，于是 {@code cap_authz_version} 恒为空，
+     * 而 {@link #require} 在无行时抛 {@link AuthzUnavailableException}（fail-closed）。
+     * 两者叠加的后果是：一旦打开能力闭包强制校验，<b>每一次工具调用都会被拒绝</b>
+     * （从「不校验」直接跳到「全拒绝」，不是修复）。
+     *
+     * <p>⚠️ <b>为什么这是安全的</b>：补建只在<b>该主体从未被跟踪过</b>时发生，
+     * 且 {@link #initialize} 的语义是 {@code ON CONFLICT DO NOTHING} ——
+     * <b>绝不重置既有行的版本号</b>。因此：
+     * <ul>
+     *   <li>已撤权的主体（版本 ≥ 2）不会被重新初始化回 1 → 撤权历史不丢；</li>
+     *   <li>「撤权」在本平台的语义是<b>递增版本</b>（{@link #bump}），
+     *       不是删除行；仓内没有任何删除 {@code cap_authz_version} 行的路径。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>与 {@link #require} 的区别</b>：{@code require} 是<b>严格</b>读 ——
+     * 缺行即失败。{@code currentOrInitialize} 是<b>生产读路径</b>：
+     * 缺行即补建。<b>两者都保持 fail-closed</b>：
+     * 存储不可用时 {@link #find} / {@link #initialize} 抛异常，
+     * 调用方据此拒绝该次调用。
+     *
+     * <p>⚠️ <b>默认实现是「先读后写」</b>：命中行时<b>不产生任何写</b>
+     * （热路径只有一次读）；仅在缺行时才写一次。
+     * 并发下多个实例同时补建，由唯一约束仲裁，结果一致（版本均为 1）。
+     *
+     * @param tenantId   租户标识
+     * @param principalId 主体标识
+     * @return 生效中的授权版本
+     * @throws AuthzUnavailableException 存储不可用（读不到也写不进）
+     */
+    default @NonNull AuthzVersion currentOrInitialize(@NonNull String tenantId,
+                                                       @NonNull String principalId) {
+        Optional<AuthzVersion> found = find(tenantId, principalId);
+        if (found.isPresent()) {
+            return found.get();
+        }
+        return initialize(tenantId, principalId);
+    }
+
+    /**
      * <b>原子</b>递增授权版本，返回递增后的新版本号。
      *
      * <p>语义：记录不存在时创建为 1 并返回 1；已存在时 {@code +1} 并返回新值。

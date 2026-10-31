@@ -21,6 +21,10 @@
   <dependencies>
     <dependency>
       <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-ports</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-application</artifactId>
     </dependency>
     <dependency>

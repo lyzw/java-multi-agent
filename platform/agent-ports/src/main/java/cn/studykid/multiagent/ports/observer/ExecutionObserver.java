@@ -151,7 +151,8 @@ public interface ExecutionObserver {
             UNKNOWN_RESULT,
             SKIPPED_STALE_GENERATION,
             CANCELLED,
-            TENANT_BLOCKED
+            TENANT_BLOCKED,
+            PARKED
         }
     }
 }

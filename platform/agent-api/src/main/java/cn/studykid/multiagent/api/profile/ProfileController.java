@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.ports.persistence.AuditPort;
 import cn.studykid.multiagent.ports.persistence.ProfileQueryPort;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
@@ -46,14 +47,34 @@ public class ProfileController {
     private final RateLimitPort rateLimiter;
     private final RunController.CurrentPrincipal currentPrincipal;
 
+    /**
+     * 访问日志端口（R-2）。
+     *
+     * <p>⚠️⚠️ <b>P3-2：读学生画像此前<b>完全没有留痕</b></b>。
+     * 本端点一直只做 {@code profile:read} 的授权检查，
+     * 而 {@code AuditPort.Actions.PROFILE_READ} 这个常量虽然早已声明，
+     * 全仓生产代码里<b>一处写入方都没有</b> ——
+     * 只有集成测试里为了验证审计链路才用过它。
+     * 后果：RLS 能回答「谁<b>能</b>看这个学生的画像」，
+     * 但「谁<b>实际看过</b>、什么时候看的」在系统里<b>一行都查不到</b>，
+     * 而这正是 R-2（抵赖风险）要求补上的那一半。
+     *
+     * <p>⚠️ <b>用 {@code recordAccess}（fail-open）而非 {@code recordRequired}</b>：
+     * 读日志丢失降低举证能力，但为了写日志而阻断用户读数据，
+     * 会被放大成拒绝服务 —— 与「关键授权动作必须 fail-closed」是两种语义。
+     */
+    private final AuditPort audit;
+
     public ProfileController(ProfileQueryPort profileQuery,
                              AuthorizationService authorization,
                              RateLimitPort rateLimiter,
-                             RunController.CurrentPrincipal currentPrincipal) {
+                             RunController.CurrentPrincipal currentPrincipal,
+                             AuditPort audit) {
         this.profileQuery = profileQuery;
         this.authorization = authorization;
         this.rateLimiter = rateLimiter;
         this.currentPrincipal = currentPrincipal;
+        this.audit = audit;
     }
 
     /**
@@ -79,6 +100,15 @@ public class ProfileController {
 
         ProfileQueryPort.ProfileView view = profileQuery.loadProfile(
                 context.tenantId(), studentId);
+
+        // ⚠️ R-2 / P3-2：读了谁的学生画像必须留痕（fail-open）。
+        //    ⚠️ detail 只放**非识别性**字段：AuditPort 的 detail 白名单会拒写
+        //    命中身份证/手机/学号/邮箱的内容，此处本就不传这些；
+        //    resourceId 是随机 studentId（非学号），符合 DEC-6 白名单纪律。
+        audit.recordAccess(context.tenantId(), currentPrincipal.principalId(),
+                AuditPort.Actions.PROFILE_READ, "student_profile", studentId,
+                java.util.Map.of("grade", String.valueOf(view.grade()),
+                        "exists", view.exists()));
 
         // ⚠️ 不存在 → 200 + notFound:true（不返回 404，避免枚举 studentId）
         boolean notFound = !view.exists();

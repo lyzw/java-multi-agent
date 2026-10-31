@@ -426,14 +426,15 @@ public record ConfigPublishPayload(
     }
 
     /**
-     * Skill 两级描述草稿（契约 {@code $defs.skillDescription}）。
+     * Skill 三级描述草稿（契约 {@code $defs.skillDescription}）。
      *
      * <p>⚠️ <b>约束即发布闸门</b>（与 schema 同源）：
      * purpose ≤200 字（1级，选型信号必须是一句话）；usage ≤20 条，
-     * 每条 when ≤200 字 / how ≤1000 字 ——的超限在这里<b>拒绝发布</b>，不在面上放行。
+     * 每条 when ≤200 字 / how ≤1000 字；content ≤2000 字 —— 超限在这里<b>拒绝发布</b>，不在面上放行。
      */
     public record SkillDescriptionSpec(@NonNull String purpose,
-                                       @NonNull List<SkillUsageSpec> usage) {
+                                       @NonNull List<SkillUsageSpec> usage,
+                                       @NonNull String content) {
 
         public SkillDescriptionSpec {
             if (purpose == null || purpose.isBlank()) {
@@ -447,6 +448,11 @@ public record ConfigPublishPayload(
             usage = usage == null ? List.of() : List.copyOf(usage);
             if (usage.size() > 20) {
                 throw new IllegalArgumentException("description.usage 超过 20 条上限: " + usage.size() + " 条");
+            }
+            content = content == null ? "" : content.trim();
+            if (content.length() > 2000) {
+                throw new IllegalArgumentException(
+                        "description.content 超过 2000 字上限: " + content.length() + " 字");
             }
         }
 

@@ -37,7 +37,7 @@
     },
     "description": {
       "$ref": "#/$defs/skillDescription",
-      "description": "两级描述（Skill 的核心配置，不是可有可无的注释）。\n\n⚠️ 描述不是授权：两级内容都只能引导模型使用 declaredTools / declaredMcp 已声明的能力，不得引入新权限；与实际声明冲突时以声明为准（fail-closed）。\n⚠️ purpose 与 usage 均计入 configFingerprint：改描述 = 改内容，需要重算指纹。"
+      "description": "三级描述（Skill 的核心配置，不是可有可无的注释）。\n\n⚠️ 描述不是授权：三级内容都只能引导模型使用 declaredTools / declaredMcp 已声明的能力，不得引入新权限；与实际声明冲突时以声明为准（fail-closed）。\n⚠️ purpose / usage / content 均计入 configFingerprint：改描述 = 改内容，需要重算指纹。"
     },
     "status": {
       "$ref": "common.schema.json#/$defs/lifecycleStatus"
@@ -146,6 +146,12 @@
             },
             "description": "一条分场景操作指引：when 描述「什么情况」，how 描述「用何种操作」。条目之间应互斥或给出优先顺序，避免模型自选时产生歧义。"
           }
+        },
+        "content": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000,
+          "description": "3级 · 详细描述（内容）。用于大模型判断后续工具调用的完整上下文，与 purpose + usage 组合后一并传递给模型。可补充：适用边界、参数来源说明、结果汇报口径、与其他 Skill 的协作关系等。"
         }
       }
     }

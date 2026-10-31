@@ -796,6 +796,8 @@ public class CapExecutionFlow {
         // ── 步骤 2：PrincipalAuthorized（主体授权最先）──────────────
         long authzVersion;
         try {
+            // ⚠️ 严格读（缺行即抛 → 下方 catch → fail-closed 拒绝）：
+            //    不得用 currentOrInitialize（缺行补建 = 把「从未授权」当成已授权）。
             authzVersion = authzVersions.require(tenantId, principalId).authzVersion();
         } catch (RuntimeException e) {
             // ⚠️ 读不到权威版本 = 版本服务不可用 → fail-closed（§5.5）
@@ -1230,7 +1232,11 @@ public class CapExecutionFlow {
             return;
         }
         try {
-            if (!budget.settle(tenantId, reservationId, reserveAmountPerToolCall, toolName)) {
+            // ⚠️ P0-3b：model_id 写**工具行前缀 + 工具名** ——
+            //    工具调用本来就没有模型，直接写工具名会让「按模型聚合成本」
+            //    把工具名当成模型名（模型行才是真实模型标识）。
+            if (!budget.settle(tenantId, reservationId, reserveAmountPerToolCall,
+                    cn.studykid.multiagent.ports.persistence.BudgetPort.toolRowModelId(toolName))) {
                 log.warn("预算结算未生效（预留不存在或已终态），将由对账兜底: "
                         + "tool={}, reservation={}", toolName, reservationId);
             }

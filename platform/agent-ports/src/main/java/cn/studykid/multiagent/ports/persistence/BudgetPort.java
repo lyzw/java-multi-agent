@@ -41,6 +41,28 @@ public interface BudgetPort {
     String SETTLEMENT_CURRENCY = "CNY";
 
     /**
+     * <b>工具调用行</b>在 {@code usage_record.model_id} 上的前缀（P0-3b）。
+     *
+     * <p>⚠️ <b>为什么需要它</b>：{@code usage_record} 里现在有两类行 ——
+     * <b>工具调用行</b>与<b>模型调用行</b>。两类的 {@code model_id} 语义完全不同：
+     * 模型行是真实模型标识，工具行<b>本来就没有模型</b>。
+     * 此前工具行直接把<b>工具名</b>写进 {@code model_id}，
+     * 于是「按模型聚合成本」会把工具名当成模型名 —— 报表失真。
+     * 加前缀后两类行可区分，聚合时能把工具行排除。
+     */
+    String TOOL_ROW_PREFIX = "tool:";
+
+    /**
+     * 构造工具调用行的 {@code model_id}。
+     *
+     * @param toolName 工具名
+     * @return 带工具行前缀的标识
+     */
+    static String toolRowModelId(@NonNull String toolName) {
+        return TOOL_ROW_PREFIX + toolName;
+    }
+
+    /**
      * 预留额度（原子）。
      *
      * <p>⚠️ 实现必须用<b>单条条件 UPDATE</b>，禁止「先 SELECT 检查再 UPDATE」——
@@ -89,6 +111,59 @@ public interface BudgetPort {
                    @NonNull String reservationId,
                    @NonNull BigDecimal actualAmount,
                    String modelId);
+
+    /**
+     * 结算预留（RESERVED → SETTLED），<b>并写入真实 token 用量</b>（P0-3b）。
+     *
+     * <p>⚠️ <b>为什么要有这个重载</b>：{@link #settle} 的计量行只写金额，
+     * {@code usage_record.input_tokens} / {@code output_tokens} 两列
+     * <b>此前无任何写入方</b> —— 于是「这个 Run 用了多少 token」
+     * 在账上不存在，成本指标（COST-1/2）算出来的是代理值。
+     *
+     * <p>⚠️ <b>默认实现丢弃 token</b>：本接口的既有实现里，
+     * 工具调用路径<b>没有</b> token 概念（工具按「调用当量」计费），
+     * 故默认实现退化为 {@link #settle}。
+     * 生产实现<b>必须</b>覆写本方法把 token 写进计量行 ——
+     * 否则「模型调用有 token」这件事在账上又会消失。
+     *
+     * @param inputTokens  输入 token 数
+     * @param outputTokens 输出 token 数
+     * @return 结算结果；{@code false} 表示预留不存在或已非 RESERVED
+     */
+    default boolean settle(@NonNull String tenantId,
+                           @NonNull String reservationId,
+                           @NonNull BigDecimal actualAmount,
+                           String modelId,
+                           long inputTokens,
+                           long outputTokens) {
+        return settle(tenantId, reservationId, actualAmount, modelId);
+    }
+
+    /**
+     * 记录一次模型调用的真实用量与成本（P0-3b · <b>无预留时</b>的计量路径）。
+     *
+     * <p>⚠️ <b>什么时候用得到</b>：模型单价<b>查不到</b>时，
+     * 无法估算成本 → 无法预留额度（预留金额必须为正）。
+     * 但 token 数是<b>事实</b>，不能因为「不知道价格」就不记 ——
+     * 否则「漏配单价」会静默变成「这次调用不存在」，
+     * 账实从此对不上且无人察觉。
+     * 故此路径<b>只计量、不扣额度</b>：成本记 0，token 如实记。
+     *
+     * <p>⚠️ <b>幂等</b>：以 {@code (tenantId, modelCallId)} 为幂等键，
+     * 重复调用只记一次。
+     *
+     * @param modelCallId 模型调用标识（<b>非空</b>；幂等键的一部分）
+     * @return 是否成功记账
+     */
+    default boolean recordModelUsage(@NonNull String tenantId,
+                                     @NonNull String runId,
+                                     @NonNull String modelId,
+                                     long inputTokens,
+                                     long outputTokens,
+                                     @NonNull BigDecimal costAmount,
+                                     @NonNull String modelCallId) {
+        return false;
+    }
 
     /**
      * 释放预留（RESERVED → RELEASED），额度退回账户。

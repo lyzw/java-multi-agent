@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>G1 + G2 设计：操作标识前移与审批可暂停</title>
+<style>
+  :root{
+    --ink:#1a1d21; --ink-2:#3d434b; --ink-3:#6b7280; --line:#e3e6ea;
+    --bg:#ffffff; --bg-2:#f7f8fa; --bg-3:#eef1f5;
+    --accent:#2f5d8a; --accent-soft:#e8eff6;
+    --red:#b3261e; --red-soft:#fdecea;
+    --amber:#8a5a00; --amber-soft:#fdf3e2;
+    --green:#1f6f43; --green-soft:#e8f5ee;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg-2); color:var(--ink);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1040px;margin:0 auto;background:var(--bg);
+    box-shadow:0 1px 3px rgba(16,24,40,.06),0 12px 32px rgba(16,24,40,.05);
+    padding:56px 64px 80px;min-height:100vh}
+  @media (max-width:820px){.wrap{padding:28px 20px 56px}}
+
+  header.doc{border-bottom:2px solid var(--ink);padding-bottom:22px;margin-bottom:8px}
+  .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  h1{font-size:30px;line-height:1.3;margin:10px 0 6px;letter-spacing:-.01em}
+  .sub{font-size:15px;color:var(--ink-3);margin:0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 26px;margin-top:18px;font-size:12.5px;color:var(--ink-3)}
+  .meta b{color:var(--ink-2);font-weight:600}
+
+  h2{font-size:20px;margin:44px 0 6px;padding-top:14px;border-top:1px solid var(--line);letter-spacing:-.005em}
+  h2 .num{color:var(--accent);font-variant-numeric:tabular-nums;margin-right:10px;font-weight:700}
+  h3{font-size:15.5px;margin:26px 0 6px;color:var(--ink)}
+  h4{font-size:14px;margin:18px 0 4px;color:var(--ink-2)}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0;padding-left:22px}
+  li{margin:4px 0}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--bg-3);padding:1.5px 5px;border-radius:3px;color:#0f2b46}
+  .path{font-family:var(--mono);font-size:12px;color:var(--ink-3);word-break:break-all}
+
+  .lead{font-size:16px;line-height:1.8;color:var(--ink-2)}
+  .callout{border-left:3px solid var(--accent);background:var(--accent-soft);padding:14px 18px;margin:16px 0;border-radius:0 4px 4px 0}
+  .callout.warn{border-color:var(--amber);background:var(--amber-soft)}
+  .callout.danger{border-color:var(--red);background:var(--red-soft)}
+  .callout.ok{border-color:var(--green);background:var(--green-soft)}
+  .callout .t{font-weight:700;font-size:13px;letter-spacing:.02em;margin-bottom:4px;display:block}
+  .callout p:last-child{margin-bottom:0}
+
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:var(--bg-3);font-weight:600;font-size:12.5px;color:var(--ink-2);letter-spacing:.02em}
+  tbody tr:nth-child(even){background:#fbfcfd}
+  td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;letter-spacing:.02em;white-space:nowrap}
+  .tag.red{background:var(--red-soft);color:var(--red)}
+  .tag.amber{background:var(--amber-soft);color:var(--amber)}
+  .tag.green{background:var(--green-soft);color:var(--green)}
+  .tag.blue{background:var(--accent-soft);color:var(--accent)}
+  .tag.gray{background:var(--bg-3);color:var(--ink-3)}
+
+  figure{margin:20px 0}
+  figcaption{font-size:12.5px;color:var(--ink-3);margin-top:8px;text-align:center}
+  .diagram{border:1px solid var(--line);border-radius:6px;background:#fcfdfe;padding:20px 18px;overflow-x:auto}
+
+  /* 阶段流程 */
+  .flow{display:flex;gap:8px;align-items:stretch;min-width:640px}
+  .flow .step{flex:1;border:1px solid var(--line);border-radius:5px;padding:10px 12px;background:#fff}
+  .flow .step .h{font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.04em}
+  .flow .step .b{font-size:12.5px;color:var(--ink-2);margin-top:3px;line-height:1.6}
+  .flow .arrow{align-self:center;color:var(--ink-3);font-size:16px;flex:0 0 14px;text-align:center}
+
+  /* 时序 */
+  .seq{min-width:620px}
+  .seq .row{display:grid;grid-template-columns:96px 1fr;gap:12px;align-items:start;margin:6px 0}
+  .seq .who{font-size:12px;font-weight:700;color:var(--ink-2);text-align:right;padding-top:3px}
+  .seq .msg{border:1px solid var(--line);border-left-width:3px;border-radius:0 4px 4px 0;background:#fff;padding:7px 12px;font-size:13px}
+  .seq .msg.a{border-left-color:var(--accent)}
+  .seq .msg.w{border-left-color:var(--amber);background:#fffdf8}
+  .seq .msg.g{border-left-color:var(--green);background:#fbfefc}
+  .seq .msg.r{border-left-color:var(--red);background:#fffbfa}
+  .seq .msg .c{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);display:block;margin-top:2px}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media (max-width:820px){.cols{grid-template-columns:1fr}}
+  .card{border:1px solid var(--line);border-radius:6px;padding:14px 16px;background:#fff}
+  .card .h{font-weight:700;font-size:13.5px;margin-bottom:6px}
+  .card .h .tag{margin-left:6px}
+
+  .decision{border:1px solid var(--line);border-radius:6px;margin:16px 0;overflow:hidden}
+  .decision .dh{background:var(--bg-3);padding:9px 14px;font-weight:700;font-size:13.5px;border-bottom:1px solid var(--line)}
+  .decision .dh .id{color:var(--accent);margin-right:8px}
+  .decision .db{padding:12px 16px}
+  .decision .db dl{margin:0;display:grid;grid-template-columns:76px 1fr;gap:6px 12px;font-size:13.5px}
+  .decision .db dt{color:var(--ink-3);font-size:12.5px;font-weight:600;padding-top:2px}
+  .decision .db dd{margin:0}
+
+  .kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}
+  @media (max-width:820px){.kpi{grid-template-columns:1fr 1fr}}
+  .kpi div{border:1px solid var(--line);border-radius:5px;padding:11px 12px;background:#fcfdfe}
+  .kpi .v{font-size:17px;font-weight:700;letter-spacing:-.01em}
+  .kpi .l{font-size:11.5px;color:var(--ink-3);margin-top:2px}
+
+  .footnote{font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line);margin-top:44px;padding-top:14px}
+  .check li{list-style:none;position:relative;padding-left:20px}
+  .check li::before{content:"";position:absolute;left:2px;top:9px;width:7px;height:7px;border:1.5px solid var(--accent);border-radius:2px}
+  .no li{list-style:none;position:relative;padding-left:20px}
+  .no li::before{content:"×";position:absolute;left:4px;top:0;color:var(--red);font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <div class="kicker">技术设计方案 · 内部评审稿</div>
+  <h1>G1 + G2 合并解法：操作标识前移与审批可暂停</h1>
+  <p class="sub">让「能力闭环校验」与「人工审批」共用同一个执行前身份，从而把两条恒拒/空转的链路真正接通</p>
+  <div class="meta">
+    <span><b>日期</b> 2026-10-31</span>
+    <span><b>关联缺口</b> G1（CAP 未启用）· G2（HITL 恒拒）</span>
+    <span><b>代码基线</b> 工作区当前未提交变更（1834 例全绿）</span>
+    <span><b>性质</b> 结构性改动 · 需评审后再实施</span>
+  </div>
+</header>
+
+<p class="lead" style="margin-top:22px">
+  <b>一句话结论：</b>G1 与 G2 不是「两个待办」，而是同一处时间序矛盾的两个出口——
+  操作身份 <code>operationId</code> 产生在判定<b>之后</b>，而判定必须发生在执行<b>之前</b>，
+  人的响应又必然发生在请求<b>之后</b>。三者被压在同一个同步代码段里，于是审批在设计上不可达。
+  解法是把「一次工具调用」从「一个执行动作」改造成「一个有身份、可暂停、可恢复的<b>意图</b>」，
+  分四个阶段落地：<b>分配身份 → 请求审批 → 挂起 → 恢复</b>。
+</p>
+
+<div class="callout danger">
+  <span class="t">⚠️ 阅读前须知：本方案的三个结论会改变既有认知</span>
+  <p>① 审批台（<code>/api/approvals</code>）的待办队列在生产中<b>结构性为空</b>——全仓没有任何生产代码写入 <code>PENDING</code> 审批行；</p>
+  <p>② 即使有人注入「全部批准」的审批来源，工具<b>仍然会被拒</b>——因为第二步 <code>consume</code> 查的是同一张表里并不存在的行；</p>
+  <p>③ CAP 开启后 <code>WRITE_EXTERNAL</code> 会<b>全灭</b>，这不是配置问题——<code>cap_approval</code> 表在物理上无法表示「等待人决定」。</p>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">01</span>根因：不是「缺一个 ID」，是四道锁串成的一把死锁</h2>
+
+<p>原评估把根因写成「<code>operationId</code> 每次调用动态生成，而判定发生在调用之前」。
+实读代码后可以更精确：<b>有四道独立的锁，任意一道都足以让 HITL 恒拒</b>。只挪 ID 只能开其中一道。</p>
+
+<table>
+  <thead>
+    <tr><th style="width:44px">#</th><th style="width:200px">锁</th><th>代码事实</th><th style="width:150px">单独后果</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="num">E1</td>
+      <td><b>身份产生在判定之后</b></td>
+      <td><span class="path">ToolInvocationGate#1096-1114</span> 先算幂等键、<code>ledger.register</code>，才有 <code>registration.operationId()</code>；
+          <span class="path">#1170-1213</span> 的审批消费用的正是它。人无法在「这行已 INSERT、下一行就 consume」之间插入任何决定。</td>
+      <td>审批窗口 = 0 毫秒</td>
+    </tr>
+    <tr>
+      <td class="num">E2</td>
+      <td><b>审批来源契约没有调用上下文</b></td>
+      <td><code>ApprovalSource.verdictFor(tenantId, handler)</code> 只拿到租户和工具句柄，
+          <b>拿不到 runId / 参数 / operationId</b>。任何实现都无法回答「这一次调用是否被批准」，
+          只能恒 <code>FAIL_CLOSED</code> 或恒 <code>APPROVED</code>（后者是安全漏洞）。
+          当前装配 <code>WorkerExecutionConfig#approvalSource()</code> 返回空策略。</td>
+      <td>判无可判</td>
+    </tr>
+    <tr>
+      <td class="num">E3</td>
+      <td><b>没有代码创建「审批请求」</b></td>
+      <td>全仓 <code>INSERT INTO approval</code> 只有 <code>JdbcApprovalRepository#grant</code> 一处，
+          且直接写 <code>state='APPROVED'</code>；<code>grant</code> 在生产代码中<b>零调用方</b>（仅测试调用）。
+          而审批台的 <code>decide()</code> 要求当前状态必须是 <code>PENDING</code>。
+          于是待办队列<b>永远为空</b>，<code>consume</code> 永远返回 <code>NO_APPROVAL</code>。</td>
+      <td>无行可批 · 无行可放</td>
+    </tr>
+    <tr>
+      <td class="num">E4</td>
+      <td><b>能力域审批表无法表示「未决」</b></td>
+      <td><code>cap_approval</code> 的 <code>approver_id</code>、<code>decided_at</code> 均为 <code>NOT NULL</code>
+          —— 建表即写死「审批必然已经有人做过」。同时它绑定 <code>closure_fingerprint</code> 与
+          <code>authz_version</code>，两者只能在 Run 启动后确定，人不可能提前授予。</td>
+      <td>CAP 原生不支持 HITL</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>时间序矛盾：一个不可能被满足的因果</h3>
+<figure>
+<div class="diagram">
+  <div class="seq">
+    <div class="row"><div class="who">模型</div><div class="msg a">产出 tool_calls（含 callId、参数）<span class="c">此时「要做什么」已确定，但还没有任何持久化身份</span></div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg">Schema 校验 → 授权 → 幂等键 → <b>账本 INSERT</b><span class="c">operationId 在此刻由 DB 生成（ToolInvocationGate#1103-1134）</span></div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg r">审批判定：查审批来源 / 消费审批行<span class="c">要求「已有针对此 operationId 的批准」——但它 3 行代码前才刚存在</span></div></div>
+    <div class="row"><div class="who">人</div><div class="msg w">（需要时间理解、核对参数、做决定）<span class="c">必然发生在请求被看见之后 —— 而请求从未被写下</span></div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg">执行工具 / 或 fail-closed 拒绝<span class="c">当前恒走后者</span></div></div>
+  </div>
+</div>
+<figcaption>矛盾的本质：判定需要的身份，与执行才需要的身份，被设计成了同一个、且产生在判定那一刻的东西。</figcaption>
+</figure>
+
+<div class="callout warn">
+  <span class="t">所以「把 ID 前移」本身不够</span>
+  <p>即使把 <code>operationId</code> 提前到模型返回后立刻生成，只要闸门仍然「在同一毫秒内请求并消费审批」，
+  HITL 依旧恒拒——因为没有<b>暂停</b>的位置。方案必须同时提供三样东西：<b>前置身份</b>、<b>可拦截的请求</b>、<b>可恢复的暂停点</b>。</p>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">02</span>目标与非目标</h2>
+
+<div class="cols">
+  <div class="card">
+    <div class="h">目标 <span class="tag green">本期</span></div>
+    <ul class="check" style="margin:6px 0 0">
+      <li>操作身份在<b>任何判定之前</b>存在且可被外部引用</li>
+      <li>「需审批」的调用会生成一条人能看见、能处置的<b>待办</b></li>
+      <li>待办未决时 Run <b>让出资源</b>，不占用 worker 线程与租约</li>
+      <li>决定到达后 Run 从<b>暂停点</b>继续，不重跑已完成步骤</li>
+      <li>上述四点全部 fail-closed，且每条都有可反证的测试</li>
+    </ul>
+  </div>
+  <div class="card">
+    <div class="h">非目标 <span class="tag gray">明确不做</span></div>
+    <ul class="no" style="margin:6px 0 0">
+      <li>不做审批流引擎（多级会签、代理、转交）</li>
+      <li>不替换 CAP 的发布指针读（G1 的 P5 前提仍是独立工作）</li>
+      <li>不改「反馈只来自用户显式动作」等既有产品纪律</li>
+      <li>不为 <code>OPTIONAL</code> 等级引入阻塞（默认仍不阻塞）</li>
+      <li>不做审批内容的自然语言摘要（本期只显示摘要前缀）</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">03</span>设计主张：把「动作」改成「意图」</h2>
+
+<p>核心是引入一个贯穿四阶段的实体——<b>操作意图（Operation Intent）</b>。
+它不是新表：身份就是既有的 <code>tool_operation</code> 行，只是把它<b>提前创建</b>并允许它以
+<code>PENDING</code>（已登记、未派发）状态存活到审批完成。</p>
+
+<figure>
+<div class="diagram">
+  <div class="flow">
+    <div class="step">
+      <div class="h">P0 · ALLOCATE</div>
+      <div class="b">模型返回后立刻登记：<code>tool_operation</code> 落 <b>PENDING</b>，取得 operationId</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="h">P1 · REQUEST</div>
+      <div class="b">若需审批：写 <code>approval</code> 行（<b>PENDING</b>），绑定参数摘要与目标资源</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="h">P2 · PARK</div>
+      <div class="b">Run → <b>WAITING_APPROVAL</b>，写检查点，释放租约</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="h">P3 · RESUME</div>
+      <div class="b">决定到达 → 唤醒 → 从检查点重入闸门 → 消费审批 → 执行</div>
+    </div>
+  </div>
+</div>
+<figcaption>四阶段全部围绕同一个 operationId；任一阶段崩溃都可重放，因为身份是幂等键的函数。</figcaption>
+</figure>
+
+<h3>为什么身份用「幂等键」而不是新造一个 UUID</h3>
+<p>既有幂等键已经是 <code>run_id + [agentRef/] + tool_name + call_id</code>，并且已有
+<code>UNIQUE (tenant_id, idempotency_key)</code> 这个租户级唯一约束。这意味着：</p>
+<ul>
+  <li><b>同一次调用重放必得同一行</b>——不需要应用侧 UUIDv5，也不需要改列默认值；</li>
+  <li>登记可以改成 <code>INSERT … ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET updated_at = now() RETURNING operation_id</code>，
+      崩溃后重放天然收敛，不会产生第二行；</li>
+  <li>「身份前移」的真实含义因此是：<b>把 <code>register</code> 的调用时机前移，并允许它在不派发的前提下返回</b>。
+      这是最小改动，不引入新的 ID 生成规则。</li>
+</ul>
+
+<div class="callout">
+  <span class="t">关键澄清：operationId 不必「预先算出来」</span>
+  <p>只要在<b>闸门内任何判定之前</b>完成登记，operationId 就已存在，审批请求即可在同一事务内绑定它。
+  真正需要前移的不是 ID 的<b>计算</b>，而是登记的<b>时点</b>，以及让这条记录能停留在 <code>PENDING</code>。</p>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">04</span>五个关键决策</h2>
+
+<div class="decision">
+  <div class="dh"><span class="id">D1</span>登记前移 + 允许 PENDING 存活</div>
+  <div class="db"><dl>
+    <dt>问题</dt><dd>operationId 与审批消费在同一段同步代码里，审批窗口为 0。</dd>
+    <dt>选择</dt><dd>把 <code>ledger.register</code> 从「执行前一刻」前移到「模型返回、进入任何判定之前」，并把它落成的状态从
+      <code>IN_FLIGHT</code> 改为 <code>PENDING</code>；<code>PENDING → IN_FLIGHT</code> 的迁移推迟到<b>真正调用 handler 之前</b>。
+      登记改用 <code>ON CONFLICT … RETURNING</code> 幂等收敛。</dd>
+    <dt>理由</dt><dd><code>ToolOperationState</code> 的文档早已写明 <code>PENDING</code> =「已登记幂等键，尚未发出外部调用」，
+      但 <code>JdbcToolOperationLedger#77-99</code> 直接 INSERT 成 <code>IN_FLIGHT</code>，把这一状态跳过了。
+      恢复它的真实语义，是 park 能存在的前提。</dd>
+    <dt>代价</dt><dd>任何以「非 IN_FLIGHT 即异常」为前提的既有测试需要重新表达；<code>recordResult</code> 的状态机前置条件要放宽为 PENDING/IN_FLIGHT 二者皆可。</dd>
+  </dl></div>
+</div>
+
+<div class="decision">
+  <div class="dh"><span class="id">D2</span>「请求」与「决定」分离，且一个 operation 只有一行</div>
+  <div class="db"><dl>
+    <dt>问题</dt><dd><code>grant</code> 一次性写 <code>APPROVED</code>，审批台的 <code>decide</code> 只接受 <code>PENDING</code>——两者永远接不上；
+      且 <code>approval</code> 表没有 <code>(tenant_id, operation_id)</code> 唯一约束，<code>lockApproval</code> 又无 <code>ORDER BY</code>。</dd>
+    <dt>选择</dt><dd>新增 <code>requestApproval(...)</code> 语义：写一行 <code>PENDING</code>（<code>approver_id</code>/<code>decided_at</code> 为空，
+      现有 CHECK 已允许）；人工处置走既有 <code>decide</code> 把它推进到 <code>APPROVED/REJECTED</code>；
+      同时加 <code>UNIQUE (tenant_id, operation_id)</code>，把「一行 = 一次调用的审批」变成硬约束。</dd>
+    <dt>理由</dt><dd>三处不确定同时消掉：待办队列有了真实来源；<code>consume</code> 的择行不再依赖未定义顺序；
+      「先 PENDING 后 APPROVED」不再可能产生两行而读到旧行。</dd>
+    <dt>代价</dt><dd>存量数据可能重复（当前生产无 <code>grant</code> 调用方，实际为空，风险可忽略）；需在 DDL 前做一次重复检查。</dd>
+  </dl></div>
+</div>
+
+<div class="decision">
+  <div class="dh"><span class="id">D3</span>挂起用「显式状态 + 检查点」，不用「原地阻塞等待」</div>
+  <div class="db"><dl>
+    <dt>问题</dt><dd>人在几分钟到几小时后才决定，worker 不可能一直占着线程和租约。</dd>
+    <dt>选择</dt><dd>新增 Run 状态 <code>WAITING_APPROVAL</code>；在 <code>run_step</code> 写一条
+      <code>step_type='TOOL_BATCH_PENDING'</code>、<code>completed_at IS NULL</code> 的检查点，
+      <code>input_payload</code> 存<b>本批 tool calls 原文（含 callId）</b>与 operationId 列表；
+      随后清空 <code>lease_owner</code>/<code>lease_expires_at</code>，不调用 <code>commitResult</code>。</dd>
+    <dt>理由</dt><dd>⚠️ 这条不是优化而是<b>正确性要求</b>：恢复时绝不能重新调用模型——模型不会再返回同样的 <code>callId</code>，
+      于是幂等键全变，副作用会被重复执行（Sev-0）。检查点让恢复精确落在「工具批次已确定、尚未派发」这一点上。</dd>
+    <dt>代价</dt><dd><code>run_state</code> 是 PG 枚举，需 <code>ALTER TYPE … ADD VALUE</code>（不可回滚）并重建
+      <code>run_completed_at_consistent</code> CHECK；<code>RunRecoverySweeper</code> 必须显式排除该状态，否则会把「等人」误判为「崩溃」接管重跑。</dd>
+  </dl></div>
+</div>
+
+<div class="decision">
+  <div class="dh"><span class="id">D4</span>删掉 ApprovalSource 这条并行通道，审批只认一张表</div>
+  <div class="db"><dl>
+    <dt>问题</dt><dd>现在有<b>两套审批判定</b>：<code>verdictFor</code>（来源策略）与 <code>consume</code>（数据行）。
+      两者可以给出矛盾结论——比如来源说「批准」，表里却没有行。</dd>
+    <dt>选择</dt><dd><code>ApprovalSource</code> 降级为<b>纯策略前置判定</b>（只回答「这个工具是否需要人批准」），
+      不再承担放行；放行唯一依据是 <code>approval</code> 行被 <code>consume</code> 成功。
+      <code>PolicyEngineApprovalSource</code> 的 <code>APPROVED</code> 语义直接删除，避免「配置里点一下就能放行副作用」。</dd>
+    <dt>理由</dt><dd>「两个真相」是这类缺陷的温床：E2 与 E3 之所以能各自成立而不被测试发现，正是因为存在一条看起来能放行的旁路。</dd>
+    <dt>代价</dt><dd>破坏性契约变更（<code>Verdict.APPROVED</code> 消失）；需同步 <code>ApprovalReadinessGuard</code> 的判据与相关测试。</dd>
+  </dl></div>
+</div>
+
+<div class="decision">
+  <div class="dh"><span class="id">D5</span>CAP 与工具域共用同一张审批表（G1 的真正前置）</div>
+  <div class="db"><dl>
+    <dt>问题</dt><dd><code>cap_approval</code> 与 <code>approval</code> 语义重叠但结构不同；前者物理上无法表示未决，
+      且绑定闭包指纹/授权版本，只能在 Run 内授予——这就是「CAP 一开，副作用工具全灭」的机制。</dd>
+    <dt>选择</dt><dd>保留 <code>cap_approval</code> 作为<b>能力域审计视图</b>（只读），CAP 的 <code>approve()</code> 步骤改为读 <code>approval</code> 表，
+      闭包指纹与 authzVersion 存入 <code>approval</code> 的扩展字段（本期用 jsonb detail，不新增列）。</dd>
+    <dt>理由</dt><dd>只有合并，G2 的暂停/恢复才能<b>同时</b>服务 CAP 链路；否则要写两套暂停逻辑——那必然漂移。</dd>
+    <dt>代价</dt><dd>属 M3，依赖 P5 发布指针读落地；本期只预留接口形状，不动 CAP 开关。</dd>
+  </dl></div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">05</span>三条时序</h2>
+
+<h3>时序 A · 不需审批：只多一次登记，行为不变</h3>
+<div class="diagram">
+  <div class="seq">
+    <div class="row"><div class="who">模型</div><div class="msg a">返回 tool_calls</div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg">Schema / 授权 / 幂等键</div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg g"><b>register → PENDING</b>（取得 operationId）</div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg">策略判定：<b>不需审批</b> → 跳过 P1/P2</div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg g">PENDING → IN_FLIGHT → 预算 → 执行 → 账本 POST</div></div>
+  </div>
+</div>
+<p style="font-size:13.5px;color:var(--ink-3)">⚠️ 幂等命中路径的处置要同步改：当前 <code>case IN_FLIGHT, PENDING → recordUnknown</code>
+（<span class="path">ToolInvocationGate#1155</span>）把两者合并。引入 park 后必须拆开——
+<code>PENDING</code> 意味着「从未派发」，是<b>可以继续</b>的；只有 <code>IN_FLIGHT</code> 才是「可能已发出、结果未知」。
+不拆开的话，恢复后的 Run 会被自己判成「结果未知」而永久转人工对账。</p>
+
+<h3>时序 B · 需审批：在派发前停住</h3>
+<div class="diagram">
+  <div class="seq">
+    <div class="row"><div class="who">闸门</div><div class="msg a">register → PENDING，operationId 就位</div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg">策略判定：<b>需审批</b></div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg w"><b>写 approval (PENDING)</b>：绑定 operationId + argsHash + targetResource + expiresAt<span class="c">参数摘要统一走 ArgsNormalizer.hash，与 CAP 同源</span></div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg w">查不到 APPROVED → <b>Park</b>：Run → WAITING_APPROVAL，写检查点，释放租约</div></div>
+    <div class="row"><div class="who">系统</div><div class="msg">发 <code>outbox_event</code> 通知审批台有新的待办</div></div>
+    <div class="row"><div class="who">人</div><div class="msg g">GET /api/approvals?state=PENDING → 看摘要 → POST decision</div></div>
+    <div class="row"><div class="who">系统</div><div class="msg g">决定写入后发唤醒事件（同事务 outbox）</div></div>
+  </div>
+</div>
+<p><b>关键约束：</b>暂停<b>不得</b>留下预算预留与已消费审批。顺序必须是「先登记 → 再问审批 → 通过后才预留预算」，
+与现有 <span class="path">CapExecutionFlow</span> 的「审批 → 预算」相对顺序一致；预算预留绝不能发生在 park 之前，
+否则待办被拒时会留下一笔悬挂预留，只能等对账释放。</p>
+
+<h3>时序 C · 恢复：从暂停点重入，不再问模型</h3>
+<div class="diagram">
+  <div class="seq">
+    <div class="row"><div class="who">唤醒</div><div class="msg a">claim：WAITING_APPROVAL → RUNNING（新 fencing token）</div></div>
+    <div class="row"><div class="who">恢复器</div><div class="msg">读检查点：取出本批 tool calls（<b>原样 callId 与参数</b>）</div></div>
+    <div class="row"><div class="who">恢复器</div><div class="msg">直接进入闸门（<b>不调用模型</b>）</div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg g">register 命中同一行（PENDING）→ 继续，不重复副作用</div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg g">consume 命中 APPROVED → PENDING → IN_FLIGHT → 执行</div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg">执行结果回灌 → 回到主循环继续下一轮</div></div>
+    <div class="row"><div class="who">闸门</div><div class="msg r">若为 REJECTED / EXPIRED：不执行，把「被拒绝」作为工具结果回灌</div></div>
+  </div>
+</div>
+<div class="callout warn">
+  <span class="t">被拒绝之后怎么走，需要一个明确口径</span>
+  <p>建议：把拒绝当作<b>一次失败的调用</b>回灌给模型（模型通常能换参数或改方案），
+  而不是直接判 Run 失败——后者会让一次参数不合规的人工拒绝变成整单作废。
+  但必须在 Run 上记录 <code>approval_denied</code> 计数，超过阈值（建议 3）即终止，防止「反复申请审批」刷屏。</p>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">06</span>数据模型变更</h2>
+
+<table>
+  <thead><tr><th style="width:180px">对象</th><th>变更</th><th style="width:120px">可回滚</th><th style="width:210px">风险</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>approval</code></td>
+      <td><code>CREATE UNIQUE INDEX approval_operation_uniq ON approval (tenant_id, operation_id);</code>
+        —— 把「一行 = 一次调用」变成硬约束，同时消除 <code>lockApproval</code> 的择行不确定。</td>
+      <td><span class="tag green">是</span></td>
+      <td>建索引前需检查重复（当前生产 <code>grant</code> 零调用，实际为空）</td>
+    </tr>
+    <tr>
+      <td><code>approval</code></td>
+      <td>无需改列：<code>approver_id</code>/<code>decided_at</code> 本就 nullable，
+        <code>approval_decided_consistent</code> 已允许 <code>PENDING</code> 时为空。<b>只是没有代码去写它。</b></td>
+      <td><span class="tag gray">无变更</span></td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><code>run_state</code> 枚举</td>
+      <td><code>ALTER TYPE run_state ADD VALUE 'WAITING_APPROVAL';</code> 并重建
+        <code>run_completed_at_consistent</code> 使新状态在完成时为 <code>completed_at IS NULL</code>。</td>
+      <td><span class="tag red">否</span></td>
+      <td>PG 枚举值不可删除；<code>run_step.state</code> 共用该类型，会自动获得新值</td>
+    </tr>
+    <tr>
+      <td><code>run_step</code></td>
+      <td>无需改表：复用 <code>input_payload</code> 存检查点，用 <code>step_type='TOOL_BATCH_PENDING'</code>
+        + <code>completed_at IS NULL</code> 标记待恢复点。</td>
+      <td><span class="tag gray">无变更</span></td>
+      <td>需保证同一 Run 至多一个未完成检查点（否则恢复点歧义）→ 应用层唯一性断言</td>
+    </tr>
+    <tr>
+      <td><code>tool_operation</code></td>
+      <td>无需改表：<code>state</code> 已有 <code>PENDING</code>，<code>step_id</code> 已存在可用于关联检查点。</td>
+      <td><span class="tag gray">无变更</span></td>
+      <td>需补索引：<code>(tenant_id, run_id, state)</code> 便于按 Run 找待决操作</td>
+    </tr>
+    <tr>
+      <td>（M3）<code>cap_approval</code></td>
+      <td>降级为只读审计视图；CAP 改读 <code>approval</code>。本期<b>不动</b>，只预留接口形状。</td>
+      <td><span class="tag amber">延后</span></td>
+      <td>依赖 P5 发布指针读</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="t">⚠️ 枚举变更是不可逆动作</span>
+  <p><code>ALTER TYPE … ADD VALUE</code> 一旦执行就无法回退（PG 不支持删除枚举值）。
+  因此这条必须在<b>代码已能处理旧值语义</b>之后单独执行，并与 <code>SchemaDriftIT</code> 的快照同步更新——
+  否则漂移门禁会在 CI 里直接报红。</p>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">07</span>代码改动清单</h2>
+
+<table>
+  <thead><tr><th style="width:290px">文件</th><th>改什么</th><th style="width:64px">规模</th></tr></thead>
+  <tbody>
+    <tr><td class="path">agent-worker/…/ToolInvocationGate.java</td>
+        <td>① 把 <code>ledger.register</code> 前端到 Schema/授权之后、任何判定之前；② 拆开 <code>case IN_FLIGHT, PENDING</code>；
+            ③ 审批段改为「先查有效审批 → 无则写请求 + 返回 PARK 信号」；④ 删除 <code>verdictFor</code> 放行语义。</td>
+        <td class="num">大</td></tr>
+    <tr><td class="path">agent-worker/…/RunExecutionLoop.java</td>
+        <td>① 识别闸门返回的 <code>PARKED</code> 结果；② 写检查点后正常返回（不 commitResult）；③ 启动时优先读检查点，
+            有则跳过模型直接重入闸门。</td>
+        <td class="num">中</td></tr>
+    <tr><td class="path">agent-ports/…/RunToolLedgerPort.java</td>
+        <td><code>Registration</code> 增加 <code>pending</code> 语义说明；新增 <code>promote(tenantId, operationId, fencingToken)</code>
+            实现 <code>PENDING → IN_FLIGHT</code>。</td>
+        <td class="num">小</td></tr>
+    <tr><td class="path">agent-infrastructure/…/JdbcToolOperationLedger.java</td>
+        <td>INSERT 改为 <code>ON CONFLICT (tenant_id, idempotency_key) DO UPDATE … RETURNING</code>，
+            状态写 <code>PENDING</code>；新增 <code>promote</code> 的状态机校验。</td>
+        <td class="num">中</td></tr>
+    <tr><td class="path">agent-ports/…/ApprovalPort.java</td>
+        <td>新增 <code>request(tenantId, operationId, argDigest, targetResource, requirement, scope, expiresAt)</code>
+            → 写 <code>PENDING</code> 行；<code>grant</code> 改为「把既有 PENDING 推进为 APPROVED」（不存在则拒绝，
+            杜绝「凭空造出已批准」）。</td>
+        <td class="num">中</td></tr>
+    <tr><td class="path">agent-infrastructure/…/JdbcApprovalRepository.java</td>
+        <td>实现 <code>request</code>；<code>grant</code> 改 UPDATE + 行数断言；<code>lockApproval</code> 加确定性排序（即便有唯一索引也保留防御）。</td>
+        <td class="num">中</td></tr>
+    <tr><td class="path">agent-core/…/RunState.java</td>
+        <td>新增 <code>WAITING_APPROVAL</code>，迁移表：<code>RUNNING ⇄ WAITING_APPROVAL</code>、
+            <code>WAITING_APPROVAL → CANCELLED / TIMED_OUT / FAILED</code>。</td>
+        <td class="num">小</td></tr>
+    <tr><td class="path">platform-bootstrap/…/RunRecoverySweeper.java</td>
+        <td>⚠️ 必须显式排除 <code>WAITING_APPROVAL</code>：它不是「租约过期的 RUNNING」，而是「正在等人」。
+            新增「待办已终态但 Run 仍挂着」的兜底唤醒（防止决定写入后唤醒事件丢失）。</td>
+        <td class="num">中</td></tr>
+    <tr><td class="path">platform-bootstrap/…/WorkerExecutionConfig.java</td>
+        <td><code>approvalSource()</code> 返回值改为「策略判定器」而非「放行器」；
+            <code>ApprovalReadinessGuard</code> 判据同步（不再以「live-source-enabled」为放行前提）。</td>
+        <td class="num">小</td></tr>
+    <tr><td class="path">agent-api/…/ApprovalController.java</td>
+        <td>列表增加「关联 Run / 工具 / 参数摘要前缀」；<code>decision</code> 成功后触发唤醒（同事务 outbox）。</td>
+        <td class="num">小</td></tr>
+  </tbody>
+</table>
+
+<h3>必须同时修的三处既有缺陷（否则方案落地即失效）</h3>
+<table>
+  <thead><tr><th style="width:230px">缺陷</th><th>为什么方案会踩到它</th><th style="width:200px">修法</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>PENDING 被当成「结果未知」</b><br><span class="path">ToolInvocationGate#1155</span></td>
+      <td>park 恢复后 operation 处于 <code>PENDING</code>，现有分支会 <code>recordUnknown</code> 并 <code>return</code>，
+          于是恢复即转人工对账，工具永不执行。</td>
+      <td><code>PENDING</code> → 继续；<code>IN_FLIGHT</code> → unknown</td>
+    </tr>
+    <tr>
+      <td><b>审批择行无定义顺序</b><br><span class="path">JdbcApprovalRepository#323-328</span></td>
+      <td>一旦出现「PENDING 请求 + APPROVED 决定」两行，<code>SELECT … FOR UPDATE</code> 取到哪行不确定；
+          取到 PENDING 即 <code>NOT_APPROVED</code> —— 人批了也不生效。</td>
+      <td>加唯一索引 + 显式排序（双保险）</td>
+    </tr>
+    <tr>
+      <td><b>参数摘要两套口径</b><br><span class="path">Gate#1198</span> vs <span class="path">CapExecutionFlow</span></td>
+      <td>闸门用 <code>String.valueOf(call.arguments())</code>，CAP 用 <code>ArgsNormalizer.hash</code>。
+          前者依赖 Map 迭代顺序、且会把<b>参数原文</b>展示在审批台上（学生信息泄漏面）。</td>
+      <td>统一 <code>ArgsNormalizer.hash</code>，审批台只显示前 12 位</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">08</span>不变量与测试矩阵</h2>
+
+<p>每条不变量都必须能被一个<b>会失败</b>的测试反证。写不出反证测试的，不算不变量，只算愿望。</p>
+
+<table>
+  <thead><tr><th style="width:44px">#</th><th>不变量</th><th style="width:340px">反证测试</th></tr></thead>
+  <tbody>
+    <tr><td class="num">I1</td><td>没有 APPROVED 行，副作用绝不发生</td>
+        <td>构造需审批工具 + 无审批行 → 断言 handler <b>调用次数为 0</b>，operation 停在 PENDING</td></tr>
+    <tr><td class="num">I2</td><td>approval 与 operation 一一对应</td>
+        <td>同一 operation 二次 <code>request</code> → 断言抛约束冲突，不产生第二行</td></tr>
+    <tr><td class="num">I3</td><td>park 不预留预算</td>
+        <td>park 后断言 <code>budget_reservation</code> 无该 operation 的行</td></tr>
+    <tr><td class="num">I4</td><td>恢复不重跑已完成步骤</td>
+        <td>三工具批次中第一个已 SUCCEEDED、第二个待批 → 恢复后断言第一个 handler <b>不再被调用</b></td></tr>
+    <tr><td class="num">I5</td><td>恢复不重新问模型</td>
+        <td>注入计数模型端口 → 恢复路径断言 model 调用次数为 0</td></tr>
+    <tr><td class="num">I6</td><td>决定幂等</td>
+        <td>对同一 approval 连续两次 APPROVE → 第二次 409，且状态仍为 APPROVED、不重复留审计</td></tr>
+    <tr><td class="num">I7</td><td>过期不可批准、但可拒绝</td>
+        <td>过期行 + APPROVE → 409；同级另测 + DENY → 成功（推入终态）</td></tr>
+    <tr><td class="num">I8</td><td>参数篡改必被拒</td>
+        <td>批准后改动参数一个字段 → 断言 <code>ARGUMENT_MISMATCH</code></td></tr>
+    <tr><td class="num">I9</td><td>sweeper 不接管等人中的 Run</td>
+        <td>构造 <code>WAITING_APPROVAL</code> + 租约为空 → 断言 <code>claimTasks</code> 未返回它</td></tr>
+    <tr><td class="num">I10</td><td>拒绝不会无限循环</td>
+        <td>连续 3 次拒绝 → 断言 Run 以 <code>APPROVAL_DENIED</code> 终止</td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">09</span>分期与灰度</h2>
+
+<table>
+  <thead><tr><th style="width:70px">阶段</th><th style="width:300px">范围</th><th>行为变化</th><th style="width:150px">开关</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>M1</b><br><span class="tag blue">身份</span></td>
+      <td>登记前移 + PENDING 语义 + <code>ON CONFLICT</code> 幂等 + 拆开 <code>PENDING/IN_FLIGHT</code></td>
+      <td><span class="tag green">零</span> 对外行为完全不变，只是记录的时点与状态更准确</td>
+      <td>无需开关（内部重构）</td>
+    </tr>
+    <tr>
+      <td><b>M2</b><br><span class="tag amber">审批</span></td>
+      <td>审批请求行 + 唯一索引 + park/resume + sweeper 排除 + 决定唤醒</td>
+      <td>需审批工具从「恒拒」变为「待办 → 人批 → 执行」；<b>默认仍按 <code>SYNC</code> 模式恒拒</b>，灰度后再切 <code>PARK</code></td>
+      <td><code>agent.approval.mode = SYNC | PARK</code>（默认 SYNC）</td>
+    </tr>
+    <tr>
+      <td><b>M3</b><br><span class="tag gray">CAP</span></td>
+      <td>CAP 改读同一张审批表 + <code>cap_approval</code> 只读化</td>
+      <td>开启 CAP 后副作用工具不再全灭；此时才具备把 <code>config.flag.cap-authorization-enforced</code> 置 true 的条件（P5 仍需先行）</td>
+      <td><code>config.flag.cap-authorization-enforced</code>（默认仍 false）</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout ok">
+  <span class="t">建议的验收顺序</span>
+  <p>M1 全绿后再动 M2；M2 必须以 <code>SYNC</code> 模式上线并跑满一个观察周期，确认「每次 park 都能被唤醒」之后才切 <code>PARK</code>。
+  否则一旦唤醒链路有洞，表现会是「Run 静默卡死」——比现在的恒拒更难排查。</p>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">10</span>风险与未决</h2>
+
+<table>
+  <thead><tr><th style="width:44px">#</th><th style="width:220px">风险</th><th>说明与缓解</th></tr></thead>
+  <tbody>
+    <tr><td class="num">R1</td><td>Run 静默卡死</td>
+        <td>决定写入后唤醒事件丢失 → Run 永远停在 <code>WAITING_APPROVAL</code>。
+            缓解：sweeper 增加「待办已终态但 Run 未推进」的兜底扫描；并对 <code>WAITING_APPROVAL</code> 设置整体超时（超时即 <code>TIMED_OUT</code>）。</td></tr>
+    <tr><td class="num">R2</td><td>恢复点歧义</td>
+        <td>同一 Run 出现两个未完成检查点 → 不知从哪恢复。缓解：应用层断言 + 部分唯一索引
+            <code>(tenant_id, run_id) WHERE step_type='TOOL_BATCH_PENDING' AND completed_at IS NULL</code>。</td></tr>
+    <tr><td class="num">R3</td><td>fencing token 漂移</td>
+        <td>park 后重新 claim 会拿到新 token，旧 token 的账本写入会被拒。缓解：恢复时统一使用新 token 写账本，
+            并在 <code>promote</code> 时校验 token 一致。</td></tr>
+    <tr><td class="num">R4</td><td>审批台暴露参数</td>
+        <td>现有 <code>argumentDigest</code> 实际是参数原文。M2 起统一为哈希；但<b>存量行</b>仍是原文 → 需要一次数据清理或标记遗留。</td></tr>
+    <tr><td class="num">R5</td><td>枚举不可回滚</td>
+        <td><code>WAITING_APPROVAL</code> 一旦加入无法移除。缓解：先在 dev/staging 验证 sweeper/API/前端三处都能处理该状态，
+            再进生产；前端需先支持展示该状态（否则 Run 列表会显示未知状态）。</td></tr>
+    <tr><td class="num">R6</td><td>与 CAP 的双轨期</td>
+        <td>M2 完成而 M3 未完成时，CAP 链路仍是旧审批语义。缓解：<code>PARK</code> 模式仅在 CAP 关闭时生效，
+            两者同时开启时启动期 fail-closed 拒绝（守卫里加一条组合校验）。</td></tr>
+  </tbody>
+</table>
+
+<h3>仍未解决的遗留问题</h3>
+<ul>
+  <li><b>G3</b>（审计删除凭据隔离 <code>04_retention_role.sql</code> 未落库）与本方案<b>无依赖</b>，可独立执行；</li>
+  <li><b>G5</b>（moderation 为黑名单级）不受影响，对外口径仍需明确；</li>
+  <li><b>G9</b>（<code>PlatformOpsSessionGuard</code> 零测试）可顺手补，不属本方案范围；</li>
+  <li><b>P5 发布指针读</b>是 M3 的硬前提，本方案不解；开启 CAP 前必须完成。</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2><span class="num">11</span>需要你拍板的三件事</h2>
+
+<div class="callout">
+  <span class="t">决策 1 · 挂起模型选哪个</span>
+  <p><b>建议：检查点挂起（D3）。</b>备选是「原地阻塞等待（租约续期 + 线程等待）」，优点是零 schema 变更、当天可上线，
+  缺点是占线程、审批超时即失败、无法跨小时。如果你的场景是「运维在旁边看着点批准」，原地等待其实够用且风险最低；
+  如果是「审批人几小时后才看」，必须走检查点。</p>
+</div>
+
+<div class="callout">
+  <span class="t">决策 2 · 被拒绝之后 Run 怎么办</span>
+  <p><b>建议：把拒绝当失败调用回灌模型，3 次后终止 Run。</b>备选是「直接判 Run 失败」——更简单、更保守，但一次参数不合规的人工拒绝会让整单作废。</p>
+</div>
+
+<div class="callout">
+  <span class="t">决策 3 · 实施节奏</span>
+  <p><b>建议：先只做 M1。</b>M1 零行为变化、可独立验收、且能顺手修掉「PENDING 被当 unknown」「择行不确定」「摘要两套口径」三个既有缺陷。
+  M2 是否现在开工，取决于你对「副作用工具本期是否必须可用」的判断——如果 <code>record_weakness</code> 之外的写外部工具还没上线，M2 可以等。</p>
+</div>
+
+<div class="footnote">
+  <p><b>证据来源</b>：源码实读（<code>ToolInvocationGate</code> / <code>CapExecutionFlow</code> / <code>ApprovalStateMachine</code> /
+  <code>JdbcApprovalRepository</code> / <code>JdbcToolOperationLedger</code> / <code>ApprovalController</code> / 平台 DDL）·
+  全仓 <code>INSERT INTO approval</code> 与 <code>grant</code> 调用方穷举 · 既有 1834 例测试基线。</p>
+  <p>生成时间 2026-10-31 · 本文档为设计方案，不含已实施改动；所有 DDL 与枚举变更均需单独授权后执行。</p>
+</div>
+
+</div>
+</body>
+</html>

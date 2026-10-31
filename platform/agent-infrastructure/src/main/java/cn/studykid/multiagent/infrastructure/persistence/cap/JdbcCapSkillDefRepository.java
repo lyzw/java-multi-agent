@@ -38,7 +38,7 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static final String COLUMNS = """
-            id, version, name, description, purpose, usage::text, declared_tools::text, declared_mcp::text,
+            id, version, name, description, purpose, usage::text, content::text, declared_tools::text, declared_mcp::text,
             risk_ceiling, param_policies::text, required_caps::text, config_fingerprint,
             schema_version, created_at, published_at
             """;
@@ -53,18 +53,18 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
      */
     private static final String SQL_INSERT = """
             INSERT INTO cap_skill_def
-                (id, version, name, description, purpose, usage, declared_tools, declared_mcp,
+                (id, version, name, description, purpose, usage, content, declared_tools, declared_mcp,
                  risk_ceiling, param_policies, required_caps, namespace,
                  config_fingerprint, schema_version, created_at, updated_at, published_at)
-            VALUES (?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?, ?::jsonb, ?::jsonb, 'platform',
+            VALUES (?, ?, ?, ?, ?, ?::jsonb, ?::text, ?::jsonb, ?::jsonb, ?, ?::jsonb, ?::jsonb, 'platform',
                     ?, ?, ?, ?, ?)
             ON CONFLICT (id, version) DO NOTHING
             """;
-    // ⚠️ 参数位次（两位描述改造）：
+    // ⚠️ 参数位次（三级描述改造）：
     //    1 id / 2 version / 3 name / 4 description(遗留单级描述列，新入库一律 NULL)
-    //    / 5 purpose / 6 usage · jsonb / 7 declared_tools · jsonb / 8 declared_mcp · jsonb
-    //    / 9 risk_ceiling / 10 param_policies · jsonb / 11 required_caps · jsonb
-    //    / 12 config_fingerprint / 13 schema_version / 14 created_at / 15 updated_at / 16 published_at
+    //    / 5 purpose / 6 usage · jsonb / 7 content · text / 8 declared_tools · jsonb / 9 declared_mcp · jsonb
+    //    / 10 risk_ceiling / 11 param_policies · jsonb / 12 required_caps · jsonb
+    //    / 13 config_fingerprint / 14 schema_version / 15 created_at / 16 updated_at / 17 published_at
 
     private static final String SQL_FIND_LATEST_PUBLISHED = "SELECT " + COLUMNS
             + " FROM cap_skill_def WHERE id = ? AND published_at IS NOT NULL"
@@ -98,23 +98,30 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
                         if (def.description() == null) {
                             ps.setNull(5, java.sql.Types.VARCHAR);
                             ps.setNull(6, java.sql.Types.LONGVARCHAR);
+                            ps.setNull(7, java.sql.Types.VARCHAR);
                         } else {
                             ps.setString(5, def.description().purpose());
                             ps.setString(6, toJson(def.description().usage()));
+                            ps.setString(7, def.description().content());
                         }
-                        ps.setString(7, toJson(def.declaredTools()));
-                        ps.setString(8, toJsonMcpDeclarations(def.declaredMcp()));
-                        ps.setString(9, def.riskCeiling().name());
-                        ps.setString(10, def.paramPolicies());
-                        ps.setString(11, toJson(def.requiredCaps()));
-                        ps.setString(12, def.configFingerprint());
-                        ps.setInt(13, def.schemaVersion());
-                        ps.setTimestamp(14, Timestamp.from(def.createdAt()));
+                        // ⚠️ 位次（三级描述改造）：content 插在第 7 位，
+                        //    其后 declared_tools 及以后**全部 +1**。
+                        //    ⚠️ 漏掉 +1 会把 content 覆盖掉、并让后续列整体错位
+                        //       （schema_version 写进 published_at…）——
+                        //       这类错误不会报错，只会静默写坏数据。
+                        ps.setString(8, toJson(def.declaredTools()));
+                        ps.setString(9, toJsonMcpDeclarations(def.declaredMcp()));
+                        ps.setString(10, def.riskCeiling().name());
+                        ps.setString(11, def.paramPolicies());
+                        ps.setString(12, toJson(def.requiredCaps()));
+                        ps.setString(13, def.configFingerprint());
+                        ps.setInt(14, def.schemaVersion());
                         ps.setTimestamp(15, Timestamp.from(def.createdAt()));
+                        ps.setTimestamp(16, Timestamp.from(def.createdAt()));
                         if (def.publishedAt() == null) {
-                            ps.setNull(16, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                            ps.setNull(17, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
                         } else {
-                            ps.setTimestamp(16, Timestamp.from(def.publishedAt()));
+                            ps.setTimestamp(17, Timestamp.from(def.publishedAt()));
                         }
                         return ps.executeUpdate() > 0;
                     }
@@ -170,7 +177,7 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
                 rs.getString("id"),
                 rs.getInt("version"),
                 rs.getString("name"),
-                readDescription(rs.getString("purpose"), rs.getString("usage")),
+                readDescription(rs.getString("purpose"), rs.getString("usage"), rs.getString("content")),
                 readStringList(rs.getString("declared_tools")),
                 readMcpDeclarations(rs.getString("declared_mcp")),
                 CapabilityRiskLevel.parse(rs.getString("risk_ceiling")),
@@ -183,14 +190,14 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
     }
 
     /**
-     * 组装两级描述。
+     * 组装三级描述。
      *
-     * <p>⚠️ 存量行只有遗留单级 {@code description}、两级列为 NULL，
+     * <p>⚠️ 存量行只有遗留单级 {@code description}、三级列为 NULL，
      * 此时描述视为缺省（<b>不得</b>把遗留 description 充当 purpose ——
      * 选型信号与执行指引是新的行为内容，混装旧文本会误导模型）。
      */
     private static @Nullable SkillDescription readDescription(
-            @Nullable String purpose, @Nullable String usageJson) {
+            @Nullable String purpose, @Nullable String usageJson, @Nullable String content) {
         if (purpose == null || purpose.isBlank()) {
             return null;
         }
@@ -209,7 +216,8 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
                 throw new IllegalStateException("解析 usage 失败: " + usageJson, e);
             }
         }
-        return new SkillDescription(purpose, usage);
+        String contentText = (content == null || content.isBlank()) ? "" : content;
+        return new SkillDescription(purpose, usage, contentText);
     }
 
     private static @NonNull List<String> readStringList(@Nullable String json) {

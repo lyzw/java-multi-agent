@@ -65,8 +65,18 @@ class PlatformAuditTicketScopeIT {
     static void setUp() {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
-        cfg.setUsername(System.getenv().getOrDefault("IT_PG_USER", "app_agent"));
-        String pwd = System.getenv("IT_PG_PASSWORD");
+        // ⚠️⚠️ **必须用平台运维凭据**（IT_PG_ADMIN_*），不能用应用凭据（IT_PG_USER）：
+        //    本类操作的是 `platform.platform_audit_event` —— **平台域**对象，
+        //    按设计「平台级对象走带外运维通道」，应用角色（app_agent）对
+        //    platform schema **刻意没有** USAGE（见 09_platform_schema_grants.sql 的说明）。
+        //    用应用账号连接会得到与业务无关的
+        //    `permission denied for schema platform`（平台审计通道其实是断的）。
+        String adminUser = System.getenv("IT_PG_ADMIN_USER");
+        String appUser = System.getenv().getOrDefault("IT_PG_USER", "app_agent");
+        cfg.setUsername(adminUser == null || adminUser.isBlank() ? appUser : adminUser);
+        String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
+        String pwd = adminPwd == null || adminPwd.isBlank()
+                ? System.getenv("IT_PG_PASSWORD") : adminPwd;
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }

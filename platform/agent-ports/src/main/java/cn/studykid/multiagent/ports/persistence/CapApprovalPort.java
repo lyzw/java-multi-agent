@@ -127,7 +127,16 @@ public interface CapApprovalPort {
         /** 已过期。 */
         EXPIRED,
         /** 已取消。 */
-        CANCELLED
+        CANCELLED,
+        /**
+         * ⚠️ 该审批处于「待人工决策」（M3 / G1）—— <b>尚未有人批准</b>。
+         *
+         * <p>⚠️ 与 {@link #NOT_FOUND} <b>不可混用</b>：
+         * NOT_FOUND = 「压根没有审批」；本值 = 「有审批，但人在批」。
+         * 混为一谈会让调用方把「等一等就能过」当成「永远过不了」，
+         * 或反过来把「不可执行」当成「可以重试」。
+         */
+        AWAITING_HUMAN_DECISION
     }
 
     /**
@@ -159,6 +168,52 @@ public interface CapApprovalPort {
             @NonNull String closureFingerprint,
             long authzVersion,
             @NonNull String approverId,
+            @NonNull String approverScope,
+            @NonNull Instant expiresAt) {
+    }
+
+    /**
+     * 登记一条「待人工决策」的审批（M3 / G1 · 运行时 HITL）。
+     *
+     * <p>⚠️ <b>与 {@link #grant} 的语义区别</b>：
+     * <ul>
+     *   <li>{@code grant} = 写入一条<b>已批准</b>的授权（PENDING 态 = 可直接消耗）；</li>
+     *   <li>{@code requestHumanApproval} = 写入一条<b>尚未有人决定</b>的待办
+     *       （AWAITING_HUMAN 态 = <b>不可被消耗</b>）。</li>
+     * </ul>
+     * 混淆两者 = 「人还没批，工具就执行了」（Sev-0）。
+     *
+     * <p>⚠️ <b>默认实现直接拒绝</b>（fail-closed）：未实现本方法的端口
+     * 不会把「运行时登记待办」悄悄降级为「不登记」——
+     * 后者会让调用方以为待办已登记、人在审批台却看不到任何东西。
+     *
+     * @param request 待人工决策的审批登记信息
+     * @return 新建的审批 id
+     */
+    default @NonNull String requestHumanApproval(@NonNull CapApprovalRequest request) {
+        throw new UnsupportedOperationException(
+                "该 CapApprovalPort 实现不支持运行时登记待人工审批（fail-closed）");
+    }
+
+    /**
+     * 待人工决策的审批登记信息（M3 / G1）。
+     *
+     * <p>⚠️ 与 {@link CapApprovalGrant} 的差别：<b>没有审批人</b>（人还没批），
+     * 故 {@code approverId} 允许为空；{@code decidedAt} 同理。
+     *
+     * @param scopeDefinition 范围定义全文（JSON）——与授予侧同一份规范化文本
+     * @param effectiveArgsHash 有效参数摘要（与范围绑定一致）
+     */
+    record CapApprovalRequest(
+            @NonNull String tenantId,
+            @NonNull String principalId,
+            @NonNull String toolId,
+            @NonNull String targetResource,
+            @NonNull String approvalScopeHash,
+            @NonNull String scopeDefinition,
+            @NonNull String effectiveArgsHash,
+            @NonNull String closureFingerprint,
+            long authzVersion,
             @NonNull String approverScope,
             @NonNull Instant expiresAt) {
     }

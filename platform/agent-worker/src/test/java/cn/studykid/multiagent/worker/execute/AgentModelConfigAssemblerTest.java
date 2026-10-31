@@ -297,8 +297,8 @@ class AgentModelConfigAssemblerTest {
     }
 
     @Test
-    @DisplayName("✅ 两级描述落地：1级 purpose 进工具 description，2级 usage 进系统提示")
-    void twoLevelDescriptionFlowsIntoToolsAndPrompt() {
+    @DisplayName("✅ 三级描述落地：1级 purpose 进工具 description，2级 usage + 3级 content 进系统提示")
+    void threeLevelDescriptionFlowsIntoToolsAndPrompt() {
         ScriptedAgentQuery query = new ScriptedAgentQuery();
         query.definition = """
                 {"modelRef":"model-1","systemPrompt":"你是辅导助手"}
@@ -311,7 +311,8 @@ class AgentModelConfigAssemblerTest {
                 new cn.studykid.multiagent.core.cap.SkillDescription("只读查询学生画像",
                         List.of(new cn.studykid.multiagent.core.cap.SkillDescription.SkillUsage(
                                 "用户提供了学生标识",
-                                "调用 tool-a；id 取自用户原文，不得凭上下文补全")))));
+                                "调用 tool-a；id 取自用户原文，不得凭上下文补全")),
+                        "适用于学生查询场景，参数必须来自对话中用户明确给出的标识，不得从历史上下文推测。")));
         closure.tools = List.of(new EffectiveClosure.ToolBinding(
                 "tool-a", 1, cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
                 cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
@@ -327,17 +328,19 @@ class AgentModelConfigAssemblerTest {
         assertThat(toolSchema.get("description"))
                 .as("1级 purpose = 工具的模型可见选型信号（不再只给工具名）")
                 .isEqualTo("只读查询学生画像");
-        // 2级：Skill 被命中后指令注入系统提示（when → how）
+        // 2级 + 3级：Skill 被命中后指令注入系统提示（when → how + content）
         String prompt = settings.get().systemPrompt();
         assertThat(prompt)
                 .startsWith("你是辅导助手")
                 .contains("技能使用指引")
                 .contains("当 用户提供了学生标识")
-                .contains("调用 tool-a；id 取自用户原文，不得凭上下文补全");    }
+                .contains("调用 tool-a；id 取自用户原文，不得凭上下文补全")
+                .contains("详细描述：适用于学生查询场景，参数必须来自对话中用户明确给出的标识");
+    }
 
     @Test
-    @DisplayName("✅ 没有 2级 usage 的 Skill → 提示词一字不改（向后兼容存量行）")
-    void skillsWithoutUsageLeavePromptUntouched() {
+    @DisplayName("✅ 没有 2/3 级内容的 Skill → 提示词一字不改（向后兼容存量行）")
+    void skillsWithoutUsageAndContentLeavePromptUntouched() {
         ScriptedAgentQuery query = new ScriptedAgentQuery();
         query.definition = """
                 {"modelRef":"model-1","systemPrompt":"你是辅导助手"}
@@ -348,7 +351,7 @@ class AgentModelConfigAssemblerTest {
                 cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
                 "fp-skill-a", List.of("tool-a"), "[]",
                 new cn.studykid.multiagent.core.cap.SkillDescription(
-                        "只读查询学生画像", List.of())));
+                        "只读查询学生画像", List.of(), "")));
         closure.tools = List.of(new EffectiveClosure.ToolBinding(
                 "tool-a", 1, cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
                 cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,

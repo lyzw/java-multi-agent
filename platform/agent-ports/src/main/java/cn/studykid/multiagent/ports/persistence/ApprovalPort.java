@@ -47,6 +47,41 @@ public interface ApprovalPort {
                           @NonNull String approverId);
 
     /**
+     * 登记一条<b>待人工审批</b>的请求（P0-2 · 审批行的生产写入方）。
+     *
+     * <p>⚠️ <b>为什么必须有它</b>：{@link #grant} 是唯一写 {@code approval} 表的入口，
+     * 而它<b>只被审批权威（人/台）调用</b> —— 生产代码零调用。
+     * 于是 {@code approval} 表永远是空的，审批台永远查不到待办，
+     * 而需要审批的工具恒被拒（fail-closed）。
+     * 「装好了门把手但通向墙壁的门」就是这么来的。
+     *
+     * <p>⚠️ <b>本方法只登记待办，不放行任何调用</b>：
+     * 登记完成后调用方仍须 <b>fail-closed 拒绝</b>本次工具执行。
+     * 审批通过与否由 {@link #consume} 判定 —— 登记与放行是<b>两件事</b>，
+     * 混在一起就等于「登记即放行」。
+     *
+     * <p>⚠️ <b>幂等</b>：同一 operation 只登记一条待决记录（重复登记返回既有 ID），
+     * 否则每次重试都会在审批台堆出重复待办。
+     *
+     * @param operationId    绑定的工具操作（消费时按它查找）
+     * @param argumentDigest 参数摘要（审批后参数被篡改则消费失败）
+     * @param targetResource 目标资源（工具名）
+     * @param requirement    审批要求
+     * @param approverScope  审批人范围
+     * @param expiresAt      有效期
+     * @return 新建（或既有）的审批 ID；未登记时为空
+     */
+    default java.util.Optional<String> request(@NonNull String tenantId,
+                                                @NonNull String operationId,
+                                                @NonNull String argumentDigest,
+                                                @NonNull String targetResource,
+                                                @NonNull ApprovalRequirement requirement,
+                                                @NonNull String approverScope,
+                                                @NonNull Instant expiresAt) {
+        return java.util.Optional.empty();
+    }
+
+    /**
      * 原子消费审批。
      *
      * <p><b>单一事实源</b>：在<b>同一事务</b>内先锁 Run 校验取消、再锁审批校验状态/有效期/绑定，

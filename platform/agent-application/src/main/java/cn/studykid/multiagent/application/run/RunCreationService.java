@@ -78,6 +78,16 @@ public class RunCreationService {
      */
     private final @Nullable CapDualWritePort dualWrite;
 
+    /**
+     * 是否要求每个 Run 必须声明 {@code timeoutMs}（P2-1）。
+     *
+     * <p>⚠️ <b>默认 {@code false} = 允许「不限时」</b>：这是 {@code CreateRunRequest}
+     * 的既定语义，由 {@code CreateRunRequestTimeoutTest} 锁定，
+     * 详见带 {@code requireRunTimeout} 参数的构造器说明。
+     * 本开关让「超限保护是否强制」成为<b>显式</b>的环境决策，而不是编码巧合。
+     */
+    private final boolean requireRunTimeout;
+
     public RunCreationService(@NonNull RunCreationPort runCreation,
                               @NonNull ExecutionSnapshotPort snapshots,
                               @NonNull TransactionRunner tx,
@@ -110,12 +120,43 @@ public class RunCreationService {
                               @NonNull Clock clock,
                               @Nullable BudgetPort budget,
                               @Nullable CapDualWritePort dualWrite) {
+        this(runCreation, snapshots, tx, clock, budget, dualWrite, false);
+    }
+
+    /**
+     * 完整构造器（P2-1）：在 {@link #dualWrite} 之外追加「是否要求 Run 声明超时」的策略开关。
+     *
+     * <p>⚠️⚠️ <b>为什么默认 {@code false} 而不是默认必填</b>：
+     * {@code CreateRunRequest.timeoutMs} 的既有语义是「不传 = 不限时」，
+     * 且这条语义被 {@code CreateRunRequestTimeoutTest} 显式锁定
+     * （「未声明 timeoutMs → 不限时（不假装有上限）」）。
+     * <b>把默认值改成必填，等于在没有产品决策的情况下推翻一条既定契约</b>
+     * ——那不是加固，是把「显式声明」偷换成「静默改变行为」。
+     * 故：保留既有默认，把「不限时」变成<b>可观测 + 可按环境收紧</b>。
+     *
+     * <p>⚠️ <b>{@code requireRunTimeout = true} 时的行为</b>（fail-closed）：
+     * 未声明 {@code timeoutMs} 的创建请求<b>直接拒绝</b>，绝不留「先创建成功、
+     * 再在运行期超时」的中间态 —— Run 已落库再失败，用户侧是「转圈后被判死」，
+     * 而创建期拒绝是明确的 4xx。
+     *
+     * @param budget            预算端口；{@code null} = 未装配
+     * @param dualWrite         双写端口；{@code null} = 未装配
+     * @param requireRunTimeout 是否要求每个 Run 必须声明 {@code timeoutMs}
+     */
+    public RunCreationService(@NonNull RunCreationPort runCreation,
+                              @NonNull ExecutionSnapshotPort snapshots,
+                              @NonNull TransactionRunner tx,
+                              @NonNull Clock clock,
+                              @Nullable BudgetPort budget,
+                              @Nullable CapDualWritePort dualWrite,
+                              boolean requireRunTimeout) {
         this.runCreation = runCreation;
         this.snapshots = snapshots;
         this.tx = tx;
         this.clock = clock;
         this.budget = budget;
         this.dualWrite = dualWrite;
+        this.requireRunTimeout = requireRunTimeout;
         if (budget == null) {
             log.warn("未装配预算端口：Run 级额度与租户额度的一致性校验不生效，"
                     + "「声明了 Run 额度」的创建请求将被拒绝（fail-closed）");
@@ -124,6 +165,8 @@ public class RunCreationService {
             log.warn("未装配迁移双写端口：Run 创建后不会生成 execution_capability_snapshot，"
                     + "依赖该快照的执行准入将一律 fail-closed 拒绝");
         }
+        log.info("Run 超时策略: requireRunTimeout={}（false = 允许「不限时」的 Run）",
+                requireRunTimeout);
     }
 
     /**
@@ -177,6 +220,21 @@ public class RunCreationService {
         //    二者漂移时截止时刻与实际不符。
         Instant deadlineAt = timeoutMs == null ? null
                 : clock.instant().plusMillis(timeoutMs);
+        // ── P2-1：把「不限时」从隐式默认变成显式决策 ──────────────────
+        //    未声明 timeoutMs → deadlineAt == null → 执行循环「跳过超时检查」，
+        //    该 Run 失去任何时间上界（只剩 maxSteps 与租约续期）。
+        //    这个后果此前既不体现在日志里、也不体现在配置里，
+        //    「没有超时」与「超时设得很长」从外部完全无法区分。
+        if (deadlineAt == null) {
+            if (requireRunTimeout) {
+                // fail-closed：创建期就拒绝，不留「跑起来再被打死」的半成品
+                throw new IllegalArgumentException(
+                        "本环境要求 Run 必须声明 timeoutMs（实际收到未声明）："
+                                + "不限时的 Run 失去 FR-024 整树共享超时上界");
+            }
+            log.warn("⚠️ 创建「不限时」的 Run: agentId={}（未声明 timeoutMs，"
+                    + "该 Run 无业务截止时间，只能靠 maxSteps 与租约兜底）", agentId);
+        }
         return createRun(context, agentId, key, inputPayload,
                 new RunLimits(deadlineAt, budgetAmount));
     }

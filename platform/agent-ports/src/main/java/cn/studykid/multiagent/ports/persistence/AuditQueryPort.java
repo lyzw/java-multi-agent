@@ -1,7 +1,9 @@
 package cn.studykid.multiagent.ports.persistence;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -55,7 +57,15 @@ public interface AuditQueryPort {
             @NonNull Map<String, Object> detail
     ) {
         public AuditEntry {
-            detail = detail == null ? Map.of() : Map.copyOf(detail);
+            // ⚠️ detail 的 JSON 可能含 null 值：JdbcAuditQueryRepository.parseDetail
+            // 会**原样保留** null（键存在、值为 null），而 Map.copyOf 拒绝 null 值
+            // 会直接抛 NPE —— 一旦某条审计记录的 detail 含 null 字段，整页查询即 500。
+            // 审计明细是只读展示通道，null 值等价于「未提供」，丢弃空值键最安全。
+            detail = detail == null ? Map.of()
+                    : detail.entrySet().stream()
+                            .filter(e -> e.getValue() != null)
+                            .collect(Collectors.toUnmodifiableMap(
+                                    Map.Entry::getKey, Map.Entry::getValue));
         }
     }
 }

@@ -18,6 +18,8 @@ import org.junit.jupiter.api.Test;
 import cn.studykid.multiagent.core.cap.ExecutionScope;
 import cn.studykid.multiagent.core.orchestration.AgentInvocationStatus;
 import cn.studykid.multiagent.ports.model.ModelGateway;
+import cn.studykid.multiagent.ports.observer.ModelCallObserverChain;
+import cn.studykid.multiagent.ports.observer.ObservableModelGateway;
 import cn.studykid.multiagent.ports.model.ModelMessage;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
@@ -42,6 +44,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 那类测试要么慢，要么不稳定。
  */
 class WorkerChildAgentRunnerTest {
+
+    /**
+     * 无观测者的观测链：测试不需要观测副作用，仅用于满足 WorkerChildAgentRunner
+     * 构造器对 {@link ObservableModelGateway}（ModelGateway 的装饰器）的类型要求。
+     */
+    private static final ModelCallObserverChain NOOP_OBSERVERS =
+            new ModelCallObserverChain(java.util.List.of());
+
+    /** 把 ModelGateway 桩包成 ObservableModelGateway，满足构造器类型要求。 */
+    private static ObservableModelGateway observe(ModelGateway gw) {
+        return new ObservableModelGateway(gw, NOOP_OBSERVERS);
+    }
 
     private static final String TENANT = "t-a";
     private static final String RUN = "run-1";
@@ -235,7 +249,7 @@ class WorkerChildAgentRunnerTest {
         ScriptedGateway gateway = new ScriptedGateway();
         CancellationProbe cancelled = (tenantId, runId) -> true;
 
-        var result = new WorkerChildAgentRunner(gateway, emptyGate(),
+        var result = new WorkerChildAgentRunner(observe(gateway), emptyGate(),
                 configs(Duration.ofSeconds(30)), 4, cancelled, System::nanoTime)
                 .run(request(30_000L));
 
@@ -252,7 +266,7 @@ class WorkerChildAgentRunnerTest {
             throw new IllegalStateException("模拟取消状态读取失败");
         };
 
-        var result = new WorkerChildAgentRunner(gateway, emptyGate(),
+        var result = new WorkerChildAgentRunner(observe(gateway), emptyGate(),
                 configs(Duration.ofSeconds(30)), 4, broken, System::nanoTime)
                 .run(request(30_000L));
 
@@ -271,7 +285,7 @@ class WorkerChildAgentRunnerTest {
             return clock.get();
         };
 
-        var result = new WorkerChildAgentRunner(gateway, emptyGate(),
+        var result = new WorkerChildAgentRunner(observe(gateway), emptyGate(),
                 configs(Duration.ofSeconds(30)), 4, null, jumpingClock)
                 .run(request(1_000L));
 
@@ -288,7 +302,7 @@ class WorkerChildAgentRunnerTest {
         // ⚠️ 每读一次时钟推进 100ms：剩余预算 = 1s - 0.1s = 0.9s
         LongSupplier tickingClock = () -> clock.addAndGet(100_000_000L);
 
-        new WorkerChildAgentRunner(gateway, emptyGate(),
+        new WorkerChildAgentRunner(observe(gateway), emptyGate(),
                 configs(Duration.ofSeconds(60)), 4, null, tickingClock)
                 .run(request(1_000L));
 
@@ -307,7 +321,7 @@ class WorkerChildAgentRunnerTest {
         ScriptedGateway gateway = new ScriptedGateway();
         ChildAgentModelConfigProvider none = (t, a, v) -> Optional.empty();
 
-        var result = new WorkerChildAgentRunner(gateway, emptyGate(), none, 4, null,
+        var result = new WorkerChildAgentRunner(observe(gateway), emptyGate(), none, 4, null,
                 System::nanoTime).run(request(30_000L));
 
         assertThat(result.status()).isEqualTo(AgentInvocationStatus.FAILED);
@@ -327,7 +341,7 @@ class WorkerChildAgentRunnerTest {
         gateway.sequence.add(new ModelResponse("已记录", Map.of(),
                 new ModelResponse.ModelUsage(20, 5), ModelResponse.FinishReason.STOP));
 
-        var result = new WorkerChildAgentRunner(gateway, gateWith(List.of(new StubTool())),
+        var result = new WorkerChildAgentRunner(observe(gateway), gateWith(List.of(new StubTool())),
                 configs(Duration.ofSeconds(30)), 4, null, System::nanoTime)
                 .run(request(30_000L));
 
@@ -361,7 +375,7 @@ class WorkerChildAgentRunnerTest {
         gateway.sequence.add(new ModelResponse("已记录", Map.of(),
                 new ModelResponse.ModelUsage(20, 5), ModelResponse.FinishReason.STOP));
 
-        var result = new WorkerChildAgentRunner(gateway, gateWith(List.of(new BigOutputTool())),
+        var result = new WorkerChildAgentRunner(observe(gateway), gateWith(List.of(new BigOutputTool())),
                 configs(Duration.ofSeconds(30)), 4, null, System::nanoTime)
                 .run(request(30_000L));
 
@@ -389,7 +403,7 @@ class WorkerChildAgentRunnerTest {
 
         // ⚠️ 预算极小：子路径的上下文必然超预算。
         //    若子路径没接裁剪（父子两套语义），这里的断言会红。
-        new WorkerChildAgentRunner(gateway, gateWith(List.of(new BigOutputTool())),
+        new WorkerChildAgentRunner(observe(gateway), gateWith(List.of(new BigOutputTool())),
                 configs(Duration.ofSeconds(30)), 4, null, System::nanoTime,
                 java.time.Clock.systemUTC(), 200)
                 .run(request(30_000L));

@@ -147,9 +147,10 @@ public record EffectiveClosure(
      * @param paramPolicies  该 Skill 的参数策略（JSON 文本）——
      *                       §4.3「Skill 参数策略仅可进一步收紧」，
      *                       求值时与 Tool 策略取交集
-     * @param description    两级描述（{@link SkillDescription}）——
+     * @param description    三级描述（{@link SkillDescription}）——
      *                       1级 purpose 供路由注入（Tool 列表的选型信号），
-     *                       2级 usage 供执行注入（分场景 when→how 指引）。
+     *                       2级 usage 供执行注入（分场景 when→how 指引），
+     *                       3级 content 供大模型判断后续工具调用的完整上下文。
      *                       ⚠️ 可空（存量版本行无结构化描述），
      *                       闭包固化它是为了「描述改了 = 行为变了」随指纹失效
      */

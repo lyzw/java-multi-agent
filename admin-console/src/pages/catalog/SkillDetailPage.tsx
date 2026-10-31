@@ -65,10 +65,11 @@ export function SkillDetailPage(): JSX.Element {
       form.setFieldsValue({
         skillId: s.skillId,
         name: s.name ?? '',
-        // ⚠️ 两级描述按结构回填：1级 purpose 一段；2级 usage 逐条 when→how。
+        // ⚠️ 三级描述按结构回填：1级 purpose 一段；2级 usage 逐条 when→how；3级 content 一段。
         description: {
           purpose: s.description?.purpose ?? '',
           usage: (s.description?.usage ?? []).map((u) => ({ when: u.when, how: u.how })),
+          content: s.description?.content ?? '',
         },
         declaredTools: [...s.declaredTools],
         // ⚠️ 回填时按三态还原：null ≠ []，不能都塞成 []。

@@ -50,6 +50,15 @@ final class BumpingAuthzVersions implements AuthzVersionPort {
     @Override
     public @NonNull Optional<AuthzVersion> find(@NonNull String tenantId,
                                                  @NonNull String principalId) {
+        // ⚠️ P0-3b：生产读路径改为 currentOrInitialize —— 它先 find、缺行才 initialize，
+        //    因此「第几次权威读」的计数必须落在 find 上。
+        //    计数若仍留在 require，读次数永远为 0 → 撤权时序场景退化成「正常放行」，
+        //    而失败现场看起来像「准入没生效」——测到的根本不是被测的那条分支。
+        reads++;
+        if (bumpAfterRead >= 0 && reads > bumpAfterRead) {
+            return Optional.of(new AuthzVersion(tenantId, principalId, bumpedVersion,
+                    Instant.EPOCH));
+        }
         return delegate.find(tenantId, principalId);
     }
 

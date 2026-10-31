@@ -30,6 +30,8 @@ import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
+import cn.studykid.multiagent.application.prompt.PromptGuard;
+import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 
 /**
  * D1 测试：Run 创建端点。
@@ -61,6 +63,24 @@ class RunControllerTest {
 
     /** 当前请求的可信上下文 —— 由 CurrentPrincipal 提供，控制器不再直接接收。 */
     private TenantContext currentContext;
+
+    /**
+     * 放行型限流替身：对应原 4 参构造器的 {@code NEVER_LIMIT} 默认行为。
+     *
+     * <p>⚠️ 原 4/5 参构造器被收口为唯一 6 参构造器（含 PromptGuard），
+     * 测试在此显式补回「默认放行」语义，避免改变既有用例意图。
+     */
+    private static final RateLimitPort ALLOW_LIMIT = new RateLimitPort() {
+        @Override
+        public RateLimitPort.Decision check(String tenantId, String bucketKey) {
+            return RateLimitPort.Decision.ALLOWED;
+        }
+
+        @Override
+        public long currentCount(String tenantId, String bucketKey) {
+            return 0L;
+        }
+    };
 
     @BeforeEach
     void setUp() {
@@ -220,7 +240,7 @@ class RunControllerTest {
             var limiter = new ScriptedRateLimiter(
                     cn.studykid.multiagent.ports.persistence.RateLimitPort.Decision.REJECTED);
             var controller = new RunController(null, allowAll(), retentionGate, principal,
-                    limiter);
+                    limiter, new PromptGuard());
 
             var response = controller.createRun(request());
 
@@ -245,7 +265,7 @@ class RunControllerTest {
             var limiter = new ScriptedRateLimiter(
                     cn.studykid.multiagent.ports.persistence.RateLimitPort.Decision.FAIL_CLOSED);
             var controller = new RunController(null, allowAll(), retentionGate, principal,
-                    limiter);
+                    limiter, new PromptGuard());
 
             var response = controller.createRun(request());
 
@@ -261,7 +281,7 @@ class RunControllerTest {
             var limiter = new ScriptedRateLimiter(
                     cn.studykid.multiagent.ports.persistence.RateLimitPort.Decision.ALLOWED);
             var controller = new RunController(new CountingRunCreationService(useCaseInvoked),
-                    allowAll(), retentionGate, principal, limiter);
+                    allowAll(), retentionGate, principal, limiter, new PromptGuard());
 
             var response = controller.createRun(request());
 
@@ -278,7 +298,7 @@ class RunControllerTest {
             var limiter = new ScriptedRateLimiter(
                     cn.studykid.multiagent.ports.persistence.RateLimitPort.Decision.ALLOWED);
             var controller = new RunController(null, denyAll(), retentionGate, principal,
-                    limiter);
+                    limiter, new PromptGuard());
 
             catchThrowableOfType(() -> controller.createRun(request()),
                     AccessDeniedException.class);
@@ -296,7 +316,7 @@ class RunControllerTest {
         @Test
         @DisplayName("⚠️ 授权拒绝 → 抛 AccessDeniedException")
         void deniedThrowsAccessDenied() {
-            var controller = new RunController(null, denyAll(), retentionGate, principal);
+            var controller = new RunController(null, denyAll(), retentionGate, principal, ALLOW_LIMIT, new PromptGuard());
 
             assertThat(catchThrowableOfType(
                     () -> controller.createRun(
@@ -308,7 +328,7 @@ class RunControllerTest {
         @Test
         @DisplayName("⚠️⚠️ 授权失败时用例绝不被调用")
         void useCaseNotInvokedWhenDenied() {
-            var controller = new RunController(null, denyAll(), retentionGate, principal);
+            var controller = new RunController(null, denyAll(), retentionGate, principal, ALLOW_LIMIT, new PromptGuard());
 
             catchThrowableOfType(
                     () -> controller.createRun(request()),
@@ -325,7 +345,7 @@ class RunControllerTest {
         void authorizedSucceeds() {
             var controller = new RunController(
                     new CountingRunCreationService(useCaseInvoked),
-                    allowAll(), retentionGate, principal);
+                    allowAll(), retentionGate, principal, ALLOW_LIMIT, new PromptGuard());
 
             var resp = controller.createRun(
                     request()).getBody();
@@ -351,7 +371,7 @@ class RunControllerTest {
             };
             var controller = new RunController(
                     new CountingRunCreationService(useCaseInvoked),
-                    recording, retentionGate, principal);
+                    recording, retentionGate, principal, ALLOW_LIMIT, new PromptGuard());
 
             controller.createRun(request());
 
@@ -367,7 +387,7 @@ class RunControllerTest {
         @Test
         @DisplayName("⚠️ 供应商未确认 → 拦截")
         void unconfirmedProviderBlocked() {
-            var controller = new RunController(null, allowAll(), retentionGate, principal);
+            var controller = new RunController(null, allowAll(), retentionGate, principal, ALLOW_LIMIT, new PromptGuard());
 
             var gate = new ZeroRetentionGate(ZeroRetentionRegistry.builder()
                     .pending(ModelProviders.DEEPSEEK)
@@ -400,6 +420,54 @@ class RunControllerTest {
     }
 
     @Nested
+    @DisplayName("⚠️ P0-3 分级由内容/声明推导（禁止硬编码 SYNTHETIC 绕过闸门）")
+    class ContentDerivedClassification {
+
+        @Test
+        @DisplayName("⚠️ 调用方声明 REAL_STUDENT（内容无识别信息）→ 走真实数据分支，未确认供应商拦截")
+        void declaredRealStudentWithoutIdentifyingContentBlocked() {
+            // 供应商未确认（pending），真实数据必须被拒
+            var gate = new ZeroRetentionGate(ZeroRetentionRegistry.builder()
+                    .pending(ModelProviders.DEEPSEEK)
+                    .build(), CLOCK);
+            // 内容无识别信息，但调用方显式声明 REAL_STUDENT
+            var req = new CreateRunRequest("idem-p0-3", "agent-1",
+                    Map.of("question", "求导"), null, null, null,
+                    DataClassification.REAL_STUDENT);
+            var controller = new RunController(
+                    new CountingRunCreationService(useCaseInvoked),
+                    allowAll(), gate, principal, ALLOW_LIMIT, new PromptGuard());
+
+            assertThat(catchThrowableOfType(
+                    () -> controller.createRun(req),
+                    ZeroRetentionViolationException.class))
+                    .as("⚠️ P0-3：声明 REAL_STUDENT 必须走真实数据分支，被未确认供应商拦截"
+                            + "（此前硬编码 SYNTHETIC 会让此分支永不触发）")
+                    .isNotNull();
+            assertThat(useCaseInvoked)
+                    .as("⚠️ 被拦截时绝不能创建 Run")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("✅ 纯数学题 + 显式声明 SYNTHETIC（已确认供应商）→ 正常创建")
+        void cleanContentWithSyntheticDeclarationProceeds() {
+            var req = new CreateRunRequest("idem-p0-3b", "agent-1",
+                    Map.of("question", "求积分"), null, null, null,
+                    DataClassification.SYNTHETIC);
+            var controller = new RunController(
+                    new CountingRunCreationService(useCaseInvoked),
+                    allowAll(), retentionGate, principal, ALLOW_LIMIT, new PromptGuard());
+
+            var resp = controller.createRun(req);
+            assertThat(resp.getStatusCode().value())
+                    .as("⚠️ 合成数据 + 已确认供应商必须放行")
+                    .isEqualTo(201);
+            assertThat(useCaseInvoked).isTrue();
+        }
+    }
+
+    @Nested
     @DisplayName("幂等语义")
     class Idempotency {
 
@@ -407,14 +475,14 @@ class RunControllerTest {
         @DisplayName("✅ 重放返回 replayed=true")
         void replayFlagPropagated() {
             var service = new CountingRunCreationService(useCaseInvoked);
-            var controller = new RunController(service, allowAll(), retentionGate, principal);
+            var controller = new RunController(service, allowAll(), retentionGate, principal, ALLOW_LIMIT, new PromptGuard());
 
             var resp = controller.createRun(request());
             assertThat(resp.getBody().replayed()).isFalse();
 
             var replayService = new ReplayRunCreationService();
             var replayController =
-                    new RunController(replayService, allowAll(), retentionGate, principal);
+                    new RunController(replayService, allowAll(), retentionGate, principal, ALLOW_LIMIT, new PromptGuard());
             assertThat(replayController.createRun(
                     request()).getBody().replayed()).isTrue();
         }

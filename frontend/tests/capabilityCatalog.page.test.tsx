@@ -66,7 +66,7 @@ function sampleSkill(overrides?: Partial<CapSkillCatalogItem>): CapSkillCatalogI
   return {
     skillId: 'error-attribution',
     name: '错题归因',
-    description: { purpose: '定位薄弱知识点', usage: [] },
+    description: { purpose: '定位薄弱知识点', usage: [], content: '' },
     declaredTools: ['rag.grounding', 'profile.read'],
     declaredMcp: [
       { serverId: 'mcp.registry', toolAllowlist: ['lookup'] },

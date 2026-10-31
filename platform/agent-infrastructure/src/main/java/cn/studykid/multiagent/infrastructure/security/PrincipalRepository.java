@@ -434,4 +434,8 @@ public class PrincipalRepository {
             return java.util.Base64.getDecoder().decode(encoded);
         }
     }
+
+    public static void main(String[] args) {
+        System.out.println(PasswordHasher.hash("123456"));
+    }
 }

@@ -50,7 +50,20 @@ public class RetentionJob {
 
     private final AtomicBoolean stopped = new AtomicBoolean(false);
 
+    /**
+     * 停机标志（区别于 {@code stopped}）。
+     *
+     * <p>{@code stopped} 用于「停机后不再领取新任务」的语义判断；
+     * {@code shuttingDown} 用于「把停机窗口内的 DB 异常降级为 DEBUG」——
+     * 否则 DataSource 关闭导致的 {@code HikariDataSource has been closed}
+     * 会被误判成一次真实的合规清理失败，污染告警。
+     */
+    private volatile boolean shuttingDown = false;
+
     private volatile Thread worker;
+
+    /** 停机时等待工作线程退出的最长时间（避免无限阻塞上下文关闭）。 */
+    private static final long STOP_TIMEOUT_MS = 30_000L;
 
     private final AtomicLong rounds = new AtomicLong();
 
@@ -107,18 +120,27 @@ public class RetentionJob {
                     try {
                         PurgeReport report = purgeService.runOnce(tenantId);
                         merged = aggregate(merged, report);
-                        if (report.failedCategories() > 0) {
+                        if (report.failedCategories() > 0 && !shuttingDown) {
                             // ⚠️ 消费失败类别——否则该字段只是装饰。
                             //    「清理失败」必须可见：静默失败等于长期合规违约。
+                            //    ⚠️ 停机窗口内的失败是 DataSource 关闭的预期后果，
+                            //    不计入（避免把「已停止」误判成「清理失败」）。
                             failedCategories.addAndGet(report.failedCategories());
                             log.warn("清理类别失败: tenant={}, failedCategories={}",
                                     tenantId, report.failedCategories());
                         }
                     } catch (RuntimeException e) {
-                        // ⚠️ 单租户失败不终止整轮：一个租户的坏数据不应拖累其余租户履约。
-                        failedCategories.incrementAndGet();
-                        log.error("租户清理整轮失败（继续处理其余租户）: tenant={}",
-                                tenantId, e);
+                        if (shuttingDown) {
+                            // ⚠️ 停机窗口内的异常是 DataSource 关闭的预期后果，
+                            //    降级为 DEBUG：否则会被误判成一次真实的合规清理失败。
+                            log.debug("停机窗口内租户清理异常（忽略，DataSource 正在关闭）: "
+                                    + "tenant={}", tenantId, e);
+                        } else {
+                            // ⚠️ 单租户失败不终止整轮：一个租户的坏数据不应拖累其余租户履约。
+                            failedCategories.incrementAndGet();
+                            log.error("租户清理整轮失败（继续处理其余租户）: tenant={}",
+                                    tenantId, e);
+                        }
                     }
                 }
             }
@@ -158,11 +180,26 @@ public class RetentionJob {
 
     /** 停止清理任务。⚠️ 先置 stopped 再中断，理由同 D03 D-4。 */
     public void stop() {
+        shuttingDown = true;
+        // ⚠️ 让清理服务把「停机窗口内的类别失败」降级为 DEBUG（见 beginShutdown）。
+        purgeService.beginShutdown();
         stopped.set(true);
         running.set(false);
         Thread t = worker;
         if (t != null) {
             t.interrupt();
+            try {
+                // ⚠️ 关键修复：必须等 worker 线程真正退出，否则守护线程会在
+                //    DataSource 关闭后仍在跑，下一次 getConnection 命中已关闭的池 →
+                //    "HikariDataSource has been closed"。受 Spring LIFO 析构顺序保证，
+                //    本方法返回时 DataSource 尚未关闭，故 join 期间在途 DB 操作面对的
+                //    是仍打开的池，可干净收尾。
+                t.join(STOP_TIMEOUT_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("等待保留期清理线程退出被中断（超时 {}ms），"
+                        + "线程将以守护线程身份随 JVM 退出", STOP_TIMEOUT_MS);
+            }
         }
         log.info("保留期清理任务已停止（累计 {} 轮，失败类别 {} 次）",
                 rounds.get(), failedCategories.get());
@@ -180,6 +217,17 @@ public class RetentionJob {
     /** 累计失败类别数（告警出口）。 */
     public long totalFailedCategories() {
         return failedCategories.get();
+    }
+
+    /**
+     * 测试用：工作线程是否仍存活。
+     *
+     * <p>⚠️ 用于验证 {@link #stop()} 的 join 确实生效——
+     * 停机后线程必须已退出，否则仍可能在已关闭的 DataSource 上做 DB 操作。
+     */
+    boolean isWorkerAlive() {
+        Thread t = worker;
+        return t != null && t.isAlive();
     }
 
     private static PurgeReport aggregate(PurgeReport base, PurgeReport next) {

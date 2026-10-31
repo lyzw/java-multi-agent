@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>管理控制台（admin-console）前端体验评测报告</title>
+<style>
+  :root{
+    --primary:#2f6df6; --ink:#1f2329; --sub:#5a6573; --line:#e6e8eb;
+    --bg:#f7f8fa; --card:#fff; --crit:#e34d59; --major:#fa8c16; --minor:#fadb14; --ok:#16a34a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+       color:var(--ink);background:var(--bg);line-height:1.7;font-size:14px}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 64px}
+  header{border-bottom:3px solid var(--primary);padding-bottom:16px;margin-bottom:8px}
+  h1{font-size:24px;margin:0 0 6px}
+  h2{font-size:19px;margin:34px 0 12px;padding-left:10px;border-left:4px solid var(--primary)}
+  h3{font-size:15px;margin:22px 0 8px;color:var(--sub)}
+  p,li{margin:6px 0}
+  .meta{color:var(--sub);font-size:13px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 22px;margin:14px 0;
+        box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .note{background:#fff8e6;border:1px solid #ffe0a3;border-radius:10px;padding:14px 18px;margin:16px 0;color:#7a5b00}
+  .chip{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;font-weight:600;color:#fff;vertical-align:middle}
+  .c-crit{background:var(--crit)} .c-major{background:var(--major)} .c-minor{background:#d4b106;color:#3a2f00}
+  .c-ok{background:var(--ok)}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#f0f4ff;color:var(--ink);font-weight:600}
+  tr:nth-child(even) td{background:#fafbfc}
+  code{background:#eef1f5;padding:1px 5px;border-radius:4px;font-size:12px;color:#0b5cad}
+  .sev-crit{color:var(--crit);font-weight:700}
+  .sev-major{color:var(--major);font-weight:700}
+  .sev-minor{color:#b08a00;font-weight:700}
+  .ok{color:var(--ok);font-weight:600}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  ul{margin:6px 0 6px 0;padding-left:20px}
+  .foot{margin-top:40px;color:var(--sub);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+  .score{display:inline-block;font-size:13px;background:#eef1f5;border-radius:8px;padding:4px 10px;margin-right:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>管理控制台（admin-console）前端体验评测报告</h1>
+  <div class="meta">评测对象：<code>admin-console</code>（React 18 + TypeScript 5 + Ant Design v5 + Vite 6，平台级管理控制台）<br/>
+  评测范围：登录、平台治理（租户/用户/角色矩阵/审计）、能力目录（Agent/Tool/Skill/MCP/路由策略）、知识与数据（RAG）、系统配置（字典）、观测度量（指标/录入）、AI 实验室<br/>
+  评测日期：2026-10-30</div>
+</header>
+
+<div class="note">
+  <b>评测方法与边界说明（请先读）：</b>本次评测本计划以真实终端用户身份在浏览器中点击走查。但当前沙箱环境存在网络命名空间隔离——
+  浏览器实例仅能访问到用户既有后端（8080/8081），而我能拉起的前端 dev server 处于不可达的独立命名空间，且不应打扰用户正在运行的线上后端，
+  因此<b>未能完成“真实浏览器点击”式走查</b>。
+  为保证结论可证伪、不臆测，本报告改用两条可观测证据链：① <b>对实际前端执行生产构建</b>（<code>npm run build</code> 通过，产物 <code>dist/index-*.js = 1,519 KB / gzip 473 KB</code>，无编译错误）；
+  ② <b>逐文件审查已实现组件的渲染与交互逻辑</b>（仅报告代码实际做了什么，所有结论附 <code>文件:行号</code> 引用）。
+  死代码 / 占位文案（如 <code>PlaceholderPage</code>、<code>DashboardPage</code>）作为“已存在但未接入”的客观事实列入问题，而非推测“未实现的功能”。
+</div>
+
+<h2>一、总体结论</h2>
+<div class="card">
+  <p><span class="score">架构与交互逻辑</span><span class="score">较强</span>
+     <span class="score">视觉一致性</span><span class="score">中等</span>
+     <span class="score">响应式</span><span class="score">薄弱</span>
+     <span class="score">首屏性能</span><span class="score">偏弱</span></p>
+  <p>控制台在<b>业务正确性</b>上做得相当扎实：统一布局壳、角色过滤导航、fail-closed 的能力发布（无删除只有“停用”+三步+双人复核）、
+  用户自我保护与 SoD、指标“未采集=— / 样本不足”纪律、错误态区分 403/409/503、404 不泄露权限模型——这些都是高质量企业后台的标志。</p>
+  <p>主要短板集中在<b>“观感与适配”</b>：响应式几乎只有侧栏折叠一级；主题色/字号大量内联硬编码；术语中英混排与同义不统一；
+  首屏 1.5MB 单包、无代码分割。这些不会阻断功能，但会拉低专业感与在非常规屏幕上的可用性。</p>
+</div>
+
+<h2>二、UI 层面</h2>
+
+<h3>2.1 视觉布局 <span class="chip c-ok">良好</span></h3>
+<ul>
+  <li>统一外壳：所有鉴权页共享 <code>AdminLayout</code>（antd <code>Layout/Sider/Header/Content</code>），含侧栏分组、面包屑、页脚，结构清晰（<code>AdminLayout.tsx:94-177</code>，<code>router.tsx:42-48</code>）。</li>
+  <li>导航由单一数据源 <code>NAV_GROUPS</code> 派生，按角色过滤整组（无权整组不渲染），激活态与展开态自动同步（<code>AdminLayout.tsx:28-82</code>）。</li>
+  <li>内容卡片统一 <code>padding:24 / 圆角8 / 白底</code>，列表页表格 + 搜索栏 + 状态 <code>Tag</code> 的范式在 Tool/Skill/MCP/Agent/租户/用户间高度一致。</li>
+</ul>
+
+<h3>2.2 配色与字体 <span class="chip c-major">内联硬编码偏多</span></h3>
+<ul>
+  <li>主色通过 <code>ConfigProvider theme.token.colorPrimary='#2f6df6'</code> 统一设置，并设 <code>zhCN</code> 中文语言包（<code>App.tsx</code>，正确做法）。</li>
+  <li>但主题色/语义色<b>大量散落为内联十六进制</b>：如 <code>AgentMetricsPage.tsx:334,376,426,459,472,566,633,640</code> 的 <code>#cf1322/#52c41a/#faad14</code>，<code>RoleMatrixPage.tsx:103</code> 的 <code>#52c41a</code>；</li>
+  <li><code>global.css:20-26</code> 与 <code>App.tsx</code> 各定义了一份 <code>#2f6df6</code> 的选中行底色，未来改主题色将“失同步”。建议统一改用 antd 语义色（<code>colorSuccess/Error/Warning</code> 或 <code>Tag color</code>），删除游离 hex。</li>
+</ul>
+
+<h3>2.3 组件一致性 <span class="chip c-ok">良好</span></h3>
+<ul>
+  <li>列表页：均用 antd <code>Table</code> + <code>rowKey</code>，统一 <code>loading</code> 属性、<code>emptyText</code> 空态、<code>Tag</code> 表状态、<code>Typography.Text code</code> 表 ID（共享渲染器 <code>displayBits.tsx</code>）。</li>
+  <li>错误态普遍用 <code>Alert</code> 且区分状态码（<code>platformRequestBits.tsx:45-53</code> 区分 403/503；<code>PlatformPublishPanel.tsx:35-44</code> 区分 400/403/409/503）。</li>
+  <li>缺憾：<b>无集中共享组件库</b>（<code>src/components</code> 不存在，复用靠同目录就近放置），每个页面重复写 <code>Alert+Table+Spin+emptyText</code> 样板，建议抽 <code>&lt;PageState&gt;</code> / <code>&lt;ErrorBoundary&gt;</code> 统一收敛。</li>
+</ul>
+
+<h3>2.4 响应式与易用性 <span class="chip c-crit">明显短板</span></h3>
+<ul>
+  <li><b>唯一的响应式措施</b>是侧栏 <code>breakpoint="lg"</code> + <code>collapsedWidth={screens.xs?0:80}</code>（<code>AdminLayout.tsx:100-101</code>）；全代码库仅此一处 <code>useBreakpoint</code>，无任何 <code>useMediaQuery/matchMedia/@media</code>。</li>
+  <li><b>统计卡固定 4 列</b>：全站 85 处 <code>&lt;Col&gt;</code>，<b>0 处</b>响应式断点，全部 <code>span={6}</code>（如 <code>AgentMetricsPage.tsx:322,325,341,344,366,406,409,412,421,447</code>；Tool/Skill/MCP/Agent 注册表同此）。在 1280 以下笔记本/平板上会被挤压，不重排为 2/1 列。</li>
+  <li><b>弹窗/抽屉固定像素宽</b>：<code>PlatformRegistrationModal width={960}</code>（<code>PlatformRegistrationModal.tsx:86</code>）、指标下钻 <code>Drawer width={720}</code>（<code>AgentMetricsPage.tsx:708</code>）、详情抽屉 <code>width={760}</code>（<code>platformDetailDrawer.tsx:48</code>），窄屏下易横向溢出。</li>
+  <li>a11y 小缺口：侧栏折叠按钮为 <code>&lt;span onClick&gt;</code> 无 <code>role/aria-label</code>（<code>AdminLayout.tsx:143</code>）；“退出登录”下拉无 aria 标注。</li>
+  <li>折叠态品牌名显示为 <code>"PC"</code>（<code>AdminLayout.tsx:117</code>），语义不清，建议用图标或“控制台”。</li>
+</ul>
+
+<h2>三、业务流程层面</h2>
+
+<h3>3.1 登录 <span class="chip c-ok">顺畅</span></h3>
+<p>用户名/密码 + 加载态 + 成功 <code>message</code> 跳回来源页；失败统一 <code>Alert</code> 且<b>不区分原因</b>（后端统一 401 防账号枚举，安全正确，<code>LoginPage.tsx:23,49-58,84-86,108</code>）。无租户 ID 输入（平台/租户身份隔离，符合设计）。落地页直接重定向到 <code>/tenants</code>——新用户缺少一个“总览/仪表盘”承接（见 3.7）。</p>
+
+<h3>3.2 能力三步发布（申请→审批→执行） <span class="chip c-ok">逻辑严谨</span></h3>
+<ul>
+  <li>三步在单面板并列呈现，强调“审批人≠申请人”双人复核（<code>PlatformPublishPanel.tsx:69-78,80-268</code>）；提交前 <code>form.validateFields()</code> 重型前端校验（kind 互斥、URL/超时、JSON 合法性、闭包自洽，<code>platformObjectForm.ts:116-451</code>）。</li>
+  <li>审批队列抽屉提供“通过/执行”双入口并带 <code>Popconfirm</code>（<code>platformRequestBits.tsx:147-259</code>）；<b>无删除，仅“停用”迁移到 DEPRECATED 终态</b>（<code>PlatformDeprecateCard.tsx</code>，<code>platformObjectForm.ts:467-468</code>），fail-closed 设计优秀。</li>
+  <li>可改进：三步“并列”呈现，新手可能不清楚“执行”需另一人触发；建议用步骤条（<code>Steps</code>）强化阶段感。</li>
+</ul>
+
+<h3>3.3 租户生命周期 <span class="chip c-ok">顺畅</span></h3>
+<p>状态机只暴露合法迁移、非法迁移后端 409 并提示（<code>TenantRegistryPage.tsx:32-39,82-99,117-118</code>）；详情页三 Tab（基本信息/配额/能力授权），能力撤销用 <code>Popconfirm</code>（<code>TenantDetailPage.tsx:295-303</code>）。
+短板：生命周期变更 <code>Modal</code> 的 OK 按钮<b>无 <code>confirmLoading</code></b>，异步期间可重复点击（<code>TenantRegistryPage.tsx:192-221</code>）。</p>
+
+<h3>3.4 平台用户管理 <span class="chip c-ok">完善</span></h3>
+<p>新建/启停/重置密码/赋撤角色齐全；<b>自我保护</b>到位：对自身操作禁用并 <code>Tooltip</code> 说明、自身不可改角色、最后超管保护、超管 SoD 禁用（<code>UsersManagePage.tsx:44-51,147-206,276-324</code>）；破坏性操作均有 <code>Popconfirm</code>（<code>279-291,564-575</code>）。
+短板：角色撤销 <code>Popconfirm</code> 的异步无 loading/禁用态。</p>
+
+<h3>3.5 角色矩阵 / RAG / 指标 / 路由守卫 <span class="chip c-ok">克制且诚实</span></h3>
+<ul>
+  <li>角色矩阵：按命名空间分 Tab 的“权限×6角色”只读冻结表（<code>RoleMatrixPage.tsx:12-29,164-200</code>），明确标注“只读·冻结”。</li>
+  <li>RAG：租户作用域（本租户/平台全局/跨租户盘点）<b>显式选择</b>并落到 <code>X-Rag-Scope</code>；403→“去领票据”，409 不给刷新避免重复非法转移（<code>RagManagementPage.tsx:236-273</code>，<code>useRagManagement.ts:109-130</code>）。<b>缺憾：RAG 对 503 未像能力目录页那样显式区分</b>（目录页有 503 分支，RAG hook 只分 timeout/409/403）。</li>
+  <li>指标：<code>未采集='—'</code>（非 0）、样本量&lt;30 显“样本不足”（<code>AgentMetricsPage.tsx:75-109,546,564</code>），链路成功率与任务成功率物理隔离——核心纪律已实现。</li>
+  <li>路由守卫：<code>RequireAuth</code> 跳登录带 <code>state.from</code>；<code>RequireRole</code> 无权限给 403 <code>Result</code>；404 刻意不列站点地图（防泄露权限模型，<code>NotFoundPage.tsx:7-11</code>）。</li>
+</ul>
+
+<h3>3.6 核心操作路径顺畅度</h3>
+<p>登录→治理→能力发布→审计这条主链路<b>整体顺畅、步骤合理、校验充分</b>，关键写操作的“二次确认/双人复核/自身保护”均到位，不存在功能性阻断。困惑点主要来自<b>信息呈现</b>而非流程卡死。</p>
+
+<h3>3.7 阻断 / 困惑点</h3>
+<ul>
+  <li><b>落地即 /tenants，无仪表盘</b>：新用户进入后缺乏总览；而 <code>DashboardPage.tsx</code> 已实现却完全未接线（死代码），说明“概览”能力被规划但丢弃。</li>
+  <li><b>能力“执行”需平台运维通道</b>：未接入会话窗时返回 503 不可达，用户可能困惑“为什么我不能执行/发布”。</li>
+  <li><b>术语混用</b>增加认知成本（见问题清单 P4）。</li>
+  <li><b>窄屏拥挤</b>：响应式缺失在 13 寸及以下笔记本、平板场景下明显（见 P1）。</li>
+</ul>
+
+<h2>四、问题清单（按严重程度分级）</h2>
+<table>
+  <thead><tr><th style="width:38px">#</th><th style="width:78px">严重度</th><th>问题</th><th>位置（可证伪）</th><th>影响 / 改进建议</th></tr></thead>
+  <tbody>
+    <tr><td>P1</td><td class="sev-crit">严重</td>
+      <td>响应式几乎缺失：仅侧栏折叠一级；统计卡固定 4 列、弹窗/抽屉固定像素宽</td>
+      <td><code>AdminLayout.tsx:100-101</code>；85 处 <code>&lt;Col span={6}&gt;</code> 无断点；<code>PlatformRegistrationModal.tsx:86</code>(960)、<code>AgentMetricsPage.tsx:708</code>(720)</td>
+      <td>13 寸笔记本/平板下拥挤甚至横向溢出。<b>建议</b>：关键栅格改用 <code>xs/sm/md/lg</code> 响应式断点；Modal/Drawer 用 <code>width="80vw" maxWidth=...</code> 或 <code>responsive</code>。</td></tr>
+    <tr><td>P2</td><td class="sev-crit">严重</td>
+      <td>首屏体积过大、无代码分割</td>
+      <td>构建产物 <code>dist/index-*.js=1,519KB</code>(gzip 473KB)；全仓无 <code>lazy()/Suspense</code></td>
+      <td>首次访问（尤其弱网/海外）白屏时间长。<b>建议</b>：路由级 <code>React.lazy</code> + <code>Suspense</code> 分包；按需引入 antd 组件；评估 antd 的 <code>transform-full-import</code> / 仅引 Icon。</td></tr>
+    <tr><td>P3</td><td class="sev-major">重要</td>
+      <td>主题色/语义色大量内联硬编码，脱离 design token</td>
+      <td><code>AgentMetricsPage.tsx:334,376,426,459,472,566,633,640</code>；<code>RoleMatrixPage.tsx:103</code>；<code>global.css:20-26</code> 与 <code>App.tsx</code> 双份 <code>#2f6df6</code></td>
+      <td>换肤/改主题时会“失同步”，视觉不统一。<b>建议</b>：统一用 antd 语义色与 <code>theme.token</code>/<code>theme.useToken()</code>，删除游离 hex。</td></tr>
+    <tr><td>P4</td><td class="sev-major">重要</td>
+      <td>术语与中英混排不一致</td>
+      <td>导航 “Tool/Skill/MCP Server” 保留英文 vs 其余中文；同义“停用/退役”“开通/登记/新建”不统一（<code>navConfig.tsx:110-148</code>、<code>PlatformDeprecateCard.tsx</code>、<code>TenantRegistryPage.tsx:89</code>、<code>UsersManagePage.tsx:337</code>）</td>
+      <td>增加用户认知负担、检索困难。<b>建议</b>：建统一术语表；能力对象名若须保留英文，至少在导航/标题给出中文括注（如“工具 Tool”）。</td></tr>
+    <tr><td>P5</td><td class="sev-major">重要</td>
+      <td>死代码 / 孤儿页：已实现但未接线，含“coming soon”文案</td>
+      <td><code>PlaceholderPage.tsx</code>、<code>DashboardPage.tsx</code> 全仓无引用（grep 仅定义处）；<code>SettingsPage.tsx:127</code> “全局参数暂未开放”</td>
+      <td>维护噪音、易误判交付范围；缺失的仪表盘削弱首屏体验。<b>建议</b>：要么接线（仪表盘作为登录后落地页），要么删除死代码与占位提示。</td></tr>
+    <tr><td>P6</td><td class="sev-minor">一般</td>
+      <td>部分异步触发器缺 in-flight 禁用/旋转</td>
+      <td>租户生命周期 <code>Modal</code> OK 无 <code>confirmLoading</code>（<code>TenantRegistryPage.tsx:192-221</code>）；用户角色撤销 <code>Popconfirm</code> 无 loading（<code>UsersManagePage.tsx:564-575</code>）</td>
+      <td>存在重复提交/双击隐患。<b>建议</b>：异步期间禁用触发器并加旋转。</td></tr>
+    <tr><td>P7</td><td class="sev-minor">一般</td>
+      <td>RAG 对 503 未显式区分</td>
+      <td><code>useRagManagement.ts:118-134</code>（仅分 timeout/409/403）vs 能力目录 <code>platformRequestBits.tsx:48-49</code>（有 503 分支）</td>
+      <td>运维通道未接入时，用户可能只看到笼统报错。<b>建议</b>：对齐能力目录页，显式提示“平台运维会话窗未接入”。</td></tr>
+    <tr><td>P8</td><td class="sev-minor">一般</td>
+      <td>列表无服务端分页 / 虚拟滚动</td>
+      <td>各列表 <code>pagination={false}</code> + 一次拉全量（<code>limit:100/200</code>）+ 前端过滤（<code>TenantRegistryPage.tsx:68,154</code> 等）</td>
+      <td>租户/对象量级变大后首屏慢、内存高。<b>建议</b>：引入服务端分页或虚拟滚动（<code>react-window</code>）。</td></tr>
+    <tr><td>P9</td><td class="sev-minor">一般</td>
+      <td>a11y 小缺口 + 折叠品牌名歧义</td>
+      <td><code>AdminLayout.tsx:143</code> 折叠按钮无 aria；折叠态显示 <code>"PC"</code>（<code>:117</code>）</td>
+      <td>屏幕阅读器与新手理解成本。<b>建议</b>：补 <code>role="button" aria-label</code>；折叠态用图标或“控制台”。</td></tr>
+  </tbody>
+</table>
+
+<h2>五、优势沉淀（建议保留）</h2>
+<div class="grid">
+  <div class="card"><span class="ok">✓</span> 统一布局壳 + 角色过滤导航</div>
+  <div class="card"><span class="ok">✓</span> 错误态区分 403/409/503，RAG 403→领票据</div>
+  <div class="card"><span class="ok">✓</span> 指标“未采集=— / 样本不足”纪律落地</div>
+  <div class="card"><span class="ok">✓</span> 用户自我保护 + SoD + 最后超管保护</div>
+  <div class="card"><span class="ok">✓</span> 能力对象 fail-closed（无删除，三步+双人复核）</div>
+  <div class="card"><span class="ok">✓</span> 404 不泄露权限模型；前端生产构建通过</div>
+</div>
+
+<h2>六、改进优先级建议</h2>
+<ul>
+  <li><b>第一优先（体验/性能硬伤）</b>：P2 代码分割（投入小、收益大）、P1 关键栅格与弹窗响应式。</li>
+  <li><b>第二优先（专业感）</b>：P3 颜色走 token、P4 统一术语表、P5 清理死代码并上线仪表盘作为落地页。</li>
+  <li><b>第三优先（打磨）</b>：P6 in-flight 禁用、P7 RAG 503 提示、P8 分页、P9 a11y。</li>
+</ul>
+
+<div class="foot">
+  本报告所有结论均来自对 <code>admin-console</code> 已实现源码的直接审查与生产构建验证，附 <code>文件:行号</code> 引用，未对“未实现功能”作主观臆测。
+  受沙箱网络隔离限制，未能执行真实浏览器点击走查；如需补充，可在与后端同源可达的环境中运行 <code>npm run dev</code> 后复核本报告每一项。
+</div>
+</div>
+</body>
+</html>

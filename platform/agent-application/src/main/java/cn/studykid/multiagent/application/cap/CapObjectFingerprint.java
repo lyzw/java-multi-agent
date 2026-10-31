@@ -259,7 +259,7 @@ public final class CapObjectFingerprint {
         root.put("id", def.id());
         root.put("version", def.version());
         root.put("name", def.name());
-        // ⚠️ 两级描述就是行为内容：改 purpose 或 usage = 内容变更（契约 §3.1）。
+        // ⚠️ 三级描述就是行为内容：改 purpose / usage / content = 内容变更（契约 §3.1）。
         if (def.description() == null) {
             root.putNull("description");
         } else {
@@ -271,6 +271,7 @@ public final class CapObjectFingerprint {
                 item.put("when", u.when());
                 item.put("how", u.how());
             });
+            desc.put("content", def.description().content());
         }
         ArrayNode declaredTools = root.putArray("declaredTools");
         def.declaredTools().forEach(declaredTools::add);

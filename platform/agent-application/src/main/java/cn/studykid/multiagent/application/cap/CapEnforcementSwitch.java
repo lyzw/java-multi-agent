@@ -27,6 +27,15 @@ import org.jspecify.annotations.NonNull;
  * <p>⚠️ <b>回退语义</b>：关闭后立即回到既有链路，<b>不删除</b>已写入的
  * {@code cap_*} 数据（与 {@link CapDualWriteSwitch} 同构）：
  * 关开关 = 停止走新判定 ≠ 删数据。
+ *
+ * <p>⚠️ <b>M3 / G1 的进展（2026-10-31）</b>：HITL 所需的<b>数据模型与状态机能力已就位</b> ——
+ * {@code cap_approval_state} 新增 {@code AWAITING_HUMAN}（待人工决策）、
+ * {@code approver_id}/{@code decided_at} 在该状态下可空、
+ * {@code ApprovalStateMachine#requestHuman} 可在运行期登记待办、
+ * {@code Acquisition#requiresHumanDecision} 能区分「等一等就能过」与「永远过不了」。
+ * <b>但开关本仍保持默认 false</b>：CAP 链路的准入判定依赖 P5 的指针读路径，
+ * 在其落地前开启会让授权判定依赖已知不完整的发布语义（见类注释）。
+ * <b>开关翻转是 P5 的验收项，不在本次改动范围内。</b>
  */
 public final class CapEnforcementSwitch {
 

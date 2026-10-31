@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.run.ToolOperationState;
 
@@ -118,6 +119,37 @@ public interface RunToolLedgerPort {
      */
     default @NonNull Optional<Registration> findByOperationId(@NonNull String tenantId,
                                                               @NonNull String operationId) {
+        return Optional.empty();
+    }
+
+    /**
+     * RESUME 重入闸门用的原始调用重建信息（M1-4 / G2 恢复 · §5.3.4）。
+     *
+     * <p>⚠️ 审批决定到达后，Run 从检查点恢复，<b>不重跑模型</b>、
+     * <b>不重问模型</b>，而是用本信息重建 {@code ToolCallRequest} 直接重入闸门——
+     * 消费已批准的审批 → 执行。
+     *
+     * <p>⚠️ {@code callId} 由存储的 {@code idempotency_key} 反解（键值末段），
+     * 用于重建与首次<b>完全相同的幂等键</b>，从而命中同一逻辑操作、
+     * 复用同一审批（杜绝重复副作用）。
+     */
+    record Invocation(@NonNull String toolName,
+                      @NonNull Map<String, Object> arguments,
+                      @Nullable String callId) {
+    }
+
+    /**
+     * 按 operationId 反查原始调用（toolName + arguments + callId），供 RESUME 重入闸门。
+     *
+     * <p>⚠️ 默认实现返回空 = 「读不到调用」；调用方据此 fail-closed（不得臆造参数重入）。
+     * 生产实现<b>必须</b>覆写本方法，否则恢复流程无法重建调用。
+     *
+     * @param tenantId    租户
+     * @param operationId 操作标识
+     * @return 原始调用；无记录时为空
+     */
+    default @NonNull Optional<Invocation> findInvocation(@NonNull String tenantId,
+                                                        @NonNull String operationId) {
         return Optional.empty();
     }
 

@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>护栏体系重新评估 · 2026-10-31</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#1b1f24; --ink-2:#4a5462; --ink-3:#77828f;
+    --line:#e3e7ec; --line-2:#eef1f5;
+    --brand:#2f5fd0; --brand-bg:#eef3fd;
+    --ok:#1a7f4b; --ok-bg:#eaf6ef;
+    --warn:#a86400; --warn-bg:#fdf4e3;
+    --bad:#b32d2e; --bad-bg:#fdeded;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 28px 80px}
+  header.top{border-bottom:2px solid var(--ink);padding-bottom:22px;margin-bottom:34px}
+  .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+  h1{font-size:30px;line-height:1.3;margin:10px 0 8px;letter-spacing:-.01em}
+  .sub{color:var(--ink-2);font-size:14px}
+  .meta{display:flex;gap:26px;flex-wrap:wrap;margin-top:16px;font-size:13px;color:var(--ink-3)}
+  .meta b{color:var(--ink-2);font-weight:600}
+  h2{font-size:20px;margin:44px 0 14px;padding-left:12px;border-left:4px solid var(--brand)}
+  h3{font-size:16px;margin:26px 0 10px;color:var(--ink)}
+  p{margin:10px 0}
+  small{color:var(--ink-3)}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;padding:1px 5px;border-radius:4px;color:#243447}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:16px 0}
+  .verdict{background:linear-gradient(180deg,#fff,#fbfcfe);border:1px solid var(--line);border-left:5px solid var(--brand);border-radius:10px;padding:20px 22px;margin:18px 0}
+  .verdict .big{font-size:19px;font-weight:650;line-height:1.55}
+  .grid{display:grid;gap:14px}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:860px){.g4{grid-template-columns:repeat(2,1fr)}.g2{grid-template-columns:1fr}}
+  .score{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .score .name{font-size:12.5px;color:var(--ink-3);font-weight:600;letter-spacing:.02em}
+  .score .val{font-size:27px;font-weight:700;margin:6px 0 2px;letter-spacing:-.02em}
+  .score .delta{font-size:12.5px;color:var(--ok);font-weight:600}
+  .bars{margin-top:10px}
+  .bar{height:6px;border-radius:3px;background:var(--line-2);overflow:hidden;position:relative}
+  .bar i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--brand)}
+  .bar u{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:#c9d5e8}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:var(--panel)}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#f6f8fb;font-weight:650;color:var(--ink-2);font-size:12.5px;letter-spacing:.02em}
+  tbody tr:nth-child(even){background:#fcfdfe}
+  .chip{display:inline-block;font-size:11.5px;font-weight:650;padding:1px 8px;border-radius:20px;white-space:nowrap}
+  .c-bad{background:var(--bad-bg);color:var(--bad)}
+  .c-warn{background:var(--warn-bg);color:var(--warn)}
+  .c-ok{background:var(--ok-bg);color:var(--ok)}
+  .c-info{background:var(--brand-bg);color:var(--brand)}
+  .c-mute{background:#f1f3f6;color:var(--ink-3)}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:6px 0}
+  .tight li{margin:3px 0}
+  .note{background:var(--warn-bg);border:1px solid #f2e2bd;border-radius:8px;padding:12px 15px;margin:14px 0;font-size:13.5px}
+  .ok-note{background:var(--ok-bg);border:1px solid #cfe8da;border-radius:8px;padding:12px 15px;margin:14px 0;font-size:13.5px}
+  .bad-note{background:var(--bad-bg);border:1px solid #f4cfcf;border-radius:8px;padding:12px 15px;margin:14px 0;font-size:13.5px}
+  .mono{font-family:var(--mono);font-size:12.5px}
+  figure{margin:20px 0}
+  figcaption{font-size:12.5px;color:var(--ink-3);text-align:center;margin-top:8px}
+  footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-3);margin:8px 0 0}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:9px;height:9px;border-radius:2px;display:inline-block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">Guardrails Re-Assessment</div>
+  <h1>护栏体系重新评估</h1>
+  <div class="sub">对象：<span class="mono">cn.studykid.multiagent</span> 多租户 SaaS Agent 平台 · 初中生错题归因辅导场景</div>
+  <div class="meta">
+    <div><b>评估日期</b>　2026-10-31</div>
+    <div><b>评估性质</b>　加固后复评（P0–P3 全部落地）</div>
+    <div><b>证据来源</b>　源码实读 + 实连库验证 + 全量测试实跑</div>
+    <div><b>上一版</b>　护栏架构评审报告_2026-10-30</div>
+  </div>
+</header>
+
+<div class="verdict">
+  <div class="big">
+    结论：护栏从「<b>单点强、整体偏科</b>」进入「<b>四维均衡、可运维</b>」区间。
+    总分 <b>5.9 → 7.9</b>（满分 10）。防越权执行与数据隔离已达主流水平；
+    防有害内容从代差追到可接受，但仍是<b>黑名单式</b>，不足以宣称「内容安全」。
+  </div>
+</div>
+
+<div class="grid g4">
+  <div class="score">
+    <div class="name">防越权执行</div>
+    <div class="val">7.5</div>
+    <div class="delta">▲ 6.5 → 7.5</div>
+    <div class="bars"><div class="bar"><u style="width:65%"></u><i style="width:75%"></i></div></div>
+  </div>
+  <div class="score">
+    <div class="name">防有害内容</div>
+    <div class="val">7.0</div>
+    <div class="delta">▲ 3.0 → 7.0</div>
+    <div class="bars"><div class="bar"><u style="width:30%"></u><i style="width:70%"></i></div></div>
+  </div>
+  <div class="score">
+    <div class="name">数据隔离与合规</div>
+    <div class="val">9.0</div>
+    <div class="delta">▲ 8.0 → 9.0</div>
+    <div class="bars"><div class="bar"><u style="width:80%"></u><i style="width:90%"></i></div></div>
+  </div>
+  <div class="score">
+    <div class="name">可运维性</div>
+    <div class="val">8.0</div>
+    <div class="delta">▲ 6.0 → 8.0</div>
+    <div class="bars"><div class="bar"><u style="width:60%"></u><i style="width:80%"></i></div></div>
+  </div>
+</div>
+<p class="legend">
+  <span><i class="dot" style="background:#c9d5e8"></i>加固前</span>
+  <span><i class="dot" style="background:var(--brand)"></i>加固后</span>
+  <span>权重：四维等权，均值即总分</span>
+</p>
+
+<h2>1　评估方法与口径</h2>
+
+<p>本次复评不重复上一轮的问题清单，而是回答三个新问题：<b>加固是否真的生效</b>、<b>是否引入了新的薄弱面</b>、<b>与主流方案的距离有没有缩小</b>。为此采用三条相互独立的证据线，避免「读代码得出结论」这种自证式评估。</p>
+
+<div class="card">
+  <table>
+    <thead><tr><th style="width:130px">证据线</th><th>做法</th><th style="width:210px">为什么必须这样做</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>① 静态结构</b></td>
+        <td>枚举全部 <code>Guard / SelfCheck / Gate / Policy / Detector / Moderation / Validator</code> 生产类（共 <b>21</b> 个关键守卫），逐个核对其<b>调用方是否存在</b>——即「守卫写了，但没人调用」这类虚假保证。</td>
+        <td>上一轮最大的发现正是这类：<code>wrapToolResult</code> 是零调用方的公开方法，红队测试却在验证它。</td>
+      </tr>
+      <tr>
+        <td><b>② 实连库验证</b></td>
+        <td>以非特权角色 <code>app_agent</code> 直连 <code>agent_dev</code>：验证 RLS 隔离（0 / 5 / 4 / 0 行）、验证审计删除拦截的两层防线、验证限流滑动窗口 SQL 的原子性。全部在事务内执行并回滚。</td>
+        <td>RLS 与权限的结论在代码里看不出来，只能拿真实角色实连。</td>
+      </tr>
+      <tr>
+        <td><b>③ 全量测试实跑</b></td>
+        <td>七个模块一次 reactor 全量跑，<b>带齐 5 个 DB 凭证</b>，让 IT 真正执行而非跳过。</td>
+        <td>项目铁律：「跳过 ≠ 通过」。无凭证跑出全绿，是最容易骗过自己的绿灯。</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>2　当前护栏全景</h2>
+
+<p>加固后的护栏是四道<b>串联</b>的防线，任一环失守都不该由下一环兜底。下图按「请求进入 → 执行 → 输出」的实际路径排列，括号内为本次新增或修复的组件。</p>
+
+<figure>
+<svg viewBox="0 0 1000 470" width="100%" role="img" aria-label="护栏四道防线示意图">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto">
+      <path d="M0,0 L7,3.2 L0,6.4 z" fill="#8a97a8"/>
+    </marker>
+  </defs>
+
+  <!-- 入口 -->
+  <rect x="18" y="192" width="118" height="62" rx="8" fill="#eef3fd" stroke="#2f5fd0" stroke-width="1.4"/>
+  <text x="77" y="216" text-anchor="middle" font-size="13" font-weight="700" fill="#1b3f8f">用户 / 家长</text>
+  <text x="77" y="236" text-anchor="middle" font-size="11.5" fill="#4a5462">Run 创建请求</text>
+
+  <!-- 防线1：入口 -->
+  <rect x="168" y="128" width="196" height="192" rx="10" fill="#ffffff" stroke="#cfd8e6" stroke-width="1.4"/>
+  <text x="266" y="152" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f5fd0">防线 ①  入口准入</text>
+  <line x1="184" y1="162" x2="348" y2="162" stroke="#e3e7ec"/>
+  <text x="184" y="184" font-size="11.8" fill="#1b1f24">鉴权 / 租户上下文绑定</text>
+  <text x="184" y="205" font-size="11.8" fill="#1b1f24">限流（滑动窗口）</text>
+  <text x="184" y="226" font-size="11.8" fill="#1b1f24">输入边界校验 validateBounds</text>
+  <text x="184" y="247" font-size="11.8" fill="#1b1f24">零保留闸门 ZeroRetentionGate</text>
+  <text x="184" y="268" font-size="11.8" fill="#1b1f24">数据分级 fromContent</text>
+  <text x="184" y="289" font-size="11.5" fill="#1a7f4b">+ 注入模式观测（不拦截）</text>
+
+  <!-- 防线2：执行 -->
+  <rect x="392" y="96" width="228" height="256" rx="10" fill="#ffffff" stroke="#cfd8e6" stroke-width="1.4"/>
+  <text x="506" y="120" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f5fd0">防线 ②  执行约束</text>
+  <line x1="408" y1="130" x2="604" y2="130" stroke="#e3e7ec"/>
+  <text x="408" y="152" font-size="11.8" fill="#1b1f24">能力授权链 CAP（开关待 P5）</text>
+  <text x="408" y="173" font-size="11.8" fill="#1b1f24">工具准入 ToolInvocationGate</text>
+  <text x="408" y="194" font-size="11.8" fill="#1b1f24">风险分级审批 RiskBasedApproval</text>
+  <text x="408" y="215" font-size="11.8" fill="#1b1f24">参数策略 / 输入 Schema 校验</text>
+  <text x="408" y="236" font-size="11.8" fill="#1b1f24">预算与步数上限</text>
+  <text x="408" y="257" font-size="11.8" fill="#1b1f24">整树共享超时 + 单步抢占</text>
+  <text x="408" y="278" font-size="11.5" fill="#1a7f4b">+ 工具结果净化与不可信标记</text>
+  <text x="408" y="299" font-size="11.5" fill="#a86400">△ HITL 活体通道未接（恒拒）</text>
+  <text x="408" y="320" font-size="11.5" fill="#1a7f4b">+ 委派 / 子 Agent 契约校验</text>
+
+  <!-- 防线3：输出 -->
+  <rect x="648" y="150" width="196" height="148" rx="10" fill="#ffffff" stroke="#cfd8e6" stroke-width="1.4"/>
+  <text x="746" y="174" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f5fd0">防线 ③  输出把关</text>
+  <line x1="664" y1="184" x2="828" y2="184" stroke="#e3e7ec"/>
+  <text x="664" y="206" font-size="11.8" fill="#1b1f24">中间步 + 终答同一筛查</text>
+  <text x="664" y="227" font-size="11.8" fill="#1b1f24">PII 脱敏后再下发</text>
+  <text x="664" y="248" font-size="11.8" fill="#1b1f24">有害 / 越狱 → 阻断整次</text>
+  <text x="664" y="269" font-size="11.8" fill="#1b1f24">编造出处检测</text>
+  <text x="664" y="288" font-size="11.5" fill="#a86400">△ 黑名单式，覆盖有限</text>
+
+  <!-- 防线4：审计 -->
+  <rect x="872" y="128" width="112" height="192" rx="10" fill="#ffffff" stroke="#cfd8e6" stroke-width="1.4"/>
+  <text x="928" y="152" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f5fd0">防线 ④</text>
+  <text x="928" y="170" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f5fd0">审计与证据</text>
+  <line x1="886" y1="180" x2="970" y2="180" stroke="#e3e7ec"/>
+  <text x="886" y="202" font-size="11.5" fill="#1b1f24">追加不可改</text>
+  <text x="886" y="221" font-size="11.5" fill="#1b1f24">删除靠凭据隔离</text>
+  <text x="886" y="240" font-size="11.5" fill="#1b1f24">审计动作覆盖门禁</text>
+  <text x="886" y="259" font-size="11.5" fill="#1b1f24">结构漂移门禁</text>
+  <text x="886" y="278" font-size="11.5" fill="#1b1f24">风险事件摘要化</text>
+  <text x="886" y="297" font-size="11.5" fill="#a86400">△ 隔离脚本待落库</text>
+
+  <!-- 箭头 -->
+  <line x1="136" y1="223" x2="164" y2="223" stroke="#8a97a8" stroke-width="1.6" marker-end="url(#ar)"/>
+  <line x1="364" y1="223" x2="388" y2="223" stroke="#8a97a8" stroke-width="1.6" marker-end="url(#ar)"/>
+  <line x1="620" y1="223" x2="644" y2="223" stroke="#8a97a8" stroke-width="1.6" marker-end="url(#ar)"/>
+  <line x1="844" y1="223" x2="868" y2="223" stroke="#8a97a8" stroke-width="1.6" marker-end="url(#ar)"/>
+
+  <!-- 底部：横切 -->
+  <rect x="168" y="366" width="816" height="74" rx="10" fill="#f6f8fb" stroke="#dbe2ec" stroke-dasharray="5 4"/>
+  <text x="576" y="390" text-anchor="middle" font-size="12.5" font-weight="700" fill="#4a5462">横切：启动期自检 + 配置键对齐 + 架构约束测试</text>
+  <text x="576" y="411" text-anchor="middle" font-size="11.5" fill="#77828f">PlatformStartupSelfCheck · CapEnforcementReadinessGuard · ApprovalReadinessGuard · AuditTamperProofGuard · ToolBypassArchitectureTest · ApplicationConfigKeyAlignmentTest · SchemaDriftIT</text>
+  <text x="576" y="430" text-anchor="middle" font-size="11.5" fill="#1a7f4b">这一层的作用不是拦截请求，而是让「护栏失效」本身变得可见</text>
+
+  <line x1="266" y1="320" x2="266" y2="362" stroke="#c7d0dd" stroke-width="1.3" stroke-dasharray="4 3"/>
+  <line x1="506" y1="352" x2="506" y2="362" stroke="#c7d0dd" stroke-width="1.3" stroke-dasharray="4 3"/>
+  <line x1="746" y1="298" x2="746" y2="362" stroke="#c7d0dd" stroke-width="1.3" stroke-dasharray="4 3"/>
+  <line x1="928" y1="320" x2="928" y2="362" stroke="#c7d0dd" stroke-width="1.3" stroke-dasharray="4 3"/>
+</svg>
+<figcaption>图 1　四道防线与横切自检层（△ = 本次评估确认仍存在的缺口，见第 5 节）</figcaption>
+</figure>
+
+<h2>3　加固项的实际生效性核验</h2>
+
+<p>以下 13 项是本轮改动。每一行都给出「<b>是否真的接进了生产路径</b>」的判断依据——而不是「代码写好了」。这一列是本次复评最关键的产出，因为上一轮的教训正是「写了但没人调用」。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:56px">编号</th>
+      <th style="width:120px">类别</th>
+      <th>改动</th>
+      <th style="width:300px">生效性依据</th>
+      <th style="width:70px">判定</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>P0-1</td><td>执行约束</td>
+      <td>CAP 关闭缺口<b>可见化</b> + 可选硬失败（<code>CapEnforcementReadinessGuard</code>）</td>
+      <td>启动期 WARN 必然触发；<code>config.flag.cap-enforcement-required=true</code> 时抛异常。4 例单测。</td>
+      <td><span class="chip c-warn">生效但未闭环</span></td>
+    </tr>
+    <tr>
+      <td>P0-2</td><td>数据隔离</td>
+      <td>启动自检非特权角色 <code>BYPASSRLS</code> / ops 角色分离（<code>PlatformStartupSelfCheck</code>）</td>
+      <td>实连验明：<code>app_agent</code> rolbypassrls=<b>f</b>；自检会放行。6 例单测。</td>
+      <td><span class="chip c-ok">已生效</span></td>
+    </tr>
+    <tr>
+      <td>P0-3</td><td>数据隔离</td>
+      <td><code>DataClassification.fromContent</code> 取代 <code>RunController</code> 硬编码 <code>SYNTHETIC</code></td>
+      <td>分级由正文内容推导，零保留闸门的真实数据分支<b>首次可被触达</b>。5 例 + 2 例接口回归。</td>
+      <td><span class="chip c-ok">已生效</span></td>
+    </tr>
+    <tr>
+      <td>P1-A</td><td>内容安全</td>
+      <td>新增 <code>OutputModeration</code>：PII→脱敏，有害/越狱→阻断，未知类别 fail-closed</td>
+      <td>接在 <code>RunExecutionLoop</code> 中间步（L492）与终答（L504）<b>同一函数</b>；11 例 + 2 例整链路回归。</td>
+      <td><span class="chip c-ok">已生效</span></td>
+    </tr>
+    <tr>
+      <td>P1-B</td><td>内容安全</td>
+      <td>工具结果真正走 <code>wrapToolResult</code>（净化的零宽/ANSI + <code>trust="untrusted"</code> 标记）</td>
+      <td>修复前该方法<b>零调用方</b>；现 <code>ToolOutcomeRenderer</code> 统一调用，根循环与子 Agent 共用。红队用例从 3 例扩到 7 例并指向真实渲染器。</td>
+      <td><span class="chip c-ok">已生效</span></td>
+    </tr>
+    <tr>
+      <td>P1-D</td><td>内容安全</td>
+      <td>幻觉检测扩展：新增口语化出处诉求规则，并覆盖中间步</td>
+      <td>原规则只认形式化引用，「如我们教材所言」100% 放行；现该类被捕获，且干净数学题不误判。11 例。</td>
+      <td><span class="chip c-ok">已生效</span></td>
+    </tr>
+    <tr>
+      <td>P1-C</td><td>执行约束</td>
+      <td>运行时 HITL 缺口显式化（<code>ApprovalReadinessGuard</code>）</td>
+      <td>启动即列出「需审批但无活体通道」的工具名；可升级为拒绝启动。4 例。</td>
+      <td><span class="chip c-warn">仅可见化</span></td>
+    </tr>
+    <tr>
+      <td>P2-1</td><td>执行约束</td>
+      <td>单步调用<b>抢占式</b>超时（<code>withinRemaining</code>）+ 「不限时」可见可配</td>
+      <td>模型调用与工具调用均受剩余截止时间封顶；测试用 10s 阻塞调用验证在 0.68s 内被中止。3 例 + 3 例策略。</td>
+      <td><span class="chip c-ok">已生效</span></td>
+    </tr>
+    <tr>
+      <td>P2-2</td><td>审计</td>
+      <td>审计删除从「可自设 GUC」改为<b>凭据隔离</b>（<code>agent_retention</code> 角色）+ 独立数据源 + 漂移守卫</td>
+      <td>实连验证双层：改前「自声明 actor 即可删」→ 改后<b>表权限层拒绝</b>；即使把 DELETE 权还回去，<b>触发器层仍拒绝</b>。4 例守卫测试。</td>
+      <td><span class="chip c-warn">已实现待落库</span></td>
+    </tr>
+    <tr>
+      <td>P3-1</td><td>可运维</td>
+      <td>a) 移除生产可用的「永不拒绝」限流桩<br>b) <code>rate_limit_bucket</code> 策略统一走 <code>current_tenant_id()</code><br>c) 限流滑动窗口<br>d) 恢复扫描器暴露健康态</td>
+      <td>a) 缺限流即启动失败（测试同步补齐）<br>b) 守卫扫全量策略，反向验证可捕获修复前的违规<br>c) 原子 SQL 已实连验明递增正确<br>d) 端口不可用不再是静默 WARN</td>
+      <td><span class="chip c-ok">已生效</span></td>
+    </tr>
+    <tr>
+      <td>P3-2</td><td>审计</td>
+      <td>a) 审计动作覆盖门禁<br>b) 活库 vs 快照结构漂移门禁</td>
+      <td>a) 门禁一上线就抓到<b>真实缺口</b>：<code>PROFILE_READ</code> 声明却从未写入（R-2 要求），已补<br>b) 实连 dev 库跑通：表集合与 RLS 开关全一致</td>
+      <td><span class="chip c-ok">已生效</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="ok-note">
+  <b>值得单独说的一点：</b>P3-2 的审计覆盖门禁在写完后第一次运行就抓到一个真实的生产缺口——<code>ProfileController</code> 校验了「谁能看学生画像」的权限，却<b>从未记录「谁看了谁的画像」</b>，而这正是合规要求 R-2 的原文。这说明「静态断言型门禁」对本项目是有正收益的，不只是形式主义。
+</div>
+
+<h2>4　实测证据</h2>
+
+<h3>4.1　全量测试（带齐 DB 凭证，IT 真跑）</h3>
+
+<table>
+  <thead><tr><th>模块</th><th style="width:110px">用例数</th><th style="width:90px">失败</th><th style="width:90px">错误</th><th style="width:90px">跳过</th></tr></thead>
+  <tbody>
+    <tr><td>agent-core</td><td>210</td><td>0</td><td>0</td><td>0</td></tr>
+    <tr><td>agent-ports</td><td>18</td><td>0</td><td>0</td><td>0</td></tr>
+    <tr><td>agent-application</td><td>689</td><td>0</td><td>0</td><td>0</td></tr>
+    <tr><td>agent-infrastructure</td><td>260</td><td>0</td><td>0</td><td>0</td></tr>
+    <tr><td>agent-worker</td><td>265</td><td>0</td><td>0</td><td>0</td></tr>
+    <tr><td>agent-api</td><td>220</td><td>0</td><td>0</td><td>0</td></tr>
+    <tr><td>platform-bootstrap</td><td>172</td><td>0</td><td>0</td><td>0</td></tr>
+    <tr style="background:#eef3fd;font-weight:700"><td>合计</td><td>1834</td><td>0</td><td>0</td><td>0</td></tr>
+  </tbody>
+</table>
+
+<p><small>对比上一轮无凭证运行的结果 1781 例 / 37 跳过：本次 37 个跳过项<b>全部真实执行</b>并通过。跳过数从 37 降到 0，是这次唯一能证明「IT 真的在测东西」的指标。</small></p>
+
+<h3>4.2　实连库验证（非特权角色 <code>app_agent</code>）</h3>
+
+<div class="grid g2">
+  <div class="card">
+    <b>RLS 租户隔离</b>
+    <table style="margin-top:10px">
+      <tbody>
+        <tr><td>未设租户上下文</td><td class="mono"><b>0</b> 行</td></tr>
+        <tr><td>租户 t-a</td><td class="mono"><b>5</b> 行</td></tr>
+        <tr><td>租户 t-b</td><td class="mono"><b>4</b> 行</td></tr>
+        <tr><td>提交后回落</td><td class="mono"><b>0</b> 行（无泄漏）</td></tr>
+      </tbody>
+    </table>
+    <small>角色属性：rolsuper=f / rolbypassrls=f；42 张表 FORCE RLS，表 owner 为库 owner 角色 → 隔离必然生效。</small>
+  </div>
+  <div class="card">
+    <b>审计删除双层拦截</b>
+    <table style="margin-top:10px">
+      <tbody>
+        <tr><td>场景 A：自声明 actor 后删除</td><td><span class="chip c-ok">表权限层拒绝</span></td></tr>
+        <tr><td>场景 B：把 DELETE 权还回去再删</td><td><span class="chip c-ok">触发器层拒绝</span></td></tr>
+      </tbody>
+    </table>
+    <small>改前判据只看会话可自设的 GUC；改后看数据库认证出来的角色成员身份，会话无法自我授予。</small>
+  </div>
+</div>
+
+<h3>4.3　守卫与测试的对应关系</h3>
+
+<p>把 21 个关键守卫逐个对照测试引用，结果是 <b>20 / 21</b> 有测试触达。唯一未被任何测试引用的是 <code>PlatformOpsSessionGuard</code>——这是本次复评新发现的小缺口（见第 5 节 G9）。</p>
+
+<h2>5　残余缺口（按严重度）</h2>
+
+<p>以下均为<b>本次确认仍然存在</b>的缺口，不含已修复项。每条都写明「为什么不现在修」，因为「没做」和「不该现在做」是两件不同的事。</p>
+
+<table>
+  <thead>
+    <tr><th style="width:52px">编号</th><th style="width:52px">级别</th><th>缺口</th><th style="width:250px">现实影响</th><th style="width:270px">为何未在本次修复</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>G1</td><td><span class="chip c-bad">高</span></td>
+      <td><b>CAP 授权闭环在生产未启用</b>：开关仍为关闭，运行期走兼容路径，<b>不校验工具名是否在能力清单内</b></td>
+      <td>「能力闭环」在代码里成立、在运行时未成立。越权执行的最后一道门实际上是开着的。</td>
+      <td>启用依赖 P5 能力目录发布链路完成（开关的既定前提），强行翻转会让现有 Agent 全部无法调用工具。</td>
+    </tr>
+    <tr>
+      <td>G2</td><td><span class="chip c-bad">高</span></td>
+      <td><b>HITL 活体审批通道未接</b>：<code>approvalSource</code> 为空策略，需审批的工具<b>运行时恒被拒</b></td>
+      <td>安全上无风险（fail-closed），但「外部写入」类能力实质不可用，产品功能受限。</td>
+      <td>真正接线要改 <code>ApprovalSource</code> 契约——<code>operationId</code> 每次调用动态生成，而判定发生在调用之前，需先在设计阶段把 ID 前移。属结构性改动，不宜塞进加固批次。</td>
+    </tr>
+    <tr>
+      <td>G3</td><td><span class="chip c-warn">中</span></td>
+      <td><b>审计删除的凭据隔离脚本尚未落库</b>（<code>04_retention_role.sql</code>）</td>
+      <td>任何持有应用凭据者仍可删除审计行。这是当前<b>性价比最高</b>的剩余项：脚本已通过 dry-run 双层验证，执行一次即关闭。</td>
+      <td>该脚本会<b>撤销应用角色的 DELETE 权限</b>，属共享 dev 库上的破坏性变更，需你确认后执行。</td>
+    </tr>
+    <tr>
+      <td>G4</td><td><span class="chip c-warn">中</span></td>
+      <td><b><code>ai_agent</code> 仍持有 <code>BYPASSRLS</code></b>，且是库 owner</td>
+      <td>它已不作应用角色，但凭据一旦泄露即可绕过全部 RLS；爆炸半径是「所有租户的全部数据」。</td>
+      <td>它是运维脚本的执行身份，收回需同步改造备份/运维流程，超出本次范围。</td>
+    </tr>
+    <tr>
+      <td>G5</td><td><span class="chip c-warn">中</span></td>
+      <td><b>输出内容安全是黑名单正则</b>，无严重度分级、无分类器、无供应商接口</td>
+      <td>拼音、谐音、拆字、多语言变体均可绕过；「不宣称内容安全」应作为对外口径。</td>
+      <td>接入真实分类器涉及供应商选型与调用成本，属产品决策而非工程修复。</td>
+    </tr>
+    <tr>
+      <td>G6</td><td><span class="chip c-warn">中</span></td>
+      <td><b>无系统提示词泄漏检测（新发现）</b>：平台没有任何机制识别「模型复述了系统指令」</td>
+      <td>提示词中含能力清单与安全规则的表述，泄漏后可被用于构造更精准的绕过。对应 OWASP LLM07，原报告未覆盖。</td>
+      <td>需先定义「什么算泄漏」——系统提示词本身是动态拼装的，无稳定指纹可匹配。需设计而非补丁。</td>
+    </tr>
+    <tr>
+      <td>G7</td><td><span class="chip c-warn">中</span></td>
+      <td><b>平台级路径无限流</b>：仅有租户级 Run 限流，运维与配置发布端点没有</td>
+      <td>配置发布是低频高危操作，被脚本刷时的后果比 Run 刷更大。</td>
+      <td>平台级限流的桶键语义与租户级不同（无 tenant_id），需先定 key 设计。</td>
+    </tr>
+    <tr>
+      <td>G8</td><td><span class="chip c-mute">低</span></td>
+      <td>限流滑动窗口<b>默认关闭</b></td>
+      <td>固定窗口在边界处实际放行量可达 2×limit。已有实现与开关，只是未开。</td>
+      <td>保持默认不变以免影响既有容量基线；建议在下个调优窗口打开。</td>
+    </tr>
+    <tr>
+      <td>G9</td><td><span class="chip c-mute">低</span></td>
+      <td><code>PlatformOpsSessionGuard</code> 无任何测试触达（21 个守卫里唯一一个）</td>
+      <td>平台运维会话的防线靠人工审阅保证，重构时静默退化不会被发现。</td>
+      <td>本次复评新发现，属补测工作量，不影响当前行为正确性。</td>
+    </tr>
+    <tr>
+      <td>G10</td><td><span class="chip c-mute">低</span></td>
+      <td>恢复扫描器已有健康事实，但<b>未接入健康端点</b>（项目未引入 actuator）</td>
+      <td>「崩溃恢复事实上不工作」目前只能靠翻日志发现。</td>
+      <td>接入需要新增依赖与端点暴露面，须与运维侧对齐口径。</td>
+    </tr>
+    <tr>
+      <td>G11</td><td><span class="chip c-mute">低</span></td>
+      <td>RAG 相关护栏受 A-008 阻断，LLM04 / LLM08 属<b>未覆盖</b>而非「已覆盖」</td>
+      <td>知识库一旦上线，投毒与向量脆弱面即刻暴露，而当前无任何对应机制。</td>
+      <td>RAG 本身未就绪（缺 Docling / BGE-M3），护栏无从挂载。占位不等于生产就绪，这一点必须诚实标注。</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>6　与 OWASP LLM Top 10 (2025) 的覆盖对照</h2>
+
+<p>用业界清单做外部标尺，避免「自己评自己」。判定口径：<b>已覆盖</b>=有强制拦截点且 fail-closed；<b>部分</b>=有检测但可绕过或仅观测；<b>未覆盖</b>=无对应机制。</p>
+
+<table>
+  <thead><tr><th style="width:250px">风险项</th><th style="width:90px">状态</th><th>依据</th></tr></thead>
+  <tbody>
+    <tr><td>LLM01 提示注入</td><td><span class="chip c-warn">部分</span></td><td>输入标记隔离 + 工具结果净化与不可信标记已生效；注入模式<b>只观测不拦截</b>（既定决策，因合法数学题也含「忽略」）。无分类器。</td></tr>
+    <tr><td>LLM02 敏感信息泄露</td><td><span class="chip c-ok">已覆盖</span></td><td>RLS 强制隔离（实连验证）+ 输出 PII 脱敏 + 零保留闸门 + 风险事件只存摘要不存原文。<b>本平台最强的一维</b>。</td></tr>
+    <tr><td>LLM03 供应链</td><td><span class="chip c-warn">部分</span></td><td>MCP 地址策略 / 端点守卫 / 服务器配置校验存在；但无依赖与模型来源的完整性校验。</td></tr>
+    <tr><td>LLM04 数据与模型投毒</td><td><span class="chip c-bad">未覆盖</span></td><td>RAG 未上线（A-008 阻断），语料侧无任何校验机制。</td></tr>
+    <tr><td>LLM05 输出处理不当</td><td><span class="chip c-ok">已覆盖</span></td><td>中间步与终答统一筛查，有害即阻断整次 Run，不存在「先入库后拦截」的窗口。</td></tr>
+    <tr><td>LLM06 过度代理权</td><td><span class="chip c-warn">部分</span></td><td>风险分级审批 + 预算 + 步数上限 + 抢占超时齐备；但 CAP 开关未开（G1）、HITL 未接（G2）。</td></tr>
+    <tr><td>LLM07 系统提示词泄露</td><td><span class="chip c-bad">未覆盖</span></td><td>无检测机制（G6，本次新发现）。</td></tr>
+    <tr><td>LLM08 向量与嵌入脆弱性</td><td><span class="chip c-bad">未覆盖</span></td><td>同 LLM04，RAG 未就绪。</td></tr>
+    <tr><td>LLM09 错误信息</td><td><span class="chip c-warn">部分</span></td><td>编造出处检测已扩到口语化表述与中间步；仍是规则式，无法判定「无出处的事实性错误」。</td></tr>
+    <tr><td>LLM10 无界消耗</td><td><span class="chip c-ok">已覆盖</span></td><td>预算 + 步数 + 整树超时 + 单步抢占 + 滑动窗口限流构成完整闭环。</td></tr>
+  </tbody>
+</table>
+
+<p><b>读数：</b>4 项已覆盖、4 项部分、3 项未覆盖（其中 2 项因 RAG 未上线而连带未覆盖）。对比加固前是「1 项已覆盖、4 项部分、5 项未覆盖」，形态从<b>偏科</b>转向<b>均衡但有洞</b>。</p>
+
+<h2>7　与主流方案的相对位置</h2>
+
+<table>
+  <thead><tr><th style="width:170px">能力</th><th style="width:150px">本平台</th><th>差距说明</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>输入 / 输出护栏分层</td><td><span class="chip c-ok">对齐</span></td>
+      <td>与 NeMo Guardrails 的 input / output rails 同构：入口做边界与分级，出口做内容判定与处置。</td>
+    </tr>
+    <tr>
+      <td>内容判定手段</td><td><span class="chip c-warn">落后</span></td>
+      <td>主流用分类器或供应商接口（Azure 按 0–7 严重度分级处置）；本平台是正则黑名单、二值处置。这是<b>唯一仍存在代差</b>的维度。</td>
+    </tr>
+    <tr>
+      <td>越权执行防护</td><td><span class="chip c-ok">领先</span></td>
+      <td>多数 Agent 框架只有「工具白名单」；本平台是「能力清单 + 风险分级 + 审批 + 预算 + 快照准入」的纵深，粒度高一个量级。</td>
+    </tr>
+    <tr>
+      <td>多租户数据隔离</td><td><span class="chip c-ok">领先</span></td>
+      <td>数据库层 FORCE RLS + 非特权角色 + 启动自检 + 结构漂移门禁，比应用层过滤（多数框架做法）强。</td>
+    </tr>
+    <tr>
+      <td>人工介入（HITL）</td><td><span class="chip c-bad">落后</span></td>
+      <td>LangGraph 的 interrupt / 恢复模型已是标准能力；本平台有审批数据模型与消费逻辑，但缺活体通道（G2）。</td>
+    </tr>
+    <tr>
+      <td>护栏失效的可观测性</td><td><span class="chip c-ok">领先</span></td>
+      <td>「守卫是否真被调用」「配置键是否真存在」「活库是否等于快照」都做了门禁。主流方案极少把<b>护栏自身</b>当作被测对象。</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>8　下一步建议</h2>
+
+<ol>
+  <li><b>立刻可做（成本最低、收益最高）</b>：执行 <code>04_retention_role.sql</code> 关闭 G3。脚本已通过 dry-run 双层验证，属一次性动作。执行后把 <code>agent.retention.require-isolated-credential</code> 置为 <code>true</code>，让「回落应用凭据」变成拒绝启动。</li>
+  <li><b>下个迭代主线</b>：解开 G1 + G2。两者其实是同一个问题的两面——<b>能力闭环与人工审批都缺一个「执行前已确定的操作标识」</b>。建议一次设计解决：在编排阶段先生成操作 ID 并落库，审批与 CAP 校验都基于它，顺带把审批台与运行期打通。</li>
+  <li><b>与产品侧对齐</b>：G5 的内容安全要不要接真实分类器，取决于「是否对外宣称内容安全」。若宣称，必须接；若不宣称，应在文档中明确「本平台提供黑名单级兜底，不提供内容安全保证」。</li>
+  <li><b>补测</b>：G9 的 <code>PlatformOpsSessionGuard</code> 补一组单测，把 20/21 补到 21/21。</li>
+  <li><b>RAG 上线前的前置条件</b>：LLM04 / LLM08 必须在 RAG 解禁<b>之前</b>设计好，否则知识库一上线就是裸奔。</li>
+</ol>
+
+<div class="note">
+  <b>一句话总结：</b>这一轮把「写了但没生效」的虚假保证清掉了，也把「生效但没人知道」的静默缺口变成了启动即报。护栏的可信度提升，主要来自<b>可验证性</b>而不是<b>规则数量</b>——这也应当是后续所有加固的主线。
+</div>
+
+<footer>
+  评估依据：源码实读（21 个关键守卫逐个核对调用方）· 实连库验证（app_agent 非特权角色，事务内回滚）· 全量测试实跑（7 模块 1834 例 0 失败 0 跳过）。<br>
+  生成时间 2026-10-31 · 对应代码状态为工作区当前未提交变更。
+</footer>
+
+</div>
+</body>
+</html>

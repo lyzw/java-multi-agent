@@ -287,6 +287,11 @@ export function SkillCatalogPanel(): JSX.Element {
                             {s.description.purpose}
                           </div>
                         ) : null}
+                        {s.description?.content ? (
+                          <div className="muted" style={{ fontSize: 'var(--t-note)', marginTop: 4 }}>
+                            📝 {s.description.content}
+                          </div>
+                        ) : null}
                       </td>
                       <td>
                         <RiskBadge level={s.riskCeiling} />

@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -68,6 +69,7 @@ import cn.studykid.multiagent.ports.persistence.PlatformOpsSessionPort;
  * 两者刻意不合并 —— 合并后「停用」会顺带移动全局指针，
  * 一次误操作就能把全平台的当前配置切走。
  */
+@Slf4j
 public class PlatformCapabilityPublishService {
 
     /** 本服务可做生命周期迁移的平台级对象类型。 */
@@ -408,7 +410,8 @@ public class PlatformCapabilityPublishService {
         return new SkillDescription(spec.purpose(),
                 spec.usage().stream()
                         .map(u -> new SkillDescription.SkillUsage(u.when(), u.how()))
-                        .toList());
+                        .toList(),
+                spec.content());
     }
 
     /**

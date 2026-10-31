@@ -3,16 +3,20 @@ package cn.studykid.multiagent.bootstrap.config;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 import cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy;
@@ -221,8 +225,92 @@ public class WorkerExecutionConfig {
      * 一旦真实审批权威实现本接口并装配，有副作用工具即可被真实审批驱动。
      */
     @Bean
-    public RiskBasedApprovalPolicy.PolicyEngineApprovalSource approvalSource() {
-        return new RiskBasedApprovalPolicy.PolicyEngineApprovalSource();
+    public RiskBasedApprovalPolicy.ApprovalSource approvalSource(
+            @Value("${agent.approval.source.mode:none}") String mode,
+            @Value("${agent.approval.live-source-enabled:false}") boolean liveSourceEnabled,
+            @NonNull Environment environment) {
+        String normalized = mode == null ? "none" : mode.trim().toLowerCase(Locale.ROOT);
+        Map<String, Map<String, RiskBasedApprovalPolicy.ApprovalSource.Verdict>> policy =
+                loadApprovalPolicy(environment);
+        boolean wired = "policy-engine".equals(normalized) && !policy.isEmpty();
+
+        // ⚠️⚠️ **一致性 fail-closed（M2-3）**：
+        //    「来源模式」与「是否已接活体通道」是两个键，若允许它们不一致，
+        //    就会出现「以为接上了、其实没有」的静默失效 ——
+        //    例如 mode=policy-engine 但策略表为空（= 全部 FAIL_CLOSED），
+        //    或 live-source-enabled=true 但 mode=none（= 根本没有来源实现）。
+        //    这类配置错位在旧实现里是无声的（审批恒拒，日志只有普通拒绝），
+        //    故此处直接**拒绝启动**。
+        if (wired != liveSourceEnabled) {
+            throw new IllegalStateException(
+                    "审批来源配置不一致：agent.approval.source.mode=" + normalized
+                            + "（已配置策略租户数=" + policy.size() + "）与 "
+                            + "agent.approval.live-source-enabled=" + liveSourceEnabled
+                            + " 矛盾。两者必须同时为 true（已接入）或同时为 false（未接入）。");
+        }
+
+        return switch (normalized) {
+            case "none" -> {
+                log.info("审批来源模式=none：需审批的工具在运行时恒 FAIL_CLOSED（安全默认）");
+                yield new RiskBasedApprovalPolicy.PolicyEngineApprovalSource();
+            }
+            case "policy-engine" -> {
+                log.info("审批来源模式=policy-engine：已配置租户 {} 个", policy.size());
+                yield new RiskBasedApprovalPolicy.PolicyEngineApprovalSource(policy);
+            }
+            default -> throw new IllegalStateException(
+                    "未知的审批来源模式: " + mode
+                            + "（支持 none / policy-engine；未识别模式一律拒绝启动）");
+        };
+    }
+
+    /**
+     * 读取审批策略表（{@code agent.approval.source.policy}）。
+     *
+     * <p>⚠️ <b>未知结论值一律拒绝启动</b>（fail-closed）：
+     * 把 {@code "MAYBE"} 当成「不批准」固然安全，但把配置写错这件事
+     * 本身必须可见 —— 否则运维会以为策略生效了。
+     *
+     * @param environment 环境
+     * @return 租户 → (工具名 → 结论)
+     */
+    private static Map<String, Map<String, RiskBasedApprovalPolicy.ApprovalSource.Verdict>>
+            loadApprovalPolicy(@NonNull Environment environment) {
+        // ⚠️ 策略表用**扁平规则列表**而非嵌套 map：
+        //    Spring 的 Bindable 没有「map of map」的可用重载，
+        //    嵌套 map 绑定在不同 Boot 版本上行为不一致（本次实测编译不过）。
+        //    扁平列表（"租户:工具=结论"）绑定稳定、解析一目了然。
+        List<String> rules = org.springframework.boot.context.properties.bind.Binder
+                .get(environment)
+                .bind("agent.approval.source.policy.rules",
+                        org.springframework.boot.context.properties.bind.Bindable
+                                .listOf(String.class))
+                .orElseGet(List::of);
+        Map<String, Map<String, RiskBasedApprovalPolicy.ApprovalSource.Verdict>> result =
+                new java.util.LinkedHashMap<>();
+        for (String rule : rules) {
+            if (rule == null || rule.isBlank()) {
+                continue;
+            }
+            int eq = rule.indexOf('=');
+            int colon = rule.indexOf(':');
+            if (eq <= 0 || colon <= 0 || colon >= eq) {
+                throw new IllegalStateException(
+                        "审批策略规则格式错误: " + rule + "（应为 租户ID:工具名=APPROVED|REJECTED）");
+            }
+            String tenantId = rule.substring(0, colon).trim();
+            String toolName = rule.substring(colon + 1, eq).trim();
+            String rawVerdict = rule.substring(eq + 1).trim().toUpperCase(Locale.ROOT);
+            RiskBasedApprovalPolicy.ApprovalSource.Verdict verdict = switch (rawVerdict) {
+                case "APPROVED" -> RiskBasedApprovalPolicy.ApprovalSource.Verdict.APPROVED;
+                case "REJECTED" -> RiskBasedApprovalPolicy.ApprovalSource.Verdict.REJECTED;
+                default -> throw new IllegalStateException(
+                        "未知的审批结论: " + rule + "（支持 APPROVED / REJECTED）");
+            };
+            result.computeIfAbsent(tenantId, k -> new java.util.LinkedHashMap<>())
+                    .put(toolName, verdict);
+        }
+        return result;
     }
 
     /**
@@ -239,23 +327,93 @@ public class WorkerExecutionConfig {
             RunToolLedgerPort ledger,
             ApprovalPort approvalPort,
             ToolInvocationGate.CancelGuard cancelGuard,
-            RiskBasedApprovalPolicy.PolicyEngineApprovalSource approvalSource,
+            RiskBasedApprovalPolicy.ApprovalSource approvalSource,
             BigDecimal reserveAmount,
             cn.studykid.multiagent.application.cap.CapExecutionFlow capExecutionFlow,
             cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlerProvider,
             cn.studykid.multiagent.ports.http.HttpToolHandlerProvider httpToolHandlerProvider,
             cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation,
             java.time.Clock clock,
-            cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudgetProbe) {
+            cn.studykid.multiagent.application.orchestration.RunBudgetProbe runBudgetProbe,
+            cn.studykid.multiagent.worker.execute.CapabilityClosureGuard closureGuard,
+            cn.studykid.multiagent.application.approval.ApprovalRequestSettings
+                    approvalRequestSettings) {
         log.info("装配工具闸门: 工具 {} 个，审批策略=按风险等级，审批来源=策略引擎，"
-                        + "CAP 授权链路={}，多级委派={}，Run 级预算={}，HTTP 出站={}",
+                        + "CAP 授权链路={}，多级委派={}，Run 级预算={}，HTTP 出站={}，"
+                        + "闭包校验={}",
                 tools.size(), capExecutionFlow.isEnabled(), delegation != null,
-                runBudgetProbe != null, httpToolHandlerProvider != null);
+                runBudgetProbe != null, httpToolHandlerProvider != null,
+                closureGuard == null ? "未装配" : closureGuard.mode());
+        // ⚠️⚠️ **闭包守卫必须真实注入**（P0-1a）：
+        //    不注入时，既有链路**完全没有**能力闭包校验 ——
+        //    「闭包」只在呈现层生效（模型看不到越权工具），
+        //    强制层却没有这道校验：任何已注册工具都可被任意 Agent 调用。
         return new ToolInvocationGate(
                 tools, authorization, approvalPolicy, budget, ledger, approvalPort,
                 BudgetPolicy.requireReserveAmount(reserveAmount),
                 cancelGuard, approvalSource, capExecutionFlow, mcpHandlerProvider, delegation,
-                clock, runBudgetProbe, httpToolHandlerProvider);
+                clock, runBudgetProbe, httpToolHandlerProvider, closureGuard,
+                // ⚠️ P0-2：必须真实注入 —— 否则需要审批的工具被拒绝时，
+                //    审批台**看不到任何待办**（approval 表无写入方），
+                //    「审批闭环」仍是一扇通向墙壁的门。
+                approvalRequestSettings);
+    }
+
+    /**
+     * 审批请求登记参数（P0-2）。
+     *
+     * <p>⚠️ <b>这两个键此前没有任何运行时读取点</b>
+     * （{@code agent.approval.ttl} / {@code agent.approval.approver-scope}）——
+     * 于是「审批记录」连有效期与审批人范围都没有落库依据。
+     * 现在它们有了真实消费者，故同时把
+     * {@code ConfigReadService} 里的 {@code effective} 标注改为 true。
+     *
+     * <p>⚠️ <b>缺配置即拒绝启动</b>（fail-closed）：
+     * 退回默认值等于「悄悄用了一个没人审过的有效期」。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.approval.ApprovalRequestSettings
+            approvalRequestSettings(
+            @Value("${agent.approval.ttl}") Duration ttl,
+            @Value("${agent.approval.approver-scope}") String approverScope) {
+        return new cn.studykid.multiagent.application.approval.ApprovalRequestSettings(
+                approverScope, ttl);
+    }
+
+    /**
+     * 能力闭包守卫（P0-1a · 关闭「越权调用工具」这个洞的强制层）。
+     *
+     * <p>⚠️ <b>模式由配置决定</b>（{@code config.flag.cap-closure-enforcement}）：
+     * <ul>
+     *   <li>{@code off}：不校验（历史行为）；</li>
+     *   <li>{@code warn}：校验但只告警 —— 用于「能力目录尚未装载」的过渡期，
+     *       把缺口变成<b>可见</b>的，而不是继续悄悄放行；</li>
+     *   <li>{@code enforce}：校验且拒绝未声明的工具。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>为什么默认不是 {@code enforce}</b>：
+     * 闭包判定的输入是<b>能力目录</b>。目录为空时，任何强制模式都会把
+     * <b>所有</b>工具调用拒掉 —— 那不是「校验生效」，是「平台不可用」。
+     * 与其让运维在不知情的情况下遭遇全拒绝，不如让缺口明确可见。
+     * 装载能力目录后应切到 {@code enforce}，并配合
+     * {@code config.flag.cap-enforcement-required=true} 让「未开启强制」在生产
+     * <b>拒绝启动</b>（见 {@code CapEnforcementReadinessGuard}）。
+     */
+    @Bean
+    public cn.studykid.multiagent.worker.execute.CapabilityClosureGuard capabilityClosureGuard(
+            cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
+            cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort capabilitySnapshots,
+            @Value("${config.flag.cap-closure-enforcement:warn}") String enforcementMode) {
+        cn.studykid.multiagent.worker.execute.CapabilityClosureGuard.Mode mode =
+                cn.studykid.multiagent.worker.execute.CapabilityClosureGuard.Mode
+                        .parse(enforcementMode);
+        if (mode != cn.studykid.multiagent.worker.execute.CapabilityClosureGuard.Mode.ENFORCE) {
+            log.warn("⚠️ 能力闭包校验未强制（模式={}）："
+                    + "既有链路只告警不拒绝 —— 越权调用工具仍可能通过，"
+                    + "请先装载能力目录（cap_tool_def / cap_skill_def）再切到 enforce", mode);
+        }
+        return new cn.studykid.multiagent.worker.execute.CapabilityClosureGuard(
+                closureResolver, capabilitySnapshots, mode);
     }
 
     /**
@@ -338,6 +496,27 @@ public class WorkerExecutionConfig {
     }
 
     /**
+     * 抢占式单步超时执行器（P2-1）。
+     *
+     * <p>⚠️⚠️ <b>为什么单独开一个 Bean 而不是共用通用线程池</b>：
+     * 本执行器的任务会被 {@code Future.cancel(true)} 中断或被遗弃到超时为止，
+     * 与业务线程池混用会把「模型卡住」的后果扩散到无关任务上
+     * （线程被占死 → 连带 MQ 消费、租约续期一起排队）。
+     *
+     * <p>⚠️ <b>为什么用虚拟线程</b>（Java 21）：任务体几乎全是
+     * 「等 HTTP 响应」的阻塞 I/O，虚拟线程在被阻塞时让出载体，
+     * 不会像平台线程那样把并发上限压到几百。
+     *
+     * <p>⚠️ <b>不设池化上限</b>：上限引入后，一次「配额耗尽」会让超时保护
+     * 本身排队等待，反而放大故障。真正的并发闸门在更外层的执行信号量，
+     * 不在这里重复发明。
+     */
+    @Bean(destroyMethod = "close")
+    public java.util.concurrent.ExecutorService stepPreemptionExecutor() {
+        return java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    /**
      * 执行循环（FR-004）。
      */
     /**
@@ -359,12 +538,18 @@ public class WorkerExecutionConfig {
             cn.studykid.multiagent.ports.persistence.RunEventPort eventPort,
             cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter adopter,
             cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe lifecycleProbe,
+            cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort,
+            cn.studykid.multiagent.application.config.ModelPricingPolicy modelPricingPolicy,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             cn.studykid.multiagent.ports.persistence.RunStepPort runStepPort,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             cn.studykid.multiagent.ports.persistence.RiskEventPort riskEventPort,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
-            cn.studykid.multiagent.ports.observer.ExecutionObserverChain observerChain) {
+            cn.studykid.multiagent.ports.observer.ExecutionObserverChain observerChain,
+            java.util.concurrent.ExecutorService stepPreemptionExecutor,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            org.springframework.beans.factory.ObjectProvider<RunDispatchConsumer.RunExecutor>
+                    executorProvider) {
         // ⚠️⚠️ **接管器必须在这里真实注入**（第九批 · MA-T12）：
         //    不注入时，Worker 接管后 RUNNING 的委派记录**永远无人能收敛**
         //    （新世代 token 不匹配、旧世代已被接管），
@@ -377,9 +562,136 @@ public class WorkerExecutionConfig {
         // ⚠️ **安全事件写入端口（P7-4）**：可选注入（required=false）——
         //    缺失时不落 agent_risk_event（SEC-2/SEC-3 明细显示「未采集」）。
         //    生产环境必须装配（infrastructure 的 JdbcRiskEventRepository）。
+        // ⚠️⚠️ **预算端口与单价表必须真实注入**（P0-3b）：
+        //    不注入时，模型调用的成本**不入账** —— usage_record 的 token 两列永远为 0，
+        //    cost_amount 只有工具调用的固定代理值，
+        //    「单 Run 成本上限」（maxCostPerRun）也因为「不知道花了多少」而无从判定。
+        //    这正是 P0-3 的核心缺口，不能靠默认值糊过去。
         return new RunExecutionLoop(modelGateway, claimPort, gate,
                 Duration.ofSeconds(leaseSeconds), workerId, promptGuard, eventPort, adopter,
-                contextTokenBudget, lifecycleProbe, runStepPort, riskEventPort, observerChain);
+                contextTokenBudget, lifecycleProbe, runStepPort, riskEventPort, observerChain,
+                // ⚠️ P2-1：必须真实注入，否则单步调用不受 deadline 约束
+                //    （循环只在每轮开头检查，FR-024 在单步粒度形同虚设）
+                stepPreemptionExecutor, budgetPort, modelPricingPolicy,
+                // ⚠️ M1-4b / G2：恢复续跑接缝。
+                //    ⚠️ **必须复用与主路径同一个 RunExecutor** ——
+                //    另起一套「恢复专用执行逻辑」必然与主路径语义漂移
+                //    （兜底收敛、取消检查、预算口径各写一遍，越修越不一致）。
+                //    ObjectProvider 是为了打破循环依赖：RunExecutor 本身依赖 loop。
+                continuation(executorProvider));
+    }
+
+    /**
+     * 恢复续跑接缝（M1-4b / G2）。
+     *
+     * <p>⚠️ <b>为什么用 {@code ObjectProvider} 延迟取</b>：
+     * {@code RunExecutor} bean 依赖 {@code RunExecutionLoop}，
+     * 而循环构造时又需要接缝 —— 直接注入会形成循环依赖。
+     * 延迟取既打破环，又保证「取到的就是主路径那个执行器」。
+     *
+     * <p>⚠️ <b>接缝缺失 = fail-closed</b>：{@code getIfAvailable()} 返回 {@code null}
+     * 时传 {@code null} 给循环 → 循环在恢复批次执行成功后
+     * <b>显式收敛 FAILED</b>（{@code RESUME_CONTINUATION_UNAVAILABLE}），
+     * 绝不把 Run 悬在 RUNNING 等租约过期被接管（那等于整单重跑）。
+     */
+    private static RunExecutionLoop.@Nullable RunContinuation continuation(
+            ObjectProvider<RunDispatchConsumer.RunExecutor> executorProvider) {
+        if (executorProvider == null) {
+            return null;
+        }
+        return (tenantId, task) -> {
+            RunDispatchConsumer.RunExecutor executor = executorProvider.getIfAvailable();
+            if (executor == null) {
+                return RunExecutionLoop.ExecutionOutcome.failed(
+                        "RESUME_CONTINUATION_UNAVAILABLE");
+            }
+            // ⚠️ 结局映射必须与 RunDispatchConsumer 的 MQ 语义一致：
+            //    UNKNOWN_RESULT 仍是「不可重试」，绝不能在此变成可重试
+            //    （重投 = 重复副作用 = Sev-0）。
+            return switch (executor.execute(tenantId, task)) {
+                case SUCCEEDED -> RunExecutionLoop.ExecutionOutcome.succeeded();
+                case FAILED -> RunExecutionLoop.ExecutionOutcome.failed("EXECUTION_FAILED");
+                case CANCELLED -> RunExecutionLoop.ExecutionOutcome.cancelled();
+                case RETRYABLE_FAILURE ->
+                        RunExecutionLoop.ExecutionOutcome.retryableFailure("RETRYABLE_FAILURE");
+                case UNKNOWN_RESULT ->
+                        RunExecutionLoop.ExecutionOutcome.unknownResult(null);
+                case STALE_GENERATION ->
+                        RunExecutionLoop.ExecutionOutcome.skippedStaleGeneration();
+            };
+        };
+    }
+
+    /**
+     * 审批决定唤醒器（M1-6 / G2 · PARK → RESUME 的后半段）。
+     *
+     * <p>⚠️ <b>为什么必须装配</b>：Run 在工具需要审批时进入
+     * {@code WAITING_APPROVAL} 并释放租约让出 worker 线程；
+     * 人批准后若没人把它拉回执行，审批台显示「已批准」而工具永远不执行
+     * —— 这正是 G2「HITL 恒拒」的最后一环。
+     *
+     * <p>⚠️ <b>依赖方向</b>：本 bean 在 bootstrap（组合根）层把
+     * {@code agent-worker} 的实现接到 {@code agent-ports} 的端口上，
+     * API 层只认端口、不知道 Worker 的存在（分层不倒置）。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ApprovalWakeupPort approvalWakeupPort(
+            cn.studykid.multiagent.ports.persistence.ApprovalQueryPort approvals,
+            RunClaimPort claimPort,
+            cn.studykid.multiagent.ports.persistence.RunToolLedgerPort ledger,
+            RunExecutionLoop loop) {
+        log.info("装配审批唤醒器: workerId={}, 租约={}s", workerId, leaseSeconds);
+        return new cn.studykid.multiagent.worker.execute.ApprovalDecidedWakeupConsumer(
+                approvals, claimPort, ledger, loop, workerId,
+                Duration.ofSeconds(leaseSeconds));
+    }
+
+    /**
+     * 模型单价表（P0-3b · 成本入账）。
+     *
+     * <p>⚠️ <b>为什么用 {@code Binder} 而不是 {@code @Value}</b>：
+     * {@code agent.pricing.models} 在 yml 里是 <b>map of map</b>，
+     * {@code @Value} 期望标量 → 必然解析失败（同 {@code agent.tool.risk-level-map}）。
+     *
+     * <p>⚠️ <b>缺配置不拒绝启动</b>（与 {@code risk-level-map} 的 fail-closed 不同）：
+     * 单价表缺失只是「成本不可计量」，不是「安全门禁缺失」。
+     * 缺表时 token 仍如实记录、成本按 0 记并打 WARN ——
+     * 让平台因为「没配价」而拒绝启动，是拿可用性换一个可观测性缺口，不划算。
+     * 但「哪些模型还没配价」必须在启动日志里<b>可见</b>。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.config.ModelPricingPolicy modelPricingPolicy(
+            @NonNull Environment environment) {
+        // ⚠️ 值类型取 Object：每个模型条目本身是一个 map，
+        //    用嵌套泛型（mapOf(String, mapOf(String, Object))) 会撞上 Binder
+        //    的重载解析歧义；绑定成 Object 后再逐条转型即可，语义等价。
+        Map<String, Object> entries = org.springframework.boot.context.properties.bind.Binder
+                .get(environment)
+                .bind("agent.pricing.models",
+                        org.springframework.boot.context.properties.bind.Bindable
+                                .mapOf(String.class, Object.class))
+                .orElseGet(Map::of);
+        Map<String, Map<String, Object>> raw = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : entries.entrySet()) {
+            if (entry.getValue() instanceof Map<?, ?> values) {
+                Map<String, Object> perModel = new java.util.LinkedHashMap<>();
+                values.forEach((k, v) -> perModel.put(String.valueOf(k), v));
+                raw.put(entry.getKey(), perModel);
+            } else {
+                throw new IllegalStateException(
+                        "agent.pricing.models." + entry.getKey() + " 必须是价格映射（"
+                                + "input-per-1k-tokens / output-per-1k-tokens）");
+            }
+        }
+        cn.studykid.multiagent.application.config.ModelPricingPolicy policy =
+                cn.studykid.multiagent.application.config.ModelPricingPolicy.of(raw);
+        if (policy.isEmpty()) {
+            log.warn("模型单价表为空（agent.pricing.models 未配置）："
+                    + "模型调用的 token 会如实记录，但成本按 0 记，成本类指标不可用");
+        } else {
+            log.info("模型单价表已加载: 已配置模型 {} 个", policy.configuredModels().size());
+        }
+        return policy;
     }
 
     /**
@@ -457,6 +769,11 @@ public class WorkerExecutionConfig {
                         RunDispatchConsumer.Outcome.STALE_GENERATION;
                 // ⚠️ 租户暂停/退役 → 终态失败，不重投（重投只会再次被拒）
                 case TENANT_BLOCKED -> RunDispatchConsumer.Outcome.FAILED;
+                // ⚠️ M1-4 / G2：PARKED = Run 已迁 WAITING_APPROVAL 并释放租约，
+                //    挂起是「暂停」而非失败——MQ 消息必须 ack 丢弃（映射同 SUCCEEDED），
+                //    绝不可重投（重投会被再次领取 = 重复登记待办 + 幂等键撞车）；
+                //    恢复由 approval.decided 事件（WakeupConsumer）驱动，与本消息无关。
+                case PARKED -> RunDispatchConsumer.Outcome.SUCCEEDED;
             };
         };
     }

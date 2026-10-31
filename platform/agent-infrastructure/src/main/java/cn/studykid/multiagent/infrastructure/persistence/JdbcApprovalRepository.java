@@ -142,12 +142,70 @@ public class JdbcApprovalRepository implements ApprovalPort {
         return approvalId;
     }
 
+    /**
+     * 登记一条<b>待人工审批</b>的请求（P0-2 · 审批行的生产写入方）。
+     *
+     * <p>⚠️ <b>用「INSERT … WHERE NOT EXISTS」而不是「先查后插」</b>：
+     * 后者是 check-then-act，同一 operation 的并发登记会堆出多条待决记录
+     * （审批台出现重复待办，运营要处理同一件事 N 次）。
+     * 单条语句由 PG 原子完成，且天然幂等。
+     *
+     * <p>⚠️ <b>只登记不放行</b>：写入 PENDING 行后，调用方仍须 fail-closed 拒绝
+     * 本次工具执行；是否放行由 {@link #consume} 依据审批状态判定。
+     */
+    @Override
+    public @NonNull Optional<String> request(@NonNull String tenantId,
+                                              @NonNull String operationId,
+                                              @NonNull String argumentDigest,
+                                              @NonNull String targetResource,
+                                              @NonNull ApprovalRequirement requirement,
+                                              @NonNull String approverScope,
+                                              @NonNull Instant expiresAt) {
+        Optional<String> approvalId = inTenantTx(tenantId, conn -> {
+            String sql = """
+                    INSERT INTO approval
+                        (tenant_id, operation_id, state, requirement,
+                         argument_digest, target_resource, approver_scope, expires_at)
+                    SELECT ?::uuid, ?::uuid, 'PENDING', ?::approval_requirement,
+                           ?, ?, ?, ?
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM approval
+                        WHERE tenant_id = ?::uuid AND operation_id = ?::uuid
+                          AND state = 'PENDING'
+                    )
+                    RETURNING approval_id::text
+                    """;
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, tenantId);
+                ps.setString(2, operationId);
+                ps.setString(3, requirement.name());
+                ps.setString(4, argumentDigest);
+                ps.setString(5, targetResource);
+                ps.setString(6, approverScope);
+                ps.setTimestamp(7, Timestamp.from(expiresAt));
+                ps.setString(8, tenantId);
+                ps.setString(9, operationId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() ? Optional.of(rs.getString(1)) : Optional.<String>empty();
+                }
+            }
+        });
+        // ⚠️ 登记**不写「已批准」类的审计**：
+        //    审计口径是「审批决定可追溯」，登记待办不是决定。
+        //    （真正被决定时由 JdbcApprovalQueryRepository 写决定审计。）
+        return approvalId;
+    }
+
     @Override
     public @NonNull ApprovalOutcome consume(@NonNull String tenantId,
                                            @NonNull String operationId,
                                            @NonNull String argumentDigest,
 @NonNull String targetResource,
                                      @NonNull String runId) {
+        // ⚠️ M1-5（G2 修复链路闭环）：本方法行为保持不变（仍只放行进 APPROVED），
+        //    真正的价值在于 M1-6/7 提供「人类 approve → PENDING→APPROVED」的闭环后，
+        //    RunExecutionLoop.resume 重入闸门时能在此消费到已批准的审批 → 执行。
+        //    此前该闭环不存在，PENDING 行虽由 request() 写入却永不生效。
         // ⚠️ firstConsume 区分「首次消费」与「幂等重放」：
         //    两者都返回 CONSUMED，但只有前者应留审计（否则崩溃恢复重放会产生 N 条重复痕迹）。
         boolean[] firstConsume = {false};
@@ -320,10 +378,15 @@ public class JdbcApprovalRepository implements ApprovalPort {
 
     private @Nullable ApprovalRow lockApproval(Connection conn, String tenantId,
                                               String operationId) throws SQLException {
+        // ⚠️ M0-2：确定性排序——若同一 operation 同时存在 PENDING 与 APPROVED，
+        //    必须优先锁定 APPROVED（人已批准），否则可能锁到 PENDING 导致
+        //    「人批了也不生效」。created_at DESC 作次级排序（取最新活动审批）。
         String sql = """
                 SELECT state::text, argument_digest, target_resource, expires_at
                 FROM approval
                 WHERE tenant_id = ?::uuid AND operation_id = ?::uuid
+                ORDER BY (state = 'APPROVED') DESC, created_at DESC
+                LIMIT 1
                 FOR UPDATE
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {

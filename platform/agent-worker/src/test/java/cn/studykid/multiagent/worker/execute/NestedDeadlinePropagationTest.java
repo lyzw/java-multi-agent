@@ -35,6 +35,8 @@ import cn.studykid.multiagent.core.orchestration.AgentInvocationStatus;
 import cn.studykid.multiagent.core.orchestration.DelegationContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.model.ModelGateway;
+import cn.studykid.multiagent.ports.observer.ModelCallObserverChain;
+import cn.studykid.multiagent.ports.observer.ObservableModelGateway;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
 import cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider;
@@ -76,6 +78,18 @@ import cn.studykid.multiagent.ports.tool.ToolHandler;
  * 真正要证明的是<b>根的截止时刻能穿过子执行、抵达孙执行</b>。
  */
 class NestedDeadlinePropagationTest {
+
+    /**
+     * 无观测者的观测链：测试不需要观测副作用，仅用于满足 WorkerChildAgentRunner
+     * 构造器对 {@link ObservableModelGateway}（ModelGateway 的装饰器）的类型要求。
+     */
+    private static final ModelCallObserverChain NOOP_OBSERVERS =
+            new ModelCallObserverChain(java.util.List.of());
+
+    /** 把 ModelGateway 桩包成 ObservableModelGateway，满足构造器类型要求。 */
+    private static ObservableModelGateway observe(ModelGateway gw) {
+        return new ObservableModelGateway(gw, NOOP_OBSERVERS);
+    }
 
     private static final String TENANT = "t-a";
     private static final String RUN = "run-1";
@@ -526,7 +540,7 @@ row.requestedTargetAgentId(),
 
         // ⚠️ 真实子执行器用**同一个闸门**：子 Agent 的嵌套委派必须再走一次闸门，
         //    否则测的就是「一次性链路」而不是「嵌套路径」。
-        recorder.delegate = new WorkerChildAgentRunner(gateway, gate, configs(), 4, null,
+        recorder.delegate = new WorkerChildAgentRunner(observe(gateway), gate, configs(), 4, null,
                 System::nanoTime, childClock);
         return new Fixture(gate, recorder);
     }

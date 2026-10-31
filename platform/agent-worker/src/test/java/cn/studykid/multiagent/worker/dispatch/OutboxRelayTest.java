@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jspecify.annotations.NonNull;
@@ -207,6 +208,77 @@ class OutboxRelayTest {
     }
 
     // ── R-3：构造期 fail-closed ─────────────────────────────────
+
+    @Nested
+    @DisplayName("R-7 ⚠️ 停机必须等待在途轮次完成（修复 shutdown race）")
+    class StopJoinsInFlightThread {
+
+        @Test
+        @DisplayName("⚠️⚠️ R-7a stop() 阻塞等待在途发布结束、线程才退出"
+                + "（否则守护线程会在 DataSource 关闭后命中已关闭的池）")
+        void stopWaitsForInFlightPublishThenThreadExits() throws Exception {
+            // ⚠️ 用「标志位 + 忙等」模拟在途 DB 操作：JDBC getConnection 不可被
+            //    interrupt 直接打断，故这里忽略中断、只在标志位置位后退出。
+            final boolean[] released = {false};
+            AtomicInteger sendCalls = new AtomicInteger();
+            MessageSender blockingSender = new MessageSender() {
+                @Override
+                public void send(String eventType, OutboxMessage message) {
+                    sendCalls.incrementAndGet();
+                    OutboxMessage.assertPayloadSafe(message.toPayload());
+                    while (!released[0]) {
+                        try {
+                            Thread.sleep(5);
+                        } catch (InterruptedException e) {
+                            // 忽略 stop() 的 interrupt：在途 DB 操作不会因此提前结束
+                        }
+                    }
+                }
+            };
+            StubOutbox outbox = new StubOutbox();
+            outbox.add(pending("ob-1"));
+
+            OutboxRelay relay = new OutboxRelay(
+                    List.of(new OutboxPublisher(outbox, blockingSender, TENANT,
+                            Clock.fixed(Instant.parse("2026-10-19T00:00:00Z"),
+                                    ZoneOffset.UTC), 50, 5)),
+                    allowAll(), Duration.ofMillis(200));
+            relay.start();
+
+            // 轮询确认 worker 已进入在途发布
+            for (int i = 0; i < 100 && sendCalls.get() == 0; i++) {
+                Thread.sleep(10);
+            }
+            assertThat(sendCalls.get())
+                    .as("工作线程必须已进入在途发布")
+                    .isPositive();
+
+            // 独立线程稍后释放：证明 stop() 会真正阻塞等待，而非立即返回
+            Thread releaser = new Thread(() -> {
+                try {
+                    Thread.sleep(120);
+                } catch (InterruptedException ignored) {
+                    // 无视
+                }
+                released[0] = true;
+            });
+            releaser.setDaemon(true);
+            releaser.start();
+
+            long startNanos = System.nanoTime();
+            relay.stop(); // ⚠️ 修复前：立即返回，线程仍阻塞在在途调用上（仍存活）
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+
+            assertThat(elapsedMs)
+                    .as("⚠️ stop() 必须等待在途轮次（约 120ms），"
+                            + "若立即返回即为未 join 的旧缺陷")
+                    .isGreaterThan(60);
+            assertThat(relay.isWorkerAlive())
+                    .as("⚠️⚠️ 停机后工作线程必须已退出，"
+                            + "否则会在已关闭的 DataSource 上执行 DB 操作")
+                    .isFalse();
+        }
+    }
 
     @Nested
     @DisplayName("R-3 构造期防护")

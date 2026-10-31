@@ -127,13 +127,13 @@ public class AgentModelConfigAssembler {
     }
 
     /**
-     * 追加 Skill 两级描述中的 <b>2级 usage 指引</b>（执行期注入）。
+     * 追加 Skill 三级描述中的 <b>2级 usage 指引 + 3级 content 详细描述</b>（执行期注入）。
      *
      * <p>⚠️ <b>1级不用这里注入</b>：purpose 是「选型信号」，已并入工具 Schema 的
-     * description（模型从工具列表挑工具时首先看到）—— 两级消费者不同。
+     * description（模型从工具列表挑工具时首先看到）—— 三级消费者不同。
      *
-     * <p>⚠️ <b>only usage</b>：只有写了分场景指引（{@code when → how}）的 Skill 才成节；
-     * 没有 2级内容的 Skill（存量版本行）提示词<b>一字不改</b>（向后兼容）。
+     * <p>⚠️ <b>usage + content</b>：只有写了分场景指引（{@code when → how}）
+     * 或详细描述的 Skill 才成节；没有 2/3 级内容的 Skill（存量版本行）提示词<b>一字不改</b>（向后兼容）。
      *
      * <p>⚠️ <b>指引不是授权</b>：提示词里明示「描述不是授权」，
      * 描述与声明冲突时以声明为准（fail-closed）；指引只是行为引导。
@@ -146,7 +146,15 @@ public class AgentModelConfigAssembler {
         StringBuilder section = new StringBuilder();
         for (EffectiveClosure.SkillBinding binding : closure.skills()) {
             SkillDescription description = binding.description();
-            if (description == null || description.usage().isEmpty()) {
+            // ⚠️ 无描述的 Skill（存量/遗留版本）跳过：提示词一字不改，向后兼容
+            //     （直接 description.usage() 会在 description 为 null 时 NPE，
+            //       导致整个 Agent 配置装配崩溃——legacySkillFallsBackToToolName 即覆盖此路径）
+            if (description == null) {
+                continue;
+            }
+            boolean hasUsage = !description.usage().isEmpty();
+            boolean hasContent = !description.content().isBlank();
+            if (!hasUsage && !hasContent) {
                 continue;
             }
             if (section.isEmpty()) {
@@ -154,9 +162,14 @@ public class AgentModelConfigAssembler {
                         .append("未命中任何适用场景时不要强行调用）");
             }
             section.append("\n- 技能「").append(description.purpose()).append("」：");
-            for (SkillDescription.SkillUsage usage : description.usage()) {
-                section.append("\n  · 当 ").append(usage.when())
-                        .append("：").append(usage.how());
+            if (hasUsage) {
+                for (SkillDescription.SkillUsage usage : description.usage()) {
+                    section.append("\n  · 当 ").append(usage.when())
+                            .append("：").append(usage.how());
+                }
+            }
+            if (hasContent) {
+                section.append("\n  · 详细描述：").append(description.content());
             }
         }
         if (section.isEmpty()) {

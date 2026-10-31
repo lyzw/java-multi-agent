@@ -62,6 +62,8 @@ class ToolBypassArchitectureTest {
      *   <li>端口定义与工具实现 —— 提供 SPI 与实现；</li>
      *   <li>审批策略（端口 + 实现）—— 只读工具的<b>风险等级</b>以决定是否需要审批；</li>
      *   <li>启动期一致性守卫 —— 只读风险等级，与 yml 镜像比对；</li>
+     *   <li>P1-C 审批就绪守卫 —— 只读元信息（复用审批策略判定），
+     *       把「需审批却无活体通道」这一状态变为可见，<b>不做任何放行判定</b>；</li>
      *   <li>装配配置 —— 声明工具 Bean 与把工具集合注入闸门；</li>
      *   <li>MCP-backed 工具与其解析器（P4）—— <b>提供</b> MCP 工具的执行器，
      *       但<b>不执行</b>：真正的执行只发生在闸门内（它们只被闸门取得并调用）。</li>
@@ -84,7 +86,8 @@ class ToolBypassArchitectureTest {
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/http/DbHttpToolHandlerProvider.java",
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/WorkerExecutionConfig.java",
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ApplicationConfiguration.java",
-            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ToolRiskLevelConsistencyGuard.java");
+            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ToolRiskLevelConsistencyGuard.java",
+            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ApprovalReadinessGuard.java");
 
     /** Spring AI 自动执行路径（ADR-011 明令禁用）。 */
     private static final List<String> FORBIDDEN_AUTO_EXECUTION = List.of(

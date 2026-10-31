@@ -195,14 +195,15 @@ class PlatformCapabilityPublishServiceTest {
     }
 
     /**
-     * 两级描述样例（1级 purpose + 2级 usage 的 when→how），
-     * 用于断言「两级描述随申请单成对透传」。
+     * 三级描述样例（1级 purpose + 2级 usage 的 when→how + 3级 content），
+     * 用于断言「三级描述随申请单成对透传」。
      */
     private static ConfigPublishPayload.SkillDescriptionSpec twoLevelDescription() {
         return new ConfigPublishPayload.SkillDescriptionSpec("只读查询客户资料",
                 List.of(new ConfigPublishPayload.SkillDescriptionSpec.SkillUsageSpec(
                         "用户提供客户识别信息",
-                        "调用 tool-1；id 取自用户原文，查无结果如实告知")));
+                        "调用 tool-1；id 取自用户原文，查无结果如实告知")),
+                "适用于客户查询场景，参数必须来自对话中用户明确给出的标识，不得从历史上下文推测。");
     }
 
     private static ConfigPublishPayload.McpServerSpec mcpSpec(String id) {

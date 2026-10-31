@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.application.cap;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -86,14 +87,33 @@ public class ApprovalStateMachine {
     public record Acquisition(@Nullable String approvalId,
                                @NonNull ReasonCode reasonCode,
                                boolean acquired,
-                               @Nullable String detail) {
+                               @Nullable String detail,
+                               /**
+                                * ⚠️ M3 / G1：是否处于「待人工决策」状态。
+                                *
+                                * <p>⚠️ 与 {@code acquired=false} <b>并存</b>：
+                                * 「未获得授权」有两种截然不同的处置 ——
+                                * 「永远过不了」（绑定不符/过期）应当<b>失败</b>，
+                                * 「等一等就能过」（待人工决策）应当<b>挂起</b>。
+                                * 只看 {@code acquired} 无法区分二者。
+                                */
+                                boolean requiresHumanDecision) {
 
         static @NonNull Acquisition ok(@NonNull String approvalId) {
-            return new Acquisition(approvalId, ReasonCode.SUCCESS, true, null);
+            return new Acquisition(approvalId, ReasonCode.SUCCESS, true, null, false);
         }
 
         static @NonNull Acquisition deny(@NonNull ReasonCode reasonCode, @Nullable String detail) {
-            return new Acquisition(null, reasonCode, false, detail);
+            return new Acquisition(null, reasonCode, false, detail, false);
+        }
+
+        /**
+         * 待人工决策（M3 / G1）：未获得授权，但<b>可挂起等待人批</b>。
+         *
+         * @param detail 诊断信息（指向哪条待办）
+         */
+        static @NonNull Acquisition awaitingHuman(@Nullable String detail) {
+            return new Acquisition(null, ReasonCode.APPROVAL_NOT_FOUND, false, detail, true);
         }
     }
 
@@ -113,6 +133,11 @@ public class ApprovalStateMachine {
         boolean mismatchSeen = false;
         String mismatchDetail = null;
         boolean expiredSeen = false;
+        // ⚠️ M3 / G1：存在「待人工决策」的审批（尚未有人批准）。
+        //    与「绑定不符」「已过期」是**三种不同语义**，不可合并：
+        //    前者等一等就能过，后两者这单永远过不了。
+        boolean awaitingHumanSeen = false;
+        String awaitingHumanDetail = null;
 
         for (CapApproval candidate : candidates) {
             // ⚠️ 非本主体的审批直接跳过（**不算绑定不符**）：
@@ -172,6 +197,18 @@ public class ApprovalStateMachine {
                     // ⚠️ 已取消 = 对本次调用不可见（等价于不存在）
                     log.debug("跳过已取消审批: approval={}", candidate.approvalId());
                 }
+                case AWAITING_HUMAN -> {
+                    // ⚠️⚠️ 待人工决策（尚未有人批准）：**不可被预占**。
+                    //    既不能当「可用授权」（否则 = 人还没批就执行 = Sev-0），
+                    //    也不能当「绑定不符 / 已过期」（语义不同：那两种是「这单永远过不了」，
+                    //    而本状态是「等一等就能过」）。
+                    //    故单独标记，调用方据此把 Run 挂起等待人批。
+                    awaitingHumanSeen = true;
+                    if (awaitingHumanDetail == null) {
+                        awaitingHumanDetail = "存在待人工决策的审批: approval="
+                                + candidate.approvalId();
+                    }
+                }
             }
         }
 
@@ -182,8 +219,55 @@ public class ApprovalStateMachine {
             return Acquisition.deny(ReasonCode.APPROVAL_EXPIRED,
                     "审批已过有效期: tool=" + request.toolId());
         }
+        if (awaitingHumanSeen) {
+            // ⚠️ 「待人工决策」不是失败，是**暂停**：调用方据此登记/沿用待办并挂起 Run。
+            return Acquisition.awaitingHuman(awaitingHumanDetail);
+        }
         return Acquisition.deny(ReasonCode.APPROVAL_NOT_FOUND,
                 "无可用审批: tool=" + request.toolId());
+    }
+
+    /**
+     * 登记待人工决策的审批（M3 / G1 · 运行时 HITL）。
+     *
+     * <p>⚠️ <b>何时用</b>：运行期发现<b>没有可用的预授权</b>（{@link #acquire} 结论为
+     * {@code APPROVAL_NOT_FOUND}）且该工具的风险等级要求审批时，
+     * 由调用方登记一条待办并把 Run 挂起（PARK），待人批准后恢复。
+     *
+     * <p>⚠️ <b>范围 = 精确匹配本次参数</b>：这里登记的范围是
+     * 「本次调用这一组参数」，不是「一类参数的允许区间」——
+     * 因为运行期只知道<b>实际</b>参数，无法凭空定义允许区间
+     * （凭空放宽 = 给自己开闸；凭空收紧 = 人批了也不生效）。
+     * 人批准的就是这一次调用，这正是 HITL 的语义。
+     *
+     * <p>⚠️ <b>不可被预占</b>：登记的状态是 {@code AWAITING_HUMAN}，
+     * {@link #acquire} 只会跳过它——必须先由人批准（转为 PENDING）才允许预占。
+     *
+     * @param request       登记请求（复用预占请求的全部绑定要素）
+     * @param approverScope 允许审批的角色范围
+     * @param ttl           有效期
+     * @return 新建的审批 id（登记失败即抛异常，绝不返回「假成功」）
+     */
+    public @NonNull String requestHuman(@NonNull AcquireRequest request,
+                                        @NonNull String approverScope,
+                                        @NonNull Duration ttl) {
+        // ⚠️ 精确匹配本次参数：每个参数一条 eq 约束。
+        Map<String, ApprovalScope.Constraint> constraints = new java.util.LinkedHashMap<>();
+        request.arguments().forEach((name, value) ->
+                constraints.put(name, new ApprovalScope.Constraint("eq", value)));
+        ApprovalScope scope = ApprovalScope.of(request.toolId(), constraints);
+        // ⚠️ 绑定要素必须由同一个 binding 服务生成（范围哈希 + 有效参数摘要），
+        //    否则消费侧重验时范围哈希与参数摘要对不上 → 审批永远匹配不上。
+        ApprovalBindingService.Binding generated = binding.generate(scope, request.arguments());
+
+        String approvalId = approvals.requestHumanApproval(new CapApprovalPort.CapApprovalRequest(
+                request.tenantId(), request.principalId(), request.toolId(),
+                request.toolId(), generated.approvalScopeHash(), scope.canonicalText(),
+                generated.effectiveArgsHash(), request.closureFingerprint(),
+                request.authzVersion(), approverScope, request.now().plus(ttl)));
+        log.info("已登记待人工审批: approval={}, tool={}, run={}, expiresAt={}",
+                approvalId, request.toolId(), request.runId(), request.now().plus(ttl));
+        return approvalId;
     }
 
     /**
@@ -257,6 +341,9 @@ public class ApprovalStateMachine {
             case NOT_FOUND, INTENT_SUBMITTED ->
                     Acquisition.deny(ReasonCode.APPROVAL_NOT_FOUND,
                             "预占失败: outcome=" + outcome);
+            // ⚠️ 待人工决策：不可被预占（人还没批）→ 挂起而非失败。
+            case AWAITING_HUMAN_DECISION -> Acquisition.awaitingHuman(
+                    "审批尚未有人批准: outcome=" + outcome);
         };
     }
 

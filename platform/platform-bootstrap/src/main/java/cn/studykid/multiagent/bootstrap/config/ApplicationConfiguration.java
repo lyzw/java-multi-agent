@@ -199,12 +199,18 @@ public class ApplicationConfiguration {
             RunCreationService.TransactionRunner tx,
             Clock clock,
             cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort,
-            cn.studykid.multiagent.ports.persistence.CapDualWritePort dualWritePort) {
+            cn.studykid.multiagent.ports.persistence.CapDualWritePort dualWritePort,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.run.require-timeout:false}")
+            boolean requireRunTimeout) {
         // ⚠️ 预算端口必须装配：缺了它，「声明了 Run 级额度」的创建请求会被
         //    fail-closed 拒绝（校验缺席 ≠ 校验通过）。
         // ⚠️ 双写端口必须装配：Run 创建是 execution_capability_snapshot 的
         //    <b>唯一生产写入点</b>（G-3）。缺了它六个 fail-closed 读方一律拒跑。
-        return new RunCreationService(port, snapshots, tx, clock, budgetPort, dualWritePort);
+        // ⚠️ P2-1：require-timeout 让「不限时 Run 是否允许」成为显式环境决策
+        //    （默认 false = 沿用 CreateRunRequest 既定语义，生产可按配置收紧）。
+        return new RunCreationService(port, snapshots, tx, clock, budgetPort, dualWritePort,
+                requireRunTimeout);
     }
 
     /**
@@ -347,7 +353,9 @@ public class ApplicationConfiguration {
                             .KEY_GOVERNANCE_QUERY_LIMIT + ":}") Long governanceQueryLimit,
             @org.springframework.beans.factory.annotation.Value(
                     "${" + cn.studykid.multiagent.application.config.RateLimitPolicy
-                            .KEY_GOVERNANCE_DECIDE_LIMIT + ":}") Long governanceDecideLimit) {
+                            .KEY_GOVERNANCE_DECIDE_LIMIT + ":}") Long governanceDecideLimit,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.rate-limit.sliding-window:false}") boolean slidingWindow) {
         // ⚠️ 治理桶限额走**独立的配置键 + 缺省回落**，不走 requireLimit 的 fail-closed：
         //    治理台阈值配错只影响可用性，不会造成越权（见 RateLimitPolicy#governanceLimitFor）。
         //    但**全局限额仍 fail-closed**（它服务学生侧动作，配错就是安全边界）。
@@ -361,7 +369,10 @@ public class ApplicationConfiguration {
                 dataSource,
                 RateLimitPolicy.requireLimit(limit),
                 RateLimitPolicy.requireWindowSeconds(windowSeconds),
-                bucketLimits);
+                bucketLimits,
+                // ⚠️ P3-1 ①：默认固定窗口（保留既有行为），可按环境开启滑动窗口近似，
+                //    消除「窗口末尾 + 下一窗口开头」可达 2×limit 的边界突发
+                slidingWindow);
     }
 
     /** 治理桶限额：未配置则用 {@link RateLimitPolicy} 的缺省值；配置了则必须为正。 */
@@ -1673,6 +1684,70 @@ public class ApplicationConfiguration {
             @Value("${" + cn.studykid.multiagent.application.cap.CapEnforcementSwitch.KEY
                     + ":false}") boolean enabled) {
         return new cn.studykid.multiagent.application.cap.CapEnforcementSwitch(enabled);
+    }
+
+    /**
+     * P0-2 启动自检：主数据源连接角色不得为超级用户 / 不得带 BYPASSRLS，
+     * 否则租户隔离 RLS 被静默绕过（dev 用 ai_agent 即此情形）。
+     * 失败即拒绝启动（fail-closed），与 {@code RagStartupSelfCheck} 同纪律。
+     */
+    @Bean
+    public PlatformStartupSelfCheck platformStartupSelfCheck(
+            org.springframework.jdbc.core.JdbcTemplate jdbcTemplate,
+            @Value("${agent.platform-ops.datasource.username:}") String opsUsername) {
+        return new PlatformStartupSelfCheck(jdbcTemplate, opsUsername);
+    }
+
+    /**
+     * P0-1 就绪守卫：把「CAP 授权链路关闭 = 不按 Agent 能力闭包校验工具」这一
+     * 静默缺口变为显式、可观测；并可经 config.flag.cap-enforcement-required 升级为硬失败。
+     * 不替 P5 翻转开关。
+     */
+    @Bean
+    public CapEnforcementReadinessGuard capEnforcementReadinessGuard(
+            cn.studykid.multiagent.application.cap.CapEnforcementSwitch capSwitch,
+            @Value("${config.flag.cap-enforcement-required:false}") boolean enforcementRequired,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.application.cap.CapExecutionFlow> capFlow,
+            @Value("${config.flag.cap-closure-enforcement:warn}") String closureEnforcementMode) {
+        // ⚠️ P0-1a：闭包校验模式一并纳入就绪判定 ——
+        //    「硬失败」要覆盖的是强制层到底有没有校验，
+        //    而强制层有两条通路（CAP 链路 / 既有链路的闭包守卫），都得处于强制状态。
+        return new CapEnforcementReadinessGuard(capSwitch, enforcementRequired, capFlow,
+                closureEnforcementMode);
+    }
+
+    /**
+     * P1-C 审批就绪守卫：把「运行时人工审批未接线 → 需审批工具恒被拒，但无任何可见信号」
+     * 这一静默缺口变为显式可观测；并可经 agent.approval.require-live-source 升级为硬失败。
+     * 不改变任何既有审批判定，也不放松任何门禁。
+     */
+    @Bean
+    public ApprovalReadinessGuard approvalReadinessGuard(
+            java.util.List<cn.studykid.multiagent.ports.tool.ToolHandler> tools,
+            cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy approvalPolicy,
+            @Value("${agent.approval.live-source-enabled:false}") boolean liveSourceEnabled,
+            @Value("${agent.approval.require-live-source:false}") boolean requireLiveSource) {
+        return new ApprovalReadinessGuard(tools, approvalPolicy,
+                liveSourceEnabled, requireLiveSource);
+    }
+
+    /**
+     * P2-2 审计防篡改漂移守卫。
+     *
+     * <p>⚠️ {@code 04_retention_role.sql} 执行后一旦有人重跑授权脚本，
+     * {@code audit_record} 的 DELETE 会被<b>悄悄还给应用角色</b>，
+     * 「不可篡改」当场失效而无任何报错。本守卫在每次启动时复核该事实。
+     * 默认告警；{@code agent.retention.require-isolated-credential=true}
+     * 时升级为拒绝启动。
+     */
+    @Bean
+    public AuditTamperProofGuard auditTamperProofGuard(
+            org.springframework.jdbc.core.JdbcTemplate jdbcTemplate,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.retention.require-isolated-credential:false}")
+            boolean requireIsolatedCredential) {
+        return new AuditTamperProofGuard(jdbcTemplate, requireIsolatedCredential);
     }
 
     /** 执行准入检查器（P2-T5 · §5.5 准入线性化）。 */

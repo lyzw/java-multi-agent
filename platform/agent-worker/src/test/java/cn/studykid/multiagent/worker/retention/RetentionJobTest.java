@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.DisplayName;
@@ -187,13 +188,82 @@ class RetentionJobTest {
                 Clock.fixed(Instant.parse("2026-10-19T00:00:00Z"), ZoneOffset.UTC));
     }
 
+    @Nested
+    @DisplayName("J-4 ⚠️ 停机必须等待在途轮次完成（修复 shutdown race）")
+    class StopJoinsInFlightThread {
+
+        @Test
+        @DisplayName("J-4a ⚠️⚠️ stop() 阻塞等待在途清理轮次结束、线程才退出"
+                + "（否则守护线程会在 DataSource 关闭后命中已关闭的池）")
+        void stopWaitsForInFlightRoundThenThreadExits() throws Exception {
+            // ⚠️ 用「标志位 + 忙等」模拟在途 DB 操作：JDBC getConnection 不可被
+            //    interrupt 直接打断，故忽略中断、只在标志位置位后退出。
+            final boolean[] released = {false};
+            StubPort port = new StubPort() {
+                @Override
+                public int purgeExpiredProfiles(String tenantId, Instant cutoff, int limit) {
+                    purgeCalls.incrementAndGet();
+                    // ⚠️ JDBC 调用本就不响应中断：用忙等模拟「在途阻塞的 DB 操作」，
+                    //    且<b>保留</b>中断状态——stop() 的 interrupt 必须由循环尾的
+                    //    Thread.sleep(interval) 真正收到并让线程退出（这正是生产行为）。
+                    //    若像 R-7 那样吞掉中断，则 1 小时间隔的 sleep 会跑满，join 超时。
+                    while (!released[0]) {
+                        try {
+                            Thread.sleep(5);
+                        } catch (InterruptedException e) {
+                            // 保留中断状态，待在途调用结束后交还给循环尾的 sleep 处理
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                    return 1;
+                }
+            };
+            RetentionJob job = new RetentionJob(service(port),
+                    List.of(TENANT_A), Duration.ofHours(1));
+            job.start();
+
+            // 轮询确认 worker 已进入在途轮次（purgeExpiredProfiles 已开始阻塞）
+            for (int i = 0; i < 100 && port.purgeCalls.get() == 0; i++) {
+                Thread.sleep(10);
+            }
+            assertThat(port.purgeCalls.get())
+                    .as("工作线程必须已进入在途清理轮次")
+                    .isPositive();
+
+            // 独立线程稍后释放：证明 stop() 会真正阻塞等待，而非立即返回
+            Thread releaser = new Thread(() -> {
+                try {
+                    Thread.sleep(120);
+                } catch (InterruptedException ignored) {
+                    // 无视
+                }
+                released[0] = true;
+            });
+            releaser.setDaemon(true);
+            releaser.start();
+
+            long startNanos = System.nanoTime();
+            job.stop(); // ⚠️ 修复前：立即返回，线程仍阻塞在在途调用上（仍存活）
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+
+            assertThat(elapsedMs)
+                    .as("⚠️ stop() 必须等待在途轮次（约 120ms），"
+                            + "若立即返回即为未 join 的旧缺陷")
+                    .isGreaterThan(60);
+            assertThat(job.isWorkerAlive())
+                    .as("⚠️⚠️ 停机后工作线程必须已退出，"
+                            + "否则会在已关闭的 DataSource 上执行 DB 操作")
+                    .isFalse();
+        }
+    }
+
     /**
      * 端口桩：记录被调用情况。
      *
      * <p>⚠️ 刻意<b>不用 Mockito</b>：本类要断言的是「调用是否发生」，
      * 手写计数比 mock 的 verify 更难误写，且不需要额外依赖。
      */
-    private static final class StubPort implements ErasurePort {
+    private static class StubPort implements ErasurePort {
 
         final AtomicInteger purgeCalls = new AtomicInteger();
         final java.util.List<String> seenTenants = new java.util.ArrayList<>();

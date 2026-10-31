@@ -18,6 +18,8 @@ import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import tools.jackson.databind.ObjectMapper;
+
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.core.run.IllegalStateTransitionException;
 import cn.studykid.multiagent.core.run.ToolOperationState;
@@ -44,6 +46,8 @@ import org.springframework.stereotype.Repository;
 public class JdbcToolOperationLedger implements RunToolLedgerPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcToolOperationLedger.class);
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final DataSource dataSource;
 
@@ -288,6 +292,62 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                 }
             }
         });
+    }
+
+    @Override
+    public @NonNull Optional<Invocation> findInvocation(@NonNull String tenantId,
+                                                      @NonNull String operationId) {
+        // ⚠️ M1-4 / G2 恢复：按 operationId 反查原始调用，
+        //    供 RESUME 重建 ToolCallRequest 重入闸门（不重跑模型）。
+        return inTenantTx(tenantId, conn -> {
+            String sql = """
+                    SELECT o.tool_name, o.tool_arguments::text, o.idempotency_key
+                    FROM tool_operation o
+                    WHERE o.tenant_id = ?::uuid AND o.operation_id = ?::uuid
+                    """;
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, tenantId);
+                ps.setString(2, operationId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return Optional.empty();
+                    }
+                    String toolName = rs.getString("tool_name");
+                    String json = rs.getString("tool_arguments");
+                    Map<String, Object> arguments = parseArguments(json);
+                    String callId = callIdFromKey(rs.getString("idempotency_key"));
+                    return Optional.of(new Invocation(toolName, arguments, callId));
+                }
+            }
+        });
+    }
+
+    /** 解析 tool_arguments jsonb 文本为参数 Map（失败回退空，绝不抛异常中断恢复）。 */
+    private Map<String, Object> parseArguments(String json) {
+        if (json == null || json.isBlank() || "null".equals(json)) {
+            return Map.of();
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = JSON.readValue(json,
+                    new tools.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            return parsed == null ? Map.of() : parsed;
+        } catch (Exception e) {
+            log.warn("解析 tool_arguments 失败，回退空参数: {}", e.getMessage());
+            return Map.of();
+        }
+    }
+
+    /** 从复合幂等键反解 callId（键值末段），用于重建与首次相同的幂等键（§5.3.4）。 */
+    private String callIdFromKey(String composite) {
+        if (composite == null || composite.isBlank()) {
+            return null;
+        }
+        String keyValue = composite.contains(":")
+                ? composite.substring(composite.indexOf(':') + 1)
+                : composite;
+        String[] parts = keyValue.split("/");
+        return parts.length == 0 ? null : parts[parts.length - 1];
     }
 
     // ── 内部 ────────────────────────────────────────────────────────

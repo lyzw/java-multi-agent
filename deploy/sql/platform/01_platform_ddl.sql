@@ -119,7 +119,8 @@ CREATE TYPE public.cap_approval_state AS ENUM (
     'INTENT_SUBMITTED',
     'CONSUMED',
     'EXPIRED',
-    'CANCELLED'
+    'CANCELLED',
+    'AWAITING_HUMAN'
 );
 
 
@@ -214,6 +215,7 @@ CREATE TYPE public.outbox_state AS ENUM (
 CREATE TYPE public.run_state AS ENUM (
     'QUEUED',
     'RUNNING',
+    'WAITING_APPROVAL',
     'CANCELLED',
     'SUCCEEDED',
     'FAILED',
@@ -449,7 +451,11 @@ BEGIN
             RETURN NEW;
         END IF;
         IF OLD.state = 'RUNNING'
-           AND NEW.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT') THEN
+           AND NEW.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT', 'WAITING_APPROVAL') THEN
+            RETURN NEW;
+        END IF;
+        IF OLD.state = 'WAITING_APPROVAL'
+           AND NEW.state IN ('RUNNING', 'CANCELLED', 'TIMED_OUT', 'FAILED') THEN
             RETURN NEW;
         END IF;
         RAISE EXCEPTION 'Run 非法状态迁移 % → %（run_id=%）',
@@ -1525,9 +1531,9 @@ CREATE TABLE public.cap_approval (
     effective_args_hash text NOT NULL,
     closure_fingerprint text NOT NULL,
     authz_version bigint NOT NULL,
-    approver_id text NOT NULL,
+    approver_id text,
     approver_scope text NOT NULL,
-    decided_at timestamp with time zone DEFAULT now() NOT NULL,
+    decided_at timestamp with time zone DEFAULT now(),
     expires_at timestamp with time zone NOT NULL,
     approval_state public.cap_approval_state DEFAULT 'PENDING'::public.cap_approval_state NOT NULL,
     reserved_at timestamp with time zone,
@@ -1537,7 +1543,8 @@ CREATE TABLE public.cap_approval (
     terminal_status text,
     cancel_reason text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT cap_approval_pending_needs_approver CHECK (((approval_state <> 'AWAITING_HUMAN'::public.cap_approval_state) OR (approver_id IS NULL)))
 );
 
 ALTER TABLE ONLY public.cap_approval FORCE ROW LEVEL SECURITY;
@@ -2090,6 +2097,7 @@ CREATE TABLE public.cap_skill_def (
     lifecycle_state public.cap_lifecycle_state DEFAULT 'DRAFT'::public.cap_lifecycle_state NOT NULL,
     purpose text,
     usage jsonb,
+    content text,
     CONSTRAINT cap_skill_def_namespace_ck CHECK ((namespace = 'platform'::text)),
     CONSTRAINT cap_skill_def_no_inherits_ck CHECK ((inherits IS NULL)),
     CONSTRAINT cap_skill_def_risk_ck CHECK ((risk_ceiling = ANY (ARRAY['READ'::text, 'WRITE_PROFILE'::text, 'WRITE_EXTERNAL'::text]))),
@@ -2546,7 +2554,7 @@ CREATE TABLE public.run (
     budget_amount numeric(18,6),
     trace_id text,
     CONSTRAINT run_attempt_non_negative CHECK ((attempt >= 0)),
-    CONSTRAINT run_completed_at_consistent CHECK ((((state = ANY (ARRAY['QUEUED'::public.run_state, 'RUNNING'::public.run_state])) AND (completed_at IS NULL)) OR ((state = ANY (ARRAY['CANCELLED'::public.run_state, 'SUCCEEDED'::public.run_state, 'FAILED'::public.run_state, 'TIMED_OUT'::public.run_state])) AND (completed_at IS NOT NULL)))),
+    CONSTRAINT run_completed_at_consistent CHECK ((((state = ANY (ARRAY['QUEUED'::public.run_state, 'RUNNING'::public.run_state, 'WAITING_APPROVAL'::public.run_state])) AND (completed_at IS NULL)) OR ((state = ANY (ARRAY['CANCELLED'::public.run_state, 'SUCCEEDED'::public.run_state, 'FAILED'::public.run_state, 'TIMED_OUT'::public.run_state])) AND (completed_at IS NOT NULL)))),
     CONSTRAINT run_fencing_non_negative CHECK ((fencing_token >= 0)),
     CONSTRAINT run_result_consistent CHECK (((state <> 'SUCCEEDED'::public.run_state) OR (result_payload IS NOT NULL)))
 );
@@ -5292,7 +5300,7 @@ ALTER TABLE public.rate_limit_bucket ENABLE ROW LEVEL SECURITY;
 -- Name: rate_limit_bucket rate_limit_bucket_tenant_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY rate_limit_bucket_tenant_isolation ON public.rate_limit_bucket USING ((tenant_id = (current_setting('app.tenant_id'::text, true))::uuid)) WITH CHECK ((tenant_id = (current_setting('app.tenant_id'::text, true))::uuid));
+CREATE POLICY rate_limit_bucket_tenant_isolation ON public.rate_limit_bucket USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
 
 
 --

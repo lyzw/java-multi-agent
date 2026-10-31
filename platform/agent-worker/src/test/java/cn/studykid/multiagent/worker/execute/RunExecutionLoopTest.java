@@ -22,6 +22,9 @@ import cn.studykid.multiagent.core.config.ToolRiskLevel;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.model.ModelGateway;
+import cn.studykid.multiagent.ports.observer.ModelCallObserverChain;
+import cn.studykid.multiagent.ports.observer.ExecutionObserverChain;
+import cn.studykid.multiagent.ports.observer.ObservableModelGateway;
 import cn.studykid.multiagent.ports.model.ModelMessage;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
@@ -44,6 +47,28 @@ import cn.studykid.multiagent.ports.tool.ToolHandler;
  * 断言针对<b>不可绕过的性质</b>，而非仅「状态变了」。
  */
 class RunExecutionLoopTest {
+
+    /**
+     * 无观测者的观测链：测试不需要观测副作用，仅用于满足 RunExecutionLoop
+     * 构造器对 {@link ObservableModelGateway}（ModelGateway 的装饰器）的类型要求。
+     */
+    private static final ModelCallObserverChain NOOP_OBSERVERS =
+            new ModelCallObserverChain(java.util.List.of());
+
+    /**
+     * 抢占式单步超时执行器（P2-1）。
+     *
+     * <p>⚠️ 测试<b>必须</b>与生产线同一形状：若这里传 {@code null}，
+     * 循环会退回「只在每轮开头查 deadline」的旧行为，
+     * 所有用例都测不到真正的抢占路径 —— 又一次「测试验证的是另一条分支」。
+     */
+    private static final java.util.concurrent.ExecutorService PREEMPT =
+            java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+
+    /** 把 ModelGateway 桩包成 ObservableModelGateway，满足构造器类型要求。 */
+    private static ObservableModelGateway observe(ModelGateway gw) {
+        return new ObservableModelGateway(gw, NOOP_OBSERVERS);
+    }
 
     private static final String TENANT = "6f5d33fc-723e-4f64-beda-9e4435c72691";
     private static final String RUN_ID = UUID.randomUUID().toString();
@@ -91,6 +116,8 @@ class RunExecutionLoopTest {
         String committedState;
         long committedToken = -1;
         int commitCount;
+        /** ⚠️ 记录实际提交的<b>结果正文</b>（P1-A：用于断言「不再原样下发」）。 */
+        String committedPayload;
         /** ⚠️ 记录 6 参 commitResult 的结构化错误码（P7-2 / 超时 / 兜底收敛）。 */
         String committedErrorCode;
         /** ⚠️ 记录续租传入的身份，供「身份一致性」断言（P3-D02 F-1）。 */
@@ -113,6 +140,7 @@ class RunExecutionLoopTest {
             commitCount++;
             committedState = s;
             committedToken = f;
+            committedPayload = p;
             return commitSucceeds;
         }
         /** 6 参版本：记录结构化错误码（超时 / 兜底收敛）后委托 5 参。 */
@@ -146,14 +174,14 @@ class RunExecutionLoopTest {
      */
     private static RunExecutionLoop loop(ModelGateway gw, RunClaimPort port,
                                          ToolInvocationGate gate) {
-        return new RunExecutionLoop(gw, port, gate, Duration.ofSeconds(30), "w-1");
+        return new RunExecutionLoop(observe(gw), port, gate, Duration.ofSeconds(30), "w-1");
     }
 
     /** 带事件写入的循环（P4-D12 / G4）。 */
     private static RunExecutionLoop loop(ModelGateway gw, RunClaimPort port,
                                          ToolInvocationGate gate,
                                          cn.studykid.multiagent.ports.persistence.RunEventPort eventPort) {
-        return new RunExecutionLoop(gw, port, gate, Duration.ofSeconds(30), "w-1",
+        return new RunExecutionLoop(observe(gw), port, gate, Duration.ofSeconds(30), "w-1",
                 new cn.studykid.multiagent.application.prompt.PromptGuard(), eventPort);
     }
 
@@ -274,6 +302,137 @@ class RunExecutionLoopTest {
         }
     }
 
+    @Nested
+    @DisplayName("P2-1 单步抢占式超时（FR-024 在单步粒度）")
+    class 单步抢占超时 {
+
+        /** 带「抢占执行器」的循环 —— 不注入的话测的根本不是生产路径。 */
+        private RunExecutionLoop loopPreemptive(ModelGateway gw, RunClaimPort port,
+                                               ToolInvocationGate gate) {
+            return new RunExecutionLoop(observe(gw), port, gate,
+                    Duration.ofSeconds(30), "w-1",
+                    new cn.studykid.multiagent.application.prompt.PromptGuard(),
+                    null, null, ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET,
+                    null, null, null, new ExecutionObserverChain(java.util.List.of()), PREEMPT);
+        }
+
+        @Test
+        @DisplayName("卡死的模型调用：按剩余截止时间中断 → FAILED/TIMEOUT（不是永久 RUNNING）")
+        void hangingModelCallIsPreempted() {
+            // ⚠️ 修复前的形状：循环只在**每轮开头**查 deadline。
+            //    若模型这一次调用卡住，两次检查之间就是**无限长的空窗**：
+            //    Run 越过 run.deadline_at 继续烧 token 与预算，
+            //    且只有等它自己返回才会落到下一轮的超时分支。
+            ModelGateway gw = request -> {
+                try {
+                    Thread.sleep(10_000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return textResponse("迟到的答案");
+            };
+            FakeClaimPort port = new FakeClaimPort();
+            RunClaimPort.LeasedTask soon = new RunClaimPort.LeasedTask(
+                    RUN_ID, 1L, Instant.now().plusSeconds(30), 1,
+                    Instant.now().plusMillis(300));
+
+            long start = System.nanoTime();
+            var outcome = loopPreemptive(gw, port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()))
+                    .execute(TENANT, soon, agentConfig(), snapshot(20), Map.of("q", "x"));
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(port.committedErrorCode)
+                    .as("单步超时必须是结构化的 TIMEOUT，不能混在 INTERNAL_ERROR 里")
+                    .isEqualTo("TIMEOUT");
+            assertThat(port.commitCount)
+                    .as("必须收敛到终态，避免孤儿 RUNNING")
+                    .isGreaterThan(0);
+            assertThat(elapsedMs)
+                    .as("抢占必须真的发生：不得等到模拟的 10s 调用自行返回")
+                    .isLessThan(5_000);
+        }
+
+        @Test
+        @DisplayName("卡死的工具调用同样被抢占，且错误码仍是 TIMEOUT")
+        void hangingToolCallIsPreempted() {
+            java.util.concurrent.atomic.AtomicInteger rounds =
+                    new java.util.concurrent.atomic.AtomicInteger();
+            ModelGateway gw = request -> {
+                if (rounds.incrementAndGet() == 1) {
+                    return new ModelResponse("", Map.of(
+                            "c1", new ModelResponse.ToolCallRequest(
+                                    "slow_tool", Map.of(), "c1")),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            };
+            ToolHandler slow = new ToolHandler() {
+                @Override public String toolName() { return "slow_tool"; }
+                @Override public String inputSchema() { return "{}"; }
+                @Override public ToolRiskLevel riskLevel() { return ToolRiskLevel.READ; }
+                @Override public void validate(Map<String, Object> arguments) { }
+                @Override public ToolResult execute(ToolExecutionContext ctx,
+                                                    Map<String, Object> a) {
+                    try {
+                        Thread.sleep(10_000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return ToolResult.of("迟到的工具输出");
+                }
+            };
+            FakeClaimPort port = new FakeClaimPort();
+            RunClaimPort.LeasedTask soon = new RunClaimPort.LeasedTask(
+                    RUN_ID, 1L, Instant.now().plusSeconds(30), 1,
+                    Instant.now().plusMillis(300));
+
+            var outcome = loopPreemptive(gw, port,
+                    new ToolInvocationGate(List.of(slow), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()))
+                    .execute(TENANT, soon, agentConfig(), snapshot(20), Map.of("q", "x"));
+
+            assertThat(outcome.kind())
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(port.committedErrorCode)
+                    .as("工具段超时与模型段同码，运维才能按「超时」归因")
+                    .isEqualTo("TIMEOUT");
+        }
+
+        @Test
+        @DisplayName("deadline 仍在未来足够远 → 不被误抢（不引入新的失败）")
+        void roomyDeadlineIsNotPreempted() {
+            ModelGateway gw = request -> {
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return textResponse("x=2 或 x=3");
+            };
+            FakeClaimPort port = new FakeClaimPort();
+            RunClaimPort.LeasedTask roomy = new RunClaimPort.LeasedTask(
+                    RUN_ID, 1L, Instant.now().plusSeconds(30), 1,
+                    Instant.now().plusSeconds(20));
+
+            var outcome = loopPreemptive(gw, port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()))
+                    .execute(TENANT, roomy, agentConfig(), snapshot(20), Map.of("q", "x"));
+
+            assertThat(outcome.kind())
+                    .as("抢占逻辑不得把正常执行变成超时（误伤 = 可用性事故）")
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+        }
+    }
+
     /** 带步骤写入的循环（P7-2）：默认带安全事件替身（多数用例不关心安全事件）。 */    private static RunExecutionLoop loopWithSteps(ModelGateway gw, RunClaimPort port,
                                                  ToolInvocationGate gate,
                                                  RunStepPort stepPort) {
@@ -285,12 +444,13 @@ class RunExecutionLoopTest {
                                                  ToolInvocationGate gate,
                                                  RunStepPort stepPort,
                                                  FakeRiskEventPort riskPort) {
-        return new RunExecutionLoop(gw, port, gate, Duration.ofSeconds(30), "w-1",
+        return new RunExecutionLoop(observe(gw), port, gate, Duration.ofSeconds(30), "w-1",
                 new cn.studykid.multiagent.application.prompt.PromptGuard(),
                 null, null,
                 cn.studykid.multiagent.worker.execute.ContextBudgetTrimmer
                         .DEFAULT_CONTEXT_TOKEN_BUDGET,
-                null, stepPort, riskPort);
+                null, stepPort, riskPort, new ExecutionObserverChain(java.util.List.of()),
+                PREEMPT);
     }
 
     /** 内存账本替身（P3-D03）。每个用例独立实例，互不污染。 */
@@ -612,6 +772,43 @@ class RunExecutionLoopTest {
         }
 
         @Test
+        @DisplayName("⚠️⚠️ P1-D：编造塞在「带工具调用的中间步」也须拦截（不再只查终答）")
+        void intermediateNarrationAlsoScreened() {
+            FakeClaimPort port = new FakeClaimPort();
+            FakeRiskEventPort risks = new FakeRiskEventPort();
+            List<ModelRequest> requests = new java.util.ArrayList<>();
+
+            // 第一轮：既有工具调用，又带一段含编造出处的正文
+            ModelGateway gw = request -> {
+                requests.add(request);
+                if (requests.size() == 1) {
+                    return new ModelResponse("如我们教材所言，先把这个数查出来",
+                            Map.of("c1", new ModelResponse.ToolCallRequest(
+                                    "recording_tool", Map.of(), "c1")),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            };
+
+            var outcome = loopWithSteps(gw, port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeRunStepPort(), risks)
+                    .execute(TENANT, task(), agentConfig(), snapshot(5), Map.of("q", "x"));
+
+            assertThat(outcome.kind())
+                    .as("⚠️⚠️ 中间步正文此前完全不经检：模型只需把编造放进同时要求调工具的那一轮"
+                            + "即可绕过终答检测")
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(risks.eventTypes).contains(RiskEventPortTypes.SAFETY_BLOCK);
+            assertThat(requests)
+                    .as("⚠️ 应在同一轮就拦下，不得让它进入工具执行")
+                    .hasSize(1);
+        }
+
+        @Test
         @DisplayName("✅ 越权调用（授权拒绝）→ 落 UNAUTHORIZED_CALL；未登记工具（BEH-3）不误报")
         void unauthorizedCallVsInvalidCall() {
             // 越权：工具已登记但授权拒绝（denyAll）→ 「无权调用该工具」→ SEC-2
@@ -676,6 +873,60 @@ class RunExecutionLoopTest {
             assertThat(risks.digests.get(0))
                     .as("⚠️ 合规红线：摘要绝不落命中原文")
                     .isEqualTo("PATTERN:邮箱");
+        }
+
+        // ── P1-A：输出内容安全层从「只观测」升级为「会改变下发形态 / 会阻断」──
+
+        @Test
+        @DisplayName("⚠️⚠️ P1-A：命中 PII 的输出不得原样下发（改为脱敏后提交）")
+        void piiIsRedactedBeforeDelivery() {
+            FakeClaimPort port = new FakeClaimPort();
+            FakeRiskEventPort risks = new FakeRiskEventPort();
+
+            var loop = loopWithSteps(modelReturning(
+                    textResponse("如需帮助请联系 teacher@example.com")), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeRunStepPort(), risks);
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "一元二次方程"));
+
+            assertThat(outcome.kind()).isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.SUCCEEDED);
+            assertThat(risks.eventTypes).containsExactly(RiskEventPortTypes.SENSITIVE_OUTPUT);
+            assertThat(port.committedPayload)
+                    .as("⚠️⚠️ 修复前「只观测不阻断」= 记录一笔后仍把原文发给用户；"
+                            + "现在必须看不到原始邮箱")
+                    .doesNotContain("teacher@example.com")
+                    .contains("已脱敏");
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ P1-A：有害输出被平台侧内容安全层阻断，Run 判失败并落 SAFETY_BLOCK")
+        void harmfulOutputIsBlocked() {
+            FakeClaimPort port = new FakeClaimPort();
+            FakeRiskEventPort risks = new FakeRiskEventPort();
+
+            var loop = loopWithSteps(modelReturning(textResponse("我不想活了，活着没意思")),
+                    port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    new FakeRunStepPort(), risks);
+
+            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+                    Map.of("q", "心情不好怎么办"));
+
+            assertThat(outcome.kind())
+                    .as("⚠️⚠️ 面向初中生的产品，自伤类内容不得原样下发")
+                    .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(risks.eventTypes).contains(RiskEventPortTypes.SAFETY_BLOCK);
+            assertThat(risks.digests)
+                    .as("摘要只含类别代号，绝不落命中原文（合规红线）")
+                    .anySatisfy(d -> assertThat(d)
+                            .startsWith("OUTPUT_MODERATION:")
+                            .doesNotContain("不想活"));
         }
 
         @Test
@@ -806,7 +1057,7 @@ class RunExecutionLoopTest {
         @DisplayName("⚠️ workerId 为空 → 构造即拒绝（fail-fast）")
         void blankWorkerIdRejected() {
             assertThatThrownBy(() -> new RunExecutionLoop(
-                    modelReturning(textResponse("x")), new FakeClaimPort(),
+                    observe(modelReturning(textResponse("x"))), new FakeClaimPort(),
                     new ToolInvocationGate(List.of(), allowAll(),
                             h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()), Duration.ofSeconds(30), " "))
@@ -852,9 +1103,10 @@ class RunExecutionLoopTest {
                                                       ToolInvocationGate gate,
                                                       cn.studykid.multiagent.ports.persistence
                                                               .TenantLifecycleProbe probe) {
-            return new RunExecutionLoop(gw, port, gate, Duration.ofSeconds(30), "w-1",
+            return new RunExecutionLoop(observe(gw), port, gate, Duration.ofSeconds(30), "w-1",
                     new cn.studykid.multiagent.application.prompt.PromptGuard(), null, null,
-                    ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, probe, null, null);
+                    ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, probe, null, null,
+                    new ExecutionObserverChain(java.util.List.of()), PREEMPT);
         }
 
         @Test
@@ -1303,9 +1555,10 @@ class RunExecutionLoopTest {
         }
 
         @Test
-        @DisplayName("⚠️⚠️ 需要审批但审批流未实现 → fail-closed 拒绝")
+        @DisplayName("⚠️⚠️ 需要审批但无法登记待办 → fail-closed 拒绝（且**不挂起**）")
         void requiredApprovalFailsClosed() {
             var handler = new RecordingTool();
+            // ⚠️ 未装配审批登记参数（无 settings）→ 待办登记不了
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
                     // 模拟风险级别被提升为需要审批
                     h -> ApprovalPolicy.ApprovalDecision.required("WRITE_EXTERNAL"),
@@ -1319,6 +1572,10 @@ class RunExecutionLoopTest {
                     .as("⚠️⚠️ 审批流未实现时必须拒绝。若静默通过 = 安全门禁形同虚设")
                     .isZero();
             assertThat(result.rejectedCount()).isEqualTo(1);
+            assertThat(result.hasParked())
+                    .as("⚠️⚠️ 登记不了待办就**不能挂起**：挂起的前提是「人能在审批台看到并批准」，"
+                            + "登记不了 = 没人能批 = Run 永久悬在 WAITING_APPROVAL（挂起泄漏）")
+                    .isFalse();
         }
 
         @Test
@@ -1696,10 +1953,16 @@ class RunExecutionLoopTest {
         }
 
         @Test
-        @DisplayName("⚠️⚠️ 需要审批但无有效审批(NO_APPROVAL) → fail-closed 拒绝")
+        @DisplayName("✅ M2-1 语义变更：审批来源明确 APPROVED → 权威批准即放行（不再恒拒）")
         void requiredWithoutApprovalBlocked() {
             var handler = new RecordingTool();
             var approval = new ScriptedApproval(ApprovalOutcome.NO_APPROVAL);
+            // ⚠️ 来源 = 审批权威。它明确表态 APPROVED 即「有人已批准」，
+            //    故放行是正确语义（M2-1 的存在意义：让审批真正能放行）。
+            //    ⚠️ 这条用例的旧期望（"查不到有效审批必须拒绝"）与新语义**直接冲突**：
+            //    旧写法同时配了 APPROVED 来源又期望被拒 —— 两种意图互相矛盾。
+            //    红线的实质「查不到权威结论 → 工具不得执行」由下面的
+            //    requiredWithoutAuthoritativeSourceParks 守住。
             var gate = new ToolInvocationGate(List.of(handler), allowAll(),
                     h -> ApprovalPolicy.ApprovalDecision.required("WRITE_EXTERNAL"),
                     budget(), ledger(), approval, java.math.BigDecimal.ONE,
@@ -1713,7 +1976,31 @@ class RunExecutionLoopTest {
 
             assertThat(approval.consumeCalls).isEqualTo(1);
             assertThat(handler.executeCount.get())
-                    .as("⚠️⚠️ 查不到有效审批必须拒绝，否则审批门禁形同虚设（Sev-0）")
+                    .as("来源明确批准 → 工具执行（「人批了要生效」）")
+                    .isEqualTo(1);
+            assertThat(result.rejectedCount()).isZero();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 查不到权威结论（来源 FAIL_CLOSED）→ 工具不得执行（Sev-0 红线）")
+        void requiredWithoutAuthoritativeSourceParks() {
+            var handler = new RecordingTool();
+            var approval = new ScriptedApproval(ApprovalOutcome.NO_APPROVAL);
+            // ⚠️ 权威不可用/无结论 → 绝不放行。工具不执行，
+            //    且因未装配登记参数无法登记待办 → 拒绝（不挂起）。
+            var gate = new ToolInvocationGate(List.of(handler), allowAll(),
+                    h -> ApprovalPolicy.ApprovalDecision.required("WRITE_EXTERNAL"),
+                    budget(), ledger(), approval, java.math.BigDecimal.ONE,
+                    (t, r) -> false, source(
+                            cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
+                                    .ApprovalSource.Verdict.FAIL_CLOSED));
+
+            var result = gate.invokeAll(TENANT, task(), Map.of(
+                    "c1", new ModelResponse.ToolCallRequest(
+                            "recording_tool", Map.of(), "c1")));
+
+            assertThat(handler.executeCount.get())
+                    .as("⚠️⚠️ 查不到权威结论必须不执行，否则审批门禁形同虚设（Sev-0）")
                     .isZero();
             assertThat(result.rejectedCount()).isEqualTo(1);
         }
@@ -1809,13 +2096,14 @@ class RunExecutionLoopTest {
 
         /** 预算极小的执行循环（让上下文必然超预算）。 */
         private static RunExecutionLoop tightBudgetLoop(ModelGateway gw, RunClaimPort port) {
-            return new RunExecutionLoop(gw, port,
+            return new RunExecutionLoop(observe(gw), port,
                     new ToolInvocationGate(List.of(new BigEchoTool()), allowAll(),
                             h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()),
                     Duration.ofSeconds(30), "w-1",
                     new cn.studykid.multiagent.application.prompt.PromptGuard(),
-                    null, null, 300, null, null, null);
+                    null, null, 300, null, null, null,
+                    new ExecutionObserverChain(java.util.List.of()), PREEMPT);
         }
 
         @Test

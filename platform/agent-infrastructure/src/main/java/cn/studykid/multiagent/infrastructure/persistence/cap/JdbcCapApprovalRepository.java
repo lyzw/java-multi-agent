@@ -59,6 +59,23 @@ public class JdbcCapApprovalRepository implements CapApprovalPort {
             RETURNING approval_id::text
             """;
 
+    /**
+     * 登记「待人工决策」的审批（M3 / G1）。
+     *
+     * <p>⚠️ {@code approval_state = 'AWAITING_HUMAN'}，{@code approver_id} 与
+     * {@code decided_at} 均为 {@code NULL}（人还没批）。
+     */
+    private static final String SQL_INSERT_AWAITING_HUMAN = """
+            INSERT INTO cap_approval
+                (tenant_id, principal_id, tool_id, target_resource,
+                 approval_scope_hash, scope_definition, effective_args_hash,
+                 closure_fingerprint, authz_version, approver_scope,
+                 expires_at, approval_state, created_at, updated_at)
+            VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, 'AWAITING_HUMAN', ?, ?)
+            RETURNING approval_id::text
+            """;
+
     // ⚠️⚠️ 下面 SQL 里的「SELECT + 反斜杠 s」**不是笔误**：
     //   Java 文本块会<b>剥掉每行的行尾空白</b>，
     //   故 `SELECT ` + COLUMNS 会拼成 `SELECTapproval_id::text` —— 语法错误，
@@ -178,6 +195,48 @@ public class JdbcCapApprovalRepository implements CapApprovalPort {
                 });
     }
 
+    /**
+     * 登记待人工决策的审批（M3 / G1 · 运行时 HITL）。
+     *
+     * <p>⚠️ <b>与 {@link #grant} 的三处关键差别</b>：
+     * <ol>
+     *   <li>{@code approval_state = 'AWAITING_HUMAN'}（<b>不是</b> PENDING）——
+     *       PENDING 意为「已批准、待消耗」，混淆即等于「未批准的副作用被执行」；</li>
+     *   <li>{@code approver_id} 写 <b>NULL</b>（人还没批）；</li>
+     *   <li>{@code decided_at} 写 <b>NULL</b>（还没决定）。</li>
+     * </ol>
+     */
+    @Override
+    public @NonNull String requestHumanApproval(@NonNull CapApprovalRequest request) {
+        Instant now = Instant.now();
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(request.tenantId()),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_INSERT_AWAITING_HUMAN)) {
+                        ps.setString(1, request.tenantId());
+                        ps.setString(2, request.principalId());
+                        ps.setString(3, request.toolId());
+                        ps.setString(4, request.targetResource());
+                        ps.setString(5, request.approvalScopeHash());
+                        ps.setString(6, request.scopeDefinition());
+                        ps.setString(7, request.effectiveArgsHash());
+                        ps.setString(8, request.closureFingerprint());
+                        ps.setLong(9, request.authzVersion());
+                        ps.setString(10, request.approverScope());
+                        ps.setTimestamp(11, Timestamp.from(request.expiresAt()));
+                        ps.setTimestamp(12, Timestamp.from(now));
+                        ps.setTimestamp(13, Timestamp.from(now));
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (!rs.next()) {
+                                throw new IllegalStateException(
+                                        "登记待人工审批失败：未返回 approval_id");
+                            }
+                            return rs.getString(1);
+                        }
+                    }
+                });
+    }
+
     @Override
     public @NonNull ReservationOutcome reserve(@NonNull String tenantId,
                                                 @NonNull String approvalId,
@@ -238,6 +297,9 @@ public class JdbcCapApprovalRepository implements CapApprovalPort {
             case CONSUMED -> ReservationOutcome.ALREADY_CONSUMED;
             case EXPIRED -> ReservationOutcome.EXPIRED;
             case CANCELLED -> ReservationOutcome.CANCELLED;
+            // ⚠️ 待人工决策：尚未有人批准，**不可被预占**。
+            //    与 NOT_FOUND 区分开（前者是「等一等」，后者是「没有」）。
+            case AWAITING_HUMAN -> ReservationOutcome.AWAITING_HUMAN_DECISION;
         };
     }
 

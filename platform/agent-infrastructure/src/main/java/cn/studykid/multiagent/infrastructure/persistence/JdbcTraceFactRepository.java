@@ -226,12 +226,19 @@ public class JdbcTraceFactRepository implements TraceFactPort {
     }
 
     private UsageFacts readUsage(Connection conn, UUID runId) throws SQLException {
+        // ⚠️ P0-3b：model_id 现在有**两类行** ——
+        //    模型调用行（真实模型标识）与工具调用行（"tool:" 前缀 + 工具名）。
+        //    聚合时优先取模型行的标识；没有模型行时退回整体最小值（存量数据）。
+        //    直接用 min(model_id) 会把工具名混进「按模型分组」，报表失真。
         String sql = """
                 SELECT sum(input_tokens)  AS in_tokens,
                        sum(output_tokens) AS out_tokens,
                        sum(cost_amount)   AS cost,
                        min(currency)      AS currency,
-                       min(model_id)      AS model_id
+                       COALESCE(
+                           min(model_id) FILTER (WHERE model_id NOT LIKE 'tool:%'),
+                           min(model_id)
+                       )                  AS model_id
                 FROM public.usage_record WHERE run_id = ?::uuid
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {

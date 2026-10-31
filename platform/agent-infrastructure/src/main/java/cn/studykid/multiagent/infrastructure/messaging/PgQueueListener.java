@@ -98,7 +98,20 @@ public class PgQueueListener {
     /** 已停止后置位：用于验证「停机后不再领取新任务」。 */
     private final AtomicBoolean stopped = new AtomicBoolean(false);
 
+    /**
+     * 停机标志（区别于 {@code stopped}）。
+     *
+     * <p>{@code stopped} 用于「停机后不再领取新任务」的语义判断；
+     * {@code shuttingDown} 用于「把停机窗口内的 DB 异常降级为 DEBUG」——
+     * 否则 DataSource 关闭导致的 {@code HikariDataSource has been closed}
+     * 会被误判成一次真实的消费失败，污染告警。
+     */
+    private volatile boolean shuttingDown = false;
+
     private volatile Thread worker;
+
+    /** 停机时等待工作线程退出的最长时间（避免无限阻塞上下文关闭）。 */
+    private static final long STOP_TIMEOUT_MS = 30_000L;
 
     /** 累计处理条数（供测试与指标读取）。 */
     private volatile long totalProcessed;
@@ -181,9 +194,15 @@ public class PgQueueListener {
             try {
                 batch = repository.claim(tenantId, batchSize, visibilityTimeout, workerId);
             } catch (RuntimeException e) {
-                // ⚠️ 单租户失败不得终止本轮其他租户（同 OutboxRelay 的隔离要求）
-                log.error("PG 队列领取失败（继续下一个租户）: tenantId={}, error={}",
-                        tenantId, e.getMessage(), e);
+                if (shuttingDown) {
+                    // ⚠️ 停机窗口内 DataSource 已关闭，领取失败是预期后果，降级为 DEBUG。
+                    log.debug("停机窗口内 PG 队列领取失败（忽略，DataSource 正在关闭）: "
+                            + "tenantId={}, error={}", tenantId, e.getMessage());
+                } else {
+                    // ⚠️ 单租户失败不得终止本轮其他租户（同 OutboxRelay 的隔离要求）
+                    log.error("PG 队列领取失败（继续下一个租户）: tenantId={}, error={}",
+                            tenantId, e.getMessage(), e);
+                }
                 continue;
             }
             for (PgQueueRepository.QueuedMessage message : batch) {
@@ -325,9 +344,15 @@ public class PgQueueListener {
                 try {
                     pollOnce();
                 } catch (RuntimeException e) {
-                    // ⚠️ 单轮异常不得终止循环：否则一次偶发故障就永久停消费
-                    //    （症状与「消息永不消费」完全相同，且更难察觉）。
-                    log.error("PG 队列消费轮次异常（继续下一轮）: {}", e.getMessage(), e);
+                    if (shuttingDown) {
+                        // ⚠️ 停机窗口内 DataSource 已关闭，轮次异常是预期后果，降级为 DEBUG。
+                        log.debug("停机窗口内 PG 队列消费轮次异常（忽略，DataSource 正在关闭）: {}",
+                                e.getMessage());
+                    } else {
+                        // ⚠️ 单轮异常不得终止循环：否则一次偶发故障就永久停消费
+                        //    （症状与「消息永不消费」完全相同，且更难察觉）。
+                        log.error("PG 队列消费轮次异常（继续下一轮）: {}", e.getMessage(), e);
+                    }
                 }
                 try {
                     Thread.sleep(interval.toMillis());
@@ -346,11 +371,23 @@ public class PgQueueListener {
 
     /** 停止监听器（先置 stopped 再中断：顺序反了会在停机窗口内继续领取新任务）。 */
     public void stop() {
+        shuttingDown = true;
         stopped.set(true);
         running.set(false);
         Thread t = worker;
         if (t != null) {
             t.interrupt();
+            try {
+                // ⚠️ 关键修复：必须等 worker 线程真正退出，否则守护线程会在
+                //    DataSource 关闭后仍在跑，下一次 getConnection 命中已关闭的池 →
+                //    "HikariDataSource has been closed"。受 Spring LIFO 析构顺序保证，
+                //    本方法返回时 DataSource 尚未关闭，故 join 期间在途消费面对的是
+                //    仍打开的池，可干净收尾。
+                t.join(STOP_TIMEOUT_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("等待 PG 队列监听线程退出被中断（超时 {}ms）", STOP_TIMEOUT_MS);
+            }
         }
         log.info("PG 队列监听器已停止（累计处理 {} 条，死信 {} 条）",
                 totalProcessed, totalDeadLettered);

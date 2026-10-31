@@ -96,6 +96,7 @@ export function SkillCatalogPage(): JSX.Element {
       if (r.skillId.toLowerCase().includes(q)) return true
       if ((r.name ?? '').toLowerCase().includes(q)) return true
       if ((r.description?.purpose ?? '').toLowerCase().includes(q)) return true
+      if ((r.description?.content ?? '').toLowerCase().includes(q)) return true
       return false
     })
   }, [rows, search])
@@ -286,7 +287,7 @@ export function SkillCatalogPage(): JSX.Element {
         <Input
           allowClear
           prefix={<SearchOutlined />}
-          placeholder="搜索 skillId / 名称 / 用途"
+          placeholder="搜索 skillId / 名称 / 用途 / 详细描述"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ maxWidth: 320, marginBottom: 16 }}
@@ -384,7 +385,7 @@ function skillToFormValues(item: SkillCatalogItem): Partial<SkillFormValues> {
     skillId: item.skillId,
     name: item.name ?? undefined,
     description: item.description
-      ? { purpose: item.description.purpose, usage: item.description.usage ?? [] }
+      ? { purpose: item.description.purpose, usage: item.description.usage ?? [], content: item.description.content ?? '' }
       : undefined,
     riskCeiling: item.riskCeiling as SkillFormValues['riskCeiling'],
     declaredTools: [...item.declaredTools],

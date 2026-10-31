@@ -882,7 +882,9 @@ public class DelegationExecutor {
      */
     private @Nullable TenantContext buildContext(@NonNull DelegationCommand command) {
         try {
-            AuthzVersionPort.AuthzVersion authz = authzVersions.require(command.tenantId(), "worker");
+            // ⚠️ 严格读（缺行即抛 AuthzUnavailableException → 下方 catch → fail-closed）。
+            //    本方法注释原本就写明「正常路径下 require() 抛异常」。
+            AuthzVersion authz = authzVersions.require(command.tenantId(), "worker");
             if (authz == null || authz.authzVersion() < AuthzVersion.INITIAL_VERSION) {
                 // ⚠️ 防御性校验：require() 返回 null 或无效版本号 → fail-closed
                 //    正常路径下 require() 抛 AuthzUnavailableException，

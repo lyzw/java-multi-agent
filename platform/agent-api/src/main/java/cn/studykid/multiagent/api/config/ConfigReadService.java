@@ -127,11 +127,10 @@ public class ConfigReadService {
                             + "不一致即拒绝启动（fail-closed）"),
             new Spec("工具与审批", "agent.approval.required-by-risk", true, "yml",
                     "P4-D11 已接入运行时（经快照工厂解析；只能收紧不能放松）"),
-            new Spec("工具与审批", "agent.approval.ttl", false, "yml",
-                    "⛔ 实测：无任何读取点 → 审批记录**无过期判定**"),
-            new Spec("工具与审批", "agent.approval.approver-scope", false, "yml",
-                    "⛔ 实测：常量 KEY_APPROVAL_SCOPE 定义外引用数 0；"
-                            + "范围实际由 DEC-6 硬编码冻结（PARENT_OR_TEACHER）"),
+            new Spec("工具与审批", "agent.approval.ttl", true, "yml",
+                    "P0-2 已接入运行时（待人工审批请求的有效期；超界拒绝启动）"),
+            new Spec("工具与审批", "agent.approval.approver-scope", true, "yml",
+                    "P0-2 已接入运行时（待人工审批请求的审批人范围，写入 approval.approver_scope）"),
 
             // ── 合规与零保留 ──
             // ⚠️ 本条于 **P4-D11** 由 false 改为 true：

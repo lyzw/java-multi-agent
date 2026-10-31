@@ -89,6 +89,7 @@ class ConfigStore:
                         SkillDescription(
                             purpose=d["purpose"],
                             usage=tuple(SkillUsage(u["when"], u["how"]) for u in d.get("usage", [])),
+                            content=d.get("content", ""),
                         )
                         if (d := s.get("description")) else None
                     ),
@@ -146,7 +147,8 @@ class ConfigStore:
                           desc.purpose if desc is not None else None,
                           json.dumps([(u.when, u.how) for u in desc.usage],
                                      ensure_ascii=False, sort_keys=True)
-                          if desc is not None else None))
+                          if desc is not None else None,
+                          desc.content if desc is not None else ""))
         if tool_id is not None:
             t = self.tools.get(tool_id)
             if t is not None:

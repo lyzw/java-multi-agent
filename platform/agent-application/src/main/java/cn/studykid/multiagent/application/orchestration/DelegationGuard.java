@@ -265,6 +265,8 @@ public class DelegationGuard {
     private @Nullable AuthorizationDecision checkAuthzFreshness(@NonNull TenantContext context) {
         long current;
         try {
+            // ⚠️ 严格读：缺行 = 从未授权 → fail-closed（既有红线锁定）。
+            //    currentOrInitialize 会在缺行时补建版本 1 并继续（削弱红线）。
             current = authzVersions.require(context.tenantId(), context.principalId())
                     .authzVersion();
         } catch (RuntimeException e) {

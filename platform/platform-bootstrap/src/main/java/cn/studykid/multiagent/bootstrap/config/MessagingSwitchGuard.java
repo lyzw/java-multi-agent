@@ -76,6 +76,27 @@ public final class MessagingSwitchGuard {
                               @Nullable String rabbitHost,
                               int rabbitPort,
                               @NonNull String rabbitQueueName) {
+        verify(channels, pgRepository, rabbitAdmin, rabbitHost, rabbitPort, rabbitQueueName, true);
+    }
+
+    /**
+     * 执行切换残留检查（可显式关闭 Rabbit 侧残留检查）。
+     *
+     * @param checkRabbitResidual 是否检查 Rabbit 侧残留。
+     *        ⚠️ <b>默认必须为 true</b>（生产）：Rabbit 队列跨租户共享，
+     *        切到 DB 模式后残留消息不会被接管，Run 永远不执行且无任何报错。
+     *        ⚠️ <b>仅供集成测试环境关闭</b>：测试自身会往 broker 发消息
+     *        （真实 broker 端到端用例），跑完必然留残留 ——
+     *        那是测试自己的产物，不该让下一轮启动被拦。
+     *        关闭时<b>必须打 INFO 日志</b>（跳过要可见，不能静默）。
+     */
+    public static void verify(@NonNull MessagingChannels channels,
+                              @NonNull PgQueueRepository pgRepository,
+                              @Nullable AmqpAdmin rabbitAdmin,
+                              @Nullable String rabbitHost,
+                              int rabbitPort,
+                              @NonNull String rabbitQueueName,
+                              boolean checkRabbitResidual) {
         // ── 检查 1：DB 侧残留（可精确到租户）──────────────────────────
         List<String> rabbitTenants = channels.rabbitTenantIds();
         for (String tenantId : rabbitTenants) {
@@ -94,6 +115,13 @@ public final class MessagingSwitchGuard {
         // ── 检查 2：Rabbit 侧残留（只能整体检查）───────────────────────
         if (!channels.databaseActive()) {
             // 没有 DB 模式租户 → Rabbit 侧残留与本次启动无关
+            return;
+        }
+        if (!checkRabbitResidual) {
+            // ⚠️ 显式关闭（仅测试环境）。跳过要**可见**：静默跳过 = 又一次静默失效。
+            log.info("Rabbit 侧残留检查已按配置关闭（agent.messaging.switch-guard."
+                    + "rabbit-residual-check=false）：本次启动不校验 broker 队列深度。"
+                    + "生产环境不得关闭该开关。");
             return;
         }
         if (rabbitHost == null || rabbitHost.isBlank()) {

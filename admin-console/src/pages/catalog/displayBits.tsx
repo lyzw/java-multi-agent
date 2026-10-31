@@ -129,11 +129,11 @@ export function tagList(list: string[], emptyText = '（无）', color?: string)
 }
 
 /**
- * Skill 两级描述的<b>完整视图</b>（详情页 / 抽屉）。
+ * Skill 三级描述的<b>完整视图</b>（详情页 / 抽屉）。
  *
  * <p>1级 purpose = 选型信号（路由为什么选中它）；2级 usage = 执行指引
- * （命中后按 when → how 操作）。⚠️ <b>描述不是授权</b> —— 这里是给人看的，
- * 真正进模型上下文的正是这两级（契约 §3.1）。
+ * （命中后按 when → how 操作）；3级 content = 详细描述，用于大模型判断后续工具调用。
+ * ⚠️ <b>描述不是授权</b> —— 这里是给人看的，真正进模型上下文的是 purpose + usage + content（契约 §3.1）。
  */
 export function skillDescriptionView(
   description: SkillDescription | null | undefined,
@@ -143,6 +143,7 @@ export function skillDescriptionView(
     return <Typography.Text type="secondary">未提供</Typography.Text>
   }
   const usage = description?.usage ?? []
+  const content = description?.content ?? ''
   return (
     <Space direction="vertical" size="small">
       <div>
@@ -161,6 +162,14 @@ export function skillDescriptionView(
               </li>
             ))}
           </ul>
+        </div>
+      )}
+      {content.trim() !== '' && (
+        <div>
+          <Typography.Text type="secondary">详细描述（3级 content）：</Typography.Text>
+          <div style={{ marginTop: 4, padding: '8px 12px', background: '#fafafa', borderRadius: 4, maxWidth: 600, whiteSpace: 'pre-wrap' }}>
+            <Typography.Text type="secondary">{content}</Typography.Text>
+          </div>
         </div>
       )}
     </Space>

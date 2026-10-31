@@ -130,6 +130,41 @@ public final class RiskBasedApprovalPolicy implements ApprovalPolicy {
         /** @return 针对该租户与该工具的审批结论。 */
         @NonNull Verdict verdictFor(@NonNull String tenantId, @NonNull ToolHandler handler);
 
+        /**
+         * M2-1 上下文感知审批判定。
+         *
+         * <p>⚠️ 运行期已知的事实（runId / operationId / 参数摘要 / 风险等级）随调用传入，
+         * 来源可据此做<b>精确</b>判定（例如「只放行这一次的 operationId」），
+         * 彻底消除 E-2「拿不到上下文只能恒拒或恒批」的死锁。
+         *
+         * <p>⚠️ 默认实现委托给旧单参方法（向后兼容：未覆写的来源行为不变），
+         * 但<b>默认仍须 fail-closed</b>——上下文缺失不得被当作「可放行」。
+         *
+         * @param tenantId    租户
+         * @param handler     工具句柄
+         * @param context     运行期上下文（runId / operationId / 参数摘要 / 风险等级）
+         * @return 审批结论
+         */
+        @NonNull default Verdict verdictFor(@NonNull String tenantId,
+                                           @NonNull ToolHandler handler,
+                                           @NonNull ApprovalContext context) {
+            return verdictFor(tenantId, handler);
+        }
+
+        /**
+         * M2-1 审批上下文：运行期已知、可供来源精确判定的事实集合。
+         *
+         * <p>⚠️ 只承载<b>判定所需</b>的最小事实；参数原文<b>严禁</b>进入上下文
+         * （合规红线），只传 {@link ArgumentDigest} 产出的摘要。
+         */
+        record ApprovalContext(@NonNull String tenantId,
+                               @NonNull String runId,
+                               @NonNull String operationId,
+                               @NonNull String argumentDigest,
+                               @NonNull String riskLevel) {
+        }
+
+
         /** 审批结论。 */
         enum Verdict {
             /** 明确批准。 */

@@ -189,6 +189,13 @@ public class AgentMetricCollector {
                 || code.startsWith("STEP_LIMIT")) {
             return TerminationReason.MAX_ROUNDS;
         }
+        // ⚠️ P0-3a：模型调用次数上限（MAX_LLM_CALLS）。
+        //    它与 MAX_STEPS 是**两个不同的闸门**（轮次 vs 模型调用次数），
+        //    但终止原因同属「执行次数触顶」—— 归到 MAX_ROUNDS，
+        //    否则看板会把它算进 OTHER（「不知道哪去了」的黑洞）。
+        if (code.startsWith("MAX_LLM_CALLS")) {
+            return TerminationReason.MAX_ROUNDS;
+        }
         if (code.startsWith("MODEL") || code.startsWith("LLM")) {
             return TerminationReason.MODEL_ERROR;
         }

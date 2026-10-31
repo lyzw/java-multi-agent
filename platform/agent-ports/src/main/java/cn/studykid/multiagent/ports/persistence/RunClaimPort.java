@@ -71,6 +71,60 @@ public interface RunClaimPort {
                                                      @NonNull Duration leaseDuration);
 
     /**
+     * 领取<b>挂起等待审批</b>的 Run（M1 / G2 · RESUME 前置）。
+     *
+     * <p>⚠️ 与 {@link #claimSpecificRun} 的区别：{@code claimSpecificRun}
+     * 只收 {@code QUEUED/RUNNING}——WAITING_APPROVAL 的 Run（已释放租约）
+     * 无法经它重新建立租约；若不提供独立入口，审批决定到达后
+     * <b>没有任何代码能把 Run 拉回执行</b>（G2 的 PARK 泄漏形态）。
+     *
+     * <p>⚠️ <b>语义</b>：{@code WAITING_APPROVAL → RUNNING}（世代 +1，
+     * 与接管同构）。CAS 依据当前 fencing token：已被唤醒（非
+     * WAITING_APPROVAL）或不存在时影响 0 行 → 返回 empty——
+     * 这是「重复唤醒/并发唤醒」的正常形态，调用方丢弃即可，不得重试。
+     *
+     * <p>⚠️ <b>默认实现返回 empty = 不可唤醒</b>（fail-closed）：
+     * 未实现本方法的端口会让审批闭环停在「批了也不执行」，
+     * 而不是错误地重跑整单。生产装配必须注入实现了本方法的仓储。
+     *
+     * @param tenantId      租户；须用于绑定 RLS 上下文
+     * @param runId         目标 Run
+     * @param workerId      唤醒方（Worker）标识
+     * @param leaseDuration 租约时长
+     * @return 领取成功返回任务；已非 WAITING_APPROVAL 或不存在返回 empty
+     */
+    default java.util.@NonNull Optional<LeasedTask> claimParkedRunForResume(
+            @NonNull String tenantId, @NonNull String runId,
+            @NonNull String workerId, @NonNull Duration leaseDuration) {
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * 收敛<b>挂起超时</b>的 Run（M1-4 / G2 · 防挂起泄漏兜底）。
+     *
+     * <p>⚠️ <b>为什么必须有兜底</b>：PARK 后 Run 处于 {@code WAITING_APPROVAL}，
+     * <b>不占 worker 线程也不续租</b>。若审批决定始终没来（人忘了批、
+     * 唤醒事件丢了、进程在「决定已落库但未唤醒」的窗口崩溃），
+     * 该 Run 会<b>永久停在挂起态</b> —— 不报错、不告警、只是再也不动。
+     * 这是典型的「静默失效」，故必须有超时收敛路径。
+     *
+     * <p>⚠️ <b>收敛语义</b>：置为 {@code FAILED}（错误码 {@code APPROVAL_TIMEOUT}），
+     * <b>工具未执行</b>（PARK 发生在执行前），因此<b>无副作用</b>。
+     * 绝不重试、绝不重新排队 —— 重试等于让一批无人批准的副作用再排一次队。
+     *
+     * <p>⚠️ <b>默认实现返回 0 = 不收敛</b>（fail-closed 的反面是「不擅自处置」）：
+     * 未实现本方法的端口不会误伤正在等待审批的 Run。
+     *
+     * @param tenantId   租户；须用于绑定 RLS 上下文
+     * @param maxWaiting 允许的最长挂起时长；超时即收敛
+     * @return 本次收敛的 Run 数量
+     */
+    default int failStaleParkedRuns(@NonNull String tenantId,
+                                     @NonNull Duration maxWaiting) {
+        return 0;
+    }
+
+    /**
      * 续租。仅当<b>持有相同世代</b>时成功——旧世代续租会失败。
      *
      * @return 是否成功（false 表示已被接管，调用方须停止工作）

@@ -37,19 +37,27 @@ public interface Skill {
     @NonNull Set<String> inherits();
 
     /**
-     * 两级描述（与契约 skill.schema.json 的 skillDescription 同构）。
+     * 三级描述（与契约 skill.schema.json 的 skillDescription 同构）。
      * purpose（1级）供路由/选型：Agent 靠它判断该不该选中本 Skill，必须一句话讲清用途；
-     * usage（2级）供选中后注入上下文执行：when 描述「什么情况」，how 描述「用何种操作」。
-     * 描述不是授权：usage 只能引导 declaredTools / declaredMcp 已声明的能力，
+     * usage（2级）供选中后注入上下文执行：when 描述「什么情况」，how 描述「用何种操作」；
+     * content（3级）供大模型判断后续工具调用的完整上下文。
+     * 描述不是授权：usage / content 只能引导 declaredTools / declaredMcp 已声明的能力，
      * 授权真相只有声明列表与 {@link #riskCeiling()}，与描述冲突时按声明执行（fail-closed）。
      */
     @NonNull SkillDescription description();
 
-    /** 两级 Skill 描述。usage 可缺省（空），但提供时条目间应互斥或有明确优先级。 */
-    record SkillDescription(@NonNull String purpose, @NonNull List<Usage> usage) {
+    /**
+     * 三级 Skill 描述。usage 可缺省（空），content 可缺省（空），但提供时条目间应互斥或有明确优先级。
+     */
+    record SkillDescription(@NonNull String purpose, @NonNull List<Usage> usage, @NonNull String content) {
 
         public SkillDescription {
             usage = List.copyOf(usage);
+            content = content == null ? "" : content.trim();
+        }
+
+        public SkillDescription(@NonNull String purpose, @NonNull List<Usage> usage) {
+            this(purpose, usage, "");
         }
 
         /** 一条分场景操作指引：when = 什么情况，how = 用何种操作。 */

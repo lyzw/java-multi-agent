@@ -137,8 +137,12 @@ public class ExecutionAdmissionChecker {
         // ── 权威 authzVersion 强一致读 ──────────────────────────────
         long currentVersion;
         try {
+            // ⚠️ 必须用 `require`（严格读）：缺行 = 该主体从未被授权 = 读不到权威事实，
+            //    必须 fail-closed 拒绝。`currentOrInitialize` 在缺行时会补建版本 1
+            //    并继续 —— 那会把「从未授权」伪装成「版本 1 的已授权主体」。
             currentVersion = authzVersions
-                    .require(request.tenantId(), request.principalId()).authzVersion();
+                    .require(request.tenantId(), request.principalId())
+                    .authzVersion();
         } catch (RuntimeException e) {
             // ⚠️ 版本服务不可用 → fail-closed（§5.5「缺失/超时/非法 → fail-closed」）
             log.error("准入检查：授权版本读取失败，fail-closed: tenant={}, run={}, err={}",

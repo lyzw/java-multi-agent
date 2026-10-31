@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>前端问答功能规划 — 以 AI 聊天框为基础交互范式</title>
+<style>
+  :root {
+    --ink: #1f2328;
+    --ink-2: #57606a;
+    --ink-3: #8b949e;
+    --paper: #ffffff;
+    --paper-2: #f6f8fa;
+    --line: #d8dee4;
+    --accent: #0b5cad;
+    --accent-soft: #eaf2fa;
+    --ok: #1a7f37;
+    --warn: #9a6700;
+    --danger: #cf222e;
+    --danger-soft: #fff1f0;
+    --code-bg: #f6f8fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--paper-2);
+    line-height: 1.75;
+    font-size: 15px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 24px 80px; }
+  header.doc { border-bottom: 2px solid var(--ink); padding-bottom: 20px; margin-bottom: 32px; }
+  header.doc .eyebrow { color: var(--ink-3); font-size: 13px; letter-spacing: .12em; margin: 0 0 6px; }
+  header.doc h1 { font-size: 28px; margin: 0 0 10px; line-height: 1.3; }
+  header.doc .meta { color: var(--ink-2); font-size: 13.5px; }
+  h2 { font-size: 20px; margin: 44px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  h2 .no { color: var(--accent); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  h3 { font-size: 16px; margin: 26px 0 8px; }
+  p { margin: 8px 0; }
+  ul, ol { padding-left: 22px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px; background: var(--code-bg);
+    border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 14px 16px; overflow-x: auto; font-size: 12.8px; line-height: 1.6;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; background: var(--paper); }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--paper-2); font-weight: 600; white-space: nowrap; }
+  .callout { border: 1px solid var(--line); border-left: 4px solid var(--accent); background: var(--paper); padding: 12px 16px; margin: 14px 0; border-radius: 4px; }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.danger { border-left-color: var(--danger); background: var(--danger-soft); }
+  .callout .t { font-weight: 600; margin: 0 0 4px; }
+  .tag { display: inline-block; font-size: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 0 8px; color: var(--ink-2); background: var(--paper-2); margin-right: 6px; }
+  .muted { color: var(--ink-2); }
+  .small { font-size: 13px; }
+  figure { margin: 16px 0; }
+  figcaption { color: var(--ink-3); font-size: 12.5px; text-align: center; margin-top: 6px; }
+  .svgbox { background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .card { background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; }
+  .card h4 { margin: 0 0 6px; font-size: 14.5px; }
+  .toc { background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 14px 20px; }
+  .toc ol { margin: 4px 0; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .tree { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12.8px; line-height: 1.9; }
+  .tree .c { color: var(--ink-3); }
+  .bubble-demo { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+  .bub { max-width: 78%; padding: 9px 13px; border-radius: 12px; font-size: 13.5px; line-height: 1.6; }
+  .bub-user { align-self: flex-end; background: var(--ink); color: #fff; border-bottom-right-radius: 3px; }
+  .bub-ai { align-self: flex-start; background: var(--paper-2); border: 1px solid var(--line); color: var(--ink); border-bottom-left-radius: 3px; }
+  .bub-err { align-self: flex-start; background: var(--danger-soft); border: 1px solid #f0b8b2; color: var(--ink); border-bottom-left-radius: 3px; }
+  .bub .cite { display: inline-block; font-size: 11.5px; color: var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 0 7px; margin: 4px 4px 0 0; }
+  .bub .disc { font-size: 11.5px; color: var(--ink-3); border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 4px; }
+  .phase td:first-child { white-space: nowrap; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <p class="eyebrow">java-multi-agent · frontend（DEC-2 学生侧工程）· 功能规划</p>
+  <h1>前端问答功能规划 —— 以普通 AI 聊天框为基础交互范式</h1>
+  <p class="meta">版本 v1.0 · 2026-10-30 · 规划范围：交互范式 / 场景与流程 / 组件结构 / 状态管理 / 五态与视觉对齐 / API 依赖 / 测试与分期</p>
+</header>
+
+<nav class="toc">
+  <strong>目录</strong>
+  <ol>
+    <li><a href="#s1">目标使用场景与非目标</a></li>
+    <li><a href="#s2">核心交互流程（含主流程图与消息状态机）</a></li>
+    <li><a href="#s3">组件结构划分</a></li>
+    <li><a href="#s4">关键状态管理要点</a></li>
+    <li><a href="#s5">五态对齐与视觉规范（气泡样式）</a></li>
+    <li><a href="#s6">API 依赖与后端缺口（fail-closed）</a></li>
+    <li><a href="#s7">测试要点</a></li>
+    <li><a href="#s8">实施分期</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="s1"><span class="no">1</span>目标使用场景与非目标</h2>
+
+<h3>1.1 目标场景</h3>
+<table>
+  <tr><th style="width:90px">优先级</th><th style="width:200px">场景</th><th>描述</th></tr>
+  <tr>
+    <td><strong>P0 主场景</strong></td>
+    <td>学生针对错题归因结果追问</td>
+    <td>学生在查看归因结果 / 讲解（<code>/runs/:runId/result</code>、<code>/rag</code> 检索页）后仍有疑问，用自然语言追问：「这道题第二步为什么用配方法？」「(2x+1)² 展开后中间项是怎么来的？」。问答页以<strong>独立对话页</strong>呈现（路由 <code>/ask</code>，学生侧不挂 area，任何已登录用户可见），并可从结果页 / 检索页携带上下文跳入。</td>
+  </tr>
+  <tr>
+    <td><strong>P1 次场景</strong></td>
+    <td>知识点开放式提问</td>
+    <td>不绑定某道错题，直接问概念性问题：「一元二次方程判别式小于零是什么意思？」。后端检索按当前租户语料回答，回答必须可溯源（引用片段）。</td>
+  </tr>
+  <tr>
+    <td><strong>P2 延伸</strong></td>
+    <td>教师 / 运营侧复用</td>
+    <td>同一套聊天组件后续可作为「语料问答」嵌入管理侧（admin-console 需另行适配 antd，本规划不覆盖）。</td>
+  </tr>
+</table>
+
+<h3>1.2 非目标（明确排除）</h3>
+<ul>
+  <li><strong>不做多轮 Agent 编排可视化</strong>：这是「普通 AI 聊天框」，不是 Run 执行过程监视器。Run 进度已有 <code>/runs/:runId</code> 页与 SSE 链路，两者不混用。</li>
+  <li><strong>不做语音 / 图片 / 文件输入</strong>：P1 仅文本输入。</li>
+  <li><strong>不做流式打字机特效优先</strong>：若后端仅提供同步生成端点（当前 <code>/api/v1/retrieval/generate</code> 即如此），就如实整段返回 + 呼吸纸面加载态；不为特效而伪造流式（<strong>fail-closed：不假装在流式</strong>）。</li>
+  <li><strong>不做自动埋点推断</strong>：任何反馈（👍/👎）只来自用户显式点击，对齐 <code>recordRunFeedback</code> 的 L3 有噪信号纪律。</li>
+</ul>
+
+<div class="callout">
+  <p class="t">产品签名约束（对齐既有设计纪律）</p>
+  <p>本项目是「批改纸」视觉体系（墨色 + 纸面 + 批改红边），<strong>不引入 antd、不引入圆角卡片阴影、不引入灰色微光骨架屏</strong>。聊天气泡是本功能新增的唯一视觉概念，样式规范见 §5，必须落在 <code>tokens.css</code> 既有变量体系内。</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s2"><span class="no">2</span>核心交互流程</h2>
+
+<h3>2.1 主流程</h3>
+<figure>
+<div class="svgbox">
+<svg viewBox="0 0 920 300" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#57606a"/>
+    </marker>
+  </defs>
+  <!-- nodes -->
+  <g>
+    <rect x="15"  y="30" width="130" height="58" rx="6" fill="#eaf2fa" stroke="#0b5cad"/>
+    <text x="80"  y="54" text-anchor="middle" fill="#1f2328" font-weight="600">空态</text>
+    <text x="80"  y="72" text-anchor="middle" fill="#57606a" font-size="11.5">Empty + 示例问题</text>
+
+    <rect x="185" y="30" width="130" height="58" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="250" y="54" text-anchor="middle" fill="#1f2328" font-weight="600">输入问题</text>
+    <text x="250" y="72" text-anchor="middle" fill="#57606a" font-size="11.5">textarea / Enter 发送</text>
+
+    <rect x="355" y="30" width="130" height="58" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="420" y="54" text-anchor="middle" fill="#1f2328" font-weight="600">乐观插入</text>
+    <text x="420" y="72" text-anchor="middle" fill="#57606a" font-size="11.5">用户气泡立即可见</text>
+
+    <rect x="525" y="30" width="130" height="58" rx="6" fill="#f6f8fa" stroke="#d8dee4"/>
+    <text x="590" y="54" text-anchor="middle" fill="#1f2328" font-weight="600">等待回答</text>
+    <text x="590" y="72" text-anchor="middle" fill="#57606a" font-size="11.5">呼吸纸面 typing 态</text>
+
+    <rect x="695" y="30" width="150" height="58" rx="6" fill="#f0fff4" stroke="#1a7f37"/>
+    <text x="770" y="54" text-anchor="middle" fill="#1f2328" font-weight="600">回答气泡落地</text>
+    <text x="770" y="72" text-anchor="middle" fill="#57606a" font-size="11.5">含引用 + disclaimer</text>
+  </g>
+  <!-- arrows -->
+  <g stroke="#57606a" stroke-width="1.4" fill="none">
+    <line x1="145" y1="59" x2="183" y2="59" marker-end="url(#arr)"/>
+    <line x1="315" y1="59" x2="353" y2="59" marker-end="url(#arr)"/>
+    <line x1="485" y1="59" x2="523" y2="59" marker-end="url(#arr)"/>
+    <line x1="655" y1="59" x2="693" y2="59" marker-end="url(#arr)"/>
+  </g>
+  <!-- error branch -->
+  <g>
+    <rect x="525" y="160" width="130" height="58" rx="6" fill="#fff1f0" stroke="#cf222e"/>
+    <text x="590" y="184" text-anchor="middle" fill="#1f2328" font-weight="600">失败</text>
+    <text x="590" y="202" text-anchor="middle" fill="#57606a" font-size="11.5">错误气泡 + 原因</text>
+
+    <rect x="695" y="160" width="150" height="58" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+    <text x="770" y="184" text-anchor="middle" fill="#1f2328" font-weight="600">内联「重试」</text>
+    <text x="770" y="202" text-anchor="middle" fill="#57606a" font-size="11.5">或改写问题重新发送</text>
+  </g>
+  <g stroke="#cf222e" stroke-width="1.4" fill="none">
+    <line x1="590" y1="88" x2="590" y2="158" marker-end="url(#arr)" stroke="#cf222e"/>
+  </g>
+  <g stroke="#57606a" stroke-width="1.4" fill="none">
+    <line x1="655" y1="189" x2="693" y2="189" marker-end="url(#arr)"/>
+  </g>
+  <!-- follow-up loop -->
+  <path d="M 770 88 C 770 128, 420 128, 300 96" fill="none" stroke="#8b949e" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+  <text x="530" y="140" text-anchor="middle" fill="#8b949e" font-size="11.5">继续追问（同一会话内，携带历史）</text>
+  <!-- send disabled note -->
+  <text x="420" y="108" text-anchor="middle" fill="#9a6700" font-size="11.5">等待期间：输入保留、发送禁用、可「停止」</text>
+</svg>
+</div>
+<figcaption>图 1 · 问答主流程：空态 → 输入 → 乐观插入 → 等待 → 回答落地（含失败分支与追问循环）</figcaption>
+</figure>
+
+<h3>2.2 异常分支一览</h3>
+<table>
+  <tr><th style="width:170px">异常</th><th style="width:230px">判定</th><th>前端行为</th></tr>
+  <tr><td>输入为空 / 纯空白</td><td>本地校验</td><td>发送按钮保持禁用，不发起请求。</td></tr>
+  <tr><td>请求超时</td><td><code>requestWithTimeout</code> 归一为 <code>REQUEST_TIMEOUT</code>（对齐 RAG 20s 超时纪律）</td><td>错误气泡：「等待回答超时」+ 下一步「重试 / 换个问法」；用户气泡保留、可重发。</td></tr>
+  <tr><td>限流（429）</td><td><code>ApiError.normalized</code></td><td>错误气泡明确「提问太频繁」+ 冷却提示；<strong>不做自动重试</strong>（会烧配额）。</td></tr>
+  <tr><td>后端能力未接入</td><td>约定 501 / 配置开关</td><td>整页 <code>Unavailable</code>（标注阻塞编号），输入框禁用——不提供「看起来能用但必然失败」的入口。</td></tr>
+  <tr><td>401 会话失效</td><td>复用 <code>_request</code> 既有 401 兜底</td><td>由全局 <code>UnauthorizedBridge</code> 清会话跳登录，聊天组件不另行处理。</td></tr>
+  <tr><td>组件卸载 / 路由离开</td><td><code>AbortController.abort()</code></td><td>中止在途请求，<code>cancelled</code> 守卫防 StrictMode 双挂载 setState（对齐 <code>useRunStatus</code> 纪律）。</td></tr>
+</table>
+
+<h3>2.3 对话历史与自动滚动</h3>
+<ul>
+  <li><strong>会话内历史</strong>：单会话消息全量保存在内存 + <code>sessionStorage</code>（刷新恢复，关闭标签即清除——不落 localStorage，避免未成年人对话内容长期驻留浏览器）。</li>
+  <li><strong>跨会话历史</strong>：P2 提供侧栏「历史会话」列表（后端需提供会话列表端点，见 §6）；P1 仅「当前会话」+「开启新会话」按钮。</li>
+  <li><strong>自动滚动策略</strong>（关键细节，见 §4.4）：
+    <ul>
+      <li>用户位于底部附近（距底 &lt; 80px）→ 新消息 / 流式增量到来时自动跟随滚动；</li>
+      <li>用户已上翻阅读历史 → <strong>停止跟随</strong>，在输入框上方浮现「回到底部 ↓」胶囊（含未读新消息数）；</li>
+      <li>用户发送消息 → 无论当前位置，强制滚到底。</li>
+    </ul>
+  </li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="s3"><span class="no">3</span>组件结构划分</h2>
+
+<h3>3.1 目录规划（对齐现有 features/* 自包含约定）</h3>
+<pre class="tree">frontend/src/
+├─ pages/ask/
+│  └─ <b>AskPage.tsx</b>            <span class="c"># 页面壳：PageHead + ChatPanel + 路由挂载 /ask</span>
+├─ features/ask/
+│  ├─ <b>chatTypes.ts</b>           <span class="c"># Message / ChatSession / 发送状态 类型定义</span>
+│  ├─ <b>chatState.ts</b>           <span class="c"># reducer + 动作（对齐 runState.ts 的纯函数风格）</span>
+│  ├─ <b>useChatSession.ts</b>      <span class="c"># 核心 hook：发消息 / 停止 / 重试 / 滚动状态</span>
+│  ├─ <b>chatApi.ts</b>             <span class="c"># API 封装（复用 api/client.ts 的 _request 与超时）</span>
+│  ├─ <b>scrollBehavior.ts</b>      <span class="c"># 距底判定 / 跟随 / 强制滚动（纯函数，可单测）</span>
+│  ├─ <b>sessionStorage.ts</b>      <span class="c"># 会话持久化（sessionStorage 读写 + 版本号防脏数据）</span>
+│  ├─ <b>MessageList.tsx</b>        <span class="c"># 消息列表 + 空态 + 自动滚动容器</span>
+│  ├─ <b>MessageBubble.tsx</b>      <span class="c"># 单条气泡（user / ai / error 三态 + 引用 + disclaimer）</span>
+│  ├─ <b>TypingIndicator.tsx</b>    <span class="c"># 呼吸纸面等待态（复用 .loading 视觉语言）</span>
+│  ├─ <b>ChatInput.tsx</b>          <span class="c"># textarea + 发送 + 停止 + 字数上限提示</span>
+│  └─ <b>ChatErrorBubble.tsx</b>    <span class="c"># 错误气泡（ErrorState 语义内联化）</span>
+└─ tests/ask/                 <span class="c"># vitest 用例，见 §7</span></pre>
+
+<div class="callout">
+  <p class="t">分层原则</p>
+  <p><code>chatState.ts</code> 与 <code>scrollBehavior.ts</code> 保持<strong>纯函数</strong>（无 React 依赖），单测不必渲染组件——对齐 <code>features/run/runState.ts</code>、<code>sse.ts</code> 的既有风格。页面组件只做装配，业务规则全部下沉 feature 层。</p>
+</div>
+
+<h3>3.2 组件职责表</h3>
+<table>
+  <tr><th style="width:170px">组件 / 模块</th><th>职责</th><th style="width:280px">复用与对齐</th></tr>
+  <tr><td><code>AskPage</code></td><td>页头（<code>PageHead</code> 设置标题）、布局、路由参数（<code>?from=runId</code> 携带上下文跳入）</td><td><code>components/ui.tsx#PageHead</code>；路由注册于 <code>App.tsx</code> 学生侧区段（不挂 area）</td></tr>
+  <tr><td><code>MessageList</code></td><td>滚动容器、消息渲染、空态、typing 占位、回到底部胶囊</td><td>空态复用 <code>shared/states.tsx#Empty</code></td></tr>
+  <tr><td><code>MessageBubble</code></td><td>气泡渲染：角色区分、长文本换行、引用片段折叠展开、disclaimer 脚注</td><td>引用点击跳转 <code>/rag</code> 检索页语料详情；样式见 §5</td></tr>
+  <tr><td><code>ChatInput</code></td><td>受控 textarea（Enter 发送 / Shift+Enter 换行）、发送与停止按钮互斥、字数上限（如 500 字）</td><td>按钮用既有 <code>.btn</code> 体系；输入失败原因用 <code>shared/Field.tsx</code> 风格</td></tr>
+  <tr><td><code>ChatErrorBubble</code></td><td>把 <code>ApiError.normalized</code> 翻译成「原因 + 下一步」+ 重试按钮</td><td>语义对齐 <code>shared/states.tsx#ErrorState</code>（⛔ 不写「请求失败」死话）</td></tr>
+  <tr><td><code>useChatSession</code></td><td>唯一状态入口：消息列表、发送、停止、重试、加载历史</td><td>内部 <code>useReducer</code>，见 §4</td></tr>
+  <tr><td><code>chatApi</code></td><td>端点调用 + 超时 + <code>X-Tenant-Id</code> 头（RAG 链路必需）</td><td>复用 <code>api/client.ts#requestWithTimeout</code>；禁绕过 <code>_request</code></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s4"><span class="no">4</span>关键状态管理要点</h2>
+
+<h3>4.1 技术选型：不引入状态库</h3>
+<p>工程现状为 <strong>React hooks + 自定义 hook，零全局状态库</strong>（<code>grep</code> 确认无 redux/zustand/recoil）。问答状态是<strong>页面局部状态</strong>，不跨页面共享（跳入时经 URL 参数携带上下文即可），故：</p>
+<div class="callout">
+  <p class="t">决策</p>
+  <p>用 <code>useReducer</code> + 单一 <code>useChatSession</code> hook 管理全部问答状态；不引入 Redux/Zustand。若 P2 出现「多页面共享会话」的真实需求，再评估——<strong>为假设的需求引入状态库是过度设计</strong>。</p>
+</div>
+
+<h3>4.2 消息数据模型</h3>
+<pre><code>// chatTypes.ts —— 与后端契约对齐后微调
+export type MessageRole = 'user' | 'assistant'
+
+export type MessageStatus =
+  | 'sent'        // 用户消息已入列
+  | 'streaming'   // 回答接收中（若走流式端点）
+  | 'done'        // 回答完整落地
+  | 'failed'      // 本条回答失败（用户气泡保留，失败原因在伴随的错误气泡）
+
+export interface Citation {          // 回答引用的语料片段（可溯源，⛔ 不凭空生成）
+  hitId: string
+  sourceTitle: string
+  snippet: string
+}
+
+export interface ChatMessage {
+  id: string                         // 前端生成（crypto.randomUUID()），重试时不复用
+  role: MessageRole
+  status: MessageStatus
+  content: string
+  citations?: Citation[]             // 仅 assistant
+  disclaimer?: string                // 仅 assistant：生成方式声明（EXCERPT_ASSEMBLY 必须展示）
+  createdAt: number
+  error?: { code: string; message: string }   // 仅 failed 的 assistant 位
+}
+
+export interface ChatSession {
+  id: string                         // 后端会话标识（P1 可本地生成）
+  title: string                      // 首条用户消息截断
+  messages: ChatMessage[]
+  updatedAt: number
+}</code></pre>
+
+<h3>4.3 Reducer 动作与防竞态纪律</h3>
+<table>
+  <tr><th style="width:190px">Action</th><th>语义</th><th style="width:250px">防坑要点</th></tr>
+  <tr><td><code>SEND_START</code></td><td>乐观插入 user 气泡，<code>sending=true</code></td><td>发送期间禁用发送按钮但<strong>保留输入内容</strong>（失败可改后重发）；同时暴露 <code>stop()</code>。</td></tr>
+  <tr><td><code>REPLY_DELTA</code></td><td>流式增量追加到最后一条 assistant 消息</td><td>仅在流式端点下存在；批量合并增量（如 60ms 节流）避免高频 re-render。</td></tr>
+  <tr><td><code>REPLY_DONE</code></td><td>回答落地，写入 citations / disclaimer</td><td>⛔ disclaimer 必须随答案渲染——只展示 answer 等于把摘录伪装成 AI 讲解（后端既有红线）。</td></tr>
+  <tr><td><code>REPLY_FAILED</code></td><td>置 failed + 错误信息</td><td>错误码取 <code>ApiError.normalized.code</code>，文案归一（超时/限流/网络分口径，见 §2.2）。</td></tr>
+  <tr><td><code>RETRY</code></td><td>移除失败气泡，以原问题重发</td><td>新 <code>AbortController</code>；旧 controller 必先 abort。</td></tr>
+  <tr><td><code>STOP</code></td><td>用户主动停止</td><td>abort + 气泡标记「已停止」而非 failed——<strong>用户主动 ≠ 出错</strong>，混同会让用户以为系统坏了。</td></tr>
+  <tr><td><code>HYDRATE</code> / <code>NEW_SESSION</code></td><td>恢复 / 新建会话</td><td>hydrate 读 sessionStorage 带版本号校验，脏数据直接丢弃回空态（fail-closed）。</td></tr>
+</table>
+
+<div class="callout danger">
+  <p class="t">两条铁律（直接抄自工程既有教训）</p>
+  <ul style="margin-bottom:0">
+    <li><strong>effect 内 <code>cancelled</code> 守卫</strong>：所有异步 setState 前检查，防 StrictMode 双挂载与路由离开后的 setState（<code>useRunStatus</code> 同款）。</li>
+    <li><strong>在途请求单一化</strong>：同一会话同一时刻至多一个在途回答；<code>sending</code> 状态下不排队第二条——初中生场景追问应等回答落地，排队会造成消息序与回答序错位。</li>
+  </ul>
+</div>
+
+<h3>4.4 自动滚动（独立纯函数模块）</h3>
+<pre><code>// scrollBehavior.ts —— 全部纯函数，可单测
+export const STICKY_THRESHOLD_PX = 80
+
+/** 距底 &lt; 阈值 → 认为用户「贴底」，允许跟随 */
+export function isNearBottom(el: HTMLElement): boolean
+
+/** 新消息到来时是否应自动滚动：贴底 或 消息由本用户发出 */
+export function shouldAutoScroll(
+  nearBottom: boolean, byUser: boolean
+): boolean</code></pre>
+<ul>
+  <li>滚动监听用 <code>scroll</code> 事件 + <code>requestAnimationFrame</code> 节流即可（消息量级小，不上 IntersectionObserver）。</li>
+  <li>「回到底部」胶囊状态（可见性 + 未读数）由 reducer 管理，避免放在 DOM ref 里导致测试不可断言。</li>
+  <li>⛔ 不用 <code>smooth</code> 滚动跟随流式增量（连续 smooth 会抖动）；仅用户点「回到底部」时用 smooth。</li>
+</ul>
+
+<h3>4.5 会话持久化与隐私</h3>
+<ul>
+  <li>P1：<code>sessionStorage</code>（键 <code>ask.session.v1</code>），刷新恢复、关标签清除；写入前 JSON 校验 + 版本号不符即弃。</li>
+  <li>P2 起若后端落库会话历史，前端只做缓存不做真相源（后端为权威快照，对齐「单一数据源」纪律）。</li>
+  <li>对话内容属学生个人信息：<strong>不在前端做任何导出/分享入口</strong>，P2 历史列表的删除能力以后端物理不可删（平台纪律）为准绳做「隐藏」语义。</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="s5"><span class="no">5</span>五态对齐与视觉规范</h2>
+
+<h3>5.1 五态映射（工程既有 FE-D3 §4 纪律：五态不可互相混淆）</h3>
+<table>
+  <tr><th style="width:100px">状态</th><th>问答场景下的定义</th><th style="width:320px">呈现</th></tr>
+  <tr><td><strong>默认</strong></td><td>会话进行中</td><td>消息列表 + 输入框常驻。</td></tr>
+  <tr><td><strong>加载</strong></td><td>已发送、等待回答</td><td>最后一条下挂 <code>TypingIndicator</code>：「正在组织讲解…」呼吸纸面动画。⛔ 不用灰色微光条。</td></tr>
+  <tr><td><strong>空</strong></td><td>查了，确实没有消息（新会话）</td><td><code>Empty</code> + <strong>3 条可点击示例问题</strong>（点击即填入输入框）——空态是邀请行动，不是死话「暂无数据」。</td></tr>
+  <tr><td><strong>错误</strong></td><td>某条回答失败</td><td>内联错误气泡（原因 + 下一步 + 重试）；<strong>不弹全局 toast、不清空对话</strong>。</td></tr>
+  <tr><td><strong>未开放</strong></td><td>后端问答端点不存在</td><td>整页 <code>Unavailable</code>（阻塞编号可追溯）+ 输入框禁用。⛔ 与「空」严格区分。</td></tr>
+</table>
+
+<h3>5.2 气泡样式规范</h3>
+<div class="grid2">
+  <div class="card">
+    <h4>气泡实况预览</h4>
+    <div class="bubble-demo">
+      <div class="bub bub-user">这道题第二步为什么要先移项？</div>
+      <div class="bub bub-ai">
+        先移项是为了把方程整理成 <b>ax² + bx = c</b> 的标准形，这样系数才好配平方……
+        <div>
+          <span class="cite">引用 · 人教版九上 §21.2</span>
+          <span class="cite">引用 · 片段 #128</span>
+        </div>
+        <div class="disc">本回答由语料摘录装配，非模型生成，请以教材原文为准。</div>
+      </div>
+      <div class="bub bub-err">这次回答没能完成：等待超时。<br/>
+        <button type="button" style="margin-top:4px" class="tag">重试</button>
+        <span class="tag">换个问法</span>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <h4>规范要点</h4>
+    <ul style="margin:0; padding-left:18px">
+      <li><strong>用户气泡</strong>：右对齐、墨色底白字（<code>--ink</code>）、右下直角；最大宽 78%。</li>
+      <li><strong>回答气泡</strong>：左对齐、纸面底（<code>--paper-2</code>）+ 1px <code>--line</code> 边、左下直角；⛔ 不用品牌色底，回答是「纸上的批注」不是「聊天气球」。</li>
+      <li><strong>引用</strong>：气泡内低饱和胶囊（<code>--accent-soft</code>），点击展开片段原文；<strong>无引用的回答必须显式标注「本回答无语料依据」</strong>（fail-closed）。</li>
+      <li><strong>disclaimer</strong>：虚线分隔的脚注小字，后端给了就展示，前端不吞。</li>
+      <li><strong>错误气泡</strong>：批改红边语言（对齐 <code>.marked</code>），含重试动作。</li>
+      <li>长文本：正常换行、保留空行；P1 不做 Markdown 渲染（避免引入解析器与注入面），纯文本 + 换行保留。</li>
+    </ul>
+  </div>
+</div>
+
+<h3>5.3 可访问性</h3>
+<ul>
+  <li>消息列表 <code>role="log"</code> + <code>aria-live="polite"</code>，新回答可被读屏感知；typing 态 <code>role="status"</code>。</li>
+  <li>输入框带 <code>&lt;label&gt;</code>（复用 <code>.field</code> 结构）；发送按钮有明确可访问名；错误气泡 <code>role="alert"</code>。</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="s6"><span class="no">6</span>API 依赖与后端缺口（fail-closed）</h2>
+
+<h3>6.1 两条实现路线</h3>
+<table>
+  <tr><th style="width:110px">路线</th><th>做法</th><th style="width:130px">流式</th><th style="width:300px">评估</th></tr>
+  <tr>
+    <td><strong>A · 最小闭环</strong><br><span class="small muted">推荐先行</span></td>
+    <td>复用现有 <code>POST /api/v1/retrieval</code>（检索召回）+ <code>POST /api/v1/retrieval/generate</code>（摘录装配）。前端把「问题 → 检索 → 生成」串成一轮回答；多轮追问在前端把历史摘要拼进检索 query。</td>
+    <td>否（同步 20s 超时）</td>
+    <td>零后端改动即可上线；回答为<strong>摘录装配</strong>，必须展示 <code>generator</code> 与 <code>disclaimer</code>；引用天然可溯源。受 A-008 / G3 占位限制，讲解质量有限但<strong>诚实</strong>。</td>
+  </tr>
+  <tr>
+    <td><strong>B · 专用问答端点</strong><br><span class="small muted">目标形态</span></td>
+    <td>后端新增 <code>POST /api/v1/qa/sessions</code> + <code>POST /api/v1/qa/sessions/{id}/messages</code>，服务端维护会话上下文，SSE 流式返回（复用既有 SSE 帧格式与 <code>IncrementalSseParser</code>）。</td>
+    <td>是</td>
+    <td>前端 <code>chatApi</code> 预留双实现：接口层已按「同步 / 流式」抽象，切换只动 <code>chatApi.ts</code> 一层。</td>
+  </tr>
+</table>
+
+<h3>6.2 必须遵守的调用纪律（沿用既有约定）</h3>
+<ul>
+  <li><strong><code>X-Tenant-Id</code> 头</strong>：走 RAG 链路（路线 A）时必须携带，缺失后端 400——此前生成端点漏传该头是已确认缺陷，此处列为验收项。</li>
+  <li><strong>限流意识</strong>：发送按钮防抖 + 失败不自动重试；若路线 B 上线，问答端点限流桶与 <code>EVENT_QUERY</code>（30 次/60s）的关系须由后端明示，前端轮询/重连策略不得新增未报备的请求链。</li>
+  <li><strong>错误归一化</strong>：只走 <code>api/errors.ts</code> 的归一化产物，组件层不直接读 HTTP 状态码。</li>
+  <li><strong>401 兜底</strong>：不新增处理，交给全局 <code>UnauthorizedBridge</code>。</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="s7"><span class="no">7</span>测试要点（vitest + @testing-library）</h2>
+<table>
+  <tr><th style="width:230px">用例</th><th>断言核心</th></tr>
+  <tr><td><code>chatState.test.ts</code></td><td>reducer 纯函数：SEND_START 插序、REPLY_FAILED 保留用户气泡、STOP 标记「已停止」≠ failed、HYDRATE 脏数据丢弃。</td></tr>
+  <tr><td><code>scrollBehavior.test.ts</code></td><td>贴底判定阈值边界、用户上翻不跟随、用户发送强制滚动。</td></tr>
+  <tr><td><code>useChatSession.test.ts(x)</code></td><td>发送 → loading → done 全链路（mock chatApi）；超时分支归一文案；在途请求 abort 后无 setState 警告（StrictMode 双挂载下不报 act 警告）。</td></tr>
+  <tr><td><code>MessageList / ChatInput</code></td><td>空态示例问题点击填入输入框；Enter 发送 / Shift+Enter 换行；等待期间发送禁用、停止可用；失败气泡出现且重试可点；disclaimer 与引用渲染（给了必显示）。</td></tr>
+  <tr><td>基建纪律</td><td>沿用 <code>tests/setup.ts</code> 的 <code>afterEach(cleanup)</code>（singleFork 共享模块缓存坑）；Mockito 式「后桩覆盖先桩」问题在 mock 模块时同样注意。</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s8"><span class="no">8</span>实施分期</h2>
+<table class="phase">
+  <tr><th style="width:70px">阶段</th><th style="width:260px">范围</th><th>验收口径</th></tr>
+  <tr>
+    <td>P1</td>
+    <td><strong>最小闭环</strong>：路线 A（检索 + 摘录生成）、单会话、五态齐全、错误/超时/停止、空态示例、sessionStorage 恢复、自动滚动</td>
+    <td><code>/ask</code> 可用；<code>mvn</code> 之外的前端 <code>npm run typecheck + vitest</code> 全绿；无引用回答有显式标注；disclaimer 必现。</td>
+  </tr>
+  <tr>
+    <td>P2</td>
+    <td>历史会话侧栏（依赖后端会话端点）、从结果页/检索页带上下文跳入、反馈 👍/👎（显式动作，接 <code>recordRunFeedback</code> 或专用端点）</td>
+    <td>上下文跳入后首条消息携带题目摘要；后端未接入的部分一律 <code>Unavailable</code> 而非隐藏入口。</td>
+  </tr>
+  <tr>
+    <td>P3</td>
+    <td>路线 B 流式端点接入、<code>REPLY_DELTA</code> 增量渲染与节流、追问上下文由服务端维护</td>
+    <td>流式断线可续（Last-Event-ID）；切换实现仅改 <code>chatApi.ts</code>，组件层零改动。</td>
+  </tr>
+</table>
+
+<div class="callout warn">
+  <p class="t">风险与未决</p>
+  <ul style="margin-bottom:0">
+    <li>路线 A 的回答质量受 RAG G3 占位（逐字摘录而非模型生成）限制——产品话术须如实定位为「语料检索式问答」，禁止包装成「AI 智能讲解」。</li>
+    <li>「多轮追问」在路线 A 下是前端拼接（检索 query 携带历史摘要），上下文窗口有限，追问超过 3 轮建议引导「开启新会话」。</li>
+    <li>后端问答会话端点（路线 B）尚无排期，P1 交付不依赖它；<code>chatApi</code> 的接口抽象须在 P1 就位，避免 P3 返工组件层。</li>
+  </ul>
+</div>
+
+<p class="small muted" style="margin-top:36px">— 规划完 · 基于 frontend 工程现状勘察（states.tsx 五态 / sse.ts 流式基建 / client.ts 请求纪律 / App.tsx 路由分区）—</p>
+
+</div>
+</body>
+</html>

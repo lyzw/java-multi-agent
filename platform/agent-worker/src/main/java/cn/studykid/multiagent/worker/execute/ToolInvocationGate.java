@@ -11,6 +11,8 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.application.ArgumentDigest;
+import cn.studykid.multiagent.application.approval.ApprovalRequestSettings;
 import cn.studykid.multiagent.application.orchestration.RunBudgetProbe;
 import cn.studykid.multiagent.core.cap.CapToolDecision;
 import cn.studykid.multiagent.core.cap.ExecutionScope;
@@ -120,6 +122,25 @@ public class ToolInvocationGate {
      * 本类这一条路径，否则八道闸门对 HTTP 工具全部失效。
      */
     private final cn.studykid.multiagent.ports.http.HttpToolHandlerProvider httpToolHandlers;
+
+    /**
+     * 能力闭包守卫（P0-1a）。
+     *
+     * <p>⚠️ <b>可为空 = 闭包校验未装配</b>：此时既有链路不校验闭包
+     * （历史行为）。生产装配<b>必须</b>传入 ——
+     * 否则「能力闭包」这件事只在呈现层生效（模型看不到越权工具），
+     * 而强制层没有这道校验：任何已注册工具都可被任意 Agent 调用。
+     */
+    private final CapabilityClosureGuard closureGuard;
+
+    /**
+     * 审批请求登记参数（P0-2）。
+     *
+     * <p>⚠️ <b>可为空 = 不登记待办</b>：此时需要审批的工具仍会被拒绝，
+     * 但审批台<b>看不到待办</b>（P0-2 的原症状）。
+     * 生产装配<b>必须</b>传入。
+     */
+    private final @Nullable ApprovalRequestSettings approvalRequestSettings;
 
     /**
      * 委派执行器（多级 Agent v1.1 · P2-MA-02）。
@@ -415,6 +436,69 @@ public class ToolInvocationGate {
                               @NonNull Clock clock,
                               RunBudgetProbe runBudget,
                               cn.studykid.multiagent.ports.http.HttpToolHandlerProvider httpToolHandlers) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                reserveAmountPerToolCall, cancelGuard, approvalSource, capFlow, mcpHandlers,
+                delegation, clock, runBudget, httpToolHandlers, null);
+    }
+
+    /**
+     * 最完整构造器（P0-1a）：额外注入<b>能力闭包守卫</b>。
+     *
+     * <p>⚠️ <b>闭包守卫只作用于既有链路</b>：CAP 链路本身就在 Phase A 做闭包判定，
+     * 再加一道就是重复判定（且两处口径可能漂移）。
+     *
+     * <p>⚠️ <b>守卫可为空 = 不校验闭包</b>（历史行为）。
+     * 生产装配<b>必须</b>传入 —— 否则 P0-1 的洞原样保留：
+     * 「能力闭包」只在呈现层生效，强制层没有这道校验。
+     *
+     * @param closureGuard 能力闭包守卫；{@code null} = 既有链路不校验闭包
+     */
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall,
+                              @NonNull CancelGuard cancelGuard,
+                              RiskBasedApprovalPolicy.ApprovalSource approvalSource,
+                              cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow,
+                              cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers,
+                              cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation,
+                              @NonNull Clock clock,
+                              RunBudgetProbe runBudget,
+                              cn.studykid.multiagent.ports.http.HttpToolHandlerProvider httpToolHandlers,
+                              @Nullable CapabilityClosureGuard closureGuard) {
+        this(handlers, authorization, approvalPolicy, budget, ledger, approvalPort,
+                reserveAmountPerToolCall, cancelGuard, approvalSource, capFlow, mcpHandlers,
+                delegation, clock, runBudget, httpToolHandlers, closureGuard, null);
+    }
+
+    /**
+     * 最完整构造器（P0-2）：额外注入<b>审批请求登记参数</b>。
+     *
+     * <p>⚠️ <b>登记不等于放行</b>：本参数只决定「需审批时要不要在审批台留一条待办」，
+     * 工具执行仍由审批状态裁决（fail-closed）。
+     *
+     * @param approvalRequestSettings 审批请求登记参数；{@code null} = 不登记待办
+     */
+    public ToolInvocationGate(@NonNull List<ToolHandler> handlers,
+                              @NonNull AuthorizationService authorization,
+                              @NonNull ApprovalPolicy approvalPolicy,
+                              @NonNull BudgetPort budget,
+                              @NonNull RunToolLedgerPort ledger,
+                              @NonNull ApprovalPort approvalPort,
+                              java.math.BigDecimal reserveAmountPerToolCall,
+                              @NonNull CancelGuard cancelGuard,
+                              RiskBasedApprovalPolicy.ApprovalSource approvalSource,
+                              cn.studykid.multiagent.application.cap.CapExecutionFlow capFlow,
+                              cn.studykid.multiagent.ports.mcp.McpHandlerProvider mcpHandlers,
+                              cn.studykid.multiagent.application.orchestration.DelegationExecutor delegation,
+                              @NonNull Clock clock,
+                              RunBudgetProbe runBudget,
+                              cn.studykid.multiagent.ports.http.HttpToolHandlerProvider httpToolHandlers,
+                              @Nullable CapabilityClosureGuard closureGuard,
+                              @Nullable ApprovalRequestSettings approvalRequestSettings) {
         this.handlers = List.copyOf(handlers);
         this.authorization = authorization;
         this.approvalPolicy = approvalPolicy;
@@ -429,6 +513,8 @@ public class ToolInvocationGate {
         this.clock = clock;
         this.runBudget = runBudget;
         this.httpToolHandlers = httpToolHandlers;
+        this.closureGuard = closureGuard;
+        this.approvalRequestSettings = approvalRequestSettings;
         if (runBudget == null) {
             // ⚠️ 明确告警：未装配 Run 级预算 = 工具调用路径上没有「这一棵树」的额度约束。
             //    这不是错误（测试与旧装配走此路径），但生产必须装配。
@@ -1062,6 +1148,27 @@ public class ToolInvocationGate {
                 continue;
             }
 
+            // ── P0-1a：能力闭包校验（既有链路此前完全没有这道闸门）──
+            //    ⚠️ 放在 findHandler 之后、Schema 校验之前：
+            //    · 「未登记」与「未声明」是**两个不同的拒绝原因**，
+            //      混在一起会让现场无法区分「工具不存在」与「越权调用」；
+            //    · 在真正执行之前拦，成本最低（不必走完校验/授权/审批/预算）。
+            //
+            //    ⚠️ 为什么这条闸门必须存在：闭包此前**只在呈现层生效**
+            //    （模型看不到越权工具），强制层却没有 ——
+            //    于是模型若被注入诱导而报出越权工具名，闸门照样放行。
+            //    「呈现层不是防线」正是本仓反复消除的那类假防线。
+            if (closureGuard != null) {
+                CapabilityClosureGuard.Decision closureDecision = closureGuard.evaluate(
+                        tenantId, task.runId(), call.toolName(), scope);
+                if (!closureDecision.allowed()) {
+                    log.warn("工具不在该 Agent 能力闭包内，拒绝执行: tool={}, runId={}, reason={}",
+                            call.toolName(), task.runId(), closureDecision.reason());
+                    result.recordRejected(call.toolName(), closureDecision.reason());
+                    continue;
+                }
+            }
+
             // ②b ⚠️ 取消检查（P3-D06 / FR-011）：闸门级双保险。
             //    即使循环级检查已放过当前轮（取消在模型返回后到达），
             //    本检查保证批次内的后续工具不再启动。取消后不得发起任何副作用。
@@ -1104,7 +1211,7 @@ public class ToolInvocationGate {
             try {
                 registration = ledger.register(tenantId, task.runId(),
                         call.toolName(), handler.riskLevel().name(),
-                        idemKey, String.valueOf(call.arguments()),
+                        idemKey, ArgumentDigest.of(call.arguments()),
                         call.arguments(), task.fencingToken());
             } catch (RuntimeException e) {
                 log.error("账本登记失败，fail-closed 拒绝执行: tool={}, runId={}",
@@ -1132,6 +1239,10 @@ public class ToolInvocationGate {
                 ToolOperationState existingState = registration.state();
                 log.warn("幂等键命中既有操作，不重复执行: tool={}, runId={}, operation={}, state={}",
                         call.toolName(), task.runId(), registration.operationId(), existingState);
+                // ⚠️ M0-1 / M1（G2 恢复）：若该操作已登记审批（挂起/恢复场景），
+                //    则<b>不</b>按「结果未知」交对账，而是落到下方审批消费段
+                //    （消费到 APPROVED 即执行，否则继续挂起）。
+                boolean parkedWithActiveApproval = false;
                 switch (existingState) {
                     case SUCCEEDED, RECONCILED_SUCCEEDED -> {
                         // ⚠️ 重放：上一次已成功。不执行工具，按「已成功」记账。
@@ -1152,11 +1263,22 @@ public class ToolInvocationGate {
                         result.recordFailed(call.toolName(),
                                 "幂等键命中已失败的既有操作，未重复执行");
                     }
-                    case IN_FLIGHT, PENDING -> {
-                        // ⚠️ 既有操作仍在途：可能崩在中途，或另一 worker 正在执行。
-                        //    此时再次执行 = 重复副作用；按「结果未知」交对账。
-                        result.recordUnknown(call.toolName(), registration.operationId());
-                        return result;
+                    case IN_FLIGHT -> {
+                        // ⚠️ M0-1 拆分：IN_FLIGHT 通常意味着「崩在中途 / 另一 worker 正在执行」
+                        //    → 结果未知。但若本操作已登记审批（挂起恢复场景），
+                        //    则交给下方审批消费段决定去留，<b>绝不</b>判 UNKNOWN
+                        //    （否则恢复后被永久转人工对账 —— G2 修复前的真实缺陷）。
+                        if (approvalPort.findActive(tenantId, registration.operationId()).isPresent()) {
+                            parkedWithActiveApproval = true;
+                        } else {
+                            result.recordUnknown(call.toolName(), registration.operationId());
+                            return result;
+                        }
+                    }
+                    case PENDING -> {
+                        // ⚠️ M0-1：PENDING 表示本操作已登记待审批，视为已 parked，
+                        //    不按结果未知处理；交下方审批消费段决定去留。
+                        parkedWithActiveApproval = true;
                     }
                     default -> {
                         result.recordRejected(call.toolName(),
@@ -1164,52 +1286,89 @@ public class ToolInvocationGate {
                         return result;
                     }
                 }
-                continue;
-            }
-
-            // ⑥ 审批消费（P3-D05 / FR-013）
-            //    ⚠️ 审批绑定参数摘要与目标资源、过期/撤销拒绝、消费与取消检查原子协调、
-            //       崩溃后可恢复，全部由 ApprovalPort 在 DB 事务内保证。
-            ApprovalPolicy.ApprovalDecision approval = approvalPolicy.evaluate(handler);
-            if (approval.requiresApproval()) {
-                // ⚠️ 先问审批权威（E-2 / P4-D01）：拿不到「明确批准」即拒绝。
-                //    FAIL_CLOSED（来源不可用）同样拒绝——不可用 ≠ 可放行。
-                cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
-                        .ApprovalSource.Verdict verdict;
-                try {
-                    verdict = approvalSource.verdictFor(tenantId, handler);
-                } catch (RuntimeException e) {
-                    // ⚠️ 权威异常同样 fail-closed（异常不得被当作「无异议」）
-                    log.error("审批权威异常，fail-closed 拒绝: tool={}, tenant={}",
-                            call.toolName(), tenantId, e);
-                    verdict = cn.studykid.multiagent.application.approval
-                            .RiskBasedApprovalPolicy.ApprovalSource.Verdict.FAIL_CLOSED;
-                }
-                if (verdict != cn.studykid.multiagent.application.approval
-                        .RiskBasedApprovalPolicy.ApprovalSource.Verdict.APPROVED) {
-                    log.warn("审批权威未批准，fail-closed 拒绝: tool={}, runId={}, verdict={}",
-                            call.toolName(), task.runId(), verdict);
-                    result.recordRejected(call.toolName(), "审批未批准:" + verdict);
+                if (!parkedWithActiveApproval) {
                     continue;
                 }
-                // ⚠️ 参数摘要与目标资源须与审批授予时绑定的一致（防篡改）：
-                //    argumentDigest 与 ledger 的 requestDigest 同源（均来自 call.arguments()），
-                //    targetResource 取工具名。
-                String argumentDigest = String.valueOf(call.arguments());
+                // ⚠️ parkedWithActiveApproval：跳过「新建」语义，直接进入下方审批消费段重消费。
+            }
+
+            // ⑥ 审批消费（P3-D05 / FR-013 · M1-3 G2 修复核心）
+            //    ⚠️ 审批绑定参数摘要与目标资源、过期/撤销拒绝、消费与取消检查原子协调、
+            //       崩溃后可恢复，全部由 ApprovalPort 在 DB 事务内保证。
+            //    ⚠️ M1-3 新模型（意图可暂停）：需要审批时**先尝试消费已批准审批**，
+            //       消费命中即执行；未命中才登记待办并<b>挂起</b>（PARK），
+            //       交人工审批台决策，待决定到达由 WakeupConsumer 唤醒后从此处重消费。
+            ApprovalPolicy.ApprovalDecision approval = approvalPolicy.evaluate(handler);
+            if (approval.requiresApproval()) {
+                // ⚠️ 先尝试消费「已批准」的审批：恢复路径（RESUME）重入时，
+                //   人类已 approve → 此处 CONSUMED → 直接执行（不重跑模型、不重问模型）。
+                String argumentDigest = ArgumentDigest.of(call.arguments());
                 String targetResource = call.toolName();
                 ApprovalPort.ApprovalOutcome outcome = approvalPort.consume(
                         tenantId, registration.operationId(), argumentDigest,
                         targetResource, task.runId());
-                if (outcome != ApprovalPort.ApprovalOutcome.CONSUMED) {
-                    // ⚠️ 任何非 CONSUMED 结果都 fail-closed 拒绝。
-                    //    需要审批但查不到有效审批（NO_APPROVAL / EXPIRED / REJECTED /
-                    //    已被取消的 Run / 参数被篡改）一律不得执行 ——
-                    //    否则变成「静默跳过审批」的安全漏洞（Sev-0）。
-                    log.warn("审批消费未通过，fail-closed 拒绝: tool={}, runId={}, outcome={}",
-                            call.toolName(), task.runId(), outcome);
-                    result.recordRejected(call.toolName(), "审批未通过:" + outcome);
+                if (outcome == ApprovalPort.ApprovalOutcome.REJECTED) {
+                    // ⚠️⚠️ 人已明确拒绝（审批台 DENY）→ **直接拒绝，不得再登记待办**。
+                    //    否则会形成死循环：拒绝 → 重新登记 PENDING → 再次挂起 →
+                    //    人再拒 → ……Run 永远停在 WAITING_APPROVAL，且审批台看到
+                    //    一条永远批不完的待办。拒绝是终态结论，不是「还没决定」。
+                    log.warn("审批已被拒绝，fail-closed 拒绝执行: tool={}, runId={}",
+                            call.toolName(), task.runId());
+                    result.recordRejected(call.toolName(), "审批已被拒绝");
                     continue;
                 }
+                if (outcome == ApprovalPort.ApprovalOutcome.EXPIRED) {
+                    // ⚠️ 审批已过期：同上，不得重新登记（过期决定不是「可重新申请」，
+                    //    重新申请等于让过期审批复活）。
+                    log.warn("审批已过期，fail-closed 拒绝执行: tool={}, runId={}",
+                            call.toolName(), task.runId());
+                    result.recordRejected(call.toolName(), "审批已过期");
+                    continue;
+                }
+                if (outcome != ApprovalPort.ApprovalOutcome.CONSUMED) {
+                    // ⚠️ 尚未获批：问审批权威（M2-2 传上下文）。
+                    //    ⚠️ REJECTED = 明确拒绝 → 不登记待办，直接 fail-closed 拒绝；
+                    //    ⚠️ APPROVED = 来源自动批准（如策略引擎）→ 直接执行；
+                    //    ⚠️ FAIL_CLOSED = 权威不可用/无自动结论 → 登记待办并挂起，
+                    //        交人工决策（绝不在此静默放行，绝不判 UNKNOWN）。
+                    cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy
+                            .ApprovalSource.Verdict verdict;
+                    try {
+                        verdict = approvalSource.verdictFor(tenantId, handler,
+                                new cn.studykid.multiagent.application.approval
+                                        .RiskBasedApprovalPolicy.ApprovalSource.ApprovalContext(
+                                        tenantId, task.runId(), registration.operationId(),
+                                        argumentDigest, handler.riskLevel().name()));
+                    } catch (RuntimeException e) {
+                        log.error("审批权威异常，fail-closed 挂起待人工决策: tool={}, tenant={}",
+                                call.toolName(), tenantId, e);
+                        verdict = cn.studykid.multiagent.application.approval
+                                .RiskBasedApprovalPolicy.ApprovalSource.Verdict.FAIL_CLOSED;
+                    }
+                    if (verdict == cn.studykid.multiagent.application.approval
+                            .RiskBasedApprovalPolicy.ApprovalSource.Verdict.REJECTED) {
+                        log.warn("审批权威明确拒绝，fail-closed 拒绝: tool={}, runId={}",
+                                call.toolName(), task.runId());
+                        result.recordRejected(call.toolName(), "审批明确拒绝:" + verdict);
+                        continue;
+                    }
+                    if (verdict != cn.studykid.multiagent.application.approval
+                            .RiskBasedApprovalPolicy.ApprovalSource.Verdict.APPROVED) {
+                        // ⚠️ FAIL_CLOSED / 无自动结论 → 登记待办并挂起（PARK/RESUME）。
+                        //    登记成功的 PENDING 行让审批台可见、可批、可触发恢复；
+                        //    返回 parked 标记，由 RunExecutionLoop 将 Run 迁 WAITING_APPROVAL。
+                        if (requestApproval(tenantId, registration.operationId(), call)) {
+                            result.recordParked(call.toolName(), registration.operationId());
+                        } else {
+                            // ⚠️ 登记失败（待办不可见）→ 拒绝，不挂起。
+                            //    挂起的前提是「人能在审批台看到并批准」。
+                            result.recordRejected(call.toolName(), "审批待办登记失败，无法挂起");
+                        }
+                        continue;
+                    }
+                    // ⚠️ 来源自动批准（APPROVED）：直接执行（靠来源决策留痕）。
+                }
+                // ⚠️ 此处 = 已消费到 APPROVED，或来源自动 APPROVED：继续向下执行工具。
             }
 
             // ⑥ ⚠️⚠️ Run 级预算判定（MA-T17 · 全调用树共享上限）：
@@ -1407,6 +1566,53 @@ public class ToolInvocationGate {
     }
 
     /**
+     * 登记一条待人工审批的请求（P0-2）。
+     *
+     * <p>⚠️ <b>登记失败不得改变调用结局</b>：登记只是让待办可见，
+     * 工具执行仍按「未获批准 → 拒绝」处理。
+     * 若登记抛异常导致整条链路崩掉，反而把「拒绝」变成了「异常」，
+     * 既改变了既有语义，也让现场更难定位。
+     *
+     * <p>⚠️ <b>未装配登记参数时跳过</b>：此时审批台看不到待办（P0-2 的原症状），
+     * 但工具仍被 fail-closed 拒绝 —— 安全姿态不变。
+     */
+    private boolean requestApproval(@NonNull String tenantId,
+                                    @NonNull String operationId,
+                                    ModelResponse.@NonNull ToolCallRequest call) {
+        if (approvalRequestSettings == null) {
+            // ⚠️⚠️ 登记参数缺失 → **不能挂起**。
+            //    挂起的前提是「人能在审批台看到待办并批准」；
+            //    登记不了 = 没人能批 = Run 会永远停在 WAITING_APPROVAL
+            //    （挂起泄漏，且无任何告警）。故此处必须回落到「拒绝」。
+            log.warn("未装配审批登记参数，无法登记待办 → 拒绝执行（不挂起）: "
+                    + "tool={}, tenant={}", call.toolName(), tenantId);
+            return false;
+        }
+        try {
+            java.util.Optional<String> approvalId = approvalPort.request(
+                    tenantId, operationId, ArgumentDigest.of(call.arguments()), call.toolName(),
+                    cn.studykid.multiagent.core.config.ApprovalRequirement.REQUIRED,
+                    approvalRequestSettings.approverScope(),
+                    java.time.Instant.now().plus(approvalRequestSettings.ttl()));
+            if (approvalId.isEmpty()) {
+                // ⚠️ 登记未返回 ID = 待办**不可见** → 人无从批准 → 不能挂起
+                log.warn("审批待办登记未返回 ID（待办不可见，不能挂起）: "
+                        + "tenant={}, operation={}, tool={}",
+                        tenantId, operationId, call.toolName());
+                return false;
+            }
+            log.info("已登记待人工审批: tenant={}, operation={}, tool={}, approval={}",
+                    tenantId, operationId, call.toolName(), approvalId.get());
+            return true;
+        } catch (RuntimeException e) {
+            // ⚠️ 登记失败 → 待办不可见 → 不能挂起（挂起 = 永久悬死）
+            log.error("审批待办登记失败 → 拒绝执行（不挂起）: tenant={}, operation={}, err={}",
+                    tenantId, operationId, e.toString());
+            return false;
+        }
+    }
+
+    /**
      * 结算预留（失败不抛）。
      *
      * <p>⚠️ 结算失败<b>不得</b>改写工具结局：工具确实成功了，
@@ -1420,7 +1626,11 @@ public class ToolInvocationGate {
         try {
             // ⚠️ 按预留额全额结算：工具调用无按量计费明细，
             //    真实成本由 usage_record 独立记录（P3-D04 §6 L-5）
-            if (!budget.settle(tenantId, reservationId, reserveAmountPerToolCall, toolName)) {
+            // ⚠️ P0-3b：model_id 写**工具行前缀 + 工具名** ——
+            //    工具调用本来就没有模型，直接写工具名会让「按模型聚合成本」
+            //    把工具名当成模型名。
+            if (!budget.settle(tenantId, reservationId, reserveAmountPerToolCall,
+                    cn.studykid.multiagent.ports.persistence.BudgetPort.toolRowModelId(toolName))) {
                 log.warn("预算结算未生效（预留不存在或已终态），将由对账兜底: "
                         + "tool={}, reservation={}", toolName, reservationId);
             }
@@ -1632,6 +1842,13 @@ public class ToolInvocationGate {
         private final List<CapToolDecision> decisions = new ArrayList<>();
         private String unknownTool;
         private String unknownOperationId;
+        /**
+         * 挂起等待审批的工具 → operationId（M1-3 / G2）。
+         *
+         * <p>⚠️ 与 {@code rejected}/{@code failed} 分离：挂起是「暂停」而非「终态」，
+         * 不得触发 {@code allRejected()} 的失败收敛。
+         */
+        private final java.util.Map<String, String> parked = new java.util.LinkedHashMap<>();
 
         void recordRejected(String tool, String reason) {
             rejected.add(tool);
@@ -1662,6 +1879,37 @@ public class ToolInvocationGate {
         void recordUnknown(String tool, String operationId) {
             this.unknownTool = tool;
             this.unknownOperationId = operationId;
+        }
+
+        /**
+         * 记录一次调用被「挂起等待审批」（M1-3 / G2 修复核心）。
+         *
+         * <p>⚠️ 挂起<b>不是</b>拒绝：被挂起的工具不计入 {@link #rejectedTools()}，
+         * 因此不会触发 {@link #allRejected()}（否则一次 REQUIRED 工具会把整单判失败）。
+         * Run 层在 {@code allRejected} 之前先查 {@link #hasParked()}，
+         * 命中即把 Run 迁 {@code WAITING_APPROVAL} 并释放租约。
+         *
+         * @param tool        工具名
+         * @param operationId 已登记的操作标识（审批台/恢复流程按它定位）
+         */
+        void recordParked(String tool, String operationId) {
+            parked.put(tool, operationId);
+            // 仅留痕（审计可见「为什么没执行」），不进 rejected 集合
+            rejectionReasons.put(tool, "等待人工审批:" + operationId);
+        }
+
+        /**
+         * @return 挂起（等待人工审批）的工具 → 其 operationId；非空即本批需 PARK。
+         */
+        public java.util.@NonNull Map<String, String> parkedTools() {
+            return java.util.Map.copyOf(parked);
+        }
+
+        /**
+         * @return 是否出现需挂起的工具调用（交给 Run 层 PARK/RESUME）。
+         */
+        public boolean hasParked() {
+            return !parked.isEmpty();
         }
 
         /**
@@ -1700,10 +1948,7 @@ public class ToolInvocationGate {
             return unknownTool != null;
         }
 
-        public String unknownOperationId() {
-            if (unknownOperationId == null) {
-                throw new IllegalStateException("无 UNKNOWN 操作");
-            }
+        public @org.jspecify.annotations.Nullable String unknownOperationId() {
             return unknownOperationId;
         }
 

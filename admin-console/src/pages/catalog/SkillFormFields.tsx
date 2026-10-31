@@ -173,6 +173,31 @@ function DescriptionTwoLevelFields(): JSX.Element {
           )}
         </Form.List>
       </Form.Item>
+      {/* ⚠️ 3级 content：详细描述，用于大模型判断后续工具调用的完整上下文。
+          与 purpose（1级选型信号）和 usage（2级执行指引）组合后一并传递给大模型。 */}
+      <Form.Item
+        name={['description', 'content']}
+        label="详细描述（3级 content · 可选）"
+        extra="用于大模型判断后续工具调用的完整上下文（≤2000 字）。与 1级 purpose 和 2级 usage 组合后一并传递给大模型。可补充：适用边界、参数来源说明、结果汇报口径、与其他 Skill 的协作关系等。"
+        rules={[
+          {
+            validator: (_rule, value: string | undefined) => {
+              const text = (value ?? '').trim()
+              if (text.length > 2000) {
+                return Promise.reject(`超过 2000 字上限（当前 ${text.length} 字）`)
+              }
+              return Promise.resolve()
+            },
+          },
+        ]}
+      >
+        <Input.TextArea
+          rows={4}
+          placeholder="如：本 Skill 适用于辅导场景下的学生画像查询；参数 studentId 必须来自对话中用户明确给出的标识，不得从历史上下文推测；查询结果仅返回该学生本人的信息，不携带任何历史记录。"
+          maxLength={2000}
+          showCount
+        />
+      </Form.Item>
     </>
   )
 }

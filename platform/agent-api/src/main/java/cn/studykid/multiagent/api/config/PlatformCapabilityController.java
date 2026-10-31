@@ -296,7 +296,8 @@ public class PlatformCapabilityController {
                 description.usage().stream()
                         .map(u -> new ConfigPublishPayload.SkillDescriptionSpec.SkillUsageSpec(
                                 u.when(), u.how()))
-                        .toList());
+                        .toList(),
+                description.content());
     }
 
     private static List<ConfigPublishPayload.McpServerSpec> mcpServerSpecs(

@@ -53,7 +53,7 @@ spring:
     connection-timeout: 10s
 
 agent:
-  # ── 限流（P3-D08 / D-2）──────────────────────────────────────────
+  # ── 限流（P3-D08 / D-2）─────────────────────────────────────────
   # ⚠️ 缺失即拒绝启动（fail-closed）：退回默认值等于「悄悄用了一个
   #    没人审过的限额」。初值取保守档，接入真实流量后按实测调整。
   # ⚠️ 数值必须加引号：YAML 中裸数字会被 YamlPropertiesFactoryBean 丢弃
@@ -62,6 +62,10 @@ agent:
   rate-limit:
     limit-per-window: "30"
     window-seconds: "60"
+    # ⚠️ P3-1 ①：false = 固定窗口（窗口边界处实际放行量可达 2×limit）
+    #    true  = 滑动窗口计数近似（上一窗口按剩余时间衰减加权），
+    #            消除「第 59.9s 打满 + 第 60.0s 再来一轮」的边界突发
+    sliding-window: "${AGENT_RATE_LIMIT_SLIDING_WINDOW:false}"
     # ── 治理桶限额（P4-D13）────────────────────────────────────────
     # ⚠️ **必须与上面的全局限额分开**：全局限额服务的是「单个学生的个人动作」
     #    （建 Run / SSE / 状态轮询），而治理台是**一个租户的多个运维共享**
@@ -121,6 +125,18 @@ agent:
     batch-size: "50"
     # 单轮枚举活跃租户上限（防租户爆炸）。
     tenant-limit: "200"
+    # ⚠️ P3-1 ⑤：是否要求租户枚举端口必须可用。
+    #    false = 端口缺失时仅「健康降级 + 抑制切换日志」（保留既有不阻塞启动的取舍）
+    #    true  = 端口缺失即让本轮扫描失败，在调度线程可见 ——
+    #            不这样做，「恢复链路已死」要等到真有 worker 崩溃那天才被发现
+    require-tenant-port: "${AGENT_WORKER_RECOVERY_REQUIRE_TENANT_PORT:false}"
+    # ⚠️ M1-4 / G2：挂起（等待人工审批）Run 的最长允许时长（秒）。
+    #    PARK 后的 Run 不占线程、不续租；若审批决定始终没来，它会**永久停在
+    #    WAITING_APPROVAL**（不报错、不告警、只是不再动）——这是静默失效。
+    #    超过此时长即收敛为 FAILED（错误码 APPROVAL_TIMEOUT，工具未执行、无副作用）。
+    #    ⚠️ 必须大于审批有效期（agent.approval.ttl，当前 15m），
+    #    否则人还没来得及批，Run 就已经被判超时失败。
+    parked-timeout-seconds: "${AGENT_WORKER_RECOVERY_PARKED_TIMEOUT_SECONDS:1800}"
 
   # ── 背压护栏（P4-D05 / 关闭 L-6）──────────────────────────────
   # ⚠️ 三项**全部必填**，缺失或越界即拒绝启动（fail-closed）。
@@ -171,6 +187,24 @@ agent:
     interval-ms: "3600000"
     # ⚠️ 操作主体：审计删除的凭证责任人，不可为空（R-1）
     actor: "${AGENT_RETENTION_ACTOR:retention-job}"
+
+    # ── P2-2 清理凭据隔离 ──────────────────────────────────────────
+    # ⚠️ agent_retention 与应用角色必须是**两套凭据**：应用凭据丢失只应
+    #    泄露租户数据；清理凭据丢失则能抹掉审计与删除凭证本身。
+    #    合一会让前者的爆炸半径无条件升级为后者。
+    # ⚠️ 接入脚本（会撤销应用角色对 audit_record / erasure_certificate
+    #    的 DELETE）：deploy/sql/platform/04_retention_role.sql
+    datasource:
+      enabled: "${AGENT_RETENTION_DATASOURCE_ENABLED:false}"
+      url: "${AGENT_RETENTION_DATASOURCE_URL:}"
+      username: "${AGENT_RETENTION_DATASOURCE_USERNAME:}"
+      password: "${AGENT_RETENTION_DATASOURCE_PASSWORD:}"
+      # 清理是低频批处理路径，不该占用与主业务池相当的额度
+      max-pool-size: "2"
+    # ⚠️ 是否强制要求独立清理凭据（执行过隔离脚本的环境应设为 true）
+    #    false = 回落主数据源并打印 SECURITY 告警（保留现状，因应用角色仍有 DELETE）
+    #    true  = 缺清理凭据即拒绝启动（fail-closed：清理通道不得等同应用通道）
+    require-isolated-credential: "${AGENT_RETENTION_REQUIRE_ISOLATED_CREDENTIAL:false}"
 
   # ── MQ 队列拓扑（ADR-001 §4）───────────────────────────────────
   # ⚠️ x-queue-type 与 x-delivery-limit 必须显式声明。
@@ -224,6 +258,14 @@ agent:
     #    否则旧通道里的消息会滞留到无人消费。装配期会做残留检查并拒绝启动
     #    （见 MessagingSwitchGuard），把「静默滞留」变成「明确报错」。
     mode: "${AGENT_MESSAGING_MODE:database}"
+    # ⚠️ 消息通道切换残留守卫（P4-D17）。
+    #    true = 启动时校验 broker 队列深度：切到 DB 模式后 Rabbit 里的残留消息
+    #          不会被接管（Run 永远不执行且无任何报错）→ 故必须先排空。
+    #    ⚠️ 仅集成测试环境可关闭（application-test.yml 置 false）：测试自身会往
+    #        broker 发消息（真实 broker 端到端用例），跑完必然留残留 —— 那是测试
+    #        自己的产物，不该让下一轮启动被拦。关闭时会打 INFO 日志（跳过要可见）。
+    switch-guard:
+      rabbit-residual-check: "${AGENT_MESSAGING_SWITCH_GUARD_RABBIT_RESIDUAL:true}"
     # 租户覆盖（灰度）：形如 t-b=database,t-c=rabbitmq
     # ⚠️ 留空 = 全部租户跟随全局模式。
     # ⚠️ 模式值非法 → **拒绝启动**（灰度静默失效比报错更危险）；
@@ -256,6 +298,12 @@ agent:
     max-llm-calls: "12"
     # 单 Run 最大步数。初值 20。调优时点：P2
     max-steps: "20"
+    # ⚠️ 是否要求每个 Run 必须声明 timeoutMs（P2-1）
+    #    false = 允许「不限时」的 Run（CreateRunRequest 既定语义，会产生 WARN 日志）
+    #    true  = 未声明 timeoutMs 的创建请求在**创建期**直接拒绝（fail-closed）
+    # ⚠️ 为什么默认值是 false：这是一条已被测试锁定的契约，加固只能让它显式化，
+    #    不能静默改变行为。生产环境建议设为 true。
+    require-timeout: false
   tenant:
     # 租户并发 Run 上限。初值 5。调优时点：P4 压测后
     max-concurrent-runs: "5"
@@ -266,6 +314,32 @@ agent:
     # ⚠️ 该值只是**传给 DB 的输入**，能否预留由 budget_no_overspend
     #    CHECK 与原子条件 UPDATE 裁决。调优时点：P4 实测 usage 后
     reserve-per-tool-call: "0.50"
+  # ── 模型单价表（P0-3b · 成本入账）─────────────────────────────────
+  # ⚠️ 为什么必须显式配置单价：
+  #    usage_record 此前只记「工具调用次数 × ¥0.50」的固定代理值，
+  #    input_tokens / output_tokens 两列**无任何写入方** ——
+  #    「单 Run 花了多少钱 / 用了多少 token」在账上根本不存在。
+  #    真实成本 = token 数 × 单价，单价是必须冻结的配置。
+  # ⚠️ 计价单位是**每千 token**（per-1k），与主流供应商公开计价一致，
+  #    且避免在配置里写 0.000015 这种易错位的小数。
+  # ⚠️ 查不到价时：token 仍如实记录、成本按 0 记并打 WARN ——
+  #    缺配置必须可见，不能静默变成「这次调用不存在」。
+  # ⚠️ 键支持**最长前缀匹配**（gpt-4o-2024-08-06 命中 gpt-4o），
+  #    因为模型标识常带日期/版本后缀，只做精确匹配会让「配了价却用不上」。
+  # ⚠️ `default` 是**兜底条目**（仅在显式配置后生效），不是默认行为。
+  pricing:
+    models:
+      # 内置假模型（平台自测/单测用）—— 单价记 0，账上有调用事实、无金额
+      fake: { input-per-1k-tokens: "0.000000", output-per-1k-tokens: "0.000000" }
+      fake-model: { input-per-1k-tokens: "0.000000", output-per-1k-tokens: "0.000000" }
+      # ⚠️ 以下为**占位价**，上线前必须按供应商最新报价替换：
+      #    错价会让成本报表失真（比「不记成本」更危险，因为它看起来是真的）。
+      #    换供应商/换模型时**必须**同步改这里 —— 没有第二处真相源。
+      gpt-4o: { input-per-1k-tokens: "0.018000", output-per-1k-tokens: "0.072000" }
+      gpt-4o-mini: { input-per-1k-tokens: "0.001100", output-per-1k-tokens: "0.004300" }
+      qwen-max: { input-per-1k-tokens: "0.020000", output-per-1k-tokens: "0.060000" }
+      qwen-plus: { input-per-1k-tokens: "0.004000", output-per-1k-tokens: "0.012000" }
+      deepseek-chat: { input-per-1k-tokens: "0.002000", output-per-1k-tokens: "0.008000" }
   tool:
     # 工具风险级别映射（P0-D00 §3.2）
     # ⚠️ 未登记的工具名一律按 WRITE_EXTERNAL 兜底（fail-closed），不会漏审批
@@ -284,6 +358,29 @@ agent:
     ttl: 15m
     # 审批人范围：家长或教师（与 DEC-6 角色一致）
     approver-scope: PARENT_OR_TEACHER
+    # ⚠️ 是否已接入**活体**人工审批通道（P1-C · 运行时 HITL）
+    #    false 表示 approvalSource 是空策略 → 需审批的工具在运行时恒被拒
+    #    （安全默认，但必须在启动日志里可见，见 ApprovalReadinessGuard）
+    live-source-enabled: false
+    # ⚠️ 未接入活体通道且存在需审批工具时是否拒绝启动（fail-closed 升级开关）
+    require-live-source: false
+    # ⚠️ M2-3：审批来源模式（配置化，消除「写死在代码里、无配置入口」）
+    #    none          = 无来源实现（默认）→ 需审批的工具恒 FAIL_CLOSED（安全默认）
+    #    policy-engine = 按下方策略表给出结论（APPROVED / REJECTED）
+    #    ⚠️ 未知模式一律**拒绝启动**（fail-closed），不静默回落 none。
+    #    ⚠️ 本键与 live-source-enabled 必须自洽：source.mode=policy-engine 且
+    #       策略表非空 ⇔ live-source-enabled=true；否则拒绝启动 ——
+    #       两键错位会产生「以为接上了、实际恒拒」的静默失效。
+    source:
+      mode: none
+      # 策略表（仅 mode=policy-engine 时生效）：扁平规则列表 "租户ID:工具名=结论"。
+      # ⚠️ 未登记的租户/工具一律 FAIL_CLOSED（绝不默认批准）。
+      # ⚠️ 结论只接受 APPROVED / REJECTED；其他值一律**拒绝启动**（fail-closed）。
+      policy:
+        rules: []
+      # policy:
+      #   rules:
+      #     - "11111111-1111-1111-1111-111111111111:record_weakness=APPROVED"
   compliance:
     # ⚠️⚠️ 模型零保留确认（DEC-10 GATE-2 / R-017）
     # 零保留条款是与**特定供应商**签订的，因此按供应商分别登记。
@@ -476,6 +573,21 @@ config:
     # ⚠️ 数值必须加引号：YamlPropertiesFactoryBean 会丢弃裸标量
     #    （P1 已在 delivery-limit 上踩过该坑）。
     cap-dual-write: "${CONFIG_FLAG_CAP_DUAL_WRITE:true}"
+    # ⚠️⚠️ 能力闭包校验模式（P0-1a）——
+    #    off     = 不校验（历史行为：任何已注册工具都可被任意 Agent 调用）
+    #    warn    = 校验但只告警（默认；把「能力目录未装载」这个缺口变成可见的）
+    #    enforce = 校验且拒绝未声明的工具（**真正关闭越权调用工具这个洞**）
+    # ⚠️ 为什么默认是 warn 而不是 enforce：
+    #    闭包判定的输入是**能力目录**（cap_tool_def / cap_skill_def）。
+    #    目录为空时，enforce 会把**所有**工具调用拒掉 ——
+    #    那不是「校验生效」，是「平台不可用」。
+    #    装载能力目录后应切到 enforce，并同时开启 cap-enforcement-required
+    #    （让「未开启强制」在生产拒绝启动，而不是只打一行 WARN）。
+    cap-closure-enforcement: "${CONFIG_FLAG_CAP_CLOSURE_ENFORCEMENT:warn}"
+    # ⚠️⚠️ 是否要求「能力闭包校验必须已强制」才允许启动（P0-1 · 硬失败开关）。
+    #    true  = 闭包校验不是 enforce 时**拒绝启动**（fail-closed，不给「假防线」留后门）。
+    #    false = 只在启动日志里报告（默认，便于能力目录尚未装载的环境先跑起来）。
+    cap-enforcement-required: "${CONFIG_FLAG_CAP_ENFORCEMENT_REQUIRED:false}"
 
 # ⚠️ 平台运维角色（BYPASSRLS）配置段原挂在本节之下（键 config.platform-ops.datasource.*），
 #    与代码读取的 agent.platform-ops.datasource.* 不一致 → 运维通道永远 disabled，

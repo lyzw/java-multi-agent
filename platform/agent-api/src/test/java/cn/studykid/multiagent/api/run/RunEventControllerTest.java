@@ -15,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.persistence.RunEventQueryPort;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
@@ -324,8 +325,28 @@ class RunEventControllerTest {
                 return "corr-1";
             }
         };
-        return new RunEventController(query, authz, principal);
+        // ⚠️ P3-1：限流器必须显式传入，不存在「默认不限流」的入口了。
+        return new RunEventController(query, authz, principal, UNLIMITED);
     }
+
+    /**
+     * 显式声明「本用例不关心限流」。
+     *
+     * <p>⚠️ 之所以要写在这个地方而不是让控制器给默认值：
+     * 「不限流」必须是测试里一处<b>显式且可 grep</b> 的声明，
+     * 而不是藏在默认构造参数里的巧合 —— 后者正是生产代码误用它的通道。
+     */
+    private static final RateLimitPort UNLIMITED = new RateLimitPort() {
+        @Override
+        public Decision check(String tenantId, String bucketKey) {
+            return Decision.ALLOWED;
+        }
+
+        @Override
+        public long currentCount(String tenantId, String bucketKey) {
+            return 0L;
+        }
+    };
 
     private static final AuthorizationService ALLOW_ALL =
             new AuthorizationService() {

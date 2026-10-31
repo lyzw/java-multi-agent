@@ -242,6 +242,16 @@ public class InvocationValidator {
     private @Nullable AuthorizationDecision checkPrincipal(@NonNull TenantContext context) {
         long current;
         try {
+            // ⚠️ 这里必须用 `require`（严格读），**不得**用 `currentOrInitialize`：
+            //    `currentOrInitialize` 在**缺行**时会补建一个版本 1 并继续 ——
+            //    那会把「该主体从未被授权」（= 读不到权威事实）从「明确拒绝」
+            //    变成「假设一个版本继续」，直接违反 S3d 红线
+            //    （既有 IT 锁定：无授权版本记录 → AUTHZ_UNAVAILABLE）。
+            //    ⚠️ 两种 fail-closed 不可混同：
+            //      · 存储不可用 → 读失败 → 拒绝（require 抛异常）；
+            //      · 记录缺行   → 从未授权 → 拒绝（require 抛异常）。
+            //    `currentOrInitialize` 只适合**写侧/准入侧**的「首次见到主体」补建，
+            //    不适合执行期授权校验。
             current = authzVersions.require(context.tenantId(), context.principalId()).authzVersion();
         } catch (RuntimeException e) {
             // ⚠️ 读不到权威版本 = 版本服务不可用 → fail-closed（§5.5）

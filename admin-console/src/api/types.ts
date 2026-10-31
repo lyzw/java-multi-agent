@@ -218,6 +218,8 @@ export interface SkillDescription {
   purpose: string
   /** 2级 · 分场景操作指引（≤20 条，可空）。 */
   usage?: SkillUsageItem[]
+  /** 3级 · 详细描述（内容，可空）：用于大模型判断后续工具调用的完整上下文。 */
+  content?: string
 }
 
 /** Skill 目录项（GET /api/cap/catalog/skills · SkillResponse，平台级只读） */

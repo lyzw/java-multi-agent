@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
@@ -530,6 +531,26 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
         log.info("请求路径未映射到任何端点: path={}", e.getResourcePath());
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(new ErrorResponse(codeOf(HttpStatus.NOT_FOUND), messageOf(HttpStatus.NOT_FOUND)));
+    }
+
+    /**
+     * HTTP 方法不被支持 → 405（Method Not Allowed）。
+     *
+     * <p>⚠️ <b>修复前落到兜底 → 500（真实缺陷）</b>：
+     * 客户端用错 HTTP 动词（如对只接受 GET 的资源发 POST）是
+     * <b>明确的客户端错误</b>，且<b>有确定解法</b>（换动词）。
+     * 报 500 会把「客户端笔误」计入服务端错误率、把真实故障淹没——
+     * 与本类「异常与拒绝必须可区分」的核心原则直接矛盾。
+     *
+     * <p>典型场景：{@code POST /api/agents/{id}/versions} 在 P0-5（2026-10-27）
+     * 已下线直发端点后只保留 GET，此时 POST 应得 405，而非 500。
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotSupported(
+            HttpRequestMethodNotSupportedException e) {
+        log.info("HTTP 方法不被支持: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(new ErrorResponse("METHOD_NOT_ALLOWED", "请求使用的 HTTP 方法不被该资源支持"));
     }
 
     /** 4xx 状态 → 归一化 code。 */

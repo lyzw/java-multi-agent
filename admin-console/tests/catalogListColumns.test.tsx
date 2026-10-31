@@ -82,7 +82,7 @@ const SKILLS = [
   {
     skillId: 'sk-live',
     name: '订单分析',
-    description: { purpose: '分析订单并给出结论', usage: [] },
+    description: { purpose: '分析订单并给出结论', usage: [], content: '' },
     declaredTools: ['tool-live'],
     declaredMcp: [{ serverId: 'srv-1', toolAllowlist: null }],
     riskCeiling: 'READ',
@@ -97,7 +97,7 @@ const SKILLS = [
   {
     skillId: 'sk-dead',
     name: '旧的对账技能',
-    description: { purpose: '历史遗留', usage: [] },
+    description: { purpose: '历史遗留', usage: [], content: '' },
     declaredTools: [],
     declaredMcp: [],
     riskCeiling: 'WRITE_EXTERNAL',

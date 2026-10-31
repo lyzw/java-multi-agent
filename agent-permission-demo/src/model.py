@@ -89,14 +89,16 @@ class SkillUsage:
 
 @dataclass(frozen=True)
 class SkillDescription:
-    """两级描述（与契约 skill.schema.json 的 skillDescription 同构）。
+    """三级描述（与契约 skill.schema.json 的 skillDescription 同构）。
 
-    purpose（1级）供路由/选型；usage（2级）供选中后注入上下文执行。
-    描述不是授权：usage 只能引导 declaredTools / declaredMcp 已声明的能力，
+    purpose（1级）供路由/选型；usage（2级）供选中后注入上下文执行；
+    content（3级）供大模型判断后续工具调用的完整上下文。
+    描述不是授权：usage / content 只能引导 declaredTools / declaredMcp 已声明的能力，
     与声明冲突时以声明为准（fail-closed）。
     """
     purpose: str
     usage: tuple = field(default_factory=tuple)   # tuple[SkillUsage]，可空
+    content: str = ""   # 3级详细描述，可空
 
 
 @dataclass(frozen=True)

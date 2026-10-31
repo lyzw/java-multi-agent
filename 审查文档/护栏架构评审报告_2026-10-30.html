@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>多租户 SaaS Agent 平台 · 护栏（Guardrails）架构评审报告</title>
+<style>
+  :root{
+    --bg:#f6f8fb; --card:#ffffff; --ink:#1f2733; --muted:#5b6b7e;
+    --line:#e2e8f0; --brand:#2563eb; --brand2:#0ea5e9;
+    --p0:#dc2626; --p1:#ea580c; --p2:#ca8a04; --p3:#0891b2; --ok:#16a34a;
+    --code:#0f172a; --codebg:#f1f5f9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.65;font-size:15px}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 64px}
+  header.hero{background:linear-gradient(135deg,#1e3a8a,#2563eb 55%,#0ea5e9);
+    color:#fff;border-radius:18px;padding:30px 34px;margin-bottom:26px;box-shadow:0 10px 30px rgba(37,99,235,.25)}
+  header.hero h1{margin:0 0 8px;font-size:25px;letter-spacing:.3px}
+  header.hero p{margin:4px 0;opacity:.94;font-size:14px}
+  .meta{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;opacity:.92}
+  .meta b{font-weight:600}
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:22px 26px;margin-bottom:22px;box-shadow:0 2px 8px rgba(15,23,42,.04)}
+  h2{font-size:20px;margin:0 0 14px;padding-bottom:10px;border-bottom:2px solid var(--brand);display:inline-block}
+  h3{font-size:16px;margin:20px 0 8px;color:#0f356e}
+  p{margin:8px 0}
+  code{background:var(--codebg);color:var(--code);padding:1px 6px;border-radius:5px;font-size:12.5px;
+    font-family:"SFMono-Regular",Consolas,Menlo,monospace}
+  pre{background:#0f172a;color:#e2e8f0;padding:14px 16px;border-radius:10px;overflow:auto;font-size:12.5px;
+    font-family:"SFMono-Regular",Consolas,Menlo,monospace;line-height:1.5}
+  pre .c{color:#7dd3fc}.pre .k{color:#fca5a5}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#eef4ff;font-weight:600;color:#13305c}
+  tr:nth-child(even) td{background:#fafcff}
+  .sev{display:inline-block;width:34px;height:34px;line-height:34px;text-align:center;border-radius:8px;
+    color:#fff;font-weight:700;font-size:13px}
+  .s0{background:var(--p0)}.s1{background:var(--p1)}.s2{background:var(--p2)}.s3{background:var(--p3)}.sok{background:var(--ok)}
+  .tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600}
+  .t-good{background:#dcfce7;color:#166534}.t-warn{background:#fef3c7;color:#92400e}.t-bad{background:#fee2e2;color:#991b1b}
+  .callout{border-left:4px solid var(--brand);background:#eff6ff;padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0}
+  .callout.red{border-color:var(--p0);background:#fef2f2}
+  .callout.amber{border-color:var(--p1);background:#fff7ed}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin:14px 0}
+  .kpi{background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .kpi .n{font-size:26px;font-weight:700;color:var(--brand)}
+  .kpi .l{font-size:12.5px;color:var(--muted)}
+  ul.tight{margin:6px 0 6px 20px;padding:0}ul.tight li{margin:4px 0}
+  .arch{width:100%;height:auto;background:#0b1220;border-radius:14px;margin:8px 0 4px}
+  .foot{color:var(--muted);font-size:12.5px;text-align:center;margin-top:30px}
+  .pill{font-size:12px;background:#eef4ff;color:#13305c;border:1px solid #c7dcff;padding:2px 9px;border-radius:999px;margin-right:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>多租户 SaaS Agent 平台 · 护栏（Guardrails）架构评审报告</h1>
+  <p>评审对象：<code style="background:rgba(255,255,255,.18);color:#fff">cn.studykid.multiagent</code> 平台（platform / agent-* 模块）</p>
+  <p>技术基线：Spring Boot 4.1.1 · PostgreSQL 17（RLS）· Java 21 · RabbitMQ 4.3.6</p>
+  <div class="meta">
+    <span><b>评审维度</b>：架构 / 关键机制 / 缺漏缺陷 / 优化方案</span>
+    <span><b>参照系</b>：OWASP LLM Top 10 · NeMo Guardrails · Azure AI Content Safety · Lakera</span>
+    <span><b>日期</b>：2026-10-30</span>
+  </div>
+</header>
+
+<!-- 总体结论 -->
+<section>
+  <h2>一、总体结论</h2>
+  <p>该平台的护栏是一套以 <b>「纵深防御 + fail-closed」</b> 为核心纪律、覆盖 <b>租户隔离、能力授权、资源控制、可观测审计</b> 四类的成熟设计，工程完成度远高于一般自研 Agent 框架。其强项在于：</p>
+  <ul class="tight">
+    <li><b>租户隔离</b>：应用层 <code>TenantContext</code> + <code>TenantSessionBinder</code> 钉会话变量 + PostgreSQL <code>FORCE RLS</code> 双层，全仓库仓库统一遵循；</li>
+    <li><b>能力闭环</b>：<code>PermissionResolver</code> → <code>InvocationValidator</code> → <code>ToolInvocationGate</code> 的全链路「谁能调用哪个工具/参数/风险上限」判定，与委派边界（深度/次数/超时/预算）配合严密；</li>
+    <li><b>资源与生命周期</b>：限流、预算（执行前原子预留）、背压、超时、租约恢复、零保留擦除、追加即写审计一应俱全且多数已接调用链；</li>
+    <li><b>fail-closed 纪律</b>：未知风险、授权不可用、缓存失效、超时缺省均默认拒绝。</li>
+  </ul>
+  <div class="callout red">
+    <b>但存在三类会动摇护栏有效性的结构性缺口（详见第三节）：</b>
+    <ul class="tight">
+      <li><b>① 默认态不成立</b>：精细能力闭环 <code>cap-authorization-enforced=false</code> 默认关闭，生产实际走粗粒度 legacy 授权（工具名不校验）；零保留闸门被硬编码为 <code>SYNTHETIC</code>；主数据源在 dev 用带 <code>BYPASSRLS</code> 的 <code>ai_agent</code>，<b>RLS 在主链路被静默绕过</b>。</li>
+      <li><b>② 运行时安全面薄弱</b>：<b>无任何平台侧输出内容安全层</b>（PII/毒性/越狱），敏感输出「只观测不阻断」；Prompt 注入检测「只观测不阻断」且工具结果净化实现与测试分叉（测试验证的是死代码）。</li>
+      <li><b>③ 部分闸门形同虚设或静默失效</b>：运行时人工审批未接线（副作用工具被全拒，但无活体放行通道）；审计「不可篡改」依赖一个任意会话可自设的 GUC。</li>
+    </ul>
+  </div>
+  <div class="grid">
+    <div class="kpi"><div class="n">5</div><div class="l">护栏层次（接入 / 控制面 / 运行时安全 / 资源生命周期 / 数据面）</div></div>
+    <div class="kpi"><div class="n">3×P0</div><div class="l">结构性高危缺漏（默认态不成立）</div></div>
+    <div class="kpi"><div class="n">4×P1</div><div class="l">运行时安全/合规缺口</div></div>
+    <div class="kpi"><div class="n">5×P2/3</div><div class="l">设计细节与可观测性缺口</div></div>
+  </div>
+</section>
+
+<!-- 架构图 -->
+<section>
+  <h2>二、护栏整体架构（分层模型）</h2>
+  <p>平台护栏可归纳为 <b>5 个层次 + 1 条横切纪律</b>。请求从 L0 进入，经控制面与运行时安全面判定后落到 Worker 执行，数据面（RLS）贯穿所有持久化。</p>
+  <svg class="arch" viewBox="0 0 960 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="护栏分层架构图">
+    <defs>
+      <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 z" fill="#38bdf8"/></marker>
+      <linearGradient id="lg0" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#1e3a8a"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+    </defs>
+    <!-- layers -->
+    <g font-family="Menlo,Consolas,monospace" font-size="13">
+      <!-- L0 -->
+      <rect x="20" y="20" width="920" height="64" rx="12" fill="#1e293b"/>
+      <text x="34" y="44" fill="#7dd3fc" font-weight="700">L0 接入层</text>
+      <text x="34" y="66" fill="#e2e8f0">认证/JWT · 限流(RateLimit) · 零保留闸门(ZeroRetentionGate) · 租户上下文建立(TenantContext)</text>
+      <!-- L1 -->
+      <rect x="20" y="96" width="450" height="80" rx="12" fill="#0f3b5e"/>
+      <text x="34" y="120" fill="#7dd3fc" font-weight="700">L1 控制面（谁能做什么）</text>
+      <text x="34" y="142" fill="#e2e8f0">PermissionResolver · AgentOverrides · InvocationValidator</text>
+      <text x="34" y="162" fill="#e2e8f0">ToolInvocationGate · DelegationGuard · MCP/HTTP 网关(SSRF)</text>
+      <!-- L2 -->
+      <rect x="490" y="96" width="450" height="80" rx="12" fill="#5b2a0e"/>
+      <text x="504" y="120" fill="#fdba74" font-weight="700">L2 运行时安全面</text>
+      <text x="504" y="142" fill="#ffe4cc">PromptGuard(注入) · HallucinationDetector(编造)</text>
+      <text x="504" y="162" fill="#ffe4cc">RiskEvent(观测) · Approval(HITL) · DecisionAudit</text>
+      <!-- L3 -->
+      <rect x="20" y="188" width="920" height="74" rx="12" fill="#134e4a"/>
+      <text x="34" y="212" fill="#5eead4" font-weight="700">L3 资源与生命周期面</text>
+      <text x="34" y="234" fill="#ccfbf1">预算(执行前预留) · 背压(Backpressure) · 超时(Deadline) · 租约恢复(RunRecoverySweeper) · 零保留擦除(Erasure) · 追加审计(AuditChain)</text>
+      <!-- L4 -->
+      <rect x="20" y="274" width="920" height="70" rx="12" fill="#312e81"/>
+      <text x="34" y="298" fill="#c7d2fe" font-weight="700">L4 数据面（租户隔离 · 纵深防御）</text>
+      <text x="34" y="320" fill="#e0e7ff">TenantSessionBinder(set_config app.tenant_id) + TransactionalConnectionHolder + FORCE RLS + 显式 WHERE tenant_id</text>
+      <!-- cross-cut -->
+      <rect x="20" y="356" width="920" height="44" rx="12" fill="#0b1220" stroke="#f59e0b" stroke-width="2"/>
+      <text x="34" y="384" fill="#fbbf24" font-weight="700">横切纪律：fail-closed（未知=拒绝 / 不可用=拒绝 / 缺省=拒绝） · 审计可追溯 · 不可信数据包裹</text>
+    </g>
+    <!-- arrows -->
+    <g stroke="#38bdf8" stroke-width="2" fill="none" marker-end="url(#ar)">
+      <path d="M240,84 C240,92 240,92 240,96"/>
+      <path d="M715,84 C715,92 715,92 715,96"/>
+      <path d="M245,176 C245,184 245,184 245,188"/>
+      <path d="M715,176 C715,184 715,184 715,188"/>
+      <path d="M480,225 C480,250 480,250 480,274"/>
+    </g>
+    <!-- mapping to mainstream -->
+    <g font-family="Menlo,Consolas,monospace" font-size="11.5" fill="#94a3b8">
+      <text x="620" y="250">↳ 对照 NeMo「Rails」/ Azure Content Safety /</text>
+      <text x="620" y="266">  OWASP LLM Top10（LL01/02/05/06/10）</text>
+    </g>
+  </svg>
+  <div class="callout">
+    <b>与主流护栏框架的对位：</b> L1≈NeMo 的 <i>action/tool guardrails</i> 与「最小权限闭包」；L2≈NeMo <i>input/output rails</i> + Lakera 注入检测 + 幻觉 grounding；L3≈主流的「成本/速率/超时」资源护栏；L4 是主流 GenAI 框架普遍弱、但本平台做得很重的<b>多租户数据隔离</b>。主流框架（尤其开源）普遍缺失 L4，而本平台缺的是 L2 的<b>输出侧内容安全</b>与<b>主动注入拦截</b>——即「只防越权执行、未防有害内容」。
+  </div>
+</section>
+
+<!-- 关键机制 -->
+<section>
+  <h2>三、关键机制详述（带代码证据）</h2>
+
+  <h3>3.1 租户隔离（L4 数据面）</h3>
+  <p><code>TenantContext</code>（<code>agent-core/.../tenant/TenantContext.java</code>）为不可变 record，租户标识只从可信认证上下文推导，并警告「客户端传入 tenant_id 不作为授权依据」。绑定在连接上由 <code>TenantSessionBinder</code> 用 <code>set_config('app.tenant_id',?,true)</code> 强制（每次取连无条重置，防连接池串租户）。<code>TransactionalConnectionHolder</code> 用 <code>ThreadLocal</code> 复用/自开连接，顺序为「先 setAutoCommit(false) 再 bind」。持久化层 42 张租户表均有 <code>FORCE ROW LEVEL SECURITY</code> + 对称读写策略；平台目录表（<code>cap_tool_def</code> 等）显式豁免。构建期 <code>SchemaStructureTest</code> + 真实 PG <code>verify/*.sql</code> 反证脚本（须以非特权 <code>app_agent</code> 运行）。</p>
+  <p><b>角色模型：</b><code>app_agent</code>(NOBYPASSRLS，应为运行时角色) / <code>platform_ops</code>(BYPASSRLS，仅运维发布通道，由 <code>GuardedPlatformOpsDataSource</code>+<code>PlatformOpsSessionGuard</code> 包裹，fail-closed) / <code>ai_agent</code>(迁移/owner，带 <code>BYPASSRLS</code>)。</p>
+
+  <h3>3.2 能力闭环（L1 控制面）</h3>
+  <p><code>PermissionResolver.build()</code> 计算 Agent→Skill→{Tool,MCP} 的 <b>EffectiveClosure</b>，深度上限 8，含环检测；<code>AgentOverrides</code> 仅能收紧（移除 Skill/工具/风险上限）；未知风险 <code>continue</code> 剔除（fail-closed）。<code>InvocationValidator</code>（Phase A 七步有序）校验：授权版本新鲜度 → 闭包解析 → Skill/Tool 声明 → 风险上限 → MCP 绑定 → 参数策略(<code>ParamPolicyEngine</code>) → 指纹。委派经 <code>DelegationGuard</code> 五步闸门（深度/次数/超时/预算/逐跳授权），父子权限互不继承，子输出按「不可信数据」包裹回父。外部 MCP/HTTP 经 <code>McpEndpointGuard</code> 在 transport 层做 SSRF 双重解析防护（每次连接执行，无旁路）。</p>
+  <p>配置期 <code>ConfigValidationGate</code> 拒绝未知风险/作用域泄漏；执行期 <code>ExecutionAdmissionChecker</code> 做 Phase B（TOCTOU 二次校验 + 重算指纹）；<code>CachingClosureResolver</code> 权威重查防缓存陈旧。</p>
+
+  <h3>3.3 运行时安全（L2）</h3>
+  <p><code>PromptGuard</code>：用户输入包裹 <code>&lt;user_input&gt;</code>、<code>sanitize</code> 剥离零宽/ANSI/控制符、长度/深度/元素硬上限（超界抛 <code>PromptRejectedException</code> fail-closed）。<code>detectSuspicious</code> 命中<b>只打 WARN</b>。幻觉检测 <code>HallucinationDetector.assertNoFabricatedSource</code> 在终答阶段校验「编造引用」正则，命中即 <code>commitFailure</code> + 发射 <code>SAFETY_BLOCK</code>（真正阻断）。<code>RiskEvent</code> 三类（<code>SAFETY_BLOCK</code>/<code>UNAUTHORIZED_CALL</code>/<code>SENSITIVE_OUTPUT</code>）只落摘要 <code>detailDigest</code> 不落原文。<code>RiskBasedApprovalPolicy</code> 按风险等级判定是否需人工审批（未登记=fail-closed 最严）。<code>DecisionAudit</code> 记录每次授权决策（不存 payload），<code>AuthzWatermark</code> 监控撤权。</p>
+
+  <h3>3.4 资源与生命周期（L3）</h3>
+  <p><b>限流</b> <code>JdbcRateLimiter</code>：判定+计数同条原子 SQL，按租户+动作分桶，fail-closed，已接入多控制器。<b>预算</b>：执行前原子预留（<code>reserve</code> 单条条件 UPDATE），Run 级上限用行锁+同事务聚合，UNKNOWN 不释放待对账。<b>背压</b> <code>BackpressureController</code> 滞回状态机，探测失败=fail-closed 停发，接入 <code>OutboxRelay</code>。<b>超时</b> <code>RunExecutionLoop</code> 每轮开头查 <code>task.deadlineAt()</code>，<code>maxSteps</code> 兜底，委派下传共享超时。<b>租约/恢复</b> <code>claimTasks</code> 用 <code>FOR UPDATE SKIP LOCKED</code>+fencing_token 双保险，<code>RunRecoverySweeper</code> 接管过期 RUNNING。<b>擦除</b> <code>RetentionJob</code>(<code>@Bean(initMethod="start")</code>) 真删/置空+凭证。<b>审计</b> 追加即写由 DB 触发器 <code>trg_audit_record_append_only</code> 强制，敏感信息拒写。</p>
+
+  <h3>3.5 横切纪律</h3>
+  <p>全链路 <b>fail-closed</b>：授权不可用=拒绝（<code>AuthzUnavailableException</code>）；未知风险不降级；默认-拒绝（角色矩阵/闭包/配置校验）；不可信数据包裹（委派输出、工具结果）。</p>
+</section>
+
+<!-- 缺漏 -->
+<section>
+  <h2>四、缺漏 / 错误 / 不完善（按严重度）</h2>
+  <p class="pill">P0 = 结构性高危</p><p class="pill">P1 = 运行时安全/合规</p><p class="pill">P2/P3 = 细节/可观测</p>
+  <table>
+    <thead><tr><th style="width:54px">级别</th><th style="width:200px">位置 / 机制</th><th>问题</th><th>代码证据</th><th>影响（对照主流护栏）</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="sev s0">P0</span></td>
+        <td>精细能力闭环默认关闭</td>
+        <td><b>生产走 legacy 粗粒度授权</b>：<code>cap-authorization-enforced</code> 默认 <code>false</code>，<code>ToolInvocationGate</code> 路由到 <code>invokeAllLegacy</code>；legacy 的 <code>isAuthorized(systemContext, TOOL_INVOKE, toolName)</code> 中 <code>systemContext</code> 携带 <code>WORKER</code> 角色（恒含 TOOL_INVOKE），而 <code>RoleBasedAuthorizationService</code> <b>从不引用 resourceId（工具名）</b>。结果：<b>任何已注册工具对该租户任何 Agent 均可被调用</b>，模型闭包（声明工具/风险上限/参数策略）在执行点不被校验。</td>
+        <td><code>ApplicationConfiguration.java:1672-1675</code><br><code>ToolInvocationGate.java:515-521,1089,1556-1564</code><br><code>RoleBasedAuthorizationService.java:101-115</code></td>
+        <td>主流「最小权限工具护栏」失效。是「呈现层限制、强制层未校验」的典型缺陷。测试注释 (<code>DelegationGateBranchTest</code>) 已自认 LEGACY=生产默认路径。</td>
+      </tr>
+      <tr>
+        <td><span class="sev s0">P0</span></td>
+        <td>租户隔离被静默绕过</td>
+        <td>主数据源在 dev（及按 <code>platform.env</code> 模板的配置）使用带 <code>BYPASSRLS</code> 的 <code>ai_agent</code> 角色，<b>RLS 在主链路完全失效</b>，仅剩各仓库显式 <code>WHERE tenant_id</code> 兜底。平台侧<b>缺少启动时拒绝 BYPASSRLS 角色的自检</b>（RAG 侧有 <code>RagStartupSelfCheck</code>，平台侧无）。</td>
+        <td><code>deploy/sql/README.md:273-280</code><br><code>JdbcStatisticsRepository.java:44-46</code><br>全仓 Grep 平台 java 无 <code>rolbypassrls</code> 生产自检</td>
+        <td>任何「只依赖 RLS」的查询会跨租户泄漏；且测试以 <code>app_agent</code>(NOBYPASSRLS) 跑全绿，产生「隔离生效」的<b>虚假安全感</b>。主流多租户设计必有启动自检。</td>
+      </tr>
+      <tr>
+        <td><span class="sev s0">P0</span></td>
+        <td>零保留闸门硬编码 SYNTHETIC</td>
+        <td><code>RunController</code> 把 <code>DataClassification</code> <b>硬编码为 SYNTHETIC</b>，<code>ZeroRetentionGate.assertAllowed</code> 内 <code>if(!classification.containsRealStudentData()) return;</code> 使真实学生数据分支（供应商确认检查 + 可识别信息拒绝）<b>整段被跳过</b>。且闸门<b>仅在 API 入口</b>，Worker/子 Agent 执行层完全不经过。</td>
+        <td><code>RunController.java:137-141</code><br><code>ZeroRetentionGate.java:47-49</code></td>
+        <td>合规闸门形同虚设（当前 P2 用合成数据故无实际风险，但「接入真实数据」时不会自动生效）。对照 PIPL/未成年人保护属高危缺位。</td>
+      </tr>
+      <tr>
+        <td><span class="sev s1">P1</span></td>
+        <td>输出侧内容安全缺失</td>
+        <td>全仓<b>无平台侧</b> PII/毒性/越狱/违规内容过滤服务。<code>SENSITIVE_OUTPUT</code> 风险事件<b>只观测不阻断</b>：命中后内容仍 <code>commitSuccess</code> 正常返回用户。唯一的「内容安全」是 LLM 供应商自带的模型侧过滤。</td>
+        <td><code>RunExecutionLoop.emitSensitiveOutputIfHit</code>（~:699-718，注释明示「只观测不阻断」）</td>
+        <td>主流护栏（Azure Content Safety / OpenAI Moderation / NeMo output rails）均有输出侧 moderations。本平台对含身份证号的输出「照常下发，仅后台记一笔」。</td>
+      </tr>
+      <tr>
+        <td><span class="sev s1">P1</span></td>
+        <td>Prompt 注入仅观测 + 工具结果净化分叉</td>
+        <td>① <code>detectSuspicious</code> 命中只打 WARN 不拦截（设计声明 D-5「只观测」）。② 红队测试 R-7 验证的 <code>PromptGuard.wrapToolResult</code>（结构化 <code>trust="untrusted"</code> 标记 + 净化）<b>在生产主路径无调用方</b>；真实工具结果走 <code>ToolOutcomeRenderer.outcomeText</code>，仅加自然语言前缀 + 8000 字符截断，<b>未调用 sanitize，无结构化标记</b>。测试验证的是死代码 → 虚假保证。</td>
+        <td><code>RunExecutionLoop.renderInput</code>(~:797-815)<br><code>ToolOutcomeRenderer.java:113-127</code><br><code>PromptInjectionRedTeamTest</code> R-7</td>
+        <td>对照 Lakera/NeMo input rails：缺<b>主动拦截</b>；零宽字符注入载体未被剥离；工具结果「不可信」仅依赖一句自然语言提示。</td>
+      </tr>
+      <tr>
+        <td><span class="sev s1">P1</span></td>
+        <td>运行时人工审批未接线</td>
+        <td><code>WorkerExecutionConfig.approvalSource()</code> 返回空 <code>PolicyEngineApprovalSource</code>（空 map → 全部 <code>FAIL_CLOSED</code>）。结果：任何 <code>WRITE_EXTERNAL</code> 副作用工具在运行时<b>永被拒绝</b>（安全默认），但 <code>agent-api</code> 的 <code>ApprovalController</code> 人工决策端点操作的是<b>另一条链路</b>（能力/配置发布域），<b>不覆盖工具副作用执行域</b>——无活体人工放行通道。</td>
+        <td><code>WorkerExecutionConfig.java:224-226</code><br><code>RiskBasedApprovalPolicy.java:165-167</code></td>
+        <td>判定「谁需审批」健全，但「运行时 HITL」缺位。要么接上，要么明确产品决策（全拒=安全默认）并文档化+加开关。</td>
+      </tr>
+      <tr>
+        <td><span class="sev s1">P1</span></td>
+        <td>幻觉检测窄且可绕过</td>
+        <td><code>HallucinationDetector</code> 仅校验「编造引用/出处」（8 条正则黑名单），<b>纯事实性幻觉</b>（给出错误知识点但不引用出处）完全不检测；且只在终答阶段、中间步骤不校验。可构造「如我们教材所言」这类不命中规则的表述绕过。</td>
+        <td><code>HallucinationDetector.java</code><br><code>RunExecutionLoop.java:448-462</code></td>
+        <td>对照 RAG grounding / NeMo 事实护栏：本平台 DEC-5 无 RAG，故「输出接地」整体缺席，仅靠引用正则。</td>
+      </tr>
+      <tr>
+        <td><span class="sev s2">P2</span></td>
+        <td>超时非抢占 + 缺省无超时</td>
+        <td><code>RunExecutionLoop</code> 的超时检查只在<b>每轮迭代开头</b>，单次长调用（模型/工具）不会被中断；<code>if(task.deadlineAt()!=null …)</code> 表示 <b>未传 timeoutMs 则完全跳过超时检查</b>，仅依赖 maxSteps+租约续期。</td>
+        <td><code>RunExecutionLoop.java:359-368</code></td>
+        <td>单步长调用可越过根截止；需确认创建路径强制 timeoutMs。</td>
+      </tr>
+      <tr>
+        <td><span class="sev s2">P2</span></td>
+        <td>审计「不可篡改」依赖可自设 GUC</td>
+        <td>审计追加即写由触发器 <code>forbid_audit_mutation()</code> 强制，但其放行 DELETE 的条件是会话声明 <code>agent.retention.actor</code> GUC——DDL 注释自承「任何持有 DB 凭据的会话都可自行 set_config」。真正的防线在 DB 凭据隔离，而非触发器本身；<code>erasure_certificate</code> 亦可用同通道删。</td>
+        <td><code>01_platform_ddl.sql:4236-4239,528-552</code></td>
+        <td>「不可篡改」是条件性的；持有 DB 凭据者（含潜在 SQL 注入上下文）可删审计行。需补威胁模型与凭据隔离。</td>
+      </tr>
+      <tr>
+        <td><span class="sev s3">P3</span></td>
+        <td>限流与恢复的细节</td>
+        <td>① 固定窗口（非滑动）边界突发；② 仅 API 入口限流，Worker 执行层无限流；③ <code>RunEventController</code> 残留 <code>NEVER_LIMIT</code> 测试桩（易误用）；④ <code>rate_limit_bucket</code> 策略直接用 <code>current_setting</code> 未走 <code>current_tenant_id()</code> 函数；⑤ <code>RunRecoverySweeper</code> 在 <code>PlatformTenantPort</code> 不可用时<b>只 WARN 静默关闭崩溃恢复</b>。</td>
+        <td><code>JdbcRateLimiter.java</code> / <code>RunEventController.java:128</code> / <code>01_platform_ddl.sql:5295</code> / <code>RunRecoverySweeper.java:96-103</code></td>
+        <td>非阻断性，但属 fail-closed 的「安静失效」，运维不易察觉。</td>
+      </tr>
+      <tr>
+        <td><span class="sev s3">P3</span></td>
+        <td>Schema 漂移风险</td>
+        <td>迁移链已删，schema 由 <code>pg_dump</code> 快照带外恢复；CI 中无「活库 == 提交快照」强制比对，运行库与 <code>01_platform_ddl.sql</code> 可能漂移。</td>
+        <td><code>PlatformDdl.java:15-17</code>；<code>db/migration</code> 仅含 <code>verify/</code></td>
+        <td>结构漂移会使 RLS 策略/CHECK 在运行库与实际不符。</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout amber">
+    <b>设计纪律加分项（非缺口）：</b> 平台目录表（<code>cap_tool_def/skill_def/mcp_server_def</code>）无 RLS、靠应用层授权是<b>有意为之</b>（全局目录）；<code>cap_config_pointer/release/decision_log</code> 读策略允许 <code>tenant_id IS NULL</code>（租户可读平台已发布行）是正确设计；<code>AgentOverrides</code> 只收紧不放松、未知风险剔除、循环/深度检测均符合 fail-closed。
+  </div>
+</section>
+
+<!-- 优化方案 -->
+<section>
+  <h2>五、优化方案（具体可落地）</h2>
+
+  <h3>5.1 P0 — 让护栏在默认态真正成立</h3>
+  <div class="callout red">
+    <b>① 开启并兜底精细能力闭环</b><br>
+    • 生产暴露前：在 <code>platform.env</code> / <code>application.yml</code> 显式设 <code>config.flag.cap-authorization-enforced=true</code>。<br>
+    • <b>防回退</b>：在 <code>ToolInvocationGate.invokeAll</code> 的 legacy 分支补「工具名 ∈ 闭包」成员校验作为兜底；或在开关缺失/关闭且未装配 CAP 时 <b>fail-closed 拒所有副作用工具</b>，消除「看似授权、实则恒放行」的伪防线。
+  </div>
+  <div class="callout red">
+    <b>② 启动自检拒绝 BYPASSRLS 应用角色</b>（仿 RAG <code>RagStartupSelfCheck</code>）<br>
+    <pre><span class="c">// platform-bootstrap 启动时执行</span>
+SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = current_user;
+<span class="c">// 若为 true → 拒绝启动（fail-closed），并告警运维改用 app_agent(NOBYPASSRLS)</span></pre>
+    • 同时在健康检查/启动中接入 <code>AdminTenantRepository.verifyIsolation()</code>（已有，按需调用→改为启动+周期自检）。<br>
+    • 中长期：让主数据源改用 <code>app_agent</code>，或将 <code>ai_agent</code> 的 <code>BYPASSRLS</code> 移除（保留其迁移角色、另设非特权应用角色）。
+  </div>
+  <div class="callout red">
+    <b>③ 零保留闸门按真实分类派生</b><br>
+    <pre>DataClassification classification =
+    DataClassification.fromRequest(request, currentPrincipal); <span class="c">// 不再硬编码 SYNTHETIC</span>
+retentionGate.assertAllowed(currentPrincipal.providerId(), requestText(request), classification);</pre>
+    • 并把 <code>ZeroRetentionGate.assertAllowed</code> 前移到 <b>Worker 执行层 / 子 Agent 调用前</b>（不仅 API 入口），防止合成数据通道外的真实数据漏过。
+  </div>
+
+  <h3>5.2 P1 — 补齐运行时安全面（对照主流 output/input rails）</h3>
+  <div class="callout amber">
+    <b>④ 新增平台侧输出内容安全层</b><br>
+    • 在 <code>RunExecutionLoop</code> 终答/工具结果回写前接入 moderation（可接 LLM 供应商安全接口或自建 classifier），覆盖 PII/毒性/越狱/违规。<br>
+    • <code>SENSITIVE_OUTPUT</code> 由「只观测」改为<b>可配置阻断</b>（默认对未成年人场景阻断并返回脱敏/拒绝，命中即 <code>commitFailure</code> 或脱敏替换，而非原样下发）。
+  </div>
+  <div class="callout amber">
+    <b>⑤ 注入防御升级 + 修复工具结果净化分叉</b><br>
+    • <code>detectSuspicious</code> 命中对<b>高置信模式默认拦截</b>（至少阻断明显指令注入），低置信保留观测；<br>
+    • 让生产主路径真正调用 <code>PromptGuard.wrapToolResult</code>（结构化 <code>&lt;tool_result trust="untrusted"&gt;</code> 标记 + <code>sanitize</code> 零宽/ANSI 净化），并<b>删除或改写 R-7 死代码测试</b>，使红队测试覆盖真实渲染器 <code>ToolOutcomeRenderer</code>；<br>
+    • 统一「不可信数据包裹」契约，避免自然语言提示被绕过。
+  </div>
+  <div class="callout amber">
+    <b>⑥ 运行时人工审批接线（或明确产品决策）</b><br>
+    • 将 <code>agent-api</code> 的 <code>ApprovalController</code> 经 <code>ApprovalSource</code> 接入 <code>ToolInvocationGate</code> 的 <code>WRITE_EXTERNAL</code> 闸门，形成「需要审批→挂起→人工决策→放行」闭环；<br>
+    • 若产品选择「副作用工具一律禁止」，则<b>显式文档化</b>该决策并加开关，避免「空配置=全拒」被误读为 bug。
+  </div>
+  <div class="callout amber">
+    <b>⑦ 幻觉/质量检测扩面</b><br>
+    • RAG 落地后接入 <code>ReferencedContentResolver</code> 做真实 grounding 校验（当前名字易误导，非输出溯源）；<br>
+    • 当前至少要扩展编造检测规则或接入轻量事实性分类器，覆盖「无引用的事实性错误」。
+  </div>
+
+  <h3>5.3 P2/P3 — 细节加固</h3>
+  <ul class="tight">
+    <li><b>超时</b>：确认 Run 创建路径 <code>timeoutMs</code> 必填；对单次长调用评估异步 Future + 硬中断（抢占），或至少把模型/工具调用包进带超时的 <code>Future.get(deadline)</code>。</li>
+    <li><b>审计不可篡改</b>：将「受控删除通道」从可自设 GUC 改为<b>DB 凭据隔离</b>（独立 retention 角色 + REVOKE 普通会话的删权限），并在合规文档显式声明威胁模型（持 DB 凭据者可删）。</li>
+    <li><b>审计覆盖</b>：增加静态/集成断言，确保「每个敏感动作（审批/取消/配置变更）都调用 <code>recordRequired</code>」。</li>
+    <li><b>限流</b>：Worker 执行层补限流或将预算视为并发上限；移除 <code>RunEventController.NEVER_LIMIT</code> 桩；统一 <code>rate_limit_bucket</code> 策略走 <code>current_tenant_id()</code> 函数。</li>
+    <li><b>恢复</b>：<code>RunRecoverySweeper</code> 在 <code>PlatformTenantPort</code> 不可用时由「只 WARN」升级为<b>可观测告警 + 健康标记降级</b>（暴露而非静默）。</li>
+    <li><b>Schema 漂移</b>：CI 增加「活库结构 == <code>01_platform_ddl.sql</code> 快照」的比对门禁（复用 <code>PlatformDdl</code>/<code>SchemaStructureTest</code> 解析逻辑）。</li>
+  </ul>
+</section>
+
+<!-- 评分 -->
+<section>
+  <h2>六、对照主流护栏的能力评分卡</h2>
+  <table>
+    <thead><tr><th>护栏维度</th><th>主流参照</th><th>本平台现状</th><th>评级</th></tr></thead>
+    <tbody>
+      <tr><td>租户数据隔离（多租户 RLS）</td><td>Azure/主流 GenAI 框架普遍弱</td><td>双层 RLS + 绑定 + 构建门禁，但默认角色 BYPASSRLS 绕过 + 无启动自检</td><td><span class="tag t-warn">B-（实现强/默认态危险）</span></td></tr>
+      <tr><td>输入校验 / Prompt 注入</td><td>NeMo input rails · Lakera</td><td>净化+边界硬拒；检测只观测不拦截；工具结果净化分叉</td><td><span class="tag t-warn">C+（缺主动拦截）</span></td></tr>
+      <tr><td>工具/动作授权（最小权限）</td><td>NeMo action guardrails</td><td>精细闭包设计完备，但<b>默认关闭</b>，生产走粗粒度</td><td><span class="tag t-bad">C（默认失效）</span></td></tr>
+      <tr><td>输出内容安全（PII/毒性/越狱）</td><td>Azure Content Safety · OpenAI Moderation</td><td>仅供应商侧过滤；平台侧无 moderations，敏感输出只观测</td><td><span class="tag t-bad">D（缺失）</span></td></tr>
+      <tr><td>幻觉 / 事实性 ground</td><td>RAG grounding · NeMo factuality</td><td>仅引用正则；无 RAG grounding；可绕过</td><td><span class="tag t-warn">C</span></td></tr>
+      <tr><td>HITL 高风险审批</td><td>主流 agent 框架</td><td>判定健全；运行时人工审批未接线（全拒或无通道）</td><td><span class="tag t-warn">B-（断链）</span></td></tr>
+      <tr><td>资源控制（限流/预算/背压/超时）</td><td>主流成本/速率护栏</td><td>四项齐备且接链；超时非抢占、限流仅入口</td><td><span class="tag t-good">A-</span></td></tr>
+      <tr><td>可观测 / 审计 / 擦除</td><td>OWASP LLM 治理</td><td>追加审计 + 决策审计 + 零保留擦除齐备；审计「不可篡改」依赖 GUC</td><td><span class="tag t-good">A-</span></td></tr>
+      <tr><td>fail-closed 设计纪律</td><td>安全默认原则</td><td>贯穿全链路，纪律强</td><td><span class="tag t-good">A</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <b>一句话总结：</b>本平台的护栏「骨架与纪律是一流水准」，但<b>三处默认态缺位（能力闭环关、BYPASSRLS 绕过、零保留硬编码）把它从「生产可用」拉回到「演示可用」</b>；而<b>输出内容安全与主动注入拦截的缺失</b>，使其相对 NeMo/Azure 这类主流护栏在「防有害内容」维度存在代差。优先修 P0（让默认态成立），再补 P1（运行时安全面），即可达到主流生产级。
+  </div>
+</section>
+
+<div class="foot">本报告基于源码静态审查（platform 8 模块 + deploy/sql + rag 参考），关键结论均附 file:line 证据；未修改任何源码。P0/P1 修复建议在实施前建议先跑 <code>mvn -o clean verify</code> 回归。</div>
+
+</div>
+</body>
+</html>

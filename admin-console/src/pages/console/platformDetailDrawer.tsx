@@ -238,8 +238,8 @@ export function SkillCatalogDetail({ id }: { id: string }): JSX.Element {
             ]}
           />
 
-          <DetailSubTitle>描述（1级用途 + 2级使用指引）</DetailSubTitle>
-          {/* 两级描述（1级 purpose + 2级 usage）：⚠️ 描述不是授权 */}
+          <DetailSubTitle>描述（1级用途 + 2级使用指引 + 3级详细描述）</DetailSubTitle>
+          {/* 三级描述（1级 purpose + 2级 usage + 3级 content）：⚠️ 描述不是授权 */}
           {skill.description !== null ? (
             skillDescriptionView(skill.description)
           ) : (

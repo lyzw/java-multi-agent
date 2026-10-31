@@ -39,6 +39,20 @@ public enum RunState {
     /** Worker 已领取并持有有效租约。 */
     RUNNING,
 
+    /**
+     * 等待人工审批（M1 / G2 修复核心 · PARK 态）。
+     *
+     * <p>⚠️ <b>非终态</b>：工具调用需要审批、且已登记待办后，
+     * Run 让出 worker 线程与租约进入本态；审批决定到达后由
+     * {@code ApprovalDecidedWakeupConsumer} 唤醒并 {@code RESUME} 回 {@link #RUNNING}。
+     * 此间不占用 worker 资源（不空转、不续租）。
+     *
+     * <p>⚠️ 仅允许迁向 {@code RUNNING}（恢复）/ {@code CANCELLED}（人撤）/ 
+     * {@code TIMED_OUT}（审批超时兜底）/ {@code FAILED}（人拒或超时收敛），
+     * 不允许从本态直接进入 {@code SUCCEEDED}（成功只能在恢复并重执行后判定）。
+     */
+    WAITING_APPROVAL,
+
     /** 协作式取消登记后停止启动新动作。终态。 */
     CANCELLED,
 
@@ -56,7 +70,9 @@ public enum RunState {
     private static Map<RunState, Set<RunState>> buildTransitions() {
         Map<RunState, Set<RunState>> m = new EnumMap<>(RunState.class);
         m.put(QUEUED, EnumSet.of(RUNNING, CANCELLED));
-        m.put(RUNNING, EnumSet.of(SUCCEEDED, FAILED, CANCELLED, TIMED_OUT));
+        m.put(RUNNING, EnumSet.of(SUCCEEDED, FAILED, CANCELLED, TIMED_OUT, WAITING_APPROVAL));
+        // ⚠️ M1-1：WAITING_APPROVAL 的恢复/收敛迁移（PARK → RESUME/终止）
+        m.put(WAITING_APPROVAL, EnumSet.of(RUNNING, CANCELLED, TIMED_OUT, FAILED));
         m.put(CANCELLED, EnumSet.noneOf(RunState.class));
         m.put(SUCCEEDED, EnumSet.noneOf(RunState.class));
         m.put(FAILED, EnumSet.noneOf(RunState.class));

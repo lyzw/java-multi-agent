@@ -50,9 +50,51 @@ public class RetentionConfig {
 
     private static final Logger log = LoggerFactory.getLogger(RetentionConfig.class);
 
+    /**
+     * 擦除端口（保留期清理 / 撤回同意删除）。
+     *
+     * <p>⚠️⚠️ <b>P2-2：优先使用清理专用数据源</b>（{@code agent_retention}）。
+     * 凭据隔离脚本撤销了应用角色对 {@code audit_record} /
+     * {@code erasure_certificate} 的 DELETE —— 用应用凭据跑清理，
+     * 只会在到期那天得到一个 {@code permission denied}，
+     * 而那时现场是「清理任务失败了」，离「这条连接不该有权限的事实」极远。
+     *
+     * <p>⚠️ <b>为什么默认不强制</b>：
+     * 隔离脚本尚未在各环境执行前，应用角色<b>仍然</b>持有 DELETE，
+     * 此时强制要求独立凭据只会让实例起不来，却不增加任何安全性。
+     * 故默认 <b>回落到主数据源 + 醒目 WARN</b>，把「清理通道 == 应用凭据」
+     * 这一事实显式暴露出来；执行完隔离脚本的环境应把
+     * {@code agent.retention.require-isolated-credential} 置为 {@code true}，
+     * 届时缺清理凭据 → <b>拒绝启动</b>（fail-closed）。
+     *
+     * <p>⚠️ <b>绝不静默</b>：回落是一次 SECURITY 级告警而不是 INFO——
+     * 「配了等于没配且没有报错」正是本项目已经吃过一次亏的故障形态。
+     */
     @Bean
-    public ErasurePort erasurePort(DataSource dataSource) {
-        return new JdbcErasureRepository(dataSource);
+    public ErasurePort erasurePort(
+            DataSource mainDataSource,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            @org.springframework.beans.factory.annotation.Qualifier(
+                    RetentionDataSourceConfiguration.BEAN_NAME)
+            javax.sql.DataSource retentionDataSource,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.retention.require-isolated-credential:false}")
+            boolean requireIsolatedCredential) {
+        if (retentionDataSource != null) {
+            return new JdbcErasureRepository(retentionDataSource);
+        }
+        String message = "未接入保留期清理专用数据源（"
+                + RetentionDataSourceConfiguration.KEY_ENABLED + "），"
+                + "正在回落应用主数据源：清理通道的凭据 == 应用凭据，"
+                + "持有应用凭据者即可删除 audit_record / erasure_certificate。"
+                + "执行 deploy/sql/platform/04_retention_role.sql 后应将 "
+                + "agent.retention.require-isolated-credential 设为 true。";
+        if (requireIsolatedCredential) {
+            throw new IllegalStateException(message
+                    + " 本环境已声明要求凭据隔离，拒绝以应用凭据启动清理通道。");
+        }
+        log.error("⚠️⚠️ SECURITY: {}", message);
+        return new JdbcErasureRepository(mainDataSource);
     }
 
     @Bean

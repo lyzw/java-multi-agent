@@ -178,6 +178,19 @@ class ConfigPublishIT extends CapITBase {
         //    序号是「发布事件」的标识，白吃会让版本追溯出现空洞。
         long seqBefore = adminQueryLong("SELECT last_value FROM cap_config_publish_seq");
 
+        // ⚠️⚠️ 度量口径：断言「**本次发布尝试没有新增任何行**」，
+        //    而不是「全表为空」。
+        //    ⚠️ 原写法是全表 count = 0 —— 那等于**要求整库为空**：
+        //        dev 库里 cap_tool_def 有 6 条平台工具定义种子
+        //        （02_platform_seed.sql），发布头/指针也可能留有历史行，
+        //        于是该断言在**任何非空库**上都不成立 —— 它验证的是
+        //        「库是空的」，不是「非法发布没写东西」。
+        //    before/after 差值才是这条红线的真实语义：
+        //    **非法发布必须零写入**（不多不少一行）。
+        long toolDefsBefore = adminQueryLong("SELECT count(*) FROM cap_tool_def");
+        long releasesBefore = adminQueryLong("SELECT count(*) FROM cap_config_release");
+        long pointersBefore = adminQueryLong("SELECT count(*) FROM cap_config_pointer");
+
         assertThatThrownBy(() -> service.publish(platformCommand(CapabilityRiskLevel.UNKNOWN, 1)))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .satisfies(e -> assertThat(((ConfigPublishRejectedException) e).reasonCode())
@@ -185,13 +198,13 @@ class ConfigPublishIT extends CapITBase {
 
         assertThat(adminQueryLong("SELECT count(*) FROM cap_tool_def"))
                 .as("⛔ 配置非法仍写入了版本行")
-                .isZero();
+                .isEqualTo(toolDefsBefore);
         assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"))
                 .as("⛔ 配置非法仍写入了发布头")
-                .isZero();
+                .isEqualTo(releasesBefore);
         assertThat(adminQueryLong("SELECT count(*) FROM cap_config_pointer"))
                 .as("⛔ 配置非法仍移动了当前指针")
-                .isZero();
+                .isEqualTo(pointersBefore);
         assertThat(adminQueryLong("SELECT last_value FROM cap_config_publish_seq"))
                 .as("⛔ 配置非法仍消耗了发布序号：门禁必须跑在事务之外、零序号占用")
                 .isEqualTo(seqBefore);

@@ -108,7 +108,7 @@ const TOOL_RELATIONS = {
 const SKILL = {
   skillId: 'sk-1',
   name: '订单分析',
-  description: { purpose: '分析订单', usage: [] },
+  description: { purpose: '分析订单', usage: [], content: '' },
   declaredTools: ['tool-1'],
   declaredMcp: [{ serverId: 'srv-1', toolAllowlist: null }],
   riskCeiling: 'READ',

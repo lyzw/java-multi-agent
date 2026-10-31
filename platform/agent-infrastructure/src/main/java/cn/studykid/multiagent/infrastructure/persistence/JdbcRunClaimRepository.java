@@ -202,6 +202,55 @@ public class JdbcRunClaimRepository implements RunClaimPort {
     }
 
     /**
+     * 领取挂起等待审批的 Run（M1 / G2 · RESUME 前置）。
+     *
+     * <p>⚠️ 与 {@link #claimSpecificRun} 的唯一差异是<b>入口状态集合</b>：
+     * 只收 {@code WAITING_APPROVAL}（审批决定已到达的挂起 Run）。
+     * CAS 仍按当前 fencing token —— 并发唤醒/重复唤醒只有一个能赢，
+     * 输家拿到 empty（正常形态，丢弃不重试）。
+     */
+    @Override
+    public java.util.Optional<LeasedTask> claimParkedRunForResume(@NonNull String tenantId,
+                                                                   @NonNull String runId,
+                                                                   @NonNull String workerId,
+                                                                   @NonNull Duration leaseDuration) {
+        String sql = """
+                UPDATE run
+                SET state = 'RUNNING',
+                    lease_owner = ?,
+                    lease_expires_at = now() + (? || ' seconds')::interval,
+                    fencing_token = fencing_token + 1,
+                    attempt = attempt + 1,
+                    updated_at = now()
+                WHERE tenant_id = ?::uuid AND run_id = ?::uuid
+                  AND fencing_token = ?
+                  AND state = 'WAITING_APPROVAL'
+                RETURNING run_id, fencing_token, lease_expires_at, attempt, deadline_at
+                """;
+        return execReturning(conn -> {
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, workerId);
+                ps.setInt(2, (int) leaseDuration.toSeconds());
+                ps.setString(3, tenantId);
+                ps.setString(4, runId);
+                ps.setLong(5, messageTokenOf(conn, tenantId, runId));
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return java.util.Optional.empty();
+                    }
+                    Timestamp exp = rs.getTimestamp("lease_expires_at");
+                    return java.util.Optional.of(new LeasedTask(
+                            rs.getString("run_id"),
+                            rs.getLong("fencing_token"),
+                            exp.toInstant(),
+                            rs.getInt("attempt"),
+                            deadlineOf(rs)));
+                }
+            }
+        }, tenantId);
+    }
+
+    /**
      * 读取 Run 的业务截止时间。
      *
      * <p>⚠️ <b>NULL = 不限时</b>：{@code rs.getTimestamp} 返回 {@code null} 时
@@ -446,6 +495,49 @@ public class JdbcRunClaimRepository implements RunClaimPort {
         } catch (SQLException e) {
             throw new IllegalStateException("检查取消状态失败", e);
         }
+    }
+
+    /**
+     * 收敛挂起超时的 Run（M1-4 / G2 · 防挂起泄漏兜底）。
+     *
+     * <p>⚠️ <b>为什么必须兜底</b>：PARK 后的 Run 处于 {@code WAITING_APPROVAL}，
+     * 不占 worker 线程、不续租。若审批决定始终没来，它会<b>永久停在挂起态</b> ——
+     * 不报错、不告警、只是再也不动。
+     *
+     * <p>⚠️ <b>为什么以 {@code updated_at} 为基准</b>：PARK 时会更新该列，
+     * 之后无人续租、无人改状态 → 它就是「进入挂起态的时刻」。
+     * 用 {@code lease_expires_at} 反而不对：PARK 已把租约释放（置 NULL）。
+     *
+     * <p>⚠️ <b>收敛而非重试</b>：置 FAILED（{@code APPROVAL_TIMEOUT}）。
+     * 工具在 PARK 时<b>尚未执行</b>（PARK 发生在执行前），故无副作用；
+     * 重新排队等于让一批无人批准的副作用再排一次队。
+     */
+    @Override
+    public int failStaleParkedRuns(@NonNull String tenantId,
+                                    @NonNull Duration maxWaiting) {
+        String sql = """
+                UPDATE run
+                SET state = 'FAILED'::run_state,
+                    error_code = 'APPROVAL_TIMEOUT',
+                    error_message = '等待人工审批超时，未执行',
+                    result_payload = '{"reason":"approval_timeout"}'::jsonb,
+                    completed_at = now(),
+                    updated_at = now(),
+                    lease_owner = NULL,
+                    lease_expires_at = NULL
+                WHERE tenant_id = ?::uuid
+                  AND state = 'WAITING_APPROVAL'
+                  AND updated_at < now() - (? || ' seconds')::interval
+                """;
+        int failed = execUpdate(sql, ps -> {
+            ps.setString(1, tenantId);
+            ps.setInt(2, (int) maxWaiting.toSeconds());
+        }, tenantId);
+        if (failed > 0) {
+            log.warn("收敛挂起超时的 Run {} 个（等待审批超过 {}s，工具未执行）",
+                    failed, maxWaiting.toSeconds());
+        }
+        return failed;
     }
 
     private int execUpdate(String sql, StatementBinder binder, String tenantId) {

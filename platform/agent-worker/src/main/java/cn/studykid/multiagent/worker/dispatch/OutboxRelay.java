@@ -60,7 +60,20 @@ public class OutboxRelay {
     /** 已停止后置位：用于验证「停机后不再领取新任务」（I-5）。 */
     private final AtomicBoolean stopped = new AtomicBoolean(false);
 
+    /**
+     * 停机标志（区别于 {@code stopped}）。
+     *
+     * <p>{@code stopped} 用于「停机后不再领取新任务」的语义判断；
+     * {@code shuttingDown} 用于「把停机窗口内的 DB 异常降级为 DEBUG」——
+     * 否则 DataSource 关闭导致的 {@code HikariDataSource has been closed}
+     * 会被误判成一次真实的发布失败，污染告警。
+     */
+    private volatile boolean shuttingDown = false;
+
     private volatile Thread worker;
+
+    /** 停机时等待工作线程退出的最长时间（避免无限阻塞上下文关闭）。 */
+    private static final long STOP_TIMEOUT_MS = 30_000L;
 
     /** 累计已发布条数（供测试与指标读取）。 */
     private volatile long totalPublished;
@@ -122,11 +135,18 @@ public class OutboxRelay {
                     try {
                         published += publisher.publishOnce();
                     } catch (RuntimeException e) {
-                        // ⚠️⚠️ 单租户失败**不得**终止本轮其他租户，也不得终止循环。
-                        //    否则一个租户的坏消息会让所有租户停摆——
-                        //    这是多租户下「隔离」的硬要求，而非可用性优化。
-                        log.error("租户发布器本轮失败（继续下一个租户，不终止循环）: {}",
-                                e.getMessage(), e);
+                        if (shuttingDown) {
+                            // ⚠️ 停机窗口内的异常是 DataSource 关闭的预期后果，
+                            //    降级为 DEBUG：否则会被误判成一次真实的发布失败。
+                            log.debug("停机窗口内租户发布器失败（忽略，DataSource 正在关闭）: {}",
+                                    e.getMessage());
+                        } else {
+                            // ⚠️⚠️ 单租户失败**不得**终止本轮其他租户，也不得终止循环。
+                            //    否则一个租户的坏消息会让所有租户停摆——
+                            //    这是多租户下「隔离」的硬要求，而非可用性优化。
+                            log.error("租户发布器本轮失败（继续下一个租户，不终止循环）: {}",
+                                    e.getMessage(), e);
+                        }
                     }
                 }
             }
@@ -179,11 +199,23 @@ public class OutboxRelay {
      * 线程会再跑一轮——停机窗口内产生新工作。
      */
     public void stop() {
+        shuttingDown = true;
         stopped.set(true);
         running.set(false);
         Thread t = worker;
         if (t != null) {
             t.interrupt();
+            try {
+                // ⚠️ 关键修复：必须等 worker 线程真正退出，否则守护线程会在
+                //    DataSource 关闭后仍在跑，下一次 getConnection 命中已关闭的池 →
+                //    "HikariDataSource has been closed"。受 Spring LIFO 析构顺序保证，
+                //    本方法返回时 DataSource 尚未关闭，故 join 期间在途发布面对的是
+                //    仍打开的池，可干净收尾。
+                t.join(STOP_TIMEOUT_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("等待 Outbox 中继线程退出被中断（超时 {}ms）", STOP_TIMEOUT_MS);
+            }
         }
         log.info("Outbox 中继已停止（累计发布 {} 条）", totalPublished);
     }
@@ -214,5 +246,16 @@ public class OutboxRelay {
     /** @return 累计已发布条数。 */
     public long totalPublished() {
         return totalPublished;
+    }
+
+    /**
+     * 测试用：工作线程是否仍存活。
+     *
+     * <p>⚠️ 用于验证 {@link #stop()} 的 join 确实生效——
+     * 停机后线程必须已退出，否则仍可能在已关闭的 DataSource 上做 DB 操作。
+     */
+    boolean isWorkerAlive() {
+        Thread t = worker;
+        return t != null && t.isAlive();
     }
 }

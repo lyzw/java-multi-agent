@@ -9,6 +9,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import cn.studykid.multiagent.core.compliance.DataClassification;
+
 /**
  * Run 创建请求。
  *
@@ -29,6 +31,10 @@ import org.jspecify.annotations.Nullable;
  * @param requestedBy    请求发起方（可空，由认证上下文推导）
  * @param timeoutMs      <b>本次 Run 的时间预算</b>（毫秒，可空 = 不限时）
  * @param budgetAmount   <b>本次 Run 的预算额度</b>（可空 = 不额外限制）
+ * @param dataClassification 数据分级声明（可空）；为空时由内容推导（见
+ *                          {@link DataClassification#fromContent}）。声明仅用于<b>升级</b>
+ *                          为 {@link DataClassification#REAL_STUDENT}，不得用于降级绕过——
+ *                          含可识别信息的内容一律按真实数据处置。
  */
 public record CreateRunRequest(
         @NonNull String idempotencyKey,
@@ -36,7 +42,8 @@ public record CreateRunRequest(
         @NonNull Map<String, Object> input,
         @Nullable String requestedBy,
         @Nullable Long timeoutMs,
-        @Nullable BigDecimal budgetAmount
+        @Nullable BigDecimal budgetAmount,
+        @Nullable DataClassification dataClassification
 ) {
 
     /**
@@ -50,7 +57,8 @@ public record CreateRunRequest(
      * （失败方向是「拒绝」而非「放行」，不会造成静默放行）。
      */
     public static final java.util.Set<String> KNOWN_FIELDS = java.util.Set.of(
-            "idempotencyKey", "agentId", "input", "requestedBy", "timeoutMs", "budgetAmount");
+            "idempotencyKey", "agentId", "input", "requestedBy", "timeoutMs", "budgetAmount",
+            "dataClassification");
 
     /**
      * JSON 绑定入口：先拒收未知字段，再走紧凑构造器的取值校验。
@@ -69,6 +77,7 @@ public record CreateRunRequest(
             @JsonProperty("requestedBy") String requestedBy,
             @JsonProperty("timeoutMs") Long timeoutMs,
             @JsonProperty("budgetAmount") BigDecimal budgetAmount,
+            @JsonProperty("dataClassification") DataClassification dataClassification,
             @JsonAnySetter Map<String, Object> unknown) {
         if (!unknown.isEmpty()) {
             throw new IllegalArgumentException(
@@ -76,7 +85,7 @@ public record CreateRunRequest(
                             + KNOWN_FIELDS + "）");
         }
         return new CreateRunRequest(idempotencyKey, agentId, input, requestedBy,
-                timeoutMs, budgetAmount);
+                timeoutMs, budgetAmount, dataClassification);
     }
 
     /**
@@ -131,7 +140,7 @@ public record CreateRunRequest(
     public CreateRunRequest(@NonNull String idempotencyKey,
                             @NonNull String agentId,
                             @NonNull Map<String, Object> input) {
-        this(idempotencyKey, agentId, input, null, null, null);
+        this(idempotencyKey, agentId, input, null, null, null, null);
     }
 
     /** 便捷构造：省略所有资源上限（不限时不限额）。 */
@@ -139,7 +148,7 @@ public record CreateRunRequest(
                             @NonNull String agentId,
                             @NonNull Map<String, Object> input,
                             @Nullable String requestedBy) {
-        this(idempotencyKey, agentId, input, requestedBy, null, null);
+        this(idempotencyKey, agentId, input, requestedBy, null, null, null);
     }
 
     /** 便捷构造：只声明时间预算。 */
@@ -148,7 +157,7 @@ public record CreateRunRequest(
                             @NonNull Map<String, Object> input,
                             @Nullable String requestedBy,
                             @Nullable Long timeoutMs) {
-        this(idempotencyKey, agentId, input, requestedBy, timeoutMs, null);
+        this(idempotencyKey, agentId, input, requestedBy, timeoutMs, null, null);
     }
 
 

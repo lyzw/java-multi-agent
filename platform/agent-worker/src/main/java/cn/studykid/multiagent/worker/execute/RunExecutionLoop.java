@@ -1,7 +1,16 @@
 package cn.studykid.multiagent.worker.execute;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -12,15 +21,19 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import cn.studykid.multiagent.application.prompt.PromptGuard;
+import cn.studykid.multiagent.application.config.ModelPricingPolicy;
 import cn.studykid.multiagent.core.compliance.DataClassification;
+import cn.studykid.multiagent.core.config.ModelPricing;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
 import cn.studykid.multiagent.ports.model.ModelGateway;
+import cn.studykid.multiagent.ports.model.ModelMessage;
 import cn.studykid.multiagent.ports.observer.ExecutionObserver;
 import cn.studykid.multiagent.ports.observer.ExecutionObserverChain;
 import cn.studykid.multiagent.ports.observer.ObservableModelGateway;
 import cn.studykid.multiagent.application.orchestration.InFlightDelegationAdopter;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
+import cn.studykid.multiagent.ports.persistence.BudgetPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunEventPort;
 import cn.studykid.multiagent.ports.persistence.RunStepPort;
@@ -57,6 +70,24 @@ public class RunExecutionLoop {
     private final RunClaimPort claimPort;
     private final ToolInvocationGate toolGate;
     private final Duration leaseDuration;
+
+    /**
+     * 预算端口（P0-3b · 模型成本入账）。
+     *
+     * <p>⚠️ <b>可为空 = 不做成本记账</b>：此时模型调用不预留额度、
+     * 不写计量行，{@code usage_record} 的 token 两列永远为 0。
+     * 生产装配<b>必须</b>传入（与闸门用<b>同一个</b>预算端口实例 ——
+     * 两个实例意味着两条独立的额度视图）。
+     */
+    private final BudgetPort budget;
+
+    /**
+     * 模型单价表（P0-3b）。
+     *
+     * <p>⚠️ <b>空表 ≠ 按 0 元计费</b>：空表只意味着「查不到价格」，
+     * 此时仍<b>如实记 token</b>、成本按 0 记并打 WARN。
+     */
+    private final ModelPricingPolicy pricing;
     /**
      * 本 Worker 实例的身份，必须与领取时传给 {@code claimTasks}/
      * {@code claimSpecificRun} 的 workerId <b>完全一致</b>——
@@ -142,6 +173,22 @@ public class RunExecutionLoop {
      */
     private final ExecutionObserverChain observerChain;
 
+    /**
+     * 单次长调用的<b>抢占式</b>超时执行器（P2-1）。
+     *
+     * <p>⚠️⚠️ <b>为什么必须有它</b>：{@code task.deadlineAt()} 的检查只发生在
+     * <b>每轮迭代的开头</b>。一次模型调用卡住 10 分钟，中间不会有任何一次
+     * deadline 检查 —— 单步调用可以<b>越过根截止时间</b>，
+     * FR-024「整树共享超时上限」在单步粒度上形同虚设。
+     * 本执行器把每一次模型/工具调用放进带 {@code Future.get(剩余时间)}
+     * 的边界里，到期即 {@code cancel(true)} 中断。
+     *
+     * <p>⚠️ <b>可为空 = 未装配</b>：此时退回「只在每轮开头检查」的旧行为，
+     * 并<b>打印 WARN</b>（同 {@link #adopter} / {@link #lifecycleProbe} 纪律：
+     * 空值不报错，但绝不假装已受保护）。生产装配<b>必须</b>传入。
+     */
+    private final ExecutorService preemptionExecutor;
+
     public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
@@ -175,7 +222,7 @@ public class RunExecutionLoop {
                              @Nullable RunEventPort eventPort) {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
                 promptGuard, eventPort, null,
-                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null, null, null, null);
+                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null, null, null, null, null);
     }
 
     /**
@@ -194,7 +241,7 @@ public class RunExecutionLoop {
                              @Nullable InFlightDelegationAdopter adopter) {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
                 promptGuard, eventPort, adopter,
-                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null, null, null, null);
+                ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, null, null, null, null, null);
     }
 
     /**
@@ -205,6 +252,9 @@ public class RunExecutionLoop {
      *                           （默认），生产装配<b>必须</b>传入
      * @param stepPort           执行步骤写入端口（P7-2）；{@code null} 表示不写步骤
      * @param riskEventPort      安全事件写入端口（P7-4）；{@code null} 表示不写安全事件
+     * @param observerChain      执行观测者链；{@code null} 表示不触发观测
+     * @param preemptionExecutor 抢占式单步超时执行器（P2-1）；{@code null} = 退回
+     *                           「只在每轮开头查 deadline」的旧行为（并打印 WARN）
      */
     public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
@@ -218,7 +268,78 @@ public class RunExecutionLoop {
                              @Nullable TenantLifecycleProbe lifecycleProbe,
                              @Nullable RunStepPort stepPort,
                              @Nullable RiskEventPort riskEventPort,
-                             @Nullable ExecutionObserverChain observerChain) {
+                             @Nullable ExecutionObserverChain observerChain,
+                             @Nullable ExecutorService preemptionExecutor) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId, promptGuard,
+                eventPort, adopter, contextTokenBudget, lifecycleProbe, stepPort,
+                riskEventPort, observerChain, preemptionExecutor, null, null);
+    }
+
+    /**
+     * <b>生产装配构造器</b>（P0-3b · 模型成本入账）。
+     *
+     * <p>⚠️ <b>为什么必须装配预算端口与单价表</b>：
+     * 二者缺一时，「模型调用花了多少钱」这件事在账上<b>不存在</b> ——
+     * {@code usage_record.input_tokens} / {@code output_tokens} 两列永远为 0，
+     * {@code cost_amount} 只有工具调用的固定代理值。
+     * 于是「单 Run 成本上限」（{@code maxCostPerRun}）无从判定，
+     * 成本类指标（COST-1/2/3）算出来的是错的。
+     *
+     * <p>⚠️ <b>单价表为空 ≠ 按 0 元计费</b>：
+     * 空表只意味着「查不到这个模型的价格」，此时仍然<b>如实记 token</b>、
+     * <b>成本按 0 记</b>并打 WARN —— 缺配置必须<b>可见</b>，
+     * 不能变成「这次调用不存在」。
+     *
+     * @param budget  预算端口（模型调用的预留与结算）；{@code null} = 不做成本记账
+     * @param pricing 模型单价表；{@code null} = 空表（无单价可查）
+     */
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             @NonNull PromptGuard promptGuard,
+                             @Nullable RunEventPort eventPort,
+                             @Nullable InFlightDelegationAdopter adopter,
+                             int contextTokenBudget,
+                             @Nullable TenantLifecycleProbe lifecycleProbe,
+                             @Nullable RunStepPort stepPort,
+                             @Nullable RiskEventPort riskEventPort,
+                             @Nullable ExecutionObserverChain observerChain,
+                             @Nullable ExecutorService preemptionExecutor,
+                             @Nullable BudgetPort budget,
+                             @Nullable ModelPricingPolicy pricing) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId, promptGuard,
+                eventPort, adopter, contextTokenBudget, lifecycleProbe, stepPort,
+                riskEventPort, observerChain, preemptionExecutor, budget, pricing, null);
+    }
+
+    /**
+     * 最完整构造器（M1-4b / G2）：额外注入<b>恢复续跑接缝</b>。
+     *
+     * <p>⚠️ 新增依赖只加在这一个构造器上（项目既有纪律）；
+     * 其余构造器保持不变并委托——{@code continuation} 为 {@code null} 时
+     * 恢复路径在批次执行成功后 fail-closed 收敛（见 {@link #resume}）。
+     *
+     * @param continuation 恢复续跑接缝；{@code null} = 未装配（恢复成功后收敛 FAILED）
+     */
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             @NonNull PromptGuard promptGuard,
+                             @Nullable RunEventPort eventPort,
+                             @Nullable InFlightDelegationAdopter adopter,
+                             int contextTokenBudget,
+                             @Nullable TenantLifecycleProbe lifecycleProbe,
+                             @Nullable RunStepPort stepPort,
+                             @Nullable RiskEventPort riskEventPort,
+                             @Nullable ExecutionObserverChain observerChain,
+                             @Nullable ExecutorService preemptionExecutor,
+                             @Nullable BudgetPort budget,
+                             @Nullable ModelPricingPolicy pricing,
+                             @Nullable RunContinuation continuation) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
@@ -239,6 +360,11 @@ public class RunExecutionLoop {
         this.contextTokenBudget = contextTokenBudget;
         this.lifecycleProbe = lifecycleProbe;
         this.observerChain = observerChain;
+        this.preemptionExecutor = preemptionExecutor;
+        if (preemptionExecutor == null) {
+            log.warn("未装配抢占式单步超时执行器：单次超长的模型/工具调用不能被中断，"
+                    + "可越过 run.deadline_at（FR-024 整树共享超时在单步粒度失效）");
+        }
         if (adopter == null) {
             log.warn("未装配在途委派接管器：Worker 接管后 RUNNING 的委派记录"
                     + "将无法收敛（一直悬着），真实原因会被掩盖成普通子调用失败");
@@ -246,6 +372,20 @@ public class RunExecutionLoop {
         if (lifecycleProbe == null) {
             log.warn("未装配租户生命周期探针：Worker 不会在执行前/中再验证租户状态，"
                     + "平台暂停/退役租户后仍可能执行其任务（验收矩阵 #4 不满足）");
+        }
+        this.budget = budget;
+        this.pricing = pricing == null ? new ModelPricingPolicy(Map.of()) : pricing;
+        if (budget == null) {
+            log.warn("未装配预算端口：模型调用的成本**不入账**"
+                    + "（usage_record 无 token 与真实成本，maxCostPerRun 无从判定）");
+        } else if (this.pricing.isEmpty()) {
+            log.warn("模型单价表为空：模型调用只能记 token、成本按 0 记，"
+                    + "成本类指标不可用（请配置 agent.pricing.models）");
+        }
+        this.continuation = continuation;
+        if (continuation == null) {
+            log.warn("未装配恢复续跑接缝（RunContinuation）：审批恢复批次执行成功后"
+                    + "无法继续对话，Run 将显式收敛 FAILED（RESUME_CONTINUATION_UNAVAILABLE）");
         }
     }
 
@@ -283,6 +423,18 @@ public class RunExecutionLoop {
         // ⚠️ P7-2：步骤序号（单调递增，供 run_step.step_number）。与 steps 不同——
         //    steps 是循环轮次上限计数器，stepSeq 是「已落库步骤」的序号。
         int stepSeq = 0;
+        // ⚠️⚠️ P0-3a：模型调用次数计数（**此前只声明、从不执行**）。
+        //    RunConfigSnapshot.maxLlmCalls 与 allowsLlmCall() 一直存在，
+        //    但生产代码零调用 —— 于是「单 Run 最多 12 次模型调用」是纸面承诺。
+        //    它与 steps 是**两个不同的上限**：steps 数「轮次」，
+        //    llmCalls 数「模型调用」—— 一轮里可能有多次模型调用
+        //    （子 Agent 委派后再回到父模型），两者不得互相替代。
+        int llmCalls = 0;
+        // ⚠️⚠️ P0-3b：本 Run 已发生的**模型成本累计**（元）。
+        //    maxCostPerRun（DEC-9，默认 ¥2.00）此前只进快照、只用于配置展示，
+        //    不参与任何拦截 —— 「单 Run 最多花 ¥2.00」是纸面承诺。
+        //    现在它是真实闸门：每次模型调用结算后累加，超限即停。
+        BigDecimal accumulatedCost = BigDecimal.ZERO;
 
         // ── 接管收敛（第九批 · MA-T12 · P3-MA-02）────────────────────
         //    ⚠️ 必须在**世代检查通过之后**：世代已失效说明这个 Run
@@ -315,6 +467,12 @@ public class RunExecutionLoop {
                 new java.util.ArrayList<>();
         messages.add(cn.studykid.multiagent.ports.model.ModelMessage.user(
                 renderInput(input)));
+
+        // ⚠️ M 决策（§8.2）：同一 callId 的工具被拒累计 3 次 → 终止 Run（FAILED）。
+        //    否则一次参数不合规的拒绝会让整个 Run 直接失败。
+        //    key = 工具名（callId 在跨模型轮次不可得，工具名已足够区分不同调用意图）；
+        //    拒绝原因经 ToolOutcomeRenderer 回灌给模型（见下方「回灌」段）。
+        java.util.Map<String, Integer> rejectionStrikes = new java.util.HashMap<>();
 
         // ⚠️ P4-D12 / G4：开始执行 → RUN_STARTED
         appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_STARTED,
@@ -418,11 +576,109 @@ public class RunExecutionLoop {
                         // ⚠️ 带消息历史：非空时以 messages 为准（userContent 仅冗余保留）
                         trimmed.messages());
 
+                // ── §2 P0-3a：模型调用次数闸门（此前只声明、从不执行）──
+                //    ⚠️ 放在**发起调用之前**而不是之后：
+                //    超限意味着「这一次调用根本不该发生」，
+                //    放在之后等于先花钱再发现超限 —— 闸门失去意义。
+                //
+                //    ⚠️ 与 steps 上限是**两个独立闸门**：
+                //    steps 数轮次、llmCalls 数模型调用。maxSteps=20 与 maxLlmCalls=12
+                //    不等值（见 RunConfigSnapshot 初值），只守 steps 会让模型调用数
+                //    达到 20 次 —— 是承诺上限的近 2 倍。
+                if (!snapshot.allowsLlmCall(llmCalls)) {
+                    log.warn("模型调用次数超限，Run 收敛为 FAILED: runId={}, 已调用={}, 上限={}",
+                            task.runId(), llmCalls, snapshot.maxLlmCalls());
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
+                            java.util.Map.of("state", "FAILED", "errorCode", "MAX_LLM_CALLS"));
+                    ExecutionOutcome limited = commitFailure(tenantId, task,
+                            "模型调用次数超限（" + llmCalls + "/" + snapshot.maxLlmCalls() + "）",
+                            "MAX_LLM_CALLS");
+                    notifyLoopComplete(tenantId, task.runId(), limited, steps);
+                    return limited;
+                }
+
+                // ── §2 P0-3b：模型调用成本预留（**发起调用之前**）──
+                //    ⚠️ 预留必须在调用前：调用后才知道花多少，
+                //    那时额度已经花出去了 —— 预留的意义就是「先占住」。
+                //
+                //    ⚠️ 预留额取**保守上界**（输入估算 × 安全系数 + 输出上限）：
+                //    token 估算是粗估（见 ContextBudgetTrimmer），
+                //    若预留额小于真实成本，结算会被 DB 的
+                //    CHECK (settled <= reserved) 拒绝，账就断了。
+                //    多预留的部分在结算时自动退回（预留额全额扣回、只计实结额）。
+                String modelCallId = modelCallId(task.runId(), task.attempt(), llmCalls);
+                Optional<ModelCostReservation> modelReservation =
+                        reserveModelCost(tenantId, task.runId(), agentConfig, trimmed,
+                                systemPrompt, modelCallId);
+                if (modelReservation.isEmpty()) {
+                    // ⚠️ 预留被拒（额度不足 / 未开通账户）→ fail-closed：
+                    //    「钱不够」不能变成「照跑不误」。
+                    log.warn("模型调用预算预留被拒，Run 收敛为 FAILED: runId={}, model={}",
+                            task.runId(), agentConfig.modelId());
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
+                            java.util.Map.of("state", "FAILED", "errorCode", "BUDGET_EXHAUSTED"));
+                    ExecutionOutcome noBudget = commitFailure(tenantId, task,
+                            "模型调用预算预留被拒", "BUDGET_EXHAUSTED");
+                    notifyLoopComplete(tenantId, task.runId(), noBudget, steps);
+                    return noBudget;
+                }
+
                 // ── §2 P7-2：记录 THINK 步骤（模型推理耗时）──
                 //    started/completed 同时取，单条 INSERT 落库；失败不影响主流程。
                 java.time.Instant thinkStart = java.time.Instant.now();
-                ModelResponse response = modelGateway.complete(
-                        tenantId, task.runId(), steps, request);
+                ModelResponse response;
+                // steps 会在循环里自增，不是有效 final —— lambda 只读这份副本
+                final int round = steps;
+                try {
+                    // ⚠️ P2-1：单步必须受剩余截止时间约束，否则循环开头的
+                    //    deadline 检查会被一次卡死的模型调用整段跳过。
+                    response = withinRemaining(task, "MODEL_CALL",
+                            () -> modelGateway.complete(tenantId, task.runId(), round, request));
+                } catch (StepDeadlineExceededException e) {
+                    releaseModelCost(tenantId, modelReservation.get());
+                    log.warn("模型调用越过根截止时间，Run 收敛为 TIMEOUT: {}", e.getMessage());
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
+                            Map.of("state", "TIMED_OUT", "phase", "MODEL_CALL"));
+                    ExecutionOutcome timedOut =
+                            commitFailure(tenantId, task, "单步模型调用超时", "TIMEOUT");
+                    notifyLoopComplete(tenantId, task.runId(), timedOut, steps);
+                    return timedOut;
+                } catch (RuntimeException e) {
+                    // ⚠️ P0-3b：模型调用失败（可重试 / 不可重试 / 其他）时**必须释放预留**：
+                    //    本次调用没有产出任何东西，钱却已经占住 ——
+                    //    不释放就是「凭空少了一笔额度」，且会拖垮后续所有 Run。
+                    releaseModelCost(tenantId, modelReservation.get());
+                    throw e;
+                }
+                // ⚠️ P0-3a：调用**成功**才计数。
+                //    失败（含超时）时本次调用没有产出，也已由上面的分支收敛 Run，
+                //    不该占额度 —— 否则「失败的调用」也会把额度耗光，
+                //    让真正的业务调用被上限挡住。
+                llmCalls++;
+
+                // ── §2 P0-3b：模型调用成本结算（调用后）──
+                //    ⚠️ 结算按**真实 token** 计价，不是按预留额 ——
+                //    预留是上界，结算才是事实；多预留的部分自动退回。
+                BigDecimal callCost = settleModelCost(tenantId, task.runId(),
+                        agentConfig.modelId(), response, modelReservation.get());
+                accumulatedCost = accumulatedCost.add(callCost);
+                // ⚠️ 单 Run 成本上限（DEC-9 maxCostPerRun）此前**只用于配置展示**，
+                //    不参与任何拦截 —— 于是「单 Run 最多花 ¥2.00」是纸面承诺。
+                //    现在它是真实的闸门：与 Run 级 budget_amount 各自独立，
+                //    任一触顶即停（两者都生效 = 取更严者）。
+                if (accumulatedCost.compareTo(snapshot.maxCostPerRun()) > 0) {
+                    log.warn("单 Run 模型成本超限，Run 收敛为 FAILED: runId={}, 累计={}, 上限={}",
+                            task.runId(), accumulatedCost, snapshot.maxCostPerRun());
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
+                            java.util.Map.of("state", "FAILED", "errorCode", "MAX_COST"));
+                    ExecutionOutcome overCost = commitFailure(tenantId, task,
+                            "单 Run 模型成本超限（" + accumulatedCost + "/"
+                                    + snapshot.maxCostPerRun() + "）",
+                            "MAX_COST");
+                    notifyLoopComplete(tenantId, task.runId(), overCost, steps);
+                    return overCost;
+                }
+
                 java.time.Instant thinkEnd = java.time.Instant.now();
                 appendStep(tenantId, task, ++stepSeq, RunStepPort.Types.THINK,
                         thinkStart, thinkEnd);
@@ -434,32 +690,31 @@ public class RunExecutionLoop {
                             java.time.Duration.between(thinkStart, thinkEnd));
                 }
 
-                if (response.toolCalls().isEmpty()) {
-                    // ⚠️ 编造出处检查（P3-D11 / FR-020 / I-5）：
-                    //    DEC-5 不做 RAG，项目无任何教材语料，
-                    //    因此「提到出处」本身就是编造，必须在提交前拦截。
-                    //    这是 Sev-0 级失败判据（P0-D00 §3.4），不可降级为警告。
-                    String content = response.content();
-                    // ── §2 P7-4：敏感信息输出命中检测（SEC-3 明细事实）──
-                    //    只观测不阻断：SEC-3 是合规计数器（命中次数），
-                    //    拦截策略属内容安全层职责，不在此处偷偷扩大语义。
-                    //    摘要只含模式代号与命中数，绝不落原文（合规红线）。
-                    emitSensitiveOutputIfHit(tenantId, task, content);
-                    try {
-                        cn.studykid.multiagent.application.evaluation
-                                .HallucinationDetector.assertNoFabricatedSource(content);
-                    } catch (cn.studykid.multiagent.application.evaluation
-                            .HallucinatedSourceException e) {
-                        log.error("⚠️⚠️ 输出涉嫌编造出处，拒绝提交: runId={}, rule={}",
-                                task.runId(), e.rule());
-                        // P7-4：SEC-1/SEC-2 之外的明细事实——安全拦截落一条 SAFETY_BLOCK
-                        emitRiskEvent(tenantId, task, RiskEventPort.SAFETY_BLOCK,
-                                "FABRICATED_SOURCE:" + e.rule());
-                        ExecutionOutcome outcome = commitFailure(tenantId, task,
-                                "输出涉嫌编造资料出处", "SAFETY_FABRICATED_SOURCE");
-                        notifyLoopComplete(tenantId, task.runId(), outcome, steps);
-                        return outcome;
+                // ⚠️ P1-D：带工具调用的中间轮同样可能携带正文（思考过程/半句结论），
+                //    这段文本此前**完全不经检**：既不过内容安全层，也不过编造检测，
+                //    理由是「只有终答才算输出」。但它会进上下文、进步骤、进观测，
+                //    同样是面向学生可见的内容。此处对其执行与终答一致的两项检查。
+                String intermediate = response.content();
+                if (intermediate != null && !intermediate.isBlank()
+                        && !response.toolCalls().isEmpty()) {
+                    ScreenResult mid = screenContent(tenantId, task, steps, intermediate);
+                    if (mid.blocked() != null) {
+                        return mid.blocked();
                     }
+                }
+
+                if (response.toolCalls().isEmpty()) {
+                    String content = response.content();
+                    // ⚠️ 终答：内容安全层 + 编造检测（见 screenContent）
+                    //    ∆ P1-A：此处**原本原样下发**；改为先经平台侧输出 moderation
+                    //    再决定下发形态 / 是否阻断。SEC-3 事实仍写 SENSITIVE_OUTPUT，
+                    //    摘要只含模式代号，绝不落原文（合规红线不变）。
+                    ScreenResult screened = screenContent(tenantId, task, steps, content);
+                    if (screened.blocked() != null) {
+                        return screened.blocked();
+                    }
+                    // BLOCK 时已提前返回；此处只有非阻断，content 为脱敏后正文
+                    content = screened.content();
                     // 无工具调用 → 生成结果，正常完成
                     ExecutionOutcome succ = commitSuccess(tenantId, task, content);
                     notifyLoopComplete(tenantId, task.runId(), succ, steps);
@@ -468,8 +723,21 @@ public class RunExecutionLoop {
 
                 // ── §4 工具调用（逐个走完整闸门）───────────────────────
                 java.time.Instant toolStart = java.time.Instant.now();
-                ToolInvocationGate.ToolInvocationResult toolResult = toolGate.invokeAll(
-                        tenantId, task, response.toolCalls());
+                ToolInvocationGate.ToolInvocationResult toolResult;
+                try {
+                    // ⚠️ P2-1：同上。工具是自己实现的时间预算执行者，
+                    //    但「实际能跑多久」必须由祖先 Run 的剩余时间封顶。
+                    toolResult = withinRemaining(task, "TOOL_CALL",
+                            () -> toolGate.invokeAll(tenantId, task, response.toolCalls()));
+                } catch (StepDeadlineExceededException e) {
+                    log.warn("工具调用越过根截止时间，Run 收敛为 TIMEOUT: {}", e.getMessage());
+                    appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
+                            Map.of("state", "TIMED_OUT", "phase", "TOOL_CALL"));
+                    ExecutionOutcome timedOut =
+                            commitFailure(tenantId, task, "单步工具调用超时", "TIMEOUT");
+                    notifyLoopComplete(tenantId, task.runId(), timedOut, steps);
+                    return timedOut;
+                }
                 java.time.Instant toolEnd = java.time.Instant.now();
                 appendStep(tenantId, task, ++stepSeq, RunStepPort.Types.TOOL,
                         toolStart, toolEnd);
@@ -522,6 +790,46 @@ public class RunExecutionLoop {
                     ExecutionOutcome unknown = ExecutionOutcome.unknownResult(toolResult.unknownOperationId());
                     notifyLoopComplete(tenantId, task.runId(), unknown, steps);
                     return unknown;
+                }
+
+                if (toolResult.hasParked()) {
+                    // ── M1-4 / G2 修复核心：PARK（挂起等待审批）────────────
+                    // ⚠️ Run 迁 WAITING_APPROVAL、写检查点、释放租约、让出 worker 线程。
+                    //    审批决定到达后由 ApprovalDecidedWakeupConsumer 唤醒并 RESUME
+                    //    （不重跑模型、不重问模型，复用同一 operationId 幂等收敛）。
+                    java.util.Set<String> parkedOps = new java.util.LinkedHashSet<>(
+                            toolResult.parkedTools().values());
+                    // 写检查点步骤（保存本轮工具调用信息，供 RESUME 重建上下文）
+                    appendStep(tenantId, task, ++stepSeq, RunStepPort.Types.TOOL,
+                            toolStart, java.time.Instant.now());
+                    // 先提交 WAITING_APPROVAL（fencing 校验），成功后再释放租约让出资源。
+                    // ⚠️ fail-closed：提交失败（世代失效）不释放租约、不当成挂起成功。
+                    boolean parkedOk = claimPort.commitResult(tenantId, task.runId(),
+                            task.fencingToken(), "WAITING_APPROVAL",
+                            jsonPayload("parkedOperations", String.join(",", parkedOps)));
+                    if (parkedOk) {
+                        appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_PARKED,
+                                java.util.Map.of("state", "WAITING_APPROVAL"));
+                        // 释放租约：让出 worker 资源；Run 在 WAITING_APPROVAL 等待唤醒
+                        // （claimSpecificRun 只收 QUEUED/RUNNING，故不会被正常领取路径误拾）。
+                        claimPort.releaseLease(tenantId, task.runId(), workerId, task.fencingToken());
+                    }
+                    ExecutionOutcome parkedOutcome = ExecutionOutcome.parked(parkedOps);
+                    notifyLoopComplete(tenantId, task.runId(), parkedOutcome, steps);
+                    return parkedOutcome;
+                }
+
+                // ⚠️ 拒绝回灌 + 3 次终止（§8.2）：累计同一工具被拒次数，满 3 次 → 终止 Run。
+                //    单次被拒不直接终止，而是经下方「回灌」把失败调用交还模型重新决策。
+                for (String rejectedTool : toolResult.rejectedTools()) {
+                    int strikes = rejectionStrikes.merge(rejectedTool, 1, Integer::sum);
+                    if (strikes >= 3) {
+                        log.warn("工具 [{}] 累计被拒 {} 次，终止 Run: runId={}", rejectedTool, strikes, task.runId());
+                        ExecutionOutcome terminated = commitFailure(tenantId, task,
+                                "工具被拒达上限:" + rejectedTool, "TOOL_REJECTED_3X");
+                        notifyLoopComplete(tenantId, task.runId(), terminated, steps);
+                        return terminated;
+                    }
                 }
 
                 if (toolResult.allRejected()) {
@@ -697,24 +1005,311 @@ public class RunExecutionLoop {
     }
 
     /**
-     * 敏感信息输出命中检测（SEC-3 · 只观测不阻断）。
+     * 单步调用越过根截止时间（FR-024 在单步粒度被击穿）。
      *
-     * <p>复用 {@code DataClassification.IdentifyingPattern} 既有合规正则
-     * （身份证 / 手机号 / 学号 / 邮箱）。摘要只含模式代号与命中数，
-     * <b>绝不把命中的原文片段写进任何观测通道</b>（合规红线）。
+     * <p>⚠️ 必须能被上方的 {@code try/catch} 精确识别并转成 {@code TIMEOUT} 终态：
+     * 若不识别，一次卡死的长调用会被当成「未知异常」落成
+     * {@code INTERNAL_ERROR}，运维无法把「超时」与「故障」区分开。
      */
-    private void emitSensitiveOutputIfHit(String tenantId, RunClaimPort.LeasedTask task,
-                                          String content) {
-        if (content == null || content.isBlank() || riskEventPort == null) {
+    private static final class StepDeadlineExceededException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        StepDeadlineExceededException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * 单次长调用的<b>抢占式</b>剩余时间边界（P2-1）。
+     *
+     * <p>⚠️⚠️ <b>补的正是这个洞</b>：循环体每轮开头才查 {@code task.deadlineAt()}，
+     * 那么「一次的卡死」天然处在两次检查之间。三个后果必须区分清楚：
+     * <ul>
+     *   <li>模型侧 HTTP 有超时但不是硬性的 → 单步可拖过 deadline；</li>
+     *   <li>工具里若有不受 {@code HttpToolExecutor} 约束的实现 → 同样可拖过；</li>
+     *   <li>结果是 Run 越过 {@code run.deadline_at} 仍在燃烧 token 与预算。</li>
+     * </ul>
+     * 故把单次调用提交到 {@link #preemptionExecutor}，用「当前到 deadline 的剩余时间」
+     * 作为 {@code Future.get} 上限，到期 {@code cancel(true)} 中断。
+     *
+     * <p>⚠️ <b>不可中断的任务怎么办</b>：{@code cancel(true)} 只发中断信号，
+     * 若任务自身不响应中断仍会继续跑。因此超时后本方法<b>立即抛出</b>
+     * {@link StepDeadlineExceededException} 让本 Run 收敛为 {@code TIMEOUT}——
+     * 结果不等废弃物线程；这是「结果正确」与「线程立即消失」之间的正确取舍。
+     *
+     * <p>⚠️ <b>未装配执行器时不做伪保护</b>：不做超时伪装，直接同步执行，
+     * 即可观测性上的 WARN 已在构造期打印。此处<b>不重复打日志</b>。
+     *
+     * @throws StepDeadlineExceededException 剩余时间已耗尽（含调用被拖到超时）
+     */
+    private <T> T withinRemaining(RunClaimPort.LeasedTask task, String phase,
+                                  @NonNull Callable<T> body) {
+        Instant deadline = task.deadlineAt();
+        if (preemptionExecutor == null || deadline == null) {
+            // deadline == null 是「创建时声明不限时」的既定语义，非缺陷，不予中断
+            return callBody(phase, body);
+        }
+        long remainingMs;
+        try {
+            remainingMs = Duration.between(Instant.now(), deadline).toMillis();
+        } catch (ArithmeticException overflow) {
+            // Instant.MAX 之类的超远期 deadline：量级溢出 = 实质不限时
+            return callBody(phase, body);
+        }
+        if (remainingMs <= 0) {
+            throw new StepDeadlineExceededException(phase + " 开始前剩余时间已耗尽: runId="
+                    + task.runId());
+        }
+        Future<T> future = preemptionExecutor.submit(body);
+        try {
+            return future.get(remainingMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new StepDeadlineExceededException(phase + " 超过根 Run 截止时间，已中断: runId="
+                    + task.runId() + ", 预算剩余=" + remainingMs + "ms");
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new IllegalStateException(phase + " 执行失败: runId=" + task.runId(), cause);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(phase + " 等待被中断: runId=" + task.runId(), e);
+        }
+    }
+
+    /** 同步执行体并还原受检异常为本类约定的形态。 */
+    private static <T> T callBody(String phase, @NonNull Callable<T> body) {
+        try {
+            return body.call();
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(phase + " 执行失败", e);
+        }
+    }
+
+    /**
+     * 内容筛查结果。
+     *
+     * @param blocked 非空表示应中止并返回该失败 outcome
+     * @param content 应下发的正文（脱敏后）；blocked 非空时被填上原文，调用方不得采用
+     */
+    private record ScreenResult(ExecutionOutcome blocked, String content) {
+    }
+
+    // ── P0-3b：模型成本预留 / 结算 / 释放 ───────────────────────────
+
+    /**
+     * 输入 token 估算的<b>安全系数</b>。
+     *
+     * <p>⚠️ <b>为什么需要它</b>：预留额必须 <b>≥</b> 真实成本，
+     * 否则结算会被 DB 的 {@code CHECK (settled <= reserved)} 拒绝，账就断了。
+     * 而 {@link ContextBudgetTrimmer} 的 token 估算是<b>粗估</b>
+     * （非真 tokenizer），且系统提示与工具 Schema 不在消息序列的估算里。
+     * 故对输入侧取 2 倍上界作为预留，输出侧取 {@code maxTokens} 上界。
+     *
+     * <p>⚠️ <b>多预留的部分会自动退回</b>：结算时「预留额全额扣回、只计实结额」，
+     * 所以取上界不会造成额度损失，只是占用时间略长。
+     */
+    private static final int INPUT_TOKEN_ESTIMATE_SAFETY_FACTOR = 2;
+
+    /**
+     * 模型调用的<b>成本预留</b>（P0-3b）。
+     *
+     * @param reservationId 预算预留标识；{@code null} = 无预留（未装配预算端口）
+     * @param modelPricing  命中的单价规则；{@code null} = 该模型未配价
+     * @param modelCallId   模型调用标识（幂等键）
+     */
+    private record ModelCostReservation(
+            @Nullable String reservationId,
+            @Nullable ModelPricing modelPricing,
+            @NonNull String modelCallId) {
+    }
+
+    /**
+     * 生成模型调用标识（<b>确定性</b> UUID）。
+     *
+     * <p>⚠️ <b>必须确定性</b>：它是 {@code usage_record} 的幂等键 ——
+     * 同一 Run 的同一次重试若算出不同的键，就会<b>重复计费</b>。
+     * 故由「runId + 领取代次 + 调用序号」派生。
+     *
+     * <p>⚠️ <b>必须含领取代次（attempt）</b>：同一个 Run 被重投时 attempt 会变，
+     * 若只用「runId + 序号」，第二次尝试会命中第一次的幂等键 →
+     * 第二次的真实消耗<b>不会被记账</b>（账实不符）。
+     */
+    private static @NonNull String modelCallId(@NonNull String runId, int attempt, int ordinal) {
+        String seed = runId + "|" + attempt + "|" + ordinal;
+        return java.util.UUID.nameUUIDFromBytes(
+                seed.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+    }
+
+    /**
+     * 预留模型调用的成本额度（P0-3b）。
+     *
+     * <p>⚠️ <b>查不到单价时</b>：不预留（金额为 0 的预留会被 DB 拒绝），
+     * 但<b>如实记 token</b>（见 {@link #settleModelCost}）。
+     * 缺配置必须<b>可见</b>（WARN），不能让「漏配单价」静默变成「这次调用不存在」。
+     *
+     * @return 预留结果；预留被拒时返回空（调用方须 fail-closed）
+     */
+    private @NonNull Optional<ModelCostReservation> reserveModelCost(
+            @NonNull String tenantId,
+            @NonNull String runId,
+            @NonNull AgentModelConfig agentConfig,
+            ContextBudgetTrimmer.Trimmed trimmed,
+            @NonNull String systemPrompt,
+            @NonNull String modelCallId) {
+        if (budget == null) {
+            return Optional.of(new ModelCostReservation(null, null, modelCallId));
+        }
+        Optional<ModelPricing> price = pricing.pricingOf(agentConfig.modelId());
+        if (price.isEmpty()) {
+            log.warn("模型未配置单价，成本按 0 记（token 仍如实记录）: model={}, runId={}",
+                    agentConfig.modelId(), runId);
+            return Optional.of(new ModelCostReservation(null, null, modelCallId));
+        }
+        ModelPricing rule = price.get();
+
+        long estimatedInput = (long) trimmed.estimatedTokens()
+                + ContextBudgetTrimmer.estimateTokens(systemPrompt);
+        long reservedInput = estimatedInput * INPUT_TOKEN_ESTIMATE_SAFETY_FACTOR;
+        BigDecimal reserved = rule.cost(reservedInput, Math.max(0, agentConfig.maxTokens()));
+        if (reserved.signum() <= 0) {
+            // 预留金额必须为正（DB CHECK）：单价为 0 的模型无需预留额度。
+            return Optional.of(new ModelCostReservation(null, rule, modelCallId));
+        }
+
+        BudgetPort.ReserveOutcome outcome =
+                budget.reserve(tenantId, runId, modelCallId, reserved);
+        if (!outcome.granted()) {
+            log.warn("模型调用预算预留被拒: tenant={}, run={}, model={}, 预留={}, outcome={}",
+                    tenantId, runId, agentConfig.modelId(), reserved, outcome);
+            return Optional.empty();
+        }
+        Optional<BudgetPort.Reservation> reservation = budget.findByOperation(tenantId, modelCallId);
+        if (reservation.isEmpty()) {
+            // ⚠️ 预留已生效却查不到预留记录 → 无法结算，fail-closed：
+            //    否则这次调用的成本会成为一笔无人认领的开销。
+            log.error("模型预算预留已生效但查不到预留记录，fail-closed: run={}, call={}",
+                    runId, modelCallId);
+            return Optional.empty();
+        }
+        return Optional.of(new ModelCostReservation(
+                reservation.get().reservationId(), rule, modelCallId));
+    }
+
+    /**
+     * 结算模型调用的成本并写入真实 token（P0-3b）。
+     *
+     * <p>⚠️ <b>两条路径</b>：
+     * <ul>
+     *   <li><b>有预留</b>：{@code settle}（预留额全额扣回、只计实结额，
+     *       并把真实 token 写进计量行）；</li>
+     *   <li><b>无预留</b>（未配价 / 未装配预算端口）：{@code recordModelUsage}
+     *       —— <b>只计量不扣款</b>：token 是事实必须记，
+     *       金额按 0 记（没有价格就没有金额）。</li>
+     * </ul>
+     *
+     * @return 本次调用的真实成本（无单价时为 0）
+     */
+    private @NonNull BigDecimal settleModelCost(@NonNull String tenantId,
+                                                @NonNull String runId,
+                                                @NonNull String modelId,
+                                                @NonNull ModelResponse response,
+                                                @NonNull ModelCostReservation reservation) {
+        if (budget == null) {
+            return BigDecimal.ZERO;
+        }
+        long inputTokens = response.usage().inputTokens();
+        long outputTokens = response.usage().outputTokens();
+        BigDecimal actual = reservation.modelPricing() == null
+                ? BigDecimal.ZERO
+                : reservation.modelPricing().cost(inputTokens, outputTokens);
+
+        try {
+            if (reservation.reservationId() != null) {
+                if (!budget.settle(tenantId, reservation.reservationId(), actual, modelId,
+                        inputTokens, outputTokens)) {
+                    log.warn("模型预算结算未生效（预留不存在或已终态），将由对账兜底: "
+                            + "run={}, reservation={}", runId, reservation.reservationId());
+                }
+            } else {
+                budget.recordModelUsage(tenantId, runId, modelId, inputTokens, outputTokens,
+                        actual, reservation.modelCallId());
+            }
+        } catch (RuntimeException e) {
+            // ⚠️ 结算失败**不得**改写调用结局：调用确实发生了，成本也确实发生了。
+            //    失败留下 RESERVED 预留，由预算对账兜底处置。
+            log.error("模型成本结算异常，预留保持 RESERVED 待对账: run={}, model={}, err={}",
+                    runId, modelId, e.toString());
+        }
+        return actual;
+    }
+
+    /**
+     * 释放模型调用的成本预留（调用失败时）。
+     *
+     * <p>⚠️ <b>失败不抛</b>：释放失败只留下悬挂预留（由对账兜底），
+     * 不得反过来把「调用失败」变成「调用异常」。
+     */
+    private void releaseModelCost(@NonNull String tenantId,
+                                  @NonNull ModelCostReservation reservation) {
+        if (budget == null || reservation.reservationId() == null) {
             return;
         }
-        for (DataClassification.IdentifyingPattern pattern
-                : DataClassification.IdentifyingPattern.values()) {
-            if (pattern.detect(content)) {
-                emitRiskEvent(tenantId, task, RiskEventPort.SENSITIVE_OUTPUT,
-                        "PATTERN:" + pattern.label());
-            }
+        try {
+            budget.release(tenantId, reservation.reservationId(), "模型调用未产出");
+        } catch (RuntimeException e) {
+            log.error("模型预算预留释放异常，留待对账兜底: reservation={}, err={}",
+                    reservation.reservationId(), e.toString());
         }
+    }
+
+    /**
+     * 对一段模型输出执行<b>输出内容安全层 + 编造出处检测</b>（P1-A / P1-D）。
+     *
+     * <p>⚠️ <b>为什么必须只留这一份实现</b>：终答与带工具调用的中间正文
+     * 需要同一套判据。若两处各写一份，迟早漂移成
+     * 「中间步放行、终答才拦」——而模型完全可以把编造塞进中间步。
+     *
+     * @return 筛查结果；{@code blocked} 非空时应立即返回该 outcome
+     */
+    private ScreenResult screenContent(String tenantId, RunClaimPort.LeasedTask task,
+                                       int steps, String content) {
+        cn.studykid.multiagent.core.compliance.OutputModeration.Decision decision =
+                cn.studykid.multiagent.core.compliance.OutputModeration.moderate(content);
+        for (String piiLabel : decision.piiLabels()) {
+            emitRiskEvent(tenantId, task, RiskEventPort.SENSITIVE_OUTPUT,
+                    "PATTERN:" + piiLabel);
+        }
+        if (decision.blocked()) {
+            log.error("⚠️⚠️ 输出未通过平台侧内容安全层，拒绝下发: runId={}, category={}, "
+                            + "labels={}", task.runId(), decision.category(),
+                    decision.labels());
+            emitRiskEvent(tenantId, task, RiskEventPort.SAFETY_BLOCK,
+                    "OUTPUT_MODERATION:" + decision.category());
+            ExecutionOutcome outcome = commitFailure(tenantId, task,
+                    "输出未通过内容安全检查", "SAFETY_OUTPUT_MODERATION");
+            notifyLoopComplete(tenantId, task.runId(), outcome, steps);
+            return new ScreenResult(outcome, decision.content());
+        }
+        try {
+            cn.studykid.multiagent.application.evaluation.HallucinationDetector
+                    .assertNoFabricatedSource(decision.content());
+        } catch (cn.studykid.multiagent.application.evaluation.HallucinatedSourceException e) {
+            log.error("⚠️⚠️ 输出涉嫌编造出处，拒绝提交: runId={}, rule={}",
+                    task.runId(), e.rule());
+            // P7-4：SEC-1/SEC-2 之外的明细事实——安全拦截落一条 SAFETY_BLOCK
+            emitRiskEvent(tenantId, task, RiskEventPort.SAFETY_BLOCK,
+                    "FABRICATED_SOURCE:" + e.rule());
+            ExecutionOutcome outcome = commitFailure(tenantId, task,
+                    "输出涉嫌编造资料出处", "SAFETY_FABRICATED_SOURCE");
+            notifyLoopComplete(tenantId, task.runId(), outcome, steps);
+            return new ScreenResult(outcome, decision.content());
+        }
+        return new ScreenResult(null, decision.content());
     }
 
     /**
@@ -843,6 +1438,122 @@ public class RunExecutionLoop {
     }
 
     /**
+     * RESUME 的续跑接缝（M1-4b / G2）。
+     *
+     * <p>⚠️ <b>为什么不直接在 {@link RunExecutionLoop} 内重入主循环</b>：
+     * 模型参数（Agent 配置）与 Run 输入由装配层（{@code WorkerExecutionConfig}）
+     * 从 DB 加载，执行循环自身没有这些依赖。续跑接缝由装配层注入：
+     * 恢复工具批次执行完后，交回主执行路径继续对话。
+     *
+     * <p>⚠️ <b>fail-closed</b>：未装配（{@code null}）时恢复路径不得静默
+     * 把 Run 悬在 RUNNING —— 由 {@link #resume} 显式收敛终态。
+     */
+    @FunctionalInterface
+    public interface RunContinuation {
+        /**
+         * @param tenantId 租户
+         * @param task     已重新领取租约的 Run 任务
+         * @return 续跑结局
+         */
+        @NonNull ExecutionOutcome continueRun(@NonNull String tenantId,
+                                              RunClaimPort.@NonNull LeasedTask task);
+    }
+
+    /**
+     * 续跑接缝（M1-4b）。
+     *
+     * <p>⚠️ <b>可为空 = 未装配</b>：此时 {@link #resume} 在工具批次执行成功后
+     * 显式收敛 Run 为 FAILED（错误码 {@code RESUME_CONTINUATION_UNAVAILABLE}），
+     * 绝不把 Run 悬在 RUNNING 等租约过期被接管 —— 那会导致整单重跑。
+     * 生产装配<b>必须</b>传入。
+     */
+    private final RunContinuation continuation;
+
+    /**
+     * RESUME（恢复 · M1-5 / G2 修复核心）。
+     *
+     * <p>审批决定到达后由 {@code ApprovalDecidedWakeupConsumer} 调用。
+     * ⚠️ <b>不调用模型</b>：调用方按 {@code tool_operation.tool_arguments}（经
+     * {@code RunToolLedgerPort#findInvocation} 重建）传入已批准的操作对应的
+     * {@link ModelResponse.ToolCallRequest}，本方法直接重入 {@code toolGate.invokeAll} 闸门；
+     * 此时 {@code approvalPort.consume} 命中已 APPROVED 行 → 执行。
+     *
+     * <p>⚠️ 恢复后若仍要推进对话，交由续跑接缝（{@link RunContinuation}）继续；
+     * 对话连续性依赖 Run 持久化上下文（属更大的「对话持久化」范畴，本变更只交付
+     * PARK/RESUME 的<b>闸门原语</b>：挂起→唤醒→重入→执行）。
+     *
+     * @param tenantId 租户
+     * @param task     已重新领取租约的 Run 任务（RESUME 需重新建立租约）
+     * @param calls    重建后的待执行工具调用（已含被批准的操作）
+     */
+    public @NonNull ExecutionOutcome resume(@NonNull String tenantId,
+                                           RunClaimPort.@NonNull LeasedTask task,
+                                           java.util.@NonNull List<ModelResponse.ToolCallRequest> calls) {
+        // ⚠️ invokeAll 以 Map 为入参（键 = 模型 callId）：恢复重建的调用按 callId 装回，
+        //    缺失 callId 的用序号兜底（键只用于遍历，不进幂等键——幂等键由
+        //    ToolInvocationGate 按 runId+agentRef+toolName+callId 自行构造）。
+        java.util.Map<String, ModelResponse.ToolCallRequest> callsByKey =
+                new java.util.LinkedHashMap<>();
+        for (int i = 0; i < calls.size(); i++) {
+            ModelResponse.ToolCallRequest call = calls.get(i);
+            String key = (call.callId() == null || call.callId().isBlank())
+                    ? "resume-" + i : call.callId();
+            callsByKey.putIfAbsent(key, call);
+        }
+        java.time.Instant toolStart = java.time.Instant.now();
+        ToolInvocationGate.ToolInvocationResult toolResult;
+        try {
+            toolResult = withinRemaining(task, "TOOL_CALL_RESUME",
+                    () -> toolGate.invokeAll(tenantId, task, callsByKey));
+        } catch (StepDeadlineExceededException e) {
+            log.warn("恢复工具调用越过根截止时间，Run 收敛为 TIMEOUT: {}", e.getMessage());
+            return commitFailure(tenantId, task, "恢复单步工具调用超时", "TIMEOUT");
+        }
+        java.time.Instant toolEnd = java.time.Instant.now();
+        appendStep(tenantId, task, 1, RunStepPort.Types.TOOL, toolStart, toolEnd);
+
+        if (toolResult.hasParked()) {
+            // 恢复后仍被判挂起（如审批被撤销/过期）→ 重新挂起，保持 WAITING_APPROVAL。
+            java.util.Set<String> parkedOps = new java.util.LinkedHashSet<>(
+                    toolResult.parkedTools().values());
+            boolean parkedOk = claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
+                    "WAITING_APPROVAL",
+                    jsonPayload("parkedOperations", String.join(",", parkedOps)));
+            if (parkedOk) {
+                appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_PARKED,
+                        java.util.Map.of("state", "WAITING_APPROVAL"));
+                claimPort.releaseLease(tenantId, task.runId(), workerId, task.fencingToken());
+            }
+            ExecutionOutcome parkedOutcome = ExecutionOutcome.parked(parkedOps);
+            notifyLoopComplete(tenantId, task.runId(), parkedOutcome, 1);
+            return parkedOutcome;
+        }
+        if (toolResult.unknownResultOccurred()) {
+            ExecutionOutcome unknown = ExecutionOutcome.unknownResult(toolResult.unknownOperationId());
+            notifyLoopComplete(tenantId, task.runId(), unknown, 1);
+            return unknown;
+        }
+        if (toolResult.allRejected()) {
+            // ⚠️ fail-closed：恢复重入被拒（如决定恰好被撤销/拒绝竞态）→ Run 收敛 FAILED。
+            //    工具未执行（账本行保持原状），无副作用。
+            ExecutionOutcome rejected = commitFailure(tenantId, task, "恢复工具调用被拒绝", "TOOL_REJECTED");
+            notifyLoopComplete(tenantId, task.runId(), rejected, 1);
+            return rejected;
+        }
+        // 执行成功：交由续跑接缝继续主循环（不重问已批准批次，模型据上下文推进）。
+        if (continuation == null) {
+            // ⚠️ fail-closed：未装配续跑接缝时，绝不能把 Run 悬在 RUNNING
+            //    （租约过期被接管 = 整单重跑 = 违背「恢复不重跑」的正确性要求）。
+            //    显式收敛终态并留可定位的错误码。
+            log.error("⚠️ 未装配续跑接缝（RunContinuation），恢复批次执行完后无法继续对话，"
+                    + "Run 显式收敛 FAILED: runId={}", task.runId());
+            return commitFailure(tenantId, task,
+                    "恢复后续跑接缝未装配", "RESUME_CONTINUATION_UNAVAILABLE");
+        }
+        return continuation.continueRun(tenantId, task);
+    }
+
+    /**
      * 构造一条合法的失败结果载荷（jsonb）。
      *
      * <p>⚠️ 统一走 Jackson 序列化，禁止手工拼字符串——
@@ -886,7 +1597,14 @@ public class RunExecutionLoop {
              * 重规划 §14 / 验收矩阵 #4：平台暂停/退役租户后拒绝新执行与在跑任务。
              * <b>不可重试</b>——重试只会再次被拒，且暂停态重投无意义。
              */
-            TENANT_BLOCKED
+            TENANT_BLOCKED,
+            /**
+             * ⚠️ 已挂起等待人工审批（M1-4 / G2 · PARK）。
+             * Run 进入 WAITING_APPROVAL、释放租约、让出 worker 线程；
+             * 审批决定到达后由 {@code ApprovalDecidedWakeupConsumer} 唤醒并 RESUME。
+             * <b>不可重试</b>——挂起是暂停而非失败。
+             */
+            PARKED
         }
 
         public ExecutionOutcome {
@@ -919,12 +1637,21 @@ public class RunExecutionLoop {
             return new ExecutionOutcome(Kind.CANCELLED, null);
         }
 
+        /**
+         * 已挂起等待审批（M1-4 / G2）。
+         *
+         * @param operationIds 被挂起的操作标识集合（供唤醒后 RESUME 重入闸门）
+         */
+        public static ExecutionOutcome parked(java.util.@NonNull Set<String> operationIds) {
+            return new ExecutionOutcome(Kind.PARKED, String.join(",", operationIds));
+        }
+
         /** 租户生命周期不可执行（暂停/退役/未激活/不存在）。不可重试。 */
         public static ExecutionOutcome tenantBlocked(String reason) {
             return new ExecutionOutcome(Kind.TENANT_BLOCKED, reason);
         }
 
-        /** @return 是否允许重新投递重试。UNKNOWN 与世代失效均**不允许**。 */
+        /** @return 是否允许重新投递重试。UNKNOWN / 世代失效 / PARKED 均**不允许**。 */
         public boolean retryable() {
             return kind == Kind.RETRYABLE_FAILURE;
         }

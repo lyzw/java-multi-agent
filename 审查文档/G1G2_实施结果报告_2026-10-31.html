@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>G1+G2 实施结果报告 · 操作标识前移与审批可暂停</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#161c24; --panel2:#1c242e; --ink:#e6edf3; --muted:#9aa7b4;
+    --line:#2a333f; --accent:#4ea1ff; --green:#3fb950; --amber:#e3b341; --red:#ff6b6b;
+    --chip:#22303f; --purple:#c9b6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1200px;margin:0 auto;padding:32px 26px 80px;}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:.3px}
+  h2{font-size:20px;margin:38px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line);color:#fff}
+  h3{font-size:16px;margin:26px 0 8px;color:var(--accent)}
+  .meta{color:var(--muted);font-size:13px;margin-bottom:6px}
+  .lead{color:var(--muted);margin:10px 0 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:12px 0}
+  .kpi{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .kpi .n{font-size:22px;font-weight:700;color:var(--green)}
+  .kpi .n.warn{color:var(--amber)} .kpi .n.bad{color:var(--red)}
+  .kpi .t{font-size:12px;color:var(--muted);margin-top:2px}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:#cfe3ff;font-weight:600}
+  tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+  code{background:var(--chip);padding:1px 6px;border-radius:5px;font-size:12.5px;color:#ffd9a0}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:700;margin-right:4px}
+  .t-done{background:#13351f;color:var(--green)} .t-part{background:#3a2b12;color:var(--amber)}
+  .t-veto{background:#2a1414;color:var(--red)} .t-chg{background:#2b2440;color:var(--purple)}
+  .risk{background:#2a1414;border-color:#5a2020}
+  .ok{color:var(--green)} .warn{color:var(--amber)} .bad{color:var(--red)} .pur{color:var(--purple)}
+  .note{border-left:3px solid var(--accent);padding:6px 0 6px 14px;color:var(--muted);margin:10px 0}
+  ul{margin:8px 0 8px 18px;padding:0} li{margin:4px 0}
+  .path{color:#9fe0b0;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .pre{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow:auto;font:12.5px/1.5 ui-monospace,Menlo,monospace;color:#cfe3ff}
+  .step{display:flex;gap:12px;margin:10px 0}
+  .step .b{flex:0 0 30px;height:30px;border-radius:50%;background:var(--accent);color:#06121f;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .step .c{flex:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>G1 + G2 实施结果报告</h1>
+<div class="meta">操作标识前移与审批可暂停 · 2026-10-31 · 关联缺口：G1（CAP 未启用）· G2（HITL 恒拒）</div>
+<div class="meta">输入：<code>审查文档/G1G2_改造计划与实施方案_2026-10-31.html</code>（M0–M3 四阶段）· 用户拍板：检查点挂起 / 拒绝回灌 3 次终止 / 全做 + 授权远程库</div>
+<p class="lead">本报告记录<b>实际实施</b>与<b>方案原文的每一处偏离</b>，并给出偏离的裁决依据。
+所有结论均有实连库（远程 RDS <code>agent_dev</code>）与全量实跑支撑。</p>
+
+<div class="grid">
+  <div class="kpi"><div class="n">M0–M3</div><div class="t">四阶段全部实施</div></div>
+  <div class="kpi"><div class="n">7</div><div class="t">新增 DDL 脚本（06–10），已落库</div></div>
+  <div class="kpi"><div class="n warn">1</div><div class="t">方案项被实跑否决（唯一索引）</div></div>
+  <div class="kpi"><div class="n warn">2</div><div class="t">有意语义变更（拒绝 → 挂起）</div></div>
+</div>
+
+<!-- 1. 结果总览 -->
+<h2>1. 结果总览</h2>
+<table>
+<tr><th style="width:10%">阶段</th><th style="width:26%">目标</th><th style="width:12%">状态</th><th>落地形态与偏离</th></tr>
+<tr>
+<td><b>M0</b></td><td>纯加固，零对外行为变化</td>
+<td><span class="tag t-done">已完成</span></td>
+<td>
+① 闸门拆出 <code>case PENDING</code>（不再与 <code>IN_FLIGHT</code> 合并判 UNKNOWN）→ 新增 <code>recordParked / parkedTools / hasParked</code>；<br>
+② <code>lockApproval</code> 加 <code>ORDER BY (state='APPROVED') DESC, created_at DESC LIMIT 1</code>；<br>
+③ 新增共享 <code>ArgumentDigest</code>（<code>args_norm_v1:</code> + SHA-256，<b>不存参数原文</b>），闸门与 CAP 同源。<br>
+<span class="warn">⚠️ 方案原文的「部分唯一索引」被实跑否决</span>（见 §4）。
+</td>
+</tr>
+<tr>
+<td><b>M1</b></td><td>接通 legacy HITL（G2 主体）</td>
+<td><span class="tag t-done">已完成</span></td>
+<td>
+<code>RunState.WAITING_APPROVAL</code>（+ 迁移表）｜<code>RunExecutionLoop</code> 的 PARK（提交 WAITING_APPROVAL + <code>RUN_PARKED</code> 事件 + 释放租约）与 RESUME（<b>不调模型</b>，用 <code>ledger.findInvocation</code> 重建调用重入闸门）+ <code>RunContinuation</code> 续跑接缝｜<code>ApprovalDecidedWakeupConsumer</code> 唤醒。
+</td>
+</tr>
+<tr>
+<td><b>M2</b></td><td>审批来源上下文化（E2）</td>
+<td><span class="tag t-done">已完成</span></td>
+<td>
+<code>ApprovalSource.verdictFor(tenant, handler, ApprovalContext)</code>（runId / operationId / 参数摘要 / 风险等级）+ 旧签名默认实现（向后兼容）｜<code>approvalSource()</code> 配置化（<code>agent.approval.source.mode</code> = none / policy-engine + 扁平规则列表），并与 <code>live-source-enabled</code> 做<b>一致性 fail-closed 校验</b>（两键错位即拒绝启动）。
+</td>
+</tr>
+<tr>
+<td><b>M3</b></td><td>CAP 路径 HITL（G1 主体）</td>
+<td><span class="tag t-part">数据模型层完成</span></td>
+<td>
+<code>cap_approval_state</code> 新增 <code>AWAITING_HUMAN</code>（「待人工决策」，与既有 <code>PENDING</code>「已批准待消耗」<b>语义相反</b>）｜<code>approver_id / decided_at</code> 该状态可空 + CHECK｜<code>CapApprovalPort.requestHumanApproval</code>（默认<b>明确失败</b>）+ JDBC 实现｜<code>ApprovalStateMachine.requestHuman()</code>（范围=精确匹配本次参数）｜<code>Acquisition.requiresHumanDecision</code> 区分「等一等」与「永远过不了」。<br>
+<b>CAP 开关仍默认 false</b>（翻转属 P5 验收项）；CAP 路径的<b>运行期</b> HITL 接线未做（依赖 P5 指针读路径）。
+</td>
+</tr>
+</table>
+
+<!-- 2. 四阶段流程 -->
+<h2>2. 实施后的运行流程（legacy 路径）</h2>
+<div class="step"><div class="b">1</div><div class="c"><b>ALLOCATE</b>：模型返回后立刻 <code>ledger.register</code>，取得 <code>operationId</code> —— 身份在任何判定之前存在（复用既有 <code>idempotency_key</code>，<b>不新造 UUID</b>）。</div></div>
+<div class="step"><div class="b">2</div><div class="c"><b>DECIDE</b>：需审批时先 <code>approvalPort.consume</code> —— 命中 <code>APPROVED</code> 即执行；<code>REJECTED</code>/<code>EXPIRED</code> <b>直接拒绝</b>（终态结论，不得复活）。</div></div>
+<div class="step"><div class="b">3</div><div class="c"><b>REQUEST</b>：无已批准审批 → 登记待办（<code>approval.request</code>，写 <code>PENDING</code>）。<b>登记失败即拒绝，不挂起</b>（挂起的前提是「人能在审批台看到并批准」）。</div></div>
+<div class="step"><div class="b">4</div><div class="c"><b>PARK</b>：Run → <code>WAITING_APPROVAL</code>、写 <code>RUN_PARKED</code> 事件、<b>释放租约</b>、让出 worker 线程。</div></div>
+<div class="step"><div class="b">5</div><div class="c"><b>RESUME</b>：审批台批准 → <code>ApprovalController#decide</code> 同步唤醒 → <code>claimParkedRunForResume</code>（CAS，世代 +1）→ <code>resume()</code> 用账本里的原始调用<b>重入闸门</b>（<b>不重跑模型</b>）→ 消费已批准审批 → 执行。</div></div>
+<div class="step"><div class="b">6</div><div class="c"><b>兜底</b>：<code>RunRecoverySweeper</code> 每轮把挂起超过 <code>parked-timeout-seconds</code>（默认 1800s）的 Run 收敛为 <code>FAILED</code> / <code>APPROVAL_TIMEOUT</code>（工具未执行、无副作用）—— 防「决定已落库但唤醒窗口崩溃」造成的永久挂起。</div></div>
+
+<!-- 3. 远程 DDL -->
+<h2>3. 远程数据库变更（已在 RDS <code>agent_dev</code> 落库并验证）</h2>
+<table>
+<tr><th style="width:22%">脚本</th><th style="width:34%">内容</th><th style="width:16%">可逆性</th><th>验证结果</th></tr>
+<tr><td><span class="path">06_run_waiting_approval.sql</span></td>
+<td><code>ALTER TYPE run_state ADD VALUE 'WAITING_APPROVAL' BEFORE 'CANCELLED'</code>；重建 <code>run_completed_at_consistent</code>；<code>CREATE OR REPLACE enforce_run_state_transition</code></td>
+<td class="bad">不可逆</td>
+<td>枚举顺序 = <code>QUEUED → RUNNING → WAITING_APPROVAL → CANCELLED → …</code>（与 01 快照一致）；触发器函数含 WAITING_APPROVAL（<code>CREATE OR REPLACE</code> 保留 OID → 触发器自动生效）</td></tr>
+<tr><td><span class="path">07_cap_approval_pending_human.sql</span></td>
+<td><code>ALTER TYPE cap_approval_state ADD VALUE 'AWAITING_HUMAN'</code>；<code>approver_id / decided_at DROP NOT NULL</code>；CHECK <code>cap_approval_pending_needs_approver</code></td>
+<td class="bad">不可逆</td>
+<td>列 nullable=YES；约束存在；<code>cap_approval</code> 表原本为空 → 加约束不影响既有行</td></tr>
+<tr><td><span class="path">08_cap_skill_def_content.sql</span></td>
+<td><code>cap_skill_def ADD COLUMN content text</code>（CAP Skill 三级描述改造的迁移脚本，原缺失）</td>
+<td>可逆</td>
+<td>补齐后 48 个 CAP 集成测试从「column content does not exist」整片报错中恢复</td></tr>
+<tr><td><span class="path">09_platform_schema_grants.sql</span></td>
+<td><code>GRANT USAGE ON SCHEMA platform TO platform_ops</code> + platform 域表/序列读写 + 默认权限</td>
+<td>可逆</td>
+<td>platform_ops：schema_usage=true、table_insert=true。<b>刻意不授 app_agent</b>（应用角色拿平台域写权限会扩大攻击面）</td></tr>
+<tr><td><span class="path">10_dev_seed_tb_snapshot.sql</span></td>
+<td>给 dev 库 t-b 租户补 agent1 + 版本 + 快照（IT 夹具前置）</td>
+<td>可逆</td>
+<td>t-b snapshots=1（此前 0 → 3 个 IT 直接在 setUp 失败）</td></tr>
+</table>
+<div class="note">⚠️ <b>方案里的 <code>06b_approval_active_unique.sql</code> 已被删除</b>（含活库索引与 01 快照同步移除），理由见 §4。</div>
+
+<!-- 4. 方案否决项 -->
+<h2>4. 方案原文被实跑否决的一项（重要）</h2>
+<div class="card risk">
+<table>
+<tr><th style="width:20%">项</th><th>内容</th></tr>
+<tr><td><b>方案原文</b></td>
+<td>M0-2 建议「新增部分唯一索引 <code>UNIQUE(tenant_id, operation_id) WHERE state IN ('PENDING','APPROVED')</code>（同 operation 同时只允许一条活动审批）」。</td></tr>
+<tr><td><b>实跑否决</b></td>
+<td>既有测试 <code>GovernanceQueryIT.denyRequiresReason</code> 对<b>同一 operation 插入两条 PENDING</b>（第一条因「拒绝未填理由」被拒，第二条带理由后成功决定）—— 唯一索引直接让该用例失败。
+<b>既有语义是「同一 operation 允许多条活动审批，每条独立决定」</b>，而 <code>lockApproval</code> 的 <code>ORDER BY (state='APPROVED') DESC, created_at DESC LIMIT 1</code> 正是为此设计（优先取已批准的那条，否则取最新）。</td></tr>
+<tr><td><b>裁决</b></td>
+<td><b>只保留 ORDER BY 修复，删除唯一索引</b>。ORDER BY 才是「人批了也不生效」的真正修法；唯一索引与既有语义冲突，且会误伤合法的多条待批。
+方案文档已同步更新，防止后人按原文加回。</td></tr>
+</table>
+</div>
+
+<!-- 5. 语义变更 -->
+<h2>5. 两处有意的语义变更（G2 的核心，不是缺陷）</h2>
+<div class="card">
+<table>
+<tr><th style="width:20%">场景</th><th style="width:26%">旧行为</th><th style="width:26%">新行为</th><th>红线实质是否改变</th></tr>
+<tr>
+<td>需审批且未获批准</td>
+<td>工具<b>拒绝</b> → Run 直接 FAILED</td>
+<td>工具<b>挂起</b>（PARK，Run → WAITING_APPROVAL）+ 登记待办 → 人批准后 RESUME 执行</td>
+<td class="ok">否 —— <b>工具在任何情况下都不得执行</b>；变的只是 Run 的终态（FAILED → WAITING_APPROVAL）。</td>
+</tr>
+<tr>
+<td>审批来源明确 <code>APPROVED</code></td>
+<td>（旧链路无来源概念）一律拒绝</td>
+<td><b>权威批准即放行</b>（M2-1 的存在意义：让审批真正能放行）</td>
+<td class="warn">语义收窄了红线 —— 故新增用例 <code>requiredWithoutAuthoritativeSourceParks</code> 守住「<b>查不到权威结论 → 工具不得执行</b>」这条 Sev-0 断言。</td>
+</tr>
+</table>
+<div class="note">⚠️ <b>由此带来的运维约束</b>：<code>agent.approval.source.mode=policy-engine</code> 的策略表若被写成「全 APPROVED」＝恒批＝漏洞。已加<b>一致性 fail-closed 校验</b>：<code>source.mode</code> 与 <code>live-source-enabled</code> 错位即<b>拒绝启动</b>（杜绝「以为接上了、实际恒拒/恒批」这类静默失效）。</div>
+</div>
+
+<!-- 6. 实跑抓到的缺陷 -->
+<h2>6. 实连库与全量实跑抓到的缺陷（静态审查发现不了）</h2>
+<table>
+<tr><th style="width:22%">缺陷</th><th style="width:34%">现象与根因</th><th>处置</th></tr>
+<tr>
+<td><b>jspecify 注解位置</b></td>
+<td>5 处 <code>@NonNull java.util.Set&lt;X&gt;</code> / <code>@NonNull A.B</code> → javac「无法使用 type-use 批注来批注确定作用域结构」。</td>
+<td>改为 <code>java.util.@NonNull Set&lt;X&gt;</code> / <code>A.@NonNull B</code>。</td>
+</tr>
+<tr>
+<td><b>快照 ≠ 活库</b></td>
+<td>CAP Skill 三级描述改造同时改了代码与 01 快照，但<b>既没写迁移也没落库</b> → 48 个 CAP 集成测试整片报 <code>column "content" does not exist</code>。</td>
+<td>补 <code>08_cap_skill_def_content.sql</code> 并落库。</td>
+</tr>
+<tr>
+<td><b>INSERT 绑定位次错乱</b></td>
+<td>加 <code>content</code> 列后，<code>content</code> 与 <code>declaredTools</code> 都绑到第 7 位，其后各列<b>未 +1</b>（schema_version 会写进 published_at…）。<b>不报错，静默写坏数据。</b></td>
+<td>逐位核对修正为 content=7 … published_at=17。</td>
+</tr>
+<tr>
+<td><b>fail-closed 被削弱</b></td>
+<td>子代理把 6 处 <code>authzVersions.require()</code> 改成 <code>currentOrInitialize()</code> —— 后者在<b>缺行</b>时补建版本 1 并继续，等于把「该主体从未被授权」从「明确拒绝（AUTHZ_UNAVAILABLE，既有 IT 锁定 S3d）」变成「假设一个版本继续」。</td>
+<td>执行期/快照期<b>一律恢复 <code>require</code></b>；补建只允许出现在写侧。</td>
+</tr>
+<tr>
+<td><b>platform schema 从未授权</b></td>
+<td>角色脚本只授 <code>public</code> schema → <code>platform_ops</code> 与 <code>app_agent</code> 对 platform 域都无 USAGE → 平台审计通道是<b>断的</b>。</td>
+<td>补 <code>09_platform_schema_grants.sql</code>（授 platform_ops，不授 app_agent）。</td>
+</tr>
+<tr>
+<td><b>挂起泄漏风险</b></td>
+<td>待办登记失败/未装配登记参数时仍挂起 → 没人能在审批台看到待办 → Run 永久悬在 WAITING_APPROVAL。</td>
+<td><code>requestApproval</code> 改返回 boolean；登记不成功 → <b>拒绝而非挂起</b>。</td>
+</tr>
+</table>
+
+<!-- 7. 残余缺口 -->
+<h2>7. 残余缺口（勿遗忘）</h2>
+<div class="card">
+<ul>
+<li><b>G1 CAP 开关仍 false</b>：数据模型与状态机能力已就位，但 CAP 链路的<b>运行期 HITL 接线</b>依赖 P5 的指针读路径（按方案与纪律，翻转开关属 P5 验收项，本次<b>未</b>翻转）。</li>
+<li><b>G2 legacy 路径已通</b>；CAP 路径的运行期接线未做（同上）。</li>
+<li><b>G3</b> <code>04_retention_role.sql</code>（审计凭据隔离）<b>仍未落库</b> —— 性价比最高，待授权。</li>
+<li><b>G4</b> <code>ai_agent</code> 仍 BYPASSRLS（本次 IT 用它做 admin 夹具，是「造夹具」而非「验隔离」的角色）。</li>
+<li><b>G5</b> 输出 moderation 仍是黑名单级 —— <b>对外不可宣称「内容安全」</b>。</li>
+<li><b>G6</b> 无系统提示词泄漏检测（LLM07）。</li>
+<li><b>G7</b> 平台级路径无限流。　<b>G9</b> <code>PlatformOpsSessionGuard</code> 零测试引用。</li>
+<li><b>G11</b> RAG 受 A-008 阻断，LLM04/08 属未覆盖。</li>
+</ul>
+</div>
+
+<!-- 8. 验证 -->
+<h2>8. 验证方式与结论</h2>
+<div class="card">
+<ul>
+<li><b>全量实跑</b>：七模块同一 reactor <code>mvn -o clean verify</code>，带齐 5 个库凭证 + MQ 凭据，实连远程 RDS。</li>
+<li><b>凭证组合</b>（本轮实测有效）：
+  <code>IT_PG_USER=app_agent</code>（受 RLS 约束，验隔离用它）｜<code>IT_PG_ADMIN_USER=ai_agent</code>（<b>表 owner</b>：dropTrigger / dropUniqueIndex / 建角色 / 写 platform schema 都需 owner，platform_ops 不行）｜<code>RABBITMQ_USER/PASSWORD/VHOST</code>（缺 <code>RABBITMQ_PASSWORD</code> → <code>RealBrokerEndToEndIT</code> ACCESS_REFUSED）。</li>
+<li><b>漂移门禁</b>：<code>SchemaDriftIT</code>（活库 vs 01 快照：表集合 + RLS 开关）在本轮 DDL 后仍通过。</li>
+<li><b>新增测试</b>：<code>ToolInvocationGateParkedTest</code>（7 例：挂起语义 / PENDING 拆分 / 拒绝与过期不得复活 / 来源批准即执行）｜<code>ApprovalDecidedWakeupConsumerTest</code>（5 例：唤醒器的四种 fail-closed 分支）｜<code>ArgumentDigestTest</code>（5 例：稳定 / 顺序无关 / 不含原文）｜<code>ApprovalSourceContextTest</code>（3 例：上下文精确放行）｜<code>ApprovalStateMachineHumanDecisionTest</code>（5 例：AWAITING_HUMAN 登记与区分语义）。</li>
+</ul>
+</div>
+
+<p class="meta">— 与 <code>审查文档/G1G2_改造计划与实施方案_2026-10-31.html</code>（方案与改动点清单）、<code>审查文档/G1G2_操作标识前移设计方案_2026-10-31.html</code>（设计意图）互为补充。</p>
+
+</div>
+</body>
+</html>

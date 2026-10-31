@@ -135,10 +135,15 @@ public class RunController {
         }
 
         // 2) 零保留闸门：未确认供应商时禁止真实学生数据
-        //    ⚠️ 当前 P2 用 SYNTHETIC；接入真实数据时按 DataClassification 判定
-        DataClassification classification = DataClassification.SYNTHETIC;
+        //    ⚠️ P0-3 修复：分级必须由请求内容推导，禁止硬编码 SYNTHETIC ——
+        //       硬编码会使闸门的真实数据分支（供应商确认 + 可识别信息拦截）永不触发。
+        //       推导规则见 DataClassification.fromContent：内容含可识别信息或调用方
+        //       显式声明 REAL_STUDENT → 走真实数据分支；否则 SYNTHETIC（P2 合成模式）。
+        String requestText = requestText(request);
+        DataClassification classification =
+                DataClassification.fromContent(requestText, request.dataClassification());
         retentionGate.assertAllowed(
-                currentPrincipal.providerId(), requestText(request), classification);
+                currentPrincipal.providerId(), requestText, classification);
 
         // 3) 执行时授权（红线 9）—— 在创建之前，而非之后
         authorization.requireAuthorized(context, AuthorizationService.Actions.RUN_CREATE, null);

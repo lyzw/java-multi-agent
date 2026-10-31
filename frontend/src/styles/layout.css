@@ -382,28 +382,330 @@ main a.mono {
   color: var(--mark);
 }
 
-/* ── 登录页 ───────────────────────────────────────────── */
+/* ── 登录页 ─────────────────────────────────────────────── */
+
+/*
+ * 登录页（2026-10-31 UI 现代化）
+ *
+ * ⛔ 仍然**没有阴影**——design.spec 有断言守着（tokens + layout 里
+ *    不许出现 box-shadow）。现代感靠：分栏、留白节奏、细线分层、
+ *    输入框内嵌图标、清晰的类型层级，而不是浮起来的卡片。
+ * ⛔ 主按钮仍是墨色（R2）：换了主按钮颜色就成了另一个产品。
+ * ⛔ 批改红不出现在此处（R1）：登录页没有错误态之外的红色需求。
+ */
 
 .login {
   min-height: 100vh;
   display: grid;
   place-items: center;
   padding: var(--s-5);
+  /* 极浅的两段纸色：让居中的表单从背景上「浮」出来，但不用阴影 */
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-sunk) 100%);
 }
 
-.login__panel {
+/* 分栏容器：宽屏左叙事 + 右表单，窄屏折叠为单栏（见下方断点） */
+.login__grid {
   width: 100%;
-  max-width: 380px;
+  max-width: 980px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 400px);
+  align-items: stretch;
+  /* 「一张纸」的观感：外框细线 + 圆角 + 白纸面 */
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* ── 左栏：产品叙事 ─────────────────────────────────── */
+
+.login__aside {
+  display: flex;
+  align-items: center;
+  padding: var(--s-6);
+  background:
+    radial-gradient(
+      120% 80% at 12% 0%,
+      rgba(255, 255, 255, 0.92) 0%,
+      rgba(255, 255, 255, 0) 62%
+    ),
+    linear-gradient(180deg, var(--paper-sunk) 0%, var(--surface-2) 100%);
+  border-right: 1px solid var(--rule);
+}
+
+.login__aside-inner {
+  max-width: 42ch;
 }
 
 .login__brand {
-  margin-bottom: var(--s-2);
+  margin-bottom: var(--s-5);
 }
 
-.login__lead {
-  margin: 0 0 var(--s-5);
+.login__headline {
+  font-size: 30px;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--s-3);
+}
+
+.login__sub {
+  color: var(--ink-2);
+  font-size: var(--t-body);
+  margin: 0 0 var(--s-6);
+  line-height: 1.8;
+}
+
+/* 价值点：图标 + 标题 + 说明，三段式对齐 */
+.login__points {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.login__point {
+  display: flex;
+  gap: var(--s-3);
+  align-items: flex-start;
+}
+
+.login__point-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-ctl);
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.login__point-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.login__point-title {
+  font-size: var(--t-body);
+  font-weight: 600;
+}
+
+.login__point-text {
+  font-size: var(--t-note);
+  color: var(--ink-2);
+  line-height: 1.7;
+}
+
+/* ── 右栏：表单卡 ───────────────────────────────────── */
+
+.login__panel {
+  display: flex;
+  align-items: center;
+  padding: var(--s-6);
+  background: var(--surface);
+}
+
+.login__card {
+  width: 100%;
+}
+
+.login__card-head {
+  margin-bottom: var(--s-5);
+}
+
+.login__card-title {
+  font-size: var(--t-display);
+  margin: 0 0 var(--s-1);
+  letter-spacing: -0.01em;
+}
+
+.login__card-lead {
+  margin: 0;
   color: var(--ink-2);
   font-size: var(--t-note);
+}
+
+/* 会话过期提示：中性线容器（不是错误，不必用红） */
+.login__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  margin: 0 0 var(--s-4);
+  padding: var(--s-3);
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--rule-strong);
+  border-radius: var(--radius-ctl);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: var(--t-note);
+  line-height: 1.6;
+}
+
+.login__notice-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--ink-2);
+}
+
+/* ── 输入控件：图标内嵌 + 焦点环 ────────────────────── */
+
+.login__field {
+  margin-bottom: var(--s-4);
+}
+
+/* 图标与输入框共处一个边框内：视觉上是一个整体控件 */
+.login__control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.login__control-icon {
+  position: absolute;
+  left: var(--s-3);
+  color: var(--ink-2);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ⛔ 覆盖 tokens.css 的 .field input 基础样式：
+ *    这里给图标让位、并把控件整体抬高到 44px（比 40px 基线更舒适）。
+ *    选择器带两级类名，确保压过 .field input。 */
+.login__field .login__control input {
+  height: 44px;
+  padding-left: 40px;
+  padding-right: 44px;
+  border-radius: var(--radius-ctl);
+  background: var(--surface);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+/* 焦点：墨色描边 + 2px 外环（不用阴影做焦点态，只用 outline） */
+.login__field .login__control input:focus {
+  border-color: var(--ink);
+  outline: none;
+}
+
+.login__field .login__control input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* 密码显隐：贴右的图标按钮，触摸目标 ≥ 40px */
+.login__toggle {
+  position: absolute;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.login__toggle:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+/* 缺项提示：居中、弱化，不抢提交按钮 */
+.login__hint {
+  margin: 0 0 var(--s-3);
+  color: var(--ink-2);
+  font-size: var(--t-note);
+  text-align: center;
+}
+
+.login__submit {
+  margin-top: var(--s-1);
+}
+
+/* 底部信任说明 */
+.login__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin: var(--s-5) 0 0;
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--rule);
+  color: var(--ink-2);
+  font-size: var(--t-note);
+}
+
+.login__foot-icon {
+  flex: none;
+  color: var(--ink-2);
+}
+
+/* ── 响应式：窄屏折叠为单栏，左栏退到顶部 ──────────── */
+
+@media (max-width: 1023px) {
+  .login__grid {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 460px;
+  }
+
+  .login__aside {
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+    padding: var(--s-5);
+  }
+
+  .login__headline {
+    font-size: 24px;
+  }
+
+  /* 窄屏收起价值点列表：首屏优先让用户看到表单。
+   * ⛔ 用 clip 方案**视觉隐藏**而不是 display:none ——
+   *    display:none 会把内容移出无障碍树（屏幕阅读器与检索都读不到），
+   *    与本项目对侧栏标签的既有纪律一致。 */
+  .login__points {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .login__sub {
+    margin-bottom: 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .login {
+    padding: var(--s-3);
+  }
+
+  .login__aside,
+  .login__panel {
+    padding: var(--s-4);
+  }
+
+  .login__headline {
+    font-size: 21px;
+  }
 }
 
 /* ── 工作台 ───────────────────────────────────────────── */

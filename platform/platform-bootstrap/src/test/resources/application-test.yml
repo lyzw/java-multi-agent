@@ -34,3 +34,13 @@ spring:
       idle-timeout: 30000
       # 连接存活探测：避免拿到已被服务端关闭的连接
       max-lifetime: 600000
+
+# ⚠️ 集成测试环境：关闭「Rabbit 侧残留检查」。
+#    理由：测试自身会往 broker 发消息（真实 broker 端到端用例），
+#    跑完必然在队列留下残留 —— 那是**测试自己的产物**，
+#    不该让下一轮启动被守卫拦下（曾导致「跑完一轮 → 下一轮起不来」）。
+#    ⚠️ 生产环境保持默认 true（application.yml），此处只影响 test profile。
+agent:
+  messaging:
+    switch-guard:
+      rabbit-residual-check: "false"

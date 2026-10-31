@@ -652,7 +652,8 @@ public class PlatformCapabilityConsoleController {
                     d.usage().stream()
                             .map(u -> new ConfigPublishPayload.SkillDescriptionSpec.SkillUsageSpec(
                                     u.when(), u.how()))
-                            .toList());
+                            .toList(),
+                    d.content());
         }
 
         private static List<ConfigPublishPayload.McpDeclarationSpec> declaredMcpOf(

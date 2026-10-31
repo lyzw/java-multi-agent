@@ -122,13 +122,23 @@ public class RunEventController {
      */
     private final RateLimitPort rateLimiter;
 
-    public RunEventController(@NonNull RunEventQueryPort eventQuery,
-                              @NonNull AuthorizationService authorization,
-                              cn.studykid.multiagent.api.run.RunController.CurrentPrincipal currentPrincipal) {
-        this(eventQuery, authorization, currentPrincipal, NEVER_LIMIT,
-                new RunEventStreamer(500L, 30 * 60 * 1000L));
-    }
-
+    /**
+     * ⚠️⚠️ <b>P3-1：本类不再提供「默认不限流」的构造入口</b>。
+     *
+     * <p>此前存在一个 3 参便捷构造器，内部填 {@code NEVER_LIMIT}
+     * （恒 {@code Decision.ALLOWED}）作为默认限流器。
+     * 它的实际危害不是「限流失效」本身 —— Spring 走
+     * {@code @Autowired} 的 5 参构造器，生产装配是对的 ——
+     * 而是它在代码里<b>长期存在着一条「忘记限流也能编译、也能运行」的路径</b>：
+     * 任何人新增一个 SSE 端点、或在别处 {@code new} 一个本类，
+     * 都会拿到一条<b>完全无限流</b>的长连接，而<b>没有任何报错或告警</b>。
+     * 长连接是本项目最贵的资源之一（每个连接长期占用服务端资源）。
+     *
+     * <p>故删除该便捷入口：<b>限流器必须由调用方显式传入</b>。
+     * 需要的取舍是单测也要显式传一个「测试中不限流」的实现 ——
+     * 这正是我们要的效果：让「不限流」成为一处显式、可 grep 的声明，
+     * 而不是一个藏在默认值里的巧合。
+     */
     /** 「限流已装配、推送器用默认参数」的便捷构造器（单测用）。 */
     public RunEventController(@NonNull RunEventQueryPort eventQuery,
                               @NonNull AuthorizationService authorization,
@@ -160,18 +170,6 @@ public class RunEventController {
     /** SSE 长连接推送器（P3-D10 / FR-014 部分）。 */
     private final RunEventStreamer streamer;
 
-    /** 默认限流桩：永不拒绝（限流未装配时保持既有行为）。 */
-    private static final RateLimitPort NEVER_LIMIT = new RateLimitPort() {
-        @Override
-        public Decision check(String tenantId, String bucketKey) {
-            return Decision.ALLOWED;
-        }
-
-        @Override
-        public long currentCount(String tenantId, String bucketKey) {
-            return 0L;
-        }
-    };
 
     /**
      * 读取 Run 事件（支持断线续传）。
