@@ -209,6 +209,17 @@ export function isAuthError(error: NormalizedError): boolean {
   return error.status === 401 || error.code === 'UNAUTHENTICATED'
 }
 
+/**
+ * 是否为「业务无权限」（已登录但缺少所需权限）。
+ *
+ * ⚠️ 与 {@link isAuthError} 严格区分：无权限**不**触发登录跳转，
+ * 只提示「无权执行该操作」或渲染无权限整页。把二者混为一谈会导致：
+ * 用户做一笔正常业务操作被拒 → 被当成「未登录」直接踢回登录页、丢掉操作现场。
+ */
+export function isAccessDenied(error: NormalizedError): boolean {
+  return error.code === 'ACCESS_DENIED'
+}
+
 /** 是否为幂等冲突 */
 export function isIdempotencyConflict(error: NormalizedError): boolean {
   return error.status === 409 && error.code === 'IDEMPOTENCY_CONFLICT'

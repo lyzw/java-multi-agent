@@ -3,6 +3,7 @@ import { AdminLayout } from '@/layout/AdminLayout'
 import { RequireAuth } from '@/auth/RequireAuth'
 import { RequireRole } from '@/auth/RequireRole'
 import { LoginPage } from '@/pages/LoginPage'
+import { NoPermissionPage } from '@/pages/NoPermissionPage'
 import { TenantRegistryPage } from '@/pages/TenantRegistryPage'
 import { TenantNewPage } from '@/pages/TenantNewPage'
 import { TenantDetailPage } from '@/pages/TenantDetailPage'
@@ -39,6 +40,12 @@ const AUDIT_SCOPE: Role[] = [ROLES.SUPER_ADMIN, ROLES.AUDITOR]
 export const router = createBrowserRouter(
   [
     { path: '/login', element: <LoginPage /> },
+    {
+      // 业务无权限整页（已登录但缺权限，区别于「未登录」跳登录）。
+      // 由 `notifyAccessDenied` 在捕获到 ACCESS_DENIED 时跳转。
+      path: '/no-permission',
+      element: <NoPermissionPage />,
+    },
     {
       path: '/',
       element: (

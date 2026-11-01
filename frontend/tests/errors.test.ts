@@ -10,6 +10,7 @@ import {
   normalizeHttpError,
   normalizeNetworkError,
   isAuthError,
+  isAccessDenied,
   isIdempotencyConflict,
 } from '@/api/errors'
 
@@ -151,6 +152,31 @@ describe('错误归一化', () => {
       const result = normalizeNetworkError(new TypeError('Failed to fetch'))
       expect(result.status).toBe(0)
       expect(result.message).toContain('网络')
+    })
+  })
+
+  describe('业务无权限识别（isAccessDenied）', () => {
+    it('ACCESS_DENIED 应识别为无权限', () => {
+      const result = normalizeHttpError(403, { code: 'ACCESS_DENIED', message: '无权执行该操作' })
+      expect(isAccessDenied(result)).toBe(true)
+      // 无权限**不是**「需重新登录」类错误：混为一谈会把用户误踢回登录页
+      expect(isAuthError(result)).toBe(false)
+    })
+
+    it('UNAUTHENTICATED 不应被识别为无权限', () => {
+      const result = normalizeHttpError(401, { code: 'UNAUTHENTICATED', message: '未认证' })
+      expect(isAccessDenied(result)).toBe(false)
+      expect(isAuthError(result)).toBe(true)
+    })
+
+    it('旧形状 {error:"forbidden"} 归一到 ACCESS_DENIED 也应识别', () => {
+      const result = normalizeHttpError(403, { error: 'forbidden' })
+      expect(isAccessDenied(result)).toBe(true)
+    })
+
+    it('其它业务错误（如 409 冲突）不应被识别为无权限', () => {
+      const result = normalizeHttpError(409, { code: 'IDEMPOTENCY_CONFLICT' })
+      expect(isAccessDenied(result)).toBe(false)
     })
   })
 

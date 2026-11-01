@@ -139,8 +139,13 @@ async function _request<T>(
 
   if (!response.ok) {
     const normalized = normalizeHttpError(response.status, body)
-    // ⚠️ 401 触发全局清理：避免半登录态（FE-D1 §4.3）
-    if (response.status === 401) {
+    // ⚠️ **按归一化后的 code 分支，而非裸 HTTP 状态码**（权限重构）：
+    //   · UNAUTHENTICATED（未登录 / 令牌失效）→ 清会话 + 通知上层跳登录；
+    //   · ACCESS_DENIED（已登录但业务无权限）→ **绝不跳登录**，原样抛出交页面提示；
+    //   · 其余（参数错 / 冲突 / 网络等）→ 原样抛出，不触碰会话。
+    // 以往对 401 一律清会话跳登录，会把「业务无权限 / 跨身份域 401」误判为未登录，
+    // 直接把用户踢回登录页、丢掉操作现场（2026-10-28 实测缺陷）。
+    if (normalized.code === 'UNAUTHENTICATED') {
       clearSession()
       onUnauthorized()
     }
@@ -240,7 +245,9 @@ export async function openEventStream(
   if (!response.ok) {
     const body = await readBody(response)
     const normalized = normalizeHttpError(response.status, body)
-    if (response.status === 401) {
+    // ⚠️ 与 _request 同口径：仅 UNAUTHENTICATED 才清会话跳登录；
+    //   ACCESS_DENIED（业务无权限）绝不跳登录。
+    if (normalized.code === 'UNAUTHENTICATED') {
       clearSession()
       onUnauthorized()
     }

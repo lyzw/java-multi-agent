@@ -25,6 +25,7 @@ import { AppShell } from '@/layouts/AppShell'
 import { PageHead } from '@/components/ui'
 
 import { LoginPage } from '@/pages/LoginPage'
+import { NoPermissionPage } from '@/components/NoPermissionPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { NewRunPage } from '@/pages/NewRunPage'
 import { RunProgressPage } from '@/pages/RunProgressPage'
@@ -151,6 +152,10 @@ function AppRoutes(): JSX.Element {
           <Route path="/profile" element={<ProfileLookup />} />
           <Route path="/profile/:studentId" element={<ProfilePage />} />
           <Route path="/rag" element={<RagSearchPage />} />
+          {/* ⚠️ 业务无权限整页（code=ACCESS_DENIED，与「未登录」严格区分，
+            不触发登录跳转；由页面在捕获到无权限时 navigate 至此）。 */}
+          <Route path="/no-permission" element={<NoPermissionPage />} />
+
           {/* ⚠️ 报表中心：租户级**聚合**视图（辅导量 / 错题 / 学生活跃 /
               知识点排行 / 检索次数 / 语料导入与准入）。
               与「检索记录」的区别：前者是逐条明细，后者是按天汇总。

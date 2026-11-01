@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { request, ApiError } from '@/api/client'
+import { request, ApiError, isAccessDenied } from '@/api/client'
 import * as tokenStorage from '@/auth/tokenStorage'
 
 /**
@@ -97,5 +97,40 @@ describe('租户身份域 401/403 · 通道边界不是会话失效', () => {
 
     expect((err as ApiError).status).toBe(403)
     expect(cleared).not.toHaveBeenCalled()
+  })
+})
+
+describe('ACCESS_DENIED · 业务无权限绝不跳登录', () => {
+  it('✅ /platform/** 返 403 + code=ACCESS_DENIED → 会话保留、不跳登录（渲染无权限页）', async () => {
+    reply(403, { code: 'ACCESS_DENIED', message: '无权执行该操作' })
+    const cleared = vi.spyOn(tokenStorage, 'clearSession')
+
+    const err = await request('/platform/v1/users').catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(403)
+    expect((err as ApiError).code).toBe('ACCESS_DENIED')
+    // ⚠️ 关键断言：已登录但无权限，绝不能清会话、绝不能跳登录
+    expect(cleared).not.toHaveBeenCalled()
+    expect(window.location.href).not.toBe('/admin/login')
+    expect(tokenStorage.loadSession()?.accessToken).toBe('platform-token')
+  })
+
+  it('✅ 租户域 403 + code=ACCESS_DENIED → 识别为无权限、会话保留', async () => {
+    reply(403, { code: 'ACCESS_DENIED', message: '无权执行该操作' })
+
+    const err = await request('/runs').catch((e: unknown) => e)
+
+    expect(isAccessDenied(err)).toBe(true)
+    expect(tokenStorage.loadSession()?.accessToken).toBe('platform-token')
+  })
+
+  it('✅ isAccessDenied 对 UNAUTHENTICATED 必须返回 false（二者不可混为一谈）', async () => {
+    reply(401, { code: 'UNAUTHENTICATED', message: '未认证' })
+
+    const err = await request('/runs').catch((e: unknown) => e)
+
+    expect(isAccessDenied(err)).toBe(false)
+    expect((err as ApiError).code).toBe('UNAUTHENTICATED')
   })
 })

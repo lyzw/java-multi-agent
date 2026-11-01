@@ -6,14 +6,110 @@ import { loadSession, clearSession } from '@/auth/tokenStorage'
 import { API_BASE, APP_BASE_PATH } from '@/config/constants'
 
 export class ApiError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-    public readonly data?: unknown,
-  ) {
+  /** HTTP 状态码；网络层失败为 0 */
+  readonly status: number
+  /**
+   * 统一错误码（与租户端 `NormalizedError.code` 同口径）。
+   *
+   * ⚠️ 来自后端两类错误形状：{code,message}（ApiExceptionHandler / Security 过滤器）
+   * 或 {error}（AuthController 登录失败）。构造时未显式给出 code，则按状态码推导：
+   * 401→UNAUTHENTICATED，403→ACCESS_DENIED，其余→HTTP_<status>。
+   * 旧的 `new ApiError(status, message, data?)` 调用因此仍可正常工作（code 自动推导）。
+   */
+  readonly code: string
+  readonly data?: unknown
+
+  constructor(status: number, message: string, data?: unknown, code?: string) {
     super(message)
     this.name = 'ApiError'
+    this.status = status
+    this.data = data
+    this.code = code ?? deriveCodeFromStatus(status)
   }
+}
+
+/** 仅按状态码推导兜底 code（体缺失 / 测试手工构造错误时） */
+function deriveCodeFromStatus(status: number): string {
+  if (status === 401) return 'UNAUTHENTICATED'
+  if (status === 403) return 'ACCESS_DENIED'
+  return `HTTP_${status}`
+}
+
+/**
+ * 从响应体提取统一错误码（与租户端 errors.ts 的 readCodeMessage / readErrorField 同口径）。
+ *
+ * ⚠️ 兼容后端两套错误形状：① {code,message} ② {error}。
+ * 体缺失时按状态码推导，保证「无 body 的裸 401/403」也能拿到正确 code，
+ * 从而让「按 code 分支」不依赖后端一定带了 body。
+ */
+function extractCode(status: number, body: unknown): string {
+  if (body && typeof body === 'object') {
+    const rec = body as Record<string, unknown>
+    if (typeof rec['code'] === 'string') return rec['code']
+    if (typeof rec['error'] === 'string') {
+      const mapped: Record<string, string> = {
+        unauthorized: 'UNAUTHENTICATED',
+        forbidden: 'ACCESS_DENIED',
+        invalid_credentials: 'INVALID_CREDENTIALS',
+      }
+      return mapped[rec['error']] ?? `HTTP_${status}`
+    }
+  }
+  if (status === 401) return 'UNAUTHENTICATED'
+  if (status === 403) return 'ACCESS_DENIED'
+  return `HTTP_${status}`
+}
+
+/** 从响应体提取面向用户文案：优先后端 message，否则按 code 兜底 */
+function extractMessage(status: number, code: string, body: unknown): string {
+  if (
+    body &&
+    typeof body === 'object' &&
+    'message' in body &&
+    typeof (body as Record<string, unknown>)['message'] === 'string'
+  ) {
+    return String((body as Record<string, unknown>)['message'])
+  }
+  switch (code) {
+    case 'UNAUTHENTICATED':
+      return '登录已过期，请重新登录'
+    case 'ACCESS_DENIED':
+      return '无权执行该操作'
+    default:
+      return `请求失败（${status}）`
+  }
+}
+
+/**
+ * 是否为「业务无权限」（已登录但缺少所需权限）。
+ *
+ * ⚠️ 与身份认证失败（UNAUTHENTICATED）严格区分：无权限**不**触发登录跳转，
+ * 只提示「无权执行该操作」或渲染无权限整页。把二者混为一谈会导致：
+ * 用户做一笔正常业务操作被拒 → 被当成「未登录」直接踢回登录页、丢掉操作现场。
+ */
+export function isAccessDenied(cause: unknown): boolean {
+  return cause instanceof ApiError && cause.code === 'ACCESS_DENIED'
+}
+
+/**
+ * 已登录但缺权限（code=ACCESS_DENIED）的统一落点。
+ *
+ * @param err 捕获到的错误（通常是 `ApiError`）
+ * @param navigate 传入则跳转到「无权限」整页（保留现场，可返回上一页）；
+ *                 不传则返回 false，由调用方自行用既有的错误态呈现。
+ * @returns 是否命中 ACCESS_DENIED（便于调用方 if 分支后做其它事）
+ */
+export function notifyAccessDenied(
+  err: unknown,
+  navigate?: (to: string) => void,
+): boolean {
+  if (!isAccessDenied(err)) return false
+  if (navigate) {
+    const message = err instanceof ApiError ? err.message : ''
+    const qs = message ? `?reason=${encodeURIComponent(message)}` : ''
+    navigate(`/no-permission${qs}`)
+  }
+  return true
 }
 
 function redirectLogin(): void {
@@ -79,30 +175,38 @@ async function _request<T>(
     // ⚠️ 透传 init.signal：调用方可借 AbortController 实现超时（RAG 管理端点）。
     res = await fetch(`${API_BASE}${path}`, { ...init, headers })
   } catch (e) {
-    throw new ApiError(0, `网络错误：${(e as Error).message}`)
+    throw new ApiError(0, `网络错误：${(e as Error).message}`, undefined, 'NETWORK_ERROR')
   }
 
-  if (res.status === 401) {
-    if (isPlatformSessionPath(path)) {
-      clearSession()
-      redirectLogin()
-      throw new ApiError(401, '登录已失效，请重新登录')
-    }
-    // ⚠️ 跨身份域端点的 401 是**预期的通道边界**，不是会话失效：
-    //    不清会话、不跳登录，原样抛出交给调用方
-    //    （`isTenantChannelBlocked`）呈现「需租户级令牌通道」。
-    throw new ApiError(401, '平台令牌对该端点不可达（身份域隔离）')
-  }
   if (res.status === 204) return undefined as T
 
   const text = await res.text()
   const data: unknown = text.length > 0 ? JSON.parse(text) : null
+
   if (!res.ok) {
-    const msg =
-      data && typeof data === 'object' && 'message' in data
-        ? String((data as Record<string, unknown>)['message'])
-        : `请求失败（${res.status}）`
-    throw new ApiError(res.status, msg, data)
+    const code = extractCode(res.status, data)
+    // ⚠️ **按「归一化 code + 路径」双轴判定是否清会话跳登录**（权限重构）：
+    //   两条件**同时**满足才登出：
+    //     · 轴一（路径）：仅本控制台自身会话域 `/platform/**` 的拒绝才可能意味令牌失效；
+    //     · 轴二（code）：该拒绝必须是 UNAUTHENTICATED（未认证 / 令牌失效）。
+    //   其余情形一律**不清会话、不跳登录**，原样抛出交给调用方分支：
+    //     · 跨身份域 401（平台令牌打租户端点）→ 通道边界，交 `isTenantChannelBlocked` 提示；
+    //     · 任意 ACCESS_DENIED（含 /platform/** 的 403，已登录但无权限）→ 渲染无权限页。
+    //   以往对 401 一律清会话跳登录，会把「业务无权限 / 跨身份域 401」误判为未登录，
+    //   直接把用户踢回登录页、丢掉操作现场（2026-10-28 实测缺陷）。
+    if (res.status === 401 && isPlatformSessionPath(path)) {
+      clearSession()
+      redirectLogin()
+      throw new ApiError(401, '登录已失效，请重新登录', data, code)
+    }
+    if (res.status === 401 && !isPlatformSessionPath(path)) {
+      // ⚠️ 跨身份域端点的 401 是**预期的通道边界**，不是会话失效：
+      //    不清会话、不跳登录，原样抛出交给调用方
+      //    （`isTenantChannelBlocked`）呈现「需租户级令牌通道」。
+      throw new ApiError(401, '平台令牌对该端点不可达（身份域隔离）', data, code)
+    }
+    const message = extractMessage(res.status, code, data)
+    throw new ApiError(res.status, message, data, code)
   }
   return data as T
 }

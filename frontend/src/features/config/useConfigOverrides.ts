@@ -19,6 +19,7 @@ import {
   clearConfigOverride,
   ApiError,
 } from '@/api/client'
+import { isAccessDenied } from '@/api/errors'
 import type { ConfigOverrideItem } from '@/api/types'
 
 /** 未知错误兜底文案（不给用户凭空猜测的具体原因）。 */
@@ -32,6 +33,13 @@ export interface UseConfigOverridesResult {
   submittingKey: string | null
   /** 上一次操作的错误（与加载错误分开：加载失败和提交失败语义不同） */
   actionError: string | null
+  /**
+   * 上一次操作是否因「业务无权限」被拒（code=ACCESS_DENIED）。
+   *
+   * ⚠️ 与「未登录」严格区分：本标志为 true 时**不**触发登录跳转，
+   * 页面应渲染无权限整页或提示，而非把用户踢回登录页。
+   */
+  accessDenied: boolean
   reload: () => void
   apply: (key: string, value: string, reason: string) => Promise<boolean>
   clear: (key: string) => Promise<boolean>
@@ -43,6 +51,7 @@ export function useConfigOverrides(): UseConfigOverridesResult {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [accessDenied, setAccessDenied] = useState(false)
   const [submittingKey, setSubmittingKey] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
   const alive = useRef(true)
@@ -93,6 +102,10 @@ export function useConfigOverrides(): UseConfigOverridesResult {
         return true
       } catch (cause: unknown) {
         if (!alive.current) return false
+        const denied = cause instanceof ApiError && isAccessDenied(cause.normalized)
+        // ⚠️ 业务无权限（ACCESS_DENIED）与「未登录」区分：前者不触发登录跳转，
+        //    仅置 accessDenied 标志，由页面渲染无权限整页 / 提示。
+        setAccessDenied(denied)
         setActionError(
           cause instanceof ApiError ? cause.normalized.message : FALLBACK_ERROR,
         )
@@ -123,6 +136,7 @@ export function useConfigOverrides(): UseConfigOverridesResult {
     error,
     submittingKey,
     actionError,
+    accessDenied,
     reload,
     apply,
     clear,

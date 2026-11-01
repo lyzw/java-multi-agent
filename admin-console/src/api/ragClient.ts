@@ -206,6 +206,8 @@ async function ragRequest<T>(
       throw new ApiError(
         RAG_TIMEOUT_STATUS,
         '请求超时，后端没有在规定时间内返回。可以稍后重试，或缩小本次操作范围。',
+        undefined,
+        'RAG_TIMEOUT',
       )
     }
     // ⚠️ 错误文案按 4xx/5xx 分流（评测 P0-2）：通用层的 401 归因
@@ -294,7 +296,9 @@ export function ragErrorMessage(cause: unknown): string {
  */
 function toRagApiError(cause: unknown): unknown {
   if (!(cause instanceof ApiError)) return cause
-  return new ApiError(cause.status, ragErrorMessage(cause), cause.data)
+  // ⚠️ 保持 status 与 code 不变：调用方按 status 分流（超时 408 / 冲突 409 / 票据 403），
+  // 只换文案，不换语义。
+  return new ApiError(cause.status, ragErrorMessage(cause), cause.data, cause.code)
 }
 
 /* ── 统计与列表 ───────────────────────────────────────── */

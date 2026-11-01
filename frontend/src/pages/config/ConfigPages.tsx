@@ -18,6 +18,7 @@ import type { KeyboardEvent, ReactNode } from 'react'
 import { Sheet, Marked, Empty, Loading, LoadingRows, ErrorState, ListFooter } from '@/shared/states'
 import { useConfig } from '@/features/config/useConfig'
 import { useConfigOverrides } from '@/features/config/useConfigOverrides'
+import { NoPermissionPage } from '@/components/NoPermissionPage'
 import { ConfigOverrideRow } from '@/features/config/ConfigOverrideRow'
 import { useGovernancePage } from '@/features/governance/useGovernancePage'
 import { ToolCatalogPanel, SkillCatalogPanel } from '@/pages/config/CapabilityCatalogPanels'
@@ -378,6 +379,7 @@ function WritableConfigTable({
     reload,
     submittingKey,
     actionError,
+    accessDenied,
     apply,
     clear,
     clearActionError,
@@ -403,13 +405,17 @@ function WritableConfigTable({
         </p>
       </Marked>
 
-      {actionError !== null && (
-        <p role="alert" className="field__error">
-          {actionError}
-          <button type="button" onClick={clearActionError}>
-            知道了
-          </button>
-        </p>
+      {accessDenied ? (
+        <NoPermissionPage />
+      ) : (
+        actionError !== null && (
+          <p role="alert" className="field__error">
+            {actionError}
+            <button type="button" onClick={clearActionError}>
+              知道了
+            </button>
+          </p>
+        )
       )}
 
       {visible.length === 0 ? (

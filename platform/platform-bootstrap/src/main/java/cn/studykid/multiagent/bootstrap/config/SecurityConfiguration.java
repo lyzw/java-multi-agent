@@ -277,33 +277,47 @@ public class SecurityConfiguration {
     }
 
     /**
-     * 401 处理器：未认证。
+     * 401 处理器：未认证（身份认证失败）。
      *
-     * <p>⚠️ 消息统一为 {@code unauthorized}，不含具体原因
-     * （令牌过期 / 签名无效 / 格式错误）—— 告诉调用方细分原因
-     * 等于帮攻击者调试。
+     * <p>⚠️ <b>统一错误体为 {@code {code, message}}</b>，与 {@code ApiExceptionHandler} 保持一致。
+     * 此前发的是 {@code {error:"unauthorized"}}，与应用层异常的 {@code {code,message}} 形状
+     * 不兼容，迫使前端维护两套解析逻辑，且难以纯粹按 {@code code} 分支。
+     * 统一后，前端拦截器只需看 {@code code}：
+     * <ul>
+     *   <li>{@code UNAUTHENTICATED}（未登录 / 令牌失效）→ 清会话并跳登录页；</li>
+     *   <li>{@code ACCESS_DENIED}（已登录但业务无权限，见 {@link #jsonForbidden()}）→
+     *       <b>不跳登录</b>，提示「无权限」。</li>
+     * </ul>
+     *
+     * <p>⚠️ 消息固定为「未认证」，不含具体原因（令牌过期 / 签名无效 / 格式错误）——
+     * 告诉调用方细分原因等于帮攻击者调试。HTTP 状态仍保持 401（拒绝走 4xx 的监控纪律不变）。
      */
     private AuthenticationEntryPoint jsonUnauthorized() {
         return (request, response, exception) -> {
             response.setStatus(HttpStatus.UNAUTHORIZED.value());
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             response.setCharacterEncoding("UTF-8");
-            response.getWriter().write("{\"error\":\"unauthorized\"}");
+            response.getWriter()
+                    .write("{\"code\":\"UNAUTHENTICATED\",\"message\":\"未认证\"}");
         };
     }
 
     /**
-     * 403 处理器：已认证但无权。
+     * 403 处理器：已认证但无权（业务权限不足）。
      *
-     * <p>与 401 分开：客户端据此知道「重新登录无用，需申请权限」，
-     * 若报 401 会导致反复重试。
+     * <p>⚠️ 统一错误体为 {@code {code:"ACCESS_DENIED", message:"无权执行该操作"}}，
+     * 与 {@code ApiExceptionHandler#handleAccessDenied} 同形同质。
+     * 与 401 分开：客户端据此知道「重新登录无用，需申请权限」，
+     * 若误判为 401 会导致反复重试、甚至被直接踢回登录页（本项目的已知缺陷）。
+     * <b>关键：绝不触发登录跳转</b>——无权限与未登录是两种场景。
      */
     private AccessDeniedHandler jsonForbidden() {
         return (request, response, exception) -> {
             response.setStatus(HttpStatus.FORBIDDEN.value());
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             response.setCharacterEncoding("UTF-8");
-            response.getWriter().write("{\"error\":\"forbidden\"}");
+            response.getWriter()
+                    .write("{\"code\":\"ACCESS_DENIED\",\"message\":\"无权执行该操作\"}");
         };
     }
 
