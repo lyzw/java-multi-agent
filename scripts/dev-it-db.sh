@@ -61,19 +61,6 @@ else
   grep -v '^\\\(un\)\?restrict ' "$SNAPSHOT" | psql_it -q -v ON_ERROR_STOP=1 -f -
 fi
 
-# ── 2.5 列级补丁：把**已存在**的 IT 库补到快照的最新形状 ──────────
-# ⚠️ 上面那段「结构已存在则跳过」是幂等保护，代价是老库会停在旧形状上：
-#    快照加了 ticket_scope（U-8）之后，旧 IT 库没有这一列，
-#    而新 jar 的 INSERT/SELECT 都点它 → 审计写入与读取直接失败，
-#    失败现场长得像「代码改坏了」，真因是库没跟上（共享远程库同理会踩，见 patch 头【执行】段）。
-#    patch 本身可空加列 + 幂等，空库与存量库都能跑，所以这里无条件重放一遍。
-for patch in "$SCRIPT_DIR/../deploy/sql/platform/patch_audit_ticket_scope.sql"; do
-  [ -e "$patch" ] || continue
-  echo "  · 重放列级补丁 $(basename "$patch")"
-  # ⚠️ 走 stdin（-f -）而不是传路径：psql 跑在**容器里**，宿主机路径在它眼里不存在。
-  psql_it -q -v ON_ERROR_STOP=1 -f - < "$patch" >/dev/null
-done
-
 # ── 2.6 清理测试残留 ─────────────────────────────────────────────
 # ⚠️⚠️ 为什么必须清（P4-D10 实测）：
 #   多个 agent-infrastructure 集成测试**没有 @AfterEach 清理**

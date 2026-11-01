@@ -169,6 +169,77 @@ SELECT format('ALTER DEFAULT PRIVILEGES IN SCHEMA PUBLIC GRANT USAGE, SELECT ON 
 
 
 -- =====================================================================
+-- 2b. platform 域授权（原 09 / 11 号脚本收编 · 2026-11-01）
+-- =====================================================================
+-- 【为什么 platform 域要单独授权】
+--   03 历史上只授了 public schema，切 app_agent 后暴露两处真实故障：
+--   ① platform_ops 对 platform schema 无 USAGE → 平台审计通道是断的
+--     （`permission denied for schema platform`，与业务逻辑无关的权限错误）；
+--   ② app_agent 读不到 platform.tenant → RunRecoverySweeper（崩溃恢复扫描器）
+--     每 30 秒报错一次，worker 崩溃后无人接管 → Run 永久卡死（静默滞留）。
+--
+-- 【授权形状是刻意不对称的】
+--   · platform_ops（BYPASSRLS 运维通道）＝ platform 域的本职 → 整域 DML；
+--   · app_agent（应用角色，NOBYPASSRLS）＝ **只读两张租户登记表**
+--     （platform.tenant / platform.tenant_quota，无 RLS 的登记元数据），
+--     不给整域、不给写权限 —— platform 域还有 platform_user /
+--     platform_audit_event 等身份与凭据表，整域放开＝凭据库对业务进程敞开。
+-- =====================================================================
+
+-- ── 运维角色：platform 域整域 DML ──────────────────────────────────
+-- ⚠️ 用 DO 块遍历「已存在」的表：不同环境的 platform 域表集合可能不同，
+--    写死表名会在缺表的环境里报错中断。
+SELECT format('GRANT USAGE ON SCHEMA platform TO %I', :'ops_role') \gexec
+DO $$
+DECLARE
+    t text;
+    ops text := current_setting('my.ops_role');
+BEGIN
+    FOR t IN
+        SELECT c.relname FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'platform' AND c.relkind IN ('r', 'p')
+    LOOP
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON platform.%I TO %I', t, ops);
+    END LOOP;
+    FOR t IN
+        SELECT c.relname FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'platform' AND c.relkind = 'S'
+    LOOP
+        EXECUTE format('GRANT USAGE, SELECT ON platform.%I TO %I', t, ops);
+    END LOOP;
+END;
+$$;
+SELECT format('ALTER DEFAULT PRIVILEGES IN SCHEMA platform GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', :'ops_role') \gexec
+SELECT format('ALTER DEFAULT PRIVILEGES IN SCHEMA platform GRANT USAGE, SELECT ON SEQUENCES TO %I', :'ops_role') \gexec
+
+-- ── 应用角色：仅租户登记表只读 ────────────────────────────────────
+SELECT format('GRANT USAGE ON SCHEMA platform TO %I', :'app_role') \gexec
+SELECT format('GRANT SELECT ON platform.tenant TO %I', :'app_role') \gexec
+SELECT format('GRANT SELECT ON platform.tenant_quota TO %I', :'app_role') \gexec
+SELECT format('ALTER DEFAULT PRIVILEGES IN SCHEMA platform GRANT SELECT ON TABLES TO %I', :'app_role') \gexec
+
+-- ── 自检：授权未生效即报错（fail-closed）──────────────────────────
+DO $$
+DECLARE
+    app  text := current_setting('my.app_role');
+    ops  text := current_setting('my.ops_role');
+BEGIN
+    IF NOT (has_schema_privilege(ops, 'platform', 'USAGE')
+            AND has_table_privilege(ops, 'platform.platform_audit_event', 'SELECT')) THEN
+        RAISE EXCEPTION '授权未生效：platform_ops 对 platform 域的 USAGE/SELECT 缺失';
+    END IF;
+    IF NOT (has_schema_privilege(app, 'platform', 'USAGE')
+            AND has_table_privilege(app, 'platform.tenant', 'SELECT')) THEN
+        RAISE EXCEPTION '授权未生效：app_agent 对 platform.tenant 的 USAGE/SELECT 缺失';
+    END IF;
+    RAISE NOTICE '自检通过：platform 域授权就位（ops 整域 DML / app 仅租户登记表只读）';
+END;
+$$;
+
+
+-- =====================================================================
 -- 3. 角色属性校验
 -- =====================================================================
 -- ⚠️ app_agent：rolsuper 与 rolbypassrls **必须**都是 f。

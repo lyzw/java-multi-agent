@@ -369,9 +369,15 @@ INSERT INTO public.cap_tool_def VALUES ('tool-mcp-schedule', 1, '课程表查询
 --    说明那条手写发布头**没有从序列取号**（§6.3 第 2 条要求序号由序列分配）。
 --    不校正的话本补丁第一次 nextval 就撞 unique 约束（dry-run 实测报错）。
 --    这里只把序列**追到已有行的最大值**，不改任何历史行、不回拨、不跳号复用。
-SELECT setval('public.cap_config_publish_seq',
-              (SELECT coalesce(max(config_publish_seq), 0) FROM public.cap_config_release),
-              true);
+--    ⚠️ 空库复放安全（2026-11-01 修）：空表时 max=0，直接 setval(seq,0) 会因
+--    序列下界 1 报 out of bounds —— 该附录 2026-10-29 为存量库补写，首次在
+--    空库复放时暴露。空表时把序列归位到 1 且 is_called=false（nextval 从 1 起）。
+SELECT CASE
+         WHEN (SELECT coalesce(max(config_publish_seq), 0) FROM public.cap_config_release) > 0
+           THEN setval('public.cap_config_publish_seq',
+                       (SELECT max(config_publish_seq) FROM public.cap_config_release), true)
+         ELSE setval('public.cap_config_publish_seq', 1, false)
+       END;
 
 -- ── 1. PLATFORM 发布头：覆盖目录里全部已发布平台对象 ──────────────────
 INSERT INTO public.cap_config_release
@@ -550,3 +556,56 @@ UPDATE public.cap_config_pointer p
  WHERE p.pointer_key = 'TENANT:' || h.tenant_id::text
    AND p.current_release_id IS DISTINCT FROM h.release_id;
 
+
+
+-- =====================================================================
+-- 附录 B：t-b 租户与跨租户夹具（原 10_dev_seed_tb_snapshot.sql 收编 · 2026-11-01）
+-- =====================================================================
+-- 【为什么 dev 种子需要第二个租户】
+--   跨租户隔离类 IT（BudgetReservationIT / FaultInjectionIT / RetentionErasureIT
+--   等）在 setUp 阶段断言「t-b 至少有一条 execution_snapshot」
+--   （FaultInjectionSupport.snapshotIdBySlug('t-b')）。
+--   ⚠️ ensureTenantSnapshot 帮不上忙：它只为名为 'agent1' 的 agent 建版本与快照。
+--
+-- 【形状纪律】
+--   · platform.tenant + platform.tenant_quota + public.tenant **三处齐**
+--     （缺平台侧登记的租户取执行票证得 404 TENANT_NOT_FOUND —— 历史实测坑）；
+--   · 快照 run_config 留空对象，与 t-a 形状一致，避免夹具形态漂移；
+--   · 全部幂等（ON CONFLICT DO NOTHING），重复复放不产生重复行。
+-- =====================================================================
+
+-- ── B1. t-b 租户登记（平台侧三处 + 业务侧镜像，UUID 固定保证幂等）──
+INSERT INTO platform.tenant (id, name, slug, status, plan, lifecycle_state, created_at, updated_at)
+VALUES ('b0b5eed0-1111-4222-8333-444455556666', 'IT 租户 B', 't-b', 'ACTIVE', NULL, 'ACTIVE', now(), now())
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO platform.tenant_quota (tenant_id, agent_limit, run_concurrency_limit)
+VALUES ('b0b5eed0-1111-4222-8333-444455556666', 50, 10)
+ON CONFLICT (tenant_id) DO NOTHING;
+
+INSERT INTO public.tenant (tenant_id, slug, name, status, created_at, updated_at)
+VALUES ('b0b5eed0-1111-4222-8333-444455556666', 't-b', 'IT 租户 B', 'ACTIVE', now(), now())
+ON CONFLICT (tenant_id) DO NOTHING;
+
+-- ── B2. t-b 预算账户（工具调用的预算预留需要）─────────────────────
+INSERT INTO public.budget_account (account_id, tenant_id, currency, total_limit, reserved_amount, settled_amount, created_at, updated_at)
+VALUES ('c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f', 'b0b5eed0-1111-4222-8333-444455556666', 'CNY', 1000.000000, 0.000000, 0.000000, now(), now())
+ON CONFLICT (account_id) DO NOTHING;
+
+-- ── B3. t-b 的 agent1 + v1 + 执行快照（跨租户用例建 Run 的前置）───
+INSERT INTO public.agent (agent_id, tenant_id, name, description, created_at, updated_at)
+VALUES ('a3f1c2d4-5e6b-4a7c-8d9e-0f1a2b3c4d5e',
+        'b0b5eed0-1111-4222-8333-444455556666', 'agent1', 'dev 种子 Agent（供跨租户夹具使用）', now(), now())
+ON CONFLICT (agent_id) DO NOTHING;
+
+INSERT INTO public.agent_version (version_id, tenant_id, agent_id, version_number, definition, published_at, created_at)
+VALUES ('b4e2d3c5-6f7c-4b8d-9e0f-1a2b3c4d5e6f',
+        'b0b5eed0-1111-4222-8333-444455556666', 'a3f1c2d4-5e6b-4a7c-8d9e-0f1a2b3c4d5e', 1,
+        '{"kind":"tutor"}'::jsonb, now(), now())
+ON CONFLICT (version_id) DO NOTHING;
+
+INSERT INTO public.execution_snapshot (snapshot_id, tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config, created_at)
+VALUES ('c5f3e4d6-7a8d-4c9e-0f1a-2b3c4d5e6f7a',
+        'b0b5eed0-1111-4222-8333-444455556666', 'b4e2d3c5-6f7c-4b8d-9e0f-1a2b3c4d5e6f',
+        '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, now())
+ON CONFLICT (snapshot_id) DO NOTHING;
