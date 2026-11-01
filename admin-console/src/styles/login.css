@@ -9,11 +9,34 @@
  *    浅色面（表单区）保持 AntD 默认前景色。
  */
 
+/* ⚠️ 大屏适配（2026-11-01）：
+ *    此前两栏直接铺满视口（1fr / 480px），在 1920 及以上的大屏上，
+ *    左栏文案会贴死屏幕左缘、右栏表单会贴死右缘，中间留出一大片空档，
+ *    观感「散」且左下/右下角孤立。
+ *    现改为：外层 .login 只做**居中与背景**，内容收进限宽的 .login__shell，
+ *    两侧留出稳定安全边距，同时 shell 自带卡片质感（圆角+投影）。
+ */
 .login {
   min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(90% 60% at 50% 0%, #eaf0fd 0%, rgba(234, 240, 253, 0) 70%),
+    #f5f7fa;
+}
+
+.login__shell {
+  width: 100%;
+  max-width: 1160px;
+  min-height: 620px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 480px);
-  background: #f5f7fa;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
+  overflow: hidden;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(16, 32, 72, 0.12);
 }
 
 /* ── 左栏：品牌深色面 ─────────────────────────────────── */
@@ -21,15 +44,18 @@
 .login__brand {
   display: flex;
   align-items: center;
-  padding: 48px 56px;
+  padding: 56px 48px;
   background:
     radial-gradient(120% 90% at 8% 0%, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0) 55%),
     linear-gradient(160deg, #1b3f9c 0%, #2f6df6 55%, #4b86f7 100%);
   color: #fff;
 }
 
+/* 品牌文案在左栏内居中：不再贴着左边缘 */
 .login__brand-inner {
-  max-width: 460px;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
 }
 
 .login__logo {
@@ -126,8 +152,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px 32px;
+  padding: 56px 44px;
   overflow-y: auto;
+  background: #fff;
 }
 
 .login__card {
@@ -167,7 +194,12 @@
 
 @media (max-width: 1023px) {
   .login {
+    padding: 16px;
+  }
+
+  .login__shell {
     grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
   }
 
   .login__brand {
@@ -204,6 +236,16 @@
 }
 
 @media (max-width: 767px) {
+  .login {
+    padding: 0;
+  }
+
+  .login__shell {
+    border-radius: 0;
+    box-shadow: none;
+    min-height: 100vh;
+  }
+
   .login__panel {
     padding: 28px 20px;
   }

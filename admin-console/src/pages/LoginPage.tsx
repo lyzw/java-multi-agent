@@ -101,6 +101,11 @@ export function LoginPage(): JSX.Element {
 
   return (
     <div className="login">
+      {/* ⚠️ 外层 .login 只负责居中与背景；真正的两栏放在 .login__shell 里。
+         *    原因：宽屏下若让两栏直接铺满视口，左栏文字会贴死屏幕左缘、
+         *    右栏表单会贴死右缘（大屏观感很差）。shell 限宽居中后，
+         *    两侧都会留出稳定的安全边距。 */}
+      <div className="login__shell">
       {/* ── 左栏：品牌与控制台价值 ─────────────────────── */}
       <aside className="login__brand">
         <div className="login__brand-inner">
@@ -218,6 +223,7 @@ export function LoginPage(): JSX.Element {
           </Form>
         </div>
       </main>
+      </div>
     </div>
   )
 }
