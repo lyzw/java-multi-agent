@@ -2,6 +2,7 @@ package cn.studykid.multiagent.infrastructure.model;
 
 import java.util.Map;
 import java.time.Duration;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -12,6 +13,7 @@ import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
@@ -92,8 +94,22 @@ public abstract class AbstractModelGateway implements ModelGateway {
     protected ModelResponse callWithTimeout(
             @NonNull Supplier<ModelResponse> supplier,
             @NonNull Duration timeout) {
-        CompletableFuture<ModelResponse> future =
-                CompletableFuture.supplyAsync(supplier);
+        // ⚠️ MDC 不跨线程：裸 supplyAsync 会把 HTTP 调用丢进 ForkJoin 公共线程池，
+        // 子线程拿不到调用线程的 traceId/租户/主体，模型供应商报错时日志退化为 [- - -]，
+        // 无法定位到具体租户与链路。用 LogContext.wrap 把上下文带进执行线程。
+        // 异常类型必须原样穿透（RuntimeException 不二次包裹），否则已归一化的
+        // ModelGatewayException.kind 会在外层被重新分类，破坏「不可重试」语义。
+        Callable<ModelResponse> wrapped = LogContext.wrap(supplier::get);
+        CompletableFuture<ModelResponse> future = CompletableFuture.supplyAsync(() -> {
+            try {
+                return wrapped.call();
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new ModelGatewayException(ModelErrorKind.PROVIDER_ERROR,
+                        CredentialRedactor.safeMessage("模型调用异常", e));
+            }
+        });
         try {
             return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {

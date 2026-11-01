@@ -5,11 +5,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 
+import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
@@ -251,6 +254,51 @@ class ModelGatewayContractTest {
         void negativeTokensRejected() {
             assertThatThrownBy(() -> new ModelResponse.ModelUsage(-1, 0))
                     .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("MDC 跨线程传播")
+    class MdcPropagation {
+
+        @Test
+        @DisplayName("✅ 异步模型调用的子线程能读到调用线程的 traceId/租户/主体")
+        void asyncCallPropagatesMdc() {
+            // 调用线程设置好链路上下文（与 RunExecutionLoop 调度模型调用前的状态一致）
+            LogContext.setTraceId("trace-deadbeef00000000000000000000ab");
+            LogContext.setIdentity("tenant-abc123", "principal-xyz789");
+            try {
+                // 子线程（ForkJoin 公共池）里捕获到的 MDC 快照
+                AtomicReference<Map<String, String>> captured = new AtomicReference<>();
+                var gw = new AbstractModelGateway() {
+                    @Override
+                    protected ModelResponse invokeGuarded(ModelRequest request) {
+                        return callWithTimeout(() -> {
+                            // 此处运行在 supplyAsync 派发的子线程上
+                            captured.set(Map.of(
+                                    LogContext.TRACE_ID, MDC.get(LogContext.TRACE_ID),
+                                    LogContext.TENANT_ID, MDC.get(LogContext.TENANT_ID),
+                                    LogContext.PRINCIPAL_ID, MDC.get(LogContext.PRINCIPAL_ID)));
+                            return new ModelResponse("ok", Map.of(),
+                                    new ModelResponse.ModelUsage(1, 1),
+                                    ModelResponse.FinishReason.STOP);
+                        }, request.timeout());
+                    }
+                };
+
+                gw.complete(request());
+
+                assertThat(captured).as("子线程应捕获到 MDC 快照").isNotNull();
+                assertThat(captured.get().get(LogContext.TRACE_ID))
+                        .as("traceId 必须跨线程带到执行线程，否则日志退化为 [- - -]")
+                        .isEqualTo("trace-deadbeef00000000000000000000ab");
+                assertThat(captured.get().get(LogContext.TENANT_ID))
+                        .isEqualTo("tenant-abc123");
+                assertThat(captured.get().get(LogContext.PRINCIPAL_ID))
+                        .isEqualTo("principal-xyz789");
+            } finally {
+                LogContext.clear();
+            }
         }
     }
 
