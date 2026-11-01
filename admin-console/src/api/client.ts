@@ -144,6 +144,9 @@ function redirectLogin(): void {
  */
 const PLATFORM_SESSION_PREFIX = '/platform/'
 
+/** 平台登录端点（公开认证入口）。它的 401 = 凭据错误，绝不是「会话过期」。 */
+const PLATFORM_LOGIN_PATH = '/platform/v1/auth/login'
+
 function isPlatformSessionPath(path: string): boolean {
   return path.startsWith(PLATFORM_SESSION_PREFIX)
 }
@@ -194,12 +197,19 @@ async function _request<T>(
     //     · 任意 ACCESS_DENIED（含 /platform/** 的 403，已登录但无权限）→ 渲染无权限页。
     //   以往对 401 一律清会话跳登录，会把「业务无权限 / 跨身份域 401」误判为未登录，
     //   直接把用户踢回登录页、丢掉操作现场（2026-10-28 实测缺陷）。
-    if (res.status === 401 && isPlatformSessionPath(path)) {
-      clearSession()
-      redirectLogin()
-      throw new ApiError(401, '登录已失效，请重新登录', data, code)
-    }
-    if (res.status === 401 && !isPlatformSessionPath(path)) {
+    if (res.status === 401) {
+      // ⚠️ 登录端点（公开认证入口）的 401 = 凭据错误，绝非「会话过期」。
+      //    必须原样抛出交 LoginPage 显示「用户名或密码错误」，严禁在此清会话 / 跳登录——
+      //    否则用户刚输完密码就被弹回登录页、且看不到任何错误原因，表现上像「登录卡死 / 超时」。
+      if (path === PLATFORM_LOGIN_PATH) {
+        throw new ApiError(401, '用户名或密码错误', data, code)
+      }
+      // ⚠️ 本控制台自身会话域（非登录）的 401 = 平台令牌失效 → 清会话并跳登录
+      if (isPlatformSessionPath(path)) {
+        clearSession()
+        redirectLogin()
+        throw new ApiError(401, '登录已失效，请重新登录', data, code)
+      }
       // ⚠️ 跨身份域端点的 401 是**预期的通道边界**，不是会话失效：
       //    不清会话、不跳登录，原样抛出交给调用方
       //    （`isTenantChannelBlocked`）呈现「需租户级令牌通道」。

@@ -134,3 +134,20 @@ describe('ACCESS_DENIED · 业务无权限绝不跳登录', () => {
     expect((err as ApiError).code).toBe('UNAUTHENTICATED')
   })
 })
+
+describe('登录端点 401 · 凭据错误绝不是会话过期', () => {
+  it('✅ /platform/v1/auth/login 返 401 → 会话保留、不跳登录，抛出「用户名或密码错误」', async () => {
+    reply(401, { error: 'invalid_credentials' })
+    const cleared = vi.spyOn(tokenStorage, 'clearSession')
+
+    const err = await request('/platform/v1/auth/login').catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(401)
+    expect((err as ApiError).message).toBe('用户名或密码错误')
+    // ⚠️ 关键：登录失败绝不能清会话 / 跳登录（否则像「登录卡死 / 超时」）
+    expect(cleared).not.toHaveBeenCalled()
+    expect(window.location.href).not.toBe('/admin/login')
+    expect(tokenStorage.loadSession()?.accessToken).toBe('platform-token')
+  })
+})
