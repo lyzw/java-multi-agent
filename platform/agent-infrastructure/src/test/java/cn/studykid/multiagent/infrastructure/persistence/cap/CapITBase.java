@@ -63,8 +63,95 @@ abstract class CapITBase {
         adminCfg.setMaximumPoolSize(2);
         adminPool = new HikariDataSource(adminCfg);
 
-        tenantA = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-a'");
-        tenantB = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-b'");
+        // ⚠️⚠️ **IT 用自己的租户，不得用真实租户**（2026-10-31 实测事故）。
+        //
+        //    原实现取的是**真实业务租户** t-a / t-b，于是：
+        //      · 每例前按 tenant_id 整租户清 CAP 表 → 把真实租户的生产种子数据抹掉
+        //        （实测 cap_agent_def 1176 行 → 1 行、cap_authz_version 10 行 → 0 行、
+        //          cap_config_pointer → 0 行）；
+        //      · 「相对断言」（如「重放后快照行数 == 1」）在真实数据存在时**恒假** ——
+        //        症状指向「业务逻辑坏了」，真因在测试基座。
+        //
+        //    改法：IT 自建两个**专用租户**（it-cap-it-a / it-cap-it-b）。
+        //    ⇒ ① IT 的写入与清理都落在这两个租户里，真实租户零污染；
+        //      ② 「清空后再断言」的老契约**原样成立**（专用租户本来就是空的）；
+        //      ③ 跨租户隔离用例仍可用（两个专用租户 + RLS 隔离验）。
+        tenantA = ensureItTenant("it-cap-it-a");
+        tenantB = ensureItTenant("it-cap-it-b");
+    }
+
+    /**
+     * 统计**只属于 IT 专用租户**的行数。
+     *
+     * <p>⚠️ **为什么必须有这个方法**：本组 IT 大量断言「本次操作没有留下任何发布头/指针」
+     * （如 CAS 失败后 {@code count(*) == 0}）。这类断言此前是
+     * {@code SELECT count(*) FROM cap_config_release} —— <b>全表计数</b>，
+     * 它成立的前提是「这张表是空的」，而那个前提只在
+     * 「清理语句把整张表删光」的旧行为下成立。
+     *
+     * <p>⚠️ 改为按 IT 专用租户计数后，断言的语义<b>反而更准</b>：
+     * 它现在问的是「<b>本次操作</b>有没有留下半成品」，
+     * 而不是「这张表里除了我刚写的还有没有别人写的行」——
+     * 后者会把共享库里其它租户的历史发布头算成本例的失败。
+     *
+     * @param table 表名
+     * @return IT 专用租户在该表里的行数
+     */
+    protected static long itCount(String table) {
+        return adminQueryLong("SELECT count(*) FROM " + table
+                + " WHERE tenant_id IN ('" + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
+    }
+
+    /**
+     * 统计 IT 专用租户在**无 tenant_id 的平台级表**里的行数。
+     *
+     * <p>⚠️ 平台级表（cap_config_release 的 PLATFORM 行、cap_config_pointer 的 PLATFORM 行）
+     * 没有 tenant_id 可按 —— 故按「object_versions 含 it- 前缀对象」判定是否属于本组 IT。
+     */
+    protected static long itPlatformReleaseCount() {
+        return adminQueryLong("SELECT count(*) FROM cap_config_release "
+                + "WHERE object_versions::text LIKE '%it-%'");
+    }
+
+    /**
+     * 统计**本组 IT 产生的 PLATFORM 作用域发布头**。
+     *
+     * <p>⚠️ 平台作用域发布头的 {@code tenant_id} 为 NULL，无法按租户过滤；
+     *    而共享库里存在**真实**的平台发布头（PLATFORM 指针是生产数据），
+     *    故全表计数会把它们算成本例的产物。
+     *    判据：object_versions 里含本组 IT 用的对象 id（it-* 前缀）。
+     */
+    protected static long itPlatformScopedReleaseCount() {
+        return adminQueryLong("SELECT count(*) FROM cap_config_release "
+                + "WHERE scope = 'PLATFORM' AND tenant_id IS NULL "
+                + "AND object_versions::text LIKE '%it-%'");
+    }
+
+    /**
+     * 统计 IT 专用租户 + IT 自己的平台级指针。
+     *
+     * <p>⚠️ {@code cap_config_pointer} 的 PLATFORM 行 {@code tenant_id} 为 NULL，
+     *    故按 tenant_id 过滤会漏掉它们 —— 那正是「被拒绝的平台发布仍创建了当前指针」
+     *    这类断言要盯的对象。故 PLATFORM 行按「指向的发布头属于本组 IT」判定。
+     */
+    protected static long itPointerCount() {
+        return adminQueryLong("SELECT count(*) FROM cap_config_pointer "
+                + "WHERE tenant_id IN ('" + tenantA + "'::uuid, '" + tenantB + "'::uuid)"
+                + " OR current_release_id IN (SELECT release_id FROM cap_config_release "
+                + "WHERE object_versions::text LIKE '%it-%')");
+    }
+
+    /**
+     * 确保 IT 专用租户存在，返回其 tenant_id。
+     *
+     * <p>⚠️ 幂等：重复执行只取回既有行，不重建（重建会丢该租户下的历史夹具，
+     * 而某些用例依赖「上一例留下的行」来构造场景）。
+     */
+    private static String ensureItTenant(String slug) {
+        adminExec("INSERT INTO tenant (tenant_id, slug, name, status) "
+                + "VALUES (gen_random_uuid(), '" + slug + "', '" + slug + "', 'ACTIVE') "
+                + "ON CONFLICT (slug) DO NOTHING");
+        return adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='" + slug + "'");
     }
 
     /**
@@ -96,8 +183,15 @@ abstract class CapITBase {
 
     @BeforeEach
     void cleanCapTables() {
-        // ⚠️ 每例前清空：否则上一例的版本行/授权版本会影响本例判定
-        //    （例如「原子自增后版本应为 3」在上一例已自增过时会变成 4）。
+        // ⚠️ 清理范围 = **IT 专用租户**（it-cap-it-a / it-cap-it-b）。
+        //    这两个租户由本基座自建（ensureItTenant），**不是**真实业务租户 ——
+        //    故「整租户清」不再有污染真实数据的风险（2026-10-31 实测事故的根因）。
+        //
+        // ⚠️ 整租户清是**必要的**：本组 IT 大量使用「相对断言」
+        //    （如「重放后快照行数 == 1」「CAS 失败后发布头 == 0」）。
+        //    只删部分行会让上一例的残留把断言带偏 ——
+        //    失败现场指向「业务逻辑坏了」，真因却是夹具残留。
+        //
         // ⚠️ 顺序：**先删引用方，再删被引用方** —— cap_agent_def 复合外键指向 agent。
         // ⚠️ P3 新表：审批与补偿任务同样必须每例清理 ——
         //    cap_approval 有 UNIQUE(tenant_id, invocation_id, tool_id)，
@@ -123,27 +217,41 @@ abstract class CapITBase {
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
         // ⚠️ platform 级对象定义（P1）：无 RLS、无 tenant_id，按 id 清理。
         //    只清本轮用例用到的固定 id，避免误删他人数据。
-        // ⚠️ 'it-ops-%'（P6R1 平台运维接入点）与 'it-r2-%'（P6R2 运行期四字段）是
-        //    新增 IT 类的自有前缀 ——
-        //    **必须**一并清理：跨测试类的残留会让其他 IT 的「零写入」断言失真
+        // ⚠️ **必须**一并清理：跨测试类的残留会让其他 IT 的「零写入」断言失真
         //    （ConfigPublishIT 的「配置非法仍写入了版本行」就是这么红过一次）。
         adminExec("DELETE FROM cap_tool_def WHERE id LIKE 'it-cap-%' OR id LIKE 'it-p5%'"
                 + " OR id LIKE 'it-ops-%' OR id LIKE 'it-r2-%'"
-                + " OR id LIKE 'it-r2b-%'");
+                + " OR id LIKE 'it-r2b-%' OR id LIKE 'it-snapchain-%'"
+                + " OR id LIKE 'it-tx-%' OR id LIKE 'it-dup-%'"
+                + " OR id LIKE 'it-g3-%' OR id LIKE 'it-deleg-%'");
         adminExec("DELETE FROM cap_skill_def WHERE id LIKE 'it-cap-%' OR id LIKE 'it-p5%'"
                 + " OR id LIKE 'it-ops-%' OR id LIKE 'it-r2-%'"
-                + " OR id LIKE 'it-r2b-%'");
+                + " OR id LIKE 'it-r2b-%' OR id LIKE 'it-snapchain-%'"
+                + " OR id LIKE 'it-tx-%' OR id LIKE 'it-dup-%'"
+                + " OR id LIKE 'it-g3-%' OR id LIKE 'it-deleg-%'");
         adminExec("DELETE FROM cap_mcp_server_def WHERE id LIKE 'it-cap-%' OR id LIKE 'it-p5%'"
                 + " OR id LIKE 'it-ops-%' OR id LIKE 'it-r2-%'"
-                + " OR id LIKE 'it-r2b-%'");
+                + " OR id LIKE 'it-r2b-%' OR id LIKE 'it-snapchain-%'"
+                + " OR id LIKE 'it-tx-%' OR id LIKE 'it-dup-%'"
+                + " OR id LIKE 'it-g3-%' OR id LIKE 'it-deleg-%'");
         // ⚠️ P5：发布指针与发布头是「当前生效版本」的权威来源。
         //    不清则上一例的指针会让本例解析到上一例的版本 ——
         //    失败现场指向「解析逻辑坏了」，真因却是夹具残留。
-        //    ⚠️ 顺序：先删指针（外键指向发布头），再删发布头。
-        adminExec("DELETE FROM cap_config_pointer");
-        adminExec("DELETE FROM cap_config_release");
+        // ⚠️ 顺序：先删指针（外键指向发布头），再删发布头。
+        // ⚠️ **PLATFORM 作用域**（无 tenant_id）另按「IT 自己的发布头」清：
+        //    只删 object_versions 含 it- 前缀对象的发布头，以及指向它们的指针。
+        //    ⚠️ 不得整表清 —— 表里有真实租户与平台的生产发布头与指针
+        //    （实测 PLATFORM 指针 1 行是生产数据，清掉即丢失「当前生效版本」）。
+        adminExec("DELETE FROM cap_config_pointer WHERE tenant_id IN ('"
+                + tenantA + "'::uuid, '" + tenantB + "'::uuid)"
+                + " OR current_release_id IN (SELECT release_id FROM cap_config_release "
+                + "WHERE object_versions::text LIKE '%it-%')");
+        adminExec("DELETE FROM cap_config_release WHERE tenant_id IN ('"
+                + tenantA + "'::uuid, '" + tenantB + "'::uuid)"
+                + " OR object_versions::text LIKE '%it-%'");
         // ⚠️ P5：四字段决策日志（追加不可改的表不在此列，DELETE 不受触发器限制）
-        adminExec("DELETE FROM cap_decision_log");
+        adminExec("DELETE FROM cap_decision_log WHERE tenant_id IN ('"
+                + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
     }
 
     /**

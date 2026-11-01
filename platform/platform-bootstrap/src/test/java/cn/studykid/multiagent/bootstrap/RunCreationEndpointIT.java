@@ -262,6 +262,38 @@ class RunCreationEndpointIT {
         return new Fixture(agentId, versionId);
     }
 
+
+    /**
+     * 取一个**已回填** cap_agent_def 的真实业务 Agent 的 agentId。
+     *
+     * <p>⚠️ 找不到就是「回填没生效」——这正是本用例要暴露的。
+     * 刻意只认「name 不带 it- 前缀」的真实业务 Agent：
+     * IT 夹具的 cap_agent_def 行是测试自己造的，认它等于没测。
+     */
+    private String realBackfilledAgent() {
+        String agentId = queryOrNull("""
+                SELECT cd.agent_id::text
+                FROM cap_agent_def cd
+                JOIN agent a ON a.agent_id = cd.agent_id AND a.tenant_id = cd.tenant_id
+                JOIN agent_version av ON av.agent_id = cd.agent_id
+                    AND av.tenant_id = cd.tenant_id AND av.version_number = cd.version
+                    AND av.published_at IS NOT NULL
+                JOIN execution_snapshot es ON es.version_id = av.version_id
+                    AND es.tenant_id = av.tenant_id
+                WHERE cd.tenant_id = '%s'::uuid
+                  AND a.name NOT LIKE 'it-%%'
+                  AND jsonb_array_length(cd.enabled_skills) > 0
+                LIMIT 1
+                """.formatted(tenant()));
+        assertThat(agentId)
+                .as("⛔⛔ 找不到已回填 cap_agent_def 的真实业务 Agent —— "
+                        + "13_cap_agent_def_backfill.sql 没有生效（或被 IT 清理掉了）。"
+                        + "后果：快照写入链断在第一步（resolver 抛 RESOURCE_UNKNOWN），"
+                        + "每个 Run 都会被判成 CONFIG_UNAVAILABLE。")
+                .isNotBlank();
+        return agentId;
+    }
+
     private String body(String agentId, String idempotencyKey) {
         return """
                 {"idempotencyKey":"%s","agentId":"%s","input":{"question":"解方程 x^2-5x+6=0"}}
@@ -331,6 +363,63 @@ class RunCreationEndpointIT {
                         + "（execution_snapshot.snapshot_id，而非 version_id）")
                 .as("绝不可能是随机 UUID——那正是原缺陷")
                 .isEqualTo(f.versionId());
+    }
+
+    @Test
+    @DisplayName("⚠️⚠️ 建 Run 时真的写出 execution_capability_snapshot（快照写入链端到端）")
+    void creatingRunWritesCapabilitySnapshot() {
+        // ⚠️⚠️ 本用例锁的是 2026-10-31 实测的断链：
+        //    execution_capability_snapshot **全库 0 行**，
+        //    而依赖它的读方（RootAgentModelConfigProvider）据此把每个 Run 判成
+        //    CONFIG_UNAVAILABLE —— 症状是「Run 建得出来、跑不起来」，
+        //    现场看着像「配置缺失」，真因却是**快照根本没被写**。
+        //
+        // ⚠️ **断链点有三个**（缺一即写不出）：
+        //    ① cap_agent_def 无行 → resolver.resolve() 抛 RESOURCE_UNKNOWN；
+        //    ② cap_authz_version 无该主体行 → require() 抛 AUTHZ_UNAVAILABLE；
+        //    ③ execution_capability_snapshot 有 FK → 必须先有 run 行
+        //       （本次由建 Run 事务本身满足）。
+        //    本用例把三者的前置都造齐，再断言快照真的出现。
+        // ⚠️⚠️ **本用例刻意不自己造 cap_agent_def 行** ——
+        //    它要验的是「**回填后的真实业务 Agent** 能不能走完快照写入链」。
+        //    若用例自带夹具，那它验的只是「夹具齐备时能写快照」，
+        //    而**回填缺失**这个真正的缺陷（2026-10-31 实测：全库 0 行）
+        //    它一条都测不出来 —— 夹具把缺陷盖住了。
+        //
+        //    故此处取一个**真实业务 Agent**（name 不带 it- 前缀），
+        //    它必须已经由回填脚本（13_cap_agent_def_backfill.sql）建出
+        //    cap_agent_def 行。找不到它 = 回填没生效 = 本用例红。
+        String f = realBackfilledAgent();
+        Fixture fixture = new Fixture(f, null);
+
+        // ── 前置②：cap_authz_version 行（本例主体 it-admin 的授权版本）──
+        exec("""
+                INSERT INTO cap_authz_version
+                    (tenant_id, principal_id, authz_version, version)
+                VALUES ('%s'::uuid, 'it-admin', 1, 0)
+                ON CONFLICT (tenant_id, principal_id) DO NOTHING
+                """.formatted(tenant()));
+
+        String key = UUID.randomUUID().toString();
+        String response = createRun(fixture.agentId(), key, 201);
+        String runId = jsonString(response, "runId");
+        remember(runId);
+
+        // ⚠️ 核心断言：快照行真的存在（不是「表非空」，而是「这一条 Run 的」）
+        String snapshotCount = query("SELECT count(*)::text FROM execution_capability_snapshot "
+                + "WHERE run_id = '" + runId + "'::uuid");
+        assertThat(snapshotCount)
+                .as("⛔⛔ 建 Run 后**没有**能力快照 = 快照写入链仍是断的。"
+                        + "后果：执行准入把该 Run 判成 CONFIG_UNAVAILABLE —— "
+                        + "Run 建得出来却永远跑不起来，且现场看着像「配置缺失」。")
+                .isEqualTo("1");
+
+        // ⚠️ 快照的授权版本必须来自 cap_authz_version（不是臆造的 0）
+        String authzVersion = query("SELECT authz_version::text FROM execution_capability_snapshot "
+                + "WHERE run_id = '" + runId + "'::uuid");
+        assertThat(authzVersion)
+                .as("⚠️ 快照的 authz_version 必须取自授权版本源，不得为 0（「无版本可追溯」）")
+                .isEqualTo("1");
     }
 
     @Test

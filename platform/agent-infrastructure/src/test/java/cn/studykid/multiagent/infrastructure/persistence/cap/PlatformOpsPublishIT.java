@@ -145,8 +145,7 @@ class PlatformOpsPublishIT extends CapITBase {
         ConfigPublishResult result = ops.publish(platformCommand(1));
 
         assertThat(result.publishSeq()).isPositive();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"
-                + " WHERE scope = 'PLATFORM' AND tenant_id IS NULL"))
+        assertThat(itPlatformScopedReleaseCount())
                 .as("⛔ 平台级发布头未落库：运维通道没有真正写进去")
                 .isEqualTo(1L);
         assertThat(adminQueryLong("SELECT count(*) FROM cap_config_pointer"
@@ -158,7 +157,9 @@ class PlatformOpsPublishIT extends CapITBase {
                 .as("⛔ 平台对象版本行未落库")
                 .isEqualTo(1L);
         assertThat(adminQueryLong("SELECT count(*) FROM cap_decision_log"
-                + " WHERE decision_kind = 'PUBLISH' AND tenant_id IS NULL"))
+                + " WHERE decision_kind = 'PUBLISH' AND tenant_id IS NULL"
+                + " AND release_id IN (SELECT release_id FROM cap_config_release"
+                + " WHERE object_versions::text LIKE '%it-%')"))
                 .as("⛔ 平台级发布未写入决策日志（审计是发布生效条件之一）")
                 .isEqualTo(1L);
 
@@ -209,10 +210,10 @@ class PlatformOpsPublishIT extends CapITBase {
                         + "任一租户都能单方面替换全平台生效配置")
                 .isInstanceOf(RuntimeException.class);
 
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"))
+        assertThat(itCount("cap_config_release"))
                 .as("⛔ 被拒绝的平台发布仍留下了发布头")
                 .isZero();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_pointer"))
+        assertThat(itPointerCount())
                 .as("⛔ 被拒绝的平台发布仍创建了当前指针")
                 .isZero();
     }
@@ -228,7 +229,7 @@ class PlatformOpsPublishIT extends CapITBase {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("不得用于租户作用域");
 
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"))
+        assertThat(itCount("cap_config_release"))
                 .as("⛔ 被拒绝的运维事务仍写入了数据")
                 .isZero();
     }
@@ -244,7 +245,7 @@ class PlatformOpsPublishIT extends CapITBase {
                 List.of(), List.of(), List.of(), List.of(), null)))
                 .isInstanceOf(ConfigPublishRejectedException.class);
 
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"))
+        assertThat(itCount("cap_config_release"))
                 .as("⛔ 被拒绝的租户作用域发布仍写入了发布头")
                 .isZero();
     }
@@ -271,10 +272,10 @@ class PlatformOpsPublishIT extends CapITBase {
                 .isInstanceOf(PlatformOpsUnavailableException.class)
                 .hasMessageContaining("agent.platform-ops.datasource.enabled");
 
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"))
+        assertThat(itCount("cap_config_release"))
                 .as("⛔ fail-closed 却仍写入了发布头")
                 .isZero();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_pointer"))
+        assertThat(itPointerCount())
                 .as("⛔ fail-closed 却仍创建了当前指针")
                 .isZero();
         assertThat(adminQueryLong("SELECT count(*) FROM cap_tool_def WHERE id = '"

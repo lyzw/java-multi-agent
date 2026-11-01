@@ -312,7 +312,11 @@ class ContractPolicyLifecycleIT extends CapITBase {
         assertThat(lifecycle().transition("result_contract", tenantA, CONTRACT_ID, 1,
                 ConfigLifecycleState.PUBLISHED, ConfigLifecycleState.DEPRECATED)).isTrue();
 
-        assertThat(adminQuery("SELECT object_versions::text FROM cap_config_release"))
+        // ⚠️ 必须限定在本组 IT 自己的发布头上：
+        //    共享库里存在真实租户/平台的历史发布头，全表取首行会取到**别人的**行 ——
+        //    失败现场是「历史清单里没有契约」，真因是查询没限定范围。
+        assertThat(adminQuery("SELECT object_versions::text FROM cap_config_release"
+                + " WHERE object_versions::text LIKE '%it-%' LIMIT 1"))
                 .as("⛔ 停用把契约从历史发布清单里抹掉了："
                         + "存量 Run 按固定版本过渡，历史清单必须保留")
                 .contains(CONTRACT_ID);

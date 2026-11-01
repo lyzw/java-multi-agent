@@ -118,7 +118,8 @@ class ConfigPublishIT extends CapITBase {
         assertThat(adminQueryLong("SELECT count(*) FROM cap_tool_def WHERE id = '" + TOOL_ID + "'"))
                 .as("⛔ 版本行未插入：发布没有落下不可变版本行")
                 .isEqualTo(1L);
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"))
+        assertThat(itPlatformScopedReleaseCount())
+                .as("⛔ 发布头未落库：本次平台级发布没有生成发布头")
                 .isEqualTo(1L);
 
         ConfigPointer pointer = new JdbcConfigPointerRepository(adminPool)
@@ -160,10 +161,10 @@ class ConfigPublishIT extends CapITBase {
         assertThat(adminQueryLong("SELECT count(*) FROM cap_skill_def WHERE id = '" + SKILL_ID + "'"))
                 .as("⛔ PUB-1 未满足：CAS 失败后版本行仍在（半成品当前发布）")
                 .isZero();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"))
+        assertThat(itCount("cap_config_release"))
                 .as("⛔ PUB-1 未满足：CAS 失败后发布头仍在（半成品当前发布）")
                 .isZero();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_pointer"))
+        assertThat(itPointerCount())
                 .as("⛔ PUB-1 未满足：CAS 失败却创建了当前指针")
                 .isZero();
     }
@@ -188,8 +189,8 @@ class ConfigPublishIT extends CapITBase {
         //    before/after 差值才是这条红线的真实语义：
         //    **非法发布必须零写入**（不多不少一行）。
         long toolDefsBefore = adminQueryLong("SELECT count(*) FROM cap_tool_def");
-        long releasesBefore = adminQueryLong("SELECT count(*) FROM cap_config_release");
-        long pointersBefore = adminQueryLong("SELECT count(*) FROM cap_config_pointer");
+        long releasesBefore = itCount("cap_config_release");
+        long pointersBefore = itPointerCount();
 
         assertThatThrownBy(() -> service.publish(platformCommand(CapabilityRiskLevel.UNKNOWN, 1)))
                 .isInstanceOf(ConfigPublishRejectedException.class)
@@ -199,10 +200,10 @@ class ConfigPublishIT extends CapITBase {
         assertThat(adminQueryLong("SELECT count(*) FROM cap_tool_def"))
                 .as("⛔ 配置非法仍写入了版本行")
                 .isEqualTo(toolDefsBefore);
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"))
+        assertThat(itCount("cap_config_release"))
                 .as("⛔ 配置非法仍写入了发布头")
                 .isEqualTo(releasesBefore);
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_pointer"))
+        assertThat(itPointerCount())
                 .as("⛔ 配置非法仍移动了当前指针")
                 .isEqualTo(pointersBefore);
         assertThat(adminQueryLong("SELECT last_value FROM cap_config_publish_seq"))
@@ -404,10 +405,10 @@ class ConfigPublishIT extends CapITBase {
                 .as("⛔ 租户成功发布了平台级配置：任一租户都能单方面替换全平台生效配置")
                 .isInstanceOf(RuntimeException.class);
 
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"))
+        assertThat(itCount("cap_config_release"))
                 .as("⛔ 被拒绝的平台发布仍留下了发布头")
                 .isZero();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_pointer"))
+        assertThat(itPointerCount())
                 .as("⛔ 被拒绝的平台发布仍创建了当前指针")
                 .isZero();
         assertThat(adminQueryLong("SELECT count(*) FROM cap_tool_def WHERE id = '" + TOOL_ID + "'"))

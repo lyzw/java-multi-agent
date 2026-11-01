@@ -139,8 +139,8 @@ class ConfigPublishManagementIT extends CapITBase {
                 + agentId + "'::uuid"))
                 .as("⛔ 被拒的执行仍然写入了版本行")
                 .isZero();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release")).isZero();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_pointer")).isZero();
+        assertThat(itCount("cap_config_release")).isZero();
+        assertThat(itPointerCount()).isZero();
     }
 
     @Test
@@ -226,7 +226,7 @@ class ConfigPublishManagementIT extends CapITBase {
                 + agentId + "'::uuid"))
                 .as("⛔ 基线冲突仍写入了版本行")
                 .isZero();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release")).isZero();
+        assertThat(itCount("cap_config_release")).isZero();
     }
 
     // ── 终态与留痕 ────────────────────────────────────────────────
@@ -252,10 +252,10 @@ class ConfigPublishManagementIT extends CapITBase {
                 .as("⛔ 执行失败后申请单未落 FAILED 终态：失败必须留痕")
                 .isEqualTo(ConfigPublishRequest.State.FAILED);
         assertThat(failed.failureReason()).isNotBlank();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release"))
+        assertThat(itCount("cap_config_release"))
                 .as("⛔ 失败执行留下了发布头")
                 .isZero();
-        assertThat(adminQueryLong("SELECT count(*) FROM cap_config_pointer")).isZero();
+        assertThat(itPointerCount()).isZero();
     }
 
     // ── 租户隔离 ──────────────────────────────────────────────────
