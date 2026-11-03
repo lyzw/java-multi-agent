@@ -102,12 +102,34 @@ function toStatsState(cause: unknown): RagStatsState {
 }
 
 /**
- * 409 冲突文案。
+ * 409 冲突文案（兜底：后端没给具体原因时用）。
  *
  * ⚠️ 刻意**不给**「刷新后重试」——刷新不会让非法转移变合法。
  */
 const CONFLICT_MESSAGE =
   '这一步不被允许：校验状态只能按既定流程流转（撤回是终态，不能复活；已拒绝的来源须先重新认领才能再判定）。请按提示选择合法的下一步。'
+
+/**
+ * 409 的**具体原因**是否值得直接透给管理员。
+ *
+ * ⚠️ 409 在 RAG 里不是只有「状态机非法转移」一种：
+ *    抽检未通过、审核员 = 采集人、复核人缺失或与执行人相同、抽检状态读不到……
+ *    这些后端都带了一句可直接照做的中文说明。此前前端一律盖成通用文案，
+ *    于是「请先完成抽检」「复核人不能是本人」这类**可执行提示**被吞掉，
+ *    管理员只能看到一个含糊的「这一步不被允许」，根本不知道该改什么。
+ *
+ * @param message 后端返回的 message
+ * @return 可直接展示则返回它，否则返回 null（回落到 {@link CONFLICT_MESSAGE}）
+ */
+function specificConflictMessage(message: string | undefined | null): string | null {
+  if (!message) return null
+  const text = message.trim()
+  // 太短 / 像异常类名 / 纯英文状态码 ⇒ 不是给人看的原因，不展示
+  if (text.length < 6) return null
+  if (/^[A-Z0-9_]+$/.test(text)) return null
+  if (/^(Internal Server Error|Bad Request|Conflict|Forbidden)$/i.test(text)) return null
+  return text
+}
 
 /**
  * 动作态归一。
@@ -120,9 +142,14 @@ function toActionState(cause: unknown, target: RagTarget): RagActionState {
     if (isRagTimeout(cause)) {
       return { status: 'timeout', message: cause.message, updated: null }
     }
-    // ⚠️ 409 = 非法状态转移（治理规则被违反），单独成态。
+    // ⚠️ 409 = 治理规则拒绝（非法转移 / 未抽检 / 自审 / 缺复核人），单独成态。
+    //    优先展示后端给出的**具体可执行原因**，拿不到才回落到通用文案。
     if (cause.status === 409) {
-      return { status: 'conflict', message: CONFLICT_MESSAGE, updated: null }
+      return {
+        status: 'conflict',
+        message: specificConflictMessage(cause.message) ?? CONFLICT_MESSAGE,
+        updated: null,
+      }
     }
     // ⚠️ 平台档的 403 只有一个可执行的下一步：领票据（见 TICKET_REQUIRED_HINT）。
     if (cause.status === 403 && target.scope === 'PLATFORM') {
@@ -145,8 +172,8 @@ export interface UseRagManagementResult {
   loadStats: (target: RagTarget) => void
   /** 执行一次校验状态流转 */
   verify: (target: RagTarget, sourceId: string, payload: RagVerificationRequest) => void
-  /** 登记新的语料来源 */
-  register: (target: RagTarget, payload: RagRegisterSourceRequest) => void
+  /** 登记新的语料来源（返回创建后的来源；失败返回 null，错误已写入 action 态）。 */
+  register: (target: RagTarget, payload: RagRegisterSourceRequest) => Promise<RagSource | null>
   /** 批量登记语料来源（数据导入） */
   bulkRegister: (target: RagTarget, registeredBy: string, items: RagBulkSourceItem[]) => void
   /** 重跑最近一次列表查询 */
@@ -269,18 +296,20 @@ export function useRagManagement(): UseRagManagementResult {
     [],
   )
 
-  const register = useCallback((target: RagTarget, payload: RagRegisterSourceRequest) => {
-    setAction({ status: 'submitting', message: null, updated: null })
-    const run = async (): Promise<void> => {
+  const register = useCallback(
+    async (target: RagTarget, payload: RagRegisterSourceRequest): Promise<RagSource | null> => {
+      setAction({ status: 'submitting', message: null, updated: null })
       try {
         const created = await registerRagSource(target, payload)
         setAction({ status: 'success', message: null, updated: created })
+        return created
       } catch (cause) {
         setAction(toActionState(cause, target))
+        return null
       }
-    }
-    void run()
-  }, [])
+    },
+    [],
+  )
 
   const bulkRegister = useCallback(
     (target: RagTarget, registeredBy: string, items: RagBulkSourceItem[]) => {

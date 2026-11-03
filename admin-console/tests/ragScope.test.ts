@@ -156,6 +156,8 @@ describe('治理票据只随写请求出发', () => {
     stubFetch('{}')
     await applyRagVerification(platformTarget(TICKET), '99999999-9999-9999-9999-999999999999', {
       targetStatus: 'IN_REVIEW',
+      // 非 VERIFIED 不要求双人复核，显式传 null（契约字段必填）
+      verifiedBy: null,
       evidenceRef: '治理会议 2026-10-29 纪要',
       decidedBy: '33333333-3333-3333-3333-333333333333',
       verificationMethod: 'MANUAL_REVIEW',

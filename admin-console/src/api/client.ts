@@ -162,7 +162,12 @@ async function _request<T>(
     const s = loadSession()
     if (s) headers.set('Authorization', `Bearer ${s.accessToken}`)
   }
-  if (init.body !== undefined) headers.set('Content-Type', 'application/json')
+  // ⚠️ 仅当 body 不是 FormData 时才强制 JSON：multipart 上传（文件）必须保留浏览器
+  //    自动生成的 `Content-Type: multipart/form-data; boundary=...`，手动覆盖成
+  //    application/json 会让后端收不到文件 part（RAG 文档上传端点）。
+  if (init.body !== undefined && !(init.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json')
+  }
   headers.set('Accept', 'application/json')
   // ⚠️ 额外头（如 RAG 管理端点强制要求的 X-Tenant-Id）。
   //    必须显式携带：跨进程 HTTP 调用时主平台事务上下文不会随之而来，

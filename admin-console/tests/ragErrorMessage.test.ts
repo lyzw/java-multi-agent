@@ -54,8 +54,12 @@ describe('RAG 通道错误的文案分流', () => {
 
     expect((err as ApiError).status).toBe(500)
     const message = (err as ApiError).message
-    expect(message).toContain('RAG 服务内部错误')
-    expect(message).toContain('500')
+    // ⚠️ 文案曾断言「RAG 服务内部错误」，实测把一次治理代码的作用域缺陷
+    //    （平台档取抽检状态抛 ISE）包装成「服务故障」，排查方向被带偏。
+    //    现在只承诺「这是服务端错误 + 去看日志」，不再替后端下结论。
+    expect(message).toContain('HTTP 500')
+    expect(message).toContain('服务端错误')
+    expect(message).toContain('控制台侧无法修复')
     expect(message).toContain('RAG 服务日志')
   })
 

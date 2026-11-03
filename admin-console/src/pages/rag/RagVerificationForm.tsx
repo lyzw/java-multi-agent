@@ -32,7 +32,13 @@ interface FormShape {
   verificationMethod: RagVerificationRequest['verificationMethod']
   trustTier: RagVerificationRequest['trustTier']
   validDays: number
+  /** 复核人（双人复核的第二个人）—— 仅 VERIFIED 必填 */
+  verifiedBy: string
 }
+
+/** UUID 形状（后端 SoD 会把该值写进 uuid 列，畸形串只会得到 500/409）。 */
+const UUID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
 export function RagVerificationForm({
   currentStatus,
@@ -47,11 +53,12 @@ export function RagVerificationForm({
   const { options: methodOptions } = useDictOptions('rag.verification_method')
   const { options: tierOptions } = useDictOptions('rag.trust_tier')
 
-  // 目标变更时：若不是 VERIFIED，清空 trustTier。
+  // 目标变更时：若不是 VERIFIED，清空 trustTier（与复核人——两者都只对 VERIFIED 有意义）。
   const targetStatus = Form.useWatch('targetStatus', form)
   useEffect(() => {
     if (targetStatus !== 'VERIFIED') {
       form.setFieldValue('trustTier', null)
+      form.setFieldValue('verifiedBy', '')
     }
   }, [targetStatus, form])
 
@@ -70,6 +77,9 @@ export function RagVerificationForm({
   const handleFinish = (values: FormShape): void => {
     const payload: RagVerificationRequest = {
       targetStatus: values.targetStatus,
+      // ⚠️ 只有 VERIFIED 带复核人；其余状态后端不要求，传 null 避免脏数据。
+      verifiedBy:
+        values.targetStatus === 'VERIFIED' ? (values.verifiedBy ?? '').trim() || null : null,
       evidenceRef: values.evidenceRef.trim(),
       decidedBy,
       verificationMethod: values.verificationMethod,
@@ -138,6 +148,41 @@ export function RagVerificationForm({
           <InputNumber min={1} max={3650} />
         </Form.Item>
       </Space>
+
+      {/*
+        双人复核的第二个主体。
+        ⚠️ 必须由人工填写：后端只能校验「这个 UUID ≠ 执行人」，
+           它无法证明这个人是真的复核过。前端若自动补一个，等于替审核员伪造一次复核。
+        ⚠️ 只对 VERIFIED 渲染/必填：其余状态的流转后端不要求双人（SoD 对非 VERIFIED 直接放行）。
+      */}
+      <Form.Item
+        label="复核人（双人复核 · 必须与决定人不同）"
+        name="verifiedBy"
+        style={{ maxWidth: 420 }}
+        tooltip="第二位复核人的主体 UUID。后端会拒绝「与决定人相同」的复核人。"
+        rules={
+          isVerifiedTarget
+            ? [
+                { required: true, message: '通过校验须填写第二位复核人' },
+                { pattern: UUID_PATTERN, message: '须为合法 UUID' },
+                {
+                  validator: (_, value: string) =>
+                    !value || value.trim().toLowerCase() !== decidedBy.toLowerCase()
+                      ? Promise.resolve()
+                      : Promise.reject(new Error('复核人不能是本人（后端会以 409 拒绝）')),
+                },
+              ]
+            : []
+        }
+      >
+        <Input
+          disabled={!isVerifiedTarget}
+          allowClear={isVerifiedTarget}
+          placeholder={
+            isVerifiedTarget ? '第二位复核人的主体 UUID' : '仅「通过校验」需要双人复核'
+          }
+        />
+      </Form.Item>
 
       <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
         决定人（留痕）：<Text code>{decidedBy || '（当前会话无 principalId，无法留痕）'}</Text>

@@ -27,7 +27,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Modal, Segmented, Select, Space, Tabs, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Modal, Segmented, Select, Space, Tabs, Tag, Typography } from 'antd'
 import { getPlatformTenants } from '@/api/adminApi'
 import type { PlatformTenant } from '@/api/types'
 import {
@@ -36,12 +36,14 @@ import {
   isRagTargetReady,
   platformTarget,
   tenantTarget,
+  uploadRagDocument,
   ApiError,
 } from '@/api/ragClient'
 import type { RagCorpusScope, RagTarget } from '@/api/ragClient'
 import type {
   RagDailyImportCount,
   RagDailySearchCount,
+  RagRegisterSourceRequest,
   RagSource,
   RagSourceQuery,
   RagVerificationRequest,
@@ -57,6 +59,7 @@ import { currentPrincipalId } from './ragUi'
 const { Text, Paragraph } = Typography
 
 export function RagManagementPage(): JSX.Element {
+  const { message } = App.useApp()
   const [tenants, setTenants] = useState<PlatformTenant[]>([])
   const [tenantError, setTenantError] = useState<string | null>(null)
   const [tenantId, setTenantId] = useState<string>('')
@@ -226,6 +229,11 @@ export function RagManagementPage(): JSX.Element {
           治理语料的准入与时效：登记 → 校验流转 → 可检索。登记只是纳入治理，
           <b>不等于可检索</b>；撤回是终态、不可复活；这里没有删除入口。
         </Paragraph>
+        <Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 0 }}>
+          <b>审核纪律</b>：审核员不得审核自己登记的来源；
+          「通过校验」须由<b>两个人</b>签署——执行人与复核人必须是不同主体，
+          且签发前该来源已通过人工抽检。
+        </Paragraph>
       </div>
 
       {tenantError && <Alert type="error" showIcon message="读取租户列表失败" description={tenantError} />}
@@ -339,6 +347,7 @@ export function RagManagementPage(): JSX.Element {
                   onVerified={onVerified}
                   actionStatus={action.status}
                   actionMessage={action.message}
+                  updatedSource={action.updated}
                 />
                 <Modal
                   title={scope === 'PLATFORM' ? '登记语料来源（写入全局语料桶）' : '登记语料来源'}
@@ -350,8 +359,42 @@ export function RagManagementPage(): JSX.Element {
                   <RagRegisterForm
                     submitting={action.status === 'submitting'}
                     registeredBy={currentPrincipalId()}
-                    onSubmit={(payload) => {
-                      register(target, payload)
+                    onSubmit={async (payload) => {
+                      // ⚠️ 先登记来源，拿到 sourceId 后（若选了文件）再随同一来源上传真实文档。
+                      //    两条都是治理动作：来源恒为 PENDING/UNVERIFIED；文档恒为待解析/待校验/不可检索。
+                      const sourcePayload: RagRegisterSourceRequest = {
+                        sourceType: payload.sourceType,
+                        title: payload.title,
+                        publisher: payload.publisher,
+                        isbn: payload.isbn,
+                        doi: payload.doi,
+                        objectRef: payload.objectRef,
+                        contentHash: payload.contentHash,
+                        registeredBy: payload.registeredBy,
+                      }
+                      const created = await register(target, sourcePayload)
+                      if (!created) {
+                        // 来源登记本身失败：错误已进入 action 态，不关闭弹窗，让用户看到原因。
+                        return
+                      }
+                      if (payload.file) {
+                        try {
+                          await uploadRagDocument(target, created.sourceId, payload.file, {
+                            carrier: payload.carrier ?? undefined,
+                            registeredBy: payload.registeredBy,
+                          })
+                          message.success('来源已登记，文档已提交入库（待解析 / 校验后才可检索）')
+                        } catch (cause) {
+                          // 来源已成功，仅文档上传失败：不回滚来源，引导去载体页补传。
+                          message.warning(
+                            cause instanceof ApiError
+                              ? `来源已登记，但文档上传失败：${cause.message}（可稍后在「载体」页补传）`
+                              : '来源已登记，但文档上传失败，可稍后在「载体」页补传',
+                          )
+                        }
+                      } else {
+                        message.success('来源已登记，待校验通过后可检索')
+                      }
                       setRegisterOpen(false)
                       retrySources()
                     }}

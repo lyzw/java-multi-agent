@@ -9,37 +9,48 @@
  *    · 载体不能超过来源（来源未通过则载体不得先通过）——后端校验，前端如实呈现后端拒绝。
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Alert,
+  App,
   Button,
   Descriptions,
   Drawer,
   Empty,
+  Select,
   Space,
   Spin,
   Table,
   Tabs,
   Tag,
   Typography,
+  Upload,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { UploadOutlined } from '@ant-design/icons'
 import {
   applyRagDocumentVerification,
   listRagChunks,
   listRagDocuments,
   isRagTargetReady,
   isRagWriteTarget,
+  uploadRagDocument,
   ApiError,
 } from '@/api/ragClient'
 import type { RagTarget } from '@/api/ragClient'
 import type {
+  RagCarrier,
   RagChunk,
   RagDocument,
   RagSource,
   RagVerificationRequest,
 } from '@/api/ragTypes'
-import { RAG_CHUNK_ROLE_LABELS, RAG_PARSE_STATUS_LABELS, RAG_VERIFICATION_LABELS } from '@/api/ragTypes'
+import {
+  RAG_CARRIER_LABELS,
+  RAG_CHUNK_ROLE_LABELS,
+  RAG_PARSE_STATUS_LABELS,
+  RAG_VERIFICATION_LABELS,
+} from '@/api/ragTypes'
 import { allowedVerificationTargets } from '@/features/rag/useRagManagement'
 import { currentPrincipalId, TrustTierTag, VerificationTag } from './ragUi'
 import { RagVerificationForm } from './RagVerificationForm'
@@ -54,6 +65,14 @@ export interface RagSourceDrawerProps {
   onVerified: (sourceId: string, payload: RagVerificationRequest) => void
   actionStatus: string
   actionMessage: string | null
+  /**
+   * 最近一次流转成功后的**最新来源快照**（来自 hook 的 `action.updated`）。
+   *
+   * ⚠️ 抽屉此前只渲染父组件传入的 `source`，而流转成功后父组件仍是列表里的旧行，
+   *    于是「已生效」的 toast 与「仍是待校验」的表单同时出现在屏幕上（实测踩到）——
+   *    管理员会重复提交，而后端只会回 409。
+   */
+  updatedSource?: RagSource | null
 }
 
 type DocsState =
@@ -70,7 +89,21 @@ export function RagSourceDrawer({
   onVerified,
   actionStatus,
   actionMessage,
+  updatedSource = null,
 }: RagSourceDrawerProps): JSX.Element {
+  /**
+   * 抽屉展示的来源：优先用「最近一次流转成功后的快照」。
+   *
+   * ⚠️ 只在 sourceId 一致时才覆盖：列表可能已经切到别的行，
+   *    拿上一行的 updated 去渲染会把两张卡片混在一起。
+   */
+  const shownSource = useMemo(() => {
+    if (source && updatedSource && updatedSource.sourceId === source.sourceId) {
+      return updatedSource
+    }
+    return source
+  }, [source, updatedSource])
+
   const [docs, setDocs] = useState<DocsState>({ kind: 'idle' })
   const [chunks, setChunks] = useState<RagChunk[] | null>(null)
   const [chunksLoading, setChunksLoading] = useState(false)
@@ -79,6 +112,12 @@ export function RagSourceDrawer({
   /** 载体级校验的提交态与成功提示（与来源级 `action*` 分开，避免两套流转互相盖掉）。 */
   const [docSubmitting, setDocSubmitting] = useState(false)
   const [docNotice, setDocNotice] = useState<string | null>(null)
+
+  /** 载体页真实文档上传（Model B）：选文件 → 上传落桶，不手填 objectRef。 */
+  const { message } = App.useApp()
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadCarrier, setUploadCarrier] = useState<RagCarrier | null>(null)
+  const [uploading, setUploading] = useState(false)
 
   const sourceId = source?.sourceId ?? null
 
@@ -128,6 +167,29 @@ export function RagSourceDrawer({
       setDocError(cause instanceof ApiError ? cause.message : '读取片段失败')
     } finally {
       setChunksLoading(false)
+    }
+  }
+
+  const uploadDocument = async (): Promise<void> => {
+    if (!uploadFile || !sourceId) return
+    setUploading(true)
+    setDocError(null)
+    try {
+      // ⚠️ 真实文件录入（区别于手填 objectRef）：由后端落桶 + 重算 SHA-256。
+      //    载体恒为「待解析 · 待校验 · 不可检索」，须经摄入与审核流程方可检索。
+      await uploadRagDocument(target, sourceId, uploadFile, {
+        carrier: uploadCarrier ?? undefined,
+        registeredBy: currentPrincipalId() ?? undefined,
+      })
+      setUploadFile(null)
+      setUploadCarrier(null)
+      const list = await listRagDocuments(target, sourceId)
+      setDocs(list.length === 0 ? { kind: 'empty' } : { kind: 'ok', docs: list })
+      message.success('文档已提交入库（待解析 / 校验后才可检索）')
+    } catch (cause) {
+      setDocError(cause instanceof ApiError ? cause.message : '上传失败')
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -236,10 +298,10 @@ export function RagSourceDrawer({
       width={860}
       open={source !== null}
       onClose={onClose}
-      title={source ? `语料来源 · ${source.title}` : '语料来源'}
+      title={shownSource ? `语料来源 · ${shownSource.title}` : '语料来源'}
       destroyOnHidden
     >
-      {source && (
+      {shownSource && (
         <Tabs
           defaultActiveKey="detail"
           items={[
@@ -251,39 +313,39 @@ export function RagSourceDrawer({
                   <Descriptions bordered column={2} size="small">
                     <Descriptions.Item label="来源 ID">
                       <Text code copyable>
-                        {source.sourceId}
+                        {shownSource.sourceId}
                       </Text>
                     </Descriptions.Item>
-                    <Descriptions.Item label="类型">{source.sourceType}</Descriptions.Item>
-                    <Descriptions.Item label="出版社">{source.publisher || '—'}</Descriptions.Item>
+                    <Descriptions.Item label="类型">{shownSource.sourceType}</Descriptions.Item>
+                    <Descriptions.Item label="出版社">{shownSource.publisher || '—'}</Descriptions.Item>
                     <Descriptions.Item label="权威等级">
-                      <TrustTierTag tier={source.trustTier} />
+                      <TrustTierTag tier={shownSource.trustTier} />
                     </Descriptions.Item>
                     <Descriptions.Item label="校验状态">
                       <Space>
-                        <VerificationTag status={source.verificationStatus} />
-                        {source.stale && <Tag color="orange">结论已过期</Tag>}
-                        <Tag color={source.admissible ? 'green' : 'default'}>
-                          {source.admissible ? '可检索' : '不可检索'}
+                        <VerificationTag status={shownSource.verificationStatus} />
+                        {shownSource.stale && <Tag color="orange">结论已过期</Tag>}
+                        <Tag color={shownSource.admissible ? 'green' : 'default'}>
+                          {shownSource.admissible ? '可检索' : '不可检索'}
                         </Tag>
                       </Space>
                     </Descriptions.Item>
                     <Descriptions.Item label="ISBN / DOI">
-                      {source.isbn || source.doi || '—'}
+                      {shownSource.isbn || shownSource.doi || '—'}
                     </Descriptions.Item>
                     <Descriptions.Item label="校验依据" span={2}>
-                      {source.verificationEvidence || '—'}
+                      {shownSource.verificationEvidence || '—'}
                     </Descriptions.Item>
                     <Descriptions.Item label="审核人 / 时间">
-                      {source.verifiedBy ? (
+                      {shownSource.verifiedBy ? (
                         <>
-                          <Text code>{source.verifiedBy}</Text> · {source.verifiedAt}
+                          <Text code>{shownSource.verifiedBy}</Text> · {shownSource.verifiedAt}
                         </>
                       ) : (
                         '—'
                       )}
                     </Descriptions.Item>
-                    <Descriptions.Item label="有效期">{source.validDays} 天</Descriptions.Item>
+                    <Descriptions.Item label="有效期">{shownSource.validDays} 天</Descriptions.Item>
                   </Descriptions>
 
                   {!writable ? (
@@ -301,7 +363,7 @@ export function RagSourceDrawer({
                           : '租户档的管理端点要求 X-Tenant-Id；请先在上方选择租户。'
                       }
                     />
-                  ) : allowedVerificationTargets(source.verificationStatus).length === 0 ? (
+                  ) : allowedVerificationTargets(shownSource.verificationStatus).length === 0 ? (
                     <Alert
                       type="warning"
                       showIcon
@@ -314,9 +376,9 @@ export function RagSourceDrawer({
                         校验流转
                       </Typography.Title>
                       <RagVerificationForm
-                        currentStatus={source.verificationStatus}
+                        currentStatus={shownSource.verificationStatus}
                         submitting={actionStatus === 'submitting'}
-                        onSubmitted={(payload) => onVerified(source.sourceId, payload)}
+                        onSubmitted={(payload) => onVerified(shownSource.sourceId, payload)}
                       />
                     </>
                   )}
@@ -352,6 +414,50 @@ export function RagSourceDrawer({
                       dataSource={docs.docs}
                       pagination={false}
                     />
+                  )}
+
+                  {writable && (
+                    <Space direction="vertical" size={6} style={{ width: '100%', marginTop: 8 }}>
+                      <Typography.Title level={5} style={{ marginBottom: 0 }}>
+                        上传文档载体（真实文件录入）
+                      </Typography.Title>
+                      <Upload
+                        // ⚠️ 阻止 antd 自动上传：统一在点击「上传到本来源」时提交。
+                        beforeUpload={(f) => {
+                          setUploadFile(f as File)
+                          return false
+                        }}
+                        maxCount={1}
+                        showUploadList={{ showPreviewIcon: false, showDownloadIcon: false }}
+                        fileList={uploadFile ? [{ uid: '-1', name: uploadFile.name, status: 'done' }] : []}
+                        onRemove={() => {
+                          setUploadFile(null)
+                          return true
+                        }}
+                      >
+                        <Button icon={<UploadOutlined />}>选择文件（PDF / EPUB / HTML / TXT 等）</Button>
+                      </Upload>
+                      <Space>
+                        <Select
+                          style={{ width: 200 }}
+                          placeholder="载体类型（留空按文件名推断）"
+                          value={uploadCarrier ?? undefined}
+                          onChange={(v) => setUploadCarrier(v)}
+                          options={Object.entries(RAG_CARRIER_LABELS).map(([v, l]) => ({ value: v, label: l }))}
+                        />
+                        <Button
+                          type="primary"
+                          loading={uploading}
+                          disabled={!uploadFile}
+                          onClick={() => void uploadDocument()}
+                        >
+                          上传到本来源
+                        </Button>
+                      </Space>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        上传后文档进入「待解析 · 待校验 · 不可检索」；须经摄入（Docling + BGE-M3）与审核后方可检索。
+                      </Text>
+                    </Space>
                   )}
 
                   {docError && <Alert type="error" showIcon message={docError} />}

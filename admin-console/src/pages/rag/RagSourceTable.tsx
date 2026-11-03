@@ -9,20 +9,39 @@
  *    · `stale` / `admissible` 直接渲染服务端返回值，前端不推算。
  */
 
-import { Alert, Button, Card, Form, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { useState } from 'react'
+import { Alert, Button, Card, Collapse, Form, Input, Select, Space, Table, Tag, Tooltip, Typography, Upload } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { UploadOutlined } from '@ant-design/icons'
 import type {
+  RagCarrier,
   RagSource,
   RagSourceQuery,
   RagTrustTier,
   RagVerificationStatus,
 } from '@/api/ragTypes'
-import { RAG_VERIFICATION_LABELS, RAG_LICENSE_LABELS } from '@/api/ragTypes'
+import { RAG_CARRIER_LABELS, RAG_VERIFICATION_LABELS, RAG_LICENSE_LABELS } from '@/api/ragTypes'
 import { isRagTargetReady, isRagWriteTarget } from '@/api/ragClient'
 import type { RagTarget } from '@/api/ragClient'
 import type { RagSourceListState } from '@/features/rag/useRagManagement'
 import { useDictOptions } from '@/features/dictionaries/useDictionaries'
+import { computeSha256Hex } from '@/features/rag/fileHash'
 import { TrustTierTag, VerificationTag } from './ragUi'
+
+/**
+ * 由文件名后缀推断载体类型（前端预览用，与后端 {@code LocalObjectStoreAdapter}
+ * 的推断口径一致）。无法推断时返回 null——`SCAN` 只能显式选。
+ */
+function inferCarrierFromName(name: string): RagCarrier | null {
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return null
+  const ext = name.slice(dot).toLowerCase()
+  if (ext === '.pdf') return 'PDF'
+  if (ext === '.epub') return 'EPUB'
+  if (ext === '.html' || ext === '.htm') return 'HTML'
+  if (ext === '.txt' || ext === '.md') return 'TXT'
+  return null
+}
 
 const { Text } = Typography
 
@@ -296,10 +315,45 @@ export function RagRegisterForm({
     objectRef: string | null
     contentHash: string | null
     registeredBy: string
+    /** 选中的物理文档（真实录入主路径）；null = 仅登记来源元数据。 */
+    file: File | null
+    /** 载体类型（可空 → 由后端按文件名后缀推断）。 */
+    carrier: RagCarrier | null
+    /** 前端算的 SHA-256 预览（仅展示，落库以服务端重算为准）。 */
+    fileHash: string | null
   }) => void
 }): JSX.Element {
   const [form] = Form.useForm()
   const { options: sourceTypeOptions } = useDictOptions('rag.source_type')
+
+  /** 选中的物理文档与衍生状态（文件指纹预览 / 推断的载体类型）。 */
+  const [file, setFile] = useState<File | null>(null)
+  const [carrier, setCarrier] = useState<RagCarrier | null>(null)
+  const [fileHash, setFileHash] = useState<string | null>(null)
+  const [hashLoading, setHashLoading] = useState(false)
+
+  const onPickFile = async (picked: File | null): Promise<void> => {
+    setFile(picked)
+    setFileHash(null)
+    if (!picked) {
+      // 取消选择：清空载体预选，回到「由后端推断」。
+      setCarrier(null)
+      return
+    }
+    // ⚠️ 后缀能推断时预选 carrier（用户仍可改；SCAN 只能手动选）。
+    const inferred = inferCarrierFromName(picked.name)
+    if (inferred) setCarrier(inferred)
+    setHashLoading(true)
+    try {
+      // ⚠️ 失败（如非安全上下文 crypto.subtle 不可用）只意味着「不显示预览」，
+      //    绝不阻断上传——落库哈希由服务端重算。
+      setFileHash(await computeSha256Hex(picked))
+    } catch {
+      setFileHash(null)
+    } finally {
+      setHashLoading(false)
+    }
+  }
 
   return (
     <Form
@@ -316,6 +370,9 @@ export function RagRegisterForm({
           objectRef: values.objectRef ? String(values.objectRef).trim() : null,
           contentHash: values.contentHash ? String(values.contentHash).trim() : null,
           registeredBy,
+          file,
+          carrier,
+          fileHash,
         })
       }
     >
@@ -340,12 +397,91 @@ export function RagRegisterForm({
           <Input placeholder="论文填 DOI" />
         </Form.Item>
       </Space>
-      <Form.Item label="对象引用（objectRef）" name="objectRef">
-        <Input placeholder="对象存储定位符，可留空" />
+
+      {/*
+        ⚠️ 真实文档录入（主路径）：选文件即视为「把文档落进语料桶」，
+        替代原本手填 objectRef 的降级路径。后端会落桶 + 重算 SHA-256，
+        前端无需、也不应手填定位符。
+      */}
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="推荐：直接上传文档，由后端落桶并校验"
+        description="选择本地文件后，系统会自动把它存进语料桶、重算内容指纹，无需你手填对象引用。"
+      />
+      <Form.Item label="上传文档（物理载体）">
+        <Space direction="vertical" style={{ width: '100%' }} size={4}>
+          <Upload
+            // ⚠️ beforeUpload 返回 false：阻止 antd 自动上传，统一在本次表单提交时随来源一起落库。
+            beforeUpload={(f) => {
+              void onPickFile(f as File)
+              return false
+            }}
+            maxCount={1}
+            showUploadList={{ showPreviewIcon: false, showDownloadIcon: false }}
+            fileList={file ? [{ uid: '-1', name: file.name, status: 'done' }] : []}
+            onRemove={() => {
+              void onPickFile(null)
+              return true
+            }}
+          >
+            <Button icon={<UploadOutlined />}>选择文件（PDF / EPUB / HTML / TXT 等）</Button>
+          </Upload>
+          {file && (
+            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                载体类型：
+                <Select
+                  size="small"
+                  style={{ width: 170, marginLeft: 4 }}
+                  placeholder="未指定（按文件名推断）"
+                  value={carrier ?? undefined}
+                  onChange={(v) => setCarrier(v)}
+                  options={Object.entries(RAG_CARRIER_LABELS).map(([v, l]) => ({ value: v, label: l }))}
+                />
+              </Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                内容指纹（SHA-256，仅展示）：
+                {hashLoading ? ' 计算中…' : fileHash ? ` ${fileHash.slice(0, 16)}…` : ' （暂不可计算）'}
+              </Text>
+            </Space>
+          )}
+        </Space>
       </Form.Item>
-      <Form.Item label="内容哈希" name="contentHash">
-        <Input placeholder="可留空；填写后可用于官方哈希比对" />
-      </Form.Item>
+
+      {/*
+        ⚠️ 手填 objectRef / contentHash 降级为「高级」折叠区：
+        仅用于「文件已在对象存储里、只差一个定位符」的少数场景。
+        绝大多数情况应走上面的「上传文档」。
+      */}
+      <Collapse
+        ghost
+        size="small"
+        items={[
+          {
+            key: 'advanced',
+            label: '高级（手动定位符）',
+            children: (
+              <>
+                <Form.Item label="对象引用（objectRef）" name="objectRef">
+                  <Input placeholder="对象存储定位符，可留空；上传文档时由系统自动生成" />
+                </Form.Item>
+                <Form.Item label="内容哈希" name="contentHash">
+                  <Input placeholder="可留空；上传文档时由系统计算" />
+                </Form.Item>
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="手动定位符用于复用已有对象存储文件"
+                  description="若你已自行把文件放进对象存储，可在此粘贴定位符；否则请使用上方的「上传文档」。"
+                />
+              </>
+            ),
+          },
+        ]}
+      />
+
       <Alert
         type="info"
         showIcon
@@ -354,7 +490,7 @@ export function RagRegisterForm({
         description="登记只是把语料纳入治理，不等于可检索。须经审核通过（指定权威等级）且版权放行后才可检索。"
       />
       <Button type="primary" htmlType="submit" loading={submitting} block>
-        提交登记
+        {file ? '提交登记并上传文档' : '提交登记'}
       </Button>
     </Form>
   )

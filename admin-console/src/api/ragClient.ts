@@ -283,7 +283,11 @@ export function ragErrorMessage(cause: unknown): string {
     return `RAG 服务拒绝这次状态流转：${detail}`
   }
   if (status >= 500) {
-    return `RAG 服务内部错误（HTTP ${status}）。这是服务端故障，控制台侧无法修复，请查看 RAG 服务日志。`
+    // ⚠️ 此前这里断言「控制台侧无法修复」，实测把一次**治理代码的作用域缺陷**
+    //    （平台档取抽检状态抛 ISE）包装成了「服务故障」，排查方向被直接带偏。
+    //    现在保留「看服务日志」的唯一可执行动作，但不再替后端下结论。
+    return `RAG 服务返回 HTTP ${status}。这是服务端错误，控制台侧无法修复：` +
+      '请查看 RAG 服务日志定位（常见原因：治理守卫/作用域判定抛异常、运维通道未接入）。'
   }
   return `请求失败（${status}）：${detail}`
 }
@@ -399,6 +403,40 @@ export function listRagDocuments(
   return ragRequest<RagDocument[]>(
     `/v1/management/sources/${encodeURIComponent(sourceId)}/documents`,
     { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * POST /api/v1/management/sources/{sourceId}/documents —— 上传物理文档载体。
+ *
+ * <p>⚠️ 这是「真实文件录入」入口（区别于来源登记里手填的 `objectRef`）：
+ *    把文件以 `multipart/form-data` 提交，后端亲自落桶并重算 SHA-256，
+ *    前端不传、也不信任任何 objectRef / contentHash。
+ *
+ * <p>⚠️ `body` 是 `FormData`：`request()` 对 FormData 会保留浏览器自动生成的
+ *    `multipart/form-data; boundary=...`（不会覆盖成 application/json）。
+ *    写请求头（含平台档治理票据）由 {@link ragWriteRequest} 统一处理。
+ *
+ * @param file 选中的文件
+ * @param opts.carrier 载体类型（可选；缺省由文件名后缀推断）
+ * @param opts.registeredBy 操作人 UUID（可选；缺省回落到会话主体）
+ */
+export function uploadRagDocument(
+  target: RagTarget,
+  sourceId: string,
+  file: File,
+  opts: { carrier?: string; registeredBy?: string } = {},
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagDocument> {
+  const form = new FormData()
+  form.append('file', file)
+  if (opts.carrier) form.append('carrier', opts.carrier)
+  if (opts.registeredBy) form.append('registeredBy', opts.registeredBy)
+  return ragWriteRequest<RagDocument>(
+    `/v1/management/sources/${encodeURIComponent(sourceId)}/documents`,
+    { method: 'POST', body: form },
     target,
     timeoutMs,
   )

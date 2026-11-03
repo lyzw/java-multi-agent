@@ -51,6 +51,15 @@ export type RagLicenseStatus =
   | 'PENDING'
   | 'RESTRICTED'
 
+/**
+ * 文档载体类型（对齐后端 `DocumentImportCommand` 的白名单）。
+ *
+ * ⚠️ 后端只接受 `PDF / SCAN / EPUB / HTML / TXT` 五种大写值；
+ *    `SCAN` 只能显式给出（扫描件往往是一组图片，无法从单一文件后缀推断）。
+ *    前端上传时若没显式选 carrier，则由文件名后缀推断（PDF/EPUB/HTML/HTM/TXT/MD）。
+ */
+export type RagCarrier = 'PDF' | 'SCAN' | 'EPUB' | 'HTML' | 'TXT'
+
 /* ── 视图对象 ─────────────────────────────────────────── */
 
 /**
@@ -199,6 +208,17 @@ export interface RagBulkImportResponse {
 /** 校验决定请求（对齐后端 `ManagementDtos.VerificationRequest`）。 */
 export interface RagVerificationRequest {
   targetStatus: RagVerificationStatus
+  /**
+   * 复核人主体 UUID（双人复核的第二个人）。
+   *
+   * ⚠️ 判定 VERIFIED 时**必填**，且必须与执行人（登录主体）不同——
+   *    后端 `SegregationOfDuties` 会比对并拒绝「缺少复核人 / 与执行人同一人」。
+   *    其余状态传 null。
+   *
+   * ⚠️ 这个值必须由**人工填写**，不能由前端自造：后端无法验证它是真实第二个人，
+   *    前端若"自动补一个"就等于替审核员伪造了一次复核。
+   */
+  verifiedBy: string | null
   /** 校验依据 —— 必填（后端强制留痕） */
   evidenceRef: string
   /** 决定人 UUID —— 必填 */
@@ -321,6 +341,15 @@ export const RAG_LICENSE_LABELS: Record<RagLicenseStatus, string> = {
   FAIR_USE_QUOTATION: '合理引用',
   PENDING: '未取得授权',
   RESTRICTED: '禁止使用',
+}
+
+/** 文档载体类型的可读标签。 */
+export const RAG_CARRIER_LABELS: Record<RagCarrier, string> = {
+  PDF: 'PDF（电子版）',
+  SCAN: '扫描件',
+  EPUB: 'EPUB 电子书',
+  HTML: 'HTML 网页',
+  TXT: '纯文本',
 }
 
 /**
