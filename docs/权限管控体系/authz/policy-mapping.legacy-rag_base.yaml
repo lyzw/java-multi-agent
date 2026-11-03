@@ -1,0 +1,337 @@
+# =====================================================================
+# policy-mapping.yaml —— RLS 策略 → 应用层 ScopeFilter 翻译对照表
+#
+# 生成方式：./scripts/export-rls-policies.sh
+# 生成时刻：2026-11-02 17:15:23
+# 来源    ：agent-pg17 / rag_base（活库 pg_policy 目录，非 DDL 脚本）
+#
+# 【怎么用这份表】
+#   ① 这是 P1 影子阶段的**比对基线**：运行时实际谓词必须与本表一致，
+#      否则报 AUTHZ_MISMATCH，且**修本表**（不是修代码去迁就）。
+#   ② 本表同时是 P3 逐表退役的**清单**：scope: NONE 的行 = 策略缺口，
+#      必须先补齐再退役（迁移前补齐，不迁移后补）。
+#   ③ 本表是 D8 退役脚本的**生成源**：每条 policy 都对应一条 DROP。
+#
+# 【字段说明】
+#   scope        翻译结论（ScopeFilter 形态）
+#   cmd          策略作用：SELECT / INSERT / UPDATE / DELETE
+#   roles        适用角色（[] = PUBLIC）
+#   using        行可见性谓词（读/删）
+#   with_check   写入谓词（写）—— ⛔ 写策略的闸门在这里，不是 using
+#   forced       relforcerowsecurity（FORCE RLS）：owner 是否也被策略收口
+#
+# 【分类口径】
+#   TENANT_ONLY        → ScopeFilter.TenantOnly(subject.tenantId)
+#   TENANT_WITH_SHARED → ScopeFilter.TenantWithShared(subject.tenantId)
+#   UNRESTRICTED       → ScopeFilter.Unrestricted（仅限 isPlatformOps() 主体）
+#   NONE               → **缺口**：表带 tenant_id 却无对应策略，须补
+#   UNKNOWN            → **待人工判定**：谓词形态不在已知四类内
+# =====================================================================
+
+meta:
+  generated_at: "2026-11-02T17:15:23"
+  source: "agent-pg17/rag_base"
+  business_tables: 11
+  policy_count: 35
+
+policies:
+  - table: "rag.rag_access_audit"
+    policy: "rag_audit_tenant_isolation"
+    cmd: "*"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "(tenant_id = rag.rag_current_tenant())"
+  - table: "rag.rag_answer_citation"
+    policy: "rag_citation_tenant_isolation"
+    cmd: "*"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "(tenant_id = rag.rag_current_tenant())"
+  - table: "rag.rag_chunk"
+    policy: "rag_chunk_write"
+    cmd: "INSERT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: ""
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_chunk"
+    policy: "rag_chunk_delete"
+    cmd: "DELETE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: ""
+  - table: "rag.rag_chunk"
+    policy: "rag_chunk_read"
+    cmd: "SELECT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_WITH_SHARED
+    using: "(tenant_id = ANY (ARRAY[rag.rag_current_tenant(), rag.rag_global_tenant_id()]))"
+    with_check: ""
+  - table: "rag.rag_chunk"
+    policy: "rag_chunk_update"
+    cmd: "UPDATE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_chunk_embedding"
+    policy: "rag_chunk_embedding_write"
+    cmd: "INSERT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: ""
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_chunk_embedding"
+    policy: "rag_chunk_embedding_delete"
+    cmd: "DELETE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: ""
+  - table: "rag.rag_chunk_embedding"
+    policy: "rag_chunk_embedding_read"
+    cmd: "SELECT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_WITH_SHARED
+    using: "(tenant_id = ANY (ARRAY[rag.rag_current_tenant(), rag.rag_global_tenant_id()]))"
+    with_check: ""
+  - table: "rag.rag_chunk_embedding"
+    policy: "rag_chunk_embedding_update"
+    cmd: "UPDATE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_dictionary"
+    policy: "rag_dictionary_write"
+    cmd: "INSERT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: ""
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_dictionary"
+    policy: "rag_dictionary_delete"
+    cmd: "DELETE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: ""
+  - table: "rag.rag_dictionary"
+    policy: "rag_dictionary_read"
+    cmd: "SELECT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_WITH_SHARED
+    using: "(tenant_id = ANY (ARRAY[rag.rag_current_tenant(), rag.rag_global_tenant_id()]))"
+    with_check: ""
+  - table: "rag.rag_dictionary"
+    policy: "rag_dictionary_update"
+    cmd: "UPDATE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_document"
+    policy: "rag_document_write"
+    cmd: "INSERT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: ""
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_document"
+    policy: "rag_document_delete"
+    cmd: "DELETE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: ""
+  - table: "rag.rag_document"
+    policy: "rag_document_read"
+    cmd: "SELECT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_WITH_SHARED
+    using: "(tenant_id = ANY (ARRAY[rag.rag_current_tenant(), rag.rag_global_tenant_id()]))"
+    with_check: ""
+  - table: "rag.rag_document"
+    policy: "rag_document_update"
+    cmd: "UPDATE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_edition"
+    policy: "rag_edition_write"
+    cmd: "INSERT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: ""
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_edition"
+    policy: "rag_edition_delete"
+    cmd: "DELETE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: ""
+  - table: "rag.rag_edition"
+    policy: "rag_edition_read"
+    cmd: "SELECT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_WITH_SHARED
+    using: "(tenant_id = ANY (ARRAY[rag.rag_current_tenant(), rag.rag_global_tenant_id()]))"
+    with_check: ""
+  - table: "rag.rag_edition"
+    policy: "rag_edition_update"
+    cmd: "UPDATE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_ingest_job"
+    policy: "rag_ingest_tenant_isolation"
+    cmd: "*"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "(tenant_id = rag.rag_current_tenant())"
+  - table: "rag.rag_knowledge_point"
+    policy: "rag_knowledge_point_write"
+    cmd: "INSERT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: ""
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_knowledge_point"
+    policy: "rag_knowledge_point_delete"
+    cmd: "DELETE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: ""
+  - table: "rag.rag_knowledge_point"
+    policy: "rag_knowledge_point_read"
+    cmd: "SELECT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_WITH_SHARED
+    using: "(tenant_id = ANY (ARRAY[rag.rag_current_tenant(), rag.rag_global_tenant_id()]))"
+    with_check: ""
+  - table: "rag.rag_knowledge_point"
+    policy: "rag_knowledge_point_update"
+    cmd: "UPDATE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_knowledge_prerequisite"
+    policy: "rag_knowledge_prerequisite_write"
+    cmd: "INSERT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: ""
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_knowledge_prerequisite"
+    policy: "rag_knowledge_prerequisite_delete"
+    cmd: "DELETE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: ""
+  - table: "rag.rag_knowledge_prerequisite"
+    policy: "rag_knowledge_prerequisite_read"
+    cmd: "SELECT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_WITH_SHARED
+    using: "(tenant_id = ANY (ARRAY[rag.rag_current_tenant(), rag.rag_global_tenant_id()]))"
+    with_check: ""
+  - table: "rag.rag_knowledge_prerequisite"
+    policy: "rag_knowledge_prerequisite_update"
+    cmd: "UPDATE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_source"
+    policy: "rag_source_write"
+    cmd: "INSERT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: ""
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+  - table: "rag.rag_source"
+    policy: "rag_source_delete"
+    cmd: "DELETE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: ""
+  - table: "rag.rag_source"
+    policy: "rag_source_read"
+    cmd: "SELECT"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_WITH_SHARED
+    using: "(tenant_id = ANY (ARRAY[rag.rag_current_tenant(), rag.rag_global_tenant_id()]))"
+    with_check: ""
+  - table: "rag.rag_source"
+    policy: "rag_source_update"
+    cmd: "UPDATE"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = rag.rag_current_tenant())"
+    with_check: "((tenant_id = rag.rag_current_tenant()) AND (scope = 'TENANT'::text))"
+
+
+# =====================================================================
+# 读写不对称清单（读含哨兵桶 / 写不含）—— **翻译时必须保留该区分**
+#
+# ⛔ 为什么单列：这些表的读策略放行到平台全局桶（哨兵），写策略不放行。
+#    若把一张表的读写策略合并成一个 ScopeFilter，就会**丢掉写侧闸门**
+#    ⇒ 迁移期租户可以写全局桶 ⇒ 越权。
+#    迁移实现上，这张表需要**两个** ScopeFilter（读一份、写一份），
+#    或一个带读写双通道的决策模型。⛔
+# =====================================================================
+read_write_asymmetry:
+  - rag.rag_chunk — 读=TENANT_WITH_SHARED / 写=TENANT_ONLY（读含哨兵桶、写不含）
+  - rag.rag_chunk_embedding — 读=TENANT_WITH_SHARED / 写=TENANT_ONLY（读含哨兵桶、写不含）
+  - rag.rag_dictionary — 读=TENANT_WITH_SHARED / 写=TENANT_ONLY（读含哨兵桶、写不含）
+  - rag.rag_document — 读=TENANT_WITH_SHARED / 写=TENANT_ONLY（读含哨兵桶、写不含）
+  - rag.rag_edition — 读=TENANT_WITH_SHARED / 写=TENANT_ONLY（读含哨兵桶、写不含）
+  - rag.rag_knowledge_point — 读=TENANT_WITH_SHARED / 写=TENANT_ONLY（读含哨兵桶、写不含）
+  - rag.rag_knowledge_prerequisite — 读=TENANT_WITH_SHARED / 写=TENANT_ONLY（读含哨兵桶、写不含）
+  - rag.rag_source — 读=TENANT_WITH_SHARED / 写=TENANT_ONLY（读含哨兵桶、写不含）
