@@ -657,6 +657,7 @@ function VerificationForm({
   onSubmit,
   busy,
   canSubmit,
+  deciderId,
 }: {
   source: RagSource
   onSubmit: (payload: {
@@ -664,15 +665,21 @@ function VerificationForm({
     evidenceRef: string
     trustTier: RagTrustTier | null
     verificationMethod: RagVerificationMethod
+    /** 【V1.0.2 S3-2】双人复核的第二个人（VERIFIED 时必填） */
+    verifiedBy: string | null
   }) => void
   busy: boolean
   canSubmit: boolean
+  /** 当前决定人（用于比对复核人，前端提前拦「自己复核自己」） */
+  deciderId: string
 }): JSX.Element {
   const targets = allowedVerificationTargets(source.verificationStatus)
   const [target, setTarget] = useState<RagVerificationStatus | null>(targets[0] ?? null)
   const [evidence, setEvidence] = useState('')
   const [tier, setTier] = useState<RagTrustTier>('OFFICIAL_TUTORIAL')
   const [method, setMethod] = useState<RagVerificationMethod>('ISBN')
+  // 【V1.0.2 S3-2】复核人：与决定人必须不同
+  const [reviewerId, setReviewerId] = useState('')
 
   if (targets.length === 0) {
     return (
@@ -687,7 +694,11 @@ function VerificationForm({
   }
 
   const needTier = target === 'VERIFIED'
-  const ready = target !== null && evidence.trim() !== '' && canSubmit
+  // 【V1.0.2 S3-2】签发 VERIFIED 还要求复核人：
+  //   ⚠️ 前端提前拦住「缺复核人 / 复核人=决定人」，
+  //      不要让用户提交后才吃 409——那等于让用户用错误去探测规则。
+  const reviewerOk = !needTier || (reviewerId.trim() !== '' && reviewerId.trim() !== deciderId.trim())
+  const ready = target !== null && evidence.trim() !== '' && canSubmit && reviewerOk
   const submitDisabled = !ready || busy
 
   return (
@@ -700,6 +711,7 @@ function VerificationForm({
           evidenceRef: evidence.trim(),
           trustTier: needTier ? tier : null,
           verificationMethod: method,
+          verifiedBy: needTier ? reviewerId.trim() : null,
         })
       }}
       noValidate
@@ -753,6 +765,28 @@ function VerificationForm({
         </div>
       </div>
 
+      {needTier ? (
+        <div className="field">
+          <label htmlFor="rag-mgmt-reviewer">复核人 UUID（双人复核，必填）</label>
+          <input
+            id="rag-mgmt-reviewer"
+            value={reviewerId}
+            onChange={(e) => setReviewerId(e.target.value)}
+            placeholder="与决定人不同的另一个主体 UUID"
+          />
+          {reviewerId.trim() !== '' && reviewerId.trim() === deciderId.trim() ? (
+            <p className="rag-verdict-warn">
+              ⚠️ 复核人不能是决定人本人——「双人复核」要求两个不同主体签字。
+            </p>
+          ) : (
+            <p className="field__hint">
+              签发 VERIFIED 会让语料<b>可被学生检索</b>，因此必须双人复核。
+              复核人须与决定人不同，且两者都不能是这份来源的登记人。
+            </p>
+          )}
+        </div>
+      ) : null}
+
       <div className="field">
         <label htmlFor="rag-mgmt-evidence">校验依据（必填）</label>
         <input
@@ -771,6 +805,9 @@ function VerificationForm({
           {busy ? '提交中…' : '提交判定'}
         </button>
         {!canSubmit ? <span className="muted">请先填写决定人与校验依据。</span> : null}
+        {canSubmit && needTier && !reviewerOk ? (
+          <span className="muted">签发 VERIFIED 还需填写与决定人不同的复核人。</span>
+        ) : null}
       </div>
     </form>
   )
@@ -2098,6 +2135,7 @@ export function RagManagementPage(): JSX.Element {
                     source={selected}
                     busy={busy}
                     canSubmit={deciderId.trim() !== ''}
+                    deciderId={deciderId.trim()}
                     onSubmit={(payload) => {
                       verify(tenantId.trim(), selected.sourceId, {
                         targetStatus: payload.targetStatus,
@@ -2105,6 +2143,8 @@ export function RagManagementPage(): JSX.Element {
                         decidedBy: deciderId.trim(),
                         verificationMethod: payload.verificationMethod,
                         trustTier: payload.trustTier,
+                        // 【V1.0.2 S3-2】双人复核的第二主体
+                        verifiedBy: payload.verifiedBy,
                         validDays: 365,
                       })
                     }}

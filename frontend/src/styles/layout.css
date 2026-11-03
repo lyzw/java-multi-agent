@@ -2068,3 +2068,108 @@ tbody tr:hover { background: var(--surface-hover); }
   color: var(--ink-2);
   white-space: nowrap;
 }
+
+/* ── 摄取任务列表（V1.0.2 S1-7 / 设计 §8.4「我的任务列表」最小版）────────────── */
+
+.rag-ingest-jobs {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.rag-ingest-jobs table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.rag-ingest-jobs th,
+.rag-ingest-jobs td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle, #e5e7eb);
+  text-align: left;
+  vertical-align: top;
+}
+
+/* 状态色阶：busy=进行中、ok=成功、error=失败、muted=排队/取消 */
+.rag-ingest-jobs tr.tone-busy td:nth-child(2) { color: var(--color-info, #2563eb); }
+.rag-ingest-jobs tr.tone-ok td:nth-child(2) { color: var(--color-success, #16a34a); }
+.rag-ingest-jobs tr.tone-error td:nth-child(2) { color: var(--color-danger, #dc2626); }
+.rag-ingest-jobs tr.tone-muted td:nth-child(2) { color: var(--color-text-muted, #6b7280); }
+
+.rag-ingest-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-muted, #6b7280);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.rag-ingest-hint {
+  margin: 8px 0;
+  color: var(--color-text-muted, #6b7280);
+  font-size: 13px;
+}
+
+.rag-ingest-error {
+  margin: 8px 0;
+  color: var(--color-danger, #dc2626);
+  font-size: 13px;
+}
+
+/* ── 抽检台（V1.0.2 S3-4 / 设计 §8.4）────────────────────────────────── */
+
+.rag-inspection {
+  margin-top: 16px;
+}
+
+.rag-inspection-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 8px 0;
+}
+
+.rag-inspection-table th,
+.rag-inspection-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle, #e5e7eb);
+  text-align: left;
+  vertical-align: top;
+}
+
+.rag-inspection-actions {
+  margin: 12px 0;
+}
+
+.rag-inspection-result-ok {
+  margin: 8px 0;
+  color: var(--color-success, #16a34a);
+  font-size: 13px;
+}
+
+.rag-inspection-history {
+  margin: 8px 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.rag-inspection-history .tone-error {
+  color: var(--color-danger, #dc2626);
+}
+
+.rag-inspection-history .tone-ok {
+  color: var(--color-text-muted, #6b7280);
+}
+
+/* ── 审核：双人复核提示（V1.0.2 S3-2 / S3-6）────────────────────────── */
+
+/*
+ * ⚠️ 用「警告色」而非「错误色」：复核人=决定人是**填写未完成**，
+ *    不是系统故障。红色会让用户以为出了大问题。
+ */
+.rag-verdict-warn {
+  margin: 6px 0 0;
+  color: var(--color-warning, #d97706);
+  font-size: 12px;
+  line-height: 1.5;
+}

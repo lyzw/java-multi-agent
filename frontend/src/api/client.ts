@@ -40,6 +40,10 @@ import type {
   RagStatistics,
   RagSource,
   RagDocument,
+  RagIngestJob,
+  RagInspectionItem,
+  RagInspectionVerdictResult,
+  RagInspectionRecord,
   RagChunk,
   RagRegisterSourceRequest,
   RagVerificationRequest,
@@ -735,6 +739,11 @@ export function generateRagAnswer(
  *    不像检索那样有自动重试。故超时给得比检索宽松，
  *    避免管理员在审核过程中被 20 秒超时打断。
  */
+/**
+ * 上传超时：单册教材可能数十 MB，默认管理面超时（通常 10~15s）不够。
+ */
+const DEFAULT_RAG_UPLOAD_TIMEOUT_MS = 180_000
+
 const DEFAULT_RAG_MGMT_TIMEOUT_MS = 30000
 
 /**
@@ -914,6 +923,183 @@ export function listRagDocuments(
 ): Promise<RagDocument[]> {
   return requestWithTimeout<RagDocument[]>(
     `/api/v1/management/sources/${encodeURIComponent(sourceId)}/documents`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * POST /api/v1/management/sources/{sourceId}/documents —— 上传载体并建摄取任务。
+ *
+ * 【V1.0.2 §3.1 ③ / Z1 / Z3】上传成功后自动创建 job，响应带 `jobId`，
+ * 前端据此轮询进度（见 {@link listRagIngestJobs}）。
+ *
+ * ⚠️ 四个同步预检失败都会以 400 + 明确错误码返回，**不会产生任何落库**：
+ *    - `DUP_SOURCE` / `DUP_EDITION` / `DUP_CARRIER`：三层去重命中；
+ *    - 魔数不符 / 后缀不合法：格式欺骗。
+ *    故调用方应把 400 的 message 直接展示给用户，而不是笼统的「上传失败」。
+ *
+ * ⚠️ 401 表示「无操作人主体」：V1.0.2 已删除哨兵回落，
+ *    调用方必须带令牌或显式 registeredBy，否则会被拒绝（这是刻意的）。
+ *
+ * @param tenantId 租户 ID
+ * @param sourceId 来源 ID
+ * @param file     文件（浏览器 File 或 Blob）
+ * @param carrier  可选：显式载体类型（SCAN 只能显式给出）
+ */
+export function uploadRagDocument(
+  tenantId: string,
+  sourceId: string,
+  file: File,
+  carrier?: string,
+  timeoutMs: number = DEFAULT_RAG_UPLOAD_TIMEOUT_MS,
+): Promise<RagDocument> {
+  const form = new FormData()
+  form.append('file', file)
+  if (carrier) {
+    form.append('carrier', carrier)
+  }
+  return requestWithTimeout<RagDocument>(
+    `/api/v1/management/sources/${encodeURIComponent(sourceId)}/documents`,
+    { method: 'POST', body: form },
+    // ⚠️ 不要手动设 Content-Type：浏览器需要自己加 multipart boundary。
+    true,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * GET /api/v1/management/ingest-jobs —— 列出摄取任务（S1-7 任务列表）。
+ *
+ * ⚠️ 后端按 `sourceId` 过滤；不传则返回该租户最近的任务。
+ */
+export function listRagIngestJobs(
+  tenantId: string,
+  params: { sourceId?: string; limit?: number } = {},
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagIngestJob[]> {
+  return requestWithTimeout<RagIngestJob[]>(
+    `/api/v1/management/ingest-jobs${toQuery({
+      sourceId: params.sourceId,
+      limit: params.limit,
+    })}`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * GET /api/v1/management/ingest-jobs/{id} —— 任务详情（轮询进度的最小接口）。
+ */
+export function getRagIngestJob(
+  tenantId: string,
+  jobId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagIngestJob> {
+  return requestWithTimeout<RagIngestJob>(
+    `/api/v1/management/ingest-jobs/${encodeURIComponent(jobId)}`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * POST /api/v1/management/ingest-jobs/{id}/retry —— 人工重试（运维角色）。
+ *
+ * ⚠️ 重试**新建一行 job**，旧行永久留痕；不是原地重置状态。
+ */
+export function retryRagIngestJob(
+  tenantId: string,
+  jobId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagIngestJob> {
+  return requestWithTimeout<RagIngestJob>(
+    `/api/v1/management/ingest-jobs/${encodeURIComponent(jobId)}/retry`,
+    { method: 'POST' },
+    true,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * POST /api/v1/management/sources/{sourceId}/inspection —— 提交一次抽检。
+ *
+ * 【V1.0.2 §5 R2】整组记录同事务写入，并回写来源的 `inspection_status`。
+ * 该状态是 VERIFIED 迁移的前置守卫：**未过抽检不得签发 VERIFIED**。
+ *
+ * ⚠️ 400 的常见原因：`verdict=FAIL` 缺 `errorType`、`PASS` 带了 `errorType`、
+ *    或空记录数组（未抽检任何片段不得提交结论）。
+ */
+export function submitRagInspection(
+  tenantId: string,
+  sourceId: string,
+  items: RagInspectionItem[],
+  inspectorId?: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagInspectionVerdictResult> {
+  return requestWithTimeout<RagInspectionVerdictResult>(
+    `/api/v1/management/sources/${encodeURIComponent(sourceId)}/inspection`,
+    { method: 'POST', body: JSON.stringify({ inspectorId, items }) },
+    true,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * GET /api/v1/management/sources/{sourceId}/inspection —— 查询抽检记录。
+ */
+export function listRagInspections(
+  tenantId: string,
+  sourceId: string,
+  limit = 200,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagInspectionRecord[]> {
+  return requestWithTimeout<RagInspectionRecord[]>(
+    `/api/v1/management/sources/${encodeURIComponent(sourceId)}/inspection${toQuery({ limit })}`,
+    { method: 'GET' },
+    false,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * POST /api/v1/management/kp-aliases —— 增补知识点别名（幂等）。
+ */
+export function addRagKpAlias(
+  tenantId: string,
+  kpId: string,
+  alias: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<{ added: number }> {
+  return requestWithTimeout<{ added: number }>(
+    '/api/v1/management/kp-aliases',
+    { method: 'POST', body: JSON.stringify({ kpId, alias }) },
+    true,
+    timeoutMs,
+    tenantHeaders(tenantId),
+  )
+}
+
+/**
+ * GET /api/v1/management/kp-aliases —— 列出知识点别名。
+ */
+export function listRagKpAliases(
+  tenantId: string,
+  kpId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<string[]> {
+  return requestWithTimeout<string[]>(
+    `/api/v1/management/kp-aliases${toQuery({ kpId })}`,
     { method: 'GET' },
     false,
     timeoutMs,

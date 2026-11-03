@@ -753,6 +753,106 @@ export interface RagDocument {
   licenseStatus?: RagLicenseStatus
   createdAt: string
   updatedAt: string
+  /**
+   * 【V1.0.2 §3.1 ③】本次上传创建的摄取任务 ID。
+   *
+   * ⚠️ 仅上传路径（POST .../documents）返回；列表 / 详情路径为 undefined。
+   *    前端用 `jobId !== undefined` 判断「是否需要开始轮询」，不要用 null 判断——
+   *    后端为保持既有 JSON 兼容，未建单时该字段直接缺省。
+   */
+  jobId?: string
+}
+
+/**
+ * 摄取任务状态（对齐后端 `IngestJobStatus`）。
+ *
+ * ⚠️ 8 个值必须与 DDL 枚举 `rag.rag_ingest_status` 严格一致：
+ *    后端没有 RUNNING / DONE（那会是一次破坏性的 ENUM 变更），
+ *    「运行中」是 PARSING/CHUNKING/EMBEDDING/INDEXING 的统称。
+ */
+export type RagIngestJobStatus =
+  | 'PENDING'
+  | 'PARSING'
+  | 'CHUNKING'
+  | 'EMBEDDING'
+  | 'INDEXING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'REJECTED'
+
+/** 摄取任务视图（对齐后端 `IngestJob`）。 */
+export interface RagIngestJob {
+  jobId: string
+  tenantId: string
+  sourceId: string
+  status: RagIngestJobStatus
+  /** 阶段内进度（如 "PARSING 60"），与 status 的阶段级语义正交 */
+  stage: string | null
+  /** 第几次尝试（重试=新建行，旧行留痕） */
+  attempt: number
+  createdBy: string | null
+  parserVersion: string | null
+  embedModel: string | null
+  chunkCount: number | null
+  /** 失败 / 取消原因。FAILED 时后端保证非空 */
+  errorDetail: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  createdAt: string
+  /**
+   * 是否为「来源撤回导致的取消」（REJECTED + error_detail='SOURCE_REVOKED'）。
+   *
+   * ⚠️ 后端口径：这是治理动作的**正常结果**，不是故障。
+   *    前端必须渲染为「已取消」中性态，而不是失败红字（方案 N2）。
+   */
+  sourceRevokedCancel: boolean
+}
+
+/** 抽检结论。 */
+export type RagInspectionVerdict = 'PASS' | 'FAIL'
+
+/**
+ * 抽检错误类型（对齐后端 `InspectionRecord.ErrorType`）。
+ *
+ * ⚠️ `ANSWER_LEAK` 是单点否决项：命中一条即整册不合格（漏判即泄题）。
+ */
+export type RagInspectionErrorType =
+  | 'ANSWER_LEAK'
+  | 'EXERCISE_NO_LOST'
+  | 'LOCATOR_WRONG'
+  | 'CHUNK_BOUNDARY'
+  | 'OTHER'
+
+/** 单条抽检记录（提交用）。 */
+export interface RagInspectionItem {
+  chunkId: string
+  expectedRole: string
+  actualRole: string
+  /** verdict=FAIL 时必填，PASS 时必须留空 */
+  errorType?: RagInspectionErrorType | null
+  verdict: RagInspectionVerdict
+}
+
+/** 抽检判定结果（对齐后端 `InspectionVerdictResponse`）。 */
+export interface RagInspectionVerdictResult {
+  passed: boolean
+  total: number
+  failed: number
+  answerLeaks: number
+  accuracy: number
+  reason: string | null
+}
+
+/** 抽检记录（响应，对齐后端 `InspectionRecordResponse`）。 */
+export interface RagInspectionRecord {
+  recordId: string
+  chunkId: string
+  inspectorId: string
+  expectedRole: string
+  actualRole: string
+  errorType: RagInspectionErrorType | null
+  verdict: RagInspectionVerdict
+  createdAt: string
 }
 
 /** 片段摘要（对齐后端 `ManagementDtos.ChunkResponse`）。 */
@@ -841,6 +941,16 @@ export interface RagBulkImportResponse {
 /** 校验决定请求（对齐后端 `ManagementDtos.VerificationRequest`）。 */
 export interface RagVerificationRequest {
   targetStatus: RagVerificationStatus
+  /**
+   * 复核人 UUID（双人复核的第二个人）。
+   *
+   * 【V1.0.2 S3-2】{@link RagVerificationStatus} 为 VERIFIED 时**必填**，
+   * 且必须与执行人（令牌 sub）**不同**——后端会 409 拦截：
+   *   · 缺复核人 → 「签发 VERIFIED 需要双人复核」
+   *   · 复核人 = 执行人 → 「双人复核要求两个不同主体」
+   * 其余状态可留空。
+   */
+  verifiedBy?: string | null
   /** 校验依据 —— 必填（后端强制留痕） */
   evidenceRef: string
   /** 决定人 UUID —— 必填 */
@@ -850,6 +960,20 @@ export interface RagVerificationRequest {
   trustTier: RagTrustTier | null
   validDays: number
 }
+
+/**
+ * 校验请求被治理规则拒绝时的原因分类（前端据此给出可操作提示）。
+ *
+ * ⚠️ 后端统一用 409 返回，前端需要区分是「未抽检」还是「双人复核」，
+ *    否则用户看到「这一步不被允许」却不知道该做什么。
+ */
+export type RagVerificationRejectReason =
+  | 'NOT_INSPECTED'
+  | 'DUAL_REVIEW_REQUIRED'
+  | 'SAME_REVIEWER'
+  | 'SELF_REVIEW'
+  | 'ROLE_FORBIDDEN'
+  | 'UNKNOWN'
 
 /**
  * 载体级校验决定请求（对齐后端 `ManagementDtos.DocumentVerificationRequest`）。

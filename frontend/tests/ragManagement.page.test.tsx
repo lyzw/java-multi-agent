@@ -332,6 +332,8 @@ describe('RAG 语料管理页：409 冲突被单独呈现', () => {
 
     await user.type(await screen.findByLabelText('决定人（UUID，必填）'), DECIDER)
     await user.type(screen.getByLabelText('校验依据（必填）'), 'ISBN:ref@2026-10-22')
+    // ⚠️ V1.0.2 S3-2：VERIFIED 需要复核人，否则按钮禁用、测不到 409
+    await user.type(screen.getByLabelText(/复核人 UUID/), 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')
     await user.click(screen.getByRole('button', { name: '提交判定' }))
 
     const alert = await screen.findByRole('alert')
@@ -356,6 +358,8 @@ describe('RAG 语料管理页：409 冲突被单独呈现', () => {
 
     await user.type(await screen.findByLabelText('决定人（UUID，必填）'), DECIDER)
     await user.type(screen.getByLabelText('校验依据（必填）'), 'evidence')
+    // ⚠️ V1.0.2 S3-2：VERIFIED 需要复核人，否则按钮禁用、测不到 409
+    await user.type(screen.getByLabelText(/复核人 UUID/), 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')
     await user.click(screen.getByRole('button', { name: '提交判定' }))
 
     await screen.findByRole('alert')
@@ -380,6 +384,9 @@ describe('RAG 语料管理页：提交校验决定', () => {
 
     await user.type(await screen.findByLabelText('决定人（UUID，必填）'), DECIDER)
     await user.type(screen.getByLabelText('校验依据（必填）'), 'ISBN:ref@2026-10-22')
+    // ⚠️ V1.0.2 S3-2：签发 VERIFIED 现在**必须**填复核人（双人复核）。
+    //    这是治理规则收紧，不是表单退化。
+    await user.type(screen.getByLabelText(/复核人 UUID/), 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')
     await user.click(screen.getByRole('button', { name: '提交判定' }))
 
     await waitFor(() => {
@@ -395,6 +402,8 @@ describe('RAG 语料管理页：提交校验决定', () => {
       evidenceRef: 'ISBN:ref@2026-10-22',
       decidedBy: DECIDER,
       verificationMethod: 'ISBN',
+      // ⚠️ 双人复核的第二主体必须随请求发出
+      verifiedBy: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       // ⚠️ 表单默认等级是 OFFICIAL_TUTORIAL（教辅品牌正式出版），
       //    与「教材出版社官方」不同——测试必须写实际默认值，
       //    否则这条断言会在有人改了默认等级后仍然通过（测不到东西）。
