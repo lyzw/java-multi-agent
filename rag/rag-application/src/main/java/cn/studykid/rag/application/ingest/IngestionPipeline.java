@@ -82,6 +82,16 @@ public class IngestionPipeline {
             if (block.type().isNoise()) {
                 continue;
             }
+            // ②' 空白文本块直接丢弃
+            //    ⚠️ 两处空校验口径不一致（2026-11-03 实测踩中）：
+            //    LayoutBlock 只拒绝 text==null（纯空白能通过），
+            //    Chunk 拒绝 text.isBlank() —— 于是 Docling 产出的
+            //    空白块（图片占位/空行，很常见）会让**整册摄取失败**
+            //    （报错「text 不能为空」，162 页教材在切分阶段整本挂掉）。
+            //    空白块不含任何内容，跳过即可（与「噪声块丢弃」同义）。
+            if (block.text() == null || block.text().isBlank()) {
+                continue;
+            }
             // ③ 有效题号＝块自身题号，否则继承上文最近一次出现的题号
             //    ⚠️ 必须**先**算出有效题号再判角色：
             //    答案册里的答案块通常**不带自己的题号**，
@@ -140,6 +150,8 @@ public class IngestionPipeline {
      *   <tr><td>在答案区 且无题号</td><td>{@code EXAMPLE_SOLUTION}（行 2）</td></tr>
      *   <tr><td>块类型 EXERCISE</td><td>{@code EXERCISE}（行 3）</td></tr>
      *   <tr><td>块类型 ANSWER</td><td>{@code EXERCISE_ANSWER}（行 4，取严）</td></tr>
+     *   <tr><td>块首确定性前缀（解：/ 解答：/ 答：/ 答案：/ Key:/ Answer:）<b>且不在答案区</b></td>
+     *       <td>{@code EXERCISE_ANSWER}/{@code EXAMPLE_SOLUTION}（行 7，学生用书无答案附录补丁）</td></tr>
      *   <tr><td>其余</td><td>{@code EXPLANATION}（行 6）</td></tr>
      * </table>
      *
@@ -180,8 +192,53 @@ public class IngestionPipeline {
                             ? ChunkRole.EXERCISE_ANSWER
                             : ChunkRole.EXAMPLE_SOLUTION;
                 }
+                // ④' 内容兜底（学生用书无答案附录时的关键补丁，RAG-D04 §3.1 行 7）。
+                //    ⚠️ 实测三册沪教版学生教材均<b>无答案附录</b>（答案册单独成册），
+                //       正文里出现的「例题解答 / 习题答案」以
+                //       「解：/ 解答：/ 解之：/ 答：/ 答案：/ 答曰：/ Key:/ Answer:」等
+                //       <b>确定性前缀</b>开头，但不含独立的「参考答案」标题。
+                //       若只靠标题驱动的答案区检测，这些块会被判成 EXPLANATION →
+                //       讲解模式下被原样召回 → <b>泄题</b>。
+                //    ⚠️ 仅匹配<b>块首</b>的强信号，<b>绝不</b>扫全文关键词：
+                //       历史经验（同 §3.1）显示按全文关键词（如 "answers"）判答案区
+                //       会把 89% 的题干误判成答案区。前缀「解：」是确定性解答引导语，
+                //       不会出现在题干指令里——"Answer the questions" 的 Answer 后跟的是
+                //       空格 + 动词而非冒号，故不命中。命中即视为解答/答案，
+                //       沿用行 1/行 2 的题号规则（有题号→习题答案，无题号→例题解答）。
+                ChunkRole contentRole = resolveAnswerBearingByContent(block.text(), effectiveExerciseNo);
+                if (contentRole != null) {
+                    return contentRole;
+                }
                 return ChunkRole.EXPLANATION;
         }
+    }
+
+    /**
+     * 内容兜底：识别「块首确定性前缀」的解答 / 答案。
+     *
+     * <p>⚠️ 仅匹配<b>块文本开头</b>的强信号，<b>绝不</b>扫全文关键词——
+     * 否则会重演「89% 题干被误判答案区」的事故。前缀
+     * 「解：/ 解答：/ 解之：/ 答：/ 答案：/ 答曰：/ 求解结果：/ Key:/ Answer:/ Answers:」
+     * 是<b>确定性</b>的解答引导语，不会出现在题干指令里：
+     * 「Answer the questions」的 Answer 后跟空格 + 动词而非冒号，故不命中；
+     * 「解释：/ 解读：/ 解析式：」等以「解」开头但非解答引导语的，也因后接非冒号而不命中。
+     *
+     * @param text 块文本
+     * @param effectiveExerciseNo 有效题号（块自身题号，否则继承上文题号）
+     * @return 命中时返回答案承载角色；否则返回 null（交回 EXPLANATION 兜底）
+     */
+    private static final java.util.regex.Pattern SOLUTION_PREFIX = java.util.regex.Pattern.compile(
+            "^\\s*(?:解|解答|解之|答|答案|答曰|求解结果|Key|Answer|Answers?)\\s*[:：]");
+
+    private static ChunkRole resolveAnswerBearingByContent(String text, String effectiveExerciseNo) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        if (!SOLUTION_PREFIX.matcher(text).find()) {
+            return null;
+        }
+        // 沿用行 1/行 2：有题号归属习题答案，无题号归属例题解答（都是答案承载内容）。
+        return effectiveExerciseNo != null ? ChunkRole.EXERCISE_ANSWER : ChunkRole.EXAMPLE_SOLUTION;
     }
 
     /**
@@ -263,7 +320,18 @@ public class IngestionPipeline {
     }
 
     private String chunkId(String documentId, LayoutBlock block) {
-        return documentId + ":" + block.pageNumber() + ":" + block.charStart();
+        // ⚠️⚠️ chunk_id 列是 **uuid**（DDL: rag_chunk.chunk_id uuid NOT NULL），
+        //    而这里的定位键是「documentId:页码:字符位」复合串 → 直接入库会抛
+        //    「invalid input syntax for type uuid: "…:1:0"」（2026-11-03 实测，
+        //    162 页教材在切分落库阶段整本 FAILED）。
+        //    用 nameUUIDFromBytes（type-3 确定性 UUID）由定位键派生：
+        //    **同一位置重复摄取得到同一个 id**，upsert / 去重语义得以保持
+        //    （随机 UUID 会让重跑产生重复片段）。
+        return java.util.UUID.nameUUIDFromBytes(
+                        ("chunk:" + documentId + ":" + block.pageNumber() + ":"
+                                + block.charStart()).getBytes(
+                                        java.nio.charset.StandardCharsets.UTF_8))
+                .toString();
     }
 
     private String contentHash(String text) {

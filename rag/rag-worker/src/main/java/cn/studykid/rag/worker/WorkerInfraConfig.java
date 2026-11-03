@@ -163,7 +163,8 @@ public class WorkerInfraConfig {
             cn.studykid.rag.application.ingest.IngestionPipeline pipeline,
             CorpusRepository corpusRepository,
             EmbeddingPort embeddingPort,
-            JdbcTemplate jdbcTemplate) {
+            JdbcTemplate jdbcTemplate,
+            PlatformTransactionManager txManager) {
         // ⚠️ V1.0.2 S2-3：真实的来源加载器替换 S1 的 Optional.empty() 占位。
         //    它需要 JDBC（读载体/版本/知识点）与**对象读取能力**。
         //    ⚠️ 对象存储端口住在 rag-management，而 worker **不依赖**管理面
@@ -172,7 +173,11 @@ public class WorkerInfraConfig {
         //    生产切 S3 时只换这里的读取实现，编排器与加载器零改动。
         cn.studykid.rag.infrastructure.ingest.JdbcIngestSourceLoader loader =
                 new cn.studykid.rag.infrastructure.ingest.JdbcIngestSourceLoader(
-                        jdbcTemplate, bucketReader());
+                        jdbcTemplate, bucketReader(),
+                        // ⚠️ 加载器读 rag_document/rag_edition 等受 RLS 约束的表，
+                        //    必须在事务内设租户会话（set_config 是事务局部），
+                        //    否则读 0 行 → 编排器误报「来源不存在或不可见」。
+                        indexingTransactionTemplate(txManager));
         return new cn.studykid.rag.application.ingest.IngestJobOrchestrator(
                 jobPort, pipeline, corpusRepository, embeddingPort, loader,
                 // ⚠️ 分词实现与检索期同源（ChineseTokenizer），保证入库分词与查询分词一致。

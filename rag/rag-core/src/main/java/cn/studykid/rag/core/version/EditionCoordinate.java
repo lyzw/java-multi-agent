@@ -93,7 +93,12 @@ public record EditionCoordinate(
         BIOLOGY("生物"),
         HISTORY("历史"),
         GEOGRAPHY("地理"),
-        POLITICS("道法");
+        POLITICS("道法"),
+        // ⚠️「未指定」是**登记流程的合法占位值**：管理面建默认版本坐标时
+        //    学科/年级/出版社一律写占位（登记 UI 不采集版本坐标）。
+        //    若枚举里没有它，摄取的「按 displayName 反查」会抛「未知学科值：未指定」，
+        //    表现为**每一个 UI 登记的来源都摄取失败**（2026-11-03 实测）。
+        UNSPECIFIED("未指定");
 
         private final String displayName;
 
@@ -111,7 +116,10 @@ public record EditionCoordinate(
         GRADE_1("一年级"), GRADE_2("二年级"), GRADE_3("三年级"),
         GRADE_4("四年级"), GRADE_5("五年级"), GRADE_6("六年级"),
         GRADE_7("七年级"), GRADE_8("八年级"), GRADE_9("九年级"),
-        HIGH_1("高一"), HIGH_2("高二"), HIGH_3("高三");
+        HIGH_1("高一"), HIGH_2("高二"), HIGH_3("高三"),
+        // ⚠️「全学段」是登记流程的合法占位值（管理面建默认版本坐标时写入），
+        //    同 Subject.UNSPECIFIED 的理由：缺它则 UI 登记的来源一律摄取失败。
+        ALL_GRADES("全学段");
 
         private final String displayName;
 
@@ -154,7 +162,12 @@ public record EditionCoordinate(
         HUJIAO("沪教版"),
         LUJIAO("鲁教版"),
         HUBEI("鄂教版"),
-        OTHER("其他");
+        OTHER("其他"),
+        // ⚠️「未指定」是登记流程的合法占位值（管理面建默认版本坐标时写入），
+        //    同 Subject.UNSPECIFIED 的理由：缺它则 UI 登记的来源一律摄取失败。
+        //    ⚠️ 本枚举是「**版本体系**」（人教版/苏教版…），与来源登记里的
+        //    「出版社」（出版机构，如上海教育出版社）是两个不同概念，勿混用。
+        UNSPECIFIED("未指定");
 
         private final String displayName;
 

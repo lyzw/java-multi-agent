@@ -85,17 +85,21 @@ public class IngestJobOrchestrator {
     public void run(@NonNull IngestJob job) {
         String jobId = job.jobId();
         String tenantId = job.tenantId();
+        // ⚠️ 载体 ID 提到 try 外：失败时若已取到载体，须把载体也标成 FAILED
+        //    （否则「解析失败的载体」面板永远为空 —— 没人置 FAILED）。
+        String documentId = null;
         try {
             // ① 取载体内容（解析输入）
             IngestSourceView src = sourcePort.load(tenantId, job.sourceId())
                     .orElseThrow(() -> new IllegalStateException(
                             "来源不存在或不可见：" + job.sourceId()));
+            documentId = src.documentId();
             byte[] content = src.content()
                     .orElseThrow(() -> new IllegalStateException(
                             "来源下无可用载体内容（object_ref 缺失或不可读）：" + job.sourceId()));
 
             // ② PARSING：解析 + 切分（占位解析器在 S1 承担此段）
-            jobPort.updateStage(jobId, "PARSING 30");
+            jobPort.updateStage(tenantId, jobId, "PARSING 30");
             List<Chunk> chunks = pipeline.ingest(
                     src.documentId(), src.title(), src.edition(), content, src.knowledgePoints());
             if (chunks.isEmpty()) {
@@ -103,10 +107,10 @@ public class IngestJobOrchestrator {
                 //    报 SUCCEEDED 会让「这本教材录完了」成为假象。
                 throw new IllegalStateException("解析后产出 0 个片段（内容可能全部被判为噪声）");
             }
-            jobPort.advance(jobId, IngestJobStatus.CHUNKING, "CHUNKING 60");
+            jobPort.advance(tenantId, jobId, IngestJobStatus.CHUNKING, "CHUNKING 60");
 
             // ③ EMBEDDING：逐片段嵌入 + 原子落库（片段与向量同事务）
-            jobPort.advance(jobId, IngestJobStatus.EMBEDDING, "EMBEDDING 0");
+            jobPort.advance(tenantId, jobId, IngestJobStatus.EMBEDDING, "EMBEDDING 0");
             int done = 0;
             for (Chunk chunk : chunks) {
                 float[] vector = embedWithRetry(chunk.text());
@@ -114,7 +118,7 @@ public class IngestJobOrchestrator {
                         tenantId, chunk, src.editionId(), vector, embeddingPort.modelVersion());
                 done++;
                 if (done % 20 == 0) {
-                    jobPort.updateStage(jobId, "EMBEDDING " + (done * 100 / chunks.size()));
+                    jobPort.updateStage(tenantId, jobId, "EMBEDDING " + (done * 100 / chunks.size()));
                 }
             }
 
@@ -123,19 +127,34 @@ public class IngestJobOrchestrator {
             //       `to_tsvector('simple', text_jieba)` 直接对「空格切好的词序列」建索引，
             //       塞原文进去会让中文整句变成一个 token，词法通道等于失效。
             //    ⚠️ 分词器与检索期同源（{@code ChineseTokenizer}），不得另写一套切词逻辑。
-            jobPort.advance(jobId, IngestJobStatus.INDEXING, "INDEXING");
+            jobPort.advance(tenantId, jobId, IngestJobStatus.INDEXING, "INDEXING");
             for (Chunk chunk : chunks) {
                 corpusRepository.updateJiebaTokens(tenantId, chunk.id(), tokenizer.apply(chunk.text()));
             }
 
-            jobPort.markSucceeded(jobId, chunks.size(),
+            // ⑤ 载体状态回写：片段与向量都已落库 → 载体解析完成。
+            //    ⚠️ 此前**从不回写** rag_document.parse_status：载体行永远停在 PENDING，
+            //    管理面「载体按解析状态」恒为 PENDING、「解析失败的载体」列表恒为空，
+            //    等于管理面看不到真实解析状态（2026-11-03 实测）。
+            corpusRepository.markDocumentParseStatus(tenantId, src.documentId(), "CHUNKED");
+
+            jobPort.markSucceeded(tenantId, jobId, chunks.size(),
                     src.parserVersion(), embeddingPort.modelVersion());
         } catch (Exception e) {
             // ⚠️ 失败必须带可读原因（IngestJob 不变式），且明确标注可能的部分残留。
             String detail = "阶段 " + stageOf(jobId) + " 失败：" + rootMessage(e)
                     + "（整册未完成；若为 EMBEDDING 之后失败，可能残留部分片段，"
                     + "来源仍为 PENDING 且 retrievable=false，不会进入检索）";
-            jobPort.markFailed(jobId, detail);
+            jobPort.markFailed(tenantId, jobId, detail);
+            // ⚠️ 载体也标 FAILED：管理面的「解析失败的载体」面板以 parse_status='FAILED' 为口径，
+            //    没人置 FAILED 那个面板就永远是空的。失败回写失败不应掩盖原始错误。
+            if (documentId != null) {
+                try {
+                    corpusRepository.markDocumentParseStatus(tenantId, documentId, "FAILED");
+                } catch (RuntimeException ignored) {
+                    // 载体状态回写失败不影响主流程（原始错误已写进 job.error_detail）。
+                }
+            }
         }
     }
 

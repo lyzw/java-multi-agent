@@ -1,5 +1,7 @@
 package cn.studykid.rag.worker;
 
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -7,6 +9,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.ports.IngestJobPort;
 
 /**
@@ -27,6 +30,7 @@ public class IngestJobSweeper {
     private static final Logger log = LoggerFactory.getLogger(IngestJobSweeper.class);
 
     private final IngestJobPort jobPort;
+    private final RagIndexerProperties properties;
 
     /**
      * 超时阈值（分钟）。
@@ -38,8 +42,9 @@ public class IngestJobSweeper {
     @Value("${rag.ingest.sweeper.timeout-minutes:30}")
     private int timeoutMinutes;
 
-    public IngestJobSweeper(IngestJobPort jobPort) {
+    public IngestJobSweeper(IngestJobPort jobPort, RagIndexerProperties properties) {
         this.jobPort = jobPort;
+        this.properties = properties;
     }
 
     /**
@@ -47,11 +52,26 @@ public class IngestJobSweeper {
      *
      * <p>⚠️ 间隔远大于消费轮询（默认 5 分钟 vs 2 秒）：
      * Sweeper 是兜底手段，扫得太频只是无谓的全表条件扫描。
+     *
+     * <p>⚠️⚠️ 按租户逐个扫：Sweeper 的 UPDATE 是跨租户动作，
+     * 而无租户会话的全表 UPDATE 会被 RLS 静默变成 0 行（实测）——
+     * 僵尸任务永远不被接管。租户清单与消费循环同源（{@code rag.indexer.tenants}）。
      */
     @Scheduled(fixedDelayString = "${rag.ingest.sweeper.interval-ms:300000}", initialDelayString = "60000")
     public void sweep() {
         try {
-            int taken = jobPort.failTimedOutRunningJobs(timeoutMinutes);
+            List<String> tenants = properties.getTenants();
+            if (tenants == null || tenants.isEmpty()) {
+                return;
+            }
+            int taken = 0;
+            for (String raw : tenants) {
+                String t = raw == null ? "" : raw.trim();
+                if (t.isEmpty() || RagScope.isGlobalTenant(t)) {
+                    continue;
+                }
+                taken += jobPort.failTimedOutRunningJobs(t, timeoutMinutes);
+            }
             if (taken > 0) {
                 // ⚠️ 取到就记 warn：接管频发是「worker 不稳定」的前兆，
                 //    应当在它变成积压之前被看见（方案 §7.3 告警项之一）。

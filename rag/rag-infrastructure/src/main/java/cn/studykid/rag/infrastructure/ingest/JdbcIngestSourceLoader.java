@@ -32,19 +32,39 @@ public class JdbcIngestSourceLoader implements TenantScopedIngestSource {
 
     private final JdbcTemplate jdbcTemplate;
     private final java.util.function.Function<String, byte[]> objectReader;
+    private final org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
     /**
      * @param jdbcTemplate  JDBC 模板
      * @param objectReader  按 objectRef 读字节（由装配方注入 {@code ObjectStorePort::read}）
+     * @param transactionTemplate 事务模板（租户会话必须在事务内，见 {@link #load}）
      */
     public JdbcIngestSourceLoader(JdbcTemplate jdbcTemplate,
-                                  java.util.function.Function<String, byte[]> objectReader) {
+                                  java.util.function.Function<String, byte[]> objectReader,
+                                  org.springframework.transaction.support.TransactionTemplate transactionTemplate) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectReader = objectReader;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @Override
     public Optional<IngestSourceView> load(@NonNull String tenantId, @NonNull String sourceId) {
+        // ⚠️⚠️ 必须**自带租户会话**：RLS 策略是 {@code tenant_id = rag_current_tenant()}，
+        //    无租户会话时「本类每个查询都显式带 tenant_id 谓词」也救不了——
+        //    谓词再精确，策略过滤器仍会把行全部滤掉（2026-11-03 实测：读 0 行，
+        //    编排器随即报「来源不存在或不可见」，而真实原因是没设租户）。
+        //    ⚠️ set_config(..., true) 是**事务局部**：autocommit 上它当场失效，
+        //    故整个 load（含版本坐标与知识点读取）必须在同一个事务内完成。
+        return transactionTemplate.execute(status -> {
+            // ⚠️ 必须用 queryForObject 而非 update：set_config 是 SELECT、返回一行，
+            //    update() 期望「无结果集」，否则抛 DataIntegrityViolation（实测 500）。
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
+            return loadWithinTenant(tenantId, sourceId);
+        });
+    }
+
+    private Optional<IngestSourceView> loadWithinTenant(String tenantId, String sourceId) {
         // ① 取来源下「最新一份待处理/已处理的载体」：job 是按来源建的，
         //    实际要解析的是该来源下最新上传的那个载体。
         List<DocRow> docs = jdbcTemplate.query("""
@@ -126,7 +146,11 @@ public class JdbcIngestSourceLoader implements TenantScopedIngestSource {
                             rs.getString(1), rs.getString(2), rs.getString(3),
                             rs.getString(4), List.of(aliases), List.of(), List.of());
                 },
-                tenantId, edition.subject(), edition.grade());
+                // ⚠️⚠️ 必须传 **displayName()（字符串）**，不能直接把枚举对象当绑定参数：
+                //    JDBC 无法为枚举实例推断 SQL 类型，会抛「无法推测实例
+                //    EditionCoordinate$Subject 的 SQL 类型」（2026-11-03 实测）。
+                //    库里的 subject/grade 存的就是 displayName（见 loadEdition 的反查注释）。
+                tenantId, edition.subject().displayName(), edition.grade().displayName());
     }
 
     private static cn.studykid.rag.core.version.EditionCoordinate.Subject subjectOf(String s) {

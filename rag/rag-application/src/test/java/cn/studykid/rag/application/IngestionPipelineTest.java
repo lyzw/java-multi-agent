@@ -140,6 +140,66 @@ class IngestionPipelineTest {
             assertThat(chunks.get(0).role()).isEqualTo(ChunkRole.EXERCISE);
             assertThat(chunks.get(0).answerBearing()).isFalse();
         }
+
+        @Test
+        @DisplayName("⚠️ 学生用书补丁：块首「解：」前缀（无答案区标题）→ 例题解答，不泄题")
+        void solutionPrefixWithoutAnswerZoneIsExampleSolution() {
+            // ⚠️ 学生版教材无答案附录，例题解答以「解：」开头但不带「参考答案」标题，
+            //    旧逻辑会把它判成 EXPLANATION → 讲解模式召回 → 泄题。
+            List<Chunk> chunks = pipelineOf(
+                    block(BlockType.PARAGRAPH, "解：配方得 y=(x-2)^2-1，故顶点为 (2,-1)。",
+                            45, 0, "第3章", null, false))
+                    .ingest("doc-1", "人教版八上", EDITION, new byte[0], List.of());
+
+            assertThat(chunks).hasSize(1);
+            assertThat(chunks.get(0).role())
+                    .as("块首解：前缀必须是答案承载角色，不能是讲解")
+                    .isEqualTo(ChunkRole.EXAMPLE_SOLUTION);
+            assertThat(chunks.get(0).answerBearing()).isTrue();
+        }
+
+        @Test
+        @DisplayName("块首「答：」前缀 + 题号（无答案区标题）→ 习题标准答案")
+        void answerPrefixWithExerciseNumberIsExerciseAnswer() {
+            List<Chunk> chunks = pipelineOf(
+                    block(BlockType.EXERCISE, "求顶点坐标。", 45, 0, "第3章", "12", false),
+                    block(BlockType.PARAGRAPH, "答：顶点为 (2,-1)。", 45, 0, "第3章", null, false))
+                    .ingest("doc-1", "人教版八上", EDITION, new byte[0], List.of());
+
+            assertThat(chunks).hasSize(2);
+            assertThat(chunks.get(1).role())
+                    .as("块首答：前缀 + 继承题号 12 必须是习题标准答案")
+                    .isEqualTo(ChunkRole.EXERCISE_ANSWER);
+        }
+
+        @Test
+        @DisplayName("解答引导语必须是块首前缀：题干「Answer the questions」不误判为答案")
+        void answerInstructionIsNotSolutionPrefix() {
+            // ⚠️ 反例：前缀规则必须只认「Answer:」而非「Answer 」，
+            //    否则会重演 89% 题干误判答案区的事故。
+            List<Chunk> chunks = pipelineOf(
+                    block(BlockType.PARAGRAPH, "Answer the questions below.", 45, 0, "第3章", null, false))
+                    .ingest("doc-1", "人教版八上", EDITION, new byte[0], List.of());
+
+            assertThat(chunks.get(0).role()).isEqualTo(ChunkRole.EXPLANATION);
+        }
+
+        @Test
+        @DisplayName("⛔ 端到端：块首解：前缀的内容同样不得进入讲解模式召回")
+        void solutionPrefixNeverSurvivesExplainMode() {
+            List<Chunk> chunks = pipelineOf(
+                    block(BlockType.EXERCISE, "已知 y=x^2-4x+3，求顶点。", 45, 0, "第3章", "12", false),
+                    block(BlockType.PARAGRAPH, "解：配方得 y=(x-2)^2-1，故顶点 (2,-1)。",
+                            45, 0, "第3章", null, false))
+                    .ingest("doc-1", "人教版八上", EDITION, new byte[0], List.of());
+
+            List<Chunk> keptInExplain = RetrievalPolicy.applyRoleFilter(chunks, RetrievalMode.EXPLAIN);
+
+            assertThat(keptInExplain)
+                    .as("讲解模式下只能看到题干，不得看到任何解答内容（无答案区标题也要拦住）")
+                    .extracting(Chunk::text)
+                    .containsExactly("已知 y=x^2-4x+3，求顶点。");
+        }
     }
 
     @Nested

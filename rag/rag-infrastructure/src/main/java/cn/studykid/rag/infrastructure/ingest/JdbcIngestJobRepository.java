@@ -66,13 +66,19 @@ public class JdbcIngestJobRepository implements IngestJobPort {
                                              @NonNull String createdBy,
                                              @Nullable String previousJobId) {
         // ⚠️ 重试=新建行，attempt 在原 job 基础上 +1；旧行永久留痕、绝不 UPDATE。
-        int nextAttempt = 1;
-        if (previousJobId != null && !previousJobId.isBlank()) {
+        // ⚠️ attempt 查询必须声明租户会话：裸查在 RLS 下恒 0 行 → attempt 恒为 1
+        //    （同一根因：rag_ingest_job 未设租户会话读不到任何行）。
+        int nextAttempt = transactionTemplate.execute(status -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
+            if (previousJobId == null || previousJobId.isBlank()) {
+                return 1;
+            }
             Integer prev = jdbcTemplate.query(
                     "SELECT attempt FROM rag_ingest_job WHERE job_id = ?::uuid",
-                    (rs, i) -> rs.getInt(1), previousJobId).stream().findFirst().orElse(0);
-            nextAttempt = (prev == null ? 0 : prev) + 1;
-        }
+                    (rs, i) -> rs.getInt(1), previousJobId).stream().findFirst().orElse(null);
+            return (prev == null ? 0 : prev) + 1;
+        });
         return createJobInternal(tenantId, sourceId, createdBy, nextAttempt);
     }
 
@@ -95,52 +101,60 @@ public class JdbcIngestJobRepository implements IngestJobPort {
     }
 
     @Override
-    public @Nullable IngestJob claimNextJob() {
+    public @Nullable IngestJob claimNextJobForTenant(@NonNull String tenantId) {
         return transactionTemplate.execute(status -> {
+            // ⚠️ RLS：必须先声明租户会话，否则 SELECT 被策略过滤成 0 行
+            //    （2026-11-03 实测：无租户会话 visible_jobs=0，任务静默积压）。
+            //    必须用 queryForObject 而非 update：set_config 是 SELECT、返回一行，
+            //    update() 期望「无结果集」，否则抛 DataIntegrityViolation（实测 500）。
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
             // ⚠️⚠️ SKIP LOCKED 是本类的核心正确性来源：
             //    多 worker 并发轮询时各领一条、互不阻塞、绝不重复。
-            //    ⚠️ 领取是跨租户动作：WHERE 不带租户谓词，故必须走**绕过 RLS 的运维通道**
-            //    连接（由调用方在事务外已切换会话，见 IngestJobConsumer）。
+            //    ⚠️ tenant_id 谓词与 RLS 策略同向（双保险）：隔离由 RLS 保证，
+            //    应用层谓词只是把「领哪一桶」写死，不承担隔离职责。
             String jobId = jdbcTemplate.query("""
                             SELECT job_id::text FROM rag_ingest_job
                              WHERE status = 'PENDING'::rag_ingest_status
+                               AND tenant_id = ?::uuid
                              ORDER BY created_at
                              LIMIT 1
                              FOR UPDATE SKIP LOCKED
                             """,
-                    (rs, i) -> rs.getString(1)).stream().findFirst().orElse(null);
+                    (rs, i) -> rs.getString(1), tenantId).stream().findFirst().orElse(null);
             if (jobId == null) {
                 return null;
             }
             jdbcTemplate.update("""
-                            UPDATE rag_ingest_job
-                               SET status = 'PARSING'::rag_ingest_status,
-                                   started_at = COALESCE(started_at, now())
-                             WHERE job_id = ?::uuid
-                            """, jobId);
+                    UPDATE rag_ingest_job
+                       SET status = 'PARSING'::rag_ingest_status,
+                           started_at = COALESCE(started_at, now())
+                     WHERE job_id = ?::uuid
+                    """, jobId);
             return load(jobId);
         });
     }
 
     @Override
-    public void updateStage(@NonNull String jobId, @NonNull String stage) {
-        jdbcTemplate.update("UPDATE rag_ingest_job SET stage = ? WHERE job_id = ?::uuid",
-                stage, jobId);
+    public void updateStage(@NonNull String tenantId, @NonNull String jobId, @NonNull String stage) {
+        inTenant(tenantId, () -> jdbcTemplate.update(
+                "UPDATE rag_ingest_job SET stage = ? WHERE job_id = ?::uuid",
+                stage, jobId));
     }
 
     @Override
-    public void advance(@NonNull String jobId, @NonNull IngestJobStatus status,
-                        @Nullable String stage) {
-        jdbcTemplate.update(
+    public void advance(@NonNull String tenantId, @NonNull String jobId,
+                        @NonNull IngestJobStatus status, @Nullable String stage) {
+        inTenant(tenantId, () -> jdbcTemplate.update(
                 "UPDATE rag_ingest_job SET status = ?::rag_ingest_status, stage = ?"
                         + " WHERE job_id = ?::uuid",
-                status.name(), stage, jobId);
+                status.name(), stage, jobId));
     }
 
     @Override
-    public void markSucceeded(@NonNull String jobId, int chunkCount,
+    public void markSucceeded(@NonNull String tenantId, @NonNull String jobId, int chunkCount,
                               @NonNull String parserVersion, @NonNull String embedModel) {
-        jdbcTemplate.update("""
+        inTenant(tenantId, () -> jdbcTemplate.update("""
                         UPDATE rag_ingest_job
                            SET status = 'SUCCEEDED'::rag_ingest_status,
                                chunk_count = ?,
@@ -149,20 +163,43 @@ public class JdbcIngestJobRepository implements IngestJobPort {
                                finished_at = now(),
                                stage = NULL
                          WHERE job_id = ?::uuid
-                        """, chunkCount, parserVersion, embedModel, jobId);
+                        """, chunkCount, parserVersion, embedModel, jobId));
     }
 
     @Override
-    public void markFailed(@NonNull String jobId, @NonNull String errorDetail) {
+    public void markFailed(@NonNull String tenantId, @NonNull String jobId,
+                           @NonNull String errorDetail) {
         // ⚠️ error_detail 必填：没有原因的 FAILED 在录入工作台上无法处置（见 IngestJob 不变式）。
-        jdbcTemplate.update("""
+        inTenant(tenantId, () -> jdbcTemplate.update("""
                         UPDATE rag_ingest_job
                            SET status = 'FAILED'::rag_ingest_status,
                                error_detail = ?,
                                finished_at = now(),
                                stage = NULL
                          WHERE job_id = ?::uuid
-                        """, errorDetail, jobId);
+                        """, errorDetail, jobId));
+    }
+
+    /**
+     * 在租户会话内执行一条写操作。
+     *
+     * <p>⚠️⚠️ 为什么每个 mutator 都必须包一层：
+     * {@code rag_ingest_job} 的 RLS 策略是 {@code tenant_id = rag_current_tenant()}，
+     * <b>未设租户会话的 UPDATE 会被静默变成 0 行</b>（2026-11-03 实测：
+     * 无租户 UPDATE 0 / 设租户 UPDATE 1）——不报错、不留痕，
+     * 于是「进度回写」与「失败原因」双双消失，任务永远停在中间态。
+     *
+     * <p>⚠️ 必须用 {@code queryForObject} 执行 set_config：它是 SELECT、返回一行，
+     * {@code update()} 期望「无结果集」，否则抛 DataIntegrityViolation（实测 500）。
+     * ⚠️ {@code set_config(..., true)} 是<b>事务局部</b>，故必须在事务内执行。
+     */
+    private void inTenant(String tenantId, Runnable action) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
+            action.run();
+            return null;
+        });
     }
 
     @Override
@@ -190,11 +227,17 @@ public class JdbcIngestJobRepository implements IngestJobPort {
     }
 
     @Override
-    public int failTimedOutRunningJobs(int timeoutMinutes) {
+    public int failTimedOutRunningJobs(@NonNull String tenantId, int timeoutMinutes) {
         if (timeoutMinutes <= 0) {
             throw new IllegalArgumentException("timeoutMinutes 必须 > 0");
         }
-        return jdbcTemplate.update("""
+        // ⚠️⚠️ Sweeper 是跨租户动作，但**不能**用无租户会话的全表 UPDATE：
+        //    RLS 会把它静默变成 0 行（实测），僵尸任务永远不被接管。
+        //    故按租户逐个执行，隔离仍由 RLS 策略保证。
+        return transactionTemplate.execute(status -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
+            return jdbcTemplate.update("""
                         UPDATE rag_ingest_job
                            SET status = 'FAILED'::rag_ingest_status,
                                error_detail = 'SWEEPER_TIMEOUT: 超过 ' || ? || ' 分钟未完成，被 Sweeper 接管',
@@ -206,6 +249,7 @@ public class JdbcIngestJobRepository implements IngestJobPort {
                                           'INDEXING'::rag_ingest_status)
                            AND started_at < now() - make_interval(mins => ?)
                         """, timeoutMinutes, timeoutMinutes);
+        });
     }
 
     @Override
@@ -214,6 +258,23 @@ public class JdbcIngestJobRepository implements IngestJobPort {
                 "SELECT " + COLUMNS + " FROM rag_ingest_job WHERE job_id = ?::uuid",
                 this::mapJob, jobId);
         return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    @Override
+    public @Nullable IngestJob findByIdForTenant(@NonNull String tenantId, @NonNull String jobId) {
+        return transactionTemplate.execute(status -> {
+            // ⚠️ RLS：裸查（findById）不声明租户会话，在应用角色下恒 0 行 →
+            //    重试端点对真实存在的 job 报 404。必须先声明租户会话再查。
+            // ⚠️ 必须用 queryForObject 而非 update：set_config 是 SELECT、返回一行。
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
+            // ⚠️ tenant_id 同时入 WHERE：就算会话被污染也不跨租户读行（纵深防御）。
+            List<IngestJob> rows = jdbcTemplate.query(
+                    "SELECT " + COLUMNS + " FROM rag_ingest_job"
+                            + " WHERE job_id = ?::uuid AND tenant_id = ?::uuid",
+                    this::mapJob, jobId, tenantId);
+            return rows.isEmpty() ? null : rows.get(0);
+        });
     }
 
     @Override

@@ -109,8 +109,27 @@ public class JdbcCorpusRepository implements CorpusRepository {
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, index_generation, embed_model, embedding)
                 VALUES (?::uuid, rag_current_tenant(), 1, ?, %s)
+                ON CONFLICT (chunk_id) DO UPDATE SET
+                    index_generation = EXCLUDED.index_generation,
+                    embed_model = EXCLUDED.embed_model,
+                    embedding = EXCLUDED.embedding
                 """.formatted(vectorColumn.castPlaceholder()),
                 chunk.id(), embedModel, vectorToString(embedding));
+    }
+
+    @Override
+    @Transactional
+    public void markDocumentParseStatus(@NonNull String tenantId, @NonNull String documentId,
+                                        @NonNull String parseStatus) {
+        // ⚠️ 必须先声明租户会话：rag_document 受 RLS 约束，无租户上下文时
+        //    UPDATE 被静默变成 0 行（不报错）——载体状态会「写不进去也不报错」。
+        jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                String.class, tenantId);
+        // ⚠️ document_id 必须显式转 uuid（列是 uuid，参数以字符串传入时
+        //    PG 无 uuid = varchar 运算符）。
+        jdbcTemplate.update(
+                "UPDATE rag_document SET parse_status = ? WHERE document_id = ?::uuid",
+                parseStatus, documentId);
     }
 
     @Override

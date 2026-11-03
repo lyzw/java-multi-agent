@@ -44,6 +44,26 @@ public interface CorpusRepository {
                            @NonNull String jiebaTokens);
 
     /**
+     * 回写**载体**的解析状态（{@code rag_document.parse_status}）。
+     *
+     * <p>⚠️⚠️ 为什么必须有它：摄入流水线此前只更新「任务」（{@code rag_ingest_job}）的状态，
+     * <b>从不回写载体行</b> —— 于是载体行永远停在 {@code PENDING}，
+     * 管理面的「载体按解析状态」恒显示 PENDING、「解析失败的载体」列表也永远为空
+     * （没人把 {@code parse_status} 置 FAILED），
+     * 即<b>管理面看不到真实解析状态</b>（2026-11-03 实测：1589 片段全部入库的教材，
+     * 载体行仍是 PENDING）。
+     *
+     * <p>取值域由 DDL 的 {@code rag_document_parse_status_chk} 约束：
+     * {@code PENDING / PARSED / CHUNKED / FAILED}。
+     *
+     * @param tenantId 租户 ID
+     * @param documentId 载体 ID
+     * @param parseStatus 目标解析状态（上述四值之一）
+     */
+    void markDocumentParseStatus(@NonNull String tenantId, @NonNull String documentId,
+                                 @NonNull String parseStatus);
+
+    /**
      * 写入或更新片段向量（RAG-D09 R2-1：历史片段向量缺失重索引 / 换模型代际重建）。
      *
      * <p>语义：{@code chunk_id} 已存在则更新其向量与模型标识，不存在则插入。
