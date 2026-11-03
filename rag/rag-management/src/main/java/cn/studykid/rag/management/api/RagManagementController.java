@@ -415,9 +415,64 @@ public class RagManagementController {
         //    X-Tenant-Min-Trust-Tier 头下发（不在 RAG 库中存租户信息）。
         //    此处用**最低门槛**渲染——真正的准入判定在服务端由 SQL 强制，
         //    管理面只呈现状态事实，不在此处给出与真实门槛不符的结论。
+        // 载体数量批量富化（一条 GROUP BY，杜绝 N+1）：0 = 「仅元数据」来源，
+        // 列表页据此打「仅元数据」标识，与真实携带语料的来源区分（2026-11-03 抽检发现）。
+        java.util.Map<String, Integer> docCounts =
+                documentCountsQuietly(ctx, sources.stream().map(CorpusSource::sourceId).toList());
         return sources.stream()
                 .map(s -> ManagementDtos.toResponse(s, TrustTier.UNVERIFIED, now))
+                .map(r -> withInspectionStatusQuietly(ctx, r))
+                .map(r -> ManagementDtos.withDocumentCount(r,
+                        docCounts.getOrDefault(r.sourceId(), 0)))
                 .toList();
+    }
+
+    /**
+     * 批量读取来源的载体数量（读路径专用，<b>fail-soft</b>）。
+     *
+     * <p>与 {@link #withInspectionStatusQuietly} 同档：这是展示字段，
+     * 读取失败回退空 Map（前端全部按 0 = 仅元数据渲染只是显示退化，
+     * 不能让「数量列读不到」把整个来源列表打成 500）。
+     */
+    private java.util.Map<String, Integer> documentCountsQuietly(
+            RagManagementContext ctx, java.util.List<String> sourceIds) {
+        if (sourceIds.isEmpty()) {
+            return java.util.Map.of();
+        }
+        try {
+            return managementPort.documentCounts(ctx, sourceIds);
+        } catch (RuntimeException e) {
+            log.warn("[RAG] 来源列表读取载体数量失败（回退为空） scope={} size={}",
+                    ctx.scope(), sourceIds.size(), e);
+            return java.util.Map.of();
+        }
+    }
+
+    /**
+     * 给来源视图富化抽检状态（读路径专用，<b>fail-soft</b>）。
+     *
+     * <p>⚠️ 与签发 VERIFIED 时的抽检守卫（fail-closed）刻意不同档：
+     * 这里只是<b>展示字段</b>——读取失败时回退 null（前端按抽检历史推导），
+     * 不能让「状态列读不到」把整个来源列表打成 500。
+     * 权威判定始终发生在校验流转端点，与本富化无关。
+     *
+     * @param ctx 管理上下文（决定按租户档还是平台档读）
+     * @param response 原视图
+     * @return 带抽检状态的视图；端口缺失或读取失败时原样返回（inspectionStatus=null）
+     */
+    private ManagementDtos.SourceResponse withInspectionStatusQuietly(
+            RagManagementContext ctx, ManagementDtos.SourceResponse response) {
+        if (inspectionPort == null) {
+            return response;
+        }
+        try {
+            String status = inspectionPort.inspectionStatusOf(ctx, response.sourceId());
+            return ManagementDtos.withInspectionStatus(response, status);
+        } catch (RuntimeException e) {
+            log.warn("[RAG] 来源列表读取抽检状态失败（回退为未读取）source={} scope={}",
+                    response.sourceId(), ctx.scope(), e);
+            return response;
+        }
     }
 
     /**
@@ -441,7 +496,11 @@ public class RagManagementController {
         if (source == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "来源不存在：" + sourceId);
         }
-        return ManagementDtos.toResponse(source, TrustTier.UNVERIFIED, Instant.now());
+        ManagementDtos.SourceResponse view =
+                withInspectionStatusQuietly(ctx,
+                        ManagementDtos.toResponse(source, TrustTier.UNVERIFIED, Instant.now()));
+        Integer n = documentCountsQuietly(ctx, java.util.List.of(sourceId)).get(sourceId);
+        return ManagementDtos.withDocumentCount(view, n == null ? 0 : n);
     }
 
     /**
@@ -887,6 +946,24 @@ public class RagManagementController {
      * @param limit 条数上限
      * @return 片段摘要列表
      */
+    /**
+     * 列出某文档下的片段摘要（管理面浏览用）。
+     *
+     * <p><b>role 筛选（人工抽检的关键可达性）</b>：{@code role} 参数接受
+     * 逗号分隔的角色名（如 {@code role=EXAMPLE_SOLUTION,EXERCISE_ANSWER}），
+     * 在 SQL 端过滤——否则 LIMIT 作用于筛选前，「答案片段被正文淹没」，
+     * 抽检员根本翻不到要抽的片段（2026-11-03 端到端抽检实测发现）。
+     * 非法角色名返回 400，绝不静默忽略（静默忽略＝筛选没生效＝同一个坑）。
+     *
+     * @param tenantId 租户 ID（租户档必填）
+     * @param minTrustTierHeader 最小权威门槛（平台注入）
+     * @param scopeHeader 作用域头
+     * @param callerDomain 调用方域
+     * @param documentId 文档 ID
+     * @param limit 条数上限
+     * @param rolesCsv 逗号分隔的角色白名单（可空 = 不过滤）
+     * @return 片段摘要列表
+     */
     @GetMapping("/documents/{documentId}/chunks")
     public List<ManagementDtos.ChunkResponse> listChunks(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
@@ -894,14 +971,30 @@ public class RagManagementController {
             @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
             @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
             @PathVariable("documentId") String documentId,
-            @RequestParam(value = "limit", defaultValue = "" + DEFAULT_LIMIT) int limit) {
+            @RequestParam(value = "limit", defaultValue = "" + DEFAULT_LIMIT) int limit,
+            @RequestParam(value = "role", required = false) String rolesCsv) {
         RagManagementContext ctx = requireManagementContext(
                 tenantId, minTrustTierHeader, scopeHeader, callerDomain);
         if (limit <= 0 || limit > MAX_CHUNK_LIMIT) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "limit 必须在 1～" + MAX_CHUNK_LIMIT + " 之间");
         }
-        List<ChunkSummary> chunks = managementPort.listChunks(ctx, documentId, limit);
+        java.util.List<String> roles = java.util.List.of();
+        if (rolesCsv != null && !rolesCsv.isBlank()) {
+            roles = java.util.Arrays.stream(rolesCsv.split(","))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toList();
+            for (String role : roles) {
+                try {
+                    cn.studykid.rag.core.chunk.ChunkRole.valueOf(role);
+                } catch (IllegalArgumentException cause) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "未知片段角色：" + role + "（合法值见 ChunkRole 枚举）");
+                }
+            }
+        }
+        List<ChunkSummary> chunks = managementPort.listChunks(ctx, documentId, limit, roles);
         return ManagementDtos.toChunkResponses(chunks);
     }
 
@@ -1455,7 +1548,12 @@ public class RagManagementController {
         if (ingestJobPort == null) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "摄取任务端口未装配");
         }
-        cn.studykid.rag.core.ingest.IngestJob origin = ingestJobPort.findById(jobId);
+        // ⚠️ 租户档必须走租户会话版查找：findById 是裸查询，在应用角色（无 BYPASSRLS）
+        //    下被 RLS 过滤成 0 行 → 对真实存在的 job 恒 404「摄取任务不存在」
+        //    （2026-11-03 实测：同一请求列表端点能看到 3 条 SUCCEEDED，重试却 404）。
+        //    平台档不走此路径（平台语料无摄取载体，requireTenant 直接拒绝）。
+        cn.studykid.rag.core.ingest.IngestJob origin = ingestJobPort.findByIdForTenant(
+                ctx.requireTenant().tenantId(), jobId);
         if (origin == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "摄取任务不存在：" + jobId);
         }

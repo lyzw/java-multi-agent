@@ -54,6 +54,7 @@ import {
 import { allowedVerificationTargets } from '@/features/rag/useRagManagement'
 import { currentPrincipalId, TrustTierTag, VerificationTag } from './ragUi'
 import { RagVerificationForm } from './RagVerificationForm'
+import { RagInspectionPanel } from './RagInspectionPanel'
 
 const { Text } = Typography
 
@@ -113,8 +114,36 @@ export function RagSourceDrawer({
   const [docSubmitting, setDocSubmitting] = useState(false)
   const [docNotice, setDocNotice] = useState<string | null>(null)
 
+  /**
+   * 人工抽检面板的未提交标注数（>0 = 关抽屉会丢草稿）。
+   *
+   * ⚠️ 抽检标注没有任何持久化/恢复手段，Esc 或误点蒙层静默丢掉标注是
+   *    纯损失（2026-11-03 端到端抽检实测踩到：Esc 关抽屉，标注全丢）。
+   *    有草稿时禁掉 Esc/蒙层关闭，X 按钮走确认弹窗。
+   */
+  const [inspectionDirty, setInspectionDirty] = useState(0)
+
+  /** 关闭守卫：有未提交标注时先确认。 */
+  const requestClose = (): void => {
+    if (inspectionDirty > 0) {
+      modal.confirm({
+        title: '抽检标注尚未提交',
+        content: `已标注 ${inspectionDirty} 条，关闭抽屉将丢弃这些标注（无恢复手段）。`,
+        okText: '丢弃并关闭',
+        okButtonProps: { danger: true },
+        cancelText: '继续标注',
+        onOk: () => {
+          setInspectionDirty(0)
+          onClose()
+        },
+      })
+      return
+    }
+    onClose()
+  }
+
   /** 载体页真实文档上传（Model B）：选文件 → 上传落桶，不手填 objectRef。 */
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploadCarrier, setUploadCarrier] = useState<RagCarrier | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -297,7 +326,9 @@ export function RagSourceDrawer({
     <Drawer
       width={860}
       open={source !== null}
-      onClose={onClose}
+      onClose={requestClose}
+      keyboard={inspectionDirty === 0}
+      maskClosable={inspectionDirty === 0}
       title={shownSource ? `语料来源 · ${shownSource.title}` : '语料来源'}
       destroyOnHidden
     >
@@ -490,6 +521,13 @@ export function RagSourceDrawer({
                       </>
                     )}
                 </Space>
+              ),
+            },
+            {
+              key: 'inspection',
+              label: '人工抽检',
+              children: (
+                <RagInspectionPanel target={target} source={shownSource} onDraftsChange={setInspectionDirty} />
               ),
             },
           ]}

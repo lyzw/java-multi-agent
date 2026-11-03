@@ -8,6 +8,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -656,7 +657,7 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                          object_ref, parse_status, content_hash, ver_status, retrievable,
                          license_status, scope)
                     VALUES (?::uuid, %s, ?::uuid, ?::uuid, ?, ?, ?,
-                            'PENDING'::rag_parse_status, ?,
+                            'PENDING'::text, ?,
                             'PENDING'::rag_verification_status, FALSE,
                             'PENDING'::rag_license_status, %s)
                     """.formatted(ch.tenantExpr(), ch.scopeExpr()),
@@ -814,13 +815,19 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
     @NonNull
     public List<ChunkSummary> listChunks(@NonNull RagManagementContext context,
                                             @NonNull String documentId,
-                                         int limit) {
+                                         int limit,
+                                         java.util.Collection<String> roles) {
         if (limit <= 0) {
             throw new IllegalArgumentException("limit 必须 > 0");
         }
+        // 角色白名单进 SQL（role = ANY(...)），LIMIT 作用于「筛选后」的结果——
+        // 若取回后再过滤，「前 N 条里的答案」几乎恒为空集，筛选就失去了意义。
+        java.util.List<String> roleFilter = (roles == null || roles.isEmpty())
+                ? java.util.List.of()
+                : java.util.List.copyOf(roles);
         return transactionTemplate.execute(status -> {
             applyReadScope(context);
-            return jdbcTemplate.query("""
+            StringBuilder sql = new StringBuilder("""
                     SELECT c.chunk_id, c.role, c.page_number, c.section_path, c.exercise_no,
                            length(c.text) AS char_length, c.content_hash,
                            (e.chunk_id IS NOT NULL) AS has_embedding
@@ -828,9 +835,21 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                     LEFT JOIN rag_chunk_embedding e
                            ON c.chunk_id = e.chunk_id AND c.tenant_id = e.tenant_id
                     WHERE c.tenant_id = ?::uuid AND c.document_id = ?::uuid
-                    ORDER BY c.page_number, c.char_start, c.chunk_id
+                    """);
+            if (!roleFilter.isEmpty()) {
+                // ⚠️ c.role 是 PG 枚举 rag_chunk_role，与 text[] 比较没有运算符——
+                //    列侧转 text 再比（等值语义不变，索引顺序扫描损失可接受，管理面低频）。
+                sql.append("  AND c.role::text = ANY(?::text[])");
+            }
+            sql.append("""
+                     ORDER BY c.page_number, c.char_start, c.chunk_id
                     LIMIT ?
-                    """,
+                    """);
+            Object[] args = roleFilter.isEmpty()
+                    ? new Object[] {context.queryTenantId(), documentId, limit}
+                    : new Object[] {context.queryTenantId(), documentId,
+                                    roleFilter.toArray(new String[0]), limit};
+            return jdbcTemplate.query(sql.toString(),
                     (rs, i) -> new ChunkSummary(
                             rs.getString("chunk_id"),
                             rs.getString("role"),
@@ -840,7 +859,29 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                             rs.getInt("char_length"),
                             rs.getBoolean("has_embedding"),
                             rs.getString("content_hash")),
-                    context.queryTenantId(), documentId, limit);
+                    args);
+        });
+    }
+
+    @Override
+    @NonNull
+    public Map<String, Integer> documentCounts(@NonNull RagManagementContext context,
+                                                         @NonNull Collection<String> sourceIds) {
+        if (sourceIds.isEmpty()) {
+            return java.util.Map.of();
+        }
+        return transactionTemplate.execute(status -> {
+            applyReadScope(context);
+            String[] ids = sourceIds.toArray(new String[0]);
+            return jdbcTemplate.query("""
+                    SELECT d.source_id, count(*) AS n
+                    FROM rag_document d
+                    WHERE d.tenant_id = ?::uuid AND d.source_id = ANY(?::uuid[])
+                    GROUP BY d.source_id
+                    """,
+                    (rs, i) -> Map.entry(rs.getString("source_id"), rs.getInt("n")),
+                    context.queryTenantId(), ids).stream()
+                    .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
         });
     }
 

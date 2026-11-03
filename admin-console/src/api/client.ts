@@ -112,7 +112,15 @@ export function notifyAccessDenied(
   return true
 }
 
-function redirectLogin(): void {
+/**
+ * 清会话并跳登录页（带 reason=expired 与回跳地址）。
+ *
+ * ⚠️ 2026-11-03 导出：RAG 管理端点（/v1/**，独立 rag 服务）与平台会话是
+ *    <b>同一身份域</b>——平台会话令牌过期时 RAG 返回 401，语义就是「登录已过期」，
+ *    ragClient 据此调用本函数，而不是把 401 误判成「跨身份域边界」
+ *    （后者只适用于平台令牌打租户端点的场景）。
+ */
+export function redirectLogin(): void {
   if (typeof window !== 'undefined') {
     // ⚠️ **必须带上「为什么」和「回哪去」**（评测 P1-5）：
     //    裸跳登录页会让用户以为是自己点的，等他重新登录完又被送回默认页

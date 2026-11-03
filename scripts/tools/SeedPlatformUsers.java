@@ -121,7 +121,11 @@ public final class SeedPlatformUsers {
             try (ResultSet rs = ps.executeQuery()) {
                 rs.next();
                 UUID id = rs.getObject("id", UUID.class);
-                System.out.printf("  %-16s %s%n", username, rs.getBoolean("inserted") ? "已创建" : "已存在（跳过口令）");
+                // ⚠️ 文案必须与实际行为一致：--reset 命中已有账号时会改写口令，
+                // 旧文案「跳过口令」让人误以为没生效，排查登录问题时白绕一圈。
+                System.out.printf("  %-16s %s%n", username,
+                        rs.getBoolean("inserted") ? "已创建"
+                                : (reset ? "已存在（口令已重置）" : "已存在（口令未改动）"));
                 return id;
             }
         }

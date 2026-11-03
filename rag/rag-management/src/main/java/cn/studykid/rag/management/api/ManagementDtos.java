@@ -349,8 +349,73 @@ public final class ManagementDtos {
             String objectRef,
             String contentHash,
             String createdAt,
-            String updatedAt
+            String updatedAt,
+            /**
+             * 抽检状态（{@code rag_source.inspection_status}，读路径透出）。
+             *
+             * <p>⚠️ 仅在<b>读路径</b>（列表/详情）由服务端填充；null 表示「本次响应
+             * 未读取」（写路径响应恒为 null）——前端应回退为按抽检历史推导，
+             * 不得把 null 当成任何一种结论。
+             */
+            String inspectionStatus,
+            /**
+             * 载体（文档）数量（读路径透出）。
+             *
+             * <p>0 = 「仅元数据」登记（从未上传物理文件）。列表页用它把这类来源
+             * 与真实携带语料的来源区分开——2026-11-03 端到端抽检发现两者
+             * 在列表里无法辨认，管理员会点进空来源白忙一场。
+             */
+            int documentCount
     ) {
+    }
+
+    /**
+     * 带上抽检状态拷贝来源视图。
+     *
+     * <p>⚠️ 刻意做成显式助手而不是让 {@link #toResponse} 直接查库：
+     * 映射器保持纯函数（不碰端口），由控制器决定「哪条读路径要富化、
+     * 富化失败怎么办」——职责分清，测试也好写。
+     *
+     * @param response 原视图
+     * @param inspectionStatus 抽检状态（可 null = 未读取）
+     * @return 带抽检状态的新视图
+     */
+    public static SourceResponse withInspectionStatus(SourceResponse response,
+                                                      String inspectionStatus) {
+        return new SourceResponse(
+                response.sourceId(), response.sourceType(), response.title(),
+                response.publisher(), response.isbn(), response.doi(),
+                response.trustTier(), response.verificationStatus(),
+                response.verificationMethod(), response.verificationEvidence(),
+                response.verifiedAt(), response.verifiedBy(), response.validDays(),
+                response.licenseStatus(), response.stale(), response.admissible(),
+                response.objectRef(), response.contentHash(),
+                response.createdAt(), response.updatedAt(),
+                inspectionStatus,
+                response.documentCount());
+    }
+
+    /**
+     * 带上载体数量拷贝来源视图（与 {@link #withInspectionStatus} 同款纯函数助手，
+     * 由控制器决定哪条读路径要富化、失败怎么办）。
+     *
+     * @param response 原视图
+     * @param documentCount 载体数量（0 = 仅元数据登记）
+     * @return 带载体数量的新视图
+     */
+    public static SourceResponse withDocumentCount(SourceResponse response,
+                                                   int documentCount) {
+        return new SourceResponse(
+                response.sourceId(), response.sourceType(), response.title(),
+                response.publisher(), response.isbn(), response.doi(),
+                response.trustTier(), response.verificationStatus(),
+                response.verificationMethod(), response.verificationEvidence(),
+                response.verifiedAt(), response.verifiedBy(), response.validDays(),
+                response.licenseStatus(), response.stale(), response.admissible(),
+                response.objectRef(), response.contentHash(),
+                response.createdAt(), response.updatedAt(),
+                response.inspectionStatus(),
+                documentCount);
     }
 
     /**
@@ -787,7 +852,11 @@ public final class ManagementDtos {
                 source.verifiedBy(), source.validDays(), source.licenseStatus(),
                 source.stale(now), source.admissible(minTrustTier, now),
                 source.objectRef(), source.contentHash(),
-                source.createdAt().toString(), source.updatedAt().toString());
+                source.createdAt().toString(), source.updatedAt().toString(),
+                // ⚠️ 抽检状态不在领域快照里：读路径由控制器经 InspectionPort 富化
+                //    （withInspectionStatus），写路径响应保持 null（前端回退历史推导）。
+                //    documentCount 同理：写路径不查库，恒 0（前端写路径不用它）。
+                null, 0);
     }
 
     /**

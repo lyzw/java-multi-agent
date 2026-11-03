@@ -93,6 +93,21 @@ export interface RagSource {
   contentHash: string | null
   createdAt: string
   updatedAt: string
+  /**
+   * 抽检状态（后端读路径自 rag_source.inspection_status 透出；权威闸门字段）。
+   *
+   * ⚠️ null / 缺省 = 「本次响应未读取」（写路径响应、旧版后端）——
+   * 不是任何一种结论，调用方应回退为按抽检历史推导。
+   */
+  inspectionStatus?: RagInspectionStatus | null
+  /**
+   * 载体（文档）数量（后端读路径批量统计透出）。
+   *
+   * ⚠️ 0 = 「仅元数据」登记（从未上传物理文件）——列表页据此打标识，
+   * 避免管理员点进一个没有语料的来源白忙一场（2026-11-03 抽检发现）。
+   * 缺省（旧版后端）按「未知」处理，不打标识。
+   */
+  documentCount?: number
 }
 
 /** 文档载体视图（对齐后端 `ManagementDtos.DocumentResponse`）。 */
@@ -381,6 +396,90 @@ export const RAG_PARSE_STATUS_LABELS: Record<string, string> = {
   PARSED: '已解析',
   CHUNKED: '已切分',
   FAILED: '解析失败',
+}
+
+/* ── RAG 人工抽检（审核前置，V1.0.2 §5 R2）────────────────── */
+
+/**
+ * 抽检错误类型（对齐后端 `InspectionRecord.ErrorType`）。
+ *
+ * ⚠️ `ANSWER_LEAK` 是<b>单点否决</b>：命中一条即整册不合格（D04 §6），
+ * 因为「应为答案却判成讲解」等于把标准答案送进讲解模式上下文 → 泄题。
+ */
+export type RagInspectionErrorType =
+  | 'ANSWER_LEAK'
+  | 'EXERCISE_NO_LOST'
+  | 'LOCATOR_WRONG'
+  | 'CHUNK_BOUNDARY'
+  | 'OTHER'
+
+/** 错误类型可读标签（下拉与历史列表共用）。 */
+export const RAG_INSPECTION_ERROR_TYPE_LABELS: Record<RagInspectionErrorType, string> = {
+  ANSWER_LEAK: '答案区漏判（单点否决）',
+  EXERCISE_NO_LOST: '题号丢失/错位',
+  LOCATOR_WRONG: '页码或章节坐标错误',
+  CHUNK_BOUNDARY: '切分边界错误',
+  OTHER: '其他错误',
+}
+
+/** 抽检结论。 */
+export type RagInspectionVerdict = 'PASS' | 'FAIL'
+
+/** 单条抽检记录（请求项，对齐后端 `InspectionItemRequest`）。 */
+export interface RagInspectionItem {
+  chunkId: string
+  /** 期望角色（人工判定的正确角色）；PASS 时与 actualRole 相同，FAIL 时由人工给出正确角色 */
+  expectedRole: string
+  /** 实际角色（系统产出） */
+  actualRole: string
+  /** 错误类型；verdict=FAIL 时必填，PASS 时不得带 */
+  errorType: RagInspectionErrorType | null
+  verdict: RagInspectionVerdict
+}
+
+/** 提交抽检请求（对齐后端 `SubmitInspectionRequest`）。 */
+export interface RagInspectionSubmitRequest {
+  /** 抽检人；缺省时后端用令牌主体 */
+  inspectorId?: string | null
+  items: RagInspectionItem[]
+}
+
+/** 抽检记录（响应项，对齐后端 `InspectionRecordResponse`）。 */
+export interface RagInspectionRecord {
+  recordId: string
+  chunkId: string
+  inspectorId: string
+  expectedRole: string
+  actualRole: string
+  /** 错误类型；结论为 PASS 时为 null */
+  errorType: RagInspectionErrorType | null
+  verdict: RagInspectionVerdict
+  createdAt: string
+}
+
+/** 抽检判定结果（对齐后端 `InspectionVerdictResponse`）。 */
+export interface RagInspectionVerdictResult {
+  passed: boolean
+  total: number
+  failed: number
+  answerLeaks: number
+  accuracy: number
+  reason: string | null
+}
+
+/**
+ * 抽检状态（对齐后端 `rag_source.inspection_status` 三值）。
+ *
+ * ⚠️ 仅 `PASSED` 允许签发 VERIFIED（见 `InspectionGuard`）；
+ *    `NOT_REQUIRED`（默认态）与 `FAILED` 都不放行——缺抽检等于未通过。
+ */
+export type RagInspectionStatus = 'NOT_REQUIRED' | 'PASSED' | 'FAILED'
+
+/** 抽检状态可读标签。 */
+export const RAG_INSPECTION_STATUS_LABELS: Record<RagInspectionStatus, string> = {
+  NOT_REQUIRED: '未抽检',
+  PASSED: '抽检通过',
+  FAILED: '抽检不通过',
 }
 
 /* ── RAG 字典（SOURCE_TYPE 可由平台前端维护，其余派生只读）──── */

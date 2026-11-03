@@ -1,6 +1,8 @@
 package cn.studykid.rag.management.ports;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -199,14 +201,34 @@ public interface CorpusManagementPort {
     /**
      * 列出某文档下的片段摘要（管理面浏览用）。
      *
+     * <p><b>roles 筛选</b>：非空时只返回命中任一角色的片段（SQL 端
+     * {@code role = ANY(...)}，不是取回后再过滤——否则 LIMIT 语义会错：
+     * 「前 N 条里的答案」几乎恒为空集，抽检员依然够不到答案片段）。
+     *
      * @param context 作用域上下文（租户档／平台全局档）
      * @param documentId 文档 ID
      * @param limit 返回条数上限
+     * @param roles 角色白名单；null/空 = 不过滤
      * @return 片段摘要列表
      */
     @NonNull List<ChunkSummary> listChunks(@NonNull RagManagementContext context,
                                             @NonNull String documentId,
-                                            int limit);
+                                            int limit,
+                                            java.util.Collection<String> roles);
+
+    /**
+     * 批量统计来源的载体（文档）数量（列表页区分「仅元数据」来源用）。
+     *
+     * <p><b>为什么是批量</b>：列表页一页最多几十个来源，逐条 COUNT 是
+     * N+1；一条 {@code GROUP BY source_id} 就够。查不到的 sourceId
+     * 由调用方按 0 处理（0 = 仅元数据登记，语义等同）。
+     *
+     * @param context 作用域上下文（租户档／平台全局档）
+     * @param sourceIds 来源 ID 集合（空集合返回空 Map）
+     * @return sourceId → 载体数量（只含 count>0 的条目）
+     */
+    @NonNull Map<String, Integer> documentCounts(@NonNull RagManagementContext context,
+                                                           @NonNull Collection<String> sourceIds);
 
     /**
      * 统计租户语料与索引状况。

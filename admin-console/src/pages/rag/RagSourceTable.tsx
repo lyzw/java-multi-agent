@@ -20,7 +20,7 @@ import type {
   RagTrustTier,
   RagVerificationStatus,
 } from '@/api/ragTypes'
-import { RAG_CARRIER_LABELS, RAG_VERIFICATION_LABELS, RAG_LICENSE_LABELS } from '@/api/ragTypes'
+import { RAG_CARRIER_LABELS, RAG_VERIFICATION_LABELS, RAG_LICENSE_LABELS, RAG_INSPECTION_STATUS_LABELS } from '@/api/ragTypes'
 import { isRagTargetReady, isRagWriteTarget } from '@/api/ragClient'
 import type { RagTarget } from '@/api/ragClient'
 import type { RagSourceListState } from '@/features/rag/useRagManagement'
@@ -70,7 +70,17 @@ const columns: ColumnsType<RagSource> = [
     width: 260,
     render: (title: string, row) => (
       <Space direction="vertical" size={0}>
-        <Text strong>{title}</Text>
+        <Space size={6} align="center" wrap={false}>
+          <Text strong>{title}</Text>
+          {/* ⚠️ 0 载体 = 「仅元数据」登记：从未上传物理文件。不标出来，
+              管理员会点进一个没有语料的来源白忙一场（2026-11-03 抽检实测）。
+              undefined = 旧版后端未返回，按「未知」处理，不打标识。 */}
+          {row.documentCount === 0 ? (
+            <Tag color="warning" style={{ marginInlineEnd: 0 }}>
+              仅元数据
+            </Tag>
+          ) : null}
+        </Space>
         <Text type="secondary" style={{ fontSize: 12 }}>
           {row.publisher || '—'} · {row.sourceType}
         </Text>
@@ -83,6 +93,22 @@ const columns: ColumnsType<RagSource> = [
     key: 'verificationStatus',
     width: 110,
     render: (_: unknown, row) => <VerificationTag status={row.verificationStatus} />,
+  },
+  {
+    title: '抽检',
+    dataIndex: 'inspectionStatus',
+    key: 'inspectionStatus',
+    width: 100,
+    render: (s: RagSource['inspectionStatus']) => {
+      // ⚠️ null = 后端本次未读取（或旧版后端），不是任何一种结论——渲染「—」，
+      //    不把它当成「未抽检」误导审核员。
+      if (!s) return <Text type="secondary">—</Text>
+      return (
+        <Tag color={s === 'PASSED' ? 'green' : s === 'FAILED' ? 'red' : 'default'}>
+          {RAG_INSPECTION_STATUS_LABELS[s] ?? s}
+        </Tag>
+      )
+    },
   },
   {
     title: '权威等级',

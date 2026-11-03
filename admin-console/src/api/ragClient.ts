@@ -27,7 +27,8 @@
  *    与「网络层失败」（status 0）区分——文案不同，混为一谈会误导管理员。
  */
 
-import { request, ApiError } from '@/api/client'
+import { request, ApiError, redirectLogin } from '@/api/client'
+import { clearSession } from '@/auth/tokenStorage'
 import { ticketAuthHeader } from '@/api/ragTicket'
 import type { RagGovernanceTicket } from '@/api/ragTicket'
 
@@ -59,6 +60,10 @@ import type {
   RagUpsertDictionaryEntryRequest,
   RagRetrievalRequest,
   RagRetrievalResponse,
+  RagInspectionItem,
+  RagInspectionRecord,
+  RagInspectionVerdictResult,
+  RagInspectionSubmitRequest,
 } from '@/api/ragTypes'
 
 /** 超时归一化的状态码哨兵（区别于网络层 status 0）。 */
@@ -179,7 +184,15 @@ function toQuery(params: Record<string, string | number | boolean | null | undef
  * ⚠️ 超时判定用 `timedOut` 旗标而非只看异常类型：AbortController 中断后
  *    `request` 会抛网络层 `ApiError(0)`，须由本层覆盖成超时语义。
  *
+ * <p>⚠️ <b>401 的归属（2026-11-03 修复）</b>：RAG 服务与平台会话是同一身份域
+ *    （验的就是平台签发的会话令牌），所以 RAG 端点的 401 = 「登录已过期」，
+ *    必须清会话跳登录——共享层把 `/v1/**` 的 401 归为「跨身份域边界」
+ *    对 RAG 是误判，实测后果是会话过期后页面只报「读取失败」、
+ *    管理员不知道要重新登录。唯一例外是平台档写请求：Authorization 被
+ *    <b>治理票据</b>覆盖，401 = 票据失效而非会话失效，原样抛出交调用方。
+ *
  * @param headers 本次请求的额外头（缺省 = 只带作用域头；写请求传 {@link writeHeaders}）
+ * @param usingTicket 本请求的 Authorization 是否为治理票据（平台档写请求）
  */
 async function ragRequest<T>(
   path: string,
@@ -187,6 +200,7 @@ async function ragRequest<T>(
   target: RagTarget,
   timeoutMs: number,
   headers: Record<string, string> = scopeHeaders(target),
+  usingTicket = false,
 ): Promise<T> {
   const controller = new AbortController()
   let timedOut = false
@@ -210,9 +224,18 @@ async function ragRequest<T>(
         'RAG_TIMEOUT',
       )
     }
-    // ⚠️ 错误文案按 4xx/5xx 分流（评测 P0-2）：通用层的 401 归因
-    //    「身份域隔离」对 RAG 是错的——RAG 的 401 意味着「没验过平台令牌签名」。
-    throw toRagApiError(cause)
+    const err = toRagApiError(cause)
+    if (
+      err instanceof ApiError &&
+      err.status === 401 &&
+      !usingTicket
+    ) {
+      // 会话令牌已失效：清会话 + 跳登录（带 reason=expired，登录后可回跳）。
+      clearSession()
+      redirectLogin()
+      throw new ApiError(401, '登录已过期，请重新登录', err.data, err.code)
+    }
+    throw err
   } finally {
     clearTimeout(timer)
   }
@@ -230,7 +253,9 @@ function ragWriteRequest<T>(
   target: RagTarget,
   timeoutMs: number,
 ): Promise<T> {
-  return ragRequest<T>(path, init, target, timeoutMs, writeHeaders(target))
+  // 平台档写的 Authorization 是治理票据：它的 401 = 票据失效，≠ 会话过期，不触发登出。
+  const usingTicket = target.scope === 'PLATFORM' && target.ticket !== undefined
+  return ragRequest<T>(path, init, target, timeoutMs, writeHeaders(target), usingTicket)
 }
 
 /** 是否为 RAG 请求超时（区别于网络层 status 0）。 */
@@ -442,16 +467,80 @@ export function uploadRagDocument(
   )
 }
 
-/** GET /api/v1/management/documents/{documentId}/chunks —— 列出文档的片段摘要（limit ≤ 500）。 */
+/**
+ * GET /api/v1/management/documents/{documentId}/chunks —— 列出文档的片段摘要（limit ≤ 500）。
+ *
+ * <p>⚠️ <b>roles 角色白名单（2026-11-03 修复）</b>：筛选在 SQL 端生效
+ * （LIMIT 作用于筛选后的结果）。没有它，「前 N 条」会被正文淹没——
+ * 端到端抽检实测：本册前 200 条恰好全为 EXPLANATION，
+ * 26 条答案/解答片段（抽检最关键对象）翻遍默认列表也够不到。
+ *
+ * @param roles 角色白名单（如 `['EXAMPLE_SOLUTION','EXERCISE_ANSWER']`）；空 = 不过滤
+ */
 export function listRagChunks(
   target: RagTarget,
   documentId: string,
   limit = 100,
   timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+  roles?: string[],
 ): Promise<RagChunk[]> {
   return ragRequest<RagChunk[]>(
-    `/v1/management/documents/${encodeURIComponent(documentId)}/chunks${toQuery({ limit })}`,
+    `/v1/management/documents/${encodeURIComponent(documentId)}/chunks${toQuery({
+      limit,
+      role: roles && roles.length > 0 ? roles.join(',') : null,
+    })}`,
     { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/* ── 人工抽检（审核前置，V1.0.2 §5 R2）────────────────── */
+
+/**
+ * GET /api/v1/management/sources/{sourceId}/inspection —— 列出来源的抽检历史记录。
+ *
+ * ⚠️ 读请求走 `scopeHeaders`：租户档带 `X-Tenant-Id`，平台档不带票据
+ *    （与列来源/载体的读路径一致，不污染平台审计）。平台全局语的抽检记录
+ *    挂在「全局哨兵租户」行上，后端按作用域正确返回。
+ */
+export function listRagInspections(
+  target: RagTarget,
+  sourceId: string,
+  limit = 200,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagInspectionRecord[]> {
+  return ragRequest<RagInspectionRecord[]>(
+    `/v1/management/sources/${encodeURIComponent(sourceId)}/inspection${toQuery({ limit })}`,
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * POST /api/v1/management/sources/{sourceId}/inspection —— 提交一次抽检。
+ *
+ * ⚠️ 写请求走 `writeHeaders`：平台档会带上治理票据（无票后端 403）。
+ *    <b>空提交会被后端 400 拒绝</b>（未抽检任何片段不得提交结论），
+ *    前端在调用前也必须拦住（见 `RagInspectionPanel`）。
+ * ⚠️ 整组记录同事务写入并回写 `rag_source.inspection_status`，
+ *    该状态是 VERIFIED 迁移的前置守卫——记录与状态必须同时可见。
+ */
+export function submitRagInspection(
+  target: RagTarget,
+  sourceId: string,
+  items: RagInspectionItem[],
+  inspectorId?: string | null,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagInspectionVerdictResult> {
+  const body: RagInspectionSubmitRequest = {
+    inspectorId: inspectorId ?? null,
+    items,
+  }
+  return ragWriteRequest<RagInspectionVerdictResult>(
+    `/v1/management/sources/${encodeURIComponent(sourceId)}/inspection`,
+    { method: 'POST', body: JSON.stringify(body) },
     target,
     timeoutMs,
   )

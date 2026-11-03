@@ -169,7 +169,7 @@ class RagManagementControllerTest {
     @DisplayName("片段 limit 越界返回 400（防止一次性拉走整册）")
     void chunkLimitOutOfRangeIsBadRequest() {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.listChunks(TENANT, null, null, PLATFORM_CALLER, SOURCE_ID, 9999));
+                () -> controller.listChunks(TENANT, null, null, PLATFORM_CALLER, SOURCE_ID, 9999, null));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
