@@ -26,7 +26,7 @@ PG_PORT="${PG_PORT:-5433}"
 PG_DB="${IT_DB:-agent_it}"
 PG_SUPERUSER="${PG_SUPERUSER:-agent}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # 结构唯一权威源（2026-10-27 收口：Flyway 迁移链已删除，改为终态快照）
 SNAPSHOT="$SCRIPT_DIR/../deploy/sql/platform/01_platform_ddl.sql"
 
@@ -55,10 +55,44 @@ psql_it() {
 #    低版本 psql 不认（配合 ON_ERROR_STOP=1 会直接判死），这里过滤掉：
 #    仓库内的文件是可信来源，不需要那层防护。
 if psql_it -tAc "SELECT 1 FROM pg_class WHERE relname='run' LIMIT 1" | grep -q 1; then
-  echo "  · 结构已存在，跳过快照（要重建请先 DROP SCHEMA public CASCADE）"
+  echo "  · 结构已存在，跳过快照"
 else
   echo "  · 应用结构快照 $(basename "$SNAPSHOT")"
   grep -v '^\\\(un\)\?restrict ' "$SNAPSHOT" | psql_it -q -v ON_ERROR_STOP=1 -f -
+fi
+
+# ── 2.2 结构版本核对（⚠️ 「存在」≠「是当前快照」）────────────────
+# 上面的判定只看 run 表在不在，于是**快照后续新增的表永远补不上**：
+# 10-31 引入 platform.authz_decision_log 时就是这样漏的 —— 本地库停在 65 表、
+# 快照已是 66 表，脚本一路绿灯，直到 SchemaDriftIT / 某个平台仓储 IT 才炸，
+# 而失败信息指向的是「表不存在」，不是「库是旧的」。
+# 快照是终态导出、只能灌空库，所以这里做**核对**而不是补差量。
+EXPECTED_TABLES=$(grep -c '^CREATE TABLE' "$SNAPSHOT")
+ACTUAL_TABLES=$(psql_it -tAc \
+  "SELECT count(*) FROM pg_tables WHERE schemaname IN ('public','platform')")
+if [ "$ACTUAL_TABLES" -lt "$EXPECTED_TABLES" ]; then
+  cat >&2 <<EOF
+❌ 结构陈旧：库里 ${ACTUAL_TABLES} 张表，快照 ${EXPECTED_TABLES} 张（$(basename "$SNAPSHOT")）
+   本脚本不补差量（快照只适用于空库 → CREATE TABLE 会直接冲突）。
+   重建（本库只放测试数据，重建等价于清缓存）：
+     docker exec ${PG_CONTAINER} psql -U ${PG_SUPERUSER} -d postgres -c 'DROP DATABASE ${PG_DB} WITH (FORCE)'
+     IT_DB=${PG_DB} $0
+EOF
+  exit 1
+fi
+echo "  · 结构版本核对：${ACTUAL_TABLES} 张表（快照 ${EXPECTED_TABLES}）"
+
+# ── 2.4 应用种子（幂等：以 platform.tenant 的 t-a 为标记）────────
+# ⚠️ 2026-11-01 收敛后，02_platform_seed.sql 附录 A 的「发布头 + 指针」与
+#    3 条 cap_agent_def 是 RunCreationEndpointIT 等 IT 的**硬依赖**
+#    （快照写入链第一步就是 resolver 解析 cap_agent_def；缺了=CONFIG_UNAVAILABLE）。
+#    收敛前这段数据来自已删除的 V1_seed.sql / 13 号回填补丁，收敛后权威源就是 02。
+SEED="$SCRIPT_DIR/../deploy/sql/platform/02_platform_seed.sql"
+if psql_it -tAc "SELECT 1 FROM platform.tenant WHERE slug='t-a' LIMIT 1" | grep -q 1; then
+  echo "  · 种子已存在，跳过（幂等标记：platform.tenant 有 t-a）"
+else
+  echo "  · 应用种子 $(basename "$SEED")"
+  grep -v '^\\\(un\)\?restrict ' "$SEED" | psql_it -q -v ON_ERROR_STOP=1 -f -
 fi
 
 # ── 2.6 清理测试残留 ─────────────────────────────────────────────
@@ -161,38 +195,69 @@ FROM tenant t WHERE t.slug IN ('t-a','t-b')
   AND NOT EXISTS (SELECT 1 FROM budget_account b WHERE b.tenant_id=t.tenant_id);
 SQL
 
-# ── 4. 授权 + RLS（对齐开发库）────────────────────────────────────
-# ⚠️ **必须做**：IT 用**非特权角色** `app_agent`（记忆铁律：验 RLS 必须用非特权，
-#    超级用户能绕过 RLS，会得到「隔离失效」的反向结论）。
-#    新建库时 `app_agent` 无任何表权限 → 报 permission denied。
-# ⚠️ 授权范围含 **platform** schema：平台身份域与平台审计的对象都在那儿。
-#    下面的循环原来只枚举 schemaname='public'，于是平台仓储的 IT 会撞
-#    「permission denied for schema platform」（PlatformAuditTicketScopeIT 实测需要）。
-echo "  · 授权 app_agent 并启用 RLS"
-
-psql_it -q <<'SQL' >/dev/null
--- 表级权限（逐条 GRANT；整段事务失败会连带回滚，故分条）
-SQL
-
-for sch in public platform; do
-  for tbl in $(psql_it -tAc "SELECT tablename FROM pg_tables WHERE schemaname='$sch' ORDER BY tablename"); do
-    for priv in SELECT INSERT UPDATE DELETE; do
-      psql_it -q -c "GRANT $priv ON $sch.$tbl TO app_agent" >/dev/null 2>&1 || true
-    done
-  done
-  psql_it -q -c "GRANT USAGE ON SCHEMA $sch TO app_agent" >/dev/null 2>&1 || true
-  psql_it -q -c "GRANT ALL ON ALL SEQUENCES IN SCHEMA $sch TO app_agent" >/dev/null 2>&1 || true
+# ── 4. 授权（直接执行权威脚本 03 + 04，不在这里重写一套 GRANT）──────
+# ⚠️ **必须用非特权角色 `app_agent` 跑 IT**（记忆铁律：验 RLS 必须用非特权，
+#    超级用户能绕过 RLS，会得到「隔离失效」的反向结论）。新建库时它没有任何表权限。
+#
+# ⚠️⚠️ 这里原来是对 public/platform **每张表 GRANT SELECT,INSERT,UPDATE,DELETE**
+#    的循环。看着省事，实际把最小权限模型整个抹平了，实测留下三个假绿：
+#      · app_agent 拿到 `audit_record` 的 DELETE → G3 凭据隔离失效
+#        （`RetentionErasureIT.requireAppCannotDeleteAudit` 直接判红）；
+#      · app_agent 拿到 `platform.authz_decision_log` 的 SELECT → 可枚举全平台
+#        授权决策（`AuthzDecisionLogLiveIT.appRoleCannotSelectDecisionLog` 判红）；
+#      · 因为「有 SELECT」，`INSERT … RETURNING` 也被放行
+#        （`insertWithReturningIsDenied` 判红）—— RETURNING 需要读权限这件事，
+#        正是本项目的第 4 条 DDL 铁律。
+#    授权模型只有一个权威源：`deploy/sql/platform/03`（public + platform 域）
+#    与 `04`（保留期角色 + 撤销 DELETE）。库在本地容器也必须走它，
+#    否则「本地绿 / RDS 红」这种最耗时的分歧就会回来。
+echo "  · 授权（权威脚本 03_platform_roles.sql + 04_retention_role.sql）"
+for f in 03_platform_roles.sql 04_retention_role.sql; do
+  docker exec -i "$PG_CONTAINER" psql -U "$PG_SUPERUSER" -d "$PG_DB" \
+      -v ON_ERROR_STOP=1 -q -f - \
+      < "$SCRIPT_DIR/../deploy/sql/platform/$f" >/dev/null
 done
 
-# ⚠️ RLS 策略随结构快照一并创建（01_platform_ddl.sql 内含 CREATE POLICY），
-#    此处只做兜底核对：策略缺失会导致「应用侧 tenant_id 条件」成为唯一防线。
+# 策略/RLS 随结构快照一并创建（01_platform_ddl.sql 内含 CREATE POLICY），
+# 此处只做兜底核对：策略缺失会导致「应用侧 tenant_id 条件」成为唯一防线。
 enabled=$(psql_it -tAc "SELECT count(*) FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity")
 policies=$(psql_it -tAc "SELECT count(*) FROM pg_policies WHERE schemaname='public'")
 echo "    RLS 启用的表: ${enabled} | 策略数: ${policies}"
+
+# ── 4.2 权限模型自检（fail-closed，与 IT 的断言同口径）─────────────
+# ⚠️ 为什么在这里再查一遍：授权脚本是「逐条 GRANT、失败不中断」的写法（刻意如此，
+#    避免一条失败回滚全部），因此**它自己不会报错**。若某条 REVOKE 因表名/角色名
+#    变更而失配，库照样建成功，直到某个 IT 判红——而失败信息是「应用角色竟有 DELETE」，
+#    指向的是权限模型，不是「你刚建的那个库」。
+chk() { psql_it -tAc "$1"; }
+app_del_audit=$(chk "SELECT has_table_privilege('app_agent','public.audit_record','DELETE')")
+app_sel_authz=$(chk "SELECT has_table_privilege('app_agent','platform.authz_decision_log','SELECT')")
+app_ins_authz=$(chk "SELECT has_table_privilege('app_agent','platform.authz_decision_log','INSERT')")
+app_sel_tenant=$(chk "SELECT has_table_privilege('app_agent','platform.tenant','SELECT')")
+ret_del_audit=$(chk "SELECT has_table_privilege('agent_retention','public.audit_record','DELETE')")
+
+echo "    权限自检: app_agent(audit_record.DELETE=${app_del_audit} 应 f | "
+echo "              authz_decision_log SELECT=${app_sel_authz} 应 f / INSERT=${app_ins_authz} 应 t | "
+echo "              platform.tenant SELECT=${app_sel_tenant} 应 t) | agent_retention(audit_record.DELETE=${ret_del_audit} 应 t)"
+if [ "$app_del_audit" != "f" ] || [ "$app_sel_authz" != "f" ] \
+   || [ "$app_ins_authz" != "t" ] || [ "$app_sel_tenant" != "t" ] || [ "$ret_del_audit" != "t" ]; then
+  cat >&2 <<'EOF'
+❌ 权限模型自检未过 —— 这个库不能用来跑 IT（会得到「本地绿」的假相）：
+   · app_agent 必须能写审计但不能删（G3 凭据隔离）
+   · app_agent 不得读 authz_decision_log（全平台授权决策，读能力只给 platform_ops）
+   · app_agent 必须能读 platform.tenant（租户登记表）
+   · agent_retention 必须能删 audit_record（保留期唯一的删除通道）
+   核对 deploy/sql/platform/03_platform_roles.sql 与 04_retention_role.sql 是否执行成功。
+EOF
+  exit 1
+fi
 if [ "$policies" -lt 10 ]; then
   echo "    ⚠️ 策略数偏少，请核对结构快照是否完整应用"
 fi
 
 echo "✅ 隔离 IT 库就绪: $PG_DB"
-echo "   用法：export IT_PG_URL=jdbc:postgresql://127.0.0.1:$PG_PORT/$PG_DB"
-echo "        export IT_PG_USER=app_agent IT_PG_PASSWORD="
+echo "   下一步（连接环境只有一个入口，别手工 export 这七八个变量）："
+echo "     source scripts/it-env.sh --probe        # 自动指向本库 + RABBITMQ + 保留期凭据"
+echo "     cd platform && mvn -o clean verify -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \\"
+echo "         -Dit.test='*IT,!RealBrokerEndToEndIT' -Dfailsafe.failIfNoSpecifiedTests=false"
+echo "   （本脚本只建库；Agent 侧的隔离判据由 ItTargetDatabaseIsolationTest 在 surefire 阶段强制）"

@@ -6,7 +6,7 @@
 #
 #   platform 目标（agent_dev / agent_prod / 隔离 IT 库）：
 #     ① 建库（缺失时，owner=执行 DDL 的角色）
-#     ② 01_platform_ddl.sql    完整结构（65 表 / 15 枚举 / 172 索引 / 42 RLS）
+#     ② 01_platform_ddl.sql    完整结构（66 表 / 15 枚举 / 172 索引 / 42 RLS）
 #     ③ 02_platform_seed.sql   种子（t-a + t-b 夹具 + 发布头/指针附录）
 #     ④ 03_platform_roles.sql  角色 + 授权（public 域 + platform 域）
 #     ⑤ 04_retention_role.sql  保留期专用角色（凭据隔离，G3）
@@ -42,7 +42,7 @@
 # ============================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 SQL_DIR="$SCRIPT_DIR/../deploy/sql"
 
 # ── psql 定位（本机装了 libpq 而 psql 不在 PATH 的形态很常见）────────
@@ -127,6 +127,12 @@ if [ "$TARGET" = platform ]; then
     -f "$SQL_DIR/platform/04_retention_role.sql" >/dev/null
 
   # ── ⑥ 自检 ─────────────────────────────────────────────────────
+  # ⚠️ 期望值是**常量**，必须与 01_platform_ddl.sql 的实际产物对齐：
+  #    2026-11-03 实测「全新库 66 表 / RDS agent_dev 66 表 / 本地旧 agent_it 65 表」
+  #    —— 旧值 65 会让**正确建出来的库**判自检失败（脚本缺陷，已修）。
+  #    多出来的那张是 platform.authz_decision_log（决策流水，2026-10-31 引入）。
+  #    改快照新增/删除表时**必须同步这里**，否则「建库成功但自检红」会被当成环境问题排查。
+  EXPECT_TABLES=66
   echo "· 自检"
   TABLES=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_tables WHERE schemaname IN ('public','platform')")
   RLSTB=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relrowsecurity")
@@ -135,10 +141,10 @@ if [ "$TARGET" = platform ]; then
   APPGRANTS=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM information_schema.role_table_grants WHERE grantee='app_agent' AND table_schema='public'")
   APP_TENANT=$(psql_owner -d "$DB" -tAc "SELECT has_table_privilege('app_agent','platform.tenant','SELECT')")
   RETENTION=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_roles WHERE rolname='agent_retention'")
-  echo "  表: ${TABLES}（应 65）| RLS 表: ${RLSTB}（应 42）| 策略: ${POLICIES}（应 50）"
+  echo "  表: ${TABLES}（应 ${EXPECT_TABLES}）| RLS 表: ${RLSTB}（应 42）| 策略: ${POLICIES}（应 50）"
   echo "  run_state.WAITING_APPROVAL: ${ENUMWA}（应 1）| app_agent public 授权: ${APPGRANTS}"
   echo "  app_agent 可读 platform.tenant: ${APP_TENANT}（应 t）| agent_retention 角色: ${RETENTION}（应 1）"
-  if [ "$TABLES" -ne 65 ] || [ "$RLSTB" -ne 42 ] || [ "$POLICIES" -ne 50 ] || [ "$ENUMWA" -ne 1 ] \
+  if [ "$TABLES" -ne "$EXPECT_TABLES" ] || [ "$RLSTB" -ne 42 ] || [ "$POLICIES" -ne 50 ] || [ "$ENUMWA" -ne 1 ] \
      || [ "$APP_TENANT" != "t" ] || [ "$RETENTION" -ne 1 ]; then
     echo "❌ 自检未过，请核对上方各项"; exit 1
   fi

@@ -11,18 +11,27 @@
 ## 0. 一句话结论
 
 ```bash
+cd /path/to/java-multi-agent
+export AI_AGENT_PASSWORD='...'      # RDS 上唯一带 CREATEDB 的业务角色（不落盘）
+./scripts/init-it-db.sh             # 首次：建 agent_it 并灌结构/种子（--recreate 可推倒重来）
+source ./scripts/it-env.sh --probe  # 导出 IT_PG_* / RABBITMQ_*，并自检结构
+
 cd platform
-export IT_PG_URL="jdbc:postgresql://<host>:5432/<isolated_db>" \
-       IT_PG_USER=app_agent IT_PG_PASSWORD=<口令> \
-       IT_PG_ADMIN_USER=<管理角色> IT_PG_ADMIN_PASSWORD=<管理口令>
 mvn -o clean verify -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \
   -Dit.test='*IT,!RealBrokerEndToEndIT' -Dfailsafe.failIfNoSpecifiedTests=false
 ```
 
 **判绿的标准不是「BUILD SUCCESS」，而是「Tests run: N, Failures: 0, Errors: 0, Skipped: 0」。**
 
+> ⚠️ **IT 的目标库是 `agent_it`，不是应用库 `agent_dev`**（2026-11-03 决策）。
+> 两者共库会让 IT 与运行实例互相污染，而 `execution_snapshot` 受
+> `forbid_snapshot_mutation` 保护、**污染不可逆**（实测 `t-a` 累积 1018 Run / 139 快照）。
+> `scripts/it-env.sh` 在「目标库 == 应用库」时**直接拒绝导出环境**——
+> 这条守卫是 fail-closed 的，想复现历史问题必须显式 `IT_ALLOW_SHARED_DB=1`。
+
 > ⚠️ `-Dtest` 后面那串正向模式**不能省**：写成纯排除（`-Dtest='!X'`）会让 surefire
 > 把 38 个 `*IT` 类也拉进单元阶段 —— 见 §6.4。
+
 
 ---
 
@@ -87,6 +96,12 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_agent;
 
 脚本是**幂等**的，重复执行不会重复插入。默认库名 `agent_it`（可用 `IT_DB=xxx` 覆盖）。
 
+> ⚠️ **脚本会核对「库的结构是不是当前快照」**（§2.2）。只看 `run` 表在不在是不够的：
+> 快照是**终态导出**、只适用于空库，后续新增的表永远补不上。10-31 引入
+> `platform.authz_decision_log` 时就这样漏过 —— 本地库停在 65 表、快照已是 66 表，
+> 脚本一路绿灯，直到 `SchemaDriftIT` 报「表不存在」才暴露，而失败信息不指向「库是旧的」。
+> 现在少了就直接打印重建命令并退出。
+
 > ⚠️ **为什么 IT 必须用自己的库**：
 > 本机开发库 `agent_dev` 被正在运行的 `PlatformApplication` 持续写入（上千条僵尸 `state='RUNNING'` 的 run）。
 > IT 与运行实例共用一个库时**双方互相污染**，且失败现场指向错误方向：
@@ -95,21 +110,61 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_agent;
 
 ### 4.2 远端 PG（RDS / 无 Docker 环境）
 
-本机无 Docker 守护进程时，用 JDBC 探针代替 `psql` 完成建库与建结构，**步骤等价**：
+```bash
+export AI_AGENT_PASSWORD='...'   # 特权角色：建库 / 建角色 / DROP 重建
+./scripts/init-it-db.sh          # = init-db.sh platform --db agent_it，但口令自动取自 platform.env
+./scripts/init-it-db.sh --recreate   # 推倒重来（DROP DATABASE … WITH (FORCE)）
+```
 
-1. 建管理角色 + 建库（`CREATE DATABASE`）；
-2. 应用结构权威源 `deploy/sql/platform/01_platform_ddl.sql`
-   （2026-10-27 收口：`db/migration/V1…V34` 迁移链已删除，只剩这一份终态快照；
-   它是 `pg_dump` 输出，**只适用于空库**，重复执行会在 `CREATE TABLE` 上报错，
-   头尾两行 `\restrict` / `\unrestrict` 需先过滤 —— 低于 17 的 psql 不认）；
-3. `GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO app_agent`；
-4. 用**管理角色**应用 `migration/verify/V1_seed.sql`（种子层与测试层必须分层：
-   以非特权角色执行会被 RLS 拒 → `new row violates row-level security policy`）。
+`init-it-db.sh` 做四件事：建库 → 灌 `01_platform_ddl.sql` → 灌 `02_platform_seed.sql`
+→ 配 `03/04` 角色并自检（表 66 / RLS 42 / 策略 50 / `run_state.WAITING_APPROVAL` / `agent_retention`）。
 
-> ⚠️ **结构必须整体应用**：快照缺任何一段（例如只跑了 `public` 的前半部分），
-> IT 会在「表不存在」上炸，而**根因在结构没建全**。
+> ⚠️ **为什么由脚本代取三个非特权口令**：`03_platform_roles.sql` / `04_retention_role.sql`
+> 是 `ALTER ROLE … PASSWORD`，**改的是集群级角色**。若随手传一个新口令，
+> 运行实例（`platform.env` 里那套）会立刻连不上库。脚本从 `platform.env` 原值回填，
+> 保证「建 IT 库」这个动作对应用侧**零副作用**。
+>
+> ⚠️ 若结构快照与活库出现分歧（`SchemaDriftIT` 报红），唯一权威源是
+> `deploy/sql/platform/01_platform_ddl.sql`：**改快照 + 对活库执行等价 ALTER**，
+> 不要新增增量 patch（2026-11-01 起的结构变更纪律）。
+
 
 ### 4.3 种子数据
+
+`verify/V1_seed.sql` 提供：`t-a` / `t-b` 两个租户、各自的 agent / agent_version / execution_snapshot、预算账户。
+
+**统计类 IT 必须复用这两个种子租户**（原因见 §6.1）。
+
+---
+
+### 4.4 隔离的四道闸（拦住「又一次浇到应用库」）
+
+脚本只是**一条**入口。IDE 里单跑一个 IT、CI 直接 `mvn verify`、或者谁手写
+`export IT_PG_URL=…/agent_dev`，全都能绕开脚本。所以判据分四层各守一段：
+
+| 阶段 | 谁 | 拦住什么 | 失败表现 |
+|---|---|---|---|
+| 建库 | `init-it-db.sh` / `dev-it-db.sh` | 目标库 == 应用库（脚本要 `DROP DATABASE`） | 直接拒绝执行 |
+| 结构 | `dev-it-db.sh` §2.2 版本核对 | 库停在旧快照（65 表 vs 66 表） | 打印重建命令后退出 |
+| 导出变量 | `it-env.sh` | 目标库 == 应用库 / 缺特权口令 | 拒绝导出并说明原因 |
+| **构建（surefire）** | `ItTargetDatabaseIsolationTest`（`agent-infrastructure` 与 `platform-bootstrap` 各一份） | `IT_PG_URL` 指向应用库、或连接串解析不出库名 | 构建失败，一条可读的错 |
+
+最后一道为什么要放在**测试里**：前两道都跟着脚本走，只有它跟着**构建**走。
+放在 surefire 阶段（而不是 failset 的 `*IT`）是刻意的 —— 它在任何 IT 连库**之前**失败，
+得到的是「一条人话」，而不是「五十条各自诡异的断言失败」。
+
+判据实现：`agent-test-support` 的 `ItTargetDatabase`（`violation` / `requireIsolated`）。
+它比对**库名**（硬编码 `agent_dev` / `study_rag` 兜底），并读 `platform.env` 里声明的
+`SPRING_DATASOURCE_URL` 做**交叉比对** —— 应用库改了名也挡得住。反证（该红时必须红）
+在 `ItTargetDatabaseTest` 里，共 10 例。
+
+> **诚实边界**：判据只做字符串比对，**不连库**。刻意如此：surefire 若依赖数据库可达，
+> 任何一次网络抖动都会变成假红；而「库空/结构旧」在 IT 里有更准确的报错，
+> 结构自检交给 `it-env.sh --probe`（表数 / RLS / 策略）。
+> 另：`platform.env` 被 `.gitignore` 忽略，CI 上没有它，交叉比对自动降级为硬编码名单。
+
+---
+
 
 `verify/V1_seed.sql` 提供：`t-a` / `t-b` 两个租户、各自的 agent / agent_version / execution_snapshot、预算账户。
 
@@ -273,7 +328,13 @@ mvn verify -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \
 | 文件 | 作用 |
 |---|---|
 | `platform/pom.xml` | failsafe 注册（`*IT.java` 才进 integration-test 阶段） |
-| `scripts/dev-it-db.sh` | 建隔离库 + 应用结构快照 + 清残留 + 播种 + 授权 |
+| `scripts/dev-it-db.sh` | 本地容器形态：建隔离库 + 应用结构快照 + 清残留 + 播种 + 授权 |
+| `scripts/init-it-db.sh` | 远端（RDS）形态：建 `agent_it` + 灌结构/种子 + 配角色 + 自检；`--recreate` 推倒重来 |
+| `scripts/it-env.sh` | IT 连接环境唯一入口：导出 `IT_PG_*` / `RABBITMQ_*`，**共库时 fail-closed 拒绝** |
+| `platform/agent-test-support/.../testsupport/db/ItTargetDatabase.java` | 判据实现：IT 目标库 vs 应用库（库名 + `platform.env` 交叉比对） |
+| `platform/agent-test-support/.../testsupport/db/ItTargetDatabaseTest.java` | 判据反证（该红时必须红），10 例 |
+| `.../agent-infrastructure/src/test/java/.../infrastructure/it/ItTargetDatabaseIsolationTest.java` | surefire 阶段闸门（基础设施模块，4 例，含「判据非空转」自证） |
+| `.../platform-bootstrap/src/test/java/.../bootstrap/ItTargetDatabaseIsolationTest.java` | surefire 阶段闸门（bootstrap 模块，2 例） |
 | `platform/agent-infrastructure/src/main/resources/db/migration/verify/V1_seed.sql` | 种子租户 `t-a` / `t-b` |
 | `platform/agent-infrastructure/src/main/resources/db/migration/verify/V1_constraint_check.sql` | 15 项约束校验（**用非特权角色跑**） |
 | `.github/workflows/ci.yml` | integration-test job 的真实配置与防假绿断言 |
@@ -289,22 +350,76 @@ mvn verify -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \
 # 0) 环境
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21 && export PATH="$JAVA_HOME/bin:$PATH"
 
-# 1) 准备库（本地容器）
-./scripts/dev-it-db.sh
+# 1) 准备库（二选一）
+./scripts/init-it-db.sh                 # 远端 RDS：建 agent_it（需 AI_AGENT_PASSWORD）
+./scripts/dev-it-db.sh                  # 本地容器 agent-pg17:5433/agent_it
 
-# 2) 准备库（远端 PG，无 psql 时用 JDBC 探针：建角色→建库→按序迁移→GRANT→种子）
+# 2) 导出连接（唯一入口；目标库 == 应用库时拒绝）
+export AI_AGENT_PASSWORD='...'
+source ./scripts/it-env.sh --probe
 
-# 3) 导出连接
-export IT_PG_URL="jdbc:postgresql://<host>:5432/<db>" \
-       IT_PG_USER=app_agent IT_PG_PASSWORD=<口令> \
-       IT_PG_ADMIN_USER=<管理角色> IT_PG_ADMIN_PASSWORD=<管理口令>
-
-# 4) 跑（CI 等价）
+# 3) 跑（CI 等价）
 cd platform
 mvn -o clean verify -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \
   -Dit.test='*IT,!RealBrokerEndToEndIT' -Dfailsafe.failIfNoSpecifiedTests=false
 
-# 5) 判绿（不是看 BUILD SUCCESS，是看这四行）
+# 4) 判绿（不是看 BUILD SUCCESS，是看这四行）
 grep -E "Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$" \
   */target/failsafe-reports/*.txt | sort -u
 ```
+
+---
+
+## 11. 隔离库实测基线（2026-11-03）
+
+在本机 `agent-pg17:5433` 上用 `01/02/03/04` **从空库重建** `agent_it_fresh`，
+按 §10 的 CI 等价命令连跑 4 轮（第 1 轮漏了保留期凭据，见下）：
+
+| 轮次 | 用例 | 失败 | 跳过 | 说明 |
+|---|---|---|---|---|
+| 1 | 2658 | 0 | 5+1 | ⚠️ 缺 `IT_RETENTION_*` → `RetentionErasureIT` **整类挂起**（20 例一条没跑，failsafe 只显示 `Skipped: 1`） |
+| 2 | 2677 | 0 | 5 | 补上保留期凭据后 |
+| 3 | 2677 | 0 | 5 | 同库第二轮，跑在上一轮的残留之上 |
+| 4 | 2677 | 0 | 5 | 改由 `source scripts/it-env.sh` 导出环境（脚本入口自证） |
+
+- **2677 = 2685 − 5（`RealBrokerEndToEndIT`）− 3（`MessagingCanaryWiringTest`）**，
+  两个差值都是 CI 等价命令**刻意排除**的类，逐类核对过，没有「静默少跑」。
+- 5 个跳过全部是**显式挂起**的用例（依赖已下线的三段式发布端点），与库无关。
+- **跨轮增量**：`it-*` 租户逐位相同（`it-gov-a` 19 / `it-pgq-a` 14 / `it-budget-a` 16 …）；
+  只有 `t-a` 每轮 +7（`ep-run-*`，来自 6 个端点契约 IT），且**全部是终态、`QUEUED=0`**
+  —— 不会挤占 `claimTasks` 的 `LIMIT 1000` 窗口，属已知可接受残留。
+  真嫌脏就 `./scripts/init-it-db.sh --recreate`（约 10 秒）。
+
+> ⚠️ **表数期望值是 66**（`public` 46 + `platform` 20）。历史脚本写死 65，
+> 会让**正确建出来的库**判自检失败 —— 2026-11-03 已修（多出来的是 `platform.authz_decision_log`）。
+
+
+## 12. 隔离判据进构建后的基线（2026-11-03 晚）
+
+同一台机器，新建本地 `agent_it`（`dev-it-db.sh`，66 表 / 42 RLS / 50 策略），连跑 2 轮：
+
+| 轮次 | 用例 | 失败 | 跳过 | 耗时 |
+|---|---|---|---|---|
+| 1 | 2693 | 0 | 5 | 58s |
+| 2 | 2693 | 0 | 5 | 60s |
+
+**2693 = 2677 + 16**，新增的 16 例正是本轮加的三道构建期判据：
+
+| 类 | 例数 |
+|---|---|
+| `agent-test-support`…`ItTargetDatabaseTest`（判据反证） | 10 |
+| `agent-infrastructure`…`infrastructure.it.ItTargetDatabaseIsolationTest` | 4 |
+| `platform-bootstrap`…`bootstrap.ItTargetDatabaseIsolationTest` | 2 |
+
+跨轮增量：`it-*` 租户**逐位相同**（`it-gov-a` 19 / `it-budget-a` 16 / `it-pgq-a` 14 /
+`it-atomic-a` 9 / `it-evt-a` 9 / `it-ledger-a` 6 / `it-fence-a` 5 / `it-fi-a` 4 /
+`it-runcap-a` 4 / `it-audit-a` 3 / `it-claim-a` 2 / `it-tx-a` 2 / 其余 0～1）；
+仅 `t-a` 每轮 +7（`ep-run-*`），与上一节一致。
+
+> ⚠️ **建库脚本与生产授权口径必须一致**。本地跑 `dev-it-db.sh` 时若图省事「对每张表
+> GRANT ALL」，会把最小权限模型抹平，实测立刻红三个 IT：
+> `RetentionErasureIT`（应用角色竟有 `audit_record` 的 DELETE）、
+> `AuthzDecisionLogLiveIT.appRoleCannotSelectDecisionLog`、
+> `AuthzDecisionLogLiveIT.insertWithReturningIsDenied`（有 SELECT 就放行了 `INSERT … RETURNING`）。
+> 现在 `dev-it-db.sh` 直接执行权威脚本 `03_platform_roles.sql` + `04_retention_role.sql`，
+> 并在末尾做权限自检（`has_table_privilege` 五项），不一致即 `exit 1`。
