@@ -42,12 +42,31 @@ public final class CheckRagOpsRole {
             "SELECT 'rolbypassrls=' || coalesce(rolbypassrls::text, '<角色不存在>')"
                     + " FROM pg_roles WHERE rolname = current_user"
                     + "   AND rolbypassrls IS DISTINCT FROM true"},
-        {"③写面恰好 6 张表（全局治理真正要写的，多一张都是漂移）",
+        // ⚠️ 写面从 6 张扩到 7 张：新增 rag_inspection_record 的 **INSERT-only**。
+        //    原因：平台全局语料同样要通过「人工抽检」才能签发 VERIFIED（InspectionGuard
+        //    对两个作用域一视同仁），而抽检记录是全局行，rag_app 的写策略
+        //    （tenant_id = rag_current_tenant() AND scope='TENANT'）写不进去
+        //    —— 实测 `new row violates row-level security policy`。只能走 ops 通道。
+        //    ⚠️ 但它与另外 6 张**不是同一档授权**：抽检记录是「结论的证据」，
+        //       只追加不修改，所以这里把它单列成 INSERT-only 断言（见 ③b），
+        //       ③ 仍要求其余表恰好 6 张且**不含**它 —— 扩面不允许夹带 UPDATE。
+        {"③写面恰好 6 张表（全局治理真正要写的，多一张都是漂移；不含只追加的抽检记录）",
             "SELECT '写面表数=' || count(*) FILTER (WHERE has_table_privilege(current_user, c.oid, 'INSERT')"
                     + "                                       OR has_table_privilege(current_user, c.oid, 'UPDATE'))"
                     + " " + RAG_TABLES
+                    + "   AND c.relname <> 'rag_inspection_record'"
+                    // ⚠️ FILTER 作用在 GROUP BY 之后、HAVING 之前；这里没有 GROUP BY，
+                    //    故用聚合直接过滤即可（count(*) FILTER 会跳过不满足条件的行）。
                     + " HAVING count(*) FILTER (WHERE has_table_privilege(current_user, c.oid, 'INSERT')"
                     + "                           OR has_table_privilege(current_user, c.oid, 'UPDATE')) <> 6"},
+        {"③b 抽检记录只追加：必须有 INSERT，且**不得**有 UPDATE / DELETE（记录是证据）",
+            "SELECT '抽检记录授权=' || string_agg(p, ',' ORDER BY p)"
+                    + " FROM (SELECT unnest(ARRAY['INSERT','UPDATE','DELETE','TRUNCATE']) AS p) x"
+                    + " WHERE has_table_privilege(current_user, 'rag.rag_inspection_record', p)"
+                    + " HAVING NOT has_table_privilege(current_user, 'rag.rag_inspection_record', 'INSERT')"
+                    + "     OR has_table_privilege(current_user, 'rag.rag_inspection_record', 'UPDATE')"
+                    + "     OR has_table_privilege(current_user, 'rag.rag_inspection_record', 'DELETE')"
+                    + "     OR has_table_privilege(current_user, 'rag.rag_inspection_record', 'TRUNCATE')"},
         {"④删除面为 0 张表（语料治理没有删除语义：撤回是终态流转，不是删行）",
             "SELECT '删除面表数=' || count(*) FILTER (WHERE has_table_privilege(current_user, c.oid, 'DELETE'))"
                     + " " + RAG_TABLES

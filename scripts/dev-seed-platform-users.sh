@@ -15,9 +15,12 @@
 # 【哈希由谁算】服务端同一个 PrincipalRepository$PasswordHasher（PBKDF2-HMAC-SHA256
 #   600k 迭代）。装完立刻读回库里的哈希 verify 一次，登录 401 不会留到运行时才发现。
 #
-# 【为什么走 JDBC 而不是 psql/docker】本地 Docker 守护不可用、机器上没装 psql，
-#   而 platform schema 归库 owner（SPRING_DATASOURCE_USERNAME=ai_agent）所有，
-#   app_agent/platform_ops 对它没有写权限 —— 必须用 owner 连接。
+# 【为什么走 JDBC 而不是 psql/docker】本地 Docker 守护不可用、机器上没装 psql。
+#   platform schema 归库 owner（ai_agent）所有；app_agent 对它刻意无写权限。
+#   ⚠️ 2026-11-01：连接身份从「主数据源」改为 platform_ops —— 主数据源自
+#   2026-10-30 起已切 app_agent（NOBYPASSRLS 且对 platform_user 无授权），
+#   旧写法播种必报 permission denied；platform_ops 对 platform 域有整域 DML
+#   （03_platform_roles.sql §2b），凭据来自 platform.env 的运维通道段。
 #
 # 【用法】
 #   scripts/dev-seed-platform-users.sh                 # dry-run（结尾回滚，什么都不写）
@@ -44,13 +47,13 @@ if [ ! -d "$CLASSES" ]; then
   (cd "$REPO" && mvn -q -pl platform/agent-infrastructure -am -DskipTests compile)
 fi
 
-# DB 凭据：优先已导出的环境变量，否则从 platform.env 取 owner 账号
+# DB 凭据：优先已导出的环境变量，否则从 platform.env 取 platform_ops 运维通道
 if [ -z "${SEED_DB_URL:-}" ] && [ -f "$REPO/platform.env" ]; then
   # shellcheck disable=SC1091
   set -a; source "$REPO/platform.env"; set +a
-  export SEED_DB_URL="${SPRING_DATASOURCE_URL:-}"
-  export SEED_DB_USER="${SPRING_DATASOURCE_USERNAME:-}"
-  export SEED_DB_PASSWORD="${SPRING_DATASOURCE_PASSWORD:-}"
+  export SEED_DB_URL="${AGENT_PLATFORM_OPS_DATASOURCE_URL:-${SPRING_DATASOURCE_URL:-}}"
+  export SEED_DB_USER="${AGENT_PLATFORM_OPS_DATASOURCE_USERNAME:-${SPRING_DATASOURCE_USERNAME:-}}"
+  export SEED_DB_PASSWORD="${AGENT_PLATFORM_OPS_DATASOURCE_PASSWORD:-${SPRING_DATASOURCE_PASSWORD:-}}"
 fi
 [ -n "${SEED_DB_URL:-}" ] || { echo "❌ SEED_DB_URL 缺失（或仓库内 platform.env 不存在）"; exit 1; }
 
@@ -60,7 +63,7 @@ if [ -z "${SEED_ACCOUNT_PASSWORD:-}" ]; then
 fi
 
 echo "=== platform schema 归属检查 ==="
-echo "  owner 连接: ${SEED_DB_USER}（platform.* 需库 owner 才可写）"
+echo "  连接身份: ${SEED_DB_USER}（platform_ops 对 platform.* 有整域 DML）"
 echo
 
 exec "$JAVA_BIN" -cp "$PGJAR:$CLASSES" "$REPO/scripts/tools/SeedPlatformUsers.java" "$@"
