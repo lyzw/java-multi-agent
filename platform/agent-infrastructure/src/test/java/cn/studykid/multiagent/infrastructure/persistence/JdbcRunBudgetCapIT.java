@@ -78,9 +78,11 @@ class JdbcRunBudgetCapIT {
         budget = new JdbcBudgetRepository(appPool);
         runBudget = new JdbcRunBudgetRepository(appPool);
 
-        tenantA = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-a");
-        FaultInjectionSupport.ensureTenantSnapshot(adminPool, "t-a");
-        snapshotA = FaultInjectionSupport.snapshotIdBySlug(adminPool, "t-a");
+        // ⚠️ IT 专用租户（2026-11-02 迁移）：避免与常驻实例共享 t-a 的 Run 池
+        tenantA = FaultInjectionSupport.itTenant(adminPool, "it-runcap-a");
+        snapshotA = FaultInjectionSupport.itSnapshot(adminPool, tenantA);
+        // 回收上一轮遗留的 Run，避免「单 Run 预算上限」类断言被历史累计消耗量干扰。
+        FaultInjectionSupport.purgeItTenantRuns(adminPool, "it-runcap-a");
     }
 
     @AfterAll

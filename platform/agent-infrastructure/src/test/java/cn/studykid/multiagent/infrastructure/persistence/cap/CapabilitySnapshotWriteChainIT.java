@@ -75,7 +75,7 @@ class CapabilitySnapshotWriteChainIT extends CapITBase {
         publishPlatformObjects("tool:" + TOOL_ID + "@1", "skill:" + SKILL_ID + "@1");
 
         // ── 前置 2：cap_agent_def 行（闭包解析的入口）──
-        String agentId = createAgentWithVersion(tenantA, uniqueName("it-snapchain-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("it-snapchain-agent"), "{}", true);
         adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
                 + " VALUES ('" + tenantA + "'::uuid, '" + agentId + "'::uuid, 1, 'it agent',"
@@ -110,7 +110,7 @@ class CapabilitySnapshotWriteChainIT extends CapITBase {
     void skipsSnapshotWhenAuthzVersionMissing() {
         // ⚠️ 本用例钉住 fail-soft 契约：缺行**不得**让 Run 创建失败。
         //    但它**必须**体现为「快照没写出来」—— 否则断链又是静默的。
-        String agentId = createAgentWithVersion(tenantA, uniqueName("it-snapchain-noauthz"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("it-snapchain-noauthz"), "{}", true);
         adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
                 + " VALUES ('" + tenantA + "'::uuid, '" + agentId + "'::uuid, 1, 'it agent',"
@@ -139,7 +139,7 @@ class CapabilitySnapshotWriteChainIT extends CapITBase {
     @DisplayName("⚠️ 缺 cap_agent_def 行 → 不写快照且不抛（闭包不可解析即跳过）")
     void skipsSnapshotWhenAgentDefMissing() {
         // ⚠️ 只有 legacy agent_version 行、没有 cap_agent_def 行
-        String agentId = createAgentWithVersion(tenantA, uniqueName("it-snapchain-nocapdef"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("it-snapchain-nocapdef"), "{}", true);
         adminExec("INSERT INTO cap_authz_version (tenant_id, principal_id, authz_version, version)"
                 + " VALUES ('" + tenantA + "'::uuid, '" + PRINCIPAL + "', 1, 0)"
                 + " ON CONFLICT (tenant_id, principal_id) DO NOTHING");

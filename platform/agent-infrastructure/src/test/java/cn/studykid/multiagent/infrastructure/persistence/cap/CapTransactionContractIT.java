@@ -90,7 +90,7 @@ class CapTransactionContractIT extends CapITBase {
     @Test
     @DisplayName("✅ 同事务：版本行插入 + authzVersion 自增 + RLS 回读全部成功")
     void versionInsertAndBumpAreAtomic() throws Exception {
-        String agentId = createAgentWithVersion(tenantA, uniqueName("cap-tx-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("cap-tx-agent"), "{}", true);
 
         long version = versionInsertAndBumpInOneTransaction(tenantA, agentId);
         assertThat(version).isEqualTo(1L);
@@ -108,7 +108,7 @@ class CapTransactionContractIT extends CapITBase {
     @Test
     @DisplayName("✅ 回滚：版本行与授权版本一并消失（不产生半成品）")
     void rollbackLeavesNothing() throws Exception {
-        String agentId = createAgentWithVersion(tenantA, uniqueName("cap-tx-rb-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("cap-tx-rb-agent"), "{}", true);
 
         try (Connection conn = appPool.getConnection()) {
             conn.setAutoCommit(false);
@@ -149,7 +149,7 @@ class CapTransactionContractIT extends CapITBase {
     @Test
     @DisplayName("✅ 同事务不泄漏：事务内写入对其他租户不可见")
     void sameTransactionDoesNotLeak() throws Exception {
-        String agentId = createAgentWithVersion(tenantA, uniqueName("cap-tx-iso-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("cap-tx-iso-agent"), "{}", true);
 
         try (Connection conn = appPool.getConnection()) {
             conn.setAutoCommit(false);
@@ -207,7 +207,7 @@ class CapTransactionContractIT extends CapITBase {
     @Test
     @DisplayName("✅ 已发布版本行不可变：DB 层拒绝改写")
     void publishedVersionRowIsImmutable() {
-        String agentId = createAgentWithVersion(tenantA, uniqueName("cap-imm-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("cap-imm-agent"), "{}", true);
         adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, enabled_skills, "
                 + "overrides, config_fingerprint, created_at, updated_at, published_at) VALUES ('"
                 + tenantA + "'::uuid, '" + agentId + "'::uuid, 1, 'imm', '[]'::jsonb, "
@@ -227,7 +227,7 @@ class CapTransactionContractIT extends CapITBase {
     @Test
     @DisplayName("✅ 草稿版本行可编辑（草稿编辑不修改已发布版本行）")
     void draftVersionRowIsEditable() {
-        String agentId = createAgentWithVersion(tenantA, uniqueName("cap-draft-agent"), "{}", false);
+        String agentId = createAgentWithVersion(tenantA, agentName("cap-draft-agent"), "{}", false);
         adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, enabled_skills, "
                 + "overrides, config_fingerprint, created_at, updated_at) VALUES ('"
                 + tenantA + "'::uuid, '" + agentId + "'::uuid, 1, 'draft', '[]'::jsonb, "
@@ -244,7 +244,7 @@ class CapTransactionContractIT extends CapITBase {
     @Test
     @DisplayName("✅ 主键冲突不覆盖：重复插入同版本返回 false")
     void duplicateVersionRowIsRejected() {
-        String agentId = createAgentWithVersion(tenantA, uniqueName("cap-dup-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("cap-dup-agent"), "{}", true);
         JdbcCapAgentDefRepository repo = new JdbcCapAgentDefRepository(appPool);
         java.time.Instant now = java.time.Instant.now();
         CapAgentDef def = new CapAgentDef(tenantA, agentId, 1, "dup", "d",
@@ -262,7 +262,7 @@ class CapTransactionContractIT extends CapITBase {
     void crossTenantReferenceRejected() {
         String agentIdB = UUID.randomUUID().toString();
         adminExec("INSERT INTO agent (agent_id, tenant_id, name) VALUES ('" + agentIdB
-                + "'::uuid, '" + tenantB + "'::uuid, '" + uniqueName("cap-xt-agent") + "')");
+                + "'::uuid, '" + tenantB + "'::uuid, '" + freshName("cap-xt-agent") + "')");
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> adminExec(
                 "INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, enabled_skills, "

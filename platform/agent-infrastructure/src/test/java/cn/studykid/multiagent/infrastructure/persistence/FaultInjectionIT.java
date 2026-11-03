@@ -57,12 +57,18 @@ class FaultInjectionIT {
         // ⚠️ E-3 守护：非特权角色，否则得到「隔离失效」虚假结论
         FaultInjectionSupport.requireNonPrivileged(pool);
 
-        tenantA = FaultInjectionSupport.tenantIdBySlug(admin, "t-a");
-        tenantB = FaultInjectionSupport.tenantIdBySlug(admin, "t-b");
-        FaultInjectionSupport.ensureTenantSnapshot(admin, "t-a");
-        FaultInjectionSupport.ensureTenantSnapshot(admin, "t-b");
-        snapshotA = FaultInjectionSupport.snapshotIdBySlug(admin, "t-a");
-        snapshotB = FaultInjectionSupport.snapshotIdBySlug(admin, "t-b");
+        // ⚠️ **专用 IT 租户**，不用种子租户 t-a / t-b：
+        //    本类断言「租户只看到自己的 Run」，而种子租户上会同时有
+        //    ① 运行实例 worker 领走本类造出来的 QUEUED Run 并改写终态；
+        //    ② 其他 IT 遗留的 Run 行。
+        //    两者都会让断言变成「取决于谁先跑」，而不是「RLS 对不对」。
+        tenantA = FaultInjectionSupport.itTenant(admin, "it-fi-a");
+        tenantB = FaultInjectionSupport.itTenant(admin, "it-fi-b");
+        snapshotA = FaultInjectionSupport.itSnapshot(admin, tenantA);
+        snapshotB = FaultInjectionSupport.itSnapshot(admin, tenantB);
+        // 回收上一轮遗留的 Run（本类关心的是「绑定与隔离」，不依赖历史 Run）。
+        FaultInjectionSupport.purgeItTenantRuns(admin, "it-fi-a");
+        FaultInjectionSupport.purgeItTenantRuns(admin, "it-fi-b");
 
         creationRepo = new JdbcRunCreationRepository(pool);
         claimRepo = new JdbcRunClaimRepository(pool);
@@ -104,6 +110,11 @@ class FaultInjectionIT {
     @Test
     @DisplayName("FI-RLS-001b ⚠️ 同一物理连接复用给另一租户时，绑定按事务重置")
     void bindingResetsOnReusedConnection() throws Exception {
+        // ⚠️ 自备夹具：改用专用 IT 租户后，A 不再天然拥有历史 Run，
+        //    若不先造一条，「asA >= 1」就退化为「断言依赖别的用例先跑」——
+        //    换个执行顺序即变红，而失败信息指向 RLS。
+        createRun(tenantA, snapshotA);
+
         // 取一条连接，先以 A 的身份查询（应能看到 A 的数据）
         try (Connection c = pool.getConnection()) {
             c.setAutoCommit(false);

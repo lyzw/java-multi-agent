@@ -134,8 +134,16 @@ class CapCompensationIT extends CapITBase {
      */
     private void resetBudget() {
         adminExec("DELETE FROM budget_reservation WHERE tenant_id = '" + tenantA + "'::uuid");
-        adminExec("UPDATE budget_account SET total_limit = 1000, reserved_amount = 0,"
-                + " settled_amount = 0 WHERE tenant_id = '" + tenantA + "'::uuid");
+        // ⚠️ 必须 upsert 而非只 UPDATE（2026-11-01 实测）：
+        //    旧行为假定 budget_account 行已存在（历史上由已删除的 V1_seed.sql /
+        //    旧库残留提供），重建隔离 IT 库（dev-it-db.sh）后专用租户没有预算行，
+        //    预留被 fail-closed 判为 NO_ACCOUNT（BUDGET_EXCEEDED / NOT_STARTED），
+        //    失败现场指向「预算/补偿逻辑坏了」，真因是夹具不自给。
+        adminExec("INSERT INTO budget_account (tenant_id, currency, total_limit,"
+                + " reserved_amount, settled_amount) VALUES"
+                + " ('" + tenantA + "'::uuid, 'CNY', 1000, 0, 0)"
+                + " ON CONFLICT (tenant_id, currency) DO UPDATE SET"
+                + " total_limit = 1000, reserved_amount = 0, settled_amount = 0");
     }
 
     // ── 夹具 ──────────────────────────────────────────────────────
@@ -154,7 +162,7 @@ class CapCompensationIT extends CapITBase {
     }
 
     private String seedAgent(String tenantId, String enabledSkillsJson) {
-        String agent = createAgentWithVersion(tenantId, uniqueName("it-agent"), "{}", true);
+        String agent = createAgentWithVersion(tenantId, agentName("it-agent"), "{}", true);
         adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
                 + " VALUES ('" + tenantId + "'::uuid, '" + agent + "'::uuid, 1, 'it agent',"

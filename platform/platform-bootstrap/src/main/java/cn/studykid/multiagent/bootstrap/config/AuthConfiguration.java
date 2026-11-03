@@ -239,9 +239,36 @@ public class AuthConfiguration {
 
     // ── 平台身份仓储 / 授权 / 登录（重规划 §2.1 / §4 / §7）──
 
+    /**
+     * 平台身份仓储（平台账号 / 角色）。
+     *
+     * <p>⚠️ <b>必须用平台运维角色的数据源，不得用主数据源</b>：
+     * {@code platform.platform_user} 等身份/凭据表对主数据源角色
+     * {@code app_agent} 刻意无授权（03_platform_roles.sql §2b），
+     * 误接主数据源的表现是登录报
+     * {@code permission denied for table platform_user}
+     * （2026-11-01 实测踩坑）。运维数据源未接入时 fail-closed
+     * （取连接即抛 {@code PlatformOpsUnavailableException}），绝不回落应用角色。
+     */
     @Bean
-    public PlatformPrincipalRepository platformPrincipalRepository(DataSource dataSource) {
-        return new JdbcPlatformPrincipalRepository(dataSource);
+    public PlatformPrincipalRepository platformPrincipalRepository(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider platformOps) {
+        return new JdbcPlatformPrincipalRepository(platformOps.platformIdentityDataSource());
+    }
+
+    /**
+     * 平台审计仓储（{@code platform.platform_audit_event} 的写入与查询）。
+     *
+     * <p>⚠️ 同 {@link #platformPrincipalRepository}：走平台运维角色数据源。
+     * ⚠️ <b>此前完全缺失装配</b>：agent-api 的用户管理/租户服务/工单服务都依赖
+     * {@code PlatformAuditPort}，缺 Bean 时应用启动即失败
+     * （{@code UnsatisfiedDependencyException}），2026-11-01 补上。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.audit.PlatformAuditPort platformAuditPort(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider platformOps) {
+        return new cn.studykid.multiagent.infrastructure.security.JdbcPlatformAuditRepository(
+                platformOps.platformIdentityDataSource());
     }
 
     @Bean

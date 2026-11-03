@@ -26,6 +26,7 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
+import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
 import cn.studykid.multiagent.ports.messaging.MessageHandler;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import tools.jackson.databind.ObjectMapper;
@@ -42,9 +43,36 @@ import tools.jackson.databind.ObjectMapper;
  * <p><b>⚠️ 断言的是「语义等价于 Rabbit 通道」，不是「实现细节」</b>：
  * 本 IT 覆盖 at-least-once、有限重试、死信、可见性超时回收、租户隔离——
  * 这些正是切换通道时**不能变**的东西。
+ *
+ * <p><b>⚠️⚠️ 必须用专用租户（{@code it-pgq-*}），不得复用 {@code t-a}/{@code t-b}</b>：
+ * 本类的核心断言形如「入队后<b>我</b>领得到」，隐含前提是<b>队列里只有我一个消费者</b>。
+ * 在开发机上这个前提<b>不成立</b>——只要有一个平台实例在跑，它的
+ * {@code PgQueueListener} 就会按 {@code agent.worker.tenant-slugs}（默认 {@code t-a}）
+ * 轮询<b>同一个开发库</b>，把本用例刚入队的消息抢先领走并 ack 删除。
+ *
+ * <p>症状极具误导性：{@code claim} 返回 0 行、<b>无异常无日志</b>，
+ * 失败信息只说「期望 1 实得 0」，看起来像 RLS 或连接绑定坏了；
+ * 而同一秒用普通 {@code SELECT} 却能数到那一行。实测把同一段 claim SQL
+ * 去掉 {@code FOR UPDATE SKIP LOCKED} 立刻返回 1 行 —— 因为行正被那个真实
+ * worker 的事务锁着，{@code SKIP LOCKED} 把它跳过了。
+ * 更隐蔽的是：测试<b>单独跑与全量跑结果不同</b>，会长期被归因为「偶发/flaky」。
+ *
+ * <p>故本类自建 {@code it-pgq-a}/{@code it-pgq-b}（幂等），
+ * 与任何部署实例消费的租户<b>不重叠</b>；{@link #provisionTenant} 与
+ * {@link #requireNoForeignConsumer} 把这个前提变成<b>可失败</b>的断言。
  */
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class PgQueueIT {
+
+    /**
+     * IT 专用租户 slug。
+     *
+     * <p>⚠️ 前缀 {@code it-} 不是命名习惯，是被断言保护的契约：
+     * 真实部署租户不以 {@code it-} 开头，故「本 IT 消费的租户」与
+     * 「线上 worker 轮询的租户」在结构上不可能重合。
+     */
+    private static final String SLUG_A = "it-pgq-a";
+    private static final String SLUG_B = "it-pgq-b";
 
     private static HikariDataSource appPool;
     private static HikariDataSource adminPool;
@@ -63,10 +91,13 @@ class PgQueueIT {
 
         repository = new PgQueueRepository(appPool, new ObjectMapper());
 
-        tenantA = tenantIdBySlug("t-a");
-        tenantB = tenantIdBySlug("t-b");
-        ensureTenantSnapshot("t-a");
-        ensureTenantSnapshot("t-b");
+        tenantA = provisionTenant(SLUG_A);
+        tenantB = provisionTenant(SLUG_B);
+
+        // 回收上一轮遗留的 Run：本类每例都会 createRun，Run 只增不减会让
+        // it-pgq-a 的计数无界上涨（实测已累积到 196 条）。队列行由 cleanQueue 处理，
+        // 故这里只删 run（其子表全部 ON DELETE CASCADE；快照不可删，不动）。
+        adminExec("DELETE FROM run WHERE " + scope());
     }
 
     @AfterAll
@@ -83,10 +114,31 @@ class PgQueueIT {
     @AfterEach
     void cleanQueue() throws Exception {
         // ⚠️ 每例前后都清：否则上一例的残留消息会让「深度」断言互相污染
-        adminExec("DELETE FROM agent_message_queue WHERE tenant_id IN ('"
-                + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
-        adminExec("DELETE FROM agent_message_dead_letter WHERE tenant_id IN ('"
-                + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
+        // ⚠️ 只清本 IT 的两个专用租户 —— 不碰任何真实租户（共享库上必须做到这点）
+        adminExec("DELETE FROM agent_message_queue WHERE " + scope());
+        adminExec("DELETE FROM agent_message_dead_letter WHERE " + scope());
+    }
+
+    /**
+     * 本 IT 的租户范围谓词。
+     *
+     * <p>⚠️ 所有「整表 count / 随便取一行」的断言都必须带上它：
+     * 在共享的开发库上，{@code SELECT count(*) FROM agent_message_dead_letter}
+     * 数的是<b>全平台</b>的死信，别的租户（甚至别的测试）留一条就会让断言错位，
+     * 而失败信息只会说「期望 1 实得 11」——指向的完全不是真因。
+     */
+    private static String scope() {
+        return "tenant_id IN ('" + tenantA + "'::uuid, '" + tenantB + "'::uuid)";
+    }
+
+    private static long queueCount(String condition) throws SQLException {
+        return adminCount("SELECT count(*) FROM agent_message_queue WHERE " + scope()
+                + (condition.isBlank() ? "" : " AND " + condition));
+    }
+
+    private static long deadLetterCount(String condition) throws SQLException {
+        return adminCount("SELECT count(*) FROM agent_message_dead_letter WHERE " + scope()
+                + (condition.isBlank() ? "" : " AND " + condition));
     }
 
     // ── Q-1：入队 / 领取 / 确认 ────────────────────────────────────
@@ -107,11 +159,11 @@ class PgQueueIT {
 
         // ⚠️ 领取后仍算「未处理」——但深度口径只看 ready（对齐 Rabbit 的 ready 深度）
         assertThat(repository.pendingDepth(tenantA)).isZero();
-        assertThat(adminCount("SELECT count(*) FROM agent_message_queue WHERE state='INFLIGHT'"))
+        assertThat(queueCount("state='INFLIGHT'"))
                 .isEqualTo(1);
 
         repository.ack(tenantA, claimed.get(0).queueId(), "w1");
-        assertThat(adminCount("SELECT count(*) FROM agent_message_queue")).isZero();
+        assertThat(queueCount("")).isZero();
     }
 
     @Test
@@ -142,7 +194,8 @@ class PgQueueIT {
         repository.retry(tenantA, msg.queueId(), "临时故障", Instant.now(), "w1");
 
         assertThat(repository.pendingDepth(tenantA)).isEqualTo(1);
-        assertThat(adminCount("SELECT attempts FROM agent_message_queue LIMIT 1")).isEqualTo(1);
+        assertThat(adminCount("SELECT attempts FROM agent_message_queue WHERE " + scope()))
+                .isEqualTo(1);
     }
 
     @Test
@@ -156,9 +209,9 @@ class PgQueueIT {
         repository.reject(tenantA, msg.queueId(), "RUN_DISPATCH", runId,
                 msg.payload(), 1, "消息非法", "w1");
 
-        assertThat(adminCount("SELECT count(*) FROM agent_message_queue")).isZero();
-        assertThat(adminCount("SELECT count(*) FROM agent_message_dead_letter")).isEqualTo(1);
-        assertThat(adminText("SELECT error FROM agent_message_dead_letter LIMIT 1"))
+        assertThat(queueCount("")).isZero();
+        assertThat(deadLetterCount("")).isEqualTo(1);
+        assertThat(adminText("SELECT error FROM agent_message_dead_letter WHERE " + scope()))
                 .isEqualTo("消息非法");
     }
 
@@ -208,7 +261,7 @@ class PgQueueIT {
                         + "否则「消费者崩溃 → 行停在 INFLIGHT → 被回收」这条路径"
                         + "永远不会达到重试上限 → 毒消息无限重投、永不进死信")
                 .isEqualTo(1);
-        assertThat(adminCount("SELECT attempts FROM agent_message_queue LIMIT 1"))
+        assertThat(adminCount("SELECT attempts FROM agent_message_queue WHERE " + scope()))
                 .as("⚠️ 库里的 attempts 也必须同步加 1（否则内存里的计数与库里不一致）")
                 .isEqualTo(1);
     }
@@ -233,14 +286,14 @@ class PgQueueIT {
 
         // ⚠️ 旧持有者 w1 返回来 ack —— 必须被围栏拒绝
         repository.ack(tenantA, first.get(0).queueId(), "w1");
-        assertThat(adminCount("SELECT count(*) FROM agent_message_queue"))
+        assertThat(queueCount(""))
                 .as("⚠️⚠️ 旧持有者的 ack 不得删掉新持有者正在处理的行 —— "
                         + "否则新 worker 崩溃就会消失消息（at-least-once 变成 at-most-once）")
                 .isEqualTo(1);
 
         // ⚠️ 新持有者的 ack 必须生效
         repository.ack(tenantA, reclaimed.get(0).queueId(), "w2");
-        assertThat(adminCount("SELECT count(*) FROM agent_message_queue")).isZero();
+        assertThat(queueCount("")).isZero();
     }
 
     @Test
@@ -260,11 +313,11 @@ class PgQueueIT {
         repository.retry(tenantA, first.get(0).queueId(), "超时持有者的重试",
                 Instant.now(), "w1");
 
-        assertThat(adminCount("SELECT count(*) FROM agent_message_queue WHERE state='PENDING'"))
+        assertThat(queueCount("state='PENDING'"))
                 .as("⚠️⚠️ 旧持有者的 retry 不得把新持有者正在处理的行退回 PENDING —— "
                         + "那会让同一条消息被再次领取 → 重复执行")
                 .isZero();
-        assertThat(adminCount("SELECT count(*) FROM agent_message_queue WHERE state='INFLIGHT'"))
+        assertThat(queueCount("state='INFLIGHT'"))
                 .isEqualTo(1);
     }
 
@@ -338,7 +391,7 @@ class PgQueueIT {
 
         assertThat(repository.pendingDepth(tenantA)).isEqualTo(1);
         String payloadJson = adminText(
-                "SELECT payload::text FROM agent_message_queue LIMIT 1");
+                "SELECT payload::text FROM agent_message_queue WHERE " + scope());
         assertThat(payloadJson)
                 .contains("runId").contains("fencingToken")
                 .doesNotContain("prompt").doesNotContain("studentId");
@@ -355,7 +408,7 @@ class PgQueueIT {
         repository.enqueue(tenantA, "RUN_DISPATCH", runId, payload(runId));
         PgQueueListener claimed = listener(fixedOutcome(MessageHandler.Outcome.CLAIMED));
         assertThat(claimed.pollOnce()).isEqualTo(1);
-        assertThat(adminCount("SELECT count(*) FROM agent_message_queue")).isZero();
+        assertThat(queueCount("")).isZero();
 
         // ② RETRY → 退回 PENDING
         // ⚠️ 必须先清队列：上一场景的消息若还在，会被本轮一起领走，
@@ -371,8 +424,8 @@ class PgQueueIT {
         repository.enqueue(tenantA, "RUN_DISPATCH", runId, payload(runId));
         PgQueueListener rejected = listener(fixedOutcome(MessageHandler.Outcome.REJECTED));
         assertThat(rejected.pollOnce()).isZero();
-        assertThat(adminCount("SELECT count(*) FROM agent_message_queue")).isZero();
-        assertThat(adminCount("SELECT count(*) FROM agent_message_dead_letter")).isEqualTo(1);
+        assertThat(queueCount("")).isZero();
+        assertThat(deadLetterCount("")).isEqualTo(1);
     }
 
     @Test
@@ -435,48 +488,69 @@ class PgQueueIT {
         }
     }
 
-    private static String tenantIdBySlug(String slug) throws SQLException {
-        try (Connection conn = adminPool.getConnection();
-             PreparedStatement ps = conn.prepareStatement(
-                     "SELECT tenant_id::text FROM tenant WHERE slug = ?")) {
-            ps.setString(1, slug);
-            try (ResultSet rs = ps.executeQuery()) {
-                assertThat(rs.next())
-                        .as("种子数据缺失租户 %s，请先执行 ./scripts/dev-postgres.sh start", slug)
-                        .isTrue();
-                return rs.getString(1);
-            }
-        }
+    /**
+     * 幂等创建本 IT 专用租户（tenant + agent + agent_version + execution_snapshot）。
+     *
+     * <p><b>为什么测试自己建房客，而不是用种子里的 {@code t-a}</b>：
+     * 共用真实租户时，「入队 → 立刻领取」会变成与运行实例的竞态，
+     * 于是这个 IT 的失败<b>不指向产品缺陷</b>，只指向「开发机上正好有实例在跑」——
+     * 而它的通过同样不能证明什么。测试必须自带前提。
+     *
+     * @return 该租户的 tenant_id
+     */
+    /**
+     * 幂等创建本 IT 的专用租户（实现见 {@link ItTenantProvisioner}）。
+     *
+     * <p>⚠️ 这里只保留「传给共享实现」的一层，<b>不要</b>再复制一份 SQL：
+     * 三份拷贝意味着 schema 变更时有三处要改，而漏改的那处会在别的 IT 里以
+     * 「缺快照/外键冲突」的面貌出现。
+     */
+    private static String provisionTenant(String slug) throws SQLException {
+        return ItTenantProvisioner.provision(
+                adminPool, slug, "IT 专用租户 · PG 队列（勿删，由 PgQueueIT 幂等创建）");
     }
 
-    /** 为租户补足 agent_version + execution_snapshot（种子只给了 t-a）。 */
-    private static void ensureTenantSnapshot(String slug) throws SQLException {
-        try (Connection conn = adminPool.getConnection()) {
-            conn.setAutoCommit(false);
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO agent_version (tenant_id, agent_id, version_number, definition) "
-                            + "SELECT a.tenant_id, a.agent_id, 1, '{\"kind\":\"tutor\"}'::jsonb "
-                            + "FROM agent a JOIN tenant t ON t.tenant_id = a.tenant_id "
-                            + "WHERE t.slug = ? AND a.name = 'agent1' "
-                            + "ON CONFLICT (tenant_id, agent_id, version_number) DO NOTHING")) {
-                ps.setString(1, slug);
-                ps.executeUpdate();
+    /**
+     * 守卫：本 IT 的租户队列里<b>不得有外部消费者</b>。
+     *
+     * <p>做法是「放一条探针消息，等 2 秒看它是否仍为 PENDING」。若被领走，
+     * 说明有真实 worker 在轮询这个租户 —— 此时整套断言都会退化成竞态，
+     * 与其让用例以「期望 1 实得 0」的面貌随机红、然后被当成 flaky 忽略，
+     * 不如在这里<b>直接把原因说出来</b>。
+     *
+     * <p>⚠️ 探针写在 {@code it-pgq-*} 专用租户下，不污染任何真实租户的数据。
+     */
+    private static void requireNoForeignConsumer() throws Exception {
+        assertThat(adminCount("SELECT count(*) FROM agent_message_queue WHERE tenant_id = '"
+                + tenantA + "'::uuid"))
+                .as("PG 队列 IT 启动前 it- 租户队列必须为空（残留会让深度断言错位）")
+                .isZero();
+
+        String runId = createRun(tenantA);
+        repository.enqueue(tenantA, "RUN_DISPATCH", runId, payload(runId));
+
+        // 2 秒足够覆盖常见的轮询间隔（本项默认 500ms）；期间任何状态变化都算被外部领走
+        long deadline = System.currentTimeMillis() + 2000L;
+        while (System.currentTimeMillis() < deadline) {
+            long moved = adminCount("SELECT count(*) FROM agent_message_queue WHERE tenant_id = '"
+                    + tenantA + "'::uuid AND state <> 'PENDING'");
+            if (moved > 0) {
+                break;
             }
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO execution_snapshot "
-                            + "(tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config) "
-                            + "SELECT v.tenant_id, v.version_id, '{}', '{}', '{}', "
-                            + "'{\"maxCostPerRun\":\"2.00\",\"maxLlmCalls\":12,\"maxSteps\":20,\"approvalRequired\":\"OPTIONAL\"}' "
-                            + "FROM agent_version v JOIN agent a ON a.agent_id = v.agent_id "
-                            + "JOIN tenant t ON t.tenant_id = v.tenant_id "
-                            + "WHERE t.slug = ? AND a.name = 'agent1' AND v.version_number = 1 "
-                            + "ON CONFLICT DO NOTHING")) {
-                ps.setString(1, slug);
-                ps.executeUpdate();
-            }
-            conn.commit();
+            Thread.sleep(100L);
         }
+        long stillPending = adminCount("SELECT count(*) FROM agent_message_queue WHERE tenant_id = '"
+                + tenantA + "'::uuid AND state = 'PENDING'");
+        adminExec("DELETE FROM agent_message_queue WHERE tenant_id = '" + tenantA + "'::uuid");
+
+        assertThat(stillPending)
+                .as("⚠️⚠️ 本 IT 专用租户 %s 的探针消息被外部消费者领走了 —— "
+                        + "说明有平台实例的 `agent.worker.tenant-slugs` 覆盖了这个租户。"
+                        + "此时「入队→领取」是竞态而非验证，请把该 slug 从 worker 配置中移除"
+                        + "（本 IT 只允许消费 it- 前缀的租户）", SLUG_A)
+                .isEqualTo(1L);
     }
+
 
     /** 建一条 Run（队列表有 FK 指向 run）。 */
     private static String createRun(String tenantId) throws SQLException {

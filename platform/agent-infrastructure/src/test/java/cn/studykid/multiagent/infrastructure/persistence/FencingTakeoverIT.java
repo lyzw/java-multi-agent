@@ -61,9 +61,12 @@ class FencingTakeoverIT {
         FaultInjectionSupport.requireNonPrivileged(appPool);
         claimRepo = new JdbcRunClaimRepository(appPool);
         creationRepo = new JdbcRunCreationRepository(appPool);
-        tenantId = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-a");
-        FaultInjectionSupport.ensureTenantSnapshot(adminPool, "t-a");
-        snapshotId = FaultInjectionSupport.snapshotIdBySlug(adminPool, "t-a");
+        // ⚠️ 必须用 IT 专用租户（2026-11-02 迁移）：常驻实例默认轮询 t-a，
+        //    会抢先 claim 本类刚建的 QUEUED Run，断言随即变成「任务未被领取」的竞态。
+        tenantId = FaultInjectionSupport.itTenant(adminPool, "it-fence-a");
+        snapshotId = FaultInjectionSupport.itSnapshot(adminPool, tenantId);
+        // 回收上一轮遗留的 Run，避免「接管候选集」随轮次膨胀（快照不可删，不处理）。
+        FaultInjectionSupport.purgeItTenantRuns(adminPool, "it-fence-a");
     }
 
     /**

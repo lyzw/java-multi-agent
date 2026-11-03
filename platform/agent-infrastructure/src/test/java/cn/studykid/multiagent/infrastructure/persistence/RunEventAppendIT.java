@@ -57,6 +57,9 @@ class RunEventAppendIT {
     private static final Clock CLOCK =
             Clock.fixed(Instant.parse("2026-10-21T02:00:00Z"), ZoneOffset.UTC);
 
+    private static final String SLUG_A = "it-evt-a";
+    private static final String SLUG_B = "it-evt-b";
+
     private static HikariDataSource appPool;
     private static JdbcRunEventAppendRepository appendRepo;
     private static JdbcRunEventQueryRepository queryRepo;
@@ -103,20 +106,23 @@ class RunEventAppendIT {
         queryRepo = new JdbcRunEventQueryRepository(appPool);
         creationRepo = new JdbcRunCreationRepository(appPool);
 
-        tenantA = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-a'");
-        tenantB = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-b'");
-        // ⚠️ 必须**按租户过滤**（2026-10-23 实测修正）：
-        //    原来是无条件 `LIMIT 1`，取到的是「物理顺序里的第一条」快照——
-        //    只要库里有别的租户的快照（任何 IT 建过快照都可能留下），
-        //    就会取到**别的租户**的快照 → run 的复合外键
-        //    (tenant_id, snapshot_id) 报错 → 本 IT 整片变红，
-        //    而失败现场（外键冲突）与真因（夹具选取不当）相距很远。
-        snapshotId = adminQuery("SELECT snapshot_id::text FROM execution_snapshot"
-                + " WHERE tenant_id='" + tenantA + "'::uuid LIMIT 1");
-        if (snapshotId == null || snapshotId.isBlank()) {
-            throw new IllegalStateException(
-                    "缺少 t-a 的执行快照：请先应用 migration/verify/V1_seed.sql");
-        }
+        // ⚠️ 用 it- 专用租户，不用种子租户 t-a/t-b（2026-11-03 修正）。
+        //    本机常驻运行实例按 agent.worker.tenant-slugs 只轮询 t-a，会把本类刚建的
+        //    Run 领走并**追加它自己的事件**；于是 containsExactly 的失败信息读起来是
+        //    「事件追加链路坏了」，真因却是「有第二个写者」。t-b 目前虽不被轮询，
+        //    但一旦有人改了 tenant-slugs 就会静默复发，故一并迁走。
+        FaultInjectionSupport.ItTenantRef refA =
+                FaultInjectionSupport.provisionItTenant(SLUG_A);
+        FaultInjectionSupport.ItTenantRef refB =
+                FaultInjectionSupport.provisionItTenant(SLUG_B);
+        tenantA = refA.tenantId();
+        tenantB = refB.tenantId();
+        // 快照必须取本租户的：run 的复合外键 (tenant_id, snapshot_id) 受 RLS 过滤，
+        // 取到他租户的快照会报「Key is not present in execution_snapshot」。
+        snapshotId = refA.snapshotId();
+        // 回收历史 Run（子表全 CASCADE，可删）；快照不可删，故不动。
+        FaultInjectionSupport.purgeItTenantRuns(SLUG_A);
+        FaultInjectionSupport.purgeItTenantRuns(SLUG_B);
     }
 
     // ── 测试 ────────────────────────────────────────────────────────
@@ -324,33 +330,6 @@ class RunEventAppendIT {
     }
 
     // ── 辅助 ────────────────────────────────────────────────────────
-
-    /**
-     * 以超级用户读取——<b>仅用于测试准备阶段</b>定位种子数据。
-     * 被测逻辑一律走非特权连接。
-     */
-    private static String adminQuery(String sql) throws Exception {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
-        cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
-        // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
-        // 密口认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，
-        // 否则连接失败（错误作用域级隔离可能被误读为「失效」）。
-        String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
-        if (adminPwd != null && !adminPwd.isBlank()) {
-            cfg.setPassword(adminPwd);
-        }
-        cfg.setMaximumPoolSize(1);
-        try (HikariDataSource adminPool = new HikariDataSource(cfg);
-             Connection conn = adminPool.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             var rs = ps.executeQuery()) {
-            assertThat(rs.next())
-                    .as("种子数据缺失，请先执行 ./scripts/dev-it-db.sh")
-                    .isTrue();
-            return rs.getString(1);
-        }
-    }
 
     /** 建一个真实 Run（走生产创建端口，顺带产出 RUN_CREATED 初始事件）。 */
     private static String newRun(String tenantId) {

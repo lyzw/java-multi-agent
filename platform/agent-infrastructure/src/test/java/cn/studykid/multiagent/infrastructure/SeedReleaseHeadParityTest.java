@@ -19,43 +19,27 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 而目录有 14 个已发布对象 → 除 {@code e2e-minimax} 外每个 Agent 闭包算不出 →
  * Run 无能力快照 → {@code CONFIG_UNAVAILABLE}。
  *
- * <p>为此同一段推导存在<b>两份</b>：
- * {@code deploy/sql/platform/patch_cap_release_head.sql}（已初始化的库）与
- * {@code deploy/sql/platform/02_platform_seed.sql} 末尾附录（空库复放）。
- * 两份只要漂一点，就会出现「补丁修好了库、种子仍复放出坏库」——
- * 而这恰好是本轮最难查的那类缺陷，所以用断言钉住，不靠 Code Review 自觉。
+ * <p><b>⚠️ 2026-11-01 数据库脚本收敛后的形状</b>：原「补丁 + 种子附录」两份同源
+ * 收敛为<b>单一权威源</b> —— {@code deploy/sql/platform/02_platform_seed.sql} 附录 A
+ * （原 {@code patch_cap_release_head.sql} 已随全部增量 patch 脚本删除，见 deploy/sql/README.md
+ * 收编清单）。本门禁相应改为只钉种子附录：
+ * 推导正文必须存在、必须来自定义表推导（不是写死对象清单）、必须含产品 codec
+ * 指纹形态、必须无事务控制（种子内联复放的前提）、必须补建缺失的 PLATFORM 指针。
+ * 任何一条漂移都意味着新库会复放出「定义表有对象、发布头/指针却空缺」的坏库。
  *
- * <p>⚠️ 第二份是<b>手写</b>的、不是 {@code pg_dump} 产物：重新导出种子会丢掉附录。
+ * <p>⚠️ 附录是<b>手写</b>的、不是 {@code pg_dump} 产物：重新导出种子会丢掉附录，
  * {@link #seedRetainsDerivedReleaseHeadAppendix()} 同时是那条 README 警告的构建期兜底。
  */
 class SeedReleaseHeadParityTest {
 
-    private static final String PATCH_RELATIVE_PATH =
-            "deploy/sql/platform/patch_cap_release_head.sql";
     private static final String SEED_RELATIVE_PATH =
             "deploy/sql/platform/02_platform_seed.sql";
 
-    /** 推导正文的起点标记：补丁的第 0 步（序列校正）。 */
+    /** 推导正文的起点标记：附录 A 的第 0 步（序列校正）。 */
     private static final String BODY_START = "-- ── 0.";
 
     /** 附录里产品 codec 的指纹前缀 —— 摘要口径变了必须让它红。 */
     private static final String FINGERPRINT_PREFIX = "'cfg_agg_v1:'";
-
-    @Test
-    @DisplayName("补丁与种子附录的推导正文必须逐字相同（两份同源，不许漂）")
-    void patchAndSeedAppendixAreIdentical() {
-        String patch = body(read(PATCH_RELATIVE_PATH), PATCH_RELATIVE_PATH);
-        String seed = body(read(SEED_RELATIVE_PATH), SEED_RELATIVE_PATH);
-
-        assertThat(seed)
-                .as("02_platform_seed.sql 末尾的发布头附录与 patch_cap_release_head.sql 正文漂移了")
-                .isEqualTo(patch);
-        assertThat(patch).contains(
-                "cap_config_pointer",
-                "cap_config_release",
-                "setval('public.cap_config_publish_seq'",
-                "aggregate_fingerprint");
-    }
 
     @Test
     @DisplayName("种子必须自带推导附录，且推导来自定义表而非写死对象清单")
@@ -81,20 +65,20 @@ class SeedReleaseHeadParityTest {
     @Test
     @DisplayName("PLATFORM 指针的「缺失则创建」不能少 —— deploy/sql 里没人写过这张表")
     void platformPointerIsCreatedWhenMissing() {
-        String patch = read(PATCH_RELATIVE_PATH);
+        String seed = read(SEED_RELATIVE_PATH);
 
-        assertThat(patch).contains("INSERT INTO public.cap_config_pointer");
-        assertThat(patch).contains("SELECT 'PLATFORM', 'PLATFORM', NULL");
-        assertThat(patch).contains("WHERE NOT EXISTS (SELECT 1 FROM public.cap_config_pointer p");
+        assertThat(seed).contains("INSERT INTO public.cap_config_pointer");
+        assertThat(seed).contains("SELECT 'PLATFORM', 'PLATFORM', NULL");
+        assertThat(seed).contains("WHERE NOT EXISTS (SELECT 1 FROM public.cap_config_pointer p");
     }
 
     @Test
     @DisplayName("推导不含事务控制，才能被种子内联复放")
     void derivationIsTransactionFree() {
-        String patch = body(read(PATCH_RELATIVE_PATH), PATCH_RELATIVE_PATH);
+        String seed = body(read(SEED_RELATIVE_PATH), SEED_RELATIVE_PATH);
 
-        assertThat(patch.toUpperCase(java.util.Locale.ROOT))
-                .as("补丁里出现 BEGIN/COMMIT 会让 02_platform_seed.sql 内联复放时提前提交")
+        assertThat(seed.toUpperCase(java.util.Locale.ROOT))
+                .as("种子附录推导正文里出现 BEGIN/COMMIT 会让 02_platform_seed.sql 内联复放时提前提交")
                 .doesNotContain("COMMIT;")
                 .doesNotContain("BEGIN;");
     }

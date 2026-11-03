@@ -35,17 +35,23 @@ import cn.studykid.multiagent.ports.persistence.ErasurePort.ErasureCertificate;
 /**
  * 数据保留与删除集成测试（P4-D04）。
  *
- * <p><b>本类证明的核心命题</b>（真实 PG17、非特权角色 {@code app_agent}）：
+ * <p><b>本类证明的核心命题</b>（真实 PG、<b>双凭据</b>：应用 {@code app_agent} + 清理 {@code agent_retention}）：
  * <ol>
  *   <li><b>四类数据按承诺被清理</b>——到期即删，未到期不动；</li>
  *   <li><b>Prompt 清理不删行</b>（I-4）：{@code run} 行保留、
  *       {@code weakness_record} <b>不被级联删除</b>；</li>
  *   <li><b>审计受控通道</b>（I-1/I-2）：UPDATE 永远被拒；
- *       DELETE 未声明 actor 时被拒，声明后放行；</li>
+ *       删除需<b>清理身份 + actor 声明</b>同时具备 ——
+ *       应用凭据连 DELETE 权限都没有（凭据隔离），有清理身份但缺 actor 仍被触发器拒绝；</li>
  *   <li><b>租户隔离</b>（I-3）：A 的清理不影响 B；</li>
  *   <li><b>凭证幂等</b>（D-6）：同一窗口重复运行只产生一张凭证；</li>
  *   <li><b>撤回履约</b>（FR-019）：登记 → 到期 → 删除 → 留凭证。</li>
  * </ol>
+ *
+ * <p>⚠️ <b>为什么需要 {@code IT_RETENTION_PASSWORD}</b>：{@code 04_retention_role.sql}
+ * 已把 {@code audit_record} / {@code erasure_certificate} 的 DELETE 从应用角色撤销，
+ * 清理测试若仍用应用池，得到的是 {@code permission denied}（指向配置，与清理逻辑无关）。
+ * 缺该变量时本类整体跳过 —— 但<b>跳过不等于「清理通道已验证」</b>。
  *
  * <p>⚠️ <b>每个用例自带夹具与清理</b>（F-8 纪律）：
  * 清理范围<b>严格等于</b>创建范围（按显式 ID 删），
@@ -53,13 +59,17 @@ import cn.studykid.multiagent.ports.persistence.ErasurePort.ErasureCertificate;
  * 且污染的是<b>后来者</b>，失败现场会指向完全错误的方向。
  */
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
+@EnabledIfEnvironmentVariable(named = "IT_RETENTION_PASSWORD", matches = ".+")
 class RetentionErasureIT {
 
     private static final String SLUG_A = "t-a";
     private static final String SLUG_B = "t-b";
 
     private static HikariDataSource admin;
+    /** 应用通道（{@code app_agent}）：验证「应用凭据删不了审计」。 */
     private static HikariDataSource app;
+    /** 清理通道（{@code agent_retention}）：清理逻辑唯一合法的执行凭据。 */
+    private static HikariDataSource retention;
 
     private static String tenantA;
     private static String tenantB;
@@ -76,7 +86,12 @@ class RetentionErasureIT {
     static void setUp() throws Exception {
         admin = FaultInjectionSupport.adminPool();
         app = FaultInjectionSupport.appPool(8);
+        retention = FaultInjectionSupport.retentionPool(4);
         FaultInjectionSupport.requireNonPrivileged(app);
+        // ⚠️ 清理通道必须**是**清理通道：若它实际连成了应用角色或超级用户，
+        //    「凭据隔离」这一层就没人验证（与 requireNonPrivileged 同一类守护）。
+        requireRetentionIdentity(retention);
+        requireAppCannotDeleteAudit(app);
 
         tenantA = FaultInjectionSupport.tenantIdBySlug(admin, SLUG_A);
         tenantB = FaultInjectionSupport.tenantIdBySlug(admin, SLUG_B);
@@ -93,7 +108,11 @@ class RetentionErasureIT {
         //    且报错指向「外键」而非真正的错因「夹具拿错了租户」。
         snapshotA = FaultInjectionSupport.snapshotIdBySlug(admin, SLUG_A);
         snapshotB = FaultInjectionSupport.snapshotIdBySlug(admin, SLUG_B);
+
+        // ⚠️ 这里**不清理**删除凭证：凭证表由 forbid_certificate_mutation() 无条件保护（L-4）。
+        //    由此带来的纪律是：凭证相关断言只能写「本次是否新增」，不能写「表里有没有」。
     }
+
 
     /** 按租户取它自己的 snapshot，避免复合外键越租户。 */
     private static String snapshotOf(String tenantId) {
@@ -110,29 +129,41 @@ class RetentionErasureIT {
             for (String id : createdRuns) {
                 exec(c, "DELETE FROM run WHERE run_id = ?::uuid", id);
             }
-            // ⚠️ audit_record 有追加不可改触发器，清理必须走受控通道：
-            //    admin（超级用户）同样受触发器约束——触发器不区分角色，
-            //    这正是 R-3 防线的设计意图。故此处必须显式声明 actor。
-            for (String id : createdAudits) {
-                try (PreparedStatement decl = c.prepareStatement(
-                        "SELECT set_config('agent.retention.actor', ?, true)")) {
-                    decl.setString(1, "retention-it-cleanup");
-                    try (ResultSet rs = decl.executeQuery()) {
-                        rs.next();
-                    }
+        }
+
+        // ⚠️ 审计与删除凭证只能走**清理凭据**（2026-11-02 起应用角色已无 DELETE）。
+        //    并且必须在**同一个事务内**先声明 actor 再删：
+        //    set_config(..., true) 是事务局部设置，autocommit 下执行完即失效，
+        //    紧接着的 DELETE 看不到 actor，会被追加不可改触发器拒绝
+        //    （这正是本类改造前 tearDown 报错的原因 —— 报错点在清理，真因在事务边界）。
+        try (Connection c = retention.getConnection()) {
+            c.setAutoCommit(false);
+            // ⚠️ 三个表（audit_record / consent_withdrawal / erasure_certificate）都是 FORCE RLS：
+            //    不绑定租户时 DELETE 影响 0 行**且不报错** —— 清理静默失效。
+            FaultInjectionSupport.bind(c, tenantA);
+            try (PreparedStatement decl = c.prepareStatement(
+                    "SELECT set_config('agent.retention.actor', ?, true)")) {
+                decl.setString(1, "retention-it-cleanup");
+                try (ResultSet rs = decl.executeQuery()) {
+                    rs.next();
                 }
+            }
+            for (String id : createdAudits) {
                 exec(c, "DELETE FROM audit_record WHERE audit_id = ?::uuid", id);
             }
-            // 撤回登记与凭证
             for (String id : createdStudents) {
                 exec(c, "DELETE FROM consent_withdrawal WHERE student_id = ?", id);
-                exec(c, "DELETE FROM erasure_certificate WHERE subject_key = ?", id);
             }
-            exec(c, "DELETE FROM erasure_certificate WHERE tenant_id = ?::uuid", tenantA);
-            exec(c, "DELETE FROM erasure_certificate WHERE tenant_id = ?::uuid", tenantB);
+            c.commit();
         }
+        // ⚠️ 凭证（erasure_certificate）**不清理**：它由 forbid_certificate_mutation()
+        //    无条件保护（连清理凭据也删不掉），这是 L-4「证据不可销毁」的本意。
+        //    由此有条纪律：凭证相关断言只能写「本次是否新增」，不能写「表里有没有」。
         if (app != null) {
             app.close();
+        }
+        if (retention != null) {
+            retention.close();
         }
         if (admin != null) {
             admin.close();
@@ -279,10 +310,26 @@ class RetentionErasureIT {
         void directDeleteWithoutActorRejected() throws Exception {
             String auditId = newAudit(tenantA, daysAgo(200));
 
-            // ⚠️ 刻意用裸连接模拟「有人绕过 Repository 直连删」的情形。
-            //    若这条能删成功，R-3 防线就形同虚设。
+            // ⚠️ 这条用例现在断言**两道**防线，而不是一道（2026-11-02 起）。
+            //    加固前的实现：任何拿到应用凭据的会话都能
+            //        SELECT set_config('agent.retention.actor','anyone',true); DELETE ...
+            //    于是触发器那只 GUC 就是「审计不可篡改」的全部强度 ——
+            //    它等价于「拿到应用凭据」，而那条凭据本来就到处都有。
+            //
+            //    第 ①道：应用凭据在**结构上**删不了审计行（权限即被撤销，
+            //            根本走不到触发器）。这是更强的保证，必须先断它；
+            //    第 ②道：即便拿到清理凭据，缺 actor 声明仍被触发器拒绝
+            //            （此时 actor 只用于留痕，不再是放行依据）。
+            //
+            //    ⚠️ 只断 ②、不断 ①，会让「凭据已隔离」这件事无人验证 ——
+            //       一旦有人把 DELETE 授回 app_agent，测试依然全绿。
             assertThatThrownBy(() -> deleteAuditDirectly(tenantA, auditId, false))
-                    .as("⚠️ 未声明操作主体的审计删除必须被触发器拒绝（I-2）")
+                    .as("应用凭据（app_agent）竟然能 DELETE 审计行 —— 凭据隔离已失效")
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("permission denied");
+
+            assertThatThrownBy(() -> deleteAuditDirectlyAsRetention(tenantA, auditId, false))
+                    .as("⚠️ 有清理身份但未声明操作主体：必须被触发器拒绝（I-2）")
                     .isInstanceOf(SQLException.class)
                     .hasMessageContaining("追加不可改");
 
@@ -411,12 +458,31 @@ class RetentionErasureIT {
         @Test
         @DisplayName("R-6b 无变更时不写凭证（避免空凭证淹没举证材料）")
         void noCertificateWhenNothingHappened() throws Exception {
+            // ⚠️ 这里刻意跑**两次**，而不是「跑一次然后断言表里没有凭证」。
+            //    两个原因，都是踩过的坑：
+            //    ① 凭证表由 forbid_certificate_mutation() 无条件保护，连清理凭据也删不掉，
+            //       同轮其它用例（R-6a 等）产生的凭证会永久留在库里 ——
+            //       「表为空」既依赖执行顺序，又永远无法通过；
+            //    ② 首次运行可能确实有到期数据（同轮用例留下的），会合法地产生一张凭证。
+            //       第二次运行时库里已经没有到期数据，于是「什么都没发生」这个前提
+            //       由**本次运行自己**保证，不依赖用例顺序。
             RetentionPurgeService service = purgeService();
             service.runOnce(tenantA);
 
-            List<ErasureCertificate> certs = erasure().findCertificates(
-                    tenantA, ErasureCertificate.REASON_RETENTION_EXPIRED, 50);
-            assertThat(certs).as("无实际删除时不应留下凭证").isEmpty();
+            List<ErasureCertificate> before = erasure().findCertificates(
+                    tenantA, ErasureCertificate.REASON_RETENTION_EXPIRED, 500);
+
+            service.runOnce(tenantA);
+
+            List<ErasureCertificate> after = erasure().findCertificates(
+                    tenantA, ErasureCertificate.REASON_RETENTION_EXPIRED, 500);
+
+            assertThat(after)
+                    .as("无实际删除时不应新增凭证（空凭证会淹没真正的举证材料）")
+                    .hasSameSizeAs(before);
+            assertThat(after)
+                    .as("除数量外，既有凭证内容也不得被改写（凭证不可变）")
+                    .containsExactlyElementsOf(before);
         }
     }
 
@@ -508,8 +574,45 @@ class RetentionErasureIT {
     // 夹具
     // ══════════════════════════════════════════════════════════════
 
+    /**
+     * 被测对象 —— <b>跑在清理凭据上</b>（与生产 {@code RetentionConfig} 一致）。
+     *
+     * <p>⚠️ 历史写法是 {@code new JdbcErasureRepository(app)}：在应用角色还有
+     * DELETE 权的年代能过，凭据隔离落地后必然 {@code permission denied}。
+     * 那时若为了让测试变绿而把 DELETE 授回应用角色，等于<b>用测试倒逼安全降级</b>。
+     */
     private static ErasurePort erasure() {
-        return new JdbcErasureRepository(app);
+        return new JdbcErasureRepository(retention);
+    }
+
+    /** 清理通道必须真的是清理通道（否则「凭据隔离」这层无人验证）。 */
+    private static void requireRetentionIdentity(DataSource ds) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT current_user, pg_has_role(current_user, 'agent_retention', 'MEMBER')");
+             ResultSet rs = ps.executeQuery()) {
+            assertThat(rs.next()).isTrue();
+            String who = rs.getString(1);
+            assertThat(rs.getBoolean(2))
+                    .as("清理数据源当前角色 %s 不具备 agent_retention 成员身份："
+                            + "清理会 permission denied，且报错点离真因（配错凭据）很远", who)
+                    .isTrue();
+        }
+    }
+
+    /** 应用通道必须删不了审计（凭据隔离的**正向**断言，防止哪一天被授回去）。 */
+    private static void requireAppCannotDeleteAudit(DataSource ds) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT current_user, has_table_privilege(current_user, 'audit_record', 'DELETE')");
+             ResultSet rs = ps.executeQuery()) {
+            assertThat(rs.next()).isTrue();
+            String who = rs.getString(1);
+            assertThat(rs.getBoolean(2))
+                    .as("应用角色 %s 竟持有 audit_record 的 DELETE —— 凭据隔离未生效"
+                            + "（04_retention_role.sql 未执行，或权限被改回）", who)
+                    .isFalse();
+        }
     }
 
     private static RetentionPurgeService purgeService() {
@@ -646,6 +749,38 @@ class RetentionErasureIT {
     private static void deleteAuditDirectly(String tenantId, String auditId, boolean declareActor)
             throws SQLException {
         try (Connection c = FaultInjectionSupport.rawAppConnection()) {
+            c.setAutoCommit(false);
+            FaultInjectionSupport.bind(c, tenantId);
+            if (declareActor) {
+                try (PreparedStatement ps = c.prepareStatement(
+                        "SELECT set_config('agent.retention.actor', ?, true)")) {
+                    ps.setString(1, "rogue");
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                    }
+                }
+            }
+            try (PreparedStatement ps = c.prepareStatement(
+                    "DELETE FROM audit_record WHERE audit_id = ?::uuid")) {
+                ps.setString(1, auditId);
+                ps.executeUpdate();
+            }
+            c.commit();
+        }
+    }
+
+    /**
+     * 以<b>清理身份</b>（{@code agent_retention}）绕过 Repository 直接删除审计。
+     *
+     * <p>⚠️ 与 {@link #deleteAuditDirectly} 的区别是「用什么凭据」：
+     * 前者用应用凭据（今天已无 DELETE 权限），后者用清理凭据（有 DELETE，但仍须 actor）。
+     * 两条路径分别对应防线的两层，缺任一层都不能说明加固有效。
+     *
+     * @param declareActor 是否声明受控清理主体——缺它即被触发器拒绝（留痕判据）
+     */
+    private static void deleteAuditDirectlyAsRetention(String tenantId, String auditId, boolean declareActor)
+            throws SQLException {
+        try (Connection c = FaultInjectionSupport.rawRetentionConnection()) {
             c.setAutoCommit(false);
             FaultInjectionSupport.bind(c, tenantId);
             if (declareActor) {

@@ -44,6 +44,8 @@ import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class TransactionBoundaryIT {
 
+    private static final String SLUG = "it-tx-a";
+
     private static HikariDataSource appPool;
     private static JdbcRunCreationRepository repo;
     private static String tenantA;
@@ -86,8 +88,16 @@ class TransactionBoundaryIT {
         appPool = new HikariDataSource(cfg);
         repo = new JdbcRunCreationRepository(appPool);
 
-        tenantA = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-a'");
-        snapshotId = adminQuery("SELECT snapshot_id::text FROM execution_snapshot LIMIT 1");
+        // ⚠️ 用 it- 专用租户，不用种子租户 t-a（2026-11-03 修正）。
+        //    常驻运行实例只轮询 t-a，会把本类提交的 Run 领走并改写状态 / 追加事件；
+        //    本类的断言多为「某 runId 的计数」，被外部改写后失败信息指向事务边界，
+        //    真因却是「有第二个写者」。
+        FaultInjectionSupport.ItTenantRef ref =
+                FaultInjectionSupport.provisionItTenant(SLUG);
+        tenantA = ref.tenantId();
+        // 快照必须取本租户的：run 的 FK 校验受 FORCE RLS 过滤（见 RunCreationAtomicityIT）
+        snapshotId = ref.snapshotId();
+        FaultInjectionSupport.purgeItTenantRuns(SLUG);
     }
 
     @AfterEach
@@ -226,29 +236,6 @@ class TransactionBoundaryIT {
 
     private static TenantContext sysCtx(String tenantId) {
         return new TenantContext(tenantId, "system", Set.of(), 0L);
-    }
-
-    private static String adminQuery(String sql) throws Exception {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
-        cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
-        // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
-        // 密口认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，
-        // 否则连接失败（错误作用域级隔离可能被误读为「失效」）。
-        String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
-        if (adminPwd != null && !adminPwd.isBlank()) {
-            cfg.setPassword(adminPwd);
-        }
-        cfg.setMaximumPoolSize(1);
-        try (HikariDataSource adminPool = new HikariDataSource(cfg);
-             Connection conn = adminPool.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             var rs = ps.executeQuery()) {
-            assertThat(rs.next())
-                    .as("种子数据缺失，请先执行 ./scripts/dev-postgres.sh start")
-                    .isTrue();
-            return rs.getString(1);
-        }
     }
 
     private static long inTenant(String tenantId, String sql, Object... args) throws Exception {

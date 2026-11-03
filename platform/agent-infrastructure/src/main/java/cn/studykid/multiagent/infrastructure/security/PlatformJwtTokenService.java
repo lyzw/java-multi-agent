@@ -137,6 +137,23 @@ public final class PlatformJwtTokenService {
     }
 
     /**
+     * 治理票据里唯一携带的角色：<b>只表示「可签发全局语料的审核结论」</b>。
+     *
+     * <p><b>⚠️ 这是资质声明，不是平台角色</b>：
+     * <ul>
+     *   <li>平台授权矩阵（{@code PlatformRolePermissionMatrix}）<b>不收录</b>它，
+     *       所以持票者在平台域任何端点依旧是「默认拒绝」——
+     *       票据不会被当成登录态使用（这正是原先签空角色的初衷）；</li>
+     *   <li>RAG 侧 {@code SegregationOfDuties} 认它，据此放行 VERIFIED 的角色闸门。</li>
+     * </ul>
+     *
+     * <p>命名刻意带 {@code RAG} 前缀且与平台角色命名空间区分开：
+     * 看到 {@code PLATFORM_RESOURCE_ADMIN} 会让人以为是平台角色，
+     * 而这里必须是「只对 RAG 审核有意义的一格授权」。
+     */
+    public static final String RAG_GOVERNANCE_ROLE = "RAG_CORPUS_GOVERNANCE";
+
+    /**
      * 治理票据的作用域 claim 名。
      *
      * <p>⚠️ 与 RAG 侧 {@code RagJwtAuthFilter#TICKET_SCOPE_CLAIM} <b>同名同义、各存一份</b>：
@@ -163,11 +180,25 @@ public final class PlatformJwtTokenService {
      * <p><b>为什么不能直接把登录令牌当票据用</b>：RAG 管理面能区分「调用方是平台域」，
      * 但平台域身份本身不等于「被授权改动全局语料」。票据多带的正是这一格授权声明。
      *
-     * <p><b>⚠️ {@code roles} 刻意签成空集合</b>：票据若带上持有者的角色，
-     * 它就同时是一枚<b>有效期内的平台登录态</b>——泄露到 RAG 侧访问日志里，
-     * 等于把「改全局语料」的授权扩成「持票者角色所能做的全部平台动作」。
-     * 带上空角色后，这枚令牌在平台域内<b>任何端点都过不了授权矩阵</b>（默认拒绝），
-     * 只在 RAG 管理面被认（那里不看角色，只看域 + 票据声明）。
+     * <p><b>⚠️ {@code roles} 只签一个专用的权限作用域角色，而不是持有者的真实角色</b>：
+     * 票据若带上持有者的真实角色，它就同时是一枚<b>有效期内的平台登录态</b>——
+     * 泄露到 RAG 侧访问日志里，等于把「改全局语料」的授权扩成
+     * 「持票者角色所能做的全部平台动作」。
+     *
+     * <p><b>为什么不能签成空集合</b>（曾经就是这样，实测踩到）：
+     * RAG 侧签发 VERIFIED 时有一道角色闸门（{@code SegregationOfDuties.checkRole}），
+     * 而空角色的票据在那道闸门面前<b>永远 403</b>；同时 RAG 的写上下文又要求
+     * 平台全局档必须持票据 —— 于是「有角色的人拿不到票据、有票据的人没有角色」，
+     * 平台上<b>任何角色都签不出全局语料的 VERIFIED</b>。
+     *
+     * <p>修法不是给票据塞真实角色（那会重新打开登录态泄漏面），而是签一个
+     * <b>只表示「这张票可签发全局语料审核结论」的专用角色</b>
+     * （{@link #RAG_GOVERNANCE_ROLE}）：
+     * <ul>
+     *   <li>它在平台授权矩阵里<b>不存在</b>，因此在平台域任何端点仍是默认拒绝；</li>
+     *   <li>RAG 侧把它识别为「已授权签发审核结论」，但**不**因此获得任何平台权限。</li>
+     * </ul>
+     * 这两条合起来才能同时满足：票据不能当登录态用 + 授权必须能到达 RAG。
      *
      * <p><b>受众与登录令牌一致</b>（{@code aud=admin-console-api}）：
      * 这是 RAG 侧平台域的既有判据，不是新开的口子——RAG 从不校验平台角色的权限码，
@@ -200,7 +231,7 @@ public final class PlatformJwtTokenService {
                 + "\"exp\":" + exp + ","
                 + "\"jti\":\"" + jti + "\","
                 + "\"principal_type\":\"" + IdentityDomains.PRINCIPAL_TYPE_PLATFORM + "\","
-                + "\"roles\":[],"
+                + "\"roles\":[\"" + RAG_GOVERNANCE_ROLE + "\"],"
                 + "\"authz_version\":" + principal.authzVersion() + ","
                 + "\"mfa\":" + principal.mfaVerified() + ","
                 + "\"" + RAG_SCOPE_CLAIM + "\":\"" + claim + "\""

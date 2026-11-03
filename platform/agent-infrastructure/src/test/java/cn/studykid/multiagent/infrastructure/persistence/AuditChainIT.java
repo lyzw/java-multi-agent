@@ -62,10 +62,16 @@ class AuditChainIT {
         audit = new JdbcAuditRepository(appPool);
         approvals = new JdbcApprovalRepository(appPool, audit);
 
-        tenantA = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-a");
-        tenantB = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-b");
-        FaultInjectionSupport.ensureTenantSnapshot(adminPool, "t-a");
-        snapshotA = FaultInjectionSupport.snapshotIdBySlug(adminPool, "t-a");
+        // ⚠️ 专用 IT 租户：本类写入 audit_record 并断言跨租户不可见；
+        //    用种子租户时，其他 IT 的审计残留与本类数据同处一个租户，
+        //    「按 resource_id 计数」尚可，但「按租户计数」类断言会互相污染。
+        tenantA = FaultInjectionSupport.itTenant(adminPool, "it-audit-a");
+        tenantB = FaultInjectionSupport.itTenant(adminPool, "it-audit-b");
+        snapshotA = FaultInjectionSupport.itSnapshot(adminPool, tenantA);
+        // 回收上一轮遗留的 Run（子表全部 ON DELETE CASCADE；快照不可删故不动）。
+        // 不回收的后果：Run 只增不减，库侧统计与「按租户取样」类断言会慢慢失真。
+        FaultInjectionSupport.purgeItTenantRuns(adminPool, "it-audit-a");
+        FaultInjectionSupport.purgeItTenantRuns(adminPool, "it-audit-b");
     }
 
     @AfterAll

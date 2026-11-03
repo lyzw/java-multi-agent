@@ -47,6 +47,9 @@ class RunCreationAtomicityIT {
     private static final Clock CLOCK =
             Clock.fixed(Instant.parse("2026-10-19T02:00:00Z"), ZoneOffset.UTC);
 
+    private static final String SLUG_A = "it-atomic-a";
+    private static final String SLUG_B = "it-atomic-b";
+
     private static HikariDataSource appPool;      // 非特权角色，用于验证 RLS
     private static JdbcRunCreationRepository repo;
     private static String tenantA;
@@ -87,42 +90,26 @@ class RunCreationAtomicityIT {
         appPool = new HikariDataSource(cfg);
         repo = new JdbcRunCreationRepository(appPool);
 
-        tenantA = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-a'");
-        tenantB = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-b'");
-        snapshotId = adminQuery("SELECT snapshot_id::text FROM execution_snapshot LIMIT 1");
+        // ⚠️ 用 it- 专用租户，不用种子租户 t-a/t-b（2026-11-03 修正）。
+        //    常驻运行实例只轮询 t-a，会把本类造的 Run 领走并改写终态；
+        //    本类断言「四者同生共死」的计数，被外部写入干扰后失败信息指向事务原子性，
+        //    真因却是「有第二个写者」。t-b 目前不被轮询，但 tenant-slugs 一改就会复发。
+        FaultInjectionSupport.ItTenantRef refA =
+                FaultInjectionSupport.provisionItTenant(SLUG_A);
+        FaultInjectionSupport.ItTenantRef refB =
+                FaultInjectionSupport.provisionItTenant(SLUG_B);
+        tenantA = refA.tenantId();
+        tenantB = refB.tenantId();
+        // 快照必须取**本租户**的（2026-11-01 实测）：
+        //    run.snapshot_id 的 FK 校验以当前用户身份执行，受 FORCE RLS 过滤 ——
+        //    无序 LIMIT 1 会随机拿到别的租户的快照，插 run 时
+        //    FK 检查在 RLS 下看不见那行 → 「Key is not present in execution_snapshot」。
+        snapshotId = refA.snapshotId();
+        FaultInjectionSupport.purgeItTenantRuns(SLUG_A);
+        FaultInjectionSupport.purgeItTenantRuns(SLUG_B);
     }
 
     // ── 查询辅助 ────────────────────────────────────────────────────
-
-    /**
-     * 以超级用户读取。
-     *
-     * <p><b>仅用于测试准备阶段</b>定位租户与快照。非特权角色受 RLS 限制，
-     * 未绑定租户上下文时读不到 {@code tenant} 表——这正是期望行为。
-     * 被测逻辑一律走非特权连接。
-     */
-    private static String adminQuery(String sql) throws Exception {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
-        cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
-        // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
-        // 密口认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，
-        // 否则连接失败（错误作用域级隔离可能被误读为「失效」）。
-        String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
-        if (adminPwd != null && !adminPwd.isBlank()) {
-            cfg.setPassword(adminPwd);
-        }
-        cfg.setMaximumPoolSize(1);
-        try (HikariDataSource adminPool = new HikariDataSource(cfg);
-             Connection conn = adminPool.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             var rs = ps.executeQuery()) {
-            assertThat(rs.next())
-                    .as("种子数据缺失，请先执行 ./scripts/dev-postgres.sh start")
-                    .isTrue();
-            return rs.getString(1);
-        }
-    }
 
     /**
      * 在租户上下文内执行查询。

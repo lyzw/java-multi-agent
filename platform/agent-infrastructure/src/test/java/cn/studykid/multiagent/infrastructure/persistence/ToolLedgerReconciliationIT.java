@@ -64,9 +64,11 @@ class ToolLedgerReconciliationIT {
         //    SUCCEEDED 路径不受宽限期影响（查到即收敛）
         reconciliation = new ToolOperationReconciliationService(
                 ledger, studentData, Duration.ofSeconds(-60));
-        tenantId = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-a");
-        FaultInjectionSupport.ensureTenantSnapshot(adminPool, "t-a");
-        snapshotId = FaultInjectionSupport.snapshotIdBySlug(adminPool, "t-a");
+        // ⚠️ IT 专用租户（2026-11-02 迁移）：避免与常驻实例共享 t-a 的 Run 池
+        tenantId = FaultInjectionSupport.itTenant(adminPool, "it-ledger-a");
+        snapshotId = FaultInjectionSupport.itSnapshot(adminPool, tenantId);
+        // 回收上一轮遗留的 Run（tool_operation / ledger 行随 run 级联删除）。
+        FaultInjectionSupport.purgeItTenantRuns(adminPool, "it-ledger-a");
     }
 
     /** 建 Run（账本外键要求真实 Run 存在）并登记一个 UNKNOWN 操作。 */

@@ -1326,6 +1326,41 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 平台租户生命周期仓储（{@code platform.tenant} / tenant_quota / capability_grant）。
+     *
+     * <p>⚠️ <b>走平台运维角色数据源，不走主数据源</b>（2026-11-01）：
+     * app_agent 对 {@code platform.tenant} 只有 SELECT（登记元数据只读），
+     * 开通/状态迁移/配额/能力授予的写路径必须由 platform_ops 执行
+     * （03_platform_roles.sql §2b）。运维数据源未接入时 fail-closed。
+     * ⚠️ 消费方含 {@code RunRecoverySweeper}（30s 轮询读活跃租户），
+     * 该轮询将经由运维连接池 —— 池小（默认 2），轮询是毫秒级短查询，可接受。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.PlatformTenantPort
+            platformTenantPort(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
+                    platformOps) {
+        return new cn.studykid.multiagent.infrastructure.persistence
+                .JdbcPlatformTenantRepository(platformOps.platformIdentityDataSource());
+    }
+
+    /**
+     * 系统字典仓储（{@code platform.sys_dictionary} / sys_dictionary_item）。
+     *
+     * <p>⚠️ <b>走平台运维角色数据源，不走主数据源</b>（2026-11-01）：
+     * app_agent 对 platform 域字典表无授权（§2b 刻意不给整域），
+     * 主数据源实现会在运行期报 permission denied。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.DictionaryPort
+            platformDictionaryPort(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
+                    platformOps) {
+        return new cn.studykid.multiagent.infrastructure.persistence
+                .JdbcDictionaryRepository(platformOps.platformIdentityDataSource());
+    }
+
+    /**
      * 平台通道的变更申请单仓储（运维连接）。
      *
      * <p>⚠️ **必须是运维连接**：本表的 RLS 读写策略是严格相等
@@ -1748,6 +1783,20 @@ public class ApplicationConfiguration {
                     "${agent.retention.require-isolated-credential:false}")
             boolean requireIsolatedCredential) {
         return new AuditTamperProofGuard(jdbcTemplate, requireIsolatedCredential);
+    }
+
+    /**
+     * 决策日志就绪守卫（D6 / P2）。
+     *
+     * <p>⚠️ 开关开着却零记录，是本项目最熟悉的失败形态（{@code RetentionConfig} 已记过两次）。
+     * 本守卫用<b>零行写入探测</b>把「配了」升级为「实测过」；探测失败即拒绝启动。
+     */
+    @Bean
+    public AuthzDecisionLogGuard authzDecisionLogGuard(
+            @Value("${agent.authz.decision-log.enabled}") boolean enabled,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.security.AuthzDecisionRecorder> recorders) {
+        return new AuthzDecisionLogGuard(enabled, recorders);
     }
 
     /** 执行准入检查器（P2-T5 · §5.5 准入线性化）。 */

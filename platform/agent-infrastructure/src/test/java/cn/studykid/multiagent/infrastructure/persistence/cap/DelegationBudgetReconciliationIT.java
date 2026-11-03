@@ -268,7 +268,7 @@ class DelegationBudgetReconciliationIT extends CapITBase {
 
     /** 建一个可挂预算预留的 Run。 */
     private String newRun(String tenantId) {
-        String agentId = createAgentWithVersion(tenantId, uniqueName("it-deleg-agent"),
+        String agentId = createAgentWithVersion(tenantId, agentName("it-deleg-agent"),
                 "{}", true);
         String snapshotId = createExecutionSnapshot(tenantId, agentId);
         return createRun(tenantId, agentId, snapshotId);

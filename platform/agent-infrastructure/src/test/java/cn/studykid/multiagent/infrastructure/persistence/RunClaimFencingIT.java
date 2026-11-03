@@ -23,6 +23,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 
@@ -85,11 +86,41 @@ class RunClaimFencingIT {
         claimRepo = new JdbcRunClaimRepository(appPool);
         creationRepo = new JdbcRunCreationRepository(appPool);
 
-        tenantId = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-a'");
-        snapshotId = adminQuery("SELECT snapshot_id::text FROM execution_snapshot LIMIT 1");
+        tenantId = ensureItTenant();
+        // ⚠️ 快照必须取本租户的：run 的 FK 校验受 FORCE RLS 过滤（见 RunCreationAtomicityIT）
+        snapshotId = ItTenantProvisioner.snapshotId(adminDataSource(), tenantId);
     }
 
-    private static String adminQuery(String sql) throws Exception {
+    /**
+     * 建/取 IT 专用租户 `it-claim-a`，并清空它历史遗留的 Run。
+     *
+     * <p>⚠️ <b>原来用的是种子租户 {@code t-a}，那是本类偶发红的结构性原因</b>（2026-11-02 查清）：
+     * 开发机常驻实例按 {@code agent.worker.tenant-slugs}（默认 {@code t-a}）轮询，
+     * 会把本类刚建的 QUEUED Run 抢先 claim 掉 → 本类再 claim 时拿到的是
+     * 「已被别人持有、租约未过期」的行 → 报 {@code 任务 X 未被领取}。
+     * 这个断言失败长得像「fencing 逻辑坏了」，真因是「有第二个消费者」。
+     * IT 租户不以 {@code t-} 开头，常驻实例在结构上轮询不到，故问题不可复现。
+     */
+    private static String ensureItTenant() throws Exception {
+        String slug = "it-claim-a";
+        try (HikariDataSource pool = new HikariDataSource(adminConfig())) {
+            String id = ItTenantProvisioner.provision(
+                    pool, slug, "IT 专用租户 · 领取与围栏（勿删，幂等创建）");
+            // 只清本租户：本租户由 IT 独建，不存在真实业务数据
+            try (Connection c = pool.getConnection();
+                 var ps = c.prepareStatement("DELETE FROM run WHERE tenant_id = ?::uuid")) {
+                ps.setString(1, id);
+                ps.executeUpdate();
+            }
+            return id;
+        }
+    }
+
+    private static HikariDataSource adminDataSource() {
+        return new HikariDataSource(adminConfig());
+    }
+
+    private static HikariConfig adminConfig() {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
@@ -101,7 +132,11 @@ class RunClaimFencingIT {
             cfg.setPassword(adminPwd);
         }
         cfg.setMaximumPoolSize(1);
-        try (HikariDataSource adminPool = new HikariDataSource(cfg);
+        return cfg;
+    }
+
+    private static String adminQuery(String sql) throws Exception {
+        try (HikariDataSource adminPool = adminDataSource();
              Connection conn = adminPool.getConnection();
              var ps = conn.prepareStatement(sql);
              var rs = ps.executeQuery()) {

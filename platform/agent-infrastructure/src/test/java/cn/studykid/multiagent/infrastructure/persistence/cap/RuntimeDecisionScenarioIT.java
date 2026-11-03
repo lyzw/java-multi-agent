@@ -356,7 +356,7 @@ class RuntimeDecisionScenarioIT extends CapITBase {
     }
 
     private String seedAgent(String tenantId, String enabledSkillsJson) {
-        String agentId = createAgentWithVersion(tenantId, uniqueName("it-r2-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantId, agentName("it-r2-agent"), "{}", true);
         seedAgentVersion(tenantId, agentId, 1, enabledSkillsJson);
         return agentId;
     }

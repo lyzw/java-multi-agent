@@ -58,9 +58,13 @@ class RunEventNotifyIT {
         creation = new JdbcRunCreationRepository(appPool);
         // ⚠️ 种子/租户/快照经 **admin** 池读写（与既有 IT 一致）——
         //    app_agent 只做业务写入，这正是 E-3 要验证的边界。
-        tenantId = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-a");
-        FaultInjectionSupport.ensureTenantSnapshot(adminPool, "t-a");
-        snapshotId = FaultInjectionSupport.snapshotIdBySlug(adminPool, "t-a");
+        // ⚠️ 专用 IT 租户：本类要证明「写入事件后订阅者收到通知」，
+        //    而种子租户上的 Event 流会被运行实例的消费者同时消费 ——
+        //    「没收到通知」与「通知被别人消费了」在现场无法区分。
+        tenantId = FaultInjectionSupport.itTenant(adminPool, "it-notify-a");
+        snapshotId = FaultInjectionSupport.itSnapshot(adminPool, tenantId);
+        // 回收上一轮遗留的 Run（run_event 随 run 级联删除），避免事件计数类断言受历史行干扰。
+        FaultInjectionSupport.purgeItTenantRuns(adminPool, "it-notify-a");
     }
 
     @AfterAll

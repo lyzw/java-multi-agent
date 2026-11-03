@@ -13,7 +13,6 @@ import java.util.UUID;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.infrastructure.persistence.TenantSessionBinder;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort;
@@ -24,8 +23,12 @@ import cn.studykid.multiagent.ports.audit.PlatformAuditPort;
  * <p>仅追加写 {@code platform.platform_audit_event}（无 {@code tenant_id}），
  * 与租户侧 {@code audit_record} 分域。查询供 {@code /api/platform/v1/audit-events}
  * 使用，仅平台审计权限可访问。
+ *
+ * <p>⚠️ <b>装配归 bootstrap（AuthConfiguration#platformAuditPort），不再 @Repository</b>：
+ * app_agent 对 {@code platform_audit_event} 无授权（03_platform_roles.sql §2b 刻意不给），
+ * 组件扫描会把它挂到主数据源上，写审计即 permission denied ——
+ * 必须经 platformIdentityDataSource()（platform_ops）连接。
  */
-@Repository
 public class JdbcPlatformAuditRepository implements PlatformAuditPort {
 
     private final DataSource dataSource;

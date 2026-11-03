@@ -50,6 +50,16 @@ class GovernanceQueryIT {
             Clock.fixed(Instant.parse("2026-10-21T03:00:00Z"), ZoneOffset.UTC);
 
     private static HikariDataSource appPool;
+
+    /**
+     * 管理连接池（库 owner）：造夹具与对照查询用，<b>整个测试类共用一个</b>。
+     *
+     * <p>⚠️ 原实现的每个 {@code adminQuery / adminExec} 都 {@code new HikariDataSource(...)}
+     * 再 close —— 一次调用一个池。本类有 40+ 处调用，等于每跑一遍就创建销毁 40+ 个池：
+     * 日志里出现 {@code HikariPool-422} 这类编号、单类耗时被连接建立主导，
+     * 且池名最大编号正是「泄漏/抖动」的可疑信号。改为类级单例后行为不变、开销归零。
+     */
+    private static HikariDataSource adminPool;
     private static JdbcRunListQueryRepository runList;
     private static JdbcApprovalQueryRepository approvals;
     private static JdbcUnknownOperationRepository operations;
@@ -75,6 +85,10 @@ class GovernanceQueryIT {
             appPool.close();
             appPool = null;
         }
+        if (adminPool != null) {
+            adminPool.close();
+            adminPool = null;
+        }
     }
 
     @BeforeAll
@@ -92,6 +106,9 @@ class GovernanceQueryIT {
         cfg.setMaximumPoolSize(4);
         appPool = new HikariDataSource(cfg);
 
+        // 类级单例管理池（见字段注释：原实现每次调用新建一个池）
+        adminPool = FaultInjectionSupport.adminPool();
+
         // ⚠️ auditPort 写成 no-op：本类只关心查询，审计写入由其它 IT 覆盖。
         //    但**决策必须留痕**，故审批/处置用真实记录端口的等价最小实现替代——
         //    这里用记录到内存的替身，避免递归写审计再查审计。
@@ -102,9 +119,19 @@ class GovernanceQueryIT {
         audits = new JdbcAuditQueryRepository(appPool);
         creationRepo = new JdbcRunCreationRepository(appPool);
 
-        tenantA = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-a'");
-        tenantB = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug='t-b'");
-        snapshotId = adminQuery("SELECT snapshot_id::text FROM execution_snapshot LIMIT 1");
+        tenantA = FaultInjectionSupport.itTenant(adminPool, "it-gov-a");
+        tenantB = FaultInjectionSupport.itTenant(adminPool, "it-gov-b");
+        // ⚠️ 必须按租户取快照：`LIMIT 1` 不带租户条件会在**多租户的 IT 库**上取到别的租户的快照，
+        //    随后造 Run 会因复合外键 (tenant_id, snapshot_id) 失败，
+        //    而报错只说外键冲突，不说「你取错租户的快照了」。
+        //    （2026-11-02：各 IT 陆续改用 it- 专用租户后，库里的快照已不止种子那一份。）
+        snapshotId = FaultInjectionSupport.itSnapshot(adminPool, tenantA);
+
+        // 回收上一轮遗留的 Run：本类的翻页类断言（`list` 全序、游标翻页、按条件筛选）
+        // 都建立在「本租户的行就是本类造的行」之上；不回收则历史 Run 累积到数百条，
+        // 翻页上限与「每行都满足筛选条件」这类断言会随轮次变慢甚至失真。
+        FaultInjectionSupport.purgeItTenantRuns(adminPool, "it-gov-a");
+        FaultInjectionSupport.purgeItTenantRuns(adminPool, "it-gov-b");
     }
 
     // ── G7：Run 列表 ────────────────────────────────────────────────
@@ -402,9 +429,23 @@ class GovernanceQueryIT {
         assertThat(mathIds)
                 .as("⛔ 学科筛选必须真的生效，否则前端下拉是个摆设")
                 .doesNotContain(physicsRun);
-        assertThat(mathIds)
-                .as("筛选结果里的每一行都必须是该学科")
-                .allMatch(id -> "数学".equals(findItem(tenantA, id).subject()));
+        // ⚠️ 这里用**库里的真实 payload** 核对，而不是「再翻一次列表逐条取 subject」：
+        //    后者每查一条都要翻页（O(n²)），而且一旦租户数据量涨过一页就会以
+        //    「列表里找不到 run」的面貌炸掉 —— 真因是分页假设，不是筛选坏了。
+        //    用一次聚合查询反而更严格：直接拿库作基准，不依赖列表自身的一致性。
+        assertThat(mathIds).isNotEmpty();
+        String inList = mathIds.stream()
+                .map(id -> "'" + id + "'::uuid")
+                .collect(java.util.stream.Collectors.joining(","));
+        assertThat(adminQueryLong("SELECT count(*) FROM run WHERE tenant_id = '" + tenantA
+                + "'::uuid AND run_id IN (" + inList + ")"))
+                .as("筛选结果里的每个 runId 都必须属于本租户且真实存在")
+                .isEqualTo(mathIds.size());
+        assertThat(adminQueryLong("SELECT count(*) FROM run WHERE tenant_id = '" + tenantA
+                + "'::uuid AND run_id IN (" + inList + ") "
+                + "AND coalesce(input_payload->>'subject', '') <> '数学'"))
+                .as("⛔ 筛选结果里的每一行在库里都必须是数学（否则前端下拉是个摆设）")
+                .isZero();
     }
 
     @Test
@@ -605,8 +646,7 @@ class GovernanceQueryIT {
     // ── 辅助 ────────────────────────────────────────────────────────
 
     private static String adminQuery(String sql) {
-        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
-             Connection conn = adminPool.getConnection();
+        try (Connection conn = adminPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql);
              var rs = ps.executeQuery()) {
             assertThat(rs.next()).as("查询应返回一行: " + sql).isTrue();
@@ -619,8 +659,7 @@ class GovernanceQueryIT {
     /** 管理员查询多行（用于「某租户实际拥有哪些 Run」这类对照断言）。 */
     private static List<String> adminQueryList(String sql) {
         List<String> out = new java.util.ArrayList<>();
-        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
-             Connection conn = adminPool.getConnection();
+        try (Connection conn = adminPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql);
              var rs = ps.executeQuery()) {
             while (rs.next()) {
@@ -634,8 +673,7 @@ class GovernanceQueryIT {
 
     /** 管理员查询单值（计数等）。 */
     private static long adminQueryLong(String sql) {
-        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
-             Connection conn = adminPool.getConnection();
+        try (Connection conn = adminPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql);
              var rs = ps.executeQuery()) {
             assertThat(rs.next()).as("查询应返回一行: " + sql).isTrue();
@@ -645,24 +683,8 @@ class GovernanceQueryIT {
         }
     }
 
-    private static HikariConfig adminConfig() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
-        cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
-        // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
-        // 密口认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，
-        // 否则连接失败（错误作用域级隔离可能被误读为「失效」）。
-        String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
-        if (adminPwd != null && !adminPwd.isBlank()) {
-            cfg.setPassword(adminPwd);
-        }
-        cfg.setMaximumPoolSize(1);
-        return cfg;
-    }
-
     private static void adminExec(String sql) {
-        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
-             Connection conn = adminPool.getConnection();
+        try (Connection conn = adminPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.executeUpdate();
         } catch (Exception e) {
@@ -730,19 +752,37 @@ class GovernanceQueryIT {
     }
 
     /**
-     * 按 runId 取出列表项。
+     * 按 runId 取出列表项（沿游标翻页，直到找到或扫完）。
      *
      * <p>⚠️ <b>刻意带上「未来时刻」上界</b>：本类里有一条用例把 created_at
      * 归一到 2099-12-31（造同刻多行），而排序是 created_at DESC——
      * 不设上界，那几行会永远排在最前面，把真正要查的夹具挤出第一页。
+     *
+     * <p>⚠️⚠️ <b>不能写成「一次取 500 条再筛」</b>（2026-11-02 实测）：
+     * 共享库 `agent_dev` 的 `t-a` 里 Run 已累积到 **588 条**（每轮回归都在加），
+     * 于是新造的夹具刚好被挤出「一页 500 条」，报错是
+     * 「列表里找不到 run …」，而真因是<b>分页假设</b>而不是列表逻辑坏了。
+     * 任何「一页装得下」的假设都会随数据增长突然失效，且失效时机与改动无关。
      */
     private static RunListQueryPort.RunListItem findItem(String tenantId, String runId) {
         Instant upperBound = Instant.now().plusSeconds(60);
-        return runList.list(tenantId, null, null, null, upperBound, null, 500)
-                .items().stream()
-                .filter(i -> i.runId().equals(runId))
-                .findFirst()
-                .orElseThrow(() -> new AssertionError("列表里找不到 run " + runId));
+        String cursor = null;
+        long scanned = 0;
+        for (int page = 0; page < 500; page++) {
+            Page<RunListQueryPort.RunListItem> p =
+                    runList.list(tenantId, null, null, null, upperBound, cursor, 200);
+            for (RunListQueryPort.RunListItem i : p.items()) {
+                scanned++;
+                if (i.runId().equals(runId)) {
+                    return i;
+                }
+            }
+            if (p.items().isEmpty() || p.nextCursor() == null) {
+                break;
+            }
+            cursor = p.nextCursor();
+        }
+        throw new AssertionError("翻页扫完 " + scanned + " 条仍找不到 run " + runId);
     }
 
     private static java.util.Map<String, String> snapshotCache = new java.util.HashMap<>();

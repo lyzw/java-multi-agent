@@ -58,7 +58,7 @@ public class JdbcTraceFactRepository implements TraceFactPort {
                 return Optional.empty();
             }
             UsageFacts usage = readUsage(conn, runId);
-            List<ToolGroup> tools = readToolOperations(conn, runId);
+            List<ToolGroup> tools = readToolOperations(conn, tenantId, runId);
             Set<String> knownTools = readKnownToolNames(conn);
             StepFacts steps = readSteps(conn, runId);
             conn.commit();
@@ -261,7 +261,13 @@ public class JdbcTraceFactRepository implements TraceFactPort {
         }
     }
 
-    private List<ToolGroup> readToolOperations(Connection conn, UUID runId) throws SQLException {
+    private List<ToolGroup> readToolOperations(Connection conn, String tenantId, UUID runId)
+            throws SQLException {
+        // ⚠️ D13（JOIN 从表谓词）：RLS 会对查询树里**每一张表**注入 tenant_id，
+        //    应用层不会。退役 RLS 后，`att.operation_id = op.operation_id` 单键 JOIN
+        //    只保证「操作号相同」，不保证「同租户」——operation_id 一旦跨租户重复，
+        //    就会把他租户的 attempt 统计进本租户的失败率。
+        //    故从表补 `att.tenant_id = op.tenant_id`，主表补显式 `op.tenant_id = ?`。
         String sql = """
                 SELECT op.tool_name,
                        op.request_digest,
@@ -274,14 +280,18 @@ public class JdbcTraceFactRepository implements TraceFactPort {
                            FILTER (WHERE att.completed_at IS NOT NULL)          AS total_ms,
                        max(EXTRACT(EPOCH FROM (att.completed_at - att.started_at)) * 1000) AS max_ms
                 FROM public.tool_operation op
-                JOIN public.tool_operation_attempt att ON att.operation_id = op.operation_id
+                JOIN public.tool_operation_attempt att
+                  ON att.operation_id = op.operation_id
+                 AND att.tenant_id = op.tenant_id
                 WHERE op.run_id = ?::uuid
+                  AND op.tenant_id = ?::uuid
                 GROUP BY op.tool_name, op.request_digest
                 ORDER BY op.tool_name
                 """;
         Map<String, ToolGroup> groups = new LinkedHashMap<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, runId.toString());
+            ps.setString(2, tenantId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String key = rs.getString("tool_name") + "|" + rs.getString("request_digest");

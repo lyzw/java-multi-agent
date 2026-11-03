@@ -305,7 +305,7 @@ class CapabilitySnapshotWriterIT extends CapITBase {
 
     /** 建 Agent 并发布 v1（旧模型 + 双写出的 cap_agent_def v1）。 */
     private String publishAgent(String definition) {
-        String name = uniqueName("g3-agent");
+        String name = freshName("g3-agent");
         String agentId = agentManage.createAgent(tenantA, name, "G-3 用例", "creator-1").agentId();
         agentManage.publishVersion(tenantA, agentId, definition, "publisher-1");
         return agentId;

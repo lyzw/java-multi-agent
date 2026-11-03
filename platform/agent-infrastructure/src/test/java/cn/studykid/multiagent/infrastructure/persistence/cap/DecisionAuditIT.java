@@ -135,7 +135,9 @@ class DecisionAuditIT extends CapITBase {
     @DisplayName("✅ 拒绝的调用：DENY + NOT_EVALUATED + NOT_STARTED + 具体原因码")
     void deniedInvocationIsAuditedWithSpecificReasonCode() {
         // 该 Agent 未启用任何 Skill → SKILL_NOT_ENABLED
-        String deniedAgent = seedAgent(tenantA, "[]");
+        // ⚠️ 必须是**另一个** Agent：@BeforeEach 已经建了「启用 SKILL_ID」的默认 Agent，
+        //    同名复用会撞 cap_agent_def 主键。
+        String deniedAgent = seedAgent(tenantA, freshName("it-audit-agent-noskill"), "[]");
         String deniedRun = seedRun(tenantA, deniedAgent);
         writeSnapshot(tenantA, deniedRun, deniedAgent, resolver().resolve(tenantA, deniedAgent, 1));
 
@@ -343,7 +345,19 @@ class DecisionAuditIT extends CapITBase {
     }
 
     private String seedAgent(String tenantId, String enabledSkillsJson) {
-        String agent = createAgentWithVersion(tenantId, uniqueName("it-audit-agent"), "{}", true);
+        return seedAgent(tenantId, agentName("it-audit-agent"), enabledSkillsJson);
+    }
+
+    /**
+     * 按指定名称建 Agent + 它的 cap_agent_def v1。
+     *
+     * <p>⚠️ {@code cap_agent_def} 主键是 {@code (tenant_id, agent_id, version)}，
+     * 而 {@link #agentName} 现在返回<b>稳定名称</b>（同名复用同一 Agent）。
+     * 所以「同一个用例里要两个不同定义的 Agent」时，第二个必须用
+     * {@link #freshName} 给不同名称 —— 否则第二次插 cap_agent_def 会撞主键。
+     */
+    private String seedAgent(String tenantId, String name, String enabledSkillsJson) {
+        String agent = createAgentWithVersion(tenantId, name, "{}", true);
         adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
                 + " VALUES ('" + tenantId + "'::uuid, '" + agent + "'::uuid, 1, 'it agent',"

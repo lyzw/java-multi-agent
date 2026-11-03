@@ -252,6 +252,15 @@ abstract class CapITBase {
         // ⚠️ P5：四字段决策日志（追加不可改的表不在此列，DELETE 不受触发器限制）
         adminExec("DELETE FROM cap_decision_log WHERE tenant_id IN ('"
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
+        // ⚠️ 跑完清掉本基座造的 Run（2026-11-02 补）。
+        //    原来不清：{@link #createRun} 每例造 1~3 条，全量回归一轮约 +90 条，
+        //    累积到 829 条且永久留下 —— 而它们已被 worker 扫成 FAILED，
+        //    既占 claim 的 LIMIT 窗口，又让后续「相对断言」失真。
+        //    识别口径 = 本基座自己写的标记（correlation_id='cap-it'），**不按形状匹配整表**：
+        //    按 'corr-%' 之类的形状删会误删真实租户的数据（CancellationRaceIT 里踩过）。
+        //    子表（run_event / agent_invocation / cap_* ）都是 ON DELETE CASCADE 或已在上方清空。
+        adminExec("DELETE FROM run WHERE correlation_id = 'cap-it' AND tenant_id IN ('"
+                + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
     }
 
     /**
@@ -387,13 +396,31 @@ abstract class CapITBase {
     }
 
     /**
-     * 生成本次运行唯一的 Agent 名称。
+     * 生成 Agent 名称：<b>同一前缀恒返回同一名称</b>（2026-11-02 起，原为随机后缀）。
      *
-     * <p>⚠️ <b>必须唯一</b>：{@code agent} 表有 {@code agent_name_per_tenant} 唯一约束。
-     * 用固定名字会在<b>第二轮</b>运行时直接撞名失败 ——
-     * 症状是「第一次跑全绿、第二次跑全红」，而真因只是残留数据。
+     * <p>⚠️ 为什么改：{@code execution_snapshot} 上有 {@code forbid_snapshot_mutation} 不可变触发器，
+     * <b>快照行物理上删不掉</b>。原来的「随机后缀」写法是「一例一 Agent → 一例一版本 → 一例一快照」，
+     * 在共享库（一个长期存活的 IT 租户）上就是无界增长：
+     * 实测 {@code it-cap-it-a} 累积 990 个 Agent / 721 份快照，且每跑一轮全量回归 +60 份。
+     * 「把插入改成幂等」只能治「同一 version 重复插入」，治不了「每例新 version」，
+     * 所以必须让<b>名称本身</b>稳定，配合 {@link #createAgentWithVersion} 的按名复用。
+     *
+     * <p>⚠️ 复用的前提已核实：{@link #cleanCapTables()} 在每个用例前清空全部 cap 表，
+     * 故用例之间不会因为「共用同一个 Agent」而串味。
+     * <b>确实需要全新 Agent 的用例请用 {@link #freshName}</b>（如断言「申请阶段没写 cap_agent_def」
+     * 但依赖 agent 本身首次出现的语义）。
      */
-    protected static String uniqueName(String prefix) {
+    protected static String agentName(String prefix) {
+        return prefix;
+    }
+
+    /**
+     * 生成本次运行唯一的 Agent 名称（随机后缀）。
+     *
+     * <p>⚠️ 只在<b>确实需要全新 Agent</b>时使用：每用一个就多一个 Agent + 一个版本 + 一份删不掉的快照，
+     * 是共享库上的永久增长。普通「把 Agent 当 FK 载体」的用例应该用 {@link #agentName}。
+     */
+    protected static String freshName(String prefix) {
         return prefix + "-" + java.util.UUID.randomUUID().toString().substring(0, 8);
     }
 
@@ -451,19 +478,32 @@ abstract class CapITBase {
     /**
      * 创建一个带完整夹具链的 Agent（agent → agent_version → execution_snapshot）。
      *
+     * <p>⚠️ <b>按名称幂等</b>（2026-11-02 起）：同名 Agent 已存在则<b>复用</b>，
+     * 不新建 —— 因为快照不可变、删不掉，重复新建等于在共享库上永久堆垃圾。
+     * 两个唯一约束都真实存在（已核对 DDL）：
+     * {@code agent_name_per_tenant UNIQUE (tenant_id, name)}、
+     * {@code agent_version_unique UNIQUE (tenant_id, agent_id, version_number)}。
+     *
+     * <p>⚠️ 因此 <b>同名但 definition / published 不同</b>的两次调用，第二次不会覆盖第一次 ——
+     * 需要不同定义的用例请给不同前缀（或用 {@link #freshName}）。
+     *
      * @param definitionJson <b>原始</b> JSON 文本（不含 SQL 引号），如 {@code {"kind":"tutor"}}
      * @return agentId
      */
     protected static String createAgentWithVersion(String tenantId, String agentName,
                                                    String definitionJson, boolean published) {
         String agentId = java.util.UUID.randomUUID().toString();
-        String versionId = java.util.UUID.randomUUID().toString();
+        // 冲突即说明同名 Agent 已存在 → DO NOTHING 后按名回查，复用既有 agent_id
         adminExec("INSERT INTO agent (agent_id, tenant_id, name) VALUES ('" + agentId
-                + "'::uuid, '" + tenantId + "'::uuid, '" + agentName + "')");
+                + "'::uuid, '" + tenantId + "'::uuid, '" + agentName + "') "
+                + "ON CONFLICT (tenant_id, name) DO NOTHING");
+        agentId = adminQuery("SELECT agent_id::text FROM agent WHERE tenant_id = '" + tenantId
+                + "'::uuid AND name = '" + agentName + "'");
         adminExec("INSERT INTO agent_version (version_id, tenant_id, agent_id, version_number, "
-                + "definition, published_at) VALUES ('" + versionId + "'::uuid, '" + tenantId
+                + "definition, published_at) VALUES (gen_random_uuid(), '" + tenantId
                 + "'::uuid, '" + agentId + "'::uuid, 1, '" + definitionJson + "'::jsonb, "
-                + (published ? "now()" : "NULL") + ")");
+                + (published ? "now()" : "NULL") + ") "
+                + "ON CONFLICT (tenant_id, agent_id, version_number) DO NOTHING");
         return agentId;
     }
 
@@ -481,8 +521,36 @@ abstract class CapITBase {
 
     /**
      * 为指定 Agent 创建执行快照，返回 snapshotId。
+     *
+     * <p>⚠️ <b>按 (tenant_id, version_id) 幂等</b>：该版本已有快照则直接返回既有 snapshotId。
+     * 注意这里<b>不能</b>用 {@code ON CONFLICT DO NOTHING} —— {@code execution_snapshot}
+     * 的唯一约束只有主键 {@code (snapshot_id)}，而语句里的 {@code snapshot_id} 是新生成的，
+     * 冲突永远不会发生，等于没写（2026-11-02 实测踩过：写了个「幂等」实际每轮泄漏一份）。
+     *
+     * <p>需要<b>多个不同快照</b>的场景（如同一版本两个快照）请用 {@link #createFreshSnapshot}。
      */
     protected static String createExecutionSnapshot(String tenantId, String agentId) {
+        String versionId = adminQuery("SELECT version_id::text FROM agent_version "
+                + "WHERE tenant_id = '" + tenantId + "'::uuid AND agent_id = '" + agentId
+                + "'::uuid AND version_number = 1");
+        adminExec("INSERT INTO execution_snapshot (snapshot_id, tenant_id, version_id, "
+                + "agent_config, prompt_config, tool_contracts, run_config) "
+                + "SELECT gen_random_uuid(), '" + tenantId + "'::uuid, '" + versionId + "'::uuid, "
+                + "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb "
+                + "WHERE NOT EXISTS (SELECT 1 FROM execution_snapshot s "
+                + "WHERE s.tenant_id = '" + tenantId + "'::uuid "
+                + "AND s.version_id = '" + versionId + "'::uuid)");
+        return adminQuery("SELECT snapshot_id::text FROM execution_snapshot "
+                + "WHERE tenant_id = '" + tenantId + "'::uuid AND version_id = '" + versionId
+                + "'::uuid ORDER BY created_at LIMIT 1");
+    }
+
+    /**
+     * 无条件新建一份快照（不做幂等）。
+     *
+     * <p>⚠️ 只在<b>确实需要同一 Agent 拥有多份快照</b>时使用：每调一次就多一份删不掉的快照。
+     */
+    protected static String createFreshSnapshot(String tenantId, String agentId) {
         String versionId = adminQuery("SELECT version_id::text FROM agent_version "
                 + "WHERE tenant_id = '" + tenantId + "'::uuid AND agent_id = '" + agentId
                 + "'::uuid AND version_number = 1");

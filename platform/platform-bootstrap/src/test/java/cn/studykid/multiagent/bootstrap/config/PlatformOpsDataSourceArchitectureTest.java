@@ -58,7 +58,16 @@ class PlatformOpsDataSourceArchitectureTest {
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/PlatformOpsDataSourceProvider.java",
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcPlatformOpsConfigPublishTransaction.java",
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/PlatformOpsDataSourceConfiguration.java",
-            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ApplicationConfiguration.java");
+            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ApplicationConfiguration.java",
+            // ⚠️ 平台身份域的第二条显式登记消费路径（2026-11-01）：
+            //    JdbcPlatformPrincipalRepository（平台登录查 platform_user/role）与
+            //    JdbcPlatformAuditRepository（platform_audit_event）按重规划 §2.1 设计
+            //    使用 platform_ops 角色 —— app_agent 对这些身份/凭据表刻意无授权
+            //    （03_platform_roles.sql §2b），误接主数据源即登录 permission denied。
+            //    它拿到的不是受守卫数据源，而是 platformIdentityDataSource()（原始池）：
+            //    受守卫包装只在 PLATFORM 发布会话窗口内交连接，身份域路径不在窗口内。
+            //    ⚠️ 前提：该路径仅供平台身份/管理面（低频、带认证或 fail-closed），不得扩散。
+            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/AuthConfiguration.java");
 
     /** 受会话守卫的数据源的合法引用方（只有持有者能构造它）。 */
     private static final Set<String> GUARD_HOLDERS = Set.of(

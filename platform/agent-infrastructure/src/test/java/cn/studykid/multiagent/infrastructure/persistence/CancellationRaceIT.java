@@ -59,11 +59,13 @@ class CancellationRaceIT {
 
         claims = new JdbcRunClaimRepository(appPool);
 
-        tenantA = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-a");
-        tenantB = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-b");
-        FaultInjectionSupport.ensureTenantSnapshot(adminPool, "t-a");
-        FaultInjectionSupport.ensureTenantSnapshot(adminPool, "t-b");
-        snapshotA = FaultInjectionSupport.snapshotIdBySlug(adminPool, "t-a");
+        // ⚠️ 专用 IT 租户：本类大量造 RUNNING 行并断言「取消后不可被接管」；
+        //    放在种子租户 t-a 上时，运行实例的 recovery sweeper 会把这些行
+        //    当成「租约过期的真实 Run」接管并改写终态 —— 取消语义的断言
+        //    随即取决于后台进程的扫描时机。
+        tenantA = FaultInjectionSupport.itTenant(adminPool, "it-cancel-a");
+        tenantB = FaultInjectionSupport.itTenant(adminPool, "it-cancel-b");
+        snapshotA = FaultInjectionSupport.itSnapshot(adminPool, tenantA);
     }
 
     @AfterAll
@@ -320,12 +322,22 @@ class CancellationRaceIT {
      * 新增写数据的用例必须自带清理，否则会污染后来者。
      */
     private static void purgeRunsCreatedByTests() {
+        // ⚠️ 清理范围必须**限定在本类的两个 IT 租户内**。
+        //    原实现只按 correlation_id / idempotency_key 的形状过滤、不带租户条件，
+        //    等于对整张 run 表做「形状匹配删除」—— 任何租户里形状相同的行都会被抹掉，
+        //    一旦真实部署的某条 Run 恰好命中前缀，就是无提示的数据丢失。
+        if (tenantA == null || tenantB == null) {
+            return;
+        }
         try (var conn = adminPool.getConnection();
              var ps = conn.prepareStatement(
-                     "DELETE FROM run WHERE correlation_id LIKE 'corr-%' "
+                     "DELETE FROM run WHERE tenant_id IN (?::uuid, ?::uuid) "
+                             + "AND correlation_id LIKE 'corr-%' "
                              + "AND idempotency_key LIKE 'run-%' "
                              + "AND NOT EXISTS (SELECT 1 FROM outbox_event o "
                              + "                WHERE o.run_id = run.run_id)")) {
+            ps.setString(1, tenantA);
+            ps.setString(2, tenantB);
             ps.executeUpdate();
         } catch (java.sql.SQLException e) {
             throw new IllegalStateException("清理测试 Run 失败", e);

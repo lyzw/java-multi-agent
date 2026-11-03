@@ -28,7 +28,7 @@ class CapRepositoryIT extends CapITBase {
     @Test
     @DisplayName("✅ 能力闭包快照可写可读，四版本齐备")
     void capabilitySnapshotRoundTrip() {
-        String agentId = createAgentWithVersion(tenantA, uniqueName("cap-snap-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("cap-snap-agent"), "{}", true);
         String snapshotId = createExecutionSnapshot(tenantA, agentId);
         String runId = createRun(tenantA, agentId, snapshotId);
 
@@ -48,7 +48,7 @@ class CapRepositoryIT extends CapITBase {
     @Test
     @DisplayName("✅ 快照不可变：重复保存同 runId 不覆盖（历史可追溯）")
     void capabilitySnapshotIsImmutable() {
-        String agentId = createAgentWithVersion(tenantA, uniqueName("cap-snap-imm"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("cap-snap-imm"), "{}", true);
         String snapshotId = createExecutionSnapshot(tenantA, agentId);
         String runId = createRun(tenantA, agentId, snapshotId);
 
@@ -231,7 +231,7 @@ class CapRepositoryIT extends CapITBase {
     @Test
     @DisplayName("✅ RLS：非特权角色在 B 租户看不到 A 的全部 cap_* 行")
     void rlsIsolatesAllTenantTables() {
-        String agentId = createAgentWithVersion(tenantA, uniqueName("cap-rls-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("cap-rls-agent"), "{}", true);
         String snapshotId = createExecutionSnapshot(tenantA, agentId);
         String runId = createRun(tenantA, agentId, snapshotId);
 

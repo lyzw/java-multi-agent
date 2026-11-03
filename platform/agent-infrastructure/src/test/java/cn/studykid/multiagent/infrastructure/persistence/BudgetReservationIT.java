@@ -78,15 +78,19 @@ class BudgetReservationIT {
         ledger = new JdbcToolOperationLedger(appPool);
         budget = new JdbcBudgetRepository(appPool);
 
-        tenantA = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-a");
-        tenantB = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-b");
+        // ⚠️ IT 专用租户（2026-11-02 迁移）：常驻实例默认只轮询 t-a，
+        //    在种子租户造 Run 会让「预算一致性」断言受第二个执行者干扰。
+        tenantA = FaultInjectionSupport.itTenant(adminPool, "it-budget-a");
+        tenantB = FaultInjectionSupport.itTenant(adminPool, "it-budget-b");
         // ⚠️ 两个租户都要补齐快照：run_snapshot_fk 是真实外键，
-        //    只给 t-a 准备会让跨租户用例在「建 Run」这一步就失败，
+        //    只给 tenantA 准备会让跨租户用例在「建 Run」这一步就失败，
         //    报错点离真正的被测行为（预算隔离）很远
-        FaultInjectionSupport.ensureTenantSnapshot(adminPool, "t-a");
-        FaultInjectionSupport.ensureTenantSnapshot(adminPool, "t-b");
-        snapshotA = FaultInjectionSupport.snapshotIdBySlug(adminPool, "t-a");
-        snapshotB = FaultInjectionSupport.snapshotIdBySlug(adminPool, "t-b");
+        snapshotA = FaultInjectionSupport.itSnapshot(adminPool, tenantA);
+        snapshotB = FaultInjectionSupport.itSnapshot(adminPool, tenantB);
+        // 回收上一轮遗留的 Run（子表 CASCADE 会带走 reservation 行；账户金额由各用例
+        // 自身的 resetAccount 重置，故不受影响）。
+        FaultInjectionSupport.purgeItTenantRuns(adminPool, "it-budget-a");
+        FaultInjectionSupport.purgeItTenantRuns(adminPool, "it-budget-b");
     }
 
     @AfterAll

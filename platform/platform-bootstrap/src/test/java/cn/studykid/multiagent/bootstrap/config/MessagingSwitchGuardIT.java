@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.UUID;
@@ -22,6 +21,7 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
 import cn.studykid.multiagent.infrastructure.messaging.PgQueueRepository;
+import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -34,9 +34,20 @@ import tools.jackson.databind.ObjectMapper;
  * 故守卫必须在<b>启动期</b>把它变成明确失败。
  *
  * <p><b>⚠️ 必须跑在真实 PG 上</b>：守卫读的是队列的真实残留量。
+ *
+ * <p><b>⚠️⚠️ 必须用专用租户（{@code it-switch-a}），不得用 {@code t-a}</b>：
+ * 本类要在「制造残留」与「守卫读残留」之间保持残留<b>不被动过</b>。
+ * 而开发机上常驻的平台实例会按 {@code agent.worker.tenant-slugs}（默认 {@code t-a}）
+ * 轮询<b>同一个库</b>，在两次断言之间把消息领走（实测 &lt; 1 秒）——
+ * 于是守卫读到 0、反证变成「期望抛异常却没抛」，失败现场完全指向错误方向。
+ * 同理，{@code passesWhenNoResidual} 要求队列<b>真空</b>，
+ * 而运行实例的 Outbox 中继可能随时往真实租户投递新消息。
  */
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class MessagingSwitchGuardIT {
+
+    /** IT 专用租户 slug（前缀 {@code it-} 由 {@link #provisionTenant} 硬校验）。 */
+    private static final String SLUG = "it-switch-a";
 
     private static HikariDataSource appPool;
     private static HikariDataSource adminPool;
@@ -50,7 +61,11 @@ class MessagingSwitchGuardIT {
         adminPool = pool(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"),
                 System.getenv("IT_PG_ADMIN_PASSWORD"), 1);
         repository = new PgQueueRepository(appPool, new ObjectMapper());
-        tenantA = tenantIdBySlug("t-a");
+        tenantA = provisionTenant(SLUG);
+        cleanQueue();
+        // 回收上一轮遗留的 Run：本类每例都 createRun，不回收则 it-switch-a 的 Run 无界增长
+        // （run 的子表全部 ON DELETE CASCADE；快照不可删，不动）。
+        purgeRuns();
     }
 
     @AfterAll
@@ -110,9 +125,20 @@ class MessagingSwitchGuardIT {
 
     // ── 辅助 ──────────────────────────────────────────────────────
 
-    /** 构造「t-a 为指定模式」的通道分配（走真实解析路径，slug → tenantId）。 */
+    /** 构造「本 IT 专用租户为指定模式」的通道分配（走真实解析路径，slug → tenantId）。 */
     private static MessagingChannels channelsWith(String mode) throws SQLException {
-        return MessagingChannels.resolve(adminPool, mode, "", List.of("t-a"));
+        return MessagingChannels.resolve(adminPool, mode, "", List.of(SLUG));
+    }
+
+    /**
+     * 幂等创建 IT 专用租户（实现见 {@link ItTenantProvisioner}）。
+     *
+     * <p>守卫只关心「这个租户的队列里有没有残留」，故必须有真实租户；
+     * 但<b>不能</b>借用 {@code t-a}——理由见类注释（运行实例会消费它）。
+     */
+    private static String provisionTenant(String slug) throws SQLException {
+        return ItTenantProvisioner.provision(
+                adminPool, slug, "IT 专用租户 · 消息通道切换守卫（勿删，幂等创建）");
     }
 
     private static HikariDataSource pool(String user, String password, int size) {
@@ -124,20 +150,6 @@ class MessagingSwitchGuardIT {
         }
         cfg.setMaximumPoolSize(size);
         return new HikariDataSource(cfg);
-    }
-
-    private static String tenantIdBySlug(String slug) throws SQLException {
-        try (Connection conn = adminPool.getConnection();
-             PreparedStatement ps = conn.prepareStatement(
-                     "SELECT tenant_id::text FROM tenant WHERE slug = ?")) {
-            ps.setString(1, slug);
-            try (ResultSet rs = ps.executeQuery()) {
-                assertThat(rs.next())
-                        .as("种子数据缺失租户 %s，请先执行 ./scripts/dev-postgres.sh start", slug)
-                        .isTrue();
-                return rs.getString(1);
-            }
-        }
     }
 
     private static String createRun(String tenantId) throws SQLException {
@@ -169,6 +181,16 @@ class MessagingSwitchGuardIT {
                 "attempt", 0,
                 "fencingToken", 0,
                 "enqueuedAt", java.time.Instant.now().toString());
+    }
+
+    /** 清空本 IT 专用租户的 Run（只删本租户，绝不碰真实租户）。 */
+    private static void purgeRuns() throws SQLException {
+        try (Connection conn = adminPool.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "DELETE FROM run WHERE tenant_id = ?::uuid")) {
+            ps.setString(1, tenantA);
+            ps.executeUpdate();
+        }
     }
 
     private static void cleanQueue() throws SQLException {

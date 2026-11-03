@@ -75,7 +75,7 @@ class CapDualWriteIT extends CapITBase {
     @DisplayName("✅ 开关开启：发布版本后新模型产出结构化版本行")
     void dualWriteProducesCapAgentDef() {
         build(true);
-        String agentId = createAgent(uniqueName("cap-dw-on"));
+        String agentId = createAgent(freshName("cap-dw-on"));
 
         agentManage.publishVersion(tenantA, agentId, DEFINITION, "publisher-1");
 
@@ -96,7 +96,7 @@ class CapDualWriteIT extends CapITBase {
     @DisplayName("✅ 开关关闭：旧路径完全接管，且旧数据不丢")
     void switchOffLeavesOldPathAuthoritative() {
         build(true);
-        String agentId = createAgent(uniqueName("cap-dw-off"));
+        String agentId = createAgent(freshName("cap-dw-off"));
 
         // 先双写一次（新模型有数据）
         agentManage.publishVersion(tenantA, agentId, DEFINITION, "publisher-1");
@@ -124,7 +124,7 @@ class CapDualWriteIT extends CapITBase {
     @DisplayName("✅ 开关关闭时完全不产生新模型行")
     void switchOffWritesNothing() {
         build(false);
-        String agentId = createAgent(uniqueName("cap-dw-never"));
+        String agentId = createAgent(freshName("cap-dw-never"));
 
         agentManage.publishVersion(tenantA, agentId, DEFINITION, "publisher-1");
 
@@ -140,7 +140,7 @@ class CapDualWriteIT extends CapITBase {
     @DisplayName("✅ 带 inherits 的存量定义被拒绝投影（V1 写入即拒）")
     void inheritsIsRejectedNotCoerced() {
         build(true);
-        String agentId = createAgent(uniqueName("cap-dw-inherits"));
+        String agentId = createAgent(freshName("cap-dw-inherits"));
 
         agentManage.publishVersion(tenantA, agentId,
                 "{\"name\":\"x\",\"inherits\":\"parent-skill\"}", "publisher-1");
@@ -159,7 +159,7 @@ class CapDualWriteIT extends CapITBase {
     @DisplayName("✅ 比对工具：双写后新旧模型 0 漂移")
     void comparatorReportsNoDrift() {
         build(true);
-        String agentId = createAgent(uniqueName("cap-dw-compare"));
+        String agentId = createAgent(freshName("cap-dw-compare"));
         agentManage.publishVersion(tenantA, agentId, DEFINITION, "publisher-1");
 
         CapDualWriteComparator comparator = new CapDualWriteComparator(appPool);
@@ -177,7 +177,7 @@ class CapDualWriteIT extends CapITBase {
     @DisplayName("✅ 比对工具：能识别「旧有新无」的真实漂移")
     void comparatorDetectsMissing() {
         build(true);
-        String agentId = createAgent(uniqueName("cap-dw-drift"));
+        String agentId = createAgent(freshName("cap-dw-drift"));
         agentManage.publishVersion(tenantA, agentId, DEFINITION, "publisher-1");
 
         // 人为制造漂移：删掉新模型行（旧模型仍在）
@@ -198,7 +198,7 @@ class CapDualWriteIT extends CapITBase {
     @DisplayName("✅ 比对工具：拒绝项与漂移分开统计（拒绝不是漂移）")
     void comparatorSeparatesRejectionsFromDrift() {
         build(true);
-        String agentId = createAgent(uniqueName("cap-dw-reject"));
+        String agentId = createAgent(freshName("cap-dw-reject"));
         agentManage.publishVersion(tenantA, agentId,
                 "{\"inherits\":\"p\"}", "publisher-1");
 

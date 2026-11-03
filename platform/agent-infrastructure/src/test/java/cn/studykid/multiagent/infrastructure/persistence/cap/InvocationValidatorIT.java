@@ -70,7 +70,7 @@ class InvocationValidatorIT extends CapITBase {
      * @return agentId
      */
     private String seedAgent(String tenantId, String enabledSkillsJson) {
-        String agentId = createAgentWithVersion(tenantId, uniqueName("it-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantId, agentName("it-agent"), "{}", true);
         adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
                 + " VALUES ('" + tenantId + "'::uuid, '" + agentId + "'::uuid, 1, 'it agent',"

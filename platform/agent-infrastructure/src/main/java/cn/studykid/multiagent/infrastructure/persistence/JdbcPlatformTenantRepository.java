@@ -15,7 +15,6 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.infrastructure.persistence.TenantSessionBinder;
 import cn.studykid.multiagent.ports.persistence.PlatformTenantPort;
@@ -32,8 +31,11 @@ import cn.studykid.multiagent.ports.tenant.TenantLifecycle;
  * 故开通/状态迁移在<b>同一事务</b>内同时更新 {@code platform.tenant.lifecycle_state}
  * 与 {@code public.tenant.status}（镜像），保证运行时再校验与 RLS 可用。
  * 单连接 + 失败回滚，避免半初始化租户（重规划 §6.1）。
+ *
+ * <p>⚠️ <b>装配归 bootstrap（ApplicationConfiguration），不再 @Repository</b>：
+ * app_agent 对 platform.tenant 仅 SELECT（03_platform_roles.sql §2b），
+ * 写路径必须经 platformIdentityDataSource()（platform_ops）连接。
  */
-@Repository
 public class JdbcPlatformTenantRepository implements PlatformTenantPort {
 
     private final DataSource dataSource;

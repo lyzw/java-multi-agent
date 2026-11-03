@@ -110,6 +110,107 @@ class RunCreationEndpointIT {
 
     // ── 夹具 ────────────────────────────────────────────────────────
 
+    /**
+     * 把 PLATFORM 指针 CAS 回「内容 = 当前目录全量已发布对象」的发布头。
+     *
+     * <p>⚠️ <b>为什么必须自愈（F-9 测试污染 · 2026-11-01 实测）</b>：
+     * {@code cap_config_pointer} 的 PLATFORM 行是<b>全局单例</b>，
+     * 其它 IT（含 agent-infrastructure 模块的
+     * {@code ExecutionPhaseBScenarioIT} 等，跨模块执行顺序不保证）
+     * 发布 it-* 测试对象后会把指针挪到只含测试对象的新发布头 ——
+     * 本类解析真实业务 Agent 的闭包（skill/tool 版本经 PLATFORM 指针解析）
+     * 就会报「对象当前无已发布版本」→ 快照写入链挂起 → 断言红，
+     * 而现场看着像「种子坏了」。
+     * 推导与 02_platform_seed.sql 附录 A 同源（seq 校正 → 补头 → CAS）。
+     */
+    private void repairPlatformPointer() {
+        // ⚠️ setval() 会返回结果集，executeUpdate() 会报「传回预期之外的结果」→ 包 DO 块吞掉返回值。
+        exec("""
+                DO $$
+                BEGIN
+                  IF (SELECT coalesce(max(config_publish_seq), 0) FROM public.cap_config_release) > 0 THEN
+                    PERFORM setval('public.cap_config_publish_seq',
+                                   (SELECT max(config_publish_seq) FROM public.cap_config_release), true);
+                  ELSE
+                    PERFORM setval('public.cap_config_publish_seq', 1, false);
+                  END IF;
+                END $$;
+                """);
+        exec("""
+                INSERT INTO public.cap_config_release
+                    (config_publish_seq, scope, tenant_id, object_versions, aggregate_fingerprint,
+                     status, requester_id, approver_id, effective_at, created_at)
+                SELECT nextval('public.cap_config_publish_seq'), 'PLATFORM', NULL,
+                       d.json_text::jsonb,
+                       'cfg_agg_v1:' || encode(sha256(d.json_text::bytea), 'hex'),
+                       'PUBLISHED', 'it-repair', NULL, now(), now()
+                FROM (
+                    SELECT '[' || string_agg(
+                               '{"type":"' || o.object_type || '","id":"' || o.id
+                                   || '","version":' || o.version || '}',
+                               ',' ORDER BY o.object_type, o.id, o.version) || ']' AS json_text
+                    FROM (
+                        SELECT 'mcp_server' AS object_type, id, max(version) AS version
+                          FROM public.cap_mcp_server_def
+                         WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+                        UNION ALL
+                        SELECT 'skill', id, max(version)
+                          FROM public.cap_skill_def
+                         WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+                        UNION ALL
+                        SELECT 'tool', id, max(version)
+                          FROM public.cap_tool_def
+                         WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+                    ) o
+                    WHERE o.id ~ '^[A-Za-z0-9_.:@-]+$'
+                ) d
+                WHERE d.json_text IS NOT NULL
+                  AND NOT EXISTS (
+                        SELECT 1
+                        FROM public.cap_config_pointer p
+                        JOIN public.cap_config_release r ON r.release_id = p.current_release_id
+                        WHERE p.pointer_key = 'PLATFORM'
+                          AND r.aggregate_fingerprint =
+                              'cfg_agg_v1:' || encode(sha256(d.json_text::bytea), 'hex'));
+                """);
+        exec("""
+                UPDATE public.cap_config_pointer p
+                   SET current_release_id    = h.release_id,
+                       current_publish_seq   = h.config_publish_seq,
+                       updated_at            = now()
+                  FROM (
+                        SELECT r.release_id, r.config_publish_seq
+                        FROM public.cap_config_release r
+                        WHERE r.scope = 'PLATFORM'
+                          AND r.status = 'PUBLISHED'
+                          AND r.aggregate_fingerprint = (
+                              SELECT 'cfg_agg_v1:' || encode(sha256(
+                                       ('[' || string_agg(
+                                            '{"type":"' || o.object_type || '","id":"' || o.id
+                                                || '","version":' || o.version || '}',
+                                            ',' ORDER BY o.object_type, o.id, o.version) || ']')::bytea),
+                                       'hex')
+                              FROM (
+                                  SELECT 'mcp_server' AS object_type, id, max(version) AS version
+                                    FROM public.cap_mcp_server_def
+                                   WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+                                  UNION ALL
+                                  SELECT 'skill', id, max(version)
+                                    FROM public.cap_skill_def
+                                   WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+                                  UNION ALL
+                                  SELECT 'tool', id, max(version)
+                                    FROM public.cap_tool_def
+                                   WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+                              ) o
+                              WHERE o.id ~ '^[A-Za-z0-9_.:@-]+$')
+                        ORDER BY r.config_publish_seq DESC
+                        LIMIT 1
+                  ) h
+                 WHERE p.pointer_key = 'PLATFORM';
+                """);
+    }
+
     private static synchronized DataSource admin() {
         if (adminPool == null) {
             HikariConfig cfg = new HikariConfig();
@@ -390,6 +491,7 @@ class RunCreationEndpointIT {
         //    它必须已经由回填脚本（13_cap_agent_def_backfill.sql）建出
         //    cap_agent_def 行。找不到它 = 回填没生效 = 本用例红。
         String f = realBackfilledAgent();
+        repairPlatformPointer();
         Fixture fixture = new Fixture(f, null);
 
         // ── 前置②：cap_authz_version 行（本例主体 it-admin 的授权版本）──

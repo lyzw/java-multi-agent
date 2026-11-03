@@ -58,6 +58,18 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
+    <!--
+      IT 专用租户供给器（ItTenantProvisioner）。
+      ⚠️ **test 作用域**：只在 IT 里造 it- 前缀的隔离租户，不进主程序 classpath。
+      此前 MessagingSwitchGuardIT 自带一份「建 tenant + agent + agent_version + execution_snapshot」
+      的 SQL，与 PgQueueIT 完全重复；schema 变更时两处都要改，漏改的那处会以
+      「缺快照 / 外键冲突」的面貌在别人的用例里爆炸。故收敛到共享实现。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-test-support</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

@@ -176,7 +176,11 @@ class GovernanceEndpointIT {
     private synchronized String newRun() {
         initTenants();
         if (snapshotId == null) {
-            snapshotId = adminQuery("SELECT snapshot_id::text FROM execution_snapshot LIMIT 1");
+            // ⚠️ 快照必须取**本租户**的（2026-11-01 实测）：run_snapshot_fk 是
+            //    (tenant_id, snapshot_id) 复合外键，无序 LIMIT 1 会拿到别的租户的
+            //    快照 → 复合 FK 校验必炸「Key is not present」。
+            snapshotId = adminQuery("SELECT snapshot_id::text FROM execution_snapshot"
+                    + " WHERE tenant_id = '" + tenantA + "'::uuid LIMIT 1");
         }
         String runId = UUID.randomUUID().toString();
         adminExec("""

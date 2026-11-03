@@ -96,7 +96,9 @@ class MultiAgentPersistenceIT extends CapITBase {
 
     /** 建一条 cap_agent_def 行（子引用表的复合外键目标）。 */
     private String seedAgentDef(String tenantId) {
-        String agentId = createAgentWithVersion(tenantId, uniqueName("it-ma-agent"), "{}", true);
+        // ⚠️ 必须每次全新 Agent：本类的用例会在一例内造「父 Agent / 子 Agent / 旁支 Agent」，
+        //    三者必须互不相同（否则第二次 seedAgentDefVersion 会撞 cap_agent_def 主键）。
+        String agentId = createAgentWithVersion(tenantId, freshName("it-ma-agent"), "{}", true);
         seedAgentDefVersion(tenantId, agentId, 1);
         return agentId;
     }

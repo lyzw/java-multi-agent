@@ -59,9 +59,10 @@ class ApprovalConsumptionIT {
         ledger = new JdbcToolOperationLedger(appPool);
         approval = new JdbcApprovalRepository(appPool);
 
-        tenantA = FaultInjectionSupport.tenantIdBySlug(adminPool, "t-a");
-        FaultInjectionSupport.ensureTenantSnapshot(adminPool, "t-a");
-        snapshotA = FaultInjectionSupport.snapshotIdBySlug(adminPool, "t-a");
+        // ⚠️ 专用 IT 租户：审批消费链路断言「同一 operation 只能被消费一次」，
+        //    而 t-a 上有其他 IT 遗留的 approval/run 行，且运行实例会改写其中的 Run 状态。
+        tenantA = FaultInjectionSupport.itTenant(adminPool, "it-approval-a");
+        snapshotA = FaultInjectionSupport.itSnapshot(adminPool, tenantA);
     }
 
     @AfterAll
@@ -314,12 +315,19 @@ class ApprovalConsumptionIT {
      * 新增写数据的用例必须自带清理，否则会污染后来者。
      */
     private static void purgeRunsCreatedByTests() {
+        // ⚠️ 必须限定租户：不带的 DELETE 等于「按形状匹配清整张 run 表」，
+        //    形状命中即是无提示的数据丢失（见 CancellationRaceIT 同款注释）。
+        if (tenantA == null) {
+            return;
+        }
         try (var conn = adminPool.getConnection();
              var ps = conn.prepareStatement(
-                     "DELETE FROM run WHERE correlation_id LIKE 'corr-%' "
+                     "DELETE FROM run WHERE tenant_id = ?::uuid "
+                             + "AND correlation_id LIKE 'corr-%' "
                              + "AND idempotency_key LIKE 'run-%' "
                              + "AND NOT EXISTS (SELECT 1 FROM outbox_event o "
                              + "                WHERE o.run_id = run.run_id)")) {
+            ps.setString(1, tenantA);
             ps.executeUpdate();
         } catch (java.sql.SQLException e) {
             throw new IllegalStateException("清理测试 Run 失败", e);

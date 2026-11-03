@@ -397,17 +397,37 @@ class RateLimitIT {
         // 窗口长度 1 秒：先打满，等窗口切换后应重新放行
         var limiter = new JdbcRateLimiter(appPool, 1, 1L);
 
-        // ⚠️ 前两次 check 必须锚定在**同一个** 1 秒窗口内（2026-10-22 修复）：
-        //    window_start 按整秒对齐（floor(epoch/1)*1），两次 check 一旦跨秒
-        //    就会落进不同窗口，第二次被当成「新窗口」而放行——
-        //    实测 expected: REJECTED but was: ALLOWED，属真实抖动而非断言写错。
-        //    故先等到「整秒刚过 100ms」再开始，距下一个边界至少 900ms，
-        //    足以覆盖两次 check 的耗时（本机 ~5-20ms/次，RDS 略慢）。
-        long untilNextSecond = 1000L - (System.currentTimeMillis() % 1000L);
-        Thread.sleep(untilNextSecond + 100L);
-
-        assertThat(limiter.check(tenantA, bucket)).isEqualTo(RateLimitPort.Decision.ALLOWED);
-        assertThat(limiter.check(tenantA, bucket)).isEqualTo(RateLimitPort.Decision.REJECTED);
+        // ⚠️ 前两次 check 必须落在**同一个** 1 秒窗口内：
+        //    window_start 按整秒对齐（floor(epoch/1)*1），两次一旦跨秒，
+        //    第二次就会被当成「新窗口」而放行 → expected REJECTED but was ALLOWED。
+        //
+        // ⚠️⚠️ 但「等整秒刚过 100ms 再打两次」**不足以**保证不跨窗（2026-11-02 实测）：
+        //    窗口起点由**数据库的** now() 决定，本机时钟只能挑「看起来还有余量」的起点；
+        //    而一次 check 是「INSERT … ON CONFLICT → SELECT」两次往返，
+        //    在远端 RDS 上排队/慢查询时可达数百毫秒（全量回归并发最高时尤甚）。
+        //    于是同一条断言「单跑恒绿、全量偶红」，且失败信息完全指向限流逻辑。
+        //
+        //    故改为「紧贴边界开始 + 跨窗即重试」：跨窗只是**本轮实验前提不成立**，
+        //    不是被测行为错误。重试仍有次数上限 —— 5 次都跨窗说明库延迟异常，
+        //    那种情况应当红，且提示语要说清是延迟而不是限流坏了。
+        boolean sameWindowVerified = false;
+        for (int attempt = 1; attempt <= 5 && !sameWindowVerified; attempt++) {
+            purgeBucket(bucket);
+            long sinceBoundary = System.currentTimeMillis() % 1000L;
+            if (sinceBoundary > 250L) {
+                // 余量不足 750ms：等到下一个整秒边界再开始
+                Thread.sleep(1000L - sinceBoundary + 30L);
+            }
+            if (limiter.check(tenantA, bucket) != RateLimitPort.Decision.ALLOWED) {
+                continue; // 首查就跨窗（库极慢），本轮作废
+            }
+            if (limiter.check(tenantA, bucket) == RateLimitPort.Decision.REJECTED) {
+                sameWindowVerified = true;
+            }
+        }
+        assertThat(sameWindowVerified)
+                .as("同一 1 秒窗口内第二次必须被拒（重试 5 次仍跨窗 ⇒ 库延迟异常，非限流缺陷）")
+                .isTrue();
 
         Thread.sleep(Duration.ofSeconds(2).toMillis());
 

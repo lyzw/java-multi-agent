@@ -89,7 +89,7 @@ class ConfigPublishManagementIT extends CapITBase {
     @DisplayName("✅ 三步发布：申请 → 审批 → 执行，版本行/发布头/指针三者同时生效")
     void threeStepPublishProducesPublishedVersionAndPointer() {
         ConfigPublishWorkflowService workflow = workflow();
-        String agentId = createAgentWithVersion(tenantA, uniqueName("it-r4-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("it-r4-agent"), "{}", true);
 
         ConfigPublishRequest created = workflow.requestPublish(tenantA, ConfigRelease.Scope.TENANT,
                 List.of(agentSpec(agentId)), null, "上线新 Agent 定义", REQUESTER);
@@ -128,7 +128,7 @@ class ConfigPublishManagementIT extends CapITBase {
     @DisplayName("⛔ 未审批不得执行：PENDING 状态直接 apply 被拒，且零副作用")
     void applyWithoutApprovalIsRejected() {
         ConfigPublishWorkflowService workflow = workflow();
-        String agentId = createAgentWithVersion(tenantA, uniqueName("it-r4-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("it-r4-agent"), "{}", true);
         ConfigPublishRequest created = workflow.requestPublish(tenantA, ConfigRelease.Scope.TENANT,
                 List.of(agentSpec(agentId)), null, "上线新 Agent 定义", REQUESTER);
 
@@ -147,7 +147,7 @@ class ConfigPublishManagementIT extends CapITBase {
     @DisplayName("⛔ 双人复核：申请人不得审批自己的申请（应用层拦截）")
     void selfApprovalIsRejected() {
         ConfigPublishWorkflowService workflow = workflow();
-        String agentId = createAgentWithVersion(tenantA, uniqueName("it-r4-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("it-r4-agent"), "{}", true);
         ConfigPublishRequest created = workflow.requestPublish(tenantA, ConfigRelease.Scope.TENANT,
                 List.of(agentSpec(agentId)), null, "上线新 Agent 定义", REQUESTER);
 
@@ -195,7 +195,7 @@ class ConfigPublishManagementIT extends CapITBase {
     @DisplayName("⛔ 申请阶段门禁预检：非法发布集合被拒，且不占用审批名额")
     void illegalPublishSetIsRejectedAtRequestTime() {
         ConfigPublishWorkflowService workflow = workflow();
-        String agentId = createAgentWithVersion(tenantA, uniqueName("it-r4-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("it-r4-agent"), "{}", true);
 
         assertThatThrownBy(() -> workflow.requestPublish(tenantA, ConfigRelease.Scope.TENANT,
                 List.of(agentSpec(agentId), agentSpec(agentId)), null, "重复对象", REQUESTER))
@@ -213,7 +213,7 @@ class ConfigPublishManagementIT extends CapITBase {
     @DisplayName("⛔ CAS 基线过期被拒：客户端看到的已不是当前配置时不得发布")
     void staleBaselineIsRejected() {
         ConfigPublishWorkflowService workflow = workflow();
-        String agentId = createAgentWithVersion(tenantA, uniqueName("it-r4-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("it-r4-agent"), "{}", true);
 
         ConfigPublishRequest created = workflow.requestPublish(tenantA, ConfigRelease.Scope.TENANT,
                 List.of(agentSpec(agentId)), 999L, "基于旧基线发布", REQUESTER);
@@ -264,7 +264,7 @@ class ConfigPublishManagementIT extends CapITBase {
     @DisplayName("✅ 租户隔离：另一租户看不到本租户的变更申请（RLS）")
     void publishRequestsAreTenantIsolated() {
         ConfigPublishWorkflowService workflow = workflow();
-        String agentId = createAgentWithVersion(tenantA, uniqueName("it-r4-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("it-r4-agent"), "{}", true);
         ConfigPublishRequest created = workflow.requestPublish(tenantA, ConfigRelease.Scope.TENANT,
                 List.of(agentSpec(agentId)), null, "上线新 Agent 定义", REQUESTER);
 

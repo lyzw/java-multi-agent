@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.api.platform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -90,26 +91,40 @@ class PlatformRagGovernanceTicketServiceTest {
     }
 
     @Test
-    @DisplayName("⚠️⚠️ 票据的角色刻意签成空集合：它在平台域内过不了授权矩阵")
+    @DisplayName("⚠️⚠️ 票据只带治理专用角色：平台域内仍过不了授权矩阵（取票≠提权）")
     void ticketCarriesNoPlatformRoles() {
         Harness h = new Harness(true, TTL);
         GovernanceTicket ticket = h.service.issue(superAdmin(), "PLATFORM");
 
-        // 用平台自己的校验器复核这枚令牌（RAG 侧不看角色，平台侧看）。
+        // 用平台自己的校验器复核这枚令牌（RAG 侧只看域 + 档位，平台侧看角色）。
+        // ⚠️ 校验器对 roles 有白名单过滤（allowedRoles）。治理专用角色刻意**不在**
+        //    平台角色白名单里 —— 这正是「票据不能当登录态」的技术落点：
+        //    连平台自己的校验器都不认它。所以这里按「平台已知角色」复核，
+        //    验证的是「票据不带任何平台角色」。
         PlatformPrincipal verified = h.tokens.verify(ticket.accessToken(), Instant.now(),
                 PlatformRoles.ALL);
+
+        // ⚠️ 平台校验器视角：票据**不携带任何平台角色**（治理角色不在白名单内被滤掉）。
+        //    这就是「取票 ≠ 提权」：即使票据泄漏，它在平台域任何端点都过不了授权矩阵。
         assertTrue(verified.roles().isEmpty(),
-                "票据若带上持有者角色，它就同时是有效期内的平台登录态：" + verified.roles());
+                "票据不得携带任何平台角色，否则它就是一枚登录态：" + verified.roles());
+        // 而票据**确实**携带了 RAG 侧需要的治理资质（否则 RAG 角色闸门永远拒绝它，
+        // 「有角色的人拿不到票据、有票据的人没有角色」→ 全局语料永远签不出 VERIFIED）。
+        assertTrue(decodePayload(ticket.accessToken()).contains(
+                        "\"roles\":[\"" + PlatformJwtTokenService.RAG_GOVERNANCE_ROLE + "\"]"),
+                "票据必须携带治理专用角色，否则 RAG 侧角色闸门永远 403");
 
         var decision = new PlatformAuthorizationServiceImpl().authorize(verified,
                 Namespaces.Platform.RESOURCE_MANAGE, "rag_corpus", "PLATFORM");
         assertTrue(!decision.allowed(),
-                "空角色票据在平台侧必须被默认拒绝，否则「取票」等于「提权」");
+                "治理角色不在平台授权矩阵里 ⇒ 平台侧必须默认拒绝，否则「取票」等于「提权」");
 
         String payload = decodePayload(ticket.accessToken());
         assertTrue(payload.contains("\"" + PlatformJwtTokenService.RAG_SCOPE_CLAIM
                 + "\":\"PLATFORM\""), payload);
-        assertTrue(payload.contains("\"roles\":[]"), payload);
+        // ⚠️ 反向钉：票据里不得出现任何真实平台角色（否则它就是登录态）
+        assertFalse(payload.contains("PLATFORM_SUPER_ADMIN"),
+                "票据不得携带持有者真实角色：" + payload);
         assertEquals("PLATFORM_USER", decodeClaim(payload, "principal_type"), payload);
         assertEquals(PLATFORM_AUDIENCE, decodeClaim(payload, "aud"), payload);
     }

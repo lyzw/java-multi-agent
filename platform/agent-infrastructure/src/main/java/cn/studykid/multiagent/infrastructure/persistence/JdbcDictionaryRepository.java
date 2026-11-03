@@ -11,7 +11,6 @@ import java.util.Optional;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.ports.persistence.DictionaryPort;
 
@@ -27,8 +26,10 @@ import cn.studykid.multiagent.ports.persistence.DictionaryPort;
  *
  * <p>⚠️ <b>内置行不可删、不可改 code</b>：DB 层不强制这三条（写起来会把
  * 正常维护也挡住），由服务层显式判定并返回 409，便于给出可操作的提示。
+ * <p>⚠️ <b>装配归 bootstrap（ApplicationConfiguration），不再 @Repository</b>：
+ * platform 域字典表对主数据源角色（app_agent）无授权（03_platform_roles.sql §2b），
+ * 必须经 platformIdentityDataSource()（platform_ops）连接 —— 自动扫描拿不到运维数据源。
  */
-@Repository
 public class JdbcDictionaryRepository implements DictionaryPort {
 
     private final DataSource dataSource;

@@ -28,6 +28,15 @@
       <artifactId>agent-application</artifactId>
     </dependency>
     <!--
+      D2 数据层权限核心领域模型（ScopeFilter / SubjectContext / Action / Decision 等）。
+      迁移方案 12 文 §5：D3 鉴权层（AccessGate / PolicyEngine）直接依赖 D2 领域类型，
+      显式声明而非依赖 agent-application 的传递依赖。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-core</artifactId>
+    </dependency>
+    <!--
       D-001 IAM：JWT 载荷解析。
       ⚠️ 只用 Map/List 反序列化，不绑定到具体 POJO —— 令牌内容是攻击者可控的，
       绑定多态类型会带来反序列化 gadget 风险。

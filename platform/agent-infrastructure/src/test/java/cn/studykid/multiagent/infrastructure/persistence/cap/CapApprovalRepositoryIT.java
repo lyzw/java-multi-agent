@@ -57,7 +57,7 @@ class CapApprovalRepositoryIT extends CapITBase {
 
     /** 造一条真实的逻辑操作（cap_approval 的 operation_id 有复合外键）。 */
     private String createOperation(String tenantId) {
-        String agentId = createAgentWithVersion(tenantId, uniqueName("it-op-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantId, agentName("it-op-agent"), "{}", true);
         String snapshotId = createExecutionSnapshot(tenantId, agentId);
         String runId = createRun(tenantId, agentId, snapshotId);
         String opId = UUID.randomUUID().toString();

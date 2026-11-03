@@ -121,6 +121,35 @@ public final class PlatformOpsDataSourceProvider implements PlatformOpsSessionGu
     }
 
     /**
+     * 取「平台身份域」专用数据源（2026-11-01 平台登录修复）。
+     *
+     * <p><b>背景</b>：{@code JdbcPlatformPrincipalRepository}（平台账号/角色查询，
+     * 登录链路）与 {@code JdbcPlatformAuditRepository}（platform_audit_event）按
+     * 重规划 §2.1 的设计必须使用 {@code platform_ops} 角色访问
+     * {@code platform} schema —— 而主数据源的 {@code app_agent} 对
+     * {@code platform_user} 等身份/凭据表<b>刻意无授权</b>
+     * （03_platform_roles.sql §2b：整域放开＝凭据库对业务进程敞开）。
+     * 此前这两个仓储被误接到主数据源，登录即报
+     * {@code permission denied for table platform_user}。
+     *
+     * <p>⚠️ <b>为什么不能复用 {@link #guardedOrUnavailableDataSource()}</b>：
+     * 受守卫数据源只在 PLATFORM 作用域发布事务窗口内交出连接，
+     * 登录/审计路径不在任何会话窗口内，取连接必被守卫拒绝。
+     * 平台身份域是运维凭据的第二条<b>显式登记</b>消费路径
+     * （见 platform-bootstrap 的 {@code PlatformOpsDataSourceArchitectureTest}
+     * PROVIDER_HOLDERS 白名单），不是绕过守卫的暗道。
+     *
+     * <p>⚠️ <b>fail-closed</b>：未接入运维角色时返回「取连接必失败」的替身，
+     * <b>绝不</b>回落到 app_agent（app_agent 本就无权访问身份表，
+     * 回落只会把真因「没配运维凭据」伪装成 SQL 权限错误）。
+     *
+     * @return 平台身份域数据源（未接入运维角色时为「取不到连接」的替身）
+     */
+    public @NonNull DataSource platformIdentityDataSource() {
+        return delegate != null ? delegate : new UnavailablePlatformOpsDataSource();
+    }
+
+    /**
      * {@inheritDoc}
      *
      * <p>⚠️ 本实现把 {@link PlatformOpsAction} 的调用包进

@@ -77,6 +77,37 @@ agent:
     governance-query-limit-per-window: "120"
     governance-decide-limit-per-window: "30"
 
+  # ── 权限影子态（P1 · 12 文 §4.5 / 13 文 §5.2）────────────────
+  # ⚠️ **只有一个开关**：enabled=true 时 AuthzShadowConfiguration 生效并产出
+  #    AuthzShadowBinding，仓库据此接线；false 时该 Bean 不存在，仓库保持未接线，
+  #    行为与接线前逐字节一致。不存在「Bean 在、开关关」的半开状态。
+  # ⚠️ 值必须加引号：YamlPropertiesFactoryBean 会丢弃裸标量（本项目已踩过该坑）。
+  authz:
+    shadow:
+      enabled: "${AGENT_AUTHZ_SHADOW_ENABLED:false}"
+      # P1 必须 false（只观测，不改变请求结果）；P2 双写期才翻 true。
+      block-on-violation: "${AGENT_AUTHZ_SHADOW_BLOCK_ON_VIOLATION:false}"
+      # 哨兵（共享）租户：平台域无哨兵模型，留空；RAG 域接入时填写。
+      sentinel-tenant-id: "${AGENT_AUTHZ_SHADOW_SENTINEL_TENANT_ID:}"
+      sampling:
+        # ⚠️ 12 文原写 0.1%，评审后上调到 1%：确定性采样下单个 (主体,资源) 平均要等
+        #    约 100 小时才被采到一次，两个月观察期里小流量租户可能一次都没被看过，
+        #    而读数仍然是 AUTHZ_MISMATCH=0（假绿）。
+        rate: "${AGENT_AUTHZ_SHADOW_SAMPLING_RATE:0.01}"
+        # 分桶窗口：同一窗口内同一 (主体,资源) 采/不采恒定（可复现），窗口滚动后换样本。
+        window-seconds: "${AGENT_AUTHZ_SHADOW_SAMPLING_WINDOW_SECONDS:300}"
+        # 高敏资源 100% 染色（导出/检索/统计/跨租户读），与 rate 无关。
+        # ⚠️ 必须与仓库传入 AuthzShadowHooks 的资源类型字面量完全一致。
+        always-sample-resource-types: "${AGENT_AUTHZ_SHADOW_ALWAYS_SAMPLE:run,tool_operation,weakness_record,run_step}"
+    # ── 授权决策日志（D6 / P2）──────────────────────────────────────
+    # true  ⇒ 每次「被采样到」的判定写一行 platform.authz_decision_log；
+    # false ⇒ NoOp（P1 影子期默认，判定不落库）。
+    # ⚠️ 开启前必须已落库表结构与授权（deploy/sql/platform/01 + 03）；
+    #    开启后由 AuthzDecisionLogGuard 在启动期做零行写入探测，不通过即拒绝启动 ——
+    #    「开关开着、每次写失败、被限频告警吞掉」的静默无审计不可接受。
+    decision-log:
+      enabled: "${AGENT_AUTHZ_DECISION_LOG_ENABLED:false}"
+
   # ── Worker 主循环（P4-D03）──────────────────────────────────────
   # ⚠️ 以下配置**缺失即拒绝启动**（fail-closed）：退回默认值等于
   #    「悄悄用了一个没人审过的并发度」，容器化环境下可能直接

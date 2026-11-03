@@ -14,8 +14,14 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort;
 
 /**
@@ -35,8 +41,37 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
 
     private final DataSource dataSource;
 
+    // ── P1 影子态接入（12 文 §4.5 / 13 文 §5.2）──────────────────────────────
+    // 默认全部为 null / false ⇒ 现有行为 100% 不变；仅当显式注入且 shadowEnabled=true 时生效。
+    // ⚠️ 非 final：由 Spring 启动期通过 {@link #bindAuthzShadow} 一次性绑定，之后只读。
+    //    容器里没有 AuthzShadowBinding 时保持构造期默认值（null / false）⇒ 零行为变更。
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private boolean shadowEnabled;
+    private @NonNull String sentinelTenantId;
+
+    /** Spring 装配入口（保持既有单参构造，确保 TenantFeedbackWiringTest 等既有装配不变）。 */
+    @Autowired
     public JdbcAgentMetricRepository(@NonNull DataSource dataSource) {
+        this(dataSource, null, null, false, "");
+    }
+
+    /**
+     * 影子态接线构造（P1 由 {@code AuthConfiguration} 在开启染色时调用；测试用）。
+     *
+     * @param shadowEnabled 是否启用影子比对 + 染色（P1 默认 false；P2 翻转为 true 进入阻断模式）
+     * @param sentinelTenantId 哨兵（共享）租户标识，与 {@code SqlScopeTranslator} 共用配置项
+     */
+    JdbcAgentMetricRepository(@NonNull DataSource dataSource,
+                              @Nullable ScopedDataAccess scoped,
+                              @Nullable AuthzShadowReporter reporter,
+                              boolean shadowEnabled,
+                              @NonNull String sentinelTenantId) {
         this.dataSource = dataSource;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -190,6 +225,7 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
 
     @Override
     public @NonNull Optional<TraceMetric> findByTraceId(@NonNull String traceId) {
+        shadowEnter("platform.agent_trace_metric", null, false);
         String sql = "SELECT * FROM platform.agent_trace_metric WHERE trace_id = ?";
         try (Connection conn = openSystem();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -200,6 +236,12 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                     return Optional.empty();
                 }
                 Optional<TraceMetric> out = Optional.of(mapMetric(rs));
+                // ⚠️ 此处**不做染色**：本方法（`findByTraceId(traceId)`）没有租户主体 ——
+                //    端口签名只带 traceId，行内 tenant_id 是「归属」，不是「主体」。
+                //    用行内 tenant_id 当主体就是同义反复（恒不违例）；
+                //    用空主体则 Gate 只能算 Unrestricted，同样无法判越权。
+                //    正确做法是把调用方的主体传进来（D5 后续接线），在此之前**宁可没有染色，
+                //    也不要一条永远不会红的染色** —— 后者会给出虚假的覆盖感。
                 conn.commit();
                 return out;
             }
@@ -215,6 +257,7 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
     @Override
     public @NonNull Overview overview(@NonNull MetricQuery query) {
         MetricQuery q = query.clamp();
+        shadowEnter("platform.agent_trace_metric", q.tenantId(), q.tenantId() != null && !q.tenantId().isBlank());
         String sql = """
                 SELECT
                     count(*)                                                     AS trace_count,
@@ -268,6 +311,7 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
     @Override
     public @NonNull List<ReasonCount> terminationDistribution(@NonNull MetricQuery query) {
         MetricQuery q = query.clamp();
+        shadowEnter("platform.agent_trace_metric", q.tenantId(), q.tenantId() != null && !q.tenantId().isBlank());
         String sql = """
                 SELECT termination_reason, count(*) AS c
                 FROM platform.agent_trace_metric
@@ -285,6 +329,9 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                             TerminationReason.valueOf(rs.getString("termination_reason")),
                             rs.getLong("c")));
                 }
+                // ⚠️ 聚合结果无「行租户」可校验 —— 此处刻意不做染色。
+                //    传入绑定租户做比对是同义反复（永远不可能违例），会给出虚假的「染色已覆盖」。
+                //    聚合路径的可信度由 shadowEnter 的谓词比对 + SQL 审计保证。
             }
             conn.commit();
         } catch (SQLException e) {
@@ -296,6 +343,7 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
     @Override
     public @NonNull LatencyPercentiles latency(@NonNull MetricQuery query) {
         MetricQuery q = query.clamp();
+        shadowEnter("platform.agent_trace_metric", q.tenantId(), q.tenantId() != null && !q.tenantId().isBlank());
         // ⚠️ 分位数必须查明细表 —— 物化视图只有 count/sum，还原不出 P95。
         String sql = """
                 SELECT percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms) AS p50,
@@ -600,6 +648,72 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
     // ══════════════════════════════════════════════════════════════
     // 内部工具
     // ══════════════════════════════════════════════════════════════
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     *
+     * <p>⚠️ 用 setter 而不是可选构造参数：本仓既有构造签名被大量单测与 {@code @Bean} 装配依赖，
+     * 改成可选构造参数会把「影子态」渗进每一个调用点。setter 只在启动期被调用一次。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /**
+     * 影子比对入口（仅记日志，不改变请求结果）。
+     *
+     * <p><b>统一委托 {@link AuthzShadowHooks}</b>（环境主体形态）：比对逻辑只有一份实现，
+     * 避免「某个仓库自己写一份」形成绕过 {@code ScopeBypassArchitectureTest} 的旁路。
+     */
+    void shadowEnter(@NonNull String resourceType,
+                     @Nullable String boundTenantId,
+                     boolean hasTenantPredicate) {
+        // ⚠️ 平台全域聚合（boundTenantId == null，openSystem + clear 后的无租户查询）**不做比对**：
+        //    它没有租户主体，Gate 只能算出 Unrestricted，而 Unrestricted 需要「平台运维主体」才能验证。
+        //    拿租户态主体去比它只会得到恒定的假 mismatch，把真实的违例淹掉。
+        //    这类路径的可观测性交给 D12（非 Repository 面）与 P3 的平台级限流/审计，不在影子期冒充已验证。
+        if (boundTenantId == null || boundTenantId.isBlank()) {
+            return;
+        }
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色校验入口（仅记日志，不改变请求结果）。
+     *
+     * <p>同样<b>统一委托 {@link AuthzShadowHooks}</b>：给定一行的租户归属，
+     * 与 Gate 算出的 ScopeFilter 比对；越权行记 taint 违例。
+     *
+     * <p>⚠️ <b>主体必须显式传入，且不得用行租户代替</b>：用行租户当主体，
+     * 策略引擎必然算出 {@code TenantOnly(行租户)}，逐行比对恒通过 —— 这是「同义反复式染色」，
+     * 单测全绿、日志干净、零检出力。主体为 {@code null}（无租户身份的查询）时直接跳过。
+     *
+     * @param subjectTenantId 本次查询的主体租户（{@code null} = 无租户身份，跳过染色）
+     * @param rowTenantId     结果行的真实 {@code tenant_id}
+     */
+    void checkTaint(@NonNull String resourceType,
+                    @Nullable String subjectTenantId,
+                    @Nullable String rowTenantId,
+                    boolean shared) {
+        if (subjectTenantId == null || subjectTenantId.isBlank() || rowTenantId == null) {
+            return;
+        }
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                SubjectContext.forTenant(subjectTenantId), rowTenantId, shared);
+    }
 
     private Connection openSystem() throws SQLException {
         Connection conn = dataSource.getConnection();

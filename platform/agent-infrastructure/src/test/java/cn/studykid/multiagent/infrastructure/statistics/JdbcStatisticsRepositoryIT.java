@@ -28,6 +28,7 @@ import cn.studykid.multiagent.ports.statistics.StatisticsPort.KnowledgePointRank
 import cn.studykid.multiagent.ports.statistics.StatisticsPort.RunDayStat;
 import cn.studykid.multiagent.ports.statistics.StatisticsPort.StudentDayStat;
 import cn.studykid.multiagent.ports.statistics.StatisticsPort.WeaknessDayStat;
+import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
 
 /**
  * 工作台统计集成测试（报表中心 · 平台侧）。
@@ -50,11 +51,24 @@ import cn.studykid.multiagent.ports.statistics.StatisticsPort.WeaknessDayStat;
  *       现象与「统计逻辑坏了」相距很远。</li>
  *   <li>应用角色<b>不得带 BYPASSRLS</b>：否则第二道隔离（表上强制 RLS）
  *       形同虚设，「跨租户隔离」用例会变成假绿。</li>
- *   <li>IT 库已应用 {@code migration/verify/V1_seed.sql}：
- *       本 IT 需要种子租户 {@code t-a} / {@code t-b} 及其执行快照。</li>
+ *   <li>IT 库可连<b>库 owner</b>（{@code IT_PG_ADMIN_USER}）：本类要幂等创建
+ *       {@code it-stat-a} / {@code it-stat-b} 两个专用租户（含 agent / agent_version /
+ *       execution_snapshot）。应用角色对 {@code tenant} 无写权且受 RLS 约束，用它建不了。</li>
  * </ol>
  *
- * <p><b>⚠️ 为什么复用种子租户、不自建随机租户</b>（2026-10-23 实测修正）：
+ * <p><b>⚠️ 为什么用 {@code it-} 前缀的专用租户，而不是种子租户 {@code t-a} / {@code t-b}</b>
+ * （2026-11-02 实测修正）：
+ * 本类的断言是「基线 + 增量」，而开发机上<b>常驻运行实例</b>按
+ * {@code agent.worker.tenant-slugs}（默认 {@code t-a}）轮询队列并执行 Run。
+ * 实测它在「取基线」与「查询」之间把遗留的 {@code QUEUED} Run 执行成
+ * {@code FAILED} → 「本区间终态数」凭空多 1（{@code expected 3L but was 4L}，
+ * 失败时间戳正落在回归执行窗口内）。只要共库，任何后台作业（Outbox 中继、
+ * 恢复扫描、保留期清理）都同样能改写基线 —— 这不是被测代码的缺陷，
+ * 也无法靠「记得清理」根治（清理本身也在被别人改写）。
+ * <p>故改用 {@code it-} 前缀租户：真实部署租户不以 {@code it-} 开头，
+ * 「本 IT 造数的租户」与「worker 轮询的租户」在结构上<b>不可能重合</b>。
+ *
+ * <p><b>⚠️ 为什么必须幂等创建、不能每用例建随机租户</b>（2026-10-23 实测教训）：
  * {@code execution_snapshot} 上挂着<b>禁止 UPDATE/DELETE 的不可变触发器</b>
  * （{@code forbid_snapshot_mutation}，V1 §4）。而 {@code run.snapshot_id}
  * 必填且带复合外键 {@code (tenant_id, snapshot_id)} →
@@ -66,7 +80,8 @@ import cn.studykid.multiagent.ports.statistics.StatisticsPort.WeaknessDayStat;
  * {@code SELECT snapshot_id FROM execution_snapshot LIMIT 1} 取快照时，
  * 会取到本 IT 留下的**别的租户**的快照 → 复合外键报错 → 别的 IT 整片变红
  * （实测 {@code RunEventAppendIT} 9 项 ERROR，现象与「本 IT 的数据」相距很远）。
- * <p>现改为：<b>复用种子租户 t-a / t-b</b>（快照已在种子里，永久存在是设计如此），
+ * <p>现改为：<b>幂等创建一次、永久复用</b>（见
+ * {@code cn.studykid.multiagent.testsupport.db.ItTenantProvisioner}），
  * 断言一律用<b>增量</b>（先取基线，再造数，再比对差值），
  * 每例结束只删本例造的行（{@code run} / {@code weakness_record} / {@code student_profile}
  * 都可删），<b>零残留</b>。
@@ -84,12 +99,32 @@ class JdbcStatisticsRepositoryIT {
     private static final String KP_PREFIX = "统计IT知识点";
 
     private static HikariDataSource pool;
+
+    /**
+     * 管理连接池（库 owner）：造夹具与对账查询用，<b>整个测试类共用一个</b>。
+     *
+     * <p>⚠️ 原实现的 {@code adminExec / adminQuery} 每次都 {@code new HikariDataSource(...)}
+     * 再 close —— 一次调用一个池。本类夹具量大，实测日志出现
+     * {@code HikariPool-422} 这种四位数编号：单类就要建/销毁几百个池，
+     * 耗时被连接建立主导，池编号本身也成了「是否泄漏」的噪声。
+     */
+    private static HikariDataSource adminPool;
     private static JdbcStatisticsRepository repository;
 
-    /** 种子租户 A（持有执行快照，可造 Run）。 */
+    /**
+     * 本 IT 的两个专用租户 slug。
+     *
+     * <p>⚠️ 前缀 {@code it-} 由 {@code ItTenantProvisioner} 硬校验：
+     * 真实部署租户不以 {@code it-} 开头，故「本 IT 造数的租户」与
+     * 「运行实例 worker 轮询的租户」不可能重合（见类注释）。
+     */
+    private static final String SLUG_A = "it-stat-a";
+    private static final String SLUG_B = "it-stat-b";
+
+    /** 租户 A（本 IT 造数的租户，持有执行快照）。 */
     private static String tenantA;
 
-    /** 种子租户 B（无快照无数据，用作隔离对照）。 */
+    /** 租户 B（不造任何数据，用作跨租户隔离的对照）。 */
     private static String tenantB;
 
     /** 租户 A 的执行快照 id。 */
@@ -146,17 +181,19 @@ class JdbcStatisticsRepositoryIT {
         pool = new HikariDataSource(cfg);
         repository = new JdbcStatisticsRepository(pool);
 
-        tenantA = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug = " + q("t-a"));
-        tenantB = adminQuery("SELECT tenant_id::text FROM tenant WHERE slug = " + q("t-b"));
-        if (tenantA == null || tenantB == null) {
+        // ⚠️ 专用租户由**库 owner** 幂等创建（应用角色对 tenant 无写权且受 RLS 约束）。
+        //    与种子租户 t-a 的区别见类注释：t-a 会被运行实例的 worker 轮询并改写。
+        // ⚠️ 管理池整个测试类只建一次（见 adminPool 字段注释），不放进 try-with-resources。
+        adminPool = new HikariDataSource(adminConfig());
+        try {
+            tenantA = ItTenantProvisioner.provision(
+                    adminPool, SLUG_A, "IT 专用租户 · 工作台统计 A（勿删，幂等创建）");
+            tenantB = ItTenantProvisioner.provision(
+                    adminPool, SLUG_B, "IT 专用租户 · 工作台统计 B（勿删，幂等创建）");
+            snapshotA = ItTenantProvisioner.snapshotId(adminPool, tenantA);
+        } catch (SQLException e) {
             throw new IllegalStateException(
-                    "IT 库缺少种子租户 t-a / t-b：请先应用 migration/verify/V1_seed.sql");
-        }
-        snapshotA = adminQuery("SELECT snapshot_id::text FROM execution_snapshot WHERE tenant_id = "
-                + q(tenantA) + "::uuid LIMIT 1");
-        if (snapshotA == null) {
-            throw new IllegalStateException(
-                    "IT 库缺少 t-a 的执行快照：请先应用 migration/verify/V1_seed.sql");
+                    "创建 IT 专用租户失败（需 IT_PG_ADMIN_USER 为库 owner）：" + SLUG_A + " / " + SLUG_B, e);
         }
     }
 
@@ -173,15 +210,19 @@ class JdbcStatisticsRepositoryIT {
             pool.close();
             pool = null;
         }
+        if (adminPool != null) {
+            adminPool.close();
+            adminPool = null;
+        }
     }
 
     /**
      * 每例开始前记录基线。
      *
-     * <p>⚠️ **必须用增量而不是绝对值**：种子租户里本来就有 Run
-     * （{@code verify/V1_seed.sql} 造的 SUCCEEDED Run），
-     * 别的 IT 也可能在本 IT 前后留下行。断言绝对值就是断言环境，
-     * 换个库、换个顺序就飘。
+     * <p>⚠️ **仍然必须用增量而不是绝对值**：租户虽是本 IT 专用，但
+     * ① 上一例若有清理失败会残留行；② 同一租户被复用于多轮构建。
+     * 断言绝对值就是断言环境，换个库、换个顺序就飘。
+     * （增量断言不能替代租户隔离：基线本身也会被别人改写 —— 见类注释。）
      */
     @BeforeEach
     void captureBaseline() {
@@ -204,7 +245,7 @@ class JdbcStatisticsRepositoryIT {
      * <p>⚠️ **只删能删的**：{@code execution_snapshot} 被不可变触发器挡住，
      * 所以本 IT 绝不新建快照（见类注释）。这里删的
      * {@code run} / {@code weakness_record} / {@code student_profile} 都可删，
-     * 删完种子租户回到种子状态，不给后续 IT 留污染。
+     * 删完回到干净状态，不给后续轮次留污染。
      */
     @AfterEach
     void cleanUp() {
@@ -710,8 +751,7 @@ class JdbcStatisticsRepositoryIT {
      * 改成 {@code autoCommit=false} + 显式 {@code commit()} 后行为确定。
      */
     private static void adminExec(String sql) {
-        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
-             Connection conn = adminPool.getConnection()) {
+        try (Connection conn = adminPool.getConnection()) {
             conn.setAutoCommit(false);
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.executeUpdate();
@@ -723,8 +763,7 @@ class JdbcStatisticsRepositoryIT {
     }
 
     private static String adminQuery(String sql) {
-        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
-             Connection conn = adminPool.getConnection();
+        try (Connection conn = adminPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {
             List<String> out = new ArrayList<>();

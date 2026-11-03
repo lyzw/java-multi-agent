@@ -222,7 +222,7 @@ class ConfigLifecycleIT extends CapITBase {
                 .isEmpty();
 
         // Agent 启用该 Skill → 闭包解析必然失败
-        String agentId = createAgentWithVersion(tenantA, uniqueName("it-lc-agent"), "{}", true);
+        String agentId = createAgentWithVersion(tenantA, agentName("it-lc-agent"), "{}", true);
         adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
                 + " VALUES ('" + tenantA + "'::uuid, '" + agentId + "'::uuid, 1, 'it agent',"
