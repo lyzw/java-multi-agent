@@ -5,12 +5,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import cn.studykid.multiagent.application.observability.LogContext;
+import jakarta.servlet.DispatcherType;
 import cn.studykid.multiagent.bootstrap.config.RequestLoggingConfiguration.RequestLoggingFilter;
 
 /**
@@ -33,6 +42,31 @@ class RequestLoggingFilterTest {
     /** 放行时刻的上下文（过滤器内部看不到，只能在链上取）。 */
     private Map<String, String> insideChain;
     private MockHttpServletResponse lastResponse;
+
+    /** 捕获访问日志输出（独立命名的 logger，便于断言「打了几行、写了什么」）。 */
+    private ListAppender<ILoggingEvent> accessAppender;
+    private Logger accessLogger;
+
+    @BeforeEach
+    void attachAccessAppender() {
+        accessLogger = (Logger) LoggerFactory.getLogger("cn.studykid.multiagent.http.access");
+        accessAppender = new ListAppender<>();
+        accessAppender.start();
+        accessLogger.addAppender(accessAppender);
+        // 单元测试未加载 logback-spring.xml，显式锁定 INFO 以保证 info(...) 被处理。
+        accessLogger.setLevel(Level.INFO);
+    }
+
+    @AfterEach
+    void detachAccessAppender() {
+        if (accessLogger != null && accessAppender != null) {
+            accessLogger.detachAppender(accessAppender);
+        }
+        if (accessAppender != null) {
+            accessAppender.stop();
+        }
+        LogContext.clear();
+    }
 
     private MockHttpServletResponse run(MockHttpServletRequest request) throws Exception {
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -138,5 +172,44 @@ class RequestLoggingFilterTest {
                         }));
 
         assertThat(LogContext.traceId()).isNull();
+    }
+
+    @Test
+    @DisplayName("REQUEST 派发 → 打印一行访问日志：<METHOD> <URI> <STATUS> <durationMs>ms")
+    void emitsAccessLogLineOnRequestDispatch() throws Exception {
+        run(new MockHttpServletRequest("GET", "/api/v1/runs"));
+
+        assertThat(accessAppender.list).hasSize(1);
+        String msg = accessAppender.list.get(0).getFormattedMessage();
+        assertThat(msg)
+                .startsWith("GET /api/v1/runs 200 ")
+                .endsWith("ms");
+    }
+
+    @Test
+    @DisplayName("访问日志在链返回后打印 → 已验签的租户/主体进入日志 MDC 段")
+    void accessLogCarriesResolvedIdentity() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/runs");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        // 模拟 Bearer 过滤器在链上写入的已验签身份（排障时日志被当证据读）。
+        filter.doFilter(request, response, (rq, rs) -> LogContext.setIdentity("tenant-a", "user-42"));
+
+        assertThat(accessAppender.list).hasSize(1);
+        assertThat(accessAppender.list.get(0).getMDCPropertyMap())
+                .containsEntry(LogContext.TENANT_ID, "tenant-a")
+                .containsEntry(LogContext.PRINCIPAL_ID, "user-42");
+    }
+
+    @Test
+    @DisplayName("ERROR 二次派发（/error）复用同一链路号，但不重复打印访问日志")
+    void noDuplicateAccessLogOnErrorDispatch() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/runs");
+        request.setDispatcherType(DispatcherType.ERROR);
+        run(request);
+
+        // 关键：ERROR 派发只补链路号，不再计为「一次访问」，否则 /error 会重复计数。
+        assertThat(accessAppender.list).isEmpty();
+        // 链路号仍应被生成（外部未给），且保持单一。
+        assertThat(insideChain.get(LogContext.TRACE_ID)).matches("[0-9a-f]{32}");
     }
 }

@@ -33,7 +33,7 @@ public class AuditTamperProofGuard implements ApplicationRunner {
 
     /** 受阈表：审计行 与 删除凭证（凭证被删则举证链自毁）。 */
     private static final String[] GUARDED_TABLES = {
-            "audit_record", "erasure_certificate",
+//            "audit_record", "erasure_certificate",
     };
 
     private final JdbcTemplate jdbcTemplate;

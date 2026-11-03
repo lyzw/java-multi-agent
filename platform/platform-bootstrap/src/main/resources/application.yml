@@ -640,3 +640,16 @@ management:
       probes:
         # 启用 liveness/readiness 分组，供 k8s 探针使用
         enabled: "true"
+
+
+# ── HTTP 访问日志（RequestLoggingConfiguration）────────────────────
+# 每行打印：<METHOD> <URI> <STATUS> <durationMs>ms；链路三要素
+# [traceId tenantId principalId] 由 logback MDC 段统一带上（见 logback-spring.xml）。
+# ⚠️ URI 只含 path，不含 query string：query 可能带令牌/授权码，落日志即泄露。
+# ⚠️ 默认 INFO（继承 root），即每个请求一行。无需改代码即可关闭/调级：
+#    关闭：logging.level.cn.studykid.multiagent.http.access=OFF
+#    调 DEBUG 看更细：=DEBUG
+#    环境变量等价写法：LOGGING_LEVEL_CN_STUDYKID_MULTIAGENT_HTTP_ACCESS=OFF
+logging:
+  level:
+    cn.studykid.multiagent.http.access: "${AGENT_HTTP_ACCESS_LOG_LEVEL:INFO}"
