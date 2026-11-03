@@ -27,7 +27,7 @@
 --
 -- 【为什么授权比 rag_app 窄】
 --   · SELECT 全库：读不是风险，而漏授权会让报错点落在业务代码、离真因极远；
---   · INSERT/UPDATE 只给全局治理真正要写的 6 张表；
+--   · INSERT/UPDATE 只给全局治理真正要写的 6 张表；抽检记录**只给 INSERT**（证据不可改）；
 --   · **一张表都不给 DELETE**：语料治理没有删除语义（撤回是终态流转，不是删行）；
 --   · DEFAULT PRIVILEGES 只给 SELECT：将来新增的表**不会**静默变成可全局写。
 --
@@ -137,6 +137,14 @@ SELECT format('GRANT UPDATE ON rag.rag_chunk TO %I', :'rag_ops_role') \gexec
 SELECT format('GRANT INSERT, UPDATE ON rag.rag_chunk_embedding TO %I', :'rag_ops_role') \gexec
 SELECT format('GRANT INSERT, UPDATE ON rag.rag_dictionary TO %I', :'rag_ops_role') \gexec
 SELECT format('GRANT INSERT ON rag.rag_access_audit TO %I', :'rag_ops_role') \gexec
+-- ⚠️ 抽检记录：平台全局语料同样要「通过人工抽检」才能签发 VERIFIED
+--    （InspectionGuard 对两个作用域一视同仁），而抽检记录是**全局行**，
+--    rag_app 的写策略（tenant_id = rag_current_tenant() AND scope='TENANT'）写不进去
+--    —— 实测：应用连接 INSERT 得到
+--    `new row violates row-level security policy for table "rag_inspection_record"`。
+--    因此必须给 ops 通道 INSERT 权；⚠️ 仍然**不给 UPDATE / DELETE**：
+--    抽检记录是「结论的证据」，只追加不修改（InspectionPort 的头注同一条纪律）。
+SELECT format('GRANT INSERT ON rag.rag_inspection_record TO %I', :'rag_ops_role') \gexec
 
 -- 2.3 未来新增的表**只**继承 SELECT —— 全局可写面必须显式扩，不会静默长出来
 SELECT format('ALTER DEFAULT PRIVILEGES IN SCHEMA rag GRANT SELECT ON TABLES TO %I', :'rag_ops_role') \gexec
@@ -162,9 +170,10 @@ SELECT r.rolname      AS 角色,
 FROM pg_roles r
 WHERE r.rolname = :'rag_ops_role';
 
--- 3.2 授权面：应看到 11 张表有 SELECT、6 张表有写、**任何一行都不该出现 DELETE**。
+-- 3.2 授权面：应看到全部表有 SELECT、6 张表有 INSERT/UPDATE、
+--     rag_inspection_record **只有 INSERT**（证据只追加），**任何一行都不该出现 DELETE**。
 \echo ''
-\echo '=== 已获授权（写权限应仅限 6 张表，且无 DELETE）==='
+\echo '=== 已获授权（写权限应仅限 6 张 + 抽检记录 INSERT-only，且无 DELETE）==='
 SELECT table_name                                AS 表,
        string_agg(DISTINCT privilege_type, ', ' ORDER BY privilege_type) AS 权限
 FROM information_schema.role_table_grants
@@ -187,6 +196,16 @@ FROM pg_policies
 WHERE schemaname = 'rag' AND cmd IN ('INSERT', 'UPDATE')
   AND tablename IN ('rag_source', 'rag_chunk', 'rag_chunk_embedding', 'rag_dictionary')
 ORDER BY tablename, policyname;
+
+-- 3.4 抽检记录必须「只追加」：INSERT 且在 UPDATE / DELETE 上零授权。
+--     ⚠️ 这一条是 2026-11-02 新增写面时特意加的收口断言：
+--        抽检记录是 VERIFIED 的判定依据，能改历史记录等于能伪造证据。
+\echo ''
+\echo '=== 抽检记录只追加（应只有 t，其余三列为 f）==='
+SELECT has_table_privilege(:'rag_ops_role', 'rag.rag_inspection_record', 'INSERT') AS 可插入,
+       has_table_privilege(:'rag_ops_role', 'rag.rag_inspection_record', 'UPDATE') AS 可修改,
+       has_table_privilege(:'rag_ops_role', 'rag.rag_inspection_record', 'DELETE') AS 可删除,
+       has_table_privilege(:'rag_ops_role', 'rag.rag_inspection_record', 'TRUNCATE') AS 可清空;
 
 \echo ''
 \echo '✅ rag_ops 角色与最小授权完成。'

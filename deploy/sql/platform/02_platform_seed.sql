@@ -609,3 +609,23 @@ VALUES ('c5f3e4d6-7a8d-4c9e-0f1a-2b3c4d5e6f7a',
         'b0b5eed0-1111-4222-8333-444455556666', 'b4e2d3c5-6f7c-4b8d-9e0f-1a2b3c4d5e6f',
         '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, now())
 ON CONFLICT (snapshot_id) DO NOTHING;
+
+-- ── B4. 执行快照推导（2026-11-01 补）───────────────────────────────
+-- 【为什么必须有】收敛前 t-a 三个 Agent 的执行快照来自已删除的 V1_seed.sql /
+--   13 号回填补丁；收敛后权威源只剩本文件。没有快照，Run 创建链第一步
+--   （execution_capability_snapshot 解析）就断：RunCreationEndpointIT 等直接红，
+--   新初始化的环境所有 Run 都会判成 CONFIG_UNAVAILABLE。
+-- 【形状】对全部 PUBLISHED 的 agent_version 逐版本推导一条快照（幂等：
+--   NOT EXISTS 守卫跳过已有快照的版本；该表无 (tenant_id, version_id) 唯一约束，
+--   不能用 ON CONFLICT）。
+-- 【与附录 A 的关系】附录 A 推导「发布头 + 指针」，本段推导「能力快照」，
+--   两者同源于定义表，共同保证「灌完种子的库是可跑 Run 的库」。
+INSERT INTO public.execution_snapshot
+    (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config, created_at)
+SELECT v.tenant_id, v.version_id, '{}', '{}', '{}',
+       '{"maxCostPerRun":"2.00","maxLlmCalls":12,"maxSteps":20,"approvalRequired":"OPTIONAL"}'::jsonb,
+       now()
+FROM public.agent_version v
+WHERE v.published_at IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM public.execution_snapshot s
+                  WHERE s.tenant_id = v.tenant_id AND s.version_id = v.version_id);

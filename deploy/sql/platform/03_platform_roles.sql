@@ -220,6 +220,37 @@ SELECT format('GRANT SELECT ON platform.tenant TO %I', :'app_role') \gexec
 SELECT format('GRANT SELECT ON platform.tenant_quota TO %I', :'app_role') \gexec
 SELECT format('ALTER DEFAULT PRIVILEGES IN SCHEMA platform GRANT SELECT ON TABLES TO %I', :'app_role') \gexec
 
+-- ── 应用角色：P7 指标遥测表（2026-11-01 补） ──────────────────────
+-- 【为什么给 app_agent 这几张】
+--   platform 域的 agent_* 指标 6 张表是 Run 执行热路径上的应用自身遥测
+--   （JdbcAgentMetricRepository / JdbcRiskEventRepository，每次 Run 采集 upsert），
+--   走 platform_ops 运维通道（max-pool-size=2 的低频小池）会挤爆连接池，
+--   且它们是非敏感遥测数据（不含身份/凭据）—— 与 platform_user 等身份表性质不同。
+--   其余 platform 身份/管理表（platform_user / role / audit / tenant 写 / sys_dictionary）
+--   不给：那些路径全部改走 platform_ops 专用数据源（PlatformOpsDataSourceProvider
+--   .platformIdentityDataSource()，见 AuthConfiguration / ApplicationConfiguration 装配）。
+SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON platform.agent_trace_metric TO %I', :'app_role') \gexec
+SELECT format('GRANT SELECT, INSERT, DELETE ON platform.agent_trace_tool_call TO %I', :'app_role') \gexec
+SELECT format('GRANT SELECT, INSERT ON platform.agent_trace_feedback TO %I', :'app_role') \gexec
+SELECT format('GRANT SELECT, INSERT ON platform.agent_eval_sample TO %I', :'app_role') \gexec
+SELECT format('GRANT SELECT, INSERT ON platform.agent_risk_event TO %I', :'app_role') \gexec
+SELECT format('GRANT SELECT, INSERT ON platform.agent_task_outcome TO %I', :'app_role') \gexec
+SELECT format('GRANT SELECT ON platform.mv_agent_metric_hourly TO %I', :'app_role') \gexec
+
+-- ── 应用角色：授权决策流水（D6 / P2，2026-11-02 补） ────────────────
+-- 【为什么只给 INSERT，且必须显式 REVOKE SELECT】
+--   这张表是「谁在什么时候、以什么主体、对什么资源、被判允许还是拒绝」的**全平台**流水。
+--   · 给 SELECT = 任一租户的主体可枚举其它租户的授权决策（谁、对什么、放行还是拒绝），
+--     属跨租户元数据泄漏；而应用侧唯一的写者是 DefaultAccessGate 的决策记录器，
+--     它只需要 INSERT。
+--   · 读能力只给 platform_ops（上「整域 DML」已覆盖）—— 取证走运维通道，不走业务进程。
+--   ⚠️ 必须显式 REVOKE：上面「应用角色：仅租户登记表只读」里的
+--     `ALTER DEFAULT PRIVILEGES IN SCHEMA platform GRANT SELECT ON TABLES TO app_role`
+--     会让**此脚本之后新建的任何 platform 表**自动获得 SELECT。
+--     只写 GRANT INSERT 而不 REVOKE，会留下「本次修好了、下次建表又漏」的复发路径。
+SELECT format('GRANT INSERT ON platform.authz_decision_log TO %I', :'app_role') \gexec
+SELECT format('REVOKE SELECT ON platform.authz_decision_log FROM %I', :'app_role') \gexec
+
 -- ── 自检：授权未生效即报错（fail-closed）──────────────────────────
 DO $$
 DECLARE
@@ -234,7 +265,17 @@ BEGIN
             AND has_table_privilege(app, 'platform.tenant', 'SELECT')) THEN
         RAISE EXCEPTION '授权未生效：app_agent 对 platform.tenant 的 USAGE/SELECT 缺失';
     END IF;
-    RAISE NOTICE '自检通过：platform 域授权就位（ops 整域 DML / app 仅租户登记表只读）';
+    -- 决策流水：必须能写（否则判定发生却不留痕迹，且失败被限频吞掉 → 静默无审计）
+    IF NOT has_table_privilege(app, 'platform.authz_decision_log', 'INSERT') THEN
+        RAISE EXCEPTION '授权未生效：app_agent 对 platform.authz_decision_log 缺 INSERT —— '
+                        '决策日志会在每次判定时写入失败，且失败被限频告警吞掉（静默无审计）';
+    END IF;
+    -- 反向：不得能读（该表含全平台各租户的判定记录）
+    IF has_table_privilege(app, 'platform.authz_decision_log', 'SELECT') THEN
+        RAISE EXCEPTION '越权：app_agent 竟可 SELECT platform.authz_decision_log —— '
+                        '该表含全平台各租户的判定记录，读必须走 platform_ops 运维通道';
+    END IF;
+    RAISE NOTICE '自检通过：platform 域授权就位（ops 整域 DML / app 仅租户登记表只读 + 决策流水只写）';
 END;
 $$;
 

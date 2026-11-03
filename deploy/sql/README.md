@@ -12,8 +12,8 @@
 deploy/sql/
 ├── README.md                              ← 本文件
 ├── platform/                              目标库：agent_dev / agent_prod / 隔离 IT 库
-│   ├── 01_platform_ddl.sql                完整结构终态快照（65 表 / 680 列 / 255 约束 /
-│   │                                      15 枚举 / 15 函数 / 172 索引 / 33 触发器 /
+│   ├── 01_platform_ddl.sql                完整结构终态快照（66 表 / 689 列 / 256 约束 /
+│   │                                      15 枚举 / 15 函数 / 175 索引 / 33 触发器 /
 │   │                                      42 RLS 开启 + 50 策略；public + platform 两域）
 │   ├── 02_platform_seed.sql               种子（pg_dump --inserts 导出）
 │   │                                      + 附录 A：发布头 + 指针（按定义表推导，非 dump）
@@ -28,7 +28,8 @@ deploy/sql/
     │                                      11 RLS 开启 + 35 策略；含扩展头）
     ├── 02_rag_seed.sql                    种子（全局字典 + 演示语料）
     ├── 03_rag_roles.sql                   rag_app 角色 + 授权（NOBYPASSRLS）
-    └── 04_rag_ops_role.sql                rag_ops 全局语料治理通道（BYPASSRLS，最小授权）
+    └── 04_rag_ops_role.sql                rag_ops 全局语料治理通道（BYPASSRLS，最小授权）；
+   ⚠️ 抽检记录只给 INSERT —— 它是 VERIFIED 的判定证据，改了等于伪造证据
 ```
 
 **初始化总入口**：`scripts/init-db.sh platform|rag`（建库 → DDL → 种子 → 角色 → 自检一条命令）。
@@ -102,6 +103,9 @@ psql -h <host> -U <超管> -d study_rag -v ON_ERROR_STOP=1 \
      -v rag_password='<口令>' -f deploy/sql/rag/03_rag_roles.sql
 psql -h <host> -U <owner> -d study_rag -v ON_ERROR_STOP=1 \
      -v rag_ops_password='<口令>' -f deploy/sql/rag/04_rag_ops_role.sql
+# ⚠️ 04 是「先 REVOKE ALL 再 GRANT」的自收敛脚本：任何授权变更都改 04 并重跑，
+#    不要手工 GRANT（手工授权不会被 REVOKE 收敛掉，表现为「改了脚本却仍漂移」）。
+#    重跑后必须核对：scripts/check-rag-ops-role.sh 全部 13 项通过。
 ```
 
 ### ⚠️ 身份与顺序纪律

@@ -1,0 +1,46 @@
+# Docling 解析服务（V1.0.2 T-4 / §4 Z5a）
+# ⚠️ 境内部署：模型随镜像预置，运行时设 HF_HUB_OFFLINE=1 断网
+services:
+  docling:
+    image: quay.io/docling-project/docling-serve@sha256:8a5fbc993da9dec17c53880e2445834591ad26800ef698ca64096bef29671808
+    container_name: rag-docling
+    restart: unless-stopped
+    ports:
+      # ⚠️ 只绑本机，不对外暴露
+      - "127.0.0.1:5001:5001"
+    environment:
+      DOCLING_SERVE_ENABLE_UI: "false"
+      DOCLING_SERVE_LOGLEVEL: "INFO"
+      # ⚠️ 实测：这三个 DOCLING_SERVE_* 开关键在 1.38.2 上**不生效**（OCR 仍会跑），
+      #    真正的控制点在**请求参数**（见 README §2.6）。保留它们无害，
+      #    但不要依赖它们控制行为。
+      DOCLING_SERVE_DO_OCR: "false"
+      DOCLING_SERVE_DO_TABLE_STRUCTURE: "true"
+      # ⚠️⚠️ 同步等待上限：默认 120s，实测 20 页需 94s，
+      #    整册（100+ 页）需 8~10 分钟 → 默认值必然 504。
+      DOCLING_SERVE_MAX_SYNC_WAIT: "1800"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - ./models:/models:rw
+      - ./inbox:/data:rw
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: "3.0"
+          memory: 8g
+        reservations:
+          memory: 2g
+    networks:
+      - rag-net
+
+networks:
+  rag-net:
+    name: rag-net
+    driver: bridge

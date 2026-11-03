@@ -852,6 +852,61 @@ COMMENT ON TABLE platform.agent_trace_tool_call IS '工具维度指标（按 Tra
 
 
 --
+-- Name: authz_decision_log; Type: TABLE; Schema: platform; Owner: -
+--
+
+-- 【这张表为什么存在】12 文 §4.5 / D6：权限判定从「数据库 RLS 隐式生效」上移到
+--   「应用层显式 Gate」后，<b>判定过程本身</b>必须可举证 —— 否则出问题时无法回答
+--   「谁在什么时候、以什么主体、对什么资源、被判了允许还是拒绝、为什么」。
+--   RLS 时代的答案是 pg_stat / 日志行数，应用层时代只能靠这张流水表。
+--
+-- 【⚠️ tenant_id / principal_id 是 text 而非 uuid】
+--   本表是<b>审计流水</b>，目标是「无论主体长什么样都能记下来」。
+--   写成 uuid 后，任何非 UUID 形态的租户标识（测试夹具、历史迁移遗留、
+--   将来的非 PG 后端）都会让写入抛类型错误 —— 而审计表写入失败意味着
+--   <b>这次判定没有留下痕迹</b>，恰恰是最需要痕迹的时刻。
+--
+-- 【⚠️ 本表<b>不挂 RLS</b>】与其余 platform 域表一致（见 SchemaStructureTest
+--   「平台域表整体不挂 RLS 策略」）。跨租户隔离靠<b>授权</b>而非行策略：
+--   应用角色 app_agent 只有 INSERT（见 03_platform_roles.sql §2b），
+--   读只能走 platform_ops 运维通道 —— 应用进程即使被攻破也读不到别人的判定流水。
+--
+-- 【⚠️ 只增不改】没有 UPDATE/DELETE 的应用路径；保留期清理属 04_retention_role 面。
+CREATE TABLE platform.authz_decision_log (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    occurred_at timestamp with time zone DEFAULT now() NOT NULL,
+    tenant_id text NOT NULL,
+    principal_id text NOT NULL,
+    scope character varying(32) NOT NULL,
+    action character varying(48) NOT NULL,
+    resource_type character varying(128) NOT NULL,
+    permitted boolean NOT NULL,
+    reason_code character varying(64)
+);
+
+
+--
+-- Name: TABLE authz_decision_log; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON TABLE platform.authz_decision_log IS '授权判定流水（D6 / P2）。每次 AccessGate 判定一行：主体 + 动作 + 资源 + 允许/拒绝 + 原因码。⚠️ 只增不改：它是「判定发生过」的举证材料，任何 UPDATE 都等于伪造证据。⚠️ 不挂 RLS，隔离靠授权（app_agent 仅 INSERT，读走 platform_ops）。详见同目录 03_platform_roles.sql §2b。';
+
+
+--
+-- Name: COLUMN authz_decision_log.tenant_id; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON COLUMN platform.authz_decision_log.tenant_id IS 'text 而非 uuid：审计流水必须「无论主体长什么样都能记下来」。写成 uuid 后非 UUID 形态的主体（测试夹具 / 历史遗留 / 非 PG 后端）会让写入抛类型错误，而那一刻正是最需要留下痕迹的时刻。';
+
+
+--
+-- Name: COLUMN authz_decision_log.reason_code; Type: COMMENT; Schema: platform; Owner: -
+--
+
+COMMENT ON COLUMN platform.authz_decision_log.reason_code IS '拒绝原因码（如 NO_RULE / NO_SUBJECT / DECISION_ERROR / 规则自带码）；放行为 NULL。⚠️ 只存码不存自由文本：调用方靠它区分 403 与 500，塞进不可枚举的文本会让它失去判别力。';
+
+
+--
 -- Name: mv_agent_metric_hourly; Type: MATERIALIZED VIEW; Schema: platform; Owner: -
 --
 
@@ -2897,6 +2952,14 @@ ALTER TABLE ONLY platform.agent_trace_tool_call
 
 
 --
+-- Name: authz_decision_log authz_decision_log_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.authz_decision_log
+    ADD CONSTRAINT authz_decision_log_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: platform_audit_event platform_audit_event_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
 --
 
@@ -3685,6 +3748,22 @@ CREATE INDEX idx_agent_metric_tenant_time ON platform.agent_trace_metric USING b
 --
 
 CREATE INDEX idx_agent_trace_tool_time ON platform.agent_trace_tool_call USING btree (started_at DESC, tool_name);
+
+
+--
+-- Name: idx_authz_decision_log_occurred; Type: INDEX; Schema: platform; Owner: -
+--
+
+-- 保留期清理与「最近发生了什么」都按时间倒序扫，故 occurred_at DESC 单独成索引。
+CREATE INDEX idx_authz_decision_log_occurred ON platform.authz_decision_log USING btree (occurred_at DESC);
+
+
+--
+-- Name: idx_authz_decision_log_tenant; Type: INDEX; Schema: platform; Owner: -
+--
+
+-- 单租户取证（「这个租户上个月被拒了多少次」）走 (tenant_id, occurred_at DESC)。
+CREATE INDEX idx_authz_decision_log_tenant ON platform.authz_decision_log USING btree (tenant_id, occurred_at DESC);
 
 
 --

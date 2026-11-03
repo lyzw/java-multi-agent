@@ -530,6 +530,55 @@ COMMENT ON COLUMN rag.rag_edition.scope IS '''作用域：PLATFORM=平台全局�
 
 
 --
+-- Name: rag_inspection_record; Type: TABLE; Schema: rag; Owner: -
+--
+
+-- ⚠️ V1.0.2 §5 R2 / 设计 §2.2.3：人工抽检明细。**只追加不修改**——它是质量判定的证据，
+--    门禁证据包（D09 G1 ②③④）直接引用这些记录。改历史记录等于伪造证据。
+CREATE TABLE rag.rag_inspection_record (
+    record_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id uuid NOT NULL,
+    source_id uuid NOT NULL,
+    chunk_id uuid NOT NULL,
+    inspector_id uuid NOT NULL,
+    expected_role text NOT NULL,
+    actual_role text NOT NULL,
+    -- 错误类型；结论为 PASS 时必须为 NULL（由应用层 InspectionRecord 不变式保证）
+    error_type text,
+    verdict text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    scope text DEFAULT 'TENANT'::text NOT NULL,
+    CONSTRAINT rag_inspection_verdict_chk CHECK ((verdict = ANY (ARRAY['PASS'::text, 'FAIL'::text]))),
+    CONSTRAINT rag_inspection_error_type_chk CHECK ((error_type IS NULL OR error_type = ANY (ARRAY['ANSWER_LEAK'::text, 'EXERCISE_NO_LOST'::text, 'LOCATOR_WRONG'::text, 'CHUNK_BOUNDARY'::text, 'OTHER'::text]))),
+    -- ⚠️ 结论与错误类型必须自洽：FAIL 必有类型、PASS 必无类型
+    CONSTRAINT rag_inspection_verdict_error_ck CHECK ((((verdict = 'FAIL'::text) AND (error_type IS NOT NULL)) OR ((verdict = 'PASS'::text) AND (error_type IS NULL))))
+);
+
+ALTER TABLE ONLY rag.rag_inspection_record FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: rag_kp_alias; Type: TABLE; Schema: rag; Owner: -
+--
+
+-- ⚠️ V1.0.2 §5 R7 / §8.3 / 设计 §2.2.3：知识点别名表。
+--    **不复用 rag_dictionary**：后者是通用 dict_type/code 词表，
+--    无法表达「某 kp_id 的别名集合」这一关系。
+--    ⚠️ KnowledgePoint.aliases（TEXT[]）的内存匹配机制已存在，
+--    本表是它的人工维护入口与持久化载体。
+CREATE TABLE rag.rag_kp_alias (
+    alias_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id uuid NOT NULL,
+    kp_id uuid NOT NULL,
+    alias_text text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    scope text DEFAULT 'TENANT'::text NOT NULL
+);
+
+ALTER TABLE ONLY rag.rag_kp_alias FORCE ROW LEVEL SECURITY;
+
+
+--
 -- Name: rag_ingest_job; Type: TABLE; Schema: rag; Owner: -
 --
 
@@ -538,6 +587,13 @@ CREATE TABLE rag.rag_ingest_job (
     tenant_id uuid NOT NULL,
     source_id uuid NOT NULL,
     status rag.rag_ingest_status DEFAULT 'PENDING'::rag.rag_ingest_status NOT NULL,
+    -- ⚠️ V1.0.2 §8.3：阶段内进度（与 status 的「阶段级」枚举正交）。
+    --    status 表达在哪个阶段，stage 表达该阶段做到什么程度（如 'PARSING 60'）。
+    stage text,
+    -- ⚠️ V1.0.2 §8.3：重试次数。重试=新建行，本列记录「这是第几次尝试」，旧行留痕不覆盖。
+    attempt integer DEFAULT 0 NOT NULL,
+    -- ⚠️ V1.0.2 §8.3：触发人（去哨兵后为真实主体），审计留痕用。
+    created_by uuid,
     parser_version text,
     embed_model text,
     chunk_count integer,
@@ -638,9 +694,18 @@ CREATE TABLE rag.rag_source (
     ver_reject_reason text,
     ver_decided_at timestamp with time zone,
     scope text DEFAULT 'TENANT'::text NOT NULL,
+    -- ⚠️ V1.0.2 §5 R2 / 设计 §2.2.4：抽检状态，是 IN_REVIEW→VERIFIED 迁移的**前置守卫**落点。
+    --    默认 NOT_REQUIRED；InspectionGuard 只认 PASSED，故默认值不会误放行。
+    --    ⚠️⚠️ **本列必须追加在表尾，不得插在中间**：
+    --    02_rag_seed.sql 的 INSERT 不带列名（{@code INSERT ... VALUES (...)}），
+    --    在中间插入一列会让后续所有值整体错位一个位置，
+    --    直接触发 CHECK 违约（真库实测已踩到：inspection_status 收到 'TENANT'）。
+    --    追加在表尾则既有不带列名的 INSERT 依然按原顺序对齐。
+    inspection_status text DEFAULT 'NOT_REQUIRED'::text NOT NULL,
     CONSTRAINT rag_source_identifier_chk CHECK ((((trust_tier = ANY (ARRAY['OFFICIAL_PUBLISHER'::rag.rag_trust_tier, 'OFFICIAL_TUTORIAL'::rag.rag_trust_tier])) AND (isbn IS NOT NULL)) OR ((trust_tier = ANY (ARRAY['PEER_REVIEWED_PAPER'::rag.rag_trust_tier, 'PREPRINT'::rag.rag_trust_tier])) AND (doi IS NOT NULL)) OR (trust_tier = 'UNVERIFIED'::rag.rag_trust_tier))),
     CONSTRAINT rag_source_scope_ck CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id())))),
     CONSTRAINT rag_source_ver_valid_days_chk CHECK ((ver_valid_days > 0)),
+    CONSTRAINT rag_source_inspection_status_chk CHECK ((inspection_status = ANY (ARRAY['NOT_REQUIRED'::text, 'PASSED'::text, 'FAILED'::text]))),
     CONSTRAINT rag_source_verified_requires_evidence_chk CHECK (((ver_status <> 'VERIFIED'::rag.rag_verification_status) OR ((ver_evidence IS NOT NULL) AND (verified_at IS NOT NULL))))
 );
 
@@ -792,6 +857,31 @@ ALTER TABLE ONLY rag.rag_chunk_embedding
 
 ALTER TABLE ONLY rag.rag_ingest_job
     ADD CONSTRAINT rag_ingest_job_pkey PRIMARY KEY (job_id);
+
+
+--
+-- Name: rag_inspection_record rag_inspection_record_pkey; Type: CONSTRAINT; Schema: rag; Owner: -
+--
+
+ALTER TABLE ONLY rag.rag_inspection_record
+    ADD CONSTRAINT rag_inspection_record_pkey PRIMARY KEY (record_id);
+
+
+--
+-- Name: rag_kp_alias rag_kp_alias_pkey; Type: CONSTRAINT; Schema: rag; Owner: -
+--
+
+ALTER TABLE ONLY rag.rag_kp_alias
+    ADD CONSTRAINT rag_kp_alias_pkey PRIMARY KEY (alias_id);
+
+
+--
+-- Name: rag_kp_alias rag_kp_alias_unique; Type: CONSTRAINT; Schema: rag; Owner: -
+--
+
+-- ⚠️ 同一知识点下同一别名只允许一条：重复别名只会让匹配变慢，不增加召回。
+ALTER TABLE ONLY rag.rag_kp_alias
+    ADD CONSTRAINT rag_kp_alias_unique UNIQUE (tenant_id, kp_id, alias_text);
 
 
 --
@@ -951,6 +1041,79 @@ CREATE INDEX rag_document_tenant_source_idx ON rag.rag_document USING btree (ten
 --
 
 CREATE INDEX rag_source_tenant_trust_idx ON rag.rag_source USING btree (tenant_id, trust_tier);
+
+
+--
+-- Name: rag_ingest_job_tenant_status_idx; Type: INDEX; Schema: rag; Owner: -
+--
+
+-- ⚠️ V1.0.2 §8.3 / P5：该表原为「零二级索引」。
+--    消费循环按 status='PENDING' + FOR UPDATE SKIP LOCKED 领取，Sweeper 按
+--    status IN (进行中) AND started_at < now()-interval 扫描超时——无索引则每次全表扫描。
+CREATE INDEX rag_ingest_job_tenant_status_idx ON rag.rag_ingest_job USING btree (tenant_id, status);
+
+
+--
+-- Name: rag_ingest_job_status_created_idx; Type: INDEX; Schema: rag; Owner: -
+--
+
+-- ⚠️ V1.0.2 §8.3：跨租户/全局视角的领取与积压统计按 (status, created_at) 排序。
+CREATE INDEX rag_ingest_job_status_created_idx ON rag.rag_ingest_job USING btree (status, created_at);
+
+
+--
+-- Name: rag_document_tenant_content_hash_uq; Type: INDEX; Schema: rag; Owner: -
+--
+
+-- ⚠️ V1.0.2 §2.2.2 / N1：载体级去重兜底——**部分唯一索引**，必须排除非活跃载体：
+--    ① ver_status='REVOKED' 的载体经新来源重传同文件是合法路径；
+--    ② parse_status='FAILED' 的载体同文件重传重跑是失败处置的唯一活口。
+--    若不加这两个条件，唯一索引会直接堵死上述两条合法链路（并与 T-10 终态纪律冲突）。
+--    ⚠️ 本索引的 WHERE 必须与应用层预检（IngestDedupPrecheck）逐字同口径，否则两层打架。
+CREATE UNIQUE INDEX rag_document_tenant_content_hash_uq ON rag.rag_document
+    USING btree (tenant_id, content_hash)
+    WHERE (ver_status <> 'REVOKED'::rag.rag_verification_status AND parse_status <> 'FAILED'::text);
+
+
+--
+-- Name: rag_source_tenant_isbn_uq; Type: INDEX; Schema: rag; Owner: -
+--
+
+-- ⚠️ V1.0.2 §2.2.2 / N1：来源级去重兜底——**部分唯一索引**，必须排除 REVOKED 来源。
+--    RAG-D07 T-10：REVOKED 是终态，重新准入必须**新建 source_id**；同一本被撤回的书
+--    重新登记会产生「新 source_id + 同 ISBN」。若不加 ver_status<>'REVOKED'，
+--    该合法路径会被唯一索引直接拒绝。
+CREATE UNIQUE INDEX rag_source_tenant_isbn_uq ON rag.rag_source
+    USING btree (tenant_id, isbn)
+    WHERE (isbn IS NOT NULL AND ver_status <> 'REVOKED'::rag.rag_verification_status);
+
+
+--
+-- Name: rag_source_tenant_doi_uq; Type: INDEX; Schema: rag; Owner: -
+--
+
+-- ⚠️ V1.0.2 §2.2.2 / N1：DOI 同 ISBN 口径（同源部分唯一索引）。
+CREATE UNIQUE INDEX rag_source_tenant_doi_uq ON rag.rag_source
+    USING btree (tenant_id, doi)
+    WHERE (doi IS NOT NULL AND ver_status <> 'REVOKED'::rag.rag_verification_status);
+
+
+--
+-- Name: rag_inspection_record_source_idx; Type: INDEX; Schema: rag; Owner: -
+--
+
+-- ⚠️ 抽检记录按来源查询（抽检台/证据包），并支撑「按来源聚合判定」。
+CREATE INDEX rag_inspection_record_source_idx ON rag.rag_inspection_record
+    USING btree (tenant_id, source_id, created_at DESC);
+
+
+--
+-- Name: rag_kp_alias_kp_idx; Type: INDEX; Schema: rag; Owner: -
+--
+
+-- ⚠️ 摄取时按知识点批量取别名，必须按 kp_id 建索引。
+CREATE INDEX rag_kp_alias_kp_idx ON rag.rag_kp_alias
+    USING btree (tenant_id, kp_id);
 
 
 --
@@ -1254,6 +1417,32 @@ ALTER TABLE rag.rag_ingest_job ENABLE ROW LEVEL SECURITY;
 --
 
 CREATE POLICY rag_ingest_tenant_isolation ON rag.rag_ingest_job USING ((tenant_id = rag.rag_current_tenant())) WITH CHECK ((tenant_id = rag.rag_current_tenant()));
+
+
+--
+-- Name: rag_inspection_record; Type: ROW SECURITY; Schema: rag; Owner: -
+--
+
+ALTER TABLE rag.rag_inspection_record ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: rag_inspection_record rag_inspection_tenant_isolation; Type: POLICY; Schema: rag; Owner: -
+--
+
+CREATE POLICY rag_inspection_tenant_isolation ON rag.rag_inspection_record USING ((tenant_id = rag.rag_current_tenant())) WITH CHECK ((tenant_id = rag.rag_current_tenant()));
+
+
+--
+-- Name: rag_kp_alias; Type: ROW SECURITY; Schema: rag; Owner: -
+--
+
+ALTER TABLE rag.rag_kp_alias ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: rag_kp_alias rag_kp_alias_tenant_isolation; Type: POLICY; Schema: rag; Owner: -
+--
+
+CREATE POLICY rag_kp_alias_tenant_isolation ON rag.rag_kp_alias USING ((tenant_id = rag.rag_current_tenant())) WITH CHECK ((tenant_id = rag.rag_current_tenant()));
 
 
 --
