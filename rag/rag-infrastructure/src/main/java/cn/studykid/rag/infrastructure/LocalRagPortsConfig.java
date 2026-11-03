@@ -10,6 +10,7 @@ import cn.studykid.rag.application.grounding.GroundingService;
 import cn.studykid.rag.application.ingest.IngestionPipeline;
 import cn.studykid.rag.core.grounding.GroundingPolicy;
 import cn.studykid.rag.infrastructure.grounding.LocalLexicalEntailmentPort;
+import cn.studykid.rag.infrastructure.parsing.DoclingDocumentParserPort;
 import cn.studykid.rag.infrastructure.parsing.LocalDeterministicDocumentParserPort;
 import cn.studykid.rag.ports.DocumentParserPort;
 import cn.studykid.rag.ports.EntailmentPort;
@@ -57,11 +58,58 @@ public class LocalRagPortsConfig {
 
     private final boolean localPortsEnabled;
 
+    /**
+     * 解析端口装配（V1.0.2 S2-1）。
+     *
+     * <p><b>选择逻辑</b>：
+     * <ul>
+     *   <li>配置了 {@code rag.docling.base-url} → <b>Docling 适配器</b>（生产路径）；</li>
+     *   <li>未配置 → 占位解析器，但受 {@link LocalPortGate} fail-closed 约束
+     *       （须显式 {@code rag.local-ports.enabled=true} 才放行）。</li>
+     * </ul>
+     *
+     * <p><b>⚠️ 两条路径都不会「自动回落」</b>：配了 Docling 地址后若服务不可用，
+     * Docling 适配器抛 {@link DoclingDocumentParserPort.DoclingUnavailableException}，
+     * job 置 FAILED——<b>绝不</b>悄悄换回占位解析器。
+     * 理由见该类的类注释：占位解析器的答案区启发式可能泄题，
+     * 「看起来成功实则泄题」比「明确失败」危险得多。
+     */
     @Bean
-    public DocumentParserPort documentParserPort() {
+    public DocumentParserPort documentParserPort(
+            @Value("${rag.docling.base-url:}") String doclingBaseUrl,
+            @Value("${rag.docling.timeout-seconds:900}") int doclingTimeoutSeconds,
+            @Value("${rag.docling.pages-per-segment:20}") int pagesPerSegment,
+            @Value("${rag.docling.max-segments:60}") int maxSegments) {
+        if (doclingBaseUrl != null && !doclingBaseUrl.isBlank()) {
+            // ⚠️ 实测（沪教版六年级下册 148 页）：整册同步解析需 710 秒，
+            //    故默认按 20 页/段提交（每段 36~54 秒），避免超时与打满服务。
+            log.info("[RAG] DocumentParserPort → Docling（base-url 已配置；"
+                    + "分段解析，每段 {} 页，最多 {} 段，单请求超时 {}s）",
+                    pagesPerSegment, maxSegments, doclingTimeoutSeconds);
+            return new DoclingDocumentParserPort(doclingBaseUrl, doclingTimeoutSeconds,
+                    pagesPerSegment, maxSegments);
+        }
         LocalPortGate.requireEnabled(localPortsEnabled,
                 "DocumentParserPort → LocalDeterministicDocumentParserPort");
         return new LocalDeterministicDocumentParserPort();
+    }
+
+    /**
+     * 无参重载（向后兼容既有测试与切片上下文）。
+     *
+     * <p>⚠️ 语义等同于「未配置 Docling 端点」：只走占位解析器并受 fail-closed 闸门约束。
+     * 生产装配由 Spring 注入 {@code rag.docling.base-url}，走带参版本。
+     *
+     * @return 占位解析器
+     */
+    public DocumentParserPort documentParserPort() {
+        // ⚠️ 未配置 Docling → 走占位解析器（受 fail-closed 闸门约束）。
+        //    分段参数在此不适用（占位实现没有远程调用）。
+        return documentParserPort("", 900,
+                cn.studykid.rag.infrastructure.parsing.DoclingDocumentParserPort
+                        .DEFAULT_PAGES_PER_SEGMENT,
+                cn.studykid.rag.infrastructure.parsing.DoclingDocumentParserPort
+                        .DEFAULT_MAX_SEGMENTS);
     }
 
     @Bean

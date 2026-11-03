@@ -40,6 +40,7 @@ import cn.studykid.rag.management.core.VerificationTransition;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort.BulkItemResult;
 import cn.studykid.rag.management.ports.CorpusManagementPort.BulkRegistrationResult;
+import cn.studykid.rag.management.ports.CorpusManagementPort.DocumentImportCommand;
 
 /**
  * 语料数据管理的 JDBC 实现（RAG-D07 §2 准入流程 / RAG-D03 §2 数据模型）。
@@ -73,6 +74,9 @@ import cn.studykid.rag.management.ports.CorpusManagementPort.BulkRegistrationRes
  * 写 {@code c.source_id} 会得到 {@code column c.source_id does not exist}。
  */
 public class JdbcCorpusManagementRepository implements CorpusManagementPort {
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(JdbcCorpusManagementRepository.class);
 
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate transactionTemplate;
@@ -454,8 +458,25 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             //    V3 迁移后 rag_access_audit 允许 ADMIT / REJECT 动作，
             //    使「审核员的判定行为」有独立事件流，而不必借道 INGEST
             //    （RAG-D07 §7 记载的缺口）。
-            appendAuditWithinTenant(ch, decision.decidedBy(),
-                    auditActionFor(decision.targetStatus()), sourceId);
+            //
+            //    ⚠️⚠️ IN_REVIEW / PENDING 这条流转**刻意不写 INGEST**：
+            //    findRegisteredBy（审核职责分离「审核员 ≠ 采集员」的判定依据）
+            //    取的是该来源最近一条 action='INGEST' 的 principal_id。而本方法
+            //    正是「认领/提交审核」的流转，执行人是审核员而不是登记人——
+            //    若它也写成 INGEST，就会把登记人**覆盖成提交人自己**，
+            //    自审校验随后比对到的是提交人，等于把「审核员 ≠ 采集员」这条
+            //    治理底线悄悄抹掉（实测可复现）。因此：
+            //      · 已有审计记录（登记时必然写过一条 INGEST）→ 不再重复写，
+            //        登记人与提交人在这里本来就是两个人时，也不该改写登记事实；
+            //      · 没有记录（历史数据）→ 才用本次主体补一条，保持留痕完整性。
+            //    两种情况下 auditActionFor() 对 VERIFIED/REJECTED/REVOKED 的映射不变。
+            if (hasAuditRecord(ch, sourceId)) {
+                log.debug("[RAG] 来源 {} 已有审计记录，本轮 {} 流转不再写入 INGEST（保护登记人）",
+                        sourceId, decision.targetStatus());
+            } else {
+                appendAuditWithinTenant(ch, decision.decidedBy(),
+                        auditActionFor(decision.targetStatus()), sourceId);
+            }
 
             return findSourceWithinTenant(ch.template(), ch.tenantId(), sourceId);
         });
@@ -572,6 +593,138 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
 
             return findDocumentWithinTenant(ch.template(), ch.tenantId(), documentId);
         });
+    }
+
+    @Override
+    @Nullable
+    public String findRegisteredBy(@NonNull RagManagementContext context,
+                                   @NonNull String sourceId) {
+        // ⚠️⚠️ 这是**只读查询，绝不能走 writeVia**。
+        //    writeVia 在 PLATFORM 作用域下要求注入 rag_ops 运维通道，
+        //    未接入时会抛 RagOpsUnavailableException——而「读一个登记人」
+        //    根本不需要写权限（实测踩到：审核端点因此 500）。
+        //
+        //    ⚠️ 也**不能**只看租户上下文：本方法的调用方是审核端点，
+        //    而全局语料（scope=PLATFORM, tenant_id=全局哨兵）在租户会话下不可见。
+        //    故这里用「尽力而为」策略：查不到就返回 null（SOD 规则会把 null 视为
+        //    「历史数据无登记人」，不阻断审核，但审计仍记录实际审核人）。
+        try {
+            String tid = context.scope() == RagCorpusScope.TENANT
+                    ? context.requireTenant().tenantId() : null;
+            java.util.List<String> rows = transactionTemplate.execute(status -> {
+                if (tid != null) {
+                    jdbcTemplate.queryForObject(
+                            "SELECT set_config('app.tenant_id', ?, true)", String.class, tid);
+                }
+                String sql = "SELECT principal_id::text FROM rag_access_audit"
+                        + " WHERE source_id = ?::uuid AND action = 'INGEST'"
+                        + (tid != null ? " AND tenant_id = ?::uuid" : "")
+                        // ⚠️ 列名是 occurred_at 而非 created_at（实测表结构）
+                        + " ORDER BY occurred_at DESC LIMIT 1";
+                return tid != null
+                        ? jdbcTemplate.query(sql, (rs, i) -> rs.getString(1), sourceId, tid)
+                        : jdbcTemplate.query(sql, (rs, i) -> rs.getString(1), sourceId);
+            });
+            return rows == null || rows.isEmpty() ? null : rows.get(0);
+        } catch (RuntimeException e) {
+            // ⚠️ 读不到登记人不构成阻断理由：SOD 规则对 null 已定义为「不阻断」。
+            //    让它冒泡会把「审核」这个核心动作变成 500（比自审风险更糟）。
+            log.warn("[RAG] 读取来源 {} 的登记人失败，按「无记录」处理：{}",
+                    sourceId, e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    @Nullable
+    public CorpusDocument importDocument(@NonNull RagManagementContext context,
+                                        @NonNull String sourceId,
+                                        @NonNull DocumentImportCommand cmd,
+                                        @NonNull String principalId) {
+        return writeVia(context, ch -> {
+            // ⚠️ 来源不存在 → 返回 null，由控制器映射为 404（而非让 FK 违约炸成 500）。
+            CorpusSource source = findSourceWithinTenant(ch.template(), ch.tenantId(), sourceId);
+            if (source == null) {
+                return null;
+            }
+            // ⚠️ 版本坐标强制 NOT NULL：优先复用来源下已有版本，否则建一个「默认版本」。
+            String editionId = resolveEdition(ch, sourceId, ch.scopeExpr());
+            String documentId = UUID.randomUUID().toString();
+            ch.template().update("""
+                    INSERT INTO rag_document
+                        (document_id, tenant_id, source_id, edition_id, carrier, title,
+                         object_ref, parse_status, content_hash, ver_status, retrievable,
+                         license_status, scope)
+                    VALUES (?::uuid, %s, ?::uuid, ?::uuid, ?, ?, ?,
+                            'PENDING'::rag_parse_status, ?,
+                            'PENDING'::rag_verification_status, FALSE,
+                            'PENDING'::rag_license_status, %s)
+                    """.formatted(ch.tenantExpr(), ch.scopeExpr()),
+                    documentId, sourceId, editionId,
+                    cmd.carrier(), cmd.title(), cmd.objectRef(), cmd.contentHash());
+            // ⚠️ 导入动作必须留痕（与状态变更同事务）：记录「谁导入了这份语料」。
+            appendAuditWithinTenant(ch, principalId, "INGEST", sourceId);
+            return findDocumentWithinTenant(ch.template(), ch.tenantId(), documentId);
+        });
+    }
+
+    /**
+     * 解析一份文档载体应挂到的版本坐标（edition）。
+     *
+     * <p>⚠️ 优先用<b>来源下第一条</b>版本坐标（同一来源下多载体共享版本是合理的）；
+     * 若来源下尚无版本（典型的「只录入文档、未维护版本」），则确保存在一个
+     * 「默认版本」并返回其 ID——让录入交互不必强制先填五轴版本信息。
+     *
+     * @param ch       写通道（已含租户表达式与作用域字面量）
+     * @param sourceId 来源 ID
+     * @param scopeExpr 作用域字面量（{@code 'TENANT'} / {@code 'PLATFORM'}）
+     * @return 版本坐标 ID
+     */
+    private String resolveEdition(@NonNull WriteChannel ch, @NonNull String sourceId,
+                                 @NonNull String scopeExpr) {
+        List<String> existing = ch.template().query(
+                "SELECT edition_id::text FROM rag_edition"
+                        + " WHERE tenant_id = " + ch.tenantExpr() + " AND source_id = ?::uuid"
+                        + " ORDER BY created_at ASC, edition_id LIMIT 1",
+                (rs, i) -> rs.getString(1), sourceId);
+        if (!existing.isEmpty()) {
+            return existing.get(0);
+        }
+        return ensureDefaultEdition(ch, sourceId, scopeExpr);
+    }
+
+    /**
+     * 确保存在一个「默认版本」坐标（幂等）。
+     *
+     * <p>⚠️ {@code revision_code='src-<sourceId>'} 保证每个来源至多一个默认版本、
+     * 且不与真实版本冲突（真实版本的版次码不会长这样）。
+     * 用 {@code ON CONFLICT ... DO NOTHING} 后回查，使并发重复导入安全——
+     * 无论谁先建，最终都拿到同一个默认版本 ID。
+     *
+     * <p>⚠️ 占位字段（学科=未指定 / 年级=全学段 / 册次=全一册 / 出版社=未指定）
+     * 仅为让 UNIQUE 约束可满足；后续维护版本信息时应由
+     * {@code DocumentImportCommand} 的可选版本字段覆盖，或显式补登版本。
+     *
+     * @param ch       写通道
+     * @param sourceId 来源 ID
+     * @param scopeExpr 作用域字面量
+     * @return 默认版本坐标 ID
+     */
+    private String ensureDefaultEdition(@NonNull WriteChannel ch, @NonNull String sourceId,
+                                       @NonNull String scopeExpr) {
+        String revisionCode = "src-" + sourceId;
+        ch.template().update(("""
+                INSERT INTO rag_edition
+                    (tenant_id, source_id, subject, grade, term, publisher, revision_code, scope)
+                VALUES (%s, ?::uuid, '未指定', '全学段', '全一册', '未指定', ?, %s)
+                ON CONFLICT (tenant_id, subject, grade, term, publisher, revision_code) DO NOTHING
+                """).formatted(ch.tenantExpr(), scopeExpr),
+                sourceId, revisionCode);
+        return ch.template().queryForObject(("""
+                SELECT edition_id::text FROM rag_edition
+                WHERE tenant_id = %s AND source_id = ?::uuid AND revision_code = ?
+                """).formatted(ch.tenantExpr()),
+                (rs, i) -> rs.getString(1), sourceId, revisionCode);
     }
 
     @Override
@@ -1039,6 +1192,23 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                 VALUES (gen_random_uuid(), %s, ?::uuid, ?, ?::uuid)
                 """.formatted(channel.tenantExpr()),
                 principalId, action, sourceId);
+    }
+
+    /**
+     * 该来源是否已有任何审计记录。
+     *
+     * <p>用途见 {@code applyVerification} 里的「不覆盖登记人」说明：
+     * 登记（以及首次导入）一定会写一条 {@code INGEST}，因此「没有记录」
+     * 只可能是历史数据，此时才值得补写。
+     *
+     * <p>⚠️ 与状态变更同事务、同一通道查询：运维通道下租户列由
+     * {@code tenantExpr()} 处理，不能用会话函数（会得到 NULL 而误判为「无记录」）。
+     */
+    private boolean hasAuditRecord(@NonNull WriteChannel channel, @NonNull String sourceId) {
+        Integer n = channel.template().queryForObject(
+                "SELECT count(*) FROM rag_access_audit WHERE source_id = ?::uuid",
+                Integer.class, sourceId);
+        return n != null && n > 0;
     }
 
 

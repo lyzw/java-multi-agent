@@ -193,6 +193,11 @@ public final class RagJwtAuthFilter implements Filter {
         //    attribute 不是 header：它只能由本过滤器在验签通过后写入，调用方伪造不了。
         req.setAttribute(RagCallerAttributes.DOMAIN_ATTRIBUTE, auth.domain());
         req.setAttribute(RagCallerAttributes.PRINCIPAL_ATTRIBUTE, auth.principalId());
+        // ⚠️ V1.0.2 S3-2：把角色与主体类型一并透出，供职责分离校验使用。
+        req.setAttribute(RagCallerAttributes.ROLES_ATTRIBUTE,
+                auth.roles() == null ? "" : auth.roles());
+        req.setAttribute(RagCallerAttributes.PRINCIPAL_TYPE_ATTRIBUTE,
+                auth.principalType() == null ? "" : auth.principalType());
         // 票据声明：只在<b>真有值</b>时写属性。
         // ⚠️ 不写「空串」——空串在属性里是「存在且为空」，
         //    而端点要区分的是「这张票声明了某档」与「压根没带票」；
@@ -243,7 +248,10 @@ public final class RagJwtAuthFilter implements Filter {
                             : RagCallerAttributes.DOMAIN_PLATFORM,
                     // 票据声明只认 claim，不认任何请求头：头的值是调用方可控的，
                     // claim 的值受签名保护——把两者混为一谈等于没有闸门。
-                    tenantDomain ? null : text(claims, TICKET_SCOPE_CLAIM));
+                    tenantDomain ? null : text(claims, TICKET_SCOPE_CLAIM),
+                    // ⚠️ V1.0.2 S3-2：roles / principal_type 同样只取 claim。
+                    roles(claims),
+                    text(claims, "principal_type"));
         }
         return null;
     }
@@ -291,7 +299,38 @@ public final class RagJwtAuthFilter implements Filter {
      *                    因为「用租户身份换全局治理票据」不是这条路；
      *                    登录令牌没这个 claim → 同样是 null，即「够格但没授权」）
      */
+    /**
+     * 把令牌 {@code roles} 声明解析为逗号分隔串。
+     *
+     * <p>⚠️ 该声明可能是 JSON 数组（{@code ["A","B"]}）或纯字符串，
+     * 两种形态都要处理——实测平台签发的是数组形态。
+     *
+     * @param claims 令牌 claims
+     * @return 逗号分隔的角色串；无声明返回空串
+     */
+    private static String roles(JsonNode claims) {
+        JsonNode raw = claims.path("roles");
+        if (raw.isMissingNode() || raw.isNull()) {
+            return "";
+        }
+        if (raw.isArray()) {
+            StringBuilder sb = new StringBuilder();
+            for (JsonNode n : raw) {
+                if (n.isNull()) {
+                    continue;
+                }
+                if (sb.length() > 0) {
+                    sb.append(',');
+                }
+                sb.append(n.asText());
+            }
+            return sb.toString();
+        }
+        return raw.asText("");
+    }
+
     record AuthenticatedToken(String principalId, String tenantId, boolean tenantBinding,
-                              String domain, String ticketScope) {
+                              String domain, String ticketScope,
+                              String roles, String principalType) {
     }
 }

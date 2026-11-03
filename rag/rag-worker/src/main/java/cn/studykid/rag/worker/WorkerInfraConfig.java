@@ -131,6 +131,54 @@ public class WorkerInfraConfig {
      * <b>同一个 bean</b>：扫描窗与落库窗由同一线程的会话深度计数保护，
      * 两个实例会让「在窗内」的判断与实际取连接的池脱节。
      */
+    /**
+     * 【V1.0.2 §3.1 ③】摄取任务端口（worker 侧：领取 / 回写 / Sweeper）。
+     *
+     * <p>⚠️ 与管理面共用同一实现（{@code JdbcIngestJobRepository}），
+     * 口径只有一处——「怎么领、怎么回写」不复制。
+     */
+    @Bean
+    public cn.studykid.rag.ports.IngestJobPort ingestJobPort(
+            JdbcTemplate jdbcTemplate,
+            @org.springframework.beans.factory.annotation.Qualifier("indexingTransactionTemplate")
+            TransactionTemplate transactionTemplate) {
+        return new cn.studykid.rag.infrastructure.ingest.JdbcIngestJobRepository(
+                jdbcTemplate, transactionTemplate);
+    }
+
+    /**
+     * 【V1.0.2 §3.2】摄取任务编排器。
+     *
+     * <p>⚠️ 解析器由 {@link LocalRagPortsConfig} 装配（S1 为占位实现，
+     * S2 换 Docling 适配器时本方法<b>无需改动</b>——这正是端口隔离的意义）。
+     *
+     * <p>⚠️ S1 的 {@code IngestSourceView} 装配是<b>暂存实现</b>：
+     * 从对象存储读字节、读版本坐标、读知识点（S2-3 已替换为真实实现
+     * {@code JdbcIngestSourceLoader}）。
+     * 仍待 S2-1（T-4）接入 Docling 解析器。
+     */
+    @Bean
+    public cn.studykid.rag.application.ingest.IngestJobOrchestrator ingestJobOrchestrator(
+            cn.studykid.rag.ports.IngestJobPort jobPort,
+            cn.studykid.rag.application.ingest.IngestionPipeline pipeline,
+            CorpusRepository corpusRepository,
+            EmbeddingPort embeddingPort,
+            JdbcTemplate jdbcTemplate) {
+        // ⚠️ V1.0.2 S2-3：真实的来源加载器替换 S1 的 Optional.empty() 占位。
+        //    它需要 JDBC（读载体/版本/知识点）与**对象读取能力**。
+        //    ⚠️ 对象存储端口住在 rag-management，而 worker **不依赖**管理面
+        //    （依赖方向：management → infrastructure，worker 只消费 infrastructure）。
+        //    故这里以「函数」注入读取能力，由 worker 自己的桶配置构造——
+        //    生产切 S3 时只换这里的读取实现，编排器与加载器零改动。
+        cn.studykid.rag.infrastructure.ingest.JdbcIngestSourceLoader loader =
+                new cn.studykid.rag.infrastructure.ingest.JdbcIngestSourceLoader(
+                        jdbcTemplate, bucketReader());
+        return new cn.studykid.rag.application.ingest.IngestJobOrchestrator(
+                jobPort, pipeline, corpusRepository, embeddingPort, loader,
+                // ⚠️ 分词实现与检索期同源（ChineseTokenizer），保证入库分词与查询分词一致。
+                cn.studykid.rag.infrastructure.text.ChineseTokenizer::tokenize);
+    }
+
     @Bean
     public ChunkIndexer chunkIndexer(JdbcTemplate jdbcTemplate,
                                      TransactionTemplate transactionTemplate,
@@ -141,4 +189,43 @@ public class WorkerInfraConfig {
         return new ChunkIndexer(jdbcTemplate, transactionTemplate, corpusRepository,
                 embeddingPort, properties.getBatchSize(), opsSessionProvider.getIfAvailable());
     }
+
+    /**
+     * 本地桶读取器（与 {@code LocalObjectStoreAdapter} 同口径的落盘根目录）。
+     *
+     * <p>⚠️ 为什么在 worker 侧单独实现而不复用 LocalObjectStoreAdapter：
+     * 那个类在 {@code rag-management}，worker 依赖它会造成
+     * 「入库执行器反向依赖管理面」的层级倒置。
+     * 这里只实现「按相对键读字节」这一个动作，语义与适配器一致
+     * （同样的 {@code safeResolve} 路径穿越防护），不复制整个适配器。
+     *
+     * <p>⚠️ 配置项与 rag-management 同名（{@code rag.corpus-bucket.base-dir} /
+     * {@code RAG_CORPUS_BUCKET_BASE_DIR}），保证两边指向同一个桶——
+     * 指向不同目录会表现为「上传成功但解析报对象不存在」。
+     */
+    private java.util.function.Function<String, byte[]> bucketReader() {
+        java.nio.file.Path base = java.nio.file.Paths.get(bucketBaseDir).toAbsolutePath().normalize();
+        return objectRef -> {
+            if (objectRef == null || objectRef.isBlank()) {
+                throw new IllegalArgumentException("objectRef 不能为空");
+            }
+            // ⚠️ 路径穿越防护：与 LocalObjectStoreAdapter.safeResolve 同口径。
+            java.nio.file.Path target = base.resolve(objectRef).normalize();
+            if (!target.startsWith(base)) {
+                throw new IllegalArgumentException("非法对象定位符（路径穿越）：" + objectRef);
+            }
+            if (!java.nio.file.Files.isRegularFile(target)) {
+                throw new IllegalStateException("对象不存在：" + objectRef);
+            }
+            try {
+                return java.nio.file.Files.readAllBytes(target);
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException("读取对象失败：" + objectRef, e);
+            }
+        };
+    }
+
+    /** 本地桶根目录（与 rag-management 同名配置，保证指向同一个桶）。 */
+    @org.springframework.beans.factory.annotation.Value("${rag.corpus-bucket.base-dir:./corpus-bucket}")
+    private String bucketBaseDir;
 }

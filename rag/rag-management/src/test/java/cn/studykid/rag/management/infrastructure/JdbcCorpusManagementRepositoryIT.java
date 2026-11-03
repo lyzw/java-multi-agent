@@ -40,6 +40,7 @@ import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
 import cn.studykid.rag.management.core.VerificationDecision;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
+import cn.studykid.rag.management.ports.CorpusManagementPort.DocumentImportCommand;
 import cn.studykid.rag.ports.CorpusRepository;
 import cn.studykid.rag.ports.EmbeddingPort;
 
@@ -568,6 +569,68 @@ class JdbcCorpusManagementRepositoryIT {
                 "REVOKED 是终态（T-10）");
     }
 
+    @Test
+    @DisplayName("载体导入：登记后状态恒为 PENDING/PENDING/FALSE/PENDING，且自动建默认版本、留 INGEST 审计")
+    void importDocumentStartsPendingAndIngests() {
+        CorpusSource source = registerIn(ctxM, "9787100000020", "导入载体教材");
+        String sourceId = source.sourceId();
+
+        CorpusDocument doc = repository.importDocument(
+                RagManagementContext.forTenant(ctxM),
+                sourceId,
+                new DocumentImportCommand("PDF", "人教版八年级上册数学.pdf",
+                        "obj://corpus/9787100000020/abc.pdf", "a".repeat(64),
+                        null, null, null, null, null),
+                REVIEWER);
+        assertNotNull(doc, "导入应返回新建的载体视图");
+        assertEquals("PDF", doc.carrier());
+        assertEquals(VerificationStatus.PENDING, doc.verificationStatus());
+        assertFalse(doc.retrievable(), "新导入的载体不得可检索（待解析·待校验）");
+        assertEquals("PENDING", doc.licenseStatus(), "新导入的载体版权轴应为 PENDING");
+
+        // ⚠️ 关键断言：状态真的落库了——只断言 Java 对象不够（A-008 占位下对象可能由内存构造）。
+        CorpusDocument persisted = findDocument(ctxM, doc.documentId());
+        assertNotNull(persisted);
+        assertEquals(VerificationStatus.PENDING, persisted.verificationStatus());
+        assertEquals("PENDING", persisted.parseStatus(), "解析状态必须为 PENDING（A-008 下不真正解析）");
+        assertFalse(persisted.retrievable());
+
+        // 自动建默认版本：revision_code = src-<sourceId>
+        String editionId = queryEditionId(ctxM, doc.documentId());
+        String revisionCode = transactionTemplate.execute(st -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, ctxM.tenantId());
+            return jdbcTemplate.queryForObject(
+                    "SELECT revision_code FROM rag_edition WHERE edition_id = ?::uuid",
+                    String.class, editionId);
+        });
+        assertEquals("src-" + sourceId, revisionCode, "无版本来源导入应自动建默认版本坐标");
+
+        // INGEST 审计留痕（与状态变更同事务）
+        Integer ingestCount = transactionTemplate.execute(st -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, ctxM.tenantId());
+            return jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM rag_access_audit WHERE source_id = ?::uuid AND action = 'INGEST'",
+                    Integer.class, sourceId);
+        });
+        assertNotNull(ingestCount);
+        assertTrue(ingestCount >= 1, "导入必须留一条 INGEST 审计，实际 " + ingestCount);
+    }
+
+    @Test
+    @DisplayName("载体导入：来源不存在时返回 null（而非 FK 违约 500）")
+    void importDocumentMissingSourceReturnsNull() {
+        CorpusDocument doc = repository.importDocument(
+                RagManagementContext.forTenant(ctxM),
+                java.util.UUID.randomUUID().toString(),
+                new DocumentImportCommand("TXT", "不存在的来源.txt",
+                        "obj://corpus/ghost/abc.txt", "c".repeat(64),
+                        null, null, null, null, null),
+                REVIEWER);
+        assertNull(doc, "来源不存在时应返回 null（由控制器映射为 404）");
+    }
+
     // ---------------------------------------------------------------------
     // 维护问题清单（IT：SQL 口径只有真 DB 才能证明）
     // ---------------------------------------------------------------------
@@ -934,6 +997,37 @@ class JdbcCorpusManagementRepositoryIT {
     }
 
     @Test
+    @DisplayName("G-9 平台档载体导入经运维通道落进哨兵桶：状态恒 PENDING、自动建默认版本、INGEST 审计同事务")
+    void platformImportDocumentThroughOpsChannelLandsInSentinelBucket() {
+        CorpusManagementPort opsRepository = repositoryWithOpsChannel();
+        requireAdminConnection();
+        String sourceId = seedGlobalSource("9787100000037", "平台全局导入夹具教材");
+        try {
+            CorpusDocument doc = opsRepository.importDocument(
+                    RagManagementContext.forPlatform(TrustTier.OFFICIAL_TUTORIAL),
+                    sourceId,
+                    new DocumentImportCommand("PDF", "平台教材.pdf",
+                            "obj://global/9787100000037/abc.pdf", "a".repeat(64),
+                            null, null, null, null, null),
+                    REVIEWER);
+            assertNotNull(doc, "平台档导入应返回新建载体");
+            assertEquals("PDF", doc.carrier());
+            assertEquals(VerificationStatus.PENDING, doc.verificationStatus());
+            assertFalse(doc.retrievable(), "导入载体不可检索（待解析·待校验）");
+
+            // ⚠️ 落点：哨兵桶 + PLATFORM。这正是用户 2026-11-01 在 PLATFORM 作用域实跑撞到的
+            // 「tenantExpr 是字面量却被当成 ?、又多绑一个 tenantId 参数」报错的同一段代码——
+            // 修复前该分支会因参数序号越界直接 500。
+            assertEquals(1, countDocumentInSentinelBucket(doc.documentId()),
+                    "导入载体必须落在全局桶且 scope='PLATFORM'");
+            assertEquals(1, countAuditInSentinelBucket(sourceId, "INGEST"),
+                    "平台档导入必须留一条 INGEST 审计，且租户列同为哨兵");
+        } finally {
+            deleteGlobalSource(sourceId);
+        }
+    }
+
+    @Test
     @DisplayName("G-3 运维通道未接入 → fail-closed（503），不回落应用角色、全局桶不留痕迹")
     void globalWriteWithoutOpsChannelFailsClosedAndWritesNothing() {
         // repository 由 setup() 用「不带 ops 通道」的构造器建出——正是生产上
@@ -1283,6 +1377,16 @@ class JdbcCorpusManagementRepositoryIT {
     /** 该行是否同时出现在了别的租户桶（应为 0）。 */
     private int countOutsideSentinelBucket(String sourceId) {
         return countWith(sourceId, "tenant_id <> rag_global_tenant_id()");
+    }
+
+    /** 该载体是否落在「哨兵桶 + scope='PLATFORM'」。 */
+    private int countDocumentInSentinelBucket(String documentId) {
+        Integer count = adminJdbcTemplate.queryForObject(
+                "SELECT count(*) FROM rag_document"
+                        + " WHERE document_id = ?::uuid"
+                        + " AND tenant_id = rag_global_tenant_id() AND scope = 'PLATFORM'",
+                Integer.class, documentId);
+        return count == null ? 0 : count;
     }
 
     /** 哨兵桶里该行的审计条数（action 为 null = 不限动作）。 */

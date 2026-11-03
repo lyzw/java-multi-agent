@@ -22,6 +22,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.rag.core.scope.RagCorpusScope;
@@ -41,6 +43,7 @@ import cn.studykid.rag.management.core.VerificationDecision;
 import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 import cn.studykid.rag.management.ports.DictionaryPort;
+import cn.studykid.rag.management.ports.ObjectStorePort;
 
 /**
  * 管理端点的契约测试（RAG-D10）。
@@ -59,6 +62,16 @@ class RagManagementControllerTest {
 
     private static final String TENANT = "11111111-1111-1111-1111-111111111111";
     private static final String SOURCE_ID = "22222222-2222-2222-2222-222222222222";
+
+    /**
+     * 带真实 PDF 魔数（{@code %PDF-1.7}）的测试字节。
+     *
+     * <p>⚠️ V1.0.2 §4 Z1 引入魔数与后缀一致性校验后，夹具**不能**再用
+     * {@code "dummy-pdf-bytes"} 这类假内容——否则测的是「魔数校验拒收」，
+     * 而不是「合法上传成功」这条本该验证的路径。
+     */
+    private static final byte[] PDF_MAGIC = "%PDF-1.7\n%test\n".getBytes(
+            java.nio.charset.StandardCharsets.US_ASCII);
     private static final String DOCUMENT_ID = "55555555-5555-5555-5555-555555555555";
     private static final String REVIEWER = "33333333-3333-3333-3333-333333333333";
 
@@ -80,8 +93,9 @@ class RagManagementControllerTest {
     private final CorpusManagementPort port = mock(CorpusManagementPort.class);
     private final CorpusIndexingPort indexingPort = mock(CorpusIndexingPort.class);
     private final DictionaryPort dictionaryPort = mock(DictionaryPort.class);
+    private final ObjectStorePort objectStore = mock(ObjectStorePort.class);
     private final RagManagementController controller =
-            new RagManagementController(port, indexingPort, dictionaryPort);
+            new RagManagementController(port, indexingPort, dictionaryPort, objectStore);
 
     private static CorpusSource sampleSource() {
         Instant now = Instant.parse("2026-10-22T00:00:00Z");
@@ -137,11 +151,17 @@ class RagManagementControllerTest {
     void illegalTransitionIsConflict() {
         when(port.applyVerification(any(), eq(SOURCE_ID), any()))
                 .thenThrow(new IllegalStateException("非法的校验状态转移：REJECTED → VERIFIED"));
+        // ⚠️ V1.0.2 S3-2：VerificationRequest 新增 verifiedBy（双人复核的第二个主体）
         ManagementDtos.VerificationRequest request = new ManagementDtos.VerificationRequest(
-                VerificationStatus.VERIFIED, "ISBN:ref@2026-01-01", REVIEWER,
+                VerificationStatus.VERIFIED, null, "ISBN:ref@2026-01-01", REVIEWER,
                 VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365);
+        // ⚠️ 本用例验证的是「非法状态转移 → 409」。它捕获的是端口抛出的 IllegalStateException，
+        //    而端口调用位于**角色闸门之后**，所以必须给一个能过闸门的角色
+        //    （否则会先在角色闸门得到 403，测不到状态机那条路径）。
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.applyVerification(TENANT, null, SCOPE_TENANT, SOURCE_ID, PLATFORM_CALLER, null, request));
+                () -> controller.applyVerification(TENANT, null, SCOPE_TENANT, SOURCE_ID,
+                        // 参数序：domain, ticketScope, principalAttr, rolesAttr, principalTypeAttr, body
+                        PLATFORM_CALLER, null, null, "TENANT_REVIEWER", null, request));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
     }
 
@@ -868,5 +888,75 @@ class RagManagementControllerTest {
                         DictionaryPort.TYPE_SOURCE_TYPE, entryRequest()));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
         verifyNoInteractions(dictionaryPort);
+    }
+
+    // ---- 载体上传端点（真实文件录入，而非手填 objectRef）----
+
+    @Test
+    @DisplayName("上传合法 PDF：服务端重算哈希、落桶、登记载体，返回 201")
+    void importDocumentValidPdfReturnsCreated() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "math-book.pdf", "application/pdf", PDF_MAGIC);
+        when(objectStore.sha256(any())).thenReturn("d".repeat(64));
+        when(objectStore.store(any(), any())).thenReturn("math-book.pdf/uuid.pdf");
+        CorpusDocument saved = sampleDocument(VerificationStatus.PENDING, false);
+        when(port.importDocument(any(), eq(SOURCE_ID), any(),
+                eq(REVIEWER))).thenReturn(saved);
+
+        ResponseEntity<ManagementDtos.DocumentResponse> resp = controller.importDocument(
+                TENANT, null, SCOPE_TENANT, SOURCE_ID, TENANT_CALLER, null, REVIEWER,
+                file, null, null);
+
+        assertEquals(HttpStatus.CREATED, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        verify(objectStore).sha256(any());
+        verify(objectStore).store(any(), any());
+        ArgumentCaptor<CorpusManagementPort.DocumentImportCommand> cmdCaptor =
+                ArgumentCaptor.forClass(CorpusManagementPort.DocumentImportCommand.class);
+        verify(port).importDocument(any(), eq(SOURCE_ID), cmdCaptor.capture(), eq(REVIEWER));
+        CorpusManagementPort.DocumentImportCommand cmd = cmdCaptor.getValue();
+        assertEquals("PDF", cmd.carrier());
+        assertEquals("math-book.pdf", cmd.title());
+        assertEquals("d".repeat(64), cmd.contentHash());
+        assertEquals("math-book.pdf/uuid.pdf", cmd.objectRef());
+    }
+
+    @Test
+    @DisplayName("空文件上传返回 400（不落桶、不写库）")
+    void importDocumentEmptyFileIsBadRequest() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "empty.pdf", "application/pdf", new byte[0]);
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.importDocument(TENANT, null, SCOPE_TENANT, SOURCE_ID,
+                        TENANT_CALLER, null, REVIEWER, file, null, null));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        verifyNoInteractions(objectStore, port);
+    }
+
+    @Test
+    @DisplayName("来源不存在返回 404")
+    void importDocumentMissingSourceIsNotFound() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "math-book.pdf", "application/pdf", PDF_MAGIC);
+        when(objectStore.sha256(any())).thenReturn("e".repeat(64));
+        when(objectStore.store(any(), any())).thenReturn("math-book.pdf/uuid.pdf");
+        when(port.importDocument(any(), eq(SOURCE_ID), any(), any())).thenReturn(null);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.importDocument(TENANT, null, SCOPE_TENANT, SOURCE_ID,
+                        TENANT_CALLER, null, REVIEWER, file, null, null));
+        assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("无法从后缀推断载体且未显式给 carrier 时返回 400")
+    void importDocumentUnrecognizedExtensionWithoutCarrierIsBadRequest() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "notes.xyz", "application/octet-stream", "bytes".getBytes());
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.importDocument(TENANT, null, SCOPE_TENANT, SOURCE_ID,
+                        TENANT_CALLER, null, REVIEWER, file, null, null));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        verifyNoInteractions(objectStore, port);
     }
 }

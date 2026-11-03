@@ -2,6 +2,7 @@ package cn.studykid.rag.management.infrastructure;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -10,9 +11,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
 import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
+import cn.studykid.rag.management.infrastructure.LocalObjectStoreAdapter;
 import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 import cn.studykid.rag.management.ports.DictionaryPort;
+import cn.studykid.rag.management.ports.ObjectStorePort;
+import cn.studykid.rag.infrastructure.ingest.JdbcIngestJobRepository;
+import cn.studykid.rag.ports.IngestJobPort;
 
 /**
  * 管理面装配（RAG-D07 §2 管理面入口）。
@@ -121,5 +126,100 @@ public class RagManagementConfig {
             @Qualifier("ragManagementTransactionTemplate")
             TransactionTemplate transactionTemplate) {
         return new JdbcDictionaryRepository(jdbcTemplate, transactionTemplate);
+    }
+
+    /**
+     * 【V1.0.2 §4 Z3】去重预检。
+     *
+     * <p>⚠️ 与 {@link #corpusManagement} 共用同一把事务模板：预检必须在设置了
+     * {@code app.tenant_id} 的会话内执行，否则 RLS 会让查询恒返回空、
+     * 预检<b>静默失效</b>（这比报错更危险：看起来在防重，实际什么都没防）。
+     *
+     * @param jdbcTemplate JDBC 模板
+     * @return 去重预检
+     */
+    @Bean
+    public IngestDedupPrecheck ingestDedupPrecheck(JdbcTemplate jdbcTemplate) {
+        return new IngestDedupPrecheck(jdbcTemplate);
+    }
+
+    /**
+     * 【V1.0.2 §3.1 ③】摄取任务端口（管理面侧：建单 / 列表 / 重试）。
+     *
+     * <p>⚠️ 实现下沉在 {@code rag-infrastructure}，与 worker 共用同一份实现——
+     * 「job 怎么领、怎么回写」的口径只有一处（与 {@code ChunkIndexer} 下沉同源）。
+     *
+     * @param jdbcTemplate JDBC 模板
+     * @param transactionTemplate job 侧事务模板
+     * @return 摄取任务端口
+     */
+    @Bean
+    public IngestJobPort ingestJobPort(JdbcTemplate jdbcTemplate,
+                                       @Qualifier("ragManagementTransactionTemplate")
+                                       TransactionTemplate transactionTemplate) {
+        return new JdbcIngestJobRepository(jdbcTemplate, transactionTemplate);
+    }
+
+    /**
+     * 【V1.0.2 §5 R2】抽检记录端口。
+     *
+     * <p>⚠️ 与 {@link #corpusManagement} 共用事务模板：抽检写入与
+     * {@code rag_source.inspection_status} 回写必须在同一事务，
+     * 否则会出现「记录是 FAILED、状态是 PASSED」的窗口期——
+     * 而 VERIFIED 守卫读的正是那个状态。
+     *
+     * @param jdbcTemplate JDBC 模板
+     * @param transactionTemplate 管理面事务模板
+     * @return 抽检端口
+     */
+    @Bean
+    public cn.studykid.rag.management.ports.InspectionPort inspectionPort(
+            JdbcTemplate jdbcTemplate,
+            @Qualifier("ragManagementTransactionTemplate")
+            TransactionTemplate transactionTemplate,
+            // ⚠️ 平台全局语料的抽检记录是全局行，rag_app 写不出来（RLS 越权闸门），
+            //    必须与来源登记/流转走同一条 rag_ops 运维通道。
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.rag.infrastructure.ops.RagOpsSessionPort opsSession) {
+        return new JdbcInspectionRepository(jdbcTemplate, transactionTemplate, opsSession);
+    }
+
+    /**
+     * 【V1.0.2 §5 R7 / S3-3】知识点别名端口。
+     *
+     * <p>⚠️ 别名表的角色是「为既有 {@code KnowledgePoint.aliases} 匹配机制
+     * 提供持久化载体与人工维护入口」，不是新建匹配逻辑。
+     *
+     * @param jdbcTemplate JDBC 模板
+     * @param transactionTemplate 管理面事务模板
+     * @return 别名端口
+     */
+    @Bean
+    public cn.studykid.rag.management.ports.KnowledgeAliasPort knowledgeAliasPort(
+            JdbcTemplate jdbcTemplate,
+            @Qualifier("ragManagementTransactionTemplate")
+            TransactionTemplate transactionTemplate) {
+        return new JdbcKnowledgeAliasRepository(jdbcTemplate, transactionTemplate);
+    }
+
+    /**
+     * 对象存储端口的本地桩实现（语料物理载体落桶）。
+     *
+     * <p><b>⚠️ 占位实现 = 本地目录</b>：把上传字节写到
+     * {@code rag.corpus-bucket.base-dir} 指定的目录，返回相对路径作为 objectRef。
+     * 它是<b>落桶语义的最小实现</b>，真实部署应替换为 MinIO / S3 适配器
+     * （实现同一 {@link ObjectStorePort}，调用方零改动）。
+     *
+     * <p><b>⚠️ 优先读环境变量</b>：路径由 {@code RAG_CORPUS_BUCKET_BASE_DIR} 注入，
+     * 缺省回落到相对路径 {@code ./corpus-bucket}（按进程工作目录解析为绝对路径）。
+     * 路径穿越防护在 {@link LocalObjectStoreAdapter} 内，非法的逻辑键会在落盘前被拒。
+     *
+     * @param baseDir 语料根目录
+     * @return 对象存储端口
+     */
+    @Bean
+    public ObjectStorePort objectStorePort(
+            @Value("${rag.corpus-bucket.base-dir:./corpus-bucket}") String baseDir) {
+        return new LocalObjectStoreAdapter(baseDir);
     }
 }

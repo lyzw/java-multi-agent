@@ -6,9 +6,11 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
 
@@ -58,5 +60,42 @@ public class RagManagementExceptionHandler {
         body.put("message", ex.getMessage());
         body.put("missingConfiguration", ex.missingConfiguration());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(body);
+    }
+
+    /**
+     * 治理性拒绝（{@link ResponseStatusException}）→ 原状态码 + <b>原因</b>。
+     *
+     * <p><b>⚠️ 为什么不能交给默认处理</b>：Spring 默认的 {@code /error}
+     * 只回 {@code {timestamp,status,error,path}}，把 {@code reason} 丢掉了
+     * （实测 409 响应体里没有任何可执行信息）。而 409 在本服务里承载的是
+     * <b>几乎是全部治理规则</b>：
+     * <ul>
+     *   <li>状态机的非法转移；</li>
+     *   <li>「尚未通过人工抽检」；</li>
+     *   <li>「审核员不得审核自己采集的来源」「双人复核缺复核人 / 与执行人同一人」；</li>
+     *   <li>「无法确认抽检结论」（fail-closed）。</li>
+     * </ul>
+     * 这些 reason 是写给管理员看的、<b>直接可照做</b>的下一步；
+     * 丢掉它只剩一个笼统的 Conflict，控制台只能展示通用文案，
+     * 管理员根本不知道该改什么（实测踩到：界面提示「这一步不被允许」，
+     * 真实原因是没做抽检）。
+     *
+     * <p>⚠️ 只回 {@code reason}，不回堆栈：响应体是给人看的原因，不是诊断包。
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> onResponseStatus(ResponseStatusException ex) {
+        HttpStatusCode status = ex.getStatusCode();
+        String reason = ex.getReason();
+        if (status.is5xxServerError()) {
+            log.error("管理面请求失败 status={} reason={}", status, reason, ex);
+        } else {
+            log.info("管理面请求被拒 status={} reason={}", status, reason);
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("timestamp", java.time.Instant.now().toString());
+        body.put("status", status.value());
+        body.put("error", HttpStatus.valueOf(status.value()).getReasonPhrase());
+        body.put("message", reason == null ? "请求未被接受" : reason);
+        return ResponseEntity.status(status).body(body);
     }
 }

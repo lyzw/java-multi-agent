@@ -71,13 +71,34 @@ public class JdbcCorpusRepository implements CorpusRepository {
         //    （A result was returned when none was expected）。
         jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                 String.class, tenantId);
+        // ⚠️⚠️ V1.0.2 §4 Z11 / 不变式 3「陈旧向量不可能」——**重灌纪律内置化**：
+        //    必须是 ON CONFLICT DO UPDATE 且**把 text_jieba 清成空串**。
+        //    理由：ChunkIndexer 的待索引判据是 `text_jieba='' OR 无向量行`。
+        //    若重灌只更新正文而不清分词列，该片段「看起来已索引」（分词列非空、
+        //    向量行存在），于是永远不会被重新嵌入 → 改了切分规则但检索结果不变，
+        //    这种「静默陈旧」在评测里表现为召回不全，极易被误归因为检索算法问题。
+        //    ⚠️ 同理 content_hash 一并更新：它是「正文变没变」的判据。
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk
-                    (chunk_id, tenant_id, document_id, edition_id, role, text, page_number,
-                     section_path, exercise_no, char_start, char_end, kp_ids, exercise_ref,
-                     content_hash, embed_model, index_generation)
-                VALUES (?::uuid, rag_current_tenant(), ?::uuid, ?::uuid, ?::rag_chunk_role, ?, ?,
-                        ?, ?, ?, ?, ?::uuid[], ?, ?, ?, 1)
+                    (chunk_id, tenant_id, document_id, edition_id, role, text, text_jieba,
+                     page_number, section_path, exercise_no, char_start, char_end, kp_ids,
+                     exercise_ref, content_hash, embed_model, index_generation)
+                VALUES (?::uuid, rag_current_tenant(), ?::uuid, ?::uuid, ?::rag_chunk_role, ?,
+                        '', ?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?, 1)
+                ON CONFLICT (chunk_id) DO UPDATE SET
+                    role = EXCLUDED.role,
+                    text = EXCLUDED.text,
+                    text_jieba = '',
+                    page_number = EXCLUDED.page_number,
+                    section_path = EXCLUDED.section_path,
+                    exercise_no = EXCLUDED.exercise_no,
+                    char_start = EXCLUDED.char_start,
+                    char_end = EXCLUDED.char_end,
+                    kp_ids = EXCLUDED.kp_ids,
+                    exercise_ref = EXCLUDED.exercise_ref,
+                    content_hash = EXCLUDED.content_hash,
+                    embed_model = EXCLUDED.embed_model,
+                    index_generation = 1
                 """,
                 chunk.id(), chunk.documentId(), editionId, chunk.role().name(), chunk.text(),
                 chunk.locator().pageNumber(), chunk.locator().sectionPath(),

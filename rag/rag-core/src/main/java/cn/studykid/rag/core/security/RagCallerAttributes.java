@@ -42,6 +42,22 @@ public final class RagCallerAttributes {
      */
     public static final String TICKET_SCOPE_ATTRIBUTE = "rag.caller.ticket.scope";
 
+    /**
+     * 调用方角色列表（令牌 {@code roles} 声明，逗号分隔）。
+     *
+     * <p>⚠️ <b>V1.0.2 S3-2 新增</b>：签发 VERIFIED 需要按角色授权阻止越权
+     * （采集员不能签发审核结论）。角色来自<b>验签通过的令牌claims</b>，
+     * 不是请求头——头可伪造，claim 受签名保护。
+     */
+    public static final String ROLES_ATTRIBUTE = "rag.caller.roles";
+
+    /**
+     * 主体类型（令牌 {@code principal_type} 声明：PLATFORM_USER / TENANT_USER）。
+     *
+     * <p>⚠️ 平台域与租户域是两套身份体系，治理动作需知道当前是哪一个。
+     */
+    public static final String PRINCIPAL_TYPE_ATTRIBUTE = "rag.caller.principal.type";
+
     /** 租户域令牌（{@code aud=agent-platform}）：已强制与 {@code X-Tenant-Id} 归属绑定。 */
     public static final String DOMAIN_TENANT = "tenant";
 

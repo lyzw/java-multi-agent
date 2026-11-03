@@ -139,6 +139,52 @@ public interface CorpusManagementPort {
                                                          @NonNull DocumentVerificationDecision decision);
 
     /**
+     * 导入一份物理文档载体（上传落桶后的登记）。
+     *
+     * <p><b>⚠️ 这条路径与「手填 objectRef 的登记」是两件不同的事</b>（RAG-D03 §4）：
+     * 来源（{@code rag_source}）是书目级元数据，文档载体（{@code rag_document}）是物理文件——
+     * 同一来源下可有多份载体（官方电子版 + 第三方扫描件）。本方法在<b>已有来源</b>下
+     * 新建一份载体，并把已落桶的 {@code objectRef} 与<b>服务端重算</b>的 {@code contentHash} 落下。
+     *
+     * <p><b>⚠️ 新建载体恒为「待解析 · 待校验 · 不可检索」</b>：
+     * {@code parse_status='PENDING'}、{@code ver_status='PENDING'}、{@code retrievable=false}、
+     * {@code license_status='PENDING'}。摄入（Docling + BGE-M3）与审核是后续独立步骤，
+     * 不在此处发生（A-008 硬阻断下摄入链为占位，强行解析只会产出糙结构）。
+     *
+     * <p><b>⚠️ 版本坐标（edition）的处理</b>：{@code rag_document.edition_id} 强制 NOT NULL。
+     * 若来源下已存在版本坐标则用其第一条；否则自动建一个「默认版本」坐标
+     * （{@code revision_code='src-<sourceId>'} 以保证唯一），让「只录入文档、暂未维护版本」
+     * 的来源也能挂上载体。{@code DocumentImportCommand} 携带的可选版本字段可覆盖默认值。
+     *
+     * <p><b>⚠️ 必须留痕</b>：导入动作写 {@code rag_access_audit}（动作 {@code INGEST}），
+     * 与状态变更同事务——「谁导入了这份语料」是后续争议追溯的第一问。
+     *
+     * @param context  作用域上下文（租户档／平台全局档；盘点档拒绝写）
+     * @param sourceId 所属来源 ID（不存在返回 {@code null}）
+     * @param command  导入命令（含 carrier / title / objectRef / contentHash / 可选版本字段）
+     * @param principalId 操作人（UUID）
+     * @return 新建的载体视图；来源不存在返回 {@code null}
+     */
+    /**
+     * 读取来源的登记人（{@code rag_source.registered_by}）。
+     *
+     * <p><b>⚠️ V1.0.2 S3-2 新增</b>：用于「审核员 ≠ 采集员」自审拦截。
+     * 返回 null 表示该来源没有登记人记录（历史数据或平台档），
+     * 此时<b>不阻断</b>审核——但审计记录仍会保留实际审核人。
+     *
+     * @param context  作用域上下文
+     * @param sourceId 来源 ID
+     * @return 登记人主体 ID；无记录返回 null
+     */
+    @Nullable
+    String findRegisteredBy(@NonNull RagManagementContext context, @NonNull String sourceId);
+
+    @Nullable CorpusDocument importDocument(@NonNull RagManagementContext context,
+                                           @NonNull String sourceId,
+                                           @NonNull DocumentImportCommand command,
+                                           @NonNull String principalId);
+
+    /**
      * 列出维护问题清单（缺向量 / 解析失败 / 待审核）。
      *
      * <p><b>⚠️ 计算属性在 SQL 里算</b>：结果中的 {@code stale}
@@ -327,4 +373,59 @@ public interface CorpusManagementPort {
     BulkRegistrationResult registerSources(@NonNull RagManagementContext context,
                                            @NonNull List<SourceRegistration> registrations,
                                            @NonNull String principalId);
+
+    /**
+     * 文档载体导入命令（上传落桶后的登记）。
+     *
+     * <p><b>⚠️ {@code objectRef} / {@code contentHash} 由服务端落桶与重算后填入</b>，
+     * 不来自前端手填（前端算的哈希只用于即时展示，落库以服务端为准）。
+     * 版本坐标字段（edition*）全部可空：留空时仓储自动建/复用「默认版本」。
+     *
+     * <p><b>⚠️ carrier 受 {@code rag_document_carrier_chk} 约束</b>（PDF/SCAN/EPUB/HTML/TXT），
+     * 构造期即校验，不把非法值拖到 DB 的 CHECK 报错（那会变成 500 而非 400）。
+     *
+     * @param carrier       载体类型（PDF/SCAN/EPUB/HTML/TXT），大写
+     * @param title         文档标题（非空）
+     * @param objectRef     对象存储定位符（落桶后由服务端产出，非空）
+     * @param contentHash   服务端重算的 SHA-256（64 位十六进制，非空）
+     * @param editionSubject      可选版本坐标：学科
+     * @param editionGrade        可选版本坐标：年级
+     * @param editionTerm         可选版本坐标：册次（上册/下册/全一册）
+     * @param editionPublisher    可选版本坐标：出版社
+     * @param editionRevisionCode 可选版本坐标：版次代码
+     */
+    record DocumentImportCommand(
+            @NonNull String carrier,
+            @NonNull String title,
+            @NonNull String objectRef,
+            @NonNull String contentHash,
+            @Nullable String editionSubject,
+            @Nullable String editionGrade,
+            @Nullable String editionTerm,
+            @Nullable String editionPublisher,
+            @Nullable String editionRevisionCode
+    ) {
+        public DocumentImportCommand {
+            if (carrier == null || carrier.isBlank()) {
+                throw new IllegalArgumentException("carrier 不能为空");
+            }
+            // ⚠️ 大小写归一：前端下拉可能给小写，落库前统一大写，避免 CHECK 拒收。
+            carrier = carrier.toUpperCase();
+            if (!java.util.Set.of("PDF", "SCAN", "EPUB", "HTML", "TXT").contains(carrier)) {
+                throw new IllegalArgumentException(
+                        "carrier 必须是 PDF / SCAN / EPUB / HTML / TXT，实际：" + carrier);
+            }
+            if (title == null || title.isBlank()) {
+                throw new IllegalArgumentException("title 不能为空");
+            }
+            if (objectRef == null || objectRef.isBlank()) {
+                throw new IllegalArgumentException("objectRef 不能为空（应由服务端落桶后产出）");
+            }
+            // ⚠️ 与 SourceRegistration 同源的校验：CHAR(64) 短值会被 PG 静默空格填充，
+            // 失去「检测语料被静默替换」能力。
+            if (contentHash == null || !contentHash.matches("^[0-9a-fA-F]{64}$")) {
+                throw new IllegalArgumentException("contentHash 必须是 64 位十六进制 SHA-256");
+            }
+        }
+    }
 }

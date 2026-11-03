@@ -202,6 +202,23 @@ public final class ManagementDtos {
             @NotNull(message = "targetStatus 不能为空")
             VerificationStatus targetStatus,
 
+            /**
+             * 复核人主体（双人复核的第二个人）。
+             *
+             * <p>⚠️ <b>V1.0.2 S3-2 新增</b>：{@code VERIFIED} 必须由两个不同主体签署；
+             * 本字段是第二个主体，<b>必须与执行人（令牌 sub）不同</b>。
+             * 其余状态可留空。
+             *
+             * <p>⚠️⚠️ <b>格式必须显式校验</b>：该值会落库到
+             * {@code rag_source.verified_by uuid}，绕过 Bean Validation 的畸形串
+             * 会在 JDBC 参数绑定阶段炸成 500 —— 把一次「治理拒绝」伪装成「服务故障」。
+             * 空串视为「未提供」（只对非 VERIFIED 合法，VERIFIED 由 SoD 拦下）。
+             */
+            @Pattern(regexp = "^$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+                    + "-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                    message = "verifiedBy 必须是合法 UUID（或留空）")
+            String verifiedBy,
+
             @NotBlank(message = "evidenceRef 不能为空"
                     + "（RAG-D07 §2.5：每次转移必须有证据留痕）")
             @Size(max = 1024, message = "evidenceRef 长度不能超过 1024")
@@ -382,8 +399,143 @@ public final class ManagementDtos {
             String revokedReason,
             String licenseStatus,
             String createdAt,
-            String updatedAt
+            String updatedAt,
+            // 【V1.0.2 §3.1 ③】本次上传所创建的摄取任务 ID；null 表示未建单（端口未装配/建单失败）。
+            // ⚠️ 追加在末尾而非中间：前端按字段名取值，追加不破坏既有解析。
+            String jobId
     ) {
+    }
+
+    /**
+     * 单条抽检记录（请求）【V1.0.2 §5 R2】。
+     *
+     * @param chunkId      片段 ID
+     * @param expectedRole 期望角色（人工判定的正确角色）
+     * @param actualRole   实际角色（系统产出）
+     * @param errorType    错误类型（verdict=FAIL 时必填）
+     * @param verdict      结论 PASS / FAIL
+     */
+    public record InspectionItemRequest(
+            String chunkId,
+            String expectedRole,
+            String actualRole,
+            String errorType,
+            String verdict
+    ) {
+    }
+
+    /**
+     * 提交抽检（请求）。
+     *
+     * @param inspectorId 抽检人（缺省时用令牌主体）
+     * @param items       抽检记录
+     */
+    public record SubmitInspectionRequest(
+            String inspectorId,
+            java.util.List<InspectionItemRequest> items
+    ) {
+    }
+
+    /**
+     * 抽检判定结果（响应）。
+     *
+     * @param passed      是否通过
+     * @param total       抽检片段总数
+     * @param failed      判错数
+     * @param answerLeaks 答案区漏判数
+     * @param accuracy    准确率
+     * @param reason      不通过原因（通过时为 null）
+     */
+    public record InspectionVerdictResponse(
+            boolean passed,
+            int total,
+            int failed,
+            int answerLeaks,
+            double accuracy,
+            String reason
+    ) {
+    }
+
+    /**
+     * 抽检记录（响应）。
+     */
+    public record InspectionRecordResponse(
+            String recordId,
+            String chunkId,
+            String inspectorId,
+            String expectedRole,
+            String actualRole,
+            String errorType,
+            String verdict,
+            String createdAt
+    ) {
+    }
+
+    /**
+     * 别名维护（请求）。
+     *
+     * @param kpId  知识点 ID
+     * @param alias 别名文本
+     */
+    public record KnowledgeAliasRequest(String kpId, String alias) {
+    }
+
+    /**
+     * 摄取任务视图（响应）【V1.0.2 §8.5】。
+     *
+     * @param jobId        任务 ID
+     * @param tenantId     租户 ID
+     * @param sourceId     所属来源
+     * @param status       状态（8 值枚举字面量）
+     * @param stage        阶段内进度（如 "PARSING 60"）
+     * @param attempt      第几次尝试
+     * @param createdBy    触发人
+     * @param parserVersion 解析器版本
+     * @param embedModel   嵌入模型
+     * @param chunkCount   产出片段数
+     * @param errorDetail  失败 / 取消原因
+     * @param startedAt    开始时间
+     * @param finishedAt   结束时间
+     * @param createdAt    建单时间
+     * @param sourceRevokedCancel 是否为「来源撤回导致的取消」（前端据此显示为正常结束而非失败）
+     */
+    public record IngestJobResponse(
+            String jobId,
+            String tenantId,
+            String sourceId,
+            String status,
+            String stage,
+            int attempt,
+            String createdBy,
+            String parserVersion,
+            String embedModel,
+            Integer chunkCount,
+            String errorDetail,
+            String startedAt,
+            String finishedAt,
+            String createdAt,
+            boolean sourceRevokedCancel
+    ) {
+    }
+
+    /**
+     * 摄取任务领域对象 → 响应视图。
+     *
+     * <p>⚠️ {@code sourceRevokedCancel} 是本映射唯一带业务判断的字段：
+     * 撤回取消（REJECTED + SOURCE_REVOKED）在 UI 上应显示为「已取消」而非「失败」——
+     * 它是治理动作的正常结果，标红会误导采集员以为自己的文件出了问题（N2）。
+     *
+     * @param job 领域任务
+     * @return 响应视图
+     */
+    public static IngestJobResponse toIngestJobResponse(
+            cn.studykid.rag.core.ingest.IngestJob job) {
+        return new IngestJobResponse(
+                job.jobId(), job.tenantId(), job.sourceId(), job.status().name(),
+                job.stage(), job.attempt(), job.createdBy(), job.parserVersion(),
+                job.embedModel(), job.chunkCount(), job.errorDetail(),
+                job.startedAt(), job.finishedAt(), job.createdAt(),
+                job.isSourceRevokedCancel());
     }
 
     /**
@@ -657,6 +809,21 @@ public final class ManagementDtos {
      */
     public static DocumentResponse toDocumentResponse(
             cn.studykid.rag.management.core.CorpusDocument document) {
+        return toDocumentResponse(document, null);
+    }
+
+    /**
+     * 把领域载体转换为响应视图（带摄取任务 ID）。
+     *
+     * <p>【V1.0.2 §3.1 ③】上传路径返回 jobId，前端据此轮询进度；
+     * 其他查询路径（列表/详情）无 job 语义，沿用 {@code jobId=null} 的重载。
+     *
+     * @param document 领域载体
+     * @param jobId    本次上传创建的摄取任务 ID（可为 null）
+     * @return 响应视图
+     */
+    public static DocumentResponse toDocumentResponse(
+            cn.studykid.rag.management.core.CorpusDocument document, String jobId) {
         return new DocumentResponse(
                 document.documentId(), document.sourceId(), document.editionId(),
                 document.carrier(), document.title(), document.pageCount(), document.objectRef(),
@@ -665,7 +832,7 @@ public final class ManagementDtos {
                 document.verificationStatus().name(), document.retrievable(),
                 document.revokedAt() == null ? null : document.revokedAt().toString(),
                 document.revokedReason(), document.licenseStatus(),
-                document.createdAt().toString(), document.updatedAt().toString());
+                document.createdAt().toString(), document.updatedAt().toString(), jobId);
     }
 
     /**

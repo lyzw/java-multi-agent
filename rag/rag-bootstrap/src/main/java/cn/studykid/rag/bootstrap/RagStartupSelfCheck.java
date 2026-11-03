@@ -80,6 +80,7 @@ public class RagStartupSelfCheck implements ApplicationRunner {
         checkRlsEnabled(failures);
         checkFailClosedEmptyCorpus(failures);
         checkOpsRoleSeparation(failures);
+        checkSchemaVersion(failures);
 
         if (!failures.isEmpty()) {
             log.error("RAG 启动自检未通过（{} 项）：{}", failures.size(), failures);
@@ -87,7 +88,8 @@ public class RagStartupSelfCheck implements ApplicationRunner {
                     "RAG 启动自检未通过：" + String.join("; ", failures));
         }
         log.info("RAG 启动自检全部通过：pgvector 就绪 / 连接角色非特权 / RLS 生效 / "
-                + "无租户上下文只见全局语料 / 运维角色与主数据源角色互斥"
+                + "无租户上下文只见全局语料 / 运维角色与主数据源角色互斥 / "
+                + "库结构与代码版本一致"
                 + "（运维通道 " + (opsEnabled ? "已接入" : "显式关闭") + "）。");
     }
 
@@ -246,5 +248,96 @@ public class RagStartupSelfCheck implements ApplicationRunner {
                     + "（BYPASSRLS 会绕过全部租户 RLS 策略，且不会留下任何异常日志）"
                     + " → 请用 rag_app 启动主数据源");
         }
+    }
+
+    /**
+     * 【V1.0.2】校验库结构是否与代码版本一致。
+     *
+     * <p><b>⚠️⚠️ 这一项是「code 已升级、DDL 未迁移」这类事故的拦截器</b>。
+     * 2026-11-02 实测踩过：代码新增了 {@code rag_ingest_job.stage/attempt/created_by}
+     * 三列，但生产库未跑迁移，导致 {@code GET /ingest-jobs} 每次调用都 500——
+     * <b>而服务照常启动、其他端点照常工作</b>，故障只在某个具体功能上暴露，
+     * 排查成本极高（要读代码反推 SELECT 了哪些列）。
+     *
+     * <p>本检查在<b>启动期</b>就拦下这类不一致，并给出可直接执行的修复指引。
+     *
+     * <p><b>⚠️ 为什么只查「必需项」而不查全部</b>：启动自检要快且稳定。
+     * 这里只覆盖<b>代码里被 SELECT/INSERT 硬依赖</b>的列与表——
+     * 新增一个可选列不会让检查失败，但漏掉一个被 SELECT 的列则必然 500。
+     *
+     * @param failures 失败项收集
+     */
+    void checkSchemaVersion(List<String> failures) {
+        // ① 取实际存在性（唯一碰库的地方）
+        java.util.Set<String> existingColumns = new java.util.HashSet<>();
+        java.util.Set<String> existingTables = new java.util.HashSet<>();
+        try {
+            jdbcTemplate.query("SELECT table_name, column_name FROM information_schema.columns "
+                            + "WHERE table_schema = 'rag'",
+                    rs -> {
+                        existingColumns.add(rs.getString(1) + "." + rs.getString(2));
+                    });
+            jdbcTemplate.query("SELECT table_name FROM information_schema.tables "
+                            + "WHERE table_schema = 'rag'",
+                    rs -> {
+                        existingTables.add(rs.getString(1));
+                    });
+        } catch (Exception e) {
+            failures.add("读取库结构失败（无法校验版本一致性）：" + e.getMessage());
+            return;
+        }
+        // ② 判定（可单测，不碰库）
+        assessSchemaVersion(failures, existingColumns, existingTables);
+    }
+
+    /**
+     * 判断库结构是否满足代码的<b>必需项</b>（纯函数，可单测）。
+     *
+     * @param failures        失败项收集
+     * @param existingColumns 形如 {@code "rag_source.isbn"} 的集合
+     * @param existingTables  表名集合
+     */
+    static void assessSchemaVersion(List<String> failures,
+                                    java.util.Set<String> existingColumns,
+                                    java.util.Set<String> existingTables) {
+        for (String[] rc : REQUIRED_COLUMNS) {
+            if (!existingColumns.contains(rc[0] + "." + rc[1])) {
+                failures.add("库结构落后于代码：" + rc[0] + "." + rc[1]
+                        + " 缺失（" + rc[2] + " 引入）"
+                        + " → 请先执行对应迁移（deploy/sql/rag/05_*、06_*），"
+                        + "否则依赖该列的功能会运行期 500");
+            }
+        }
+        for (String[] rt : REQUIRED_TABLES) {
+            if (!existingTables.contains(rt[0])) {
+                failures.add("库结构落后于代码：表 rag." + rt[0] + " 缺失（" + rt[1] + " 引入）"
+                        + " → 请先执行 deploy/sql/rag/06_v1_0_2_s3_alter.sql，"
+                        + "否则抽检/别名功能不可用");
+            }
+        }
+    }
+
+    /**
+     * 代码硬依赖的列：{表, 列, 引入版本}。
+     *
+     * <p>⚠️ 只列<b>被 SELECT/INSERT 硬依赖</b>的列。
+     */
+    private static final String[][] REQUIRED_COLUMNS = {
+            // V1.0.2 S1：GET /ingest-jobs 直接 SELECT 这三列
+            {"rag_ingest_job", "stage", "V1.0.2-S1"},
+            {"rag_ingest_job", "attempt", "V1.0.2-S1"},
+            {"rag_ingest_job", "created_by", "V1.0.2-S1"},
+            // V1.0.2 S3：抽检状态是 VERIFIED 迁移的前置守卫落点
+            {"rag_source", "inspection_status", "V1.0.2-S3"},
+    };
+
+    /** 代码硬依赖的表：{表, 引入版本}。 */
+    private static final String[][] REQUIRED_TABLES = {
+            {"rag_inspection_record", "V1.0.2-S3"},
+            {"rag_kp_alias", "V1.0.2-S3"},
+    };
+
+    /** 原始实现（保留签名，调用新实现）。 */
+    private void checkSchemaVersionLegacy(List<String> failures) {        checkSchemaVersion(failures);
     }
 }
