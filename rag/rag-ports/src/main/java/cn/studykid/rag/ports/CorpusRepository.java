@@ -81,6 +81,47 @@ public interface CorpusRepository {
     void upsertEmbedding(@NonNull String tenantId, @NonNull String chunkId,
                          @NonNull float[] embedding, @NonNull String embedModel);
 
+    /**
+     * 写入指定**索引代际**的向量（代际构建器专用，RAG-D13 §3.5.2）。
+     *
+     * <p><b>⚠️ 为什么需要它而不是复用 {@link #upsertEmbedding}</b>：
+     * 后者的语义是「写进当前 ACTIVE 代际」——那是**日常入库**的正确行为。
+     * 但代际构建器要写的是一个**尚未激活的 BUILDING 代际**：
+     * 若它也写 ACTIVE，重建会污染正在服务的索引（新旧向量混在一个空间，
+     * 余弦相似度给出无意义的分数，且无任何报错）。
+     *
+     * <p>⚠️ 代际号必须由调用方显式给出：构建器知道自己在建第几代，
+     * 而仓储层不应去猜——猜错就是写进错误的空间。
+     *
+     * @param tenantId   租户 ID
+     * @param chunkId    片段 ID
+     * @param embedding  向量
+     * @param embedModel 嵌入模型标识
+     * @param generation 目标代际号
+     */
+    void upsertEmbeddingForGeneration(@NonNull String tenantId, @NonNull String chunkId,
+                                      @NonNull float[] embedding, @NonNull String embedModel,
+                                      int generation);
+
+    /**
+     * 写入**全局桶**指定代际的向量（代际构建器的全局通道）。
+     *
+     * <p>⚠️ 与 {@link #upsertEmbeddingInGlobalBucket} 的区别同租户侧：
+     * 后者写「当前 ACTIVE 代际」（日常入库），本方法写**指定的 BUILDING 代际**（换模型）。
+     *
+     * <p>⚠️ 无 tenantId 参数：全局写通道跑在 BYPASSRLS 的运维角色上，
+     * 桶谓词写死 {@code rag_global_tenant_id()}。
+     *
+     * @param chunkId    片段 ID（须属全局桶）
+     * @param embedding  向量
+     * @param embedModel 嵌入模型标识
+     * @param generation 目标代际号
+     */
+    void upsertEmbeddingForGenerationInGlobalBucket(@NonNull String chunkId,
+                                                    @NonNull float[] embedding,
+                                                    @NonNull String embedModel,
+                                                    int generation);
+
     // ---------------------------------------------------------------------
     // 平台全局桶（RAG-D11 §1.3 / 第二刀 2.5）
     //

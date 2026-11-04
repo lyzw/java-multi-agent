@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>摄取任务 · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="jobs">
+<script src="../assets/shell.js"></script>
+<script>
+shell('运维 / 摄取任务', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">摄取任务</div>
+    <div class="page-desc">查看语料入库任务的「三态」，对失败任务重试。仅三态 + 单进度条，不再暴露内部阶段。</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-pad" style="padding-bottom:8px">
+    <div class="filterbar">
+      <select><option>任务状态：全部</option><option>SUBMITTED</option><option>PROCESSING</option><option>READY</option><option>FAILED</option></select>
+      <input type="text" placeholder="搜索来源/载体…" style="width:220px">
+      <div class="grow"></div>
+    </div>
+    <div class="row small muted" style="gap:20px;padding:6px 2px">
+      <span><span class="badge b-submitted">SUBMITTED</span> 已提交</span>
+      <span><span class="badge b-process">PROCESSING</span> 处理中</span>
+      <span><span class="badge b-ready">READY</span> 已就绪</span>
+      <span><span class="badge b-failed">FAILED</span> 失败</span>
+    </div>
+  </div>
+  <table class="tbl">
+    <thead><tr><th>来源 / 载体</th><th>任务三态</th><th>进度 0–100%</th><th>失败原因 error_detail</th><th></th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="td-strong">数学·七年级上册·人教版</td>
+        <td><span class="badge b-ready">READY</span></td>
+        <td><div class="progress"><div class="bar"><i style="width:100%"></i></div><span class="pct">100%</span></div></td>
+        <td class="small muted">—</td>
+        <td class="right"><a class="btn btn-sm" href="#">详情</a></td>
+      </tr>
+      <tr>
+        <td class="td-strong">英语·七年级上册·沪教版</td>
+        <td><span class="badge b-process">PROCESSING</span></td>
+        <td><div class="progress"><div class="bar"><i style="width:64%"></i></div><span class="pct">64%</span></div></td>
+        <td class="small muted">—</td>
+        <td class="right"><a class="btn btn-sm" href="#">详情</a></td>
+      </tr>
+      <tr>
+        <td class="td-strong">物理·八年级下册·人教版</td>
+        <td><span class="badge b-failed">FAILED</span></td>
+        <td><div class="progress"><div class="bar"><i class="fail" style="width:38%"></i></div><span class="pct">38%</span></div></td>
+        <td class="small" style="color:var(--danger)">阶段 CHUNKING 失败：text 不能为空（整册未完成；可能残留部分片段，来源仍 PENDING）</td>
+        <td class="right"><a class="btn btn-sm btn-primary" href="#">重试</a></td>
+      </tr>
+      <tr>
+        <td class="td-strong">语文·七年级上册·人教版</td>
+        <td><span class="badge b-submitted">SUBMITTED</span></td>
+        <td><div class="progress"><div class="bar"><i style="width:0%"></i></div><span class="pct">0%</span></div></td>
+        <td class="small muted">—</td>
+        <td class="right"><a class="btn btn-sm" href="#">详情</a></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="notice info" style="margin-top:16px"><span>ℹ️</span><span>「解析/切分/嵌入/索引」四阶段已收敛为单进度条；载体 parse_status 由任务状态派生，不再作为独立可见状态（对应 RAG-D12 靶点 A）。</span></div>`;
+</script>
+</body>
+</html>

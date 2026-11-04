@@ -60,6 +60,26 @@ public class JdbcCorpusRepository implements CorpusRepository {
         this.opsSession = opsSession;
     }
 
+    // ---------------------------------------------------------------------
+    // ⚠️⚠️ 代际号的取法（RAG-D13 §3.5.2 蓝绿切换）
+    //
+    // 所有向量写入都用同一条 SQL 表达式取「本租户 ACTIVE 代际」：
+    //   COALESCE((SELECT generation FROM rag_index_generation
+    //              WHERE tenant_id = <bucket> AND status = 'ACTIVE' LIMIT 1), 1)
+    //
+    // 【为什么写 ACTIVE 而不是写死 1】
+    //   写死 1 意味着换模型后新向量仍进代际 1，与旧模型向量混在同一个空间里——
+    //   两条向量不可比，余弦相似度会给出毫无意义的分数，且**没有任何报错**。
+    //
+    // 【为什么缺省回落 1 而不是报错】
+    //   迁移前的空库没有代际记录。此时回落 1 与旧行为完全一致（存量行都是 1），
+    //   而报错会让所有入库在迁移完成前全部失败——那是一次不必要的停机。
+    //
+    // 【为什么在 SQL 里取而不是查一遍再传参】
+    //   同一事务内「先查后写」在并发切换代际时会出现读写不一致（查出 2、写入时已是 3）。
+    //   写成子查询则由语句执行时刻的快照决定，语义更稳。
+    // ---------------------------------------------------------------------
+
     @Override
     @Transactional
     public void saveChunkAndEmbedding(@NonNull String tenantId, @NonNull Chunk chunk,
@@ -82,9 +102,14 @@ public class JdbcCorpusRepository implements CorpusRepository {
                 INSERT INTO rag_chunk
                     (chunk_id, tenant_id, document_id, edition_id, role, text, text_jieba,
                      page_number, section_path, exercise_no, char_start, char_end, kp_ids,
-                     exercise_ref, content_hash, embed_model, index_generation)
+                     exercise_ref, content_hash, embed_model, index_generation,
+                     in_answer_zone, block_type, matched_prefix)
                 VALUES (?::uuid, rag_current_tenant(), ?::uuid, ?::uuid, ?::rag_chunk_role, ?,
-                        '', ?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?, 1)
+                        '', ?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?,
+                        COALESCE((SELECT g.generation FROM rag_index_generation g
+                                   WHERE g.tenant_id = rag_current_tenant()
+                                     AND g.status = 'ACTIVE' LIMIT 1), 1),
+                        ?, ?, ?)
                 ON CONFLICT (chunk_id) DO UPDATE SET
                     role = EXCLUDED.role,
                     text = EXCLUDED.text,
@@ -98,19 +123,27 @@ public class JdbcCorpusRepository implements CorpusRepository {
                     exercise_ref = EXCLUDED.exercise_ref,
                     content_hash = EXCLUDED.content_hash,
                     embed_model = EXCLUDED.embed_model,
-                    index_generation = 1
+                    index_generation = EXCLUDED.index_generation,
+                    in_answer_zone = EXCLUDED.in_answer_zone,
+                    block_type = EXCLUDED.block_type,
+                    matched_prefix = EXCLUDED.matched_prefix
                 """,
                 chunk.id(), chunk.documentId(), editionId, chunk.role().name(), chunk.text(),
                 chunk.locator().pageNumber(), chunk.locator().sectionPath(),
                 chunk.locator().exerciseNo(), chunk.locator().charStart(),
                 chunk.locator().charEnd(), toUuidArrayLiteral(chunk.knowledgePointIds()),
-                chunk.exerciseRef(), chunk.contentHash(), embedModel);
+                chunk.exerciseRef(), chunk.contentHash(), embedModel,
+                // 版面事实（可空：旧路径 / 非解析来源产生的片段没有这些信息）
+                chunk.layoutFacts() != null && chunk.layoutFacts().inAnswerZone(),
+                chunk.layoutFacts() == null ? null : chunk.layoutFacts().blockType(),
+                chunk.layoutFacts() == null ? null : chunk.layoutFacts().matchedPrefix());
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, index_generation, embed_model, embedding)
-                VALUES (?::uuid, rag_current_tenant(), 1, ?, %s)
-                ON CONFLICT (chunk_id) DO UPDATE SET
-                    index_generation = EXCLUDED.index_generation,
+                VALUES (?::uuid, rag_current_tenant(), COALESCE((SELECT g.generation FROM rag_index_generation g
+                                       WHERE g.tenant_id = rag_current_tenant()
+                                         AND g.status = 'ACTIVE' LIMIT 1), 1), ?, %s)
+                ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
                     embed_model = EXCLUDED.embed_model,
                     embedding = EXCLUDED.embedding
                 """.formatted(vectorColumn.castPlaceholder()),
@@ -168,13 +201,61 @@ public class JdbcCorpusRepository implements CorpusRepository {
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, index_generation, embed_model, embedding)
-                VALUES (?::uuid, rag_current_tenant(), 1, ?, %s)
-                ON CONFLICT (chunk_id) DO UPDATE SET
+                VALUES (?::uuid, rag_current_tenant(), COALESCE((SELECT g.generation FROM rag_index_generation g
+                                       WHERE g.tenant_id = rag_current_tenant()
+                                         AND g.status = 'ACTIVE' LIMIT 1), 1), ?, %s)
+                ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
-                    embed_model = EXCLUDED.embed_model,
-                    index_generation = 1
+                    embed_model = EXCLUDED.embed_model
                 """.formatted(vectorColumn.castPlaceholder()),
                 chunkId, embedModel, vectorToString(embedding));
+    }
+
+    @Override
+    public void upsertEmbeddingForGeneration(@NonNull String tenantId, @NonNull String chunkId,
+                                             @NonNull float[] embedding, @NonNull String embedModel,
+                                             int generation) {
+        vectorColumn.requireDimension(embedding);
+        if (generation < 1) {
+            throw new IllegalArgumentException("代际号必须 >= 1，收到：" + generation);
+        }
+        // ⚠️ 代际号**不由 SQL 子查询解析**，而是显式参数：
+        //    本方法专供代际构建器写 BUILDING 代际——若也去查 ACTIVE，
+        //    重建就会污染正在服务的索引（新旧向量混在一个空间）。
+        jdbcTemplate.queryForObject(
+                "SELECT set_config('app.tenant_id', ?, true)", String.class, tenantId);
+        jdbcTemplate.update("""
+                INSERT INTO rag_chunk_embedding
+                    (chunk_id, tenant_id, index_generation, embed_model, embedding)
+                VALUES (?::uuid, ?::uuid, ?, ?, %s)
+                ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
+                    embedding = EXCLUDED.embedding,
+                    embed_model = EXCLUDED.embed_model
+                """.formatted(vectorColumn.castPlaceholder()),
+                chunkId, tenantId, generation, embedModel, vectorToString(embedding));
+    }
+
+    @Override
+    public void upsertEmbeddingForGenerationInGlobalBucket(@NonNull String chunkId,
+                                                           @NonNull float[] embedding,
+                                                           @NonNull String embedModel,
+                                                           int generation) {
+        vectorColumn.requireDimension(embedding);
+        if (generation < 1) {
+            throw new IllegalArgumentException("代际号必须 >= 1，收到：" + generation);
+        }
+        // ⚠️ 走运维会话窗（BYPASSRLS），且**不设会话租户**：
+        //    填全局哨兵会让 rag_current_tenant() 直接抛错（V8 封堵）。
+        requireOpsSession().inGlobalCorpusSession((template, tx) -> template.update("""
+                INSERT INTO rag_chunk_embedding
+                    (chunk_id, tenant_id, scope, index_generation, embed_model, embedding)
+                VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM', ?, ?, %s)
+                ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
+                    embedding = EXCLUDED.embedding,
+                    embed_model = EXCLUDED.embed_model
+                WHERE rag_chunk_embedding.tenant_id = rag_global_tenant_id()
+                """.formatted(vectorColumn.castPlaceholder()),
+                chunkId, generation, embedModel, vectorToString(embedding)));
     }
 
     // ---------------------------------------------------------------------
@@ -224,11 +305,14 @@ public class JdbcCorpusRepository implements CorpusRepository {
         requireOpsSession().inGlobalCorpusSession((template, tx) -> template.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, scope, index_generation, embed_model, embedding)
-                VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM', 1, ?, %s)
-                ON CONFLICT (chunk_id) DO UPDATE SET
+                VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM',
+                        COALESCE((SELECT g.generation FROM rag_index_generation g
+                                   WHERE g.tenant_id = rag_global_tenant_id()
+                                     AND g.status = 'ACTIVE' LIMIT 1), 1),
+                        ?, %s)
+                ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
-                    embed_model = EXCLUDED.embed_model,
-                    index_generation = 1
+                    embed_model = EXCLUDED.embed_model
                 WHERE rag_chunk_embedding.tenant_id = rag_global_tenant_id()
                 """.formatted(vectorColumn.castPlaceholder()),
                 chunkId, embedModel, vectorToString(embedding)));

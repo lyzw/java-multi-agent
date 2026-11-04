@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>审核员名录 · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="roster">
+<script src="../assets/shell.js"></script>
+<script>
+shell('规则配置 / 审核员名录', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">审核员名录</div>
+    <div class="page-desc">维护审核员及其审核范围（ReviewerRosterEntry）。</div>
+  </div>
+  <button class="btn btn-primary">＋ 新增审核员</button>
+</div>
+
+<div class="card">
+  <div class="card-pad" style="padding-bottom:8px">
+    <div class="filterbar">
+      <input type="text" placeholder="搜索姓名/账号…" style="width:220px">
+      <select><option>审核范围：全部</option><option>数学</option><option>英语</option></select>
+      <div class="grow"></div>
+    </div>
+  </div>
+  <table class="tbl">
+    <thead><tr><th>姓名</th><th>账号</th><th>审核范围</th><th>职责分离 SoD</th><th>状态</th><th></th></tr></thead>
+    <tbody>
+      <tr><td class="td-strong">张敏</td><td class="mono">zhangmin</td><td>数学 · 七年级</td><td><span class="badge b-verified">已隔离</span></td><td><span class="badge b-verified">在职</span></td><td class="right"><a class="btn btn-sm" href="#">编辑</a></td></tr>
+      <tr><td class="td-strong">李强</td><td class="mono">liqiang</td><td>英语 · 全年级</td><td><span class="badge b-verified">已隔离</span></td><td><span class="badge b-verified">在职</span></td><td class="right"><a class="btn btn-sm" href="#">编辑</a></td></tr>
+      <tr><td class="td-strong">王芳</td><td class="mono">wangfang</td><td>—（未分配）</td><td><span class="badge b-failed">⚠ 录入+审核兼任</span></td><td><span class="badge b-pending">停用</span></td><td class="right"><a class="btn btn-sm" href="#">编辑</a></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="notice warn" style="margin-top:16px"><span>⚠️</span><span>职责分离（SegregationOfDuties）：同一人不得同时担任录入员与审核员；「录入+审核兼任」将拦截其审核操作。</span></div>`;
+</script>
+</body>
+</html>

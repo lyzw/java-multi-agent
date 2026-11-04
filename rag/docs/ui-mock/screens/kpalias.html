@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识点别名 · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="kpalias">
+<script src="../assets/shell.js"></script>
+<script>
+shell('规则配置 / 知识点别名', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">知识点别名</div>
+    <div class="page-desc">维护知识点别名（canonical_name + aliases），确定性匹配挂接知识点，不做模型抽取。</div>
+  </div>
+  <button class="btn btn-primary">＋ 新增别名</button>
+</div>
+
+<div class="grid-1-2">
+  <div class="card">
+    <div class="card-pad" style="padding-bottom:8px">
+      <div class="filterbar"><input type="text" placeholder="搜索规范名/别名…" style="width:100%"></div>
+    </div>
+    <table class="tbl">
+      <thead><tr><th>规范名 canonical_name</th><th>别名 aliases</th></tr></thead>
+      <tbody>
+        <tr><td class="td-strong">二次函数</td><td class="small">抛物线函数 / 二次方程函数</td></tr>
+        <tr><td class="td-strong">勾股定理</td><td class="small">毕达哥拉斯定理</td></tr>
+        <tr><td class="td-strong">相似三角形</td><td class="small">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card card-pad">
+    <div class="card-title">知识点详情</div>
+    <div class="field"><label class="req">规范名</label><input type="text" style="width:100%" value="二次函数"></div>
+    <div class="field"><label>别名（逗号分隔）</label><input type="text" style="width:100%" value="抛物线函数, 二次方程函数"></div>
+    <div class="field"><label>先修关系 prerequisites</label><div class="small muted">一次函数 · 一元二次方程</div></div>
+    <div class="notice info"><span>ℹ️</span><span>别名仅用于确定性匹配；模型抽取作为低置信辅助信号，不与确定性匹配冲突（RAG-D04 §3.4）。</span></div>
+    <button class="btn btn-primary">保存</button>
+  </div>
+</div>`;
+</script>
+</body>
+</html>

@@ -404,12 +404,34 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         String vec = vectorToString(queryVector);
         String cast = vectorColumn.castPlaceholder();
         int limit = request.topK() * CANDIDATE_MULTIPLIER;
+        // ⚠️⚠️ 代际过滤（RAG-D13 §3.5.2 蓝绿切换）：
+        //    同一片段可能有多个代际的向量（换模型时新旧并存），
+        //    **只能读 ACTIVE 代际**——把两个不可比的向量空间混在一起算余弦相似度，
+        //    会静默产出错误的相似度，且没有任何报错。
+        //
+        //    ⚠️ 用按行解析的子查询而不是单一参数：本查询作用域是
+        //    「本租户 ∪ 全局哨兵」，两个租户可能在同一时刻处于不同代际
+        //    （例如全局语料已切到代际 3、本租户还在代际 2）。
+        //
+        //    ⚠️ 无代际记录时退回「不过滤」（兼容迁移前的空库与存量数据）：
+        //    子查询返回 NULL → `g.status = 'ACTIVE'` 不成立 → 用 COALESCE 兜底到「代际不限」。
         String sql = """
                 SELECT %s,
                        (1 - (e.embedding <=> %s)) AS score
                 FROM rag_chunk c
                 JOIN rag_chunk_embedding e
                      ON c.chunk_id = e.chunk_id AND c.tenant_id = e.tenant_id
+                   AND (
+                         -- 该租户有 ACTIVE 代际 → 只读它
+                         e.index_generation = (
+                           SELECT g.generation FROM rag_index_generation g
+                            WHERE g.tenant_id = e.tenant_id AND g.status = 'ACTIVE'
+                            LIMIT 1)
+                         -- 该租户尚无代际记录（迁移前空库）→ 不过滤（兼容存量）
+                         OR NOT EXISTS (
+                           SELECT 1 FROM rag_index_generation g2
+                            WHERE g2.tenant_id = e.tenant_id AND g2.status = 'ACTIVE')
+                       )
                 JOIN rag_edition ed
                      ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
                 JOIN rag_document doc

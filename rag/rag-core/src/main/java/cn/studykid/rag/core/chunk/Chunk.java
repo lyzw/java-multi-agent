@@ -40,8 +40,31 @@ public record Chunk(
         @NonNull Locator locator,
         @NonNull List<String> knowledgePointIds,
         @Nullable String exerciseRef,
-        @NonNull String contentHash
+        @NonNull String contentHash,
+        /**
+         * 角色判定的版面事实快照（RAG-D13 §3.2.4）。
+         *
+         * <p>⚠️ 为 null 表示「未采集」（旧数据 / 非解析路径产生的片段），
+         * 界面应显示"无判定依据"，而不是伪造一个"不在答案区"。
+         */
+        @Nullable LayoutFacts layoutFacts
 ) {
+
+    /**
+     * 向后兼容构造（不含版面事实）。
+     *
+     * <p>⚠️ 保留原因：既有单测与仓储映射按 9 参构造，
+     * 而版面事实是"有则更好"的增强信息——缺失时角色判定逻辑完全不受影响
+     * （判定发生在切分时，用 `LayoutBlock` 的原始值）。
+     */
+    public Chunk(@NonNull String id, @NonNull String documentId,
+                 @NonNull EditionCoordinate edition, @NonNull ChunkRole role,
+                 @NonNull String text, @NonNull Locator locator,
+                 @NonNull List<String> knowledgePointIds, @Nullable String exerciseRef,
+                 @NonNull String contentHash) {
+        this(id, documentId, edition, role, text, locator,
+                knowledgePointIds, exerciseRef, contentHash, null);
+    }
 
     public Chunk {
         if (id == null || id.isBlank()) {

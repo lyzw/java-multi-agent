@@ -11,6 +11,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.core.ingest.IngestJob;
 import cn.studykid.rag.core.ingest.IngestJobStatus;
+import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
+import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
 import cn.studykid.rag.ports.IngestHealth;
 import cn.studykid.rag.ports.IngestJobPort;
 
@@ -38,13 +40,64 @@ public class JdbcIngestJobRepository implements IngestJobPort {
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate transactionTemplate;
 
+    /**
+     * 平台全局桶的建单通道（BYPASSRLS 的 rag_ops）；为 null 时平台档建单直接抛
+     * {@link RagOpsUnavailableException}（呈现 503），绝不回落应用角色。
+     */
+    private final RagOpsSessionPort opsSession;
+
     public JdbcIngestJobRepository(JdbcTemplate jdbcTemplate,
                                    TransactionTemplate transactionTemplate) {
+        this(jdbcTemplate, transactionTemplate, null);
+    }
+
+    public JdbcIngestJobRepository(JdbcTemplate jdbcTemplate,
+                                   TransactionTemplate transactionTemplate,
+                                   @Nullable RagOpsSessionPort opsSession) {
         if (jdbcTemplate == null || transactionTemplate == null) {
             throw new IllegalArgumentException("jdbcTemplate / transactionTemplate 不能为空");
         }
         this.jdbcTemplate = jdbcTemplate;
         this.transactionTemplate = transactionTemplate;
+        this.opsSession = opsSession;
+    }
+
+    /**
+     * 平台全局桶建单（rag_ops 运维会话）。
+     *
+     * <p><b>⚠️ 为什么不是「给 createJob 传全局哨兵」</b>：应用通道的
+     * {@code set_config('app.tenant_id', 哨兵)} 会撞 {@code rag_current_tenant()}
+     * 的越权封堵（SQLSTATE 42501，V8 承重设计）——那句话在库里就不成立。
+     * 全局行的租户列在 SQL 文本里直接写 {@code rag_global_tenant_id()}，
+     * 方法签名里也没有租户参数可填。
+     *
+     * @param sourceId  所属来源（全局桶内）
+     * @param createdBy 建单人主体 ID
+     * @return 新建的 job
+     */
+    @NonNull
+    public IngestJob createGlobalJob(@NonNull String sourceId, @NonNull String createdBy) {
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局语料写通道未接入：建摄取任务需要运维数据源（rag_ops），不回落应用角色");
+        }
+        return opsSession.inGlobalCorpusSession((opsTemplate, opsTx) ->
+                opsTx.execute(status -> {
+                    String jobId = opsTemplate.queryForObject(
+                            "INSERT INTO rag_ingest_job"
+                                    + " (tenant_id, source_id, status, attempt, created_by)"
+                                    + " VALUES (rag_global_tenant_id(), ?::uuid,"
+                                    + "         'PENDING'::rag_ingest_status, 0, ?::uuid)"
+                                    + " RETURNING job_id::text",
+                            String.class, sourceId, createdBy);
+                    List<IngestJob> rows = opsTemplate.query(
+                            "SELECT " + COLUMNS + " FROM rag_ingest_job WHERE job_id = ?::uuid",
+                            this::mapJob, jobId);
+                    if (rows.isEmpty()) {
+                        throw new IllegalStateException("刚写入的全局 job 读不回来：" + jobId);
+                    }
+                    return rows.get(0);
+                }));
     }
 
     /** 列清单（读取顺序与 {@link #mapJob} 严格对应）。 */

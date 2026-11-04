@@ -16,6 +16,19 @@ import { SkillCatalogPage } from '@/pages/console/SkillCatalogPage'
 import { McpCatalogPage } from '@/pages/console/McpCatalogPage'
 import { RoutingPolicyPage } from '@/pages/catalog/RoutingPolicyPage'
 import { RagManagementPage } from '@/pages/rag/RagManagementPage'
+import { RagDashboardPage } from '@/pages/rag/RagDashboardPage'
+import { RagSourceRegisterPage } from '@/pages/rag/RagSourceRegisterPage'
+import { RagSourceListPage } from '@/pages/rag/RagSourceListPage'
+import { RagDocUploadPage } from '@/pages/rag/RagDocUploadPage'
+import { RagChunkFixPage } from '@/pages/rag/RagChunkFixPage'
+import { RagVerifyPage } from '@/pages/rag/RagVerifyPage'
+import { RagInspectionPage } from '@/pages/rag/RagInspectionPage'
+import { RagRecallPage } from '@/pages/rag/RagRecallPage'
+import { RagReviewerRosterPage } from '@/pages/rag/RagReviewerRosterPage'
+import { RagKpAliasPage } from '@/pages/rag/RagKpAliasPage'
+import { RagDictionaryPage } from '@/pages/rag/RagDictionaryPage'
+import { RagIngestJobsPage } from '@/pages/rag/RagIngestJobsPage'
+import { RagReindexPage } from '@/pages/rag/RagReindexPage'
 import { DictionaryAdminPage } from '@/pages/dictionaries/DictionaryAdminPage'
 import { AgentLabPage } from '@/pages/agentlab/AgentLabPage'
 import { AgentMetricsPage } from '@/pages/metrics/AgentMetricsPage'
@@ -150,11 +163,120 @@ export const router = createBrowserRouter(
           ),
         },
         {
-          // RAG 语料治理（独立服务 /api/v1，须带 X-Tenant-Id，页内显式选租户）
+          // RAG 语料治理：单页 → 四治理域 13 页（RAG-D13 / RAG-D14）
+          //
+          // ⚠️ 改造前是一个 /rag 页挂 5 个 Tab（RAG-D12 靶点 G：治理面过重）。
+          //    现按「录入与校对 / 审核 / 规则配置 / 运维」四个域拆成独立路由，
+          //    每页只承担一件事，导航分区见 navConfig。
+          // ⚠️ 旧的 /rag 单页保留为入口跳转，避免既有书签 404。
           path: 'rag',
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>
               <RagManagementPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/dashboard',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagDashboardPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/sources',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagSourceListPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/sources/new',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagSourceRegisterPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/doc-upload',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagDocUploadPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/chunk-fix',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagChunkFixPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/verify',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagVerifyPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/inspection',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagInspectionPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/recall',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagRecallPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/reviewers',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagReviewerRosterPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/kp-alias',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagKpAliasPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/dictionaries',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagDictionaryPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/jobs',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagIngestJobsPage />
+            </RequireRole>
+          ),
+        },
+        {
+          path: 'rag/reindex',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagReindexPage />
             </RequireRole>
           ),
         },

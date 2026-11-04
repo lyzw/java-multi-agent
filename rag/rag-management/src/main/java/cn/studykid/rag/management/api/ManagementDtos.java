@@ -67,9 +67,72 @@ public final class ManagementDtos {
             @NotBlank(message = "registeredBy 不能为空（登记必须留痕）")
             @Pattern(regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
                     message = "registeredBy 必须是合法 UUID")
-            String registeredBy
+            String registeredBy,
+
+            // ---- 版本五轴（RAG-D00 RD-03「缺一轴不可入库」）----
+            //
+            // ⚠️ 刻意全部可空：批量导入（CSV/ZIP）与既有调用方不走五轴，
+            //    存量行为必须保持不变（回落到默认版本坐标）。
+            //    **是否强制齐全由调用方决定**：管理台登记页在 UI 层强制五轴齐全，
+            //    后端只在「部分填写」时报 400（见 SourceRegistration#partiallyFilledEdition），
+            //    因为部分填写意味着用户以为登记了某版本、实际会退化成默认坐标。
+
+            @Size(max = 32, message = "subject 长度不能超过 32")
+            String subject,
+
+            @Size(max = 32, message = "grade 长度不能超过 32")
+            String grade,
+
+            /**
+             * 册次，取值白名单与 {@code rag_edition.term} 的 CHECK 同口径。
+             */
+            @Size(max = 16, message = "term 长度不能超过 16")
+            String term,
+
+            @Size(max = 64, message = "revisionCode 长度不能超过 64")
+            String revisionCode,
+
+            /**
+             * 版本出版社。
+             *
+             * <p>⚠️ 与来源的 {@code publisher} 分开：来源出版社是「谁出版的」，
+             * 版本出版社是「用的哪个版本坐标的教材」。二者通常相同，
+             * 但同一出版社会有多个版本线。缺省回落到 {@code publisher}。
+             */
+            @Size(max = 256, message = "editionPublisher 长度不能超过 256")
+            String editionPublisher,
+
+            /** 登记时声明的权威等级（缺省 UNVERIFIED；登记态不允许自行提升，见服务端校验）。 */
+            String trustTier,
+
+            /** 登记时声明的版权状态（缺省 PENDING）。 */
+            String licenseStatus
     ) {
+
+        /**
+         * 五轴之前的老签名（8 参数）便捷构造。
+         *
+         * <p>⚠️ 保留以兼容既有调用方与测试：五轴全空即走「延迟到载体上传时
+         * 建默认版本坐标」的存量行为，与改造前逐字节一致。
+         */
+        public RegisterSourceRequest(String sourceType, String title, String publisher,
+                                     String isbn, String doi, String objectRef,
+                                     String contentHash, String registeredBy) {
+            this(sourceType, title, publisher, isbn, doi, objectRef, contentHash, registeredBy,
+                    null, null, null, null, null, null, null);
+        }
     }
+
+    /**
+     * 登记请求的五轴说明。
+     *
+     * <p><b>⚠️ {@code trustTier} / {@code licenseStatus} 刻意被服务端忽略</b>
+     * （RAG-D07 §2.2 角色表：采集员不得自行提升权威等级或置 VERIFIED）。
+     * 保留这两个字段只为接口前向兼容——前端可以传，
+     * 但登记落库恒为 {@code UNVERIFIED / PENDING}，由后续「校验决定」流程提升。
+     * 若将来要支持「带初始状态的导入」，必须走独立的、有权限校验的端点，
+     * 不能在登记上报口径上开口子。
+     */
 
     /**
      * 批量导入的单条来源项（不含登记人：登记人对整批统一留痕）。
@@ -965,6 +1028,7 @@ public final class ManagementDtos {
      * @param charLength 字符数
      * @param hasEmbedding 是否已写入向量
      * @param contentHash 校验和
+     * @param text 片段正文（管理面预览，仓储侧截断至 512 字符）
      */
     public record ChunkResponse(
             String chunkId,
@@ -974,7 +1038,44 @@ public final class ManagementDtos {
             String exerciseNo,
             int charLength,
             boolean hasEmbedding,
-            String contentHash
+            String contentHash,
+            /**
+             * 片段正文预览。
+             *
+             * <p><b>⚠️ 为什么必须给</b>：解析预览与片段校对要让人看到原文，
+             * 才能判断"这段到底是答案还是讲解"（RAG-D13 §3.2.3/§3.2.4）。
+             * 只给 {@code charLength} 无法支撑任何判断。
+             */
+            String text,
+            /**
+             * 版面事实：块类型（BlockType 枚举名）。
+             *
+             * <p>⚠️ null = 该片段早于版面事实采集，**不是**"无块类型"。
+             */
+            String blockType,
+            /** 版面事实：是否位于答案区。 */
+            boolean inAnswerZone,
+            /** 版面事实：块首命中的解答前缀（如「解:」）。 */
+            String matchedPrefix
+    ) {
+    }
+
+    /**
+     * 片段角色重判请求（RAG-D13 §3.2.4）。
+     *
+     * @param role 目标角色（必须是 {@code ChunkRole} 枚举名）
+     * @param reason 重判理由（审计留痕；可为空但不推荐）
+     */
+    public record UpdateChunkRoleRequest(
+            @jakarta.validation.constraints.NotBlank(message = "role 不能为空")
+            @jakarta.validation.constraints.Pattern(
+                    regexp = "EXPLANATION|EXAMPLE|EXAMPLE_SOLUTION|EXERCISE|EXERCISE_ANSWER"
+                            + "|EXERCISE_HINT|PAPER_BODY|PAPER_METHOD|APPENDIX|BOILERPLATE",
+                    message = "role 必须是合法的 ChunkRole 枚举名")
+            String role,
+
+            @jakarta.validation.constraints.Size(max = 512, message = "reason 长度不能超过 512")
+            String reason
     ) {
     }
 
@@ -1201,7 +1302,8 @@ public final class ManagementDtos {
         return chunks.stream()
                 .map(c -> new ChunkResponse(
                         c.chunkId(), c.role(), c.pageNumber(), c.sectionPath(), c.exerciseNo(),
-                        c.charLength(), c.hasEmbedding(), c.contentHash()))
+                        c.charLength(), c.hasEmbedding(), c.contentHash(), c.text(),
+                        c.blockType(), c.inAnswerZone(), c.matchedPrefix()))
                 .toList();
     }
 
@@ -1302,6 +1404,149 @@ public final class ManagementDtos {
             int sortOrder,
 
             boolean enabled
+    ) {
+    }
+
+    // ======================================================================
+    // 索引代际（RAG-D13 §3.5.2 蓝绿切换）
+    // ======================================================================
+
+    /**
+     * 索引代际视图（响应）。
+     *
+     * @param generation    代际号
+     * @param embedModel    嵌入模型标识
+     * @param dimension     向量维度
+     * @param status        BUILDING / ACTIVE / RETIRED
+     * @param indexedChunks 已写入向量行数
+     * @param totalChunks   目标片段总数
+     * @param progressPercent 构建进度百分比（0–100，服务端算好避免前端除零）
+     * @param retrievable   是否参与检索（仅 ACTIVE）
+     * @param activatable   是否可切换过去（ACTIVE / RETIRED；BUILDING 不可）
+     * @param note          备注
+     * @param activatedAt   激活时刻
+     * @param retiredAt     退役时刻
+     * @param createdAt     创建时刻
+     */
+    public record IndexGenerationResponse(
+            int generation,
+            String embedModel,
+            int dimension,
+            String status,
+            long indexedChunks,
+            long totalChunks,
+            int progressPercent,
+            boolean retrievable,
+            boolean activatable,
+            String note,
+            String activatedAt,
+            String retiredAt,
+            String createdAt
+    ) {
+
+        static IndexGenerationResponse from(
+                cn.studykid.rag.core.indexing.IndexGeneration g) {
+            return new IndexGenerationResponse(
+                    g.generation(), g.embedModel(), g.dimension(), g.status().name(),
+                    g.indexedChunks(), g.totalChunks(), g.progressPercent(),
+                    g.isRetrievable(), g.isActivatable(), g.note(),
+                    g.activatedAt(), g.retiredAt(), g.createdAt());
+        }
+    }
+
+    /**
+     * 新建索引代际请求。
+     *
+     * @param embedModel 嵌入模型标识（如 BGE-M3 / qwen3-embedding:8b）
+     * @param dimension  向量维度（必须与目标模型的真实维度一致，
+     *                   否则构建出的向量写不进 embedding 列）
+     */
+    public record CreateIndexGenerationRequest(
+            @jakarta.validation.constraints.NotBlank(message = "embedModel 不能为空")
+            @jakarta.validation.constraints.Size(max = 128, message = "embedModel 长度不能超过 128")
+            String embedModel,
+
+            @jakarta.validation.constraints.Min(value = 1, message = "dimension 必须为正")
+            @jakarta.validation.constraints.Max(value = 16384, message = "dimension 过大")
+            int dimension
+    ) {
+    }
+
+    /**
+     * 代际构建结果。
+     *
+     * @param processed 本次处理的片段数
+     * @param generation 构建后的代际快照（含最新进度）
+     */
+    public record BuildGenerationResponse(
+            int processed,
+            IndexGenerationResponse generation
+    ) {
+    }
+
+    /**
+     * 知识点摘要（响应，RAG-D15 §六 待办 #8）。
+     *
+     * @param kpId 知识点 ID
+     * @param subject 学科
+     * @param grade 年级
+     * @param canonicalName 规范名
+     * @param aliasCount 已有别名数量
+     * @param prerequisiteCount 先修关系数量
+     */
+    public record KnowledgePointBriefDto(
+            String kpId,
+            String subject,
+            String grade,
+            String canonicalName,
+            int aliasCount,
+            int prerequisiteCount
+    ) {
+    }
+
+    /**
+     * 解析预览片段（响应）。
+     *
+     * @param chunkId    预览用片段 ID（由内容哈希派生，同一文件稳定）
+     * @param role       片段角色
+     * @param text       片段正文预览
+     * @param pageNumber 页码
+     * @param exerciseNo 题号
+     * @param sectionPath 章节路径
+     * @param inAnswerZone 是否位于答案区（版面事实）
+     * @param blockType  版面块类型
+     */
+    public record PreviewChunkDto(
+            String chunkId,
+            String role,
+            String text,
+            int pageNumber,
+            String exerciseNo,
+            String sectionPath,
+            boolean inAnswerZone,
+            String blockType
+    ) {
+    }
+
+    /**
+     * 解析预览结果（响应，RAG-D15 §六 待办 #6）。
+     *
+     * @param totalChunks    切分得到的总片段数
+     * @param returnedChunks 本次返回的片段数
+     * @param limit          生效的条数上限
+     * @param truncated      是否因上限被截断
+     * @param byRole         按角色的片段计数
+     * @param edition        预览所用版本坐标（展示名）
+     * @param chunks         片段样本
+     */
+    public record PreviewResponse(
+            int totalChunks,
+            int returnedChunks,
+            int limit,
+            boolean truncated,
+            java.util.Map<String, Integer> byRole,
+            String edition,
+            java.util.List<PreviewChunkDto> chunks
     ) {
     }
 }

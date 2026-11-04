@@ -170,12 +170,171 @@ export const NAV_GROUPS: NavGroup[] = [
       {
         key: 'rag',
         label: 'RAG 语料管理',
-        path: '/rag',
+        path: '/rag/dashboard',
         icon: <FileSearchOutlined />,
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
-          '教辅语料治理：登记 → 校验流转 → 可检索。独立 RAG 服务（默认 8081，/api/v1/management/*），作用域由 X-Rag-Scope 显式声明：本租户语料需选租户（读写俱全），平台全局语料不选租户（本刀只读）。撤回是终态、无删除入口。',
+          '教辅语料治理：登记 → 校验流转 → 可检索。独立 RAG 服务（默认 8081，/api/v1/management/*），'
+          + '作用域由 X-Rag-Scope 显式声明：本租户语料需选租户（读写俱全），'
+          + '平台全局语料不选租户（读走登录态、写需治理票据）。撤回是终态、无删除入口。',
         phase: '知识与数据',
+      },
+    ],
+  },
+  // ------------------------------------------------------------------
+  // RAG 语料管理 · 四治理域分区（RAG-D13 §2.1 / RAG-D14）
+  //
+  // ⚠️ 改造前 RAG 只有 /rag 一个入口，页内挂 5 个 Tab——用户进去不知道先看哪，
+  //    且「审核」「运维」两种完全不同的职责混在同一页（RAG-D12 靶点 G）。
+  //    现按治理域拆成四个分组，每组页面共享同一类角色与同一种操作语气。
+  // ------------------------------------------------------------------
+  {
+    key: 'rag-ingest',
+    label: 'RAG · 录入与校对',
+    icon: <FileSearchOutlined />,
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    children: [
+      {
+        key: 'rag-dashboard',
+        label: 'Dashboard 总览',
+        path: '/rag/dashboard',
+        icon: <AppstoreOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '三面健康度一览：写面入库 · 读面检索 · 治理面审核，按角色给出下一步。',
+        phase: 'RAG · 录入与校对',
+      },
+      {
+        key: 'rag-source-new',
+        label: '来源登记',
+        path: '/rag/sources/new',
+        icon: <FileProtectOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '登记来源（作品级）：版本五轴、权威等级与版权状态，五轴缺一不可入库。',
+        phase: 'RAG · 录入与校对',
+      },
+      {
+        key: 'rag-source-list',
+        label: '来源列表',
+        path: '/rag/sources',
+        icon: <FileSearchOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '浏览与筛选全部来源，快速定位治理状态与生命周期。',
+        phase: 'RAG · 录入与校对',
+      },
+      {
+        key: 'rag-doc-upload',
+        label: '载体上传与解析预览',
+        path: '/rag/doc-upload',
+        icon: <ThunderboltOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '上传载体后先看解析结果（切片/角色着色/页码），确认再入库——切分错误会直接导致泄题。',
+        phase: 'RAG · 录入与校对',
+      },
+      {
+        key: 'rag-chunk-fix',
+        label: '片段校对',
+        path: '/rag/chunk-fix',
+        icon: <FileProtectOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '人工纠正片段角色，重点处理疑似答案区误判（判成讲解会直接泄题）。',
+        phase: 'RAG · 录入与校对',
+      },
+    ],
+  },
+  {
+    key: 'rag-review',
+    label: 'RAG · 审核',
+    icon: <FileProtectOutlined />,
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    children: [
+      {
+        key: 'rag-verify',
+        label: '校验决定',
+        path: '/rag/verify',
+        icon: <FileProtectOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: 'VERIFIED / REVOKED 决定；VERIFIED 须证据并双人复核，REVOKED 须填原因。',
+        phase: 'RAG · 审核',
+      },
+      {
+        key: 'rag-inspection',
+        label: '抽检队列',
+        path: '/rag/inspection',
+        icon: <MergeCellsOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '对疑似片段人工抽检；抽检未通过则来源签不出 VERIFIED（必经关卡）。',
+        phase: 'RAG · 审核',
+      },
+      {
+        key: 'rag-recall',
+        label: '召回解释（质检）',
+        path: '/rag/recall',
+        icon: <LineChartOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '模拟检索：召回什么、为什么、是否触发门禁。学生搜不到时先在这里自查。',
+        phase: 'RAG · 审核',
+      },
+    ],
+  },
+  {
+    key: 'rag-rules',
+    label: 'RAG · 规则配置',
+    icon: <ControlOutlined />,
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    children: [
+      {
+        key: 'rag-reviewers',
+        label: '审核员名录',
+        path: '/rag/reviewers',
+        icon: <TeamOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '维护审核员与复核权限，显式暴露职责分离（SoD）冲突。',
+        phase: 'RAG · 规则配置',
+      },
+      {
+        key: 'rag-kp-alias',
+        label: '知识点别名',
+        path: '/rag/kp-alias',
+        icon: <BookOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '维护知识点别名，让口语化问法确定性匹配到规范知识点。',
+        phase: 'RAG · 规则配置',
+      },
+      {
+        key: 'rag-dictionaries',
+        label: '字典',
+        path: '/rag/dictionaries',
+        icon: <BookOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '维护治理下拉枚举的数据源；仅「来源类型」可编辑，其余为派生只读。',
+        phase: 'RAG · 规则配置',
+      },
+    ],
+  },
+  {
+    key: 'rag-ops',
+    label: 'RAG · 运维',
+    icon: <ToolOutlined />,
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    children: [
+      {
+        key: 'rag-jobs',
+        label: '摄取任务',
+        path: '/rag/jobs',
+        icon: <ThunderboltOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '入库任务三态 + 单进度条；失败可重试（新建一次尝试，旧尝试留痕）。',
+        phase: 'RAG · 运维',
+      },
+      {
+        key: 'rag-reindex',
+        label: '重索引',
+        path: '/rag/reindex',
+        icon: <DatabaseOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '补齐缺失向量 / 重建索引（同步执行）。蓝绿代际切换后端尚未提供。',
+        phase: 'RAG · 运维',
       },
     ],
   },

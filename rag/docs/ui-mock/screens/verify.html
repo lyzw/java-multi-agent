@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>校验决定 · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="verify">
+<script src="../assets/shell.js"></script>
+<script>
+shell('审核 / 校验决定', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">校验决定</div>
+    <div class="page-desc">对来源/载体做 VERIFIED / REVOKED 决定，维护权威等级与撤回。VERIFIED 须填校验证据，REVOKED 须填撤回原因。</div>
+  </div>
+  <div class="row">
+    <button class="btn btn-primary">✓ 判定 VERIFIED</button>
+    <button class="btn btn-danger">✕ 判定 REVOKED</button>
+  </div>
+</div>
+
+<div class="grid-2-1">
+  <div class="card card-pad">
+    <div class="card-title">来源 / 载体详情</div>
+    <table class="tbl">
+      <thead><tr><th>字段</th><th>值</th></tr></thead>
+      <tbody>
+        <tr><td style="color:var(--text-3)">来源名称</td><td class="td-strong">义务教育教科书 · 数学 七年级上册</td></tr>
+        <tr><td style="color:var(--text-3)">版本五轴</td><td class="td-strong">数学·七上·人教版·2024修订</td></tr>
+        <tr><td style="color:var(--text-3)">权威等级</td><td><span class="badge b-verified">OFFICIAL_PUBLISHER</span></td></tr>
+        <tr><td style="color:var(--text-3)">版权状态</td><td><span class="badge b-verified">LICENSED</span></td></tr>
+        <tr><td style="color:var(--text-3)">校验状态</td><td><span class="badge b-pending">PENDING</span></td></tr>
+        <tr><td style="color:var(--text-3)">片段概览</td><td class="small">2 480 片段 · 答案类 156 · 噪声 214</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="stack">
+    <div class="card card-pad">
+      <div class="card-title">校验决定</div>
+      <div class="field"><label class="req">校验证据（VERIFIED 必填）</label><textarea rows="3" placeholder="例如：已对照出版社授权电子版，ISBN / 版权页与授权凭证一致"></textarea></div>
+      <div class="field"><label>有效期 ver_valid_days</label><input type="text" style="width:100%" value="365"></div>
+      <div class="field"><label>权威等级调整</label><select style="width:100%"><option>保持 OFFICIAL_PUBLISHER</option><option>降为 OFFICIAL_TUTORIAL</option></select></div>
+    </div>
+    <div class="card card-pad">
+      <div class="card-title">撤回原因（REVOKED 必填）</div>
+      <div class="field"><textarea rows="2" placeholder="例如：版权到期 / 扫描件质量不合格 / 检出盗版内容"></textarea></div>
+      <div class="notice danger"><span>⚠️</span><span>撤回后该载体 immediate：不可检索、不可引用，但历史审计保留。</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <div class="card-pad">
+    <div class="card-title">审计流（校验/撤回逐动作留痕）</div>
+    <table class="tbl">
+      <thead><tr><th>时间</th><th>动作</th><th>操作人</th><th>备注</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">2026-05-12 10:23</td><td><span class="badge b-pending">登记</span></td><td>录入员 王芳</td><td class="small muted">初始登记，权威等级 UNVERIFIED</td></tr>
+        <tr><td class="mono">2026-05-14 15:02</td><td><span class="badge b-process">提交校验</span></td><td>管理员 李强</td><td class="small muted">提交权威等级复核</td></tr>
+        <tr><td class="mono">2026-05-15 09:41</td><td><span class="badge b-verified">VERIFIED</span></td><td>审核员 张敏</td><td class="small muted">证据：授权电子版 ISBN 一致</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>`;
+</script>
+</body>
+</html>

@@ -7,6 +7,7 @@ import org.jspecify.annotations.NonNull;
 
 import cn.studykid.rag.core.chunk.Chunk;
 import cn.studykid.rag.core.chunk.ChunkRole;
+import cn.studykid.rag.core.chunk.LayoutFacts;
 import cn.studykid.rag.core.knowledge.KnowledgePoint;
 import cn.studykid.rag.core.version.EditionCoordinate;
 import cn.studykid.rag.ports.BlockType;
@@ -119,6 +120,15 @@ public class IngestionPipeline {
                     block.charStart(),
                     block.charEnd());
             List<String> kpIds = matchKnowledgePoints(block.text(), knowledgePoints);
+            // ⑦ 版面事实快照（RAG-D13 §3.2.4）
+            //    ⚠️ 必须在这里**采集**而不是事后重算：解析器版本升级后，
+            //       同一片段的重算结果可能不同；存快照才能解释"历史上为什么那样判"。
+            //    ⚠️ matchedPrefix 记录**具体命中的词**（如「解：」）而非布尔：
+            //       校对员要能一眼看到"是哪个前缀让系统判成答案的"。
+            LayoutFacts facts = new LayoutFacts(
+                    block.inAnswerZone(),
+                    block.type() == null ? null : block.type().name(),
+                    matchedSolutionPrefix(block.text()));
             chunks.add(new Chunk(
                     chunkId(documentId, block),
                     documentId,
@@ -128,7 +138,8 @@ public class IngestionPipeline {
                     locator,
                     kpIds,
                     currentExerciseNo,
-                    contentHash(block.text())));
+                    contentHash(block.text()),
+                    facts));
         }
         return List.copyOf(chunks);
     }
@@ -229,6 +240,24 @@ public class IngestionPipeline {
      */
     private static final java.util.regex.Pattern SOLUTION_PREFIX = java.util.regex.Pattern.compile(
             "^\\s*(?:解|解答|解之|答|答案|答曰|求解结果|Key|Answer|Answers?)\\s*[:：]");
+
+    /**
+     * 提取块首命中的解答前缀（无则 null）。
+     *
+     * <p>⚠️ 单独抽出来是因为「判定」与「记录」要使用**同一份规则**：
+     * 若采集时另写一个正则，判定改了采集没改，校对页就会展示一个
+     * 与真实判定依据不符的前缀——那比不显示更糟。
+     *
+     * @param text 块文本
+     * @return 命中的前缀原文（如「解：」）；未命中或空文本为 null
+     */
+    private static String matchedSolutionPrefix(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        java.util.regex.Matcher m = SOLUTION_PREFIX.matcher(text);
+        return m.find() ? m.group().trim() : null;
+    }
 
     private static ChunkRole resolveAnswerBearingByContent(String text, String effectiveExerciseNo) {
         if (text == null || text.isBlank()) {

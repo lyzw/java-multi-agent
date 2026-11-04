@@ -63,7 +63,13 @@ public class JdbcDictionaryRepository implements DictionaryPort {
 
     @Override
     public boolean isEditable(@NonNull String type) {
-        return TYPE_SOURCE_TYPE.equals(type);
+        // ⚠️ 四个**动态类型**可维护；派生类型（TRUST_TIER 等）由 Java 枚举生成，
+        //    改名会与检索期判定漂移，故只读。
+        return TYPE_SOURCE_TYPE.equals(type)
+                || TYPE_EDITION_PUBLISHER.equals(type)
+                || TYPE_SUBJECT.equals(type)
+                || TYPE_GRADE.equals(type)
+                || TYPE_REVISION.equals(type);
     }
 
     @Override

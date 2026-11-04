@@ -192,6 +192,48 @@ class RagManagementControllerTest {
     }
 
     @Test
+    @DisplayName("⛔ 登记缺 ISBN/DOI 返回 400（不得漏成 500：那是入参问题，不是服务故障）")
+    void registerWithoutIdentifierIsBadRequestNotServerError() {
+        // ⚠️ 复现 2026-11-04 实测：登记「沪教版五四制六年级数学上册」时
+        //    未填 ISBN 与 DOI → SourceRegistration 构造期抛 IllegalArgumentException
+        //    → 修复前它冒泡成 500，响应体只剩笼统的 Internal Server Error，
+        //       管理员既看不到「ISBN 与 DOI 至少提供一个」，又被误导成「服务坏了」而反复重试。
+        ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
+                "TEXTBOOK", "沪教版五四制六年级数学上册", "上海教育出版社",
+                null, null, null, null, REVIEWER);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.registerSource(TENANT, null, SCOPE_TENANT, PLATFORM_CALLER, null, request));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode(),
+                "缺 ISBN/DOI 是入参形态问题，必须是 400 而不是 500");
+        assertNotNull(ex.getReason());
+        assertTrue(ex.getReason().contains("ISBN") && ex.getReason().contains("DOI"),
+                "必须原样带回领域层原因（管理员照着改的下一步），实际: " + ex.getReason());
+        verify(port, never()).registerSource(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("⛔ 登记的 contentHash 格式非法返回 400（不得漏成 500）")
+    void registerWithMalformedContentHashIsBadRequest() {
+        // ⚠️ contentHash 非 64 位十六进制 → 领域层构造期拒绝。
+        //    短值进库会被 PG 静默空格填充（CHAR(64)），失去「检测语料被静默替换」的能力，
+        //    所以必须在这里挡住——且以 400 的形态挡，而不是 500。
+        ManagementDtos.RegisterSourceRequest request = new ManagementDtos.RegisterSourceRequest(
+                "TEXTBOOK", "沪教版五四制六年级数学上册", "上海教育出版社",
+                "9787534417001", null, null, "NOT-A-HASH", REVIEWER);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.registerSource(TENANT, null, SCOPE_TENANT, PLATFORM_CALLER, null, request));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertNotNull(ex.getReason());
+        assertTrue(ex.getReason().contains("contentHash"),
+                "必须指明是 contentHash 的问题，实际: " + ex.getReason());
+        verify(port, never()).registerSource(any(), any(), any());
+    }
+
+    @Test
     @DisplayName("来源列表返回状态事实，并计算过期标记")
     void listSourcesReturnsStaleFlag() {
         when(port.listSources(any(), any())).thenReturn(List.of(sampleSource()));
@@ -725,9 +767,15 @@ class RagManagementControllerTest {
     }
 
     @Test
-    @DisplayName("字典列表返回四类字典，且只有 SOURCE_TYPE 可编辑")
+    @DisplayName("字典列表返回八类：五轴四类 + 治理四类，可编辑性按动态/派生区分")
     void dictionaryListMarksEditable() {
+        // 动态类型（可维护）：版本五轴四类 + 来源类型
         when(dictionaryPort.isEditable(SOURCE_TYPE)).thenReturn(true);
+        when(dictionaryPort.isEditable(DictionaryPort.TYPE_EDITION_PUBLISHER)).thenReturn(true);
+        when(dictionaryPort.isEditable(DictionaryPort.TYPE_SUBJECT)).thenReturn(true);
+        when(dictionaryPort.isEditable(DictionaryPort.TYPE_GRADE)).thenReturn(true);
+        when(dictionaryPort.isEditable(DictionaryPort.TYPE_REVISION)).thenReturn(true);
+        // 派生类型（只读）：由 Java 枚举生成
         when(dictionaryPort.isEditable(DictionaryPort.TYPE_TRUST_TIER)).thenReturn(false);
         when(dictionaryPort.isEditable(DictionaryPort.TYPE_VERIFICATION_METHOD)).thenReturn(false);
         when(dictionaryPort.isEditable(DictionaryPort.TYPE_LICENSE_STATUS)).thenReturn(false);
@@ -738,12 +786,23 @@ class RagManagementControllerTest {
         List<ManagementDtos.DictionaryTypeDto> types =
                 controller.listDictionaries(TENANT, null, null, PLATFORM_CALLER);
 
-        assertEquals(4, types.size());
+        // ⚠️ RAG-D15 §六 待办 #7：新增版本五轴四类（出版社/学科/年级/版次）
+        assertEquals(8, types.size());
         ManagementDtos.DictionaryTypeDto source = types.stream()
                 .filter(t -> SOURCE_TYPE.equals(t.type())).findFirst().orElseThrow();
         assertEquals(true, source.editable(), "SOURCE_TYPE 应可维护");
         assertEquals(1, source.entries().size());
-        assertTrue(types.stream().filter(t -> !SOURCE_TYPE.equals(t.type())).allMatch(t -> !t.editable()),
+
+        // ⚠️ 顺序即界面标签页顺序：五轴在前（录入时选），治理在后（流转时选）
+        assertEquals(DictionaryPort.TYPE_EDITION_PUBLISHER, types.get(0).type());
+        assertEquals(DictionaryPort.TYPE_SUBJECT, types.get(1).type());
+
+        // 派生字典仍只读（改它会与检索期判定漂移）
+        assertTrue(types.stream()
+                        .filter(t -> t.type().equals(DictionaryPort.TYPE_TRUST_TIER)
+                                || t.type().equals(DictionaryPort.TYPE_VERIFICATION_METHOD)
+                                || t.type().equals(DictionaryPort.TYPE_LICENSE_STATUS))
+                        .allMatch(t -> !t.editable()),
                 "派生字典应只读");
     }
 

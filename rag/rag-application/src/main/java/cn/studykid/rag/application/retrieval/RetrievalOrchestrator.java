@@ -133,17 +133,32 @@ public class RetrievalOrchestrator {
                 .anyMatch(s -> request.editionScope().requiresVersionDisclaimer(s.chunk().edition()));
         boolean suppressed = versionFiltered.size() > roleFiltered.size();
 
+        // ⑧ 过滤漏斗计数（RAG-D05 §7 / 靶点 D）
+        //    ⚠️ 计数点必须紧贴各环节的 List，**不能事后重算**：
+        //       重算等于把过滤规则再实现一遍，两份实现必然漂移；
+        //       而这份漂移会直接表现为"漏斗显示过滤掉 0 条，结果却是空的"。
+        List<ScoredChunk> returned = above.stream().limit(request.topK()).toList();
+        RetrievalResult.RetrievalFunnel funnel = new RetrievalResult.RetrievalFunnel(
+                candidates.size(),      // ① 多路召回原始候选
+                versionFiltered.size(), // ② 版本硬过滤后
+                roleFiltered.size(),    // ③ 角色硬过滤后（泄题闸门）
+                above.size(),           // ④ 分数门禁后
+                returned.size());       // ⑤ topK 截断后
+
         if (above.isEmpty()) {
-            log.debug("检索未达分数门禁：query={} mode={} minScore={}",
-                    request.query(), request.mode(), minScore);
+            log.debug("检索未达分数门禁：query={} mode={} minScore={} funnel={}",
+                    request.query(), request.mode(), minScore, funnel);
         }
 
         return new RetrievalResult(
-                above.stream().limit(request.topK()).toList(),
+                returned,
                 knowledgePoints,
                 request.editionScope().preferred(),
                 versionMismatch,
-                suppressed);
+                suppressed,
+                funnel,
+                // 本次实际生效的门禁阈值（界面据此画刻度线，避免与配置漂移）
+                minScore);
     }
 
     /**

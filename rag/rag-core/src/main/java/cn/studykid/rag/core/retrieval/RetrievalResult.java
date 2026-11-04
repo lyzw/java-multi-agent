@@ -24,14 +24,135 @@ public record RetrievalResult(
         @NonNull List<KnowledgePoint> knowledgePoints,
         @NonNull EditionCoordinate primaryEdition,
         @NonNull boolean versionMismatchDetected,
-        @NonNull boolean answerContentSuppressed
+        @NonNull boolean answerContentSuppressed,
+        /**
+         * 过滤漏斗计数（RAG-D05 §7 / RAG-D12 靶点 D）。
+         *
+         * <p><b>⚠️ 为什么检索结果要带漏斗</b>：只给最终命中数，使用者无法区分
+         * 「语料里确实没有」与「被过滤光了」——两者处置完全不同
+         * （前者补语料、后者调策略）。把每层剩余量显式带出，规则效果才可验证。
+         *
+         * <p>缺省为空漏斗，保证既有调用方与测试不受影响。
+         */
+        @NonNull RetrievalFunnel funnel,
+        /**
+         * 本次检索实际生效的**分数门禁阈值**（RAG-D15 §六 待办 #3）。
+         *
+         * <p><b>⚠️ 为什么由结果携带而不是调用方自己读配置</b>：
+         * 阈值来自 {@code rag.retrieval.min-score}，由编排器在构造期定格。
+         * 若界面另读一份配置，两处一旦不一致（改配置未重启 / 多实例不同值），
+         * 界面画的刻度线就与实际门禁**不是同一个数**——
+         * 用户会看到一个"明明过了刻度线却被判依据不足"的矛盾界面。
+         * 让结果把真实阈值带出来，是消除这类漂移的唯一可靠做法。
+         */
+        double minScore
 ) {
+
+    /** 向后兼容构造（无漏斗、无阈值）。 */
+    public RetrievalResult(@NonNull List<ScoredChunk> chunks,
+                           @NonNull List<KnowledgePoint> knowledgePoints,
+                           @NonNull EditionCoordinate primaryEdition,
+                           @NonNull boolean versionMismatchDetected,
+                           @NonNull boolean answerContentSuppressed) {
+        this(chunks, knowledgePoints, primaryEdition,
+                versionMismatchDetected, answerContentSuppressed,
+                RetrievalFunnel.empty(chunks == null ? 0 : chunks.size()), 0.0);
+    }
+
+    /** 兼容构造（有漏斗、无阈值）。 */
+    public RetrievalResult(@NonNull List<ScoredChunk> chunks,
+                           @NonNull List<KnowledgePoint> knowledgePoints,
+                           @NonNull EditionCoordinate primaryEdition,
+                           @NonNull boolean versionMismatchDetected,
+                           @NonNull boolean answerContentSuppressed,
+                           @NonNull RetrievalFunnel funnel) {
+        this(chunks, knowledgePoints, primaryEdition, versionMismatchDetected,
+                answerContentSuppressed, funnel, 0.0);
+    }
 
     public RetrievalResult {
         chunks = chunks == null ? List.of() : List.copyOf(chunks);
         knowledgePoints = knowledgePoints == null ? List.of() : List.copyOf(knowledgePoints);
         if (primaryEdition == null) {
             throw new IllegalArgumentException("primaryEdition 不能为空");
+        }
+        if (funnel == null) {
+            funnel = RetrievalFunnel.empty(chunks.size());
+        }
+    }
+
+    /**
+     * 过滤漏斗（每层<b>剩余</b>数量）。
+     *
+     * <p><b>⚠️ 语义是「剩余」不是「剔除」</b>：{@code afterRole} 表示角色过滤后还剩多少条，
+     * 不是"被滤掉多少条"。用剩余量是因为界面要画逐层收窄的漏斗，
+     * 且缺失某层（如未走知识点补全）时可直接沿用上一层值。
+     *
+     * @param candidates   ① 多路召回的原始候选数（含知识点补全引入的片段）
+     * @param afterVersion ② 版本硬过滤后剩余
+     * @param afterRole    ③ 角色硬过滤后剩余（泄题闸门）
+     * @param afterGate    ④ 分数门禁后剩余（可交付的依据数）
+     * @param returned     ⑤ 实际返回条数（被 topK 截断后）
+     */
+    public record RetrievalFunnel(
+            int candidates,
+            int afterVersion,
+            int afterRole,
+            int afterGate,
+            int returned
+    ) {
+
+        public RetrievalFunnel {
+            // ⚠️ 漏斗必须单调不增：某层比上一层还多，说明计数点写错了。
+            //    与其静默传播一个自相矛盾的漏斗（会让"诊断"本身失真），不如当场拒绝。
+            if (afterVersion > candidates || afterRole > afterVersion
+                    || afterGate > afterRole || returned > afterGate) {
+                throw new IllegalArgumentException(
+                        "漏斗计数必须单调不增，实际：candidates=" + candidates
+                                + " afterVersion=" + afterVersion + " afterRole=" + afterRole
+                                + " afterGate=" + afterGate + " returned=" + returned);
+            }
+        }
+
+        /** 空漏斗（未采集 / 结果为空）。 */
+        public static @NonNull RetrievalFunnel empty(int size) {
+            return new RetrievalFunnel(size, size, size, size, size);
+        }
+
+        /** @return 版本过滤剔除条数 */
+        public int droppedByVersion() {
+            return candidates - afterVersion;
+        }
+
+        /** @return 角色过滤剔除条数 */
+        public int droppedByRole() {
+            return afterVersion - afterRole;
+        }
+
+        /** @return 门禁剔除条数 */
+        public int droppedByGate() {
+            return afterRole - afterGate;
+        }
+
+        /**
+         * 主因归因：哪一层剔除最多。
+         *
+         * <p>这是「召回不足 vs 过滤过严」这条诊断问题的**结论字段**——
+         * 界面不必自己比较三个差值，避免各处算法漂移。
+         *
+         * @return NONE / ROLE / VERSION / GATE
+         */
+        public @NonNull String dominantDrop() {
+            int v = droppedByVersion();
+            int r = droppedByRole();
+            int g = droppedByGate();
+            if (v == 0 && r == 0 && g == 0) {
+                return "NONE";
+            }
+            if (r >= v && r >= g) {
+                return "ROLE";
+            }
+            return v >= g ? "VERSION" : "GATE";
         }
     }
 

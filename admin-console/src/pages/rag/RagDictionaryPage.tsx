@@ -1,0 +1,278 @@
+/**
+ * RAG 语料管理 · 字典（RAG-D13 §3.4.1 / RAG-D14 §4.11）
+ *
+ * <p><b>这一页做什么</b>：维护语料治理下拉枚举的数据源（来源类型 / 权威等级 /
+ * 校验手段 / 版权状态），让新增取值不必改前端代码。
+ *
+ * <p><b>⚠️ 与视觉稿的差异（如实现，不粉饰）</b>：
+ * 视觉稿原型里字典类型写的是「出版社 / 学科 / 版次」，但后端
+ * `GET /dictionaries` 实际固定返回 **SOURCE_TYPE / TRUST_TIER /
+ * VERIFICATION_METHOD / LICENSE_STATUS** 四类，且只有 SOURCE_TYPE 可写。
+ * 本页按**后端真实类型**渲染——把不存在的类型画出来只会让人点了报错。
+ * 出版社/学科/版次若要可维护，需后端先补字典类型（见改造说明）。
+ */
+
+import { useCallback, useEffect, useState } from 'react'
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Space,
+  Switch,
+  Table,
+  Tabs,
+  Tag,
+  Typography,
+} from 'antd'
+
+import {
+  ApiError,
+  deleteRagDictionaryEntry,
+  getRagDictionaries,
+  upsertRagDictionaryEntry,
+} from '@/api/ragClient'
+import type { RagDictionaryEntry, RagDictionaryType, RagDictionaryTypeView } from '@/api/ragTypes'
+import { RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagEmpty } from './ragVisuals'
+
+const { Text, Paragraph } = Typography
+
+/** 字典类型中文名（与后端四类一一对应）。 */
+const TYPE_LABEL: Record<string, string> = {
+  // 版本五轴（可维护）
+  EDITION_PUBLISHER: '出版社',
+  SUBJECT: '学科',
+  GRADE: '年级',
+  REVISION: '版次',
+  // 治理流转
+  SOURCE_TYPE: '来源类型',
+  TRUST_TIER: '权威等级',
+  VERIFICATION_METHOD: '校验手段',
+  LICENSE_STATUS: '版权状态',
+}
+
+interface EntryForm {
+  code: string
+  label: string
+  sortOrder: number
+  enabled: boolean
+}
+
+export function RagDictionaryPage(): JSX.Element {
+  const { message } = App.useApp()
+  const { target, ready, scopeKey } = useRagScope()
+
+  const [types, setTypes] = useState<RagDictionaryTypeView[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [activeType, setActiveType] = useState<RagDictionaryType | null>(null)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form] = Form.useForm<EntryForm>()
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const list = await getRagDictionaries(target)
+      setTypes(list)
+      setActiveType((prev) => prev ?? list[0]?.type ?? null)
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : '读取字典失败')
+      setTypes([])
+    } finally {
+      setLoading(false)
+    }
+  }, [target])
+
+  useEffect(() => {
+    if (ready) void load()
+  }, [ready, scopeKey, load])
+
+  const current = types.find((t) => t.type === activeType) ?? types[0]
+  const editable = current?.editable ?? false
+
+  const onSave = async (v: EntryForm): Promise<void> => {
+    if (!current) return
+    setSaving(true)
+    try {
+      await upsertRagDictionaryEntry(target, current.type, {
+        code: v.code.trim(),
+        label: v.label.trim(),
+        sortOrder: v.sortOrder,
+        enabled: v.enabled,
+      })
+      message.success('字典项已保存')
+      setModalOpen(false)
+      await load()
+    } catch (cause) {
+      message.error(cause instanceof ApiError ? cause.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const onDelete = async (code: string): Promise<void> => {
+    if (!current) return
+    setSaving(true)
+    try {
+      await deleteRagDictionaryEntry(target, current.type, code)
+      message.success(`已删除「${code}」`)
+      await load()
+    } catch (cause) {
+      message.error(cause instanceof ApiError ? cause.message : '删除失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <RagScopeShell
+      domain="规则配置"
+      title="字典"
+      description="维护语料录入与治理下拉的数据源，新增取值无需改前端代码。版本五轴四类与「来源类型」可维护；权威等级/校验手段/版权状态为派生字典（由后端枚举生成，只读）。"
+      extra={
+        editable ? (
+          <Button
+            type="primary"
+            onClick={() => {
+              form.setFieldsValue({ code: '', label: '', sortOrder: 0, enabled: true })
+              setModalOpen(true)
+            }}
+          >
+            ＋ 新增条目
+          </Button>
+        ) : undefined
+      }
+    >
+      {error && <Alert type="error" showIcon message={error} />}
+
+      <Card size="small">
+        {types.length === 0 && !loading ? (
+          <RagEmpty text="暂无字典数据" />
+        ) : (
+          <Tabs
+            activeKey={current?.type}
+            onChange={(k) => setActiveType(k as RagDictionaryType)}
+            items={types.map((t) => ({
+              key: t.type,
+              label: (
+                <Space size={6}>
+                  {TYPE_LABEL[t.type] ?? t.type}
+                  {!t.editable && <Tag>只读</Tag>}
+                </Space>
+              ),
+              children: (
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  {!t.editable && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="该字典由后端枚举派生，不可编辑"
+                      description="派生字典的取值来自领域枚举（如 TrustTier），改名会与检索期判定漂移，故只读。"
+                    />
+                  )}
+                  <Table<RagDictionaryEntry>
+                    size="small"
+                    rowKey="code"
+                    loading={loading}
+                    dataSource={t.entries}
+                    pagination={false}
+                    locale={{ emptyText: <RagEmpty text="该类型暂无条目" /> }}
+                    columns={[
+                      {
+                        title: '编码 code',
+                        dataIndex: 'code',
+                        render: (v: string) => <Text code>{v}</Text>,
+                      },
+                      { title: '显示名 label', dataIndex: 'label' },
+                      {
+                        title: '状态',
+                        dataIndex: 'enabled',
+                        width: 90,
+                        render: (v: boolean) =>
+                          v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>,
+                      },
+                      {
+                        title: '作用域',
+                        dataIndex: 'scope',
+                        width: 100,
+                        render: (v: string) => <Tag>{v}</Tag>,
+                      },
+                      {
+                        title: '',
+                        key: 'actions',
+                        width: 120,
+                        render: (_, row) =>
+                          t.editable ? (
+                            <Space size={8}>
+                              <a
+                                onClick={() => {
+                                  form.setFieldsValue({
+                                    code: row.code,
+                                    label: row.label,
+                                    sortOrder: row.sortOrder ?? 0,
+                                    enabled: row.enabled,
+                                  })
+                                  setModalOpen(true)
+                                }}
+                              >
+                                编辑
+                              </a>
+                              <a
+                                style={{ color: '#cf1322' }}
+                                onClick={() => void onDelete(row.code)}
+                              >
+                                删除
+                              </a>
+                            </Space>
+                          ) : (
+                            <Text type="secondary">—</Text>
+                          ),
+                      },
+                    ]}
+                  />
+                </Space>
+              ),
+            }))}
+          />
+        )}
+      </Card>
+
+      <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+        ⚠️ 「出版社 / 学科 / 年级」的取值须落在版本坐标枚举范围内——
+        检索期按枚举 displayName 反查，超出范围的值会让该校材的检索失败。
+        「版次」无枚举约束，可自由填写。
+      </Paragraph>
+
+      <Modal
+        title={`${current ? (TYPE_LABEL[current.type] ?? current.type) : ''} · 字典项`}
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        onOk={() => form.submit()}
+        confirmLoading={saving}
+        destroyOnHidden
+      >
+        <Form<EntryForm> form={form} layout="vertical" onFinish={(v) => void onSave(v)}>
+          <Form.Item name="code" label="编码 code" rules={[{ required: true }]}>
+            <Input placeholder="如 ONLINE_BOOK" />
+          </Form.Item>
+          <Form.Item name="label" label="显示名 label" rules={[{ required: true }]}>
+            <Input placeholder="如 在线图书" />
+          </Form.Item>
+          <Form.Item name="sortOrder" label="排序">
+            <InputNumber style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="enabled" label="启用" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </RagScopeShell>
+  )
+}

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>重索引 · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="reindex">
+<script src="../assets/shell.js"></script>
+<script>
+shell('运维 / 重索引', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">重索引（索引代际 / 蓝绿）</div>
+    <div class="page-desc">换嵌入模型走「新代际 + 蓝绿切换」，不原地改向量列。运维不感知向量列迁移细节。</div>
+  </div>
+  <button class="btn btn-primary">＋ 新建索引代际</button>
+</div>
+
+<div class="card">
+  <table class="tbl">
+    <thead><tr><th>代际名</th><th>嵌入模型 modelVersion</th><th>维度</th><th>片段数</th><th>状态（蓝/绿/构建中）</th><th></th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="td-strong">gen-2026-05</td>
+        <td class="mono">BGE-M3</td><td>1024</td><td>7 200</td>
+        <td><span class="badge b-verified">🟢 绿（当前服务）</span></td>
+        <td class="right"><a class="btn btn-sm" href="#">查看</a></td>
+      </tr>
+      <tr>
+        <td class="td-strong">gen-2026-06</td>
+        <td class="mono">qwen3-embedding:8b</td><td>4096</td><td>7 200</td>
+        <td><span class="badge b-completed">🔵 蓝（待切换）</span></td>
+        <td class="right"><a class="btn btn-sm btn-primary" href="#">切换为当前</a> <a class="btn btn-sm" href="#">回滚</a></td>
+      </tr>
+      <tr>
+        <td class="td-strong">gen-2026-07</td>
+        <td class="mono">BGE-M3</td><td>1024</td><td>3 480</td>
+        <td><span class="badge b-process">⏳ 构建中</span></td>
+        <td class="right"><a class="btn btn-sm" href="#">进度</a></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="notice warn" style="margin-top:16px">
+  <span>⚠️</span><span>4096 维超过 pgvector HNSW 索引上限（4000），构建中将无 ANN 索引；切换前请确认已按 MRL 截断或选 1024 维模型（对应 RAG-D12 靶点 C 的模型侧根因之一 / 问题记录 RAG-04）。</span>
+</div>`;
+</script>
+</body>
+</html>

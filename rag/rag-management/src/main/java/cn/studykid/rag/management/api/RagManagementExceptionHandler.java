@@ -98,4 +98,47 @@ public class RagManagementExceptionHandler {
         body.put("message", reason == null ? "请求未被接受" : reason);
         return ResponseEntity.status(status).body(body);
     }
+
+    /**
+     * 入参形态校验失败（{@link IllegalArgumentException}）→ <b>400</b> + 领域层原话。
+     *
+     * <p><b>⚠️ 为什么必须有这层兜底</b>：管理面的领域对象（{@code SourceRegistration}、
+     * {@code MetadataConfirmation}、{@code VerificationDecision} 等）都在
+     * <b>构造期</b>做入参校验并抛 {@link IllegalArgumentException}。
+     * 控制器里那些**显式**写了 try/catch 的端点把它转成了 400，
+     * 但只要有一处漏写（实测踩到：{@code POST /sources} 漏了），
+     * 这个异常就会一路冒泡成 <b>500</b>——
+     * <ul>
+     *   <li>运维含义被带偏：500 = 「服务坏了」，真实情况是「请求没填全」；</li>
+     *   <li>响应体被 Spring 默认的 {@code /error} 接管，只剩
+     *       {@code {timestamp,status,error,path}}——<b>领域层那条可执行的原因被丢掉</b>，
+     *       管理员看到的是笼统的「Internal Server Error」；</li>
+     *   <li>控制台按 5xx 分流成「服务端故障、控制台侧修不了」，
+     *       管理员于是反复重试——重试永远不会成功。</li>
+     * </ul>
+     * 所以这里把它收成 400：<b>调用方输入问题</b>，且<b>原样带回原因</b>
+     * （如「ISBN 与 DOI 至少提供一个（否则无法进入校验流程）」），
+     * 让管理员知道下一步该做什么。
+     *
+     * <p>⚠️ <b>只收 4xx 语义明确的入参异常</b>：{@link IllegalArgumentException}
+     * 在本服务里的语义就是「入参形态不合法」，因此可以安全地整体归一为 400。
+     * 真正的服务故障（库不可达、通道未接入）走的是别的异常类型
+     * （如 {@link RagOpsUnavailableException} → 503），不会被这里误吞。
+     *
+     * @param ex 入参校验异常
+     * @return 400 + 领域层原话
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> onIllegalArgument(IllegalArgumentException ex) {
+        String reason = ex.getMessage() == null || ex.getMessage().isBlank()
+                ? "请求参数不合法"
+                : ex.getMessage();
+        log.info("管理面入参校验失败 reason={}", reason);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("timestamp", java.time.Instant.now().toString());
+        body.put("status", HttpStatus.BAD_REQUEST.value());
+        body.put("error", HttpStatus.BAD_REQUEST.getReasonPhrase());
+        body.put("message", reason);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
 }

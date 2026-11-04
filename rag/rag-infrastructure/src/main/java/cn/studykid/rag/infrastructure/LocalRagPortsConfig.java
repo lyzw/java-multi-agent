@@ -129,6 +129,28 @@ public class LocalRagPortsConfig {
         return new IngestionPipeline(parserPort);
     }
 
+    /**
+     * 上传前解析预览（RAG-D15 §六 待办 #6）。
+     *
+     * <p>⚠️ 复用同一个 {@link IngestionPipeline} 与
+     * {@link cn.studykid.rag.infrastructure.ingest.JdbcIngestSourceLoader}：
+     * 若预览用另一套切分/取坐标逻辑，预览结果与真实入库就会不一致——
+     * 那比不提供预览更糟（让人"确认"一个错误的结果）。
+     *
+     * <p>⚠️ 依赖 {@code TransactionTemplate}：加载版本坐标与知识点需要
+     * 租户会话（RLS FORCE），而 set_config 是事务局部的。
+     *
+     * @param pipeline 入库流水线
+     * @param loader   来源加载器（复用其版本坐标与知识点加载）
+     * @return 预览服务
+     */
+    @Bean
+    public cn.studykid.rag.infrastructure.ingest.DocumentPreviewService documentPreviewService(
+            IngestionPipeline pipeline,
+            cn.studykid.rag.infrastructure.ingest.JdbcIngestSourceLoader loader) {
+        return new cn.studykid.rag.infrastructure.ingest.DocumentPreviewService(pipeline, loader);
+    }
+
     @Bean
     public GroundingService groundingService(EntailmentPort entailmentPort,
                                              GroundingPolicy groundingPolicy) {

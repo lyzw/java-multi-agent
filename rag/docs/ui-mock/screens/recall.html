@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>召回解释（质检）· RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="recall">
+<script src="../assets/shell.js"></script>
+<script>
+shell('审核 / 召回解释（质检）', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">召回解释（质检）</div>
+    <div class="page-desc">模拟一次检索，验证「召回什么、为什么、是否触发门禁」。读面 ask_textbook 单一契约的管理端调试视图。</div>
+  </div>
+</div>
+
+<div class="card card-pad">
+  <div class="card-title">① 查询输入（student_context + question）</div>
+  <div class="grid-2">
+    <div class="field"><label class="req">问题 question</label><input type="text" style="width:100%" value="二次函数的顶点怎么求"></div>
+    <div class="field"><label class="req">意图 intent</label><select style="width:100%"><option>EXPLAIN · 讲解</option><option>SOLVE · 解题</option><option>VERIFY · 核对</option><option>OVERVIEW · 概览</option></select></div>
+  </div>
+  <div class="grid-2">
+    <div class="field"><label>学科</label><select style="width:100%"><option>数学</option></select></div>
+    <div class="field"><label>年级/册次</label><select style="width:100%"><option>七年级 · 上册</option></select></div>
+    <div class="field"><label>出版社/版次</label><select style="width:100%"><option>人教版 · 2024修订</option></select></div>
+    <div class="field"><label>版本范围 Mode</label><select style="width:100%"><option>STRICT · 严格锁定</option><option>PREFERRED_WITH_FALLBACK · 首选+回退</option><option>CROSS_EDITION · 跨版本</option></select></div>
+  </div>
+  <button class="btn btn-primary">🔍 执行检索</button>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <div class="card-pad" style="padding-bottom:8px">
+    <div class="card-title">② 检索摘要 <span class="sub">过滤前 → 过滤后 · 门禁状态</span></div>
+    <div class="row wrap" style="gap:16px">
+      <span class="tag"><span class="key">过滤前候选</span><b>100</b></span>
+      <span class="tag"><span class="key">版本硬过滤后</span><b>72</b></span>
+      <span class="tag"><span class="key">角色硬过滤后</span><b>54</b></span>
+      <span class="tag"><span class="key">门禁后命中</span><b>38</b></span>
+      <span class="badge b-ready">门禁通过</span>
+    </div>
+    <div class="small muted" style="margin-top:8px">「过滤前后数量」用于诊断：是召回不足，还是过滤过严。</div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <div class="card-pad" style="padding-bottom:0">
+    <div class="card-title">③ 命中片段 <span class="sub">每条带 relevance + 通道 + 命中原因 + 角色 + 版本标记</span></div>
+  </div>
+  <div class="card-pad">
+    <div class="frag cite">
+      <div class="row"><span class="role role-cite">讲解</span><span class="small muted">第 12 页 · 3.1 二次函数</span><span class="grow"></span><span class="badge b-verified">本版</span></div>
+      <div class="row" style="margin-top:10px;align-items:center">
+        <div style="flex:0 0 140px" class="small td-strong" style="color:var(--brand-600)">relevance 0.634</div>
+        <div class="scale grow" style="margin:0 8px"><div class="thr" style="left:38%"></div><div class="mark" style="left:63%;background:var(--cite)"></div></div>
+        <span class="tag"><span class="key">通道</span>稠密</span><span class="tag"><span class="key">原因</span>直接命中</span>
+      </div>
+    </div>
+    <div class="frag answer">
+      <div class="row"><span class="role role-answer">习题答案</span><span class="small muted">第 45 页 · 第 12 题</span><span class="grow"></span><span class="badge b-failed">已抑制</span></div>
+      <div class="row" style="margin-top:10px;align-items:center">
+        <div class="small td-strong" style="flex:0 0 140px;color:var(--danger)">已按策略排除</div>
+        <div class="scale grow" style="margin:0 8px;opacity:.4"><div class="thr" style="left:38%"></div><div class="mark" style="left:71%;background:var(--answer)"></div></div>
+        <span class="badge b-failed">泄题闸门</span>
+      </div>
+      <div class="small muted" style="margin-top:8px">讲解模式下 EXAMPLE_SOLUTION / EXERCISE_ANSWER 不进入 prompt（RAG-D05 §5）。</div>
+    </div>
+    <div class="frag cite">
+      <div class="row"><span class="role role-cite">例题</span><span class="small muted">第 20 页 · 例 1</span><span class="grow"></span><span class="badge b-pending">异版</span></div>
+      <div class="row" style="margin-top:10px;align-items:center">
+        <div class="small td-strong" style="flex:0 0 140px" style="color:var(--brand-600)">relevance 0.491</div>
+        <div class="scale grow" style="margin:0 8px"><div class="thr" style="left:38%"></div><div class="mark" style="left:49%;background:var(--cite)"></div></div>
+        <span class="tag"><span class="key">通道</span>词法</span><span class="tag"><span class="key">原因</span>别名命中</span>
+      </div>
+      <div class="small muted" style="margin-top:8px">来自其他版本，已标注差异（版本范围 PREFERRED_WITH_FALLBACK）。</div>
+    </div>
+  </div>
+</div>`;
+</script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>字典 · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="dict">
+<script src="../assets/shell.js"></script>
+<script>
+shell('规则配置 / 字典', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">字典</div>
+    <div class="page-desc">维护字典条目（dictionary type → entries）。</div>
+  </div>
+  <button class="btn btn-primary">＋ 新增条目</button>
+</div>
+
+<div class="card">
+  <div class="card-pad" style="padding-bottom:0">
+    <div class="tabs">
+      <div class="tab active">出版社 Publisher</div>
+      <div class="tab">学科 Subject</div>
+      <div class="tab">版次 Revision</div>
+    </div>
+  </div>
+  <table class="tbl">
+    <thead><tr><th>编码 code</th><th>显示名</th><th>状态</th><th>创建时间</th><th></th></tr></thead>
+    <tbody>
+      <tr><td class="mono">RENJIAO</td><td class="td-strong">人民教育出版社（人教版）</td><td><span class="badge b-verified">启用</span></td><td class="small muted">2026-05-01</td><td class="right"><a class="btn btn-sm" href="#">编辑</a></td></tr>
+      <tr><td class="mono">HUJIAO</td><td class="td-strong">上海教育出版社（沪教版）</td><td><span class="badge b-verified">启用</span></td><td class="small muted">2026-05-01</td><td class="right"><a class="btn btn-sm" href="#">编辑</a></td></tr>
+      <tr><td class="mono">BEISHI</td><td class="td-strong">北京师范大学出版社</td><td><span class="badge b-pending">停用</span></td><td class="small muted">2026-04-20</td><td class="right"><a class="btn btn-sm" href="#">编辑</a></td></tr>
+    </tbody>
+  </table>
+</div>`;
+</script>
+</body>
+</html>

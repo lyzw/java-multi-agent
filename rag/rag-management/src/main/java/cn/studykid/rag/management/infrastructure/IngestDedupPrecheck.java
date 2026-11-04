@@ -1,14 +1,19 @@
 package cn.studykid.rag.management.infrastructure;
 
 import java.util.List;
+import java.util.Objects;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.core.ingest.IngestDedupRules;
 import cn.studykid.rag.core.ingest.IngestDedupRules.DuplicateHit;
 import cn.studykid.rag.core.ingest.IngestDedupRules.Layer;
+import cn.studykid.rag.core.scope.RagCorpusScope;
+import cn.studykid.rag.management.core.RagManagementContext;
 
 /**
  * 上传前的三层去重预检（方案 §4 Z3 / 设计 §2.2.2 / N1）。
@@ -24,18 +29,93 @@ import cn.studykid.rag.core.ingest.IngestDedupRules.Layer;
  * {@link IngestDedupRules#ACTIVE_SOURCE_PREDICATE}，<b>不在此处另写一份条件</b>——
  * 两份条件一旦漂移，就会出现「预检说重复、约束说可入」或反之的两层打架。
  *
- * <p>⚠️ 调用前必须已设置租户会话（{@code app.tenant_id}），否则 RLS 会让查询恒返回空、
- * 预检形同虚设（静默失效，比报错更危险）。
+ * <p><b>⚠️ 会话租户由本类按作用域建立</b>（{@link RagSessionScope}）：
+ * 租户档绑该租户；平台档<b>显式置空</b>（不是跳过——池化连接可能带着上一位的租户），
+ * 此时 RLS 读策略 {@code tenant_id = ANY (ARRAY[rag_current_tenant(), rag_global_tenant_id()])}
+ * 只剩「全局行」一支，谓词再绑定全局哨兵，正好是平台语料那一批行。
+ * 不建会话的后果是查询恒返回空、预检形同虚设（静默失效，比报错更危险）。
+ *
+ * <p><b>⚠️ 平台档的租户值是 {@code queryTenantId()} 而不是 {@code requireTenant()}</b>：
+ * 后者对平台档必然抛异常，会让「平台语料抽检时的注入校验」一律 500（实测踩到）。
+ * 换言之：预检是<b>读</b>，读的租户列就是哨兵；写通道的选择不归本类管。
  */
 public class IngestDedupPrecheck {
 
     private final JdbcTemplate jdbcTemplate;
+    private final TransactionTemplate transactionTemplate;
 
+    /**
+     * 不绑定事务模板的构造器：每次预检自开事务（会话变量只在事务内有效）。
+     *
+     * @param jdbcTemplate JDBC 模板
+     */
     public IngestDedupPrecheck(JdbcTemplate jdbcTemplate) {
+        this(jdbcTemplate, null);
+    }
+
+    /**
+     * @param jdbcTemplate        JDBC 模板
+     * @param transactionTemplate 事务模板（可为 null = 自建一个仅用于本类的模板）
+     */
+    public IngestDedupPrecheck(JdbcTemplate jdbcTemplate,
+                               @Nullable TransactionTemplate transactionTemplate) {
         if (jdbcTemplate == null) {
             throw new IllegalArgumentException("jdbcTemplate 不能为空");
         }
         this.jdbcTemplate = jdbcTemplate;
+        // ⚠️ 缺省自建：会话变量必须在一个事务里设置才有效，
+        //    而预检的调用方（控制器）不持有事务边界。
+        this.transactionTemplate = transactionTemplate != null
+                ? transactionTemplate
+                : new TransactionTemplate(new DataSourceTransactionManager(
+                        Objects.requireNonNull(jdbcTemplate.getDataSource(),
+                                "JdbcTemplate 未绑定 DataSource，无法为预检建立会话")));
+    }
+
+    /**
+     * 按作用域预检「同内容哈希的活跃载体」是否存在。
+     *
+     * <p>⚠️ 平台档必须走这里而不是自己拼租户 ID：租户列与<b>会话</b>是两件事
+     * （会话置空 + 谓词绑哨兵），后者由 {@link RagSessionScope} 负责。
+     *
+     * @param context     作用域上下文
+     * @param contentHash 服务端 SHA-256
+     * @return 命中结果；未命中返回 {@code null}
+     */
+    @Nullable
+    public DuplicateHit checkCarrier(@NonNull RagManagementContext context,
+                                     @NonNull String contentHash) {
+        if (context.scope() == RagCorpusScope.ALL) {
+            // 与读侧同一语义：rag_app 角色看不到别的租户，给不出正确口径的答案。
+            throw new IllegalStateException("跨租户盘点档不支持去重预检（需平台运维数据源）");
+        }
+        String tenantId = context.queryTenantId();
+        return transactionTemplate.execute(status -> {
+            RagSessionScope.apply(jdbcTemplate, context);
+            return checkCarrier(tenantId, contentHash);
+        });
+    }
+
+    /**
+     * 按作用域预检「同 ISBN / DOI 的活跃来源」是否存在。
+     *
+     * @param context 作用域上下文
+     * @param isbn    ISBN（可为 null）
+     * @param doi     DOI（可为 null）
+     * @return 命中结果；未命中返回 {@code null}
+     */
+    @Nullable
+    public DuplicateHit checkSource(@NonNull RagManagementContext context,
+                                    @Nullable String isbn,
+                                    @Nullable String doi) {
+        if (context.scope() == RagCorpusScope.ALL) {
+            throw new IllegalStateException("跨租户盘点档不支持去重预检（需平台运维数据源）");
+        }
+        String tenantId = context.queryTenantId();
+        return transactionTemplate.execute(status -> {
+            RagSessionScope.apply(jdbcTemplate, context);
+            return checkSource(tenantId, isbn, doi);
+        });
     }
 
     /**

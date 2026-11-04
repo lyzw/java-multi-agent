@@ -14,6 +14,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
@@ -174,6 +175,32 @@ public class RagManagementController {
 
     private final CorpusManagementPort managementPort;
     private final CorpusIndexingPort indexingPort;
+
+    /**
+     * 索引代际端口（RAG-D13 §3.5.2 蓝绿切换）。
+     *
+     * <p>⚠️ 可空：装配方未接入时（如只读部署、单测）代际端点返回 501，
+     * 而不是在构造期把整个控制器拖垮——控制器还承载着大量与代际无关的端点。
+     */
+    private final cn.studykid.rag.ports.@Nullable IndexGenerationPort generationPort;
+
+    /**
+     * 代际构建器（可选）。
+     *
+     * <p>⚠️ 可空：构建器需要 EmbeddingPort 与 CorpusRepository，
+     * 而某些部署（如纯只读管理面）不装配它们。缺省时「触发构建」端点返回 501。
+     */
+    private final cn.studykid.rag.infrastructure.indexing.@Nullable
+            IndexGenerationBuilder generationBuilder;
+
+    /**
+     * 上传前解析预览服务（RAG-D15 §六 待办 #6）。
+     *
+     * <p>⚠️ 可空：它需要解析器（{@code DocumentParserPort}），
+     * 未装配时预览端点返回 501，不影响上传本身。
+     */
+    private final cn.studykid.rag.infrastructure.ingest.@Nullable
+            DocumentPreviewService previewService;
     private final DictionaryPort dictionaryPort;
     private final ObjectStorePort objectStore;
 
@@ -245,7 +272,13 @@ public class RagManagementController {
                                    @Autowired(required = false)
                                    cn.studykid.rag.management.ports.InspectionPort inspectionPort,
                                    @Autowired(required = false)
-                                   cn.studykid.rag.management.ports.KnowledgeAliasPort knowledgeAliasPort) {
+                                   cn.studykid.rag.management.ports.KnowledgeAliasPort knowledgeAliasPort,
+                                   @Autowired(required = false)
+                                   cn.studykid.rag.ports.IndexGenerationPort generationPort,
+                                   @Autowired(required = false)
+                                   cn.studykid.rag.infrastructure.indexing.IndexGenerationBuilder generationBuilder,
+                                   @Autowired(required = false)
+                                   cn.studykid.rag.infrastructure.ingest.DocumentPreviewService previewService) {
         if (managementPort == null || indexingPort == null || dictionaryPort == null
                 || objectStore == null) {
             throw new IllegalArgumentException(
@@ -253,6 +286,9 @@ public class RagManagementController {
         }
         this.managementPort = managementPort;
         this.indexingPort = indexingPort;
+        this.generationPort = generationPort;
+        this.generationBuilder = generationBuilder;
+        this.previewService = previewService;
         this.dictionaryPort = dictionaryPort;
         this.objectStore = objectStore;
         // ⚠️ 这两个可选依赖用 required=false：既有的单测/切片上下文未装配它们，
@@ -281,7 +317,8 @@ public class RagManagementController {
                                    CorpusIndexingPort indexingPort,
                                    DictionaryPort dictionaryPort,
                                    ObjectStorePort objectStore) {
-        this(managementPort, indexingPort, dictionaryPort, objectStore, null, null, null, null, null);
+        this(managementPort, indexingPort, dictionaryPort, objectStore,
+                null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -314,7 +351,21 @@ public class RagManagementController {
         try {
             SourceRegistration registration = new SourceRegistration(
                     request.sourceType(), request.title(), request.publisher(),
-                    request.isbn(), request.doi(), request.objectRef(), request.contentHash());
+                    request.isbn(), request.doi(), request.objectRef(), request.contentHash(),
+                    // ---- 版本五轴（RAG-D00 RD-03）----
+                    request.subject(), request.grade(), request.term(),
+                    request.revisionCode(), request.editionPublisher());
+            // ⚠️ 五轴「部分填写」必须拒绝，不能静默退化：
+            //    用户填了学科却没填年级，说明他以为登记的是「数学七年级」，
+            //    而落库会退化成一个默认坐标（未指定/全学段）——
+            //    这个偏差不可见、只在学生检索时暴露"按七年级查不到这本书"。
+            //    宁可现在失败并告诉他缺哪一轴。
+            String missingAxes = registration.partiallyFilledEdition();
+            if (missingAxes != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "版本五轴缺轴：" + missingAxes
+                                + "（要么五轴填齐，要么全部留空；部分填写会退化成默认版本坐标）");
+            }
             source = managementPort.registerSource(tenant, registration,
                     request.registeredBy());
         } catch (IllegalArgumentException e) {
@@ -1067,6 +1118,84 @@ public class RagManagementController {
      * @param rolesCsv 逗号分隔的角色白名单（可空 = 不过滤）
      * @return 片段摘要列表
      */
+    /**
+     * 上传前解析预览（dry-run，RAG-D15 §六 待办 #6）。
+     *
+     * <p><b>⚠️ 这是**只读**操作：不写对象存储、不建 document/chunk/job、不嵌入</b>。
+     * 它只做一次纯内存的解析 + 切分，让录入员在上传前看到"这本书会被切成什么样"。
+     *
+     * <p><b>⚠️ 为什么不需要治理票据</b>：预览不产生任何持久化副作用，
+     * 按读端点处理即可。若要求票据，反而会让人为了"看一眼"去领一张写票。
+     *
+     * <p><b>⚠️ 版本坐标来自来源已登记的五轴</b>（RAG-D16）：
+     * 取不到时返回 400 并提示先补登记——**不造默认坐标**，
+     * 否则预览"成功"而真实入库挂到默认坐标，预览就成了"确认一个错误的结果"。
+     *
+     * @param sourceId 来源 ID（版本坐标由它反查）
+     * @param file     待上传文件（不落盘，仅内存解析）
+     * @param limit    返回片段条数上限（默认 50，封顶 200）
+     * @return 预览结果（总片段数 + 角色统计 + 片段样本）
+     */
+    @PostMapping(value = "/sources/{sourceId}/documents/preview",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ManagementDtos.PreviewResponse previewDocument(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @PathVariable("sourceId") String sourceId,
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        // ⚠️ 读上下文即可：预览无副作用（不落桶、不建行、不嵌入）。
+        RagManagementContext context = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        if (previewService == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    "解析预览未接入（装配方未提供 DocumentPreviewService）");
+        }
+        if (file == null || file.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件不能为空");
+        }
+        if (context.scope() == RagCorpusScope.PLATFORM) {
+            // ⚠️ 平台全局档的预览需要运维通道读版本坐标，暂不支持——
+            //    明确 501，而不是用应用连接读出一个"看起来正常"的空结果。
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    "平台全局档暂不支持解析预览（需运维通道读取版本坐标）");
+        }
+        byte[] content;
+        try {
+            content = file.getBytes();
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "读取上传文件失败", e);
+        }
+        if (content.length == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件内容为空");
+        }
+        // ⚠️ 魔数校验前置：预览也要拦"把 .exe 改名 .pdf"，
+        //    否则预览会解析出一堆乱码，让人误以为切分有问题。
+        assertMagicMatchesExtension(content, file.getOriginalFilename());
+
+        try {
+            var result = previewService.preview(
+                    context.requireTenant().tenantId(), sourceId,
+                    file.getOriginalFilename() == null ? "unnamed" : file.getOriginalFilename(),
+                    content, limit);
+            return new ManagementDtos.PreviewResponse(
+                    result.totalChunks(), result.returnedChunks(), result.limit(),
+                    result.truncated(), result.byRole(), result.edition().display(),
+                    result.chunks().stream().map(c -> new ManagementDtos.PreviewChunkDto(
+                            c.id(), c.role().name(), c.text().trim(),
+                            c.locator().pageNumber(), c.locator().exerciseNo(),
+                            c.locator().sectionPath(),
+                            c.layoutFacts() != null && c.layoutFacts().inAnswerZone(),
+                            c.layoutFacts() == null ? null : c.layoutFacts().blockType()
+                    )).toList());
+        } catch (IllegalStateException e) {
+            // 「来源未登记五轴」是调用方可修正的问题 → 400，不是 500。
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        }
+    }
+
     @GetMapping("/documents/{documentId}/chunks")
     public List<ManagementDtos.ChunkResponse> listChunks(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
@@ -1099,6 +1228,49 @@ public class RagManagementController {
         }
         List<ChunkSummary> chunks = managementPort.listChunks(ctx, documentId, limit, roles);
         return ManagementDtos.toChunkResponses(chunks);
+    }
+
+    /**
+     * 人工重判单个片段的角色（片段校对，RAG-D13 §3.2.4）。
+     *
+     * <p><b>⚠️ 为什么需要这个端点</b>：角色判定是**基于版面事实的确定性规则**
+     * （答案区标识 + 题号 + 块首前缀），不是模型推断。规则再严也挡不住版面千奇百怪，
+     * 必须给人一个就地纠正的入口。没有它，纠正唯一途径是重导整册——
+     * 而重导会连带重建向量与分词，代价远大于改一个角色。
+     *
+     * <p><b>⚠️ 为什么这个动作高风险</b>：把「讲解」改成「习题答案」是收紧（安全），
+     * 把「习题答案」改成「讲解」是**放松**——后者会让标准答案在讲解模式下被召回，
+     * 即泄题。所以本端点：
+     * <ol>
+     *   <li>走<b>写上下文</b>（平台档需治理票据），与登记/校验同级授权；</li>
+     *   <li>落 {@code INGEST} 审计（不新增审计枚举值，避免牵连 DDL 迁移）；</li>
+     *   <li>只改 role 一列，<b>不动</b> text / 向量 / 分词——角色不参与嵌入，
+     *       检索期的角色过滤读的是本列，改完立即生效。</li>
+     * </ol>
+     *
+     * @param chunkId   片段 ID
+     * @param body      重判请求（目标角色 + 理由）
+     * @param tenantId  租户 ID
+     * @param scopeHeader 语料作用域头
+     * @param callerDomain 调用方域
+     * @param ticketScope 治理票据档位
+     * @return 重判后的片段摘要
+     */
+    @PatchMapping("/chunks/{chunkId}/role")
+    public ManagementDtos.ChunkResponse updateChunkRole(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
+            @PathVariable("chunkId") String chunkId,
+            @Valid @RequestBody ManagementDtos.UpdateChunkRoleRequest body) {
+        RagManagementContext ctx = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
+        // 角色合法性在 DTO 层已用 @Pattern 校验为 ChunkRole 枚举名，此处不再重复解析。
+        ChunkSummary updated = managementPort.updateChunkRole(
+                ctx, chunkId, body.role(), body.reason());
+        return ManagementDtos.toChunkResponses(java.util.List.of(updated)).get(0);
     }
 
     /**
@@ -1542,8 +1714,38 @@ public class RagManagementController {
     }
 
     /**
-     * 登记/更新审核员（维护审核员名录）。
+     * 列出审核员名录（RAG-D13 §3.4.1）。
      *
+     * <p><b>⚠️ 为什么需要 LIST</b>：改造前只有 {@code POST /reviewers}（upsert）
+     * 与场景化的 {@code GET .../co-signers}（仅返回"可复核"子集）。
+     * 没有一个"看全量名录"的读端点，管理员无法回答"现在谁能审核、谁被停用了"——
+     * 而名录正是治理面的支撑数据。
+     *
+     * <p>⚠️ 只读，走 {@code requireManagementContext}（与其它读端点同级），
+     * 不需要治理票据。
+     *
+     * @param tenantId 租户 ID
+     * @param scopeHeader 语料作用域头
+     * @param callerDomain 调用方域
+     * @return 名录条目（启用与停用都返回，由前端按状态分组）
+     */
+    @GetMapping("/reviewers")
+    public List<ManagementDtos.ReviewerItem> listReviewers(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain) {
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        return managementPort.listReviewers(ctx).stream()
+                .map(r -> new ManagementDtos.ReviewerItem(
+                        r.principalId(), r.displayName(),
+                        r.canReview(), r.canCoSign(), r.enabled()))
+                .toList();
+    }
+
+    /**
+     * 登记/更新审核员（维护审核员名录）。
      * <p>⚠️ 幂等：同一主体重复登记为覆盖更新（显示名与权限可变），
      * 但 {@code created_at} 不变——「什么时候开始能审核」是审计事实。
      *
@@ -1786,6 +1988,42 @@ public class RagManagementController {
      * @param request  别名请求
      * @return 实际新增条数
      */
+    /**
+     * 列出知识点本体（RAG-D15 §六 待办 #8）。
+     *
+     * <p><b>⚠️ 为什么需要它</b>：改造前只有 `GET /kp-aliases?kpId=`——
+     * 调用方必须<b>先知道 kpId</b> 才能查别名，而管理台无从得知有哪些知识点，
+     * 别名页只能做成"粘贴 UUID"。补上本端点后，别名页可以做成"选知识点 → 维护别名"。
+     *
+     * @param keyword 按规范名模糊匹配（可空 = 全部）
+     * @param limit   条数上限（≤ 500）
+     * @return 知识点摘要列表
+     */
+    @GetMapping("/knowledge-points")
+    public List<ManagementDtos.KnowledgePointBriefDto> listKnowledgePoints(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "limit", defaultValue = "200") int limit) {
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        if (knowledgeAliasPort == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    "知识点别名端口未接入");
+        }
+        if (limit <= 0 || limit > 500) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "limit 必须在 1～500 之间");
+        }
+        return knowledgeAliasPort.listKnowledgePoints(ctx, keyword, limit).stream()
+                .map(b -> new ManagementDtos.KnowledgePointBriefDto(
+                        b.kpId(), b.subject(), b.grade(), b.canonicalName(),
+                        b.aliasCount(), b.prerequisiteCount()))
+                .toList();
+    }
+
     @PostMapping("/kp-aliases")
     public java.util.Map<String, Object> addKpAlias(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
@@ -1984,7 +2222,15 @@ public class RagManagementController {
             @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain) {
         RagManagementContext ctx = requireManagementContext(
                 tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        // ⚠️ 顺序即界面的标签页顺序：先「录入时需要选的」（版本五轴四类），
+        //    再「治理流转时需要选的」（来源类型/权威/校验手段/版权）。
         List<String> types = List.of(
+                // 版本五轴（RAG-D15 §六 待办 #7）
+                DictionaryPort.TYPE_EDITION_PUBLISHER,
+                DictionaryPort.TYPE_SUBJECT,
+                DictionaryPort.TYPE_GRADE,
+                DictionaryPort.TYPE_REVISION,
+                // 治理流转
                 DictionaryPort.TYPE_SOURCE_TYPE,
                 DictionaryPort.TYPE_TRUST_TIER,
                 DictionaryPort.TYPE_VERIFICATION_METHOD,
@@ -2151,6 +2397,147 @@ public class RagManagementController {
                 : indexingPort.reindex(context.requireTenant().tenantId(), limit);
         return new ManagementDtos.ReindexResponse(
                 outcome.indexedChunks(), outcome.scannedChunks(), outcome.durationMs());
+    }
+
+    // =====================================================================
+    // 索引代际（RAG-D13 §3.5.2 蓝绿切换）
+    // =====================================================================
+
+    /**
+     * 列出索引代际（蓝绿切换的只读视图）。
+     *
+     * <p>读端点，不需要治理票据：看"现在是哪个代际、构建到哪了"是无害的。
+     */
+    @GetMapping("/index-generations")
+    public List<ManagementDtos.IndexGenerationResponse> listIndexGenerations(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain) {
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        requireGenerationPort();
+        return generationPort.listGenerations(ctx.queryTenantId()).stream()
+                .map(ManagementDtos.IndexGenerationResponse::from)
+                .toList();
+    }
+
+    /**
+     * 新建索引代际（状态 BUILDING，不参与检索）。
+     *
+     * <p>⚠️ <b>写动作</b>：它会创建一条代际记录并触发后台重建，
+     * 故与登记/校验同级授权（平台档需治理票据）。
+     *
+     * <p>⚠️ 新建的代际是 BUILDING，<b>不会立即生效</b>——
+     * 必须等构建完成再调用 {@code /activate} 切换。
+     * 这是"构建中不可激活"在接口层的体现：不让一个只建了一半的代际上线。
+     */
+    @PostMapping("/index-generations")
+    public ManagementDtos.IndexGenerationResponse createIndexGeneration(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
+            @Valid @RequestBody ManagementDtos.CreateIndexGenerationRequest request) {
+        RagManagementContext ctx = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
+        requireGenerationPort();
+        try {
+            // ⚠️ totalChunks 传 0：真正总数由构建器在开跑时用同一 fail-closed 口径统计。
+            //    在这里先算一遍会引入第二份「合格片段」定义，必然与构建器漂移。
+            var created = generationPort.createGeneration(
+                    ctx.queryTenantId(), request.embedModel().trim(),
+                    request.dimension(), 0);
+            return ManagementDtos.IndexGenerationResponse.from(created);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 切换到指定代际（蓝绿切换 / 回滚）。
+     *
+     * <p>⚠️ 目标代际处于 BUILDING 时返回 409：只建了一半的代际上线，
+     * 等于让检索去查一半是空向量的索引——表现为"有些片段永远召回不到"，且无任何报错。
+     */
+    @PostMapping("/index-generations/{generation}/activate")
+    public ManagementDtos.IndexGenerationResponse activateIndexGeneration(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
+            @PathVariable("generation") int generation) {
+        RagManagementContext ctx = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
+        requireGenerationPort();
+        try {
+            return ManagementDtos.IndexGenerationResponse.from(
+                    generationPort.activateGeneration(ctx.queryTenantId(), generation));
+        } catch (IllegalArgumentException e) {
+            // 「构建中不可激活」与「代际不存在」都是状态问题 → 409，不是 400。
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 触发指定代际的构建（**异步**：只标记，立即返回）。
+     *
+     * <p><b>⚠️ 改造前这里是同步跑完全部片段</b>——数万片段会阻塞数十分钟，
+     * 请求超时、进程重启后进度丢失。现改为：
+     * <pre>
+     *   本端点：确认代际可构建 → 写入 total_chunks（标记"待构建"）→ 立即返回
+     *   worker：每 2 秒轮询"待构建"代际 → 处理一批 → 更新游标与进度
+     * </pre>
+     *
+     * <p><b>⚠️ 为什么不在本端点里起线程池</b>：进程内线程池在重启后丢失、
+     * 多实例会重复跑。交给 worker 后，进度与游标都在库里，
+     * 崩溃最多丢一批（RAG-D21 §六 P1）。
+     *
+     * <p>⚠️ <b>只允许构建 BUILDING 代际</b>：写 ACTIVE = 原地重建（蓝绿要避免的），
+     * 写 RETIRED = 污染回滚目标。两者都返回 409。
+     *
+     * @return 当前代际快照（状态仍为 BUILDING，进度 0）；前端据此提示"已排队"
+     */
+    @PostMapping("/index-generations/{generation}/build")
+    public ManagementDtos.BuildGenerationResponse buildIndexGeneration(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
+            @PathVariable("generation") int generation) {
+        RagManagementContext ctx = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
+        requireGenerationPort();
+        if (generationBuilder == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    "代际构建器未接入（装配方未提供 IndexGenerationBuilder）");
+        }
+        try {
+            // 只"标记开始"：统计总数并清零游标与进度，真正的嵌入交给 worker。
+            // ⚠️ 这里调用的是 builder 的 prepare 而非 buildBatch——
+            //    本端点不该持有 HTTP 线程去跑嵌入。
+            //
+            // ⚠️ 全局档走 prepareGlobal：它的计数连接必须是 BYPASSRLS 的运维角色，
+            //    且**不设会话租户**（填哨兵会让 rag_current_tenant() 抛错）。
+            var prepared = ctx.scope() == RagCorpusScope.PLATFORM
+                    ? generationBuilder.prepareGlobal(generation)
+                    : generationBuilder.prepare(ctx.queryTenantId(), generation);
+            return new ManagementDtos.BuildGenerationResponse(
+                    0, ManagementDtos.IndexGenerationResponse.from(prepared));
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage(), e);
+        }
+    }
+
+    /** 代际端口未装配时的统一拒绝（501）。 */
+    private void requireGenerationPort() {
+        if (generationPort == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                    "索引代际能力未接入（装配方未提供 IndexGenerationPort）");
+        }
     }
 
     /**

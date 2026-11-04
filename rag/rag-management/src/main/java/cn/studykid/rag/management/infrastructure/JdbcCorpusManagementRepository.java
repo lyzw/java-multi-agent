@@ -86,6 +86,16 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(JdbcCorpusManagementRepository.class);
 
+    /**
+     * 片段正文在管理面列表中的预览字符数。
+     *
+     * <p><b>⚠️ 为什么要截断</b>：一册教材 2400+ 片段，整册正文灌进响应体
+     * 既拖慢列表、又把"预览"变成了"全文阅读器"。
+     * 512 字足以覆盖一道完整题目或一段讲解的起头，支撑"角色判得对不对"的判断；
+     * 需要完整原文时走单片段详情（后续扩展）。
+     */
+    private static final int CHUNK_TEXT_PREVIEW_CHARS = 512;
+
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate transactionTemplate;
 
@@ -265,8 +275,57 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             //    与 INSERT 同事务——审计写不进去则登记整体回滚，
             //    避免出现「库里有来源但无登记审计」的无痕数据。
             appendAuditWithinTenant(ch, principalId, "INGEST", sourceId);
+
+            // ---- 版本五轴落库（RAG-D00 RD-03）----
+            //
+            // ⚠️ **为什么在同一事务里**：来源行与版本坐标必须同生同灭。
+            //    只写来源不写版本，则该来源的载体上传时会退化成「默认版本坐标」
+            //    （未指定/全学段），而这个偏差**不可见**——只在检索时表现为
+            //    「按七年级数学检索查不到这本」，排查成本极高。
+            //
+            // ⚠️ **为什么只写完整五轴**：五轴全空的登记（批量导入/存量路径）
+            //    维持既有行为（延迟到载体上传时建默认坐标）；**部分填写**在
+            //    领域层已报错（partiallyFilledEdition），不会走到这里。
+            if (registration.hasFullEdition()) {
+                upsertCompleteEdition(ch, sourceId, registration);
+            }
+
             return findSourceWithinTenant(ch.template(), ch.tenantId(), sourceId);
         });
+    }
+
+    /**
+     * 按登记的完整五轴写入（或复用）版本坐标。
+     *
+     * <p><b>⚠️ 为什么是 upsert 而不是纯 INSERT</b>：{@code rag_edition_unique}
+     * 是 {@code (tenant_id, subject, grade, term, publisher, revision_code)}——
+     * **不含 source_id**。若两个来源登记了同一套教材的同一版次（例如同一本书
+     * 被两个采集员先后登记），纯 INSERT 会撞唯一约束让登记失败；
+     * 而语义上它们本就该共享同一个版本坐标。
+     *
+     * <p><b>⚠️ 为什么写入的是「归一后」的值</b>：
+     * 检索期的 {@code subjectFromDb / gradeFromDb / publisherFromDb} 用枚举
+     * {@code displayName()} 逐个比对，**比对不上直接抛异常 → 该校材的任何检索 500**。
+     * 而这三列都是 {@code text}，写入不做校验。登记页填的是出版机构名
+     * （如「人民教育出版社」）而非版本体系名（「人教版」），直接写入必然踩雷。
+     * 故这里统一走 {@code normalizedEdition*}：非枚举值收敛到安全兜底值。
+     */
+    private void upsertCompleteEdition(@NonNull WriteChannel ch,
+                                       @NonNull String sourceId,
+                                       @NonNull SourceRegistration registration) {
+        ch.template().update(("""
+                INSERT INTO rag_edition
+                    (tenant_id, source_id, subject, grade, term, publisher, revision_code, scope)
+                VALUES (%s, ?::uuid, ?, ?, ?, ?, ?, %s)
+                ON CONFLICT (tenant_id, subject, grade, term, publisher, revision_code)
+                DO NOTHING
+                """).formatted(ch.tenantExpr(), ch.scopeExpr()),
+                sourceId,
+                registration.normalizedEditionSubject(),
+                registration.normalizedEditionGrade(),
+                registration.term(),
+                registration.normalizedEditionPublisher(),
+                registration.revisionCode());
     }
 
     /**
@@ -405,6 +464,27 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             return rows.stream()
                     .filter(r -> !excluded.contains(r.principalId().toLowerCase()))
                     .toList();
+        });
+    }
+
+    @Override
+    public java.util.@NonNull List<ReviewerRosterEntry> listReviewers(
+            @NonNull RagManagementContext context) {
+        return transactionTemplate.execute(status -> {
+            applyReadScope(context);
+            // ⚠️ 不过滤 enabled：停用项也要出现（否则管理员无法"重新启用"一个看不到的人）。
+            //    与 co-signers 的差别见端口 javadoc。
+            java.util.List<ReviewerRosterEntry> rows = jdbcTemplate.query("""
+                            SELECT principal_id, display_name, can_review, can_co_sign, enabled
+                              FROM rag_reviewer_roster
+                             WHERE tenant_id = ?::uuid
+                             ORDER BY enabled DESC, display_name
+                            """,
+                    (rs, i) -> new ReviewerRosterEntry(
+                            rs.getString(1), rs.getString(2),
+                            rs.getBoolean(3), rs.getBoolean(4), rs.getBoolean(5)),
+                    context.queryTenantId());
+            return rows == null ? java.util.List.<ReviewerRosterEntry>of() : rows;
         });
     }
 
@@ -1067,12 +1147,14 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             StringBuilder sql = new StringBuilder("""
                     SELECT c.chunk_id, c.role, c.page_number, c.section_path, c.exercise_no,
                            length(c.text) AS char_length, c.content_hash,
-                           (e.chunk_id IS NOT NULL) AS has_embedding
+                           (e.chunk_id IS NOT NULL) AS has_embedding,
+                           left(c.text, %d) AS chunk_text,
+                           c.block_type, c.in_answer_zone, c.matched_prefix
                     FROM rag_chunk c
                     LEFT JOIN rag_chunk_embedding e
                            ON c.chunk_id = e.chunk_id AND c.tenant_id = e.tenant_id
                     WHERE c.tenant_id = ?::uuid AND c.document_id = ?::uuid
-                    """);
+                    """.formatted(CHUNK_TEXT_PREVIEW_CHARS));
             if (!roleFilter.isEmpty()) {
                 // ⚠️ c.role 是 PG 枚举 rag_chunk_role，与 text[] 比较没有运算符——
                 //    列侧转 text 再比（等值语义不变，索引顺序扫描损失可接受，管理面低频）。
@@ -1095,8 +1177,87 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                             rs.getString("exercise_no"),
                             rs.getInt("char_length"),
                             rs.getBoolean("has_embedding"),
-                            rs.getString("content_hash")),
+                            rs.getString("content_hash"),
+                            rs.getString("chunk_text"),
+                            rs.getString("block_type"),
+                            rs.getBoolean("in_answer_zone"),
+                            rs.getString("matched_prefix")),
                     args);
+        });
+    }
+
+    /**
+     * 人工重判片段角色（RAG-D13 §3.2.4）。
+     *
+     * <p><b>⚠️ 只更新 role 一列</b>：text / content_hash / 向量 / 分词都不动。
+     * 角色是纯检索期过滤维度（{@code RetrievalPolicy.allowsRole}），
+     * 不参与嵌入，因此改完即生效、无需重建索引。
+     *
+     * <p><b>⚠️ 走 {@link #writeVia}</b>：平台全局语料的片段行 {tenant_id = 全局哨兵}，
+     * 用应用连接改会被 RLS 静默滤成 0 行——表面上"成功"，实际什么都没改。
+     * 必须与登记/校验同一条写通道。
+     *
+     * <p><b>⚠️ 0 行受影响即 404</b>：不区分"不存在"与"不属于当前作用域"，
+     * 避免通过错误码探测其它租户的片段是否存在。
+     */
+    @Override
+    @NonNull
+    public ChunkSummary updateChunkRole(@NonNull RagManagementContext context,
+                                        @NonNull String chunkId,
+                                        @NonNull String role,
+                                        @Nullable String reason) {
+        return writeVia(context, channel -> {
+            // 先读旧角色（审计要记录 from→to，且借此判断片段是否存在/可见）。
+            java.util.List<String> current = channel.template().query(
+                    "SELECT role::text FROM rag_chunk WHERE chunk_id = ?::uuid"
+                            + " AND tenant_id = ?::uuid",
+                    (rs, i) -> rs.getString(1),
+                    chunkId, channel.tenantId());
+            if (current.isEmpty()) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND,
+                        "片段不存在或不属于当前作用域：" + chunkId);
+            }
+            String fromRole = current.get(0);
+            channel.template().update(
+                    "UPDATE rag_chunk SET role = ?::rag.rag_chunk_role"
+                            + " WHERE chunk_id = ?::uuid AND tenant_id = ?::uuid",
+                    role, chunkId, channel.tenantId());
+            log.info("片段角色重判 chunkId={} {} -> {} reason={} tenant={}",
+                    chunkId, fromRole, role, reason, channel.tenantId());
+
+            // 返回更新后的摘要（含新角色与正文预览）。
+            java.util.List<ChunkSummary> after = channel.template().query("""
+                    SELECT c.chunk_id, c.role::text AS role, c.page_number, c.section_path,
+                           c.exercise_no, length(c.text) AS char_length, c.content_hash,
+                           (e.chunk_id IS NOT NULL) AS has_embedding,
+                           left(c.text, %d) AS chunk_text,
+                           c.block_type, c.in_answer_zone, c.matched_prefix
+                    FROM rag_chunk c
+                    LEFT JOIN rag_chunk_embedding e
+                           ON c.chunk_id = e.chunk_id AND c.tenant_id = e.tenant_id
+                    WHERE c.chunk_id = ?::uuid AND c.tenant_id = ?::uuid
+                    """.formatted(CHUNK_TEXT_PREVIEW_CHARS),
+                    (rs, i) -> new ChunkSummary(
+                            rs.getString("chunk_id"),
+                            rs.getString("role"),
+                            rs.getInt("page_number"),
+                            rs.getString("section_path"),
+                            rs.getString("exercise_no"),
+                            rs.getInt("char_length"),
+                            rs.getBoolean("has_embedding"),
+                            rs.getString("content_hash"),
+                            rs.getString("chunk_text"),
+                            rs.getString("block_type"),
+                            rs.getBoolean("in_answer_zone"),
+                            rs.getString("matched_prefix")),
+                    chunkId, channel.tenantId());
+            if (after.isEmpty()) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR,
+                        "片段已更新但回读失败：" + chunkId);
+            }
+            return after.get(0);
         });
     }
 

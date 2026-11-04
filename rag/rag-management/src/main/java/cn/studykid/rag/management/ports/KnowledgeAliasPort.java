@@ -2,6 +2,8 @@ package cn.studykid.rag.management.ports;
 
 import java.util.List;
 
+import org.jspecify.annotations.NonNull;
+
 import cn.studykid.rag.management.core.RagManagementContext;
 
 /**
@@ -52,4 +54,43 @@ public interface KnowledgeAliasPort {
      * @return 实际删除条数
      */
     int removeAlias(RagManagementContext context, String kpId, String alias);
+
+    /**
+     * 列出知识点本体（RAG-D15 §六 待办 #8）。
+     *
+     * <p><b>⚠️ 为什么需要它</b>：改造前只有 {@code listAliases(kpId)}——
+     * 调用方必须<b>先知道 kpId</b> 才能查别名，而管理台无从得知有哪些知识点。
+     * 别名页因此只能做成"粘贴 UUID"，教研根本用不了。
+     *
+     * <p>⚠️ 只返回管理需要的最小字段（id/学科/年级/规范名/先修数量），
+     * 不返回 facets 等大字段——列表页不需要，传了只是浪费带宽。
+     *
+     * @param context 作用域上下文
+     * @param keyword 按规范名模糊匹配（可空 = 全部）
+     * @param limit 条数上限
+     * @return 知识点摘要列表（按学科/年级/规范名排序）
+     */
+    @NonNull List<KnowledgePointBrief> listKnowledgePoints(@NonNull RagManagementContext context,
+                                                           String keyword,
+                                                           int limit);
+
+    /**
+     * 知识点摘要。
+     *
+     * @param kpId 知识点 ID
+     * @param subject 学科
+     * @param grade 年级
+     * @param canonicalName 规范名
+     * @param aliasCount 已有别名数量
+     * @param prerequisiteCount 先修关系数量
+     */
+    record KnowledgePointBrief(
+            @NonNull String kpId,
+            @NonNull String subject,
+            @NonNull String grade,
+            @NonNull String canonicalName,
+            int aliasCount,
+            int prerequisiteCount
+    ) {
+    }
 }

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>片段校对 · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="chunk-fix">
+<script src="../assets/shell.js"></script>
+<script>
+shell('录入与校对 / 片段校对', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">片段校对</div>
+    <div class="page-desc">对片段角色进行纠错，重点处理「疑似答案区误判」的高亮项。角色判定只基于版面事实。</div>
+  </div>
+</div>
+
+<div class="split">
+  <div>
+    <div class="card card-pad">
+      <div class="filterbar">
+        <input type="text" placeholder="搜索片段…" style="width:100px">
+        <select><option>角色：疑难 12</option><option>答案类</option><option>全部</option></select>
+      </div>
+      <div class="listgroup">
+        <div class="item active">
+          <div class="row"><span class="role role-answer">现判：讲解</span><span class="grow"></span><span class="badge b-failed">疑似泄题</span></div>
+          <div class="d">第 45 页 · 「解：x = 4」</div>
+        </div>
+        <div class="item">
+          <div class="row"><span class="role role-cite">现判：讲解</span><span class="grow"></span><span class="badge b-failed">疑似泄题</span></div>
+          <div class="d">第 47 页 · 「答案：-1」</div>
+        </div>
+        <div class="item">
+          <div class="row"><span class="role role-question">现判：题目</span><span class="grow"></span><span class="badge b-pending">建议：提示</span></div>
+          <div class="d">第 52 页 · 「本题思路」</div>
+        </div>
+        <div class="item">
+          <div class="row"><span class="role role-cite">现判：讲解</span><span class="grow"></span><span class="badge b-verified">无误</span></div>
+          <div class="d">第 12 页 · 二次函数定义</div>
+        </div>
+        <div class="item">
+          <div class="row"><span class="role role-noise">现判：噪声</span><span class="grow"></span><span class="badge b-verified">无误</span></div>
+          <div class="d">第 138 页 · 版权页</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stack">
+    <div class="card card-pad">
+      <div class="card-title">片段详情</div>
+      <div class="frag answer" style="margin-bottom:0">
+        <div class="row"><span class="role role-answer">现判角色：讲解 EXPLANATION</span><span class="grow"></span><span class="badge b-failed">疑似泄题风险</span></div>
+        <div style="margin-top:10px;font-size:15px;color:var(--text)">「解：x = 4。顶点坐标为 (2, -1)。」</div>
+      </div>
+      <table class="tbl" style="margin-top:16px">
+        <thead><tr><th>版面事实</th><th>取值</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">inAnswerZone（答案区标识）</td><td class="td-strong">true</td></tr>
+          <tr><td>题号 exerciseNo</td><td class="td-strong">第 12 题（继承）</td></tr>
+          <tr><td class="mono">BlockType（块类型）</td><td class="td-strong">PARAGRAPH</td></tr>
+          <tr><td>块首前缀</td><td class="td-strong">「解：」命中 SOLUTION_PREFIX</td></tr>
+        </tbody>
+      </table>
+      <div class="notice warn" style="margin-top:16px"><span>⚠️</span><span>版面事实表明该块位于答案区且带题号，应判为「习题答案 EXERCISE_ANSWER」；当前判为「讲解」会在讲解模式下被召回 → 泄题。</span></div>
+    </div>
+
+    <div class="card card-pad">
+      <div class="card-title">角色重判</div>
+      <div class="row wrap" style="gap:8px">
+        <button class="btn btn-danger">判为 习题答案 EXERCISE_ANSWER</button>
+        <button class="btn">判为 例题解答 EXAMPLE_SOLUTION</button>
+        <button class="btn">判为 习题提示 EXERCISE_HINT</button>
+        <button class="btn">判为 噪声 BOILERPLATE</button>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn btn-primary">保存重判</button>
+        <button class="btn">标记为已复核</button>
+        <button class="btn" style="margin-left:auto">下一处 →</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+</script>
+</body>
+</html>

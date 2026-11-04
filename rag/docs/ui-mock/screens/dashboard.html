@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="dashboard">
+<script src="../assets/shell.js"></script>
+<script>
+shell('总览 / Dashboard', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">Dashboard</div>
+    <div class="page-desc">三面健康度一览：写面入库 · 读面检索 · 治理面审核，按角色给出「下一步该做什么」。</div>
+  </div>
+  <div class="row">
+    <button class="btn"><span>📥</span> 登记新来源</button>
+    <button class="btn btn-primary"><span>🔍</span> 打开召回质检</button>
+  </div>
+</div>
+
+<div class="kpi-row">
+  <div class="kpi"><div class="k-label">待校对片段</div><div class="k-value brand">128</div><div class="k-note">含 12 处疑似答案区误判</div></div>
+  <div class="kpi"><div class="k-label">待审核来源</div><div class="k-value warn">6</div><div class="k-note">PENDING · 等待校验决定</div></div>
+  <div class="kpi"><div class="k-label">进行中任务</div><div class="k-value">3</div><div class="k-note">PROCESSING · 单进度条</div></div>
+  <div class="kpi"><div class="k-label">门禁触发率</div><div class="k-value ok">12.4%</div><div class="k-note">「依据不足」or 合法输出</div></div>
+  <div class="kpi"><div class="k-label">答案类抑制数</div><div class="k-value danger">34</div><div class="k-note">讲解模式 · 泄题闸门命中</div></div>
+</div>
+
+<div class="grid-1-2">
+  <div>
+    <div class="card card-pad">
+      <div class="card-title">治理域入口</div>
+      <div class="listgroup">
+        <a class="item" style="text-decoration:none;display:block" href="#">
+          <div class="t">📥 录入与校对</div>
+          <div class="d">来源登记 · 载体上传解析预览 · 片段校对　<span style="color:var(--danger);font-weight:600">12 待校对</span></div>
+        </a>
+        <a class="item" style="text-decoration:none;display:block" href="#">
+          <div class="t">✅ 审核</div>
+          <div class="d">校验决定 · 抽检队列 · 召回解释　<span style="color:var(--warn);font-weight:600">6 待审核</span></div>
+        </a>
+        <a class="item" style="text-decoration:none;display:block" href="#">
+          <div class="t">🧩 规则配置</div>
+          <div class="d">审核员名录 · 知识点别名 · 字典</div>
+        </a>
+        <a class="item" style="text-decoration:none;display:block" href="#">
+          <div class="t">🛠 运维</div>
+          <div class="d">摄取任务（三态）· 重索引（蓝绿）</div>
+        </a>
+      </div>
+    </div>
+
+    <div class="card card-pad" style="margin-top:16px">
+      <div class="card-title">最近摄取任务（三态）</div>
+      <table class="tbl">
+        <thead><tr><th>任务</th><th>状态</th><th>进度</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="td-strong">数学·七年级上册·人教版</td>
+            <td><span class="badge b-ready">READY</span></td>
+            <td><div class="progress"><div class="bar"><i style="width:100%"></i></div><span class="pct">100%</span></div></td>
+          </tr>
+          <tr>
+            <td class="td-strong">英语·七年级上册·沪教版</td>
+            <td><span class="badge b-process">PROCESSING</span></td>
+            <td><div class="progress"><div class="bar"><i style="width:64%"></i></div><span class="pct">64%</span></div></td>
+          </tr>
+          <tr>
+            <td class="td-strong">物理·八年级下册·人教版</td>
+            <td><span class="badge b-failed">FAILED</span></td>
+            <td><div class="progress"><div class="bar"><i class="fail" style="width:38%"></i></div><span class="pct">38%</span></div></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div>
+    <div class="card card-pad">
+      <div class="card-title">近期待处理</div>
+      <div class="listgroup">
+        <div class="item"><div class="t">🔴 抽检待办 #INSP-0418</div><div class="d">「二次函数」片段疑似被误判为讲解 · 待审核员复核</div></div>
+        <div class="item"><div class="t">🟠 任务失败 #JOB-0092</div><div class="d">整册失败 · 切分阶段抛出「text 不能为空」· 待重试</div></div>
+        <div class="item"><div class="t">🔵 召回异常 #Q-130</div><div class="d">「篮球 NBA 总决赛」远域噪声仍命中 1 条 · 门禁 0.411</div></div>
+        <div class="item"><div class="t">🟡 来源待校验 #SRC-0017</div><div class="d">人教版数学七年级上册 · 权威等级待确认</div></div>
+      </div>
+    </div>
+
+    <div class="card card-pad" style="margin-top:16px">
+      <div class="card-title">最近抽检异常 Top 3</div>
+      <table class="tbl">
+        <thead><tr><th>片段</th><th>角色(现判→应判)</th><th>风险</th></tr></thead>
+        <tbody>
+          <tr><td class="td-strong">「解：x = 4」· 第45页</td><td><span class="role role-cite">讲解</span> → <span class="role role-answer">答案</span></td><td><span class="badge b-failed">泄题风险</span></td></tr>
+          <tr><td class="td-strong">附录词表 · 第138页</td><td><span class="role role-cite">附录</span> → <span class="role role-cite">附录</span></td><td><span class="badge b-pending">无</span></td></tr>
+          <tr><td class="td-strong">「本题思路」· 第52页</td><td><span class="role role-question">题目</span> → <span class="role role-hint">提示</span></td><td><span class="badge b-pending">降级</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>`;
+</script>
+</body>
+</html>

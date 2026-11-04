@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>载体上传与解析预览 · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="doc-upload">
+<script src="../assets/shell.js"></script>
+<script>
+shell('录入与校对 / 载体上传与解析预览', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">载体上传与解析预览</div>
+    <div class="page-desc">上传载体（PDF 级），实时查看解析预览：切片结果、角色着色、页码/题号。确认无误后提交入库。</div>
+  </div>
+  <button class="btn btn-primary" disabled>提交入库（预览确认后亮起）</button>
+</div>
+
+<div class="grid-2-1">
+  <div class="stack">
+    <div class="card card-pad">
+      <div class="card-title">① 上传载体</div>
+      <div style="border:2px dashed var(--border-strong);border-radius:var(--r-8);padding:22px;text-align:center;color:var(--text-3)">
+        <div style="font-size:26px">📄</div>
+        <div style="margin:6px 0">数学·七年级上册·人教版 正文.pdf</div>
+        <div class="small">162 页 · 已就绪</div>
+      </div>
+    </div>
+    <div class="card card-pad">
+      <div class="card-title">② 载体元数据</div>
+      <div class="grid-2">
+        <div class="field"><label>标题</label><input type="text" style="width:100%" value="数学 七年级上册 正文"></div>
+        <div class="field"><label>版本五轴</label><input type="text" style="width:100%" value="数学·七上·人教版·2024修订" readonly></div>
+      </div>
+    </div>
+    <div class="card card-pad">
+      <div class="card-title">③ 入库进度（三态）</div>
+      <div class="progress">
+        <div class="bar"><i style="width:0%"></i></div><span class="pct">—</span>
+      </div>
+      <div class="small muted" style="margin-top:8px">状态待确认：上传后进入 <span class="mono">SUBMITTED → PROCESSING → READY/FAILED</span>，仅单进度条，无内部阶段。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-pad" style="padding-bottom:8px">
+      <div class="card-title">④ 解析预览 <span class="sub">共生 2 480 片段 · 噪声 214 · 待确认 12</span></div>
+      <div class="row wrap" style="gap:8px;margin-bottom:12px">
+        <button class="btn btn-sm">全部</button>
+        <button class="btn btn-sm" style="border-color:var(--answer);color:var(--answer)">答案类 156</button>
+        <button class="btn btn-sm">疑似误判 12</button>
+        <button class="btn btn-sm">噪声丢弃 214</button>
+      </div>
+    </div>
+    <div style="padding:0 20px 4px; border-bottom:1px solid var(--border)">
+      <div class="row small muted" style="gap:24px;padding:6px 0">
+        <span style="color:var(--answer)">■ 答案类（泄题风险）</span>
+        <span style="color:var(--hint)">■ 提示</span>
+        <span style="color:var(--question)">■ 题目/例题</span>
+        <span style="color:var(--cite)">■ 可引用正文</span>
+        <span style="color:var(--noise)">■ 噪声（丢弃）</span>
+      </div>
+    </div>
+    <div class="card-pad">
+      <div class="frag cite">
+        <div class="row"><span class="role role-cite">讲解</span><span class="small muted">第 12 页 · 第 3 章 > 3.1 二次函数 · 无题号</span><span class="grow"></span><button class="btn btn-sm">纠错</button></div>
+        <div style="margin-top:8px;color:var(--text-2)">一般地，形如 y = ax² + bx + c（a、b、c 是常数，a ≠ 0）的函数叫做二次函数…</div>
+      </div>
+      <div class="frag answer">
+        <div class="row"><span class="role role-answer">习题答案</span><span class="small muted">第 45 页 · 第 12 题 · 答案区</span><span class="grow"></span><button class="btn btn-sm">纠错</button></div>
+        <div style="margin-top:8px;color:var(--text-2)">解：x = 4。顶点坐标为 (2, -1)。</div>
+      </div>
+      <div class="frag hint">
+        <div class="row"><span class="role role-hint">习题提示</span><span class="small muted">第 52 页 · 第 3 章 > 3.2 · 第 18 题</span><span class="grow"></span><button class="btn btn-sm">纠错</button></div>
+        <div style="margin-top:8px;color:var(--text-2)">提示：先配方，再代入顶点坐标公式，注意开口方向。</div>
+      </div>
+      <div class="frag cite">
+        <div class="row"><span class="role role-cite">例题</span><span class="small muted">第 20 页 · 例 1 · 无答案区</span><span class="grow"></span><button class="btn btn-sm">纠错</button></div>
+        <div style="margin-top:8px;color:var(--text-2)">例 1　判断下列函数是否为二次函数…</div>
+      </div>
+      <div class="frag muted">
+        <div class="row"><span class="role role-noise">噪声（已丢弃）</span><span class="small muted">第 138 页 · 版权页</span></div>
+        <div style="margin-top:8px">定价：18.90 元　本套教材根据…编写 —— 无教学价值，已丢弃</div>
+      </div>
+    </div>
+  </div>
+</div>`;
+</script>
+</body>
+</html>

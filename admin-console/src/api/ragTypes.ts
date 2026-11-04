@@ -155,6 +155,32 @@ export interface RagChunk {
   /** 是否已写入向量 —— 缺失即「静默漏召回」风险 */
   hasEmbedding: boolean
   contentHash: string | null
+  /**
+   * 片段正文预览（后端仓储侧截断至 512 字符）。
+   *
+   * ⚠️ 新增于 RAG-D13 §3.2.3/§3.2.4：解析预览与片段校对必须让人**看到原文**，
+   * 才能判断「这段到底是答案还是讲解」。缺省（旧版后端）为 undefined。
+   */
+  text?: string | null
+  /**
+   * 版面事实：块类型（BlockType 枚举名）。
+   *
+   * ⚠️ null = 该片段早于版面事实采集，**不是**"无块类型"。
+   * 界面须据此显示"无判定依据"，不要伪造"不在答案区"。
+   */
+  blockType?: string | null
+  /** 版面事实：是否位于答案区 */
+  inAnswerZone?: boolean
+  /** 版面事实：块首命中的解答前缀（如「解:」） */
+  matchedPrefix?: string | null
+}
+
+/** 片段角色重判请求（对齐后端 `ManagementDtos.UpdateChunkRoleRequest`）。 */
+export interface RagUpdateChunkRoleRequest {
+  /** 目标角色（ChunkRole 枚举名） */
+  role: string
+  /** 重判理由（审计留痕，可空但不推荐） */
+  reason?: string | null
 }
 
 /** 索引统计（对齐后端 `ManagementDtos.StatisticsResponse`）。 */
@@ -185,6 +211,22 @@ export interface RagRegisterSourceRequest {
   contentHash: string | null
   /** 登记人 UUID —— 登记必须留痕（后端 principal_id NOT NULL） */
   registeredBy: string
+  /**
+   * 版本五轴（RAG-D00 RD-03「缺一轴不可入库」）。
+   *
+   * ⚠️ 新增于 RAG-D13 §3.2.1：改造前后端 `RegisterSourceRequest` 没有版本坐标，
+   * 来源无法与 `rag_edition` 建立关联。五个字段均可空以兼容批量导入等
+   * 不走五轴的存量调用方；**登记页强制齐全**才允许提交。
+   */
+  subject?: string | null
+  grade?: string | null
+  term?: string | null
+  editionPublisher?: string | null
+  revisionCode?: string | null
+  /** 登记时声明的权威等级（缺省由后端取 UNVERIFIED） */
+  trustTier?: RagTrustTier | null
+  /** 登记时声明的版权状态（缺省由后端取 PENDING） */
+  licenseStatus?: RagLicenseStatus | null
 }
 
 /**
@@ -497,7 +539,15 @@ export const RAG_INSPECTION_STATUS_LABELS: Record<RagInspectionStatus, string> =
  * - `SOURCE_TYPE`：动态字典，可前端维护（增删改），落地 `rag_dictionary` 表；
  * - 其余三类为派生字典（由后端按 Java 枚举派生，只读），保证准入判定单一权威。
  */
-export type RagDictionaryType = 'SOURCE_TYPE' | 'TRUST_TIER' | 'VERIFICATION_METHOD' | 'LICENSE_STATUS'
+export type RagDictionaryType =
+  | 'EDITION_PUBLISHER'
+  | 'SUBJECT'
+  | 'GRADE'
+  | 'REVISION'
+  | 'SOURCE_TYPE'
+  | 'TRUST_TIER'
+  | 'VERIFICATION_METHOD'
+  | 'LICENSE_STATUS'
 
 /**
  * 字典项作用域（对齐后端 `DictionaryPort.Scope`）。
@@ -614,6 +664,33 @@ export interface RagRetrievalResponse {
   versionMismatchDetected: boolean
   answerContentSuppressed: boolean
   primaryEdition: string
+  /**
+   * 过滤漏斗（RAG-D12 靶点 D）。
+   *
+   * ⚠️ 缺省（旧版后端）为 undefined：界面须显示「待后端提供」而不是编造数字。
+   */
+  funnel?: RagRetrievalFunnel | null
+  /**
+   * 本次检索实际生效的门禁阈值。
+   *
+   * ⚠️ 缺省（旧版后端）为 undefined：界面须回退到 `RAG_SCORE_THRESHOLD` 常量，
+   * 而**不是**假设一个值——阈值可配置，假设等于硬编码。
+   */
+  minScore?: number | null
+}
+
+/** 过滤漏斗：每层「剩余」数量 + 剔除数 + 主因归因。 */
+export interface RagRetrievalFunnel {
+  candidates: number
+  afterVersion: number
+  afterRole: number
+  afterGate: number
+  returned: number
+  droppedByVersion: number
+  droppedByRole: number
+  droppedByGate: number
+  /** NONE / ROLE / VERSION / GATE */
+  dominantDrop: string
 }
 
 /** 检索模式可读标签。 */
@@ -943,4 +1020,79 @@ export interface RagReviewer {
   /** 是否可做复核（双人签署的第二签） */
   canCoSign: boolean
   enabled: boolean
+}
+
+/* ── 索引代际（RAG-D13 §3.5.2 蓝绿切换）────────────────── */
+
+/** 代际状态。 */
+export type RagIndexGenerationStatus = 'BUILDING' | 'ACTIVE' | 'RETIRED'
+
+/** 索引代际视图（对齐后端 `IndexGenerationResponse`）。 */
+export interface RagIndexGeneration {
+  generation: number
+  embedModel: string
+  dimension: number
+  status: RagIndexGenerationStatus
+  indexedChunks: number
+  totalChunks: number
+  /** 构建进度 0–100（服务端算好，避免前端除零） */
+  progressPercent: number
+  /** 是否参与检索（仅 ACTIVE） */
+  retrievable: boolean
+  /** 是否可切换过去（ACTIVE / RETIRED；BUILDING 不可） */
+  activatable: boolean
+  note: string | null
+  activatedAt: string | null
+  retiredAt: string | null
+  createdAt: string | null
+}
+
+/** 代际状态可读标签。 */
+export const RAG_INDEX_GENERATION_LABEL: Record<RagIndexGenerationStatus, string> = {
+  BUILDING: '构建中',
+  ACTIVE: '当前服务（绿）',
+  RETIRED: '已退役（蓝）',
+}
+
+/** 新建代际请求。 */
+export interface RagCreateIndexGenerationRequest {
+  embedModel: string
+  dimension: number
+}
+
+/* ── 知识点本体（RAG-D15 §六 待办 #8）──────────────────── */
+
+/** 知识点摘要（对齐后端 `KnowledgePointBriefDto`）。 */
+export interface RagKnowledgePointBrief {
+  kpId: string
+  subject: string
+  grade: string
+  canonicalName: string
+  aliasCount: number
+  prerequisiteCount: number
+}
+
+/* ── 上传前解析预览（RAG-D15 §六 待办 #6）──────────────── */
+
+/** 预览片段。 */
+export interface RagPreviewChunk {
+  chunkId: string
+  role: string
+  text: string
+  pageNumber: number
+  exerciseNo: string | null
+  sectionPath: string
+  inAnswerZone: boolean
+  blockType: string | null
+}
+
+/** 解析预览结果。 */
+export interface RagPreviewResult {
+  totalChunks: number
+  returnedChunks: number
+  limit: number
+  truncated: boolean
+  byRole: Record<string, number>
+  edition: string
+  chunks: RagPreviewChunk[]
 }

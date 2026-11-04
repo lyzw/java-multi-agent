@@ -64,6 +64,64 @@ public class JdbcIngestSourceLoader implements TenantScopedIngestSource {
         });
     }
 
+    /**
+     * 解析预览用：按 **sourceId** 加载版本坐标与知识点（上传前 dry-run）。
+     *
+     * <p><b>⚠️ 为什么需要它而不是复用 {@link #load}</b>：
+     * {@code load} 是从 {@code rag_document} 反查 edition——
+     * 而 dry-run 发生在**上传之前**，此时还没有 document 行。
+     * 故这里改从 {@code rag_edition} 按 {@code source_id} 直接取。
+     *
+     * <p><b>⚠️ 取不到版本坐标时返回空而不是造一个默认坐标</b>：
+     * 造默认坐标（未指定/全学段）会让预览"成功"，
+     * 而真实入库时若该来源也没有坐标，载体同样会挂到默认坐标上——
+     * 预览就成了"确认一个错误的结果"。宁可让调用方看到"该来源未登记五轴"。
+     *
+     * @param tenantId 租户 ID
+     * @param sourceId 来源 ID
+     * @return 版本坐标 + 知识点；来源无版本坐标时为空
+     */
+    @NonNull
+    public Optional<PreviewContext> loadForPreview(@NonNull String tenantId,
+                                                    @NonNull String sourceId) {
+        if (tenantId == null || tenantId.isBlank() || sourceId == null || sourceId.isBlank()) {
+            return Optional.empty();
+        }
+        return transactionTemplate.execute(status -> {
+            // ⚠️ 与 load 同样的理由：RLS 需要会话租户，且 set_config 是事务局部的。
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, tenantId);
+            // 取该来源下的版本坐标（RAG-D16 之后新登记来源都有真实五轴）。
+            List<EditionRow> editions = jdbcTemplate.query("""
+                            SELECT edition_id::text
+                              FROM rag_edition
+                             WHERE tenant_id = ?::uuid AND source_id = ?::uuid
+                             ORDER BY created_at ASC, edition_id
+                             LIMIT 1
+                            """,
+                    (rs, i) -> new EditionRow(rs.getString(1)),
+                    tenantId, sourceId);
+            if (editions.isEmpty()) {
+                return Optional.<PreviewContext>empty();
+            }
+            EditionCoordinate edition = loadEdition(tenantId, editions.get(0).editionId());
+            if (edition == null) {
+                return Optional.<PreviewContext>empty();
+            }
+            List<KnowledgePoint> kps = loadKnowledgePoints(tenantId, edition);
+            return Optional.of(new PreviewContext(edition, editions.get(0).editionId(), kps));
+        });
+    }
+
+    /** 预览上下文：版本坐标 + 知识点（不含原始字节——字节由调用方上传时直接持有）。 */
+    public record PreviewContext(@NonNull EditionCoordinate edition,
+                                 @NonNull String editionId,
+                                 @NonNull List<KnowledgePoint> knowledgePoints) {
+    }
+
+    private record EditionRow(@NonNull String editionId) {
+    }
+
     private Optional<IngestSourceView> loadWithinTenant(String tenantId, String sourceId) {
         // ① 取来源下「最新一份待处理/已处理的载体」：job 是按来源建的，
         //    实际要解析的是该来源下最新上传的那个载体。

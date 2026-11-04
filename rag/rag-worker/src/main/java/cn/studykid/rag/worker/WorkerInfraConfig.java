@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.infrastructure.LocalRagPortsConfig;
@@ -12,10 +13,13 @@ import cn.studykid.rag.infrastructure.embedding.EmbeddingPorts;
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
 import cn.studykid.rag.infrastructure.ops.RagOpsConfiguration;
 import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
+import cn.studykid.rag.infrastructure.indexing.IndexGenerationBuilder;
+import cn.studykid.rag.infrastructure.indexing.JdbcIndexGenerationRepository;
 import cn.studykid.rag.infrastructure.persistence.JdbcCorpusRepository;
 import cn.studykid.rag.infrastructure.persistence.VectorColumn;
 import cn.studykid.rag.ports.CorpusRepository;
 import cn.studykid.rag.ports.EmbeddingPort;
+import cn.studykid.rag.ports.IndexGenerationPort;
 
 import org.springframework.context.annotation.Import;
 
@@ -122,6 +126,54 @@ public class WorkerInfraConfig {
     @Bean
     public TransactionTemplate indexingTransactionTemplate(PlatformTransactionManager txManager) {
         return new TransactionTemplate(txManager);
+    }
+
+    /**
+     * 索引代际端口（RAG-D13 §3.5.2）。
+     *
+     * <p>⚠️ worker 的组件扫描仅限 {@code cn.studykid.rag.worker}，
+     * 而本实现位于 {@code rag-management}，故必须在此显式装配。
+     *
+     * @param jdbcTemplate JDBC 模板
+     * @param transactionTemplate 索引事务模板
+     * @return 代际端口
+     */
+    @Bean
+    public IndexGenerationPort indexGenerationPort(
+            JdbcTemplate jdbcTemplate,
+            @org.springframework.beans.factory.annotation.Qualifier("indexingTransactionTemplate")
+            TransactionTemplate transactionTemplate) {
+        return new JdbcIndexGenerationRepository(jdbcTemplate, transactionTemplate);
+    }
+
+    /**
+     * 代际构建器（异步分批推进的执行体）。
+     *
+     * <p>⚠️ 与 {@code ChunkIndexer} 语义不同：后者补缺向量（写 ACTIVE），
+     * 前者换模型重算全部片段（写指定 BUILDING 代际）。不可混用。
+     *
+     * @param jdbcTemplate JDBC 模板
+     * @param transactionTemplate 索引事务模板
+     * @param corpusRepository 语料仓储（写向量）
+     * @param embeddingPort 嵌入端口
+     * @param generationPort 代际端口
+     * @return 构建器
+     */
+    @Bean
+    public IndexGenerationBuilder indexGenerationBuilder(
+            JdbcTemplate jdbcTemplate,
+            @org.springframework.beans.factory.annotation.Qualifier("indexingTransactionTemplate")
+            TransactionTemplate transactionTemplate,
+            CorpusRepository corpusRepository,
+            EmbeddingPort embeddingPort,
+            IndexGenerationPort generationPort,
+            ObjectProvider<RagOpsSessionPort> opsSessionProvider) {
+        // ⚠️ opsSession 可空：未接入运维数据源时全局桶代际构建会明确抛
+        //    RagOpsUnavailableException，而不是回落应用连接（那会静默写 0 行）。
+        return new IndexGenerationBuilder(
+                jdbcTemplate, transactionTemplate, corpusRepository, embeddingPort,
+                generationPort, IndexGenerationBuilder.DEFAULT_BATCH_SIZE,
+                opsSessionProvider.getIfAvailable());
     }
 
     /**

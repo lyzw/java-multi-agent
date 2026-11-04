@@ -199,6 +199,20 @@ public interface CorpusManagementPort {
             cn.studykid.rag.management.core.ReviewerRosterEntry entry);
 
     /**
+     * 列出全部审核员名录（含停用项）。
+     *
+     * <p><b>⚠️ 与 {@link #listCoSigners} 的区别</b>：后者是「能复核的人」这个
+     * <b>场景化子集</b>（已排除本人与采集人、只保留 canCoSign）；本方法是
+     * <b>全量名录</b>，供管理员回答"现在谁能审核、谁被停用了"。
+     * 两者语义不同，不可相互替代。
+     *
+     * @param context 作用域上下文
+     * @return 名录条目（按显示名排序）
+     */
+    java.util.@NonNull List<cn.studykid.rag.management.core.ReviewerRosterEntry> listReviewers(
+            @NonNull RagManagementContext context);
+
+    /**
      * 列出某来源下的文档载体。
      *
      * @param context 作用域上下文（租户档／平台全局档）
@@ -311,6 +325,28 @@ public interface CorpusManagementPort {
                                             java.util.Collection<String> roles);
 
     /**
+     * 人工重判单个片段的角色（片段校对，RAG-D13 §3.2.4）。
+     *
+     * <p><b>⚠️ 只改 role 一列</b>：text / 向量 / 分词列都不动——
+     * 角色不参与嵌入计算，检索期的 {@code RetrievalPolicy.allowsRole} 直接读本列，
+     * 改完即生效。重建向量既不必要，也会拖慢一次人工纠正。
+     *
+     * <p><b>⚠️ 必须落审计</b>：角色放松（答案→讲解）等于打开泄题闸门，
+     * 审计里必须能回答"谁在什么时候把哪一条从什么改成什么"。
+     *
+     * @param context 作用域上下文（写上下文：租户档／平台全局档+票据）
+     * @param chunkId 片段 ID
+     * @param role 目标角色（{@code ChunkRole} 枚举名）
+     * @param reason 重判理由（可空）
+     * @return 重判后的片段摘要
+     * @throws org.springframework.web.server.ResponseStatusException 片段不存在（404）
+     */
+    @NonNull ChunkSummary updateChunkRole(@NonNull RagManagementContext context,
+                                          @NonNull String chunkId,
+                                          @NonNull String role,
+                                          @Nullable String reason);
+
+    /**
      * 批量统计来源的载体（文档）数量（列表页区分「仅元数据」来源用）。
      *
      * <p><b>为什么是批量</b>：列表页一页最多几十个来源，逐条 COUNT 是
@@ -409,6 +445,7 @@ public interface CorpusManagementPort {
      * @param charLength 正文字符数
      * @param hasEmbedding 是否已写入向量
      * @param contentHash 内容校验和
+     * @param text 片段正文（管理面截断后返回；见字段说明）
      */
     record ChunkSummary(
             @NonNull String chunkId,
@@ -418,7 +455,27 @@ public interface CorpusManagementPort {
             @Nullable String exerciseNo,
             int charLength,
             boolean hasEmbedding,
-            @Nullable String contentHash
+            @Nullable String contentHash,
+            /**
+             * 片段正文。
+             *
+             * <p><b>⚠️ 为什么必须返回</b>：解析预览与片段校对要让人**看到原文**才能判断
+             * 角色判得对不对——只给「128 字」这种摘要，管理员无法核对
+             * "这段到底是答案还是讲解"（RAG-D13 §3.2.3 / §3.2.4）。
+             *
+             * <p>⚠️ 仓储侧按固定字符数截断（{@code CHUNK_TEXT_PREVIEW_CHARS}），
+             * 避免一册 2400 片段整册正文灌进响应体。
+             */
+            @Nullable String text,
+            /**
+             * 角色判定的版面事实（RAG-D13 §3.2.4）。
+             *
+             * <p>⚠️ null 表示「未采集」（存量片段），界面应显示"无判定依据"，
+             * 不伪造一个"不在答案区"——后者会被读成"系统确认过"。
+             */
+            @Nullable String blockType,
+            boolean inAnswerZone,
+            @Nullable String matchedPrefix
     ) {
     }
 

@@ -3,6 +3,7 @@ package cn.studykid.rag.management.infrastructure;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -15,6 +16,7 @@ import cn.studykid.rag.management.infrastructure.LocalObjectStoreAdapter;
 import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 import cn.studykid.rag.management.ports.DictionaryPort;
+import cn.studykid.rag.management.ports.GlobalIngestJobPort;
 import cn.studykid.rag.management.ports.ObjectStorePort;
 import cn.studykid.rag.infrastructure.ingest.JdbcIngestJobRepository;
 import cn.studykid.rag.ports.IngestJobPort;
@@ -109,6 +111,67 @@ public class RagManagementConfig {
     }
 
     /**
+     * 索引代际端口的 JDBC 实现（RAG-D13 §3.5.2 蓝绿切换）。
+     *
+     * <p><b>⚠️ 为什么复用管理面事务模板</b>：代际表的读写同样以
+     * {@code rag_current_tenant()} 收口（FORCE RLS），
+     * 必须在设置了 {@code app.tenant_id} 的事务内执行。
+     *
+     * <p>⚠️ 本 bean 可缺席：控制器把它作为可选依赖（{@code @Autowired(required=false)}），
+     * 未装配时代际端点返回 501 而非拖垮整个控制器。
+     *
+     * @param jdbcTemplate JDBC 模板
+     * @param transactionTemplate 管理面事务模板
+     * @return 索引代际端口
+     */
+    @Bean
+    public cn.studykid.rag.ports.IndexGenerationPort indexGenerationPort(
+            JdbcTemplate jdbcTemplate,
+            @Qualifier("ragManagementTransactionTemplate")
+            TransactionTemplate transactionTemplate) {
+        return new cn.studykid.rag.infrastructure.indexing.JdbcIndexGenerationRepository(
+                jdbcTemplate, transactionTemplate);
+    }
+
+    /**
+     * 代际构建器（RAG-D13 §3.5.2 蓝绿切换的「绿」）。
+     *
+     * <p>⚠️ 依赖 {@link cn.studykid.rag.ports.EmbeddingPort} 与
+     * {@link cn.studykid.rag.ports.CorpusRepository}：前者由启动装配方决定用哪个模型，
+     * 管理面只消费不生产（与 {@code CorpusIndexingPort} 同一纪律）。
+     *
+     * <p>⚠️ {@code required = false}：只读部署或单测环境可能没有这些 bean，
+     * 缺席时代际端点返回 501，而不是让整个配置类装配失败。
+     *
+     * @param jdbcTemplate JDBC 模板
+     * @param transactionTemplate 管理面事务模板
+     * @param corpusRepository 语料仓储（写向量）
+     * @param embeddingPort 嵌入端口（新模型）
+     * @param generationPort 代际端口（更新进度）
+     * @return 构建器
+     */
+    @Bean
+    @ConditionalOnBean({cn.studykid.rag.ports.EmbeddingPort.class,
+            cn.studykid.rag.ports.CorpusRepository.class})
+    public cn.studykid.rag.infrastructure.indexing.IndexGenerationBuilder indexGenerationBuilder(
+            JdbcTemplate jdbcTemplate,
+            @Qualifier("ragManagementTransactionTemplate")
+            TransactionTemplate transactionTemplate,
+            cn.studykid.rag.ports.CorpusRepository corpusRepository,
+            cn.studykid.rag.ports.EmbeddingPort embeddingPort,
+            cn.studykid.rag.ports.IndexGenerationPort generationPort,
+            org.springframework.beans.factory.ObjectProvider<RagOpsSessionPort> opsSessionProvider) {
+        // ⚠️ 运维通道可缺席（rag.ops.enabled=false）：此时全局桶代际构建会明确抛
+        //    RagOpsUnavailableException，不回落应用连接——回落的失败形态是
+        //    「扫到行、写 0 行、报告成功」，比报错难发现。
+        return new cn.studykid.rag.infrastructure.indexing.IndexGenerationBuilder(
+                jdbcTemplate, transactionTemplate, corpusRepository, embeddingPort,
+                generationPort,
+                cn.studykid.rag.infrastructure.indexing.IndexGenerationBuilder.DEFAULT_BATCH_SIZE,
+                opsSessionProvider.getIfAvailable());
+    }
+
+    /**
      * 字典端口的 JDBC 实现（Point 2：枚举下拉的数据源）。
      *
      * <p><b>⚠️ 复用管理面事务模板</b>：动态字典的读写同样以
@@ -139,8 +202,13 @@ public class RagManagementConfig {
      * @return 去重预检
      */
     @Bean
-    public IngestDedupPrecheck ingestDedupPrecheck(JdbcTemplate jdbcTemplate) {
-        return new IngestDedupPrecheck(jdbcTemplate);
+    public IngestDedupPrecheck ingestDedupPrecheck(
+            JdbcTemplate jdbcTemplate,
+            @Qualifier("ragManagementTransactionTemplate") TransactionTemplate transactionTemplate) {
+        // ⚠️ 必须传事务模板：预检内部要按作用域建立会话租户（平台档显式置空），
+        //    而 set_config(..., true) 只在事务内有效。不传的话本类会自建一个
+        //    与装配同一数据源、但不受此配置约束的模板——能跑，却不是同一口径。
+        return new IngestDedupPrecheck(jdbcTemplate, transactionTemplate);
     }
 
     /**
@@ -154,10 +222,32 @@ public class RagManagementConfig {
      * @return 摄取任务端口
      */
     @Bean
-    public IngestJobPort ingestJobPort(JdbcTemplate jdbcTemplate,
-                                       @Qualifier("ragManagementTransactionTemplate")
-                                       TransactionTemplate transactionTemplate) {
-        return new JdbcIngestJobRepository(jdbcTemplate, transactionTemplate);
+    public JdbcIngestJobRepository ingestJobRepository(
+            JdbcTemplate jdbcTemplate,
+            @Qualifier("ragManagementTransactionTemplate")
+            TransactionTemplate transactionTemplate,
+            // ⚠️ 平台档的 job 是全局行（tenant_id = 哨兵），而平台档会话租户按设计置空，
+            //    应用连接的 WITH CHECK 必然拒绝 → 只能与来源登记/抽检一样走 rag_ops。
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            RagOpsSessionPort opsSession) {
+        return new JdbcIngestJobRepository(jdbcTemplate, transactionTemplate, opsSession);
+    }
+
+    @Bean
+    public IngestJobPort ingestJobPort(JdbcIngestJobRepository ingestJobRepository) {
+        return ingestJobRepository;
+    }
+
+    /**
+     * 平台全局桶的建单端口（与 {@link #ingestJobPort} 是两个 bean 类型，
+     * 不是同一接口的两个分支）：租户列在 SQL 里写死为 {@code rag_global_tenant_id()}。
+     *
+     * @param ingestJobRepository 同一份仓储实现（运维通道已注入）
+     * @return 全局建单端口
+     */
+    @Bean
+    public GlobalIngestJobPort globalIngestJobPort(JdbcIngestJobRepository ingestJobRepository) {
+        return ingestJobRepository::createGlobalJob;
     }
 
     /**

@@ -44,6 +44,39 @@ public interface DictionaryPort {
     String TYPE_LICENSE_STATUS = "LICENSE_STATUS";
 
     /**
+     * 出版社（版本体系）字典 —— 动态类型，可维护。
+     *
+     * <p>⚠️ 这是**版本体系**（人教版/苏教版…），不是出版机构（人民教育出版社）。
+     * 检索期 `publisherFromDb` 按枚举 displayName 反查，
+     * 故本字典的合法值应限定在 `EditionCoordinate.Publisher` 的取值范围内；
+     * 超出范围的值落库后会让该校材的检索反查失败（表现为 500）。
+     *
+     * <p>做成可维护类型是为了让「新增一个版本体系」不必改前端代码。
+     */
+    String TYPE_EDITION_PUBLISHER = "EDITION_PUBLISHER";
+
+    /**
+     * 学科字典 —— 动态类型，可维护。
+     *
+     * <p>⚠️ 同出版社：检索期 `subjectFromDb` 按枚举 displayName 反查，
+     * 非法值会让检索 500。
+     */
+    String TYPE_SUBJECT = "SUBJECT";
+
+    /**
+     * 年级字典 —— 动态类型，可维护。
+     */
+    String TYPE_GRADE = "GRADE";
+
+    /**
+     * 版次字典 —— 动态类型，可维护。
+     *
+     * <p>版次没有枚举约束（真实写法差异大：`2024修订` / `第3版` / `2024`），
+     * 故这是四类中**唯一不参与枚举反查**的。
+     */
+    String TYPE_REVISION = "REVISION";
+
+    /**
      * 字典项的作用域。
      *
      * <p>与 {@code rag_dictionary.scope} 列取值一一对应，

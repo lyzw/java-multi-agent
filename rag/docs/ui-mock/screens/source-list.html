@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>来源列表 · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="source-list">
+<script src="../assets/shell.js"></script>
+<script>
+shell('录入与校对 / 来源列表', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">来源列表</div>
+    <div class="page-desc">浏览与筛选全部来源，快速定位治理状态与生命周期。</div>
+  </div>
+  <button class="btn btn-primary">＋ 登记新来源</button>
+</div>
+
+<div class="card">
+  <div class="card-pad" style="padding-bottom:8px">
+    <div class="filterbar">
+      <input type="text" placeholder="搜索来源名称…" style="width:220px">
+      <select><option>治理状态：全部</option><option>PENDING</option><option>VERIFIED</option><option>REVOKED</option><option>FAILED</option></select>
+      <select><option>学科：全部</option><option>数学</option><option>英语</option></select>
+      <select><option>年级：全部</option><option>七年级</option><option>八年级</option></select>
+      <select><option>权威等级：全部</option><option>OFFICIAL_PUBLISHER</option><option>OFFICIAL_TUTORIAL</option><option>UNVERIFIED</option></select>
+      <select><option>版权状态：全部</option><option>LICENSED</option><option>RESTRICTED</option><option>PENDING</option></select>
+      <div class="grow"></div>
+      <button class="btn btn-sm">重置</button>
+    </div>
+  </div>
+  <table class="tbl">
+    <thead><tr>
+      <th>来源名称</th><th>版本五轴</th><th>权威等级</th><th>载体</th><th>校验状态</th><th>生命周期</th><th></th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="td-strong">义务教育教科书 · 数学 七年级上册</td>
+        <td class="small">数学·七上·人教版·2024修订</td>
+        <td><span class="badge b-verified">OFFICIAL_PUBLISHER</span></td>
+        <td>3</td>
+        <td><span class="badge b-verified">VERIFIED</span></td>
+        <td class="small muted">05-12 登记 → 05-15 校验</td>
+        <td class="right"><a class="btn btn-sm" href="#">详情</a></td>
+      </tr>
+      <tr>
+        <td class="td-strong">英语 七年级上册 沪教版</td>
+        <td class="small">英语·七上·沪教版·2024修订</td>
+        <td><span class="badge b-pending">OFFICIAL_TUTORIAL</span></td>
+        <td>2</td>
+        <td><span class="badge b-pending">PENDING</span></td>
+        <td class="small muted">05-20 登记</td>
+        <td class="right"><a class="btn btn-sm btn-primary" href="#">发起校验</a></td>
+      </tr>
+      <tr>
+        <td class="td-strong">物理 八年级下册 人教版</td>
+        <td class="small">物理·八下·人教版·2023修订</td>
+        <td><span class="badge b-failed">UNVERIFIED</span></td>
+        <td>1</td>
+        <td><span class="badge b-failed">FAILED</span></td>
+        <td class="small muted">05-18 登记 → 切分失败</td>
+        <td class="right"><a class="btn btn-sm" href="#">详情</a></td>
+      </tr>
+      <tr>
+        <td class="td-strong">数学 九年级上册 无授权扫描件</td>
+        <td class="small">数学·九上·—·—</td>
+        <td><span class="badge b-revoked">UNVERIFIED</span></td>
+        <td>1</td>
+        <td><span class="badge b-revoked">REVOKED</span></td>
+        <td class="small muted">05-01 登记 → 05-03 撤回</td>
+        <td class="right"><a class="btn btn-sm" href="#">详情</a></td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="card-pad small muted" style="padding-top:12px">共 4 条 · 已按治理状态过滤</div>
+</div>`;
+</script>
+</body>
+</html>

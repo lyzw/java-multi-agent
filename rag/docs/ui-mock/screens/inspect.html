@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抽检队列 · RAG 语料管理</title>
+<link rel="stylesheet" href="../assets/ui.css">
+</head>
+<body data-page="inspect">
+<script src="../assets/shell.js"></script>
+<script>
+shell('审核 / 抽检队列', '租户档');
+document.getElementById('content').innerHTML = `
+<div class="page-head">
+  <div>
+    <div class="page-title">抽检队列</div>
+    <div class="page-desc">对已入库片段做人工抽检，看到「召回解释」：这条为什么被召回（通道 + 分数 + 命中原因）。</div>
+  </div>
+</div>
+
+<div class="split">
+  <div>
+    <div class="card card-pad">
+      <div class="card-title">抽检任务</div>
+      <div class="filterbar">
+        <select style="width:100%"><option>随机样本（今日 24 条）</option><option>按角色：答案类</option><option>按权威等级</option></select>
+      </div>
+      <div class="listgroup">
+        <div class="item active"><div class="t">#INSP-0418 · 二次函数定义</div><div class="d">讲解 · 召回过 1 次 · 待复核</div></div>
+        <div class="item"><div class="t">#INSP-0417 · 第 12 题答案</div><div class="d">习题答案 · 抑制 0 次 · 待复核</div></div>
+        <div class="item"><div class="t">#INSP-0416 · 附录词表</div><div class="d">附录 · 召回过 3 次 · 待复核</div></div>
+        <div class="item"><div class="t">#INSP-0415 · 例题 例 1</div><div class="d">例题 · 待复核</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stack">
+    <div class="card card-pad">
+      <div class="card-title">抽检片段 #INSP-0418</div>
+      <div class="frag cite" style="margin-bottom:0">
+        <div class="row"><span class="role role-cite">讲解</span><span class="small muted">第 12 页 · 第 3 章 > 3.1 · 数学·七上·人教版</span></div>
+        <div style="margin-top:8px;color:var(--text-2)">一般地，形如 y = ax² + bx + c 的函数叫做二次函数…</div>
+      </div>
+    </div>
+
+    <div class="card card-pad">
+      <div class="card-title">召回解释卡 <span class="sub">通道 + 分数 + 命中原因</span></div>
+      <div class="grid-2">
+        <div class="field"><label>召回通道 RetrievalChannel</label><div class="small td-strong">DENSE_VECTOR · 稠密向量</div></div>
+        <div class="field"><label>相关性 relevance（单值）</label><div class="small td-strong" style="color:var(--brand-600)">0.634</div></div>
+      </div>
+      <div class="field" style="margin-top:8px"><label>命中原因 HitReason</label><div class="small td-strong">DIRECT_MATCH · 直接命中</div></div>
+      <div class="field"><label>门禁（阈值 0.38）</label>
+        <div class="scale"><div class="thr" style="left:38%"></div><div class="mark" style="left:63%;background:var(--cite)"></div></div>
+        <div class="small muted">0.634 ≥ 0.38 → 通过门禁，进入上下文</div>
+      </div>
+    </div>
+
+    <div class="card card-pad">
+      <div class="card-title">判定</div>
+      <div class="row">
+        <button class="btn btn-primary">✓ 通过</button>
+        <button class="btn btn-danger">✕ 驳回</button>
+      </div>
+      <div class="field" style="margin-top:14px"><label>驳回理由（驳回必填）</label><textarea rows="2" placeholder="记录 InspectionRecord，驳回须填理由"></textarea></div>
+    </div>
+  </div>
+</div>`;
+</script>
+</body>
+</html>

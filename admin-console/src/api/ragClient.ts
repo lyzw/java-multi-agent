@@ -44,6 +44,11 @@ import type {
   RagSource,
   RagDocument,
   RagChunk,
+  RagPreviewResult,
+  RagUpdateChunkRoleRequest,
+  RagIndexGeneration,
+  RagCreateIndexGenerationRequest,
+  RagKnowledgePointBrief,
   RagRegisterSourceRequest,
   RagBulkSourceItem,
   RagBulkImportResponse,
@@ -517,7 +522,65 @@ export function listRagChunks(
   )
 }
 
-/* ── 人工抽检（审核前置，V1.0.2 §5 R2）────────────────── */
+/**
+ * POST /api/v1/management/sources/{sourceId}/documents/preview —— 上传前解析预览。
+ *
+ * <p>⚠️ **dry-run：不写对象存储、不建 document/chunk/job、不嵌入**。
+ * 只做一次纯内存的解析 + 切分，让录入员上传前看到"这本书会被切成什么样"。
+ *
+ * <p>⚠️ 走 `ragRequest`（读语义、不带治理票据）：预览无副作用，
+ * 不该为了"看一眼"去领一张写票。
+ *
+ * @param sourceId 来源 ID（版本坐标由它反查；来源须已登记五轴）
+ * @param file     待上传文件（不落盘）
+ * @param limit    返回片段条数上限（默认 50，封顶 200）
+ */
+export function previewRagDocument(
+  target: RagTarget,
+  sourceId: string,
+  file: File,
+  limit = 50,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagPreviewResult> {
+  const form = new FormData()
+  form.append('file', file)
+  return ragRequest<RagPreviewResult>(
+    `/v1/management/sources/${encodeURIComponent(sourceId)}/documents/preview${toQuery({ limit })}`,
+    { method: 'POST', body: form },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * PATCH /api/v1/management/chunks/{chunkId}/role —— 人工重判片段角色（片段校对）。
+ *
+ * <p>⚠️ **为什么需要这个端点**：角色判定是基于版面事实的确定性规则，不是模型推断；
+ *    规则再严也挡不住版面千奇百怪，必须给人就地纠正的入口。没有它，
+ *    纠正唯一途径是重导整册（连带重建向量与分词），代价远大于改一个角色。
+ *
+ * <p>⚠️ 走 `ragWriteRequest`：平台档必须带治理票据（无票后端 403）。
+ *    这是**写动作**——角色放松（答案→讲解）等于打开泄题闸门，必须与登记同级别授权。
+ *
+ * @param chunkId 片段 ID
+ * @param role    目标角色（ChunkRole 枚举名）
+ * @param reason  重判理由（审计留痕）
+ */
+export function updateChunkRole(
+  target: RagTarget,
+  chunkId: string,
+  role: string,
+  reason?: string | null,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagChunk> {
+  const body: RagUpdateChunkRoleRequest = { role, reason: reason ?? null }
+  return ragWriteRequest<RagChunk>(
+    `/v1/management/chunks/${encodeURIComponent(chunkId)}/role`,
+    { method: 'PATCH', body: JSON.stringify(body) },
+    target,
+    timeoutMs,
+  )
+}
 
 /**
  * GET /api/v1/management/sources/{sourceId}/inspection —— 列出来源的抽检历史记录。
@@ -694,6 +757,84 @@ export function retrieveRagChunks(
   return ragRequest<RagRetrievalResponse>(
     '/v1/retrieval',
     { method: 'POST', body: JSON.stringify(payload) },
+    target,
+    timeoutMs,
+  )
+}
+
+/* ── 索引代际（RAG-D13 §3.5.2 蓝绿切换）────────────────── */
+
+/**
+ * GET /api/v1/management/index-generations —— 列出索引代际。
+ *
+ * 读端点，不需要治理票据：看"现在是哪个代际、构建到哪了"是无害的。
+ */
+export function listRagIndexGenerations(
+  target: RagTarget,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagIndexGeneration[]> {
+  return ragRequest<RagIndexGeneration[]>(
+    '/v1/management/index-generations',
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * POST /api/v1/management/index-generations —— 新建代际（状态 BUILDING）。
+ *
+ * ⚠️ **写动作**：平台档需治理票据。
+ * ⚠️ 新建的代际**不会立即生效**——必须等构建完成再调 activate 切换。
+ */
+export function createRagIndexGeneration(
+  target: RagTarget,
+  payload: RagCreateIndexGenerationRequest,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagIndexGeneration> {
+  return ragWriteRequest<RagIndexGeneration>(
+    '/v1/management/index-generations',
+    { method: 'POST', body: JSON.stringify(payload) },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * POST .../index-generations/{generation}/activate —— 切换/回滚到指定代际。
+ *
+ * ⚠️ 目标处于 BUILDING 时后端返回 **409**（不是 400）：
+ * 那是"状态不允许"，不是"参数错"。调用方应展示后端给的原因。
+ */
+export function activateRagIndexGeneration(
+  target: RagTarget,
+  generation: number,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagIndexGeneration> {
+  return ragWriteRequest<RagIndexGeneration>(
+    `/v1/management/index-generations/${generation}/activate`,
+    { method: 'POST' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * POST .../index-generations/{generation}/build —— 触发代际构建。
+ *
+ * ⚠️ **同步执行**：把该租户全部合格片段重新嵌入到目标 BUILDING 代际。
+ * 片段多时会阻塞较久，调用方应据此设置超时（复用重索引的长超时）。
+ *
+ * ⚠️ 目标非 BUILDING 时后端返回 **409**（状态冲突，不是参数错）。
+ */
+export function buildRagIndexGeneration(
+  target: RagTarget,
+  generation: number,
+  timeoutMs: number = DEFAULT_RAG_REINDEX_TIMEOUT_MS,
+): Promise<{ processed: number; generation: RagIndexGeneration }> {
+  return ragWriteRequest<{ processed: number; generation: RagIndexGeneration }>(
+    `/v1/management/index-generations/${generation}/build`,
+    { method: 'POST' },
     target,
     timeoutMs,
   )
@@ -885,6 +1026,112 @@ export function listRagCoSigners(
 ): Promise<RagReviewer[]> {
   return ragRequest<RagReviewer[]>(
     `/v1/management/sources/${encodeURIComponent(sourceId)}/co-signers`,
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/* ── 知识点别名（RAG-D13 §3.4.1）──────────────────────── */
+
+/**
+ * GET /api/v1/management/knowledge-points —— 列出知识点本体。
+ *
+ * ⚠️ 改造前只有 `getRagKpAliases(kpId)`：调用方必须先知道 kpId，
+ * 而管理台无从得知有哪些知识点——别名页只能做成"粘贴 UUID"。
+ *
+ * @param keyword 按规范名模糊匹配（可空 = 全部）
+ */
+export function listRagKnowledgePoints(
+  target: RagTarget,
+  keyword?: string,
+  limit = 200,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagKnowledgePointBrief[]> {
+  return ragRequest<RagKnowledgePointBrief[]>(
+    `/v1/management/knowledge-points${toQuery({
+      keyword: keyword?.trim() ? keyword.trim() : null,
+      limit,
+    })}`,
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+
+/**
+ * GET /api/v1/management/kp-aliases?kpId= —— 某知识点的别名列表。
+ *
+ * <p>⚠️ 后端返回的是**纯别名字符串数组**，不含 canonical_name / 先修关系。
+ *    界面因此只做"别名增删"，不伪造一个不存在的知识点本体编辑器。
+ *
+ * @param kpId 知识点 ID（必填，后端缺省直接 400）
+ */
+export function getRagKpAliases(
+  target: RagTarget,
+  kpId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<string[]> {
+  return ragRequest<string[]>(
+    `/v1/management/kp-aliases${toQuery({ kpId })}`,
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * POST /api/v1/management/kp-aliases —— 新增一条知识点别名。
+ *
+ * <p>⚠️ 写请求：平台档需治理票据（无票 403）。
+ */
+export function upsertRagKpAlias(
+  target: RagTarget,
+  kpId: string,
+  alias: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<{ added: number }> {
+  return ragWriteRequest<{ added: number }>(
+    '/v1/management/kp-aliases',
+    { method: 'POST', body: JSON.stringify({ kpId, alias }) },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * DELETE /api/v1/management/kp-aliases?kpId=&alias= —— 删除一条知识点别名。
+ *
+ * <p>⚠️ 写请求：平台档需治理票据。
+ */
+export function deleteRagKpAlias(
+  target: RagTarget,
+  kpId: string,
+  alias: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<{ removed: number }> {
+  return ragWriteRequest<{ removed: number }>(
+    `/v1/management/kp-aliases${toQuery({ kpId, alias })}`,
+    { method: 'DELETE' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * GET /api/v1/management/reviewers —— 列出全部审核员名录（含停用项）。
+ * <p>⚠️ 与 `listRagCoSigners` 的区别：后者是「能复核的人」这个**场景化子集**
+ * （已排除本人与采集人、只保留 canCoSign）；本函数是**全量名录**，
+ * 供管理员回答"现在谁能审核、谁被停用了"。两者语义不同，不可互替。
+ */
+export function listRagReviewers(
+  target: RagTarget,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagReviewer[]> {
+  return ragRequest<RagReviewer[]>(
+    '/v1/management/reviewers',
     { method: 'GET' },
     target,
     timeoutMs,
