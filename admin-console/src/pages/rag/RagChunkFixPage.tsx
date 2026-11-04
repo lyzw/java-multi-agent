@@ -37,7 +37,7 @@ import {
 import { ApiError, listRagChunks, listRagDocuments } from '@/api/ragClient'
 import type { RagChunk, RagDocument } from '@/api/ragTypes'
 import { updateChunkRole } from '@/api/ragClient'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 import {
   ChunkRoleTag,
   RagEmpty,
@@ -60,8 +60,21 @@ const TARGET_ROLES = [
 type FilterKind = 'SUSPECT' | 'ANSWER' | 'ALL'
 
 export function RagChunkFixPage(): JSX.Element {
+  return (
+    <RagScopeShell
+      domain="录入与校对"
+      title="片段校对"
+      description="对片段角色纠错，重点处理「疑似答案区误判」。角色判定只基于版面事实（答案区标识 / 题号 / 块首前缀），本页只做人工纠正。"
+    >
+      {(scope) => <RagChunkFixBody scope={scope} />}
+    </RagScopeShell>
+  )
+}
+
+/** 页面主体：处在 {@link RagScopeShell} 的 provider 之内，故可直接消费作用域。 */
+function RagChunkFixBody({ scope }: RagScopePageProps): JSX.Element {
   const { message } = App.useApp()
-  const { target, ready, scopeKey } = useRagScope()
+  const { target, ready, scopeKey } = scope
 
   const [sourceId, setSourceId] = useState('')
   const [documents, setDocuments] = useState<RagDocument[]>([])
@@ -154,11 +167,7 @@ export function RagChunkFixPage(): JSX.Element {
   }
 
   return (
-    <RagScopeShell
-      domain="录入与校对"
-      title="片段校对"
-      description="对片段角色纠错，重点处理「疑似答案区误判」。角色判定只基于版面事实（答案区标识 / 题号 / 块首前缀），本页只做人工纠正。"
-    >
+    <>
       {!ready ? (
         <RagNotReady />
       ) : (
@@ -362,6 +371,6 @@ export function RagChunkFixPage(): JSX.Element {
           </Row>
         </Space>
       )}
-    </RagScopeShell>
+    </>
   )
 }

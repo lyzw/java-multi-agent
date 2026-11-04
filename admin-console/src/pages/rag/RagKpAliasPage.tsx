@@ -38,14 +38,27 @@ import {
   upsertRagKpAlias,
 } from '@/api/ragClient'
 import type { RagKnowledgePointBrief } from '@/api/ragTypes'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 import { RagEmpty } from './ragVisuals'
 
 const { Text, Paragraph } = Typography
 
 export function RagKpAliasPage(): JSX.Element {
+  return (
+    <RagScopeShell
+      domain="规则配置"
+      title="知识点别名"
+      description="维护知识点别名，让口语化问法（如「抛物线函数」）能确定性匹配到规范知识点（「二次函数」）。别名是人工可核对、可回滚的确定性资产，不做模型抽取。"
+    >
+      {(scope) => <RagKpAliasBody scope={scope} />}
+    </RagScopeShell>
+  )
+}
+
+/** 页面主体：处在 {@link RagScopeShell} 的 provider 之内，故可直接消费作用域。 */
+function RagKpAliasBody({ scope }: RagScopePageProps): JSX.Element {
   const { message } = App.useApp()
-  const { target, ready, scopeKey } = useRagScope()
+  const { target, ready, scopeKey } = scope
 
   const [points, setPoints] = useState<RagKnowledgePointBrief[]>([])
   const [loading, setLoading] = useState(false)
@@ -129,11 +142,7 @@ export function RagKpAliasPage(): JSX.Element {
   }
 
   return (
-    <RagScopeShell
-      domain="规则配置"
-      title="知识点别名"
-      description="维护知识点别名，让口语化问法（如「抛物线函数」）能确定性匹配到规范知识点（「二次函数」）。别名是人工可核对、可回滚的确定性资产，不做模型抽取。"
-    >
+    <>
       {!ready ? (
         <RagNotReady />
       ) : (
@@ -279,6 +288,6 @@ export function RagKpAliasPage(): JSX.Element {
           </Row>
         </>
       )}
-    </RagScopeShell>
+    </>
   )
 }

@@ -39,7 +39,7 @@ import {
 
 import { ApiError, retrieveRagChunks } from '@/api/ragClient'
 import type { RagRetrievalHit, RagRetrievalMode, RagRetrievalResponse, RagScopeMode } from '@/api/ragTypes'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 import {
   ChunkRoleTag,
   RAG_SCORE_THRESHOLD,
@@ -99,7 +99,20 @@ const PUBLISHER_OPTIONS = ['人教版', '沪教版', '北师大版', '苏教版'
 )
 
 export function RagRecallPage(): JSX.Element {
-  const { target, ready } = useRagScope()
+  return (
+    <RagScopeShell
+      domain="审核"
+      title="召回解释（质检）"
+      description="模拟一次检索，验证「召回什么、为什么、是否触发门禁」。这是读面的管理端调试视图——学生搜不到时，先在这里自查。"
+    >
+      {(scope) => <RagRecallBody scope={scope} />}
+    </RagScopeShell>
+  )
+}
+
+/** 页面主体：处在 {@link RagScopeShell} 的 provider 之内，故可直接消费作用域。 */
+function RagRecallBody({ scope }: RagScopePageProps): JSX.Element {
+  const { target, ready } = scope
   const [form] = Form.useForm<FormValues>()
 
   const [loading, setLoading] = useState(false)
@@ -154,11 +167,7 @@ export function RagRecallPage(): JSX.Element {
   }, [result])
 
   return (
-    <RagScopeShell
-      domain="审核"
-      title="召回解释（质检）"
-      description="模拟一次检索，验证「召回什么、为什么、是否触发门禁」。这是读面的管理端调试视图——学生搜不到时，先在这里自查。"
-    >
+    <>
       {!ready ? (
         <RagNotReady />
       ) : (
@@ -364,6 +373,6 @@ export function RagRecallPage(): JSX.Element {
           )}
         </Space>
       )}
-    </RagScopeShell>
+    </>
   )
 }

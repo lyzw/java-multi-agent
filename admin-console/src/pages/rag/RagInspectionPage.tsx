@@ -52,7 +52,7 @@ import type {
   RagInspectionSuspect,
 } from '@/api/ragTypes'
 import { RAG_INSPECTION_ERROR_TYPE_LABELS, RAG_SUSPICION_SEVERITY_ORDER } from '@/api/ragTypes'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 import { ChunkRoleTag, RagEmpty, chunkRoleGroup, chunkRoleLabel } from './ragVisuals'
 
 const { Text, Paragraph } = Typography
@@ -82,8 +82,21 @@ interface VerdictDraft {
 }
 
 export function RagInspectionPage(): JSX.Element {
+  return (
+    <RagScopeShell
+      domain="审核"
+      title="抽检队列"
+      description="对已入库片段做人工抽检，判定系统给出的角色是否可信。抽检未通过则来源签不出 VERIFIED——这是治理链路的必经关卡。"
+    >
+      {(scope) => <RagInspectionBody scope={scope} />}
+    </RagScopeShell>
+  )
+}
+
+/** 页面主体：处在 {@link RagScopeShell} 的 provider 之内，故可直接消费作用域。 */
+function RagInspectionBody({ scope }: RagScopePageProps): JSX.Element {
   const { message } = App.useApp()
-  const { target, ready, scopeKey } = useRagScope()
+  const { target, ready, scopeKey } = scope
 
   const [sourceId, setSourceId] = useState('')
   const [suspects, setSuspects] = useState<RagInspectionSuspect[]>([])
@@ -210,11 +223,7 @@ export function RagInspectionPage(): JSX.Element {
   }
 
   return (
-    <RagScopeShell
-      domain="审核"
-      title="抽检队列"
-      description="对已入库片段做人工抽检，判定系统给出的角色是否可信。抽检未通过则来源签不出 VERIFIED——这是治理链路的必经关卡。"
-    >
+    <>
       {!ready ? (
         <RagNotReady />
       ) : (
@@ -412,6 +421,6 @@ export function RagInspectionPage(): JSX.Element {
           )}
         </Space>
       )}
-    </RagScopeShell>
+    </>
   )
 }

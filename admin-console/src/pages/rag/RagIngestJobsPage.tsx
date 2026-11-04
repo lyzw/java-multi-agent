@@ -30,7 +30,7 @@ import {
 import { ApiError, listRagIngestJobs, retryRagIngestJob } from '@/api/ragClient'
 import type { RagIngestJob } from '@/api/ragTypes'
 import { parseStagePercent } from './ragUi'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopeBodyParts, type RagScopePageProps } from './RagScopeShell'
 import { IngestProgress, IngestStateBadge, RagEmpty, toIngestState } from './ragVisuals'
 import type { IngestState } from './ragVisuals'
 
@@ -38,9 +38,26 @@ const { Text, Paragraph } = Typography
 
 type StateFilter = 'ALL' | IngestState
 
+/**
+ * RAG · 摄取任务。
+ *
+ * ⚠️ 用 `body` 形态：页头主操作按钮要绑定本页状态（loading / 弹窗开关等），
+ *    而这些状态依赖作用域，只能在 provider 之内声明，故一并写在这个函数里。
+ */
 export function RagIngestJobsPage(): JSX.Element {
-  const { message } = App.useApp()
-  const { target, ready, scopeKey } = useRagScope()
+  return (
+    <RagScopeShell
+      domain="运维"
+      title="摄取任务"
+      description="查看语料入库任务的三态（已提交 / 处理中 / 已就绪 / 失败），对失败任务重试。只有一条进度条，不展示内部阶段。"
+
+      body={(scope) => RagIngestJobsBody({ scope })}
+    />
+  )
+}
+
+function RagIngestJobsBody({ scope }: RagScopePageProps): RagScopeBodyParts {  const { message } = App.useApp()
+  const { target, ready, scopeKey } = scope
 
   const [jobs, setJobs] = useState<RagIngestJob[]>([])
   const [loading, setLoading] = useState(false)
@@ -99,18 +116,15 @@ export function RagIngestJobsPage(): JSX.Element {
     }
   }
 
-  return (
-    <RagScopeShell
-      domain="运维"
-      title="摄取任务"
-      description="查看语料入库任务的三态（已提交 / 处理中 / 已就绪 / 失败），对失败任务重试。只有一条进度条，不展示内部阶段。"
-      extra={
-        <Button onClick={() => void load()} loading={loading}>
+  return {
+    extra: (
+<Button onClick={() => void load()} loading={loading}>
           刷新
         </Button>
-      }
-    >
-      {!ready ? (
+    ),
+    content: (
+      <>
+!ready ? (
         <RagNotReady />
       ) : (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -230,7 +244,10 @@ export function RagIngestJobsPage(): JSX.Element {
             />
           )}
         </Space>
-      )}
-    </RagScopeShell>
-  )
+      )
+      </>
+
+    ),
+  }
 }
+

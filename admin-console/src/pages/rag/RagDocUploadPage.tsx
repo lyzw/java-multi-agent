@@ -46,7 +46,7 @@ import {
 import type { RagChunk, RagDocument, RagIngestJob, RagPreviewResult } from '@/api/ragTypes'
 import { useRagIngestJobs } from '@/features/rag/useRagIngestJobs'
 import { currentPrincipalId } from './ragUi'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 import {
   ChunkRoleLegend,
   ChunkRoleTag,
@@ -79,8 +79,21 @@ const ROLE_WHITELIST: Record<Exclude<RoleFilter, 'ALL'>, string[]> = {
 }
 
 export function RagDocUploadPage(): JSX.Element {
+  return (
+    <RagScopeShell
+      domain="录入与校对"
+      title="载体上传与解析预览"
+      description="上传载体（PDF 级）后先看解析结果：切片、角色着色、页码/题号。确认无误再提交入库——切分错误会直接导致泄题或召回不全。"
+    >
+      {(scope) => <RagDocUploadBody scope={scope} />}
+    </RagScopeShell>
+  )
+}
+
+/** 页面主体：处在 {@link RagScopeShell} 的 provider 之内，故可直接消费作用域。 */
+function RagDocUploadBody({ scope }: RagScopePageProps): JSX.Element {
   const { message } = App.useApp()
-  const { target, ready, scopeKey, tenantId } = useRagScope()
+  const { target, ready, scopeKey, tenantId } = scope
 
   const [documents, setDocuments] = useState<RagDocument[]>([])
   const [docsLoading, setDocsLoading] = useState(false)
@@ -233,11 +246,7 @@ export function RagDocUploadPage(): JSX.Element {
   }, [chunks])
 
   return (
-    <RagScopeShell
-      domain="录入与校对"
-      title="载体上传与解析预览"
-      description="上传载体（PDF 级）后先看解析结果：切片、角色着色、页码/题号。确认无误再提交入库——切分错误会直接导致泄题或召回不全。"
-    >
+    <>
       {!ready ? (
         <RagNotReady />
       ) : (
@@ -515,6 +524,6 @@ export function RagDocUploadPage(): JSX.Element {
           </Row>
         </Space>
       )}
-    </RagScopeShell>
+    </>
   )
 }

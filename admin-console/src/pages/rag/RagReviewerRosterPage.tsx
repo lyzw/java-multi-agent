@@ -32,7 +32,7 @@ import {
 
 import { ApiError, listRagReviewers, upsertRagReviewer } from '@/api/ragClient'
 import type { RagReviewer } from '@/api/ragTypes'
-import { RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagScopeShell, type RagScopeBodyParts, type RagScopePageProps } from './RagScopeShell'
 import { RagEmpty } from './ragVisuals'
 
 const { Text, Paragraph } = Typography
@@ -45,9 +45,26 @@ interface ReviewerForm {
   enabled: boolean
 }
 
+/**
+ * RAG · 审核员名录。
+ *
+ * ⚠️ 用 `body` 形态：页头主操作按钮要绑定本页状态（loading / 弹窗开关等），
+ *    而这些状态依赖作用域，只能在 provider 之内声明，故一并写在这个函数里。
+ */
 export function RagReviewerRosterPage(): JSX.Element {
-  const { message } = App.useApp()
-  const { target, ready, scopeKey } = useRagScope()
+  return (
+    <RagScopeShell
+      domain="规则配置"
+      title="审核员名录"
+      description="维护审核员及其审核/复核权限。职责分离：能复核的人必须也能审核；同一人不得同时采集又审核。"
+
+      body={(scope) => RagReviewerRosterBody({ scope })}
+    />
+  )
+}
+
+function RagReviewerRosterBody({ scope }: RagScopePageProps): RagScopeBodyParts {  const { message } = App.useApp()
+  const { target, ready, scopeKey } = scope
 
   const [rows, setRows] = useState<RagReviewer[]>([])
   const [loading, setLoading] = useState(false)
@@ -120,20 +137,17 @@ export function RagReviewerRosterPage(): JSX.Element {
   /** SoD 冲突：能复核但不能审核（DDL 会拒）。 */
   const isSodConflict = (r: RagReviewer): boolean => r.canCoSign && !r.canReview
 
-  return (
-    <RagScopeShell
-      domain="规则配置"
-      title="审核员名录"
-      description="维护审核员及其审核/复核权限。职责分离：能复核的人必须也能审核；同一人不得同时采集又审核。"
-      extra={
-        ready ? (
+  return {
+    extra: (
+ready ? (
           <Button type="primary" onClick={() => openEdit()}>
             ＋ 新增审核员
           </Button>
         ) : undefined
-      }
-    >
-      {error && <Alert type="error" showIcon message={error} />}
+    ),
+    content: (
+      <>
+error && <Alert type="error" showIcon message={error} />
 
       <Card size="small">
         <Table<RagReviewer>
@@ -248,6 +262,9 @@ export function RagReviewerRosterPage(): JSX.Element {
           </Paragraph>
         </Form>
       </Modal>
-    </RagScopeShell>
-  )
+      </>
+
+    ),
+  }
 }
+

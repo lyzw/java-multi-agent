@@ -52,7 +52,7 @@ import {
 } from '@/api/ragClient'
 import type { RagIndexGeneration } from '@/api/ragTypes'
 import { RAG_INDEX_GENERATION_LABEL } from '@/api/ragTypes'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopeBodyParts, type RagScopePageProps } from './RagScopeShell'
 import { RagEmpty } from './ragVisuals'
 
 const { Text, Paragraph } = Typography
@@ -74,9 +74,26 @@ function statusColor(g: RagIndexGeneration): string {
   }
 }
 
+/**
+ * RAG · 重索引。
+ *
+ * ⚠️ 用 `body` 形态：页头主操作按钮要绑定本页状态（loading / 弹窗开关等），
+ *    而这些状态依赖作用域，只能在 provider 之内声明，故一并写在这个函数里。
+ */
 export function RagReindexPage(): JSX.Element {
-  const { message } = App.useApp()
-  const { target, ready, scopeKey } = useRagScope()
+  return (
+    <RagScopeShell
+      domain="运维"
+      title="重索引"
+      description="换嵌入模型时的索引代际管理与蓝绿切换：旧代际继续服务，新代际建好再原子切换，出问题可回滚。"
+
+      body={(scope) => RagReindexBody({ scope })}
+    />
+  )
+}
+
+function RagReindexBody({ scope }: RagScopePageProps): RagScopeBodyParts {  const { message } = App.useApp()
+  const { target, ready, scopeKey } = scope
 
   const [generations, setGenerations] = useState<RagIndexGeneration[]>([])
   const [loading, setLoading] = useState(false)
@@ -162,13 +179,9 @@ export function RagReindexPage(): JSX.Element {
     }
   }
 
-  return (
-    <RagScopeShell
-      domain="运维"
-      title="重索引"
-      description="换嵌入模型时的索引代际管理与蓝绿切换：旧代际继续服务，新代际建好再原子切换，出问题可回滚。"
-      extra={
-        ready ? (
+  return {
+    extra: (
+ready ? (
           <Space>
             <Button onClick={() => void load()} loading={loading}>
               刷新
@@ -178,9 +191,10 @@ export function RagReindexPage(): JSX.Element {
             </Button>
           </Space>
         ) : undefined
-      }
-    >
-      {!ready ? (
+    ),
+    content: (
+      <>
+!ready ? (
         <RagNotReady />
       ) : (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -385,7 +399,7 @@ export function RagReindexPage(): JSX.Element {
             拆成两次提交会出现「零个 ACTIVE」的中间态，那一瞬并发检索查不到任何向量。
           </Paragraph>
         </Space>
-      )}
+      )
 
       <Modal
         title="新建索引代际"
@@ -426,6 +440,9 @@ export function RagReindexPage(): JSX.Element {
           </Form.Item>
         </Form>
       </Modal>
-    </RagScopeShell>
-  )
+      </>
+
+    ),
+  }
 }
+

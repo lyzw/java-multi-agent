@@ -18,7 +18,7 @@ import { Link } from 'react-router-dom'
 
 import { useRagManagement } from '@/features/rag/useRagManagement'
 import { useRagIngestJobs } from '@/features/rag/useRagIngestJobs'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 import {
   GovernanceBadge,
   IngestProgress,
@@ -58,7 +58,30 @@ const DOMAIN_ENTRIES = [
 ] as const
 
 export function RagDashboardPage(): JSX.Element {
-  const { target, ready, scopeKey } = useRagScope()
+  return (
+    <RagScopeShell
+      domain="总览"
+      title="Dashboard"
+      description="三面健康度一览：写面入库 · 读面检索 · 治理面审核。数字来自已接入端点，未接入的指标显示为「—」。"
+      extra={() => (        <Space>
+          <Link to="/rag/sources">
+            <Tag color="blue">登记新来源</Tag>
+          </Link>
+          <Link to="/rag/recall">
+            <Tag color="green">打开召回质检</Tag>
+          </Link>
+        </Space>
+      )}
+
+    >
+      {(scope) => <RagDashboardBody scope={scope} />}
+    </RagScopeShell>
+  )
+}
+
+/** 页面主体：处在 {@link RagScopeShell} 的 provider 之内，故可直接消费作用域。 */
+function RagDashboardBody({ scope }: RagScopePageProps): JSX.Element {
+  const { target, ready, scopeKey } = scope
   const { sources, stats, loadSources, loadStats, retrySources, retryStats } = useRagManagement()
   const ingest = useRagIngestJobs(target, { limit: 100 })
 
@@ -86,21 +109,7 @@ export function RagDashboardPage(): JSX.Element {
   )
 
   return (
-    <RagScopeShell
-      domain="总览"
-      title="Dashboard"
-      description="三面健康度一览：写面入库 · 读面检索 · 治理面审核。数字来自已接入端点，未接入的指标显示为「—」。"
-      extra={
-        <Space>
-          <Link to="/rag/sources">
-            <Tag color="blue">登记新来源</Tag>
-          </Link>
-          <Link to="/rag/recall">
-            <Tag color="green">打开召回质检</Tag>
-          </Link>
-        </Space>
-      }
-    >
+    <>
       {!ready ? (
         <RagNotReady />
       ) : (
@@ -283,6 +292,6 @@ export function RagDashboardPage(): JSX.Element {
           )}
         </Space>
       )}
-    </RagScopeShell>
+    </>
   )
 }

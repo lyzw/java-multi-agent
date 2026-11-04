@@ -37,7 +37,7 @@ import {
   upsertRagDictionaryEntry,
 } from '@/api/ragClient'
 import type { RagDictionaryEntry, RagDictionaryType, RagDictionaryTypeView } from '@/api/ragTypes'
-import { RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagScopeShell, type RagScopeBodyParts, type RagScopePageProps } from './RagScopeShell'
 import { RagEmpty } from './ragVisuals'
 
 const { Text, Paragraph } = Typography
@@ -63,9 +63,25 @@ interface EntryForm {
   enabled: boolean
 }
 
+/**
+ * RAG · 字典（RAG-D13 §3.4.1 / RAG-D14 §4.11）
+ *
+ * ⚠️ 用 `body` 形态：页头「＋ 新增条目」要绑定本页 editable / form / setModalOpen，
+ *    这些依赖作用域，故全部状态与页头按钮一并写在 body 函数里。
+ */
 export function RagDictionaryPage(): JSX.Element {
-  const { message } = App.useApp()
-  const { target, ready, scopeKey } = useRagScope()
+  return (
+    <RagScopeShell
+      domain="规则配置"
+      title="字典"
+      description="维护语料录入与治理下拉的数据源，新增取值无需改前端代码。版本五轴四类与「来源类型」可维护；权威等级/校验手段/版权状态为派生字典（由后端枚举生成，只读）。"
+      body={(scope) => RagDictionaryBody({ scope })}
+    />
+  )
+}
+
+function RagDictionaryBody({ scope }: RagScopePageProps): RagScopeBodyParts {  const { message } = App.useApp()
+  const { target, ready, scopeKey } = scope
 
   const [types, setTypes] = useState<RagDictionaryTypeView[]>([])
   const [loading, setLoading] = useState(false)
@@ -131,13 +147,9 @@ export function RagDictionaryPage(): JSX.Element {
     }
   }
 
-  return (
-    <RagScopeShell
-      domain="规则配置"
-      title="字典"
-      description="维护语料录入与治理下拉的数据源，新增取值无需改前端代码。版本五轴四类与「来源类型」可维护；权威等级/校验手段/版权状态为派生字典（由后端枚举生成，只读）。"
-      extra={
-        editable ? (
+  return {
+    extra: (
+editable ? (
           <Button
             type="primary"
             onClick={() => {
@@ -148,8 +160,9 @@ export function RagDictionaryPage(): JSX.Element {
             ＋ 新增条目
           </Button>
         ) : undefined
-      }
-    >
+    ),
+    content: (
+      <>
       {error && <Alert type="error" showIcon message={error} />}
 
       <Card size="small">
@@ -273,6 +286,8 @@ export function RagDictionaryPage(): JSX.Element {
           </Form.Item>
         </Form>
       </Modal>
-    </RagScopeShell>
-  )
+      </>
+    ),
+  }
 }
+

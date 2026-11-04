@@ -23,10 +23,30 @@ import { useRagIngestJobs } from '@/features/rag/useRagIngestJobs'
 import { RagSourceTable } from './RagSourceTable'
 import { RagSourceDrawer } from './RagSourceDrawer'
 import { RagMetadataConfirmDrawer } from './RagMetadataConfirmDrawer'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 
 export function RagSourceListPage(): JSX.Element {
-  const { target, ready, scopeKey } = useRagScope()
+  return (
+    <RagScopeShell
+      domain="录入与校对"
+      title="来源列表"
+      description="浏览与筛选全部来源，快速定位治理状态与生命周期。登记只是纳入治理，不等于可检索；撤回是终态、无删除入口。"
+      extra={() => (        <Link to="/rag/sources/new">
+          <Card size="small" hoverable style={{ padding: '2px 8px' }}>
+            <span style={{ fontSize: 13 }}>＋ 登记新来源</span>
+          </Card>
+        </Link>
+      )}
+
+    >
+      {(scope) => <RagSourceListBody scope={scope} />}
+    </RagScopeShell>
+  )
+}
+
+/** 页面主体：处在 {@link RagScopeShell} 的 provider 之内，故可直接消费作用域。 */
+function RagSourceListBody({ scope }: RagScopePageProps): JSX.Element {
+  const { target, ready, scopeKey } = scope
   const navigate = useNavigate()
 
   const [selected, setSelected] = useState<RagSource | null>(null)
@@ -77,18 +97,7 @@ export function RagSourceListPage(): JSX.Element {
   )
 
   return (
-    <RagScopeShell
-      domain="录入与校对"
-      title="来源列表"
-      description="浏览与筛选全部来源，快速定位治理状态与生命周期。登记只是纳入治理，不等于可检索；撤回是终态、无删除入口。"
-      extra={
-        <Link to="/rag/sources/new">
-          <Card size="small" hoverable style={{ padding: '2px 8px' }}>
-            <span style={{ fontSize: 13 }}>＋ 登记新来源</span>
-          </Card>
-        </Link>
-      }
-    >
+    <>
       {!ready ? (
         <RagNotReady />
       ) : (
@@ -131,6 +140,6 @@ export function RagSourceListPage(): JSX.Element {
           </Space>
         </Card>
       )}
-    </RagScopeShell>
+    </>
   )
 }

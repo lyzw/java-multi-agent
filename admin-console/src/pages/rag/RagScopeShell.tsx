@@ -65,6 +65,57 @@ export function useRagScope(): RagScopeContextValue {
   return ctx
 }
 
+/**
+ * ⚠️ **为什么需要下面这层「提供者 / 消费者」拆分**：
+ *
+ *     React context 只能由外向内流动。页面若在自己的 render **顶层**调用
+ *     {@link useRagScope}，而 {@link RagScopeShell} 又写在同一组件的 return 里，
+ *     消费者就位于提供者**之上**——运行时必抛
+ *     「useRagScope 必须在 RagScopeShell 内使用」，整页白屏。
+ *
+ *     这个错误 `tsc` 查不出（类型完全合法）、单测也不易覆盖（单测常直接 mock 掉 hook），
+ *     只有真正挂到路由上才暴露。改造期 13 个页面全部踩中，即为此故。
+ *
+ *     修法不是「每个页面各自管作用域」（会退回横切机制各写一遍的老问题），
+ *     而是把外壳拆两层：外层取得作用域并渲染布局，页面主体作为子组件天然处在
+ *     provider 之内，通过 {@link RagScopeBody} 取到它。
+ */
+export interface RagScopePageProps {
+  /** 已就绪的作用域。由 {@link RagScopeBody} 注入，页面不自行获取。 */
+  scope: RagScopeContextValue
+}
+
+/**
+ * 在作用域**之内**渲染页面主体。
+ *
+ * <p>页面主体只声明「我需要 scope」，位置由外壳决定：
+ *
+ * <pre>{@code
+ * function Body({ scope }: RagScopePageProps) { ... }   // 处在 provider 内
+ * export function RagDashboardPage() {
+ *   return <RagScopeShell domain="总览" title="Dashboard" ...>
+ *     {(scope) => <Body scope={scope} />}
+ *   </RagScopeShell>
+ * }
+ * }</pre>
+ */
+export function RagScopeBody({
+  children,
+}: {
+  children: (props: RagScopePageProps) => ReactNode
+}): JSX.Element {
+  const scope = useRagScope()
+  return <>{children({ scope })}</>
+}
+
+/** {@link RagScopeShell} 的 `body` 形态返回的片段：页头主操作 + 页面主体。 */
+export interface RagScopeBodyParts {
+  /** 页头右侧主操作区。 */
+  extra?: ReactNode
+  /** 页面主体。 */
+  content: ReactNode
+}
+
 export interface RagScopeShellProps {
   /** 页面标题。 */
   title: string
@@ -72,10 +123,37 @@ export interface RagScopeShellProps {
   description: ReactNode
   /** 所属治理域，用于面包屑与视觉分区提示。 */
   domain: '录入与校对' | '审核' | '规则配置' | '运维' | '总览'
-  /** 页面右上角的主操作区。 */
-  extra?: ReactNode
-  /** 页面主体。 */
-  children: ReactNode
+  /**
+   * 页面右上角的主操作区。
+   *
+   * ⚠️ 与 `children` 一样收 render prop，二者都拿到同一份作用域。
+   *    若按钮还要绑定页面内部状态（loading / 刷新回调 / 弹窗开关），
+   *    用 {@link RagScopeShellProps.body} 形态——它是本组件在 provider **之内**
+   *    调用的一个函数，页面把状态写在那里面，extra 与主体自然共享。
+   */
+  extra?: (scope: RagScopeContextValue) => ReactNode
+  /**
+   * 页面主体（**必须是 render prop**）。
+   *
+   * ⚠️ 为什么不接受普通节点：主体需要作用域（target / ready / scopeKey），
+   *    而作用域只在本组件内部才存在。一旦允许传节点，页面就会把
+   *    `useRagScope()` 提到自己 render 的顶层——那正是白屏的成因，
+   *    而且 `tsc` 当时是**查不出来**的。把签名收紧成函数，
+   *    编译器就能在改造时把所有违规页面点出来。
+   */
+  children?: (scope: RagScopeContextValue) => ReactNode
+  /**
+   * **推荐形态**：在 provider 之内调用，一次返回「页头主操作 + 页面主体」。
+   *
+   * ⚠️ 为什么需要它：主操作按钮常要绑定页面内部状态（刷新用的 loading、
+   *    新建弹窗开关、表单实例）。这些状态只有在 provider 之内才拿得到
+   *    （因为要 target 才能发请求）。用 body 形态，页面把全部 state 与逻辑
+   *    写在这一个函数里，`extra` 和 `content` 都是它的返回值，共享同一份状态，
+   *    既不用提升、也不用把按钮挪到页面中部。
+   *
+   * ⚠️ 与 `children` 互斥：两者都给会用 `body`。
+   */
+  body?: (scope: RagScopeContextValue) => RagScopeBodyParts
   /**
    * 是否显示作用域选择器。
    * ⚠️ 规则配置域（审核员/知识点/字典）与作用域无关，关闭它避免误导。
@@ -90,8 +168,9 @@ export function RagScopeShell({
   title,
   description,
   domain,
-  extra,
+  extra: extraProp,
   children,
+  body,
   scopeSelector = true,
 }: RagScopeShellProps): JSX.Element {
   const [tenants, setTenants] = useState<PlatformTenant[]>([])
@@ -155,6 +234,16 @@ export function RagScopeShell({
     [target, tenantId, scope, scopeKey, ready],
   )
 
+  /**
+   * 两种形态归一：
+   *   - body 形态：在 provider 之内调用一次，拿到 {extra, content}；
+   *   - render prop 形态：extra / children 各自调用。
+   * ⚠️ body 优先，避免调用方两个都写时出现两套状态各画一半。
+   */
+  const parts = body ? body(ctx) : null
+  const extraNode = parts ? parts.extra : extraProp ? extraProp(ctx) : null
+  const bodyNode = parts ? parts.content : children ? children(ctx) : null
+
   return (
     <RagScopeContext.Provider value={ctx}>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -170,7 +259,7 @@ export function RagScopeShell({
               {description}
             </Paragraph>
           </div>
-          {extra && <div style={{ flexShrink: 0 }}>{extra}</div>}
+          {extraNode && <div style={{ flexShrink: 0 }}>{extraNode}</div>}
         </div>
 
         {tenantError && (
@@ -268,7 +357,7 @@ export function RagScopeShell({
           </Card>
         )}
 
-        <div>{children}</div>
+        <div>{bodyNode}</div>
       </Space>
     </RagScopeContext.Provider>
   )

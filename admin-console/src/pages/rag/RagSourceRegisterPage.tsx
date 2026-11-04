@@ -30,7 +30,7 @@ import {
 import type { RagLicenseStatus, RagTrustTier } from '@/api/ragTypes'
 import { useRagManagement } from '@/features/rag/useRagManagement'
 import { currentPrincipalId } from './ragUi'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 
 const { Text, Paragraph } = Typography
 
@@ -104,8 +104,21 @@ interface FormValues {
 }
 
 export function RagSourceRegisterPage(): JSX.Element {
+  return (
+    <RagScopeShell
+      domain="录入与校对"
+      title="来源登记"
+      description="登记一个来源（作品级），录入版本五轴、权威等级与版权状态。登记只是纳入治理，不等于可检索；五轴缺一不可入库。"
+    >
+      {(scope) => <RagSourceRegisterBody scope={scope} />}
+    </RagScopeShell>
+  )
+}
+
+/** 页面主体：处在 {@link RagScopeShell} 的 provider 之内，故可直接消费作用域。 */
+function RagSourceRegisterBody({ scope }: RagScopePageProps): JSX.Element {
   const { message } = App.useApp()
-  const { target, ready } = useRagScope()
+  const { target, ready } = scope
   const { action, register, resetAction } = useRagManagement()
   const [form] = Form.useForm<FormValues>()
   const [submitting, setSubmitting] = useState(false)
@@ -156,11 +169,7 @@ export function RagSourceRegisterPage(): JSX.Element {
   }
 
   return (
-    <RagScopeShell
-      domain="录入与校对"
-      title="来源登记"
-      description="登记一个来源（作品级），录入版本五轴、权威等级与版权状态。登记只是纳入治理，不等于可检索；五轴缺一不可入库。"
-    >
+    <>
       {!ready ? (
         <RagNotReady />
       ) : (
@@ -366,6 +375,6 @@ export function RagSourceRegisterPage(): JSX.Element {
           </Col>
         </Row>
       )}
-    </RagScopeShell>
+    </>
   )
 }

@@ -48,15 +48,28 @@ import type {
 import { RAG_VERIFICATION_LABELS } from '@/api/ragTypes'
 import { useRagManagement } from '@/features/rag/useRagManagement'
 import { currentPrincipalId, LicenseTag, TrustTierTag } from './ragUi'
-import { RagNotReady, RagScopeShell, useRagScope } from './RagScopeShell'
+import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 import { GovernanceBadge, RagEmpty } from './ragVisuals'
 
 const { Text } = Typography
 const { TextArea } = Input
 
 export function RagVerifyPage(): JSX.Element {
+  return (
+    <RagScopeShell
+      domain="审核"
+      title="校验决定"
+      description="对来源做 VERIFIED / REVOKED 决定。VERIFIED 须填校验证据并指定复核人（双人复核）；REVOKED 须填撤回原因。撤回是终态，不可复活。"
+    >
+      {(scope) => <RagVerifyBody scope={scope} />}
+    </RagScopeShell>
+  )
+}
+
+/** 页面主体：处在 {@link RagScopeShell} 的 provider 之内，故可直接消费作用域。 */
+function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
   const { message } = App.useApp()
-  const { target, ready, scopeKey } = useRagScope()
+  const { target, ready, scopeKey } = scope
   const [searchParams] = useSearchParams()
 
   const [sourceId, setSourceId] = useState<string>(searchParams.get('sourceId') ?? '')
@@ -167,11 +180,7 @@ export function RagVerifyPage(): JSX.Element {
   }, [action.status, action.updated, message])
 
   return (
-    <RagScopeShell
-      domain="审核"
-      title="校验决定"
-      description="对来源做 VERIFIED / REVOKED 决定。VERIFIED 须填校验证据并指定复核人（双人复核）；REVOKED 须填撤回原因。撤回是终态，不可复活。"
-    >
+    <>
       {!ready ? (
         <RagNotReady />
       ) : (
@@ -393,6 +402,6 @@ export function RagVerifyPage(): JSX.Element {
           )}
         </Space>
       )}
-    </RagScopeShell>
+    </>
   )
 }
