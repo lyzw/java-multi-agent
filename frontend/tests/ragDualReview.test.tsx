@@ -208,7 +208,8 @@ describe('审核：双人复核前端约束（V1.0.2 S3-6）', () => {
     await user.click(submit)
 
     await waitFor(() => expect(applyRagVerificationMock).toHaveBeenCalled())
-    const payload = applyRagVerificationMock.mock.calls[0][2]
+    // ⚠️ mock.calls[0] 在 noUncheckedIndexedAccess 下是可能 undefined 的元组
+    const payload = applyRagVerificationMock.mock.calls[0]![2]
     expect(payload.targetStatus).toBe('VERIFIED')
     // ⚠️ 核心：复核人必须随请求发出，否则后端必然 409
     expect(payload.verifiedBy).toBe(REVIEWER)

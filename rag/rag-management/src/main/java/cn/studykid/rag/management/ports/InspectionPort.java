@@ -45,6 +45,29 @@ public interface InspectionPort {
                                         @NonNull String sourceId,
                                         int limit);
 
+
+    /**
+     * 列出抽检疑点（交互文档 §4.6「看红灯」）。
+     *
+     * <p><b>它解决什么</b>：抽检台当前把一册教材的上千条片段逐条摆出来裁决
+     * （实测 1463 条、翻 159 页），而抽检真正要找的是「哪几条可能出错了」。
+     * 本方法由系统按已知的高风险模式（{@link cn.studykid.rag.management.core.SuspicionRules}）
+     * 预筛出可疑片段，人只需确认这十几条。
+     *
+     * <p><b>⚠️ 预筛不参与结论</b>：抽检结论仍由人提交的 {@link InspectionRecord}
+     * 聚合得出（{@link InspectionRules#evaluate}）。本方法只决定「先看哪几条」，
+     * 故它漏掉的片段不会改变判定结果——但抽检台必须同时提供查看全部的入口。
+     *
+     * @param context  作用域上下文
+     * @param sourceId 来源 ID
+     * @param limit    最多返回的疑点数（按严重度排序后截断）
+     * @return 疑点列表（HIGH 在前）
+     */
+    List<cn.studykid.rag.management.core.InspectionSuspicion> listSuspects(
+            @NonNull RagManagementContext context,
+            @NonNull String sourceId,
+            int limit);
+
     /**
      * 读取来源的当前抽检状态（供 VERIFIED 前置守卫使用）。
      *

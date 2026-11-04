@@ -66,6 +66,20 @@ class RagManagementConfigTest {
         ChunkIndexer chunkIndexer() {
             return mock(ChunkIndexer.class);
         }
+
+        /**
+         * 平台档建单的运维通道替身。
+         *
+         * <p>⚠️ 必须提供：{@code ingestJobRepository} 的工厂方法把它声明为
+         * {@code @Autowired(required = false)} 的**可选**依赖，但在「无数据源」的
+         * 测试上下文里它既不存在也无法内部创建，导致该 bean 创建失败、
+         * 整个上下文起不来（本测试守的正是「启动就崩」这一类问题）。
+         * 这里给一个替身，让装配面的断言能跑在「依赖齐备」的前提下。
+         */
+        @Bean
+        cn.studykid.rag.infrastructure.ops.RagOpsSessionPort ragOpsSessionPort() {
+            return mock(cn.studykid.rag.infrastructure.ops.RagOpsSessionPort.class);
+        }
     }
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()

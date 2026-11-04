@@ -1,11 +1,13 @@
 package cn.studykid.rag.management.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -30,6 +32,7 @@ import cn.studykid.rag.core.scope.RagCorpusScope;
 import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.core.security.RagCallerAttributes;
 import cn.studykid.rag.management.core.RagManagementContext;
+import cn.studykid.rag.management.core.ReviewerRosterEntry;
 import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
@@ -457,6 +460,128 @@ class RagManagementControllerTest {
         assertEquals(12, response.scannedChunks());
         assertEquals(340, response.durationMs());
         verify(indexingPort).reindex(eq(TENANT), eq(500));
+    }
+
+    @Test
+    @DisplayName("可复核审核员下拉：排除本人与采集人（两人后端都会拒绝）")
+    void coSignersExcludeSelfAndRegistrant() {
+        when(port.findRegisteredBy(any(), eq("s-1"))).thenReturn("u-creator");
+        when(port.listCoSigners(any(), anyCollection()))
+                .thenReturn(java.util.List.of(
+                        new ReviewerRosterEntry("u-reviewer", "教研组-李老师", true, true, true)));
+
+        java.util.List<ManagementDtos.ReviewerItem> items = controller.listCoSigners(
+                TENANT, null, SCOPE_TENANT, null, "u-self", "s-1");
+
+        assertEquals(1, items.size());
+        assertEquals("教研组-李老师", items.get(0).displayName());
+        // ⚠️ 必须把「本人」与「采集人」都排除掉：
+        //    后端 SoD 会拒绝这两类人做复核，下拉里留着他们等于让人必然 409。
+        verify(port).listCoSigners(any(), argThat(ids ->
+                ids.contains("u-self") && ids.contains("u-creator")));
+    }
+
+    @Test
+    @DisplayName("读不到采集人时不阻断列表（SOD 对 null 不判自审）")
+    void coSignersToleratesMissingRegistrant() {
+        when(port.findRegisteredBy(any(), eq("s-1"))).thenThrow(new IllegalStateException("boom"));
+        when(port.listCoSigners(any(), anyCollection()))
+                .thenReturn(java.util.List.of());
+
+        java.util.List<ManagementDtos.ReviewerItem> items = controller.listCoSigners(
+                TENANT, null, SCOPE_TENANT, null, "u-self", "s-1");
+
+        assertEquals(0, items.size());
+    }
+
+    @Test
+    @DisplayName("登记审核员：可复核必须同时可审核（矛盾状态提前拦下）")
+    void upsertReviewerRejectsCoSignWithoutReview() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.upsertReviewer(TENANT, null, SCOPE_TENANT, null, null,
+                        new ManagementDtos.UpsertReviewerRequest(
+                                "u-1", "教研组-王老师", false, true, true)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("必须也能审核"));
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    @DisplayName("登记审核员：默认 canReview=true、enabled=true")
+    void upsertReviewerDefaults() {
+        when(port.upsertReviewer(any(), any())).thenAnswer(inv -> inv.getArgument(1));
+
+        ManagementDtos.ReviewerItem item = controller.upsertReviewer(
+                TENANT, null, SCOPE_TENANT, null, null,
+                new ManagementDtos.UpsertReviewerRequest("u-1", "教研组-王老师", null, null, null));
+
+        assertEquals("u-1", item.principalId());
+        assertTrue(item.canReview());
+        assertFalse(item.canCoSign());
+        assertTrue(item.enabled());
+    }
+
+    @Test
+    @DisplayName("重处理 REINDEX_MISSING：复用 reindex，只补缺失向量")
+    void reprocessReindexMissingDelegatesToReindex() {
+        when(indexingPort.reindex(any(), anyInt()))
+                .thenReturn(new CorpusIndexingPort.ReindexOutcome(7, 10, 120));
+
+        ManagementDtos.ReprocessResponse resp = controller.reprocessSource(
+                TENANT, null, SCOPE_TENANT, null, null, "s-1",
+                new ManagementDtos.ReprocessRequest("REINDEX_MISSING"));
+
+        assertTrue(resp.accepted());
+        assertEquals("REINDEX_MISSING", resp.mode());
+        /*
+          ⚠️ 断言必须是消息里**真实存在**的子串。
+              此处曾写成 contains("不影响")，而文案是「检索不【受】影响」——
+              「受」字插在中间，故 "不影响" 并非其子串，断言恒为 false。
+              是测试写错、不是代码写错；靠打印运行时码点才看清。
+        */
+        assertTrue(resp.message().contains("不受影响"), "消息应说明检索不受影响");
+        verify(indexingPort).reindex(eq(TENANT), anyInt());
+    }
+
+    @Test
+    @DisplayName("⛔ 重处理 RESPLIT：明确 501，绝不静默成功")
+    void reprocessResplitIsNotImplemented() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.reprocessSource(
+                        TENANT, null, SCOPE_TENANT, null, null, "s-1",
+                        new ManagementDtos.ReprocessRequest("RESPLIT")));
+
+        // ⚠️ 静默成功会让人以为「重新切分过了」而实际什么都没发生
+        assertEquals(HttpStatus.NOT_IMPLEMENTED, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("暂不可用"));
+        // 不得偷偷调用 reindex（那是另一种模式的能力）
+        verify(indexingPort, never()).reindex(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("⛔ 重处理 REPLACE_FILE：明确 501 并给出替代路径")
+    void reprocessReplaceFileIsNotImplemented() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.reprocessSource(
+                        TENANT, null, SCOPE_TENANT, null, null, "s-1",
+                        new ManagementDtos.ReprocessRequest("REPLACE_FILE")));
+
+        assertEquals(HttpStatus.NOT_IMPLEMENTED, ex.getStatusCode());
+        // 必须给出可执行的替代方案，而不是只说「不行」
+        assertTrue(ex.getReason().contains("新建一条来源"));
+    }
+
+    @Test
+    @DisplayName("未知重处理模式返回 400 并列出合法值")
+    void reprocessUnknownModeIsBadRequest() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.reprocessSource(
+                        TENANT, null, SCOPE_TENANT, null, null, "s-1",
+                        new ManagementDtos.ReprocessRequest("MAGIC")));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("REINDEX_MISSING"));
     }
 
     @Test

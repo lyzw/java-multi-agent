@@ -546,6 +546,263 @@ public final class ManagementDtos {
     }
 
     /**
+     * 审核员名录条目视图（D-001 RAG 侧授权投影）。
+     *
+     * <p>⚠️ 只含「选人需要的最小信息」：主体 ID + 显示名 + 权限标记。
+     *    不返回登录名、密码、真实姓名（PIPL / DEC-6）。
+     *
+     * @param principalId 主体 ID（与平台 JWT 的 sub 一致）
+     * @param displayName 显示名（下拉里给人看的那一行）
+     * @param canReview   是否可执行审核
+     * @param canCoSign   是否可做复核人（双人签署的第二签）
+     * @param enabled     是否启用
+     */
+    public record ReviewerItem(
+            String principalId,
+            String displayName,
+            boolean canReview,
+            boolean canCoSign,
+            boolean enabled
+    ) {
+    }
+
+    /**
+     * 登记审核员请求。
+     *
+     * @param principalId 主体 ID（必填：名录必须指向一个确定的人）
+     * @param displayName 显示名（不得含真实姓名）
+     * @param canReview   是否可执行审核
+     * @param canCoSign   是否可做复核
+     * @param enabled     是否启用（默认 true）
+     */
+    public record UpsertReviewerRequest(
+            @NotBlank(message = "principalId 不能为空")
+            String principalId,
+
+            @NotBlank(message = "displayName 不能为空")
+            @Size(max = 128, message = "displayName 长度不能超过 128")
+            String displayName,
+
+            Boolean canReview,
+            Boolean canCoSign,
+            Boolean enabled
+    ) {
+    }
+
+    /**
+     * 重处理请求（交互文档 §4.3「追加重传」）。
+     *
+     * <p><b>为什么必须显式声明模式，而不是一个「重新处理」按钮</b>：
+     * 三种重处理的代价与影响面差别极大——
+     * 只补向量是分钟级且不中断检索，重新切分会短暂让语料不可检索，
+     * 换文件则会让旧文件作废。用一个含糊的按钮把它们混在一起，
+     * 等于让人在不清楚后果的情况下做不可逆决定。
+     *
+     * @param mode 重处理模式（REINDEX_MISSING / RESPLIT / REPLACE_FILE 之一）
+     */
+    public record ReprocessRequest(
+            @NotBlank(message = "mode 不能为空")
+            String mode
+    ) {
+    }
+
+    /**
+     * 重处理结果。
+     *
+     * @param mode         实际执行的模式
+     * @param accepted     是否已受理
+     * @param message      人话说明（含「接下来会发生什么」）
+     * @param newJobId     新任务 ID（需要异步重跑的模式会返回）
+     */
+    public record ReprocessResponse(
+            String mode,
+            boolean accepted,
+            String message,
+            String newJobId
+    ) {
+    }
+
+    /**
+     * 语料生命周期状态（交互文档 §4.7「检索准入与撤回」）。
+     *
+     * <p><b>它解决什么</b>：当前「有效期/过期」只体现为列表里一个
+     * 「结论已过期」标签，**没有任何提前提醒**——语料到期当天才被发现，
+     * 而那时学生已经搜不到了。本视图把「还有几天到期、哪些已过期」算好并前置呈现。
+     *
+     * <p>⚠️ {@code stale} / {@code daysUntilExpiry} 一律**服务端计算**：
+     * 前端自己拿 verifiedAt + validDays 算，会与检索侧
+     * {@code admissiblePredicate} 的口径漂移（时区、边界日、时钟偏差各算一遍）。
+     *
+     * @param sourceId          来源 ID
+     * @param title             书名
+     * @param verificationStatus 校验状态
+     * @param verifiedAt        校验通过时间（未通过为 null）
+     * @param validDays         有效期天数
+     * @param expiresAt         到期时刻（未通过为 null）
+     * @param daysUntilExpiry   距到期天数（负数=已过期；未通过为 null）
+     * @param stale             是否已过期（服务端计算）
+     * @param expiringSoon      是否即将到期（阈值内，需人工续期）
+     * @param admissible        当前是否可被检索
+     */
+    public record LifecycleItem(
+            String sourceId,
+            String title,
+            String verificationStatus,
+            String verifiedAt,
+            int validDays,
+            String expiresAt,
+            Integer daysUntilExpiry,
+            boolean stale,
+            boolean expiringSoon,
+            boolean admissible
+    ) {
+    }
+
+    /**
+     * 审核待办项（交互文档 §4.6「审核收件箱」）。
+     *
+     * <p><b>它解决什么</b>：审核员当前要「搜索 → 找人 → 读上下文」才能知道
+     * 今天该审哪几本。本视图把「该不该我审、卡在哪一步」直接算好，
+     * 审核员打开就是一份可执行的待办清单。
+     *
+     * <p>⚠️ {@code stage} 是**服务端算好的下一步**，不是让前端自己判断：
+     * 前端一旦自行推算，就会与后端的状态机守卫口径漂移
+     * （典型事故：界面给了一个点下去必然 409 的按钮）。
+     *
+     * @param sourceId        来源 ID
+     * @param title           书名
+     * @param publisher       出版社
+     * @param verificationStatus 校验状态（PENDING / IN_REVIEW / ...）
+     * @param metadataConfirmed 元数据是否已确认
+     * @param inspectionStatus 抽检状态（NOT_REQUIRED / PASSED / FAILED）
+     * @param documentCount   载体数
+     * @param chunkCount      片段总数
+     * @param answerChunkCount 答案类片段数（抽检最关键对象）
+     * @param registeredBy    采集人（用于「审核员≠采集人」的界面提示）
+     * @param stage           下一步该做什么（见 Stage 枚举）
+     * @param stageText       下一步的人话说明
+     * @param canAct          当前调用者此刻是否可执行该步骤
+     * @param cantActReason   不可执行的原因（canAct=false 时非空）
+     * @param createdAt       创建时间
+     */
+    public record ReviewQueueItem(
+            String sourceId,
+            String title,
+            String publisher,
+            String verificationStatus,
+            boolean metadataConfirmed,
+            String inspectionStatus,
+            int documentCount,
+            long chunkCount,
+            long answerChunkCount,
+            String registeredBy,
+            String stage,
+            String stageText,
+            boolean canAct,
+            String cantActReason,
+            String createdAt
+    ) {
+    }
+
+    /**
+     * 抽检疑点视图（交互文档 §4.6「看红灯」）。
+     *
+     * <p>⚠️ 必须带 {@code text}：判「是不是答案」必须**看到字**。
+     *    只给角色和页码的摘要行，人无法做判断（这正是当前抽检台的老问题）。
+     *
+     * @param chunkId     片段 ID
+     * @param documentId  所属载体
+     * @param role        当前角色
+     * @param text        片段正文（已截断）
+     * @param pageNumber  页码
+     * @param sectionPath 章节路径
+     * @param exerciseNo  题号
+     * @param reason      疑点成因代码
+     * @param reasonText  疑点成因的人话说明
+     * @param severity    严重度（HIGH / MEDIUM / LOW）
+     */
+    public record InspectionSuspectResponse(
+            String chunkId,
+            String documentId,
+            String role,
+            String text,
+            Integer pageNumber,
+            String sectionPath,
+            String exerciseNo,
+            String reason,
+            String reasonText,
+            String severity
+    ) {
+    }
+
+    /**
+     * 元数据确认请求（交互文档 §4.3「产出确认」/ V1.0.2 §5 R1）。
+     *
+     * <p>⚠️ 携带元数据快照而非只有「已确认」一个布尔：确认的意义是
+     * 「我为**这一组具体值**担保」。只记布尔的留痕，事后无法回答
+     * 「他确认时书名是什么」——而书名恰是最常被改的字段。
+     *
+     * @param title     确认时的书名
+     * @param publisher 确认时的出版社
+     * @param isbn      ISBN（论文类可空）
+     * @param subject   学科（可空）
+     * @param grade     年级（可空）
+     * @param term      册次：上册/下册/全一册（可空）
+     * @param note      确认备注（可空）
+     */
+    public record ConfirmMetadataRequest(
+            @NotBlank(message = "title 不能为空")
+            @Size(max = 512, message = "title 长度不能超过 512")
+            String title,
+
+            @NotBlank(message = "publisher 不能为空")
+            @Size(max = 256, message = "publisher 长度不能超过 256")
+            String publisher,
+
+            @Size(max = 64, message = "isbn 长度不能超过 64")
+            String isbn,
+
+            @Size(max = 64, message = "subject 长度不能超过 64")
+            String subject,
+
+            @Size(max = 64, message = "grade 长度不能超过 64")
+            String grade,
+
+            @Size(max = 16, message = "term 长度不能超过 16")
+            String term,
+
+            @Size(max = 512, message = "note 长度不能超过 512")
+            String note
+    ) {
+    }
+
+    /**
+     * 元数据确认响应。
+     *
+     * @param sourceId            来源 ID
+     * @param metadataConfirmed   是否已确认
+     * @param metadataConfirmedAt 首次确认时间
+     * @param metadataConfirmedBy 首次确认人
+     */
+    public record ConfirmMetadataResponse(
+            String sourceId,
+            boolean metadataConfirmed,
+            String metadataConfirmedAt,
+            String metadataConfirmedBy
+    ) {
+        /** 领域结果 → 视图（时间统一 ISO-8601）。 */
+        public static ConfirmMetadataResponse from(
+                cn.studykid.rag.management.core.MetadataConfirmationResult result) {
+            return new ConfirmMetadataResponse(
+                    result.sourceId(),
+                    result.metadataConfirmed(),
+                    result.metadataConfirmedAt() == null
+                            ? null : result.metadataConfirmedAt().toString(),
+                    result.metadataConfirmedBy());
+        }
+    }
+
+    /**
      * 摄取任务视图（响应）【V1.0.2 §8.5】。
      *
      * @param jobId        任务 ID

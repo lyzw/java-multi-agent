@@ -9,12 +9,13 @@
  *    · `stale` / `admissible` 直接渲染服务端返回值，前端不推算。
  */
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Alert, Button, Card, Collapse, Form, Input, Select, Space, Table, Tag, Tooltip, Typography, Upload } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { UploadOutlined } from '@ant-design/icons'
 import type {
   RagCarrier,
+  RagIngestJob,
   RagSource,
   RagSourceQuery,
   RagTrustTier,
@@ -26,7 +27,7 @@ import type { RagTarget } from '@/api/ragClient'
 import type { RagSourceListState } from '@/features/rag/useRagManagement'
 import { useDictOptions } from '@/features/dictionaries/useDictionaries'
 import { computeSha256Hex } from '@/features/rag/fileHash'
-import { TrustTierTag, VerificationTag } from './ragUi'
+import { IngestJobTag, IngestProgress, TrustTierTag, VerificationTag } from './ragUi'
 
 /**
  * 由文件名后缀推断载体类型（前端预览用，与后端 {@code LocalObjectStoreAdapter}
@@ -53,6 +54,15 @@ export interface RagSourceTableProps {
   onRefresh: () => void
   onSelect: (source: RagSource) => void
   onRegister: () => void
+  /**
+   * sourceId → 最近一次摄取任务（用于「处理状态」列）。
+   *
+   * ⚠️ 缺省 = 尚未加载 / 功能降级：列渲染为「未处理」，
+   *    不把「没拿到任务」说成「处理失败」。
+   */
+  jobsBySource?: Map<string, RagIngestJob>
+  /** 打开元数据确认抽屉（交互文档 §4.3） */
+  onConfirmMetadata?: (source: RagSource) => void
 }
 
 interface FilterShape {
@@ -62,7 +72,20 @@ interface FilterShape {
   includeStale: boolean
 }
 
-const columns: ColumnsType<RagSource> = [
+/**
+ * 按「该来源最近一次摄取任务」构造列。
+ *
+ * ⚠️ 列从模块级常量改成函数：处理状态是**逐行不同**的（依赖 job），
+ *    而此前的常量列里根本没有「处理到哪一步」这一列——
+ *    用户上传后只能看到一个「待校验」标签，看不出文件还在跑。
+ *
+ * @param jobBySource sourceId → 最近一次任务（无任务 = 纯元数据登记）
+ */
+function buildColumns(
+  jobBySource: Map<string, RagIngestJob>,
+  onConfirmMetadata?: (source: RagSource) => void,
+): ColumnsType<RagSource> {
+  return [
   {
     title: '标题',
     dataIndex: 'title',
@@ -129,6 +152,27 @@ const columns: ColumnsType<RagSource> = [
     ),
   },
   {
+    title: '处理状态',
+    key: 'ingest',
+    width: 150,
+    render: (_: unknown, row) => {
+      const latest = jobBySource.get(row.sourceId)
+      // ⚠️ 无任务 = 「仅元数据」登记，不是「处理失败」——两者必须区分
+      if (!latest) return <Text type="secondary">未处理</Text>
+      return (
+        <Space size={4} direction="vertical" style={{ rowGap: 2 }}>
+          <IngestJobTag
+            status={latest.status}
+            stage={latest.stage}
+            errorDetail={latest.errorDetail}
+            sourceRevokedCancel={latest.sourceRevokedCancel}
+          />
+          <IngestProgress status={latest.status} stage={latest.stage} width={110} />
+        </Space>
+      )
+    },
+  },
+  {
     title: '准入',
     key: 'admissible',
     width: 150,
@@ -143,13 +187,43 @@ const columns: ColumnsType<RagSource> = [
     ),
   },
   {
+    title: '操作',
+    key: 'actions',
+    width: 130,
+    render: (_: unknown, row) => {
+      if (!onConfirmMetadata) return <Text type="secondary">—</Text>
+      // ⚠️ 只在「已处理完、但还没开始审核」时给确认入口：
+      //    处理中的来源元数据还没定稿，审核中的来源已经过了这一步。
+      const latest = jobBySource.get(row.sourceId)
+      const processed = latest !== undefined && latest.status === 'SUCCEEDED'
+      const notReviewing = row.verificationStatus === 'PENDING'
+      if (processed && notReviewing) {
+        return (
+          <Button
+            size="small"
+            type="link"
+            onClick={(e) => {
+              // ⚠️ 阻止冒泡：行点击会打开详情抽屉，两个抽屉同时弹是坏的体验
+              e.stopPropagation()
+              onConfirmMetadata(row)
+            }}
+          >
+            确认元数据
+          </Button>
+        )
+      }
+      return <Text type="secondary">—</Text>
+    },
+  },
+  {
     title: '校验依据',
     dataIndex: 'verificationEvidence',
     key: 'verificationEvidence',
     ellipsis: true,
     render: (v: string | null) => (v ? v : <Text type="secondary">—</Text>),
   },
-]
+  ]
+}
 
 export function RagSourceTable({
   state,
@@ -158,8 +232,15 @@ export function RagSourceTable({
   onRefresh,
   onSelect,
   onRegister,
+  jobsBySource,
+  onConfirmMetadata,
 }: RagSourceTableProps): JSX.Element {
   const [form] = Form.useForm<FilterShape>()
+  // ⚠️ 用 useMemo 固定引用：每次渲染换一个 columns 数组会让 Table 反复重算布局
+  const columns = useMemo(
+    () => buildColumns(jobsBySource ?? new Map(), onConfirmMetadata),
+    [jobsBySource, onConfirmMetadata],
+  )
   // ⚠️ 校验状态是**状态机**取值（代码强绑定），刻意不走字典；权威等级走字典表
   const { options: tierOptions } = useDictOptions('rag.trust_tier')
 

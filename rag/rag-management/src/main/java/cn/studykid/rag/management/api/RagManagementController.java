@@ -7,6 +7,7 @@ import java.util.UUID;
 
 import jakarta.validation.Valid;
 
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -36,12 +37,16 @@ import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
+import cn.studykid.rag.management.core.ReviewerRosterEntry;
+import cn.studykid.rag.management.core.MetadataConfirmation;
+import cn.studykid.rag.management.core.MetadataConfirmationResult;
 import cn.studykid.rag.management.core.VerificationDecision;
 import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort.ChunkSummary;
 import cn.studykid.rag.management.ports.CorpusManagementPort.DocumentImportCommand;
 import cn.studykid.rag.management.ports.DictionaryPort;
+import cn.studykid.rag.management.ports.GlobalIngestJobPort;
 import cn.studykid.rag.management.ports.ObjectStorePort;
 import cn.studykid.rag.management.infrastructure.IngestDedupPrecheck;
 import cn.studykid.rag.management.core.InspectionGuard;
@@ -183,6 +188,13 @@ public class RagManagementController {
     private final IngestJobPort ingestJobPort;
 
     /**
+     * 【平台档】全局桶的摄取任务建单（rag_ops 运维通道）。
+     * 与 {@link #ingestJobPort} 分开是因为两者是<b>两条物理连接</b>，
+     * 而不是同一接口上的两个分支（见 {@link GlobalIngestJobPort}）。
+     */
+    private final GlobalIngestJobPort globalIngestJobPort;
+
+    /**
      * 【V1.0.2 §5 R2】抽检端口（可为 null = 未装配；此时抽检守卫不生效）。
      */
     private final cn.studykid.rag.management.ports.InspectionPort inspectionPort;
@@ -229,6 +241,8 @@ public class RagManagementController {
                                    @Autowired(required = false) IngestDedupPrecheck dedupPrecheck,
                                    @Autowired(required = false) IngestJobPort ingestJobPort,
                                    @Autowired(required = false)
+                                   GlobalIngestJobPort globalIngestJobPort,
+                                   @Autowired(required = false)
                                    cn.studykid.rag.management.ports.InspectionPort inspectionPort,
                                    @Autowired(required = false)
                                    cn.studykid.rag.management.ports.KnowledgeAliasPort knowledgeAliasPort) {
@@ -246,6 +260,7 @@ public class RagManagementController {
         //    去重预检缺失 → 503 拒绝（不静默放行）；job 端口缺失 → 只记日志（载体可留）。
         this.dedupPrecheck = dedupPrecheck;
         this.ingestJobPort = ingestJobPort;
+        this.globalIngestJobPort = globalIngestJobPort;
         this.inspectionPort = inspectionPort;
         this.knowledgeAliasPort = knowledgeAliasPort;
     }
@@ -266,7 +281,7 @@ public class RagManagementController {
                                    CorpusIndexingPort indexingPort,
                                    DictionaryPort dictionaryPort,
                                    ObjectStorePort objectStore) {
-        this(managementPort, indexingPort, dictionaryPort, objectStore, null, null, null, null);
+        this(managementPort, indexingPort, dictionaryPort, objectStore, null, null, null, null, null);
     }
 
     /**
@@ -286,13 +301,26 @@ public class RagManagementController {
             @Valid @RequestBody ManagementDtos.RegisterSourceRequest request) {
         RagManagementContext tenant = requireWriteContext(
                 tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
-        SourceRegistration registration = new SourceRegistration(
-                request.sourceType(), request.title(), request.publisher(),
-                request.isbn(), request.doi(), request.objectRef(), request.contentHash());
+        // ⚠️⚠️ 命令构造与端口调用必须放在**同一个** try 里：
+        //    「ISBN 与 DOI 至少提供一个」是 SourceRegistration 的**构造期**校验
+        //    （教材/教辅给 ISBN、论文给 DOI，两者皆空则无法进入校验流程）。
+        //    若把构造放在 try 之外，这个 IllegalArgumentException 会一路冒泡成 500——
+        //    而它其实是**调用方入参形态问题**，应当是 400。
+        //    ⚠️ 实测踩到（2026-11-04）：登记「沪教版五四制六年级数学上册」时
+        //    未填 ISBN/DOI → 接口回 500 Internal Server Error，
+        //    控制台只能显示「服务端错误」，管理员既看不到原因、
+        //    又被误导成「服务坏了」而反复重试。
         CorpusSource source;
         try {
+            SourceRegistration registration = new SourceRegistration(
+                    request.sourceType(), request.title(), request.publisher(),
+                    request.isbn(), request.doi(), request.objectRef(), request.contentHash());
             source = managementPort.registerSource(tenant, registration,
                     request.registeredBy());
+        } catch (IllegalArgumentException e) {
+            // ⚠️ 入参形态问题（缺 ISBN/DOI、contentHash 格式非法等）→ 400，
+            //    并**原样带回领域层的原因**——那是管理员能照着改的下一步。
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
         } catch (org.springframework.dao.DuplicateKeyException e) {
             // ⚠️⚠️ V1.0.2 §4 Z3：DB 部分唯一索引拦下了重复来源。
             //    这是「去重的第二层防线」（第一层是应用层预检）。
@@ -644,6 +672,63 @@ public class RagManagementController {
      * @param sourceId 来源 ID
      * @return 文档列表
      */
+    /**
+     * 确认来源元数据（交互文档 §4.3「产出确认」/ V1.0.2 §5 R1）。
+     *
+     * <p><b>为什么需要这一步</b>：上传后书名/出版社/ISBN 由系统**推断**得出
+     * （见前端 {@code metadataInference.ts}）。推断值只是**待确认的建议**，
+     * 未经人确认就送审，等于让审核员审一份机器猜出来的元数据。
+     *
+     * <p><b>⚠️ 这是「确认」不是「修改」</b>：本端点只记录「谁在何时确认了什么」，
+     * 不改写来源的书名等字段。若人改了字段，那是一次独立的元数据更新。
+     * 合并两者会让「确认」掩盖掉「人到底改了什么」。
+     *
+     * <p><b>⚠️ 幂等</b>：重复确认返回成功，且**不改写首次确认人**。
+     *
+     * <p><b>⚠️ 与 VERIFIED 的关系</b>：确认元数据**不等于**审核通过。
+     * 它只是准入门槛的前置步骤（把来源推进到「可送审」），
+     * 不会改变 {@code ver_status}，也不会让语料变得可检索。
+     *
+     * @param tenantId 租户 ID
+     * @param sourceId 来源 ID
+     * @param request  确认时的元数据快照
+     * @return 确认结果
+     */
+    @PostMapping("/sources/{sourceId}/metadata-confirmation")
+    public ManagementDtos.ConfirmMetadataResponse confirmMetadata(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
+            @RequestAttribute(value = RagCallerAttributes.PRINCIPAL_ATTRIBUTE, required = false) String principalAttr,
+            @PathVariable("sourceId") String sourceId,
+            @Valid @RequestBody ManagementDtos.ConfirmMetadataRequest request) {
+        RagManagementContext context = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
+        // ⚠️ 确认必须有主体：无主的确认等于没有确认（与删除哨兵回落同一纪律）。
+        if (principalAttr == null || principalAttr.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                    "缺少操作人主体（令牌 sub），拒绝以匿名身份确认元数据");
+        }
+        MetadataConfirmation info;
+        try {
+            info = new MetadataConfirmation(
+                    request.title(), request.publisher(), request.isbn(),
+                    request.subject(), request.grade(), request.term(), request.note());
+        } catch (IllegalArgumentException e) {
+            // ⚠️ 领域校验失败（如册次不在白名单）应映射成 400 并带回原话，
+            //    而不是 500——那是调用方输入问题，不是服务故障。
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+        MetadataConfirmationResult result =
+                managementPort.confirmMetadata(context, sourceId, info, principalAttr);
+        if (result == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "来源不存在：" + sourceId);
+        }
+        return ManagementDtos.ConfirmMetadataResponse.from(result);
+    }
+
     @GetMapping("/sources/{sourceId}/documents")
     public List<ManagementDtos.DocumentResponse> listDocuments(
             @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
@@ -849,9 +934,12 @@ public class RagManagementController {
             log.warn("[RAG] 去重预检未装配，本次录入降级为仅依赖 DB 唯一约束兜底");
             return;
         }
-        // ⚠️ requireTenant() 返回的是租户上下文对象，不是字符串。
-        String tenantId = context.requireTenant().tenantId();
-        IngestDedupRules.DuplicateHit hit = dedupPrecheck.checkCarrier(tenantId, hash);
+        // ⚠️ 预检按**作用域**取租户，不能用 requireTenant()：
+        //    平台档（平台语料抽检/维护）根本没有会话租户，requireTenant() 对它必然抛 ISE，
+        //    于是「平台来源上传文档」一律 500（实测踩到：沪教版英语六上 PDF 导入）。
+        //    去重预检是**读**，读的租户列在平台档就是全局哨兵；
+        //    会话租户的建立（平台档显式置空）由预检内部按 RagSessionScope 完成。
+        IngestDedupRules.DuplicateHit hit = dedupPrecheck.checkCarrier(context, hash);
         if (hit != null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     hit.layer().errorCode() + "：" + hit.describe());
@@ -861,17 +949,32 @@ public class RagManagementController {
     /**
      * 【V1.0.2 §3.1 ③】建摄取任务；失败只记日志不回滚载体。
      *
-     * @return jobId；建单失败返回 null（前端可走重试/补建）
+     * <p><b>⚠️ 平台档必须走运维通道</b>：{@code rag_ingest_job} 的 RLS 策略是
+     * {@code tenant_id = rag_current_tenant()}，且平台档的会话租户按设计<b>置空</b>
+     * （写哨兵会触发 SQLSTATE 42501），所以用应用连接建全局 job 必然被 WITH CHECK 拒绝。
+     * 平台语料同样要能摄取，故与来源登记/抽检一样换<b>角色</b>（rag_ops），
+     * 而不是放宽策略或把哨兵塞进会话变量。
+     *
+     * @return jobId；建单失败或通道未接入返回 null（前端可走重试/补建）
      */
-    private String createIngestJobQuietly(RagManagementContext context, String sourceId,
+    private @Nullable String createIngestJobQuietly(RagManagementContext context, String sourceId,
                                           String principalId) {
         if (ingestJobPort == null) {
             log.warn("[RAG] 摄取任务端口未装配，来源 {} 的上传未创建 job", sourceId);
             return null;
         }
         try {
-            String tenantId = context.requireTenant().tenantId();
-            return ingestJobPort.createJob(tenantId, sourceId, principalId).jobId();
+            if (context.scope() == RagCorpusScope.TENANT) {
+                return ingestJobPort.createJob(
+                        context.requireTenant().tenantId(), sourceId, principalId).jobId();
+            }
+            // ⚠️ 平台档：租户列由 SQL 写死为 rag_global_tenant_id()，本方法不传租户。
+            if (globalIngestJobPort == null) {
+                log.warn("[RAG] 平台档摄取通道未装配（rag_ops），来源 {} 的全局上传未创建 job",
+                        sourceId);
+                return null;
+            }
+            return globalIngestJobPort.createGlobalJob(sourceId, principalId).jobId();
         } catch (RuntimeException e) {
             // ⚠️ 载体已落库，job 建单失败不应让整个上传失败：
             //    载体是事实，job 可补建；回滚会制造「文件在桶里但库里没有」的状态。
@@ -1233,8 +1336,8 @@ public class RagManagementController {
                 assertMagicMatchesExtension(content, row.filename());
                 if (dedupPrecheck != null) {
                     String hash = objectStore.sha256(content);
-                    IngestDedupRules.DuplicateHit hit =
-                            dedupPrecheck.checkCarrier(ctx.requireTenant().tenantId(), hash);
+                    // ⚠️ 与单文件路径同一纪律：按作用域预检，平台档不得调用 requireTenant()。
+                    IngestDedupRules.DuplicateHit hit = dedupPrecheck.checkCarrier(ctx, hash);
                     if (hit != null) {
                         items.add(new BulkImportResult.Item(row.lineNo(), row.filename(), false,
                                 null, null, hit.layer().errorCode() + "：" + hit.describe()));
@@ -1384,6 +1487,293 @@ public class RagManagementController {
                         r.actualRole(),
                         r.errorType() == null ? null : r.errorType().name(),
                         r.verdict().name(), r.createdAt()))
+                .toList();
+    }
+
+    /**
+     * 列出可做复核的审核员（签发表单的下拉数据源）。
+     *
+     * <p><b>它解决什么</b>：签发表单的「复核人」此前要<b>手输 UUID</b>
+     * （交互文档问题 P5）。RAG 与平台是两个独立库，看不到 {@code public.principal}，
+     * 故 RAG 侧维护一份审核员名录（D-001 §3.2「角色以库中登记为准」的投影）。
+     *
+     * <p><b>⚠️ 服务端已排除本人与采集人</b>：后端 SoD 会拒绝
+     * 「复核人 = 决定人」与「复核人 = 采集人」，下拉里若留着这些人，
+     * 用户选下去必然 409——让用户点一个注定被拒的选项是产品缺陷。
+     *
+     * <p><b>⚠️ 只返回可复核的条目</b>：可执行审核 ≠ 可做复核
+     * （复核是双人签署的第二签，通常只授予少数资深审核员）。
+     *
+     * @param tenantId 租户 ID
+     * @param sourceId 来源 ID（用于取出采集人以排除）
+     * @return 可复核的审核员（按显示名排序）
+     */
+    @GetMapping("/sources/{sourceId}/co-signers")
+    public List<ManagementDtos.ReviewerItem> listCoSigners(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.PRINCIPAL_ATTRIBUTE, required = false) String principalAttr,
+            @PathVariable("sourceId") String sourceId) {
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+
+        // ⚠️ 排除「本人」与「采集人」：这两类后端都会拒绝，下拉里不该出现
+        java.util.Set<String> exclude = new java.util.LinkedHashSet<>();
+        if (principalAttr != null && !principalAttr.isBlank()) {
+            exclude.add(principalAttr);
+        }
+        try {
+            String registrant = managementPort.findRegisteredBy(ctx, sourceId);
+            if (registrant != null && !registrant.isBlank()) {
+                exclude.add(registrant);
+            }
+        } catch (RuntimeException e) {
+            // ⚠️ 读不到采集人不阻断：SOD 对 null 已定义为「不判自审」
+            log.debug("[RAG] 读取来源 {} 的采集人失败，下拉不额外排除：{}", sourceId, e.getMessage());
+        }
+
+        return managementPort.listCoSigners(ctx, exclude).stream()
+                .map(e -> new ManagementDtos.ReviewerItem(
+                        e.principalId(), e.displayName(),
+                        e.canReview(), e.canCoSign(), e.enabled()))
+                .toList();
+    }
+
+    /**
+     * 登记/更新审核员（维护审核员名录）。
+     *
+     * <p>⚠️ 幂等：同一主体重复登记为覆盖更新（显示名与权限可变），
+     * 但 {@code created_at} 不变——「什么时候开始能审核」是审计事实。
+     *
+     * <p>⚠️ 显示名的隐私边界：**不得含真实姓名**（DEC-6 / PIPL），
+     * 应写「教研组-王老师」这类内部标识。
+     *
+     * @param tenantId 租户 ID
+     * @param request  名录条目
+     * @return 登记后的条目
+     */
+    @PostMapping("/reviewers")
+    public ManagementDtos.ReviewerItem upsertReviewer(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
+            @Valid @RequestBody ManagementDtos.UpsertReviewerRequest request) {
+        RagManagementContext ctx = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
+        boolean canReview = request.canReview() == null || request.canReview();
+        boolean canCoSign = request.canCoSign() != null && request.canCoSign();
+        boolean enabled = request.enabled() == null || request.enabled();
+        // ⚠️ 「能复核但不能审核」是矛盾状态，DDL 有 CHECK 会拒；
+        //    这里提前拦下并给人话，而不是让用户看到一条约束名。
+        if (canCoSign && !canReview) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "可做复核的人必须也能审核（复核是多人签署的第二签）");
+        }
+        ReviewerRosterEntry saved = managementPort.upsertReviewer(ctx,
+                new ReviewerRosterEntry(request.principalId().trim(),
+                        request.displayName().trim(), canReview, canCoSign, enabled));
+        return new ManagementDtos.ReviewerItem(
+                saved.principalId(), saved.displayName(),
+                saved.canReview(), saved.canCoSign(), saved.enabled());
+    }
+
+    /**
+     * 重处理载体（交互文档 §4.3「追加重传」的三种模式）。
+     *
+     * <p><b>为什么必须区分模式</b>：三种重处理的代价与影响面差别极大——
+     * 只补向量是分钟级且不中断检索；重新切分会短暂让语料不可检索；
+     * 换文件会让旧文件作废。用一个含糊的「重新处理」按钮把它们混在一起，
+     * 等于让人在不知道后果的情况下做不可逆决定。
+     *
+     * <p><b>⚠️ 三种模式的落地现状（诚实边界，不装作用）</b>：
+     * <ol>
+     *   <li>{@code REINDEX_MISSING}：<b>已支持</b>，转调既有 {@code POST /reindex}；</li>
+     *   <li>{@code RESPLIT}：<b>暂不支持</b>——切分参数当前固化在
+     *       {@code IngestionPipeline} 内且编排器无「重跑已有载体」入口，
+     *       贸然暴露会让按钮点了没反应。返回 501 并说明原因；</li>
+     *   <li>{@code REPLACE_FILE}：<b>暂不支持</b>——需要「作废旧载体 + 建新载体」
+     *       的事务化流程，属独立议题；返回 501。</li>
+     * </ol>
+     *
+     * <p>⚠️ 对 2/3 返回 501 而不是静默成功，是刻意的：
+     * 静默成功会让人以为「重新切分过了」，而实际什么都没发生——
+     * 这比明确说「暂不支持」危险得多。
+     *
+     * @param tenantId 租户 ID
+     * @param sourceId 来源 ID
+     * @param request  模式声明
+     * @return 受理结果（含人话说明）
+     */
+    @PostMapping("/sources/{sourceId}/reprocess")
+    public ManagementDtos.ReprocessResponse reprocessSource(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.TICKET_SCOPE_ATTRIBUTE, required = false) String ticketScope,
+            @PathVariable("sourceId") String sourceId,
+            @Valid @RequestBody ManagementDtos.ReprocessRequest request) {
+        RagManagementContext context = requireWriteContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
+        String mode = request.mode().trim().toUpperCase(java.util.Locale.ROOT);
+
+        switch (mode) {
+            case "REINDEX_MISSING" -> {
+                // ⚠️ 复用既有 reindex：它只补缺失向量（text_jieba='' 或无向量行），
+                //    不动已切好的片段，因此不会让语料短暂不可检索。
+                CorpusIndexingPort.ReindexOutcome outcome = context.scope() == RagCorpusScope.PLATFORM
+                        ? indexingPort.reindexGlobalCorpus(MAX_REINDEX_LIMIT)
+                        : indexingPort.reindex(context.requireTenant().tenantId(), MAX_REINDEX_LIMIT);
+                return new ManagementDtos.ReprocessResponse(
+                        mode, true,
+                        "已补全缺失向量：扫描 " + outcome.scannedChunks()
+                                + " 条、补齐 " + outcome.indexedChunks() + " 条。检索不受影响。",
+                        null);
+            }
+            case "RESPLIT" -> {
+                // ⚠️ 明确拒绝并说明原因，绝不静默成功
+                throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                        "重新切分暂不可用：切分参数当前固化在处理流水线内，"
+                                + "且不支持对已有载体重跑。请等待该能力上线后再使用；"
+                                + "如需修正个别片段，请通过抽检标注反馈给研发。");
+            }
+            case "REPLACE_FILE" -> {
+                throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED,
+                        "换文件重新处理暂不可用：需要事务化的「作废旧载体 + 建新载体」流程。"
+                                + "当前请新建一条来源并上传新文件（旧来源按需撤回）。");
+            }
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "未知的重处理模式：" + request.mode()
+                            + "（只允许 REINDEX_MISSING / RESPLIT / REPLACE_FILE）");
+        }
+    }
+
+    /**
+     * 语料生命周期清单（交互文档 §4.7「检索准入与撤回」）。
+     *
+     * <p><b>它解决什么</b>：当前「过期」只体现为列表里一个标签，
+     * <b>没有任何提前提醒</b>——语料到期当天才被发现，而那时学生已经搜不到了。
+     * 本端点把「还有几天到期、哪些已过期」算好并前置呈现（已过期排最前）。
+     *
+     * <p><b>⚠️ 过期由服务端判定</b>（{@code LifecycleRules}）而非前端计算：
+     * 过期与否决定学生能否搜到（检索侧 {@code admissiblePredicate} 同一口径），
+     * 前端另算一遍会在边界日/时区/时钟偏差上与检索侧漂移。
+     *
+     * <p><b>⚠️ 只读</b>：本端点不改变任何校验状态。
+     *
+     * @param tenantId 租户 ID
+     * @param limit    条数上限（默认 200，封顶 500）
+     * @return 生命周期列表（已过期在前）
+     */
+    @GetMapping("/lifecycle")
+    public List<ManagementDtos.LifecycleItem> listLifecycle(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestParam(value = "limit", required = false, defaultValue = "200") int limit) {
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        int capped = Math.max(1, Math.min(limit, 500));
+        return managementPort.listLifecycle(ctx, capped).stream()
+                .map(e -> new ManagementDtos.LifecycleItem(
+                        e.sourceId(), e.title(), e.verificationStatus(),
+                        e.verifiedAt(), e.validDays(), e.expiresAt(),
+                        e.daysUntilExpiry(), e.stale(), e.expiringSoon(),
+                        e.admissible()))
+                .toList();
+    }
+
+    /**
+     * 审核待办清单（交互文档 §4.6「审核收件箱」）。
+     *
+     * <p><b>它解决什么</b>：审核员当前要「搜索 → 找人 → 读上下文」才知道今天该审哪几本。
+     * 本端点把「下一步做什么、为什么现在不能做」一次性算好，
+     * 审核员打开就是一份可执行清单。
+     *
+     * <p><b>⚠️ 下一步由服务端判定</b>（{@code ReviewQueueRules}）而非前端推算：
+     * 前端自行判断会与状态机守卫 / 抽检守卫口径漂移，
+     * 产出「点下去必然 409」的按钮。
+     *
+     * <p><b>⚠️ 只返回仍需人动手的来源</b>：已完成 / 已撤回不进队列——
+     * 混进终态会让待办数永远清不零，人会逐渐不再看它。
+     *
+     * <p><b>⚠️ 不猜角色</b>：本端点只判「审核员 ≠ 采集人」这一条已知硬约束
+     * （采集人取自审计记录）。角色级权限由提交时的守卫校验，此处不做前端臆测。
+     *
+     * @param tenantId 租户 ID
+     * @param limit    条数上限（默认 100，封顶 200）
+     * @return 待办列表（按创建时间倒序）
+     */
+    @GetMapping("/review-queue")
+    public List<ManagementDtos.ReviewQueueItem> listReviewQueue(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestAttribute(value = RagCallerAttributes.PRINCIPAL_ATTRIBUTE, required = false) String principalAttr,
+            @RequestParam(value = "limit", required = false, defaultValue = "100") int limit) {
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        // ⚠️ 上限 200：待办是给人看的清单，不是分页表格
+        int capped = Math.max(1, Math.min(limit, 200));
+        return managementPort.listReviewQueue(ctx, capped, principalAttr).stream()
+                .map(e -> new ManagementDtos.ReviewQueueItem(
+                        e.sourceId(), e.title(), e.publisher(),
+                        e.verificationStatus(), e.metadataConfirmed(), e.inspectionStatus(),
+                        e.documentCount(), e.chunkCount(), e.answerChunkCount(),
+                        e.registeredBy(),
+                        e.stage().name(), e.stage().description(),
+                        e.canAct(), e.cantActReason(), e.createdAt()))
+                .toList();
+    }
+
+    /**
+     * 列出抽检疑点（交互文档 §4.6「看红灯」）。
+     *
+     * <p><b>它解决什么</b>：抽检台当前要求人把一册的上千条片段逐条裁决
+     * （实测 1463 条、翻 159 页），而抽检真正要找的是「哪几条可能出错了」。
+     * 本端点由系统按已知高风险模式预筛可疑片段并**附上原因**，
+     * 人只需确认这十几条。
+     *
+     * <p><b>⚠️ 预筛不替代抽检</b>：返回结果是「建议先看的」，不参与
+     * {@code InspectionRules.evaluate} 的结论聚合。抽检台必须同时提供
+     * 查看全部片段的入口，否则会造成「没被标出=没问题」的错觉。
+     *
+     * <p><b>⚠️ 只读</b>：本端点不写任何数据，也不改变抽检状态。
+     *
+     * @param tenantId 租户 ID
+     * @param sourceId 来源 ID
+     * @param limit    疑点条数上限（按严重度排序后截断）
+     * @return 疑点列表（HIGH 在前）
+     */
+    @GetMapping("/sources/{sourceId}/inspection/suspects")
+    public List<ManagementDtos.InspectionSuspectResponse> listInspectionSuspects(
+            @RequestHeader(value = TENANT_HEADER, required = false) String tenantId,
+            @RequestHeader(value = MIN_TRUST_TIER_HEADER, required = false) String minTrustTierHeader,
+            @RequestHeader(value = SCOPE_HEADER, required = false) String scopeHeader,
+            @PathVariable("sourceId") String sourceId,
+            @RequestAttribute(value = RagCallerAttributes.DOMAIN_ATTRIBUTE, required = false) String callerDomain,
+            @RequestParam(value = "limit", required = false, defaultValue = "50") int limit) {
+        RagManagementContext ctx = requireManagementContext(
+                tenantId, minTrustTierHeader, scopeHeader, callerDomain);
+        if (inspectionPort == null) {
+            // ⚠️ 端口未装配时返回空列表而非 500：抽检台仍可用「查看全部」路径工作。
+            log.warn("[RAG] 抽检端口未装配，疑点预筛返回空列表");
+            return List.of();
+        }
+        // ⚠️ 上限 200：预筛是给人看的清单，不是分页表格
+        int capped = Math.max(1, Math.min(limit, 200));
+        return inspectionPort.listSuspects(ctx, sourceId, capped).stream()
+                .map(s -> new ManagementDtos.InspectionSuspectResponse(
+                        s.chunkId(), s.documentId(), s.role(), s.text(),
+                        s.pageNumber(), s.sectionPath(), s.exerciseNo(),
+                        s.reason().name(), s.reason().description(),
+                        s.severity().name()))
                 .toList();
     }
 

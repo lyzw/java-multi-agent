@@ -28,7 +28,7 @@
  */
 
 import { request, ApiError, redirectLogin } from '@/api/client'
-import { clearSession } from '@/auth/tokenStorage'
+import { clearSession, loadSession } from '@/auth/tokenStorage'
 import { ticketAuthHeader } from '@/api/ragTicket'
 import type { RagGovernanceTicket } from '@/api/ragTicket'
 
@@ -64,6 +64,15 @@ import type {
   RagInspectionRecord,
   RagInspectionVerdictResult,
   RagInspectionSubmitRequest,
+  RagIngestJob,
+  RagInspectionSuspect,
+  RagLifecycleItem,
+  RagReviewer,
+  RagReprocessMode,
+  RagReprocessResult,
+  RagReviewQueueItem,
+  RagMetadataConfirmationRequest,
+  RagMetadataConfirmationResult,
 } from '@/api/ragTypes'
 
 /** 超时归一化的状态码哨兵（区别于网络层 status 0）。 */
@@ -191,6 +200,13 @@ function toQuery(params: Record<string, string | number | boolean | null | undef
  *    管理员不知道要重新登录。唯一例外是平台档写请求：Authorization 被
  *    <b>治理票据</b>覆盖，401 = 票据失效而非会话失效，原样抛出交调用方。
  *
+ * <p>⚠️ <b>补充判据（2026-11-03）</b>：把 401 判为「登录过期」还要求**本地确有会话**
+ *    （`loadSession() !== null`）。没有会话的 401 是配置/验签问题，
+ *    必须让 {@link ragErrorMessage} 的 401 分支把它说成「令牌没被 RAG 接受」，
+ *    否则接口直接报「登录已过期」，而 `ragErrorMessage` 里那条
+ *    「核对 PLATFORM_JWT_PRIVATE_KEY 与 RAG_PLATFORM_JWT_PUBLIC_KEY 是否同源」
+ *    的**可执行**指引永远走不到（`tests/ragErrorMessage.test.ts` 正是守这一点）。
+ *
  * @param headers 本次请求的额外头（缺省 = 只带作用域头；写请求传 {@link writeHeaders}）
  * @param usingTicket 本请求的 Authorization 是否为治理票据（平台档写请求）
  */
@@ -228,7 +244,13 @@ async function ragRequest<T>(
     if (
       err instanceof ApiError &&
       err.status === 401 &&
-      !usingTicket
+      !usingTicket &&
+      // ⚠️ **只有「确实存在本地会话」时 401 才是「登录已过期」**。
+      //    没有会话却收到 401，说明请求根本没带上有资格被验签的令牌，
+      //    它暴露的是**配置问题**（两端 JWT 密钥不同源 / 令牌受众不符），
+      //    不是「你该重新登录」。此前无条件判为过期，把这两类原因混成一句
+      //    「登录已过期」，管理员照此反复重新登录也修不好，排查方向被彻底带偏。
+      loadSession() !== null
     ) {
       // 会话令牌已失效：清会话 + 跳登录（带 reason=expired，登录后可回跳）。
       clearSession()
@@ -672,6 +694,222 @@ export function retrieveRagChunks(
   return ragRequest<RagRetrievalResponse>(
     '/v1/retrieval',
     { method: 'POST', body: JSON.stringify(payload) },
+    target,
+    timeoutMs,
+  )
+}
+
+/* ── 摄取任务（Ingest Job · 进度反馈）────────────────────── */
+
+/**
+ * GET /api/v1/management/ingest-jobs —— 列出摄取任务（按来源或本租户最近）。
+ *
+ * <p>⚠️ **这是「上传后看不到进度」缺口的修复入口**：上传接口早就返回 `jobId`，
+ *    但 admin-console 此前没有任何函数去读它。没有本函数，
+ *    用户上传一本 148 页教材后（约 450 秒）无法判断「在跑还是挂了」。
+ *
+ * @param sourceId 指定来源（省略 = 本租户最近的任务）
+ * @param limit    条数上限（后端封顶 200）
+ */
+export function listRagIngestJobs(
+  target: RagTarget,
+  opts: { sourceId?: string; limit?: number } = {},
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagIngestJob[]> {
+  return ragRequest<RagIngestJob[]>(
+    `/v1/management/ingest-jobs${toQuery({
+      sourceId: opts.sourceId,
+      limit: opts.limit ?? 50,
+    })}`,
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/** GET /api/v1/management/ingest-jobs/{jobId} —— 单个任务详情（轮询用）。 */
+export function getRagIngestJob(
+  target: RagTarget,
+  jobId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagIngestJob> {
+  return ragRequest<RagIngestJob>(
+    `/v1/management/ingest-jobs/${encodeURIComponent(jobId)}`,
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * POST /api/v1/management/ingest-jobs/{jobId}/retry —— 人工重试。
+ *
+ * <p>⚠️ 重试 = **新建一行 job**（`attempt`+1），旧行永久留痕；
+ *    返回的是**新任务**，不是原任务的原地重置。
+ *    写请求：平台档会带治理票据。
+ */
+export function retryRagIngestJob(
+  target: RagTarget,
+  jobId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagIngestJob> {
+  return ragWriteRequest<RagIngestJob>(
+    `/v1/management/ingest-jobs/${encodeURIComponent(jobId)}/retry`,
+    { method: 'POST' },
+    target,
+    timeoutMs,
+  )
+}
+
+/* ── 元数据确认（交互文档 §4.3 产出确认）────────────────── */
+
+/**
+ * POST /api/v1/management/sources/{sourceId}/metadata-confirmation —— 确认来源元数据。
+ *
+ * <p>⚠️ **这是「确认」不是「修改」**：本端点只记录「谁在何时确认了什么」，
+ *    不改写来源的书名等字段。确认后来源方可进入送审流程。
+ *
+ * <p>⚠️ 幂等：重复确认成功，且**不改写首次确认人**。
+ *
+ * @param payload 确认时的元数据快照（书名/出版社必填）
+ */
+export function confirmRagSourceMetadata(
+  target: RagTarget,
+  sourceId: string,
+  payload: RagMetadataConfirmationRequest,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagMetadataConfirmationResult> {
+  return ragWriteRequest<RagMetadataConfirmationResult>(
+    `/v1/management/sources/${encodeURIComponent(sourceId)}/metadata-confirmation`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * GET /api/v1/management/sources/{sourceId}/inspection/suspects —— 列出抽检疑点。
+ *
+ * <p>⚠️ **只读**：不写数据、不改抽检状态。
+ * <p>⚠️ 返回的是「建议先看的」，不参与抽检结论聚合——
+ * 漏掉的片段仍需通过「查看全部」的入口人工核对。
+ */
+export function listRagInspectionSuspects(
+  target: RagTarget,
+  sourceId: string,
+  limit = 50,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagInspectionSuspect[]> {
+  return ragRequest<RagInspectionSuspect[]>(
+    `/v1/management/sources/${encodeURIComponent(sourceId)}/inspection/suspects${toQuery({ limit })}`,
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * GET /api/v1/management/review-queue —— 审核待办清单。
+ *
+ * <p>⚠️ 只返回仍需人动手的来源（已完成/已撤回不进队列）。
+ * <p>⚠️ `stage` 由服务端判定，前端**不得**自行推算下一步。
+ */
+export function listRagReviewQueue(
+  target: RagTarget,
+  limit = 100,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagReviewQueueItem[]> {
+  return ragRequest<RagReviewQueueItem[]>(
+    `/v1/management/review-queue${toQuery({ limit })}`,
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * GET /api/v1/management/lifecycle —— 语料生命周期清单（已过期在前）。
+ *
+ * <p>⚠️ 过期由服务端判定，前端不自行计算 verifiedAt + validDays。
+ */
+export function listRagLifecycle(
+  target: RagTarget,
+  limit = 200,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagLifecycleItem[]> {
+  return ragRequest<RagLifecycleItem[]>(
+    `/v1/management/lifecycle${toQuery({ limit })}`,
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * POST /api/v1/management/sources/{sourceId}/reprocess —— 重处理（三种模式）。
+ *
+ * <p>⚠️ 模式必须显式声明：三种重处理的代价与影响面差别极大，
+ * 用一个含糊的「重新处理」按钮把它们混在一起，
+ * 等于让人在不知道后果的情况下做不可逆决定。
+ *
+ * <p>⚠️ 后端对暂不支持的模式返回 **501**（而非静默成功）：
+ * 静默成功会让人以为「重新切分过了」，而实际什么都没发生。
+ */
+export function reprocessRagSource(
+  target: RagTarget,
+  sourceId: string,
+  mode: RagReprocessMode,
+  timeoutMs: number = DEFAULT_RAG_REINDEX_TIMEOUT_MS,
+): Promise<RagReprocessResult> {
+  return ragWriteRequest<RagReprocessResult>(
+    `/v1/management/sources/${encodeURIComponent(sourceId)}/reprocess`,
+    { method: 'POST', body: JSON.stringify({ mode }) },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * GET /api/v1/management/sources/{sourceId}/co-signers —— 可做复核的审核员。
+ *
+ * <p>⚠️ **服务端已排除本人与采集人**：后端 SoD 会拒绝这两类人做复核，
+ * 下拉里留着他们等于让用户选一个注定 409 的选项。
+ *
+ * <p>⚠️ 只返回 {@code canCoSign=true} 且启用的条目：
+ * 可执行审核 ≠ 可做复核（复核是双人签署的第二签）。
+ */
+export function listRagCoSigners(
+  target: RagTarget,
+  sourceId: string,
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagReviewer[]> {
+  return ragRequest<RagReviewer[]>(
+    `/v1/management/sources/${encodeURIComponent(sourceId)}/co-signers`,
+    { method: 'GET' },
+    target,
+    timeoutMs,
+  )
+}
+
+/**
+ * POST /api/v1/management/reviewers —— 登记/更新审核员（维护名录）。
+ *
+ * <p>⚠️ 幂等：同一主体重复登记为覆盖更新，{@code created_at} 不变。
+ */
+export function upsertRagReviewer(
+  target: RagTarget,
+  entry: {
+    principalId: string
+    displayName: string
+    canReview?: boolean
+    canCoSign?: boolean
+    enabled?: boolean
+  },
+  timeoutMs: number = DEFAULT_RAG_MGMT_TIMEOUT_MS,
+): Promise<RagReviewer> {
+  return ragWriteRequest<RagReviewer>(
+    '/v1/management/reviewers',
+    { method: 'POST', body: JSON.stringify(entry) },
     target,
     timeoutMs,
   )

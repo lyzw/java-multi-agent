@@ -69,11 +69,6 @@ export function RagIngestJobList({ tenantId, sourceId }: RagIngestJobListProps) 
   const [error, setError] = useState<string | null>(null)
   const pollsRef = useRef(0)
 
-  const hasInFlight = useMemo(
-    () => jobs.some((j) => IN_FLIGHT.has(j.status)),
-    [jobs],
-  )
-
   const refresh = useCallback(async () => {
     if (!tenantId) {
       return
@@ -91,29 +86,53 @@ export function RagIngestJobList({ tenantId, sourceId }: RagIngestJobListProps) 
     }
   }, [tenantId, sourceId, jobs.length])
 
-  // 首次加载 + 有进行中任务时轮询
+  // 首次加载
   useEffect(() => {
     void refresh()
   }, [tenantId, sourceId])
 
+  /**
+   * 有进行中任务时轮询**进行中的那几条**。
+   *
+   * ⚠️ 依赖里放的是「进行中的 jobId 集合」而不是 `jobs` 数组本身：
+   *    此前依赖 `jobs`，每次 `setJobs` 都会清掉并重建 `setInterval`——
+   *    定时器被反复重置，实际周期漂移，且在高频更新下几乎不会触发。
+   *    用稳定的 id 串做依赖，定时器只在「进行中的集合」真的变化时重建。
+   *
+   * ⚠️ 只拉详情、不拉列表：列表接口会因新任务插入而重排，
+   *    而这里只需要「这几条变了没有」，逐条取更稳定（也不会引起整表跳动）。
+   */
+  const activeJobIds = useMemo(
+    () =>
+      jobs
+        .filter((j) => IN_FLIGHT.has(j.status))
+        .map((j) => j.jobId)
+        .sort()
+        .join(','),
+    [jobs],
+  )
+
   useEffect(() => {
-    if (!hasInFlight || !tenantId) {
+    if (!tenantId || activeJobIds === '') {
       pollsRef.current = 0
       return
     }
+    const ids = activeJobIds.split(',')
     const timer = window.setInterval(() => {
       if (pollsRef.current >= MAX_POLLS) {
         window.clearInterval(timer)
         return
       }
+      // ⚠️ 页签隐藏时不打后端（与 useRagIngestJobs 同一纪律）
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return
+      }
       pollsRef.current += 1
-      void getActiveJobs(tenantId, jobs)
+      void getJobsByIds(tenantId, ids)
         .then((updated) => {
           // ⚠️ 只更新进行中的那几条，避免整表重排导致视觉跳动。
           if (updated.size > 0) {
-            setJobs((prev) =>
-              prev.map((j) => updated.get(j.jobId) ?? j),
-            )
+            setJobs((prev) => prev.map((j) => updated.get(j.jobId) ?? j))
           }
         })
         .catch(() => {
@@ -121,7 +140,7 @@ export function RagIngestJobList({ tenantId, sourceId }: RagIngestJobListProps) 
         })
     }, POLL_INTERVAL_MS)
     return () => window.clearInterval(timer)
-  }, [hasInFlight, tenantId, jobs])
+  }, [activeJobIds, tenantId])
 
   const onRetry = useCallback(
     async (job: RagIngestJob) => {
@@ -207,16 +226,15 @@ export function RagIngestJobList({ tenantId, sourceId }: RagIngestJobListProps) 
  * <p>⚠️ 刻意不用列表接口轮询：列表接口会重排（新任务插入），
  * 而这里只需要「这几条变了没有」，用详情接口逐条取更稳定。
  */
-async function getActiveJobs(
+async function getJobsByIds(
   tenantId: string,
-  jobs: RagIngestJob[],
+  jobIds: readonly string[],
 ): Promise<Map<string, RagIngestJob>> {
-  const active = jobs.filter((j) => IN_FLIGHT.has(j.status))
   const result = new Map<string, RagIngestJob>()
   await Promise.all(
-    active.map(async (job) => {
+    jobIds.map(async (jobId) => {
       try {
-        result.set(job.jobId, await getRagIngestJob(tenantId, job.jobId))
+        result.set(jobId, await getRagIngestJob(tenantId, jobId))
       } catch {
         /* 单条失败不影响其它 */
       }

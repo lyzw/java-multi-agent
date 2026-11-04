@@ -33,6 +33,11 @@ const listRagChunksMock = vi.hoisted(() => vi.fn())
 const getRagDictionariesMock = vi.hoisted(() => vi.fn())
 const upsertRagDictionaryEntryMock = vi.hoisted(() => vi.fn())
 const deleteRagDictionaryEntryMock = vi.hoisted(() => vi.fn())
+/**
+ * ⚠️ 摄取任务轮询也走 `@/api/client`：不 mock 会让页面在测试里发起**真实网络请求**
+ *    （`...actual` 保留了真实实现），既慢又不稳定。默认返回空任务列表。
+ */
+const listRagIngestJobsMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/client', async (importActual) => {
   const actual = await importActual<typeof import('@/api/client')>()
@@ -47,6 +52,7 @@ vi.mock('@/api/client', async (importActual) => {
     getRagDictionaries: getRagDictionariesMock,
     upsertRagDictionaryEntry: upsertRagDictionaryEntryMock,
     deleteRagDictionaryEntry: deleteRagDictionaryEntryMock,
+    listRagIngestJobs: listRagIngestJobsMock,
   }
 })
 
@@ -151,7 +157,10 @@ beforeEach(() => {
   getRagDictionariesMock.mockReset()
   upsertRagDictionaryEntryMock.mockReset()
   deleteRagDictionaryEntryMock.mockReset()
+  listRagIngestJobsMock.mockReset()
 
+  // ⚠️ 默认「暂无摄取任务」：本文件聚焦审核线，任务线由专用用例覆盖
+  listRagIngestJobsMock.mockResolvedValue([])
   listRagSourcesMock.mockResolvedValue([sampleSource()])
   getRagStatisticsMock.mockResolvedValue(sampleStats())
   listRagDocumentsMock.mockResolvedValue([])
@@ -781,5 +790,91 @@ describe('RAG 语料管理页：界面文案纪律', () => {
     await screen.findByText('缺向量')
     expect(screen.getByText(/召不回/)).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('**')
+  })
+})
+
+/**
+ * 来源行的**处理进度**（交互文档 §4.5「状态反馈」）。
+ *
+ * ⚠️ 守的是「上传后用户看得见处理到哪一步」：
+ *    · 进行中 → 显示阶段 + 百分比；
+ *    · 已完成 → 「处理完成」；
+ *    · 无任务 → 「未处理」（≠ 失败，仅元数据登记）；
+ *    · 撤回取消 → 「已取消」且**不**表现为失败。
+ *    这四种此前**一个都看不到**：来源行根本没有处理状态。
+ */
+describe('来源行展示摄取进度', () => {
+  function jobPayload(
+    status: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      jobId: 'job-1',
+      tenantId: TENANT,
+      sourceId: 's-1',
+      status,
+      stage: null,
+      attempt: 0,
+      createdBy: null,
+      parserVersion: null,
+      embedModel: null,
+      chunkCount: null,
+      errorDetail: null,
+      startedAt: null,
+      finishedAt: null,
+      createdAt: '2026-11-03T00:00:00Z',
+      sourceRevokedCancel: false,
+      ...overrides,
+    }
+  }
+
+  it('✅ 进行中显示阶段与百分比', async () => {
+    listRagIngestJobsMock.mockResolvedValue([jobPayload('EMBEDDING', { stage: 'EMBEDDING 62' })])
+    const user = userEvent.setup()
+    renderPage()
+    await query(user)
+
+    expect(await screen.findByText('向量化中 62%')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar')).toBeInTheDocument()
+  })
+
+  it('✅ 终态显示「处理完成」，且不再画进度条', async () => {
+    listRagIngestJobsMock.mockResolvedValue([jobPayload('SUCCEEDED')])
+    const user = userEvent.setup()
+    renderPage()
+    await query(user)
+
+    expect(await screen.findByText('处理完成')).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).toBeNull()
+  })
+
+  it('✅ 无任务显示「未处理」（不是失败）', async () => {
+    listRagIngestJobsMock.mockResolvedValue([])
+    const user = userEvent.setup()
+    renderPage()
+    await query(user)
+
+    expect(await screen.findByText('未处理')).toBeInTheDocument()
+  })
+
+  it('✅ 撤回取消显示「已取消」，不显示「处理失败」', async () => {
+    listRagIngestJobsMock.mockResolvedValue([
+      jobPayload('REJECTED', {
+        sourceRevokedCancel: true,
+        errorDetail: 'SOURCE_REVOKED: 来源已撤回',
+      }),
+    ])
+    const user = userEvent.setup()
+    renderPage()
+    await query(user)
+
+    // ⚠️ 「已取消」会出现两次：来源行的 chip + 任务列表的单元格。
+    //    两者都是正确的；这里断言的是**来源行 chip** 的语义。
+    await waitFor(() => {
+      const chips = document.querySelectorAll('.rag-mgmt__tags .chip')
+      const texts = Array.from(chips).map((el) => el.textContent)
+      expect(texts).toContain('已取消')
+    })
+    expect(screen.queryByText('处理失败')).toBeNull()
   })
 })

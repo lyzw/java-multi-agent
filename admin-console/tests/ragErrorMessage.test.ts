@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { listRagSources, ragErrorMessage, ApiError } from '@/api/ragClient'
 import { PLATFORM_TARGET } from '@/api/ragClient'
+import { loadSession, storeSession } from '@/auth/tokenStorage'
 
 /**
  * RAG 通道错误的文案分流（评测 P0-2）。
@@ -46,6 +47,27 @@ describe('RAG 通道错误的文案分流', () => {
     expect(message).toContain('RAG_PLATFORM_JWT_PUBLIC_KEY')
     // ⚠️ 旧的通用归因对 RAG 是错的：RAG 与平台之间**不存在**租户身份域边界
     expect(message).not.toContain('身份域隔离')
+  })
+
+  it('✅ 本地**有会话**时 401 才是「登录已过期」，并清会话', async () => {
+    // ⚠️ 与上一条互为一对：同是 401，差别只在「本地有没有会话」。
+    //    有会话 → 令牌到期/失效 → 说「登录已过期」并清会话；
+    //    无会话 → 配置/验签问题 → 保留「令牌没被接受」的归因（上一条）。
+    //    把两者混成一句话，是 2026-11-03 之前真实的回归。
+    storeSession({
+      accessToken: 'stale-token',
+      expiresAt: Date.now() + 60_000,
+      tenantId: null,
+      principalId: null,
+      roles: [],
+    })
+    stubFetchStatus(401)
+    const err = await listRagSources(PLATFORM_TARGET).catch((e: unknown) => e)
+
+    expect((err as ApiError).status).toBe(401)
+    expect((err as ApiError).message).toContain('登录已过期')
+    // 会话必须被清掉，否则用户重新登录后仍带着旧令牌
+    expect(loadSession()).toBeNull()
   })
 
   it('✅ 5xx 说清「服务端故障、控制台侧修不了」，并指向 RAG 服务日志', async () => {

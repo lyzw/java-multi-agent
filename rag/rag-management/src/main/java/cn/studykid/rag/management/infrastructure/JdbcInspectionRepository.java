@@ -1,5 +1,7 @@
 package cn.studykid.rag.management.infrastructure;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import org.jspecify.annotations.NonNull;
@@ -10,6 +12,8 @@ import cn.studykid.rag.core.scope.RagCorpusScope;
 import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
 import cn.studykid.rag.management.core.InspectionGuard;
 import cn.studykid.rag.management.core.InspectionRecord;
+import cn.studykid.rag.management.core.InspectionSuspicion;
+import cn.studykid.rag.management.core.SuspicionRules;
 import cn.studykid.rag.management.core.InspectionRules;
 import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.ports.InspectionPort;
@@ -160,6 +164,51 @@ public class JdbcInspectionRepository implements InspectionPort {
                             InspectionRecord.Verdict.valueOf(rs.getString(9)),
                             rs.getTimestamp(10).toInstant().toString()),
                     tenantId, sourceId, capped);
+        });
+    }
+
+    @Override
+    public List<InspectionSuspicion> listSuspects(@NonNull RagManagementContext context,
+                                                  @NonNull String sourceId,
+                                                  int limit) {
+        String tenantId = context.queryTenantId();
+        // ⚠️ 多取一些再在内存里按严重度排序截断：
+        //    SQL 端无法表达「第六类判据」，而严重度由判定规则决定。
+        //    上限 3000 是为了兜住一册较大教材的片段数，同时防止病态数据把内存打满。
+        int scanCap = 3000;
+        return transactionTemplate.execute(tx -> {
+            RagSessionScope.apply(jdbcTemplate, context);
+            List<SuspicionRules.ChunkFacts> facts = jdbcTemplate.query("""
+                            SELECT c.chunk_id::text, c.document_id::text, c.role,
+                                   c.text, c.page_number, c.section_path, c.exercise_no
+                              FROM rag_chunk c
+                              JOIN rag_document d
+                                ON d.document_id = c.document_id AND d.tenant_id = c.tenant_id
+                             WHERE c.tenant_id = ?::uuid AND d.source_id = ?::uuid
+                             ORDER BY c.document_id, c.page_number NULLS LAST, c.char_start
+                             LIMIT ?
+                            """,
+                    (rs, i) -> new SuspicionRules.ChunkFacts(
+                            rs.getString(1), rs.getString(2), rs.getString(3),
+                            rs.getString(4),
+                            (Integer) rs.getObject(5),
+                            rs.getString(6), rs.getString(7)),
+                    tenantId, sourceId, scanCap);
+
+            List<InspectionSuspicion> findings = new ArrayList<>();
+            for (SuspicionRules.ChunkFacts f : facts) {
+                findings.addAll(SuspicionRules.inspect(f));
+            }
+            // ⚠️ 排序后截断：HIGH（可能泄题）必须排在最前，
+            //    否则人翻到第 10 条就累了，最危险的那条还没出现。
+            findings.sort(Comparator
+                    .comparingInt((InspectionSuspicion s) -> s.severity().order())
+                    .thenComparing(InspectionSuspicion::documentId)
+                    .thenComparing(s -> s.pageNumber() == null ? Integer.MAX_VALUE : s.pageNumber()));
+            int capped = Math.max(1, limit);
+            return findings.size() <= capped
+                    ? findings
+                    : new ArrayList<>(findings.subList(0, capped));
         });
     }
 

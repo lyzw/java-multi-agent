@@ -41,6 +41,7 @@ import {
 } from '@/api/ragClient'
 import type { RagCorpusScope, RagTarget } from '@/api/ragClient'
 import type {
+  RagIngestJob,
   RagDailyImportCount,
   RagDailySearchCount,
   RagRegisterSourceRequest,
@@ -49,9 +50,13 @@ import type {
   RagVerificationRequest,
 } from '@/api/ragTypes'
 import { useRagManagement } from '@/features/rag/useRagManagement'
+import { useRagIngestJobs } from '@/features/rag/useRagIngestJobs'
 import { useRagGovernanceTicket } from '@/features/rag/useRagGovernanceTicket'
 import { RagSourceTable, RagRegisterForm } from './RagSourceTable'
 import { RagSourceDrawer } from './RagSourceDrawer'
+import { RagMetadataConfirmDrawer } from './RagMetadataConfirmDrawer'
+import { RagReviewInbox } from './RagReviewInbox'
+import { RagLifecyclePanel } from './RagLifecyclePanel'
 import { RagStatisticsPanel } from './RagStatisticsPanel'
 import { RagMaintenancePanel } from './RagMaintenancePanel'
 import { currentPrincipalId } from './ragUi'
@@ -67,6 +72,8 @@ export function RagManagementPage(): JSX.Element {
   const [scope, setScope] = useState<RagCorpusScope>('TENANT')
   const [selected, setSelected] = useState<RagSource | null>(null)
   const [registerOpen, setRegisterOpen] = useState(false)
+  /** 元数据确认抽屉的目标来源（null = 关闭）。 */
+  const [confirmTarget, setConfirmTarget] = useState<RagSource | null>(null)
   /**
    * 维护面板的 remount key。
    *
@@ -116,6 +123,25 @@ export function RagManagementPage(): JSX.Element {
    *    把他刚设好的「只看未通过 / 关键词」冲掉——票据是授权态，不是查询条件。
    */
   const readKey = `${scope}:${tenantId}`
+
+  /**
+   * 摄取任务轮询（「处理状态」列的数据源）。
+   *
+   * ⚠️ 只在**页面可见 + 确有进行中任务**时轮询，见 `useRagIngestJobs` 的纪律。
+   *    这里读的是「本租户最近 100 条任务」，按 sourceId 折叠成每行的最新一条：
+   *    一个来源可能失败重试多次，列表要看到**最近一次**的结论，
+   *    历史尝试留在抽屉的载体详情里（旧行永久留痕）。
+   */
+  const ingest = useRagIngestJobs(target, { limit: 100 })
+
+  /** sourceId → 最近一次任务（按 createdAt 倒序取首条；后端已按时间倒序返回）。 */
+  const jobsBySource = useMemo(() => {
+    const map = new Map<string, RagIngestJob>()
+    for (const job of ingest.state.jobs) {
+      if (!map.has(job.sourceId)) map.set(job.sourceId, job)
+    }
+    return map
+  }, [ingest.state.jobs])
 
   const {
     sources,
@@ -332,10 +358,23 @@ export function RagManagementPage(): JSX.Element {
                 <RagSourceTable
                   state={sources}
                   target={target}
+                  jobsBySource={jobsBySource}
                   onQuery={onQuery}
                   onRefresh={retrySources}
                   onSelect={setSelected}
                   onRegister={() => setRegisterOpen(true)}
+                  onConfirmMetadata={(row) => setConfirmTarget(row)}
+                />
+                {/*
+                  ⚠️ 元数据确认抽屉（交互文档 §4.3）：
+                      文件上传后书名/出版社/ISBN 由系统**推断**得出，
+                      须由人核对确认后才能送审（V1.0.2 §5 R1）。
+                */}
+                <RagMetadataConfirmDrawer
+                  source={confirmTarget}
+                  target={target}
+                  onClose={() => setConfirmTarget(null)}
+                  onConfirmed={() => retrySources()}
                 />
                 <RagSourceDrawer
                   source={selected}
@@ -413,6 +452,31 @@ export function RagManagementPage(): JSX.Element {
                 imports={imports}
                 onRefresh={retryStats}
               />
+            ),
+          },
+          {
+            key: 'review',
+            label: '审核待办',
+            children: (
+              <Card>
+                <RagReviewInbox
+                  target={target}
+                  onOpen={(item) => {
+                    // ⚠️ 打开对应来源的详情抽屉：待办只是入口，处置仍在详情里完成
+                    const match = sources.sources.find((s) => s.sourceId === item.sourceId)
+                    if (match) setSelected(match)
+                  }}
+                />
+              </Card>
+            ),
+          },
+          {
+            key: 'lifecycle',
+            label: '有效期',
+            children: (
+              <Card>
+                <RagLifecyclePanel target={target} />
+              </Card>
             ),
           },
           {

@@ -29,6 +29,13 @@ import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
 import cn.studykid.rag.management.core.CorpusDocument;
 import cn.studykid.rag.management.core.CorpusIssues;
 import cn.studykid.rag.management.core.CorpusSource;
+import cn.studykid.rag.management.core.MetadataConfirmation;
+import cn.studykid.rag.management.core.LifecycleEntry;
+import cn.studykid.rag.management.core.LifecycleRules;
+import cn.studykid.rag.management.core.ReviewQueueEntry;
+import cn.studykid.rag.management.core.ReviewerRosterEntry;
+import cn.studykid.rag.management.core.ReviewQueueRules;
+import cn.studykid.rag.management.core.MetadataConfirmationResult;
 import cn.studykid.rag.management.core.CorpusStatistics;
 import cn.studykid.rag.management.core.DocumentVerification;
 import cn.studykid.rag.management.core.DocumentVerificationDecision;
@@ -362,6 +369,236 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
         return transactionTemplate.execute(status -> {
             applyReadScope(context);
             return findSourceWithinTenant(jdbcTemplate, context.queryTenantId(), sourceId);
+        });
+    }
+
+    @Override
+    public java.util.List<ReviewerRosterEntry> listCoSigners(@NonNull RagManagementContext context,
+                                                             java.util.Collection<String> excludeIds) {
+        String tenantId = context.queryTenantId();
+        java.util.Set<String> excluded = excludeIds == null
+                ? java.util.Set.of()
+                : excludeIds.stream().filter(s -> s != null && !s.isBlank())
+                        .map(String::toLowerCase).collect(java.util.stream.Collectors.toSet());
+        return transactionTemplate.execute(tx -> {
+            RagSessionScope.apply(jdbcTemplate, context);
+            java.util.List<ReviewerRosterEntry> rows = jdbcTemplate.query("""
+                            SELECT principal_id::text, display_name, can_review, can_co_sign, enabled
+                              FROM rag_reviewer_roster
+                             WHERE tenant_id = ?::uuid
+                               AND enabled = true
+                               AND can_co_sign = true
+                             ORDER BY display_name
+                            """,
+                    (rs, i) -> new ReviewerRosterEntry(
+                            rs.getString(1), rs.getString(2),
+                            rs.getBoolean(3), rs.getBoolean(4), rs.getBoolean(5)),
+                    tenantId);
+            if (rows == null) {
+                return java.util.List.<ReviewerRosterEntry>of();
+            }
+            // ⚠️ 排除本人与采集人：后端 SoD 会拒绝这些人，
+            //    下拉里留着他们等于让用户选一个注定 409 的选项。
+            if (excluded.isEmpty()) {
+                return rows;
+            }
+            return rows.stream()
+                    .filter(r -> !excluded.contains(r.principalId().toLowerCase()))
+                    .toList();
+        });
+    }
+
+    @Override
+    public ReviewerRosterEntry upsertReviewer(@NonNull RagManagementContext context,
+                                              @NonNull ReviewerRosterEntry entry) {
+        return writeVia(context, ch -> {
+            // ⚠️ 幂等覆盖：显示名与权限可改，但 created_at 只在首次插入时写，
+            //    updated_at 每次刷新——「什么时候开始能审核」是审计事实。
+            ch.template().update("""
+                            INSERT INTO rag_reviewer_roster
+                                (tenant_id, principal_id, display_name,
+                                 can_review, can_co_sign, enabled, scope)
+                            VALUES (?::uuid, ?::uuid, ?, ?, ?, ?, ?)
+                            ON CONFLICT (tenant_id, principal_id) DO UPDATE
+                               SET display_name = EXCLUDED.display_name,
+                                   can_review   = EXCLUDED.can_review,
+                                   can_co_sign  = EXCLUDED.can_co_sign,
+                                   enabled      = EXCLUDED.enabled,
+                                   updated_at   = now()
+                            """,
+                    ch.tenantId(), entry.principalId(), entry.displayName(),
+                    entry.canReview(), entry.canCoSign(), entry.enabled(),
+                    ch.tenantId().equals(cn.studykid.rag.core.scope.RagScope.GLOBAL_TENANT_ID)
+                            ? "PLATFORM" : "TENANT");
+            return entry;
+        });
+    }
+
+    @Override
+    public java.util.List<LifecycleEntry> listLifecycle(@NonNull RagManagementContext context,
+                                                        int limit) {
+        String tenantId = context.queryTenantId();
+        int capped = Math.max(1, Math.min(limit, 500));
+        java.time.Instant now = java.time.Instant.now();
+        return transactionTemplate.execute(tx -> {
+            RagSessionScope.apply(jdbcTemplate, context);
+            // ⚠️ 只列「有校验时间」或「已通过」的来源：
+            //    从未校验过的来源没有有效期概念，混进来会让清单失去意义。
+            java.util.List<LifecycleEntry> rows = jdbcTemplate.query("""
+                            SELECT s.source_id::text, s.title, s.ver_status::text,
+                                   s.verified_at, s.ver_valid_days
+                              FROM rag_source s
+                             WHERE s.tenant_id = ?::uuid
+                               AND (s.verified_at IS NOT NULL
+                                    OR s.ver_status::text = 'VERIFIED')
+                             ORDER BY s.verified_at NULLS LAST
+                             LIMIT ?
+                            """,
+                    (rs, i) -> {
+                        java.sql.Timestamp vt = rs.getTimestamp(4);
+                        java.time.Instant verifiedAt = vt == null ? null : vt.toInstant();
+                        int validDays = rs.getInt(5);
+                        LifecycleRules.Expiry expiry =
+                                LifecycleRules.compute(verifiedAt, validDays, now);
+                        boolean admissible = "VERIFIED".equals(rs.getString(3));
+                        return new LifecycleEntry(
+                                rs.getString(1), rs.getString(2), rs.getString(3),
+                                verifiedAt == null ? null : verifiedAt.toString(),
+                                validDays,
+                                expiry.expiresAt() == null ? null : expiry.expiresAt().toString(),
+                                expiry.daysUntilExpiry(),
+                                expiry.stale(), expiry.expiringSoon(),
+                                admissible,
+                                LifecycleRules.describe(expiry));
+                    },
+                    tenantId, capped);
+            if (rows == null) {
+                return java.util.List.<LifecycleEntry>of();
+            }
+            // ⚠️ 已过期的排最前：那是最需要动手的，排在后面等于没有提醒
+            java.util.List<LifecycleEntry> sorted = new java.util.ArrayList<>(rows);
+            sorted.sort(java.util.Comparator
+                    .comparing((LifecycleEntry e) -> !e.stale())
+                    .thenComparing(e -> !e.expiringSoon())
+                    .thenComparing(e -> e.daysUntilExpiry() == null
+                            ? Integer.MAX_VALUE : e.daysUntilExpiry()));
+            return sorted;
+        });
+    }
+
+    @Override
+    public java.util.List<ReviewQueueEntry> listReviewQueue(@NonNull RagManagementContext context,
+                                                            int limit,
+                                                            @Nullable String currentUser) {
+        String tenantId = context.queryTenantId();
+        int capped = Math.max(1, Math.min(limit, 200));
+        return transactionTemplate.execute(tx -> {
+            RagSessionScope.apply(jdbcTemplate, context);
+            // ⚠️ 一次查询拿齐待办所需的全部信息：
+            //    来源状态 + 元数据确认 + 抽检状态 + 载体数 + 片段数 + 答案片段数 + 采集人。
+            //    分多次查询会让「待办清单」与「详情页」看到不同的数字（缓存不一致）。
+            //
+            //    ⚠️ 采集人取自审计表最近一条 INGEST（与 findRegisteredBy 同口径）；
+            //    没有审计记录时为 null —— 历史数据不阻断审核（SOD 对 null 不判自审）。
+            //
+            //    ⚠️ 只取还需要人动手的状态：PENDING / IN_REVIEW / REJECTED。
+            //    VERIFIED 与 REVOKED 是终态，混进待办会让待办数永远清不零。
+            List<ReviewQueueEntry> rows = jdbcTemplate.query("""
+                            SELECT s.source_id::text, s.title, s.publisher::text,
+                                   s.ver_status::text, s.metadata_confirmed,
+                                   s.inspection_status, s.created_at,
+                                   (SELECT count(*) FROM rag_document d
+                                     WHERE d.source_id = s.source_id
+                                       AND d.tenant_id = s.tenant_id) AS doc_count,
+                                   (SELECT count(*) FROM rag_chunk c
+                                     JOIN rag_document d2
+                                       ON d2.document_id = c.document_id
+                                      AND d2.tenant_id = c.tenant_id
+                                     WHERE d2.source_id = s.source_id
+                                       AND d2.tenant_id = s.tenant_id) AS chunk_count,
+                                   (SELECT count(*) FROM rag_chunk c2
+                                     JOIN rag_document d3
+                                       ON d3.document_id = c2.document_id
+                                      AND d3.tenant_id = c2.tenant_id
+                                     WHERE d3.source_id = s.source_id
+                                       AND d3.tenant_id = s.tenant_id
+                                       AND c2.role IN ('EXAMPLE_SOLUTION', 'EXERCISE_ANSWER'))
+                                     AS answer_count,
+                                   (SELECT a.principal_id::text FROM rag_access_audit a
+                                     WHERE a.source_id = s.source_id
+                                       AND a.action = 'INGEST'
+                                     ORDER BY a.occurred_at DESC LIMIT 1) AS registered_by
+                              FROM rag_source s
+                             WHERE s.tenant_id = ?::uuid
+                               AND s.ver_status::text IN ('PENDING', 'IN_REVIEW', 'REJECTED')
+                             ORDER BY s.created_at DESC
+                             LIMIT ?
+                            """,
+                    (rs, i) -> {
+                        String verStatus = rs.getString(4);
+                        boolean metaConfirmed = rs.getBoolean(5);
+                        String inspection = rs.getString(6);
+                        ReviewQueueRules.Stage stage =
+                                ReviewQueueRules.nextStage(verStatus, metaConfirmed, inspection);
+                        ReviewQueueEntry base = new ReviewQueueEntry(
+                                rs.getString(1), rs.getString(2), rs.getString(3),
+                                verStatus, metaConfirmed,
+                                inspection == null ? "NOT_REQUIRED" : inspection,
+                                rs.getInt(8), rs.getLong(9), rs.getLong(10),
+                                rs.getString(11), stage,
+                                false, null,
+                                rs.getTimestamp(7) == null ? "" : rs.getTimestamp(7).toInstant().toString());
+                        return base.withViewer(currentUser);
+                    },
+                    tenantId, capped);
+            return rows == null ? java.util.List.<ReviewQueueEntry>of() : rows;
+        });
+    }
+
+    @Override
+    @Nullable
+    public MetadataConfirmationResult confirmMetadata(@NonNull RagManagementContext context,
+                                                      @NonNull String sourceId,
+                                                      @NonNull MetadataConfirmation info,
+                                                      @NonNull String principalId) {
+        return writeVia(context, ch -> {
+            // ⚠️ 先确认来源存在且在本作用域内：不存在返回 null（控制器映射 404），
+            //    而不是插入一条悬空的确认记录。
+            CorpusSource current = findSourceWithinTenant(ch.template(), ch.tenantId(), sourceId);
+            if (current == null) {
+                return null;
+            }
+
+            // ⚠️ 幂等：重复确认不报错，但**不改写首次确认人与时间**。
+            //    「谁最先确认」比「最后谁点了按钮」更有审计价值；
+            //    若每次都覆盖，责任人会漂移到最后一个点按钮的人。
+            ch.template().update("""
+                    UPDATE rag_source
+                    SET metadata_confirmed = TRUE,
+                        metadata_confirmed_at = COALESCE(metadata_confirmed_at, now()),
+                        metadata_confirmed_by = COALESCE(metadata_confirmed_by, ?::uuid),
+                        updated_at = now()
+                    WHERE tenant_id = %s AND source_id = ?::uuid
+                    """.formatted(ch.tenantExpr()), principalId, sourceId);
+
+            return ch.template().query("""
+                    SELECT metadata_confirmed, metadata_confirmed_at, metadata_confirmed_by
+                    FROM rag_source
+                    WHERE tenant_id = %s AND source_id = ?::uuid
+                    """.formatted(ch.tenantExpr()),
+                    rs -> {
+                        if (!rs.next()) {
+                            return null;
+                        }
+                        String by = rs.getString("metadata_confirmed_by");
+                        java.sql.Timestamp at = rs.getTimestamp("metadata_confirmed_at");
+                        return new MetadataConfirmationResult(
+                                sourceId,
+                                rs.getBoolean("metadata_confirmed"),
+                                at == null ? null : at.toInstant(),
+                                by);
+                    },
+                    sourceId);
         });
     }
 

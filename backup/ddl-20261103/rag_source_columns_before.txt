@@ -1,0 +1,25 @@
+source_id | uuid | NO | gen_random_uuid()
+tenant_id | uuid | NO | -
+source_type | text | NO | -
+title | text | NO | -
+publisher | text | NO | -
+isbn | text | YES | -
+doi | text | YES | -
+trust_tier | USER-DEFINED | NO | 'UNVERIFIED'::rag_trust_tier
+ver_status | USER-DEFINED | NO | 'PENDING'::rag_verification_status
+ver_method | USER-DEFINED | NO | 'NONE'::rag_verification_method
+ver_evidence | text | YES | -
+verified_at | timestamp with time zone | YES | -
+verified_by | uuid | YES | -
+ver_valid_days | integer | NO | 365
+license_status | USER-DEFINED | NO | 'PENDING'::rag_license_status
+object_ref | text | YES | -
+content_hash | character | YES | -
+created_at | timestamp with time zone | NO | now()
+updated_at | timestamp with time zone | NO | now()
+review_started_at | timestamp with time zone | YES | -
+reviewer_id | uuid | YES | -
+ver_reject_reason | text | YES | -
+ver_decided_at | timestamp with time zone | YES | -
+scope | text | NO | 'TENANT'::text
+inspection_status | text | NO | 'NOT_REQUIRED'::text

@@ -133,6 +133,13 @@ export interface RagDocument {
   revokedReason?: string | null
   /** 载体级版权状态（独立于来源级版权） */
   licenseStatus?: RagLicenseStatus
+  /**
+   * 上传时创建的摄取任务 ID（对齐后端 `DocumentResponse.jobId`）。
+   *
+   * ⚠️ 此前该字段**没有建模**，于是上传返回的 jobId 在类型层就被丢掉了，
+   *    界面无从追踪进度。缺省（旧版后端 / 非上传路径）为 undefined。
+   */
+  jobId?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -622,4 +629,318 @@ export const RAG_SCOPE_MODE_LABELS: Record<RagScopeMode, string> = {
   STRICT: '严格锁定当前版本',
   PREFERRED_WITH_FALLBACK: '优先本版可回退同册',
   CROSS_EDITION: '跨版本',
+}
+
+/* ── 摄取任务（Ingest Job）───────────────────────────────── */
+
+/**
+ * 摄取任务状态（对齐后端 `IngestJobStatus` 的 8 值枚举）。
+ *
+ * ⚠️ 这是**处理维度**的状态，与校验维度的 `RagVerificationStatus` 正交：
+ *    job FAILED 不影响来源校验状态；来源 REVOKED 会让未完成 job 变 REJECTED。
+ */
+export type RagIngestJobStatus =
+  | 'PENDING'
+  | 'PARSING'
+  | 'CHUNKING'
+  | 'EMBEDDING'
+  | 'INDEXING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'REJECTED'
+
+/**
+ * 摄取任务视图（对齐后端 `ManagementDtos.IngestJobResponse`）。
+ *
+ * <p>⚠️ 这个类型此前在 admin-console **完全缺失**，导致上传接口返回的 `jobId`
+ *    被前端丢弃（`RagDocument` 类型里也没有该字段）——用户上传后看不到任何进度。
+ */
+export interface RagIngestJob {
+  jobId: string
+  tenantId: string
+  sourceId: string
+  status: RagIngestJobStatus
+  /** 阶段内进度（如 `PARSING 60`），与 status 的阶段级语义正交 */
+  stage: string | null
+  /** 第几次尝试（重试 = 新建一行，旧行留痕） */
+  attempt: number
+  createdBy: string | null
+  parserVersion: string | null
+  embedModel: string | null
+  chunkCount: number | null
+  /** 失败 / 取消原因。FAILED 时后端保证非空 */
+  errorDetail: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  createdAt: string
+  /**
+   * 是否为「来源撤回导致的取消」。
+   *
+   * ⚠️ 为 true 时必须显示为**中性色「已取消」**，不标红：
+   *    撤回是法务的正常结果，标红会误导采集员以为自己的文件出了问题。
+   */
+  sourceRevokedCancel: boolean
+}
+
+/**
+ * 任务是否处于「进行中」（决定是否继续轮询、是否显示进度条）。
+ *
+ * ⚠️ 终态三值（SUCCEEDED / FAILED / REJECTED）必须在这里穷举，
+ *    漏一个会让轮询永不停止。
+ */
+export const RAG_INGEST_IN_FLIGHT: ReadonlySet<RagIngestJobStatus> = new Set([
+  'PENDING',
+  'PARSING',
+  'CHUNKING',
+  'EMBEDDING',
+  'INDEXING',
+])
+
+/** 任务是否仍在进行中。 */
+export function isRagIngestJobInFlight(status: RagIngestJobStatus): boolean {
+  return RAG_INGEST_IN_FLIGHT.has(status)
+}
+
+/**
+ * 任务状态的可读标签（**用户语言**，不暴露 EMBEDDING 这类技术词）。
+ *
+ * ⚠️ 与后端 `stage` 字段配合：`PARSING` + `stage="PARSING 60"` → 显示「解析中 60%」。
+ */
+export const RAG_INGEST_JOB_STATUS_LABELS: Record<RagIngestJobStatus, string> = {
+  PENDING: '排队中',
+  PARSING: '解析中',
+  CHUNKING: '切分中',
+  EMBEDDING: '向量化中',
+  INDEXING: '入库中',
+  SUCCEEDED: '处理完成',
+  FAILED: '处理失败',
+  REJECTED: '已取消',
+}
+
+/**
+ * 任务状态 → 徽标色。
+ *
+ * ⚠️ 四档色必须可区分（处理中 / 成功 / 失败 / 中性取消），
+ *    其中 `REJECTED` 一律 `'default'`——它是撤回导致的中性终态，**绝不标红**。
+ */
+export const RAG_INGEST_JOB_STATUS_COLORS: Record<RagIngestJobStatus, string> = {
+  PENDING: 'default',
+  PARSING: 'processing',
+  CHUNKING: 'processing',
+  EMBEDDING: 'processing',
+  INDEXING: 'processing',
+  SUCCEEDED: 'success',
+  FAILED: 'error',
+  REJECTED: 'default',
+}
+
+/* ── 元数据确认（交互文档 §4.3）──────────────────────────── */
+
+/**
+ * 元数据确认请求。
+ *
+ * ⚠️ 携带元数据快照而非只有「已确认」一个布尔：确认的意义是
+ *    「我为**这一组具体值**担保」，只记布尔的留痕回答不了
+ *    「他确认时书名是什么」。
+ */
+export interface RagMetadataConfirmationRequest {
+  title: string
+  publisher: string
+  /** ISBN（论文类可空） */
+  isbn?: string | null
+  subject?: string | null
+  grade?: string | null
+  /** 册次：上册 / 下册 / 全一册 */
+  term?: string | null
+  note?: string | null
+}
+
+/** 元数据确认结果。 */
+export interface RagMetadataConfirmationResult {
+  sourceId: string
+  metadataConfirmed: boolean
+  metadataConfirmedAt: string | null
+  metadataConfirmedBy: string | null
+}
+
+/** 册次白名单（与后端 {@code MetadataConfirmation} 及 DB CHECK 同口径）。 */
+export const RAG_TERM_OPTIONS = ['上册', '下册', '全一册'] as const
+
+/**
+ * 元数据确认状态的展示文案。
+ *
+ * ⚠️ 两态互斥且**都不表示可检索**：「已确认」只说明元数据过了人这关，
+ *    离「学生能搜到」还隔着抽检与双人复核。
+ */
+export const RAG_METADATA_CONFIRMED_LABELS = {
+  CONFIRMED: '元数据已确认',
+  UNCONFIRMED: '元数据待确认',
+} as const
+
+/* ── 抽检疑点（交互文档 §4.6「看红灯」）──────────────────── */
+
+/**
+ * 抽检疑点。
+ *
+ * ⚠️ 必须带 `text`：判「是不是答案」必须**看到字**，
+ *    只给角色和页码的摘要行，人无法做判断。
+ */
+export interface RagInspectionSuspect {
+  chunkId: string
+  documentId: string
+  /** 当前被判定的角色 */
+  role: string
+  /** 片段正文（已截断） */
+  text: string
+  pageNumber: number | null
+  sectionPath: string | null
+  exerciseNo: string | null
+  /** 疑点成因代码 */
+  reason: string
+  /** 疑点成因的人话说明 */
+  reasonText: string
+  /** 严重度：HIGH / MEDIUM / LOW（HIGH = 可能泄题） */
+  severity: string
+}
+
+/** 严重度 → 排序权重（与后端 SuspicionRules.Severity 同口径）。 */
+export const RAG_SUSPICION_SEVERITY_ORDER: Record<string, number> = {
+  HIGH: 0,
+  MEDIUM: 1,
+  LOW: 2,
+}
+
+/* ── 审核待办（交互文档 §4.6「审核收件箱」）──────────────── */
+
+/**
+ * 审核待办项。
+ *
+ * ⚠️ `stage` 与 `stageText` 由**服务端**算好：前端自行推算会与
+ *    状态机守卫 / 抽检守卫口径漂移，产出「点下去必然 409」的按钮。
+ */
+export interface RagReviewQueueItem {
+  sourceId: string
+  title: string
+  publisher: string
+  verificationStatus: string
+  metadataConfirmed: boolean
+  inspectionStatus: string
+  documentCount: number
+  chunkCount: number
+  /** 答案类片段数（抽检最关键的对象） */
+  answerChunkCount: number
+  registeredBy: string | null
+  /** 下一步阶段代码 */
+  stage: string
+  /** 下一步的人话说明 */
+  stageText: string
+  /** 当前调用者此刻能否执行 */
+  canAct: boolean
+  /** 不可执行的原因（canAct=true 时为 null） */
+  cantActReason: string | null
+  createdAt: string
+}
+
+/** 阶段代码 → 展示短语（与后端 ReviewQueueRules.Stage 同口径）。 */
+export const RAG_REVIEW_STAGE_LABELS: Record<string, string> = {
+  CONFIRM_METADATA: '确认元数据',
+  NEEDS_INSPECTION: '开始抽检',
+  INSPECTION_FAILED: '需重新处理',
+  READY_TO_CLAIM: '认领并审核',
+  IN_REVIEW: '签发或拒绝',
+  DONE: '已完成',
+  REVOKED: '已撤回',
+}
+
+/** 阶段 → 徽标色。⚠️ 撤回是中性色，不标红（它不是故障）。 */
+export const RAG_REVIEW_STAGE_COLORS: Record<string, string> = {
+  CONFIRM_METADATA: 'gold',
+  NEEDS_INSPECTION: 'orange',
+  INSPECTION_FAILED: 'volcano',
+  READY_TO_CLAIM: 'blue',
+  IN_REVIEW: 'blue',
+  DONE: 'green',
+  REVOKED: 'default',
+}
+
+/* ── 语料生命周期（交互文档 §4.7）────────────────────────── */
+
+/**
+ * 生命周期条目。
+ *
+ * ⚠️ `stale` / `expiringSoon` / `daysUntilExpiry` 一律**服务端计算**：
+ *    过期与否决定学生能否搜到（与检索侧 admissiblePredicate 同一口径），
+ *    前端另算一遍会在边界日/时区上漂移。
+ */
+export interface RagLifecycleItem {
+  sourceId: string
+  title: string
+  verificationStatus: string
+  verifiedAt: string | null
+  validDays: number
+  expiresAt: string | null
+  /** 距到期天数（负数=已过期；未校验为 null） */
+  daysUntilExpiry: number | null
+  stale: boolean
+  expiringSoon: boolean
+  admissible: boolean
+}
+
+/* ── 重处理（交互文档 §4.3「追加重传」）────────────────── */
+
+/**
+ * 重处理模式。
+ *
+ * ⚠️ 三种模式的代价差别极大，必须让用户在**动手前**知道后果：
+ *    · REINDEX_MISSING：只补缺失向量，分钟级，不中断检索；
+ *    · RESPLIT：重新切分，会短暂让语料不可检索（当前后端未支持）；
+ *    · REPLACE_FILE：换文件，旧文件作废（当前后端未支持）。
+ */
+export type RagReprocessMode = 'REINDEX_MISSING' | 'RESPLIT' | 'REPLACE_FILE'
+
+/** 重处理模式 → 人类可读的标题与后果说明。 */
+export const RAG_REPROCESS_MODE_META: Record<
+  RagReprocessMode,
+  { title: string; consequence: string; cost: string }
+> = {
+  REINDEX_MISSING: {
+    title: '只补缺失的向量',
+    consequence: '不动已切好的片段，检索不中断。适合「有片段没向量」的情况。',
+    cost: '分钟级',
+  },
+  RESPLIT: {
+    title: '重新切分并重建向量',
+    consequence: '会丢弃现有片段重新切分，期间语料短暂不可检索。适合「切分规则变了」。',
+    cost: '较慢，且短暂不可检索',
+  },
+  REPLACE_FILE: {
+    title: '换一个文件重新处理',
+    consequence: '原文件作废、旧片段清除，审计留痕。适合「上传的文件本身有问题」。',
+    cost: '最重，不可撤销',
+  },
+}
+
+/** 重处理结果。 */
+export interface RagReprocessResult {
+  mode: string
+  accepted: boolean
+  /** 人话说明（含「接下来会发生什么」） */
+  message: string
+  newJobId: string | null
+}
+
+/* ── 审核员名录（D-001 RAG 侧授权投影）────────────────────── */
+
+/**
+ * 审核员条目。
+ *
+ * ⚠️ 只含「选人需要的最小信息」：不含登录名、密码、真实姓名（PIPL / DEC-6）。
+ */
+export interface RagReviewer {
+  principalId: string
+  displayName: string
+  canReview: boolean
+  /** 是否可做复核（双人签署的第二签） */
+  canCoSign: boolean
+  enabled: boolean
 }

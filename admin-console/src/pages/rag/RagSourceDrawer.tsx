@@ -35,6 +35,7 @@ import {
   isRagTargetReady,
   isRagWriteTarget,
   uploadRagDocument,
+  retryRagIngestJob,
   ApiError,
 } from '@/api/ragClient'
 import type { RagTarget } from '@/api/ragClient'
@@ -52,11 +53,58 @@ import {
   RAG_VERIFICATION_LABELS,
 } from '@/api/ragTypes'
 import { allowedVerificationTargets } from '@/features/rag/useRagManagement'
-import { currentPrincipalId, TrustTierTag, VerificationTag } from './ragUi'
+import { useRagIngestJobs } from '@/features/rag/useRagIngestJobs'
+import {
+  currentPrincipalId,
+  IngestJobTag,
+  IngestProgress,
+  TrustTierTag,
+  VerificationTag,
+} from './ragUi'
 import { RagVerificationForm } from './RagVerificationForm'
 import { RagInspectionPanel } from './RagInspectionPanel'
+import { RagReprocessPanel } from './RagReprocessPanel'
 
 const { Text } = Typography
+
+/** 载体轮询周期（毫秒）。 */
+const DOC_POLL_INTERVAL_MS = 3000
+/** 载体轮询上限（3s × 200 ≈ 10 分钟，覆盖 148 页教材的 450 秒并留余量）。 */
+const DOC_POLL_MAX = 200
+
+/**
+ * 载体是否仍在处理中（决定是否继续轮询）。
+ *
+ * ⚠️ 用**白名单**而不是黑名单：出现未知 `parseStatus`（后端加了新值）时
+ *    按「终止」处理，宁可少轮询也不要无限轮询。
+ */
+function isDocInFlight(parseStatus: string): boolean {
+  return parseStatus === 'PENDING' || parseStatus === 'PARSING'
+}
+
+/**
+ * 把技术错误码翻译成「用户能据此行动」的说明（交互文档 §4.5）。
+ *
+ * ⚠️ 错误码 (`PARSING 失败` / `SWEEPER_TIMEOUT` / `CONSUMER_CRASH`) 对采集员毫无意义，
+ *    而《入库操作手册》§9.4 专门做了一张对照表——说明这类翻译**本该由界面提供**。
+ *    未知前缀原样透出：宁可让用户看到原始信息，也不要吞掉线索。
+ */
+function humanizeIngestError(detail: string | null | undefined): string {
+  if (!detail) return '处理过程中出现异常。可点击「重试处理」重新尝试。'
+  if (detail.startsWith('SWEEPER_TIMEOUT')) {
+    return '处理超时（文件较大或服务繁忙），系统已自动中止。建议重试，仍失败可拆分文件后再传。'
+  }
+  if (detail.startsWith('CONSUMER_CRASH')) {
+    return '处理过程出现意外，已自动记录。请点「重试处理」；若持续失败请联系运维。'
+  }
+  if (detail.startsWith('SOURCE_REVOKED')) {
+    return '本来源已被撤回，处理已取消。'
+  }
+  if (detail.startsWith('PARSING') || detail.includes('解析')) {
+    return `文件无法解析：${detail}。常见原因是文件加密、损坏或不是标准 PDF，建议先用 PDF 工具打开确认。`
+  }
+  return detail
+}
 
 export interface RagSourceDrawerProps {
   source: RagSource | null
@@ -151,6 +199,19 @@ export function RagSourceDrawer({
   const sourceId = source?.sourceId ?? null
 
   /**
+   * 本来源的摄取任务（用于载体行的**真实阶段进度**）。
+   *
+   * ⚠️ 为什么载体行还需要任务信息：`rag_document.parse_status` 只有 4 个值
+   *    （待解析/已解析/已切分/失败），**表达不了「切分中」「向量化中」**——
+   *    于是用户在长达数分钟的处理期间只看到一个不变的「待解析」标签。
+   *    job 的 `status` + `stage` 才能回答「现在卡在哪一步、还剩多少」。
+   */
+  const ingest = useRagIngestJobs(target, { sourceId: sourceId ?? undefined, limit: 20 })
+
+  /** 本来源最近一次任务（旧任务按时间倒序在后）。 */
+  const latestJob = ingest.state.jobs[0] ?? null
+
+  /**
    * 平台全局档写要治理票据（第二刀）：没有票就是只读视图。
    *
    * ⚠️ 在这里收口成**一个**旗标，让「来源流转」「载体流转」「载体列表的校验按钮」
@@ -159,29 +220,95 @@ export function RagSourceDrawer({
    */
   const writable = isRagWriteTarget(target)
 
+  /**
+   * 载体列表加载 + **处理中自动轮询**。
+   *
+   * ⚠️ 此前这里只加载一次（打开抽屉时），于是载体行的「解析状态」标签
+   *    永远停在「待解析」——用户眼睁睁看着一个不会动的东西，
+   *    无法判断任务是在跑还是挂了（148 页教材约 450 秒）。
+   *
+   * ⚠️ 轮询条件与全局纪律一致：**页面可见** 且 **有任一载体仍在处理中**
+   *    （`parseStatus` 非终态），终态立即停；页签隐藏时跳过。
+   * ⚠️ 轮询刷新**不重置** `activeDoc` / `chunks`：用户正在看某个载体的片段时，
+   *    后台刷新把视图清掉是纯粹的体验倒退。
+   */
   useEffect(() => {
     if (!sourceId || !isRagTargetReady(target)) return
     let cancelled = false
-    setDocs({ kind: 'loading' })
-    setChunks(null)
-    setActiveDoc(null)
-    setDocError(null)
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let polls = 0
+    /** 是否还要继续轮询（由本次拉取结果决定）。 */
+    let keepPolling = true
+
+    const clear = (): void => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+    }
+
+    const schedule = (): void => {
+      if (cancelled || !keepPolling) return
+      if (polls >= DOC_POLL_MAX) return
+      clear()
+      timer = setTimeout(() => {
+        void run()
+      }, DOC_POLL_INTERVAL_MS)
+    }
+
     const run = async (): Promise<void> => {
+      if (cancelled) return
+      // ⚠️ 页签隐藏时不打后端；切回来由 visibilitychange 立即补拉
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        schedule()
+        return
+      }
+      polls += 1
       try {
         const list = await listRagDocuments(target, sourceId)
         if (cancelled) return
         setDocs(list.length === 0 ? { kind: 'empty' } : { kind: 'ok', docs: list })
+        keepPolling = list.some((d) => isDocInFlight(d.parseStatus))
       } catch (cause) {
         if (cancelled) return
-        setDocs({
-          kind: 'error',
-          message: cause instanceof ApiError ? cause.message : '读取载体失败',
-        })
+        // ⚠️ 轮询期间的偶发失败不清空已展示的载体（只报错）
+        setDocs((prev) =>
+          prev.kind === 'ok'
+            ? prev
+            : {
+                kind: 'error',
+                message: cause instanceof ApiError ? cause.message : '读取载体失败',
+              },
+        )
+        keepPolling = false
       }
+      schedule()
     }
+
+    const onVisible = (): void => {
+      if (cancelled || document.visibilityState !== 'visible') return
+      clear()
+      polls += 1
+      void run()
+    }
+
+    // 首拉：清空上一来源的视图状态（换来源时必须重置）
+    setDocs({ kind: 'loading' })
+    setChunks(null)
+    setActiveDoc(null)
+    setDocError(null)
     void run()
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisible)
+    }
+
     return () => {
       cancelled = true
+      clear()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisible)
+      }
     }
   }, [sourceId, target])
 
@@ -196,6 +323,30 @@ export function RagSourceDrawer({
       setDocError(cause instanceof ApiError ? cause.message : '读取片段失败')
     } finally {
       setChunksLoading(false)
+    }
+  }
+
+  /** 重试状态（与上传/校验的 busy 态分开，互不干扰）。 */
+  const [retrying, setRetrying] = useState(false)
+
+  /**
+   * 重试失败的任务。
+   *
+   * ⚠️ 重试 = **新建一行 job**（attempt+1），旧行永久留痕。
+   *    因此这里成功后必须 `reload()` 拉新任务，而不是原地改一条状态。
+   */
+  const retryJob = async (): Promise<void> => {
+    if (!latestJob) return
+    setRetrying(true)
+    setDocError(null)
+    try {
+      await retryRagIngestJob(target, latestJob.jobId)
+      ingest.reload()
+      message.success('已提交重试，正在重新处理')
+    } catch (cause) {
+      setDocError(cause instanceof ApiError ? cause.message : '重试失败')
+    } finally {
+      setRetrying(false)
     }
   }
 
@@ -214,7 +365,10 @@ export function RagSourceDrawer({
       setUploadCarrier(null)
       const list = await listRagDocuments(target, sourceId)
       setDocs(list.length === 0 ? { kind: 'empty' } : { kind: 'ok', docs: list })
-      message.success('文档已提交入库（待解析 / 校验后才可检索）')
+      // ⚠️ 上传后立即触发一次任务刷新，让「处理进度」列马上出现，
+      //    而不是等下一个轮询周期（用户会以为没提交成功）
+      ingest.reload()
+      message.success('文档已提交入库，正在自动解析（可在「处理进度」查看）')
     } catch (cause) {
       setDocError(cause instanceof ApiError ? cause.message : '上传失败')
     } finally {
@@ -263,14 +417,32 @@ export function RagSourceDrawer({
       ),
     },
     {
-      title: '解析状态',
-      dataIndex: 'parseStatus',
-      width: 110,
-      render: (s: string) => (
-        <Tag color={s === 'FAILED' ? 'red' : s === 'PENDING' ? 'orange' : 'blue'}>
-          {RAG_PARSE_STATUS_LABELS[s] ?? s}
-        </Tag>
-      ),
+      title: '处理进度',
+      key: 'ingest',
+      width: 170,
+      render: (_: unknown, row) => {
+        // ⚠️ 有任务时以任务为准：它才知道「切分中 / 向量化中 / 失败原因」
+        if (latestJob && latestJob.sourceId === row.sourceId) {
+          return (
+            <Space direction="vertical" size={2} style={{ rowGap: 2 }}>
+              <IngestJobTag
+                status={latestJob.status}
+                stage={latestJob.stage}
+                errorDetail={latestJob.errorDetail}
+                sourceRevokedCancel={latestJob.sourceRevokedCancel}
+              />
+              <IngestProgress status={latestJob.status} stage={latestJob.stage} width={140} />
+            </Space>
+          )
+        }
+        // 无任务（如历史导入、job 未建）：回落到载体自身的解析状态
+        const st = row.parseStatus
+        return (
+          <Tag color={st === 'FAILED' ? 'red' : st === 'PENDING' ? 'orange' : 'blue'}>
+            {RAG_PARSE_STATUS_LABELS[st] ?? st}
+          </Tag>
+        )
+      },
     },
     {
       title: '载体校验',
@@ -410,6 +582,8 @@ export function RagSourceDrawer({
                         currentStatus={shownSource.verificationStatus}
                         submitting={actionStatus === 'submitting'}
                         onSubmitted={(payload) => onVerified(shownSource.sourceId, payload)}
+                        sourceId={shownSource.sourceId}
+                        target={target}
                       />
                     </>
                   )}
@@ -446,6 +620,21 @@ export function RagSourceDrawer({
                       pagination={false}
                     />
                   )}
+
+                  {/*
+                    ⚠️ 重处理面板（交互文档 §4.3）：
+                        此前想重跑的用户只有两个含糊选项——「重试」或手册里的 reindex，
+                        而 reindex 并**不会重新切分**，于是「点了还是老样子」成为高频误解。
+                        这里把三种方式显式列出并各自标注代价。
+                  */}
+                  <Typography.Title level={5} style={{ marginTop: 16, marginBottom: 0 }}>
+                    重处理
+                  </Typography.Title>
+                  <RagReprocessPanel
+                    target={target}
+                    sourceId={sourceId ?? ''}
+                    writable={writable && sourceId !== null}
+                  />
 
                   {writable && (
                     <Space direction="vertical" size={6} style={{ width: '100%', marginTop: 8 }}>
@@ -494,6 +683,28 @@ export function RagSourceDrawer({
                   {docError && <Alert type="error" showIcon message={docError} />}
                   {docNotice && <Alert type="success" showIcon message={docNotice} />}
 
+                  {/*
+                    ⚠️ 任务失败要在**页面内**说清楚并给出下一步。
+                    此前失败原因只能通过载体行的 tooltip 看到，且没有任何重试入口——
+                    用户只能去翻《入库操作手册》复制 curl（交互文档问题 P7）。
+                    「已取消」不在此提示：撤回是法务的正常结果，不是故障。
+                  */}
+                  {latestJob?.status === 'FAILED' && !latestJob.sourceRevokedCancel && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message={`处理失败${latestJob.attempt > 0 ? `（第 ${latestJob.attempt} 次尝试）` : ''}`}
+                      description={humanizeIngestError(latestJob.errorDetail)}
+                      action={
+                        writable ? (
+                          <Button size="small" loading={retrying} onClick={() => void retryJob()}>
+                            重试处理
+                          </Button>
+                        ) : null
+                      }
+                    />
+                  )}
+
                   {chunksLoading && <Spin />}
                   {chunks && (
                     <Table<RagChunk>
@@ -517,6 +728,8 @@ export function RagSourceDrawer({
                           currentStatus={activeDoc.verificationStatus}
                           submitting={docSubmitting}
                           onSubmitted={(payload) => void verifyDoc(activeDoc, payload)}
+                          sourceId={shownSource.sourceId}
+                          target={target}
                         />
                       </>
                     )}

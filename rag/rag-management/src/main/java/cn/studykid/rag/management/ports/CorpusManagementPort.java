@@ -12,6 +12,8 @@ import cn.studykid.rag.management.core.CorpusIssues;
 import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.management.core.CorpusStatistics;
 import cn.studykid.rag.management.core.DocumentVerificationDecision;
+import cn.studykid.rag.management.core.MetadataConfirmation;
+import cn.studykid.rag.management.core.MetadataConfirmationResult;
 import cn.studykid.rag.management.core.RagManagementContext;
 import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
@@ -103,6 +105,98 @@ public interface CorpusManagementPort {
     @Nullable CorpusSource applyVerification(@NonNull RagManagementContext context,
                                              @NonNull String sourceId,
                                              @NonNull VerificationDecision decision);
+
+    /**
+     * 确认来源元数据（交互文档 §4.3「产出确认」/ V1.0.2 §5 R1）。
+     *
+     * <p><b>为什么需要这一步</b>：文件上传后书名/出版社/ISBN 等由系统**推断**得出
+     * （见 {@code MetadataInference}）。推断值只是**待确认的建议**，不是权威值——
+     * 未经人确认就送审，等于让审核员审一份机器猜出来的元数据。
+     *
+     * <p><b>⚠️ 这是「确认」不是「修改」</b>：本方法只记录
+     * 「谁在何时确认了什么」这一事实。若人改了字段，那是一次普通的元数据更新，
+     * 由调用方先走更新再确认——两者**分开**，否则「确认」会掩盖掉改动本身。
+     *
+     * <p><b>⚠️ 幂等</b>：重复确认不报错（返回当前视图），
+     * 但**不改写首次确认人**——「谁最先确认」比「最后谁点了按钮」更有意义。
+     *
+     * @param context 作用域上下文（租户档／平台全局档；盘点档拒绝写）
+     * @param sourceId  来源 ID
+     * @param info      确认时的元数据快照（记录被确认的值，便于追溯）
+     * @param principalId 确认人（UUID，必填：不能出现无主的确认）
+     * @return 确认后的来源视图；来源不存在返回 {@code null}
+     */
+    @Nullable MetadataConfirmationResult confirmMetadata(@NonNull RagManagementContext context,
+                                                         @NonNull String sourceId,
+                                                         @NonNull MetadataConfirmation info,
+                                                         @NonNull String principalId);
+
+
+    /**
+     * 列出审核待办（交互文档 §4.6「审核收件箱」）。
+     *
+     * <p><b>它解决什么</b>：审核员当前要「搜索 → 找人 → 读上下文」才知道
+     * 今天该审哪几本。本方法把「该不该我审、卡在哪一步」一次性算好。
+     *
+     * <p>⚠️ 只返回**还需要人动手**的来源（已完成 / 已撤回的不进队列）：
+     * 把终态混进待办里，待办数就永远清不零，人会逐渐不再看它。
+     *
+     * @param context 作用域上下文
+     * @param limit   条数上限
+     * @param currentUser 当前调用者主体 ID（用于「审核员 ≠ 采集人」的界面提示），可空
+     * @return 待办列表（按创建时间倒序）
+     */
+    java.util.List<cn.studykid.rag.management.core.ReviewQueueEntry> listReviewQueue(
+            @NonNull RagManagementContext context,
+            int limit,
+            @Nullable String currentUser);
+
+
+    /**
+     * 列出语料生命周期状态（交互文档 §4.7）。
+     *
+     * <p>⚠️ 过期与「即将到期」一律由服务端计算（{@link LifecycleRules}）：
+     * 前端自行算会与检索侧 {@code admissiblePredicate} 的边界口径漂移。
+     *
+     * @param context 作用域上下文
+     * @param limit   条数上限
+     * @return 生命周期列表（已过期的排前面）
+     */
+    java.util.List<cn.studykid.rag.management.core.LifecycleEntry> listLifecycle(
+            @NonNull RagManagementContext context, int limit);
+
+
+    /**
+     * 列出可做复核的审核员（签发表单的下拉数据源）。
+     *
+     * <p><b>⚠️ 必须排除「本人」与「采集人」</b>：
+     * 后端 SoD 会拒绝「复核人 = 决定人」与「复核人 = 采集人」，
+     * 若下拉里仍列出这些人，用户选下去必然 409——
+     * 让用户点一个注定被拒的选项是产品缺陷。
+     *
+     * <p>⚠️ 只返回 {@code enabled = true} 且 {@code can_co_sign = true} 的条目：
+     * 可执行审核 ≠ 可做复核（复核是双人签署的第二签，通常只授予少数资深审核员）。
+     *
+     * @param context     作用域上下文
+     * @param excludeIds  需要排除的主体 ID（通常是「本人」与「采集人」）
+     * @return 可复核的审核员列表（按显示名排序）
+     */
+    java.util.List<cn.studykid.rag.management.core.ReviewerRosterEntry> listCoSigners(
+            @NonNull RagManagementContext context, java.util.Collection<String> excludeIds);
+
+    /**
+     * 登记/更新一名审核员（管理面维护名录）。
+     *
+     * <p>⚠️ 幂等：同一主体重复登记为覆盖更新（显示名与权限可变），
+     * 但不改写 {@code created_at}——「什么时候开始能审核」是有审计意义的事实。
+     *
+     * @param context 作用域上下文
+     * @param entry   名录条目
+     * @return 登记后的条目
+     */
+    cn.studykid.rag.management.core.ReviewerRosterEntry upsertReviewer(
+            @NonNull RagManagementContext context,
+            cn.studykid.rag.management.core.ReviewerRosterEntry entry);
 
     /**
      * 列出某来源下的文档载体。

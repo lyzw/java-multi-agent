@@ -58,7 +58,11 @@ import {
   SourceStatusDistribution,
   VocabularyDrift,
 } from '@/pages/rag/RagMaintenancePanels'
+import { IngestProgressBar, IngestStatusChip } from '@/pages/rag/ragIngestUi'
+import { RagIngestJobList } from '@/pages/rag/RagIngestJobList'
+import { useRagIngestJobs } from '@/features/rag/useRagIngestJobs'
 import type {
+  RagIngestJob,
   RagSource,
   RagDocument,
   RagChunk,
@@ -81,6 +85,21 @@ import {
 } from '@/api/types'
 
 const TENANT_STORAGE_KEY = 'rag.tenantId'
+
+/** 载体轮询周期（毫秒）。 */
+const DOC_POLL_INTERVAL_MS = 3000
+/** 载体轮询上限（3s × 200 ≈ 10 分钟，覆盖 148 页教材约 450 秒并留余量）。 */
+const DOC_POLL_MAX = 200
+
+/**
+ * 载体是否仍在处理中（决定是否继续轮询）。
+ *
+ * ⚠️ 用**白名单**：出现未知 `parseStatus`（后端加新值）时按「终止」处理，
+ *    宁可少轮询也不要无限轮询。
+ */
+function isDocInFlight(parseStatus: string): boolean {
+  return parseStatus === 'PENDING' || parseStatus === 'PARSING'
+}
 
 /** 读取上次使用的租户标识（仅本地记忆，不涉及任何凭据）。 */
 function readStoredTenantId(): string {
@@ -439,10 +458,19 @@ function SourceEntry({
   source,
   selected,
   onSelect,
+  job,
 }: {
   source: RagSource
   selected: boolean
   onSelect: (id: string) => void
+  /**
+   * 该来源最近一次摄取任务。
+   *
+   * ⚠️ 此前来源行**完全没有处理状态**：用户上传后只能看到「待校验」，
+   *    看不出文件是在跑、跑完了、还是失败了（148 页教材约 450 秒）。
+   *    `undefined` = 本来源从未上传载体（仅元数据登记），与「失败」必须区分。
+   */
+  job?: RagIngestJob
 }): JSX.Element {
   return (
     <div className="entry">
@@ -461,9 +489,20 @@ function SourceEntry({
       </button>
       <div className="rag-mgmt__tags">
         <StatusChip source={source} />
+        {job !== undefined ? (
+          <IngestStatusChip
+            status={job.status}
+            stage={job.stage}
+            errorDetail={job.errorDetail}
+            sourceRevokedCancel={job.sourceRevokedCancel}
+          />
+        ) : (
+          <span className="chip" title="这个来源还没有上传物理文件">未处理</span>
+        )}
         <span className="chip">{RAG_TRUST_TIER_LABELS[source.trustTier]}</span>
         <span className="chip">{RAG_LICENSE_LABELS[source.licenseStatus]}</span>
       </div>
+      {job !== undefined ? <IngestProgressBar status={job.status} stage={job.stage} /> : null}
     </div>
   )
 }
@@ -482,8 +521,94 @@ function SourceDetail({
   const [chunks, setChunks] = useState<RagChunk[] | null>(null)
   const [chunkDocId, setChunkDocId] = useState<string | null>(null)
 
+  /** 本来源最近一次摄取任务（载体行的阶段进度来自它）。 */
+  const ingest = useRagIngestJobs(tenantId, { sourceId: source.sourceId, limit: 20 })
+  const latestJob = ingest.state.jobs[0]
+
+  /**
+   * 载体自动加载 + **处理中自动轮询**。
+   *
+   * ⚠️ 此前载体列表要**手动点「加载载体列表」**才出，且只加载一次：
+   *    · 打开详情先看到一片空白，用户不知道要点；
+   *    · 加载后「解析」标签永远停在「待解析」——一个不会动的东西。
+   *    现在：进入即拉，处理中每 3 秒刷新，全部终态即停。
+   *
+   * ⚠️ 轮询刷新**不重置**已选片段视图：用户正看着某载体的片段时，
+   *    后台刷新把视图清掉是纯粹的体验倒退。
+   */
+  useEffect(() => {
+    if (tenantId.trim() === '') return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let polls = 0
+    let keepPolling = true
+
+    const clear = (): void => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+    }
+
+    const schedule = (): void => {
+      if (cancelled || !keepPolling) return
+      if (polls >= DOC_POLL_MAX) return
+      clear()
+      timer = setTimeout(() => {
+        void run()
+      }, DOC_POLL_INTERVAL_MS)
+    }
+
+    const run = async (): Promise<void> => {
+      if (cancelled) return
+      // ⚠️ 页签隐藏时不打后端；切回来由 visibilitychange 立即补拉
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        schedule()
+        return
+      }
+      polls += 1
+      try {
+        const list = await listRagDocuments(tenantId, source.sourceId)
+        if (cancelled) return
+        setDocuments(list)
+        setDocError(null)
+        keepPolling = list.some((d) => isDocInFlight(d.parseStatus))
+      } catch {
+        if (cancelled) return
+        // ⚠️ 已有数据时轮询失败不清空（保留上次快照）
+        setDocuments((prev) => {
+          if (prev === null) setDocError('读取载体列表失败')
+          return prev
+        })
+        keepPolling = false
+      }
+      schedule()
+    }
+
+    const onVisible = (): void => {
+      if (cancelled || typeof document === 'undefined') return
+      if (document.visibilityState !== 'visible') return
+      clear()
+      polls += 1
+      void run()
+    }
+
+    void run()
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisible)
+    }
+
+    return () => {
+      cancelled = true
+      clear()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisible)
+      }
+    }
+  }, [tenantId, source.sourceId])
+
+  /** 手动重载载体（保留给「刷新」按钮）。 */
   const loadDocuments = useCallback(() => {
-    setDocuments(null)
     setDocError(null)
     const run = async (): Promise<void> => {
       try {
@@ -569,7 +694,7 @@ function SourceDetail({
           <div>
             <div className="btn-row" style={{ marginTop: 'var(--s-3)' }}>
               <button type="button" className="btn btn--quiet" onClick={loadDocuments}>
-                加载载体列表
+                刷新载体
               </button>
             </div>
 
@@ -586,24 +711,48 @@ function SourceDetail({
                 hint="登记后需上传物理文件（PDF/扫描件）并入库切分。"
               />
             ) : (
-              <div className="entry-list" style={{ marginTop: 'var(--s-3)' }}>
-                {documents.map((doc) => (
-                  <DocumentEntry
-                    key={doc.documentId}
-                    document={doc}
-                    tenantId={tenantId}
-                    sourceStatus={source.verificationStatus}
-                    onChanged={(updated) => {
-                      setDocuments((prev) =>
-                        prev === null
-                          ? prev
-                          : prev.map((d) => (d.documentId === updated.documentId ? updated : d)),
-                      )
-                    }}
-                    onViewChunks={loadChunks}
-                  />
-                ))}
-              </div>
+              <>
+                {/*
+                  ⚠️ 处理进度提到载体列表**之前**：
+                      此前载体行只有「解析 待解析」这种静态标签，
+                      表达不了「切分中 / 向量化中」，用户看不出还要等多久。
+                */}
+                {latestJob !== undefined ? (
+                  <div
+                    className="rag-mgmt__tags"
+                    style={{ marginTop: 'var(--s-3)' }}
+                    aria-live="polite"
+                  >
+                    <span className="muted">处理进度：</span>
+                    <IngestStatusChip
+                      status={latestJob.status}
+                      stage={latestJob.stage}
+                      errorDetail={latestJob.errorDetail}
+                      sourceRevokedCancel={latestJob.sourceRevokedCancel}
+                    />
+                    <IngestProgressBar status={latestJob.status} stage={latestJob.stage} />
+                  </div>
+                ) : null}
+
+                <div className="entry-list" style={{ marginTop: 'var(--s-3)' }}>
+                  {documents.map((doc) => (
+                    <DocumentEntry
+                      key={doc.documentId}
+                      document={doc}
+                      tenantId={tenantId}
+                      sourceStatus={source.verificationStatus}
+                      onChanged={(updated) => {
+                        setDocuments((prev) =>
+                          prev === null
+                            ? prev
+                            : prev.map((d) => (d.documentId === updated.documentId ? updated : d)),
+                        )
+                      }}
+                      onViewChunks={loadChunks}
+                    />
+                  ))}
+                </div>
+              </>
             )}
           </div>
         ) : null}
@@ -1927,6 +2076,28 @@ export function RagManagementPage(): JSX.Element {
 
   const tenantReady = tenantId.trim().length > 0
 
+  /**
+   * 摄取任务轮询（来源行的「处理状态」数据源）。
+   *
+   * ⚠️ 只在**页面可见 + 确有进行中任务**时轮询（见 `useRagIngestJobs` 纪律）。
+   *    未填租户时 hook 内部不发请求。
+   */
+  const ingest = useRagIngestJobs(tenantId, { limit: 100 })
+
+  /**
+   * sourceId → 最近一次任务。
+   *
+   * ⚠️ 一个来源可能失败重试多次（重试 = 新建一行 job）：
+   *    列表要显示**最近一次**的结论，历史留痕在任务列表里看。
+   */
+  const jobsBySource = useMemo(() => {
+    const map = new Map<string, RagIngestJob>()
+    for (const job of ingest.state.jobs) {
+      if (!map.has(job.sourceId)) map.set(job.sourceId, job)
+    }
+    return map
+  }, [ingest.state.jobs])
+
   const handleLoad = useCallback(
     (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault()
@@ -2078,6 +2249,7 @@ export function RagManagementPage(): JSX.Element {
                       source={s}
                       selected={s.sourceId === selectedId}
                       onSelect={setSelectedId}
+                      job={jobsBySource.get(s.sourceId)}
                     />
                   ))}
                 </div>
@@ -2150,6 +2322,20 @@ export function RagManagementPage(): JSX.Element {
                     }}
                   />
                 </div>
+              </Sheet>
+            ) : null}
+
+            {/*
+              ⚠️ 摄取任务列表此前是**死代码**：组件写好了但从未被任何页面引用，
+                  于是上传返回的 jobId 无人消费，用户看不到任何处理进度。
+                  放在来源列表下方：这正是「我传的那本处理到哪了」的上下文。
+            */}
+            {tenantReady ? (
+              <Sheet
+                title="处理中的任务"
+                note="上传后自动解析、切分、向量化。失败可在此重试；撤回导致的任务取消不算失败。"
+              >
+                <RagIngestJobList tenantId={tenantId.trim()} />
               </Sheet>
             ) : null}
           </>

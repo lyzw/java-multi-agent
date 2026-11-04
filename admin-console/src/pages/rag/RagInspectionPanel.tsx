@@ -20,7 +20,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Button,
+  Card,
   Empty,
+  Segmented,
   Select,
   Space,
   Spin,
@@ -33,6 +35,7 @@ import {
   listRagChunks,
   listRagDocuments,
   listRagInspections,
+  listRagInspectionSuspects,
   submitRagInspection,
   ApiError,
   isRagTargetReady,
@@ -45,6 +48,7 @@ import type {
   RagInspectionItem,
   RagInspectionRecord,
   RagInspectionStatus,
+  RagInspectionSuspect,
   RagInspectionVerdictResult,
   RagSource,
 } from '@/api/ragTypes'
@@ -99,6 +103,19 @@ export function RagInspectionPanel({ target, source, onDraftsChange }: RagInspec
    * EXPLANATION，抽检员靠翻页永远够不到 26 条答案/解答片段（实测踩坑）。
    */
   const [roleFilter, setRoleFilter] = useState<'ALL' | 'ANSWER' | string>('ALL')
+  /**
+   * 视图模式（交互文档 §4.6「看红灯」）。
+   *
+   * ⚠️ 默认是 `SUSPECTS`（只看疑点）而不是 `ALL`：
+   *    当前默认「全部」等于要求人翻 159 页裁决 1463 条，
+   *    而抽检真正要找的是「哪几条可能错了」。默认值决定了绝大多数人的实际路径。
+   *
+   * ⚠️ 但 `ALL` 入口必须保留且显眼：预筛漏掉的片段仍需人工核对。
+   *    把「只看疑点」做成唯一视图会造成「没被标出=没问题」的错觉。
+   */
+  const [viewMode, setViewMode] = useState<'SUSPECTS' | 'ALL'>('SUSPECTS')
+  const [suspects, setSuspects] = useState<RagInspectionSuspect[]>([])
+  const [loadingSuspects, setLoadingSuspects] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
   const [records, setRecords] = useState<RagInspectionRecord[]>([])
   const [result, setResult] = useState<RagInspectionVerdictResult | null>(null)
@@ -109,6 +126,26 @@ export function RagInspectionPanel({ target, source, onDraftsChange }: RagInspec
   const [error, setError] = useState<string | null>(null)
   const [loadingDocs, setLoadingDocs] = useState(false)
   const [loadingChunks, setLoadingChunks] = useState(false)
+
+  /**
+   * 加载疑点预筛结果。
+   *
+   * ⚠️ 失败**不阻断**抽检：预筛只是加速手段，退回「查看全部」仍能完成抽检。
+   *    把它做成致命错误会让一次接口抖动挡死整条治理链路。
+   */
+  const loadSuspects = useCallback(async (): Promise<void> => {
+    if (!isRagTargetReady(target)) return
+    setLoadingSuspects(true)
+    try {
+      const list = await listRagInspectionSuspects(target, sourceId, 100)
+      setSuspects(list)
+    } catch {
+      // 静默降级：界面提示「预筛不可用，请用『查看全部』」
+      setSuspects([])
+    } finally {
+      setLoadingSuspects(false)
+    }
+  }, [target, sourceId])
 
   const loadRecords = useCallback(async (): Promise<void> => {
     if (!isRagTargetReady(target)) return
@@ -159,12 +196,16 @@ export function RagInspectionPanel({ target, source, onDraftsChange }: RagInspec
   useEffect(() => {
     void loadDocs()
     void loadRecords()
+    void loadSuspects()
     // 来源切换时清空草稿、上次结论与会话内提交状态
     setDrafts({})
     setResult(null)
     setSubmittedStatus(null)
     setError(null)
-  }, [loadDocs, loadRecords, sourceId])
+    // 换来源时回到「看红灯」视图，并清掉上一册的疑点
+    setViewMode('SUSPECTS')
+    setSuspects([])
+  }, [loadDocs, loadRecords, loadSuspects, sourceId])
 
   useEffect(() => {
     if (activeDocId) {
@@ -448,6 +489,98 @@ export function RagInspectionPanel({ target, source, onDraftsChange }: RagInspec
         <Empty description="该来源还没有文档载体，请先上传" />
       ) : null}
 
+      {/*
+        ── 看红灯（交互文档 §4.6）────────────────────────────────
+        ⚠️ 默认视图：系统预筛出的疑点，按严重度排序（HIGH 在前 = 可能泄题）。
+        ⚠️ 「查看全部」入口必须保留：预筛漏掉的片段仍需人工核对，
+           不能造成「没被标出 = 没问题」的错觉。
+      */}
+      <Space wrap align="center">
+        <Text>抽检视图：</Text>
+        <Segmented
+          value={viewMode}
+          onChange={(v) => setViewMode(v as 'SUSPECTS' | 'ALL')}
+          options={[
+            {
+              label: `只看疑点${suspects.length > 0 ? `（${suspects.length}）` : ''}`,
+              value: 'SUSPECTS',
+            },
+            { label: '查看全部片段', value: 'ALL' },
+          ]}
+        />
+        {viewMode === 'SUSPECTS' && loadingSuspects ? <Spin size="small" /> : null}
+        {viewMode === 'SUSPECTS' && !loadingSuspects ? (
+          <Button size="small" onClick={() => void loadSuspects()}>
+            重新预筛
+          </Button>
+        ) : null}
+      </Space>
+
+      {viewMode === 'SUSPECTS' ? (
+        <div>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="系统已按已知高风险模式挑出疑点，请重点确认这几条"
+            description={
+              <span>
+                「疑似答案区被判成正文」是<b>单点否决</b>项——漏判即泄题。
+                预筛只是建议，<b>仍有片段可能未被标出</b>，必要时请切到「查看全部片段」核对。
+                共 {suspects.length} 条疑点。
+              </span>
+            }
+          />
+          {suspects.length === 0 ? (
+            <Empty description="没有发现疑点。这通常是个好消息，但保险起见请点「查看全部片段」抽查几条。" />
+          ) : (
+            <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              {suspects.map((sp) => (
+                <Card
+                  key={`${sp.chunkId}-${sp.reason}`}
+                  size="small"
+                  title={
+                    <Space wrap size={6}>
+                      <Tag color={sp.severity === 'HIGH' ? 'red' : sp.severity === 'MEDIUM' ? 'orange' : 'default'}>
+                        {sp.severity === 'HIGH' ? '高' : sp.severity === 'MEDIUM' ? '中' : '低'}
+                      </Tag>
+                      <Text strong>{sp.reasonText}</Text>
+                      <Tag>{RAG_CHUNK_ROLE_LABELS[sp.role] ?? sp.role}</Tag>
+                    </Space>
+                  }
+                  extra={
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      p{sp.pageNumber ?? '?'} · {sp.sectionPath ?? '—'}
+                      {sp.exerciseNo ? ` · 题 ${sp.exerciseNo}` : ''}
+                    </Text>
+                  }
+                >
+                  {/*
+                    ⚠️ 必须展示**正文**：判「是不是答案」必须看到字。
+                        只给角色与页码的摘要行，人无法做判断（这是旧抽检台的核心缺陷）。
+                  */}
+                  <pre
+                    style={{
+                      margin: 0,
+                      padding: 8,
+                      background: 'rgba(0,0,0,0.03)',
+                      borderRadius: 4,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-all',
+                      fontSize: 12,
+                      maxHeight: 160,
+                      overflow: 'auto',
+                    }}
+                  >
+                    {sp.text || '（空片段）'}
+                  </pre>
+                </Card>
+              ))}
+            </Space>
+          )}
+        </div>
+      ) : (
+        <>
       {loadingChunks ? (
         <Spin />
       ) : chunks.length > 0 ? (
@@ -464,6 +597,10 @@ export function RagInspectionPanel({ target, source, onDraftsChange }: RagInspec
           pagination={{ pageSize: 10 }}
         />
       ) : null}
+        </>
+      )}
+
+
 
       <Space>
         <Button

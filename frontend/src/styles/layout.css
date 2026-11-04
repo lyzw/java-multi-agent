@@ -2173,3 +2173,29 @@ tbody tr:hover { background: var(--surface-hover); }
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* ── 摄取进度条（来源行 / 载体行共用）───────────────────────
+   仅在进行中渲染；终态由 chip 表达，不画条。 */
+.rag-ingest-bar {
+  display: block;
+  width: 100%;
+  max-width: 140px;
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--rule-strong, #e5e7eb);
+}
+
+.rag-ingest-bar__fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--color-info, #2563eb);
+  transition: width 0.4s ease;
+}
+
+/* 载体行里的进度条与描述文字对齐，不撑开行高 */
+.entry__desc .rag-ingest-bar {
+  margin-top: 6px;
+}

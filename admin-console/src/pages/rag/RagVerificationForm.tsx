@@ -8,9 +8,15 @@
  *    · 撤回（REVOKED）必带依据，DB CHECK 亦会拦。
  */
 
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Alert, Button, Form, Input, InputNumber, Select, Space, Typography } from 'antd'
-import type { RagVerificationRequest, RagVerificationStatus } from '@/api/ragTypes'
+import type {
+  RagReviewer,
+  RagVerificationRequest,
+  RagVerificationStatus,
+} from '@/api/ragTypes'
+import { listRagCoSigners, isRagTargetReady } from '@/api/ragClient'
+import type { RagTarget } from '@/api/ragClient'
 import { allowedVerificationTargets } from '@/features/rag/useRagManagement'
 import { useDictOptions } from '@/features/dictionaries/useDictionaries'
 import { VERIFICATION_TARGET_VERB, currentPrincipalId } from './ragUi'
@@ -24,6 +30,14 @@ export interface RagVerificationFormProps {
   onSubmitted: (payload: RagVerificationRequest) => void
   /** 撤销（关闭模态等） */
   onCancel?: () => void
+  /**
+   * 当前来源与作用域（用于拉「可复核审核员」下拉）。
+   *
+   * ⚠️ 缺省时不渲染下拉，退回手输 UUID——
+   * 这是刻意的降级：宁可让人手输，也不要让一个拉不到名录的表单挡住签发。
+   */
+  sourceId?: string
+  target?: RagTarget
 }
 
 interface FormShape {
@@ -45,9 +59,56 @@ export function RagVerificationForm({
   submitting,
   onSubmitted,
   onCancel,
+  sourceId,
+  target,
 }: RagVerificationFormProps): JSX.Element {
   const [form] = Form.useForm<FormShape>()
   const targets = allowedVerificationTargets(currentStatus)
+
+  /**
+   * 可复核的审核员（下拉数据源）。
+   *
+   * ⚠️ 拉取失败**不阻断签发**：退回手输 UUID。
+   *    让一个拉不到名录的表单挡住整条治理链路，比手输一次糟糕得多。
+   */
+  const [coSigners, setCoSigners] = useState<RagReviewer[]>([])
+  const [loadingCoSigners, setLoadingCoSigners] = useState(false)
+  /** 请求序号（见下方 effect 注释：用序号而非布尔，避免丢弃最新结果）。 */
+  const requestSeq = useRef(0)
+
+  /*
+    ⚠️ 依赖用**原语**而不是 target 对象：target 每次渲染都是新引用，
+       直接放进依赖会让 effect 反复重跑，名录永远加载不完
+       （表现是下拉一直不出现，而手输框也不出现——两者皆空）。
+  */
+  const targetKey = target ? `${target.scope}:${target.tenantId ?? ''}` : ''
+
+  useEffect(() => {
+    if (!sourceId || !target || !isRagTargetReady(target)) return
+    setLoadingCoSigners(true)
+    void listRagCoSigners(target, sourceId)
+      .then((list) => {
+        // 只有「仍是最新一次请求」才落结果，避免旧请求覆盖新数据
+        if (requestSeq.current === seq) setCoSigners(list)
+      })
+      .catch(() => {
+        // 静默降级：表单退回手输 UUID
+        if (requestSeq.current === seq) setCoSigners([])
+      })
+      .finally(() => {
+        if (requestSeq.current === seq) setLoadingCoSigners(false)
+      })
+    /*
+      ⚠️ 撤销标记用**计数器**而不是布尔：
+          React 在依赖变化与卸载时都会跑 cleanup。若 cleanup 无条件把本次
+          请求标为「作废」，其结果就被丢弃——而下一次 effect 又会重新发起，
+          抽屉内表单频繁重渲染时名录会**永远停在空数组**
+          （实测：接口 200 且返回 1 条，下拉始终为空）。
+          做法：每次 effect 自增序号，回调里比对「我这次是否仍是最新一次」。
+    */
+    const seq = ++requestSeq.current
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceId, targetKey])
   const decidedBy = currentPrincipalId()
   // 校验手段 / 权威等级取值来自字典表（不可达时回落静态兜底）
   const { options: methodOptions } = useDictOptions('rag.verification_method')
@@ -159,12 +220,19 @@ export function RagVerificationForm({
         label="复核人（双人复核 · 必须与决定人不同）"
         name="verifiedBy"
         style={{ maxWidth: 420 }}
-        tooltip="第二位复核人的主体 UUID。后端会拒绝「与决定人相同」的复核人。"
+        tooltip={
+          coSigners.length > 0
+            ? '从可复核的审核员中选人。服务端已排除你本人与该来源的采集人。'
+            : '第二位复核人的主体 UUID。后端会拒绝「与决定人相同」的复核人。'
+        }
         rules={
           isVerifiedTarget
             ? [
-                { required: true, message: '通过校验须填写第二位复核人' },
-                { pattern: UUID_PATTERN, message: '须为合法 UUID' },
+                { required: true, message: '通过校验须选择第二位复核人' },
+                // ⚠️ 只有退回手输时才校验 UUID 格式：下拉选出来的值本就是合法 UUID
+                ...(coSigners.length > 0
+                  ? []
+                  : [{ pattern: UUID_PATTERN, message: '须为合法 UUID' }]),
                 {
                   validator: (_, value: string) =>
                     !value || value.trim().toLowerCase() !== decidedBy.toLowerCase()
@@ -175,13 +243,38 @@ export function RagVerificationForm({
             : []
         }
       >
-        <Input
-          disabled={!isVerifiedTarget}
-          allowClear={isVerifiedTarget}
-          placeholder={
-            isVerifiedTarget ? '第二位复核人的主体 UUID' : '仅「通过校验」需要双人复核'
-          }
-        />
+        {/*
+          ⚠️ **下拉选人，而不是手输 UUID**（交互文档问题 P5）：
+              让审核员去「找到一个 UUID 并抄进来」是把服务端已知的信息转嫁给用户。
+              ⚠️ 服务端已排除本人与采集人（后端 SoD 会拒绝这两类），
+              故下拉里不存在「选了会被拒」的选项。
+        */}
+        {coSigners.length > 0 ? (
+          <Select
+            disabled={!isVerifiedTarget}
+            allowClear={isVerifiedTarget}
+            loading={loadingCoSigners}
+            placeholder={
+              isVerifiedTarget ? '选择第二位复核人' : '仅「通过校验」需要双人复核'
+            }
+            options={coSigners.map((r) => ({
+              value: r.principalId,
+              label: r.displayName,
+            }))}
+          />
+        ) : (
+          <Input
+            disabled={!isVerifiedTarget}
+            allowClear={isVerifiedTarget}
+            placeholder={
+              isVerifiedTarget
+                ? loadingCoSigners
+                  ? '正在读取可复核审核员…'
+                  : '第二位复核人的主体 UUID（未配置审核员名录时手输）'
+                : '仅「通过校验」需要双人复核'
+            }
+          />
+        )}
       </Form.Item>
 
       <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
