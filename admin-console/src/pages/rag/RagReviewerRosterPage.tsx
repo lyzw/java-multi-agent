@@ -147,7 +147,7 @@ ready ? (
     ),
     content: (
       <>
-error && <Alert type="error" showIcon message={error} />
+        {error && <Alert type="error" showIcon message={error} />}
 
       <Card size="small">
         <Table<RagReviewer>

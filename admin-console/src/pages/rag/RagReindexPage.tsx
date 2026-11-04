@@ -194,7 +194,7 @@ ready ? (
     ),
     content: (
       <>
-!ready ? (
+        {!ready ? (
         <RagNotReady />
       ) : (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -399,7 +399,7 @@ ready ? (
             拆成两次提交会出现「零个 ACTIVE」的中间态，那一瞬并发检索查不到任何向量。
           </Paragraph>
         </Space>
-      )
+      )}
 
       <Modal
         title="新建索引代际"

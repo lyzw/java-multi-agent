@@ -120,4 +120,25 @@ describe('RAG 13 页挂载守卫', () => {
       unmount()
     }
   })
+
+  /**
+   * ⚠️ 这条守的是一类**已经真实发生过两次**的事故：
+   *   批量改造时 JSX 表达式丢了花括号，页面把代码当文字渲染出来了：
+   *     - `{error && <Alert/>}` → 屏幕上出现「error &&」
+   *     - `{!ready ? (<X/>) : (<Y/>)}` → 屏幕上出现「!ready ? (」和「) : (」
+   *
+   *   ⚠️ 为什么 tsc 查不出来：那些裸文本在 TS 里是合法的 JSX 文本节点。
+   *      所以只能靠"渲染后的可见文本里不该出现裸代码"来守。
+   */
+  it('渲染文本里不出现裸的变量名或三元表达式（丢了花括号的 JSX 表达式）', () => {
+    const forbidden = ['error &&', '!ready ? (', ') : (', '{error']
+    for (const p of PAGES) {
+      const { container, unmount } = render(<MemoryRouter>{p.el()}</MemoryRouter>)
+      const text = container.textContent ?? ''
+      for (const f of forbidden) {
+        expect(text, `${p.name} 渲染出裸代码 "${f}"，疑似 JSX 花括号丢失`).not.toContain(f)
+      }
+      unmount()
+    }
+  })
 })

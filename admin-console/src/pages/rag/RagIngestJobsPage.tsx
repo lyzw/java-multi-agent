@@ -124,7 +124,7 @@ function RagIngestJobsBody({ scope }: RagScopePageProps): RagScopeBodyParts {  c
     ),
     content: (
       <>
-!ready ? (
+        {!ready ? (
         <RagNotReady />
       ) : (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -244,7 +244,7 @@ function RagIngestJobsBody({ scope }: RagScopePageProps): RagScopeBodyParts {  c
             />
           )}
         </Space>
-      )
+      )}
       </>
 
     ),
