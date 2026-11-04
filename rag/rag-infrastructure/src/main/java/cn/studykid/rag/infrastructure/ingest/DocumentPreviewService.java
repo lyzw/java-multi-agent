@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import cn.studykid.rag.application.ingest.IngestionPipeline;
 import cn.studykid.rag.core.chunk.Chunk;
 import cn.studykid.rag.core.chunk.ChunkRole;
+import cn.studykid.rag.core.knowledge.KnowledgePoint;
 import cn.studykid.rag.core.version.EditionCoordinate;
 
 /**
@@ -48,12 +49,26 @@ public class DocumentPreviewService {
     public static final int MAX_PREVIEW_LIMIT = 200;
 
     private final IngestionPipeline pipeline;
-    private final JdbcIngestSourceLoader sourceLoader;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    private final org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
-    public DocumentPreviewService(@NonNull IngestionPipeline pipeline,
-                                  @NonNull JdbcIngestSourceLoader sourceLoader) {
+    /**
+     * ⚠️ **刻意不依赖 {@code JdbcIngestSourceLoader}**：
+     * 那个加载器还负责"按 objectRef 读原始字节"，而读字节的能力由各模块自行注入
+     * （worker 用本地桶、bootstrap 无此能力）。预览**只需要版本坐标与知识点**，
+     * 不该把"读字节"这条依赖一并拉进来——否则会逼着每个装配方都提供对象读取实现。
+     *
+     * <p>（这正是初始实现导致 bootstrap 启动失败的原因：
+     * {@code JdbcIngestSourceLoader} 在全仓**不是 bean**，
+     * 只在 worker 里就地 new 出来。）
+     */
+    public DocumentPreviewService(
+            @NonNull IngestionPipeline pipeline,
+            org.springframework.jdbc.core.@NonNull JdbcTemplate jdbcTemplate,
+            org.springframework.transaction.support.@NonNull TransactionTemplate transactionTemplate) {
         this.pipeline = pipeline;
-        this.sourceLoader = sourceLoader;
+        this.jdbcTemplate = jdbcTemplate;
+        this.transactionTemplate = transactionTemplate;
     }
 
     /**
@@ -77,7 +92,7 @@ public class DocumentPreviewService {
         // ⚠️ 取不到版本坐标就明确失败，**不造默认坐标**：
         //    造默认坐标会让预览"成功"，而真实入库若也没坐标，载体同样挂到默认坐标——
         //    预览就变成了"确认一个错误的结果"。宁可让人看到"该来源未登记五轴"。
-        var ctx = sourceLoader.loadForPreview(tenantId, sourceId).orElseThrow(() ->
+        var ctx = loadPreviewContext(tenantId, sourceId).orElseThrow(() ->
                 new IllegalStateException(
                         "该来源未登记版本五轴，无法预览切分结果"
                                 + "（请先在「来源登记」补齐学科/年级/册次/出版社/版次）"));
@@ -105,6 +120,99 @@ public class DocumentPreviewService {
         return new PreviewResult(
                 chunks.size(), preview.size(), effectiveLimit, byRole,
                 ctx.edition(), preview, chunks.size() > effectiveLimit);
+    }
+
+    /** 预览上下文：版本坐标 + 知识点。 */
+    private record PreviewContext(@NonNull EditionCoordinate edition,
+                                  @NonNull List<KnowledgePoint> knowledgePoints) {
+    }
+
+    /**
+     * 加载版本坐标与知识点（预览专用）。
+     *
+     * <p>⚠️ 取不到版本坐标返回空，**不造默认坐标**：造默认坐标会让预览"成功"，
+     * 而真实入库若也没坐标，载体同样挂到默认坐标——预览就成了"确认一个错误的结果"。
+     *
+     * <p>⚠️ 与 {@code JdbcIngestSourceLoader} 必须同口径（否则预览与入库对不上）：
+     * ① 知识点只取**同学科同年级**（跨学科挂接会产生错误归因）；
+     * ② subject/grade 传 **displayName 字符串**而非枚举对象
+     * （JDBC 无法为枚举实例推断 SQL 类型，会抛「无法推测 SQL 类型」）。
+     */
+    private java.util.Optional<PreviewContext> loadPreviewContext(@NonNull String tenantId,
+                                                                  @NonNull String sourceId) {
+        return transactionTemplate.execute(status -> {
+            // ⚠️ RLS 需要会话租户，且 set_config 是事务局部的。
+            jdbcTemplate.queryForObject(
+                    "SELECT set_config('app.tenant_id', ?, true)", String.class, tenantId);
+
+            List<EditionCoordinate> editions = jdbcTemplate.query(
+                    "SELECT subject, grade, term, publisher, revision_code"
+                            + " FROM rag_edition"
+                            + " WHERE tenant_id = ?::uuid AND source_id = ?::uuid"
+                            + " ORDER BY created_at ASC, edition_id LIMIT 1",
+                    (rs, i) -> new EditionCoordinate(
+                            subjectOf(rs.getString(1)), gradeOf(rs.getString(2)),
+                            termOf(rs.getString(3)), publisherOf(rs.getString(4)),
+                            rs.getString(5)),
+                    tenantId, sourceId);
+            if (editions.isEmpty()) {
+                return java.util.Optional.<PreviewContext>empty();
+            }
+            EditionCoordinate edition = editions.get(0);
+
+            List<KnowledgePoint> kps = jdbcTemplate.query(
+                    "SELECT kp_id::text, subject, grade, canonical_name,"
+                            + " COALESCE(aliases, ARRAY[]::text[]) AS aliases"
+                            + " FROM rag_knowledge_point"
+                            + " WHERE tenant_id = ?::uuid AND subject = ? AND grade = ?",
+                    (rs, i) -> {
+                        String[] raw = rs.getObject("aliases", String[].class);
+                        String[] aliases = raw == null ? new String[0] : raw;
+                        return new KnowledgePoint(
+                                rs.getString(1), rs.getString(2), rs.getString(3),
+                                rs.getString(4), List.of(aliases), List.of(), List.of());
+                    },
+                    tenantId, edition.subject().displayName(), edition.grade().displayName());
+
+            return java.util.Optional.of(new PreviewContext(edition, kps));
+        });
+    }
+
+    // 枚举反查（与 JdbcIngestSourceLoader 同口径：库内存 displayName，用 name() 会全抛未知值）
+    private static EditionCoordinate.Subject subjectOf(String s) {
+        for (var v : EditionCoordinate.Subject.values()) {
+            if (v.displayName().equals(s)) {
+                return v;
+            }
+        }
+        throw new IllegalStateException("未知学科值：" + s);
+    }
+
+    private static EditionCoordinate.GradeBand gradeOf(String s) {
+        for (var v : EditionCoordinate.GradeBand.values()) {
+            if (v.displayName().equals(s)) {
+                return v;
+            }
+        }
+        throw new IllegalStateException("未知年级值：" + s);
+    }
+
+    private static EditionCoordinate.Term termOf(String s) {
+        for (var v : EditionCoordinate.Term.values()) {
+            if (v.displayName().equals(s)) {
+                return v;
+            }
+        }
+        throw new IllegalStateException("未知册次值：" + s);
+    }
+
+    private static EditionCoordinate.Publisher publisherOf(String s) {
+        for (var v : EditionCoordinate.Publisher.values()) {
+            if (v.displayName().equals(s)) {
+                return v;
+            }
+        }
+        throw new IllegalStateException("未知出版社值：" + s);
     }
 
     /** 内容摘要（SHA-256 前 16 位十六进制），仅用于派生稳定的预览 ID。 */

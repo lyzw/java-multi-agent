@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -15,6 +16,8 @@ import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.DisplayName;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
@@ -45,14 +48,35 @@ class DocumentPreviewServiceTest {
                 List.of(), null, "hash-" + id);
     }
 
-    private static JdbcIngestSourceLoader loaderWith(Optional<JdbcIngestSourceLoader.PreviewContext> ctx) {
-        JdbcIngestSourceLoader loader = mock(JdbcIngestSourceLoader.class);
-        when(loader.loadForPreview(anyString(), anyString())).thenReturn(ctx);
-        return loader;
-    }
+    /**
+     * 构造预览服务：版本坐标改由内部 SQL 加载，测试用 mock 的 JdbcTemplate/事务模板模拟。
+     *
+     * ⚠️ 有版本坐标时返回一个 edition 行；无版本坐标时返回空表。
+     */
+    private static DocumentPreviewService serviceWith(IngestionPipeline pipeline, boolean hasEdition) {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        TransactionTemplate tx = mock(TransactionTemplate.class);
 
-    private static JdbcIngestSourceLoader.PreviewContext okContext() {
-        return new JdbcIngestSourceLoader.PreviewContext(EDITION, "edition-1", List.of());
+        // 事务模板直接执行回调
+        when(tx.execute(any())).thenAnswer(inv -> {
+            org.springframework.transaction.support.TransactionCallback<?> cb = inv.getArgument(0);
+            return cb.doInTransaction(null);
+        });
+        // set_config
+        when(jdbc.queryForObject(anyString(), eq(String.class), any(Object[].class)))
+                .thenReturn(null);
+        when(jdbc.queryForObject(anyString(), eq(String.class), any())).thenReturn(null);
+        // edition 查询
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(Object[].class)))
+                .thenReturn(hasEdition
+                        ? List.of(EDITION)
+                        : List.of());
+        // 知识点查询
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(), any(), any()))
+                .thenReturn(List.of());
+
+        return new DocumentPreviewService(pipeline, jdbc, tx);
     }
 
     @Nested
@@ -69,7 +93,7 @@ class DocumentPreviewServiceTest {
                             chunk("c2", ChunkRole.EXERCISE_ANSWER, "答案1"),
                             chunk("c3", ChunkRole.EXPLANATION, "讲解2")));
 
-            DocumentPreviewService svc = new DocumentPreviewService(pipeline, loaderWith(Optional.of(okContext())));
+            DocumentPreviewService svc = serviceWith(pipeline, true);
             var r = svc.preview(TENANT, SOURCE, "a.pdf", "x".getBytes(StandardCharsets.UTF_8), 2);
 
             // ⚠️ 截断后仍要告诉用户"一共多少"——否则他以为就 2 段
@@ -84,7 +108,7 @@ class DocumentPreviewServiceTest {
             IngestionPipeline pipeline = mock(IngestionPipeline.class);
             when(pipeline.ingest(any(), any(), any(), any(), any())).thenReturn(List.of());
 
-            DocumentPreviewService svc = new DocumentPreviewService(pipeline, loaderWith(Optional.of(okContext())));
+            DocumentPreviewService svc = serviceWith(pipeline, true);
             assertThat(svc.preview(TENANT, SOURCE, "a.pdf", new byte[]{1}, 99999).limit())
                     .isEqualTo(DocumentPreviewService.MAX_PREVIEW_LIMIT);
             assertThat(svc.preview(TENANT, SOURCE, "a.pdf", new byte[]{1}, 0).limit())
@@ -98,7 +122,7 @@ class DocumentPreviewServiceTest {
             when(pipeline.ingest(any(), any(), any(), any(), any()))
                     .thenReturn(List.of(chunk("c1", ChunkRole.EXPLANATION, "讲解")));
 
-            DocumentPreviewService svc = new DocumentPreviewService(pipeline, loaderWith(Optional.of(okContext())));
+            DocumentPreviewService svc = serviceWith(pipeline, true);
             var r = svc.preview(TENANT, SOURCE, "a.pdf", new byte[]{1}, 50);
 
             assertThat(r.byRole()).containsKey(ChunkRole.EXERCISE_ANSWER.name());
@@ -118,7 +142,7 @@ class DocumentPreviewServiceTest {
             when(pipeline.ingest(any(), any(), any(), any(), any()))
                     .thenReturn(List.of(chunk("c1", ChunkRole.EXPLANATION, "讲解")));
 
-            DocumentPreviewService svc = new DocumentPreviewService(pipeline, loaderWith(Optional.of(okContext())));
+            DocumentPreviewService svc = serviceWith(pipeline, true);
             svc.preview(TENANT, SOURCE, "a.pdf", "content".getBytes(StandardCharsets.UTF_8), 50);
 
             // ⚠️ DocumentPreviewService 的依赖只有 pipeline 与 loader——
@@ -136,8 +160,7 @@ class DocumentPreviewServiceTest {
         @DisplayName("来源未登记五轴 → 明确报错，不造默认坐标")
         void missingEditionFailsLoudly() {
             IngestionPipeline pipeline = mock(IngestionPipeline.class);
-            DocumentPreviewService svc =
-                    new DocumentPreviewService(pipeline, loaderWith(Optional.empty()));
+            DocumentPreviewService svc = serviceWith(pipeline, false);
 
             assertThatThrownBy(() ->
                     svc.preview(TENANT, SOURCE, "a.pdf", new byte[]{1}, 50))

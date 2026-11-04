@@ -172,6 +172,33 @@ public class RagManagementConfig {
     }
 
     /**
+     * 上传前解析预览服务（RAG-D15 §六 待办 #6）。
+     *
+     * <p>⚠️ 依赖 {@link cn.studykid.rag.application.ingest.IngestionPipeline}：
+     * 它由 {@code LocalRagPortsConfig} 装配（需要解析器）。
+     * 解析器未接入时本 bean 缺席，预览端点返回 501，**不影响上传本身**。
+     *
+     * <p>⚠️ 本 bean 不走 {@code JdbcIngestSourceLoader}：
+     * 那个加载器需要"按 objectRef 读字节"的能力（由各模块自行注入），
+     * 而预览只读版本坐标与知识点——把读字节的依赖拉进来会让 bootstrap 起不来。
+     *
+     * @param pipeline 入库流水线（纯函数，不落库）
+     * @param jdbcTemplate JDBC 模板
+     * @param transactionTemplate 管理面事务模板
+     * @return 预览服务
+     */
+    @Bean
+    @ConditionalOnBean(cn.studykid.rag.application.ingest.IngestionPipeline.class)
+    public cn.studykid.rag.infrastructure.ingest.DocumentPreviewService documentPreviewService(
+            cn.studykid.rag.application.ingest.IngestionPipeline pipeline,
+            JdbcTemplate jdbcTemplate,
+            @Qualifier("ragManagementTransactionTemplate")
+            TransactionTemplate transactionTemplate) {
+        return new cn.studykid.rag.infrastructure.ingest.DocumentPreviewService(
+                pipeline, jdbcTemplate, transactionTemplate);
+    }
+
+    /**
      * 字典端口的 JDBC 实现（Point 2：枚举下拉的数据源）。
      *
      * <p><b>⚠️ 复用管理面事务模板</b>：动态字典的读写同样以

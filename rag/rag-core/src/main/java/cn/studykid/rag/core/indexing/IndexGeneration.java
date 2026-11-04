@@ -118,11 +118,32 @@ public record IndexGeneration(
     /**
      * @return 是否可切换到该代际。
      *
-     * <p>⚠️ **只有 ACTIVE 与 RETIRED 可被激活，BUILDING 不行**：
-     * 让一个只建了一半的代际上线，等于让检索去查一半是空向量的索引——
+     * <p>⚠️ <b>规则：ACTIVE / RETIRED 恒可激活；BUILDING 只有「已构建完成」才可激活。</b>
+     *
+     * <p>为什么 BUILDING 不能无条件拒绝：异步构建完成后 {@code status} 仍是 BUILDING
+     * （构建完成 ≠ 自动上线，是否切换由人决定），
+     * 若按状态一刀切，**构建完成的代际将永远无法切换**
+     * （2026-11-04 真实库实测：切换接口恒返回 409）。
+     *
+     * <p>为什么"建了一半"必须拒绝：那等于让检索去查一半是空向量的索引——
      * 表现为「有些片段永远召回不到」，且没有任何报错。
+     * 判据是 {@link #buildFinished()}：由构建器在扫到末尾时写入。
      */
     public boolean isActivatable() {
-        return status == Status.ACTIVE || status == Status.RETIRED;
+        if (status == Status.ACTIVE || status == Status.RETIRED) {
+            return true;
+        }
+        return status == Status.BUILDING && buildFinished();
+    }
+
+    /**
+     * @return 构建是否已全部完成（由构建器在扫到末尾时标记）。
+     *
+     * <p>⚠️ 不能用 {@code indexedChunks >= totalChunks} 代替：
+     * 计数相等有两种含义——"刚建完但还没扫到末尾确认" 与 "确实建完了"。
+     * 构建器在收尾时把 {@code note} 写成含「构建已完成」的标记，以此区分。
+     */
+    public boolean buildFinished() {
+        return note != null && note.contains("构建已完成");
     }
 }

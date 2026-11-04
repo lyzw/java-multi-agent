@@ -297,8 +297,12 @@ public class IndexGenerationBuilder {
         List<PendingChunk> page = scanBatch(channel, fromCursor);
         if (page.isEmpty()) {
             long done = currentIndexed(tenantId, generation);
-            generationPort.updateBuildState(tenantId, generation, done,
-                    Math.max(done, total), cursor);
+            // ⚠️⚠️ 扫不到新片段 = 确实到末尾了，必须**显式标记完成**：
+            //    只靠 `indexed == total` 推不出来——那有两种含义
+            //    （"刚建完未确认" / "确实建完"）。不标记的话 worker 会
+            //    每 2 秒把同一个代际再捡一遍（空转），而 `findPendingBuild`
+            //    又会误判它"已完成"从而永远不让状态推进。
+            generationPort.markBuildFinished(tenantId, generation);
             log.info("代际构建完成 bucket={} generation={} processed={}",
                     label, generation, done);
             return new BatchOutcome(0, true);

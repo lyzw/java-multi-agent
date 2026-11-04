@@ -120,4 +120,22 @@ public interface IndexGenerationPort {
      * @return 待构建的代际；没有则 null
      */
     @Nullable IndexGeneration findPendingBuild(@NonNull String tenantId);
+
+    /**
+     * 标记构建已全部完成（异步构建的收尾）。
+     *
+     * <p><b>⚠️ 为什么需要显式的完成标记，而不是靠 {@code indexed == total} 推断</b>：
+     * 计数相等有两种含义——"刚建完但还没扫到末尾确认" 与 "确实建完了"。
+     * 若只用计数判断，worker 要么永远不再捡起（构建停在 BUILDING 无法切换），
+     * 要么反复捡起已完成的代际（空转刷日志）。
+     * 用一个显式标记把两者分开。
+     *
+     * <p>实现约定：把 {@code total_chunks} 对齐为 {@code indexed_chunks}
+     * 并在 {@code note} 写入完成标记；{@code status} 仍保持 BUILDING
+     * （是否上线由人决定，构建完成 ≠ 自动切换）。
+     *
+     * @param tenantId   租户 ID
+     * @param generation 代际号
+     */
+    void markBuildFinished(@NonNull String tenantId, int generation);
 }

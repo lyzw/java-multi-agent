@@ -212,6 +212,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
     }
 
     @Override
+    @Transactional
     public void upsertEmbeddingForGeneration(@NonNull String tenantId, @NonNull String chunkId,
                                              @NonNull float[] embedding, @NonNull String embedModel,
                                              int generation) {
@@ -222,6 +223,11 @@ public class JdbcCorpusRepository implements CorpusRepository {
         // ⚠️ 代际号**不由 SQL 子查询解析**，而是显式参数：
         //    本方法专供代际构建器写 BUILDING 代际——若也去查 ACTIVE，
         //    重建就会污染正在服务的索引（新旧向量混在一个空间）。
+        //
+        // ⚠️⚠️ **必须有 @Transactional**（2026-11-04 真实库实测踩到）：
+        //    `set_config(..., true)` 是**事务局部**的，在 autocommit 下当场失效
+        //    → INSERT 失去会话租户 → RLS 写策略拒绝（500 / worker 无限重试）。
+        //    这与 `saveChunkAndEmbedding` 需要 @Transactional 是同一个理由。
         jdbcTemplate.queryForObject(
                 "SELECT set_config('app.tenant_id', ?, true)", String.class, tenantId);
         jdbcTemplate.update("""
