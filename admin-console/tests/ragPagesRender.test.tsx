@@ -141,4 +141,32 @@ describe('RAG 13 页挂载守卫', () => {
       unmount()
     }
   })
+
+  /**
+   * ⚠️ **覆盖边界（如实登记）**：旧的 `/rag` 单页入口（{@link RagManagementPage}）
+   *    不在上面的挂载清单里。
+   *
+   *    原因不是懒，是它**挂不住**：该页用 useRagIngestJobs，那个 hook 在挂载后
+   *    会 setTimeout 自递归轮询（且不可见时也只是「推迟到下一个周期」再排一次），
+   *    在 jsdom 里不会自然停下——挂载它就等于让测试进入无限轮询。
+   *    其它 13 页没有这个行为，所以挂载断言对它们有效。
+   *
+   *    替代守法是静态体检：把那个文件当文本读，断言它满足那几条曾出事的结构约束。
+   *    这比「假装它也挂载过」诚实——后者会让覆盖清单看起来更漂亮，却少了它。
+   */
+  it('旧 /rag 入口页：静态结构体检（它不参与挂载守卫）', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    // ⚠️ 不用 import.meta.url：jsdom 环境下它不是 file: 协议，readFileSync 会抛
+    //    「The URL must be of scheme file」。用 cwd 拼相对路径，与 runner 等价且稳。
+    const src = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/pages/rag/RagManagementPage.tsx'), 'utf8')
+
+    // ① 不许把 useRagScope 提到顶层（该页不依赖 Shell，但若日后改成依赖，必须走 render prop）
+    expect(src).not.toMatch(/=\s*useRagScope\(\)/)
+    // ② 不许出现裸 JSX 表达式（花括号丢失）——与挂载守卫同一类事故
+    expect(src).not.toMatch(/^\s*(error &&|!ready \? \()/m)
+    // ③ 必须真的有内容（防止文件被误删成空壳）
+    expect(src).toContain('RAG 语料数据管理')
+  })
 })
