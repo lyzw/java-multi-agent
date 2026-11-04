@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.infrastructure.observer.metrics;
 
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.jspecify.annotations.NonNull;
 import org.springframework.core.annotation.Order;
@@ -11,6 +12,7 @@ import cn.studykid.multiagent.ports.observer.ExecutionObserver.ToolCallSummary;
 import cn.studykid.multiagent.ports.model.ModelResponse;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 
@@ -23,6 +25,7 @@ import io.micrometer.core.instrument.Timer;
  *   <li>{@code ai.execution.latency.total} — 端到端延迟（Timer）</li>
  *   <li>{@code ai.execution.loops.total} — 循环完成次数（Counter）</li>
  *   <li>{@code ai.execution.trimmed} — 裁剪发生次数（Counter）</li>
+ *   <li>{@code cap.tool_availability_ratio} — 工具调用成功率（Gauge，阶段一 · I2 · P0-1c）</li>
  * </ul>
  *
  * <p><b>Order = 20</b>：在日志之后执行。
@@ -36,6 +39,7 @@ public class MicrometerExecutionObserver implements ExecutionObserver {
     private static final String STEPS = "ai.execution.steps";
     private static final String LATENCY_TOTAL = "ai.execution.latency.total";
     private static final String TRIMMED = "ai.execution.trimmed";
+    static final String TOOL_AVAILABILITY_RATIO = "cap.tool_availability_ratio";
 
     private static final String TAG_TENANT = "tenant";
     private static final String TAG_OUTCOME = "outcome";
@@ -43,8 +47,24 @@ public class MicrometerExecutionObserver implements ExecutionObserver {
 
     private Timer.Sample loopTimer;
 
+    /** 工具成功率累计（阶段一 · I2 · P0-1c）：成功计数 / 调用计数，拉模型 Gauge。 */
+    private final AtomicLong toolSuccess = new AtomicLong();
+    private final AtomicLong toolTotal = new AtomicLong();
+
     public MicrometerExecutionObserver(MeterRegistry registry) {
         this.registry = registry;
+        Gauge.builder(TOOL_AVAILABILITY_RATIO, this::toolAvailabilityRatio)
+                .description("Tool invocation success ratio (succeeded / (succeeded+failed))")
+                .register(registry);
+    }
+
+    /** 工具调用成功率：0.0（无调用）…1.0（全成功）。 */
+    double toolAvailabilityRatio() {
+        long total = toolTotal.get();
+        if (total == 0) {
+            return 0.0d;
+        }
+        return (double) toolSuccess.get() / (double) total;
     }
 
     @Override
@@ -67,7 +87,12 @@ public class MicrometerExecutionObserver implements ExecutionObserver {
     public void onToolCallComplete(String tenantId, String runId, int step,
                                    @NonNull ToolCallSummary toolResult,
                                    java.time.Duration latency) {
-        // 不采集
+        // 工具成功率（阶段一 · I2 · P0-1c）：成功 / 成功+失败。
+        // rejected / unknown 不计入分母（它们不是「调用执行」而是「准入拦截/结果未知」，
+        // 计入会扭曲「工具可用率」= 工具自己是否可用 的语义）。
+        toolSuccess.addAndGet(toolResult.succeededTools().size());
+        toolTotal.addAndGet(toolResult.succeededTools().size()
+                + toolResult.failedTools().size());
     }
 
     @Override

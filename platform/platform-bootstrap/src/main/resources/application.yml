@@ -604,6 +604,22 @@ config:
     # ⚠️ 数值必须加引号：YamlPropertiesFactoryBean 会丢弃裸标量
     #    （P1 已在 delivery-limit 上踩过该坑）。
     cap-dual-write: "${CONFIG_FLAG_CAP_DUAL_WRITE:true}"
+    # CAP 授权链路全局开关（P2 · 阶段一 P0-1c 灰度）。
+    #
+    # ⚠️⚠️ **默认 false，且 P5 之前不得在生产全局开启**：
+    #   P5 的发布指针读路径落地前，开关开启会让授权判定依赖已知不完整的
+    #   发布语义（见 CapEnforcementSwitch 类注释）。这里只做灰度。
+    #
+    # 租户级灰度（P0-1c）：cap-authorization-enforced.tenants 是逗号分隔的
+    # 租户白名单。全局开关 false 时，仍可仅对白名单内租户开启 CAP 链路，
+    # 用于切分观察窗口（阶段 1 = 单测试租户）。白名单内租户是「提前走 CAP
+    # 完整链路」的先行者，不是「绕开 CAP」的特权户。
+    #
+    # 示例：十位灰度租户先是 0，验证后再逐个放大。
+    #   cap-authorization-enforced: "${CONFIG_FLAG_CAP_AUTHORIZATION_ENFORCED:false}"
+    #   cap-authorization-enforced.tenants: "${CONFIG_FLAG_CAP_AUTHORIZATION_ENFORCED_TENANTS:}"
+    cap-authorization-enforced: "${CONFIG_FLAG_CAP_AUTHORIZATION_ENFORCED:false}"
+    cap-authorization-enforced.tenants: "${CONFIG_FLAG_CAP_AUTHORIZATION_ENFORCED_TENANTS:}"
     # ⚠️⚠️ 能力闭包校验模式（P0-1a）——
     #    off     = 不校验（历史行为：任何已注册工具都可被任意 Agent 调用）
     #    warn    = 校验但只告警（默认；把「能力目录未装载」这个缺口变成可见的）
@@ -632,7 +648,9 @@ management:
   endpoints:
     web:
       exposure:
-        include: "health"
+        # ⚠️ 最小暴露面：只暴露 health + prometheus（CAP 灰度 E1/E2 指标抓取，见
+        #    《运行时灰度验证方案》）。prometheus 为只读抓取；其余端点保持关闭。
+        include: "health,prometheus"
   endpoint:
     health:
       # 匿名访问仅返回 status（不泄露磁盘/DB 等细节）
@@ -640,6 +658,14 @@ management:
       probes:
         # 启用 liveness/readiness 分组，供 k8s 探针使用
         enabled: "true"
+    prometheus:
+      # 指标抓取为只读；不在此开放任何写/配置端点
+      enabled: "true"
+  metrics:
+    export:
+      prometheus:
+        enabled: "true"
+        step: "30s"
 
 
 # ── HTTP 访问日志（RequestLoggingConfiguration）────────────────────

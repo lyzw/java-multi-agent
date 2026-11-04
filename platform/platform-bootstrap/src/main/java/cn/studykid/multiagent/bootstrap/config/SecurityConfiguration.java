@@ -91,6 +91,7 @@ public class SecurityConfiguration {
             "/api/auth/jwks",
             "/actuator/health",
             "/actuator/health/**",
+            "/actuator/prometheus",
             "/error"
     };
 

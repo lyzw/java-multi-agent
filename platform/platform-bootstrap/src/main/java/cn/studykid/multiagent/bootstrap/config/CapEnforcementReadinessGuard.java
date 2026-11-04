@@ -18,8 +18,8 @@ import cn.studykid.multiagent.application.cap.CapExecutionFlow;
  * CAP 授权链路就绪守卫（P0-1 修复：把「CAP 关闭」这个静默缺口变成显式、可观测的状态）。
  *
  * <p><b>背景</b>：{@code config.flag.cap-authorization-enforced} 默认 {@code false}
- * （{@link CapEnforcementSwitch} 类注释明示「P5 发布指针读落地前不得在生产开启」）。
- * 关闭时执行点走既有链路，<b>不按 Agent 能力闭包校验工具名/参数/风险上限</b>——
+ * （{@link CapEnforcementSwitch} 类注释：P5 指针读路径已落地，全量开启待运行时灰度证据）。
+ * 关闭时执行点走既有链路，<b>不按 Agent 能力闭包校验工具</b>——
  * 任何已注册工具均可被任意具备 {@code TOOL_INVOKE} 的 Agent 调用。
  *
  * <p><b>本报告评审的 P0-1 核心抱怨是「配了也不生效且无任何报错」</b>（静默失效）。
@@ -32,8 +32,9 @@ import cn.studykid.multiagent.application.cap.CapExecutionFlow;
  *       <b>fail-closed 拒绝启动</b>，供生产以硬失败姿态强制显式授权。</li>
  * </ul>
  *
- * <p>⚠️ 本守卫<b>不替 P5 做决定</b>：它不翻转开关、不私自放行。完整的「按 Agent 能力闭包
- * 强制校验工具」要在 P5 发布指针读落地、开关置 {@code true} 后才生效。
+ * <p>⚠️ 本守卫<b>只观测、不替它做决定</b>：它不翻转开关、不私自放行。完整的「按 Agent 能力闭包
+ * 强制校验工具」在开关置 {@code true} 后生效（P5 指针读路径 2026-11-04 已落地，
+ * 见 {@link CapEnforcementSwitch} 类注释）。
  */
 public class CapEnforcementReadinessGuard implements ApplicationRunner {
 
@@ -90,24 +91,31 @@ public class CapEnforcementReadinessGuard implements ApplicationRunner {
             //    故本条告警必须区分「两条通路都没强制」与「闭包守卫已在强制」——
             //    否则告警会声称「任何已注册工具都可被任意 Agent 调用」，
             //    而实际已有闭包校验在拦，**假警报同样有害**（会让人忽略真警报）。
+            //    ⚠️ P0-1c：灰度白名单是「给个别租户提前开启」的先行通道（不是豁免）。
             boolean closureForced = closureEnforcementMode != null
                     && "enforce".equalsIgnoreCase(closureEnforcementMode.trim());
+            int allowlistSize = capSwitch.tenantAllowlist().size();
             if (closureForced) {
-                log.warn("⚠️ [SECURITY] CAP 授权链路未启用（config.flag.cap-authorization-enforced=false），"
+                log.warn("⚠️ [SECURITY] CAP 授权链路未全局启用（config.flag.cap-authorization-enforced=false"
+                        + "，灰度白名单 {} 个租户），"
                         + " 但既有链路的闭包守卫已强制（cap-closure-enforcement=enforce）："
                         + " 工具名仍按 Agent 能力闭包校验，但参数/风险上限等更细的判定"
-                        + " 仍走既有链路。");
+                        + " 仍走既有链路。",
+                        allowlistSize);
             } else {
-                log.warn("⚠️ [SECURITY] CAP 授权链路未启用（config.flag.cap-authorization-enforced=false），"
+                log.warn("⚠️ [SECURITY] CAP 授权链路未全局启用（config.flag.cap-authorization-enforced=false"
+                        + "，灰度白名单 {} 个租户），"
                         + " 且闭包守卫未强制（cap-closure-enforcement=" + closureEnforcementMode + "）。"
                         + " 执行点不按 Agent 能力闭包校验工具名/参数/风险上限"
                         + " —— 任何已注册工具均可被任意具备 TOOL_INVOKE 的 Agent 调用（P0-1）。"
+                        + " 白名单内租户（先行者）除外。"
                         + " 请装载能力目录后置 config.flag.cap-closure-enforcement=enforce，"
                         + " 或置 config.flag.cap-authorization-enforced=true 启用 CAP 链路；"
-                        + " 若需以硬失败姿态强制，可设 config.flag.cap-enforcement-required=true。");
+                        + " 若需以硬失败姿态强制，可设 config.flag.cap-enforcement-required=true。",
+                        allowlistSize);
             }
         } else {
-            log.info("CAP 授权链路已启用：执行点将按 Agent 能力闭包强制校验工具/参数/风险上限。");
+            log.info("CAP 授权链路已全局启用：执行点将按 Agent 能力闭包强制校验工具/参数/风险上限。");
         }
     }
 

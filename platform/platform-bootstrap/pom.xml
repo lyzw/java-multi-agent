@@ -59,6 +59,16 @@
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
     <!--
+      Prometheus 指标暴露（阶段一 · P0-1c 监控面板 + 运行时灰度验证方案）。
+      ⚠️ 只提供只读的 /actuator/prometheus 抓取端（见 application.yml management + SecurityConfiguration 白名单），
+      供 ops 抓 cap.authz_mismatch_total / cap.tool_availability_ratio 等 Micrometer 指标，
+      用于 CAP 灰度阶段 E1/E2 判定。不暴露任何配置/写端点。
+    -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+    <!--
       IT 专用租户供给器（ItTenantProvisioner）。
       ⚠️ **test 作用域**：只在 IT 里造 it- 前缀的隔离租户，不进主程序 classpath。
       此前 MessagingSwitchGuardIT 自带一份「建 tenant + agent + agent_version + execution_snapshot」

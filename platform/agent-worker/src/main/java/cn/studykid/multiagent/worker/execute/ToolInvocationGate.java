@@ -598,7 +598,7 @@ public class ToolInvocationGate {
             @Nullable ExecutionScope scope,
             @Nullable DelegationContext delegationContext) {
 
-        if (capFlow != null && capFlow.isEnabled()) {
+        if (capFlow != null && capFlow.isEnabled(tenantId)) {
             return invokeAllCap(tenantId, task, calls, scope, delegationContext);
         }
         // ⚠️ 既有链路同样带委派分支（第十九批）：委派不是 CAP 授权链路的能力，

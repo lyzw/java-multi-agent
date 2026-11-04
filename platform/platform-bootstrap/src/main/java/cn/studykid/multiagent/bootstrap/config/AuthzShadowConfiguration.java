@@ -21,13 +21,14 @@ import cn.studykid.multiagent.infrastructure.security.AuthzShadowPolicyDefaults;
 import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
 import cn.studykid.multiagent.infrastructure.security.DefaultAccessGate;
 import cn.studykid.multiagent.infrastructure.security.JdbcAuthzDecisionLog;
+import cn.studykid.multiagent.infrastructure.security.MicrometerAuthzMismatchMetrics;
 import cn.studykid.multiagent.infrastructure.security.NoOpAuthzDecisionRecorder;
 import cn.studykid.multiagent.infrastructure.security.PolicyEngine;
 import cn.studykid.multiagent.infrastructure.security.PolicyStore;
 import cn.studykid.multiagent.infrastructure.security.RuleBasedPolicyEngine;
 import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
-import cn.studykid.multiagent.infrastructure.security.Slf4jAuthzMismatchMetrics;
 import cn.studykid.multiagent.infrastructure.security.SubjectContextResolver;
+import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * 权限<b>影子态</b>装配（P1 / 12 文 §4.5 · 13 文 §5.2）。
@@ -97,10 +98,18 @@ public class AuthzShadowConfiguration {
         return AuthzSamplingPolicy.of(r, windowMillis, always);
     }
 
-    /** 观测指标出口：SLF4J 实现（mismatch / taint 直接打 WARN，便于告警订阅）。 */
+    /**
+     * 观测指标出口（阶段一 · I2 · P0-1c）：Micrometer 实现。
+     *
+     * <p><b>单源真相</b>：{@link MicrometerAuthzMismatchMetrics} 在原子计数基础上同步递增
+     * Micrometer {@code cap.authz_mismatch_total / cap.authz_shadow_samples_total /
+     * cap.authz_unrestricted_total / cap.authz_taint_violations_total} 并保留 SLF4J WARN
+     * 告警（mismatch / taint）—— 取代此前的 {@code Slf4jAuthzMismatchMetrics}，二者行为一致，
+     * 只是额外暴露生产可采集指标（13 文 §5.2 验收矩阵 + 阶段一 §2.2 监控面板）。
+     */
     @Bean
-    public AuthzMismatchMetrics authzMismatchMetrics() {
-        return new Slf4jAuthzMismatchMetrics();
+    public AuthzMismatchMetrics authzMismatchMetrics(MeterRegistry registry) {
+        return new MicrometerAuthzMismatchMetrics(registry);
     }
 
     /**

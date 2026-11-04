@@ -151,6 +151,10 @@ class AuthzShadowWiringTest {
         ctx.getEnvironment().getPropertySources().addFirst(new MapPropertySource("test", props));
         ctx.register(Placeholders.class, BeanRegisteredRepos.class);
         ctx.registerBean(DataSource.class, NoConnectDataSource::new);
+        // ⚠️ P0-1c 监控：authzMismatchMetrics 现在依赖 MeterRegistry（Micrometer 实现）——
+        //    最小容器没有 Spring Boot 自动装配，须用 SimpleMeterRegistry 补齐。
+        ctx.registerBean(io.micrometer.core.instrument.simple.SimpleMeterRegistry.class,
+                io.micrometer.core.instrument.simple.SimpleMeterRegistry::new);
         ctx.register(AuthzShadowConfiguration.class);
         ctx.register(COMPONENT_REPOS.toArray(new Class<?>[0]));
         ctx.refresh();

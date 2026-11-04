@@ -1711,14 +1711,58 @@ public class ApplicationConfiguration {
     /**
      * CAP 授权链路迁移开关（P2）。
      *
-     * <p>⚠️ <b>默认 false</b>：P5 的发布指针读落地前不得在生产开启
+     * <p>⚠️ <b>默认 false</b>：P5 的发布指针读落地前不得在生产整体开启
      * （见 {@code CapEnforcementSwitch} 的类注释）。
+     *
+     * <p><b>租户级灰度（阶段一 · P0-1c）</b>：额外解析
+     * {@code config.flag.cap-authorization-enforced.tenants} 逗号分隔列表，
+     * 作为灰度白名单传给开关。全局关闭时仍可仅对白名单内租户开启 CAP 链路；
+     * 白名单为空 = 无租户级灰度（与旧行为逐字节一致）。
      */
     @Bean
     public cn.studykid.multiagent.application.cap.CapEnforcementSwitch capEnforcementSwitch(
             @Value("${" + cn.studykid.multiagent.application.cap.CapEnforcementSwitch.KEY
-                    + ":false}") boolean enabled) {
-        return new cn.studykid.multiagent.application.cap.CapEnforcementSwitch(enabled);
+                    + ":false}") boolean enabled,
+            @Value("${" + cn.studykid.multiagent.application.cap.CapEnforcementSwitch.KEY
+                    + ".tenants:}") String tenantAllowlistCsv) {
+        return new cn.studykid.multiagent.application.cap.CapEnforcementSwitch(
+                enabled, parseCsvSet(tenantAllowlistCsv));
+    }
+
+    /**
+     * CAP 授权链路状态指标（阶段一 · I2 · P0-1c 监控面板）。
+     *
+     * <p>注册 {@code cap.enforcement_status} Gauge（0=关 / 1=灰度 / 2=开），
+     * 由 {@code MeterRegistry}（Spring Boot 自动装配）采样。
+     *
+     * <p>⚠️ <b>这只是观测</b>，不翻转开关 —— 与 {@link CapEnforcementReadinessGuard}
+     * 同纪律：P5 指针读落地前默认保持 {@code 0}（见 {@code CapEnforcementSwitch} 类注释）。
+     */
+    @Bean
+    public CapEnforcementMetrics capEnforcementMetrics(
+            cn.studykid.multiagent.application.cap.CapEnforcementSwitch capSwitch,
+            io.micrometer.core.instrument.MeterRegistry registry) {
+        return new CapEnforcementMetrics(capSwitch, registry);
+    }
+
+    /**
+     * 解析逗号分隔的标识列表为 {@code Set}；空串/全空白 → 空集合。
+     *
+     * <p>⚠️ 本项目 {@code application.yml} 的列表值一律用引号包成字符串
+     * （裸 YAML 序列会被 {@code YamlPropertiesFactoryBean} 丢弃），故这里做 CSV 解析。
+     */
+    private static java.util.Set<String> parseCsvSet(String csv) {
+        if (csv == null || csv.isBlank()) {
+            return java.util.Set.of();
+        }
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        for (String part : csv.split(",")) {
+            String trimmed = part == null ? "" : part.trim();
+            if (!trimmed.isEmpty()) {
+                out.add(trimmed);
+            }
+        }
+        return out;
     }
 
     /**

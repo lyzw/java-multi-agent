@@ -303,10 +303,22 @@ public class CapExecutionFlow {
     }
 
     /**
-     * @return CAP 授权链路是否已启用（迁移开关）
+     * @return CAP 授权链路是否已启用（迁移开关，不区分租户）。<b>判定应以
+     *         {@link #isEnabled(String)} 为准</b>，本方法只反映全局位。
      */
     public boolean isEnabled() {
         return enforcementSwitch.isEnabled();
+    }
+
+    /**
+     * 指定租户是否启用 CAP 授权链路（阶段一 · P0-1c 灰度判定）。
+     *
+     * <p>委托 {@link CapEnforcementSwitch#isEnabled(String)}：全局开启 <i>或</i>
+     * 该租户在灰度白名单内即启用。白名单是「给个别租户提前走 CAP 完整链路」的
+     * 先行通道，不是豁免。
+     */
+    public boolean isEnabled(@org.jspecify.annotations.Nullable String tenantId) {
+        return enforcementSwitch.isEnabled(tenantId);
     }
 
     // ── 主入口 ────────────────────────────────────────────────────
