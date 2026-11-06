@@ -180,8 +180,12 @@ class IngestInvariantEvidenceTest {
         @Test
         @DisplayName("反向：非答案区的同内容判 EXPLANATION（证明是 inAnswerZone 驱动的）")
         void counterFactualOutsideAnswerZone() {
+            // ⚠️ 探针不用「参考答案」开头：该短语在 RAG-D26 取严补丁后属于
+            //    「块首答案区标题形态」（MergeChunk 场景的泄题防线），
+            //    即使不在答案区也判答案承载——那是**有意**的行为（宁可过判）。
+            //    本测试要证明的是「版面驱动」：用不含答案区短语的对照文本。
             List<Chunk> chunks = ingest(List.of(
-                    block(BlockType.PARAGRAPH, "参考答案内容", 1, 0, "", null, false)));
+                    block(BlockType.PARAGRAPH, "配方后的顶点式是 y=(x-2)^2-1。", 1, 0, "", null, false)));
             assertEquals(ChunkRole.EXPLANATION, chunks.get(0).role(),
                     "对照组：同样的文本、不同的版面事实 → 不同角色，证明判定看的是版面而非文本");
         }

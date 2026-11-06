@@ -48,8 +48,38 @@ class LocalPortGateTest {
         assertNotNull(config.documentParserPort());
         assertNotNull(config.entailmentPort());
         assertNotNull(config.groundingPolicy());
-        assertNotNull(config.ingestionPipeline(config.documentParserPort()));
+        // RAG-D26 阶段 3.1：ingestionPipeline 增加 premise 配置参数，
+        // 默认值（enabled=false）下仍走旧内置切分——行为与迁移前一致。
+        assertNotNull(config.ingestionPipeline(config.documentParserPort(),
+                false, "", 512, 0.15));
         assertNotNull(config.groundingService(config.entailmentPort(),
                 config.groundingPolicy()));
+    }
+
+    @Test
+    void premiseDefaultsToLegacyMode() {
+        LocalRagPortsConfig config = new LocalRagPortsConfig(true);
+        var pipeline = config.ingestionPipeline(config.documentParserPort(),
+                false, "", 512, 0.15);
+        org.junit.jupiter.api.Assertions.assertFalse(pipeline.premiseModeEnabled(),
+                "默认必须关闭 premise 切分（阶段 3 灰度未开启）");
+    }
+
+    @Test
+    void premiseEnabledAssemblesHeadingChunker() {
+        LocalRagPortsConfig config = new LocalRagPortsConfig(true);
+        var pipeline = config.ingestionPipeline(config.documentParserPort(),
+                true, "heading", 512, 0.15);
+        assertTrue(pipeline.premiseModeEnabled(), "显式开启后应注入 premise 切分器");
+    }
+
+    @Test
+    void premiseRejectsUnknownPolicyAtAssemblyTime() {
+        LocalRagPortsConfig config = new LocalRagPortsConfig(true);
+        // ⚠️ fail-closed：未知策略值在装配期抛出（应用拒绝启动），不留到运行期。
+        assertThrows(IllegalArgumentException.class, () ->
+                        config.ingestionPipeline(config.documentParserPort(),
+                                true, "not-a-policy", 512, 0.15),
+                "未知切分策略必须在装配期失败");
     }
 }
