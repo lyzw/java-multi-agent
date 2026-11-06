@@ -132,7 +132,10 @@ class RagManagementControllerTest {
                 "9787100000000", null, TrustTier.OFFICIAL_PUBLISHER,
                 VerificationStatus.VERIFIED, VerificationMethod.ISBN,
                 "ISBN:ref@2026-01-01", now.minusSeconds(3600), REVIEWER, 365,
-                "LICENSED", "obj://book.pdf", "a".repeat(64), now, now);
+                "LICENSED", "obj://book.pdf", "a".repeat(64), now, now,
+                // 时间轴刻意错开：认领于 2h 前、判定于 now、元数据确认于 1h 前。
+                // 三者互不相同 → 任何「拿一个字段冒充另一个」的回归都会立刻失败。
+                now.minusSeconds(7200), now, now.minusSeconds(3600));
     }
 
     private static CorpusDocument sampleDocument(VerificationStatus status, boolean retrievable) {
@@ -268,6 +271,44 @@ class RagManagementControllerTest {
         assertEquals(false, responses.get(0).stale());
         assertEquals(true, responses.get(0).admissible(),
                 "VERIFIED + 未过期 + 版权放行 → 准入（以最低门槛判定）");
+    }
+
+    @Test
+    @DisplayName("来源视图透出三条时间轴：录入 / 审核开始 / 审核决定 / 元数据确认")
+    void sourceResponseExposesLifecycleTimestamps() {
+        when(port.listSources(any(), any())).thenReturn(List.of(sampleSource()));
+        ManagementDtos.SourceResponse r = controller
+                .listSources(TENANT, null, null, PLATFORM_CALLER, null, null, null, false, 50, 0)
+                .get(0);
+        // 录入时间 = created_at（管理台「录入时间」列的数据源）
+        assertEquals("2026-10-22T00:00:00Z", r.createdAt());
+        // 审核开始时间（review_started_at）：认领那一刻，与录入时间**不是同一个值**
+        assertEquals("2026-10-21T22:00:00Z", r.reviewStartedAt());
+        // 审核决定时间（ver_decided_at）
+        assertEquals("2026-10-22T00:00:00Z", r.decidedAt());
+        // 元数据确认时间（metadata_confirmed_at）
+        assertEquals("2026-10-21T23:00:00Z", r.metadataConfirmedAt());
+    }
+
+    @Test
+    @DisplayName("未认领/未判定/未确认时三个时间为 null（不得回落成录入时间）")
+    void absentTimestampsStayNull() {
+        Instant now = Instant.parse("2026-10-22T00:00:00Z");
+        CorpusSource pending = new CorpusSource(
+                SOURCE_ID, "教材", "人教版八年级上册数学", "人民教育出版社",
+                "9787100000000", null, TrustTier.UNVERIFIED,
+                VerificationStatus.PENDING, VerificationMethod.NONE,
+                null, null, null, 365, "PENDING", null, null, now, now,
+                null, null, null);
+        when(port.listSources(any(), any())).thenReturn(List.of(pending));
+        ManagementDtos.SourceResponse r = controller
+                .listSources(TENANT, null, null, PLATFORM_CALLER, null, null, null, false, 50, 0)
+                .get(0);
+        assertNull(r.reviewStartedAt(), "从未认领 → 审核开始时间必须为 null");
+        assertNull(r.decidedAt(), "从未判定 → 决定时间必须为 null");
+        assertNull(r.metadataConfirmedAt(), "未确认元数据 → 确认时间必须为 null");
+        // ⚠️ 反例守卫：录入时间必须有值（否则列表第一列就空白）
+        assertEquals("2026-10-22T00:00:00Z", r.createdAt());
     }
 
     // ---------------------------------------------------------------------

@@ -142,10 +142,18 @@ const VERIFICATION_METHODS: RagVerificationMethod[] = [
   'OFFICIAL_HASH',
 ]
 
-function formatTime(iso: string | null): string {
-  if (iso === null || iso === '') return '—'
+function formatTime(iso: string | null | undefined): string {
+  // ⚠️ `undefined`（旧版后端未返回该字段）与 `null`（该事件尚未发生）都按「无值」呈现，
+  //    但**不共用结论文案**：调用点自己决定写「未发生」还是「未返回」。
+  if (iso === null || iso === undefined || iso === '') return '—'
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('zh-CN', { hour12: false })
+  if (Number.isNaN(d.getTime())) return iso
+  // 逐段补零：`toLocaleString` 在个位数月/日时输出 `2026-11-1`，时间列会参差不齐。
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  )
 }
 
 /* ── 标签导航 ──────────────────────────────────────────── */
@@ -489,6 +497,22 @@ function SourceEntry({
       </button>
       <div className="rag-mgmt__tags">
         <StatusChip source={source} />
+        {/*
+          时间维度（2026-11-05）：列表补「录入 / 审核开始」两个时刻。
+          ⚠️ 只补两个而不是全部：这是**扫读**层，用来快速定位"卡住的、录得慢的"；
+            完整时间轴（元数据确认 / 审核决定 / 最近更新）在详情页。
+            再往这一行塞更多时刻，标签区就不再可扫读了。
+        */}
+        <span className="chip" title="录入（登记）时间">
+          录入 {formatTime(source.createdAt)}
+        </span>
+        {source.reviewStartedAt !== undefined ? (
+          <span className="chip" title="审核开始时间（进入审核的那一刻）">
+            {source.reviewStartedAt === null
+              ? '未进入审核'
+              : `审核中自 ${formatTime(source.reviewStartedAt)}`}
+          </span>
+        ) : null}
         {job !== undefined ? (
           <IngestStatusChip
             status={job.status}
@@ -681,8 +705,36 @@ function SourceDetail({
             <dd>{source.verificationEvidence ?? '—'}</dd>
             <dt>决定人</dt>
             <dd className="mono">{source.verifiedBy ?? '—'}</dd>
-            <dt>决定时间</dt>
+            <dt>有效期起算</dt>
             <dd>{formatTime(source.verifiedAt)}</dd>
+            <dt>录入时间</dt>
+            <dd>{formatTime(source.createdAt)}</dd>
+            <dt>元数据确认时间</dt>
+            <dd>
+              {source.metadataConfirmedAt === undefined
+                ? '本次响应未返回'
+                : source.metadataConfirmedAt === null
+                  ? '尚未确认'
+                  : formatTime(source.metadataConfirmedAt)}
+            </dd>
+            <dt>审核开始时间</dt>
+            <dd>
+              {source.reviewStartedAt === undefined
+                ? '本次响应未返回'
+                : source.reviewStartedAt === null
+                  ? '尚未进入审核'
+                  : formatTime(source.reviewStartedAt)}
+            </dd>
+            <dt>审核决定时间</dt>
+            <dd>
+              {source.decidedAt === undefined
+                ? '本次响应未返回'
+                : source.decidedAt === null
+                  ? '尚无审核结论'
+                  : formatTime(source.decidedAt)}
+            </dd>
+            <dt>最近更新</dt>
+            <dd>{formatTime(source.updatedAt)}</dd>
             <dt>有效期</dt>
             <dd>{source.validDays} 天</dd>
             <dt>内容校验和</dt>

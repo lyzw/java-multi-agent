@@ -27,7 +27,8 @@ import type { RagTarget } from '@/api/ragClient'
 import type { RagSourceListState } from '@/features/rag/useRagManagement'
 import { useDictOptions } from '@/features/dictionaries/useDictionaries'
 import { computeSha256Hex } from '@/features/rag/fileHash'
-import { IngestJobTag, IngestProgress, TrustTierTag, VerificationTag } from './ragUi'
+import { IngestJobTag, IngestProgress, TimeCell, TrustTierTag, VerificationTag } from './ragUi'
+import { scrollXOf } from '@/shared/tableLayout'
 
 /**
  * 由文件名后缀推断载体类型（前端预览用，与后端 {@code LocalObjectStoreAdapter}
@@ -222,6 +223,83 @@ function buildColumns(
     ellipsis: true,
     render: (v: string | null) => (v ? v : <Text type="secondary">—</Text>),
   },
+  // ── 时间维度（2026-11-05）───────────────────────────────────────
+  //
+  // ⚠️ **为什么「录入时间」与「审核时间」要分开两列、且必须落到列表**：
+  //    此前列表只回答「现在是什么状态」，回答不了「什么时候到的」——
+  //    审核 SLA、卡单排查、录入时效全都无从查起（要逐个点开抽屉看）。
+  //    两列刻意不合并成一个「时间」列：
+  //      · 录入时间 = 采集员行为，衡量「录得慢不慢」；
+  //      · 审核时间 = 审核员行为，衡量「审得慢不慢」；
+  //    合并后无法分别度量，也就无法定位瓶颈在录入侧还是审核侧。
+  {
+    title: '录入时间',
+    key: 'createdAt',
+    width: 165,
+    render: (_: unknown, row) => (
+      // ⚠️ 录入时间必填（DB NOT NULL）；为 null 只可能是极旧后端，
+      //    此时 TimeCell 会如实显示「—」，不补当前时间。
+      <TimeCell value={row.createdAt} />
+    ),
+  },
+  {
+    title: '审核时间',
+    key: 'reviewTimeline',
+    width: 210,
+    render: (_: unknown, row) => {
+      // ⚠️ 两段式：**开始**与**决定**是两个不同的事实，不可合并成「最近一次审核」。
+      //    只看决定时间会把「卡在审核中三天」的来源显示成空白，
+      //    而那正是最需要被看见的行。
+      const started = row.reviewStartedAt
+      const decided = row.decidedAt
+      if (started === undefined && decided === undefined) {
+        // 旧版后端未返回这两个字段：如实呈现「未返回」，不当成「没审核过」。
+        return <Text type="secondary">—</Text>
+      }
+      return (
+        <Space direction="vertical" size={0} style={{ rowGap: 2 }}>
+          {/* ⚠️ 标签与时刻用 Space 横向排布，而不是把 TimeCell 塞进一个 Text 里：
+              Typography.Text 嵌 Typography.Text 会生成两层 span，
+              读屏会把「开始：」与时间读成两段互不相关的文本。 */}
+          <Space size={4} align="center">
+            <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+              开始
+            </Text>
+            <TimeCell value={started} />
+          </Space>
+          <Space size={4} align="center">
+            <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+              决定
+            </Text>
+            <TimeCell value={decided} />
+          </Space>
+        </Space>
+      )
+    },
+  },
+  {
+    title: '元数据确认',
+    key: 'metadataConfirmedAt',
+    width: 165,
+    render: (_: unknown, row) => {
+      // ⚠️ 确认与审核不同轴：确认是「人替系统推断值背书」，审核是「准不准入库」。
+      //    未确认时显示「未确认」而不是「—」，因为这一列的存在意义就是区分
+      //    「还在推断值待核」与「已核过」，一个破折号表达不出这个区别。
+      if (row.metadataConfirmedAt === undefined) {
+        return <Text type="secondary">—</Text>
+      }
+      if (row.metadataConfirmedAt === null) {
+        return <Text type="secondary">未确认</Text>
+      }
+      return <TimeCell value={row.metadataConfirmedAt} />
+    },
+  },
+  {
+    title: '最近更新',
+    key: 'updatedAt',
+    width: 165,
+    render: (_: unknown, row) => <TimeCell value={row.updatedAt} />,
+  },
   ]
 }
 
@@ -241,6 +319,15 @@ export function RagSourceTable({
     () => buildColumns(jobsBySource ?? new Map(), onConfirmMetadata),
     [jobsBySource, onConfirmMetadata],
   )
+  /**
+   * 横向滚动宽度 = 各列显式 width 之和。
+   *
+   * ⚠️ 加时间四列后总宽已超出常见视口（1600px 以上），必须显式滚动：
+   *    写 {@code scroll={{ x: 'max-content' }}} 会在固定列场景下把
+   *    最后一列压在固定列之下（见 {@code shared/tableLayout} 的实测记载）。
+   *    这里没有固定列，但仍统一用 `scrollXOf` 保持一份口径。
+   */
+  const scrollX = scrollXOf(columns)
   // ⚠️ 校验状态是**状态机**取值（代码强绑定），刻意不走字典；权威等级走字典表
   const { options: tierOptions } = useDictOptions('rag.trust_tier')
 
@@ -353,7 +440,9 @@ export function RagSourceTable({
         </Form.Item>
       </Form>
 
-      {state.status === 'loading' && <Table loading dataSource={[]} columns={columns} rowKey="sourceId" />}
+      {state.status === 'loading' && (
+        <Table loading dataSource={[]} columns={columns} rowKey="sourceId" scroll={{ x: scrollX }} />
+      )}
 
       {state.status === 'empty' && (
         <Alert
@@ -397,6 +486,7 @@ export function RagSourceTable({
           rowKey="sourceId"
           columns={columns}
           dataSource={state.sources}
+          scroll={{ x: scrollX }}
           pagination={{ pageSize: 10, showSizeChanger: true }}
           onRow={(row) => ({ onClick: () => onSelect(row), style: { cursor: 'pointer' } })}
         />

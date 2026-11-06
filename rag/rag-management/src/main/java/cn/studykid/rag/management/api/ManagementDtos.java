@@ -389,8 +389,11 @@ public final class ManagementDtos {
      * @param admissible 是否当前准入可检索
      * @param objectRef 对象存储引用
      * @param contentHash 内容校验和
-     * @param createdAt 创建时间
-     * @param updatedAt 更新时间
+     * @param createdAt 录入（登记）时间
+     * @param updatedAt 最近更新时间
+     * @param reviewStartedAt 审核开始时间（可空：从未认领）
+     * @param decidedAt 审核决定时间（可空：从未判定）
+     * @param metadataConfirmedAt 元数据确认时间（可空：尚未确认）
      */
     public record SourceResponse(
             String sourceId,
@@ -413,6 +416,27 @@ public final class ManagementDtos {
             String contentHash,
             String createdAt,
             String updatedAt,
+            /**
+             * 审核开始时间（{@code rag_source.review_started_at}）。
+             *
+             * <p>null = 从未被认领进审核（不是「时间是 1970」也不是「等于登记时间」）。
+             */
+            String reviewStartedAt,
+            /**
+             * 审核决定时间（{@code rag_source.ver_decided_at}，最近一次判定时刻）。
+             *
+             * <p>⚠️ 与 {@code verifiedAt} 不同轴：{@code verifiedAt} 是
+             * 「结论有效期」的起点（{@code ver_valid_days} 从它算起），
+             * 而本字段记录「那次判定发生在何时」。判定被拒/撤回时
+             * {@code verifiedAt} 可能无意义，{@code decidedAt} 仍然有效。
+             */
+            String decidedAt,
+            /**
+             * 元数据确认时间（{@code rag_source.metadata_confirmed_at}）。
+             *
+             * <p>null = 尚未由人确认元数据（来源可能仍处于「推断值待核」阶段）。
+             */
+            String metadataConfirmedAt,
             /**
              * 抽检状态（{@code rag_source.inspection_status}，读路径透出）。
              *
@@ -454,6 +478,8 @@ public final class ManagementDtos {
                 response.licenseStatus(), response.stale(), response.admissible(),
                 response.objectRef(), response.contentHash(),
                 response.createdAt(), response.updatedAt(),
+                response.reviewStartedAt(), response.decidedAt(),
+                response.metadataConfirmedAt(),
                 inspectionStatus,
                 response.documentCount());
     }
@@ -477,6 +503,8 @@ public final class ManagementDtos {
                 response.licenseStatus(), response.stale(), response.admissible(),
                 response.objectRef(), response.contentHash(),
                 response.createdAt(), response.updatedAt(),
+                response.reviewStartedAt(), response.decidedAt(),
+                response.metadataConfirmedAt(),
                 response.inspectionStatus(),
                 documentCount);
     }
@@ -1211,10 +1239,28 @@ public final class ManagementDtos {
                 source.stale(now), source.admissible(minTrustTier, now),
                 source.objectRef(), source.contentHash(),
                 source.createdAt().toString(), source.updatedAt().toString(),
+                // ⚠️ 三个时间各自可空：null 表达「尚未发生」，不得回落到 createdAt ——
+                //    列表要能区分「还没人认领」与「认领于登记当天」。
+                toIso(source.reviewStartedAt()), toIso(source.decidedAt()),
+                toIso(source.metadataConfirmedAt()),
                 // ⚠️ 抽检状态不在领域快照里：读路径由控制器经 InspectionPort 富化
                 //    （withInspectionStatus），写路径响应保持 null（前端回退历史推导）。
                 //    documentCount 同理：写路径不查库，恒 0（前端写路径不用它）。
                 null, 0);
+    }
+
+    /**
+     * 可空时刻 → ISO 字符串（null 保持 null）。
+     *
+     * <p>⚠️ 单独抽出来而不是内联三段三元表达式：三个时间字段都会用到它，
+     * 复制三遍就有三次机会把 null 写成空串或 {@code "null"} ——
+     * 前端按 `null` 判断「尚未发生」，空串会被当成一个合法时刻渲染成 Invalid Date。
+     *
+     * @param instant 可空时刻
+     * @return ISO-8601 文本，或 null
+     */
+    private static String toIso(java.time.Instant instant) {
+        return instant == null ? null : instant.toString();
     }
 
     /**

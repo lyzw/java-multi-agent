@@ -719,8 +719,22 @@ export interface RagSource {
   admissible: boolean
   objectRef: string | null
   contentHash: string | null
+  /** 录入（登记）时间 */
   createdAt: string
+  /** 最近更新时间 */
   updatedAt: string
+  /**
+   * 审核开始时间（后端 `review_started_at`；从未认领时为 null）。
+   *
+   * ⚠️ null ≠ createdAt：null 是「还没人认领」，回落到录入时间会把
+   *    「审核还没开始」显示成「审核从登记那刻开始」。
+   *    缺省（旧版后端）为 undefined —— 与 null（尚未发生）区分呈现。
+   */
+  reviewStartedAt?: string | null
+  /** 审核决定时间（后端 `ver_decided_at`；从未判定时为 null）。与 verifiedAt 不同轴。 */
+  decidedAt?: string | null
+  /** 元数据确认时间（后端 `metadata_confirmed_at`；尚未确认时为 null）。 */
+  metadataConfirmedAt?: string | null
 }
 
 /** 文档载体视图（对齐后端 `ManagementDtos.DocumentResponse`）。 */

@@ -384,7 +384,8 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                     SELECT source_id, source_type, title, publisher, isbn, doi,
                            trust_tier, ver_status, ver_method, ver_evidence, verified_at,
                            verified_by, ver_valid_days, license_status, object_ref,
-                           content_hash, created_at, updated_at
+                           content_hash, created_at, updated_at,
+                           review_started_at, ver_decided_at, metadata_confirmed_at
                     FROM rag_source
                     WHERE tenant_id = ?::uuid
                     """);
@@ -1550,7 +1551,8 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                 SELECT source_id, source_type, title, publisher, isbn, doi,
                        trust_tier, ver_status, ver_method, ver_evidence, verified_at,
                        verified_by, ver_valid_days, license_status, object_ref,
-                       content_hash, created_at, updated_at
+                       content_hash, created_at, updated_at,
+                       review_started_at, ver_decided_at, metadata_confirmed_at
                 FROM rag_source
                 WHERE tenant_id = ?::uuid AND source_id = ?::uuid
                 """,
@@ -1725,7 +1727,15 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                 rs.getString("object_ref"),
                 rs.getString("content_hash"),
                 toInstant(rs.getTimestamp("created_at")),
-                toInstant(rs.getTimestamp("updated_at")));
+                toInstant(rs.getTimestamp("updated_at")),
+                // ⚠️ 三个时间列可空且**语义各自独立**（见 CorpusSource 的 Javadoc）：
+                //    未认领 → review_started_at 为 null；未判定 → ver_decided_at 为 null；
+                //    未确认元数据 → metadata_confirmed_at 为 null。
+                //    一律如实映射为 null，**不得**回落到 createdAt/updatedAt ——
+                //    那会让「还没开始审核」看起来像「已经审核过了」。
+                toInstant(rs.getTimestamp("review_started_at")),
+                toInstant(rs.getTimestamp("ver_decided_at")),
+                toInstant(rs.getTimestamp("metadata_confirmed_at")));
     }
 
     private CorpusDocument mapDocument(ResultSet rs) throws SQLException {

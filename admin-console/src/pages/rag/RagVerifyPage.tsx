@@ -47,7 +47,17 @@ import type {
 } from '@/api/ragTypes'
 import { RAG_VERIFICATION_LABELS } from '@/api/ragTypes'
 import { useRagManagement } from '@/features/rag/useRagManagement'
-import { currentPrincipalId, LicenseTag, TrustTierTag } from './ragUi'
+import { currentPrincipalId, LicenseTag, TrustTierTag, timeText } from './ragUi'
+
+/**
+ * 时间线用的人类可读时刻（空值 → 破折号）。
+ *
+ * ⚠️ 复用 `timeText` 而不是再写一份 `toLocaleString`：同一页里
+ *    时间格式不一致，用户会以为那是两个系统的数据。
+ */
+function formatTime(iso: string | null | undefined): string {
+  return timeText(iso) || '—'
+}
 import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 import { GovernanceBadge, RagEmpty } from './ragVisuals'
 
@@ -250,23 +260,58 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
                 </Card>
 
                 <Card size="small" title="审计时间线" style={{ marginTop: 12 }}>
+                  {/*
+                    ⚠️ 时间线按**事件发生顺序**排，并把两个此前完全缺失的事件补上：
+                      「元数据确认」与「审核认领/判定」。只画「登记 → 校验通过」
+                      会把审核期整段涂空——审核员看不出这条已经卡了多久，
+                      而这正是审计时间线存在的理由。
+                    ⚠️ 未发生的事件画成灰色并写明「尚未…」，**不省略**：
+                      省略会让人以为系统没有这条记录，而不是这件事还没发生。
+                  */}
                   <Timeline
                     items={[
                       {
                         color: 'gray',
-                        children: `登记于 ${source.createdAt}`,
+                        children: `录入（登记）于 ${formatTime(source.createdAt)}`,
+                      },
+                      {
+                        color: source.metadataConfirmedAt ? 'blue' : 'gray',
+                        children:
+                          source.metadataConfirmedAt === undefined
+                            ? '元数据确认：本次响应未返回'
+                            : source.metadataConfirmedAt === null
+                              ? '元数据尚未确认（推断值待人工核对）'
+                              : `元数据确认于 ${formatTime(source.metadataConfirmedAt)}`,
+                      },
+                      {
+                        color: source.reviewStartedAt ? 'blue' : 'gray',
+                        children:
+                          source.reviewStartedAt === undefined
+                            ? '审核认领：本次响应未返回'
+                            : source.reviewStartedAt === null
+                              ? '尚未进入审核'
+                              : `进入审核于 ${formatTime(source.reviewStartedAt)}`,
+                      },
+                      {
+                        color: source.decidedAt ? 'green' : 'gray',
+                        children:
+                          source.decidedAt === undefined
+                            ? '审核决定：本次响应未返回'
+                            : source.decidedAt === null
+                              ? '尚无审核结论'
+                              : `审核判定于 ${formatTime(source.decidedAt)}${
+                                  source.verifiedBy ? `（签署人 ${source.verifiedBy.slice(0, 8)}…）` : ''
+                                }`,
                       },
                       {
                         color: source.verifiedAt ? 'green' : 'gray',
                         children: source.verifiedAt
-                          ? `校验通过于 ${source.verifiedAt}${
-                              source.verifiedBy ? `（签署人 ${source.verifiedBy.slice(0, 8)}…）` : ''
-                            }`
-                          : '尚未校验通过',
+                          ? `有效期自 ${formatTime(source.verifiedAt)} 起算`
+                          : '尚未校验通过（无有效期）',
                       },
                       {
                         color: 'gray',
-                        children: `最近更新 ${source.updatedAt}`,
+                        children: `最近更新 ${formatTime(source.updatedAt)}`,
                       },
                     ]}
                   />

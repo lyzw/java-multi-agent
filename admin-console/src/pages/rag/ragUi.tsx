@@ -4,7 +4,7 @@
  * ⚠️ 所有颜色与标签集中在此，避免散落各处导致治理语义漂移。
  */
 
-import { Progress, Tag, Tooltip } from 'antd'
+import { Progress, Tag, Tooltip, Typography } from 'antd'
 import { loadSession } from '@/auth/tokenStorage'
 import type {
   RagIngestJobStatus,
@@ -21,6 +21,8 @@ import {
   RAG_INGEST_JOB_STATUS_COLORS,
   isRagIngestJobInFlight,
 } from '@/api/ragTypes'
+
+const { Text } = Typography
 
 /** 校验状态配色（与后端状态机语义一致）。 */
 export const RAG_VERIFICATION_COLORS: Record<RagVerificationStatus, string> = {
@@ -176,5 +178,54 @@ export function IngestProgress({
       format={() => (percent === null ? '进行中' : `${percent}%`)}
       style={{ width, marginBottom: 0 }}
     />
+  )
+}
+
+/* ── 时间单元格（录入 / 审核）────────────────────────────── */
+
+/**
+ * ISO 时刻 → 本地可读文本（`YYYY-MM-DD HH:mm:ss`），原始值进 tooltip。
+ *
+ * <p>⚠️ 三条纪律（与目录页 {@code timeCell} 同一口径，避免同控制台两种时间格式）：
+ * <ol>
+ *   <li><b>缺失如实呈现</b>：{@code null} = 「该事件尚未发生」，
+ *       {@code undefined} = 「后端本次未返回」——都渲染成 `—`，绝不补默认值；</li>
+ *   <li><b>本地可读时刻</b>：后端给的是带微秒的 UTC，直接铺在表格里读不出秒级顺序；</li>
+ *   <li><b>原始 ISO 可复制</b>：排查跨时区问题时，人需要能拿到原值。</li>
+ * </ol>
+ */
+export function timeText(value: string | null | undefined): string {
+  if (value === null || value === undefined) return ''
+  const raw = value.trim()
+  if (raw === '') return ''
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return raw
+  // ⚠️ 逐段补零而不是直接 toString：`toLocaleString('zh-CN')` 在个位数月/日时
+  //    输出 `2026-11-1 10:00:00`（宽度不固定），一列时间就会参差不齐，
+  //    扫一眼也分不清 11-1 与 11-10 哪个在前。补零后每行等宽、可直接按字面比较。
+  //    ⚠️ 这里只改变**显示宽度**，不改时区口径：仍是浏览器本地时刻。
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  )
+}
+
+/**
+ * 时间单元格：本地可读时刻 + 原始 ISO tooltip；无值时显示 `—`。
+ *
+ * @param value ISO 时刻（null/undefined 均可）
+ */
+export function TimeCell({ value }: { value: string | null | undefined }): JSX.Element {
+  const text = timeText(value)
+  if (text === '') {
+    // ⚠️ 「没发生」与「没读到」在此统一显示 `—`，但调用方可用 title 说明前者；
+    //    这里**不**写「未知」，因为列表里的大部分空白都是「尚未发生」。
+    return <Text type="secondary">—</Text>
+  }
+  return (
+    <Tooltip title={String(value)}>
+      <Text style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{text}</Text>
+    </Tooltip>
   )
 }

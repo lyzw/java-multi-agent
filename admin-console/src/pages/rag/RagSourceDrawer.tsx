@@ -58,6 +58,8 @@ import {
   currentPrincipalId,
   IngestJobTag,
   IngestProgress,
+  TimeCell,
+  timeText,
   TrustTierTag,
   VerificationTag,
 } from './ragUi'
@@ -539,16 +541,62 @@ export function RagSourceDrawer({
                     <Descriptions.Item label="校验依据" span={2}>
                       {shownSource.verificationEvidence || '—'}
                     </Descriptions.Item>
-                    <Descriptions.Item label="审核人 / 时间">
-                      {shownSource.verifiedBy ? (
-                        <>
-                          <Text code>{shownSource.verifiedBy}</Text> · {shownSource.verifiedAt}
-                        </>
-                      ) : (
-                        '—'
-                      )}
+                    <Descriptions.Item label="审核人">
+                      {shownSource.verifiedBy ? <Text code>{shownSource.verifiedBy}</Text> : '—'}
                     </Descriptions.Item>
                     <Descriptions.Item label="有效期">{shownSource.validDays} 天</Descriptions.Item>
+                    {/*
+                      时间轴（2026-11-05）：五个时刻分别对应一个**不同**的治理事件。
+                      ⚠️ 不合并成「最近一次时间」——排障时要回答的是
+                        「录了多久才进审核」「审了多久才判定」「谁在什么时候替推断值背书」，
+                        任一时刻缺失都表示该事件**尚未发生**，不能回落到相邻时刻。
+                    */}
+                    <Descriptions.Item label="录入时间">
+                      <TimeCell value={shownSource.createdAt} />
+                    </Descriptions.Item>
+                    <Descriptions.Item label="最近更新">
+                      <TimeCell value={shownSource.updatedAt} />
+                    </Descriptions.Item>
+                    <Descriptions.Item label="元数据确认时间">
+                      {shownSource.metadataConfirmedAt === undefined ? (
+                        <Text type="secondary">本次响应未返回</Text>
+                      ) : shownSource.metadataConfirmedAt === null ? (
+                        <Text type="secondary">尚未确认</Text>
+                      ) : (
+                        <TimeCell value={shownSource.metadataConfirmedAt} />
+                      )}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="审核开始时间">
+                      {shownSource.reviewStartedAt === undefined ? (
+                        <Text type="secondary">本次响应未返回</Text>
+                      ) : shownSource.reviewStartedAt === null ? (
+                        <Text type="secondary">
+                          {/* ⚠️ 别把「没认领过」写成「未审核」：PENDING 的「未审核」是对的，
+                              IN_REVIEW 却没开始时间只可能是历史数据（认领列后补前已入库）。 */}
+                          尚未进入审核
+                        </Text>
+                      ) : (
+                        <TimeCell value={shownSource.reviewStartedAt} />
+                      )}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="审核决定时间" span={2}>
+                      {shownSource.decidedAt === undefined ? (
+                        <Text type="secondary">本次响应未返回</Text>
+                      ) : shownSource.decidedAt === null ? (
+                        <Text type="secondary">尚无审核结论</Text>
+                      ) : (
+                        <Space size={6} wrap>
+                          <TimeCell value={shownSource.decidedAt} />
+                          {/* ⚠️ 有效期由服务端按 verifiedAt + validDays 计算，
+                              与决定时间在实践中是同一次写入、通常相差几毫秒，
+                              但**语义不同**：决定时间是审计事实，verifiedAt 是有效期起点。
+                              历史数据里两者可能不等，据此算到期日才不会差一天。 */}
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            有效期自 {timeText(shownSource.verifiedAt) || '（无校验通过时刻）'} 起算
+                          </Text>
+                        </Space>
+                      )}
+                    </Descriptions.Item>
                   </Descriptions>
 
                   {!writable ? (

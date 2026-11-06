@@ -30,7 +30,10 @@ class CorpusSourceTest {
                 "9787100000000", null, tier, status, VerificationMethod.ISBN,
                 "ISBN:ref@2026-01-01", verifiedAt, "reviewer-1", validDays,
                 license, "obj://book.pdf", "a".repeat(64),
-                NOW.minus(100, ChronoUnit.DAYS), NOW);
+                NOW.minus(100, ChronoUnit.DAYS), NOW,
+                // 三个时间轴各自独立：未认领 / 未判定 / 未确认元数据一律 null，
+                // 不得拿 createdAt 冒充（那会把「还没开始」显示成「已经审过」）。
+                null, null, null);
     }
 
     @Test
@@ -123,11 +126,11 @@ class CorpusSourceTest {
         assertThrows(IllegalArgumentException.class, () -> new CorpusSource(
                 "", "教材", "标题", "出版社", null, null, TrustTier.UNVERIFIED,
                 VerificationStatus.PENDING, VerificationMethod.NONE, null, null, null,
-                365, "PENDING", null, null, NOW, NOW));
+                365, "PENDING", null, null, NOW, NOW, null, null, null));
         assertThrows(IllegalArgumentException.class, () -> new CorpusSource(
                 "src-1", "教材", "标题", "出版社", null, null, TrustTier.UNVERIFIED,
                 VerificationStatus.PENDING, VerificationMethod.NONE, null, null, null,
-                0, "PENDING", null, null, NOW, NOW),
+                0, "PENDING", null, null, NOW, NOW, null, null, null),
                 "validDays 必须 > 0（与 V1 的 CHECK 约束一致）");
     }
 }

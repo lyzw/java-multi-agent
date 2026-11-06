@@ -39,8 +39,25 @@ import cn.studykid.rag.core.source.TrustTier;
  * @param licenseStatus 版权状态（LICENSED / FAIR_USE_QUOTATION / PENDING / RESTRICTED）
  * @param objectRef 正文在对象存储中的引用（正文不入库）
  * @param contentHash 整册内容校验和
- * @param createdAt 登记时间
- * @param updatedAt 更新时间
+ * @param createdAt 录入（登记）时间
+ * @param updatedAt 最近更新时间
+ * @param reviewStartedAt 审核开始时间（进入 {@code IN_REVIEW} 的时刻；未认领过为 null）
+ * @param decidedAt 审核决定时间（最近一次判定的时刻，对应 {@code ver_decided_at}）
+ * @param metadataConfirmedAt 元数据确认时间（首次确认时刻；未确认为 null）
+ *
+ * <p><b>⚠️ 为什么把三个时间都放进读模型</b>：
+ * 它们此前只存在于表中（{@code review_started_at} / {@code ver_decided_at} /
+ * {@code metadata_confirmed_at}），管理面一条都不透出，于是列表只能回答
+ * 「现在是什么状态」，回答不了「什么时候到这个状态的」——
+ * 审核 SLA、卡单排查、录入时效全部无从度量（RAG-D07 §2.6 / RAG-D10 §2.6）。
+ * 三个时间与 {@code verifiedAt} 语义不同，不可互相替代：
+ * <ul>
+ *   <li>{@code createdAt} = 录入门槛，采集员的行为时刻；</li>
+ *   <li>{@code reviewStartedAt} = 审核认领时刻（「卡在谁手上、卡了多久」的起点）；</li>
+ *   <li>{@code decidedAt} = 判定时刻（{@code verifiedAt} 是同一次写入的派生物，
+ *       但 {@code verifiedAt} 还承载「结论有效期」的语义，不能当作决定时间用）；</li>
+ *   <li>{@code metadataConfirmedAt} = 人替系统推断值背书的时刻，与审核不同轴。</li>
+ * </ul>
  */
 public record CorpusSource(
         @NonNull String sourceId,
@@ -60,7 +77,10 @@ public record CorpusSource(
         @Nullable String objectRef,
         @Nullable String contentHash,
         @NonNull Instant createdAt,
-        @NonNull Instant updatedAt
+        @NonNull Instant updatedAt,
+        @Nullable Instant reviewStartedAt,
+        @Nullable Instant decidedAt,
+        @Nullable Instant metadataConfirmedAt
 ) {
 
     public CorpusSource {
