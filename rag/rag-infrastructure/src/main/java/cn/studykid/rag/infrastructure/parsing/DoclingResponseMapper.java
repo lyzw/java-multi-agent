@@ -46,13 +46,6 @@ import cn.studykid.rag.ports.LayoutBlock;
  */
 public class DoclingResponseMapper {
 
-    /**
-     * 参与章节路径推进的最大标题层级。
-     *
-     * <p>⚠️ Docling 的 level=6 表示「单元内小节」（实测 410 个标题里 409 个是它），
-     * 它们几乎每页出现；若参与推进，路径会无限累积。
-     */
-    private static final int MAX_SECTION_LEVEL = 5;
 
     /**
      * 章节路径最大层数（册 > 单元 > 小节）。
@@ -63,6 +56,39 @@ public class DoclingResponseMapper {
 
     public DoclingResponseMapper(ObjectMapper mapper) {
         this.mapper = mapper == null ? new ObjectMapper() : mapper;
+    }
+
+    /**
+     * 从 Docling 完整响应中提取 {@code document.json_content}（对象或字符串皆处理），
+     * 供分块桥复用（RAG-D26 §2.4 纪律①：HybridChunker 必须吃<b>解析阶段</b>的
+     * DoclingDocument——二次解析会让 item_refs 与块对不上，角色回填必然错位）。
+     *
+     * <p>⚠️ 本方法只做提取不做映射；失败抛
+     * {@link DoclingDocumentParserPort.DoclingUnavailableException}（与 map 同纪律）。
+     *
+     * @param responseBody Docling {@code /v1/convert/file} 的原始响应
+     * @return json_content 的原始 JSON 串
+     */
+    public String extractJsonContent(String responseBody) {
+        JsonNode root;
+        try {
+            root = mapper.readTree(responseBody);
+        } catch (Exception e) {
+            throw new DoclingDocumentParserPort.DoclingUnavailableException(
+                    "Docling 响应不是合法 JSON：" + e.getMessage(), e);
+        }
+        String status = root.path("status").asText("");
+        if ("failure".equalsIgnoreCase(status)) {
+            String err = root.path("errors").toString();
+            throw new DoclingDocumentParserPort.DoclingUnavailableException(
+                    "Docling 解析失败：" + (err.isBlank() ? "未知原因" : err));
+        }
+        JsonNode jsonContent = root.path("document").path("json_content");
+        if (jsonContent.isMissingNode() || jsonContent.isNull()) {
+            throw new DoclingDocumentParserPort.DoclingUnavailableException(
+                    "Docling 响应缺少 document.json_content（to_formats 是否漏了 json？）");
+        }
+        return jsonContent.isTextual() ? jsonContent.asText() : jsonContent.toString();
     }
 
     /**
@@ -231,8 +257,8 @@ public class DoclingResponseMapper {
         //    几乎每页都有。若让它们参与推进，路径会变成
         //    「英语 / 英语 / 2 Rules around us Unit / Festivals across cultures / …」
         //    无限累积 —— 实测 94% 的块路径超 60 字符，引用溯源彻底失效。
-        if (type == BlockType.HEADING && level >= 1 && level <= MAX_SECTION_LEVEL
-                && !isNoiseHeading(trimmed)) {
+        // ⚠️ 推进闸（层级 + 噪声标题）与 MinerU 共享同一份（LayoutPredicates）。
+        if (LayoutPredicates.advancesSectionPath(type, level, trimmed)) {
             // ⚠️⚠️ 层级推进的语义是**按槽位替换**，不是追加。
             //    首版用「截断到 level-1 再追加」，但 level-1 的处理有 off-by-one：
             //    实测上册得到「Starter 1 / Starter 2 / Starter 3」——
@@ -272,12 +298,8 @@ public class DoclingResponseMapper {
         //    ② 已是答案区时，遇到**任意**新标题即退出
         //       （答案区不会被下一个单元/章节的内容延续）；
         //    ③ 其余块沿用当前状态。
-        boolean isAnswerHeading = type == BlockType.HEADING && isAnswerZoneHeading(trimmed);
-        if (isAnswerHeading) {
-            inAnswerZone[0] = true;
-        } else if (inAnswerZone[0] && type == BlockType.HEADING) {
-            inAnswerZone[0] = false;
-        }
+        // ⚠️ 状态机推进与 MinerU 共享（LayoutPredicates.advanceAnswerZone）。
+        LayoutPredicates.advanceAnswerZone(type, trimmed, inAnswerZone);
         boolean answerZone = inAnswerZone[0];
 
         return new LayoutBlock(type, trimmed, page, level, section,
@@ -345,11 +367,8 @@ public class DoclingResponseMapper {
      * @return 剥掉页眉后的标题（若剥完为空则返回原值）
      */
     private static String stripPageHeaderSuffix(String text) {
-        if (text == null || text.isBlank()) {
-            return text;
-        }
-        String stripped = text.replaceAll("上海教育出版社", "").trim();
-        return stripped.isEmpty() ? text : stripped;
+        // ⚠️ 委托 {@link LayoutPredicates}（RAG-D26 阶段 1.2 共享判定）。
+        return LayoutPredicates.stripPageHeaderSuffix(text);
     }
 
     /**
@@ -364,56 +383,9 @@ public class DoclingResponseMapper {
      * @return 是噪声标题返回 true
      */
     private static boolean isNoiseHeading(String text) {
-        if (text == null || text.isBlank()) {
-            return true;
-        }
-        String t = text.trim();
-        // 出版社名（页眉/封底）
-        if (t.contains("出版社")) {
-            // ⚠️⚠️ 但「<真实标题> 上海教育出版社」这种**标题带页眉后缀**的情况
-            //    是真实内容（实测下册 p38 'Festivals across cultures 上海教育出版社'，
-            //    lvl=4，是「2 Rules around us」下的子节）。
-            //    直接判噪声会把它整条丢掉 → 章节层级缺失。
-            //    正解：剥掉页眉后缀后仍剩有意义内容，才算噪声标题。
-            String stripped = t.replaceAll("上海教育出版社", "")
-                    .replaceAll("[\\s·、,，]+$", "").trim();
-            if (stripped.isEmpty()) {
-                return true;
-            }
-            // 剥掉后仍有内容 → 是带页眉的真实标题，不算噪声
-            return false;
-        }
-        // 书名/册次等封面元素
-        if (t.equals("英语") || t.equals("ENGLISH") || t.equals("YINGYU")) {
-            return true;
-        }
-        if (t.contains("义务教育教科书") || t.contains("五·四学制")
-                || t.contains("课标") || t.contains("后 记") || t.contains("后记")) {
-            return true;
-        }
-        // 纯页码
-        if (t.matches("\\d{1,3}")) {
-            return true;
-        }
-        // ⚠️ 目录页标题：实测上册第 7 页有 lvl=2 的「Contents」，
-        //    若参与路径推进，正文所有片段的路径都会以「Contents / ...」开头，
-        //    引用溯源时看到的是目录而不是真实章节。
-        if (t.equals("Contents") || t.equals("目录") || t.equals("Table of contents")) {
-            return true;
-        }
-        // ⚠️⚠️ 「疑似正文被误标为标题」：实测上册 p116 的歌词页被 Docling 标成 lvl=1
-        //    （'2. (Page 3) Big E, little e, she sells seashells…'），
-        //    这些是**歌词正文**，不是章节标题。它们作为顶层标题入路径后，
-        //    实测产生 168~170 个超长路径。
-        //    判据：**以「序号 + (Page N)」开头** —— 教材正文交叉引用的典型特征。
-        if (t.matches("^\\d{1,3}\\.\\s*\\(Page\\s+\\d+\\).*")) {
-            return true;
-        }
-        // ⚠️ 过长的标题多半是正文句子而非标题（真实章节标题通常 < 60 字符）
-        if (t.length() > 60) {
-            return true;
-        }
-        return false;
+        // ⚠️ 委托 {@link LayoutPredicates}（RAG-D26 阶段 1.2 共享判定）：
+        //    封面/封底判噪规则随实现移至 predicates，双 mapper 共享。
+        return LayoutPredicates.isNoiseHeading(text);
     }
 
     /**
@@ -441,10 +413,11 @@ public class DoclingResponseMapper {
         }
         Set<String> headers = new HashSet<>();
         lineToPages.forEach((text, pages) -> {
-            // ⚠️ 阈值 5（不是 3）：实测「英语」这类书名/册次词在正文页脚也出现，
-            //    用 3 会把封面上的书名一并降级成页眉（实测确实发生了）。
-            //    真实页眉（出版社名）几乎每页都有，跨页数远大于 5。
-            if (pages.size() >= 5 && pages.size() > 1) {
+            // ⚠️ 阈值与最小页数语义统一在 {@link LayoutPredicates}（RAG-D26 阶段 1.2）：
+            //    阈值 5 的实测依据（书名/册次词在正文页脚也出现，3 会误降级封面书名）
+            //    记录在 predicates 侧，双 mapper 共享。
+            if (pages.size() > 1 && LayoutPredicates.isRepeatedHeaderLine(
+                    new ArrayList<>(pages))) {
                 headers.add(text);
             }
         });
@@ -454,35 +427,15 @@ public class DoclingResponseMapper {
     /**
      * 抽取题号（如 {@code 1.}、{@code (2)}、{@code Exercise 3}）。
      *
+     * <p>⚠️ 委托 {@link LayoutPredicates}（RAG-D26 阶段 1.2 抽取的共享版面判定）：
+     * MinerU 与 Docling 必须用同一套题号规则，两份正则会静默漂移。
+     * 本方法保留为兼容入口（既有测试引用）；规则修正只改 predicates。
+     *
      * @param text 块文本
      * @return 题号；无则 null
      */
     static String extractExerciseNo(String text) {
-        if (text == null || text.isBlank()) {
-            return null;
-        }
-        // 实测教材题号形态（沪教版）：
-        //   "1. What is your name?"        → 1.
-        //   "2 Work out the rules"         → 2  （⚠️ 无点号，首版漏了这种，导致 1871 块只抽到 3 个）
-        //   "（1）Listen and match"         → （1）
-        //   "Exercise 3"                   → Exercise 3
-        //   "1 Read and answer"            → 1
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("^\\s*(?:[(（]?\\s*(\\d{1,3})\\s*[.、)）]"
-                        + "|[(（]\\s*(\\d{1,3})\\s*[)）]"
-                        + "|Exercise\\s+(\\d{1,3})"
-                        // 行首 1~2 位数 + 空格 + 大写字母开头（如 "2 Work out"），
-                        // 且后面必须是字母而非纯数字（排除 "2024 年" 这类年份）
-                        + "|(\\d{1,2})\\s+(?=[A-Za-z]))")
-                .matcher(text);
-        if (m.find()) {
-            for (int g = 1; g <= 4; g++) {
-                if (m.group(g) != null) {
-                    return m.group(g);
-                }
-            }
-        }
-        return null;
+        return LayoutPredicates.extractExerciseNo(text);
     }
 
     /**
@@ -502,18 +455,9 @@ public class DoclingResponseMapper {
      * @return 是答案区标题返回 true
      */
     static boolean isAnswerZoneHeading(String text) {
-        String t = text == null ? "" : text.trim();
-        if (t.isEmpty() || t.length() > 40) {
-            // ⚠️ 答案区标题通常很短；过长的文本是段落，不是标题
-            return false;
-        }
-        String lower = t.toLowerCase();
-        // 必须「以」答案区字样开头或整块就是这几类短标题
-        return lower.startsWith("answer key") || lower.startsWith("answers to")
-                || lower.startsWith("answer sheet") || lower.equals("answers")
-                || t.startsWith("参考答案") || t.startsWith("答案与解析")
-                || t.startsWith("答案") || t.startsWith("练习答案")
-                || t.startsWith("习题答案");
+        // ⚠️ 委托 {@link LayoutPredicates}（RAG-D26 阶段 1.2 共享判定）：
+        //    89% 事故的教训注释随实现移至 predicates，双 mapper 共享同一份规则。
+        return LayoutPredicates.isAnswerZoneHeading(text);
     }
 
     /**
