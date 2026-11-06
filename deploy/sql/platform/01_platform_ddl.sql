@@ -6,8 +6,17 @@
 --   ⚠️ 不是从远程 agent_dev 导的 —— 远程 Flyway 只到 V27，
 --   缺 V31 platform 身份域 / V32 字典 / V33 指标 / V34 状态守卫的对象；
 --   以远程为源会把这四个版本的对象从仓库里永久丢掉。
+-- 【增量】P1 跨 Run 记忆：+1 表（student_memory，13 列）/ +6 约束 /
+--   +2 索引 / +1 RLS 开启 + 1 策略 / +2 外键。
+--   ⚠️ 该表**不含** embedding 列 —— platform 库尚未安装 pgvector，
+--   写进快照会让 CREATE TABLE 在缺扩展的库上直接失败（见该表注释）。
 -- 【地位】db/migration 下 V1~V34 已随本次收口删除，本文件即结构唯一权威定义。
 -- 【扩展】platform 用的 gen_random_uuid() 是 PG13+ 内置，无需 pgcrypto。
+--   ⚠️ pgvector **未**安装在本库：pg_available_extensions 里有 vector
+--   （0.8.1.3）但 installed 为 null，且本脚本 0 处 CREATE EXTENSION。
+--   启用 agent.memory.vector.enabled 前，须由**库 owner**（有 CREATE 权限）
+--   手工执行：CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+--   app_role 无 CREATE 权限，不能靠应用启动时自动建扩展。
 -- 【执行】psql -v ON_ERROR_STOP=1 -f 01_platform_ddl.sql（空库，owner 身份）
 -- =====================================================================
 
@@ -2896,6 +2905,79 @@ COMMENT ON TABLE public.weakness_record IS '薄弱点记录。首期唯一的有
 
 
 --
+-- Name: student_memory; Type: TABLE; Schema: public; Owner: -
+--
+-- 跨 Run 记忆（P1 · docs/Agent记忆机制分析与设计方案.md §3.3）。
+--
+-- 与 weakness_record 的分工（这是本表存在的全部理由）：
+--   weakness_record  = 事件日志，一次 Run 一条，幂等键含 run_id，只追加；
+--   student_memory   = 记忆条目，一个学生一个知识点一条（聚合），用于召回进上下文。
+-- 不在事件表上加 strength 列：事件表一个知识点每次 Run 都产生新行，
+-- 在其上做聚合等于每次读都要 GROUP BY + 窗口函数，且无法承载「上次整合时间」。
+--
+-- ⚠️ student_id 存**明文**而非哈希（对阶段二设计 I7-1 的一处修正）：
+--   哈希在本域不提供保护（同租户内只要读到一条 profile 就能算出对应哈希），
+--   却会破坏下面的 (tenant_id, student_id) 复合外键 —— 撤回删除时
+--   就只能靠应用层「记得删」，而这正是「机制正确但漏接」的高发点。
+--
+-- ⚠️ 本表**不含** embedding 列：platform 库当前未安装 pgvector
+--   （pg_available_extensions 有 vector 0.8.1.3，但 installed = null），
+--   把 vector(1024) 写进本快照会让 CREATE TABLE 在缺扩展的库上直接失败。
+--   向量召回（P2）默认关闭（agent.memory.vector.enabled=false），
+--   启用前须由库 owner 先执行 CREATE EXTENSION vector，再追加该列与 hnsw 索引。
+
+CREATE TABLE public.student_memory (
+    memory_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id uuid NOT NULL,
+    student_id text NOT NULL,
+    knowledge_point text NOT NULL,
+    error_type text NOT NULL,
+    strength numeric(3,2) DEFAULT 0.30 NOT NULL,
+    evidence_count integer DEFAULT 1 NOT NULL,
+    first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_run_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT memory_strength_chk CHECK (((strength >= (0)::numeric) AND (strength <= (1)::numeric))),
+    CONSTRAINT memory_evidence_chk CHECK ((evidence_count >= 1)),
+    CONSTRAINT memory_kp_length_chk CHECK (((char_length(knowledge_point) >= 1) AND (char_length(knowledge_point) <= 100))),
+    CONSTRAINT memory_error_type_chk CHECK ((error_type = ANY (ARRAY['概念不清'::text, '公式记错'::text, '符号错误'::text, '计算失误'::text, '审题偏差'::text, '步骤缺失'::text]))),
+    CONSTRAINT memory_student_id_format_chk CHECK ((student_id ~ '^stu_[a-z0-9]{16}$'::text))
+);
+
+ALTER TABLE ONLY public.student_memory FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: TABLE student_memory; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.student_memory IS '跨 Run 记忆（聚合态）。一个学生一个知识点一条，由 weakness_record 派生，用于在 Run 开始时召回进系统提示。⚠️ 写本表不经工具闸门：数据源必须是已落库的 weakness_record，不得从模型输出直接派生。';
+
+
+--
+-- Name: COLUMN student_memory.strength; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.student_memory.strength IS '写入时刻的记忆强度 0..1，由 MemoryStrength 计算（base(n)=1-e^(-0.35n)，λ=0.01）。⚠️ 读取时必须按当前时间重算，本列只是快照；靠夜间跑批刷新会让白天读到过期强度。';
+
+
+--
+-- Name: COLUMN student_memory.evidence_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.student_memory.evidence_count IS '证据计数：该知识点在**不同 Run** 中出现的次数。⚠️ 仅当 last_run_id 与本次 Run 不同时才 +1 —— 否则 MQ 重投与 resume 重复整合会把「错 1 次」刷成「错 3 次」，直接跨过召回门槛（0.40）。';
+
+
+--
+-- Name: COLUMN student_memory.last_run_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.student_memory.last_run_id IS '最后一次贡献证据的 Run。幂等闸：与本次 Run 相同时不得增加 evidence_count。';
+
+
+--
 -- Name: agent_eval_sample agent_eval_sample_pkey; Type: CONSTRAINT; Schema: platform; Owner: -
 --
 
@@ -3613,6 +3695,29 @@ ALTER TABLE ONLY public.run
 
 
 --
+-- Name: student_memory memory_pk; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.student_memory
+    ADD CONSTRAINT memory_pk PRIMARY KEY (memory_id);
+
+
+--
+-- Name: student_memory memory_uniq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.student_memory
+    ADD CONSTRAINT memory_uniq UNIQUE (tenant_id, student_id, knowledge_point);
+
+
+--
+-- Name: CONSTRAINT memory_uniq ON student_memory; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT memory_uniq ON public.student_memory IS '聚合幂等键：同一 (租户,学生,知识点) 只允许一条记忆。⚠️ 与 weakness_idempotency_uniq 的区别在于**不含 run_id** —— 记忆是聚合态，不是事件。';
+
+
+--
 -- Name: student_profile student_profile_pk; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4222,6 +4327,35 @@ CREATE UNIQUE INDEX idx_usage_operation_once ON public.usage_record USING btree 
 
 
 --
+-- Name: idx_memory_student_strength; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_memory_student_strength ON public.student_memory USING btree (tenant_id, student_id, strength DESC, last_seen_at DESC);
+
+
+--
+-- Name: INDEX idx_memory_student_strength; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_memory_student_strength IS '召回主路径：按学生取强度最高的若干条。⚠️ 这是 P1 唯一的召回索引 —— 没有 pgvector 也能工作，向量召回缺失时不会退化为全表扫。';
+
+
+--
+-- Name: idx_memory_last_seen; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_memory_last_seen ON public.student_memory USING btree (tenant_id, last_seen_at);
+
+
+--
+--
+-- Name: idx_memory_last_seen; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_memory_last_seen IS '自然遗忘扫描路径（strength < 0.15 且 last_seen_at 早于 180 天前）。⚠️ 与保留期清理是两条独立路径：保留期按 created_at 切，自然遗忘按「强度 + 久未出现」切。';
+
+
+--
 -- Name: idx_usage_reservation; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4783,6 +4917,29 @@ ALTER TABLE ONLY public.run
 
 ALTER TABLE ONLY public.student_profile
     ADD CONSTRAINT student_profile_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenant(tenant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: student_memory memory_record_tenant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.student_memory
+    ADD CONSTRAINT memory_record_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenant(tenant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: student_memory memory_student_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.student_memory
+    ADD CONSTRAINT memory_student_fk FOREIGN KEY (tenant_id, student_id) REFERENCES public.student_profile(tenant_id, student_id) ON DELETE CASCADE;
+
+
+--
+-- Name: CONSTRAINT memory_student_fk ON student_memory; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT memory_student_fk ON public.student_memory IS '级联：画像删了，记忆必须跟着没。⚠️ 但这**不是唯一**删除路径 —— 撤回删除流程存在 markWithdrawalFailed 等分支，那时 profile 可能还在，故 MemoryPort.forget 必须另有一道显式删除。';
 
 
 --
@@ -5504,6 +5661,26 @@ ALTER TABLE public.weakness_record ENABLE ROW LEVEL SECURITY;
 --
 
 CREATE POLICY weakness_record_tenant_isolation ON public.weakness_record USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
+
+
+--
+-- Name: student_memory; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.student_memory ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: student_memory student_memory_tenant_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY student_memory_tenant_isolation ON public.student_memory USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
+
+
+--
+-- Name: POLICY student_memory_tenant_isolation ON student_memory; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON POLICY student_memory_tenant_isolation ON public.student_memory IS '租户隔离。记忆表直接承载未成年人学习画像的派生结论（「他总错这里」），跨租户泄漏后果与 student_profile 同级。⚠️ FORCE 不可省：缺 FORCE 时表 owner 与超级用户绕过策略，而清理作业用的正是 owner 级凭据。';
 
 
 --

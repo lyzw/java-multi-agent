@@ -114,6 +114,17 @@ public class RetentionPurgeService {
             failed++;
         }
 
+        // ⚠️ 记忆是**第 5 类**，必须排在画像之后：先删画像会经
+        //    memory_student_fk 的 ON DELETE CASCADE 连带删掉到期画像下的记忆，
+        //    于是本类再删时返回 0 行 —— 但那个 0 是「已被级联删除」，
+        //    不是「没有到期记忆」。排在后面时，两类的计数各自独立、
+        //    报告里的 memoriesDeleted 才是可信的。
+        int memories = runCategory("记忆", detail, () -> erasurePort.purgeExpiredMemories(
+                tenantId, monthsAgo(now, settings.memoryMonths()), settings.batchSize()));
+        if (memories < 0) {
+            failed++;
+        }
+
         int prompts = runCategory("Prompt", detail, () -> erasurePort.blankExpiredPrompts(
                 tenantId, now.minus(settings.promptDays(), ChronoUnit.DAYS), settings.batchSize()));
         if (prompts < 0) {
@@ -157,6 +168,7 @@ public class RetentionPurgeService {
                 Math.max(prompts, 0),
                 Math.max(traces, 0),
                 Math.max(audits, 0),
+                Math.max(memories, 0),
                 withdrawalsErased,
                 failed);
     }
@@ -245,6 +257,7 @@ public class RetentionPurgeService {
     private static String labelKey(String label) {
         return switch (label) {
             case "画像" -> "student_profile";
+            case "记忆" -> "student_memory";
             case "Prompt" -> "prompt_payload";
             case "Trace" -> "run_event";
             case "审计" -> "audit_record";
@@ -265,6 +278,7 @@ public class RetentionPurgeService {
      * 这里只做传输，避免两处校验口径不一致。
      */
     public record RetentionSettings(int profileMonths,
+                                    int memoryMonths,
                                     int promptDays,
                                     int auditDays,
                                     int traceDays,
@@ -284,13 +298,20 @@ public class RetentionPurgeService {
                               int promptsBlanked,
                               int tracesDeleted,
                               int auditsDeleted,
+                              int memoriesDeleted,
                               int withdrawalsErased,
                               int failedCategories) {
 
-        /** 本轮是否有任何数据被删除/清理。 */
+        /**
+         * 本轮是否有任何数据被删除/清理。
+         *
+         * <p>⚠️ 新增类别必须同步加进本判断：漏加的表现是
+         * "只清理了记忆、其余类别都是 0"时 <b>凭证不写</b> ——
+         * 于是"删了但无凭证"，正是合规举证最不能缺的那一种情形。
+         */
         public boolean hasChanges() {
             return profilesDeleted + promptsBlanked + tracesDeleted
-                    + auditsDeleted + withdrawalsErased > 0;
+                    + auditsDeleted + memoriesDeleted + withdrawalsErased > 0;
         }
     }
 }

@@ -549,7 +549,16 @@ public class WorkerExecutionConfig {
             java.util.concurrent.ExecutorService stepPreemptionExecutor,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             org.springframework.beans.factory.ObjectProvider<RunDispatchConsumer.RunExecutor>
-                    executorProvider) {
+                    executorProvider,
+            // ⚠️⚠️ 记忆两件套（P1）**可选注入** —— 但它们缺失时的后果
+            //    与 turn 预算端口那种"账不平"不同：记忆缺失的表现是
+            //    「模型看起来很了解这个学生，其实一无所知」，
+            //    以及「student_memory 永远为空」。两者都不会报错。
+            //    → 由 MemoryWiringIT 断言生产装配下二者**非 null**。
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.application.memory.MemoryRecallService memoryRecallService,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.application.memory.MemoryConsolidator memoryConsolidator) {
         // ⚠️⚠️ **接管器必须在这里真实注入**（第九批 · MA-T12）：
         //    不注入时，Worker 接管后 RUNNING 的委派记录**永远无人能收敛**
         //    （新世代 token 不匹配、旧世代已被接管），
@@ -578,7 +587,10 @@ public class WorkerExecutionConfig {
                 //    另起一套「恢复专用执行逻辑」必然与主路径语义漂移
                 //    （兜底收敛、取消检查、预算口径各写一遍，越修越不一致）。
                 //    ObjectProvider 是为了打破循环依赖：RunExecutor 本身依赖 loop。
-                continuation(executorProvider));
+                continuation(executorProvider),
+                // ⚠️ P1：记忆召回与整合。null = 关闭（agent.memory.enabled=false），
+                //    此时 RunExecutionLoop 会打 WARN，行为回到本次改动之前。
+                memoryRecallService, memoryConsolidator);
     }
 
     /**

@@ -200,7 +200,7 @@ class RetentionPolicyTest {
     }
 
     private static RetentionPurgeService.RetentionSettings settings() {
-        return new RetentionPurgeService.RetentionSettings(12, 90, 180, 30, 30, 1000);
+        return new RetentionPurgeService.RetentionSettings(12, 12, 90, 180, 30, 30, 1000);
     }
 
     private static Clock fixedClock() {
@@ -214,12 +214,20 @@ class RetentionPolicyTest {
         /** 画像清理返回行数（>0 触发凭证写入）。 */
         int profileRows;
 
+        /** 记忆清理返回行数（第 5 类，P1）。 */
+        int memoriesRows;
+
         final java.util.List<cn.studykid.multiagent.ports.persistence.ErasurePort.ErasureCertificate>
                 certificates = new java.util.ArrayList<>();
 
         @Override
         public int purgeExpiredProfiles(String tenantId, Instant cutoff, int limit) {
             return profileRows;
+        }
+
+        @Override
+        public int purgeExpiredMemories(String tenantId, Instant cutoff, int limit) {
+            return memoriesRows;
         }
 
         @Override

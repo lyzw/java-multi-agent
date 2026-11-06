@@ -446,11 +446,22 @@ class RetentionErasureIT {
 
             List<ErasureCertificate> certs = erasure().findCertificates(
                     tenantA, ErasureCertificate.REASON_RETENTION_EXPIRED, 50);
-            assertThat(certs)
-                    .as("⚠️ 重复清理窗口不得产生重复凭证——"
-                            + "重复凭证会被误读为「删了两次」")
+            // ⚠️ 必须**只断言本窗口**：凭证表由 forbid_certificate_mutation()
+            //    无条件保护（连清理凭据也删不掉），同租户历史上每一次 IT 运行
+            //    留下的凭证都会永久累积。写成「总数为 1」的断言，
+            //    在干净库上绿、在跑过一次的库上红 —— 而红色指向的
+            //    「产生了两张凭证」是假的，真因是「三天前也有一张」。
+            String windowKey = java.time.LocalDate.now(
+                            java.time.ZoneId.of("UTC"))
+                    .format(java.time.format.DateTimeFormatter.ISO_DATE);
+            List<ErasureCertificate> thisWindow = certs.stream()
+                    .filter(c -> windowKey.equals(c.windowKey()))
+                    .toList();
+            assertThat(thisWindow)
+                    .as("⚠️ 同一窗口重复运行只能有一张凭证——"
+                            + "重复凭证会被误读为「删了两次」；窗口=%s", windowKey)
                     .hasSize(1);
-            assertThat(certs.get(0).detail())
+            assertThat(thisWindow.get(0).detail())
                     .as("凭证明细应记录实际删除行数")
                     .containsKey("student_profile");
         }
@@ -618,7 +629,7 @@ class RetentionErasureIT {
     private static RetentionPurgeService purgeService() {
         return new RetentionPurgeService(
                 erasure(),
-                new RetentionPurgeService.RetentionSettings(12, 90, 180, 30, 0, 1000),
+                new RetentionPurgeService.RetentionSettings(12, 12, 90, 180, 30, 0, 1000),
                 "retention-job",
                 java.time.Clock.systemUTC());
     }

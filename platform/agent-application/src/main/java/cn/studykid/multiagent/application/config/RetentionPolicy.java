@@ -24,6 +24,16 @@ public final class RetentionPolicy {
     /** 学习画像保留月数（student_profile / weakness_record）。 */
     public static final String KEY_PROFILE_MONTHS = "agent.retention.profile-months";
 
+    /**
+     * 跨 Run 记忆保留月数（{@code student_memory}）。
+     *
+     * <p>⚠️ <b>刻意独立于 {@link #KEY_PROFILE_MONTHS}</b>，而不是"跟着画像走"：
+     * 记忆的 {@code created_at} 可能远晚于画像（新知识点是后来才出现的），
+     * 若共用一个键，运维就无法单独缩短"结论"的留存期而不动"证据"。
+     * 默认值与画像同为 12 个月 —— 但那是**配置**的一致，不是代码的耦合。
+     */
+    public static final String KEY_MEMORY_MONTHS = "agent.retention.memory-months";
+
     /** Prompt 与工具结果保留天数（置空，不删行）。 */
     public static final String KEY_PROMPT_DAYS = "agent.retention.prompt-days";
 
@@ -52,6 +62,21 @@ public final class RetentionPolicy {
 
     public static int requireProfileMonths(@Nullable Object raw) {
         long v = requireInRange(raw, KEY_PROFILE_MONTHS, 1, 120);
+        return (int) v;
+    }
+
+    /**
+     * 记忆保留月数。
+     *
+     * <p>⚠️ 区间与画像同源（1..120）：记忆是从画像派生的结论，
+     * 比画像留得久就等于"画像删了，结论还活着"——那是 PIPL 意义上的
+     * 超期留存，且比画像更敏感（它是"这个学生总是错哪里"的定性判断）。
+     *
+     * @param raw yml 原始值
+     * @return 月数
+     */
+    public static int requireMemoryMonths(@Nullable Object raw) {
+        long v = requireInRange(raw, KEY_MEMORY_MONTHS, 1, 120);
         return (int) v;
     }
 

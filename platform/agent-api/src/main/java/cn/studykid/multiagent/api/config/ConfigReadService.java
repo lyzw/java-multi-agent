@@ -77,6 +77,8 @@ public class ConfigReadService {
                     "P4-D03 已实现"),
             new Spec("运行与容量", "agent.worker.max-publish-attempts", true, "yml",
                     "P4-D03 已实现"),
+            new Spec("运行与容量", "agent.worker.context-token-budget", true, "yml",
+                    "A7 已接入运行时（ContextBudgetTrimmer 预算；记忆召回从中扣减）"),
             new Spec("运行与容量", "deployment.pilot.max-tenants", true, "yml",
                     "P4-D05 校验"),
             new Spec("运行与容量", "agent.budget.reserve-per-tool-call", true, "yml",
@@ -84,11 +86,27 @@ public class ConfigReadService {
             new Spec("运行与容量", "auth.jwt.token-ttl-seconds", true, "yml",
                     "已接入运行时（仅暴露 ttl，不暴露私钥）"),
 
+            // ── 跨 Run 记忆（P1，已接入运行时）──
+            // ⚠️ 这批键此前**不存在**：记忆能力在代码里完全没有，
+            //    yml 也没有任何对应配置，故谈不上「配置了没生效」。
+            new Spec("跨 Run 记忆", "agent.memory.enabled", true, "yml",
+                    "P1 已接入运行时（false = 逐位退回无记忆行为）"),
+            new Spec("跨 Run 记忆", "agent.memory.recall-max-items", true, "yml",
+                    "P1 已实现（单次 Run 召回条数上限）"),
+            new Spec("跨 Run 记忆", "agent.memory.recall-max-tokens", true, "yml",
+                    "P1 已实现（从上下文预算中扣减）"),
+            new Spec("跨 Run 记忆", "agent.memory.recall-min-strength", true, "yml",
+                    "P1 已实现（低于门槛不进上下文）"),
+            new Spec("跨 Run 记忆", "agent.memory.vector.enabled", true, "yml",
+                    "P2 已实现（⚠️ 需目标库安装 pgvector；缺失即降级并告警）"),
+
             // ── 数据保留与删除（PIPL 未成年人，已接入运行时）──
             new Spec("数据保留与删除", "agent.retention.enabled", true, "yml",
                     "P4-D04 已实现"),
             new Spec("数据保留与删除", "agent.retention.profile-months", true, "yml",
                     "P4-D04 已实现"),
+            new Spec("数据保留与删除", "agent.retention.memory-months", true, "yml",
+                    "P1 已实现（记忆与画像同期删除）"),
             new Spec("数据保留与删除", "agent.retention.prompt-days", true, "yml",
                     "P4-D04 已实现"),
             new Spec("数据保留与删除", "agent.retention.audit-days", true, "yml",

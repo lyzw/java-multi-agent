@@ -146,8 +146,8 @@ public class RetentionJob {
             }
             rounds.incrementAndGet();
             if (merged.hasChanges()) {
-                log.info("清理本轮完成: profiles={}, prompts={}, traces={}, audits={}, withdrawals={}",
-                        merged.profilesDeleted(), merged.promptsBlanked(),
+                log.info("清理本轮完成: profiles={}, memories={}, prompts={}, traces={}, audits={}, withdrawals={}",
+                        merged.profilesDeleted(), merged.memoriesDeleted(), merged.promptsBlanked(),
                         merged.tracesDeleted(), merged.auditsDeleted(),
                         merged.withdrawalsErased());
             }
@@ -236,9 +236,10 @@ public class RetentionJob {
                 base.promptsBlanked() + next.promptsBlanked(),
                 base.tracesDeleted() + next.tracesDeleted(),
                 base.auditsDeleted() + next.auditsDeleted(),
+                base.memoriesDeleted() + next.memoriesDeleted(),
                 base.withdrawalsErased() + next.withdrawalsErased(),
                 base.failedCategories() + next.failedCategories());
     }
 
-    private static final PurgeReport EMPTY_REPORT = new PurgeReport(0, 0, 0, 0, 0, 0);
+    private static final PurgeReport EMPTY_REPORT = new PurgeReport(0, 0, 0, 0, 0, 0, 0);
 }

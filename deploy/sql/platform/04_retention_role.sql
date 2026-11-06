@@ -112,6 +112,16 @@ FROM unnest(ARRAY[
         'student_profile', 'run_event', 'audit_record',
         'consent_withdrawal', 'erasure_certificate']) AS t \gexec
 
+-- ⚠️ P1 跨 Run 记忆（student_memory）必须**显式**列在这里：
+--    记忆清理按 created_at 切，与画像清理（按 student_profile.created_at）
+--    是**两条独立路径**。记忆的 created_at 可能远晚于画像
+--    （新知识点是后来才出现的），故「画像删了、记忆还在」这个窗口
+--    只能靠本表被本角色显式删除来关闭。
+--    ⚠️ 不能依赖 student_profile 的 ON DELETE CASCADE 作为唯一路径：
+--    那要求画像先被删，而记忆清理的触发条件是它自己的 created_at。
+SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO %I', t, :'retention_role')
+FROM unnest(ARRAY['student_memory']) AS t \gexec
+
 SELECT format('GRANT SELECT, UPDATE ON %s TO %I', t, :'retention_role')
 FROM unnest(ARRAY['run', 'run_step', 'tool_operation']) AS t \gexec
 
@@ -213,6 +223,16 @@ FROM pg_roles WHERE rolname IN (:'retention_role', :'app_role') ORDER BY rolname
 SELECT grantee AS 角色, privilege_type AS 权限
 FROM information_schema.role_table_grants
 WHERE table_schema='public' AND table_name='audit_record'
+  AND privilege_type='DELETE' AND grantee IN (:'retention_role', :'app_role')
+ORDER BY grantee;
+
+\echo ''
+\echo '=== student_memory 的 DELETE 权归属（清理角色必须「有」）==='
+-- ⚠️ 这一项缺失时的症状是「记忆从不被清理」，而清理报告里
+--    memoriesDeleted 恒为 0、failedCategories 也恒为 0 —— 静默合规违约。
+SELECT grantee AS 角色, privilege_type AS 权限
+FROM information_schema.role_table_grants
+WHERE table_schema='public' AND table_name='student_memory'
   AND privilege_type='DELETE' AND grantee IN (:'retention_role', :'app_role')
 ORDER BY grantee;
 

@@ -129,6 +129,15 @@ agent:
     outbox-batch: "50"
     # 发布失败累计上限（超过则停止重试并告警）。
     max-publish-attempts: "5"
+    # 上下文 token 预算（单次模型请求的消息序列估算上限，A7）。
+    # ⚠️ 此前该值只存在于代码默认值（ContextBudgetTrimmer:62 的 16000），
+    #    没有任何一处配置能看见它 —— 「改了但没生效」与「没改」外观一致。
+    #    显式声明在此，与代码默认值同源，避免静默漂移。
+    # 语义：超出即裁掉最早的若干轮（首条原始输入永不裁）；
+    #      记忆召回占用的额度会先从本预算中扣减（见 RunExecutionLoop）。
+    # 上限 200000：超过没有意义（没有模型接受这么大的窗口），且会掩盖裁剪失效。
+    # ⚠️ 数值必须加引号：YamlPropertiesFactoryBean 会丢弃裸标量。
+    context-token-budget: "${AGENT_WORKER_CONTEXT_TOKEN_BUDGET:16000}"
     # ⚠️ 本实例服务的租户 slug **清单**（逗号分隔，P4-D05 / 关闭 L-4）。
     #   每个租户一个独立发布器，各自绑定自己的 tenantId。
     #   ⚠️ 不写 UUID：换环境要改配置，且没人看得出它指哪个租户。
@@ -189,6 +198,26 @@ agent:
     # 上限 20：过大等于「队列已清空却长期不恢复发布」。
     cooldown-multiplier: "4"
 
+  # ── 跨 Run 记忆（P1 · docs/Agent记忆机制分析与设计方案.md）──────
+  # ⚠️ 记忆是**可选增强**：enabled=false 时必须与「没有记忆功能」的行为
+  #    逐位一致（不召回、不写入、不多扣一个 token），供回滚使用。
+  # ⚠️ 数值必须加引号：YamlPropertiesFactoryBean 会丢弃裸标量。
+  memory:
+    enabled: "${AGENT_MEMORY_ENABLED:true}"
+    # 单次 Run 最多召回的记忆条数。上限 10：
+    # 记忆走系统提示（可信通道），条数越多越容易被当成指令注入面。
+    recall-max-items: "${AGENT_MEMORY_RECALL_MAX_ITEMS:5}"
+    # 召回内容的 token 上限。该额度会**先从上下文预算中扣减**，
+    # 故必须远小于 agent.worker.context-token-budget（16000）。
+    recall-max-tokens: "${AGENT_MEMORY_RECALL_MAX_TOKENS:800}"
+    # 召回强度门槛。低于此值的历史记忆不进上下文——
+    # 衰减到 0.40 以下的记忆，其证据已被后续学习覆盖，留着只会干扰判断。
+    recall-min-strength: "${AGENT_MEMORY_RECALL_MIN_STRENGTH:0.40}"
+    # 向量召回（P2）。⚠️ 需要目标库安装 pgvector 扩展；
+    #    扩展缺失时**自动降级为结构化召回并打印 WARN**，绝不静默跳过。
+    vector:
+      enabled: "${AGENT_MEMORY_VECTOR_ENABLED:false}"
+
   # ── 数据保留与删除（P4-D04 / PIPL 未成年人）────────────────────
   # ⚠️ 五项保留期**全部必填**，缺失或越界即拒绝启动（fail-closed）。
   #    为什么说"没有安全默认值"：
@@ -202,6 +231,9 @@ agent:
     enabled: "true"
     # 学习画像保留月数（student_profile / weakness_record）
     profile-months: "12"
+    # 记忆保留月数（student_memory）。⚠️ 与画像同源：记忆是从画像派生的
+    # 学习状态，比画像留得久就等于「画像删了，结论还活着」。
+    memory-months: "12"
     # Prompt 与工具结果保留天数。到期置空，不删 run 行
     # （删 run 行会经 ON DELETE CASCADE 级联删除学生薄弱点）
     prompt-days: "90"

@@ -119,6 +119,35 @@ public class JdbcErasureRepository implements ErasurePort {
     }
 
     @Override
+    public int purgeExpiredMemories(@NonNull String tenantId,
+                                    @NonNull Instant cutoff,
+                                    int limit) {
+        // ⚠️ 判据是 student_memory.created_at，**不是** student_profile.created_at。
+        //    记忆的创建时间可能远晚于画像（新知识点是后来才出现的），
+        //    若跟着画像一起切，会出现「画像已删、记忆还在」的窗口。
+        //    同理，本方法的删除**不依赖** profile 的 ON DELETE CASCADE。
+        return inTenantTx(tenantId, conn -> {
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM student_memory "
+                            + "WHERE tenant_id = ?::uuid AND created_at < ? "
+                            + "  AND ctid IN (SELECT ctid FROM student_memory "
+                            + "               WHERE tenant_id = ?::uuid AND created_at < ? "
+                            + "               ORDER BY created_at LIMIT ?)")) {
+                ps.setString(1, tenantId);
+                ps.setTimestamp(2, Timestamp.from(cutoff));
+                ps.setString(3, tenantId);
+                ps.setTimestamp(4, Timestamp.from(cutoff));
+                ps.setInt(5, limit);
+                int deleted = ps.executeUpdate();
+                if (deleted > 0) {
+                    log.info("记忆已按保留期清理: tenant={}, rows={}", tenantId, deleted);
+                }
+                return deleted;
+            }
+        });
+    }
+
+    @Override
     public int purgeExpiredAudits(@NonNull String tenantId,
                                   @NonNull Instant cutoff,
                                   int limit,
@@ -212,6 +241,23 @@ public class JdbcErasureRepository implements ErasurePort {
                     "撤回删除必须声明操作主体（P4-D04 D-1）：actor 为空");
         }
         return inTenantTx(tenantId, conn -> {
+            // ⚠️ 先显式删记忆，再删画像。
+            //    顺序不能反：先删画像会经 memory_student_fk 的 ON DELETE CASCADE
+            //    连带删掉记忆，于是下面的 DELETE 返回 0 行 —— 看起来"记忆清理没生效"，
+            //    而事实是已经被级联删了。反过来先删记忆，两条路径的计数才可区分。
+            // ⚠️ 也不能只靠级联：撤回流程存在 markWithdrawalFailed 分支，
+            //    那时 profile 可能还在，级联不会触发 —— 记忆就成了漏网数据。
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM student_memory "
+                            + "WHERE tenant_id = ?::uuid AND student_id = ?")) {
+                ps.setString(1, tenantId);
+                ps.setString(2, studentId);
+                int memories = ps.executeUpdate();
+                if (memories > 0) {
+                    log.info("撤回同意：记忆已显式删除: tenant={}, student={}, rows={}, actor={}",
+                            tenantId, studentId, memories, actor);
+                }
+            }
             try (PreparedStatement ps = conn.prepareStatement(
                     "DELETE FROM student_profile "
                             + "WHERE tenant_id = ?::uuid AND student_id = ?")) {

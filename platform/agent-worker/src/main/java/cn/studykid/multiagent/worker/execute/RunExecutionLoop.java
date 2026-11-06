@@ -22,6 +22,9 @@ import tools.jackson.databind.node.ObjectNode;
 
 import cn.studykid.multiagent.application.prompt.PromptGuard;
 import cn.studykid.multiagent.application.config.ModelPricingPolicy;
+import cn.studykid.multiagent.application.memory.MemoryConsolidator;
+import cn.studykid.multiagent.application.memory.MemoryPolicy;
+import cn.studykid.multiagent.application.memory.MemoryRecallService;
 import cn.studykid.multiagent.core.compliance.DataClassification;
 import cn.studykid.multiagent.core.config.ModelPricing;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
@@ -65,6 +68,20 @@ public class RunExecutionLoop {
      * Run 被误报为失败。详见 {@link #jsonPayload(String, String)}。
      */
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    /**
+     * 学生标识格式（与 {@code student_profile_student_id_format_chk}、
+     * {@code MemoryEntry.STUDENT_ID} 三方同源）。
+     *
+     * <p>⚠️ 为什么在这里再写一遍而不是引用 {@code MemoryEntry.STUDENT_ID}：
+     * worker 可以依赖 core，但那个常量的语义是"记忆条目的校验"，
+     * 而本处要判断的是"<b>输入载荷</b>里的值能不能当作记忆主体"——
+     * 前者是写库前的前置条件，后者是采集侧的白名单。
+     * 两者恰好同值属于**巧合性的约定**，必须靠一处引用而非两处定义来保证。
+     * 故这里<b>直接引用</b> {@code MemoryEntry.STUDENT_ID}。
+     */
+    private static final java.util.regex.Pattern STUDENT_ID_PATTERN =
+            cn.studykid.multiagent.core.memory.MemoryEntry.STUDENT_ID;
 
     private final ObservableModelGateway modelGateway;
     private final RunClaimPort claimPort;
@@ -189,6 +206,24 @@ public class RunExecutionLoop {
      */
     private final ExecutorService preemptionExecutor;
 
+    /**
+     * 跨 Run 记忆召回（P1）。
+     *
+     * <p>⚠️ <b>可为空 = 不召回</b>：未装配时模型看不到任何历史记忆，
+     * 行为与本次改动前完全一致（零风险回滚位）。生产装配<b>必须</b>传入，
+     * 由 {@code MemoryWiringIT} 断言。
+     */
+    private final MemoryRecallService memoryRecallService;
+
+    /**
+     * 跨 Run 记忆整合（P1）。
+     *
+     * <p>⚠️ <b>可为空 = 不整合</b>：未装配时 {@code student_memory} 永远为空
+     * —— 而"永远为空"与"学生从没错过"在外部完全无法区分，
+     * 这正是 P4-D08 R-1 的翻版。生产装配<b>必须</b>传入。
+     */
+    private final MemoryConsolidator memoryConsolidator;
+
     public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
@@ -311,7 +346,8 @@ public class RunExecutionLoop {
                              @Nullable ModelPricingPolicy pricing) {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId, promptGuard,
                 eventPort, adopter, contextTokenBudget, lifecycleProbe, stepPort,
-                riskEventPort, observerChain, preemptionExecutor, budget, pricing, null);
+                riskEventPort, observerChain, preemptionExecutor, budget, pricing, null,
+                null, null);
     }
 
     /**
@@ -322,6 +358,8 @@ public class RunExecutionLoop {
      * 恢复路径在批次执行成功后 fail-closed 收敛（见 {@link #resume}）。
      *
      * @param continuation 恢复续跑接缝；{@code null} = 未装配（恢复成功后收敛 FAILED）
+     * @param memoryRecallService 跨 Run 记忆召回（P1）；{@code null} = 不召回
+     * @param memoryConsolidator  跨 Run 记忆整合（P1）；{@code null} = 不整合
      */
     public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
@@ -339,7 +377,9 @@ public class RunExecutionLoop {
                              @Nullable ExecutorService preemptionExecutor,
                              @Nullable BudgetPort budget,
                              @Nullable ModelPricingPolicy pricing,
-                             @Nullable RunContinuation continuation) {
+                             @Nullable RunContinuation continuation,
+                             @Nullable MemoryRecallService memoryRecallService,
+                             @Nullable MemoryConsolidator memoryConsolidator) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
@@ -386,6 +426,16 @@ public class RunExecutionLoop {
         if (continuation == null) {
             log.warn("未装配恢复续跑接缝（RunContinuation）：审批恢复批次执行成功后"
                     + "无法继续对话，Run 将显式收敛 FAILED（RESUME_CONTINUATION_UNAVAILABLE）");
+        }
+        this.memoryRecallService = memoryRecallService;
+        this.memoryConsolidator = memoryConsolidator;
+        if (memoryRecallService == null) {
+            log.warn("未装配记忆召回（MemoryRecallService）：模型看不到任何跨 Run 历史记忆，"
+                    + "「这个学生以前错过什么」只能靠模型主动调 get_student_profile 工具");
+        }
+        if (memoryConsolidator == null) {
+            log.warn("未装配记忆整合（MemoryConsolidator）：student_memory 将永远为空，"
+                    + "而「永远为空」与「学生从没错过」在外部无法区分（P4-D08 R-1 翻版）");
         }
     }
 
@@ -468,6 +518,35 @@ public class RunExecutionLoop {
         messages.add(cn.studykid.multiagent.ports.model.ModelMessage.user(
                 renderInput(input)));
 
+        // ── 跨 Run 记忆召回（P1）────────────────────────────────────
+        //    ⚠️ 只在这里召回**一次**：本轮 Run 的上下文一旦开始增长，
+        //    再召回就等于在同一个决策中途插入新证据（记忆应当属于"开场设定"）。
+        //    ⚠️ 召回失败不抛异常（MemoryRecallService 内部已降级为 empty）。
+        //
+        //    ⚠️⚠️ 记忆**不计入** messages —— 它走系统提示（可信通道），
+        //    但内容按不可信数据围栏。理由见 PromptGuard.MEMORY_OPEN：
+        //    记忆源自模型历史输出，混进消息序列会引入角色交替问题，
+        //    伪装成用户输入则等于把系统事实交给不可信通道。
+        String memoryBlock = null;
+        int memoryTokens = 0;
+        if (memoryRecallService != null) {
+            MemoryRecallService.Recalled recalled =
+                    memoryRecallService.recall(tenantId, studentIdOf(input));
+            if (recalled.hasMemory()) {
+                memoryBlock = recalled.block();
+                memoryTokens = recalled.tokens();
+                log.info("已召回跨 Run 记忆: runId={}, 条数={}, tokens≈{}",
+                        task.runId(), recalled.items(), recalled.tokens());
+            }
+        }
+        // ⚠️ 记忆占用必须从**裁剪预算**里扣掉：trim 只约束消息序列，
+        //    但真正撑爆模型上下文窗口的是"系统提示 + 消息序列"的合计。
+        //    不扣就等于"预算说 16000，实际塞进去 16000 + 记忆"。
+        //    ⚠️⚠️ 扣到 0 或负数会让 ContextBudgetTrimmer.trim 直接抛异常
+        //    （:127–130「预算必须为正数」），此后**每一个 Run** 都会在第一步失败。
+        //    故用 MIN_TRIM_BUDGET 夹紧，并在夹紧时告警（说明配置不自洽）。
+        final int trimBudget = computeTrimBudget(memoryTokens);
+
         // ⚠️ M 决策（§8.2）：同一 callId 的工具被拒累计 3 次 → 终止 Run（FAILED）。
         //    否则一次参数不合规的拒绝会让整个 Run 直接失败。
         //    key = 工具名（callId 在跨模型轮次不可得，工具名已足够区分不同调用意图）；
@@ -535,7 +614,7 @@ public class RunExecutionLoop {
                 //    不裁就会顶爆上下文窗口。裁剪**只影响发给模型的内容**，
                 //    累积序列本身不删 —— 否则裁一次就永久丢历史。
                 ContextBudgetTrimmer.Trimmed trimmed =
-                        ContextBudgetTrimmer.trim(messages, contextTokenBudget);
+                        ContextBudgetTrimmer.trim(messages, trimBudget);
                 if (trimmed.trimmed()) {
                     log.info("上下文按 token 预算裁剪: runId={}, 丢弃轮数={}, 丢弃 token≈{}",
                             task.runId(), trimmed.droppedRounds(), trimmed.droppedTokens());
@@ -545,9 +624,15 @@ public class RunExecutionLoop {
                     //    此时**不得静默截断用户输入**（那是任务本身），
                     //    也不得假装裁剪成功 —— 显式告警，让运维知道预算配错了。
                     log.warn("⚠️ 上下文预算({})小于原始输入本身，裁剪无法满足预算: runId={}",
-                            contextTokenBudget, task.runId());
+                            trimBudget, task.runId());
                 }
                 String systemPrompt = agentConfig.systemPrompt();
+                if (memoryBlock != null) {
+                    // ⚠️ 记忆块每次循环都重新拼上去：systemPrompt 是局部变量，
+                    //    不拼就会在第二轮之后消失 —— 而那种"只有第一轮有记忆"
+                    //    的 bug 在单轮测试里完全看不出来。
+                    systemPrompt = systemPrompt + "\n\n" + memoryBlock;
+                }
                 if (trimmed.notice() != null) {
                     // ⚠️ 裁剪说明走**系统提示**（可信指令载体）：
                     //    混进消息序列会引入角色交替问题，
@@ -717,6 +802,18 @@ public class RunExecutionLoop {
                     content = screened.content();
                     // 无工具调用 → 生成结果，正常完成
                     ExecutionOutcome succ = commitSuccess(tenantId, task, content);
+                    // ── 跨 Run 记忆整合（P1）──────────────────────────
+                    //    ⚠️ 必须放在 commitSuccess **之后**：整合的判据是
+                    //    「这个 Run 成功了」，而成功的唯一判定就是提交成功。
+                    //    放在之前会让一个随后提交失败的 Run 也沉淀记忆 ——
+                    //    那份证据永远不会有对应的成功结果可追溯。
+                    //    ⚠️ 只整合 SUCCEEDED（失败/取消的 Run 不沉淀，见 MemoryConsolidator）。
+                    //    ⚠️ 整合失败不影响已提交的结果（MemoryConsolidator 内部吞掉异常）：
+                    //    此时 Run 已经终结，再改状态就是伪造结果。
+                    if (memoryConsolidator != null && succ.kind() == ExecutionOutcome.Kind.SUCCEEDED) {
+                        memoryConsolidator.consolidate(tenantId, task.runId(),
+                                studentIdOf(input));
+                    }
                     notifyLoopComplete(tenantId, task.runId(), succ, steps);
                     return succ;
                 }
@@ -1378,6 +1475,72 @@ public class RunExecutionLoop {
         public AgentModelConfig {
             toolSchemas = toolSchemas == null ? Map.of() : Map.copyOf(toolSchemas);
         }
+    }
+
+    /**
+     * 从 Run 输入里取学生标识（跨 Run 记忆的稳定键）。
+     *
+     * <p>⚠️ <b>三重校验，缺一不可</b>（{@code docs/Agent记忆机制分析与设计方案.md} §3.4.4）：
+     * <ol>
+     *   <li>存在 —— 不存在就没有可召回的主体；</li>
+     *   <li>是字符串 —— 输入载荷是自由 JSON，非字符串值是脏数据；</li>
+     *   <li>符合 {@code stu_ + 16 位小写十六进制} —— 与会话外层的
+     *       {@code StudentIdPattern} 同源。不合规的值直接当作"没有学生"，
+     *       而不是抛异常：<b>记忆不该让一个本来能跑的 Run 失败</b>。</li>
+     * </ol>
+     *
+     * <p>⚠️ 刻意<b>不</b>透传任意键：只认 {@code input.studentId}。
+     * 若允许从任意字段嗅探 ID，就等于让用户在提示词里控制记忆主体
+     * （写一句 {@code "studentId": "stu_..."} 就能读到别人的记忆 ——
+     * 当然 RLS 会拦住跨租户，但同租户内的跨学生读取无任何拦截）。
+     *
+     * @param input Run 输入
+     * @return 合法学生标识；否则 {@code null}
+     */
+    private static @Nullable String studentIdOf(Map<String, Object> input) {
+        if (input == null) {
+            return null;
+        }
+        Object raw = input.get("studentId");
+        if (raw == null) {
+            return null;
+        }
+        String value = String.valueOf(raw).strip();
+        if (!STUDENT_ID_PATTERN.matcher(value).matches()) {
+            if (log.isWarnEnabled()) {
+                // ⚠️ 只记长度与是否为空，**不记原值**：学生标识属于个人信息，
+                //    写进日志就等于在日志系统里另存一份，而日志不随画像一起删除。
+                log.warn("Run 输入的 studentId 格式不合法，跳过记忆召回与整合: 长度={}",
+                        value.length());
+            }
+            return null;
+        }
+        return value;
+    }
+
+    /**
+     * 计算裁剪预算（扣除记忆占用）。
+     *
+     * @param memoryTokens 记忆块占用的估算 token
+     * @return 传给 {@code ContextBudgetTrimmer} 的正数预算
+     */
+    private int computeTrimBudget(int memoryTokens) {
+        if (memoryTokens <= 0) {
+            return contextTokenBudget;
+        }
+        int remaining = contextTokenBudget - memoryTokens;
+        if (remaining < MemoryPolicy.MIN_TRIM_BUDGET) {
+            // ⚠️ 夹紧而不是让它变成 0 或负数：trim(0) 直接抛异常，
+            //    而那会把**每一个** Run 打成 FAILED —— 一个"记忆配得太多"
+            //    的配置错误不该有这么大的影响面。
+            //    ⚠️ 但必须告警：夹紧意味着记忆与消息**合计超出**预算，
+            //    真实上下文会顶到窗口边缘，这时该调的是配置而不是代码。
+            log.warn("⚠️ 记忆占用({})过高，裁剪预算被夹紧到下限 {}（原预算 {}）："
+                            + "合计将超出上下文预算，请下调 agent.memory.recall-max-tokens",
+                    memoryTokens, MemoryPolicy.MIN_TRIM_BUDGET, contextTokenBudget);
+            return MemoryPolicy.MIN_TRIM_BUDGET;
+        }
+        return remaining;
     }
 
     /**

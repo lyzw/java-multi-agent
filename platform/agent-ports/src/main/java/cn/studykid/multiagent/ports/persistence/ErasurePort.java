@@ -17,13 +17,20 @@ import org.jspecify.annotations.NonNull;
  * <p>因此本端口<b>刻意不提供</b>任何无租户参数的删除方法——
  * 「不方便」是有意的：DELETE 的代价不可逆，便捷性必须让位于安全性。
  *
- * <p><b>⚠️ 四类数据的处置方式不同且不可互换</b>（见 {@code P4-D04 §3}）：
+ * <p><b>⚠️ 五类数据的处置方式不同且不可互换</b>（见 {@code P4-D04 §3}）：
  * <ul>
- *   <li>画像 /  Trace / 审计 → <b>删行</b>；</li>
+ *   <li>画像 / 记忆 / Trace / 审计 → <b>删行</b>；</li>
  *   <li>Prompt 与工具结果 → <b>置空字段</b>，不删行
  *       （删 run 行会经 {@code ON DELETE CASCADE} 级联删除学生薄弱点）；</li>
  *   <li>幂等键 → 本片<b>不清理</b>（删键等于解除重复执行保护）。</li>
  * </ul>
+ *
+ * <p><b>为什么「记忆」是第 5 类而不是并进画像</b>：
+ * {@code student_memory} 与 {@code student_profile} 的清理判据<b>不同</b> ——
+ * 画像按 {@code student_profile.created_at} 切，记忆按
+ * {@code student_memory.created_at} 切。后者的创建时间可能<b>远晚于</b>画像
+ * （新知识点是后来才出现的），于是"画像已删、记忆还在"这个窗口
+ * 只能由本端口的独立方法关闭。合在一起会让这段窗口永远不可见。
  */
 public interface ErasurePort {
 
@@ -36,6 +43,31 @@ public interface ErasurePort {
      * @return 实际删除的画像行数
      */
     int purgeExpiredProfiles(@NonNull String tenantId,
+                             @NonNull Instant cutoff,
+                             int limit);
+
+    /**
+     * 清理到期的跨 Run 记忆（{@code student_memory}）。
+     *
+     * <p>⚠️ <b>本方法必须由 {@code agent_retention} 凭据执行</b>，
+     * 而不是应用凭据 —— 与审计删除同一条纪律。理由是删除的影响面：
+     * 记忆表承载的是"这个学生长期的学习结论"，误删的后果不可逆。
+     *
+     * <p>⚠️ <b>不能依赖画像的 {@code ON DELETE CASCADE} 作为唯一路径</b>：
+     * 那要求画像先到期。而记忆的 {@code created_at} 晚于画像时，
+     * 画像删了记忆还在 —— 这正是本方法存在的理由。
+     *
+     * <p>⚠️ <b>与"自然遗忘"是两条独立路径</b>：本方法按 {@code created_at}
+     * 切（保留期口径）；自然遗忘按"强度 &lt; 0.15 且 180 天未再出现"切
+     * （领域口径，见 {@code MemoryStrength.isNaturallyForgotten}）。
+     * 两者都不能替代对方。
+     *
+     * @param tenantId 租户标识，必填
+     * @param cutoff   早于该时点创建的记忆视为到期
+     * @param limit    单轮上限，防止长事务锁表
+     * @return 实际删除的记忆行数
+     */
+    int purgeExpiredMemories(@NonNull String tenantId,
                              @NonNull Instant cutoff,
                              int limit);
 

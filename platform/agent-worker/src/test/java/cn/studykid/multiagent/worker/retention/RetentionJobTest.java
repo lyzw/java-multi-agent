@@ -183,7 +183,7 @@ class RetentionJobTest {
     private static RetentionPurgeService service(ErasurePort port) {
         return new RetentionPurgeService(
                 port,
-                new RetentionPurgeService.RetentionSettings(12, 90, 180, 30, 0, 1000),
+                new RetentionPurgeService.RetentionSettings(12, 12, 90, 180, 30, 0, 1000),
                 "retention-job",
                 Clock.fixed(Instant.parse("2026-10-19T00:00:00Z"), ZoneOffset.UTC));
     }
@@ -280,6 +280,11 @@ class RetentionJobTest {
                 throw new IllegalStateException("模拟该租户清理失败");
             }
             return nextProfileRows;
+        }
+
+        @Override
+        public int purgeExpiredMemories(String tenantId, Instant cutoff, int limit) {
+            return 0;
         }
 
         @Override

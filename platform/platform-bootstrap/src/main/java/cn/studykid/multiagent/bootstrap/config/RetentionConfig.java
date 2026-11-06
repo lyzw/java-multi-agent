@@ -101,6 +101,7 @@ public class RetentionConfig {
     public RetentionPurgeService retentionPurgeService(
             ErasurePort erasurePort,
             @Value("${" + RetentionPolicy.KEY_PROFILE_MONTHS + "}") String profileMonths,
+            @Value("${" + RetentionPolicy.KEY_MEMORY_MONTHS + "}") String memoryMonths,
             @Value("${" + RetentionPolicy.KEY_PROMPT_DAYS + "}") String promptDays,
             @Value("${" + RetentionPolicy.KEY_AUDIT_DAYS + "}") String auditDays,
             @Value("${" + RetentionPolicy.KEY_TRACE_DAYS + "}") String traceDays,
@@ -110,15 +111,16 @@ public class RetentionConfig {
         RetentionPurgeService.RetentionSettings settings =
                 new RetentionPurgeService.RetentionSettings(
                         RetentionPolicy.requireProfileMonths(profileMonths),
+                        RetentionPolicy.requireMemoryMonths(memoryMonths),
                         RetentionPolicy.requirePromptDays(promptDays),
                         RetentionPolicy.requireAuditDays(auditDays),
                         RetentionPolicy.requireTraceDays(traceDays),
                         RetentionPolicy.requireWithdrawalGraceDays(graceDays),
                         RetentionPolicy.requireBatchSize(batchSize));
-        log.info("保留期清理配置已装载: profileMonths={}, promptDays={}, auditDays={}, "
-                        + "traceDays={}, graceDays={}, batchSize={}, actor={}",
-                settings.profileMonths(), settings.promptDays(), settings.auditDays(),
-                settings.traceDays(), settings.withdrawalGraceDays(),
+        log.info("保留期清理配置已装载: profileMonths={}, memoryMonths={}, promptDays={}, "
+                        + "auditDays={}, traceDays={}, graceDays={}, batchSize={}, actor={}",
+                settings.profileMonths(), settings.memoryMonths(), settings.promptDays(),
+                settings.auditDays(), settings.traceDays(), settings.withdrawalGraceDays(),
                 settings.batchSize(), actor);
         return new RetentionPurgeService(erasurePort, settings, actor, Clock.systemUTC());
     }
