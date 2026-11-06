@@ -27,6 +27,14 @@
       <groupId>cn.studykid.rag</groupId>
       <artifactId>rag-application</artifactId>
     </dependency>
+    <!--
+      物料前期处理 SPI（RAG-D26）：DoclingPremiseBackend 把既有解析端口
+      包装成 premise 的 DocumentParseBackend（依赖方向 infrastructure → premise）。
+    -->
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-premise</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-jdbc</artifactId>

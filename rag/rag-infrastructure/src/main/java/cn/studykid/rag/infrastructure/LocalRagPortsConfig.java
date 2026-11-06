@@ -124,9 +124,142 @@ public class LocalRagPortsConfig {
         return GroundingPolicy.productionDefault();
     }
 
+    /**
+     * 入库切分管道（RAG-D26 阶段 3.1：双模式，默认关闭）。
+     *
+     * <p><b>选择逻辑</b>：
+     * <ul>
+     *   <li>{@code rag.premise.enabled=false}（默认）→
+     *       旧模式 {@code new IngestionPipeline(parserPort)}——
+     *       行为与迁移前完全一致（既有测试锚定）；</li>
+     *   <li>{@code rag.premise.enabled=true} →
+     *       注入 premise 切分器（策略由 {@code rag.premise.chunk-policy} 决定，
+     *       fail-closed：配置了 hybrid 但分块桥未部署时，job 运行期失败，
+     *       <b>绝不</b>静默回退 heading）。</li>
+     * </ul>
+     *
+     * <p>⚠️ 配置错误（未知策略值）在<b>装配期</b>即抛异常（应用拒绝启动）——
+     * 比运行期失败更早暴露，符合 fail-closed 纪律。
+     *
+     * @param parserPort   解析端口（两种模式共用，保证评测只变量是切分）
+     * @param premiseEnabled 灰度开关（默认 false）
+     * @param chunkPolicyValue 策略配置值（heading / hybrid，大小写不敏感）
+     * @param maxTokens    token 预算
+     * @param overlapRatio 重叠比例
+     * @return 管道实例
+     */
     @Bean
-    public IngestionPipeline ingestionPipeline(DocumentParserPort parserPort) {
-        return new IngestionPipeline(parserPort);
+    public IngestionPipeline ingestionPipeline(
+            DocumentParserPort parserPort,
+            @Value("${rag.premise.enabled:false}") boolean premiseEnabled,
+            @Value("${rag.premise.chunk-policy:}") String chunkPolicyValue,
+            @Value("${rag.premise.max-tokens:512}") int maxTokens,
+            @Value("${rag.premise.overlap-ratio:0.15}") double overlapRatio) {
+        if (!premiseEnabled) {
+            log.info("[RAG] IngestionPipeline → 旧内置切分（rag.premise.enabled=false，"
+                    + "RAG-D26 阶段 3 灰度未开启）");
+            return new IngestionPipeline(parserPort);
+        }
+        // ⚠️ 装配期解析策略：未知值在这里就抛（应用拒绝启动），不留到运行期。
+        cn.studykid.rag.premise.model.ChunkPolicy policy =
+                cn.studykid.rag.premise.model.ChunkPolicy.fromConfigValue(chunkPolicyValue);
+        var config = new cn.studykid.rag.premise.model.ChunkPolicyConfig(
+                maxTokens, overlapRatio, true, true);
+        cn.studykid.rag.premise.spi.BlockChunker chunker = premiseChunker(policy);
+        log.info("[RAG] IngestionPipeline → premise 切分（policy={}，maxTokens={}，"
+                        + "overlapRatio={}；⚠️ 灰度开启后切分留痕为 {}）",
+                policy, maxTokens, overlapRatio, policy);
+        return new IngestionPipeline(parserPort, chunker, config);
+    }
+
+    /**
+     * 按策略提供切分器（仅返回真实可用的实现；Hybrid 占位按 policy() 查表返回，
+     * 其 fail-closed 行为在运行期暴露——装配期只校验策略值合法）。
+     *
+     * @param policy 切分策略
+     * @return 切分器
+     */
+    private cn.studykid.rag.premise.spi.BlockChunker premiseChunker(
+            cn.studykid.rag.premise.model.ChunkPolicy policy) {
+        return switch (policy) {
+            case HEADING_HIERARCHY ->
+                    new cn.studykid.rag.premise.chunker.HeadingHierarchyChunker();
+            case HYBRID_CHUNKER ->
+                    new cn.studykid.rag.premise.chunker.HybridChunkerClient();
+        };
+    }
+
+    /**
+     * 物料前期处理门面（RAG-D26 阶段 1.5：解析后端配置化，MinerU 已接入）。
+     *
+     * <p><b>选择逻辑（{@code rag.premise.parse-backend}）</b>：
+     * <ul>
+     *   <li>{@code docling}（默认）→ {@code DoclingPremiseBackend}
+     *       （包装既有 DocumentParserPort——配置了 rag.docling.base-url 走 Docling，
+     *       否则占位 + fail-closed 闸门）；</li>
+     *   <li>{@code mineru} → {@code MineruPremiseBackend}
+     *       （Tasks API 客户端，须配置 rag.premise.mineru.base-url；<b>整册提交</b>，
+     *       Tasks API 自身异步，实测 162 页约 200 秒）；</li>
+     *   <li>未知值 → 装配期抛异常（应用拒绝启动）。</li>
+     * </ul>
+     *
+     * <p>⚠️ 本门面仍<b>不进生产路径</b>（编排器切换属阶段 3.2）；
+     * 切分器表只挂 HEADING_HIERARCHY（真实）与 HYBRID_CHUNKER（占位，待分块桥）。
+     *
+     * @param parserPort 解析端口（docling 后端的包装来源）
+     * @param backendValue 解析后端配置值
+     * @param mineruBaseUrl MinerU api-server 端点
+     * @param mineruTier MinerU 解析档位（flash/basic/standard；扫描版建议 standard）
+     * @param mineruTimeout MinerU 总超时（秒）
+     * @return 门面实例
+     */
+    @Bean
+    public cn.studykid.rag.premise.PremisePreprocessor premisePreprocessor(
+            DocumentParserPort parserPort,
+            @Value("${rag.premise.parse-backend:docling}") String backendValue,
+            @Value("${rag.premise.mineru.base-url:}") String mineruBaseUrl,
+            @Value("${rag.premise.mineru.tier:standard}") String mineruTier,
+            @Value("${rag.premise.mineru.timeout-seconds:600}") int mineruTimeout) {
+        cn.studykid.rag.premise.spi.DocumentParseBackend parseBackend =
+                switch (backendValue == null ? "" : backendValue.trim().toLowerCase()) {
+                    case "", "docling" -> {
+                        log.info("[RAG] PremisePreprocessor → Docling 后端（包装 DocumentParserPort）");
+                        yield new cn.studykid.rag.infrastructure.premise.DoclingPremiseBackend(
+                                parserPort);
+                    }
+                    case "mineru" -> {
+                        if (mineruBaseUrl == null || mineruBaseUrl.isBlank()) {
+                            // ⚠️ fail-closed：选了 mineru 却没配端点 → 拒绝启动
+                            //    （「配了 mineru 却静默用 docling」会让留痕失真）。
+                            throw new IllegalStateException(
+                                    "rag.premise.parse-backend=mineru 但 "
+                                            + "rag.premise.mineru.base-url 未配置——拒绝装配");
+                        }
+                        log.info("[RAG] PremisePreprocessor → MinerU 后端（{}，tier={}，timeout={}s）",
+                                mineruBaseUrl, mineruTier, mineruTimeout);
+                        yield new cn.studykid.rag.infrastructure.premise.MineruPremiseBackend(
+                                mineruBaseUrl, mineruTier, mineruTimeout);
+                    }
+                    default -> throw new IllegalStateException(
+                            "未知解析后端: " + backendValue
+                                    + "（合法值: docling / mineru）");
+                };
+        var headingChunker = new cn.studykid.rag.premise.chunker.HeadingHierarchyChunker();
+        // 阶段 2.2：HybridChunker 已真实接入（Python 分块桥 deploy/docling/chunk_service）；
+        // 桥不可用时调用即抛 fail-closed 异常，可用性探测交给运维探活。
+        var hybridChunker = new cn.studykid.rag.premise.chunker.HybridChunkerClient();
+
+        log.info("[RAG] PremisePreprocessor 装配：parse={}（{}），chunkers=[{}, {}]",
+                parseBackend.backendId(), parseBackend.backendVersion(),
+                headingChunker.policy(), hybridChunker.policy());
+        return new cn.studykid.rag.premise.PremisePreprocessor(
+                parseBackend,
+                java.util.Map.of(
+                        cn.studykid.rag.premise.model.ChunkPolicy.HEADING_HIERARCHY,
+                        headingChunker,
+                        cn.studykid.rag.premise.model.ChunkPolicy.HYBRID_CHUNKER,
+                        hybridChunker),
+                cn.studykid.rag.premise.model.ChunkPolicyConfig.productionDefault());
     }
 
     @Bean
