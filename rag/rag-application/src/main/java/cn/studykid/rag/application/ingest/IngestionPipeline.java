@@ -10,10 +10,12 @@ import cn.studykid.rag.core.chunk.ChunkRole;
 import cn.studykid.rag.core.chunk.LayoutFacts;
 import cn.studykid.rag.core.knowledge.KnowledgePoint;
 import cn.studykid.rag.core.version.EditionCoordinate;
-import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.DocumentParserPort;
 import cn.studykid.rag.ports.LayoutBlock;
 import cn.studykid.rag.ports.ParsedDocument;
+import cn.studykid.rag.premise.normalize.ChunkIdentifiers;
+import cn.studykid.rag.premise.normalize.SectionPathResolver;
+import cn.studykid.rag.premise.role.BlockRoleResolver;
 
 /**
  * 入库切分用例（RAG-D04 §3）。
@@ -37,19 +39,88 @@ import cn.studykid.rag.ports.ParsedDocument;
  * 而误判为答案的代价是<b>泄题</b>，误判为讲解的代价仅是<b>不够具体</b>。
  * 两类错误代价不对称，因此<b>宁可过判为讲解</b>（更安全），
  * 并要求人工抽检（见 RAG-D08 §5）。
+ *
+ * <p><b>⚠️ 规则已迁移至 rag-premise（RAG-D26 阶段 0.3）</b>：
+ * 角色判定表（{@code BlockRoleResolver}）、章节路径推进/取值
+ * （{@code SectionPathResolver}）、chunk 标识与指纹
+ * （{@code ChunkIdentifiers})现在统一住在 {@code rag-premise}，
+ * 本类<b>委托调用</b>。迁移是「搬运不是重写」：
+ * 判定语义与迁移前逐条等价，由既有测试（本模块与 infrastructure 的
+ * 全部角色/路径用例）<b>一条不改地通过</b>来保证——
+ * 这是「切分规则只有一张判定表、两处实现不再漂移」的结构性保障。
+ *
+ * <p><b>⚠️ 双模式（RAG-D26 阶段 3.1，默认关闭）</b>：
+ * 本类可注入 {@code BlockChunker}（{@code rag-premise} 的切分 SPI），
+ * 注入后 {@link #ingest} 走「解析 → 归一化 → 切分器」的新管线；
+ * <b>不注入时行为与迁移前完全一致</b>（内置主循环，旧测试锚定）。
+ * 切换由装配方控制（{@code rag.premise.enabled}），
+ * 灰度期间两种模式共用同一份 {@code parserPort}——
+ * 只有切分方式不同，评测才能把差异归因到切分策略本身。
  */
 public class IngestionPipeline {
 
     private final DocumentParserPort parserPort;
 
     /**
-     * @param parserPort 解析端口
+     * 可选的 premise 切分器（null = 内置旧逻辑）。
+     *
+     * <p>⚠️ {@code BlockChunker} 的实现可能 fail-closed（如 HybridChunker 占位），
+     * 装配方必须保证注入的实现真实可用——本类不做回退。
+     */
+    private final cn.studykid.rag.premise.spi.BlockChunker premiseChunker;
+
+    private final cn.studykid.rag.premise.model.ChunkPolicyConfig premiseConfig;
+
+    /**
+     * @param parserPort 解析端口（旧路径与新路径共用）
      */
     public IngestionPipeline(DocumentParserPort parserPort) {
+        this(parserPort, null, null);
+    }
+
+    /**
+     * premise 模式构造（阶段 3.1 灰度开关的注入点）。
+     *
+     * @param parserPort      解析端口
+     * @param premiseChunker  premise 切分器（非 null 时启用新管线）
+     * @param premiseConfig   切分参数（premise 模式必填）
+     */
+    public IngestionPipeline(DocumentParserPort parserPort,
+                             cn.studykid.rag.premise.spi.BlockChunker premiseChunker,
+                             cn.studykid.rag.premise.model.ChunkPolicyConfig premiseConfig) {
         if (parserPort == null) {
             throw new IllegalArgumentException("parserPort 不能为空");
         }
+        if (premiseChunker != null && premiseConfig == null) {
+            throw new IllegalArgumentException(
+                    "注入 premiseChunker 时必须同时提供 premiseConfig");
+        }
         this.parserPort = parserPort;
+        this.premiseChunker = premiseChunker;
+        this.premiseConfig = premiseConfig;
+    }
+
+    /**
+     * @return 是否启用 premise 切分管线（装配自检与测试断言用）
+     */
+    public boolean premiseModeEnabled() {
+        return premiseChunker != null;
+    }
+
+    /**
+     * @return 当前切分策略标识（写入 {@code chunk_policy} 留痕列）；
+     *         旧模式返回 null——「未采集」语义，不伪造策略值
+     */
+    public String chunkPolicyTrace() {
+        return premiseChunker == null ? null : premiseChunker.policy().name();
+    }
+
+    /**
+     * @return 当前切分参数快照（写入 {@code chunk_policy_config} 留痕列）；
+     *         旧模式返回 null
+     */
+    public String chunkPolicyConfigTrace() {
+        return premiseConfig == null ? null : premiseConfig.stableString();
     }
 
     /**
@@ -68,6 +139,47 @@ public class IngestionPipeline {
                                        @NonNull byte[] content,
                                        @NonNull List<KnowledgePoint> knowledgePoints) {
         ParsedDocument parsed = parserPort.parse(documentId, content);
+        // 阶段 3.1 双模式：注入了 premise 切分器 → 走归一化 + 切分 SPI；
+        // 否则走内置主循环（与迁移前行为逐条等价，旧测试锚定）。
+        if (premiseChunker != null) {
+            return ingestViaPremise(documentId, edition, knowledgePoints, parsed);
+        }
+        return ingestLegacyLoop(documentId, edition, knowledgePoints, parsed);
+    }
+
+    /**
+     * premise 切分管线（阶段 3.1 新路径）。
+     *
+     * <p>解析产物经 {@code PremiseDocument.fromParsed} 恒等包装（无字段复制），
+     * 切分策略由注入的 {@code premiseChunker} 决定；知识点挂接经由
+     * {@code ChunkContext} 传入切分器（挂接规则与旧路径同源）。
+     *
+     * @param documentId      文档 ID
+     * @param edition         版本坐标
+     * @param knowledgePoints 知识点匹配表
+     * @param parsed          既有端口解析产物
+     * @return 切分片段
+     */
+    private @NonNull List<Chunk> ingestViaPremise(@NonNull String documentId,
+                                                  @NonNull EditionCoordinate edition,
+                                                  @NonNull List<KnowledgePoint> knowledgePoints,
+                                                  @NonNull ParsedDocument parsed) {
+        cn.studykid.rag.premise.model.PremiseDocument premise =
+                cn.studykid.rag.premise.model.PremiseDocument.fromParsed(documentId, parsed);
+        cn.studykid.rag.premise.model.ChunkOutcome outcome = premiseChunker.chunk(
+                premise,
+                premiseConfig,
+                new cn.studykid.rag.premise.model.ChunkContext(edition, knowledgePoints));
+        return outcome.chunks();
+    }
+
+    /**
+     * 内置旧主循环（默认路径；与迁移前行为逐条等价）。
+     */
+    private @NonNull List<Chunk> ingestLegacyLoop(@NonNull String documentId,
+                                                  @NonNull EditionCoordinate edition,
+                                                  @NonNull List<KnowledgePoint> knowledgePoints,
+                                                  @NonNull ParsedDocument parsed) {
         List<Chunk> chunks = new ArrayList<>();
         StringBuilder sectionPath = new StringBuilder();
         String currentExerciseNo = null;
@@ -75,7 +187,9 @@ public class IngestionPipeline {
         for (LayoutBlock block : parsed.blocks()) {
             // ① 标题块推进章节路径
             if (block.type().isHeading()) {
-                updateSectionPath(sectionPath, block);
+                // 委托 rag-premise 的 SectionPathResolver（RAG-D26 阶段 0.3 迁移）：
+                // 规则与原 updateSectionPath 逐行等价（按层级截断而非追加）。
+                SectionPathResolver.advance(sectionPath, block);
                 currentExerciseNo = null;
                 continue;
             }
@@ -99,10 +213,12 @@ public class IngestionPipeline {
             //    它归属的是上文那道题。若只看块自身题号，
             //    「习题的答案」会被判成「例题解答」甚至「讲解」——
             //    后者会让标准答案在讲解模式下被召回（泄题）。
+            //    委托 rag-premise 的 BlockRoleResolver（RAG-D26 阶段 0.3 迁移）。
             String effectiveExerciseNo =
-                    block.exerciseNo() != null ? block.exerciseNo() : currentExerciseNo;
+                    BlockRoleResolver.effectiveExerciseNo(block, currentExerciseNo);
             // ④ 答案区判定——先于角色推断，且优先
-            ChunkRole role = resolveRole(block, effectiveExerciseNo);
+            //    （委托同一 resolver：判定表与迁移前逐条等价）。
+            ChunkRole role = BlockRoleResolver.resolveRole(block, effectiveExerciseNo);
             if (role == ChunkRole.BOILERPLATE) {
                 continue;
             }
@@ -111,11 +227,11 @@ public class IngestionPipeline {
                 currentExerciseNo = block.exerciseNo();
             }
             // ⑥ 生成片段
-            //    ⚠️ 章节路径取值见 resolveSectionPath：标题上下文优先，
+            //    ⚠️ 章节路径取值见 SectionPathResolver.resolve：标题上下文优先，
             //    无标题上下文时回退到解析器给出的路径。
             Chunk.Locator locator = new Chunk.Locator(
                     block.pageNumber(),
-                    resolveSectionPath(sectionPath, block),
+                    SectionPathResolver.resolve(sectionPath, block),
                     currentExerciseNo,
                     block.charStart(),
                     block.charEnd());
@@ -125,12 +241,14 @@ public class IngestionPipeline {
             //       同一片段的重算结果可能不同；存快照才能解释"历史上为什么那样判"。
             //    ⚠️ matchedPrefix 记录**具体命中的词**（如「解：」）而非布尔：
             //       校对员要能一眼看到"是哪个前缀让系统判成答案的"。
+            //    采集与判定使用同一份规则（BlockRoleResolver.matchedSolutionPrefix，
+            //    RAG-D26 阶段 0.3 迁移）。
             LayoutFacts facts = new LayoutFacts(
                     block.inAnswerZone(),
                     block.type() == null ? null : block.type().name(),
-                    matchedSolutionPrefix(block.text()));
+                    BlockRoleResolver.matchedSolutionPrefix(block.text()));
             chunks.add(new Chunk(
-                    chunkId(documentId, block),
+                    ChunkIdentifiers.chunkId(documentId, block.pageNumber(), block.charStart()),
                     documentId,
                     edition,
                     role,
@@ -138,194 +256,10 @@ public class IngestionPipeline {
                     locator,
                     kpIds,
                     currentExerciseNo,
-                    contentHash(block.text()),
+                    ChunkIdentifiers.contentHash(block.text()),
                     facts));
         }
         return List.copyOf(chunks);
-    }
-
-    /**
-     * 角色判定（RAG-D04 §3.1 判定表的实现）。
-     *
-     * <p><b>⚠️ 判定顺序即安全顺序</b>：本方法产出的角色直接决定
-     * {@code RetrievalPolicy.applyRoleFilter} 会不会把该片段放进讲解模式的上下文。
-     * {@link ChunkRole#EXPLANATION} <b>不是</b>答案类角色 → 它<b>会</b>被召回 →
-     * 一旦答案区的内容被判成 EXPLANATION，<b>标准答案就泄给了还没作答的学生</b>。
-     * 因此本表的每一条都<b>取严</b>：能判成答案类的一律判成答案类。
-     *
-     * <table border="1">
-     *   <caption>判定表（RAG-D04 §3.1）</caption>
-     *   <tr><th>版面事实</th><th>判定</th></tr>
-     *   <tr><td>公式/表格/图注 且在答案区</td><td>{@code EXERCISE_ANSWER}（行 5，最严）</td></tr>
-     *   <tr><td>在答案区 且有题号（含继承）</td><td>{@code EXERCISE_ANSWER}（行 1）</td></tr>
-     *   <tr><td>在答案区 且无题号</td><td>{@code EXAMPLE_SOLUTION}（行 2）</td></tr>
-     *   <tr><td>块类型 EXERCISE</td><td>{@code EXERCISE}（行 3）</td></tr>
-     *   <tr><td>块类型 ANSWER</td><td>{@code EXERCISE_ANSWER}（行 4，取严）</td></tr>
-     *   <tr><td>块首确定性前缀（解：/ 解答：/ 答：/ 答案：/ Key:/ Answer:）<b>且不在答案区</b></td>
-     *       <td>{@code EXERCISE_ANSWER}/{@code EXAMPLE_SOLUTION}（行 7，学生用书无答案附录补丁）</td></tr>
-     *   <tr><td>其余</td><td>{@code EXPLANATION}（行 6）</td></tr>
-     * </table>
-     *
-     * <p>⚠️ <b>行 2 的「无题号」曾经被实现成 {@code EXPLANATION}</b>——
-     * 那不是「不够具体」，而是<b>把答案判成了讲解</b>：
-     * 讲解模式下该片段会被原样送进 prompt → <b>泄题</b>。
-     * 本方法的判据只看<b>版面事实</b>（答案区标识 + 题号），不看内容。
-     *
-     * @param block 版面块
-     * @param effectiveExerciseNo 有效题号（块自身题号，否则继承上文最近题号）
-     * @return 片段角色
-     */
-    private ChunkRole resolveRole(LayoutBlock block, String effectiveExerciseNo) {
-        boolean answerZone = block.inAnswerZone();
-        switch (block.type()) {
-            case FORMULA:
-            case TABLE:
-            case FIGURE:
-                // ⚠️ 公式/表格/图注：若位于答案区，仍属答案承载内容（行 5）。
-                //    取 EXERCISE_ANSWER（而非 EXAMPLE_SOLUTION）——后者在 SOLVE 模式下
-                //    是允许的，标准答案在解题模式下被召回同样是泄题。
-                return answerZone ? ChunkRole.EXERCISE_ANSWER : ChunkRole.EXPLANATION;
-            case HEADING:
-            case BOILERPLATE:
-                return ChunkRole.BOILERPLATE;
-            case EXERCISE:
-                return ChunkRole.EXERCISE;
-            case ANSWER:
-                // 行 4：块类型已由解析器断言「这是答案内容」，无题号时无法判定
-                //        是例题解答还是习题答案 → 取严判为 EXERCISE_ANSWER。
-                return ChunkRole.EXERCISE_ANSWER;
-            case PARAGRAPH:
-            case LIST_ITEM:
-            default:
-                if (answerZone) {
-                    // 行 1 / 行 2
-                    return effectiveExerciseNo != null
-                            ? ChunkRole.EXERCISE_ANSWER
-                            : ChunkRole.EXAMPLE_SOLUTION;
-                }
-                // ④' 内容兜底（学生用书无答案附录时的关键补丁，RAG-D04 §3.1 行 7）。
-                //    ⚠️ 实测三册沪教版学生教材均<b>无答案附录</b>（答案册单独成册），
-                //       正文里出现的「例题解答 / 习题答案」以
-                //       「解：/ 解答：/ 解之：/ 答：/ 答案：/ 答曰：/ Key:/ Answer:」等
-                //       <b>确定性前缀</b>开头，但不含独立的「参考答案」标题。
-                //       若只靠标题驱动的答案区检测，这些块会被判成 EXPLANATION →
-                //       讲解模式下被原样召回 → <b>泄题</b>。
-                //    ⚠️ 仅匹配<b>块首</b>的强信号，<b>绝不</b>扫全文关键词：
-                //       历史经验（同 §3.1）显示按全文关键词（如 "answers"）判答案区
-                //       会把 89% 的题干误判成答案区。前缀「解：」是确定性解答引导语，
-                //       不会出现在题干指令里——"Answer the questions" 的 Answer 后跟的是
-                //       空格 + 动词而非冒号，故不命中。命中即视为解答/答案，
-                //       沿用行 1/行 2 的题号规则（有题号→习题答案，无题号→例题解答）。
-                ChunkRole contentRole = resolveAnswerBearingByContent(block.text(), effectiveExerciseNo);
-                if (contentRole != null) {
-                    return contentRole;
-                }
-                return ChunkRole.EXPLANATION;
-        }
-    }
-
-    /**
-     * 内容兜底：识别「块首确定性前缀」的解答 / 答案。
-     *
-     * <p>⚠️ 仅匹配<b>块文本开头</b>的强信号，<b>绝不</b>扫全文关键词——
-     * 否则会重演「89% 题干被误判答案区」的事故。前缀
-     * 「解：/ 解答：/ 解之：/ 答：/ 答案：/ 答曰：/ 求解结果：/ Key:/ Answer:/ Answers:」
-     * 是<b>确定性</b>的解答引导语，不会出现在题干指令里：
-     * 「Answer the questions」的 Answer 后跟空格 + 动词而非冒号，故不命中；
-     * 「解释：/ 解读：/ 解析式：」等以「解」开头但非解答引导语的，也因后接非冒号而不命中。
-     *
-     * @param text 块文本
-     * @param effectiveExerciseNo 有效题号（块自身题号，否则继承上文题号）
-     * @return 命中时返回答案承载角色；否则返回 null（交回 EXPLANATION 兜底）
-     */
-    private static final java.util.regex.Pattern SOLUTION_PREFIX = java.util.regex.Pattern.compile(
-            "^\\s*(?:解|解答|解之|答|答案|答曰|求解结果|Key|Answer|Answers?)\\s*[:：]");
-
-    /**
-     * 提取块首命中的解答前缀（无则 null）。
-     *
-     * <p>⚠️ 单独抽出来是因为「判定」与「记录」要使用**同一份规则**：
-     * 若采集时另写一个正则，判定改了采集没改，校对页就会展示一个
-     * 与真实判定依据不符的前缀——那比不显示更糟。
-     *
-     * @param text 块文本
-     * @return 命中的前缀原文（如「解：」）；未命中或空文本为 null
-     */
-    private static String matchedSolutionPrefix(String text) {
-        if (text == null || text.isBlank()) {
-            return null;
-        }
-        java.util.regex.Matcher m = SOLUTION_PREFIX.matcher(text);
-        return m.find() ? m.group().trim() : null;
-    }
-
-    private static ChunkRole resolveAnswerBearingByContent(String text, String effectiveExerciseNo) {
-        if (text == null || text.isBlank()) {
-            return null;
-        }
-        if (!SOLUTION_PREFIX.matcher(text).find()) {
-            return null;
-        }
-        // 沿用行 1/行 2：有题号归属习题答案，无题号归属例题解答（都是答案承载内容）。
-        return effectiveExerciseNo != null ? ChunkRole.EXERCISE_ANSWER : ChunkRole.EXAMPLE_SOLUTION;
-    }
-
-    /**
-     * 章节路径取值（RAG-D04 §5.2 / §5.3）。
-     *
-     * <p><b>⚠️ 两个来源，一个权威</b>：
-     * <ol>
-     *   <li><b>标题上下文</b>（流水线按 §5.3 的层级截断规则累积）——
-     *       这是<b>文档规定的规范机制</b>：只有它实现了「按层级截断而非追加」，
-     *       追加会产出「第3章 &gt; 3.1 &gt; 3.1.1 &gt; 3.2」这种错误路径，
-     *       在引用展示时学生会找不到对应位置。</li>
-     *   <li><b>解析器给出的 {@code LayoutBlock.sectionPath}</b>——
-     *       解析器是版面事实的权威，但它的路径<b>不经过层级截断</b>。</li>
-     * </ol>
-     *
-     * <p><b>取值规则</b>：有标题上下文时用累积路径（规范机制优先，
-     * 它保证路径与本文档的标题块自洽）；<b>没有标题上下文</b>时
-     * 累积路径无从产生，回退到解析器路径——此时解析器路径是唯一可用的版面事实，
-     * 直接丢弃它会让定位信息退化为空串，<b>引用无法核对</b>（RAG-D04 §5.2）。
-     *
-     * @param accumulated 流水线累积的标题路径
-     * @param block 版面块
-     * @return 最终章节路径
-     */
-    private String resolveSectionPath(StringBuilder accumulated, LayoutBlock block) {
-        String fromHeadings = accumulated.toString();
-        if (!fromHeadings.isBlank()) {
-            return fromHeadings;
-        }
-        String fromParser = block.sectionPath();
-        return fromParser == null ? "" : fromParser;
-    }
-
-    /**
-     * 章节路径推进。
-     *
-     * <p>⚠️ 标题层级变化时<b>截断</b>路径而非追加——
-     * 否则路径会变成「第 3 章 > 3.1 > 3.1.1 > 3.1.1.1」的累积错误。
-     */
-    private void updateSectionPath(StringBuilder path, LayoutBlock block) {
-        int level = Math.max(1, block.headingLevel());
-        String[] parts = path.toString().split(" > ");
-        int keep = Math.min(parts.length, level - 1);
-        StringBuilder rebuilt = new StringBuilder();
-        for (int i = 0; i < keep; i++) {
-            if (!parts[i].isBlank()) {
-                if (rebuilt.length() > 0) {
-                    rebuilt.append(" > ");
-                }
-                rebuilt.append(parts[i]);
-            }
-        }
-        if (rebuilt.length() > 0) {
-            rebuilt.append(" > ");
-        }
-        rebuilt.append(block.text().trim());
-        path.setLength(0);
-        path.append(rebuilt);
     }
 
     /**
@@ -346,35 +280,5 @@ public class IngestionPipeline {
             }
         }
         return matched;
-    }
-
-    private String chunkId(String documentId, LayoutBlock block) {
-        // ⚠️⚠️ chunk_id 列是 **uuid**（DDL: rag_chunk.chunk_id uuid NOT NULL），
-        //    而这里的定位键是「documentId:页码:字符位」复合串 → 直接入库会抛
-        //    「invalid input syntax for type uuid: "…:1:0"」（2026-11-03 实测，
-        //    162 页教材在切分落库阶段整本 FAILED）。
-        //    用 nameUUIDFromBytes（type-3 确定性 UUID）由定位键派生：
-        //    **同一位置重复摄取得到同一个 id**，upsert / 去重语义得以保持
-        //    （随机 UUID 会让重跑产生重复片段）。
-        return java.util.UUID.nameUUIDFromBytes(
-                        ("chunk:" + documentId + ":" + block.pageNumber() + ":"
-                                + block.charStart()).getBytes(
-                                        java.nio.charset.StandardCharsets.UTF_8))
-                .toString();
-    }
-
-    private String contentHash(String text) {
-        try {
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-            byte[] digest = md.digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(64);
-            for (byte b : digest) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
-        } catch (java.security.NoSuchAlgorithmException e) {
-            // ⚠️ SHA-256 是 JDK 必备算法；若不可用说明运行环境异常，不应静默降级。
-            throw new IllegalStateException("SHA-256 不可用", e);
-        }
     }
 }

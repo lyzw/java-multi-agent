@@ -23,6 +23,14 @@
       <groupId>cn.studykid.rag</groupId>
       <artifactId>rag-ports</artifactId>
     </dependency>
+    <!--
+      物料前期处理（RAG-D26）：切分器抽象与规则类（SectionPathResolver / BlockRoleResolver）。
+      IngestionPipeline 委托这两个类做章节路径推进与角色判定，判定语义保持原样。
+    -->
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-premise</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
