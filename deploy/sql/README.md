@@ -12,9 +12,10 @@
 deploy/sql/
 ├── README.md                              ← 本文件
 ├── platform/                              目标库：agent_dev / agent_prod / 隔离 IT 库
-│   ├── 01_platform_ddl.sql                完整结构终态快照（66 表 / 689 列 / 256 约束 /
-│   │                                      15 枚举 / 15 函数 / 175 索引 / 33 触发器 /
-│   │                                      42 RLS 开启 + 50 策略；public + platform 两域）
+│   ├── 01_platform_ddl.sql                完整结构终态快照（2026-11-06 起 67 表 /
+│   │                                      43 RLS 开启 + 51 策略；public + platform 两域。
+│   │                                      P1 跨 Run 记忆 public.student_memory 的
+│   │                                      列/约束/索引增量见本文件头部【增量】说明）
 │   ├── 02_platform_seed.sql               种子（pg_dump --inserts 导出）
 │   │                                      + 附录 A：发布头 + 指针（按定义表推导，非 dump）
 │   │                                      + 附录 B：t-b 租户与跨租户夹具（原 10 号脚本收编）

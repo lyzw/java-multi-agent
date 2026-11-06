@@ -177,8 +177,11 @@ _it_env_main() {
                 -U "$IT_PG_ADMIN_USER" -tAc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relrowsecurity" 2>/dev/null)"
       policies="$(PGPASSWORD="$IT_PG_ADMIN_PASSWORD" "$psql_bin" -h "$host" -p "$port" -d "$target_db" \
                 -U "$IT_PG_ADMIN_USER" -tAc "SELECT count(*) FROM pg_policies WHERE schemaname='public'" 2>/dev/null)"
-      echo "   结构   : 表 ${tables}（应 66）｜RLS 表 ${rls}（应 42）｜策略 ${policies}（应 50）"
-      if [ "$tables" -lt 66 ]; then
+      # 2026-11-06 P1 记忆表 +1：快照 67 表 / 43 RLS 表 / 51 策略。
+      # ⚠️ 这三个常量与 init-db.sh 自检、01_platform_ddl.sql 快照是同一份事实，
+      #    改快照增删表时必须一起改，否则 --probe 会把「结构陈旧」报成「正常」。
+      echo "   结构   : 表 ${tables}（应 67）｜RLS 表 ${rls}（应 43）｜策略 ${policies}（应 51）"
+      if [ "$tables" -lt 67 ]; then
         echo "   ⚠️ 库是空的或结构不全 —— 先跑：scripts/init-db.sh platform --db $target_db ..."
       fi
     fi
