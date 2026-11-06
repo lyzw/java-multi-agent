@@ -156,6 +156,24 @@
           <release>${maven.compiler.release}</release>
           <compilerArgs>
             <arg>-parameters</arg>
+            <!--
+              ⚠️⚠️ `-proc:full`：JDK 23 起（JEP 738）javac 默认**不再从类路径
+              隐式加载注解处理器**，Lombok 的处理器因此不运行 →
+              `@Slf4j` 不生成 log 字段 → 编译期报「找不到符号: 变量 log」。
+
+              `-proc:full` 恢复 JDK 21 及以前的隐式处理器发现行为，
+              使项目在 JDK 21（项目基线）与 JDK 25（IntelliJ JBR）上都能编译。
+
+              ⚠️ 这个红灯此前被 target/ 里的陈旧产物掩盖了：类文件已是最新时
+              maven 直接跳过编译（Nothing to compile），**增量构建永远绿**，
+              只有 `mvn clean compile` 才暴露。本项目此前三次栽在同形态上
+              （反证假阴性 / 测试没跑起来 / 断言无判别力），这次是第四次：
+              **红灯被缓存掩盖**。
+
+              ⚠️ JDK 27 仍会失败：lombok 1.18.46 的 javac 内部补丁不支持
+              JDK 27（Fatal error compiling: EndPosTable）。需升级 lombok 版本。
+            -->
+            <arg>-proc:full</arg>
           </compilerArgs>
         </configuration>
       </plugin>

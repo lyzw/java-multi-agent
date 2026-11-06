@@ -18,6 +18,17 @@
   </description>
 
   <dependencies>
+    <!--
+      Lombok：PlatformCapabilityPublishService 用 @Slf4j。
+      ⚠️ 必须**在本模块显式声明**——注解处理器是编译期依赖，靠传递依赖拿到
+      是脆的：agent-core 一旦不再依赖 lombok，本模块就会在编译期报
+      「找不到符号: 变量 log」，而这种失败只在 clean 构建里才暴露。
+      版本由 spring-boot-dependencies 管理（与 agent-core 同一版本）。
+    -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+    </dependency>
     <dependency>
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-core</artifactId>
