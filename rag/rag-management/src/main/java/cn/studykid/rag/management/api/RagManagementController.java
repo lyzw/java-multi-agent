@@ -29,6 +29,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.rag.core.scope.RagCorpusScope;
 import cn.studykid.rag.core.security.RagCallerAttributes;
+import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
 import cn.studykid.rag.management.core.CorpusDocument;
@@ -291,9 +292,10 @@ public class RagManagementController {
         this.previewService = previewService;
         this.dictionaryPort = dictionaryPort;
         this.objectStore = objectStore;
-        // ⚠️ 这两个可选依赖用 required=false：既有的单测/切片上下文未装配它们，
+        // ⚠️ 这些可选依赖用 required=false：既有的单测/切片上下文未装配它们，
         //    强行必填会让所有既有测试无法构造控制器。**调用处已做显式失败处置**：
-        //    去重预检缺失 → 503 拒绝（不静默放行）；job 端口缺失 → 只记日志（载体可留）。
+        //    去重预检缺失 → 仅依赖 DB 唯一约束兜底；job 端口缺失 → 503 拒绝
+        //    （载体已落库不回滚、可事后补建 job），绝不返回 201 + jobId=null 假装成功。
         this.dedupPrecheck = dedupPrecheck;
         this.ingestJobPort = ingestJobPort;
         this.globalIngestJobPort = globalIngestJobPort;
@@ -305,8 +307,9 @@ public class RagManagementController {
      * 向后兼容构造器（4 参）。
      *
      * <p><b>⚠️ 仅用于既有单测与切片测试</b>：去重预检与摄取任务端口在 v1.0.2 之前
-     * 不存在，既有 130 项控制器测试均按 4 参构造。保留此重载以免大面积改动测试，
-     * 但<b>生产装配必须走 6 参构造器</b>（否则去重预检缺失会以 503 拒绝录入）。
+     * 不存在，既有控制器测试均按 4 参构造。保留此重载以免大面积改动测试，
+     * 但<b>生产装配必须走全参构造器</b>：4 参版本没有摄取任务端口，
+     * 上传端点会以 503 拒绝（这是刻意的 fail-closed，不是缺陷）。
      *
      * @param managementPort 语料管理端口
      * @param indexingPort   重索引端口
@@ -998,7 +1001,9 @@ public class RagManagementController {
     }
 
     /**
-     * 【V1.0.2 §3.1 ③】建摄取任务；失败只记日志不回滚载体。
+     * 【V1.0.2 §3.1 ③】建摄取任务；通道不可用或建单失败时<b>必须让上传以 503 失败</b>，
+     * 绝不能再静默返回 null（那会让上传接口谎报 201 成功，造出「PENDING 且永无 job」
+     * 的孤儿载体，人工抽检永远无片段可标，且无人能察觉）。
      *
      * <p><b>⚠️ 平台档必须走运维通道</b>：{@code rag_ingest_job} 的 RLS 策略是
      * {@code tenant_id = rag_current_tenant()}，且平台档的会话租户按设计<b>置空</b>
@@ -1006,13 +1011,19 @@ public class RagManagementController {
      * 平台语料同样要能摄取，故与来源登记/抽检一样换<b>角色</b>（rag_ops），
      * 而不是放宽策略或把哨兵塞进会话变量。
      *
-     * @return jobId；建单失败或通道未接入返回 null（前端可走重试/补建）
+     * <p><b>G1 已于 2026-11-05 补完</b>：独立的 {@code RagWorkerApplication} 通过
+     * {@code GlobalIngestJobConsumer} 领取全局 job，{@code GlobalIngestJobOrchestrator}
+     * 经运维会话写全局 chunk。本法的 503 覆盖「通道没接好 / 建单失败」这一部署缺陷，
+     * 与「job 建好之后能否被消费」是两层独立的失败形态，两者都必须第一时间暴露。
+     *
+     * @return jobId；通道不可用或建单失败时抛 {@code 503 SERVICE_UNAVAILABLE}
      */
     private @Nullable String createIngestJobQuietly(RagManagementContext context, String sourceId,
                                           String principalId) {
         if (ingestJobPort == null) {
-            log.warn("[RAG] 摄取任务端口未装配，来源 {} 的上传未创建 job", sourceId);
-            return null;
+            // ⚠️ 端口未装配是部署缺陷，不能静默成「上传成功」。
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "摄取任务端口未装配，来源 " + sourceId + " 的上传无法创建摄取任务");
         }
         try {
             if (context.scope() == RagCorpusScope.TENANT) {
@@ -1021,16 +1032,26 @@ public class RagManagementController {
             }
             // ⚠️ 平台档：租户列由 SQL 写死为 rag_global_tenant_id()，本方法不传租户。
             if (globalIngestJobPort == null) {
-                log.warn("[RAG] 平台档摄取通道未装配（rag_ops），来源 {} 的全局上传未创建 job",
-                        sourceId);
-                return null;
+                // ⚠️ 平台档摄取依赖 rag_ops 运维通道；通道未装配（rag.ops.enabled=false
+                //    或 rag.ops.datasource.* 未配置）时绝不能再静默成「上传成功」——
+                //    那样会造出「PENDING 且永无 job」的孤儿载体。
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "平台档（PLATFORM）全局摄取通道未装配（rag.ops 未启用/未配置）："
+                                + "来源 " + sourceId + " 的载体已落库但无法创建全局摄取任务。"
+                                + "请为 rag-management 接入 rag.ops.datasource.* 后重传或补建。");
             }
             return globalIngestJobPort.createGlobalJob(sourceId, principalId).jobId();
+        } catch (RagOpsUnavailableException e) {
+            // ⚠️ 运维通道不可用（rag.ops 未配置 / 角色体检未过 / 连接失败）：部署缺陷，
+            //    必须让上传以 503 失败并附人话，绝不返回 201 + jobId=null 假装成功。
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "平台档全局摄取通道不可用（" + e.missingConfiguration() + "）："
+                            + e.getMessage() + "。载体已落库，请修复 rag.ops 后重传或补建。", e);
         } catch (RuntimeException e) {
-            // ⚠️ 载体已落库，job 建单失败不应让整个上传失败：
-            //    载体是事实，job 可补建；回滚会制造「文件在桶里但库里没有」的状态。
+            // ⚠️ 其它建单异常同样不能静默：载体已落库但 job 没建，必须暴露失败。
             log.error("[RAG] 来源 {} 上传后建摄取任务失败，载体已保留", sourceId, e);
-            return null;
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "来源 " + sourceId + " 上传后建摄取任务失败，载体已保留，请排查摄取链路后补建", e);
         }
     }
 

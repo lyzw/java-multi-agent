@@ -28,6 +28,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import cn.studykid.rag.core.ingest.IngestJob;
+import cn.studykid.rag.core.ingest.IngestJobStatus;
 import cn.studykid.rag.core.scope.RagCorpusScope;
 import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.core.security.RagCallerAttributes;
@@ -46,7 +48,9 @@ import cn.studykid.rag.management.core.VerificationDecision;
 import cn.studykid.rag.management.ports.CorpusIndexingPort;
 import cn.studykid.rag.management.ports.CorpusManagementPort;
 import cn.studykid.rag.management.ports.DictionaryPort;
+import cn.studykid.rag.management.ports.GlobalIngestJobPort;
 import cn.studykid.rag.management.ports.ObjectStorePort;
+import cn.studykid.rag.ports.IngestJobPort;
 
 /**
  * 管理端点的契约测试（RAG-D10）。
@@ -97,8 +101,29 @@ class RagManagementControllerTest {
     private final CorpusIndexingPort indexingPort = mock(CorpusIndexingPort.class);
     private final DictionaryPort dictionaryPort = mock(DictionaryPort.class);
     private final ObjectStorePort objectStore = mock(ObjectStorePort.class);
+    private final IngestJobPort ingestJobPort = mock(IngestJobPort.class);
+    private final GlobalIngestJobPort globalIngestJobPort = mock(GlobalIngestJobPort.class);
     private final RagManagementController controller =
             new RagManagementController(port, indexingPort, dictionaryPort, objectStore);
+
+    /**
+     * 装配了摄取端口的控制器：验证「上传成功即建 job」的 happy path。
+     *
+     * <p>⚠️ 与 {@link #controller} 的区别是刻意的：后者用 4 参兼容构造器
+     * （摄取端口为 null），现在专用于断言「端口未装配 → 503 而不是谎报 201」。
+     */
+    private final RagManagementController controllerWithJobPort =
+            new RagManagementController(port, indexingPort, dictionaryPort, objectStore,
+                    null, ingestJobPort, globalIngestJobPort, null, null, null, null, null);
+
+    /** 建单结果夹具（只需 jobId 可读，其余字段保持合法）。 */
+    private static IngestJob pendingJob(String jobId) {
+        return new IngestJob(jobId, "11111111-1111-1111-1111-111111111111",
+                "22222222-2222-2222-2222-222222222222",
+                IngestJobStatus.PENDING, null, 0,
+                null, null, null, null, null, null, null,
+                "2026-11-05T00:00:00Z");
+    }
 
     private static CorpusSource sampleSource() {
         Instant now = Instant.parse("2026-10-22T00:00:00Z");
@@ -1086,8 +1111,10 @@ class RagManagementControllerTest {
         CorpusDocument saved = sampleDocument(VerificationStatus.PENDING, false);
         when(port.importDocument(any(), eq(SOURCE_ID), any(),
                 eq(REVIEWER))).thenReturn(saved);
+        when(ingestJobPort.createJob(eq(TENANT), eq(SOURCE_ID), any()))
+                .thenReturn(pendingJob("job-created-1"));
 
-        ResponseEntity<ManagementDtos.DocumentResponse> resp = controller.importDocument(
+        ResponseEntity<ManagementDtos.DocumentResponse> resp = controllerWithJobPort.importDocument(
                 TENANT, null, SCOPE_TENANT, SOURCE_ID, TENANT_CALLER, null, REVIEWER,
                 file, null, null);
 
@@ -1103,6 +1130,29 @@ class RagManagementControllerTest {
         assertEquals("math-book.pdf", cmd.title());
         assertEquals("d".repeat(64), cmd.contentHash());
         assertEquals("math-book.pdf/uuid.pdf", cmd.objectRef());
+        verify(ingestJobPort).createJob(eq(TENANT), eq(SOURCE_ID), any());
+    }
+
+    @Test
+    @DisplayName("摄取端口未装配：上传返回 503 而不是谎报 201（载体保留可补建）")
+    void importDocumentWithoutJobPortIsServiceUnavailable() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "math-book.pdf", "application/pdf", PDF_MAGIC);
+        when(objectStore.sha256(any())).thenReturn("f".repeat(64));
+        when(objectStore.store(any(), any())).thenReturn("math-book.pdf/no-port.pdf");
+        when(port.importDocument(any(), eq(SOURCE_ID), any(), eq(REVIEWER)))
+                .thenReturn(sampleDocument(VerificationStatus.PENDING, false));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.importDocument(TENANT, null, SCOPE_TENANT, SOURCE_ID,
+                        TENANT_CALLER, null, REVIEWER, file, null, null));
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatusCode());
+        // ⚠️ 载体是事实、不回滚：落桶与登记都已发生，job 可事后补建。
+        //    修复前这里会返回 201 + jobId=null，制造「PENDING 且永无 job」的孤儿载体。
+        verify(objectStore).store(any(), any());
+        verify(port).importDocument(any(), eq(SOURCE_ID), any(), eq(REVIEWER));
+        verifyNoInteractions(ingestJobPort, globalIngestJobPort);
     }
 
     @Test

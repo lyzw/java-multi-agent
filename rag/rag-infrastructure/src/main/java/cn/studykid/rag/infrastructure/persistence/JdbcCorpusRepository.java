@@ -324,6 +324,105 @@ public class JdbcCorpusRepository implements CorpusRepository {
                 chunkId, embedModel, vectorToString(embedding)));
     }
 
+    /**
+     * 原子写入一个<b>全局桶</b>片段与其向量（平台档摄入，G1 / RAG-D11 §1.3）。
+     *
+     * <p>⚠️ <b>不标 {@code @Transactional}</b>：注解绑定的是主事务管理器，而本方法
+     * 跑在运维连接上；事务由 {@code inGlobalCorpusSession} 提供的
+     * {@code TransactionTemplate} 统一承载（两表写入包在同一 {@code opsTx.execute} 内），
+     * 既保证「片段 + 向量」原子，又不被应用事务管理器白借一条无关连接。
+     *
+     * <p>⚠️ {@code scope} 显式写 {@code 'PLATFORM'}（理由见端口注释）：
+     * 省略它会被 {@code rag_chunk_scope_ck} 恒拒。
+     */
+    @Override
+    public void saveChunkAndEmbeddingInGlobalBucket(@NonNull Chunk chunk,
+                                                   @NonNull String editionId, float[] embedding,
+                                                   @NonNull String embedModel) {
+        vectorColumn.requireDimension(embedding);
+        requireOpsSession().inGlobalCorpusSession((opsTemplate, opsTx) -> opsTx.execute(status -> {
+            // ⚠️ 重灌纪律内置化（同租户版）：ON CONFLICT DO UPDATE 必须把 text_jieba 清成空串、
+            //    content_hash 一并更新，避免「改了切分规则但检索结果不变」的静默陈旧。
+            //    scope 不在 DO UPDATE 列中（保持 PLATFORM，不随冲突分支翻写）。
+            opsTemplate.update("""
+                    INSERT INTO rag_chunk
+                        (chunk_id, tenant_id, document_id, edition_id, role, text, text_jieba,
+                         page_number, section_path, exercise_no, char_start, char_end, kp_ids,
+                         exercise_ref, content_hash, embed_model, index_generation,
+                         in_answer_zone, block_type, matched_prefix, scope)
+                    VALUES (?::uuid, rag_global_tenant_id(), ?::uuid, ?::uuid, ?::rag_chunk_role, ?,
+                            '', ?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?,
+                            COALESCE((SELECT g.generation FROM rag_index_generation g
+                                       WHERE g.tenant_id = rag_global_tenant_id()
+                                         AND g.status = 'ACTIVE' LIMIT 1), 1),
+                            ?, ?, ?,
+                            'PLATFORM')
+                    ON CONFLICT (chunk_id) DO UPDATE SET
+                        role = EXCLUDED.role,
+                        text = EXCLUDED.text,
+                        text_jieba = '',
+                        page_number = EXCLUDED.page_number,
+                        section_path = EXCLUDED.section_path,
+                        exercise_no = EXCLUDED.exercise_no,
+                        char_start = EXCLUDED.char_start,
+                        char_end = EXCLUDED.char_end,
+                        kp_ids = EXCLUDED.kp_ids,
+                        exercise_ref = EXCLUDED.exercise_ref,
+                        content_hash = EXCLUDED.content_hash,
+                        embed_model = EXCLUDED.embed_model,
+                        index_generation = EXCLUDED.index_generation,
+                        in_answer_zone = EXCLUDED.in_answer_zone,
+                        block_type = EXCLUDED.block_type,
+                        matched_prefix = EXCLUDED.matched_prefix
+                    """,
+                    chunk.id(), chunk.documentId(), editionId, chunk.role().name(), chunk.text(),
+                    chunk.locator().pageNumber(), chunk.locator().sectionPath(),
+                    chunk.locator().exerciseNo(), chunk.locator().charStart(),
+                    chunk.locator().charEnd(), toUuidArrayLiteral(chunk.knowledgePointIds()),
+                    chunk.exerciseRef(), chunk.contentHash(), embedModel,
+                    // 版面事实（可空：旧路径 / 非解析来源产生的片段没有这些信息）
+                    chunk.layoutFacts() != null && chunk.layoutFacts().inAnswerZone(),
+                    chunk.layoutFacts() == null ? null : chunk.layoutFacts().blockType(),
+                    chunk.layoutFacts() == null ? null : chunk.layoutFacts().matchedPrefix());
+            // ⚠️ 向量写入同样带 WHERE 租户判据（承重，非冗余）：chunk_id 是全表主键，
+            //    冲突可能来自任意租户的行；不加 WHERE，冲突分支就成了一条
+            //    「经 chunk_id 写进别人桶」的旁路。
+            opsTemplate.update("""
+                    INSERT INTO rag_chunk_embedding
+                        (chunk_id, tenant_id, scope, index_generation, embed_model, embedding)
+                    VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM',
+                            COALESCE((SELECT g.generation FROM rag_index_generation g
+                                       WHERE g.tenant_id = rag_global_tenant_id()
+                                         AND g.status = 'ACTIVE' LIMIT 1), 1),
+                            ?, %s)
+                    ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
+                        embedding = EXCLUDED.embedding,
+                        embed_model = EXCLUDED.embed_model
+                    WHERE rag_chunk_embedding.tenant_id = rag_global_tenant_id()
+                    """.formatted(vectorColumn.castPlaceholder()),
+                    chunk.id(), embedModel, vectorToString(embedding));
+            return null;
+        }));
+    }
+
+    /**
+     * 回写全局桶载体的解析状态（平台档摄入，G1）。
+     *
+     * <p>⚠️ <b>不标 {@code @Transactional}</b>：同 {@link #updateJiebaTokensInGlobalBucket}
+     * —— 注解绑定的主事务管理器对运维连接无效。
+     *
+     * <p>⚠️ {@code AND tenant_id = rag_global_tenant_id()} 承重（非冗余）：
+     * 运维角色带 BYPASSRLS、策略不设防，去掉它一个传错的 document_id 会改到别的租户。
+     */
+    @Override
+    public void markDocumentParseStatusInGlobalBucket(@NonNull String documentId,
+                                                     @NonNull String parseStatus) {
+        requireOpsSession().inGlobalCorpusSession((opsTemplate, opsTx) -> opsTemplate.update(
+                "UPDATE rag_document SET parse_status = ?"
+                        + " WHERE document_id = ?::uuid AND tenant_id = rag_global_tenant_id()",
+                parseStatus, documentId));
+    }
+
     /** 全局写的前置：通道未接入就拒绝服务，绝不回落到应用角色。 */
     private RagOpsSessionPort requireOpsSession() {
         if (opsSession == null) {

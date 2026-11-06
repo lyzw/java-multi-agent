@@ -138,8 +138,12 @@ public class IngestJobOrchestrator {
             //    等于管理面看不到真实解析状态（2026-11-03 实测）。
             corpusRepository.markDocumentParseStatus(tenantId, src.documentId(), "CHUNKED");
 
+            // ⑥ 切分留痕（RAG-D26 阶段 3.2）：premise 模式下写 chunk_policy /
+            //    chunk_policy_config；旧内置切分传 null（「未采集」，不伪造策略值）。
+            //    ⚠️ 评测依赖这两列把「检索表现变化」归因到切分策略——不写等于评测白做。
             jobPort.markSucceeded(tenantId, jobId, chunks.size(),
-                    src.parserVersion(), embeddingPort.modelVersion());
+                    src.parserVersion(), embeddingPort.modelVersion(),
+                    pipeline.chunkPolicyTrace(), pipeline.chunkPolicyConfigTrace());
         } catch (Exception e) {
             // ⚠️ 失败必须带可读原因（IngestJob 不变式），且明确标注可能的部分残留。
             String detail = "阶段 " + stageOf(jobId) + " 失败：" + rootMessage(e)

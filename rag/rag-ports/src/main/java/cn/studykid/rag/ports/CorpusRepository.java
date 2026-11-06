@@ -154,4 +154,54 @@ public interface CorpusRepository {
     void upsertEmbeddingInGlobalBucket(@NonNull String chunkId,
                                        @NonNull float[] embedding,
                                        @NonNull String embedModel);
+
+    // ---------------------------------------------------------------------
+    // 平台档摄入：全局桶「整片段 + 向量」原子写入（G1 / RAG-D11 §1.3）
+    //
+    // ⚠️ 下面两个方法与上面的全局桶方法同源护栏：<b>没有 tenantId 参数</b>。
+    //   桶由方法名钉死为全局，SQL 文本里的租户列写死
+    //   {@code rag_global_tenant_id()}、{@code scope='PLATFORM'}，
+    //   调用方连「把别的桶写进去」这句话都拼不出来。
+    //
+    // ⚠️ 为什么需要它们而不仅仅是 upsertEmbeddingInGlobalBucket：
+    //   全局文档摄入流水线要落<b>整片段</b>（rag_chunk）——含版面事实、切分坐标、
+    //   kp_ids 等——而非只补向量。租户侧由 saveChunkAndEmbedding 承担同一职责，
+    //   全局侧此前缺位（只有 embedding 回填），是 G1 链路断点的直接原因。
+    // ---------------------------------------------------------------------
+
+    /**
+     * 原子写入一个<b>全局桶</b>片段与其向量（平台档摄入专用）。
+     *
+     * <p>语义与 {@link #saveChunkAndEmbedding} 完全镜像，但桶固定为<b>全局</b>：
+     * 实现跑在 BYPASSRLS 的运维会话（{@code rag_ops}）上，
+     * {@code tenant_id} 写为 {@code rag_global_tenant_id()}、{@code scope='PLATFORM'}，
+     * 两表写入包在同一事务内，保证「片段 + 向量」要么都成、要么都无
+     * （否则会出现静默漏召回或脏数据）。
+     *
+     * <p>⚠️ {@code scope} 必须<b>显式</b>写 {@code 'PLATFORM'}：该列 NOT NULL 且默认
+     * {@code 'TENANT'}，而 {@code rag_chunk_scope_ck} 要求
+     * 「{@code scope='PLATFORM' ⇔ tenant_id=哨兵}」——省略这一列，
+     * 全局插入会因「租户是哨兵、作用域却是 TENANT」被 CHECK <b>恒拒</b>。
+     *
+     * @param chunk 片段（含版本坐标；editionId 由调用方解析后传入）
+     * @param editionId 版本坐标对应的 {@code rag_edition} 主键
+     * @param embedding 向量（维度须与 embedModel 一致）
+     * @param embedModel 嵌入模型标识
+     */
+    void saveChunkAndEmbeddingInGlobalBucket(@NonNull Chunk chunk,
+                                             @NonNull String editionId, float[] embedding,
+                                             @NonNull String embedModel);
+
+    /**
+     * 回写<b>全局桶</b>载体的解析状态（{@code rag_document.parse_status}）。
+     *
+     * <p>镜像 {@link #markDocumentParseStatus}，但桶固定为全局：
+     * 实现跑在运维会话上，UPDATE 带 {@code AND tenant_id = rag_global_tenant_id()} 收口，
+     * 防止一个传错的 document_id 改到<b>别的租户</b>的载体（BYPASSRLS 下无 RLS 兜底）。
+     *
+     * @param documentId 载体 ID（须属全局桶）
+     * @param parseStatus 目标解析状态（PENDING / PARSED / CHUNKED / FAILED）
+     */
+    void markDocumentParseStatusInGlobalBucket(@NonNull String documentId,
+                                              @NonNull String parseStatus);
 }

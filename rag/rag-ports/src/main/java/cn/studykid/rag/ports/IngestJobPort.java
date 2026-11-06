@@ -228,4 +228,85 @@ public interface IngestJobPort {
                                       @NonNull String sourceId,
                                       @NonNull String createdBy,
                                       @Nullable String previousJobId);
+
+    // ---------------------------------------------------------------------
+    // 平台档摄入：全局桶 job 领取 / 回写（G1 / RAG-D11 §1.3）
+    //
+    // ⚠️ 与租户侧同名方法同源护栏：<b>没有 tenantId 参数</b>。
+    //   桶由方法名钉死为全局，SQL 谓词写死 {@code tenant_id = rag_global_tenant_id()}，
+    //   实现跑在 BYPASSRLS 的运维会话（rag_ops）上——
+    //   调用方连「领/写别的桶」这句话都拼不出来，且不回落应用角色。
+    // ---------------------------------------------------------------------
+
+    /**
+     * 领取下一条待处理的<b>全局</b> job（平台档摄入消费者专用）。
+     *
+     * <p>语义与 {@link #claimNextJobForTenant} 完全镜像，但桶固定为<b>全局</b>：
+     * 实现走运维会话，领取谓词写死 {@code tenant_id = rag_global_tenant_id()}，
+     * 同样用 {@code FOR UPDATE SKIP LOCKED} 保证多 worker 不重复领。
+     *
+     * <p>⚠️ <b>没有 tenantId 参数</b>：全局桶的消费者在全局哨兵租户上工作，
+     * 不是「被授权的某一个租户」——把租户参数留在这里反而允许越权领桶。
+     *
+     * @return 领取到的 job（已置 {@code PARSING} + {@code started_at}）；
+     *         无待处理返回 {@code null}
+     */
+    @Nullable IngestJob claimNextGlobalJob();
+
+    /**
+     * 标记全局 job 成功（平台档摄入，G1）。
+     *
+     * @param jobId 全局 job ID
+     * @param chunkCount 产出片段数
+     * @param parserVersion 解析器版本
+     * @param embedModel 嵌入模型标识
+     */
+    void markSucceededGlobal(@NonNull String jobId, int chunkCount,
+                             @NonNull String parserVersion, @NonNull String embedModel);
+
+    default void markSucceededGlobal(@NonNull String jobId, int chunkCount,
+                                     @NonNull String parserVersion, @NonNull String embedModel,
+                                     @Nullable String chunkPolicy, @Nullable String chunkPolicyConfig) {
+        markSucceededGlobal(jobId, chunkCount, parserVersion, embedModel);
+    }
+
+    /**
+     * 回写全局 job 的阶段进度（平台档摄入，G1）。
+     *
+     * @param jobId 全局 job ID
+     * @param stage 阶段内进度描述（如 {@code "PARSING 60"}）
+     */
+    void updateStageGlobal(@NonNull String jobId, @NonNull String stage);
+
+    /**
+     * 推进全局 job 状态（平台档摄入，G1）。
+     *
+     * @param jobId 全局 job ID
+     * @param status 目标状态
+     * @param stage 阶段内进度，可为 null
+     */
+    void advanceGlobal(@NonNull String jobId,
+                       @NonNull IngestJobStatus status, @Nullable String stage);
+
+    /**
+     * 标记全局 job 失败（平台档摄入，G1）。
+     *
+     * <p>⚠️ 同租户侧 {@link #markFailed}：{@code error_detail} 必填，
+     * 否则故障现场消失、任务表面看像「还在跑」。
+     *
+     * @param jobId 全局 job ID
+     * @param errorDetail 失败原因
+     */
+    void markFailedGlobal(@NonNull String jobId, @NonNull String errorDetail);
+
+    /**
+     * Sweeper：把超时仍在「进行中」的<b>全局</b> job 置为 FAILED（防僵尸，G1）。
+     *
+     * <p>镜像 {@link #failTimedOutRunningJobs}，但桶固定为全局：
+     * 实现走运维会话，谓词写死 {@code tenant_id = rag_global_tenant_id()}。
+     *
+     * @param timeoutMinutes 超时阈值（分钟）
+     * @return 被接管的 job 数量
+     */
+    int failTimedOutRunningGlobalJobs(int timeoutMinutes);
 }

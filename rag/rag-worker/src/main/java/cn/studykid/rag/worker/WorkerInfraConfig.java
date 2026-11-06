@@ -193,9 +193,13 @@ public class WorkerInfraConfig {
     public cn.studykid.rag.ports.IngestJobPort ingestJobPort(
             JdbcTemplate jdbcTemplate,
             @org.springframework.beans.factory.annotation.Qualifier("indexingTransactionTemplate")
-            TransactionTemplate transactionTemplate) {
+            TransactionTemplate transactionTemplate,
+            ObjectProvider<RagOpsSessionPort> opsSessionProvider) {
+        // ⚠️ 必须传入 opsSession：平台档全局 job 的领取 / 回写 / 建单都走 BYPASSRLS 运维通道，
+        //    缺它会导致这些全局方法抛 RagOpsUnavailableException（503，不回落应用角色）。
+        //    未接入运维通道时传 null，全局档功能 fail-closed，不影响租户档。
         return new cn.studykid.rag.infrastructure.ingest.JdbcIngestJobRepository(
-                jdbcTemplate, transactionTemplate);
+                jdbcTemplate, transactionTemplate, opsSessionProvider.getIfAvailable());
     }
 
     /**
@@ -234,6 +238,54 @@ public class WorkerInfraConfig {
                 jobPort, pipeline, corpusRepository, embeddingPort, loader,
                 // ⚠️ 分词实现与检索期同源（ChineseTokenizer），保证入库分词与查询分词一致。
                 cn.studykid.rag.infrastructure.text.ChineseTokenizer::tokenize);
+    }
+
+    /**
+     * 【G1 / RAG-D11 §1.3】平台档（全局桶）来源加载器。
+     *
+     * <p>镜像租户侧 {@code JdbcIngestSourceLoader}，但读取落在运维会话（{@code rag_ops}）上，
+     * 谓词写死 {@code tenant_id = rag_global_tenant_id()}——应用角色对全局行静默 0 行，
+     * 设租户会话也救不了（且设哨兵会被越权封堵）。
+     */
+    @Bean
+    public cn.studykid.rag.infrastructure.ingest.JdbcGlobalIngestSourceLoader globalIngestSourceLoader(
+            ObjectProvider<RagOpsSessionPort> opsSessionProvider) {
+        // ⚠️ 与租户侧同源的桶读取器（同一 base-dir）：全局载体字节同样落在本地桶。
+        return new cn.studykid.rag.infrastructure.ingest.JdbcGlobalIngestSourceLoader(
+                bucketReader(), opsSessionProvider.getIfAvailable());
+    }
+
+    /**
+     * 【G1 / RAG-D11 §1.3】平台档（全局桶）摄取编排器。
+     *
+     * <p>与租户侧 {@code IngestJobOrchestrator} 完全镜像，但所有落库 / 回写都走
+     * <b>不带租户参数</b>的全局方法（{@code *InGlobalBucket} / {@code *Global}），
+     * 由实现在运维会话上钉死 {@code rag_global_tenant_id()}。
+     */
+    @Bean
+    public cn.studykid.rag.application.ingest.GlobalIngestJobOrchestrator globalIngestJobOrchestrator(
+            cn.studykid.rag.ports.IngestJobPort jobPort,
+            cn.studykid.rag.application.ingest.IngestionPipeline pipeline,
+            CorpusRepository corpusRepository,
+            EmbeddingPort embeddingPort,
+            cn.studykid.rag.infrastructure.ingest.JdbcGlobalIngestSourceLoader globalSourceLoader) {
+        return new cn.studykid.rag.application.ingest.GlobalIngestJobOrchestrator(
+                jobPort, pipeline, corpusRepository, embeddingPort, globalSourceLoader,
+                // ⚠️ 分词实现与租户侧 / 检索期同源（ChineseTokenizer）。
+                cn.studykid.rag.infrastructure.text.ChineseTokenizer::tokenize);
+    }
+
+    /**
+     * 【G1 / RAG-D11 §1.3】平台档（全局桶）摄取消费循环。
+     *
+     * <p>由 {@link GlobalIngestJobConsumer} 自带的 {@code @ConditionalOnProperty}
+     * 控制装配（仅 {@code rag.ops.enabled=true} 时存在）。本方法只需声明 bean。
+     */
+    @Bean
+    public cn.studykid.rag.worker.GlobalIngestJobConsumer globalIngestJobConsumer(
+            cn.studykid.rag.ports.IngestJobPort jobPort,
+            cn.studykid.rag.application.ingest.GlobalIngestJobOrchestrator globalOrchestrator) {
+        return new cn.studykid.rag.worker.GlobalIngestJobConsumer(jobPort, globalOrchestrator);
     }
 
     @Bean

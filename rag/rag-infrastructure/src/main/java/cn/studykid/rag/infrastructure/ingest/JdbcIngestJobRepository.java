@@ -207,16 +207,46 @@ public class JdbcIngestJobRepository implements IngestJobPort {
     @Override
     public void markSucceeded(@NonNull String tenantId, @NonNull String jobId, int chunkCount,
                               @NonNull String parserVersion, @NonNull String embedModel) {
-        inTenant(tenantId, () -> jdbcTemplate.update("""
-                        UPDATE rag_ingest_job
-                           SET status = 'SUCCEEDED'::rag_ingest_status,
-                               chunk_count = ?,
-                               parser_version = ?,
-                               embed_model = ?,
-                               finished_at = now(),
-                               stage = NULL
-                         WHERE job_id = ?::uuid
-                        """, chunkCount, parserVersion, embedModel, jobId));
+        // 旧签名 = 未采集切分留痕（RAG-D26 阶段 3.2 前的行为）
+        markSucceeded(tenantId, jobId, chunkCount, parserVersion, embedModel, null, null);
+    }
+
+    @Override
+    public void markSucceeded(@NonNull String tenantId, @NonNull String jobId, int chunkCount,
+                              @NonNull String parserVersion, @NonNull String embedModel,
+                              String chunkPolicy, String chunkPolicyConfig) {
+        // ⚠️ 留痕列逐项判断：null 不写（保持 NULL）——「未采集」与「空串」是两件事
+        //    （13_v1_0_4_chunk_policy_alter.sql 的口径注释）。
+        //    SQL 用 StringBuilder 显式拼 SET，参数列表与之一一对应（可审计）。
+        StringBuilder sql = new StringBuilder("""
+                UPDATE rag_ingest_job
+                   SET status = 'SUCCEEDED'::rag_ingest_status,
+                       chunk_count = ?,
+                       parser_version = ?,
+                       embed_model = ?,
+                       finished_at = now(),
+                       stage = NULL
+                 WHERE job_id = ?::uuid
+                """);
+        java.util.List<Object> setArgs = new java.util.ArrayList<>();
+        setArgs.add(chunkCount);
+        setArgs.add(parserVersion);
+        setArgs.add(embedModel);
+        // WHERE 前的动态 SET 必须拼在 WHERE 之前——用占位替换而不是字符串尾插
+        String base = sql.toString();
+        String setPrefix = base.substring(0, base.indexOf(" WHERE"));
+        String wherePart = base.substring(base.indexOf(" WHERE"));
+        StringBuilder setSql = new StringBuilder(setPrefix);
+        if (chunkPolicy != null) {
+            setSql.append(",\n                       chunk_policy = ?");
+            setArgs.add(chunkPolicy);
+        }
+        if (chunkPolicyConfig != null) {
+            setSql.append(",\n                       chunk_policy_config = ?");
+            setArgs.add(chunkPolicyConfig);
+        }
+        String finalSql = setSql + wherePart;
+        inTenant(tenantId, () -> jdbcTemplate.update(finalSql, setArgs.toArray()));
     }
 
     @Override
@@ -231,6 +261,180 @@ public class JdbcIngestJobRepository implements IngestJobPort {
                                stage = NULL
                          WHERE job_id = ?::uuid
                         """, errorDetail, jobId));
+    }
+
+    // ---------------------------------------------------------------------
+    // 平台档摄入：全局桶 job 领取 / 回写（G1 / RAG-D11 §1.3）
+    // 全部走运维会话（rag_ops，BYPASSRLS），谓词写死全局哨兵租户。
+    // ---------------------------------------------------------------------
+
+    @Nullable
+    @Override
+    public IngestJob claimNextGlobalJob() {
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局摄取消费需要运维数据源（rag_ops），不回落应用角色");
+        }
+        return opsSession.inGlobalCorpusSession((opsTemplate, opsTx) -> opsTx.execute(status -> {
+            // ⚠️ 同租户侧 claim：FOR UPDATE SKIP LOCKED 保多 worker 不重复领。
+            //    tenant_id 谓词写死全局哨兵（方法不接收租户参数，杜绝越权领桶）。
+            String jobId = opsTemplate.query("""
+                            SELECT job_id::text FROM rag_ingest_job
+                             WHERE status = 'PENDING'::rag_ingest_status
+                               AND tenant_id = rag_global_tenant_id()
+                             ORDER BY created_at
+                             LIMIT 1
+                             FOR UPDATE SKIP LOCKED
+                            """, (rs, i) -> rs.getString(1)).stream().findFirst().orElse(null);
+            if (jobId == null) {
+                return null;
+            }
+            // ⚠️ 置 PARSING + 首次 started_at（与租户侧语义一致）。
+            opsTemplate.update("""
+                    UPDATE rag_ingest_job
+                       SET status = 'PARSING'::rag_ingest_status,
+                           started_at = COALESCE(started_at, now())
+                     WHERE job_id = ?::uuid
+                    """, jobId);
+            // ⚠️ 读回必须用同一运维会话（不能用主连接 jdbcTemplate：应用角色读不到全局行）。
+            List<IngestJob> rows = opsTemplate.query(
+                    "SELECT " + COLUMNS + " FROM rag_ingest_job WHERE job_id = ?::uuid",
+                    this::mapJob, jobId);
+            return rows.isEmpty() ? null : rows.get(0);
+        }));
+    }
+
+    @Override
+    public void markSucceededGlobal(@NonNull String jobId, int chunkCount,
+                                    @NonNull String parserVersion, @NonNull String embedModel) {
+        // 旧签名 = 未采集切分留痕（RAG-D26 阶段 3.2 前的行为）
+        markSucceededGlobal(jobId, chunkCount, parserVersion, embedModel, null, null);
+    }
+
+    @Override
+    public void markSucceededGlobal(@NonNull String jobId, int chunkCount,
+                                    @NonNull String parserVersion, @NonNull String embedModel,
+                                    String chunkPolicy, String chunkPolicyConfig) {
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局摄取回写需要运维数据源（rag_ops），不回落应用角色");
+        }
+        // ⚠️ 留痕列逐项判断（同租户侧 markSucceeded 的口径与注释）。
+        String base = """
+                        UPDATE rag_ingest_job
+                           SET status = 'SUCCEEDED'::rag_ingest_status,
+                               chunk_count = ?,
+                               parser_version = ?,
+                               embed_model = ?,
+                               finished_at = now(),
+                               stage = NULL
+                         WHERE job_id = ?::uuid
+                           AND tenant_id = rag_global_tenant_id()
+                        """;
+        String setPrefix = base.substring(0, base.indexOf(" WHERE"));
+        String wherePart = base.substring(base.indexOf(" WHERE"));
+        StringBuilder setSql = new StringBuilder(setPrefix);
+        java.util.List<Object> setArgs = new java.util.ArrayList<>();
+        setArgs.add(chunkCount);
+        setArgs.add(parserVersion);
+        setArgs.add(embedModel);
+        if (chunkPolicy != null) {
+            setSql.append(",\n                               chunk_policy = ?");
+            setArgs.add(chunkPolicy);
+        }
+        if (chunkPolicyConfig != null) {
+            setSql.append(",\n                               chunk_policy_config = ?");
+            setArgs.add(chunkPolicyConfig);
+        }
+        String finalSql = setSql + wherePart;
+        opsSession.inGlobalCorpusSession((opsTemplate, opsTx) -> opsTx.execute(status -> {
+            // ⚠️ AND tenant_id = rag_global_tenant_id() 承重（非冗余）：BYPASSRLS 下无 RLS 兜底，
+            //    去掉它一个传错的 job_id 会改到别的租户的 job。
+            opsTemplate.update(finalSql, setArgs.toArray());
+            return null;
+        }));
+    }
+
+    @Override
+    public void updateStageGlobal(@NonNull String jobId, @NonNull String stage) {
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局摄取回写需要运维数据源（rag_ops），不回落应用角色");
+        }
+        opsSession.inGlobalCorpusSession((opsTemplate, opsTx) -> opsTx.execute(status -> {
+            opsTemplate.update("""
+                            UPDATE rag_ingest_job SET stage = ?
+                             WHERE job_id = ?::uuid
+                               AND tenant_id = rag_global_tenant_id()
+                            """, stage, jobId);
+            return null;
+        }));
+    }
+
+    @Override
+    public void advanceGlobal(@NonNull String jobId,
+                              @NonNull IngestJobStatus status, @Nullable String stage) {
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局摄取回写需要运维数据源（rag_ops），不回落应用角色");
+        }
+        // ⚠️ lambda 的事务状态参数改名 txStatus，避免与上面的 IngestJobStatus status 重名遮蔽。
+        opsSession.inGlobalCorpusSession((opsTemplate, opsTx) -> opsTx.execute(txStatus -> {
+            opsTemplate.update("""
+                            UPDATE rag_ingest_job
+                               SET status = ?::rag_ingest_status, stage = ?
+                             WHERE job_id = ?::uuid
+                               AND tenant_id = rag_global_tenant_id()
+                            """, status.name(), stage, jobId);
+            return null;
+        }));
+    }
+
+    @Override
+    public void markFailedGlobal(@NonNull String jobId, @NonNull String errorDetail) {
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局摄取回写需要运维数据源（rag_ops），不回落应用角色");
+        }
+        opsSession.inGlobalCorpusSession((opsTemplate, opsTx) -> opsTx.execute(status -> {
+            // ⚠️ error_detail 必填（同租户侧 markFailed）：故障现场不可消失。
+            // ⚠️ AND tenant_id = rag_global_tenant_id() 承重（见 markSucceededGlobal）。
+            opsTemplate.update("""
+                            UPDATE rag_ingest_job
+                               SET status = 'FAILED'::rag_ingest_status,
+                                   error_detail = ?,
+                                   finished_at = now(),
+                                   stage = NULL
+                             WHERE job_id = ?::uuid
+                               AND tenant_id = rag_global_tenant_id()
+                            """, errorDetail, jobId);
+            return null;
+        }));
+    }
+
+    @Override
+    public int failTimedOutRunningGlobalJobs(int timeoutMinutes) {
+        if (timeoutMinutes <= 0) {
+            throw new IllegalArgumentException("timeoutMinutes 必须 > 0");
+        }
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局摄取 Sweeper 需要运维数据源（rag_ops），不回落应用角色");
+        }
+        return opsSession.inGlobalCorpusSession((opsTemplate, opsTx) -> opsTx.execute(status ->
+                opsTemplate.update("""
+                        UPDATE rag_ingest_job
+                           SET status = 'FAILED'::rag_ingest_status,
+                               error_detail = 'SWEEPER_TIMEOUT: 超过 ' || ? || ' 分钟未完成，被 Sweeper 接管',
+                               finished_at = now(),
+                               stage = NULL
+                         WHERE tenant_id = rag_global_tenant_id()
+                           AND status IN ('PARSING'::rag_ingest_status,
+                                          'CHUNKING'::rag_ingest_status,
+                                          'EMBEDDING'::rag_ingest_status,
+                                          'INDEXING'::rag_ingest_status)
+                           AND started_at < now() - make_interval(mins => ?)
+                        """, timeoutMinutes, timeoutMinutes)));
     }
 
     /**
