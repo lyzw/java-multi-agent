@@ -423,3 +423,35 @@ grep -E "Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$" 
 > `AuthzDecisionLogLiveIT.insertWithReturningIsDenied`（有 SELECT 就放行了 `INSERT … RETURNING`）。
 > 现在 `dev-it-db.sh` 直接执行权威脚本 `03_platform_roles.sql` + `04_retention_role.sql`，
 > 并在末尾做权限自检（`has_table_privilege` 五项），不一致即 `exit 1`。
+
+## 13. rag/ reactor 的连库 IT：另一套独立入口（2026-11-06）
+
+⚠️ `scripts/it-env.sh` 与本节**互不通用**：两个 reactor 各自独立构建、独立数据库，
+凭据与角色也不同。RAG 侧请用：
+
+```bash
+source scripts/rag-it-env.sh              # 需要推倒重建时加 --reset
+cd rag && mvn -o clean verify
+```
+
+脚本在本地 `rag-pg-s2` 容器维护隔离库 `study_rag_it`：结构从 `ragdb` **只读**导出，
+绝不改动 `ragdb` 与共享 RDS `study_rag`；新建 `rag_it_app`（NOBYPASSRLS，业务断言专用）、
+`rag_it_admin`（BYPASSRLS，seed/清理全局桶）、`rag_it_ops`（BYPASSRLS，运维通道）三条
+专用角色并导出 9 个 `IT_RAG_*` 变量。每次 source 都会 TRUNCATE 全部 `rag` 表、只保留
+4 行全局字典，杜绝跨轮夹具累积；目标库等于应用库时 fail-closed 直接拒绝。
+
+**口径**：不带 `IT_RAG_PG_URL` 时 4 个 `*IT` 类整类跳过（基线只有 682 单测）。配好环境后
+实测 `BUILD SUCCESS`：10 模块 / **745 testcase**（682 单测 + 63 IT）/ 0 失败 / 0 错误 /
+**0 跳过**。
+
+⚠️ **探针库 ≠ 生产库**（完整说明见脚本头注释）：`RetrievalRepositoryIT` 仍写死
+`?::vector` + 1024 维 + `ON CONFLICT (chunk_id)`，而活库已是 `halfvec(4096)` + 代际复合
+主键 `(tenant_id, chunk_id, index_generation)`，故探针库刻意改回 `vector(1024)` 并补
+`chunk_id` 单列唯一约束。这一层不覆盖生产向量列形态与索引代际语义，让 IT 适配生产结构是
+独立待办。另：`deploy/sql/rag/04_rag_ops_role.sql` 的最小授权清单缺 `rag_edition`，G-9
+用例（平台档载体导入）在真实 `rag_ops` 角色下会 `permission denied`；脚本只给探针专用
+`rag_it_ops` 补权，生产授权脚本待评审。
+
+⚠️ 干净隔离库还暴露出 `applyVerification` 把 `ADMIT / REJECT / REVOKE` 审计一并跳过
+（与同段注释及 RAG-D07 §2.5 矛盾，已修复）；共享库里同 ISBN 的残留审计行会让
+`legalTransitionChainWritesAudit` 的 `auditCount >= 2` 假绿——这正是必须用隔离库的另一条理由。

@@ -789,12 +789,17 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             //        登记人与提交人在这里本来就是两个人时，也不该改写登记事实；
             //      · 没有记录（历史数据）→ 才用本次主体补一条，保持留痕完整性。
             //    两种情况下 auditActionFor() 对 VERIFIED/REJECTED/REVOKED 的映射不变。
-            if (hasAuditRecord(ch, sourceId)) {
+            //    ⚠️⚠️ 上面的「不重复写」只适用于 INGEST。原实现把 hasAuditRecord()
+            //    套在整条 appendAudit 上，导致 VERIFIED / REJECTED / REVOKED 的
+            //    ADMIT / REJECT / REVOKE 也被一并跳过 —— 审核动作零留痕，与本段
+            //    「映射不变」及 RAG-D07 §2.5 矛盾（干净隔离 IT 库实测：登记 1 条、
+            //    审核 0 条）。共享库若残留历史审计行会让断言假绿，掩盖该缺口。
+            String auditAction = auditActionFor(decision.targetStatus());
+            if ("INGEST".equals(auditAction) && hasAuditRecord(ch, sourceId)) {
                 log.debug("[RAG] 来源 {} 已有审计记录，本轮 {} 流转不再写入 INGEST（保护登记人）",
                         sourceId, decision.targetStatus());
             } else {
-                appendAuditWithinTenant(ch, decision.decidedBy(),
-                        auditActionFor(decision.targetStatus()), sourceId);
+                appendAuditWithinTenant(ch, decision.decidedBy(), auditAction, sourceId);
             }
 
             return findSourceWithinTenant(ch.template(), ch.tenantId(), sourceId);
