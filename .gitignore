@@ -11101,3 +11101,13 @@ playwright-report/
 __pycache__/
 *.pyc
 *.pyo
+
+# ── 本地运行时产物（不入库）──
+# 对象存储的本地桶内容（83MB 级运行时数据；语料正文不入库，只入引用）
+/blobs/
+# 开发过程截图的临时输出目录（正式视觉稿在 rag/docs/ui-mock/screens/）
+/shots/
+# MinerU 本地服务锁与临时测试件
+.mineru-service.lock
+/test_mineru.pdf
+/test_mineru_out.md

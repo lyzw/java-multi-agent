@@ -1,0 +1,381 @@
+-- ==== SCHEMA ====
+rag_access_audit | audit_id | uuid | NO | gen_random_uuid()
+rag_access_audit | tenant_id | uuid | NO | null
+rag_access_audit | principal_id | uuid | YES | null
+rag_access_audit | action | text | NO | null
+rag_access_audit | chunk_id | uuid | YES | null
+rag_access_audit | source_id | uuid | YES | null
+rag_access_audit | request_digest | character | YES | null
+rag_access_audit | occurred_at | timestamp with time zone | NO | now()
+rag_answer_citation | citation_id | uuid | NO | gen_random_uuid()
+rag_answer_citation | tenant_id | uuid | NO | null
+rag_answer_citation | conversation_id | uuid | YES | null
+rag_answer_citation | run_id | uuid | YES | null
+rag_answer_citation | chunk_id | uuid | NO | null
+rag_answer_citation | supported_claim | text | NO | null
+rag_answer_citation | verbatim_quote | text | NO | null
+rag_answer_citation | verdict | USER-DEFINED | NO | null
+rag_answer_citation | entailment_score | real | NO | null
+rag_answer_citation | edition_snapshot | jsonb | NO | null
+rag_answer_citation | created_at | timestamp with time zone | NO | now()
+rag_chunk | chunk_id | uuid | NO | gen_random_uuid()
+rag_chunk | tenant_id | uuid | NO | null
+rag_chunk | document_id | uuid | NO | null
+rag_chunk | edition_id | uuid | NO | null
+rag_chunk | role | USER-DEFINED | NO | null
+rag_chunk | text | text | NO | null
+rag_chunk | page_number | integer | NO | null
+rag_chunk | section_path | text | NO | null
+rag_chunk | exercise_no | text | YES | null
+rag_chunk | char_start | integer | NO | null
+rag_chunk | char_end | integer | NO | null
+rag_chunk | kp_ids | ARRAY | NO | '{}'::uuid[]
+rag_chunk | exercise_ref | text | YES | null
+rag_chunk | content_hash | character | NO | null
+rag_chunk | embed_model | text | YES | null
+rag_chunk | index_generation | integer | NO | 1
+rag_chunk | created_at | timestamp with time zone | NO | now()
+rag_chunk | text_jieba | text | NO | ''::text
+rag_chunk | scope | text | NO | 'TENANT'::text
+rag_chunk_embedding | chunk_id | uuid | NO | null
+rag_chunk_embedding | tenant_id | uuid | NO | null
+rag_chunk_embedding | index_generation | integer | NO | 1
+rag_chunk_embedding | embed_model | text | NO | null
+rag_chunk_embedding | embedding | USER-DEFINED | NO | null
+rag_chunk_embedding | scope | text | NO | 'TENANT'::text
+rag_dictionary | dict_id | uuid | NO | gen_random_uuid()
+rag_dictionary | tenant_id | uuid | NO | null
+rag_dictionary | dict_type | text | NO | null
+rag_dictionary | code | text | NO | null
+rag_dictionary | label | text | NO | null
+rag_dictionary | sort_order | integer | NO | 0
+rag_dictionary | enabled | boolean | NO | true
+rag_dictionary | created_at | timestamp with time zone | NO | now()
+rag_dictionary | scope | text | NO | 'TENANT'::text
+rag_document | document_id | uuid | NO | gen_random_uuid()
+rag_document | tenant_id | uuid | NO | null
+rag_document | source_id | uuid | NO | null
+rag_document | edition_id | uuid | NO | null
+rag_document | carrier | text | NO | 'PDF'::text
+rag_document | title | text | NO | null
+rag_document | page_count | integer | YES | null
+rag_document | object_ref | text | YES | null
+rag_document | parse_status | text | NO | 'PENDING'::text
+rag_document | parser_version | text | YES | null
+rag_document | content_hash | character | YES | null
+rag_document | created_at | timestamp with time zone | NO | now()
+rag_document | updated_at | timestamp with time zone | NO | now()
+rag_document | ver_status | USER-DEFINED | NO | 'PENDING'::rag.rag_verification_status
+rag_document | retrievable | boolean | NO | false
+rag_document | revoked_at | timestamp with time zone | YES | null
+rag_document | revoked_reason | text | YES | null
+rag_document | license_status | USER-DEFINED | NO | 'PENDING'::rag.rag_license_status
+rag_document | scope | text | NO | 'TENANT'::text
+rag_edition | edition_id | uuid | NO | gen_random_uuid()
+rag_edition | tenant_id | uuid | NO | null
+rag_edition | source_id | uuid | NO | null
+rag_edition | subject | text | NO | null
+rag_edition | grade | text | NO | null
+rag_edition | term | text | NO | null
+rag_edition | publisher | text | NO | null
+rag_edition | revision_code | text | NO | null
+rag_edition | curriculum_ref | text | YES | null
+rag_edition | effective_from | date | YES | null
+rag_edition | effective_to | date | YES | null
+rag_edition | created_at | timestamp with time zone | NO | now()
+rag_edition | scope | text | NO | 'TENANT'::text
+rag_ingest_job | job_id | uuid | NO | gen_random_uuid()
+rag_ingest_job | tenant_id | uuid | NO | null
+rag_ingest_job | source_id | uuid | NO | null
+rag_ingest_job | status | USER-DEFINED | NO | 'PENDING'::rag.rag_ingest_status
+rag_ingest_job | parser_version | text | YES | null
+rag_ingest_job | embed_model | text | YES | null
+rag_ingest_job | chunk_count | integer | YES | null
+rag_ingest_job | error_detail | text | YES | null
+rag_ingest_job | started_at | timestamp with time zone | YES | null
+rag_ingest_job | finished_at | timestamp with time zone | YES | null
+rag_ingest_job | created_at | timestamp with time zone | NO | now()
+rag_ingest_job | stage | text | YES | null
+rag_ingest_job | attempt | integer | NO | 0
+rag_ingest_job | created_by | uuid | YES | null
+rag_inspection_record | record_id | uuid | NO | gen_random_uuid()
+rag_inspection_record | tenant_id | uuid | NO | null
+rag_inspection_record | source_id | uuid | NO | null
+rag_inspection_record | chunk_id | uuid | NO | null
+rag_inspection_record | inspector_id | uuid | NO | null
+rag_inspection_record | expected_role | text | NO | null
+rag_inspection_record | actual_role | text | NO | null
+rag_inspection_record | error_type | text | YES | null
+rag_inspection_record | verdict | text | NO | null
+rag_inspection_record | created_at | timestamp with time zone | NO | now()
+rag_inspection_record | scope | text | NO | 'TENANT'::text
+rag_knowledge_point | kp_id | uuid | NO | gen_random_uuid()
+rag_knowledge_point | tenant_id | uuid | NO | null
+rag_knowledge_point | subject | text | NO | null
+rag_knowledge_point | grade | text | NO | null
+rag_knowledge_point | canonical_name | text | NO | null
+rag_knowledge_point | aliases | ARRAY | NO | '{}'::text[]
+rag_knowledge_point | prerequisites | ARRAY | NO | '{}'::uuid[]
+rag_knowledge_point | facets | jsonb | NO | '{}'::jsonb
+rag_knowledge_point | created_at | timestamp with time zone | NO | now()
+rag_knowledge_point | updated_at | timestamp with time zone | NO | now()
+rag_knowledge_point | scope | text | NO | 'TENANT'::text
+rag_knowledge_prerequisite | tenant_id | uuid | NO | null
+rag_knowledge_prerequisite | kp_id | uuid | NO | null
+rag_knowledge_prerequisite | prereq_kp_id | uuid | NO | null
+rag_knowledge_prerequisite | scope | text | NO | 'TENANT'::text
+rag_kp_alias | alias_id | uuid | NO | gen_random_uuid()
+rag_kp_alias | tenant_id | uuid | NO | null
+rag_kp_alias | kp_id | uuid | NO | null
+rag_kp_alias | alias_text | text | NO | null
+rag_kp_alias | created_at | timestamp with time zone | NO | now()
+rag_kp_alias | scope | text | NO | 'TENANT'::text
+rag_reviewer_roster | tenant_id | uuid | NO | null
+rag_reviewer_roster | principal_id | uuid | NO | null
+rag_reviewer_roster | display_name | text | NO | null
+rag_reviewer_roster | can_review | boolean | NO | true
+rag_reviewer_roster | can_co_sign | boolean | NO | false
+rag_reviewer_roster | enabled | boolean | NO | true
+rag_reviewer_roster | scope | text | NO | 'TENANT'::text
+rag_reviewer_roster | created_at | timestamp with time zone | NO | now()
+rag_reviewer_roster | updated_at | timestamp with time zone | NO | now()
+rag_source | source_id | uuid | NO | gen_random_uuid()
+rag_source | tenant_id | uuid | NO | null
+rag_source | source_type | text | NO | null
+rag_source | title | text | NO | null
+rag_source | publisher | text | NO | null
+rag_source | isbn | text | YES | null
+rag_source | doi | text | YES | null
+rag_source | trust_tier | USER-DEFINED | NO | 'UNVERIFIED'::rag.rag_trust_tier
+rag_source | ver_status | USER-DEFINED | NO | 'PENDING'::rag.rag_verification_status
+rag_source | ver_method | USER-DEFINED | NO | 'NONE'::rag.rag_verification_method
+rag_source | ver_evidence | text | YES | null
+rag_source | verified_at | timestamp with time zone | YES | null
+rag_source | verified_by | uuid | YES | null
+rag_source | ver_valid_days | integer | NO | 365
+rag_source | license_status | USER-DEFINED | NO | 'PENDING'::rag.rag_license_status
+rag_source | object_ref | text | YES | null
+rag_source | content_hash | character | YES | null
+rag_source | created_at | timestamp with time zone | NO | now()
+rag_source | updated_at | timestamp with time zone | NO | now()
+rag_source | review_started_at | timestamp with time zone | YES | null
+rag_source | reviewer_id | uuid | YES | null
+rag_source | ver_reject_reason | text | YES | null
+rag_source | ver_decided_at | timestamp with time zone | YES | null
+rag_source | scope | text | NO | 'TENANT'::text
+rag_source | inspection_status | text | NO | 'NOT_REQUIRED'::text
+rag_source | metadata_confirmed | boolean | NO | false
+rag_source | metadata_confirmed_at | timestamp with time zone | YES | null
+rag_source | metadata_confirmed_by | uuid | YES | null
+-- ==== CONSTRAINTS ====
+rag.rag_access_audit | rag_access_audit_action_chk | CHECK ((action = ANY (ARRAY['RETRIEVE'::text, 'INGEST'::text, 'CITE'::text, 'EXPORT'::text, 'REVOKE'::text, 'ADMIT'::text, 'REJECT'::text])))
+rag.rag_access_audit | rag_access_audit_action_not_null | NOT NULL action
+rag.rag_access_audit | rag_access_audit_audit_id_not_null | NOT NULL audit_id
+rag.rag_access_audit | rag_access_audit_occurred_at_not_null | NOT NULL occurred_at
+rag.rag_access_audit | rag_access_audit_pkey | PRIMARY KEY (audit_id)
+rag.rag_access_audit | rag_access_audit_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_answer_citation | rag_answer_citation_chunk_id_not_null | NOT NULL chunk_id
+rag.rag_answer_citation | rag_answer_citation_citation_id_not_null | NOT NULL citation_id
+rag.rag_answer_citation | rag_answer_citation_created_at_not_null | NOT NULL created_at
+rag.rag_answer_citation | rag_answer_citation_edition_snapshot_not_null | NOT NULL edition_snapshot
+rag.rag_answer_citation | rag_answer_citation_entailment_score_not_null | NOT NULL entailment_score
+rag.rag_answer_citation | rag_answer_citation_pkey | PRIMARY KEY (citation_id)
+rag.rag_answer_citation | rag_answer_citation_supported_claim_not_null | NOT NULL supported_claim
+rag.rag_answer_citation | rag_answer_citation_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_answer_citation | rag_answer_citation_verbatim_quote_not_null | NOT NULL verbatim_quote
+rag.rag_answer_citation | rag_answer_citation_verdict_not_null | NOT NULL verdict
+rag.rag_answer_citation | rag_citation_chunk_fk | FOREIGN KEY (chunk_id) REFERENCES rag.rag_chunk(chunk_id) ON DELETE CASCADE
+rag.rag_answer_citation | rag_citation_quote_present_chk | CHECK ((length(btrim(verbatim_quote)) > 0))
+rag.rag_answer_citation | rag_citation_score_chk | CHECK (((entailment_score >= (0.0)::double precision) AND (entailment_score <= (1.0)::double precision)))
+rag.rag_chunk | rag_chunk_char_end_not_null | NOT NULL char_end
+rag.rag_chunk | rag_chunk_char_range_chk | CHECK ((char_end >= char_start))
+rag.rag_chunk | rag_chunk_char_start_chk | CHECK ((char_start >= 0))
+rag.rag_chunk | rag_chunk_char_start_not_null | NOT NULL char_start
+rag.rag_chunk | rag_chunk_chunk_id_not_null | NOT NULL chunk_id
+rag.rag_chunk | rag_chunk_content_hash_not_null | NOT NULL content_hash
+rag.rag_chunk | rag_chunk_created_at_not_null | NOT NULL created_at
+rag.rag_chunk | rag_chunk_document_fk | FOREIGN KEY (tenant_id, document_id) REFERENCES rag.rag_document(tenant_id, document_id) ON DELETE CASCADE
+rag.rag_chunk | rag_chunk_document_id_not_null | NOT NULL document_id
+rag.rag_chunk | rag_chunk_edition_fk | FOREIGN KEY (tenant_id, edition_id) REFERENCES rag.rag_edition(tenant_id, edition_id) ON DELETE CASCADE
+rag.rag_chunk | rag_chunk_edition_id_not_null | NOT NULL edition_id
+rag.rag_chunk | rag_chunk_index_generation_not_null | NOT NULL index_generation
+rag.rag_chunk | rag_chunk_kp_ids_not_null | NOT NULL kp_ids
+rag.rag_chunk | rag_chunk_page_chk | CHECK ((page_number >= 1))
+rag.rag_chunk | rag_chunk_page_number_not_null | NOT NULL page_number
+rag.rag_chunk | rag_chunk_pkey | PRIMARY KEY (chunk_id)
+rag.rag_chunk | rag_chunk_role_not_null | NOT NULL role
+rag.rag_chunk | rag_chunk_scope_ck | CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
+rag.rag_chunk | rag_chunk_scope_not_null | NOT NULL scope
+rag.rag_chunk | rag_chunk_section_path_not_null | NOT NULL section_path
+rag.rag_chunk | rag_chunk_tenant_chunk_unique | UNIQUE (tenant_id, chunk_id)
+rag.rag_chunk | rag_chunk_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_chunk | rag_chunk_text_jieba_not_null | NOT NULL text_jieba
+rag.rag_chunk | rag_chunk_text_not_null | NOT NULL text
+rag.rag_chunk_embedding | rag_chunk_embedding_chunk_id_not_null | NOT NULL chunk_id
+rag.rag_chunk_embedding | rag_chunk_embedding_embed_model_not_null | NOT NULL embed_model
+rag.rag_chunk_embedding | rag_chunk_embedding_embedding_not_null | NOT NULL embedding
+rag.rag_chunk_embedding | rag_chunk_embedding_index_generation_not_null | NOT NULL index_generation
+rag.rag_chunk_embedding | rag_chunk_embedding_pkey | PRIMARY KEY (chunk_id)
+rag.rag_chunk_embedding | rag_chunk_embedding_scope_ck | CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
+rag.rag_chunk_embedding | rag_chunk_embedding_scope_not_null | NOT NULL scope
+rag.rag_chunk_embedding | rag_chunk_embedding_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_chunk_embedding | rag_embedding_chunk_fk | FOREIGN KEY (tenant_id, chunk_id) REFERENCES rag.rag_chunk(tenant_id, chunk_id) ON DELETE CASCADE
+rag.rag_chunk_embedding | rag_embedding_tenant_chunk_unique | UNIQUE (tenant_id, chunk_id)
+rag.rag_dictionary | rag_dictionary_code_not_null | NOT NULL code
+rag.rag_dictionary | rag_dictionary_created_at_not_null | NOT NULL created_at
+rag.rag_dictionary | rag_dictionary_dict_id_not_null | NOT NULL dict_id
+rag.rag_dictionary | rag_dictionary_dict_type_not_null | NOT NULL dict_type
+rag.rag_dictionary | rag_dictionary_enabled_not_null | NOT NULL enabled
+rag.rag_dictionary | rag_dictionary_label_not_null | NOT NULL label
+rag.rag_dictionary | rag_dictionary_pkey | PRIMARY KEY (dict_id)
+rag.rag_dictionary | rag_dictionary_scope_ck | CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
+rag.rag_dictionary | rag_dictionary_scope_not_null | NOT NULL scope
+rag.rag_dictionary | rag_dictionary_sort_order_not_null | NOT NULL sort_order
+rag.rag_dictionary | rag_dictionary_tenant_id_dict_type_code_key | UNIQUE (tenant_id, dict_type, code)
+rag.rag_dictionary | rag_dictionary_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_document | rag_document_carrier_chk | CHECK ((carrier = ANY (ARRAY['PDF'::text, 'SCAN'::text, 'EPUB'::text, 'HTML'::text, 'TXT'::text])))
+rag.rag_document | rag_document_carrier_not_null | NOT NULL carrier
+rag.rag_document | rag_document_created_at_not_null | NOT NULL created_at
+rag.rag_document | rag_document_document_id_not_null | NOT NULL document_id
+rag.rag_document | rag_document_edition_fk | FOREIGN KEY (tenant_id, edition_id) REFERENCES rag.rag_edition(tenant_id, edition_id) ON DELETE CASCADE
+rag.rag_document | rag_document_edition_id_not_null | NOT NULL edition_id
+rag.rag_document | rag_document_license_status_not_null | NOT NULL license_status
+rag.rag_document | rag_document_page_count_chk | CHECK ((page_count >= 0))
+rag.rag_document | rag_document_parse_status_chk | CHECK ((parse_status = ANY (ARRAY['PENDING'::text, 'PARSED'::text, 'CHUNKED'::text, 'FAILED'::text])))
+rag.rag_document | rag_document_parse_status_not_null | NOT NULL parse_status
+rag.rag_document | rag_document_pkey | PRIMARY KEY (document_id)
+rag.rag_document | rag_document_retrievable_not_null | NOT NULL retrievable
+rag.rag_document | rag_document_revoked_reason_chk | CHECK (((ver_status <> 'REVOKED'::rag.rag_verification_status) OR (revoked_reason IS NOT NULL)))
+rag.rag_document | rag_document_scope_ck | CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
+rag.rag_document | rag_document_scope_not_null | NOT NULL scope
+rag.rag_document | rag_document_source_fk | FOREIGN KEY (tenant_id, source_id) REFERENCES rag.rag_source(tenant_id, source_id) ON DELETE CASCADE
+rag.rag_document | rag_document_source_id_not_null | NOT NULL source_id
+rag.rag_document | rag_document_tenant_document_unique | UNIQUE (tenant_id, document_id)
+rag.rag_document | rag_document_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_document | rag_document_title_not_null | NOT NULL title
+rag.rag_document | rag_document_updated_at_not_null | NOT NULL updated_at
+rag.rag_document | rag_document_ver_status_not_null | NOT NULL ver_status
+rag.rag_edition | rag_edition_created_at_not_null | NOT NULL created_at
+rag.rag_edition | rag_edition_edition_id_not_null | NOT NULL edition_id
+rag.rag_edition | rag_edition_grade_not_null | NOT NULL grade
+rag.rag_edition | rag_edition_pkey | PRIMARY KEY (edition_id)
+rag.rag_edition | rag_edition_publisher_not_null | NOT NULL publisher
+rag.rag_edition | rag_edition_revision_code_not_null | NOT NULL revision_code
+rag.rag_edition | rag_edition_scope_ck | CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
+rag.rag_edition | rag_edition_scope_not_null | NOT NULL scope
+rag.rag_edition | rag_edition_source_fk | FOREIGN KEY (tenant_id, source_id) REFERENCES rag.rag_source(tenant_id, source_id) ON DELETE CASCADE
+rag.rag_edition | rag_edition_source_id_not_null | NOT NULL source_id
+rag.rag_edition | rag_edition_subject_not_null | NOT NULL subject
+rag.rag_edition | rag_edition_tenant_edition_unique | UNIQUE (tenant_id, edition_id)
+rag.rag_edition | rag_edition_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_edition | rag_edition_term_chk | CHECK ((term = ANY (ARRAY['上册'::text, '下册'::text, '全一册'::text])))
+rag.rag_edition | rag_edition_term_not_null | NOT NULL term
+rag.rag_edition | rag_edition_unique | UNIQUE (tenant_id, subject, grade, term, publisher, revision_code)
+rag.rag_ingest_job | rag_ingest_job_attempt_not_null | NOT NULL attempt
+rag.rag_ingest_job | rag_ingest_job_created_at_not_null | NOT NULL created_at
+rag.rag_ingest_job | rag_ingest_job_job_id_not_null | NOT NULL job_id
+rag.rag_ingest_job | rag_ingest_job_pkey | PRIMARY KEY (job_id)
+rag.rag_ingest_job | rag_ingest_job_source_id_not_null | NOT NULL source_id
+rag.rag_ingest_job | rag_ingest_job_status_not_null | NOT NULL status
+rag.rag_ingest_job | rag_ingest_job_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_ingest_job | rag_ingest_source_fk | FOREIGN KEY (tenant_id, source_id) REFERENCES rag.rag_source(tenant_id, source_id) ON DELETE CASCADE
+rag.rag_inspection_record | rag_inspection_error_type_chk | CHECK (((error_type IS NULL) OR (error_type = ANY (ARRAY['ANSWER_LEAK'::text, 'EXERCISE_NO_LOST'::text, 'LOCATOR_WRONG'::text, 'CHUNK_BOUNDARY'::text, 'OTHER'::text]))))
+rag.rag_inspection_record | rag_inspection_record_actual_role_not_null | NOT NULL actual_role
+rag.rag_inspection_record | rag_inspection_record_chunk_id_not_null | NOT NULL chunk_id
+rag.rag_inspection_record | rag_inspection_record_created_at_not_null | NOT NULL created_at
+rag.rag_inspection_record | rag_inspection_record_expected_role_not_null | NOT NULL expected_role
+rag.rag_inspection_record | rag_inspection_record_inspector_id_not_null | NOT NULL inspector_id
+rag.rag_inspection_record | rag_inspection_record_pkey | PRIMARY KEY (record_id)
+rag.rag_inspection_record | rag_inspection_record_record_id_not_null | NOT NULL record_id
+rag.rag_inspection_record | rag_inspection_record_scope_not_null | NOT NULL scope
+rag.rag_inspection_record | rag_inspection_record_source_id_not_null | NOT NULL source_id
+rag.rag_inspection_record | rag_inspection_record_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_inspection_record | rag_inspection_record_verdict_not_null | NOT NULL verdict
+rag.rag_inspection_record | rag_inspection_verdict_chk | CHECK ((verdict = ANY (ARRAY['PASS'::text, 'FAIL'::text])))
+rag.rag_inspection_record | rag_inspection_verdict_error_ck | CHECK ((((verdict = 'FAIL'::text) AND (error_type IS NOT NULL)) OR ((verdict = 'PASS'::text) AND (error_type IS NULL))))
+rag.rag_knowledge_point | rag_knowledge_point_aliases_not_null | NOT NULL aliases
+rag.rag_knowledge_point | rag_knowledge_point_canonical_name_not_null | NOT NULL canonical_name
+rag.rag_knowledge_point | rag_knowledge_point_created_at_not_null | NOT NULL created_at
+rag.rag_knowledge_point | rag_knowledge_point_facets_not_null | NOT NULL facets
+rag.rag_knowledge_point | rag_knowledge_point_grade_not_null | NOT NULL grade
+rag.rag_knowledge_point | rag_knowledge_point_kp_id_not_null | NOT NULL kp_id
+rag.rag_knowledge_point | rag_knowledge_point_pkey | PRIMARY KEY (kp_id)
+rag.rag_knowledge_point | rag_knowledge_point_prerequisites_not_null | NOT NULL prerequisites
+rag.rag_knowledge_point | rag_knowledge_point_scope_ck | CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
+rag.rag_knowledge_point | rag_knowledge_point_scope_not_null | NOT NULL scope
+rag.rag_knowledge_point | rag_knowledge_point_subject_not_null | NOT NULL subject
+rag.rag_knowledge_point | rag_knowledge_point_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_knowledge_point | rag_knowledge_point_updated_at_not_null | NOT NULL updated_at
+rag.rag_knowledge_point | rag_kp_tenant_kp_unique | UNIQUE (tenant_id, kp_id)
+rag.rag_knowledge_point | rag_kp_unique_name | UNIQUE (tenant_id, subject, grade, canonical_name)
+rag.rag_knowledge_prerequisite | rag_knowledge_prerequisite_kp_id_not_null | NOT NULL kp_id
+rag.rag_knowledge_prerequisite | rag_knowledge_prerequisite_pkey | PRIMARY KEY (tenant_id, kp_id, prereq_kp_id)
+rag.rag_knowledge_prerequisite | rag_knowledge_prerequisite_prereq_kp_id_not_null | NOT NULL prereq_kp_id
+rag.rag_knowledge_prerequisite | rag_knowledge_prerequisite_scope_ck | CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
+rag.rag_knowledge_prerequisite | rag_knowledge_prerequisite_scope_not_null | NOT NULL scope
+rag.rag_knowledge_prerequisite | rag_knowledge_prerequisite_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_knowledge_prerequisite | rag_kp_prereq_kp_fk | FOREIGN KEY (tenant_id, kp_id) REFERENCES rag.rag_knowledge_point(tenant_id, kp_id) ON DELETE CASCADE
+rag.rag_knowledge_prerequisite | rag_kp_prereq_prereq_fk | FOREIGN KEY (tenant_id, prereq_kp_id) REFERENCES rag.rag_knowledge_point(tenant_id, kp_id) ON DELETE CASCADE
+rag.rag_knowledge_prerequisite | rag_kp_prereq_self_chk | CHECK ((kp_id <> prereq_kp_id))
+rag.rag_kp_alias | rag_kp_alias_alias_id_not_null | NOT NULL alias_id
+rag.rag_kp_alias | rag_kp_alias_alias_text_not_null | NOT NULL alias_text
+rag.rag_kp_alias | rag_kp_alias_created_at_not_null | NOT NULL created_at
+rag.rag_kp_alias | rag_kp_alias_kp_id_not_null | NOT NULL kp_id
+rag.rag_kp_alias | rag_kp_alias_pkey | PRIMARY KEY (alias_id)
+rag.rag_kp_alias | rag_kp_alias_scope_not_null | NOT NULL scope
+rag.rag_kp_alias | rag_kp_alias_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_kp_alias | rag_kp_alias_unique | UNIQUE (tenant_id, kp_id, alias_text)
+rag.rag_reviewer_roster | rag_reviewer_roster_can_co_sign_not_null | NOT NULL can_co_sign
+rag.rag_reviewer_roster | rag_reviewer_roster_can_review_not_null | NOT NULL can_review
+rag.rag_reviewer_roster | rag_reviewer_roster_created_at_not_null | NOT NULL created_at
+rag.rag_reviewer_roster | rag_reviewer_roster_display_name_not_null | NOT NULL display_name
+rag.rag_reviewer_roster | rag_reviewer_roster_enabled_not_null | NOT NULL enabled
+rag.rag_reviewer_roster | rag_reviewer_roster_name_chk | CHECK ((length(btrim(display_name)) > 0))
+rag.rag_reviewer_roster | rag_reviewer_roster_pk | PRIMARY KEY (tenant_id, principal_id)
+rag.rag_reviewer_roster | rag_reviewer_roster_principal_id_not_null | NOT NULL principal_id
+rag.rag_reviewer_roster | rag_reviewer_roster_scope_ck | CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
+rag.rag_reviewer_roster | rag_reviewer_roster_scope_not_null | NOT NULL scope
+rag.rag_reviewer_roster | rag_reviewer_roster_sign_chk | CHECK (((NOT can_co_sign) OR can_review))
+rag.rag_reviewer_roster | rag_reviewer_roster_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_reviewer_roster | rag_reviewer_roster_updated_at_not_null | NOT NULL updated_at
+rag.rag_source | rag_source_created_at_not_null | NOT NULL created_at
+rag.rag_source | rag_source_identifier_chk | CHECK ((((trust_tier = ANY (ARRAY['OFFICIAL_PUBLISHER'::rag.rag_trust_tier, 'OFFICIAL_TUTORIAL'::rag.rag_trust_tier])) AND (isbn IS NOT NULL)) OR ((trust_tier = ANY (ARRAY['PEER_REVIEWED_PAPER'::rag.rag_trust_tier, 'PREPRINT'::rag.rag_trust_tier])) AND (doi IS NOT NULL)) OR (trust_tier = 'UNVERIFIED'::rag.rag_trust_tier)))
+rag.rag_source | rag_source_inspection_status_chk | CHECK ((inspection_status = ANY (ARRAY['NOT_REQUIRED'::text, 'PASSED'::text, 'FAILED'::text])))
+rag.rag_source | rag_source_inspection_status_not_null | NOT NULL inspection_status
+rag.rag_source | rag_source_license_status_not_null | NOT NULL license_status
+rag.rag_source | rag_source_metadata_confirm_chk | CHECK (((metadata_confirmed = false) OR ((metadata_confirmed_at IS NOT NULL) AND (metadata_confirmed_by IS NOT NULL))))
+rag.rag_source | rag_source_metadata_confirmed_not_null | NOT NULL metadata_confirmed
+rag.rag_source | rag_source_pkey | PRIMARY KEY (source_id)
+rag.rag_source | rag_source_publisher_not_null | NOT NULL publisher
+rag.rag_source | rag_source_scope_ck | CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
+rag.rag_source | rag_source_scope_not_null | NOT NULL scope
+rag.rag_source | rag_source_source_id_not_null | NOT NULL source_id
+rag.rag_source | rag_source_source_type_not_null | NOT NULL source_type
+rag.rag_source | rag_source_tenant_id_not_null | NOT NULL tenant_id
+rag.rag_source | rag_source_title_not_null | NOT NULL title
+rag.rag_source | rag_source_trust_tier_not_null | NOT NULL trust_tier
+rag.rag_source | rag_source_unique | UNIQUE (tenant_id, source_id)
+rag.rag_source | rag_source_updated_at_not_null | NOT NULL updated_at
+rag.rag_source | rag_source_ver_method_not_null | NOT NULL ver_method
+rag.rag_source | rag_source_ver_status_not_null | NOT NULL ver_status
+rag.rag_source | rag_source_ver_valid_days_chk | CHECK ((ver_valid_days > 0))
+rag.rag_source | rag_source_ver_valid_days_not_null | NOT NULL ver_valid_days
+rag.rag_source | rag_source_verified_requires_evidence_chk | CHECK (((ver_status <> 'VERIFIED'::rag.rag_verification_status) OR ((ver_evidence IS NOT NULL) AND (verified_at IS NOT NULL))))
+-- ==== DATA COUNTS ====
+rag_source = 7
+rag_document = 5
+rag_chunk = 4326
+rag_chunk_embedding = 4326
+rag_edition = 5
+rag_dictionary = 4
+rag_knowledge_point = 0
+-- ==== chunk_embedding 明细（迁移前） ====
+2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2 | gen=1 | qwen3-embedding:8b | 4326
+-- ==== rag_source 清单 ====
+4e6e75d5-63cf-475e-b1e1-b850c62ebc70 | 沪教版（五·四学制） 英语 六年级 上册 | 00000000-0000-0000-0000-000000000000
+f20b1c15-946f-41bf-bb2a-80bbd6f1a2ba | 沪教版（五·四学制） 英语 六年级 下册 | 00000000-0000-0000-0000-000000000000
+7efb0f0e-08b1-47d9-aea5-35066a849320 | 沪教版五四制六年级数学上册 | 2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2
+89cbce16-54a4-4a37-8ce1-9c008ec821d3 | 沪教版五四制六年级数学上册 | 2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2
+e76e44a9-3758-41e0-a8cd-9c656ed47661 | 沪教版（五·四学制）英语六年级下册 | 2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2
+5bce806a-eb27-4f32-a5ed-bdd295d0ec88 | 沪教版（五·四学制）英语六年级上册 | 2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2
+4b299383-930c-4f43-a623-974402a4427e | 沪教版五四制六年级数学上册 | 00000000-0000-0000-0000-000000000000
