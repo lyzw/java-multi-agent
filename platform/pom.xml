@@ -49,6 +49,11 @@
     <module>agent-test-support</module>
     <module>agent-application</module>
     <module>agent-infrastructure</module>
+    <!--
+      ⚠️ 顺序有意：跨 Run 记忆特性模块复用 infrastructure 的租户事务连接，
+         且被 agent-worker 依赖，故夹在两者之间（Maven 也会按依赖拓扑排序）。
+    -->
+    <module>agent-memory</module>
     <module>agent-infra</module>
     <module>agent-worker</module>
     <module>agent-api</module>
@@ -99,6 +104,11 @@
       <dependency>
         <groupId>cn.studykid.multiagent</groupId>
         <artifactId>agent-infra</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.multiagent</groupId>
+        <artifactId>agent-memory</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

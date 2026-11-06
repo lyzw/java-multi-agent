@@ -1,4 +1,4 @@
-package cn.studykid.multiagent.infrastructure.persistence;
+package cn.studykid.multiagent.memory.persistence;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -18,10 +18,12 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import cn.studykid.multiagent.core.memory.MemoryEntry;
-import cn.studykid.multiagent.core.memory.MemoryStrength;
+import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
+import cn.studykid.multiagent.infrastructure.persistence.TenantConnectionLease;
+import cn.studykid.multiagent.memory.domain.MemoryEntry;
+import cn.studykid.multiagent.memory.domain.MemoryStrength;
 import cn.studykid.multiagent.core.tenant.TenantContext;
-import cn.studykid.multiagent.ports.persistence.MemoryPort;
+import cn.studykid.multiagent.memory.port.MemoryPort;
 
 /**
  * 跨 Run 记忆的 JDBC 实现（P1 · {@code docs/Agent记忆机制分析与设计方案.md}）。

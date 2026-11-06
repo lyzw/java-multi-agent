@@ -31,12 +31,12 @@ import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
  *       会伪造「崩溃后数据仍在」——故崩溃场景必须用裸连接。</li>
  * </ul>
  */
-final class FaultInjectionSupport {
+public final class FaultInjectionSupport {
 
     private FaultInjectionSupport() {
     }
 
-    static HikariDataSource appPool(int maxPoolSize) {
+    public static HikariDataSource appPool(int maxPoolSize) {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_USER", "app_agent"));
@@ -64,7 +64,7 @@ final class FaultInjectionSupport {
      *
      * <p>凭据只从环境变量来（{@code IT_RETENTION_USER} / {@code IT_RETENTION_PASSWORD}）。
      */
-    static HikariDataSource retentionPool(int maxPoolSize) {
+    public static HikariDataSource retentionPool(int maxPoolSize) {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_RETENTION_USER", "agent_retention"));
@@ -84,7 +84,7 @@ final class FaultInjectionSupport {
         return DriverManager.getConnection(url, user, pwd == null ? "" : pwd);
     }
 
-    static HikariDataSource adminPool() {
+    public static HikariDataSource adminPool() {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
@@ -108,7 +108,7 @@ final class FaultInjectionSupport {
     }
 
     /** E-3 守护：非特权角色运行，否则得到「隔离失效」的虚假结论。 */
-    static void requireNonPrivileged(DataSource appPool) throws SQLException {
+    public static void requireNonPrivileged(DataSource appPool) throws SQLException {
         try (Connection conn = appPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                      "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user");
@@ -144,7 +144,7 @@ final class FaultInjectionSupport {
      * 累积到 {@code claimTasks} 的 {@code LIMIT} 配额之上后，
      * 连<b>别的</b> IT 的领取断言也会开始假红 —— 污染会跨测试类传染。
      */
-    static String itTenant(DataSource admin, String slug) throws SQLException {
+    public static String itTenant(DataSource admin, String slug) throws SQLException {
         return ItTenantProvisioner.provision(admin, slug);
     }
 
@@ -155,7 +155,7 @@ final class FaultInjectionSupport {
      * 取到别的租户的快照后，插 Run 时复合外键 {@code (tenant_id, snapshot_id)} 报冲突，
      * 而错误只说外键，不说「你取错租户了」。
      */
-    static String itSnapshot(DataSource admin, String tenantId) throws SQLException {
+    public static String itSnapshot(DataSource admin, String tenantId) throws SQLException {
         return ItTenantProvisioner.snapshotId(admin, tenantId);
     }
 

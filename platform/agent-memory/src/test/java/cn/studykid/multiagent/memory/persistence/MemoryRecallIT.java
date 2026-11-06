@@ -1,4 +1,4 @@
-package cn.studykid.multiagent.infrastructure.persistence;
+package cn.studykid.multiagent.memory.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -26,8 +26,10 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 import com.zaxxer.hikari.HikariDataSource;
 
-import cn.studykid.multiagent.core.memory.MemoryEntry;
-import cn.studykid.multiagent.ports.persistence.MemoryPort;
+import cn.studykid.multiagent.infrastructure.persistence.FaultInjectionSupport;
+import cn.studykid.multiagent.infrastructure.persistence.JdbcErasureRepository;
+import cn.studykid.multiagent.memory.domain.MemoryEntry;
+import cn.studykid.multiagent.memory.port.MemoryPort;
 
 /**
  * 跨 Run 记忆的集成测试（P1），真实 PostgreSQL。

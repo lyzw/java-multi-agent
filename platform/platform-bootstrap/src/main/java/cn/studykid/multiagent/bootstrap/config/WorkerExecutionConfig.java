@@ -556,9 +556,9 @@ public class WorkerExecutionConfig {
             //    以及「student_memory 永远为空」。两者都不会报错。
             //    → 由 MemoryWiringIT 断言生产装配下二者**非 null**。
             @org.springframework.beans.factory.annotation.Autowired(required = false)
-            cn.studykid.multiagent.application.memory.MemoryRecallService memoryRecallService,
+            cn.studykid.multiagent.memory.application.MemoryRecallService memoryRecallService,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
-            cn.studykid.multiagent.application.memory.MemoryConsolidator memoryConsolidator) {
+            cn.studykid.multiagent.memory.application.MemoryConsolidator memoryConsolidator) {
         // ⚠️⚠️ **接管器必须在这里真实注入**（第九批 · MA-T12）：
         //    不注入时，Worker 接管后 RUNNING 的委派记录**永远无人能收敛**
         //    （新世代 token 不匹配、旧世代已被接管），

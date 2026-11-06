@@ -39,6 +39,15 @@
       <artifactId>agent-infrastructure</artifactId>
     </dependency>
     <!--
+      跨 Run 记忆特性模块：组合根必须把它放进运行时 classpath，
+      否则 MemoryConfiguration 虽在 scanBasePackages 下却根本加载不到 ——
+      症状是「记忆静默关闭、无任何报错」，而 MemoryWiringTest 才会揭穿。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-memory</artifactId>
+    </dependency>
+    <!--
       显式声明：本模块测试（RunRecoverySweeperTest 等）直接引用
       cn.studykid.multiagent.ports.persistence.*（如 PlatformTenantPort）。
       此前仅经 agent-infrastructure 间接传递引入，离线 -am 构建下偶发

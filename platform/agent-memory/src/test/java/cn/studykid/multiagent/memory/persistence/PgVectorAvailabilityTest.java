@@ -1,4 +1,4 @@
-package cn.studykid.multiagent.infrastructure.persistence;
+package cn.studykid.multiagent.memory.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 import com.zaxxer.hikari.HikariDataSource;
+
+import cn.studykid.multiagent.infrastructure.persistence.FaultInjectionSupport;
 
 /**
  * pgvector 可用性探测（P2）。

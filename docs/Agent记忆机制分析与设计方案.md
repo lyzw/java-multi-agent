@@ -18,6 +18,42 @@
 > 下方"现状"描述的是**实施前**的代码；实施后的状态与所有偏差修正见
 > [§4.0 实施状态](#40-✅-实施状态2026-11-06-回填以代码为准)。**
 
+### 0.1 当前代码落位（2026-11-06 模块收敛，⚠️ 优先级高于本文后续所有路径）
+
+> **所有记忆专属代码已迁到 `platform/agent-memory`（包 `cn.studykid.multiagent.memory.*`）。
+> 后续记忆相关改动一律在该模块内闭环。** 本文 §3.2 / §4.0 / §4.2 中写的
+> `agent-core / agent-ports / agent-application / agent-infrastructure / platform-bootstrap`
+> 路径是 **P1 实施时的历史记录**，不再是当前落位。
+
+| 层 | 当前位置 |
+|---|---|
+| 领域值对象 | `agent-memory/.../memory/domain/`：`MemoryEntry`、`MemoryStrength` |
+| 端口 | `agent-memory/.../memory/port/`：`MemoryPort`、`EmbeddingPort` |
+| 策略 / 服务 | `agent-memory/.../memory/application/`：`MemoryPolicy`、`MemoryRecallService`、`MemoryConsolidator` |
+| 持久化 | `agent-memory/.../memory/persistence/`：`JdbcMemoryRepository`、`PgVectorAvailability` |
+| 装配 | `agent-memory/.../memory/config/MemoryConfiguration`（3 个 `@Bean`，由组件扫描发现） |
+| 测试 | `agent-memory/src/test/.../memory/`：6 个类（含 `MemoryRecallIT`、`PgVectorAvailabilityTest`） |
+| 边界守卫 | `agent-memory/.../config/MemoryModuleBoundaryTest`：内层不得反向依赖、外层必须接线、记忆类型不得散落回其它模块 |
+
+**刻意保留在原模块的协作点**（搬走会造成 Maven 环，或破坏既有职责边界）：
+
+| 位置 | 保留内容 | 理由 |
+|---|---|---|
+| `agent-application/.../prompt/PromptGuard` | `MEMORY_*` 围栏常量与 `sanitize` | 通用提示词安全护栏；搬入 memory 模块会让 application 反向依赖它而成环 |
+| `agent-ports/.../ErasurePort`、`agent-infrastructure/.../JdbcErasureRepository` | `purgeExpiredMemories` / `DELETE FROM student_memory` | 属保留期清理通道（独立凭据），与召回/整合是不同职责 |
+| `agent-application/.../config/RetentionPolicy`、`retention/RetentionPurgeService` | `KEY_MEMORY_MONTHS` 与「记忆」清理分类 | 保留期策略统一在应用层 |
+| `agent-api/.../ConfigReadService` | `agent.memory.*` 配置键目录 | 全局配置目录，不按特性拆分 |
+| `agent-worker/.../RunExecutionLoop` | 主循环里的召回 / 整合调用点 | 与执行循环深度耦合（构造器链 + execute 三段），本次只换类型引用 |
+| `platform-bootstrap/.../WorkerExecutionConfig`、`application.yml` | 两件套可选注入、`agent.memory` 配置块 | 组合根与配置载体 |
+| `platform-bootstrap/.../MemoryWiringTest`、`agent-worker/.../RunExecutionLoopMemoryTest` | 装配 / 主循环接线连通性断言 | 测的是各自主机模块，跟着主机留 |
+
+**依赖方向**：`agent-memory` 依赖 `agent-core / agent-ports / agent-application / agent-infrastructure`
+（复用 `TransactionalConnectionHolder` 的 RLS 事务边界），只被 `agent-worker` 与
+`platform-bootstrap` 依赖；`agent-infrastructure` 产出 `test-jar` 供本模块连库 IT 复用
+`FaultInjectionSupport`（it- 前缀租户造数口径不另起一份）。
+
+---
+
 **（实施前）本项目有一层「Run 内的临时对话数组」，没有「记忆系统」。**
 
 ```
@@ -294,7 +330,7 @@ int contextTokenBudget;
 | **I-5** | **记忆失败不得影响 Run**：召回失败 → 空记忆；写入失败 → WARN + 计数，不冒泡 | 与 `appendStep`（`RunExecutionLoop:972`）同纪律 |
 | **I-6** | **可关**：装配开关置 false → 全 NOOP，< 5 分钟回滚 | 对齐 `docs/阶段二详细设计_架构升级_v1.0.md:755` 的回滚表 |
 
-### 3.2 分层架构（严格贴合现有模块方向）
+### 3.2 分层架构（P1 实施时的分层设计 · ⚠️ 当前落位见 §0.1）
 
 ```
 ┌ agent-core ────────────────────────────────────────────────┐
@@ -338,6 +374,10 @@ int contextTokenBudget;
 → `MemoryPort` 放 `agent-ports/persistence/`（允许）、`MemoryRecallService` 放 `agent-application/memory/`（允许）、
 `JdbcMemoryRepository` 放 `agent-infrastructure/persistence/`（允许，且该包已在白名单外的正常实现包）。
 ⚠️ **不得**让 `agent-ports` 依赖 `rag-ports`（跨反应堆且违反 `:49`）。
+
+> ⚠️ **2026-11-06 起上图仅为历史设计**：图中四类已收敛到 `agent-memory` 单模块，
+> `ModuleDependencyDirectionTest` 的旧白名单不再用来论证记忆的落位；新的依赖方向由
+> `agent-memory/.../MemoryModuleBoundaryTest` 锁定（内层不得反向依赖、worker/bootstrap 必须接线）。
 
 ### 3.3 数据模型
 

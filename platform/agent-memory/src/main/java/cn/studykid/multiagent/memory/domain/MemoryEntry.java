@@ -1,4 +1,4 @@
-package cn.studykid.multiagent.core.memory;
+package cn.studykid.multiagent.memory.domain;
 
 import java.time.Instant;
 import java.util.Set;

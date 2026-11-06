@@ -1,4 +1,4 @@
-package cn.studykid.multiagent.application.memory;
+package cn.studykid.multiagent.memory.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -11,8 +11,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import cn.studykid.multiagent.core.memory.MemoryEntry;
-import cn.studykid.multiagent.ports.persistence.MemoryPort;
+import cn.studykid.multiagent.memory.domain.MemoryEntry;
+import cn.studykid.multiagent.memory.port.MemoryPort;
 import cn.studykid.multiagent.ports.persistence.ResultQueryPort;
 
 /**

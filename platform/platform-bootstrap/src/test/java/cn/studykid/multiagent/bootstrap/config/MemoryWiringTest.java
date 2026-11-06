@@ -12,9 +12,9 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
-import cn.studykid.multiagent.application.memory.MemoryConsolidator;
-import cn.studykid.multiagent.application.memory.MemoryRecallService;
-import cn.studykid.multiagent.ports.persistence.MemoryPort;
+import cn.studykid.multiagent.memory.application.MemoryConsolidator;
+import cn.studykid.multiagent.memory.application.MemoryRecallService;
+import cn.studykid.multiagent.memory.port.MemoryPort;
 import cn.studykid.multiagent.worker.execute.RunExecutionLoop;
 
 /**

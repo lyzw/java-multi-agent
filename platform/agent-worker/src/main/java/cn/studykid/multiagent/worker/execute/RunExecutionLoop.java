@@ -22,9 +22,9 @@ import tools.jackson.databind.node.ObjectNode;
 
 import cn.studykid.multiagent.application.prompt.PromptGuard;
 import cn.studykid.multiagent.application.config.ModelPricingPolicy;
-import cn.studykid.multiagent.application.memory.MemoryConsolidator;
-import cn.studykid.multiagent.application.memory.MemoryPolicy;
-import cn.studykid.multiagent.application.memory.MemoryRecallService;
+import cn.studykid.multiagent.memory.application.MemoryConsolidator;
+import cn.studykid.multiagent.memory.application.MemoryPolicy;
+import cn.studykid.multiagent.memory.application.MemoryRecallService;
 import cn.studykid.multiagent.core.compliance.DataClassification;
 import cn.studykid.multiagent.core.config.ModelPricing;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
@@ -81,7 +81,7 @@ public class RunExecutionLoop {
      * 故这里<b>直接引用</b> {@code MemoryEntry.STUDENT_ID}。
      */
     private static final java.util.regex.Pattern STUDENT_ID_PATTERN =
-            cn.studykid.multiagent.core.memory.MemoryEntry.STUDENT_ID;
+            cn.studykid.multiagent.memory.domain.MemoryEntry.STUDENT_ID;
 
     private final ObservableModelGateway modelGateway;
     private final RunClaimPort claimPort;

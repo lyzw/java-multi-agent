@@ -1,4 +1,4 @@
-package cn.studykid.multiagent.application.memory;
+package cn.studykid.multiagent.memory.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import cn.studykid.multiagent.core.memory.MemoryStrength;
+import cn.studykid.multiagent.memory.domain.MemoryStrength;
 
 /**
  * 记忆配置解析（P1）。

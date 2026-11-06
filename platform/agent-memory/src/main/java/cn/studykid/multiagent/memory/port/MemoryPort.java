@@ -1,11 +1,11 @@
-package cn.studykid.multiagent.ports.persistence;
+package cn.studykid.multiagent.memory.port;
 
 import java.util.List;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
-import cn.studykid.multiagent.core.memory.MemoryEntry;
+import cn.studykid.multiagent.memory.domain.MemoryEntry;
 
 /**
  * 跨 Run 记忆端口（P1 · {@code docs/Agent记忆机制分析与设计方案.md}）。
@@ -31,13 +31,13 @@ import cn.studykid.multiagent.core.memory.MemoryEntry;
  *       续跑（{@code resume}）<b>不</b>召回：同一 Run 的上下文已存在，
  *       再召回等于在同一个决策里插入新证据。</li>
  *   <li>{@link #consolidate} —— Run 进入终态<b>之后</b>。
- *       数据来源只能是 {@link ResultQueryPort#findResult} 返回的
+ *       数据来源只能是 {@code ResultQueryPort#findResult} 返回的
  *       {@code weaknesses()}（即 {@code weakness_record}），
  *       <b>不得</b>从模型输出直接派生。</li>
- *   <li>{@link ErasurePort#purgeExpiredMemories} —— 保留期清理（第 5 类）。
+ *   <li>{@code ErasurePort#purgeExpiredMemories} —— 保留期清理（第 5 类）。
  *       与画像清理<b>同期</b>：记忆是从画像派生的学习状态，
  *       画像删了而记忆还活着 = "结论比证据活得久"。
- *       ⚠️ 刻意放在 {@link ErasurePort} 而不是本端口：清理走<b>独立凭据</b>
+ *       ⚠️ 刻意放在 {@code ErasurePort} 而不是本端口：清理走<b>独立凭据</b>
  *       （{@code agent_retention}），而本端口用应用凭据。</li>
  *   <li>{@link #forget} —— 监护人撤回同意时<b>显式</b>删除。
  *       虽然 {@code ON DELETE CASCADE} 已经会跟着
@@ -108,7 +108,7 @@ public interface MemoryPort {
      * 级联只在"确实删了 profile"时生效，而撤回流程存在
      * {@code markWithdrawalFailed} 等分支 —— 那些分支下 profile 可能还在。
      *
-     * <p>⚠️ <b>保留期清理不经过本方法</b>：那条路径走 {@link ErasurePort}
+     * <p>⚠️ <b>保留期清理不经过本方法</b>：那条路径走 {@code ErasurePort}
      * （独立清理凭据 + 统一清理报告）。若这里也留一个"按时间删"的方法，
      * 就会出现两个都能删记忆的入口 —— 一个接线了、另一个没接线，
      * 而症状完全相同（"记忆没被清理"）。

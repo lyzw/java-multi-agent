@@ -1,4 +1,4 @@
-package cn.studykid.multiagent.application.memory;
+package cn.studykid.multiagent.memory.application;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -10,8 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.application.prompt.PromptGuard;
-import cn.studykid.multiagent.core.memory.MemoryEntry;
-import cn.studykid.multiagent.ports.persistence.MemoryPort;
+import cn.studykid.multiagent.memory.domain.MemoryEntry;
+import cn.studykid.multiagent.memory.port.MemoryPort;
 
 /**
  * 跨 Run 记忆召回（P1）。

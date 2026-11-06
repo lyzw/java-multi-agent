@@ -1,8 +1,8 @@
-package cn.studykid.multiagent.application.memory;
+package cn.studykid.multiagent.memory.application;
 
 import org.jspecify.annotations.Nullable;
 
-import cn.studykid.multiagent.core.memory.MemoryStrength;
+import cn.studykid.multiagent.memory.domain.MemoryStrength;
 
 /**
  * 跨 Run 记忆的运行期配置（P1）。

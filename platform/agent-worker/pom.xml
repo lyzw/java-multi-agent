@@ -26,6 +26,15 @@
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-infrastructure</artifactId>
     </dependency>
+    <!--
+      跨 Run 记忆（P1）：RunExecutionLoop 在主循环里调用召回/整合两件套。
+      ⚠️ 只依赖 agent-memory 的 application 层类型，不触碰其 persistence 包 ——
+         否则等于 Worker 直连持久层（ModuleDependencyDirectionTest 会判红）。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-memory</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter</artifactId>

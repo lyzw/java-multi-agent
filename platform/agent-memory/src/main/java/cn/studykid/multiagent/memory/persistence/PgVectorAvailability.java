@@ -1,4 +1,4 @@
-package cn.studykid.multiagent.infrastructure.persistence;
+package cn.studykid.multiagent.memory.persistence;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;

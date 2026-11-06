@@ -1,4 +1,4 @@
-package cn.studykid.multiagent.core.memory;
+package cn.studykid.multiagent.memory.domain;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;

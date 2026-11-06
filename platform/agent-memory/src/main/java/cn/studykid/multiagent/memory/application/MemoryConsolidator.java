@@ -1,11 +1,11 @@
-package cn.studykid.multiagent.application.memory;
+package cn.studykid.multiagent.memory.application;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import cn.studykid.multiagent.ports.persistence.MemoryPort;
+import cn.studykid.multiagent.memory.port.MemoryPort;
 import cn.studykid.multiagent.ports.persistence.ResultQueryPort;
 
 /**
