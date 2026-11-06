@@ -176,8 +176,14 @@ export function RagScopeShell({
   const [tenants, setTenants] = useState<PlatformTenant[]>([])
   const [tenantError, setTenantError] = useState<string | null>(null)
   const [tenantId, setTenantId] = useState<string>('')
-  /** 缺省租户档——与改造前行为一致（PLATFORM 影响全部租户，不该是默认值）。 */
-  const [scope, setScope] = useState<RagCorpusScope>('TENANT')
+  /**
+   * **缺省平台档**：产品口径「凡同时涉及租户与平台数据的页面，一律优先展示平台数据」。
+   *
+   * ⚠️ 安全约束不因换默认值而放松：平台档首屏是**只读视图**（读走登录态），
+   *    写入仍需显式领取治理票据（缺票 403），租户头与平台档互斥的规则也不变。
+   *    换到「本租户语料」且未选租户时依旧一条请求都不发。
+   */
+  const [scope, setScope] = useState<RagCorpusScope>('PLATFORM')
 
   const {
     ticket,
@@ -274,12 +280,13 @@ export function RagScopeShell({
                 value={scope}
                 onChange={(v) => setScope(v)}
                 options={[
-                  { label: '本租户语料', value: 'TENANT' },
+                  // ⚠️ 平台数据优先：既作默认档，也排在选项首位。
                   {
                     label: '平台全局语料',
                     value: 'PLATFORM',
                     title: '平台维护、全部租户共享的语料（写需先领治理票据）',
                   },
+                  { label: '本租户语料', value: 'TENANT' },
                   {
                     label: '跨租户盘点',
                     value: 'ALL',
@@ -306,6 +313,11 @@ export function RagScopeShell({
                 }
               />
             </Space>
+
+            <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+              平台数据优先：首屏默认展示「平台全局语料」（只读）；要看某个租户的语料，
+              请切到「本租户语料」档并选择租户。
+            </Paragraph>
 
             {scope === 'TENANT' && tenantId.trim() === '' && (
               <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
@@ -373,7 +385,9 @@ export function RagNotReady({ hint }: { hint?: string }): JSX.Element {
   return (
     <Card>
       <Space direction="vertical" align="center" style={{ width: '100%', padding: '32px 0' }}>
-        <Text type="secondary">{hint ?? '请先在上方选择租户（或切换到平台全局语料档）'}</Text>
+        <Text type="secondary">
+          {hint ?? '本租户语料档请先选择租户；要查看平台数据请切回默认的「平台全局语料」档（只读）'}
+        </Text>
       </Space>
     </Card>
   )

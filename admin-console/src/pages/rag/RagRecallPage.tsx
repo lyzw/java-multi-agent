@@ -37,7 +37,7 @@ import {
   Typography,
 } from 'antd'
 
-import { ApiError, retrieveRagChunks } from '@/api/ragClient'
+import { ApiError, isRagRetrievalTarget, retrieveRagChunks } from '@/api/ragClient'
 import type { RagRetrievalHit, RagRetrievalMode, RagRetrievalResponse, RagScopeMode } from '@/api/ragTypes'
 import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeShell'
 import {
@@ -113,6 +113,12 @@ export function RagRecallPage(): JSX.Element {
 /** 页面主体：处在 {@link RagScopeShell} 的 provider 之内，故可直接消费作用域。 */
 function RagRecallBody({ scope }: RagScopePageProps): JSX.Element {
   const { target, ready } = scope
+  /**
+   * ⚠️ 检索面 `POST /api/v1/retrieval` 强制要求 `X-Tenant-Id`，平台档不带租户头。
+   *    平台数据优先后首屏默认落在平台档，若不设闸门，表单看着可用、点下去必吃 400。
+   *    与「维护面板」的探针闸门同一判据，不另造一套。
+   */
+  const probeable = isRagRetrievalTarget(target)
   const [form] = Form.useForm<FormValues>()
 
   const [loading, setLoading] = useState(false)
@@ -121,6 +127,7 @@ function RagRecallBody({ scope }: RagScopePageProps): JSX.Element {
   const [elapsedMs, setElapsedMs] = useState<number | null>(null)
 
   const onRun = async (v: FormValues): Promise<void> => {
+    if (!probeable) return
     setLoading(true)
     setError(null)
     setResult(null)
@@ -172,6 +179,14 @@ function RagRecallBody({ scope }: RagScopePageProps): JSX.Element {
         <RagNotReady />
       ) : (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          {!probeable && (
+            <Alert
+              type="info"
+              showIcon
+              message="检索探针按租户上下文召回，平台全局档不提供"
+              description="首屏默认展示平台数据；要执行一次检索，请切到「本租户语料」档并选择租户。平台档不带 X-Tenant-Id，检索端点会直接返回 400。"
+            />
+          )}
           <Card size="small" title="① 查询条件（student_context + question）">
             <Form<FormValues>
               form={form}
@@ -254,7 +269,7 @@ function RagRecallBody({ scope }: RagScopePageProps): JSX.Element {
                 </Col>
                 <Col span={16}>
                   <Form.Item>
-                    <Button type="primary" htmlType="submit" loading={loading}>
+                    <Button type="primary" htmlType="submit" loading={loading} disabled={!probeable}>
                       执行检索
                     </Button>
                     {elapsedMs != null && (

@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { SessionProvider } from '@/auth/session'
 import { ReportsPage } from '@/pages/reports/ReportsPage'
@@ -663,8 +663,13 @@ describe('报表中心：CSV 导出（与表格同源）', () => {
       expect(screen.getByText('每日搜索的问题数明细')).toBeInTheDocument()
     })
 
-    const buttons = screen.getAllByRole('button', { name: '导出 CSV' })
-    fireEvent.click(buttons[0] as HTMLElement)
+    // ⚠️ 按区块 id 定位按钮，不要用「第一个导出按钮」：
+    //    平台数据优先后平台侧报表排在最前，第一个按钮已不再是「每日搜索」。
+    const section = document.getElementById('report-daily-search')
+    expect(section).not.toBeNull()
+    fireEvent.click(
+      within(section as HTMLElement).getByRole('button', { name: '导出 CSV' }),
+    )
 
     await waitFor(() => {
       expect(downloadCsvMock).toHaveBeenCalled()
@@ -783,6 +788,42 @@ describe('报表中心：页内定位与键盘可达性', () => {
     const hrefs = anchors.map((a) => a.getAttribute('href'))
     expect(hrefs).toContain('#report-knowledge-rank')
     expect(hrefs).toContain('#report-daily-search')
+  })
+
+  it('⛔ 平台数据优先：平台侧四张报表排在 RAG（租户语料）侧三张之前', async () => {
+    seedSession()
+    renderPage()
+
+    // 等两侧数据都渲染完再断言，避免异步 setState 落到 act 之外
+    await waitFor(() => {
+      expect(screen.getByText('每日错题分析明细')).toBeInTheDocument()
+      expect(screen.getByText('每日搜索的问题数明细')).toBeInTheDocument()
+    })
+
+    const platformIds = [
+      '#report-daily-weakness',
+      '#report-daily-runs',
+      '#report-knowledge-rank',
+      '#report-daily-students',
+    ]
+    const ragIds = [
+      '#report-daily-search',
+      '#report-daily-import',
+      '#report-rag-corpus',
+    ]
+
+    // ① 页首锚点顺序：平台侧全部在租户语料侧之前
+    const nav = screen.getByRole('group', { name: '报表区块导航' })
+    const hrefs = Array.from(nav.querySelectorAll<HTMLAnchorElement>('a[href^="#"]'))
+      .map((a) => a.getAttribute('href'))
+    expect(Math.max(...platformIds.map((id) => hrefs.indexOf(id)))).toBeLessThan(
+      Math.min(...ragIds.map((id) => hrefs.indexOf(id))),
+    )
+
+    // ② DOM 顺序与锚点一致（只换顺序，不发第二套请求、不删区块）
+    const domIds = Array.from(document.querySelectorAll<HTMLElement>('div[id^="report-"]'))
+      .map((el) => `#${el.id}`)
+    expect(domIds).toEqual(hrefs)
   })
 
   it('⛔ 图表的横向滚动容器必须可聚焦（否则键盘用户滚不动长区间图表）', async () => {

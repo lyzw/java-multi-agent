@@ -212,7 +212,8 @@ export function useRagManagement(): UseRagManagementResult {
   const [statsNonce, setStatsNonce] = useState(0)
   /** 最近一次查询参数：retry 复用，避免把表单状态塞进 effect 依赖 */
   const lastQuery = useRef<RagSourceQuery>({})
-  const lastTarget = useRef<RagTarget>({ scope: 'TENANT', tenantId: '' })
+  /** 平台数据优先：首屏默认档与页面缺省档一致，重试不会偷偷退回租户档。 */
+  const lastTarget = useRef<RagTarget>({ scope: 'PLATFORM' })
 
   useEffect(() => {
     if (listNonce === 0) return

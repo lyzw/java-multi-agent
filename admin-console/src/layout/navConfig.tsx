@@ -175,8 +175,8 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
           '教辅语料治理：登记 → 校验流转 → 可检索。独立 RAG 服务（默认 8081，/api/v1/management/*），'
-          + '作用域由 X-Rag-Scope 显式声明：本租户语料需选租户（读写俱全），'
-          + '平台全局语料不选租户（读走登录态、写需治理票据）。撤回是终态、无删除入口。',
+          + '平台数据优先：首屏默认展示平台全局语料、不选租户（读走登录态、写需治理票据）；'
+          + '切到本租户语料档需选租户（读写俱全）。作用域由 X-Rag-Scope 显式声明。撤回是终态、无删除入口。',
         phase: '知识与数据',
       },
     ],

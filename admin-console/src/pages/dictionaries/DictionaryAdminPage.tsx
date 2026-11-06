@@ -52,16 +52,26 @@ export function DictionaryAdminPage(): JSX.Element {
   const [editingItem, setEditingItem] = useState<DictionaryItem | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  /**
+   * 平台数据优先：`builtIn` 字典是平台内置（由迁移脚本播种、与后端枚举强绑定），
+   * 其余为业务（租户侧）字典。列表与默认选中都先给平台内置项。
+   * ⚠️ 稳定排序：同组内保持后端返回顺序，不打乱既有 sortOrder 语义。
+   */
+  const orderedList = useMemo(
+    () => [...list].sort((a, b) => Number(b.builtIn) - Number(a.builtIn)),
+    [list],
+  )
+
   useEffect(() => {
-    const first = list[0]
+    const first = orderedList[0]
     if (selectedCode === null && first) {
       setSelectedCode(first.dictCode)
     }
-  }, [list, selectedCode])
+  }, [orderedList, selectedCode])
 
   const current = useMemo(
-    () => list.find((d) => d.dictCode === selectedCode) ?? null,
-    [list, selectedCode],
+    () => orderedList.find((d) => d.dictCode === selectedCode) ?? null,
+    [orderedList, selectedCode],
   )
 
   const [dictForm] = Form.useForm()
@@ -281,10 +291,13 @@ export function DictionaryAdminPage(): JSX.Element {
             {/* ⚠️ 左栏是**选择器**不是数据表：用 List 而非 Table —— 表格在窄栏里
                 会把「字典名」压成逐字竖排（实测「Agent 编排模式」竖成 4 行）。
                 List 不设固定列宽，名字与编码各自整行显示，窄栏也读得下去。 */}
+            <Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 8, fontSize: 12 }}>
+              平台内置的字典优先展示并默认选中；业务（租户侧）字典排在其后。
+            </Paragraph>
             <List
               size="small"
               loading={loading}
-              dataSource={list}
+              dataSource={orderedList}
               locale={{ emptyText: emptyTextWhileLoading(loading, '暂无字典') }}
               renderItem={(row) => {
                 const selected = row.dictCode === selectedCode

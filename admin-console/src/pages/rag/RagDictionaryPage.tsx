@@ -64,6 +64,34 @@ interface EntryForm {
 }
 
 /**
+ * 平台数据优先：平台全局项（`PLATFORM`）排在每个字典类型的前面，
+ * 含平台项的类型也排在页签前面；同组内保持后端返回顺序（稳定排序）。
+ *
+ * ⚠️ 只改**展示顺序**，不改可编辑性判定：平台项对租户只读，
+ *    表格里不给它们编辑/删除入口（后端 RLS 不放行 `tenant_id IS NULL`）。
+ */
+function platformFirst(list: RagDictionaryTypeView[]): RagDictionaryTypeView[] {
+  const withOrderedEntries = list.map((t) => ({
+    ...t,
+    entries: [...t.entries].sort(
+      (a, b) => Number(b.scope === 'PLATFORM') - Number(a.scope === 'PLATFORM'),
+    ),
+  }))
+  return withOrderedEntries.sort(
+    (a, b) =>
+      Number(b.entries.some((e) => e.scope === 'PLATFORM')) -
+      Number(a.entries.some((e) => e.scope === 'PLATFORM')),
+  )
+}
+
+/** 作用域列：把枚举值翻成中文并给平台档上色，避免「平台数据优先」只靠排序暗示。 */
+function scopeTag(scope: string): JSX.Element {
+  if (scope === 'PLATFORM') return <Tag color="blue">平台全局</Tag>
+  if (scope === 'TENANT') return <Tag>本租户</Tag>
+  return <Tag>{scope}</Tag>
+}
+
+/**
  * RAG · 字典（RAG-D13 §3.4.1 / RAG-D14 §4.11）
  *
  * ⚠️ 用 `body` 形态：页头「＋ 新增条目」要绑定本页 editable / form / setModalOpen，
@@ -81,7 +109,15 @@ export function RagDictionaryPage(): JSX.Element {
 }
 
 function RagDictionaryBody({ scope }: RagScopePageProps): RagScopeBodyParts {  const { message } = App.useApp()
-  const { target, ready, scopeKey } = scope
+  const { target, ready, scopeKey, scope: corpusScope } = scope
+
+  /**
+   * ⚠️ 字典项写端点走 `requireTenantContext`：**只接受 TENANT 档**（PLATFORM 直接 409），
+   *    与语料来源写（平台档可凭治理票据）不是同一套闸门。
+   *    平台数据优先后首屏默认在平台档，故写入口必须按这个更严的判据收住，
+   *    否则「＋ 新增条目 / 编辑 / 删除」点了必吃 409。
+   */
+  const canWriteTenantEntries = corpusScope === 'TENANT' && ready
 
   const [types, setTypes] = useState<RagDictionaryTypeView[]>([])
   const [loading, setLoading] = useState(false)
@@ -95,8 +131,9 @@ function RagDictionaryBody({ scope }: RagScopePageProps): RagScopeBodyParts {  c
     setLoading(true)
     setError(null)
     try {
-      const list = await getRagDictionaries(target)
+      const list = platformFirst(await getRagDictionaries(target))
       setTypes(list)
+      // 默认落在含平台数据的字典类型（平台数据优先）
       setActiveType((prev) => prev ?? list[0]?.type ?? null)
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : '读取字典失败')
@@ -149,7 +186,7 @@ function RagDictionaryBody({ scope }: RagScopePageProps): RagScopeBodyParts {  c
 
   return {
     extra: (
-editable ? (
+editable && canWriteTenantEntries ? (
           <Button
             type="primary"
             onClick={() => {
@@ -164,6 +201,16 @@ editable ? (
     content: (
       <>
       {error && <Alert type="error" showIcon message={error} />}
+
+      {editable && !canWriteTenantEntries && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="字典项写入只支持「本租户语料」档"
+          description="首屏默认展示平台全局字典（只读）。要新增 / 编辑 / 删除租户私有字典项，请切到「本租户语料」档并选择租户；平台档提交会被后端以 409 拒绝。"
+        />
+      )}
 
       <Card size="small">
         {types.length === 0 && !loading ? (
@@ -215,14 +262,14 @@ editable ? (
                         title: '作用域',
                         dataIndex: 'scope',
                         width: 100,
-                        render: (v: string) => <Tag>{v}</Tag>,
+                        render: (v: string) => scopeTag(v),
                       },
                       {
                         title: '',
                         key: 'actions',
                         width: 120,
                         render: (_, row) =>
-                          t.editable ? (
+                          t.editable && row.scope !== 'PLATFORM' && canWriteTenantEntries ? (
                             <Space size={8}>
                               <a
                                 onClick={() => {
@@ -258,6 +305,9 @@ editable ? (
       </Card>
 
       <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+        平台数据优先：平台全局项排在每类字典前面并默认展示。平台档为只读视图——字典项写入只支持本租户档；平台项本身也不提供编辑 / 删除入口。
+      </Paragraph>
+      <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
         ⚠️ 「出版社 / 学科 / 年级」的取值须落在版本坐标枚举范围内——
         检索期按枚举 displayName 反查，超出范围的值会让该校材的检索失败。
         「版次」无枚举约束，可自由填写。

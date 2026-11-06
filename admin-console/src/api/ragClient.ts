@@ -112,7 +112,7 @@ export interface RagTarget {
   readonly ticket?: RagGovernanceTicket
 }
 
-/** 租户档目标（缺省档，行为与改造前一致）。 */
+/** 租户档目标（页面切换到「本租户语料」档时使用；首屏默认档是平台档）。 */
 export function tenantTarget(tenantId: string): RagTarget {
   return { scope: 'TENANT', tenantId }
 }

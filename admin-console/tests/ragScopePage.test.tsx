@@ -98,15 +98,37 @@ function registerButton(): HTMLButtonElement {
 }
 
 describe('RAG 管理页作用域分段控件', () => {
-  it('✅ 未选租户时（缺省租户档）一条 RAG 请求都不发', async () => {
+  it('✅ 平台数据优先：缺省档就是平台全局档，首屏按 PLATFORM_TARGET 发请求且不要求选租户', async () => {
     render(<RagManagementPage />)
     await waitFor(() => expect(screen.getByText('RAG 语料数据管理')).toBeTruthy())
+    await waitFor(() => expect(listRagSources).toHaveBeenCalled())
+    expect(vi.mocked(listRagSources).mock.calls[0]?.[0]).toEqual(PLATFORM_TARGET)
+    expect(vi.mocked(getRagStatistics).mock.calls[0]?.[0]).toEqual(PLATFORM_TARGET)
+    // 平台档与租户身份互斥：租户选择器禁用，占位文案说明「不属于任何租户」
+    expect(screen.getByText('平台全局语料不属于任何租户')).toBeTruthy()
+  })
+
+  it('✅ 切到本租户档且未选租户时不再发新 RAG 请求（配置问题不伪装成后端故障）', async () => {
+    render(<RagManagementPage />)
+    await waitFor(() => expect(listRagSources).toHaveBeenCalled())
+    vi.mocked(listRagSources).mockClear()
+    vi.mocked(getRagStatistics).mockClear()
+
+    pickScope('本租户语料')
+    await waitFor(() =>
+      expect(screen.getByText(/租户档未选择租户时不会发起任何 RAG 请求/)).toBeTruthy(),
+    )
     expect(listRagSources).not.toHaveBeenCalled()
     expect(getRagStatistics).not.toHaveBeenCalled()
   })
 
-  it('✅ 切到平台全局档：按平台档发请求，且不要求选租户', async () => {
+  it('✅ 从租户档切回平台档：重新按平台档发请求', async () => {
     render(<RagManagementPage />)
+    await waitFor(() => expect(listRagSources).toHaveBeenCalled())
+    pickScope('本租户语料')
+    vi.mocked(listRagSources).mockClear()
+    vi.mocked(getRagStatistics).mockClear()
+
     pickScope('平台全局语料')
     await waitFor(() => expect(listRagSources).toHaveBeenCalled())
     expect(vi.mocked(listRagSources).mock.calls[0]?.[0]).toEqual(PLATFORM_TARGET)
@@ -164,8 +186,12 @@ describe('RAG 管理页作用域分段控件', () => {
     expect(listRagSources).toHaveBeenCalledTimes(1)
   })
 
-  it('✅ 租户档选定租户后按租户目标发请求（与本刀之前一致）', async () => {
+  it('✅ 切到租户档并选定租户后按租户目标发请求（与本刀之前一致）', async () => {
     render(<RagManagementPage />)
+    await waitFor(() => expect(listRagSources).toHaveBeenCalled())
+    pickScope('本租户语料')
+    vi.mocked(listRagSources).mockClear()
+
     fireEvent.mouseDown(screen.getByText('选择租户（本档管理端点要求 X-Tenant-Id）'))
     const option = await screen.findByText('示例租户（demo）')
     fireEvent.click(option)

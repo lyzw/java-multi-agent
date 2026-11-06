@@ -68,8 +68,12 @@ export function RagManagementPage(): JSX.Element {
   const [tenants, setTenants] = useState<PlatformTenant[]>([])
   const [tenantError, setTenantError] = useState<string | null>(null)
   const [tenantId, setTenantId] = useState<string>('')
-  /** 作用域档位（缺省租户档——与本刀之前的行为逐字节一致）。 */
-  const [scope, setScope] = useState<RagCorpusScope>('TENANT')
+  /**
+   * 作用域档位：**缺省平台档**（与 RagScopeShell 保持一致的产品口径：
+   * 同时涉及租户与平台数据的页面一律优先展示平台数据）。
+   * ⚠️ 平台档首屏只读，写入仍需显式领取治理票据；切到租户档未选租户时不发请求。
+   */
+  const [scope, setScope] = useState<RagCorpusScope>('PLATFORM')
   const [selected, setSelected] = useState<RagSource | null>(null)
   const [registerOpen, setRegisterOpen] = useState(false)
   /** 元数据确认抽屉的目标来源（null = 关闭）。 */
@@ -271,12 +275,13 @@ export function RagManagementPage(): JSX.Element {
             value={scope}
             onChange={(v) => setScope(v)}
             options={[
-              { label: '本租户语料', value: 'TENANT' },
+              // ⚠️ 平台数据优先：既作默认档，也排在选项首位。
               {
                 label: '平台全局语料',
                 value: 'PLATFORM',
                 title: '平台维护、全部租户共享的语料（写需先领治理票据）',
               },
+              { label: '本租户语料', value: 'TENANT' },
               {
                 label: '跨租户盘点',
                 value: 'ALL',
@@ -299,6 +304,10 @@ export function RagManagementPage(): JSX.Element {
             }
           />
         </Space>
+        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+          平台数据优先：首屏默认展示「平台全局语料」（只读）；要看某个租户的语料，
+          请切到「本租户语料」档并选择租户。
+        </Paragraph>
         {scope === 'TENANT' && tenantId.trim() === '' && (
           <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
             租户档未选择租户时不会发起任何 RAG 请求，下方相关入口已一并置灰——

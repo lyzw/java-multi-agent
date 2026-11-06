@@ -198,7 +198,15 @@ export function PlatformRequestQueueButton(): JSX.Element {
       ),
     },
     { title: '操作', dataIndex: 'operation', width: 90 },
-    { title: '范围', dataIndex: 'scope', width: 90 },
+    {
+      title: '范围',
+      dataIndex: 'scope',
+      width: 90,
+      // 平台数据优先：把平台级申请标出来，避免与租户级申请在纯文本列里混读。
+      // ⚠️ 队列仍按服务端时间顺序展示（审批队列不能因排序把 PENDING 压到后面）。
+      render: (v: string) =>
+        v === 'PLATFORM' ? <Tag color="blue">平台</Tag> : v === 'TENANT' ? <Tag>租户</Tag> : <Tag>{v}</Tag>,
+    },
     { title: '状态', dataIndex: 'state', width: 100, render: (v: string) => requestStateCell(v) },
     { title: '申请人', dataIndex: 'requesterId', width: 110 },
     { title: '审批人', dataIndex: 'approverId', width: 110, render: (v?: string) => v ?? '-' },

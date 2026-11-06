@@ -99,7 +99,7 @@ beforeEach(() => {
 /* ── 连通性 ──────────────────────────────────────────────── */
 
 describe('可写配置区连通性（FE-D11）', () => {
-  it('F1：P15 调用 listConfigOverrides 并渲染生效值', async () => {
+  it('F1：P15 调用 listConfigOverrides，主值渲染平台声明值', async () => {
     listConfigOverridesMock.mockResolvedValue([
       override('agent.run.max-steps', '20'),
     ])
@@ -109,17 +109,35 @@ describe('可写配置区连通性（FE-D11）', () => {
     await waitFor(() => {
       expect(listConfigOverridesMock).toHaveBeenCalled()
     })
-    expect(await screen.findByTestId('effective-agent.run.max-steps')).toHaveTextContent('20')
+    // 平台数据优先：主值是 yml 声明值；未覆盖时不再重复列一遍生效值。
+    expect(await screen.findByTestId('declared-agent.run.max-steps')).toHaveTextContent('20')
+    expect(screen.queryByTestId('effective-agent.run.max-steps')).toBeNull()
   })
 
-  it('F2 反证：生效值随 mock 变化（非硬编码）', async () => {
+  it('F2 反证：平台声明值随 mock 变化（非硬编码）', async () => {
     listConfigOverridesMock.mockResolvedValue([
       override('agent.run.max-steps', '999'),
     ])
 
     renderPage(<ConfigRuntimePage />)
 
-    expect(await screen.findByTestId('effective-agent.run.max-steps')).toHaveTextContent('999')
+    expect(await screen.findByTestId('declared-agent.run.max-steps')).toHaveTextContent('999')
+  })
+
+  it('F2b：被租户覆盖时，平台声明值为主值、租户生效值为次要对照', async () => {
+    listConfigOverridesMock.mockResolvedValue([
+      override('agent.run.max-steps', '10', 'TIGHTEN', {
+        declaredValue: '20',
+        source: 'db_override',
+      }),
+    ])
+
+    renderPage(<ConfigRuntimePage />)
+
+    const row = await screen.findByTestId('override-row-agent.run.max-steps')
+    expect(within(row).getByTestId('declared-agent.run.max-steps')).toHaveTextContent('20')
+    expect(within(row).getByTestId('effective-agent.run.max-steps')).toHaveTextContent('10')
+    expect(within(row).getByText(/租户生效值/)).toBeTruthy()
   })
 
   it('F3 连通性：提交时调用 applyConfigOverride 并带上 value + reason', async () => {

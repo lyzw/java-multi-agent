@@ -61,7 +61,13 @@ export function ConfigOverrideRow({
   const [reason, setReason] = useState('')
   const [matrix, setMatrix] = useState<Partial<Record<MatrixKey, ApprovalLevel>>>({})
 
+  /** 编辑基线恒为「当前生效值」——收紧校验 / 提交 / 恢复默认都据此，不随展示主次改变。 */
   const current = item.effectiveValue ?? item.declaredValue ?? ''
+  /**
+   * 平台数据优先：把 yml 声明值作为主值展示；租户覆盖后的生效值降为次要对照。
+   * ⚠️ `current` 与 `primary` 刻意分开：前者管编辑行为，后者只管视觉主次。
+   */
+  const primary = item.declaredValue ?? current
   const overridden = item.source === 'db_override'
 
   // 审批矩阵的初始值来自**当前生效值**（可能是 yml 的花括号形态）
@@ -104,10 +110,11 @@ export function ConfigOverrideRow({
         )}
       </th>
       <td>
-        <code data-testid={`effective-${item.key}`}>{current || '—'}</code>
+        {/* 主值 = 平台声明值（yml）；租户未覆盖时它同时也是生效值。 */}
+        <code data-testid={`declared-${item.key}`}>{primary || '—'}</code>
         {item.declaredValue !== null && overridden && (
           <div className="muted">
-            声明值 <code>{item.declaredValue}</code>
+            租户生效值 <code data-testid={`effective-${item.key}`}>{current || '—'}</code>
           </div>
         )}
       </td>
@@ -137,6 +144,13 @@ export function ConfigOverrideRow({
           </div>
         ) : (
           <div className="editor-panel">
+            {/* ⚠️ 展示主次已改为「平台声明值优先」，但编辑基线仍是租户当前生效值：
+                两者不同时必须当场说清，否则用户会以为自己在改上面那个主值。 */}
+            {overridden && item.declaredValue !== null && (
+              <p className="field__hint">
+                编辑基线为租户当前生效值 <code>{current || '—'}</code>；上方平台声明值仅作对照。
+              </p>
+            )}
             {isMatrix ? (
               /* ⛔ FE-CFG-01：只列收紧方向，放宽值不在选项中 */
               <div data-testid={`matrix-editor-${item.key}`}>

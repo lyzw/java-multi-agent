@@ -9,6 +9,8 @@
  *    必含：① 每日搜索的问题数 ② 每日导入 RAG 的资料数 ③ 每日错题分析
  *    常用：④ 每日辅导量与成功率 ⑤ 知识点薄弱排行 ⑥ 每日活跃/新增学生
  *          ⑦ RAG 语料增长与准入率
+ *    ⚠️ 上面的 ①～⑦ 是**需求清单编号**，不是页面展示顺序：按「平台数据优先」
+ *    口径，平台侧四张（必含 ③ + 常用 ④⑤⑥）前移，RAG 侧三张（①②⑦）排在其后。
  *
  * ⚠️ **数据来源是两端**：
  *    平台侧 /api/statistics/daily（辅导量、错题、学生活跃、知识点排行）
@@ -76,14 +78,20 @@ const DAY_OPTIONS = [7, 14, 30, 90] as const
  * ⛔ **不得留下指向不存在 id 的死锚点**：这 9 个区块的 Panel 都是无条件渲染的
  *    （加载中/失败/空态只换内容，不换区块），故锚点恒有落点。
  */
+/**
+ * ⚠️ **平台数据优先**：平台侧 `/api/statistics/daily` 的四张报表排在前面，
+ *    RAG（租户语料）侧三张排在其后；锚点顺序与 DOM 顺序保持一致，
+ *    否则页首导航点了会跳到与列表顺序不同的位置。
+ *    ⚠️ 9 个 id 一个不减（reports.page.test.tsx 守「锚点恒有落点 + 恰好 9 个」）。
+ */
 const SECTION_ANCHORS: { id: string; label: string }[] = [
   { id: 'report-range', label: '统计区间' },
-  { id: 'report-daily-search', label: '每日搜索的问题数' },
-  { id: 'report-daily-import', label: '每日导入 RAG 的资料数' },
   { id: 'report-daily-weakness', label: '每日错题分析' },
   { id: 'report-daily-runs', label: '每日辅导量与成功率' },
   { id: 'report-knowledge-rank', label: '知识点薄弱排行' },
   { id: 'report-daily-students', label: '每日活跃与新增学生' },
+  { id: 'report-daily-search', label: '每日搜索的问题数' },
+  { id: 'report-daily-import', label: '每日导入 RAG 的资料数' },
   { id: 'report-rag-corpus', label: 'RAG 语料增长与准入率' },
   { id: 'report-related', label: '相关页面' },
 ]
@@ -1039,39 +1047,13 @@ export function ReportsPage(): JSX.Element {
         </Panel>
       </div>
 
-      {/* ── 必含报表 ①：每日搜索的问题数 ── */}
-      <div id="report-daily-search">
-        <Panel
-          title="每日搜索的问题数"
-          icon="search"
-          note="按天统计的 RAG 检索次数——检索审计从本次改造起才开始落库。"
-        >
-          <DailySearchReport
-            data={rag.searches?.searchesByDay ?? null}
-            status={rag.status}
-            error={rag.error}
-            onRetry={reload}
-          />
-        </Panel>
-      </div>
+      {/*
+        ⚠️ **平台数据优先**：平台侧 `/api/statistics/daily` 四张报表排在最前，
+        RAG（租户语料）侧三张排在其后。数据与状态完全不变，只换 DOM 顺序，
+        页首锚点表已同步重排（见 SECTION_ANCHORS）。
+      */}
 
-      {/* ── 必含报表 ②：每日导入 RAG 的资料数 ── */}
-      <div id="report-daily-import">
-        <Panel
-          title="每日导入 RAG 的资料数"
-          icon="book"
-          note="资料来源 / 文档载体 / 片段三个层级并列，不做求和。"
-        >
-          <DailyImportReport
-            data={rag.imports?.importsByDay ?? null}
-            status={rag.status}
-            error={rag.error}
-            onRetry={reload}
-          />
-        </Panel>
-      </div>
-
-      {/* ── 必含报表 ③：每日错题分析 ── */}
+      {/* ── 平台侧 · 必含报表 ③：每日错题分析 ── */}
       <div id="report-daily-weakness">
         <Panel
           title="每日错题分析"
@@ -1089,7 +1071,7 @@ export function ReportsPage(): JSX.Element {
         </Panel>
       </div>
 
-      {/* ── 常用报表 ④：每日辅导量与成功率 ── */}
+      {/* ── 平台侧 · 常用报表 ④：每日辅导量与成功率 ── */}
       <div id="report-daily-runs">
         <Panel
           title="每日辅导量与成功率"
@@ -1107,7 +1089,7 @@ export function ReportsPage(): JSX.Element {
         </Panel>
       </div>
 
-      {/* ── 常用报表 ⑤：知识点薄弱排行 ── */}
+      {/* ── 平台侧 · 常用报表 ⑤：知识点薄弱排行 ── */}
       <div id="report-knowledge-rank">
         <Panel
           title="知识点薄弱排行"
@@ -1124,7 +1106,7 @@ export function ReportsPage(): JSX.Element {
         </Panel>
       </div>
 
-      {/* ── 常用报表 ⑥：每日活跃 / 新增学生 ── */}
+      {/* ── 平台侧 · 常用报表 ⑥：每日活跃 / 新增学生 ── */}
       <div id="report-daily-students">
         <Panel
           title="每日活跃与新增学生"
@@ -1142,7 +1124,39 @@ export function ReportsPage(): JSX.Element {
         </Panel>
       </div>
 
-      {/* ── 常用报表 ⑦：RAG 语料增长与准入率 ── */}
+      {/* ── RAG（租户语料）侧 · 必含报表 ①：每日搜索的问题数 ── */}
+      <div id="report-daily-search">
+        <Panel
+          title="每日搜索的问题数"
+          icon="search"
+          note="按天统计的 RAG 检索次数——检索审计从本次改造起才开始落库。"
+        >
+          <DailySearchReport
+            data={rag.searches?.searchesByDay ?? null}
+            status={rag.status}
+            error={rag.error}
+            onRetry={reload}
+          />
+        </Panel>
+      </div>
+
+      {/* ── RAG（租户语料）侧 · 必含报表 ②：每日导入 RAG 的资料数 ── */}
+      <div id="report-daily-import">
+        <Panel
+          title="每日导入 RAG 的资料数"
+          icon="book"
+          note="资料来源 / 文档载体 / 片段三个层级并列，不做求和。"
+        >
+          <DailyImportReport
+            data={rag.imports?.importsByDay ?? null}
+            status={rag.status}
+            error={rag.error}
+            onRetry={reload}
+          />
+        </Panel>
+      </div>
+
+      {/* ── RAG（租户语料）侧 · 常用报表 ⑦：RAG 语料增长与准入率 ── */}
       <div id="report-rag-corpus">
         <Panel
           title="RAG 语料增长与准入率"

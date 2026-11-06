@@ -403,6 +403,10 @@ function WritableConfigTable({
           保存后<b>下一个新建的 Run</b> 会使用新值；已经开始执行的 Run 不受影响
           （配置在 Run 创建时即被快照固化）。
         </p>
+        <p className="muted" style={{ margin: 'var(--s-2) 0 0' }}>
+          平台数据优先：下表主值展示平台声明值（yml）；若该键被租户覆盖，
+          主值下方会并列给出租户当前生效值，调整时仍以生效值为基线。
+        </p>
       </Marked>
 
       {accessDenied ? (
@@ -426,7 +430,7 @@ function WritableConfigTable({
             <thead>
               <tr>
                 <th scope="col">配置项</th>
-                <th scope="col">当前生效值</th>
+                <th scope="col">平台声明值</th>
                 <th scope="col">约束</th>
                 <th scope="col">操作</th>
               </tr>

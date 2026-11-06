@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   Card,
@@ -63,6 +63,19 @@ export function TenantDetailPage(): JSX.Element {
   const [newResource, setNewResource] = useState('')
   const [newScope, setNewScope] = useState('TENANT')
   const [granting, setGranting] = useState(false)
+
+  /**
+   * 平台数据优先：平台作用域的能力授权排在租户作用域之前（稳定排序，
+   * 同组内保持后端返回顺序）。⚠️ 只改展示顺序，不改授权表单的默认写入档位 ——
+   * 平台级授权属带外运维通道，表单默认仍为 TENANT，避免误发平台级授权。
+   */
+  const orderedCaps = useMemo(
+    () =>
+      [...caps].sort(
+        (a, b) => Number(b.scope === 'PLATFORM') - Number(a.scope === 'PLATFORM'),
+      ),
+    [caps],
+  )
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -268,7 +281,7 @@ export function TenantDetailPage(): JSX.Element {
                   <Table<PlatformCapability>
                     rowKey="id"
                     size="small"
-                    dataSource={caps}
+                    dataSource={orderedCaps}
                     pagination={false}
                     locale={{ emptyText: '未授予任何平台能力' }}
                     columns={[
@@ -277,7 +290,13 @@ export function TenantDetailPage(): JSX.Element {
                         dataIndex: 'resourceCode',
                         render: (v: string) => <Typography.Text code>{v}</Typography.Text>,
                       },
-                      { title: '作用域', dataIndex: 'scope', width: 100 },
+                      {
+                        title: '作用域',
+                        dataIndex: 'scope',
+                        width: 100,
+                        render: (v: string) =>
+                          v === 'PLATFORM' ? <Tag color="blue">平台</Tag> : <Tag>租户</Tag>,
+                      },
                       {
                         title: '状态',
                         dataIndex: 'status',

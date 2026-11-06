@@ -122,6 +122,33 @@ describe('RAG 13 页挂载守卫', () => {
   })
 
   /**
+   * ⚠️ **平台数据优先的守卫**：13 个页面共用 RagScopeShell，旧 /rag 单页
+   *    另有一份独立实现。两处缺省档必须一致是 PLATFORM，且选项顺序平台在前；
+   *    否则「同一模块某些页面首屏看租户数据」会悄悄回归。
+   *    用静态体检而不是逐个挂载断言：jsdom 里 antd Segmented 的选中态
+   *    依赖 matchMedia / ResizeObserver，逐个断言既慢又脆。
+   */
+  it('平台数据优先：外壳与旧 /rag 单页的缺省档一致且平台选项排在首位', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const files = [
+      'src/pages/rag/RagScopeShell.tsx',
+      'src/pages/rag/RagManagementPage.tsx',
+    ]
+    for (const file of files) {
+      const src = fs.readFileSync(path.resolve(process.cwd(), file), 'utf8')
+      expect(src, `${file} 缺省档不是平台档`).toMatch(
+        /useState<RagCorpusScope>\('PLATFORM'\)/,
+      )
+      const platformAt = src.indexOf("label: '平台全局语料'")
+      const tenantAt = src.indexOf("label: '本租户语料'")
+      expect(platformAt, `${file} 缺平台档选项`).toBeGreaterThan(-1)
+      expect(tenantAt, `${file} 缺租户档选项`).toBeGreaterThan(-1)
+      expect(platformAt, `${file} 平台档没有排在租户档前面`).toBeLessThan(tenantAt)
+    }
+  })
+
+  /**
    * ⚠️ 这条守的是一类**已经真实发生过两次**的事故：
    *   批量改造时 JSX 表达式丢了花括号，页面把代码当文字渲染出来了：
    *     - `{error && <Alert/>}` → 屏幕上出现「error &&」

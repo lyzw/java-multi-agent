@@ -122,7 +122,7 @@ export function RagLifecyclePanel({ target }: RagLifecyclePanelProps): JSX.Eleme
   }, [load])
 
   if (state.kind === 'idle') {
-    return <Text type="secondary">请先选择租户或切换到平台全局档。</Text>
+    return <Text type="secondary">本租户语料档请先选择租户；默认展示的是平台全局语料。</Text>
   }
   if (state.kind === 'loading') return <Spin />
   if (state.kind === 'error') {

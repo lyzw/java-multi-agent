@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Button,
@@ -55,6 +55,18 @@ export function PublishReleasesPage(): JSX.Element {
     void load()
   }, [load])
 
+  /**
+   * 平台数据优先：`PLATFORM` 发布排在前、`TENANT` 排在后。
+   * ⚠️ 稳定排序：同档内保持服务端返回顺序（发布时间线仍按服务端口径读）。
+   */
+  const orderedItems = useMemo(
+    () =>
+      [...items].sort(
+        (a, b) => Number(b.scope === 'PLATFORM') - Number(a.scope === 'PLATFORM'),
+      ),
+    [items],
+  )
+
   const submitRollback = async (): Promise<void> => {
     if (!target) return
     if (!reason.trim()) {
@@ -97,7 +109,7 @@ export function PublishReleasesPage(): JSX.Element {
         showIcon
         style={{ marginBottom: 16 }}
         message="时间线含已回滚发布（ROLLED_BACK 仅作审计旁路，不参与当前版本解析）"
-        description="回滚只是把指针指向历史 release，历史内容一字不改；也不恢复任何已撤销的主体授权。"
+        description="平台数据优先：平台级发布排在时间线前面，租户级排在其后；同档内仍按服务端返回顺序。回滚只是把指针指向历史 release，历史内容一字不改；也不恢复任何已撤销的主体授权。"
       />
 
       <Card
@@ -112,7 +124,7 @@ export function PublishReleasesPage(): JSX.Element {
         <Table<PublishRelease>
           rowKey="releaseId"
           loading={loading}
-          dataSource={items}
+          dataSource={orderedItems}
           pagination={false}
           locale={{ emptyText: '尚无发布记录' }}
           columns={[
@@ -131,6 +143,13 @@ export function PublishReleasesPage(): JSX.Element {
                 </Space>
               ),
               width: 160,
+            },
+            {
+              title: '范围',
+              dataIndex: 'scope',
+              width: 90,
+              render: (v: PublishRelease['scope']) =>
+                v === 'PLATFORM' ? <Tag color="blue">平台</Tag> : <Tag>租户</Tag>,
             },
             {
               title: '状态',
