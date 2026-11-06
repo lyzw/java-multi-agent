@@ -245,6 +245,23 @@ public class JdbcIngestJobRepository implements IngestJobPort {
             setSql.append(",\n                       chunk_policy_config = ?");
             setArgs.add(chunkPolicyConfig);
         }
+        // ⚠️⚠️ job_id 的占位符在 **WHERE** 段里，而参数是按 SET 段的顺序追加的——
+        //    所以它必须**最后**加。加漏了会在运行期报
+        //    「未设定参数值 N 的内容」（占位符 6 个、参数只给了 5 个），
+        //    而且只在 chunk_policy 两列都非空（premise 模式）时才暴露：
+        //    旧签名（两列都为 null）时占位符 4 个、参数 3 个，同样少一个 ——
+        //    也就是说**这条路径从来没有成功回写过一次**。
+        //    （2026-11-06 灰度实测暴露：972 片段 + 972 向量已落库，
+        //      却在最后一步 markSucceeded 上失败，job 卡在 FAILED。）
+        // ⚠️⚠️ job_id 的占位符在 **WHERE** 段里，而参数是按 SET 段的顺序追加的——
+        //    所以它必须**最后**加。加漏了会在运行期报
+        //    「未设定参数值 N 的内容」（占位符 6 个、参数只给了 5 个），
+        //    而且只在 chunk_policy 两列都非空（premise 模式）时才暴露：
+        //    旧签名（两列都为 null）时占位符 4 个、参数 3 个，同样少一个 ——
+        //    也就是说**这条路径从来没有成功回写过一次**。
+        //    （2026-11-06 灰度实测暴露：972 片段 + 972 向量已落库，
+        //      却在最后一步 markSucceeded 上失败，job 卡在 FAILED。）
+        setArgs.add(jobId);
         String finalSql = setSql + wherePart;
         inTenant(tenantId, () -> jdbcTemplate.update(finalSql, setArgs.toArray()));
     }
@@ -346,6 +363,9 @@ public class JdbcIngestJobRepository implements IngestJobPort {
             setSql.append(",\n                               chunk_policy_config = ?");
             setArgs.add(chunkPolicyConfig);
         }
+        // ⚠️ job_id 的占位符在 WHERE 段，参数按 SET 段顺序追加 → 必须最后加。
+        //    漏加会在运行期报「未设定参数值 N 的内容」（同租户侧 markSucceeded 的同病）。
+        setArgs.add(jobId);
         String finalSql = setSql + wherePart;
         opsSession.inGlobalCorpusSession((opsTemplate, opsTx) -> opsTx.execute(status -> {
             // ⚠️ AND tenant_id = rag_global_tenant_id() 承重（非冗余）：BYPASSRLS 下无 RLS 兜底，
