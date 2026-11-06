@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.multiagent</groupId>
+    <artifactId>java-saas-agent-platform</artifactId>
+    <version>1.0.1-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>agent-persistence</artifactId>
+  <name>agent-persistence :: 数据库访问层（唯一边界）</name>
+  <description>
+    平台唯一的数据库边界模块：数据访问接口的实现、SQL、连接与事务（含 RLS 租户绑定）、
+    数据源/连接池配置、schema 校验脚本，以及全部连库集成测试。
+
+    ⚠️ 本模块是**唯一允许**声明 JDBC/PostgreSQL/Flyway/Hikari 等数据库依赖、
+       唯一允许出现 java.sql.* / org.springframework.jdbc.* / com.zaxxer.hikari.* 的模块。
+       由 DatabaseBoundaryTest 在构建期锁死。
+       业务模块只依赖 agent-ports 的端口契约；组合根（platform-bootstrap）只依赖
+       本模块对外暴露的 Bean，不感知具体持久化实现。
+
+    ⚠️ 兼容性纪律：迁移时刻意**保持全部 Java 包名与类名不变**（仅更换所属 Maven 模块）。
+       因此上层 import、Spring 组件扫描、@Bean 签名、反射配置全部无需改动；
+       将来替换 ORM 插件时，改动收敛在本模块内。
+
+    ⚠️ 依赖方向：本模块 → agent-infrastructure（只复用其非数据库的安全/策略类型），
+       agent-infrastructure **不得**反向依赖本模块，否则形成 Maven 环。
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-ports</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-application</artifactId>
+    </dependency>
+    <!-- 仅复用非数据库的认证/授权策略类型；不得反向依赖本模块。 -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-infrastructure</artifactId>
+    </dependency>
+    <!--
+      记忆的 JDBC 实现（JdbcMemoryRepository / PgVectorAvailability / MemoryConfiguration）
+      迁入本模块后，需要 agent-memory 的 MemoryPort / MemoryEntry 等领域类型。
+      agent-memory 不依赖本模块 —— 单向，无 Maven 环。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-memory</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+    <!-- ↓↓↓ 全平台唯一的数据库依赖声明处 ↓↓↓ -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+    <!-- ↑↑↑ 全平台唯一的数据库依赖声明处 ↑↑↑ -->
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-amqp</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>tools.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+    </dependency>
+    <!-- ADR-011 纪律：注解处理器/静态注解显式声明，不吃传递依赖。 -->
+    <dependency>
+      <groupId>org.jspecify</groupId>
+      <artifactId>jspecify</artifactId>
+      <version>${jspecify.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-test-support</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        IT 造数口径只有一份：FaultInjectionSupport / CapITBase 随连库 IT 一起迁入本模块，
+        产出 test-jar 供 agent-memory 等模块以 test 作用域复用（避免两套租户回收纪律）。
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.5.1</version>
+        <executions>
+          <execution>
+            <id>attach-shared-it-support</id>
+            <goals><goal>test-jar</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

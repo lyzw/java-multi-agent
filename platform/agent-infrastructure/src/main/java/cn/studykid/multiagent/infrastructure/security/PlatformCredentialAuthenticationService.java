@@ -1,5 +1,7 @@
 package cn.studykid.multiagent.infrastructure.security;
 
+import cn.studykid.multiagent.ports.security.PrincipalStore;
+
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Set;
@@ -29,7 +31,7 @@ import cn.studykid.multiagent.ports.security.PlatformPrincipalRepository;
 public class PlatformCredentialAuthenticationService {
 
     private static final String DUMMY_HASH =
-            PrincipalRepository.PasswordHasher.hash("dummy-platform-timing-equalization");
+            PrincipalStore.PasswordHasher.hash("dummy-platform-timing-equalization");
 
     private final PlatformPrincipalRepository users;
     private final PlatformJwtTokenService tokens;
@@ -59,7 +61,7 @@ public class PlatformCredentialAuthenticationService {
 
         // ⚠️ 常量耗时：无论用户是否存在都跑一次校验（假哈希或真实哈希）
         String hash = record == null ? DUMMY_HASH : record.passwordHash();
-        boolean matched = PrincipalRepository.PasswordHasher.verify(password, hash);
+        boolean matched = PrincipalStore.PasswordHasher.verify(password, hash);
 
         // 用户不存在或口令错：统一失败（不区分）
         if (record == null || !matched) {

@@ -11,11 +11,16 @@
   </parent>
 
   <artifactId>agent-infrastructure</artifactId>
-  <name>agent-infrastructure :: 基础设施层</name>
+  <name>agent-infrastructure :: 非数据库基础设施层</name>
   <description>
-    端口实现：PostgreSQL 持久化、Outbox、MQ、对象存储、ModelGateway 适配。
-    ADR-011 注意：Spring Boot 4.x 已模块化为 70+ starter，此处只显式引入所需模块，
-    禁止依赖「统一 classpath 一定包含某类」的隐式假设。
+    端口实现：MQ、HTTP、MCP、ModelGateway、观测与认证/授权策略等技术适配。
+
+    ⚠️ 2026-11-06 数据库层收敛：所有 JDBC 仓储、SQL、连接/事务（含 RLS 绑定）、
+       数据源与连接池配置、连库集成测试，已整体迁入独立模块 agent-persistence。
+       本模块不再声明任何数据库依赖，也不得反向依赖 agent-persistence（否则成环）；
+       由 DatabaseBoundaryTest 在构建期锁死。
+       ADR-011 注意：Spring Boot 4.x 已模块化为 70+ starter，此处只显式引入所需模块，
+       禁止依赖「统一 classpath 一定包含某类」的隐式假设。
   </description>
 
   <dependencies>
@@ -27,88 +32,39 @@
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-application</artifactId>
     </dependency>
-    <!--
-      D2 数据层权限核心领域模型（ScopeFilter / SubjectContext / Action / Decision 等）。
-      迁移方案 12 文 §5：D3 鉴权层（AccessGate / PolicyEngine）直接依赖 D2 领域类型，
-      显式声明而非依赖 agent-application 的传递依赖。
-    -->
+    <!-- D2 数据层权限核心领域模型（ScopeFilter / SubjectContext / Action / Decision 等）。 -->
     <dependency>
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-core</artifactId>
     </dependency>
-    <!--
-      D-001 IAM：JWT 载荷解析。
-      ⚠️ 只用 Map/List 反序列化，不绑定到具体 POJO —— 令牌内容是攻击者可控的，
-      绑定多态类型会带来反序列化 gadget 风险。
-      Jackson 3（tools.jackson），随 Spring Boot 4.1 基线。
-    -->
+    <!-- D-001 IAM：JWT 载荷只反序列化到 Map/List，不绑定 POJO。 -->
     <dependency>
       <groupId>tools.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-jdbc</artifactId>
+      <artifactId>spring-boot-starter</artifactId>
     </dependency>
-    <!--
-      ADR-001：RabbitMQ 4.3.6 + Quorum Queue。
-      Spring Boot 4.1 已自动装配 RabbitMQ 的 Observation 约定（metrics/traces），
-      直接服务 FR-017 可观测性，无需自研指标采集。
-      ⚠️ 禁用内置 @Retryable：与 ModelGateway 自研重试会双重重试（ADR-011 §3.2）。
-    -->
+    <!-- ADR-001：RabbitMQ 4.3.6 + Quorum Queue（非数据库通道）。 -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-amqp</artifactId>
     </dependency>
-    <!-- PostgreSQL 17（DEC-13），支持至 2029-11-08 -->
     <dependency>
-      <groupId>org.postgresql</groupId>
-      <artifactId>postgresql</artifactId>
-    </dependency>
-    <!-- Flyway 12.x（ADR-011 适配项），迁移规范按新版重写 -->
-    <dependency>
-      <groupId>org.flywaydb</groupId>
-      <artifactId>flyway-core</artifactId>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
     </dependency>
     <dependency>
-      <groupId>org.flywaydb</groupId>
-      <artifactId>flyway-database-postgresql</artifactId>
+      <groupId>org.jspecify</groupId>
+      <artifactId>jspecify</artifactId>
+      <version>${jspecify.version}</version>
     </dependency>
-      <!--
-      ⚠️ **test 作用域**：§9 场景注册表与统一四字段断言框架（§9 / §5.1）。
-      单测与 IT 必须引用**同一份**注册表 —— 否则「证据路径」会分裂成两份真相。
-    -->
+    <!-- §9 场景注册表与统一四字段断言框架（单测/IT 共用同一份）。 -->
     <dependency>
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-test-support</artifactId>
       <scope>test</scope>
     </dependency>
-      <!-- Micrometer 指标采集（观测者层） -->
-      <dependency>
-        <groupId>io.micrometer</groupId>
-        <artifactId>micrometer-core</artifactId>
-      </dependency>
-    </dependencies>
-
-  <build>
-    <plugins>
-      <!--
-        ⚠️ 2026-11-06：跨 Run 记忆的连库 IT 已迁到 agent-memory，但仍复用本模块的
-        FaultInjectionSupport（it- 前缀租户供给、受控清理通道、非特权角色守卫）。
-        产出 test-jar 供 agent-memory 以 test 作用域依赖 —— 造数口径保持同一份实现，
-        避免「两套租户回收纪律」各自漂移（见 ItTenantRunReclaimArchitectureTest）。
-      -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-jar-plugin</artifactId>
-        <version>3.5.1</version>
-        <executions>
-          <execution>
-            <id>attach-shared-it-support</id>
-            <goals><goal>test-jar</goal></goals>
-          </execution>
-        </executions>
-      </plugin>
-    </plugins>
-  </build>
+  </dependencies>
 </project>

@@ -1,5 +1,7 @@
 package cn.studykid.multiagent.infrastructure.security;
 
+import cn.studykid.multiagent.ports.security.PrincipalStore;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -25,13 +27,13 @@ public class AuthenticationService {
 
     private static final Logger log = LoggerFactory.getLogger(AuthenticationService.class);
 
-    private final PrincipalRepository principals;
+    private final PrincipalStore principals;
     private final JwtTokenService tokens;
     private final Duration lockDuration;
     private final int maxFailedAttempts;
     private final Set<String> knownRoles;
 
-    public AuthenticationService(PrincipalRepository principals,
+    public AuthenticationService(PrincipalStore principals,
                                  JwtTokenService tokens,
                                  Duration lockDuration,
                                  int maxFailedAttempts,
@@ -81,9 +83,9 @@ public class AuthenticationService {
             return AuthResult.failure();
         }
 
-        Optional<PrincipalRepository.PrincipalRecord> found =
+        Optional<PrincipalStore.PrincipalRecord> found =
                 principals.findByLogin(tenantId, loginName);
-        PrincipalRepository.PrincipalRecord record = found.orElse(null);
+        PrincipalStore.PrincipalRecord record = found.orElse(null);
 
         // ⚠️ 无条件校验：record 为 null 时走 dummy 哈希路径，耗时一致
         boolean passwordOk = principals.verifyPassword(record, rawPassword, now);
@@ -137,7 +139,7 @@ public class AuthenticationService {
      * 若改为信任 JWT 声明，攻击者自签一个带 {@code TENANT_ADMIN}
      * 的令牌即可提权 —— 因为签发能力一旦泄露就等于完全失守。
      */
-    private Set<String> rolesOf(PrincipalRepository.PrincipalRecord record) {
+    private Set<String> rolesOf(PrincipalStore.PrincipalRecord record) {
         return principals.findRoles(record.tenantId(), record.principalId());
     }
 }

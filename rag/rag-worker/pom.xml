@@ -31,6 +31,15 @@
       <groupId>cn.studykid.rag</groupId>
       <artifactId>rag-infrastructure</artifactId>
     </dependency>
+    <!--
+      组合根装配（WorkerInfraConfig / ReindexRunner / GlobalIngestJobConsumer）
+      已迁入数据库边界模块；包名仍是 cn.studykid.rag.worker，
+      @SpringBootApplication(scanBasePackages="cn.studykid.rag.worker") 行为不变。
+    -->
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-persistence</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter</artifactId>

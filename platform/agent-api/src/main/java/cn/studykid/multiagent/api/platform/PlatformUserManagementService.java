@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.api.security.PlatformSecurity;
-import cn.studykid.multiagent.infrastructure.security.PrincipalRepository.PasswordHasher;
+import cn.studykid.multiagent.ports.security.PrincipalStore.PasswordHasher;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort.PlatformAuditEvent;
 import cn.studykid.multiagent.ports.security.Namespaces;

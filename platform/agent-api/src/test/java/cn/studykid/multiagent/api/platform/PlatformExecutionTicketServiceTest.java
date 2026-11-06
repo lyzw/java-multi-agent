@@ -19,7 +19,7 @@ import cn.studykid.multiagent.api.security.PlatformSecurity;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.security.JwtTokenService;
 import cn.studykid.multiagent.infrastructure.security.PlatformAuthorizationServiceImpl;
-import cn.studykid.multiagent.infrastructure.security.PrincipalRepository;
+import cn.studykid.multiagent.ports.security.PrincipalStore;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort.PlatformAuditEvent;
 import cn.studykid.multiagent.ports.persistence.PlatformTenantPort.PlatformTenantRow;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
@@ -342,21 +342,21 @@ class PlatformExecutionTicketServiceTest {
         }
 
         void seedPrincipal(String loginName, String status, Set<String> roles) {
-            principals.put(new PrincipalRepository.PrincipalRecord(
+            principals.put(new PrincipalStore.PrincipalRecord(
                             PRINCIPAL_ID, TENANT_ID, loginName, "$irrelevant$",
                             "实验室账号", status, 0, null, 7L),
                     roles);
         }
     }
 
-    /** 假账号仓储：只实现票证用到的两次查询（按登录名取账号、取角色）。 */
-    private static final class FakePrincipalRepository extends PrincipalRepository {
+    /**
+     * 假账号仓储：只实现票证用到的两次查询（按登录名取账号、取角色）。
+     * ⚠️ 2026-11-06 起实现端口契约而非 JDBC 仓储 —— 接口层测试不应把数据库实现
+     *    拉进 classpath；写路径是空操作，票证用例不覆盖它们。
+     */
+    private static final class FakePrincipalRepository implements PrincipalStore {
         private final java.util.Map<String, PrincipalRecord> byLogin = new java.util.HashMap<>();
         private final java.util.Map<String, Set<String>> rolesByKey = new java.util.HashMap<>();
-
-        FakePrincipalRepository() {
-            super(null);
-        }
 
         void put(PrincipalRecord record, Set<String> roles) {
             byLogin.put(record.tenantId() + "|" + record.loginName(), record);
@@ -371,6 +371,25 @@ class PlatformExecutionTicketServiceTest {
         @Override
         public Set<String> findRoles(String tenantId, String principalId) {
             return rolesByKey.getOrDefault(tenantId + "|" + principalId, Set.of());
+        }
+
+        @Override
+        public boolean verifyPassword(PrincipalRecord record, String rawPassword,
+                                      java.time.Instant now) {
+            return false;
+        }
+
+        @Override
+        public void recordFailure(PrincipalRecord record, java.time.Instant now,
+                                  int maxAttempts, Duration lockDuration) {
+        }
+
+        @Override
+        public void recordSuccess(PrincipalRecord record, java.time.Instant now) {
+        }
+
+        @Override
+        public void revokeAuthorization(PrincipalRecord record, java.time.Instant now) {
         }
     }
 

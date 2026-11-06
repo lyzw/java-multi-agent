@@ -1,5 +1,7 @@
 package cn.studykid.multiagent.infrastructure.security;
 
+import cn.studykid.multiagent.ports.security.PrincipalStore;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -177,7 +179,7 @@ public class InMemoryPlatformPrincipalRepository implements PlatformPrincipalRep
     public static PlatformUserRecord testUser(String id, String username, String rawPassword,
                                               String status, boolean mfaRequired,
                                               long authzVersion) {
-        String hash = PrincipalRepository.PasswordHasher.hash(rawPassword);
+        String hash = PrincipalStore.PasswordHasher.hash(rawPassword);
         return new PlatformUserRecord(id, username, null, username, status,
                 "LOCAL", mfaRequired, authzVersion, Instant.EPOCH, hash,
                 Instant.EPOCH, Instant.EPOCH);

@@ -42,6 +42,11 @@
     <module>rag-premise</module>
     <module>rag-application</module>
     <module>rag-infrastructure</module>
+    <!--
+      ⚠️ 数据库访问层唯一边界：rag-persistence 依赖 rag-infrastructure 的非数据库适配器，
+         故排在其后；management 的领域契约与实现一并迁入其中，故外层模块排在其后。
+    -->
+    <module>rag-persistence</module>
     <module>rag-worker</module>
     <module>rag-api</module>
     <module>rag-management</module>
@@ -81,6 +86,11 @@
       <dependency>
         <groupId>cn.studykid.rag</groupId>
         <artifactId>rag-infrastructure</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.rag</groupId>
+        <artifactId>rag-persistence</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

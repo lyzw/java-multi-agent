@@ -50,6 +50,11 @@
     <module>agent-application</module>
     <module>agent-infrastructure</module>
     <!--
+      ⚠️ 数据库访问层唯一边界：agent-persistence 依赖 agent-infrastructure 的非数据库类型，
+         故排在其后；agent-memory 复用其租户事务连接，故排在其前。
+    -->
+    <module>agent-persistence</module>
+    <!--
       ⚠️ 顺序有意：跨 Run 记忆特性模块复用 infrastructure 的租户事务连接，
          且被 agent-worker 依赖，故夹在两者之间（Maven 也会按依赖拓扑排序）。
     -->
@@ -99,6 +104,11 @@
       <dependency>
         <groupId>cn.studykid.multiagent</groupId>
         <artifactId>agent-infrastructure</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.multiagent</groupId>
+        <artifactId>agent-persistence</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

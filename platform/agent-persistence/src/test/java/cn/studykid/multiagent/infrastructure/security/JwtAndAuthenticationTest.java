@@ -17,8 +17,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
-import cn.studykid.multiagent.infrastructure.security.PrincipalRepository.PasswordHasher;
-import cn.studykid.multiagent.infrastructure.security.PrincipalRepository.PrincipalRecord;
+import cn.studykid.multiagent.ports.security.PrincipalStore.PasswordHasher;
+import cn.studykid.multiagent.ports.security.PrincipalStore.PrincipalRecord;
 
 /**
  * D-001 IAM 认证链测试。

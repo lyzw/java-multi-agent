@@ -74,7 +74,7 @@ class SeedTenantWriteArchitectureTest {
 
     static {
         REVIEWED_WRITERS.put(
-                "agent-infrastructure/src/test/java/cn/studykid/multiagent/infrastructure/persistence/"
+                "agent-persistence/src/test/java/cn/studykid/multiagent/infrastructure/persistence/"
                         + "RetentionErasureIT.java",
                 "G3 清理通道验证：需要真实审计链数据 + 两套凭据（应用池「删不了」/清理池「删得对」），"
                         + "断言与租户归属无关；残留：t-a 上累积 run 行（可删），不影响 worker 领取");

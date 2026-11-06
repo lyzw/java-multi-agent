@@ -39,6 +39,14 @@
       <artifactId>agent-infrastructure</artifactId>
     </dependency>
     <!--
+      数据库实现由唯一边界模块提供：组合根只在此处显式接线，
+      本模块不声明任何 JDBC/ORM 依赖，也不 import 具体 ORM 类。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-persistence</artifactId>
+    </dependency>
+    <!--
       跨 Run 记忆特性模块：组合根必须把它放进运行时 classpath，
       否则 MemoryConfiguration 虽在 scanBasePackages 下却根本加载不到 ——
       症状是「记忆静默关闭、无任何报错」，而 MemoryWiringTest 才会揭穿。

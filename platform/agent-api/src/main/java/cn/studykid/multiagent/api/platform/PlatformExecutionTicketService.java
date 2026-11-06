@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
 import cn.studykid.multiagent.api.security.PlatformSecurity;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.security.JwtTokenService;
-import cn.studykid.multiagent.infrastructure.security.PrincipalRepository;
+import cn.studykid.multiagent.ports.security.PrincipalStore;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort.PlatformAuditEvent;
 import cn.studykid.multiagent.ports.persistence.PlatformTenantPort;
@@ -86,7 +86,7 @@ public class PlatformExecutionTicketService {
     private final PlatformTenantPort tenants;
     private final PlatformSecurity security;
     private final PlatformAuditPort audit;
-    private final PrincipalRepository principals;
+    private final PrincipalStore principals;
     private final JwtTokenService tokens;
     private final RateLimitPort rateLimiter;
     private final boolean enabled;
@@ -96,7 +96,7 @@ public class PlatformExecutionTicketService {
             PlatformTenantPort tenants,
             PlatformSecurity security,
             PlatformAuditPort audit,
-            PrincipalRepository principals,
+            PrincipalStore principals,
             JwtTokenService tokens,
             RateLimitPort rateLimiter,
             @Value("${platform.security.execution-ticket.enabled}") boolean enabled,
@@ -236,13 +236,13 @@ public class PlatformExecutionTicketService {
         }
 
         // 闸门 4b：主体真实存在且 ACTIVE —— 审计与计费归属指向真人
-        Optional<PrincipalRepository.PrincipalRecord> found =
+        Optional<PrincipalStore.PrincipalRecord> found =
                 principals.findByLogin(tenantId, loginName);
         if (found.isEmpty()) {
             throw denyAndReject(principal, tenantId, null, HttpStatus.NOT_FOUND,
                     "PRINCIPAL_NOT_FOUND", "该租户下不存在登录名 " + loginName);
         }
-        PrincipalRepository.PrincipalRecord record = found.get();
+        PrincipalStore.PrincipalRecord record = found.get();
         if (!"ACTIVE".equals(record.status())) {
             throw denyAndReject(principal, tenantId, record.principalId(), HttpStatus.CONFLICT,
                     "PRINCIPAL_NOT_ACTIVE",

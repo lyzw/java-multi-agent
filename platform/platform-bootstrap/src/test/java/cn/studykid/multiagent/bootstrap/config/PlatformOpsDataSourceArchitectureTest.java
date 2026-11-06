@@ -55,9 +55,9 @@ class PlatformOpsDataSourceArchitectureTest {
      * </ul>
      */
     private static final Set<String> PROVIDER_HOLDERS = Set.of(
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/PlatformOpsDataSourceProvider.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcPlatformOpsConfigPublishTransaction.java",
-            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/PlatformOpsDataSourceConfiguration.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/PlatformOpsDataSourceProvider.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcPlatformOpsConfigPublishTransaction.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/bootstrap/config/PlatformOpsDataSourceConfiguration.java",
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ApplicationConfiguration.java",
             // ⚠️ 平台身份域的第二条显式登记消费路径（2026-11-01）：
             //    JdbcPlatformPrincipalRepository（平台登录查 platform_user/role）与
@@ -71,8 +71,8 @@ class PlatformOpsDataSourceArchitectureTest {
 
     /** 受会话守卫的数据源的合法引用方（只有持有者能构造它）。 */
     private static final Set<String> GUARD_HOLDERS = Set.of(
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/PlatformOpsDataSourceProvider.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/GuardedPlatformOpsDataSource.java");
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/PlatformOpsDataSourceProvider.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/GuardedPlatformOpsDataSource.java");
 
     /** 运维发布入口的合法引用方（声明 + 唯一装配点）。 */
     private static final Set<String> SERVICE_HOLDERS = Set.of(
@@ -80,7 +80,7 @@ class PlatformOpsDataSourceArchitectureTest {
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ApplicationConfiguration.java");
 
     /** 应用角色的发布事务：<b>不得</b>引用运维凭据。 */
-    private static final String APP_TX = "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigPublishTransaction.java";
+    private static final String APP_TX = "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigPublishTransaction.java";
 
     // ── 用例 ──────────────────────────────────────────────────────
 
@@ -171,9 +171,12 @@ class PlatformOpsDataSourceArchitectureTest {
                 continue;
             }
             String rel = relative(file);
-            // ⚠️ 装配层是唯一允许自建连接池的地方（运维池）；
-            //    其余业务模块不得自建池，以免绕过运维通道的会话守卫。
-            if (!rel.startsWith("platform-bootstrap/")) {
+            // ⚠️ 只允许两处自建连接池：组合根（保留期/运维池）与数据库边界模块
+            //    agent-persistence（2026-11-06 收敛后，HikariDataSource 的构造随
+            //    数据源配置一并迁入该模块）。其余业务模块不得自建池，
+            //    以免绕过运维通道的会话守卫。
+            if (!rel.startsWith("platform-bootstrap/")
+                    && !rel.startsWith("agent-persistence/")) {
                 violations.add(rel);
             }
         }

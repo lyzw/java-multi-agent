@@ -41,7 +41,7 @@ class AuthzDecisionLogSchemaTest {
     private static final String TABLE = "platform.authz_decision_log";
 
     private static final Path RECORDER = repoRoot()
-            .resolve("platform/agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/security/JdbcAuthzDecisionLog.java");
+            .resolve("platform/agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/security/JdbcAuthzDecisionLog.java");
 
     private static final Path GRANTS = repoRoot().resolve("deploy/sql/platform/03_platform_roles.sql");
 

@@ -11,8 +11,12 @@
   </parent>
 
   <artifactId>rag-infrastructure</artifactId>
-  <name>rag-infrastructure :: 基础设施层</name>
-  <description>pgvector 索引、文档解析、嵌入/重排适配器、PostgreSQL 持久化</description>
+  <name>rag-infrastructure :: 非数据库基础设施层</name>
+  <description>
+    文档解析 / 版面还原、嵌入适配器、分词、前提后端、本地端口装配。
+    ⚠️ 全部 JDBC 仓储、数据源、租户会话与 Flyway 配置已迁入 rag-persistence；
+       本模块不得再声明数据库依赖，也不得反向依赖 rag-persistence（否则 Maven 成环）。
+  </description>
 
   <dependencies>
     <dependency>
@@ -35,26 +39,18 @@
       <groupId>cn.studykid.rag</groupId>
       <artifactId>rag-premise</artifactId>
     </dependency>
+    <!--
+      @Configuration/@Bean/@Value 与 slf4j 原先由 spring-boot-starter-jdbc 传递带入；
+      JDBC 迁走后改为显式声明，避免吃隐式 classpath（ADR-011 纪律）。
+    -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-jdbc</artifactId>
+      <artifactId>spring-boot-starter</artifactId>
     </dependency>
     <!-- 嵌入适配器解析 OpenAI 兼容 /embeddings 响应（Jackson 3，版本由 Boot BOM 管理） -->
     <dependency>
       <groupId>tools.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.postgresql</groupId>
-      <artifactId>postgresql</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.flywaydb</groupId>
-      <artifactId>flyway-core</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.flywaydb</groupId>
-      <artifactId>flyway-database-postgresql</artifactId>
     </dependency>
   </dependencies>
 </project>

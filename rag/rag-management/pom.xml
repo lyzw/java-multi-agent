@@ -11,17 +11,22 @@
   </parent>
 
   <artifactId>rag-management</artifactId>
-  <name>rag-management :: 语料数据管理</name>
-  <description>语料来源登记、校验状态机、文档/片段管理、索引统计的管理面模块</description>
+  <name>rag-management :: 语料数据管理（HTTP 适配层）</name>
+  <description>
+    管理面 REST 端点与异常处理。领域契约（management.core / management.ports）、
+    JDBC 仓储与装配（management.infrastructure）已随数据库层一并迁入 rag-persistence，
+    Java 包名与类名全部保持不变；本模块不再含任何 JDBC / 数据库依赖。
+  </description>
 
   <!--
     ⚠️ 分层与依赖方向（与 rag/ 其余模块同构，依赖只能向内）：
       rag-core / rag-ports  ← 领域与端口（零框架依赖）
       rag-application          ← 用例
-      rag-infrastructure       ← JDBC 适配器
-      rag-management（本模块）← 管理面用例 + 管理 REST 端点 + 装配
+      rag-infrastructure       ← 非数据库适配器（解析/嵌入/分词）
+      rag-persistence          ← 数据库唯一边界（含管理面领域契约与 JDBC 实现）
+      rag-management（本模块）← 管理 REST 端点（外层适配层，允许接线依赖 persistence）
 
-    本模块<b>不</b>依赖 rag-api：管理端点是独立的一组 REST 契约，
+    本模块不依赖 rag-api：管理端点是独立的一组 REST 契约，
     与检索端点（/api/v1/retrieval）职责不同、演进节奏不同，
     合并会让检索面被管理面的变更牵动。
   -->
@@ -34,9 +39,10 @@
       <groupId>cn.studykid.rag</groupId>
       <artifactId>rag-ports</artifactId>
     </dependency>
+    <!-- 管理面领域类型、端口与 JDBC 实现现在由数据库边界模块提供（FQN 不变）。 -->
     <dependency>
       <groupId>cn.studykid.rag</groupId>
-      <artifactId>rag-infrastructure</artifactId>
+      <artifactId>rag-persistence</artifactId>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -45,10 +51,6 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-validation</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-jdbc</artifactId>
     </dependency>
   </dependencies>
 </project>

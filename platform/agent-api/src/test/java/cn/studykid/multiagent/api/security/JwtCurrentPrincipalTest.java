@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.security.AuthenticationService;
 import cn.studykid.multiagent.infrastructure.security.JwtTokenService;
-import cn.studykid.multiagent.infrastructure.security.PrincipalRepository;
+import cn.studykid.multiagent.ports.security.PrincipalStore;
 
 /**
  * 认证信任链测试（D-001 API 层）。
@@ -46,7 +46,7 @@ class JwtCurrentPrincipalTest {
         tokens = new JwtTokenService(keyPair.getPrivate(), keyPair.getPublic(),
                 "https://auth.studykid.cn", "agent-platform", Duration.ofMinutes(15), "k1");
         auth = new AuthenticationService(
-                new PrincipalRepository(null), tokens,
+                new NoopPrincipalStore(), tokens,
                 Duration.ofMinutes(15), 5, ROLES);
     }
 
@@ -184,5 +184,37 @@ class JwtCurrentPrincipalTest {
                 .map(Field::getType))
                 .noneMatch(t -> t.getName().contains("Tenant"))
                 .as("不得静态缓存 TenantContext —— 跨请求复用会导致租户串号");
+    }
+
+    /** 令牌解析用例不需要账号仓储：给一个不查库、不写库的端口空实现。 */
+    private static final class NoopPrincipalStore implements PrincipalStore {
+        @Override
+        public java.util.Optional<PrincipalRecord> findByLogin(String tenantId, String loginName) {
+            return java.util.Optional.empty();
+        }
+
+        @Override
+        public boolean verifyPassword(PrincipalRecord record, String rawPassword,
+                                      java.time.Instant now) {
+            return false;
+        }
+
+        @Override
+        public void recordFailure(PrincipalRecord record, java.time.Instant now,
+                                  int maxAttempts, java.time.Duration lockDuration) {
+        }
+
+        @Override
+        public void recordSuccess(PrincipalRecord record, java.time.Instant now) {
+        }
+
+        @Override
+        public void revokeAuthorization(PrincipalRecord record, java.time.Instant now) {
+        }
+
+        @Override
+        public java.util.Set<String> findRoles(String tenantId, String principalId) {
+            return java.util.Set.of();
+        }
     }
 }

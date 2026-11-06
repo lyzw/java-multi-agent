@@ -22,5 +22,11 @@
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-core</artifactId>
     </dependency>
+    <!-- PrincipalStore 的 @Nullable 契约：显式声明，不吃传递依赖。 -->
+    <dependency>
+      <groupId>org.jspecify</groupId>
+      <artifactId>jspecify</artifactId>
+      <version>${jspecify.version}</version>
+    </dependency>
   </dependencies>
 </project>

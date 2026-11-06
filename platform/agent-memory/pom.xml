@@ -11,17 +11,17 @@
   </parent>
 
   <artifactId>agent-memory</artifactId>
-  <name>agent-memory :: 跨 Run 记忆特性模块</name>
+  <name>agent-memory :: 跨 Run 记忆特性模块（纯领域层）</name>
   <description>
-    跨 Run 记忆的完整纵切：领域模型（强度衰减）、端口、召回/整合策略、
-    PostgreSQL 持久化与 Spring 装配。2026-11-06 从 agent-core / agent-ports /
-    agent-application / agent-infrastructure / platform-bootstrap 五处收敛到本模块，
-    后续记忆相关改动只需在本模块内进行。
+    跨 Run 记忆的领域纵切：领域模型（强度衰减）、端口、召回/整合策略。
+    2026-11-06 首次从五个模块收敛到本模块；同日数据库层二次收敛后，
+    JdbcMemoryRepository / PgVectorAvailability / MemoryConfiguration 与连库 IT
+    一并迁入 agent-persistence —— 本模块不再含任何 JDBC / 数据库依赖。
 
-    ⚠️ 依赖方向：本模块位于 agent-infrastructure 之上（复用租户事务连接），
-       只能被 agent-worker / platform-bootstrap 这类外层模块依赖；
+    ⚠️ 依赖方向：agent-memory 只依赖 agent-core / agent-ports / agent-application；
+       agent-persistence 反向依赖本模块取得 MemoryPort 等领域类型（单向，无环）。
        agent-core / agent-ports / agent-application / agent-infrastructure
-       不得反向依赖本模块，否则形成环。由 MemoryModuleBoundaryTest 锁死。
+       不得反向依赖本模块。由 MemoryModuleBoundaryTest + DatabaseBoundaryTest 锁死。
   </description>
 
   <dependencies>
@@ -38,20 +38,11 @@
     <!--
       PromptGuard 的记忆围栏常量与 sanitize：属于通用提示词安全护栏，
       刻意不搬进本模块 —— 否则 agent-application 需反向依赖本模块，
-      而本模块又经 agent-infrastructure 间接依赖 application，必然成环。
+      而本模块又依赖 application，必然成环。
     -->
     <dependency>
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-application</artifactId>
-    </dependency>
-    <!--
-      ⚠️ JdbcMemoryRepository 必须复用 TransactionalConnectionHolder /
-      TenantConnectionLease 的租户事务边界（RLS 铁律：set_config 必须在事务内，
-      Repository 绝不 commit）。自造一份连接管理等于绕过 RLS 而不报错。
-    -->
-    <dependency>
-      <groupId>cn.studykid.multiagent</groupId>
-      <artifactId>agent-infrastructure</artifactId>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -63,31 +54,9 @@
       <artifactId>jspecify</artifactId>
       <version>${jspecify.version}</version>
     </dependency>
-
-    <!--
-      ⚠️ test-jar：MemoryRecallIT / PgVectorAvailabilityTest 迁到本模块后，
-      仍需复用 agent-infrastructure 的连库测试支撑 FaultInjectionSupport
-      （it- 前缀租户供给、受控清理通道、非特权角色守卫）。
-      刻意不在本模块复制一份 —— 造数口径必须与其它 IT 是同一份实现，
-      否则租户回收纪律会分裂成两套真相。
-    -->
-    <!--
-      ⚠️ 连库 IT 的租户供给契约：FaultInjectionSupport.itTenant 内部调
-      ItTenantProvisioner.provision(adminPool, slug) 造 it- 前缀租户。
-      test 作用域依赖**不传递**，故这里必须显式声明 —— 否则运行期
-      NoClassDefFoundError: ItTenantProvisioner（编译期看不出来）。
-    -->
     <dependency>
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-test-support</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>cn.studykid.multiagent</groupId>
-      <artifactId>agent-infrastructure</artifactId>
-      <!-- ⚠️ type=test-jar 不命中 dependencyManagement 中的普通 jar 条目，版本必须显式给出。 -->
-      <version>${project.version}</version>
-      <type>test-jar</type>
       <scope>test</scope>
     </dependency>
   </dependencies>

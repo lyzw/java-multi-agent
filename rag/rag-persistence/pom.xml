@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.rag</groupId>
+    <artifactId>java-saas-rag</artifactId>
+    <version>1.0.1-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>rag-persistence</artifactId>
+  <name>rag-persistence :: 数据库访问层（唯一边界）</name>
+  <description>
+    RAG 子系统唯一的数据库边界模块：JDBC 仓储实现、租户会话 / 事务（set_config）、
+    运维连接池（BYPASSRLS 通道）、数据源与 Flyway 配置、启动自检 SQL，以及连库 IT。
+
+    ⚠️ 本模块是 rag reactor 中唯一允许声明 JDBC/PostgreSQL/Flyway/Hikari 依赖、
+       唯一允许出现 java.sql.* / javax.sql.* / org.springframework.jdbc.* /
+       com.zaxxer.hikari.* 的模块，由 RagDatabaseBoundaryTest 在构建期锁死。
+
+    ⚠️ 兼容性纪律：迁移时刻意保持全部 Java 包名与类名不变（仅更换所属 Maven 模块）。
+       因此上层 import、Spring 组件扫描（cn.studykid.rag.bootstrap / worker /
+       management / infrastructure）、@Bean 签名、反射配置全部无需改动；
+       将来替换 ORM 插件时，改动收敛在本模块内。
+
+    ⚠️ 依赖方向：本模块 → rag-infrastructure（只复用嵌入/解析/分词等非数据库适配器）。
+       rag-infrastructure 不得反向依赖本模块，否则形成 Maven 环。
+       management 的 core/ports 契约随实现一同迁入本模块，是为了避免
+       「rag-persistence ← rag-management ← rag-persistence」双向依赖，
+       同时保持全部 FQN 不变；rag-management 仅保留 HTTP api 外壳。
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-ports</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-premise</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-application</artifactId>
+    </dependency>
+    <!-- 仅复用非数据库的嵌入/解析/分词适配器；不得反向依赖本模块。 -->
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-infrastructure</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+    <!--
+      ⚠️ 迁移前既有耦合（非本次引入）：JdbcCorpusManagementRepository 在两处
+      直接抛 ResponseStatusException / 用 HttpStatus 表达 404 与 500。
+      为保证「行为与 HTTP 状态映射完全不变」，这里只补 spring-web 库本身
+      （不引 starter-web / 不启 Web 容器）；原 rag-management 已依赖 starter-web。
+      后续若把仓储异常改成领域异常，可连同本依赖一起删除。
+    -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-web</artifactId>
+    </dependency>
+    <!-- ↓↓↓ 全 RAG reactor 唯一的数据库依赖声明处 ↓↓↓ -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-flyway</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+    <!-- ↑↑↑ 全 RAG reactor 唯一的数据库依赖声明处 ↑↑↑ -->
+  </dependencies>
+</project>

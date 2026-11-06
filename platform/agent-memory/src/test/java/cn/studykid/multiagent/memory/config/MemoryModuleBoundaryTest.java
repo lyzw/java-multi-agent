@@ -53,6 +53,14 @@ class MemoryModuleBoundaryTest {
                     + "PgVectorAvailability|MemoryConfiguration)\\b",
             Pattern.MULTILINE);
 
+    /**
+     * 2026-11-06 数据库层二次收敛：这三类是<b>持久化实现/装配</b>，
+     * 已随 JdbcMemoryRepository 一起迁入唯一数据库模块 agent-persistence。
+     * 领域类型（MemoryEntry / MemoryPort / MemoryRecallService …）仍只允许在 agent-memory 声明。
+     */
+    private static final Set<String> PERSISTENCE_TYPES = Set.of(
+            "JdbcMemoryRepository", "PgVectorAvailability", "MemoryConfiguration");
+
     private static final Pattern DEPENDENCY_BLOCK =
             Pattern.compile("<dependency>(.*?)</dependency>", Pattern.DOTALL);
     private static final Pattern ARTIFACT = Pattern.compile("<artifactId>(.*?)</artifactId>");
@@ -113,7 +121,11 @@ class MemoryModuleBoundaryTest {
                         scanned[1]++;
                         Matcher matcher = MEMORY_TYPE_DECLARATION.matcher(read(file));
                         while (matcher.find()) {
-                            violations.add(name + ": " + matcher.group(1)
+                            String type = matcher.group(1);
+                            if ("agent-persistence".equals(name) && PERSISTENCE_TYPES.contains(type)) {
+                                continue;
+                            }
+                            violations.add(name + ": " + type
                                     + " (" + root.relativize(file) + ")");
                         }
                     }

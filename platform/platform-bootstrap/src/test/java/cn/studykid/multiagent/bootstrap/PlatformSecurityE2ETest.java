@@ -35,9 +35,8 @@ import cn.studykid.multiagent.core.compliance.ZeroRetentionRegistry;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.security.AuthenticationService;
 import cn.studykid.multiagent.infrastructure.security.JwtTokenService;
-import cn.studykid.multiagent.infrastructure.security.PrincipalRepository;
-import cn.studykid.multiagent.infrastructure.security.PrincipalRepository.PasswordHasher;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
+import cn.studykid.multiagent.ports.security.PrincipalStore.PasswordHasher;
 
 /**
  * D-001 端到端验证（真实 HTTP + 真实过滤链 + 真实 PostgreSQL）。

@@ -53,18 +53,18 @@ class ScopeBypassArchitectureTest {
      * 否则影子比对永远不跑，P1 的 `AUTHZ_MISMATCH=0` 毫无信息量。
      */
     private static final Set<String> INTEGRATED = Set.of(
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAgentMetricRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAgentQueryRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcBudgetRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcResultQueryRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcAuthzVersionRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapAgentChildRefRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapAgentDefRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapMcpServerDefRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapSkillDefRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapToolDefRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigReleaseRepository.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcDelegationBudgetRepository.java");
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAgentMetricRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAgentQueryRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcBudgetRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcResultQueryRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcAuthzVersionRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapAgentChildRefRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapAgentDefRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapMcpServerDefRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapSkillDefRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapToolDefRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigReleaseRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcDelegationBudgetRepository.java");
 
     /** 影子钩子的调用形态（静态入口，避免逐仓重复实现）。 */
     private static final Pattern HOOK_CALL =
@@ -252,15 +252,18 @@ class ScopeBypassArchitectureTest {
      */
     private static final Set<String> NON_REPO_SURFACES = Set.of(
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/security/DefaultAccessGate.java",
-            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/security/AuthzShadowHooks.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/security/AuthzShadowHooks.java",
             // P1 影子的装配层：构造 ScopedDataAccess 并交给各仓库，
             // 自身不查询任何业务表（装配 ≠ 数据访问面）。
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/AuthzShadowConfiguration.java");
 
     /** 鉴权层自身（接缝与门禁实现），不属于数据访问面。 */
     private static boolean isScopeInfrastructure(String rel) {
-        return rel.startsWith(
-                "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/security/")
+        // 2026-11-06 数据库层收敛：影子鉴权接缝的一部分随 JDBC 仓储迁入
+        // agent-persistence，两个模块的 security 包同属「非数据访问面」。
+        String securityPackage = "src/main/java/cn/studykid/multiagent/infrastructure/security/";
+        return (rel.startsWith("agent-infrastructure/" + securityPackage)
+                    || rel.startsWith("agent-persistence/" + securityPackage))
                 && !rel.endsWith("Test.java")
                 && (rel.endsWith("AccessGate.java")
                     || rel.endsWith("ScopedDataAccess.java")
