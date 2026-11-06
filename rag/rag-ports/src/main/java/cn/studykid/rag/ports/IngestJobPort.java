@@ -100,6 +100,35 @@ public interface IngestJobPort {
                        @NonNull String parserVersion, @NonNull String embedModel);
 
     /**
+     * 标记成功<b>并回写切分留痕</b>（RAG-D26 阶段 3.2）。
+     *
+     * <p>⚠️ 本重载是 {@link #markSucceeded} 的<b>契约补齐</b>，不是新能力：
+     * 此前实现层（{@code JdbcIngestJobRepository}）与调用层（{@code IngestJobOrchestrator}）
+     * 都已按 7 参签名落地（实现还带着 {@code @Override}），唯独<b>接口没声明这个重载</b>——
+     * 于是 {@code mvn compile} 在 rag-application 报 2 个错，其后 5 个模块全部 SKIPPED。
+     *
+     * <p>做成 {@code default} 委托旧签名：既有实现与测试桩<b>零改动</b>即可编译，
+     * 只有显式实现留痕的类（如 JDBC 实现）才需要覆盖它。
+     *
+     * <p>⚠️ null 语义：{@code chunkPolicy} / {@code chunkPolicyConfig} 为 null 表示
+     * <b>「未采集」</b>（旧内置切分），实现层据此<b>不写该列</b>——
+     * 「未采集」与「空串」是两件事（同 {@code 10_v1_0_3} 版面事实的口径）。
+     *
+     * @param tenantId 租户 ID
+     * @param jobId 任务 ID
+     * @param chunkCount 产出片段数
+     * @param parserVersion 解析器版本
+     * @param embedModel 嵌入模型标识
+     * @param chunkPolicy 切分策略（可空 = 未采集）
+     * @param chunkPolicyConfig 切分参数（可空 = 未采集）
+     */
+    default void markSucceeded(@NonNull String tenantId, @NonNull String jobId, int chunkCount,
+                                @NonNull String parserVersion, @NonNull String embedModel,
+                                @Nullable String chunkPolicy, @Nullable String chunkPolicyConfig) {
+        markSucceeded(tenantId, jobId, chunkCount, parserVersion, embedModel);
+    }
+
+    /**
      * 标记失败（{@code error_detail} 必填）。
      *
      * <p>⚠️ 同 {@link #updateStage}：必须带租户会话，否则**失败原因写不进去**
