@@ -57,6 +57,13 @@ class ScopeBypassArchitectureTest {
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAgentQueryRepository.java",
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcBudgetRepository.java",
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcResultQueryRepository.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcAuthzVersionRepository.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapAgentChildRefRepository.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapAgentDefRepository.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapMcpServerDefRepository.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapSkillDefRepository.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapToolDefRepository.java",
+            "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigReleaseRepository.java",
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcDelegationBudgetRepository.java");
 
     /** 影子钩子的调用形态（静态入口，避免逐仓重复实现）。 */
