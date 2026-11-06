@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.rag</groupId>
+    <artifactId>java-saas-rag</artifactId>
+    <version>1.0.1-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>rag-premise</artifactId>
+  <name>rag-premise :: 物料前期处理</name>
+  <description>
+    RAG 物料前期处理模块（RAG-D26）：解析后端抽象（Docling 已接入，MinerU / PP-StructureV3 预留）
+    与切分器抽象（标题层级分块已接入，HybridChunker 桥预留）。
+    仅依赖 rag-core / rag-ports / JSpecify，不依赖 Spring 与 Jackson。
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.studykid.rag</groupId>
+      <artifactId>rag-ports</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.jspecify</groupId>
+      <artifactId>jspecify</artifactId>
+      <version>${jspecify.version}</version>
+    </dependency>
+  </dependencies>
+</project>
