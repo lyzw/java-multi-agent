@@ -20,7 +20,11 @@
 >   - 教训形态与本项目此前四次「假绿」同源：**调用方与实现方都写完了，唯独契约没写**，于是「谁在调」看起来是通的（IDE 跳转能跳到实现），但编译器第一个拦住的偏偏是契约缺声明。契约层的重载/新增必须在**实现与调用同一次改动里**落地，不能拆成两批。
 > - ✅ 阶段 4（部分，清理项）：**共享判定去重**——`DoclingResponseMapper` 的题号/答案区标题/页眉剥除/噪声标题/推进闸/答案区状态机/页眉阈值全部改为委托 `LayoutPredicates`（单份规则双 mapper 共用）；`LayoutPredicatesParityTest` 锁定 premise/infrastructure 两侧判定同源，**并抓出一个真实取严缺口**：`Answer Key` 等答案区标题短语不满足冒号前缀正则 → 已补入 `SOLUTION_PREFIX`（merge_peers 把答案区标题合进 chunk 块首时不再漏判）；`IngestInvariantEvidenceTest` 对照组探针相应调整（原探针文本恰为取严短语，改用不含短语的对照）；
 > - ⬜ 阶段 3.3~3.4：灰度开册 / 对比评测（运维动作：`RAG_PREMISE_ENABLED=true` + 先跑 13 号 SQL）；阶段 4 余项（占位解析器定位收窄文案、删除 `LocalDeterministicDocumentParserPort` 于生产装配的可达性）。
+> - 🔄 **阶段 3.3 灰度开册（2026-11-06，本地演练）**：`13_v1_0_4` 已先在本地 `ragdb` 执行（幂等复跑通过），随后以 `RAG_PREMISE_ENABLED=true` + `chunk-policy=heading` + `parse-backend=docling` 起 `rag-worker`，对**真实 162 页沪教版英语教材**（`corpus-bucket` 内既有语料）跑整册摄取。
+>   - ⚠️ **首轮实测抓出一个从未暴露过的留痕回写缺陷**：解析 → 切分 → 嵌入 → 落库全部成功（**972 片段 + 972 向量入库**），却在最后一步 `markSucceeded` 报「未设定参数值 6 的内容」→ job 卡在 FAILED。根因是动态 SET 拼 SQL 时 **`job_id` 的占位符在 WHERE 段、参数却按 SET 段顺序追加**，漏绑了 jobId —— 且旧签名（两列都为 null）下同样少一个，说明**这条回写路径从来没成功过一次**。已修复并补 5 例参数绑定回归测试（详见 `f932327`）。
+>   - ⚠️ 演练环境的三处口径差异（本地库与生产不同，按需对齐）：① 嵌入维度 —— 本地 Ollama 的 `qwen3-embedding:8b` 返回 **4096** 维，而 `halfvec(4096)` 列正好匹配（此前误配 1024 → 维度守卫 fail-closed 拦下）；② 蕴含端口仍是词法占位，`LocalPortGate` 按设计**拒绝启动**，本地演练需显式 `RAG_LOCAL_PORTS_ENABLED=true`（启动横幅以 ERROR 级记录，不静默）；③ `rag_edition.publisher` 必须取**版本体系名**（沪教版），不是出版机构名（上海教育出版社）—— 写错会让该书的任何一次检索 500（`SourceRegistration.normalizedEditionPublisher` 的注释已警告）。
 > - **端到端实测记录（2026-11-06）**：真实 162 页英语教材 PDF，MinerU flash 档解析 189 秒 → 3099 块（318 标题 / 1605 段落 / 60 表格 / 370 图 / 746 噪声）→ heading 切分 2042 片段（9 处超长拆分）→ **泄题闸门 leak=0**；留痕 `mineru/4.1.7`。分块桥实测：同一教材 DoclingDocument → 6.4 秒 → 444 chunks。
+>   - **Docling 后端本地实测**（本轮）：162 页教材按「每段 20 页 / 共 9 段」解析约 8 分钟 → heading 切分 **972 片段** → 4096 维嵌入 972 条全部入库。解析耗时约为 MinerU（189 秒）的 2.5 倍 —— 灰度选型时这是必须计入的成本差。
 
 ---
 
