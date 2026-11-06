@@ -168,6 +168,30 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
 
     @Override
     public @NonNull ParsedDocument parse(@NonNull String documentId, @NonNull byte[] content) {
+        return parseWithRaw(documentId, content).parsed();
+    }
+
+    /**
+     * 解析并<b>同时返回原始响应</b>（RAG-D26 §2.4 数据流约束①的落点）。
+     *
+     * <p>⚠️ 为什么需要它：分块桥（HybridChunker）必须复用<b>解析阶段</b>的
+     * DoclingDocument JSON——二次解析会让 chunk 的 {@code item_refs}
+     * 与块对不上，角色回填必然错位。本方法让「一次 HTTP 往返同时产出
+     * 块序列与可复用的原始 JSON」，调用方（{@code DoclingPremiseBackend}）
+     * 不需要第二个请求，也不需要自行拼 multipart。
+     *
+     * <p>⚠️ 分段路径下 raw 保存的是<b>最后一段</b>的 json_content——
+     * 分段产物合并后的块序列与「整册 DoclingDocument」不再一一对应
+     * （各段独立映射、char 区间已重编），此时 raw <b>不可</b>交给分块桥
+     * （item_refs 会错位）。调用方据此判断：分段文档 → HybridChunker
+     * fail-closed（明确报错，不是静默换策略）。
+     *
+     * @param documentId 文档 ID
+     * @param content    PDF 字节
+     * @return 解析结果（块序列 + json_content 原文 + 是否整册单响应）
+     */
+    public @NonNull ParseWithRaw parseWithRaw(@NonNull String documentId,
+                                              @NonNull byte[] content) {
         if (content == null || content.length == 0) {
             throw new IllegalArgumentException("content 不能为空");
         }
@@ -183,8 +207,10 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
             // 小册：整册一次提交
             log.debug("[RAG] Docling 解析 documentId={} bytes={} 页数={} → 整册提交",
                     documentId, content.length, totalPages);
-            List<LayoutBlock> blocks = mapper.map(callDocling(documentId, content, 1, totalPages));
-            return new ParsedDocument(documentId, blocks);
+            String raw = callDocling(documentId, content, 1, totalPages);
+            List<LayoutBlock> blocks = mapper.map(raw);
+            return new ParseWithRaw(documentId, blocks,
+                    mapper.extractJsonContent(raw), true);
         }
 
         // ② 大册：按页段提交并合并
@@ -199,6 +225,7 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
                 documentId, totalPages, segmentCount, pagesPerSegment);
 
         List<LayoutBlock> merged = new java.util.ArrayList<>();
+        String lastRaw = null;
         for (int seg = 0; seg < segmentCount; seg++) {
             int from = seg * pagesPerSegment + 1;
             int to = Math.min(totalPages, (seg + 1) * pagesPerSegment);
@@ -207,6 +234,7 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
             String body = callDocling(documentId, content, from, to);
             List<LayoutBlock> segBlocks = mapper.map(body);
             merged.addAll(segBlocks);
+            lastRaw = body;
             log.debug("[RAG] Docling 分段 {}/{} 页 {}-{} → {} 块",
                     seg + 1, segmentCount, from, to, segBlocks.size());
         }
@@ -216,7 +244,32 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
             throw new DoclingUnavailableException(
                     "Docling 分段解析产出 0 个块（documentId=" + documentId + "）");
         }
-        return new ParsedDocument(documentId, continuous);
+        // ⚠️ 分段路径：raw 取最后一段且 wholeDocument=false（不可用于分块桥，见方法注释）
+        return new ParseWithRaw(documentId, continuous,
+                lastRaw == null ? null : mapper.extractJsonContent(lastRaw), false);
+    }
+
+    /**
+     * 解析结果 + 原始 DoclingDocument（RAG-D26 §2.4）。
+     *
+     * @param documentId    文档 ID
+     * @param blocks        块序列
+     * @param rawJson       最后一次响应提取出的 json_content（无则 null）
+     * @param wholeDocument rawJson 是否为「整册单响应」（分段路径为 false，
+     *                      此时不具备交给分块桥的前提）
+     */
+    public record ParseWithRaw(
+            @NonNull String documentId,
+            @NonNull List<LayoutBlock> blocks,
+            String rawJson,
+            boolean wholeDocument) {
+
+        /**
+         * @return 本结果对应的 ParsedDocument
+         */
+        public @NonNull ParsedDocument parsed() {
+            return new ParsedDocument(documentId, blocks);
+        }
     }
 
     /**
