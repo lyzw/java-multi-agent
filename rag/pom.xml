@@ -39,6 +39,7 @@
   <modules>
     <module>rag-core</module>
     <module>rag-ports</module>
+    <module>rag-premise</module>
     <module>rag-application</module>
     <module>rag-infrastructure</module>
     <module>rag-worker</module>
@@ -65,6 +66,11 @@
       <dependency>
         <groupId>cn.studykid.rag</groupId>
         <artifactId>rag-ports</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.rag</groupId>
+        <artifactId>rag-premise</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
