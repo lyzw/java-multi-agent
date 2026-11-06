@@ -194,10 +194,145 @@ cmd_verify() {
   docker cp "$VERIFY_DIR/V1_constraint_check.sql" "$CONTAINER_NAME":/tmp/check.sql >/dev/null
   say "以 ${APP_ROLE} 身份验证安全约束"
   echo ""
-  docker exec "$CONTAINER_NAME" psql -U "$APP_ROLE" -d "$DB_NAME" -f /tmp/check.sql 2>&1 \
-    | grep -E "^---|^psql.*ERROR:|^ [0-9]+$" | head -60
+  # ⚠️ 必须同时收 stdout 与 stderr：psql 把 ERROR 写到 stderr，
+  #    只收 stdout 会得到「全部通过」的假象（这是本脚本此前最大的问题）。
+  #    合并后再按「--- 」分块，把 ERROR 归到它所属的检查项。
+  # ⚠️ stdout 与 stderr **必须分文件**：psql 的 ERROR 走 stderr、正文走 stdout，
+  #    两者合并到同一 fd 时会**字节级交错**（stdout 是块缓冲，stderr 不是）——
+  #    实测出现过错误行前缀被冲掉：'psql:/tmp/check.sql:174: ERROR: ...'
+  #    变成 '174: ERROR: ...'，导致按行号归因失效、该项被误判为「约束失效」。
+  #    分开落盘后没有交错，stderr 每行完整，stdout 内部顺序不变。
+  local raw_out raw_err rc=0
+  raw_out="$(mktemp)"; raw_err="$(mktemp)"
+  docker exec "$CONTAINER_NAME" psql -U "$APP_ROLE" -d "$DB_NAME" -f /tmp/check.sql \
+    >"$raw_out" 2>"$raw_err"
+  # 原始输出只在**判定失败**时整段打印（成功时只给判定表，避免刷屏）
+
+  # ⚠️⚠️ 机器判定（此前**没有**判定）：本命令此前只打印输出并恒返回 0，
+  #    于是 scripts/dev-env-up.sh 里那句 `verify || exit 1` 是一道**永远不可能
+  #    失败**的闸门 —— 约束真的失效了也不会让构建变红。
+  #    判据来自检查脚本自带的机器可读标记 [expect:reject|ok|count0|count1]：
+  #      reject → 该块必须有 ERROR（无 ERROR = 约束失效 = Sev-0）
+  #      ok     → 该块不得有 ERROR（有 ERROR = 约束过严或数据异常）
+  #      count0 → 该块计数必须为 0（无租户上下文时不可见）
+  #      scope → 换到租户B 后可见本租户行（>0）且跨租户泄漏为 0
+  #
+  # ⚠️ ERROR 的归因**按 SQL 行号**，不按输出顺序：psql 的 ERROR 走 stderr、
+  #    正文走 stdout，重定向到同一文件时 stdout 的块缓冲会打乱两者的交错
+  #    （实测：R3 的 ERROR 被算到了 R1 名下 → 误判「约束失效」）。
+  #    ERROR 行自带 `check.sql:NN`，用 NN 对回检查脚本里最近的 \echo 行号，
+  #    归因就是确定的。计数同理：检查脚本用 \gset + \echo 输出 KEY=VALUE，
+  #    键值行与所属检查项在 stdout 上的相对顺序不会变。
+  python3 - "$raw_out" "$raw_err" "$VERIFY_DIR/V1_constraint_check.sql" <<'PY' || rc=1
+import re, sys
+
+out_path, err_path, sql_path = sys.argv[1], sys.argv[2], sys.argv[3]
+out_text = open(out_path, encoding="utf-8", errors="replace").read()
+err_text = open(err_path, encoding="utf-8", errors="replace").read()
+
+# ① 检查脚本里每个 \echo '--- ...' 标记的行号
+markers = []  # [(行号, 标签)]
+with open(sql_path, encoding="utf-8", errors="replace") as fh:
+    for i, line in enumerate(fh, 1):
+        m = re.search(r"\\echo\s+'---\s+(.*)'\s*$", line)
+        if m:
+            markers.append((i, m.group(1)))
+if not markers:
+    print("⛔ 检查脚本里找不到 \\echo '--- ' 标记，判定无从下手", file=sys.stderr)
+    sys.exit(2)
+
+def block_of(lineno):
+    """按 SQL 行号找到所属检查项（最近的、起点不晚于该行的标记）。"""
+    owner = None
+    for ln, label in markers:
+        if ln <= lineno:
+            owner = label
+        else:
+            break
+    return owner
+
+# ② ERROR 全部来自 stderr 文件（每行完整，无交错）→ 按行号归因
+errors_by_block = {}
+for line in err_text.splitlines():
+    m = re.search(r"check\.sql:(\d+):\s*ERROR:", line)
+    if not m:
+        continue
+    owner = block_of(int(m.group(1)))
+    if owner:
+        errors_by_block[owner] = errors_by_block.get(owner, 0) + 1
+
+# ③ 键值行来自 stdout（stdout 内部顺序不变，与所属检查项相邻）
+kv_by_block = {}
+cur_label = None
+for line in out_text.splitlines():
+    if line.startswith("--- "):
+        cur_label = line[4:].strip()
+    m = re.match(r"^([A-Z][A-Z0-9_]*)=(.*)$", line.strip())
+    if m and cur_label:
+        kv_by_block.setdefault(cur_label, []).append((m.group(1), m.group(2).strip()))
+
+MARK = re.compile(r"\[expect:(reject|ok|count0|scope)\]")
+fails, skipped = [], []
+print("=" * 100)
+print(f"{'检查项':<50} {'期望':<9} {'ERROR':>5}  判定")
+print("-" * 100)
+for lineno, label in markers:
+    name = MARK.sub("", label).strip()
+    err = errors_by_block.get(label, 0)
+    kv = kv_by_block.get(label, [])
+    m = MARK.search(label)
+    if not m:
+        skipped.append(name)
+        print(f"{name[:48]:<50} {'（未标注）':<9} {err:>5}  — 跳过（无机器可读期望）")
+        continue
+    kind = m.group(1)
+    kvmap = dict(kv)
+    counts = [v for k, v in kv if k.endswith("_COUNT")]
+    leaks = [v for k, v in kv if k.endswith("_LEAK")]
+    fixtures = [(k, v) for k, v in kv if k.endswith("_FIXTURE")]
+    # ⚠️ 夹具空转识别：检查项自己报告的候选行数为 0 → 它根本没触达被测约束。
+    #    这时「没有 ERROR」不能判成「约束失效」——那是误报（Sev-0 被假警报掩盖）。
+    fixture_empty = any(v == "0" for _, v in fixtures)
+    if kind == "reject":
+        ok, want = (err > 0) and not fixture_empty, "被拒绝"
+    elif kind == "ok":
+        ok, want = (err == 0) and not fixture_empty, "被接受"
+    elif kind == "count0":
+        ok = err == 0 and bool(counts) and all(v == "0" for v in counts) and not fixture_empty
+        want = "计数=0"
+    else:  # scope：可见本租户行（>0），且跨租户泄漏为 0
+        # ⚠️ 曾经写死「期望 1」——那是数据量只有 1 时的假设（现库 t-b 有 24 个
+        #   agent），数据一变就误报。真不变式是「不泄漏」：泄漏数必须为 0。
+        ok = (err == 0 and bool(counts) and all(int(v) > 0 for v in counts)
+              and bool(leaks) and all(v == "0" for v in leaks) and not fixture_empty)
+        want = "不泄漏"
+    if fixture_empty:
+        verdict = "⚠️ 夹具空转"
+    else:
+        verdict = "✅" if ok else ("⛔ 约束失效" if kind == "reject" else "⚠️ 异常")
+    if not ok or fixture_empty:
+        detail = f"（读到 {kv}）" if kv else ""
+        fails.append(f"{name} → {verdict}{detail}")
+    print(f"{name[:48]:<50} {want:<9} {err:>5}  {verdict}")
+print("=" * 100)
+print(f"检查项 {len(markers)} · 失败 {len(fails)} · 未标注跳过 {len(skipped)}")
+for f in fails:
+    print(f"  ⛔ {f}")
+if skipped:
+    print("  （未标注期望的检查项不参与判定，只作人工参考）")
+sys.exit(1 if fails else 0)
+PY
+  rm -f "$raw_out" "$raw_err"
+  if [ "$rc" -ne 0 ]; then
+    echo ""
+    warn "约束自检未通过：上方标 ⛔ 的检查项表示该安全约束在当前库上**没有生效**（Sev-0）。"
+    echo "—— 原始输出 ——"
+    docker exec "$CONTAINER_NAME" psql -U "$APP_ROLE" -d "$DB_NAME" -f /tmp/check.sql 2>&1 | tail -40
+    return 1
+  fi
   echo ""
-  warn "判读规则：标注「期望拒绝」的检查若<b>无 ERROR 行</b>，即表示该约束已失效（Sev-0）。"
+  say "全部安全约束自检通过（机器判定：期望拒绝的被拒绝、期望成功的被接受、计数符合预期）"
+  return 0
 }
 
 cmd_status() {
