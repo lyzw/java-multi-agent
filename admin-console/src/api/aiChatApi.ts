@@ -9,7 +9,8 @@
  *       不是静默空结果），Bearer 令牌用平台会话（<code>aud=admin-console-api</code>）——
  *       RAG 过滤器对平台域令牌不做租户绑定，跨租户语料盘点属设计内行为。</li>
  *   <li><b>直接对话（direct）</b>：平台自身 <code>POST /api/chat/stream</code>
- *       （真·LLM 多轮流式 SSE，走平台会话令牌，租户取自令牌上下文）。
+ *       （真·LLM 多轮流式 SSE，走平台会话令牌，由<b>平台安全链</b>验签；
+ *       身份只用于限流与日志，<b>不绑定租户</b>）。
  *       这是<b>管理员自己</b>与模型的实时对话，<b>不</b>是回放租户 Agent Run 输出，
  *       故不触碰红线 R6。前端用 <code>delta</code> 事件逐 token 渲染，终帧带完整正文与用量。</li>
  * </ol>
@@ -29,7 +30,7 @@
  */
 
 import { redirectLogin, request, ApiError } from '@/api/client'
-import { clearSession, loadSession } from '@/auth/tokenStorage'
+import { clearSession, isExpired, loadSession } from '@/auth/tokenStorage'
 import { API_BASE } from '@/config/constants'
 
 /** 检索模式（对齐 rag-core `RetrievalRequest.RetrievalMode`，防泄题第一道闸门）。 */
@@ -428,7 +429,13 @@ export const directChatTransport: ChatTransport = {
   },
 }
 
-/** 直接对话通道的流式 POST：超时/取消/401 与 `chatPost` 同源纪律，返回原始响应流。 */
+/**
+ * 直接对话通道的流式 POST：裸 fetch 返回原始 SSE 响应流。
+ *
+ * ⚠️ 不能复用 `client.ts#request`：它会 `await res.text()` 把整条流读干。
+ * ⚠️ 401 判定与 `chatPost` **刻意不同**：本端点会因身份域 / 部署版本错配返回 401，
+ *    一律清会话跳登录会把对话草稿一起丢掉，详见下方分支注释。
+ */
 async function chatStreamPost(
   path: string,
   body: unknown,
@@ -458,11 +465,28 @@ async function chatStreamPost(
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     if (signal.aborted) throw new ChatCancelledError()
-    // 平台会话域 401 = 令牌失效（本端点走平台会话令牌）
-    if (res.status === 401 && loadSession() !== null) {
-      clearSession()
-      redirectLogin()
-      throw new ApiError(401, '登录已过期，请重新登录', undefined, 'UNAUTHENTICATED')
+    if (res.status === 401) {
+      // ⚠️ 2026-11-07 修复「点发送直接跳登录页」：401 曾一律被当成登录过期，
+      //    清会话 + 硬跳登录页。但本端点是<b>租户域</b>路径，旧版后端把它挂在
+      //    只认 aud=agent-platform 的租户链上，平台会话令牌打过去必然 401 ——
+      //    这是身份域 / 部署版本错配，重新登录一万次也不会变对，反而把整段
+      //    对话草稿（只存内存）连同会话一起丢了。
+      //
+      //    与 client.ts 的「会话域」纪律对齐：只有<b>本地会话确实已过期</b>的 401
+      //    才可能是令牌失效，值得跳登录；会话仍有效却不认，一律按「通道不可达」
+      //    原样上报，交给 describeChatError 给可执行的排查指引，绝不主动登出。
+      const session = loadSession()
+      if (session !== null && isExpired(session)) {
+        clearSession()
+        redirectLogin()
+        throw new ApiError(401, '登录已过期，请重新登录', undefined, 'UNAUTHENTICATED')
+      }
+      throw new ApiError(
+        401,
+        text || '直接对话通道未通过平台身份认证',
+        undefined,
+        'CHAT_CHANNEL_UNAUTHENTICATED',
+      )
     }
     throw new ApiError(res.status, text || `请求失败（${res.status}）`, undefined, `HTTP_${res.status}`)
   }
@@ -510,6 +534,14 @@ export function describeChatError(cause: unknown): ChatErrorInfo {
           code,
           message: '登录已过期，或模型凭据未授权',
           hint: '重新登录；若仍失败，核对平台 MiniMax 凭据是否已装配。',
+          retryable: false,
+        }
+      case 'CHAT_CHANNEL_UNAUTHENTICATED':
+        return {
+          code,
+          message: '直接对话通道未通过平台身份认证',
+          hint:
+            '先确认登录状态；若刚登录就出现，多为后端 /api/chat 安全链仍按租户域验签（需更新并重启平台服务），或平台 JWT 密钥不同源。本页不会自动登出，可保留当前会话排查。',
           retryable: false,
         }
       case 'RATE_LIMITED':

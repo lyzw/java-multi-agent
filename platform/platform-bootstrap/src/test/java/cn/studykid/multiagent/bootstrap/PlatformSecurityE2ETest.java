@@ -35,7 +35,9 @@ import cn.studykid.multiagent.core.compliance.ZeroRetentionRegistry;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.security.AuthenticationService;
 import cn.studykid.multiagent.infrastructure.security.JwtTokenService;
+import cn.studykid.multiagent.infrastructure.security.PlatformJwtTokenService;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
+import cn.studykid.multiagent.ports.security.PlatformPrincipal;
 import cn.studykid.multiagent.ports.security.PrincipalStore.PasswordHasher;
 
 /**
@@ -118,6 +120,10 @@ class PlatformSecurityE2ETest {
 
     @Autowired
     private JwtTokenService tokens;
+
+    /** 平台会话域签发器：用于验证「平台令牌能穿过 /api/chat/**」的正向路径。 */
+    @Autowired
+    private PlatformJwtTokenService platformTokens;
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -365,6 +371,63 @@ class PlatformSecurityE2ETest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.alg").isEqualTo("RSA");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // E2E-9：控制台「直接对话」的身份域归属（2026-11-07 修复）
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("⛔ E2E-9 租户令牌不得穿过 /api/chat/stream（该端点属平台身份域）")
+    void tenantTokenCannotReachConsoleChat() {
+        String tenantToken = loginSuccessfully();
+
+        // ⚠️ 故意用空 messages：ConsoleChatController 会在建 SSE 连接、调用模型网关
+        //    **之前**就 fail-closed 返回 400。所以「非 401」意味着请求已穿过安全链
+        //    进入控制器 —— 修复前 /api/chat/** 挂在租户链上，这里正是 400。
+        //    修复后它归 @Order(0) 平台链，租户令牌（aud=agent-platform）应被拒为 401。
+        //    本用例不触发任何模型调用，零配额消耗。
+        var status = rest.post().uri("/api/chat/stream")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + tenantToken)
+                .header(HttpHeaders.ACCEPT, MediaType.TEXT_EVENT_STREAM_VALUE)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"messages\":[]}")
+                .exchange()
+                .expectBody(String.class)
+                .returnResult()
+                .getStatus();
+
+        assertThat(status.value())
+                .as("租户令牌必须被平台链拒绝；若返回 400 说明端点又落回了租户链，"
+                        + "平台控制台持平台令牌发送时就会 401 并被误判为登录过期")
+                .isEqualTo(401);
+    }
+
+    @Test
+    @DisplayName("✅ E2E-9b 平台会话令牌可穿过 /api/chat/stream 并到达控制器（空消息 400）")
+    void platformTokenReachesConsoleChatController() {
+        String platformToken = platformTokens.issue(
+                new PlatformPrincipal("e2e-platform-admin", Set.of("PLATFORM_ADMIN"), 1L, true),
+                Instant.now());
+
+        // ⚠️ 空 messages 会在建 SSE 连接、调用模型网关**之前**fail-closed 返回 400。
+        //    所以 400 是「全链路打通」的证据：平台链验签通过 → ChatCaller 从
+        //    PLATFORM_PRINCIPAL_ATTRIBUTE 取到主体 → 限流放行 → 进入 Controller。
+        //    若仍是 401，说明该端点又被挪回租户链，正是点发送被踢回登录页的根因。
+        //    本用例不产生 SSE 长连接、不触发模型调用。
+        var status = rest.post().uri("/api/chat/stream")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + platformToken)
+                .header(HttpHeaders.ACCEPT, MediaType.TEXT_EVENT_STREAM_VALUE)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"messages\":[]}")
+                .exchange()
+                .expectBody(String.class)
+                .returnResult()
+                .getStatus();
+
+        assertThat(status.value())
+                .as("平台会话令牌必须能到达 ConsoleChatController；401 = 身份域错配未修复")
+                .isEqualTo(400);
     }
 
     @Test

@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
 
@@ -16,8 +15,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
-import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway.ModelErrorKind;
@@ -35,8 +32,6 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
  * {@code event: error} 帧、空消息与限流 fail-closed。
  */
 class ConsoleChatControllerTest {
-
-    private static final String TENANT = "11111111-1111-1111-1111-111111111111";
 
     // ── S1：逐帧增量 + 终帧 ──────────────────────────────────────────────
 
@@ -132,6 +127,40 @@ class ConsoleChatControllerTest {
         assertEquals(HttpStatus.TOO_MANY_REQUESTS, ex.getStatusCode(), "限流必须 429");
     }
 
+    // ── S3b：限流分桶键取自已验签身份，不取请求体 / 不伪装租户 ────────────
+
+    @Test
+    void rateLimitBucketUsesVerifiedCallerKey() {
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer ->
+                new ModelResponse("", Map.of(), new ModelResponse.ModelUsage(0, 0),
+                        ModelResponse.FinishReason.STOP));
+        java.util.List<String> keys = new java.util.ArrayList<>();
+        RateLimitPort recording = new RateLimitPort() {
+            @Override
+            public Decision check(String callerKey, String bucketKey) {
+                keys.add(callerKey);
+                assertEquals(RateLimitPort.Buckets.SSE_CONNECT, bucketKey);
+                return Decision.ALLOWED;
+            }
+
+            @Override
+            public long currentCount(String callerKey, String bucketKey) {
+                return 0L;
+            }
+        };
+        Executor sync = command -> command.run();
+        ConsoleChatController controller = new ConsoleChatController(
+                gate, () -> PLATFORM_KEY, recording, "MiniMax-M2.5", sync, () -> emitter);
+
+        controller.streamChat(new ConsoleChatController.ChatStreamRequest(
+                null, null, null, null,
+                List.of(new ConsoleChatController.ChatStreamRequest.ChatMessage("user", "hi"))));
+
+        assertEquals(List.of(PLATFORM_KEY), keys,
+                "限流键必须原样来自已验签的调用方标识，不能取请求体或默认租户");
+    }
+
     // ── S4：网关错误归一为 error 帧（不裸抛异常）─────────────────────────
 
     @Test
@@ -159,7 +188,7 @@ class ConsoleChatControllerTest {
                                             RateLimitPort rate) {
         // ⚠️ 同步执行器：流式逻辑在当前线程内跑完，便于直接断言帧序列
         Executor sync = command -> command.run();
-        return new ConsoleChatController(gate, PRINCIPAL, rate, "MiniMax-M2.5", sync, () -> emitter);
+        return new ConsoleChatController(gate, CALLER, rate, "MiniMax-M2.5", sync, () -> emitter);
     }
 
     /** 记录每一帧原始 SSE 字符串（event: .../data: ...）与完成/错误状态。 */
@@ -207,27 +236,13 @@ class ConsoleChatControllerTest {
         }
     }
 
-    private static final CurrentPrincipal PRINCIPAL = new CurrentPrincipal() {
-        @Override
-        public TenantContext context() {
-            return new TenantContext(TENANT, "p-1", Set.of("USER"), 1L);
-        }
+    /**
+     * ⚠️ 直接对话是平台身份域：注入的是限流分桶键（合法 UUID），不是 TenantContext。
+     * 平台主体用派生 v3 UUID，与真实租户 v4 UUID 不碰撞。
+     */
+    private static final String PLATFORM_KEY = "00000000-0000-3000-8000-000000000001";
 
-        @Override
-        public String principalId() {
-            return "p-1";
-        }
-
-        @Override
-        public String providerId() {
-            return "deepseek";
-        }
-
-        @Override
-        public String correlationId() {
-            return "corr-1";
-        }
-    };
+    private static final ConsoleChatController.ChatCaller CALLER = () -> PLATFORM_KEY;
 
     private static final RateLimitPort ALLOWED = new RateLimitPort() {
         @Override

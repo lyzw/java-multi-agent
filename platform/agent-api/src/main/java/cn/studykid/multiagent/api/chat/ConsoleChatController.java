@@ -24,8 +24,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.server.ResponseStatusException;
 
-import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
-import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelMessage;
@@ -51,14 +49,40 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
  *
  * <p><b>沿用既有铁律</b>：
  * <ul>
- *   <li>租户来自验签令牌 {@link CurrentPrincipal#context()}，<b>绝不</b>取请求体；</li>
+ *   <li>调用方身份来自已验签令牌（{@link ChatCaller}），<b>绝不</b>取请求体；</li>
  *   <li>建连前过 {@link RateLimitPort}（SSE 长连接是贵资源，与 RunEventController 同源纪律）；</li>
  *   <li>凭据（MiniMax API Key）只存在于网关层，本控制器与日志均不接触。</li>
  * </ul>
+ *
+ * <p><b>⚠️ 身份域（2026-11-07 修正）</b>：本端点由<b>平台安全链</b>验签，
+ * 主体是平台管理员（{@code PlatformPrincipal}），<b>不持有租户</b>。
+ * 因此这里刻意<b>不</b>依赖 {@code CurrentPrincipal#context()}（那要求 TenantContext，
+ * 只有租户链才会写入）：直接对话不读写任何租户数据，把平台身份硬塞进 TenantContext
+ * 会造出一个「看起来可信、实则不存在的租户」，是后续越权 / 静默空结果的隐患。
+ * 身份在本控制器里只用于<b>限流分桶与日志定位</b>，见 {@link ChatCaller}。
  */
 @RestController
 @RequestMapping("/api/chat")
 public class ConsoleChatController {
+
+    /**
+     * 对话调用方标识（组合根注入）。
+     *
+     * <p>刻意只暴露一个字符串、不暴露 {@code TenantContext}：本端点不需要租户上下文，
+     * 缩小接口面可防止后续有人拿它去做租户数据查询。实现必须<b>只</b>从过滤器
+     * 已验签的请求属性取值，取不到即 401（fail-closed），绝不返回默认身份。
+     */
+    public interface ChatCaller {
+        /**
+         * 限流分桶 / 日志定位键：<b>必须是合法 UUID 字符串</b>。
+         *
+         * <p>租户主体传真实 {@code tenantId}；平台管理员不属任何租户，由组合根
+         * 从 userId 派生确定性 UUID。原因是 {@link RateLimitPort} 的实现把该值
+         * 写入带 RLS 的 {@code rate_limit_bucket.tenant_id uuid}，非 UUID 会被
+         * 限流器 fail-closed 判为 429（2026-11-07 实测）。
+         */
+        @NonNull String rateLimitKey();
+    }
 
     private static final Logger log = LoggerFactory.getLogger(ConsoleChatController.class);
 
@@ -72,7 +96,7 @@ public class ConsoleChatController {
     private static final ObjectMapper SSE_JSON = new ObjectMapper();
 
     private final ChatStreamGateway chatGateway;
-    private final CurrentPrincipal currentPrincipal;
+    private final ChatCaller caller;
     private final RateLimitPort rateLimiter;
     private final String defaultModel;
     /** 流式调用执行器（生产用虚拟线程，测试可注入同步执行器）。 */
@@ -91,25 +115,25 @@ public class ConsoleChatController {
     public ConsoleChatController(
                                  @NonNull @Qualifier("chatStreamGateway")
                                  ChatStreamGateway chatGateway,
-                                 @NonNull CurrentPrincipal currentPrincipal,
+                                 @NonNull ChatCaller caller,
                                  @NonNull RateLimitPort rateLimiter,
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${agent.model.minimax.default-model:MiniMax-M2.5}")
                                  String defaultModel) {
-        this(chatGateway, currentPrincipal, rateLimiter, defaultModel,
+        this(chatGateway, caller, rateLimiter, defaultModel,
                 Executors.newVirtualThreadPerTaskExecutor(),
                 () -> new SseEmitter(SSE_TIMEOUT_MS));
     }
 
     /** 全参构造（测试可注入同步执行器与可捕获的发射器工厂）。 */
     ConsoleChatController(@NonNull ChatStreamGateway chatGateway,
-                          @NonNull CurrentPrincipal currentPrincipal,
+                          @NonNull ChatCaller caller,
                           @NonNull RateLimitPort rateLimiter,
                           String defaultModel,
                           @NonNull Executor executor,
                           @NonNull Supplier<SseEmitter> emitterFactory) {
         this.chatGateway = chatGateway;
-        this.currentPrincipal = currentPrincipal;
+        this.caller = caller;
         this.rateLimiter = rateLimiter;
         this.defaultModel = defaultModel == null || defaultModel.isBlank()
                 ? "MiniMax-M2.5" : defaultModel;
@@ -125,14 +149,15 @@ public class ConsoleChatController {
      */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<SseEmitter> streamChat(@RequestBody ChatStreamRequest body) {
-        // 1) 可信身份：唯一来源是已验签令牌
-        TenantContext context = currentPrincipal.context();
+        // 1) 可信身份：唯一来源是过滤器已验签的请求属性（平台主体 / 租户主体），
+        //    ⚠️ 只作限流分桶与日志定位，不是租户数据访问上下文。
+        String callerKey = caller.rateLimitKey();
 
         // 2) 建连限流（SSE 长连接长期占用资源，与 RunEventController 同源纪律）
         RateLimitPort.Decision limit = rateLimiter.check(
-                context.tenantId(), RateLimitPort.Buckets.SSE_CONNECT);
+                callerKey, RateLimitPort.Buckets.SSE_CONNECT);
         if (limit != RateLimitPort.Decision.ALLOWED) {
-            log.warn("对话 SSE 建连被限流拒绝: tenant={}, decision={}", context.tenantId(), limit);
+            log.warn("对话 SSE 建连被限流拒绝: caller={}, decision={}", callerKey, limit);
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "对话连接过于频繁");
         }
 
@@ -140,9 +165,9 @@ public class ConsoleChatController {
         ModelRequest request = buildRequest(body);
 
         SseEmitter emitter = emitterFactory.get();
-        emitter.onCompletion(() -> log.debug("对话 SSE 完成: tenant={}", context.tenantId()));
+        emitter.onCompletion(() -> log.debug("对话 SSE 完成: caller={}", callerKey));
         emitter.onTimeout(() -> {
-            log.warn("对话 SSE 超时: tenant={}", context.tenantId());
+            log.warn("对话 SSE 超时: caller={}", callerKey);
             emitter.complete();
         });
 
@@ -174,10 +199,10 @@ public class ConsoleChatController {
             } catch (ChatClientGoneException gone) {
                 emitter.complete();
             } catch (ModelGatewayException e) {
-                log.warn("对话流式调用失败: tenant={}, kind={}", context.tenantId(), e.kind());
+                log.warn("对话流式调用失败: caller={}, kind={}", callerKey, e.kind());
                 emitError(emitter, e.kind(), e.getMessage());
             } catch (RuntimeException e) {
-                log.warn("对话流式调用异常: tenant={}", context.tenantId(), e);
+                log.warn("对话流式调用异常: caller={}", callerKey, e);
                 emitError(emitter, ModelErrorKind.PROVIDER_ERROR, "模型调用失败");
             }
         });

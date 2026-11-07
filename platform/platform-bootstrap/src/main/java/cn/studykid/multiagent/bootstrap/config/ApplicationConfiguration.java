@@ -12,9 +12,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.server.ResponseStatusException;
 
+import cn.studykid.multiagent.api.chat.ConsoleChatController;
 import cn.studykid.multiagent.api.run.RunController;
 import cn.studykid.multiagent.api.run.RunEventStreamer;
 import cn.studykid.multiagent.api.security.JwtCurrentPrincipal;
@@ -29,6 +32,7 @@ import cn.studykid.multiagent.application.config.RateLimitPolicy;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcRateLimiter;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
+import cn.studykid.multiagent.ports.security.PlatformPrincipal;
 
 /**
  * 应用层装配。
@@ -534,6 +538,49 @@ public class ApplicationConfiguration {
                             .KEY_RESERVE_PER_TOOL_CALL + "}") Object raw) {
         return cn.studykid.multiagent.application.config.BudgetPolicy
                 .requireReserveAmount(raw);
+    }
+
+    /**
+     * 控制台「直接对话」的调用方标识（限流分桶键）。
+     *
+     * <p><b>为什么不能复用 {@link #currentPrincipal}</b>：{@code /api/chat/**} 已归入
+     * 平台安全链，验签后写入的是 {@link PlatformPrincipal}（刻意无 tenantId），
+     * 而 {@code currentPrincipal} 要求 {@link TenantContext}，取不到就会回落去解析
+     * 租户令牌 → 401。本端点不读写租户数据，只需一个限流分桶 / 日志定位键。
+     *
+     * <p>⚠️ <b>返回值必须是合法 UUID 字符串</b>：{@code JdbcRateLimiter} 把它当作
+     * {@code rate_limit_bucket.tenant_id}（{@code ?::uuid}）并在事务里绑定为 RLS 上下文。
+     * 直接塞 {@code "platform:ops-1"} 会触发 {@code invalid input syntax for type uuid}，
+     * 被限流器 fail-closed 判成 429 —— 症状从「跳登录页」变成「一发送就 429」。
+     * 平台主体不属任何租户，故用 {@code nameUUIDFromBytes} 从 userId 派生一个
+     * <b>确定性 v3 UUID</b> 作为平台域计数命名空间：与真实租户 UUID（v4）天然不碰撞，
+     * 也不会把管理员的对话流量算进任何租户的配额桶。
+     *
+     * <p>⚠️ <b>身份只从已验签的请求属性取</b>，两者都没有时 fail-closed 抛 401，
+     * 绝不编造默认身份，也不接受请求体/请求头自称的身份。
+     */
+    @Bean
+    public ConsoleChatController.ChatCaller chatCaller() {
+        return () -> {
+            if (RequestContextHolder.getRequestAttributes()
+                    instanceof ServletRequestAttributes attrs) {
+                var request = attrs.getRequest();
+                Object platform = request.getAttribute(
+                        SecurityConfiguration.PLATFORM_PRINCIPAL_ATTRIBUTE);
+                if (platform instanceof PlatformPrincipal p) {
+                    return UUID.nameUUIDFromBytes(
+                            ("platform-chat:" + p.userId())
+                                    .getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                            .toString();
+                }
+                Object tenant = request.getAttribute(
+                        SecurityConfiguration.TENANT_CONTEXT_ATTRIBUTE);
+                if (tenant instanceof TenantContext ctx) {
+                    return ctx.tenantId();
+                }
+            }
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "未认证");
+        };
     }
 
     /**

@@ -81,6 +81,21 @@ public class SecurityConfiguration {
     private static final String PLATFORM_API_PREFIX = "/api/platform/";
 
     /**
+     * 控制台「直接对话」路径前缀：与平台管理 API 同属<b>平台身份域</b>。
+     *
+     * <p><b>为什么必须显式登记（2026-11-07 修复）</b>：{@code /api/chat/stream} 是
+     * 平台管理员自己与模型对话的工具，调用方持有的是平台会话令牌
+     * （{@code aud=admin-console-api}）。此前它未匹配 {@code /api/platform/**}，
+     * 落进 @Order(1) 的租户链，被 {@code aud=agent-platform} 校验硬拒 → 必然 401；
+     * 前端把这个 401 当成「登录过期」清会话硬跳登录页，点发送即被踢出且对话草稿全丢。
+     *
+     * <p>⚠️ 只收窄到 {@code /api/chat/} 这一个前缀，<b>不放宽成 {@code /api/**}</b>：
+     * 平台链的 {@link PlatformBearerTokenFilter} 只接受平台令牌，新增租户端点若被
+     * 误纳入会全线 401；反之漏配的新端点仍由租户链保护，不会变成匿名放行。
+     */
+    private static final String CONSOLE_CHAT_PREFIX = "/api/chat/";
+
+    /**
      * 无需认证即可访问的端点。
      *
      * <p>⚠️ 须精确到端点。出现 {@code /api/**} 之类的通配，
@@ -109,7 +124,8 @@ public class SecurityConfiguration {
     /**
      * 平台管理 API 安全链（重规划 §7）。
      *
-     * <p><b>最高优先级（{@code @Order(0)}）</b>，仅匹配 {@code /api/platform/**}。
+     * <p><b>最高优先级（{@code @Order(0)}）</b>，匹配 {@code /api/platform/**} 与
+     * {@code /api/chat/**}（控制台直接对话，见 {@link #CONSOLE_CHAT_PREFIX}）。
      * 使用平台专属令牌服务，校验 {@code aud=admin-console-api} 与
      * {@code principal_type=PLATFORM_USER}；租户令牌（{@code aud=agent-platform}）
      * 在此链被拒，从令牌层实现身份隔离。
@@ -121,7 +137,10 @@ public class SecurityConfiguration {
             throws Exception {
 
         http
-                .securityMatcher(PLATFORM_API_PREFIX + "**")
+                // ⚠️ 两个精确前缀的并集：/api/chat/** 只挂平台令牌过滤器，
+                //    不会命中下面 .requestMatchers("/api/platform/v1/auth/**").permitAll()，
+                //    因此直接对话仍强制 authenticated（无匿名放行）。
+                .securityMatcher(PLATFORM_API_PREFIX + "**", CONSOLE_CHAT_PREFIX + "**")
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .csrf(csrf -> csrf.disable())

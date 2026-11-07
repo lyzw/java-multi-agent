@@ -350,9 +350,46 @@ describe('sendChatMessage · 直接对话通道 (directChatTransport)', () => {
   })
 })
 
+describe('sendChatMessage · 直接对话 401 不得误踢登录页', () => {
+  it('✅ 会话有效却 401（身份域 / 旧版后端租户链）→ 保留会话并给出通道排查提示', async () => {
+    storeSession({
+      accessToken: 'valid-platform-token',
+      expiresAt: Date.now() + 10 * 60_000,
+      roles: ['PLATFORM_ADMIN'],
+    })
+    fetchImpl = () =>
+      Promise.resolve(json(401, { code: 'UNAUTHENTICATED', message: '未认证' }))
+
+    await expect(collect({ ...PARAMS, channel: 'direct' })).rejects.toMatchObject({
+      status: 401,
+      code: 'CHAT_CHANNEL_UNAUTHENTICATED',
+    })
+    // ⚠️ 会话仍在 = 没走 clearSession() + redirectLogin() 那条硬跳分支。
+    //    本页对话只存内存，硬跳会把草稿一并丢掉，且重新登录后仍会 401。
+    expect(window.sessionStorage.getItem(STORAGE_KEY)).not.toBeNull()
+    expect(calls[0]?.url).toBe('/api/chat/stream')
+    const info = describeChatError(
+      new ApiError(401, 'raw', undefined, 'CHAT_CHANNEL_UNAUTHENTICATED'),
+    )
+    expect(info.hint).toContain('/api/chat')
+    expect(info.retryable).toBe(false)
+  })
+
+  it('✅ 无本地会话的 401 也不清会话跳登录（配置问题原样上报）', async () => {
+    fetchImpl = () => Promise.resolve(json(401, { code: 'UNAUTHENTICATED', message: '未认证' }))
+
+    await expect(collect({ ...PARAMS, channel: 'direct' })).rejects.toMatchObject({
+      status: 401,
+      code: 'CHAT_CHANNEL_UNAUTHENTICATED',
+    })
+    expect(window.sessionStorage.getItem(STORAGE_KEY)).toBeNull()
+  })
+})
+
 describe('describeChatError · 直接对话通道归一化 kind', () => {
   it.each([
     ['UNAUTHORIZED', 401, '未授权', false],
+    ['CHAT_CHANNEL_UNAUTHENTICATED', 401, '身份认证', false],
     ['RATE_LIMITED', 429, '频繁', true],
     ['INVALID_REQUEST', 400, '拒绝', false],
     ['CONTENT_BLOCKED', 422, '拦截', false],
