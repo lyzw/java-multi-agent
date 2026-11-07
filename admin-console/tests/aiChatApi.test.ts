@@ -266,11 +266,62 @@ describe('sendChatMessage · 直接对话通道 (directChatTransport)', () => {
     return { ok: true, status: 200, body: stream }
   }
 
+  /** 刻意不 close：模拟后端/反代未干净结束 chunked 流，reader 永远等不到 EOF。 */
+  function hangingSseResponse(
+    chunks: string[],
+  ): { ok: boolean; status: number; body: ReadableStream<Uint8Array> } {
+    const enc = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(enc.encode(c))
+      },
+    })
+    return { ok: true, status: 200, body: stream }
+  }
+
   const DIRECT_OK = [
     'event: delta\ndata: 你好\n\n',
     'event: delta\ndata: 世界\n\n',
     'event: done\ndata: {"content":"你好世界","finishReason":"STOP","inputTokens":5,"outputTokens":2}\n\n',
   ]
+
+  /**
+   * ⚠️ 2026-11-07 回归：后端改用 Spring 原生 SseEmitter.event() 后，真实线上字节是
+   * `event:delta` / `data:你好`（冒号后<b>不带空格</b>）。此前后端误用
+   * emitter.send(String)，整帧被包成一条 data 值（`data:event: delta`），
+   * 事件名全丢，前端一帧都分派不到，对话框永远停在「正在生成回复」。
+   * 本例用无空格的真实格式，锁死解析器对「有空格 / 无空格」两种写法都兼容。
+   */
+  it('✅ 兼容 Spring 原生帧（event:/data: 无空格）：thinking/delta/done 全部分派', async () => {
+    fetchImpl = (url) =>
+      url.endsWith('/api/chat/stream')
+        ? Promise.resolve(
+            sseResponse([
+              'event:thinking\ndata:先算判别式\n\n',
+              'event:delta\ndata:判别式小于零\n\n',
+              'event:delta\ndata:时没有实数根\n\n',
+              'event:done\ndata:{"content":"判别式小于零时没有实数根","finishReason":"STOP"}\n\n',
+            ]),
+          )
+        : Promise.resolve(json(200, {}))
+    const events = await collect({ ...PARAMS, channel: 'direct' })
+    expect(events.map((e) => e.type)).toEqual([
+      'stage',
+      'thinking',
+      'delta',
+      'delta',
+      'answer',
+      'done',
+    ])
+    const deltas = events.filter(
+      (e): e is Extract<ChatStreamEvent, { type: 'delta' }> => e.type === 'delta',
+    )
+    expect(deltas.map((d) => d.text)).toEqual(['判别式小于零', '时没有实数根'])
+    expect(events.find((e) => e.type === 'thinking')).toMatchObject({ text: '先算判别式' })
+    expect(events.find((e) => e.type === 'answer')).toMatchObject({
+      answer: '判别式小于零时没有实数根',
+    })
+  })
 
   it('✅ 真·LLM 流：delta 逐帧 + 终帧 answer(generator=DIRECT_GENERATOR_LABEL) + done', async () => {
     fetchImpl = (url) =>
@@ -299,6 +350,21 @@ describe('sendChatMessage · 直接对话通道 (directChatTransport)', () => {
     expect(body.messages[body.messages.length - 1]).toEqual({ role: 'user', content: PARAMS.query })
     expect(headerOf(calls[0], 'Accept')).toBe('text/event-stream')
     expect(headerOf(calls[0], 'X-Tenant-Id')).toBe(PARAMS.tenantId)
+  })
+
+  it('✅ 反证：流不结束也必须靠 done 帧收口，气泡不能永远停在「生成中」', async () => {
+    fetchImpl = (url) =>
+      url.endsWith('/api/chat/stream')
+        ? Promise.resolve(
+            hangingSseResponse([
+              'event:delta\ndata:判别式小于零时无实数根\n\n',
+              'event:done\ndata:{"content":"判别式小于零时无实数根","finishReason":"STOP"}\n\n',
+            ]),
+          )
+        : Promise.resolve(json(200, {}))
+    // ⚠️ 若把 done 事件留到 reader EOF 才推，这个用例会一直挂到 testTimeout。
+    const events = await collect({ ...PARAMS, channel: 'direct' })
+    expect(events.map((e) => e.type)).toEqual(['stage', 'delta', 'answer', 'done'])
   })
 
   it('✅ error 帧归一为对应 ApiError（RATE_LIMITED → 429），且流被关闭', async () => {

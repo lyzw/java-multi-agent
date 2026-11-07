@@ -78,6 +78,28 @@ class ConsoleChatIdentityDomainTest {
                 .doesNotContain("CurrentPrincipal", "TenantContext");
     }
 
+    @Test
+    @DisplayName("⛔ 两条安全链都必须放行 ASYNC dispatch，否则 SSE 终帧后连接不收尾")
+    void asyncDispatchMustBePermittedForSseCompletion() {
+        String security = codeOnly(read(platformRoot().resolve(
+                "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/"
+                        + "SecurityConfiguration.java")));
+
+        // ── 防空转锚点 ──────────────────────────────────────────────
+        assertThat(security).contains("platformSecurityFilterChain", "PUBLIC_ENDPOINTS", "@Order(0)");
+
+        long matchers = security.lines()
+                .filter(l -> l.contains("dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()"))
+                .count();
+        assertThat(matchers)
+                .as("平台链（/api/chat SSE）与租户链（RunEventController SSE）各一处。"
+                        + "SseEmitter.complete() 触发的 ASYNC dispatch 上，"
+                        + "Bearer 过滤器（OncePerRequestFilter）不再执行、SecurityContext 为空，"
+                        + "若被 AuthorizationFilter 二次授权拦下，会在响应已提交后抛 Access Denied，"
+                        + "chunked 流写不出终止块 → 浏览器/反代永远等不到 EOF（实测挂起 15s+）")
+                .isEqualTo(2);
+    }
+
     // ════════════════════════════════════════════════════════════
     // chatCaller：只认过滤器已验签的请求属性，取不到即 fail-closed
     // ════════════════════════════════════════════════════════════

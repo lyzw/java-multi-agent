@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.api.chat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -51,9 +52,9 @@ class ConsoleChatControllerTest {
                 List.of(new ConsoleChatController.ChatStreamRequest.ChatMessage("user", "hi"))));
 
         String all = String.join("", emitter.frames);
-        int i1 = all.indexOf("data: 你好");
-        int i2 = all.indexOf("data: 世界");
-        int iDone = all.indexOf("event: done");
+        int i1 = all.indexOf("data:你好");
+        int i2 = all.indexOf("data:世界");
+        int iDone = all.indexOf("event:done");
         assertTrue(i1 >= 0, "第一个增量必须发出");
         assertTrue(i2 >= 0, "第二个增量必须发出");
         assertTrue(iDone >= 0, "必须发送 done 终帧");
@@ -61,6 +62,36 @@ class ConsoleChatControllerTest {
         assertTrue(all.contains("\"finishReason\":\"STOP\""), "终帧含 STOP 终态");
         assertTrue(all.contains("\"inputTokens\":5"), "终帧含用量");
         assertTrue(emitter.completed, "流必须完成");
+    }
+
+    // ── S1c：帧必须是原生 SSE 事件（防「data:event:」双重包裹回归）────────
+
+    @Test
+    void framesAreNativeSseEventsNotDoubleWrappedData() {
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer -> {
+            consumer.onDelta("第一行\n第二行");
+            return new ModelResponse("第一行\n第二行", Map.of(),
+                    new ModelResponse.ModelUsage(5L, 3L), ModelResponse.FinishReason.STOP);
+        });
+        ConsoleChatController controller = controller(emitter, gate, ALLOWED);
+
+        controller.streamChat(new ConsoleChatController.ChatStreamRequest(
+                null, null, null, null,
+                List.of(new ConsoleChatController.ChatStreamRequest.ChatMessage("user", "hi"))));
+
+        assertEquals(List.of(), emitter.rawStringSends,
+                "禁止 emitter.send(String)：Spring 7 会把整帧包成一条 data 值，事件名全丢，"
+                        + "前端按 event 分派时一帧都匹配不上（对话框永远停在生成中）");
+        String first = emitter.frames.get(0);
+        assertTrue(first.startsWith("event:delta\n"),
+                "帧必须以原生 event 行开头，实际: " + first);
+        assertFalse(first.contains("data:event:"),
+                "出现 data:event: 说明帧被双重包裹，实际: " + first);
+        assertTrue(first.contains("data:第一行\ndata:第二行"),
+                "data 内换行必须规范为多行 data: 续行，实际: " + first);
+        assertTrue(emitter.frames.stream().anyMatch(f -> f.startsWith("event:done\n")),
+                "终帧必须是原生 done 事件");
     }
 
     // ── S1b：思考过程帧（event: thinking）被前向转发 ──────────────────────
@@ -83,11 +114,11 @@ class ConsoleChatControllerTest {
                 List.of(new ConsoleChatController.ChatStreamRequest.ChatMessage("user", "hi"))));
 
         String all = String.join("", emitter.frames);
-        assertTrue(all.contains("event: thinking"), "思考帧必须发出");
-        int t1 = all.indexOf("data: 让我先算一下判别式");
-        int d1 = all.indexOf("data: 你好");
-        int t2 = all.indexOf("data: 再确认根的情况");
-        int d2 = all.indexOf("data: 世界");
+        assertTrue(all.contains("event:thinking"), "思考帧必须发出");
+        int t1 = all.indexOf("data:让我先算一下判别式");
+        int d1 = all.indexOf("data:你好");
+        int t2 = all.indexOf("data:再确认根的情况");
+        int d2 = all.indexOf("data:世界");
         assertTrue(t1 >= 0 && d1 >= 0 && t2 >= 0 && d2 >= 0, "思考与答案帧都应存在");
         assertTrue(t1 < d1 && d1 < t2 && t2 < d2, "顺序须为 思考1 → 答案1 → 思考2 → 答案2");
         assertTrue(all.contains("\"finishReason\":\"STOP\""), "终帧含 STOP 终态");
@@ -176,7 +207,7 @@ class ConsoleChatControllerTest {
                 List.of(new ConsoleChatController.ChatStreamRequest.ChatMessage("user", "hi"))));
 
         String all = String.join("", emitter.frames);
-        assertTrue(all.contains("event: error"), "错误必须走 error 事件，而非裸抛");
+        assertTrue(all.contains("event:error"), "错误必须走 error 事件，而非裸抛");
         assertTrue(all.contains("RATE_LIMITED"), "错误帧须携带归一化 kind");
         assertTrue(emitter.completed, "错误后仍须结束流");
     }
@@ -191,9 +222,17 @@ class ConsoleChatControllerTest {
         return new ConsoleChatController(gate, CALLER, rate, "MiniMax-M2.5", sync, () -> emitter);
     }
 
-    /** 记录每一帧原始 SSE 字符串（event: .../data: ...）与完成/错误状态。 */
+    /**
+     * 记录每一帧渲染后的 SSE 文本与完成/错误状态。
+     *
+     * <p>⚠️ 刻意覆写<b>两个</b> send 重载：{@code send(SseEventBuilder)} 是正确通路，
+     * 把 builder 的片段按序拼回帧文本；{@code send(Object)} 只记录、不转发。
+     * 生产代码一旦回退到手工拼帧字符串，就会落进后者，被守卫用例判红 ——
+     * 那种写法在 Spring 7 下会被包成一条 data 值，浏览器收不到事件名。
+     */
     private static final class RecordingEmitter extends SseEmitter {
         final java.util.List<String> frames = new java.util.ArrayList<>();
+        final java.util.List<String> rawStringSends = new java.util.ArrayList<>();
         volatile boolean completed = false;
         final java.util.concurrent.atomic.AtomicReference<Throwable> error =
                 new java.util.concurrent.atomic.AtomicReference<>();
@@ -204,10 +243,17 @@ class ConsoleChatControllerTest {
 
         @Override
         public void send(Object object) throws IOException {
-            if (object instanceof String s) {
-                frames.add(s);
-            }
+            rawStringSends.add(String.valueOf(object));
             // ⚠️ 不调用 super（测试无真实响应通道）
+        }
+
+        @Override
+        public void send(SseEmitter.SseEventBuilder builder) throws IOException {
+            StringBuilder sb = new StringBuilder();
+            for (var part : builder.build()) {
+                sb.append(part.getData());
+            }
+            frames.add(sb.toString());
         }
 
         @Override

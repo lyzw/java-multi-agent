@@ -256,14 +256,22 @@ public class ConsoleChatController {
     /**
      * 以原始 SSE 帧格式推送（{@code event: <name>\\ndata: <data>\\n\\n}）。
      *
-     * <p>⚠️ 不用 Spring 的 {@code SseEmitter.event()} 构造器，便于在测试中
-     * 以纯字符串断言帧结构；且 data 内的换行被规范为续行 {@code data:}，
-     * 避免破坏 SSE 帧边界。
+     * <p>⚠️ <b>绝不能写成 {@code emitter.send("event: ... data: ...")} 这样手工拼帧</b>。
+     * Spring Framework 7 覆写了 {@code SseEmitter#send(Object)}：它等价于
+     * {@code send(event().data(object))}，会把整段字符串当作<b>一条 data 值</b>，
+     * 再由 {@code SseUtils} 逐行补 {@code data:} 前缀。2026-11-07 实测线上字节是
+     * {@code data:event: delta} / {@code data:data: 你好} —— 事件名全丢，浏览器
+     * DevTools 的 EventStream 面板只显示 {@code Type=message}，前端按 event 名
+     * 分派时一帧都匹配不上，对话框永远停在「正在生成回复」。
+     * 必须用 {@link SseEmitter#event()} 构造原生事件，由框架写出正确的 event 行。
+     *
+     * <p>builder 的 {@code data(Object)} 会自行把内容里的换行规范为多行
+     * {@code data:} 续行，因此这里只需把 CR 归一，不能手工拼帧文本。
      */
     private static void sendFrame(SseEmitter emitter, String name, String data) {
-        String safe = data.replace("\r\n", "\n").replace("\n", "\ndata: ");
+        String safe = data.replace("\r\n", "\n").replace('\r', '\n');
         try {
-            emitter.send("event: " + name + "\ndata: " + safe + "\n\n");
+            emitter.send(SseEmitter.event().name(name).data(safe));
         } catch (java.io.IOException e) {
             // 客户端断开：停止推送即可
             throw new ChatClientGoneException();

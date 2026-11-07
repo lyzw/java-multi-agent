@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -145,6 +146,14 @@ public class SecurityConfiguration {
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
+                        // ⚠️ SseEmitter.complete() 会让 Tomcat 做一次 ASYNC dispatch。
+                        //    此时 PlatformBearerTokenFilter（OncePerRequestFilter）按语义
+                        //    不再执行，SecurityContext 为空；若不放行，AuthorizationFilter
+                        //    会在响应已提交后抛 Access Denied，chunked 流写不出终止块，
+                        //    浏览器/反代永远等不到 EOF（2026-11-07 实测挂起 15s+）。
+                        //    ASYNC dispatch 只能由容器在<b>已完成 REQUEST 授权</b>的同一
+                        //    请求上发起，放行它不绕过初始验签。
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         .requestMatchers("/api/platform/v1/auth/**").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(tokenFilter, UsernamePasswordAuthenticationFilter.class)
@@ -177,6 +186,9 @@ public class SecurityConfiguration {
                 .csrf(csrf -> csrf.disable())
 
                 .authorizeHttpRequests(auth -> auth
+                        // 与平台链同源纪律：RunEventController 也是 SseEmitter 长连接，
+                        // complete() 触发的 ASYNC dispatch 不应被二次授权拦下。
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
                         .anyRequest().authenticated())
 

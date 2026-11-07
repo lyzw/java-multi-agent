@@ -358,6 +358,8 @@ export const directChatTransport: ChatTransport = {
     let buffer = ''
     let eventName = ''
     let dataLines: string[] = []
+    /** 是否已收到后端终帧：done 是应用层收口信号，不再依赖 TCP EOF。 */
+    let sawDoneFrame = false
 
     const flush = (): void => {
       const data = dataLines.join('\n')
@@ -386,6 +388,12 @@ export const directChatTransport: ChatTransport = {
           answerContentSuppressed: false,
           at: Date.now(),
         })
+        // ⚠️ done 是<b>应用层终帧</b>：收到即收口，绝不等 TCP EOF。
+        //    SseEmitter.complete() 经反代后 chunked 流可能不干净结束
+        //    （2026-11-07 实测浏览器 reader 挂起 15s+）；若把 done 事件留到
+        //    reader 读完才推，气泡会永远停在「生成中」，停止按钮也一直亮着。
+        onEvent({ type: 'done', at: Date.now() })
+        sawDoneFrame = true
       } else if (eventName === 'error') {
         let kind = 'PROVIDER_ERROR'
         let message = '模型调用失败'
@@ -414,16 +422,20 @@ export const directChatTransport: ChatTransport = {
           buffer = buffer.slice(idx + 1)
           if (line === '') {
             flush()
+            if (sawDoneFrame) break
           } else if (line.startsWith('event:')) {
             eventName = line.slice(6).trim()
           } else if (line.startsWith('data:')) {
             dataLines.push(line.slice(5).replace(/^ /, ''))
           }
         }
+        if (sawDoneFrame) break
       }
-      if (eventName !== '' || dataLines.length > 0) flush()
-      onEvent({ type: 'done', at: Date.now() })
+      // 流自然结束但没收到终帧（异常中断）：仍收口，不留悬挂的「生成中」状态。
+      if (!sawDoneFrame && (eventName !== '' || dataLines.length > 0)) flush()
+      if (!sawDoneFrame) onEvent({ type: 'done', at: Date.now() })
     } finally {
+      // 收到终帧后主动断开，避免后端/反代继续挂着一条已完成的长连接。
       reader.cancel().catch(() => {})
     }
   },
@@ -467,8 +479,8 @@ async function chatStreamPost(
     if (signal.aborted) throw new ChatCancelledError()
     if (res.status === 401) {
       // ⚠️ 2026-11-07 修复「点发送直接跳登录页」：401 曾一律被当成登录过期，
-      //    清会话 + 硬跳登录页。但本端点是<b>租户域</b>路径，旧版后端把它挂在
-      //    只认 aud=agent-platform 的租户链上，平台会话令牌打过去必然 401 ——
+      //    清会话 + 硬跳登录页。旧版后端曾把 /api/chat/** 挂在只认
+      //    aud=agent-platform 的租户链上，平台会话令牌打过去必然 401 ——
       //    这是身份域 / 部署版本错配，重新登录一万次也不会变对，反而把整段
       //    对话草稿（只存内存）连同会话一起丢了。
       //
