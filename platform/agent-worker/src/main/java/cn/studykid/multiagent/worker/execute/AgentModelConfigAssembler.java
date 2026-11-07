@@ -15,8 +15,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.application.cap.ClosureResolver;
+import cn.studykid.multiagent.application.modelcatalog.ModelResolver;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
 import cn.studykid.multiagent.core.cap.SkillDescription;
+import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
+import cn.studykid.multiagent.ports.modelcatalog.ModelScenario;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 
@@ -51,13 +54,38 @@ public class AgentModelConfigAssembler {
     private final AgentQueryPort agentQuery;
     private final ClosureResolver closureResolver;
     private final CapToolDefPort toolDefs;
+    /**
+     * 统一模型目录解析器（可空）。
+     *
+     * <p>⚠️ <b>可空</b>：未注入时（如单测直接构造、或目录尚未启用）按历史语义
+     * 把 Agent 定义里的 {@code modelRef} 原样当作模型名——保证向后兼容、不破坏既有测试。
+     * 注入后，{@code modelRef} 视为目录模型名，经 {@link ModelResolver} 解析出真实模型标识
+     * （命中则取其 {@code modelName}；目录为空/未命中且无默认则回落字面名并告警）。
+     */
+    private final @Nullable ModelResolver resolver;
 
     public AgentModelConfigAssembler(@NonNull AgentQueryPort agentQuery,
                                      @NonNull ClosureResolver closureResolver,
                                      @NonNull CapToolDefPort toolDefs) {
+        this(agentQuery, closureResolver, toolDefs, null);
+    }
+
+    /**
+     * 完整构造器（接入统一模型目录）。
+     *
+     * @param agentQuery        Agent 版本查询（读模型配置定义）
+     * @param closureResolver   闭包解析（读工具绑定）
+     * @param toolDefs          工具定义仓储（读工具 Schema）
+     * @param resolver          统一模型目录解析器；{@code null} = 不解析、原样用 modelRef
+     */
+    public AgentModelConfigAssembler(@NonNull AgentQueryPort agentQuery,
+                                     @NonNull ClosureResolver closureResolver,
+                                     @NonNull CapToolDefPort toolDefs,
+                                     @Nullable ModelResolver resolver) {
         this.agentQuery = agentQuery;
         this.closureResolver = closureResolver;
         this.toolDefs = toolDefs;
+        this.resolver = resolver;
     }
 
     /**
@@ -92,13 +120,16 @@ public class AgentModelConfigAssembler {
             log.warn("Agent 定义缺少模型标识: agent={}, version={}", agentId, agentVersion);
             return Optional.empty();
         }
+        // ⚠️ 统一模型目录：modelRef 视为目录模型名，解析出真实模型标识。
+        //   目录未注入 / 未命中且无默认时回落字面名（向后兼容历史数据 + 不破坏测试）。
+        String effectiveModelName = resolveModelName(modelId);
 
         // ⚠️ 闭包只解析一次，同时供给「工具 Schema（1级）」与「Skill 指引（2级）」：
         //    两处各解析一次必然漂移（一边能读到描述、另一边读不到）——那正是「两套语义」。
         EffectiveClosure closure = resolveClosure(tenantId, agentId, agentVersion);
 
         return Optional.of(new AgentModelSettings(
-                modelId,
+                effectiveModelName,
                 skillGuidance(systemPrompt(root), closure),
                 number(root.get("temperature"), 0.2),
                 (int) number(root.get("maxOutputTokens"), 1024),
@@ -286,6 +317,64 @@ public class AgentModelConfigAssembler {
             }
         }
         return null;
+    }
+
+    /**
+     * 把 Agent 定义里的 {@code modelRef} 解析为真实模型标识。
+     *
+     * <p><b>解析优先级</b>：
+     * <ol>
+     *   <li><b>目录 id 优先</b>：若 {@code modelRef} 形如目录主键（UUID），走
+     *       {@link ModelResolver#resolveById(String)} 精确取回该记录的 {@code modelName}
+     *       （Per-Agent 绑目录 id：换模型只需改目录记录或重指 id，不必硬编码模型名）；</li>
+     *   <li><b>目录模型名</b>：否则视为目录模型名，经
+     *       {@link ModelResolver#resolve(String, String)} 在 {@link ModelScenario#AGENT_CHAT}
+     *       场景内解析（命中含场景默认回落）取 {@code modelName}；</li>
+     *   <li><b>安全回落（fail-soft）</b>：目录未注入 / 该 id 或名称未命中且无默认时，
+     *       回落为字面 {@code modelRef}（保留历史语义、不破坏既有数据与测试）。</li>
+     * </ol>
+     */
+    private @NonNull String resolveModelName(@NonNull String rawModelRef) {
+        if (resolver == null) {
+            return rawModelRef;
+        }
+        // ① 目录 id（UUID）优先：Agent 直接绑定目录里的某条模型记录
+        if (isCatalogId(rawModelRef)) {
+            Optional<ModelDefinition> byId = resolver.resolveById(rawModelRef);
+            if (byId.isPresent()) {
+                return byId.get().modelName();
+            }
+            log.warn("Agent 模型引用 [{}] 形如 catalog id 但目录无此启用记录，回落按名称解析",
+                    rawModelRef);
+        }
+        // ② 按名称解析（剥离 provider: 前缀）
+        String ref = stripProviderPrefix(rawModelRef);
+        Optional<ModelDefinition> resolved = resolver.resolve(ModelScenario.AGENT_CHAT, ref);
+        if (resolved.isPresent()) {
+            return resolved.get().modelName();
+        }
+        log.warn("Agent 模型 [{}] 未在统一目录(agent-chat)命中且无默认，回落字面模型名"
+                + "（建议迁移到管理后台模型目录）", rawModelRef);
+        return rawModelRef;
+    }
+
+    /** 判断字符串是否形如目录主键 UUID（Per-Agent 绑目录 id 的识别依据）。 */
+    private static boolean isCatalogId(@NonNull String value) {
+        try {
+            java.util.UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 剥离可选的 {@code provider:} 前缀（与网关 {@code resolveModelName} 同口径）：
+     * 目录里的 {@code modelName} 是不带供应商前缀的真实模型标识。
+     */
+    private static @NonNull String stripProviderPrefix(@NonNull String modelId) {
+        int idx = modelId.indexOf(':');
+        return idx >= 0 ? modelId.substring(idx + 1) : modelId;
     }
 
     private static double number(Object raw, double defaultValue) {

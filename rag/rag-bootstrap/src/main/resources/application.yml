@@ -93,6 +93,20 @@ rag:
     # HNSW 索引的维度上限：vector 2000、halfvec 4000；超上限只能存储、建不了 ANN 索引。
     # 维度不在这里配：取自嵌入端口的 dimension()，两处只允许有一个权威源。
     vector-type: ${RAG_EMBEDDING_VECTOR_TYPE:vector}
+  # ── 生成侧大模型（RAG 接地讲解「合成」环节）──────────────────────
+  # 默认关闭：关闭时 GroundedGenerationService 走逐字摘录（零幻觉基线）。
+  # 开启且 base-url/api-key/model 三者齐备时，装配 OpenAI 兼容适配器做
+  # 「接地合成 + 强制引用」；任一缺失则回落逐字摘录（fail-closed，绝不编造）。
+  # 密钥只从环境变量注入，绝不写进本文件。
+  generation:
+    model:
+      enabled: ${RAG_GENERATION_MODEL_ENABLED:false}
+      base-url: ${RAG_GENERATION_MODEL_BASE_URL:}
+      api-key: ${RAG_GENERATION_MODEL_API_KEY:}
+      model: ${RAG_GENERATION_MODEL_NAME:}
+      temperature: ${RAG_GENERATION_MODEL_TEMPERATURE:0.3}
+      max-tokens: ${RAG_GENERATION_MODEL_MAX_TOKENS:1500}
+      timeout-seconds: ${RAG_GENERATION_MODEL_TIMEOUT_SECONDS:60}
   retrieval:
     # 分数门禁：低于此值的命中视为「未找到依据」，
     # 使「找不到」成为合法输出，阻断 RAG 自信地胡说（RAG-D05 §⑦）。

@@ -9,6 +9,8 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import org.jspecify.annotations.NonNull;
+
 import cn.studykid.rag.application.generation.GroundedGenerationService.MissingBasisException;
 import cn.studykid.rag.core.chunk.Chunk;
 import cn.studykid.rag.core.chunk.ChunkRole;
@@ -17,6 +19,8 @@ import cn.studykid.rag.core.generation.GenerationResult;
 import cn.studykid.rag.core.retrieval.RetrievalRequest.RetrievalMode;
 import cn.studykid.rag.core.version.EditionCoordinate;
 import cn.studykid.rag.core.version.EditionScope;
+import cn.studykid.rag.ports.GenerationModelException;
+import cn.studykid.rag.ports.GenerationModelPort;
 import cn.studykid.rag.ports.RetrievalPort;
 
 /**
@@ -229,6 +233,98 @@ class GroundedGenerationServiceTest {
     @Test
     @DisplayName("⛔ 生成方式必须如实标注，不得伪装成大模型生成")
     void generatorHonestlyLabelled() {
+        GroundedGenerationService service = new GroundedGenerationService(
+                new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, "顶点公式"))));
+
+        GenerationResult result = service.generate(
+                request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A));
+
+        assertThat(result.generator()).isEqualTo(GenerationResult.GENERATOR_EXCERPT_ASSEMBLY);
+    }
+
+    // ——— 以下为「两者都接」后新增：大模型接地合成（合成 + 强制引用）路径 ———
+
+    /** 只返回固定合成文本的端口替身。 */
+    private static final class StubModel implements GenerationModelPort {
+        private final String reply;
+        private int calls = 0;
+
+        StubModel(String reply) {
+            this.reply = reply;
+        }
+
+        @Override
+        public @NonNull String synthesize(@NonNull String query, @NonNull String modeLabel,
+                                          @NonNull List<Chunk> basis) {
+            calls++;
+            return reply;
+        }
+    }
+
+    /** 一调用就抛错的端口替身（触发 fail-soft 回落）。 */
+    private static final class FailingModel implements GenerationModelPort {
+        @Override
+        public @NonNull String synthesize(@NonNull String query, @NonNull String modeLabel,
+                                          @NonNull List<Chunk> basis) {
+            throw new GenerationModelException("模型不可用");
+        }
+    }
+
+    @Test
+    @DisplayName("✅ 接入模型且合成成功：generator 标 LLM_GROUNDED，答案 = 合成体 + 强制引用块")
+    void llmGroundedPathAppendsCitationBlock() {
+        String body = "二次函数 y=ax²+bx+c 的顶点坐标为 (-b/2a, (4ac-b²)/4a)。";
+        GroundedGenerationService service = new GroundedGenerationService(
+                new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, body))),
+                new StubModel("根据依据 1，顶点横坐标为 -b/2a。"));
+
+        GenerationResult result = service.generate(
+                request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A));
+
+        assertThat(result.generator()).isEqualTo(GenerationResult.GENERATOR_LLM_GROUNDED);
+        // 合成正文在前
+        assertThat(result.answer()).startsWith("根据依据 1，顶点横坐标为 -b/2a。");
+        // ⛔ 强制引用块在后，且含逐字原文，保证可核对
+        assertThat(result.answer()).contains("以下为依据原文");
+        assertThat(result.answer()).contains("【依据 1】");
+        assertThat(result.answer()).contains(body);
+    }
+
+    @Test
+    @DisplayName("⛔ 模型抛错必须 fail-soft 回落逐字摘录，不得把异常抛给用户")
+    void modelFailureFallsBackToExcerpt() {
+        String body = "顶点坐标公式原文。";
+        GroundedGenerationService service = new GroundedGenerationService(
+                new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, body))),
+                new FailingModel());
+
+        GenerationResult result = service.generate(
+                request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A));
+
+        // ⚠️ 回落而非崩溃：学生至少能看到可核对的原文
+        assertThat(result.generator()).isEqualTo(GenerationResult.GENERATOR_EXCERPT_ASSEMBLY);
+        assertThat(result.answer()).contains(body);
+        assertThat(result.answer()).doesNotContain("以下为依据原文"); // 逐字摘录本身不重复追加引用块
+    }
+
+    @Test
+    @DisplayName("⛔ 模型返回空白也必须回落逐字摘录（不把 blank 当答案）")
+    void modelBlankReplyFallsBackToExcerpt() {
+        String body = "顶点公式原文。";
+        GroundedGenerationService service = new GroundedGenerationService(
+                new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, body))),
+                new StubModel("   "));
+
+        GenerationResult result = service.generate(
+                request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A));
+
+        assertThat(result.generator()).isEqualTo(GenerationResult.GENERATOR_EXCERPT_ASSEMBLY);
+        assertThat(result.answer()).contains(body);
+    }
+
+    @Test
+    @DisplayName("✅ 未接入模型（modelPort 为 null）恒走逐字摘录，保持旧不变式")
+    void noModelPortStaysExcerpt() {
         GroundedGenerationService service = new GroundedGenerationService(
                 new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, "顶点公式"))));
 

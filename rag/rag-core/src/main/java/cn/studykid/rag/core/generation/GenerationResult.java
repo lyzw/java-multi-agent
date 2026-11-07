@@ -9,18 +9,18 @@ import cn.studykid.rag.core.chunk.Chunk;
 /**
  * 生成结果（RAG-D00 §2.7 决策 D-R09 的出口契约）。
  *
- * <p><b>⚠️ 本结果的核心不变量：{@link #answer} 的每一个字都来自
- * {@link #basis} 中各片段的逐字原文或由其派生的事实性陈述</b>
- * （片段条数、版本名、页码）。不存在「模型补充的知识」——
- * 这是教辅场景下唯一可接受的生成形态，理由见
+ * <p><b>⚠️ 本结果的核心不变量（{@link #GENERATOR_EXCERPT_ASSEMBLY}）</b>：
+ * {@link #answer} 的每一个字都来自 {@link #basis} 中各片段的逐字原文或由其
+ * 派生的事实性陈述（片段条数、版本名、页码）。不存在「模型补充的知识」——
+ * 这是教辅场景下唯一零幻觉的生成形态，理由见
  * {@link cn.studykid.rag.core.grounding.GroundingPolicy}：
  * 模型参数里的数学结论没有版本、没有页码，学生无法核对，
  * 答得再对也是答非所问。
  *
  * <p><b>⚠️ {@link #generator} 必须如实标注生成方式</b>：
- * 在真实大模型接入前（RAG-D09 G3 条件，当前受 A-008 阻断），
- * 它恒为 {@link #GENERATOR_EXCERPT_ASSEMBLY}。
- * 把它说成「AI 生成」是对用户的欺骗；前端必须原样展示这个字段。
+ * 逐字摘录为 {@link #GENERATOR_EXCERPT_ASSEMBLY}，大模型接地合成为
+ * {@link #GENERATOR_LLM_GROUNDED}。前端必须原样展示这个字段，
+ * 并按形态决定如何呈现（逐字摘录无需额外说明；接地合成须明示「AI 基于以下原文生成」）。
  *
  * @param answer 讲解正文（空串表示「依据不足」，此时应读 {@link #disclaimer}）
  * @param basis 实际构成讲解的依据片段（已通过角色与版本硬过滤）
@@ -46,6 +46,17 @@ public record GenerationResult(
      * 它不产生新知识，因此不可能幻觉——代价是它也不会「讲得更好」。
      */
     public static final String GENERATOR_EXCERPT_ASSEMBLY = "EXCERPT_ASSEMBLY";
+
+    /**
+     * 大模型接地合成（合成 + 强制逐字引用）。
+     *
+     * <p>模型基于已通过全部闸门的逐字依据片段做自然语言讲解，并在末尾<b>强制追加</b>
+     * 逐字引用块，保证学生可对照原书核对。合成正文是模型的转述，<b>不保证逐字来自依据</b>——
+     * 这是与 {@link #GENERATOR_EXCERPT_ASSEMBLY} 的根本区别：后者每个字都来自依据，
+     * 前者是模型的转述。可核查性由强制引用块（而非正文逐字性）保证，
+     * 且模型被提示「只能使用给定原文」。
+     */
+    public static final String GENERATOR_LLM_GROUNDED = "LLM_GROUNDED_SYNTHESIS";
 
     public GenerationResult {
         if (answer == null) {

@@ -9,11 +9,18 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.Optional;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import cn.studykid.rag.application.generation.GroundedGenerationService;
 import cn.studykid.rag.application.retrieval.RetrievalOrchestrator;
 import cn.studykid.rag.infrastructure.embedding.EmbeddingPorts;
 import cn.studykid.rag.infrastructure.embedding.LocalDeterministicEmbeddingPort;
+import cn.studykid.rag.infrastructure.generation.OpenAiCompatibleGenerationAdapter;
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
+import cn.studykid.rag.infrastructure.modelcatalog.ModelCatalogClient;
 import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
 import cn.studykid.rag.infrastructure.persistence.JdbcCorpusRepository;
 import cn.studykid.rag.infrastructure.persistence.JdbcRetrievalRepository;
@@ -22,6 +29,7 @@ import cn.studykid.rag.infrastructure.persistence.JdbcTenantScopedRetrieval;
 import cn.studykid.rag.infrastructure.persistence.VectorColumn;
 import cn.studykid.rag.ports.CorpusRepository;
 import cn.studykid.rag.ports.EmbeddingPort;
+import cn.studykid.rag.ports.GenerationModelPort;
 import cn.studykid.rag.ports.RetrievalPort;
 import cn.studykid.rag.ports.TenantScopedGeneration;
 import cn.studykid.rag.ports.TenantScopedRetrieval;
@@ -53,6 +61,8 @@ import cn.studykid.rag.ports.TenantScopedRetrieval;
  */
 @Configuration
 public class RagInfrastructureConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(RagInfrastructureConfig.class);
 
     /**
      * 分数门禁阈值：低于此值的命中判为「未找到依据」（RAG-D05 §⑦）。
@@ -100,6 +110,46 @@ public class RagInfrastructureConfig {
     @Value("${rag.embedding.timeout-seconds:120}")
     private int embeddingTimeoutSeconds;
 
+    // ── 生成侧大模型（RAG 接地讲解的「合成」环节）────────────────────
+    // ⚠️ fail-closed：默认不启用（enabled=false），此时 GroundedGenerationService 走逐字摘录；
+    //    enabled=true 且 base-url/api-key/model 三者齐备才装配真实适配器，否则回落摘录（不静默编造）。
+    // ⚠️ 密钥只从环境变量注入，绝不写进本文件。
+    @Value("${rag.generation.model.enabled:false}")
+    private boolean generationModelEnabled;
+
+    @Value("${rag.generation.model.base-url:}")
+    private String generationBaseUrl;
+
+    @Value("${rag.generation.model.api-key:}")
+    private String generationApiKey;
+
+    @Value("${rag.generation.model.model:}")
+    private String generationModel;
+
+    @Value("${rag.generation.model.temperature:0.3}")
+    private double generationTemperature;
+
+    @Value("${rag.generation.model.max-tokens:1500}")
+    private int generationMaxTokens;
+
+    @Value("${rag.generation.model.timeout-seconds:60}")
+    private int generationTimeoutSeconds;
+
+    /**
+     * 统一模型目录（平台侧）的 base-url；配置后 RAG 优先从目录解析 embedding 模型，
+     * 否则回落到下方 yml 配置。留空 = 不启用目录（沿用历史 yml 行为，保证存量部署不变）。
+     */
+    @Value("${rag.model-catalog.platform-base-url:}")
+    private String modelCatalogBaseUrl;
+
+    /** 访问平台内部解析端点的共享令牌（与平台 {@code model-catalog.internal-token} 对应）。 */
+    @Value("${rag.model-catalog.token:}")
+    private String modelCatalogToken;
+
+    /** 目录解析结果缓存秒数（默认 5 分钟，避免每条索引批都打平台）。 */
+    @Value("${rag.model-catalog.cache-ttl-seconds:300}")
+    private long modelCatalogCacheTtlSeconds;
+
     /**
      * 嵌入端口。
      *
@@ -112,9 +162,64 @@ public class RagInfrastructureConfig {
      */
     @Bean
     public EmbeddingPort embeddingPort() {
-        return EmbeddingPorts.create(localPortsEnabled, embeddingBaseUrl, embeddingApiKey,
-                embeddingModel, embeddingDimension, embeddingBatchSize, embeddingTimeoutSeconds,
+        // ① 优先：统一模型目录（平台侧）解析 embedding 场景模型；未配置或解析失败则回落 yml
+        String baseUrl = embeddingBaseUrl;
+        String model = embeddingModel;
+        int dimension = embeddingDimension;
+        if (!modelCatalogBaseUrl.isBlank()) {
+            ModelCatalogClient client = new ModelCatalogClient(
+                    modelCatalogBaseUrl, modelCatalogToken, modelCatalogCacheTtlSeconds);
+            Optional<ModelCatalogClient.ResolvedEmbeddingModel> resolved =
+                    client.resolveEmbeddingModel();
+            if (resolved.isPresent()) {
+                ModelCatalogClient.ResolvedEmbeddingModel r = resolved.get();
+                // ⚠️ 模型名与维度始终取自目录（统一模型定义优先于 yml）；
+                //    base_url 仅当目录明确给出时才覆盖 yml（目录 base_url 为空则沿用 yml 嵌入地址）。
+                model = r.modelName();
+                if (r.dimension() != null) {
+                    dimension = r.dimension();
+                }
+                if (r.baseUrl() != null && !r.baseUrl().isBlank()) {
+                    log.info("RAG 嵌入模型取自统一模型目录: provider={}, model={}, baseUrl={}",
+                            r.provider(), r.modelName(), r.baseUrl());
+                    baseUrl = r.baseUrl();
+                } else {
+                    log.info("RAG 嵌入模型名/维度取自统一模型目录（基址沿用 yml）: provider={}, model={}",
+                            r.provider(), r.modelName());
+                }
+            }
+        }
+        return EmbeddingPorts.create(localPortsEnabled, baseUrl, embeddingApiKey,
+                model, dimension, embeddingBatchSize, embeddingTimeoutSeconds,
                 "rag-bootstrap");
+    }
+
+    /**
+     * 生成侧大模型端口。
+     *
+     * <p>⚠️ fail-closed：{@code rag.generation.model.enabled=false}（默认）或
+     * base-url/api-key/model 任一缺失 → 返回 {@code null}，
+     * {@code GroundedGenerationService} 据此走逐字摘录；绝不因配置不全而编造回答。
+     *
+     * <p>⚠️ 仅支持 OpenAI 兼容协议（openai / deepseek / workbuddy / ollama / 本地 vLLM），
+     * 与平台侧网关同源、但完全独立（RAG 自带配置，不跨进程依赖平台）。
+     */
+    @Bean
+    public GenerationModelPort generationModelPort() {
+        if (!generationModelEnabled
+                || generationBaseUrl.isBlank()
+                || generationApiKey.isBlank()
+                || generationModel.isBlank()) {
+            if (generationModelEnabled) {
+                log.warn("生成模型已启用但 base-url/api-key/model 不完整，回落逐字摘录（fail-closed）");
+            } else {
+                log.info("生成模型未启用（rag.generation.model.enabled=false），RAG 生成走逐字摘录");
+            }
+            return null;
+        }
+        log.info("装配生成模型适配器: baseUrl={}, model={}", generationBaseUrl, generationModel);
+        return new OpenAiCompatibleGenerationAdapter(generationBaseUrl, generationApiKey,
+                generationModel, generationTemperature, generationMaxTokens, generationTimeoutSeconds);
     }
 
     /**
@@ -245,8 +350,9 @@ public class RagInfrastructureConfig {
      * 只会多一份需要同步维护的 SQL。
      */
     @Bean
-    public GroundedGenerationService groundedGenerationService(RetrievalPort retrievalPort) {
-        return new GroundedGenerationService(retrievalPort);
+    public GroundedGenerationService groundedGenerationService(RetrievalPort retrievalPort,
+                                                             ObjectProvider<GenerationModelPort> generationModelProvider) {
+        return new GroundedGenerationService(retrievalPort, generationModelProvider.getIfAvailable());
     }
 
     @Bean

@@ -17,6 +17,7 @@ import {
   ToolOutlined,
   ThunderboltOutlined,
   UserOutlined,
+  ApiOutlined,
 } from '@ant-design/icons'
 import { PLATFORM_SCOPE_ROLES, ROLES, type Role } from '@/config/constants'
 
@@ -353,6 +354,16 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
           '把前端下拉枚举收敛到 sys_dictionary / sys_dictionary_item 两表维护：新增、改名、停用无需改前端代码。内置字典禁止物理删除，仅可停用（避免历史数据取值悬空）。',
+        phase: '系统配置',
+      },
+      {
+        key: 'model-catalog',
+        label: '模型配置',
+        path: '/model-catalog',
+        icon: <ApiOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '模型配置（Model Catalog）：模型定义 CRUD（供应商 / 场景 / 能力开关 / 维度 / 排序）+ 供应商密钥（仅脱敏回显，明文只上传不回显）。写端点需 PLATFORM_ADMIN，安全边界以执行时后端重授权为准。',
         phase: '系统配置',
       },
     ],

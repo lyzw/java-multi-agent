@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.application.cap.ClosureResolver;
+import cn.studykid.multiagent.application.modelcatalog.ModelResolver;
 import cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
@@ -43,31 +44,56 @@ public class WorkerChildAgentModelConfigProvider implements ChildAgentModelConfi
      * 此时<b>宁可不给</b>，也不凭猜测给一把委派枪。
      */
     private final @Nullable DelegationToolSchemaAssembler delegationSchemas;
+    /**
+     * 统一模型目录解析器（可空）。
+     *
+     * <p>⚠️ <b>可为空</b>：未注入时子 Agent 的 {@code modelRef} 按历史语义原样当模型名；
+     * 注入后子 Agent 模型走统一目录解析（与根 Agent 同口径）。
+     */
+    private final @Nullable ModelResolver resolver;
 
     public WorkerChildAgentModelConfigProvider(@NonNull AgentQueryPort agentQuery,
                                                @NonNull ClosureResolver closureResolver,
                                                @NonNull CapToolDefPort toolDefs) {
-        this(agentQuery, closureResolver, toolDefs, null);
+        this(agentQuery, closureResolver, toolDefs, null, null);
     }
 
     /**
-     * 最完整构造器（第二十批 · 增加委派工具装配）。
+     * 委托工具装配版构造器（第二十批 · 增加委派工具装配）。
      *
      * @param agentQuery   Agent 版本查询（读模型配置定义）
      * @param closureResolver 闭包解析（读工具绑定）
      * @param toolDefs     工具定义仓储（读工具 Schema）
-     * @param delegationSchemas 委派工具 Schema 装配器；
-     *                     {@code null} = 不装配委派工具
+     * @param delegationSchemas 委派工具 Schema 装配器；{@code null} = 不装配委派工具
      */
     public WorkerChildAgentModelConfigProvider(@NonNull AgentQueryPort agentQuery,
                                                @NonNull ClosureResolver closureResolver,
                                                @NonNull CapToolDefPort toolDefs,
                                                @Nullable DelegationToolSchemaAssembler
                                                        delegationSchemas) {
+        this(agentQuery, closureResolver, toolDefs, delegationSchemas, null);
+    }
+
+    /**
+     * 最完整构造器（接入统一模型目录）。
+     *
+     * @param agentQuery   Agent 版本查询（读模型配置定义）
+     * @param closureResolver 闭包解析（读工具绑定）
+     * @param toolDefs     工具定义仓储（读工具 Schema）
+     * @param delegationSchemas 委派工具 Schema 装配器；{@code null} = 不装配委派工具
+     * @param resolver     统一模型目录解析器；{@code null} = 不解析、原样用 modelRef
+     */
+    public WorkerChildAgentModelConfigProvider(@NonNull AgentQueryPort agentQuery,
+                                               @NonNull ClosureResolver closureResolver,
+                                               @NonNull CapToolDefPort toolDefs,
+                                               @Nullable DelegationToolSchemaAssembler
+                                                       delegationSchemas,
+                                               @Nullable ModelResolver resolver) {
         this.agentQuery = agentQuery;
         this.closureResolver = closureResolver;
         this.toolDefs = toolDefs;
         this.delegationSchemas = delegationSchemas;
+        this.resolver = resolver;
     }
 
     @Override
@@ -94,7 +120,7 @@ public class WorkerChildAgentModelConfigProvider implements ChildAgentModelConfi
      * 共用装配器（根路径与子路径<b>同一份</b>）。
      */
     private @NonNull AgentModelConfigAssembler assembler() {
-        return new AgentModelConfigAssembler(agentQuery, closureResolver, toolDefs);
+        return new AgentModelConfigAssembler(agentQuery, closureResolver, toolDefs, resolver);
     }
 
     /**

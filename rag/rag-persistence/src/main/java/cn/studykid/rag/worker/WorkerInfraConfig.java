@@ -8,9 +8,15 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.Optional;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import cn.studykid.rag.infrastructure.LocalRagPortsConfig;
 import cn.studykid.rag.infrastructure.embedding.EmbeddingPorts;
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
+import cn.studykid.rag.infrastructure.modelcatalog.ModelCatalogClient;
 import cn.studykid.rag.infrastructure.ops.RagOpsConfiguration;
 import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
 import cn.studykid.rag.infrastructure.indexing.IndexGenerationBuilder;
@@ -56,6 +62,8 @@ import org.springframework.context.annotation.Import;
 @Import({LocalRagPortsConfig.class, RagOpsConfiguration.class})
 public class WorkerInfraConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(WorkerInfraConfig.class);
+
     /**
      * 占位端口显式启用开关（评审 P0-6，缺省 {@code false} = fail-closed）。
      * 与 {@link LocalRagPortsConfig} 共用同一属性：嵌入/解析/蕴含三处占位
@@ -83,16 +91,60 @@ public class WorkerInfraConfig {
     private int embeddingTimeoutSeconds;
 
     /**
+     * 统一模型目录（平台侧）的 base-url；配置后 RAG worker 优先从目录解析 embedding 模型，
+     * 否则回落到下方 yml 配置。留空 = 不启用目录（沿用历史 yml 行为，保证存量部署不变）。
+     *
+     * <p>⚠️ 必须与 rag-bootstrap 同源：索引向量与查询向量来自不同 embedding 模型时，
+     * 检索会恒低分且不报错。两侧共用同一 {@link ModelCatalogClient} 解析逻辑。
+     */
+    @org.springframework.beans.factory.annotation.Value("${rag.model-catalog.platform-base-url:}")
+    private String modelCatalogBaseUrl;
+
+    /** 访问平台内部解析端点的共享令牌（与平台 {@code model-catalog.internal-token} 对应）。 */
+    @org.springframework.beans.factory.annotation.Value("${rag.model-catalog.token:}")
+    private String modelCatalogToken;
+
+    /** 目录解析结果缓存秒数（默认 5 分钟，避免每条索引批都打平台）。 */
+    @org.springframework.beans.factory.annotation.Value("${rag.model-catalog.cache-ttl-seconds:300}")
+    private long modelCatalogCacheTtlSeconds;
+
+    /**
      * 嵌入端口。
      *
-     * <p>与 rag-bootstrap 共用 {@link EmbeddingPorts}：配置了 {@code rag.embedding.base-url}
-     * 走真实模型，否则退回本地确定性占位并受 fail-closed 闸门约束。
+     * <p>与 rag-bootstrap <b>共用同一套解析口径</b>：优先从统一模型目录（平台侧）解析
+     * embedding 场景模型；未配置目录或解析失败时回落 {@code rag.embedding.*} yml。
      * 两处必须同源——索引向量与查询向量来自不同模型时，检索会恒低分且不报错。
      */
     @Bean
     public EmbeddingPort embeddingPort() {
-        return EmbeddingPorts.create(localPortsEnabled, embeddingBaseUrl, embeddingApiKey,
-                embeddingModel, embeddingDimension, embeddingBatchSize, embeddingTimeoutSeconds,
+        String baseUrl = embeddingBaseUrl;
+        String model = embeddingModel;
+        int dimension = embeddingDimension;
+        if (!modelCatalogBaseUrl.isBlank()) {
+            ModelCatalogClient client = new ModelCatalogClient(
+                    modelCatalogBaseUrl, modelCatalogToken, modelCatalogCacheTtlSeconds);
+            Optional<ModelCatalogClient.ResolvedEmbeddingModel> resolved =
+                    client.resolveEmbeddingModel();
+            if (resolved.isPresent()) {
+                ModelCatalogClient.ResolvedEmbeddingModel r = resolved.get();
+                // ⚠️ 模型名与维度始终取自目录（统一模型定义优先于 yml）；
+                //    base_url 仅当目录明确给出时才覆盖 yml（目录 base_url 为空则沿用 yml 嵌入地址）。
+                model = r.modelName();
+                if (r.dimension() != null) {
+                    dimension = r.dimension();
+                }
+                if (r.baseUrl() != null && !r.baseUrl().isBlank()) {
+                    log.info("[RAG worker] 嵌入模型取自统一模型目录: provider={}, model={}, baseUrl={}",
+                            r.provider(), r.modelName(), r.baseUrl());
+                    baseUrl = r.baseUrl();
+                } else {
+                    log.info("[RAG worker] 嵌入模型名/维度取自统一模型目录（基址沿用 yml）: provider={}, model={}",
+                            r.provider(), r.modelName());
+                }
+            }
+        }
+        return EmbeddingPorts.create(localPortsEnabled, baseUrl, embeddingApiKey,
+                model, dimension, embeddingBatchSize, embeddingTimeoutSeconds,
                 "rag-worker");
     }
 

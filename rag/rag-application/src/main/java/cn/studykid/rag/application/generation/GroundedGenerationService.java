@@ -7,12 +7,16 @@ import java.util.Set;
 import java.util.UUID;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import cn.studykid.rag.core.chunk.Chunk;
 import cn.studykid.rag.core.generation.GenerationRequest;
 import cn.studykid.rag.core.generation.GenerationResult;
 import cn.studykid.rag.core.retrieval.RetrievalPolicy;
+import cn.studykid.rag.ports.GenerationModelPort;
 import cn.studykid.rag.ports.RetrievalPort;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 接地生成用例（RAG-D00 §2.7 决策 D-R09 / B5）。
@@ -39,17 +43,37 @@ import cn.studykid.rag.ports.RetrievalPort;
  */
 public class GroundedGenerationService {
 
+    private static final Logger log = LoggerFactory.getLogger(GroundedGenerationService.class);
+
     private final RetrievalPort retrievalPort;
+
+    /**
+     * 大模型合成端口（可空）。非空时讲解优先走「接地合成 + 强制引用」，
+     * 端口抛错 / 返回空时回落逐字摘录（fail-soft）。为 null 时恒走逐字摘录。
+     */
+    @Nullable
+    private final GenerationModelPort modelPort;
 
     /**
      * @param retrievalPort 检索端口（复用一个读取方法，见
      *                      {@link RetrievalPort#loadByIds}）
      */
     public GroundedGenerationService(@NonNull RetrievalPort retrievalPort) {
+        this(retrievalPort, null);
+    }
+
+    /**
+     * @param retrievalPort 检索端口（复用一个读取方法，见
+     *                      {@link RetrievalPort#loadByIds}）
+     * @param modelPort     大模型合成端口（可空；非空时优先接地合成）
+     */
+    public GroundedGenerationService(@NonNull RetrievalPort retrievalPort,
+            @Nullable GenerationModelPort modelPort) {
         if (retrievalPort == null) {
             throw new IllegalArgumentException("retrievalPort 不能为空");
         }
         this.retrievalPort = retrievalPort;
+        this.modelPort = modelPort;
     }
 
     /**
@@ -114,11 +138,35 @@ public class GroundedGenerationService {
                             + "或把版本范围改成「优先本版，可回退同册」。");
         }
 
-        // ⑥ 逐字装配
+        // ⑥ 生成讲解：优先大模型接地合成（合成 + 强制引用），失败回落逐字摘录
+        String generator;
+        String answer;
+        if (modelPort != null) {
+            try {
+                String synthesized = modelPort.synthesize(
+                        request.query(), modeLabel(request.mode()), versionAllowed);
+                if (synthesized != null && !synthesized.isBlank()) {
+                    generator = GenerationResult.GENERATOR_LLM_GROUNDED;
+                    answer = synthesized + citationBlock(versionAllowed);
+                } else {
+                    generator = GenerationResult.GENERATOR_EXCERPT_ASSEMBLY;
+                    answer = assemble(request, versionAllowed);
+                }
+            } catch (RuntimeException e) {
+                // ⚠️ fail-soft：模型不可用 / 超时 / 返回空 → 回落逐字摘录，
+                //    保证学生至少能看到可核对的原文，而不是一段无出处的话。
+                log.warn("接地生成 LLM 合成失败，回落逐字摘录: {}", e.toString());
+                generator = GenerationResult.GENERATOR_EXCERPT_ASSEMBLY;
+                answer = assemble(request, versionAllowed);
+            }
+        } else {
+            generator = GenerationResult.GENERATOR_EXCERPT_ASSEMBLY;
+            answer = assemble(request, versionAllowed);
+        }
         return new GenerationResult(
-                assemble(request, versionAllowed),
+                answer,
                 versionAllowed,
-                GenerationResult.GENERATOR_EXCERPT_ASSEMBLY,
+                generator,
                 buildDisclaimer(versionMismatch, suppressed),
                 versionMismatch,
                 suppressed);
@@ -154,11 +202,7 @@ public class GroundedGenerationService {
         StringBuilder sb = new StringBuilder();
         sb.append("以下内容逐字摘自你正在使用的教材，未作改写，可对照原书核对。\n\n");
         for (int i = 0; i < basis.size(); i++) {
-            Chunk c = basis.get(i);
-            sb.append("【依据 ").append(i + 1).append("】")
-                    .append(c.edition().display())
-                    .append(" · ").append(c.locator().display()).append('\n');
-            sb.append(c.text().strip()).append('\n');
+            sb.append(formatExcerpt(i + 1, basis.get(i)));
             if (i < basis.size() - 1) {
                 sb.append('\n');
             }
@@ -169,6 +213,30 @@ public class GroundedGenerationService {
             sb.append("\n（以上为与「").append(request.query().strip()).append("」相关的教材原文。）");
         }
         return sb.toString();
+    }
+
+    /**
+     * 逐字引用块（LLM 合成后强制追加，保证学生可对照原书核对）。
+     *
+     * <p>⚠️ 与逐字摘录共用 {@link #formatExcerpt}：引用块就是「依据原文」本身，
+     * 合成讲解再好，学生也能逐条翻书核对模型是否忠于原文。
+     */
+    private static String citationBlock(List<Chunk> basis) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n\n— 以下为依据原文（可对照原书核对）—\n");
+        for (int i = 0; i < basis.size(); i++) {
+            sb.append(formatExcerpt(i + 1, basis.get(i)));
+            if (i < basis.size() - 1) {
+                sb.append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 单条依据的逐字格式化（依据编号 + 版本 + 页码 + 原文）。 */
+    private static String formatExcerpt(int index, Chunk c) {
+        return "【依据 " + index + "】" + c.edition().display() + " · "
+                + c.locator().display() + '\n' + c.text().strip();
     }
 
     /**

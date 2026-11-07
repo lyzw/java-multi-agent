@@ -5684,6 +5684,112 @@ COMMENT ON POLICY student_memory_tenant_isolation ON public.student_memory IS '�
 
 
 --
+--
+-- Name: model_catalog; Type: TABLE; Schema: public; Owner: -
+--
+
+-- 统一模型目录（管理后台集中维护的所有模型配置，平台全局、无租户隔离）。
+-- ⚠️ 本表不含任何 API Key / 密钥列：密钥按 provider 由环境变量解析
+--    （agent.model.<provider>.api-key），遵循「凭据不入库」铁律。
+CREATE TABLE public.model_catalog (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider        text NOT NULL,
+    scenario        text NOT NULL,
+    model_name      text NOT NULL,
+    display_name    text,
+    base_url        text,
+    is_default      boolean NOT NULL DEFAULT false,
+    supports_tools  boolean NOT NULL DEFAULT true,
+    supports_streaming boolean NOT NULL DEFAULT true,
+    supports_vision boolean NOT NULL DEFAULT false,
+    dimension       integer,
+    is_enabled      boolean NOT NULL DEFAULT true,
+    sort_order      integer NOT NULL DEFAULT 0,
+    description     text,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE public.model_catalog IS
+    '统一模型目录：所有模型（对话/嵌入/摘要/分类/审核）由管理后台集中定义与维护，'
+    '各模块运行时统一经 ModelResolver 读取，禁止硬编码。不含密钥。';
+
+-- 同场景内模型名唯一（避免重复登记）
+CREATE UNIQUE INDEX model_catalog_scenario_name_uq
+    ON public.model_catalog (scenario, model_name);
+
+-- ⚠️ 每场景至多一个默认模型（部分唯一索引强制）
+CREATE UNIQUE INDEX model_catalog_scenario_default_uq
+    ON public.model_catalog (scenario) WHERE is_default;
+
+CREATE INDEX model_catalog_scenario_idx ON public.model_catalog (scenario);
+CREATE INDEX model_catalog_default_idx ON public.model_catalog (is_default);
+CREATE INDEX model_catalog_enabled_idx ON public.model_catalog (is_enabled);
+
+
+--
+--
+-- Name: model_provider_credential; Type: TABLE; Schema: public; Owner: -
+--
+
+-- 供应商 API 密钥（带外加密存储，与 model_catalog 分离：目录是「配置」，本表是「凭据」）。
+-- ⚠️ api_key 明文绝不落库：经 AES-256-GCM 加密后存入 encrypted_key；
+--    key_checksum 为明文 SHA-256（用于篡改检测，不回显）；algorithm 记录加密算法。
+-- ⚠️ 管理后台只读脱敏视图（仅末 4 位），明文仅在运行时由 ProviderCredentialPort 解密供网关使用。
+-- ⚠️ 本表为平台全局表，无租户、无 RLS（密钥由超级管理员统一维护，所有租户共用）。
+CREATE TABLE public.model_provider_credential (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider        text NOT NULL UNIQUE,
+    encrypted_key   text NOT NULL,
+    key_checksum    text NOT NULL,
+    algorithm       text NOT NULL DEFAULT 'AES_256_GCM',
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE public.model_provider_credential IS
+    '供应商 API 密钥（AES-256-GCM 加密存储）。仅运行时由 ProviderCredentialPort 解密，管理后台只读脱敏视图。';
+
+CREATE INDEX model_provider_credential_provider_idx
+    ON public.model_provider_credential (provider);
+
+
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║ 种子默认模型（统一模型目录初始数据）                                        ║
+-- ║                                                                           ║
+-- ║ ⚠️ 这是「配置」不是「凭据」：本表不含任何 API Key。                        ║
+-- ║    密钥按 provider 由环境变量 agent.model.<provider>.api-key 解析。        ║
+-- ║                                                                           ║
+-- ║ 每场景至多一个默认（部分唯一索引 model_catalog_scenario_default_uq 强制）。  ║
+-- ║ 存量库请用 deploy/sql/platform/seed_model_catalog.sql（幂等，可重复执行）。  ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
+INSERT INTO public.model_catalog
+    (provider, scenario, model_name, display_name, base_url,
+     is_default, supports_tools, supports_streaming, supports_vision,
+     dimension, is_enabled, sort_order, description)
+VALUES
+    -- 主 Agent 对话：MiniMax M2.5（平台 Worker 执行链路核心 LLM）
+    ('minimax', 'agent-chat', 'MiniMax-M2.5', 'MiniMax M2.5',
+     'https://api.minimax.cn/v1',
+     true, true, true, false, NULL, true, 0,
+     '主 Agent 对话默认模型（MiniMax M2.5，思考型）。base_url/key 仍走环境变量。'),
+    -- 管理后台直接对话（控制台调试）
+    ('minimax', 'console-chat', 'MiniMax-M2.5', 'MiniMax M2.5（控制台）',
+     'https://api.minimax.cn/v1',
+     true, true, true, false, NULL, true, 0,
+     '管理后台控制台直接对话默认模型。'),
+    -- 向量化 / Embedding（RAG 索引与查询共用；base_url 留空→沿用 rag.embedding.base-url）
+    ('bge', 'embedding', 'bge-m3', 'BGE-M3 向量化',
+     NULL,
+     true, false, false, false, 1024, true, 0,
+     'RAG 嵌入默认模型（BGE-M3，1024 维）。base_url 由 yml 提供，维度与向量列一致。'),
+    -- 兜底默认场景（其它场景无命中时回落；保证「任何场景至少一个可用模型」）
+    ('minimax', 'default', 'MiniMax-M2.5', 'MiniMax M2.5（兜底）',
+     'https://api.minimax.cn/v1',
+     true, true, true, false, NULL, true, 0,
+     '全局兜底默认模型：具体场景无命中且无自身默认时回落到此。');
+
+
 -- PostgreSQL database dump complete
 --
 

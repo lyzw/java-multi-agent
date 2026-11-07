@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 import javax.sql.DataSource;
 
@@ -24,8 +25,13 @@ import cn.studykid.multiagent.application.config.BudgetPolicy;
 import cn.studykid.multiagent.application.config.EffectiveConfigResolver;
 import cn.studykid.multiagent.application.config.PlatformConfig;
 import cn.studykid.multiagent.application.config.RunConfigSnapshotFactory;
+import cn.studykid.multiagent.application.modelcatalog.ModelResolver;
 import cn.studykid.multiagent.application.prompt.PromptGuard;
+import cn.studykid.multiagent.core.compliance.ModelProviders;
 import cn.studykid.multiagent.core.config.ApprovalRequirement;
+import cn.studykid.multiagent.infrastructure.model.ModelCredentialProvider;
+import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
+import cn.studykid.multiagent.ports.modelcatalog.ModelScenario;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
 import cn.studykid.multiagent.core.config.ToolRiskLevel;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
@@ -122,6 +128,21 @@ public class WorkerExecutionConfig {
     String minimaxDefaultModel;
 
     /**
+     * 统一模型目录解析器（管理后台集中维护的模型配置）。
+     *
+     * <p>⚠️ <b>required=false</b>：{@code ChatStreamGatewayWiringTest} 等单测直接
+     * {@code new WorkerExecutionConfig()} 调 {@code chatStreamGateway()}，不走 Spring 注入，
+     * 此时本字段为 {@code null}——{@link #modelGateway()} 必须对其空值守卫，
+     * 回落到 yml / Fake，不能因缺 bean 而 NPE 或编译失败。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    ModelResolver modelResolver;
+
+    /** 按 provider 解析 API Key（环境变量，不入库）。同上为 required=false。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    ModelCredentialProvider modelCredentialProvider;
+
+    /**
      * 模型网关（P4-D01 / L-4）。
      *
      * <p><b>配置了 {@code agent.model.minimax.api-key} 时走真实 MiniMax 调用</b>；
@@ -165,18 +186,83 @@ public class WorkerExecutionConfig {
     /**
      * 模型网关实例（raw，未包装观测链）。
      *
-     * <p>配置了 {@code agent.model.minimax.api-key} 时走真实 MiniMax 调用；
-     * 未配置时回落 {@code FakeModelGateway} 占位，保证链路结构完整。
-     * 统一收口到此处，确保两个端口 Bean 永远指向同一决策。
+     * <p><b>⚠️ 统一配置源优先</b>：优先读管理后台「统一模型目录」中
+     * {@link ModelScenario#AGENT_CHAT} 场景的默认模型（provider / 模型名 / 地址均来自目录），
+     * API Key 仍按 provider 由 {@link ModelCredentialProvider} 从环境变量解析（不入库）。
+     * 目录未配置 / 取失败 / 无密钥时，<b>回落</b>到 yml 硬编码（保持历史部署兼容），
+     * 再无配置则 {@link #fakeGateway()} 占位——绝不因「目录为空」而 NPE。
+     *
+     * <p>⚠️ {@code modelResolver} 可能为 {@code null}（直接构造的单元测试），
+     * 必须空值守卫，否则 {@code chatStreamGateway()} 在测试中无法返回实例。
      */
     private cn.studykid.multiagent.infrastructure.model.AbstractModelGateway modelGateway() {
+        // ① 统一模型目录：agent-chat 场景默认模型
+        if (modelResolver != null) {
+            try {
+                Optional<ModelDefinition> defOpt = modelResolver.defaultForScenario(
+                        ModelScenario.AGENT_CHAT);
+                if (defOpt.isPresent() && defOpt.get().isEnabled()) {
+                    ModelDefinition d = defOpt.get();
+                    String key = modelCredentialProvider == null ? null
+                            : modelCredentialProvider.apiKeyFor(d.provider());
+                    String baseUrl = (d.baseUrl() != null && !d.baseUrl().isBlank())
+                            ? d.baseUrl()
+                            : (modelCredentialProvider == null ? null
+                                : modelCredentialProvider.defaultBaseUrlFor(d.provider()));
+                    if (key != null && !key.isBlank() && baseUrl != null && !baseUrl.isBlank()) {
+                        log.info("装配网关(统一模型目录): provider={}, scenario={}, model={}",
+                                d.provider(), d.scenario(), d.modelName());
+                        return gatewayForProvider(d.provider(), baseUrl, key, d.modelName());
+                    }
+                }
+            } catch (RuntimeException e) {
+                // 目录读取异常不应阻断启动：回落 yml/Fake
+                log.warn("读取统一模型目录失败，回落 yml 配置: {}", e.getMessage());
+            }
+        }
+        // ② 回落：yml 硬编码（保持历史部署兼容）
         if (minimaxApiKey != null && !minimaxApiKey.isBlank()) {
             log.info("装配 MiniMaxModelGateway: 真实模型调用已启用, defaultModel={}",
                     minimaxDefaultModel);
             return new cn.studykid.multiagent.infrastructure.model.MiniMaxModelGateway(
                     minimaxBaseUrl, minimaxApiKey, minimaxDefaultModel);
         }
-        log.warn("⚠️⚠️ 使用 FakeModelGateway 占位（未配置 agent.model.minimax.api-key）——"
+        // ③ 占位：链路可跑通，但非真实模型调用
+        return fakeGateway();
+    }
+
+    /**
+     * 按 provider 选择真实网关适配器。
+     *
+     * <p>⚠️ <b>分发口径</b>：
+     * <ul>
+     *   <li>{@code minimax} → {@link MiniMaxModelGateway}
+     *       （自带思考草稿 {@code <think>} 与业务错误体 {@code base_resp} 处理）；</li>
+     *   <li>{@code openai / deepseek / workbuddy / ollama} →
+     *       {@link OpenAiCompatibleModelGateway}（标准 OpenAI Chat Completions 协议）；</li>
+     *   <li>未知 provider 无适配器 → 回落 Fake 占位并告警（fail-soft：链路可跑通但非真实调用）。</li>
+     * </ul>
+     */
+    private cn.studykid.multiagent.infrastructure.model.AbstractModelGateway gatewayForProvider(
+            @NonNull String provider, @NonNull String baseUrl,
+            @NonNull String apiKey, @NonNull String modelName) {
+        return switch (provider) {
+            case ModelProviders.MINIMAX ->
+                    new cn.studykid.multiagent.infrastructure.model.MiniMaxModelGateway(
+                            baseUrl, apiKey, modelName);
+            case "openai", "deepseek", "workbuddy", "ollama" ->
+                    new cn.studykid.multiagent.infrastructure.model.OpenAiCompatibleModelGateway(
+                            baseUrl, apiKey, modelName);
+            default -> {
+                log.warn("统一模型目录 provider={} 暂无对应网关适配器，回落 Fake 占位", provider);
+                yield fakeGateway();
+            }
+        };
+    }
+
+    /** Fake 占位网关（未配置真实模型时保证链路结构完整）。 */
+    private cn.studykid.multiagent.infrastructure.model.AbstractModelGateway fakeGateway() {
+        log.warn("⚠️⚠️ 使用 FakeModelGateway 占位（未配置可用模型 / api-key）——"
                 + "链路可跑通，但**不是真实模型调用**");
         return new cn.studykid.multiagent.infrastructure.model.FakeModelGateway(
                 cn.studykid.multiagent.infrastructure.model.FakeModelGateway.FaultMode.NONE,
@@ -476,9 +562,11 @@ public class WorkerExecutionConfig {
             cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
             cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
             cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
-                    delegationToolSchemaAssembler) {
+                    delegationToolSchemaAssembler,
+            cn.studykid.multiagent.application.modelcatalog.ModelResolver modelResolver) {
         return new cn.studykid.multiagent.worker.execute.WorkerChildAgentModelConfigProvider(
-                agentQuery, closureResolver, toolDefs, delegationToolSchemaAssembler);
+                agentQuery, closureResolver, toolDefs, delegationToolSchemaAssembler,
+                modelResolver);
     }
 
     /**
@@ -883,11 +971,12 @@ public class WorkerExecutionConfig {
             cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
             cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
             cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
-                    delegationToolSchemaAssembler) {
+                    delegationToolSchemaAssembler,
+            cn.studykid.multiagent.application.modelcatalog.ModelResolver modelResolver) {
         return new cn.studykid.multiagent.worker.execute.RootAgentModelConfigProvider(
                 snapshots,
                 new cn.studykid.multiagent.worker.execute.AgentModelConfigAssembler(
-                        agentQuery, closureResolver, toolDefs),
+                        agentQuery, closureResolver, toolDefs, modelResolver),
                 delegationToolSchemaAssembler);
     }
 

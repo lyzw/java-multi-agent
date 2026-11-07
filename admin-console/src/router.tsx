@@ -30,6 +30,7 @@ import { RagDictionaryPage } from '@/pages/rag/RagDictionaryPage'
 import { RagIngestJobsPage } from '@/pages/rag/RagIngestJobsPage'
 import { RagReindexPage } from '@/pages/rag/RagReindexPage'
 import { DictionaryAdminPage } from '@/pages/dictionaries/DictionaryAdminPage'
+import { ModelCatalogPage } from '@/pages/models/ModelCatalogPage'
 import { AgentLabPage } from '@/pages/agentlab/AgentLabPage'
 import { AiChatPage } from '@/pages/agentlab/AiChatPage'
 import { AgentMetricsPage } from '@/pages/metrics/AgentMetricsPage'
@@ -287,6 +288,15 @@ export const router = createBrowserRouter(
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>
               <DictionaryAdminPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 模型配置（Model Catalog）：模型定义 CRUD + 供应商密钥（PLATFORM_ADMIN 闸门）
+          path: 'model-catalog',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <ModelCatalogPage />
             </RequireRole>
           ),
         },

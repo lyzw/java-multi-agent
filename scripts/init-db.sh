@@ -133,8 +133,10 @@ if [ "$TARGET" = platform ]; then
   #    多出来的那张是 platform.authz_decision_log（决策流水，2026-10-31 引入）。
   #    2026-11-06 P1 跨 Run 记忆再 +1 表 public.student_memory（同时 +1 RLS 表 / +1 策略），
   #    故三项期望值同步为 67 / 43 / 51；与 it-env.sh --probe 用的是同一份事实。
+  #    2026-11-07 统一模型目录表 model_catalog（全局、无 RLS）：67 → 68。
+  #    2026-11-07 供应商密钥表 model_provider_credential（全局、无 RLS，加密存储）：68 → 69。
   #    改快照新增/删除表时**必须同步这里**，否则「建库成功但自检红」会被当成环境问题排查。
-  EXPECT_TABLES=67
+  EXPECT_TABLES=69
   echo "· 自检"
   TABLES=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_tables WHERE schemaname IN ('public','platform')")
   RLSTB=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relrowsecurity")
