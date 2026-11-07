@@ -237,6 +237,11 @@ mkdir -p deploy/docling/{models,inbox,samples}
 cd deploy/docling
 ```
 
+> `samples/` 只保留本 README §5 自造的 `sample.pdf`（900 字节合成件）。
+> 真实教材 PDF（沪教版/苏教版等）**不入库**——`.gitignore` 已排除
+> `deploy/docling/samples/*.pdf`，请自行把要实测的教材放进去；
+> 教材正文不进版本库，语料侧同样只在 `rag_source.object_ref` 留引用。
+
 ### 3.2 `docker-compose.yml`（**可直接复制执行**）
 
 ```yaml

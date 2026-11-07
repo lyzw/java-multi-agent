@@ -11105,8 +11105,14 @@ __pycache__/
 # ── 本地运行时产物（不入库）──
 # 对象存储的本地桶内容（83MB 级运行时数据；语料正文不入库，只入引用）
 /blobs/
+# 语料对象存储的同一份本地桶的另一目录形态（rag.corpus-bucket.base-dir 默认值；
+# 内容是用户上传的教材原件，同样不入库，只在 rag_source.object_ref 里留引用）
+/corpus-bucket/
 # 开发过程截图的临时输出目录（正式视觉稿在 rag/docs/ui-mock/screens/）
 /shots/
+# Docling 手工样例教材（真实教材 PDF 不入库；只保留 README §5 自造的 sample.pdf）
+deploy/docling/samples/*.pdf
+!deploy/docling/samples/sample.pdf
 # MinerU 本地服务锁与临时测试件
 .mineru-service.lock
 /test_mineru.pdf
