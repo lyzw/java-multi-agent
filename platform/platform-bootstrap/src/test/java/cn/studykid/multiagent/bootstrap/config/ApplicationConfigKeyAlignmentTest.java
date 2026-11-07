@@ -65,6 +65,19 @@ class ApplicationConfigKeyAlignmentTest {
     private static final Set<String> ENV_PROVIDED = Set.of(
             "spring.datasource.url", "spring.datasource.username", "spring.datasource.password");
 
+    /**
+     * 运行时拼接的动态键前缀：<b>只由环境变量提供</b>，yml 里刻意不写静态键。
+     *
+     * <p>{@code ModelCredentialProvider} 读
+     * {@code agent.model.<provider>.api-key} / {@code .base-url}，其中 provider
+     * 取自统一模型目录（DB），键由 {@code AGENT_MODEL_MINIMAX_API_KEY} 一类环境变量
+     * 经 Spring 松散绑定注入（见 platform.env.example）。守卫的
+     * {@code GET_PROPERTY} 只能截到字面量前缀 {@code agent.model.}，
+     * 无法静态验证完整键；此处登记为有界例外，并由
+     * {@link #dynamicEnvNamespacesAreStillInUse()} 防止条目陈旧空转。
+     */
+    private static final Set<String> DYNAMIC_ENV_NAMESPACES = Set.of("agent.model.");
+
     /** {@code @Value("${key}")} 与 {@code @Value("${key:默认值}")}。 */
     private static final Pattern VALUE_PLACEHOLDER =
             Pattern.compile("\\$\\{([A-Za-z0-9_.\\-]+)(:[^}]*)?\\}");
@@ -146,7 +159,7 @@ class ApplicationConfigKeyAlignmentTest {
         List<String> missing = new ArrayList<>();
         for (Map.Entry<String, List<String>> entry : readBy.entrySet()) {
             String key = entry.getKey();
-            if (ENV_PROVIDED.contains(key)) {
+            if (ENV_PROVIDED.contains(key) || DYNAMIC_ENV_NAMESPACES.contains(key)) {
                 continue;
             }
             if (ymlKeys.contains(key)) {
@@ -167,6 +180,16 @@ class ApplicationConfigKeyAlignmentTest {
                         + "常见成因：yml 段被挂错父键（如 platform-ops 挂到 config: 下）。",
                         String.join("\n", missing))
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("⚠️ 动态环境变量命名空间仍被代码使用（豁免条目不得陈旧空转）")
+    void dynamicEnvNamespacesAreStillInUse() {
+        Set<String> readByCode = configKeysReadByCode().keySet();
+        assertThat(readByCode)
+                .as("动态键豁免条目已不被任何代码读取 —— 说明源码已改为静态键，"
+                        + "应删除 DYNAMIC_ENV_NAMESPACES 中对应条目，避免豁免变成永久盲区")
+                .containsAll(DYNAMIC_ENV_NAMESPACES);
     }
 
     @Test

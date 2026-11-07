@@ -12,6 +12,8 @@ import tools.jackson.databind.ObjectMapper;
 import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -78,8 +80,17 @@ public class ConsoleChatController {
     /** SSE 发射器工厂（生产用标准超时 SseEmitter，测试可注入可捕获替身）。 */
     private final Supplier<SseEmitter> emitterFactory;
 
-    /** 默认构造：虚拟线程执行器 + 标准超时 SSE 发射器（生产装配用）。 */
-    public ConsoleChatController(@NonNull ChatStreamGateway chatGateway,
+    /**
+     * 默认构造：虚拟线程执行器 + 标准超时 SSE 发射器（生产装配用）。
+     *
+     * <p>⚠️ <b>必须 {@code @Autowired}</b>：本类另有一个测试用包级全参构造，
+     * 组件扫描下多构造且无 {@code @Autowired} 时 Spring 回落无参构造并抛
+     * {@code No default constructor found}（启动期故障，编译期发现不了）。
+     */
+    @Autowired
+    public ConsoleChatController(
+                                 @NonNull @Qualifier("chatStreamGateway")
+                                 ChatStreamGateway chatGateway,
                                  @NonNull CurrentPrincipal currentPrincipal,
                                  @NonNull RateLimitPort rateLimiter,
                                  @org.springframework.beans.factory.annotation.Value(

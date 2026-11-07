@@ -29,10 +29,20 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class SchemaStructureTest {
 
-    /** 无需 RLS 的租户域表：租户自身即隔离单元，或为平台级定义。 */
+    /**
+     * 无需 RLS 的租户域表：租户自身即隔离单元，或为平台级定义。
+     *
+     * <p>⚠️ 2026-11-07 统一模型配置：{@code model_catalog}（模型目录）与
+     * {@code model_provider_credential}（供应商密钥密文）是<b>平台级全局资源</b>，
+     * 由超级管理员经 {@code /api/admin/models}、{@code /api/admin/model-credentials}
+     * 维护、所有租户共用，设计上<b>不带 tenant_id、不挂 RLS</b>（见
+     * {@code docs/模型统一配置架构设计.md} §7.2 ③）。它们不是租户数据，
+     * 故登记为有界豁免；密钥表落库为 AES-256-GCM 密文且仅平台管理端点可读写。
+     */
     private static final Set<String> RLS_EXEMPT_TABLES = Set.of(
             "public.tenant",
-            "public.cap_tool_def", "public.cap_skill_def", "public.cap_mcp_server_def");
+            "public.cap_tool_def", "public.cap_skill_def", "public.cap_mcp_server_def",
+            "public.model_catalog", "public.model_provider_credential");
 
     /** 必须存在的安全约束关键词——缺一即视为安全能力退化。 */
     private static final List<String> REQUIRED_SECURITY_MECHANISMS = List.of(
