@@ -74,6 +74,18 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler): void {
   onUnauthorized = handler
 }
 
+/**
+ * 供非 `_request` 通道复用同一套 401 处置（如 SSE 流式响应）。
+ *
+ * ⚠️ 流式端点必须走裸 `fetch`（`_request` 会 `await res.text()` 把整条流读干），
+ *    但「清会话 + 通知上层跳登录」仍应只有一处实现；
+ *    否则各通道各写一遍，迟早又出现「401 一律清会话」把对话草稿丢掉的事故。
+ *    调用方仍需自行 `clearSession()`（与 `_request` 的语义保持一致）。
+ */
+export function notifyUnauthorized(): void {
+  onUnauthorized()
+}
+
 const BASE = ''
 
 function buildHeaders(hasBody: boolean, extra?: Record<string, string>): Headers {

@@ -35,6 +35,11 @@ import cn.studykid.multiagent.ports.security.PlatformPrincipal;
  * 「端点必须挂在平台链」「控制器不得再要求 TenantContext」两条约束固定下来，
  * 防止后续重构把端点挪回去、或有人图省事用 {@code permitAll} 绕过 401。
  *
+ * <p><b>2026-11-07 租户前台「通用知识问答」</b>：同一流式实现另挂
+ * {@code /api/knowledge/chat/**}（租户链）。本守卫额外锁死
+ * 「新前缀不得被收进平台链 / 匿名白名单」以及「推理草稿不下发到租户通道」，
+ * 否则会重演身份域错配（租户令牌打平台链必 401）。
+ *
  * <p>⚠️ <b>防空转</b>：先断言两份源码确实被读到且含预期锚点，
  * 再做「包含 / 不包含」判断 —— 路径发现失败会让空串恒绿。
  */
@@ -58,7 +63,8 @@ class ConsoleChatIdentityDomainTest {
         // ── 防空转锚点 ──────────────────────────────────────────────
         assertThat(security)
                 .contains("platformSecurityFilterChain", "PUBLIC_ENDPOINTS", "@Order(0)");
-        assertThat(controller).contains("@RequestMapping(\"/api/chat\")", "ChatCaller");
+        assertThat(controller).contains(
+                "@RequestMapping({\"/api/chat\", \"/api/knowledge/chat\"})", "ChatCaller");
 
         assertThat(security)
                 .as("漏配即落回租户链：平台令牌（aud=admin-console-api）被 aud=agent-platform 校验拒绝，"
@@ -76,6 +82,44 @@ class ConsoleChatIdentityDomainTest {
                 .as("平台主体刻意不持有 tenantId；控制器若再依赖 TenantContext / CurrentPrincipal，"
                         + "请求到业务层仍会 401")
                 .doesNotContain("CurrentPrincipal", "TenantContext");
+    }
+
+    @Test
+    @DisplayName("⛔ 租户通用问答前缀必须留在租户链，且不下发推理草稿")
+    void tenantGeneralChatStaysOnTenantChainWithoutThinkingFrames() {
+        String security = codeOnly(read(platformRoot().resolve(
+                "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/"
+                        + "SecurityConfiguration.java")));
+        String controller = codeOnly(read(platformRoot().resolve(
+                "agent-api/src/main/java/cn/studykid/multiagent/api/chat/"
+                        + "ConsoleChatController.java")));
+
+        // ── 防空转锚点 ──────────────────────────────────────────────
+        assertThat(security).contains("platformSecurityFilterChain", "PUBLIC_ENDPOINTS", "@Order(0)");
+        assertThat(controller).contains("ChatCaller", "@PostMapping(value = \"/stream\"");
+
+        assertThat(controller)
+                .as("租户前台必须走独立前缀；共用 /api/chat/** 会被平台链按 aud 拒绝")
+                .contains("TENANT_CHAT_PREFIX = \"/api/knowledge/chat/\"");
+        assertThat(security)
+                .as("平台链若把新前缀一并纳入，租户令牌（aud=agent-platform）会被"
+                        + "PlatformBearerTokenFilter 拒成 401，前台点发送必然失败")
+                .doesNotContain("/api/knowledge/chat");
+
+        int publicStart = security.indexOf("PUBLIC_ENDPOINTS");
+        int publicEnd = security.indexOf("}", publicStart);
+        assertThat(publicEnd).isGreaterThan(publicStart);
+        assertThat(security.substring(publicStart, publicEnd))
+                .as("租户对话端点必须经租户链验签，严禁进匿名白名单")
+                .doesNotContain("/api/knowledge/chat");
+
+        assertThat(controller)
+                .as("推理草稿（thinking）按设计仅展示给平台管理员；"
+                        + "租户通道必须显式判定并跳过该帧")
+                .contains("consoleThinkingAllowed()", "!includeThinking");
+        assertThat(controller)
+                .as("判定必须走 /api/chat/ 前缀白名单（未知路径默认不下发）")
+                .contains("startsWith(CONSOLE_CHAT_PREFIX)");
     }
 
     @Test

@@ -13,7 +13,7 @@
  *    ④ 顶栏回落文案写死「学生 / 家长 / 老师」→ **谎报身份**且无任何提示
  *
  * ✅ 本文件锁死三件事：
- *    · TENANT_ADMIN 必须看到**完整**菜单（4 分面 16 项）；
+ *    · TENANT_ADMIN 必须看到**完整**菜单（4 分面 17 项）；
  *    · 角色缺失时必须**自愈**（回补 `/api/auth/roles`，不必重新登录）；
  *    · 角色确实拿不到时必须**如实说明**，不得谎称用户是学生。
  */
@@ -24,11 +24,11 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { AppShell } from '@/layouts/AppShell'
 import { SessionProvider } from '@/auth/session'
 
-/** 完整菜单：4 个分面 + 16 个入口（缺一即视为「菜单不完整」） */
+/** 完整菜单：4 个分面 + 17 个入口（缺一即视为「菜单不完整」） */
 const FULL_MENU_GROUPS = ['辅导台', '知识库治理', '运行治理', '平台配置与运维']
 const FULL_MENU_ITEMS = [
   // 辅导台
-  '工作台', '发起辅导', '检索记录', '知识检索', '学习画像', '报表中心',
+  '工作台', '发起辅导', '检索记录', '知识检索', '通用问答', '学习画像', '报表中心',
   // 知识库治理
   '语料管理',
   // 运行治理
@@ -82,7 +82,7 @@ describe('侧栏菜单完整性', () => {
     vi.unstubAllGlobals()
   })
 
-  it('⛔ TENANT_ADMIN 必须看到完整菜单（4 分面 16 项）', () => {
+  it('⛔ TENANT_ADMIN 必须看到完整菜单（4 分面 17 项）', () => {
     seedSession(['TENANT_ADMIN'])
     renderShell()
 
@@ -92,9 +92,9 @@ describe('侧栏菜单完整性', () => {
     for (const item of FULL_MENU_ITEMS) {
       expect(screen.getByRole('link', { name: item })).toBeInTheDocument()
     }
-    // 恰好 16 项，不多不少（多出重复入口同样是「菜单不完整」）
+    // 恰好 17 项，不多不少（多出重复入口同样是「菜单不完整」）
     // ⚠️ 2026-10-24：作用域收敛到**导航地标**。壳内现有两类 link：
-    //    ① 侧栏导航项（16 个，本断言的对象）；
+    //    ① 侧栏导航项（17 个，本断言的对象）；
     //    ② 「跳到主内容」skip link（键盘可达性基线，不是导航项）。
     //    旧写法用全局 getAllByRole('link') 会把 skip link 一并数进去，
     //    于是"加一个无障碍跳转链接"会被误判成"菜单多了入口"。

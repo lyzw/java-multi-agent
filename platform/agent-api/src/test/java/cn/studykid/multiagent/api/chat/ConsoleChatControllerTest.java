@@ -11,8 +11,13 @@ import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -31,8 +36,23 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
  *
  * <p>⚠️ 断言的是「不可绕过的性质」：增量逐帧、推理草稿不外泄、错误归一为
  * {@code event: error} 帧、空消息与限流 fail-closed。
+ *
+ * <p><b>⚠️ 2026-11-07</b>：控制器按请求 URI 判定是否允许 thinking 帧，
+ * 故所有用例默认注入「平台控制台」请求上下文（等价于真实 HTTP 链路）。
+ * 租户前台通道另有专门用例覆盖「不下发推理草稿」。
  */
 class ConsoleChatControllerTest {
+
+    @BeforeEach
+    void useConsoleChatRequest() {
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(
+                new MockHttpServletRequest("POST", "/api/chat/stream")));
+    }
+
+    @AfterEach
+    void clearRequestContext() {
+        RequestContextHolder.resetRequestAttributes();
+    }
 
     // ── S1：逐帧增量 + 终帧 ──────────────────────────────────────────────
 
@@ -122,6 +142,35 @@ class ConsoleChatControllerTest {
         assertTrue(t1 >= 0 && d1 >= 0 && t2 >= 0 && d2 >= 0, "思考与答案帧都应存在");
         assertTrue(t1 < d1 && d1 < t2 && t2 < d2, "顺序须为 思考1 → 答案1 → 思考2 → 答案2");
         assertTrue(all.contains("\"finishReason\":\"STOP\""), "终帧含 STOP 终态");
+        assertTrue(emitter.completed, "流必须完成");
+    }
+
+    // ── S1d：租户前台通道不下发推理草稿，正文链路不变 ──────────────────────
+
+    @Test
+    void tenantGeneralChatSuppressesThinkingButKeepsDeltaAndDone() {
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(
+                new MockHttpServletRequest("POST", "/api/knowledge/chat/stream")));
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer -> {
+            consumer.onThinking("这段推理草稿不得下发到学生侧");
+            consumer.onDelta("通用知识回答");
+            return new ModelResponse("通用知识回答", Map.of(),
+                    new ModelResponse.ModelUsage(5L, 3L), ModelResponse.FinishReason.STOP);
+        });
+        ConsoleChatController controller = controller(emitter, gate, ALLOWED);
+
+        controller.streamChat(new ConsoleChatController.ChatStreamRequest(
+                null, null, null, null,
+                List.of(new ConsoleChatController.ChatStreamRequest.ChatMessage("user", "hi"))));
+
+        String all = String.join("", emitter.frames);
+        assertFalse(all.contains("event:thinking"),
+                "推理草稿按设计仅展示给平台管理员，租户通道必须不下发");
+        assertFalse(all.contains("这段推理草稿不得下发到学生侧"),
+                "推理草稿正文也不得出现在租户通道的字节里");
+        assertTrue(all.contains("data:通用知识回答"), "租户通道仍须逐 token 下发正文");
+        assertTrue(all.contains("event:done"), "租户通道仍须有应用层终帧");
         assertTrue(emitter.completed, "流必须完成");
     }
 

@@ -12,7 +12,7 @@
  *   3. Esc 能关闭，关闭后焦点回到菜单按钮；
  *   4. 路由变化自动关闭（否则遮罩会盖住刚跳过去的页面）。
  *
- * ⛔ 另有一条不可回退的契约：**抽屉化不得让 16 个导航项消失**
+ * ⛔ 另有一条不可回退的契约：**抽屉化不得让 17 个导航项消失**
  *    （nav.menu.test.tsx 已按可访问名逐项断言，这里再断言一次
  *    「抽屉关闭状态下它们仍在导航地标内」）。
  */
@@ -148,13 +148,13 @@ describe('移动端导航抽屉', () => {
     })
   })
 
-  it('⛔ 抽屉化不得让 16 个导航项消失', () => {
+  it('⛔ 抽屉化不得让 17 个导航项消失', () => {
     seedSession()
     renderShell()
 
     const nav = within(screen.getByRole('navigation'))
-    expect(nav.getAllByRole('link')).toHaveLength(16)
-    for (const label of ['工作台', '发起辅导', '检索记录', '审批台', '系统健康']) {
+    expect(nav.getAllByRole('link')).toHaveLength(17)
+    for (const label of ['工作台', '发起辅导', '检索记录', '通用问答', '审批台', '系统健康']) {
       expect(nav.getByRole('link', { name: label })).toBeInTheDocument()
     }
   })

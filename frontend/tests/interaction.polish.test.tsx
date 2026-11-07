@@ -128,12 +128,12 @@ describe('skip link（键盘可达性基线）', () => {
     expect(main?.contains(document.getElementById('main-content'))).toBe(true)
   })
 
-  it('skip link 不是导航项（导航地标内仍恰好 16 项）', () => {
+  it('skip link 不是导航项（导航地标内仍恰好 17 项）', () => {
     seedSession(['TENANT_ADMIN'])
     renderShellAt('/')
     const nav = screen.getByRole('navigation')
-    // 16 个导航链接（nav.menu.test 已逐项断言，这里只确认 skip link 在壳外）
-    expect(nav.querySelectorAll('a')).toHaveLength(16)
+    // 17 个导航链接（nav.menu.test 已逐项断言，这里只确认 skip link 在壳外）
+    expect(nav.querySelectorAll('a')).toHaveLength(17)
     expect(nav.contains(screen.getByRole('link', { name: '跳到主内容' }))).toBe(false)
   })
 })

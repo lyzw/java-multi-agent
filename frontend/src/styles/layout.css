@@ -2199,3 +2199,245 @@ tbody tr:hover { background: var(--surface-hover); }
 .entry__desc .rag-ingest-bar {
   margin-top: 6px;
 }
+
+/* ── 通用知识问答（租户前台 · SSE 流式对话）──────────────────
+   ⚠️ 纸感纪律：靠 1px 线与留白分层，不用卡片阴影、不用骨架微光；
+      文字一律 --ink / --ink-2（--ink-3 只许给装饰），状态色仍只有
+      批改红 --mark 与低饱和青 --settled。 */
+
+.gchat__notice {
+  margin: 0 0 var(--s-4);
+}
+
+.gchat__notice-list {
+  margin: var(--s-2) 0 0;
+  padding-left: 18px;
+  font-size: var(--t-note);
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+
+.gchat__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.gchat__field {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+.gchat__select {
+  min-height: 40px;
+  padding: 0 var(--s-2);
+  border: 1px solid var(--rule-input);
+  border-radius: var(--radius-ctl);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--t-body);
+}
+
+.gchat__hint {
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+.gchat {
+  position: relative;
+  margin-top: var(--s-4);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.gchat__messages {
+  height: 420px;
+  overflow-y: auto;
+  padding: var(--s-4);
+}
+
+.gchat__empty {
+  padding: var(--s-5) var(--s-3);
+  text-align: center;
+}
+
+.gchat__empty-title {
+  font-size: var(--t-body);
+  color: var(--ink-2);
+}
+
+.gchat__samples {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.gchat__row {
+  display: flex;
+  margin-bottom: var(--s-4);
+}
+
+.gchat__row:last-child {
+  margin-bottom: 0;
+}
+
+.gchat__row--user {
+  justify-content: flex-end;
+}
+
+.gchat__row--assistant {
+  justify-content: flex-start;
+}
+
+.gchat__bubble {
+  max-width: min(72ch, 88%);
+  padding: var(--s-3);
+  border: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.gchat__row--user .gchat__bubble {
+  background: var(--paper-sunk);
+}
+
+.gchat__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+.gchat__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--t-body);
+  line-height: 1.7;
+}
+
+.gchat__waiting {
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+.gchat__truncated {
+  margin-top: var(--s-2);
+  padding: var(--s-2);
+  border-left: 2px solid var(--rule-strong);
+  background: var(--paper-sunk);
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+.gchat__error {
+  margin-top: var(--s-2);
+  padding: var(--s-2);
+  border: 1px solid var(--mark);
+  background: var(--mark-wash);
+  font-size: var(--t-note);
+}
+
+.gchat__error p {
+  margin: var(--s-1) 0 0;
+  color: var(--ink-2);
+}
+
+.gchat__code {
+  margin-left: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.gchat__error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+
+.gchat__stopped {
+  margin-top: var(--s-2);
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+.gchat__footnote {
+  margin: var(--s-2) 0 0;
+  padding-top: var(--s-2);
+  border-top: 1px dashed var(--rule);
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+.gchat__scroll-pill {
+  position: absolute;
+  right: var(--s-3);
+  bottom: var(--s-3);
+}
+
+.gchat__composer {
+  padding: var(--s-3);
+  border-top: 1px solid var(--rule);
+}
+
+.gchat__input {
+  width: 100%;
+  min-height: 72px;
+  padding: var(--s-2);
+  border: 1px solid var(--rule-input);
+  border-radius: var(--radius-ctl);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--t-body);
+  font-family: var(--font-ui);
+  resize: vertical;
+}
+
+.gchat__sensitive {
+  margin: var(--s-2) 0 0;
+  font-size: var(--t-note);
+  color: var(--mark);
+}
+
+.gchat__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+
+.gchat__actions-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.gchat__count {
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+@media (max-width: 767px) {
+  .gchat__messages {
+    height: 320px;
+    padding: var(--s-3);
+  }
+
+  .gchat__bubble {
+    max-width: 100%;
+  }
+
+  .gchat__toolbar {
+    gap: var(--s-2);
+  }
+}

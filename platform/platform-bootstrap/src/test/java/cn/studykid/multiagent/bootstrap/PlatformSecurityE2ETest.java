@@ -430,6 +430,55 @@ class PlatformSecurityE2ETest {
                 .isEqualTo(400);
     }
 
+    // ════════════════════════════════════════════════════════════
+    // E2E-9c/9d：租户前台「通用知识问答」独立前缀（2026-11-07）
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("✅ E2E-9c 租户令牌可穿过 /api/knowledge/chat/stream 并到达控制器（空消息 400）")
+    void tenantTokenReachesGeneralChatController() {
+        String tenantToken = loginSuccessfully();
+
+        // 空 messages 会在建 SSE 连接、调用模型网关之前 fail-closed 返回 400，
+        // 故「400」= 租户链验签通过 + chatCaller 从 TENANT_CONTEXT_ATTRIBUTE 取到主体。
+        // 若被平台链抢走，返回的是 401（见 E2E-9）。零模型调用、零配额消耗。
+        var status = rest.post().uri("/api/knowledge/chat/stream")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + tenantToken)
+                .header(HttpHeaders.ACCEPT, MediaType.TEXT_EVENT_STREAM_VALUE)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"messages\":[]}")
+                .exchange()
+                .expectBody(String.class)
+                .returnResult()
+                .getStatus();
+
+        assertThat(status.value())
+                .as("租户令牌必须能到达通用问答端点；401 说明新前缀被误收进平台链")
+                .isEqualTo(400);
+    }
+
+    @Test
+    @DisplayName("⛔ E2E-9d 平台令牌不得穿过 /api/knowledge/chat/stream（该端点属租户身份域）")
+    void platformTokenCannotReachGeneralChat() {
+        String platformToken = platformTokens.issue(
+                new PlatformPrincipal("e2e-platform-admin", Set.of("PLATFORM_ADMIN"), 1L, true),
+                Instant.now());
+
+        var status = rest.post().uri("/api/knowledge/chat/stream")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + platformToken)
+                .header(HttpHeaders.ACCEPT, MediaType.TEXT_EVENT_STREAM_VALUE)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"messages\":[]}")
+                .exchange()
+                .expectBody(String.class)
+                .returnResult()
+                .getStatus();
+
+        assertThat(status.value())
+                .as("租户链必须按 aud 拒绝平台令牌；若返回 400 说明两条身份域被打通了")
+                .isEqualTo(401);
+    }
+
     @Test
     @DisplayName("⛔ 错误口令 → 401（非 403）")
     void wrongPasswordRejected() {

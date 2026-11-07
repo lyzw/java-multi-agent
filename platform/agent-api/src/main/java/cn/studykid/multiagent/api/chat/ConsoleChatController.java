@@ -21,6 +21,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -54,15 +56,29 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
  *   <li>凭据（MiniMax API Key）只存在于网关层，本控制器与日志均不接触。</li>
  * </ul>
  *
- * <p><b>⚠️ 身份域（2026-11-07 修正）</b>：本端点由<b>平台安全链</b>验签，
+ * <p><b>⚠️ 身份域（2026-11-07 修正）</b>：{@code /api/chat/**} 由<b>平台安全链</b>验签，
  * 主体是平台管理员（{@code PlatformPrincipal}），<b>不持有租户</b>。
  * 因此这里刻意<b>不</b>依赖 {@code CurrentPrincipal#context()}（那要求 TenantContext，
  * 只有租户链才会写入）：直接对话不读写任何租户数据，把平台身份硬塞进 TenantContext
  * 会造出一个「看起来可信、实则不存在的租户」，是后续越权 / 静默空结果的隐患。
  * 身份在本控制器里只用于<b>限流分桶与日志定位</b>，见 {@link ChatCaller}。
+ *
+ * <p><b>⚠️ 两个前缀 / 两条安全链（2026-11-07 租户前台接入）</b>：同一个流式实现挂在
+ * {@code /api/chat}（平台链，仅 {@code aud=admin-console-api}）与
+ * {@code /api/knowledge/chat}（租户链，仅 {@code aud=agent-platform}）两个前缀下。
+ * 后者是租户前台「通用知识问答」：输入只来自本次键入与多轮历史，<b>不读取任何
+ * 租户 Run / 学生数据、不检索教材语料</b>，故不触碰红线 R6，也不需要 TenantContext
+ * 做数据隔离（身份仍由过滤器验签，限流按真实 tenantId 分桶）。
+ * <b>刻意不放宽 {@code /api/chat/**}</b>：平台管理 API 与管理员对话仍只在平台链上，
+ * 租户令牌依旧被拒（{@code PlatformSecurityE2ETest} E2E-9 锁死），身份域隔离不回退。
+ *
+ * <p><b>⚠️ 推理草稿只走平台通道</b>：{@code event: thinking} 是模型的推理草稿，
+ * 按设计仅展示给平台管理员。租户通道由 {@link #consoleThinkingAllowed()} 显式判定，
+ * 不下发该帧；判定在请求线程完成（执行器是虚拟线程，RequestContextHolder 不会
+ * 自动传播），未知路径 / 无 Web 上下文一律 <b>不下发</b>（fail-closed）。
  */
 @RestController
-@RequestMapping("/api/chat")
+@RequestMapping({"/api/chat", "/api/knowledge/chat"})
 public class ConsoleChatController {
 
     /**
@@ -85,6 +101,12 @@ public class ConsoleChatController {
     }
 
     private static final Logger log = LoggerFactory.getLogger(ConsoleChatController.class);
+
+    /** 平台控制台对话前缀（平台身份域；唯一允许下发 thinking 帧的通道）。 */
+    private static final String CONSOLE_CHAT_PREFIX = "/api/chat/";
+
+    /** 租户前台「通用知识问答」前缀（租户身份域）。 */
+    private static final String TENANT_CHAT_PREFIX = "/api/knowledge/chat/";
 
     /** SSE 长连接整体超时（与单次模型调用超时解耦）。 */
     private static final long SSE_TIMEOUT_MS = 120_000L;
@@ -142,6 +164,26 @@ public class ConsoleChatController {
     }
 
     /**
+     * 是否允许下发推理草稿（{@code event: thinking}）。
+     *
+     * <p>⛔ 采用<b>前缀白名单</b>而非「不是租户路径就放行」：将来再加新前缀时，
+     * 默认不下发推理草稿；把 {@code /api/chat/} 写死为唯一允许通道，
+     * 与 {@code SecurityConfiguration#CONSOLE_CHAT_PREFIX} 的平台身份域一一对应。
+     *
+     * <p>⚠️ 必须在<b>请求线程</b>取值：流式调用跑在虚拟线程执行器里，
+     * {@code RequestContextHolder} 不会自动传播过去，故结果由调用方捕获后
+     * 以 final 局部变量带进 lambda（见 {@link #streamChat}）。
+     */
+    private static boolean consoleThinkingAllowed() {
+        if (RequestContextHolder.getRequestAttributes()
+                instanceof ServletRequestAttributes attrs) {
+            return attrs.getRequest().getRequestURI().startsWith(CONSOLE_CHAT_PREFIX);
+        }
+        // 无 Web 上下文：只可能是单测直调 / 非 HTTP 误用，一律不下发（fail-closed）
+        return false;
+    }
+
+    /**
      * 流式对话。
      *
      * @param body 请求体（多轮以 {@code messages} 全量历史为准）
@@ -171,7 +213,10 @@ public class ConsoleChatController {
             emitter.complete();
         });
 
-        // 4) 在执行器里跑流式调用，避免阻塞 Tomcat 平台线程
+        // 4) 在执行器里跑流式调用，避免阻塞 Tomcat 平台线程。
+        //    ⚠️ 推理草稿的开关必须在请求线程算好再捕获进 lambda：
+        //    虚拟线程里读不到 RequestContextHolder（不自动传播）。
+        final boolean includeThinking = consoleThinkingAllowed();
         executor.execute(() -> {
             try {
                 StringBuilder full = new StringBuilder();
@@ -188,7 +233,9 @@ public class ConsoleChatController {
 
                             @Override
                             public void onThinking(String token) {
-                                if (token == null || token.isEmpty()) {
+                                // ⛔ 推理草稿不回落到面向学生的通道：租户路径 (/api/knowledge/chat/**)
+                                //    只收 delta / done / error，正文与终帧语义完全不变。
+                                if (!includeThinking || token == null || token.isEmpty()) {
                                     return;
                                 }
                                 emitThinking(emitter, token);

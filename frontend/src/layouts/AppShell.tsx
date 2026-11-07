@@ -14,7 +14,7 @@
  *     改为顶栏菜单按钮拉出的抽屉：打开进焦点、Esc/遮罩可关、关后焦点回按钮。
  *
  * ⚠️ 保留的硬契约（nav.menu.test.tsx / design.spec.test.ts 依赖）：
- *   · 恰好 16 个 link，可访问名 = 中文标签（图标 aria-hidden）；
+ *   · 恰好 17 个 link，可访问名 = 中文标签（图标 aria-hidden）；
  *   · 4 个分面标题；header-identity / roles-unknown-notice 两个 testid；
  *   · <main className="main">；
  *   · 到期预警 / 角色未回传提示 / 登出 全部保留。
@@ -73,6 +73,8 @@ const NAV: NavGroup[] = [
       { to: '/runs/new', label: '发起辅导', icon: 'plus' },
       { to: '/runs', label: '检索记录', icon: 'search' },
       { to: '/rag', label: '知识检索', icon: 'book' },
+      // 通用知识问答：不挂教材语料的 SSE 对话（与 /rag 的「可溯源依据」互补）。
+      { to: '/chat', label: '通用问答', icon: 'cpu' },
       { to: '/profile', label: '学习画像', icon: 'profile' },
       // ⚠️ 报表中心：租户级**聚合**视图（按天看辅导 / 错题 / 检索 / 语料导入）。
       //    与「检索记录」不同：后者是逐条明细，前者是按天汇总。

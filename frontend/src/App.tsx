@@ -36,6 +36,7 @@ import { ProfilePage } from '@/pages/business/ProfilePage'
 import { RunSearchPage } from '@/pages/business/RunSearchPage'
 import { RagSearchPage } from '@/pages/rag/RagSearchPage'
 import { RagManagementPage } from '@/pages/rag/RagManagementPage'
+import { GeneralChatPage } from '@/pages/chat/GeneralChatPage'
 import { ReportsPage } from '@/pages/reports/ReportsPage'
 import {
   ConfigOverviewPage,
@@ -152,6 +153,10 @@ function AppRoutes(): JSX.Element {
           <Route path="/profile" element={<ProfileLookup />} />
           <Route path="/profile/:studentId" element={<ProfilePage />} />
           <Route path="/rag" element={<RagSearchPage />} />
+          {/* 通用知识问答：真·LLM SSE 多轮对话（租户令牌 / 独立身份域端点）。
+              ⚠️ 不挂 area：与辅导台其它学生侧页面一致，任何已登录用户可见；
+              后端不读取任何租户业务数据，输入只来自本次会话。 */}
+          <Route path="/chat" element={<GeneralChatPage />} />
           {/* ⚠️ 业务无权限整页（code=ACCESS_DENIED，与「未登录」严格区分，
             不触发登录跳转；由页面在捕获到无权限时 navigate 至此）。 */}
           <Route path="/no-permission" element={<NoPermissionPage />} />
