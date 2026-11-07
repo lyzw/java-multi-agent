@@ -370,6 +370,38 @@ JSON 里没有整数/长整之分，Java 里必须选一个。手写解析时选
 
 ---
 
+## API-17 · SSE 帧被 Spring 二次包裹 → 事件名全丢，前端零分派
+
+**问题描述**
+DevTools 的 EventStream 面板能看到数据（`Type=message`，`Data=event: thinking data: …`），
+但右侧对话气泡始终空白、停在「正在生成回答…」。数据到了浏览器，界面却不动。
+
+**产生原因**
+`ConsoleChatController.sendFrame` 手工拼 `"event: x\ndata: y\n\n"` 再调 `emitter.send(String)`。
+Spring Framework 7 覆写了 `SseEmitter#send(Object)`，语义等价于 `send(event().data(object))`：
+整段字符串被当作**一条 data 值**，框架再逐行补 `data:` 前缀。实测原始字节是
+
+```
+data:event: thinking
+data:data: We need answer Chinese
+data:
+```
+
+`thinking` / `delta` / `done` 全部退化成匿名 message，前端按 `eventName === …` 分派时一帧都匹配不上。
+**契约的破裂点在框架的序列化层，不在业务代码，也不在前端解析**。
+
+**相关解决方案**
+1. 改用 `SseEmitter.event().name(name).data(safe)`，由框架生成原生 `event:` 行；
+   只做 CR 归一，data 内换行交给 builder 规范为多行 `data:` 续行，不手工拼帧文本；
+2. 前端以 `event:done` 终帧收口并 `reader.cancel()`，**不再依赖 TCP EOF**（与 SEC-26 配套）；
+3. `ConsoleChatControllerTest` 替身改捕获原生 `SseEventBuilder` 并加「禁止 `send(String)`」守卫；
+   前端补「Spring 原生无空格帧」与「流不 close 也靠 done 收口」用例。
+
+**来源**：`git log eac390d`、[`记录-2026-11-07_AI直接对话链路.md`](记录-2026-11-07_AI直接对话链路.md) §二 R3
+**状态**：✅ 已修
+
+---
+
 ## 本分类小结
 
 | 编号 | 一句话 | 状态 |
@@ -390,6 +422,7 @@ JSON 里没有整数/长整之分，Java 里必须选一个。手写解析时选
 | API-14 | 手写 `coerce` 整数类型不对称 | ✅ |
 | API-15 | 错误日志可能含敏感路径 | ✅ |
 | API-16 | 不可达的 `lastConflict == null` 分支 | ✅ |
+| API-17 | SSE 帧二次包裹 → 事件名全丢 | ✅ |
 
 > **本类统一教训**：**状态码是契约，不是分类标签**。
 > 同一个 401 在不同端点可能表达完全不同的语义（API-06 / API-07）；
