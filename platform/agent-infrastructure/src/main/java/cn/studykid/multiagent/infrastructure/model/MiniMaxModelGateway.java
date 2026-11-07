@@ -1,14 +1,20 @@
 package cn.studykid.multiagent.infrastructure.model;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
@@ -18,6 +24,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.model.ModelMessage;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
@@ -42,7 +49,7 @@ import cn.studykid.multiagent.ports.model.ModelResponse;
  * {@code 400 invalid params, tool result's tool id(...) not found (2013)}
  * 拒收<b>整次请求</b>（2026-10-28 真实 MiniMax 端到端实测）。
  */
-public final class MiniMaxModelGateway extends AbstractModelGateway {
+public final class MiniMaxModelGateway extends AbstractModelGateway implements ChatStreamGateway {
 
     private static final Logger log = LoggerFactory.getLogger(MiniMaxModelGateway.class);
 
@@ -85,6 +92,301 @@ public final class MiniMaxModelGateway extends AbstractModelGateway {
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         return callWithTimeout(() -> sendAndParse(http), timeout);
+    }
+
+    /**
+     * 流式对话（真·LLM 多轮流式）。
+     *
+     * <p>与 {@link #invokeGuarded} 共享请求组装与错误归一化纪律，区别仅在：
+     * <ul>
+     *   <li>请求体 {@code stream=true}；</li>
+     *   <li>响应体按 SSE 逐行读取，每个内容分片经
+     *       {@link #ThinkFilter} 分流——答案正文实时回吐给 {@code consumer.onDelta}，
+     *       推理草稿（思考过程）实时回吐给 {@code consumer.onThinking}；</li>
+     *   <li>归整为 {@link ModelResponse}（含完整展示正文与用量）。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>思考过程现在会展示给管理员</b>：MiniMax-M2.5 把思考混在 {@code content} 里
+     * （{@code <think>…</think>}）。本方法用 {@link #ThinkFilter} 把思考与答案<b>分流</b>——
+     * 答案走 {@code onDelta}（最终呈现），思考走 {@code onThinking}（仅控制台工具展示，
+     * 不可回落到面向学生的通道）。思考内容未经答案级安全审核，仅对平台管理员可见，
+     * 与红线 R6「平台控制台不展示<b>运行输出</b>」不冲突（这里是管理员本人对话，
+     * 不是回放租户 Run 输出）。
+     */
+    @Override
+    public @NonNull ModelResponse streamChat(@NonNull ModelRequest request,
+                                            ChatStreamGateway.StreamDeltaConsumer consumer) {
+        Map<String, Object> payload = buildPayload(request);
+        // ⚠️ 覆盖 buildPayload 里写死的 stream=false
+        payload.put("stream", true);
+        String body = MAPPER.writeValueAsString(payload);
+        Duration timeout = request.timeout();
+        HttpRequest http = HttpRequest.newBuilder(endpoint)
+                .timeout(timeout)
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + apiKey)
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        return streamAndParse(http, consumer);
+    }
+
+    /**
+     * 读取 SSE 流并逐片解析。
+     *
+     * <p>⚠️ 复用与 {@link #sendAndParse} 相同的状态码与业务错误判定
+     * （HTTP >= 300 与 {@code base_resp.status_code != 0} 均归一为异常），
+     * 保证流式与一次性调用<b>错误语义一致</b>。
+     */
+    private @NonNull ModelResponse streamAndParse(
+            @NonNull HttpRequest http,
+            ChatStreamGateway.StreamDeltaConsumer consumer) {
+        try {
+            HttpResponse<InputStream> response =
+                    client.send(http, HttpResponse.BodyHandlers.ofInputStream());
+
+            int status = response.statusCode();
+            if (status >= 300) {
+                String errBody = readAll(response.body());
+                log.warn("MiniMax 流式调用失败: status={}, body={}",
+                        status, CredentialRedactor.redact(truncate(errBody)));
+                // ⚠️ 归一为 ProviderStatusException，交外层 catch 转 ModelGatewayException
+                throw new ProviderStatusException(status, extractProviderError(errBody));
+            }
+
+            // 流式累计状态：状态机式过滤推理草稿，增量单调、不回撤已发文本
+            ThinkFilter filter = new ThinkFilter();
+            long promptTokens = 0;
+            long completionTokens = 0;
+            String finishReason = "stop";
+
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+                StringBuilder data = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.isEmpty()) {
+                        // SSE 帧以空行结束：处理已累积的 data
+                        if (data.length() > 0) {
+                            String frame = data.toString();
+                            data.setLength(0);
+                            if (frame.equals("[DONE]")) {
+                                break;
+                            }
+                            JsonNode root = MAPPER.readTree(frame);
+                            long bizStatus = root.path("base_resp").path("status_code").asLong(0);
+                            if (bizStatus != 0) {
+                                throw new ProviderStatusException(200,
+                                        "base_resp.status_code=" + bizStatus + " "
+                                                + root.path("base_resp").path("status_msg").asString(""));
+                            }
+                            JsonNode choices = root.path("choices");
+                            if (choices.isArray() && !choices.isEmpty()) {
+                                JsonNode delta = choices.path(0).path("delta");
+                                // ⚠️ 只消费 content 增量：MiniMax-M2.5 把思考混在 content 里，
+                                //    由 ThinkFilter 拆成「答案」(onDelta) 与「思考」(onThinking)。
+                                String content = delta.path("content").asString("");
+                                if (!content.isEmpty()) {
+                                    filter.consume(
+                                            content,
+                                            piece -> {
+                                                if (!piece.isEmpty()) {
+                                                    consumer.onDelta(piece);
+                                                }
+                                            },
+                                            piece -> {
+                                                if (!piece.isEmpty()) {
+                                                    consumer.onThinking(piece);
+                                                }
+                                            });
+                                }
+                                String fr = choices.path(0).path("finish_reason").asString("");
+                                if (!fr.isEmpty()) {
+                                    finishReason = fr;
+                                }
+                            }
+                            JsonNode usage = root.path("usage");
+                            if (!usage.isMissingNode()) {
+                                promptTokens = usage.path("prompt_tokens").asLong(promptTokens);
+                                completionTokens = usage.path("completion_tokens").asLong(completionTokens);
+                            }
+                        }
+                        continue;
+                    }
+                    if (line.startsWith(":")) {
+                        // 注释行：SSE keep-alive / 终止信号，忽略
+                        continue;
+                    }
+                    if (line.startsWith("data:")) {
+                        String v = line.substring(5);
+                        if (v.startsWith(" ")) {
+                            v = v.substring(1);
+                        }
+                        data.append(v);
+                    }
+                    // event:/id: 等字段在本场景忽略
+                }
+            }
+
+            String finalContent = filter.finishDisplay();
+            return new ModelResponse(finalContent, Map.of(),
+                    new ModelResponse.ModelUsage(promptTokens, completionTokens),
+                    mapFinishReason(finishReason));
+        } catch (java.net.http.HttpTimeoutException e) {
+            throw new ModelGatewayException(ModelErrorKind.TIMEOUT, "模型流式调用超时");
+        } catch (java.io.InterruptedIOException e) {
+            Thread.currentThread().interrupt();
+            throw new ModelGatewayException(ModelErrorKind.PROVIDER_ERROR, "模型流式调用被中断");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ModelGatewayException(ModelErrorKind.PROVIDER_ERROR, "模型流式调用被中断");
+        } catch (Exception e) {
+            // ⚠️ 所有非 2xx / 网络 / 业务错误统一归一为 ModelGatewayException（含 kind）
+            throw toModelException(e);
+        }
+    }
+
+    /**
+     * 流式推理草稿状态机过滤器（答案 / 思考分流）。
+     *
+     * <p>把累计原始正文里的 {@code <think>…</think>} 拆成两路：
+     * <ul>
+     *   <li><b>块外文本</b> → 答案，交给 {@code displayOut}（经 {@code consumer.onDelta} 回吐）；</li>
+     *   <li><b>块内文本</b> → 思考过程，交给 {@code thinkOut}（经 {@code consumer.onThinking} 回吐）。</li>
+     * </ul>
+     * 增量消费时实时回吐「本次新增且已确认安全」的片段，保证：
+     * <ul>
+     *   <li>已发出的答案文本<b>绝不被撤回</b>（即便后续出现推理块）；</li>
+     *   <li>跨分片拆分的半截标签（如 {@code <thi}、{@code </think}）不会泄漏到前端；</li>
+     *   <li>未闭合的推理块（流式被截断）<b>整段丢弃</b>，绝不外泄不完整的草稿。</li>
+     * </ul>
+     *
+     * <p>与一次性 {@link #stripReasoning} 的「只保留最后一个 {@code </think>} 之后」语义不同：
+     * 流式里推理块<b>之前</b>已发出的正文（如本例的「你好」）是真实答案，若因后续出现
+     * 推理块而整体丢弃会造成已显文本「消失」，故此处保留块外全部文本、只把块内文本转交思考流。
+     */
+    private static final class ThinkFilter {
+        private boolean inThink = false;
+        private final StringBuilder display = new StringBuilder();
+        private final StringBuilder thinking = new StringBuilder();
+        private final StringBuilder pending = new StringBuilder();
+        private int displayEmitted = 0;
+        private int thinkingEmitted = 0;
+
+        /**
+         * 消费一段原始增量：答案片段交 {@code displayOut}，推理草稿交 {@code thinkOut}。
+         * 两个回调可能被多次调用（逐片回吐），也可能都不调用（本片仅含标签/空白）。
+         */
+        void consume(String chunk, Consumer<String> displayOut, Consumer<String> thinkOut) {
+            if (chunk.isEmpty()) {
+                return;
+            }
+            pending.append(chunk);
+            int i = 0;
+            int n = pending.length();
+            while (i < n) {
+                if (inThink) {
+                    int close = pending.indexOf(THINK_CLOSE, i);
+                    if (close < 0) {
+                        // 暂无完整闭合：尾部可能含半截闭合标签，保留 pending 待续；
+                        // 此前已确认安全的部分作为思考片段实时回吐。
+                        int safe = safePrefixEndIndex(pending, i, THINK_CLOSE);
+                        if (safe > i) {
+                            String piece = pending.substring(i, safe);
+                            thinking.append(piece);
+                            thinkOut.accept(piece);
+                            thinkingEmitted = thinking.length();
+                        }
+                        i = safe;
+                        break;
+                    }
+                    if (close > i) {
+                        String piece = pending.substring(i, close);
+                        thinking.append(piece);
+                        thinkOut.accept(piece);
+                        thinkingEmitted = thinking.length();
+                    }
+                    inThink = false;
+                    i = close + THINK_CLOSE.length();
+                } else {
+                    int open = pending.indexOf(THINK_OPEN, i);
+                    if (open < 0) {
+                        // 暂无完整开启：尾部可能含半截开启标签，提交其前的安全文本
+                        int safe = safePrefixEndIndex(pending, i, THINK_OPEN);
+                        if (safe > i) {
+                            String piece = pending.substring(i, safe);
+                            display.append(piece);
+                            displayOut.accept(piece);
+                            displayEmitted = display.length();
+                        }
+                        i = safe;
+                        break;
+                    }
+                    if (open > i) {
+                        String piece = pending.substring(i, open);
+                        display.append(piece);
+                        displayOut.accept(piece);
+                        displayEmitted = display.length();
+                    }
+                    inThink = true;
+                    i = open + THINK_OPEN.length();
+                }
+            }
+            pending.delete(0, i);
+        }
+
+        /** 终态：返回完整展示正文（丢弃仍处推理块内的内容以及任何半截标签）。 */
+        String finishDisplay() {
+            if (!inThink) {
+                int safe = safePrefixEndIndex(pending, 0, THINK_OPEN);
+                if (safe > 0) {
+                    String piece = pending.substring(0, safe);
+                    display.append(piece);
+                    displayEmitted = display.length();
+                }
+            }
+            pending.setLength(0);
+            return display.toString().strip();
+        }
+
+        /**
+         * 返回 {@code [start, n)} 中可安全提交的最大右端索引：即不落在任何
+         * {@code tag} 真前缀（作为尾缀出现）之内的位置——半截标签留待后续分片补全。
+         */
+        private static int safePrefixEndIndex(CharSequence s, int start, String tag) {
+            int n = s.length();
+            for (int len = 1; len < tag.length(); len++) {
+                String prefix = tag.substring(0, len);
+                if (n - prefix.length() >= start
+                        && s.subSequence(n - prefix.length(), n).toString().equals(prefix)) {
+                    return n - prefix.length();
+                }
+            }
+            return n;
+        }
+    }
+
+    private static String readAll(InputStream in) {
+        try {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    /** 把流式解析期的异常归一成 {@link ModelGatewayException}（保留已归一化的 kind）。 */
+    private ModelGatewayException toModelException(Throwable error) {
+        Throwable cursor = error;
+        while (cursor != null) {
+            if (cursor instanceof ModelGatewayException mge) {
+                return mge;
+            }
+            if (cursor instanceof ProviderStatusException pse) {
+                return new ModelGatewayException(classify(pse), pse.getMessage());
+            }
+            cursor = cursor.getCause() == cursor ? null : cursor.getCause();
+        }
+        return new ModelGatewayException(ModelErrorKind.PROVIDER_ERROR,
+                CredentialRedactor.safeMessage("模型流式解析异常", error));
     }
 
     /**

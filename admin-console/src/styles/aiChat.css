@@ -1,0 +1,234 @@
+/**
+ * AI 实验室 · AI 对话页样式。
+ *
+ * 与 admin-console 现有约定一致：antd 负责控件，本文件只负责气泡/列表布局，
+ * 不引入 CSS Modules、不引入新的颜色体系（沿用 ConfigProvider 的品牌蓝 #2f6df6）。
+ * 浅色主题：纸面底 + 墨色字，回答气泡刻意不用品牌色底 —— 回答是「纸上的批注」。
+ */
+
+.ai-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ai-chat__params {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+}
+
+.ai-chat__param {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ai-chat__param-label {
+  font-size: 12px;
+  color: #5b6472;
+}
+
+.ai-chat__shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: min(62vh, 640px);
+  min-height: 400px;
+}
+
+.ai-chat__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 18px;
+  background: #fafbfd;
+  border: 1px solid #edf0f5;
+  border-radius: 8px 8px 0 0;
+  scroll-behavior: smooth;
+}
+
+.ai-chat__empty {
+  padding: 48px 16px 24px;
+}
+
+.ai-chat__samples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.ai-chat__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.ai-chat__row--user {
+  flex-direction: row-reverse;
+}
+
+.ai-chat__avatar {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  background: #eef2fb;
+  color: #2f6df6;
+}
+
+.ai-chat__row--user .ai-chat__avatar {
+  background: #2f6df6;
+  color: #fff;
+}
+
+.ai-chat__bubble {
+  max-width: 78%;
+  min-width: 180px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.ai-chat__row--assistant .ai-chat__bubble {
+  background: #fff;
+  border: 1px solid #e4e8f0;
+  border-bottom-left-radius: 2px;
+  color: #1f2733;
+}
+
+.ai-chat__row--user .ai-chat__bubble {
+  background: #2f6df6;
+  border-bottom-right-radius: 2px;
+  color: #fff;
+}
+
+.ai-chat__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: #8a93a3;
+}
+
+.ai-chat__row--user .ai-chat__meta {
+  color: #d9e4ff;
+  justify-content: flex-end;
+}
+
+.ai-chat__text {
+  white-space: pre-wrap;
+}
+
+.ai-chat__stages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.ai-chat__evidence {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: #f7f9fd;
+  border-left: 2px solid #b9cbf5;
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+  color: #4a5566;
+}
+
+.ai-chat__answer {
+  white-space: pre-wrap;
+  font-size: 13.5px;
+}
+
+.ai-chat__footnote {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #e0e5ee;
+  font-size: 11.5px;
+  color: #6b7484;
+}
+
+.ai-chat__citations {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.ai-chat__citation {
+  white-space: pre-wrap;
+  color: #3b4658;
+}
+
+.ai-chat__error {
+  border-left: 3px solid #d03050;
+  padding: 4px 0 4px 10px;
+}
+
+.ai-chat__no-basis {
+  border-left: 3px solid #d89614;
+  padding: 4px 0 4px 10px;
+}
+
+.ai-chat__waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #5b6472;
+  font-size: 12.5px;
+}
+
+.ai-chat__thinking {
+  margin: 8px 0;
+  font-size: 12.5px;
+}
+
+.ai-chat__thinking :global(.ant-collapse-header) {
+  padding: 6px 10px !important;
+  color: #6b7484;
+}
+
+.ai-chat__thinking-body {
+  white-space: pre-wrap;
+  color: #6b7484;
+  background: #f7f9fd;
+  border-left: 2px solid #c9d4ee;
+  border-radius: 0 4px 4px 0;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.ai-chat__composer {
+  padding: 10px 12px 12px;
+  border: 1px solid #edf0f5;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background: #fff;
+}
+
+.ai-chat__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.ai-chat__scroll-pill {
+  position: absolute;
+  right: 22px;
+  bottom: 118px;
+  z-index: 2;
+}

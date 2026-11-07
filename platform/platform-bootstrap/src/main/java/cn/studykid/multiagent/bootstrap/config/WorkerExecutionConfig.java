@@ -28,6 +28,7 @@ import cn.studykid.multiagent.application.prompt.PromptGuard;
 import cn.studykid.multiagent.core.config.ApprovalRequirement;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
 import cn.studykid.multiagent.core.config.ToolRiskLevel;
+import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.persistence.ApprovalPort;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
@@ -138,6 +139,37 @@ public class WorkerExecutionConfig {
      */
     @Bean
     public cn.studykid.multiagent.ports.model.ModelGateway rawModelGateway() {
+        return modelGateway();
+    }
+
+    /**
+     * 控制台「直接对话」流式网关（真·LLM 多轮流式，{@code POST /api/chat/stream}）。
+     *
+     * <p>复用 {@link #rawModelGateway()} 这<b>同一个</b>网关实例——
+     * {@code MiniMaxModelGateway} 与 {@code FakeModelGateway} 均<span
+     * style="white-space:nowrap">同时</span>实现 {@code ModelGateway} 与
+     * {@code ChatStreamGateway} 两个端口，故同一实例既可作为一次性调用网关
+     * （被 {@code ObservableModelGateway} 包装后供 Worker），也可作为
+     * 流式对话网关（供 {@code ConsoleChatController}），共享一个 HTTP 客户端。
+     *
+     * <p>⚠️ <b>这是之前漏接的 Bean</b>：{@code ConsoleChatController}
+     * 构造器需要 {@code ChatStreamGateway}，但此前从未注册该类型 Bean，
+     * 导致应用上下文无法启动（单元测试用直接构造绕过了这一步，故一直没暴露）。
+     */
+    @Bean
+    public ChatStreamGateway chatStreamGateway() {
+        // rawModelGateway() 返回的实例必然实现 ChatStreamGateway（MiniMax/Fake 均双实现）
+        return (ChatStreamGateway) rawModelGateway();
+    }
+
+    /**
+     * 模型网关实例（raw，未包装观测链）。
+     *
+     * <p>配置了 {@code agent.model.minimax.api-key} 时走真实 MiniMax 调用；
+     * 未配置时回落 {@code FakeModelGateway} 占位，保证链路结构完整。
+     * 统一收口到此处，确保两个端口 Bean 永远指向同一决策。
+     */
+    private cn.studykid.multiagent.infrastructure.model.AbstractModelGateway modelGateway() {
         if (minimaxApiKey != null && !minimaxApiKey.isBlank()) {
             log.info("装配 MiniMaxModelGateway: 真实模型调用已启用, defaultModel={}",
                     minimaxDefaultModel);

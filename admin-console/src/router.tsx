@@ -31,6 +31,7 @@ import { RagIngestJobsPage } from '@/pages/rag/RagIngestJobsPage'
 import { RagReindexPage } from '@/pages/rag/RagReindexPage'
 import { DictionaryAdminPage } from '@/pages/dictionaries/DictionaryAdminPage'
 import { AgentLabPage } from '@/pages/agentlab/AgentLabPage'
+import { AiChatPage } from '@/pages/agentlab/AiChatPage'
 import { AgentMetricsPage } from '@/pages/metrics/AgentMetricsPage'
 import { MetricEntryPage } from '@/pages/metrics/MetricEntryPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
@@ -313,6 +314,15 @@ export const router = createBrowserRouter(
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>
               <AgentLabPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // AI 实验室 · AI 对话（RAG 语料问答：输入 → 检索 → 依据 → 回答 + 异常分支）
+          path: 'ai-chat',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <AiChatPage />
             </RequireRole>
           ),
         },

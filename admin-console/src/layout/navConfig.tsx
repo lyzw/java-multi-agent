@@ -9,6 +9,7 @@ import {
   FileSearchOutlined,
   LineChartOutlined,
   MergeCellsOutlined,
+  MessageOutlined,
   PartitionOutlined,
   RobotOutlined,
   BookOutlined,
@@ -398,6 +399,16 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
           '挑选 Agent 与用例，发起一次真实执行并观察事件流、工具调用、耗时与预算消耗，用于回归比对与效果验收。',
+        phase: 'AI 实验室',
+      },
+      {
+        key: 'ai-chat',
+        label: 'AI 对话',
+        path: '/ai-chat',
+        icon: <MessageOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '基于现有 RAG 检索/生成端点的语料问答：输入问题、阶段增量接收回答、引用可核对，覆盖停止、重试、超时与依据不足。回答当前为逐字摘录装配，非大模型生成；平台控制台禁区红线不展示租户运行输出正文。',
         phase: 'AI 实验室',
       },
     ],

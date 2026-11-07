@@ -6,6 +6,7 @@ import java.util.concurrent.TimeoutException;
 
 import org.jspecify.annotations.NonNull;
 
+import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelRequest;
 import cn.studykid.multiagent.ports.model.ModelResponse;
@@ -23,7 +24,7 @@ import cn.studykid.multiagent.ports.model.ModelResponse;
  * <p>⚠️ 模拟的异常消息中<b>刻意包含假密钥</b>，用于验证脱敏是否真的生效——
  * 若脱敏被绕过，契约测试会失败。
  */
-public class FakeModelGateway extends AbstractModelGateway {
+public class FakeModelGateway extends AbstractModelGateway implements ChatStreamGateway {
 
     /** 故障注入模式。 */
     public enum FaultMode {
@@ -106,6 +107,42 @@ public class FakeModelGateway extends AbstractModelGateway {
             }
         }, request.timeout());
     }
+
+    @Override
+    public ModelResponse streamChat(ModelRequest request,
+                                    ChatStreamGateway.StreamDeltaConsumer consumer) {
+        // ⚠️ 错误语义必须与 invokeGuarded 同源：故障模式先归一化抛错，
+        //    否则回放罐头响应（作为单个增量实时回吐，再返回整包）。
+        return switch (mode) {
+            case NONE -> {
+                String content = cannedResponse.content();
+                if (!content.isEmpty()) {
+                    consumer.onDelta(content);
+                }
+                yield cannedResponse;
+            }
+            case TIMEOUT -> {
+                try {
+                    Thread.sleep(request.timeout().toMillis() + 500);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new ModelGatewayException(ModelErrorKind.TIMEOUT, "upstream timeout");
+            }
+            case RATE_LIMITED -> throw new ModelGatewayException(ModelErrorKind.RATE_LIMITED,
+                    "HTTP 429 rate_limit_exceeded; api-key=" + FAKE_SECRET);
+            case PROVIDER_ERROR -> throw new ModelGatewayException(ModelErrorKind.PROVIDER_ERROR,
+                    "HTTP 500 internal_error; Authorization: Bearer " + FAKE_SECRET);
+            case INVALID_REQUEST -> throw new ModelGatewayException(ModelErrorKind.INVALID_REQUEST,
+                    "context length exceeded");
+            case UNAUTHORIZED -> throw new ModelGatewayException(ModelErrorKind.UNAUTHORIZED,
+                    "invalid api key: " + FAKE_SECRET);
+            case CONTENT_BLOCKED -> throw new ModelGatewayException(ModelErrorKind.CONTENT_BLOCKED,
+                    "content blocked by safety policy");
+        };
+    }
+
+    /** 供子类覆写以验证 classify：把 SDK 异常映射为归一化分类。 */
 
     /** 供子类覆写以验证 classify：把 SDK 异常映射为归一化分类。 */
     public static ModelErrorKind classifyVendorError(Throwable error) {
