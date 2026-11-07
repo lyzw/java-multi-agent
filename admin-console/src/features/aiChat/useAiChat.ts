@@ -116,7 +116,7 @@ export function useAiChat(): UseAiChat {
       const at = Date.now()
       const userId = makeId('u')
       const assistantId = makeId('a')
-      dispatch({ type: 'SEND', userId, assistantId, text, at })
+      dispatch({ type: 'SEND', userId, assistantId, text, at, channel: params.channel })
       // ⚠️ id 必须在 dispatch 之前生成：reducer 是异步生效的，
       //    从 state 里「读回刚插入的气泡」会晚一帧，流式事件就贴不上了。
       run(text, params, assistantId, controller)

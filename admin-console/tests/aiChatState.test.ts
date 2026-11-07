@@ -170,6 +170,40 @@ describe('chatReducer · 真实 LLM 逐 token 流 (delta)', () => {
     expect(s.messages[1]?.content).toBe('已发前半已发后半')
   })
 
+  it('✅ 反证：终帧 content 为空/解析失败时，绝不回撤已逐 token 收到的正文', () => {
+    let s = chatReducer(initialChatState, {
+      type: 'SEND', userId: 'u-1', assistantId: 'a-1', text: '问题', at: 1_000, channel: 'direct',
+    })
+    s = stream(s, { type: 'delta', text: '\\[\nx^2\n\\]', at: 1_010 })
+    s = stream(s, {
+      type: 'answer',
+      answer: '',
+      citations: [],
+      generator: 'LLM·MiniMax-M2.5',
+      disclaimer: '',
+      versionMismatchDetected: false,
+      answerContentSuppressed: false,
+      at: 1_020,
+    })
+    expect(s.messages[1]?.content).toBe('\\[\nx^2\n\\]')
+    expect(s.messages[1]?.generator).toBe('LLM·MiniMax-M2.5')
+  })
+
+  it('✅ channel 随气泡固定：重试沿用原通道，切换通道不会把摘录当 LLM 输出重排', () => {
+    const direct = chatReducer(initialChatState, {
+      type: 'SEND', userId: 'u-1', assistantId: 'a-1', text: '问题', at: 1_000, channel: 'direct',
+    })
+    expect(direct.messages[1]?.channel).toBe('direct')
+    expect(sent().messages[1]?.channel).toBeUndefined()
+
+    let s = chatReducer(direct, {
+      type: 'FAIL', id: 'a-1',
+      error: { code: 'X', message: '失败', hint: '重试', retryable: true }, at: 1_500,
+    })
+    s = chatReducer(s, { type: 'RETRY', id: 'a-1', at: 2_000 })
+    expect(s.messages[1]?.channel).toBe('direct')
+  })
+
   it('✅ thinking 与正文独立累积，互不回撤、互不覆盖', () => {
     let s = sent()
     s = stream(s, { type: 'stage', stage: 'generating', at: 1_010 })

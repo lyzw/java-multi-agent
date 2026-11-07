@@ -308,4 +308,118 @@ describe('AiChatPage · 直接对话通道', () => {
     expect(await screen.findByText(/推理草稿，仅供参考/)).toBeInTheDocument()
     expect(await screen.findByText('你好世界')).toBeInTheDocument()
   })
+
+  it('✅ 直接对话回答按 Markdown + LaTeX 排版，且可一键切回未经重排的原文', async () => {
+    const answer = [
+      '一元二次方程',
+      '',
+      '\\[',
+      'ax^2+bx+c=0 \\quad (a\\ne 0)',
+      '\\]',
+      '',
+      '当 **(\\Delta<0)** 时：',
+      '',
+      '- 无实数根',
+      '- 有共轭复数根',
+    ].join('\n')
+    // ⚠️ 真实后端 SseEmitter 会把多行 delta 拆成多个 `data:` 行（空行也不能丢），
+    //    这里按真实线上字节构造，顺带锁死解析器对多 data 行的拼接。
+    const frame = `event: delta\n${answer
+      .split('\n')
+      .map((line) => `data: ${line}`)
+      .join('\n')}\n\n`
+    const done = `event: done\ndata: ${JSON.stringify({ content: answer, finishReason: 'STOP' })}\n\n`
+    fetchImpl = (url) => {
+      if (url.includes('/platform/v1/tenants')) return Promise.resolve(json(200, TENANTS))
+      if (url.endsWith('/api/chat/stream')) {
+        const enc = new TextEncoder()
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(enc.encode(frame))
+            controller.enqueue(enc.encode(done))
+            controller.close()
+          },
+        })
+        return Promise.resolve({ ok: true, status: 200, body })
+      }
+      return Promise.resolve(json(404, { code: 'NOT_FOUND' }))
+    }
+
+    await renderPage()
+    fireEvent.click(screen.getByTitle('直接对话'))
+    fireEvent.change(inputBox(), { target: { value: '判别式小于零呢' } })
+    fireEvent.click(screen.getByRole('button', { name: /发送/ }))
+
+    expect(await screen.findByText('一元二次方程')).toBeInTheDocument()
+    await waitFor(() => expect(document.querySelector('.katex-display')).not.toBeNull())
+    expect(document.querySelector('.ai-chat__markdown strong')?.textContent).toContain('Δ')
+    expect(document.querySelectorAll('.ai-chat__markdown li')).toHaveLength(2)
+    // 排版视图不应把 LaTeX 源码糊在页面上
+    expect(document.querySelector('.katex-html')?.textContent).not.toContain('\\quad')
+
+    // 「原文」核对：展示的是模型原始字节（`\[` 仍原样），不是渲染前的归一化文本
+    fireEvent.click(screen.getByText('原文'))
+    const source = document.querySelector('.ai-chat__source')
+    expect(source?.textContent).toBe(answer)
+    expect(source?.textContent).toContain('\\[')
+    expect(document.querySelector('.ai-chat__markdown')).toBeNull()
+  })
+
+  it('✅ 直接对话失败后无需选租户即可重试（X-Tenant-Id 门禁只约束语料问答）', async () => {
+    let fail = true
+    const sse = (payload: string): unknown => {
+      const enc = new TextEncoder()
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(enc.encode(payload))
+          controller.close()
+        },
+      })
+      return { ok: true, status: 200, body }
+    }
+    fetchImpl = (url) => {
+      if (url.includes('/platform/v1/tenants')) return Promise.resolve(json(200, TENANTS))
+      if (url.endsWith('/api/chat/stream')) {
+        return Promise.resolve(
+          fail
+            ? sse('event: error\ndata: {"kind":"RATE_LIMITED","message":"too many"}\n\n')
+            : sse('event: done\ndata: {"content":"重试成功","finishReason":"STOP"}\n\n'),
+        )
+      }
+      return Promise.resolve(json(404, { code: 'NOT_FOUND' }))
+    }
+
+    await renderPage()
+    fireEvent.click(screen.getByTitle('直接对话'))
+    fireEvent.change(inputBox(), { target: { value: '会失败的问题' } })
+    fireEvent.click(screen.getByRole('button', { name: /发送/ }))
+
+    expect(await screen.findByText('模型调用过于频繁（429）')).toBeInTheDocument()
+    expect(screen.queryByTestId('ai-chat-tenant')).toBeNull()
+
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: /重试/ }))
+    expect(await screen.findByText('重试成功')).toBeInTheDocument()
+    expect(calls.filter((c) => c.url.endsWith('/api/chat/stream'))).toHaveLength(2)
+  })
+})
+
+describe('AiChatPage · 语料问答不得被 Markdown 重排', () => {
+  it('✅ EXCERPT_ASSEMBLY 逐字摘录原样显示：`**` / `$` 不被解释成格式', async () => {
+    const excerpt = '**原文** 里的 $x^2$ 不是公式，\\[也不是\\]'
+    fetchImpl = (url) => {
+      if (url.includes('/platform/v1/tenants')) return Promise.resolve(json(200, TENANTS))
+      if (url.endsWith('/api/v1/retrieval')) return Promise.resolve(json(200, RETRIEVAL_OK))
+      return Promise.resolve(json(200, { ...GENERATE_OK, answer: excerpt }))
+    }
+    await renderPage()
+    await pickTenant()
+    await ask('摘录长什么样？')
+
+    await screen.findByText(excerpt)
+    const answerEl = document.querySelector('.ai-chat__answer')
+    expect(answerEl?.textContent).toBe(excerpt)
+    expect(answerEl?.querySelector('strong')).toBeNull()
+    expect(document.querySelector('.ai-chat__markdown')).toBeNull()
+  })
 })

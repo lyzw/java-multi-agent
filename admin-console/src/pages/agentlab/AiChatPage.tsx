@@ -27,7 +27,7 @@
  * 状态用 <code>useReducer</code>（不引入状态库），会话只留内存。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import {
   Alert,
@@ -74,6 +74,16 @@ import type { ChatParams } from '@/features/aiChat/useAiChat'
 import { useAiChat } from '@/features/aiChat/useAiChat'
 import type { ChatMessage } from '@/features/aiChat/chatState'
 import '@/styles/aiChat.css'
+
+/**
+ * 排版引擎（react-markdown + KaTeX + 字体）只在「直接对话」首次出答案时加载，
+ * 不压到管理控制台其它页面的首屏。加载期间按原文显示 —— 那是真实状态，
+ * 不是打字机特效，也不丢任何已到达的 token。
+ */
+const MarkdownAnswer = lazy(async () => {
+  const module = await import('@/features/aiChat/MarkdownAnswer')
+  return { default: module.MarkdownAnswer }
+})
 
 const { Text, Paragraph, Title } = Typography
 
@@ -168,6 +178,44 @@ function ThinkingBlock({ message }: { message: ChatMessage }): JSX.Element | nul
   )
 }
 
+type AnswerView = 'rendered' | 'source'
+
+/**
+ * 直接对话（真·LLM）正文：Markdown + LaTeX 排版视图，外加「原文」核对视图。
+ *
+ * ⚠️ 原文视图展示的是<b>未经任何预处理</b>的模型输出：渲染层会归一化 `\[…\]`、
+ * 补裸命令、转义未闭合定界符，这些改写只发生在呈现层，必须能被一键核对，
+ * 否则「答案被重排过」这件事就藏起来了（与「逐字摘录不得伪装」同一条纪律）。
+ */
+function RichAnswer({ content, streaming }: { content: string; streaming: boolean }): JSX.Element {
+  const [view, setView] = useState<AnswerView>('rendered')
+  return (
+    <div className="ai-chat__rich">
+      <div className="ai-chat__rich-toolbar">
+        <Segmented
+          size="small"
+          value={view}
+          onChange={(v) => setView(v as AnswerView)}
+          options={[
+            { label: '排版', value: 'rendered' },
+            { label: '原文', value: 'source' },
+          ]}
+        />
+        <Text type="secondary" style={{ fontSize: 11.5 }}>
+          {view === 'rendered' ? 'Markdown · LaTeX 公式' : '模型原始输出（未经任何重排）'}
+        </Text>
+      </div>
+      {view === 'source' ? (
+        <pre className="ai-chat__source">{content}</pre>
+      ) : (
+        <Suspense fallback={<div className="ai-chat__answer">{content}</div>}>
+          <MarkdownAnswer content={content} streaming={streaming} />
+        </Suspense>
+      )}
+    </div>
+  )
+}
+
 /** 单条 assistant 消息的完整呈现：阶段 → 依据 → 思考 → 正文 → 脚注 → 引用 → 错误。 */
 function AssistantBody({ message, question, onRetry, onRephrase }: AssistantBodyProps): JSX.Element {
   const stages = message.stages ?? []
@@ -207,7 +255,16 @@ function AssistantBody({ message, question, onRetry, onRephrase }: AssistantBody
         </div>
       )}
 
-      {message.content !== '' && <div className="ai-chat__answer">{message.content}</div>}
+      {/*
+        ⚠️ 只有「直接对话」的 LLM 输出才排版：语料问答是 EXCERPT_ASSEMBLY
+        逐字摘录，把原文里的 * / $ / 反斜杠当 Markdown 解释就是篡改依据。
+      */}
+      {message.content !== '' &&
+        (message.channel === 'direct' ? (
+          <RichAnswer content={message.content} streaming={message.status === 'streaming'} />
+        ) : (
+          <div className="ai-chat__answer">{message.content}</div>
+        ))}
 
       {message.noBasis !== undefined && (
         <div className="ai-chat__no-basis" role="status">
@@ -415,9 +472,11 @@ export function AiChatPage(): JSX.Element {
   }, [])
 
   const handleRetry = useCallback((): void => {
-    if (tenantId === '') return
+    // ⚠️ 只有语料问答强制 X-Tenant-Id；直接对话租户取自登录令牌，
+    //    未选租户时也必须能重试，否则 direct 通道的错误气泡上的「重试」是死按钮。
+    if (!isDirect && tenantId === '') return
     retry(params)
-  }, [params, retry, tenantId])
+  }, [isDirect, params, retry, tenantId])
 
   const handleNewSession = useCallback((): void => {
     newSession()
@@ -477,6 +536,11 @@ export function AiChatPage(): JSX.Element {
               SYNC_PIPELINE
             </Tag>{' '}
             / <code>{DIRECT_GENERATOR_LABEL}</code>。
+            <br />
+            4）<b>回答排版只作用于直接对话</b>：LLM 输出按 Markdown + LaTeX 渲染
+            （<code>$…$</code> / <code>$$…$$</code> / <code>\[…\]</code> / <code>\(…\)</code>），
+            可切「原文」核对未重排的模型字节；<b>语料问答的逐字摘录一律原样显示</b>，
+            不把摘录里的符号解释成格式。
           </>
         }
       />
@@ -632,7 +696,12 @@ export function AiChatPage(): JSX.Element {
               </div>
             ) : (
               state.messages.map((m, index) => (
-                <div key={m.id} className={`ai-chat__row ai-chat__row--${m.role}`}>
+                <div
+                  key={m.id}
+                  className={`ai-chat__row ai-chat__row--${m.role}${
+                    m.role === 'assistant' && m.channel === 'direct' ? ' ai-chat__row--rich' : ''
+                  }`}
+                >
                   <div className="ai-chat__avatar">
                     {m.role === 'user' ? <UserOutlined /> : <RobotOutlined />}
                   </div>

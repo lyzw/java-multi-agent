@@ -17,6 +17,7 @@
  */
 
 import type {
+  ChatChannel,
   ChatErrorInfo,
   ChatHit,
   ChatStage,
@@ -35,6 +36,11 @@ export interface ChatMessage {
   stages?: ChatStage[]
   /** 模型思考过程（推理草稿，直接对话通道独有；折叠展示，仅管理员可见） */
   thinking?: string
+  /**
+   * 该气泡由哪条通道产生：只有 direct（真·LLM）才做 Markdown/公式渲染；
+   * corpus 是 EXCERPT_ASSEMBLY 逐字摘录，任何重排都是对原文的篡改。
+   */
+  channel?: ChatChannel
   /** 检索阶段召回的片段，作为「依据已就绪」的证据 */
   evidence?: ChatHit[]
   primaryEdition?: string
@@ -57,7 +63,7 @@ export interface ChatState {
 export const initialChatState: ChatState = { messages: [], sending: false }
 
 export type ChatAction =
-  | { type: 'SEND'; userId: string; assistantId: string; text: string; at: number }
+  | { type: 'SEND'; userId: string; assistantId: string; text: string; at: number; channel?: ChatChannel }
   | { type: 'STREAM'; id: string; event: ChatStreamEvent }
   | { type: 'FAIL'; id: string; error: ChatErrorInfo; at: number }
   | { type: 'STOP'; at: number }
@@ -98,7 +104,9 @@ function applyStreamEvent(m: ChatMessage, event: ChatStreamEvent): ChatMessage {
     case 'answer':
       return {
         ...m,
-        content: event.answer,
+        // 直接对话的终帧是「兜底」而非覆盖：终帧 content 偶发为空/解析失败时，
+        // 绝不回撤已经逐 token 收到的正文（delta 纪律：只追加，不回退）。
+        content: event.answer !== '' ? event.answer : m.content,
         citations: event.citations,
         generator: event.generator,
         disclaimer: event.disclaimer,
@@ -131,6 +139,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         status: 'streaming',
         content: '',
         createdAt: action.at,
+        channel: action.channel,
         stages: [],
         thinking: '',
       }
@@ -180,6 +189,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         status: 'streaming',
         content: '',
         createdAt: action.at,
+        // 重试沿用原通道；否则切过通道后重试会把摘录当 LLM 输出重排。
+        channel: target.channel,
         stages: [],
         thinking: '',
       }

@@ -232,3 +232,207 @@
   bottom: 118px;
   z-index: 2;
 }
+
+/* ---------------------------------------------------------------------------
+ * 直接对话（真·LLM）的 Markdown + LaTeX 排版
+ * 语料问答的 .ai-chat__answer 刻意保持 white-space: pre-wrap 纯文本，不参与重排。
+ * ------------------------------------------------------------------------- */
+
+.ai-chat__row--rich .ai-chat__bubble {
+  /* 公式 / 表格 / 代码块需要横向空间，比普通气泡宽一档 */
+  max-width: 88%;
+  word-break: normal;
+}
+
+.ai-chat__rich {
+  margin-top: 2px;
+}
+
+.ai-chat__rich-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.ai-chat__source {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f7f9fd;
+  border: 1px solid #e6ebf4;
+  border-radius: 6px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: #3b4658;
+}
+
+.ai-chat__markdown {
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: #1f2733;
+  overflow-wrap: anywhere;
+}
+
+.ai-chat__markdown > :first-child {
+  margin-top: 0;
+}
+
+.ai-chat__markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.ai-chat__markdown p {
+  margin: 0 0 10px;
+}
+
+.ai-chat__markdown h1,
+.ai-chat__markdown h2,
+.ai-chat__markdown h3,
+.ai-chat__markdown h4 {
+  margin: 16px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #16203a;
+}
+
+.ai-chat__markdown h1 {
+  font-size: 1.4em;
+}
+.ai-chat__markdown h2 {
+  font-size: 1.25em;
+}
+.ai-chat__markdown h3 {
+  font-size: 1.12em;
+}
+.ai-chat__markdown h4 {
+  font-size: 1em;
+}
+
+.ai-chat__markdown ul,
+.ai-chat__markdown ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.ai-chat__markdown li {
+  margin: 3px 0;
+}
+
+.ai-chat__markdown li > p {
+  margin: 0;
+}
+
+.ai-chat__markdown strong {
+  font-weight: 600;
+  color: #16203a;
+}
+
+.ai-chat__markdown a {
+  color: #2f6df6;
+  text-decoration: none;
+  border-bottom: 1px solid #b9cbf5;
+}
+
+.ai-chat__markdown a:hover {
+  border-bottom-color: #2f6df6;
+}
+
+.ai-chat__markdown blockquote {
+  margin: 10px 0;
+  padding: 6px 12px;
+  border-left: 3px solid #cddcf8;
+  background: #f8faff;
+  color: #4a5566;
+}
+
+.ai-chat__markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.ai-chat__markdown hr {
+  border: none;
+  border-top: 1px solid #e6ebf4;
+  margin: 14px 0;
+}
+
+.ai-chat__markdown :not(pre) > code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f1f4f9;
+  border: 1px solid #e6ebf4;
+  color: #a3325c;
+  font-size: 0.92em;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+.ai-chat__code-block {
+  margin: 10px 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  background: #f7f9fd;
+  border: 1px solid #e6ebf4;
+  border-radius: 6px;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.ai-chat__code-block code {
+  padding: 0;
+  border: none;
+  background: none;
+  color: #26324a;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+.ai-chat__table-wrap {
+  margin: 10px 0;
+  overflow-x: auto;
+}
+
+.ai-chat__markdown table {
+  border-collapse: collapse;
+  min-width: 60%;
+  font-size: 12.8px;
+}
+
+.ai-chat__markdown th,
+.ai-chat__markdown td {
+  padding: 6px 10px;
+  border: 1px solid #e2e8f2;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ai-chat__markdown th {
+  background: #f4f7fd;
+  font-weight: 600;
+}
+
+.ai-chat__markdown .katex {
+  font-size: 1.08em;
+}
+
+.ai-chat__markdown .katex-display {
+  margin: 12px 0;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* 流式半截公式：KaTeX 的行内 errorColor 需 !important 才能覆写成中性灰（还没写完，不是错误） */
+.ai-chat__markdown--streaming .katex-error {
+  color: #8a93a3 !important;
+}
+
+.ai-chat__image-ref {
+  color: #6b7484;
+  background: #f4f7fd;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
