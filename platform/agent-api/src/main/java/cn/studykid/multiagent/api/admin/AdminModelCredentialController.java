@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
+import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.modelcredential.ProviderCredentialPort;
 import cn.studykid.multiagent.ports.modelcredential.ProviderCredentialPort.ProviderCredentialView;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
@@ -36,14 +37,11 @@ import cn.studykid.multiagent.ports.security.AuthorizationService;
 public class AdminModelCredentialController {
 
     private final ProviderCredentialPort credentialPort;
-    private final AuthorizationService authorization;
     private final CurrentPrincipal currentPrincipal;
 
     public AdminModelCredentialController(ProviderCredentialPort credentialPort,
-                                          AuthorizationService authorization,
                                           CurrentPrincipal currentPrincipal) {
         this.credentialPort = credentialPort;
-        this.authorization = authorization;
         this.currentPrincipal = currentPrincipal;
     }
 
@@ -90,10 +88,28 @@ public class AdminModelCredentialController {
         return ResponseEntity.noContent().build();
     }
 
+    // ── 鉴权辅助 ──
+
+    /**
+     * 平台级作用域闸门：模型密钥属平台级资源（所有租户共用、表无租户无 RLS），
+     * 仅 {@code PLATFORM_ADMIN} 可访问（默认拒绝）。
+     *
+     * <p>⚠️ <b>必须 {@code hasRole} 直判，不可走 {@code requireAuthorized(ctx, PLATFORM_ADMIN)}</b>：
+     * 后者把 {@code PLATFORM_ADMIN} 当<b>动作</b>传入，而 {@code RoleBasedAuthorizationService}
+     * 的角色→动作映射里 {@code PLATFORM_ADMIN} 映射到 {@code Actions.all()}（全是
+     * {@code xxx:yyy} 形态的业务动作），<b>不含字符串 {@code "PLATFORM_ADMIN"}</b>，
+     * 于是 {@code isAuthorized} 恒返回 false → 平台管理员访问反而 403。
+     * 平台级端点的正确范式见 {@code AdminTenantController#requirePlatformAdmin} /
+     * {@code PlatformCapabilityController#requirePlatformAdmin}：直接 {@code hasRole} 直判。
+     */
     private void requireAdmin() {
-        authorization.requireAuthorized(currentPrincipal.context(),
-                AuthorizationService.Roles.PLATFORM_ADMIN, null);
+        TenantContext context = currentPrincipal.context();
+        if (!context.hasRole(AuthorizationService.Roles.PLATFORM_ADMIN)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "平台级密钥管理仅限 PLATFORM_ADMIN（须经平台运维通道授权）");
+        }
     }
+
 
     /** 写入请求体（明文仅上传瞬时处理，不落库、不回显）。 */
     public record ProviderCredentialRequest(

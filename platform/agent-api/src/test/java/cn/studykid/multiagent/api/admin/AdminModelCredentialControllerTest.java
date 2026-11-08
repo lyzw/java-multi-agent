@@ -17,8 +17,6 @@ import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.modelcredential.ProviderCredentialPort;
 import cn.studykid.multiagent.ports.modelcredential.ProviderCredentialPort.ProviderCredentialView;
-import cn.studykid.multiagent.ports.security.AccessDeniedException;
-import cn.studykid.multiagent.ports.security.AuthorizationService;
 
 @DisplayName("AdminModelCredentialController · 密钥带外管理端点")
 class AdminModelCredentialControllerTest {
@@ -58,30 +56,6 @@ class AdminModelCredentialControllerTest {
         }
     }
 
-    /** 授权桩：allow=false 时默认 requireAuthorized 抛 AccessDeniedException。 */
-    static final class StubAuthz implements AuthorizationService {
-        final boolean allow;
-
-        StubAuthz(boolean allow) {
-            this.allow = allow;
-        }
-
-        @Override
-        public boolean isAuthorized(TenantContext context, String action, String resourceId) {
-            return allow;
-        }
-
-        @Override
-        public long currentAuthzVersion(String tenantId, String principalId) {
-            return 0;
-        }
-
-        @Override
-        public Set<String> rolesOf(TenantContext context) {
-            return context.roles();
-        }
-    }
-
     record StubPrincipal(TenantContext ctx) implements CurrentPrincipal {
         @Override
         public TenantContext context() {
@@ -109,9 +83,8 @@ class AdminModelCredentialControllerTest {
     private static final TenantContext USER = new TenantContext("t-a", "u-user",
             Set.of("AGENT_MANAGE"), 1);
 
-    private AdminModelCredentialController controller(boolean allow, StubCredentialPort port) {
-        return new AdminModelCredentialController(port, new StubAuthz(allow),
-                new StubPrincipal(allow ? ADMIN : USER));
+    private AdminModelCredentialController controller(StubCredentialPort port, TenantContext ctx) {
+        return new AdminModelCredentialController(port, new StubPrincipal(ctx));
     }
 
     @Test
@@ -119,7 +92,7 @@ class AdminModelCredentialControllerTest {
     void listMasked() {
         StubCredentialPort port = new StubCredentialPort();
         port.save("openai", "sk-super-secret-1234");
-        var resp = controller(true, port).list();
+        var resp = controller(port, ADMIN).list();
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         List<ProviderCredentialView> body = resp.getBody();
         assertThat(body).hasSize(1);
@@ -133,7 +106,7 @@ class AdminModelCredentialControllerTest {
     @DisplayName("✅ 管理员写入密钥 → 返回脱敏视图，明文不回显")
     void saveReturnsMasked() {
         StubCredentialPort port = new StubCredentialPort();
-        var resp = controller(true, port).save(
+        var resp = controller(port, ADMIN).save(
                 new AdminModelCredentialController.ProviderCredentialRequest(
                         "deepseek", "sk-deepseek-9876"));
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
@@ -148,27 +121,29 @@ class AdminModelCredentialControllerTest {
     void deleteCallsPort() {
         StubCredentialPort port = new StubCredentialPort();
         port.save("minimax", "sk-minimax-0000");
-        var resp = controller(true, port).delete("minimax");
+        var resp = controller(port, ADMIN).delete("minimax");
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
         assertThat(port.store).doesNotContainKey("minimax");
     }
 
     @Test
-    @DisplayName("✅ 非管理员 → 403 AccessDenied")
+    @DisplayName("✅ 非 PLATFORM_ADMIN → 403（hasRole 直判，而非 requireAuthorized 的 AccessDenied）")
     void unauthorized() {
         StubCredentialPort port = new StubCredentialPort();
-        assertThatThrownBy(() -> controller(false, port).list())
-                .isInstanceOf(AccessDeniedException.class);
-        assertThatThrownBy(() -> controller(false, port).save(
+        assertThatThrownBy(() -> controller(port, USER).list())
+                .isInstanceOf(ResponseStatusException.class)
+                .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+        assertThatThrownBy(() -> controller(port, USER).save(
                 new AdminModelCredentialController.ProviderCredentialRequest("x", "y")))
-                .isInstanceOf(AccessDeniedException.class);
+                .isInstanceOf(ResponseStatusException.class)
+                .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
     }
 
     @Test
     @DisplayName("⚠️ 写入缺少 apiKey → 400")
     void saveMissingKey() {
         StubCredentialPort port = new StubCredentialPort();
-        assertThatThrownBy(() -> controller(true, port).save(
+        assertThatThrownBy(() -> controller(port, ADMIN).save(
                 new AdminModelCredentialController.ProviderCredentialRequest("x", "  ")))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
