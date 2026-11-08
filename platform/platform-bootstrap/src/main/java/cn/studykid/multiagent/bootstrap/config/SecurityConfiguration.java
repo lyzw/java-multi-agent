@@ -97,6 +97,28 @@ public class SecurityConfiguration {
     private static final String CONSOLE_CHAT_PREFIX = "/api/chat/";
 
     /**
+     * 模型配置管理端点（平台级，PLATFORM_ADMIN 闸门）——与平台管理 API 同属<b>平台身份域</b>。
+     *
+     * <p><b>为什么必须显式登记（2026-11-07 修复，同源 {@link #CONSOLE_CHAT_PREFIX}）</b>：
+     * 模型目录（{@code /api/admin/models}）与供应商密钥（{@code /api/admin/model-credentials}）
+     * 是<b>平台级</b>资源——超级管理员在管理后台集中维护、<b>所有租户共用</b>，底层表
+     * {@code model_catalog} / {@code model_provider_credential} <b>无租户、无 RLS</b>。
+     * 此前它们未被任何平台前缀覆盖，落进 @Order(1) 的租户链，被 {@code aud=agent-platform}
+     * 校验硬拒 → 平台管理员（持 {@code aud=admin-console-api}）访问必然 401，控制台
+     * 「模型配置」页因此显示「密钥列表加载失败 / 平台令牌对该端点不可达（身份域隔离）」。
+     *
+     * <p>⚠️ 只精确到这两个前缀，<b>不放宽成 {@code /api/admin/**}</b>：
+     * 同前缀下的 {@code /api/admin/dashboard}、{@code /api/admin/monitoring}、
+     * {@code /api/admin/dependencies} 是<b>租户级</b>观测端点（按调用方租户聚合，
+     * 控制器会读 {@code context.tenantId()}），仍须留在租户链；
+     * {@code /api/admin/tenants} 已弃用、迁移至 {@code /api/platform/v1/tenants}。
+     * 平台链的 {@link PlatformBearerTokenFilter} 只接受平台令牌，
+     * 误把租户端点纳入会全线 401（与 {@link #CONSOLE_CHAT_PREFIX} 同样的纪律）。
+     */
+    private static final String ADMIN_MODEL_CATALOG_PREFIX = "/api/admin/models";
+    private static final String ADMIN_MODEL_CREDENTIALS_PREFIX = "/api/admin/model-credentials";
+
+    /**
      * 无需认证即可访问的端点。
      *
      * <p>⚠️ 须精确到端点。出现 {@code /api/**} 之类的通配，
@@ -141,7 +163,8 @@ public class SecurityConfiguration {
                 // ⚠️ 两个精确前缀的并集：/api/chat/** 只挂平台令牌过滤器，
                 //    不会命中下面 .requestMatchers("/api/platform/v1/auth/**").permitAll()，
                 //    因此直接对话仍强制 authenticated（无匿名放行）。
-                .securityMatcher(PLATFORM_API_PREFIX + "**", CONSOLE_CHAT_PREFIX + "**")
+                .securityMatcher(PLATFORM_API_PREFIX + "**", CONSOLE_CHAT_PREFIX + "**",
+                        ADMIN_MODEL_CATALOG_PREFIX + "**", ADMIN_MODEL_CREDENTIALS_PREFIX + "**")
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .csrf(csrf -> csrf.disable())

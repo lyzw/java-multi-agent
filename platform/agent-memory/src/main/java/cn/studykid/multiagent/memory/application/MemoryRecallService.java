@@ -104,7 +104,12 @@ public class MemoryRecallService {
 
         String block = render(kept, now);
         int tokens = MemoryEntry.estimateTokens(block);
-        return new Recalled(block, tokens, kept.size());
+        // ⚠️ 只暴露「知识点 + 错误类型」的标签，不暴露 renderLine 的完整行
+        //    （后者含强度/证据数/时间戳等运行时细节，对回放无价值却扩大落库面）。
+        List<Recalled.MemoryLabel> labels = kept.stream()
+                .map(e -> new Recalled.MemoryLabel(e.knowledgePoint(), e.errorType()))
+                .toList();
+        return new Recalled(block, tokens, kept.size(), labels);
     }
 
     /**
@@ -131,10 +136,13 @@ public class MemoryRecallService {
      * @param block  可注入系统提示的文本；无记忆时为 {@code null}
      * @param tokens 该块占用的估算 token（含围栏与前言）；无记忆时为 0
      * @param items  实际注入的条数
+     * @param labels 召回条目的<b>标签摘要</b>（知识点 + 错误类型）；无记忆时为空列表
      */
-    public record Recalled(@Nullable String block, int tokens, int items) {
+    public record Recalled(@Nullable String block, int tokens, int items,
+                            @NonNull List<MemoryLabel> labels) {
 
         public Recalled {
+            labels = labels == null ? List.of() : List.copyOf(labels);
             if (tokens < 0) {
                 throw new IllegalArgumentException("token 记账不可为负: " + tokens);
             }
@@ -143,9 +151,38 @@ public class MemoryRecallService {
             }
         }
 
+        /**
+         * 兼容构造器（无标签摘要）。
+         *
+         * <p>⚠️ 保留它是为了让既有调用点（测试、其它模块）不必改签名；
+         * 但生产路径<b>应当</b>用带 {@code labels} 的四参构造器 ——
+         * 否则回放时拿不到「召回了哪些薄弱点」，这条 SYSTEM 消息只剩一个条数。
+         */
+        public Recalled(@Nullable String block, int tokens, int items) {
+            this(block, tokens, items, List.of());
+        }
+
+        /**
+         * 召回条目的标签摘要（P1 · G1 回放底座用）。
+         *
+         * <p>⚠️ <b>只含知识点与错误类型</b>，不含知识库原文、不含学生标识、
+         * 不含 {@code renderLine} 的完整行 —— 回放只需知道「召回了哪几个薄弱点」，
+         * 落库面越小越安全。
+         */
+        public record MemoryLabel(@NonNull String knowledgePoint, @NonNull String errorType) {
+            public MemoryLabel {
+                if (knowledgePoint == null || knowledgePoint.isBlank()) {
+                    throw new IllegalArgumentException("知识点不可为空");
+                }
+                if (errorType == null || errorType.isBlank()) {
+                    throw new IllegalArgumentException("错误类型不可为空");
+                }
+            }
+        }
+
         /** 无记忆。 */
         public static Recalled empty() {
-            return new Recalled(null, 0, 0);
+            return new Recalled(null, 0, 0, List.of());
         }
 
         /** 是否有可注入的记忆。 */

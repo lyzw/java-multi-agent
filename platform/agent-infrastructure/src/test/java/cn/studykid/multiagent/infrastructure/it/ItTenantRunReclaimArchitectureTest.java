@@ -53,10 +53,19 @@ class ItTenantRunReclaimArchitectureTest {
             "(?i)\\bINSERT\\s+INTO\\s+(?:public\\.)?run\\b"
                     + "|insertRunAtomically\\s*\\(|\\bcreateRun\\s*\\(|\\bnewRun\\s*\\(");
 
-    /** 回收 Run 的信号。 */
+    /**
+     * 回收 Run 的信号。
+     *
+     * <p>⚠️ {@code DELETE FROM} 的表名**允许带 schema 前缀**
+     * （{@code public.run} 与 {@code run} 等价）——本仓绝大多数 SQL 都写成
+     * {@code public.run}（schema 限定是本项目的既有纪律，见 {@code PlatformDdl}
+     * 的「对象名一律 schema 限定」），若只认裸 {@code run}，
+     * 会把**确实回收了**的 IT 判红 —— 守卫一旦误报，
+     * 就会被当成「门禁坏了」而被关掉，那比没有守卫更糟。
+     */
     private static final Pattern RECLAIM = Pattern.compile(
             "purgeItTenantRuns\\s*\\(|purgeRuns\\s*\\(|purgeRunsCreatedByTests\\s*\\("
-                    + "|(?i)\\bDELETE\\s+FROM\\s+run\\b");
+                    + "|(?i)\\bDELETE\\s+FROM\\s+(?:public\\.)?run\\b");
 
     /**
      * 扫描下界的「防空转」阀值。

@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,7 +31,10 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import cn.studykid.multiagent.application.config.WorkerPolicy;
+import cn.studykid.multiagent.bootstrap.messaging.TraceMetricCollectorListener;
 import cn.studykid.multiagent.infrastructure.messaging.RabbitExecutionListener;
+import cn.studykid.multiagent.infrastructure.messaging.RabbitMessageSender;
+import cn.studykid.multiagent.infrastructure.messaging.TenantRoutingMessageSender;
 import cn.studykid.multiagent.ports.messaging.MessageSender;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
@@ -38,6 +42,7 @@ import cn.studykid.multiagent.worker.dispatch.OutboxPublisher;
 import cn.studykid.multiagent.worker.dispatch.OutboxRelay;
 import cn.studykid.multiagent.worker.dispatch.RunDispatchConsumer;
 import cn.studykid.multiagent.worker.dispatch.TenantOutboxPublishers;
+import cn.studykid.multiagent.worker.execute.RunExecutionLoop;
 
 /**
  * Worker 主循环**连通性测试**（P4-D03）。
@@ -300,7 +305,107 @@ class WorkerLoopWiringTest {
         }
     }
 
+    // ── P0：指标自动采集接线连通性（G2）─────────────────────────
+    // ⚠️ 本组的价值与 C-1~C-4 同源：P0 把「采集器只在 admin-console 手动触发」
+    //    改成「Run 终态自动触发」。若任一环断链，症状是
+    //    **agent_trace_metric 宽表长期为空、看板一片空白**，
+    //    而系统表面完全正常（Run 正常成功、无任何报错）。
+    //    这正是 P7 指标体系当初「空转」的原因，必须有守卫盯住。
+    @Nested
+    @DisplayName("P0 指标自动采集接线连通性（G2）")
+    class TraceCollectWiring {
+
+        @Test
+        @DisplayName("⚠️⚠️ P0-a 采集队列存在且为 quorum + delivery-limit≤3")
+        void traceCollectQueueTopologyIsSafe() {
+            Queue q = ctx.getBean("traceCollectQueue", Queue.class);
+            assertThat(q.getArguments())
+                    .as("⚠️⚠️ 必须显式声明 x-queue-type=quorum（classic 在 4.x 无复制能力）")
+                    .containsEntry("x-queue-type", "quorum");
+            Object limit = q.getArguments().get("x-delivery-limit");
+            assertThat(limit)
+                    .as("⚠️⚠️ x-delivery-limit 必须显式声明：quorum 默认 20，"
+                            + "采集失败会重投 20 次")
+                    .isNotNull();
+            assertThat(((Number) limit).intValue())
+                    .as("⚠️ delivery-limit 过大 → 采集失败反复重投")
+                    .isLessThanOrEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ P0-b 采集发送器路由键 ≠ 执行队列（否则 Run 被重跑 = Sev-0）")
+        void traceCollectSenderMustNotTargetExecuteQueue() {
+            RabbitMessageSender sender = ctx.getBean("traceCollectMessageSender",
+                    RabbitMessageSender.class);
+            assertThat(sender.routingKey())
+                    .as("⚠️⚠️ 采集发送器若指向 agent.run.execute，采集消息会被"
+                            + "RunDispatchConsumer 当成「唤醒执行」→ 已终态的 Run 被重跑（Sev-0）")
+                    .isNotEqualTo("agent.run.execute");
+            assertThat(sender.routingKey())
+                    .as("⚠️ 采集发送器必须指向采集队列")
+                    .isEqualTo(ctx.getBean("traceCollectQueue", Queue.class).getName());
+            assertThat(sender.exchange())
+                    .as("⚠️ 采集发送器必须发到与绑定同一个 exchange")
+                    .isEqualTo(ctx.getBean("runDispatchExchange", TopicExchange.class).getName());
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ P0-c 采集消费者存在（否则消息进队列没人处理）")
+        void traceCollectorListenerExists() {
+            assertThat(ctx.getBean(TraceMetricCollectorListener.class))
+                    .as("⚠️⚠️ 无采集消费者 = 消息进了队列但没人处理"
+                            + "（与 D01 断链同一形态）")
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ P0-d 执行循环必须装配采集发布器（否则退回手动补算）")
+        void runExecutionLoopHoldsTraceSender() {
+            RunExecutionLoop loop = ctx.getBean(RunExecutionLoop.class);
+            assertThat(traceSenderFieldValue(loop))
+                    .as("⚠️⚠️ RunExecutionLoop 的 traceSender 为 null = Run 终态不触发采集，"
+                            + "宽表退回「手动补算」→ G2 缺口未闭合且看板长期空白")
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ P0-e 采集发送器必须按租户路由（Rabbit/DB 双通道都覆盖）")
+        void traceCollectSenderIsTenantRouted() {
+            MessageSender routed = ctx.getBean("traceCollectRoutedMessageSender",
+                    MessageSender.class);
+            assertThat(routed)
+                    .as("⚠️⚠️ 采集发送器必须是按租户路由的发送器 —— "
+                            + "只用一种通道的话，另一种通道的部署里采集消息发出去却无人消费，"
+                            + "宽表永远空白而系统表面完全正常")
+                    .isInstanceOf(TenantRoutingMessageSender.class);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ P0-f DB 通道的复合处理器存在且按 eventType 分流")
+        void eventRoutedHandlerExists() {
+            assertThat(ctx.getBean("eventRoutedMessageHandler"))
+                    .as("⚠️⚠️ DB 通道下执行消息与采集消息**同表**，"
+                            + "领取是「按租户取全部 PENDING」——"
+                            + "不分流则要么采集被当执行事件拒绝（采集失效），"
+                            + "要么已终态 Run 被重新执行（Sev-0）")
+                    .isNotNull();
+            assertThat(ctx.getBean("traceCollectMessageHandler"))
+                    .as("⚠️ 采集事件处理器必须存在（DB 通道的采集消费端）")
+                    .isNotNull();
+        }
+    }
+
     // ── 反射工具（读私有字段，仅测试用）──────────────────────────
+
+    private static @Nullable Object traceSenderFieldValue(@NonNull RunExecutionLoop loop) {
+        try {
+            var f = RunExecutionLoop.class.getDeclaredField("traceSender");
+            f.setAccessible(true);
+            return f.get(loop);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("读取 traceSender 字段失败", e);
+        }
+    }
 
     private static @Nullable Object senderFieldValue(@NonNull OutboxPublisher publisher) {
         try {

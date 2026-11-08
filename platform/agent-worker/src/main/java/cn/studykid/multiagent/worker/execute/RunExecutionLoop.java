@@ -39,9 +39,13 @@ import cn.studykid.multiagent.ports.model.ModelResponse;
 import cn.studykid.multiagent.ports.persistence.BudgetPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.ports.persistence.RunEventPort;
+import cn.studykid.multiagent.ports.persistence.RunMessagePort;
 import cn.studykid.multiagent.ports.persistence.RunStepPort;
 import cn.studykid.multiagent.ports.persistence.RiskEventPort;
 import cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe;
+import cn.studykid.multiagent.ports.messaging.MessageSender;
+import cn.studykid.multiagent.ports.messaging.TraceCollectEvent;
+import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.tenant.TenantLifecycle;
 import cn.studykid.multiagent.ports.tool.ToolExecutionException;
 
@@ -68,6 +72,15 @@ public class RunExecutionLoop {
      * Run 被误报为失败。详见 {@link #jsonPayload(String, String)}。
      */
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    /**
+     * 工具结果摘要的长度上限（P1 · G1 埋点 M4）。
+     *
+     * <p>⚠️ <b>必须有上限</b>：工具输出可能是整篇文档或大 JSON，
+     * 无上限落库会让 {@code run_message} 在几次辅导后迅速膨胀，
+     * 回放端点变成「一次请求拉几十 MB」。
+     */
+    private static final int TOOL_OUTPUT_SUMMARY_LIMIT = 2000;
 
     /**
      * 学生标识格式（与 {@code student_profile_student_id_format_chk}、
@@ -211,7 +224,7 @@ public class RunExecutionLoop {
      *
      * <p>⚠️ <b>可为空 = 不召回</b>：未装配时模型看不到任何历史记忆，
      * 行为与本次改动前完全一致（零风险回滚位）。生产装配<b>必须</b>传入，
-     * 由 {@code MemoryWiringIT} 断言。
+     * 由 {@code MemoryWiringTest} 断言。
      */
     private final MemoryRecallService memoryRecallService;
 
@@ -223,6 +236,27 @@ public class RunExecutionLoop {
      * 这正是 P4-D08 R-1 的翻版。生产装配<b>必须</b>传入。
      */
     private final MemoryConsolidator memoryConsolidator;
+
+    /**
+     * 指标采集事件发布器（P0 自动采集接线，G2）。
+     *
+     * <p>⚠️ <b>可为空 = 不发布</b>：未装配时 Run 终态不会触发自动采集，
+     * {@code agent_trace_metric} 宽表退回「由 admin-console 补算按钮手动触发」的旧行为。
+     * 生产装配<b>必须</b>传入（否则 G2 缺口不闭合，看板长期空白被误读为健康）。
+     */
+    private final MessageSender traceSender;
+
+    /**
+     * 对话消息写入端口（P1 · G1 回放底座）。
+     *
+     * <p>⚠️ <b>可为空 = 不落对话内容</b>：未装配时 {@code run_message} 永远为空 ——
+     * 而「对话内容从未被记录」与「这次辅导没有对话」在外部完全无法区分，
+     * 这正是 P4-D08 R-1 的翻版。生产装配<b>必须</b>传入。
+     *
+     * <p>⚠️ <b>写入失败绝不冒泡</b>：见 {@link #appendMessage} —— 一次本可成功的
+     * 辅导不能因「消息没记下」而变成失败。
+     */
+    private final RunMessagePort messagePort;
 
     public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
@@ -347,7 +381,7 @@ public class RunExecutionLoop {
         this(modelGateway, claimPort, toolGate, leaseDuration, workerId, promptGuard,
                 eventPort, adopter, contextTokenBudget, lifecycleProbe, stepPort,
                 riskEventPort, observerChain, preemptionExecutor, budget, pricing, null,
-                null, null);
+                null, null, null);
     }
 
     /**
@@ -379,7 +413,44 @@ public class RunExecutionLoop {
                              @Nullable ModelPricingPolicy pricing,
                              @Nullable RunContinuation continuation,
                              @Nullable MemoryRecallService memoryRecallService,
-                             @Nullable MemoryConsolidator memoryConsolidator) {
+                             @Nullable MemoryConsolidator memoryConsolidator,
+                             @Nullable MessageSender traceSender) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId, promptGuard,
+                eventPort, adopter, contextTokenBudget, lifecycleProbe, stepPort,
+                riskEventPort, observerChain, preemptionExecutor, budget, pricing,
+                continuation, memoryRecallService, memoryConsolidator, traceSender, null);
+    }
+
+    /**
+     * <b>生产装配构造器</b>（P1 · G1 回放底座）：额外注入<b>对话消息写入端口</b>。
+     *
+     * <p>⚠️ 新增依赖只加在这一个构造器上（项目既有纪律）；
+     * 其余构造器保持不变并委托——{@code messagePort} 为 {@code null} 时
+     * 执行循环<b>不写对话内容</b>（行为与本次改动前完全一致，零风险回滚位）。
+     *
+     * @param messagePort 对话消息写入端口；{@code null} = 不落对话内容
+     */
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             @NonNull PromptGuard promptGuard,
+                             @Nullable RunEventPort eventPort,
+                             @Nullable InFlightDelegationAdopter adopter,
+                             int contextTokenBudget,
+                             @Nullable TenantLifecycleProbe lifecycleProbe,
+                             @Nullable RunStepPort stepPort,
+                             @Nullable RiskEventPort riskEventPort,
+                             @Nullable ExecutionObserverChain observerChain,
+                             @Nullable ExecutorService preemptionExecutor,
+                             @Nullable BudgetPort budget,
+                             @Nullable ModelPricingPolicy pricing,
+                             @Nullable RunContinuation continuation,
+                             @Nullable MemoryRecallService memoryRecallService,
+                             @Nullable MemoryConsolidator memoryConsolidator,
+                             @Nullable MessageSender traceSender,
+                             @Nullable RunMessagePort messagePort) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
@@ -429,6 +500,16 @@ public class RunExecutionLoop {
         }
         this.memoryRecallService = memoryRecallService;
         this.memoryConsolidator = memoryConsolidator;
+        this.traceSender = traceSender;
+        if (traceSender == null) {
+            log.warn("未装配指标采集发布器（traceSender）：Run 终态不会触发自动采集，"
+                    + "agent_trace_metric 宽表退回手动补算（G2 缺口不闭合）");
+        }
+        this.messagePort = messagePort;
+        if (messagePort == null) {
+            log.warn("未装配对话消息写入端口（messagePort）：run_message 永远为空，"
+                    + "「这次辅导模型究竟说了什么」在系统内无法复盘（G1 缺口不闭合）");
+        }
         if (memoryRecallService == null) {
             log.warn("未装配记忆召回（MemoryRecallService）：模型看不到任何跨 Run 历史记忆，"
                     + "「这个学生以前错过什么」只能靠模型主动调 get_student_profile 工具");
@@ -515,8 +596,16 @@ public class RunExecutionLoop {
         //    （ToolOutcomeRenderer：不可信标记 / 长度封顶 / 失败也回灌）。
         java.util.List<cn.studykid.multiagent.ports.model.ModelMessage> messages =
                 new java.util.ArrayList<>();
-        messages.add(cn.studykid.multiagent.ports.model.ModelMessage.user(
-                renderInput(input)));
+        String renderedInput = renderInput(input);
+        messages.add(cn.studykid.multiagent.ports.model.ModelMessage.user(renderedInput));
+
+        // ── P1 · G1 埋点 M1：学生输入（回放底座）────────────────────
+        //    ⚠️ 存的是**渲染后**的文本（含 PromptGuard 的标记包裹），
+        //    不是原始载荷 —— 与模型实际看到的完全一致，回放才可信。
+        //    ⚠️ stepNumber=0：用户输入不属于任何一轮，0 表示「开场」。
+        appendMessage(tenantId, task, 0, RunMessagePort.Roles.USER,
+                java.util.Map.of("text", renderedInput),
+                null, null, null, null, null);
 
         // ── 跨 Run 记忆召回（P1）────────────────────────────────────
         //    ⚠️ 只在这里召回**一次**：本轮 Run 的上下文一旦开始增长，
@@ -537,6 +626,22 @@ public class RunExecutionLoop {
                 memoryTokens = recalled.tokens();
                 log.info("已召回跨 Run 记忆: runId={}, 条数={}, tokens≈{}",
                         task.runId(), recalled.items(), recalled.tokens());
+                // ── P1 · G1 埋点 M2：记忆召回摘要 ──────────────────────
+                //    ⚠️⚠️ **只存标签摘要（知识点 + 错误类型），绝不存 block 原文**：
+                //    block 是「模型历史输出」拼成的可注入系统提示，
+                //    它同时含知识点原文与围栏标记，落库等于把不可信通道的内容
+                //    原样存档（与 PromptGuard.MEMORY_* 围栏纪律冲突）。
+                //    回放只需知道「召回了哪几个薄弱点」—— 标签足够。
+                appendMessage(tenantId, task, 0, RunMessagePort.Roles.SYSTEM,
+                        java.util.Map.of(
+                                "kind", "MEMORY_RECALL",
+                                "items", recalled.labels().stream()
+                                        .map(l -> java.util.Map.of(
+                                                "knowledgePoint", l.knowledgePoint(),
+                                                "errorType", l.errorType()))
+                                        .toList(),
+                                "tokens", recalled.tokens()),
+                        null, null, null, null, null);
             }
         }
         // ⚠️ 记忆占用必须从**裁剪预算**里扣掉：trim 只约束消息序列，
@@ -768,6 +873,20 @@ public class RunExecutionLoop {
                 appendStep(tenantId, task, ++stepSeq, RunStepPort.Types.THINK,
                         thinkStart, thinkEnd);
 
+                // ── P1 · G1 埋点 M3：模型输出（含工具调用意图摘要）──────
+                //    ⚠️ 落库的是**模型原始输出**（未经 moderation 改写）：
+                //    回放要看的是「模型究竟说了什么」，而不是「平台放行了什么」——
+                //    若存改写后的文本，模型被 moderation 拦下的那些话会从证据里消失，
+                //    复盘就永远看不到「它本来想说什么」。
+                //    ⚠️ 工具参数只存**摘要**（键名 + 长度），不存完整参数值：
+                //    参数里可能含学生姓名、手机号等个人信息。
+                appendMessage(tenantId, task, steps, RunMessagePort.Roles.ASSISTANT,
+                        assistantMessageContent(response),
+                        null, agentConfig.modelId(),
+                        response.usage() == null ? null : response.usage().inputTokens(),
+                        response.usage() == null ? null : response.usage().outputTokens(),
+                        java.time.Duration.between(thinkStart, thinkEnd).toMillis());
+
                 // 观测者：模型调用完成
                 if (observerChain != null) {
                     observerChain.onModelCallComplete(
@@ -876,6 +995,30 @@ public class RunExecutionLoop {
                     appendEvent(tenantId, task.runId(), RunEventPort.Types.TOOL_INVOKED,
                             java.util.Map.of("toolName", toolResult.unknownToolName(),
                                     "operationState", "UNKNOWN"));
+                }
+
+                // ── P1 · G1 埋点 M4：工具调用结果摘要 ────────────────
+                //    ⚠️ 逐工具一条消息（不是一个汇总）——回放要能看出
+                //    「哪一步调了什么、成了还是败了」，汇总成一条就看不出顺序与粒度。
+                //    ⚠️ 结果正文**长度封顶**（工具输出可能是整篇文档/大 JSON，
+                //    无上限落库会让 run_message 迅速膨胀）。
+                //    ⚠️ 拒绝原因保留（审查时最关键的就是「为什么被拒」），
+                //    但它已是闸门给出的原因码，不含参数原文。
+                for (String tool : toolResult.succeededTools()) {
+                    appendToolMessage(tenantId, task, steps, tool, "SUCCEEDED",
+                            toolResult.outputOf(tool).orElse(null),
+                            toolResult.rejectionReasonOf(tool).orElse(null),
+                            java.time.Duration.between(toolStart, toolEnd).toMillis());
+                }
+                for (String tool : toolResult.failedTools()) {
+                    appendToolMessage(tenantId, task, steps, tool, "FAILED", null,
+                            toolResult.rejectionReasonOf(tool).orElse(null),
+                            java.time.Duration.between(toolStart, toolEnd).toMillis());
+                }
+                for (String tool : toolResult.rejectedTools()) {
+                    appendToolMessage(tenantId, task, steps, tool, "REJECTED", null,
+                            toolResult.rejectionReasonOf(tool).orElse(null),
+                            java.time.Duration.between(toolStart, toolEnd).toMillis());
                 }
 
                 if (toolResult.unknownResultOccurred()) {
@@ -1057,6 +1200,32 @@ public class RunExecutionLoop {
     }
 
     /**
+     * 发布「指标采集」事件（P0 自动采集接线，G2）。
+     *
+     * <p>⚠️ <b>fail-safe</b>：发布失败不影响 Run 终态（由 admin-console「补算」按钮兜底）。
+     * 消息路由到<b>专用队列</b> {@code agent.trace.collect}——
+     * <b>绝不是</b> {@code agent.run.execute}，否则会被 {@code RunDispatchConsumer}
+     * 当成「唤醒执行」再次跑这个已终态的 Run（重复执行 = Sev-0）。
+     *
+     * <p>⚠️ 复用 {@link OutboxMessage} 的白名单载荷（仅 runId/tenantId/…）：
+     * 既满足「消息最小化」纪律，又恰好是采集器 {@code collect(tenantId, runId)}
+     * 所需的全部信息。
+     */
+    void publishTraceCollect(String tenantId, RunClaimPort.LeasedTask task) {
+        if (traceSender == null) {
+            return;
+        }
+        try {
+            OutboxMessage msg = new OutboxMessage(
+                    task.runId(), tenantId, 0, task.fencingToken(), Instant.now());
+            traceSender.send(TraceCollectEvent.TYPE, msg);
+        } catch (RuntimeException e) {
+            log.warn("⚠️ 发布 trace 采集事件失败（不影响终态，可由补算按钮兜底）: runId={}, cause={}",
+                    task.runId(), e.toString());
+        }
+    }
+
+    /**
      * 追加一条执行步骤（P7-2 事实写入）。
      *
      * <p>⚠️ <b>与 {@link #appendEvent} 同纪律</b>：步骤是 P7 指标与结果页的真实数据源，
@@ -1078,6 +1247,98 @@ public class RunExecutionLoop {
         } catch (RuntimeException e) {
             log.warn("⚠️ 写入执行步骤失败（不影响本次执行结果）: runId={}, step={}, type={}, cause={}",
                     task.runId(), stepNumber, stepType, e.toString());
+        }
+    }
+
+    /**
+     * 构造 ASSISTANT 消息内容（P1 · G1 埋点 M3）。
+     *
+     * <p>⚠️ <b>工具参数只存摘要，不存值</b>：模型发起的工具调用参数里
+     * 可能含学生姓名、手机号、题目原文等个人信息；
+     * 落库完整参数 = 把敏感数据复制到一个<b>无保留期约束的复盘表</b>里。
+     * 存「参数键名 + 值长度」已足够回答「模型想调什么工具、传了多少东西」，
+     * 真正的参数值仍可经 {@code tool_operation_id} 按需回查。
+     */
+    private static java.util.Map<String, Object> assistantMessageContent(
+            @NonNull ModelResponse response) {
+        java.util.Map<String, Object> content = new java.util.LinkedHashMap<>();
+        content.put("text", response.content() == null ? "" : response.content());
+        content.put("toolCalls", response.toolCalls().values().stream()
+                .map(tc -> {
+                    java.util.Map<String, Object> one = new java.util.LinkedHashMap<>();
+                    one.put("id", tc.callId() == null ? "" : tc.callId());
+                    one.put("name", tc.toolName());
+                    one.put("argKeys", tc.arguments().keySet().stream().sorted().toList());
+                    one.put("argCount", tc.arguments().size());
+                    return one;
+                })
+                .toList());
+        content.put("finishReason", response.finishReason() == null ? "" : response.finishReason());
+        return content;
+    }
+
+    /**
+     * 追加一条工具消息（P1 · G1 埋点 M4）。
+     *
+     * <p>⚠️ <b>结果正文长度封顶</b>：工具输出可能是整篇文档或大 JSON，
+     * 无上限落库会让 {@code run_message} 在几次辅导后迅速膨胀到不可用。
+     * 封顶后截断并标注 —— 「结果被截断」本身也是审查时需要的信号。
+     */
+    private void appendToolMessage(String tenantId, RunClaimPort.LeasedTask task,
+                                    int stepNumber, @NonNull String toolName,
+                                    @NonNull String state, @Nullable String output,
+                                    @Nullable String reason, @Nullable Long latencyMs) {
+        java.util.Map<String, Object> content = new java.util.LinkedHashMap<>();
+        content.put("toolName", toolName);
+        content.put("state", state);
+        content.put("output", summarizeToolOutput(output));
+        content.put("reason", reason == null ? "" : reason);
+        appendMessage(tenantId, task, stepNumber, RunMessagePort.Roles.TOOL,
+                content, null, null, null, null, latencyMs);
+    }
+
+    /**
+     * 工具结果摘要（长度封顶）。
+     *
+     * <p>⚠️ 截断时补 {@code truncated=true} 标记：审查者必须能分辨
+     * 「工具就返回了这么多」与「这里被截断了」——
+     * 否则截断会被误读为工具本身输出短，掩盖了「输出异常庞大」这一信号。
+     */
+    private static String summarizeToolOutput(@Nullable String output) {
+        if (output == null) {
+            return "";
+        }
+        if (output.length() <= TOOL_OUTPUT_SUMMARY_LIMIT) {
+            return output;
+        }
+        return output.substring(0, TOOL_OUTPUT_SUMMARY_LIMIT) + "…[truncated]";
+    }
+
+    /**
+     * 追加一条对话消息（P1 · G1 回放底座）。
+     *
+     * <p>⚠️ <b>与 {@link #appendStep} 同纪律</b>：对话消息是复盘与内容级评估的底座，
+     * 但写入失败（DB 抖动 / 未注入端口 / fencing 拦截）<b>绝不冒泡到主流程</b>——
+     * 一次本可成功的辅导不能因「消息没记下」而变成失败。异常在此吞掉并记 WARN。
+     *
+     * <p>⚠️ <b>端口未注入（{@code null}）直接跳过</b>：与事件端口同款可选装配纪律。
+     */
+    private void appendMessage(String tenantId, RunClaimPort.LeasedTask task,
+                               int stepNumber, @NonNull String role,
+                               @NonNull Map<String, Object> content,
+                               @Nullable String toolOperationId, @Nullable String modelId,
+                               @Nullable Long inputTokens, @Nullable Long outputTokens,
+                               @Nullable Long latencyMs) {
+        if (messagePort == null) {
+            return;
+        }
+        try {
+            messagePort.append(tenantId, task.runId(), task.fencingToken(),
+                    stepNumber, role, content, toolOperationId, modelId,
+                    inputTokens, outputTokens, latencyMs);
+        } catch (RuntimeException e) {
+            log.warn("⚠️ 写入对话消息失败（不影响本次执行结果）: runId={}, role={}, step={}, cause={}",
+                    task.runId(), role, stepNumber, e.toString());
         }
     }
 
@@ -1433,6 +1694,7 @@ public class RunExecutionLoop {
             //    提交失败 = 世代失效（白干了），不是「执行失败」。
             appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_SUCCEEDED,
                     java.util.Map.of("state", "SUCCEEDED"));
+            publishTraceCollect(tenantId, task);
         }
         // ⚠️ 提交失败（世代不符）不是执行失败，是「白干了」
         return ok ? ExecutionOutcome.succeeded()
@@ -1452,6 +1714,7 @@ public class RunExecutionLoop {
             //    不再永远兜底成 OTHER。
             appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
                     java.util.Map.of("state", "FAILED"));
+            publishTraceCollect(tenantId, task);
         }
         return ok ? ExecutionOutcome.failed(reason)
                   : ExecutionOutcome.skippedStaleGeneration();

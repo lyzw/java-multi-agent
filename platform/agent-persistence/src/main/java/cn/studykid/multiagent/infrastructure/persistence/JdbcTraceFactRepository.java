@@ -22,6 +22,7 @@ import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.TraceIdSource;
+import cn.studykid.multiagent.ports.metrics.ScenarioTag;
 import cn.studykid.multiagent.ports.metrics.TraceFactPort;
 
 /**
@@ -82,8 +83,14 @@ public class JdbcTraceFactRepository implements TraceFactPort {
     }
 
     private Optional<RunFacts> readRun(Connection conn, UUID runId) throws SQLException {
+        // ⚠️ scenario 只认**显式字符串标签**（input_payload.scenario）：
+        //    jsonb_typeof 先挡住 object/array —— 否则 ->> 会把整个 JSON 结构
+        //    转成文本，把对话原文带进指标宽表（合规红线 + 看板分组基数爆炸）。
+        //    内容白名单由 ScenarioTag 在 Java 侧再校验一次（可单测、可反向验证）。
         String sql = """
-                SELECT state, error_code, trace_id, correlation_id, created_at, completed_at
+                SELECT state, error_code, trace_id, correlation_id, created_at, completed_at,
+                       CASE WHEN jsonb_typeof(input_payload -> 'scenario') = 'string'
+                            THEN input_payload ->> 'scenario' END AS scenario
                 FROM public.run WHERE run_id = ?::uuid
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -123,7 +130,8 @@ public class JdbcTraceFactRepository implements TraceFactPort {
                                 ? null
                                 : rs.getTimestamp("completed_at").toInstant(),
                         agent == null ? null : agent.agentId(),
-                        agent == null ? null : agent.version()));
+                        agent == null ? null : agent.version(),
+                        ScenarioTag.normalize(rs.getString("scenario"))));
             }
         }
     }
@@ -354,20 +362,36 @@ public class JdbcTraceFactRepository implements TraceFactPort {
     }
 
     /**
-     * 读取全部已定义工具名，用于识别「模型幻觉出的工具」。
+     * 读取能力目录里已定义的工具标识，用于识别「模型幻觉出的工具」。
      *
      * <p>⚠️ 这是<b>全局存在性</b>判定，不是「该快照的生效闭包」——
      * 精确闭包要展开 {@code execution_snapshot} 版本树。故本判定只能发现
      * 「从未定义过的工具名」，发现不了「已下线版本里的工具」。
      * 文档里明示，不冒充更严格的判据。
+     *
+     * <p>⚠️⚠️ <b>列名必须是 {@code id}，绝不是 {@code tool_name}</b>：
+     * {@code cap_tool_def} 的逻辑标识列叫 {@code id}（形如 {@code tool-profile-read}），
+     * {@code name} 是中文显示名（形如 {@code 档案读取}），
+     * <b>该表根本没有 {@code tool_name} 列</b>。
+     * <p>写错列名的后果<b>不是「少算几个工具」，而是整条采集链路抛
+     * {@link SQLException}</b> → 采集器每次都失败 → 宽表永远空白——
+     * 且表象是「消息发了但没人消费」，极易误判为 MQ 接线问题。
+     * 这个缺陷曾长期潜伏：采集器从未被真正触发过（G2 缺口），
+     * 单测又全用 stub 事实端口，从不执行本 SQL。
+     *
+     * <p>⚠️ 这里读到的只是<b>目录侧</b>的工具名；<b>代码注册</b>的 native 工具
+     * （{@code get_student_profile} / {@code record_weakness}）不在目录里，
+     * 由 {@code ToolNameRegistry} 补齐，在采集器里取并集。
      */
     private Set<String> readKnownToolNames(Connection conn) throws SQLException {
         Set<String> out = new HashSet<>();
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT DISTINCT tool_name FROM public.cap_tool_def");
+                "SELECT id FROM public.cap_tool_def "
+                        + "UNION SELECT mcp_tool_name FROM public.cap_tool_def "
+                        + "WHERE mcp_tool_name IS NOT NULL");
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
-                out.add(rs.getString("tool_name"));
+                out.add(rs.getString(1));
             }
         }
         return out;

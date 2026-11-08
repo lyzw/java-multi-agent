@@ -177,7 +177,12 @@ class MqTopologyWiringTest {
         @DisplayName("⚠️⚠️ 绑定的路由键必须与发送器的路由键一致（失配即消息无处可去）")
         void bindingRoutingKeyMatchesSender() {
             Binding binding = ctx.getBean("runExecuteBinding", Binding.class);
-            RabbitMessageSender sender = ctx.getBean(RabbitMessageSender.class);
+            // ⚠️ 按 Bean 名取，**不按类型取**：P0 新增了第二个 RabbitMessageSender
+            //    （traceCollectMessageSender，指向采集队列），
+            //    `getBean(RabbitMessageSender.class)` 会抛 NoUniqueBeanDefinitionException。
+            //    且本用例断言的是**执行通道**的发送器，按名取本就确。
+            RabbitMessageSender sender = ctx.getBean("rabbitMessageSender",
+                    RabbitMessageSender.class);
 
             assertThat(binding.getRoutingKey())
                     .as("⚠️⚠️ 绑定的路由键与发送器的路由键必须一致 —— "
@@ -197,7 +202,10 @@ class MqTopologyWiringTest {
         @Test
         @DisplayName("⚠️⚠️ 发送器持有的交换机与路由键必须来自配置")
         void senderUsesConfiguredTopology() {
-            RabbitMessageSender sender = ctx.getBean(RabbitMessageSender.class);
+            // ⚠️ 按 Bean 名取，**不按类型取**：容器里有两个 RabbitMessageSender
+            //    （执行通道 + 采集通道），按类型取会抛 NoUniqueBeanDefinitionException。
+            RabbitMessageSender sender = ctx.getBean("rabbitMessageSender",
+                    RabbitMessageSender.class);
 
             assertThat(sender.exchange())
                     .as("⚠️⚠️ 发送器的交换机必须来自配置 —— 此前硬编码，"

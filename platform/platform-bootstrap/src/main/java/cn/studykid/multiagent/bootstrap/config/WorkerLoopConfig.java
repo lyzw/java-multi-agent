@@ -31,6 +31,8 @@ import cn.studykid.multiagent.application.config.BackpressurePolicy;
 import cn.studykid.multiagent.application.config.MessagingPolicy;
 import cn.studykid.multiagent.application.config.PlatformConfig;
 import cn.studykid.multiagent.application.config.WorkerPolicy;
+import cn.studykid.multiagent.bootstrap.messaging.EventRoutedMessageHandler;
+import cn.studykid.multiagent.bootstrap.messaging.TraceCollectMessageHandler;
 import cn.studykid.multiagent.infrastructure.messaging.CompositeQueueDepthProbe;
 import cn.studykid.multiagent.infrastructure.messaging.PgQueueDepthProbe;
 import cn.studykid.multiagent.infrastructure.messaging.PgQueueListener;
@@ -41,6 +43,8 @@ import cn.studykid.multiagent.infrastructure.messaging.RabbitMessageSender;
 import cn.studykid.multiagent.infrastructure.messaging.RabbitQueueDepthProbe;
 import cn.studykid.multiagent.infrastructure.messaging.TenantRoutingMessageSender;
 import cn.studykid.multiagent.ports.messaging.MessageSender;
+import cn.studykid.multiagent.application.metrics.AgentMetricCollector;
+import cn.studykid.multiagent.bootstrap.messaging.TraceMetricCollectorListener;
 import cn.studykid.multiagent.ports.messaging.MessagingMode;
 import cn.studykid.multiagent.ports.messaging.QueueDepthProbe;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
@@ -174,6 +178,139 @@ public class WorkerLoopConfig {
         return BindingBuilder.bind(runExecuteQueue)
                 .to(runDispatchExchange)
                 .with(routingKey);
+    }
+
+    /**
+     * 指标自动采集队列（P0 自动采集接线，G2）。
+     *
+     * <p>⚠️ <b>专用队列，绝不复用 {@code agent.run.execute}</b>：采集事件若进执行队列，
+     * 会被 {@code RunDispatchConsumer} 当成「唤醒执行」再次跑这个已终态的 Run（重复执行 = Sev-0）。
+     * 这里用独立路由键 + 独立队列 + 独立消费者（{@code TraceMetricCollectorListener}）。
+     */
+    @Bean
+    public Queue traceCollectQueue(
+            @Value("${agent.mq.queues.trace-collect.name}") String name,
+            @Value("${agent.mq.queues.trace-collect.delivery-limit}") int deliveryLimit,
+            @Value("${agent.mq.queues.trace-collect.dead-letter-exchange}") String deadLetterExchange,
+            @Value("${agent.mq.queues.trace-collect.dead-letter-routing-key}") String deadLetterRoutingKey) {
+        return QueueBuilder.durable(name)
+                .quorum()
+                .deliveryLimit(deliveryLimit)
+                .deadLetterExchange(deadLetterExchange)
+                .deadLetterRoutingKey(deadLetterRoutingKey)
+                .build();
+    }
+
+    @Bean
+    public Binding traceCollectBinding(
+            Queue traceCollectQueue,
+            TopicExchange runDispatchExchange,
+            @Value("${agent.mq.queues.trace-collect.name}") String routingKey) {
+        return BindingBuilder.bind(traceCollectQueue)
+                .to(runDispatchExchange)
+                .with(routingKey);
+    }
+
+    /**
+     * 指标采集专用发送器（P0 · Rabbit 通道）。
+     *
+     * <p>⚠️ <b>独立 {@link RabbitMessageSender}，路由键固定为 {@code agent.trace.collect}</b>：
+     * 共享的 {@code messageSender}（{@code TenantRoutingMessageSender}）默认路由键是
+     * {@code agent.run.execute}——复用它会把采集事件发到执行队列，导致 Run 被重跑（Sev-0）。
+     * 故此处单独构造一个指向采集队列的发送器。
+     */
+    @Bean
+    public RabbitMessageSender traceCollectMessageSender(
+            RabbitTemplate runRabbitTemplate,
+            @Value("${agent.mq.exchange}") String exchange,
+            @Value("${agent.mq.queues.trace-collect.name}") String routingKey) {
+        return new RabbitMessageSender(runRabbitTemplate, exchange, routingKey);
+    }
+
+    /**
+     * 指标采集专用发送器（P0 · DB 通道）。
+     *
+     * <p>⚠️ <b>为什么必须有 DB 版本</b>：{@code agent.messaging.mode} 默认是
+     * {@code database}（以 PG 表为队列，不依赖外部 broker）。
+     * 只做 Rabbit 版本的话，<b>默认部署下采集事件会发到 Rabbit 但没有消费者</b>
+     * （监听容器 autoStartup 与「Rabbit 是否活动」求和，DB 模式下不启动）
+     * → 宽表永远空白，而系统表面完全正常。
+     *
+     * <p>⚠️ PG 通道用 {@code eventType} 区分消息类型
+     * （{@code PgQueueMessageSender} 把 eventType 存进队列行），
+     * 故同一张队列表可以同时承载执行消息与采集消息，
+     * 由消费端按 eventType 分流（见 {@code EventRoutedMessageHandler}）。
+     */
+    @Bean
+    public PgQueueMessageSender traceCollectPgMessageSender(PgQueueRepository pgRepository) {
+        return new PgQueueMessageSender(pgRepository);
+    }
+
+    /**
+     * 指标采集发送器（P0 · <b>按租户路由</b>的最终形态）。
+     *
+     * <p>⚠️ <b>为什么不能直接用共享的 {@code messageSender}</b>：
+     * 它在 Rabbit 模式下指向 {@code agent.run.execute}（执行队列），
+     * 采集事件若进执行队列 → 被当成「唤醒执行」→ <b>已终态的 Run 被重跑（Sev-0）</b>。
+     * <p>⚠️ <b>为什么也不能固定用 Rabbit 版</b>：
+     * 默认部署是 DB 模式，采集事件会进 Rabbit 队列却<b>无人消费</b>。
+     * <p>故按 {@link MessagingChannels} 的全局模式 + 租户覆盖，
+     * 与执行通道<b>同源</b>地路由 —— 灰度混合模式下两个租户各走各的通道。
+     */
+    @Bean
+    public MessageSender traceCollectRoutedMessageSender(
+            MessagingChannels channels,
+            @org.springframework.beans.factory.annotation.Qualifier("traceCollectMessageSender")
+                    RabbitMessageSender rabbit,
+            PgQueueMessageSender traceCollectPgMessageSender) {
+        MessageSender database = traceCollectPgMessageSender;
+
+        Map<String, MessageSender> overrides = new LinkedHashMap<>();
+        for (String tenantId : channels.tenantIds()) {
+            MessagingMode mode = channels.modeOf(tenantId);
+            if (mode != channels.globalMode()) {
+                overrides.put(tenantId,
+                        mode == MessagingMode.RABBITMQ ? rabbit : database);
+            }
+        }
+        MessageSender defaultSender =
+                channels.globalMode() == MessagingMode.RABBITMQ ? rabbit : database;
+
+        log.info("指标采集发送端已装配: 全局={}, 灰度覆盖租户数={}",
+                channels.globalMode().key(), overrides.size());
+        return new TenantRoutingMessageSender(defaultSender, overrides);
+    }
+
+    /**
+     * 采集事件处理器（P0 · DB 通道消费端）。
+     */
+    @Bean
+    public TraceCollectMessageHandler traceCollectMessageHandler(
+            AgentMetricCollector collector) {
+        return new TraceCollectMessageHandler(collector);
+    }
+
+    /**
+     * 按事件类型分流的复合处理器（P0 · DB 通道）。
+     *
+     * <p>⚠️ <b>必须在这里分流</b>：DB 通道下执行消息与采集消息<b>同表</b>，
+     * 领取是「按租户取全部 PENDING」，不分流则要么采集事件被当执行事件拒绝，
+     * 要么已终态 Run 被重新执行（Sev-0）。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.messaging.MessageHandler eventRoutedMessageHandler(
+            RunDispatchConsumer consumer,
+            TraceCollectMessageHandler traceCollectMessageHandler) {
+        return new EventRoutedMessageHandler(consumer, traceCollectMessageHandler);
+    }
+
+    /**
+     * 指标自动采集消费者（P0）。宿主 Bean：{@code @RabbitListener} 由容器自动发现。
+     */
+    @Bean
+    public TraceMetricCollectorListener traceMetricCollectorListener(
+            AgentMetricCollector collector, ObjectMapper mapper) {
+        return new TraceMetricCollectorListener(collector, mapper);
     }
 
     /**
@@ -318,6 +455,7 @@ public class WorkerLoopConfig {
     @Bean
     @Primary
     public MessageSender messageSender(MessagingChannels channels,
+                                      @org.springframework.beans.factory.annotation.Qualifier("rabbitMessageSender")
                                       RabbitMessageSender rabbit,
                                       PgQueueRepository pgRepository) {
         // ⚠️ **@Primary 是必需的**（第二十八批 · C28-1 · A9）：
@@ -326,6 +464,15 @@ public class WorkerLoopConfig {
         //    `getBean(MessageSender.class)` 会抛 NoUniqueBeanDefinitionException。
         //    对外的消息发送端只能是**按租户路由**的那个（本 Bean），
         //    裸的 RabbitMessageSender 只是它的内部实现。
+        //
+        // ⚠️⚠️ **@Qualifier("rabbitMessageSender") 是必需的**（P0 自动采集接线）：
+        //    P0 新增了第二个 {@link RabbitMessageSender}（traceCollectMessageSender，
+        //    指向采集队列）。若本注入点按类型取，容器里就有**两个** RabbitMessageSender
+        //    候选 → NoUniqueBeanDefinitionException →
+        //    **整个 Spring 上下文启动失败**（全部端点 503，不是「采集不工作」而是「平台起不来」）。
+        //    ⚠️ 这里指的是**执行通道**那个发送器，绝不能误取采集发送器：
+        //    采集发送器的路由键是 agent.trace.collect，
+        //    拿它当执行通道的发送器会让所有 Run 的唤醒消息发到采集队列 → Run 永不执行。
         MessageSender database = new PgQueueMessageSender(pgRepository);
 
         Map<String, MessageSender> overrides = new LinkedHashMap<>();
@@ -487,7 +634,8 @@ public class WorkerLoopConfig {
     @Bean
     public PgQueueListener pgQueueListener(MessagingChannels channels,
                                            PgQueueRepository pgRepository,
-                                           RunDispatchConsumer consumer,
+                                           @org.springframework.beans.factory.annotation.Qualifier("eventRoutedMessageHandler")
+                                           cn.studykid.multiagent.ports.messaging.MessageHandler handler,
                                            @Value("${" + MessagingPolicy.KEY_POLL_INTERVAL_MS + "}")
                                                    String pollIntervalMs,
                                            @Value("${" + MessagingPolicy.KEY_BATCH_SIZE + "}")
@@ -504,7 +652,7 @@ public class WorkerLoopConfig {
                                                    String workerId) {
         List<String> databaseTenants = channels.databaseTenantIds();
         PgQueueListener listener = new PgQueueListener(
-                databaseTenants, pgRepository, consumer,
+                databaseTenants, pgRepository, handler,
                 Duration.ofMillis(MessagingPolicy.requireMillis(
                         pollIntervalMs, MessagingPolicy.KEY_POLL_INTERVAL_MS, 10)),
                 MessagingPolicy.requireBoundedInt(

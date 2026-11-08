@@ -58,7 +58,9 @@ public interface TraceFactPort {
      * @param run              Run 本体的收敛信息
      * @param usage            模型用量（可能为「一条记录都没有」，此时各字段为 null）
      * @param toolGroups       按 {@code (tool_name, request_digest)} 聚合的工具调用
-     * @param knownToolNames   已定义工具名全集（用于识别模型幻觉出的工具）
+     * @param knownToolNames   <b>能力目录</b>里已定义的工具标识全集
+     *                          （{@code cap_tool_def.id} 与其 {@code mcp_tool_name}；
+     *                          用于识别模型幻觉出的工具）
      * @param steps            执行步骤聚合（P7-2 真实口径来源；未写入时为 {@code present=false}）
      */
     record TraceFacts(
@@ -97,7 +99,15 @@ public interface TraceFactPort {
                 new StepFacts(false, 0L, 0L, 0L, 0L, 0);
     }
 
-    /** Run 本体。 */
+    /**
+     * Run 本体。
+     *
+     * @param scenario <b>显式场景标签</b>（学科/知识点/归因类型）。来自
+     *                 {@code run.input_payload.scenario}，经 {@link ScenarioTag}
+     *                 规范化；{@code null} = 调用方未标注，<b>绝不从自由文本猜测</b>。
+     *                 采集器原样写入 {@code agent_trace_metric.scenario}，
+     *                 让「按场景拆分」看板有真实分组维度。
+     */
     record RunFacts(
             @NonNull String runId,
             @NonNull String state,
@@ -107,7 +117,27 @@ public interface TraceFactPort {
             @NonNull Instant startedAt,
             @Nullable Instant endedAt,
             @Nullable String agentId,
-            @Nullable Integer agentVersion) {
+            @Nullable Integer agentVersion,
+            @Nullable String scenario) {
+
+        /**
+         * 兼容构造：未标注场景（存量 Run 与不传标签的调用方）。
+         *
+         * <p>⚠️ 保留 9 参是为了不改动既有单测构造点；新增字段一律走
+         * 10 参规范构造，避免「没标注」被悄悄填成空串或默认分组。
+         */
+        public RunFacts(@NonNull String runId,
+                        @NonNull String state,
+                        @Nullable String errorCode,
+                        @NonNull String traceId,
+                        @NonNull TraceIdSource traceIdSource,
+                        @NonNull Instant startedAt,
+                        @Nullable Instant endedAt,
+                        @Nullable String agentId,
+                        @Nullable Integer agentVersion) {
+            this(runId, state, errorCode, traceId, traceIdSource, startedAt, endedAt,
+                    agentId, agentVersion, null);
+        }
 
         /** 是否到达终态。在途（QUEUED / RUNNING）不采集。 */
         public boolean converged() {

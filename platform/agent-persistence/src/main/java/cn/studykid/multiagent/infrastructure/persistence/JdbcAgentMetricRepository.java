@@ -466,6 +466,43 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
         return out;
     }
 
+    @Override
+    public @NonNull List<ScenarioCount> scenarios(@NonNull MetricQuery query) {
+        // ⚠️ 刻意清空 agent / scenario 维度：这是筛选器自身的数据源。
+        //    若沿用调用方传来的 scenario，选中 A 之后下拉里只剩 A（自锁，用户切不回 B）；
+        //    沿用 agent 维度则会漏掉其它 Agent 下的可选场景。只保留时间窗与租户边界。
+        MetricQuery q = new MetricQuery(query.from(), query.to(), query.tenantId(), null, null, null)
+                .clamp();
+        shadowEnter("platform.agent_trace_metric", q.tenantId(),
+                q.tenantId() != null && !q.tenantId().isBlank());
+        String sql = """
+                SELECT scenario, count(*) AS c
+                FROM platform.agent_trace_metric
+                WHERE started_at >= ? AND started_at < ?
+                """;
+        sql = applyFilters(sql, q, false) + " GROUP BY scenario ORDER BY c DESC, scenario NULLS LAST LIMIT 100";
+        List<ScenarioCount> out = new ArrayList<>();
+        try (Connection conn = openSystem();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            int i = bindRange(ps, q, 1);
+            bindDims(ps, q, i, false);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String raw = rs.getString("scenario");
+                    // NULL 单独成组 → 「未标注」哨兵，前端原样回填即可选中 IS NULL 的行。
+                    out.add(new ScenarioCount(
+                            raw == null ? AgentMetricPort.UNLABELED_SCENARIO : raw,
+                            raw == null ? "未标注" : raw,
+                            rs.getLong("c")));
+                }
+            }
+            conn.commit();
+        } catch (SQLException e) {
+            throw new IllegalStateException("枚举场景标签失败", e);
+        }
+        return out;
+    }
+
     /** 超大 token 阈值：超过它通常是死循环而不是「任务真的复杂」。 */
     public static final long OVERSIZED_TOKEN_THRESHOLD = 20_000L;
 
@@ -722,7 +759,29 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
         return conn;
     }
 
-    /** 追加维度过滤条件。{@code toolTable=true} 时工具表无 agent 列，只按租户过滤。 */
+    private static boolean hasScenario(MetricQuery q) {
+        return q.scenario() != null && !q.scenario().isBlank();
+    }
+
+    /** 「未标注」哨兵译成 IS NULL；普通标签译成等值比较。 */
+    private static String scenarioPredicate(String scenario) {
+        return AgentMetricPort.UNLABELED_SCENARIO.equals(scenario)
+                ? "scenario IS NULL"
+                : "scenario = ?";
+    }
+
+    /**
+     * 追加维度过滤条件。
+     *
+     * <p>⚠️ <b>场景必须贯穿所有面板</b>：{@code toolTable=true} 时工具明细表
+     * （{@code platform.agent_trace_tool_call}）没有 scenario 列，若直接跳过场景条件，
+     * 总览/分布/耗时已按场景收窄，唯独「工具维度」仍是全量 —— 不报错、只是数字悄悄错，
+     * 正是本项目反复踩的失真形态。这里按 {@code trace_id} 反查宽表的场景，
+     * 保证整页同一个统计口径。
+     *
+     * <p>⚠️ 条件追加顺序与 {@link #bindDims} 的绑定顺序<b>必须逐字对应</b>：
+     * 租户 →（非工具表）agent/version → 场景。错位只会在运行期报「参数下标越界」。
+     */
     private String applyFilters(String sql, MetricQuery q, boolean toolTable) {
         StringBuilder sb = new StringBuilder(sql);
         if (q.tenantId() != null && !q.tenantId().isBlank()) {
@@ -735,11 +794,21 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
             if (q.agentVersion() != null) {
                 sb.append(" AND agent_version = ?");
             }
-            if (q.scenario() != null && !q.scenario().isBlank()) {
-                sb.append(" AND scenario = ?");
+        }
+        if (hasScenario(q)) {
+            String predicate = scenarioPredicate(q.scenario());
+            if (toolTable) {
+                sb.append(" AND trace_id IN (SELECT trace_id FROM platform.agent_trace_metric WHERE ")
+                        .append(predicate).append(")");
+            } else {
+                sb.append(" AND ").append(predicate);
             }
         }
-        return sb.toString();
+        // ⚠️ 末尾必须留一个空格：部分调用方用 `sql += """\n ORDER BY ..."""` 的 text block
+        //    续接，而 Java text block 会吃掉开分隔符后的第一个换行 —— 少这个空格
+        //    会拼成 `?ORDER BY` / `NULLORDER BY`，PG 报语法错误。
+        //    这类缺陷只在真跑 SQL 时暴露，mock 单测全绿也照不出（本轮 IT 实测抓到）。
+        return sb.append(' ').toString();
     }
 
     private int bindRange(PreparedStatement ps, MetricQuery q, int idx) throws SQLException {
@@ -749,11 +818,13 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
     }
 
     /**
-     * 绑定维度参数。
+     * 绑定维度参数（顺序必须与 {@link #applyFilters} 的条件追加顺序一致）。
      *
-     * <p>⚠️ {@code toolTable=true} 时只绑租户 —— 工具表没有 agent/scenario 列，
-     * 多绑一个参数会让 {@code PreparedStatement} 直接报「参数下标越界」，
-     * 而这种错误只在运行期暴露，单测不查库根本发现不了。
+     * <p>⚠️ {@code toolTable=true} 时不绑 agent/version —— 工具表没有这两列，
+     * 多绑一个参数会让 {@code PreparedStatement} 报「参数下标越界」；
+     * 但<b>场景参数必须照绑</b>，因为它的条件在 {@code trace_id} 子查询里，
+     * 少了它会让整条 SQL 在运行期才炸，单测不查库根本发现不了。
+     * 「未标注」译成 IS NULL，SQL 里没有占位符，自然也不绑。
      */
     private int bindDims(PreparedStatement ps, MetricQuery q, int idx, boolean toolTable)
             throws SQLException {
@@ -768,9 +839,9 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
             if (q.agentVersion() != null) {
                 ps.setInt(i++, q.agentVersion());
             }
-            if (q.scenario() != null && !q.scenario().isBlank()) {
-                ps.setString(i++, q.scenario());
-            }
+        }
+        if (hasScenario(q) && !AgentMetricPort.UNLABELED_SCENARIO.equals(q.scenario())) {
+            ps.setString(i++, q.scenario());
         }
         return i;
     }

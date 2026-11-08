@@ -83,16 +83,22 @@ public class PlatformAgentMetricsController {
         return metrics.overview(query(hours, tenantId, agentId, agentVersion, scenario));
     }
 
-    /** 终止原因分布（9 值归一，合计必须等于总数）。 */
+    /**
+     * 终止原因分布（9 值归一，合计必须等于总数）。
+     *
+     * <p>⚠️ <b>scenario 必传</b>：看板整页共用一个筛选口径。若这里漏传，
+     * 分布仍是全量而总览已按场景收窄 —— 合计对不上却不报任何错。
+     */
     @GetMapping("/terminations")
     public List<AgentMetricPort.ReasonCount> terminations(
             @RequestAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE)
             PlatformPrincipal principal,
             @RequestParam(name = "hours", defaultValue = "24") long hours,
             @RequestParam(name = "tenantId", required = false) String tenantId,
-            @RequestParam(name = "agentId", required = false) String agentId) {
+            @RequestParam(name = "agentId", required = false) String agentId,
+            @RequestParam(name = "scenario", required = false) String scenario) {
         security.require(principal, Namespaces.Platform.RESOURCE_READ, null, null);
-        return metrics.terminationDistribution(query(hours, tenantId, agentId, null, null));
+        return metrics.terminationDistribution(query(hours, tenantId, agentId, null, scenario));
     }
 
     /** 端到端耗时分位数（P50/P95/P99，查明细不查物化视图）。 */
@@ -102,9 +108,10 @@ public class PlatformAgentMetricsController {
             PlatformPrincipal principal,
             @RequestParam(name = "hours", defaultValue = "24") long hours,
             @RequestParam(name = "tenantId", required = false) String tenantId,
-            @RequestParam(name = "agentId", required = false) String agentId) {
+            @RequestParam(name = "agentId", required = false) String agentId,
+            @RequestParam(name = "scenario", required = false) String scenario) {
         security.require(principal, Namespaces.Platform.RESOURCE_READ, null, null);
-        return metrics.latency(query(hours, tenantId, agentId, null, null));
+        return metrics.latency(query(hours, tenantId, agentId, null, scenario));
     }
 
     /** 工具维度：调用次数 / 失败率 / 均值与最大耗时（不提供 P95）。 */
@@ -113,9 +120,10 @@ public class PlatformAgentMetricsController {
             @RequestAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE)
             PlatformPrincipal principal,
             @RequestParam(name = "hours", defaultValue = "24") long hours,
-            @RequestParam(name = "tenantId", required = false) String tenantId) {
+            @RequestParam(name = "tenantId", required = false) String tenantId,
+            @RequestParam(name = "scenario", required = false) String scenario) {
         security.require(principal, Namespaces.Platform.RESOURCE_READ, null, null);
-        return metrics.toolBreakdown(query(hours, tenantId, null, null, null));
+        return metrics.toolBreakdown(query(hours, tenantId, null, null, scenario));
     }
 
     /** 异常 Trace Top-N：超大 token / 循环调用 / 触达轮次上限。 */
@@ -124,9 +132,27 @@ public class PlatformAgentMetricsController {
             @RequestAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE)
             PlatformPrincipal principal,
             @RequestParam(name = "hours", defaultValue = "24") long hours,
-            @RequestParam(name = "limit", defaultValue = "20") int limit) {
+            @RequestParam(name = "limit", defaultValue = "20") int limit,
+            @RequestParam(name = "scenario", required = false) String scenario) {
         security.require(principal, Namespaces.Platform.RESOURCE_READ, null, null);
-        return metrics.anomalies(query(hours, null, null, null, null), limit);
+        return metrics.anomalies(query(hours, null, null, null, scenario), limit);
+    }
+
+    /**
+     * 场景标签枚举（筛选器下拉数据源）。
+     *
+     * <p>⚠️ <b>刻意不接受 scenario 参数</b>：这是筛选器自身的数据源，
+     * 跟着当前筛选走会自锁 —— 选中 A 之后下拉里只剩 A，再也切不回 B。
+     * 实现层亦显式清空该维度，两层都守住。
+     */
+    @GetMapping("/scenarios")
+    public List<AgentMetricPort.ScenarioCount> scenarios(
+            @RequestAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE)
+            PlatformPrincipal principal,
+            @RequestParam(name = "hours", defaultValue = "24") long hours,
+            @RequestParam(name = "tenantId", required = false) String tenantId) {
+        security.require(principal, Namespaces.Platform.RESOURCE_READ, null, null);
+        return metrics.scenarios(query(hours, tenantId, null, null, null));
     }
 
     /** 单条 Trace 的指标明细。 */

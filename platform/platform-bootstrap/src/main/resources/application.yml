@@ -21,8 +21,14 @@ spring:
   flyway:
     default-schema: public
   datasource:
+    # ⚠️ 主数据源由 PrimaryDataSourceConfiguration 显式装配（不交给自动配置猜）：
+    #    它读下面这些键，故必须在此显式声明（配置键对齐守卫会逐个核对）。
+    #    url / username / password 刻意不写 —— 由 SPRING_DATASOURCE_* 环境变量提供。
+    driver-class-name: org.postgresql.Driver
     hikari:
       connection-init-sql: SET search_path TO public
+      maximum-pool-size: 10
+      minimum-idle: 1
 
   # ── RabbitMQ（DEC-12 / ADR-001）──────────────────────────────────
   # 本地实例：./scripts/dev-rabbitmq.sh start
@@ -53,6 +59,15 @@ spring:
     connection-timeout: 10s
 
 agent:
+  # ── 质量评估双轨（P3 · G3）──────────────────────────────────────
+  # ⚠️ 口径按「保守默认」：量级 <1k Run/日 → 抽样率 5%（约 50 条/日人审基线）。
+  #    LLM-as-judge 兜底**未接线**：参考答案 / 题库标准解析（详细设计 §13 第 3 项）
+  #    与模型判分成本口径待产品确认，在拿到判分源前不编造「归因正确率」。
+  #    L1 只判链路完整性（有回答 / 未截断 / 无工具失败），不判答案对错。
+  quality:
+    eval:
+      enabled: true
+      sample-rate: 0.05
   # ── 限流（P3-D08 / D-2）─────────────────────────────────────────
   # ⚠️ 缺失即拒绝启动（fail-closed）：退回默认值等于「悄悄用了一个
   #    没人审过的限额」。初值取保守档，接入真实流量后按实测调整。
@@ -300,6 +315,14 @@ agent:
       dead:
         name: agent.run.dead
         # 死信队列自身不再挂 DLX，避免死信循环
+      # ⚠️ P0 自动采集队列（G2）：与执行队列**完全独立**。
+      #   路由键固定 agent.trace.collect，消费者只调 AgentMetricCollector，
+      #   绝不触发 Run 重跑。delivery-limit 同样降到 3（与 execute 同纪律）。
+      trace-collect:
+        name: agent.trace.collect
+        delivery-limit: "3"
+        dead-letter-exchange: agent.run.dlx
+        dead-letter-routing-key: agent.trace.collect.dead
 
   # ── 消息通道（P4-D17 · 可切换消息通道）────────────────────────────
   # ⚠️ **缺失即拒绝启动**（fail-closed）：通道选错的症状是

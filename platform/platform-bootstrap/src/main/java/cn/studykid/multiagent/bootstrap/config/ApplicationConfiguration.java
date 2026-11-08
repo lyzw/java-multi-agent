@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.jspecify.annotations.NonNull;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
@@ -33,6 +34,7 @@ import cn.studykid.multiagent.infrastructure.persistence.JdbcRateLimiter;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 import cn.studykid.multiagent.ports.security.PlatformPrincipal;
+import cn.studykid.multiagent.ports.security.PlatformRoles;
 
 /**
  * 应用层装配。
@@ -53,6 +55,9 @@ import cn.studykid.multiagent.ports.security.PlatformPrincipal;
 @Configuration
 @org.springframework.context.annotation.Import(WorkerExecutionConfig.class)
 public class ApplicationConfiguration {
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(ApplicationConfiguration.class);
 
     /**
      * 授权服务。
@@ -244,6 +249,65 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 对话消息写入端口（P1 · G1 回放底座）。
+     *
+     * <p>⚠️ 沿用 P4-D07 装配惯例：显式 {@code @Bean} 注册（repository 不挂 {@code @Repository}，
+     * 组件扫描选不到），否则 {@code RunExecutionLoop.appendMessage} 静默跳过，
+     * {@code run_message} 永远没有行 ——
+     * 症状是「回放永远是空的」且<b>没有任何报错</b>，
+     * 极易被误判为「学生那次辅导确实没说什么」。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.RunMessagePort runMessagePort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcRunMessageRepository(
+                dataSource);
+    }
+
+    /**
+     * 对话回放读取端口（P1 · G1 闭环）。
+     *
+     * <p>⚠️ 沿用同一装配惯例：不注册则回放端点恒 404/空，且无报错。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.TraceReplayPort traceReplayPort(
+            DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcTraceReplayRepository(
+                dataSource);
+    }
+
+    /**
+     * 人工审查队列端口（P2 · G3「人审」半边）。
+     *
+     * <p>⚠️ 沿用同一装配惯例（显式 {@code @Bean}）：不注册则告警联动
+     * 「静默跳过」，队列永远为空 —— 症状是「审查流程看起来在、但没有一条任务」，
+     * 无任何报错。
+     */
+    /**
+     * ⚠️ 显式 {@code @Qualifier(PrimaryDataSourceConfiguration.BEAN_NAME)}：
+     * 容器里存在两个 {@code DataSource}（应用主池 + 保留期清理池），
+     * 靠参数名匹配太脆弱。审查队列是业务数据，必须由应用主池写入。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.ReviewTaskPort reviewTaskPort(
+            @Qualifier("dataSource") DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcReviewTaskRepository(
+                dataSource);
+    }
+
+    /**
+     * 对话回放服务（P1 · G1 闭环）。
+     *
+     * <p>⚠️ 必须显式注册：它是回放端点的唯一数据入口，
+     * 缺失则端点启动即失败（fail-fast），而不是静默返回空回放。
+     */
+    @Bean
+    public cn.studykid.multiagent.application.replay.TraceReplayService traceReplayService(
+            cn.studykid.multiagent.ports.persistence.TraceReplayPort replayPort) {
+        return new cn.studykid.multiagent.application.replay.TraceReplayService(replayPort);
+    }
+
+    /**
      * SSE 长连接推送器（P3-D10 / FR-014 部分）。
      *
      * <p>⚠️ 轮询 500ms / 最大存活 30 分钟：最大存活是<b>防连接泄漏的兜底</b>——
@@ -411,6 +475,34 @@ public class ApplicationConfiguration {
     public cn.studykid.multiagent.ports.tool.ToolHandler recordWeaknessTool(
             cn.studykid.multiagent.infrastructure.tool.StudentDataRepository repository) {
         return new cn.studykid.multiagent.infrastructure.tool.RecordWeaknessTool(repository);
+    }
+
+    /**
+     * 已注册工具名注册表（P7-2 采集口径）。
+     *
+     * <p><b>用途</b>：指标里的「未知工具数」要判定「模型请求的工具名是否在
+     * 平台已定义的工具全集里」。该全集有两侧：能力目录（{@code cap_tool_def}，
+     * 由事实端口读）与<b>代码注册表</b>（本 Bean）。
+     *
+     * <p><b>⚠️ 为什么必须有这个 Bean</b>：native 工具
+     * （{@code get_student_profile} / {@code record_weakness}）的注册名
+     * <b>不在 {@code cap_tool_def} 里</b>（目录里是目录 id）。
+     * 缺了它，native 工具的每次调用都会被判成「模型幻觉出的工具」→
+     * {@code unknown_tool} 虚高 → 无效调用率失真（不报错，只悄悄算错）。
+     *
+     * <p>⚠️ 只收 <b>进程内注册的 {@link cn.studykid.multiagent.ports.tool.ToolHandler}</b>：
+     * HTTP / MCP 工具由 provider <b>按需</b>创建，不是 Bean，
+     * 它们的工具名（目录 id）由能力目录侧覆盖。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.tool.ToolNameRegistry toolNameRegistry(
+            @NonNull List<cn.studykid.multiagent.ports.tool.ToolHandler> tools) {
+        java.util.Set<String> names = tools.stream()
+                .map(cn.studykid.multiagent.ports.tool.ToolHandler::toolName)
+                .filter(n -> n != null && !n.isBlank())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        log.info("装配工具名注册表: {} 个已注册工具 {}", names.size(), names);
+        return () -> names;
     }
 
     // 跨 Run 记忆的装配已迁入 agent-memory 模块（MemoryConfiguration）。
@@ -584,6 +676,15 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 平台主体在合成 {@link TenantContext} 中使用的哨兵租户。
+     *
+     * <p>仅服务于「模型配置」等平台级端点的 {@code PLATFORM_ADMIN} 角色闸门——
+     * 这些端点的底层表无租户无 RLS，仓储从不按 {@code tenantId} 访问数据，
+     * 故合成上下文的 {@code tenantId} 仅为占位、绝不被用于数据隔离。
+     */
+    private static final String PLATFORM_SENTINEL_TENANT = "__platform_admin__";
+
+    /**
      * 当前主体。
      *
      * <p>⚠️ <b>本实现只在真实 HTTP 请求下有意义</b>：它从请求属性取
@@ -606,6 +707,40 @@ public class ApplicationConfiguration {
                             SecurityConfiguration.TENANT_CONTEXT_ATTRIBUTE);
                     if (verified instanceof TenantContext ctx) {
                         return ctx;
+                    }
+                    // ⚠️ 平台身份域回退（2026-11-07 修复，与 CONSOLE_CHAT_PREFIX 同源）：
+                    //    /api/admin/models 与 /api/admin/model-credentials 已归入平台安全链，
+                    //    验签后写入的是 PlatformPrincipal（刻意无 tenantId）。这两个端点是
+                    //    平台级、跨租户共享的模型配置资源（表上无租户无 RLS），其仓储不依赖
+                    //    tenantId，故把平台主体收敛成仅用于 PLATFORM_ADMIN 角色闸门的 TenantContext。
+                    //    ⚠️ 仅当 TENANT_CONTEXT_ATTRIBUTE 缺失（请求落在平台链）时触发；
+                    //       租户链的端点仍拿到真实 TenantContext，不受影响。
+                    //    ⚠️ 此合成上下文<b>绝不可</b>用于任何按 tenantId 的数据访问——
+                    //       那会把平台身份伪装成某个租户，正是 ConsoleChatController 明确反对的。
+                    Object platform = attrs.getRequest().getAttribute(
+                            SecurityConfiguration.PLATFORM_PRINCIPAL_ATTRIBUTE);
+                    if (platform instanceof PlatformPrincipal pp) {
+                        // ⚠️ 桥接：平台治理角色 → 租户侧 PLATFORM_ADMIN 闸门。
+                        //    平台账号（plat-superadmin / plat-resource 等）实际持有的是
+                        //    PLATFORM_SUPER_ADMIN / PLATFORM_RESOURCE_ADMIN 等<b>平台侧</b>角色，
+                        //    而模型配置等平台级端点用租户侧
+                        //    {@code AuthorizationService.requireAuthorized(PLATFORM_ADMIN)} 做闸门，
+                        //    且<b>没有任何平台账号被授予租户侧 PLATFORM_ADMIN</b>
+                        //    （knownRoles 白名单与种子脚本均无此角色）—— 若不桥接，
+                        //    平台治理者访问模型配置会 403（「无权执行该操作」），
+                        //    前端仍显示「密钥列表加载失败」，与最初的 401 跨域是同一页面的两种失败态。
+                        //    这里仅把「平台资源治理者」（超级管理员 + 资源管理员）映射到 PLATFORM_ADMIN，
+                        //    与 {@code PlatformRolePermissionMatrix} 对齐：模型目录属 RESOURCE_ADMIN 职责、
+                        //    超级管理员持全部平台权限；安全管理员/审计员/支持人员不授予，避免扩权。
+                        //    ⚠️ 合成上下文的 tenantId 仅为占位（哨兵值），绝不被用于按 tenantId 的数据访问。
+                        java.util.Set<String> bridgedRoles =
+                                new java.util.LinkedHashSet<>(pp.roles());
+                        if (bridgedRoles.contains(PlatformRoles.SUPER_ADMIN)
+                                || bridgedRoles.contains(PlatformRoles.RESOURCE_ADMIN)) {
+                            bridgedRoles.add(AuthorizationService.Roles.PLATFORM_ADMIN);
+                        }
+                        return new TenantContext(
+                                PLATFORM_SENTINEL_TENANT, pp.userId(), bridgedRoles, pp.authzVersion());
                     }
                 }
 

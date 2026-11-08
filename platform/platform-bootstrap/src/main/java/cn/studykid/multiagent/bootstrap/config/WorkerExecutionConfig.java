@@ -674,11 +674,31 @@ public class WorkerExecutionConfig {
             //    与 turn 预算端口那种"账不平"不同：记忆缺失的表现是
             //    「模型看起来很了解这个学生，其实一无所知」，
             //    以及「student_memory 永远为空」。两者都不会报错。
-            //    → 由 MemoryWiringIT 断言生产装配下二者**非 null**。
+            //    → 由 MemoryWiringTest 断言生产装配下二者**非 null**。
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             cn.studykid.multiagent.memory.application.MemoryRecallService memoryRecallService,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
-            cn.studykid.multiagent.memory.application.MemoryConsolidator memoryConsolidator) {
+            cn.studykid.multiagent.memory.application.MemoryConsolidator memoryConsolidator,
+            // ⚠️⚠️ P0 自动采集发布器**可选注入**（G2）：
+            //    采集发送器定义在 WorkerLoopConfig 里，而该类带
+            //    @ConditionalOnProperty(agent.worker.enabled=true) ——
+            //    **worker 关闭时该 Bean 根本不存在**（如 CI、agent.worker.enabled=false 的测试）。
+            //    若此处按必需注入 → NoSuchBeanDefinitionException →
+            //    **整个 Spring 上下文启动失败**（与 worker 开关无关地起不来）。
+            //    故必须 required=false：缺失时 RunExecutionLoop 打 WARN，
+            //    宽表退回「手动补算」（G2 缺口不闭合但不崩平台）。
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            @org.springframework.beans.factory.annotation.Qualifier("traceCollectRoutedMessageSender")
+            cn.studykid.multiagent.ports.messaging.MessageSender traceCollectMessageSender,
+            // ⚠️⚠️ P1 对话消息写入端口（G1）**可选注入**：
+            //    缺失时 run_message 永远为空 —— 而「对话没被记录」与
+            //    「这次辅导没有对话」在外部完全无法区分，
+            //    回放永远是空的且**没有任何报错**。
+            //    故 required=false（不因缺装配而平台起不来），
+            //    但由 RunMessageWiringTest 断言生产装配下它**非 null**，
+            //    并由 TraceReplayClosedLoopIT 验到「真跑一次 Run 自动落下消息」。
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.ports.persistence.RunMessagePort runMessagePort) {
         // ⚠️⚠️ **接管器必须在这里真实注入**（第九批 · MA-T12）：
         //    不注入时，Worker 接管后 RUNNING 的委派记录**永远无人能收敛**
         //    （新世代 token 不匹配、旧世代已被接管），
@@ -710,7 +730,15 @@ public class WorkerExecutionConfig {
                 continuation(executorProvider),
                 // ⚠️ P1：记忆召回与整合。null = 关闭（agent.memory.enabled=false），
                 //    此时 RunExecutionLoop 会打 WARN，行为回到本次改动之前。
-                memoryRecallService, memoryConsolidator);
+                memoryRecallService, memoryConsolidator,
+                // ⚠️ P0 自动采集接线（G2）：**按租户路由**的专用发送器
+                //    （Rabbit 通道 → agent.trace.collect 队列；DB 通道 → PG 队列行），
+                //    绝不复用共享 messageSender（其默认路由键是 agent.run.execute，会重跑 Run）。
+                //    缺失 = 宽表退回手动补算（已在 RunExecutionLoop 构造 WARN）。
+                traceCollectMessageSender,
+                // ⚠️ P1（G1）：对话消息写入端口。
+                //    缺失 = run_message 永远为空（回放永远是空的且无报错）。
+                runMessagePort);
     }
 
     /**

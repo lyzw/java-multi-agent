@@ -37,9 +37,18 @@ import cn.studykid.multiagent.ports.metrics.TraceFactPort.TraceFacts;
  */
 class AgentMetricCollectorTest {
 
+    /**
+     * 代码注册表替身（与生产同构：native 工具名在注册表里，<b>不在</b>能力目录里）。
+     *
+     * <p>⚠️ 这里刻意与 {@code TraceFacts.knownToolNames()}（目录侧）<b>不同</b>，
+     * 以便断言「采集器把两侧取并集」——只取目录侧会把 native 工具误判成幻觉工具。
+     */
+    private static final cn.studykid.multiagent.ports.tool.ToolNameRegistry REGISTRY =
+            () -> Set.of("get_student_profile", "record_weakness");
+
     private final RecordingMetrics metrics = new RecordingMetrics();
     private final AgentMetricCollector collector =
-            new AgentMetricCollector(new StubFacts(), metrics);
+            new AgentMetricCollector(new StubFacts(), metrics, REGISTRY);
 
     // ── 终止原因映射 ──────────────────────────────────────────────
 
@@ -107,7 +116,7 @@ class AgentMetricCollectorTest {
                 List.of(),
                 Set.of(),
                 StepFacts.ABSENT);
-        AgentMetricCollector c = new AgentMetricCollector(stub, metrics);
+        AgentMetricCollector c = new AgentMetricCollector(stub, metrics, REGISTRY);
 
         Optional<String> traceId = c.collect("tenant-1", UUID.randomUUID());
 
@@ -140,9 +149,48 @@ class AgentMetricCollectorTest {
                 List.of(),
                 Set.of(),
                 StepFacts.ABSENT);
-        AgentMetricCollector c = new AgentMetricCollector(stub, metrics);
+        AgentMetricCollector c = new AgentMetricCollector(stub, metrics, REGISTRY);
         assertTrue(c.collect("tenant-1", UUID.randomUUID()).isEmpty());
         assertNull(metrics.last);
+    }
+
+    // ── 场景维度（scenario）───────────────────────────────────────
+
+    @Test
+    @DisplayName("⚠️ 事实里的显式场景标签必须透传进宽表指标，否则「按场景拆分」恒空")
+    void explicitScenarioFlowsIntoMetric() {
+        StubFacts stub = new StubFacts();
+        stub.facts = new TraceFacts(
+                new TraceFactPort.RunFacts("run-1", "SUCCEEDED", null, "trace-1",
+                        AgentMetricPort.TraceIdSource.RUN_TRACE_ID,
+                        Instant.now(), Instant.now(), null, null, "数学:一元二次方程"),
+                new TraceFactPort.UsageFacts(null, null, null, null, null),
+                List.of(), Set.of(), StepFacts.ABSENT);
+        AgentMetricCollector c = new AgentMetricCollector(stub, metrics, REGISTRY);
+        c.collect("tenant-1", UUID.randomUUID());
+
+        assertNotNull(metrics.last);
+        assertEquals("数学:一元二次方程", metrics.last.scenario(),
+                "采集器若仍把 scenario 硬编码成 null，看板分组维度会全程空转且不报错");
+    }
+
+    @Test
+    @DisplayName("⚠️ 未标注场景必须保持 null，绝不填默认分组或空串（未采集 ≠ 0）")
+    void absentScenarioStaysNull() {
+        StubFacts stub = new StubFacts();
+        stub.facts = new TraceFacts(
+                // 9 参兼容构造 = 存量/未标注 Run
+                new TraceFactPort.RunFacts("run-1", "SUCCEEDED", null, "trace-1",
+                        AgentMetricPort.TraceIdSource.RUN_TRACE_ID,
+                        Instant.now(), Instant.now(), null, null),
+                new TraceFactPort.UsageFacts(null, null, null, null, null),
+                List.of(), Set.of(), StepFacts.ABSENT);
+        AgentMetricCollector c = new AgentMetricCollector(stub, metrics, REGISTRY);
+        c.collect("tenant-1", UUID.randomUUID());
+
+        assertNotNull(metrics.last);
+        assertNull(metrics.last.scenario(),
+                "没有标注就是没有标注；填成 '默认' 会把真实覆盖率稀释到看不出来");
     }
 
     // ── 行为指标口径 ──────────────────────────────────────────────
@@ -161,7 +209,7 @@ class AgentMetricCollectorTest {
                 List.of(group),
                 Set.of("search"),
                 StepFacts.ABSENT);
-        AgentMetricCollector c = new AgentMetricCollector(stub, metrics);
+        AgentMetricCollector c = new AgentMetricCollector(stub, metrics, REGISTRY);
         c.collect("tenant-1", UUID.randomUUID());
 
         assertEquals(3, metrics.last.toolCallTotal());
@@ -184,12 +232,37 @@ class AgentMetricCollectorTest {
                 List.of(ghost),
                 Set.of("search"),
                 StepFacts.ABSENT);
-        AgentMetricCollector c = new AgentMetricCollector(stub, metrics);
+        AgentMetricCollector c = new AgentMetricCollector(stub, metrics, REGISTRY);
         c.collect("tenant-1", UUID.randomUUID());
 
         // 2 次全是未知工具（2）+ 重复（1）= 3
         assertEquals(3, metrics.last.toolCallInvalid());
         assertEquals(TerminationReason.MODEL_ERROR, metrics.last.terminationReason());
+    }
+
+    @Test
+    @DisplayName("⚠️⚠️ 已知工具全集 = 能力目录 ∪ 代码注册表 —— native 工具不得被误判为幻觉工具")
+    void knownToolSetIsUnionOfCatalogAndRegistry() {
+        StubFacts stub = new StubFacts();
+        // 目录侧只知道 "search"（能力目录里的 id）
+        // native 工具 "record_weakness" 只在**代码注册表**里
+        ToolGroup nativeTool = new ToolGroup("record_weakness", 1, 0, 0, false, false, 5L, 5L);
+        stub.facts = new TraceFacts(
+                new TraceFactPort.RunFacts("run-1", "SUCCEEDED", null, "trace-1",
+                        AgentMetricPort.TraceIdSource.RUN_TRACE_ID,
+                        Instant.now(), Instant.now(), null, null),
+                new TraceFactPort.UsageFacts(null, null, null, null, null),
+                List.of(nativeTool),
+                Set.of("search"),
+                StepFacts.ABSENT);
+        AgentMetricCollector c = new AgentMetricCollector(stub, metrics, REGISTRY);
+        c.collect("tenant-1", UUID.randomUUID());
+
+        // ⚠️ 若只取目录侧：unknown_tool = 1 → invalid = 1（把合法 native 工具算成幻觉）
+        assertEquals(0, metrics.last.toolCallInvalid(),
+                "native 工具在代码注册表里，不得被判成「模型幻觉出的工具」"
+                        + "（否则无效调用率虚高，且不报错——只是悄悄算错）");
+        assertEquals(1, metrics.last.toolCallTotal());
     }
 
     @Test
@@ -207,7 +280,7 @@ class AgentMetricCollectorTest {
                 List.of(group),
                 Set.of("search"),
                 steps);
-        AgentMetricCollector c = new AgentMetricCollector(stub, metrics);
+        AgentMetricCollector c = new AgentMetricCollector(stub, metrics, REGISTRY);
         c.collect("tenant-1", UUID.randomUUID());
 
         assertEquals(2, metrics.last.toolRounds(), "tool_rounds 应取 TOOL 步骤数，而非工具组数");
@@ -228,7 +301,7 @@ class AgentMetricCollectorTest {
                 List.of(group),
                 Set.of("search"),
                 StepFacts.ABSENT);
-        AgentMetricCollector c = new AgentMetricCollector(stub, metrics);
+        AgentMetricCollector c = new AgentMetricCollector(stub, metrics, REGISTRY);
         c.collect("tenant-1", UUID.randomUUID());
 
         assertNull(metrics.last.toolRounds(), "历史未埋点 Run 的 tool_rounds 必须 null，绝不退回近似");
@@ -320,6 +393,11 @@ class AgentMetricCollectorTest {
 
         @Override
         public List<AnomalyTrace> anomalies(MetricQuery query, int limit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<ScenarioCount> scenarios(MetricQuery query) {
             throw new UnsupportedOperationException();
         }
 

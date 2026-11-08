@@ -1,12 +1,17 @@
 package cn.studykid.multiagent.application.metrics;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort;
@@ -15,7 +20,10 @@ import cn.studykid.multiagent.ports.metrics.AgentMetricPort.ToolCallRow;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.TraceMetric;
 import cn.studykid.multiagent.ports.metrics.TraceFactPort;
 import cn.studykid.multiagent.ports.metrics.TraceFactPort.ToolGroup;
+import cn.studykid.multiagent.application.evaluation.TraceEvaluationService;
+import cn.studykid.multiagent.application.review.ReviewAlertService;
 import cn.studykid.multiagent.ports.metrics.TraceFactPort.TraceFacts;
+import cn.studykid.multiagent.ports.tool.ToolNameRegistry;
 
 /**
  * Trace 指标采集器（P7-1）：把执行事实派生为一条 {@code agent_trace_metric} 行。
@@ -33,6 +41,8 @@ import cn.studykid.multiagent.ports.metrics.TraceFactPort.TraceFacts;
 @Service
 public class AgentMetricCollector {
 
+    private static final Logger log = LoggerFactory.getLogger(AgentMetricCollector.class);
+
     /** 循环调用判定阈值：同一 (工具, 参数摘要) 在单条 Trace 内出现 ≥3 次。 */
     static final int LOOP_THRESHOLD = 3;
 
@@ -41,10 +51,49 @@ public class AgentMetricCollector {
 
     private final TraceFactPort facts;
     private final AgentMetricPort metrics;
+    private final ToolNameRegistry toolNames;
 
-    public AgentMetricCollector(@NonNull TraceFactPort facts, @NonNull AgentMetricPort metrics) {
+    /**
+     * 告警联动（P2）。<b>可为 null</b>：未装配时跳过联动，
+     * 指标采集照常（与「可选构造参数 + 默认 null」纪律一致，避免破坏既有单测）。
+     */
+    private final ReviewAlertService reviewAlerts;
+
+    /** 质量评估双轨（P3）。同样可为 null：未装配时只跳过评估，不影响采集。 */
+    private final TraceEvaluationService evaluation;
+
+    public AgentMetricCollector(@NonNull TraceFactPort facts,
+                                @NonNull AgentMetricPort metrics,
+                                @NonNull ToolNameRegistry toolNames) {
+        this(facts, metrics, toolNames, null, null);
+    }
+
+    /** P2 兼容构造（单测与旧装配用）。 */
+    public AgentMetricCollector(@NonNull TraceFactPort facts,
+                                @NonNull AgentMetricPort metrics,
+                                @NonNull ToolNameRegistry toolNames,
+                                @Nullable ReviewAlertService reviewAlerts) {
+        this(facts, metrics, toolNames, reviewAlerts, null);
+    }
+
+    /**
+     * 生产装配构造器（P2 告警联动 + P3 评估双轨）。
+     *
+     * <p>⚠️ <b>必须标 {@code @Autowired}</b>：本类有三个构造器时，
+     * Spring 无法自行选择 → 启动期报「no default constructor found」，
+     * 而单测全是直接 new（不启 Spring）⇒ <b>单测全绿但生产起不来</b>。
+     */
+    @Autowired
+    public AgentMetricCollector(@NonNull TraceFactPort facts,
+                                @NonNull AgentMetricPort metrics,
+                                @NonNull ToolNameRegistry toolNames,
+                                @Nullable ReviewAlertService reviewAlerts,
+                                @Nullable TraceEvaluationService evaluation) {
         this.facts = facts;
         this.metrics = metrics;
+        this.toolNames = toolNames;
+        this.reviewAlerts = reviewAlerts;
+        this.evaluation = evaluation;
     }
 
     /**
@@ -67,6 +116,15 @@ public class AgentMetricCollector {
         var usage = f.usage();
         TerminationReason reason = deriveTerminationReason(run.state(), run.errorCode(), f.toolGroups());
 
+        // ⚠️⚠️ 「已知工具全集」= 能力目录 ∪ 代码注册表，**两处都要**：
+        //    事实端口给的是**目录侧**（cap_tool_def.id 与其 mcp_tool_name），
+        //    代码注册的 native 工具（get_student_profile / record_weakness）
+        //    **不在目录里** —— 只用目录侧会把 native 工具的每次调用
+        //    都判成「模型幻觉出的工具」→ unknown_tool 虚高 → 无效调用率失真。
+        //    这类错误不报错，只让看板数字悄悄变错，故此处必须取并集。
+        Set<String> knownTools = new HashSet<>(f.knownToolNames());
+        knownTools.addAll(toolNames.knownToolNames());
+
         int callTotal = 0;
         int callFailed = 0;
         int unknownTool = 0;
@@ -82,7 +140,7 @@ public class AgentMetricCollector {
             if (g.totalDurationMs() != null) {
                 toolMsTotal += g.totalDurationMs();
             }
-            if (!f.knownToolNames().contains(g.toolName())) {
+            if (!knownTools.contains(g.toolName())) {
                 unknownTool += g.callCount();
             }
             invalidArg += g.invalidArgCount();
@@ -109,7 +167,10 @@ public class AgentMetricCollector {
                 run.runId(),
                 run.agentId(),
                 run.agentVersion(),
-                null,                                   // scenario：暂无来源（P7-3）
+                // 场景维度：只取调用方在 input_payload.scenario 里**显式标注**的标签，
+                // 由事实仓储经 ScenarioTag 规范化；未标注 = null（绝不从对话正文猜学科）。
+                // 见 §2.3：这一列驱动「按场景拆分」看板，之前恒 null 使该维度全程空转。
+                run.scenario(),
                 usage.modelId(),
                 run.startedAt(),
                 run.endedAt(),
@@ -142,7 +203,64 @@ public class AgentMetricCollector {
 
         metrics.upsert(metric);
         metrics.replaceToolCalls(run.traceId(), rows);
+        raiseReviewAlerts(metric);
+        raiseEvaluation(metric);
         return Optional.of(run.traceId());
+    }
+
+    /**
+     * 告警联动（P2）：把本条 Trace 的异常信号转成待审任务。
+     *
+     * <p>⚠️ <b>为什么在这里而不是在独立的定时任务里</b>：采集是<b>终态即触发的</b>，
+     * 异常（循环 / 轮次触顶 / 安全拦截）在 Run 收敛那一刻就已经确定。
+     * 挂进采集链路意味着「异常出现 → 立刻进队列」，
+     * 不必等下一次扫描；而独立定时任务会让「刚出的问题」在队列里空等一个周期。
+     *
+     * <p>⚠️ <b>联动失败绝不影响采集结果</b>：指标已落库，Run 已终态；
+     * 告警只是「提示人来看一眼」，漏一条好过把已成功的采集打成失败。
+     * {@link ReviewAlertService#evaluate} 内部已 fail-soft，此处再兜一层。
+     */
+    private void raiseReviewAlerts(@NonNull TraceMetric metric) {
+        if (reviewAlerts == null) {
+            return;
+        }
+        try {
+            reviewAlerts.evaluate(metric.tenantId(), metric.traceId(),
+                    new ReviewAlertService.ReviewableFacts(
+                            metric.runId(),
+                            metric.loopSuspectedCount() == null ? 0 : metric.loopSuspectedCount(),
+                            Boolean.TRUE.equals(metric.maxRoundsReached()),
+                            metric.safetyBlockedCount() != null && metric.safetyBlockedCount() > 0,
+                            metric.inputTokens(),
+                            metric.outputTokens()));
+        } catch (RuntimeException e) {
+            log.warn("告警联动异常（已忽略，不影响采集结果）: trace={}, cause={}",
+                    metric.traceId(), e.toString());
+        }
+    }
+
+    /**
+     * 质量评估双轨（P3）：采集完成后立刻做 L1 判分与分层抽样。
+     *
+     * <p>⚠️ <b>为什么也挂在采集链路</b>：与 P2 告警同理——
+     * 回放消息在 Run 终态时已经齐备，此刻判分不必等下一次扫描；
+     * 更重要的是，若评估服务「定义了却没接线」，症状是
+     * <b>auto_checked 覆盖率恒为 0、看板看起来正常</b>，
+     * 又是一个「机制正确但从未接线」的空转形态。
+     *
+     * <p>⚠️ <b>评估失败绝不影响采集结果</b>：指标已落库，
+     * 覆盖率缺失会在看板并排显示（§7.3），漏判好过把成功的采集打成失败。
+     */
+    private void raiseEvaluation(@NonNull TraceMetric metric) {
+        if (evaluation == null) {
+            return;
+        }
+        try {
+            evaluation.evaluate(metric.tenantId(), metric.runId(), metric.traceId());
+        } catch (RuntimeException e) {
+            log.warn("质量评估异常（已忽略，不影响采集结果）: trace={}, cause={}",
+                    metric.traceId(), e.toString());
+        }
     }
 
     /** 超大 token 判定（供告警复用）。 */

@@ -25,6 +25,18 @@ import org.jspecify.annotations.Nullable;
  */
 public interface AgentMetricPort {
 
+    /**
+     * 「未标注」场景的筛选哨兵 —— 选中 {@code scenario IS NULL} 的 Trace。
+     *
+     * <p>⚠️ <b>故意包含圆括号</b>：{@link ScenarioTag} 白名单只允许 Unicode 字母/数字
+     * 与 {@code _ . : / + -}，圆括号不可能由真实标签规范化产生 ⇒ 与真实场景值零冲突，
+     * 不需要在标签侧再挖一段保留命名空间。真实标签也绝不会因此被误判为「未标注」。
+     *
+     * <p>该值由 {@code /scenarios} 枚举端点作为「未标注」组的 {@code value} 下发，
+     * 前端原样回填给 {@code ?scenario=}，闭环封闭，无需前端理解其语义。
+     */
+    String UNLABELED_SCENARIO = "(unlabeled)";
+
     /** 幂等写入 / 覆盖一条 Trace 的指标。 */
     void upsert(@NonNull TraceMetric metric);
 
@@ -55,6 +67,18 @@ public interface AgentMetricPort {
 
     /** 异常明细 Top-N：超大 token / 循环调用 / 触达最大轮次。 */
     @NonNull List<AnomalyTrace> anomalies(@NonNull MetricQuery query, int limit);
+
+    /**
+     * 枚举区间内出现过的场景标签（供筛选器下拉）。
+     *
+     * <p>⚠️ <b>刻意不接受当前 scenario 过滤</b>：这是筛选器自身的数据源，
+     * 若跟着当前筛选走，选中 A 之后下拉里只剩 A，用户再也切不回 B（自锁）。
+     * 实现层必须显式丢弃 query 里的 scenario/agent 维度，只保留时间窗与租户。
+     *
+     * <p>未标注（{@code scenario IS NULL}）单独成组，value 为
+     * {@link #UNLABELED_SCENARIO}，可直接回填给 {@link MetricQuery#scenario()}。
+     */
+    @NonNull List<ScenarioCount> scenarios(@NonNull MetricQuery query);
 
     // ── 回填录入（效果 / 反馈 / 风险）──
 
@@ -144,6 +168,14 @@ public interface AgentMetricPort {
             @Nullable Long totalDurationMs,
             @Nullable Long maxDurationMs,
             @NonNull Instant startedAt) {
+    }
+
+    /**
+     * 场景枚举项。{@code value} 可直接回填给筛选条件，{@code label} 是给人看的文字
+     * （未标注组由后端译成「未标注」，前端无需理解哨兵语义，避免两端复制常量）。
+     * {@code traceCount} 是区间内该组的 Trace 数。
+     */
+    record ScenarioCount(@NonNull String value, @NonNull String label, long traceCount) {
     }
 
     /** 查询条件。{@code tenantId} 为空表示平台视角跨租户。 */

@@ -320,7 +320,7 @@ class RunExecutionLoopMemoryTest {
         MemoryConsolidator consolidator = new MemoryConsolidator(memoryPort, queryPort);
         return new RunExecutionLoop(observe(gw), port, gate(), Duration.ofSeconds(30), "w-1",
                 guard, null, null, contextTokenBudget, null, null, null, null, null,
-                null, null, null, recall, consolidator);
+                null, null, null, recall, consolidator, null);
     }
 
     private static MemoryEntry strongEntry() {
@@ -392,7 +392,7 @@ class RunExecutionLoopMemoryTest {
                             new AlwaysBudget(), new InMemoryLedger()),
                     Duration.ofSeconds(30), "w-1", guard, null, null, 16000,
                     null, null, null, null, null, null, null, null,
-                    recall, new MemoryConsolidator(mem, new StubQueryPort()));
+                    recall, new MemoryConsolidator(mem, new StubQueryPort()), null);
 
             // ⚠️ 工具必须声明在 Agent 的 toolSchemas 里，否则模型调用会被闸门
             //    以「未声明的工具」拒绝，循环就走不到第二轮 ——
@@ -485,7 +485,7 @@ class RunExecutionLoopMemoryTest {
             RunExecutionLoop loop = new RunExecutionLoop(observe(gw), new FakeClaimPort(),
                     gate(), Duration.ofSeconds(30), "w-1", guard, null, null,
                     4000, null, null, null, null, null, null, null, null,
-                    recall, new MemoryConsolidator(mem, new StubQueryPort()));
+                    recall, new MemoryConsolidator(mem, new StubQueryPort()), null);
 
             var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
                     inputWithStudent());

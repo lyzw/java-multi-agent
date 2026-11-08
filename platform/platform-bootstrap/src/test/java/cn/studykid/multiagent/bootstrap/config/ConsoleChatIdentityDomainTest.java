@@ -68,8 +68,13 @@ class ConsoleChatIdentityDomainTest {
 
         assertThat(security)
                 .as("漏配即落回租户链：平台令牌（aud=admin-console-api）被 aud=agent-platform 校验拒绝，"
-                        + "直接对话每次发送都会 401")
-                .contains("securityMatcher(PLATFORM_API_PREFIX + \"**\", CONSOLE_CHAT_PREFIX + \"**\")");
+                        + "直接对话每次发送都会 401；模型配置端点（/api/admin/models、"
+                        + "/api/admin/model-credentials）同样是平台级资源，必须挂在平台链上，"
+                        + "否则平台管理员访问必然 401（密钥列表加载失败 / 身份域隔离）")
+                .contains(
+                        "CONSOLE_CHAT_PREFIX + \"**\"",
+                        "ADMIN_MODEL_CATALOG_PREFIX + \"**\"",
+                        "ADMIN_MODEL_CREDENTIALS_PREFIX + \"**\"");
         assertThat(security).contains("CONSOLE_CHAT_PREFIX = \"/api/chat/\"");
 
         // ⚠️ 严禁用「加进匿名白名单」来消掉 401 —— 那等于把管理员的 LLM 通道公开。
@@ -200,6 +205,59 @@ class ConsoleChatIdentityDomainTest {
         assertThatThrownBy(() -> new ApplicationConfiguration().chatCaller().rateLimitKey())
                 .isInstanceOfSatisfying(ResponseStatusException.class, ex ->
                         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED));
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // 模型配置端点（/api/admin/models、/api/admin/model-credentials）并入平台链后，
+    // currentPrincipal 必须在平台链下从 PlatformPrincipal 收敛出携带 PLATFORM_ADMIN 的
+    // 合成 TenantContext，否则控制器里的 requireAuthorized(PLATFORM_ADMIN) 会 401/403。
+    // 这正是最初「密钥列表加载失败 / 身份域隔离」的根因修复点。
+    // ⚠️ 平台属性已设置时兜底解析不会被触发，故 currentPrincipal(null) 即可，
+    //    无需装配真实 AuthenticationService。
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("✅ 平台超级管理员 → 合成 TenantContext 桥接出 PLATFORM_ADMIN（模型配置端点放行）")
+    void platformAdminResolvesWithPlatformAdminRole() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/admin/models");
+        // ⚠️ 平台账号实际持有的是平台侧 PLATFORM_SUPER_ADMIN，而非租户侧 PLATFORM_ADMIN；
+        //    桥接逻辑须把它映射成 PLATFORM_ADMIN，否则模型配置端点会 403。
+        request.setAttribute(SecurityConfiguration.PLATFORM_PRINCIPAL_ATTRIBUTE,
+                new PlatformPrincipal("ops-1", Set.of("PLATFORM_SUPER_ADMIN"), 1L, true));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+
+        TenantContext ctx = new ApplicationConfiguration().currentPrincipal(null).context();
+
+        assertThat(ctx.hasRole("PLATFORM_ADMIN")).isTrue();
+    }
+
+    @Test
+    @DisplayName("✅ 平台资源管理员 → 合成 TenantContext 同样桥接出 PLATFORM_ADMIN（模型目录属其职责）")
+    void platformResourceAdminResolvesWithPlatformAdminRole() {
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/api/admin/model-credentials");
+        request.setAttribute(SecurityConfiguration.PLATFORM_PRINCIPAL_ATTRIBUTE,
+                new PlatformPrincipal("ops-2", Set.of("PLATFORM_RESOURCE_ADMIN"), 1L, true));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+
+        TenantContext ctx = new ApplicationConfiguration().currentPrincipal(null).context();
+
+        assertThat(ctx.hasRole("PLATFORM_ADMIN")).isTrue();
+    }
+
+    @Test
+    @DisplayName("⛔ 非治理类平台用户（如支持人员） → 合成 TenantContext 不含 PLATFORM_ADMIN（据此 403）")
+    void nonAdminPlatformUserResolvesWithoutPlatformAdminRole() {
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("GET", "/api/admin/model-credentials");
+        // ⚠️ PLATFORM_SUPPORT 是只读诊断角色，不属于资源治理者，不得桥接出 PLATFORM_ADMIN。
+        request.setAttribute(SecurityConfiguration.PLATFORM_PRINCIPAL_ATTRIBUTE,
+                new PlatformPrincipal("ops-3", Set.of("PLATFORM_SUPPORT"), 1L, true));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+
+        TenantContext ctx = new ApplicationConfiguration().currentPrincipal(null).context();
+
+        assertThat(ctx.hasRole("PLATFORM_ADMIN")).isFalse();
     }
 
     // ════════════════════════════════════════════════════════════
