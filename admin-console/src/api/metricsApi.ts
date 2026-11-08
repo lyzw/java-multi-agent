@@ -1,4 +1,4 @@
-import { request } from '@/api/client'
+import { ApiError, request } from '@/api/client'
 
 /**
  * Agent 效果指标 API（P7）。
@@ -113,34 +113,85 @@ function query(params: Record<string, string | undefined>): string {
 //    自带前缀会拼成 `/api/api/...` → 401 → 会话被清并跳登录。
 const BASE = '/platform/v1/metrics/agent'
 
-export function fetchAgentMetricOverview(hours: number, tenantId?: string): Promise<AgentMetricOverview> {
+/**
+ * 看板统一筛选条件。
+ *
+ * ⚠️ **五个读端点必须收同一个 filter 对象**：少给一个端点带 scenario，
+ *    就会出现「总览已按场景收窄、分布/耗时/工具/异常仍是全量」——
+ *    合计对不上却不报任何错，是本项目反复踩的静默失真形态。
+ */
+export interface MetricFilter {
+  /** 精确场景标签；后端把「未标注」组映射成专用哨兵值，由 /scenarios 下发。 */
+  scenario?: string
+  tenantId?: string
+}
+
+/** 场景枚举项。value 可直接回填给 MetricFilter.scenario，label 由后端给出可读文字。 */
+export interface MetricScenario {
+  value: string
+  label: string
+  traceCount: number
+}
+
+function metricQuery(hours: number, filter: MetricFilter, extra: Record<string, string | undefined> = {}): string {
+  return query({
+    hours: String(hours),
+    tenantId: filter.tenantId,
+    scenario: filter.scenario,
+    ...extra,
+  })
+}
+
+export function fetchAgentMetricOverview(hours: number, filter: MetricFilter = {}): Promise<AgentMetricOverview> {
   return request<AgentMetricOverview>(
-    `${BASE}/overview${query({ hours: String(hours), tenantId })}`,
+    `${BASE}/overview${metricQuery(hours, filter)}`,
   )
 }
 
-export function fetchTerminationDistribution(hours: number, tenantId?: string): Promise<ReasonCount[]> {
+export function fetchTerminationDistribution(hours: number, filter: MetricFilter = {}): Promise<ReasonCount[]> {
   return request<ReasonCount[]>(
-    `${BASE}/terminations${query({ hours: String(hours), tenantId })}`,
+    `${BASE}/terminations${metricQuery(hours, filter)}`,
   )
 }
 
-export function fetchLatency(hours: number, tenantId?: string): Promise<LatencyPercentiles> {
+export function fetchLatency(hours: number, filter: MetricFilter = {}): Promise<LatencyPercentiles> {
   return request<LatencyPercentiles>(
-    `${BASE}/latency${query({ hours: String(hours), tenantId })}`,
+    `${BASE}/latency${metricQuery(hours, filter)}`,
   )
 }
 
-export function fetchToolBreakdown(hours: number, tenantId?: string): Promise<ToolMetric[]> {
+export function fetchToolBreakdown(hours: number, filter: MetricFilter = {}): Promise<ToolMetric[]> {
   return request<ToolMetric[]>(
-    `${BASE}/tools${query({ hours: String(hours), tenantId })}`,
+    `${BASE}/tools${metricQuery(hours, filter)}`,
   )
 }
 
-export function fetchAnomalies(hours: number, limit = 20): Promise<AnomalyTrace[]> {
+export function fetchAnomalies(hours: number, limit = 20, filter: MetricFilter = {}): Promise<AnomalyTrace[]> {
   return request<AnomalyTrace[]>(
-    `${BASE}/anomalies${query({ hours: String(hours), limit: String(limit) })}`,
+    `${BASE}/anomalies${metricQuery(hours, filter, { limit: String(limit) })}`,
   )
+}
+
+/**
+ * 场景标签枚举（筛选器下拉数据源）。
+ *
+ * ⚠️ **签名刻意不接受 scenario**：这是筛选器自己的数据源，跟着当前筛选走会自锁 ——
+ *    选中 A 之后下拉里只剩 A，用户再也切不回 B。后端同样显式清空该维度。
+ *
+ * ⚠️ 响应不是数组就抛错，绝不退化成 `[]`：否则「端点被网关改写 / 返回结构不对」
+ *    会显示成「暂无场景」，管理员据此认定没有场景可筛。
+ */
+export async function fetchMetricScenarios(
+  hours: number,
+  filter: Pick<MetricFilter, 'tenantId'> = {},
+): Promise<MetricScenario[]> {
+  const body = await request<unknown>(
+    `${BASE}/scenarios${query({ hours: String(hours), tenantId: filter.tenantId })}`,
+  )
+  if (!Array.isArray(body)) {
+    throw new ApiError(200, '场景枚举响应不是数组，不能当作「暂无场景」', body, 'MALFORMED_RESPONSE')
+  }
+  return body as MetricScenario[]
 }
 
 /** ⚠️ 与后端 `AgentMetricPort.TraceMetric` 逐字段对齐；可空字段一律 `| null`。 */

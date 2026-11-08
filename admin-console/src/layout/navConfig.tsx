@@ -394,6 +394,16 @@ export const NAV_GROUPS: NavGroup[] = [
           '手动回填四类效果数据：L1 自动校验回执 / L2 抽样标注（黄金基线）/ 风险事件 / L3 用户反馈。要求 platform.resource.manage；风险事件只接受摘要绝不接收原文（合规红线）。租户侧反馈请勿经此页，走租户端反馈入口。',
         phase: '观测度量',
       },
+      {
+        key: 'review-queue',
+        label: '人工审查队列',
+        path: '/review-queue',
+        icon: <MessageOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '告警 / 异常 / 随机抽样 / L1 判分缺口自动入队；认领 → 查看完整对话回放（含 TOOL，学生端不可见）→ 归因关闭或驳回。读需 platform.resource.read，写需 platform.resource.manage；无物理删除端点。⚠️ L1 只判链路完整性，不判答案正确性。',
+        phase: '观测度量',
+      },
     ],
   },
   {

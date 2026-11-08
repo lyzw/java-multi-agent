@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Alert,
   Button,
@@ -10,6 +10,7 @@ import {
   Progress,
   Row,
   Segmented,
+  Select,
   Space,
   Spin,
   Statistic,
@@ -25,6 +26,7 @@ import {
   fetchTerminationDistribution,
   fetchToolBreakdown,
   fetchTraceMetric,
+  fetchMetricScenarios,
   collectTraceMetric,
   ANOMALY_KIND_LABELS,
   TERMINATION_REASON_COLORS,
@@ -33,10 +35,12 @@ import {
   type AgentMetricOverview,
   type AnomalyTrace,
   type LatencyPercentiles,
+  type MetricScenario,
   type ReasonCount,
   type ToolMetric,
   type TraceMetric,
 } from '@/api/metricsApi'
+import { TraceTranscriptDrawer } from '@/features/quality/TraceTranscriptDrawer'
 
 /**
  * Agent 效果指标看板（P7）。
@@ -110,6 +114,12 @@ function stamp(v: string | null): string {
 
 export function AgentMetricsPage(): JSX.Element {
   const [hours, setHours] = useState<number>(24)
+  /** '' = 全部场景；其它值由 /scenarios 下发，原样回填给后端（含「未标注」哨兵）。 */
+  const [scenario, setScenario] = useState<string>('')
+  const [scenarioOptions, setScenarioOptions] = useState<MetricScenario[]>([])
+  const [scenarioError, setScenarioError] = useState<string | null>(null)
+  /** 快速切换筛选时，旧请求后返回不得覆盖新口径的读数。 */
+  const loadSeq = useRef(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [overview, setOverview] = useState<AgentMetricOverview | null>(null)
@@ -127,6 +137,10 @@ export function AgentMetricsPage(): JSX.Element {
   /** 补算（POST /collect）的三态结果。 */
   const [collecting, setCollecting] = useState(false)
   const [collectResult, setCollectResult] = useState<{ kind: 'ok' | 'pending' | 'error'; message: string } | null>(null)
+  /** 内容级复盘入口：指标只说「跑得好不好」，对话回放才回答「到底说了什么」。 */
+  const [transcriptRunId, setTranscriptRunId] = useState<string>('')
+  /** 指标明细自带 tenantId，显式传给回放端点，避免「尚未采集」的 Run 定位不到租户。 */
+  const [transcriptTenantId, setTranscriptTenantId] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     if (drillTraceId === '') {
@@ -155,28 +169,57 @@ export function AgentMetricsPage(): JSX.Element {
     }
   }, [drillTraceId])
 
+  /**
+   * 场景下拉的数据源。
+   *
+   * ⚠️ **依赖里刻意没有 scenario**：这是筛选器自身的数据源，跟着当前筛选拉会自锁 ——
+   *    选中 A 之后下拉里只剩 A，用户再也切不回 B。后端同样显式清空该维度。
+   *    加载失败只给出可操作的错误，绝不退化成「暂无场景」的空下拉。
+   */
+  useEffect(() => {
+    let cancelled = false
+    setScenarioError(null)
+    fetchMetricScenarios(hours)
+      .then((rows) => {
+        if (!cancelled) setScenarioOptions(rows)
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return
+        setScenarioError((cause as Error).message || '场景列表加载失败')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [hours])
+
   const load = useCallback(async (): Promise<void> => {
+    const seq = ++loadSeq.current
     setLoading(true)
     setError(null)
+    // ⚠️ 五个读端点共用同一个 filter 对象 —— 少给一个端点带 scenario，
+    //    就会出现「总览已按场景收窄、分布/耗时/工具/异常仍是全量」的静默错配。
+    const filter = { scenario: scenario === '' ? undefined : scenario }
     try {
       const [ov, tm, lt, tl, an] = await Promise.all([
-        fetchAgentMetricOverview(hours),
-        fetchTerminationDistribution(hours),
-        fetchLatency(hours),
-        fetchToolBreakdown(hours),
-        fetchAnomalies(hours, 20),
+        fetchAgentMetricOverview(hours, filter),
+        fetchTerminationDistribution(hours, filter),
+        fetchLatency(hours, filter),
+        fetchToolBreakdown(hours, filter),
+        fetchAnomalies(hours, 20, filter),
       ])
+      if (seq !== loadSeq.current) return
       setOverview(ov)
       setTerminations(tm)
       setLatency(lt)
       setTools(tl)
       setAnomalies(an)
     } catch (e) {
+      if (seq !== loadSeq.current) return
       setError((e as Error).message || '指标加载失败')
     } finally {
-      setLoading(false)
+      if (seq === loadSeq.current) setLoading(false)
     }
-  }, [hours])
+  }, [hours, scenario])
 
   useEffect(() => {
     void load()
@@ -257,6 +300,10 @@ export function AgentMetricsPage(): JSX.Element {
   const totalTerminations = terminations.reduce((s, r) => s + r.count, 0)
   const sampled = ov.sampledCount
   const sampleEnough = sampled !== null && sampled >= MIN_SAMPLE_SIZE
+  const activeScenarioLabel = scenarioOptions.find((s) => s.value === scenario)?.label ?? scenario
+  /** 切时间窗后当前场景可能已无数据；不提示的话「0 条」会被误读成「这个场景表现很差」。 */
+  const scenarioMissingInRange = scenario !== '' && scenarioOptions.length > 0
+    && !scenarioOptions.some((s) => s.value === scenario)
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -265,6 +312,19 @@ export function AgentMetricsPage(): JSX.Element {
         title="Agent 效果指标"
         extra={
           <Space>
+            <Select
+              size="small"
+              allowClear
+              aria-label="按场景筛选"
+              placeholder="全部场景"
+              style={{ minWidth: 184 }}
+              value={scenario === '' ? undefined : scenario}
+              onChange={(v) => setScenario(v ?? '')}
+              options={scenarioOptions.map((s) => ({
+                value: s.value,
+                label: `${s.label}（${s.traceCount}）`,
+              }))}
+            />
             <Segmented
               value={String(hours)}
               onChange={(v) => setHours(Number(v))}
@@ -302,6 +362,28 @@ export function AgentMetricsPage(): JSX.Element {
           }
           style={{ marginBottom: 8 }}
         />
+        {scenarioError !== null && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 8 }}
+            message="场景筛选器不可用"
+            description={`${scenarioError}。⚠️ 这是「取不到场景列表」，不是「没有场景可筛」——下方读数仍是当前筛选口径，别把空下拉当成全量视图。`}
+          />
+        )}
+        {scenario !== '' && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 8 }}
+            message={`当前统计范围：场景 = ${activeScenarioLabel}`}
+            description={
+              scenarioMissingInRange
+                ? '该场景在当前时间窗内没有 Trace，页面上的 0 条是「区间内无数据」，不是「这个场景表现很差」。本页所有面板（含终止原因分布、耗时分位、工具维度、异常明细）均按同一场景口径过滤；清空筛选回到全量。'
+                : '本页所有面板（含终止原因分布、耗时分位、工具维度、异常明细）均按同一场景口径过滤；清空筛选回到全量。'
+            }
+          />
+        )}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           数据时效 {new Date(ov.refreshedAt).toLocaleString('zh-CN')}
           （小时桶来自物化视图，刷新期间可能读到上一版）
@@ -799,8 +881,15 @@ export function AgentMetricsPage(): JSX.Element {
               <Button loading={collecting} onClick={() => void runCollect()}>
                 补算指标
               </Button>
+              <Button onClick={() => {
+                setTranscriptRunId(drill.runId)
+                setTranscriptTenantId(drill.tenantId)
+              }}>
+                查看对话回放
+              </Button>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                运维入口：正常由 Run 收敛事件自动采集，这里只用于漏采回补。
+                运维入口：正常由 Run 收敛事件自动采集，这里只用于漏采回补；
+                回放走平台链端点（含 TOOL 消息），与指标端点刻意分离。
               </Typography.Text>
             </Space>
             {collectResult !== null && (
@@ -813,6 +902,14 @@ export function AgentMetricsPage(): JSX.Element {
           </Space>
         )}
       </Drawer>
+
+      {/* 内容级复盘：与指标抽屉并存，指标端点刻意不返回对话正文 */}
+      <TraceTranscriptDrawer
+        runId={transcriptRunId}
+        tenantId={transcriptTenantId}
+        open={transcriptRunId !== ''}
+        onClose={() => setTranscriptRunId('')}
+      />
     </Space>
   )
 }

@@ -35,6 +35,7 @@ import { AgentLabPage } from '@/pages/agentlab/AgentLabPage'
 import { AiChatPage } from '@/pages/agentlab/AiChatPage'
 import { AgentMetricsPage } from '@/pages/metrics/AgentMetricsPage'
 import { MetricEntryPage } from '@/pages/metrics/MetricEntryPage'
+import { ReviewQueuePage } from '@/pages/quality/ReviewQueuePage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { APP_BASE_PATH, ROLES, PLATFORM_SCOPE_ROLES, type Role } from '@/config/constants'
 
@@ -315,6 +316,16 @@ export const router = createBrowserRouter(
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>
               <MetricEntryPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 观测度量 · 人工审查队列（P2/P3：告警/抽样/L1 缺口自动入队 → 回放 → 归因）
+          // 深链 /review-queue?runId=<uuid> 直接打开对话回放抽屉，供指标下钻跳转。
+          path: 'review-queue',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <ReviewQueuePage />
             </RequireRole>
           ),
         },
