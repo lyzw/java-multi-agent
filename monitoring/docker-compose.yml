@@ -1,0 +1,42 @@
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      # ── P4 数据源凭据经宿主环境变量注入（source platform.env 后 export）──
+      #    provisioning yml 里用 ${GRAFANA_PG_*} 插值，口令不进仓库文件
+      - GRAFANA_PG_HOST=${GRAFANA_PG_HOST:-host.docker.internal}
+      - GRAFANA_PG_PORT=${GRAFANA_PG_PORT:-5432}
+      - GRAFANA_PG_DB=${GRAFANA_PG_DB:-agent_dev}
+      - GRAFANA_PG_USER=${GRAFANA_PG_USER:-platform_ops}
+      - GRAFANA_PG_PASSWORD=${GRAFANA_PG_PASSWORD:-}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus_data:
+  grafana_data:

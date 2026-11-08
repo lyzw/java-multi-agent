@@ -1,0 +1,16 @@
+# =====================================================================
+# Dashboard 自动装载（P4）：扫描 dashboards/ 目录，改动即热加载
+# =====================================================================
+apiVersion: 1
+
+providers:
+  - name: agent-quality
+    orgId: 1
+    folder: Agent 质量体系
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

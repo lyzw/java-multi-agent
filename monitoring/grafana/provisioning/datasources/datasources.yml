@@ -1,0 +1,45 @@
+# =====================================================================
+# Grafana 数据源自动 provisioning（P4 · 可视化监控接入）
+# =====================================================================
+# ⚠️ 凭据经环境变量注入（docker-compose 的 grafana.environment 透传），
+#    **绝不写进本文件** —— 本文件会被提交。
+#    宿主机启动方式（口令来自 platform.env，不出现在 compose/仓库）：
+#      set -a; source ../platform.env; set +a
+#      export GRAFANA_PG_HOST=<host> GRAFANA_PG_PORT=5432 GRAFANA_PG_DB=agent_dev \
+#             GRAFANA_PG_USER=platform_ops GRAFANA_PG_PASSWORD=<口令>
+#      docker compose up -d
+# =====================================================================
+apiVersion: 1
+
+datasources:
+  # ── 业务库（P4 看板的权威口径，见详细设计 §9）──────────────────
+  # 用 platform_ops（BYPASSRLS）：看板是平台级视图，必须跨租户聚合；
+  # app_agent（NOBYPASSRLS）会被 RLS 收窄到单租户，看板数字失真。
+  # ⚠️ 面板全部只做 SELECT；platform_ops 虽持 DML 权限，但 Grafana 侧无写路径。
+  - name: Platform-PG
+    uid: platform-pg
+    type: postgres
+    access: proxy
+    url: ${GRAFANA_PG_HOST}:${GRAFANA_PG_PORT}
+    user: ${GRAFANA_PG_USER}
+    secureJsonData:
+      password: ${GRAFANA_PG_PASSWORD}
+    jsonData:
+      database: ${GRAFANA_PG_DB}
+      # ⚠️ 2026-11-08 实测：当前 RDS 实例未启用 TLS（pq: SSL is not enabled on the server）。
+      #    enable TLS 后改回 require —— 届时无需改本文件之外任何东西。
+      sslmode: disable
+      postgresVersion: 1800
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+    isDefault: true
+
+  # ── 进程侧实时指标（JVM / HTTP / ai_model_calls_*）───────────────
+  - name: Prometheus
+    uid: prometheus-uid
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    jsonData:
+      httpMethod: POST
