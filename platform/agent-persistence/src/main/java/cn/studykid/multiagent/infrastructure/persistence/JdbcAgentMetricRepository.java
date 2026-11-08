@@ -284,6 +284,8 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                     count(hallucination) FILTER (WHERE hallucination)             AS hallucinated,
                     count(*) FILTER (WHERE instruction_followed)                  AS followed,
                     count(instruction_followed)                                   AS followed_denom,
+                    count(attribution_correct) FILTER (WHERE attribution_correct) AS attr_correct,
+                    count(attribution_correct)                                    AS attr_graded,
                     sum(feedback_up)                                              AS fb_up,
                     sum(feedback_down)                                            AS fb_down,
                     count(*) FILTER (WHERE abandoned)                             AS abandoned,
@@ -514,8 +516,9 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
     public void recordEvalSample(@NonNull EvalSample s) {
         String insert = """
                 INSERT INTO platform.agent_eval_sample
-                    (trace_id, tenant_id, verdict, hallucination, instruction_followed, note, sampler)
-                VALUES (?, ?::uuid, ?, ?, ?, ?, ?)
+                    (trace_id, tenant_id, verdict, hallucination, instruction_followed,
+                     attribution_correct, note, sampler)
+                VALUES (?, ?::uuid, ?, ?, ?, ?, ?, ?)
                 """;
         // ⚠️ 回写用「最新一条标注为准」，重复标注不叠加样本量（否则同一样本被算多次）
         String backfill = """
@@ -523,7 +526,8 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                     sampled = TRUE,
                     human_verdict = ?,
                     hallucination = ?,
-                    instruction_followed = ?
+                    instruction_followed = ?,
+                    attribution_correct = ?
                 WHERE trace_id = ? AND tenant_id = ?::uuid
                 """;
         try (Connection conn = openSystem()) {
@@ -533,16 +537,18 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                 ps.setString(3, s.verdict());
                 setNullableBoolean(ps, 4, s.hallucination());
                 setNullableBoolean(ps, 5, s.instructionFollowed());
-                ps.setString(6, s.note());
-                ps.setString(7, s.sampler());
+                setNullableBoolean(ps, 6, s.attributionCorrect());
+                ps.setString(7, s.note());
+                ps.setString(8, s.sampler());
                 ps.executeUpdate();
             }
             try (PreparedStatement ps = conn.prepareStatement(backfill)) {
                 ps.setString(1, s.verdict());
                 setNullableBoolean(ps, 2, s.hallucination());
                 setNullableBoolean(ps, 3, s.instructionFollowed());
-                ps.setString(4, s.traceId());
-                ps.setString(5, s.tenantId());
+                setNullableBoolean(ps, 4, s.attributionCorrect());
+                ps.setString(5, s.traceId());
+                ps.setString(6, s.tenantId());
                 ps.executeUpdate();
             }
             conn.commit();
@@ -860,6 +866,8 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
         Long falseOk = rs.getLong("false_ok");
         Long hallucinated = rs.getLong("hallucinated");
         Long followed = rs.getLong("followed");
+        Long attrGraded = zeroAsNull(rs.getLong("attr_graded"));
+        Long attrCorrect = rs.getLong("attr_correct");
         Long fbUp = nullableLong(rs, "fb_up");
         Long fbDown = nullableLong(rs, "fb_down");
         Long calls = nullableLong(rs, "calls");
@@ -888,6 +896,12 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
                 (falseDenom == null || falseDenom == 0) ? null : (double) falseOk / falseDenom,
                 (sampled == null || sampled == 0) ? null : (double) hallucinated / sampled,
                 (followedDenom == null || followedDenom == 0) ? null : (double) followed / followedDenom,
+                attrGraded,
+                attrCorrect,
+                // ⚠️ 与 sampledSuccessRate 同纪律：n < 30 一律不显示百分比（噪声不是指标）。
+                //    未启用 L2 判定时 attr_graded 为 0 → null，看板显示「未启用 / 样本不足」。
+                (attrGraded == null || attrGraded < AgentMetricPort.Overview.MIN_SAMPLE_SIZE) ? null
+                        : (double) attrCorrect / attrGraded,
                 fbUp,
                 fbDown,
                 (fbUp == null || fbDown == null || (fbUp + fbDown) == 0)

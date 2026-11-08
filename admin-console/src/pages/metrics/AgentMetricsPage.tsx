@@ -655,6 +655,25 @@ export function AgentMetricsPage(): JSX.Element {
               value={sampleEnough ? pct(ov.instructionFollowRate) : '样本不足'}
             />
           </Col>
+          <Col span={12}>
+            <Statistic
+              title="归因正确率（L2 · LLM-as-judge）"
+              value={
+                ov.attributionCorrectRate === null ? '未启用 / 样本不足' : pct(ov.attributionCorrectRate)
+              }
+              valueStyle={{
+                color:
+                  ov.attributionCorrectRate !== null && ov.attributionCorrectRate < 0.8
+                    ? '#cf1322'
+                    : undefined,
+              }}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {ov.attributionGradedCount === null || ov.attributionGradedCount === 0
+                ? 'L2 判定未启用（缺参考源/判定器，待产品确认，绝不编造占比）'
+                : `已判 ${ov.attributionGradedCount} 条（n≥${MIN_SAMPLE_SIZE} 才显示占比）`}
+            </Typography.Text>
+          </Col>
         </Row>
       </Card>
 

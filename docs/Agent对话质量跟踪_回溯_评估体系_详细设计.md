@@ -16,7 +16,7 @@
 | **P0**（G2 自动采集） | ✅ 代码层闭环 | 必须**双通道**：Rabbit `TraceMetricCollectorListener` + DB `EventRoutedMessageHandler → TraceCollectMessageHandler`。`agent.messaging.mode` 默认 **database** 且 `platform.env` 未覆盖，只做 Rabbit 等于「验收通过但生产不生效」。另修了 `cap_tool_def` 列名错误（无 `tool_name`，逻辑标识是 `id`）。 |
 | **P1**（G1 回放底座） | ✅ 代码层闭环 | 见下方「P1 落地偏差」。 |
 | **P2**（审查队列） | ✅ 已完成 | `platform.review_task` DDL + 端口/仓储/端点 + `ReviewAlertService` 告警联动（去重、状态机、fail-soft）+ 闭环 IT；已在 RDS 实跑验证。 |
-| **P3**（评估双轨） | ✅ 代码层闭环（L1 规则半边） | `L1AttributionEvaluator` + `TraceEvaluationService` 接进 `AgentMetricCollector.collect()`；L1 回执 → `agent_task_outcome` → 宽表 `auto_checked/auto_verified`；L1_GAP / SAMPLE_RANDOM 入人审。**`scenario` 显式标签维度已接通**（见下方「场景维度落地」）。⚠️ **LLM-as-judge 兜底未接线**（§13 第 3 项未答）。 |
+| **P3**（评估双轨） | ✅ 代码层闭环（L1 规则半边 + L2 管线） | `L1AttributionEvaluator` + `TraceEvaluationService` 接进 `AgentMetricCollector.collect()`；L1 回执 → `agent_task_outcome` → 宽表 `auto_checked/auto_verified`；L1_GAP / SAMPLE_RANDOM 入人审。`scenario` 显式标签维度已接通。**L2 归因正确率（ATTRIBUTION）管线已接**（列 / 聚合 / 编排 / `attribution_correct` / 前端开关，见「L2 归因正确率落地」），默认 **fail-closed 不评级**：`NoReferenceAnswerSource` + 不注册 `AttributionJudge`，看板显示「未启用 / 样本不足」。⚠️ **判分源（参考答案 / 题库标准解析）与 `AttributionJudge` 具体实现仍待产品确认**（§13 第 3 项判分源未定），在那之前绝不编造归因正确率。 |
 | **P4**（监控） | ✅ 已完成 | Grafana PG 数据源 + Prometheus scrape + **13 面板** provisioning（含 §7.3 覆盖率并排 / 样本不足 / 审查队列 / 按场景拆分），全部 SQL 已在 RDS 与 Grafana 数据源 API 实跑；admin-console 另接「按场景筛选」下拉，五个读端点整页同口径（见下方专节）。 |
 
 > ⚠️ **本文按「保守默认口径」实施**：保留期与 Run 对齐默认 30 天、不额外存敏感原文；量级按 `<1k Run/日`；回放仅平台审计 / ADMIN 可读。以上均为**可配置项并标注「待产品确认」**，对应 §13 第 2/4/5 项尚未由产品正式确认，不得表述为已定稿。
@@ -37,9 +37,20 @@
 3. **双重准入（合规红线）**：SQL 侧 `jsonb_typeof(input_payload -> 'scenario') = 'string'` 挡住 object/array（否则 `->>` 会把整段 JSON 结构转成文本）；Java 侧 `ScenarioTag` 白名单（Unicode 字母/数字 + `_ . : / + -`，≤64 字符，**不含空白与句读**）挡住整段学生提问被复制进指标宽表。非法值一律降级为「未标注」，不截断、不猜默认分组。
 4. **看板口径**：Grafana 面板 13 按场景并排显示「自动校验覆盖率 / 人工抽样覆盖率」，NULL 独立成「未标注」组，`n<30` 百分比置 NULL 且标注「样本不足」。后端 `GET /api/platform/v1/metrics/agent/*?scenario=...` 筛选对**五个读端点同时生效**，并新增 `/scenarios` 枚举端点（见下方「按场景筛选 · 整页同口径落地」）。
 5. **验收**：`ScenarioTagTest`(11) + `AgentMetricCollectorTest` 新增 2 例 + `EvaluationClosedLoopIT` 新增 4 例（显式标签 / 未标注保持 NULL / 自由文本被拒 / 非字符串被拒）。**双重反向验证**：① 把采集器 `run.scenario()` 改回 `null` → 单测 1 例 + 闭环 1 例精准变红；② 拆掉 `ScenarioTag.normalize` → 自由文本守卫变红。恢复后全量 **3024 testcase / 0 失败**。**RDS 实跑**：给真实 MiniMax Run 补标签后重投采集事件 → 宽表 `scenario='数学:一元二次方程'`，另一条未标注 Run 保持 NULL，Grafana 面板 13 出现两组，API 按场景筛选 2/1/0 条。
-6. ⚠️ **仍未做**：「归因正确率按场景拆分」仍阻塞于 `agent_eval_sample.attribution_correct`（§13 第 3 项），面板 13 目前拆的是**链路指标与覆盖率**，不得表述为内容正确率。前端「按场景筛选」控件已落地，见下一节。
+6. ⚠️ **归因正确率口径**：`agent_eval_sample.attribution_correct` 列、聚合、`L2AttributionEvaluator` 编排与前端 `attributionCorrectRate` 卡片**管线已全部落地**（见「L2 归因正确率落地」），但默认 fail-closed 未评级（看板显示「未启用 / 样本不足」），面板 13 当前**实际呈现**的仍是**链路指标与覆盖率**拆分，不得把「未启用」误读为「内容正确率」。真正的「归因正确率按场景拆分」要等判分源与 `AttributionJudge` 落地后才会有非空数据（§13 第 3 项）。前端「按场景筛选」控件已落地，见下一节。
 
 **前端落地（2026-11-08）**：admin-console 新增 `TraceTranscriptDrawer`（对话时间线，TOOL 消息仅 ADMIN 可见）、`ReviewQueuePage`（审查队列 + 认领/驳回/归因关闭），接入路由 `/review-queue` 与导航，并在 `AgentMetricsPage` 的 Trace 下钻挂「查看对话回放」。⚠️ 实跑联调抓到并修复 **Sev-1**：平台回放端点旧实现用 `app_agent`（NOBYPASSRLS）未绑租户直查 FORCE RLS 的 `public.run` → 恒 0 行 → 对所有 Run 一律 404；现改为「显式 `tenantId` 优先 + 平台域无 RLS 的 `agent_trace_metric` 反查兜底」，并加真实库闭环守卫（`platformReplayResolvesTenantForRealRun`）+ 反向验证。前端全量 56 文件 607 测试 / typecheck / 生产构建通过。
+
+---
+
+**L2 归因正确率（ATTRIBUTION）落地（2026-11-09，§13 第 3 项「管线」）**：
+
+1. **做了什么（骨架 / 管线）**：`agent_eval_sample.attribution_correct` + `agent_trace_metric.attribution_correct` 两列（`01_platform_ddl.sql` 终态 + `patch_platform_eval_attribution.sql` 活库补列）；端口 `EvalSample.attributionCorrect` 与 `Overview.attributionGradedCount / attributionCorrectCount / attributionCorrectRate`（nullable，`n<30` 一律 null）；持久层 `JdbcAgentMetricRepository` 写回 + 聚合（`count(*) FILTER (WHERE attribution_correct)` 与率，`MIN_SAMPLE_SIZE=30` 纪律复用）；`L2AttributionEvaluator`（`@Service`，fail-closed 编排）、`ReferenceAnswerSource`（Pluggable 参考源接口）、`NoReferenceAnswerSource`（`@ConditionalOnMissingBean` 默认，恒 `Optional.empty()`）、`AttributionJudge`（判定器契约，**刻意不注册实现**）、`EvaluationConfiguration`（默认 bean）、`TraceEvaluationService` 接 L2；配置 `agent.quality.eval.llm-judge.enabled:false`、`reference-source.enabled:false`、`llm-judge.sample-rate:0.05`；前端 `metricsApi.ts` 扩 3 字段 + `AgentMetricsPage.tsx` 新增「归因正确率（L2 · LLM-as-judge）」卡片（未启用显示「未启用 / 样本不足」、`<0.8` 标红）。
+2. **没做什么（大脑）**：⛔ 不提供任何具体 `AttributionJudge` 实现，也不接 LLM 客户端（平台当前无 `ChatClient` / `ModelClient` 抽象）。`attribution_correct` 全 NULL → 看板恒显示「未启用 / 样本不足」，绝不显示 0% / 100% 的伪造占比。
+3. **fail-closed 分级**：开关未开 → `UNGRADED_DISABLED`；判定器未注册 → `UNGRADED_NO_JUDGE`；回放无 USER / ASSISTANT → `UNGRADED_NO_FACTS`；参考源空 → `UNGRADED_NO_REFERENCE`；抽样未命中 → `SKIPPED_SAMPLING`；判定器拿不准（`Optional.empty()`）→ `UNGRADED_JUDGE_UNSURE`（待人工）。仅参考源 + 判定器 + 抽样全满足才写 `attribution_correct` 并回 `Result.graded`。
+4. **合规红线**：判定器 / 参考源只回「标准解析文本」与「布尔结论」，绝不落学生原题 / 答案原文；证据只存摘要不存原文；未启用时看板不编造占比。
+5. **验收**：`L2AttributionEvaluatorTest`（8，覆盖上述全部分支）、`TraceEvaluationServiceTest`（构造加 `l2` mock + `verify(l2).evaluate(...)`）、`AgentMetricCollectorTest`（`Overview` 构造已扩 3 字段）；真实库 `JdbcAgentMetricAttributionIT`（写回 + 回填、`n<30` 不显示占比、35 样本算 `30/35≈0.8571`、未评级 → `0/null`）。⚠️ **本机无 PostgreSQL，真实库 IT 未运行**（待具备 `IT_PG_URL` 活库环境执行）；Java 三模块（`agent-ports` / `agent-application` / `agent-persistence`）+ 前端 `typecheck` 全通过。
+6. **接入判分源后的动作**：拿到参考答案 / 题库标准解析 + 成本口径 → 在 `EvaluationConfiguration` 注册一个 `AttributionJudge` Bean（与 `ReferenceAnswerSource` 实现）即可真正评级，**无需改编排**。在此之前不得把「未启用」表述为「已判分」。
 
 **按场景筛选 · 整页同口径落地（2026-11-08 收尾）**：
 
@@ -63,7 +74,7 @@
 
 > ✅ **已补实跑验收**：RDS `agent_dev` 上已用 MiniMax-M2.5 跑过真实 `SUCCEEDED` Run，`run_message` 2 条、`/transcript` 200、`agent_trace_metric` 1 行、Prometheus `ai_model_calls_total` 可见；P2 审查队列、P3 L1 回执与覆盖率回填也各在 RDS 重投采集事件实跑验证。本地 `agent_it` 全量回归不替代这些实跑，两者都做了。
 >
-> ⚠️ **仍未做**：LLM-as-judge 兜底 / `ATTRIBUTION` 判分（阻塞于 §13 第 3 项「参考答案 / 题库标准解析」口径），以及依赖它的「归因正确率按场景拆分」。`scenario` 显式标签维度、admin-console 的 `TraceTranscriptDrawer` / `ReviewQueuePage`、以及**按场景筛选控件（整页五端点同口径）**均已落地，见「场景维度落地」「前端落地」「按场景筛选 · 整页同口径落地」。
+> ⚠️ **L2 管线已接、大脑未接**：`LLM-as-judge` 兜底 / `ATTRIBUTION` 判分的**管线**（列、聚合、`L2AttributionEvaluator` 编排、前端卡片、配置开关）已全部落地且 fail-closed 默认不评级；但**判分源（参考答案 / 题库标准解析）与 `AttributionJudge` 具体实现仍待产品确认**（§13 第 3 项）。在那之前看板显示「未启用 / 样本不足」，绝不编造归因正确率。依赖它的「归因正确率按场景拆分」在数据上仍为空（见「L2 归因正确率落地」）。`scenario` 显式标签维度、admin-console 的 `TraceTranscriptDrawer` / `ReviewQueuePage`、以及**按场景筛选控件（整页五端点同口径）**均已落地。
 
 ---
 
@@ -555,7 +566,7 @@ PENDING ──assign──▶ IN_REVIEW ──resolve(rootCause)──▶ RESOLV
 | 工具失败率 Top | Bar gauge | `SELECT tool_name, sum(failed)/sum(call) FROM agent_trace_tool_call WHERE ... GROUP BY 1` |
 | **内容质量·归因正确率** | Time series | `SELECT started_at, count(*) FILTER(WHERE attribution_correct) / count(*) FROM agent_eval_sample WHERE ... GROUP BY 1`（n<30 置空） |
 | **内容质量·幻觉率** | Time series | `SELECT started_at, count(*) FILTER(WHERE hallucination) / count(*) FROM agent_eval_sample ...` |
-| **按 scenario 拆分（链路指标 / 覆盖率）** | Table | ✅ **已落地（面板 13）**：`coalesce(nullif(scenario,''), '未标注')` 分组，自动/人工覆盖率并排，`n<30` 百分比置 NULL 并标「样本不足」。⚠️ 此处拆的是**链路指标与覆盖率**，不是归因正确率 —— 后者仍阻塞于 `agent_eval_sample.attribution_correct`（§13 第 3 项）。 |
+| **按 scenario 拆分（链路指标 / 覆盖率）** | Table | ✅ **已落地（面板 13）**：`coalesce(nullif(scenario,''), '未标注')` 分组，自动/人工覆盖率并排，`n<30` 百分比置 NULL 并标「样本不足」。⚠️ 此处拆的是**链路指标与覆盖率**，不是归因正确率。归因正确率（ATTRIBUTION）管线已接但默认未评级（`attribution_correct` 全 NULL → 看板「未启用 / 样本不足」），非空数据待 §13 第 3 项判分源落地。 |
 | **审查运营·积压/覆盖** | Stat + Bar | `SELECT status, count(*) FROM review_task GROUP BY 1`；覆盖率=`count(sampled)/count(*)` from metric |
 
 > 响应体带 `refreshed_at`（`mv` 刷新期间读旧数据，前端标注时效，与 P7 约定一致）。
@@ -610,7 +621,7 @@ PENDING ──assign──▶ IN_REVIEW ──resolve(rootCause)──▶ RESOLV
 | **P0** ✅ 已完成 | 自动采集接线（§5） | 现有看板立刻有数，暴露真实质量 | Rabbit + DB **双通道** `agent.trace.collect` 专用链路（默认 database） |
 | **P1** ✅ 已完成 | 回放底座（§2.1+§3+§4+§6） | 补齐对话内容持久化与回放 | `run_message` DDL + 仓储 + worker 埋点 + 两端点（**落地偏差见 §0.0**） |
 | **P2** ✅ 已完成 | 审查闭环（§8） | 看→判→填闭环 | `review_task` DDL + `ReviewTaskPort` + 端点 + 告警联动 + 闭环 IT + RDS 实跑；admin-console `ReviewQueuePage` 前端已接 |
-| **P3** ✅ 已完成（L1 半边 + 场景维度） | 评估双轨（§7） | 覆盖率是真数字 | `L1AttributionEvaluator` + `TraceEvaluationService` + 回执/覆盖率回填 + 闭环 IT + RDS 实跑；`scenario` 显式标签维度已接通（落地偏差见 §0.0）；**LLM-as-judge 未做** |
+| **P3** ✅ 已完成（L1 半边 + 场景维度 + L2 管线） | 评估双轨（§7） | 覆盖率是真数字 | `L1AttributionEvaluator` + `TraceEvaluationService` + 回执/覆盖率回填 + 闭环 IT + RDS 实跑；`scenario` 显式标签维度已接通（落地偏差见 §0.0）；**L2 归因正确率管线已接（fail-closed 不评级），判分源 / 判定器待 §13 第 3 项确认** |
 | **P4** ✅ 已完成 | 监控升级（§9） | 可行动的监控 | Grafana PG 数据源 + Prometheus scrape + **13 面板**（覆盖率并排 / 样本不足 / 队列 / 按场景拆分），全部 SQL 经 RDS 与 Grafana 数据源 API 实跑；admin-console 按场景筛选（五端点同口径 + `/scenarios` 枚举）已在真实应用实跑 200 |
 
 ---
@@ -619,6 +630,6 @@ PENDING ──assign──▶ IN_REVIEW ──resolve(rootCause)──▶ RESOLV
 
 1. **Grafana/Prometheus 是否部署**——✅ **已答并完成接入（2026-11-08）**：Prometheus `java-multi-agent` 作业已启用，Grafana PG 数据源 `platform-pg` 已 provisioning（RDS 主机名 + `sslmode=disable`），看板 13 面板全部 SQL 实跑通过、Grafana API 确认热加载。
 2. **`run_message` 保留期与合规口径**——🟡 **按保守默认实施，待产品确认**：保留期与 Run 对齐默认 30 天、不额外存敏感原文（M2 SYSTEM 只存记忆标签）。教育/未成年人数据的特定期限与脱敏要求仍无正式口径。
-3. **L1 自动判分源**——⛔ **唯一实质阻塞项**：参考答案/题库标准解析（`ATTRIBUTION` checker）是否存在仍未知。当前 L1 只判链路完整性（`TRACE_LINK_L1`），**LLM-as-judge 兜底未接线**：没有判分源就让大模型猜一个「归因正确率」是编造指标。拿到判分源与成本口径后才接模型判分。
+3. **L1 自动判分源 / L2 判分大脑**——🟡 **管线已接，判分源待确认**：`agent_eval_sample.attribution_correct` / `agent_trace_metric.attribution_correct` 列、聚合、`L2AttributionEvaluator` 编排、前端 `attributionCorrectRate` 卡片与配置开关（`agent.quality.eval.llm-judge.enabled:false`、`reference-source.enabled:false`）已全部落地，默认 **fail-closed 不评级**（`NoReferenceAnswerSource` 恒返回 empty、不注册 `AttributionJudge`，看板显示「未启用 / 样本不足」）。⛔ **实质阻塞项未变**：参考答案 / 题库标准解析（`ATTRIBUTION` checker）是否存在、用哪家模型判分、成本口径仍未知。**拿到判分源 + 成本口径 + 实现 `AttributionJudge` 后，仅需在 `EvaluationConfiguration` 注册一个 `AttributionJudge` Bean 即可真正评级**，无需改编排。在那之前绝不编造归因正确率。
 4. **预期量级**——🟡 **按 `<1k Run/日` 设计，待产品确认**；决定 `run_message` 存储与 `mv` 刷新频率，当前为可配置项。
 5. **回放受众**——🟡 **按「仅平台审计 / ADMIN 可读」实施，待产品确认**：租户侧端点对 STUDENT 隐藏 TOOL 消息。学生端是否开放「查看我的辅导记录」未定，会改变 §6.2 脱敏粒度。

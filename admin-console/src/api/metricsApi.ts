@@ -53,6 +53,11 @@ export interface AgentMetricOverview {
   falseSuccessRate: number | null
   hallucinationRate: number | null
   instructionFollowRate: number | null
+  // ── L2 内容级归因正确率（§13 第 3 项 · LLM-as-judge，fail-closed）──
+  // ⚠️ 默认未启用：gradedCount=0 → 看板显示「未启用 / 样本不足」，绝不显示编造的 0%/100%
+  attributionGradedCount: number | null
+  attributionCorrectCount: number | null
+  attributionCorrectRate: number | null
   // ── L3 用户反馈（有噪）──
   feedbackUpCount: number | null
   feedbackDownCount: number | null

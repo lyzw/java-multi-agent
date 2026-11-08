@@ -232,6 +232,9 @@ public interface AgentMetricPort {
             @Nullable Double falseSuccessRate,
             @Nullable Double hallucinationRate,
             @Nullable Double instructionFollowRate,
+            @Nullable Long attributionGradedCount,
+            @Nullable Long attributionCorrectCount,
+            @Nullable Double attributionCorrectRate,
             @Nullable Long feedbackUpCount,
             @Nullable Long feedbackDownCount,
             @Nullable Double thumbUpRate,
@@ -301,6 +304,7 @@ public interface AgentMetricPort {
             @NonNull String verdict,
             @Nullable Boolean hallucination,
             @Nullable Boolean instructionFollowed,
+            @Nullable Boolean attributionCorrect,
             @Nullable String note,
             @NonNull String sampler) {
     }

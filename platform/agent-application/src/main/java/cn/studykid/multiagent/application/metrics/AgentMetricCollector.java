@@ -256,7 +256,7 @@ public class AgentMetricCollector {
             return;
         }
         try {
-            evaluation.evaluate(metric.tenantId(), metric.runId(), metric.traceId());
+            evaluation.evaluate(metric.tenantId(), metric.runId(), metric.traceId(), metric.scenario());
         } catch (RuntimeException e) {
             log.warn("质量评估异常（已忽略，不影响采集结果）: trace={}, cause={}",
                     metric.traceId(), e.toString());

@@ -329,6 +329,7 @@ class AgentMetricCollectorTest {
                 0.01, 3.0, 0.02, 0.05, 2L,
                 null, null, null, null,
                 sampled, null, null, null, null,
+                null, null, null,
                 null, null, null, null,
                 0L, 0L, 0L, Instant.now());
     }

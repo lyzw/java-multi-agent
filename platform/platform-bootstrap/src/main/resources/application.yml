@@ -68,6 +68,20 @@ agent:
     eval:
       enabled: true
       sample-rate: 0.05
+      # ── L2 内容级归因判分（§13 第 3 项 · LLM-as-judge 兜底）─────────
+      # ⚠️ **默认全部关闭（fail-closed）**：平台当前没有可供评估链路调用的 LLM 客户端，
+      #    且其判定 rubric / 模型判分成本口径仍待产品确认；在拿到判分源（题库标准解析）
+      #    与真正的 AttributionJudge 实现前，L2 明确「未启用」，看板显示「未启用 / 样本不足」，
+      #    **绝不**用 LLM 猜一个「归因正确率」。两项开关都开启后 L2 才参与评级。
+      llm-judge:
+        enabled: false
+        # 判定抽样率：LLM 判分有成本，不逐条判；与 L1 同算法、确定性。
+        sample-rate: 0.05
+      # ⚠️ 参考答案 / 题库标准解析判分源开关：默认关闭。
+      #    接入真正的 ReferenceAnswerSource bean 后，由 EvaluationConfiguration 的
+      #    @ConditionalOnMissingBean 自动让位给实现；本开关是「是否允许使用判分源」的总闸。
+      reference-source:
+        enabled: false
   # ── 限流（P3-D08 / D-2）─────────────────────────────────────────
   # ⚠️ 缺失即拒绝启动（fail-closed）：退回默认值等于「悄悄用了一个
   #    没人审过的限额」。初值取保守档，接入真实流量后按实测调整。
