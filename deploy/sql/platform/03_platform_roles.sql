@@ -234,8 +234,30 @@ SELECT format('GRANT SELECT, INSERT, DELETE ON platform.agent_trace_tool_call TO
 SELECT format('GRANT SELECT, INSERT ON platform.agent_trace_feedback TO %I', :'app_role') \gexec
 SELECT format('GRANT SELECT, INSERT ON platform.agent_eval_sample TO %I', :'app_role') \gexec
 SELECT format('GRANT SELECT, INSERT ON platform.agent_risk_event TO %I', :'app_role') \gexec
-SELECT format('GRANT SELECT, INSERT ON platform.agent_task_outcome TO %I', :'app_role') \gexec
+-- ⚠️ **必须带 UPDATE**（2026-11-08 P3 实测修复）：JdbcAgentMetricRepository
+--    .recordTaskOutcome 用的是 `INSERT … ON CONFLICT (trace_id, checker_code)
+--    DO UPDATE`，重采一次同一 Trace 要覆盖回执（幂等）。只给 INSERT+SELECT 时
+--    PostgreSQL 会以 permission denied 拒绝这条 upsert；采集器对评估异常是
+--    fail-soft（WARN 后继续），于是「指标表有数、看板正常、agent_task_outcome
+--    恒 0 行、auto_checked 永远 false」—— 又是一次不报错、只是数字悄悄错。
+--    不给 DELETE：回执只走 upsert 覆盖，没有物理删除端点。
+SELECT format('GRANT SELECT, INSERT, UPDATE ON platform.agent_task_outcome TO %I', :'app_role') \gexec
+SELECT format('REVOKE DELETE ON platform.agent_task_outcome FROM %I', :'app_role') \gexec
 SELECT format('GRANT SELECT ON platform.mv_agent_metric_hourly TO %I', :'app_role') \gexec
+
+-- ── 应用角色：P2 人工审查队列（2026-11-08 补） ──────────────────────
+-- 【为什么给 app_agent 这张表】
+--   review_task 是「告警/异常自动产出、reviewer 认领与关闭」的**运营队列**，
+--   写者是应用自身（采集链路上的告警联动 ReviewAlertService），
+--   与上面的 agent_* 遥测表同性质：非敏感运营数据、不含身份凭据。
+--   读它也走应用角色（队列端点 GET /api/platform/v1/review-tasks 由平台权限闸门把关，
+--   隔离靠**授权码**而非 RLS —— 该表在 platform 域，本来就无 RLS）。
+-- ⚠️ **不给 DELETE**：队列只走状态机流转（PENDING→IN_REVIEW→RESOLVED/DISMISSED），
+--   没有物理删除端点；防止业务进程误删审计痕迹。
+-- ⚠️ 不给 platform_user / platform_role / platform_audit_event 等身份表 —— 那些仍走
+--   platform_ops 专用通道（同上「其余 platform 身份/管理表不给」纪律）。
+SELECT format('GRANT SELECT, INSERT, UPDATE ON platform.review_task TO %I', :'app_role') \gexec
+SELECT format('REVOKE DELETE ON platform.review_task FROM %I', :'app_role') \gexec
 
 -- ── 应用角色：授权决策流水（D6 / P2，2026-11-02 补） ────────────────
 -- 【为什么只给 INSERT，且必须显式 REVOKE SELECT】
@@ -274,6 +296,30 @@ BEGIN
     IF has_table_privilege(app, 'platform.authz_decision_log', 'SELECT') THEN
         RAISE EXCEPTION '越权：app_agent 竟可 SELECT platform.authz_decision_log —— '
                         '该表含全平台各租户的判定记录，读必须走 platform_ops 运维通道';
+    END IF;
+    -- P2 审查队列：必须能写（否则告警联动建任务被拒 → 队列恒空且**无告警级症状**：
+    --   指标表有数、看板正常、只是没人可审 —— 「不报错、只是功能空转」的典型形态）
+    IF NOT has_table_privilege(app, 'platform.review_task', 'INSERT') THEN
+        RAISE EXCEPTION '授权未生效：app_agent 对 platform.review_task 缺 INSERT —— '
+                        '告警联动会被拒（fail-soft 吞掉），审查队列永远为空';
+    END IF;
+    -- 反向：不得能删（队列只走状态机流转，无物理删除端点）
+    IF has_table_privilege(app, 'platform.review_task', 'DELETE') THEN
+        RAISE EXCEPTION '越权：app_agent 竟可 DELETE platform.review_task —— '
+                        '审查队列只走状态机流转，业务进程不应有物理删除权';
+    END IF;
+    -- P3 自动校验回执：必须能 INSERT **且能 UPDATE**（upsert 幂等）。
+    --   只给 INSERT 时 recordTaskOutcome 的 ON CONFLICT DO UPDATE 会被拒，
+    --   而评估异常被 fail-soft 吞掉 → 自动校验覆盖率恒 0，看板毫无异常。
+    IF NOT (has_table_privilege(app, 'platform.agent_task_outcome', 'INSERT')
+            AND has_table_privilege(app, 'platform.agent_task_outcome', 'UPDATE')) THEN
+        RAISE EXCEPTION '授权未生效：app_agent 对 platform.agent_task_outcome 缺 INSERT/UPDATE —— '
+                        'L1 回执的 ON CONFLICT DO UPDATE 会被拒（fail-soft 吞掉），'
+                        'auto_checked 永远为 false，自动校验覆盖率恒 0';
+    END IF;
+    IF has_table_privilege(app, 'platform.agent_task_outcome', 'DELETE') THEN
+        RAISE EXCEPTION '越权：app_agent 竟可 DELETE platform.agent_task_outcome —— '
+                        '校验回执只走 upsert 覆盖，无物理删除端点';
     END IF;
     RAISE NOTICE '自检通过：platform 域授权就位（ops 整域 DML / app 仅租户登记表只读 + 决策流水只写）';
 END;

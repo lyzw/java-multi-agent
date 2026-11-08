@@ -861,6 +861,59 @@ COMMENT ON TABLE platform.agent_trace_tool_call IS '工具维度指标（按 Tra
 
 
 --
+-- Name: review_task; Type: TABLE; Schema: platform; Owner: -
+--
+
+-- ⚠️⚠️ P2 人工审查队列（G3 内容级评估的「人审」半边）：
+--    告警/异常/抽样自动产出的待审任务在此排队，reviewer 认领 → 复盘（回放）
+--    → 归因（root_cause）→ 关闭。与 agent_eval_sample 同域（platform，无 RLS）：
+--    reviewer 跨租户可见，隔离靠授权（读 RESOURCE_READ / 写 RESOURCE_MANAGE），
+--    不靠行策略 —— 与「读在租户域、审在平台域」的边界一致。
+--    ⚠️ 只走状态机流转，无物理删除端点；保留期清理属 04_retention_role 面。
+CREATE TABLE platform.review_task (
+    task_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    trace_id text NOT NULL,
+    tenant_id uuid NOT NULL,
+    run_id uuid NOT NULL,
+    source text NOT NULL,
+    priority text DEFAULT 'NORMAL'::text NOT NULL,
+    status text DEFAULT 'PENDING'::text NOT NULL,
+    assigned_to text,
+    root_cause text,
+    note text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    resolved_at timestamp with time zone,
+    CONSTRAINT review_task_source_valid CHECK ((source = ANY (ARRAY['ALERT'::text, 'ANOMALY'::text, 'SAMPLE_RANDOM'::text, 'L1_GAP'::text, 'MANUAL'::text]))),
+    CONSTRAINT review_task_priority_valid CHECK ((priority = ANY (ARRAY['HIGH'::text, 'NORMAL'::text, 'LOW'::text]))),
+    CONSTRAINT review_task_status_valid CHECK ((status = ANY (ARRAY['PENDING'::text, 'IN_REVIEW'::text, 'RESOLVED'::text, 'DISMISSED'::text]))),
+    CONSTRAINT review_task_root_cause_valid CHECK ((root_cause = ANY (ARRAY['MODEL'::text, 'PROMPT'::text, 'TOOL'::text, 'DATA'::text, 'CONFIG'::text, 'UNKNOWN'::text])))
+);
+
+
+--
+-- Name: review_task; Type: CONSTRAINT; Schema: platform; Owner: -
+--
+
+ALTER TABLE ONLY platform.review_task
+    ADD CONSTRAINT review_task_pkey PRIMARY KEY (task_id);
+
+
+--
+-- Name: review_task idx_review_task_status; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_review_task_status ON platform.review_task USING btree (status, created_at DESC);
+
+
+--
+-- Name: review_task idx_review_task_tenant; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE INDEX idx_review_task_tenant ON platform.review_task USING btree (tenant_id, status);
+
+
+--
 -- Name: authz_decision_log; Type: TABLE; Schema: platform; Owner: -
 --
 
@@ -2689,6 +2742,59 @@ ALTER TABLE ONLY public.run_step FORCE ROW LEVEL SECURITY;
 
 
 --
+-- Name: run_message; Type: TABLE; Schema: public; Owner: -
+--
+
+-- ⚠️⚠️ G1 回放底座（对话内容持久化）。此前**全库零持久化**：
+--    run / run_step / run_event / tool_operation 只存「结构化事实」
+--    （状态、时长、工具名、状态码），**对话原文一个字节都没有**。
+--    于是「这次辅导模型究竟说了什么、为什么这样说」在系统内**无法复盘**——
+--    质量评估只能看指标（tool_call_invalid=1），无法看「它错在哪一句」。
+--
+-- ⚠️ seq 用 GENERATED ALWAYS AS IDENTITY 而非 created_at：
+--    gen_random_uuid() 是 v4 无序；created_at 同毫秒会有 tie，
+--    回放顺序将不确定（同一 run 的两条消息先后随机）→ 对话树错乱。
+--    IDENTITY 单调递增保证「回放顺序 == 插入序」严格一致。
+CREATE TABLE public.run_message (
+    message_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    seq bigint GENERATED ALWAYS AS IDENTITY,
+    tenant_id uuid NOT NULL,
+    run_id uuid NOT NULL,
+    trace_id text,
+    step_number integer,
+    parent_message_id uuid,
+    role text NOT NULL,
+    content jsonb DEFAULT '{}'::jsonb NOT NULL,
+    tool_operation_id uuid,
+    model_id text,
+    input_tokens bigint,
+    output_tokens bigint,
+    latency_ms bigint,
+    fencing_token bigint DEFAULT 0 NOT NULL,
+    idem_key text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT run_message_role_valid CHECK ((role = ANY (ARRAY['SYSTEM'::text, 'USER'::text, 'ASSISTANT'::text, 'TOOL'::text]))),
+    CONSTRAINT run_message_fencing_non_negative CHECK ((fencing_token >= 0))
+);
+
+ALTER TABLE ONLY public.run_message FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: run_message; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+-- ⚠️⚠️ **幂等键是必需的，不是可选优化**：
+--    seq 是 IDENTITY 自增，**永远不会冲突**，若直接 INSERT，
+--    执行循环重试一次就多一条消息 → 回放出现重复对话（「同一句话说了两遍」）。
+--    idem_key 由应用侧按 (role, step_number[, tool_operation_id]) 计算，
+--    冲突时覆盖而非追加。
+--    ⚠️ 必须含 tenant_id 与 run_id：否则跨租户/跨 Run 的同名键会互相覆盖。
+ALTER TABLE ONLY public.run_message
+    ADD CONSTRAINT run_message_idem_uniq UNIQUE (tenant_id, run_id, idem_key);
+
+
+--
 -- Name: student_profile; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4271,6 +4377,30 @@ CREATE INDEX idx_run_step_run ON public.run_step USING btree (tenant_id, run_id,
 
 
 --
+-- Name: idx_run_message_run_seq; Type: INDEX; Schema: public; Owner: -
+--
+
+-- 回放主路径：按 run 拉全量时间线（seq 升序 = 插入序，确定性排序）
+CREATE INDEX idx_run_message_run_seq ON public.run_message USING btree (tenant_id, run_id, seq);
+
+
+--
+-- Name: idx_run_message_step; Type: INDEX; Schema: public; Owner: -
+--
+
+-- 下钻：按轮次定位问题 step（「第几轮开始跑偏」）
+CREATE INDEX idx_run_message_step ON public.run_message USING btree (tenant_id, run_id, step_number);
+
+
+--
+-- Name: idx_run_message_trace; Type: INDEX; Schema: public; Owner: -
+--
+
+-- 跨 trace 聚合（异常抽样 / 内容质量统计）；显式带 tenant_id 谓词（纵深防御）
+CREATE INDEX idx_run_message_trace ON public.run_message USING btree (tenant_id, trace_id, created_at);
+
+
+--
 -- Name: idx_run_tenant_created; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4577,6 +4707,18 @@ CREATE TRIGGER trg_enforce_reservation_state_transition BEFORE UPDATE ON public.
 --
 
 CREATE TRIGGER trg_fencing_guard BEFORE UPDATE ON public.run FOR EACH ROW EXECUTE FUNCTION public.enforce_fencing_on_write();
+
+
+--
+-- Name: run_message trg_run_message_fencing_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+-- ⚠️ 与 run / run_step 同源（红线 5：旧世代不得写入）：
+--    执行循环的「重试」会带着**更旧的** fencing token 回来补写消息，
+--    若无此守卫，旧世代的过期回答会覆盖新世代的当前回答 →
+--    回放里出现「模型说了两句互相矛盾的话」，且无法解释哪句是最终的。
+--    ⚠️ 触发器是 BEFORE UPDATE：命中幂等键的覆盖写也会被此守卫拦住（正确）。
+CREATE TRIGGER trg_run_message_fencing_guard BEFORE UPDATE ON public.run_message FOR EACH ROW EXECUTE FUNCTION public.enforce_fencing_on_write();
 
 
 --
@@ -5569,6 +5711,23 @@ ALTER TABLE public.run_step ENABLE ROW LEVEL SECURITY;
 --
 
 CREATE POLICY run_step_tenant_isolation ON public.run_step USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
+
+
+--
+-- Name: run_message; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.run_message ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: run_message run_message_tenant_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+-- ⚠️⚠️ **必须显式挂这条策略**：FORCE RLS 下「有表无策略」= 拒绝全部访问，
+--    而拒绝的表现是**静默零行**（不是报错）——
+--    表现为「消息写不进去且没有任何异常」，回放永远为空。
+--    这正是本项目的铁律：**新建租户域表必须显式挂策略**。
+CREATE POLICY run_message_tenant_isolation ON public.run_message USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
 
 
 --

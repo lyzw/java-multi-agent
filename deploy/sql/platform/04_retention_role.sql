@@ -122,6 +122,16 @@ FROM unnest(ARRAY[
 SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO %I', t, :'retention_role')
 FROM unnest(ARRAY['student_memory']) AS t \gexec
 
+-- ⚠️ P1 G1 对话回放底座（run_message）必须**显式**列在这里：
+--    对话原文是**保留期最长、敏感度最高**的一类数据（未成年人辅导原话），
+--    它既不能被应用角色物理删除（无物理删除端点，与 ErasurePort 纪律一致），
+--    又必须能在保留期到期时被清理 —— 否则「不落原文」的承诺只在写侧成立、
+--    读侧的数据却能无限期留存。
+--    ⚠️ 清理按 run_message.created_at 切，与 run/run_step 的保留期同口径
+--    （保留期策略待产品/合规最终确认，当前与 run 对齐）。
+SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO %I', t, :'retention_role')
+FROM unnest(ARRAY['run_message']) AS t \gexec
+
 SELECT format('GRANT SELECT, UPDATE ON %s TO %I', t, :'retention_role')
 FROM unnest(ARRAY['run', 'run_step', 'tool_operation']) AS t \gexec
 

@@ -167,12 +167,24 @@ public final class PlatformDdl {
     /**
      * @param table 表名（限定或不限定均可）
      * @return 该表 {@code CREATE TABLE} 括号内的原文；表不存在时返回空串
+     *
+     * <p>⚠️ <b>限定名必须精确匹配</b>：本快照里 {@code public.tenant} 与
+     * {@code platform.tenant} <b>同名但列完全不同</b>。
+     * 若一律按末段名匹配，{@code columnNames("public.tenant")} 会取到
+     * {@code platform.tenant} 的列 —— 断言随即变成「拿 A 表的列比 B 表的列」，
+     * 报出并不存在的缺列。故：入参<b>带 schema 前缀</b>时按限定名精确匹配，
+     * <b>不带</b>时才退化为末段名匹配（此时取先声明的那张）。
      */
     public static String tableBody(String table) {
         String simple = simpleName(table);
+        boolean qualified = table.contains(".");
         Matcher m = CREATE_TABLE.matcher(text());
         while (m.find()) {
-            if (!simpleName(m.group(1)).equals(simple)) {
+            String candidate = m.group(1);
+            boolean hit = qualified
+                    ? candidate.equalsIgnoreCase(table)
+                    : simpleName(candidate).equals(simple);
+            if (!hit) {
                 continue;
             }
             String body = balancedBody(text(), m.end() - 1);
