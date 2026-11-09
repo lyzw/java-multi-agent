@@ -33,8 +33,10 @@ meta:
   source: "postgresql://rm-cn-hhf50fbhh0001uzo.rwlb.rds.aliyuncs.com:5432/agent_dev"
   database: "agent_dev"
   connected_as: "app_agent"
-  business_tables: 65
-  policy_count: 50
+  business_tables: 66
+  # ⚠️ business_tables / policy_count 已含 2026-11-08 手工补登记的 run_message（+1 表 +1 策略）。
+  #    下次 ./scripts/export-rls-policies.sh 全量重导后以导出产物为准。
+  policy_count: 51
 
 policies:
   - table: "public.agent"
@@ -375,6 +377,22 @@ policies:
     with_check: "(tenant_id = current_tenant_id())"
   - table: "public.run_event"
     policy: "run_event_tenant_isolation"
+    cmd: "*"
+    roles: "{0}"
+    forced: "t"
+    scope: TENANT_ONLY
+    using: "(tenant_id = current_tenant_id())"
+    with_check: "(tenant_id = current_tenant_id())"
+  # ⚠️ 手工补登记（非本次导出产物）：run_message 是 G1 回放底座新增表，
+  #    落地于 2026-11-08，晚于本表导出时刻（2026-11-02），故导出时不存在。
+  #    形状取自 deploy/sql/platform/01_platform_ddl.sql 终态快照：
+  #    ENABLE + FORCE ROW LEVEL SECURITY + run_message_tenant_isolation
+  #    (USING tenant_id = current_tenant_id() / WITH CHECK 同)。
+  #    登记原因：本表是 D8 退役脚本的生成源（每条 policy 对应一条 DROP），
+  #    漏登记 ⇒ 退役时漏删该策略 ⇒ 隔离被静默放开。
+  #    下次执行 ./scripts/export-rls-policies.sh 会被自动覆盖为导出产物。
+  - table: "public.run_message"
+    policy: "run_message_tenant_isolation"
     cmd: "*"
     roles: "{0}"
     forced: "t"

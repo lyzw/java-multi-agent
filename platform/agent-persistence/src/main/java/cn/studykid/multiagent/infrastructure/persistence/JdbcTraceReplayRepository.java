@@ -19,8 +19,14 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.ObjectMapper;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.TraceReplayPort;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * 对话回放 JDBC 读取（P1 · G1 闭环）。
@@ -50,6 +56,12 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
 
     private final DataSource dataSource;
 
+    // ── P1 影子态字段（默认 dormant：全部 null/false，零行为变更）──
+    private ScopedDataAccess scoped;
+    private AuthzShadowReporter reporter;
+    private String sentinelTenantId = "";
+    private boolean shadowEnabled;
+
     public JdbcTraceReplayRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
     }
@@ -59,15 +71,18 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
         List<MessageView> out = new ArrayList<>();
         try (Connection conn = openTenant(tenantId)) {
             try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT seq, role, step_number, content, tool_operation_id, model_id, "
+                    "SELECT tenant_id, seq, role, step_number, content, tool_operation_id, model_id, "
                             + "       input_tokens, output_tokens, latency_ms, created_at "
                             + "FROM public.run_message "
                             + "WHERE tenant_id = ?::uuid AND run_id = ?::uuid "
                             + "ORDER BY seq ASC")) {
                 ps.setString(1, tenantId);
                 ps.setString(2, runId);
+                shadowCompare("run_message", tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
+                        String rowTenant = rs.getString("tenant_id");
+                        shadowTaint("run_message", tenantId, rowTenant);
                         out.add(new MessageView(
                                 rs.getLong("seq"),
                                 rs.getString("role"),
@@ -104,16 +119,19 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
     private Optional<Map<String, Object>> readToolOperation(Connection conn, String tenantId,
                                                            String operationId) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT operation_id, tool_name, risk_level, state, tool_arguments, "
+                "SELECT tenant_id, operation_id, tool_name, risk_level, state, tool_arguments, "
                         + "       result_payload, error_class, created_at, completed_at "
                         + "FROM public.tool_operation "
                         + "WHERE tenant_id = ?::uuid AND operation_id = ?::uuid")) {
             ps.setString(1, tenantId);
             ps.setString(2, operationId);
+            shadowCompare("tool_operation", tenantId, true);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
                     return Optional.empty();
                 }
+                String rowTenant = rs.getString("tenant_id");
+                shadowTaint("tool_operation", tenantId, rowTenant);
                 Map<String, Object> out = new LinkedHashMap<>();
                 out.put("operationId", rs.getString("operation_id"));
                 out.put("toolName", rs.getString("tool_name"));
@@ -146,15 +164,18 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
         List<StepView> out = new ArrayList<>();
         try (Connection conn = openTenant(tenantId)) {
             try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT step_number, step_type, "
+                    "SELECT tenant_id, step_number, step_type, "
                             + "       EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000 AS duration_ms "
                             + "FROM public.run_step "
                             + "WHERE tenant_id = ?::uuid AND run_id = ?::uuid "
                             + "ORDER BY step_number ASC")) {
                 ps.setString(1, tenantId);
                 ps.setString(2, runId);
+                shadowCompare("run_step", tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
+                        String rowTenant = rs.getString("tenant_id");
+                        shadowTaint("run_step", tenantId, rowTenant);
                         out.add(new StepView(
                                 rs.getInt("step_number"),
                                 rs.getString("step_type"),
@@ -208,6 +229,10 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
         // ⚠️ 语义收窄：**只有已被采集过指标的终态 Run** 能仅凭 runId 反查；
         //    未采集的 Run 必须由调用方显式传 tenantId（平台端点已支持该参数）。
         //    这不是「完整反查」，端点 404 文案必须如实说明，不能伪装成「Run 不存在」。
+        //
+        // ⚠️ <b>P1 影子态豁免</b>：本方法是<b>平台域</b>反查（系统连接、按 run_id 查、
+        //    不带租户谓词），平台运维角色合法跨租户读取——与 {@code JdbcReviewTaskRepository}
+        //    同属平台域，<b>不在</b>租户级读路径影子观测范围内（D5/C 组平台级豁免口径）。
         try (Connection conn = dataSource.getConnection()) {
             conn.setAutoCommit(false);
             TenantSessionBinder.clear(conn);
@@ -231,16 +256,19 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
     private Optional<RunMeta> readRunMeta(Connection conn, String tenantId, String runId)
             throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT run_id, trace_id, state, snapshot_id, created_at, completed_at, "
+                "SELECT tenant_id, run_id, trace_id, state, snapshot_id, created_at, completed_at, "
                         + "       EXTRACT(EPOCH FROM (completed_at - created_at)) * 1000 AS duration_ms "
                         + "FROM public.run "
                         + "WHERE tenant_id = ?::uuid AND run_id = ?::uuid")) {
             ps.setString(1, tenantId);
             ps.setString(2, runId);
+            shadowCompare("run", tenantId, true);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
                     return Optional.empty();
                 }
+                String rowTenant = rs.getString("tenant_id");
+                shadowTaint("run", tenantId, rowTenant);
                 return Optional.of(new RunMeta(
                         rs.getString("run_id"),
                         rs.getString("trace_id"),
@@ -257,16 +285,19 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
     private Optional<Map<String, Object>> readSnapshot(Connection conn, String tenantId,
                                                        String snapshotId) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT snapshot_id, version_id, agent_config, prompt_config, "
+                "SELECT tenant_id, snapshot_id, version_id, agent_config, prompt_config, "
                         + "       tool_contracts, run_config, created_at "
                         + "FROM public.execution_snapshot "
                         + "WHERE tenant_id = ?::uuid AND snapshot_id = ?::uuid")) {
             ps.setString(1, tenantId);
             ps.setString(2, snapshotId);
+            shadowCompare("execution_snapshot", tenantId, true);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
                     return Optional.empty();
                 }
+                String rowTenant = rs.getString("tenant_id");
+                shadowTaint("execution_snapshot", tenantId, rowTenant);
                 Map<String, Object> out = new LinkedHashMap<>();
                 out.put("snapshotId", rs.getString("snapshot_id"));
                 out.put("versionId", rs.getString("version_id"));
@@ -290,6 +321,7 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
                         + "WHERE tenant_id = ?::uuid AND run_id = ?::uuid")) {
             ps.setString(1, tenantId);
             ps.setString(2, runId);
+            shadowCompare("usage_record", tenantId, true);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
                     return Optional.empty();
@@ -341,5 +373,50 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
         TenantSessionBinder.bind(conn,
                 new TenantContext(tenantId, "agent-trace-replay-reader", Set.of(), 0L));
         return conn;
+    }
+
+    // ══════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /** 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。 */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）：
+     * 主体是<b>发起本次查询的租户</b>，行归属从<b>结果行</b>读出的 {@code tenant_id}。
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }

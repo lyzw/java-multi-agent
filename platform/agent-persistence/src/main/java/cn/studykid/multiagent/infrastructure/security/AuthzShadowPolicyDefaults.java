@@ -51,6 +51,9 @@ public final class AuthzShadowPolicyDefaults {
             "audit_record",
             "config_change_request",
             "tenant_config_override",
+            "run_message",
+            "execution_snapshot",
+            "usage_record",
             // 逻辑资源名（物理表 agent_trace_metric，基线 scope=NONE 的缺口表）
             "platform.agent_trace_metric");
 
