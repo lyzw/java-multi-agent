@@ -51,6 +51,15 @@ class ScopeBypassArchitectureTest {
      * <p>登记条件：持有 {@code ScopedDataAccess} 字段。
      * 一旦登记，必须<b>真的</b>在查询路径调用 {@code AuthzShadowHooks.*}；
      * 否则影子比对永远不跑，P1 的 `AUTHZ_MISMATCH=0` 毫无信息量。
+     *
+     * <p>⚠️ <b>「定义辅助方法」不算「已接」</b>（2026-11-09 实测）：辅助方法体里
+     * 天然含有 {@code AuthzShadowHooks.compare(...)}，只看这一句会把「装饰性接线」放过去。
+     * 故本台账额外要求<b>查询路径上有真实调用点</b>（见
+     * {@code integratedRepositoriesActuallyInvokeHooks}）。
+     *
+     * <p>⚠️ <b>平台级目录不在本台账</b>：{@code cap_tool_def} / {@code cap_skill_def} /
+     * {@code cap_mcp_server_def} 三张表<b>没有 {@code tenant_id} 列</b>、无 RLS ⇒ 没有行归属，
+     * 染色无从谈起；它们<b>刻意不持有 {@code ScopedDataAccess}</b>，走平台级运维通道。
      */
     private static final Set<String> INTEGRATED = Set.of(
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAgentMetricRepository.java",
@@ -62,9 +71,6 @@ class ScopeBypassArchitectureTest {
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcAuthzVersionRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapAgentChildRefRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapAgentDefRepository.java",
-            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapMcpServerDefRepository.java",
-            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapSkillDefRepository.java",
-            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapToolDefRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigReleaseRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcDelegationBudgetRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcUnknownOperationRepository.java",
@@ -82,6 +88,29 @@ class ScopeBypassArchitectureTest {
     /** 影子钩子的调用形态（静态入口，避免逐仓重复实现）。 */
     private static final Pattern HOOK_CALL =
             Pattern.compile("AuthzShadowHooks\\s*\\.\\s*(compare|taint)\\s*\\(");
+
+    /**
+     * 仓库侧影子辅助方法的<b>方法声明</b>形态。
+     *
+     * <p>⚠️ <b>为什么必须把「声明」和「调用」分开</b>（2026-11-09 实测踩坑）：
+     * {@code HOOK_CALL} 匹配的是 {@code AuthzShadowHooks.compare(...)}，它出现在
+     * <b>辅助方法体内部</b>。一个仓只要<b>定义</b>了 {@code void shadowCompare(...)}
+     * 辅助方法，就算一个查询路径都没调用，也照样能通过「接线诚实性」检查 ——
+     * 这正是 3 个 CAP 平台目录仓（cap_tool_def / cap_skill_def / cap_mcp_server_def）
+     * 曾经的形态：持有 Gate、登记在台账、辅助方法齐备，<b>但查询路径从不调用</b> ⇒
+     * 零观测 ⇒ 影子期 {@code AUTHZ_MISMATCH=0} 是<b>假绿</b>。
+     *
+     * <p>本仓的辅助方法一律声明为 {@code void} 且方法体只调用
+     * {@code AuthzShadowHooks.*}（不递归调用自身），因此
+     * 「去掉声明头后剩余的 {@code shadowCompare/shadowTaint/shadowEnter} 出现次数」
+     * 就是真实的查询路径调用点数。
+     */
+    private static final Pattern HOOK_DECLARATION =
+            Pattern.compile("\\bvoid\\s+shadow(?:Compare|Taint|Enter)\\s*\\(");
+
+    /** 仓库侧影子辅助方法的调用形态（去掉方法声明后即为真实调用点）。 */
+    private static final Pattern HOOK_INVOCATION =
+            Pattern.compile("\\bshadow(?:Compare|Taint|Enter)\\s*\\(");
 
     /** `Unrestricted` 构造形态。 */
     private static final Pattern UNRESTRICTED_NEW =
@@ -133,12 +162,38 @@ class ScopeBypassArchitectureTest {
                 String code = stripCommentsAndStrings(read(file));
                 if (!HOOK_CALL.matcher(code).find()) {
                     violations.add(rel + "（持有 ScopedDataAccess 但从不调用 AuthzShadowHooks）");
+                    continue;
+                }
+                // ⚠️ 仅「辅助方法体内有 AuthzShadowHooks 调用」不够：
+                //    必须存在<b>查询路径上的真实调用点</b>，否则是装饰性接线。
+                String withoutDeclarations = HOOK_DECLARATION.matcher(code).replaceAll("void __decl__(");
+                if (!HOOK_INVOCATION.matcher(withoutDeclarations).find()) {
+                    violations.add(rel + "（只定义了影子辅助方法、查询路径从不调用 ⇒ 装饰性接线，影子期必然假绿）");
                 }
             }
 
             assertThat(violations)
                     .as("⚠️⚠️ 「注入但不调用」的接线是装饰：影子期会给出 0 违规的假绿，"
                             + "而 P1 出口条件正是依赖这个 0")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 已接 Gate 的仓库不得是平台级对象（无 tenant_id ⇒ 染色无从谈起）")
+        void integratedRepositoriesAreNotPlatformLevel() {
+            // 平台级目录表（cap_tool_def / cap_skill_def / cap_mcp_server_def）没有 tenant_id 列，
+            // 登记成「已接 Gate」等于宣称一个不存在的租户维度。
+            List<String> platformLevel = List.of(
+                    "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapToolDefRepository.java",
+                    "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapSkillDefRepository.java",
+                    "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapMcpServerDefRepository.java");
+
+            List<String> registered = platformLevel.stream()
+                    .filter(INTEGRATED::contains)
+                    .toList();
+
+            assertThat(registered)
+                    .as("⚠️ 平台级目录没有 tenant_id，登记进台账会让人误以为它们受租户影子覆盖")
                     .isEmpty();
         }
 
@@ -253,6 +308,59 @@ class ScopeBypassArchitectureTest {
             assertThat(UNRESTRICTED_NEW.matcher(code).find())
                     .as("正常代码不得被误判为越权构造")
                     .isFalse();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 注入的「只定义辅助方法、查询路径从不调用」必须被检出")
+        void detectsDecorativeIntegration() {
+            // 2026-11-09 实测形态：3 个 CAP 平台目录仓持有 Gate、辅助方法齐备，
+            // 但查询路径一个都没调用 ⇒ 零观测 ⇒ AUTHZ_MISMATCH=0 是假绿。
+            String decorative = """
+                    package evil;
+                    class DecorativeRepository {
+                        private final ScopedDataAccess scoped;
+                        DecorativeRepository(ScopedDataAccess scoped) { this.scoped = scoped; }
+                        void shadowCompare(String resourceType, String tenantId, boolean hasPredicate) {
+                            AuthzShadowHooks.compare(scoped, reporter, true, resourceType,
+                                    subject, tenantId, hasPredicate);
+                        }
+                        void read() { }
+                    }
+                    """;
+
+            String code = stripCommentsAndStrings(decorative);
+            assertThat(HOOK_CALL.matcher(code).find())
+                    .as("辅助方法体内确有 AuthzShadowHooks 调用 —— 旧检查会误放行")
+                    .isTrue();
+
+            String withoutDeclarations = HOOK_DECLARATION.matcher(code).replaceAll("void __decl__(");
+            assertThat(HOOK_INVOCATION.matcher(withoutDeclarations).find())
+                    .as("⚠️⚠️ 只定义不调用必须被判为装饰性接线，否则 P1 出口门禁拿到的是假绿")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("✅ 真实调用不会被误判为装饰性接线（负样本）")
+        void doesNotFlagRealInvocation() {
+            String real = """
+                    package ok;
+                    class RealRepository {
+                        private final ScopedDataAccess scoped;
+                        void shadowCompare(String resourceType, String tenantId, boolean hasPredicate) {
+                            AuthzShadowHooks.compare(scoped, reporter, true, resourceType,
+                                    subject, tenantId, hasPredicate);
+                        }
+                        void read() {
+                            shadowCompare("agent", tenantId, true);
+                        }
+                    }
+                    """;
+
+            String code = stripCommentsAndStrings(real);
+            String withoutDeclarations = HOOK_DECLARATION.matcher(code).replaceAll("void __decl__(");
+            assertThat(HOOK_INVOCATION.matcher(withoutDeclarations).find())
+                    .as("查询路径确有调用点，不得被误判为装饰性接线")
+                    .isTrue();
         }
     }
 

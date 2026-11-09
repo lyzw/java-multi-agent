@@ -28,6 +28,12 @@ import org.jspecify.annotations.NonNull;
  *       影子期正好用它来证明「应用层谓词确实在」。</li>
  *   <li>哨兵（共享）行：平台域无哨兵模型 ⇒ {@code TENANT_WITH_SHARED} 不出现。
  *       RAG 域的哨兵规则在 {@code policy-mapping-rag.yaml}，随 RAG 侧接线（D5 后续）再引入。</li>
+ *   <li>平台级目录（{@code cap_tool_def} / {@code cap_skill_def} / {@code cap_mcp_server_def}）：
+ *       物理表<b>没有 {@code tenant_id} 列</b>、无 RLS ⇒ 不存在租户行归属，
+ *       租户级影子<b>无从观测</b>。这类类型<b>刻意不登记</b>，而是登记在
+ *       {@link #PLATFORM_LEVEL_RESOURCE_TYPES} 并在架构守卫里显式豁免 ——
+ *       登记成 {@code TENANT_ONLY} 反而会制造恒定假违例。
+ *       见 {@code ScopeBypassArchitectureTest} 的平台级豁免台账。</li>
  * </ol>
  */
 public final class AuthzShadowPolicyDefaults {
@@ -54,8 +60,50 @@ public final class AuthzShadowPolicyDefaults {
             "run_message",
             "execution_snapshot",
             "usage_record",
+            // ── CAP 域（2026-11-09 补登记）──────────────────────────────
+            // ⚠️ 这 4 个类型此前**未登记**，但已接入的仓库
+            //    （JdbcCapAgentDefRepository / JdbcCapAgentChildRefRepository /
+            //      JdbcAuthzVersionRepository / JdbcConfigReleaseRepository）
+            //    **用常量传参**调用影子钩子 ⇒ 覆盖扫描器（只认字面量）看不见它们
+            //    ⇒ Gate 恒返 Deny(NO_RULE) ⇒ 每次被采样的查询都记一条
+            //    「Gate 拒绝: NO_RULE」假 mismatch ⇒ AUTHZ_MISMATCH 恒非零
+            //    ⇒ P1 出口门禁（连续 2 周 =0）永远达不成，真实违例被恒定噪声淹没。
+            //    形状对齐 policy-mapping.yaml：四者均 TENANT_ONLY + forced=t。
+            "cap_agent_def",
+            "cap_agent_child_ref",
+            "cap_authz_version",
+            // ⚠️ cap_config_release 的读策略是 (tenant_id IS NULL) OR (tenant_id = current_tenant_id())
+            //    —— 含 tenant_id IS NULL 的「平台全局行」。policy-mapping.yaml 将其归类为
+            //    TENANT_ONLY；影子期沿用 yaml 口径（行级归属由结果行 tenant_id 判定，
+            //    IS NULL 的全局行在染色时因 rowTenantId==null 被跳过，见 AuthzShadowHooks.taint）。
+            //    ⚠️ P2 应用层翻译时必须单独处理 IS NULL 分支，否则会丢掉全局发布行。
+            "cap_config_release",
             // 逻辑资源名（物理表 agent_trace_metric，基线 scope=NONE 的缺口表）
             "platform.agent_trace_metric");
+
+    /**
+     * <b>平台级目录</b>：<b>刻意不纳入</b> {@link #RESOURCE_TYPES} 的资源类型。
+     *
+     * <p>判定依据（不是「懒得登记」）：
+     * <ul>
+     *   <li>物理表<b>没有 {@code tenant_id} 列</b>（{@code cap_tool_def} /
+     *       {@code cap_skill_def} / {@code cap_mcp_server_def}）—— 没有行归属，
+     *       「染色」在语义上无从谈起；</li>
+     *   <li>policy-mapping.yaml 中<b>没有它们的策略条目</b>（无 RLS），
+     *       属平台域对象，按 {@code platform.resource.read} 等平台权限走带外运维通道；</li>
+     *   <li>它们的连接走 {@code platformContext()}（平台上下文），与租户上下文无关。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>为什么不能简单登记成 TENANT_ONLY</b>：那会要求 Gate 认为这些行有租户归属，
+     * 而它们根本没有 ⇒ 登记即制造恒定假违例（同 NO_RULE 噪声）。
+     * <p>⚠️ 这些类型的仓储<b>不得持有 {@code ScopedDataAccess}</b>：持有却不观测
+     * 就是「装饰性接线」，会让 P1 的 {@code AUTHZ_MISMATCH=0} 变成假绿。
+     * 见 {@code ScopeBypassArchitectureTest} 的平台级豁免台账。
+     */
+    public static final List<String> PLATFORM_LEVEL_RESOURCE_TYPES = List.of(
+            "cap_tool_def",
+            "cap_skill_def",
+            "cap_mcp_server_def");
 
     private AuthzShadowPolicyDefaults() {
     }
