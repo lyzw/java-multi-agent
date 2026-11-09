@@ -23,8 +23,14 @@ import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
 import cn.studykid.multiagent.ports.persistence.RunLimits;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.type.TypeReference;
@@ -53,6 +59,15 @@ public class JdbcRunCreationRepository implements RunCreationPort {
 
     private final DataSource dataSource;
 
+    // ── P1 影子态字段（默认 dormant：全部 null/false，零行为变更）──
+    private static final String RUN_RESOURCE_TYPE = "run";
+    private static final String IDEMPOTENCY_RESOURCE_TYPE = "idempotency_record";
+    private static final String OUTBOX_RESOURCE_TYPE = "outbox_event";
+    private ScopedDataAccess scoped;
+    private AuthzShadowReporter reporter;
+    private String sentinelTenantId = "";
+    private boolean shadowEnabled;
+
     public JdbcRunCreationRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
     }
@@ -62,7 +77,7 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                                                               @NonNull IdempotencyKey key,
                                                               @NonNull RequestDigest digest) {
         String sql = """
-                SELECT request_digest, resource_id
+                SELECT tenant_id::text, request_digest, resource_id
                 FROM idempotency_record
                 WHERE tenant_id = ?::uuid AND key_namespace = ? AND idempotency_key = ?
                 """;
@@ -74,11 +89,13 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                 ps.setString(1, tenantId);
                 ps.setString(2, key.namespace());
                 ps.setString(3, key.keyValue());
+                shadowCompare(IDEMPOTENCY_RESOURCE_TYPE, tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) {
                         lease.rollbackQuietly();
                         return IdempotencyDecision.firstExecution("pending");
                     }
+                    shadowTaint(IDEMPOTENCY_RESOURCE_TYPE, tenantId, rs.getString("tenant_id"));
                     String storedDigest = rs.getString("request_digest");
                     String resourceId = rs.getString("resource_id");
                     lease.rollbackQuietly();
@@ -330,7 +347,7 @@ public class JdbcRunCreationRepository implements RunCreationPort {
     @Override
     public @Nullable RunRecord findRun(@NonNull String tenantId, @NonNull String runId) {
         String sql = """
-                SELECT run_id, state::text, attempt, fencing_token,
+                SELECT tenant_id::text, run_id, state::text, attempt, fencing_token,
                        lease_owner, lease_expires_at, created_at
                 FROM run WHERE tenant_id = ? AND run_id = ?::uuid
                 """;
@@ -339,11 +356,13 @@ public class JdbcRunCreationRepository implements RunCreationPort {
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, tenantId);
                 ps.setString(2, runId);
+                shadowCompare(RUN_RESOURCE_TYPE, tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) {
                         lease.rollbackQuietly();
                         return null;
                     }
+                    shadowTaint(RUN_RESOURCE_TYPE, tenantId, rs.getString("tenant_id"));
                     Timestamp leaseExp = rs.getTimestamp("lease_expires_at");
                     RunRecord record = new RunRecord(
                             rs.getString("run_id"),
@@ -365,7 +384,7 @@ public class JdbcRunCreationRepository implements RunCreationPort {
     @Override
     public @NonNull OutboxBatch loadPendingOutbox(@NonNull String tenantId, int limit) {
         String sql = """
-                SELECT outbox_id, run_id, event_type, payload, attempts
+                SELECT tenant_id::text, outbox_id, run_id, event_type, payload, attempts
                 FROM outbox_event
                 WHERE tenant_id = ?::uuid AND state = 'PENDING'
                 ORDER BY created_at
@@ -377,6 +396,7 @@ public class JdbcRunCreationRepository implements RunCreationPort {
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, tenantId);
                 ps.setInt(2, limit);
+                shadowCompare(OUTBOX_RESOURCE_TYPE, tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         events.add(new PendingOutbox(
@@ -385,6 +405,7 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                                 rs.getString("event_type"),
                                 parseJsonObject(rs.getString("payload")),
                                 rs.getInt("attempts")));
+                        shadowTaint(OUTBOX_RESOURCE_TYPE, tenantId, rs.getString("tenant_id"));
                     }
                 }
             }
@@ -503,5 +524,39 @@ public class JdbcRunCreationRepository implements RunCreationPort {
         }
         Map<String, Object> parsed = MAPPER.readValue(json, MAP_TYPE);
         return parsed == null ? new LinkedHashMap<>() : parsed;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }

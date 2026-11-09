@@ -99,6 +99,21 @@ public final class AuthzShadowPolicyDefaults {
             "cap_compensation_task",
             // execution_capability_snapshot：执行期能力快照（1 处读）。
             "execution_capability_snapshot",
+            // ── 2026-11-09 第五批（A 组剩余读路径）─────────────────
+            // cap_config_publish_request：配置变更申请（第三十四批起支持 PLATFORM 作用域）。
+            // 读路径用 `tenant_id IS NOT DISTINCT FROM ?::uuid`（兼容平台级 NULL 行）；
+            // 影子期沿用 TENANT_ONLY 口径，平台 NULL 行在染色时因 rowTenantId==null 被跳过。
+            "cap_config_publish_request",
+            // idempotency_record：幂等记录（Run 创建原子写入的一部分）。读带显式 tenant_id 谓词。
+            "idempotency_record",
+            // outbox_event：唤醒信号表（Run 创建写、Worker 读）。读带显式 tenant_id 谓词。
+            "outbox_event",
+            // ── 2026-11-09 第六批（A 组：删除/撤回域租户读，P4-D04）──────
+            // consent_withdrawal：监护人撤回同意。读（findDueWithdrawals）带显式 tenant_id 谓词。
+            "consent_withdrawal",
+            // erasure_certificate：删除凭证。读（findCertificates）带显式 tenant_id 谓词
+            //   （SELECT 已补 tenant_id::text 供逐行染色取行归属）。
+            "erasure_certificate",
             // 逻辑资源名（物理表 agent_trace_metric，基线 scope=NONE 的缺口表）
             "platform.agent_trace_metric");
 

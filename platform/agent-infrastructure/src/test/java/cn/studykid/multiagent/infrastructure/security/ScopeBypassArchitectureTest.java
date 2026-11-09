@@ -94,7 +94,34 @@ class ScopeBypassArchitectureTest {
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapApprovalRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCompensationTaskRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcCapabilitySnapshotRepository.java",
-            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAuditRepository.java");
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAuditRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcApprovalRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcConfigPublishRequestRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcRunCreationRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcErasureRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigLifecycleRepository.java");
+
+    /**
+     * 平台级 / 混合作用域仓储（刻意<b>不</b>接 Gate、<b>不</b>登记为已接）：
+     * 这些物理表要么<b>没有 {@code tenant_id} 列</b>（{@code sys_dictionary} /
+     * {@code tenant} / {@code model_catalog} / {@code provider_credential} /
+     * {@code review_task} / 三个平台级 CAP 目录），要么<b>走平台 schema / 运维连接</b>
+     * （{@code cap_config_pointer} 的 CAS 指针用 {@code pointer_key} 编码 scope+tenant，
+     * {@code JdbcPlatformAgentDirectoryRepository} 做跨租户列举）。
+     * 它们不存在「逐行租户归属」可供染色，故走平台级运维通道，P1 影子期不观测。
+     *
+     * <p>⚠️ <b>若将来要观测其中某个</b>：必须先登记资源类型 + 接钩子，并把对应文件
+     * 从本豁免名单移到 {@link #INTEGRATED}，否则 {@code scopedHoldersAreRegistered}
+     * 会把它当成「漏登记的 Gate 持有者」而报错。
+     */
+    private static final Set<String> PLATFORM_LEVEL_EXEMPT = Set.of(
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigPointerRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcPlatformAgentDirectoryRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcDictionaryRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcPlatformTenantRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcModelCatalogRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcProviderCredentialRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcReviewTaskRepository.java");
 
     /** 影子钩子的调用形态（静态入口，避免逐仓重复实现）。 */
     private static final Pattern HOOK_CALL =
@@ -205,6 +232,27 @@ class ScopeBypassArchitectureTest {
 
             assertThat(registered)
                     .as("⚠️ 平台级目录没有 tenant_id，登记进台账会让人误以为它们受租户影子覆盖")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("⚠️ 平台级/混合作用域仓储不得持有 ScopedDataAccess（否则会假装受租户影子覆盖）")
+        void platformLevelRepositoriesDoNotHoldScopedDataAccess() {
+            List<String> violations = new ArrayList<>();
+            for (String rel : PLATFORM_LEVEL_EXEMPT) {
+                Path file = platformRoot().resolve(rel);
+                if (!Files.exists(file)) {
+                    violations.add(rel + "（豁免名单漂移：文件不存在）");
+                    continue;
+                }
+                String code = stripCommentsAndStrings(read(file));
+                if (SCOPED_HOLDER.matcher(code).find()) {
+                    violations.add(rel + "（平台级/混合作用域对象不应持有 ScopedDataAccess）");
+                }
+            }
+            assertThat(violations)
+                    .as("平台级/混合作用域仓储刻意不接 Gate：它们没有租户行归属，"
+                            + "持有 ScopedDataAccess 会制造恒定假违例（同 NO_RULE 噪声）")
                     .isEmpty();
         }
 

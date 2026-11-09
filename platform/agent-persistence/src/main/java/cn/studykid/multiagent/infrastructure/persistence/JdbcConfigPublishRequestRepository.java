@@ -22,8 +22,14 @@ import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.page.PageCursor;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.AuditPort;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort;
 import cn.studykid.multiagent.ports.persistence.Page;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * 配置变更申请仓储（P6R4 · 管理端点）。
@@ -74,6 +80,13 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
 
     private final DataSource dataSource;
     private final AuditPort audit;
+
+    // ── P1 影子态字段（默认 dormant：全部 null/false，零行为变更）──
+    private static final String RESOURCE_TYPE = "cap_config_publish_request";
+    private ScopedDataAccess scoped;
+    private AuthzShadowReporter reporter;
+    private String sentinelTenantId = "";
+    private boolean shadowEnabled;
 
     public JdbcConfigPublishRequestRepository(@NonNull DataSource dataSource,
                                               @NonNull AuditPort audit) {
@@ -146,8 +159,17 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
             try (PreparedStatement ps = lease.connection().prepareStatement(sql)) {
                 bindTenant(ps, 1, tenantId);
                 ps.setString(2, requestId);
+                if (tenantId != null) {
+                    shadowCompare(RESOURCE_TYPE, tenantId, true);
+                }
                 try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next() ? Optional.of(read(rs)) : Optional.empty();
+                    if (!rs.next()) {
+                        return Optional.empty();
+                    }
+                    if (tenantId != null) {
+                        shadowTaint(RESOURCE_TYPE, tenantId, rs.getString("tenant_id"));
+                    }
+                    return Optional.of(read(rs));
                 }
             }
         } catch (SQLException e) {
@@ -188,9 +210,15 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             try (PreparedStatement ps = lease.connection().prepareStatement(sql.toString())) {
                 bind(ps, params);
+                if (tenantId != null) {
+                    shadowCompare(RESOURCE_TYPE, tenantId, true);
+                }
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         rows.add(read(rs));
+                        if (tenantId != null) {
+                            shadowTaint(RESOURCE_TYPE, tenantId, rs.getString("tenant_id"));
+                        }
                     }
                 }
             }
@@ -501,5 +529,39 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
     /** 审计的租户维度：平台作用域用零 UUID 哨兵。 */
     private static String auditTenant(@Nullable String tenantId) {
         return tenantId == null ? PLATFORM_SCOPE_TENANT : tenantId;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }

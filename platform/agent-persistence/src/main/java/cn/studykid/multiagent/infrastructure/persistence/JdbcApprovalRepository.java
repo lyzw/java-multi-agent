@@ -20,8 +20,14 @@ import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.config.ApprovalRequirement;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.ApprovalPort;
 import cn.studykid.multiagent.ports.persistence.AuditPort;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * {@link ApprovalPort} 的 JDBC 实现（P3-D05 / FR-013）。
@@ -44,17 +50,16 @@ import cn.studykid.multiagent.ports.persistence.AuditPort;
  * （V5 迁移）禁止从终态（CONSUMED/EXPIRED/REJECTED）非法迁出，
  * 与应用层校验构成双保险（D-4）。
  *
- * <p><b>P1 影子态（RLS→应用层迁移）盲区标注</b>：本仓为<b>写主导</b>，
- * 不参与 P1 影子染色（12 文 §4.5 / 13 文 §5.2 明确 P1 只观测「返回行给调用方的读路径」）。
- * 其读路径有两类，均被排除：
- * <ol>
+ * <p><b>P1 影子态（RLS→应用层迁移）</b>：本仓为<b>写主导</b>，
+ * P1 只观测「返回行给调用方的读路径」（12 文 §4.5 / 13 文 §5.2）。
+ * <ul>
+ *   <li>{@code findActive} 读 {@code approval} 表（已登记
+ *       {@code AuthzShadowPolicyDefaults.RESOURCE_TYPES}），自带显式
+ *       {@code tenant_id = ?::uuid} 谓词 ⇒ 已接影子比对 + 逐行染色；</li>
  *   <li>{@code lockRun}/{@code lockApproval} 是<b>写事务内的 FOR UPDATE 锁</b>
- *       （{@code consume} 原子取消检查 / 串行化消费），不向调用方返回行列；</li>
- *   <li>{@code findActive} 读 {@code approval} 表，而 {@code approval} 尚未登记进
- *       {@code AuthzShadowPolicyDefaults.RESOURCE_TYPES}（D 组高敏 4 表不含它）。</li>
- * </ol>
- * ⚠️ 因此本仓在 P1 的租户隔离仍由 <b>RLS 强制</b>兜底；其写事务（grant/consume/revoke）
- * 的「未来应用层强制」属于 P2 双写/阻断范围，不在此处影子观测。
+ *       （{@code consume} 原子取消检查 / 串行化消费），不向调用方返回行列 ⇒ 不观测；
+ *       其租户隔离在 P1 仍由 RLS 强制兜底，应用层强制属 P2 双写/阻断范围。</li>
+ * </ul>
  */
 public class JdbcApprovalRepository implements ApprovalPort {
 
@@ -70,6 +75,13 @@ public class JdbcApprovalRepository implements ApprovalPort {
      * 生产装配必须传入真实实现——否则 R-1 的「审批决定可追溯」名存实亡。
      */
     private final AuditPort audit;
+
+    // ── P1 影子态字段（默认 dormant：全部 null/false，零行为变更）──
+    private static final String RESOURCE_TYPE = "approval";
+    private ScopedDataAccess scoped;
+    private AuthzShadowReporter reporter;
+    private String sentinelTenantId = "";
+    private boolean shadowEnabled;
 
     /** 空审计（未装配时的占位）。生产<b>必须</b>替换为真实实现。 */
     private static final AuditPort NO_AUDIT = new AuditPort() {
@@ -330,7 +342,7 @@ public class JdbcApprovalRepository implements ApprovalPort {
                                                      @NonNull String operationId) {
         return inTenantTx(tenantId, conn -> {
             String sql = """
-                    SELECT approval_id::text, state::text, requirement::text,
+                    SELECT tenant_id::text, approval_id::text, state::text, requirement::text,
                            expires_at, approver_id
                     FROM approval
                     WHERE tenant_id = ?::uuid AND operation_id = ?::uuid
@@ -339,10 +351,12 @@ public class JdbcApprovalRepository implements ApprovalPort {
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, tenantId);
                 ps.setString(2, operationId);
+                shadowCompare(RESOURCE_TYPE, tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) {
                         return Optional.empty();
                     }
+                    shadowTaint(RESOURCE_TYPE, tenantId, rs.getString("tenant_id"));
                     ApprovalOutcome state = switch (rs.getString("state")) {
                         case "APPROVED" -> ApprovalOutcome.CONSUMED; // 有效待消费
                         case "PENDING" -> ApprovalOutcome.NOT_APPROVED;
@@ -459,6 +473,40 @@ public class JdbcApprovalRepository implements ApprovalPort {
     /** 审批状态（与 DB approval_state 枚举对齐）。 */
     private enum ApprovalState {
         PENDING, APPROVED, REJECTED, EXPIRED, CONSUMED
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 
     /**

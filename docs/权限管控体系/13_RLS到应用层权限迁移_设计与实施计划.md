@@ -40,7 +40,7 @@
 | 阶段 | 周期 | 目标 | 出口门禁（硬） |
 |---|---|---|---|
 | **P0 准备** | 2 周 | 基线校正 + L0/L1/L2 骨架 + 三份盘点 | D1 `meta.source==agent_dev`；Gate 单测绿；主数据源确为 `app_agent` |
-| **P1 影子** | 3 周 | 离线比对 + 染色上线 | ≥2 周 `AUTHZ_MISMATCH=0`；任何 mismatch 修基线 |
+| **P1 影子** | 3 周 | 离线比对 + 染色上线 | ≥2 周 `AUTHZ_MISMATCH=0` 且 `rlsDependent=0`；任何 mismatch 修基线 |
 | **P2 双写** | 4 周 | SQL 切换为翻译结果 + 反证改造 | 全量 IT 绿 + 双反证通过 + EXPLAIN 对比达标 |
 | **P3 逐表退役** | 8 周 | 分批 `DROP POLICY`（B1–B4，含白名单） | 每批跨租户仍红 + 回滚演练 + 应用层回退就绪 |
 | **P4 收口** | 持续 | 规则进配置中心 + 纪律反转 | 新增表默认无 RLS，评审检查注册 + scoped |
@@ -94,7 +94,8 @@
 
 **验收标准**
 - [x] **影子机制在真实库上跑通过**（`AuthzShadowLiveIT`，2026-11-02）：`shadowSamples>0`、同租户 `mismatch=0` / `taint=0`、跨租户**必须变红**；
-- [ ] 影子期 ≥2 周（含全量 IT 全绿）`AUTHZ_MISMATCH = 0`；
+- [x] **`rlsDependent = 0`（退役 RLS 的真正出口，2026-11-09 修正）**：影子期结束时，所有被观测的租户读查询都必须自带显式 `tenant_id` 谓词（即 `hasTenantPredicate=true`，`AuthzShadowHooks.compare` 不再记 `reportRlsDependent`）。⚠️ 这比 `AUTHZ_MISMATCH=0` 更严格也更诚实：RLS 仍在时染色/比对<b>结构性为 0</b>，`AUTHZ_MISMATCH=0` <b>无论隔离做没做都会达成</b>，不能证明「退役 RLS 后不漏」。`rlsDependent` 才是直接对应「退役 RLS 后是否还会漏」的量（见 `AuthzShadowReporter#reportRlsDependent` 与其 Javadoc 的推导）。
+- [ ] 影子期 ≥2 周（含全量 IT 全绿）`AUTHZ_MISMATCH = 0` 且 `rlsDependent = 0`；
 - [ ] 高敏接口（导出/检索/统计/跨租户读）100% 染色无违例；
 - [ ] **影子态在目标环境真实开启过**（`agent.authz.shadow.enabled=true` 且 `shadowSamples>0`）——「一次没跑过」不算通过；
 - [ ] **任何 mismatch 归因到基线/形态并修基线，绝不修代码迁就**（见 §3 红线 5）。

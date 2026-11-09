@@ -15,11 +15,18 @@ import java.util.Set;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.ErasurePort;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * {@link ErasurePort} 的 JDBC 实现（P4-D04）。
@@ -42,6 +49,13 @@ import cn.studykid.multiagent.ports.persistence.ErasurePort;
  * 清理是周期性批量操作，单条语句失败不应回滚整个租户的清理成果
  * （已经删掉的数据无法回滚，强行回滚反而造成「凭证与事实不一致」）。
  * 因此本类不提供跨方法的原子性，由上层 {@code RetentionPurgeService} 决定补写方式。
+ *
+ * <p>⚠️ <b>P1 影子态：只观测读路径</b>：{@link #findDueWithdrawals}（查到期撤回）
+ * 与 {@link #findCertificates}（查删除凭证）均带显式 {@code tenant_id = ?::uuid} 谓词
+ * （{@code hasTenantPredicate=true}），已接影子钩子。
+ * 其余方法为 DELETE/UPDATE/INSERT（写路径，含 {@code consent_withdrawal} /
+ * {@code erasure_certificate} 之外的多张表的清理），写隔离由 RLS 的 {@code WITH CHECK}
+ * 保证，属 P2 双写期接入范围 —— P1 不观测。
  */
 public class JdbcErasureRepository implements ErasurePort {
 
@@ -51,10 +65,34 @@ public class JdbcErasureRepository implements ErasurePort {
     private static final Set<String> TERMINAL_STATES =
             Set.of("SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT");
 
+    /** 影子比对/染色的资源类型（对齐 policy-mapping.yaml 的 TENANT_ONLY）。 */
+    private static final String RESOURCE_TYPE_CONSENT_WITHDRAWAL = "consent_withdrawal";
+    private static final String RESOURCE_TYPE_ERASURE_CERTIFICATE = "erasure_certificate";
+
     private final DataSource dataSource;
 
+    // ── P1 影子态字段（默认 dormant：全部 null/false，零行为变更）──
+    private ScopedDataAccess scoped;
+    private AuthzShadowReporter reporter;
+    private String sentinelTenantId = "";
+    private boolean shadowEnabled;
+
+    @Autowired
     public JdbcErasureRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    /** 影子态接线构造（测试与包内装配用；生产走 {@link #bindAuthzShadow} setter）。 */
+    JdbcErasureRepository(@NonNull DataSource dataSource,
+                          @Nullable ScopedDataAccess scoped,
+                          @Nullable AuthzShadowReporter reporter,
+                          boolean shadowEnabled,
+                          @NonNull String sentinelTenantId) {
+        this.dataSource = dataSource;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     @Override
@@ -218,9 +256,13 @@ public class JdbcErasureRepository implements ErasurePort {
                             + "ORDER BY due_at LIMIT 1000")) {
                 ps.setString(1, tenantId);
                 ps.setTimestamp(2, Timestamp.from(now));
+                // ⚠️ hasTenantPredicate=true：SQL 自带显式 `tenant_id = ?::uuid`。
+                shadowCompare(RESOURCE_TYPE_CONSENT_WITHDRAWAL, tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     List<PendingWithdrawal> rows = new ArrayList<>();
                     while (rs.next()) {
+                        // 逐行染色：行归属取结果行的 tenant_id（与绑定租户比对）。
+                        shadowTaint(RESOURCE_TYPE_CONSENT_WITHDRAWAL, tenantId, rs.getString("tenant_id"));
                         rows.add(new PendingWithdrawal(
                                 rs.getString("tenant_id"),
                                 rs.getString("student_id"),
@@ -318,16 +360,20 @@ public class JdbcErasureRepository implements ErasurePort {
                                                               int limit) {
         return inTenantTx(tenantId, conn -> {
             try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT reason, actor, executed_at, window_key, subject_key, detail "
+                    "SELECT tenant_id::text, reason, actor, executed_at, window_key, subject_key, detail "
                             + "FROM erasure_certificate "
                             + "WHERE tenant_id = ?::uuid AND reason = ? "
                             + "ORDER BY executed_at DESC LIMIT ?")) {
                 ps.setString(1, tenantId);
                 ps.setString(2, reason);
                 ps.setInt(3, limit);
+                // ⚠️ hasTenantPredicate=true：SQL 自带显式 `tenant_id = ?::uuid`。
+                shadowCompare(RESOURCE_TYPE_ERASURE_CERTIFICATE, tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     List<ErasureCertificate> out = new ArrayList<>();
                     while (rs.next()) {
+                        // 逐行染色：行归属取结果行的 tenant_id（与绑定租户比对）。
+                        shadowTaint(RESOURCE_TYPE_ERASURE_CERTIFICATE, tenantId, rs.getString("tenant_id"));
                         out.add(new ErasureCertificate(
                                 rs.getString("reason"),
                                 rs.getString("actor"),
@@ -537,5 +583,54 @@ public class JdbcErasureRepository implements ErasurePort {
     @FunctionalInterface
     private interface TxAction<T> {
         T run(Connection conn) throws SQLException;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。
+     *
+     * @param hasTenantPredicate 该查询的 SQL 是否真的带了显式租户谓词（必须如实填写）。
+     */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）：
+     * 主体是<b>发起本次查询的租户</b>，行归属从<b>结果行</b>读出的 {@code tenant_id}。
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }
