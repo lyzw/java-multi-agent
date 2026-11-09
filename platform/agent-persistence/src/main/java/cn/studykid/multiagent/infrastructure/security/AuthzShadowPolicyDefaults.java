@@ -90,6 +90,15 @@ public final class AuthzShadowPolicyDefaults {
             "cap_routing_policy",
             "cap_execution_intent",
             "cap_result_event",
+            // ── 2026-11-09 第四批 CAP 域（3 仓）────────────────────────
+            // cap_approval：CAP 审批。⚠️ 写路径（grant / requestHumanApproval / reserve /
+            // consume / cancel）用 INSERT…RETURNING，**RETURNING 也是 executeQuery**，
+            // 但那是写路径 ⇒ P1 不观测（影子钩子只挂在 3 处读查询上）。
+            "cap_approval",
+            // cap_compensation_task：补偿任务（2 处读，均带显式租户谓词）。
+            "cap_compensation_task",
+            // execution_capability_snapshot：执行期能力快照（1 处读）。
+            "execution_capability_snapshot",
             // 逻辑资源名（物理表 agent_trace_metric，基线 scope=NONE 的缺口表）
             "platform.agent_trace_metric");
 

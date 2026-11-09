@@ -35,21 +35,27 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * CAP 域<b>形态一致</b>的 4 个租户级仓储的 P1 影子态接线测试（表驱动）。
+ * CAP 域<b>形态一致</b>的 7 个租户级仓储的 P1 影子态接线测试（表驱动）。
  *
  * <p>覆盖：{@code JdbcCapResultContractRepository}（cap_result_contract）、
  * {@code JdbcCapRoutingPolicyRepository}（cap_routing_policy）、
  * {@code JdbcExecutionIntentRepository}（cap_execution_intent）、
- * {@code JdbcResultEventRepository}（cap_result_event）。
+ * {@code JdbcResultEventRepository}（cap_result_event）、
+ * {@code JdbcCapApprovalRepository}（cap_approval）、
+ * {@code JdbcCompensationTaskRepository}（cap_compensation_task）、
+ * {@code JdbcCapabilitySnapshotRepository}（execution_capability_snapshot）。
  *
- * <p>⚠️ <b>为什么用表驱动而不是一仓一测</b>：这 4 个仓的读路径形态完全一致 ——
+ * <p>⚠️ <b>为什么用表驱动而不是一仓一测</b>：这 7 个仓的读路径形态完全一致 ——
  * 1 参构造 + 资源类型常量 + SQL 自带显式 {@code tenant_id = ?::uuid} 谓词 +
  * SELECT 已含 {@code tenant_id::text} ⇒ 逐行染色可直接取行归属。
- * 「一致」本身是需要被断言的事实，用同一张表断言比复制 4 份更贴近真相；
+ * 「一致」本身是需要被断言的事实，用同一张表断言比复制 7 份更贴近真相；
  * 任一仓的形态若变了（例如少了租户谓词、或改成了平台域），本表会立刻暴露。
  *
- * <p>四者均为 policy-mapping.yaml 的 TENANT_ONLY + forced=t ⇒
+ * <p>七者均为 policy-mapping.yaml 的 TENANT_ONLY + forced=t ⇒
  * {@code hasTenantPredicate} 一律 {@code true}（不计入「RLS 依赖」清单）。
+ * 其中 {@code JdbcCapApprovalRepository} 的写路径用 {@code INSERT…RETURNING}
+ * （同样走 {@code executeQuery}）但<b>刻意不接影子钩子</b> —— 写隔离由 RLS
+ * {@code WITH CHECK} 保证，属 P2 范围，避免把写事务误记成读观测。
  *
  * <p>本测试证明「染色 / 比对确实有检出力」，而不是恒不违例的摆设（D13 防同义反复）。
  */
@@ -86,7 +92,10 @@ class CapUniformTenantScopedShadowTest {
                 capResultContractCase(),
                 capRoutingPolicyCase(),
                 executionIntentCase(),
-                resultEventCase());
+                resultEventCase(),
+                capApprovalCase(),
+                compensationTaskCase(),
+                capabilitySnapshotCase());
     }
 
     private static Case capResultContractCase() {
@@ -161,6 +170,59 @@ class CapUniformTenantScopedShadowTest {
                 binding -> repo.bindAuthzShadow(binding));
     }
 
+    private static Case capApprovalCase() {
+        JdbcCapApprovalRepository repo = new JdbcCapApprovalRepository(new NoConnectDataSource());
+        ShadowTarget target = new ShadowTarget() {
+            @Override
+            public void compare(String t, String tenantId, boolean p) {
+                repo.shadowCompare(t, tenantId, p);
+            }
+
+            @Override
+            public void taint(String t, String subjectTenantId, String rowTenantId) {
+                repo.shadowTaint(t, subjectTenantId, rowTenantId);
+            }
+        };
+        return new Case("cap_approval", "cap_approval", target,
+                binding -> repo.bindAuthzShadow(binding));
+    }
+
+    private static Case compensationTaskCase() {
+        JdbcCompensationTaskRepository repo =
+                new JdbcCompensationTaskRepository(new NoConnectDataSource());
+        ShadowTarget target = new ShadowTarget() {
+            @Override
+            public void compare(String t, String tenantId, boolean p) {
+                repo.shadowCompare(t, tenantId, p);
+            }
+
+            @Override
+            public void taint(String t, String subjectTenantId, String rowTenantId) {
+                repo.shadowTaint(t, subjectTenantId, rowTenantId);
+            }
+        };
+        return new Case("cap_compensation_task", "cap_compensation_task", target,
+                binding -> repo.bindAuthzShadow(binding));
+    }
+
+    private static Case capabilitySnapshotCase() {
+        JdbcCapabilitySnapshotRepository repo =
+                new JdbcCapabilitySnapshotRepository(new NoConnectDataSource());
+        ShadowTarget target = new ShadowTarget() {
+            @Override
+            public void compare(String t, String tenantId, boolean p) {
+                repo.shadowCompare(t, tenantId, p);
+            }
+
+            @Override
+            public void taint(String t, String subjectTenantId, String rowTenantId) {
+                repo.shadowTaint(t, subjectTenantId, rowTenantId);
+            }
+        };
+        return new Case("execution_capability_snapshot", "execution_capability_snapshot", target,
+                binding -> repo.bindAuthzShadow(binding));
+    }
+
     /** 固定 ScopeFilter 的测试夹具。 */
     private static final class Fixture {
         final Case c;
@@ -191,11 +253,11 @@ class CapUniformTenantScopedShadowTest {
     }
 
     @Test
-    @DisplayName("⚠️ 4 个 CAP 租户级仓储都在表内、且资源类型互不重复")
+    @DisplayName("⚠️ 7 个 CAP 租户级仓储都在表内、且资源类型互不重复")
     void allCasesPresent() {
         List<Case> all = cases();
-        assertEquals(4, all.size());
-        assertEquals(4, all.stream().map(c -> c.resourceType).distinct().count());
+        assertEquals(7, all.size());
+        assertEquals(7, all.stream().map(c -> c.resourceType).distinct().count());
     }
 
     @Test

@@ -14,11 +14,17 @@ import java.util.UUID;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.cap.CapApproval;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
 import cn.studykid.multiagent.ports.persistence.CapApprovalPort;
 
 /**
@@ -37,8 +43,16 @@ import cn.studykid.multiagent.ports.persistence.CapApprovalPort;
  * 这两个哈希在授予时确定，消费时只做比对。
  * 若允许消费侧改写，就等于「先改绑定再通过校验」——
  * 防参数替换重放将形同虚设。
+ *
+ * <p>⚠️ <b>P1 影子态：只观测读路径</b>：CAP 审批。**3 处读查询**（findById / findByTool / findByInvocation）已接影子；
+ * 写路径（grant / requestHumanApproval / reserve / consume / cancel）用 {@code INSERT…RETURNING}，
+ * 而 {@code RETURNING} 同样走 {@code executeQuery} —— ⚠️ <b>它是写路径，不接影子钩子</b>
+ * （否则会把写事务误记成读观测）。写隔离由 RLS {@code WITH CHECK} 保证，属 P2 范围。
  */
 public class JdbcCapApprovalRepository implements CapApprovalPort {
+    /** 影子比对/染色的资源类型（对齐 policy-mapping.yaml 的 TENANT_ONLY）。 */
+    private static final String RESOURCE_TYPE = "cap_approval";
+
 
     private static final String COLUMNS = """
             approval_id::text, tenant_id::text, principal_id, run_id::text,
@@ -159,8 +173,27 @@ public class JdbcCapApprovalRepository implements CapApprovalPort {
 
     private final DataSource dataSource;
 
+    // ── P1 影子态字段（默认 dormant：全部 null/false，零行为变更）──
+    private ScopedDataAccess scoped;
+    private AuthzShadowReporter reporter;
+    private String sentinelTenantId = "";
+    private boolean shadowEnabled;
+
     public JdbcCapApprovalRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    /** 影子态接线构造（测试与包内装配用；生产走 {@link #bindAuthzShadow} setter）。 */
+    JdbcCapApprovalRepository(@NonNull DataSource dataSource,
+                          @Nullable ScopedDataAccess scoped,
+                          @Nullable AuthzShadowReporter reporter,
+                          boolean shadowEnabled,
+                          @NonNull String sentinelTenantId) {
+        this.dataSource = dataSource;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     @Override
@@ -385,10 +418,14 @@ public class JdbcCapApprovalRepository implements CapApprovalPort {
                     try (PreparedStatement ps = conn.prepareStatement(SQL_FIND_BY_ID)) {
                         ps.setString(1, tenantId);
                         ps.setString(2, approvalId);
+                        // ⚠️ hasTenantPredicate=true：SQL 自带显式 `tenant_id = ?::uuid`。
+                        shadowCompare(RESOURCE_TYPE, tenantId, true);
                         try (ResultSet rs = ps.executeQuery()) {
-                            return rs.next()
-                                    ? Optional.of(map(rs))
-                                    : Optional.<CapApproval>empty();
+                            if (!rs.next()) {
+                                return Optional.empty();
+                            }
+                        shadowTaint(RESOURCE_TYPE, tenantId, rs.getString("tenant_id"));
+                        return Optional.of(map(rs));
                         }
                     }
                 });
@@ -404,8 +441,11 @@ public class JdbcCapApprovalRepository implements CapApprovalPort {
                     try (PreparedStatement ps = conn.prepareStatement(SQL_FIND_BY_TOOL)) {
                         ps.setString(1, tenantId);
                         ps.setString(2, toolId);
+                        // ⚠️ hasTenantPredicate=true：SQL 自带显式 `tenant_id = ?::uuid`。
+                        shadowCompare(RESOURCE_TYPE, tenantId, true);
                         try (ResultSet rs = ps.executeQuery()) {
                             while (rs.next()) {
+                                shadowTaint(RESOURCE_TYPE, tenantId, rs.getString("tenant_id"));
                                 out.add(map(rs));
                             }
                         }
@@ -423,10 +463,14 @@ public class JdbcCapApprovalRepository implements CapApprovalPort {
                     try (PreparedStatement ps = conn.prepareStatement(SQL_FIND_BY_INVOCATION)) {
                         ps.setString(1, tenantId);
                         ps.setString(2, invocationId);
+                        // ⚠️ hasTenantPredicate=true：SQL 自带显式 `tenant_id = ?::uuid`。
+                        shadowCompare(RESOURCE_TYPE, tenantId, true);
                         try (ResultSet rs = ps.executeQuery()) {
-                            return rs.next()
-                                    ? Optional.of(map(rs))
-                                    : Optional.<CapApproval>empty();
+                            if (!rs.next()) {
+                                return Optional.empty();
+                            }
+                        shadowTaint(RESOURCE_TYPE, tenantId, rs.getString("tenant_id"));
+                        return Optional.of(map(rs));
                         }
                     }
                 });
@@ -465,5 +509,54 @@ public class JdbcCapApprovalRepository implements CapApprovalPort {
     /** 生成新的审批 id（供测试与补偿任务构造使用）。 */
     public static @NonNull String newApprovalId() {
         return UUID.randomUUID().toString();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。
+     *
+     * @param hasTenantPredicate 该查询的 SQL 是否真的带了显式租户谓词（必须如实填写）。
+     */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）：
+     * 主体是<b>发起本次查询的租户</b>，行归属从<b>结果行</b>读出的 {@code tenant_id}。
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }
