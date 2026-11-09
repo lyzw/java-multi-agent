@@ -12,6 +12,7 @@ import {
 } from 'antd'
 import { ApiError } from '@/api/client'
 import { fetchPlatformTranscript, type TranscriptResponse } from '@/api/traceReviewApi'
+import { ToolOperationDetails } from '@/features/quality/ToolOperationDetails'
 import {
   messageBody,
   renderDuration,
@@ -190,6 +191,12 @@ export function TraceTranscriptDrawer({ runId, tenantId, open, onClose }: Props)
                           </Typography.Text>
                         ))}
                       </Space>
+                    )}
+                    {/* ⚠️ 只有 TOOL 行才可能下钻到 tool_operation 原始参数 */}
+                    {m.role === 'TOOL' && (
+                      <div style={{ marginTop: 8 }}>
+                        <ToolOperationDetails operationId={m.toolOperationId} tenantId={tenantId} />
+                      </div>
                     )}
                   </Card>
                 )

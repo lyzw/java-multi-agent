@@ -135,6 +135,21 @@ export function fetchPlatformTranscript(runId: string, tenantId?: string): Promi
   )
 }
 
+/**
+ * 读取一次工具调用的原始详情（TOOL 消息下钻）。
+ *
+ * ⚠️ tenantId 必填：tool_operation 是 FORCE RLS 的租户域表，
+ * 只有 (tenantId, operationId) 才能命中；跨租户查恒 404。
+ */
+export function fetchToolOperation(
+  operationId: string,
+  tenantId: string,
+): Promise<{ operationId: string; detail: Record<string, unknown> }> {
+  return request(
+    `${TRANSCRIPT_BASE}/tool-operations/${encodeURIComponent(operationId)}?tenantId=${encodeURIComponent(tenantId)}`,
+  )
+}
+
 export interface ReviewTaskQuery {
   /** 精确状态；不传 = 待处理视图（PENDING + IN_REVIEW）。 */
   status?: string

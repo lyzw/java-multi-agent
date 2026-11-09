@@ -13,6 +13,7 @@ import {
   dismissReviewTask,
   fetchPlatformTranscript,
   fetchReviewTasks,
+  fetchToolOperation,
   resolveReviewTask,
 } from '@/api/traceReviewApi'
 
@@ -68,6 +69,29 @@ describe('对话回放端点', () => {
     expect(calls[0]?.url).toBe(
       '/api/platform/v1/runs/run-1/transcript?tenantId=2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2',
     )
+  })
+})
+
+describe('TOOL 消息下钻端点', () => {
+  it('路径与后端一致，且 tenantId 必带（tool_operation 是 FORCE RLS 租户域表）', async () => {
+    reply(200, { operationId: 'op-1', detail: {} })
+    await fetchToolOperation('op-1', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2')
+    expect(calls[0]?.url).toBe(
+      '/api/platform/v1/runs/tool-operations/op-1?tenantId=2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2',
+    )
+    expect(calls[0]?.url).not.toContain('/api/api/')
+  })
+
+  it('operationId 做 URL 编码，不把原始串直接拼进路径', async () => {
+    reply(200, { operationId: 'x', detail: {} })
+    await fetchToolOperation('op/with space', 't-1')
+    expect(calls[0]?.url).toContain('/tool-operations/op%2Fwith%20space?')
+  })
+
+  it('tenantId 做 URL 编码', async () => {
+    reply(200, { operationId: 'x', detail: {} })
+    await fetchToolOperation('op-1', 'tenant/with space')
+    expect(calls[0]?.url).toContain('tenantId=tenant%2Fwith%20space')
   })
 })
 

@@ -1004,20 +1004,27 @@ public class RunExecutionLoop {
                 //    无上限落库会让 run_message 迅速膨胀）。
                 //    ⚠️ 拒绝原因保留（审查时最关键的就是「为什么被拒」），
                 //    但它已是闸门给出的原因码，不含参数原文。
+                // ⚠️⚠️ **tool_operation_id 必须写进 TOOL 行**（2026-11-09 补）：
+                //    此前恒为 NULL ⇒ 审查者无法从对话回放跳到工具调用的原始参数/返回，
+                //    「点击 TOOL 消息展开 tool_operation 详情」（详细设计 §8.3）整条链断在第一环。
+                //    只写主键，不写参数原文 —— 原文留在 tool_operation 表按权限读。
                 for (String tool : toolResult.succeededTools()) {
                     appendToolMessage(tenantId, task, steps, tool, "SUCCEEDED",
                             toolResult.outputOf(tool).orElse(null),
                             toolResult.rejectionReasonOf(tool).orElse(null),
+                            toolResult.operationIdOf(tool).orElse(null),
                             java.time.Duration.between(toolStart, toolEnd).toMillis());
                 }
                 for (String tool : toolResult.failedTools()) {
                     appendToolMessage(tenantId, task, steps, tool, "FAILED", null,
                             toolResult.rejectionReasonOf(tool).orElse(null),
+                            toolResult.operationIdOf(tool).orElse(null),
                             java.time.Duration.between(toolStart, toolEnd).toMillis());
                 }
                 for (String tool : toolResult.rejectedTools()) {
                     appendToolMessage(tenantId, task, steps, tool, "REJECTED", null,
                             toolResult.rejectionReasonOf(tool).orElse(null),
+                            toolResult.operationIdOf(tool).orElse(null),
                             java.time.Duration.between(toolStart, toolEnd).toMillis());
                 }
 
@@ -1287,14 +1294,17 @@ public class RunExecutionLoop {
     private void appendToolMessage(String tenantId, RunClaimPort.LeasedTask task,
                                     int stepNumber, @NonNull String toolName,
                                     @NonNull String state, @Nullable String output,
-                                    @Nullable String reason, @Nullable Long latencyMs) {
+                                    @Nullable String reason, @Nullable String operationId,
+                                    @Nullable Long latencyMs) {
         java.util.Map<String, Object> content = new java.util.LinkedHashMap<>();
         content.put("toolName", toolName);
         content.put("state", state);
         content.put("output", summarizeToolOutput(output));
         content.put("reason", reason == null ? "" : reason);
+        // ⚠️ tool_operation_id 走**独立的列**而非 content 里：
+        //    回放端点按列过滤/联查，混进 jsonb 就只能全表扫。
         appendMessage(tenantId, task, stepNumber, RunMessagePort.Roles.TOOL,
-                content, null, null, null, null, latencyMs);
+                content, operationId, null, null, null, latencyMs);
     }
 
     /**

@@ -61,6 +61,29 @@ public class TraceReplayService {
     }
 
     /**
+     * 读取一次工具调用的原始详情（TOOL 消息下钻 · 详细设计 §8.3）。
+     *
+     * <p>⚠️ <b>为什么需要它</b>：{@code run_message} 的 TOOL 行只存结果摘要
+     * （输出封顶 2000 字 + 原因文本），审查者要判断「这次工具调用到底传了什么参数、
+     * 原始返回是什么、是不是被改过」必须回查 {@code tool_operation} 表。
+     * 此前整条链断在第一环 —— {@code run_message.tool_operation_id} 恒为 NULL，
+     * 而本方法没有对应的 HTTP 端点，审查者在 UI 上无处可查。
+     *
+     * <p>⚠️ <b>只按 (tenantId, operationId) 查</b>：{@code tool_operation} 是
+     * FORCE RLS 的租户域表，跨租户查恒 0 行 ⇒ 表现为「不存在」，不泄露归属。
+     *
+     * <p>⚠️ <b>本方法不做鉴权</b>：授权由端点层负责（平台权限闸门）。
+     *
+     * @param tenantId    租户标识（<b>必须来自认证上下文</b>）
+     * @param operationId 工具操作标识（{@code tool_operation.operation_id}）
+     * @return 工具调用详情；不存在或不属于该租户时返回 {@code null}
+     */
+    public @Nullable Map<String, Object> toolOperation(@NonNull String tenantId,
+                                                       @NonNull String operationId) {
+        return replay.toolOperation(tenantId, operationId).orElse(null);
+    }
+
+    /**
      * 回放记录。
      *
      * @param run      Run 元信息

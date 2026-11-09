@@ -181,4 +181,64 @@ class PlatformTranscriptControllerTest {
                             .contains("请显式传 tenantId");
                 });
     }
+
+    // ── TOOL 消息下钻端点（2026-11-09 补，详细设计 §8.3）─────────────
+
+    private static final String OPERATION_ID = "55555555-5555-5555-5555-555555555555";
+
+    @Test
+    @DisplayName("✅ 工具详情：先授权，再以 (tenantId, operationId) 读取原始参数/返回")
+    void toolOperationReturnsDetail() {
+        Map<String, Object> detail = Map.of(
+                "tool_name", "get_student_profile",
+                "state", "SUCCEEDED",
+                "tool_arguments", "{\"studentId\":\"s-1\"}");
+        when(replay.toolOperation(TENANT_ID, OPERATION_ID)).thenReturn(detail);
+
+        PlatformTranscriptController.ToolOperationResponse resp = controller().toolOperation(
+                principal, UUID.fromString(OPERATION_ID), TENANT_ID);
+
+        assertThat(resp.operationId()).isEqualTo(OPERATION_ID);
+        assertThat(resp.detail()).containsEntry("tool_name", "get_student_profile");
+        verify(security).require(eq(principal), eq(Namespaces.Platform.RESOURCE_READ),
+                isNull(), isNull());
+        verify(replay).toolOperation(eq(TENANT_ID), eq(OPERATION_ID));
+    }
+
+    @Test
+    @DisplayName("⚠️⚠️ 工具详情权限拒绝必须短路：绝不读 tool_operation 原文")
+    void toolOperationPermissionDeniedShortCircuits() {
+        doThrow(new AccessDeniedException("admin-1",
+                Namespaces.Platform.RESOURCE_READ, null))
+                .when(security).require(any(), any(), any(), any());
+
+        assertThatThrownBy(() -> controller().toolOperation(
+                principal, UUID.fromString(OPERATION_ID), TENANT_ID))
+                .isInstanceOf(AccessDeniedException.class);
+
+        verify(replay, never()).toolOperation(any(), any());
+    }
+
+    @Test
+    @DisplayName("⚠️ 工具详情 tenantId 非法 → 400，不下沉到 SQL 变成 500")
+    void toolOperationMalformedTenantIs400() {
+        assertThatThrownBy(() -> controller().toolOperation(
+                principal, UUID.fromString(OPERATION_ID), "not-a-uuid"))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST));
+        verify(replay, never()).toolOperation(any(), any());
+    }
+
+    @Test
+    @DisplayName("⚠️ 工具详情不存在 / 跨租户 → 404（不泄露归属差异）")
+    void toolOperationMissingIs404() {
+        when(replay.toolOperation(TENANT_ID, OPERATION_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> controller().toolOperation(
+                principal, UUID.fromString(OPERATION_ID), TENANT_ID))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+    }
 }

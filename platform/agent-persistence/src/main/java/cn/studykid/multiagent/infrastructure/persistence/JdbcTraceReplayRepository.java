@@ -118,9 +118,15 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
 
     private Optional<Map<String, Object>> readToolOperation(Connection conn, String tenantId,
                                                            String operationId) throws SQLException {
+        // ⚠️⚠️ **列名必须与 01 终态快照逐字对齐**（2026-11-09 修正）：
+        //    初版 SQL 引用了 error_class / completed_at 两个**根本不存在的列**
+        //    （表里是 request_digest / updated_at）。因为 toolOperation() 此前
+        //    没有任何 IT 覆盖，这个错误一直潜伏 —— 端点一旦被调用就报
+        //    `column "error_class" does not exist`，而 fail-soft 只留一行 WARN。
+        //    这正是「方法写了、却从没真跑过」的典型形态。
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT tenant_id, operation_id, tool_name, risk_level, state, tool_arguments, "
-                        + "       result_payload, error_class, created_at, completed_at "
+                        + "       result_payload, request_digest, created_at, updated_at "
                         + "FROM public.tool_operation "
                         + "WHERE tenant_id = ?::uuid AND operation_id = ?::uuid")) {
             ps.setString(1, tenantId);
@@ -139,10 +145,11 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
                 out.put("state", rs.getString("state"));
                 out.put("toolArguments", readJsonObject(rs.getString("tool_arguments")));
                 out.put("resultPayload", readJsonObject(rs.getString("result_payload")));
-                out.put("errorClass", rs.getString("error_class"));
+                // ⚠️ 无 error_class 列：失败原因归并进 request_digest（参数摘要）
+                out.put("requestDigest", rs.getString("request_digest"));
                 out.put("createdAt", rs.getTimestamp("created_at").toInstant());
-                Timestamp completed = rs.getTimestamp("completed_at");
-                out.put("completedAt", completed == null ? null : completed.toInstant());
+                Timestamp updated = rs.getTimestamp("updated_at");
+                out.put("updatedAt", updated == null ? null : updated.toInstant());
                 return Optional.of(out);
             }
         }

@@ -1388,6 +1388,9 @@ public class ToolInvocationGate {
                             verdict.reasonCode());
                     result.recordRejected(call.toolName(),
                             "Run 级预算不足:" + verdict.denial());
+                    // ⚠️ 拒绝也记 operationId：账本里已落了一条 FAILED，
+                    //    回放时对不上号就查不到「为什么被拒」。
+                    result.recordOperationId(call.toolName(), registration.operationId());
                     continue;
                 }
             }
@@ -1406,6 +1409,7 @@ public class ToolInvocationGate {
                 recordFailed(tenantId, registration.operationId(), task.fencingToken(),
                         "预算预留异常");
                 result.recordRejected(call.toolName(), "预算预留异常");
+                result.recordOperationId(call.toolName(), registration.operationId());
                 continue;
             }
             if (reservationId == null) {
@@ -1428,6 +1432,10 @@ public class ToolInvocationGate {
                 //    结算失败不能反过来改写「工具已成功」这一事实
                 settleQuietly(tenantId, reservationId, call.toolName());
                 result.recordSucceeded(call.toolName(), toolResult);
+                // ⚠️ 记下 operationId：对话回放的 TOOL 行要靠它回查工具原始参数/返回
+                //    （详细设计 §8.3「点击 TOOL 消息展开 tool_operation 详情」）。
+                //    只存主键 —— 参数原文留在 tool_operation 表，按权限读。
+                result.recordOperationId(call.toolName(), registration.operationId());
 
             } catch (cn.studykid.multiagent.ports.tool.ToolExecutionException e) {
                 // ⚠️ §3 三种异常语义 —— 最易出现的 Sev-0
@@ -1451,6 +1459,9 @@ public class ToolInvocationGate {
                 releaseQuietly(tenantId, reservationId,
                         "tool-failed:" + e.getClass().getSimpleName());
                 result.recordFailed(call.toolName(), e.getMessage());
+                // ⚠️ 失败同样记 operationId：审查者要能回查「这次为什么失败」
+                //    （参数是否非法、工具是否抛错），否则失败行只有一句 reason 文本。
+                result.recordOperationId(call.toolName(), registration.operationId());
 
             } catch (RuntimeException e) {
                 // ⚠️ 未预期异常按「结果未知」处理 —— 保守假设可能有副作用。
@@ -1802,6 +1813,44 @@ public class ToolInvocationGate {
          */
         private final java.util.Map<String, String> rejectionReasons =
                 new java.util.LinkedHashMap<>();
+
+        /**
+         * 工具名 → {@code tool_operation.id}（2026-11-09 补：对话回放下钻所需）。
+         *
+         * <p>⚠️ <b>为什么必须有它</b>：{@code run_message} 的 TOOL 行只存了结果摘要
+         * （输出封顶 2000 字），审查者要看「这次工具调用到底传了什么参数、
+         * 原始返回是什么」必须回查 {@code tool_operation} 表 —— 而回查需要主键。
+         * 此前 {@code run_message.tool_operation_id} 恒为 NULL，M4 埋点形同虚设，
+         * 「点击 TOOL 消息展开 tool_operation 详情」（详细设计 §8.3）整条链断在第一环。
+         *
+         * <p>⚠️ <b>键是工具名而非 operationId</b>：与 {@code outputs} /
+         * {@code rejectionReasons} 保持同一范式（同一工具在一轮内只调一次）。
+         * <p>⚠️ <b>不存参数原文</b>：只存主键。参数与返回原文留在 {@code tool_operation}
+         * 表，由回放端点按权限读取 —— 这里不复制敏感内容。
+         */
+        private final java.util.Map<String, String> operationIds = new java.util.LinkedHashMap<>();
+
+        /** 记录某工具本次调用对应的 {@code tool_operation.id}。 */
+        void recordOperationId(String tool, String operationId) {
+            if (tool != null && operationId != null && !operationId.isBlank()) {
+                operationIds.put(tool, operationId);
+            }
+        }
+
+        /**
+         * @param tool 工具名
+         * @return 该工具本次调用的 {@code tool_operation.id}；未记录时为空
+         */
+        public @NonNull Optional<String> operationIdOf(String tool) {
+            return Optional.ofNullable(operationIds.get(tool));
+        }
+
+        /**
+         * @return 工具名 → {@code tool_operation.id}（不可变副本）
+         */
+        public @NonNull Map<String, String> operationIds() {
+            return Map.copyOf(operationIds);
+        }
 
         void recordSucceeded(String tool, ToolHandler.ToolResult r) {
             recordSucceeded(tool, r == null ? null : r.output());
