@@ -18,8 +18,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.core.compliance.DataClassification.IdentifyingPattern;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.AuditPort;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * {@link AuditPort} 的 JDBC 实现（P3-D07 / R-1 / R-2 / R-3）。
@@ -38,15 +44,43 @@ import cn.studykid.multiagent.ports.persistence.AuditPort;
  *
  * <p><b>连接所有权</b>：全部经 {@link TransactionalConnectionHolder#inTransaction}
  * （P2-D05 铁律：禁止直接 {@code dataSource.getConnection()}）。
+ *
+ * <p>⚠️ <b>P1 影子态：只观测读路径</b>：{@link #findByResource}（按租户查审计）已接影子钩子，
+ * SQL 自带显式 {@code tenant_id = ?::uuid} 谓词（{@code hasTenantPredicate=true}）。
+ * 写路径 {@link #insert} 用 {@code INSERT…RETURNING}（同样走 {@code executeQuery}）——
+ * <b>刻意不接影子钩子</b>，否则会把审计写入当成读观测；写隔离由 RLS {@code WITH CHECK} 保证。
  */
 public class JdbcAuditRepository implements AuditPort {
+
+    /** 影子比对/染色的资源类型（对齐 policy-mapping.yaml 的 TENANT_ONLY）。 */
+    private static final String RESOURCE_TYPE = "audit_record";
 
     private static final Logger log = LoggerFactory.getLogger(JdbcAuditRepository.class);
 
     private final DataSource dataSource;
 
+    // ── P1 影子态字段（默认 dormant：全部 null/false，零行为变更）──
+    private ScopedDataAccess scoped;
+    private AuthzShadowReporter reporter;
+    private String sentinelTenantId = "";
+    private boolean shadowEnabled;
+
+    @Autowired
     public JdbcAuditRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    /** 影子态接线构造（测试与包内装配用；生产走 {@link #bindAuthzShadow} setter）。 */
+    JdbcAuditRepository(@NonNull DataSource dataSource,
+                        @Nullable ScopedDataAccess scoped,
+                        @Nullable AuthzShadowReporter reporter,
+                        boolean shadowEnabled,
+                        @NonNull String sentinelTenantId) {
+        this.dataSource = dataSource;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     @Override
@@ -91,13 +125,13 @@ public class JdbcAuditRepository implements AuditPort {
             //    此时按 resource_type 全量查。
             String sql = resourceId == null
                     ? """
-                    SELECT audit_id::text, actor_id, action, resource_type, resource_id, created_at
+                    SELECT tenant_id::text, audit_id::text, actor_id, action, resource_type, resource_id, created_at
                     FROM audit_record
                     WHERE tenant_id = ?::uuid AND resource_type = ?
                     ORDER BY created_at
                     """
                     : """
-                    SELECT audit_id::text, actor_id, action, resource_type, resource_id, created_at
+                    SELECT tenant_id::text, audit_id::text, actor_id, action, resource_type, resource_id, created_at
                     FROM audit_record
                     WHERE tenant_id = ?::uuid AND resource_type = ? AND resource_id = ?
                     ORDER BY created_at
@@ -109,8 +143,12 @@ public class JdbcAuditRepository implements AuditPort {
                 if (resourceId != null) {
                     ps.setString(3, resourceId);
                 }
+                // ⚠️ hasTenantPredicate=true：SQL 自带显式 `tenant_id = ?::uuid`（审计按租户隔离）。
+                shadowCompare(RESOURCE_TYPE, tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
+                        // 逐行染色：行归属取结果行的 tenant_id（与绑定租户比对）。
+                        shadowTaint(RESOURCE_TYPE, tenantId, rs.getString("tenant_id"));
                         Timestamp created = rs.getTimestamp("created_at");
                         out.add(new AuditView(
                                 rs.getString("audit_id"),
@@ -281,5 +319,54 @@ public class JdbcAuditRepository implements AuditPort {
     @FunctionalInterface
     private interface TxAction<T> {
         T run(Connection conn) throws SQLException;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。
+     *
+     * @param hasTenantPredicate 该查询的 SQL 是否真的带了显式租户谓词（必须如实填写）。
+     */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）：
+     * 主体是<b>发起本次查询的租户</b>，行归属从<b>结果行</b>读出的 {@code tenant_id}。
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }
