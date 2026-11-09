@@ -10,9 +10,16 @@ import java.util.Optional;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.RunBudgetPort;
 
 /**
@@ -42,12 +49,37 @@ public class JdbcRunBudgetRepository implements RunBudgetPort {
 
     private final DataSource dataSource;
 
+    // ── P1 影子态接入（12 文 §4.5 / 13 文 §5.2）──────────────────────────────
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private boolean shadowEnabled;
+    private @NonNull String sentinelTenantId;
+
+    /** Spring 装配入口（保持既有单参构造，确保 @Bean 装配不变）。 */
+    @Autowired
     public JdbcRunBudgetRepository(@NonNull DataSource dataSource) {
+        this(dataSource, null, null, false, "");
+    }
+
+    /**
+     * 影子态接线构造（P1 由 {@code AuthzShadowConfiguration} 在开启染色时调用；测试用）。
+     */
+    JdbcRunBudgetRepository(@NonNull DataSource dataSource,
+                            @Nullable ScopedDataAccess scoped,
+                            @Nullable AuthzShadowReporter reporter,
+                            boolean shadowEnabled,
+                            @NonNull String sentinelTenantId) {
         this.dataSource = dataSource;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     @Override
     public @NonNull Optional<RunBudget> find(@NonNull String tenantId, @NonNull String runId) {
+        // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+        shadowCompare("run", tenantId, true);
         return TransactionalConnectionHolder.inTransaction(
                 dataSource,
                 new cn.studykid.multiagent.core.tenant.TenantContext(
@@ -58,7 +90,8 @@ public class JdbcRunBudgetRepository implements RunBudgetPort {
                     //    ⚠️ 占用口径来自 RunBudgetAggregate（全仓唯一实现）：
                     //    判定侧与观测侧必须用同一份定义，否则「上限」有两个解释。
                     String sql = """
-                            SELECT r.budget_amount,
+                            SELECT r.tenant_id AS tenant_id,
+                                   r.budget_amount,
                                    %s
                                        AS reserved_amount,
                                    %s
@@ -81,16 +114,21 @@ public class JdbcRunBudgetRepository implements RunBudgetPort {
                                 throw new IllegalStateException(
                                         "Run 不存在，无法读取 Run 级预算: run=" + runId);
                             }
+                            // ⚠️ 主体 = 查询租户；行归属 = 结果行真实 tenant_id（防同义反复）。
+                            String rowTenant = rs.getString("tenant_id");
                             BigDecimal amount = rs.getBigDecimal("budget_amount");
                             if (amount == null) {
                                 // ⚠️ 未声明额度 = 不额外限制（≠ 余额为 0）
+                                shadowTaint("run", tenantId, rowTenant);
                                 return Optional.empty();
                             }
-                            return Optional.of(new RunBudget(
+                            RunBudget budget = new RunBudget(
                                     runId,
                                     amount,
                                     nonNull(rs.getBigDecimal("reserved_amount")),
-                                    nonNull(rs.getBigDecimal("settled_amount"))));
+                                    nonNull(rs.getBigDecimal("settled_amount")));
+                            shadowTaint("run", tenantId, rowTenant);
+                            return Optional.of(budget);
                         }
                     }
                 });
@@ -99,5 +137,49 @@ public class JdbcRunBudgetRepository implements RunBudgetPort {
     /** 聚合结果不得为 null（COALESCE 已兜底，这里再兜一层以防驱动差异）。 */
     private static @NonNull BigDecimal nonNull(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /** 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。 */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）。
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }

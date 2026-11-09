@@ -12,9 +12,15 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.ProfileQueryPort;
 
 /**
@@ -38,7 +44,7 @@ public class JdbcProfileQueryRepository implements ProfileQueryPort {
             """;
 
     private static final String SQL_LOAD_WEAKNESSES = """
-            SELECT knowledge_point, error_type, confidence, created_at
+            SELECT tenant_id, knowledge_point, error_type, confidence, created_at
             FROM weakness_record
             WHERE tenant_id = ?::uuid AND student_id = ?
             ORDER BY updated_at DESC
@@ -50,8 +56,33 @@ public class JdbcProfileQueryRepository implements ProfileQueryPort {
 
     private final DataSource dataSource;
 
+    // ── P1 影子态接入（12 文 §4.5 / 13 文 §5.2）──────────────────────────────
+    // 仅 weakness_record 读路径接染色；student_profile 路径待 Task #41 扩 RESOURCE_TYPES 后再接。
+    // 默认全部为 null / false ⇒ 现有行为 100% 不变；仅当显式注入且 shadowEnabled=true 时生效。
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private boolean shadowEnabled;
+    private @NonNull String sentinelTenantId;
+
+    /** Spring 装配入口（保持既有单参构造，确保 @Repository 装配不变）。 */
+    @Autowired
     public JdbcProfileQueryRepository(@NonNull DataSource dataSource) {
+        this(dataSource, null, null, false, "");
+    }
+
+    /**
+     * 影子态接线构造（P1 由 {@code AuthzShadowConfiguration} 在开启染色时调用；测试用）。
+     */
+    JdbcProfileQueryRepository(@NonNull DataSource dataSource,
+                               @Nullable ScopedDataAccess scoped,
+                               @Nullable AuthzShadowReporter reporter,
+                               boolean shadowEnabled,
+                               @NonNull String sentinelTenantId) {
         this.dataSource = dataSource;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     @Override
@@ -86,12 +117,16 @@ public class JdbcProfileQueryRepository implements ProfileQueryPort {
     private List<WeaknessView> loadWeaknesses(java.sql.Connection conn,
                                                String tenantId, String studentId)
             throws SQLException {
+        // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+        shadowCompare("weakness_record", tenantId, true);
         List<WeaknessView> result = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(SQL_LOAD_WEAKNESSES)) {
             ps.setString(1, tenantId);
             ps.setString(2, studentId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next() && result.size() < MAX_WEAKNESSES) {
+                    // ⚠️ 主体 = 查询租户；行归属 = 结果行真实 tenant_id（防同义反复）。
+                    String rowTenant = rs.getString("tenant_id");
                     double raw = rs.getDouble("confidence");
                     Double confidence = rs.wasNull() ? null : raw;
                     result.add(new WeaknessView(
@@ -99,6 +134,7 @@ public class JdbcProfileQueryRepository implements ProfileQueryPort {
                             rs.getString("error_type"),
                             confidence,
                             toInstant(rs.getTimestamp("created_at"))));
+                    shadowTaint("weakness_record", tenantId, rowTenant);
                 }
             }
         }
@@ -138,5 +174,50 @@ public class JdbcProfileQueryRepository implements ProfileQueryPort {
 
     private static TenantContext systemContext(String tenantId) {
         return new TenantContext(tenantId, "system", java.util.Set.of(), 0L);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /** 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。 */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）：
+     * 主体是<b>发起本次查询的租户</b>，行归属从<b>结果行</b>读出的 {@code tenant_id}。
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }
