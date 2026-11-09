@@ -3,6 +3,14 @@
 /.m2repo/
 /.m2-local/
 
+# ── 本地运行时产物（不提交：体积大且可由工具重新生成）──
+# ⚠️ 清理脚本导出的备份（scripts/agent-cleanup-presets/run.sh --backup-only）
+/backup/
+# ⚠️ 测试散落日志（各次 mvn/容器实跑的原始输出，含库结构片段）
+/tf.log
+/tw.log
+/tw2.log
+
 # ── 构建产物 ──────────────────────────────────────────────
 target/
 *.jar
