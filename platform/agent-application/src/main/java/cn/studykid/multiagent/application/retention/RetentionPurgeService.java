@@ -137,6 +137,17 @@ public class RetentionPurgeService {
             failed++;
         }
 
+        // ⚠️ 对话原文（run_message）是**第 6 类**，与 Trace 同一保留期口径但不共用方法：
+        //    run_event 存的是"发生了什么"（结构化事实），run_message 存的是"说了什么"
+        //    （未成年人辅导原话）。敏感度不同 ⇒ 清理路径必须独立可审计。
+        //    ⚠️ 本类别此前**完全缺失**（2026-11-09 评估）：04 授权脚本给了 DELETE 权限，
+        //    却没有任何代码执行删除 ⇒ 原话无限期留存，而"保留 30 天"的承诺只在文档里。
+        int messages = runCategory("对话原文", detail, () -> erasurePort.purgeExpiredMessages(
+                tenantId, now.minus(settings.messageDays(), ChronoUnit.DAYS), settings.batchSize()));
+        if (messages < 0) {
+            failed++;
+        }
+
         int audits = runCategory("审计", detail, () -> erasurePort.purgeExpiredAudits(
                 tenantId, now.minus(settings.auditDays(), ChronoUnit.DAYS),
                 settings.batchSize(), actor));
@@ -169,6 +180,7 @@ public class RetentionPurgeService {
                 Math.max(traces, 0),
                 Math.max(audits, 0),
                 Math.max(memories, 0),
+                Math.max(messages, 0),
                 withdrawalsErased,
                 failed);
     }
@@ -260,6 +272,7 @@ public class RetentionPurgeService {
             case "记忆" -> "student_memory";
             case "Prompt" -> "prompt_payload";
             case "Trace" -> "run_event";
+            case "对话原文" -> "run_message";
             case "审计" -> "audit_record";
             default -> label;
         };
@@ -282,6 +295,7 @@ public class RetentionPurgeService {
                                     int promptDays,
                                     int auditDays,
                                     int traceDays,
+                                    int messageDays,
                                     int withdrawalGraceDays,
                                     int batchSize) {
     }
@@ -299,6 +313,7 @@ public class RetentionPurgeService {
                               int tracesDeleted,
                               int auditsDeleted,
                               int memoriesDeleted,
+                              int messagesDeleted,
                               int withdrawalsErased,
                               int failedCategories) {
 
@@ -311,7 +326,8 @@ public class RetentionPurgeService {
          */
         public boolean hasChanges() {
             return profilesDeleted + promptsBlanked + tracesDeleted
-                    + auditsDeleted + memoriesDeleted + withdrawalsErased > 0;
+                    + auditsDeleted + memoriesDeleted + messagesDeleted
+                    + withdrawalsErased > 0;
         }
     }
 }

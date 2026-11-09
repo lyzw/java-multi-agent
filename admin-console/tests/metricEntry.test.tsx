@@ -122,6 +122,36 @@ describe('效果数据录入页', () => {
     )
   })
 
+  it('抽样标注：人工「归因是否正确」必须映射进 payload（不是只渲染个控件）', async () => {
+    renderPage()
+    const card = screen.getByText('一、抽样标注录入（L2 黄金基线）').closest('.ant-card') as HTMLElement
+    typeInto(card, '要与回执/标注关联的 Run Trace', 'trace-attr-1')
+    typeInto(card, '回填数据归属的租户', 'tenant-attr-1')
+
+    // 4 个 Select 依次是：verdict / 幻觉 / 遵从指令 / 归因是否正确
+    const selects = within(card).getAllByRole('combobox')
+    expect(selects.length).toBe(4)
+
+    fireEvent.mouseDown(selects[0]!, { button: 0 })
+    fireEvent.click(await screen.findByText('成功'))
+
+    fireEvent.mouseDown(selects[3]!, { button: 0 })
+    const yes = await screen.findByText('是')
+    fireEvent.click(yes)
+
+    fireEvent.click(within(card).getByRole('button', { name: '提交录入' }))
+
+    await waitFor(() => expect(recordEvalSample).toHaveBeenCalledTimes(1))
+    expect(recordEvalSample).toHaveBeenCalledWith(
+      expect.objectContaining({
+        traceId: 'trace-attr-1',
+        verdict: 'SUCCESS',
+        // ⚠️ 缺了这一句，控件在、字段却永远不传 —— 后端收不到归因，看板永远是「未启用」
+        attributionCorrect: true,
+      }),
+    )
+  })
+
   it('必填项缺失时拦截提交（不调用 API）', async () => {
     renderPage()
     const card = screen.getByText('四、用户反馈录入（L3 有噪信号）').closest('.ant-card') as HTMLElement

@@ -80,10 +80,57 @@ public interface AgentMetricPort {
      */
     @NonNull List<ScenarioCount> scenarios(@NonNull MetricQuery query);
 
+    /**
+     * 抽样候选：区间内<b>尚未被人审抽中</b>的 Trace（按 {@code started_at} 倒序）。
+     *
+     * <p>⚠️ <b>为什么需要专用方法，而不是复用 {@link #anomalies}</b>：
+     * {@code anomalies} 只返回「已经异常」的三类（超大 token / 循环 / 轮次触顶），
+     * 用它做抽样等于<b>只审出问题的样本</b> —— 分母里那些「看起来正常」的 Trace
+     * 永远不会被人看过，于是「人工抽样覆盖率」永远偏斜，
+     * 而「成功率 99%」也无从验证（详见详细设计 §7.2 分层抽样）。
+     *
+     * <p>⚠️ <b>「尚未抽中」的判据是 {@code sampled IS NOT TRUE}</b>（不是 {@code = FALSE}）：
+     * 该列的历史值是 {@code NULL}（P7 采集时未接人审轨），
+     * 用等值比较会把全部历史样本漏掉 —— 而这正是「抽样器跑起来却什么都抽不到」的形态。
+     *
+     * <p>⚠️ 本方法<b>不</b>判断是否已有未终结的 review_task：
+     * 去重由 {@link cn.studykid.multiagent.ports.persistence.ReviewTaskPort#hasOpenTask} 负责，
+     * 两者职责分开，避免在这里写一个「半套去重」。
+     *
+     * @param query 时间窗 + 租户/agent/scenario 维度（与看板同口径）
+     * @param limit 单轮扫描上限
+     * @return 候选 Trace（含判定抽样所需的最小事实）
+     */
+    @NonNull List<SamplingCandidate> samplingCandidates(@NonNull MetricQuery query, int limit);
+
     // ── 回填录入（效果 / 反馈 / 风险）──
 
     /** 录入抽样标注，并回写该 Trace 的 {@code sampled / human_verdict / ...}。 */
     void recordEvalSample(@NonNull EvalSample sample);
+
+    /**
+     * 回写<b>机器判分</b>的归因正确率（L2 · ATTRIBUTION）。
+     *
+     * <p>⚠️⚠️ <b>为什么必须与 {@link #recordEvalSample} 分开，而不是复用它的 verdict：</b>
+     * 两个表的 verdict 列都只有 {@code SUCCESS/PARTIAL/FAIL} 三值，那是<b>人工抽样</b>的口径。
+     * 把机器结论（{@code ATTRIBUTION}）塞进去会同时破坏三处语义：
+     * <ol>
+     *   <li>回填写入 {@code agent_trace_metric.sampled = TRUE} → 看板的
+     *       「人工抽样覆盖率」把机器判分算成人审，覆盖率变成假指标；</li>
+     *   <li>{@code human_verdict} 非 {@code SUCCESS} 会被 {@code false_ok} 统计成
+     *       「自动校验通过但人工判失败」→ 一条凭空生成的劣化样本；</li>
+     *   <li>{@code agent_eval_sample} 是人工/标注表，混入机器结论后
+     *       任何「人工抽样 n 条」的口径都不可信（详细设计 §0.0 铁律第 2 条）。</li>
+     * </ol>
+     * 故本方法<b>只</b>写 {@code agent_trace_metric.attribution_correct}：
+     * 不改 {@code sampled} / {@code human_verdict}，也不写 {@code agent_eval_sample}。
+     * 人工若要补录归因正确率，走 {@link #recordEvalSample}（verdict 三值 + 该列置值）。
+     *
+     * @param traceId Trace 标识
+     * @param tenantId 租户（回填必须带租户谓词，防跨租户写入）
+     * @param correct 判分结论；判不了时调用方<b>不得</b>调用本方法（fail-closed）
+     */
+    void recordAttributionGrade(@NonNull String traceId, @NonNull String tenantId, boolean correct);
 
     /** 录入用户反馈事件，并累计回写。 */
     void recordFeedback(@NonNull FeedbackEvent event);
@@ -286,6 +333,39 @@ public interface AgentMetricPort {
     }
 
     /** 异常 Trace 明细（用于「死循环长什么样」的具象排查）。 */
+    /**
+     * 抽样候选（{@code ReviewSampler} 的输入）。
+     *
+     * <p>⚠️ 字段刻意最小化：抽样决策只需要「能不能判」与「有多异常」，
+     * 不需要对话正文 —— 抽样器绝不读内容（那是回放与判分器的职责）。
+     */
+    record SamplingCandidate(
+            @NonNull String traceId,
+            @NonNull String tenantId,
+            @NonNull String runId,
+            @Nullable String scenario,
+            @Nullable Boolean autoChecked,
+            @Nullable Boolean autoVerified,
+            @Nullable Boolean maxRoundsReached,
+            @Nullable Integer loopSuspectedCount,
+            @Nullable Integer safetyBlockedCount,
+            @Nullable Long totalTokens,
+            @NonNull Instant startedAt) {
+
+        /** 是否命中「异常优先」层（与 §7.2 的分层规则一致）。 */
+        public boolean isAnomaly() {
+            return (loopSuspectedCount != null && loopSuspectedCount > 0)
+                    || Boolean.TRUE.equals(maxRoundsReached)
+                    || (safetyBlockedCount != null && safetyBlockedCount > 0)
+                    || (totalTokens != null && totalTokens > 20_000L);
+        }
+
+        /** 是否是 L1 覆盖缺口（采集了但没判过）。 */
+        public boolean isCoverageGap() {
+            return autoChecked == null;
+        }
+    }
+
     record AnomalyTrace(
             @NonNull String traceId,
             @NonNull AnomalyKind kind,

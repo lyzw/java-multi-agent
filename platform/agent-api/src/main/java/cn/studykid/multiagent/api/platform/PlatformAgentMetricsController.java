@@ -211,9 +211,13 @@ public class PlatformAgentMetricsController {
         if (!verdict.equals("SUCCESS") && !verdict.equals("PARTIAL") && !verdict.equals("FAIL")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "verdict 取值：SUCCESS / PARTIAL / FAIL");
         }
+        // ⚠️ 这是**人工**录入通道：verdict 必须是三值人工口径。
+        //    机器判分（ATTRIBUTION）走 AgentMetricPort.recordAttributionGrade，
+        //    不经过本端点 —— 混进来会把 sampled/人工覆盖率变成假指标。
         metrics.recordEvalSample(new EvalSample(
                 request.traceId().trim(), request.tenantId().trim(), verdict,
                 request.hallucination(), request.instructionFollowed(),
+                request.attributionCorrect(),
                 request.note(), principal.userId()));
         return ResponseEntity.ok().build();
     }
@@ -308,7 +312,8 @@ public class PlatformAgentMetricsController {
     }
 
     public record EvalSampleRequest(String traceId, String tenantId, String verdict,
-                                    Boolean hallucination, Boolean instructionFollowed, String note) {
+                                    Boolean hallucination, Boolean instructionFollowed,
+                                    Boolean attributionCorrect, String note) {
     }
 
     public record FeedbackRequest(String traceId, String tenantId, String kind) {

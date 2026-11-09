@@ -136,6 +136,37 @@ public class JdbcErasureRepository implements ErasurePort {
     }
 
     @Override
+    public int purgeExpiredMessages(@NonNull String tenantId,
+                                    @NonNull Instant cutoff,
+                                    int limit) {
+        // ⚠️ 与 run_event 同形态（ctid 子查询 + LIMIT 分批），但**判据不同**：
+        //    按 run_message.created_at 切，不是跟 run 的终态时间走。
+        //    理由见 ErasurePort#purgeExpiredMessages 的 Javadoc。
+        // ⚠️ 幂等键 (tenant_id, run_id, idem_key) 只约束「同一句话不重复」，
+        //    不影响这里的批量删除：删掉旧消息后，若同一 Run 被重放，
+        //    写入侧仍是 upsert 语义（不会因旧行已删而产生重复对话）。
+        return inTenantTx(tenantId, conn -> {
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM public.run_message "
+                            + "WHERE tenant_id = ?::uuid AND created_at < ? "
+                            + "  AND ctid IN (SELECT ctid FROM public.run_message "
+                            + "                WHERE tenant_id = ?::uuid AND created_at < ? "
+                            + "                ORDER BY created_at LIMIT ?)")) {
+                ps.setString(1, tenantId);
+                ps.setTimestamp(2, Timestamp.from(cutoff));
+                ps.setString(3, tenantId);
+                ps.setTimestamp(4, Timestamp.from(cutoff));
+                ps.setInt(5, limit);
+                int deleted = ps.executeUpdate();
+                if (deleted > 0) {
+                    log.info("对话原文已按保留期清理: tenant={}, rows={}", tenantId, deleted);
+                }
+                return deleted;
+            }
+        });
+    }
+
+    @Override
     public int purgeExpiredTraces(@NonNull String tenantId,
                                   @NonNull Instant cutoff,
                                   int limit) {

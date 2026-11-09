@@ -408,6 +408,16 @@ class AgentMetricCollectorTest {
         }
 
         @Override
+        public void recordAttributionGrade(String traceId, String tenantId, boolean correct) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<AgentMetricPort.SamplingCandidate> samplingCandidates(MetricQuery query, int limit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public void recordFeedback(FeedbackEvent event) {
             throw new UnsupportedOperationException();
         }

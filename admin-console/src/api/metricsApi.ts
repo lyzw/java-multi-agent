@@ -330,6 +330,14 @@ export interface EvalSampleRequest {
   hallucination?: boolean
   /** 是否遵从指令。 */
   instructionFollowed?: boolean
+  /**
+   * 归因是否正确（ATTRIBUTION）。
+   *
+   * ⚠️ 这是**人工判定**的归因正确率，与 L2 机器判分分开：
+   * 机器判分经 AgentMetricPort.recordAttributionGrade 只写宽表列，
+   * 不经过本接口（否则 sampled/human_verdict 会把机器结论算进人审覆盖率）。
+   */
+  attributionCorrect?: boolean
   note?: string
 }
 

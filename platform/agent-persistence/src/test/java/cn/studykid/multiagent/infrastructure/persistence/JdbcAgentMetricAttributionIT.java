@@ -20,7 +20,6 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
-import cn.studykid.multiagent.ports.metrics.AgentMetricPort;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.EvalSample;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.MetricQuery;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.Overview;
@@ -28,8 +27,23 @@ import cn.studykid.multiagent.ports.metrics.AgentMetricPort.Overview;
 /**
  * attribution_correct 的<b>真库闭环</b>（§13 第 3 项）。
  *
- * <p><b>⚠️ 为什么必须是 IT</b>：L2 的「写回 + 回填 + 聚合」都只在真跑 SQL 时才暴露问题 ——
+ * <p><b>⚠️ 为什么必须是 IT</b>：L2 的「写回 + 聚合」都只在真跑 SQL 时才暴露问题 ——
  *   列不存在（结构未补）、占位符错位、n&lt;30 占比被静默置 NULL 等，mock 单测照不出。
+ *   早先版本的 3 个用例正是因为「本机无 PG 未跑过」而带着两个缺陷入库：
+ *   ① 拿 {@code isZero()} 断言一个按纪律折算为 {@code null} 的计数；
+ *   ② 依赖「上一条用例已写入」的跨用例状态（JUnit 方法顺序不定 ⇒ 必然 flaky）。
+ *   本版本每条用例自建数据，互不依赖。
+ *
+ * <p><b>⚠️⚠️ 两类写入路径必须物理分离</b>（2026-11-09 修正的核心）：
+ * <ul>
+ *   <li><b>机器判分</b> → {@code recordAttributionGrade}：只写宽表
+ *       {@code attribution_correct}，<b>不碰</b> {@code sampled} / {@code human_verdict}，
+ *       也不往 {@code agent_eval_sample} 插行；</li>
+ *   <li><b>人工标注</b> → {@code recordEvalSample}：verdict 三值，
+ *       回填 {@code sampled=TRUE} + {@code human_verdict}。</li>
+ * </ul>
+ * 混用的后果是「人工抽样覆盖率」把机器判分计成人审 —— 一个不报错、只是数字悄悄错的失真。
+ * {@link #machineGradeMustNotPolluteHumanSampling()} 就是钉住这一点的守卫。
  *
  * <p><b>⚠️ 隔离纪律</b>：平台域表无 RLS，用管理角色直连。所有造数带本 IT 专属
  *   {@code tenant_id} 与 {@code trace_id} 前缀，清理只删自己的行。
@@ -38,8 +52,12 @@ import cn.studykid.multiagent.ports.metrics.AgentMetricPort.Overview;
 class JdbcAgentMetricAttributionIT {
 
     private static final String PREFIX = "attr-it-" + UUID.randomUUID().toString().replace("-", "") + "-";
-    private static final String TENANT_A = UUID.randomUUID().toString();
-    private static final String TENANT_B = UUID.randomUUID().toString();
+
+    /** 每个用例各用一个租户：互不污染，也不依赖清理时机。 */
+    private static final String TENANT_GRADE = UUID.randomUUID().toString();
+    private static final String TENANT_RATE = UUID.randomUUID().toString();
+    private static final String TENANT_EMPTY = UUID.randomUUID().toString();
+    private static final String TENANT_HUMAN = UUID.randomUUID().toString();
 
     private static HikariDataSource adminPool;
     private static JdbcAgentMetricRepository repo;
@@ -68,10 +86,8 @@ class JdbcAgentMetricAttributionIT {
     }
 
     @BeforeEach
-    void seed() {
+    void reset() {
         purge();
-        // 一条基线 Trace，attribution_correct 先为 NULL
-        insertMetric(PREFIX + "base", TENANT_A, null);
     }
 
     private static MetricQuery q(String tenantId) {
@@ -112,83 +128,152 @@ class JdbcAgentMetricAttributionIT {
     }
 
     @Test
-    @DisplayName("✅ 写回 + 回填：recordEvalSample 把 attribution_correct 落库并回填宽表")
-    void writesAndBackfillsAttributionCorrect() {
-        String trace = PREFIX + "base";
-        repo.recordEvalSample(new EvalSample(
-                trace, TENANT_A, L2Constants.VERDICT, null, null, Boolean.TRUE,
-                "L2 LLM-as-judge", "ATTRIBUTION_JUDGE"));
+    @DisplayName("✅ 机器判分写回宽表 attribution_correct（true/false 都如实写）")
+    void machineGradeWritesMetricColumn() {
+        String trace = PREFIX + "machine";
+        insertMetric(trace, TENANT_GRADE, null);
 
-        assertThat(readEvalAttribution(trace)).isTrue();
-        assertThat(readMetricAttribution(trace)).isTrue();
+        repo.recordAttributionGrade(trace, TENANT_GRADE, true);
+        assertThat(readMetricBool("attribution_correct", trace)).isTrue();
+
+        // 判 false 也必须落实（不是「只写 true」的假实现）
+        repo.recordAttributionGrade(trace, TENANT_GRADE, false);
+        assertThat(readMetricBool("attribution_correct", trace)).isFalse();
     }
 
     @Test
-    @DisplayName("✅ 覆盖率为 null 时不编造：单条已评级样本 → rate=null（n<30）")
-    void singleGradedSampleIsNotARate() {
-        // 基线 Trace 已 recordEvalSample=true（上条测试前置未清理，这里再写一次确保）
-        repo.recordEvalSample(new EvalSample(
-                PREFIX + "base", TENANT_A, L2Constants.VERDICT, null, null, Boolean.TRUE,
-                "L2", "ATTRIBUTION_JUDGE"));
+    @DisplayName("⛔ 机器判分绝不污染人审口径：sampled / human_verdict 保持 NULL，且不插 eval_sample")
+    void machineGradeMustNotPolluteHumanSampling() {
+        String trace = PREFIX + "nopollute";
+        insertMetric(trace, TENANT_GRADE, null);
 
-        Overview ov = repo.overview(q(TENANT_A));
+        repo.recordAttributionGrade(trace, TENANT_GRADE, true);
+
+        // ① 宽表列写了
+        assertThat(readMetricBool("attribution_correct", trace)).isTrue();
+        // ② 但 sampled 必须仍是 NULL —— 否则「人工抽样覆盖率」把机器判分计成人审
+        assertThat(readMetricBool("sampled", trace)).isNull();
+        // ③ human_verdict 必须仍是 NULL —— 否则 false_ok 会凭空多出一条劣化样本
+        assertThat(readMetricText("human_verdict", trace)).isNull();
+        // ④ 人工标注表不得出现这条 trace 的行
+        assertThat(countEvalSample(trace)).isZero();
+    }
+
+    @Test
+    @DisplayName("✅ 人工标注路径不受影响：recordEvalSample 仍回填 sampled + human_verdict")
+    void humanAnnotationStillBackfillsSampled() {
+        String trace = PREFIX + "human";
+        insertMetric(trace, TENANT_HUMAN, null);
+
+        repo.recordEvalSample(new EvalSample(
+                trace, TENANT_HUMAN, "SUCCESS", null, null, Boolean.TRUE,
+                "人工复核", "MANUAL"));
+
+        assertThat(countEvalSample(trace)).isEqualTo(1);
+        assertThat(readEvalBool("attribution_correct", trace)).isTrue();
+        assertThat(readMetricBool("sampled", trace)).isTrue();
+        assertThat(readMetricText("human_verdict", trace)).isEqualTo("SUCCESS");
+    }
+
+    @Test
+    @DisplayName("✅ 回写带租户谓词：错租户写入必须 0 行命中（不跨租户改别人的行）")
+    void gradeIsTenantScoped() {
+        String trace = PREFIX + "scoped";
+        insertMetric(trace, TENANT_GRADE, null);
+
+        repo.recordAttributionGrade(trace, TENANT_EMPTY, true);
+
+        assertThat(readMetricBool("attribution_correct", trace))
+                .as("租户不匹配时不得改写该行")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("✅ n<30 不出占比：1 条已评级 → count=1 但 rate=null（噪声不是指标）")
+    void singleGradedSampleIsNotARate() {
+        String trace = PREFIX + "single";
+        insertMetric(trace, TENANT_GRADE, null);
+        repo.recordAttributionGrade(trace, TENANT_GRADE, true);
+
+        Overview ov = repo.overview(q(TENANT_GRADE));
+
         assertThat(ov.attributionGradedCount()).isEqualTo(1L);
         assertThat(ov.attributionCorrectCount()).isEqualTo(1L);
-        // ⚠️ 纪律：n<30 一律不显示百分比（噪声不是指标）
         assertThat(ov.attributionCorrectRate()).isNull();
     }
 
     @Test
-    @DisplayName("✅ 足量样本时算出真占比（30 真 / 5 假 → 0.8571），且与宽表口径闭合")
+    @DisplayName("✅ 足量样本时算出真占比（30 真 / 5 假 → 0.8571）")
     void computesRealRateAtSufficientSample() {
         for (int i = 0; i < 35; i++) {
-            insertMetric(PREFIX + "agg-" + i, TENANT_B, i < 30); // 30 true + 5 false
+            insertMetric(PREFIX + "agg-" + i, TENANT_RATE, i < 30); // 30 true + 5 false
         }
 
-        Overview ov = repo.overview(q(TENANT_B));
+        Overview ov = repo.overview(q(TENANT_RATE));
+
         assertThat(ov.attributionGradedCount()).isEqualTo(35L);
         assertThat(ov.attributionCorrectCount()).isEqualTo(30L);
         // 30/35 = 0.857142857...
-        assertThat(ov.attributionCorrectRate()).isNotNull();
         assertThat(ov.attributionCorrectRate()).isBetween(0.8571, 0.8572);
     }
 
     @Test
-    @DisplayName("✅ 未评级租户：graded=0 → rate=null（看板显示「未启用」，绝不 0%）")
+    @DisplayName("✅ 未评级租户：graded 折算为 null、rate=null（看板显示「未启用」，绝不 0%）")
     void noGradedSampleYieldsNullRate() {
-        // TENANT_A 基线未评级（attribution_correct 为 NULL）
-        Overview ov = repo.overview(q(TENANT_A));
-        assertThat(ov.attributionGradedCount()).isZero();
+        insertMetric(PREFIX + "ungraded", TENANT_EMPTY, null);
+
+        Overview ov = repo.overview(q(TENANT_EMPTY));
+
+        // ⚠️ 计数 0 按项目既有纪律折算为 null（与 auto_checked / sampled 同口径：
+        //    「一条都没评级」与「没采集」在看板上都必须是「未启用」，
+        //    绝不能渲染成 0%，否则会读成「归因正确率 0%」这种灾难性误判）。
+        assertThat(ov.attributionGradedCount()).isNull();
+        assertThat(ov.attributionCorrectCount()).isZero();
         assertThat(ov.attributionCorrectRate()).isNull();
     }
 
-    private Boolean readEvalAttribution(String trace) {
-        return readBool(
-                "SELECT attribution_correct FROM platform.agent_eval_sample WHERE trace_id = ?", trace);
+    // ── 读侧 ────────────────────────────────────────────────────
+
+    /** 读宽表的布尔列；行不存在或值为 NULL 时返回 null。 */
+    private static Boolean readMetricBool(String column, String trace) {
+        return (Boolean) readOne("SELECT " + column + " FROM platform.agent_trace_metric WHERE trace_id = ?", trace);
     }
 
-    private Boolean readMetricAttribution(String trace) {
-        return readBool(
-                "SELECT attribution_correct FROM platform.agent_trace_metric WHERE trace_id = ?", trace);
+    /** 读宽表的文本列；行不存在或值为 NULL 时返回 null。 */
+    private static String readMetricText(String column, String trace) {
+        return (String) readOne("SELECT " + column + " FROM platform.agent_trace_metric WHERE trace_id = ?", trace);
     }
 
-    private Boolean readBool(String sql, String trace) {
+    private static Boolean readEvalBool(String column, String trace) {
+        return (Boolean) readOne("SELECT " + column + " FROM platform.agent_eval_sample WHERE trace_id = ?", trace);
+    }
+
+    private static Object readOne(String sql, String trace) {
         try (Connection c = adminPool.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, trace);
             try (var rs = ps.executeQuery()) {
                 if (!rs.next()) {
                     return null;
                 }
-                boolean b = rs.getBoolean(1);
-                return rs.wasNull() ? null : b;
+                Object v = rs.getObject(1);
+                return rs.wasNull() ? null : v;
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("读取 attribution 失败", e);
+            throw new IllegalStateException("读取列 " + sql + " 失败: " + trace, e);
         }
     }
 
-    /** 与 L2AttributionEvaluator.VERDICT 同字面量；守卫不得引用被测实现常量。 */
-    private static final class L2Constants {
-        static final String VERDICT = "ATTRIBUTION";
+    private static long countEvalSample(String trace) {
+        try (Connection c = adminPool.getConnection();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT count(*) FROM platform.agent_eval_sample WHERE trace_id = ?")) {
+            ps.setString(1, trace);
+            try (var rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("统计 eval_sample 失败: " + trace, e);
+        }
     }
 }

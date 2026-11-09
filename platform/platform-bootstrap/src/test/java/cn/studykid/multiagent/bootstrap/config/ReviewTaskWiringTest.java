@@ -15,6 +15,8 @@ import org.springframework.test.context.TestPropertySource;
 import cn.studykid.multiagent.api.platform.PlatformReviewTaskController;
 import cn.studykid.multiagent.application.metrics.AgentMetricCollector;
 import cn.studykid.multiagent.application.review.ReviewAlertService;
+import cn.studykid.multiagent.application.review.ReviewSampler;
+import cn.studykid.multiagent.bootstrap.quality.ReviewSampleJob;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcReviewTaskRepository;
 import cn.studykid.multiagent.ports.persistence.ReviewTaskPort;
 
@@ -103,6 +105,46 @@ class ReviewTaskWiringTest {
         void alertServiceUsesContainerPort() throws Exception {
             assertThat(field(ctx.getBean(ReviewAlertService.class), "reviewTasks"))
                     .as("告警服务若拿了另一个端口，队列写入与端点读取会看到不同事实")
+                    .isSameAs(ctx.getBean(ReviewTaskPort.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("R-3 ⚠️ 分层抽样必须真的挂在调度链路上（P3 · §7.2）")
+    class SamplerWiring {
+
+        @Test
+        @DisplayName("R-3a ⚠️⚠️ ReviewSampler 与定时驱动都必须存在")
+        void samplerAndJobRegistered() {
+            assertThat(ctx.getBean(ReviewSampler.class))
+                    .as("抽样器不存在 ⇒ 队列里只有采集时的内联告警，"
+                            + "分母里「看起来正常」的样本永远没人看过")
+                    .isNotNull();
+            assertThat(ctx.getBean(ReviewSampleJob.class))
+                    .as("⚠️⚠️ 只有 sampler、没有 job = 机制正确但不在链路上"
+                            + "（本仓已三次栽在同一形态：D01 / D03 / F-14）")
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("R-3b ⚠️ 抽样的 @Scheduled 必须真的在驱动类上（不是挂在应用层）")
+        void scheduledLivesOnJobAndIsEnabled() throws Exception {
+            var method = ReviewSampleJob.class.getMethod("sweep");
+            assertThat(method.isAnnotationPresent(
+                            org.springframework.scheduling.annotation.Scheduled.class))
+                    .as("调度注解不在期望位置 = 抽样永不触发，且没有任何报错")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("R-3c ⚠️ 抽样器接的是容器里的指标端口与队列端口（不另起一套）")
+        void samplerUsesContainerPorts() throws Exception {
+            ReviewSampler sampler = ctx.getBean(ReviewSampler.class);
+            assertThat(field(sampler, "metrics"))
+                    .as("抽样器若拿另一个指标端口，扫到的候选与看板口径会分叉")
+                    .isSameAs(ctx.getBean(cn.studykid.multiagent.ports.metrics.AgentMetricPort.class));
+            assertThat(field(sampler, "reviewTasks"))
+                    .as("抽样器若拿另一个队列端口，写入的队列端点读不到")
                     .isSameAs(ctx.getBean(ReviewTaskPort.class));
         }
     }

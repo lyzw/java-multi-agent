@@ -390,6 +390,48 @@ class RetentionErasureIT {
     }
 
     // ══════════════════════════════════════════════════════════════
+    // N-4b 对话原文（run_message）保留期
+    //   ⚠️ 这一组此前**完全没有**：04_retention_role.sql 早就把
+    //   run_message 的 DELETE 授予了 agent_retention，头注释还写明
+    //   「否则『不落原文』的承诺只在写侧成立」，但 ErasurePort 没有对应方法
+    //   ⇒ 真实库里未成年人辅导原话无限期留存（2026-11-09 评估发现）。
+    // ══════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("N-4b 对话原文（run_message）30 天清理")
+    class MessageRetention {
+
+        @Test
+        @DisplayName("R-4c 超过保留期的消息被删除，未到期的保留")
+        void expiredMessageDeleted() throws Exception {
+            String runId = newRun(tenantA, daysAgo(60));
+            insertRunMessage(tenantA, runId, "old", daysAgo(40));
+            insertRunMessage(tenantA, runId, "fresh", daysAgo(5));
+
+            int rows = erasure().purgeExpiredMessages(tenantA, daysAgo(30), 1000);
+
+            assertThat(rows).as("只删到期的那一条").isEqualTo(1);
+            assertThat(countMessages(tenantA, runId)).as("近期消息必须保留").isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("R-4d ⚠️ 租户隔离：A 的清理不得删掉 B 的对话原文")
+        void messagePurgeIsTenantScoped() throws Exception {
+            String runA = newRun(tenantA, daysAgo(60));
+            String runB = newRun(tenantB, daysAgo(60));
+            insertRunMessage(tenantA, runA, "a-old", daysAgo(40));
+            insertRunMessage(tenantB, runB, "b-old", daysAgo(40));
+
+            int rows = erasure().purgeExpiredMessages(tenantA, daysAgo(30), 1000);
+
+            assertThat(rows).isEqualTo(1);
+            assertThat(countMessages(tenantB, runB))
+                    .as("跨租户删除是最严重的一类越界，必须精确为 1")
+                    .isEqualTo(1);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
     // N-5 租户隔离（I-3）
     // ══════════════════════════════════════════════════════════════
 
@@ -629,7 +671,7 @@ class RetentionErasureIT {
     private static RetentionPurgeService purgeService() {
         return new RetentionPurgeService(
                 erasure(),
-                new RetentionPurgeService.RetentionSettings(12, 12, 90, 180, 30, 0, 1000),
+                new RetentionPurgeService.RetentionSettings(12, 12, 90, 180, 30, 30, 0, 1000),
                 "retention-job",
                 java.time.Clock.systemUTC());
     }
@@ -715,6 +757,42 @@ class RetentionErasureIT {
                 ps.setString(3, runId);
                 ps.setTimestamp(4, Timestamp.from(createdAt));
                 ps.executeUpdate();
+            }
+        }
+    }
+
+    /**
+     * 造一条 run_message（对话原文）。
+     *
+     * <p>⚠️ 必须走**管理连接**：run_message 是 FORCE RLS 表，
+     * 不绑租户时 INSERT 会被 WITH CHECK 直接拒绝（不是静默 0 行）。
+     * ⚠️ idem_key 在同一 (tenant, run) 内唯一，故调用方须传不同 key。
+     */
+    private static void insertRunMessage(String tenantId, String runId, String idemKey, Instant createdAt)
+            throws SQLException {
+        try (Connection c = admin.getConnection()) {
+            try (PreparedStatement ps = c.prepareStatement(
+                    "INSERT INTO public.run_message (tenant_id, run_id, role, content, idem_key, created_at) "
+                            + "VALUES (?::uuid, ?::uuid, 'USER', '{\"text\":\"s\"}'::jsonb, ?, ?)")) {
+                ps.setString(1, tenantId);
+                ps.setString(2, runId);
+                ps.setString(3, idemKey);
+                ps.setTimestamp(4, Timestamp.from(createdAt));
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    /** 数该 Run 剩余消息条数（管理连接直读，绕过 RLS 做交叉验证）。 */
+    private static long countMessages(String tenantId, String runId) throws SQLException {
+        try (Connection c = admin.getConnection();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT count(*) FROM public.run_message WHERE tenant_id = ?::uuid AND run_id = ?::uuid")) {
+            ps.setString(1, tenantId);
+            ps.setString(2, runId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
             }
         }
     }

@@ -237,9 +237,10 @@ public class RetentionJob {
                 base.tracesDeleted() + next.tracesDeleted(),
                 base.auditsDeleted() + next.auditsDeleted(),
                 base.memoriesDeleted() + next.memoriesDeleted(),
+                base.messagesDeleted() + next.messagesDeleted(),
                 base.withdrawalsErased() + next.withdrawalsErased(),
                 base.failedCategories() + next.failedCategories());
     }
 
-    private static final PurgeReport EMPTY_REPORT = new PurgeReport(0, 0, 0, 0, 0, 0, 0);
+    private static final PurgeReport EMPTY_REPORT = new PurgeReport(0, 0, 0, 0, 0, 0, 0, 0);
 }

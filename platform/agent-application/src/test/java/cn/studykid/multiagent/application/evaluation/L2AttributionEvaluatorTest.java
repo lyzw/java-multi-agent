@@ -2,6 +2,7 @@ package cn.studykid.multiagent.application.evaluation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -19,7 +20,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort;
-import cn.studykid.multiagent.ports.metrics.AgentMetricPort.EvalSample;
 import cn.studykid.multiagent.ports.persistence.TraceReplayPort;
 import cn.studykid.multiagent.ports.persistence.TraceReplayPort.MessageView;
 
@@ -89,10 +89,9 @@ class L2AttributionEvaluatorTest {
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.GRADED);
         assertThat(r.attributionCorrect()).isTrue();
-        var cap = org.mockito.ArgumentCaptor.forClass(EvalSample.class);
-        verify(metrics).recordEvalSample(cap.capture());
-        assertThat(cap.getValue().verdict()).isEqualTo(L2AttributionEvaluator.VERDICT);
-        assertThat(cap.getValue().attributionCorrect()).isTrue();
+        // ⚠️ 机器判分只回写宽表列；绝不写人工标注表（否则 sampled 被人审统计计一遍）。
+        verify(metrics).recordAttributionGrade(TRACE, TENANT, true);
+        verify(metrics, never()).recordEvalSample(any());
     }
 
     @Test
@@ -117,6 +116,8 @@ class L2AttributionEvaluatorTest {
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_NO_REFERENCE);
         assertThat(r.attributionCorrect()).isNull();
         verify(metrics, never()).recordEvalSample(any());
+        // ⚠️ 未评级时同样不得写宽表列（两条路径都不许「判不了也留个 false」）。
+        verify(metrics, never()).recordAttributionGrade(anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -129,6 +130,8 @@ class L2AttributionEvaluatorTest {
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_NO_JUDGE);
         verify(metrics, never()).recordEvalSample(any());
+        // ⚠️ 未评级时同样不得写宽表列（两条路径都不许「判不了也留个 false」）。
+        verify(metrics, never()).recordAttributionGrade(anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -145,6 +148,8 @@ class L2AttributionEvaluatorTest {
         assertThat(offBoth.evaluate(TENANT, RUN, TRACE, SCENARIO).outcome())
                 .isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_DISABLED);
         verify(metrics, never()).recordEvalSample(any());
+        // ⚠️ 未评级时同样不得写宽表列（两条路径都不许「判不了也留个 false」）。
+        verify(metrics, never()).recordAttributionGrade(anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -156,6 +161,8 @@ class L2AttributionEvaluatorTest {
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_NO_FACTS);
         verify(metrics, never()).recordEvalSample(any());
+        // ⚠️ 未评级时同样不得写宽表列（两条路径都不许「判不了也留个 false」）。
+        verify(metrics, never()).recordAttributionGrade(anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -170,6 +177,8 @@ class L2AttributionEvaluatorTest {
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.SKIPPED_SAMPLING);
         verify(metrics, never()).recordEvalSample(any());
+        // ⚠️ 未评级时同样不得写宽表列（两条路径都不许「判不了也留个 false」）。
+        verify(metrics, never()).recordAttributionGrade(anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -181,5 +190,7 @@ class L2AttributionEvaluatorTest {
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_JUDGE_UNSURE);
         verify(metrics, never()).recordEvalSample(any());
+        // ⚠️ 未评级时同样不得写宽表列（两条路径都不许「判不了也留个 false」）。
+        verify(metrics, never()).recordAttributionGrade(anyString(), anyString(), anyBoolean());
     }
 }

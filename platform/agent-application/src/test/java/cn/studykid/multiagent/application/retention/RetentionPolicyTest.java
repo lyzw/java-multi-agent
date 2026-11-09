@@ -184,6 +184,38 @@ class RetentionPolicyTest {
                     .isEqualTo(1);
         }
 
+        /**
+         * ⚠️ 本用例守的**不是**「端口方法能返回行数」，而是「编排层真的调了它」。
+         *
+         * <p>为什么必须从 {@code runOnce} 进：2026-11-09 的反向验证实测发现，
+         * 直接调 {@code erasure().purgeExpiredMessages(...)} 的真库 IT
+         * 在「把该类别从 {@code RetentionPurgeService} 摘掉」之后**依然全绿** ——
+         * 因为它验的是端口，不是接线。这正是本项目反复治理的
+         * 「机制正确、测试全绿、但不在链路上」形态。
+         */
+        @Test
+        @DisplayName("F-15 ⚠️ 对话原文清理必须在编排链路上真的被调用（且按 message-days 切）")
+        void messagePurgeActuallyWiredIntoOrchestration() {
+            ErasurePortStub port = new ErasurePortStub();
+            port.messagesRows = 3;
+
+            RetentionPurgeService.PurgeReport report =
+                    new RetentionPurgeService(port, settings(), "retention-job", fixedClock())
+                            .runOnce("33333333-3333-3333-3333-333333333333");
+
+            assertThat(report.failedCategories())
+                    .as("对话原文类别不得抛异常被吞（脚本注释说删、代码却没删，是最坏的形态）")
+                    .isZero();
+            assertThat(report.messagesDeleted())
+                    .as("⚠️ run_message 清理必须真的执行：04 授权脚本给了 DELETE 权限，"
+                            + "若代码不调，未成年人原话就无限期留存")
+                    .isEqualTo(3);
+            // settings 里 messageDays=30，fixedClock=2026-10-19T00:00:00Z
+            assertThat(port.lastMessagesCutoff)
+                    .as("cutoff 必须来自 messageDays（不是 traceDays / auditDays 的误用）")
+                    .isEqualTo(Instant.parse("2026-09-19T00:00:00Z"));
+        }
+
         @Test
         @DisplayName("F-14 有变更时必须留下凭证（举证链闭合）")
         void certificateWrittenWhenChanged() {
@@ -200,7 +232,7 @@ class RetentionPolicyTest {
     }
 
     private static RetentionPurgeService.RetentionSettings settings() {
-        return new RetentionPurgeService.RetentionSettings(12, 12, 90, 180, 30, 30, 1000);
+        return new RetentionPurgeService.RetentionSettings(12, 12, 90, 180, 30, 30, 30, 1000);
     }
 
     private static Clock fixedClock() {
@@ -216,6 +248,12 @@ class RetentionPolicyTest {
 
         /** 记忆清理返回行数（第 5 类，P1）。 */
         int memoriesRows;
+
+        /** 对话原文清理返回行数（第 6 类，2026-11-09）。 */
+        int messagesRows;
+
+        /** 最近一次 purgeExpiredMessages 收到的 cutoff（用于验证「按 message-days 切」）。 */
+        Instant lastMessagesCutoff;
 
         final java.util.List<cn.studykid.multiagent.ports.persistence.ErasurePort.ErasureCertificate>
                 certificates = new java.util.ArrayList<>();
@@ -233,6 +271,12 @@ class RetentionPolicyTest {
         @Override
         public int blankExpiredPrompts(String tenantId, Instant cutoff, int limit) {
             return 0;
+        }
+
+        @Override
+        public int purgeExpiredMessages(String tenantId, Instant cutoff, int limit) {
+            lastMessagesCutoff = cutoff;
+            return messagesRows;
         }
 
         @Override

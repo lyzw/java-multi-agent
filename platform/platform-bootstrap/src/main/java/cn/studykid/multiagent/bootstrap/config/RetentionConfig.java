@@ -105,6 +105,7 @@ public class RetentionConfig {
             @Value("${" + RetentionPolicy.KEY_PROMPT_DAYS + "}") String promptDays,
             @Value("${" + RetentionPolicy.KEY_AUDIT_DAYS + "}") String auditDays,
             @Value("${" + RetentionPolicy.KEY_TRACE_DAYS + "}") String traceDays,
+            @Value("${" + RetentionPolicy.KEY_MESSAGE_DAYS + "}") String messageDays,
             @Value("${" + RetentionPolicy.KEY_WITHDRAWAL_GRACE_DAYS + "}") String graceDays,
             @Value("${" + RetentionPolicy.KEY_BATCH_SIZE + "}") String batchSize,
             @Value("${agent.retention.actor}") String actor) {
@@ -115,13 +116,15 @@ public class RetentionConfig {
                         RetentionPolicy.requirePromptDays(promptDays),
                         RetentionPolicy.requireAuditDays(auditDays),
                         RetentionPolicy.requireTraceDays(traceDays),
+                        RetentionPolicy.requireMessageDays(messageDays),
                         RetentionPolicy.requireWithdrawalGraceDays(graceDays),
                         RetentionPolicy.requireBatchSize(batchSize));
         log.info("保留期清理配置已装载: profileMonths={}, memoryMonths={}, promptDays={}, "
-                        + "auditDays={}, traceDays={}, graceDays={}, batchSize={}, actor={}",
+                        + "auditDays={}, traceDays={}, messageDays={}, graceDays={}, "
+                        + "batchSize={}, actor={}",
                 settings.profileMonths(), settings.memoryMonths(), settings.promptDays(),
-                settings.auditDays(), settings.traceDays(), settings.withdrawalGraceDays(),
-                settings.batchSize(), actor);
+                settings.auditDays(), settings.traceDays(), settings.messageDays(),
+                settings.withdrawalGraceDays(), settings.batchSize(), actor);
         return new RetentionPurgeService(erasurePort, settings, actor, Clock.systemUTC());
     }
 

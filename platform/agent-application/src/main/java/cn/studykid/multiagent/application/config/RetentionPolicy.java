@@ -43,6 +43,18 @@ public final class RetentionPolicy {
     /** Trace（run_event）保留天数。 */
     public static final String KEY_TRACE_DAYS = "agent.retention.trace-days";
 
+    /**
+     * 对话原文（{@code public.run_message}）保留天数。
+     *
+     * <p>⚠️ <b>刻意独立于 {@link #KEY_TRACE_DAYS}</b>，即使实现上两者默认同值：
+     * Trace 存的是「发生了什么」（结构化事实，脱敏后可用于质量分析），
+     * 对话原文存的是「辅导时具体说了什么」（未成年人原话，最敏感）。
+     * 共用一个键就意味着「为了多看几天指标，被迫把学生原话也留更久」——
+     * 这类耦合在合规审查里无法解释。默认值与 Trace 对齐（30 天），
+     * 但缩短原话保留期绝不应该需要同时缩短 Trace。
+     */
+    public static final String KEY_MESSAGE_DAYS = "agent.retention.message-days";
+
     /** 撤回同意后的删除宽限天数（FR-019 要求上限 30 天）。 */
     public static final String KEY_WITHDRAWAL_GRACE_DAYS = "agent.retention.withdrawal-grace-days";
 
@@ -94,6 +106,21 @@ public final class RetentionPolicy {
 
     public static int requireTraceDays(@Nullable Object raw) {
         long v = requireInRange(raw, KEY_TRACE_DAYS, 1, 3650);
+        return (int) v;
+    }
+
+    /**
+     * 对话原文保留天数。
+     *
+     * <p>⚠️ 下限 1 天、上限 3650 天，与 Trace 同区间；但语义上更严格：
+     * 这是唯一一类「存了就等于持有学生原话」的数据，
+     * 产品/合规口径（详细设计 §13 第 2 项）定稿后应只降不升。
+     *
+     * @param raw yml 原始值
+     * @return 天数
+     */
+    public static int requireMessageDays(@Nullable Object raw) {
+        long v = requireInRange(raw, KEY_MESSAGE_DAYS, 1, 3650);
         return (int) v;
     }
 

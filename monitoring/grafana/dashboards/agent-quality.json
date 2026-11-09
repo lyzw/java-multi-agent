@@ -1,22 +1,37 @@
 {
   "title": "Agent 对话质量 · 链路指标 / 评估覆盖 / 场景维度（P3/P4）",
   "uid": "agent-quality-overview",
-  "tags": ["agent-quality", "P3", "P4"],
+  "tags": [
+    "agent-quality",
+    "P3",
+    "P4"
+  ],
   "timezone": "browser",
   "editable": true,
   "graphTooltip": 1,
   "refresh": "1m",
-  "time": { "from": "now-24h", "to": "now" },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
   "timepicker": {},
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "panels": [
     {
       "id": 1,
       "title": "链路成功率（近 24h）",
       "type": "stat",
-      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -26,7 +41,12 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^success_rate$/" },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^success_rate$/"
+        },
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "value_and_name",
@@ -38,8 +58,16 @@
       "id": 2,
       "title": "Run 数量（近 24h）",
       "type": "stat",
-      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -49,7 +77,12 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^runs$/" },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^runs$/"
+        },
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "value_and_name"
@@ -59,8 +92,16 @@
       "id": 3,
       "title": "模型调用（Prometheus · ai_model_calls_total）",
       "type": "stat",
-      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus-uid" },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-uid"
+      },
       "targets": [
         {
           "refId": "A",
@@ -68,7 +109,11 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "value_and_name"
@@ -78,8 +123,16 @@
       "id": 4,
       "title": "终止原因分布",
       "type": "piechart",
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -88,14 +141,29 @@
           "rawSql": "SELECT coalesce(terminal_state, 'UNKNOWN') AS 终止状态, count(*) AS 数量 FROM platform.agent_trace_metric WHERE $__timeFilter(started_at) GROUP BY 1 ORDER BY 2 DESC"
         }
       ],
-      "options": { "pieType": "pie", "legend": { "displayMode": "table", "placement": "right", "showValue": true } }
+      "options": {
+        "pieType": "pie",
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showValue": true
+        }
+      }
     },
     {
       "id": 5,
       "title": "Run 耗时（P50 / P95，5 分钟桶）",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -104,15 +172,33 @@
           "rawSql": "SELECT to_timestamp(floor(extract(epoch FROM started_at) / 300) * 300) AS time, percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) AS p50_ms, percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_ms FROM platform.agent_trace_metric WHERE $__timeFilter(started_at) GROUP BY 1 ORDER BY 1"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
     },
     {
       "id": 6,
       "title": "Token 用量（input / output，5 分钟桶）",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -121,15 +207,33 @@
           "rawSql": "SELECT to_timestamp(floor(extract(epoch FROM started_at) / 300) * 300) AS time, sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens FROM platform.agent_trace_metric WHERE $__timeFilter(started_at) GROUP BY 1 ORDER BY 1"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
     },
     {
       "id": 7,
       "title": "工具失败率 Top（按 Trace × 工具聚合）",
       "type": "bargauge",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -138,15 +242,34 @@
           "rawSql": "SELECT tool_name AS 工具, sum(failed_count)::numeric / NULLIF(sum(call_count), 0) AS 失败率 FROM platform.agent_trace_tool_call WHERE $__timeFilter(started_at) GROUP BY 1 HAVING sum(call_count) > 0 ORDER BY 2 DESC NULLS LAST LIMIT 10"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
-      "options": { "displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      }
     },
     {
       "id": 8,
       "title": "最近 Run 明细（点开 run_id 可在平台侧回放 /api/runs/{runId}/transcript）",
       "type": "table",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -155,15 +278,25 @@
           "rawSql": "SELECT run_id, left(tenant_id::text, 8) AS tenant, agent_id, agent_version, terminal_state, duration_ms, input_tokens, output_tokens, tool_rounds, started_at FROM platform.agent_trace_metric WHERE $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 50"
         }
       ],
-      "options": { "showHeader": true }
+      "options": {
+        "showHeader": true
+      }
     },
     {
       "id": 9,
       "title": "评估覆盖率（自动校验 / 人工抽样 · 必须并排看）",
       "description": "详细设计 §7.3：自动校验覆盖率与人工抽样覆盖率并排显示；n<30 只显示「样本不足」，不显示百分比。⚠️ 只校验 3% 时「成功率 99%」本身是误导，成功率必须与本面板并排解读。",
       "type": "table",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -173,31 +306,75 @@
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "none" },
+        "defaults": {
+          "unit": "none"
+        },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "自动校验覆盖率" },
-            "properties": [{ "id": "unit", "value": "percentunit" }, { "id": "decimals", "value": 1 }]
+            "matcher": {
+              "id": "byName",
+              "options": "自动校验覆盖率"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
           },
           {
-            "matcher": { "id": "byName", "options": "人工抽样覆盖率" },
-            "properties": [{ "id": "unit", "value": "percentunit" }, { "id": "decimals", "value": 1 }]
+            "matcher": {
+              "id": "byName",
+              "options": "人工抽样覆盖率"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
           },
           {
-            "matcher": { "id": "byName", "options": "口径" },
-            "properties": [{ "id": "custom.width", "value": 260 }]
+            "matcher": {
+              "id": "byName",
+              "options": "口径"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 260
+              }
+            ]
           }
         ]
       },
-      "options": { "showHeader": true }
+      "options": {
+        "showHeader": true
+      }
     },
     {
       "id": 10,
       "title": "L1 链路完整率（仅已自动校验的 Trace）",
       "description": "⚠️ TRACE_LINK_L1 的 PASS 只代表链路完整（有提问、有非空回答、未截断、无工具失败），**不代表答案正确性**。详细设计 §13 第 3 项（参考答案 / 题库标准解析作为判分源）未确认前，不展示「归因正确率」。n<30 不显示百分比。",
       "type": "stat",
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 21 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 21
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -207,7 +384,12 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^l1_link_complete_rate$/" },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^l1_link_complete_rate$/"
+        },
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "value_and_name",
@@ -220,8 +402,16 @@
       "title": "待审任务数（PENDING / IN_REVIEW）",
       "description": "P2 审查队列 + P3 的 L1_GAP / SAMPLE_RANDOM 都会落到这里。队列恒为 0 时先查采集链路是否接线，而不是默认「质量没问题」。",
       "type": "stat",
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 21 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 21
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -231,7 +421,12 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^pending_reviews$/" },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^pending_reviews$/"
+        },
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "value_and_name"
@@ -242,8 +437,16 @@
       "title": "审查队列明细（HIGH 优先 · 点开 trace_id 走平台回放）",
       "description": "来源口径：ALERT / ANOMALY = 告警联动；L1_GAP = 回放事实不足、机器不硬判；SAMPLE_RANDOM = 黄金基线抽样；MANUAL = 人工建单。",
       "type": "table",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 29 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -252,15 +455,25 @@
           "rawSql": "SELECT source AS \"来源\", priority AS \"优先级\", status AS \"状态\", trace_id AS \"Trace\", left(tenant_id::text, 8) AS \"租户\", run_id AS \"Run\", left(coalesce(note, ''), 80) AS \"备注\", created_at AS \"创建时间\" FROM platform.review_task WHERE $__timeFilter(created_at) ORDER BY CASE priority WHEN 'HIGH' THEN 0 WHEN 'NORMAL' THEN 1 ELSE 2 END, created_at DESC LIMIT 50"
         }
       ],
-      "options": { "showHeader": true }
+      "options": {
+        "showHeader": true
+      }
     },
     {
       "id": 13,
       "title": "按场景拆分（自动校验 / 人工抽样覆盖率 · n<30 不展示百分比）",
       "description": "场景来自 run.input_payload.scenario 的显式标注，经白名单规范化；NULL 独立成「未标注」组，绝不从对话正文派生。覆盖率必须与样本数并排看：n<30 只显示「样本不足」，百分比置空，避免 3% 覆盖下的 99% 成功率被误读。",
       "type": "table",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 38 },
-      "datasource": { "type": "postgres", "uid": "platform-pg" },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
       "targets": [
         {
           "refId": "A",
@@ -269,7 +482,108 @@
           "rawSql": "SELECT coalesce(nullif(scenario, ''), '未标注') AS \"场景\", count(*) AS \"样本数\", count(*) FILTER (WHERE auto_checked IS TRUE) AS \"已自动校验\", count(*) FILTER (WHERE sampled IS TRUE) AS \"已人工抽样\", CASE WHEN count(*) >= 30 THEN round(100.0 * (count(*) FILTER (WHERE auto_checked IS TRUE)) / count(*), 1) ELSE NULL END AS \"自动覆盖率%\", CASE WHEN count(*) >= 30 THEN round(100.0 * (count(*) FILTER (WHERE sampled IS TRUE)) / count(*), 1) ELSE NULL END AS \"抽样覆盖率%\", CASE WHEN count(*) >= 30 THEN '可判读' ELSE '样本不足（n<30，不展示百分比）' END AS \"口径\" FROM platform.agent_trace_metric WHERE $__timeFilter(started_at) GROUP BY 1 ORDER BY count(*) DESC LIMIT 50"
         }
       ],
-      "options": { "showHeader": true }
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 14,
+      "title": "成本趋势（按小时 · 仅统计已采集成本的行）",
+      "description": "详细设计 §9.1「成本趋势」：此前 13 面板未覆盖。⚠️ 分母只算 cost_amount IS NOT NULL 的行——把「未采集成本」按 0 计入会把均价算低，是最常见的静默失真。",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 29
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('hour', started_at) AS time, sum(cost_amount) AS \"成本合计\", count(*) AS \"样本数 n\", avg(cost_amount) AS \"单次均价\" FROM platform.agent_trace_metric WHERE $__timeFilter(started_at) AND cost_amount IS NOT NULL GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 15,
+      "title": "内容质量 · 归因正确率（L2 · 仅已评级样本）",
+      "description": "详细设计 §9.1「内容质量·归因正确率」。⚠️ 分母是 agent_eval_sample 里 attribution_correct 非空的行；管线已接但默认 fail-closed 不评级（无判分源 ⇒ n=0 ⇒ 显示「未启用」），绝不把「未启用」渲染成 0% 或 100%。",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 29
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH s AS (  SELECT count(*) AS graded,          count(*) FILTER (WHERE attribution_correct) AS correct   FROM platform.agent_eval_sample   WHERE $__timeFilter(sampled_at) AND attribution_correct IS NOT NULL) SELECT graded AS \"已评级样本 n\",   CASE WHEN graded >= 30 THEN correct::numeric / NULLIF(graded,0) END AS \"归因正确率\",   correct AS \"判对条数\",   CASE WHEN graded = 0 THEN '未启用（无判分源 / 判定器未注册）'        WHEN graded < 30 THEN '样本不足（n<30，不展示百分比）'        ELSE '样本充足' END AS \"口径\" FROM s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 16,
+      "title": "内容质量 · 幻觉率（人工抽样口径）",
+      "description": "详细设计 §9.1「内容质量·幻觉率」。⚠️ 分母是 sampled IS TRUE 的行（真正被人看过的样本），不是全量——用全量做分母会把「没看过」当成「没幻觉」，幻觉率被系统性低估。",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 29
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "platform-pg"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH s AS (  SELECT count(*) FILTER (WHERE sampled IS TRUE) AS n,          count(*) FILTER (WHERE sampled IS TRUE AND hallucination IS TRUE) AS hallucinated   FROM platform.agent_trace_metric WHERE $__timeFilter(started_at)) SELECT n AS \"人工抽样 n\",   CASE WHEN n >= 30 THEN hallucinated::numeric / NULLIF(n,0) END AS \"幻觉率\",   hallucinated AS \"幻觉条数\",   CASE WHEN n = 0 THEN '未抽样（无人工标注）'        WHEN n < 30 THEN '样本不足（n<30，不展示百分比）'        ELSE '样本充足' END AS \"口径\" FROM s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
     }
   ]
 }

@@ -14,6 +14,8 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
@@ -38,6 +40,8 @@ import cn.studykid.multiagent.ports.metrics.AgentMetricPort;
  */
 @Repository
 public class JdbcAgentMetricRepository implements AgentMetricPort {
+
+    private static final Logger log = LoggerFactory.getLogger(JdbcAgentMetricRepository.class);
 
     private final DataSource dataSource;
 
@@ -505,6 +509,59 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
         return out;
     }
 
+    @Override
+    public @NonNull List<SamplingCandidate> samplingCandidates(@NonNull MetricQuery query, int limit) {
+        MetricQuery q = query.clamp();
+        int safeLimit = Math.min(Math.max(limit, 1), 500);
+        // ⚠️ 判据是 `sampled IS NOT TRUE` 而**不是** `sampled = FALSE`：
+        //    该列的历史值是 NULL（P7 采集期未接人审轨），等值比较会把全部历史样本漏掉 →
+        //    抽样器「跑起来了却什么都抽不到」，而且不报错。
+        String sql = """
+                SELECT trace_id, tenant_id, run_id, scenario, auto_checked, auto_verified,
+                       max_rounds_reached, loop_suspected_count, safety_blocked_count,
+                       coalesce(input_tokens,0) + coalesce(output_tokens,0) AS total_tokens,
+                       started_at
+                FROM platform.agent_trace_metric
+                WHERE started_at >= ? AND started_at < ?
+                  AND sampled IS NOT TRUE
+                """;
+        sql = applyFilters(sql, q, false);
+        // ⚠️ 末尾必须留空格：Java text block 会吃掉开分隔符后的换行，
+        //    直接拼 ORDER BY 会得到 `?ORDER BY`（本仓已在场景筛选上踩过一次）。
+        sql = sql + " ";
+        sql += """
+                ORDER BY started_at DESC
+                LIMIT ?
+                """;
+        List<SamplingCandidate> out = new ArrayList<>();
+        try (Connection conn = openSystem();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            int i = bindRange(ps, q, 1);
+            i = bindDims(ps, q, i, false);
+            ps.setInt(i, safeLimit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    out.add(new SamplingCandidate(
+                            rs.getString("trace_id"),
+                            String.valueOf(rs.getObject("tenant_id")),
+                            String.valueOf(rs.getObject("run_id")),
+                            rs.getString("scenario"),
+                            nullableBoolean(rs, "auto_checked"),
+                            nullableBoolean(rs, "auto_verified"),
+                            nullableBoolean(rs, "max_rounds_reached"),
+                            nullableInt(rs, "loop_suspected_count"),
+                            nullableInt(rs, "safety_blocked_count"),
+                            nullableLong(rs, "total_tokens"),
+                            rs.getTimestamp("started_at").toInstant()));
+                }
+            }
+            conn.commit();
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询抽样候选失败", e);
+        }
+        return out;
+    }
+
     /** 超大 token 阈值：超过它通常是死循环而不是「任务真的复杂」。 */
     public static final long OVERSIZED_TOKEN_THRESHOLD = 20_000L;
 
@@ -554,6 +611,40 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
             conn.commit();
         } catch (SQLException e) {
             throw new IllegalStateException("录入抽样标注失败", e);
+        }
+    }
+
+    @Override
+    public void recordAttributionGrade(@NonNull String traceId, @NonNull String tenantId,
+                                       boolean correct) {
+        // ⚠️⚠️ **只写 attribution_correct 这一列**，不改 sampled / human_verdict：
+        //    · sampled=TRUE 会把人机判分算进「人工抽样覆盖率」→ 覆盖率变假指标；
+        //    · human_verdict 非 SUCCESS 会被 false_ok 统计成「自动通过但人工判失败」
+        //      → 每写一条凭空生成一条劣化样本。
+        //    两张表的 verdict CHECK 只收 SUCCESS/PARTIAL/FAIL（人工口径），
+        //    机器结论不是「人工裁定」，故根本不进那两列。
+        // ⚠️ 带租户谓词：本连接是 openSystem（不受 RLS 约束），只按 trace_id 更新
+        //    会允许 A 租户改写 B 租户的指标行（跨租户写入）。
+        String sql = """
+                UPDATE platform.agent_trace_metric
+                   SET attribution_correct = ?, computed_at = now()
+                 WHERE trace_id = ? AND tenant_id = ?::uuid
+                """;
+        try (Connection conn = openSystem();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setBoolean(1, correct);
+            ps.setString(2, traceId);
+            ps.setString(3, tenantId);
+            int rows = ps.executeUpdate();
+            if (rows == 0) {
+                // ⚠️ 0 行不是「已写入」：采集尚未落宽表时会发生。如实记录，
+                //    绝不静默成功 —— 否则「判了但看板没数」无从排查。
+                log.warn("回写归因判分未命中任何宽表行（采集可能尚未落库）: trace={}, tenant={}",
+                        traceId, tenantId);
+            }
+            conn.commit();
+        } catch (SQLException e) {
+            throw new IllegalStateException("回写归因判分失败: " + traceId, e);
         }
     }
 

@@ -88,6 +88,34 @@ public interface ErasurePort {
                            int limit);
 
     /**
+     * 清理到期的<b>对话原文</b>（{@code public.run_message}）。
+     *
+     * <p>⚠️⚠️ <b>本方法此前缺失，导致「与 Run 对齐 30 天」的承诺只在写侧成立</b>
+     *   （2026-11-09 评估发现）：{@code 04_retention_role.sql} 早已把
+     *   {@code run_message} 显式授予 {@code agent_retention} 的 DELETE，
+     *   头注释甚至写明「否则『不落原文』的承诺只在写侧成立、读侧的数据却能无限期留存」，
+     *   但 {@code ErasurePort} 没有对应方法、{@code RetentionPurgeService} 也没有这一类别
+     *   ⇒ 全仓 {@code DELETE FROM run_message} 只出现在测试里，真实库里
+     *   <b>未成年人辅导原话无限期留存</b>。
+     *
+     * <p>⚠️ <b>为什么按 {@code created_at} 切而不是按 run 的终态时间</b>：
+     *   一条消息在 Run 结束后仍可能被补写（重试、补采）。按消息自身的 created_at 切，
+     *   「消息写入后满 N 天」是一个可解释、可举证的判据；按 run 时间切则会出现
+     *   「Run 到期但消息比 Run 还新」的歧义。
+     *
+     * <p>⚠️ <b>必须由 {@code agent_retention} 凭据执行</b>（与审计删除同一条纪律）：
+     *   对话原文是保留期最长、敏感度最高的一类数据，删错不可逆。
+     *
+     * @param tenantId 租户标识，必填（本端口刻意不提供无租户的批量删除）
+     * @param cutoff   早于该时点的消息视为到期
+     * @param limit    单轮上限，防止长事务锁表
+     * @return 实际删除的消息行数
+     */
+    int purgeExpiredMessages(@NonNull String tenantId,
+                             @NonNull Instant cutoff,
+                             int limit);
+
+    /**
      * 清理到期的审计记录。
      *
      * <p>⚠️ <b>{@code actor} 不可为空</b>（D-1）：

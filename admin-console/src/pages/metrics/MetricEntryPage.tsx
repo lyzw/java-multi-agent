@@ -112,6 +112,7 @@ export function MetricEntryPage(): JSX.Element {
       verdict: v.verdict as EvalVerdict,
       hallucination: v.hallucination as boolean | undefined,
       instructionFollowed: v.instructionFollowed as boolean | undefined,
+      attributionCorrect: v.attributionCorrect as boolean | undefined,
       note: v.note ? String(v.note) : undefined,
     }
     try {
@@ -205,6 +206,13 @@ export function MetricEntryPage(): JSX.Element {
           <Select placeholder="可选" allowClear options={YES_NO} />
         </Form.Item>
         <Form.Item label="是否遵从指令" name="instructionFollowed">
+          <Select placeholder="可选" allowClear options={YES_NO} />
+        </Form.Item>
+        <Form.Item
+          label="归因是否正确"
+          name="attributionCorrect"
+          tooltip="人工判定这次回答的错因归因是否正确。⚠️ 机器判分（L2）走独立通道，不填这里。"
+        >
           <Select placeholder="可选" allowClear options={YES_NO} />
         </Form.Item>
         <Form.Item label="备注" name="note">

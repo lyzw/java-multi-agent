@@ -28,17 +28,25 @@ import cn.studykid.multiagent.ports.persistence.TraceReplayPort.MessageView;
  *     <li>抽样未命中 → 跳过（但不算「未评级」）。</li>
  *   </ol>
  *
- * <p>评出的结论写入 {@code agent_eval_sample(verdict='ATTRIBUTION', attribution_correct=bool)}
- *   并回填宽表 {@code agent_trace_metric.attribution_correct}，使看板的「归因正确率(L2)」
+ * <p>评出的结论<b>只</b>回填宽表 {@code agent_trace_metric.attribution_correct}
+ *   （经 {@code AgentMetricPort.recordAttributionGrade}），使看板的「归因正确率(L2)」
  *   成为<b>真数字</b>。判定器返回 empty（拿不准）时记为「待人工」，不写布尔。
+ *
+ * <p>⚠️⚠️ <b>绝不写 {@code agent_eval_sample}</b>（2026-11-09 修正）：
+ *   早先版本把机器结论写成 {@code verdict='ATTRIBUTION'} 塞进人工标注表，
+ *   直接撞上两张表的 CHECK 约束（{@code verdict} / {@code human_verdict} 只收
+ *   SUCCESS/PARTIAL/FAIL），且即便放宽约束也会污染「人工抽样覆盖率」——
+ *   {@code recordEvalSample} 的回填会把 {@code sampled} 置 TRUE，
+ *   机器判分就被人审统计计一遍（详细设计 §0.0 铁律第 2 条明令禁止）。
+ *   现在机器结论与人工标注<b>物理分离</b>：机器写宽表列，人工走 eval_sample。
  */
 @Service
 public class L2AttributionEvaluator {
 
     private static final Logger log = LoggerFactory.getLogger(L2AttributionEvaluator.class);
 
-    /** 写入 agent_eval_sample 的 verdict 标识。 */
-    public static final String VERDICT = "ATTRIBUTION";
+    /** 判分来源标识（写日志与证据摘要用；<b>不再</b>作为 eval_sample 的 verdict）。 */
+    public static final String SOURCE = "ATTRIBUTION_JUDGE";
 
     private final ReferenceAnswerSource referenceSource;
     private final @Nullable AttributionJudge judge;
@@ -128,9 +136,9 @@ public class L2AttributionEvaluator {
         if (correct.isEmpty()) {
             return Result.of(Outcome.UNGRADED_JUDGE_UNSURE);
         }
-        metrics.recordEvalSample(new AgentMetricPort.EvalSample(
-                traceId, tenantId, VERDICT, null, null, correct.get(),
-                "L2 LLM-as-judge | scenario=" + scenario, "ATTRIBUTION_JUDGE"));
+        // ⚠️ 只写宽表列（机器判分），不碰 agent_eval_sample / sampled / human_verdict。
+        metrics.recordAttributionGrade(traceId, tenantId, correct.get());
+        log.info("L2 归因判分已回写: trace={}, scenario={}, correct={}", traceId, scenario, correct.get());
         return Result.graded(correct.get());
     }
 
