@@ -18,9 +18,16 @@ import org.jspecify.annotations.Nullable;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.page.PageCursor;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.AuditQueryPort;
 import cn.studykid.multiagent.ports.persistence.Page;
+
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * 审计查询实现（P4-D13 / G10 · P3-D07 追加只读）。
@@ -37,7 +44,7 @@ import cn.studykid.multiagent.ports.persistence.Page;
 public class JdbcAuditQueryRepository implements AuditQueryPort {
 
     private static final String SQL_BASE = """
-            SELECT audit_id, actor_id, action, resource_type, resource_id,
+            SELECT tenant_id, audit_id, actor_id, action, resource_type, resource_id,
                    correlation_id, created_at, detail::text
             FROM audit_record
             WHERE tenant_id = ?::uuid
@@ -48,8 +55,33 @@ public class JdbcAuditQueryRepository implements AuditQueryPort {
 
     private final DataSource dataSource;
 
+    // ── P1 影子态接入（12 文 §4.5 / 13 文 §5.2）──────────────────────────────
+    // audit_record 为租户隔离实体（policy-mapping.yaml: TENANT_ONLY + FORCE RLS）。
+    // 默认全部为 null / false ⇒ 现有行为 100% 不变；仅当显式注入且 shadowEnabled=true 时生效。
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private boolean shadowEnabled;
+    private @NonNull String sentinelTenantId;
+
+    /** Spring 装配入口（保持既有单参构造，确保 @Repository 装配不变）。 */
+    @Autowired
     public JdbcAuditQueryRepository(@NonNull DataSource dataSource) {
+        this(dataSource, null, null, false, "");
+    }
+
+    /**
+     * 影子态接线构造（P1 由 {@code AuthzShadowConfiguration} 在开启染色时调用；测试用）。
+     */
+    JdbcAuditQueryRepository(@NonNull DataSource dataSource,
+                             @Nullable ScopedDataAccess scoped,
+                             @Nullable AuthzShadowReporter reporter,
+                             boolean shadowEnabled,
+                             @NonNull String sentinelTenantId) {
         this.dataSource = dataSource;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     @Override
@@ -105,8 +137,13 @@ public class JdbcAuditQueryRepository implements AuditQueryPort {
                 for (int i = 0; i < params.size(); i++) {
                     ps.setObject(i + 1, params.get(i));
                 }
+                // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+                shadowCompare("audit_record", tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
+                        // ⚠️ 主体 = 查询租户；行归属 = 结果行真实 tenant_id（防同义反复）。
+                        String rowTenant = rs.getString("tenant_id");
+                        shadowTaint("audit_record", tenantId, rowTenant);
                         rows.add(read(rs));
                     }
                 }
@@ -180,5 +217,50 @@ public class JdbcAuditQueryRepository implements AuditQueryPort {
         }
         return TransactionalConnectionHolder.openTenantConnection(
                 dataSource, new TenantContext(tenantId, "system", java.util.Set.of(), 0L));
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /** 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。 */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）：
+     * 主体是<b>发起本次查询的租户</b>，行归属从<b>结果行</b>读出的 {@code tenant_id}。
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }

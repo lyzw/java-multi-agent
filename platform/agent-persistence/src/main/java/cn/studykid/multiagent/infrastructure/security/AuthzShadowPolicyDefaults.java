@@ -48,6 +48,8 @@ public final class AuthzShadowPolicyDefaults {
             "budget_reservation",
             "budget_account",
             "agent_invocation",
+            "audit_record",
+            "tenant_config_override",
             // 逻辑资源名（物理表 agent_trace_metric，基线 scope=NONE 的缺口表）
             "platform.agent_trace_metric");
 
