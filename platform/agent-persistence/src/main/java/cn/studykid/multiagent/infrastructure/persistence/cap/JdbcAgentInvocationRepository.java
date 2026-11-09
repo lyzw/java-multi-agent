@@ -17,9 +17,16 @@ import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.orchestration.AgentInvocation;
 import cn.studykid.multiagent.core.orchestration.AgentInvocationStatus;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.AgentInvocationPort;
+
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * {@link AgentInvocationPort} 的 PostgreSQL 实现（多级 Agent v1.1 · P2-MA-01）。
@@ -112,8 +119,33 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
 
     private final DataSource dataSource;
 
+    // ── P1 影子态接入（12 文 §4.5 / 13 文 §5.2）──────────────────────────────
+    // agent_invocation 为租户隔离实体（policy-mapping.yaml: TENANT_ONLY + FORCE RLS）。
+    // 默认全部为 null / false ⇒ 现有行为 100% 不变；仅当显式注入且 shadowEnabled=true 时生效。
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private boolean shadowEnabled;
+    private @NonNull String sentinelTenantId;
+
+    /** Spring 装配入口（保持既有单参构造，确保 @Bean 装配不变）。 */
+    @Autowired
     public JdbcAgentInvocationRepository(@NonNull DataSource dataSource) {
+        this(dataSource, null, null, false, "");
+    }
+
+    /**
+     * 影子态接线构造（P1 由 {@code AuthzShadowConfiguration} 在开启染色时调用；测试用）。
+     */
+    JdbcAgentInvocationRepository(@NonNull DataSource dataSource,
+                                  @Nullable ScopedDataAccess scoped,
+                                  @Nullable AuthzShadowReporter reporter,
+                                  boolean shadowEnabled,
+                                  @NonNull String sentinelTenantId) {
         this.dataSource = dataSource;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     @Override
@@ -180,11 +212,19 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
         return TransactionalConnectionHolder.inTransaction(
                 dataSource, tenantContext(tenantId),
                 conn -> {
+                    // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+                    shadowCompare("agent_invocation", tenantId, true);
                     try (PreparedStatement ps = conn.prepareStatement(SQL_FIND)) {
                         ps.setString(1, tenantId);
                         ps.setString(2, invocationId);
                         try (ResultSet rs = ps.executeQuery()) {
-                            return rs.next() ? Optional.of(map(rs)) : Optional.<AgentInvocation>empty();
+                            if (!rs.next()) {
+                                return Optional.<AgentInvocation>empty();
+                            }
+                            // ⚠️ 主体 = 查询租户；行归属 = 结果行真实 tenant_id（防同义反复）。
+                            String rowTenant = rs.getString("tenant_id");
+                            shadowTaint("agent_invocation", tenantId, rowTenant);
+                            return Optional.of(map(rs));
                         }
                     }
                 });
@@ -197,11 +237,15 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
                 dataSource, tenantContext(tenantId),
                 conn -> {
                     List<AgentInvocation> rows = new ArrayList<>();
+                    // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+                    shadowCompare("agent_invocation", tenantId, true);
                     try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_BY_RUN)) {
                         ps.setString(1, tenantId);
                         ps.setString(2, runId);
                         try (ResultSet rs = ps.executeQuery()) {
                             while (rs.next()) {
+                                // ⚠️ 主体 = 查询租户；行归属 = 结果行真实 tenant_id（防同义反复）。
+                                shadowTaint("agent_invocation", tenantId, rs.getString("tenant_id"));
                                 rows.add(map(rs));
                             }
                         }
@@ -334,5 +378,50 @@ public class JdbcAgentInvocationRepository implements AgentInvocationPort {
 
     private static TenantContext tenantContext(String tenantId) {
         return new TenantContext(tenantId, "system", Set.of(), 0L);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /** 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。 */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）：
+     * 主体是<b>发起本次查询的租户</b>，行归属从<b>结果行</b>读出的 {@code tenant_id}。
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }
