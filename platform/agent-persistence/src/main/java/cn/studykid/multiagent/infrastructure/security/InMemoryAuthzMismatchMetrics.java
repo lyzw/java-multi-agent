@@ -18,6 +18,7 @@ public final class InMemoryAuthzMismatchMetrics implements AuthzMismatchMetrics 
     private final AtomicLong unrestrictedUsages = new AtomicLong();
     private final AtomicLong mismatches = new AtomicLong();
     private final AtomicLong taintViolations = new AtomicLong();
+    private final AtomicLong rlsDependent = new AtomicLong();
 
     @Override
     public void recordShadowSample(@NonNull String resourceType) {
@@ -42,6 +43,11 @@ public final class InMemoryAuthzMismatchMetrics implements AuthzMismatchMetrics 
     }
 
     @Override
+    public void recordRlsDependent(@NonNull String resourceType) {
+        rlsDependent.incrementAndGet();
+    }
+
+    @Override
     public long shadowSamples() {
         return shadowSamples.get();
     }
@@ -59,5 +65,10 @@ public final class InMemoryAuthzMismatchMetrics implements AuthzMismatchMetrics 
     @Override
     public long taintViolations() {
         return taintViolations.get();
+    }
+
+    @Override
+    public long rlsDependent() {
+        return rlsDependent.get();
     }
 }

@@ -46,6 +46,13 @@ public final class MicrometerAuthzMismatchMetrics implements AuthzMismatchMetric
     static final String SHADOW_SAMPLES_TOTAL = "cap.authz_shadow_samples_total";
     static final String UNRESTRICTED_TOTAL = "cap.authz_unrestricted_total";
     static final String TAINT_VIOLATIONS_TOTAL = "cap.authz_taint_violations_total";
+    /**
+     * 仍依赖 RLS 兜底的查询数（P2 退役清单的当前规模）。
+     *
+     * <p>⚠️ <b>与 {@link #MISMATCH_TOTAL} 分开</b>：它不是违例，而是「迁移清单条目」。
+     * 混进 mismatch 会让出口门禁（{@code AUTHZ_MISMATCH=0}）要么永不达成、要么被迫调松阈值。
+     */
+    static final String RLS_DEPENDENT_TOTAL = "cap.authz_rls_dependent_total";
     static final String TAG_RESOURCE_TYPE = "resource_type";
 
     private final MeterRegistry registry;
@@ -53,6 +60,7 @@ public final class MicrometerAuthzMismatchMetrics implements AuthzMismatchMetric
     private final AtomicLong unrestrictedUsages = new AtomicLong();
     private final AtomicLong mismatches = new AtomicLong();
     private final AtomicLong taintViolations = new AtomicLong();
+    private final AtomicLong rlsDependent = new AtomicLong();
 
     public MicrometerAuthzMismatchMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -105,6 +113,18 @@ public final class MicrometerAuthzMismatchMetrics implements AuthzMismatchMetric
     }
 
     @Override
+    public void recordRlsDependent(@NonNull String resourceType) {
+        rlsDependent.incrementAndGet();
+        Counter.builder(RLS_DEPENDENT_TOTAL)
+                .description("Queries relying on RLS only (no explicit tenant predicate)")
+                .tag(TAG_RESOURCE_TYPE, resourceType)
+                .register(registry)
+                .increment();
+        // ⚠️ 不是违例 ⇒ DEBUG（不打 WARN，避免与 mismatch 告警混淆）
+        LOG.debug("[authz-rls-dependent] 查询未带显式租户谓词，当前靠 RLS 兜底 resourceType={}", resourceType);
+    }
+
+    @Override
     public long shadowSamples() {
         return shadowSamples.get();
     }
@@ -122,5 +142,10 @@ public final class MicrometerAuthzMismatchMetrics implements AuthzMismatchMetric
     @Override
     public long taintViolations() {
         return taintViolations.get();
+    }
+
+    @Override
+    public long rlsDependent() {
+        return rlsDependent.get();
     }
 }

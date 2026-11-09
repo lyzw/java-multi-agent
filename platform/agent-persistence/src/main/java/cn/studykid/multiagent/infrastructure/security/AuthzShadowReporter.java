@@ -5,6 +5,8 @@ import cn.studykid.multiagent.infrastructure.persistence.scope.RowAttribution;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 影子比对 / 染色违例的<b>上报桥</b>（12 文 §4.5 / D6）。
@@ -24,6 +26,8 @@ import org.jspecify.annotations.Nullable;
  * <p>这一翻转由配置驱动，是「双写取交集 → 应用层唯一权威」的开关点之一（13 文 §3 红线 1）。
  */
 public final class AuthzShadowReporter {
+
+    private static final Logger LOG = LoggerFactory.getLogger(AuthzShadowReporter.class);
 
     private final @NonNull AuthzMismatchMetrics metrics;
     private final boolean blockOnViolation;
@@ -74,6 +78,25 @@ public final class AuthzShadowReporter {
         if (blockOnViolation) {
             throw new AccessDeniedException("AUTHZ_MISMATCH", detail);
         }
+    }
+
+    /**
+     * 「仍依赖 RLS 兜底」的查询：Gate 要求按租户收口，但该查询<b>没有显式租户谓词</b>。
+     *
+     * <p>⚠️ <b>只计数，绝不阻断</b>（即使 {@code blockOnViolation=true} 也不抛）：
+     * 它<b>不是违例</b>，而是「退役 RLS 前必须补应用层过滤」的迁移清单条目。
+     * 把它当违例处理，会让 P1 期间大量正常查询直接失败 —— 那是把影子期变成了停机期。
+     *
+     * <p>⚠️ <b>为什么必须有这个信号</b>（2026-11-09 实测推导）：RLS 仍在时，
+     * 染色违例与比对不一致<b>都结构性为 0</b>（RLS 已经保证只返回本租户的行、
+     * Gate 用的主体租户与查询绑定租户通常相同）。
+     * 于是「2 周 AUTHZ_MISMATCH=0」<b>无论隔离做得好不好都会达成</b>，
+     * 它<b>不是</b>「应用层过滤已正确」的证据。
+     * 本计数是 P1 期间唯一能产出非平凡信号、且直接对应「退役 RLS 后是否还会漏」的量。
+     */
+    public void reportRlsDependent(@NonNull String resourceType, @NonNull String detail) {
+        metrics.recordRlsDependent(resourceType);
+        LOG.debug("[authz-rls-dependent] resourceType={} detail={}", resourceType, detail);
     }
 
     /** 染色校验捕到越权行。P1 仅记录。 */

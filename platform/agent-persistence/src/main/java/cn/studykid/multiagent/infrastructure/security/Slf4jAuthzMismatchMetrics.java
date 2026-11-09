@@ -47,6 +47,13 @@ public final class Slf4jAuthzMismatchMetrics implements AuthzMismatchMetrics {
     }
 
     @Override
+    public void recordRlsDependent(@NonNull String resourceType) {
+        delegate.recordRlsDependent(resourceType);
+        // ⚠️ 不是违例 ⇒ 不打 WARN（WARN 会触发值守告警，会把「迁移清单」误当成「线上事故」）。
+        LOG.debug("[authz-rls-dependent] 查询未带显式租户谓词，当前靠 RLS 兜底 resourceType={}", resourceType);
+    }
+
+    @Override
     public long shadowSamples() {
         return delegate.shadowSamples();
     }
@@ -64,5 +71,10 @@ public final class Slf4jAuthzMismatchMetrics implements AuthzMismatchMetrics {
     @Override
     public long taintViolations() {
         return delegate.taintViolations();
+    }
+
+    @Override
+    public long rlsDependent() {
+        return delegate.rlsDependent();
     }
 }

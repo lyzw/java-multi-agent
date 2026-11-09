@@ -36,4 +36,18 @@ class AuthzShadowReporterTest {
                         new ScopeFilter.TenantOnly("a")));
         assertEquals(2, m.mismatches() + m.taintViolations());
     }
+
+    @Test
+    void rlsDependency_neverBlocksAndNeverCountsAsMismatch() {
+        // ⚠️ 「靠 RLS 兜底」是迁移清单条目，不是违例：
+        //    阻断模式下也必须不抛、也不进 mismatches（出口门禁指标语义不能被污染）。
+        InMemoryAuthzMismatchMetrics m = new InMemoryAuthzMismatchMetrics();
+        AuthzShadowReporter blocking = new AuthzShadowReporter(m, true);
+
+        blocking.reportRlsDependent("t", "查询未带显式租户谓词");
+
+        assertEquals(1, m.rlsDependent());
+        assertEquals(0, m.mismatches());
+        assertEquals(0, m.taintViolations());
+    }
 }

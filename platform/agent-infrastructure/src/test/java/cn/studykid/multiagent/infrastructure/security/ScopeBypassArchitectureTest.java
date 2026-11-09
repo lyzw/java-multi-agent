@@ -83,7 +83,8 @@ class ScopeBypassArchitectureTest {
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcConfigOverrideRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAuditQueryRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcConfigChangeRepository.java",
-            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcTraceReplayRepository.java");
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcTraceReplayRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcTraceFactRepository.java");
 
     /** 影子钩子的调用形态（静态入口，避免逐仓重复实现）。 */
     private static final Pattern HOOK_CALL =

@@ -47,6 +47,11 @@ public final class AuthzShadowHooks {
      *   <li>Gate 租户 ≠ 查询绑定租户 ⇒ mismatch；</li>
      *   <li>其余（含 TenantWithShared / Unrestricted）影子期不做严格比对。</li>
      * </ul>
+     *
+     * <p>⚠️ <b>另有一条独立计数（不计入 mismatch）</b>：Gate=TenantOnly 而查询
+     * <b>未带显式租户谓词</b> ⇒ 该查询当前<b>完全靠 RLS 兜底</b> ⇒ 退役 RLS 后即越权。
+     * 见 {@link AuthzShadowReporter#reportRlsDependent}：P1 期间染色/比对信号结构性为 0，
+     * 这条是唯一能产出非平凡信号的量。
      */
     public static void compare(@Nullable ScopedDataAccess scoped,
                                @Nullable AuthzShadowReporter reporter,
@@ -115,6 +120,14 @@ public final class AuthzShadowHooks {
                 if (boundTenantId != null && !boundTenantId.equals(t.tenantId())) {
                     reporter.reportMismatch(resourceType,
                             "Gate 租户=" + t.tenantId() + " 但查询绑定租户=" + boundTenantId);
+                }
+                // ⚠️ RLS 依赖度（2026-11-09 新增，**不是 mismatch**）：
+                //    Gate 要求按租户收口，但本次查询**没有显式租户谓词**
+                //    ⇒ 该查询当前完全靠 RLS 兜底 ⇒ 退役 RLS 后就会越权。
+                //    单独计数（不混进 AUTHZ_MISMATCH），因为出口门禁的语义不能被污染。
+                if (!hasTenantPredicate) {
+                    reporter.reportRlsDependent(resourceType,
+                            "Gate 要求按租户收口，但查询未带显式租户谓词（当前靠 RLS 兜底）");
                 }
             }
         } catch (AccessDeniedException ex) {

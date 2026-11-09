@@ -74,6 +74,24 @@ class MicrometerAuthzMismatchMetricsTest {
                 "cap_config_release")).isEqualTo(1.0d);
     }
 
+    @Test
+    void recordsRlsDependencySeparatelyFromMismatch() {
+        // ⚠️ 「靠 RLS 兜底」必须是**独立指标**：混进 mismatch 会让出口门禁
+        //    （AUTHZ_MISMATCH=0）要么永不达成、要么被迫调松阈值。
+        metrics.recordRlsDependent("run");
+        metrics.recordRlsDependent("run");
+
+        assertThat(metrics.rlsDependent()).isEqualTo(2);
+        assertThat(metrics.mismatches())
+                .as("RLS 依赖不得计入 mismatch")
+                .isZero();
+        assertThat(counterValue(MicrometerAuthzMismatchMetrics.RLS_DEPENDENT_TOTAL, "run"))
+                .isEqualTo(2.0d);
+        assertThat(counterValue(MicrometerAuthzMismatchMetrics.MISMATCH_TOTAL, "run"))
+                .as("mismatch 指标上不应出现 RLS 依赖的计数")
+                .isZero();
+    }
+
     private double counterValue(String name, String resourceType) {
         for (Meter m : registry.getMeters()) {
             if (m.getId().getName().equals(name)
