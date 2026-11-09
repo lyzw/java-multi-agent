@@ -423,6 +423,19 @@ public enum ReasonCode {
      * 绝不降级成「先收下、跑起来再说」—— 后者正是本仓库反复出现的
      * 「看起来生效、实际不生效」缺陷类。
      */
+    /**
+     * Agent <b>提示词声明非法</b>（发布期拒绝 · 2026-11-10）。
+     *
+     * <p>触发条件：`instructions` 不是合法 JSON 对象，或携带 V1 未实现的
+     * {@code systemPromptRef}（引用式提示词库）。
+     *
+     * <p>⚠️ <b>为什么必须在发布期挡住</b>：此前只有「前端提交前拒」与
+     * 「运行期 fail-closed 拒绝执行」两道关 —— 直接调 API 仍能把这类声明发布成功，
+     * 而配置一旦生效，<b>该 Agent 的所有新 Run 全部被拒</b>，
+     * 运维看到的是「Agent 突然不可用」，真因却藏在提交那一刻的声明里。
+     * 按 §5.7「只追加、不改写」原则新增，不改任何既有常量语义。
+     */
+    AGENT_INSTRUCTIONS_INVALID("发布期"),
     ROUTING_POLICY_INVALID("发布期");
 
     private final String phase;

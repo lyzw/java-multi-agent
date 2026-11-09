@@ -12,14 +12,14 @@ import org.slf4j.LoggerFactory;
 import cn.studykid.multiagent.application.cap.ClosureResolver;
 import cn.studykid.multiagent.application.modelcatalog.ModelResolver;
 import cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider;
-import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
+import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 
 /**
  * 子 Agent 模型配置装配（多级 Agent v1.1 · P2-MA-02）。
  *
  * <p>⚠️ <b>绑定固定版本</b>：委派目标在发布时已固定 release，
- * 本装配按<b>那个版本</b>的 {@code agent_version.definition} 读取模型配置 ——
+ * 本装配按<b>那个版本</b>的 {@code cap_agent_def} 权威定义读取模型配置 ——
  * 子 Agent 发布新版本后，在途委派不会静默漂移到新模型/新提示词（MA-T08）。
  *
  * <p>⚠️ <b>工具 Schema 来自子 Agent 自己的闭包</b>：模型能看到的工具
@@ -33,7 +33,7 @@ public class WorkerChildAgentModelConfigProvider implements ChildAgentModelConfi
     private static final Logger log = LoggerFactory.getLogger(
             WorkerChildAgentModelConfigProvider.class);
 
-    private final AgentQueryPort agentQuery;
+    private final CapAgentDefPort agentDefs;
     private final ClosureResolver closureResolver;
     private final CapToolDefPort toolDefs;
     /**
@@ -52,44 +52,44 @@ public class WorkerChildAgentModelConfigProvider implements ChildAgentModelConfi
      */
     private final @Nullable ModelResolver resolver;
 
-    public WorkerChildAgentModelConfigProvider(@NonNull AgentQueryPort agentQuery,
+    public WorkerChildAgentModelConfigProvider(@NonNull CapAgentDefPort agentDefs,
                                                @NonNull ClosureResolver closureResolver,
                                                @NonNull CapToolDefPort toolDefs) {
-        this(agentQuery, closureResolver, toolDefs, null, null);
+        this(agentDefs, closureResolver, toolDefs, null, null);
     }
 
     /**
      * 委托工具装配版构造器（第二十批 · 增加委派工具装配）。
      *
-     * @param agentQuery   Agent 版本查询（读模型配置定义）
+     * @param agentDefs   Agent 定义仓储（读权威定义：提示词 / 模型 / 生成参数）
      * @param closureResolver 闭包解析（读工具绑定）
      * @param toolDefs     工具定义仓储（读工具 Schema）
      * @param delegationSchemas 委派工具 Schema 装配器；{@code null} = 不装配委派工具
      */
-    public WorkerChildAgentModelConfigProvider(@NonNull AgentQueryPort agentQuery,
+    public WorkerChildAgentModelConfigProvider(@NonNull CapAgentDefPort agentDefs,
                                                @NonNull ClosureResolver closureResolver,
                                                @NonNull CapToolDefPort toolDefs,
                                                @Nullable DelegationToolSchemaAssembler
                                                        delegationSchemas) {
-        this(agentQuery, closureResolver, toolDefs, delegationSchemas, null);
+        this(agentDefs, closureResolver, toolDefs, delegationSchemas, null);
     }
 
     /**
      * 最完整构造器（接入统一模型目录）。
      *
-     * @param agentQuery   Agent 版本查询（读模型配置定义）
+     * @param agentDefs   Agent 定义仓储（读权威定义：提示词 / 模型 / 生成参数）
      * @param closureResolver 闭包解析（读工具绑定）
      * @param toolDefs     工具定义仓储（读工具 Schema）
      * @param delegationSchemas 委派工具 Schema 装配器；{@code null} = 不装配委派工具
      * @param resolver     统一模型目录解析器；{@code null} = 不解析、原样用 modelRef
      */
-    public WorkerChildAgentModelConfigProvider(@NonNull AgentQueryPort agentQuery,
+    public WorkerChildAgentModelConfigProvider(@NonNull CapAgentDefPort agentDefs,
                                                @NonNull ClosureResolver closureResolver,
                                                @NonNull CapToolDefPort toolDefs,
                                                @Nullable DelegationToolSchemaAssembler
                                                        delegationSchemas,
                                                @Nullable ModelResolver resolver) {
-        this.agentQuery = agentQuery;
+        this.agentDefs = agentDefs;
         this.closureResolver = closureResolver;
         this.toolDefs = toolDefs;
         this.delegationSchemas = delegationSchemas;
@@ -120,7 +120,7 @@ public class WorkerChildAgentModelConfigProvider implements ChildAgentModelConfi
      * 共用装配器（根路径与子路径<b>同一份</b>）。
      */
     private @NonNull AgentModelConfigAssembler assembler() {
-        return new AgentModelConfigAssembler(agentQuery, closureResolver, toolDefs, resolver);
+        return new AgentModelConfigAssembler(agentDefs, closureResolver, toolDefs, resolver);
     }
 
     /**

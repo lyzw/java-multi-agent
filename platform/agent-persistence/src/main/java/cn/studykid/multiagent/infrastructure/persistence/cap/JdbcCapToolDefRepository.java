@@ -41,7 +41,7 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
     private static final String COLUMNS = """
             id, version, name, kind, risk_level, mcp_server_id, mcp_tool_name,
             http_method, http_url, http_timeout_ms,
-            input_schema::text, param_policies::text, config_fingerprint,
+            input_schema::text, param_policies::text, description, config_fingerprint,
             schema_version, created_at, published_at
             """;
 
@@ -59,9 +59,9 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
             INSERT INTO cap_tool_def
                 (id, version, name, kind, risk_level, mcp_server_id, mcp_tool_name,
                  http_method, http_url, http_timeout_ms,
-                 input_schema, param_policies, namespace, config_fingerprint,
+                 input_schema, param_policies, namespace, description, config_fingerprint,
                  schema_version, created_at, updated_at, published_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, 'platform', ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, 'platform', ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id, version) DO NOTHING
             """;
 
@@ -129,14 +129,15 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
                         }
                         ps.setString(11, def.inputSchema());
                         ps.setString(12, def.paramPolicies());
-                        ps.setString(13, def.configFingerprint());
-                        ps.setInt(14, def.schemaVersion());
-                        ps.setTimestamp(15, Timestamp.from(def.createdAt()));
+                        ps.setString(13, def.description());
+                        ps.setString(14, def.configFingerprint());
+                        ps.setInt(15, def.schemaVersion());
                         ps.setTimestamp(16, Timestamp.from(def.createdAt()));
+                        ps.setTimestamp(17, Timestamp.from(def.createdAt()));
                         if (def.publishedAt() == null) {
-                            ps.setNull(17, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                            ps.setNull(18, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
                         } else {
-                            ps.setTimestamp(17, Timestamp.from(def.publishedAt()));
+                            ps.setTimestamp(18, Timestamp.from(def.publishedAt()));
                         }
                         return ps.executeUpdate() > 0;
                     }
@@ -226,6 +227,7 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
                 mapHttpConfig(rs),
                 rs.getString("input_schema"),
                 rs.getString("param_policies"),
+                rs.getString("description"),
                 rs.getString("config_fingerprint"),
                 rs.getInt("schema_version"),
                 rs.getTimestamp("created_at").toInstant(),

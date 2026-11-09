@@ -515,6 +515,9 @@ public class ConfigPublishWorkflowService {
                     spec.name(), spec.description(), spec.roles(), spec.enabledSkills(),
                     spec.skillBundles(), spec.capabilityTags(), spec.overrides(),
                     spec.orchestration(),
+                    // ⚠️ 提示词 / 模型 / 生成参数是**权威定义的一部分**：
+                    //    它们进版本行、也进内容指纹（改了提示词 = 改了内容）。
+                    spec.instructions(), spec.modelRef(), spec.generationParams(),
                     // ⚠️ 占位指纹：内容指纹**不包含**自身，故可先占位再算
                     "pending", 1, now, null);
             String fingerprint = CapObjectFingerprint.of(draft);
@@ -522,6 +525,7 @@ public class ConfigPublishWorkflowService {
                     spec.name(), spec.description(), spec.roles(), spec.enabledSkills(),
                     spec.skillBundles(), spec.capabilityTags(), spec.overrides(),
                     spec.orchestration(),
+                    spec.instructions(), spec.modelRef(), spec.generationParams(),
                     fingerprint, 1, now, null));
         }
         // ⚠️ 契约的版本号与内容指纹**同样由服务端决定**（与 Agent 同口径）：

@@ -155,3 +155,105 @@ describe('agentDraftForm · 校验与归一化', () => {
     expect(NEW_AGENT_SEGMENT).toBe('new')
   })
 })
+
+/**
+ * 提示词 / 模型 / 生成参数（2026-11-10 补）。
+ *
+ * ⚠️ 这三个字段的校验逻辑是 2026-11-09 新增的 221 行代码，当时**零用例**。
+ *    这里从导出的 `normalizeAgentDraft` / `definitionToDraft` 入口进，
+ *    撤掉任一校验分支，对应用例必须变红。
+ */
+describe('agentDraftForm · 提示词 / 模型 / 生成参数', () => {
+  const valid = () => ({
+    ...emptyAgentDraft(),
+    name: '错题归因助手',
+    instructions: '{"inlineInstructions":"你是数学辅导助手"}',
+    modelRef: '  MiniMax-M2.5  ',
+    generationParams: '{"temperature":0.3,"maxOutputTokens":2048}',
+  })
+
+  it('✅ 三字段原样进草稿（提示词不重新序列化，模型去空白）', () => {
+    const r = normalizeAgentDraft(valid())
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.draft.instructions).toBe('{"inlineInstructions":"你是数学辅导助手"}')
+    expect(r.draft.modelRef).toBe('MiniMax-M2.5')
+    expect(r.draft.generationParams).toBe('{"temperature":0.3,"maxOutputTokens":2048}')
+  })
+
+  it('✅ 未声明提示词 / 未绑定模型 → {} 且不带 modelRef 键', () => {
+    const r = normalizeAgentDraft({
+      ...emptyAgentDraft(),
+      name: 'x',
+      instructions: '',
+      modelRef: '',
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.draft.instructions).toBe('{}')
+    expect(r.draft.modelRef).toBeUndefined()
+  })
+
+  it('⛔ systemPromptRef → 当场拒（V1 未实现引用式提示词库）', () => {
+    const r = normalizeAgentDraft({
+      ...valid(),
+      instructions: '{"systemPromptRef":"prompt-x","systemPromptVersion":"3"}',
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error).toContain('systemPromptRef')
+  })
+
+  it('⛔ instructions 不是合法 JSON 对象 → 拒', () => {
+    for (const bad of ['{ 坏掉的', '["inlineInstructions"]']) {
+      const r = normalizeAgentDraft({ ...valid(), instructions: bad })
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain('提示词声明')
+    }
+  })
+
+  it('⛔ inlineInstructions 不是非空字符串 → 拒', () => {
+    const r = normalizeAgentDraft({
+      ...valid(),
+      instructions: '{"inlineInstructions":123}',
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error).toContain('inlineInstructions')
+  })
+
+  it('⛔ 生成参数非法 / 越界 → 拒（不得静默走默认值）', () => {
+    const badCases = [
+      '{ 坏掉的',
+      '{"temperature":9}',
+      '{"topP":0}',
+      '{"maxOutputTokens":0}',
+    ]
+    for (const bad of badCases) {
+      const r = normalizeAgentDraft({ ...valid(), generationParams: bad })
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain('生成参数')
+    }
+  })
+
+  it('✅ 权威定义回显三字段 → 编辑既有 Agent 不会被覆盖成空', () => {
+    const { values } = definitionToDraft({
+      ...DEFINITION,
+      instructions: '{"inlineInstructions":"既有提示词"}',
+      modelRef: 'Model-Existing',
+      generationParams: '{"temperature":0.7}',
+    })
+    expect(values.instructions).toBe('{"inlineInstructions":"既有提示词"}')
+    expect(values.modelRef).toBe('Model-Existing')
+    expect(values.generationParams).toBe('{"temperature":0.7}')
+  })
+
+  it('✅ buildAgentSpec 带齐三字段（治理通道提交形态）', () => {
+    const built = buildAgentSpec('agent-9', valid())
+    expect(built.ok).toBe(true)
+    if (!built.ok) return
+    expect(built.spec.instructions).toContain('你是数学辅导助手')
+    expect(built.spec.modelRef).toBe('MiniMax-M2.5')
+    expect(built.spec.generationParams).toContain('0.3')
+  })
+})

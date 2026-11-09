@@ -10,9 +10,10 @@ import org.jspecify.annotations.Nullable;
  * Agent 结构化定义（§6.1 / 06 §1.4）。
  *
  * <p><b>与既有 {@code agent_version} 的关系</b>（06 §1.4 评审 01-02）：
- * 二者并存但指向同一发布事实 —— 本对象是<b>结构化真源</b>，
- * {@code agent_version.definition}（自由 JSONB）保留为历史快照归档，
- * 迁移期<b>双写</b>（P0-T6），最终读路径切到本对象。
+ * 二者并存但指向同一发布事实 —— <b>本对象是权威真源</b>：
+ * 运行期的<b>提示词 / 模型 / 生成参数</b>一律读本对象，
+ * {@code agent_version.definition}（自由 JSONB）仅保留为历史快照归档
+ * 与 {@code run.snapshot_id} 外键桥接，不再是配置真源。
  *
  * <p>⚠️ <b>V1 硬边界</b>（04 §A1 / §3 / N1 / N2）：
  * <ul>
@@ -34,6 +35,12 @@ import org.jspecify.annotations.Nullable;
  * @param overrides        收紧覆盖（仅移除/调低）
  * @param orchestration    编排声明（JSON 文本）—— 缺省 {@code "{}"} 解析为 {@code LEAF}；
  *                         多级 Agent v1.1 新增，<b>旧行不改写</b>（兼容读）
+ * @param instructions     提示词声明（JSON 文本）—— V1 仅支持 {@code inlineInstructions}；
+ *                         缺省 {@code "{}"} = 未声明提示词
+ * @param modelRef         绑定的模型引用（契约 {@code modelRef}）——
+ *                         {@code null} = <b>未绑定模型</b>；运行期据此 fail-closed 拒绝执行
+ * @param generationParams 生成参数（JSON 文本）：{@code temperature} / {@code topP} /
+ *                         {@code maxOutputTokens}；缺省 {@code "{}"} = 走运行期默认值
  * @param configFingerprint 本 Agent 定义版本的内容指纹
  * @param schemaVersion    行格式版本
  * @param createdAt        创建时间
@@ -51,6 +58,9 @@ public record CapAgentDef(
         @NonNull List<String> capabilityTags,
         @NonNull String overrides,
         @NonNull String orchestration,
+        @NonNull String instructions,
+        @Nullable String modelRef,
+        @NonNull String generationParams,
         @NonNull String configFingerprint,
         int schemaVersion,
         @NonNull Instant createdAt,
@@ -79,8 +89,36 @@ public record CapAgentDef(
                        @NonNull Instant createdAt,
                        @Nullable Instant publishedAt) {
         this(tenantId, agentId, version, name, description, roles, enabledSkills,
-                skillBundles, capabilityTags, overrides, "{}", configFingerprint,
-                schemaVersion, createdAt, publishedAt);
+                skillBundles, capabilityTags, overrides, "{}", "{}", null, "{}",
+                configFingerprint, schemaVersion, createdAt, publishedAt);
+    }
+
+    /**
+     * 兼容构造器：<b>有编排声明、但未声明提示词、未绑定模型</b>的 Agent 定义行
+     * （多级 Agent 之前的历史行）。
+     *
+     * <p>⚠️ {@code modelRef = null} 是<b>「未绑定模型」</b>而不是「绑定默认模型」：
+     * 运行期据此 fail-closed 拒绝执行该 Agent 的 Run ——
+     * 绝不回落默认模型（回落等于让「配置缺失」被伪装成「配置正常」）。
+     */
+    public CapAgentDef(@NonNull String tenantId,
+                       @NonNull String agentId,
+                       int version,
+                       @Nullable String name,
+                       @Nullable String description,
+                       @NonNull List<String> roles,
+                       @NonNull List<String> enabledSkills,
+                       @NonNull List<String> skillBundles,
+                       @NonNull List<String> capabilityTags,
+                       @NonNull String overrides,
+                       @NonNull String orchestration,
+                       @NonNull String configFingerprint,
+                       int schemaVersion,
+                       @NonNull Instant createdAt,
+                       @Nullable Instant publishedAt) {
+        this(tenantId, agentId, version, name, description, roles, enabledSkills,
+                skillBundles, capabilityTags, overrides, orchestration, "{}", null, "{}",
+                configFingerprint, schemaVersion, createdAt, publishedAt);
     }
 
     public CapAgentDef {
@@ -103,6 +141,15 @@ public record CapAgentDef(
             // ⚠️ 空编排声明按缺省 LEAF 处理，但不能是 null/空白 ——
             //    那说明写入路径把「没填」和「填坏了」混为一谈。
             throw new IllegalArgumentException("orchestration 不能为空（缺省用 {} 表示 LEAF）");
+        }
+        if (instructions == null || instructions.isBlank()) {
+            // ⚠️ 空提示词声明按缺省 "{}" 处理，但不能是 null/空白 ——
+            //    那说明写入路径把「没填」和「填坏了」混为一谈。
+            throw new IllegalArgumentException("instructions 不能为空（缺省用 {} 表示未声明提示词）");
+        }
+        if (generationParams == null || generationParams.isBlank()) {
+            throw new IllegalArgumentException(
+                    "generationParams 不能为空（缺省用 {} 表示走运行期默认值）");
         }
         roles = roles == null ? List.of() : List.copyOf(roles);
         enabledSkills = enabledSkills == null ? List.of() : List.copyOf(enabledSkills);

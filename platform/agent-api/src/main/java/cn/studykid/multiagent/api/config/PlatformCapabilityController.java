@@ -255,7 +255,8 @@ public class PlatformCapabilityController {
                 spec.mcpServerId(), spec.mcpToolName(),
                 spec.httpMethod(), spec.httpUrl(), spec.httpTimeoutMs(),
                 spec.inputSchema() == null ? "{}" : spec.inputSchema(),
-                spec.paramPolicies() == null ? "{}" : spec.paramPolicies())).toList();
+                spec.paramPolicies() == null ? "{}" : spec.paramPolicies(),
+                spec.description())).toList();
     }
 
     private static List<ConfigPublishPayload.SkillSpec> skillSpecs(
@@ -327,6 +328,10 @@ public class PlatformCapabilityController {
      *
      * <p>⚠️ <b>HTTP 三件套仅 {@code kind=http} 时有效</b>（第三十七批）：
      * 其余 kind 携带它们会被 {@link ConfigPublishPayload.ToolSpec} 拒绝。
+     *
+     * <p><b>description</b>（2026-11-09）是工具自己的模型可见描述；
+     * 缺省时运行期回落所属 Skill 的 1 级 purpose，再回落工具名。
+     * 它与 Skill 的 purpose 不是一回事（前者说「这个工具做什么」，后者说「这个 Skill 做什么」）。
      */
     public record PlatformToolSpec(
             @NonNull String toolId,
@@ -339,7 +344,8 @@ public class PlatformCapabilityController {
             @Nullable String httpUrl,
             @Nullable Integer httpTimeoutMs,
             @Nullable String inputSchema,
-            @Nullable String paramPolicies) {
+            @Nullable String paramPolicies,
+            @Nullable String description) {
     }
 
     /** Skill 定义草稿。 */

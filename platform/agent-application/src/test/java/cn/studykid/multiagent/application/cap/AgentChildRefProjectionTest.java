@@ -182,7 +182,9 @@ class AgentChildRefProjectionTest {
                 world.toolDefs, world.skillDefs, world.serverDefs, world.agentDefs,
                 world.audit, new ConfigValidationGate(), CLOCK,
                 ConfigPublishService.DEFAULT_MAX_ATTEMPTS, validator, childRefs,
-                null, null);
+                null, null,
+                // ⚠️ 归档能力必须装配：未装配时发布会被拒（fail-closed）。
+                new InMemoryAgentReleaseArchive());
     }
 
     private static ConfigPublishCommand commandWith(String orchestration) {

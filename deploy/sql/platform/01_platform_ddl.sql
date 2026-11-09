@@ -1636,6 +1636,9 @@ CREATE TABLE public.cap_agent_def (
     published_at timestamp with time zone,
     lifecycle_state public.cap_lifecycle_state DEFAULT 'DRAFT'::public.cap_lifecycle_state NOT NULL,
     orchestration jsonb DEFAULT '{}'::jsonb NOT NULL,
+    instructions jsonb DEFAULT '{}'::jsonb NOT NULL,
+    model_ref text,
+    generation_params jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT cap_agent_def_no_inherits_ck CHECK ((inherits IS NULL)),
     CONSTRAINT cap_agent_def_version_positive CHECK ((version > 0))
 );
@@ -1647,7 +1650,28 @@ ALTER TABLE ONLY public.cap_agent_def FORCE ROW LEVEL SECURITY;
 -- Name: TABLE cap_agent_def; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.cap_agent_def IS 'Agent 结构化定义（租户级，§6.1 / 06 §1.4）。迁移期与 agent_version 双写，本表为结构化真源。';
+COMMENT ON TABLE public.cap_agent_def IS 'Agent 结构化定义（租户级，§6.1 / 06 §1.4）。⚠️ 本表是 Agent 定义的**权威真源**：运行期的提示词/模型/生成参数一律读本表；agent_version.definition 仅作历史归档与 run 快照桥接，不再是配置真源。';
+
+
+--
+-- Name: COLUMN cap_agent_def.instructions; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_agent_def.instructions IS 'Agent 提示词声明（契约 instructions）。V1 仅支持 inlineInstructions（系统提示词正文）；systemPromptRef 引用式提示词库在 V1 未实现，提交即被配置期门禁拒绝（fail-closed，不静默忽略）。';
+
+
+--
+-- Name: COLUMN cap_agent_def.model_ref; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_agent_def.model_ref IS 'Agent 绑定的模型引用（契约 modelRef）。NULL = 未绑定模型；运行期取不到模型标识即拒绝执行该 Run（绝不回落默认模型）。';
+
+
+--
+-- Name: COLUMN cap_agent_def.generation_params; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_agent_def.generation_params IS '生成参数（契约 generationParams）：temperature / topP / maxOutputTokens。缺省项由运行期回落默认值（0.2 / — / 1024）。';
 
 
 --
@@ -2294,6 +2318,7 @@ CREATE TABLE public.cap_tool_def (
     http_method text,
     http_url text,
     http_timeout_ms integer,
+    description text,
     CONSTRAINT cap_tool_def_http_binding_ck CHECK ((((kind = 'http'::text) AND (http_method IS NOT NULL) AND (http_url IS NOT NULL) AND (http_timeout_ms IS NOT NULL) AND (http_method = ANY (ARRAY['GET'::text, 'POST'::text, 'PUT'::text, 'PATCH'::text, 'DELETE'::text, 'HEAD'::text])) AND (http_timeout_ms > 0) AND (http_timeout_ms <= 300000) AND (http_url ~* '^https?://[^[:space:]]+$'::text)) OR ((kind <> 'http'::text) AND (http_method IS NULL) AND (http_url IS NULL) AND (http_timeout_ms IS NULL)))),
     CONSTRAINT cap_tool_def_kind_ck CHECK ((kind = ANY (ARRAY['native'::text, 'mcp'::text, 'http'::text]))),
     CONSTRAINT cap_tool_def_mcp_binding_ck CHECK ((((kind = 'mcp'::text) AND (mcp_server_id IS NOT NULL) AND (mcp_tool_name IS NOT NULL)) OR ((kind = 'native'::text) AND (mcp_server_id IS NULL) AND (mcp_tool_name IS NULL)) OR ((kind = 'http'::text) AND (mcp_server_id IS NULL) AND (mcp_tool_name IS NULL)))),
@@ -2336,6 +2361,13 @@ COMMENT ON COLUMN public.cap_tool_def.http_url IS '远程 HTTP 请求工具的�
 --
 
 COMMENT ON COLUMN public.cap_tool_def.http_timeout_ms IS '远程 HTTP 请求工具的单次请求超时（毫秒，正整数，上限 300000）。仅 kind=http 时非空。';
+
+
+--
+-- Name: COLUMN cap_tool_def.description; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cap_tool_def.description IS '工具的模型可见描述（契约 description）。⚠️ 这是 Tool 自己的描述，与所属 Skill 的 1 级 purpose 是两回事：purpose 描述「这个 Skill 做什么」，description 描述「这个工具做什么」。运行期优先取本列，缺省才回落 purpose，再缺省回落工具名。';
 
 
 --

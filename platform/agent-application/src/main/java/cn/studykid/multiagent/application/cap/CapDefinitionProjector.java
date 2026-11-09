@@ -89,6 +89,9 @@ public final class CapDefinitionProjector {
             @NonNull List<String> capabilityTags,
             @NonNull String overrides,
             @NonNull String orchestration,
+            @NonNull String instructions,
+            @Nullable String modelRef,
+            @NonNull String generationParams,
             @NonNull String configFingerprint
     ) {
         public CapAgentDefView {
@@ -100,6 +103,10 @@ public final class CapDefinitionProjector {
             // ⚠️ 缺省 LEAF（MA-T01）：缺字段 ≠ 不限制，而是「不允许委派」。
             orchestration = orchestration == null || orchestration.isBlank()
                     ? "{}" : orchestration;
+            instructions = instructions == null || instructions.isBlank()
+                    ? "{}" : instructions;
+            generationParams = generationParams == null || generationParams.isBlank()
+                    ? "{}" : generationParams;
         }
     }
 
@@ -148,13 +155,24 @@ public final class CapDefinitionProjector {
             description = fallbackDescription;
         }
 
-        List<String> roles = stringList(root.get("roles"));
-        List<String> enabledSkills = stringList(root.get("enabledSkills"));
-        if (enabledSkills.isEmpty()) {
-            enabledSkills = stringList(root.get("enabled_skills"));
+        List<String> roles;
+        List<String> enabledSkills;
+        List<String> skillBundles;
+        List<String> capabilityTags;
+        try {
+            roles = stringList(root.get("roles"), "roles");
+            enabledSkills = stringList(root.get("enabledSkills"), "enabledSkills");
+            if (enabledSkills.isEmpty()) {
+                enabledSkills = stringList(root.get("enabled_skills"), "enabled_skills");
+            }
+            skillBundles = stringList(root.get("skillBundles"), "skillBundles");
+            capabilityTags = stringList(root.get("capabilityTags"), "capabilityTags");
+        } catch (ProjectionException e) {
+            // ⚠️ 元素形态解析不出 → **拒绝投影**，不降级（fail-closed）。
+            //    降级等于把「声明了但解析不出」当成「没声明」——
+            //    那样产出的 Agent 看起来发布成功、实际零能力。
+            return Projection.rejected(e.getMessage());
         }
-        List<String> skillBundles = stringList(root.get("skillBundles"));
-        List<String> capabilityTags = stringList(root.get("capabilityTags"));
 
         String overrides = "{}";
         Object rawOverrides = root.get("overrides");
@@ -188,6 +206,68 @@ public final class CapDefinitionProjector {
             }
         }
 
+        // ⚠️ 提示词 / 模型 / 生成参数（2026-11-09 · 权威源定 A）：
+        //    这三项是**运行期配置真源**的一部分，投影时必须一并带走 ——
+        //    丢掉它们等于「旧定义投影成新定义后，Agent 变成零配置」。
+        //    形态：{@code instructions} 对象 / {@code modelRef} 字符串 /
+        //    {@code generationParams} 对象；缺失即缺省（未声明）。
+        String instructions = "{}";
+        Object rawInstructions = root.get("instructions");
+        if (rawInstructions != null) {
+            if (!(rawInstructions instanceof Map)) {
+                return Projection.rejected("instructions 必须是对象");
+            }
+            try {
+                instructions = MAPPER.writeValueAsString(rawInstructions);
+            } catch (JacksonException e) {
+                return Projection.rejected("instructions 序列化失败: " + e.getMessage());
+            }
+        }
+        String modelRef = textOrNull(root.get("modelRef"));
+        if (modelRef == null) {
+            modelRef = textOrNull(root.get("modelId"));
+        }
+        String generationParams = "{}";
+        Object rawGeneration = root.get("generationParams");
+        if (rawGeneration != null) {
+            if (!(rawGeneration instanceof Map)) {
+                return Projection.rejected("generationParams 必须是对象");
+            }
+            try {
+                generationParams = MAPPER.writeValueAsString(rawGeneration);
+            } catch (JacksonException e) {
+                return Projection.rejected("generationParams 序列化失败: " + e.getMessage());
+            }
+        }
+        // ⚠️ 兼容存量扁平形态：旧定义的提示词/模型曾以顶层键存放
+        //    （{@code systemPrompt} / {@code modelRef} / {@code temperature} …）。
+        //    扁平形态<b>不是</b>契约形态，但存量数据就是那样写的 ——
+        //    直接丢掉等于让存量 Agent 集体失去配置。
+        if ("{}".equals(instructions)) {
+            String flatPrompt = textOrNull(root.get("systemPrompt"));
+            if (flatPrompt != null) {
+                try {
+                    instructions = MAPPER.writeValueAsString(
+                            Map.of("inlineInstructions", flatPrompt));
+                } catch (JacksonException e) {
+                    return Projection.rejected("systemPrompt 序列化失败: " + e.getMessage());
+                }
+            }
+        }
+        if ("{}".equals(generationParams)) {
+            Map<String, Object> flat = new java.util.LinkedHashMap<>();
+            copyNumber(root, flat, "temperature");
+            copyNumber(root, flat, "maxOutputTokens");
+            copyNumber(root, flat, "timeoutMs");
+            if (!flat.isEmpty()) {
+                try {
+                    generationParams = MAPPER.writeValueAsString(flat);
+                } catch (JacksonException e) {
+                    return Projection.rejected("生成参数序列化失败: " + e.getMessage());
+                }
+            }
+        }
+
         String fingerprint = ProvisionalFingerprint.of(List.of(
                 ProvisionalFingerprint.canonicalList(roles),
                 ProvisionalFingerprint.canonicalList(enabledSkills),
@@ -195,12 +275,29 @@ public final class CapDefinitionProjector {
                 ProvisionalFingerprint.canonicalList(capabilityTags),
                 overrides,
                 orchestration,
+                instructions,
+                modelRef == null ? "" : modelRef,
+                generationParams,
                 name == null ? "" : name,
                 description == null ? "" : description));
 
         return Projection.ok(new CapAgentDefView(
                 name, description, roles, enabledSkills, skillBundles, capabilityTags,
-                overrides, orchestration, fingerprint));
+                overrides, orchestration, instructions, modelRef, generationParams, fingerprint));
+    }
+
+    /**
+     * 从自由 JSON 里抄一个数值项到扁平参数表（只抄数值型，不抄字符串）。
+     *
+     * <p>⚠️ 只抄数值：字符串型参数（如 "1.0"）多半是别的字段的误写，
+     * 抄进来会让「生成参数」凭空多出一个语义不明的键。
+     */
+    private static void copyNumber(Map<String, Object> root, Map<String, Object> target,
+                                   String key) {
+        Object value = root.get(key);
+        if (value instanceof Number number) {
+            target.put(key, number);
+        }
     }
 
     @Nullable
@@ -211,17 +308,68 @@ public final class CapDefinitionProjector {
         return null;
     }
 
+    /**
+     * 读一个字符串列表项。
+     *
+     * <p>⚠️ <b>兼容契约的 {@code $defs.ref} 形态</b>（2026-11-09）：
+     * 契约要求 {@code enabledSkills} 的元素是 {@code {"id": ..., "version": ...}} 对象，
+     * 而历史数据用的是裸字符串。两种都接受。
+     *
+     * <p>⚠️ <b>解析不出即报错，绝不静默丢弃</b>：
+     * 此前实现只收集 {@code instanceof String} 的元素，其余<b>一律丢弃</b> ——
+     * 于是按契约书写的一组 {@code {"id": ...}} 会被投影成<b>空集</b>：
+     * 一个「看起来发布成功、实际零能力」的 Agent。
+     * 静默丢弃 = 把「声明了但解析不出」当成「没声明」，
+     * 与本仓 fail-closed 纪律直接矛盾。
+     *
+     * @param value 原始值（列表 / 单值）
+     * @param field 字段名（用于报错定位）
+     * @return 解析出的字符串列表
+     * @throws ProjectionException 元素形态无法解析
+     */
     @NonNull
-    private static List<String> stringList(Object value) {
-        if (!(value instanceof List<?> list)) {
+    private static List<String> stringList(Object value, String field) {
+        if (value == null) {
             return List.of();
+        }
+        if (value instanceof String s) {
+            return s.isBlank() ? List.of() : List.of(s.trim());
+        }
+        if (!(value instanceof List<?> list)) {
+            throw new ProjectionException(field + " 必须是字符串或字符串数组");
         }
         List<String> out = new ArrayList<>(list.size());
         for (Object item : list) {
-            if (item instanceof String s && !s.isBlank()) {
-                out.add(s.trim());
+            if (item instanceof String s) {
+                if (!s.isBlank()) {
+                    out.add(s.trim());
+                }
+                continue;
             }
+            if (item instanceof Map<?, ?> map) {
+                // ⚠️ 契约形态：{"id": "...", "version": "..."} —— 取 id。
+                Object id = map.get("id");
+                if (!(id instanceof String sid) || sid.isBlank()) {
+                    throw new ProjectionException(
+                            field + " 的对象元素缺少非空 id 字段: " + map);
+                }
+                out.add(sid.trim());
+                continue;
+            }
+            throw new ProjectionException(
+                    field + " 的元素只能是字符串或 {id,version} 对象，实际: " + item);
         }
         return out;
+    }
+
+    /**
+     * 投影期解析失败（<b>拒绝投影</b>，不降级）。
+     */
+    static final class ProjectionException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        ProjectionException(String message) {
+            super(message);
+        }
     }
 }

@@ -93,7 +93,10 @@ class ResultContractPublishFlowTest {
                 world.toolDefs, world.skillDefs, world.serverDefs, world.agentDefs,
                 world.audit, new ConfigValidationGate(), CLOCK,
                 ConfigPublishService.DEFAULT_MAX_ATTEMPTS, validator, null,
-                withContracts ? world.contracts : null);
+                withContracts ? world.contracts : null, null,
+                // ⚠️ 归档能力必须装配：未装配时发布会被拒（fail-closed）——
+                //    归档缺失会让 run.snapshot_id 外键链断裂。
+                new InMemoryAgentReleaseArchive());
     }
 
     private ConfigPublishCommand commandWith(List<CapAgentDef> agents,

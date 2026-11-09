@@ -15,10 +15,8 @@ import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
 import cn.studykid.multiagent.core.orchestration.DelegationToolSchema;
-import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
-import cn.studykid.multiagent.ports.persistence.Page;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -47,29 +45,6 @@ class WorkerChildAgentModelConfigProviderTest {
 
     // ── 替身 ──────────────────────────────────────────────────────
 
-    /** 内存版 Agent 版本查询（只提供模型配置定义）。 */
-    private static final class InMemoryAgentQuery implements AgentQueryPort {
-        @Override
-        public @NonNull Page<AgentItem> listAgents(
-                @NonNull String tenantId, @Nullable String cursor, int limit) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public @Nullable AgentItem findAgent(@NonNull String tenantId,
-                                             @NonNull String agentId) {
-            return null;
-        }
-
-        @Override
-        public @NonNull List<AgentVersionItem> listVersions(@NonNull String tenantId,
-                                                            @NonNull String agentId) {
-            return List.of(new AgentVersionItem("v1", VERSION,
-                    "{\"modelRef\":\"model-1\",\"systemPrompt\":\"你是子 Agent\"}",
-                    Instant.EPOCH, Instant.EPOCH));
-        }
-    }
-
     /** 内存版 Agent 定义仓储（编排声明的真源）。 */
     private static final class InMemoryAgentDefs implements CapAgentDefPort {
         private final String orchestration;
@@ -92,6 +67,9 @@ class WorkerChildAgentModelConfigProviderTest {
             }
             return Optional.of(new CapAgentDef(TENANT, AGENT, VERSION, "子 Agent", "描述",
                     List.of(), List.of(), List.of(), List.of(), "{}", orchestration,
+                    // ⚠️ 权威源定 A（2026-11-09）：提示词与模型引用都是
+                    //    {@code cap_agent_def} 的一等列，模型配置装配从这儿读。
+                    "{\"inlineInstructions\":\"你是子 Agent\"}", "model-1", "{}",
                     "fp-child", 1, Instant.EPOCH, Instant.EPOCH));
         }
 
@@ -170,7 +148,7 @@ class WorkerChildAgentModelConfigProviderTest {
 
     private static WorkerChildAgentModelConfigProvider provider(String orchestration) {
         return new WorkerChildAgentModelConfigProvider(
-                new InMemoryAgentQuery(), new EmptyClosureResolver(), new NoToolDefs(),
+                new InMemoryAgentDefs("{}"), new EmptyClosureResolver(), new NoToolDefs(),
                 new DelegationToolSchemaAssembler(new InMemoryAgentDefs(orchestration)));
     }
 
@@ -231,7 +209,7 @@ class WorkerChildAgentModelConfigProviderTest {
         // ⚠️ 读不到编排声明就不知道有没有委派能力，
         //    此时**宁可不给** —— 多给了等于让模型去试探不该碰的边界。
         var provider = new WorkerChildAgentModelConfigProvider(
-                new InMemoryAgentQuery(), new EmptyClosureResolver(), new NoToolDefs());
+                new InMemoryAgentDefs("{}"), new EmptyClosureResolver(), new NoToolDefs());
 
         var config = provider.configFor(TENANT, AGENT, VERSION);
 

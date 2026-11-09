@@ -6,6 +6,10 @@ import java.util.Set;
 
 import org.jspecify.annotations.NonNull;
 
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+
+import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapHttpToolConfig;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
@@ -37,6 +41,8 @@ import cn.studykid.multiagent.core.cap.ReasonCode;
  */
 public final class ConfigValidationGate {
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     /**
      * 校验一次发布命令。
      *
@@ -49,7 +55,65 @@ public final class ConfigValidationGate {
         validateRiskLevels(command);
         validateMcpServers(command);
         validateHttpTools(command);
+        validateAgentInstructions(command);
         validateReferences(command);
+    }
+
+    // ── Agent 提示词声明（配置期契约门禁） ──────────────────────────
+
+    /**
+     * 拒绝 V1 无法执行的提示词声明（06 §5.3）。
+     *
+     * <p>⚠️ <b>为什么不能只靠运行期拒绝</b>：运行期
+     * {@code AgentModelConfigAssembler#systemPrompt} 对非法声明 fail-closed，
+     * 但那时<b>配置已经生效</b> —— 该 Agent 的所有新 Run 一律被拒，
+     * 运维看到的是「Agent 突然全员不可用」，而真因（提交了一份 V1 不认识的
+     * 提示词声明）在发布那一刻就完全可判。前端提交前校验同理可被绕过
+     * （直接调 API 即可），故门禁必须落在发布命令上。
+     *
+     * <p><b>V1 字段清单</b>（与运行期解析口径逐字对齐）：
+     * <ul>
+     *   <li>{@code inlineInstructions}：string，唯一的已实现字段；</li>
+     *   <li>{@code systemPromptRef} / {@code systemPromptVersion}：<b>V1 未实现</b>
+     *       （引用式提示词库），出现即拒；</li>
+     *   <li>其它键：V1 忽略语义（V2 预留），但<b>整段必须是合法 JSON 对象</b>，
+     *       否则「读不懂的提示词」会被静默当作「没声明提示词」。</li>
+     * </ul>
+     */
+    private void validateAgentInstructions(@NonNull ConfigPublishCommand command) {
+        for (CapAgentDef agent : command.agents()) {
+            JsonNode root;
+            try {
+                root = MAPPER.readTree(agent.instructions());
+            } catch (RuntimeException e) {
+                throw new ConfigPublishRejectedException(
+                        ReasonCode.AGENT_INSTRUCTIONS_INVALID, "instructions",
+                        "Agent " + agent.agentId() + " v" + agent.version()
+                                + " 的提示词声明不是合法 JSON：" + e.getMessage()
+                                + "。未声明请用 {} ，不要留一段读不懂的文本");
+            }
+            if (root == null || !root.isObject()) {
+                throw new ConfigPublishRejectedException(
+                        ReasonCode.AGENT_INSTRUCTIONS_INVALID, "instructions",
+                        "Agent " + agent.agentId() + " v" + agent.version()
+                                + " 的提示词声明必须是 JSON 对象（未声明用 {}）");
+            }
+            if (root.get("systemPromptRef") != null) {
+                throw new ConfigPublishRejectedException(
+                        ReasonCode.AGENT_INSTRUCTIONS_INVALID, "instructions",
+                        "Agent " + agent.agentId() + " v" + agent.version()
+                                + " 的提示词声明含 systemPromptRef：V1 未实现引用式提示词库，"
+                                + "拒绝发布（否则配置生效后该 Agent 的所有 Run 都会被运行期拒绝）。"
+                                + "请改用 inlineInstructions");
+            }
+            JsonNode inline = root.get("inlineInstructions");
+            if (inline != null && !inline.isTextual() && !inline.isNull()) {
+                throw new ConfigPublishRejectedException(
+                        ReasonCode.AGENT_INSTRUCTIONS_INVALID, "instructions",
+                        "Agent " + agent.agentId() + " v" + agent.version()
+                                + " 的 inlineInstructions 必须是字符串");
+            }
+        }
     }
 
     // ── 作用域一致性 ────────────────────────────────────────────

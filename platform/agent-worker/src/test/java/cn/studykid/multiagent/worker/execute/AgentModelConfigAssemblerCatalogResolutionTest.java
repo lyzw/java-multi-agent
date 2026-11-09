@@ -19,10 +19,6 @@ import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 import cn.studykid.multiagent.ports.modelcatalog.ModelCatalogPort;
 import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
 import cn.studykid.multiagent.ports.modelcatalog.ModelScenario;
-import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
-import cn.studykid.multiagent.ports.persistence.AgentQueryPort.AgentItem;
-import cn.studykid.multiagent.ports.persistence.AgentQueryPort.AgentVersionItem;
-import cn.studykid.multiagent.ports.persistence.Page;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -48,7 +44,7 @@ class AgentModelConfigAssemblerCatalogResolutionTest {
     void resolvesModelRefFromCatalogWhenPresent() {
         StubCatalogPort catalog = new StubCatalogPort(List.of(agentChatDefault()));
         ModelResolver resolver = new ModelResolver(catalog);
-        var query = new ScriptedAgentQuery("{\"modelRef\":\"MiniMax-M2.5\"}");
+        var query = agentDefsWithModelRef("MiniMax-M2.5");
 
         var settings = new AgentModelConfigAssembler(query, new ScriptedClosureResolver(),
                 new ScriptedToolDefs(), resolver).assemble(TENANT, AGENT, 1);
@@ -63,7 +59,7 @@ class AgentModelConfigAssemblerCatalogResolutionTest {
         StubCatalogPort catalog = new StubCatalogPort(List.of(agentChatDefault()));
         ModelResolver resolver = new ModelResolver(catalog);
         // 该 Agent 写了一个目录里不存在的模型名
-        var query = new ScriptedAgentQuery("{\"modelRef\":\"some-legacy-model\"}");
+        var query = agentDefsWithModelRef("some-legacy-model");
 
         var settings = new AgentModelConfigAssembler(query, new ScriptedClosureResolver(),
                 new ScriptedToolDefs(), resolver).assemble(TENANT, AGENT, 1);
@@ -77,7 +73,7 @@ class AgentModelConfigAssemblerCatalogResolutionTest {
     void fallsBackToLiteralWhenCatalogEmpty() {
         StubCatalogPort catalog = new StubCatalogPort(List.of()); // 空目录
         ModelResolver resolver = new ModelResolver(catalog);
-        var query = new ScriptedAgentQuery("{\"modelRef\":\"some-legacy-model\"}");
+        var query = agentDefsWithModelRef("some-legacy-model");
 
         var settings = new AgentModelConfigAssembler(query, new ScriptedClosureResolver(),
                 new ScriptedToolDefs(), resolver).assemble(TENANT, AGENT, 1);
@@ -96,7 +92,7 @@ class AgentModelConfigAssemblerCatalogResolutionTest {
         StubCatalogPort catalog = new StubCatalogPort(List.of(bound));
         ModelResolver resolver = new ModelResolver(catalog);
         // Agent 定义里直接存目录记录的 id（不是模型名）
-        var query = new ScriptedAgentQuery("{\"modelRef\":\"" + catalogId + "\"}");
+        var query = agentDefsWithModelRef(catalogId);
 
         var settings = new AgentModelConfigAssembler(query, new ScriptedClosureResolver(),
                 new ScriptedToolDefs(), resolver).assemble(TENANT, AGENT, 1);
@@ -108,7 +104,7 @@ class AgentModelConfigAssemblerCatalogResolutionTest {
     @Test
     @DisplayName("✅ 未注入解析器（3 参构造）→ 原样使用 modelRef，向后兼容")
     void literalWhenResolverAbsent() {
-        var query = new ScriptedAgentQuery("{\"modelRef\":\"MiniMax-M2.5\"}");
+        var query = agentDefsWithModelRef("MiniMax-M2.5");
 
         var settings = new AgentModelConfigAssembler(query, new ScriptedClosureResolver(),
                 new ScriptedToolDefs()).assemble(TENANT, AGENT, 1);
@@ -119,30 +115,14 @@ class AgentModelConfigAssemblerCatalogResolutionTest {
 
     // ── 极简替身 ──
 
-    private static final class ScriptedAgentQuery implements AgentQueryPort {
-        private final String definition;
-
-        ScriptedAgentQuery(String definition) {
-            this.definition = definition;
-        }
-
-        @Override
-        public @NonNull Page<AgentItem> listAgents(@NonNull String tenantId,
-                                                 String cursor, int limit) {
-            return Page.of(List.of(), null);
-        }
-
-        @Override
-        public AgentItem findAgent(@NonNull String tenantId, @NonNull String agentId) {
-            return null;
-        }
-
-        @Override
-        public @NonNull List<AgentVersionItem> listVersions(@NonNull String tenantId,
-                                                           @NonNull String agentId) {
-            return List.of(new AgentVersionItem("v-1", 1, definition,
-                    Instant.EPOCH, Instant.EPOCH));
-        }
+    /**
+     * 只关心「模型引用」的替身（2026-11-09 · 权威源定 A）：
+     * 配置真源是 {@code cap_agent_def}，模型引用取自其 {@code model_ref} 列。
+     */
+    private static ScriptedAgentDefPort agentDefsWithModelRef(String modelRef) {
+        ScriptedAgentDefPort defs = new ScriptedAgentDefPort();
+        defs.modelRef = modelRef;
+        return defs;
     }
 
     private static final class ScriptedClosureResolver implements ClosureResolver {

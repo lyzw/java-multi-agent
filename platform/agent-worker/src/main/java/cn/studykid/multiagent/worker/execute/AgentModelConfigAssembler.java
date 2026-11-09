@@ -16,11 +16,12 @@ import org.slf4j.LoggerFactory;
 
 import cn.studykid.multiagent.application.cap.ClosureResolver;
 import cn.studykid.multiagent.application.modelcatalog.ModelResolver;
+import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
 import cn.studykid.multiagent.core.cap.SkillDescription;
 import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
 import cn.studykid.multiagent.ports.modelcatalog.ModelScenario;
-import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
+import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 
 /**
@@ -43,6 +44,20 @@ import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
  *
  * <p>⚠️ <b>取不到模型标识即拒绝</b>：无法确定用哪个模型时返回空，
  * 由调用方按「确定失败」处理 —— 绝不随便挑一个默认模型。
+ *
+ * <p>⚠️⚠️ <b>配置真源是 {@code cap_agent_def}，不是 {@code agent_version.definition}</b>
+ * （2026-11-09 · 权威源定 A）：
+ * <ul>
+ *   <li>此前本类读 {@code agent_version.definition}（自由 JSONB），
+ *       而那条 JSONB <b>只有旧发布端点会写</b>，而该端点已随 P0-5 下线 ——
+ *       于是经治理三步流发布的 Agent <b>永远读不到提示词与模型</b>，
+ *       Run 一律 fail-closed 拒绝执行；</li>
+ *   <li>现在改读 {@link CapAgentDefPort}（{@code cap_agent_def} 结构化真源）：
+ *       提示词、模型、生成参数都是<b>该表的一等列</b>，
+ *       治理通道能配、能存、能进内容指纹；</li>
+ *   <li>{@code agent_version.definition} 退化为<b>历史归档与 run 快照桥接</b>，
+ *       不再是配置真源。</li>
+ * </ul>
  */
 public class AgentModelConfigAssembler {
 
@@ -51,7 +66,7 @@ public class AgentModelConfigAssembler {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private final AgentQueryPort agentQuery;
+    private final CapAgentDefPort agentDefs;
     private final ClosureResolver closureResolver;
     private final CapToolDefPort toolDefs;
     /**
@@ -64,25 +79,25 @@ public class AgentModelConfigAssembler {
      */
     private final @Nullable ModelResolver resolver;
 
-    public AgentModelConfigAssembler(@NonNull AgentQueryPort agentQuery,
+    public AgentModelConfigAssembler(@NonNull CapAgentDefPort agentDefs,
                                      @NonNull ClosureResolver closureResolver,
                                      @NonNull CapToolDefPort toolDefs) {
-        this(agentQuery, closureResolver, toolDefs, null);
+        this(agentDefs, closureResolver, toolDefs, null);
     }
 
     /**
      * 完整构造器（接入统一模型目录）。
      *
-     * @param agentQuery        Agent 版本查询（读模型配置定义）
+     * @param agentDefs        Agent 定义仓储（读权威定义：提示词 / 模型 / 生成参数）
      * @param closureResolver   闭包解析（读工具绑定）
      * @param toolDefs          工具定义仓储（读工具 Schema）
      * @param resolver          统一模型目录解析器；{@code null} = 不解析、原样用 modelRef
      */
-    public AgentModelConfigAssembler(@NonNull AgentQueryPort agentQuery,
+    public AgentModelConfigAssembler(@NonNull CapAgentDefPort agentDefs,
                                      @NonNull ClosureResolver closureResolver,
                                      @NonNull CapToolDefPort toolDefs,
                                      @Nullable ModelResolver resolver) {
-        this.agentQuery = agentQuery;
+        this.agentDefs = agentDefs;
         this.closureResolver = closureResolver;
         this.toolDefs = toolDefs;
         this.resolver = resolver;
@@ -99,24 +114,15 @@ public class AgentModelConfigAssembler {
     public @NonNull Optional<AgentModelSettings> assemble(@NonNull String tenantId,
                                                            @NonNull String agentId,
                                                            int agentVersion) {
-        Optional<String> definition = definitionOf(tenantId, agentId, agentVersion);
+        Optional<CapAgentDef> definition = definitionOf(tenantId, agentId, agentVersion);
         if (definition.isEmpty()) {
             return Optional.empty();
         }
-        Map<String, Object> root;
-        try {
-            Map<String, Object> parsed = MAPPER.readValue(definition.get(),
-                    new TypeReference<Map<String, Object>>() {
-                    });
-            root = parsed == null ? Map.of() : parsed;
-        } catch (JacksonException e) {
-            log.warn("Agent 定义解析失败: agent={}, version={}", agentId, agentVersion, e);
-            return Optional.empty();
-        }
+        CapAgentDef def = definition.get();
 
-        String modelId = text(root.get("modelRef"), root.get("modelId"));
+        // ⚠️ 取不到模型标识 → 拒绝执行（不猜、不回落默认模型）。
+        String modelId = text(def.modelRef());
         if (modelId == null) {
-            // ⚠️ 无法确定模型 → 拒绝执行（不猜）
             log.warn("Agent 定义缺少模型标识: agent={}, version={}", agentId, agentVersion);
             return Optional.empty();
         }
@@ -124,17 +130,44 @@ public class AgentModelConfigAssembler {
         //   目录未注入 / 未命中且无默认时回落字面名（向后兼容历史数据 + 不破坏测试）。
         String effectiveModelName = resolveModelName(modelId);
 
+        // ⚠️ 提示词声明坏掉 → 拒绝执行（fail-closed）：
+        //    带着一份「读不懂的提示词」跑 = 静默丢掉业务指令，
+        //    而模型仍按「无约束」行事 —— 那是最坏的假成功。
+        String prompt = systemPrompt(def.instructions());
+        if (prompt == null) {
+            return Optional.empty();
+        }
+
         // ⚠️ 闭包只解析一次，同时供给「工具 Schema（1级）」与「Skill 指引（2级）」：
         //    两处各解析一次必然漂移（一边能读到描述、另一边读不到）——那正是「两套语义」。
         EffectiveClosure closure = resolveClosure(tenantId, agentId, agentVersion);
 
         return Optional.of(new AgentModelSettings(
                 effectiveModelName,
-                skillGuidance(systemPrompt(root), closure),
-                number(root.get("temperature"), 0.2),
-                (int) number(root.get("maxOutputTokens"), 1024),
-                Duration.ofMillis((long) number(root.get("timeoutMs"), 30_000)),
+                skillGuidance(prompt, closure),
+                generationParam(def.generationParams(), "temperature", 0.2),
+                (int) generationParam(def.generationParams(), "maxOutputTokens", 1024),
+                Duration.ofMillis((long) generationParam(def.generationParams(), "timeoutMs", 30_000)),
                 toolSchemas(closure)));
+    }
+
+    /**
+     * 解析该 Agent 固定版本的权威定义（{@code cap_agent_def}）。
+     *
+     * <p>⚠️ <b>读不到即返回空</b>：由调用方 fail-closed 拒绝执行。
+     * 绝不回落「旧表 {@code agent_version.definition}」——
+     * 那正是本次要消除的「两套真源」：一旦回落，
+     * 「治理面配的提示词」与「运行期用的提示词」就又分叉了。
+     */
+    private @NonNull Optional<CapAgentDef> definitionOf(@NonNull String tenantId,
+                                                         @NonNull String agentId,
+                                                         int agentVersion) {
+        try {
+            return agentDefs.find(tenantId, agentId, agentVersion);
+        } catch (RuntimeException e) {
+            log.warn("Agent 定义读取失败: agent={}, version={}", agentId, agentVersion, e);
+            return Optional.empty();
+        }
     }
 
     /**
@@ -206,17 +239,23 @@ public class AgentModelConfigAssembler {
         if (section.isEmpty()) {
             return basePrompt;
         }
-        String base = basePrompt == null ? "" : basePrompt.trim();
+        String base = basePrompt.trim();
         return base.isBlank() ? section.toString() : base + "\n\n" + section;
     }
 
     /**
      * 装配该 Agent <b>自己闭包</b>里的工具 Schema。
      *
-     * <p>⚠️ <b>1级 purpose 是 Tool 的模型可见选型信号</b>：
-     * 工具备自多个 Skill（同一 Tool 可被多个 Skill 声明）时，
-     * 取<b>第一个</b>声明它的、写了两级描述的 Skill 的 purpose —— 闭包顺序即口径，
-     * 否则每次取值随机漂移。全都没有时回退<b>工具名</b>（旧行为）。
+     * <p>⚠️ <b>工具描述三级回落</b>（2026-11-09）：
+     * <ol>
+     *   <li><b>Tool 自己的 {@code description}</b>（{@code cap_tool_def.description}）——
+     *       契约的一等字段，描述「这个工具做什么」；</li>
+     *   <li>所属 Skill 的 <b>1级 purpose</b> —— 描述「这个 Skill 做什么」，
+     *       语义不如上一项精确，但比工具名有信息量；</li>
+     *   <li>工具名 —— 最后兜底。</li>
+     * </ol>
+     * ⚠️ 同一 Tool 被多个 Skill 声明时取<b>第一个</b>声明它的 Skill 的 purpose
+     * （闭包顺序即口径，否则每次取值随机漂移）。
      */
     private @NonNull Map<String, Object> toolSchemas(@Nullable EffectiveClosure closure) {
         Map<String, Object> schemas = new LinkedHashMap<>();
@@ -228,8 +267,8 @@ public class AgentModelConfigAssembler {
             toolDefs.find(binding.toolId(), binding.version()).ifPresent(tool -> {
                 Map<String, Object> schema = new LinkedHashMap<>();
                 schema.put("name", tool.id());
-                schema.put("description", purposeByTool.getOrDefault(
-                        tool.id(), tool.name() == null ? tool.id() : tool.name()));
+                schema.put("description", descriptionOf(tool.id(), tool.description(),
+                        purposeByTool, tool.name()));
                 schema.put("inputSchema", parseSchema(tool.inputSchema()));
                 schemas.put(tool.id(), schema);
             });
@@ -238,7 +277,30 @@ public class AgentModelConfigAssembler {
     }
 
     /**
-     * Tool id → 所属 Skill 的 1级 purpose（取<b>第一个</b>声明该 Tool 且有描述的 Skill）。
+     * 工具的模型可见描述（三级回落）。
+     *
+     * @param toolId        工具标识
+     * @param description   工具自己的描述（{@code cap_tool_def.description}，可空）
+     * @param purposeByTool 工具 id → 所属 Skill 的 1 级 purpose
+     * @param toolName      工具显示名（最后兜底）
+     */
+    private static @NonNull String descriptionOf(@NonNull String toolId,
+                                                 @Nullable String description,
+                                                 @NonNull Map<String, String> purposeByTool,
+                                                 @Nullable String toolName) {
+        String own = text(description);
+        if (own != null) {
+            return own;
+        }
+        String purpose = purposeByTool.get(toolId);
+        if (purpose != null && !purpose.isBlank()) {
+            return purpose;
+        }
+        return toolName == null || toolName.isBlank() ? toolId : toolName;
+    }
+
+    /**
+     * Tool id → 所属 Skill 的 1 级 purpose（取<b>第一个</b>声明该 Tool 且有描述的 Skill）。
      */
     private static @NonNull Map<String, String> purposesOf(@NonNull EffectiveClosure closure) {
         Map<String, String> out = new LinkedHashMap<>();
@@ -255,36 +317,84 @@ public class AgentModelConfigAssembler {
     }
 
     /**
-     * 读取指定<b>版本</b>的 Agent 定义文本。
+     * 解析系统提示：读 {@code cap_agent_def.instructions}。
+     *
+     * <p>⚠️ <b>V1 只支持 {@code inlineInstructions}</b>（契约的 {@code systemPromptRef}
+     * 引用式提示词库在 V1 未实现）—— 出现 {@code systemPromptRef} 时
+     * <b>明确拒绝</b>（返回 {@code null} → 拒绝执行），而不是静默忽略：
+     * 静默忽略会让运维以为「提示词已生效」，
+     * 而运行期实际用的是另一段（甚至没有）文本。
+     *
+     * <p>⚠️ <b>「声明坏了」与「没声明」是两种不同的失败</b>：
+     * <ul>
+     *   <li><b>没声明</b>（{@code {}}）→ 系统提示词为空串，Agent 照常跑
+     *       （它可能本来就不需要特殊指令）；</li>
+     *   <li><b>声明坏了</b>（JSON 非法 / 用了未实现的引用式）→ <b>拒绝执行</b>：
+     *       带着一份「读不懂的提示词」跑，等于<b>静默丢掉了业务指令</b>，
+     *       而模型仍然按「无约束」行事 —— 这是最坏的一类假成功。</li>
+     * </ul>
+     *
+     * @param instructions 提示词声明 JSON 文本
+     * @return 系统提示词正文；未声明时返回空串；<b>声明非法时返回 {@code null}</b>
      */
-    private @NonNull Optional<String> definitionOf(@NonNull String tenantId,
-                                                   @NonNull String agentId,
-                                                   int agentVersion) {
+    private static @Nullable String systemPrompt(@NonNull String instructions) {
+        Map<String, Object> root;
         try {
-            return agentQuery.listVersions(tenantId, agentId).stream()
-                    .filter(version -> version.versionNumber() == agentVersion)
-                    .map(AgentQueryPort.AgentVersionItem::definition)
-                    .findFirst();
-        } catch (RuntimeException e) {
-            log.warn("Agent 版本读取失败: agent={}, version={}", agentId, agentVersion, e);
-            return Optional.empty();
+            Map<String, Object> parsed = MAPPER.readValue(instructions,
+                    new TypeReference<Map<String, Object>>() {
+                    });
+            root = parsed == null ? Map.of() : parsed;
+        } catch (JacksonException e) {
+            log.warn("Agent 提示词声明解析失败，拒绝执行: {}", e.getMessage());
+            return null;
         }
+        if (root.containsKey("systemPromptRef")) {
+            // ⚠️ fail-closed：V1 不支持引用式提示词 —— 明确拒绝，不静默忽略。
+            log.warn("Agent 提示词声明含 systemPromptRef，V1 未实现引用式提示词库，拒绝执行");
+            return null;
+        }
+        Object inline = root.get("inlineInstructions");
+        if (inline instanceof String s && !s.isBlank()) {
+            return s.trim();
+        }
+        return "";
     }
 
     /**
-     * 解析系统提示：兼容契约形态（{@code instructions.inlineInstructions}）
-     * 与存量扁平形态（{@code systemPrompt}）。
+     * 读取生成参数（{@code generationParams}）中的某个数值项。
+     *
+     * <p>⚠️ <b>缺省即回落默认值</b>，但<b>非法值一律回落默认值</b>（不抛）：
+     * 生成参数写错不该让整个 Agent 不可用 ——
+     * 真正「不可用」的是「不知道用哪个模型」那种硬缺失（那里是 fail-closed）。
+     *
+     * @param params  生成参数 JSON 文本
+     * @param key     参数名
+     * @param defaultValue 缺省值
      */
-    private static @NonNull String systemPrompt(@NonNull Map<String, Object> root) {
-        Object instructions = root.get("instructions");
-        if (instructions instanceof Map<?, ?> map) {
-            Object inline = map.get("inlineInstructions");
-            if (inline instanceof String s && !s.isBlank()) {
-                return s;
+    private static double generationParam(@NonNull String params, @NonNull String key,
+                                          double defaultValue) {
+        Map<String, Object> root;
+        try {
+            Map<String, Object> parsed = MAPPER.readValue(params,
+                    new TypeReference<Map<String, Object>>() {
+                    });
+            root = parsed == null ? Map.of() : parsed;
+        } catch (JacksonException e) {
+            log.warn("Agent 生成参数解析失败，回落默认值: key={}, err={}", key, e.getMessage());
+            return defaultValue;
+        }
+        Object raw = root.get(key);
+        if (raw instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (raw instanceof String s) {
+            try {
+                return Double.parseDouble(s.trim());
+            } catch (NumberFormatException e) {
+                return defaultValue;
             }
         }
-        String flat = text(root.get("systemPrompt"));
-        return flat == null ? "" : flat;
+        return defaultValue;
     }
 
     /**
@@ -375,20 +485,6 @@ public class AgentModelConfigAssembler {
     private static @NonNull String stripProviderPrefix(@NonNull String modelId) {
         int idx = modelId.indexOf(':');
         return idx >= 0 ? modelId.substring(idx + 1) : modelId;
-    }
-
-    private static double number(Object raw, double defaultValue) {
-        if (raw instanceof Number number) {
-            return number.doubleValue();
-        }
-        if (raw instanceof String s) {
-            try {
-                return Double.parseDouble(s.trim());
-            } catch (NumberFormatException e) {
-                return defaultValue;
-            }
-        }
-        return defaultValue;
     }
 
     /**

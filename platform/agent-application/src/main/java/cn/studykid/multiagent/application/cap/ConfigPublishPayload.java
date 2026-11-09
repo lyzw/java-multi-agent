@@ -224,6 +224,12 @@ public record ConfigPublishPayload(
      * @param skillBundles   Skill 包集
      * @param capabilityTags 能力标签集
      * @param overrides      收紧覆盖（JSON 文本）
+     * @param orchestration  编排声明（JSON 文本）
+     * @param instructions   提示词声明（JSON 文本）—— V1 仅支持 {@code inlineInstructions}
+     * @param modelRef       绑定的模型引用（契约 {@code modelRef}）——
+     *                        {@code null} = 未绑定（运行期 fail-closed 拒绝执行）
+     * @param generationParams 生成参数（JSON 文本）：{@code temperature} /
+     *                        {@code topP} / {@code maxOutputTokens}
      */
     public record AgentSpec(@NonNull String agentId,
                             @Nullable String name,
@@ -233,7 +239,10 @@ public record ConfigPublishPayload(
                             @NonNull List<String> skillBundles,
                             @NonNull List<String> capabilityTags,
                             @NonNull String overrides,
-                            @NonNull String orchestration) {
+                            @NonNull String orchestration,
+                            @NonNull String instructions,
+                            @Nullable String modelRef,
+                            @NonNull String generationParams) {
 
         /**
          * 兼容构造器：<b>无编排声明</b>的 Agent 草稿（多级 Agent 之前的提交形态）。
@@ -249,7 +258,7 @@ public record ConfigPublishPayload(
                          @NonNull List<String> capabilityTags,
                          @NonNull String overrides) {
             this(agentId, name, description, roles, enabledSkills, skillBundles,
-                    capabilityTags, overrides, "{}");
+                    capabilityTags, overrides, "{}", "{}", null, "{}");
         }
 
         public AgentSpec {
@@ -262,6 +271,14 @@ public record ConfigPublishPayload(
             if (orchestration == null || orchestration.isBlank()) {
                 throw new IllegalArgumentException(
                         "orchestration 不能为空（缺省用 {} 表示 LEAF）");
+            }
+            if (instructions == null || instructions.isBlank()) {
+                throw new IllegalArgumentException(
+                        "instructions 不能为空（缺省用 {} 表示未声明提示词）");
+            }
+            if (generationParams == null || generationParams.isBlank()) {
+                throw new IllegalArgumentException(
+                        "generationParams 不能为空（缺省用 {} 表示走运行期默认值）");
             }
             roles = roles == null ? List.of() : List.copyOf(roles);
             enabledSkills = enabledSkills == null ? List.of() : List.copyOf(enabledSkills);
@@ -301,7 +318,8 @@ public record ConfigPublishPayload(
                             @Nullable String httpUrl,
                             @Nullable Integer httpTimeoutMs,
                             @NonNull String inputSchema,
-                            @NonNull String paramPolicies) {
+                            @NonNull String paramPolicies,
+                            @Nullable String description) {
 
         public ToolSpec {
             if (toolId == null || toolId.isBlank()) {
@@ -368,6 +386,9 @@ public record ConfigPublishPayload(
         /**
          * 兼容构造器（<b>非 HTTP 工具</b>）—— 既有构造点不必逐个补参数。
          *
+         * <p>⚠️ 只能造出「未声明工具描述」的草稿：描述缺省时运行期回落
+         * Skill 的 1 级 purpose，再回落工具名。需要描述请用全参构造。
+         *
          * @param toolId Tool 标识
          * @param name 显示名
          * @param kind Tool 种类
@@ -386,7 +407,7 @@ public record ConfigPublishPayload(
                         @NonNull String inputSchema,
                         @NonNull String paramPolicies) {
             this(toolId, name, kind, riskLevel, mcpServerId, mcpToolName,
-                    null, null, null, inputSchema, paramPolicies);
+                    null, null, null, inputSchema, paramPolicies, null);
         }
     }
 

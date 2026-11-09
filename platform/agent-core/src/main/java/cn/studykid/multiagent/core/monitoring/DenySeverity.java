@@ -161,6 +161,9 @@ public enum DenySeverity {
             //    两者都是「改配置」，不惊动安全值班；但**原因码不同**，
             //    因为排查方向相反（查规则内容 vs 查发布流程）。
             case ROUTING_POLICY_INVALID -> WARNING;
+            // ⚠️ 提示词声明非法同样是**发布期配置缺陷**：改声明即可恢复，
+            //    不触碰安全边界 → WARNING（与 ROUTING_POLICY_INVALID 同档）。
+            case AGENT_INSTRUCTIONS_INVALID -> WARNING;
             case DELEGATION_NOT_ALLOWED -> WARNING;
             case DELEGATION_DEPTH_EXCEEDED -> WARNING;
             case DELEGATION_TIMEOUT -> WARNING;

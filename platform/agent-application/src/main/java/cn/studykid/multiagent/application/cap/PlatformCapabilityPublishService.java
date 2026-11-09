@@ -340,17 +340,20 @@ public class PlatformCapabilityPublishService {
                 http = new CapHttpToolConfig(spec.httpMethod(), spec.httpUrl(),
                         spec.httpTimeoutMs());
             }
+            // ⚠️ 全参构造：description 是模型可见的工具行为定义，
+            //    且已纳入 CapObjectFingerprint.of(CapToolDef) —— 用兼容构造器
+            //    既会让管理台提交的描述丢失，又会让「改了描述」算不出内容变化。
             CapToolDef draft = new CapToolDef(spec.toolId(), version, spec.name(),
                     kind, parseRisk(spec.riskLevel()),
                     spec.mcpServerId(), spec.mcpToolName(), http,
-                    spec.inputSchema(), spec.paramPolicies(),
+                    spec.inputSchema(), spec.paramPolicies(), spec.description(),
                     // ⚠️ 占位指纹：内容指纹**不包含**自身，故可先占位再算
                     "pending", 1, now, null);
             String fingerprint = CapObjectFingerprint.of(draft);
             toolRows.add(new CapToolDef(spec.toolId(), version, spec.name(),
                     kind, parseRisk(spec.riskLevel()),
                     spec.mcpServerId(), spec.mcpToolName(), http,
-                    spec.inputSchema(), spec.paramPolicies(),
+                    spec.inputSchema(), spec.paramPolicies(), spec.description(),
                     fingerprint, 1, now, null));
         }
 

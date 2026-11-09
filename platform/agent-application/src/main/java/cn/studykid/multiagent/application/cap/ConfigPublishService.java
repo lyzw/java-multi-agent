@@ -31,6 +31,7 @@ import cn.studykid.multiagent.core.orchestration.AgentOrchestration;
 import cn.studykid.multiagent.core.orchestration.CapAgentChildRef;
 import cn.studykid.multiagent.core.orchestration.ChildAgentRef;
 import cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort;
+import cn.studykid.multiagent.ports.persistence.AgentReleaseArchivePort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
 import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
@@ -122,6 +123,19 @@ public class ConfigPublishService {
      * 而运维看到的是「发布成功」。
      */
     private final CapRoutingPolicyPort routingPolicies;
+
+    /**
+     * Agent 发布归档端口（2026-11-09 · 权威源定 A）。
+     *
+     * <p>⚠️ <b>可为空 = 归档能力未装配</b>：此时发布<b>会被拒</b>
+     * （fail-closed，见 {@link #archiveRelease}）——
+     * 因为归档缺失会让 {@code run.snapshot_id} 外键链断裂，
+     * 发布的 Agent 一个 Run 都建不出来。
+     *
+     * <p>⚠️ <b>归档不是真源</b>：写进去的 {@code definition} 由
+     * {@code cap_agent_def} 派生；运行期不读它。
+     */
+    private final @Nullable AgentReleaseArchivePort archive;
 
     public ConfigPublishService(@NonNull ConfigPublishTransaction tx,
                                 @NonNull ConfigPointerPort pointers,
@@ -231,6 +245,33 @@ public class ConfigPublishService {
                                 @Nullable CapAgentChildRefPort childRefs,
                                 @Nullable CapResultContractPort contracts,
                                 @Nullable CapRoutingPolicyPort routingPolicies) {
+        this(tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate,
+                clock, maxAttempts, closureValidator, childRefs, contracts, routingPolicies,
+                null);
+    }
+
+    /**
+     * 最完整构造器（2026-11-09 · 权威源定 A）：额外注入发布归档端口。
+     *
+     * <p>⚠️ {@code archive} 为 {@code null} 表示「归档能力未装配」：
+     * 发布会被拒（fail-closed）—— 发布一个永远建不出 Run 的 Agent 比发布失败糟得多。
+     */
+    public ConfigPublishService(@NonNull ConfigPublishTransaction tx,
+                                @NonNull ConfigPointerPort pointers,
+                                @NonNull ConfigReleasePort releases,
+                                @NonNull CapToolDefPort toolDefs,
+                                @NonNull CapSkillDefPort skillDefs,
+                                @NonNull CapMcpServerDefPort serverDefs,
+                                @NonNull CapAgentDefPort agentDefs,
+                                @NonNull DecisionAuditPort audit,
+                                @NonNull ConfigValidationGate gate,
+                                @NonNull Clock clock,
+                                int maxAttempts,
+                                @Nullable AgentPublishClosureValidator closureValidator,
+                                @Nullable CapAgentChildRefPort childRefs,
+                                @Nullable CapResultContractPort contracts,
+                                @Nullable CapRoutingPolicyPort routingPolicies,
+                                @Nullable AgentReleaseArchivePort archive) {
         if (maxAttempts < 1) {
             throw new IllegalArgumentException("maxAttempts 必须为正数，收到: " + maxAttempts);
         }
@@ -249,6 +290,7 @@ public class ConfigPublishService {
         this.childRefs = childRefs;
         this.contracts = contracts;
         this.routingPolicies = routingPolicies;
+        this.archive = archive;
     }
 
     // ── 原子发布 ────────────────────────────────────────────────
@@ -402,6 +444,14 @@ public class ConfigPublishService {
                         agentDefs.find(command.tenantId(), agent.agentId(), agent.version())
                                 .map(CapAgentDef::configFingerprint));
             }
+            // ⚠️⚠️ 归档（2026-11-09 · 权威源定 A）：
+            //    {@code run.snapshot_id} 的外键链是
+            //    {@code run → execution_snapshot → agent_version} ——
+            //    只写 {@code cap_agent_def} 会让**建 Run 直接失败**（外键违约）。
+            //    故同事务内把这一版派生归档到旧表（不可变版本行 + 执行快照）。
+            //    ⚠️ 归档内容由 {@code cap_agent_def} **派生**，不是客户端提交的 JSON：
+            //    否则「两套真源」又回来了（旧表那份就成了第二份配置）。
+            archiveRelease(command.tenantId(), published);
         }
 
         // ── 1b. 多级 Agent：发布期闭包校验 + 父子关系投影 ────────────────
@@ -633,9 +683,12 @@ public class ConfigPublishService {
         if (def.publishedAt() != null) {
             return def;
         }
+        // ⚠️ 必须用**全参构造**逐字段带过去：兼容构造器会把 description 静默清成 null
+        //    （2026-11-09 实测的三字段同型缺陷）。描述是模型可见的工具行为定义，
+        //    在「草稿 → 发布」这一步丢掉，等于写进库的是另一个对象。
         return new CapToolDef(def.id(), def.version(), def.name(), def.kind(), def.riskLevel(),
                 def.mcpServerId(), def.mcpToolName(), def.httpConfig(),
-                def.inputSchema(), def.paramPolicies(),
+                def.inputSchema(), def.paramPolicies(), def.description(),
                 def.configFingerprint(), def.schemaVersion(), def.createdAt(), publishedAt);
     }
 
@@ -668,6 +721,33 @@ public class ConfigPublishService {
      * 「校验器没接上」不等于「校验通过」。放行等于让未校验的委派图上线，
      * 环与未发布引用会一直留到运行期才爆。
      */
+    /**
+     * 归档一次 Agent 发布（派生 {@code agent_version} + {@code execution_snapshot}）。
+     *
+     * <p>⚠️ <b>归档能力未装配 → 抛异常让整笔发布回滚</b>（不静默跳过）：
+     * 外键链会断、建 Run 会失败，而症状出现在 Run 创建处，离真因很远。
+     * 「发布了一个永远建不出 Run 的 Agent」比「发布失败」糟得多。
+     *
+     * @param tenantId 租户标识
+     * @param agent    已发布的 Agent 定义行（权威真源）
+     */
+    private void archiveRelease(@NonNull String tenantId, @NonNull CapAgentDef agent) {
+        if (archive == null) {
+            throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_UNKNOWN, "agent",
+                    "Agent 发布归档能力未装配（归档仓储缺失），拒绝发布: agent="
+                            + agent.agentId() + " v" + agent.version()
+                            + "。原因：归档缺失会让 run.snapshot_id 外键链断裂，"
+                            + "发布出去的 Agent 永远建不出 Run。");
+        }
+        boolean archived = archive.archiveRelease(tenantId, agent.agentId(), agent.version(),
+                AgentReleaseArchive.deriveDefinition(agent),
+                AgentReleaseArchive.deriveAgentConfig(agent));
+        if (!archived) {
+            log.debug("Agent 发布归档跳过（版本行已存在）: agent={}, version={}",
+                    agent.agentId(), agent.version());
+        }
+    }
+
     private void validateMultiAgentClosure(@NonNull ConfigPublishCommand command) {
         for (CapAgentDef agent : command.agents()) {
             AgentOrchestration orchestration = parseOrchestration(agent);
@@ -794,12 +874,18 @@ public class ConfigPublishService {
                 def.lifecycleState());
     }
 
-    private static CapAgentDef withPublished(CapAgentDef def, Instant publishedAt) {        if (def.publishedAt() != null) {
+    private static CapAgentDef withPublished(CapAgentDef def, Instant publishedAt) {
+        if (def.publishedAt() != null) {
             return def;
         }
+        // ⚠️ 必须用**全参构造**逐字段带过去：15 参兼容构造器会把
+        //    instructions / modelRef / generationParams 静默清成 "{}" / null / "{}"，
+        //    于是「三步发布」写进库与归档的是另一个对象 —— 运行期取不到模型，
+        //    所有经治理通道发布的 Agent 一律 fail-closed（2026-11-09 实跑证实）。
         return new CapAgentDef(def.tenantId(), def.agentId(), def.version(), def.name(),
                 def.description(), def.roles(), def.enabledSkills(), def.skillBundles(),
                 def.capabilityTags(), def.overrides(), def.orchestration(),
+                def.instructions(), def.modelRef(), def.generationParams(),
                 def.configFingerprint(),
                 def.schemaVersion(), def.createdAt(), publishedAt);
     }

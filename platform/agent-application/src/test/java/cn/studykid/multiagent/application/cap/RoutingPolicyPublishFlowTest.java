@@ -105,7 +105,9 @@ class RoutingPolicyPublishFlowTest {
                 world.toolDefs, world.skillDefs, world.serverDefs, world.agentDefs,
                 world.audit, new ConfigValidationGate(), CLOCK,
                 ConfigPublishService.DEFAULT_MAX_ATTEMPTS, validator, world.childRefs,
-                world.contracts, withPolicies ? world.routingPolicies : null);
+                world.contracts, withPolicies ? world.routingPolicies : null,
+                // ⚠️ 归档能力必须装配：未装配时发布会被拒（fail-closed）。
+                new InMemoryAgentReleaseArchive());
     }
 
     private ConfigPublishCommand commandWith(List<CapAgentDef> agents,

@@ -250,6 +250,36 @@ class PlatformCapabilityPublishServiceTest {
                 .startsWith(CapObjectFingerprint.PREFIX);
     }
 
+    /**
+     * <b>治理通道可写性守卫</b>（2026-11-10）：工具描述从载荷一路进版本行，
+     * 且参与内容指纹。撤掉 {@code PlatformCapabilityPublishService} 里的
+     * {@code spec.description()} 或指纹里的 {@code description}，本用例必红。
+     */
+    @Test
+    @DisplayName("✅ 治理通道提交的 description 进入版本行与内容指纹（不是加了列却写不进去）")
+    void toolDescriptionReachesVersionRowAndFingerprint() {
+        ConfigPublishPayload.ToolSpec withDescription = new ConfigPublishPayload.ToolSpec(
+                "tool-1", "工具", "NATIVE", "READ", null, null,
+                null, null, null, "{}", "{}", "查询学生档案（模型可见）");
+        service().requestPublish(List.of(withDescription), List.of(), List.of(),
+                null, "登记带描述的工具", REQUESTER);
+
+        var command = captureCommand();
+        assertThat(command.tools()).hasSize(1);
+        CapToolDef row = command.tools().get(0);
+        assertThat(row.description())
+                .as("⚠️ 描述在「载荷 → 版本行」这一段被丢了：管理台有入口也写不进去")
+                .isEqualTo("查询学生档案（模型可见）");
+        assertThat(row.configFingerprint()).isEqualTo(CapObjectFingerprint.of(row));
+
+        // 成对断言：描述变了就是内容变了（否则失效检测看不出模型可见文本被改）
+        CapToolDef changed = new CapToolDef(row.id(), row.version(), row.name(), row.kind(),
+                row.riskLevel(), row.mcpServerId(), row.mcpToolName(), row.httpConfig(),
+                row.inputSchema(), row.paramPolicies(), "查询课程表",
+                row.configFingerprint(), row.schemaVersion(), row.createdAt(), row.publishedAt());
+        assertThat(CapObjectFingerprint.of(changed)).isNotEqualTo(row.configFingerprint());
+    }
+
     @Test
     @DisplayName("⛔ 平台发布不得携带任何租户级对象")
     void platformPublishCarriesNoTenantObjects() {

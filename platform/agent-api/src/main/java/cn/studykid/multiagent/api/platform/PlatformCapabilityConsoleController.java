@@ -628,7 +628,7 @@ public class PlatformCapabilityConsoleController {
             return views.stream().map(v -> new ConfigPublishPayload.ToolSpec(
                     v.toolId(), v.name(), v.kind(), v.riskLevel(), v.mcpServerId(),
                     v.mcpToolName(), v.httpMethod(), v.httpUrl(), v.httpTimeoutMs(),
-                    v.inputSchema(), v.paramPolicies())).toList();
+                    v.inputSchema(), v.paramPolicies(), v.description())).toList();
         }
 
         static List<ConfigPublishPayload.SkillSpec> toSkillSpecs(
@@ -678,7 +678,7 @@ public class PlatformCapabilityConsoleController {
                                @Nullable String mcpServerId, @Nullable String mcpToolName,
                                @Nullable String httpMethod, @Nullable String httpUrl,
                                @Nullable Integer httpTimeoutMs, @Nullable String inputSchema,
-                               @Nullable String paramPolicies) {
+                               @Nullable String paramPolicies, @Nullable String description) {
     }
 
     public record SkillSpecView(@Nullable String skillId, @Nullable String name,

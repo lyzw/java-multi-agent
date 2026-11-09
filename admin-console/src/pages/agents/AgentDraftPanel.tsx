@@ -93,7 +93,8 @@ export interface AgentDraftPanelProps {
  *
  * <p><b>⚠️ 一张表单覆盖 `cap_agent_def` 的全部字段</b>：
  * 名称 / 描述 / 角色 / 启用技能 / 技能包 / 能力标签 / 配置覆盖 / 编排声明
- * （模式 / 子 Agent / 路由策略 / 输出契约 / 三项委派限制 / 失败策略）。
+ * （模式 / 子 Agent / 路由策略 / 输出契约 / 三项委派限制 / 失败策略）
+ * / 提示词声明 / 模型绑定 / 生成参数。
  *
  * <p><b>⚠️ 「修改」= 发一个新版本，不是原地改</b>（FR-002）：
  * 已发布版本行不可变（DB 触发器），所以改配置只能走发布通道走一个新版本。
@@ -394,6 +395,70 @@ export function AgentDraftPanel({
             rows={6}
             style={{ fontFamily: 'monospace', fontSize: 12 }}
             placeholder='{"removedSkills":["skill-old"]}'
+          />
+        </Form.Item>
+                </>
+              ),
+            },
+            {
+              key: 'prompt',
+              label: '提示词与模型',
+              forceRender: true,
+              children: (
+                <>
+        {/* ── 提示词声明 / 模型绑定 / 生成参数 ── */}
+        {/* ⚠️ 单独一个页签而不是塞进「基本信息」：这三个字段决定的是
+            「这个 Agent 跑起来是什么样」，与「它叫什么、属于谁」是两类事。
+            混在一起作者很容易漏填 —— 而漏填 modelRef 的后果是
+            「发布成功、跑起来被拒」，反馈点离填写点很远。 */}
+        <Form.Item
+          name="instructions"
+          label="提示词声明（instructions · JSON）"
+          extra={
+            <>
+              V1 只支持内联提示词 <code>{'{"inlineInstructions":"..."}'}</code>；
+              引用式提示词库（systemPromptRef）尚未实现，后端会拒绝执行该 Agent。
+              <br />
+              ⚠️ 必须是 JSON <b>对象</b>；<code>inlineInstructions</code> 若填则必须是非空字符串。
+            </>
+          }
+        >
+          <Input.TextArea
+            rows={6}
+            style={{ fontFamily: 'monospace', fontSize: 12 }}
+            placeholder='{"inlineInstructions":"你是初中数学辅导助手。"}'
+          />
+        </Form.Item>
+        <Form.Item
+          name="modelRef"
+          label="模型引用（modelRef）"
+          extra={
+            <>
+              可填目录模型名（如 <code>MiniMax-M2.5</code>）或目录 id（UUID）。
+              <br />
+              ⚠️ <b>留空 = 未绑定模型 ⇒ 该 Agent 的 Run 会被拒绝执行</b>
+              （平台不提供默认模型）。
+            </>
+          }
+        >
+          <Input placeholder="如 MiniMax-M2.5（或目录 id）" />
+        </Form.Item>
+        <Form.Item
+          name="generationParams"
+          label="生成参数（generationParams · JSON）"
+          extra={
+            <>
+              可选键：<code>temperature</code>（0~2）、<code>topP</code>（0~1，不含 0）、
+              <code>maxOutputTokens</code>（正整数）。留空对象 = 走运行期默认值。
+              <br />
+              ⚠️ 必须是 JSON <b>对象</b>。
+            </>
+          }
+        >
+          <Input.TextArea
+            rows={3}
+            style={{ fontFamily: 'monospace', fontSize: 12 }}
+            placeholder='{"temperature":0.3,"maxOutputTokens":2048}'
           />
         </Form.Item>
                 </>

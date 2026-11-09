@@ -25,7 +25,7 @@ class ConfigPublishPayloadToolSpecHttpTest {
     private static ConfigPublishPayload.ToolSpec httpSpec(String method, String url,
                                                          Integer timeoutMs) {
         return new ConfigPublishPayload.ToolSpec("tool-1", "订单查询", "HTTP", "READ",
-                null, null, method, url, timeoutMs, "{}", "{}");
+                null, null, method, url, timeoutMs, "{}", "{}", null);
     }
 
     @Test
@@ -72,7 +72,7 @@ class ConfigPublishPayloadToolSpecHttpTest {
     @DisplayName("⛔ 非 HTTP 工具却携带 HTTP 配置 → 拒")
     void nativeSpecWithHttpFieldsIsRejected() {
         assertThatThrownBy(() -> new ConfigPublishPayload.ToolSpec("tool-1", "t", "NATIVE", "READ",
-                null, null, "GET", "https://api.example.com/x", 10_000, "{}", "{}"))
+                null, null, "GET", "https://api.example.com/x", 10_000, "{}", "{}", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("不得携带 HTTP 配置");
     }
@@ -81,7 +81,7 @@ class ConfigPublishPayloadToolSpecHttpTest {
     @DisplayName("⛔ HTTP 工具却携带 MCP 绑定 → 拒（目标必须唯一）")
     void httpSpecWithMcpBindingIsRejected() {
         assertThatThrownBy(() -> new ConfigPublishPayload.ToolSpec("tool-1", "t", "HTTP", "READ",
-                "srv-1", "op", "GET", "https://api.example.com/x", 10_000, "{}", "{}"))
+                "srv-1", "op", "GET", "https://api.example.com/x", 10_000, "{}", "{}", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("不得携带 MCP 绑定");
     }
@@ -90,7 +90,7 @@ class ConfigPublishPayloadToolSpecHttpTest {
     @DisplayName("⛔ MCP 工具却携带 HTTP 配置 → 拒")
     void mcpSpecWithHttpFieldsIsRejected() {
         assertThatThrownBy(() -> new ConfigPublishPayload.ToolSpec("tool-1", "t", "MCP", "READ",
-                "srv-1", "op", "GET", "https://api.example.com/x", 10_000, "{}", "{}"))
+                "srv-1", "op", "GET", "https://api.example.com/x", 10_000, "{}", "{}", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("不得携带 HTTP 配置");
     }

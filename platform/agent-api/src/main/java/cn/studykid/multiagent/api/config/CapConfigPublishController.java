@@ -338,7 +338,15 @@ public class CapConfigPublishController {
                 // ⚠️ 编排声明必须由客户端提交（多级 Agent v1.1）：
                 //    缺省 "{}" = LEAF，与「显式声明 LEAF」不可区分 ——
                 //    治理通道若不暴露这个字段，多级 Agent 根本无法发布。
-                a.orchestration() == null ? "{}" : a.orchestration())).toList();
+                a.orchestration() == null ? "{}" : a.orchestration(),
+                // ⚠️ 提示词声明：缺省 "{}" = 未声明提示词。
+                //    运行期据此 fail-closed（没有提示词的 Agent 不该被当成
+                //    「一个没有特殊要求的 Agent」照常跑）。
+                a.instructions() == null ? "{}" : a.instructions(),
+                // ⚠️ 模型引用：null = 未绑定模型 → 运行期拒绝执行该 Agent 的 Run。
+                a.modelRef(),
+                // ⚠️ 生成参数：缺省 "{}" = 走运行期默认值。
+                a.generationParams() == null ? "{}" : a.generationParams())).toList();
     }
 
     /**
@@ -446,7 +454,10 @@ public class CapConfigPublishController {
             @Nullable List<String> skillBundles,
             @Nullable List<String> capabilityTags,
             @Nullable String overrides,
-            @Nullable String orchestration) {
+            @Nullable String orchestration,
+            @Nullable String instructions,
+            @Nullable String modelRef,
+            @Nullable String generationParams) {
 
         /**
          * 兼容构造器：<b>无编排声明</b>的 Agent 草稿（多级 Agent 之前的提交形态）。
@@ -462,7 +473,27 @@ public class CapConfigPublishController {
                              @Nullable List<String> capabilityTags,
                              @Nullable String overrides) {
             this(agentId, name, description, roles, enabledSkills, skillBundles, capabilityTags,
-                    overrides, null);
+                    overrides, null, null, null, null);
+        }
+
+        /**
+         * 兼容构造器：<b>有编排声明、但无提示词、未绑定模型</b>的 Agent 草稿
+         * （多级 Agent 之前 / 提示词治理之前的提交形态）。
+         *
+         * <p>⚠️ 缺省 {@code instructions = "{}"} = 未声明提示词；
+         * {@code modelRef = null} = 未绑定模型（运行期 fail-closed 拒绝执行）。
+         */
+        public AgentRequest(@Nullable String agentId,
+                             @Nullable String name,
+                             @Nullable String description,
+                             @Nullable List<String> roles,
+                             @Nullable List<String> enabledSkills,
+                             @Nullable List<String> skillBundles,
+                             @Nullable List<String> capabilityTags,
+                             @Nullable String overrides,
+                             @Nullable String orchestration) {
+            this(agentId, name, description, roles, enabledSkills, skillBundles, capabilityTags,
+                    overrides, orchestration, null, null, null);
         }
     }
 

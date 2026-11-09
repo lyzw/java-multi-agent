@@ -15,9 +15,11 @@ import cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService;
 import cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService.ConfigPublishBaselineConflictException;
 import cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService.ConfigPublishScopeNotAllowedException;
 import cn.studykid.multiagent.application.cap.ConfigValidationGate;
+import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcAuditRepository;
+import cn.studykid.multiagent.infrastructure.persistence.cap.JdbcAgentReleaseArchiveRepository;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcConfigPublishRequestRepository;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort.Decision;
@@ -59,7 +61,12 @@ class ConfigPublishManagementIT extends CapITBase {
                 new JdbcCapAgentDefRepository(appPool),
                 new JdbcDecisionAuditRepository(appPool),
                 new ConfigValidationGate(),
-                CLOCK);
+                CLOCK,
+                ConfigPublishService.DEFAULT_MAX_ATTEMPTS, null, null, null, null,
+                // ⚠️ 归档仓储必须装配（2026-11-09 · 权威源定 A）：
+                //    未装配时发布会被拒 —— 归档缺失会让 run.snapshot_id 外键链断裂，
+                //    发布出去的 Agent 一个 Run 都建不出来。
+                new JdbcAgentReleaseArchiveRepository(appPool));
     }
 
     private ConfigPublishWorkflowService workflow() {
@@ -77,6 +84,22 @@ class ConfigPublishManagementIT extends CapITBase {
     private static ConfigPublishPayload.AgentSpec agentSpec(String agentId) {
         return new ConfigPublishPayload.AgentSpec(agentId, "it agent", "desc",
                 List.of("TEACHER"), List.of(), List.of(), List.of(), "{}");
+    }
+
+    /**
+     * 造一个**只有主体行、没有旧归档版本行**的 Agent（与生产
+     * {@code JdbcAgentManageRepository#createAgent} 同形态）。
+     *
+     * <p>⚠️ 不能用 {@link #createAgentWithVersion}：它会预建
+     * {@code agent_version} v1，令发布事务里的归档 INSERT 撞唯一约束被
+     * {@code ON CONFLICT DO NOTHING} 跳过 —— 那样归档内容就是夹具的旧 JSON，
+     * **验不出「归档是否由本次真源派生」**。
+     */
+    private static String createBareAgent(String tenantId, String name) {
+        adminExec("INSERT INTO agent (tenant_id, name) VALUES ('" + tenantId
+                + "'::uuid, '" + name + "') ON CONFLICT (tenant_id, name) DO NOTHING");
+        return adminQuery("SELECT agent_id::text FROM agent WHERE tenant_id = '" + tenantId
+                + "'::uuid AND name = '" + name + "'");
     }
 
     private static long requestRows() {
@@ -113,6 +136,19 @@ class ConfigPublishManagementIT extends CapITBase {
                 + agentId + "'::uuid AND published_at IS NOT NULL"))
                 .as("⛔ 执行后没有已发布的 Agent 版本行")
                 .isEqualTo(1L);
+        // ⚠️ 归档断言（2026-11-09 · 权威源定 A）：
+        //    真源 cap_agent_def 落行的同时，必须同事务把这一版**派生**归档到
+        //    agent_version + execution_snapshot —— 否则 run.snapshot_id 的外键链断裂，
+        //    这个 Agent 永远建不出 Run。
+        assertThat(adminQueryLong("SELECT count(*) FROM agent_version WHERE agent_id = '"
+                + agentId + "'::uuid"))
+                .as("⛔ 执行后没有归档版本行（run.snapshot_id 外键链会断裂）")
+                .isGreaterThanOrEqualTo(1L);
+        assertThat(adminQueryLong("SELECT count(*) FROM execution_snapshot es "
+                + "JOIN agent_version av ON av.version_id = es.version_id "
+                + "WHERE av.agent_id = '" + agentId + "'::uuid"))
+                .as("⛔ 执行后没有归档执行快照（run.snapshot_id 外键会违约）")
+                .isGreaterThanOrEqualTo(1L);
         assertThat(adminQueryLong("SELECT count(*) FROM cap_config_release WHERE scope = 'TENANT'"
                 + " AND tenant_id = '" + tenantA + "'::uuid"))
                 .as("⛔ 执行后没有租户级发布头")
@@ -122,6 +158,76 @@ class ConfigPublishManagementIT extends CapITBase {
                 .as("⛔ 执行后当前发布指针没有指向新发布")
                 .isEqualTo(1L);
         assertThat(workflow.currentPointer(tenantA)).isPresent();
+    }
+
+    /**
+     * <b>跨表面闭环守卫</b>（2026-11-10 · 审查 §7 第 1 条）。
+     *
+     * <p>从<b>三步发布编排入口</b>进，带齐提示词 / 模型 / 生成参数，
+     * 逐层断言：发布行 → 归档派生 → 运行期仓储读回，三处同源。
+     *
+     * <p>⚠️ <b>反向验证</b>：把
+     * {@code ConfigPublishService.withPublished(CapAgentDef)} 改回 15 参兼容构造，
+     * 本用例的发布行 / 归档 / 读回断言会<b>同时变红</b>（三字段被清成
+     * {@code "{}"} / {@code null} / {@code "{}"}）—— 这正是 2026-11-09 实测的
+     * Sev-0：全量测试全绿却照不出「发布态把新字段丢了」。
+     * ⚠️ 断言值<b>不引用被测实现里的常量</b>，撤掉修复点时不会跟着漂。
+     */
+    @Test
+    @DisplayName("✅ 跨表面闭环：三步发布带提示词/模型/生成参数 → 发布行、归档、运行期读回同源")
+    void publishedAgentKeepsInstructionsModelAndGenerationParams() {
+        String agentId = createBareAgent(tenantA, freshName("it-r4-closed-loop"));
+        String instructions = "{\"inlineInstructions\":\"你是初中数学辅导助手\"}";
+        String modelRef = "MiniMax-M2.5";
+        String generationParams = "{\"temperature\":0.3,\"maxOutputTokens\":2048}";
+        ConfigPublishPayload.AgentSpec spec = new ConfigPublishPayload.AgentSpec(
+                agentId, "闭环 Agent", "带提示词与模型", List.of("TEACHER"),
+                List.of(), List.of(), List.of(), "{}", "{}",
+                instructions, modelRef, generationParams);
+
+        ConfigPublishWorkflowService workflow = workflow();
+        ConfigPublishRequest created = workflow.requestPublish(tenantA,
+                ConfigRelease.Scope.TENANT, List.of(spec), null,
+                "发布带提示词与模型的 Agent", REQUESTER);
+        workflow.decide(tenantA, created.requestId(), Decision.APPROVE, "同意", APPROVER);
+        workflow.apply(tenantA, created.requestId(), APPROVER);
+
+        // ① 已发布版本行（运行期真正读的权威源）
+        String row = " FROM cap_agent_def WHERE agent_id = '" + agentId
+                + "'::uuid AND published_at IS NOT NULL";
+        assertThat(adminQuery("SELECT instructions->>'inlineInstructions'" + row))
+                .as("⚠️ 发布态把提示词清空了：三步发布写进库的是另一个对象")
+                .isEqualTo("你是初中数学辅导助手");
+        assertThat(adminQuery("SELECT model_ref" + row))
+                .as("⚠️ 发布态把模型清空了：运行期取不到 modelRef → 该 Agent 的所有 Run fail-closed")
+                .isEqualTo(modelRef);
+        assertThat(adminQuery("SELECT generation_params->>'temperature'" + row))
+                .isEqualTo("0.3");
+        assertThat(adminQuery("SELECT generation_params->>'maxOutputTokens'" + row))
+                .isEqualTo("2048");
+
+        // ② 归档必须由本次真源派生（不是夹具遗留的旧 definition）
+        String av = " FROM agent_version WHERE agent_id = '" + agentId
+                + "'::uuid AND version_number = 1";
+        assertThat(adminQuery("SELECT definition->>'modelRef'" + av))
+                .as("⚠️ 归档与真源分叉：definition 不是从本次发布的 cap_agent_def 派生的")
+                .isEqualTo(modelRef);
+        assertThat(adminQuery("SELECT definition->'instructions'->>'inlineInstructions'" + av))
+                .isEqualTo("你是初中数学辅导助手");
+        assertThat(adminQueryLong("SELECT count(*) FROM execution_snapshot es "
+                + "JOIN agent_version v ON v.version_id = es.version_id "
+                + "WHERE v.agent_id = '" + agentId + "'::uuid "
+                + "AND es.agent_config->>'modelRef' = '" + modelRef + "'"))
+                .as("⚠️ 执行快照的 agent_config 没带上模型（run.snapshot_id 链路上的配置被清空）")
+                .isEqualTo(1L);
+
+        // ③ 运行期仓储按租户读回（不是只看管理连接的裸 SQL）
+        CapAgentDef fromRuntime = new JdbcCapAgentDefRepository(appPool)
+                .findLatest(tenantA, agentId)
+                .orElseThrow(() -> new AssertionError("运行期读不到刚发布的 Agent 定义"));
+        assertThat(fromRuntime.instructions()).contains("你是初中数学辅导助手");
+        assertThat(fromRuntime.modelRef()).isEqualTo(modelRef);
+        assertThat(fromRuntime.generationParams()).contains("0.3");
     }
 
     @Test

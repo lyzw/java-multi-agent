@@ -832,6 +832,25 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * Agent 发布归档仓储（2026-11-09 · 权威源定 A）。
+     *
+     * <p>⚠️ <b>归档不是真源</b>：真源是 {@code cap_agent_def}。
+     * 本仓储把真源<b>派生</b>归档到旧表 {@code agent_version} +
+     * {@code execution_snapshot}，唯一理由是维持
+     * {@code run → execution_snapshot → agent_version} 的外键链 ——
+     * 没有归档行，{@code run.snapshot_id} 外键违约，<b>建 Run 直接失败</b>。
+     *
+     * <p>⚠️ <b>必须装配</b>：未装配时治理通道发布会 fail-closed 被拒
+     * （而不是「发布成功但永远建不出 Run」）。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.AgentReleaseArchivePort
+            agentReleaseArchivePort(DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcAgentReleaseArchiveRepository(dataSource);
+    }
+
+    /**
      * 父子 Agent 关系投影仓储（多级 Agent v1.1 · 06 变更补充「关系数据」）。
      *
      * <p>⚠️ <b>投影不是权威来源</b>：权威定义是不可变 Agent release 里的
@@ -1296,14 +1315,18 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort childRefs,
             cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts,
             cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort routingPolicies,
+            cn.studykid.multiagent.ports.persistence.AgentReleaseArchivePort archive,
             java.time.Clock clock) {
         // ⚠️ 输出契约仓储必须注入：未装配时「发布命令带契约」会被拒（fail-closed），
         //    绝不静默跳过 —— 那等于「发布成功但契约没落库」。
         // ⚠️ 路由策略仓储同理（第十四批）：未装配时「发布命令带策略」会被拒。
+        // ⚠️ 归档端口必须注入（2026-11-09 · 权威源定 A）：未装配时发布会被拒 ——
+        //    归档缺失会让 run.snapshot_id 外键链断裂，
+        //    发布出去的 Agent 一个 Run 都建不出来（症状在 Run 创建处，离真因很远）。
         return new cn.studykid.multiagent.application.cap.ConfigPublishService(
                 tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate,
                 clock, cn.studykid.multiagent.application.cap.ConfigPublishService.DEFAULT_MAX_ATTEMPTS,
-                closureValidator, childRefs, contracts, routingPolicies);
+                closureValidator, childRefs, contracts, routingPolicies, archive);
     }
 
     /**

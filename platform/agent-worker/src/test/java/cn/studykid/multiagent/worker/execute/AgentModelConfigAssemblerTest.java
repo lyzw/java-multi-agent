@@ -10,52 +10,78 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import cn.studykid.multiagent.application.cap.ClosureResolver;
+import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
-import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
+import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
-import cn.studykid.multiagent.ports.persistence.Page;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 共用装配器测试（多级 Agent v1.1 · 第二十一批 · FR-036）。
+ * 共用装配器测试（多级 Agent v1.1 · 第二十一批 · FR-036 · 2026-11-09 权威源定 A）。
  *
  * <p>⚠️ <b>本类的存在理由</b>：根 Agent 与子 Agent 的模型配置此前是<b>两套实现</b>
  * —— 子路径读真实定义，根路径走硬编码占位（{@code fake-model} + 空工具表）。
  * 现在两者共用 {@link AgentModelConfigAssembler}，
  * 本类钉死这份<b>唯一定义</b>的行为。
+ *
+ * <p>⚠️ <b>配置真源是 {@code cap_agent_def}</b>（2026-11-09）：
+ * 本类的替身因此实现 {@link CapAgentDefPort} 而<b>不是</b>旧的
+ * {@code AgentQueryPort} —— 旧表 {@code agent_version.definition} 降级为归档，
+ * 运行期不再读它。
  */
 class AgentModelConfigAssemblerTest {
 
     private static final String TENANT = "t-a";
     private static final String AGENT = "agent-1";
 
-    /** 可编程的 Agent 版本查询替身。 */
-    private static final class ScriptedAgentQuery implements AgentQueryPort {
-        String definition = "{\"modelRef\":\"model-1\"}";
+    /** 可编程的 Agent 定义仓储替身（权威真源）。 */
+    private static final class ScriptedAgentDefs implements CapAgentDefPort {
+        String modelRef = "model-1";
+        String instructions = "{\"inlineInstructions\":\"你是辅导助手\"}";
+        String generationParams = "{}";
         int version = 1;
-        boolean throwOnList = false;
+        boolean throwOnFind = false;
+        boolean present = true;
 
         @Override
-        public @NonNull Page<AgentItem> listAgents(@NonNull String tenantId,
-                                                   String cursor, int limit) {
-            return Page.of(List.of(), null);
+        public boolean insert(@NonNull CapAgentDef def) {
+            return true;
         }
 
         @Override
-        public AgentItem findAgent(@NonNull String tenantId, @NonNull String agentId) {
-            return null;
-        }
-
-        @Override
-        public @NonNull List<AgentVersionItem> listVersions(@NonNull String tenantId,
-                                                            @NonNull String agentId) {
-            if (throwOnList) {
+        public @NonNull Optional<CapAgentDef> find(@NonNull String tenantId,
+                                                    @NonNull String agentId,
+                                                    int version) {
+            if (throwOnFind) {
                 throw new IllegalStateException("仓储故障");
             }
-            return List.of(new AgentVersionItem("v-" + version, version, definition,
-                    java.time.Instant.EPOCH, java.time.Instant.EPOCH));
+            if (!present || version != this.version) {
+                return Optional.empty();
+            }
+            return Optional.of(new CapAgentDef(
+                    tenantId, agentId, version,
+                    "agent-1", "描述", List.of("student"), List.of(), List.of(), List.of(),
+                    "{}", "{}", instructions, modelRef, generationParams,
+                    "fp", 1, java.time.Instant.EPOCH, java.time.Instant.EPOCH));
+        }
+
+        @Override
+        public @NonNull Optional<CapAgentDef> findLatest(@NonNull String tenantId,
+                                                          @NonNull String agentId) {
+            return find(tenantId, agentId, this.version);
+        }
+
+        @Override
+        public @NonNull Optional<CapAgentDef> findLatestPublished(@NonNull String tenantId,
+                                                                     @NonNull String agentId) {
+            return find(tenantId, agentId, this.version);
+        }
+
+        @Override
+        public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
+            return List.of();
         }
     }
 
@@ -83,6 +109,8 @@ class AgentModelConfigAssemblerTest {
     private static final class ScriptedToolDefs implements CapToolDefPort {
         /** 夹具的输入 Schema（默认最小，各用例按需覆盖）。 */
         String inputSchema = "{}";
+        /** 工具自己的描述（契约 description）；{@code null} = 未声明。 */
+        String description;
 
         @Override
         public boolean insert(@NonNull CapToolDef def) {
@@ -94,7 +122,7 @@ class AgentModelConfigAssemblerTest {
             return Optional.of(new CapToolDef(toolId, version, "工具",
                     cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
                     cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
-                    null, null, inputSchema, "{}", "fp", 1,
+                    null, null, null, inputSchema, "{}", description, "fp", 1,
                     java.time.Instant.EPOCH, java.time.Instant.EPOCH));
         }
 
@@ -123,21 +151,19 @@ class AgentModelConfigAssemblerTest {
         }
     }
 
-    private static AgentModelConfigAssembler assembler(ScriptedAgentQuery query,
+    private static AgentModelConfigAssembler assembler(ScriptedAgentDefs defs,
                                                         ScriptedClosureResolver closure) {
-        return new AgentModelConfigAssembler(query, closure, new ScriptedToolDefs());
+        return new AgentModelConfigAssembler(defs, closure, new ScriptedToolDefs());
     }
 
     @Test
-    @DisplayName("✅ 按定义装配模型标识与提示词（根与子共用这一份）")
+    @DisplayName("✅ 按权威定义装配模型标识与提示词（根与子共用这一份）")
     void assemblesModelConfigFromDefinition() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.definition = """
-                {"modelRef":"model-1","systemPrompt":"你是辅导助手",
-                 "temperature":0.5,"maxOutputTokens":777,"timeoutMs":9000}
-                """;
+        ScriptedAgentDefs defs = new ScriptedAgentDefs();
+        defs.instructions = "{\"inlineInstructions\":\"你是辅导助手\"}";
+        defs.generationParams = "{\"temperature\":0.5,\"maxOutputTokens\":777,\"timeoutMs\":9000}";
 
-        var settings = assembler(query, new ScriptedClosureResolver())
+        var settings = assembler(defs, new ScriptedClosureResolver())
                 .assemble(TENANT, AGENT, 1);
 
         assertThat(settings).isPresent();
@@ -149,14 +175,12 @@ class AgentModelConfigAssemblerTest {
     }
 
     @Test
-    @DisplayName("✅ 提示词兼容契约形态（instructions.inlineInstructions）")
+    @DisplayName("✅ 提示词读契约形态（instructions.inlineInstructions）")
     void supportsContractShapedPrompt() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.definition = """
-                {"modelRef":"model-1","instructions":{"inlineInstructions":"契约形态提示词"}}
-                """;
+        ScriptedAgentDefs defs = new ScriptedAgentDefs();
+        defs.instructions = "{\"inlineInstructions\":\"契约形态提示词\"}";
 
-        var settings = assembler(query, new ScriptedClosureResolver())
+        var settings = assembler(defs, new ScriptedClosureResolver())
                 .assemble(TENANT, AGENT, 1);
 
         assertThat(settings).isPresent();
@@ -164,23 +188,34 @@ class AgentModelConfigAssemblerTest {
     }
 
     @Test
+    @DisplayName("⛔ 提示词声明含 systemPromptRef → 拒绝装配（V1 未实现引用式提示词库，不静默忽略）")
+    void systemPromptRefIsRejected() {
+        ScriptedAgentDefs defs = new ScriptedAgentDefs();
+        defs.instructions = "{\"systemPromptRef\":\"prompt-x\",\"systemPromptVersion\":\"3\"}";
+
+        assertThat(assembler(defs, new ScriptedClosureResolver()).assemble(TENANT, AGENT, 1))
+                .as("⚠️ V1 没有提示词库：静默忽略引用会让运维以为「提示词已生效」")
+                .isEmpty();
+    }
+
+    @Test
     @DisplayName("⛔ 定义缺少模型标识 → 拒绝装配（不猜模型）")
     void missingModelIdentifierIsRejected() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.definition = "{\"systemPrompt\":\"没有模型标识\"}";
+        ScriptedAgentDefs defs = new ScriptedAgentDefs();
+        defs.modelRef = null;
 
-        assertThat(assembler(query, new ScriptedClosureResolver()).assemble(TENANT, AGENT, 1))
+        assertThat(assembler(defs, new ScriptedClosureResolver()).assemble(TENANT, AGENT, 1))
                 .as("⚠️⚠️ 取不到模型标识 → **不得**随便挑一个默认模型")
                 .isEmpty();
     }
 
     @Test
-    @DisplayName("⛔ 定义不是合法 JSON → 拒绝装配（fail-closed）")
-    void malformedDefinitionIsRejected() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.definition = "{这不是 JSON";
+    @DisplayName("⛔ 提示词声明不是合法 JSON → 拒绝装配（fail-closed）")
+    void malformedInstructionsIsRejected() {
+        ScriptedAgentDefs defs = new ScriptedAgentDefs();
+        defs.instructions = "{这不是 JSON";
 
-        assertThat(assembler(query, new ScriptedClosureResolver()).assemble(TENANT, AGENT, 1))
+        assertThat(assembler(defs, new ScriptedClosureResolver()).assemble(TENANT, AGENT, 1))
                 .as("⚠️ 配置解析不了 → 不得凭空猜一个配置")
                 .isEmpty();
     }
@@ -188,10 +223,10 @@ class AgentModelConfigAssemblerTest {
     @Test
     @DisplayName("⛔ 读不到指定版本 → 拒绝装配（不漂移到其它版本）")
     void missingVersionIsRejected() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.version = 1;
+        ScriptedAgentDefs defs = new ScriptedAgentDefs();
+        defs.version = 1;
 
-        assertThat(assembler(query, new ScriptedClosureResolver()).assemble(TENANT, AGENT, 9))
+        assertThat(assembler(defs, new ScriptedClosureResolver()).assemble(TENANT, AGENT, 9))
                 .as("⚠️⚠️ 固定 release 取不到 → 不得回落到别的版本（MA-T08）")
                 .isEmpty();
     }
@@ -199,10 +234,10 @@ class AgentModelConfigAssemblerTest {
     @Test
     @DisplayName("⛔ 仓储异常 → 拒绝装配（不吞异常当成功）")
     void repositoryFailureIsRejected() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.throwOnList = true;
+        ScriptedAgentDefs defs = new ScriptedAgentDefs();
+        defs.throwOnFind = true;
 
-        assertThat(assembler(query, new ScriptedClosureResolver()).assemble(TENANT, AGENT, 1))
+        assertThat(assembler(defs, new ScriptedClosureResolver()).assemble(TENANT, AGENT, 1))
                 .as("⚠️ 读失败 → 不得当成「没有配置」之外的成功")
                 .isEmpty();
     }
@@ -216,7 +251,7 @@ class AgentModelConfigAssemblerTest {
                 cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
                 "fp", "{}", null, null));
 
-        var settings = assembler(new ScriptedAgentQuery(), closure).assemble(TENANT, AGENT, 1);
+        var settings = assembler(new ScriptedAgentDefs(), closure).assemble(TENANT, AGENT, 1);
 
         assertThat(settings).isPresent();
         assertThat(settings.get().toolSchemas())
@@ -238,10 +273,6 @@ class AgentModelConfigAssemblerTest {
     @Test
     @DisplayName("⛔ 工具登记的 inputSchema 必须是 Map（网关按 Map 取值，JsonNode = 参数全丢）")
     void toolSchemaValueIsMapNotJsonNode() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.definition = """
-                {"modelRef":"model-1","systemPrompt":"你是辅导助手"}
-                """;
         ScriptedClosureResolver closure = new ScriptedClosureResolver();
         closure.tools = List.of(new EffectiveClosure.ToolBinding(
                 "tool-a", 1, cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
@@ -253,7 +284,7 @@ class AgentModelConfigAssemblerTest {
                  "properties":{"studentId":{"type":"string"}}}
                 """;
 
-        var settings = new AgentModelConfigAssembler(query, closure, toolDefs)
+        var settings = new AgentModelConfigAssembler(new ScriptedAgentDefs(), closure, toolDefs)
                 .assemble(TENANT, AGENT, 1);
 
         assertThat(settings).isPresent();
@@ -287,7 +318,7 @@ class AgentModelConfigAssemblerTest {
         };
 
         var settings = new AgentModelConfigAssembler(
-                new ScriptedAgentQuery(), broken, new ScriptedToolDefs())
+                new ScriptedAgentDefs(), broken, new ScriptedToolDefs())
                 .assemble(TENANT, AGENT, 1);
 
         assertThat(settings)
@@ -297,12 +328,8 @@ class AgentModelConfigAssemblerTest {
     }
 
     @Test
-    @DisplayName("✅ 三级描述落地：1级 purpose 进工具 description，2级 usage + 3级 content 进系统提示")
+    @DisplayName("✅ 三级描述落地：工具自己的 description 优先，其次 1级 purpose；2级 usage + 3级 content 进系统提示")
     void threeLevelDescriptionFlowsIntoToolsAndPrompt() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.definition = """
-                {"modelRef":"model-1","systemPrompt":"你是辅导助手"}
-                """;
         ScriptedClosureResolver closure = new ScriptedClosureResolver();
         closure.skills = List.of(new EffectiveClosure.SkillBinding(
                 "skill-a", 1,
@@ -318,7 +345,7 @@ class AgentModelConfigAssemblerTest {
                 cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
                 "fp", "{}", null, null));
 
-        var settings = assembler(query, closure).assemble(TENANT, AGENT, 1);
+        var settings = assembler(new ScriptedAgentDefs(), closure).assemble(TENANT, AGENT, 1);
 
         assertThat(settings).isPresent();
         // 1级：模型在「挑工具」时首先看到的是所属 Skill 的 purpose（选型信号）
@@ -339,12 +366,37 @@ class AgentModelConfigAssemblerTest {
     }
 
     @Test
+    @DisplayName("✅ 工具自己的 description 优先于 Skill 的 purpose（2026-11-09）")
+    void toolOwnDescriptionWinsOverPurpose() {
+        ScriptedClosureResolver closure = new ScriptedClosureResolver();
+        closure.skills = List.of(new EffectiveClosure.SkillBinding(
+                "skill-a", 1,
+                cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
+                "fp-skill-a", List.of("tool-a"), "[]",
+                new cn.studykid.multiagent.core.cap.SkillDescription("只读查询学生画像",
+                        List.of(), "")));
+        closure.tools = List.of(new EffectiveClosure.ToolBinding(
+                "tool-a", 1, cn.studykid.multiagent.core.cap.CapToolKind.NATIVE,
+                cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
+                "fp", "{}", null, null));
+        ScriptedToolDefs toolDefs = new ScriptedToolDefs();
+        toolDefs.description = "按学生编码读取学生档案（只读）";
+
+        var settings = new AgentModelConfigAssembler(new ScriptedAgentDefs(), closure, toolDefs)
+                .assemble(TENANT, AGENT, 1);
+
+        assertThat(settings).isPresent();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> toolSchema =
+                (Map<String, Object>) settings.get().toolSchemas().get("tool-a");
+        assertThat(toolSchema.get("description"))
+                .as("⚠️ 工具自己的描述描述的是「这个工具做什么」，比 Skill 的 purpose 更精确")
+                .isEqualTo("按学生编码读取学生档案（只读）");
+    }
+
+    @Test
     @DisplayName("✅ 没有 2/3 级内容的 Skill → 提示词一字不改（向后兼容存量行）")
     void skillsWithoutUsageAndContentLeavePromptUntouched() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.definition = """
-                {"modelRef":"model-1","systemPrompt":"你是辅导助手"}
-                """;
         ScriptedClosureResolver closure = new ScriptedClosureResolver();
         closure.skills = List.of(new EffectiveClosure.SkillBinding(
                 "skill-a", 1,
@@ -357,7 +409,7 @@ class AgentModelConfigAssemblerTest {
                 cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
                 "fp", "{}", null, null));
 
-        var settings = assembler(query, closure).assemble(TENANT, AGENT, 1);
+        var settings = assembler(new ScriptedAgentDefs(), closure).assemble(TENANT, AGENT, 1);
 
         assertThat(settings).isPresent();
         assertThat(settings.get().systemPrompt()).isEqualTo("你是辅导助手");
@@ -381,7 +433,7 @@ class AgentModelConfigAssemblerTest {
                 cn.studykid.multiagent.core.cap.CapabilityRiskLevel.READ,
                 "fp", "{}", null, null));
 
-        var settings = assembler(new ScriptedAgentQuery(), closure)
+        var settings = assembler(new ScriptedAgentDefs(), closure)
                 .assemble(TENANT, AGENT, 1);
 
         assertThat(settings).isPresent();

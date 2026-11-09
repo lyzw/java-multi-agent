@@ -160,6 +160,13 @@ export interface ToolCatalogItem {
   httpTimeoutMs?: number | null
   inputSchema: string
   paramPolicies: string
+  /**
+   * 工具自己的**模型可见描述**。
+   *
+   * ⚠️ **可选**：老版本后端不回显该列，缺失时按「未声明」呈现，
+   * **不得**由前端臆造（臆造出来的是一段平台没存过的文本）。
+   */
+  description?: string | null
   version: number
   schemaVersion: number
   published: boolean
@@ -322,6 +329,29 @@ export interface PublishAgentSpec {
    * 由管理台的编排声明表单生成。
    */
   orchestration?: string
+  /**
+   * 提示词声明（**JSON 文本**，与后端 `AgentRequest.instructions` 一致）。
+   *
+   * ⚠️ **V1 只支持 `{"inlineInstructions": "..."}`** ——
+   * 契约里的 `systemPromptRef`（引用式提示词库）后端 V1 未实现，
+   * 运行期会 **fail-closed 拒绝执行**该 Agent。故管理台在提交前就拒，
+   * 不让作者「配好了却在跑的时候才发现不生效」。
+   */
+  instructions?: string
+  /**
+   * 绑定的模型引用（目录模型名或目录 id）。
+   *
+   * ⚠️ **留空 = 未绑定模型** ⇒ 运行期会**拒绝执行**该 Agent 的 Run。
+   * 这不是「用默认模型」—— 平台不提供默认模型。
+   */
+  modelRef?: string
+  /**
+   * 生成参数（**JSON 文本**，与后端 `AgentRequest.generationParams` 一致）。
+   *
+   * 可选键：`temperature`（0~2）、`topP`（0~1，不含 0）、`maxOutputTokens`（正整数）。
+   * 缺省 `{}` = 走运行期默认值。
+   */
+  generationParams?: string
 }
 
 /**
@@ -462,6 +492,15 @@ export interface PlatformToolSpec {
   httpTimeoutMs?: number
   inputSchema?: string
   paramPolicies?: string
+  /**
+   * 工具自己的**模型可见描述**（契约 `description`，上限 4000 字）。
+   *
+   * ⚠️ **与 Skill 的 1 级 purpose 不是一回事**：
+   * purpose 描述「这个 Skill 做什么」，description 描述「这个工具做什么」，
+   * 两者不可互相顶替。运行期回落顺序为
+   * 「本字段 → 所属 Skill 的 1 级 purpose → 工具名」。
+   */
+  description?: string
 }
 
 /**
@@ -624,6 +663,20 @@ export interface AgentDefinition {
   overrides: string
   /** 编排声明（JSON 原文） */
   orchestration: string
+  /**
+   * 提示词声明（JSON 原文）—— ⚠️ **可选**：
+   * 老版本后端不回显该列，缺失时按「未声明提示词」呈现，**不得**由前端臆造。
+   */
+  instructions?: string
+  /**
+   * 绑定的模型引用 —— ⚠️ **可选**：
+   * 老版本后端不回显该列；缺失 = 未绑定（≠「有默认模型」）。
+   */
+  modelRef?: string
+  /**
+   * 生成参数（JSON 原文）—— ⚠️ **可选**：老版本后端不回显该列。
+   */
+  generationParams?: string
   published: boolean
 }
 

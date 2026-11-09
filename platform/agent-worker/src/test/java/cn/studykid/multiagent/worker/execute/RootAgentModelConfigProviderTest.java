@@ -16,10 +16,8 @@ import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.CapabilitySnapshot;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
 import cn.studykid.multiagent.core.orchestration.DelegationToolSchema;
-import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 import cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort;
-import cn.studykid.multiagent.ports.persistence.Page;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -70,28 +68,6 @@ class RootAgentModelConfigProviderTest {
             }
             return Optional.of(new CapabilitySnapshot(runId, tenantId, agentId, "{}",
                     agentVersion, 1L, "fp", 1L, Instant.EPOCH));
-        }
-    }
-
-    private static final class ScriptedAgentQuery implements AgentQueryPort {
-        String definition = "{\"modelRef\":\"model-root\",\"systemPrompt\":\"根提示词\"}";
-
-        @Override
-        public @NonNull Page<AgentItem> listAgents(@NonNull String tenantId,
-                                                   String cursor, int limit) {
-            return Page.of(List.of(), null);
-        }
-
-        @Override
-        public AgentItem findAgent(@NonNull String tenantId, @NonNull String agentId) {
-            return null;
-        }
-
-        @Override
-        public @NonNull List<AgentVersionItem> listVersions(@NonNull String tenantId,
-                                                            @NonNull String agentId) {
-            return List.of(new AgentVersionItem("v", ROOT_VERSION, definition,
-                    Instant.EPOCH, Instant.EPOCH));
         }
     }
 
@@ -166,8 +142,23 @@ class RootAgentModelConfigProviderTest {
         }
     }
 
+    /**
+     * 根 Agent 专用夹具（模型 {@code model-root} / 提示词「根提示词」/ 版本 {@code ROOT_VERSION}）。
+     *
+     * <p>⚠️ 版本必须与能力快照里的 {@code ROOT_VERSION} 一致：
+     * 装配按<b>固定 release</b> 精确取那一版（MA-T08），
+     * 版本对不上就是「取不到 → 拒绝执行」。
+     */
+    private static ScriptedAgentDefPort rootAgentDefs() {
+        ScriptedAgentDefPort defs = new ScriptedAgentDefPort();
+        defs.modelRef = "model-root";
+        defs.instructions = "{\"inlineInstructions\":\"根提示词\"}";
+        defs.version = ROOT_VERSION;
+        return defs;
+    }
+
     private static RootAgentModelConfigProvider provider(ScriptedSnapshots snapshots,
-                                                          ScriptedAgentQuery query,
+                                                          ScriptedAgentDefPort query,
                                                           String orchestration) {
         return new RootAgentModelConfigProvider(
                 snapshots,
@@ -179,7 +170,7 @@ class RootAgentModelConfigProviderTest {
     @Test
     @DisplayName("✅ 根 Agent 按快照里的固定 release 读真实定义")
     void readsRealDefinitionByFixedRelease() {
-        var config = provider(new ScriptedSnapshots(), new ScriptedAgentQuery(), SEQUENTIAL)
+        var config = provider(new ScriptedSnapshots(), rootAgentDefs(), SEQUENTIAL)
                 .configFor(TENANT, RUN);
 
         assertThat(config).isPresent();
@@ -194,7 +185,7 @@ class RootAgentModelConfigProviderTest {
     @Test
     @DisplayName("✅ 根 Agent 有委派能力 → 看得见委派工具（与子路径同一份语义）")
     void seesDelegationTool() {
-        var config = provider(new ScriptedSnapshots(), new ScriptedAgentQuery(), SEQUENTIAL)
+        var config = provider(new ScriptedSnapshots(), rootAgentDefs(), SEQUENTIAL)
                 .configFor(TENANT, RUN);
 
         assertThat(config).isPresent();
@@ -206,7 +197,7 @@ class RootAgentModelConfigProviderTest {
     @Test
     @DisplayName("⛔ 根 Agent 是 LEAF → 不给委派工具（不该给的不给）")
     void leafGetsNoDelegationTool() {
-        var config = provider(new ScriptedSnapshots(), new ScriptedAgentQuery(), "{}")
+        var config = provider(new ScriptedSnapshots(), rootAgentDefs(), "{}")
                 .configFor(TENANT, RUN);
 
         assertThat(config).isPresent();
@@ -221,7 +212,7 @@ class RootAgentModelConfigProviderTest {
         ScriptedSnapshots snapshots = new ScriptedSnapshots();
         snapshots.present = false;
 
-        var config = provider(snapshots, new ScriptedAgentQuery(), SEQUENTIAL)
+        var config = provider(snapshots, rootAgentDefs(), SEQUENTIAL)
                 .configFor(TENANT, RUN);
 
         assertThat(config)
@@ -235,7 +226,7 @@ class RootAgentModelConfigProviderTest {
         ScriptedSnapshots snapshots = new ScriptedSnapshots();
         snapshots.throwOnFind = true;
 
-        var config = provider(snapshots, new ScriptedAgentQuery(), SEQUENTIAL)
+        var config = provider(snapshots, rootAgentDefs(), SEQUENTIAL)
                 .configFor(TENANT, RUN);
 
         assertThat(config).isEmpty();
@@ -244,8 +235,9 @@ class RootAgentModelConfigProviderTest {
     @Test
     @DisplayName("⛔ 定义缺少模型标识 → 拒绝执行（不猜模型）")
     void missingModelIdentifierIsRejected() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.definition = "{\"systemPrompt\":\"没有模型标识\"}";
+        ScriptedAgentDefPort query = rootAgentDefs();
+        query.modelRef = null;
+        query.instructions = "{\"inlineInstructions\":\"没有模型标识\"}";
 
         var config = provider(new ScriptedSnapshots(), query, SEQUENTIAL)
                 .configFor(TENANT, RUN);
@@ -258,7 +250,7 @@ class RootAgentModelConfigProviderTest {
     void missingDelegationAssemblerStillYieldsConfig() {
         var config = new RootAgentModelConfigProvider(
                 new ScriptedSnapshots(),
-                new AgentModelConfigAssembler(new ScriptedAgentQuery(),
+                new AgentModelConfigAssembler(rootAgentDefs(),
                         new ScriptedClosureResolver(), new ScriptedToolDefs()),
                 null)
                 .configFor(TENANT, RUN);

@@ -78,6 +78,14 @@ public final class CapObjectFingerprint {
         //    改了深度/次数上限）就是<b>行为性变化</b>，
         //    不入指纹会让「配置变了但指纹没变」——失效检测彻底失效（MA-T15）。
         root.put("orchestration", canonicalJsonFragment(def.orchestration()));
+        // ⚠️ **提示词 / 模型 / 生成参数必须入内容指纹**（06 §5.3）：
+        //    它们是运行期直接消费的权威定义 —— 改了提示词或换了模型就是<b>行为性变化</b>。
+        //    不入指纹的后果是「配置变了但指纹没变」：闭包失效检测、审批复用判定、
+        //    同版本幂等重放全部看不出差异，而 Run 已在用另一套提示词跑（静默失真）。
+        //    JSON 文本经 jsonb 往返会重排键，故与 orchestration 一样先规范化。
+        root.put("instructions", canonicalJsonFragment(def.instructions()));
+        root.put("modelRef", def.modelRef() == null ? "" : def.modelRef());
+        root.put("generationParams", canonicalJsonFragment(def.generationParams()));
         root.put("schemaVersion", def.schemaVersion());
         return PREFIX + sha256Hex(MAPPER.writeValueAsString(root));
     }
@@ -243,6 +251,10 @@ public final class CapObjectFingerprint {
         }
         root.put("inputSchema", def.inputSchema());
         root.put("paramPolicies", def.paramPolicies());
+        // ⚠️ **工具自己的描述必须入指纹**（2026-11-09）：
+        //    描述是模型可见的行为定义 —— 改了它，模型选工具的方式就变了。
+        //    不入指纹的后果与 Agent 侧同构：「描述变了但指纹没变」。
+        root.put("description", def.description());
         root.put("schemaVersion", def.schemaVersion());
         return PREFIX + sha256Hex(MAPPER.writeValueAsString(root));
     }

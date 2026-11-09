@@ -401,7 +401,9 @@ class ContractPolicyLifecycleTest {
                 },
                 new ConfigValidationGate(), CLOCK,
                 ConfigPublishService.DEFAULT_MAX_ATTEMPTS, validator(), null,
-                fixture.resultContracts(), fixture.routingPolicies());
+                fixture.resultContracts(), fixture.routingPolicies(),
+                // ⚠️ 归档能力必须装配：未装配时发布会被拒（fail-closed）。
+                new InMemoryAgentReleaseArchive());
 
         return new ConfigPublishWorkflowService(
                 requestPort(), publisher,

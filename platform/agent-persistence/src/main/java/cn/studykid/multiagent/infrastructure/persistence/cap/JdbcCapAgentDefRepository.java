@@ -48,10 +48,11 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
     private static final String SQL_INSERT = """
             INSERT INTO cap_agent_def
                 (tenant_id, agent_id, version, name, description, roles, enabled_skills,
-                 skill_bundles, capability_tags, overrides, orchestration, config_fingerprint,
+                 skill_bundles, capability_tags, overrides, orchestration, instructions,
+                 model_ref, generation_params, config_fingerprint,
                  schema_version, created_at, updated_at, published_at)
             VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb,
-                    ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?)
+                    ?::jsonb, ?::jsonb, ?::jsonb, ?, ?::jsonb, ?, ?, ?, ?, ?)
             ON CONFLICT (tenant_id, agent_id, version) DO NOTHING
             """;
 
@@ -59,6 +60,7 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
             SELECT tenant_id::text, agent_id::text, version, name, description,
                    roles::text, enabled_skills::text, skill_bundles::text,
                    capability_tags::text, overrides::text, orchestration::text,
+                   instructions::text, model_ref, generation_params::text,
                    config_fingerprint,
                    schema_version, created_at, published_at
             FROM cap_agent_def
@@ -69,6 +71,7 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
             SELECT tenant_id::text, agent_id::text, version, name, description,
                    roles::text, enabled_skills::text, skill_bundles::text,
                    capability_tags::text, overrides::text, orchestration::text,
+                   instructions::text, model_ref, generation_params::text,
                    config_fingerprint,
                    schema_version, created_at, published_at
             FROM cap_agent_def
@@ -81,6 +84,7 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
             SELECT tenant_id::text, agent_id::text, version, name, description,
                    roles::text, enabled_skills::text, skill_bundles::text,
                    capability_tags::text, overrides::text, orchestration::text,
+                   instructions::text, model_ref, generation_params::text,
                    config_fingerprint,
                    schema_version, created_at, published_at
             FROM cap_agent_def
@@ -101,6 +105,7 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
             SELECT tenant_id::text, agent_id::text, version, name, description,
                    roles::text, enabled_skills::text, skill_bundles::text,
                    capability_tags::text, overrides::text, orchestration::text,
+                   instructions::text, model_ref, generation_params::text,
                    config_fingerprint,
                    schema_version, created_at, published_at
             FROM cap_agent_def
@@ -164,14 +169,17 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
                         ps.setString(9, toJson(def.capabilityTags()));
                         ps.setString(10, def.overrides());
                         ps.setString(11, def.orchestration());
-                        ps.setString(12, def.configFingerprint());
-                        ps.setInt(13, def.schemaVersion());
-                        ps.setTimestamp(14, Timestamp.from(def.createdAt()));
-                        ps.setTimestamp(15, Timestamp.from(def.createdAt()));
+                        ps.setString(12, def.instructions());
+                        ps.setString(13, def.modelRef());
+                        ps.setString(14, def.generationParams());
+                        ps.setString(15, def.configFingerprint());
+                        ps.setInt(16, def.schemaVersion());
+                        ps.setTimestamp(17, Timestamp.from(def.createdAt()));
+                        ps.setTimestamp(18, Timestamp.from(def.createdAt()));
                         if (def.publishedAt() == null) {
-                            ps.setNull(16, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                            ps.setNull(19, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
                         } else {
-                            ps.setTimestamp(16, Timestamp.from(def.publishedAt()));
+                            ps.setTimestamp(19, Timestamp.from(def.publishedAt()));
                         }
                         return ps.executeUpdate() > 0;
                     }
@@ -315,6 +323,9 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
                 fromJson(rs.getString("capability_tags")),
                 rs.getString("overrides"),
                 rs.getString("orchestration"),
+                rs.getString("instructions"),
+                rs.getString("model_ref"),
+                rs.getString("generation_params"),
                 rs.getString("config_fingerprint"),
                 rs.getInt("schema_version"),
                 rs.getTimestamp("created_at").toInstant(),

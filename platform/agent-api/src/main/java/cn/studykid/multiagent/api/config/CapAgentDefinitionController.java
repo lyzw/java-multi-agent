@@ -98,6 +98,9 @@ public class CapAgentDefinitionController {
      * @param capabilityTags 能力标签集
      * @param overrides      收紧覆盖（<b>JSON 原文</b>）
      * @param orchestration  编排声明（<b>JSON 原文</b>）
+     * @param instructions   提示词声明（<b>JSON 原文</b>，缺省 {@code "{}"} = 未声明）
+     * @param modelRef       绑定的模型引用（{@code null} = 未绑定，运行期 fail-closed）
+     * @param generationParams 生成参数（<b>JSON 原文</b>，缺省 {@code "{}"} = 运行期默认值）
      * @param published      该版本行是否已发布
      */
     public record AgentDefinitionResponse(
@@ -111,13 +114,20 @@ public class CapAgentDefinitionController {
             @NonNull List<String> capabilityTags,
             @NonNull String overrides,
             @NonNull String orchestration,
+            @NonNull String instructions,
+            @Nullable String modelRef,
+            @NonNull String generationParams,
             boolean published
     ) {
         static AgentDefinitionResponse of(CapAgentDef def) {
+            // ⚠️ 提示词 / 模型 / 生成参数必须回显：编辑既有 Agent 时前端靠这个 DTO
+            //    还原草稿，缺了它们会在「读 → 改 → 存」时把三个字段静默覆盖成空值。
             return new AgentDefinitionResponse(
                     def.agentId(), def.version(), def.name(), def.description(),
                     def.roles(), def.enabledSkills(), def.skillBundles(), def.capabilityTags(),
-                    def.overrides(), def.orchestration(), def.isPublished());
+                    def.overrides(), def.orchestration(),
+                    def.instructions(), def.modelRef(), def.generationParams(),
+                    def.isPublished());
         }
     }
 }

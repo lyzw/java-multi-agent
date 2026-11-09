@@ -73,6 +73,36 @@ class ConfigPublishServiceTest {
                 .isEqualTo(DecisionAuditEntry.Kind.PUBLISH);
     }
 
+    /**
+     * <b>发布态字段保留守卫</b>（2026-11-10）。
+     *
+     * <p>⚠️ 从 {@link ConfigPublishService#publish} 编排入口进，不直连私有
+     * {@code withPublished}：<b>撤掉</b> {@code withPublished(CapToolDef)} 的全参构造
+     * （改回 14 参兼容构造）本用例必须变红 —— 兼容构造器会把
+     * {@code description} 静默清成 {@code null}，同型于 Agent 侧的 Sev-0。
+     */
+    @Test
+    @DisplayName("✅ 发布态 Tool 保留 description（兼容构造器会静默清空它）")
+    void publishedToolKeepsDescription() {
+        World world = new World();
+        ConfigPublishService service = service(world);
+        CapToolDef draft = new CapToolDef("t-a", 1, "t-a", CapToolKind.NATIVE,
+                CapabilityRiskLevel.READ, null, null, null,
+                "{}", "{}", "查询学生档案", "fp-t-a", 1, CLOCK.instant(), null);
+        ConfigPublishCommand cmd = new ConfigPublishCommand(ConfigRelease.Scope.PLATFORM, null,
+                null, "requester-1", "approver-1", null,
+                List.of(draft), List.of(skill("s-a", 1)), List.of(), List.of(), null);
+
+        service.publish(cmd);
+
+        CapToolDef published = world.tools.get("t-a@1");
+        assertThat(published).as("发布后没有已发布版本行").isNotNull();
+        assertThat(published.publishedAt()).isNotNull();
+        assertThat(published.description())
+                .as("⚠️ 草稿 → 发布这一步把工具描述清空了：库里写的是另一个对象")
+                .isEqualTo("查询学生档案");
+    }
+
     @Test
     @DisplayName("⛔ PUB-1：CAS 失败 → 整事务回滚，无半成品当前发布")
     void casFailureRollsBackEverything() {

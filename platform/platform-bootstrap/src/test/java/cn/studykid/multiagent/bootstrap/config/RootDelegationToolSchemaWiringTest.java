@@ -49,16 +49,28 @@ class RootDelegationToolSchemaWiringTest {
              "failurePolicy":"FAIL_FAST"}
             """;
 
-    /** 根 Agent 的真实定义（含模型标识与提示词）。 */
-    private static final String ROOT_DEFINITION = """
-            {"modelRef":"model-root","systemPrompt":"你是根 Agent","temperature":0.3,
-             "maxOutputTokens":512,"timeoutMs":15000}
-            """;
+    /** 根 Agent 的提示词声明（2026-11-09 · 权威源定 A：读 {@code cap_agent_def.instructions}）。 */
+    private static final String ROOT_INSTRUCTIONS = "{\"inlineInstructions\":\"你是根 Agent\"}";
 
-    /** 可编程的 Agent 定义仓储替身。 */
+    /** 根 Agent 的生成参数（契约 {@code generationParams}）。 */
+    private static final String ROOT_GENERATION_PARAMS =
+            "{\"temperature\":0.3,\"maxOutputTokens\":512,\"timeoutMs\":15000}";
+
+    /**
+     * 可编程的 Agent 定义仓储替身。
+     *
+     * <p>⚠️ 权威源定 A（2026-11-09）：模型标识、提示词、生成参数
+     * 全都是 {@code cap_agent_def} 的一等列 —— 同一个替身既是编排声明的载体，
+     * 也是运行期模型配置的载体（不再有两张表、两套替身）。
+     */
     private static final class ScriptedAgentDefs implements CapAgentDefPort {
         String orchestration = SEQUENTIAL;
         String agentId = ROOT_AGENT;
+        int version = ROOT_VERSION;
+        String modelRef = "model-root";
+        String instructions = ROOT_INSTRUCTIONS;
+        String generationParams = ROOT_GENERATION_PARAMS;
+        boolean present = true;
 
         @Override
         public boolean insert(@NonNull CapAgentDef def) {
@@ -69,58 +81,31 @@ class RootDelegationToolSchemaWiringTest {
         public @NonNull Optional<CapAgentDef> find(@NonNull String tenantId,
                                                     @NonNull String agentId,
                                                     int version) {
-            if (!TENANT.equals(tenantId) || !this.agentId.equals(agentId)) {
+            if (!present || !TENANT.equals(tenantId) || !this.agentId.equals(agentId)
+                    || version != this.version) {
                 return Optional.empty();
             }
             return Optional.of(new CapAgentDef(TENANT, agentId, version, "根", "描述",
                     List.of(), List.of(), List.of(), List.of(), "{}", orchestration,
+                    instructions, modelRef, generationParams,
                     "fp", 1, Instant.EPOCH, Instant.EPOCH));
         }
 
         @Override
         public @NonNull Optional<CapAgentDef> findLatest(@NonNull String tenantId,
                                                           @NonNull String agentId) {
-            return find(tenantId, agentId, ROOT_VERSION);
+            return find(tenantId, agentId, version);
         }
 
         @Override
         public @NonNull Optional<CapAgentDef> findLatestPublished(@NonNull String tenantId,
                                                                     @NonNull String agentId) {
-            return find(tenantId, agentId, ROOT_VERSION);
+            return find(tenantId, agentId, version);
         }
 
         @Override
         public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
             return List.of();
-        }
-    }
-
-    /** 可编程的 Agent 版本查询替身（读模型配置定义）。 */
-    private static final class ScriptedAgentQuery implements AgentQueryPort {
-        String agentId = ROOT_AGENT;
-        int version = ROOT_VERSION;
-        String definition = ROOT_DEFINITION;
-        boolean present = true;
-
-        @Override
-        public @NonNull Page<AgentItem> listAgents(
-                @NonNull String tenantId, String cursor, int limit) {
-            return Page.of(List.of(), null);
-        }
-
-        @Override
-        public AgentItem findAgent(@NonNull String tenantId, @NonNull String agentId) {
-            return null;
-        }
-
-        @Override
-        public @NonNull List<AgentVersionItem> listVersions(@NonNull String tenantId,
-                                                            @NonNull String agentId) {
-            if (!present || !this.agentId.equals(agentId)) {
-                return List.of();
-            }
-            return List.of(new AgentVersionItem("v-" + version, version, definition,
-                    Instant.EPOCH, Instant.EPOCH));
         }
     }
 
@@ -150,7 +135,7 @@ class RootDelegationToolSchemaWiringTest {
     }
 
     private static WorkerExecutionConfig.RunExecutionInputs inputs(
-            ScriptedAgentDefs defs, ScriptedSnapshots snapshots, ScriptedAgentQuery query) {
+            ScriptedAgentDefs defs, ScriptedSnapshots snapshots, ScriptedAgentDefs query) {
         return new WorkerExecutionConfig.RunExecutionInputs(
                 null, "2.00", "12", "20",
                 java.util.Map.of(), java.util.Map.of(),
@@ -218,7 +203,7 @@ class RootDelegationToolSchemaWiringTest {
 
     private static WorkerExecutionConfig.RunExecutionInputs inputs(
             ScriptedAgentDefs defs, ScriptedSnapshots snapshots) {
-        return inputs(defs, snapshots, new ScriptedAgentQuery());
+        return inputs(defs, snapshots, new ScriptedAgentDefs());
     }
 
     @Test
@@ -243,7 +228,7 @@ class RootDelegationToolSchemaWiringTest {
         snapshots.agentId = "other-root";
         ScriptedAgentDefs defs = new ScriptedAgentDefs();
         defs.agentId = "other-root";
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
+        ScriptedAgentDefs query = new ScriptedAgentDefs();
         query.agentId = "other-root";
 
         var config = inputs(defs, snapshots, query).agentConfig(TENANT, RUN);
@@ -284,8 +269,9 @@ class RootDelegationToolSchemaWiringTest {
     @Test
     @DisplayName("⛔ 根 Agent 定义缺少模型标识 → 拒绝执行（不猜模型）")
     void missingModelIdentifierRejectsExecution() {
-        ScriptedAgentQuery query = new ScriptedAgentQuery();
-        query.definition = "{\"systemPrompt\":\"没有模型标识\"}";
+        ScriptedAgentDefs query = new ScriptedAgentDefs();
+        query.modelRef = null;
+        query.instructions = "{\"inlineInstructions\":\"没有模型标识\"}";
 
         var config = inputs(new ScriptedAgentDefs(), new ScriptedSnapshots(), query)
                 .agentConfig(TENANT, RUN);

@@ -18,6 +18,11 @@ import org.jspecify.annotations.Nullable;
  *                    {@code null} 表示「本 Tool 不是 HTTP 工具」。
  *                    ⚠️ <b>三态不可归一化</b>：{@code kind=http} 却 {@code httpConfig == null}
  *                    是一个「永远跑不起来」的中间态，构造器直接拒绝（见下方紧凑构造器）。
+ * @param description 工具自己的模型可见描述（契约 {@code description}）——
+ *                    {@code null} = 未声明；运行期回落顺序为
+ *                    「本字段 → 所属 Skill 的 1 级 purpose → 工具名」。
+ *                    ⚠️ <b>与 purpose 不是一回事</b>：purpose 描述「这个 Skill 做什么」，
+ *                    description 描述「这个工具做什么」—— 两者不可互相顶替。
  */
 public record CapToolDef(
         @NonNull String id,
@@ -30,6 +35,7 @@ public record CapToolDef(
         @Nullable CapHttpToolConfig httpConfig,
         @NonNull String inputSchema,
         @NonNull String paramPolicies,
+        @Nullable String description,
         @NonNull String configFingerprint,
         int schemaVersion,
         @NonNull Instant createdAt,
@@ -56,6 +62,47 @@ public record CapToolDef(
             throw new IllegalArgumentException(
                     "HTTP 工具不得同时携带 MCP 绑定（目标必须唯一）");
         }
+    }
+
+    /**
+     * 兼容构造器（<b>有 HTTP 配置、未声明描述</b>）。
+     *
+     * <p>⚠️ 保留它是为了让「描述字段引入之前」的既有构造点（发布流、夹具）
+     * 不必逐个补参数 —— 但它<b>只能</b>造出「描述未声明」的 Tool：
+     * 描述缺省时运行期回落 Skill 的 1 级 purpose，再回落工具名。
+     *
+     * @param id Tool 标识
+     * @param version 版本号
+     * @param name 显示名
+     * @param kind Tool 种类
+     * @param riskLevel 风险等级
+     * @param mcpServerId MCP Server 标识（仅 kind=mcp）
+     * @param mcpToolName MCP 远端操作名（仅 kind=mcp）
+     * @param httpConfig 远程 HTTP 请求配置（仅 kind=http）
+     * @param inputSchema 入参 JSON Schema 文本
+     * @param paramPolicies 参数策略 JSON 文本
+     * @param configFingerprint 内容指纹
+     * @param schemaVersion 行格式版本
+     * @param createdAt 创建时间
+     * @param publishedAt 发布时间（未发布为 null）
+     */
+    public CapToolDef(@NonNull String id,
+                       int version,
+                       @Nullable String name,
+                       @NonNull CapToolKind kind,
+                       @NonNull CapabilityRiskLevel riskLevel,
+                       @Nullable String mcpServerId,
+                       @Nullable String mcpToolName,
+                       @Nullable CapHttpToolConfig httpConfig,
+                       @NonNull String inputSchema,
+                       @NonNull String paramPolicies,
+                       @NonNull String configFingerprint,
+                       int schemaVersion,
+                       @NonNull Instant createdAt,
+                       @Nullable Instant publishedAt) {
+        this(id, version, name, kind, riskLevel, mcpServerId, mcpToolName, httpConfig,
+                inputSchema, paramPolicies, null, configFingerprint, schemaVersion,
+                createdAt, publishedAt);
     }
 
     /**
@@ -93,7 +140,7 @@ public record CapToolDef(
                        @NonNull Instant createdAt,
                        @Nullable Instant publishedAt) {
         this(id, version, name, kind, riskLevel, mcpServerId, mcpToolName, null,
-                inputSchema, paramPolicies, configFingerprint, schemaVersion,
+                inputSchema, paramPolicies, null, configFingerprint, schemaVersion,
                 createdAt, publishedAt);
     }
 

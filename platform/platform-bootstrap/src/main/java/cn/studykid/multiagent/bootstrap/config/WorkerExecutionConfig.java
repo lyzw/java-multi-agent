@@ -558,14 +558,14 @@ public class WorkerExecutionConfig {
     @Bean
     public cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider
             childAgentModelConfigProvider(
-            cn.studykid.multiagent.ports.persistence.AgentQueryPort agentQuery,
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
             cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
             cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
             cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
                     delegationToolSchemaAssembler,
             cn.studykid.multiagent.application.modelcatalog.ModelResolver modelResolver) {
         return new cn.studykid.multiagent.worker.execute.WorkerChildAgentModelConfigProvider(
-                agentQuery, closureResolver, toolDefs, delegationToolSchemaAssembler,
+                agentDefs, closureResolver, toolDefs, delegationToolSchemaAssembler,
                 modelResolver);
     }
 
@@ -995,7 +995,7 @@ public class WorkerExecutionConfig {
     public cn.studykid.multiagent.worker.execute.RootAgentModelConfigProvider
             rootAgentModelConfigProvider(
             cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort snapshots,
-            cn.studykid.multiagent.ports.persistence.AgentQueryPort agentQuery,
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
             cn.studykid.multiagent.application.cap.ClosureResolver closureResolver,
             cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
             cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler
@@ -1004,7 +1004,7 @@ public class WorkerExecutionConfig {
         return new cn.studykid.multiagent.worker.execute.RootAgentModelConfigProvider(
                 snapshots,
                 new cn.studykid.multiagent.worker.execute.AgentModelConfigAssembler(
-                        agentQuery, closureResolver, toolDefs, modelResolver),
+                        agentDefs, closureResolver, toolDefs, modelResolver),
                 delegationToolSchemaAssembler);
     }
 
