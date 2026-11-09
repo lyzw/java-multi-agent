@@ -14,10 +14,16 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.page.PageCursor;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.ApprovalQueryPort;
 import cn.studykid.multiagent.ports.persistence.AuditPort;
 import cn.studykid.multiagent.ports.persistence.Page;
@@ -35,6 +41,16 @@ import cn.studykid.multiagent.ports.persistence.Page;
  * <p>⚠️ <b>终态由数据库触发器兜底</b>：{@code enforce_approval_state_guard}
  * 拒绝任何从 CONSUMED/REJECTED/EXPIRED 的迁出。本实现的显式校验是
  * <b>为了让调用方拿到 409 而不是 500</b>，而非替代触发器。
+ *
+ * <p>⚠️ <b>P1 影子态：只观测读路径</b>：{@code approval} 是租户隔离实体
+ * （policy-mapping.yaml：TENANT_ONLY + forced=t）。{@code list} / {@code find} 两处读路径
+ * <b>自带显式 {@code a.tenant_id} 谓词</b> ⇒ 不依赖 RLS 兜底。
+ * 与 {@code tool_operation} 的 JOIN 用 <b>租户等值</b>（{@code o.tenant_id = a.tenant_id}），
+ * 故两张表的行归属必须<b>分别</b>取各自的 {@code tenant_id} 来染色 ——
+ * 用主表的租户去推断从表的租户，就是同义反复。
+ * <p>⚠️ {@code lockAndRead}（{@code FOR UPDATE OF a}，供 {@code decide} 写事务用）
+ * 属写路径，P1 <b>不观测</b>；其强制隔离仍由 RLS 兜底（与 {@code JdbcConfigChangeRepository}
+ * 的 {@code loadForUpdate} 同口径，不进「已接 Gate 即全绿」假象）。
  */
 @Repository
 public class JdbcApprovalQueryRepository implements ApprovalQueryPort {
@@ -43,7 +59,8 @@ public class JdbcApprovalQueryRepository implements ApprovalQueryPort {
             SELECT a.approval_id, a.operation_id, a.state, a.requirement,
                    a.argument_digest, a.target_resource, a.approver_scope,
                    a.expires_at, a.approver_id, a.decided_at, a.created_at,
-                   o.run_id
+                   o.run_id,
+                   a.tenant_id AS a_tenant_id, o.tenant_id AS o_tenant_id
             FROM approval a
             JOIN tool_operation o
               ON o.tenant_id = a.tenant_id AND o.operation_id = a.operation_id
@@ -54,12 +71,34 @@ public class JdbcApprovalQueryRepository implements ApprovalQueryPort {
     private final AuditPort audit;
     private final Clock clock;
 
+    // ── P1 影子态字段（默认 dormant：全部 null/false，零行为变更）──
+    private ScopedDataAccess scoped;
+    private AuthzShadowReporter reporter;
+    private String sentinelTenantId = "";
+    private boolean shadowEnabled;
+
+    @Autowired
     public JdbcApprovalQueryRepository(@NonNull DataSource dataSource,
                                        @NonNull AuditPort audit,
                                        @NonNull Clock clock) {
+        this(dataSource, audit, clock, null, null, false, "");
+    }
+
+    /** 影子态接线构造（测试与包内装配用；生产走 {@link #bindAuthzShadow} setter）。 */
+    JdbcApprovalQueryRepository(@NonNull DataSource dataSource,
+                                @NonNull AuditPort audit,
+                                @NonNull Clock clock,
+                                @Nullable ScopedDataAccess scoped,
+                                @Nullable AuthzShadowReporter reporter,
+                                boolean shadowEnabled,
+                                @NonNull String sentinelTenantId) {
         this.dataSource = dataSource;
         this.audit = audit;
         this.clock = clock;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     @Override
@@ -95,8 +134,12 @@ public class JdbcApprovalQueryRepository implements ApprovalQueryPort {
                 for (int i = 0; i < params.size(); i++) {
                     ps.setObject(i + 1, params.get(i));
                 }
+                // ⚠️ hasTenantPredicate=true：SQL 自带显式 `a.tenant_id = ?::uuid`。
+                shadowCompare("approval", tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
+                        shadowTaint("approval", tenantId, rs.getString("a_tenant_id"));
+                        shadowTaint("tool_operation", tenantId, rs.getString("o_tenant_id"));
                         rows.add(read(rs));
                     }
                 }
@@ -120,8 +163,15 @@ public class JdbcApprovalQueryRepository implements ApprovalQueryPort {
             try (PreparedStatement ps = lease.connection().prepareStatement(sql)) {
                 ps.setString(1, tenantId);
                 ps.setString(2, approvalId);
+                // ⚠️ hasTenantPredicate=true：SQL 自带显式 `a.tenant_id = ?::uuid`。
+                shadowCompare("approval", tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next() ? read(rs) : null;
+                    if (!rs.next()) {
+                        return null;
+                    }
+                    shadowTaint("approval", tenantId, rs.getString("a_tenant_id"));
+                    shadowTaint("tool_operation", tenantId, rs.getString("o_tenant_id"));
+                    return read(rs);
                 }
             }
         } catch (SQLException e) {
@@ -261,5 +311,54 @@ public class JdbcApprovalQueryRepository implements ApprovalQueryPort {
         }
         return TransactionalConnectionHolder.openTenantConnection(
                 dataSource, new TenantContext(tenantId, "system", java.util.Set.of(), 0L));
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。
+     *
+     * @param hasTenantPredicate 该查询的 SQL 是否真的带了显式租户谓词（必须如实填写）。
+     */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）：
+     * 主体是<b>发起本次查询的租户</b>，行归属从<b>结果行</b>读出的 {@code tenant_id}。
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }

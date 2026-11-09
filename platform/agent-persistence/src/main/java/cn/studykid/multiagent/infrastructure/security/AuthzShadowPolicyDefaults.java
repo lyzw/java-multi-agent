@@ -78,6 +78,13 @@ public final class AuthzShadowPolicyDefaults {
             //    IS NULL 的全局行在染色时因 rowTenantId==null 被跳过，见 AuthzShadowHooks.taint）。
             //    ⚠️ P2 应用层翻译时必须单独处理 IS NULL 分支，否则会丢掉全局发布行。
             "cap_config_release",
+            // ── 2026-11-09 第二批 CAP/治理域 ────────────────────────────
+            // cap_decision_log：决策审计（08 §7）—— 高敏审计面，只存决策与上下文标识，
+            // 不存明文凭据；4 处读查询均自带显式 tenant_id 谓词。
+            "cap_decision_log",
+            // approval：审批台（G8 · FR-014）—— 与 tool_operation 按 tenant 等值 JOIN，
+            // 读路径带显式 a.tenant_id 谓词；写入路径（decide）属 P2 观测范围外。
+            "approval",
             // 逻辑资源名（物理表 agent_trace_metric，基线 scope=NONE 的缺口表）
             "platform.agent_trace_metric");
 
