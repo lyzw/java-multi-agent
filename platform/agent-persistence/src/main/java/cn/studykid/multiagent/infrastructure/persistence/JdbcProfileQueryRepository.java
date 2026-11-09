@@ -38,7 +38,7 @@ public class JdbcProfileQueryRepository implements ProfileQueryPort {
      * ⚠️ <b>{@code tenant_id} 条件不可删除</b>（即便 RLS 已隔离，应用侧条件仍是第一道防线）。
      */
     private static final String SQL_LOAD_PROFILE = """
-            SELECT grade, subject, updated_at
+            SELECT tenant_id, grade, subject, updated_at
             FROM student_profile
             WHERE tenant_id = ?::uuid AND student_id = ?
             """;
@@ -57,7 +57,9 @@ public class JdbcProfileQueryRepository implements ProfileQueryPort {
     private final DataSource dataSource;
 
     // ── P1 影子态接入（12 文 §4.5 / 13 文 §5.2）──────────────────────────────
-    // 仅 weakness_record 读路径接染色；student_profile 路径待 Task #41 扩 RESOURCE_TYPES 后再接。
+    // weakness_record 与 student_profile 两条读路径均接染色（student_profile 资源类型
+    // 已登记于 AuthzShadowPolicyDefaults.RESOURCE_TYPES，对齐 policy-mapping.yaml 的
+    // TENANT_ONLY + FORCE RLS）。
     // 默认全部为 null / false ⇒ 现有行为 100% 不变；仅当显式注入且 shadowEnabled=true 时生效。
     private @Nullable ScopedDataAccess scoped;
     private @Nullable AuthzShadowReporter reporter;
@@ -92,15 +94,20 @@ public class JdbcProfileQueryRepository implements ProfileQueryPort {
             try (PreparedStatement ps = lease.connection().prepareStatement(SQL_LOAD_PROFILE)) {
                 ps.setString(1, tenantId);
                 ps.setString(2, studentId);
+                // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+                shadowCompare("student_profile", tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) {
                         // ⚠️ 学生不存在 → 返回空画像而非报错：
                         //    若不存在报错、存在返回数据，攻击者可据此枚举有效 studentId。
                         return ProfileView.empty(studentId);
                     }
+                    // ⚠️ 主体 = 查询租户；行归属 = 结果行真实 tenant_id（防同义反复）。
+                    String rowTenant = rs.getString("tenant_id");
                     String grade = rs.getString("grade");
                     String subject = rs.getString("subject");
                     Instant updatedAt = toNullableInstant(rs.getTimestamp("updated_at"));
+                    shadowTaint("student_profile", tenantId, rowTenant);
                     return new ProfileView(studentId, grade, subject,
                             loadWeaknesses(lease.connection(), tenantId, studentId),
                             updatedAt);

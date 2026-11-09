@@ -43,6 +43,7 @@ public final class AuthzShadowPolicyDefaults {
             "run",
             "run_step",
             "weakness_record",
+            "student_profile",
             "tool_operation",
             "budget_reservation",
             "budget_account",

@@ -34,10 +34,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 /**
  * {@link JdbcProfileQueryRepository} 的 P1 影子态接线测试。
  *
- * <p>该仓访问高敏 {@code weakness_record} 表（resourceType=weakness_record 已登记），
- * 读路径 {@code loadWeaknesses} 带显式 {@code tenant_id} 谓词。
+ * <p>该仓访问 {@code weakness_record} 与 {@code student_profile} 两张表
+ * （resourceType 均已登记于 {@code AuthzShadowPolicyDefaults.RESOURCE_TYPES}，
+ * 对齐 policy-mapping.yaml 的 TENANT_ONLY + FORCE RLS）。
+ * 两条读路径 {@code loadProfile} / {@code loadWeaknesses} 均带显式 {@code tenant_id} 谓词。
  * 本测试证明「染色确实有检出力」，而不是恒不违例的摆设。
- * <b>注意</b>：{@code student_profile} 路径暂未接染色（待 Task #41 扩 RESOURCE_TYPES）。
  */
 class JdbcProfileQueryRepositoryShadowTest {
 
@@ -147,6 +148,45 @@ class JdbcProfileQueryRepositoryShadowTest {
         assertEquals(0, metrics.taintViolations(), "本租户行不得判违例");
 
         repo.shadowTaint("weakness_record", TENANT, "tenant-B");
+        assertEquals(1, metrics.taintViolations(),
+                "⚠️⚠️ 主体是查询租户、行归属是他租户 → 必须违例；"
+                        + "若恒为 0，说明染色把行租户当成了主体（同义反复）");
+    }
+
+    // ── student_profile 路径（resourceType 已登记，对齐 policy-mapping.yaml TENANT_ONLY）──
+
+    @Test
+    void shadowTaint_studentProfile_rowInScope_noViolation() {
+        Fixture f = new Fixture(new ScopeFilter.TenantOnly(TENANT), false);
+        f.repo.shadowTaint("student_profile", TENANT, TENANT);
+        assertEquals(0, f.metrics.taintViolations());
+    }
+
+    @Test
+    void shadowTaint_studentProfile_crossTenantRow_recordsViolation() {
+        Fixture f = new Fixture(new ScopeFilter.TenantOnly(TENANT), false);
+        f.repo.shadowTaint("student_profile", TENANT, "tenant-B");
+        assertEquals(1, f.metrics.taintViolations());
+    }
+
+    /**
+     * ⚠️⚠️ student_profile 路径同样必须真的能抓到跨租户行（D13 回归，独立规则）。
+     */
+    @Test
+    void shadowTaint_realPolicyEngine_studentProfile_crossTenantRowIsViolation() {
+        PolicyRule rule = new PolicyRule("r-sp", "student_profile", Action.RETRIEVE,
+                ScopeRequirement.TENANT, ScopeEffect.TENANT_ONLY);
+        PolicyEngine engine = new RuleBasedPolicyEngine(new InMemoryPolicyStore(List.of(rule)));
+        ScopedDataAccess scoped = new ScopedDataAccess(new EngineGate(engine));
+        InMemoryAuthzMismatchMetrics metrics = new InMemoryAuthzMismatchMetrics();
+        JdbcProfileQueryRepository repo = new JdbcProfileQueryRepository(
+                new NoConnectDataSource(), scoped,
+                new AuthzShadowReporter(metrics, false), true, SENTINEL);
+
+        repo.shadowTaint("student_profile", TENANT, TENANT);
+        assertEquals(0, metrics.taintViolations(), "本租户行不得判违例");
+
+        repo.shadowTaint("student_profile", TENANT, "tenant-B");
         assertEquals(1, metrics.taintViolations(),
                 "⚠️⚠️ 主体是查询租户、行归属是他租户 → 必须违例；"
                         + "若恒为 0，说明染色把行租户当成了主体（同义反复）");
