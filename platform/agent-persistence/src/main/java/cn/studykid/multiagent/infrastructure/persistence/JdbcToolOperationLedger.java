@@ -15,6 +15,7 @@ import java.util.Set;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,9 +23,14 @@ import tools.jackson.databind.ObjectMapper;
 
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.core.run.IllegalStateTransitionException;
-import cn.studykid.multiagent.core.run.ToolOperationState;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -51,8 +57,35 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
 
     private final DataSource dataSource;
 
+    // ── P1 影子态接入（12 文 §4.5 / 13 文 §5.2）──────────────────────────────
+    // 默认全部为 null / false ⇒ 现有行为 100% 不变；仅当显式注入且 shadowEnabled=true 时生效。
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private boolean shadowEnabled;
+    private @NonNull String sentinelTenantId;
+
+    /** Spring 装配入口（保持既有单参构造，确保 @Repository 装配不变）。 */
+    @Autowired
     public JdbcToolOperationLedger(@NonNull DataSource dataSource) {
+        this(dataSource, null, null, false, "");
+    }
+
+    /**
+     * 影子态接线构造（P1 由 {@code AuthzShadowConfiguration} 在开启染色时调用；测试用）。
+     *
+     * @param shadowEnabled 是否启用影子比对 + 染色（P1 默认 false；P2 翻转为 true 进入阻断模式）
+     * @param sentinelTenantId 哨兵（共享）租户标识，与 {@code SqlScopeTranslator} 共用配置项
+     */
+    JdbcToolOperationLedger(@NonNull DataSource dataSource,
+                            @Nullable ScopedDataAccess scoped,
+                            @Nullable AuthzShadowReporter reporter,
+                            boolean shadowEnabled,
+                            @NonNull String sentinelTenantId) {
         this.dataSource = dataSource;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     @Override
@@ -209,9 +242,11 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
 
     @Override
     public @NonNull List<UnknownOperation> findUnknownOperations(@NonNull String tenantId) {
+        // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志，不改变结果）。
+        shadowCompare("tool_operation", tenantId, true);
         return inTenantTx(tenantId, conn -> {
             String sql = """
-                    SELECT operation_id::text, run_id::text, tool_name,
+                    SELECT tenant_id, operation_id::text, run_id::text, tool_name,
                            idempotency_key, created_at
                     FROM tool_operation
                     WHERE tenant_id = ?::uuid AND state = 'UNKNOWN'
@@ -222,6 +257,8 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                 ps.setString(1, tenantId);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
+                        // ⚠️ 主体=查询租户；行归属=结果行真实 tenant_id（防同义反复）。
+                        String rowTenant = rs.getString("tenant_id");
                         Timestamp created = rs.getTimestamp("created_at");
                         out.add(new UnknownOperation(
                                 rs.getString("operation_id"),
@@ -229,6 +266,7 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                                 rs.getString("tool_name"),
                                 rs.getString("idempotency_key"),
                                 created.toInstant()));
+                        shadowTaint("tool_operation", tenantId, rowTenant);
                     }
                 }
             }
@@ -239,15 +277,19 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
     @Override
     public @NonNull Optional<Registration> findByIdempotencyKey(@NonNull String tenantId,
                                                                 @NonNull String idempotencyKey) {
+        // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+        shadowCompare("tool_operation", tenantId, true);
         return inTenantTx(tenantId, conn -> findExisting(conn, tenantId, idempotencyKey));
     }
 
     @Override
     public @NonNull Optional<String> findRequestDigest(@NonNull String tenantId,
                                                         @NonNull String idempotencyKey) {
+        // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+        shadowCompare("tool_operation", tenantId, true);
         return inTenantTx(tenantId, conn -> {
             String sql = """
-                    SELECT o.request_digest
+                    SELECT o.tenant_id, o.request_digest
                     FROM tool_operation o
                     WHERE o.tenant_id = ?::uuid AND o.idempotency_key = ?
                     """;
@@ -255,7 +297,14 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                 ps.setString(1, tenantId);
                 ps.setString(2, idempotencyKey);
                 try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next() ? Optional.ofNullable(rs.getString(1)) : Optional.empty();
+                    if (!rs.next()) {
+                        return Optional.empty();
+                    }
+                    // ⚠️ 主体=查询租户；行归属=结果行真实 tenant_id（防同义反复）。
+                    String rowTenant = rs.getString("tenant_id");
+                    Optional<String> result = Optional.ofNullable(rs.getString("request_digest"));
+                    shadowTaint("tool_operation", tenantId, rowTenant);
+                    return result;
                 }
             }
         });
@@ -267,9 +316,11 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
         // ⚠️ 恢复方拿到的是**执行意图**（意图上记的是 invocationId = 账本 operationId），
         //    故恢复流程必须按 operationId 反查账本状态，
         //    才能判定「外部是否已执行、结果是否已知」（§5.3.4）。
+        // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+        shadowCompare("tool_operation", tenantId, true);
         return inTenantTx(tenantId, conn -> {
             String sql = """
-                    SELECT o.operation_id::text, o.state::text, o.fencing_token,
+                    SELECT o.tenant_id, o.operation_id::text, o.state::text, o.fencing_token,
                            (SELECT count(*) FROM tool_operation_attempt a
                             WHERE a.tenant_id = o.tenant_id AND a.operation_id = o.operation_id)
                            AS attempt_count
@@ -283,12 +334,16 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                     if (!rs.next()) {
                         return Optional.empty();
                     }
-                    return Optional.of(new Registration(
+                    // ⚠️ 主体=查询租户；行归属=结果行真实 tenant_id（防同义反复）。
+                    String rowTenant = rs.getString("tenant_id");
+                    Optional<Registration> result = Optional.of(new Registration(
                             rs.getString("operation_id"),
                             ToolOperationState.valueOf(rs.getString("state")),
                             rs.getInt("attempt_count"),
                             rs.getLong("fencing_token"),
                             false));
+                    shadowTaint("tool_operation", tenantId, rowTenant);
+                    return result;
                 }
             }
         });
@@ -299,9 +354,11 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                                                       @NonNull String operationId) {
         // ⚠️ M1-4 / G2 恢复：按 operationId 反查原始调用，
         //    供 RESUME 重建 ToolCallRequest 重入闸门（不重跑模型）。
+        // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+        shadowCompare("tool_operation", tenantId, true);
         return inTenantTx(tenantId, conn -> {
             String sql = """
-                    SELECT o.tool_name, o.tool_arguments::text, o.idempotency_key
+                    SELECT o.tenant_id, o.tool_name, o.tool_arguments::text, o.idempotency_key
                     FROM tool_operation o
                     WHERE o.tenant_id = ?::uuid AND o.operation_id = ?::uuid
                     """;
@@ -312,11 +369,16 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                     if (!rs.next()) {
                         return Optional.empty();
                     }
+                    // ⚠️ 主体=查询租户；行归属=结果行真实 tenant_id（防同义反复）。
+                    String rowTenant = rs.getString("tenant_id");
                     String toolName = rs.getString("tool_name");
                     String json = rs.getString("tool_arguments");
                     Map<String, Object> arguments = parseArguments(json);
                     String callId = callIdFromKey(rs.getString("idempotency_key"));
-                    return Optional.of(new Invocation(toolName, arguments, callId));
+                    Optional<Invocation> result =
+                            Optional.of(new Invocation(toolName, arguments, callId));
+                    shadowTaint("tool_operation", tenantId, rowTenant);
+                    return result;
                 }
             }
         });
@@ -355,7 +417,7 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
     private Optional<Registration> findExisting(Connection conn, String tenantId,
                                                 String idempotencyKey) throws SQLException {
         String sql = """
-                SELECT o.operation_id::text, o.state::text, o.fencing_token,
+                SELECT o.tenant_id, o.operation_id::text, o.state::text, o.fencing_token,
                        (SELECT count(*) FROM tool_operation_attempt a
                         WHERE a.tenant_id = o.tenant_id AND a.operation_id = o.operation_id)
                        AS attempt_count
@@ -369,12 +431,17 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                 if (!rs.next()) {
                     return Optional.empty();
                 }
-                return Optional.of(new Registration(
+                // ⚠️ 主体=查询租户；行归属=结果行真实 tenant_id（防同义反复）。
+                //    注：本方法亦被 register（写路径）复用，染色仅观测、不改变写行为。
+                String rowTenant = rs.getString("tenant_id");
+                Optional<Registration> result = Optional.of(new Registration(
                         rs.getString("operation_id"),
                         ToolOperationState.valueOf(rs.getString("state")),
                         rs.getInt("attempt_count"),
                         rs.getLong("fencing_token"),
                         false));
+                shadowTaint("tool_operation", tenantId, rowTenant);
+                return result;
             }
         }
     }
@@ -490,5 +557,59 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
         // ⚠️ 制表符同 \n/\r：模型生成的工具参数里极常见，PG 的 jsonb 一律拒绝裸控制字符。
         return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
                 .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\"";
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     *
+     * <p>⚠️ 用 setter 而不是可选构造参数：本仓既有构造签名被 {@code @Repository} 装配依赖，
+     * 改成可选构造参数会把「影子态」渗进每一个调用点。setter 只在启动期被调用一次。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /** 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。 */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）：
+     * 主体是<b>发起本次查询的租户</b>，行归属从<b>结果行</b>读出的 {@code tenant_id}。
+     * 若把行租户当作主体，策略引擎必然算出 {@code TenantOnly(行租户)}，逐行比对恒通过 ——
+     * 染色会退化成「永远 0 违例」的装饰。
+     *
+     * @param subjectTenantId 发起查询的租户（主体）
+     * @param rowTenantId 结果行的真实租户（不可用查询绑定租户代替，否则是同义反复）
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        // 哨兵行可由「行租户 == 哨兵租户」直接推断，无需调用方另行声明。
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }

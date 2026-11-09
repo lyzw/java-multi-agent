@@ -33,6 +33,14 @@ import cn.studykid.multiagent.ports.persistence.RunClaimPort;
  *   <li><b>UPDATE 条件带 fencing_token</b> —— 旧世代提交影响 0 行，
  *       与数据库触发器形成双保险。</li>
  * </ol>
+ *
+ * <p><b>P1 影子态（RLS→应用层迁移）盲区标注</b>：本仓为<b>写主导</b>（几乎全是
+ * {@code UPDATE … RETURNING} 的领取/续租/释放/提交/取消），不参与 P1 影子染色
+ * （12 文 §4.5 / 13 文 §5.2 明确 P1 只观测「返回行给调用方的读路径」）。
+ * 唯一的 SELECT（{@code messageTokenOf} 取 token、{@code isCurrentGeneration} /
+ * {@code isCancelled} 的存在性布尔检查）均<b>不向调用方返回数据行</b>，无可染色的行级租户归属。
+ * ⚠️ 因此本仓在 P1 的租户隔离仍由 <b>RLS 强制</b>兜底；其领取/提交的「未来应用层强制」
+ * 属于 P2 双写/阻断范围，不在此处影子观测。
  */
 public class JdbcRunClaimRepository implements RunClaimPort {
 

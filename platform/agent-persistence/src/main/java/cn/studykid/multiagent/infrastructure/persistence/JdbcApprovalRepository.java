@@ -43,6 +43,18 @@ import cn.studykid.multiagent.ports.persistence.AuditPort;
  * <p><b>DB 第二道防线</b>：{@code enforce_approval_state_transition} 触发器
  * （V5 迁移）禁止从终态（CONSUMED/EXPIRED/REJECTED）非法迁出，
  * 与应用层校验构成双保险（D-4）。
+ *
+ * <p><b>P1 影子态（RLS→应用层迁移）盲区标注</b>：本仓为<b>写主导</b>，
+ * 不参与 P1 影子染色（12 文 §4.5 / 13 文 §5.2 明确 P1 只观测「返回行给调用方的读路径」）。
+ * 其读路径有两类，均被排除：
+ * <ol>
+ *   <li>{@code lockRun}/{@code lockApproval} 是<b>写事务内的 FOR UPDATE 锁</b>
+ *       （{@code consume} 原子取消检查 / 串行化消费），不向调用方返回行列；</li>
+ *   <li>{@code findActive} 读 {@code approval} 表，而 {@code approval} 尚未登记进
+ *       {@code AuthzShadowPolicyDefaults.RESOURCE_TYPES}（D 组高敏 4 表不含它）。</li>
+ * </ol>
+ * ⚠️ 因此本仓在 P1 的租户隔离仍由 <b>RLS 强制</b>兜底；其写事务（grant/consume/revoke）
+ * 的「未来应用层强制」属于 P2 双写/阻断范围，不在此处影子观测。
  */
 public class JdbcApprovalRepository implements ApprovalPort {
 
