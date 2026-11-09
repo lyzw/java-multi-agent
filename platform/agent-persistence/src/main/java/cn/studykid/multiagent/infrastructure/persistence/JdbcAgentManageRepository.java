@@ -43,6 +43,15 @@ import cn.studykid.multiagent.ports.persistence.AuditPort;
  * 候选 Bean → {@code NoUniqueBeanDefinitionException}，<b>整个应用无法启动</b>。
  * 装配改由 {@code ApplicationConfiguration} 显式 {@code @Bean} 完成，
  * 与 {@code runClaimPort}（P3-D07）的既有惯例一致。
+ *
+ * <p><b>P1 影子态（RLS→应用层迁移）盲区标注</b>：本仓为<b>写主导</b>
+ * （{@code INSERT…RETURNING} 创建 Agent/版本/执行快照），不参与 P1 影子染色
+ * （12 文 §4.5 / 13 文 §5.2 明确 P1 只观测「返回行给调用方的读路径」）。
+ * 唯一的 SELECT（{@code agentExists} 的 {@code SELECT 1} 存在性检查）自带显式
+ * {@code tenant_id = ?::uuid} 谓词，但<b>不向调用方返回数据行</b>（返回布尔），
+ * 与 {@code JdbcRunClaimRepository} 的 {@code isCurrentGeneration} 同口径 ——
+ * 无可染色的行级租户归属。⚠️ 因此本仓在 P1 的租户隔离仍由 <b>RLS 强制</b>兜底；
+ * 写事务的「未来应用层强制」属于 P2 双写/阻断范围。
  */
 public class JdbcAgentManageRepository implements AgentManagePort {
 
