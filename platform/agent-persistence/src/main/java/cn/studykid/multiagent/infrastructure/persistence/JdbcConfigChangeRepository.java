@@ -14,10 +14,16 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.page.PageCursor;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.AuditPort;
 import cn.studykid.multiagent.ports.persistence.ConfigChangePort;
 import cn.studykid.multiagent.ports.persistence.ConfigOverridePort;
@@ -36,6 +42,12 @@ import cn.studykid.multiagent.ports.persistence.Page;
  * <p>⚠️ <b>apply 时重做收紧校验</b>：申请提交后、审批之前，
  * 配置可能已被他人改过——此时的「收紧」相对<b>新基线</b>可能已是放松。
  * 故 apply 时重跑 {@code ConfigTighteningPolicy}。
+ *
+ * <p>⚠️ <b>P1 影子态范围</b>：仅读路径 {@code list} 接比对 + 逐行染色
+ * （resourceType=config_change_request，已登记）。写事务内的
+ * {@code loadForUpdate}（FOR UPDATE 锁读，供 decide/apply 使用）属写路径，
+ * P1 <b>不观测</b>，其强制租户隔离仍由 RLS 兜底——与 JdbcApprovalRepository /
+ * JdbcRunClaimRepository 的写主导盲区处理一致，不在「已接 Gate 即全绿」的假象里。
  */
 @Repository
 public class JdbcConfigChangeRepository implements ConfigChangePort {
@@ -49,12 +61,39 @@ public class JdbcConfigChangeRepository implements ConfigChangePort {
     private final AuditPort audit;
     private final ConfigOverridePort overrides;
 
+    // ── P1 影子态接入（12 文 §4.5 / 13 文 §5.2）──────────────────────────────
+    // config_change_request 为租户隔离实体（policy-mapping.yaml: TENANT_ONLY + FORCE RLS）。
+    // 默认全部为 null / false ⇒ 现有行为 100% 不变；仅当显式注入且 shadowEnabled=true 时生效。
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private boolean shadowEnabled;
+    private @NonNull String sentinelTenantId;
+
+    /** Spring 装配入口（保持既有 3 参构造，确保 @Repository 装配不变）。 */
+    @Autowired
     public JdbcConfigChangeRepository(@NonNull DataSource dataSource,
                                       @NonNull AuditPort audit,
                                       @NonNull ConfigOverridePort overrides) {
+        this(dataSource, audit, overrides, null, null, false, "");
+    }
+
+    /**
+     * 影子态接线构造（P1 由 {@code AuthzShadowConfiguration} 在开启染色时调用；测试用）。
+     */
+    JdbcConfigChangeRepository(@NonNull DataSource dataSource,
+                               @NonNull AuditPort audit,
+                               @NonNull ConfigOverridePort overrides,
+                               @Nullable ScopedDataAccess scoped,
+                               @Nullable AuthzShadowReporter reporter,
+                               boolean shadowEnabled,
+                               @NonNull String sentinelTenantId) {
         this.dataSource = dataSource;
         this.audit = audit;
         this.overrides = overrides;
+        this.scoped = scoped;
+        this.reporter = reporter;
+        this.shadowEnabled = shadowEnabled;
+        this.sentinelTenantId = sentinelTenantId;
     }
 
     @Override
@@ -131,7 +170,7 @@ public class JdbcConfigChangeRepository implements ConfigChangePort {
         PageCursor after = (cursor == null || cursor.isBlank()) ? null : PageCursor.decode(cursor);
 
         StringBuilder sql = new StringBuilder("""
-                SELECT change_id::text, config_key, proposed_value, value_type, reason,
+                SELECT tenant_id, change_id::text, config_key, proposed_value, value_type, reason,
                        requester_id, requested_at, state::text,
                        approver_id, decided_at, decision_note, applied_at
                 FROM config_change_request
@@ -157,8 +196,13 @@ public class JdbcConfigChangeRepository implements ConfigChangePort {
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             try (PreparedStatement ps = lease.connection().prepareStatement(sql.toString())) {
                 bind(ps, params);
+                // ⚠️ P1 影子比对：绑定租户 vs Gate ScopeFilter（只记日志）。
+                shadowCompare("config_change_request", tenantId, true);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
+                        // ⚠️ 主体 = 查询租户；行归属 = 结果行真实 tenant_id（防同义反复）。
+                        String rowTenant = rs.getString("tenant_id");
+                        shadowTaint("config_change_request", tenantId, rowTenant);
                         rows.add(read(rs));
                     }
                 }
@@ -448,5 +492,50 @@ public class JdbcConfigChangeRepository implements ConfigChangePort {
         }
         return TransactionalConnectionHolder.openTenantConnection(
                 dataSource, new TenantContext(tenantId, "system", java.util.Set.of(), 0L));
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // P1 影子态：比对 + 染色（默认不启用，不影响现有行为）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 影子态装配入口（P1 / 13 文 §5.2）：容器里<b>存在</b> {@code AuthzShadowBinding} 即开启，
+     * 不存在即完全关闭（不存在「Bean 在、开关关」的半开状态）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
+    /** 影子比对：Gate 算出的 ScopeFilter vs 本次查询的绑定租户（只记日志）。 */
+    void shadowCompare(@NonNull String resourceType,
+                       @NonNull String boundTenantId,
+                       boolean hasTenantPredicate) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, resourceType,
+                SubjectContext.forTenant(boundTenantId), boundTenantId, hasTenantPredicate);
+    }
+
+    /**
+     * 逐行染色：结果行的真实 {@code tenant_id} 与 Gate 算出的 ScopeFilter 比对。
+     *
+     * <p>⚠️ <b>主体与行归属必须分开</b>（12 文 §4.5 · D6/D13）：
+     * 主体是<b>发起本次查询的租户</b>，行归属从<b>结果行</b>读出的 {@code tenant_id}。
+     */
+    void shadowTaint(@NonNull String resourceType,
+                     @Nullable String subjectTenantId,
+                     @Nullable String rowTenantId) {
+        if (rowTenantId == null) {
+            return;
+        }
+        boolean shared = !sentinelTenantId.isBlank() && sentinelTenantId.equals(rowTenantId);
+        AuthzShadowHooks.taint(scoped, reporter, shadowEnabled, resourceType, sentinelTenantId,
+                subjectTenantId == null ? null : SubjectContext.forTenant(subjectTenantId),
+                rowTenantId, shared);
     }
 }
