@@ -12,6 +12,8 @@ import java.util.UUID;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import cn.studykid.multiagent.ports.persistence.ReviewTaskPort;
 
 /**
@@ -34,10 +36,30 @@ import cn.studykid.multiagent.ports.persistence.ReviewTaskPort;
  */
 public class JdbcReviewTaskRepository implements ReviewTaskPort {
 
+    private static final Logger log = LoggerFactory.getLogger(JdbcReviewTaskRepository.class);
+
     private final javax.sql.DataSource dataSource;
 
+    /**
+     * 归因结论回写钩子（§8.1 · 可空 = 口径未定不接线）。
+     *
+     * <p>⚠️ 钩子失败**绝不影响已关闭的任务**：任务状态是事实，
+     * 回写只是下游动作。若下游抛异常把 resolve 整体报失败，
+     * reviewer 重试反而会造成「任务已关闭却显示失败」的双真相。
+     */
+    private final cn.studykid.multiagent.ports.quality.ReviewAttributionHook attributionHook;
+
+    /** 兼容构造：无回写钩子（= 口径未定，不接线）。 */
     public JdbcReviewTaskRepository(javax.sql.DataSource dataSource) {
+        this(dataSource, null);
+    }
+
+    /** 带钩子构造：由 ApplicationConfiguration 显式选择（本类刻意不挂 @Repository）。 */
+    public JdbcReviewTaskRepository(
+            javax.sql.DataSource dataSource,
+            cn.studykid.multiagent.ports.quality.ReviewAttributionHook attributionHook) {
         this.dataSource = dataSource;
+        this.attributionHook = attributionHook;
     }
 
     private static final String SQL_INSERT = """
@@ -98,12 +120,34 @@ public class JdbcReviewTaskRepository implements ReviewTaskPort {
 
     @Override
     public void resolve(@NonNull String taskId, @Nullable String rootCause, @Nullable String note) {
-        updateWithPrecondition(SQL_RESOLVE, ps -> {
+        TaskFacts facts = updateWithPrecondition(SQL_RESOLVE, ps -> {
             ps.setString(1, rootCause);
             ps.setString(2, note);
             ps.setString(3, taskId);
         }, taskId, "关闭");
+
+        // ⚠️⚠️ 回写只在状态流转**确实生效之后**发生：updateWithPrecondition 在
+        //    0 行命中时抛异常，执行不到这里 —— 于是「任务根本没关闭却已回写 eval_sample」
+        //    这种双真相在结构上不可达。
+        if (attributionHook != null && facts != null
+                && facts.rootCause() != null && ITERATION_ROOT_CAUSES.contains(facts.rootCause())) {
+            try {
+                // ⚠️ 钩子失败绝不冒泡：任务状态是事实，回写只是下游动作。
+                //    若下游抛异常把 resolve 报失败，reviewer 重试会造成
+                //    「任务已关闭却显示失败」的双真相。失败必须 WARN 可见，
+                //    而不是 debug 级别静默（否则「接线了但没人看得到」正是本仓反复治理的形态）。
+                attributionHook.onAttributionResolved(facts.traceId(), facts.tenantId(),
+                        facts.runId(), facts.rootCause(), note, facts.assignedTo());
+            } catch (RuntimeException e) {
+                log.warn("归因结论回写钩子失败（任务已关闭，不回滚）: task={}, rootCause={}, cause={}",
+                        taskId, facts.rootCause(), e.toString());
+            }
+        }
     }
+
+    /** §8.1 触发迭代工单的三类根因（TOOL/DATA/UNKNOWN 不触发）。 */
+    private static final java.util.Set<String> ITERATION_ROOT_CAUSES =
+            java.util.Set.of("PROMPT", "CONFIG", "MODEL");
 
     @Override
     public void dismiss(@NonNull String taskId, @Nullable String note) {
@@ -194,8 +238,13 @@ public class JdbcReviewTaskRepository implements ReviewTaskPort {
         void bind(PreparedStatement ps) throws SQLException;
     }
 
-    /** 带状态前置条件的流转；影响行数为 0 = 前态不合法（终态不可再流转），抛出明确异常。 */
-    private void updateWithPrecondition(@NonNull String sql, @NonNull Binder binder,
+    /**
+     * 带状态前置条件的流转；影响行数为 0 = 前态不合法（终态不可再流转），抛出明确异常。
+     *
+     * <p>⚠️ 返回「流转后的任务事实」（仅 resolve 需要：回写钩子要 traceId/租户/根因）。
+     *    其他流转返回 null 即可 —— 让 assign/dismiss 也回查一遍是纯浪费。
+     */
+    private @Nullable TaskFacts updateWithPrecondition(@NonNull String sql, @NonNull Binder binder,
                                         @NonNull String taskId, @NonNull String action) {
         try (Connection conn = openSystem();
                 PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -205,10 +254,46 @@ public class JdbcReviewTaskRepository implements ReviewTaskPort {
                 throw new IllegalStateException(
                         "审查任务" + action + "未生效（任务不存在或已终态）: " + taskId);
             }
+            TaskFacts facts = needsFacts(sql) ? readFacts(conn, taskId) : null;
             conn.commit();
+            return facts;
         } catch (SQLException e) {
             throw new IllegalStateException("审查任务" + action + "失败: " + e.getMessage(), e);
         }
+    }
+
+    /** 该流转是否需要回查任务事实（目前只有 resolve 的回写钩子需要）。 */
+    private static boolean needsFacts(@NonNull String sql) {
+        return sql == SQL_RESOLVE;
+    }
+
+    /**
+     * 在同一事务内回查任务事实。
+     *
+     * <p>⚠️ 必须在 commit 之前：此时 UPDATE 已生效但未提交，
+     * 用同一连接能看到自己刚写入的 root_cause；提交后再查就是另一个事务、
+     * 且并发下可能被别的 reviewer 改写。
+     */
+    private static @Nullable TaskFacts readFacts(Connection conn, String taskId) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT trace_id, tenant_id::text, run_id::text, root_cause, assigned_to "
+                        + "FROM platform.review_task WHERE task_id = ?::uuid")) {
+            ps.setString(1, taskId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return new TaskFacts(rs.getString("trace_id"), rs.getString("tenant_id"),
+                        rs.getString("run_id"), rs.getString("root_cause"),
+                        rs.getString("assigned_to"));
+            }
+        }
+    }
+
+    /** 流转后的任务事实（回写钩子的入参）。 */
+    private record TaskFacts(@NonNull String traceId, @NonNull String tenantId,
+                             @NonNull String runId, @Nullable String rootCause,
+                             @Nullable String assignedTo) {
     }
 
     /** 系统身份连接：清空租户上下文（platform 域无 RLS，与指标仓储同款）。 */

@@ -43,8 +43,23 @@ public record CreateRunRequest(
         @Nullable String requestedBy,
         @Nullable Long timeoutMs,
         @Nullable BigDecimal budgetAmount,
-        @Nullable DataClassification dataClassification
+        @Nullable DataClassification dataClassification,
+        /** 显式场景标签（见 {@link #SCENARIO_KEY}）；null = 未标注。 */
+        @Nullable String scenario
 ) {
+
+    /**
+     * 兼容构造：已有调用方（含单测）不传 scenario 时等价于「未标注」。
+     *
+     * <p>⚠️ 保留这个重载是**刻意**的：scenario 是可选维度，
+     * 强制所有调用方改签名只会制造无意义的改动面。
+     */
+    public CreateRunRequest(String idempotencyKey, String agentId, Map<String, Object> input,
+                            String requestedBy, Long timeoutMs, BigDecimal budgetAmount,
+                            DataClassification dataClassification) {
+        this(idempotencyKey, agentId, input, requestedBy, timeoutMs, budgetAmount,
+                dataClassification, null);
+    }
 
     /**
      * 请求体<b>允许</b>出现的字段名 —— 未知字段拒收的<b>唯一权威清单</b>。
@@ -58,7 +73,17 @@ public record CreateRunRequest(
      */
     public static final java.util.Set<String> KNOWN_FIELDS = java.util.Set.of(
             "idempotencyKey", "agentId", "input", "requestedBy", "timeoutMs", "budgetAmount",
-            "dataClassification");
+            "dataClassification", "scenario");
+
+    /**
+     * {@code input_payload} 里场景标签的键名（与 {@code JdbcTraceFactRepository} 读取口径一致）。
+     *
+     * <p>⚠️ <b>为什么要显式常量</b>：此前「scenario 从 input.scenario 读」只活在
+     * 采集侧的 SQL 注释里，调用方没有任何契约可依 —— 于是真实流量下
+     * {@code agent_trace_metric.scenario} 恒为 NULL，看板面板 13 长期只有「未标注」组。
+     * 现在把键名收敛成一处常量，两端共用。
+     */
+    public static final String SCENARIO_KEY = "scenario";
 
     /**
      * JSON 绑定入口：先拒收未知字段，再走紧凑构造器的取值校验。
@@ -78,6 +103,7 @@ public record CreateRunRequest(
             @JsonProperty("timeoutMs") Long timeoutMs,
             @JsonProperty("budgetAmount") BigDecimal budgetAmount,
             @JsonProperty("dataClassification") DataClassification dataClassification,
+            @JsonProperty("scenario") String scenario,
             @JsonAnySetter Map<String, Object> unknown) {
         if (!unknown.isEmpty()) {
             throw new IllegalArgumentException(
@@ -85,7 +111,7 @@ public record CreateRunRequest(
                             + KNOWN_FIELDS + "）");
         }
         return new CreateRunRequest(idempotencyKey, agentId, input, requestedBy,
-                timeoutMs, budgetAmount, dataClassification);
+                timeoutMs, budgetAmount, dataClassification, scenario);
     }
 
     /**
@@ -132,6 +158,31 @@ public record CreateRunRequest(
                 && (budgetAmount.signum() <= 0 || budgetAmount.compareTo(MAX_BUDGET_AMOUNT) > 0)) {
             throw new IllegalArgumentException(
                     "budgetAmount 必须为正数且不超过 " + MAX_BUDGET_AMOUNT + "，收到：" + budgetAmount);
+        }
+
+        // ⚠️⚠️ **scenario 是唯一的生产方契约**（2026-11-09 补）：
+        //    此前「scenario 从 input_payload.scenario 读」只活在采集侧的 SQL 注释里，
+        //    调用方没有任何契约可依 ⇒ 真实流量下宽表 scenario 恒 NULL，
+        //    看板「按场景拆分」长期只有一个「未标注」组。
+        //
+        //    规则：
+        //    ① 显式 scenario 字段优先（覆盖 input 里的同名键，避免两个真相）；
+        //    ② 用 ScenarioTag 白名单在创建期校验，非法 **直接 400**，
+        //       而不是静默降级为 null —— 调用方必须立刻知道传错了；
+        //    ③ 合法值写回 input_payload，采集侧 JdbcTraceFactRepository 无需改动。
+        if (scenario != null && !scenario.isBlank()) {
+            String normalized = cn.studykid.multiagent.ports.metrics.ScenarioTag.normalize(scenario);
+            if (normalized == null) {
+                throw new IllegalArgumentException(
+                        "scenario 不是合法的场景标签（仅允许 Unicode 字母/数字 + _ . : / + -，"
+                                + "长度 ≤64，不含空白与句读；例如 数学:一元二次方程）");
+            }
+            java.util.Map<String, Object> merged = new java.util.LinkedHashMap<>(input);
+            merged.put(SCENARIO_KEY, normalized);
+            input = java.util.Map.copyOf(merged);
+            scenario = normalized;
+        } else {
+            scenario = null;
         }
         input = Map.copyOf(input);
     }

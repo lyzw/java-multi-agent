@@ -147,6 +147,102 @@ class JdbcReviewTaskRepositoryIT {
      * <p>本用例直接<b>绕过应用层检查</b>连插两条，验证 DB 层会拒绝第二条 ——
      * 这正是「应用层检查只是优化，DB 约束才是保证」的含义。
      */
+    // ── §8.1 归因回写钩子（2026-11-09 预留）───────────────────────
+
+    /** 记录钩子收到的事实；resolve 成功后必须被调用且只被合法根因调用。 */
+    private static final class RecordingHook
+            implements cn.studykid.multiagent.ports.quality.ReviewAttributionHook {
+        final java.util.List<String> calls = new java.util.ArrayList<>();
+
+        @Override
+        public void onAttributionResolved(String traceId, String tenantId, String runId,
+                                          String rootCause, String note, String reviewer) {
+            calls.add(rootCause + "|" + traceId + "|" + tenantId);
+        }
+    }
+
+    @Test
+    @DisplayName("✅ H-1 PROMPT/CONFIG/MODEL 归因关闭后钩子收到完整事实")
+    void hookFiredForIterationRootCauses() {
+        RecordingHook hook = new RecordingHook();
+        JdbcReviewTaskRepository withHook =
+                new JdbcReviewTaskRepository(adminPool, hook);
+
+        for (String cause : new String[]{"PROMPT", "CONFIG", "MODEL"}) {
+            String tid = traceId + "-" + cause;
+            String taskId = withHook.create(new ReviewTaskSpec(tid, tenantId,
+                    runIdOf(cause), Source.MANUAL, Priority.NORMAL, null));
+            withHook.resolve(taskId, cause, "备注-" + cause);
+
+            assertThat(hook.calls).anySatisfy(c -> assertThat(c)
+                    .startsWith(cause + "|").contains(tid).contains(tenantId));
+        }
+        assertThat(hook.calls).hasSize(3);
+    }
+
+    @Test
+    @DisplayName("✅ H-2 TOOL/DATA/UNKNOWN 不触发钩子（§8.1 只对迭代工单三类）")
+    void hookSilentForNonIterationRootCauses() {
+        RecordingHook hook = new RecordingHook();
+        JdbcReviewTaskRepository withHook =
+                new JdbcReviewTaskRepository(adminPool, hook);
+
+        for (String cause : new String[]{"TOOL", "DATA", "UNKNOWN"}) {
+            String taskId = withHook.create(new ReviewTaskSpec(
+                    traceId + "-" + cause, tenantId, runIdOf(cause),
+                    Source.MANUAL, Priority.NORMAL, null));
+            withHook.resolve(taskId, cause, null);
+        }
+
+        assertThat(hook.calls).isEmpty();
+    }
+
+    @Test
+    @DisplayName("⚠️⚠️ H-3 钩子抛异常不影响已关闭的任务（fail-soft 不回滚）")
+    void hookFailureDoesNotBreakResolve() {
+        cn.studykid.multiagent.ports.quality.ReviewAttributionHook throwing =
+                (t, te, r, rc, n, rv) -> {
+                    throw new RuntimeException("下游炸了");
+                };
+        JdbcReviewTaskRepository withHook =
+                new JdbcReviewTaskRepository(adminPool, throwing);
+
+        String tid = traceId + "-boom";
+        String taskId = withHook.create(new ReviewTaskSpec(tid, tenantId,
+                runIdOf("boom"), Source.MANUAL, Priority.NORMAL, null));
+
+        // resolve 必须正常返回：任务关闭是事实，回写失败只是下游问题
+        withHook.resolve(taskId, "MODEL", null);
+
+        List<ReviewTaskPort.ReviewTaskView> resolved =
+                withHook.list("RESOLVED", null, 50).stream()
+                        .filter(v -> v.traceId().equals(tid)).toList();
+        assertThat(resolved)
+                .as("⚠️ 钩子失败若把 resolve 整体报失败，reviewer 重试会造成"
+                        + "「任务已关闭却显示失败」的双真相")
+                .hasSize(1);
+        assertThat(resolved.get(0).rootCause()).isEqualTo("MODEL");
+    }
+
+    @Test
+    @DisplayName("⚠️ H-4 未流转生效（已终态）时绝不回调钩子")
+    void hookNotFiredWhenResolveRejected() {
+        RecordingHook hook = new RecordingHook();
+        JdbcReviewTaskRepository withHook =
+                new JdbcReviewTaskRepository(adminPool, hook);
+
+        String tid = traceId + "-twice";
+        String taskId = withHook.create(new ReviewTaskSpec(tid, tenantId,
+                runIdOf("twice"), Source.MANUAL, Priority.NORMAL, null));
+        withHook.resolve(taskId, "PROMPT", null);
+        assertThat(hook.calls).hasSize(1);
+
+        // 二次 resolve（已 RESOLVED，前态不合法）→ 抛异常且钩子不再收到调用
+        assertThatThrownBy(() -> withHook.resolve(taskId, "MODEL", null))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(hook.calls).as("回写绝不发生在未生效的流转上").hasSize(1);
+    }
+
     @Test
     @DisplayName("✅ P2-6 ⚠️ 同 trace 的第二条未终结任务被 DB 拒绝（并发去重）")
     void duplicateOpenTaskRejectedByDatabase() {

@@ -290,9 +290,16 @@ public class ApplicationConfiguration {
      */
     @Bean
     public cn.studykid.multiagent.ports.persistence.ReviewTaskPort reviewTaskPort(
-            @Qualifier("dataSource") DataSource dataSource) {
+            @Qualifier("dataSource") DataSource dataSource,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.ports.quality.ReviewAttributionHook> hookProvider) {
+        // ⚠️ 钩子用 ObjectProvider 可选注入：产品口径未定时**没有任何实现**，
+        //    此时仓储走 NoOp（resolve 不回写）。口径定了之后实现一个
+        //    ReviewAttributionHook Bean，这里自动接上 —— 编排零改动。
+        //    这正是「把接线与口径解耦」的落点：接线（已完成）与口径（待产品）
+        //    分属两个变更通道，不能因为口径没定就把接线也欠着。
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcReviewTaskRepository(
-                dataSource);
+                dataSource, hookProvider.getIfAvailable());
     }
 
     /**

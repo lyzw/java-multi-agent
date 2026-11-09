@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import cn.studykid.multiagent.application.review.QualityAlertEvaluator;
 import cn.studykid.multiagent.application.review.ReviewSampler;
 
 /**
@@ -38,10 +39,14 @@ public class ReviewSampleJob {
     private static final Logger log = LoggerFactory.getLogger(ReviewSampleJob.class);
 
     private final ReviewSampler sampler;
+    private final QualityAlertEvaluator alerts;
     private final Clock clock;
 
-    public ReviewSampleJob(@NonNull ReviewSampler sampler, @NonNull Clock clock) {
+    public ReviewSampleJob(@NonNull ReviewSampler sampler,
+                           @NonNull QualityAlertEvaluator alerts,
+                           @NonNull Clock clock) {
         this.sampler = sampler;
+        this.alerts = alerts;
         this.clock = clock;
     }
 
@@ -62,6 +67,36 @@ public class ReviewSampleJob {
     }
 
     /**
+     * 一轮「分层抽样 + 比例类告警」（定时器实际走的入口）。
+     *
+     * <p>⚠️ <b>两段必须在同一轮里跑</b>：分层抽样把「该审哪些 Trace」推进队列，
+     * 比例告警把「系统整体是否在劣化」推进队列。拆成两个定时器会让两者的
+     * 时间窗口错开，排障时无法把「某天错误率飙升」与「那批被抽中的样本」对上。
+     *
+     * <p>⚠️ 抽样失败不阻断告警（反之亦然）：一段抛异常只记 ERROR，
+     * 另一段照跑。不能让「抽样器偶发失败」把整个质量告警链一起带掉。
+     */
+    public void sweepWithAlerts() {
+        ReviewSampler.Result sampled = sweepOnce();
+        if (sampled.queued() > 0) {
+            log.info("分层抽样本轮入队 {} 条（异常 {} / 缺口 {} / 基线 {}，扫描 {}）",
+                    sampled.queued(), sampled.anomalyQueued(), sampled.gapQueued(),
+                    sampled.baselineQueued(), sampled.scanned());
+        }
+        try {
+            QualityAlertEvaluator.Result alerted = alerts.evaluateOnce(clock.instant());
+            if (alerted.fired() > 0) {
+                log.warn("比例类质量告警告警 {} 条：{}", alerted.fired(), alerted.reasons());
+            } else if (alerted.insufficientSample() > 0) {
+                log.info("比例类告警本轮不判（样本不足）：{}", alerted.reasons());
+            }
+        } catch (RuntimeException e) {
+            // ⚠️ 不重抛：调度线程被打断会让后续周期全部不执行。
+            log.error("比例类质量告警告警本轮失败（下个周期重试）", e);
+        }
+    }
+
+    /**
      * 周期扫描。
      *
      * <p>⚠️ {@code fixedDelay}（不是 {@code fixedRate}）：上轮结束后再等一个间隔，
@@ -71,10 +106,6 @@ public class ReviewSampleJob {
      */
     @Scheduled(fixedDelayString = "${agent.quality.sampler.interval-ms:600000}")
     public void sweep() {
-        ReviewSampler.Result r = sweepOnce();
-        if (r.queued() > 0) {
-            log.info("分层抽样本轮入队 {} 条（异常 {} / 缺口 {} / 基线 {}，扫描 {}）",
-                    r.queued(), r.anomalyQueued(), r.gapQueued(), r.baselineQueued(), r.scanned());
-        }
+        sweepWithAlerts();
     }
 }

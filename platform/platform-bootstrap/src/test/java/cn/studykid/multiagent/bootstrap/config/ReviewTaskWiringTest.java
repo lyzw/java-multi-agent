@@ -149,6 +149,41 @@ class ReviewTaskWiringTest {
         }
     }
 
+    @Nested
+    @DisplayName("R-4 ⚠️ 比例类质量告警必须真的挂在调度链路上（P4 · §9.2）")
+    class AlertWiring {
+
+        @Test
+        @DisplayName("R-4a ⚠️⚠️ QualityAlertEvaluator 必须存在且接的是容器端口")
+        void alertEvaluatorRegisteredAndWired() throws Exception {
+            cn.studykid.multiagent.application.review.QualityAlertEvaluator ev =
+                    ctx.getBean(cn.studykid.multiagent.application.review.QualityAlertEvaluator.class);
+            assertThat(ev).isNotNull();
+            assertThat(field(ev, "metrics"))
+                    .as("告警器若拿另一个指标端口，算出的比例与看板对不上")
+                    .isSameAs(ctx.getBean(cn.studykid.multiagent.ports.metrics.AgentMetricPort.class));
+            assertThat(field(ev, "reviewTasks"))
+                    .as("告警器若拿另一个队列端口，建的 ALERT 任务端点读不到")
+                    .isSameAs(ctx.getBean(ReviewTaskPort.class));
+        }
+
+        @Test
+        @DisplayName("R-4b ⚠️⚠️ 定时入口 sweep() 必须真的调到告警评估（不能只跑抽样）")
+        void scheduledSweepIncludesAlerts() throws Exception {
+            // ⚠️ 用 spy 真跑一次 sweep()：只断言「方法存在」是弱守卫 ——
+            //    把 sweep() 里的 sweepWithAlerts() 换成 sweepOnce() 后照样全绿，
+            //    而比例类告警会整个静默失效（本仓反复治理的形态）。
+            var job = ctx.getBean(cn.studykid.multiagent.bootstrap.quality.ReviewSampleJob.class);
+            var spy = org.mockito.Mockito.spy(job);
+            org.mockito.Mockito.doNothing().when(spy).sweepWithAlerts();
+
+            spy.sweep();
+
+            org.mockito.Mockito.verify(spy).sweepWithAlerts();
+            org.mockito.Mockito.verify(spy, org.mockito.Mockito.never()).sweepOnce();
+        }
+    }
+
     /** 读私有字段（不给生产类加 getter —— 那等于为测试打开生产 API 面）。 */
     private static Object field(Object target, String name) throws Exception {
         java.lang.reflect.Field f = target.getClass().getDeclaredField(name);
