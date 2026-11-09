@@ -86,7 +86,11 @@ class JdbcReviewTaskRepositoryIT {
     @DisplayName("✅ P2-1 创建 → 待处理视图可见，HIGH 排在 NORMAL 前")
     void createAndListOrdered() {
         String normal = repo.create(spec(Source.MANUAL, Priority.NORMAL));
-        String high = repo.create(new ReviewTaskSpec(traceId, tenantId, runIdOf("main"), Source.ALERT, Priority.HIGH, null));
+        // ⚠️ 必须用**不同的 trace**：设计 §7.2 第 4 条「已存在 PENDING/IN_REVIEW 同 trace → 跳过（去重）」
+        //    意味着同一 trace 同时只能有一条未终结任务（DB 层由 uq_review_task_open 部分唯一索引保证）。
+        //    本用例要验的是「优先级排序」，不是同 trace 重复建任务。
+        String high = repo.create(new ReviewTaskSpec(
+                traceId + "-high", tenantId, runIdOf("main"), Source.ALERT, Priority.HIGH, null));
 
         List<ReviewTaskViewRow> rows = repo.list(null, null, 50).stream()
                 .map(v -> new ReviewTaskViewRow(v.taskId(), v.priority(), v.status()))
@@ -133,13 +137,56 @@ class JdbcReviewTaskRepositoryIT {
                 .isInstanceOf(IllegalStateException.class);
     }
 
+    /**
+     * ⚠️⚠️ **并发去重必须由数据库保证**（2026-11-09 补）。
+     *
+     * <p>设计 §7.2 第 4 条：「已存在 PENDING/IN_REVIEW 同 trace → 跳过（去重）」。
+     * {@code hasOpenTask} 是「先查后插」，多副本并发时两个实例可同时通过检查
+     * ⇒ 队列里出现两条同 trace 的待审任务，reviewer 要挨个点开才发现是同一个。
+     *
+     * <p>本用例直接<b>绕过应用层检查</b>连插两条，验证 DB 层会拒绝第二条 ——
+     * 这正是「应用层检查只是优化，DB 约束才是保证」的含义。
+     */
+    @Test
+    @DisplayName("✅ P2-6 ⚠️ 同 trace 的第二条未终结任务被 DB 拒绝（并发去重）")
+    void duplicateOpenTaskRejectedByDatabase() {
+        repo.create(spec(Source.MANUAL, Priority.NORMAL));
+
+        assertThatThrownBy(() -> repo.create(
+                new ReviewTaskSpec(traceId, tenantId, runIdOf("main"), Source.ALERT, Priority.HIGH, null)))
+                .as("⚠️ 同 trace 的未终结任务必须唯一 —— 否则多副本并发下队列出现重复，"
+                        + "reviewer 白看一遍")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("uq_review_task_open");
+    }
+
+    /** 任务关闭后，同 trace 应能再次入队（状态机允许新问题再次入队）。 */
+    @Test
+    @DisplayName("✅ P2-7 已终结的同 trace 允许再次入队（部分唯一索引不误伤状态流转）")
+    void resolvedTaskAllowsRequeue() {
+        String first = repo.create(spec(Source.MANUAL, Priority.NORMAL));
+        repo.resolve(first, "MODEL", "已定位");
+
+        String second = repo.create(
+                new ReviewTaskSpec(traceId, tenantId, runIdOf("main"), Source.ALERT, Priority.HIGH, null));
+
+        assertThat(second)
+                .as("⚠️ RESOLVED 后同一 trace 再次入队是合法状态流转 —— "
+                        + "若这里被拒，说明唯一约束写成了「全状态唯一」，把状态机锁死了")
+                .isNotBlank();
+    }
+
     @Test
     @DisplayName("✅ P2-5 租户过滤 + 精确状态过滤 + limit 钳制")
     void filters() {
         String otherTenant = UUID.randomUUID().toString();
         repo.create(spec(Source.MANUAL, Priority.NORMAL));
-        String mine = repo.create(new ReviewTaskSpec(traceId, tenantId, runIdOf("main"), Source.MANUAL, Priority.NORMAL, null));
-        String theirs = repo.create(new ReviewTaskSpec(traceId, otherTenant, runIdOf("main"), Source.MANUAL, Priority.NORMAL, null));
+        // ⚠️ 两条必须用不同 trace：同 trace 同时只允许一条未终结任务（uq_review_task_open）。
+        //    本用例验的是「租户过滤」，与 trace 无关。
+        String mine = repo.create(new ReviewTaskSpec(
+                traceId + "-mine", tenantId, runIdOf("main"), Source.MANUAL, Priority.NORMAL, null));
+        String theirs = repo.create(new ReviewTaskSpec(
+                traceId + "-theirs", otherTenant, runIdOf("main"), Source.MANUAL, Priority.NORMAL, null));
 
         List<String> forTenant = repo.list(null, tenantId, 50).stream()
                 .map(ReviewTaskPort.ReviewTaskView::taskId).toList();

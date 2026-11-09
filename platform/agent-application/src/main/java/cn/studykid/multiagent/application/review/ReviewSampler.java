@@ -2,7 +2,9 @@ package cn.studykid.multiagent.application.review;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
@@ -73,7 +75,10 @@ public class ReviewSampler {
     private final ReviewTaskPort reviewTasks;
     private final boolean enabled;
     private final Duration lookback;
-    private final int maxPerRound;
+    /** 每个租户每轮最多入队多少条（防止单租户吃满配额）。 */
+    private final int maxPerTenant;
+    /** 全平台每轮入队总上限（兜底，防队列爆炸）。 */
+    private final int globalCap;
     private final double baselineRate;
 
     public ReviewSampler(
@@ -81,13 +86,18 @@ public class ReviewSampler {
             @NonNull ReviewTaskPort reviewTasks,
             @Value("${agent.quality.sampler.enabled:true}") boolean enabled,
             @Value("${agent.quality.sampler.lookback-hours:24}") int lookbackHours,
-            @Value("${agent.quality.sampler.max-per-round:50}") int maxPerRound,
+            @Value("${agent.quality.sampler.max-per-tenant:20}") int maxPerTenant,
+            @Value("${agent.quality.sampler.global-cap:200}") int globalCap,
             @Value("${agent.quality.sampler.baseline-rate:0.02}") double baselineRate) {
         if (lookbackHours <= 0) {
             throw new IllegalArgumentException("agent.quality.sampler.lookback-hours 必须 > 0");
         }
-        if (maxPerRound <= 0) {
-            throw new IllegalArgumentException("agent.quality.sampler.max-per-round 必须 > 0");
+        if (maxPerTenant <= 0) {
+            throw new IllegalArgumentException("agent.quality.sampler.max-per-tenant 必须 > 0");
+        }
+        if (globalCap < maxPerTenant) {
+            throw new IllegalArgumentException(
+                    "agent.quality.sampler.global-cap 必须 >= max-per-tenant，否则单租户都装不满");
         }
         if (baselineRate < 0 || baselineRate > 1) {
             throw new IllegalArgumentException("agent.quality.sampler.baseline-rate 必须在 [0,1]");
@@ -96,7 +106,8 @@ public class ReviewSampler {
         this.reviewTasks = reviewTasks;
         this.enabled = enabled;
         this.lookback = Duration.ofHours(lookbackHours);
-        this.maxPerRound = maxPerRound;
+        this.maxPerTenant = maxPerTenant;
+        this.globalCap = globalCap;
         this.baselineRate = baselineRate;
     }
 
@@ -131,12 +142,24 @@ public class ReviewSampler {
         int gap = 0;
         int baseline = 0;
         int skipped = 0;
+        // ⚠️⚠️ **配额必须按租户计，不能全平台共享**（2026-11-09 自查修复）：
+        //    初版是 `anomaly + gap + baseline >= maxPerRound` 就停 —— 那是**全平台**上限。
+        //    后果：单租户的高流量可以吃满全部配额，其他租户整轮 0 条入队，
+        //    而「抽样覆盖率」在看板上是按平台聚合的，看不出某个租户从未被审过。
+        //    多租户 SaaS 里这是实质性偏差，不是公平性偏好。
+        //    现在改为「每租户每轮上限」，全局仍保留一个总量上界防队列爆炸。
+        Map<String, Integer> perTenant = new HashMap<>();
 
         for (SamplingCandidate c : candidates) {
-            if (anomaly + gap + baseline >= maxPerRound) {
-                // ⚠️ 达到上限就停，不是「忍一忍继续灌」：
+            if (anomaly + gap + baseline >= globalCap) {
+                // ⚠️ 全局兜底上限：即使租户很多，单轮也不会无限灌队列。
                 //    队列塞爆的后果是 reviewer 不再看队列，比少抽几条严重得多。
                 break;
+            }
+            int used = perTenant.getOrDefault(c.tenantId(), 0);
+            if (used >= maxPerTenant) {
+                // 该租户本轮配额已满，跳过但它不占用其他租户的名额
+                continue;
             }
             if (reviewTasks.hasOpenTask(c.traceId())) {
                 skipped++;
@@ -148,6 +171,7 @@ public class ReviewSampler {
             }
             ReviewTaskSpec s = spec.get();
             reviewTasks.create(s);
+            perTenant.put(c.tenantId(), used + 1);
             switch (s.source()) {
                 case ANOMALY -> anomaly++;
                 case L1_GAP -> gap++;
@@ -158,8 +182,8 @@ public class ReviewSampler {
 
         Result result = new Result(candidates.size(), anomaly, gap, baseline, skipped);
         if (result.queued() > 0) {
-            log.info("分层抽样完成: 扫描={}, 异常={}, 覆盖缺口={}, 随机基线={}, 已入队跳过={}",
-                    result.scanned(), anomaly, gap, baseline, skipped);
+            log.info("分层抽样完成: 扫描={}, 异常={}, 覆盖缺口={}, 随机基线={}, 已入队跳过={}, 涉及租户={}",
+                    result.scanned(), anomaly, gap, baseline, skipped, perTenant.size());
         }
         return result;
     }

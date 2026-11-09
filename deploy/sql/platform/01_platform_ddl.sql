@@ -916,6 +916,38 @@ CREATE INDEX idx_review_task_tenant ON platform.review_task USING btree (tenant_
 
 
 --
+-- Name: review_task open_task_key; Type: COLUMN; Schema: platform; Owner: -
+--
+-- ⚠️⚠️ **并发去重靠数据库保证，不靠应用层「先查后插」**（2026-11-09 补）：
+--   ReviewTaskPort.hasOpenTask 是「SELECT 再 INSERT」，两个应用副本并发时
+--   可能同时通过检查、插入两条同 trace 的任务 ⇒ reviewer 要挨个点开才发现是同一个，
+--   队列信噪比下降。R6 的周期批量入队显著提高了这个竞态的触发概率。
+--
+--   ⚠️ 为什么用**生成列 + 部分唯一索引**，而不是给 (trace_id, status) 加唯一约束：
+--   状态机允许「同一 trace 在 RESOLVED/DISMISSED 之后再次入队」（新一轮问题）。
+--   普通唯一约束会禁止这种合法状态流转；部分唯一索引才能表达
+--   「**仅对未终结状态**唯一」。
+--
+--   ⚠️ 生成列而非触发器：触发器在并发下仍需额外加锁才能保证唯一性，
+--   而生成列是 PG 内部的不可变计算 + 唯一索引是数据库级的原子判定，无竞态窗口。
+--   NULL 不参与唯一性判定（多个 NULL 互不冲突），这正是我们要的
+--   「已终结的行不占用唯一键」。
+
+ALTER TABLE platform.review_task
+    ADD COLUMN open_task_key text
+    GENERATED ALWAYS AS (CASE WHEN status IN ('PENDING'::text, 'IN_REVIEW'::text)
+                              THEN trace_id ELSE NULL END) STORED;
+
+
+--
+-- Name: review_task uq_review_task_open; Type: INDEX; Schema: platform; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_review_task_open ON platform.review_task USING btree (open_task_key)
+    WHERE open_task_key IS NOT NULL;
+
+
+--
 -- Name: authz_decision_log; Type: TABLE; Schema: platform; Owner: -
 --
 

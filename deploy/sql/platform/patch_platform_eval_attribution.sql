@@ -13,6 +13,7 @@
 --     1. platform.agent_eval_sample.attribution_correct   （人工标注的归因正确率）
 --     2. platform.agent_trace_metric.attribution_correct  （宽表聚合口径）
 --     3. platform.review_task 整表 + 索引 + 4 个 CHECK     （P2 审查队列；老库可能没有）
+--     4. review_task.open_task_key 生成列 + uq_review_task_open 部分唯一索引（并发去重）
 -- =====================================================================
 \set ON_ERROR_STOP on
 
@@ -64,6 +65,32 @@ CREATE TABLE IF NOT EXISTS platform.review_task (
 CREATE INDEX IF NOT EXISTS idx_review_task_status ON platform.review_task USING btree (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_review_task_tenant ON platform.review_task USING btree (tenant_id, status);
 
+-- ── 2b. 并发去重：生成列 + 部分唯一索引（2026-11-09 补）─────────────
+--   ⚠️ hasOpenTask 是「先查后插」，多副本并发下会插入重复的未终结任务。
+--   部分唯一索引让「仅未终结状态唯一」成为数据库级原子判定，无竞态窗口。
+--   ⚠️ 加索引前必须先确认现无重复行，否则建索引会失败：
+ALTER TABLE platform.review_task
+    ADD COLUMN IF NOT EXISTS open_task_key text
+    GENERATED ALWAYS AS (CASE WHEN status IN ('PENDING'::text, 'IN_REVIEW'::text)
+                              THEN trace_id ELSE NULL END) STORED;
+
+DO $$
+DECLARE dupes int;
+BEGIN
+    SELECT count(*) INTO dupes FROM (
+        SELECT trace_id FROM platform.review_task
+         WHERE status IN ('PENDING'::text, 'IN_REVIEW'::text)
+         GROUP BY trace_id HAVING count(*) > 1) d;
+    IF dupes > 0 THEN
+        RAISE EXCEPTION
+            '存在 % 条同 trace 的未终结任务，无法建立并发去重唯一索引；请先人工归并', dupes;
+    END IF;
+END
+$$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_review_task_open ON platform.review_task USING btree (open_task_key)
+    WHERE open_task_key IS NOT NULL;
+
 COMMIT;
 
 -- ── 3. 复查（人读）──────────────────────────────────────────────────
@@ -81,7 +108,11 @@ SELECT concat(
          WHERE table_schema='platform' AND table_name='review_task'),
     ' | review_task_idx=', (
         SELECT count(*) FROM pg_indexes
-         WHERE schemaname='platform' AND tablename='review_task')
+         WHERE schemaname='platform' AND tablename='review_task'),
+    ' | uq_review_task_open=', (
+        SELECT count(*) FROM pg_indexes
+         WHERE schemaname='platform' AND tablename='review_task'
+           AND indexname='uq_review_task_open')
 ) AS quality_shape;
 
 -- ── 4. 断言（机读）──────────────────────────────────────────────────
@@ -109,6 +140,11 @@ BEGIN
     END IF;
     IF idx < 3 THEN
         RAISE EXCEPTION 'review_task 索引不足：% 个（主键 + 2 个查询索引 = 3）', idx;
+    END IF;
+    IF (SELECT count(*) FROM pg_indexes
+         WHERE schemaname='platform' AND tablename='review_task'
+           AND indexname='uq_review_task_open') <> 1 THEN
+        RAISE EXCEPTION '并发去重唯一索引未建出来（多副本下会产生重复待审任务）';
     END IF;
     RAISE NOTICE '✅ 质量体系结构补齐通过（列 2 / 表 1 / 索引 %）', idx;
 END

@@ -529,8 +529,24 @@ public class JdbcAgentMetricRepository implements AgentMetricPort {
         // ⚠️ 末尾必须留空格：Java text block 会吃掉开分隔符后的换行，
         //    直接拼 ORDER BY 会得到 `?ORDER BY`（本仓已在场景筛选上踩过一次）。
         sql = sql + " ";
+        // ⚠️⚠️ **排序必须让「异常优先」在 SQL 层生效**（2026-11-09 自查修复）：
+        //    初版是 `ORDER BY started_at DESC LIMIT ?`，而分层判定在 Java 内存里做 ——
+        //    于是候选集只取到「最近的 N 条」，**落在 N 名之外的异常样本永远进不了候选**
+        //    （异常恰恰是最该优先审的）。这是「分层在内存、截断在 SQL」的经典错配：
+        //    单测用 20 条假数据照不出，只有真跑到高流量才暴露。
+        //    现在把分层谓词前置到 ORDER BY，异常 > 覆盖缺口 > 其它，同层内再按时间倒序。
         sql += """
-                ORDER BY started_at DESC
+                ORDER BY
+                  CASE
+                    WHEN loop_suspected_count > 0
+                      OR max_rounds_reached
+                      OR coalesce(safety_blocked_count, 0) > 0
+                      OR coalesce(input_tokens,0) + coalesce(output_tokens,0) > 20000
+                    THEN 0
+                    WHEN auto_checked IS NULL THEN 1
+                    ELSE 2
+                  END,
+                  started_at DESC
                 LIMIT ?
                 """;
         List<SamplingCandidate> out = new ArrayList<>();

@@ -43,6 +43,9 @@ import cn.studykid.multiagent.ports.persistence.ReviewTaskPort.Source;
 class ReviewSamplerTest {
 
     private static final String TENANT = "11111111-1111-1111-1111-111111111111";
+    /** 第二个租户：用于验证配额不被单租户吃满。 */
+    private static final String TENANT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    private static final String TENANT_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
     private static final Instant NOW = Instant.parse("2026-11-09T10:00:00Z");
 
     private final AgentMetricPort metrics = mock(AgentMetricPort.class);
@@ -54,8 +57,17 @@ class ReviewSamplerTest {
         when(reviewTasks.create(any())).thenReturn("task-1");
     }
 
-    private ReviewSampler sampler(int maxPerRound, double baselineRate) {
-        return new ReviewSampler(metrics, reviewTasks, true, 24, maxPerRound, baselineRate);
+    /**
+     * 构造抽样器。
+     *
+     * @param maxPerTenant 每租户每轮配额
+     * @param baselineRate 随机基线抽样率
+     */
+    private ReviewSampler sampler(int maxPerTenant, double baselineRate) {
+        // ⚠️ globalCap 取 maxPerTenant 的 10 倍：既要能装满单租户，
+        //    又要留出「多租户各自分到一份」的余量（否则测不出租户公平性）。
+        return new ReviewSampler(metrics, reviewTasks, true, 24, maxPerTenant,
+                Math.max(maxPerTenant * 10, maxPerTenant + 1), baselineRate);
     }
 
     private void candidates(SamplingCandidate... cs) {
@@ -129,8 +141,8 @@ class ReviewSamplerTest {
     class LimitsAndDedup {
 
         @Test
-        @DisplayName("S-2a ⚠️ 单轮上限真的生效（塞爆队列 = reviewer 弃用队列）")
-        void maxPerRoundIsEnforced() {
+        @DisplayName("S-2a ⚠️ 单租户配额真的生效（塞爆队列 = reviewer 弃用队列）")
+        void perTenantCapIsEnforced() {
             List<SamplingCandidate> many = new ArrayList<>();
             for (int i = 0; i < 20; i++) {
                 many.add(cand("t-" + i, true, Boolean.TRUE));
@@ -139,8 +151,46 @@ class ReviewSamplerTest {
 
             ReviewSampler.Result r = sampler(5, 0.02).sampleOnce(NOW);
 
-            assertThat(r.queued()).as("上限 5 ⇒ 最多建 5 条").isEqualTo(5);
+            assertThat(r.queued()).as("单租户配额 5 ⇒ 最多建 5 条").isEqualTo(5);
             verify(reviewTasks, org.mockito.Mockito.times(5)).create(any());
+        }
+
+        @Test
+        @DisplayName("S-2c ⚠️⚠️ 单租户不得吃满全平台配额（多租户 SaaS 的实质性偏差）")
+        void oneTenantCannotStarveOthers() {
+            // 租户 A 塞 30 条，租户 B 只有 2 条 —— 候选按时间倒序，A 在前面
+            List<SamplingCandidate> many = new ArrayList<>();
+            for (int i = 0; i < 30; i++) {
+                many.add(new SamplingCandidate(
+                        "a-" + i, TENANT_A, "run-a" + i, null,
+                        Boolean.TRUE, Boolean.TRUE,
+                        false, 2, 0, 25_000L, NOW));
+            }
+            for (int i = 0; i < 2; i++) {
+                many.add(new SamplingCandidate(
+                        "b-" + i, TENANT_B, "run-b" + i, null,
+                        Boolean.TRUE, Boolean.TRUE,
+                        false, 2, 0, 25_000L, NOW));
+            }
+            when(metrics.samplingCandidates(any(MetricQuery.class), anyInt())).thenReturn(many);
+
+            ReviewSampler.Result r = sampler(5, 0.02).sampleOnce(NOW);
+
+            // 单租户配额 5：A 拿 5 条，B 也应拿到 2 条（不受 A 影响）
+            long fromA = captureTenant(TENANT_A);
+            long fromB = captureTenant(TENANT_B);
+            assertThat(fromA).as("A 最多拿自己的配额").isLessThanOrEqualTo(5);
+            assertThat(fromB)
+                    .as("⚠️ B 不能因为 A 高流量而被饿死 —— "
+                            + "看板覆盖率按平台聚合，看不出某租户从未被审过")
+                    .isEqualTo(2);
+        }
+
+        /** 统计本轮为某租户建了多少条任务。 */
+        private long captureTenant(String tenantId) {
+            ArgumentCaptor<ReviewTaskSpec> cap = ArgumentCaptor.forClass(ReviewTaskSpec.class);
+            verify(reviewTasks, org.mockito.Mockito.atLeast(0)).create(cap.capture());
+            return cap.getAllValues().stream().filter(s -> tenantId.equals(s.tenantId())).count();
         }
 
         @Test
@@ -185,7 +235,7 @@ class ReviewSamplerTest {
         @Test
         @DisplayName("S-3b 关闭时不扫库、不建任务")
         void disabledDoesNothing() {
-            ReviewSampler off = new ReviewSampler(metrics, reviewTasks, false, 24, 50, 0.02);
+            ReviewSampler off = new ReviewSampler(metrics, reviewTasks, false, 24, 50, 500, 0.02);
 
             ReviewSampler.Result r = off.sampleOnce(NOW);
 
@@ -196,12 +246,16 @@ class ReviewSamplerTest {
         @Test
         @DisplayName("S-3c 基线上限非法配置必须启动期拒绝（fail-closed）")
         void invalidConfigRejected() {
-            assertThatThrownBy(() -> new ReviewSampler(metrics, reviewTasks, true, 24, 50, 1.5))
+            assertThatThrownBy(() -> new ReviewSampler(metrics, reviewTasks, true, 24, 50, 500, 1.5))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("baseline-rate");
-            assertThatThrownBy(() -> new ReviewSampler(metrics, reviewTasks, true, 0, 50, 0.02))
+            assertThatThrownBy(() -> new ReviewSampler(metrics, reviewTasks, true, 0, 50, 500, 0.02))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("lookback-hours");
+            // ⚠️ globalCap < maxPerTenant ⇒ 连单租户都装不满，配置本身自相矛盾
+            assertThatThrownBy(() -> new ReviewSampler(metrics, reviewTasks, true, 24, 50, 10, 0.02))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("global-cap");
         }
     }
 }
