@@ -87,7 +87,7 @@ interface FormValues {
 }
 
 /** 版本五轴可选值（须与后端 `EditionCoordinate` 展示名严格一致，否则 400）。 */
-const SUBJECT_OPTIONS = ['语文', '数学', '英语', '物理', '化学', '生物', '历史', '地理'].map(
+const SUBJECT_OPTIONS = ['语文', '数学', '英语', '物理', '化学', '生物', '历史', '地理', '体育'].map(
   (v) => ({ value: v, label: v }),
 )
 const GRADE_OPTIONS = [

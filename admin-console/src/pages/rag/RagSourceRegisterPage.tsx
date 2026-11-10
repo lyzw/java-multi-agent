@@ -35,7 +35,7 @@ import { RagNotReady, RagScopeShell, type RagScopePageProps } from './RagScopeSh
 const { Text, Paragraph } = Typography
 
 /** 学科可选项（与后端 `Subject` 展示名一致）。 */
-const SUBJECT_OPTIONS = ['语文', '数学', '英语', '物理', '化学', '生物', '历史', '地理'].map(
+const SUBJECT_OPTIONS = ['语文', '数学', '英语', '物理', '化学', '生物', '历史', '地理', '体育'].map(
   (v) => ({ value: v, label: v }),
 )
 

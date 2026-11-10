@@ -2,7 +2,7 @@ import { Result, Button } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { useSession } from '@/auth/session'
-import { APP_BASE_PATH, type Role } from '@/config/constants'
+import { type Role } from '@/config/constants'
 
 /**
  * 角色守卫：角色仅用于**导航显隐**，非安全边界——后端执行时仍重新授权（红线）。
@@ -32,7 +32,14 @@ export function RequireRole({
         title="403"
         subTitle={`当前账号无权访问「${location.pathname}」（需后端重授权）。`}
         extra={
-          <Button type="primary" onClick={() => navigate(`${APP_BASE_PATH}/tenants`)}>
+          <Button
+            type="primary"
+            onClick={() => {
+              // ⚠️ navigate 目标相对 Router basename（/admin），不带前缀；
+              //    带上 /admin 会拼成 /admin/admin/tenants → 404。
+              navigate('/tenants')
+            }}
+          >
             返回租户管理
           </Button>
         }

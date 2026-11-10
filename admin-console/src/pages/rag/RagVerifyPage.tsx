@@ -64,6 +64,22 @@ import { GovernanceBadge, RagEmpty } from './ragVisuals'
 const { Text } = Typography
 const { TextArea } = Input
 
+/**
+ * ⚠️ 来源 ID 必须是完整 UUID 才能触发读取。
+ *
+ * 此前 `useEffect([sourceId])` 对每一次键入都直接请求 `getRagSource`：
+ * 用户粘贴 36 位 UUID 会产生 30+ 次 partial UUID 请求，后端 `?::uuid`
+ * 转换失败 → 连续 HTTP 500 提示刷屏，且最后一次成功前页面已被错误态淹没。
+ * 这里与「片段校对」页统一走完整 UUID 正则 + 300ms 防抖。
+ */
+const UUID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+const SOURCE_LOAD_DEBOUNCE_MS = 300
+
+function isUuid(value: string | null | undefined): value is string {
+  return Boolean(value && UUID_PATTERN.test(value.trim()))
+}
+
 export function RagVerifyPage(): JSX.Element {
   return (
     <RagScopeShell
@@ -109,10 +125,12 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
 
   const loadSource = useCallback(
     async (sid: string) => {
-      if (!sid) return
+      // ⚠️ 守卫必须在发请求之前：partial UUID 打到后端 `?::uuid` 是 500，
+      //    不是「来源不存在」。缺字符时只提示用户，不制造服务端错误。
+      if (!isUuid(sid)) return
       setLoading(true)
       try {
-        const s = await getRagSource(target, sid)
+        const s = await getRagSource(target, sid.trim())
         setSource(s)
       } catch (cause) {
         message.error(cause instanceof ApiError ? cause.message : '读取来源失败')
@@ -125,16 +143,18 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
   )
 
   useEffect(() => {
-    if (sourceId && ready) void loadSource(sourceId)
+    if (!ready || !isUuid(sourceId)) return
+    const timer = setTimeout(() => void loadSource(sourceId), SOURCE_LOAD_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
   }, [sourceId, ready, loadSource])
 
   // 复核人候选（双人复核：执行人不得复核自己）。
   useEffect(() => {
-    if (!sourceId || !ready) return
+    if (!ready || !isUuid(sourceId)) return
     let cancelled = false
     const run = async (): Promise<void> => {
       try {
-        const list = await listRagCoSigners(target, sourceId)
+        const list = await listRagCoSigners(target, sourceId.trim())
         if (cancelled) return
         setCoSigners(
           list.map((c) => ({
@@ -154,22 +174,35 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
   }, [sourceId, ready, target])
 
   const executorId = currentPrincipalId()
+  /**
+   * 复核人必须先通过本地形状/自审校验。
+   *
+   * ⚠️ 后端 `verified_by` 是 UUID 列：手输少一位会让 409 变成 500；
+   *     「自己复核自己」则会被 SoD 明确拒绝。两者都在提交前拦住，
+   *     而不是把服务端错误堆栈暴露给审核员。
+   */
+  const coSignerIsValid = useMemo(
+    () =>
+      isUuid(coSignerId) &&
+      coSignerId.trim().toLowerCase() !== (executorId ?? '').toLowerCase(),
+    [coSignerId, executorId],
+  )
 
   const canSubmit = useMemo(() => {
     if (!source) return false
     if (targetStatus === 'VERIFIED') {
-      // VERIFIED 需：证据 + 复核人 + 权威等级（否则通过校验却仍被权威门槛拦下）
-      return evidence.trim().length > 0 && Boolean(coSignerId) && trustTier !== null
+      // VERIFIED 需：证据 + 合法复核人 + 权威等级（否则通过校验却仍被权威门槛拦下）
+      return evidence.trim().length > 0 && coSignerIsValid && trustTier !== null
     }
     return evidence.trim().length > 0
-  }, [source, targetStatus, evidence, coSignerId, trustTier])
+  }, [source, targetStatus, evidence, coSignerIsValid, trustTier])
 
   const onSubmit = async (): Promise<void> => {
     if (!source) return
     const payload: RagVerificationRequest = {
       targetStatus,
       // 双人复核的第二人；其余状态传 null（后端 SoD 会比对并拒绝同人）
-      verifiedBy: targetStatus === 'VERIFIED' ? (coSignerId ?? null) : null,
+      verifiedBy: targetStatus === 'VERIFIED' ? coSignerId?.trim() ?? null : null,
       evidenceRef: evidence.trim(),
       decidedBy: executorId || source.sourceId,
       verificationMethod: method,
@@ -196,17 +229,28 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
       ) : (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Card size="small">
-            <Space wrap align="center">
-              <Text>来源 ID</Text>
-              <Input
-                style={{ width: 380 }}
-                placeholder="粘贴来源 UUID（或从 Dashboard / 列表页进入）"
-                value={sourceId}
-                onChange={(e) => setSourceId(e.target.value.trim())}
-              />
-              <Button onClick={() => void loadSource(sourceId)} disabled={!sourceId}>
-                读取
-              </Button>
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <Space wrap align="center">
+                <Text>来源 ID</Text>
+                <Input
+                  style={{ width: 380 }}
+                  placeholder="粘贴来源 UUID（或从 Dashboard / 列表页进入）"
+                  value={sourceId}
+                  onChange={(e) => setSourceId(e.target.value.trim())}
+                />
+                <Button
+                  onClick={() => void loadSource(sourceId)}
+                  disabled={!isUuid(sourceId)}
+                  title={isUuid(sourceId) ? undefined : '请输入完整 36 位 UUID'}
+                >
+                  读取
+                </Button>
+              </Space>
+              {sourceId && !isUuid(sourceId) ? (
+                <Text type="warning" style={{ fontSize: 12 }}>
+                  输入完整 UUID 后自动读取；缺字符不会被发给后端（避免 ?::uuid 转换 500）
+                </Text>
+              ) : null}
             </Space>
           </Card>
 
@@ -355,15 +399,37 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
                       <>
                         <div>
                           <Text type="secondary">复核人（双人复核，必填）</Text>
-                          <Select
-                            style={{ width: '100%', marginTop: 4 }}
-                            value={coSignerId}
-                            onChange={setCoSignerId}
-                            placeholder="选择第二位签署人（不得与执行人相同）"
-                            options={coSigners
-                              .filter((c) => c.principalId !== executorId)
-                              .map((c) => ({ value: c.principalId, label: c.label }))}
-                          />
+                          {coSigners.length > 0 ? (
+                            <Select
+                              style={{ width: '100%', marginTop: 4 }}
+                              value={coSignerId}
+                              onChange={setCoSignerId}
+                              allowClear
+                              showSearch
+                              optionFilterProp="label"
+                              placeholder="选择第二位签署人（不得与执行人相同）"
+                              options={coSigners
+                                .filter(
+                                  (c) =>
+                                    c.principalId.toLowerCase() !==
+                                    (executorId ?? '').toLowerCase(),
+                                )
+                                .map((c) => ({ value: c.principalId, label: c.label }))}
+                            />
+                          ) : (
+                            <Input
+                              style={{ marginTop: 4 }}
+                              value={coSignerId ?? ''}
+                              onChange={(e) => setCoSignerId(e.target.value.trim() || undefined)}
+                              allowClear
+                              placeholder="第二位复核人的主体 UUID（未配置审核员名录时手输）"
+                            />
+                          )}
+                          {coSignerId && !coSignerIsValid ? (
+                            <Text type="warning" style={{ fontSize: 12 }}>
+                              复核人须为完整 UUID，且不能与决定人相同
+                            </Text>
+                          ) : null}
                         </div>
                         <div>
                           <Text type="secondary">校验后权威等级（必填）</Text>
@@ -432,7 +498,10 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
                       </Button>
                       {!canSubmit && (
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                              请填写证据{targetStatus === 'VERIFIED' ? '并选择复核人' : ''}
+                              请填写证据
+                              {targetStatus === 'VERIFIED'
+                                ? '，选择合法复核人与权威等级'
+                                : ''}
                         </Text>
                       )}
                     </Space>

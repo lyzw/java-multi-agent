@@ -87,7 +87,9 @@ export function AdminLayout(): JSX.Element {
     onClick: ({ key }: { key: string }) => {
       if (key === 'logout') {
         signOut()
-        navigate(`${APP_BASE_PATH}/login`)
+        // ⚠️ navigate 的目标相对 Router basename（/admin），不带前缀；
+        //    写 `${APP_BASE_PATH}/login` 会拼成 /admin/admin/login → 404。
+        navigate('/login')
       }
     },
   }
@@ -180,9 +182,9 @@ export function AdminLayout(): JSX.Element {
                       //    而认证态更新是同步的，先落地的永远是后者。
                       //    故这里只清存储、不动 React 态：登录成功后 signIn 会整体替换。
                       clearSession()
-                      navigate(
-                        `${APP_BASE_PATH}/login?reason=expired&next=${encodeURIComponent(rel)}`,
-                      )
+                      // ⚠️ 同上：navigate 目标相对 basename，不能带 /admin 前缀，
+                      //    否则「重新登录」落到 /admin/admin/login?... → 404，用户回不来。
+                      navigate(`/login?reason=expired&next=${encodeURIComponent(rel)}`)
                     }}
                   >
                     重新登录

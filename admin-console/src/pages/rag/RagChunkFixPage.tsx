@@ -47,6 +47,18 @@ import {
 
 const { Text, Paragraph } = Typography
 
+/**
+ * 来源 ID 必须是完整 UUID 才允许打后端。
+ *
+ * ⚠️ 此前每敲一个字符就触发一次 `listRagDocuments`，partial UUID 在服务端
+ *    被转成 `?::uuid` 时抛 `invalid input syntax for type uuid`，表现为
+ *    一连串 500 —— 用户只是在输入，却看到「读取载体失败」。
+ *    校验形状 + 300ms 防抖，既消除假错误，也少打不必要的请求。
+ */
+const SOURCE_UUID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+const SOURCE_LOAD_DEBOUNCE_MS = 300
+
 /** 可重判的目标角色（与 `ChunkRole` 枚举一致）。 */
 const TARGET_ROLES = [
   { value: 'EXERCISE_ANSWER', label: '习题答案 EXERCISE_ANSWER', danger: true },
@@ -133,7 +145,10 @@ function RagChunkFixBody({ scope }: RagScopePageProps): JSX.Element {
   }, [scopeKey])
 
   useEffect(() => {
-    if (sourceId) void loadDocs(sourceId)
+    const sid = sourceId.trim()
+    if (!SOURCE_UUID_PATTERN.test(sid)) return
+    const timer = setTimeout(() => void loadDocs(sid), SOURCE_LOAD_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
   }, [sourceId, loadDocs])
 
   useEffect(() => {
@@ -181,6 +196,11 @@ function RagChunkFixBody({ scope }: RagScopePageProps): JSX.Element {
                 value={sourceId}
                 onChange={(e) => setSourceId(e.target.value.trim())}
               />
+              {sourceId && !SOURCE_UUID_PATTERN.test(sourceId.trim()) ? (
+                <Text type="warning" style={{ fontSize: 12 }}>
+                  输入完整 UUID 后自动加载载体
+                </Text>
+              ) : null}
               <Text>载体</Text>
               <Segmented
                 value={activeDoc?.documentId ?? ''}

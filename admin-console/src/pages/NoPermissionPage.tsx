@@ -1,6 +1,5 @@
 import { Result, Button } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { APP_BASE_PATH } from '@/config/constants'
 
 /**
  * 业务无权限整页（区分于「未登录」跳登录）。
@@ -27,7 +26,14 @@ export function NoPermissionPage(): JSX.Element {
       title="403 · 无权限"
       subTitle={reason}
       extra={
-        <Button type="primary" onClick={() => navigate(`${APP_BASE_PATH}/tenants`)}>
+        <Button
+          type="primary"
+          onClick={() => {
+            // ⚠️ navigate 目标相对 Router basename（/admin），不带前缀；
+            //    带上 /admin 会拼成 /admin/admin/tenants → 404。
+            navigate('/tenants')
+          }}
+        >
           返回租户管理
         </Button>
       }
