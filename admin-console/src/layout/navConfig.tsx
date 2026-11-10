@@ -163,32 +163,19 @@ export const NAV_GROUPS: NavGroup[] = [
       },
     ],
   },
-  {
-    key: 'knowledge',
-    label: '知识与数据',
-    icon: <DatabaseOutlined />,
-    requiredRoles: PLATFORM_SCOPE_ROLES,
-    children: [
-      {
-        key: 'rag',
-        label: 'RAG 语料管理',
-        path: '/rag/dashboard',
-        icon: <FileSearchOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description:
-          '教辅语料治理：登记 → 校验流转 → 可检索。独立 RAG 服务（默认 8081，/api/v1/management/*），'
-          + '平台数据优先：首屏默认展示平台全局语料、不选租户（读走登录态、写需治理票据）；'
-          + '切到本租户语料档需选租户（读写俱全）。作用域由 X-Rag-Scope 显式声明。撤回是终态、无删除入口。',
-        phase: '知识与数据',
-      },
-    ],
-  },
   // ------------------------------------------------------------------
   // RAG 语料管理 · 四治理域分区（RAG-D13 §2.1 / RAG-D14）
   //
   // ⚠️ 改造前 RAG 只有 /rag 一个入口，页内挂 5 个 Tab——用户进去不知道先看哪，
   //    且「审核」「运维」两种完全不同的职责混在同一页（RAG-D12 靶点 G）。
   //    现按治理域拆成四个分组，每组页面共享同一类角色与同一种操作语气。
+  //
+  // ⚠️ 2026-11-10 E2E 修复：原先「知识与数据」分组下还留着一个改造前的
+  //    「RAG 语料管理」入口，path 同样指向 /rag/dashboard。AdminLayout 用
+  //    n.path 作 Menu key，两个入口 key 撞车 → AntD 打
+  //    "Duplicated key '/rag/dashboard'" 警告且选中态落在非预期分组。
+  //    该入口与下面「RAG · 录入与校对 → Dashboard 总览」完全同路由、零功能差别，
+  //    故删除遗留项而不是造第二个假路由：菜单 key 必须唯一，且每条 path 只有一个入口。
   // ------------------------------------------------------------------
   {
     key: 'rag-ingest',

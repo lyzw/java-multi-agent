@@ -13,6 +13,7 @@ import java.util.Map;
 import org.jspecify.annotations.NonNull;
 
 import cn.studykid.rag.ports.EmbeddingPort;
+import cn.studykid.rag.ports.EmbeddingUnavailableException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -118,17 +119,23 @@ public class OpenAiCompatibleEmbeddingPort implements EmbeddingPort {
             HttpResponse<String> response =
                     httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() / 100 != 2) {
-                throw new IllegalStateException(
-                        "Embedding 服务返回 HTTP %d：%s".formatted(response.statusCode(), response.body()));
+                // ⚠️ 上游不可用是「暂时故障」，不是代码/配置契约错误：
+                //    单独一类让 HTTP 层映射成 503 + 可执行提示，而不是无名 500。
+                //    ⚠️ 不把 response.body() 原文拼进消息（可能含密钥或语料）。
+                throw new EmbeddingUnavailableException(
+                        "Embedding 服务返回 HTTP %d：%s".formatted(response.statusCode(), endpoint));
             }
             root = mapper.readTree(response.body());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Embedding 请求被中断：" + endpoint, e);
-        } catch (IllegalStateException e) {
+            throw new EmbeddingUnavailableException("Embedding 请求被中断：" + endpoint, e);
+        } catch (EmbeddingUnavailableException e) {
             throw e;
         } catch (Exception e) {
-            throw new IllegalStateException("Embedding 请求失败：" + endpoint + "（" + e + "）", e);
+            // 连接拒绝 / 超时 / DNS 失败等：外部依赖没起是最常见的真实原因，
+            // 必须让调用方看到「嵌入服务不可用」而不是一条泛化的 500。
+            throw new EmbeddingUnavailableException("Embedding 请求失败：" + endpoint
+                    + "（" + e.getClass().getSimpleName() + ": " + e.getMessage() + "）", e);
         }
         JsonNode data = root.path("data");
         if (!data.isArray()) {

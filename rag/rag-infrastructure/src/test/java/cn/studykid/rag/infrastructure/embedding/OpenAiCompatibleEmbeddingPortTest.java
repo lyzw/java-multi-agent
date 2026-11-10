@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import cn.studykid.rag.ports.EmbeddingPort;
+import cn.studykid.rag.ports.EmbeddingUnavailableException;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -162,9 +163,28 @@ class OpenAiCompatibleEmbeddingPortTest {
     @Test
     void surfacesHttpError() {
         register((exchange, body) -> write(exchange, 404, "{\"error\":\"model not found\"}"));
-        IllegalStateException e = assertThrows(IllegalStateException.class,
+        // 2026-11-10 E2E D-03：上游不可用必须与「代码/配置契约错误」分开，
+        // HTTP 层据此映射 503 而不是无名 500。
+        EmbeddingUnavailableException e = assertThrows(EmbeddingUnavailableException.class,
                 () -> port(4, 16).embed(List.of("x")));
         assertTrue(e.getMessage().contains("HTTP 404"), e.getMessage());
+    }
+
+    @Test
+    void connectionRefusedIsReportedAsUnavailableNotServerBug() throws IOException {
+        // 取一个刚释放、当前没有监听者的本地端口 —— 等价于「本机 Ollama 没启动」。
+        int deadPort;
+        try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
+            deadPort = probe.getLocalPort();
+        }
+        OpenAiCompatibleEmbeddingPort p = new OpenAiCompatibleEmbeddingPort(
+                "http://127.0.0.1:" + deadPort + "/v1", "k", "m", 4, 16, Duration.ofSeconds(3));
+
+        EmbeddingUnavailableException e = assertThrows(EmbeddingUnavailableException.class,
+                () -> p.embed(List.of("二次函数的顶点式")));
+        assertTrue(e.getMessage().contains("Embedding 请求失败"), e.getMessage());
+        assertTrue(e.getMessage().contains(String.valueOf(deadPort)), e.getMessage());
+        // ⚠️ 反向验证：把实现改回抛 IllegalStateException，本用例与 surfacesHttpError 都会红。
     }
 
     @Test

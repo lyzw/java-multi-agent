@@ -1,6 +1,7 @@
 package cn.studykid.rag.infrastructure.ingest;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -241,5 +242,56 @@ class GlobalIngestRepositoryTest {
         RagOpsUnavailableException ex = assertThrows(RagOpsUnavailableException.class,
                 repo::claimNextGlobalJob);
         assertEquals("rag.ops.datasource", ex.missingConfiguration());
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // 2026-11-10 E2E 缺陷 D-01 守卫：平台档任务列表只能读全局桶
+    //
+    // ⚠️ 反向验证：把 listGlobalJobs 改回应用连接（或复用 listRecentByTenant），
+    //    ops.entries()=1 / verifyNoInteractions(appJdbc) / 桶谓词断言会立刻红。
+    // ──────────────────────────────────────────────────────────────────
+
+    @Test
+    void listGlobalJobsReadsOnlyGlobalBucketThroughOpsSession() {
+        List<String> sink = new java.util.ArrayList<>();
+        RecordingOpsSession opsSession = new RecordingOpsSession(recordingJdbc(sink), passthroughTx());
+        JdbcIngestJobRepository repo = new JdbcIngestJobRepository(appJdbc, passthroughTx(), opsSession);
+
+        List<IngestJob> rows = repo.listGlobalJobs(null, 20);
+
+        assertEquals(1, rows.size());
+        assertEquals(1, opsSession.entries(), "全局桶读取必须发生在运维会话窗内");
+        String sql = sink.stream().filter(s -> s.contains("FROM rag_ingest_job"))
+                .findFirst().orElseThrow();
+        assertTrue(sql.contains("tenant_id = rag_global_tenant_id()"),
+                "BYPASSRLS 下没有策略兜底，桶谓词是唯一隔离边界");
+        assertFalse(sql.contains("app.tenant_id"),
+                "平台档绝不把全局哨兵写进会话变量（rag_current_tenant() 会抛 42501）");
+        verifyNoInteractions(appJdbc);
+    }
+
+    @Test
+    void listGlobalJobsBySourceKeepsGlobalPredicate() {
+        List<String> sink = new java.util.ArrayList<>();
+        RecordingOpsSession opsSession = new RecordingOpsSession(recordingJdbc(sink), passthroughTx());
+        JdbcIngestJobRepository repo = new JdbcIngestJobRepository(appJdbc, passthroughTx(), opsSession);
+
+        repo.listGlobalJobs("22222222-2222-2222-2222-222222222222", 5);
+
+        String sql = sink.stream().filter(s -> s.contains("FROM rag_ingest_job"))
+                .findFirst().orElseThrow();
+        assertTrue(sql.contains("source_id = ?::uuid"));
+        assertTrue(sql.contains("tenant_id = rag_global_tenant_id()"),
+                "按来源过滤不能把全局桶谓词挤掉");
+    }
+
+    @Test
+    void listGlobalJobsWithoutOpsSessionFailsClosed() {
+        JdbcIngestJobRepository repo = new JdbcIngestJobRepository(appJdbc, passthroughTx(), null);
+
+        RagOpsUnavailableException ex = assertThrows(RagOpsUnavailableException.class,
+                () -> repo.listGlobalJobs(null, 20));
+        assertEquals("rag.ops.datasource", ex.missingConfiguration());
+        verifyNoInteractions(appJdbc);
     }
 }

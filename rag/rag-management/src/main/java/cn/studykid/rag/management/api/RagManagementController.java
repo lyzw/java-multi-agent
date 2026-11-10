@@ -2138,12 +2138,36 @@ public class RagManagementController {
             log.warn("[RAG] 摄取任务端口未装配，返回空任务列表");
             return List.of();
         }
-        String tid = ctx.requireTenant().tenantId();
         int capped = Math.max(1, Math.min(limit, 200));
-        // ⚠️ 端口按 sourceId 查询；未指定时用该租户最近的 job（见实现注释）。
-        return (sourceId == null || sourceId.isBlank()
-                        ? ingestJobPort.listRecentByTenant(tid, capped)
-                        : ingestJobPort.listBySource(sourceId, capped))
+        java.util.List<cn.studykid.rag.core.ingest.IngestJob> jobs;
+        if (ctx.scope() == RagCorpusScope.PLATFORM) {
+            // ⚠️⚠️ 平台全局档没有「本租户」：改造前这里直接 ctx.requireTenant()，
+            //    非租户档必抛 IllegalStateException → GET /ingest-jobs 恒 500。
+            //    但也不能只把哨兵塞给租户侧端口：rag_ingest_job 的 RLS 是
+            //    tenant_id = rag_current_tenant()，应用角色在置空会话下读 0 行
+            //    （静默空列表），把哨兵写进会话又会撞 42501。
+            //    故全局桶列表与全局建单一样走 rag_ops 运维通道。
+            if (globalIngestJobPort == null) {
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "平台档（PLATFORM）全局摄取任务列表需要运维通道（rag.ops 未启用/未配置）");
+            }
+            try {
+                jobs = globalIngestJobPort.listGlobalJobs(sourceId, capped);
+            } catch (RagOpsUnavailableException e) {
+                // ⚠️ 部署缺陷要呈现为明确的 503，绝不回落应用角色给出「暂无任务」的假象。
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "平台档全局摄取任务列表不可用（" + e.missingConfiguration() + "）："
+                                + e.getMessage(), e);
+            }
+        } else {
+            // TENANT 档（ALL 已在 requireManagementContext 处以 501 拒绝）。
+            String tid = ctx.requireTenant().tenantId();
+            // ⚠️ 端口按 sourceId 查询；未指定时用该租户最近的 job（见实现注释）。
+            jobs = (sourceId == null || sourceId.isBlank()
+                    ? ingestJobPort.listRecentByTenant(tid, capped)
+                    : ingestJobPort.listBySource(sourceId, capped));
+        }
+        return (jobs == null ? java.util.List.<cn.studykid.rag.core.ingest.IngestJob>of() : jobs)
                 .stream().map(ManagementDtos::toIngestJobResponse).toList();
     }
 

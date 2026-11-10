@@ -25,6 +25,7 @@ import cn.studykid.rag.core.version.EditionCoordinate.Subject;
 import cn.studykid.rag.core.version.EditionCoordinate.Term;
 import cn.studykid.rag.core.version.EditionScope;
 import cn.studykid.rag.core.version.EditionScope.Mode;
+import cn.studykid.rag.ports.EmbeddingUnavailableException;
 import cn.studykid.rag.ports.TenantScopedGeneration;
 import cn.studykid.rag.ports.TenantScopedRetrieval;
 
@@ -87,7 +88,18 @@ public class RagRetrievalController {
                                        @Valid @RequestBody RetrievalRequestDto dto) {
         String tenant = requireTenant(tenantId);
         RetrievalRequest request = toRequest(dto);
-        RetrievalResult result = tenantScopedRetrieval.retrieve(tenant, request);
+        RetrievalResult result;
+        try {
+            result = tenantScopedRetrieval.retrieve(tenant, request);
+        } catch (EmbeddingUnavailableException e) {
+            // ⚠️ 稠密向量拿不到时绝不静默退化成纯词法检索（分数口径会悄悄变、
+            //    页面却显示检索成功），必须 fail-closed 并给出可执行的 503。
+            //    改造前本机 Ollama 未启动会以无名 500 呈现，运维无从判断原因。
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                    "嵌入模型服务不可用，检索暂不可用（" + e.getMessage()
+                            + "）。请确认 RAG_EMBEDDING_BASE_URL 指向的服务与模型已启动后重试。", e);
+        }
         return RetrievalResultDto.from(result);
     }
 

@@ -100,6 +100,43 @@ public class JdbcIngestJobRepository implements IngestJobPort {
                 }));
     }
 
+    /**
+     * 列出平台<b>全局桶</b>最近的摄取任务（管理面 PLATFORM 档的任务列表）。
+     *
+     * <p><b>⚠️ 不能复用 {@link #listRecentByTenant}</b>：那条走应用连接 + 租户会话，
+     * 而本表的 RLS 策略是 {@code tenant_id = rag_current_tenant()}；平台档会话租户
+     * 按设计置空，应用角色对全局行恒读 0 行（静默空列表），把全局哨兵塞进
+     * {@code app.tenant_id} 又会被 {@code rag_current_tenant()} 以 42501 拒绝（500）。
+     * 所以这里与 {@link #createGlobalJob} 一样走 {@code rag_ops} 运维会话（BYPASSRLS）。
+     *
+     * <p>⚠️ BYPASSRLS 下没有策略兜底，{@code tenant_id = rag_global_tenant_id()}
+     * 这个谓词就是<b>唯一</b>的桶边界——它写死在 SQL 文本里，签名里没有租户参数可填。
+     *
+     * @param sourceId 可选：按来源过滤；空表示列全局桶最近任务
+     * @param limit 条数上限（夹到 1~200）
+     * @return 任务列表（新→旧）
+     */
+    public @NonNull List<IngestJob> listGlobalJobs(@Nullable String sourceId, int limit) {
+        if (opsSession == null) {
+            // ⚠️ 绝不回落应用角色：那会给出「暂无任务」的假象（真实全局 job 读不到）。
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局语料读通道未接入：列全局摄取任务需要运维数据源（rag_ops），不回落应用角色");
+        }
+        int capped = Math.max(1, Math.min(limit, 200));
+        boolean bySource = sourceId != null && !sourceId.isBlank();
+        List<IngestJob> rows = opsSession.inGlobalCorpusSession((opsTemplate, opsTx) ->
+                opsTx.execute(status -> {
+                    String sql = "SELECT " + COLUMNS + " FROM rag_ingest_job"
+                            + " WHERE tenant_id = rag_global_tenant_id()"
+                            + (bySource ? " AND source_id = ?::uuid" : "")
+                            + " ORDER BY created_at DESC LIMIT ?";
+                    return bySource
+                            ? opsTemplate.query(sql, this::mapJob, sourceId, capped)
+                            : opsTemplate.query(sql, this::mapJob, capped);
+                }));
+        return rows == null ? List.of() : rows;
+    }
+
     /** 列清单（读取顺序与 {@link #mapJob} 严格对应）。 */
     private static final String COLUMNS =
             "job_id, tenant_id, source_id, status, stage, attempt, created_by,"

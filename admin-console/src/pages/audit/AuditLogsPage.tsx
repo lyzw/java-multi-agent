@@ -24,18 +24,27 @@ import { scrollXOf } from '@/shared/tableLayout'
 
 const { Text } = Typography
 
-/** 时间窗（小时）→ ISO 起始时刻；null = 不限 */
-function windowFrom(hours: number | null): string | null {
-  if (hours === null) return null
+/**
+ * 时间窗「不限」的哨兵值。
+ *
+ * ⚠️ AntD Select 的 option value 不允许 null / undefined（会打
+ * "`value` in Select options should not be `null`" 控制台警告，且选中态不可靠）。
+ * 所以用显式数值哨兵表达「不限」，在 windowFrom 里再映射回 null。
+ */
+export const NO_LIMIT_WINDOW_HOURS = 0
+
+/** 时间窗（小时）→ ISO 起始时刻；NO_LIMIT_WINDOW_HOURS = 不限 */
+export function windowFrom(hours: number): string | null {
+  if (hours === NO_LIMIT_WINDOW_HOURS) return null
   return new Date(Date.now() - hours * 3600_000).toISOString()
 }
 
-const WINDOW_FILTERS: Array<{ value: number | null; label: string }> = [
+export const WINDOW_FILTERS: Array<{ value: number; label: string }> = [
   { value: 1, label: '最近 1 小时' },
   { value: 24, label: '最近 24 小时' },
   { value: 72, label: '最近 3 天' },
   { value: 168, label: '最近 7 天' },
-  { value: null, label: '不限' },
+  { value: NO_LIMIT_WINDOW_HOURS, label: '不限' },
 ]
 
 const DECISION_COLOR: Record<string, string> = {
@@ -53,7 +62,7 @@ const DECISION_COLOR: Record<string, string> = {
  * 本页无任何写/删入口。需 {@code platform.audit.read}（PLATFORM_AUDITOR 等）。
  */
 export function AuditLogsPage(): JSX.Element {
-  const [windowHours, setWindowHours] = useState<number | null>(24)
+  const [windowHours, setWindowHours] = useState<number>(24)
   const [action, setAction] = useState('')
   const [actorId, setActorId] = useState('')
   const [targetType, setTargetType] = useState('')

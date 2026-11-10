@@ -90,14 +90,15 @@ public class JdbcKnowledgeAliasRepository implements KnowledgeAliasPort {
         if (limit <= 0) {
             throw new IllegalArgumentException("limit 必须 > 0");
         }
-        // ⚠️ 用 queryTenantId() 而非 requireTenant()：
-        //    平台全局档（不选租户）也要能看知识点；requireTenant() 对非租户档直接抛错。
-        //    RLS 读策略已把范围收在「本租户 ∪ 全局」。
-        String tenantId = context.queryTenantId();
+        // ⚠️⚠️ 会话租户必须按作用域建立，绝不能把 queryTenantId() 直接写进 app.tenant_id：
+        //    平台档的 queryTenantId() 是全局哨兵，而 rag_current_tenant() 对哨兵会抛
+        //    SQLSTATE 42501（迁移 V8 §1 的越权封堵）——实测表现为 GET /knowledge-points
+        //    在平台全局档恒 500。RagSessionScope.apply 对平台档显式置空、对租户档绑真实租户；
+        //    置空后 RLS 读策略只剩「全局行」一支，正是平台档要看的那批知识点。
+        //    这与 listSources / listInspectionSuspects 走的是同一个入口，不另写一份。
         String kw = (keyword == null || keyword.isBlank()) ? null : keyword.trim();
         List<KnowledgePointBrief> rows = transactionTemplate.execute(tx -> {
-            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
-                    String.class, tenantId);
+            RagSessionScope.apply(jdbcTemplate, context);
             return jdbcTemplate.query("""
                     SELECT kp_id::text, subject, grade, canonical_name,
                            COALESCE(array_length(aliases, 1), 0) AS alias_count,

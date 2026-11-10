@@ -1,5 +1,7 @@
 package cn.studykid.rag.management.infrastructure;
 
+import java.util.List;
+
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -10,6 +12,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import cn.studykid.rag.core.ingest.IngestJob;
 import cn.studykid.rag.infrastructure.indexing.ChunkIndexer;
 import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
 import cn.studykid.rag.management.infrastructure.LocalObjectStoreAdapter;
@@ -274,7 +277,20 @@ public class RagManagementConfig {
      */
     @Bean
     public GlobalIngestJobPort globalIngestJobPort(JdbcIngestJobRepository ingestJobRepository) {
-        return ingestJobRepository::createGlobalJob;
+        // ⚠️ 接口现在有两个方法（建单 + 平台档列表），不再是函数式接口：
+        //    不能继续用方法引用，否则平台档列表会在装配期缺失实现。
+        //    两条都委托给同一份仓储（运维通道已注入），口径只有一处。
+        return new GlobalIngestJobPort() {
+            @Override
+            public IngestJob createGlobalJob(String sourceId, String createdBy) {
+                return ingestJobRepository.createGlobalJob(sourceId, createdBy);
+            }
+
+            @Override
+            public List<IngestJob> listGlobalJobs(String sourceId, int limit) {
+                return ingestJobRepository.listGlobalJobs(sourceId, limit);
+            }
+        };
     }
 
     /**

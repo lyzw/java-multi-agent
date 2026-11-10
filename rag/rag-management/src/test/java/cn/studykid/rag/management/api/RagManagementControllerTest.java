@@ -38,6 +38,7 @@ import cn.studykid.rag.management.core.ReviewerRosterEntry;
 import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.SourceVerification.VerificationStatus;
 import cn.studykid.rag.core.source.TrustTier;
+import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
 import cn.studykid.rag.management.core.CorpusDocument;
 import cn.studykid.rag.management.core.CorpusIssues;
 import cn.studykid.rag.management.core.CorpusSource;
@@ -1233,5 +1234,72 @@ class RagManagementControllerTest {
                         TENANT_CALLER, null, REVIEWER, file, null, null));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
         verifyNoInteractions(objectStore, port);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // 2026-11-10 E2E 缺陷 D-01 守卫：GET /ingest-jobs 平台档不再 500
+    //
+    // ⚠️ 反向验证：把控制器改回 `String tid = ctx.requireTenant().tenantId()`，
+    //    第一个用例会立刻抛 IllegalStateException（平台档无租户上下文）而变红；
+    //    只把平台档改走租户侧端口（不接运维通道）也会被第三个用例的 503 断言挡住。
+    // ──────────────────────────────────────────────────────────────────
+
+    /** 运维通道未装配的控制器：平台档必须 503，绝不回落应用角色报「暂无任务」。 */
+    private final RagManagementController controllerWithoutOps =
+            new RagManagementController(port, indexingPort, dictionaryPort, objectStore,
+                    null, ingestJobPort, null, null, null, null, null, null);
+
+    @Test
+    @DisplayName("平台档摄取任务列表走全局桶运维通道，不调用 requireTenant()")
+    void platformScopeIngestJobsReadsGlobalBucketThroughOps() {
+        when(globalIngestJobPort.listGlobalJobs(null, 20))
+                .thenReturn(List.of(pendingJob("job-global-1")));
+
+        List<ManagementDtos.IngestJobResponse> rows = controllerWithJobPort.listIngestJobs(
+                null, null, SCOPE_PLATFORM, PLATFORM_CALLER, null, 20);
+
+        assertEquals(1, rows.size());
+        assertEquals("job-global-1", rows.get(0).jobId());
+        verify(globalIngestJobPort).listGlobalJobs(null, 20);
+        verify(ingestJobPort, never()).listRecentByTenant(any(), anyInt());
+        verify(ingestJobPort, never()).listBySource(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("租户档摄取任务列表仍按租户读，不误切到运维通道")
+    void tenantScopeIngestJobsStillReadsTenantBucket() {
+        when(ingestJobPort.listRecentByTenant(TENANT, 20))
+                .thenReturn(List.of(pendingJob("job-tenant-1")));
+
+        List<ManagementDtos.IngestJobResponse> rows = controllerWithJobPort.listIngestJobs(
+                TENANT, null, SCOPE_TENANT, PLATFORM_CALLER, null, 20);
+
+        assertEquals(1, rows.size());
+        assertEquals("job-tenant-1", rows.get(0).jobId());
+        verify(ingestJobPort).listRecentByTenant(TENANT, 20);
+        verify(globalIngestJobPort, never()).listGlobalJobs(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("平台档运维通道未装配 → 503（不是 500，也不是静默空列表）")
+    void platformScopeIngestJobsWithoutOpsChannelReturns503() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controllerWithoutOps.listIngestJobs(
+                        null, null, SCOPE_PLATFORM, PLATFORM_CALLER, null, 20));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatusCode());
+        verify(ingestJobPort, never()).listRecentByTenant(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("平台档运维通道不可用异常 → 503 并带出缺失配置键")
+    void platformScopeIngestJobsOpsUnavailableMapsTo503() {
+        when(globalIngestJobPort.listGlobalJobs(null, 20))
+                .thenThrow(new RagOpsUnavailableException("rag.ops.datasource", "通道未接入"));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controllerWithJobPort.listIngestJobs(
+                        null, null, SCOPE_PLATFORM, PLATFORM_CALLER, null, 20));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("rag.ops.datasource"));
     }
 }

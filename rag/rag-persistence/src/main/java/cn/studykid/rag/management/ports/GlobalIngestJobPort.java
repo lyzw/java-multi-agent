@@ -1,6 +1,9 @@
 package cn.studykid.rag.management.ports;
 
+import java.util.List;
+
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import cn.studykid.rag.core.ingest.IngestJob;
 
@@ -32,4 +35,24 @@ public interface GlobalIngestJobPort {
      */
     @NonNull
     IngestJob createGlobalJob(@NonNull String sourceId, @NonNull String createdBy);
+
+    /**
+     * 列出<b>全局桶</b>最近的摄取任务（管理面平台档「摄取任务」页用）。
+     *
+     * <p><b>⚠️ 为什么必须走运维通道</b>：{@code rag_ingest_job} 的 RLS 策略是
+     * {@code tenant_id = rag_current_tenant()}，而平台档的会话租户按设计<b>置空</b>，
+     * 应用角色 {@code rag_app} 因此对全局行恒读 0 行。用应用连接查只会得到
+     * 「暂无任务」这种静默失真；拿全局哨兵去 {@code set_config} 更会被
+     * {@code rag_current_tenant()} 的越权封堵（SQLSTATE 42501）打成 500。
+     *
+     * <p><b>⚠️ 方法名里没有租户参数</b>：桶由 SQL 谓词写死为
+     * {@code tenant_id = rag_global_tenant_id()}，调用方拼不出「查某个租户的任务」。
+     *
+     * @param sourceId 可选：按来源过滤；为 {@code null}/空串时返回全局桶最近的任务
+     * @param limit    条数上限（实现内部同样会夹到 1~200）
+     * @return 任务列表（新→旧）；通道未接入时抛 {@code RagOpsUnavailableException}
+     *         由管理面呈现为 503，<b>不</b>回落成空列表
+     */
+    @NonNull
+    List<IngestJob> listGlobalJobs(@Nullable String sourceId, int limit);
 }
