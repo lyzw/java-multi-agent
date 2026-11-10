@@ -1302,4 +1302,158 @@ class RagManagementControllerTest {
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatusCode());
         assertTrue(ex.getReason().contains("rag.ops.datasource"));
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    // 平台档「摄取任务重试」守卫（2026-11-10 页面端导入实测缺陷）
+    //
+    // ⚠️ 反向验证：把 retryIngestJob 改回无条件 ctx.requireTenant() +
+    //    findByIdForTenant / createRetryJob（即修复前形态），
+    //    platformScopeRetryRoutesToGlobalBucket 会立刻在 ctx.requireTenant() 抛
+    //    IllegalStateException（平台档无租户上下文）而变红；
+    //    只把「读」改走全局端口却把「建」留在租户端口，会因 verify never() 变红。
+    // ──────────────────────────────────────────────────────────────────
+
+    /** 终态 job 夹具：重试只接受已结束的任务（终态不变式要求 finishedAt 必填）。 */
+    private static IngestJob terminalJob(String jobId, IngestJobStatus status) {
+        return new IngestJob(jobId, RagScope.GLOBAL_TENANT_ID, SOURCE_ID,
+                status, "EMBEDDING 0", 0, REVIEWER, null, null, null,
+                "全局摄入阶段 EMBEDDING 失败",
+                "2026-11-10T00:00:00Z", "2026-11-10T01:00:00Z", "2026-11-10T00:00:00Z");
+    }
+
+    @Test
+    @DisplayName("平台档重试走全局桶：读+建都走运维通道，租户端口零交互")
+    void platformScopeRetryRoutesToGlobalBucket() {
+        when(globalIngestJobPort.findByIdGlobal("job-global-failed"))
+                .thenReturn(terminalJob("job-global-failed", IngestJobStatus.FAILED));
+        when(globalIngestJobPort.createRetryGlobalJob(
+                eq(SOURCE_ID), eq(REVIEWER), eq("job-global-failed")))
+                .thenReturn(pendingJob("job-global-retry"));
+
+        ManagementDtos.IngestJobResponse response = controllerWithJobPort.retryIngestJob(
+                null, null, SCOPE_PLATFORM, PLATFORM_CALLER, PLATFORM_TICKET,
+                REVIEWER, "job-global-failed");
+
+        assertEquals("job-global-retry", response.jobId());
+        verify(globalIngestJobPort).findByIdGlobal("job-global-failed");
+        verify(globalIngestJobPort).createRetryGlobalJob(
+                eq(SOURCE_ID), eq(REVIEWER), eq("job-global-failed"));
+        // ⚠️ 反向验证的承重断言：修复前这两条会走到租户端口
+        verify(ingestJobPort, never()).findByIdForTenant(any(), any());
+        verify(ingestJobPort, never()).createRetryJob(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("平台档重试缺省操作人回落到原 job 建单人（仍走全局端口）")
+    void platformScopeRetryFallsBackToOriginCreator() {
+        when(globalIngestJobPort.findByIdGlobal("job-global-failed"))
+                .thenReturn(terminalJob("job-global-failed", IngestJobStatus.SUCCEEDED));
+        when(globalIngestJobPort.createRetryGlobalJob(
+                eq(SOURCE_ID), eq(REVIEWER), eq("job-global-failed")))
+                .thenReturn(pendingJob("job-global-retry-2"));
+
+        controllerWithJobPort.retryIngestJob(
+                null, null, SCOPE_PLATFORM, PLATFORM_CALLER, PLATFORM_TICKET,
+                null, "job-global-failed");
+
+        // principalAttr 缺省 → 用 origin.createdBy()（夹具里是 REVIEWER）
+        verify(globalIngestJobPort).createRetryGlobalJob(
+                eq(SOURCE_ID), eq(REVIEWER), eq("job-global-failed"));
+    }
+
+    @Test
+    @DisplayName("平台档重试非终态 job → 409，且不建新行（防并行重复落库）")
+    void platformScopeRetryOnNonTerminalJobIsConflict() {
+        when(globalIngestJobPort.findByIdGlobal("job-global-stuck"))
+                .thenReturn(terminalJob("job-global-stuck", IngestJobStatus.PARSING));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controllerWithJobPort.retryIngestJob(
+                        null, null, SCOPE_PLATFORM, PLATFORM_CALLER, PLATFORM_TICKET,
+                        REVIEWER, "job-global-stuck"));
+
+        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
+        verify(globalIngestJobPort, never())
+                .createRetryGlobalJob(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("平台档重试不存在的 job → 404")
+    void platformScopeRetryMissingJobIsNotFound() {
+        when(globalIngestJobPort.findByIdGlobal("no-such-job")).thenReturn(null);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controllerWithJobPort.retryIngestJob(
+                        null, null, SCOPE_PLATFORM, PLATFORM_CALLER, PLATFORM_TICKET,
+                        REVIEWER, "no-such-job"));
+
+        assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
+        verify(globalIngestJobPort, never())
+                .createRetryGlobalJob(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("平台档重试运维通道未装配 → 503（全局端口为 null）")
+    void platformScopeRetryWithoutOpsChannelIs503() {
+        // globalIngestJobPort 未注入（第 7 位参数为 null）
+        RagManagementController noGlobal =
+                new RagManagementController(port, indexingPort, dictionaryPort, objectStore,
+                        null, ingestJobPort, null, null, null, null, null, null);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> noGlobal.retryIngestJob(
+                        null, null, SCOPE_PLATFORM, PLATFORM_CALLER, PLATFORM_TICKET,
+                        REVIEWER, "job-global-failed"));
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatusCode());
+        verify(ingestJobPort, never()).findByIdForTenant(any(), any());
+    }
+
+    @Test
+    @DisplayName("平台档重试运维通道异常 → 503 并带出缺失配置键")
+    void platformScopeRetryOpsUnavailableMapsTo503() {
+        when(globalIngestJobPort.findByIdGlobal("job-global-failed"))
+                .thenThrow(new RagOpsUnavailableException("rag.ops.datasource", "通道未接入"));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controllerWithJobPort.retryIngestJob(
+                        null, null, SCOPE_PLATFORM, PLATFORM_CALLER, PLATFORM_TICKET,
+                        REVIEWER, "job-global-failed"));
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("rag.ops.datasource"));
+    }
+
+    @Test
+    @DisplayName("平台档重试无治理票据 → 403（requireWriteContext 统一把关）")
+    void platformScopeRetryWithoutTicketIsForbidden() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controllerWithJobPort.retryIngestJob(
+                        null, null, SCOPE_PLATFORM, PLATFORM_CALLER, null,
+                        REVIEWER, "job-global-failed"));
+
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        verifyNoInteractions(globalIngestJobPort, ingestJobPort);
+    }
+
+    @Test
+    @DisplayName("租户档重试仍走租户端口，全局端口零交互（无回归）")
+    void tenantScopeRetryStillUsesTenantBucket() {
+        when(ingestJobPort.findByIdForTenant(TENANT, "job-tenant-failed"))
+                .thenReturn(terminalJob("job-tenant-failed", IngestJobStatus.FAILED));
+        when(ingestJobPort.createRetryJob(
+                eq(TENANT), eq(SOURCE_ID), eq(REVIEWER), eq("job-tenant-failed")))
+                .thenReturn(pendingJob("job-tenant-retry"));
+
+        ManagementDtos.IngestJobResponse response = controllerWithJobPort.retryIngestJob(
+                TENANT, null, SCOPE_TENANT, PLATFORM_CALLER, null,
+                REVIEWER, "job-tenant-failed");
+
+        assertEquals("job-tenant-retry", response.jobId());
+        verify(ingestJobPort).findByIdForTenant(TENANT, "job-tenant-failed");
+        verify(ingestJobPort).createRetryJob(
+                eq(TENANT), eq(SOURCE_ID), eq(REVIEWER), eq("job-tenant-failed"));
+        verify(globalIngestJobPort, never()).findByIdGlobal(any());
+        verify(globalIngestJobPort, never()).createRetryGlobalJob(any(), any(), any());
+    }
 }

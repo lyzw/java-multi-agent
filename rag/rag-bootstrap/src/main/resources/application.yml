@@ -4,11 +4,11 @@ spring:
   servlet:
     multipart:
       # ⚠️ 载体上传端点（POST /sources/{sourceId}/documents）依赖 multipart 解析。
-      #    默认上限 50MB：语料 PDF / EPUB 单册通常不会超此值；
-      #    调大需同步调整反向代理（若有）的请求体上限。
+      #    2026-11-10 实测：六年级数学下册扫描版 PDF 178MB，旧 50MB 上限直接 413，
+      #    页面无可读原因。抬到 256MB 以覆盖整册扫描件；反向代理若有同样限制需同步。
       enabled: true
-      max-file-size: 50MB
-      max-request-size: 50MB
+      max-file-size: 256MB
+      max-request-size: 256MB
   datasource:
     # ⚠️ 生产必须通过环境变量（RAG_PG_*）覆盖：连接角色必须是
     #    「非特权 + 无 BYPASSRLS」的应用账号（详见 RagStartupSelfCheck）。
@@ -24,6 +24,15 @@ spring:
       #    否则未限定名解析不到对象（表现为 relation does not exist）。
       #    public 保留在末尾：pgvector 的 vector 类型在 public。
       connection-init-sql: SET search_path TO rag, public
+      # ⚠️ 空闲保活 + 定期轮换：长册摄取（Docling 解析十几分钟后一次性写 embedding/chunk）
+      #    期间连接长时间空闲，托管 RDS 会回收空闲数百秒的连接；Hikari 默认不保活，
+      #    写阶段会拿到已被服务端关闭的死连接（This connection has been closed.）。
+      #    keepalive 必须 < max-lifetime；两者都 < 常见 600s 空闲回收线。
+      #    2026-11-10 语文下册 146 页摄取失败即此根因（HikariPool-1 与 rag-platform-ops 同时告警）。
+      keepalive-time: 120000
+      idle-timeout: 300000
+      max-lifetime: 540000
+      validation-timeout: 5000
   flyway:
     # ⛔ 迁移链 V1~V8 的脚本已从仓库删除，`classpath:db/migration` 现在是空目录。
     #    结构唯一权威源是 deploy/sql/rag/01_rag_ddl.sql（由库 owner 线下执行，

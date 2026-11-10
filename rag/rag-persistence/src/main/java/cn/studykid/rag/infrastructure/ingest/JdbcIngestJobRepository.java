@@ -101,6 +101,82 @@ public class JdbcIngestJobRepository implements IngestJobPort {
     }
 
     /**
+     * 在全局桶内按 ID 读取一条摄取任务（平台档「重试原任务」的前置查询）。
+     *
+     * <p>⚠️ 必须走运维会话：全局行在应用角色下恒读 0 行（RLS），
+     * 用裸查询 {@link #findById} 会对真实存在的 job 报「不存在」→ 404。
+     * 谓词写死 {@code tenant_id = rag_global_tenant_id()}，BYPASSRLS 下这是唯一桶边界。
+     *
+     * @param jobId 任务 ID
+     * @return 全局 job；不存在返回 null
+     */
+    @Override
+    public @Nullable IngestJob findByIdGlobal(@NonNull String jobId) {
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局摄取任务读取需要运维数据源（rag_ops），不回落应用角色");
+        }
+        return opsSession.inGlobalCorpusSession((opsTemplate, opsTx) -> opsTx.execute(status -> {
+            List<IngestJob> rows = opsTemplate.query(
+                    "SELECT " + COLUMNS + " FROM rag_ingest_job"
+                            + " WHERE job_id = ?::uuid"
+                            + "   AND tenant_id = rag_global_tenant_id()",
+                    this::mapJob, jobId);
+            return rows.isEmpty() ? null : rows.get(0);
+        }));
+    }
+
+    /**
+     * 全局桶人工重试：<b>新建一行</b> job（attempt = 原 attempt + 1），旧行永久留痕。
+     *
+     * <p>⚠️ 整段「读原 attempt + INSERT 新行」在<b>同一运维事务</b>内完成：
+     * 两段都走 BYPASSRLS 的 {@code rag_ops} 会话、谓词/租户列写死全局哨兵。
+     * 拆成两次运维窗口会有「读到 attempt=0、另一个线程也重试、两行都是 attempt=1」
+     * 的竞态（attempt 不再是单调递增的审计事实）。
+     *
+     * <p>⚠️ 与租户侧 {@link #createRetryJob} 同源护栏：绝不 UPDATE 旧行重置状态。
+     *
+     * @param sourceId      所属来源（全局桶内）
+     * @param createdBy     重试操作人主体 ID
+     * @param previousJobId 被重试的原 job（用于 attempt 递增）；可为空
+     * @return 新建的 PENDING 全局 job
+     */
+    @Override
+    public @NonNull IngestJob createRetryGlobalJob(@NonNull String sourceId,
+                                                   @NonNull String createdBy,
+                                                   @Nullable String previousJobId) {
+        if (opsSession == null) {
+            throw new RagOpsUnavailableException("rag.ops.datasource",
+                    "平台全局摄取重试需要运维数据源（rag_ops），不回落应用角色");
+        }
+        return opsSession.inGlobalCorpusSession((opsTemplate, opsTx) -> opsTx.execute(status -> {
+            int nextAttempt = 1;
+            if (previousJobId != null && !previousJobId.isBlank()) {
+                Integer prev = opsTemplate.query(
+                        "SELECT attempt FROM rag_ingest_job"
+                                + " WHERE job_id = ?::uuid"
+                                + "   AND tenant_id = rag_global_tenant_id()",
+                        (rs, i) -> rs.getInt(1), previousJobId).stream().findFirst().orElse(null);
+                nextAttempt = (prev == null ? 0 : prev) + 1;
+            }
+            String jobId = opsTemplate.queryForObject(
+                    "INSERT INTO rag_ingest_job"
+                            + " (tenant_id, source_id, status, attempt, created_by)"
+                            + " VALUES (rag_global_tenant_id(), ?::uuid,"
+                            + "         'PENDING'::rag_ingest_status, ?, ?::uuid)"
+                            + " RETURNING job_id::text",
+                    String.class, sourceId, nextAttempt, createdBy);
+            List<IngestJob> rows = opsTemplate.query(
+                    "SELECT " + COLUMNS + " FROM rag_ingest_job WHERE job_id = ?::uuid",
+                    this::mapJob, jobId);
+            if (rows.isEmpty()) {
+                throw new IllegalStateException("刚写入的全局重试 job 读不回来：" + jobId);
+            }
+            return rows.get(0);
+        }));
+    }
+
+    /**
      * 列出平台<b>全局桶</b>最近的摄取任务（管理面 PLATFORM 档的任务列表）。
      *
      * <p><b>⚠️ 不能复用 {@link #listRecentByTenant}</b>：那条走应用连接 + 租户会话，

@@ -32,6 +32,54 @@ public final class RagOpsDataSourceProvider implements RagOpsSessionPort, AutoCl
     /** RAG 全部对象在 schema rag，应用 SQL 用未限定名——运维池必须设同一个 search_path。 */
     private static final String SEARCH_PATH_SQL = "SET search_path TO rag, public";
 
+    /**
+     * 保活探测间隔（毫秒）。
+     *
+     * <p><b>⚠️ 为什么必须保活</b>：平台全局摄取是「解析十几分钟 → 末尾一次性写 embedding/chunk」的长事务。
+     * 池里预先建好的连接在 Docling 长册解析期间长时间空闲，而托管 RDS（阿里云等）会回收
+     * 空闲超过数百秒的连接；Hikari 默认 {@code keepaliveTime=0}（不保活）、{@code maxLifetime=30min}，
+     * 于是写阶段拿到一条已被服务端关闭的死连接，报
+     * {@code This connection has been closed.}（2026-11-10 语文下册 146 页摄取的实测根因：
+     * rag-platform-ops 池告警 Failed to validate connection）。
+     * 保活间隔取 2 分钟，远小于常见 300s 空闲回收线，让 Hikari 在连接被服务端回收前先 ping 一次。
+     */
+    static final long OP_POOL_KEEPALIVE_MS = 120_000L;
+
+    /**
+     * 连接最大存活（毫秒，9 分钟）。
+     *
+     * <p>必须 <b>大于</b> {@link #OP_POOL_KEEPALIVE_MS}（否则 Hikari 直接拒绝启动），
+     * 且小于托管库常见的连接回收上限；配合保活实现「空闲连接定期轮换、绝不拿死连接」。
+     */
+    static final long OP_POOL_MAX_LIFETIME_MS = 540_000L;
+
+    /**
+     * 空闲连接回收（毫秒，5 分钟）。
+     *
+     * <p>必须 <b>小于</b> {@link #OP_POOL_MAX_LIFETIME_MS}：Hikari 的默认值是 10 分钟，
+     * 会大于 9 分钟的 maxLifetime，触发 "idleTimeout is close to or more than
+     * maxLifetime, disabling it" 告警并静默禁用空闲回收。显式收紧后语义完整：
+     * 空闲 5 分钟回收、2 分钟保活、9 分钟强制轮换。
+     */
+    static final long OP_POOL_IDLE_TIMEOUT_MS = 300_000L;
+
+    /** 校验单条连接是否可用的超时（毫秒）。 */
+    static final long OP_POOL_VALIDATION_TIMEOUT_MS = 5_000L;
+
+    static {
+        // 装配期常量自检：把「keepalive < idle < maxLifetime」钉在代码里，配错即启动失败。
+        if (OP_POOL_KEEPALIVE_MS <= 0
+                || OP_POOL_IDLE_TIMEOUT_MS <= OP_POOL_KEEPALIVE_MS
+                || OP_POOL_MAX_LIFETIME_MS <= OP_POOL_IDLE_TIMEOUT_MS
+                || OP_POOL_VALIDATION_TIMEOUT_MS <= 0) {
+            throw new IllegalStateException(
+                    "运维池保活参数非法：keepalive=" + OP_POOL_KEEPALIVE_MS
+                            + " / idleTimeout=" + OP_POOL_IDLE_TIMEOUT_MS
+                            + " / maxLifetime=" + OP_POOL_MAX_LIFETIME_MS
+                            + " / validationTimeout=" + OP_POOL_VALIDATION_TIMEOUT_MS);
+        }
+    }
+
     private final boolean enabled;
     private final String missingConfiguration;
     private final HikariDataSource pool;
@@ -89,7 +137,22 @@ public final class RagOpsDataSourceProvider implements RagOpsSessionPort, AutoCl
         cfg.setConnectionTimeout(5_000L);
         cfg.setInitializationFailTimeout(-1);
         cfg.setConnectionInitSql(SEARCH_PATH_SQL);
+        // 空闲保活 + 定期轮换：避免长册摄取期间的连接被托管库回收成死连接。
+        cfg.setKeepaliveTime(OP_POOL_KEEPALIVE_MS);
+        cfg.setIdleTimeout(OP_POOL_IDLE_TIMEOUT_MS);
+        cfg.setMaxLifetime(OP_POOL_MAX_LIFETIME_MS);
+        cfg.setValidationTimeout(OP_POOL_VALIDATION_TIMEOUT_MS);
         return new RagOpsDataSourceProvider(true, null, cfg);
+    }
+
+    /**
+     * 底层 Hikari 池（包内可见，供单测断言保活参数确实装配到位）。
+     *
+     * <p>⚠️ 不对外暴露真实连接池：外部调用方只能拿 {@link RagOpsSessionPort} 的会话窗；
+     * 这里只在同包测试里读取配置，防止「加了保活代码却没生效」的假绿。
+     */
+    HikariDataSource pool() {
+        return pool;
     }
 
     @Override

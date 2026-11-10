@@ -2218,13 +2218,52 @@ public class RagManagementController {
             @PathVariable("jobId") String jobId) {
         RagManagementContext ctx = requireWriteContext(
                 tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
+
+        // ⚠️⚠️ 平台档（PLATFORM）必须走全局桶运维通道：全局 job 的 tenant_id 是哨兵，
+        //    应用角色对它静默 0 行。改造前这里无条件 ctx.requireTenant() +
+        //    findByIdForTenant / createRetryJob，平台档点「重试」恒 500
+        //    （IllegalStateException: 只有租户档携带会话租户）——
+        //    而平台档恰恰是唯一能在摄取失败后自愈的路径（撤回旧载体那套绕行太重）。
+        //    requireWriteContext 已校验平台域令牌 + 治理票据，这里只负责选桶。
+        //    ALL 档已在 requireWriteContext 以 409 拒绝（不存在「往全部租户写」）。
+        if (ctx.scope() == RagCorpusScope.PLATFORM) {
+            if (globalIngestJobPort == null) {
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "平台档（PLATFORM）摄取任务重试需要运维通道（rag.ops 未启用/未配置）");
+            }
+            try {
+                cn.studykid.rag.core.ingest.IngestJob origin = globalIngestJobPort.findByIdGlobal(jobId);
+                if (origin == null) {
+                    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "摄取任务不存在：" + jobId);
+                }
+                if (!origin.status().isTerminal()) {
+                    // ⚠️ 与租户侧同一闸门：未完成就重试会产生两个并行处理同一载体的 job。
+                    //    典型触发是 Sweeper 尚未接管的卡死 job；请等它超时失败后再重试。
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "任务尚未结束（" + origin.status() + "），不能重试；请等待其完成或失败后再操作");
+                }
+                String principal = (principalAttr == null || principalAttr.isBlank())
+                        ? origin.createdBy() : principalAttr;
+                if (principal == null || principal.isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                            "缺少操作人主体，拒绝以匿名身份发起重试");
+                }
+                return ManagementDtos.toIngestJobResponse(
+                        globalIngestJobPort.createRetryGlobalJob(origin.sourceId(), principal, jobId));
+            } catch (RagOpsUnavailableException e) {
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "平台档全局摄取重试通道不可用（" + e.missingConfiguration() + "）："
+                                + e.getMessage(), e);
+            }
+        }
+
+        // TENANT 档：以下逐字节保持改造前的租户语义（无回归）。
         if (ingestJobPort == null) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "摄取任务端口未装配");
         }
         // ⚠️ 租户档必须走租户会话版查找：findById 是裸查询，在应用角色（无 BYPASSRLS）
         //    下被 RLS 过滤成 0 行 → 对真实存在的 job 恒 404「摄取任务不存在」
         //    （2026-11-03 实测：同一请求列表端点能看到 3 条 SUCCEEDED，重试却 404）。
-        //    平台档不走此路径（平台语料无摄取载体，requireTenant 直接拒绝）。
         cn.studykid.rag.core.ingest.IngestJob origin = ingestJobPort.findByIdForTenant(
                 ctx.requireTenant().tenantId(), jobId);
         if (origin == null) {

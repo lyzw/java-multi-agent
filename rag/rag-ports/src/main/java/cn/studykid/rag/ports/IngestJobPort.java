@@ -309,4 +309,32 @@ public interface IngestJobPort {
      * @return 被接管的 job 数量
      */
     int failTimedOutRunningGlobalJobs(int timeoutMinutes);
+
+    /**
+     * 在全局桶内按 ID 读取一条摄取任务（管理面平台档「重试原任务」的前置查询）。
+     *
+     * <p>⚠️ 必须走运维会话、谓词写死 {@code tenant_id = rag_global_tenant_id()}：
+     * 应用角色对全局行静默 0 行，裸查会把真实存在的 job 报成「不存在」。
+     * 签名里没有租户参数，调用方拼不出「读别的桶」这句话。
+     *
+     * @param jobId 任务 ID
+     * @return 全局 job；不存在返回 {@code null}
+     */
+    @Nullable IngestJob findByIdGlobal(@NonNull String jobId);
+
+    /**
+     * 全局桶人工重试：为同一来源<b>新建一行</b> job（{@code attempt}+1），旧行永久留痕。
+     *
+     * <p>⚠️ 与 {@link #createRetryJob} 完全镜像但桶固定为全局：整段「读 attempt +
+     * INSERT 新行」在<b>同一运维事务</b>内完成（BYPASSRLS，租户列写死全局哨兵），
+     * 不回落应用角色、也不把哨兵写进会话变量。签名里没有租户参数。
+     *
+     * @param sourceId      所属来源（全局桶内）
+     * @param createdBy     重试操作人主体 ID
+     * @param previousJobId 被重试的原 job（用于 attempt 递增）；可为空
+     * @return 新建的 PENDING 全局 job
+     */
+    @NonNull IngestJob createRetryGlobalJob(@NonNull String sourceId,
+                                            @NonNull String createdBy,
+                                            @Nullable String previousJobId);
 }

@@ -219,9 +219,16 @@ class SourceRegistrationTest {
     @Test
     @DisplayName("非法学科/年级归一为兜底值（未指定 / 全学段）")
     void illegalSubjectAndGradeFallBack() {
-        SourceRegistration reg = withEdition("体育", "十年级", "上册", "2024修订", "人教版");
+        SourceRegistration reg = withEdition("天文学", "十年级", "上册", "2024修订", "人教版");
         assertEquals("未指定", reg.normalizedEditionSubject());
         assertEquals("全学段", reg.normalizedEditionGrade());
+    }
+
+    @Test
+    @DisplayName("体育学科可被检索期反查（不再归一为未指定）")
+    void physicalEducationSubjectIsResolvable() {
+        SourceRegistration reg = withEdition("体育", "六年级", "全一册", "2024", "沪教版");
+        assertEquals("体育", reg.normalizedEditionSubject());
     }
 
     @Test

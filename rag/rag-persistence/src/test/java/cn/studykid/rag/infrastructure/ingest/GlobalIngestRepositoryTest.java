@@ -2,6 +2,7 @@ package cn.studykid.rag.infrastructure.ingest;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -292,6 +293,119 @@ class GlobalIngestRepositoryTest {
         RagOpsUnavailableException ex = assertThrows(RagOpsUnavailableException.class,
                 () -> repo.listGlobalJobs(null, 20));
         assertEquals("rag.ops.datasource", ex.missingConfiguration());
+        verifyNoInteractions(appJdbc);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // 平台档「摄取任务重试」仓储守卫（2026-11-10 页面端导入实测缺陷）
+    //
+    // ⚠️ 反向验证：把 createRetryGlobalJob 里的 INSERT 租户列从
+    //    rag_global_tenant_id() 改成 ?::uuid 绑定参数，或把 attempt 递增改成
+    //    固定 0，下面两条断言会分别变红；把 findByIdGlobal 改回主连接 jdbcTemplate
+    //    （应用角色）则 globalRetryReadsThroughOpsSession 变红。
+    // ──────────────────────────────────────────────────────────────────
+
+    /** 记录全部 SQL 与实参的运维模板：按 SQL 形态分别应答 INSERT/attempt/job 行。 */
+    private static final class RetryJdbc {
+        final List<String> sql = new java.util.ArrayList<>();
+        final List<Object[]> args = new java.util.ArrayList<>();
+
+        JdbcTemplate template() {
+            return mock(JdbcTemplate.class, invocation -> {
+                Object[] a = invocation.getArguments();
+                if (a.length == 0 || !(a[0] instanceof String s)) {
+                    return null;
+                }
+                sql.add(s);
+                args.add(a);
+                String name = invocation.getMethod().getName();
+                if ("queryForObject".equals(name) && s.contains("INSERT INTO rag_ingest_job")) {
+                    return "job-new"; // RETURNING job_id::text
+                }
+                if ("query".equals(name) && s.contains("SELECT attempt")) {
+                    return List.of(3); // 原 job attempt=3
+                }
+                if ("query".equals(name) && s.contains("FROM rag_ingest_job")) {
+                    return List.of(sampleJob());
+                }
+                return null;
+            });
+        }
+    }
+
+    @Test
+    void globalRetryCreatesNewRowInGlobalBucketWithAttemptPlusOne() {
+        RetryJdbc retry = new RetryJdbc();
+        RecordingOpsSession opsSession =
+                new RecordingOpsSession(retry.template(), passthroughTx());
+        JdbcIngestJobRepository repo =
+                new JdbcIngestJobRepository(appJdbc, passthroughTx(), opsSession);
+
+        IngestJob created = repo.createRetryGlobalJob("src-1", "principal-1", "job-old");
+
+        assertEquals("job-1", created.jobId());
+        assertEquals(1, opsSession.entries(), "重试的读+写必须在同一运维会话窗内");
+        String insert = retry.sql.stream()
+                .filter(s -> s.contains("INSERT INTO rag_ingest_job"))
+                .findFirst().orElseThrow();
+        assertTrue(insert.contains("rag_global_tenant_id()"),
+                "重试新行的租户列必须写死全局哨兵（BYPASSRLS 下无策略兜底）");
+        assertTrue(insert.contains("'PENDING'::rag_ingest_status"),
+                "重试新行必须是 PENDING，绝不原地重置旧行");
+        assertFalse(insert.contains("UPDATE"), "重试=新建行，绝不 UPDATE 旧行留痕");
+        // queryForObject(sql, String.class, sourceId, attempt, createdBy) —— attempt 是第 4 个实参（下标 3）
+        int insertIdx = retry.sql.indexOf(insert);
+        Object[] insertArgs = retry.args.get(insertIdx);
+        assertEquals(4, insertArgs[3], "attempt 必须单调递增（原 3 → 新 4）");
+        assertEquals("src-1", insertArgs[2]);
+        assertEquals("principal-1", insertArgs[4]);
+        verifyNoInteractions(appJdbc);
+    }
+
+    @Test
+    void globalRetryReadsThroughOpsSessionWithGlobalPredicate() {
+        List<String> sink = new java.util.ArrayList<>();
+        RecordingOpsSession opsSession = new RecordingOpsSession(recordingJdbc(sink), passthroughTx());
+        JdbcIngestJobRepository repo = new JdbcIngestJobRepository(appJdbc, passthroughTx(), opsSession);
+
+        IngestJob found = repo.findByIdGlobal("job-1");
+
+        assertEquals("job-1", found.jobId());
+        assertEquals(1, opsSession.entries(), "按 ID 读全局 job 必须走运维会话");
+        String sql = sink.stream().filter(s -> s.contains("FROM rag_ingest_job"))
+                .findFirst().orElseThrow();
+        assertTrue(sql.contains("tenant_id = rag_global_tenant_id()"),
+                "BYPASSRLS 下桶谓词是唯一隔离边界");
+        assertFalse(sql.contains("app.tenant_id"),
+                "平台档绝不把哨兵写进会话变量（rag_current_tenant() 会抛 42501）");
+        verifyNoInteractions(appJdbc);
+    }
+
+    @Test
+    void globalRetryReadsNotFoundReturnsNullThroughOps() {
+        List<String> sink = new java.util.ArrayList<>();
+        JdbcTemplate emptyJdbc = mock(JdbcTemplate.class, invocation -> {
+            Object[] a = invocation.getArguments();
+            if (a.length > 0 && a[0] instanceof String s) {
+                sink.add(s);
+            }
+            return List.of();
+        });
+        RecordingOpsSession opsSession = new RecordingOpsSession(emptyJdbc, passthroughTx());
+        JdbcIngestJobRepository repo = new JdbcIngestJobRepository(appJdbc, passthroughTx(), opsSession);
+
+        assertNull(repo.findByIdGlobal("missing"));
+        assertEquals(1, opsSession.entries());
+    }
+
+    @Test
+    void globalRetryFailsClosedWithoutOpsSession() {
+        JdbcIngestJobRepository repo = new JdbcIngestJobRepository(appJdbc, passthroughTx(), null);
+
+        assertThrows(RagOpsUnavailableException.class,
+                () -> repo.findByIdGlobal("job-1"));
+        assertThrows(RagOpsUnavailableException.class,
+                () -> repo.createRetryGlobalJob("src-1", "principal-1", "job-old"));
         verifyNoInteractions(appJdbc);
     }
 }

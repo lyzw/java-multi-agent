@@ -244,9 +244,45 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
             throw new DoclingUnavailableException(
                     "Docling 分段解析产出 0 个块（documentId=" + documentId + "）");
         }
+        // ⚠️⚠️ 页面覆盖守卫（2026-11-10）：若已知总页数 N，但解析出的块只落在
+        //    前 MIN_PAGE_COVERAGE 比例的页面上，说明解析被静默截断
+        //    （典型：page_range 钳成 [1,1] 只切封面）。这种「不报错、只是内容空掉」
+        //    比直接失败危险——它会被标「已就绪」并进入检索。这里 fail-closed。
+        assertPageCoverage(documentId, totalPages, continuous);
         // ⚠️ 分段路径：raw 取最后一段且 wholeDocument=false（不可用于分块桥，见方法注释）
         return new ParseWithRaw(documentId, continuous,
                 lastRaw == null ? null : mapper.extractJsonContent(lastRaw), false);
+    }
+
+    /** 解析块必须覆盖至少该比例的最后页码（防「只切封面」的静默截断）。 */
+    static final double MIN_PAGE_COVERAGE = 0.5;
+
+    /** 页数过少时不触发覆盖守卫（避免小册/纯图片册误报）。 */
+    static final int MIN_PAGES_FOR_COVERAGE_GUARD = 10;
+
+    /**
+     * 页面覆盖守卫：块的最大页码必须达到总页数的一定比例，否则判为截断。
+     *
+     * <p>只对「页数已知且足够多」的大册生效；纯图片册可能大量页无文本块，
+     * 但每页至少会有 figure/图片占位块，故最大页码仍应接近总页数。
+     */
+    static void assertPageCoverage(String documentId, int totalPages,
+                                   List<LayoutBlock> blocks) {
+        if (totalPages < MIN_PAGES_FOR_COVERAGE_GUARD) {
+            return;
+        }
+        int maxPage = 0;
+        for (LayoutBlock b : blocks) {
+            maxPage = Math.max(maxPage, b.pageNumber());
+        }
+        double coverage = (double) maxPage / totalPages;
+        if (coverage < MIN_PAGE_COVERAGE) {
+            throw new DoclingDocumentParserPort.DoclingUnavailableException(
+                    "Docling 解析页覆盖不足（documentId=" + documentId + "：块最大页码 "
+                            + maxPage + " / 总页数 " + totalPages + " = "
+                            + String.format("%.0f%%", coverage * 100)
+                            + "，疑似只解析了封面/前几页被静默截断，拒绝标记为成功）");
+        }
     }
 
     /**
@@ -279,6 +315,20 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
      * 本项目的依赖面已经不小，为「数页数」引入 pdfbox 并不划算。
      * 探测失败时返回 0 → 调用方按「整册提交」处理，行为退化但不报错。
      *
+     * <p><b>⚠️⚠️ 2026-11-10 实测踩中的静默失真</b>：现代教材 PDF 普遍把页树对象
+     * 塞进<b>压缩对象流</b>（{@code /ObjStm} + FlateDecode），明文里根本没有
+     * {@code /Type /Page} / {@code /Count}。旧实现只扫明文→返回 0→走「整册提交」，
+     * 而整册提交的 {@code callDocling(content, 1, 0)} 又把 {@code pageTo=0}
+     * 钳成 {@code page_range=[1,1]}（见 callDocling 的 to=max(from,to)），
+     * <b>只解析封面</b>：146 页教材产出 3~4 个封面占位片段、job 却被标
+     * 「已就绪」——「不报错、只是内容悄悄空掉」的典型。修复有两层：
+     * <ol>
+     *   <li>本方法：明文扫不到时，<b>解压所有 FlateDecode 流</b>再数
+     *       {@code /Type /Page} 与 {@code /Count}，覆盖对象流形态；</li>
+     *   <li>callDocling：页数未知（0）时按「整册、不带 page_range」提交，
+     *       绝不退化成 {@code [1,1]}（见该方法注释）。</li>
+     * </ol>
+     *
      * @param documentId 文档 ID
      * @param content    PDF 字节
      * @return 总页数；探测失败返回 0
@@ -286,28 +336,137 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
     private int probePageCount(String documentId, byte[] content) {
         try {
             String raw = new String(content, java.nio.charset.StandardCharsets.ISO_8859_1);
-            java.util.regex.Matcher m = java.util.regex.Pattern
-                    .compile("/Type\\s*/Pages[^>]*?/Count\\s+(\\d+)")
-                    .matcher(raw);
-            int max = 0;
-            while (m.find()) {
-                max = Math.max(max, Integer.parseInt(m.group(1)));
+            int fromPlain = scanPageCount(raw);
+            if (fromPlain > 0) {
+                return fromPlain;
             }
-            if (max > 0) {
-                return max;
+            // ⚠️ 明文没有页树 → 页对象很可能藏在压缩对象流（/ObjStm）里。
+            //    逐个解压 FlateDecode 流再数；失败/非 Flate 流跳过（图片流本就解不开）。
+            int fromStreams = 0;
+            byte[] marker = "stream".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+            int from = indexOf(content, marker, 0, content.length);
+            while (from >= 0) {
+                int dataStart = skipEol(content, from + marker.length, content.length);
+                int dataEnd = indexOf(content, ENDSTREAM_BYTES, dataStart, content.length);
+                if (dataEnd < 0) {
+                    break;
+                }
+                // 单流上限保护：跳过超大图片流，避免把整册图片解压进内存。
+                if (dataEnd - dataStart <= MAX_INFLATE_BYTES) {
+                    byte[] inflated = tryInflate(content, dataStart, dataEnd);
+                    if (inflated != null) {
+                        fromStreams = Math.max(fromStreams,
+                                scanPageCount(new String(inflated,
+                                        java.nio.charset.StandardCharsets.ISO_8859_1)));
+                    }
+                }
+                from = indexOf(content, marker, dataEnd + ENDSTREAM_BYTES.length, content.length);
             }
-            // 兜底：数 /Type /Page（排除 /Pages）
-            java.util.regex.Matcher m2 = java.util.regex.Pattern
-                    .compile("/Type\\s*/Page[^s]")
-                    .matcher(raw);
-            int count = 0;
-            while (m2.find()) {
-                count++;
+            if (fromStreams > 0) {
+                log.debug("[RAG] 探测 {} 页数：明文无页树，从压缩对象流解出 {} 页",
+                        documentId, fromStreams);
             }
-            return count;
+            return fromStreams;
         } catch (RuntimeException e) {
             log.warn("[RAG] 探测 {} 页数失败，按整册提交处理", documentId, e);
             return 0;
+        }
+    }
+
+    /** 明文页树扫描：先取 /Count（页树根），再退而数 /Type /Page（排除 /Pages）。 */
+    private static int scanPageCount(String text) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("/Type\\s*/Pages[^>]*?/Count\\s+(\\d+)")
+                .matcher(text);
+        int max = 0;
+        while (m.find()) {
+            max = Math.max(max, parseIntSafe(m.group(1)));
+        }
+        if (max > 0) {
+            return max;
+        }
+        java.util.regex.Matcher m2 = java.util.regex.Pattern
+                .compile("/Type\\s*/Page[^s]")
+                .matcher(text);
+        int count = 0;
+        while (m2.find()) {
+            count++;
+        }
+        return count;
+    }
+
+    private static int parseIntSafe(String s) {
+        try {
+            return Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static final byte[] ENDSTREAM_BYTES =
+            "endstream".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+
+    /** 单流解压上限：对象流通常远小于此；超过视为图片流跳过。 */
+    private static final int MAX_INFLATE_BYTES = 4 * 1024 * 1024;
+
+    /** 解压上限：防止解压炸弹（压缩比异常的对象流）撑爆内存。 */
+    private static final int MAX_INFLATED_OUTPUT = 32 * 1024 * 1024;
+
+    /** 在 content[from,to) 内找 needle 的起始下标，找不到返回 -1。 */
+    private static int indexOf(byte[] content, byte[] needle, int from, int to) {
+        if (needle.length == 0 || from > to - needle.length) {
+            return -1;
+        }
+        outer:
+        for (int i = from; i <= to - needle.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (content[i + j] != needle[j]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    /** 跳过 stream 关键字后的 EOL（\\r\\n 或 \\n）。 */
+    private static int skipEol(byte[] content, int pos, int to) {
+        if (pos < to && content[pos] == '\r') {
+            pos++;
+        }
+        if (pos < to && content[pos] == '\n') {
+            pos++;
+        }
+        return pos;
+    }
+
+    /**
+     * 尝试 FlateDecode 解压一段 PDF 流；非 Flate / 损坏流返回 null。
+     * PDF 流用 zlib 封装（nowrap=false），故 Inflater 传 false。
+     */
+    private static byte[] tryInflate(byte[] content, int from, int to) {
+        java.util.zip.Inflater inflater = new java.util.zip.Inflater();
+        try {
+            inflater.setInput(content, from, to - from);
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int total = 0;
+            while (!inflater.finished() && !inflater.needsInput()) {
+                int n = inflater.inflate(buf);
+                if (n <= 0) {
+                    break;
+                }
+                total += n;
+                if (total > MAX_INFLATED_OUTPUT) {
+                    return null;
+                }
+                out.write(buf, 0, n);
+            }
+            return inflater.finished() ? out.toByteArray() : null;
+        } catch (java.util.zip.DataFormatException e) {
+            return null; // 非 Flate 流（图片等）——本就解不开，跳过
+        } finally {
+            inflater.end();
         }
     }
 
@@ -373,7 +532,13 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
             bos.write("\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             // 字段③：页范围（⚠️ 实测：page_range 是**两个独立字段**，
             //         写成 "1-20" 会 422 —— 服务端要的是 int 数组 [from, to]）
-            if (pageFrom > 0) {
+            // ⚠️⚠️ 2026-11-10 静默失真根因：页数探测失败返回 0 时，调用方以
+            //     callDocling(content, 1, 0) 表示「整册提交」。旧代码进到此分支后
+            //     把 to 钳成 max(from,to)=max(1,0)=1，实际发出 page_range=[1,1]
+            //     —— **只解析封面**，146 页教材产出封面占位片段却被标「已就绪」。
+            //     修正：pageTo<=0 明确表示「页数未知、整册提交」，
+            //     **不发 page_range 字段**，让 Docling 转换全部页。
+            if (pageFrom > 0 && pageTo >= pageFrom) {
                 bos.write(("--" + boundary + "\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 bos.write("Content-Disposition: form-data; name=\"page_range\"\r\n\r\n"
                         .getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -382,7 +547,7 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
                 bos.write(("--" + boundary + "\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 bos.write("Content-Disposition: form-data; name=\"page_range\"\r\n\r\n"
                         .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                bos.write(String.valueOf(Math.max(pageFrom, pageTo))
+                bos.write(String.valueOf(pageTo)
                         .getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 bos.write("\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }

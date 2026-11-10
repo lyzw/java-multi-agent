@@ -10,6 +10,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import cn.studykid.rag.core.scope.RagScope;
+import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
 import cn.studykid.rag.ports.IngestJobPort;
 
 /**
@@ -59,6 +60,12 @@ public class IngestJobSweeper {
      */
     @Scheduled(fixedDelayString = "${rag.ingest.sweeper.interval-ms:300000}", initialDelayString = "60000")
     public void sweep() {
+        sweepTenantJobs();
+        sweepGlobalJobs();
+    }
+
+    /** 租户桶：逐租户扫，保持原有语义（租户清单与消费循环同源）。 */
+    private void sweepTenantJobs() {
         try {
             List<String> tenants = properties.getTenants();
             if (tenants == null || tenants.isEmpty()) {
@@ -75,11 +82,42 @@ public class IngestJobSweeper {
             if (taken > 0) {
                 // ⚠️ 取到就记 warn：接管频发是「worker 不稳定」的前兆，
                 //    应当在它变成积压之前被看见（方案 §7.3 告警项之一）。
-                log.warn("[RAG] Sweeper 接管 {} 个超时（>{}分钟）摄取任务",
+                log.warn("[RAG] Sweeper 接管 {} 个超时（>{}分钟）租户摄取任务",
                         taken, timeoutMinutes);
             }
         } catch (RuntimeException e) {
-            log.warn("[RAG] Sweeper 扫描失败，下一轮重试", e);
+            log.warn("[RAG] Sweeper 扫描租户任务失败，下一轮重试", e);
+        }
+    }
+
+    /**
+     * 平台全局桶：独立扫一次，<b>不</b>受 {@code rag.indexer.tenants} 是否为空影响。
+     *
+     * <p><b>⚠️ 为什么必须单独扫</b>：全局 job 由 {@code GlobalIngestJobConsumer} 消费，
+     * 它只领 PENDING；卡在 PARSING/CHUNKING/EMBEDDING/INDEXING 的全局 job
+     * （worker 崩溃、连接池断链等）若无本节接管，将永久停在中间态——
+     * 管理面「摄取任务」页一直转圈，重试端点又因其非终态而 409，形成死锁。
+     * 2026-11-10 实测：平台 job {@code e82da78e} 卡在 PARSING 30 超过数小时无人接管。
+     *
+     * <p>⚠️ Sweeper 本身无条件装配（不像消费者有 {@code rag.ops.enabled} 条件），
+     * 故运维通道未接入时 {@link IngestJobPort#failTimedOutRunningGlobalJobs} 会抛
+     * {@link RagOpsUnavailableException}。此处单独降级为 debug：部署没开全局档是
+     * 正常选择（fail-closed），不该每 5 分钟刷一条 warn 把人训练成「忽略告警」。
+     * 真正的接管（taken&gt;0）仍记 warn，与租户侧同口径可见。
+     */
+    private void sweepGlobalJobs() {
+        try {
+            int taken = jobPort.failTimedOutRunningGlobalJobs(timeoutMinutes);
+            if (taken > 0) {
+                log.warn("[RAG] Sweeper 接管 {} 个超时（>{}分钟）全局摄取任务",
+                        taken, timeoutMinutes);
+            }
+        } catch (RagOpsUnavailableException e) {
+            // 运维通道未接入 = 平台档未启用，正常部署；不刷 warn，也不影响租户清扫。
+            log.debug("[RAG] 运维通道未接入，跳过全局摄取 Sweeper：{}", e.getMessage());
+        } catch (RuntimeException e) {
+            // 通道已接入但清扫失败（如连接池抖动）：记 warn，下一轮重试，不终止线程。
+            log.warn("[RAG] Sweeper 清扫全局任务失败，下一轮重试", e);
         }
     }
 }

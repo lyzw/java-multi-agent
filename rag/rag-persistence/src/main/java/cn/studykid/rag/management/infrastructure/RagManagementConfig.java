@@ -277,9 +277,9 @@ public class RagManagementConfig {
      */
     @Bean
     public GlobalIngestJobPort globalIngestJobPort(JdbcIngestJobRepository ingestJobRepository) {
-        // ⚠️ 接口现在有两个方法（建单 + 平台档列表），不再是函数式接口：
-        //    不能继续用方法引用，否则平台档列表会在装配期缺失实现。
-        //    两条都委托给同一份仓储（运维通道已注入），口径只有一处。
+        // ⚠️ 接口现有四个方法（建单 + 平台档列表 + 按 ID 读 + 重试），不再是函数式接口：
+        //    不能继续用方法引用，否则平台档列表/重试会在装配期缺失实现。
+        //    四条都委托给同一份仓储（运维通道已注入），口径只有一处。
         return new GlobalIngestJobPort() {
             @Override
             public IngestJob createGlobalJob(String sourceId, String createdBy) {
@@ -289,6 +289,17 @@ public class RagManagementConfig {
             @Override
             public List<IngestJob> listGlobalJobs(String sourceId, int limit) {
                 return ingestJobRepository.listGlobalJobs(sourceId, limit);
+            }
+
+            @Override
+            public IngestJob findByIdGlobal(String jobId) {
+                return ingestJobRepository.findByIdGlobal(jobId);
+            }
+
+            @Override
+            public IngestJob createRetryGlobalJob(String sourceId, String createdBy,
+                                                  String previousJobId) {
+                return ingestJobRepository.createRetryGlobalJob(sourceId, createdBy, previousJobId);
             }
         };
     }

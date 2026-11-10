@@ -94,6 +94,7 @@ public record EditionCoordinate(
         HISTORY("历史"),
         GEOGRAPHY("地理"),
         POLITICS("道法"),
+        PHYSICAL_EDUCATION("体育"),
         // ⚠️「未指定」是**登记流程的合法占位值**：管理面建默认版本坐标时
         //    学科/年级/出版社一律写占位（登记 UI 不采集版本坐标）。
         //    若枚举里没有它，摄取的「按 displayName 反查」会抛「未知学科值：未指定」，
