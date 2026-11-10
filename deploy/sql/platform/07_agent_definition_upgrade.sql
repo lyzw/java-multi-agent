@@ -110,6 +110,20 @@ END $$;
 --
 -- 4.4 工具描述同理：已发布 Tool 行不可改写；如需补描述，走 PLATFORM 作用域
 --     的三步发布发新版本（治理通道 `PlatformToolSpec.description`）。
+--
+-- 4.5 ⚠️ **已验证的带外处置口径**（2026-11-10 · 远程 `agent_dev` 实测）：
+--     治理三步发布 `POST /api/cap/config/publishes` → `/decision` → `/apply`，
+--     需 TENANT_ADMIN 身份且申请人与审批人是两个不同 principalId（自审批 409）。
+--     · 必须把**全部** Agent 放进同一个 `agents` 数组：`cap_config_release.object_versions`
+--       是本次发布集的**全量替换**，只发一个会把其余对象从当前发布指针里挤掉。
+--     · `assignment-copilot` 种子行的 `orchestration.childAgentRefs[].id` 写的是
+--       **名字**（"math-tutor"）而非 UUID，`projectChildRefs` 直接当 UUID 写库 →
+--       `invalid input syntax for type uuid`，整笔 apply 500 且事务回滚。发布前必须换成
+--       子 Agent 的 `agent_id`，并把固定 release version 指向本次发布的新版本。
+--     · 三个种子 Agent 的已批准提示词原文就在 `02_platform_seed.sql`，直接复用；
+--       其余按 `description` 由运维显式填写 —— 绝不猜默认模型、绝不反填归档。
+--     ✅ 验收：新 Run 的 `run.snapshot_id` 指向新版本的 `execution_snapshot`，
+--       worker 不再报 `CONFIG_UNAVAILABLE`，模型真实产出后 Run 收敛 `SUCCEEDED`。
 
 COMMIT;
 

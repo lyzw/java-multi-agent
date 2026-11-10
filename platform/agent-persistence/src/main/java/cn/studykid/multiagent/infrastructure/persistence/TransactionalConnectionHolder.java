@@ -46,6 +46,23 @@ public final class TransactionalConnectionHolder {
 
     private static final ThreadLocal<Connection> CURRENT = new ThreadLocal<>();
 
+    /**
+     * 事务「毒化」标记：本事务内曾发生 SQL 失败。
+     *
+     * <p>⚠️ <b>为什么必须有</b>（2026-11-10 实测 Sev-0）：PostgreSQL 语句一旦报错，
+     * 事务立即进入 aborted 态；<b>此时执行 COMMIT 不会抛错，而是静默等价 ROLLBACK</b>。
+     * 若嵌套事务把 SQLException 包成运行时异常抛出，上层又按 fail-soft 语义
+     * 把它吞掉（例如 {@code CapDualWriteService} 的「双写挂起」），
+     * 顶层就会带着一个「看起来成功」的结果走到 commit ——
+     * 结果是「四条 INSERT 全回滚，接口却返回 201 + 一个从未落库的 runId」。
+     *
+     * <p>本标记把「SQL 失败」与「业务上算不出来的降级」区分开：
+     * 前者毒化事务、<b>必须让顶层抛异常</b>（明确 5xx）；后者不毒化，
+     * fail-soft 仍可正常降级提交。标记与 {@link #CURRENT} 同样在
+     * {@link #clear()} 中无条件清理，绝不跨请求泄漏。
+     */
+    private static final ThreadLocal<Boolean> POISONED = new ThreadLocal<>();
+
     private TransactionalConnectionHolder() {
     }
 
@@ -80,6 +97,9 @@ public final class TransactionalConnectionHolder {
                             + "另开连接会使外层回滚失效，进而破坏原子性。");
         }
         CURRENT.set(connection);
+        // ⚠️ 新事务必须从「干净」状态开始：上一事务若残留毒化标记，
+        //    会让本次所有写入被误判为不可提交（fail-closed 但方向错误）。
+        POISONED.remove();
         if (log.isTraceEnabled()) {
             log.trace("事务连接已绑定");
         }
@@ -93,6 +113,26 @@ public final class TransactionalConnectionHolder {
      */
     public static void clear() {
         CURRENT.remove();
+        // ⚠️ 与连接同样无条件清理：残留会让下一次请求（可能是另一个租户）
+        //    的所有事务一律被判为「已毒化」，构成静默功能空转。
+        POISONED.remove();
+    }
+
+    /**
+     * 当前事务是否已被毒化（事务内曾发生 SQL 失败）。
+     *
+     * <p>供顶层提交前做 fail-closed 判定；<b>不是</b>给业务代码做降级判断。
+     */
+    public static boolean isPoisoned() {
+        return Boolean.TRUE.equals(POISONED.get());
+    }
+
+    /**
+     * 标记本事务已被毒化。只允许在「复用外层连接」的嵌套事务里，
+     * 捕获到 {@link SQLException} 时调用。
+     */
+    private static void markPoisoned() {
+        POISONED.set(Boolean.TRUE);
     }
 
     /**
@@ -113,6 +153,11 @@ public final class TransactionalConnectionHolder {
             try {
                 return action.run(CURRENT.get());
             } catch (SQLException e) {
+                // ⚠️⚠️ PG 事务此刻已进入 aborted 态。本异常极可能被上层
+                //    fail-soft 吞掉（例如「双写挂起」），但「吞掉异常」不等于
+                //    「事务还能提交」：顶层 COMMIT 会静默回滚全部写入，
+                //    调用方却以为成功。故这里必须给事务打标，由顶层拒绝提交。
+                markPoisoned();
                 throw new IllegalStateException("事务内操作失败", e);
             }
         }
@@ -124,10 +169,18 @@ public final class TransactionalConnectionHolder {
             bind(conn);
             try {
                 T result = action.run(conn);
+                if (isPoisoned()) {
+                    // ⚠️ 绝不 commit：aborted 事务上的 COMMIT 不抛错、只静默回滚，
+                    //    会让 POST /api/runs 返回 201 + 一个从未落库的 runId。
+                    //    这里必须显式失败，让端点返回 5xx（明确失败优于幽灵成功）。
+                    throw new IllegalStateException(
+                            "事务已被毒化：事务内 SQL 失败被上层吞掉，禁止提交"
+                                    + "（避免静默回滚 + 假成功）");
+                }
                 lease.commitQuietly();
                 return result;
             } finally {
-                // ⚠️ 必须无条件清理 —— 忘记清理会让连接泄漏到下一个请求，
+                // ⚠️ 必须无条件清理 —— 忘记清理会让连接与毒化标记泄漏到下一个请求，
                 //    下一个请求会沿用上一个租户的事务，构成跨租户数据泄漏。
                 clear();
             }

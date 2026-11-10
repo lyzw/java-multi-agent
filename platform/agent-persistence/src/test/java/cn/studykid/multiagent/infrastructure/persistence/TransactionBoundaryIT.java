@@ -232,6 +232,81 @@ class TransactionBoundaryIT {
         });
     }
 
+    // ── T4/T5：事务毒化（2026-11-10 Sev-0「201 + 幽灵 runId」）────────
+
+    /**
+     * <p>⚠️ <b>本用例是反向守卫</b>：撤掉 {@code markPoisoned()} 或顶层的
+     * {@code isPoisoned()} 检查，本用例<b>必然变红</b>（{@code inTransaction}
+     * 会返回 "fake-success"，且 PG 把 COMMIT 静默变成 ROLLBACK）。
+     *
+     * <p>复现的正是线上故障形态：{@code CapDualWriteService} 在事务内查
+     * {@code cap_agent_def.instructions} 失败（活库缺 07 号升级列），
+     * fail-soft 把它吞成一条 WARN，顶层照常 commit → 接口 201，库里零行。
+     */
+    @Test
+    @DisplayName("T4 ⚠️ 事务内 SQL 失败被吞 → 顶层必须拒绝提交，四者零残留")
+    void swallowedSqlFailureMustRejectCommit() throws Exception {
+        String runId = java.util.UUID.randomUUID().toString();
+        IdempotencyKey key = new IdempotencyKey("run-create", "tx-poison-" + runId);
+        Map<String, Object> input = Map.of("topic", "毒性事务");
+        OutboxMessage msg = new OutboxMessage(runId, tenantA, 0, 0L, Instant.now());
+
+        assertThatThrownBy(() -> TransactionalConnectionHolder.inTransaction(
+                appPool, sysCtx(tenantA), conn -> {
+                    // ① 与线上 POST /api/runs 完全同构的真实写入
+                    repo.insertRunAtomically(tenantA, runId, snapshotId, key,
+                            RequestDigest.of(input), input, "corr-poison-" + runId, msg);
+                    // ② 嵌套事务内跑一条必然失败的 SQL（等价「缺列」）
+                    try {
+                        TransactionalConnectionHolder.inTransaction(appPool, sysCtx(tenantA), nested -> {
+                            try (PreparedStatement ps = nested.prepareStatement(
+                                    "SELECT __poison_no_such_column__ FROM cap_agent_def")) {
+                                ps.executeQuery();
+                            }
+                            return null;
+                        });
+                    } catch (RuntimeException swallowed) {
+                        // ③ 模拟双写服务的 fail-soft：吞掉异常，继续当成功
+                    }
+                    return "fake-success";
+                }))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("毒化");
+
+        // ⚠️ 四者必须全为 0：若 COMMIT 被静默执行，这里会留下「假成功」的证据
+        assertThat(countRun(tenantA, runId)).as("Run 不应残留").isZero();
+        assertThat(countIdempotency(tenantA, key.keyValue())).as("幂等记录不应残留").isZero();
+        assertThat(countOutbox(tenantA, runId)).as("Outbox 不应残留").isZero();
+        assertThat(countEvent(tenantA, runId)).as("初始事件不应残留").isZero();
+    }
+
+    /**
+     * 对照组：<b>业务上算不出来</b>被吞掉时不应毒化事务，
+     * fail-soft 降级后写入仍须照常提交。防止 T4 的修复把正常降级一并打成 5xx。
+     */
+    @Test
+    @DisplayName("T5 对照：业务异常被吞（非 SQL 失败）→ 不毒化，事务照常提交")
+    void swallowedBusinessFailureStillCommits() throws Exception {
+        String runId = java.util.UUID.randomUUID().toString();
+        IdempotencyKey key = new IdempotencyKey("run-create", "tx-soft-" + runId);
+        Map<String, Object> input = Map.of("topic", "可降级");
+        OutboxMessage msg = new OutboxMessage(runId, tenantA, 0, 0L, Instant.now());
+
+        TransactionalConnectionHolder.inTransaction(appPool, sysCtx(tenantA), conn -> {
+            repo.insertRunAtomically(tenantA, runId, snapshotId, key,
+                    RequestDigest.of(input), input, "corr-soft-" + runId, msg);
+            try {
+                throw new IllegalArgumentException("闭包不可解析：按设计跳过双写");
+            } catch (RuntimeException swallowed) {
+                // 业务降级，不涉及 SQL 失败 → 事务仍是干净的
+            }
+            return null;
+        });
+
+        assertThat(countRun(tenantA, runId)).as("Run 应已提交").isEqualTo(1);
+        assertThat(countIdempotency(tenantA, key.keyValue())).as("幂等记录应已提交").isEqualTo(1);
+    }
+
     // ── 查询辅助 ────────────────────────────────────────────────────
 
     private static TenantContext sysCtx(String tenantId) {

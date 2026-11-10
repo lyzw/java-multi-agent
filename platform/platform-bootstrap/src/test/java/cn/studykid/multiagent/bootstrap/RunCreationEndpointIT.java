@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.bootstrap;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -30,7 +31,9 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
+import cn.studykid.multiagent.application.run.RunCreationService;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
 import cn.studykid.multiagent.infrastructure.security.JwtTokenService;
 
 /**
@@ -79,6 +82,14 @@ class RunCreationEndpointIT {
 
     @Autowired
     private JwtTokenService tokens;
+
+    /** 生产装配的事务执行器（{@code PersistenceTransactionConfiguration} 提供）。 */
+    @Autowired
+    private RunCreationService.TransactionRunner transactionRunner;
+
+    /** 生产主数据源（app_agent，NOBYPASSRLS）。 */
+    @Autowired
+    private DataSource dataSource;
 
     /**
      * 管理员连接池（<b>静态 + 必须关闭</b>）。
@@ -660,6 +671,43 @@ class RunCreationEndpointIT {
                 .as("⛔ CurrentPrincipal.snapshotId() 必须保持删除状态："
                         + "它曾返回随机 UUID，使 POST /api/runs 恒 500")
                 .doesNotContain("snapshotId");
+    }
+
+    /**
+     * <p>⚠️ <b>从「生产装配的编排执行器」进的反向守卫</b>（2026-11-10 Sev-0）。
+     * 线上故障：活库缺 {@code cap_agent_def.instructions} → 事务内双写 SQL 失败，
+     * 被 {@code CapDualWriteService} 的 fail-soft 吞成一条 WARN → 顶层 COMMIT
+     * 在 aborted 事务上静默回滚 → {@code POST /api/runs} 返回 201 + 幽灵 runId。
+     *
+     * <p>本用例用 <b>Spring 上下文里真实的 TransactionRunner + 真实主数据源</b>
+     * 复现「SQL 失败被吞」：<b>撤掉毒化标记或顶层检查，断言必然变红</b>
+     * （{@code execute} 会返回 "fake-success" 而不是抛异常）。
+     *
+     * <p>与 {@code TransactionBoundaryIT} 的 T4 互补：那边验证四者零残留，
+     * 这边验证生产装配接线后行为一致 —— 防止「实现改对了、装配没走到」。
+     */
+    @Test
+    @DisplayName("⛔ 守卫：生产事务执行器遇「被吞掉的 SQL 失败」必须抛异常，绝不返回假成功")
+    void productionTransactionRunnerRejectsSwallowedSqlFailure() {
+        assertThatThrownBy(() -> transactionRunner.execute(tenant(), () -> {
+            try {
+                TransactionalConnectionHolder.inTransaction(
+                        dataSource,
+                        new TenantContext(tenant(), "system", Set.of(), 0L),
+                        nested -> {
+                            try (PreparedStatement ps = nested.prepareStatement(
+                                    "SELECT __poison_no_such_column__ FROM cap_agent_def")) {
+                                ps.executeQuery();
+                            }
+                            return null;
+                        });
+            } catch (RuntimeException swallowed) {
+                // 模拟双写服务的 fail-soft：吞掉异常，继续当成功
+            }
+            return "fake-success";
+        }))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("毒化");
     }
 
     // ── 工具 ────────────────────────────────────────────────────────
