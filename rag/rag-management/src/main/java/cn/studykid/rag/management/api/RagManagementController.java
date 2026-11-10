@@ -52,6 +52,7 @@ import cn.studykid.rag.management.ports.GlobalIngestJobPort;
 import cn.studykid.rag.management.ports.ObjectStorePort;
 import cn.studykid.rag.management.infrastructure.IngestDedupPrecheck;
 import cn.studykid.rag.management.core.InspectionGuard;
+import cn.studykid.rag.management.core.LicenseStatus;
 import cn.studykid.rag.management.core.SegregationOfDuties;
 import cn.studykid.rag.core.ingest.IngestDedupRules;
 import cn.studykid.rag.ports.IngestJobPort;
@@ -607,6 +608,10 @@ public class RagManagementController {
             @Valid @RequestBody ManagementDtos.VerificationRequest request) {
         RagManagementContext tenant = requireWriteContext(
                 tenantId, minTrustTierHeader, scopeHeader, callerDomain, ticketScope);
+        // ⚠️ 版权声明是 VERIFIED 的入参形态问题：缺声明/声明 PENDING 一律 400，
+        //    必须在抽检与 SoD 之前拦下，避免把「表单没填」误报成「抽检未通过」或「缺少复核人」。
+        LicenseStatus licenseStatus =
+                requireLicenseStatus(request.targetStatus(), request.licenseStatus());
         // ⚠️⚠️ V1.0.2 §5 R2 / 设计 §2.2.4：**抽检前置守卫**。
         //    签发 VERIFIED 之前必须确认该来源已通过人工抽检——这是治理底线，
         //    不是建议。漏判一次答案区即泄题（D04 §6 单点否决），
@@ -700,10 +705,18 @@ public class RagManagementController {
             }
         }
 
-        VerificationDecision decision = new VerificationDecision(
-                request.targetStatus(), request.evidenceRef(), request.decidedBy(),
-                request.verificationMethod(), request.trustTier(),
-                request.validDays() == null ? 365 : request.validDays());
+        VerificationDecision decision;
+        try {
+            decision = new VerificationDecision(
+                    request.targetStatus(), request.evidenceRef(), request.decidedBy(),
+                    request.verificationMethod(), request.trustTier(),
+                    request.validDays() == null ? 365 : request.validDays(),
+                    licenseStatus);
+        } catch (IllegalArgumentException e) {
+            // ⚠️ 入参形态问题（VERIFIED 缺权威等级 / 非法版权声明等）必须是 400，
+            //    不能让领域守卫冒泡成 500——那会把「表单没填」伪装成「服务故障」。
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        }
         CorpusSource updated;
         try {
             updated = managementPort.applyVerification(tenant, sourceId, decision);
@@ -1411,6 +1424,10 @@ public class RagManagementController {
         //    `?::uuid` 转换拒绝，那会变成一条 500 的 SQL 错误——
         //    而它其实是调用方传参错误，应当是 400。
         requireUuidPathVariable(documentId, "documentId");
+        // ⚠️ 版权声明与来源级同口径：VERIFIED 缺声明/声明 PENDING → 400，
+        //    非 VERIFIED 携带声明同样 400。先于端口调用，避免落库后才失败。
+        LicenseStatus licenseStatus =
+                requireLicenseStatus(request.targetStatus(), request.licenseStatus());
         CorpusDocument updated;
         try {
             // ⚠️ 命令构造与端口调用必须放在**同一个** try 里：
@@ -1419,7 +1436,8 @@ public class RagManagementController {
             DocumentVerificationDecision decision = new DocumentVerificationDecision(
                     request.targetStatus(), request.evidenceRef(), request.decidedBy(),
                     request.verificationMethod(), request.trustTier(),
-                    request.validDays() == null ? 365 : request.validDays());
+                    request.validDays() == null ? 365 : request.validDays(),
+                    licenseStatus);
             updated = managementPort.applyDocumentVerification(tenant, documentId, decision);
         } catch (IllegalArgumentException e) {
             // ⚠️ 入参形态问题（目标状态不在允许集合内等）→ 400。
@@ -2644,6 +2662,37 @@ public class RagManagementController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "查询参数 limit 必须是整数：" + limitParam);
         }
+    }
+
+    /**
+     * 解析校验决定中的版权声明。
+     *
+     * <p>⚠️ <b>VERIFIED 必须显式声明</b>且只能是 {@code LICENSED} /
+     * {@code FAIR_USE_QUOTATION}；非 VERIFIED 不得携带。任何缺失、拼错或
+     * 试图复用登记态 {@code PENDING} 的请求都返回 400，绝不猜默认值——
+     * 「版权未声明」被静默当成「已声明合理引用」是合规事故。
+     *
+     * @param target 目标校验状态
+     * @param raw    请求中的 licenseStatus（可空）
+     * @return 归一后的版权状态；非 VERIFIED 恒为 null
+     */
+    private static @Nullable LicenseStatus requireLicenseStatus(
+            VerificationStatus target, @Nullable String raw) {
+        boolean supplied = raw != null && !raw.isBlank();
+        if (target != VerificationStatus.VERIFIED) {
+            if (supplied) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "版权声明只允许 VERIFIED 决定携带；" + target + " 不得声明 licenseStatus");
+            }
+            return null;
+        }
+        LicenseStatus parsed = LicenseStatus.parse(raw);
+        if (parsed == null || !parsed.permitsRetrieval()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "判定 VERIFIED 必须显式声明版权状态 LICENSED 或 FAIR_USE_QUOTATION"
+                            + "（PENDING 是登记占位态，不支持放行）");
+        }
+        return parsed;
     }
 
     /**

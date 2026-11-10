@@ -16,6 +16,12 @@ import cn.studykid.rag.core.source.TrustTier;
  * 故本命令虽然也接收 {@code trustTier} 以保持两份 HTTP 契约同形，
  * 但它<b>不产生</b>任何等级变更效果。
  *
+ * <p><b>⚠️ VERIFIED 必须显式声明版权状态</b>：载体版权轴是 G-4 的独立一侧。
+ * 改造前登记 SQL 硬编码 {@code PENDING} 且没有写入端点，
+ * 于是「来源 VERIFIED + 载体 VERIFIED」仍可能因版权轴停在 PENDING 而语义不明。
+ * 本命令要求放行时必须给出 {@code LICENSED} / {@code FAIR_USE_QUOTATION}；
+ * 非 VERIFIED 流转不得携带版权声明。
+ *
  * <p><b>⚠️ 诚实边界：证据引用当前无处持久化</b>。
  * {@code rag_document} 只有 {@code revoked_reason} 一个可写依据的列，
  * {@code rag_access_audit} 也<b>没有</b>证据列（只有 {@code request_digest}，
@@ -36,6 +42,7 @@ import cn.studykid.rag.core.source.TrustTier;
  * @param verificationMethod 校验手段
  * @param trustTier 判定后的权威等级（载体级不改变来源等级，仅保持契约同形）
  * @param validDays 有效天数（载体级无独立有效期字段，仅保持契约同形）
+ * @param licenseStatus 版权声明（仅 VERIFIED，且必须可放行）
  */
 public record DocumentVerificationDecision(
         @NonNull VerificationStatus targetStatus,
@@ -43,7 +50,8 @@ public record DocumentVerificationDecision(
         @NonNull String decidedBy,
         @NonNull VerificationMethod verificationMethod,
         @Nullable TrustTier trustTier,
-        int validDays
+        int validDays,
+        @Nullable LicenseStatus licenseStatus
 ) {
 
     public DocumentVerificationDecision {
@@ -68,6 +76,30 @@ public record DocumentVerificationDecision(
         //    「PENDING 不是任何审核动作的目标」是入参形态问题（400），
         //    不该留到落库阶段才发现。
         DocumentVerification.requireAssignableTarget(targetStatus);
+        if (targetStatus == VerificationStatus.VERIFIED) {
+            if (licenseStatus == null) {
+                throw new IllegalArgumentException("载体判定 VERIFIED 必须显式声明版权状态"
+                        + "（LICENSED / FAIR_USE_QUOTATION）");
+            }
+            if (!licenseStatus.permitsRetrieval()) {
+                throw new IllegalArgumentException("版权状态 " + licenseStatus.name()
+                        + " 不支持载体 VERIFIED 放行；只允许 LICENSED / FAIR_USE_QUOTATION");
+            }
+        } else if (licenseStatus != null) {
+            throw new IllegalArgumentException(
+                    "版权声明只允许 VERIFIED 决定携带；" + targetStatus + " 不得声明 licenseStatus");
+        }
+    }
+
+    /** 兼容构造：<b>仅供非 VERIFIED 流转使用</b>；VERIFIED 必须走全参构造。 */
+    public DocumentVerificationDecision(@NonNull VerificationStatus targetStatus,
+                                        @NonNull String evidenceRef,
+                                        @NonNull String decidedBy,
+                                        @NonNull VerificationMethod verificationMethod,
+                                        @Nullable TrustTier trustTier,
+                                        int validDays) {
+        this(targetStatus, evidenceRef, decidedBy, verificationMethod,
+                trustTier, validDays, null);
     }
 
     /**
@@ -76,15 +108,17 @@ public record DocumentVerificationDecision(
      * @param method 校验手段
      * @param evidence 证据引用
      * @param decider 决定人
+     * @param license 显式版权声明（LICENSED / FAIR_USE_QUOTATION）
      * @param days 有效天数
      * @return 载体级校验决定
      */
     public static DocumentVerificationDecision approve(@NonNull VerificationMethod method,
                                                        @NonNull String evidence,
                                                        @NonNull String decider,
+                                                       @NonNull LicenseStatus license,
                                                        int days) {
         return new DocumentVerificationDecision(VerificationStatus.VERIFIED, evidence, decider,
-                method, null, days);
+                method, null, days, license);
     }
 
     /**

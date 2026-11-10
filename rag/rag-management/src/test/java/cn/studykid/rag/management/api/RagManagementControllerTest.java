@@ -186,7 +186,8 @@ class RagManagementControllerTest {
         // ⚠️ V1.0.2 S3-2：VerificationRequest 新增 verifiedBy（双人复核的第二个主体）
         ManagementDtos.VerificationRequest request = new ManagementDtos.VerificationRequest(
                 VerificationStatus.VERIFIED, null, "ISBN:ref@2026-01-01", REVIEWER,
-                VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365);
+                VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365,
+                "FAIR_USE_QUOTATION");
         // ⚠️ 本用例验证的是「非法状态转移 → 409」。它捕获的是端口抛出的 IllegalStateException，
         //    而端口调用位于**角色闸门之后**，所以必须给一个能过闸门的角色
         //    （否则会先在角色闸门得到 403，测不到状态机那条路径）。
@@ -195,6 +196,51 @@ class RagManagementControllerTest {
                         // 参数序：domain, ticketScope, principalAttr, rolesAttr, principalTypeAttr, body
                         PLATFORM_CALLER, null, null, "TENANT_REVIEWER", null, request));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("⛔ VERIFIED 缺版权声明返回 400，不误报成抽检/复核失败")
+    void verifiedWithoutLicenseIsBadRequest() {
+        ManagementDtos.VerificationRequest request = new ManagementDtos.VerificationRequest(
+                VerificationStatus.VERIFIED, null, "ISBN:ref@2026-01-01", REVIEWER,
+                VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365, null);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.applyVerification(TENANT, null, SCOPE_TENANT, SOURCE_ID,
+                        PLATFORM_CALLER, null, null, "TENANT_REVIEWER", null, request));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode(),
+                "「表单没填版权状态」是入参问题，不能伪装成 409 抽检失败或缺复核人");
+        assertTrue(ex.getReason().contains("LICENSED"));
+    }
+
+    @Test
+    @DisplayName("⛔ 用登记态 PENDING 冒充版权声明仍被 400 拒绝")
+    void verifiedWithPendingLicenseIsBadRequest() {
+        ManagementDtos.VerificationRequest request = new ManagementDtos.VerificationRequest(
+                VerificationStatus.VERIFIED, null, "ISBN:ref@2026-01-01", REVIEWER,
+                VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365, "PENDING");
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.applyVerification(TENANT, null, SCOPE_TENANT, SOURCE_ID,
+                        PLATFORM_CALLER, null, null, "TENANT_REVIEWER", null, request));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("PENDING"));
+    }
+
+    @Test
+    @DisplayName("⛔ 非 VERIFIED 流转携带版权声明返回 400（不写脏审计口径）")
+    void nonVerifiedWithLicenseIsBadRequest() {
+        ManagementDtos.VerificationRequest request = new ManagementDtos.VerificationRequest(
+                VerificationStatus.REVOKED, null, "权利人通知", REVIEWER,
+                VerificationMethod.NONE, null, 365, "FAIR_USE_QUOTATION");
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.applyVerification(TENANT, null, SCOPE_TENANT, SOURCE_ID,
+                        PLATFORM_CALLER, null, null, "TENANT_REVIEWER", null, request));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
     @Test
@@ -468,6 +514,37 @@ class RagManagementControllerTest {
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
                 () -> controller.applyDocumentVerification(null, null, SCOPE_TENANT, DOCUMENT_ID, PLATFORM_CALLER, null,
                         documentRequest(VerificationStatus.IN_REVIEW)));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+    }
+
+    @Test
+    @DisplayName("⛔ 载体 VERIFIED 缺版权声明返回 400（不落库后才失败）")
+    void documentVerifiedWithoutLicenseIsBadRequest() {
+        ManagementDtos.DocumentVerificationRequest request =
+                new ManagementDtos.DocumentVerificationRequest(
+                        VerificationStatus.VERIFIED, "ISBN:ref@2026-10-23", REVIEWER,
+                        VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365, null);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT,
+                        DOCUMENT_ID, PLATFORM_CALLER, null, request));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("版权"));
+    }
+
+    @Test
+    @DisplayName("⛔ 载体 VERIFIED 用 PENDING 版权状态仍返回 400")
+    void documentVerifiedWithPendingLicenseIsBadRequest() {
+        ManagementDtos.DocumentVerificationRequest request =
+                new ManagementDtos.DocumentVerificationRequest(
+                        VerificationStatus.VERIFIED, "ISBN:ref@2026-10-23", REVIEWER,
+                        VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365, "PENDING");
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.applyDocumentVerification(TENANT, null, SCOPE_TENANT,
+                        DOCUMENT_ID, PLATFORM_CALLER, null, request));
+
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
     }
 
@@ -819,7 +896,8 @@ class RagManagementControllerTest {
     private ManagementDtos.DocumentVerificationRequest documentRequest(VerificationStatus target) {
         return new ManagementDtos.DocumentVerificationRequest(
                 target, "ISBN:ref@2026-10-23", REVIEWER, VerificationMethod.ISBN,
-                TrustTier.OFFICIAL_PUBLISHER, 365);
+                TrustTier.OFFICIAL_PUBLISHER, 365,
+                target == VerificationStatus.VERIFIED ? "FAIR_USE_QUOTATION" : null);
     }
 
     // ---------------------------------------------------------------------

@@ -126,6 +126,21 @@ class DocumentVerificationTest {
     }
 
     @Test
+    @DisplayName("载体 VERIFIED 必须显式声明可放行的版权状态")
+    void verifiedDecisionRequiresExplicitLicense() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new DocumentVerificationDecision(VerificationStatus.VERIFIED, "ISBN:ref",
+                        REVIEWER, VerificationMethod.ISBN, null, 365));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DocumentVerificationDecision(VerificationStatus.VERIFIED, "ISBN:ref",
+                        REVIEWER, VerificationMethod.ISBN, null, 365, LicenseStatus.PENDING));
+        DocumentVerificationDecision ok = DocumentVerificationDecision.approve(
+                VerificationMethod.ISBN, "ISBN:ref", REVIEWER,
+                LicenseStatus.FAIR_USE_QUOTATION, 365);
+        assertEquals(LicenseStatus.FAIR_USE_QUOTATION, ok.licenseStatus());
+    }
+
+    @Test
     @DisplayName("撤回命令必须带依据（DB CHECK 亦强制）")
     void revokeRequiresEvidence() {
         assertThrows(IllegalArgumentException.class,

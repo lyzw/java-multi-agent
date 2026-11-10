@@ -30,6 +30,7 @@ import cn.studykid.rag.core.version.EditionCoordinate.Subject;
 import cn.studykid.rag.core.version.EditionCoordinate.Term;
 import cn.studykid.rag.core.version.EditionScope;
 import cn.studykid.rag.infrastructure.text.ChineseTokenizer;
+import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.ports.EmbeddingPort;
 import cn.studykid.rag.ports.RetrievalPort;
 
@@ -120,8 +121,13 @@ public class JdbcRetrievalRepository implements RetrievalPort {
      * <p>⚠️ <b>四轴齐备（评审 P0-7 · RAG-D07 §701 D2 的查询期硬过滤）</b>：
      * <ol>
      *   <li><b>G-0 两级校验</b>：来源与载体都 VERIFIED，且载体未被撤回；</li>
-     *   <li><b>G-4 版权</b>：来源与载体的 {@code license_status} 都不是 RESTRICTED
-     *       （两个独立轴，任一禁止即整体不可检索）；</li>
+     *   <li><b>G-4 版权</b>：来源与载体的 {@code license_status} 都必须是
+     *       {@code LICENSED} / {@code FAIR_USE_QUOTATION}（两个独立轴，任一未放行即整体不可检索）。
+     *       ⚠️ 旧谓词只写 {@code <> 'RESTRICTED'}，于是登记占位态 {@code PENDING}
+     *       也被当作「可用」——与管理面 {@link CorpusSource#licensePermitsRetrieval()}
+     *       的「PENDING 不放行」口径直接矛盾。2026-11-10 六年级物料导入实测发现：
+     *       版权轴没有任何写入路径，全库常驻 PENDING，检索 SQL 却照单全收。
+     *       这里收紧为显式白名单，让「未声明版权」真正不可检索；</li>
      *   <li><b>staleness 校验有效期</b>：{@code verified_at + ver_valid_days} 过期即失效
      *       （须重新校验；VERIFIED 行必有 verified_at，DDL 约束保证）；</li>
      *   <li><b>G-3 权威门槛</b>：来源等级达到服务端配置的门槛（含等于）。
@@ -148,8 +154,8 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                   AND src.ver_status = 'VERIFIED'
                   AND doc.ver_status = 'VERIFIED'
                   AND doc.retrievable
-                  AND src.license_status <> 'RESTRICTED'
-                  AND doc.license_status <> 'RESTRICTED'
+                  AND src.license_status IN ('LICENSED', 'FAIR_USE_QUOTATION')
+                  AND doc.license_status IN ('LICENSED', 'FAIR_USE_QUOTATION')
                   AND src.verified_at + make_interval(days => src.ver_valid_days) >= now()
                   AND src.trust_tier IN (%s)
             """;

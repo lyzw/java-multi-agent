@@ -260,6 +260,8 @@ public final class ManagementDtos {
      * @param verificationMethod 校验手段
      * @param trustTier 判定后的权威等级（VERIFIED 时必填）
      * @param validDays 有效天数
+     * @param licenseStatus VERIFIED 时显式声明的版权状态
+     *                      （LICENSED / FAIR_USE_QUOTATION；其余状态留空）
      */
     public record VerificationRequest(
             @NotNull(message = "targetStatus 不能为空")
@@ -298,7 +300,19 @@ public final class ManagementDtos {
             TrustTier trustTier,
 
             @MinValidDays
-            Integer validDays
+            Integer validDays,
+
+            /**
+             * ⚠️ <b>VERIFIED 必填</b>：版权状态必须与校验决定同时签署。
+             *
+             * <p>登记 SQL 恒写 {@code PENDING}，且历史上没有任何端点能把来源版权轴
+             * 改成可放行值——结果是「抽检通过 + 双人复核齐全」仍签不出可检索语料。
+             * 本字段只在 VERIFIED 时有意义；非 VERIFIED 携带它一律 400，
+             * 避免把一次拒绝/撤回混进版权声明。
+             */
+            @Pattern(regexp = "^$|^(LICENSED|FAIR_USE_QUOTATION)$",
+                    message = "licenseStatus 只允许 LICENSED 或 FAIR_USE_QUOTATION")
+            String licenseStatus
     ) {
     }
 
@@ -317,6 +331,8 @@ public final class ManagementDtos {
      * @param verificationMethod 校验手段
      * @param trustTier 权威等级（载体级不生效，仅保持契约同形）
      * @param validDays 有效天数（载体级不生效，仅保持契约同形）
+     * @param licenseStatus VERIFIED 时显式声明的载体版权状态
+     *                      （LICENSED / FAIR_USE_QUOTATION；其余状态留空）
      */
     public record DocumentVerificationRequest(
             @NotNull(message = "targetStatus 不能为空")
@@ -338,7 +354,19 @@ public final class ManagementDtos {
             TrustTier trustTier,
 
             @MinValidDays
-            Integer validDays
+            Integer validDays,
+
+            /**
+             * ⚠️ 载体 VERIFIED 必填。与来源级同口径：只接受
+             * {@code LICENSED} / {@code FAIR_USE_QUOTATION}。
+             *
+             * <p>来源 VERIFIED 时会把其下 PENDING 载体级联到同一版权状态；
+             * 本字段允许对单个载体显式声明更准确的依据（例如来源合理引用、
+             * 其中一份扫描件另有授权）。
+             */
+            @Pattern(regexp = "^$|^(LICENSED|FAIR_USE_QUOTATION)$",
+                    message = "licenseStatus 只允许 LICENSED 或 FAIR_USE_QUOTATION")
+            String licenseStatus
     ) {
     }
 

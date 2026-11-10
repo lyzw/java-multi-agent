@@ -35,6 +35,7 @@ import cn.studykid.rag.management.core.CorpusIssues;
 import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.management.core.CorpusStatistics;
 import cn.studykid.rag.management.core.DocumentVerificationDecision;
+import cn.studykid.rag.management.core.LicenseStatus;
 import cn.studykid.rag.management.core.RagTenantContext;
 import cn.studykid.rag.management.core.SourceQuery;
 import cn.studykid.rag.management.core.SourceRegistration;
@@ -294,7 +295,7 @@ class JdbcCorpusManagementRepositoryIT {
         // 试图 REJECTED → VERIFIED（禁止）
         assertThrows(IllegalStateException.class, () -> repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
-                        "ISBN:ref@2026-01-01", REVIEWER, 365)));
+                        "ISBN:ref@2026-01-01", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 365)));
 
         // ⚠️ 关键断言：状态必须仍是 REJECTED——非法转移不能留下任何写入痕迹。
         CorpusSource after = repository.findSource(RagManagementContext.forTenant(ctxT), id);
@@ -335,11 +336,13 @@ class JdbcCorpusManagementRepositoryIT {
                 VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
         CorpusSource verified = repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
-                        "ISBN:https://example/9787100000005@2026-10-22", REVIEWER, 365));
+                        "ISBN:https://example/9787100000005@2026-10-22", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 365));
         assertNotNull(verified);
         assertEquals(VerificationStatus.VERIFIED, verified.verificationStatus());
         assertEquals(TrustTier.OFFICIAL_PUBLISHER, verified.trustTier());
         assertEquals(VerificationMethod.ISBN, verified.verificationMethod());
+        assertEquals("FAIR_USE_QUOTATION", verified.licenseStatus(),
+                "VERIFIED 必须把显式声明的版权状态落库，而不是保留 PENDING");
         assertNotNull(verified.verifiedAt());
         assertEquals(REVIEWER, verified.verifiedBy());
 
@@ -385,7 +388,7 @@ class JdbcCorpusManagementRepositoryIT {
                 VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
         repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
-                        "ISBN:ref@2026-01-01", REVIEWER, 1));
+                        "ISBN:ref@2026-01-01", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 1));
 
         // 把 verified_at 往前推，使其超过 ver_valid_days
         transactionTemplate.executeWithoutResult(st -> {
@@ -417,7 +420,7 @@ class JdbcCorpusManagementRepositoryIT {
                 VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
         repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
-                        "ISBN:ref@2026-01-01", REVIEWER, 1));
+                        "ISBN:ref@2026-01-01", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 1));
 
         transactionTemplate.executeWithoutResult(st -> {
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
@@ -449,7 +452,7 @@ class JdbcCorpusManagementRepositoryIT {
         String id = source.sourceId();
         CorpusSource result = repository.applyVerification(RagManagementContext.forTenant(ctxT), id,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
-                        "ISBN:ref@2026-01-01", REVIEWER, 365));
+                        "ISBN:ref@2026-01-01", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 365));
         assertNull(result, "跨租户审核应查无此源（RLS 过滤）");
     }
 
@@ -495,7 +498,7 @@ class JdbcCorpusManagementRepositoryIT {
 
         assertThrows(IllegalStateException.class, () -> repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM),
                 documentId, DocumentVerificationDecision.approve(VerificationMethod.ISBN,
-                        "ISBN:ref@2026-10-23", REVIEWER, 365)),
+                        "ISBN:ref@2026-10-23", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 365)),
                 "来源未通过校验时载体不得自称 VERIFIED");
 
         // ⚠️ 关键断言：库中状态必须仍是 IN_REVIEW——被拒的流转不能留下写入痕迹。
@@ -519,12 +522,66 @@ class JdbcCorpusManagementRepositoryIT {
                         VerificationMethod.NONE, null, 365));
         CorpusDocument updated = repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM), documentId,
                 DocumentVerificationDecision.approve(VerificationMethod.ISBN,
-                        "ISBN:ref@2026-10-23", REVIEWER, 365));
+                        "ISBN:ref@2026-10-23", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 365));
         assertNotNull(updated);
         assertEquals(VerificationStatus.VERIFIED, updated.verificationStatus());
         assertTrue(updated.retrievable(), "VERIFIED 的载体必须可检索");
         assertNull(updated.revokedAt());
-        assertEquals("PENDING", updated.licenseStatus());
+        assertEquals("FAIR_USE_QUOTATION", updated.licenseStatus(),
+                "载体 VERIFIED 必须把显式声明的版权状态真正落库，不能再停在登记态 PENDING");
+    }
+
+    @Test
+    @DisplayName("来源 VERIFIED 的版权声明级联 PENDING 载体，但不复活已 RESTRICTED 载体")
+    void sourceVerificationCascadesLicenseWithoutRevivingRestrictedCarrier() {
+        CorpusSource source = registerIn(ctxM, "9787100000038", "级联版权教材");
+        String pendingDoc = seedDocument(ctxM, source.sourceId(), "官方电子版", "PDF", "CHUNKED");
+        String restrictedDoc = seedDocument(ctxM, source.sourceId(), "已下架扫描版", "SCAN", "CHUNKED");
+        // ⚠️ 造一个「载体单独下架」的既成事实。来源通过校验不是撤销它的理由，
+        //    否则一次正常的版权声明就会把历史撤回悄悄翻案。
+        transactionTemplate.executeWithoutResult(st -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, ctxM.tenantId());
+            jdbcTemplate.update("""
+                    UPDATE rag_document
+                    SET ver_status = 'REVOKED'::rag_verification_status,
+                        retrievable = FALSE,
+                        revoked_at = now(),
+                        revoked_reason = '权利人要求单独下架',
+                        license_status = 'RESTRICTED'::rag_license_status
+                    WHERE tenant_id = rag_current_tenant() AND document_id = ?::uuid
+                    """, restrictedDoc);
+        });
+
+        repository.applyVerification(RagManagementContext.forTenant(ctxM), source.sourceId(),
+                new VerificationDecision(VerificationStatus.IN_REVIEW, "认领", REVIEWER,
+                        VerificationMethod.NONE, null, 365));
+        CorpusSource verified = repository.applyVerification(RagManagementContext.forTenant(ctxM), source.sourceId(),
+                VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
+                        "合理引用：已按版权页与教学引用范围声明@2026-11-10", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 365));
+        assertNotNull(verified);
+        assertEquals("FAIR_USE_QUOTATION", verified.licenseStatus(),
+                "来源 VERIFIED 必须把显式声明的版权状态真正落库");
+
+        CorpusDocument inherited = findDocument(ctxM, pendingDoc);
+        assertNotNull(inherited);
+        assertEquals("FAIR_USE_QUOTATION", inherited.licenseStatus(),
+                "来源下的 PENDING 载体应继承同一版权依据，否则载体永远卡在 PENDING");
+        CorpusDocument stillBlocked = findDocument(ctxM, restrictedDoc);
+        assertNotNull(stillBlocked);
+        assertEquals("RESTRICTED", stillBlocked.licenseStatus(),
+                "来源通过不得复活已单独下架的载体");
+        assertFalse(stillBlocked.retrievable());
+
+        repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM), pendingDoc,
+                new DocumentVerificationDecision(VerificationStatus.IN_REVIEW, "认领", REVIEWER,
+                        VerificationMethod.NONE, null, 365));
+        CorpusDocument released = repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM), pendingDoc,
+                DocumentVerificationDecision.approve(VerificationMethod.ISBN,
+                        "合理引用：逐份载体核对@2026-11-10", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 365));
+        assertNotNull(released);
+        assertTrue(released.retrievable(), "来源与载体均 VERIFIED 且版权放行后应可检索");
+        assertEquals("FAIR_USE_QUOTATION", released.licenseStatus());
     }
 
     @Test
@@ -565,7 +622,7 @@ class JdbcCorpusManagementRepositoryIT {
 
         assertThrows(IllegalStateException.class, () -> repository.applyDocumentVerification(RagManagementContext.forTenant(ctxM),
                 documentId, DocumentVerificationDecision.approve(VerificationMethod.ISBN,
-                        "ISBN:ref@2026-10-23", REVIEWER, 365)),
+                        "ISBN:ref@2026-10-23", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 365)),
                 "REVOKED 是终态（T-10）");
     }
 
@@ -707,7 +764,7 @@ class JdbcCorpusManagementRepositoryIT {
                 VerificationStatus.IN_REVIEW, "认领", REVIEWER, VerificationMethod.NONE, null, 365));
         repository.applyVerification(RagManagementContext.forTenant(ctxM), sourceId,
                 VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
-                        "ISBN:ref@2026-10-23", REVIEWER, 365));
+                        "ISBN:ref@2026-10-23", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 365));
     }
 
     /**
@@ -976,9 +1033,8 @@ class JdbcCorpusManagementRepositoryIT {
             opsRepository.applyVerification(platform, id, new VerificationDecision(
                     VerificationStatus.IN_REVIEW, "认领", REVIEWER,
                     VerificationMethod.NONE, null, 365));
-            opsRepository.applyVerification(platform, id, VerificationDecision.approve(
-                    TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
-                    "ISBN:global@2026-10-29", REVIEWER, 365));
+            opsRepository.applyVerification(platform, id, VerificationDecision.approve(TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
+                    "ISBN:global@2026-10-29", REVIEWER, LicenseStatus.FAIR_USE_QUOTATION, 365));
 
             // ⚠️ 断言读的是<b>库里的真实状态</b>，不是返回值：
             //    跨桶 UPDATE 被策略挡住的表现是「影响 0 行、不报错」（第一刀实测），

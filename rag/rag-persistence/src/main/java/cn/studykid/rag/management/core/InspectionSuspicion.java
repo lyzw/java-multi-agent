@@ -77,7 +77,18 @@ public record InspectionSuspicion(
         /**
          * 答案类片段却缺少页码：无法回取原文核对。
          */
-        NO_LOCATOR("片段缺页码，无法回取原文核对", Severity.LOW);
+        NO_LOCATOR("片段缺页码，无法回取原文核对", Severity.LOW),
+
+        /**
+         * 确认性抽检样本（零疑点来源专用）。
+         *
+         * <p>⚠️ <b>这不是「疑点」</b>：当 {@link SuspicionRules} 未命中任何高风险模式时，
+         * 抽检台没有可裁决的片段，来源会永远签不出 VERIFIED（见
+         * {@link ConfirmationSampling}）。本成因把均匀抽出的正常片段交给人确认，
+         * 让「系统没报错」的来源也能走完「人确实看过」这道治理关卡。
+         * 它不改变结论聚合——人仍须逐条判 PASS/FAIL，答案区漏判依旧单点否决。
+         */
+        ROUTINE_CONFIRM("确认性抽检样本（未发现自动疑点，请人工核对角色判定）", Severity.LOW);
 
         private final String description;
         private final Severity severity;

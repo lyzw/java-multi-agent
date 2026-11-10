@@ -95,6 +95,11 @@ class RetrievalRepositoryIT {
     private static final String E6 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa9";
     private static final String D6 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     private static final String C7 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb7";
+    // G-4 版权夹具（来源/载体均 VERIFIED，但载体版权仍是登记态 PENDING）
+    private static final String S7 = "dddddddd-dddd-dddd-dddd-dddddddddd01";
+    private static final String E7 = "dddddddd-dddd-dddd-dddd-dddddddddd02";
+    private static final String D7 = "dddddddd-dddd-dddd-dddd-dddddddddd03";
+    private static final String C8 = "dddddddd-dddd-dddd-dddd-dddddddddd04";
 
     // 平台全局语料夹具（tenant_id = 全局哨兵，scope='PLATFORM'）
     private static final String GS = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeee01";
@@ -112,6 +117,10 @@ class RetrievalRepositoryIT {
     /** 载体级撤回夹具所用的版本坐标（北师大版，与人教版错开以避开 rag_edition_unique）。 */
     private static final EditionCoordinate E_BSED = new EditionCoordinate(
             Subject.MATH, GradeBand.GRADE_8, Term.FIRST, Publisher.BEISHIDA, "2024修订");
+
+    /** G-4 版权夹具版本坐标（沪教版，避开已用的四家出版社）。 */
+    private static final EditionCoordinate E_HUJIAO = new EditionCoordinate(
+            Subject.MATH, GradeBand.GRADE_8, Term.FIRST, Publisher.HUJIAO, "2024修订");
 
     private JdbcTemplate jdbcTemplate;
     private TransactionTemplate transactionTemplate;
@@ -339,6 +348,28 @@ class RetrievalRepositoryIT {
         List<String> searched = searchAs(T, req).stream().map(s -> s.chunk().id()).toList();
         assertTrue(searched.contains(C1),
                 "✅ 正常（载体已校验且可检索）的语料必须仍能召回");
+    }
+
+    @Test
+    @DisplayName("⛔ 版权状态仍为 PENDING 时，已 VERIFIED 且可检索的载体也不得召回/取回")
+    void pendingLicenseIsNotRetrieved() {
+        // ⚠️ 这是 G-4 的「未声明版权」侧。旧 SQL 只写 `<> 'RESTRICTED'`，
+        //    PENDING 会被静默放行；管理面 CorpusSource.licensePermitsRetrieval()
+        //    却明确 PENDING 不放行——同一条语料在「看板」与「检索」里结论相反。
+        //    2026-11-10 六年级导入实测：7 本版权轴全停在 PENDING，
+        //    若没有这道守卫，「没声明版权」会被当成「已获授权」。
+        seedPendingLicenseSource();
+
+        RetrievalRequest req = new RetrievalRequest(
+                "二次函数的顶点", RetrievalMode.EXPLAIN, EditionScope.strict(E_HUJIAO),
+                null, null, null, 10);
+        List<String> searched = searchAs(T, req).stream().map(s -> s.chunk().id()).toList();
+        assertFalse(searched.contains(C8),
+                "载体版权轴=PENDING 属于未声明授权，检索必须 fail-closed");
+
+        List<String> loaded = loadByIdsAs(T, List.of(C8)).stream().map(Chunk::id).toList();
+        assertTrue(loaded.isEmpty(),
+                "未声明版权的片段更不得作为生成依据——比不引用更糟的是引用未授权内容");
     }
 
     // ---------------------------------------------------------------------
@@ -672,6 +703,26 @@ class RetrievalRepositoryIT {
     }
 
     /**
+     * 造一条「来源与载体都 VERIFIED、载体可检索，但版权轴仍是 PENDING」的语料。
+     *
+     * <p>⚠️ 只把版权轴单独拎出来，避免和其他三轴混在一起：
+     * 若这里同时放宽 ver_status / retrievable / trust_tier，测试就无法证明
+     * 「PENDING 被拒」确实由 G-4 版权过滤造成。
+     */
+    private void seedPendingLicenseSource() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, T);
+            insertSource(S7, T, "沪教版", "ISBN-PENDING-G4");
+            insertEdition(E7, T, S7, "沪教版");
+            insertDocument(jdbcTemplate, D7, T, S7, E7, "PENDING", "TENANT");
+            insertChunk(C8, T, D7, E7, "EXPLANATION",
+                    "沪教版二次函数的顶点讲解内容");
+            return null;
+        });
+    }
+
+    /**
      * 造一条「来源等级低于权威门槛、其余轴全部合格」的语料（G-3 双向钉死的反向侧）。
      *
      * <p>ver_status=VERIFIED / license=LICENSED / 新鲜（verified_at=now()），
@@ -800,21 +851,33 @@ class RetrievalRepositoryIT {
     }
 
     private void insertDocument(String documentId, String tenantId, String sourceId, String editionId) {
-        insertDocument(jdbcTemplate, documentId, tenantId, sourceId, editionId, "TENANT");
+        insertDocument(jdbcTemplate, documentId, tenantId, sourceId, editionId,
+                "LICENSED", "TENANT");
     }
 
     private void insertDocument(JdbcTemplate jdbc, String documentId, String tenantId,
                                 String sourceId, String editionId, String scope) {
-        // ⚠️⚠️ **必须显式置位载体级准入标记**（修复前此处不写，依赖默认值）：
-        //    rag_document.ver_status 默认 'PENDING'、retrievable 默认 FALSE，
-        //    而检索侧现在**会**过滤这两列（载体级撤回此前在检索侧完全无效）。
-        //    不置位则所有夹具文档都不可检索 —— 那正是修复要达成的效果，
-        //    但会让本 IT 测不到「正常语料能召回」。
+        insertDocument(jdbc, documentId, tenantId, sourceId, editionId, "LICENSED", scope);
+    }
+
+    /**
+     * 载体夹具；{@code licenseStatus} 显式传值，便于把 G-4「未声明版权」侧独立造出来。
+     *
+     * <p>⚠️⚠️ **必须显式置位载体级准入标记**（修复前此处不写，依赖默认值）：
+     * rag_document.ver_status 默认 'PENDING'、retrievable 默认 FALSE，
+     * 而检索侧现在**会**过滤这两列（载体级撤回此前在检索侧完全无效）。
+     * 不置位则所有夹具文档都不可检索 —— 那正是修复要达成的效果，
+     * 但会让本 IT 测不到「正常语料能召回」。
+     */
+    private void insertDocument(JdbcTemplate jdbc, String documentId, String tenantId,
+                                String sourceId, String editionId,
+                                String licenseStatus, String scope) {
         jdbc.update(
                 "INSERT INTO rag_document (document_id, tenant_id, source_id, edition_id, title, "
-                        + "parse_status, ver_status, retrievable, scope) "
+                        + "parse_status, ver_status, retrievable, license_status, scope) "
                         + "VALUES (?::uuid, ?::uuid, ?::uuid, ?::uuid, 'fixture', 'CHUNKED', "
-                        + "'VERIFIED'::rag_verification_status, TRUE, ?) "
+                        + "'VERIFIED'::rag_verification_status, TRUE, "
+                        + "?::rag_license_status, ?) "
                         // ⚠️ DO UPDATE 而非 DO NOTHING（评审 P0-7 期间实测）：
                         //    共享 IT 库可能残留旧版本夹具的行（当年不写准入标记，
                         //    ver_status=PENDING / retrievable=FALSE）——DO NOTHING 会被
@@ -824,8 +887,9 @@ class RetrievalRepositoryIT {
                         + "parse_status = EXCLUDED.parse_status, "
                         + "ver_status = EXCLUDED.ver_status, "
                         + "retrievable = EXCLUDED.retrievable, "
+                        + "license_status = EXCLUDED.license_status, "
                         + "scope = EXCLUDED.scope",
-                documentId, tenantId, sourceId, editionId, scope);
+                documentId, tenantId, sourceId, editionId, licenseStatus, scope);
     }
 
     private void insertChunk(String chunkId, String tenantId, String documentId, String editionId,

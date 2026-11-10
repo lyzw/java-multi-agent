@@ -718,12 +718,18 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                         "权威等级 " + targetTier + " 需要 ISBN 或 DOI，但该来源两者皆无");
             }
 
-            // ⚠️ 版权状态：撤回（REVOKED）时强制置 RESTRICTED。
+            // ⚠️ 版权状态：VERIFIED 时采用决定中**显式声明**的版权状态；
+            //    撤回（REVOKED）时强制置 RESTRICTED。
             //    RAG-D07 §2.3.1 G-4 把「版权状态」与「校验状态」作为两个独立轴，
             //    但撤回意味着「权利人要求下架」——此时版权轴必须同时关闭，
             //    否则一旦有别的路径只看版权轴，撤回语料仍可能被检索到。
+            //    ⚠️ 改造前这里只会保留 current（登记态恒 PENDING），
+            //    全库又没有把 PENDING 改成 FAIR_USE_QUOTATION 的端点，
+            //    于是「抽检 PASSED + 双人复核齐全」仍签不出可检索语料。
             String licenseStatus = current.licenseStatus();
-            if (decision.targetStatus() == VerificationStatus.REVOKED) {
+            if (decision.targetStatus() == VerificationStatus.VERIFIED) {
+                licenseStatus = decision.licenseStatus().name();
+            } else if (decision.targetStatus() == VerificationStatus.REVOKED) {
                 licenseStatus = "RESTRICTED";
             }
 
@@ -755,6 +761,27 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                     decision.targetStatus().name(), decision.decidedBy(),
                     decision.targetStatus().name(),
                     sourceId);
+
+            // ⚠️⚠️ 来源 VERIFIED 的版权声明必须级联到**仍处于 PENDING 的载体**。
+            //    载体版权轴（rag_document.license_status）是 G-4 的独立一侧，
+            //    但它的 PENDING 只是「登记时还没审到版权」的占位态，
+            //    不是 against 该来源的否定结论。来源层面既然已经由人显式声明
+            //    LICENSED / FAIR_USE_QUOTATION，其下未单独定级的载体应继承同一依据。
+            //    ⚠️ 只更新 PENDING：已 RESTRICTED 的载体是「单独下架」的既成事实，
+            //    来源通过校验绝不能把它悄悄放回来（那会让撤回形同虚设）。
+            if (decision.targetStatus() == VerificationStatus.VERIFIED
+                    && decision.licenseStatus().permitsRetrieval()) {
+                int cascaded = ch.template().update("""
+                        UPDATE rag_document
+                        SET license_status = ?::rag_license_status,
+                            updated_at = now()
+                        WHERE tenant_id = %s AND source_id = ?::uuid
+                          AND license_status = 'PENDING'::rag_license_status
+                        """.formatted(ch.tenantExpr()),
+                        decision.licenseStatus().name(), sourceId);
+                log.info("[RAG] 来源 {} VERIFIED 版权声明 {} 级联到 {} 个 PENDING 载体",
+                        sourceId, decision.licenseStatus(), cascaded);
+            }
 
             // ⚠️ 撤回必须**连带下架该来源下的所有载体**。
             //    理由：来源级与载体级是两个独立轴（RAG-D07 §2.3.1 G-0 要求两者同时通过）。
@@ -890,6 +917,15 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
             boolean retrievable = DocumentVerification.retrievableAfter(decision.targetStatus());
             boolean revoked = decision.targetStatus() == VerificationStatus.REVOKED;
 
+            // ⚠️ 版权轴：VERIFIED 用决定中显式声明的状态；REVOKED 强制 RESTRICTED；
+            //    其余流转保留原值。绝不把「未声明」猜成 LICENSED，
+            //    也不让来源级通过覆盖载体上已有的单独下架结论。
+            String licenseStatus = switch (decision.targetStatus()) {
+                case VERIFIED -> decision.licenseStatus().name();
+                case REVOKED -> "RESTRICTED";
+                default -> current.licenseStatus();
+            };
+
             ch.template().update("""
                     UPDATE rag_document
                     SET ver_status = ?::rag_verification_status,
@@ -898,15 +934,13 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                                           THEN now() ELSE revoked_at END,
                         revoked_reason = CASE WHEN ?::rag_verification_status = 'REVOKED'
                                               THEN ? ELSE revoked_reason END,
-                        license_status = CASE WHEN ?::rag_verification_status = 'REVOKED'
-                                              THEN 'RESTRICTED'::rag_license_status
-                                              ELSE license_status END,
+                        license_status = ?::rag_license_status,
                         updated_at = now()
                     WHERE tenant_id = %s AND document_id = ?::uuid
                     """.formatted(ch.tenantExpr()),
                     decision.targetStatus().name(), retrievable,
                     decision.targetStatus().name(), decision.targetStatus().name(),
-                    decision.evidenceRef(), decision.targetStatus().name(), documentId);
+                    decision.evidenceRef(), licenseStatus, documentId);
 
             // ⚠️ 审计与状态变更同事务（RAG-D07 §2.5）。
             //    载体级动作记在**来源**上：审计表没有「文档」维度，

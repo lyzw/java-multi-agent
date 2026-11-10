@@ -23,8 +23,15 @@ import cn.studykid.rag.core.source.TrustTier;
  *       否则来源「已校验」却仍是 {@code UNVERIFIED}，
  *       依然过不了 G-3 门槛，审核就<b>没有产生实际效果</b>；</li>
  *   <li>必须给出 {@code verificationMethod}——ISBN / DOI / MANUAL_REVIEW /
- *       OFFICIAL_HASH 决定了证据的可复核方式。</li>
+ *       OFFICIAL_HASH 决定了证据的可复核方式；</li>
+ *   <li><b>必须显式声明 {@code licenseStatus}</b>——且只能是
+ *       {@code LICENSED} / {@code FAIR_USE_QUOTATION}。版权轴曾被硬编码为
+ *       {@code PENDING} 且没有任何写入端点，导致「技术导入完成、治理永远签不出去」。
+ *       未声明即拒绝，绝不猜默认值。</li>
  * </ul>
+ *
+ * <p>⚠️ 非 VERIFIED 流转<b>不允许携带</b>版权声明：它只在放行时有意义，
+ * 带着它走 REJECTED/REVOKED 只会让审计口径变脏。
  *
  * @param targetStatus 目标校验状态
  * @param evidenceRef 校验依据引用（建议 {@code method:ref@timestamp} 形式）
@@ -32,6 +39,7 @@ import cn.studykid.rag.core.source.TrustTier;
  * @param verificationMethod 校验手段
  * @param trustTier 判定后的权威等级（仅 VERIFIED 时必填）
  * @param validDays 校验结论有效天数
+ * @param licenseStatus 版权声明（仅 VERIFIED，且必须可放行）
  */
 public record VerificationDecision(
         @NonNull VerificationStatus targetStatus,
@@ -39,7 +47,8 @@ public record VerificationDecision(
         @NonNull String decidedBy,
         @NonNull VerificationMethod verificationMethod,
         @Nullable TrustTier trustTier,
-        int validDays
+        int validDays,
+        @Nullable LicenseStatus licenseStatus
 ) {
 
     public VerificationDecision {
@@ -60,10 +69,40 @@ public record VerificationDecision(
         if (validDays <= 0) {
             throw new IllegalArgumentException("validDays 必须 > 0");
         }
-        if (targetStatus == VerificationStatus.VERIFIED && trustTier == null) {
-            throw new IllegalArgumentException("判定 VERIFIED 必须同时给出权威等级"
-                    + "（否则来源通过校验却仍被 G-3 门槛拦下，审核形同虚设）");
+        if (targetStatus == VerificationStatus.VERIFIED) {
+            if (trustTier == null) {
+                throw new IllegalArgumentException("判定 VERIFIED 必须同时给出权威等级"
+                        + "（否则来源通过校验却仍被 G-3 门槛拦下，审核形同虚设）");
+            }
+            if (licenseStatus == null) {
+                throw new IllegalArgumentException("判定 VERIFIED 必须显式声明版权状态"
+                        + "（LICENSED / FAIR_USE_QUOTATION），不得沿用登记态 PENDING");
+            }
+            if (!licenseStatus.permitsRetrieval()) {
+                throw new IllegalArgumentException("版权状态 " + licenseStatus.name()
+                        + " 不支持 VERIFIED 放行；只允许 LICENSED / FAIR_USE_QUOTATION");
+            }
+        } else if (licenseStatus != null) {
+            throw new IllegalArgumentException(
+                    "版权声明只允许 VERIFIED 决定携带；" + targetStatus + " 不得声明 licenseStatus");
         }
+    }
+
+    /**
+     * 兼容构造：<b>仅供非 VERIFIED 流转使用</b>（认领 / 拒绝 / 撤回）。
+     *
+     * <p>⚠️ 这不是「缺省版权声明」：若 targetStatus 为 VERIFIED，
+     * 上面的不变式会直接拒绝，而不是悄悄落一个 {@code PENDING}。
+     * 保留它是为了让历史调用点不必为了「不加版权轴」而手写 {@code null}。
+     */
+    public VerificationDecision(@NonNull VerificationStatus targetStatus,
+                                @NonNull String evidenceRef,
+                                @NonNull String decidedBy,
+                                @NonNull VerificationMethod verificationMethod,
+                                @Nullable TrustTier trustTier,
+                                int validDays) {
+        this(targetStatus, evidenceRef, decidedBy, verificationMethod,
+                trustTier, validDays, null);
     }
 
     /**
@@ -73,6 +112,7 @@ public record VerificationDecision(
      * @param method 校验手段
      * @param evidence 证据引用
      * @param decider 决定人
+     * @param license 显式版权声明（必须是 LICENSED / FAIR_USE_QUOTATION）
      * @param days 有效天数
      * @return 校验决定
      */
@@ -80,8 +120,10 @@ public record VerificationDecision(
                                               @NonNull VerificationMethod method,
                                               @NonNull String evidence,
                                               @NonNull String decider,
+                                              @NonNull LicenseStatus license,
                                               int days) {
-        return new VerificationDecision(VerificationStatus.VERIFIED, evidence, decider, method, tier, days);
+        return new VerificationDecision(VerificationStatus.VERIFIED, evidence, decider,
+                method, tier, days, license);
     }
 
     /**

@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.util.List;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -87,8 +89,36 @@ class SourceRegistrationTest {
                 VerificationMethod.ISBN, null, 365));
         VerificationDecision d = VerificationDecision.approve(
                 TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
-                "ISBN:ref@2026-01-01", "reviewer-1", 365);
+                "ISBN:ref@2026-01-01", "reviewer-1",
+                LicenseStatus.FAIR_USE_QUOTATION, 365);
         assertEquals(TrustTier.OFFICIAL_PUBLISHER, d.trustTier());
+    }
+
+    @Test
+    @DisplayName("VERIFIED 必须显式声明可放行的版权状态（不得沿用登记态 PENDING）")
+    void approveRequiresExplicitLicense() {
+        // 缺声明：旧代码会让来源 VERIFIED 但 license 仍 PENDING，治理链路静默走不动。
+        assertThrows(IllegalArgumentException.class, () -> new VerificationDecision(
+                VerificationStatus.VERIFIED, "ISBN:ref@2026-01-01", "reviewer-1",
+                VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365));
+        // 声明了但不可放行：同样拒绝，而不是「有填就算」。
+        for (LicenseStatus blocked : List.of(LicenseStatus.PENDING, LicenseStatus.RESTRICTED)) {
+            assertThrows(IllegalArgumentException.class, () -> new VerificationDecision(
+                    VerificationStatus.VERIFIED, "ISBN:ref@2026-01-01", "reviewer-1",
+                    VerificationMethod.ISBN, TrustTier.OFFICIAL_PUBLISHER, 365, blocked));
+        }
+        VerificationDecision ok = VerificationDecision.approve(
+                TrustTier.OFFICIAL_PUBLISHER, VerificationMethod.ISBN,
+                "ISBN:ref@2026-01-01", "reviewer-1", LicenseStatus.LICENSED, 365);
+        assertEquals(LicenseStatus.LICENSED, ok.licenseStatus());
+    }
+
+    @Test
+    @DisplayName("非 VERIFIED 流转不得携带版权声明（避免脏审计口径）")
+    void nonVerifiedCannotDeclareLicense() {
+        assertThrows(IllegalArgumentException.class, () -> new VerificationDecision(
+                VerificationStatus.REJECTED, "证据不足", "reviewer-1",
+                VerificationMethod.NONE, null, 365, LicenseStatus.FAIR_USE_QUOTATION));
     }
 
     @Test

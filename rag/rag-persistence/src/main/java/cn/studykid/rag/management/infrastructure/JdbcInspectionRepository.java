@@ -10,6 +10,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.core.scope.RagCorpusScope;
 import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
+import cn.studykid.rag.management.core.ConfirmationSampling;
 import cn.studykid.rag.management.core.InspectionGuard;
 import cn.studykid.rag.management.core.InspectionRecord;
 import cn.studykid.rag.management.core.InspectionSuspicion;
@@ -198,6 +199,14 @@ public class JdbcInspectionRepository implements InspectionPort {
             List<InspectionSuspicion> findings = new ArrayList<>();
             for (SuspicionRules.ChunkFacts f : facts) {
                 findings.addAll(SuspicionRules.inspect(f));
+            }
+            // ⚠️⚠️ 零疑点回退（V1.0.2 S3 补充）：质量很好的来源可能一条规则都不命中，
+            //    若就此返回空，抽检台没有可裁决的片段、提交按钮不出现，
+            //    inspection_status 永远停在 NOT_REQUIRED → VERIFIED 死锁（实测：4 本六年级教材）。
+            //    故从正常片段中均匀抽样交人确认——这是「给人看的材料」，不是自动放行：
+            //    结论仍由人提交的记录经 InspectionRules 聚合，答案区漏判依旧单点否决。
+            if (findings.isEmpty()) {
+                return ConfirmationSampling.sample(facts, limit);
             }
             // ⚠️ 排序后截断：HIGH（可能泄题）必须排在最前，
             //    否则人翻到第 10 条就累了，最危险的那条还没出现。
