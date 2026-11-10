@@ -311,6 +311,14 @@ export interface RagVerificationRequest {
   verificationMethod: RagVerificationMethod
   /** 判定 VERIFIED 时必填（否则来源通过校验却仍被权威门槛拦下） */
   trustTier: RagTrustTier | null
+  /**
+   * VERIFIED 时必填的版权声明。
+   *
+   * ⚠️ 登记态恒为 PENDING，且后端没有任何隐式升级路径——
+   *    不显式声明就会让「抽检通过 + 双人复核齐全」仍签不出可检索语料。
+   *    仅 LICENSED / FAIR_USE_QUOTATION 可选；非 VERIFIED 传 null。
+   */
+  licenseStatus?: RagLicenseStatus | null
   validDays: number
 }
 
@@ -328,6 +336,8 @@ export interface RagDocumentVerificationRequest {
   decidedBy: string
   verificationMethod: RagVerificationMethod
   trustTier: RagTrustTier | null
+  /** VERIFIED 时必填，口径与来源级一致（LICENSED / FAIR_USE_QUOTATION） */
+  licenseStatus?: RagLicenseStatus | null
   validDays: number
 }
 

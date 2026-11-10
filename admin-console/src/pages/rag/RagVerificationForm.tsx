@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Alert, Button, Form, Input, InputNumber, Select, Space, Typography } from 'antd'
 import type {
+  RagLicenseStatus,
   RagReviewer,
   RagVerificationRequest,
   RagVerificationStatus,
@@ -48,7 +49,21 @@ interface FormShape {
   validDays: number
   /** 复核人（双人复核的第二个人）—— 仅 VERIFIED 必填 */
   verifiedBy: string
+  /** 版权声明 —— 仅 VERIFIED 必填；只允许可放行的两种 */
+  licenseStatus: RagLicenseStatus | null
 }
+
+/**
+ * VERIFIED 可用的版权状态白名单。
+ *
+ * ⚠️ 刻意不复用字典全集：字典里还有 PENDING / RESTRICTED，
+ *   它们对 VERIFIED 是禁用值。让「不能选」发生在 UI 上，
+ *   比让人选完再吃 400 更省事，也避免误以为 PENDING 是个合法选项。
+ */
+const VERIFIABLE_LICENSE_OPTIONS: { value: RagLicenseStatus; label: string }[] = [
+  { value: 'FAIR_USE_QUOTATION', label: 'FAIR_USE_QUOTATION · 合理引用' },
+  { value: 'LICENSED', label: 'LICENSED · 已获授权' },
+]
 
 /** UUID 形状（后端 SoD 会把该值写进 uuid 列，畸形串只会得到 500/409）。 */
 const UUID_PATTERN =
@@ -120,6 +135,7 @@ export function RagVerificationForm({
     if (targetStatus !== 'VERIFIED') {
       form.setFieldValue('trustTier', null)
       form.setFieldValue('verifiedBy', '')
+      form.setFieldValue('licenseStatus', null)
     }
   }, [targetStatus, form])
 
@@ -145,6 +161,8 @@ export function RagVerificationForm({
       decidedBy,
       verificationMethod: values.verificationMethod,
       trustTier: values.targetStatus === 'VERIFIED' ? values.trustTier : null,
+      // ⚠️ 版权声明与校验决定同一次提交；非 VERIFIED 一律 null，避免脏审计口径。
+      licenseStatus: values.targetStatus === 'VERIFIED' ? values.licenseStatus : null,
       validDays: values.validDays,
     }
     onSubmitted(payload)
@@ -161,6 +179,7 @@ export function RagVerificationForm({
         verificationMethod: 'MANUAL_REVIEW',
         validDays: 365,
         trustTier: null,
+        licenseStatus: null,
       }}
       onFinish={handleFinish}
     >
@@ -209,6 +228,26 @@ export function RagVerificationForm({
           <InputNumber min={1} max={3650} />
         </Form.Item>
       </Space>
+
+      {/*
+        ⚠️ 版权声明必须与 VERIFIED 同一次提交。
+        登记态恒 PENDING，历史上没有写入端点；若这里不选，后端会 400，
+        来源/载体就永远停在「抽检通过但不可检索」的死锁里。
+      */}
+      <Form.Item
+        label="版权声明（VERIFIED 必填）"
+        name="licenseStatus"
+        style={{ maxWidth: 420 }}
+        tooltip="按实际授权依据选择。合理引用需已核对引用范围与版权状态；禁止使用 PENDING / RESTRICTED。"
+        rules={isVerifiedTarget ? [{ required: true, message: '通过校验须声明版权状态' }] : []}
+      >
+        <Select
+          allowClear={isVerifiedTarget}
+          disabled={!isVerifiedTarget}
+          placeholder={isVerifiedTarget ? '请选择版权状态' : '仅「通过校验」需要'}
+          options={VERIFIABLE_LICENSE_OPTIONS}
+        />
+      </Form.Item>
 
       {/*
         双人复核的第二个主体。

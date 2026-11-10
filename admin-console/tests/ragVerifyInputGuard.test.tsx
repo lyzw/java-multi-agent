@@ -165,4 +165,63 @@ describe('校验决定页输入守卫', () => {
     })
     expect(screen.queryByPlaceholderText(/选择第二位签署人/)).toBeNull()
   })
+
+  it('VERIFIED 只暴露可放行的版权状态，并预填已确认的合理引用', async () => {
+    await renderPage()
+    fireEvent.change(screen.getByPlaceholderText(/粘贴来源 UUID/), {
+      target: { value: SOURCE_ID },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/版权声明（必填）/)).toBeInTheDocument()
+    })
+    // ⚠️ 登记态 PENDING / 禁止态 RESTRICTED 绝不能出现在 VERIFIED 的选项里，
+    //    否则「选了再被 400 拒」会让人误以为平台自相矛盾。
+    expect(screen.getByText('FAIR_USE_QUOTATION · 合理引用')).toBeInTheDocument()
+    expect(screen.queryByText('PENDING · 未取得授权')).toBeNull()
+    expect(screen.queryByText('RESTRICTED · 禁止使用')).toBeNull()
+  })
+
+  it('VERIFIED 提交必须携带显式版权声明，否则按钮不可用', async () => {
+    await renderPage()
+    fireEvent.change(screen.getByPlaceholderText(/粘贴来源 UUID/), {
+      target: { value: SOURCE_ID },
+    })
+    await waitFor(() => {
+      expect(screen.getByText(/版权声明（必填）/)).toBeInTheDocument()
+    })
+
+    const evidence = screen.getByPlaceholderText(/已对照出版社授权电子版/)
+    const coSigner = screen.getByPlaceholderText(/第二位复核人的主体 UUID/)
+    fireEvent.change(evidence, {
+      target: { value: '合理引用：已按版权页与教学引用范围核对' },
+    })
+    fireEvent.change(coSigner, {
+      target: { value: 'fa41bfeb-1111-4111-8111-111111111111' },
+    })
+
+    // 选权威等级（antd Select：点击外层 selector 后选可见 option）
+    const tierLabel = screen.getByText(/校验后权威等级/)
+    const tierSelector = tierLabel.closest('div')?.querySelector('.ant-select-selector')
+    expect(tierSelector).not.toBeNull()
+    tierSelector!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await waitFor(() => {
+      expect(screen.getByText('OFFICIAL_PUBLISHER · 官方出版社')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('OFFICIAL_PUBLISHER · 官方出版社'))
+
+    const submit = screen.getByRole('button', { name: /判定 VERIFIED/ })
+    expect(submit).not.toBeDisabled()
+    await act(async () => {
+      fireEvent.click(submit)
+    })
+
+    await waitFor(() => expect(verifyMock).toHaveBeenCalledTimes(1))
+    const payload = verifyMock.mock.calls[0]?.[2]
+    expect(payload).toMatchObject({
+      targetStatus: 'VERIFIED',
+      licenseStatus: 'FAIR_USE_QUOTATION',
+      verifiedBy: 'fa41bfeb-1111-4111-8111-111111111111',
+    })
+  })
 })

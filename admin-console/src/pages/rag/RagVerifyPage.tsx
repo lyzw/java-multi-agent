@@ -39,6 +39,7 @@ import { useSearchParams } from 'react-router-dom'
 
 import { ApiError, getRagSource, listRagCoSigners } from '@/api/ragClient'
 import type {
+  RagLicenseStatus,
   RagSource,
   RagTrustTier,
   RagVerificationMethod,
@@ -76,6 +77,17 @@ const UUID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 const SOURCE_LOAD_DEBOUNCE_MS = 300
 
+/**
+ * VERIFIED 可选的版权状态。
+ *
+ * ⚠️ 只暴露两种可放行值：PENDING 是登记占位态，RESTRICTED 是禁止使用，
+ *    都不是「通过校验」时能选的版权依据。
+ */
+const LICENSE_OPTIONS: { value: RagLicenseStatus; label: string }[] = [
+  { value: 'FAIR_USE_QUOTATION', label: 'FAIR_USE_QUOTATION · 合理引用' },
+  { value: 'LICENSED', label: 'LICENSED · 已获授权' },
+]
+
 function isUuid(value: string | null | undefined): value is string {
   return Boolean(value && UUID_PATTERN.test(value.trim()))
 }
@@ -105,6 +117,10 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
   const [evidence, setEvidence] = useState('')
   const [validDays, setValidDays] = useState<number>(365)
   const [trustTier, setTrustTier] = useState<RagTrustTier | null>(null)
+  // 本次六年级物料已由产品确认按「合理引用」推进；仍保留选择权，由决定人确认提交。
+  const [licenseStatus, setLicenseStatus] = useState<RagLicenseStatus | null>(
+    'FAIR_USE_QUOTATION',
+  )
   const [method, setMethod] = useState<RagVerificationMethod>('MANUAL_REVIEW')
   const [coSignerId, setCoSignerId] = useState<string | undefined>(undefined)
   const [coSigners, setCoSigners] = useState<{ principalId: string; label?: string }[]>([])
@@ -191,11 +207,17 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
   const canSubmit = useMemo(() => {
     if (!source) return false
     if (targetStatus === 'VERIFIED') {
-      // VERIFIED 需：证据 + 合法复核人 + 权威等级（否则通过校验却仍被权威门槛拦下）
-      return evidence.trim().length > 0 && coSignerIsValid && trustTier !== null
+      // VERIFIED 需：证据 + 合法复核人 + 权威等级 + 显式版权声明
+      // （缺任一项都会让「通过校验」在后端 fail-closed，宁可在本页先拦住）
+      return (
+        evidence.trim().length > 0 &&
+        coSignerIsValid &&
+        trustTier !== null &&
+        licenseStatus !== null
+      )
     }
     return evidence.trim().length > 0
-  }, [source, targetStatus, evidence, coSignerIsValid, trustTier])
+  }, [source, targetStatus, evidence, coSignerIsValid, trustTier, licenseStatus])
 
   const onSubmit = async (): Promise<void> => {
     if (!source) return
@@ -208,6 +230,9 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
       verificationMethod: method,
       // VERIFIED 必填：否则来源通过校验却仍被权威门槛拦下
       trustTier: targetStatus === 'VERIFIED' ? trustTier : null,
+      // ⚠️ 版权声明必须与 VERIFIED 同一次提交：缺它后端 400，
+      //    来源/载体就永远停在「抽检通过但不可检索」。
+      licenseStatus: targetStatus === 'VERIFIED' ? licenseStatus : null,
       validDays,
     }
     await verify(target, source.sourceId, payload)
@@ -447,6 +472,19 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
                           />
                         </div>
                         <div>
+                          <Text type="secondary">版权声明（必填）</Text>
+                          <Select<RagLicenseStatus>
+                            style={{ width: '100%', marginTop: 4 }}
+                            value={licenseStatus ?? undefined}
+                            onChange={setLicenseStatus}
+                            placeholder="选择本次放行的版权依据"
+                            options={LICENSE_OPTIONS}
+                          />
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            登记态 PENDING 不是版权依据；本次物料按已确认的「合理引用」预填，可手动改选。
+                          </Text>
+                        </div>
+                        <div>
                           <Text type="secondary">校验手段</Text>
                           <Select<RagVerificationMethod>
                             style={{ width: '100%', marginTop: 4 }}
@@ -500,7 +538,7 @@ function RagVerifyBody({ scope }: RagScopePageProps): JSX.Element {
                         <Text type="secondary" style={{ fontSize: 12 }}>
                               请填写证据
                               {targetStatus === 'VERIFIED'
-                                ? '，选择合法复核人与权威等级'
+                                ? '，选择合法复核人、权威等级与版权声明'
                                 : ''}
                         </Text>
                       )}
