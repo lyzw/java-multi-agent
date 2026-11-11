@@ -2,6 +2,7 @@ package cn.studykid.multiagent.application.cap;
 
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.jspecify.annotations.NonNull;
@@ -9,6 +10,7 @@ import org.jspecify.annotations.NonNull;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import cn.studykid.multiagent.context.ContextPolicyValidator;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapHttpToolConfig;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
@@ -56,6 +58,7 @@ public final class ConfigValidationGate {
         validateMcpServers(command);
         validateHttpTools(command);
         validateAgentInstructions(command);
+        validateGenerationParams(command);
         validateReferences(command);
     }
 
@@ -112,6 +115,51 @@ public final class ConfigValidationGate {
                         ReasonCode.AGENT_INSTRUCTIONS_INVALID, "instructions",
                         "Agent " + agent.agentId() + " v" + agent.version()
                                 + " 的 inlineInstructions 必须是字符串");
+            }
+        }
+    }
+
+    // ── 压缩策略声明（ADR-013 / 配置期契约门禁） ────────────────────
+
+    /**
+     * 拒绝 {@code generation_params.context} 里的非法压缩策略。
+     *
+     * <p>⚠️ <b>为什么必须在发布期拒</b>：配置一旦生效，
+     * 非法策略会让该 Agent 的所有新 Run 在运行期被拒或发生抖动风暴
+     * （{@code targetRatio >= triggerRatio} 时「压完立刻再压」）——
+     * 运维看到的是「Agent 突然全员不可用」，而真因在提交那一刻就已知。
+     * 前端表单校验可被绕过（直接调 API），故门禁必须落在发布命令上。
+     *
+     * <p>⚠️ <b>发布期与执行期共用同一份实现</b>：校验逻辑放在
+     * {@code agent-context} 的 {@link ContextPolicyValidator}，
+     * 两侧不得另写范围常量（路由策略 §7 债 5 同形态的漂移）。
+     *
+     * <p>⚠️ <b>S1 影子期边界</b>：未声明 {@code context} 子对象时直接跳过，
+     * 旧 Agent 版本行为逐字不变；{@code generationParams} 整体非法 JSON
+     * 也不在此抛（沿用运行期回落默认值的既有语义），避免扩大本期影响面。
+     */
+    private void validateGenerationParams(@NonNull ConfigPublishCommand command) {
+        for (CapAgentDef agent : command.agents()) {
+            // ⚠️ 与运行期共用同一份 JSON 归一化实现：任何一侧另写解析器，
+            //    都会出现「发布时判合法、跑起来是另一套值」的静默漂移。
+            JsonNode context = ContextPolicyReader.contextNode(agent.generationParams());
+            if (context == null) {
+                continue;
+            }
+            String who = "Agent " + agent.agentId() + " v" + agent.version();
+            if (!context.isObject()) {
+                throw new ConfigPublishRejectedException(ReasonCode.PARAM_SCHEMA_FAIL,
+                        "generationParams.context",
+                        who + " 的压缩策略必须是 JSON 对象（未声明请省略该键）");
+            }
+            Map<String, Object> plain = ContextPolicyReader.toPlainMap(context);
+            List<ContextPolicyValidator.Violation> violations =
+                    ContextPolicyValidator.validate(plain);
+            if (!violations.isEmpty()) {
+                throw new ConfigPublishRejectedException(ReasonCode.PARAM_SCHEMA_FAIL,
+                        "generationParams.context." + violations.get(0).field(),
+                        who + " 的压缩策略非法（发布期即拒，避免配置生效后全员不可用）："
+                                + violations);
             }
         }
     }

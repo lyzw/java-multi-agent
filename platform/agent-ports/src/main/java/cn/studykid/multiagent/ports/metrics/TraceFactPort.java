@@ -107,6 +107,11 @@ public interface TraceFactPort {
      *                 规范化；{@code null} = 调用方未标注，<b>绝不从自由文本猜测</b>。
      *                 采集器原样写入 {@code agent_trace_metric.scenario}，
      *                 让「按场景拆分」看板有真实分组维度。
+     * @param questionId <b>显式题目标识</b>。来自 {@code run.input_payload.questionId}，
+     *                 经 {@link QuestionIdTag} 规范化；{@code null} = 未标注 / 非法。
+     *                 ⚠️ <b>只用于 L2 判分源精确关联，绝不写入指标宽表</b>：
+     *                 宽表是看板维度，把题目标识也塞进去会让「一题一行」基数爆炸，
+     *                 且与「不存学生原文」的合规口径相冲突。
      */
     record RunFacts(
             @NonNull String runId,
@@ -118,13 +123,15 @@ public interface TraceFactPort {
             @Nullable Instant endedAt,
             @Nullable String agentId,
             @Nullable Integer agentVersion,
-            @Nullable String scenario) {
+            @Nullable String scenario,
+            @Nullable String questionId) {
 
         /**
-         * 兼容构造：未标注场景（存量 Run 与不传标签的调用方）。
+         * 兼容构造：只知 Run 本体、两个可选标签都未标注（存量 Run 与老单测）。
          *
-         * <p>⚠️ 保留 9 参是为了不改动既有单测构造点；新增字段一律走
-         * 10 参规范构造，避免「没标注」被悄悄填成空串或默认分组。
+         * <p>⚠️ 保留 9 参是为了不改动既有构造点；⚠️⚠️ 兼容构造<b>必须显式传 null</b>
+         * 走全参构造 —— 依赖 record 默认值会让后加的字段在「复制 / 投影」路径上
+         * 被静默清空（项目铁律 11）。
          */
         public RunFacts(@NonNull String runId,
                         @NonNull String state,
@@ -136,7 +143,26 @@ public interface TraceFactPort {
                         @Nullable String agentId,
                         @Nullable Integer agentVersion) {
             this(runId, state, errorCode, traceId, traceIdSource, startedAt, endedAt,
-                    agentId, agentVersion, null);
+                    agentId, agentVersion, null, null);
+        }
+
+        /**
+         * 兼容构造：已标注 scenario、但无 questionId（存量 Run 与老单测）。
+         *
+         * <p>⚠️ 同样显式传 {@code null}，绝不默认成空串或题面文本。
+         */
+        public RunFacts(@NonNull String runId,
+                        @NonNull String state,
+                        @Nullable String errorCode,
+                        @NonNull String traceId,
+                        @NonNull TraceIdSource traceIdSource,
+                        @NonNull Instant startedAt,
+                        @Nullable Instant endedAt,
+                        @Nullable String agentId,
+                        @Nullable Integer agentVersion,
+                        @Nullable String scenario) {
+            this(runId, state, errorCode, traceId, traceIdSource, startedAt, endedAt,
+                    agentId, agentVersion, scenario, null);
         }
 
         /** 是否到达终态。在途（QUEUED / RUNNING）不采集。 */

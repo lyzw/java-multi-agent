@@ -3,6 +3,7 @@ package cn.studykid.multiagent.bootstrap.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,9 +19,16 @@ import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.env.Environment;
 import org.springframework.core.env.PropertySource;
+import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.io.FileSystemResource;
+
+import cn.studykid.multiagent.application.config.ModelPricingPolicy;
+import cn.studykid.multiagent.core.config.ModelPricing;
 
 /**
  * 配置键对齐守卫：<b>代码读的每一个配置键，都必须在 {@code application.yml} 里真的存在</b>。
@@ -193,6 +201,33 @@ class ApplicationConfigKeyAlignmentTest {
     }
 
     @Test
+    @DisplayName("⚠️⚠️ MiniMax-M2.5 单价必须按字面键绑定：模型名含点号，裸键会被 Spring Binder 拆层")
+    void dottedModelIdKeepsItsPricing() {
+        Map<String, Object> entries = Binder.get(yamlEnvironment())
+                .bind("agent.pricing.models", Bindable.mapOf(String.class, Object.class))
+                .orElseGet(Map::of);
+
+        Map<String, Map<String, Object>> raw = new LinkedHashMap<>();
+        entries.forEach((model, value) -> {
+            assertThat(value).as("模型 %s 的价格必须是映射", model).isInstanceOf(Map.class);
+            Map<String, Object> prices = new LinkedHashMap<>();
+            ((Map<?, ?>) value).forEach((k, v) -> prices.put(String.valueOf(k), v));
+            raw.put(model, prices);
+        });
+
+        ModelPricingPolicy policy = ModelPricingPolicy.of(raw);
+        assertThat(policy.pricingOf("MiniMax-M2.5"))
+                .as("裸键 MiniMax-M2.5 会被拆成 MiniMax-M2 + 子键 5："
+                        + "业务 Run 成本静默按 0 记，L2 judge 也因查不到单价而拒调，两者都不报错")
+                .isPresent();
+        ModelPricing price = policy.pricingOf("MiniMax-M2.5").orElseThrow();
+        assertThat(price.inputPerThousandTokens())
+                .isEqualByComparingTo(new BigDecimal("0.002100"));
+        assertThat(price.outputPerThousandTokens())
+                .isEqualByComparingTo(new BigDecimal("0.008400"));
+    }
+
+    @Test
     @DisplayName("⚠️ yml 不得残留与代码读取口径不一致的同族键（误挂残留）")
     void noMisnestedResidueForKnownKeys() {
         Set<String> keys = yamlKeys();
@@ -212,21 +247,31 @@ class ApplicationConfigKeyAlignmentTest {
     /** 读 yml 并摊平成「点分键 → 值」。 */
     private static Set<String> yamlKeys() {
         Set<String> keys = new TreeSet<>();
-        YamlPropertySourceLoader loader = new YamlPropertySourceLoader();
-        List<PropertySource<?>> sources;
-        try {
-            sources = loader.load("app", new FileSystemResource(
-                    platformRoot().resolve("platform-bootstrap/src/main/resources/application.yml")));
-        } catch (IOException e) {
-            throw new IllegalStateException("读取 application.yml 失败", e);
-        }
-        for (PropertySource<?> source : sources) {
+        for (PropertySource<?> source : yamlPropertySources()) {
             Object value = source.getSource();
             if (value instanceof Map<?, ?> map) {
                 map.keySet().forEach(k -> keys.add(String.valueOf(k)));
             }
         }
         return keys;
+    }
+
+    /** 把同一份 yml 装进 Environment，供 Binder 验证「键真的绑成了预期形状」。 */
+    private static Environment yamlEnvironment() {
+        StandardEnvironment env = new StandardEnvironment();
+        for (PropertySource<?> source : yamlPropertySources()) {
+            env.getPropertySources().addFirst(source);
+        }
+        return env;
+    }
+
+    private static List<PropertySource<?>> yamlPropertySources() {
+        try {
+            return new YamlPropertySourceLoader().load("app", new FileSystemResource(
+                    platformRoot().resolve("platform-bootstrap/src/main/resources/application.yml")));
+        } catch (IOException e) {
+            throw new IllegalStateException("读取 application.yml 失败", e);
+        }
     }
 
     /**

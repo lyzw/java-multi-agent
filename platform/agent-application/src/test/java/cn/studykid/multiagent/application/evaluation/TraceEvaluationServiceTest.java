@@ -26,6 +26,7 @@ class TraceEvaluationServiceTest {
     private static final String TENANT = "11111111-1111-1111-1111-111111111111";
     private static final String RUN = "22222222-2222-2222-2222-222222222222";
     private static final String TRACE = "trace-eval-0001";
+    private static final String QUESTION_ID = "Q-MATH-001";
 
     private final L1AttributionEvaluator l1 = mock(L1AttributionEvaluator.class);
     private final L2AttributionEvaluator l2 = mock(L2AttributionEvaluator.class);
@@ -47,7 +48,7 @@ class TraceEvaluationServiceTest {
         when(l1.judge(TENANT, RUN)).thenReturn(Optional.of(pass()));
         when(tasks.hasOpenTask(TRACE)).thenReturn(false);
 
-        service(true, 0).evaluate(TENANT, RUN, TRACE, null);
+        service(true, 0).evaluate(TENANT, RUN, TRACE, null, QUESTION_ID);
 
         ArgumentCaptor<TaskOutcome> cap = ArgumentCaptor.forClass(TaskOutcome.class);
         verify(metrics).recordTaskOutcome(cap.capture());
@@ -55,7 +56,7 @@ class TraceEvaluationServiceTest {
         assertThat(cap.getValue().verified()).isTrue();
         assertThat(cap.getValue().traceId()).isEqualTo(TRACE);
         // 编排已接 L2（§13 第 3 项），但默认 fail-closed：L2 被调用但不写（无参考源/判定器）
-        verify(l2).evaluate(TENANT, RUN, TRACE, null);
+        verify(l2).evaluate(TENANT, RUN, TRACE, null, QUESTION_ID);
     }
 
     @Test
@@ -65,7 +66,7 @@ class TraceEvaluationServiceTest {
         when(tasks.hasOpenTask(TRACE)).thenReturn(false);
         when(tasks.create(any())).thenReturn("task-gap");
 
-        var result = service(true, 0).evaluate(TENANT, RUN, TRACE, null);
+        var result = service(true, 0).evaluate(TENANT, RUN, TRACE, null, QUESTION_ID);
 
         assertThat(result).contains("task-gap");
         verify(metrics, never()).recordTaskOutcome(any());
@@ -82,7 +83,7 @@ class TraceEvaluationServiceTest {
         when(tasks.hasOpenTask(TRACE)).thenReturn(false);
         when(tasks.create(any())).thenReturn("task-sample");
 
-        var result = service(true, 1.0).evaluate(TENANT, RUN, TRACE, null);
+        var result = service(true, 1.0).evaluate(TENANT, RUN, TRACE, null, QUESTION_ID);
 
         assertThat(result).contains("task-sample");
         ArgumentCaptor<ReviewTaskSpec> cap = ArgumentCaptor.forClass(ReviewTaskSpec.class);
@@ -95,7 +96,7 @@ class TraceEvaluationServiceTest {
     void zeroSampleRateStillWritesL1() {
         when(l1.judge(TENANT, RUN)).thenReturn(Optional.of(pass()));
 
-        var result = service(true, 0).evaluate(TENANT, RUN, TRACE, null);
+        var result = service(true, 0).evaluate(TENANT, RUN, TRACE, null, QUESTION_ID);
 
         assertThat(result).isEmpty();
         verify(metrics).recordTaskOutcome(any());
@@ -105,7 +106,7 @@ class TraceEvaluationServiceTest {
     @Test
     @DisplayName("E-5 开关关闭时整条评估链不触发")
     void disabledDoesNothing() {
-        service(false, 1.0).evaluate(TENANT, RUN, TRACE, null);
+        service(false, 1.0).evaluate(TENANT, RUN, TRACE, null, QUESTION_ID);
         verify(metrics, never()).recordTaskOutcome(any());
         verify(tasks, never()).create(any());
         verify(tasks, never()).hasOpenTask(anyString());
@@ -117,7 +118,7 @@ class TraceEvaluationServiceTest {
         when(l1.judge(TENANT, RUN)).thenReturn(Optional.empty());
         when(tasks.hasOpenTask(TRACE)).thenReturn(true);
 
-        assertThat(service(true, 1.0).evaluate(TENANT, RUN, TRACE, null)).isEmpty();
+        assertThat(service(true, 1.0).evaluate(TENANT, RUN, TRACE, null, QUESTION_ID)).isEmpty();
         verify(tasks, never()).create(any());
     }
 
@@ -136,8 +137,18 @@ class TraceEvaluationServiceTest {
     void l1FailureIsFailSoft() {
         when(l1.judge(TENANT, RUN)).thenThrow(new IllegalStateException("回放读失败"));
 
-        assertThat(service(true, 1.0).evaluate(TENANT, RUN, TRACE, null)).isEmpty();
+        assertThat(service(true, 1.0).evaluate(TENANT, RUN, TRACE, null, QUESTION_ID)).isEmpty();
         verify(metrics, never()).recordTaskOutcome(any());
         verify(tasks, never()).create(any());
+    }
+
+    @Test
+    @DisplayName("E-9 ⚠️ questionId 必须沿编排入口透传给 L2（漏传会让 L2 静默恒未评级）")
+    void questionIdIsForwardedToL2() {
+        when(l1.judge(TENANT, RUN)).thenReturn(Optional.of(pass()));
+
+        service(true, 0).evaluate(TENANT, RUN, TRACE, "数学:一元二次方程", QUESTION_ID);
+
+        verify(l2).evaluate(TENANT, RUN, TRACE, "数学:一元二次方程", QUESTION_ID);
     }
 }

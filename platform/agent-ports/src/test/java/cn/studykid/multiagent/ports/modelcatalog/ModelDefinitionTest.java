@@ -12,27 +12,27 @@ class ModelDefinitionTest {
 
     private static ModelDefinition def(String provider, String scenario, String name) {
         return new ModelDefinition(null, provider, scenario, name, null, null,
-                false, true, true, false, null, true, 0, null, null, null);
+                false, true, true, false, null, true, 0, null, null, null, ModelContextCapabilities.defaults());
     }
 
     @Test
     void rejectsBlankProvider() {
         assertThatThrownBy(() -> new ModelDefinition(null, "", "agent-chat",
-                "m", null, null, false, true, true, false, null, true, 0, null, null, null))
+                "m", null, null, false, true, true, false, null, true, 0, null, null, null, ModelContextCapabilities.defaults()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void rejectsBlankScenario() {
         assertThatThrownBy(() -> new ModelDefinition(null, "openai", "",
-                "m", null, null, false, true, true, false, null, true, 0, null, null, null))
+                "m", null, null, false, true, true, false, null, true, 0, null, null, null, ModelContextCapabilities.defaults()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void rejectsBlankModelName() {
         assertThatThrownBy(() -> new ModelDefinition(null, "openai", "agent-chat",
-                "  ", null, null, false, true, true, false, null, true, 0, null, null, null))
+                "  ", null, null, false, true, true, false, null, true, 0, null, null, null, ModelContextCapabilities.defaults()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -40,7 +40,7 @@ class ModelDefinitionTest {
     void labelFallsBackToModelNameWhenDisplayNameBlank() {
         assertThat(def("openai", "agent-chat", "gpt-4o").label()).isEqualTo("gpt-4o");
         ModelDefinition withDisplay = new ModelDefinition(null, "openai", "agent-chat",
-                "gpt-4o", "GPT-4o 对话", null, false, true, true, false, null, true, 0, null, null, null);
+                "gpt-4o", "GPT-4o 对话", null, false, true, true, false, null, true, 0, null, null, null, ModelContextCapabilities.defaults());
         assertThat(withDisplay.label()).isEqualTo("GPT-4o 对话");
     }
 }

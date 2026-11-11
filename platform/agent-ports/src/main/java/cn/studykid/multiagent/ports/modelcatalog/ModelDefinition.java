@@ -61,10 +61,23 @@ public record ModelDefinition(
         /** 创建时间（仓储回填）。 */
         @Nullable Instant createdAt,
         /** 更新时间（仓储回填）。 */
-        @Nullable Instant updatedAt) {
+        @Nullable Instant updatedAt,
+        /**
+         * 上下文压缩能力（ADR-013 / {@code model_catalog} 五列）。
+         *
+         * <p>⚠️ <b>有意放在组件末尾且不留兼容构造器</b>：新增能力项时，
+         * 全仓所有全参构造点由编译器强制补齐，杜绝「加了字段却漏带」
+         * 把配置静默清成默认值（铁律 #10）。收敛为单个值对象后，
+         * 日后加第六项能力只需改 {@link ModelContextCapabilities} 与读写点。
+         */
+        @NonNull ModelContextCapabilities contextCapabilities) {
 
     /** 校验非空字段；空值构造即抛，杜绝「半截配置」进入运行时。 */
     public ModelDefinition {
+        if (contextCapabilities == null) {
+            throw new IllegalArgumentException(
+                    "模型上下文能力不能为空：必须显式传入 ModelContextCapabilities（禁止隐式默认）");
+        }
         if (provider == null || provider.isBlank()) {
             throw new IllegalArgumentException("模型 provider 不能为空");
         }

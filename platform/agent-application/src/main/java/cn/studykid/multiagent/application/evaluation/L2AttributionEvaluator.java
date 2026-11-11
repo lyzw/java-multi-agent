@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort;
+import cn.studykid.multiagent.ports.metrics.QuestionIdTag;
 import cn.studykid.multiagent.ports.persistence.TraceReplayPort;
 import cn.studykid.multiagent.ports.persistence.TraceReplayPort.MessageView;
 
@@ -22,8 +23,10 @@ import cn.studykid.multiagent.ports.persistence.TraceReplayPort.MessageView;
  *   「归因正确率」：
  *   <ol>
  *     <li>开关未开（llm-judge.enabled / reference-source.enabled）→ 不评级；</li>
- *     <li>无可用参考答案（ReferenceAnswerSource 返回 empty）→ 不评级；</li>
  *     <li>无判定器 bean（AttributionJudge 未装配）→ 不评级；</li>
+ *     <li><b>无合法 {@code questionId}</b>（缺失 / 非法 / 非字符串）→ 不评级；
+ *         不回退按题面文本匹配题库（已确认口径＝显式主键精确关联）；</li>
+ *     <li>无可用参考答案（ReferenceAnswerSource 按 questionId 返回 empty）→ 不评级；</li>
  *     <li>回放无 USER / 无 ASSISTANT → 事实不足，不评级；</li>
  *     <li>抽样未命中 → 跳过（但不算「未评级」）。</li>
  *   </ol>
@@ -86,6 +89,8 @@ public class L2AttributionEvaluator {
         UNGRADED_DISABLED,
         /** 无判定器 bean（AttributionJudge 未装配）。 */
         UNGRADED_NO_JUDGE,
+        /** 无合法题目标识：缺失 / 非法 / 非字符串，不做题面模糊匹配。 */
+        UNGRADED_NO_QUESTION_ID,
         /** 回放无 USER / 无 ASSISTANT：事实不足。 */
         UNGRADED_NO_FACTS,
         /** 无可用参考答案（ReferenceAnswerSource 返回 empty）。 */
@@ -107,15 +112,24 @@ public class L2AttributionEvaluator {
     /**
      * 对某次 Run 做 L2 归因正确率判分。
      *
+     * @param questionId 来自 {@code run.input_payload.questionId} 的题目标识；
+     *                   <b>缺失 / 非法一律不评级</b>，绝不退化成按题面文本匹配题库
      * @return 评级结果；不评级时 {@link Result#attributionCorrect()} 为 null
      */
     public @NonNull Result evaluate(@NonNull String tenantId, @NonNull String runId,
-                                    @NonNull String traceId, @Nullable String scenario) {
+                                    @NonNull String traceId, @Nullable String scenario,
+                                    @Nullable String questionId) {
         if (!llmJudgeEnabled || !referenceSourceEnabled) {
             return Result.of(Outcome.UNGRADED_DISABLED);
         }
         if (judge == null) {
             return Result.of(Outcome.UNGRADED_NO_JUDGE);
+        }
+        // ⚠️ 应用层再校验一次（事实仓储已用 QuestionIdTag 规范化）：
+        //    纵深防御，防止本方法被别的调用方直接传入题面原文或畸形标识。
+        String normalizedQuestionId = QuestionIdTag.normalize(questionId);
+        if (normalizedQuestionId == null) {
+            return Result.of(Outcome.UNGRADED_NO_QUESTION_ID);
         }
         List<MessageView> messages = replay.messages(tenantId, runId);
         String question = firstText(messages, "USER");
@@ -123,22 +137,25 @@ public class L2AttributionEvaluator {
         if (question == null || attribution == null) {
             return Result.of(Outcome.UNGRADED_NO_FACTS);
         }
+        // ⚠️ 只按显式 questionId 精确关联；判分源实现不得接题面文本做模糊匹配。
         Optional<ReferenceAnswerSource.ReferenceAnswer> ref =
-                referenceSource.resolve(scenario == null ? "" : scenario, question);
-        if (ref.isEmpty()) {
+                referenceSource.resolve(normalizedQuestionId);
+        if (ref.isEmpty() || !normalizedQuestionId.equals(ref.get().questionId())) {
             return Result.of(Outcome.UNGRADED_NO_REFERENCE);
         }
         if (!shouldSample(traceId)) {
             return Result.of(Outcome.SKIPPED_SAMPLING);
         }
         Optional<Boolean> correct = judge.judgeCorrect(new AttributionJudge.JudgeInput(
-                scenario == null ? "" : scenario, question, attribution, ref.get()));
+                normalizedQuestionId, scenario == null ? "" : scenario,
+                question, attribution, ref.get()));
         if (correct.isEmpty()) {
             return Result.of(Outcome.UNGRADED_JUDGE_UNSURE);
         }
         // ⚠️ 只写宽表列（机器判分），不碰 agent_eval_sample / sampled / human_verdict。
         metrics.recordAttributionGrade(traceId, tenantId, correct.get());
-        log.info("L2 归因判分已回写: trace={}, scenario={}, correct={}", traceId, scenario, correct.get());
+        log.info("L2 归因判分已回写: trace={}, questionId={}, scenario={}, correct={}",
+                traceId, normalizedQuestionId, scenario, correct.get());
         return Result.graded(correct.get());
     }
 

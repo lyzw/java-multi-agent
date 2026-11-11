@@ -204,7 +204,9 @@ public class AgentMetricCollector {
         metrics.upsert(metric);
         metrics.replaceToolCalls(run.traceId(), rows);
         raiseReviewAlerts(metric);
-        raiseEvaluation(metric);
+        // ⚠️ questionId 只沿「事实端口 → 评估编排」这条内部链传递，
+        //    绝不进 TraceMetric / 指标宽表（宽表是看板维度，题目标识会造成基数爆炸）。
+        raiseEvaluation(metric, run.questionId());
         return Optional.of(run.traceId());
     }
 
@@ -250,13 +252,19 @@ public class AgentMetricCollector {
      *
      * <p>⚠️ <b>评估失败绝不影响采集结果</b>：指标已落库，
      * 覆盖率缺失会在看板并排显示（§7.3），漏判好过把成功的采集打成失败。
+     *
+     * <p>⚠️ <b>questionId 与 scenario 走同一条编排入口，但用途不同</b>：
+     * scenario 会写进宽表做看板分组；questionId 只用于 L2 题库<b>精确关联</b>，
+     * 不进宽表、不从对话正文派生。这里是它唯一的传递点 ——
+     * 漏传会让 L2 恒「无题目标识」而看板只显示「未启用」，<b>没有任何报错</b>。
      */
-    private void raiseEvaluation(@NonNull TraceMetric metric) {
+    private void raiseEvaluation(@NonNull TraceMetric metric, @Nullable String questionId) {
         if (evaluation == null) {
             return;
         }
         try {
-            evaluation.evaluate(metric.tenantId(), metric.runId(), metric.traceId(), metric.scenario());
+            evaluation.evaluate(metric.tenantId(), metric.runId(), metric.traceId(),
+                    metric.scenario(), questionId);
         } catch (RuntimeException e) {
             log.warn("质量评估异常（已忽略，不影响采集结果）: trace={}, cause={}",
                     metric.traceId(), e.toString());

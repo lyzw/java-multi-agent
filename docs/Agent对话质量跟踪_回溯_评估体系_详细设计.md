@@ -80,6 +80,8 @@
 5. **验收**：`L2AttributionEvaluatorTest`（8，覆盖上述全部分支）、`TraceEvaluationServiceTest`（构造加 `l2` mock + `verify(l2).evaluate(...)`）、`AgentMetricCollectorTest`（`Overview` 构造已扩 3 字段）；真实库 `JdbcAgentMetricAttributionIT`（写回 + 回填、`n<30` 不显示占比、35 样本算 `30/35≈0.8571`、未评级 → `0/null`）。⚠️ **本机无 PostgreSQL，真实库 IT 未运行**（待具备 `IT_PG_URL` 活库环境执行）；Java 三模块（`agent-ports` / `agent-application` / `agent-persistence`）+ 前端 `typecheck` 全通过。
 6. **接入判分源后的动作**：拿到参考答案 / 题库标准解析 + 成本口径 → 在 `EvaluationConfiguration` 注册一个 `AttributionJudge` Bean（与 `ReferenceAnswerSource` 实现）即可真正评级，**无需改编排**。在此之前不得把「未启用」表述为「已判分」。
 
+> 🟢 **2026-11-11 追加（取代上面 2026-11-09 的「大脑未接」表述）**：用户确认「按不依赖外部接口」口径后，L2 大脑骨架已落地——`LocalFileReferenceAnswerSource`（默认空题库、`file:` 可覆盖）、`ModelAttributionJudge`（MiniMax-M2.5 严格 rubric）、`EvaluationCostBudget`（`EVAL_JUDGE_COST` 独立日预算）与 `questionId` 全链路均已实现；默认双开关仍为 false，**看板仍显示「未启用 / 样本不足」**。零新增表。启用只剩题库内容 + 调用方传 `questionId` + 两个开关置 true。完整口径与守卫见 §13 第 3 项。
+
 **按场景筛选 · 整页同口径落地（2026-11-08 收尾）**：
 
 1. ⚠️ **核心纪律：整页同口径，不允许「总览已筛选、其它面板仍是全量」**。原先只有 `/overview` 接受 `scenario`，`/terminations`、`/latency`、`/tools`、`/anomalies` 都把该维度硬编码为 `null`；若只给前端总览挂筛选，合计会对不上却零报错 —— 又是一次「不报错、只是数字悄悄错」。现四个端点全部补 `@RequestParam("scenario")`，控制器逐一守卫参数下传。
@@ -102,7 +104,7 @@
 
 > ✅ **已补实跑验收**：RDS `agent_dev` 上已用 MiniMax-M2.5 跑过真实 `SUCCEEDED` Run，`run_message` 2 条、`/transcript` 200、`agent_trace_metric` 1 行、Prometheus `ai_model_calls_total` 可见；P2 审查队列、P3 L1 回执与覆盖率回填也各在 RDS 重投采集事件实跑验证。本地 `agent_it` 全量回归不替代这些实跑，两者都做了。
 >
-> ⚠️ **L2 管线已接、大脑未接**：`LLM-as-judge` 兜底 / `ATTRIBUTION` 判分的**管线**（列、聚合、`L2AttributionEvaluator` 编排、前端卡片、配置开关）已全部落地且 fail-closed 默认不评级；但**判分源（参考答案 / 题库标准解析）与 `AttributionJudge` 具体实现仍待产品确认**（§13 第 3 项）。在那之前看板显示「未启用 / 样本不足」，绝不编造归因正确率。依赖它的「归因正确率按场景拆分」在数据上仍为空（见「L2 归因正确率落地」）。`scenario` 显式标签维度、admin-console 的 `TraceTranscriptDrawer` / `ReviewQueuePage`、以及**按场景筛选控件（整页五端点同口径）**均已落地。
+> ⚠️ **L2 管线 + 大脑骨架均已接，默认仍 fail-closed**：`LLM-as-judge` / `ATTRIBUTION` 的列、聚合、`L2AttributionEvaluator` 编排、前端卡片、配置开关已落地；2026-11-11 补齐判分源（`LocalFileReferenceAnswerSource`，默认空题库）、`AttributionJudge` 实现（`ModelAttributionJudge` / MiniMax-M2.5 严格 rubric）与独立评估日预算（§13 第 3 项）。**双开关默认 false + 空题库** ⇒ 看板仍显示「未启用 / 样本不足」，绝不编造归因正确率；依赖它的「归因正确率按场景拆分」在数据上仍为空。`scenario` 显式标签维度、admin-console 的 `TraceTranscriptDrawer` / `ReviewQueuePage`、以及**按场景筛选控件（整页五端点同口径）**均已落地。
 
 ---
 
@@ -649,7 +651,7 @@ PENDING ──assign──▶ IN_REVIEW ──resolve(rootCause)──▶ RESOLV
 | **P0** ✅ 已完成 | 自动采集接线（§5） | 现有看板立刻有数，暴露真实质量 | Rabbit + DB **双通道** `agent.trace.collect` 专用链路（默认 database） |
 | **P1** ✅ 已完成 | 回放底座（§2.1+§3+§4+§6） | 补齐对话内容持久化与回放 | `run_message` DDL + 仓储 + worker 埋点 + 两端点（**落地偏差见 §0.0**） |
 | **P2** ✅ 已完成 | 审查闭环（§8） | 看→判→填闭环 | `review_task` DDL + `ReviewTaskPort` + 端点 + 告警联动 + 闭环 IT + RDS 实跑；admin-console `ReviewQueuePage` 前端已接 |
-| **P3** ✅ 已完成（L1 半边 + 场景维度 + L2 管线 + 分层抽样） | 评估双轨（§7） | 覆盖率是真数字 | `L1AttributionEvaluator` + `TraceEvaluationService` + 回执/覆盖率回填 + 闭环 IT + RDS 实跑；`scenario` 显式标签维度已接通（落地偏差见 §0.0）；**L2 归因正确率管线已接（fail-closed 不评级），判分源 / 判定器待 §13 第 3 项确认** |
+| **P3** ✅ 已完成（L1 + 场景维度 + L2 判分骨架 + 分层抽样） | 评估双轨（§7） | 覆盖率是真数字 | `L1AttributionEvaluator` + `TraceEvaluationService` + 回执/覆盖率回填 + 闭环 IT + RDS 实跑；`scenario` 显式标签维度已接通（落地偏差见 §0.0）；**L2 骨架已落地**：`questionId` 精确关联 + 本地题库文件源 + MiniMax 严格 rubric + 独立评估日预算，默认双开关 false 仍 fail-closed，待题库内容与调用侧传 `questionId` 才出真数字（§13 第 3 项） |
 | **P4** ✅ 已完成 | 监控升级（§9） | 可行动的监控 | Grafana PG 数据源 + Prometheus scrape + **16 面板**（覆盖率并排 / 样本不足 / 队列 / 按场景拆分），全部 SQL 经 RDS 与 Grafana 数据源 API 实跑；admin-console 按场景筛选（五端点同口径 + `/scenarios` 枚举）已在真实应用实跑 200 |
 
 ---
@@ -659,10 +661,12 @@ PENDING ──assign──▶ IN_REVIEW ──resolve(rootCause)──▶ RESOLV
 1. **Grafana/Prometheus 是否部署**——✅ **已答并完成接入（2026-11-08）**：Prometheus `java-multi-agent` 作业已启用，Grafana PG 数据源 `platform-pg` 已 provisioning（RDS 主机名 + `sslmode=disable`），看板 13 面板全部 SQL 实跑通过、Grafana API 确认热加载。
 2. **`run_message` 保留期与合规口径**——🟡 **代码已闭环，口径仍待产品确认**：保留期与 Run 对齐默认 30 天、不额外存敏感原文（M2 SYSTEM 只存记忆标签）。教育/未成年人数据的特定期限与脱敏要求仍无正式口径。
    ✅ **2026-11-09 补齐执行侧**：此前 `04_retention_role.sql` 已授予 `agent_retention` 对 `run_message` 的 DELETE，但 `ErasurePort` / `RetentionPurgeService` **都没有对应方法** ⇒ 承诺只在文档里。现新增 `purgeExpiredMessages` + 第 6 类「对话原文」+ 独立配置 `agent.retention.message-days`（默认 30，刻意不跟随 `trace-days`）。**「配了 30 天」与「真的会删」现在是两件被分别验证的事**（`RetentionPolicyTest.F-15` 验接线、`RetentionErasureIT.N-4b` 验 SQL）。
-3. **L1 自动判分源 / L2 判分大脑**——🟡 **管线已接，判分源待确认**：`agent_eval_sample.attribution_correct` / `agent_trace_metric.attribution_correct` 列、聚合、`L2AttributionEvaluator` 编排、前端 `attributionCorrectRate` 卡片与配置开关（`agent.quality.eval.llm-judge.enabled:false`、`reference-source.enabled:false`）已全部落地，默认 **fail-closed 不评级**（`NoReferenceAnswerSource` 恒返回 empty、不注册 `AttributionJudge`，看板显示「未启用 / 样本不足」）。⛔ **实质阻塞项未变**：参考答案 / 题库标准解析（`ATTRIBUTION` checker）是否存在、用哪家模型判分、成本口径仍未知。**拿到判分源 + 成本口径 + 实现 `AttributionJudge` 后，只需在 `EvaluationConfiguration` 注册一个 `AttributionJudge` Bean 即可真正评级**，无需改编排。在那之前绝不编造归因正确率。
-   ⚠️ **2026-11-09 更正**：上面「仅需注册一个 Bean」在复核时**并不成立** ——
-   ① `agent-dev` 活库当时缺 `attribution_correct` 两列（聚合会报 column does not exist，而采集器 fail-soft 只留 WARN）；
-   ② L2 走的写入路径会撞 `agent_eval_sample_verdict_ck`（只收 SUCCESS/PARTIAL/FAIL）。
-   两项已修（见 §0.0.1 R2/R3）。现在的准确表述是：**注册 `AttributionJudge` + 确认 `ReferenceAnswerSource` 实现 + 执行 `patch_platform_eval_attribution.sql`，三者齐备才真正评级。**
+3. **L1 自动判分源 / L2 判分大脑**——✅ **口径已确认，骨架已落地（2026-11-11）；默认仍 fail-closed**：
+   1. **事实真相源**：题库标准解析（题 ID → 标准解析文本）。已实现 `ReferenceAnswerSource` 端口 + `LocalFileReferenceAnswerSource`：默认 `classpath:agent-eval/reference-answers.json` 是**空题库**，生产可用 `file:` 外部路径覆盖；加载期校验 `version`、字段类型、题号白名单、空解析、**重复 `questionId`**，失败即拒绝启动。查不到即 `empty`，绝不拿 RAG 片段或模型参数内知识冒充权威。本期按「不依赖外部接口」落地；后续换 DB / HTTP 题库只需替换一个 Bean。
+   2. **关联键**：已打通 `run.input_payload.questionId` → `JdbcTraceFactRepository`（`jsonb_typeof` 类型闸门 + `QuestionIdTag` 白名单）→ `TraceFactPort.RunFacts` → `AgentMetricCollector` → `TraceEvaluationService` → `L2AttributionEvaluator` → `ReferenceAnswerSource`。`questionId` **不写指标宽表**（避免看板分组基数爆炸与多存一份题目标识）；缺失 / 非法 / 非字符串一律 `empty`，不做题面文本相似度猜测。
+   3. **判定器 / rubric**：`ModelAttributionJudge` 已实现，受 `agent.quality.eval.llm-judge.enabled` 控制，复用生产 `chatStreamGateway`（MiniMax-M2.5，低温度、零工具、结构化 `{correct, reason, confidence}`）；题面 / Agent 归因 / 标准解析三段分别经 `PromptGuard.wrapToolResult` 标为不可信数据。置信度不足 / 解析失败 / 模型异常 / 预算超限一律返回 `empty` → 待人工；结论只写 `agent_trace_metric.attribution_correct`，**绝不写** `agent_eval_sample`（人工抽样表）/ `sampled` / `human_verdict`。
+   4. **成本 / 抽样**：`EvaluationCostBudget.SUBJECT=EVAL_JUDGE_COST` 独立日预算；调用前按最坏上限预留、调用后按真实 token 结算，超限不调用、不评级，失败释放预留；**不写** `usage_record` / `cost_amount` / 业务指标端口。`MiniMax-M2.5` 单价已补在 `agent.pricing.models`，⚠️ 模型名含点号必须写成 `"[MiniMax-M2.5]"` 字面键，否则 Spring Binder 会拆成 `MiniMax-M2` + 子键 `5`，症状是业务 Run 成本静默按 0 记、L2 judge 直接拒调（已有绑定守卫锁死）。
+   ✅ **启用条件**：填充本地题库（或 `file:` 指向题库）+ 把 `llm-judge.enabled` / `reference-source.enabled` 同置 `true` + 调用方创建 Run 时传 `questionId`。抽样率默认 5%，`n<30` 仍不显示百分比；当前预算是单进程实现，多实例总量上限＝`实例数 × dailyLimit`，要跨实例硬封顶需换共享预算。
+   ⚠️ **2026-11-09 的 R2/R3 更正仍有效**：机器判分与人工标注物理分离；`patch_platform_eval_attribution.sql` 两列 + 审查队列已执行，本期**零新增表 / 零结构变更**。默认空题库 + 双开关 false ⇒ 看板恒显「未启用 / 样本不足」，绝不编造。验证：`L2ProductionGuardTest`(6) + `ApplicationConfigKeyAlignmentTest` 单价绑定用例 + `L2AttributionClosedLoopIT`(7) 全绿；**9 项反向验证**（裸键拆层、类型闸门、精确关联、人机分离、fail-closed 注解、成本隔离、编排入口、`questionId` 透传、`sampled` 污染）全部变红。
 4. **预期量级**——🟡 **按 `<1k Run/日` 设计，待产品确认**；决定 `run_message` 存储与 `mv` 刷新频率，当前为可配置项。
 5. **回放受众**——🟡 **按「仅平台审计 / ADMIN 可读」实施，待产品确认**：租户侧端点对 STUDENT 隐藏 TOOL 消息。学生端是否开放「查看我的辅导记录」未定，会改变 §6.2 脱敏粒度。

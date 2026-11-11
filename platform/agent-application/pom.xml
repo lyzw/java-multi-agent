@@ -38,6 +38,15 @@
       <artifactId>agent-ports</artifactId>
     </dependency>
     <!--
+      ADR-013：发布期门禁（ConfigValidationGate）与运行期策略解析共用
+      agent-context 的 ContextPolicyValidator；禁止另写一套范围常量，
+      否则会出现「发布时判合法、跑起来判不同」（路由策略 §7 债 5 同形态）。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-context</artifactId>
+    </dependency>
+    <!--
       10 号设计 §7 债 5：路由策略的**文法与守卫**只允许有一份实现。
       应用层（发布期校验）与 worker（运行期决策）与 api（管理台 dry-run）
       都调用 agent-routing 的同一个 PolicyCodec / PublishGuards / RoutingEngine；

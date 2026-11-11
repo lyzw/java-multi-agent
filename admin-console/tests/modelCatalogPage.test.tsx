@@ -44,6 +44,11 @@ const MODELS = [
     description: '默认聊天模型',
     createdAt: '2026-10-01T00:00:00Z',
     updatedAt: '2026-10-01T00:00:00Z',
+    contextWindowTokens: 65536,
+    maxInputTokens: 61440,
+    tokenizerId: 'o200k_base',
+    supportsPromptCaching: true,
+    supportsTokenizeApi: false,
   },
   {
     id: 'm2',
@@ -62,6 +67,11 @@ const MODELS = [
     description: null,
     createdAt: '2026-10-02T00:00:00Z',
     updatedAt: '2026-10-02T00:00:00Z',
+    contextWindowTokens: 32768,
+    maxInputTokens: 28672,
+    tokenizerId: null,
+    supportsPromptCaching: false,
+    supportsTokenizeApi: false,
   },
 ]
 
@@ -141,6 +151,12 @@ describe('模型配置页 · Feature A 模型定义 CRUD', () => {
     expect(payload.provider).toBe('deepseek')
     expect(payload.modelName).toBe('deepseek-chat')
     expect(payload.scenario).toBeTruthy()
+    // ADR-013：新建时 5 项能力按 R10 保守回落逐字提交
+    expect(payload.contextWindowTokens).toBe(32768)
+    expect(payload.maxInputTokens).toBe(28672)
+    expect(payload.tokenizerId).toBeNull()
+    expect(payload.supportsPromptCaching).toBe(false)
+    expect(payload.supportsTokenizeApi).toBe(false)
   })
 
   it('✅ 缺少必填项时不会调用 createModel（校验拦截）', async () => {

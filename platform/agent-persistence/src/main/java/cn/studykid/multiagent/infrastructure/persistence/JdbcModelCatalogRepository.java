@@ -18,6 +18,7 @@ import org.jspecify.annotations.Nullable;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.ports.modelcatalog.ModelCatalogPort;
+import cn.studykid.multiagent.ports.modelcatalog.ModelContextCapabilities;
 import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
 
 /**
@@ -49,6 +50,8 @@ public class JdbcModelCatalogRepository implements ModelCatalogPort {
                 SELECT id, provider, scenario, model_name, display_name, base_url,
                        is_default, supports_tools, supports_streaming, supports_vision,
                        dimension, is_enabled, sort_order, description,
+                       context_window_tokens, max_input_tokens, tokenizer_id,
+                       supports_prompt_caching, supports_tokenize_api,
                        created_at, updated_at
                 FROM model_catalog
                 ORDER BY scenario, sort_order, model_name
@@ -72,6 +75,8 @@ public class JdbcModelCatalogRepository implements ModelCatalogPort {
                 SELECT id, provider, scenario, model_name, display_name, base_url,
                        is_default, supports_tools, supports_streaming, supports_vision,
                        dimension, is_enabled, sort_order, description,
+                       context_window_tokens, max_input_tokens, tokenizer_id,
+                       supports_prompt_caching, supports_tokenize_api,
                        created_at, updated_at
                 FROM model_catalog WHERE id = ?::uuid
                 """;
@@ -96,8 +101,10 @@ public class JdbcModelCatalogRepository implements ModelCatalogPort {
                 INSERT INTO model_catalog (
                     id, provider, scenario, model_name, display_name, base_url,
                     is_default, supports_tools, supports_streaming, supports_vision,
-                    dimension, is_enabled, sort_order, description, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+                    dimension, is_enabled, sort_order, description,
+                    context_window_tokens, max_input_tokens, tokenizer_id,
+                    supports_prompt_caching, supports_tokenize_api, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
                 ON CONFLICT (id) DO UPDATE SET
                     provider        = EXCLUDED.provider,
                     scenario        = EXCLUDED.scenario,
@@ -112,6 +119,11 @@ public class JdbcModelCatalogRepository implements ModelCatalogPort {
                     is_enabled      = EXCLUDED.is_enabled,
                     sort_order      = EXCLUDED.sort_order,
                     description     = EXCLUDED.description,
+                    context_window_tokens   = EXCLUDED.context_window_tokens,
+                    max_input_tokens        = EXCLUDED.max_input_tokens,
+                    tokenizer_id            = EXCLUDED.tokenizer_id,
+                    supports_prompt_caching = EXCLUDED.supports_prompt_caching,
+                    supports_tokenize_api   = EXCLUDED.supports_tokenize_api,
                     updated_at      = now()
                 """; // 注意：created_at 仅在首次插入时取默认 now()，ON CONFLICT 不动它
         try (Connection conn = dataSource.getConnection()) {
@@ -135,6 +147,14 @@ public class JdbcModelCatalogRepository implements ModelCatalogPort {
                 ps.setBoolean(12, definition.isEnabled());
                 ps.setInt(13, definition.sortOrder());
                 ps.setString(14, definition.description());
+                // ⚠️ 5 个上下文能力列必须与 DO UPDATE SET 逐列对应：
+                //    只加 INSERT 不加 UPDATE，后台每次 PUT 都会把能力覆盖回默认值（R9）。
+                ModelContextCapabilities caps = definition.contextCapabilities();
+                ps.setInt(15, caps.contextWindowTokens());
+                ps.setInt(16, caps.maxInputTokens());
+                ps.setString(17, caps.tokenizerId());
+                ps.setBoolean(18, caps.supportsPromptCaching());
+                ps.setBoolean(19, caps.supportsTokenizeApi());
                 ps.executeUpdate();
                 conn.commit();
             } catch (SQLException e) {
@@ -153,7 +173,8 @@ public class JdbcModelCatalogRepository implements ModelCatalogPort {
                 definition.isDefault(), definition.supportsTools(), definition.supportsStreaming(),
                 definition.supportsVision(), definition.dimension(), definition.isEnabled(),
                 definition.sortOrder(), definition.description(),
-                definition.createdAt() != null ? definition.createdAt() : now, now);
+                definition.createdAt() != null ? definition.createdAt() : now, now,
+                definition.contextCapabilities());
     }
 
     @Override
@@ -174,6 +195,8 @@ public class JdbcModelCatalogRepository implements ModelCatalogPort {
                 SELECT id, provider, scenario, model_name, display_name, base_url,
                        is_default, supports_tools, supports_streaming, supports_vision,
                        dimension, is_enabled, sort_order, description,
+                       context_window_tokens, max_input_tokens, tokenizer_id,
+                       supports_prompt_caching, supports_tokenize_api,
                        created_at, updated_at
                 FROM model_catalog
                 WHERE scenario = ? AND is_default = true AND is_enabled = true
@@ -200,6 +223,8 @@ public class JdbcModelCatalogRepository implements ModelCatalogPort {
                 SELECT id, provider, scenario, model_name, display_name, base_url,
                        is_default, supports_tools, supports_streaming, supports_vision,
                        dimension, is_enabled, sort_order, description,
+                       context_window_tokens, max_input_tokens, tokenizer_id,
+                       supports_prompt_caching, supports_tokenize_api,
                        created_at, updated_at
                 FROM model_catalog
                 WHERE scenario = ? AND model_name = ? AND is_enabled = true
@@ -242,6 +267,25 @@ public class JdbcModelCatalogRepository implements ModelCatalogPort {
                 rs.getInt("sort_order"),
                 rs.getString("description"),
                 created == null ? null : created.toInstant(),
-                updated == null ? null : updated.toInstant());
+                updated == null ? null : updated.toInstant(),
+                contextCapabilities(rs));
+    }
+
+    /**
+     * 读取模型级上下文能力。
+     *
+     * <p>⚠️ <b>刻意不做「列不存在就回落默认」的降级</b>：活库若尚未执行
+     * {@code 07_model_catalog_context_upgrade.sql}，SELECT 会直接失败并暴露出来；
+     * 静默回落会让所有模型都按 32768 窗口估算，形成「不报错、只是数字悄悄错」
+     * 的静默超窗（R2）。部署顺序固定为 <b>先 SQL、后 jar</b>。
+     */
+    private static ModelContextCapabilities contextCapabilities(@NonNull ResultSet rs)
+            throws SQLException {
+        return new ModelContextCapabilities(
+                rs.getInt("context_window_tokens"),
+                rs.getInt("max_input_tokens"),
+                rs.getString("tokenizer_id"),
+                rs.getBoolean("supports_prompt_caching"),
+                rs.getBoolean("supports_tokenize_api"));
     }
 }

@@ -28,6 +28,7 @@ import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
 import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
 import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.TraceIdSource;
+import cn.studykid.multiagent.ports.metrics.QuestionIdTag;
 import cn.studykid.multiagent.ports.metrics.ScenarioTag;
 import cn.studykid.multiagent.ports.metrics.TraceFactPort;
 
@@ -107,10 +108,14 @@ public class JdbcTraceFactRepository implements TraceFactPort {
         //    jsonb_typeof 先挡住 object/array —— 否则 ->> 会把整个 JSON 结构
         //    转成文本，把对话原文带进指标宽表（合规红线 + 看板分组基数爆炸）。
         //    内容白名单由 ScenarioTag 在 Java 侧再校验一次（可单测、可反向验证）。
+        // ⚠️ questionId 同理只认**显式字符串**：它只喂给 L2 判分源做精确关联，
+        //    绝不写宽表；类型闸门挡住把整段题干/对象塞进「题目标识」的调用方。
         String sql = """
                 SELECT tenant_id, state, error_code, trace_id, correlation_id, created_at, completed_at,
                        CASE WHEN jsonb_typeof(input_payload -> 'scenario') = 'string'
-                            THEN input_payload ->> 'scenario' END AS scenario
+                            THEN input_payload ->> 'scenario' END AS scenario,
+                       CASE WHEN jsonb_typeof(input_payload -> 'questionId') = 'string'
+                            THEN input_payload ->> 'questionId' END AS question_id
                 FROM public.run WHERE run_id = ?::uuid
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -154,7 +159,10 @@ public class JdbcTraceFactRepository implements TraceFactPort {
                                 : rs.getTimestamp("completed_at").toInstant(),
                         agent == null ? null : agent.agentId(),
                         agent == null ? null : agent.version(),
-                        ScenarioTag.normalize(rs.getString("scenario"))));
+                        ScenarioTag.normalize(rs.getString("scenario")),
+                        // ⚠️ 非法 / 未标注一律 null，L2 据此 fail-closed；
+                        //    绝不把题面原文截断成「题目标识」去模糊匹配题库。
+                        QuestionIdTag.normalize(rs.getString("question_id"))));
             }
         }
     }

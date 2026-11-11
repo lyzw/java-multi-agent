@@ -31,14 +31,14 @@ import cn.studykid.multiagent.ports.persistence.ReviewTaskPort.Source;
  *       机器结论混进去会让「人工抽样覆盖率」变成假指标）。</li>
  * </ol>
  *
- * <p>⚠️ <b>L2 内容级归因判分（§13 第 3 项）已接线，但 fail-closed</b>：
- *   {@link L2AttributionEvaluator} 已接入本编排，在 L1 之后执行；但它只在
- *   <b>全部</b>满足时才评级 —— 开关启用（llm-judge / reference-source）、装配了真正的
- *   {@code ReferenceAnswerSource} 与 {@code AttributionJudge} bean、回放事实充足、抽样命中。
- *   平台当前<b>没有</b>可供评估链路调用的 LLM 客户端，且其 rubric / 成本口径待产品确认，
- *   故默认 {@code NoReferenceAnswerSource}（返回 empty）+ 无 {@code AttributionJudge} bean，
- *   使得 L2 明确「未启用」—— 看板据此显示「未启用 / 样本不足」，<b>绝不</b>编造归因正确率。
- *   该通道的「实质落地」取决于产品确认判分源与判定器，不在本类里放空实现冒充已接线。
+ * <p>⚠️ <b>L2 内容级归因判分（§13 第 3 项）已接骨架，但默认 fail-closed</b>：
+ *   {@link L2AttributionEvaluator} 已接入本编排，在 L1 之后执行。骨架包含平台本地题库
+ *   文件源、显式 {@code questionId} 精确关联、MiniMax 严格 rubric 判定器与<b>独立日预算</b>；
+ *   但它只在<b>全部</b>满足时才评级 —— 两个开关启用、题库收录该 questionId、判定器给出
+ *   足够置信的结论、回放事实充足、抽样命中。
+ *   生产默认 {@code NoReferenceAnswerSource}（返回 empty）+ 不注册 {@code AttributionJudge}，
+ *   L2 明确「未启用」—— 看板显示「未启用 / 样本不足」，<b>绝不</b>编造归因正确率。
+ *   机器结论只写 {@code agent_trace_metric.attribution_correct}，绝不写 {@code agent_eval_sample}。
  *
  * <p><b>确定性抽样</b>：用 {@code traceId.hashCode()} 取模而非随机数，
  * 同一 Trace 重放时结论一致（不会因重采一次就多出一条待审任务）。
@@ -77,13 +77,16 @@ public class TraceEvaluationService {
     /**
      * 采集完成后的一次评估（L1 规则判分 → L2 内容级归因判分 → 分层抽样入人审）。
      *
-     * @param scenario 显式场景标签（可为 null）；仅作为 L2 判定器的上下文，不派生。
+     * @param scenario    显式场景标签（可为 null）；仅作为 L2 判定器的上下文，不派生。
+     * @param questionId  显式题目标识（可为 null）；来自事实端口，只喂给 L2 判分源精确关联，
+     *                    <b>不写入指标宽表</b>，也与 L1 的规则判分无关。
      * @return 本轮新建的待审任务 id（无则 empty）
      */
     public @NonNull Optional<String> evaluate(@NonNull String tenantId,
                                               @NonNull String runId,
                                               @NonNull String traceId,
-                                              @Nullable String scenario) {
+                                              @Nullable String scenario,
+                                              @Nullable String questionId) {
         if (!enabled) {
             return Optional.empty();
         }
@@ -109,9 +112,10 @@ public class TraceEvaluationService {
                 traceId, tenantId, L1AttributionEvaluator.CHECKER_CODE,
                 null, v.linkComplete(), v.evidenceDigest()));
 
-        // L2 内容级归因判分（§13 第 3 项）：fail-closed，无参考源/判定器/未启用则不写。
+        // L2 内容级归因判分（§13 第 3 项）：fail-closed，
+        // 无合法 questionId / 参考源 / 判定器 / 未启用则不写。
         try {
-            l2.evaluate(tenantId, runId, traceId, scenario);
+            l2.evaluate(tenantId, runId, traceId, scenario, questionId);
         } catch (RuntimeException e) {
             // 与 L1 同纪律：L2 异常绝不影响采集与 L1 结论，也不假装判过。
             log.warn("L2 归因判分异常（已忽略，不影响采集与 L1 结论）: trace={}, cause={}",

@@ -9,6 +9,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 import cn.studykid.multiagent.ports.modelcatalog.ModelCatalogPort;
+import cn.studykid.multiagent.ports.modelcatalog.ModelContextCapabilities;
 import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
 import cn.studykid.multiagent.ports.modelcatalog.ModelScenario;
 
@@ -22,7 +23,8 @@ class ModelResolverTest {
     private static ModelDefinition def(String id, String provider, String scenario,
                                       String name, boolean isDefault, boolean enabled) {
         return new ModelDefinition(id, provider, scenario, name, name, "https://x/v1",
-                isDefault, true, true, false, null, enabled, 0, null, null, null);
+                isDefault, true, true, false, null, enabled, 0, null, null, null,
+                ModelContextCapabilities.defaults());
     }
 
     /** 内存桩：按测试需要返回固定目录。 */

@@ -32,6 +32,13 @@ export interface ModelConfig {
   description: string | null
   createdAt: string
   updatedAt: string
+  /** ADR-013：模型级上下文能力（后端 model_catalog 五列，写入即生效）。 */
+  contextWindowTokens: number
+  maxInputTokens: number
+  /** null = 启发式估算；供应商能力未探测时恒 null（R10）。 */
+  tokenizerId: string | null
+  supportsPromptCaching: boolean
+  supportsTokenizeApi: boolean
 }
 
 /** 模型定义创建/更新请求体（POST/PUT /api/admin/models） */
@@ -49,6 +56,12 @@ export interface ModelConfigRequest {
   isEnabled: boolean
   sortOrder: number
   description: string
+  /** ADR-013：⚠️ 前端每次提交都必须全量带上（启用开关走全量 PUT，漏带会把能力覆盖回默认）。 */
+  contextWindowTokens: number
+  maxInputTokens: number
+  tokenizerId: string | null
+  supportsPromptCaching: boolean
+  supportsTokenizeApi: boolean
 }
 
 /** 供应商密钥（GET /api/admin/model-credentials · ProviderCredentialResponse） */

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "questions": [
+    {
+      "questionId": "Q-MATH-001",
+      "standardAnalysis": "先移项得 2x=4，故 x=2；错因：移项时符号未变。",
+      "question": "【不应被加载】学生原题原文：解方程 2x-4=0，我哪里错了"
+    },
+    {
+      "questionId": "Q-MATH-002",
+      "standardAnalysis": "用求根公式得两根；错因：漏掉负根。"
+    }
+  ]
+}

@@ -5932,12 +5932,34 @@ CREATE TABLE public.model_catalog (
     sort_order      integer NOT NULL DEFAULT 0,
     description     text,
     created_at      timestamptz NOT NULL DEFAULT now(),
-    updated_at      timestamptz NOT NULL DEFAULT now()
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    -- ── 上下文压缩 · 模型级能力（ADR-013 / 方案 §3.2-A）──────────────
+    -- ⚠️ R10：能力未做事实探测前，两个特性位恒 false、tokenizer 恒 NULL，
+    --    绝不假设供应商支持精确计数 / 前缀缓存（否则估算偏小而静默超窗）。
+    --    IN-6 探测结果写入目录后才可显式置 true。
+    context_window_tokens   integer NOT NULL DEFAULT 32768,
+    max_input_tokens        integer NOT NULL DEFAULT 28672,
+    tokenizer_id            text,
+    supports_prompt_caching boolean NOT NULL DEFAULT false,
+    supports_tokenize_api   boolean NOT NULL DEFAULT false
 );
 
 COMMENT ON TABLE public.model_catalog IS
     '统一模型目录：所有模型（对话/嵌入/摘要/分类/审核）由管理后台集中定义与维护，'
     '各模块运行时统一经 ModelResolver 读取，禁止硬编码。不含密钥。';
+
+COMMENT ON COLUMN public.model_catalog.context_window_tokens IS
+    '模型总窗口（输入+输出），默认 32768，范围 4096–1000000。决定 max_input_tokens 上界；'
+    '未登记/不确定时按 R10 回落全局默认并上调 reserve。';
+COMMENT ON COLUMN public.model_catalog.max_input_tokens IS
+    '允许的输入 token 硬顶，默认 = context_window_tokens − 4096。'
+    '直接决定压缩触发阈值与最终硬顶；必须 ≤ 总窗口 − 4096（输出预留），配置期校验不满足即拒绝。';
+COMMENT ON COLUMN public.model_catalog.tokenizer_id IS
+    '精确计数器标识；NULL = 启发式估算。有精确 tokenizer 时 reserveRatio 才可下调到 0.03。';
+COMMENT ON COLUMN public.model_catalog.supports_prompt_caching IS
+    '供应商是否支持前缀缓存；为 true 才启用 [D6] 稳定前缀守卫与缓存命中率指标。默认 false。';
+COMMENT ON COLUMN public.model_catalog.supports_tokenize_api IS
+    '供应商是否提供 /tokenize 精确计数端点；为 true 才优先调用（带本地兜底）。默认 false。';
 
 -- 同场景内模型名唯一（避免重复登记）
 CREATE UNIQUE INDEX model_catalog_scenario_name_uq
@@ -5991,28 +6013,30 @@ CREATE INDEX model_provider_credential_provider_idx
 INSERT INTO public.model_catalog
     (provider, scenario, model_name, display_name, base_url,
      is_default, supports_tools, supports_streaming, supports_vision,
-     dimension, is_enabled, sort_order, description)
+     dimension, is_enabled, sort_order, description,
+     context_window_tokens, max_input_tokens, tokenizer_id,
+     supports_prompt_caching, supports_tokenize_api)
 VALUES
     -- 主 Agent 对话：MiniMax M2.5（平台 Worker 执行链路核心 LLM）
     ('minimax', 'agent-chat', 'MiniMax-M2.5', 'MiniMax M2.5',
      'https://api.minimax.cn/v1',
      true, true, true, false, NULL, true, 0,
-     '主 Agent 对话默认模型（MiniMax M2.5，思考型）。base_url/key 仍走环境变量。'),
+     '主 Agent 对话默认模型（MiniMax M2.5，思考型）。base_url/key 仍走环境变量。', 32768, 28672, NULL, false, false),
     -- 管理后台直接对话（控制台调试）
     ('minimax', 'console-chat', 'MiniMax-M2.5', 'MiniMax M2.5（控制台）',
      'https://api.minimax.cn/v1',
      true, true, true, false, NULL, true, 0,
-     '管理后台控制台直接对话默认模型。'),
+     '管理后台控制台直接对话默认模型。', 32768, 28672, NULL, false, false),
     -- 向量化 / Embedding（RAG 索引与查询共用；base_url 留空→沿用 rag.embedding.base-url）
     ('bge', 'embedding', 'bge-m3', 'BGE-M3 向量化',
      NULL,
      true, false, false, false, 1024, true, 0,
-     'RAG 嵌入默认模型（BGE-M3，1024 维）。base_url 由 yml 提供，维度与向量列一致。'),
+     'RAG 嵌入默认模型（BGE-M3，1024 维）。base_url 由 yml 提供，维度与向量列一致。', 32768, 28672, NULL, false, false),
     -- 兜底默认场景（其它场景无命中时回落；保证「任何场景至少一个可用模型」）
     ('minimax', 'default', 'MiniMax-M2.5', 'MiniMax M2.5（兜底）',
      'https://api.minimax.cn/v1',
      true, true, true, false, NULL, true, 0,
-     '全局兜底默认模型：具体场景无命中且无自身默认时回落到此。');
+     '全局兜底默认模型：具体场景无命中且无自身默认时回落到此。', 32768, 28672, NULL, false, false);
 
 
 -- PostgreSQL database dump complete

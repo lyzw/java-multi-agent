@@ -41,6 +41,8 @@
     -->
     <module>agent-routing</module>
     <module>agent-ports</module>
+    <!-- ADR-013 [D1]：纯算法层，只依赖 agent-ports；位于 ports 之上、application 之下。 -->
+    <module>agent-context</module>
     <!--
       ⚠️ **顺序有意**：测试支撑件排在 agent-application 之前，
       因为后两者都以 test 作用域依赖它（§9 场景注册表与统一四字段断言框架）。
@@ -89,6 +91,11 @@
       <dependency>
         <groupId>cn.studykid.multiagent</groupId>
         <artifactId>agent-ports</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.studykid.multiagent</groupId>
+        <artifactId>agent-context</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

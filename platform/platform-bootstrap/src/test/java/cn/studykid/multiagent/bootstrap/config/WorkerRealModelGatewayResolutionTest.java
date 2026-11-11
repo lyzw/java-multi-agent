@@ -15,6 +15,7 @@ import cn.studykid.multiagent.infrastructure.model.MiniMaxModelGateway;
 import cn.studykid.multiagent.infrastructure.model.ModelCredentialProvider;
 import cn.studykid.multiagent.infrastructure.model.OpenAiCompatibleModelGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway;
+import cn.studykid.multiagent.ports.modelcatalog.ModelContextCapabilities;
 import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
 import cn.studykid.multiagent.ports.modelcatalog.ModelScenario;
 
@@ -47,7 +48,8 @@ class WorkerRealModelGatewayResolutionTest {
                                        boolean enabled) {
         return new ModelDefinition(
                 null, provider, ModelScenario.AGENT_CHAT, modelName, null, baseUrl,
-                true, false, true, false, null, enabled, 0, null, null, null);
+                true, false, true, false, null, enabled, 0, null, null, null,
+                ModelContextCapabilities.defaults());
     }
 
     /** 只返回固定默认模型的解析器替身。 */

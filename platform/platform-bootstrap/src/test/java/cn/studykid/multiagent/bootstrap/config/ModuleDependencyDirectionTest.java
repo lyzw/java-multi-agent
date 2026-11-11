@@ -59,7 +59,9 @@ class ModuleDependencyDirectionTest {
      * 跑起来判不同」，而 dry-run 面板给出的结论也不再是运行期的结论（10 号设计 §7 债 5）。
      */
     private static final Set<String> APPLICATION_ALLOWED_PLATFORM_DEPS = Set.of(
-            "agent-core", "agent-ports", "agent-routing", "agent-test-support");
+            "agent-core", "agent-ports", "agent-routing", "agent-test-support",
+            // ADR-013 [D1]：纯算法层，位于 ports 之上；应用层依赖它是正向依赖。
+            "agent-context");
 
     /**
      * 允许 agent-routing 依赖的平台模块（<b>只有领域层</b>）。

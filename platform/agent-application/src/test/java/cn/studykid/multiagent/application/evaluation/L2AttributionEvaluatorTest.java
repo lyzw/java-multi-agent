@@ -18,6 +18,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort;
 import cn.studykid.multiagent.ports.persistence.TraceReplayPort;
@@ -27,9 +28,9 @@ import cn.studykid.multiagent.ports.persistence.TraceReplayPort.MessageView;
  * L2 内容级归因判分（§13 第 3 项）fail-closed 行为单测。
  *
  * <p>⚠️ 本类用 test-double 的参考源 / 判定器，验证<b>编排门禁</b>而非真实判分：
- *   真实判分源（题库标准解析）与 LLM 判定器仍待产品确认，否则测的是「猜的」。
- *   这里只证 —— <b>任一条件缺失时 L2 不评级、不写 attribution_correct</b>，
- *   以及全部满足时才写出真布尔。
+ *   真实题库文件源与 MiniMax rubric 判定器由各自单测 / 闭环 IT 覆盖。
+ *   这里只证 —— <b>任一条件缺失（尤其 questionId 非法）时 L2 不评级、
+ *   不写 attribution_correct</b>，以及全部满足时才写出真布尔。
  */
 @DisplayName("P3 · L2 内容级归因判分（§13 第 3 项）")
 class L2AttributionEvaluatorTest {
@@ -38,6 +39,7 @@ class L2AttributionEvaluatorTest {
     private static final String RUN = "22222222-2222-2222-2222-222222222222";
     private static final String TRACE = "trace-l2-0001";
     private static final String SCENARIO = "数学:一元二次方程";
+    private static final String QUESTION_ID = "Q-MATH-001";
 
     private TraceReplayPort replay;
     private AgentMetricPort metrics;
@@ -51,9 +53,9 @@ class L2AttributionEvaluatorTest {
         replay = mock(TraceReplayPort.class);
         metrics = mock(AgentMetricPort.class);
         refWithAnswer = mock(ReferenceAnswerSource.class);
-        when(refWithAnswer.resolve(anyString(), anyString()))
+        when(refWithAnswer.resolve(anyString()))
                 .thenReturn(Optional.of(new ReferenceAnswerSource.ReferenceAnswer(
-                        SCENARIO, "求方程根", "标准解析：用求根公式")));
+                        QUESTION_ID, "标准解析：用求根公式")));
         refEmpty = new NoReferenceAnswerSource();
         judgeTrue = mock(AttributionJudge.class);
         when(judgeTrue.judgeCorrect(any())).thenReturn(Optional.of(true));
@@ -85,7 +87,7 @@ class L2AttributionEvaluatorTest {
         when(replay.messages(TENANT, RUN)).thenReturn(transcript());
         when(judgeTrue.judgeCorrect(any())).thenReturn(Optional.of(true));
 
-        var r = enabled(refWithAnswer, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO);
+        var r = enabled(refWithAnswer, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO, QUESTION_ID);
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.GRADED);
         assertThat(r.attributionCorrect()).isTrue();
@@ -100,7 +102,7 @@ class L2AttributionEvaluatorTest {
         when(replay.messages(TENANT, RUN)).thenReturn(transcript());
         when(judgeTrue.judgeCorrect(any())).thenReturn(Optional.of(false));
 
-        var r = enabled(refWithAnswer, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO);
+        var r = enabled(refWithAnswer, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO, QUESTION_ID);
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.GRADED);
         assertThat(r.attributionCorrect()).isFalse();
@@ -111,7 +113,7 @@ class L2AttributionEvaluatorTest {
     void ungradedWhenNoReference() {
         when(replay.messages(TENANT, RUN)).thenReturn(transcript());
 
-        var r = enabled(refEmpty, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO);
+        var r = enabled(refEmpty, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO, QUESTION_ID);
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_NO_REFERENCE);
         assertThat(r.attributionCorrect()).isNull();
@@ -126,7 +128,7 @@ class L2AttributionEvaluatorTest {
         when(replay.messages(TENANT, RUN)).thenReturn(transcript());
 
         var r = new L2AttributionEvaluator(refWithAnswer, null, replay, metrics, true, true, 1.0)
-                .evaluate(TENANT, RUN, TRACE, SCENARIO);
+                .evaluate(TENANT, RUN, TRACE, SCENARIO, QUESTION_ID);
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_NO_JUDGE);
         verify(metrics, never()).recordEvalSample(any());
@@ -143,9 +145,9 @@ class L2AttributionEvaluatorTest {
         L2AttributionEvaluator offBoth = new L2AttributionEvaluator(
                 refWithAnswer, judgeTrue, replay, metrics, true, false, 1.0);
 
-        assertThat(off.evaluate(TENANT, RUN, TRACE, SCENARIO).outcome())
+        assertThat(off.evaluate(TENANT, RUN, TRACE, SCENARIO, QUESTION_ID).outcome())
                 .isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_DISABLED);
-        assertThat(offBoth.evaluate(TENANT, RUN, TRACE, SCENARIO).outcome())
+        assertThat(offBoth.evaluate(TENANT, RUN, TRACE, SCENARIO, QUESTION_ID).outcome())
                 .isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_DISABLED);
         verify(metrics, never()).recordEvalSample(any());
         // ⚠️ 未评级时同样不得写宽表列（两条路径都不许「判不了也留个 false」）。
@@ -157,7 +159,7 @@ class L2AttributionEvaluatorTest {
     void ungradedWhenNoFacts() {
         when(replay.messages(TENANT, RUN)).thenReturn(List.of());
 
-        var r = enabled(refWithAnswer, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO);
+        var r = enabled(refWithAnswer, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO, QUESTION_ID);
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_NO_FACTS);
         verify(metrics, never()).recordEvalSample(any());
@@ -173,7 +175,7 @@ class L2AttributionEvaluatorTest {
         L2AttributionEvaluator sampled = new L2AttributionEvaluator(
                 refWithAnswer, judgeTrue, replay, metrics, true, true, 0.0);
 
-        var r = sampled.evaluate(TENANT, RUN, TRACE, SCENARIO);
+        var r = sampled.evaluate(TENANT, RUN, TRACE, SCENARIO, QUESTION_ID);
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.SKIPPED_SAMPLING);
         verify(metrics, never()).recordEvalSample(any());
@@ -186,11 +188,68 @@ class L2AttributionEvaluatorTest {
     void unsureIsNotGraded() {
         when(replay.messages(TENANT, RUN)).thenReturn(transcript());
 
-        var r = enabled(refWithAnswer, judgeUnsure).evaluate(TENANT, RUN, TRACE, SCENARIO);
+        var r = enabled(refWithAnswer, judgeUnsure).evaluate(TENANT, RUN, TRACE, SCENARIO, QUESTION_ID);
 
         assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_JUDGE_UNSURE);
         verify(metrics, never()).recordEvalSample(any());
         // ⚠️ 未评级时同样不得写宽表列（两条路径都不许「判不了也留个 false」）。
         verify(metrics, never()).recordAttributionGrade(anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("L2-9 ⚠️⚠️ 无 questionId：明确不评级，绝不拿题面文本去题库模糊匹配")
+    void missingQuestionIdIsNotGraded() {
+        when(replay.messages(TENANT, RUN)).thenReturn(transcript());
+
+        var r = enabled(refWithAnswer, judgeTrue)
+                .evaluate(TENANT, RUN, TRACE, SCENARIO, null);
+
+        assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_NO_QUESTION_ID);
+        verify(refWithAnswer, never()).resolve(anyString());
+        verify(judgeTrue, never()).judgeCorrect(any());
+        verify(metrics, never()).recordAttributionGrade(anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("L2-10 ⚠️⚠️ questionId 是题面原文（非法标签）：不评级，不截断成「题目标识」")
+    void freeTextQuestionIdIsNotGraded() {
+        when(replay.messages(TENANT, RUN)).thenReturn(transcript());
+
+        var r = enabled(refWithAnswer, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO,
+                "请帮我解方程 x^2 - 5x + 6 = 0，我不确定对不对");
+
+        assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_NO_QUESTION_ID);
+        verify(refWithAnswer, never()).resolve(anyString());
+        verify(metrics, never()).recordAttributionGrade(anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("L2-11 ⚠️ 判分源返回别的题号：视为无参考答案（防模糊匹配冒充精确关联）")
+    void referenceWithMismatchedIdIsRejected() {
+        when(replay.messages(TENANT, RUN)).thenReturn(transcript());
+        when(refWithAnswer.resolve(anyString())).thenReturn(Optional.of(
+                new ReferenceAnswerSource.ReferenceAnswer("Q-OTHER-999", "另一题的解析")));
+
+        var r = enabled(refWithAnswer, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO, QUESTION_ID);
+
+        assertThat(r.outcome()).isEqualTo(L2AttributionEvaluator.Outcome.UNGRADED_NO_REFERENCE);
+        verify(judgeTrue, never()).judgeCorrect(any());
+        verify(metrics, never()).recordAttributionGrade(anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("L2-12 ✅ 判定器拿到的 questionId 与题面分离，且不从正文派生")
+    void questionIdPassedToJudgeWithoutDerivingFromText() {
+        when(replay.messages(TENANT, RUN)).thenReturn(transcript());
+
+        enabled(refWithAnswer, judgeTrue).evaluate(TENANT, RUN, TRACE, SCENARIO, "  " + QUESTION_ID + " ");
+
+        ArgumentCaptor<AttributionJudge.JudgeInput> cap =
+                ArgumentCaptor.forClass(AttributionJudge.JudgeInput.class);
+        verify(judgeTrue).judgeCorrect(cap.capture());
+        assertThat(cap.getValue().questionId()).isEqualTo(QUESTION_ID);
+        assertThat(cap.getValue().scenario()).isEqualTo(SCENARIO);
+        assertThat(cap.getValue().question()).isEqualTo("求方程根");
+        verify(refWithAnswer).resolve(QUESTION_ID);
     }
 }

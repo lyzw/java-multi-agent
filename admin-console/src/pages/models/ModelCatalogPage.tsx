@@ -8,6 +8,7 @@ import {
   Form,
   Input,
   InputNumber,
+  Divider,
   Modal,
   Popconfirm,
   Select,
@@ -66,10 +67,19 @@ interface ModelFormValues {
   isEnabled?: boolean
   sortOrder?: number
   description?: string
+  contextWindowTokens?: number
+  maxInputTokens?: number
+  tokenizerId?: string | null
+  supportsPromptCaching?: boolean
+  supportsTokenizeApi?: boolean
 }
 
 /** 把 ModelConfig / 表单值收敛成后端契约要求的 ModelConfigRequest（null→空串） */
-function toRequest(m: ModelConfig | ModelFormValues): ModelConfigRequest {
+/**
+ * ⚠️ 导出仅供契约测试：启用开关走 `updateModel(id, toRequest(...))` 的**全量 PUT**，
+ *    任何一次提交漏带 5 项能力，后端都会把该模型的能力覆盖回默认值（R9）。
+ */
+export function toRequest(m: ModelConfig | ModelFormValues): ModelConfigRequest {
   return {
     provider: m.provider ?? '',
     scenario: m.scenario ?? '',
@@ -84,6 +94,13 @@ function toRequest(m: ModelConfig | ModelFormValues): ModelConfigRequest {
     isEnabled: m.isEnabled ?? true,
     sortOrder: Number(m.sortOrder ?? 0),
     description: m.description ?? '',
+    contextWindowTokens: Number(m.contextWindowTokens ?? 32768),
+    maxInputTokens: Number(
+      m.maxInputTokens ?? Math.max(1024, Number(m.contextWindowTokens ?? 32768) - 4096),
+    ),
+    tokenizerId: m.tokenizerId ?? null,
+    supportsPromptCaching: Boolean(m.supportsPromptCaching),
+    supportsTokenizeApi: Boolean(m.supportsTokenizeApi),
   }
 }
 
@@ -101,6 +118,12 @@ const EMPTY_FORM: ModelFormValues = {
   isEnabled: true,
   sortOrder: 0,
   description: '',
+  // R10：能力未探测前一律按保守回落，两个特性位恒 false。
+  contextWindowTokens: 32768,
+  maxInputTokens: 28672,
+  tokenizerId: null,
+  supportsPromptCaching: false,
+  supportsTokenizeApi: false,
 }
 
 /**
@@ -178,6 +201,13 @@ function ModelDefinitionsPane(): JSX.Element {
     const modelName = (values.modelName ?? '').trim()
     if (!provider || !scenario || !modelName) {
       message.warning('供应商 / 场景 / 模型名称均为必填')
+      return
+    }
+    const win = Number(values.contextWindowTokens ?? 32768)
+    const maxIn = Number(values.maxInputTokens ?? Math.max(1024, win - 4096))
+    if (maxIn > win - 4096) {
+      // 与后端 ModelContextCapabilities 同判据：配置期拒，绝不悄悄夹紧。
+      message.warning('输入硬顶必须 ≤ 总窗口 − 4096（输出预留）')
       return
     }
     setSubmitting(true)
@@ -357,6 +387,28 @@ function ModelDefinitionsPane(): JSX.Element {
             <Switch />
           </Form.Item>
           <Form.Item name="supportsVision" label="支持视觉" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+
+          <Divider orientation="left" plain>上下文与压缩（ADR-013）</Divider>
+          <Alert
+            type="info"
+            showIcon
+            message="模型能力未做事实探测前，请保持两个开关关闭、计数器留空（R10：不假设供应商支持精确计数 / 前缀缓存）。"
+          />
+          <Form.Item name="contextWindowTokens" label="总上下文窗口（输入+输出 Token）">
+            <InputNumber style={{ width: '100%' }} min={4096} max={1000000} />
+          </Form.Item>
+          <Form.Item name="maxInputTokens" label="输入硬顶 Token（≤ 总窗口 − 4096）">
+            <InputNumber style={{ width: '100%' }} min={1024} max={1000000} />
+          </Form.Item>
+          <Form.Item name="tokenizerId" label="精确计数器标识">
+            <Input placeholder="留空 = 启发式估算（默认）" />
+          </Form.Item>
+          <Form.Item name="supportsPromptCaching" label="支持前缀缓存" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="supportsTokenizeApi" label="支持 /tokenize 精确计数" valuePropName="checked">
             <Switch />
           </Form.Item>
 

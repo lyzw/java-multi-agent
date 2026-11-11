@@ -17,6 +17,7 @@ import cn.studykid.multiagent.core.cap.CapToolKind;
 import cn.studykid.multiagent.core.cap.EffectiveClosure;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
 import cn.studykid.multiagent.ports.modelcatalog.ModelCatalogPort;
+import cn.studykid.multiagent.ports.modelcatalog.ModelContextCapabilities;
 import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
 import cn.studykid.multiagent.ports.modelcatalog.ModelScenario;
 
@@ -36,7 +37,8 @@ class AgentModelConfigAssemblerCatalogResolutionTest {
     private static ModelDefinition agentChatDefault() {
         return new ModelDefinition(null, "minimax", ModelScenario.AGENT_CHAT, "MiniMax-M2.5",
                 "MiniMax M2.5", "https://api.minimax.cn/v1",
-                true, true, true, false, null, true, 0, "默认对话模型", null, null);
+                true, true, true, false, null, true, 0, "默认对话模型", null, null,
+                ModelContextCapabilities.defaults());
     }
 
     @Test
@@ -88,7 +90,8 @@ class AgentModelConfigAssemblerCatalogResolutionTest {
         String catalogId = "11111111-1111-1111-1111-111111111111";
         ModelDefinition bound = new ModelDefinition(catalogId, "minimax", ModelScenario.AGENT_CHAT,
                 "resolved-by-id-model", "按 id 绑定的模型", "https://api.minimax.cn/v1",
-                true, true, true, false, null, true, 0, "Per-Agent 绑目录 id", null, null);
+                true, true, true, false, null, true, 0, "Per-Agent 绑目录 id", null, null,
+                ModelContextCapabilities.defaults());
         StubCatalogPort catalog = new StubCatalogPort(List.of(bound));
         ModelResolver resolver = new ModelResolver(catalog);
         // Agent 定义里直接存目录记录的 id（不是模型名）

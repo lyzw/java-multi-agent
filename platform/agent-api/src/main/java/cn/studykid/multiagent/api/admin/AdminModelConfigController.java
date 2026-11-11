@@ -22,6 +22,7 @@ import cn.studykid.multiagent.api.run.RunController.CurrentPrincipal;
 import cn.studykid.multiagent.application.modelcatalog.ModelResolver;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.modelcatalog.ModelCatalogPort;
+import cn.studykid.multiagent.ports.modelcatalog.ModelContextCapabilities;
 import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 
@@ -85,7 +86,7 @@ public class AdminModelConfigController {
     @PostMapping
     public ResponseEntity<ModelConfigResponse> create(@RequestBody ModelConfigRequest req) {
         requireAdmin();
-        ModelDefinition saved = catalog.save(toDefinition(null, req));
+        ModelDefinition saved = saveDefinition(null, req);
         return ResponseEntity.status(HttpStatus.CREATED).body(ModelConfigResponse.from(saved));
     }
 
@@ -97,7 +98,7 @@ public class AdminModelConfigController {
         if (catalog.get(id).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "模型定义不存在");
         }
-        ModelDefinition saved = catalog.save(toDefinition(id, req));
+        ModelDefinition saved = saveDefinition(id, req);
         return ResponseEntity.ok(ModelConfigResponse.from(saved));
     }
 
@@ -139,6 +140,18 @@ public class AdminModelConfigController {
         }
     }
 
+    /**
+     * 配置期非法能力（如 maxInputTokens &gt; 总窗口 − 4096）必须回 400，
+     * 不能让 {@code IllegalArgumentException} 冒成 500，更不能运行期悄悄夹紧。
+     */
+    private ModelDefinition saveDefinition(@Nullable String id, ModelConfigRequest req) {
+        try {
+            return catalog.save(toDefinition(id, req));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        }
+    }
+
     private static ModelDefinition toDefinition(@Nullable String id, ModelConfigRequest req) {
         return new ModelDefinition(
                 id,
@@ -155,7 +168,28 @@ public class AdminModelConfigController {
                 req.isEnabled(),
                 req.sortOrder(),
                 req.description(),
-                null, null);
+                null, null,
+                contextCapabilities(req));
+    }
+
+    /**
+     * 请求体新增 5 项一律用<b>包装类型 + 缺省回落</b>：
+     * primitive boolean / int 在 JSON 缺字段时会被 Jackson 直接判 400
+     * （{@code FAIL_ON_NULL_FOR_PRIMITIVES}），旧客户端 / 运维脚本的 payload
+     * 会在这批改动上「莫名全挂」。回落值与 DDL 默认值逐字对齐（32768 / 28672 / false）。
+     */
+    // 包内可见：契约测试直接验证「旧 payload 缺省回落」与配置期校验，不走反射。
+    static ModelContextCapabilities contextCapabilities(ModelConfigRequest req) {
+        int window = req.contextWindowTokens() != null
+                ? req.contextWindowTokens() : 32_768;
+        int maxInput = req.maxInputTokens() != null
+                ? req.maxInputTokens() : Math.max(1_024, window - 4_096);
+        return new ModelContextCapabilities(
+                window,
+                maxInput,
+                req.tokenizerId(),
+                Boolean.TRUE.equals(req.supportsPromptCaching()),
+                Boolean.TRUE.equals(req.supportsTokenizeApi()));
     }
 
     /** 创建 / 更新请求体（不含 id 与时间戳）。 */
@@ -172,7 +206,12 @@ public class AdminModelConfigController {
             Integer dimension,
             boolean isEnabled,
             int sortOrder,
-            String description) {
+            String description,
+            @Nullable Integer contextWindowTokens,
+            @Nullable Integer maxInputTokens,
+            @Nullable String tokenizerId,
+            @Nullable Boolean supportsPromptCaching,
+            @Nullable Boolean supportsTokenizeApi) {
     }
 
     /** 列表 / 详情响应（不含密钥）。 */
@@ -192,13 +231,21 @@ public class AdminModelConfigController {
             int sortOrder,
             String description,
             Instant createdAt,
-            Instant updatedAt) {
+            Instant updatedAt,
+            int contextWindowTokens,
+            int maxInputTokens,
+            @Nullable String tokenizerId,
+            boolean supportsPromptCaching,
+            boolean supportsTokenizeApi) {
 
         static ModelConfigResponse from(ModelDefinition d) {
+            ModelContextCapabilities caps = d.contextCapabilities();
             return new ModelConfigResponse(d.id(), d.provider(), d.scenario(), d.modelName(),
                     d.displayName(), d.baseUrl(), d.isDefault(), d.supportsTools(),
                     d.supportsStreaming(), d.supportsVision(), d.dimension(), d.isEnabled(),
-                    d.sortOrder(), d.description(), d.createdAt(), d.updatedAt());
+                    d.sortOrder(), d.description(), d.createdAt(), d.updatedAt(),
+                    caps.contextWindowTokens(), caps.maxInputTokens(), caps.tokenizerId(),
+                    caps.supportsPromptCaching(), caps.supportsTokenizeApi());
         }
     }
 

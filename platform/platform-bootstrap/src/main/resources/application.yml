@@ -70,27 +70,39 @@ agent:
 
   # ── 质量评估双轨（P3 · G3）──────────────────────────────────────
   # ⚠️ 口径按「保守默认」：量级 <1k Run/日 → 抽样率 5%（约 50 条/日人审基线）。
-  #    LLM-as-judge 兜底**未接线**：参考答案 / 题库标准解析（详细设计 §13 第 3 项）
-  #    与模型判分成本口径待产品确认，在拿到判分源前不编造「归因正确率」。
   #    L1 只判链路完整性（有回答 / 未截断 / 无工具失败），不判答案对错。
+  #    L2 判「错因归因」是否和标准解析一致（详细设计 §13 第 3 项），默认不启用。
   quality:
     eval:
       enabled: true
       sample-rate: 0.05
-      # ── L2 内容级归因判分（§13 第 3 项 · LLM-as-judge 兜底）─────────
-      # ⚠️ **默认全部关闭（fail-closed）**：平台当前没有可供评估链路调用的 LLM 客户端，
-      #    且其判定 rubric / 模型判分成本口径仍待产品确认；在拿到判分源（题库标准解析）
-      #    与真正的 AttributionJudge 实现前，L2 明确「未启用」，看板显示「未启用 / 样本不足」，
-      #    **绝不**用 LLM 猜一个「归因正确率」。两项开关都开启后 L2 才参与评级。
+      # ── L2 内容级归因判分（§13 第 3 项 · LLM-as-judge）─────────────
+      # ⚠️ 骨架已落地但**默认全部关闭（fail-closed）**：
+      #    判分源＝平台本地题库文件（默认 classpath 空题库，可 file: 覆盖）；
+      #    关联键＝run.input_payload.questionId 显式精确关联，缺失/非法一律不评级；
+      #    判定器＝MiniMax-M2.5 严格 rubric，低置信/解析失败/异常返回「待人工」；
+      #    成本＝独立评估科目日预算，绝不混入业务 usage_record.cost_amount。
+      #    两个开关都开启 + 题库收录该 questionId + 抽样命中，L2 才写 attribution_correct。
+      #    看板 n<30 不显示百分比；未启用时显示「未启用 / 样本不足」。
       llm-judge:
         enabled: false
         # 判定抽样率：LLM 判分有成本，不逐条判；与 L1 同算法、确定性。
         sample-rate: 0.05
-      # ⚠️ 参考答案 / 题库标准解析判分源开关：默认关闭。
-      #    接入真正的 ReferenceAnswerSource bean 后，由 EvaluationConfiguration 的
-      #    @ConditionalOnMissingBean 自动让位给实现；本开关是「是否允许使用判分源」的总闸。
+        model: "MiniMax-M2.5"
+        temperature: 0.0
+        max-tokens: 256
+        timeout-seconds: 10
+        min-confidence: 0.75
+        # ⚠️ 单进程日预算（元/日/实例）；多实例总量上限＝实例数×本值。
+        #    超限时 L2 直接不评级，不硬猜；0 = 一分钱不许花（judge 恒不调用）。
+        daily-cost-limit-yuan: "1.00"
+      # ⚠️ 参考答案 / 题库标准解析判分源：默认关闭（此时装配 NoReferenceAnswerSource）。
+      #    location 支持 classpath: 与 file:；文件格式
+      #    {"version":1,"questions":[{"questionId":"Q-...","standardAnalysis":"..."}]}
+      #    加载期校验重复 questionId / 非法题号 / 空解析，失败即拒绝启动。
       reference-source:
         enabled: false
+        location: "classpath:agent-eval/reference-answers.json"
     # ── 分层抽样（P3 · §7.2 · 2026-11-09 补齐）─────────────────────
     # ⚠️ 为什么需要它：ReviewAlertService 只做「单条 Trace 可确定」的判定
     #    （循环 / 轮次触顶 / 超大 token / 安全拦截），比例类问题它不做 ——
@@ -207,6 +219,42 @@ agent:
     lease-seconds: "30"
     # 本 Worker 实例身份（生产应为实例唯一标识）。
     id: "worker-local"
+
+  # ── 上下文压缩全局配置（ADR-013 · 开发计划 S1 / P0 影子期）────────
+  # ⚠️ 影子期默认 **关闭**：S1 只做配置、计量与门禁，不得改变任何模型请求字节；
+  #    enabled=false 必须与「没有压缩功能」逐位一致（[D11] / G1 影子对照零差异）。
+  # ⚠️ 数值必须加引号：YamlPropertiesFactoryBean 会丢弃裸标量。
+  # ⚠️ 所有键一律引用环境变量：曾出现「env 里定义了 AGENT_CONTEXT_HARD_CEILING_TOKENS
+  #    但 yml 写字面量」，改 env 不生效还以为已经收紧了预算。
+  # ⚠️ S1 影子期：除 enabled 外，下列键尚未被组合根装配消费（S2 接线后才生效）；
+  #    在此登记是为了让配置契约与《方案》§3.2-C 对齐，绝不表示功能已启用。
+  context:
+    enabled: "${AGENT_CONTEXT_ENABLED:false}"
+    # 全窗口输入硬顶（无论 Agent 级怎么配都不得突破）。
+    hard-ceiling-tokens: "${AGENT_CONTEXT_HARD_CEILING_TOKENS:128000}"
+    # Agent 未声明 generation_params.context 时的兜底默认值。
+    default-max-input-tokens: "${AGENT_CONTEXT_DEFAULT_MAX_INPUT:16000}"
+    default-trigger-ratio: "${AGENT_CONTEXT_TRIGGER_RATIO:0.70}"
+    default-target-ratio: "${AGENT_CONTEXT_TARGET_RATIO:0.40}"
+    default-reserve-ratio: "${AGENT_CONTEXT_RESERVE_RATIO:0.10}"
+    default-recent-turns: "${AGENT_CONTEXT_RECENT_TURNS:6}"
+    # 四级水位线：W1 可逆外置 / W3 摘要的全局触发线。
+    tier-snip-ratio: "${AGENT_CONTEXT_TIER_SNIP:0.60}"
+    tier-summary-ratio: "${AGENT_CONTEXT_TIER_SUMMARY:0.90}"
+    # 压缩后再次触发前的新增 token 冷却比例（防抖动风暴）。
+    min-new-tokens-ratio: "${AGENT_CONTEXT_COOLDOWN:0.10}"
+    # SSE contextState 大小上限（字符），超限即丢弃并优雅降级。
+    max-state-chars: "${AGENT_CONTEXT_MAX_STATE_CHARS:8192}"
+    checkpoint-ttl-seconds: "${AGENT_CONTEXT_CHECKPOINT_TTL:1800}"
+    summary-timeout-ms: "${AGENT_CONTEXT_SUMMARY_TIMEOUT_MS:8000}"
+    # ⚠️ n<30 不启用校准、不展示百分比；bias 夹在 [0.8, 2.0]（R2 / §7.1）。
+    calibration:
+      enabled: "${AGENT_CONTEXT_CALIBRATION_ENABLED:true}"
+      min-samples: "${AGENT_CONTEXT_CALIBRATION_MIN_SAMPLES:30}"
+      bias-clamp-min: "${AGENT_CONTEXT_BIAS_CLAMP_MIN:0.80}"
+      bias-clamp-max: "${AGENT_CONTEXT_BIAS_CLAMP_MAX:2.00}"
+    # ⚠️ 独立 HMAC 密钥：绝不复用 JWT_PRIVATE_KEY / PLATFORM_JWT_PRIVATE_KEY。
+    state-hmac-key: "${AGENT_CONTEXT_STATE_HMAC_KEY:}"
 
   # ── 崩溃恢复扫描（第二十一批 · 接通 claimTasks 生产调用方）────
   # ⚠️ 周期性枚举活跃租户、调用 claimTasks 接管过期 RUNNING 租约，
@@ -475,6 +523,14 @@ agent:
       qwen-max: { input-per-1k-tokens: "0.020000", output-per-1k-tokens: "0.060000" }
       qwen-plus: { input-per-1k-tokens: "0.004000", output-per-1k-tokens: "0.012000" }
       deepseek-chat: { input-per-1k-tokens: "0.002000", output-per-1k-tokens: "0.008000" }
+      # MiniMax-M2.5（业务 Run 与 L2 judge 共用同一份冻结价）：
+      # 国内计价 ¥2.1/百万输入 token、¥8.4/百万输出 token，折算每千 token 如下。
+      # ⚠️ 未配这个键时业务 Run 成本按 0 记并 WARN，L2 judge 则直接拒绝调用（不猜价）。
+      # ⚠️ 模型标识含点号，裸键会被 Spring Binder 拆成 `MiniMax-M2` + 子键 `5`，
+      #    症状是业务 Run 成本按 0 记且 L2 judge 拒绝调用。必须写成方括号字面键。
+      "[MiniMax-M2.5]":
+        input-per-1k-tokens: "0.002100"
+        output-per-1k-tokens: "0.008400"
   tool:
     # 工具风险级别映射（P0-D00 §3.2）
     # ⚠️ 未登记的工具名一律按 WRITE_EXTERNAL 兜底（fail-closed），不会漏审批

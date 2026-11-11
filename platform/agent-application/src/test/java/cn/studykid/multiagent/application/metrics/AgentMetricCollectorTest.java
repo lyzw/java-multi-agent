@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -15,7 +18,9 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
+import cn.studykid.multiagent.application.evaluation.TraceEvaluationService;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.TerminationReason;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.ToolCallRow;
@@ -321,6 +326,31 @@ class AgentMetricCollectorTest {
         AgentMetricPort.Overview small = overview(12L);
         assertFalse(small.sampleSufficient(), "n=12 不足以支撑百分比结论");
         assertTrue(overview(30L).sampleSufficient());
+    }
+
+    @Test
+    @DisplayName("⚠️ questionId 必须从 TraceFacts 传到评估编排，但不进指标宽表")
+    void questionIdIsForwardedToEvaluationButNotToWideTable() {
+        StubFacts stub = new StubFacts();
+        stub.facts = new TraceFacts(
+                new TraceFactPort.RunFacts("run-1", "SUCCEEDED", null, "trace-1",
+                        AgentMetricPort.TraceIdSource.RUN_TRACE_ID,
+                        Instant.now(), Instant.now(), null, null,
+                        "数学:一元二次方程", "Q-MATH-001"),
+                new TraceFactPort.UsageFacts(10L, 5L, BigDecimal.ONE, "CNY", "fake-model"),
+                List.of(), Set.of(), StepFacts.ABSENT);
+        TraceEvaluationService evaluation = mock(TraceEvaluationService.class);
+        AgentMetricCollector c =
+                new AgentMetricCollector(stub, metrics, REGISTRY, null, evaluation);
+
+        c.collect("tenant-1", UUID.randomUUID());
+
+        ArgumentCaptor<String> qid = ArgumentCaptor.forClass(String.class);
+        verify(evaluation).evaluate(eq("tenant-1"), eq("run-1"), eq("trace-1"),
+                eq("数学:一元二次方程"), qid.capture());
+        assertEquals("Q-MATH-001", qid.getValue(),
+                "⚠️ 漏传 questionId 会让 L2 恒「无题目标识」而看板只显示未启用，无任何报错");
+        assertEquals("数学:一元二次方程", metrics.last.scenario());
     }
 
     private static AgentMetricPort.Overview overview(Long sampled) {
