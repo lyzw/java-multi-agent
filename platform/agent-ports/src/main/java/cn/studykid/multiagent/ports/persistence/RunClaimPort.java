@@ -32,6 +32,21 @@ public interface RunClaimPort {
     Duration DEFAULT_LEASE = Duration.ofSeconds(30);
 
     /**
+     * 请求级 SSE 编排专用 {@code run.lease_owner}（不经过 MQ / Worker）。
+     *
+     * <p><b>为什么必须有它</b>：{@code RunRecoverySweeper} 每 30s 调 {@code claimTasks}，
+     * 而后者会接管「租约已过期的 RUNNING」。只靠「不写 Outbox」挡不住这条 DB 轮询路径 ——
+     * 一次长 SSE 请求中途租约过期，Run 就会被 Worker 领走重跑。
+     * 故请求级 Run 固定用本所有者标记，{@code claimTasks} 在候选集里
+     * <b>显式排除</b>它（{@code lease_owner IS DISTINCT FROM ...}），
+     * 让「无 Outbox」与「不可被领取」成为两条独立防线。
+     *
+     * <p>⚠️ 本常量是跨模块契约：审计写入方与领取方都引用它，
+     * 守卫测试用字面量反查，防止两边各写一份漂移。
+     */
+    String SSE_DIRECT_LEASE_OWNER = "agent-chat-sse";
+
+    /**
      * 领取一批待执行任务并建立租约。
      *
      * <p>实现<b>必须</b>使用 {@code SELECT ... FOR UPDATE SKIP LOCKED}，

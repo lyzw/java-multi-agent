@@ -24,6 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { PageHead, Panel, StatusPill } from '@/components/ui'
 import { scanText } from '@/features/compliance/scan'
 import {
@@ -321,6 +322,11 @@ export function GeneralChatPage(): JSX.Element {
         title="通用知识问答"
         eyebrow="AI 对话"
         lead="不挂教材语料的自由问答：逐 token 流式呈现，多轮上下文由本页维护。需要可溯源依据请走「知识检索」。"
+        actions={
+          <Link to="/agent-chat" className="btn btn--quiet">
+            Agent 编排对话
+          </Link>
+        }
       />
 
       <div className="gchat__notice marked marked--calm">

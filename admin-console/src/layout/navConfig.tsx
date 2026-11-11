@@ -419,6 +419,16 @@ export const NAV_GROUPS: NavGroup[] = [
           '基于现有 RAG 检索/生成端点的语料问答：输入问题、阶段增量接收回答、引用可核对，覆盖停止、重试、超时与依据不足。回答当前为逐字摘录装配，非大模型生成；平台控制台禁区红线不展示租户运行输出正文。',
         phase: 'AI 实验室',
       },
+      {
+        key: 'agent-chat',
+        label: 'Agent 编排对话',
+        path: '/agent-chat',
+        icon: <MessageOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '通用 Agent 聊天的 SSE 可视化：路由 → RAG 注入 → Skill → Tool → 结果回传 → 流式回答逐阶段可见。真实模式对接已实现的平台链编排端点，当前环境未部署时如实报「能力未接入」；样例回放明确标注非真实模型输出。',
+        phase: 'AI 实验室',
+      },
     ],
   },
 ]

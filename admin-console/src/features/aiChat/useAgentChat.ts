@@ -1,0 +1,156 @@
+/**
+ * 通用 Agent 编排对话的唯一状态入口：发送 / 停止 / 重试 / 新建会话。
+ *
+ * <p>与现有 {@code useAiChat} 同构：useReducer + AbortController + mountedRef，
+ * 不引入状态库。新增的是「组件过程帧」的处理：传输层只管按到达顺序推事件，
+ * hook 只管把事件投给 reducer；换 live / sample 传输时本文件一行不用改。
+ *
+ * <p>⚠️ 卸载 / 停止 / 新会话都 abort 在途请求；`stateRef` 同步镜像让 retry 能在
+ * 事件回调里读到最新消息（等 useEffect 会晚一帧）。`controllerRef` 身份比较
+ * 保证旧请求的迟到事件与失败不会写进新气泡。
+ */
+
+import { useCallback, useEffect, useReducer, useRef } from 'react'
+import {
+  describeAgentChatError,
+  isAgentChatCancelled,
+  sendAgentChat,
+  type AgentChatRequest,
+} from '@/api/agentChatApi'
+import {
+  agentChatReducer,
+  conversationTurns,
+  initialAgentChatState,
+  lastFailedAgentQuestion,
+  type AgentChatState,
+} from '@/features/aiChat/agentChatState'
+
+/** 页面参数区给出的部分（message/history 由 hook 组装）。 */
+export type AgentChatParams = Omit<AgentChatRequest, 'message' | 'history'>
+
+export interface UseAgentChat {
+  state: AgentChatState
+  send: (text: string, params: AgentChatParams) => void
+  stop: () => void
+  retry: (params: AgentChatParams) => void
+  newSession: () => void
+}
+
+function makeId(prefix: string): string {
+  const rand =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  return `${prefix}-${rand}`
+}
+
+export function useAgentChat(): UseAgentChat {
+  const [state, dispatch] = useReducer(agentChatReducer, initialAgentChatState)
+  const controllerRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
+  const stateRef = useRef<AgentChatState>(state)
+  stateRef.current = state
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      controllerRef.current?.abort()
+      controllerRef.current = null
+    }
+  }, [])
+
+  const run = useCallback(
+    (text: string, params: AgentChatParams, assistantId: string, controller: AbortController): void => {
+      void (async (): Promise<void> => {
+        try {
+          const request: AgentChatRequest = {
+            ...params,
+            message: text,
+            // 后端无状态：只回传「已完成且未截断」的问答对，避免半截答案污染下一轮。
+            history: conversationTurns(stateRef.current.messages),
+          }
+          await sendAgentChat(request, {
+            signal: controller.signal,
+            onEvent: (event) => {
+              // done 到达即释放「在途」锁：用户不必等微任务队列才能发下一句。
+              if (event.type === 'done' && controllerRef.current === controller) {
+                controllerRef.current = null
+              }
+              if (mountedRef.current) dispatch({ type: 'STREAM', id: assistantId, event })
+            },
+          })
+        } catch (cause) {
+          if (isAgentChatCancelled(cause)) return
+          // 已被新请求接管：旧失败不许覆盖新气泡（否则用户会看到上一条的报错）。
+          if (controllerRef.current !== controller) return
+          if (mountedRef.current) {
+            dispatch({
+              type: 'FAIL',
+              id: assistantId,
+              error: describeAgentChatError(cause),
+              at: Date.now(),
+            })
+          }
+        } finally {
+          if (controllerRef.current === controller) controllerRef.current = null
+        }
+      })()
+    },
+    [],
+  )
+
+  const send = useCallback(
+    (raw: string, params: AgentChatParams): void => {
+      const text = raw.trim()
+      if (text === '' || controllerRef.current !== null) return
+      const controller = new AbortController()
+      controllerRef.current = controller
+      const at = Date.now()
+      const userId = makeId('u')
+      const assistantId = makeId('a')
+      // ⚠️ id 在 dispatch 之前生成：reducer 异步生效，从 state 读回刚插入的气泡会晚一帧。
+      dispatch({
+        type: 'SEND',
+        userId,
+        assistantId,
+        text,
+        at,
+        source: params.source,
+        thinkingMode: params.thinkingMode,
+      })
+      run(text, params, assistantId, controller)
+    },
+    [run],
+  )
+
+  const stop = useCallback((): void => {
+    const controller = controllerRef.current
+    if (controller === null) return
+    controllerRef.current = null
+    controller.abort()
+    // 不 dispatch FAIL：用户主动停止是正常操作。
+    dispatch({ type: 'STOP', at: Date.now() })
+  }, [])
+
+  const retry = useCallback(
+    (params: AgentChatParams): void => {
+      const failed = lastFailedAgentQuestion(stateRef.current)
+      if (failed === null || controllerRef.current !== null) return
+      const controller = new AbortController()
+      controllerRef.current = controller
+      dispatch({ type: 'RETRY', id: failed.assistantId, at: Date.now() })
+      run(failed.question, params, failed.assistantId, controller)
+    },
+    [run],
+  )
+
+  const newSession = useCallback((): void => {
+    const controller = controllerRef.current
+    controllerRef.current = null
+    controller?.abort()
+    dispatch({ type: 'NEW_SESSION' })
+  }, [])
+
+  return { state, send, stop, retry, newSession }
+}

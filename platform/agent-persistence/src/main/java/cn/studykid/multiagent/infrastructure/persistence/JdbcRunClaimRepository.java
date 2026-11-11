@@ -100,17 +100,23 @@ public class JdbcRunClaimRepository implements RunClaimPort {
                                                 int limit) {
         // SKIP LOCKED：并发 Worker 各自锁住不同的行，无需相互等待
         // 同时捞取 QUEUED（未领取）与 RUNNING 且租约已过期（可接管）的任务
+        //
+        // ⚠️⚠️ 必须是 MATERIALIZED CTE + UPDATE…FROM，绝不能写回
+        //    UPDATE…WHERE run_id IN (SELECT … LIMIT ? FOR UPDATE SKIP LOCKED)。
+        //    2026-11-10 在 app_agent(NOBYPASSRLS) + FORCE RLS 下实测：RLS 的 security-barrier
+        //    让 IN 子查询退化成「对每一行外层候选重新求值」的 SubPlan —— 第一次求值锁走第 1 行，
+        //    第二次 SKIP LOCKED 跳过它改返第 2 行……于是 LIMIT 1 实际领走了全部可领取行
+        //    （3 个候选全部 RETURNING，attempt 全变 1）。超发 Worker 配额，且把本不该本次领取的
+        //    行一并带走。同样的 SQL 用 superuser 跑则正确返回 1 行 —— 这正是「必须非特权角色测」的原因。
+        //    MATERIALIZED 强制候选集只求值一次，LIMIT 才是真上限；并发下 SKIP LOCKED 语义不变。
         String sql = """
-                UPDATE run r
-                SET state = 'RUNNING',
-                    lease_owner = ?,
-                    lease_expires_at = now() + (? || ' seconds')::interval,
-                    fencing_token = r.fencing_token + 1,
-                    attempt = r.attempt + 1,
-                    updated_at = now()
-                WHERE r.run_id IN (
+                WITH candidates AS MATERIALIZED (
                     SELECT run_id FROM run
                     WHERE tenant_id = ?::uuid
+                      -- ⚠️ 请求级 SSE 编排的 RUNNING 占位行（不写 Outbox）绝不交给 Worker：
+                      --    否则长 SSE 请求租约一过期，RecoverySweeper 会把它当崩溃任务接管重跑。
+                      --    IS DISTINCT FROM 同时放行 lease_owner IS NULL 的既有 QUEUED 行。
+                      AND lease_owner IS DISTINCT FROM '%s'
                       AND (state = 'QUEUED'
                            OR (state = 'RUNNING'
                                AND (lease_expires_at IS NULL OR lease_expires_at < now())))
@@ -118,8 +124,19 @@ public class JdbcRunClaimRepository implements RunClaimPort {
                     LIMIT ?
                     FOR UPDATE SKIP LOCKED
                 )
-                RETURNING run_id, fencing_token, lease_expires_at, attempt, deadline_at
-                """;
+                UPDATE run r
+                SET state = 'RUNNING',
+                    lease_owner = ?,
+                    lease_expires_at = now() + (? || ' seconds')::interval,
+                    fencing_token = r.fencing_token + 1,
+                    attempt = r.attempt + 1,
+                    updated_at = now()
+                FROM candidates c
+                WHERE r.run_id = c.run_id
+                RETURNING r.run_id AS run_id, r.fencing_token AS fencing_token,
+                          r.lease_expires_at AS lease_expires_at, r.attempt AS attempt,
+                          r.deadline_at AS deadline_at
+                """.formatted(RunClaimPort.SSE_DIRECT_LEASE_OWNER);
         List<LeasedTask> tasks = new ArrayList<>();
         try (Connection conn = dataSource.getConnection()) {
             boolean prev = conn.getAutoCommit();
@@ -127,10 +144,13 @@ public class JdbcRunClaimRepository implements RunClaimPort {
             try {
                 TenantSessionBinder.bind(conn, systemContext(tenantId));
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                    ps.setString(1, workerId);
-                    ps.setInt(2, (int) leaseDuration.toSeconds());
-                    ps.setString(3, tenantId);
-                    ps.setInt(4, limit);
+                    // ⚠️ 占位符顺序必须与新 SQL 逐字对应：CTE 内 tenant_id → LIMIT，
+                    //    外层 UPDATE 的 lease_owner → lease 秒数（顺序与旧版不同，错位会导致
+                    //    workerId 写进 tenant_id 比较、limit 写进 lease 间隔，静默失真）。
+                    ps.setString(1, tenantId);
+                    ps.setInt(2, limit);
+                    ps.setString(3, workerId);
+                    ps.setInt(4, (int) leaseDuration.toSeconds());
                     try (ResultSet rs = ps.executeQuery()) {
                         while (rs.next()) {
                             Timestamp exp = rs.getTimestamp("lease_expires_at");

@@ -97,6 +97,19 @@ public class SecurityConfiguration {
     private static final String CONSOLE_CHAT_PREFIX = "/api/chat/";
 
     /**
+     * 通用 Agent 编排对话（平台控制台）前缀——平台身份域。
+     *
+     * <p>⚠️ <b>必须显式登记（2026-11-10 生产接入）</b>：{@code /api/agent/chat/stream}
+     * 由 {@code admin-console} 以平台令牌（{@code aud=admin-console-api}）调用。
+     * 若不进平台链 matcher，它会落进 @Order(1) 租户链，被 {@code aud=agent-platform}
+     * 校验硬拒 → 控制台点发送必然 401，且前端会误判为登录过期清会话。
+     *
+     * <p>⚠️ 只精确到 {@code /api/agent/}，<b>不匹配</b> {@code /api/knowledge/agent/}：
+     * 后者是租户前台链路（{@code frontend}），必须留在租户链，租户取自已验签令牌。
+     */
+    private static final String AGENT_CHAT_PREFIX = "/api/agent/";
+
+    /**
      * 模型配置管理端点（平台级，PLATFORM_ADMIN 闸门）——与平台管理 API 同属<b>平台身份域</b>。
      *
      * <p><b>为什么必须显式登记（2026-11-07 修复，同源 {@link #CONSOLE_CHAT_PREFIX}）</b>：
@@ -147,8 +160,9 @@ public class SecurityConfiguration {
     /**
      * 平台管理 API 安全链（重规划 §7）。
      *
-     * <p><b>最高优先级（{@code @Order(0)}）</b>，匹配 {@code /api/platform/**} 与
-     * {@code /api/chat/**}（控制台直接对话，见 {@link #CONSOLE_CHAT_PREFIX}）。
+     * <p><b>最高优先级（{@code @Order(0)}）</b>，匹配 {@code /api/platform/**}、
+     * {@code /api/chat/**}（控制台直接对话，见 {@link #CONSOLE_CHAT_PREFIX}）与
+     * {@code /api/agent/**}（通用 Agent 编排对话，见 {@link #AGENT_CHAT_PREFIX}）。
      * 使用平台专属令牌服务，校验 {@code aud=admin-console-api} 与
      * {@code principal_type=PLATFORM_USER}；租户令牌（{@code aud=agent-platform}）
      * 在此链被拒，从令牌层实现身份隔离。
@@ -164,6 +178,7 @@ public class SecurityConfiguration {
                 //    不会命中下面 .requestMatchers("/api/platform/v1/auth/**").permitAll()，
                 //    因此直接对话仍强制 authenticated（无匿名放行）。
                 .securityMatcher(PLATFORM_API_PREFIX + "**", CONSOLE_CHAT_PREFIX + "**",
+                        AGENT_CHAT_PREFIX + "**",
                         ADMIN_MODEL_CATALOG_PREFIX + "**", ADMIN_MODEL_CREDENTIALS_PREFIX + "**")
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

@@ -7,7 +7,17 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { GeneralChatPage } from '@/pages/chat/GeneralChatPage'
+
+/** 页面头部有到「Agent 编排对话」的 SPA 链接，渲染时必须提供 Router 上下文。 */
+function renderPage(): void {
+  render(
+    <MemoryRouter>
+      <GeneralChatPage />
+    </MemoryRouter>,
+  )
+}
 
 function sseResponse(chunks: string[]): Response {
   let index = 0
@@ -72,7 +82,7 @@ describe('通用知识问答页面', () => {
 
   it('首屏如实展示边界说明，空输入时发送不可用', () => {
     fetchMock.mockResolvedValue(successStream())
-    render(<GeneralChatPage />)
+    renderPage()
 
     expect(screen.getByRole('heading', { name: '通用知识问答' })).toBeInTheDocument()
     expect(screen.getByText('这条链路的诚实边界')).toBeInTheDocument()
@@ -84,7 +94,7 @@ describe('通用知识问答页面', () => {
 
   it('发送后逐 token 落地并收口；用户气泡始终保留', async () => {
     fetchMock.mockResolvedValue(successStream())
-    render(<GeneralChatPage />)
+    renderPage()
 
     typeDraft('什么是条件概率')
     clickSend()
@@ -130,7 +140,7 @@ describe('通用知识问答页面', () => {
         },
       } as unknown as Response),
     )
-    render(<GeneralChatPage />)
+    renderPage()
 
     typeDraft('请讲讲牛顿第三定律')
     clickSend()
@@ -154,7 +164,7 @@ describe('通用知识问答页面', () => {
         ]),
       )
       .mockResolvedValueOnce(successStream())
-    render(<GeneralChatPage />)
+    renderPage()
 
     typeDraft('再问一次')
     clickSend()
@@ -180,7 +190,7 @@ describe('通用知识问答页面', () => {
       status: 404,
       text: async () => JSON.stringify({ error: 'not_found' }),
     } as unknown as Response)
-    render(<GeneralChatPage />)
+    renderPage()
 
     typeDraft('问题')
     clickSend()
@@ -192,7 +202,7 @@ describe('通用知识问答页面', () => {
 
   it('⛔ 敏感信息本地预检阻断发送，且不回显命中内容', async () => {
     fetchMock.mockResolvedValue(successStream())
-    render(<GeneralChatPage />)
+    renderPage()
 
     typeDraft('我的电话 13812345678 请联系我')
     expect(screen.getByRole('alert')).toHaveTextContent('输入包含不可采集的信息')
@@ -206,7 +216,7 @@ describe('通用知识问答页面', () => {
 
   it('场景预设带上系统提示词，示例问题可回填输入框', async () => {
     fetchMock.mockResolvedValue(successStream())
-    render(<GeneralChatPage />)
+    renderPage()
 
     fireEvent.change(screen.getByLabelText('回答场景'), {
       target: { value: 'concept' },
@@ -227,7 +237,7 @@ describe('通用知识问答页面', () => {
 
   it('新会话清空内存消息与草稿', async () => {
     fetchMock.mockResolvedValue(successStream())
-    render(<GeneralChatPage />)
+    renderPage()
 
     typeDraft('第一个问题')
     clickSend()

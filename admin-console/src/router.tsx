@@ -33,6 +33,7 @@ import { DictionaryAdminPage } from '@/pages/dictionaries/DictionaryAdminPage'
 import { ModelCatalogPage } from '@/pages/models/ModelCatalogPage'
 import { AgentLabPage } from '@/pages/agentlab/AgentLabPage'
 import { AiChatPage } from '@/pages/agentlab/AiChatPage'
+import { AgentChatPage } from '@/pages/agentlab/AgentChatPage'
 import { AgentMetricsPage } from '@/pages/metrics/AgentMetricsPage'
 import { MetricEntryPage } from '@/pages/metrics/MetricEntryPage'
 import { ReviewQueuePage } from '@/pages/quality/ReviewQueuePage'
@@ -344,6 +345,15 @@ export const router = createBrowserRouter(
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>
               <AiChatPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // AI 实验室 · 通用 Agent 编排对话（SSE 全链路可视化 + 样例回放）
+          path: 'agent-chat',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <AgentChatPage />
             </RequireRole>
           ),
         },

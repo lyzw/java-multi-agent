@@ -80,15 +80,22 @@ describe('通用问答身份域边界', () => {
     expect(controller).toContain(
       '@RequestMapping({"/api/chat", "/api/knowledge/chat"})',
     )
-    expect(security).toContain(
-      'securityMatcher(PLATFORM_API_PREFIX + "**", CONSOLE_CHAT_PREFIX + "**")',
-    );
-    // 平台链一旦纳入 /api/knowledge/chat，租户令牌会被 PlatformBearerTokenFilter 拒成 401
-    expect(security).not.toContain('/api/knowledge/chat')
+    // 平台链 securityMatcher 可能跨行、且含多个管理前缀（如 model catalog）：
+    // 折叠空白后只取首个 securityMatcher 的参数列表逐项验证，不依赖换行/前缀数量。
+    const flat = security.replace(/\s+/g, ' ')
+    const matcherOpen = flat.indexOf('securityMatcher(')
+    expect(matcherOpen).toBeGreaterThan(-1)
+    const matcherArgs = flat.slice(matcherOpen, flat.indexOf(')', matcherOpen) + 1)
+    expect(matcherArgs).toContain('PLATFORM_API_PREFIX + "**"')
+    expect(matcherArgs).toContain('CONSOLE_CHAT_PREFIX + "**"')
+    // 平台链一旦纳入任意 /api/knowledge/** 前缀，租户令牌会被 PlatformBearerTokenFilter
+    // 拒成 401。用前缀根（而非仅 /chat）兜住未来新增的 knowledge 子路径。
+    expect(matcherArgs).not.toMatch(/KNOWLEDGE|knowledge/i)
+    expect(flat).not.toContain('/api/knowledge')
     const publicStart = security.indexOf('PUBLIC_ENDPOINTS')
     const publicEnd = security.indexOf('}', publicStart)
     expect(publicEnd).toBeGreaterThan(publicStart)
-    expect(security.slice(publicStart, publicEnd)).not.toContain('/api/knowledge/chat')
+    expect(security.slice(publicStart, publicEnd)).not.toContain('/api/knowledge')
   })
 
   it('⛔ 推理草稿不得回落到租户通道', () => {

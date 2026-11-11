@@ -59,6 +59,15 @@ spring:
     connection-timeout: 10s
 
 agent:
+  # ── 通用 Agent 编排对话 → RAG 独立服务（请求级 SSE 链路）────────────
+  # platform 与 rag 是两个独立 Maven reactor / 进程。这里是 platform 服务端
+  # 直连 rag `/api/v1/retrieval` 的唯一地址来源，由 HttpRagRetrievalGateway 读取。
+  # ⚠️ rag 侧必须配置与本进程签发令牌匹配的验签公钥：租户链令牌 tenant_id claim
+  #    要与 X-Tenant-Id 一致；平台链令牌可跨租户。否则 RAG 会是 503/401，
+  #    编排器如实标为组件级失败并给零命中，不伪造命中。
+  rag:
+    base-url: "${RAG_BASE_URL:http://127.0.0.1:8081}"
+
   # ── 质量评估双轨（P3 · G3）──────────────────────────────────────
   # ⚠️ 口径按「保守默认」：量级 <1k Run/日 → 抽样率 5%（约 50 条/日人审基线）。
   #    LLM-as-judge 兜底**未接线**：参考答案 / 题库标准解析（详细设计 §13 第 3 项）

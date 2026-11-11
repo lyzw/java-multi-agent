@@ -2441,3 +2441,199 @@ tbody tr:hover { background: var(--surface-hover); }
     gap: var(--s-2);
   }
 }
+
+/* ── 通用 Agent 编排对话（租户前台 · SSE 过程可视化）─────────
+   ⚠️ 仍守纸感纪律：1px 线 + 留白分层，不用阴影、不用骨架微光；
+      状态色只用 --mark（失败）/ --settled（成功）/ --ink-2（提示）。
+      ⛔ 所有静态 class 都必须写进主样式层，否则 css.integrity 会拦。 */
+
+.achat__banner {
+  margin: 0 0 var(--s-4);
+  padding: var(--s-3);
+  border-left: 2px solid var(--mark);
+  background: var(--mark-wash);
+  font-size: var(--t-note);
+  line-height: 1.7;
+}
+
+.achat__icon {
+  flex: 0 0 auto;
+  vertical-align: -2px;
+}
+
+.achat__timeline {
+  margin: var(--s-2) 0;
+  padding: var(--s-2) 0 var(--s-2) var(--s-3);
+  border-left: 1px dashed var(--rule-strong);
+}
+
+.achat__step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+}
+
+.achat__step:last-child {
+  margin-bottom: 0;
+}
+
+.achat__step[data-status='error'] > .achat__icon {
+  color: var(--mark);
+}
+
+.achat__step[data-status='success'] > .achat__icon {
+  color: var(--settled, #2f855a);
+}
+
+.achat__step-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.achat__step-title {
+  font-size: var(--t-note);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.achat__step-time {
+  margin-left: var(--s-2);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.achat__step-detail {
+  margin: var(--s-1) 0 0;
+  padding: var(--s-2);
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  background: var(--paper-sunk);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+
+.achat__step-detail--error {
+  border-color: var(--mark);
+  background: var(--mark-wash);
+  color: var(--mark);
+}
+
+.achat__route,
+.achat__rag {
+  margin: var(--s-2) 0;
+  padding: var(--s-2);
+  border-left: 2px solid var(--rule-strong);
+  background: var(--paper-sunk);
+}
+
+.achat__route-title,
+.achat__rag-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin: 0;
+  font-size: var(--t-note);
+}
+
+.achat__route-note,
+.achat__rag-note {
+  margin: var(--s-1) 0 0;
+  font-size: var(--t-note);
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+
+.achat__candidate {
+  display: inline-block;
+  margin-right: var(--s-2);
+  padding: 1px 6px;
+  border: 1px solid var(--rule);
+  font-size: 11.5px;
+}
+
+.achat__hits {
+  margin-top: var(--s-2);
+  font-size: var(--t-note);
+}
+
+.achat__hits summary {
+  cursor: pointer;
+  color: var(--ink-2);
+}
+
+.achat__hit {
+  padding: var(--s-2) 0;
+  border-bottom: 1px dashed var(--rule);
+}
+
+.achat__hit:last-child {
+  border-bottom: none;
+}
+
+.achat__hit-meta {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.achat__hit-text {
+  margin: var(--s-1) 0 0;
+  padding: var(--s-2);
+  background: var(--surface);
+  white-space: pre-wrap;
+  font-size: var(--t-note);
+  line-height: 1.7;
+  color: var(--ink);
+}
+
+.achat__source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin: 0 0 var(--s-2);
+}
+
+.achat__run-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.achat__answer {
+  margin-top: var(--s-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--t-body);
+  line-height: 1.75;
+}
+
+.achat__usage {
+  margin: var(--s-2) 0 0;
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+.achat__legend {
+  margin: var(--s-4) 0 0;
+  font-size: var(--t-note);
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+
+@media (max-width: 767px) {
+  .achat__banner {
+    padding: var(--s-2);
+  }
+
+  .achat__timeline {
+    padding-left: var(--s-2);
+  }
+}

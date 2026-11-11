@@ -37,6 +37,7 @@ import { RunSearchPage } from '@/pages/business/RunSearchPage'
 import { RagSearchPage } from '@/pages/rag/RagSearchPage'
 import { RagManagementPage } from '@/pages/rag/RagManagementPage'
 import { GeneralChatPage } from '@/pages/chat/GeneralChatPage'
+import { AgentChatPage } from '@/pages/chat/AgentChatPage'
 import { ReportsPage } from '@/pages/reports/ReportsPage'
 import {
   ConfigOverviewPage,
@@ -157,6 +158,10 @@ function AppRoutes(): JSX.Element {
               ⚠️ 不挂 area：与辅导台其它学生侧页面一致，任何已登录用户可见；
               后端不读取任何租户业务数据，输入只来自本次会话。 */}
           <Route path="/chat" element={<GeneralChatPage />} />
+          {/* 通用 Agent 编排对话（租户链 SSE：路由/RAG/Skill/Tool/回传逐帧可见）。
+              ⚠️ 端点 /api/knowledge/agent/chat/stream 仍在租户安全链，不挂 area；
+              真实端点未部署时如实报「能力未接入」，样例回放明确标注非真实输出。 */}
+          <Route path="/agent-chat" element={<AgentChatPage />} />
           {/* ⚠️ 业务无权限整页（code=ACCESS_DENIED，与「未登录」严格区分，
             不触发登录跳转；由页面在捕获到无权限时 navigate 至此）。 */}
           <Route path="/no-permission" element={<NoPermissionPage />} />
