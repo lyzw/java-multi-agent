@@ -140,3 +140,35 @@ describe('通用 Agent 对话 · 状态机与页面守卫', () => {
     expect(nav).toContain('已实现的平台链编排端点')
   })
 })
+
+describe('通用 Agent 对话 · 协议 v1.1 M13 mock 边界', () => {
+  it('⛔ 14 事件齐备，且只解析 v1.1 字段；请求接口与请求体不含 contextState', () => {
+    const from = transportCode.indexOf('export function decodeAgentFrame')
+    const to = transportCode.indexOf('export async function consumeAgentStream', from)
+    expect(from).toBeGreaterThanOrEqual(0)
+    expect(to).toBeGreaterThan(from)
+    const cases = [...transportCode.slice(from, to).matchAll(/case '([a-z][a-z.]*)':/g)].map((m) => m[1] ?? '')
+    expect(cases).toHaveLength(14)
+    expect(cases).toContain('context.checkpoint')
+
+    const reqFrom = transportCode.indexOf('export interface AgentChatRequest')
+    const reqTo = transportCode.indexOf('export interface AgentChatSendContext', reqFrom)
+    expect(reqFrom).toBeGreaterThanOrEqual(0)
+    const reqBlock = transportCode.slice(reqFrom, reqTo)
+    expect(reqBlock).not.toContain('contextState')
+    expect(reqBlock).not.toContain('contextStateVersion')
+    expect(transportCode).not.toMatch(/contextState\s*:/)
+    expect(transportCode).not.toContain("'contextState'")
+    expect(transportCode).not.toContain('"contextState"')
+    expect(transportCode).toContain('contextStateVersion')
+  })
+
+  it('⛔ 压缩态只在内存暂存，初始为空，禁止本地存储', () => {
+    expect(stateCode).toContain('pendingContextCheckpoint')
+    expect(stateCode).toContain('contextCheckpoint: cp')
+    expect(stateCode).toContain('currentContextCheckpoint')
+    expect(stateCode).toContain('pendingContextCheckpoint: undefined')
+    expect(stateCode).not.toContain('localStorage')
+    expect(stateCode).not.toContain('sessionStorage')
+  })
+})

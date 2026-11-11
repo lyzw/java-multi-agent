@@ -23,6 +23,7 @@ import type {
   AgentCandidate,
   AgentChatError,
   AgentChatSource,
+  AgentContextCheckpoint,
   AgentHit,
   AgentStepStatus,
   AgentStreamEvent,
@@ -101,8 +102,19 @@ export interface AgentChatMessage {
 export interface AgentChatState {
   messages: AgentChatMessage[]
   sending: boolean
+  /**
+   * M13 mock：协议 v1.1 的**已提交**压缩态。只在内存，刷新即丢；
+   * ⛔ 当前不进入请求体，携带 `contextState` 属 M8 + G1 签核后的能力。
+   */
+  contextCheckpoint?: AgentContextCheckpoint
+  /** 已提交压缩态对应的版本（来自 `done.contextStateVersion`，缺省为 undefined）。 */
+  contextStateVersion?: string
+  /** 本轮已到达但**尚未**收到非截断 done 的压缩态；截断 / 失败 / 停止一律不提交。 */
+  pendingContextCheckpoint?: AgentContextCheckpoint
+  pendingContextStateVersion?: string
 }
 
+/** M13 mock：初始 / 刷新即无压缩态；⛔ 不写 localStorage / sessionStorage。 */
 export const initialAgentChatState: AgentChatState = { messages: [], sending: false }
 
 export type AgentChatAction =
@@ -368,6 +380,10 @@ function applyStreamEvent(m: AgentChatMessage, event: AgentStreamEvent): AgentCh
         elapsedMs: Math.max(event.at - m.createdAt, 0),
       }
 
+    case 'context.checkpoint':
+      // 压缩态属于会话级状态，不在单条消息上渲染；由 reducer 在 STREAM 分支暂存。
+      return m
+
     case 'done':
       return {
         ...m,
@@ -412,15 +428,57 @@ export function agentChatReducer(state: AgentChatState, action: AgentChatAction)
         source: action.source,
         thinkingMode: action.thinkingMode,
       }
-      return { messages: [...state.messages, user, assistant], sending: true }
+      // ⚠️ 必须展开旧 state：M13 新增的 contextCheckpoint / contextStateVersion
+      //    若只重建 messages + sending 会被静默清空（铁律 #10 同类失真）。
+      return {
+        ...state,
+        messages: [...state.messages, user, assistant],
+        sending: true,
+        pendingContextCheckpoint: undefined,
+        pendingContextStateVersion: undefined,
+      }
     }
 
     case 'STREAM': {
+      // M13 mock：context.checkpoint 是会话级压缩态，不写入单条消息；
+      // 只有「非截断 done」才把本轮 pending 提交为 committed（截断 / 失败 / 停止一律不提交）。
+      if (action.event.type === 'context.checkpoint') {
+        const next = patchStreaming(state, action.id, (m) => m)
+        if (next === state) return state
+        const cp: AgentContextCheckpoint = {
+          state: action.event.state,
+          ...(action.event.upToTurn === undefined ? {} : { upToTurn: action.event.upToTurn }),
+          policyVersion: action.event.policyVersion,
+          tier: action.event.tier,
+          fallback: action.event.fallback,
+          digest: action.event.digest,
+        }
+        return { ...next, pendingContextCheckpoint: cp }
+      }
+
       const next = patchStreaming(state, action.id, (m) => applyStreamEvent(m, action.event))
       if (next === state) return state
-      const terminal =
-        action.event.type === 'done' || action.event.type === 'error'
-      return { ...next, sending: terminal ? false : next.sending }
+      const clear = {
+        pendingContextCheckpoint: undefined,
+        pendingContextStateVersion: undefined,
+      }
+      if (action.event.type === 'error') {
+        return { ...next, ...clear, sending: false }
+      }
+      if (action.event.type === 'done') {
+        if (action.event.truncated) return { ...next, ...clear, sending: false }
+        const cp = next.pendingContextCheckpoint
+        if (cp === undefined) return { ...next, ...clear, sending: false }
+        return {
+          ...next,
+          ...clear,
+          sending: false,
+          contextCheckpoint: cp,
+          contextStateVersion:
+            action.event.contextStateVersion ?? next.pendingContextStateVersion,
+        }
+      }
+      return next
     }
 
     case 'FAIL': {
@@ -439,7 +497,13 @@ export function agentChatReducer(state: AgentChatState, action: AgentChatAction)
         }),
       }))
       if (next === state) return state
-      return { ...next, sending: false }
+      return {
+        ...next,
+        sending: false,
+        // 本轮失败：绝不把已到达但未完成的压缩态当下一轮上下文。
+        pendingContextCheckpoint: undefined,
+        pendingContextStateVersion: undefined,
+      }
     }
 
     case 'STOP': {
@@ -462,7 +526,14 @@ export function agentChatReducer(state: AgentChatState, action: AgentChatAction)
         }
       })
       if (!changed) return state
-      return { messages, sending: false }
+      return {
+        ...state,
+        messages,
+        sending: false,
+        // 主动停止不是完成：本轮压缩态作废，上一轮已提交的压缩态保留。
+        pendingContextCheckpoint: undefined,
+        pendingContextStateVersion: undefined,
+      }
     }
 
     case 'RETRY': {
@@ -491,7 +562,14 @@ export function agentChatReducer(state: AgentChatState, action: AgentChatAction)
       }
       const next = state.messages.slice()
       next[index] = reset
-      return { messages: next, sending: true }
+      return {
+        ...state,
+        messages: next,
+        sending: true,
+        // 重试失败轮次：已提交态（来自更早的成功轮）保留，本轮 pending 作废。
+        pendingContextCheckpoint: undefined,
+        pendingContextStateVersion: undefined,
+      }
     }
 
     case 'NEW_SESSION':
@@ -542,4 +620,18 @@ export function conversationTurns(messages: AgentChatMessage[]): {
     }
   }
   return turns
+}
+
+/**
+ * M13 mock 暴露的「当前已提交压缩态」只读句柄。
+ * ⚠️ 仅内存：刷新页面后回到 {@link initialAgentChatState}，调用方必须按「无压缩态」降级。
+ * ⛔ 当前不进入请求体；真正携带 `contextState` 须等 M8 服务端五项校验 + G1 TL/QA 签核。
+ */
+export function currentContextCheckpoint(
+  state: AgentChatState,
+): { state: string; version?: string } | null {
+  if (state.contextCheckpoint === undefined) return null
+  return state.contextStateVersion === undefined
+    ? { state: state.contextCheckpoint.state }
+    : { state: state.contextCheckpoint.state, version: state.contextStateVersion }
 }

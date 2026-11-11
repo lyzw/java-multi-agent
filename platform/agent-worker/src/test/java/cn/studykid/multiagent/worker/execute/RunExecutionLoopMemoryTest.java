@@ -79,7 +79,7 @@ class RunExecutionLoopMemoryTest {
     private static RunExecutionLoop.AgentModelConfig agentConfig() {
         return new RunExecutionLoop.AgentModelConfig(
                 "test-model", "你是初中数学辅导助手", 0.7d, 1024,
-                Duration.ofSeconds(5), Map.of());
+                Duration.ofSeconds(5), Map.of(), "test-agent", 1);
     }
 
     private static RunClaimPort.LeasedTask task() {
@@ -400,7 +400,8 @@ class RunExecutionLoopMemoryTest {
             RunExecutionLoop.AgentModelConfig withTools = new RunExecutionLoop.AgentModelConfig(
                     "test-model", "你是初中数学辅导助手", 0.7d, 1024,
                     Duration.ofSeconds(5), Map.of("noop_tool", Map.of(
-                            "name", "noop_tool", "parameters", Map.of("type", "object"))));
+                            "name", "noop_tool", "parameters", Map.of("type", "object"))),
+                    "test-agent", 1);
 
             loop.execute(TENANT, task(), withTools, snapshot(5), inputWithStudent());
 

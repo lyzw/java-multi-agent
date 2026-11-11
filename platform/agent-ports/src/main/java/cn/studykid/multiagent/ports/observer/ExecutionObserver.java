@@ -80,6 +80,30 @@ public interface ExecutionObserver {
                           @NonNull List<String> droppedTools);
 
     /**
+     * 上下文完成统一装配/压缩后触发（M6 契约；M7 起由统一装配入口调用）。
+     *
+     * <p>⚠️ <b>default 空实现是兼容性硬要求</b>：M6 只冻结契约、不接线，
+     * 既有 {@link ExecutionObserver} 实现者零改动即可编译，运行时行为与今天逐位一致。
+     * 旧 {@link #onContextTrimmed} <b>保留且不改语义</b>；[D11] 关闭态仍走旧路径（CH-8）。
+     *
+     * <p>⚠️ M7 接线纪律：开启态调用本方法时，{@code droppedTokens} 必须是
+     * {@code max(0, beforeTokens - afterTokens)}，由调用方算好后传入；端口层不做
+     * 隐式推导，避免「看到有数字就以为算对了」。需要轮次/工具名维度的观测者
+     * 仍应消费旧 {@code onContextTrimmed}，本方法不伪造这两个维度。
+     *
+     * @param tier          触发水位档位（0=W0 未压缩，1/2/3=W1/W2/W3）
+     * @param beforeTokens  压缩前全窗口估算 token
+     * @param afterTokens   压缩后全窗口估算 token
+     * @param droppedTokens 净减少 token（调用方 clamp 到 ≥0）
+     * @param fallback      是否从 W3 摘要失败回落到 W2
+     */
+    default void onContextCompacted(@NonNull String tenantId, @NonNull String runId,
+                                    int tier, int beforeTokens, int afterTokens,
+                                    int droppedTokens, boolean fallback) {
+        // M6 contract-only：默认无副作用，M7 起由需要该事件的观测者显式覆写。
+    }
+
+    /**
      * 执行循环完成时触发（无论成功/失败/取消）。
      *
      * @param tenantId   租户标识

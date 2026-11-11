@@ -32,6 +32,15 @@
       <groupId>cn.studykid.multiagent</groupId>
       <artifactId>agent-application</artifactId>
     </dependency>
+    <!--
+      ADR-013 / M4：校准桥（ContextCalibrationObserver）需要 agent-context 的
+      TokenEstimationCalibrator / RequestContextProjection。显式声明、不吃传递依赖。
+      方向 infrastructure → 纯算法层为正向；不触及 agent-persistence（DatabaseBoundaryTest）。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-context</artifactId>
+    </dependency>
     <!-- D2 数据层权限核心领域模型（ScopeFilter / SubjectContext / Action / Decision 等）。 -->
     <dependency>
       <groupId>cn.studykid.multiagent</groupId>

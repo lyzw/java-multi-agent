@@ -17,6 +17,11 @@ import org.junit.jupiter.api.Test;
 
 import cn.studykid.multiagent.core.cap.ExecutionScope;
 import cn.studykid.multiagent.core.orchestration.AgentInvocationStatus;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyException;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyException.Reason;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyInput;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyResult;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.observer.ModelCallObserverChain;
 import cn.studykid.multiagent.ports.observer.ObservableModelGateway;
@@ -241,6 +246,47 @@ class WorkerChildAgentRunnerTest {
                 new ExecutionScope("child-agent", 1, "cap_fp_v1:child"), timeoutMs, 1L, 1);
     }
 
+    private static ChildAgentRunner.ChildAgentRequest anchoredRequest(String marker) {
+        return new ChildAgentRunner.ChildAgentRequest(
+                TENANT, RUN, "inv-1", "trace-1", "parent-agent", 1,
+                "child-agent", 1, Map.<String, Object>of("question", marker), 2,
+                new ExecutionScope("child-agent", 1, "cap_fp_v1:child"), 30_000L, 1L, 1);
+    }
+
+    // ── M7-b 统一请求装配替身 ──────────────────────────────────────
+
+    private static final class FakeAssemblyPort implements RequestAssemblyPort {
+        final List<RequestAssemblyInput> inputs = new java.util.ArrayList<>();
+        RequestAssemblyResult forced;
+        RuntimeException failure;
+
+        @Override
+        public RequestAssemblyResult assemble(RequestAssemblyInput input) {
+            inputs.add(input);
+            if (failure != null) {
+                throw failure;
+            }
+            return forced == null
+                    ? RequestAssemblyResult.passthrough(input.legacyRequest())
+                    : forced;
+        }
+    }
+
+    private static WorkerChildAgentRunner runner(ModelGateway gateway,
+                                                 RequestAssemblyPort port) {
+        return new WorkerChildAgentRunner(observe(gateway), emptyGate(),
+                configs(Duration.ofSeconds(30)), 4, null, System::nanoTime,
+                java.time.Clock.systemUTC(), 200, port);
+    }
+
+    private static WorkerChildAgentRunner runner(
+            ModelGateway gateway, RequestAssemblyPort port,
+            List<cn.studykid.multiagent.ports.tool.ToolHandler> tools) {
+        return new WorkerChildAgentRunner(observe(gateway), gateWith(tools),
+                configs(Duration.ofSeconds(30)), 4, null, System::nanoTime,
+                java.time.Clock.systemUTC(), 200, port);
+    }
+
     // ── 用例 ──────────────────────────────────────────────────────
 
     @Test
@@ -454,5 +500,100 @@ class WorkerChildAgentRunnerTest {
         public ToolResult execute(ToolExecutionContext c, Map<String, Object> arguments) {
             return ToolResult.of("x".repeat(20_000));
         }
+    }
+
+    // ── M7-b 子 Agent 统一请求装配接线 ────────────────────────────
+
+    @Test
+    @DisplayName("✅ L4 关闭态：发的是 legacy 基线同一引用；首轮锚只发一遍、不继承父 checkpoint")
+    void childClosedStateIsLegacyByIdentityAndHasNoParentCheckpoint() {
+        ScriptedGateway gateway = new ScriptedGateway();
+        FakeAssemblyPort assembly = new FakeAssemblyPort();
+
+        var result = runner(gateway, assembly).run(anchoredRequest("child-anchor-marker"));
+
+        assertThat(result.status()).isEqualTo(AgentInvocationStatus.SUCCEEDED);
+        assertThat(gateway.requests).hasSize(1);
+        assertThat(assembly.inputs).hasSize(1);
+        assertThat(gateway.lastRequest)
+                .as("⛔ L4 关闭态没有返回 legacy 同一引用")
+                .isSameAs(assembly.inputs.get(0).legacyRequest());
+
+        RequestAssemblyInput input = assembly.inputs.get(0);
+        assertThat(input.tenantId()).isEqualTo(TENANT);
+        assertThat(input.scopeKey()).isEqualTo("run:" + RUN);
+        assertThat(input.agentId()).isEqualTo("child-agent");
+        assertThat(input.agentVersion()).isEqualTo(1);
+        assertThat(input.modelId()).isEqualTo("model-1");
+        assertThat(input.stableSystemPrompt()).isEqualTo("你是子 Agent");
+        assertThat(input.firstUserTurn()).contains("child-anchor-marker");
+        assertThat(input.currentInput()).as("委派输入已是首轮锚，不得再发一遍").isEmpty();
+        assertThat(input.historyMessages()).isEmpty();
+        assertThat(input.memoryBlock()).isEmpty();
+        assertThat(input.ragBlocks()).isEmpty();
+        assertThat(input.maxOutputTokens()).isEqualTo(512);
+        assertThat(input.fencingToken()).isEqualTo(1L);
+        assertThat(input.upToSeq()).as("子 Agent 绝不继承父 checkpoint").isEqualTo(-1L);
+        assertThat(input.carryOverStateJson()).isNull();
+        assertThat(input.priorCompactions()).isZero();
+    }
+
+    @Test
+    @DisplayName("✅ L4 开启态：唯一请求来自端口；每轮都不继承 checkpoint，首轮锚不重复")
+    void childAssembledRequestIsOnlyRequestAndNeverInheritsCheckpoint() {
+        ScriptedGateway gateway = new ScriptedGateway();
+        gateway.sequence.add(new ModelResponse("", Map.of("call-1",
+                        new ModelResponse.ToolCallRequest("record_weakness",
+                                Map.of(), "call-1")),
+                new ModelResponse.ModelUsage(10, 5), ModelResponse.FinishReason.TOOL_CALLS));
+        gateway.sequence.add(new ModelResponse("已记录", Map.of(),
+                new ModelResponse.ModelUsage(20, 5), ModelResponse.FinishReason.STOP));
+        ModelRequest assembled = new ModelRequest("model-1", "子 Agent 统一装配", "",
+                0.2d, 512, Duration.ofSeconds(30), Map.of(),
+                List.of(ModelMessage.user("子 Agent 装配消息")));
+        FakeAssemblyPort assembly = new FakeAssemblyPort();
+        assembly.forced = new RequestAssemblyResult(assembled, true, 1, false, 100, 60, 1, null);
+
+        var result = runner(gateway, assembly, List.of(new StubTool()))
+                .run(anchoredRequest("child-anchor-marker"));
+
+        assertThat(result.status()).isEqualTo(AgentInvocationStatus.SUCCEEDED);
+        assertThat(gateway.requests).hasSize(2);
+        assertThat(gateway.requests)
+                .as("⛔ 子 Agent 又二次拼了请求")
+                .allSatisfy(r -> assertThat(r).isSameAs(assembled));
+        assertThat(assembly.inputs).hasSize(2);
+        assertThat(assembly.inputs).allSatisfy(in -> {
+            assertThat(in.upToSeq()).as("⛔ 子路径继承或累计了 checkpoint 游标")
+                    .isEqualTo(-1L);
+            assertThat(in.carryOverStateJson()).isNull();
+            assertThat(in.priorCompactions()).isZero();
+            assertThat(in.firstUserTurn()).contains("child-anchor-marker");
+            assertThat(in.currentInput()).isEmpty();
+        });
+
+        RequestAssemblyInput second = assembly.inputs.get(1);
+        assertThat(second.historyMessages())
+                .as("⛔ 工具结果回灌后没有进入子路径装配输入").isNotEmpty();
+        assertThat(second.historyMessages()).allSatisfy(
+                m -> assertThat(m.content()).as("⛔ 首轮锚在子路径历史里重复出现 [D27]")
+                        .doesNotContain("child-anchor-marker"));
+        assertThat(second.historyMessages()).anySatisfy(
+                m -> assertThat(m.role()).isEqualTo(ModelMessage.Role.TOOL));
+    }
+
+    @Test
+    @DisplayName("⛔ L4 装配被拒 → FAILED + 稳定原因码，绝不静默回退 legacy 调模型")
+    void childAssemblyRejectionFailsClosed() {
+        ScriptedGateway gateway = new ScriptedGateway();
+        FakeAssemblyPort assembly = new FakeAssemblyPort();
+        assembly.failure = new RequestAssemblyException(
+                Reason.CONTEXT_POLICY_INVALID, "模拟策略非法");
+
+        var result = runner(gateway, assembly).run(anchoredRequest("child-anchor-marker"));
+
+        assertThat(result.status()).isEqualTo(AgentInvocationStatus.FAILED);
+        assertThat(result.reasonCode()).isEqualTo("CONTEXT_POLICY_INVALID");
+        assertThat(gateway.calls.get()).as("⛔ 被拒后仍然发了模型请求（静默回退）").isZero();
     }
 }

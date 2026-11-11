@@ -3,6 +3,7 @@ package cn.studykid.multiagent.worker.execute;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -16,11 +17,19 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import cn.studykid.multiagent.application.config.ModelPricingPolicy;
 import cn.studykid.multiagent.core.config.ApprovalRequirement;
+import cn.studykid.multiagent.core.config.ModelPricing;
 import cn.studykid.multiagent.core.config.RunConfigSnapshot;
 import cn.studykid.multiagent.core.config.ToolRiskLevel;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.observer.noop.NoopExecutionObserver;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyException;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyException.Reason;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyInput;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyResult;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.observer.ModelCallObserverChain;
 import cn.studykid.multiagent.ports.observer.ExecutionObserverChain;
@@ -84,7 +93,7 @@ class RunExecutionLoopTest {
     private static RunExecutionLoop.AgentModelConfig agentConfig() {
         return new RunExecutionLoop.AgentModelConfig(
                 "test-model", "你是初中数学辅导助手", 0.7d, 1024,
-                Duration.ofSeconds(5), Map.of());
+                Duration.ofSeconds(5), Map.of(), "test-agent", 1);
     }
 
     private static RunClaimPort.LeasedTask task() {
@@ -2398,6 +2407,335 @@ class RunExecutionLoopTest {
             assertThat(port.requestCancel(TENANT, RUN_ID))
                     .as("已取消的 Run 重复取消必须返回 false（幂等且不回退终态）")
                     .isFalse();
+        }
+    }
+
+    // ── M7-b 统一请求装配接线（G1 签核后放行）─────────────────────
+
+    /**
+     * 统一装配端口的行为测试。
+     *
+     * <p>⚠️ 本组不是「有个 Bean 调了一下」的结构测试：六条断言分别钉死
+     * <b>关闭态同一引用</b>、<b>开启态唯一请求源</b>、<b>观测/成本分流</b>、
+     * <b>fail-closed 不回退</b>、<b>首轮锚去重</b>与<b>不继承父 checkpoint</b>。
+     * 任一条被撤掉，对应的线上失真（多报指标 / 预算口径漂移 / 静默放行）
+     * 都不会有任何报错 —— 正是本项目反复吃的「静默失真」形态。
+     */
+    @Nested
+    @DisplayName("M7-b 统一请求装配入口（唯一请求源 / 关闭等价）")
+    class RequestAssemblyWiring {
+
+        private static final class FakeAssemblyPort implements RequestAssemblyPort {
+            final List<RequestAssemblyInput> inputs = new java.util.ArrayList<>();
+            RequestAssemblyResult forced;
+            RuntimeException failure;
+
+            @Override
+            public RequestAssemblyResult assemble(RequestAssemblyInput input) {
+                inputs.add(input);
+                if (failure != null) {
+                    throw failure;
+                }
+                return forced == null
+                        ? RequestAssemblyResult.passthrough(input.legacyRequest())
+                        : forced;
+            }
+        }
+
+        private static final class RecordingContextObserver extends NoopExecutionObserver {
+            int trimmedCalls;
+            int compactedCalls;
+            Integer tier;
+            Integer beforeTokens;
+            Integer afterTokens;
+            Integer droppedTokens;
+            Boolean fallback;
+
+            @Override
+            public void onContextTrimmed(String tenantId, String runId, int droppedRounds,
+                                         int dropped, List<String> droppedTools) {
+                trimmedCalls++;
+            }
+
+            @Override
+            public void onContextCompacted(String tenantId, String runId, int tier,
+                                           int before, int after, int dropped,
+                                           boolean fallback) {
+                compactedCalls++;
+                this.tier = tier;
+                this.beforeTokens = before;
+                this.afterTokens = after;
+                this.droppedTokens = dropped;
+                this.fallback = fallback;
+            }
+        }
+
+        /** 记录网关：默认单轮文本；{@code toolFirst=true} 用于制造第二轮历史。 */
+        private static final class RecordingGateway implements ModelGateway {
+            final List<ModelRequest> requests = new java.util.ArrayList<>();
+            final boolean toolFirst;
+
+            RecordingGateway(boolean toolFirst) {
+                this.toolFirst = toolFirst;
+            }
+
+            @Override
+            public ModelResponse complete(ModelRequest request) {
+                requests.add(request);
+                if (toolFirst && requests.size() == 1) {
+                    return new ModelResponse("", Map.of("c1",
+                                    new ModelResponse.ToolCallRequest(
+                                            "recording_tool", Map.of(), "c1")),
+                            new ModelResponse.ModelUsage(1, 1),
+                            ModelResponse.FinishReason.TOOL_CALLS);
+                }
+                return textResponse("完成");
+            }
+        }
+
+        /** 超长工具输出：把 legacy 基线顶过预算，让 trim 分支可证伪。 */
+        private static final class BigTool implements ToolHandler {
+            @Override public String toolName() { return "recording_tool"; }
+            @Override public String inputSchema() { return "{}"; }
+            @Override public ToolRiskLevel riskLevel() { return ToolRiskLevel.READ; }
+            @Override public void validate(Map<String, Object> arguments) { }
+            @Override public ToolResult execute(ToolExecutionContext ctx,
+                                                Map<String, Object> arguments) {
+                return ToolResult.of("工具输出 ".repeat(400));
+            }
+        }
+
+        private static ToolInvocationGate bigToolGate() {
+            return new ToolInvocationGate(List.of(new BigTool()), allowAll(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                    budget(), ledger());
+        }
+
+        private static ToolInvocationGate emptyGate(BudgetPort modelBudget) {
+            return new ToolInvocationGate(List.of(), allowAll(),
+                    h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                    modelBudget, ledger());
+        }
+
+        /** 成本断言专用快照：单 Run 上限必须高于预留额，否则测的是 MAX_COST 分支。 */
+        private static RunConfigSnapshot costSnapshot() {
+            return new RunConfigSnapshot(RUN_ID, new BigDecimal("1000.00"),
+                    12, 5, ApprovalRequirement.NOT_REQUIRED, Instant.now());
+        }
+
+        /** 输入 ¥1 / 千 input token、输出免费：预留额只由输入估算决定。 */
+        private static ModelPricingPolicy pricing() {
+            return new ModelPricingPolicy(Map.of("test-model",
+                    new ModelPricing(BigDecimal.ONE, BigDecimal.ZERO)));
+        }
+
+        private static RunExecutionLoop loopWith(
+                ModelGateway gateway, RunClaimPort claimPort,
+                ExecutionObserverChain observers, ToolInvocationGate gate,
+                BudgetPort modelBudget, ModelPricingPolicy pricing,
+                RunEventPort eventPort, RequestAssemblyPort assemblyPort) {
+            return loopWith(gateway, claimPort, observers, gate, modelBudget, pricing,
+                    eventPort, ContextBudgetTrimmer.DEFAULT_CONTEXT_TOKEN_BUDGET, assemblyPort);
+        }
+
+        /** 极小预算：让 legacy 基线必然发生 trim，从而能证伪观测分流。 */
+        private static RunExecutionLoop tightLoopWith(
+                ModelGateway gateway, RunClaimPort claimPort,
+                ExecutionObserverChain observers, ToolInvocationGate gate,
+                BudgetPort modelBudget, ModelPricingPolicy pricing,
+                RunEventPort eventPort, RequestAssemblyPort assemblyPort) {
+            return loopWith(gateway, claimPort, observers, gate, modelBudget, pricing,
+                    eventPort, 300, assemblyPort);
+        }
+
+        private static RunExecutionLoop loopWith(
+                ModelGateway gateway, RunClaimPort claimPort,
+                ExecutionObserverChain observers, ToolInvocationGate gate,
+                BudgetPort modelBudget, ModelPricingPolicy pricing,
+                RunEventPort eventPort, int contextTokenBudget,
+                RequestAssemblyPort assemblyPort) {
+            return new RunExecutionLoop(observe(gateway), claimPort, gate,
+                    Duration.ofSeconds(30), "w-1",
+                    new cn.studykid.multiagent.application.prompt.PromptGuard(),
+                    eventPort, null,
+                    contextTokenBudget,
+                    null, null, null, observers, PREEMPT,
+                    modelBudget, pricing, null, null, null, null, null,
+                    assemblyPort);
+        }
+
+        private static BigDecimal firstReservation(BudgetPort b) {
+            if (!(b instanceof InMemoryBudget inMemory)) {
+                throw new AssertionError("成本断言必须用 InMemoryBudget 才能读到预留额");
+            }
+            assertThat(inMemory.byOperation).as("⛔ 模型成本预留没有发生").hasSize(1);
+            return inMemory.byOperation.values().iterator().next().reservedAmount();
+        }
+
+        private static RequestAssemblyResult assembled(int before, int after) {
+            ModelRequest out = new ModelRequest("test-model", "统一装配系统提示", "",
+                    0.3d, 1024, Duration.ofSeconds(5), Map.of(),
+                    List.of(ModelMessage.user("统一装配消息")));
+            return new RequestAssemblyResult(out, true, 2, true, before, after, 1, null);
+        }
+
+        @Test
+        @DisplayName("✅ 关闭态：发的是 legacy 基线同一引用；仍走旧 trim 事件；首轮锚只发一遍、不继承 checkpoint")
+        void closedStateIsLegacyByIdentityAndCarriesNoParentCheckpoint() {
+            FakeClaimPort port = new FakeClaimPort();
+            RecordingGateway gateway = new RecordingGateway(true);
+            FakeAssemblyPort assembly = new FakeAssemblyPort();
+            RecordingContextObserver observer = new RecordingContextObserver();
+
+            tightLoopWith(gateway, port, new ExecutionObserverChain(List.of(observer)),
+                    bigToolGate(), budget(), pricing(), null, assembly)
+                    .execute(TENANT, task(), agentConfig(), costSnapshot(),
+                            Map.of("q", "first-anchor-marker"));
+
+            assertThat(gateway.requests).hasSizeGreaterThanOrEqualTo(2);
+            assertThat(assembly.inputs).hasSize(gateway.requests.size());
+            assertThat(gateway.requests.get(0))
+                    .as("⛔ 关闭态没有返回 legacy 同一引用：逐位等价失去构造级保证")
+                    .isSameAs(assembly.inputs.get(0).legacyRequest());
+            assertThat(observer.compactedCalls)
+                    .as("⛔ 关闭态多报了压缩行为事件 [D11]").isZero();
+            assertThat(observer.trimmedCalls)
+                    .as("⛔ 关闭态 legacy trim 事件消失（旧观测语义被破坏）").isPositive();
+
+            RequestAssemblyInput first = assembly.inputs.get(0);
+            assertThat(first.tenantId()).isEqualTo(TENANT);
+            assertThat(first.scopeKey()).isEqualTo("run:" + RUN_ID);
+            assertThat(first.agentId()).isEqualTo("test-agent");
+            assertThat(first.agentVersion()).isEqualTo(1);
+            assertThat(first.modelId()).isEqualTo("test-model");
+            assertThat(first.stableSystemPrompt()).isEqualTo(agentConfig().systemPrompt());
+            assertThat(first.firstUserTurn()).contains("first-anchor-marker");
+            assertThat(first.currentInput()).as("L1 首轮锚即本轮输入，不得再发一遍").isEmpty();
+            assertThat(first.memoryBlock()).isEmpty();
+            assertThat(first.ragBlocks()).isEmpty();
+            assertThat(first.historyMessages()).isEmpty();
+            assertThat(first.maxOutputTokens()).isEqualTo(1024);
+            assertThat(first.fencingToken()).isEqualTo(task().fencingToken());
+            assertThat(first.upToSeq()).as("L1 首轮不得继承父 checkpoint").isEqualTo(-1L);
+            assertThat(first.carryOverStateJson()).isNull();
+            assertThat(first.priorCompactions()).isZero();
+
+            RequestAssemblyInput second = assembly.inputs.get(1);
+            assertThat(second.firstUserTurn()).contains("first-anchor-marker");
+            assertThat(second.historyMessages())
+                    .as("⛔ 工具结果回灌后没有进入装配输入").isNotEmpty();
+            assertThat(second.historyMessages()).allSatisfy(
+                    m -> assertThat(m.content()).as("⛔ 首轮锚在历史里重复出现 [D27]")
+                            .doesNotContain("first-anchor-marker"));
+            assertThat(second.historyMessages()).anySatisfy(
+                    m -> assertThat(m.role()).isEqualTo(ModelMessage.Role.TOOL));
+            assertThat(ContextBudgetTrimmer.estimateTokens(
+                    second.legacyRequest().effectiveMessages()))
+                    .as("⛔ legacy 基线没有按预算裁剪（观测数字会与请求分叉）")
+                    .isLessThanOrEqualTo(300);
+        }
+
+        @Test
+        @DisplayName("✅ 开启态：唯一送模型的请求来自端口；新事件分流，旧 trim 事件不再误报")
+        void assembledStateUsesPortRequestAndRoutesNewObserver() {
+            FakeClaimPort port = new FakeClaimPort();
+            RecordingGateway gateway = new RecordingGateway(true);
+            FakeAssemblyPort assembly = new FakeAssemblyPort();
+            RequestAssemblyResult result = assembled(500, 200);
+            assembly.forced = result;
+            RecordingContextObserver observer = new RecordingContextObserver();
+
+            tightLoopWith(gateway, port, new ExecutionObserverChain(List.of(observer)),
+                    bigToolGate(), budget(), pricing(), null, assembly)
+                    .execute(TENANT, task(), agentConfig(), costSnapshot(),
+                            Map.of("q", "x"));
+
+            assertThat(gateway.requests).hasSizeGreaterThanOrEqualTo(2);
+            assertThat(gateway.requests)
+                    .as("⛔ Worker 又二次拼了请求：系统提示/围栏块会被绕过")
+                    .allSatisfy(r -> assertThat(r).isSameAs(result.request()));
+            assertThat(result.request().systemPrompt()).doesNotContain("裁剪");
+            assertThat(observer.compactedCalls).isEqualTo(gateway.requests.size());
+            assertThat(observer.trimmedCalls).as("⛔ 开启态仍误报 legacy trim").isZero();
+            assertThat(observer.tier).isEqualTo(2);
+            assertThat(observer.beforeTokens).isEqualTo(500);
+            assertThat(observer.afterTokens).isEqualTo(200);
+            assertThat(observer.droppedTokens).isEqualTo(300);
+            assertThat(observer.fallback).isTrue();
+        }
+
+        @Test
+        @DisplayName("⛔ 统一装配被拒 → Run 收敛 FAILED + 稳定原因码，绝不静默回退 legacy")
+        void assemblyRejectionFailsClosed() {
+            FakeClaimPort port = new FakeClaimPort();
+            RecordingEventPort events = new RecordingEventPort();
+            RecordingGateway gateway = new RecordingGateway(false);
+            FakeAssemblyPort assembly = new FakeAssemblyPort();
+            assembly.failure = new RequestAssemblyException(
+                    Reason.CONTEXT_BUDGET_EXCEEDED, "模拟预算超硬顶");
+
+            var outcome = loopWith(gateway, port,
+                    new ExecutionObserverChain(List.of()), bigToolGate(),
+                    budget(), pricing(), events, assembly)
+                    .execute(TENANT, task(), agentConfig(), costSnapshot(), Map.of("q", "x"));
+
+            assertThat(outcome.kind()).isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(gateway.requests).as("⛔ 被拒后仍然发了模型请求（静默回退）").isEmpty();
+            assertThat(port.committedState).isEqualTo("FAILED");
+            assertThat(port.committedErrorCode).isEqualTo("CONTEXT_BUDGET_EXCEEDED");
+            assertThat(events.types).contains(RunEventPort.Types.RUN_FAILED);
+            assertThat(events.payloads).anySatisfy(
+                    p -> assertThat(p).containsEntry("errorCode", "CONTEXT_BUDGET_EXCEEDED"));
+        }
+
+        @Test
+        @DisplayName("✅ 开启态成本预留用全窗口 afterTokens（不是 legacy trim 估算）")
+        void assembledCostReservationUsesAfterTokens() {
+            InMemoryBudget lowBudget = budget();
+            FakeAssemblyPort lowPort = new FakeAssemblyPort();
+            lowPort.forced = assembled(20_000, 10_000);
+            loopWith(new RecordingGateway(false), new FakeClaimPort(),
+                    new ExecutionObserverChain(List.of()), emptyGate(lowBudget),
+                    lowBudget, pricing(), null, lowPort)
+                    .execute(TENANT, task(), agentConfig(), costSnapshot(), Map.of("q", "x"));
+
+            InMemoryBudget highBudget = budget();
+            FakeAssemblyPort highPort = new FakeAssemblyPort();
+            highPort.forced = assembled(40_000, 20_000);
+            loopWith(new RecordingGateway(false), new FakeClaimPort(),
+                    new ExecutionObserverChain(List.of()), emptyGate(highBudget),
+                    highBudget, pricing(), null, highPort)
+                    .execute(TENANT, task(), agentConfig(), costSnapshot(), Map.of("q", "x"));
+
+            BigDecimal low = firstReservation(lowBudget);
+            BigDecimal high = firstReservation(highBudget);
+            // ¥1 / 千 input token，安全系数 2：10k → ¥20；20k → ¥40（输出免费）。
+            assertThat(low).isEqualByComparingTo("20.000000");
+            assertThat(high).isEqualByComparingTo("40.000000");
+            assertThat(high).isEqualByComparingTo(low.multiply(BigDecimal.valueOf(2)));
+        }
+
+        @Test
+        @DisplayName("✅ 关闭态成本预留与接线前逐位一致（passthrough 不改变金额）")
+        void closedStateCostReservationMatchesLegacy() {
+            InMemoryBudget legacyBudget = budget();
+            loopWith(new RecordingGateway(false), new FakeClaimPort(),
+                    new ExecutionObserverChain(List.of()), emptyGate(legacyBudget),
+                    legacyBudget, pricing(), null, null)
+                    .execute(TENANT, task(), agentConfig(), costSnapshot(), Map.of("q", "x"));
+
+            InMemoryBudget passthroughBudget = budget();
+            loopWith(new RecordingGateway(false), new FakeClaimPort(),
+                    new ExecutionObserverChain(List.of()), emptyGate(passthroughBudget),
+                    passthroughBudget, pricing(), null, new FakeAssemblyPort())
+                    .execute(TENANT, task(), agentConfig(), costSnapshot(), Map.of("q", "x"));
+
+            BigDecimal legacy = firstReservation(legacyBudget);
+            BigDecimal passthrough = firstReservation(passthroughBudget);
+            assertThat(legacy).isPositive();
+            assertThat(passthrough)
+                    .as("⛔ 关掉压缩却改变了成本预留金额（G1 影子期承诺被破坏）")
+                    .isEqualByComparingTo(legacy);
         }
     }
 }

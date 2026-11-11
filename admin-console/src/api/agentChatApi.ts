@@ -91,6 +91,22 @@ export interface AgentHit {
 export type AgentStepStatus = 'pending' | 'running' | 'success' | 'error' | 'info'
 
 /**
+ * 协议 v1.1 第 14 事件的载荷（M13 mock：**只解析、只内存暂存**）。
+ *
+ * <p>⚠️ {@code state} 是服务端签名的**不透明基串**，前端只做形状校验，
+ * ⛔ 绝不解析/解密/渲染其正文，也⛔ 不写入任何 localStorage/sessionStorage；
+ * 请求侧携带 {@code contextState} 属于 M8 + G1 签核后的能力，当前请求体逐位不变。
+ */
+export interface AgentContextCheckpoint {
+  state: string
+  upToTurn?: number
+  policyVersion: string
+  tier: number
+  fallback: boolean
+  digest: string
+}
+
+/**
  * 页面消费的流式事件：每一条都对应一帧真实到达（live 来自服务端，sample 来自脚本化的帧）。
  * thinking/delta 是增量；answer 是终帧正文兜底（绝不回撤已到达的增量）；done 是应用层收口。
  */
@@ -134,8 +150,10 @@ export type AgentStreamEvent =
   | { type: 'answer'; text: string; at: number }
   | { type: 'usage'; inputTokens: number; outputTokens: number; at: number }
   | { type: 'error'; code: string; message: string; at: number }
+  /** 协议 v1.1 第 14 事件：M13 mock 只解析、只内存暂存，⛔ 不进入请求体。 */
+  | ({ type: 'context.checkpoint' } & AgentContextCheckpoint & { at: number })
   /** truncated=true 表示流在未收到服务端终帧时结束（断流 ≠ 失败）。 */
-  | { type: 'done'; truncated: boolean; at: number }
+  | { type: 'done'; truncated: boolean; contextStateVersion?: string; at: number }
 
 /** 单次调用入参。 */
 export interface AgentChatRequest {
@@ -596,9 +614,49 @@ export function decodeAgentFrame(frame: AgentSseFrame): AgentStreamEvent | null 
         at,
       }
     }
-    case 'done':
+    case 'context.checkpoint': {
+      // M13 mock：只做形状校验与不透明暂存。⛔ 不解析 state、不验 HMAC、不回传请求。
+      const p = parseJson(raw)
+      const state = str(p?.['state'])
+      const policyVersion = str(p?.['policyVersion'])
+      const digest = str(p?.['digest'])
+      const tier = num(p?.['tier'])
+      const fallback = bool(p?.['fallback'])
+      if (
+        state === undefined || state === '' ||
+        policyVersion === undefined || policyVersion === '' ||
+        digest === undefined || digest === '' ||
+        tier === undefined || !Number.isInteger(tier) || tier < 1 || tier > 3 ||
+        fallback === undefined
+      ) return null
+      const rawUpToTurn = p?.['upToTurn']
+      const upToTurn = rawUpToTurn === undefined || rawUpToTurn === null
+        ? undefined
+        : num(rawUpToTurn)
+      if (upToTurn !== undefined && (!Number.isInteger(upToTurn) || upToTurn < 0)) return null
+      return {
+        type: 'context.checkpoint',
+        state,
+        ...(upToTurn === undefined ? {} : { upToTurn }),
+        policyVersion,
+        tier,
+        fallback,
+        digest,
+        at,
+      }
+    }
+    case 'done': {
       // done 允许空 data；truncated 由流结束时的收口逻辑补充（见 consumeAgentStream）。
-      return { type: 'done', truncated: false, at }
+      // v1.1 只追加可选字段；旧 `{}` 帧必须仍产出无该字段的事件。
+      const p = raw === '' ? undefined : parseJson(raw)
+      const version = p?.['contextStateVersion']
+      return {
+        type: 'done',
+        truncated: false,
+        ...(typeof version === 'string' && version !== '' ? { contextStateVersion: version } : {}),
+        at,
+      }
+    }
     default:
       return null
   }

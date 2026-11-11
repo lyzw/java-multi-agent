@@ -274,6 +274,8 @@ describe('真实端点 · 请求与诚实失败', () => {
     expect(body['thinkingMode']).toBe(true)
     expect(body['agentId']).toBe('agent-1')
     expect(body['topK']).toBe(5)
+    // M13 mock：两前端只解析 v1.1 帧，⛔ 请求体仍逐位不变（contextState 属 M8 + G1 签核）。
+    expect(body).not.toHaveProperty('contextState')
   })
 
   it('✅ 404/501 明示「能力未接入」，并给出样例回放这条可执行出路', async () => {
@@ -376,5 +378,85 @@ describe('真实端点 · 终帧、断流与错误帧', () => {
       message: 'boom',
       retryable: true,
     })
+  })
+})
+
+describe('协议 v1.1 · context.checkpoint 与 done 可选字段（M13 mock 只解析不上送）', () => {
+  const VALID = {
+    state: 'opaque-base64',
+    upToTurn: 3,
+    policyVersion: 'cp_v1',
+    tier: 2,
+    fallback: false,
+    digest: 'sha256:abc',
+  }
+
+  it('✅ 合法 checkpoint 帧解码为第 14 事件，upToTurn 缺省时省略字段', () => {
+    expect(decodeAgentFrame({ event: 'context.checkpoint', data: JSON.stringify(VALID) })).toMatchObject({
+      type: 'context.checkpoint',
+      state: 'opaque-base64',
+      upToTurn: 3,
+      policyVersion: 'cp_v1',
+      tier: 2,
+      fallback: false,
+      digest: 'sha256:abc',
+    })
+    const { upToTurn: _ignored, ...withoutTurn } = VALID
+    expect(decodeAgentFrame({ event: 'context.checkpoint', data: JSON.stringify(withoutTurn) })).not.toHaveProperty('upToTurn')
+  })
+
+  it('⛔ 形状不合法的 checkpoint 帧一律 fail-closed（不伪造压缩态）', () => {
+    const invalid: Array<Record<string, unknown>> = [
+      {},
+      { ...VALID, state: '' },
+      { ...VALID, policyVersion: '' },
+      { ...VALID, digest: '' },
+      { ...VALID, tier: 0 },
+      { ...VALID, tier: 4 },
+      { ...VALID, tier: 1.5 },
+      { ...VALID, upToTurn: -1 },
+      { ...VALID, upToTurn: 1.5 },
+      { ...VALID, fallback: 'false' },
+      { ...VALID, fallback: undefined },
+      { ...VALID, state: 42 },
+    ]
+    for (const data of invalid) {
+      expect(decodeAgentFrame({ event: 'context.checkpoint', data: JSON.stringify(data) })).toBeNull()
+    }
+    expect(decodeAgentFrame({ event: 'context.checkpoint', data: 'not-json' })).toBeNull()
+  })
+
+  it('✅ done 只追加可选字段；旧 `{}` 帧的解码结果零新增键', () => {
+    const legacy = decodeAgentFrame({ event: 'done', data: '{}' })
+    expect(Object.keys(legacy ?? {}).sort()).toEqual(['at', 'truncated', 'type'])
+    expect(legacy).toMatchObject({ type: 'done', truncated: false })
+
+    const v11 = decodeAgentFrame({
+      event: 'done',
+      data: '{"truncated":false,"contextStateVersion":"cp_v1"}',
+    })
+    expect(v11).toMatchObject({ type: 'done', truncated: false, contextStateVersion: 'cp_v1' })
+    expect(decodeAgentFrame({ event: 'done', data: '{"contextStateVersion":""}' })).not.toHaveProperty('contextStateVersion')
+    expect(decodeAgentFrame({ event: 'done', data: '{"contextStateVersion":42}' })).not.toHaveProperty('contextStateVersion')
+  })
+
+  it('✅ 线序 answer → context.checkpoint → done；done 仍是唯一应用层终帧，请求体无 contextState', async () => {
+    fetchImpl = () =>
+      Promise.resolve(
+        sseResponse([
+          'event: answer\ndata: {"text":"答案"}\n\n',
+          `event: context.checkpoint\ndata: ${JSON.stringify(VALID)}\n\n`,
+          'event: done\ndata: {"truncated":false,"contextStateVersion":"cp_v1"}\n\n',
+        ]),
+      )
+    const { events, failure } = await run(REQUEST)
+    expect(failure).toBeNull()
+    expect(events.map((e) => e.type)).toEqual(['answer', 'context.checkpoint', 'done'])
+    expect(events[1]).toMatchObject({ type: 'context.checkpoint', digest: 'sha256:abc' })
+    expect(events[2]).toMatchObject({ type: 'done', contextStateVersion: 'cp_v1' })
+
+    const body = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    expect(body).not.toHaveProperty('contextState')
+    expect(body).not.toHaveProperty('contextStateVersion')
   })
 })

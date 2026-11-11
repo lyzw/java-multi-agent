@@ -92,7 +92,10 @@ class JdbcReviewTaskRepositoryIT {
         String high = repo.create(new ReviewTaskSpec(
                 traceId + "-high", tenantId, runIdOf("main"), Source.ALERT, Priority.HIGH, null));
 
-        List<ReviewTaskViewRow> rows = repo.list(null, null, 50).stream()
+        // ⚠️ 必须按本 IT 的 tenantId 过滤：platform.review_task 是平台域全局表，
+        //    其它闭环 IT 会往里写待审任务；list(null, null, 50) 会因 CASE priority 排序
+        //    把本用例的 NORMAL 新行挤出 LIMIT 50（2026-11-11 全量 verify 假红事故）。
+        List<ReviewTaskViewRow> rows = repo.list(null, tenantId, 50).stream()
                 .map(v -> new ReviewTaskViewRow(v.taskId(), v.priority(), v.status()))
                 .toList();
         assertThat(rows).extracting(ReviewTaskViewRow::taskId).contains(normal, high);
@@ -105,7 +108,7 @@ class JdbcReviewTaskRepositoryIT {
     void assignFlow() {
         String id = repo.create(spec(Source.MANUAL, Priority.NORMAL));
         repo.assign(id, "reviewer-a");
-        assertThat(repo.list(null, null, 50))
+        assertThat(repo.list(null, tenantId, 50))
                 .filteredOn(v -> v.taskId().equals(id))
                 .first()
                 .satisfies(v -> {
@@ -121,7 +124,7 @@ class JdbcReviewTaskRepositoryIT {
         repo.assign(id, "reviewer-a");
         repo.resolve(id, "PROMPT", "系统提示词缺验证步骤引导");
 
-        assertThat(repo.list(null, null, 50))
+        assertThat(repo.list(null, tenantId, 50))
                 .noneMatch(v -> v.taskId().equals(id)); // RESOLVED 不进待处理视图
         assertThatThrownBy(() -> repo.assign(id, "reviewer-b"))
                 .isInstanceOf(IllegalStateException.class)
@@ -215,7 +218,7 @@ class JdbcReviewTaskRepositoryIT {
         withHook.resolve(taskId, "MODEL", null);
 
         List<ReviewTaskPort.ReviewTaskView> resolved =
-                withHook.list("RESOLVED", null, 50).stream()
+                withHook.list("RESOLVED", tenantId, 50).stream()
                         .filter(v -> v.traceId().equals(tid)).toList();
         assertThat(resolved)
                 .as("⚠️ 钩子失败若把 resolve 整体报失败，reviewer 重试会造成"
@@ -289,11 +292,11 @@ class JdbcReviewTaskRepositoryIT {
         assertThat(forTenant).contains(mine).doesNotContain(theirs);
 
         repo.assign(mine, "reviewer-x");
-        List<String> inReview = repo.list("IN_REVIEW", null, 50).stream()
+        List<String> inReview = repo.list("IN_REVIEW", tenantId, 50).stream()
                 .map(ReviewTaskPort.ReviewTaskView::taskId).toList();
         assertThat(inReview).contains(mine).doesNotContain(theirs);
 
-        assertThat(repo.list(null, null, 1)).hasSize(1);
+        assertThat(repo.list(null, tenantId, 1)).hasSize(1);
     }
 
     @Test

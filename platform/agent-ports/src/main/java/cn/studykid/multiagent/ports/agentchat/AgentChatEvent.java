@@ -17,6 +17,11 @@ import org.jspecify.annotations.Nullable;
  * <p><b>线格式</b>：{@code thinking}/{@code delta} 的 data 是裸文本；其余事件的 data 是 JSON 对象；
  * {@code done} 是应用层终帧（客户端收到即收口，不等 TCP EOF）。
  *
+ * <p><b>协议 v1.1</b>：新增可选 {@code context.checkpoint}（第 14 个类型；线序在
+ * {@code answer} 与 {@code done} 之间）与 {@code done.contextStateVersion} 可选字段。
+ * 旧客户端忽略未知事件、按可选字段解析 {@code done} 即可；<b>旧 13 个事件的 data 字节
+ * 与 {@code new Done(false).data()} 逐字冻结</b>，M6 仅定义契约、不发射该事件。
+ *
  * <p><b>语义</b>：{@code error} 表示整轮失败；{@code skill}/{@code tool} 的
  * {@code phase=error} 表示<b>组件级</b>失败，Agent 可降级继续；RAG 零命中是合法
  * {@code info}，不是 {@code error}。
@@ -34,7 +39,8 @@ public sealed interface AgentChatEvent permits
         AgentChatEvent.Answer,
         AgentChatEvent.Usage,
         AgentChatEvent.Error,
-        AgentChatEvent.Done {
+        AgentChatEvent.Done,
+        AgentChatEvent.ContextCheckpoint {
 
     /** SSE 帧名（前端 {@code switch(name)} 的键）。 */
     @NonNull String eventName();
@@ -278,8 +284,26 @@ public sealed interface AgentChatEvent permits
         }
     }
 
-    /** ⑬ done · data=JSON（应用层终帧）。 */
-    record Done(boolean truncated) implements AgentChatEvent {
+    /** ⑬ done · data=JSON（应用层终帧；v1.1 新增可选 contextStateVersion）。 */
+    record Done(boolean truncated, @Nullable String contextStateVersion) implements AgentChatEvent {
+
+        /**
+         * v1 兼容构造器：旧调用点仍写 {@code new Done(false)}，且 data 字节必须与 v1 逐字一致。
+         *
+         * <p>⚠️ 铁律 #10：加字段后所有构造路径必须收敛到全参构造；这里显式
+         * {@code this(truncated, null)}，绝不保留一份独立的旧 data 拼装逻辑。
+         */
+        public Done(boolean truncated) {
+            this(truncated, null);
+        }
+
+        public Done {
+            // 空串视作未提供：既不让客户端看到空字段，也保证 v1 字节不变。
+            if (contextStateVersion != null && contextStateVersion.isBlank()) {
+                contextStateVersion = null;
+            }
+        }
+
         @Override
         public @NonNull String eventName() {
             return "done";
@@ -287,7 +311,70 @@ public sealed interface AgentChatEvent permits
 
         @Override
         public @NonNull String data() {
-            return "{\"truncated\":" + truncated + "}";
+            StringBuilder sb = new StringBuilder("{\"truncated\":").append(truncated);
+            if (contextStateVersion != null) {
+                sb.append(",\"contextStateVersion\":").append(quote(contextStateVersion));
+            }
+            return sb.append('}').toString();
+        }
+    }
+
+    /**
+     * ⑭ context.checkpoint · data=JSON（可选事件，线序在 {@code answer} 与 {@code done} 之间）。
+     *
+     * <p>⚠️ <b>state 是不透明 base64</b>：内容为结构化状态 JSON + 元数据，经独立 HMAC 密钥
+     * {@code AGENT_CONTEXT_STATE_HMAC_KEY} 签名；服务端下一轮必须按不可信数据处理，
+     * 五项校验任一失败即丢弃并退回全量历史（§4.4）。⛔ 绝不复用 JWT 密钥。
+     *
+     * <p>⚠️ 本 record 在 M6 只定义契约、不发射；M8 接线时才由编排器在
+     * {@code answer} 之后、{@code done} 之前下发。旧客户端 {@code default: return null}
+     * 忽略未知事件，因此不会破坏现有对话。
+     *
+     * @param state          不透明 base64 压缩态；null/空串禁止
+     * @param upToTurn       已吸收的轮次；null = 未用轮次坐标（JSON 中省略该字段）
+     * @param policyVersion  策略指纹，服务端不匹配即丢弃重建
+     * @param tier           触发水位 1/2/3
+     * @param fallback       是否从 W3 回落到 W2
+     * @param digest         状态摘要（{@code sha256:…}），幂等键
+     */
+    record ContextCheckpoint(@NonNull String state,
+                             @Nullable Integer upToTurn,
+                             @NonNull String policyVersion,
+                             int tier,
+                             boolean fallback,
+                             @NonNull String digest) implements AgentChatEvent {
+
+        public ContextCheckpoint {
+            if (state == null || state.isBlank()) {
+                throw new IllegalArgumentException("ContextCheckpoint.state 不得为空");
+            }
+            if (policyVersion == null || policyVersion.isBlank()) {
+                throw new IllegalArgumentException("ContextCheckpoint.policyVersion 不得为空");
+            }
+            if (digest == null || digest.isBlank()) {
+                throw new IllegalArgumentException("ContextCheckpoint.digest 不得为空");
+            }
+            if (tier < 1 || tier > 3) {
+                throw new IllegalArgumentException("ContextCheckpoint.tier 必须是 1/2/3");
+            }
+        }
+
+        @Override
+        public @NonNull String eventName() {
+            return "context.checkpoint";
+        }
+
+        @Override
+        public @NonNull String data() {
+            StringBuilder sb = new StringBuilder("{\"state\":").append(quote(state));
+            if (upToTurn != null) {
+                sb.append(",\"upToTurn\":").append(upToTurn);
+            }
+            return sb.append(",\"policyVersion\":").append(quote(policyVersion))
+                    .append(",\"tier\":").append(tier)
+                    .append(",\"fallback\":").append(fallback)
+                    .append(",\"digest\":").append(quote(digest))
+                    .append('}').toString();
         }
     }
 
@@ -334,5 +421,6 @@ public sealed interface AgentChatEvent permits
             Map.entry("answer", "answer"),
             Map.entry("usage", "usage"),
             Map.entry("error", "error"),
-            Map.entry("done", "done"));
+            Map.entry("done", "done"),
+            Map.entry("contextCheckpoint", "context.checkpoint"));
 }

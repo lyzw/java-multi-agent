@@ -66,6 +66,14 @@
       <artifactId>agent-ports</artifactId>
     </dependency>
     <!--
+      ADR-013 / M2+M4：组合根装配 GlobalContextPolicy / TokenCounter /
+      TokenEstimationCalibrator（均在 agent-context），显式声明避免吃传递依赖。
+    -->
+    <dependency>
+      <groupId>cn.studykid.multiagent</groupId>
+      <artifactId>agent-context</artifactId>
+    </dependency>
+    <!--
       健康检查端点 /actuator/health。
       ⚠️ SecurityConfiguration 已将其列为匿名白名单，但此前缺依赖导致
          该端点不存在，请求落入静态资源处理器抛 500（NoResourceFoundException）。

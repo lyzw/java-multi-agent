@@ -581,13 +581,17 @@ public class WorkerExecutionConfig {
             cn.studykid.multiagent.ports.observer.ObservableModelGateway modelGateway,
             ToolInvocationGate gate,
             cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider configs,
-            cn.studykid.multiagent.ports.orchestration.CancellationProbe cancellation) {
+            cn.studykid.multiagent.ports.orchestration.CancellationProbe cancellation,
+            // ⚠️ M7-b：统一请求装配入口。required=false 保证未装配上下文压缩的
+            //    裁剪测试切片仍可启动；生产非 null 由 ContextRequestAssemblyWiringTest 断言。
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort requestAssemblyPort) {
         return new cn.studykid.multiagent.worker.execute.WorkerChildAgentRunner(
                 modelGateway, gate, configs,
                 cn.studykid.multiagent.worker.execute.WorkerChildAgentRunner.DEFAULT_MAX_CHILD_STEPS,
                 cancellation, System::nanoTime,
                 java.time.Clock.systemUTC(),
-                contextTokenBudget);
+                contextTokenBudget, requestAssemblyPort);
     }
 
     /**
@@ -698,7 +702,10 @@ public class WorkerExecutionConfig {
             //    但由 RunMessageWiringTest 断言生产装配下它**非 null**，
             //    并由 TraceReplayClosedLoopIT 验到「真跑一次 Run 自动落下消息」。
             @org.springframework.beans.factory.annotation.Autowired(required = false)
-            cn.studykid.multiagent.ports.persistence.RunMessagePort runMessagePort) {
+            cn.studykid.multiagent.ports.persistence.RunMessagePort runMessagePort,
+            // ⚠️ M7-b：统一请求装配入口（null = 完全走 legacy 路径，G1 关闭等价回滚位）。
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort requestAssemblyPort) {
         // ⚠️⚠️ **接管器必须在这里真实注入**（第九批 · MA-T12）：
         //    不注入时，Worker 接管后 RUNNING 的委派记录**永远无人能收敛**
         //    （新世代 token 不匹配、旧世代已被接管），
@@ -738,7 +745,9 @@ public class WorkerExecutionConfig {
                 traceCollectMessageSender,
                 // ⚠️ P1（G1）：对话消息写入端口。
                 //    缺失 = run_message 永远为空（回放永远是空的且无报错）。
-                runMessagePort);
+                runMessagePort,
+                // ⚠️ M7-b：唯一送模型的统一装配入口。
+                requestAssemblyPort);
     }
 
     /**
@@ -1148,7 +1157,10 @@ public class WorkerExecutionConfig {
             return rootAgentModelConfigProvider.configFor(tenantId, runId)
                     .map(c -> new RunExecutionLoop.AgentModelConfig(
                             c.modelId(), c.systemPrompt(), c.temperature(),
-                            c.maxTokens(), c.timeout(), c.toolSchemas()));
+                            c.maxTokens(), c.timeout(), c.toolSchemas(),
+                            // ⚠️ M7-b：把 Run 能力快照固定的 Agent 身份带到执行层，
+                            //    统一装配 adapter 按它精确读冻结策略（D4）。
+                            c.agentId(), c.agentVersion()));
         }
 
         /**

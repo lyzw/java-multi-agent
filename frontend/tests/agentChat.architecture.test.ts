@@ -104,11 +104,42 @@ describe('租户身份域与推理草稿边界', () => {
 })
 
 describe('双工程协议一致性', () => {
-  it('✅ 两个前端 decodeAgentFrame 的事件集合逐项一致', () => {
+  it('✅ 两个前端 decodeAgentFrame 的事件集合逐项一致（v1.1 共 14 事件）', () => {
     const tenant = protocolEvents(transportCode)
     const platform = protocolEvents(adminTransport)
-    expect(tenant.length).toBeGreaterThanOrEqual(13)
+    expect(tenant).toHaveLength(14)
+    expect(platform).toHaveLength(14)
+    expect(tenant).toContain('context.checkpoint')
+    expect(platform).toContain('context.checkpoint')
     expect(new Set(tenant)).toEqual(new Set(platform))
+  })
+
+  it('⛔ M13 mock：只解析 v1.1 字段，请求接口与请求体均不含 contextState', () => {
+    for (const source of [transportCode, adminTransport]) {
+      const from = source.indexOf('export interface AgentChatRequest')
+      const to = source.indexOf('export interface AgentChatSendContext', from)
+      expect(from, '应存在 AgentChatRequest').toBeGreaterThanOrEqual(0)
+      expect(to).toBeGreaterThan(from)
+      const reqBlock = source.slice(from, to)
+      expect(reqBlock).not.toContain('contextState')
+      expect(reqBlock).not.toContain('contextStateVersion')
+      expect(source).not.toMatch(/contextState\s*:/)
+      expect(source).not.toContain("'contextState'")
+      expect(source).not.toContain('"contextState"')
+      expect(source).toContain("case 'context.checkpoint':")
+      expect(source).toContain('contextStateVersion')
+    }
+  })
+
+  it('⛔ M13 mock：压缩态只在内存暂存，初始为空，禁止本地存储', () => {
+    for (const source of [stateCode, adminState]) {
+      expect(source).toContain('pendingContextCheckpoint')
+      expect(source).toContain('contextCheckpoint: cp')
+      expect(source).toContain('currentContextCheckpoint')
+      expect(source).toContain('pendingContextCheckpoint: undefined')
+      expect(source).not.toContain('localStorage')
+      expect(source).not.toContain('sessionStorage')
+    }
   })
 
   it('✅ buildSampleFrames 签名同构（两工程共用协议帧构造器语义）', () => {

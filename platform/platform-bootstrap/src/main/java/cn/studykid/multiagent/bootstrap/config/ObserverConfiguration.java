@@ -6,12 +6,16 @@ import java.util.List;
 import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 
+import cn.studykid.multiagent.context.TokenEstimationCalibrator;
+import cn.studykid.multiagent.infrastructure.observer.metrics.ContextCalibrationObserver;
+import cn.studykid.multiagent.ports.context.TokenCounter;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.observer.ExecutionObserver;
 import cn.studykid.multiagent.ports.observer.ExecutionObserverChain;
@@ -102,6 +106,32 @@ public class ObserverConfiguration {
             return order != null ? order.value() : Ordered.LOWEST_PRECEDENCE;
         }));
         return new ModelCallObserverChain(observers);
+    }
+
+    /**
+     * 上下文压缩校准桥（ADR-013 / M4）：<b>只读</b>地把
+     * {@code usage.prompt_tokens} 真值与全窗口估算求比值，喂给 EWMA 校准器，
+     * 并记录 {@code context.*} 指标。
+     *
+     * <p>⚠️ 影子期受 {@code agent.context.calibration.enabled} 控制（默认 true），
+     * 与总开关 {@code agent.context.enabled} <b>独立</b>：本 Bean 只读请求、
+     * 不构造新 {@code ModelRequest}，因此即使在 {@code enabled=false} 的影子期
+     * 注册，也不改变任何模型请求字节（G1「影子对照零差异」）。
+     * 它只采集校准样本；bias 在 n&lt;30 恒为 1.0 且无任何压缩逻辑消费（S2 才接线）。
+     *
+     * <p>⚠️ 校准器异常不得影响主流程：{@link ModelCallObserverChain} 已逐观测者 try/catch，
+     * 观测器内部再包一层防护（双保险）。
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "agent.context.calibration", name = "enabled",
+            havingValue = "true", matchIfMissing = false)
+    @ConditionalOnMissingBean(ContextCalibrationObserver.class)
+    public ContextCalibrationObserver contextCalibrationModelCallObserver(
+            TokenCounter contextTokenCounter,
+            TokenEstimationCalibrator contextTokenEstimationCalibrator,
+            MeterRegistry registry) {
+        return new ContextCalibrationObserver(
+                registry, contextTokenCounter, contextTokenEstimationCalibrator);
     }
 
     /**

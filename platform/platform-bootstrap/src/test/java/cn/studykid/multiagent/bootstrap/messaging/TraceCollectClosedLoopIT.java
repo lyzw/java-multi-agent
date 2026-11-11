@@ -126,6 +126,10 @@ class TraceCollectClosedLoopIT {
         exec("DELETE FROM public.run_step WHERE tenant_id = ?::uuid", tenantId);
         exec("DELETE FROM public.run_event WHERE tenant_id = ?::uuid", tenantId);
         exec("DELETE FROM public.run WHERE tenant_id = ?::uuid", tenantId);
+        // ⚠️ 真实 Run 的质检信号会自动落 platform.review_task（L1_GAP / SAMPLE_RANDOM）；
+        //    漏删会逐次 verify 累积，把 JdbcReviewTaskRepositoryIT 的待处理列表挤出 LIMIT 50
+        //    （2026-11-11 事故）。按 tenant_id 谓词清理，绝不按种子租户字面量全表扫。
+        exec("DELETE FROM platform.review_task WHERE tenant_id = ?::uuid", tenantId);
         if (traceId != null) {
             exec("DELETE FROM platform.agent_trace_tool_call WHERE trace_id = ?", traceId);
             exec("DELETE FROM platform.agent_trace_metric WHERE trace_id = ?", traceId);
@@ -159,7 +163,8 @@ class TraceCollectClosedLoopIT {
                 runId.toString(), new BigDecimal("2.00"), 12, 20,
                 ApprovalRequirement.OPTIONAL, Instant.now());
         RunExecutionLoop.AgentModelConfig modelConfig = new RunExecutionLoop.AgentModelConfig(
-                "fake-model", "你是辅导助手", 0.3, 512, Duration.ofSeconds(10), Map.of());
+                "fake-model", "你是辅导助手", 0.3, 512, Duration.ofSeconds(10), Map.of(),
+                "test-agent", 1);
 
         executionLoop.execute(tenantId, task, modelConfig, snapshot, Map.of("query", "错题归因"));
 

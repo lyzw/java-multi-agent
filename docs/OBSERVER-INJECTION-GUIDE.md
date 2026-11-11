@@ -81,6 +81,10 @@ public interface ExecutionObserver {
                             ToolCallSummary toolResult, Duration latency);
     void onContextTrimmed(String tenantId, String runId, int droppedRounds,
                           int droppedTokens, List<String> droppedTools);
+    // M6 契约：default 空实现，既有实现者零改动；M7 起由统一装配入口调用
+    default void onContextCompacted(String tenantId, String runId, int tier,
+                                    int beforeTokens, int afterTokens,
+                                    int droppedTokens, boolean fallback) { }
     void onLoopComplete(String tenantId, String runId, LoopOutcome outcome, int totalSteps);
 
     // 内部中性值对象
@@ -95,7 +99,10 @@ public interface ExecutionObserver {
 - `onStepStart`: 每轮迭代开始
 - `onModelCallComplete`: 模型调用完成（复用 ModelCallObserver 的数据）
 - `onToolCallComplete`: 工具调用完成（成功/失败/拒绝/未知）
-- `onContextTrimmed`: 上下文裁剪发生
+- `onContextTrimmed`: 上下文裁剪发生（**旧事件保留**；[D11] 关闭态继续走这条）
+- `onContextCompacted`: 统一装配/压缩完成（M6 仅冻结契约，默认空实现；M7 接线才触发，
+  观测者按需覆写；`droppedTokens = max(0, before - after)` 由调用方算好传入，
+  ⛔ 新契约不伪造 `droppedRounds` / `droppedTools`）
 - `onLoopComplete`: 执行循环结束（记录结局 + 总步数）
 
 ### 2.3 TraceObserver
@@ -185,7 +192,8 @@ RunExecutionLoop.execute()
   │
   ├─ 每轮循环:
   │    ├─ observerChain.onStepStart(tenantId, runId, steps)                ← 注入点 2
-  │    ├─ observerChain.onContextTrimmed(...)                              ← 注入点 3 (条件)
+  │    ├─ observerChain.onContextTrimmed(...)                              ← 注入点 3 (旧/关闭态，条件)
+  │    ├─ observerChain.onContextCompacted(...)                            ← M7 起：新装配链（条件，默认空实现）
   │    ├─ modelGateway.complete() → ModelCallObserver 触发
   │    └─ observerChain.onToolCallComplete(...)                            ← 注入点 4
   │

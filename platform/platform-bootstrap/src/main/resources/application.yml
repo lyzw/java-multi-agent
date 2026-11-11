@@ -237,6 +237,9 @@ agent:
     default-trigger-ratio: "${AGENT_CONTEXT_TRIGGER_RATIO:0.70}"
     default-target-ratio: "${AGENT_CONTEXT_TARGET_RATIO:0.40}"
     default-reserve-ratio: "${AGENT_CONTEXT_RESERVE_RATIO:0.10}"
+    # ⚠️ R10：模型能力未探测时的 reserve 下限（GlobalContextPolicy 第 4 字段）。
+    #    缺这个键会让该字段绑成 0 → Math.max(reserve, 0) 永不上调 → R10 静默失效。
+    unknown-capability-reserve-ratio: "${AGENT_CONTEXT_UNKNOWN_RESERVE:0.10}"
     default-recent-turns: "${AGENT_CONTEXT_RECENT_TURNS:6}"
     # 四级水位线：W1 可逆外置 / W3 摘要的全局触发线。
     tier-snip-ratio: "${AGENT_CONTEXT_TIER_SNIP:0.60}"
@@ -251,6 +254,8 @@ agent:
     calibration:
       enabled: "${AGENT_CONTEXT_CALIBRATION_ENABLED:true}"
       min-samples: "${AGENT_CONTEXT_CALIBRATION_MIN_SAMPLES:30}"
+      # EWMA 平滑系数；与 TokenEstimationCalibrator.DEFAULT_ALPHA 对齐。
+      alpha: "${AGENT_CONTEXT_CALIBRATION_ALPHA:0.20}"
       bias-clamp-min: "${AGENT_CONTEXT_BIAS_CLAMP_MIN:0.80}"
       bias-clamp-max: "${AGENT_CONTEXT_BIAS_CLAMP_MAX:2.00}"
     # ⚠️ 独立 HMAC 密钥：绝不复用 JWT_PRIVATE_KEY / PLATFORM_JWT_PRIVATE_KEY。

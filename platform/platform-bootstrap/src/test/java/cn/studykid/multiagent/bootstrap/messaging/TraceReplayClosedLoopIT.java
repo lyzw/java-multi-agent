@@ -163,7 +163,8 @@ class TraceReplayClosedLoopIT {
                 runId.toString(), new BigDecimal("2.00"), 12, 20,
                 ApprovalRequirement.OPTIONAL, Instant.now());
         RunExecutionLoop.AgentModelConfig modelConfig = new RunExecutionLoop.AgentModelConfig(
-                "fake-model", "你是辅导助手", 0.3, 512, Duration.ofSeconds(10), Map.of());
+                "fake-model", "你是辅导助手", 0.3, 512, Duration.ofSeconds(10), Map.of(),
+                "test-agent", 1);
 
         executionLoop.execute(tenantId, task, modelConfig, snapshot, Map.of("query", "错题归因"));
 
@@ -247,7 +248,8 @@ class TraceReplayClosedLoopIT {
                 runId.toString(), new BigDecimal("2.00"), 12, 20,
                 ApprovalRequirement.OPTIONAL, Instant.now());
         RunExecutionLoop.AgentModelConfig modelConfig = new RunExecutionLoop.AgentModelConfig(
-                "fake-model", "你是辅导助手", 0.3, 512, Duration.ofSeconds(10), Map.of());
+                "fake-model", "你是辅导助手", 0.3, 512, Duration.ofSeconds(10), Map.of(),
+                "test-agent", 1);
 
         executionLoop.execute(tenantId, task, modelConfig, snapshot, Map.of("query", "错题归因"));
 
@@ -289,7 +291,8 @@ class TraceReplayClosedLoopIT {
                 runId.toString(), new BigDecimal("2.00"), 12, 20,
                 ApprovalRequirement.OPTIONAL, Instant.now());
         RunExecutionLoop.AgentModelConfig modelConfig = new RunExecutionLoop.AgentModelConfig(
-                "fake-model", "你是辅导助手", 0.3, 512, Duration.ofSeconds(10), Map.of());
+                "fake-model", "你是辅导助手", 0.3, 512, Duration.ofSeconds(10), Map.of(),
+                "test-agent", 1);
 
         // 第一次执行
         RunClaimPort.LeasedTask first = claimPort

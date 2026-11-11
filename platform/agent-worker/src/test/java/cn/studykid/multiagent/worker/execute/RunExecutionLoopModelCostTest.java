@@ -225,7 +225,8 @@ class RunExecutionLoopModelCostTest {
 
     private static RunExecutionLoop.AgentModelConfig agentConfig(String modelId) {
         return new RunExecutionLoop.AgentModelConfig(
-                modelId, "你是初中数学辅导助手", 0.7d, 1024, Duration.ofSeconds(5), Map.of());
+                modelId, "你是初中数学辅导助手", 0.7d, 1024, Duration.ofSeconds(5), Map.of(),
+                "test-agent", 1);
     }
 
     private static RunClaimPort.LeasedTask task() {

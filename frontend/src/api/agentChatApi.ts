@@ -70,6 +70,19 @@ export interface AgentHit {
 
 export type AgentStepStatus = 'pending' | 'running' | 'success' | 'error' | 'info'
 
+/**
+ * 协议 v1.1 第 14 事件的载荷（M13 mock：**只解析、只内存暂存**）。
+ * ⚠️ state 是不透明基串，前端只做形状校验，绝不解析/解密/渲染；请求侧 contextState 属 M8。
+ */
+export interface AgentContextCheckpoint {
+  state: string
+  upToTurn?: number
+  policyVersion: string
+  tier: number
+  fallback: boolean
+  digest: string
+}
+
 export type AgentStreamEvent =
   | { type: 'run.start'; runId: string; at: number }
   | {
@@ -110,7 +123,9 @@ export type AgentStreamEvent =
   | { type: 'answer'; text: string; at: number }
   | { type: 'usage'; inputTokens: number; outputTokens: number; at: number }
   | { type: 'error'; code: string; message: string; at: number }
-  | { type: 'done'; truncated: boolean; at: number }
+  /** 协议 v1.1 第 14 事件：M13 mock 只解析、只内存暂存，⛔ 不进入请求体。 */
+  | ({ type: 'context.checkpoint' } & AgentContextCheckpoint & { at: number })
+  | { type: 'done'; truncated: boolean; contextStateVersion?: string; at: number }
 
 export interface AgentChatRequest {
   message: string
@@ -530,8 +545,48 @@ export function decodeAgentFrame(frame: AgentSseFrame): AgentStreamEvent | null 
         at,
       }
     }
-    case 'done':
-      return { type: 'done', truncated: false, at }
+    case 'context.checkpoint': {
+      // M13 mock：只做形状校验与不透明暂存。⛔ 不解析 state、不验 HMAC、不回传请求。
+      const p = parseJson(raw)
+      const state = str(p?.['state'])
+      const policyVersion = str(p?.['policyVersion'])
+      const digest = str(p?.['digest'])
+      const tier = num(p?.['tier'])
+      const fallback = bool(p?.['fallback'])
+      if (
+        state === undefined || state === '' ||
+        policyVersion === undefined || policyVersion === '' ||
+        digest === undefined || digest === '' ||
+        tier === undefined || !Number.isInteger(tier) || tier < 1 || tier > 3 ||
+        fallback === undefined
+      ) return null
+      const rawUpToTurn = p?.['upToTurn']
+      const upToTurn = rawUpToTurn === undefined || rawUpToTurn === null
+        ? undefined
+        : num(rawUpToTurn)
+      if (upToTurn !== undefined && (!Number.isInteger(upToTurn) || upToTurn < 0)) return null
+      return {
+        type: 'context.checkpoint',
+        state,
+        ...(upToTurn === undefined ? {} : { upToTurn }),
+        policyVersion,
+        tier,
+        fallback,
+        digest,
+        at,
+      }
+    }
+    case 'done': {
+      // v1.1 只追加可选字段；旧 `{}` 帧必须仍产出无该字段的事件。
+      const p = raw === '' ? undefined : parseJson(raw)
+      const version = p?.['contextStateVersion']
+      return {
+        type: 'done',
+        truncated: false,
+        ...(typeof version === 'string' && version !== '' ? { contextStateVersion: version } : {}),
+        at,
+      }
+    }
     default:
       return null
   }

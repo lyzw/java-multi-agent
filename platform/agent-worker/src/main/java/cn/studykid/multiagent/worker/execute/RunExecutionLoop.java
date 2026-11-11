@@ -3,6 +3,7 @@ package cn.studykid.multiagent.worker.execute;
 import java.time.Duration;
 import java.time.Instant;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Callable;
@@ -48,6 +49,10 @@ import cn.studykid.multiagent.ports.messaging.TraceCollectEvent;
 import cn.studykid.multiagent.ports.persistence.OutboxMessage;
 import cn.studykid.multiagent.ports.tenant.TenantLifecycle;
 import cn.studykid.multiagent.ports.tool.ToolExecutionException;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyException;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyInput;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyResult;
 
 /**
  * Worker 执行循环（P2-D03 §2 / FR-004）。
@@ -258,6 +263,16 @@ public class RunExecutionLoop {
      */
     private final RunMessagePort messagePort;
 
+    /**
+     * M7-b 统一请求装配入口（{@code null} = 未装配 → 完全走 legacy 路径）。
+     *
+     * <p>⚠️ <b>唯一送模型的请求必须来自这里</b>：关闭态它返回 legacy 基线同一引用，
+     * 开启态它只切换上下文字段；worker ⛔ 不得再二次拼 systemPrompt / messages。
+     * 本类只依赖 {@code agent-ports} 的中性端口，不认识 agent-context 的算法类型
+     * （ADR-011 / M7-a 守卫边界）。
+     */
+    private final @Nullable RequestAssemblyPort requestAssemblyPort;
+
     public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
@@ -422,13 +437,10 @@ public class RunExecutionLoop {
     }
 
     /**
-     * <b>生产装配构造器</b>（P1 · G1 回放底座）：额外注入<b>对话消息写入端口</b>。
+     * 兼容构造器（M7-b）：21 参形态保持不变，统一装配端口缺省为 {@code null}。
      *
-     * <p>⚠️ 新增依赖只加在这一个构造器上（项目既有纪律）；
-     * 其余构造器保持不变并委托——{@code messagePort} 为 {@code null} 时
-     * 执行循环<b>不写对话内容</b>（行为与本次改动前完全一致，零风险回滚位）。
-     *
-     * @param messagePort 对话消息写入端口；{@code null} = 不落对话内容
+     * <p>⚠️ {@code null} = <b>完全走 legacy 路径</b>（与 M7-b 接线前逐位一致），
+     * 仅用于既有单测与未装配上下文压缩的组合根；生产装配由 22 参构造器注入。
      */
     public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
@@ -451,6 +463,47 @@ public class RunExecutionLoop {
                              @Nullable MemoryConsolidator memoryConsolidator,
                              @Nullable MessageSender traceSender,
                              @Nullable RunMessagePort messagePort) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId, promptGuard,
+                eventPort, adopter, contextTokenBudget, lifecycleProbe, stepPort,
+                riskEventPort, observerChain, preemptionExecutor, budget, pricing,
+                continuation, memoryRecallService, memoryConsolidator, traceSender,
+                messagePort, null);
+    }
+
+    /**
+     * <b>生产装配构造器</b>（P1 · G1 回放底座 + M7-b 统一请求装配）：
+     * 额外注入<b>对话消息写入端口</b>与<b>统一请求装配端口</b>。
+     *
+     * <p>⚠️ 新增依赖只加在这一个构造器上（项目既有纪律）；
+     * 其余构造器保持不变并委托——{@code messagePort} 为 {@code null} 时
+     * 执行循环<b>不写对话内容</b>；{@code requestAssemblyPort} 为 {@code null} 时
+     * <b>完全走 legacy 路径</b>（行为与 M7-b 接线前逐位一致，零风险回滚位）。
+     *
+     * @param messagePort          对话消息写入端口；{@code null} = 不落对话内容
+     * @param requestAssemblyPort  统一请求装配入口；{@code null} = legacy 路径
+     */
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             @NonNull PromptGuard promptGuard,
+                             @Nullable RunEventPort eventPort,
+                             @Nullable InFlightDelegationAdopter adopter,
+                             int contextTokenBudget,
+                             @Nullable TenantLifecycleProbe lifecycleProbe,
+                             @Nullable RunStepPort stepPort,
+                             @Nullable RiskEventPort riskEventPort,
+                             @Nullable ExecutionObserverChain observerChain,
+                             @Nullable ExecutorService preemptionExecutor,
+                             @Nullable BudgetPort budget,
+                             @Nullable ModelPricingPolicy pricing,
+                             @Nullable RunContinuation continuation,
+                             @Nullable MemoryRecallService memoryRecallService,
+                             @Nullable MemoryConsolidator memoryConsolidator,
+                             @Nullable MessageSender traceSender,
+                             @Nullable RunMessagePort messagePort,
+                             @Nullable RequestAssemblyPort requestAssemblyPort) {
         this.modelGateway = modelGateway;
         this.claimPort = claimPort;
         this.toolGate = toolGate;
@@ -506,6 +559,7 @@ public class RunExecutionLoop {
                     + "agent_trace_metric 宽表退回手动补算（G2 缺口不闭合）");
         }
         this.messagePort = messagePort;
+        this.requestAssemblyPort = requestAssemblyPort;
         if (messagePort == null) {
             log.warn("未装配对话消息写入端口（messagePort）：run_message 永远为空，"
                     + "「这次辅导模型究竟说了什么」在系统内无法复盘（G1 缺口不闭合）");
@@ -715,49 +769,26 @@ public class RunExecutionLoop {
                 //    两者不可混用：改 Agent 影响新 Run，改配置快照也影响新 Run，
                 //    但已创建的 Run 必须按创建时的约束执行。
                 //
-                // ⚠️ 上下文裁剪（第二十六批 · A7）：消息序列随轮次线性增长，
-                //    不裁就会顶爆上下文窗口。裁剪**只影响发给模型的内容**，
-                //    累积序列本身不删 —— 否则裁一次就永久丢历史。
+                // ⚠️ M7-b 的职责切分：legacy trim 只负责构造「关闭态基线请求」，
+                //    真正送模型的唯一入口是 requestAssemblyPort。
+                //    ⛔ 关闭态返回 legacyRequest 同一引用 ⇒ 逐位一致由构造级保证；
+                //    开启态只切换 systemPrompt / messages，非上下文字段逐字复制。
+                //    累积序列 messages 本身仍不删 —— 「本轮不发」≠「永久丢历史」。
                 ContextBudgetTrimmer.Trimmed trimmed =
                         ContextBudgetTrimmer.trim(messages, trimBudget);
-                if (trimmed.trimmed()) {
-                    log.info("上下文按 token 预算裁剪: runId={}, 丢弃轮数={}, 丢弃 token≈{}",
-                            task.runId(), trimmed.droppedRounds(), trimmed.droppedTokens());
-                }
-                if (!trimmed.withinBudget()) {
-                    // ⚠️ 连「只留原始输入」都超预算 → 预算本身小于单条输入。
-                    //    此时**不得静默截断用户输入**（那是任务本身），
-                    //    也不得假装裁剪成功 —— 显式告警，让运维知道预算配错了。
-                    log.warn("⚠️ 上下文预算({})小于原始输入本身，裁剪无法满足预算: runId={}",
-                            trimBudget, task.runId());
-                }
-                String systemPrompt = agentConfig.systemPrompt();
+                String legacySystemPrompt = agentConfig.systemPrompt();
                 if (memoryBlock != null) {
-                    // ⚠️ 记忆块每次循环都重新拼上去：systemPrompt 是局部变量，
-                    //    不拼就会在第二轮之后消失 —— 而那种"只有第一轮有记忆"
-                    //    的 bug 在单轮测试里完全看不出来。
-                    systemPrompt = systemPrompt + "\n\n" + memoryBlock;
+                    // ⚠️ legacy 路径每轮都重新拼记忆（systemPrompt 是局部变量）；
+                    //    开启态由统一装配改走围栏 USER 块，此处只服务关闭态基线。
+                    legacySystemPrompt = legacySystemPrompt + "\n\n" + memoryBlock;
                 }
                 if (trimmed.notice() != null) {
-                    // ⚠️ 裁剪说明走**系统提示**（可信指令载体）：
-                    //    混进消息序列会引入角色交替问题，
-                    //    而伪装成用户输入等于把系统事实交给不可信通道。
-                    systemPrompt = systemPrompt + "\n\n" + trimmed.notice();
+                    // ⚠️ legacy 路径裁剪说明走系统提示；开启态改走围栏 USER 块。
+                    legacySystemPrompt = legacySystemPrompt + "\n\n" + trimmed.notice();
                 }
-
-                // 观测者：步骤开始 + 裁剪事件
-                if (observerChain != null) {
-                    observerChain.onStepStart(tenantId, task.runId(), steps);
-                    if (trimmed.trimmed()) {
-                        observerChain.onContextTrimmed(tenantId, task.runId(),
-                                trimmed.droppedRounds(), trimmed.droppedTokens(),
-                                trimmed.droppedTools());
-                    }
-                }
-
-                ModelRequest request = new ModelRequest(
+                ModelRequest legacyRequest = new ModelRequest(
                         agentConfig.modelId(),
-                        systemPrompt,
+                        legacySystemPrompt,
                         renderInput(input),
                         agentConfig.temperature(),
                         agentConfig.maxTokens(),
@@ -765,6 +796,38 @@ public class RunExecutionLoop {
                         agentConfig.toolSchemas(),
                         // ⚠️ 带消息历史：非空时以 messages 为准（userContent 仅冗余保留）
                         trimmed.messages());
+
+                RequestAssemblyResult assembly = assembleRequest(
+                        tenantId, task, agentConfig, messages, memoryBlock, legacyRequest);
+                ModelRequest request = assembly.request();
+
+                if (!assembly.assembled()) {
+                    // ⚠️ 这些 legacy 诊断只描述「关闭态基线」，开启态下 trim 不参与发送，
+                    //    不得再报成实际发生的裁剪（否则观测与请求字节分叉）。
+                    if (trimmed.trimmed()) {
+                        log.info("上下文按 token 预算裁剪: runId={}, 丢弃轮数={}, 丢弃 token≈{}",
+                                task.runId(), trimmed.droppedRounds(), trimmed.droppedTokens());
+                    }
+                    if (!trimmed.withinBudget()) {
+                        log.warn("⚠️ 上下文预算({})小于原始输入本身，裁剪无法满足预算: runId={}",
+                                trimBudget, task.runId());
+                    }
+                }
+
+                // 观测者：步骤开始 + 行为分流（关闭态仍发 legacy trim 事件）
+                if (observerChain != null) {
+                    observerChain.onStepStart(tenantId, task.runId(), steps);
+                    if (assembly.assembled()) {
+                        observerChain.onContextCompacted(tenantId, task.runId(),
+                                assembly.tier(), assembly.beforeTokens(),
+                                assembly.afterTokens(), assembly.droppedTokens(),
+                                assembly.fallback());
+                    } else if (trimmed.trimmed()) {
+                        observerChain.onContextTrimmed(tenantId, task.runId(),
+                                trimmed.droppedRounds(), trimmed.droppedTokens(),
+                                trimmed.droppedTools());
+                    }
+                }
 
                 // ── §2 P0-3a：模型调用次数闸门（此前只声明、从不执行）──
                 //    ⚠️ 放在**发起调用之前**而不是之后：
@@ -797,9 +860,17 @@ public class RunExecutionLoop {
                 //    CHECK (settled <= reserved) 拒绝，账就断了。
                 //    多预留的部分在结算时自动退回（预留额全额扣回、只计实结额）。
                 String modelCallId = modelCallId(task.runId(), task.attempt(), llmCalls);
+                // ⚠️ M7-b 成本口径分流：关闭态逐字沿用 legacy 的
+                //    「trim 消息 + systemPrompt」估算；开启态改用装配内核的
+                //    **全窗口** afterTokens（含 system/tools/RAG/memory/围栏），
+                //    消除 legacy 漏算 tools/RAG 导致的预留偏低。
+                long estimatedInput = assembly.assembled()
+                        ? assembly.afterTokens()
+                        : (long) trimmed.estimatedTokens()
+                            + ContextBudgetTrimmer.estimateTokens(legacySystemPrompt);
                 Optional<ModelCostReservation> modelReservation =
-                        reserveModelCost(tenantId, task.runId(), agentConfig, trimmed,
-                                systemPrompt, modelCallId);
+                        reserveModelCost(tenantId, task.runId(), agentConfig,
+                                estimatedInput, modelCallId);
                 if (modelReservation.isEmpty()) {
                     // ⚠️ 预留被拒（额度不足 / 未开通账户）→ fail-closed：
                     //    「钱不够」不能变成「照跑不误」。
@@ -1136,12 +1207,61 @@ public class RunExecutionLoop {
                     commitFailure(tenantId, task, "工具执行异常", "TOOL_INTERNAL"), steps);
             return commitFailure(tenantId, task, "工具执行异常", "TOOL_INTERNAL");
 
+        } catch (RequestAssemblyException e) {
+            // ⚠️ M7-b fail-closed：策略非法 / 预算超硬顶 / 装配链路异常
+            //    一律以稳定原因码拒绝该 Run，⛔ 绝不静默回退 legacy 继续发模型请求
+            //    （那会把「配错策略」伪装成「策略正常」，灰度证据全失真）。
+            log.warn("上下文统一装配被拒，Run 收敛 FAILED: runId={}, reason={}, err={}",
+                    task.runId(), e.reason(), e.getMessage());
+            appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
+                    java.util.Map.of("state", "FAILED", "errorCode", e.reason().name()));
+            ExecutionOutcome rejected = commitFailure(tenantId, task,
+                    "上下文统一装配被拒：" + e.reason(), e.reason().name());
+            notifyLoopComplete(tenantId, task.runId(), rejected, steps);
+            return rejected;
         } catch (RuntimeException e) {
             log.error("执行过程未预期异常: runId={}", task.runId(), e);
             notifyLoopComplete(tenantId, task.runId(),
                     commitFailure(tenantId, task, "执行异常", "INTERNAL_ERROR"), steps);
             return commitFailure(tenantId, task, "执行异常", "INTERNAL_ERROR");
         }
+    }
+
+    /**
+     * M7-b 统一装配调用点：把 legacy 基线请求 + 六块上下文交给中性端口。
+     *
+     * <p>⚠️ <b>首轮锚去重 [D27]</b>：{@code messages.get(0)} 是本 Run 的原始用户输入，
+     * 装配器会把它渲染成独立 pinned USER 消息。传给端口的
+     * {@code historyMessages} 必须<b>剔除它</b>，否则模型看到两遍、
+     * {@code ContextLayout.countRendered} 也会双算预算。
+     *
+     * <p>⚠️ <b>{@code currentInput} 留空</b>：L1 的首轮锚就是本轮输入；
+     * 若再填一遍，布局末尾会重复同一段任务文本。
+     *
+     * <p>⚠️ <b>{@code systemPrompt} 用稳定前缀</b>：memory / legacy trim notice
+     * 只存在于 {@code legacyRequest}（关闭态基线），开启态由装配器改走围栏 USER 块。
+     */
+    private @NonNull RequestAssemblyResult assembleRequest(
+            @NonNull String tenantId,
+            RunClaimPort.LeasedTask task,
+            @NonNull AgentModelConfig agentConfig,
+            @NonNull List<ModelMessage> messages,
+            @Nullable String memoryBlock,
+            @NonNull ModelRequest legacyRequest) {
+        if (requestAssemblyPort == null) {
+            return RequestAssemblyResult.passthrough(legacyRequest);
+        }
+        String firstUserTurn = messages.isEmpty() ? "" : messages.get(0).content();
+        List<ModelMessage> history = messages.size() <= 1
+                ? List.of() : messages.subList(1, messages.size());
+        return requestAssemblyPort.assemble(new RequestAssemblyInput(
+                tenantId, "run:" + task.runId(),
+                agentConfig.agentId(), agentConfig.agentVersion(), agentConfig.modelId(),
+                agentConfig.systemPrompt(), agentConfig.toolSchemas(),
+                firstUserTurn, memoryBlock == null ? "" : memoryBlock, List.of(), history,
+                // L1 首轮锚即本轮输入，currentInput 必须留空（⛔ 否则任务发两遍）。
+                "", agentConfig.maxTokens(), task.fencingToken(), -1L, null, 0,
+                legacyRequest));
     }
 
     /**
@@ -1520,14 +1640,18 @@ public class RunExecutionLoop {
      * 但<b>如实记 token</b>（见 {@link #settleModelCost}）。
      * 缺配置必须<b>可见</b>（WARN），不能让「漏配单价」静默变成「这次调用不存在」。
      *
+     * <p>⚠️ M7-b 起本方法只收「已算好的输入 token 估算」：
+     * 关闭态由 legacy trim + systemPrompt 算出，开启态由统一装配的
+     * 全窗口 afterTokens 给出。⛔ 不在这里重算口径 —— 两处各算一份必然漂移。
+     *
+     * @param estimatedInput 输入 token 估算（调用方按装配态分流算好）
      * @return 预留结果；预留被拒时返回空（调用方须 fail-closed）
      */
     private @NonNull Optional<ModelCostReservation> reserveModelCost(
             @NonNull String tenantId,
             @NonNull String runId,
             @NonNull AgentModelConfig agentConfig,
-            ContextBudgetTrimmer.Trimmed trimmed,
-            @NonNull String systemPrompt,
+            long estimatedInput,
             @NonNull String modelCallId) {
         if (budget == null) {
             return Optional.of(new ModelCostReservation(null, null, modelCallId));
@@ -1540,8 +1664,6 @@ public class RunExecutionLoop {
         }
         ModelPricing rule = price.get();
 
-        long estimatedInput = (long) trimmed.estimatedTokens()
-                + ContextBudgetTrimmer.estimateTokens(systemPrompt);
         long reservedInput = estimatedInput * INPUT_TOKEN_ESTIMATE_SAFETY_FACTOR;
         BigDecimal reserved = rule.cost(reservedInput, Math.max(0, agentConfig.maxTokens()));
         if (reserved.signum() <= 0) {
@@ -1743,7 +1865,17 @@ public class RunExecutionLoop {
             double temperature,
             int maxTokens,
             Duration timeout,
-            Map<String, Object> toolSchemas
+            Map<String, Object> toolSchemas,
+            /**
+             * 根 Agent 标识（M7-b）。由 {@code execution_capability_snapshot} 固定的
+             * release 身份带过来，统一装配 adapter 按它精确读冻结策略（D4）。
+             */
+            String agentId,
+            /**
+             * 根 Agent 的<b>固定版本号</b>（M7-b）。⛔ 绝不传「当前已发布版本」，
+             * 否则在途 Run 会在别人发布时中途换策略。
+             */
+            int agentVersion
     ) {
         public AgentModelConfig {
             toolSchemas = toolSchemas == null ? Map.of() : Map.copyOf(toolSchemas);

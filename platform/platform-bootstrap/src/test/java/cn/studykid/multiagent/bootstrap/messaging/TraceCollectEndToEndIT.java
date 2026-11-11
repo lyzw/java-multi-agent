@@ -6,6 +6,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -67,6 +68,10 @@ import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
  * （{@link ItTenantProvisioner}），断言必须带租户过滤——
  * 本机常驻实例会消费/改写共享库数据，不能依赖「库里只有我的数据」。
  *
+ * <p><b>⚠️ S2 边界</b>：本类只验「同一输入重投 → 输出确定、无副作用、不二次计费」；
+ * <b>不验</b>「压缩态不重复落库」——{@code checkpoint} 表 /
+ * {@code ContextCheckpointPort} / compaction 幂等键尚未落地，归 S3-M8。
+ *
  * <p><b>⚠️ 需要真实基建</b>：PG（{@code IT_PG_URL}）与 RabbitMQ 都必须可用。
  * 无 PG 时跳过；无 broker 时本类失败——这是 IT 的正确行为
  * （它本就要在真实基建上验证消息路由）。
@@ -117,6 +122,9 @@ class TraceCollectEndToEndIT {
 
     private static final String TENANT_SLUG = "it-trace-collect";
 
+    /** 重投后等待「第二次真的被消费且覆盖写」的上限；超时即断言红，不做弱等待。 */
+    private static final long REPLAY_TIMEOUT_MS = 15_000L;
+
     @Autowired
     private DataSource dataSource;
 
@@ -124,6 +132,10 @@ class TraceCollectEndToEndIT {
     @Autowired
     @Qualifier("traceCollectMessageSender")
     private RabbitMessageSender traceCollectMessageSender;
+
+    /** ⚠️ 生产装配的**采集消费者**：用 ack 计数证明「第二次投递真的被消费」，堵死重投空断言。 */
+    @Autowired
+    private TraceMetricCollectorListener traceCollectListener;
 
     /** owner 连接池（造数用）：应用角色对 {@code public.run} 无写权。 */
     private static HikariDataSource adminPool;
@@ -175,40 +187,46 @@ class TraceCollectEndToEndIT {
         topologyAdmin.declareQueue(traceQueue);
         topologyAdmin.declareBinding(BindingBuilder.bind(traceQueue)
                 .to(exchange).with("agent.trace.collect.it"));
+        // ⚠️ 必须清空 .it 队列：否则上一轮遗留消息会让 ack 增量失真，
+        //    「第二次投递被消费」的非空转证据就不可信。
+        topologyAdmin.purgeQueue("agent.trace.collect.it");
     }
 
     @AfterEach
     void cleanup() {
         // ⚠️ 回收本用例造的数据：it- 租户下的 Run 必须清理，
         //    否则跨轮累积（与项目 IT 回收纪律一致）。
-        if (runId != null && tenantId != null) {
-            try (Connection conn = adminPool.getConnection()) {
-                conn.setAutoCommit(false);
-                try (PreparedStatement ps = conn.prepareStatement(
-                        "DELETE FROM public.run WHERE tenant_id = ?::uuid AND run_id = ?::uuid")) {
-                    ps.setString(1, tenantId);
-                    ps.setString(2, runId.toString());
-                    ps.executeUpdate();
-                }
-                conn.commit();
-            } catch (SQLException ignored) {
-                // 清理失败不掩盖主断言结果
-            }
-        }
+        // ⚠️ 顺序：平台域子表 → 租户域子表 → run；全部带 tenant_id / trace_id 谓词，
+        //    FORCE RLS 下不绑租户的 DELETE 会静默 0 行（假清理）。
         if (traceId != null) {
-            try (Connection conn = adminPool.getConnection();
-                    PreparedStatement ps = conn.prepareStatement(
-                            "DELETE FROM platform.agent_trace_metric WHERE trace_id = ?")) {
-                ps.setString(1, traceId);
-                ps.executeUpdate();
-            } catch (SQLException ignored) {
-                // 同上
+            execAdminQuiet("DELETE FROM platform.agent_task_outcome WHERE trace_id = ?", traceId);
+            execAdminQuiet("DELETE FROM platform.agent_eval_sample WHERE trace_id = ?", traceId);
+            execAdminQuiet("DELETE FROM platform.review_task WHERE trace_id = ?", traceId);
+            execAdminQuiet("DELETE FROM platform.agent_trace_tool_call WHERE trace_id = ?", traceId);
+            execAdminQuiet("DELETE FROM platform.agent_trace_metric WHERE trace_id = ?", traceId);
+        }
+        if (tenantId != null) {
+            execAdminQuiet("DELETE FROM public.agent_message_dead_letter WHERE tenant_id = ?::uuid",
+                    tenantId);
+            execAdminQuiet("DELETE FROM public.agent_message_queue WHERE tenant_id = ?::uuid",
+                    tenantId);
+            execAdminQuiet("DELETE FROM public.usage_record WHERE tenant_id = ?::uuid", tenantId);
+            execAdminQuiet("DELETE FROM public.run_step WHERE tenant_id = ?::uuid", tenantId);
+            execAdminQuiet("DELETE FROM public.run_message WHERE tenant_id = ?::uuid", tenantId);
+            execAdminQuiet("DELETE FROM public.budget_reservation WHERE tenant_id = ?::uuid",
+                    tenantId);
+            execAdminQuiet("DELETE FROM public.tool_operation_attempt WHERE tenant_id = ?::uuid",
+                    tenantId);
+            execAdminQuiet("DELETE FROM public.tool_operation WHERE tenant_id = ?::uuid", tenantId);
+            if (runId != null) {
+                execAdminQuiet("DELETE FROM public.run WHERE tenant_id = ?::uuid "
+                        + "AND run_id = ?::uuid", tenantId, runId.toString());
             }
         }
     }
 
     @Test
-    @DisplayName("⚠️⚠️ 采集事件经真实 broker → 生产消费者 → 生产采集器 → agent_trace_metric 落一行")
+    @DisplayName("⚠️⚠️ 采集事件经真实 broker → 生产消费者 → 生产采集器 → agent_trace_metric 落一行；同一事件重投不重跑/不翻倍")
     void collectEventProducesMetricRowThroughRealBroker() throws Exception {
         // ── 1. 夹具：it- 租户 + 一个已收敛（SUCCEEDED）的 Run ──────────
         tenantId = ItTenantProvisioner.provision(adminPool, TENANT_SLUG);
@@ -219,43 +237,76 @@ class TraceCollectEndToEndIT {
         runId = UUID.randomUUID();
         traceId = "trace-it-" + runId;
         insertConvergedRun();
+        // ⚠️ 非零计费事实 + 非零步骤事实：否则「不二次计费 / 不重跑」只是在比 0 与 0。
+        insertUsage();
+        insertRunStep();
 
-        // 前置断言：此刻宽表**还没有**这行（证明后面是「真的写进去」而非「本来就有」）
+        ExecutionFacts baseline = captureExecutionFacts();
         assertThat(metricRowCount())
                 .as("⚠️ 前置条件：采集前该 trace 不应存在指标行")
                 .isZero();
+        assertThat(captureSideEffectFacts())
+                .as("⚠️ 前置条件：采集前不应有任何评估/工具副作用")
+                .isEqualTo(new SideEffectFacts(0L, 0L, 0L, 0L));
 
         // 隔离性基线：生产执行队列深度（采集前后必须不变）
         int productionDepthBefore = productionExecuteQueueDepth();
+        long acksBefore = traceCollectListener.ackedCount();
+        long retriesBefore = traceCollectListener.retriedCount();
+        long deadBefore = traceCollectListener.deadLetterCount();
 
         // ── 2. 用**生产发送器**发布采集事件（与 RunExecutionLoop 同款载荷）──
         OutboxMessage msg = new OutboxMessage(
                 runId.toString(), tenantId, 0, 1L, Instant.now());
         traceCollectMessageSender.send("agent.trace.collect", msg);
 
-        // ── 3. 等生产消费者把指标写进表（真实 broker + 真实 PG，有真实延迟）──
-        long deadline = System.currentTimeMillis() + 30_000;
-        while (System.currentTimeMillis() < deadline && metricRowCount() == 0) {
-            Thread.sleep(200);
-        }
+        // ── 3. 等生产消费者真的 ack + 把指标写进表（真实 broker + 真实 PG）──
+        awaitAckCount(acksBefore + 1);
+        awaitMetricRowCount(1);
+        Instant computedAfterFirst = metricComputedAt();
+        assertThat(computedAfterFirst)
+                .as("⚠️ 首次采集必须写 computed_at；后续用它证明第二次真的被消费")
+                .isNotNull();
+        assertThat(captureExecutionFacts())
+                .as("⚠️ 首次采集只读事实、不执行 Run：Run 状态/计费/步骤不得变化")
+                .isEqualTo(baseline);
+        SideEffectFacts sideAfterFirst = captureSideEffectFacts();
+        assertThat(sideAfterFirst.reviewTasks() + sideAfterFirst.taskOutcomes())
+                .as("⚠️ 首次采集必须产生至少一条评估副作用（L1_GAP 或 TaskOutcome）—— "
+                        + "否则「重投不重复副作用」是空转断言")
+                .isPositive();
 
-        // ── 4. 断言：宽表真的多了一行，且内容正确 ────────────────────────
+        // ── 4. 同一事件二次投递：必须真的被消费一次，且事实/副作用不重复 ──
+        // ⚠️ 等一小会让 now() 必然前进，否则「computed_at 未变」无法区分
+        //    「第二次没消费」与「两次落在同一时间精度内」。
+        Thread.sleep(100);
+        long acksAfterFirst = traceCollectListener.ackedCount();
+        traceCollectMessageSender.send("agent.trace.collect", msg);
+        awaitAckCount(acksAfterFirst + 1);
+        awaitMetricRecomputedAfter(computedAfterFirst);
+
+        assertThat(traceCollectListener.retriedCount())
+                .as("⚠️ 重投不得触发 nack 重投循环（幂等覆盖成功即 ack）")
+                .isEqualTo(retriesBefore);
+        assertThat(traceCollectListener.deadLetterCount())
+                .as("⚠️ 重投不得进死信")
+                .isEqualTo(deadBefore);
         assertThat(metricRowCount())
-                .as("⚠️⚠️ 采集消息经真实 broker 被生产消费者消费后，"
-                        + "agent_trace_metric 必须落一行 —— 为 0 说明"
-                        + "「消息发出去了但没人消费 / 消费了但写不进去」，"
-                        + "看板就会长期空白（G2 缺口未闭合）")
+                .as("⚠️ 同一 trace 重投不得新增指标行")
                 .isEqualTo(1);
-
-        assertThat(metricTerminalState())
-                .as("⚠️ 指标行必须反映真实终态")
-                .isEqualTo("SUCCEEDED");
-        assertThat(metricTraceId())
-                .as("⚠️ 指标行的 trace_id 必须与 Run 的 trace_id 一致")
-                .isEqualTo(traceId);
-        assertThat(metricTenantId())
-                .as("⚠️ 指标行的租户必须来自消息体（权威来源），不得串租户")
-                .isEqualTo(tenantId);
+        assertThat(metricComputedAt())
+                .as("⚠️⚠️ 第二次投递必须真的走到覆盖写 —— "
+                        + "时间戳不前进说明消息根本没被消费，行数断言是假绿")
+                .isAfter(computedAfterFirst);
+        assertThat(captureExecutionFacts())
+                .as("⚠️⚠️ 重投不得重跑已终态 Run：状态/fencing/attempt/计费/步骤必须逐项不变")
+                .isEqualTo(baseline);
+        assertThat(captureSideEffectFacts())
+                .as("⚠️⚠️ 重投不得重复派生评估/告警/工具明细副作用")
+                .isEqualTo(sideAfterFirst);
+        assertThat(metricTerminalState()).isEqualTo("SUCCEEDED");
+        assertThat(metricTraceId()).isEqualTo(traceId);
+        assertThat(metricTenantId()).isEqualTo(tenantId);
 
         // ── 5. 隔离性断言：采集消息**不得**进生产执行队列 ────────────────────
         //    这是 P0 最核心的安全性质：采集事件若进 agent.run.execute，
@@ -299,6 +350,145 @@ class TraceCollectEndToEndIT {
         } catch (Exception e) {
             // 查不到即视为 0：本类只关心「我的消息没进去」
             return 0;
+        }
+    }
+
+    // ── 重投非空转证据 ──────────────────────────────────────────────
+
+    /**
+     * 租户域执行事实：重投不得改变 Run 状态/计费/步骤/消息/预算。
+     * ⚠️ 用 owner 连接查询：{@code app_agent} 在 FORCE RLS 下未绑租户会静默读 0 行。
+     */
+    private record ExecutionFacts(String state, long fencingToken, int attempt,
+                                  Instant completedAt, long usageRows, long inputTokens,
+                                  long outputTokens, long stepRows, long messageRows,
+                                  long reservationRows) {}
+
+    /** 平台域派生副作用：重投不得让评估/告警/工具明细翻倍。 */
+    private record SideEffectFacts(long reviewTasks, long taskOutcomes,
+                                   long evalSamples, long toolCallRows) {}
+
+    private ExecutionFacts captureExecutionFacts() {
+        String sql = """
+                SELECT r.state, r.fencing_token, r.attempt, r.completed_at,
+                       (SELECT count(*) FROM public.usage_record u
+                         WHERE u.tenant_id = r.tenant_id AND u.run_id = r.run_id),
+                       (SELECT coalesce(sum(u.input_tokens), 0) FROM public.usage_record u
+                         WHERE u.tenant_id = r.tenant_id AND u.run_id = r.run_id),
+                       (SELECT coalesce(sum(u.output_tokens), 0) FROM public.usage_record u
+                         WHERE u.tenant_id = r.tenant_id AND u.run_id = r.run_id),
+                       (SELECT count(*) FROM public.run_step s
+                         WHERE s.tenant_id = r.tenant_id AND s.run_id = r.run_id),
+                       (SELECT count(*) FROM public.run_message m
+                         WHERE m.tenant_id = r.tenant_id AND m.run_id = r.run_id),
+                       (SELECT count(*) FROM public.budget_reservation b
+                         WHERE b.tenant_id = r.tenant_id AND b.run_id = r.run_id)
+                FROM public.run r
+                WHERE r.tenant_id = ?::uuid AND r.run_id = ?::uuid
+                """;
+        try (Connection conn = adminPool.getConnection();
+                PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, runId.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                assertThat(rs.next())
+                        .as("⚠️ Run 夹具必须存在，否则所有事实断言都在比空值")
+                        .isTrue();
+                Timestamp completed = rs.getTimestamp(4);
+                return new ExecutionFacts(
+                        rs.getString(1), rs.getLong(2), rs.getInt(3),
+                        completed == null ? null : completed.toInstant(),
+                        rs.getLong(5), rs.getLong(6), rs.getLong(7),
+                        rs.getLong(8), rs.getLong(9), rs.getLong(10));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("读取 Run 事实失败", e);
+        }
+    }
+
+    private SideEffectFacts captureSideEffectFacts() {
+        String sql = """
+                SELECT
+                  (SELECT count(*) FROM platform.review_task WHERE trace_id = ?),
+                  (SELECT count(*) FROM platform.agent_task_outcome WHERE trace_id = ?),
+                  (SELECT count(*) FROM platform.agent_eval_sample WHERE trace_id = ?),
+                  (SELECT count(*) FROM platform.agent_trace_tool_call WHERE trace_id = ?)
+                """;
+        try (Connection conn = dataSource.getConnection();
+                PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (int i = 1; i <= 4; i++) {
+                ps.setString(i, traceId);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                return new SideEffectFacts(rs.getLong(1), rs.getLong(2),
+                        rs.getLong(3), rs.getLong(4));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("读取采集副作用失败", e);
+        }
+    }
+
+    private Instant metricComputedAt() {
+        try (Connection conn = dataSource.getConnection();
+                PreparedStatement ps = conn.prepareStatement(
+                        "SELECT computed_at FROM platform.agent_trace_metric WHERE trace_id = ?")) {
+            ps.setString(1, traceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getTimestamp(1).toInstant() : null;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("读取指标 computed_at 失败", e);
+        }
+    }
+
+    private void awaitAckCount(long expected) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 30_000L;
+        while (System.currentTimeMillis() < deadline
+                && traceCollectListener.ackedCount() < expected) {
+            Thread.sleep(100);
+        }
+        assertThat(traceCollectListener.ackedCount())
+                .as("⚠️ 生产消费者必须真的 ack 两次 —— 没有 ack 增量时"
+                        + "「行数不增」无法区分「幂等成功」与「消息根本没消费」")
+                .isEqualTo(expected);
+    }
+
+    private void awaitMetricRowCount(int expected) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 30_000L;
+        while (System.currentTimeMillis() < deadline && metricRowCount() != expected) {
+            Thread.sleep(200);
+        }
+        assertThat(metricRowCount()).isEqualTo(expected);
+    }
+
+    private void awaitMetricRecomputedAfter(Instant baseline) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + REPLAY_TIMEOUT_MS;
+        while (System.currentTimeMillis() < deadline) {
+            Instant current = metricComputedAt();
+            if (current != null && current.isAfter(baseline)) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        assertThat(metricComputedAt())
+                .as("⚠️⚠️ 第二次投递必须真正走到 upsert 覆盖写（computed_at 前移）；"
+                        + "否则「行数仍为 1」是「消息没被消费」的假绿")
+                .isAfter(baseline);
+    }
+
+    /** owner 连接执行清理；失败只记异常，不掩盖主断言。 */
+    private void execAdminQuiet(String sql, String... args) {
+        try (Connection conn = adminPool.getConnection();
+                PreparedStatement ps = conn.prepareStatement(sql)) {
+            conn.setAutoCommit(false);
+            for (int i = 0; i < args.length; i++) {
+                ps.setString(i + 1, args[i]);
+            }
+            ps.executeUpdate();
+            conn.commit();
+        } catch (SQLException ignored) {
+            // 清理失败不掩盖主断言结果
         }
     }
 
@@ -355,6 +545,34 @@ class TraceCollectEndToEndIT {
                 ps.executeUpdate();
             }
             conn.commit();
+        }
+    }
+
+    /** 非零计费事实：让「重投不二次计费」不是 0 与 0 的弱断言。 */
+    private void insertUsage() throws SQLException {
+        try (Connection conn = adminPool.getConnection();
+                PreparedStatement ps = conn.prepareStatement("""
+                        INSERT INTO public.usage_record (tenant_id, run_id, model_id,
+                                input_tokens, output_tokens, cost_amount, currency)
+                        VALUES (?::uuid, ?::uuid, 'minimax-chat', 120, 45, 0.012345, 'CNY')
+                        """)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, runId.toString());
+            ps.executeUpdate();
+        }
+    }
+
+    /** 非零执行步骤事实：让「重投不重跑 Run」有可观察的计数基线。 */
+    private void insertRunStep() throws SQLException {
+        try (Connection conn = adminPool.getConnection();
+                PreparedStatement ps = conn.prepareStatement("""
+                        INSERT INTO public.run_step (tenant_id, run_id, step_number, state,
+                                step_type, fencing_token, started_at, completed_at)
+                        VALUES (?::uuid, ?::uuid, 1, 'SUCCEEDED', 'THINK', 1, now(), now())
+                        """)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, runId.toString());
+            ps.executeUpdate();
         }
     }
 

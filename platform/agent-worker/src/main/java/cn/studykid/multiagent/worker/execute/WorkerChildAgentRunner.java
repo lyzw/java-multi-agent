@@ -9,6 +9,7 @@ import java.util.Optional;
 
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,6 +25,10 @@ import cn.studykid.multiagent.ports.orchestration.CancellationProbe;
 import cn.studykid.multiagent.ports.orchestration.ChildAgentModelConfigProvider;
 import cn.studykid.multiagent.ports.orchestration.ChildAgentRunner;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyException;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyInput;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyResult;
 
 /**
  * 子 Agent 执行器（多级 Agent v1.1 · P2-MA-02 · MA-T09 / MA-T11）。
@@ -102,6 +107,15 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
      */
     private final int contextTokenBudget;
 
+    /**
+     * M7-b 统一请求装配入口（{@code null} = 未装配 → 完全走 legacy 路径）。
+     *
+     * <p>⚠️ <b>子 Agent 不继承父 checkpoint</b>：本端口每次调用都带
+     * {@code upToSeq=-1 / carryOverStateJson=null / priorCompactions=0}，
+     * 既有父 Run 的压缩状态绝不流进子窗口（L4 上下文隔离硬约束）。
+     */
+    private final @Nullable RequestAssemblyPort requestAssemblyPort;
+
     public WorkerChildAgentRunner(@NonNull ObservableModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
                                    @NonNull ChildAgentModelConfigProvider configs) {
@@ -156,9 +170,10 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
     }
 
     /**
-     * 最完整构造器（含上下文 token 预算 · 第二十六批 · A7）。
+     * 兼容构造器（M7-b）：8 参形态保持不变，统一装配端口缺省为 {@code null}。
      *
-     * @param contextTokenBudget 上下文 token 预算；必须为正数
+     * <p>⚠️ {@code null} = <b>完全走 legacy 路径</b>（与 M7-b 接线前逐位一致），
+     * 仅用于既有单测与未装配上下文压缩的组合根；生产装配由 9 参构造器注入。
      */
     public WorkerChildAgentRunner(@NonNull ObservableModelGateway modelGateway,
                                    @NonNull ToolInvocationGate toolGate,
@@ -168,6 +183,25 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
                                    java.util.function.LongSupplier nanoTime,
                                    java.time.Clock clock,
                                    int contextTokenBudget) {
+        this(modelGateway, toolGate, configs, maxChildSteps, cancellation, nanoTime, clock,
+                contextTokenBudget, null);
+    }
+
+    /**
+     * 生产装配构造器（含上下文 token 预算 · A7 + M7-b 统一请求装配）。
+     *
+     * @param contextTokenBudget   上下文 token 预算；必须为正数
+     * @param requestAssemblyPort  统一请求装配入口；{@code null} = legacy 路径
+     */
+    public WorkerChildAgentRunner(@NonNull ObservableModelGateway modelGateway,
+                                   @NonNull ToolInvocationGate toolGate,
+                                   @NonNull ChildAgentModelConfigProvider configs,
+                                   int maxChildSteps,
+                                   CancellationProbe cancellation,
+                                   java.util.function.LongSupplier nanoTime,
+                                   java.time.Clock clock,
+                                   int contextTokenBudget,
+                                   @Nullable RequestAssemblyPort requestAssemblyPort) {
         if (maxChildSteps < 1) {
             throw new IllegalArgumentException("maxChildSteps 必须为正数，收到: " + maxChildSteps);
         }
@@ -183,6 +217,7 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
         this.nanoTime = nanoTime;
         this.clock = clock;
         this.contextTokenBudget = contextTokenBudget;
+        this.requestAssemblyPort = requestAssemblyPort;
     }
 
     @Override
@@ -252,35 +287,38 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
 
             ModelResponse response;
             try {
-                // ⚠️ 上下文裁剪（第二十六批 · A7）：与根循环**共用同一份实现**
-                //    （ContextBudgetTrimmer）—— 父子两套裁剪口径必然漂移，
-                //    而漂移落在「根裁了子不裁」这类两套语义上。
-                //    裁剪**只影响发给模型的内容**，累积序列本身不删。
+                // ⚠️ M7-b：legacy trim 只构造「关闭态基线请求」；真正送模型的唯一入口
+                //    是统一装配端口。父子共用同一份中性端口，⛔ 不再各写一套裁剪口径。
                 ContextBudgetTrimmer.Trimmed trimmed =
                         ContextBudgetTrimmer.trim(messages, contextTokenBudget);
-                if (trimmed.trimmed()) {
+                String legacySystemPrompt = modelConfig.systemPrompt();
+                if (trimmed.notice() != null) {
+                    // ⚠️ legacy 路径裁剪说明走系统提示；开启态改走围栏 USER 块。
+                    legacySystemPrompt = legacySystemPrompt + "\n\n" + trimmed.notice();
+                }
+                // ⚠️ 单次模型调用的超时**不得超过**剩余预算：
+                //    否则一次卡住的模型调用就能吃掉整条链路的预算。
+                Duration effectiveTimeout = capTimeout(modelConfig.timeout(), remainingNanos);
+                ModelRequest legacyRequest = new ModelRequest(
+                        modelConfig.modelId(), legacySystemPrompt, input,
+                        modelConfig.temperature(), modelConfig.maxTokens(), effectiveTimeout,
+                        modelConfig.toolSchemas(), trimmed.messages());
+
+                RequestAssemblyResult assembly = assembleRequest(
+                        request, modelConfig, messages, legacyRequest);
+                if (!assembly.assembled() && trimmed.trimmed()) {
+                    // ⚠️ legacy 诊断只描述关闭态基线，开启态 trim 不参与发送。
                     log.info("子执行上下文按 token 预算裁剪: agent={}, 丢弃轮数={}, 丢弃 token≈{}",
                             request.targetAgentId(), trimmed.droppedRounds(),
                             trimmed.droppedTokens());
                 }
-                String systemPrompt = modelConfig.systemPrompt();
-                if (trimmed.notice() != null) {
-                    // ⚠️ 裁剪说明走**系统提示**（可信指令载体），与根循环同口径。
-                    systemPrompt = systemPrompt + "\n\n" + trimmed.notice();
-                }
                 response = modelGateway.complete(
-                        request.tenantId(), request.runId(), step + 1,
-                        new ModelRequest(
-                                modelConfig.modelId(),
-                                systemPrompt,
-                                input,
-                                modelConfig.temperature(),
-                                modelConfig.maxTokens(),
-                                // ⚠️ 单次模型调用的超时**不得超过**剩余预算：
-                                //    否则一次卡住的模型调用就能吃掉整条链路的预算。
-                                capTimeout(modelConfig.timeout(), remainingNanos),
-                                modelConfig.toolSchemas(),
-                                trimmed.messages()));
+                        request.tenantId(), request.runId(), step + 1, assembly.request());
+            } catch (RequestAssemblyException e) {
+                // ⚠️ fail-closed：子 Agent 同样不得把「配错策略」伪装成正常执行。
+                log.warn("子 Agent 上下文统一装配被拒: agent={}, reason={}, err={}",
+                        request.targetAgentId(), e.reason(), e.getMessage());
+                return ChildAgentResult.failed(e.reason().name(), "");
             } catch (ModelGateway.ModelGatewayException e) {
                 if (e.kind() == ModelGateway.ModelErrorKind.TIMEOUT) {
                     return ChildAgentResult.timedOut(ReasonCode.DELEGATION_TIMEOUT.name());
@@ -324,6 +362,37 @@ public class WorkerChildAgentRunner implements ChildAgentRunner {
 
         log.warn("子执行轮次超限: agent={}, max={}", request.targetAgentId(), maxChildSteps);
         return ChildAgentResult.failed(ReasonCode.DELEGATION_TIMEOUT.name(), "");
+    }
+
+    /**
+     * M7-b 统一装配调用点（L4 子 Agent）。
+     *
+     * <p>⚠️ <b>不继承父 checkpoint</b>：{@code upToSeq=-1} /
+     * {@code carryOverStateJson=null} / {@code priorCompactions=0} 三项硬编码，
+     * 父 Run 的摘要与压缩次数绝不流进子窗口（L4 上下文隔离）。
+     *
+     * <p>⚠️ <b>首轮锚去重 [D27]</b>：{@code messages.get(0)} 是委派输入，
+     * 装配器会把它渲染成独立 pinned USER 消息，故从 history 中剔除；
+     * {@code currentInput} 留空，避免同一段委派输入发两遍。
+     */
+    private @NonNull RequestAssemblyResult assembleRequest(
+            @NonNull ChildAgentRequest request,
+            ChildAgentModelConfigProvider.ChildModelConfig modelConfig,
+            @NonNull List<ModelMessage> messages,
+            @NonNull ModelRequest legacyRequest) {
+        if (requestAssemblyPort == null) {
+            return RequestAssemblyResult.passthrough(legacyRequest);
+        }
+        String firstUserTurn = messages.isEmpty() ? "" : messages.get(0).content();
+        List<ModelMessage> history = messages.size() <= 1
+                ? List.of() : messages.subList(1, messages.size());
+        return requestAssemblyPort.assemble(new RequestAssemblyInput(
+                request.tenantId(), "run:" + request.runId(),
+                request.targetAgentId(), request.targetAgentVersion(), modelConfig.modelId(),
+                modelConfig.systemPrompt(), modelConfig.toolSchemas(),
+                firstUserTurn, "", List.of(), history, "",
+                modelConfig.maxTokens(), request.fencingToken(), -1L, null, 0,
+                legacyRequest));
     }
 
     /**

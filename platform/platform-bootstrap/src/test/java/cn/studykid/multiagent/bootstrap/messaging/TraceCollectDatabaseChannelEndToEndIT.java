@@ -145,6 +145,19 @@ class TraceCollectDatabaseChannelEndToEndIT {
                 // 同上
             }
         }
+        // ⚠️ 真实 Run 的质检信号会自动落 platform.review_task（L1_GAP / SAMPLE_RANDOM）；
+        //    漏删会逐次 verify 累积，把 JdbcReviewTaskRepositoryIT 的待处理列表挤出 LIMIT 50
+        //    （2026-11-11 事故）。按 tenant_id 谓词清理，绝不按种子租户字面量全表扫。
+        if (tenantId != null) {
+            try (Connection conn = adminPool.getConnection();
+                    PreparedStatement ps = conn.prepareStatement(
+                            "DELETE FROM platform.review_task WHERE tenant_id = ?::uuid")) {
+                ps.setString(1, tenantId);
+                ps.executeUpdate();
+            } catch (SQLException ignored) {
+                // 清理失败不掩盖主断言结果
+            }
+        }
     }
 
     @Test

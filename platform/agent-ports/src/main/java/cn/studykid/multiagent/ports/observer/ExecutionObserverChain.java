@@ -67,6 +67,20 @@ public class ExecutionObserverChain implements ExecutionObserver {
     }
 
     @Override
+    public void onContextCompacted(@NonNull String tenantId, @NonNull String runId,
+                                   int tier, int beforeTokens, int afterTokens,
+                                   int droppedTokens, boolean fallback) {
+        for (ExecutionObserver o : observers) {
+            try {
+                o.onContextCompacted(tenantId, runId, tier, beforeTokens, afterTokens,
+                        droppedTokens, fallback);
+            } catch (RuntimeException e) {
+                logWarn("onContextCompacted", o.getClass(), tenantId, runId, e);
+            }
+        }
+    }
+
+    @Override
     public void onLoopComplete(@NonNull String tenantId, @NonNull String runId,
                                @NonNull LoopOutcome outcome, int totalSteps) {
         for (ExecutionObserver o : observers) {

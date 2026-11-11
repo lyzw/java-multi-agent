@@ -126,10 +126,12 @@ class ContextCompressionS1GuardTest {
     }
 
     @Test
-    @DisplayName("✅ S1 影子期：三条模型链路零压缩接线（G1「请求字节零差异」结构证据）")
-    void shadowPhaseHasNoProductionWiring() {
-        // ⚠️ 阶段守卫：S2 接线时按计划升级为
-        //    NoDirectTrimCallOutsideAssemblerGuard，并在评审记录登记退役，不得直接删。
+    @DisplayName("✅ M7 关闭等价守卫（原 S1 影子期零接线守卫升级）：L1/L4 只依赖中性端口，算法层零泄漏")
+    void closedEquivalenceHasNoAlgorithmLayerLeak() {
+        // ⚠️ G1 报告 A.5 台账：本方法由「S1 零接线」阶段守卫**升级**而来，不删除。
+        //    旧禁止面（算法层类型不得进任何模型链路）完整保留；
+        //    新增正面断言：G1 签核后 L1/L4 必须只经 RequestAssemblyPort 这一条入口，
+        //    SSE / Console 仍保持 contract-only（结构证据边界未扩大）。
         List<String> chains = List.of(
                 "agent-worker/src/main/java/cn/studykid/multiagent/worker/execute/RunExecutionLoop.java",
                 "agent-worker/src/main/java/cn/studykid/multiagent/worker/execute/WorkerChildAgentRunner.java",
@@ -153,8 +155,236 @@ class ContextCompressionS1GuardTest {
             }
         }
         assertThat(violations)
-                .as("⛔ S1 不得接线：G1 要求 enabled=false 与「无压缩功能」逐位一致")
+                .as("⛔ 算法层类型泄漏进模型链路：worker 只能认识 ports/contextwiring 中性端口（ADR-011）")
                 .isEmpty();
+
+        String loop = stripCommentsKeepStrings(read(platformRoot().resolve(chains.get(0))));
+        String child = stripCommentsKeepStrings(read(platformRoot().resolve(chains.get(1))));
+        assertThat(loop)
+                .as("⛔ L1 没接统一请求装配入口：关闭态逐位等价失去构造级保证")
+                .contains("RequestAssemblyPort")
+                .contains("RequestAssemblyResult assembly = assembleRequest(")
+                .contains("if (!assembly.assembled())")
+                .contains("ModelRequest request = assembly.request();");
+        assertThat(child)
+                .as("⛔ L4 没接统一请求装配入口：父子两套裁剪语义")
+                .contains("RequestAssemblyPort")
+                .contains("RequestAssemblyResult assembly = assembleRequest(")
+                .contains("assembly.request()");
+        for (String rel : chains.subList(2, chains.size())) {
+            assertThat(stripCommentsKeepStrings(read(platformRoot().resolve(rel))))
+                    .as("⛔ SSE/Console 结构证据边界被扩大：%s 不得接统一装配入口", rel)
+                    .doesNotContain("RequestAssemblyPort");
+        }
+    }
+
+    @Test
+    @DisplayName("⚠️ R10：能力未知时的 reserve 配置键必须存在且注入 GlobalContextPolicy（缺键=静默失效）")
+    void unknownCapabilityReserveIsWiredFromYml() {
+        String yml = read(platformRoot().resolve(
+                "platform-bootstrap/src/main/resources/application.yml"));
+        assertThat(yml)
+                .as("⛔ 缺少 agent.context.unknown-capability-reserve-ratio："
+                        + "能力未知时不抬安全余量，估算偏小 → 静默超窗（R10）")
+                .contains("unknown-capability-reserve-ratio:")
+                .contains("AGENT_CONTEXT_UNKNOWN_RESERVE");
+
+        String config = stripCommentsKeepStrings(read(platformRoot().resolve(
+                "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config"
+                        + "/AgentContextConfiguration.java")));
+        assertThat(config)
+                .as("⛔ GlobalContextPolicy 第 4 参数被写死或漏传：运维改 env 永远无效")
+                .contains("properties.getUnknownCapabilityReserveRatio()");
+        assertThat(config)
+                .as("⛔ 启动期未校验 reserve 上界：配成 1.0 会让预算全被余量吃光却不报错")
+                .contains("getUnknownCapabilityReserveRatio() > 0")
+                .contains("<= 0.25");
+
+        // 校准 alpha 必须也有 yml 键，否则与 0.20 默认值漂移。
+        assertThat(yml).as("⛔ 缺 calibration.alpha 键").contains("alpha:")
+                .contains("AGENT_CONTEXT_CALIBRATION_ALPHA");
+    }
+
+    @Test
+    @DisplayName("✅ 校准桥是只读 ModelCallObserver：不构造/替换 ModelRequest，只投影计数")
+    void calibrationBridgeIsReadOnlyObserver() {
+        String observer = stripCommentsKeepStrings(read(platformRoot().resolve(
+                "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure"
+                        + "/observer/metrics/ContextCalibrationObserver.java")));
+        assertThat(observer)
+                .as("⛔ 校准桥必须实现 ModelCallObserver 才能挂进观测链")
+                .contains("implements ModelCallObserver");
+        assertThat(observer)
+                .as("⛔ 校准桥构造了新 ModelRequest：G1「请求字节零差异」被破坏")
+                .doesNotContain("new ModelRequest(");
+        assertThat(observer)
+                .as("⛔ 校准桥退化为「只看消息序列」估算：全窗口口径丢失，bias 会把超窗悄悄放大")
+                .contains("RequestContextProjection.project(request)")
+                .contains("counter.count(");
+        assertThat(observer)
+                .as("⛔ afterCall 未用 usage 真值喂校准器：bias 恒 1.0，S2 拿不到可信系数")
+                .contains("calibrator.addSample(")
+                .contains("response.usage().inputTokens()");
+        assertThat(observer)
+                .as("⛔ ThreadLocal 未在 finally 清理：线程池复用会串味到下一次请求")
+                .contains("finally")
+                .contains("clearQuietly()")
+                .contains("pendingEstimate.remove()");
+
+        // 投影本身也必须只读、确定性（Map 递归排序）。
+        String projection = stripCommentsKeepStrings(read(platformRoot().resolve(
+                "agent-context/src/main/java/cn/studykid/multiagent/context"
+                        + "/RequestContextProjection.java")));
+        assertThat(projection)
+                .as("⛔ 投影构造了 ModelRequest：它会参与请求构造，违反影子期只读")
+                .doesNotContain("new ModelRequest(");
+        assertThat(projection)
+                .as("⛔ Map 未递归按 key 排序：Map.copyOf 迭代序不定 → 同请求两次估算不同，"
+                        + "校准样本变噪声且静默")
+                .contains("new TreeMap<>()")
+                .contains("sorted.put(String.valueOf(e.getKey())");
+    }
+
+    @Test
+    @DisplayName("✅ 校准桥按 @Order(40) 排在观测链末尾，且由 @ConditionalOnProperty 开关控制")
+    void calibrationBridgeIsLastAndFeatureGated() {
+        String observer = read(platformRoot().resolve(
+                "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure"
+                        + "/observer/metrics/ContextCalibrationObserver.java"));
+        assertThat(observer).contains("@Order(40)")
+                .as("⛔ 观测者顺序未钉死：若插在事件桥接之前，自身失败会影响后续观测者");
+
+        String wiring = read(platformRoot().resolve(
+                "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config"
+                        + "/ObserverConfiguration.java"));
+        assertThat(wiring)
+                .as("⛔ 校准桥装配未加启用开关：影子期无法一键关停该观测者")
+                .contains("@ConditionalOnProperty(prefix = \"agent.context.calibration\"")
+                .contains("matchIfMissing = false");
+        assertThat(wiring)
+                .as("⛔ 装配参数顺序错（MeterRegistry 必须是第一个）")
+                .contains("new ContextCalibrationObserver(\n                registry, contextTokenCounter");
+    }
+
+    @Test
+    @DisplayName("⚠️ 校准桥装配闭环：Bean → List<ModelCallObserver> → Chain → ObservableModelGateway → Worker 两链路")
+    void calibrationBridgeIsActuallyInTheCallPath() {
+        String wiring = stripCommentsKeepStrings(read(platformRoot().resolve(
+                "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config"
+                        + "/ObserverConfiguration.java")));
+
+        // 链必须由「容器注入的全部观测者」构造，不能写死 List.of()（否则校准桥 Bean 存在却空转）。
+        assertThat(wiring)
+                .as("⛔ ModelCallObserverChain 未从注入的观测者列表构造："
+                        + "校准桥 Bean 会被创建但永远不进调用链（功能空转）")
+                .contains("modelCallObserverChain(")
+                .contains("List<ModelCallObserver> observers")
+                .contains("new ModelCallObserverChain(observers)");
+        // 可观测网关必须真的把链包进 delegate。
+        assertThat(wiring)
+                .as("⛔ observableModelGateway 未注入观测者链：观测者不会被触发")
+                .contains("ObservableModelGateway(rawModelGateway, observerChain)");
+
+        // Worker 两条链路必须注入「可观测」网关并调用带上下文的 4 参 complete。
+        for (String rel : List.of(
+                "agent-worker/src/main/java/cn/studykid/multiagent/worker/execute/RunExecutionLoop.java",
+                "agent-worker/src/main/java/cn/studykid/multiagent/worker/execute/WorkerChildAgentRunner.java")) {
+            String code = stripCommentsKeepStrings(read(platformRoot().resolve(rel)));
+            assertThat(code)
+                    .as("⛔ %s 未注入 ObservableModelGateway：校准桥不在调用路径上，"
+                            + "G1 行为覆盖证据失效", rel)
+                    .contains("ObservableModelGateway");
+            assertThat(code)
+                    .as("⛔ %s 未调用带上下文的 4 参 complete：观测链不会被触发", rel)
+                    .contains(".complete(");
+        }
+    }
+
+    @Test
+    @DisplayName("✅ G1 覆盖边界：SSE/Console 链路不经过 ModelCallObserver（报告须诚实标注）")
+    void sseAndConsoleBypassObserverChainByDesign() {
+        // ⚠️ 这不是「缺陷守卫」而是「诚实边界守卫」：SSE/Console 走 ChatStreamGateway，
+        //    不进 ObservableModelGateway。若将来有人给它们接上观测链，本用例会红，
+        //    强制更新 G1 报告的行为覆盖口径，避免报告谎称「所有链路都过了校准桥」。
+        List<String> chatChains = List.of(
+                "agent-worker/src/main/java/cn/studykid/multiagent/worker/agentchat/AgentChatOrchestrator.java",
+                "agent-api/src/main/java/cn/studykid/multiagent/api/chat/ConsoleChatController.java");
+        for (String rel : chatChains) {
+            Path file = platformRoot().resolve(rel);
+            if (!Files.exists(file)) {
+                continue;
+            }
+            String code = stripCommentsKeepStrings(read(file));
+            assertThat(code)
+                    .as("⛔ %s 接线了 ModelCallObserver：G1 报告的行为覆盖口径需随之升级", rel)
+                    .doesNotContain("ModelCallObserver")
+                    .doesNotContain("ObservableModelGateway");
+        }
+    }
+
+    @Test
+    @DisplayName("✅ 关闭等价 [D11]：enabled=false 时零压缩行为指标；影子期仅 4 个只读估算指标，且独立于总开关")
+    void disabledCompressionIsBitIdenticalForRequestsAndMetricsScoped() {
+        // [D11] 逐位等价的核心是「不改请求字节 / 不多发事件 / 不多扣 token」。
+        // 影子校准指标（tokens.before / tokens.actual / estimation_error_ratio / bias）
+        // 是 G1 完成标准 4「估算误差基线值记录并可回放」的必需观测，且由独立开关
+        // agent.context.calibration.enabled 控制——不随压缩总开关 enabled 注册行为指标。
+        // 本守卫钉死：S1 生产代码里的 context.* 指标名只能是这 4 个只读估算指标。
+        List<String> allowedShadowMetrics = List.of(
+                "context.tokens.before", "context.tokens.actual",
+                "context.estimation_error_ratio", "context.bias");
+        List<String> forbiddenBehaviorMetrics = List.of(
+                "context.tokens.after", "context.compaction_total",
+                "context.dropped_tokens_total", "context.checkpoint.",
+                "context.budget_exceeded_total", "context.summarizer.",
+                "context.prompt_cache.prefix_hash");
+
+        List<String> found = new ArrayList<>();
+        List<String> behaviorLeak = new ArrayList<>();
+        try (java.util.stream.Stream<Path> tree = java.util.stream.Stream.concat(
+                Files.walk(platformRoot().resolve("agent-context/src/main/java")),
+                Files.walk(platformRoot().resolve("agent-infrastructure/src/main/java")))) {
+            for (Path f : tree.filter(p -> p.toString().endsWith(".java")).toList()) {
+                String code = stripCommentsKeepStrings(read(f));
+                java.util.regex.Matcher m = Pattern.compile("\"(context\\.[a-z_.]+)\"").matcher(code);
+                while (m.find()) {
+                    String metric = m.group(1);
+                    if (!allowedShadowMetrics.contains(metric)) {
+                        found.add(f.getFileName() + " → " + metric);
+                    }
+                    for (String forbidden : forbiddenBehaviorMetrics) {
+                        if (metric.startsWith(forbidden) || metric.equals(forbidden)) {
+                            behaviorLeak.add(f.getFileName() + " → " + metric);
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("扫描 context.* 指标失败", e);
+        }
+
+        assertThat(found)
+                .as("⛔ S1 影子期不允许出现压缩行为指标（compaction/checkpoint/budget/summarizer/after）："
+                        + "enabled=false 必须与「无压缩功能」逐位一致 [D11]")
+                .isEmpty();
+        assertThat(behaviorLeak).isEmpty();
+
+        // 校准桥必须由「独立开关」控制，且默认开（采集基线），绝不挂在压缩总开关下。
+        String wiring = stripCommentsKeepStrings(read(platformRoot().resolve(
+                "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config"
+                        + "/ObserverConfiguration.java")));
+        assertThat(wiring)
+                .as("⛔ 校准桥若挂在压缩总开关 agent.context.enabled 下："
+                        + "enabled=false 时收不到估算样本，G1 完成标准 4「基线可回放」失效")
+                .contains("@ConditionalOnProperty(prefix = \"agent.context.calibration\"")
+                .doesNotContain("prefix = \"agent.context.enabled\"");
+
+        String yml = read(platformRoot().resolve(
+                "platform-bootstrap/src/main/resources/application.yml"));
+        assertThat(yml)
+                .as("⛔ 影子期总开关必须默认关，校准开关必须默认开（独立）")
+                .contains("enabled: \"${AGENT_CONTEXT_ENABLED:false}\"")
+                .contains("enabled: \"${AGENT_CONTEXT_CALIBRATION_ENABLED:true}\"");
     }
 
     @Test
@@ -176,7 +406,7 @@ class ContextCompressionS1GuardTest {
                 .doesNotContain("public ContextPolicy(");
     }
 
-    private static int countOccurrences(String text, String needle) {
+    static int countOccurrences(String text, String needle) {
         int n = 0;
         int i = 0;
         while ((i = text.indexOf(needle, i)) >= 0) {
@@ -190,9 +420,10 @@ class ContextCompressionS1GuardTest {
      * 剥离 Java 注释但<b>保留字符串字面量</b>（项目既有源码守卫纪律）。
      * 不剥离会把 Javadoc 里的说明文字当成实现，产生结构性假红。
      */
-    private static String stripCommentsKeepStrings(String src) {
+    static String stripCommentsKeepStrings(String src) {
         StringBuilder out = new StringBuilder();
         boolean inString = false;
+        boolean inChar = false;
         boolean inLineComment = false;
         boolean inBlockComment = false;
         for (int i = 0; i < src.length(); i++) {
@@ -212,6 +443,17 @@ class ContextCompressionS1GuardTest {
                 }
                 continue;
             }
+            // ⚠️ 字符字面量（如 '"' / '\\' / '/'）必须先于字符串处理：
+            //    否则 '"' 会被误判为字符串起点，吞掉后续注释，守卫拿到含注释的源码 → 假绿。
+            if (inChar) {
+                out.append(c);
+                if (c == '\\' && i + 1 < src.length()) {
+                    out.append(src.charAt(++i));
+                } else if (c == '\'') {
+                    inChar = false;
+                }
+                continue;
+            }
             if (inString) {
                 out.append(c);
                 if (c == '\\' && i + 1 < src.length()) {
@@ -221,7 +463,10 @@ class ContextCompressionS1GuardTest {
                 }
                 continue;
             }
-            if (c == '"') {
+            if (c == '\'') {
+                inChar = true;
+                out.append(c);
+            } else if (c == '"') {
                 inString = true;
                 out.append(c);
             } else if (c == '/' && n == '/') {
@@ -239,7 +484,7 @@ class ContextCompressionS1GuardTest {
 
     // ── 辅助 ──────────────────────────────────────────────────────
 
-    private static Path platformRoot() {
+    static Path platformRoot() {
         Path dir = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (dir != null) {
             if (Files.isDirectory(dir.resolve("agent-core")) && Files.exists(dir.resolve("pom.xml"))) {
@@ -250,11 +495,11 @@ class ContextCompressionS1GuardTest {
         throw new IllegalStateException("未定位到 platform 源码根目录");
     }
 
-    private static Path repoRoot() {
+    static Path repoRoot() {
         return platformRoot().getParent();
     }
 
-    private static String read(Path file) {
+    static String read(Path file) {
         try {
             return new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
         } catch (IOException e) {
