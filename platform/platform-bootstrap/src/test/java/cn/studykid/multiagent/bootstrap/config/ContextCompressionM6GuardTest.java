@@ -33,8 +33,9 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatRequest;
  * <p>⚠️ 本类钉死 M6 的<b>契约冻结面</b>（M7 签核后仍不得改变）：
  * <ol>
  *   <li>{@code agent-ports/ports/context} 只有四个中性端口，零算法层/框架/JDBC 反向依赖；</li>
- *   <li>SSE 协议 v1 → v1.1 <b>只追加不改旧帧</b>：14 事件、旧 13 帧字节冻结、
- *       {@code context.checkpoint} 只定义不发射；</li>
+ *   <li>SSE 协议 v1 → v1.1 <b>只追加不改旧帧</b>：14 事件、旧 13 帧字节冻结；
+ *       {@code context.checkpoint} 自 M8-b-2 起仅在白名单内按
+ *       {@code answer → usage → context.checkpoint? → done} 发射，关闭态不发射；</li>
  *   <li>M8-a 升级后，后端请求 DTO <b>只允许白名单文件</b>携带未验 {@code contextState}：
  *       全参构造、Controller 逐字透传、编排边界静默净化；两前端请求体仍不带该字段，
  *       只解析 v1.1 字段（{@code context.checkpoint} / {@code done.contextStateVersion}），
@@ -88,11 +89,16 @@ class ContextCompressionM6GuardTest {
             "context.checkpoint");
 
     /**
-     * G1 签核放行的<b>唯一</b> M7 接线面（G1 报告 A.5 台账）。
+     * G1 签核放行的<b>唯一</b> M6 令牌生产接线面（G1 报告 A.5 台账，M7 + M8-b 两批登记）。
      *
      * <p>⛔ 白名单按「文件 → 允许令牌」精确到令牌，不是整文件豁免：
      * adapter 多写一个 {@code ContextCheckpointPort} 仍会判红。
-     * 新增条目必须同步 A.5 台账，并在 #45 做撤点反向验证。
+     * 新增条目必须同步 A.5 台账，并在对应里程碑做撤点反向验证。
+     *
+     * <p><b>M8-b-2 升级（#73）</b>：L2 SSE 轮末发射第 14 事件，新增 4 个文件持有
+     * {@code ContextCheckpoint} / {@code CheckpointDelta} 令牌 —— 均按 G1 A.5
+     * 「白名单精确到文件 → 令牌」登记，白名单外仍禁止。关闭态零发射、v1 兼容构造不变的
+     * 负面语义由 {@link #contextCheckpointIsDefinedButNotEmitted()} 升级后的正面守卫承载。
      */
     private static final Map<String, Set<String>> M7_ALLOWED_WIRING = Map.of(
             "agent-worker/RunExecutionLoop.java", Set.of("onContextCompacted"),
@@ -102,7 +108,14 @@ class ContextCompressionM6GuardTest {
             // 否则 adapter 会退化为内部 new 第二套内核（M7 RV-112）。精确登记到令牌，
             // 不允许整文件豁免；RV-74 会锁死这个令牌不得消失。
             "platform-bootstrap/ContextRequestAssemblyConfiguration.java",
-            Set.of("CompactionPipeline", "WaterLevel"));
+            Set.of("CompactionPipeline", "WaterLevel"),
+            // ── M8-b-2：L2 轮末 checkpoint 发射白名单（精确到令牌）──
+            "agent-worker/AgentChatOrchestrator.java", Set.of("ContextCheckpoint"),
+            "platform-bootstrap/ContextCheckpointEmitterAdapter.java",
+            Set.of("CheckpointDelta", "ContextCheckpoint"),
+            "platform-bootstrap/ContextCheckpointEmitterConfiguration.java",
+            Set.of("ContextCheckpoint"),
+            "platform-bootstrap/AgentChatConfiguration.java", Set.of("ContextCheckpoint"));
 
     /**
      * G1 A.5 S3-M8 台账登记的<b>请求侧 contextState 白名单</b>（精确到文件 → 令牌）。
@@ -240,11 +253,15 @@ class ContextCompressionM6GuardTest {
                 .as("⛔ 请求侧混入响应字段 contextStateVersion：收发方向被污染")
                 .contains("record AgentChatRequest(")
                 .doesNotContain("contextStateVersion");
+        // G1 A.5 M8-b-2 升级（#73）：第 14 事件从「只定义不发射」改为「白名单内正面发射」。
+        // 保留的负面：请求侧不得混入响应字段 —— 编排器只能在成功收口发射 checkpoint，
+        // 绝不把 checkpoint 线名 / contextStateVersion 塞回请求 DTO（收发方向仍须单向）。
         assertThat(orchestrator)
-                .as("⛔ SSE 链提前发射第 14 事件：M8-a 只做接收侧净化")
-                .doesNotContain("new AgentChatEvent.ContextCheckpoint(")
-                .doesNotContain("context.checkpoint")
-                .doesNotContain("new AgentChatEvent.Done(false,")
+                .as("⛔ SSE 链白名单内发射点消失：M8-b-2 的 context.checkpoint 被静默摘除")
+                .contains("new AgentChatEvent.ContextCheckpoint(")
+                .as("⛔ 成功收口 Done 未带版本：前端无法把 state 与 done 绑定")
+                .contains("checkpoint == null ? null : checkpoint.version()")
+                .as("⛔ 失败收口 v1 兼容构造丢失：旧客户端会收到带新字段的 done")
                 .contains("new AgentChatEvent.Done(false)");
 
         // ③ 全参构造唯一：compat 构造器会静默清空后加字段（铁律 #10）。
@@ -337,19 +354,43 @@ class ContextCompressionM6GuardTest {
     }
 
     @Test
-    @DisplayName("✅ RV-69（M7-c 升级）：context.checkpoint 仍只定义不发射；压缩观测按装配态分流")
-    void contextCheckpointIsDefinedButNotEmitted() {
+    @DisplayName("✅ RV-69（G1 A.5 / M8-b-2 升级）：第 14 事件仅在白名单内按冻结线序发射；"
+            + "关闭态零发射、done 仍是唯一应用层终帧、L1 压缩观测按装配态分流")
+    void contextCheckpointIsEmittedInAllowListWithFrozenWireOrder() {
         String orchestrator = stripped(platformRoot().resolve(ORCHESTRATOR));
         String loop = stripped(platformRoot().resolve(LOOP));
 
-        assertThat(orchestrator)
-                .as("⛔ SSE 链提前发射 context.checkpoint：旧客户端与审计口径均未升级")
-                .doesNotContain("ContextCheckpoint")
-                .doesNotContain("context.checkpoint")
-                .as("⛔ done 仍是唯一应用层终帧")
-                .contains("new AgentChatEvent.Done(false)");
+        // ── ① M8-b-2 正面接入：SSE 链在白名单文件内、成功收口处按顺序发射第 14 事件。
+        //     旧负面「只定义不发射」按 G1 A.5 升级为「白名单内正面发射 + 白名单外禁止」。
+        //     冻结线序：answer → usage → context.checkpoint? → done（旧 13 帧相对次序不变）。
+        int answer = orchestrator.indexOf("new AgentChatEvent.Answer(");
+        int usage = orchestrator.indexOf("new AgentChatEvent.Usage(");
+        int checkpoint = orchestrator.indexOf("new AgentChatEvent.ContextCheckpoint(");
+        int done = orchestrator.indexOf("new AgentChatEvent.Done(");
+        assertThat(answer).as("⛔ answer 帧缺失：成功收口序列被改写").isGreaterThan(-1);
+        assertThat(usage).as("⛔ usage 帧缺失：token 计数不再对用户可见").isGreaterThan(answer);
+        assertThat(checkpoint)
+                .as("⛔ L2 未发射 context.checkpoint：M8-b-2 契约空转").isGreaterThan(usage);
+        assertThat(done).as("⛔ done 不再是应用层终帧").isGreaterThan(checkpoint);
 
-        // ⚠️ G1 签核后 L1 已接线：新事件由「装配态」唯一推导，关闭态仍走旧事件。
+        // ── ② 关闭态零发射的守卫（旧负面精华内化为「发射前置条件」）：
+        //     未装配端口 / 非装配态 / policyVersion 裁决不到 / 封包返回 null / 异常 —— 一律 null → 不发。
+        assertThat(orchestrator)
+                .as("⛔ 发射前置条件被撤掉：关闭态会误发 checkpoint，逐位等价被破坏")
+                .contains("checkpointEmitter == null || state.lastAssembly == null")
+                .contains("!state.lastAssembly.assembled()")
+                .contains("CheckpointEmission checkpoint = emitCheckpoint(")
+                .as("⛔ 可选增强 fail-soft 被撤掉：封包异常会中断主流程")
+                .contains("catch (RuntimeException e)")
+                .as("⛔ 空 checkpoint 未走 v1 兼容构造：关闭态/无新增会泄漏空版本字段")
+                .contains("checkpoint == null ? null : checkpoint.version()")
+                // 失败收口仍用 v1 兼容构造；done 仍是唯一终帧（不得再加第二个终帧事件）。
+                .contains("new AgentChatEvent.Done(false)");
+        assertThat(count(orchestrator, "sink.accept(new AgentChatEvent.ContextCheckpoint("))
+                .as("⛔ 第 14 事件发射点不是恰好 1 处：多发射会重复帧 / 少发射会空转")
+                .isEqualTo(1);
+
+        // ── ③ L1 仍只走观测链、不发射 SSE 第 14 事件（旧负面原样保留）。
         assertThat(loop)
                 .as("⛔ L1 没接统一装配入口：压缩观测不会触发")
                 .contains("RequestAssemblyResult assembly = assembleRequest(")
@@ -362,10 +403,11 @@ class ContextCompressionM6GuardTest {
                 .as("⛔ 观测未与唯一请求源同源：droppedTokens 可能算错")
                 .contains("assembly.droppedTokens()");
         assertThat(loop)
-                .as("⛔ context.checkpoint 提前发射：done 不再是唯一应用层终帧")
+                .as("⛔ L1 周期链发射 SSE 第 14 事件：done 不再是唯一应用层终帧")
                 .doesNotContain("ContextCheckpoint")
                 .doesNotContain("context.checkpoint");
 
+        // ── ④ 白名单外禁止：仅 M7_ALLOWED_WIRING 登记的文件可持有 M6 令牌。
         List<String> violations = productionWiringViolations();
         assertThat(violations)
                 .as("⛔ 生产模块出现白名单外的 M6 令牌：contract-only 边界被扩大")

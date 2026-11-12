@@ -37,6 +37,8 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatEvent;
 import cn.studykid.multiagent.ports.agentchat.AgentChatOrchestratorPort;
 import cn.studykid.multiagent.ports.agentchat.AgentChatRequest;
 import cn.studykid.multiagent.ports.agentchat.AgentChatRequest.Context;
+import cn.studykid.multiagent.ports.agentchat.ContextCheckpointEmitter;
+import cn.studykid.multiagent.ports.agentchat.ContextCheckpointEmitter.Emitted;
 import cn.studykid.multiagent.ports.agentchat.ContextPolicyVersionPort;
 import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier;
 import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Accepted;
@@ -87,10 +89,15 @@ import cn.studykid.multiagent.worker.execute.ToolOutcomeRenderer;
  *
  * <p><b>压缩态边界</b>：S3-M8-b 起，模型请求只经 {@link RequestAssemblyPort} 统一装配
  * （关闭态返回 legacy 同一引用，逐位等价；开启态如实给出 tier / fallback / token）。
- * 本批仍<b>不生成 / 不发射第 14 事件</b>（{@code context.checkpoint} / {@code Done} 版本
- * 由 M8-b-2 负责），旧 13 帧字节、审计两段式、无 outbox / MQ 全部不变；装配态只多一条
- * 内部审计事实 {@code CONTEXT_ASSEMBLED}（非 SSE 帧）。策略指纹由中性裁决端口提供，
- * ⛔ 编排器不自己拼全局常量、不读算法层配置（ADR-011）。
+ * 轮末经 {@link ContextCheckpointEmitter} 尝试封包：仅当本轮<b>确实装配生效</b>且封包成功，
+ * 才在 {@code answer → usage} 之后、{@code done} 之前发射第 14 事件
+ * {@code context.checkpoint}，并让 {@code Done} 带 {@code contextStateVersion}。
+ * ⚠️ 这是<b>可选轮末增强</b>：无新增 / 抽取回落 / 超长 / 密钥不可用 / 未装配端口一律
+ * <b>静默不发</b>（Done 退回 v1 字节），绝不因它中断 RAG / 回答 / 审计主流程（fail-soft）；
+ * 与装配入口的 fail-closed（拒绝对话）边界严格分开。旧 13 帧字节、审计两段式、
+ * 无 outbox / MQ 全部不变；装配态多一条内部审计事实 {@code CONTEXT_ASSEMBLED}，
+ * 发射态再多一条标量审计事实 {@code CONTEXT_CHECKPOINT}（均非 SSE 帧、不含 state 正文）。
+ * 策略指纹由中性裁决端口提供，⛔ 编排器不自己拼全局常量、不读算法层配置（ADR-011）。
  *
  * <p><b>fail-closed</b>：路由不确定 / Agent 配置缺失 / 模型请求非法 / 工具闸门抛异常
  * 一律发 {@code error} 并收敛 FAILED；<b>绝不</b>编造命中、不静默降级成「随便选一个」。
@@ -139,6 +146,15 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
      * worker 只认识 {@code agent-ports} 的中性端口，不碰算法层类型（ADR-011）。
      */
     private final @Nullable RequestAssemblyPort requestAssemblyPort;
+    /**
+     * S3-M8-b-2 轮末压缩态封包端口（{@code null} = 未装配 → 不发射 checkpoint）。
+     *
+     * <p>⚠️ <b>发射是可选增强</b>：本字段只在成功收口、且 {@link #lastAssembly} 判定装配
+     * 生效时被调用；返回 null / 抛异常都静默降级为「不发第 14 事件、Done 走 v1 字节」，
+     * ⛔ 绝不改变已产出的 answer / usage / 审计终态。worker 只认识中性端口，不碰算法层
+     * 的 CheckpointDelta / StructuredState / HMAC 信封（ADR-011）。
+     */
+    private final @Nullable ContextCheckpointEmitter checkpointEmitter;
     private final int maxToolRounds;
     private final int defaultTopK;
     private final Duration lease;
@@ -159,10 +175,11 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
                                  @NonNull ToolInvocationGate toolGate,
                                  @NonNull ContextStateVerifier stateVerifier,
                                  @NonNull ContextPolicyVersionPort policyVersions,
-                                 @Nullable RequestAssemblyPort requestAssemblyPort) {
+                                 @Nullable RequestAssemblyPort requestAssemblyPort,
+                                 @Nullable ContextCheckpointEmitter checkpointEmitter) {
         this(audit, rag, chatGateway, router, agents, snapshots, closureResolver,
                 modelConfig, toolGate, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_TOP_K, DEFAULT_LEASE,
-                stateVerifier, policyVersions, requestAssemblyPort);
+                stateVerifier, policyVersions, requestAssemblyPort, checkpointEmitter);
     }
 
     /** 全参构造（测试可收紧轮次 / 租约以构造挤出压力）。 */
@@ -180,7 +197,8 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
                                  @NonNull Duration lease,
                                  @NonNull ContextStateVerifier stateVerifier,
                                  @NonNull ContextPolicyVersionPort policyVersions,
-                                 @Nullable RequestAssemblyPort requestAssemblyPort) {
+                                 @Nullable RequestAssemblyPort requestAssemblyPort,
+                                 @Nullable ContextCheckpointEmitter checkpointEmitter) {
         if (maxToolRounds < 0 || defaultTopK < 1 || defaultTopK > MAX_TOP_K) {
             throw new IllegalArgumentException("编排参数非法: rounds=" + maxToolRounds
                     + ", topK=" + defaultTopK);
@@ -200,6 +218,7 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
         this.stateVerifier = Objects.requireNonNull(stateVerifier, "stateVerifier 不得为空");
         this.policyVersions = Objects.requireNonNull(policyVersions, "policyVersions 不得为空");
         this.requestAssemblyPort = requestAssemblyPort;
+        this.checkpointEmitter = checkpointEmitter;
     }
 
     @Override
@@ -245,8 +264,11 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
             // ⑥ Skill：当前语义是「声明式能力闭包 + 提示词行为指引」，真实执行在 Tool。
             emitSkills(state, sink, state.closure);
 
-            // ⑦ 模型循环。
-            List<ModelMessage> messages = buildMessages(effective, ragContext);
+            // ⑦ 模型循环。carry-over 已验状态作为不可信围栏 USER 块注入（S3-M8-b-2 / D49）：
+            //    ⛔ 只取 applyContextState 验过的 stateJson，绝不重新解析原始 request.contextState()；
+            //    未装配 / 关闭态 / 丢弃态 stateJson 为 null → 不注入，请求字节与影子期逐位一致。
+            List<ModelMessage> messages = buildMessages(
+                    effective, ragContext, state.carryOver.stateJson());
             ExecutionScope scope = new ExecutionScope(state.agentId, state.agentVersion,
                     ClosureFingerprint.of(state.closure));
             RunClaimPort.LeasedTask task = new RunClaimPort.LeasedTask(
@@ -272,13 +294,33 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
                         "afterTokens", a.afterTokens(),
                         "compactionCount", a.compactionCount())));
             }
+            // S3-M8-b-2 / D49：轮末尝试封包并发射第 14 事件。⛔ 严格置于 usage 之后、done 之前，
+            //    保持旧 13 帧相对次序不变，done 仍是唯一应用层终帧。
+            //    ⚠️ 可选增强 fail-soft：未装配 / 关闭态 / 无新增 / 抽取回落 / 超长 / 密钥不可用
+            //    一律 null → 不发事件、Done 退回 v1 字节，主流程不受影响。
+            CheckpointEmission checkpoint = emitCheckpoint(context, state, effective);
+            if (checkpoint != null) {
+                Emitted emitted = checkpoint.emitted();
+                sink.accept(new AgentChatEvent.ContextCheckpoint(
+                        emitted.state(), emitted.upToTurn(), emitted.policyVersion(),
+                        emitted.tier(), emitted.fallback(), emitted.digest()));
+                // 标量审计事实：只记档位 / 游标 / 摘要 / 长度，⛔ 绝不把 state 信封正文写进审计。
+                state.events().add(event("CONTEXT_CHECKPOINT", Map.of(
+                        "tier", emitted.tier(),
+                        "fallback", emitted.fallback(),
+                        "upToTurn", emitted.upToTurn() == null ? -1 : emitted.upToTurn(),
+                        "digest", emitted.digest(),
+                        "stateChars", emitted.state().length())));
+            }
             state.events().add(event("DONE", Map.of("truncated", false)));
             audit.finish(state.handle, new AgentChatAuditPort.FinishRecord(
                     "SUCCEEDED", null,
                     resultPayload(state, "STOP", null),
                     state.events(), state.steps(), Instant.now()));
             state.finished = true;
-            sink.accept(new AgentChatEvent.Done(false));
+            // 版本与 checkpoint 同源：只有成功发射才带 digest；否则走 v1 兼容构造（旧字节冻结）。
+            sink.accept(new AgentChatEvent.Done(
+                    false, checkpoint == null ? null : checkpoint.version()));
 
         } catch (RuntimeException e) {
             handleFailure(context, e, sink, state);
@@ -541,7 +583,9 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
     // ── 阶段 ⑥ 模型 / 工具循环 ────────────────────────────────────────
 
     private static @NonNull List<ModelMessage> buildMessages(
-            @NonNull AgentChatRequest request, @Nullable String ragContext) {
+            @NonNull AgentChatRequest request,
+            @Nullable String ragContext,
+            @Nullable String carryOverStateJson) {
         List<ModelMessage> messages = new ArrayList<>();
         for (AgentChatRequest.Turn turn : request.history()) {
             messages.add("assistant".equals(turn.role())
@@ -551,6 +595,12 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
         // ⚠️ RAG 上下文以 USER 消息注入并自带不可信围栏；绝不拼进 systemPrompt。
         if (ragContext != null) {
             messages.add(ModelMessage.user(ragContext));
+        }
+        // ⚠️ 上一轮已验压缩态经 PromptGuard 包成不可信围栏 USER 块（D49）：
+        //    绝不拼 systemPrompt、绝不裸拼、绝不把 HMAC 信封原文当指令执行。
+        //    放在历史之后、当前输入之前——作为「历史的事实参考」，当前输入永不裁剪。
+        if (carryOverStateJson != null && !carryOverStateJson.isEmpty()) {
+            messages.add(ModelMessage.user(RAG_GUARD.wrapCompactedContext(carryOverStateJson)));
         }
         messages.add(ModelMessage.user(request.message()));
         return messages;
@@ -697,6 +747,78 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
                 /* upToSeq */ -1L,
                 state.carryOver == null ? null : state.carryOver.stateJson(),
                 /* priorCompactions */ 0, legacyRequest));
+    }
+
+    /**
+     * S3-M8-b-2 轮末压缩态封包（D49）。<b>可选增强 / fail-soft</b>：任何一步不满足条件或抛异常
+     * 都返回 {@code null}，让 L2 静默不发第 14 事件、Done 退回 v1 字节，⛔ 绝不改变已产出的
+     * answer / usage / 审计终态。
+     *
+     * <p>⚠️ <b>发射前置条件</b>（缺一即不发）：
+     * <ol>
+     *   <li>端口已装配（{@code checkpointEmitter != null}）；</li>
+     *   <li>本轮<b>装配确实生效</b>（{@code lastAssembly.assembled()}）——关闭态 / 策略 OFF /
+     *       Agent 关闭时恒 false，零封包、零事件，逐位等价；</li>
+     *   <li>{@code policyVersion} 已由 D17 唯一裁决端口取得（与接收侧同一来源），
+     *       裁决不到就 null → 不发（否则发出去的 state 下一轮必被「版本不符」丢弃）；</li>
+     *   <li>封包算法层判定有新增可吸收状态（否则返回 null）。</li>
+     * </ol>
+     *
+     * <p>⚠️ <b>seq 坐标系</b>：传纯对话历史（history turn + 当前输入，<b>不含</b> RAG 围栏 /
+     * carry-over 围栏 / 工具回灌），使 {@code CheckpointDeltaFactory} 的 list-index seq 与接收侧
+     * {@code upToTurn ≤ history 长度} 同口径、跨请求前缀稳定；围栏块是外部/摘要数据，
+     * ⛔ 绝不能被逐字抽取器当成用户事实写入状态。
+     */
+    private @Nullable CheckpointEmission emitCheckpoint(
+            @NonNull Context context,
+            @NonNull RunState state,
+            @NonNull AgentChatRequest effective) {
+        // ① 未装配端口 / 非装配态：零封包（关闭态逐位等价的关键防线）。
+        if (checkpointEmitter == null || state.lastAssembly == null
+                || !state.lastAssembly.assembled()) {
+            return null;
+        }
+        try {
+            // ② D17 唯一裁决：与 M8-a 接收侧 applyContextState 用同一端口 / 同一 Input 口径。
+            String policyVersion = policyVersions.resolve(new ContextPolicyVersionPort.Input(
+                    context.tenantId(), state.agentId, state.agentVersion,
+                    state.settings.modelId(), state.settings.maxTokens()));
+            if (policyVersion == null || policyVersion.isBlank()) {
+                return null;
+            }
+            // ③ 纯对话历史：只含 history turn + 本轮输入，排除所有围栏/工具回灌消息。
+            List<ModelMessage> dialogue = new ArrayList<>(effective.history().size() + 1);
+            for (AgentChatRequest.Turn turn : effective.history()) {
+                dialogue.add("assistant".equals(turn.role())
+                        ? ModelMessage.assistant(turn.content())
+                        : ModelMessage.user(turn.content()));
+            }
+            dialogue.add(ModelMessage.user(effective.message()));
+
+            Emitted emitted = checkpointEmitter.emit(
+                    new ContextCheckpointEmitter.Input(
+                            context.tenantId(), "chat:" + state.runId,
+                            state.settings.modelId(), dialogue, effective.history().size(),
+                            policyVersion,
+                            state.carryOver == null ? null : state.carryOver.stateJson(),
+                            state.lastAssembly.tier(), state.lastAssembly.fallback()));
+            if (emitted == null) {
+                return null;
+            }
+            // ④ version 与 checkpoint digest 同源：唯一标识这份状态，前端据此把 state 与 done 绑定。
+            return new CheckpointEmission(emitted, emitted.digest());
+        } catch (RuntimeException e) {
+            // 可选增强失败静默降级；⛔ 不打印任何 state 正文 / 密钥，只记异常类型供排障。
+            log.debug("L2 checkpoint 发射跳过（可选增强 fail-soft）: domain={}, kind={}",
+                    context.domain(), e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    /** 轮末 checkpoint 发射结果：中性载荷 + 与 Done 绑定的版本串。 */
+    private record CheckpointEmission(
+            @NonNull Emitted emitted,
+            @NonNull String version) {
     }
 
     /** 为缺失 callId 的模型调用补稳定标识，保证 SSE 事件与回灌消息引用同一 id。 */

@@ -17,6 +17,7 @@ import cn.studykid.multiagent.infrastructure.rag.HttpRagRetrievalGateway;
 import cn.studykid.multiagent.ports.agentchat.AgentChatAuditPort;
 import cn.studykid.multiagent.ports.agentchat.AgentChatIdentityResolver;
 import cn.studykid.multiagent.ports.agentchat.AgentChatOrchestratorPort;
+import cn.studykid.multiagent.ports.agentchat.ContextCheckpointEmitter;
 import cn.studykid.multiagent.ports.agentchat.ContextPolicyVersionPort;
 import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort;
@@ -134,7 +135,10 @@ public class AgentChatConfiguration {
      *       不可信状态（S3-M8-a / D49）；</li>
      *   <li>{@link RequestAssemblyPort} 是 SSE 链唯一送模型请求的装配入口（S3-M8-b / D38），
      *       与 Worker 两条链路共用同一个 Bean：关闭态短路返回 legacy 同一引用，
-     *       ⛔ 绝不给对话链另造一套「假装配」。</li>
+     *       ⛔ 绝不给对话链另造一套「假装配」；</li>
+     *   <li>{@link ContextCheckpointEmitter} 是轮末 client carry-over 封包端口（S3-M8-b-2 / D49），
+     *       与接收侧 verifier 共用同一把独立 HMAC 密钥；未装配 / 无新增即静默不发，
+     *       ⛔ 不给对话链接 S4 checkpoint 表 / 观测链。</li>
      * </ul>
      */
     @Bean
@@ -152,14 +156,16 @@ public class AgentChatConfiguration {
             @NonNull ToolInvocationGate toolGate,
             @NonNull ContextStateVerifier contextStateVerifier,
             @NonNull ContextPolicyVersionPort contextPolicyVersionPort,
-            @NonNull RequestAssemblyPort requestAssemblyPort) {
+            @NonNull RequestAssemblyPort requestAssemblyPort,
+            @NonNull ContextCheckpointEmitter contextCheckpointEmitter) {
         AgentModelConfigAssembler modelConfig = new AgentModelConfigAssembler(
                 agentDefs, closureResolver, toolDefs, modelResolver);
-        log.info("装配请求级 Agent 编排器: 路由/RAG/Skill/Tool/审计/统一装配均已接真实实现"
+        log.info("装配请求级 Agent 编排器: 路由/RAG/Skill/Tool/审计/统一装配/轮末压缩态均已接真实实现"
                 + "（不写 Outbox，lease_owner={}）",
                 cn.studykid.multiagent.ports.persistence.RunClaimPort.SSE_DIRECT_LEASE_OWNER);
         return new AgentChatOrchestrator(audit, rag, chatGateway, router, agents,
                 snapshots, closureResolver, modelConfig, toolGate,
-                contextStateVerifier, contextPolicyVersionPort, requestAssemblyPort);
+                contextStateVerifier, contextPolicyVersionPort, requestAssemblyPort,
+                contextCheckpointEmitter);
     }
 }

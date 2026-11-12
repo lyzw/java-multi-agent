@@ -40,6 +40,8 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatEvent;
 import cn.studykid.multiagent.ports.agentchat.AgentChatOrchestratorPort;
 import cn.studykid.multiagent.ports.agentchat.AgentChatRequest;
 import cn.studykid.multiagent.ports.agentchat.AgentChatRequest.Context;
+import cn.studykid.multiagent.ports.agentchat.ContextCheckpointEmitter;
+import cn.studykid.multiagent.ports.agentchat.ContextCheckpointEmitter.Emitted;
 import cn.studykid.multiagent.ports.agentchat.ContextPolicyVersionPort;
 import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier;
 import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Accepted;
@@ -107,6 +109,9 @@ class AgentChatOrchestratorTest {
     private static final String VERIFIED_STATE = "VERIFIED_STATE_JSON_标记";
     private static final String POLICY = "cp_m8a_test";
     private static final String STATE_DIGEST = "sha256:m8a-test";
+    /** M8-b-2 轮末封包替身载荷：刻意用可辨识串，证明 worker 逐字透传、不解析不改写。 */
+    private static final String EMIT_STATE = "OPAQUE_EMIT_STATE_不透明信封";
+    private static final String EMIT_DIGEST = "sha256:m8b-emit-digest";
     /** 单轮终答、零 RAG 命中、一个 Skill 时的旧 13 帧子集（M8-a 不得改变）。 */
     private static final List<String> NO_TOOL_FRAME_NAMES = List.of(
             "run.start", "route", "rag.query", "rag.hits",
@@ -400,7 +405,7 @@ class AgentChatOrchestratorTest {
     }
 
     @Test
-    @DisplayName("⛔ 原始 / 已验压缩态串都不进事件、模型上下文与审计载荷")
+    @DisplayName("⛔ 压缩态不泄漏到可信面：原始信封全禁；已验 stateJson 仅允许围栏内注入模型（A.5 白名单升级）")
     void contextStateNeverLeaksIntoFramesOrAudit() {
         Harness h = new Harness();
         h.stateVerifier.result = new Accepted(VERIFIED_STATE, POLICY, null, STATE_DIGEST);
@@ -415,9 +420,23 @@ class AgentChatOrchestratorTest {
                 + h.audit.finishRecord.resultPayload()
                 + h.audit.finishRecord.events().stream()
                         .map(e -> String.valueOf(e.payload())).reduce("", String::concat);
-        for (String blob : List.of(frames, model, audit)) {
-            assertThat(blob).doesNotContain(RAW_STATE, VERIFIED_STATE);
+        // ① 可信面（SSE 帧 + 审计）：原始信封与已验状态串一律禁止（旧负面原样保留）。
+        for (String trusted : List.of(frames, audit)) {
+            assertThat(trusted).doesNotContain(RAW_STATE, VERIFIED_STATE);
         }
+        // ② 模型上下文：原始未验信封绝不裸进（旧负面保留）。
+        assertThat(model).doesNotContain(RAW_STATE);
+        // ③ G1 A.5 白名单升级：已验 stateJson 只允许出现在不可信围栏块内，
+        //    围栏之外禁止出现 —— 防止二次裸拼绕过 PromptGuard 围栏（白名单精确到令牌）。
+        int open = model.indexOf(PromptGuard.COMPACTED_OPEN);
+        int close = model.indexOf(PromptGuard.COMPACTED_CLOSE);
+        assertThat(open).as("验过的状态必须经围栏注入模型").isGreaterThan(-1);
+        assertThat(close).isGreaterThan(open);
+        assertThat(model.substring(0, open)).doesNotContain(VERIFIED_STATE);
+        assertThat(model.substring(close + PromptGuard.COMPACTED_CLOSE.length()))
+                .doesNotContain(VERIFIED_STATE);
+        assertThat(model.substring(open, close + PromptGuard.COMPACTED_CLOSE.length()))
+                .contains(VERIFIED_STATE);
     }
 
     // ── 工具组件级失败 ────────────────────────────────────────────────
@@ -777,6 +796,187 @@ class AgentChatOrchestratorTest {
         assertThat(h.audit.finishRecord.resultPayload()).doesNotContain(RAW_STATE);
     }
 
+    // ── S3-M8-b #73：轮末发射 context.checkpoint + Done 版本 + carry-over 注入 ──
+
+    @Test
+    @DisplayName("⛔ 装配态发射第 14 事件：line 序 answer→usage→context.checkpoint→done，Done 带 digest 版本")
+    void assembledStateEmitsCheckpointBeforeDoneWithVersion() {
+        Harness h = new Harness();
+        h.assembly.assembled(2, false, 9000, 4200);
+        h.emitter.emits(EMIT_STATE, 2, POLICY, 2, false, EMIT_DIGEST);
+        h.gateway.then(answer(ANSWER_MARKER));
+
+        h.orchestrator.run(h.platform(), h.request(null), h.sink);
+
+        // 线序冻结：checkpoint 严格在 usage 之后、done 之前；done 仍是唯一应用层终帧。
+        assertThat(h.sink.names).containsExactly(
+                "run.start", "route", "rag.query", "rag.hits",
+                "skill", "skill", "delta", "answer", "usage",
+                "context.checkpoint", "done");
+        AgentChatEvent.ContextCheckpoint cp = firstOf(h.sink, AgentChatEvent.ContextCheckpoint.class);
+        // data 字段逐字对齐协议 v1.1 冻结顺序（不透明 state 不被 worker 解析/改写）。
+        assertThat(cp.state()).isEqualTo(EMIT_STATE);
+        assertThat(cp.upToTurn()).isEqualTo(2);
+        assertThat(cp.policyVersion()).isEqualTo(POLICY);
+        assertThat(cp.tier()).isEqualTo(2);
+        assertThat(cp.fallback()).isFalse();
+        assertThat(cp.digest()).isEqualTo(EMIT_DIGEST);
+        // Done 版本与 checkpoint 同源（digest），且 v1 兼容构造仍支持无版本。
+        AgentChatEvent.Done done = firstOf(h.sink, AgentChatEvent.Done.class);
+        assertThat(done.contextStateVersion()).isEqualTo(EMIT_DIGEST);
+        assertThat(done.data()).contains("\"contextStateVersion\":\"" + EMIT_DIGEST + "\"");
+        // 审计只记标量，绝不把不透明 state 正文写进可信面。
+        // eventType 是 AuditEvent 的独立字段、不在 payload 里 —— 必须按 eventType 精确找事实。
+        List<AuditEvent> checkpointFacts = h.audit.finishRecord.events().stream()
+                .filter(e -> "CONTEXT_CHECKPOINT".equals(e.eventType()))
+                .toList();
+        assertThat(checkpointFacts).hasSize(1);
+        assertThat(checkpointFacts.get(0).payload())
+                .containsEntry("tier", 2)
+                .containsEntry("fallback", false)
+                .containsEntry("upToTurn", 2)
+                .containsEntry("digest", EMIT_DIGEST)
+                .containsEntry("stateChars", EMIT_STATE.length());
+        assertThat(String.valueOf(checkpointFacts.get(0).payload()))
+                .doesNotContain(EMIT_STATE);
+    }
+
+    @Test
+    @DisplayName("⛔ 关闭态逐位等价：即使 emitter 备好载荷，非装配态也零发射、Done 走 v1 旧字节")
+    void closedStateNeverEmitsCheckpointEvenIfEmitterHasPayload() {
+        Harness h = new Harness();
+        // 装配层 passthrough（默认关闭态），但 emitter 备好载荷——必须被发射前置条件挡住。
+        h.emitter.emits(EMIT_STATE, 2, POLICY, 2, false, EMIT_DIGEST);
+        h.gateway.then(answer(ANSWER_MARKER));
+
+        h.orchestrator.run(h.platform(), h.request(null), h.sink);
+
+        assertThat(h.sink.names).doesNotContain("context.checkpoint");
+        AgentChatEvent.Done done = firstOf(h.sink, AgentChatEvent.Done.class);
+        assertThat(done.contextStateVersion()).isNull();
+        assertThat(done.data()).isEqualTo("{\"truncated\":false}");
+        assertThat(h.emitter.inputs)
+                .as("关闭态必须零封包调用（不是发了再丢）")
+                .isEmpty();
+        assertThat(h.audit.finishRecord.events())
+                .noneMatch(e -> "CONTEXT_CHECKPOINT".equals(e.eventType()));
+    }
+
+    @Test
+    @DisplayName("⛔ 无新增（emitter 返回 null）静默不发：Done 退回 v1 字节，主流程成功")
+    void noNewStateSilentlySkipsCheckpoint() {
+        Harness h = new Harness();
+        h.assembly.assembled(1, false, 9000, 4200);
+        // emitter 默认 noEmit=true（返回 null）
+        h.gateway.then(answer(ANSWER_MARKER));
+
+        h.orchestrator.run(h.platform(), h.request(null), h.sink);
+
+        assertThat(h.sink.names).doesNotContain("context.checkpoint");
+        assertThat(firstOf(h.sink, AgentChatEvent.Done.class).data())
+                .isEqualTo("{\"truncated\":false}");
+        assertThat(h.audit.finishRecord.state()).isEqualTo("SUCCEEDED");
+        assertThat(h.audit.finishRecord.events())
+                .noneMatch(e -> "CONTEXT_CHECKPOINT".equals(e.eventType()));
+    }
+
+    @Test
+    @DisplayName("⛔ 封包异常 fail-soft：不中断回答/审计、不发 checkpoint、Done 走 v1 字节")
+    void emitterFailureIsFailSoftAndNeverBreaksMainFlow() {
+        Harness h = new Harness();
+        h.assembly.assembled(2, true, 9000, 4200);
+        h.emitter.throwsOnEmit(new IllegalStateException("HMAC key unavailable"));
+        h.gateway.then(answer(ANSWER_MARKER));
+
+        h.orchestrator.run(h.platform(), h.request(null), h.sink);
+
+        // 主流程完好：answer / usage / done、SUCCEEDED、两段式审计一个都不少。
+        assertThat(h.sink.names).doesNotContain("context.checkpoint");
+        assertThat(firstOf(h.sink, AgentChatEvent.Answer.class).text()).isEqualTo(ANSWER_MARKER);
+        assertThat(firstOf(h.sink, AgentChatEvent.Done.class).data())
+                .isEqualTo("{\"truncated\":false}");
+        assertThat(h.audit.finishRecord.state()).isEqualTo("SUCCEEDED");
+        assertThat(h.audit.finishRecord.errorCode()).isNull();
+        assertThat(h.audit.finishCount).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("⛔ carry-over 围栏注入：已验 stateJson 作不可信 USER 块，不进 systemPrompt、不裸拼")
+    void carryOverIsInjectedAsUntrustedUserFence() {
+        Harness h = new Harness();
+        h.stateVerifier.result = new Accepted(VERIFIED_STATE, POLICY, 3, STATE_DIGEST);
+        h.gateway.then(answer(ANSWER_MARKER));
+
+        h.orchestrator.run(h.platform(), h.request(SPOOF_TENANT, RAW_STATE), h.sink);
+
+        ModelRequest sent = h.gateway.requests.get(0);
+        assertThat(sent.systemPrompt()).isEqualTo(SYSTEM_MARKER)
+                .doesNotContain("compacted_context").doesNotContain(VERIFIED_STATE);
+        // 围栏块：恰好一个，开闭合标记各一次，含已验 stateJson，绝不含原始未验 envelope。
+        List<ModelMessage> fences = sent.messages().stream()
+                .filter(m -> m.content().contains(PromptGuard.COMPACTED_OPEN))
+                .toList();
+        assertThat(fences).hasSize(1);
+        ModelMessage fence = fences.get(0);
+        assertThat(fence.role()).isEqualTo(ModelMessage.Role.USER);
+        assertThat(fence.content()).containsOnlyOnce(PromptGuard.COMPACTED_OPEN)
+                .containsOnlyOnce(PromptGuard.COMPACTED_CLOSE)
+                .contains(VERIFIED_STATE)
+                .doesNotContain(RAW_STATE);
+        // 围栏块在顺序上位于 history 之后、当前输入之前（本例无 history → 位于当前输入之前）。
+        assertThat(sent.messages().get(sent.messages().size() - 1).content())
+                .isEqualTo(QUESTION_MARKER);
+    }
+
+    @Test
+    @DisplayName("⛔ emitter 入参口径：纯对话历史（不含 RAG 围栏）、D17 policyVersion、upToTurn=history 长度")
+    void emitterInputUsesPureDialogueAndD17Policy() {
+        Harness h = new Harness();
+        h.assembly.assembled(2, false, 9000, 4200);
+        h.emitter.emits(EMIT_STATE, 2, POLICY, 2, false, EMIT_DIGEST);
+        h.rag.result = ragWith(RAG_HIT);
+        h.gateway.then(answer(ANSWER_MARKER));
+        AgentChatRequest req = new AgentChatRequest(
+                QUESTION_MARKER,
+                List.of(new AgentChatRequest.Turn("user", "第一轮问题"),
+                        new AgentChatRequest.Turn("assistant", "第一轮回答")),
+                null, 7, true, SPOOF_TENANT, "algebra", null);
+
+        h.orchestrator.run(h.platform(), req, h.sink);
+
+        assertThat(h.emitter.inputs).hasSize(1);
+        ContextCheckpointEmitter.Input in = h.emitter.inputs.get(0);
+        // 纯对话历史：history 2 条 + 当前输入 1 条，⛔ 不含 RAG 围栏块（否则会被抽取成事实）。
+        assertThat(in.historyMessages()).hasSize(3);
+        assertThat(in.historyMessages()).noneMatch(
+                m -> m.content().contains(PromptGuard.TOOL_RESULT_OPEN));
+        assertThat(in.historyMessages().get(2).content()).isEqualTo(QUESTION_MARKER);
+        assertThat(in.historyTurns()).isEqualTo(2)
+                .as("upToTurn 必须与接收侧 history 长度同口径");
+        assertThat(in.policyVersion()).isEqualTo(POLICY)
+                .as("发射策略指纹必须由 D17 唯一裁决端口取得，与接收侧同源");
+        assertThat(h.policyVersions.calls).isGreaterThanOrEqualTo(1);
+        assertThat(in.tenantId()).isEqualTo(TENANT)
+                .as("checkpoint 租户必须来自 Context，绝不取请求体 SPOOF_TENANT");
+        assertThat(in.scopeKey()).isEqualTo("chat:" + firstOf(h.sink, AgentChatEvent.RunStart.class).runId());
+        assertThat(in.tier()).isEqualTo(2);
+        assertThat(in.fallback()).isFalse();
+    }
+
+    @Test
+    @DisplayName("⛔ 装配拒绝 fail-closed 时零 checkpoint：错误帧后不发射、审计 FAILED")
+    void assemblyRejectionEmitsNoCheckpoint() {
+        Harness h = new Harness();
+        h.assembly.reject(RequestAssemblyException.Reason.CONTEXT_BUDGET_EXCEEDED);
+        h.emitter.emits(EMIT_STATE, 2, POLICY, 2, false, EMIT_DIGEST);
+
+        h.orchestrator.run(h.platform(), h.request(null), h.sink);
+
+        assertThat(h.sink.names).doesNotContain("context.checkpoint");
+        assertThat(h.emitter.inputs).isEmpty();
+        assertThat(h.audit.finishRecord.state()).isEqualTo("FAILED");
+    }
+
     // ── 夹具 ────────────────────────────────────────────────────────
 
     /** 每次测试独立的编排器与可观测替身；全部通过 {@code run()} 入口驱动。 */
@@ -797,6 +997,8 @@ class AgentChatOrchestratorTest {
         ToolInvocationGate.ToolInvocationResult toolResult = ToolInvocationResultFixture.empty();
         /** 默认 passthrough：走真实装配接线但返回 legacy 同一引用（关闭态逐位等价）。 */
         final ScriptedAssembly assembly = new ScriptedAssembly();
+        /** 默认 null：轮末不发 checkpoint（影子期 / 关闭态 / 无新增的基线）。 */
+        final ScriptedEmitter emitter = new ScriptedEmitter();
         final AgentChatOrchestrator orchestrator;
 
         Harness() {
@@ -825,7 +1027,7 @@ class AgentChatOrchestratorTest {
                     closures, modelConfig, toolGate,
                     /* maxToolRounds */ 1, /* defaultTopK */ 5,
                     /* lease */ Duration.ofMinutes(1),
-                    stateVerifier, policyVersions, assembly);
+                    stateVerifier, policyVersions, assembly, emitter);
         }
 
         Context platform() {
@@ -1051,6 +1253,36 @@ class AgentChatOrchestratorTest {
                     List.of(ModelMessage.user("ASSEMBLED_MESSAGE")));
             return new RequestAssemblyResult(replaced, true, tier, fallback,
                     beforeTokens, afterTokens, compactionCount, null);
+        }
+    }
+
+    /** 轮末压缩态封包替身：默认 null（不发）；可注入可辨识载荷 / 异常并记录真实入参。 */
+    private static final class ScriptedEmitter implements ContextCheckpointEmitter {
+        final List<Input> inputs = new ArrayList<>();
+        Emitted next;
+        RuntimeException failure;
+        boolean noEmit = true;
+
+        ScriptedEmitter emits(String state, Integer upToTurn, String policyVersion,
+                              int tier, boolean fallback, String digest) {
+            this.next = new Emitted(state, upToTurn, policyVersion, tier, fallback, digest);
+            this.noEmit = false;
+            return this;
+        }
+
+        ScriptedEmitter throwsOnEmit(RuntimeException failure) {
+            this.failure = failure;
+            this.noEmit = false;
+            return this;
+        }
+
+        @Override
+        public Emitted emit(@NonNull Input input) {
+            inputs.add(input);
+            if (failure != null) {
+                throw failure;
+            }
+            return noEmit ? null : next;
         }
     }
 

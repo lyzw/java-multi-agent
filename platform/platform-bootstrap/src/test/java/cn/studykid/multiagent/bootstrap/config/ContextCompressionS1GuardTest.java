@@ -56,6 +56,7 @@ class ContextCompressionS1GuardTest {
 
     /** S3-M8-b-1（#72）撤点反证脚本，钉死「升级后的白名单守卫」不是空断言。 */
     private static final String COUNTERPROOF = "scripts/m8b-l2-assembly-counterproof.sh";
+    private static final String COUNTERPROOF_M8B2 = "scripts/m8b2-checkpoint-emission-counterproof.sh";
 
     @Test
     @DisplayName("✅ agent-context 是纯算法层：零 Spring / 零 JDBC / 零驱动 import")
@@ -272,6 +273,34 @@ class ContextCompressionS1GuardTest {
                 .contains("RV-M8B-03")
                 .contains("RV-M8B-04")
                 .contains("RV-M8B-05")
+                .as("⛔ 中断保护缺失：SIGTERM/SIGINT 会残留撤点源码造成静默失真")
+                .contains("trap restore EXIT")
+                .contains("INT TERM")
+                .as("⛔ 红/绿判定缺失：编译失败无报告时会被当作有效反证")
+                .contains("expect_red")
+                .contains("expect_green")
+                .contains("Tests run:")
+                .contains("Skipped: 0")
+                .as("⛔ 复原三件套缺失")
+                .contains("anchor_count")
+                .contains("marker_count")
+                .contains("md5_all")
+                .contains("git diff --check");
+    }
+
+    @Test
+    @DisplayName("✅ M8-b-2 反证脚本带中断保护、精确锚点、红/绿判定与 md5 复原（第 14 事件发射不是空断言）")
+    void m8b2CounterproofScriptKeepsDiscipline() {
+        String script = read(repoRoot().resolve(COUNTERPROOF_M8B2));
+
+        assertThat(script)
+                .as("⛔ 撤点标识缺失：无法证明「撤掉修复点会红」")
+                .contains("RV-M8B2-01")
+                .contains("RV-M8B2-02")
+                .contains("RV-M8B2-03")
+                .contains("RV-M8B2-04")
+                .contains("RV-M8B2-05")
+                .contains("RV-M8B2-06")
                 .as("⛔ 中断保护缺失：SIGTERM/SIGINT 会残留撤点源码造成静默失真")
                 .contains("trap restore EXIT")
                 .contains("INT TERM")
