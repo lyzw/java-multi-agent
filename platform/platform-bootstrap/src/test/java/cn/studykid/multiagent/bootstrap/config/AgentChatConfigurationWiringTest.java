@@ -19,6 +19,8 @@ import cn.studykid.multiagent.infrastructure.rag.HttpRagRetrievalGateway;
 import cn.studykid.multiagent.ports.agentchat.AgentChatAuditPort;
 import cn.studykid.multiagent.ports.agentchat.AgentChatIdentityResolver;
 import cn.studykid.multiagent.ports.agentchat.AgentChatOrchestratorPort;
+import cn.studykid.multiagent.ports.agentchat.ContextPolicyVersionPort;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
@@ -87,7 +89,9 @@ class AgentChatConfigurationWiringTest {
                 mock(CapAgentDefPort.class),
                 mock(CapToolDefPort.class),
                 mock(ModelResolver.class),
-                mock(ToolInvocationGate.class));
+                mock(ToolInvocationGate.class),
+                mock(ContextStateVerifier.class),
+                mock(ContextPolicyVersionPort.class));
 
         assertThat(port).isInstanceOf(AgentChatOrchestrator.class);
         for (Field field : AgentChatOrchestrator.class.getDeclaredFields()) {

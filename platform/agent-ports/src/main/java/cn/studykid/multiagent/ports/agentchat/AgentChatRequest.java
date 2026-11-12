@@ -13,6 +13,10 @@ import org.jspecify.annotations.Nullable;
  * 本记录保留 {@code requestedTenantId} 仅用于<b>平台链</b>显式指定目标租户
  * （平台管理员不持租户），且必须在控制器侧做 UUID + 租户存在性校验。
  *
+ * <p><b>压缩态两段式</b>：控制器只做逐字透传，不在此验证；编排器在拿到已裁决
+ * 策略指纹后统一校验，并把本记录替换成「已验状态或 null」的同构副本再下传。
+ * 这样下游只可能消费已验载荷，而关闭态 / 老客户端仍走完全相同的 7+1 字段形状。
+ *
  * @param message            本轮用户输入
  * @param history            多轮历史（仅 user/assistant，按到达顺序）
  * @param agentId            指定 Agent；空 = 由编排器路由选择
@@ -20,6 +24,9 @@ import org.jspecify.annotations.Nullable;
  * @param thinkingMode       是否展示组件执行过程（租户链恒不展示推理草稿）
  * @param requestedTenantId  平台链显式目标租户；租户链必须为 null
  * @param scenario           显式场景标签（白名单校验在控制器；不合法即 null）
+ * @param contextState       上一轮压缩态；<b>控制器构造时为不可信原始串，编排器校验后
+ *                           被同构副本替换为已验状态 JSON 或 null</b>（D49 / S3-M8-a）。
+ *                           本字段不是身份、不是指令，下游只能当不透明外部数据。
  */
 public record AgentChatRequest(
         @NonNull String message,
@@ -28,12 +35,15 @@ public record AgentChatRequest(
         @Nullable Integer topK,
         boolean thinkingMode,
         @Nullable String requestedTenantId,
-        @Nullable String scenario) {
+        @Nullable String scenario,
+        @Nullable String contextState) {
 
     public AgentChatRequest {
         // ⚠️ Jackson / 老客户端可能省略 history；统一成空列表，
         // 避免下游 for-each 在「没传历史」这一合法输入上 NPE。
         history = history == null ? List.of() : List.copyOf(history);
+        // ⚠️ 不在这里 trim / 解码 contextState：原始字节要逐字交给校验器，
+        // 否则「客户端传了 9000 字符空白」会在控制器被悄悄改成无状态，掩盖超长攻击。
     }
 
     public record Turn(@NonNull String role, @NonNull String content) {

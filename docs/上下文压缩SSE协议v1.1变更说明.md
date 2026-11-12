@@ -1,6 +1,6 @@
 # SSE 协议 v1.1 变更说明（上下文压缩，M6 冻结）
 
-> **状态**：契约冻结 / G2 已对话确认放行，S3-M8 按 ADR-013 D49 与 G1 A.5 台账激活（M6 仍为历史 contract-only 时点）
+> **状态**：契约冻结 / G2 已对话确认放行；**S3-M8-a 请求侧已落地（只收不发）**——DTO 扩字段 + Controller 逐字透传 + 编排边界六项静默丢弃，第 14 事件仍不发射（ADR-013 D49 / D50）
 > **版本**：v1 → **v1.1**
 > **前置**：G1 已对话确认放行；G2 于 2026-11-12 对话确认放行（线下补签）。旧口径「G1 TL/QA 签核前不进入 M7」保留为历史门禁，当前须按 G1 A.5 的 S3-M8 台账「先登记、后升级守卫」
 > **激活边界**：M8（服务端在 `usage` 与 `done` 之间发射 `context.checkpoint` + 请求侧 `contextState` **六项**静默丢弃校验）、M13（两前端同批发协议 v1.1 并携带 committed `contextState`）
@@ -138,8 +138,11 @@ new AgentChatEvent.Done(false, "cp_v1_8f3").data()
 - M6 **不**给 `AgentChatStreamRequest` / `AgentChatRequest` 增加 `contextState`；
 - **M13 mock 仍不**改请求体、**不**引入 localStorage/sessionStorage 持久化：只解析帧、
   只在内存暂存压缩态，刷新即降级为全量历史；
-- 请求字段与 carry-over **六项**丢弃校验（D49）属于 **M8**；前端正式收发 `contextState` 属于
-  **M13 收口**，与 M8 同批发；
+- 请求字段与 carry-over **六项**丢弃校验（D49）属于 **M8**：**M8-a 已完成**——
+  `AgentChatStreamRequest` / `AgentChatRequest` 全参新增 `contextState`，Controller 只逐字透传，
+  六项校验在编排边界执行，`Absent` / `Discarded` 一律静默归 `null` 并退回全量历史；
+  **M8-b** 才发射 `context.checkpoint` 与 `Done.contextStateVersion`；
+- 前端正式收发 `contextState` 属于 **M13 收口**，与 M8-b 同批发；此前两前端请求体仍禁带；
 - 因此 M6 + M13 mock 的服务端行为与今天**逐位一致**：既没有新请求头/字段，也没有新 SSE 帧；
   唯一变化是两前端**能识别**服务端尚未发射的第 14 事件。
 

@@ -324,7 +324,9 @@ public sealed interface AgentChatEvent permits
      *
      * <p>⚠️ <b>state 是不透明 base64</b>：内容为结构化状态 JSON + 元数据，经独立 HMAC 密钥
      * {@code AGENT_CONTEXT_STATE_HMAC_KEY} 签名；服务端下一轮必须按不可信数据处理，
-     * 五项校验任一失败即丢弃并退回全量历史（§4.4）。⛔ 绝不复用 JWT 密钥。
+     * <b>六项</b>不可信校验（D49：HMAC / {@code exp} / {@code policyVersion} /
+     * tenant digest / {@code max-state-chars} / {@code upToTurn ≤ history}）任一失败即丢弃并
+     * 退回全量历史（§4.4）。⛔ 绝不复用 JWT 密钥。
      *
      * <p>⚠️ 本 record 在 M6 只定义契约、不发射；M8 接线时才由编排器在
      * {@code answer} 之后、{@code done} 之前下发。旧客户端 {@code default: return null}

@@ -55,6 +55,9 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
  *
  * <p><b>失败口径</b>：建连前失败（身份/参数/限流）走 HTTP 4xx；
  * 编排中失败走 {@code event: error} + {@code event: done}，且审计仍收敛 FAILED。
+ *
+ * <p><b>压缩态边界</b>：本控制器对 {@code contextState} 只做逐字透传，不验签 / 不解码 /
+ * 不因它拒绝请求；六项不可信校验统一放在能取得已裁决策略指纹的编排边界（D49）。
  */
 @RestController
 public class AgentChatController {
@@ -115,7 +118,7 @@ public class AgentChatController {
     private ResponseEntity<SseEmitter> stream(@RequestBody AgentChatStreamRequest body,
                                               boolean platformChain) {
         AgentChatStreamRequest safe = body == null
-                ? new AgentChatStreamRequest(null, List.of(), null, null, false, null, null)
+                ? new AgentChatStreamRequest(null, List.of(), null, null, false, null, null, null)
                 : body;
         if (safe.message() == null || safe.message().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "message 不能为空");
@@ -152,7 +155,10 @@ public class AgentChatController {
                 safe.topK(),
                 safe.thinkingMode(),
                 platformChain ? blankToNull(safe.tenantId()) : null,
-                blankToNull(safe.scenario()));
+                blankToNull(safe.scenario()),
+                // ⚠️ 控制器只透传原始串；六项不可信校验在能取得已裁决策略指纹的
+                //    编排边界执行（D49）。这里做 trim / 解码会掩盖超长与篡改。
+                safe.contextState());
 
         SseEmitter emitter = emitterFactory.get();
         emitter.onCompletion(() -> log.debug("Agent 编排 SSE 完成: domain={}", context.domain()));
@@ -233,7 +239,13 @@ public class AgentChatController {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    /** 请求体：字段名与两个前端的 {@code AgentChatRequest} 逐字对齐。 */
+    /**
+     * 请求体：字段名与两个前端的 {@code AgentChatRequest} 逐字对齐。
+     *
+     * <p>⚠️ {@code contextState} 是<b>不透明原始串</b>：缺失 / 空白表示本轮无压缩态；
+     * 控制器不验签、不解码、不 trim，逐字下传给编排边界统一按 D49 六项校验。
+     * 租户链只禁止请求体指定 {@code tenantId}，压缩态对两条身份域同样放开。
+     */
     public record AgentChatStreamRequest(
             @Nullable String message,
             @Nullable List<AgentChatTurn> history,
@@ -241,7 +253,8 @@ public class AgentChatController {
             @Nullable Integer topK,
             boolean thinkingMode,
             @Nullable String tenantId,
-            @Nullable String scenario) {
+            @Nullable String scenario,
+            @Nullable String contextState) {
     }
 
     /** 单轮历史；role 只允许 user / assistant，其余由编排器 fail-closed 拒绝。 */

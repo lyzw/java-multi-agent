@@ -18,7 +18,8 @@ import cn.studykid.multiagent.ports.model.ModelMessage;
  * <p>⚠️ <b>不可信块与主流程分离</b>：{@code memoryBlock} / {@code ragBlocks} /
  * {@code carryOverStateJson} 都是外部数据，装配器必须走带围栏 USER 块，
  * ⛔ 绝不拼进 {@code systemPrompt}（[D6] / MA-T14）。{@code carryOverStateJson}
- * 还须先过 HMAC / TTL / policyVersion / tenant digest / 大小五项校验（§4.4）。
+ * 还须先过<b>六项</b>不可信校验（D49：HMAC / {@code exp} / {@code policyVersion} /
+ * tenant digest / {@code max-state-chars} / {@code upToTurn ≤ history}，§4.4）。
  *
  * <p>⚠️ <b>零框架</b>：只用端口层已有的 {@link ModelMessage} / {@link ModelCapabilities}，
  * 不引入 agent-context 的 {@code ContextPolicy} / {@code StructuredState}（ADR-011 / C1）。

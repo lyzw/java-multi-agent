@@ -40,6 +40,12 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatEvent;
 import cn.studykid.multiagent.ports.agentchat.AgentChatOrchestratorPort;
 import cn.studykid.multiagent.ports.agentchat.AgentChatRequest;
 import cn.studykid.multiagent.ports.agentchat.AgentChatRequest.Context;
+import cn.studykid.multiagent.ports.agentchat.ContextPolicyVersionPort;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Accepted;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Discarded;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.DropReason;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Result;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort.RagResult;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort.RagUnavailableException;
@@ -93,6 +99,14 @@ class AgentChatOrchestratorTest {
     private static final String QUESTION_MARKER = "QUESTION_MARKER_怎么移项";
     private static final String SYSTEM_MARKER = "SYS_PROMPT_MARKER_可信指令";
     private static final String THINKING_SECRET = "推理草稿_绝不可下发租户";
+    private static final String RAW_STATE = "RAW_ENVELOPE_不进审计";
+    private static final String VERIFIED_STATE = "VERIFIED_STATE_JSON_标记";
+    private static final String POLICY = "cp_m8a_test";
+    private static final String STATE_DIGEST = "sha256:m8a-test";
+    /** 单轮终答、零 RAG 命中、一个 Skill 时的旧 13 帧子集（M8-a 不得改变）。 */
+    private static final List<String> NO_TOOL_FRAME_NAMES = List.of(
+            "run.start", "route", "rag.query", "rag.hits",
+            "skill", "skill", "delta", "answer", "usage", "done");
 
     // ── 主链路 ────────────────────────────────────────────────────────
 
@@ -265,6 +279,143 @@ class AgentChatOrchestratorTest {
         assertThat(h.audit.beginRecord.tenantId()).isEqualTo(TENANT);
     }
 
+    // ── 请求侧压缩态（S3-M8-a） ──────────────────────────────────────
+
+    @Test
+    @DisplayName("⛔ 已验压缩态静默下传：同构副本只换 contextState，旧 13 帧与审计形状不变")
+    void acceptedContextStateIsSilentlyNormalized() {
+        Harness h = new Harness();
+        h.stateVerifier.result = new Accepted(VERIFIED_STATE, POLICY, 2, STATE_DIGEST);
+        h.gateway.then(answer(ANSWER_MARKER));
+        AgentChatRequest raw = h.request(null, RAW_STATE);
+
+        AgentChatOrchestrator.ContextStateResolution resolved = h.orchestrator.applyContextState(
+                h.platform(), raw, AGENT, 1, "model-x", 2048);
+
+        assertThat(resolved.request()).isNotSameAs(raw);
+        assertThat(resolved.request().contextState()).isEqualTo(VERIFIED_STATE);
+        assertThat(resolved.stateJson()).isEqualTo(VERIFIED_STATE);
+        assertThat(resolved.policyVersion()).isEqualTo(POLICY);
+        assertThat(resolved.digest()).isEqualTo(STATE_DIGEST);
+        assertThat(resolved.upToTurn()).isEqualTo(2);
+        assertThat(resolved.dropReason()).isNull();
+        // 铁律 #10：全参逐字段带过，净化不得顺手改消息 / 场景 / 身份。
+        assertThat(resolved.request().message()).isEqualTo(raw.message());
+        assertThat(resolved.request().history()).containsExactlyElementsOf(raw.history());
+        assertThat(resolved.request().scenario()).isEqualTo(raw.scenario());
+        assertThat(resolved.request().thinkingMode()).isEqualTo(raw.thinkingMode());
+        assertThat(resolved.request().requestedTenantId()).isEqualTo(raw.requestedTenantId());
+        assertThat(h.policyVersions.seen.tenantId()).isEqualTo(TENANT);
+        assertThat(h.policyVersions.seen.agentId()).isEqualTo(AGENT);
+        assertThat(h.policyVersions.seen.agentVersion()).isEqualTo(1);
+        assertThat(h.policyVersions.seen.modelId()).isEqualTo("model-x");
+        assertThat(h.policyVersions.seen.maxOutputTokens()).isEqualTo(2048);
+        assertThat(h.stateVerifier.seen.clientState()).isEqualTo(RAW_STATE);
+        assertThat(h.stateVerifier.seen.historyTurns()).isEqualTo(raw.history().size());
+        assertThat(h.stateVerifier.seen.expectedPolicyVersion()).isEqualTo(POLICY);
+
+        h.orchestrator.run(h.platform(), raw, h.sink);
+        assertThat(h.sink.names).containsExactlyElementsOf(NO_TOOL_FRAME_NAMES);
+        assertThat(h.sink.names).doesNotContain("error");
+        assertThat(h.audit.finishRecord.state()).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
+    @DisplayName("⛔ 任一不可信校验命中：静默丢弃 + 全量历史，旧 13 帧一个字节不变")
+    void discardedContextStateFallsBackToFullHistorySilently() {
+        Harness h = new Harness();
+        h.stateVerifier.result = new Discarded(DropReason.HMAC_MISMATCH);
+        h.gateway.then(answer(ANSWER_MARKER));
+        AgentChatRequest raw = h.request(null, RAW_STATE);
+
+        AgentChatOrchestrator.ContextStateResolution resolved = h.orchestrator.applyContextState(
+                h.platform(), raw, AGENT, 1, "model-x", 2048);
+
+        assertThat(resolved.request().contextState()).isNull();
+        assertThat(resolved.stateJson()).isNull();
+        assertThat(resolved.dropReason()).isEqualTo(DropReason.HMAC_MISMATCH);
+
+        h.orchestrator.run(h.platform(), raw, h.sink);
+        assertThat(h.sink.names).containsExactlyElementsOf(NO_TOOL_FRAME_NAMES);
+        assertThat(h.sink.names).doesNotContain("error");
+        assertThat(h.audit.finishRecord.state()).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
+    @DisplayName("⛔ 无 contextState：同一请求引用直返，零策略读取 / 零校验调用（G1 老客户端逐位等价）")
+    void absentContextStateSkipsBothPortsAndKeepsRequestIdentity() {
+        Harness h = new Harness();
+        h.gateway.then(answer(ANSWER_MARKER));
+        AgentChatRequest raw = h.request(null);
+
+        AgentChatOrchestrator.ContextStateResolution resolved = h.orchestrator.applyContextState(
+                h.platform(), raw, AGENT, 1, "model-x", 2048);
+        assertThat(resolved.request()).isSameAs(raw);
+        assertThat(resolved.dropReason()).isNull();
+        assertThat(h.policyVersions.calls).isZero();
+        assertThat(h.stateVerifier.calls).isZero();
+
+        h.orchestrator.run(h.platform(), raw, h.sink);
+        assertThat(h.policyVersions.calls).isZero();
+        assertThat(h.stateVerifier.calls).isZero();
+        assertThat(h.sink.names).containsExactlyElementsOf(NO_TOOL_FRAME_NAMES);
+    }
+
+    @Test
+    @DisplayName("⛔ 策略裁决异常也为静默丢弃，绝不把可选增强变成 error 帧 / FAILED 审计")
+    void policyResolutionFailureIsSilent() {
+        Harness h = new Harness();
+        h.policyVersions.failure = new IllegalStateException("catalog unavailable");
+        h.gateway.then(answer(ANSWER_MARKER));
+        AgentChatRequest raw = h.request(null, RAW_STATE);
+
+        AgentChatOrchestrator.ContextStateResolution resolved = h.orchestrator.applyContextState(
+                h.platform(), raw, AGENT, 1, "model-x", 2048);
+        assertThat(resolved.request().contextState()).isNull();
+        assertThat(resolved.dropReason()).isNull();
+
+        h.orchestrator.run(h.platform(), raw, h.sink);
+        assertThat(h.sink.names).containsExactlyElementsOf(NO_TOOL_FRAME_NAMES);
+        assertThat(h.sink.names).doesNotContain("error");
+        assertThat(h.audit.finishRecord.state()).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
+    @DisplayName("⛔ 租户链同样按不可信纪律处理，不因压缩态泄漏 thinking 或新增帧")
+    void tenantChainContextStateStaysSilentAndThinkingFree() {
+        Harness h = new Harness();
+        h.stateVerifier.result = new Accepted(VERIFIED_STATE, POLICY, null, STATE_DIGEST);
+        h.gateway.then(thinkingThenAnswer(THINKING_SECRET, ANSWER_MARKER));
+
+        h.orchestrator.run(h.tenant(), h.request(SPOOF_TENANT, RAW_STATE), h.sink);
+
+        assertThat(h.stateVerifier.seen.tenantId()).isEqualTo(TENANT);
+        assertThat(h.sink.events).noneMatch(e -> e instanceof AgentChatEvent.Thinking);
+        assertThat(h.sink.names).doesNotContain("error").endsWith("done");
+        assertThat(h.audit.beginRecord.tenantId()).isEqualTo(TENANT);
+    }
+
+    @Test
+    @DisplayName("⛔ 原始 / 已验压缩态串都不进事件、模型上下文与审计载荷")
+    void contextStateNeverLeaksIntoFramesOrAudit() {
+        Harness h = new Harness();
+        h.stateVerifier.result = new Accepted(VERIFIED_STATE, POLICY, null, STATE_DIGEST);
+        h.gateway.then(answer(ANSWER_MARKER));
+
+        h.orchestrator.run(h.platform(), h.request(null, RAW_STATE), h.sink);
+
+        String frames = h.sink.events.stream().map(AgentChatEvent::data).reduce("", String::concat);
+        String model = h.gateway.requests.get(0).messages().stream()
+                .map(ModelMessage::content).reduce("", String::concat);
+        String audit = String.valueOf(h.audit.beginRecord.inputPayload())
+                + h.audit.finishRecord.resultPayload()
+                + h.audit.finishRecord.events().stream()
+                        .map(e -> String.valueOf(e.payload())).reduce("", String::concat);
+        for (String blob : List.of(frames, model, audit)) {
+            assertThat(blob).doesNotContain(RAW_STATE, VERIFIED_STATE);
+        }
+    }
+
     // ── 工具组件级失败 ────────────────────────────────────────────────
 
     @Test
@@ -428,13 +579,13 @@ class AgentChatOrchestratorTest {
     @DisplayName("⛔ 非法请求 fail-closed：四种畸形输入都发 INVALID_REQUEST + done")
     void invalidRequestsFailClosed() {
         List<AgentChatRequest> bad = List.of(
-                new AgentChatRequest("  ", List.of(), null, null, false, null, null),
-                new AgentChatRequest("x".repeat(32_001), List.of(), null, null, false, null, null),
+                new AgentChatRequest("  ", List.of(), null, null, false, null, null, null),
+                new AgentChatRequest("x".repeat(32_001), List.of(), null, null, false, null, null, null),
                 new AgentChatRequest("q", List.of(new AgentChatRequest.Turn("system", "越权")),
-                        null, null, false, null, null),
+                        null, null, false, null, null, null),
                 new AgentChatRequest("q", java.util.stream.IntStream.range(0, 101)
                         .mapToObj(i -> new AgentChatRequest.Turn("user", "m" + i)).toList(),
-                        null, null, false, null, null));
+                        null, null, false, null, null, null));
 
         for (AgentChatRequest request : bad) {
             Harness h = new Harness();
@@ -494,6 +645,8 @@ class AgentChatOrchestratorTest {
         final FixedClosures closures = new FixedClosures();
         final AgentModelConfigAssembler modelConfig = mock(AgentModelConfigAssembler.class);
         final ToolInvocationGate toolGate = mock(ToolInvocationGate.class);
+        final RecordingPolicyVersions policyVersions = new RecordingPolicyVersions();
+        final RecordingStateVerifier stateVerifier = new RecordingStateVerifier();
         final List<ExecutionScope> scopes = new ArrayList<>();
         ToolInvocationGate.ToolInvocationResult toolResult = ToolInvocationResultFixture.empty();
         final AgentChatOrchestrator orchestrator;
@@ -523,7 +676,8 @@ class AgentChatOrchestratorTest {
                             new ExecutionSnapshotPort.SnapshotRef(SNAPSHOT, 1)),
                     closures, modelConfig, toolGate,
                     /* maxToolRounds */ 1, /* defaultTopK */ 5,
-                    /* lease */ Duration.ofMinutes(1));
+                    /* lease */ Duration.ofMinutes(1),
+                    stateVerifier, policyVersions);
         }
 
         Context platform() {
@@ -535,8 +689,12 @@ class AgentChatOrchestratorTest {
         }
 
         AgentChatRequest request(String spoofTenant) {
+            return request(spoofTenant, null);
+        }
+
+        AgentChatRequest request(String spoofTenant, String contextState) {
             return new AgentChatRequest(QUESTION_MARKER, List.of(), null, 7, true,
-                    spoofTenant, "algebra");
+                    spoofTenant, "algebra", contextState);
         }
     }
 
@@ -751,6 +909,38 @@ class AgentChatOrchestratorTest {
         public @NonNull EffectiveClosure resolveCurrent(@NonNull String tenantId,
                                                         @NonNull String agentId) {
             return closure;
+        }
+    }
+
+    /** 策略指纹裁决替身：记录真实查询事实，可注入裁决异常验证静默降级。 */
+    private static final class RecordingPolicyVersions implements ContextPolicyVersionPort {
+        Input seen;
+        int calls;
+        String version = POLICY;
+        RuntimeException failure;
+
+        @Override
+        public String resolve(@NonNull Input input) {
+            calls++;
+            seen = input;
+            if (failure != null) {
+                throw failure;
+            }
+            return version;
+        }
+    }
+
+    /** 不可信状态校验替身：只按脚本给三态结果，记录编排器传入的原始事实。 */
+    private static final class RecordingStateVerifier implements ContextStateVerifier {
+        Input seen;
+        int calls;
+        Result result = new ContextStateVerifier.Absent();
+
+        @Override
+        public @NonNull Result verify(@NonNull Input input) {
+            calls++;
+            seen = input;
+            return result;
         }
     }
 

@@ -17,6 +17,8 @@ import cn.studykid.multiagent.infrastructure.rag.HttpRagRetrievalGateway;
 import cn.studykid.multiagent.ports.agentchat.AgentChatAuditPort;
 import cn.studykid.multiagent.ports.agentchat.AgentChatIdentityResolver;
 import cn.studykid.multiagent.ports.agentchat.AgentChatOrchestratorPort;
+import cn.studykid.multiagent.ports.agentchat.ContextPolicyVersionPort;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
@@ -126,7 +128,9 @@ public class AgentChatConfiguration {
      *   <li>{@code ExecutionSnapshotPort} 提供固定版本的执行快照，
      *       保证工具账本外键与「在途 Run 不漂移」；</li>
      *   <li>{@code ToolInvocationGate} 是工具执行的唯一闸门（审批 / 预算 / 闭包 / 取消
-     *       全在里面），<b>绝不允许</b>对话链路绕过它直接调工具。</li>
+     *       全在里面），<b>绝不允许</b>对话链路绕过它直接调工具；</li>
+     *   <li>请求侧压缩态校验器与策略指纹裁决端口均来自独立装配片，编排器不自己解析
+     *       不可信状态（S3-M8-a / D49）。</li>
      * </ul>
      */
     @Bean
@@ -141,13 +145,16 @@ public class AgentChatConfiguration {
             @NonNull CapAgentDefPort agentDefs,
             @NonNull CapToolDefPort toolDefs,
             @NonNull ModelResolver modelResolver,
-            @NonNull ToolInvocationGate toolGate) {
+            @NonNull ToolInvocationGate toolGate,
+            @NonNull ContextStateVerifier contextStateVerifier,
+            @NonNull ContextPolicyVersionPort contextPolicyVersionPort) {
         AgentModelConfigAssembler modelConfig = new AgentModelConfigAssembler(
                 agentDefs, closureResolver, toolDefs, modelResolver);
         log.info("装配请求级 Agent 编排器: 路由/RAG/Skill/Tool/审计均已接真实实现"
                 + "（不写 Outbox，lease_owner={}）",
                 cn.studykid.multiagent.ports.persistence.RunClaimPort.SSE_DIRECT_LEASE_OWNER);
         return new AgentChatOrchestrator(audit, rag, chatGateway, router, agents,
-                snapshots, closureResolver, modelConfig, toolGate);
+                snapshots, closureResolver, modelConfig, toolGate,
+                contextStateVerifier, contextPolicyVersionPort);
     }
 }

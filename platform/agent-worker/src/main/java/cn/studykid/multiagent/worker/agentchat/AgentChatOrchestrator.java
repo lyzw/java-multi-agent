@@ -10,6 +10,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 import org.jspecify.annotations.NonNull;
@@ -36,6 +37,12 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatEvent;
 import cn.studykid.multiagent.ports.agentchat.AgentChatOrchestratorPort;
 import cn.studykid.multiagent.ports.agentchat.AgentChatRequest;
 import cn.studykid.multiagent.ports.agentchat.AgentChatRequest.Context;
+import cn.studykid.multiagent.ports.agentchat.ContextPolicyVersionPort;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Accepted;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Discarded;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.DropReason;
+import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Result;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort;
 import cn.studykid.multiagent.ports.metrics.ScenarioTag;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
@@ -70,7 +77,13 @@ import cn.studykid.multiagent.worker.execute.ToolOutcomeRenderer;
  *   <li>工具结果回灌复用 {@link ToolOutcomeRenderer#renderRound}，
  *       保证 assistant(tool_calls) 与 tool 消息成对且标识一致；</li>
  *   <li>推理草稿仅 {@code context.thinkingAllowed()} 时下发，租户通道恒不下发。</li>
+ *   <li>请求侧压缩态是<b>不透明外部数据</b>：控制器只逐字透传，本类在拿到冻结策略
+ *       指纹后统一做六项不可信校验，验过才下传，验不过静默退回全量历史。</li>
  * </ul>
+ *
+ * <p><b>压缩态边界</b>：本批只做「接收侧净化」，不生成 / 不发射第 14 事件，
+ * 旧 13 帧字节、审计两段式、无 outbox / MQ 全部不变。策略指纹由中性裁决端口提供，
+ * ⛔ 编排器不自己拼全局常量、不读算法层配置（ADR-011）。
  *
  * <p><b>fail-closed</b>：路由不确定 / Agent 配置缺失 / 模型请求非法 / 工具闸门抛异常
  * 一律发 {@code error} 并收敛 FAILED；<b>绝不</b>编造命中、不静默降级成「随便选一个」。
@@ -108,6 +121,8 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
     private final ClosureResolver closureResolver;
     private final AgentModelConfigAssembler modelConfig;
     private final ToolInvocationGate toolGate;
+    private final @NonNull ContextStateVerifier stateVerifier;
+    private final @NonNull ContextPolicyVersionPort policyVersions;
     private final int maxToolRounds;
     private final int defaultTopK;
     private final Duration lease;
@@ -125,9 +140,12 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
                                  @NonNull ExecutionSnapshotPort snapshots,
                                  @NonNull ClosureResolver closureResolver,
                                  @NonNull AgentModelConfigAssembler modelConfig,
-                                 @NonNull ToolInvocationGate toolGate) {
+                                 @NonNull ToolInvocationGate toolGate,
+                                 @NonNull ContextStateVerifier stateVerifier,
+                                 @NonNull ContextPolicyVersionPort policyVersions) {
         this(audit, rag, chatGateway, router, agents, snapshots, closureResolver,
-                modelConfig, toolGate, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_TOP_K, DEFAULT_LEASE);
+                modelConfig, toolGate, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_TOP_K, DEFAULT_LEASE,
+                stateVerifier, policyVersions);
     }
 
     /** 全参构造（测试可收紧轮次 / 租约以构造挤出压力）。 */
@@ -142,7 +160,9 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
                                  @NonNull ToolInvocationGate toolGate,
                                  int maxToolRounds,
                                  int defaultTopK,
-                                 @NonNull Duration lease) {
+                                 @NonNull Duration lease,
+                                 @NonNull ContextStateVerifier stateVerifier,
+                                 @NonNull ContextPolicyVersionPort policyVersions) {
         if (maxToolRounds < 0 || defaultTopK < 1 || defaultTopK > MAX_TOP_K) {
             throw new IllegalArgumentException("编排参数非法: rounds=" + maxToolRounds
                     + ", topK=" + defaultTopK);
@@ -159,6 +179,8 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
         this.maxToolRounds = maxToolRounds;
         this.defaultTopK = defaultTopK;
         this.lease = lease;
+        this.stateVerifier = Objects.requireNonNull(stateVerifier, "stateVerifier 不得为空");
+        this.policyVersions = Objects.requireNonNull(policyVersions, "policyVersions 不得为空");
     }
 
     @Override
@@ -179,10 +201,18 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
             state.agentName = nameOf(candidates, decision.agentId());
             state.agentVersion = snapshotVersion(context.tenantId(), decision.agentId(), state);
 
-            // ② 审计占位必须在任何工具调用之前存在（tool_operation 外键）。
-            state.handle = audit.begin(beginRecord(context, request, state, started));
+            // ② 请求侧压缩态净化：在能取得冻结策略指纹的边界统一校验。
+            //    控制器传来的原始串在这里被换成「已验状态 JSON 或 null」，下游只见已验载荷。
+            ContextStateResolution carryOver = applyContextState(
+                    context, request, state.agentId, state.agentVersion,
+                    state.settings.modelId(), state.settings.maxTokens());
+            state.carryOver = carryOver;
+            AgentChatRequest effective = carryOver.request();
 
-            // ③ 协议序：run.start → route。runId 是刚落库的真实行，不是凭空生成后补写。
+            // ③ 审计占位必须在任何工具调用之前存在（tool_operation 外键）。
+            state.handle = audit.begin(beginRecord(context, effective, state, started));
+
+            // ④ 协议序：run.start → route。runId 是刚落库的真实行，不是凭空生成后补写。
             sink.accept(new AgentChatEvent.RunStart(state.runId));
             state.events().add(event("ROUTE", Map.of(
                     "agentId", state.agentId,
@@ -190,22 +220,22 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
             sink.accept(new AgentChatEvent.Route(state.agentId, state.agentName,
                     decision.reason(), decision.candidates()));
 
-            // ④ RAG：组件级失败不终止整轮；零命中是合法 info。
-            String ragContext = doRag(context, request, sink, state);
+            // ⑤ RAG：组件级失败不终止整轮；零命中是合法 info。
+            String ragContext = doRag(context, effective, sink, state);
 
-            // ⑤ Skill：当前语义是「声明式能力闭包 + 提示词行为指引」，真实执行在 Tool。
+            // ⑥ Skill：当前语义是「声明式能力闭包 + 提示词行为指引」，真实执行在 Tool。
             emitSkills(state, sink, state.closure);
 
-            // ⑥ 模型循环。
-            List<ModelMessage> messages = buildMessages(request, ragContext);
+            // ⑦ 模型循环。
+            List<ModelMessage> messages = buildMessages(effective, ragContext);
             ExecutionScope scope = new ExecutionScope(state.agentId, state.agentVersion,
                     ClosureFingerprint.of(state.closure));
             RunClaimPort.LeasedTask task = new RunClaimPort.LeasedTask(
                     state.runId, state.handle.fencingToken(),
                     started.plus(lease), 0, null);
-            runModelLoop(context, request, sink, state, messages, scope, task);
+            runModelLoop(context, effective, sink, state, messages, scope, task);
 
-            // ⑦ 成功收口：answer 用「用户实际看到的 delta 拼接」，保证与已到达增量同前缀。
+            // ⑧ 成功收口：answer 用「用户实际看到的 delta 拼接」，保证与已到达增量同前缀。
             sink.accept(new AgentChatEvent.Answer(state.answer().toString()));
             sink.accept(new AgentChatEvent.Usage(state.inputTokens(), state.outputTokens()));
             state.events().add(event("USAGE", Map.of(
@@ -247,6 +277,83 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
                 throw new IllegalArgumentException("history.role 只能是 user / assistant");
             }
         }
+    }
+
+    /**
+     * 请求侧压缩态的<b>唯一净化点</b>（ADR-013 D49）。
+     *
+     * <p>无 state 时返回传入的同一请求引用（老客户端 / 关闭态逐位等价）；有 state 时
+     * 先取当前已裁决策略指纹，再过六项不可信校验：通过才把已验状态 JSON 下传，
+     * 任一项失败都静默换成 {@code null} 并退回全量历史。⛔ 本方法不碰 Sink、
+     * 不发事件、不抛 HTTP 异常、不打印原始状态串。
+     *
+     * <p>包可见仅供行为测试从同一入口断言「验过才下传、丢弃传 null」；生产路径
+     * 由 {@link #run} 唯一调用。
+     */
+    @NonNull ContextStateResolution applyContextState(
+            @NonNull Context context,
+            @NonNull AgentChatRequest request,
+            @NonNull String agentId,
+            int agentVersion,
+            @NonNull String modelId,
+            int maxOutputTokens) {
+        Objects.requireNonNull(context, "context 不得为空");
+        Objects.requireNonNull(request, "request 不得为空");
+        if (request.contextState() == null) {
+            return new ContextStateResolution(request, null, null, null, null, null);
+        }
+        try {
+            String expected = policyVersions.resolve(new ContextPolicyVersionPort.Input(
+                    context.tenantId(), agentId, agentVersion, modelId, maxOutputTokens));
+            Result result = stateVerifier.verify(new ContextStateVerifier.Input(
+                    request.contextState(), context.tenantId(),
+                    request.history().size(), expected));
+            if (result instanceof Accepted accepted) {
+                return new ContextStateResolution(
+                        withContextState(request, accepted.stateJson()),
+                        accepted.stateJson(), accepted.digest(), accepted.policyVersion(),
+                        accepted.upToTurn(), null);
+            }
+            DropReason reason = result instanceof Discarded discarded ? discarded.reason() : null;
+            if (reason != null) {
+                log.debug("Agent 编排静默丢弃客户端压缩态: domain={}, reason={}",
+                        context.domain(), reason);
+            }
+            return new ContextStateResolution(
+                    withContextState(request, null), null, null, null, null, reason);
+        } catch (RuntimeException e) {
+            // 校验器 / 裁决端口自身出错也按「无可用压缩态」处理：
+            // 请求照常跑全量历史，绝不为可选增强发 error 帧或中断审计。
+            log.debug("Agent 编排压缩态校验不可用，退回全量历史: domain={}, kind={}",
+                    context.domain(), e.getClass().getSimpleName());
+            return new ContextStateResolution(
+                    withContextState(request, null), null, null, null, null, null);
+        }
+    }
+
+    /**
+     * 全参同构副本（铁律 #10）：只换 {@code contextState}，其它字段逐字带过。
+     * ⚠️ 绝不在这里重排 history / 顺手 trim message，否则「净化」会变成改请求字节。
+     */
+    private static @NonNull AgentChatRequest withContextState(
+            @NonNull AgentChatRequest request, @Nullable String stateJson) {
+        return new AgentChatRequest(
+                request.message(), request.history(), request.agentId(), request.topK(),
+                request.thinkingMode(), request.requestedTenantId(), request.scenario(),
+                stateJson);
+    }
+
+    /**
+     * 一次请求的压缩态净化结果。{@link #request()} 是此后唯一向下游传递的请求对象：
+     * {@code contextState} 只可能是已验状态 JSON 或 {@code null}（全量历史降级）。
+     */
+    record ContextStateResolution(
+            @NonNull AgentChatRequest request,
+            @Nullable String stateJson,
+            @Nullable String digest,
+            @Nullable String policyVersion,
+            @Nullable Integer upToTurn,
+            @Nullable DropReason dropReason) {
     }
 
     /** 候选来自 AgentQueryPort（RLS 内查询），只保留能解析出已发布执行快照的 Agent。 */
@@ -763,6 +870,8 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
         int toolRounds;
         int ragHits;
         boolean ragInjected;
+        /** S3-M8-a 净化结果；M8-b 从此处读取已验载荷，⛔ 不重新解析原始请求串。 */
+        ContextStateResolution carryOver;
         int stepNo;
         boolean finished;
 

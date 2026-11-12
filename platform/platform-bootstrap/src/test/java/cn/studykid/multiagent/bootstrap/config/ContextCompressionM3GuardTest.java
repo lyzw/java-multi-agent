@@ -6,7 +6,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -24,8 +27,9 @@ import org.junit.jupiter.api.Test;
  *       且旧直发与 CAP 归档都从同一个 {@link ContextPolicyReader} 归一化实现派生；
  *       ⛔ 不允许任一侧另写 Jackson / 默认值逻辑；</li>
  *   <li>发布期多传的 {@code contextPolicy} 只进快照：{@code run_config}（DEC-9 容量）
- *       与 {@code prompt_config} 口径不变；M7 运行时装配仍只从
- *       {@code cap_agent_def.generationParams} 读策略，⛔ 不读快照；</li>
+ *       与 {@code prompt_config} 口径不变；运行期唯一策略读点登记在
+ *       {@code ContextPolicyResolutionSupport}，M7 装配与 M8-a 指纹裁决共用同一次裁决，
+ *       ⛔ 不读快照、不在 adapter 内联第二套读源；</li>
  *   <li>配套 {@code scripts/m3-context-policy-counterproof.sh} 的六点撤点、
  *       中断保护、旧报告清理、红/绿判定与 md5 复原三件套齐全。</li>
  * </ol>
@@ -68,6 +72,12 @@ class ContextCompressionM3GuardTest {
     private static final String ADAPTER =
             "platform/platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/"
                     + "ContextRequestAssemblyAdapter.java";
+    private static final String SUPPORT =
+            "platform/platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/"
+                    + "ContextPolicyResolutionSupport.java";
+    private static final String POLICY_VERSION_ADAPTER =
+            "platform/platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/"
+                    + "ContextPolicyVersionAdapter.java";
     private static final String COUNTERPROOF = "scripts/m3-context-policy-counterproof.sh";
 
     /** 与 DDL / 07 脚本逐字比对的列定义（不引用被测实现常量）。 */
@@ -209,19 +219,81 @@ class ContextCompressionM3GuardTest {
     }
 
     @Test
-    @DisplayName("✅ RV-M3-G3：M7 运行时仍只读 generationParams，零快照读源耦合")
+    @DisplayName("✅ RV-M3-G3（M8-a 升级）：运行期唯一策略读点同源，零快照读源")
     void m7RuntimeStillReadsGenerationParamsOnly() {
+        String support = src(SUPPORT);
         String adapter = src(ADAPTER);
+        String versionAdapter = src(POLICY_VERSION_ADAPTER);
         String readCall = "ContextPolicyReader.read(definition.get().generationParams())";
-        assertThat(countLiteral(adapter, readCall))
-                .as("⛔ M7 冻结策略读源被改：运行期必须只读 cap_agent_def.generationParams")
+        String resolveCall = "ContextPolicyResolutionSupport.resolve(";
+
+        // ① 旧负面覆盖升级：adapter 不再内联读真源，改由唯一支持类读一次。
+        assertThat(countLiteral(support, readCall))
+                .as("⛔ 运行期唯一策略读点丢失：冻结定义必须只读 cap_agent_def.generationParams")
                 .isEqualTo(1);
-        assertNoPattern(adapter, Pattern.quote("context_policy"),
-                "⛔ M7 运行时装配出现 context_policy 读源：快照与真源会静默分叉");
-        assertNoPattern(adapter, "snapshotJson\\(",
-                "⛔ M7 运行时装配调用快照派生：发布期 / 运行期职责混线");
-        assertNoPattern(adapter, "snapshotFromAgentConfig\\(",
-                "⛔ M7 运行时装配调用旧直发快照派生：职责混线");
+        assertThat(countLiteral(adapter, readCall))
+                .as("⛔ M7 adapter 出现第二套内联读源：与 M8-a 指纹裁决会静默漂移")
+                .isZero();
+        assertThat(countLiteral(versionAdapter, readCall))
+                .as("⛔ M8-a 指纹裁决自造第二套策略读源：装配按 A 版、校验按 B 版会静默失真")
+                .isZero();
+
+        // ② 两处调用点必须都走同一个裁决支持类，指纹才与装配态同源。
+        assertThat(countLiteral(adapter, resolveCall))
+                .as("⛔ M7 统一装配未走唯一裁决支持：policyVersion 会与请求侧校验分叉")
+                .isEqualTo(1);
+        assertThat(countLiteral(versionAdapter, resolveCall))
+                .as("⛔ M8-a 指纹裁决未复用 M7 裁决支持：组合根会制造第二策略真相")
+                .isEqualTo(1);
+        assertThat(adapter)
+                .as("⛔ M7 未把同一次裁决的模型能力传给装配器：窗口预算可能按别的模型算")
+                .contains("resolved.capabilities()")
+                .contains("EffectivePolicyProjection.toEffectivePolicy(resolved.policy())");
+        assertThat(versionAdapter)
+                .as("⛔ M8-a 指纹不是从同一次裁决结果派生")
+                .contains("resolved.policy().policyVersion()");
+
+        // ③ 全平台运行期只能有一处读 generationParams，且必须落在白名单支持类。
+        Map<String, Integer> runtimeReads = runtimeGenerationParamReads();
+        assertThat(runtimeReads)
+                .as("⛔ 运行期出现白名单外的 generationParams 读点："
+                        + "快照/真源或多套裁决实现会静默分叉")
+                .containsOnlyKeys("platform-bootstrap/ContextPolicyResolutionSupport.java");
+        assertThat(runtimeReads.values()).containsExactly(1);
+
+        // ④ 三处运行期接线都不得读发布快照或调用发布期派生。
+        for (String code : List.of(support, adapter, versionAdapter)) {
+            assertNoPattern(code, Pattern.quote("context_policy"),
+                    "⛔ 运行期装配出现 context_policy 读源：快照与真源会静默分叉");
+            assertNoPattern(code, "snapshotJson\\(",
+                    "⛔ 运行期装配调用快照派生：发布期 / 运行期职责混线");
+            assertNoPattern(code, "snapshotFromAgentConfig\\(",
+                    "⛔ 运行期装配调用旧直发快照派生：职责混线");
+        }
+    }
+
+    /** 扫描 platform 生产源码中 {@code ContextPolicyReader.read(} 的精确调用点。 */
+    private static Map<String, Integer> runtimeGenerationParamReads() {
+        Map<String, Integer> found = new LinkedHashMap<>();
+        try (Stream<Path> modules = Files.list(platformRoot())) {
+            for (Path module : modules.filter(Files::isDirectory).toList()) {
+                Path src = module.resolve("src/main/java");
+                if (!Files.isDirectory(src)) {
+                    continue;
+                }
+                try (Stream<Path> tree = Files.walk(src)) {
+                    for (Path file : tree.filter(p -> p.toString().endsWith(".java")).toList()) {
+                        int n = countLiteral(stripped(file), "ContextPolicyReader.read(");
+                        if (n > 0) {
+                            found.put(module.getFileName() + "/" + file.getFileName(), n);
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("扫描运行期 generationParams 读点失败", e);
+        }
+        return found;
     }
 
     @Test

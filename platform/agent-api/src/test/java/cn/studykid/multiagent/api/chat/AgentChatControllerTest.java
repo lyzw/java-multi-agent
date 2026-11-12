@@ -48,6 +48,7 @@ class AgentChatControllerTest {
     private static final String SPOOF_TENANT = "99999999-9999-9999-9999-999999999999";
     private static final String PRINCIPAL = "principal-1";
     private static final String TOKEN = "signed-bearer-jwt";
+    private static final String RAW_STATE = "RAW_CONTEXT_STATE_FROM_CLIENT";
 
     // ── 端点映射 ──────────────────────────────────────────────────────
 
@@ -101,7 +102,7 @@ class AgentChatControllerTest {
     }
 
     @Test
-    @DisplayName("请求体字段逐字下传：history / agentId / topK / thinkingMode / scenario")
+    @DisplayName("请求体字段逐字下传：history / agentId / topK / thinkingMode / scenario / contextState")
     void requestBodyFieldsPassedThrough() {
         Harness h = new Harness();
         h.identity.context = platformContext();
@@ -109,7 +110,7 @@ class AgentChatControllerTest {
                 "本轮问题",
                 List.of(new AgentChatController.AgentChatTurn("user", "上一轮"),
                         new AgentChatController.AgentChatTurn("assistant", "回答")),
-                "agent-7", 13, true, TENANT, "algebra");
+                "agent-7", 13, true, TENANT, "algebra", RAW_STATE);
         h.orchestrator.emitted = List.of(new AgentChatEvent.Done(false));
 
         h.controller().streamPlatform(body);
@@ -124,6 +125,9 @@ class AgentChatControllerTest {
         assertThat(seen.thinkingMode()).isTrue();
         assertThat(seen.scenario()).isEqualTo("algebra");
         assertThat(seen.requestedTenantId()).isEqualTo(TENANT);
+        assertThat(seen.contextState())
+                .as("控制器不验签 / 不解码 / 不 trim：原始字节逐字交给编排边界")
+                .isEqualTo(RAW_STATE);
     }
 
     @Test
@@ -134,12 +138,12 @@ class AgentChatControllerTest {
         h.orchestrator.emitted = List.of(new AgentChatEvent.Done(false));
 
         h.controller().streamPlatform(new AgentChatController.AgentChatStreamRequest(
-                "q", null, null, null, false, TENANT, null));
+                "q", null, null, null, false, TENANT, null, null));
         assertThat(h.orchestrator.seenRequest.history()).isEmpty();
 
         h.orchestrator.seenRequest = null;
         h.controller().streamPlatform(new AgentChatController.AgentChatStreamRequest(
-                "q", List.of(), null, null, false, TENANT, null));
+                "q", List.of(), null, null, false, TENANT, null, null));
         assertThat(h.orchestrator.seenRequest.history()).isEmpty();
     }
 
@@ -173,6 +177,20 @@ class AgentChatControllerTest {
         assertThat(h.orchestrator.seenContext.domain()).isEqualTo(Context.Domain.TENANT);
         assertThat(h.orchestrator.seenContext.thinkingAllowed()).isFalse();
         assertThat(h.orchestrator.seenRequest.requestedTenantId()).isNull();
+    }
+
+    @Test
+    @DisplayName("租户链同样逐字透传 contextState；禁止的只有请求体 tenantId")
+    void tenantChainAlsoPassesRawContextState() {
+        Harness h = new Harness();
+        h.identity.context = tenantContext();
+        h.orchestrator.emitted = List.of(new AgentChatEvent.Done(false));
+
+        h.controller().streamTenant(request("q", null, RAW_STATE));
+
+        assertThat(h.orchestrator.seenRequest.contextState()).isEqualTo(RAW_STATE);
+        assertThat(h.orchestrator.seenRequest.requestedTenantId()).isNull();
+        assertThat(h.identity.seenPlatformChain).isFalse();
     }
 
     // ── 建连前的 fail-closed ──────────────────────────────────────────
@@ -305,8 +323,14 @@ class AgentChatControllerTest {
 
     private static AgentChatController.AgentChatStreamRequest request(String message,
                                                                       String tenantId) {
+        return request(message, tenantId, null);
+    }
+
+    private static AgentChatController.AgentChatStreamRequest request(String message,
+                                                                      String tenantId,
+                                                                      String contextState) {
         return new AgentChatController.AgentChatStreamRequest(
-                message, List.of(), null, null, false, tenantId, null);
+                message, List.of(), null, null, false, tenantId, null, contextState);
     }
 
     private static Context platformContext() {

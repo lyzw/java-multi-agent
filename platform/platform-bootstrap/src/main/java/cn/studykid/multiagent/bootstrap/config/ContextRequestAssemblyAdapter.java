@@ -1,34 +1,26 @@
 package cn.studykid.multiagent.bootstrap.config;
 
 import java.util.Objects;
-import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
-import cn.studykid.multiagent.application.cap.ContextPolicyReader;
 import cn.studykid.multiagent.context.ContextAssembler;
 import cn.studykid.multiagent.context.ContextAssembler.AssemblyInput;
 import cn.studykid.multiagent.context.ContextBudgetException;
-import cn.studykid.multiagent.context.ContextPolicy;
 import cn.studykid.multiagent.context.ContextPolicyRejectedException;
-import cn.studykid.multiagent.context.ContextPolicyResolver;
 import cn.studykid.multiagent.context.EffectivePolicyProjection;
 import cn.studykid.multiagent.context.GlobalContextPolicy;
 import cn.studykid.multiagent.context.RequestContextProjection;
 import cn.studykid.multiagent.context.CompactionPipeline.Summarizer;
-import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.ports.context.AssembledContext;
 import cn.studykid.multiagent.ports.context.ContextSpec;
-import cn.studykid.multiagent.ports.context.ModelCapabilities;
 import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyException;
 import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyException.Reason;
 import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyInput;
 import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort;
 import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyResult;
 import cn.studykid.multiagent.ports.modelcatalog.ModelCatalogPort;
-import cn.studykid.multiagent.ports.modelcatalog.ModelContextCapabilities;
-import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 
 /**
@@ -96,25 +88,12 @@ public final class ContextRequestAssemblyAdapter implements RequestAssemblyPort 
         }
 
         try {
-            if (agentDefs == null) {
-                throw new RequestAssemblyException(
-                        Reason.CONTEXT_ASSEMBLY_FAILED,
-                        "全局压缩已开启但未装配 CapAgentDefPort：无法读取冻结策略");
-            }
-            Optional<CapAgentDef> definition = agentDefs.find(
-                    input.tenantId(), input.agentId(), input.agentVersion());
-            if (definition.isEmpty()) {
-                throw new RequestAssemblyException(
-                        Reason.CONTEXT_ASSEMBLY_FAILED,
-                        "冻结版本的 Agent 定义不存在: agent=" + input.agentId()
-                                + ", version=" + input.agentVersion());
-            }
-            ContextPolicy agentPolicy =
-                    ContextPolicyReader.read(definition.get().generationParams());
-            ModelCapabilities capabilities = capabilitiesOf(input.modelId());
-            ContextPolicy effective = ContextPolicyResolver.resolve(new ContextPolicyResolver.Input(
-                    agentPolicy, capabilities, global, input.maxOutputTokens(),
-                    String.valueOf(input.agentVersion())));
+            // ⚠️ 与请求侧指纹校验共用唯一的冻结策略裁决接线（D17 / D49）。
+            ContextPolicyResolutionSupport.Resolved resolved =
+                    ContextPolicyResolutionSupport.resolve(
+                            global, agentDefs, catalog,
+                            input.tenantId(), input.agentId(), input.agentVersion(),
+                            input.modelId(), input.maxOutputTokens());
 
             ContextSpec spec = new ContextSpec(
                     input.tenantId(), input.scopeKey(), input.modelId(),
@@ -122,8 +101,8 @@ public final class ContextRequestAssemblyAdapter implements RequestAssemblyPort 
                     RequestContextProjection.canonicalToolSchemas(input.toolSchemas()),
                     input.firstUserTurn(), input.memoryBlock(), input.ragBlocks(),
                     input.historyMessages(), input.currentInput(),
-                    EffectivePolicyProjection.toEffectivePolicy(effective),
-                    capabilities, input.upToSeq(), input.carryOverStateJson(),
+                    EffectivePolicyProjection.toEffectivePolicy(resolved.policy()),
+                    resolved.capabilities(), input.upToSeq(), input.carryOverStateJson(),
                     input.fencingToken());
 
             AssembledContext out = assembler.assemble(new AssemblyInput(
@@ -148,25 +127,6 @@ public final class ContextRequestAssemblyAdapter implements RequestAssemblyPort 
                     Reason.CONTEXT_ASSEMBLY_FAILED,
                     "上下文统一装配失败: " + e.getMessage(), e);
         }
-    }
-
-    /**
-     * 模型能力精确读取：只认目录里<b>启用中且模型名逐字相等</b>的那一条。
-     * 目录缺失 / 未登记一律 unknown（窗口归零 → Resolver 上调 reserve），绝不回落默认模型。
-     */
-    private @NonNull ModelCapabilities capabilitiesOf(@NonNull String modelId) {
-        if (catalog == null) {
-            return ModelCapabilities.unknown(modelId);
-        }
-        for (ModelDefinition def : catalog.list()) {
-            if (def.isEnabled() && def.modelName().equals(modelId)) {
-                ModelContextCapabilities c = def.contextCapabilities();
-                return new ModelCapabilities(modelId, c.contextWindowTokens(),
-                        c.maxInputTokens(), c.tokenizerId(),
-                        c.supportsPromptCaching(), c.supportsTokenizeApi());
-            }
-        }
-        return ModelCapabilities.unknown(modelId);
     }
 
     /** 算法层稳定拒因 → 中性稳定拒因；未知码一律兜底，绝不静默当成功。 */

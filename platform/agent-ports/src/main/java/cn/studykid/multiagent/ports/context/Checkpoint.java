@@ -9,8 +9,10 @@ import org.jspecify.annotations.Nullable;
  * 加载出的 checkpoint（{@link ContextCheckpointPort#load} 的返回值，M6 端口契约）。
  *
  * <p>⚠️ <b>不可信数据</b>：本对象可能来自客户端 carry-over（base64 状态）或 DB，
- * 在进入压缩链前必须做 HMAC / TTL / policyVersion / tenant digest / 大小五项校验
- * （《方案》§4.4）。{@code stateJson} 只能作为带围栏 USER 块注入，⛔ 绝不进 systemPrompt。
+ * 在进入压缩链前必须做<b>六项</b>不可信校验（D49：HMAC / {@code exp} /
+ * {@code policyVersion} / tenant digest / {@code max-state-chars} /
+ * {@code upToTurn ≤ history}，《方案》§4.4）。{@code stateJson} 只能作为带围栏
+ * USER 块注入，⛔ 绝不进 systemPrompt。
  *
  * <p>⚠️ {@link #expired(long)} 采用<b>显式时钟入参</b>（而非无参读系统时钟）：
  * 端口层保持确定性/可测性，调用方（M7/M11）负责传 {@code System.currentTimeMillis()}。

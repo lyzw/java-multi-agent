@@ -3,6 +3,7 @@ package cn.studykid.multiagent.bootstrap.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.lang.reflect.RecordComponent;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -17,12 +18,14 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import cn.studykid.multiagent.api.chat.AgentChatController;
 import cn.studykid.multiagent.ports.agentchat.AgentChatEvent;
 import cn.studykid.multiagent.ports.agentchat.AgentChatEvent.Candidate;
 import cn.studykid.multiagent.ports.agentchat.AgentChatEvent.ContextCheckpoint;
 import cn.studykid.multiagent.ports.agentchat.AgentChatEvent.Done;
 import cn.studykid.multiagent.ports.agentchat.AgentChatEvent.Hit;
 import cn.studykid.multiagent.ports.agentchat.AgentChatEvent.StepStatus;
+import cn.studykid.multiagent.ports.agentchat.AgentChatRequest;
 
 /**
  * 上下文压缩 <b>S2-M6 端口与事件契约</b>的跨模块源码守卫（ADR-013 D33–D35 / 开发计划 W4）。
@@ -32,9 +35,10 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatEvent.StepStatus;
  *   <li>{@code agent-ports/ports/context} 只有四个中性端口，零算法层/框架/JDBC 反向依赖；</li>
  *   <li>SSE 协议 v1 → v1.1 <b>只追加不改旧帧</b>：14 事件、旧 13 帧字节冻结、
  *       {@code context.checkpoint} 只定义不发射；</li>
- *   <li>请求 DTO 与两前端请求体均不带 {@code contextState}；两前端只解析 v1.1 字段
- *       （{@code context.checkpoint} / {@code done.contextStateVersion}），未知事件仍
- *       {@code default: return null}；完整收发属 M8；</li>
+ *   <li>M8-a 升级后，后端请求 DTO <b>只允许白名单文件</b>携带未验 {@code contextState}：
+ *       全参构造、Controller 逐字透传、编排边界静默净化；两前端请求体仍不带该字段，
+ *       只解析 v1.1 字段（{@code context.checkpoint} / {@code done.contextStateVersion}），
+ *       未知事件仍 {@code default: return null}；正式同批发属 M13；</li>
  *   <li>{@code ExecutionObserver.onContextCompacted} 是 default 空实现，链转发只做异常隔离。</li>
  * </ol>
  *
@@ -52,8 +56,8 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatEvent.StepStatus;
  * 不用 AssertJ {@code doesNotMatch}（它是<b>全串不匹配</b>语义，长函数里恒真，是假绿源）。
  *
  * <p>⛔ M13 mock 已显式升级 RV-71 为「解析但不发送」；M7 已按 G1 签核升级 RV-69。
- * M8 请求侧 {@code contextState} / M13 正式同批发协议 v1.1 时，仍必须按评审记录
- * <b>显式升级或退役</b>对应断言，不得直接删守卫了事。
+ * M8-a 已按 G1 A.5 台账把 RV-67 升级为「白名单内正面接入 + 白名单外禁止」，
+ * M13 前端正式同批发时仍须显式二次升级，不得直接删守卫了事。
  */
 class ContextCompressionM6GuardTest {
 
@@ -99,6 +103,37 @@ class ContextCompressionM6GuardTest {
             // 不允许整文件豁免；RV-74 会锁死这个令牌不得消失。
             "platform-bootstrap/ContextRequestAssemblyConfiguration.java",
             Set.of("CompactionPipeline", "WaterLevel"));
+
+    /**
+     * G1 A.5 S3-M8 台账登记的<b>请求侧 contextState 白名单</b>（精确到文件 → 令牌）。
+     *
+     * <p>⛔ 不是整模块豁免：新增生产文件携带 {@code contextState} 必须显式登记，
+     * 否则下方的白名单外扫描立即红。当前 M8-a 只允许 8 个文件出现以下三种令牌。
+     */
+    private static final Map<String, Set<String>> M8A_CONTEXT_STATE_ALLOWED = Map.of(
+            "agent-ports/AgentChatRequest.java", Set.of("contextState"),
+            "agent-ports/AgentChatEvent.java", Set.of("contextState", "contextStateVersion"),
+            "agent-ports/ContextStateVerifier.java", Set.of("contextState"),
+            "agent-context/ContextStateEnvelope.java", Set.of("contextState"),
+            "agent-api/AgentChatController.java", Set.of("contextState"),
+            "agent-worker/AgentChatOrchestrator.java", Set.of("contextState"),
+            "platform-bootstrap/AgentChatConfiguration.java", Set.of("contextStateVerifier"),
+            "platform-bootstrap/ContextStateVerifierAdapter.java", Set.of("contextState"),
+            "platform-bootstrap/ContextStateVerifierConfiguration.java",
+            Set.of("contextState", "contextStateVerifier"));
+
+    /** 必须真实出现的令牌；没有这些就是「白名单登记了但实现空转」。 */
+    private static final Map<String, Set<String>> M8A_CONTEXT_STATE_REQUIRED = Map.of(
+            "agent-ports/AgentChatRequest.java", Set.of("contextState"),
+            "agent-ports/AgentChatEvent.java", Set.of("contextStateVersion"),
+            "agent-api/AgentChatController.java", Set.of("contextState"),
+            "agent-worker/AgentChatOrchestrator.java", Set.of("contextState"),
+            "platform-bootstrap/AgentChatConfiguration.java", Set.of("contextStateVerifier"),
+            "platform-bootstrap/ContextStateVerifierConfiguration.java",
+            Set.of("contextStateVerifier"));
+
+    private static final List<String> M8A_CONTEXT_STATE_TOKENS =
+            List.of("contextState", "contextStateVersion", "contextStateVerifier");
 
     private static final Pattern IMPORT = Pattern.compile(
             "^import\\s+(?:static\\s+)?([\\w.]+);", Pattern.MULTILINE);
@@ -178,21 +213,90 @@ class ContextCompressionM6GuardTest {
     }
 
     @Test
-    @DisplayName("✅ RV-67：请求 DTO 不带 contextState，M6 请求字节零变更")
+    @DisplayName("✅ RV-67（M8-a 升级）：后端 DTO 仅在白名单携带原始 contextState，前端请求字节冻结")
     void requestDtosDoNotCarryCheckpointState() {
         String controller = stripped(platformRoot().resolve(CONTROLLER));
         String request = portsSrc("agentchat/AgentChatRequest.java");
+        String orchestrator = stripped(platformRoot().resolve(ORCHESTRATOR));
 
+        // ① 旧负面覆盖保留：两前端请求接口与真实 JSON.stringify 请求体仍禁带 state。
+        for (String rel : List.of(
+                "admin-console/src/api/agentChatApi.ts",
+                "frontend/src/api/agentChatApi.ts")) {
+            String raw = read(repoRoot().resolve(rel));
+            String body = ContextCompressionS1GuardTest.stripCommentsKeepStrings(
+                    regionBetween(raw, "body: JSON.stringify({", "}),"));
+            assertThat(body)
+                    .as("⛔ %s 请求体提前上送 contextState：M13 才允许正式同批发", rel)
+                    .doesNotContain("contextState")
+                    .doesNotContain("contextStateVersion");
+        }
+        // ② 协议响应字段不进请求侧；M6 冻结的 context.checkpoint 仍只定义不发射。
         assertThat(controller)
-                .as("⛔ SSE 请求体提前加入 contextState：M6 只冻结契约，请求字节必须逐位不变")
+                .as("⛔ 请求侧混入响应字段 contextStateVersion：收发方向被污染")
                 .contains("record AgentChatStreamRequest(")
-                .doesNotContain("contextState")
                 .doesNotContain("contextStateVersion");
         assertThat(request)
-                .as("⛔ 中性请求 DTO 提前加入 contextState：M8 才允许扩字段并做五项不可信校验")
+                .as("⛔ 请求侧混入响应字段 contextStateVersion：收发方向被污染")
                 .contains("record AgentChatRequest(")
-                .doesNotContain("contextState")
                 .doesNotContain("contextStateVersion");
+        assertThat(orchestrator)
+                .as("⛔ SSE 链提前发射第 14 事件：M8-a 只做接收侧净化")
+                .doesNotContain("new AgentChatEvent.ContextCheckpoint(")
+                .doesNotContain("context.checkpoint")
+                .doesNotContain("new AgentChatEvent.Done(false,")
+                .contains("new AgentChatEvent.Done(false)");
+
+        // ③ 全参构造唯一：compat 构造器会静默清空后加字段（铁律 #10）。
+        assertThat(java.util.Arrays.stream(AgentChatRequest.class.getRecordComponents())
+                .map(RecordComponent::getName).toList())
+                .as("⛔ 中性请求 DTO 字段顺序被改：编排入口/审计摘要可能漏带 contextState")
+                .containsExactly("message", "history", "agentId", "topK",
+                        "thinkingMode", "requestedTenantId", "scenario", "contextState");
+        assertThat(AgentChatRequest.class.getDeclaredConstructors())
+                .as("⛔ AgentChatRequest 出现兼容构造器：铁律 #10 逐字段带过会被绕过")
+                .hasSize(1);
+        assertThat(java.util.Arrays.stream(
+                AgentChatController.AgentChatStreamRequest.class.getRecordComponents())
+                .map(RecordComponent::getName).toList())
+                .as("⛔ SSE 请求体字段顺序被改：前端 JSON 键与后端 DTO 会静默失配")
+                .containsExactly("message", "history", "agentId", "topK",
+                        "thinkingMode", "tenantId", "scenario", "contextState");
+        assertThat(AgentChatController.AgentChatStreamRequest.class.getDeclaredConstructors())
+                .as("⛔ AgentChatStreamRequest 出现兼容构造器：缺字段会被 Jackson 静默补空")
+                .hasSize(1);
+
+        // ④ 正面接入：Controller 必须逐字透传，不得 trim / 解码 / 当错误帧处理。
+        assertThat(count(controller, "safe.contextState())"))
+                .as("⛔ Controller 未把原始 state 逐字交给编排边界")
+                .isEqualTo(1);
+        assertThat(Pattern.compile("blankToNull\\s*\\(\\s*safe\\.contextState\\(\\)\\s*\\)")
+                .matcher(controller).find())
+                .as("⛔ Controller 对 state 做 blankToNull：超长/篡改会被静默改写成无状态")
+                .isFalse();
+        assertThat(Pattern.compile("safe\\.contextState\\(\\s*\\)\\.trim\\s*\\(")
+                .matcher(controller).find())
+                .as("⛔ Controller 对 state 做 trim：原始字节不再逐字下传")
+                .isFalse();
+
+        // ⑤ 白名单外禁止：任何新增生产文件携带 state 令牌都必须先登记 A.5。
+        Map<String, Set<String>> found = m8aContextStateTokens();
+        List<String> outside = new ArrayList<>();
+        found.forEach((file, tokens) -> {
+            if (!M8A_CONTEXT_STATE_ALLOWED.containsKey(file)) {
+                outside.add(file + " → " + tokens);
+            }
+        });
+        assertThat(outside).as("⛔ 白名单外生产文件出现 contextState 令牌：须先登记 A.5").isEmpty();
+        found.forEach((file, tokens) -> assertThat(tokens)
+                .as("⛔ 白名单文件 %s 出现未登记令牌", file)
+                .isSubsetOf(M8A_CONTEXT_STATE_ALLOWED.getOrDefault(file, Set.of())));
+        for (Map.Entry<String, Set<String>> required : M8A_CONTEXT_STATE_REQUIRED.entrySet()) {
+            assertThat(found.getOrDefault(required.getKey(), Set.of()))
+                    .as("⛔ 已登记白名单文件 %s 的 state 令牌消失（守卫会随文件退化而假绿）",
+                            required.getKey())
+                    .containsAll(required.getValue());
+        }
     }
 
     @Test
@@ -431,6 +535,48 @@ class ContextCompressionM6GuardTest {
                 "{\"inputTokens\":10,\"outputTokens\":20}",
                 "{\"kind\":\"ROUTE_FAILED\",\"message\":\"没有可执行 Agent\"}",
                 "{\"truncated\":false}");
+    }
+
+    /**
+     * 扫描生产源码中精确出现的 M8-a state 令牌；返回「模块/文件 → 命中令牌」。
+     *
+     * <p>⛔ 用「前后非标识符字符」的边界而非裸 {@code String.contains}：
+     * {@code contextStateVersion} 包含 {@code contextState} 前缀，裸匹配会把响应字段
+     * 误算成请求字段，白名单随之失焦。
+     */
+    private static Map<String, Set<String>> m8aContextStateTokens() {
+        Map<String, Set<String>> found = new java.util.LinkedHashMap<>();
+        List<Pattern> exact = M8A_CONTEXT_STATE_TOKENS.stream()
+                .map(token -> Pattern.compile("(?<![A-Za-z0-9_])"
+                        + Pattern.quote(token) + "(?![A-Za-z0-9_])"))
+                .toList();
+        try (Stream<Path> modules = Files.list(platformRoot())) {
+            for (Path module : modules.filter(Files::isDirectory).toList()) {
+                Path src = module.resolve("src/main/java");
+                if (!Files.isDirectory(src)) {
+                    continue;
+                }
+                try (Stream<Path> tree = Files.walk(src)) {
+                    for (Path file : tree.filter(p -> p.toString().endsWith(".java")).toList()) {
+                        String code = ContextCompressionS1GuardTest.stripCommentsKeepStrings(
+                                ContextCompressionS1GuardTest.read(file));
+                        Set<String> hits = new LinkedHashSet<>();
+                        for (int i = 0; i < M8A_CONTEXT_STATE_TOKENS.size(); i++) {
+                            if (exact.get(i).matcher(code).find()) {
+                                hits.add(M8A_CONTEXT_STATE_TOKENS.get(i));
+                            }
+                        }
+                        if (!hits.isEmpty()) {
+                            found.put(module.getFileName() + "/" + file.getFileName(),
+                                    Set.copyOf(hits));
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("扫描生产源码的 contextState 令牌失败", e);
+        }
+        return found;
     }
 
     /** 扫描 M6 令牌在白名单外的生产接线；返回「文件 → 命中令牌」。 */
