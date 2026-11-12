@@ -1,10 +1,10 @@
 # SSE 协议 v1.1 变更说明（上下文压缩，M6 冻结）
 
-> **状态**：契约冻结 / 运行时未激活（M6 contract-only）
+> **状态**：契约冻结 / G2 已对话确认放行，S3-M8 按 ADR-013 D49 与 G1 A.5 台账激活（M6 仍为历史 contract-only 时点）
 > **版本**：v1 → **v1.1**
-> **前置**：G1 技术条件满足，但 **TL/QA 签核未完成**；依据开发计划，G1 签核前不得进入 M7 接线
-> **激活边界**：M8（服务端发射 `context.checkpoint` + 请求侧 `contextState` 五项校验）、M13（两前端同批发协议 v1.1）
-> **权威代码**：`platform/agent-ports/.../agentchat/AgentChatEvent.java`、`AgentChatEventTest`
+> **前置**：G1 已对话确认放行；G2 于 2026-11-12 对话确认放行（线下补签）。旧口径「G1 TL/QA 签核前不进入 M7」保留为历史门禁，当前须按 G1 A.5 的 S3-M8 台账「先登记、后升级守卫」
+> **激活边界**：M8（服务端在 `usage` 与 `done` 之间发射 `context.checkpoint` + 请求侧 `contextState` **六项**静默丢弃校验）、M13（两前端同批发协议 v1.1 并携带 committed `contextState`）
+> **权威代码**：`platform/agent-ports/.../agentchat/AgentChatEvent.java`、`AgentChatEventTest`；**权威决策**：ADR-013 D49
 
 ---
 
@@ -23,10 +23,10 @@
 | --- | --- | --- | --- |
 | `run.start` … `error` | 13 类事件 | **逐字不变** | 正常发射 |
 | `done` | `{"truncated":false}` | 增可选 `contextStateVersion`；null/空串时**仍产出 v1 旧字节** | 正常发射，新字段缺省 |
-| `context.checkpoint` | 不存在 | 新增第 14 个 permitted record，wire name `context.checkpoint` | **M6 不发射**，M8 起在 `answer` 与 `done` 之间可选发射 |
+| `context.checkpoint` | 不存在 | 新增第 14 个 permitted record，wire name `context.checkpoint` | **M6 不发射**，M8 起在 `usage` 与 `done` 之间可选发射（旧帧相对次序 `answer → usage → done` 不变） |
 | `WIRE_NAMES` | 13 项 | 14 项，含 `contextCheckpoint → context.checkpoint` | 冻结 |
-| `AgentChatStreamRequest` / `AgentChatRequest` | 无 `contextState` | **M6 不加** | M8 加；缺失 = 无压缩态 |
-| 两前端 `agentChatApi.ts` | `default: return null` | **M13 mock：只解析不上送** | 解析 `context.checkpoint` / `done.contextStateVersion`，压缩态仅内存暂存；请求体仍无 `contextState`，完整收发留 M8 + G1 签核 |
+| `AgentChatStreamRequest` / `AgentChatRequest` | 无 `contextState` | **M6 不加** | M8 加 `@Nullable contextState`；缺失 = 无压缩态 |
+| 两前端 `agentChatApi.ts` | `default: return null` | **M13 mock：只解析不上送** | 解析 `context.checkpoint` / `done.contextStateVersion`，压缩态仅内存暂存；mock 阶段请求体仍无 `contextState`，S3-M8 / M13 同批发正式收发 |
 | `ExecutionObserver` | `onContextTrimmed` | 增 `onContextCompacted`（default 空实现）；旧方法保留 | M6 仅契约，M7 接线才调用 |
 
 ---
@@ -48,11 +48,12 @@
 | ⑪ | `usage` | `{"inputTokens":…,"outputTokens":…}` | v1 冻结 |
 | ⑫ | `error` | `{"kind":…,"message":…}` | v1 冻结 |
 | ⑬ | `done` | `{"truncated":…,"contextStateVersion"?:…}` | **追加可选字段** |
-| ⑭ | `context.checkpoint` | `{"state":…,"upToTurn"?:…,"policyVersion":…,"tier":…,"fallback":…,"digest":…}` | **新增可选事件**；声明序号 ⑭，但线序在 ⑬ `done` **之前** |
+| ⑭ | `context.checkpoint` | `{"state":…,"upToTurn"?:…,"policyVersion":…,"tier":…,"fallback":…,"digest":…}` | **新增可选事件**；声明序号 ⑭，但线序在 ⑪ `usage` **之后**、⑬ `done` **之前** |
 
 > ⚠️ 声明顺序与线序刻意解耦：Java `permits` / `WIRE_NAMES` 把新类型追加为第 14 个，
-> 保持旧 13 个类型的相对次序不变；实际发射时序由 M8 编排器保证
-> `answer → context.checkpoint? → done`，因为 `done` 仍是应用层终帧。
+> 保持旧 13 个类型的相对次序不变；ADR-013 D49 冻结实际发射时序为
+> `answer → usage → context.checkpoint? → done`，因为 `done` 仍是应用层终帧。
+> ⛔ 不插到 `answer` 与 `usage` 之间，避免旧帧相邻关系漂移。
 
 ---
 
@@ -76,7 +77,7 @@
 | `fallback` | boolean | 是 | W3 摘要失败回落 W2 时为 `true`，绝不伪造摘要 |
 | `digest` | string | 是 | 状态摘要 `sha256:…`，缓存与幂等键 |
 
-### 3.3 不可信纪律（服务端，M8 实现）
+### 3.3 不可信纪律（服务端 M8 实现：六项静默丢弃）
 
 `state` 是**客户端携带的不可信数据**，不是可信指令。下一轮进入压缩链前必须逐项校验，
 任一命中即**静默丢弃 + 退回全量历史 + 服务端确定性裁剪**，不报错、不拒绝用户：
@@ -87,6 +88,8 @@
 4. tenantId digest 与当前租户不一致；
 5. 超过 `max-state-chars`；
 6. `upToTurn > 当前 history 长度`（防止把未来状态当历史）。
+
+> **D49 口径**：开发计划与本文早期「五项」指前五项**状态自身校验**；第 6 项是**历史游标一致性**校验，S3-M8 必须一并实现。G3 最小必测四组为验签 / 过期 / 版本不符 / 超长，六项全部实现并逐项留痕。
 
 注入时必须经 `PromptGuard.wrapCompactedContext()` 包成
 `<compacted_context trust="untrusted">` 的 **USER 消息**，
@@ -101,6 +104,8 @@
 但仍**只解析不上送**——`AgentChatRequest` / 请求体不含 `contextState`，服务端发射属 M8。
 `ContextCompressionM6GuardTest#frontendProtocolV11MockIsParseOnly` 与
 `ContextCompressionM13GuardTest` 双向锁死这一边界；G1 TL/QA 签核前不进入 M7 接线。
+
+> **S3-M8 激活**：G2 已于 2026-11-12 对话确认放行（线下补签）；两前端与服务端**同批发**，上述 mock 阶段守卫按 G1 A.5 台账升级为「正式收发 + 不解析 / 不持久化 + 旧客户端兼容」，旧负面覆盖不删除。
 
 ---
 
@@ -133,7 +138,7 @@ new AgentChatEvent.Done(false, "cp_v1_8f3").data()
 - M6 **不**给 `AgentChatStreamRequest` / `AgentChatRequest` 增加 `contextState`；
 - **M13 mock 仍不**改请求体、**不**引入 localStorage/sessionStorage 持久化：只解析帧、
   只在内存暂存压缩态，刷新即降级为全量历史；
-- 请求字段与 carry-over 五项丢弃校验属于 **M8**；前端正式收发 `contextState` 属于
+- 请求字段与 carry-over **六项**丢弃校验（D49）属于 **M8**；前端正式收发 `contextState` 属于
   **M13 收口**，与 M8 同批发；
 - 因此 M6 + M13 mock 的服务端行为与今天**逐位一致**：既没有新请求头/字段，也没有新 SSE 帧；
   唯一变化是两前端**能识别**服务端尚未发射的第 14 事件。
@@ -147,7 +152,7 @@ new AgentChatEvent.Done(false, "cp_v1_8f3").data()
 | 旧客户端 + v1.1 服务端 | 忽略 `context.checkpoint`；`done` 多出的字段被可选解析/忽略 | ✅ 可用，无压缩态复用 |
 | v1.1 客户端 + 旧服务端 | 收不到 `context.checkpoint`，`done.contextStateVersion` 缺失 | ✅ 可用，按「无压缩态」降级为全量历史 |
 | 滚动发布中的混合实例 | 无共享状态假设；每轮请求自带状态，实例间不依赖 | ✅ 可接受 |
-| 任一实例提前发射 `context.checkpoint` | 旧客户端忽略；但 M6 禁止，须等 M8 + G1 签核 | ⛔ M6 阶段不允许 |
+| 任一实例在 M6 / M13 mock 阶段提前发射 `context.checkpoint` | 旧客户端忽略；但阶段契约禁止，须等 G2 放行后的 S3-M8 且守卫升级完成 | ⛔ M6 / M13 mock 阶段不允许；S3-M8 按 D49 激活 |
 
 ---
 
@@ -189,6 +194,7 @@ default void onContextCompacted(@NonNull String tenantId, @NonNull String runId,
 > 请求体不含 `contextState`、两前端未知事件仍忽略、三条链路零 M6 运行时接线、
 > `context.checkpoint` 只定义不发射。本报告与 ADR-013 D33–D35 为协议 v1.1 的冻结依据；
 > **G1 TL/QA 签核前不进入 M7**；M8 服务端发射与 M13 两前端解析必须同批发布。
+> G1 与 G2 已分别于 2026-11-11 / 2026-11-12 对话确认放行（线下补签）；S3-M8 激活按 ADR D49 与 G1 A.5 新台账执行，旧冻结证据保留为历史基线。
 
 ---
 
@@ -198,6 +204,6 @@ default void onContextCompacted(@NonNull String tenantId, @NonNull String runId,
    `onContextCompacted`、或给请求 DTO 加 `contextState`。
 2. 三套活库执行 `07_model_catalog_context_upgrade.sql` 是 S2 灰度硬前置
    （本地 `agent_it` 已补，远程 RDS 待 DBA 维护窗口）。
-3. G1 报告中的 D25 指标口径与 SSE/Console 结构证据边界须 TL/QA 签核。
+3. G1 报告中的 D25 指标口径与 SSE/Console 结构证据边界**已对话确认放行**（线下补签）；S3-M8 接线触发的守卫升级须先在 G1 A.5 新台账登记（#60 已完成），未登记不得改守卫。
 4. M8 服务端发射 + M13 两前端同批发，必须在**同一发布窗口**完成；
-   不允许只发一侧造成协议 v1.1 半升级。
+   不允许只发一侧造成协议 v1.1 半升级。线序、压缩态生产者与六项丢弃校验按 ADR-013 D49 执行。
