@@ -80,6 +80,23 @@ public final class AgentReleaseArchive {
         return sb.toString();
     }
 
+    /**
+     * 派生归档用的 {@code execution_snapshot.context_policy} 文本（ADR-013 / CH-9 / M3）。
+     *
+     * <p>⚠️ <b>唯一实现委托 {@link ContextPolicyReader#snapshotJson(String)}</b>：
+     * 发布期门禁、运行期读取与快照派生共用同一归一化 / 校验实现。
+     * 本类绝不另拼一套 JSON，否则会出现「发布放行、快照却是另一套策略」的静默漂移。
+     *
+     * <p>{@code {}} 表示未声明压缩策略 / 回落运行期默认，<b>不是关闭</b>。
+     *
+     * @param agent 权威定义行（{@code cap_agent_def}）
+     * @return 规范化 {@code context} 对象 JSON 文本
+     */
+    @NonNull
+    public static String deriveContextPolicy(@NonNull CapAgentDef agent) {
+        return ContextPolicyReader.snapshotJson(agent.generationParams());
+    }
+
     @NonNull
     private static String jsonArray(@NonNull List<String> values) {
         StringBuilder sb = new StringBuilder(32);

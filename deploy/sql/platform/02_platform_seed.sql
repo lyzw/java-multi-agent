@@ -604,10 +604,10 @@ VALUES ('b4e2d3c5-6f7c-4b8d-9e0f-1a2b3c4d5e6f',
         '{"kind":"tutor"}'::jsonb, now(), now())
 ON CONFLICT (version_id) DO NOTHING;
 
-INSERT INTO public.execution_snapshot (snapshot_id, tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config, created_at)
+INSERT INTO public.execution_snapshot (snapshot_id, tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config, context_policy, created_at)
 VALUES ('c5f3e4d6-7a8d-4c9e-0f1a-2b3c4d5e6f7a',
         'b0b5eed0-1111-4222-8333-444455556666', 'b4e2d3c5-6f7c-4b8d-9e0f-1a2b3c4d5e6f',
-        '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, now())
+        '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, now())
 ON CONFLICT (snapshot_id) DO NOTHING;
 
 -- ── B4. 执行快照推导（2026-11-01 补）───────────────────────────────
@@ -621,9 +621,10 @@ ON CONFLICT (snapshot_id) DO NOTHING;
 -- 【与附录 A 的关系】附录 A 推导「发布头 + 指针」，本段推导「能力快照」，
 --   两者同源于定义表，共同保证「灌完种子的库是可跑 Run 的库」。
 INSERT INTO public.execution_snapshot
-    (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config, created_at)
+    (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config, context_policy, created_at)
 SELECT v.tenant_id, v.version_id, '{}', '{}', '{}',
        '{"maxCostPerRun":"2.00","maxLlmCalls":12,"maxSteps":20,"approvalRequired":"OPTIONAL"}'::jsonb,
+       '{}'::jsonb,
        now()
 FROM public.agent_version v
 WHERE v.published_at IS NOT NULL

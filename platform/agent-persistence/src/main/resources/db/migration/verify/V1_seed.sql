@@ -32,9 +32,10 @@ WHERE t.slug = 't-a' AND a.name = 'agent1'
 ON CONFLICT (tenant_id, agent_id, version_number) DO NOTHING;
 
 INSERT INTO execution_snapshot (tenant_id, version_id, agent_config,
-                                prompt_config, tool_contracts, run_config)
+                                prompt_config, tool_contracts, run_config, context_policy)
 SELECT v.tenant_id, v.version_id, '{}', '{}', '{}',
-       '{"maxCostPerRun":"2.00","maxLlmCalls":12,"maxSteps":20,"approvalRequired":"OPTIONAL"}'
+       '{"maxCostPerRun":"2.00","maxLlmCalls":12,"maxSteps":20,"approvalRequired":"OPTIONAL"}',
+       '{}'
 FROM agent_version v JOIN agent a ON a.agent_id = v.agent_id
 JOIN tenant t ON t.tenant_id = v.tenant_id
 WHERE t.slug = 't-a' AND a.name = 'agent1' AND v.version_number = 1

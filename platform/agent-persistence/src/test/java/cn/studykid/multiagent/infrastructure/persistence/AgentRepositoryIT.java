@@ -188,6 +188,30 @@ class AgentRepositoryIT {
         // run_config = DEC-9 运行期容量配置档
         assertJsonEquals("{\"maxCostPerRun\":\"2.00\",\"maxLlmCalls\":12,\"maxSteps\":20,"
                 + "\"approvalRequired\":\"OPTIONAL\"}", rows.get(0)[3]);
+        // context_policy = CH-9：旧 definition 未声明 generationParams.context → {}
+        assertJsonEquals("{}", rows.get(0)[4]);
+    }
+
+    @Test
+    @DisplayName("✅ 旧直发通道：definition 内的 generationParams.context 落成规范 context_policy 快照")
+    void publishVersionSnapshotsContextPolicy() throws Exception {
+        String name = "agent-ctxpol-" + UUID.randomUUID();
+        var agent = manage.createAgent(tenantA, name, null, "creator-1");
+
+        String def = """
+                {"kind":"tutor","generationParams":{"temperature":0.3,
+                 "context":{"maxInputTokens":12000,"strategy":"TIERED","recentTurns":7}}}
+                """;
+        manage.publishVersion(tenantA, agent.agentId(), def, "publisher-1");
+
+        var rows = snapshotRows(tenantA, agent.agentId());
+        assertThat(rows).hasSize(1);
+        assertJsonEquals("{\"maxInputTokens\":12000,\"recentTurns\":7,"
+                + "\"strategy\":\"TIERED\"}", rows.get(0)[4]);
+        // ⛔ 快照新增列不得污染既有列：definition 与 DEC-9 容量配置保持原口径。
+        assertJsonEquals(def, rows.get(0)[0]);
+        assertJsonEquals("{\"maxCostPerRun\":\"2.00\",\"maxLlmCalls\":12,\"maxSteps\":20,"
+                + "\"approvalRequired\":\"OPTIONAL\"}", rows.get(0)[3]);
     }
 
     @Test
@@ -329,7 +353,8 @@ class AgentRepositoryIT {
     }
 
     /**
-     * 快照内容四列：{@code [agent_config, prompt_config, tool_contracts, run_config]}。
+     * 快照内容五列：{@code [agent_config, prompt_config, tool_contracts, run_config,
+     * context_policy]}。
      *
      * <p>⚠️ <b>用管理员连接读</b>（超管绕过 RLS）：本方法的目的是
      * 「确认真实写了什么内容」，不是「验证隔离」——隔离由
@@ -341,7 +366,8 @@ class AgentRepositoryIT {
              Connection conn = adminPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                      "SELECT es.agent_config::text, es.prompt_config::text, "
-                             + "es.tool_contracts::text, es.run_config::text "
+                             + "es.tool_contracts::text, es.run_config::text, "
+                             + "es.context_policy::text "
                              + "FROM execution_snapshot es "
                              + "JOIN agent_version v ON v.version_id = es.version_id "
                              + "  AND v.tenant_id = es.tenant_id "
@@ -352,7 +378,8 @@ class AgentRepositoryIT {
             try (var rs = ps.executeQuery()) {
                 while (rs.next()) {
                     rows.add(new String[] {
-                            rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4)});
+                            rs.getString(1), rs.getString(2), rs.getString(3),
+                            rs.getString(4), rs.getString(5)});
                 }
             }
             return rows;

@@ -13,6 +13,7 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import cn.studykid.multiagent.application.cap.ContextPolicyReader;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.AgentManagePort;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
@@ -256,7 +257,12 @@ public class JdbcAgentManageRepository implements AgentManagePort {
      *   <li>{@code run_config} = DEC-9 的运行期容量配置，取值与
      *       {@code application.yml} 的 {@code agent.run.*} 默认值一致
      *       （max-cost-per-run=2.00 / max-llm-calls=12 / max-steps=20），
-     *       与种子脚本 {@code V1_seed.sql} 的形态保持一致。</li>
+     *       与种子脚本 {@code V1_seed.sql} 的形态保持一致；</li>
+     *   <li>{@code context_policy} = ADR-013 / CH-9 的压缩策略规范快照，
+     *       从 definition 的 {@code generationParams.context} 派生；
+     *       旧 definition 无该键时写 {@code {}}（未声明 / 回落默认，不是关闭）。
+     *       与 CAP 通道共用 {@link ContextPolicyReader} 的归一化与校验，
+     *       不混入 {@code run_config}（DEC-9 容量配置）。</li>
      * </ul>
      *
      * <p>⚠️ <b>不与种子脚本抢口径</b>：种子里这三列是 {@code {}}，
@@ -265,16 +271,22 @@ public class JdbcAgentManageRepository implements AgentManagePort {
      */
     private void createExecutionSnapshot(Connection conn, String tenantId, String versionId,
                                          @Nullable String definition) throws SQLException {
+        // ⚠️ 旧直发通道的 definition 是自由 schema；从其中的 generationParams.context
+        //    派生规范快照。缺失 / 非对象 / 不可解析一律 {}（回落默认，不是关闭）。
+        //    策略校验与序列化全部委托 ContextPolicyReader，禁止本仓储另写 Jackson 归一化。
+        String contextPolicy = ContextPolicyReader.snapshotFromAgentConfig(definition);
         String sql = """
                 INSERT INTO execution_snapshot
-                    (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config)
-                VALUES (?::uuid, ?::uuid, ?::jsonb, '{}'::jsonb, '{}'::jsonb, ?::jsonb)
+                    (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config,
+                     context_policy)
+                VALUES (?::uuid, ?::uuid, ?::jsonb, '{}'::jsonb, '{}'::jsonb, ?::jsonb, ?::jsonb)
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, tenantId);
             ps.setString(2, versionId);
             ps.setString(3, definition == null || definition.isBlank() ? "{}" : definition);
             ps.setString(4, RUN_CONFIG_DEFAULTS);
+            ps.setString(5, contextPolicy);
             ps.executeUpdate();
         }
     }

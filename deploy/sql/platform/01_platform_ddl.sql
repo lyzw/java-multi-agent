@@ -2522,6 +2522,7 @@ CREATE TABLE public.execution_snapshot (
     prompt_config jsonb NOT NULL,
     tool_contracts jsonb NOT NULL,
     run_config jsonb NOT NULL,
+    context_policy jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -2533,6 +2534,12 @@ ALTER TABLE ONLY public.execution_snapshot FORCE ROW LEVEL SECURITY;
 --
 
 COMMENT ON COLUMN public.execution_snapshot.run_config IS 'DEC-9 配置快照：maxCostPerRun/maxLlmCalls/maxSteps/approvalRequired。Run 创建时固化，改配置只影响新 Run。审计导出不得含学生可识别信息';
+
+--
+-- Name: COLUMN execution_snapshot.context_policy; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.execution_snapshot.context_policy IS 'ADR-013 / CH-9：Agent 级 generation_params.context 的发布期规范快照（jsonb 对象）。{} = 未声明 / 回落默认；只影响新 Run，在途 Run 沿用原快照。与 run_config（DEC-9 容量配置）分工：本列专管上下文压缩策略，不混入容量字段。';
 
 
 --

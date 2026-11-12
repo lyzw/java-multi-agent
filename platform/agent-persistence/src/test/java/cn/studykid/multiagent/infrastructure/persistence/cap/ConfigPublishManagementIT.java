@@ -231,6 +231,55 @@ class ConfigPublishManagementIT extends CapITBase {
     }
 
     @Test
+    @DisplayName("✅ CAP 发布归档：generationParams.context 派生为规范 context_policy 快照（单一实现）")
+    void publishedAgentSnapshotsContextPolicy() {
+        String agentId = createBareAgent(tenantA, freshName("it-r4-ctx-policy"));
+        String instructions = "{\"inlineInstructions\":\"你是初中数学辅导助手\"}";
+        String modelRef = "MiniMax-M2.5";
+        String generationParams = """
+                {"temperature":0.3,"maxOutputTokens":2048,
+                 "context":{"maxInputTokens":12000,"strategy":"TIERED","recentTurns":7}}
+                """;
+        ConfigPublishPayload.AgentSpec spec = new ConfigPublishPayload.AgentSpec(
+                agentId, "策略快照 Agent", "带 context 发布", List.of("TEACHER"),
+                List.of(), List.of(), List.of(), "{}", "{}",
+                instructions, modelRef, generationParams);
+
+        ConfigPublishWorkflowService workflow = workflow();
+        ConfigPublishRequest created = workflow.requestPublish(tenantA,
+                ConfigRelease.Scope.TENANT, List.of(spec), null,
+                "发布带压缩策略的 Agent", REQUESTER);
+        workflow.decide(tenantA, created.requestId(), Decision.APPROVE, "同意", APPROVER);
+        workflow.apply(tenantA, created.requestId(), APPROVER);
+
+        String where = " FROM execution_snapshot es "
+                + "JOIN agent_version v ON v.version_id = es.version_id "
+                + "WHERE v.tenant_id = '" + tenantA + "'::uuid "
+                + "AND v.agent_id = '" + agentId + "'::uuid "
+                + "AND v.version_number = 1";
+        String expected = """
+                {"maxInputTokens":12000,"recentTurns":7,"strategy":"TIERED"}
+                """.trim();
+
+        assertThat(adminQueryLong("SELECT count(*)" + where
+                + " AND es.context_policy = '" + expected + "'::jsonb"))
+                .as("⛔ CAP 归档未写入由 generationParams.context 派生的规范快照")
+                .isEqualTo(1L);
+        assertThat(adminQueryLong("SELECT count(*)" + where
+                + " AND es.context_policy = '{}'::jsonb"))
+                .as("⛔ 已声明 context 却落成默认 {}：快照派生空转")
+                .isZero();
+        assertThat(adminQueryLong("SELECT count(*)" + where
+                + " AND es.agent_config->'generationParams'->'context'->>'strategy' = 'TIERED'"))
+                .as("⛔ agent_config 的生成参数被 context_policy 派生污染")
+                .isEqualTo(1L);
+        assertThat(adminQueryLong("SELECT count(*)" + where
+                + " AND es.run_config->>'maxLlmCalls' = '12'"))
+                .as("⛔ run_config（DEC-9 容量配置）被 context_policy 派生污染")
+                .isEqualTo(1L);
+    }
+
+    @Test
     @DisplayName("⛔ 未审批不得执行：PENDING 状态直接 apply 被拒，且零副作用")
     void applyWithoutApprovalIsRejected() {
         ConfigPublishWorkflowService workflow = workflow();

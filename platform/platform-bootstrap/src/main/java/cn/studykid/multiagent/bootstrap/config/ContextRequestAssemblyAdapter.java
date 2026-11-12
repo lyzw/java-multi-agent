@@ -49,7 +49,8 @@ import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
  * 精确读 {@code cap_agent_def} 的 {@code generationParams} 一等列。该版本由
  * {@code execution_capability_snapshot} 固定，⛔ 绝不读「当前已发布版本」——
  * 否则别人发布新版本时，在途 Run 会中途换策略。
- * （M3 余项 {@code execution_snapshot.context_policy} 是后续加固，不构成本路径的前置。）
+ * （M3 已完成 {@code execution_snapshot.context_policy} 发布期双写：该列供回放 / 审计
+ * 固化策略快照，本路径仍只读 {@code cap_agent_def.generationParams}，不引入新读源。）
  *
  * <p>⚠️ <b>能力读取防回落</b>：模型目录按 {@code modelName} <b>精确匹配</b>，
  * 命中不到就按 unknown 处理并让 {@link ContextPolicyResolver} 上调 reserve（R10）。

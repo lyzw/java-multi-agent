@@ -31,6 +31,11 @@ import cn.studykid.multiagent.ports.persistence.AgentReleaseArchivePort;
  * <p>⚠️ <b>不可覆盖</b>：{@code agent_version} 是不可变版本行
  * （唯一约束 {@code (tenant_id, agent_id, version_number)}），
  * 重复归档用 {@code ON CONFLICT DO NOTHING} 并返回 {@code false}。
+ *
+ * <p>⚠️ <b>{@code context_policy} 由调用方传入，本仓储不做二次解析</b>：
+ * 值来自 {@code AgentReleaseArchive.deriveContextPolicy(agent)}，
+ * 与发布期门禁、运行期读取共用同一归一化实现。存量版本行幂等补插快照时
+ * 沿用同一参数，但**不回写**既有不可变快照（符合 [D4]「在途 Run 沿用原快照」）。
  */
 public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePort {
 
@@ -57,8 +62,9 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
 
     private static final String SQL_INSERT_SNAPSHOT = """
             INSERT INTO execution_snapshot
-                (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config)
-            VALUES (?::uuid, ?::uuid, ?::jsonb, '{}'::jsonb, '{}'::jsonb, ?::jsonb)
+                (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config,
+                 context_policy)
+            VALUES (?::uuid, ?::uuid, ?::jsonb, '{}'::jsonb, '{}'::jsonb, ?::jsonb, ?::jsonb)
             """;
 
     private final DataSource dataSource;
@@ -72,15 +78,17 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
                                   @NonNull String agentId,
                                   int version,
                                   @NonNull String definition,
-                                  @Nullable String agentConfig) {
+                                  @Nullable String agentConfig,
+                                  @NonNull String contextPolicy) {
         return TransactionalConnectionHolder.inTransaction(
                 dataSource, tenantContext(tenantId),
-                conn -> doArchive(conn, tenantId, agentId, version, definition, agentConfig));
+                conn -> doArchive(conn, tenantId, agentId, version, definition, agentConfig,
+                        contextPolicy));
     }
 
     private boolean doArchive(Connection conn, String tenantId, String agentId, int version,
-                              String definition, @Nullable String agentConfig)
-            throws SQLException {
+                              String definition, @Nullable String agentConfig,
+                              @NonNull String contextPolicy) throws SQLException {
         // ⚠️ **必须先有 agent 行**：agent_version 的外键指向 agent(tenant_id, agent_id)。
         //    没有 agent 行就插入 = 外键违约 → 整笔发布事务回滚。
         //    这里显式判一次并给出可读原因，而不是让外键以 PSQLException 冒泡成 500。
@@ -109,7 +117,7 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
                                 + ", version=" + version + "）—— 数据不一致，拒绝发布");
             }
         }
-        insertSnapshotIfAbsent(conn, tenantId, versionId.get(), agentConfig);
+        insertSnapshotIfAbsent(conn, tenantId, versionId.get(), agentConfig, contextPolicy);
         return inserted;
     }
 
@@ -132,7 +140,8 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
     }
 
     private void insertSnapshotIfAbsent(Connection conn, String tenantId, String versionId,
-                                        @Nullable String agentConfig) throws SQLException {
+                                        @Nullable String agentConfig,
+                                        @NonNull String contextPolicy) throws SQLException {
         // ⚠️ NOT EXISTS 守卫而不是唯一约束：execution_snapshot 只有
         //    (tenant_id, snapshot_id) 主键，快照 id 每次都是新随机值 ——
         //    ON CONFLICT 永远不触发，「幂等」就成了每轮泄漏一行
@@ -148,7 +157,7 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
                 }
             }
         }
-        insertSnapshot(conn, tenantId, versionId, agentConfig);
+        insertSnapshot(conn, tenantId, versionId, agentConfig, contextPolicy);
     }
 
     private @NonNull Optional<String> insertVersion(Connection conn, String tenantId,
@@ -166,12 +175,14 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
     }
 
     private void insertSnapshot(Connection conn, String tenantId, String versionId,
-                                @Nullable String agentConfig) throws SQLException {
+                                @Nullable String agentConfig,
+                                @NonNull String contextPolicy) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(SQL_INSERT_SNAPSHOT)) {
             ps.setString(1, tenantId);
             ps.setString(2, versionId);
             ps.setString(3, agentConfig == null || agentConfig.isBlank() ? "{}" : agentConfig);
             ps.setString(4, RUN_CONFIG_DEFAULTS);
+            ps.setString(5, contextPolicy);
             ps.executeUpdate();
         }
     }

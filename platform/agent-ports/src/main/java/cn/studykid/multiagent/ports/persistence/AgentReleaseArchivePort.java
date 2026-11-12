@@ -22,8 +22,9 @@ import org.jspecify.annotations.Nullable;
  * <ul>
  *   <li>{@code agent_version.definition} 由 {@code cap_agent_def} <b>派生</b>，
  *       <b>不由客户端提交</b> —— 客户端提交的 JSON 不再有任何效力；</li>
- *   <li>{@code execution_snapshot} 记录该 release 的运行期容量配置，
- *       供 {@code run.snapshot_id} 外键与回放使用；</li>
+ *   <li>{@code execution_snapshot} 记录该 release 的运行期容量配置与
+ *       {@code context_policy} 规范快照（ADR-013 / CH-9），
+ *       供 {@code run.snapshot_id} 外键、回放与压缩策略审计使用；</li>
  *   <li>运行期的<b>提示词 / 模型 / 生成参数</b>一律读 {@code cap_agent_def}，
  *       不读归档里的 {@code definition}。</li>
  * </ul>
@@ -40,13 +41,16 @@ public interface AgentReleaseArchivePort {
      * @param tenantId    租户标识
      * @param agentId     Agent 标识
      * @param version     版本号（与 {@code cap_agent_def.version} 一致）
-     * @param definition  归档用的定义 JSON 文本（<b>由 {@code cap_agent_def} 派生</b>）
-     * @param agentConfig 归档用的 Agent 配置 JSON 文本（可空 → {@code {}}）
+     * @param definition    归档用的定义 JSON 文本（<b>由 {@code cap_agent_def} 派生</b>）
+     * @param agentConfig   归档用的 Agent 配置 JSON 文本（可空 → {@code {}}）
+     * @param contextPolicy 发布期规范化的 {@code generation_params.context} JSON 文本
+     *                      （{@code {}} = 未声明 / 回落默认；不可空）
      * @return {@code true} = 本次写入；{@code false} = 该版本已归档（未覆盖）
      */
     boolean archiveRelease(@NonNull String tenantId,
                            @NonNull String agentId,
                            int version,
                            @NonNull String definition,
-                           @Nullable String agentConfig);
+                           @Nullable String agentConfig,
+                           @NonNull String contextPolicy);
 }

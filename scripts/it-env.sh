@@ -177,7 +177,10 @@ _it_env_main() {
                 -U "$IT_PG_ADMIN_USER" -tAc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relrowsecurity" 2>/dev/null)"
       policies="$(PGPASSWORD="$IT_PG_ADMIN_PASSWORD" "$psql_bin" -h "$host" -p "$port" -d "$target_db" \
                 -U "$IT_PG_ADMIN_USER" -tAc "SELECT count(*) FROM pg_policies WHERE schemaname='public'" 2>/dev/null)"
+      snapshot_context_policy="$(PGPASSWORD="$IT_PG_ADMIN_PASSWORD" "$psql_bin" -h "$host" -p "$port" -d "$target_db" \
+                -U "$IT_PG_ADMIN_USER" -tAc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='execution_snapshot' AND column_name='context_policy'" 2>/dev/null)"
       # 结构事实（2026-11-08）：71 表 / 44 RLS 表 / 52 策略
+      # 2026-11-12 加列不加表：execution_snapshot.context_policy 单独探一次，避免表数不变掩盖缺列
       #   · 2026-11-07 model_catalog + model_provider_credential（全局、无 RLS）：67 → 69
       #   · 2026-11-08 public.run_message（租户域、FORCE RLS）：69 → 70，同时 +1 RLS 表 / +1 策略
       # ⚠️ 与 init-db.sh 的 EXPECT_TABLES / EXPECT_RLS_TABLES / EXPECT_POLICIES
@@ -185,9 +188,10 @@ _it_env_main() {
       #    ⚠️ 这里用**精确相等**而非弱下界：弱下界会把「多了一张没审过的表」
       #    也判成正常，结构漂移必须可见。
       local expect_tables=71 expect_rls=44 expect_policies=52
-      tables="${tables:-0}"; rls="${rls:-0}"; policies="${policies:-0}"
-      echo "   结构   : 表 ${tables}（应 ${expect_tables}）｜RLS 表 ${rls}（应 ${expect_rls}）｜策略 ${policies}（应 ${expect_policies}）"
-      if [ "$tables" -ne "$expect_tables" ] || [ "$rls" -ne "$expect_rls" ] || [ "$policies" -ne "$expect_policies" ]; then
+      tables="${tables:-0}"; rls="${rls:-0}"; policies="${policies:-0}"; snapshot_context_policy="${snapshot_context_policy:-0}"
+      echo "   结构   : 表 ${tables}（应 ${expect_tables}）｜RLS 表 ${rls}（应 ${expect_rls}）｜策略 ${policies}（应 ${expect_policies}）｜execution_snapshot.context_policy 列 ${snapshot_context_policy}（应 1）"
+      if [ "$tables" -ne "$expect_tables" ] || [ "$rls" -ne "$expect_rls" ] || [ "$policies" -ne "$expect_policies" ] \
+         || [ "$snapshot_context_policy" -ne 1 ]; then
         echo "   ⚠️ 结构与快照不一致（库是空的 / 旧的 / 被改过）—— 先跑：scripts/init-db.sh platform --db $target_db ..."
       fi
     fi

@@ -741,7 +741,8 @@ public class ConfigPublishService {
         }
         boolean archived = archive.archiveRelease(tenantId, agent.agentId(), agent.version(),
                 AgentReleaseArchive.deriveDefinition(agent),
-                AgentReleaseArchive.deriveAgentConfig(agent));
+                AgentReleaseArchive.deriveAgentConfig(agent),
+                AgentReleaseArchive.deriveContextPolicy(agent));
         if (!archived) {
             log.debug("Agent 发布归档跳过（版本行已存在）: agent={}, version={}",
                     agent.agentId(), agent.version());

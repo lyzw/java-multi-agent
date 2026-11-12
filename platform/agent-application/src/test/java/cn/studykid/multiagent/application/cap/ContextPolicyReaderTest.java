@@ -96,4 +96,70 @@ class ContextPolicyReaderTest {
                     .isInstanceOf(ContextPolicyRejectedException.class);
         }
     }
+
+    @Test
+    @DisplayName("✅ 快照派生：未声明 / 空对象 / 非对象配置一律 {}（回落默认，不等于关闭）")
+    void snapshotFallsBackToEmptyObject() {
+        assertThat(ContextPolicyReader.snapshotJson(null)).isEqualTo("{}");
+        assertThat(ContextPolicyReader.snapshotJson("")).isEqualTo("{}");
+        assertThat(ContextPolicyReader.snapshotJson("not-json")).isEqualTo("{}");
+        assertThat(ContextPolicyReader.snapshotJson("{\"temperature\":0.3}")).isEqualTo("{}");
+        assertThat(ContextPolicyReader.snapshotJson("{\"context\":{}}")).isEqualTo("{}");
+
+        assertThat(ContextPolicyReader.snapshotFromAgentConfig(null)).isEqualTo("{}");
+        assertThat(ContextPolicyReader.snapshotFromAgentConfig("{\"kind\":\"tutor\"}"))
+                .isEqualTo("{}");
+        assertThat(ContextPolicyReader.snapshotFromAgentConfig("[]")).isEqualTo("{}");
+    }
+
+    @Test
+    @DisplayName("✅ 快照派生：显式 context 归一化为稳定稀疏 JSON（键序无关、只含声明键）")
+    void snapshotIsCanonicalAndSparse() {
+        String contextJson = "{\"maxInputTokens\":12000,\"enabled\":true,"
+                + "\"strategy\":\"TIERED\",\"recentTurns\":7}";
+        String generationParams = "{\"temperature\":0.3,\"context\":" + contextJson + "}";
+        String first = "{\"instructions\":\"{}\",\"generationParams\":"
+                + generationParams + "}";
+        String second = """
+                {"generationParams":{"context":{"recentTurns":7,"strategy":"TIERED",
+                  "enabled":true,"maxInputTokens":12000},"temperature":0.3}}
+                """;
+        String expected = "{\"enabled\":true,\"maxInputTokens\":12000,"
+                + "\"recentTurns\":7,\"strategy\":\"TIERED\"}";
+        assertThat(ContextPolicyReader.snapshotFromAgentConfig(first)).isEqualTo(expected);
+        assertThat(ContextPolicyReader.snapshotFromAgentConfig(second)).isEqualTo(expected);
+
+        // generationParams 为「承载 JSON 文本的字符串」的历史形态也走同一实现。
+        assertThat(ContextPolicyReader.snapshotFromAgentConfig(
+                "{\"generationParams\":\"{\\\"context\\\":{\\\"recentTurns\\\":7}}\"}"))
+                .isEqualTo("{\"recentTurns\":7}");
+
+        // 快照声明键必须与 read() 解析出的值同源，不能出现两套真相。
+        ContextPolicy parsed = ContextPolicyReader.read(generationParams);
+        assertThat(parsed.maxInputTokens()).isEqualTo(12_000);
+        assertThat(parsed.recentTurns()).isEqualTo(7);
+        assertThat(parsed.strategy()).isEqualTo(ContextPolicy.Strategy.TIERED);
+    }
+
+    @Test
+    @DisplayName("⛔ 快照派生与运行期读取同判据：非对象 / 非法策略一律 fail-closed")
+    void snapshotDerivationIsFailClosed() {
+        String[] badContexts = {
+                "\"TIERED\"",
+                "{\"trigerRatio\":0.8}",
+                "{\"strategy\":\"AGGRESSIVE\"}",
+                "{\"recentTurns\":1}"
+        };
+        for (String context : badContexts) {
+            String generationParams = "{\"context\":" + context + "}";
+            assertThatThrownBy(() -> ContextPolicyReader.snapshotJson(generationParams))
+                    .as("快照派生必须拒：" + generationParams)
+                    .isInstanceOf(ContextPolicyRejectedException.class);
+
+            String config = "{\"generationParams\":" + generationParams + "}";
+            assertThatThrownBy(() -> ContextPolicyReader.snapshotFromAgentConfig(config))
+                    .as("旧直发快照派生必须拒：" + config)
+                    .isInstanceOf(ContextPolicyRejectedException.class);
+        }
+    }
 }

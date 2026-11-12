@@ -32,14 +32,15 @@ public final class InMemoryAgentReleaseArchive implements AgentReleaseArchivePor
                                   @NonNull String agentId,
                                   int version,
                                   @NonNull String definition,
-                                  @Nullable String agentConfig) {
+                                  @Nullable String agentConfig,
+                                  @NonNull String contextPolicy) {
         String key = key(tenantId, agentId, version);
         if (archived.containsKey(key)) {
             // ⚠️ 不可变版本行：已存在不覆盖（与 JDBC 实现同口径）。
             return false;
         }
         archived.put(key, new ArchivedRelease(tenantId, agentId, version,
-                definition, agentConfig == null ? "{}" : agentConfig));
+                definition, agentConfig == null ? "{}" : agentConfig, contextPolicy));
         return true;
     }
 
@@ -85,11 +86,13 @@ public final class InMemoryAgentReleaseArchive implements AgentReleaseArchivePor
      * @param version    版本号
      * @param definition 归档的 definition JSON 文本
      * @param agentConfig 归档的运行期配置快照 JSON 文本
+     * @param contextPolicy 归档的规范化压缩策略快照 JSON 文本（{@code {}} = 未声明）
      */
     public record ArchivedRelease(@NonNull String tenantId,
                                   @NonNull String agentId,
                                   int version,
                                   @NonNull String definition,
-                                  @NonNull String agentConfig) {
+                                  @NonNull String agentConfig,
+                                  @NonNull String contextPolicy) {
     }
 }

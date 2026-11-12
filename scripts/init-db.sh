@@ -142,6 +142,8 @@ if [ "$TARGET" = platform ]; then
   #    ⚠️ run_message 走租户域，故三项期望值**同时**变化；
   #    只改表数会让「建库成功但自检红」被当成环境问题排查。
   #    改快照新增/删除表时**必须同步这里**，否则「建库成功但自检红」会被当成环境问题排查。
+#    2026-11-12 execution_snapshot 新增 context_policy 列（CH-9 / M3）：加列不加表，
+#    三项期望值 71 / 44 / 52 不变；列级存在性由 SchemaDriftIT.snapshotColumnsExistInLiveDatabase 验证。
   EXPECT_TABLES=71
   EXPECT_RLS_TABLES=44
   EXPECT_POLICIES=52
