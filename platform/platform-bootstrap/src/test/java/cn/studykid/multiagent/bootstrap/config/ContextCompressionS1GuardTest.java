@@ -5,7 +5,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -35,6 +37,25 @@ class ContextCompressionS1GuardTest {
 
     private static final Pattern IMPORT = Pattern.compile(
             "^import\\s+(?:static\\s+)?([\\w.]+);", Pattern.MULTILINE);
+
+    /**
+     * G1 A.5 S3-M8-b 台账登记的<b>模型链路统一装配白名单</b>（精确文件 → 必需令牌，#72 从
+     * 「L2/L3 一律禁止 RequestAssemblyPort」升级而来，旧负面覆盖不删除）。
+     *
+     * <p>⛔ keySet 必须与扫描结果完全一致：L3 Console 或任何新文件接线即红；
+     * 白名单文件被删 / 改名 / 必需令牌消失也红（防守卫随实现退化而假绿）。
+     * 组合根装配边界由 M6/M7 守卫单独钉死，此处只管 worker / api 模型链路层。
+     */
+    private static final Map<String, Set<String>> REQUEST_ASSEMBLY_WIRING = Map.of(
+            "RunExecutionLoop.java", Set.of("RequestAssemblyPort", "assembly.request()"),
+            "WorkerChildAgentRunner.java", Set.of("RequestAssemblyPort", "assembly.request()"),
+            "AgentChatOrchestrator.java", Set.of("RequestAssemblyPort",
+                    "assembly.request()", "RequestAssemblyResult.passthrough(",
+                    "CONTEXT_ASSEMBLED", "assembly.reason().name()",
+                    "state.carryOver.stateJson()"));
+
+    /** S3-M8-b-1（#72）撤点反证脚本，钉死「升级后的白名单守卫」不是空断言。 */
+    private static final String COUNTERPROOF = "scripts/m8b-l2-assembly-counterproof.sh";
 
     @Test
     @DisplayName("✅ agent-context 是纯算法层：零 Spring / 零 JDBC / 零驱动 import")
@@ -126,12 +147,12 @@ class ContextCompressionS1GuardTest {
     }
 
     @Test
-    @DisplayName("✅ M7 关闭等价守卫（原 S1 影子期零接线守卫升级）：L1/L4 只依赖中性端口，算法层零泄漏")
+    @DisplayName("✅ M8-b 关闭等价守卫（M7 守卫按 G1 A.5 台账升级）：L1/L2/L4 统一装配白名单精确到文件→令牌；L3 Console 仍零接线；算法层零泄漏")
     void closedEquivalenceHasNoAlgorithmLayerLeak() {
-        // ⚠️ G1 报告 A.5 台账：本方法由「S1 零接线」阶段守卫**升级**而来，不删除。
+        // ⚠️ G1 报告 A.5 台账：本方法由「S1 零接线」→「M7 L1/L4 正面接入」两次升级而来，不删除。
+        //    本批（M8-b-1 / #72）第三次升级：L2 SSE 接入统一装配入口；
         //    旧禁止面（算法层类型不得进任何模型链路）完整保留；
-        //    新增正面断言：G1 签核后 L1/L4 必须只经 RequestAssemblyPort 这一条入口，
-        //    SSE / Console 仍保持 contract-only（结构证据边界未扩大）。
+        //    L1/L4 正面断言保留；新增 L2 精确白名单 + 白名单外禁止 + 关闭态同一引用。
         List<String> chains = List.of(
                 "agent-worker/src/main/java/cn/studykid/multiagent/worker/execute/RunExecutionLoop.java",
                 "agent-worker/src/main/java/cn/studykid/multiagent/worker/execute/WorkerChildAgentRunner.java",
@@ -141,6 +162,7 @@ class ContextCompressionS1GuardTest {
                 "ContextAssembler", "ContextPolicyResolver", "BudgetAllocator",
                 "CompactionPipeline", "cn.studykid.multiagent.context.");
 
+        // ── ① 旧负面覆盖（原样保留）：算法层类型不得泄漏进任何模型链路 ──
         List<String> violations = new ArrayList<>();
         for (String rel : chains) {
             Path file = platformRoot().resolve(rel);
@@ -158,6 +180,7 @@ class ContextCompressionS1GuardTest {
                 .as("⛔ 算法层类型泄漏进模型链路：worker 只能认识 ports/contextwiring 中性端口（ADR-011）")
                 .isEmpty();
 
+        // ── ② M7 既有正面断言（原样保留）：L1/L4 只经统一装配入口 ──
         String loop = stripCommentsKeepStrings(read(platformRoot().resolve(chains.get(0))));
         String child = stripCommentsKeepStrings(read(platformRoot().resolve(chains.get(1))));
         assertThat(loop)
@@ -171,11 +194,97 @@ class ContextCompressionS1GuardTest {
                 .contains("RequestAssemblyPort")
                 .contains("RequestAssemblyResult assembly = assembleRequest(")
                 .contains("assembly.request()");
-        for (String rel : chains.subList(2, chains.size())) {
-            assertThat(stripCommentsKeepStrings(read(platformRoot().resolve(rel))))
-                    .as("⛔ SSE/Console 结构证据边界被扩大：%s 不得接统一装配入口", rel)
-                    .doesNotContain("RequestAssemblyPort");
+
+        // ── ③ M8-b 升级：L2 SSE 正面接入（白名单精确到文件→令牌）──
+        String orchestrator = stripCommentsKeepStrings(read(platformRoot().resolve(chains.get(2))));
+        assertThat(orchestrator)
+                .as("⛔ L2 没接统一请求装配入口：送模型的还是 legacy 请求，装配层空转")
+                .contains("RequestAssemblyPort")
+                .contains("RequestAssemblyResult assembly = assembleRequest(")
+                .contains("ModelRequest modelRequest = assembly.request();")
+                .as("⛔ L2 关闭态没有回退 legacy 同一引用：逐位等价失去构造级保证")
+                .contains("if (requestAssemblyPort == null)")
+                .contains("RequestAssemblyResult.passthrough(legacyRequest)")
+                .as("⛔ L2 装配拒绝未 fail-closed：错误码会被吞成 SERVER_ERROR")
+                .contains("assembly.reason().name()")
+                .as("⛔ L2 carry-over 未只取已验载荷，或装配态未记真实事实")
+                .contains("state.carryOver.stateJson()")
+                .contains("CONTEXT_ASSEMBLED");
+
+        // ── ④ 白名单外禁止：worker / api 模型链路层的接线文件集合必须恰好等于登记白名单 ──
+        //    防两条静默失真：(a) L3 Console 被扩大接线；(b) 新文件偷接装配入口绕过守卫。
+        Map<String, Path> found = requestAssemblyWiringFiles();
+        assertThat(found.keySet())
+                .as("⛔ 模型链路统一装配接线文件集合与 G1 A.5 登记白名单不一致："
+                        + "多出=越界接线，少=白名单文件被改名/删除后守卫失效")
+                .containsExactlyInAnyOrderElementsOf(REQUEST_ASSEMBLY_WIRING.keySet());
+        for (Map.Entry<String, Set<String>> e : REQUEST_ASSEMBLY_WIRING.entrySet()) {
+            assertThat(stripCommentsKeepStrings(read(found.get(e.getKey()))))
+                    .as("⛔ 白名单文件 %s 的必需装配令牌消失（守卫随实现退化而假绿）", e.getKey())
+                    .contains(e.getValue().toArray(new String[0]));
         }
+        // L3 Console 结构证据边界在此次升级中仍不扩大（原负面语义显式保留）。
+        String console = stripCommentsKeepStrings(read(platformRoot().resolve(chains.get(3))));
+        assertThat(console)
+                .as("⛔ L3 Console 结构证据边界被扩大：Console 仍 contract-only，不得接统一装配入口")
+                .doesNotContain("RequestAssemblyPort");
+    }
+
+    /**
+     * 扫描 worker / api 模型链路层生产源码，返回「文件名 → 路径」中含统一装配令牌的文件。
+     *
+     * <p>⛔ 只扫模型链路两层（不扫 bootstrap 组合根——那里的装配边界由 M6/M7 守卫钉死），
+     * 否则 adapter / config 持有端口会被误判为越界接线。
+     */
+    private static Map<String, Path> requestAssemblyWiringFiles() {
+        Map<String, Path> found = new LinkedHashMap<>();
+        for (String module : List.of("agent-worker", "agent-api")) {
+            Path src = platformRoot().resolve(module + "/src/main/java");
+            if (!Files.isDirectory(src)) {
+                continue;
+            }
+            try (Stream<Path> tree = Files.walk(src)) {
+                for (Path file : tree.filter(p -> p.toString().endsWith(".java")).toList()) {
+                    String code = stripCommentsKeepStrings(read(file));
+                    boolean wired = List.of("RequestAssemblyPort", "RequestAssemblyResult",
+                            "RequestAssemblyInput", "RequestAssemblyException").stream()
+                            .anyMatch(code::contains);
+                    if (wired) {
+                        found.put(file.getFileName().toString(), file);
+                    }
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException("扫描模型链路统一装配接线失败", e);
+            }
+        }
+        return found;
+    }
+
+    @Test
+    @DisplayName("✅ M8-b 反证脚本带中断保护、精确锚点、红/绿判定与 md5 复原（升级守卫不是空断言）")
+    void m8bCounterproofScriptKeepsDiscipline() {
+        String script = read(repoRoot().resolve(COUNTERPROOF));
+
+        assertThat(script)
+                .as("⛔ 撤点标识缺失：无法证明「撤掉修复点会红」")
+                .contains("RV-M8B-01")
+                .contains("RV-M8B-02")
+                .contains("RV-M8B-03")
+                .contains("RV-M8B-04")
+                .contains("RV-M8B-05")
+                .as("⛔ 中断保护缺失：SIGTERM/SIGINT 会残留撤点源码造成静默失真")
+                .contains("trap restore EXIT")
+                .contains("INT TERM")
+                .as("⛔ 红/绿判定缺失：编译失败无报告时会被当作有效反证")
+                .contains("expect_red")
+                .contains("expect_green")
+                .contains("Tests run:")
+                .contains("Skipped: 0")
+                .as("⛔ 复原三件套缺失")
+                .contains("anchor_count")
+                .contains("marker_count")
+                .contains("md5_all")
+                .contains("git diff --check");
     }
 
     @Test

@@ -49,6 +49,10 @@ import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Result;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort.RagResult;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort.RagUnavailableException;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyException;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyInput;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyResult;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway.ModelErrorKind;
 import cn.studykid.multiagent.ports.model.ModelGateway.ModelGatewayException;
@@ -631,6 +635,148 @@ class AgentChatOrchestratorTest {
         assertThat(h.audit.beginRecord.inputPayload()).containsEntry("scenario", "algebra");
     }
 
+    // ── S3-M8-b #72：L2 统一装配入口 ────────────────────────────────
+
+    @Test
+    @DisplayName("⛔ 关闭态逐位等价：passthrough 时送模型的是 legacy 同一引用，零 CONTEXT_ASSEMBLED 事件")
+    void closedStateSendsLegacyRequestByIdentity() {
+        Harness h = new Harness();
+        h.gateway.then(answer(ANSWER_MARKER));
+
+        h.orchestrator.run(h.platform(), h.request(null), h.sink);
+
+        // 装配入口被调用，但关闭态返回 legacy 引用本身；网关收到的正是它（引用身份，非内容相等）。
+        assertThat(h.assembly.inputs).hasSize(1);
+        RequestAssemblyInput input = h.assembly.inputs.get(0);
+        assertThat(h.gateway.requests).hasSize(1);
+        assertThat(h.gateway.requests.get(0)).isSameAs(input.legacyRequest());
+        assertThat(h.gateway.requests.get(0).systemPrompt()).isEqualTo(SYSTEM_MARKER)
+                .as("关闭态 systemPrompt 逐字等于 legacy，不得被装配层改写");
+        // 关闭态零装配行为事件（G1 [D11]：enabled=false 与无压缩功能逐位一致）。
+        assertThat(h.audit.finishRecord.events())
+                .noneMatch(e -> "CONTEXT_ASSEMBLED".equals(e.eventType()));
+        assertThat(h.sink.names).doesNotContain("context.checkpoint");
+        assertThat(h.audit.finishRecord.state()).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
+    @DisplayName("⛔ 开启态唯一送模型请求来自 assembly.request()；tier/token 真实落审计")
+    void assembledStateSendsAssemblyRequestAndRecordsRealFacts() {
+        Harness h = new Harness();
+        h.assembly.assembled(/* tier */ 2, /* fallback */ true, /* before */ 9000, /* after */ 4200);
+        h.gateway.then(answer(ANSWER_MARKER));
+
+        h.orchestrator.run(h.platform(), h.request(null), h.sink);
+
+        // 送模型的是装配层替代请求，不是 legacy——证明装配层不是空转。
+        assertThat(h.gateway.requests).hasSize(1);
+        assertThat(h.gateway.requests.get(0).systemPrompt()).isEqualTo("ASSEMBLED_SYSTEM");
+        assertThat(h.gateway.requests.get(0).messages())
+                .singleElement().satisfies(m -> assertThat(m.content()).isEqualTo("ASSEMBLED_MESSAGE"));
+        // 真实计数如实落审计（不是硬编码 0/假数）："有一行"不够，数字要算对。
+        List<AuditEvent> assembledEvents = h.audit.finishRecord.events().stream()
+                .filter(e -> "CONTEXT_ASSEMBLED".equals(e.eventType()))
+                .toList();
+        assertThat(assembledEvents)
+                .as("一轮装配只能记一条装配事实，多记=重复、少记=空转")
+                .hasSize(1);
+        AuditEvent assembled = assembledEvents.get(0);
+        // payload 是 Map<String,Object>：用 containsEntry 逐字段比对真实值（比字符串 contains 更强，
+        // 数字/布尔的类型与值都必须算对，且不会被相邻字段的.toString子串蒙混）。
+        assertThat(assembled.payload())
+                .containsEntry("tier", 2)
+                .containsEntry("fallback", true)
+                .containsEntry("beforeTokens", 9000)
+                .containsEntry("afterTokens", 4200)
+                .containsEntry("compactionCount", 1);
+        // 本批仍不发射第 14 事件 / 不改 13 帧字节序。
+        assertThat(h.sink.names).doesNotContain("context.checkpoint");
+        assertThat(h.audit.finishRecord.state()).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
+    @DisplayName("⛔ 装配拒绝 fail-closed：error 帧带稳定码、FAILED、绝不发模型请求、绝不静默回退")
+    void assemblyRejectionFailsClosedWithStableCode() {
+        Harness h = new Harness();
+        h.assembly.reject(RequestAssemblyException.Reason.CONTEXT_BUDGET_EXCEEDED);
+
+        h.orchestrator.run(h.platform(), h.request(null), h.sink);
+
+        // 稳定原因码原样透出，绝不伪装成 SERVER_ERROR 后回退 legacy。
+        AgentChatEvent.Error error = firstOf(h.sink, AgentChatEvent.Error.class);
+        assertThat(error.kind()).isEqualTo("CONTEXT_BUDGET_EXCEEDED");
+        assertThat(h.audit.finishRecord.state()).isEqualTo("FAILED");
+        assertThat(h.audit.finishRecord.errorCode()).isEqualTo("CONTEXT_BUDGET_EXCEEDED");
+        // 装配在模型调用之前拒绝：零模型请求、零 delta、零 answer、零装配事件。
+        assertThat(h.gateway.requests).isEmpty();
+        assertThat(h.sink.events).noneMatch(e -> e instanceof AgentChatEvent.Delta
+                || e instanceof AgentChatEvent.Answer);
+        assertThat(h.audit.finishRecord.events())
+                .noneMatch(e -> "CONTEXT_ASSEMBLED".equals(e.eventType()));
+        assertThat(h.sink.names).doesNotContain("context.checkpoint");
+    }
+
+    @Test
+    @DisplayName("⛔ 装配入参：整段历史+RAG 单次围栏传给 historyMessages，RAG 不二次包裹")
+    void assemblyInputCarriesFullHistoryWithSingleRagFence() {
+        Harness h = new Harness();
+        h.rag.result = ragWith(RAG_HIT);
+        h.gateway.then(answer(ANSWER_MARKER));
+        AgentChatRequest req = new AgentChatRequest(
+                QUESTION_MARKER,
+                List.of(new AgentChatRequest.Turn("user", "第一轮问题"),
+                        new AgentChatRequest.Turn("assistant", "第一轮回答")),
+                null, 7, true, SPOOF_TENANT, "algebra", null);
+
+        h.orchestrator.run(h.platform(), req, h.sink);
+
+        assertThat(h.assembly.inputs).hasSize(1);
+        RequestAssemblyInput in = h.assembly.inputs.get(0);
+        // firstUserTurn / currentInput / ragBlocks 全留空，避免重复渲染与二次围栏。
+        assertThat(in.firstUserTurn()).isEmpty();
+        assertThat(in.currentInput()).isEmpty();
+        assertThat(in.ragBlocks()).isEmpty();
+        // 整段对话（历史 user/assistant + RAG 围栏块 + 本轮输入）进 historyMessages。
+        assertThat(in.historyMessages()).hasSize(4);
+        assertThat(in.historyMessages().get(0).content()).isEqualTo("第一轮问题");
+        assertThat(in.historyMessages().get(1).content()).isEqualTo("第一轮回答");
+        String ragBlock = in.historyMessages().get(2).content();
+        assertThat(ragBlock).contains(RAG_MARKER)
+                .containsOnlyOnce(PromptGuard.TOOL_RESULT_OPEN)
+                .containsOnlyOnce(PromptGuard.TOOL_RESULT_CLOSE)
+                .as("RAG 只围栏一次；再进 ragBlocks 会被装配布局二次包裹");
+        // 装配布局的不可信围栏标记不得出现在 history 里（那是 RAG 二次围栏的证据）。
+        assertThat(ragBlock).doesNotContain("<compacted_context");
+        assertThat(in.historyMessages().get(3).content()).isEqualTo(QUESTION_MARKER);
+        // legacy 基线携带同一段 messages（关闭态可用），且非上下文字段一致。
+        assertThat(in.legacyRequest().messages()).hasSize(4);
+        assertThat(in.modelId()).isEqualTo("model-x");
+        assertThat(in.agentId()).isEqualTo(AGENT);
+        assertThat(in.agentVersion()).isEqualTo(1);
+        assertThat(in.tenantId()).isEqualTo(TENANT)
+                .as("装配作用域租户必须来自 Context，绝不取请求体的 SPOOF_TENANT");
+        assertThat(in.carryOverStateJson()).isNull();
+    }
+
+    @Test
+    @DisplayName("⛔ carry-over 只来自已验载荷：原始 request.contextState() 不进装配入参")
+    void assemblyCarryOverUsesVerifiedStateOnly() {
+        Harness h = new Harness();
+        h.stateVerifier.result = new Accepted(VERIFIED_STATE, POLICY, 3, STATE_DIGEST);
+        h.gateway.then(answer(ANSWER_MARKER));
+        AgentChatRequest req = new AgentChatRequest(QUESTION_MARKER, List.of(), null,
+                7, true, SPOOF_TENANT, "algebra", RAW_STATE);
+
+        h.orchestrator.run(h.platform(), req, h.sink);
+
+        assertThat(h.assembly.inputs).hasSize(1);
+        assertThat(h.assembly.inputs.get(0).carryOverStateJson()).isEqualTo(VERIFIED_STATE)
+                .as("装配只能拿已验状态，绝不重新解析原始不可信串");
+        assertThat(h.assembly.inputs.get(0).carryOverStateJson()).isNotEqualTo(RAW_STATE);
+        // 原始串绝不进审计可信面 / 模型上下文。
+        assertThat(h.audit.finishRecord.resultPayload()).doesNotContain(RAW_STATE);
+    }
+
     // ── 夹具 ────────────────────────────────────────────────────────
 
     /** 每次测试独立的编排器与可观测替身；全部通过 {@code run()} 入口驱动。 */
@@ -649,6 +795,8 @@ class AgentChatOrchestratorTest {
         final RecordingStateVerifier stateVerifier = new RecordingStateVerifier();
         final List<ExecutionScope> scopes = new ArrayList<>();
         ToolInvocationGate.ToolInvocationResult toolResult = ToolInvocationResultFixture.empty();
+        /** 默认 passthrough：走真实装配接线但返回 legacy 同一引用（关闭态逐位等价）。 */
+        final ScriptedAssembly assembly = new ScriptedAssembly();
         final AgentChatOrchestrator orchestrator;
 
         Harness() {
@@ -677,7 +825,7 @@ class AgentChatOrchestratorTest {
                     closures, modelConfig, toolGate,
                     /* maxToolRounds */ 1, /* defaultTopK */ 5,
                     /* lease */ Duration.ofMinutes(1),
-                    stateVerifier, policyVersions);
+                    stateVerifier, policyVersions, assembly);
         }
 
         Context platform() {
@@ -854,6 +1002,55 @@ class AgentChatOrchestratorTest {
                 throw new AssertionError("意外的模型调用（第 " + requests.size() + " 轮）");
             }
             return step.apply(consumer);
+        }
+    }
+
+    /** 统一装配替身：默认 passthrough（同一引用）；可注入装配态/拒绝态并记录真实入参。 */
+    private static final class ScriptedAssembly implements RequestAssemblyPort {
+        final List<RequestAssemblyInput> inputs = new ArrayList<>();
+        boolean passthrough = true;
+        int tier;
+        boolean fallback;
+        int beforeTokens;
+        int afterTokens;
+        int compactionCount;
+        RequestAssemblyException rejection;
+
+        /** 装配态：返回一个可辨认的替代请求 + 真实档位/计数，用于挤出「用了 assembly.request()」。 */
+        ScriptedAssembly assembled(int tier, boolean fallback, int before, int after) {
+            this.passthrough = false;
+            this.tier = tier;
+            this.fallback = fallback;
+            this.beforeTokens = before;
+            this.afterTokens = after;
+            this.compactionCount = 1;
+            return this;
+        }
+
+        ScriptedAssembly reject(RequestAssemblyException.Reason reason) {
+            this.passthrough = false;
+            this.rejection = new RequestAssemblyException(reason, "测试注入的装配拒因");
+            return this;
+        }
+
+        @Override
+        public @NonNull RequestAssemblyResult assemble(@NonNull RequestAssemblyInput input) {
+            inputs.add(input);
+            if (rejection != null) {
+                throw rejection;
+            }
+            if (passthrough) {
+                return RequestAssemblyResult.passthrough(input.legacyRequest());
+            }
+            // 替代请求只改 systemPrompt，其余字段逐字复制——用于断言「送模型的是 assembly.request()」。
+            ModelRequest replaced = new ModelRequest(
+                    input.legacyRequest().modelId(), "ASSEMBLED_SYSTEM",
+                    input.legacyRequest().userContent(),
+                    input.legacyRequest().temperature(), input.legacyRequest().maxTokens(),
+                    input.legacyRequest().timeout(), input.legacyRequest().toolSchemas(),
+                    List.of(ModelMessage.user("ASSEMBLED_MESSAGE")));
+            return new RequestAssemblyResult(replaced, true, tier, fallback,
+                    beforeTokens, afterTokens, compactionCount, null);
         }
     }
 

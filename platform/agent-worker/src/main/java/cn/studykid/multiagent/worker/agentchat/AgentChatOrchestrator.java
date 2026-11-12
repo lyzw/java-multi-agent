@@ -44,6 +44,10 @@ import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Discarded;
 import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.DropReason;
 import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier.Result;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyException;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyInput;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyResult;
 import cn.studykid.multiagent.ports.metrics.ScenarioTag;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway.ModelGatewayException;
@@ -81,8 +85,11 @@ import cn.studykid.multiagent.worker.execute.ToolOutcomeRenderer;
  *       指纹后统一做六项不可信校验，验过才下传，验不过静默退回全量历史。</li>
  * </ul>
  *
- * <p><b>压缩态边界</b>：本批只做「接收侧净化」，不生成 / 不发射第 14 事件，
- * 旧 13 帧字节、审计两段式、无 outbox / MQ 全部不变。策略指纹由中性裁决端口提供，
+ * <p><b>压缩态边界</b>：S3-M8-b 起，模型请求只经 {@link RequestAssemblyPort} 统一装配
+ * （关闭态返回 legacy 同一引用，逐位等价；开启态如实给出 tier / fallback / token）。
+ * 本批仍<b>不生成 / 不发射第 14 事件</b>（{@code context.checkpoint} / {@code Done} 版本
+ * 由 M8-b-2 负责），旧 13 帧字节、审计两段式、无 outbox / MQ 全部不变；装配态只多一条
+ * 内部审计事实 {@code CONTEXT_ASSEMBLED}（非 SSE 帧）。策略指纹由中性裁决端口提供，
  * ⛔ 编排器不自己拼全局常量、不读算法层配置（ADR-011）。
  *
  * <p><b>fail-closed</b>：路由不确定 / Agent 配置缺失 / 模型请求非法 / 工具闸门抛异常
@@ -123,6 +130,15 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
     private final ToolInvocationGate toolGate;
     private final @NonNull ContextStateVerifier stateVerifier;
     private final @NonNull ContextPolicyVersionPort policyVersions;
+    /**
+     * S3-M8-b L2 统一请求装配入口（{@code null} = 未装配 → 完全走 legacy 基线）。
+     *
+     * <p>⚠️ <b>唯一送模型的请求来自 {@link #assembleRequest}</b>：关闭态它返回 legacy
+     * 基线同一引用，逐位等价由构造级保证；开启态只切换上下文字段并如实返回
+     * tier / fallback / token 计数，供轮末的 checkpoint 发射使用。
+     * worker 只认识 {@code agent-ports} 的中性端口，不碰算法层类型（ADR-011）。
+     */
+    private final @Nullable RequestAssemblyPort requestAssemblyPort;
     private final int maxToolRounds;
     private final int defaultTopK;
     private final Duration lease;
@@ -142,10 +158,11 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
                                  @NonNull AgentModelConfigAssembler modelConfig,
                                  @NonNull ToolInvocationGate toolGate,
                                  @NonNull ContextStateVerifier stateVerifier,
-                                 @NonNull ContextPolicyVersionPort policyVersions) {
+                                 @NonNull ContextPolicyVersionPort policyVersions,
+                                 @Nullable RequestAssemblyPort requestAssemblyPort) {
         this(audit, rag, chatGateway, router, agents, snapshots, closureResolver,
                 modelConfig, toolGate, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_TOP_K, DEFAULT_LEASE,
-                stateVerifier, policyVersions);
+                stateVerifier, policyVersions, requestAssemblyPort);
     }
 
     /** 全参构造（测试可收紧轮次 / 租约以构造挤出压力）。 */
@@ -162,7 +179,8 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
                                  int defaultTopK,
                                  @NonNull Duration lease,
                                  @NonNull ContextStateVerifier stateVerifier,
-                                 @NonNull ContextPolicyVersionPort policyVersions) {
+                                 @NonNull ContextPolicyVersionPort policyVersions,
+                                 @Nullable RequestAssemblyPort requestAssemblyPort) {
         if (maxToolRounds < 0 || defaultTopK < 1 || defaultTopK > MAX_TOP_K) {
             throw new IllegalArgumentException("编排参数非法: rounds=" + maxToolRounds
                     + ", topK=" + defaultTopK);
@@ -181,6 +199,7 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
         this.lease = lease;
         this.stateVerifier = Objects.requireNonNull(stateVerifier, "stateVerifier 不得为空");
         this.policyVersions = Objects.requireNonNull(policyVersions, "policyVersions 不得为空");
+        this.requestAssemblyPort = requestAssemblyPort;
     }
 
     @Override
@@ -241,6 +260,18 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
             state.events().add(event("USAGE", Map.of(
                     "inputTokens", state.inputTokens(),
                     "outputTokens", state.outputTokens())));
+            // S3-M8-b：装配态如实记录真实档位 / 回退 / token 计数——这是 #73 轮末
+            // checkpoint 的唯一数据来源。⛔ 关闭态（含全局熔断）不发此事件，逐位等价。
+            // ⚠️ 只记标量事实，绝不把压缩态正文 / 状态串写进审计可信面。
+            if (state.lastAssembly != null && state.lastAssembly.assembled()) {
+                RequestAssemblyResult a = state.lastAssembly;
+                state.events().add(event("CONTEXT_ASSEMBLED", Map.of(
+                        "tier", a.tier(),
+                        "fallback", a.fallback(),
+                        "beforeTokens", a.beforeTokens(),
+                        "afterTokens", a.afterTokens(),
+                        "compactionCount", a.compactionCount())));
+            }
             state.events().add(event("DONE", Map.of("truncated", false)));
             audit.finish(state.handle, new AgentChatAuditPort.FinishRecord(
                     "SUCCEEDED", null,
@@ -537,10 +568,19 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
         for (int round = 1; round <= totalRounds; round++) {
             Map<String, Object> schemas = round <= maxToolRounds
                     ? state.settings.toolSchemas() : Map.of();
-            ModelRequest modelRequest = new ModelRequest(
+            // S3-M8-b / D38：legacy 基线是关闭态逐位等价的唯一真源，也是开启态 6 个
+            // 非上下文字段的唯一来源；⛔ 不再直接把它送模型（那会让装配层空转）。
+            ModelRequest legacyRequest = new ModelRequest(
                     state.settings.modelId(), state.settings.systemPrompt(), "",
                     state.settings.temperature(), state.settings.maxTokens(),
                     state.settings.timeout(), schemas, List.copyOf(messages));
+            // ⚠️ 唯一送模型的请求来自统一装配入口：关闭态返回 legacy 同一引用（逐位等价），
+            //    开启态只切换上下文字段并如实给出 tier / fallback / token 计数；
+            //    装配被拒抛 RequestAssemblyException → 顶层 fail-closed，⛔ 绝不静默回退。
+            RequestAssemblyResult assembly = assembleRequest(
+                    context, state, messages, schemas, task, legacyRequest);
+            state.lastAssembly = assembly;
+            ModelRequest modelRequest = assembly.request();
             Instant roundStart = Instant.now();
             ModelResponse response = chatGateway.streamChat(modelRequest,
                     new ChatStreamGateway.StreamDeltaConsumer() {
@@ -613,6 +653,50 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
             // 复用共享渲染器：assistant(tool_calls) + tool 成对、标识一致、不可信标记齐全。
             messages.addAll(ToolOutcomeRenderer.renderRound(calls, toolResult));
         }
+    }
+
+    /**
+     * S3-M8-b L2 统一装配调用点：把 legacy 基线 + 六块上下文交给中性端口（D38 / G1 A.5）。
+     *
+     * <p>⚠️ <b>与 L1/L4 消息映射的差异</b>：L2 是请求级多轮对话，
+     * {@link #buildMessages} 产出的 {@code messages} 已按对话顺序包含「历史轮 → 可选 RAG 围栏块
+     * → 本轮输入」，工具回灌追加在其后（assistant tool_calls + tool 成对）。因此：
+     * <ul>
+     *   <li>{@code historyMessages} = 整段 messages（含 RAG 围栏块与当前输入）；</li>
+     *   <li>{@code firstUserTurn / currentInput / ragBlocks} 留空：⛔ 绝不把当前输入或 RAG
+     *       再渲染一遍——RAG 已由 {@link RAG_GUARD} 按 {@code wrapToolResult} 围栏，
+     *       若再进 {@code ragBlocks} 会被 {@code ContextLayout} 二次包裹，关闭态也会字节漂移；</li>
+     *   <li>装配内核的整轮切分器把所有 USER 判为 ANCHOR 永不裁，
+     *       故本轮输入与 RAG 围栏块在开启态也绝不丢失（ADR-011：worker 不碰算法层类型）。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>关闭等价桥</b>：端口未装配时返回 {@code passthrough(legacyRequest)} 同一引用；
+     * 端口装配但 {@code agent.context.enabled=false} 时由 adapter 第一行短路，同样同一引用。
+     * ⛔ 本方法不重复任何 enabled 判定（那会与 adapter 漂移）。
+     *
+     * <p>⚠️ <b>carry-over 来源</b>：只读 {@code state.carryOver}（M8-a 已验载荷），
+     * ⛔ 绝不重新解析原始 {@code request.contextState()}；本批不消费 delta（#73 才发射）。
+     */
+    private @NonNull RequestAssemblyResult assembleRequest(
+            @NonNull Context context,
+            @NonNull RunState state,
+            @NonNull List<ModelMessage> messages,
+            @NonNull Map<String, Object> schemas,
+            @NonNull LeasedTask task,
+            @NonNull ModelRequest legacyRequest) {
+        if (requestAssemblyPort == null) {
+            return RequestAssemblyResult.passthrough(legacyRequest);
+        }
+        return requestAssemblyPort.assemble(new RequestAssemblyInput(
+                context.tenantId(), "chat:" + state.runId,
+                state.agentId, state.agentVersion, state.settings.modelId(),
+                state.settings.systemPrompt(), schemas,
+                /* firstUserTurn */ "", /* memoryBlock */ "", /* ragBlocks */ List.of(),
+                List.copyOf(messages), /* currentInput */ "",
+                state.settings.maxTokens(), task.fencingToken(),
+                /* upToSeq */ -1L,
+                state.carryOver == null ? null : state.carryOver.stateJson(),
+                /* priorCompactions */ 0, legacyRequest));
     }
 
     /** 为缺失 callId 的模型调用补稳定标识，保证 SSE 事件与回灌消息引用同一 id。 */
@@ -717,6 +801,12 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
         if (hasCause(e, ToolGateException.class)) {
             return "TOOL_EXECUTION_FAILED";
         }
+        // ⚠️ S3-M8-b：装配拒因是端口层稳定码（只追加不改名），如实透出给 error 帧与审计，
+        //    绝不把「配错策略」伪装成 SERVER_ERROR 后静默回退 legacy 继续发模型请求。
+        RequestAssemblyException assembly = findCause(e, RequestAssemblyException.class);
+        if (assembly != null) {
+            return assembly.reason().name();
+        }
         if (hasCause(e, RagRetrievalPort.RagUnavailableException.class)) {
             return "RAG_UNAVAILABLE";
         }
@@ -738,6 +828,10 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
     /** 只对已归一化的异常透出原文；未知异常给固定文案，避免泄漏供应商报文 / 配置。 */
     private static @NonNull String publicMessage(@NonNull RuntimeException e,
                                                  @NonNull String kind) {
+        if (findCause(e, RequestAssemblyException.class) != null) {
+            // 只透出稳定原因码，不泄漏内部策略 / 预算细节（归一化文案）。
+            return "上下文统一装配被拒（" + kind + "）";
+        }
         if (findCause(e, AgentRouter.RoutingException.class) != null
                 || findCause(e, ConfigUnavailableException.class) != null
                 || findCause(e, ContentBlockedException.class) != null
@@ -872,6 +966,8 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
         boolean ragInjected;
         /** S3-M8-a 净化结果；M8-b 从此处读取已验载荷，⛔ 不重新解析原始请求串。 */
         ContextStateResolution carryOver;
+        /** S3-M8-b 最后一轮装配结果；#73 用它发射 checkpoint，#72 只记标量审计事实。 */
+        @Nullable RequestAssemblyResult lastAssembly;
         int stepNo;
         boolean finished;
 

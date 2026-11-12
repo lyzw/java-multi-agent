@@ -20,6 +20,7 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatOrchestratorPort;
 import cn.studykid.multiagent.ports.agentchat.ContextPolicyVersionPort;
 import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort;
+import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
@@ -130,7 +131,10 @@ public class AgentChatConfiguration {
      *   <li>{@code ToolInvocationGate} 是工具执行的唯一闸门（审批 / 预算 / 闭包 / 取消
      *       全在里面），<b>绝不允许</b>对话链路绕过它直接调工具；</li>
      *   <li>请求侧压缩态校验器与策略指纹裁决端口均来自独立装配片，编排器不自己解析
-     *       不可信状态（S3-M8-a / D49）。</li>
+     *       不可信状态（S3-M8-a / D49）；</li>
+     *   <li>{@link RequestAssemblyPort} 是 SSE 链唯一送模型请求的装配入口（S3-M8-b / D38），
+     *       与 Worker 两条链路共用同一个 Bean：关闭态短路返回 legacy 同一引用，
+     *       ⛔ 绝不给对话链另造一套「假装配」。</li>
      * </ul>
      */
     @Bean
@@ -147,14 +151,15 @@ public class AgentChatConfiguration {
             @NonNull ModelResolver modelResolver,
             @NonNull ToolInvocationGate toolGate,
             @NonNull ContextStateVerifier contextStateVerifier,
-            @NonNull ContextPolicyVersionPort contextPolicyVersionPort) {
+            @NonNull ContextPolicyVersionPort contextPolicyVersionPort,
+            @NonNull RequestAssemblyPort requestAssemblyPort) {
         AgentModelConfigAssembler modelConfig = new AgentModelConfigAssembler(
                 agentDefs, closureResolver, toolDefs, modelResolver);
-        log.info("装配请求级 Agent 编排器: 路由/RAG/Skill/Tool/审计均已接真实实现"
+        log.info("装配请求级 Agent 编排器: 路由/RAG/Skill/Tool/审计/统一装配均已接真实实现"
                 + "（不写 Outbox，lease_owner={}）",
                 cn.studykid.multiagent.ports.persistence.RunClaimPort.SSE_DIRECT_LEASE_OWNER);
         return new AgentChatOrchestrator(audit, rag, chatGateway, router, agents,
                 snapshots, closureResolver, modelConfig, toolGate,
-                contextStateVerifier, contextPolicyVersionPort);
+                contextStateVerifier, contextPolicyVersionPort, requestAssemblyPort);
     }
 }
