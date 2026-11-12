@@ -91,7 +91,7 @@ export interface AgentHit {
 export type AgentStepStatus = 'pending' | 'running' | 'success' | 'error' | 'info'
 
 /**
- * 协议 v1.1 第 14 事件的载荷（M13 mock：**只解析、只内存暂存**）。
+ * 协议 v1.1 第 14 事件的载荷（**只解析、只内存暂存**不透明 state）。
  *
  * <p>⚠️ {@code state} 是服务端签名的**不透明基串**，前端只做形状校验，
  * ⛔ 绝不解析/解密/渲染其正文，也⛔ 不写入任何 localStorage/sessionStorage；
@@ -150,7 +150,7 @@ export type AgentStreamEvent =
   | { type: 'answer'; text: string; at: number }
   | { type: 'usage'; inputTokens: number; outputTokens: number; at: number }
   | { type: 'error'; code: string; message: string; at: number }
-  /** 协议 v1.1 第 14 事件：M13 mock 只解析、只内存暂存，⛔ 不进入请求体。 */
+  /** 协议 v1.1 第 14 事件：只解析、只内存暂存不透明 state，S3-M13 起由 hook 逐字上送。 */
   | ({ type: 'context.checkpoint' } & AgentContextCheckpoint & { at: number })
   /** truncated=true 表示流在未收到服务端终帧时结束（断流 ≠ 失败）。 */
   | { type: 'done'; truncated: boolean; contextStateVersion?: string; at: number }
@@ -168,6 +168,12 @@ export interface AgentChatRequest {
   sampleScenario?: SampleScenario
   /** live 端点覆盖（测试/私有部署用）；缺省为 {@link AGENT_LIVE_STREAM_PATH}。 */
   endpoint?: string
+  /**
+   * S3-M13 正式收发：上一轮「非截断 done」提交的压缩态，不透明串逐字上送。
+   * ⛔ 只能由 useAgentChat 从 currentContextCheckpoint 注入；页面不得传，响应字段
+   * contextStateVersion 更不得反向进请求。首轮 / 刷新后缺省 undefined，JSON 序列化自动省略该键。
+   */
+  contextState?: string
 }
 
 export interface AgentChatSendContext {
@@ -615,7 +621,7 @@ export function decodeAgentFrame(frame: AgentSseFrame): AgentStreamEvent | null 
       }
     }
     case 'context.checkpoint': {
-      // M13 mock：只做形状校验与不透明暂存。⛔ 不解析 state、不验 HMAC、不回传请求。
+      // S3-M13：只做形状校验与不透明暂存。⛔ 不解析 state、不验 HMAC；由 hook 逐字上送。
       const p = parseJson(raw)
       const state = str(p?.['state'])
       const policyVersion = str(p?.['policyVersion'])
@@ -1034,6 +1040,7 @@ export const liveAgentChatTransport: AgentChatTransport = {
             topK: params.topK,
             thinkingMode: params.thinkingMode,
             tenantId: params.tenantId,
+            contextState: params.contextState,
           }),
           signal: controller.signal,
         })

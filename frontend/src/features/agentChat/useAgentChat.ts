@@ -20,13 +20,18 @@ import {
 import {
   agentChatReducer,
   conversationTurns,
+  currentContextCheckpoint,
   initialAgentChatState,
   lastFailedAgentQuestion,
   type AgentChatState,
 } from '@/features/agentChat/agentChatState'
 
-/** 页面参数区给出的部分（message/history 由 hook 组装）。 */
-export type AgentChatParams = Omit<AgentChatRequest, 'message' | 'history'>
+/**
+ * 页面参数区给出的部分（message/history 由 hook 组装）。
+ * ⚠️ contextState 刻意不开放给页面：只有 hook 能从 committed checkpoint 注入，
+ * 否则页面把半截 / 伪造的 state 塞进请求会绕过状态机的提交闸门。
+ */
+export type AgentChatParams = Omit<AgentChatRequest, 'message' | 'history' | 'contextState'>
 
 export interface UseAgentChat {
   state: AgentChatState
@@ -64,11 +69,15 @@ export function useAgentChat(): UseAgentChat {
     (text: string, params: AgentChatParams, assistantId: string, controller: AbortController): void => {
       void (async (): Promise<void> => {
         try {
+          const committed = currentContextCheckpoint(stateRef.current)
           const request: AgentChatRequest = {
             ...params,
             message: text,
             // ⚠️ 只回传「已完成且未截断」的问答对；半截答案不能当下一轮上下文。
             history: conversationTurns(stateRef.current.messages),
+            // ⚠️ S3-M13：只上送上一轮非截断 done 提交的 committed state；
+            // pending / 截断 / 失败态绝不上送。首轮为 undefined，JSON 自动省略该键。
+            contextState: committed?.state,
           }
           await sendAgentChat(request, {
             signal: controller.signal,

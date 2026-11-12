@@ -71,7 +71,7 @@ export interface AgentHit {
 export type AgentStepStatus = 'pending' | 'running' | 'success' | 'error' | 'info'
 
 /**
- * 协议 v1.1 第 14 事件的载荷（M13 mock：**只解析、只内存暂存**）。
+ * 协议 v1.1 第 14 事件的载荷（**只解析、只内存暂存**不透明 state）。
  * ⚠️ state 是不透明基串，前端只做形状校验，绝不解析/解密/渲染；请求侧 contextState 属 M8。
  */
 export interface AgentContextCheckpoint {
@@ -123,7 +123,7 @@ export type AgentStreamEvent =
   | { type: 'answer'; text: string; at: number }
   | { type: 'usage'; inputTokens: number; outputTokens: number; at: number }
   | { type: 'error'; code: string; message: string; at: number }
-  /** 协议 v1.1 第 14 事件：M13 mock 只解析、只内存暂存，⛔ 不进入请求体。 */
+  /** 协议 v1.1 第 14 事件：只解析、只内存暂存不透明 state，S3-M13 起由 hook 逐字上送。 */
   | ({ type: 'context.checkpoint' } & AgentContextCheckpoint & { at: number })
   | { type: 'done'; truncated: boolean; contextStateVersion?: string; at: number }
 
@@ -139,6 +139,12 @@ export interface AgentChatRequest {
   sampleScenario?: SampleScenario
   /** live 端点覆盖（测试/私有部署用）；缺省为 AGENT_CHAT_PATH。 */
   endpoint?: string
+  /**
+   * S3-M13 正式收发：上一轮「非截断 done」提交的压缩态，不透明串逐字上送。
+   * ⛔ 只能由 useAgentChat 从 currentContextCheckpoint 注入；页面不得传，响应字段
+   * contextStateVersion 更不得反向进请求。首轮 / 刷新后缺省 undefined，JSON 序列化自动省略该键。
+   */
+  contextState?: string
 }
 
 export interface AgentChatSendContext {
@@ -546,7 +552,7 @@ export function decodeAgentFrame(frame: AgentSseFrame): AgentStreamEvent | null 
       }
     }
     case 'context.checkpoint': {
-      // M13 mock：只做形状校验与不透明暂存。⛔ 不解析 state、不验 HMAC、不回传请求。
+      // S3-M13：只做形状校验与不透明暂存。⛔ 不解析 state、不验 HMAC；由 hook 逐字上送。
       const p = parseJson(raw)
       const state = str(p?.['state'])
       const policyVersion = str(p?.['policyVersion'])
@@ -938,6 +944,7 @@ export const liveAgentChatTransport: AgentChatTransport = {
             agentId: params.agentId,
             topK: params.topK,
             thinkingMode: params.thinkingMode,
+            contextState: params.contextState,
           }),
           signal: controller.signal,
         })

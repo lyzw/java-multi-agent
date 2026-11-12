@@ -425,7 +425,7 @@ describe('conversationTurns · 多轮上下文不污染', () => {
   })
 })
 
-describe('M13 mock · 协议 v1.1 压缩态只内存暂存', () => {
+describe('S3-M13 正式收发 · 协议 v1.1 压缩态只内存暂存，仅 committed 上送', () => {
   const CP: AgentStreamEvent = {
     type: 'context.checkpoint',
     state: 'opaque-base64',
@@ -443,7 +443,7 @@ describe('M13 mock · 协议 v1.1 压缩态只内存暂存', () => {
     return s
   }
 
-  it('✅ 只在非截断 done 提交；checkpoint 帧不进消息时间线，⛔ 不进入请求体', () => {
+  it('✅ 只在非截断 done 提交；checkpoint 帧不进消息时间线，⛔ pending 绝不上送', () => {
     expect(currentContextCheckpoint(initialAgentChatState)).toBeNull()
     let s = stream(sent(), CP)
     expect(s.pendingContextCheckpoint).toMatchObject({

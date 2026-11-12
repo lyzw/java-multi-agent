@@ -40,6 +40,18 @@ const stateCode = codeOnly(read('src/features/aiChat/agentChatState.ts'))
 const page = read('src/pages/agentlab/AgentChatPage.tsx')
 const router = read('src/router.tsx')
 const nav = read('src/layout/navConfig.tsx')
+const hook = codeOnly(read('src/features/aiChat/useAgentChat.ts'))
+const tenantHook = codeOnly(read('../frontend/src/features/agentChat/useAgentChat.ts'))
+const tenantTransport = codeOnly(read('../frontend/src/api/agentChatApi.ts'))
+
+/** 精确切源码区间；找不到锚点就红，绝不靠空串恒绿。 */
+function regionBetween(src: string, start: string, end: string): string {
+  const from = src.indexOf(start)
+  expect(from, `应存在区间起点：${start}`).toBeGreaterThanOrEqual(0)
+  const to = src.indexOf(end, from)
+  expect(to, `应存在区间终点：${end}`).toBeGreaterThan(from)
+  return src.slice(from, to)
+}
 
 describe('通用 Agent 对话 · 身份域与传输边界', () => {
   it('防空转：五份源码都确实读到，且含预期锚点', () => {
@@ -141,34 +153,81 @@ describe('通用 Agent 对话 · 状态机与页面守卫', () => {
   })
 })
 
-describe('通用 Agent 对话 · 协议 v1.1 M13 mock 边界', () => {
-  it('⛔ 14 事件齐备，且只解析 v1.1 字段；请求接口与请求体不含 contextState', () => {
-    const from = transportCode.indexOf('export function decodeAgentFrame')
-    const to = transportCode.indexOf('export async function consumeAgentStream', from)
-    expect(from).toBeGreaterThanOrEqual(0)
-    expect(to).toBeGreaterThan(from)
-    const cases = [...transportCode.slice(from, to).matchAll(/case '([a-z][a-z.]*)':/g)].map((m) => m[1] ?? '')
-    expect(cases).toHaveLength(14)
-    expect(cases).toContain('context.checkpoint')
+describe('通用 Agent 对话 · 协议 v1.1 S3-M13 正式收发边界', () => {
+  it('✅ 14 事件齐备；请求 DTO 与真实 body 只放行 contextState，解码器仍不解析', () => {
+    for (const [name, source] of [
+      ['管理平台', transportCode],
+      ['租户前台', tenantTransport],
+    ] as const) {
+      const decode = regionBetween(source,
+        'export function decodeAgentFrame', 'export async function consumeAgentStream')
+      const cases = [...decode.matchAll(/case '([a-z][a-z.]*)':/g)].map((m) => m[1] ?? '')
+      expect(cases, `⛔ ${name} 协议事件数不是 14`).toHaveLength(14)
+      expect(cases, `⛔ ${name} 缺第 14 事件`).toContain('context.checkpoint')
 
-    const reqFrom = transportCode.indexOf('export interface AgentChatRequest')
-    const reqTo = transportCode.indexOf('export interface AgentChatSendContext', reqFrom)
-    expect(reqFrom).toBeGreaterThanOrEqual(0)
-    const reqBlock = transportCode.slice(reqFrom, reqTo)
-    expect(reqBlock).not.toContain('contextState')
-    expect(reqBlock).not.toContain('contextStateVersion')
-    expect(transportCode).not.toMatch(/contextState\s*:/)
-    expect(transportCode).not.toContain("'contextState'")
-    expect(transportCode).not.toContain('"contextState"')
-    expect(transportCode).toContain('contextStateVersion')
+      const reqBlock = regionBetween(source,
+        'export interface AgentChatRequest', 'export interface AgentChatSendContext')
+      expect(reqBlock, `⛔ ${name} 请求接口缺少中性 state 字段：hook 注入的 committed state 无类型出口`)
+        .toContain('contextState?: string')
+      expect(reqBlock, `⛔ ${name} 响应字段 contextStateVersion 反向进入请求接口：收发方向被污染`)
+        .not.toContain('contextStateVersion')
+
+      // 真正的请求字节在 liveAgentChatTransport 的 JSON.stringify 里。
+      const body = regionBetween(source, 'body: JSON.stringify({', '}),')
+      expect(body, `⛔ ${name} 真实请求体未携带 committed state：S3-M13 前端空转`)
+        .toMatch(/contextState\s*:/)
+      expect(body, `⛔ ${name} 请求体混入响应字段 contextStateVersion`)
+        .not.toContain('contextStateVersion')
+      expect([...source.matchAll(/contextState\s*:/g)],
+        `⛔ ${name} contextState 请求键出现在 body 白名单之外（regex find，非全串匹配）`)
+        .toHaveLength(1)
+
+      expect(decode, `⛔ ${name} 解码器缺第 14 事件分支`)
+        .toContain("case 'context.checkpoint':")
+      expect(decode, `⛔ ${name} 解码器缺 done 版本字段`)
+        .toContain('contextStateVersion')
+      expect(decode, `⛔ ${name} 解码器未知事件兜底被改写：v1 客户端会报错`)
+        .toMatch(/default:\s*return null/)
+      expect(decode, `⛔ ${name} 解码器出现 contextState 请求键（regex find）`)
+        .not.toMatch(/contextState\s*:/)
+      expect(decode, `⛔ ${name} 解码器出现请求键字面量 'contextState'`)
+        .not.toContain("'contextState'")
+      expect(decode, `⛔ ${name} 解码器出现请求键字面量 "contextState"`)
+        .not.toContain('"contextState"')
+      expect(decode, `⛔ ${name} 前端解析了 state 正文：不可信载荷不得被当指令`)
+        .not.toContain('JSON.parse(state)')
+      expect(decode, `⛔ ${name} 前端解码了 base64 state：不可信载荷不得被当指令`)
+        .not.toContain('atob(')
+    }
   })
 
-  it('⛔ 压缩态只在内存暂存，初始为空，禁止本地存储', () => {
+  it('⛔ S3-M13：hook 是 contextState 唯一注入口；页面参数不得传 state，STOP 不构造请求', () => {
+    for (const [name, source] of [
+      ['管理平台', hook],
+      ['租户前台', tenantHook],
+    ] as const) {
+      expect(source, `⛔ ${name} hook 未从 committed checkpoint 取 state：请求会空转或误送 pending`)
+        .toContain('currentContextCheckpoint(stateRef.current)')
+      expect(source, `⛔ ${name} hook 未把 state 放进请求 DTO`)
+        .toContain('contextState: committed?.state')
+      expect(source, `⛔ ${name} 页面参数仍可传 contextState：半截 / 伪造 state 会绕过提交闸门`)
+        .toContain("Omit<AgentChatRequest, 'message' | 'history' | 'contextState'>")
+      const stop = regionBetween(source, 'const stop = useCallback(', 'const retry = useCallback(')
+      expect(stop, `⛔ ${name} STOP 构造了新请求：停止动作不得把半截上下文再送一次`)
+        .not.toContain('sendAgentChat')
+      expect(stop, `⛔ ${name} STOP 未 abort 在途请求`)
+        .toContain('controller.abort()')
+    }
+  })
+
+  it('⛔ 压缩态只在内存暂存，初始为空，禁止本地存储 / 解析 state', () => {
     expect(stateCode).toContain('pendingContextCheckpoint')
     expect(stateCode).toContain('contextCheckpoint: cp')
     expect(stateCode).toContain('currentContextCheckpoint')
     expect(stateCode).toContain('pendingContextCheckpoint: undefined')
     expect(stateCode).not.toContain('localStorage')
     expect(stateCode).not.toContain('sessionStorage')
+    expect(stateCode).not.toContain('JSON.parse(state)')
+    expect(stateCode).not.toContain('atob(')
   })
 })

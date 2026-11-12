@@ -99,8 +99,8 @@ export interface AgentChatState {
   messages: AgentChatMessage[]
   sending: boolean
   /**
-   * M13 mock：协议 v1.1 的**已提交**压缩态。只在内存，刷新即丢；
-   * ⛔ 当前不进入请求体，携带 `contextState` 属 M8 + G1 签核后的能力。
+   * S3-M13 正式收发：协议 v1.1 的**已提交**压缩态。只在内存，刷新即丢；
+   * ⛔ 只有它可经 currentContextCheckpoint 进入请求体；pending 一律不上送。
    */
   contextCheckpoint?: AgentContextCheckpoint
   /** 已提交压缩态对应的版本（来自 `done.contextStateVersion`，缺省为 undefined）。 */
@@ -110,7 +110,7 @@ export interface AgentChatState {
   pendingContextStateVersion?: string
 }
 
-/** M13 mock：初始 / 刷新即无压缩态；⛔ 不写 localStorage / sessionStorage。 */
+/** S3-M13：初始 / 刷新即无压缩态；⛔ 不写 localStorage / sessionStorage。 */
 export const initialAgentChatState: AgentChatState = { messages: [], sending: false }
 
 export type AgentChatAction =
@@ -436,7 +436,7 @@ export function agentChatReducer(state: AgentChatState, action: AgentChatAction)
     }
 
     case 'STREAM': {
-      // M13 mock：context.checkpoint 是会话级压缩态，不写入单条消息；
+      // S3-M13：context.checkpoint 是会话级压缩态，不写入单条消息；
       // 只有「非截断 done」才把本轮 pending 提交为 committed（截断 / 失败 / 停止一律不提交）。
       if (action.event.type === 'context.checkpoint') {
         const next = patchStreaming(state, action.id, (m) => m)
@@ -619,9 +619,9 @@ export function conversationTurns(messages: AgentChatMessage[]): {
 }
 
 /**
- * M13 mock 暴露的「当前已提交压缩态」只读句柄。
+ * S3-M13 正式收发暴露的「当前已提交压缩态」只读句柄。
  * ⚠️ 仅内存：刷新页面后回到 {@link initialAgentChatState}，调用方必须按「无压缩态」降级。
- * ⛔ 当前不进入请求体；真正携带 `contextState` 须等 M8 服务端五项校验 + G1 TL/QA 签核。
+ * ⛔ 请求体只取 .state；version 仅作前端对照，不进请求；不透明串不得解析 / 解码。
  */
 export function currentContextCheckpoint(
   state: AgentChatState,
