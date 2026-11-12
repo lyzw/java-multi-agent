@@ -48,6 +48,11 @@ public class AgentContextProperties {
     private int summaryTimeoutMs = 8_000;
     /** 独立 HMAC 密钥，绝不复用 JWT 私钥；影子期可为空。 */
     private String stateHmacKey = "";
+    /**
+     * S3-M10：L2 SSE 的 RAG 命中区 token 配额（{@code agent.context.rag-quota.*}）。
+     * ⚠️ 只影响 {@code enabled=true} 时的注入；关闭态仍走 legacy 固定口径逐位等价。
+     */
+    private RagQuota ragQuota = new RagQuota();
     /** 估算校准子配置。 */
     private Calibration calibration = new Calibration();
 
@@ -171,12 +176,71 @@ public class AgentContextProperties {
         this.stateHmacKey = stateHmacKey == null ? "" : stateHmacKey;
     }
 
+    public RagQuota getRagQuota() {
+        return ragQuota;
+    }
+
+    public void setRagQuota(RagQuota ragQuota) {
+        this.ragQuota = ragQuota == null ? new RagQuota() : ragQuota;
+    }
+
     public Calibration getCalibration() {
         return calibration;
     }
 
     public void setCalibration(Calibration calibration) {
         this.calibration = calibration == null ? new Calibration() : calibration;
+    }
+
+    /**
+     * RAG 命中区配额（{@code agent.context.rag-quota.*}，S3-M10）。
+     *
+     * <p>⚠️ 默认值与 {@code application.yml} 的 {@code ${AGENT_CONTEXT_RAG_QUOTA_*:默认}}
+     * 逐字对齐，由 {@code AgentContextPropertiesBindingTest} 用真实 Binder 锁死。
+     * 默认条数 8 与 legacy {@code MAX_INJECT_HITS} 相同，是为了灰度切换时**只有 token
+     * 口径变化**，不会额外改变命中条数上限；关闭态完全不读这些值。
+     */
+    public static class RagQuota {
+        /** 命中区 token 预算（不含固定围栏 / 根字段；它们由全窗口硬顶兜底）。 */
+        private int tokenBudget = 4_096;
+        /** 保留正文的命中条数上限（legacy 固定口径为 8）。 */
+        private int maxHits = 8;
+        /** 单条命中正文的 token 上限（legacy 固定字符口径为 1200）。 */
+        private int maxHitTokens = 1_200;
+        /** 低于该 token 数的截断块不保留，直接降级引用或丢弃。 */
+        private int minKeptTokens = 64;
+
+        public int getTokenBudget() {
+            return tokenBudget;
+        }
+
+        public void setTokenBudget(int tokenBudget) {
+            this.tokenBudget = tokenBudget;
+        }
+
+        public int getMaxHits() {
+            return maxHits;
+        }
+
+        public void setMaxHits(int maxHits) {
+            this.maxHits = maxHits;
+        }
+
+        public int getMaxHitTokens() {
+            return maxHitTokens;
+        }
+
+        public void setMaxHitTokens(int maxHitTokens) {
+            this.maxHitTokens = maxHitTokens;
+        }
+
+        public int getMinKeptTokens() {
+            return minKeptTokens;
+        }
+
+        public void setMinKeptTokens(int minKeptTokens) {
+            this.minKeptTokens = minKeptTokens;
+        }
     }
 
     /** 估算校准（{@code agent.context.calibration.*}）。 */

@@ -20,6 +20,7 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatOrchestratorPort;
 import cn.studykid.multiagent.ports.agentchat.ContextCheckpointEmitter;
 import cn.studykid.multiagent.ports.agentchat.ContextPolicyVersionPort;
 import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier;
+import cn.studykid.multiagent.ports.agentchat.RagHitQuotaPort;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort;
 import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
@@ -139,6 +140,9 @@ public class AgentChatConfiguration {
      *   <li>{@link ContextCheckpointEmitter} 是轮末 client carry-over 封包端口（S3-M8-b-2 / D49），
      *       与接收侧 verifier 共用同一把独立 HMAC 密钥；未装配 / 无新增即静默不发，
      *       ⛔ 不给对话链接 S4 checkpoint 表 / 观测链。</li>
+     *   <li>{@link RagHitQuotaPort} 是 RAG 命中区 token 配额端口（S3-M10 / D51），
+     *       与 L1/L4/L2 统一装配共用同一个全局开关与生产 TokenCounter；关闭态返回 null
+     *       让编排器走 legacy 逐位等价，开启态由组合根唯一委托纯算法内核。</li>
      * </ul>
      */
     @Bean
@@ -157,15 +161,16 @@ public class AgentChatConfiguration {
             @NonNull ContextStateVerifier contextStateVerifier,
             @NonNull ContextPolicyVersionPort contextPolicyVersionPort,
             @NonNull RequestAssemblyPort requestAssemblyPort,
-            @NonNull ContextCheckpointEmitter contextCheckpointEmitter) {
+            @NonNull ContextCheckpointEmitter contextCheckpointEmitter,
+            @NonNull RagHitQuotaPort ragHitQuotaPort) {
         AgentModelConfigAssembler modelConfig = new AgentModelConfigAssembler(
                 agentDefs, closureResolver, toolDefs, modelResolver);
-        log.info("装配请求级 Agent 编排器: 路由/RAG/Skill/Tool/审计/统一装配/轮末压缩态均已接真实实现"
+        log.info("装配请求级 Agent 编排器: 路由/RAG/配额/Skill/Tool/审计/统一装配/轮末压缩态均已接真实实现"
                 + "（不写 Outbox，lease_owner={}）",
                 cn.studykid.multiagent.ports.persistence.RunClaimPort.SSE_DIRECT_LEASE_OWNER);
         return new AgentChatOrchestrator(audit, rag, chatGateway, router, agents,
                 snapshots, closureResolver, modelConfig, toolGate,
                 contextStateVerifier, contextPolicyVersionPort, requestAssemblyPort,
-                contextCheckpointEmitter);
+                contextCheckpointEmitter, ragHitQuotaPort);
     }
 }

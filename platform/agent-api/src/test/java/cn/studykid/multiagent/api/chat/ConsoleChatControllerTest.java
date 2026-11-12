@@ -2,13 +2,16 @@ package cn.studykid.multiagent.api.chat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import org.junit.jupiter.api.AfterEach;
@@ -21,6 +24,10 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import cn.studykid.multiagent.ports.agentchat.ConsoleBudgetException;
+import cn.studykid.multiagent.ports.agentchat.ConsoleBudgetException.Reason;
+import cn.studykid.multiagent.ports.agentchat.ConsoleBudgetPort;
+import cn.studykid.multiagent.ports.agentchat.ConsoleBudgetPort.BudgetResult;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway.ModelErrorKind;
@@ -231,7 +238,7 @@ class ConsoleChatControllerTest {
         };
         Executor sync = command -> command.run();
         ConsoleChatController controller = new ConsoleChatController(
-                gate, () -> PLATFORM_KEY, recording, "MiniMax-M2.5", sync, () -> emitter);
+                gate, () -> PLATFORM_KEY, recording, "MiniMax-M2.5", sync, () -> emitter, null);
 
         controller.streamChat(new ConsoleChatController.ChatStreamRequest(
                 null, null, null, null,
@@ -239,6 +246,194 @@ class ConsoleChatControllerTest {
 
         assertEquals(List.of(PLATFORM_KEY), keys,
                 "限流键必须原样来自已验签的调用方标识，不能取请求体或默认租户");
+    }
+
+    // ── S3-M9：Console 请求级 W1/W2 预算保护接线 ──────────────────────────
+
+    @Test
+    void budgetedRequestIsTheOnlyRequestSentToGateway() {
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer -> {
+            consumer.onDelta("预算后回答");
+            return new ModelResponse("预算后回答", Map.of(),
+                    new ModelResponse.ModelUsage(9, 3), ModelResponse.FinishReason.STOP);
+        });
+        RecordingBudgetPort budget = new RecordingBudgetPort();
+        budget.input = captured -> new BudgetResult(rewritten(captured.legacyRequest()),
+                true, 900, 600, 2);
+        ConsoleChatController controller = controller(emitter, gate, ALLOWED, budget);
+
+        controller.streamChat(body("用户原始输入", 512));
+
+        assertSame(budget.result.request(), gate.request,
+                "⛔ 送模型请求不是 BudgetResult.request()：Controller 仍在用 legacy 或二次拼装");
+        assertEquals("预算后稳定前缀", gate.request.systemPrompt());
+        assertEquals(List.of(ModelMessage.user("预算后唯一输入")), gate.request.messages());
+        assertTrue(emitter.frames.stream().anyMatch(f -> f.startsWith("event:delta\n")),
+                "预算保护不得改变 SSE 增量帧");
+        assertTrue(emitter.frames.stream().anyMatch(f -> f.startsWith("event:done\n")),
+                "预算保护不得吞掉 done 终帧");
+        assertTrue(emitter.completed);
+        assertEquals(1, budget.calls.get(), "每次请求只能裁决一次");
+        assertEquals(ConsoleBudgetPort.DEFAULT_SCOPE, budget.lastInput.scopeKey());
+        assertEquals(512, budget.lastInput.maxOutputTokens());
+        assertEquals("用户原始输入", budget.lastInput.legacyRequest().messages().get(0).content());
+    }
+
+    @Test
+    void missingBudgetPortKeepsLegacyRequestFieldsExactly() {
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer ->
+                new ModelResponse("", Map.of(), new ModelResponse.ModelUsage(0, 0),
+                        ModelResponse.FinishReason.STOP));
+        ConsoleChatController controller = controller(emitter, gate, ALLOWED, null);
+
+        controller.streamChat(new ConsoleChatController.ChatStreamRequest(
+                "model-x", "稳定前缀", 0.25, 321,
+                List.of(new ConsoleChatController.ChatStreamRequest.ChatMessage("user", "原始输入"))));
+
+        assertEquals("model-x", gate.request.modelId());
+        assertEquals("稳定前缀", gate.request.systemPrompt());
+        assertEquals(321, gate.request.maxTokens());
+        assertEquals(List.of(ModelMessage.user("原始输入")), gate.request.messages());
+        assertTrue(emitter.completed);
+    }
+
+    @Test
+    void passthroughBudgetResultKeepsLegacyRequestIdentity() {
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer ->
+                new ModelResponse("", Map.of(), new ModelResponse.ModelUsage(0, 0),
+                        ModelResponse.FinishReason.STOP));
+        RecordingBudgetPort budget = new RecordingBudgetPort();
+        budget.input = in -> BudgetResult.passthrough(in.legacyRequest());
+        ConsoleChatController controller = controller(emitter, gate, ALLOWED, budget);
+
+        controller.streamChat(body("原始输入", 512));
+
+        assertSame(budget.lastInput.legacyRequest(), gate.request,
+                "⛔ passthrough 没走同一引用：关闭态逐位等价被破坏");
+        assertEquals(1, gate.request.messages().size());
+        assertEquals("原始输入", gate.request.messages().get(0).content());
+        assertFalse(budget.result.budgeted());
+        assertEquals(0, budget.result.beforeTokens());
+        assertEquals(0, budget.result.afterTokens());
+        assertEquals(0, budget.result.tier());
+    }
+
+    @Test
+    void budgetPolicyRejectionReturns400BeforeEmitterAndNeverFallsBack() {
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer ->
+                new ModelResponse("", Map.of(), new ModelResponse.ModelUsage(0, 0),
+                        ModelResponse.FinishReason.STOP));
+        RecordingBudgetPort budget = new RecordingBudgetPort();
+        budget.input = in -> {
+            throw new ConsoleBudgetException(Reason.CONTEXT_WINDOW_EXCEEDED,
+                    "input 16000 + output 512 > 总窗口");
+        };
+        ConsoleChatController controller = controller(emitter, gate, ALLOWED, budget);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.streamChat(body("超窗输入", 512)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode(),
+                "策略 / 窗口类拒绝是请求问题（4xx），不是服务端故障");
+        assertTrue(emitter.frames.isEmpty(), "⛔ 预算拒绝前已产生 SSE 帧");
+        assertFalse(emitter.completed, "⛔ 预算拒绝前已结束 SSE 连接");
+        assertSame(null, gate.request, "⛔ 预算拒绝后仍把 legacy 请求送进了模型（静默失真）");
+        assertEquals(1, budget.calls.get());
+    }
+
+    @Test
+    void budgetInfrastructureFailureReturns500WithoutLegacyFallback() {
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer ->
+                new ModelResponse("", Map.of(), new ModelResponse.ModelUsage(0, 0),
+                        ModelResponse.FinishReason.STOP));
+        RecordingBudgetPort budget = new RecordingBudgetPort();
+        budget.input = in -> {
+            throw new ConsoleBudgetException(Reason.CONSOLE_BUDGET_FAILED, "装配内核异常");
+        };
+        ConsoleChatController controller = controller(emitter, gate, ALLOWED, budget);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.streamChat(body("普通输入", 512)));
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatusCode(),
+                "预算装配链路自身异常是服务端问题（5xx）");
+        assertTrue(emitter.frames.isEmpty(), "⛔ 预算失败前不应发任何帧");
+        assertSame(null, gate.request, "⛔ 装配异常后不应回退 legacy 继续送模型");
+    }
+
+    @Test
+    void invalidBudgetInputReturns400WithoutLegacyFallback() {
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer ->
+                new ModelResponse("", Map.of(), new ModelResponse.ModelUsage(0, 0),
+                        ModelResponse.FinishReason.STOP));
+        RecordingBudgetPort budget = new RecordingBudgetPort();
+        budget.input = in -> {
+            assertEquals(0, in.maxOutputTokens(),
+                    "⛔ Controller 私改输出上限，adapter 无法按真实值 fail-closed");
+            throw new ConsoleBudgetException(Reason.CONSOLE_BUDGET_INPUT_INVALID,
+                    "maxOutputTokens 必须为正");
+        };
+        ConsoleChatController controller = controller(emitter, gate, ALLOWED, budget);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.streamChat(body("maxTokens 非法", 0)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(emitter.frames.isEmpty(), "⛔ 非法请求仍产生了 SSE 帧");
+        assertFalse(emitter.completed, "⛔ 非法请求仍结束了 SSE 连接");
+        assertSame(null, gate.request, "⛔ 非法输出上限仍进了模型请求");
+        assertEquals(1, budget.calls.get(), "Controller 必须把 maxTokens 原样交给端口裁决");
+        assertEquals(0, budget.lastInput.maxOutputTokens());
+    }
+
+    @Test
+    void unconfiguredBudgetPortStillKeepsTenantThinkingSuppressed() {
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(
+                new MockHttpServletRequest("POST", "/api/knowledge/chat/stream")));
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer -> {
+            consumer.onThinking("租户链不得看到的推理草稿");
+            consumer.onDelta("预算后回答");
+            return new ModelResponse("预算后回答", Map.of(),
+                    new ModelResponse.ModelUsage(9, 3), ModelResponse.FinishReason.STOP);
+        });
+        RecordingBudgetPort budget = new RecordingBudgetPort();
+        budget.input = in -> new BudgetResult(rewritten(in.legacyRequest()),
+                true, 900, 600, 2);
+        ConsoleChatController controller = controller(emitter, gate, ALLOWED, budget);
+
+        controller.streamChat(body("租户问题", 512));
+
+        String all = String.join("", emitter.frames);
+        assertFalse(all.contains("event:thinking"), "⛔ 预算接线把租户链的 thinking 放开了");
+        assertFalse(all.contains("租户链不得看到的推理草稿"));
+        assertTrue(all.contains("event:delta"));
+        assertTrue(all.contains("event:done"));
+    }
+
+    @Test
+    void rateLimitHappensBeforeBudgetProtection() {
+        RecordingEmitter emitter = new RecordingEmitter();
+        FakeStreamGateway gate = new FakeStreamGateway(consumer ->
+                new ModelResponse("", Map.of(), new ModelResponse.ModelUsage(0, 0),
+                        ModelResponse.FinishReason.STOP));
+        RecordingBudgetPort budget = new RecordingBudgetPort();
+        budget.input = in -> new BudgetResult(rewritten(in.legacyRequest()),
+                true, 900, 600, 2);
+        ConsoleChatController controller = controller(emitter, gate, DENIED, budget);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> controller.streamChat(body("被限流", 512)));
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, ex.getStatusCode());
+        assertEquals(0, budget.calls.get(), "限流必须先于预算，拒绝时不得触发 W1/W2");
+        assertSame(null, gate.request);
     }
 
     // ── S4：网关错误归一为 error 帧（不裸抛异常）─────────────────────────
@@ -266,9 +461,18 @@ class ConsoleChatControllerTest {
     private ConsoleChatController controller(RecordingEmitter emitter,
                                             ChatStreamGateway gate,
                                             RateLimitPort rate) {
+        return controller(emitter, gate, rate, null);
+    }
+
+    /** M9：可注入预算端口替身；默认 null = 未装配 legacy 逐位等价基线。 */
+    private ConsoleChatController controller(RecordingEmitter emitter,
+                                            ChatStreamGateway gate,
+                                            RateLimitPort rate,
+                                            ConsoleBudgetPort budgetPort) {
         // ⚠️ 同步执行器：流式逻辑在当前线程内跑完，便于直接断言帧序列
         Executor sync = command -> command.run();
-        return new ConsoleChatController(gate, CALLER, rate, "MiniMax-M2.5", sync, () -> emitter);
+        return new ConsoleChatController(
+                gate, CALLER, rate, "MiniMax-M2.5", sync, () -> emitter, budgetPort);
     }
 
     /**
@@ -316,9 +520,10 @@ class ConsoleChatControllerTest {
         }
     }
 
-    /** 可控的流式网关替身。 */
+    /** 可控的流式网关替身；记录唯一实际送模型的请求。 */
     private static final class FakeStreamGateway implements ChatStreamGateway {
         private final Function<ChatStreamGateway.StreamDeltaConsumer, ModelResponse> handler;
+        private ModelRequest request;
 
         FakeStreamGateway(Function<ChatStreamGateway.StreamDeltaConsumer, ModelResponse> handler) {
             this.handler = handler;
@@ -327,8 +532,37 @@ class ConsoleChatControllerTest {
         @Override
         public ModelResponse streamChat(ModelRequest request,
                                        ChatStreamGateway.StreamDeltaConsumer consumer) {
+            this.request = request;
             return handler.apply(consumer);
         }
+    }
+
+    /** 预算端口替身：记录输入与调用次数，可注入返回值或异常。 */
+    private static final class RecordingBudgetPort implements ConsoleBudgetPort {
+        private final AtomicInteger calls = new AtomicInteger();
+        private Function<BudgetInput, BudgetResult> input;
+        private BudgetInput lastInput;
+        private BudgetResult result;
+
+        @Override
+        public BudgetResult protect(BudgetInput input) {
+            calls.incrementAndGet();
+            lastInput = input;
+            result = this.input.apply(input);
+            return result;
+        }
+    }
+
+    private static ConsoleChatController.ChatStreamRequest body(String content, int maxTokens) {
+        return new ConsoleChatController.ChatStreamRequest(
+                null, null, null, maxTokens,
+                List.of(new ConsoleChatController.ChatStreamRequest.ChatMessage("user", content)));
+    }
+
+    private static ModelRequest rewritten(ModelRequest legacy) {
+        return new ModelRequest(legacy.modelId(), "预算后稳定前缀", legacy.userContent(),
+                legacy.temperature(), legacy.maxTokens(), legacy.timeout(), legacy.toolSchemas(),
+                List.of(ModelMessage.user("预算后唯一输入")));
     }
 
     /**

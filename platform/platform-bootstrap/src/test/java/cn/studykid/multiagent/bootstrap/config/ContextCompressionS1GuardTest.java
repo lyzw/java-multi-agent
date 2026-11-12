@@ -148,12 +148,13 @@ class ContextCompressionS1GuardTest {
     }
 
     @Test
-    @DisplayName("✅ M8-b 关闭等价守卫（M7 守卫按 G1 A.5 台账升级）：L1/L2/L4 统一装配白名单精确到文件→令牌；L3 Console 仍零接线；算法层零泄漏")
+    @DisplayName("✅ M8-b + S3-M9 关闭等价守卫（G1 A.5 升级不删除）：L1/L2/L4 统一装配白名单精确到文件→令牌；L3 Console 只接中性预算端口、仍零 RequestAssemblyPort；算法层零泄漏")
     void closedEquivalenceHasNoAlgorithmLayerLeak() {
-        // ⚠️ G1 报告 A.5 台账：本方法由「S1 零接线」→「M7 L1/L4 正面接入」两次升级而来，不删除。
-        //    本批（M8-b-1 / #72）第三次升级：L2 SSE 接入统一装配入口；
-        //    旧禁止面（算法层类型不得进任何模型链路）完整保留；
-        //    L1/L4 正面断言保留；新增 L2 精确白名单 + 白名单外禁止 + 关闭态同一引用。
+        // ⚠️ G1 报告 A.5 台账：本方法由「S1 零接线」→「M7 L1/L4 正面接入」→
+        //    「M8-b-1 / #72 L2 SSE 正面接入」→「S3-M9 / #64 L3 Console 中性预算端口正面接入」
+        //    四次升级而来，**旧禁止面一律不删除**：
+        //    算法层类型不得进任何模型链路；L3 仍不得接 Run 专用 RequestAssemblyPort；
+        //    L1/L4/L2 正面断言与精确白名单保留；关闭态仍必须是 legacy 同一引用。
         List<String> chains = List.of(
                 "agent-worker/src/main/java/cn/studykid/multiagent/worker/execute/RunExecutionLoop.java",
                 "agent-worker/src/main/java/cn/studykid/multiagent/worker/execute/WorkerChildAgentRunner.java",
@@ -224,11 +225,20 @@ class ContextCompressionS1GuardTest {
                     .as("⛔ 白名单文件 %s 的必需装配令牌消失（守卫随实现退化而假绿）", e.getKey())
                     .contains(e.getValue().toArray(new String[0]));
         }
-        // L3 Console 结构证据边界在此次升级中仍不扩大（原负面语义显式保留）。
+        // ── ⑤ S3-M9 升级：L3 Console 从「contract-only 零接线」升级为
+        //    「只接中性预算端口 + 仍禁 Run 专用装配入口」。旧负面声明原样保留，
+        //    新增正面令牌钉死 W1/W2 预算保护真的进入 Console 唯一送模型路径。
         String console = stripCommentsKeepStrings(read(platformRoot().resolve(chains.get(3))));
         assertThat(console)
-                .as("⛔ L3 Console 结构证据边界被扩大：Console 仍 contract-only，不得接统一装配入口")
-                .doesNotContain("RequestAssemblyPort");
+                .as("⛔ L3 Console 结构证据边界被扩大：Console 仍不得接 Run 统一装配入口")
+                .doesNotContain("RequestAssemblyPort")
+                .as("⛔ S3-M9 未接 L3 中性预算端口：Console W1/W2 预算保护空转")
+                .contains("ConsoleBudgetPort")
+                .contains("Optional<ConsoleBudgetPort> consoleBudgetPort")
+                .as("⛔ Console 送模型请求不是预算保护结果：legacy 基线仍可能绕过 W1/W2")
+                .contains("ModelRequest request = protectRequest(callerKey, buildLegacyRequest(body))")
+                .contains("return BudgetResult.passthrough(legacyRequest).request();")
+                .contains("return result.request();");
     }
 
     /**

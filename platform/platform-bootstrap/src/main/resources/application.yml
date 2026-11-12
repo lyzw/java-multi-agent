@@ -260,6 +260,15 @@ agent:
       bias-clamp-max: "${AGENT_CONTEXT_BIAS_CLAMP_MAX:2.00}"
     # ⚠️ 独立 HMAC 密钥：绝不复用 JWT_PRIVATE_KEY / PLATFORM_JWT_PRIVATE_KEY。
     state-hmac-key: "${AGENT_CONTEXT_STATE_HMAC_KEY:}"
+    # ── S3-M10：L2 SSE RAG 命中区 token 配额（仅 enabled=true 时生效）────
+    # ⚠️ 关闭态仍走 legacy MAX_INJECT_HITS / MAX_HIT_TEXT 固定口径，请求字节逐位等价；
+    #    开启态由 RagHitQuota 纯算法按 token 动态 top-k / 截断 / 引用，算法不动。
+    #    token-budget 是「命中区」预算，不含固定围栏与根字段，后者由全窗口硬顶兜底。
+    rag-quota:
+      token-budget: "${AGENT_CONTEXT_RAG_QUOTA_TOKEN_BUDGET:4096}"
+      max-hits: "${AGENT_CONTEXT_RAG_QUOTA_MAX_HITS:8}"
+      max-hit-tokens: "${AGENT_CONTEXT_RAG_QUOTA_MAX_HIT_TOKENS:1200}"
+      min-kept-tokens: "${AGENT_CONTEXT_RAG_QUOTA_MIN_KEPT_TOKENS:64}"
 
   # ── 崩溃恢复扫描（第二十一批 · 接通 claimTasks 生产调用方）────
   # ⚠️ 周期性枚举活跃租户、调用 claimTasks 接管过期 RUNNING 租约，

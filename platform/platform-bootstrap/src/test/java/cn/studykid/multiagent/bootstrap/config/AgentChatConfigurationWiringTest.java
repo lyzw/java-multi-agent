@@ -14,6 +14,8 @@ import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.application.cap.ClosureResolver;
 import cn.studykid.multiagent.application.modelcatalog.ModelResolver;
+import cn.studykid.multiagent.context.GlobalContextPolicy;
+import cn.studykid.multiagent.context.HeuristicTokenCounter;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcAgentChatAuditRepository;
 import cn.studykid.multiagent.infrastructure.rag.HttpRagRetrievalGateway;
 import cn.studykid.multiagent.ports.agentchat.AgentChatAuditPort;
@@ -22,6 +24,7 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatOrchestratorPort;
 import cn.studykid.multiagent.ports.agentchat.ContextCheckpointEmitter;
 import cn.studykid.multiagent.ports.agentchat.ContextPolicyVersionPort;
 import cn.studykid.multiagent.ports.agentchat.ContextStateVerifier;
+import cn.studykid.multiagent.ports.agentchat.RagHitQuotaPort;
 import cn.studykid.multiagent.ports.agentchat.RagRetrievalPort;
 import cn.studykid.multiagent.ports.contextwiring.RequestAssemblyPort;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
@@ -78,6 +81,17 @@ class AgentChatConfigurationWiringTest {
     }
 
     @Test
+    @DisplayName("RAG 配额端口装配为真实组合根适配器（不是桩 / NoOp / 第二套算法）")
+    void ragQuotaPortIsRealAdapter() {
+        RagHitQuotaPort port = new RagHitQuotaConfiguration().ragHitQuotaPort(
+                new AgentContextProperties(),
+                GlobalContextPolicy.shadowDisabled(),
+                new HeuristicTokenCounter());
+
+        assertThat(port).isInstanceOf(RagHitQuotaAdapter.class);
+    }
+
+    @Test
     @DisplayName("⛔ 编排器的全部生产依赖都真实注入（缺一个即红）")
     void orchestratorReceivesEveryDependency() throws Exception {
         AgentChatOrchestratorPort port = config.agentChatOrchestrator(
@@ -95,7 +109,8 @@ class AgentChatConfigurationWiringTest {
                 mock(ContextStateVerifier.class),
                 mock(ContextPolicyVersionPort.class),
                 mock(RequestAssemblyPort.class),
-                mock(ContextCheckpointEmitter.class));
+                mock(ContextCheckpointEmitter.class),
+                mock(RagHitQuotaPort.class));
 
         assertThat(port).isInstanceOf(AgentChatOrchestrator.class);
         for (Field field : AgentChatOrchestrator.class.getDeclaredFields()) {

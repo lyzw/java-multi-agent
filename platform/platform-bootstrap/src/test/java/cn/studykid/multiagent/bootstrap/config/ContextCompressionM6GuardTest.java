@@ -37,9 +37,9 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatRequest;
  *       {@code context.checkpoint} 自 M8-b-2 起仅在白名单内按
  *       {@code answer → usage → context.checkpoint? → done} 发射，关闭态不发射；</li>
  *   <li>M8-a 升级后，后端请求 DTO <b>只允许白名单文件</b>携带未验 {@code contextState}：
- *       全参构造、Controller 逐字透传、编排边界静默净化；两前端请求体仍不带该字段，
- *       只解析 v1.1 字段（{@code context.checkpoint} / {@code done.contextStateVersion}），
- *       未知事件仍 {@code default: return null}；正式同批发属 M13；</li>
+ *       全参构造、Controller 逐字透传、编排边界静默净化。S3-M13 二次升级后，两前端
+ *       请求 DTO / 真实 body <b>白名单内必须携带 committed state</b>，仍只解析 v1.1 字段、
+ *       不解析 / 不持久化 state，未知事件仍 {@code default: return null}；</li>
  *   <li>{@code ExecutionObserver.onContextCompacted} 是 default 空实现，链转发只做异常隔离。</li>
  * </ol>
  *
@@ -47,7 +47,13 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatRequest;
  * 已升级为「<b>只允许白名单装配边界接线</b>」——
  * L1 {@code RunExecutionLoop} 可按装配态发 {@code onContextCompacted}，
  * bootstrap adapter 可引用组合用 M6 类型；其余生产模块仍判红。
- * 关闭态必须继续走旧 {@code onContextTrimmed}，SSE/Console 仍零接线。
+ * 关闭态必须继续走旧 {@code onContextTrimmed}。
+ *
+ * <p>⚠️ <b>S3-M9 二次升级（D52 / #64，不删守卫）</b>：L3 Console 从「零接线」升级为
+ * 「只接中性 {@code ConsoleBudgetPort}」，其组合根 {@code ConsoleBudgetAdapter} /
+ * {@code ConsoleBudgetConfiguration} 按「文件 → 允许令牌」精确登记到
+ * {@link #M7_ALLOWED_WIRING}；{@code RequestAssemblyPort} 仍被禁止进入 L3，
+ * 白名单外持有 M6 令牌的生产文件仍一律判红。
  *
  * <p>⚠️ 每条断言都问过「撤掉修复点它会红吗」，并配套 RV-65..RV-73 与 RV-79 撤点验证
  * （精确计数替换 + finally 复原 + md5 校验）。⚠️ 本类<b>不引用被测实现自己的常量</b>：
@@ -56,9 +62,11 @@ import cn.studykid.multiagent.ports.agentchat.AgentChatRequest;
  * <p>⛔ 所有「不得出现某模式」断言均用 {@code Pattern.find()} 取反，
  * 不用 AssertJ {@code doesNotMatch}（它是<b>全串不匹配</b>语义，长函数里恒真，是假绿源）。
  *
- * <p>⛔ M13 mock 已显式升级 RV-71 为「解析但不发送」；M7 已按 G1 签核升级 RV-69。
- * M8-a 已按 G1 A.5 台账把 RV-67 升级为「白名单内正面接入 + 白名单外禁止」，
- * M13 前端正式同批发时仍须显式二次升级，不得直接删守卫了事。
+ * <p>⛔ M13 mock 原「解析但不发送」已按 S3-M13 / D53 / #65 二次升级为
+ * 「白名单内正面发送 committed state + 白名单外禁止 + 仍在解码器禁解析」；
+ * M7 已按 G1 签核升级 RV-69，M8-a 已按 G1 A.5 台账把 RV-67 升级为
+ * 「后端白名单内正面接入 + 白名单外禁止」。旧负面覆盖不删除：响应字段不得反向进请求、
+ * 包装函数 / 解码器不得自己塞请求键。
  */
 class ContextCompressionM6GuardTest {
 
@@ -74,6 +82,14 @@ class ContextCompressionM6GuardTest {
             "agent-worker/src/main/java/cn/studykid/multiagent/worker/execute/RunExecutionLoop.java";
     private static final String ORCHESTRATOR =
             "agent-worker/src/main/java/cn/studykid/multiagent/worker/agentchat/AgentChatOrchestrator.java";
+    private static final List<String> FRONTEND_TRANSPORTS = List.of(
+            "admin-console/src/api/agentChatApi.ts",
+            "frontend/src/api/agentChatApi.ts");
+    private static final List<String> FRONTEND_HOOKS = List.of(
+            "admin-console/src/features/aiChat/useAgentChat.ts",
+            "frontend/src/features/agentChat/useAgentChat.ts");
+
+    private static final Pattern REQUEST_KEY = Pattern.compile("contextState\\s*:");
 
     private static final Set<String> FORBIDDEN_IMPORT_PREFIXES = Set.of(
             "org.springframework.", "java.sql.", "javax.sql.",
@@ -115,7 +131,14 @@ class ContextCompressionM6GuardTest {
             Set.of("CheckpointDelta", "ContextCheckpoint"),
             "platform-bootstrap/ContextCheckpointEmitterConfiguration.java",
             Set.of("ContextCheckpoint"),
-            "platform-bootstrap/AgentChatConfiguration.java", Set.of("ContextCheckpoint"));
+            "platform-bootstrap/AgentChatConfiguration.java", Set.of("ContextCheckpoint"),
+            // ── S3-M9：L3 Console 独立预算端口的组合根接线（D52 / #64）──
+            // L3 不复用 RequestAssemblyPort，只在 bootstrap 持有中性 ConsoleBudgetPort；
+            // 两个新组合根文件必须精确登记「文件 → 允许令牌」，白名单外仍禁止 M6 令牌。
+            "platform-bootstrap/ConsoleBudgetAdapter.java",
+            Set.of("ContextSpec", "CompactionPipeline"),
+            "platform-bootstrap/ConsoleBudgetConfiguration.java",
+            Set.of("CompactionPipeline"));
 
     /**
      * G1 A.5 S3-M8 台账登记的<b>请求侧 contextState 白名单</b>（精确到文件 → 令牌）。
@@ -226,23 +249,37 @@ class ContextCompressionM6GuardTest {
     }
 
     @Test
-    @DisplayName("✅ RV-67（M8-a 升级）：后端 DTO 仅在白名单携带原始 contextState，前端请求字节冻结")
-    void requestDtosDoNotCarryCheckpointState() {
+    @DisplayName("✅ RV-67（M8-a + S3-M13 二次升级）：state 仅在各层白名单内正面出现，白名单外禁止")
+    void requestDtosCarryContextStateOnlyInWhitelist() {
         String controller = stripped(platformRoot().resolve(CONTROLLER));
         String request = portsSrc("agentchat/AgentChatRequest.java");
         String orchestrator = stripped(platformRoot().resolve(ORCHESTRATOR));
 
-        // ① 旧负面覆盖保留：两前端请求接口与真实 JSON.stringify 请求体仍禁带 state。
-        for (String rel : List.of(
-                "admin-console/src/api/agentChatApi.ts",
-                "frontend/src/api/agentChatApi.ts")) {
+        // ① S3-M13：两前端请求 DTO / 真实 body 白名单内必须携带 committed state。
+        //    保留的负面：响应字段 contextStateVersion 绝不反向进请求；请求键只能出现在 body 一处。
+        for (String rel : FRONTEND_TRANSPORTS) {
             String raw = read(repoRoot().resolve(rel));
+            String code = ContextCompressionS1GuardTest.stripCommentsKeepStrings(raw);
+            String req = ContextCompressionS1GuardTest.stripCommentsKeepStrings(
+                    regionBetween(raw, "export interface AgentChatRequest",
+                            "export interface AgentChatSendContext"));
+            assertThat(req)
+                    .as("⛔ %s 请求接口缺少中性 state 字段：hook 注入的 committed state 无类型出口", rel)
+                    .contains("contextState?: string")
+                    .as("⛔ %s 请求接口混入响应字段 contextStateVersion：收发方向被污染", rel)
+                    .doesNotContain("contextStateVersion");
             String body = ContextCompressionS1GuardTest.stripCommentsKeepStrings(
                     regionBetween(raw, "body: JSON.stringify({", "}),"));
+            assertThat(REQUEST_KEY.matcher(body).find())
+                    .as("⛔ %s 真实请求体未携带 committed state：S3-M13 前端空转（regex find）", rel)
+                    .isTrue();
             assertThat(body)
-                    .as("⛔ %s 请求体提前上送 contextState：M13 才允许正式同批发", rel)
-                    .doesNotContain("contextState")
+                    .as("⛔ %s 请求体混入响应字段 contextStateVersion：收发方向被污染", rel)
                     .doesNotContain("contextStateVersion");
+            assertThat(count(REQUEST_KEY, code))
+                    .as("⛔ %s contextState 请求键必须恰好出现在 body 白名单一处，实际 %s 处",
+                            rel, count(REQUEST_KEY, code))
+                    .isEqualTo(1);
         }
         // ② 协议响应字段不进请求侧；M6 冻结的 context.checkpoint 仍只定义不发射。
         assertThat(controller)
@@ -458,57 +495,81 @@ class ContextCompressionM6GuardTest {
     }
 
     @Test
-    @DisplayName("✅ RV-71：两前端未知事件忽略；M13 mock 只解析 v1.1 字段，请求接口/真实请求体均不上送 contextState")
-    void frontendProtocolV11MockIsParseOnly() {
-        for (String rel : List.of(
-                "admin-console/src/api/agentChatApi.ts",
-                "frontend/src/api/agentChatApi.ts")) {
+    @DisplayName("✅ RV-71（S3-M13 升级）：未知事件忽略；只上送 committed state，解码器 / hook 不解析")
+    void frontendProtocolV11SendsCommittedStateOnly() {
+        for (String rel : FRONTEND_TRANSPORTS) {
             String raw = read(repoRoot().resolve(rel));
-            String fn = functionRegion(raw, "export function decodeAgentFrame");
-            String code = ContextCompressionS1GuardTest.stripCommentsKeepStrings(fn);
+            String fn = ContextCompressionS1GuardTest.stripCommentsKeepStrings(
+                    functionRegion(raw, "export function decodeAgentFrame"));
+            String all = ContextCompressionS1GuardTest.stripCommentsKeepStrings(raw);
 
-            assertThat(code)
+            assertThat(fn)
                     .as("⛔ %s 的未知事件兜底被改写：v1 客户端遇到未知帧会报错或污染状态", rel)
                     .contains("switch (name)")
                     .contains("case 'context.checkpoint':")
                     .contains("case 'done':")
                     .contains("contextStateVersion")
                     .containsPattern("default:\\s*return null");
+            // ⛔ 解码器只读：Regex.find() 取反（doesNotMatch 是全串语义，长函数恒真）。
+            assertThat(REQUEST_KEY.matcher(fn).find())
+                    .as("⛔ %s 解码器出现 contextState 请求键：请求 / 响应方向被污染", rel)
+                    .isFalse();
+            assertThat(fn)
+                    .as("⛔ %s 解码器出现请求键字面量或解析 state 正文", rel)
+                    .doesNotContain("'contextState'")
+                    .doesNotContain("\"contextState\"")
+                    .doesNotContain("JSON.parse(state)")
+                    .doesNotContain("atob(");
 
             String request = ContextCompressionS1GuardTest.stripCommentsKeepStrings(
                     regionBetween(raw, "export interface AgentChatRequest",
                             "export interface AgentChatSendContext"));
             assertThat(request)
-                    .as("⛔ %s 请求接口提前加入 contextState：M13 mock 必须只解析不上送（M8 + G1 签核）", rel)
-                    .doesNotContain("contextState")
+                    .as("⛔ %s 请求接口缺少中性 state 字段：hook 注入的 committed state 无类型出口", rel)
+                    .contains("contextState?: string")
+                    .as("⛔ %s 请求接口混入响应字段 contextStateVersion：收发方向被污染", rel)
                     .doesNotContain("contextStateVersion");
-            // ⛔ AssertJ doesNotMatch 是「全串不匹配」语义，长函数里永远为真；
-            //    必须用 Pattern.find() 取反，否则撤掉这个修复点守卫仍绿。
-            assertThat(Pattern.compile("contextState\\s*:").matcher(code).find())
-                    .as("⛔ %s 解码器出现 contextState 请求键：请求字节零变更被破坏", rel)
-                    .isFalse();
-            assertThat(code)
-                    .as("⛔ %s 解码器出现 contextState 请求键字面量", rel)
-                    .doesNotContain("'contextState'")
-                    .doesNotContain("\"contextState\"");
 
             // 真实请求体在 liveAgentChatTransport 的 JSON.stringify 中，
             // 包装函数 / 接口不变不代表字节不变，必须一并冻结。
             String body = ContextCompressionS1GuardTest.stripCommentsKeepStrings(
                     regionBetween(raw, "body: JSON.stringify({", "}),"));
+            assertThat(REQUEST_KEY.matcher(body).find())
+                    .as("⛔ %s 真实请求体未携带 committed state：S3-M13 前端空转（regex find）", rel)
+                    .isTrue();
             assertThat(body)
-                    .as("⛔ %s 真实请求体提前加入 contextState：M13 mock 只解析不上送", rel)
-                    .doesNotContain("contextState")
+                    .as("⛔ %s 请求体混入响应字段 contextStateVersion：收发方向被污染", rel)
                     .doesNotContain("contextStateVersion");
-            assertThat(Pattern.compile("contextState\\s*:").matcher(body).find())
-                    .as("⛔ %s 真实请求体出现 contextState: 键（regex find，非全串匹配）", rel)
-                    .isFalse();
+            assertThat(count(REQUEST_KEY, all))
+                    .as("⛔ %s contextState 请求键必须恰好出现在 body 白名单一处，实际 %s 处",
+                            rel, count(REQUEST_KEY, all))
+                    .isEqualTo(1);
+        }
+
+        // hook 是唯一注入口：页面参数不得传 state，STOP 不构造请求。
+        for (String rel : FRONTEND_HOOKS) {
+            String code = ContextCompressionS1GuardTest.stripCommentsKeepStrings(
+                    read(repoRoot().resolve(rel)));
+            assertThat(code)
+                    .as("⛔ %s hook 未从 committed checkpoint 取 state：请求会空转或误送 pending", rel)
+                    .contains("currentContextCheckpoint(stateRef.current)")
+                    .as("⛔ %s hook 未把 state 放进请求 DTO", rel)
+                    .contains("contextState: committed?.state")
+                    .as("⛔ %s 页面参数仍可传 contextState：半截 / 伪造 state 会绕过提交闸门", rel)
+                    .contains("Omit<AgentChatRequest, 'message' | 'history' | 'contextState'>");
+            String stop = ContextCompressionS1GuardTest.stripCommentsKeepStrings(
+                    regionBetween(code, "const stop = useCallback(", "const retry = useCallback("));
+            assertThat(stop)
+                    .as("⛔ %s STOP 构造了新请求：停止动作不得把半截上下文再送一次", rel)
+                    .doesNotContain("sendAgentChat")
+                    .as("⛔ %s STOP 未 abort 在途请求", rel)
+                    .contains("controller.abort()");
         }
     }
 
     @Test
-    @DisplayName("✅ RV-72：协议 v1.1 / Observer / G1 边界文档与 ADR D33–D35 同步冻结")
-    void protocolDocsFreezeM6Boundary() {
+    @DisplayName("✅ RV-72（S3-M13 升级）：协议 v1.1 / Observer / G1 边界文档与 D33–D35、D53 同步冻结")
+    void protocolDocsFreezeM6AndM13Boundary() {
         String adr = read(repoRoot().resolve(
                 "docs/P0/P1/ADR-013_上下文压缩统一入口与全窗口预算.md"));
         String protocol = read(repoRoot().resolve("docs/上下文压缩SSE协议v1.1变更说明.md"));
@@ -532,6 +593,12 @@ class ContextCompressionM6GuardTest {
                 .as("⛔ Observer 注入指南未同步 default 新方法")
                 .contains("default void onContextCompacted(")
                 .contains("M6 仅冻结契约");
+        // G1 A.5 S3-M13 二次升级：旧 mock 边界不删，正式收发放行同时登记。
+        assertThat(adr).as("⛔ ADR 未登记 D53 正式收发决策")
+                .contains("D53").contains("S3-M13 正式收发");
+        assertThat(protocol).as("⛔ 协议说明未登记两前端正式收发边界")
+                .contains("S3-M13 正式收发").contains("contextState")
+                .contains("不解析").contains("不持久化");
     }
 
     // ── 辅助 ──────────────────────────────────────────────────────
@@ -747,6 +814,16 @@ class ContextCompressionM6GuardTest {
 
     private static int count(String text, String needle) {
         return ContextCompressionS1GuardTest.countOccurrences(text, needle);
+    }
+
+    /** Regex.find() 计数：⛔ 不用 doesNotMatch（全串语义，长函数恒真）。 */
+    private static int count(Pattern pattern, String text) {
+        int n = 0;
+        Matcher m = pattern.matcher(text);
+        while (m.find()) {
+            n++;
+        }
+        return n;
     }
 
     private static Path platformRoot() {

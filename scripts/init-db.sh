@@ -145,8 +145,14 @@ if [ "$TARGET" = platform ]; then
 #    2026-11-12 execution_snapshot 新增 context_policy 列（CH-9 / M3）：加列不加表，
 #    三项期望值 71 / 44 / 52 不变；列级存在性由 SchemaDriftIT.snapshotColumnsExistInLiveDatabase 验证。
   EXPECT_TABLES=71
-  EXPECT_RLS_TABLES=44
-  EXPECT_POLICIES=52
+  # ── RLS 退役期变量（RLS依赖清理改造计划 M4 B1–B4 批）──────────────
+  #    每退役一批（DROP POLICY / DISABLE RLS）上调 RLS_RETIRED_*；
+  #    期望值 = 基线 − 已退役数。未退役时为 0，行为与原常量完全一致。
+  #    改这里必须同步 it-env.sh --probe 的 rls_retired_*（同一份事实）。
+  RLS_RETIRED_TABLES=0
+  RLS_RETIRED_POLICIES=0
+  EXPECT_RLS_TABLES=$((44 - RLS_RETIRED_TABLES))
+  EXPECT_POLICIES=$((52 - RLS_RETIRED_POLICIES))
   echo "· 自检"
   TABLES=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_tables WHERE schemaname IN ('public','platform')")
   RLSTB=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relrowsecurity")
@@ -191,8 +197,16 @@ else
   POLICIES=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_policies WHERE schemaname='rag'")
   EMBTYPE=$(psql_owner -d "$DB" -tAc "SELECT format_type(a.atttypid,a.atttypmod) FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid WHERE c.relname='rag_chunk_embedding' AND a.attname='embedding'")
   RAGOPS=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_roles WHERE rolname='rag_ops'")
-  echo "  rag 表: ${TABLES}（应 11）| 策略: ${POLICIES}（应 35）| embedding: ${EMBTYPE}（应 halfvec(4096)）| rag_ops: ${RAGOPS}（应 1）"
-  if [ "$TABLES" -ne 11 ] || [ "$POLICIES" -ne 35 ] || [ "$EMBTYPE" != "halfvec(4096)" ] || [ "$RAGOPS" -ne 1 ]; then
+  # ⚠️ 期望值必须与 01_rag_ddl.sql 实际产物对齐（2026-11-12 实测 13 表 / 37 策略 / 13 FORCE）：
+  #    旧值 11/35 已漂移（01 终态并入增量 05/06/08/09 后未同步本处），
+  #    会让**正确建出来的库**判自检失败。
+  #    RLS 退役期（改造计划 M4 R1–R3 批）每退役一批上调 RLS_RETIRED_*。
+  RLS_RETIRED_TABLES=0
+  RLS_RETIRED_POLICIES=0
+  EXPECT_RAG_TABLES=$((13 - RLS_RETIRED_TABLES))
+  EXPECT_RAG_POLICIES=$((37 - RLS_RETIRED_POLICIES))
+  echo "  rag 表: ${TABLES}（应 ${EXPECT_RAG_TABLES}）| 策略: ${POLICIES}（应 ${EXPECT_RAG_POLICIES}）| embedding: ${EMBTYPE}（应 halfvec(4096)）| rag_ops: ${RAGOPS}（应 1）"
+  if [ "$TABLES" -ne "$EXPECT_RAG_TABLES" ] || [ "$POLICIES" -ne "$EXPECT_RAG_POLICIES" ] || [ "$EMBTYPE" != "halfvec(4096)" ] || [ "$RAGOPS" -ne 1 ]; then
     echo "❌ 自检未过，请核对上方各项"; exit 1
   fi
 fi

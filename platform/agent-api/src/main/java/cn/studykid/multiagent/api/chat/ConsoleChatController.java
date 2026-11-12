@@ -4,12 +4,14 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 
 import tools.jackson.databind.ObjectMapper;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,6 +28,9 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.server.ResponseStatusException;
 
+import cn.studykid.multiagent.ports.agentchat.ConsoleBudgetException;
+import cn.studykid.multiagent.ports.agentchat.ConsoleBudgetPort;
+import cn.studykid.multiagent.ports.agentchat.ConsoleBudgetPort.BudgetResult;
 import cn.studykid.multiagent.ports.model.ChatStreamGateway;
 import cn.studykid.multiagent.ports.model.ModelGateway;
 import cn.studykid.multiagent.ports.model.ModelMessage;
@@ -71,6 +76,13 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
  * 做数据隔离（身份仍由过滤器验签，限流按真实 tenantId 分桶）。
  * <b>刻意不放宽 {@code /api/chat/**}</b>：平台管理 API 与管理员对话仍只在平台链上，
  * 租户令牌依旧被拒（{@code PlatformSecurityE2ETest} E2E-9 锁死），身份域隔离不回退。
+ *
+ * <p><b>⚠️ S3-M9 请求级预算保护</b>：{@code /api/chat} 与 {@code /api/knowledge/chat}
+ * 共用本控制器，但都只做<b>无会话态</b>的 W1/W2 预算保护——组装 {@link ModelRequest} 后、
+ * 建 SSE 连接前经 {@link ConsoleBudgetPort} 一次裁决，⛔ 不复用 Run 专用的
+ * {@code RequestAssemblyPort}、不读写 checkpoint / carry-over、不接观测链、不伪装租户。
+ * 全局关闭或端口未装配时走 {@link BudgetResult#passthrough} 的<b>同一引用</b>，
+ * 与「没有压缩功能」逐位一致（[D11]）；策略 / 预算失败则 fail-closed 明确拒绝请求。
  *
  * <p><b>⚠️ 推理草稿只走平台通道</b>：{@code event: thinking} 是模型的推理草稿，
  * 按设计仅展示给平台管理员。租户通道由 {@link #consoleThinkingAllowed()} 显式判定，
@@ -125,6 +137,13 @@ public class ConsoleChatController {
     private final Executor executor;
     /** SSE 发射器工厂（生产用标准超时 SseEmitter，测试可注入可捕获替身）。 */
     private final Supplier<SseEmitter> emitterFactory;
+    /**
+     * S3-M9 请求级预算端口；{@code null} = 测试切片 / 未装配，走 legacy 同一引用。
+     *
+     * <p>生产由 {@code ConsoleBudgetConfiguration} 提供唯一 Bean；这里刻意保持中性端口类型，
+     * ⛔ 不引用算法层、不持有会话态。
+     */
+    private final @Nullable ConsoleBudgetPort consoleBudgetPort;
 
     /**
      * 默认构造：虚拟线程执行器 + 标准超时 SSE 发射器（生产装配用）。
@@ -132,6 +151,9 @@ public class ConsoleChatController {
      * <p>⚠️ <b>必须 {@code @Autowired}</b>：本类另有一个测试用包级全参构造，
      * 组件扫描下多构造且无 {@code @Autowired} 时 Spring 回落无参构造并抛
      * {@code No default constructor found}（启动期故障，编译期发现不了）。
+     *
+     * <p>⚠️ M9 预算端口用 {@link Optional} 注入：裁剪过的 Spring 测试切片没有
+     * {@code ConsoleBudgetPort} Bean 时仍可启动并走 legacy；生产组合根提供唯一 Bean。
      */
     @Autowired
     public ConsoleChatController(
@@ -141,19 +163,22 @@ public class ConsoleChatController {
                                  @NonNull RateLimitPort rateLimiter,
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${agent.model.minimax.default-model:MiniMax-M2.5}")
-                                 String defaultModel) {
+                                 String defaultModel,
+                                 Optional<ConsoleBudgetPort> consoleBudgetPort) {
         this(chatGateway, caller, rateLimiter, defaultModel,
                 Executors.newVirtualThreadPerTaskExecutor(),
-                () -> new SseEmitter(SSE_TIMEOUT_MS));
+                () -> new SseEmitter(SSE_TIMEOUT_MS),
+                consoleBudgetPort == null ? null : consoleBudgetPort.orElse(null));
     }
 
-    /** 全参构造（测试可注入同步执行器与可捕获的发射器工厂）。 */
+    /** 全参构造（测试可注入同步执行器、可捕获的发射器工厂与预算端口替身）。 */
     ConsoleChatController(@NonNull ChatStreamGateway chatGateway,
                           @NonNull ChatCaller caller,
                           @NonNull RateLimitPort rateLimiter,
                           String defaultModel,
                           @NonNull Executor executor,
-                          @NonNull Supplier<SseEmitter> emitterFactory) {
+                          @NonNull Supplier<SseEmitter> emitterFactory,
+                          @Nullable ConsoleBudgetPort consoleBudgetPort) {
         this.chatGateway = chatGateway;
         this.caller = caller;
         this.rateLimiter = rateLimiter;
@@ -161,6 +186,7 @@ public class ConsoleChatController {
                 ? "MiniMax-M2.5" : defaultModel;
         this.executor = executor;
         this.emitterFactory = emitterFactory;
+        this.consoleBudgetPort = consoleBudgetPort;
     }
 
     /**
@@ -203,8 +229,9 @@ public class ConsoleChatController {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "对话连接过于频繁");
         }
 
-        // 3) 组装模型请求（fail-closed：消息为空即拒）
-        ModelRequest request = buildRequest(body);
+        // 3) 组装 legacy 基线，再经 M9 预算保护得到「唯一送模型的请求」
+        //    ⚠️ 必须在建 SSE 连接前完成：预算拒绝是明确的 HTTP 错误，不是 error 帧。
+        ModelRequest request = protectRequest(callerKey, buildLegacyRequest(body));
 
         SseEmitter emitter = emitterFactory.get();
         emitter.onCompletion(() -> log.debug("对话 SSE 完成: caller={}", callerKey));
@@ -325,8 +352,8 @@ public class ConsoleChatController {
         }
     }
 
-    /** 由请求体组装 {@link ModelRequest}（多轮以 messages 为准）。 */
-    private ModelRequest buildRequest(ChatStreamRequest body) {
+    /** 由请求体组装 legacy 基线 {@link ModelRequest}（多轮以 messages 为准）。 */
+    private ModelRequest buildLegacyRequest(ChatStreamRequest body) {
         if (body == null || body.messages() == null || body.messages().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "messages 不能为空");
         }
@@ -353,6 +380,48 @@ public class ConsoleChatController {
         Integer maxTokens = (body.maxTokens() == null) ? 1024 : body.maxTokens();
         return new ModelRequest(modelId, system, "", temperature, maxTokens,
                 MODEL_TIMEOUT, Map.of(), messages);
+    }
+
+    /**
+     * S3-M9：把 legacy 基线交给 L3 中性预算端口，拿到<b>唯一送模型的请求</b>。
+     *
+     * <p>⚠️ <b>关闭 / 未装配是同一引用</b>：{@link BudgetResult#passthrough} 直接返回传入对象，
+     * 控制器⛔ 不再复制 enabled / strategy 判定，也不二次拼 systemPrompt / messages。
+     *
+     * <p>⚠️ <b>开启态 fail-closed</b>：策略 / 预算 / 装配异常在建连前转成明确 HTTP 错误；
+     * ⛔ 绝不 catch 后回退 legacy——那会让超窗请求悄悄进入模型（[D11] 失真的反例）。
+     * 用户可见信息只含稳定原因码，完整堆栈仅进日志。
+     */
+    private @NonNull ModelRequest protectRequest(@NonNull String callerKey,
+                                                 @NonNull ModelRequest legacyRequest) {
+        if (consoleBudgetPort == null) {
+            return BudgetResult.passthrough(legacyRequest).request();
+        }
+        try {
+            BudgetResult result = consoleBudgetPort.protect(new ConsoleBudgetPort.BudgetInput(
+                    legacyRequest,
+                    ConsoleBudgetPort.DEFAULT_SCOPE,
+                    legacyRequest.maxTokens()));
+            return result.request();
+        } catch (ConsoleBudgetException e) {
+            log.warn("对话上下文预算保护拒绝请求: caller={}, reason={}",
+                    callerKey, e.reason().name(), e);
+            throw new ResponseStatusException(statusOf(e),
+                    "对话上下文预算保护失败: " + e.reason().name());
+        } catch (IllegalArgumentException e) {
+            // maxOutputTokens 等请求级参数非法：明确拒绝，不带着非法窗口进模型。
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "对话请求参数非法");
+        } catch (RuntimeException e) {
+            log.warn("对话上下文预算保护异常: caller={}", callerKey, e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "对话上下文预算保护不可用");
+        }
+    }
+
+    /** 策略/窗口类拒绝是请求问题（4xx）；L3 预算装配链路自身异常才是服务端问题（5xx）。 */
+    private static @NonNull HttpStatus statusOf(@NonNull ConsoleBudgetException e) {
+        return e.reason() == ConsoleBudgetException.Reason.CONSOLE_BUDGET_FAILED
+                ? HttpStatus.INTERNAL_SERVER_ERROR : HttpStatus.BAD_REQUEST;
     }
 
     private static ModelMessage.Role parseRole(String role) {

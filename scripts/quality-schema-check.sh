@@ -105,10 +105,17 @@ for spec in "platform|agent_eval_sample|attribution_correct" \
 done
 
 # ── 3. RLS：run_message 必须 FORCE（否则租户隔离强度与代码假设不符）──
+#    RLS 退役期（RLS依赖清理改造计划 M4）：B1/B2 批退役 run_message 策略后，
+#    把 RLS_RETIREMENT_PHASE 置 2 本断言自动跳过；退役完成前默认 0 = 照常断言。
+RLS_RETIREMENT_PHASE="${RLS_RETIREMENT_PHASE:-0}"
 echo
 echo "[RLS]"
-n="$(query "select count(*) from pg_class c join pg_namespace ns on ns.oid=c.relnamespace where ns.nspname='public' and c.relname='run_message' and c.relrowsecurity and c.relforcerowsecurity")"
-if [ "$n" = "1" ]; then ok "public.run_message FORCE RLS"; else bad "public.run_message 未强制 RLS（隔离强度与代码假设不符）"; fi
+if [ "$RLS_RETIREMENT_PHASE" -ge 2 ]; then
+    ok "public.run_message FORCE RLS（RLS 退役阶段 ${RLS_RETIREMENT_PHASE} ≥ 2，断言按计划跳过）"
+else
+    n="$(query "select count(*) from pg_class c join pg_namespace ns on ns.oid=c.relnamespace where ns.nspname='public' and c.relname='run_message' and c.relrowsecurity and c.relforcerowsecurity")"
+    if [ "$n" = "1" ]; then ok "public.run_message FORCE RLS"; else bad "public.run_message 未强制 RLS（隔离强度与代码假设不符）"; fi
+fi
 
 # ── 4. 授权：app_agent 对 eval_sample 需 INSERT；对 task_outcome 需 UPDATE
 #        （ON CONFLICT DO UPDATE 要 UPDATE 而不是 INSERT，P3 实测踩过）

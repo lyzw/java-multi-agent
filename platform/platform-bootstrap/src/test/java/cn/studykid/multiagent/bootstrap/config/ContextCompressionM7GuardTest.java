@@ -39,6 +39,8 @@ import org.junit.jupiter.api.Test;
  *
  * <p>⛔ 原「M7-a 零生产接线」守卫已按 G1 A.5 台账<b>升级</b>为
  * 「生产仅允许 bootstrap 组合根接线」，原 S1 守卫同批升级；两者均不得直接删除。
+ * S3-M9（D52 / #64）二次升级：L3 Console 组合根也复用同一个 {@code ContextAssembler}，
+ * 白名单由两文件扩为四文件；worker / api 零算法层引用与关闭态同一引用旧负面原样保留。
  */
 class ContextCompressionM7GuardTest {
 
@@ -54,15 +56,27 @@ class ContextCompressionM7GuardTest {
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ContextRequestAssemblyAdapter.java";
     private static final String CONFIG =
             "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ContextRequestAssemblyConfiguration.java";
+    private static final String CONSOLE_ADAPTER =
+            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ConsoleBudgetAdapter.java";
+    private static final String CONSOLE_CONFIG =
+            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ConsoleBudgetConfiguration.java";
 
     /** 词边界避免把端口层的 {@code ContextAssemblerPort} 误判成装配内核接线。 */
     private static final Pattern M7A_KERNEL_TOKENS = Pattern.compile(
             "\\b(ContextAssembler|AssemblyInput|EffectivePolicyProjection)\\b");
 
-    /** G1 A.5 登记的唯一算法层接线面：组合根两文件，worker 永不直接引用。 */
+    /**
+     * G1 A.5 登记的唯一算法层接线面：组合根四文件，worker 永不直接引用。
+     *
+     * <p>⚠️ S3-M9（D52 / #64）把 L3 Console 预算保护也接到<b>同一个</b> {@code ContextAssembler}，
+     * 因此白名单从 M7 的两文件升级为四文件。仍然禁止整文件豁免：worker / api 直接出现
+     * 算法层类型一律红；{@link ContextCompressionM9GuardTest} 另钉死 L3 组合根逐字段接线。
+     */
     private static final List<String> ALLOWED_KERNEL_FILES = List.of(
             "platform-bootstrap/ContextRequestAssemblyAdapter.java",
-            "platform-bootstrap/ContextRequestAssemblyConfiguration.java");
+            "platform-bootstrap/ContextRequestAssemblyConfiguration.java",
+            "platform-bootstrap/ConsoleBudgetAdapter.java",
+            "platform-bootstrap/ConsoleBudgetConfiguration.java");
 
     @Test
     @DisplayName("✅ RV-111（M7-c 升级）：装配内核只在 bootstrap 组合根接线，worker 零算法层引用")
@@ -113,6 +127,21 @@ class ContextCompressionM7GuardTest {
                 .as("⛔ 组合根缺少唯一 ContextAssembler Bean：会退回 adapter 内部 new 的第二套内核")
                 .contains("@ConditionalOnMissingBean(ContextAssembler.class)")
                 .contains("new ContextAssembler(counter, thresholds)");
+
+        // ── S3-M9 升级：L3 Console 也只复用同一个内核，不另起第二套 ──
+        assertThat(src(CONSOLE_ADAPTER))
+                .as("⛔ L3 组合根没有真正调用装配内核：Console W1/W2 会空转")
+                .contains("new AssemblyInput(spec, legacy, summarizer, 0)")
+                .contains("assembler.assemble(")
+                .as("⛔ L3 关闭态没有零副作用短路：[D11] 逐位等价失去构造级保证")
+                .contains("if (!global.enabled())")
+                .contains("return BudgetResult.passthrough(legacy);");
+        assertThat(src(CONSOLE_CONFIG))
+                .as("⛔ L3 组合根私造第二套 ContextAssembler：改 yml 阈值会有一套不生效")
+                .doesNotContain("new ContextAssembler(")
+                .as("⛔ L3 预算端口不是唯一可覆盖 Bean：多实例会让 W1/W2 口径漂移")
+                .contains("@ConditionalOnMissingBean(ConsoleBudgetPort.class)")
+                .contains("new ConsoleBudgetAdapter(");
     }
 
     @Test

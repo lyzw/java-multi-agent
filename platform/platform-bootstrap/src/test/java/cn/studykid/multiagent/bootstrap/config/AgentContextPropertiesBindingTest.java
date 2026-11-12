@@ -22,6 +22,8 @@ import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.io.FileSystemResource;
 
 import cn.studykid.multiagent.context.GlobalContextPolicy;
+import cn.studykid.multiagent.context.HeuristicTokenCounter;
+import cn.studykid.multiagent.ports.agentchat.RagHitQuotaPort;
 
 /**
  * {@code agent.context.*} 真实 Binder 绑定测试（ADR-013 / M2 / RV-12）。
@@ -64,6 +66,11 @@ class AgentContextPropertiesBindingTest {
         assertThat(p.getCalibration().getMinSamples()).isEqualTo(30);
         assertThat(p.getCalibration().getBiasClampMin()).isEqualTo(0.80);
         assertThat(p.getCalibration().getBiasClampMax()).isEqualTo(2.00);
+        // S3-M10：RAG 配额四项默认值与 yml 同源；关闭态不消费，但配置契约必须真实绑定。
+        assertThat(p.getRagQuota().getTokenBudget()).isEqualTo(4_096);
+        assertThat(p.getRagQuota().getMaxHits()).isEqualTo(8);
+        assertThat(p.getRagQuota().getMaxHitTokens()).isEqualTo(1_200);
+        assertThat(p.getRagQuota().getMinKeptTokens()).isEqualTo(64);
     }
 
     @Test
@@ -74,7 +81,11 @@ class AgentContextPropertiesBindingTest {
                 "AGENT_CONTEXT_UNKNOWN_RESERVE", "0.15",
                 "AGENT_CONTEXT_CALIBRATION_ENABLED", "false",
                 "AGENT_CONTEXT_CALIBRATION_ALPHA", "0.33",
-                "AGENT_CONTEXT_CALIBRATION_MIN_SAMPLES", "12")));
+                "AGENT_CONTEXT_CALIBRATION_MIN_SAMPLES", "12",
+                "AGENT_CONTEXT_RAG_QUOTA_TOKEN_BUDGET", "777",
+                "AGENT_CONTEXT_RAG_QUOTA_MAX_HITS", "5",
+                "AGENT_CONTEXT_RAG_QUOTA_MAX_HIT_TOKENS", "320",
+                "AGENT_CONTEXT_RAG_QUOTA_MIN_KEPT_TOKENS", "17")));
 
         assertThat(p.isEnabled())
                 .as("⛔ AGENT_CONTEXT_ENABLED 未穿透：enabled 键缺失或挂错父键")
@@ -88,6 +99,12 @@ class AgentContextPropertiesBindingTest {
                 .as("⛔ AGENT_CONTEXT_CALIBRATION_ALPHA 未穿透：校准平滑系数静默落回 0.20")
                 .isEqualTo(0.33);
         assertThat(p.getCalibration().getMinSamples()).isEqualTo(12);
+        assertThat(p.getRagQuota().getTokenBudget())
+                .as("⛔ RAG 配额 budget 未穿透：env 改了却仍用 Java 默认，开启态预算静默失真")
+                .isEqualTo(777);
+        assertThat(p.getRagQuota().getMaxHits()).isEqualTo(5);
+        assertThat(p.getRagQuota().getMaxHitTokens()).isEqualTo(320);
+        assertThat(p.getRagQuota().getMinKeptTokens()).isEqualTo(17);
     }
 
     @Test
@@ -151,6 +168,59 @@ class AgentContextPropertiesBindingTest {
         assertThat(new AgentContextConfiguration().globalContextPolicy(p))
                 .as("合法覆盖必须能构造出策略，否则门禁过严会把 S2 全挡在门外")
                 .isNotNull();
+    }
+
+    @Test
+    @DisplayName("⚠️⚠️ RAG 配额四项 env 必须穿透到组合根 Options（缺键即静默用默认值）")
+    void ragQuotaOverridesReachCompositionRootOptions() throws Exception {
+        AgentContextProperties p = bind(yamlEnvironment(Map.of(
+                "AGENT_CONTEXT_RAG_QUOTA_TOKEN_BUDGET", "777",
+                "AGENT_CONTEXT_RAG_QUOTA_MAX_HITS", "5",
+                "AGENT_CONTEXT_RAG_QUOTA_MAX_HIT_TOKENS", "320",
+                "AGENT_CONTEXT_RAG_QUOTA_MIN_KEPT_TOKENS", "17")));
+
+        RagHitQuotaPort port = new RagHitQuotaConfiguration().ragHitQuotaPort(
+                p, GlobalContextPolicy.defaults(), new HeuristicTokenCounter());
+        java.lang.reflect.Field f = RagHitQuotaAdapter.class.getDeclaredField("options");
+        f.setAccessible(true);
+        cn.studykid.multiagent.context.RagHitQuota.Options options =
+                (cn.studykid.multiagent.context.RagHitQuota.Options) f.get(port);
+
+        assertThat(options.tokenBudget()).isEqualTo(777);
+        assertThat(options.maxHits()).isEqualTo(5);
+        assertThat(options.maxHitTokens()).isEqualTo(320);
+        assertThat(options.minKeptTokens()).isEqualTo(17);
+    }
+
+    @Test
+    @DisplayName("✅ RAG 配额非法配置启动期 fail-fast（非正 / min>max / 单块>总预算 / 超硬顶）")
+    void invalidRagQuotaFailsFast() {
+        RagHitQuotaConfiguration config = new RagHitQuotaConfiguration();
+        GlobalContextPolicy global = GlobalContextPolicy.defaults();
+
+        AgentContextProperties zero = bind(yamlEnvironment(Map.of(
+                "AGENT_CONTEXT_RAG_QUOTA_TOKEN_BUDGET", "0")));
+        assertThatThrownBy(() -> config.ragHitQuotaPort(zero, global, new HeuristicTokenCounter()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rag-quota.token-budget");
+
+        AgentContextProperties minTooBig = bind(yamlEnvironment(Map.of(
+                "AGENT_CONTEXT_RAG_QUOTA_MIN_KEPT_TOKENS", "4097")));
+        assertThatThrownBy(() -> config.ragHitQuotaPort(minTooBig, global, new HeuristicTokenCounter()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rag-quota.min-kept-tokens");
+
+        AgentContextProperties hitTooBig = bind(yamlEnvironment(Map.of(
+                "AGENT_CONTEXT_RAG_QUOTA_MAX_HIT_TOKENS", "8192")));
+        assertThatThrownBy(() -> config.ragHitQuotaPort(hitTooBig, global, new HeuristicTokenCounter()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rag-quota.max-hit-tokens");
+
+        AgentContextProperties overCeiling = bind(yamlEnvironment(Map.of(
+                "AGENT_CONTEXT_RAG_QUOTA_TOKEN_BUDGET", "128001")));
+        assertThatThrownBy(() -> config.ragHitQuotaPort(overCeiling, global, new HeuristicTokenCounter()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("hard-ceiling-tokens");
     }
 
     // ── 辅助 ──────────────────────────────────────────────────────
