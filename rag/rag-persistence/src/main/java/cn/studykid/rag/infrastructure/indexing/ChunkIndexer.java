@@ -120,8 +120,10 @@ public class ChunkIndexer {
         if (limit <= 0) {
             throw new IllegalArgumentException("limit 必须 > 0");
         }
+        // ⚠️ M3（RLS 清理）：租户谓词由显式 UUID 字面量注入（set_config 仅保留为 RLS 兼容层）。
+        String tenantSql = PENDING_SQL.replace("{rag_tenant}", "'" + tenantId + "'::uuid");
         return indexOn(new ScanChannel(jdbcTemplate, transactionTemplate,
-                PENDING_SQL, tenantId), limit);
+                tenantSql, tenantId), limit);
     }
 
     /**
@@ -225,7 +227,9 @@ public class ChunkIndexer {
      * <p>本方法<b>不触碰扫描 SQL / 事务模板</b>，可被单元测试直接调用验证索引逻辑。
      */
     public void indexOne(@NonNull String tenantId, @NonNull String chunkId, @NonNull String text) {
-        writeChunk(new ScanChannel(jdbcTemplate, transactionTemplate, PENDING_SQL, tenantId),
+        // ⚠️ M3（RLS 清理）：租户谓词由显式 UUID 字面量注入。
+        String tenantSql = PENDING_SQL.replace("{rag_tenant}", "'" + tenantId + "'::uuid");
+        writeChunk(new ScanChannel(jdbcTemplate, transactionTemplate, tenantSql, tenantId),
                 new PendingChunk(chunkId, text));
     }
 
@@ -340,7 +344,7 @@ public class ChunkIndexer {
                  ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
             JOIN rag_source src
                  ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-            WHERE c.tenant_id = rag_current_tenant()
+            WHERE c.tenant_id = {rag_tenant}
               AND src.ver_status = 'VERIFIED'
               AND doc.ver_status = 'VERIFIED'
               AND doc.retrievable
@@ -367,6 +371,6 @@ public class ChunkIndexer {
      * <b>所有租户</b>的待索引片段当成全局语料逐一重写。
      */
     static final String GLOBAL_PENDING_SQL = PENDING_SQL.replace(
-            "WHERE c.tenant_id = rag_current_tenant()",
+            "WHERE c.tenant_id = {rag_tenant}",
             "WHERE c.tenant_id = rag_global_tenant_id()");
 }

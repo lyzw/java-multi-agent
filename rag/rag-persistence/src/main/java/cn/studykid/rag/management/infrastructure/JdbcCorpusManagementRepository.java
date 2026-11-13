@@ -164,16 +164,23 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
                                 JdbcTemplate template,
                                 TransactionTemplate tx) {
 
-        /** 应用通道：会话租户由 {@code app.tenant_id} 决定，RLS 同时兜底。 */
+        /**
+         * 应用通道：租户列从「读 GUC 的 {@code rag_current_tenant()}」改为显式 UUID 字面量
+         * （RLS 清理 · M3）——隔离权威移交应用层，不再依赖会话变量 {@code app.tenant_id}。
+         * {@link #open()} 里的 {@code set_config} 兼容层保留至 M4-R2 退役。
+         */
         static WriteChannel ofTenant(JdbcTemplate jdbcTemplate, TransactionTemplate tx,
                                      @NonNull String tenantId) {
-            return new WriteChannel("rag_current_tenant()", "'TENANT'", tenantId,
+            return new WriteChannel("'" + tenantId + "'::uuid", "'TENANT'", tenantId,
                     false, jdbcTemplate, tx);
         }
 
-        /** 运维通道：租户在 SQL 文本里就是全局哨兵函数，没有可替换的位置。 */
+        /**
+         * 运维通道：租户在 SQL 文本里是全局哨兵字面量（不再依赖 {@code rag_global_tenant_id()}，
+         * 避免 M5 删函数时漏改一处即运行期炸点）。BYPASSRLS 通道的 {@code open()} 不设置会话租户。
+         */
         static WriteChannel ofGlobal(JdbcTemplate template, TransactionTemplate tx) {
-            return new WriteChannel("rag_global_tenant_id()", "'PLATFORM'",
+            return new WriteChannel("'" + RagScope.GLOBAL_TENANT_ID + "'::uuid", "'PLATFORM'",
                     RagScope.GLOBAL_TENANT_ID, true, template, tx);
         }
 

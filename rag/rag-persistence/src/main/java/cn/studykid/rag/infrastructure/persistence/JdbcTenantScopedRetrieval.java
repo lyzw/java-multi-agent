@@ -7,6 +7,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import cn.studykid.rag.application.retrieval.RetrievalOrchestrator;
 import cn.studykid.rag.core.retrieval.RetrievalRequest;
 import cn.studykid.rag.core.retrieval.RetrievalResult;
+import cn.studykid.rag.core.scope.RagScopeFilter;
 import cn.studykid.rag.ports.TenantScopedRetrieval;
 
 /**
@@ -45,7 +46,12 @@ public class JdbcTenantScopedRetrieval implements TenantScopedRetrieval {
         return transactionTemplate.execute(status -> {
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, tenantId);
-            RetrievalResult result = orchestrator.retrieve(request);
+            // ⚠️ 作用域在此判定（入口层），并逐层透传（M3 显式化）：
+            //    检索读侧口径恒为「本租户 ∪ 全局哨兵」（与迁移 V8 读策略逐字等价）。
+            //    这里<b>不</b>用「会话里设过什么」反推作用域——那条路在
+            //    set_config 缺失时会静默退化成「只看全局行」。
+            RagScopeFilter scope = new RagScopeFilter.TenantWithGlobal(tenantId);
+            RetrievalResult result = orchestrator.retrieve(scope, request);
             // ⚠️ 检索留痕（报表中心「每日搜索的问题数」的唯一数据源）：
             //    检索由系统发起（platform 工具调用），没有人类 principal，
             //    principal_id 记 NULL——V5 迁移已把该列放宽为可空，
@@ -56,8 +62,8 @@ public class JdbcTenantScopedRetrieval implements TenantScopedRetrieval {
             jdbcTemplate.update("""
                     INSERT INTO rag_access_audit
                         (audit_id, tenant_id, principal_id, action, source_id)
-                    VALUES (gen_random_uuid(), rag_current_tenant(), NULL, 'RETRIEVE', NULL)
-                    """);
+                    VALUES (gen_random_uuid(), ?::uuid, NULL, 'RETRIEVE', NULL)
+                    """, tenantId);
             return result;
         });
     }

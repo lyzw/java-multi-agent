@@ -7,12 +7,19 @@ import java.util.Map;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.RunEventPort;
 
 /**
@@ -28,6 +35,11 @@ import cn.studykid.multiagent.ports.persistence.RunEventPort;
  * <p>⚠️ <b>不选 {@code INSERT ... MAX+1}（无锁）</b>：并发下会撞唯一约束。
  * <p>⚠️ <b>不选 {@code pg_advisory_xact_lock}</b>：引入 PG 专有依赖，
  * 且与本项目「按 run 串行」的既有模型不直观。
+ *
+ * <p><b>影子态（改造计划 WP-M1-2）</b>：写主导仓（锁行 + 追加），无行租户染色点；
+ * {@link #append} 入口 {@code compare("run_event")}；自持/借出连接的 GUC 绑定
+ * （holder {@code openTenantConnection} 中心执行）保留至 M4 退役批次；
+ * SQL 全显式 {@code tenant_id} 谓词，RLS 退役后功能不变。
  */
 @Repository
 public class JdbcRunEventAppendRepository implements RunEventPort {
@@ -67,8 +79,29 @@ public class JdbcRunEventAppendRepository implements RunEventPort {
 
     private final DataSource dataSource;
 
+    // ── 影子态接入（WP-M1-2，默认不启用零行为变更）────────────────────
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private volatile boolean shadowEnabled;
+    private @NonNull String sentinelTenantId = "";
+
     public JdbcRunEventAppendRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    /**
+     * 影子态装配入口：容器里存在 {@link AuthzShadowBinding} 即开启（P1 影子期），
+     * 不存在即完全关闭（零行为变更）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
     }
 
     @Override
@@ -76,6 +109,8 @@ public class JdbcRunEventAppendRepository implements RunEventPort {
                        @NonNull String runId,
                        @NonNull String eventType,
                        @NonNull Map<String, Object> payload) {
+        // ⚠️ 影子比对（P1 只记日志）：Gate 算出的 ScopeFilter vs 本次绑定租户。
+        shadowCompare(tenantId);
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             // ⚠️ 自持连接已由 openTenantConnection 置 autoCommit=false；
             //    此处不再经租约做额外回滚——事务边界由下面的 commit/rollback 收口。
@@ -194,5 +229,16 @@ public class JdbcRunEventAppendRepository implements RunEventPort {
 
     private static TenantContext systemContext(String tenantId) {
         return new TenantContext(tenantId, "system", java.util.Set.of(), 0L);
+    }
+
+    // ── 影子辅助（守卫要求：声明与调用分离，入口真调用）────────────
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次绑定租户（只记日志）。
+     * 写主导仓无行租户染色点；全 SQL 显式 {@code tenant_id} 谓词 ⇒ hasTenantPredicate=true。
+     */
+    void shadowCompare(@NonNull String boundTenantId) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, "run_event",
+                SubjectContext.forTenant(boundTenantId), boundTenantId, true);
     }
 }

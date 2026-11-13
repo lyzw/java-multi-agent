@@ -31,6 +31,12 @@ import org.jspecify.annotations.Nullable;
  * （迁移 V8 §1），应用侧由本类的 {@link #isGlobalTenant(String)} 在
  * 租户上下文构造处再挡一次——纵深防御，两层都必须存在。
  *
+ * <p><b>⚠️ 哨兵来源口径（RLS 清理 · M3，2026-11-12）</b>：本常量<b>就是</b>应用侧
+ * 哨兵的唯一来源（与 SQL 函数 {@code rag_global_tenant_id()} 同值——后者是
+ * IMMUTABLE 常量函数、不依赖 GUC，见 {@code authz/guc-dependency.md} G3）。
+ * 不存在「应用从 PG 函数取哨兵」的代码路径，故计划 WP-M3-1 的
+ * 「哨兵改为配置项」无需执行；应用侧哨兵值迁移时以本常量为准做一致性校验即可。
+ *
  * <p>取值用 nil UUID：真实租户 ID 来自 {@code gen_random_uuid()} 或
  * platform 下发，与之碰撞概率为 0，且它一眼可辨、不会被误当成正常租户。
  */

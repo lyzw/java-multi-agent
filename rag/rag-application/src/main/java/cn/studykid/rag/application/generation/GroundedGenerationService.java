@@ -13,6 +13,7 @@ import cn.studykid.rag.core.chunk.Chunk;
 import cn.studykid.rag.core.generation.GenerationRequest;
 import cn.studykid.rag.core.generation.GenerationResult;
 import cn.studykid.rag.core.retrieval.RetrievalPolicy;
+import cn.studykid.rag.core.scope.RagScopeFilter;
 import cn.studykid.rag.ports.GenerationModelPort;
 import cn.studykid.rag.ports.RetrievalPort;
 import org.slf4j.Logger;
@@ -89,12 +90,14 @@ public class GroundedGenerationService {
      *   ⑥ 逐字装配       → 只引用原文，不产生新陈述
      * </pre>
      *
+     * @param scope 行级作用域（隔离权威；逐层透传给端口，见 {@link RetrievalPort#loadByIds}）
      * @param request 生成请求
      * @return 生成结果
      * @throws IllegalArgumentException 入参含非法 UUID（调用方错误，映射 400）
      * @throws MissingBasisException   依据片段不存在或不属于本租户（映射 400）
      */
-    public @NonNull GenerationResult generate(@NonNull GenerationRequest request) {
+    public @NonNull GenerationResult generate(@NonNull RagScopeFilter scope,
+                                              @NonNull GenerationRequest request) {
         // ① 入参形态校验——非法 UUID 必须在进 SQL 前拦住，
         //    否则 Postgres 会抛 22P02，被包装成 500（把调用方错误报成服务故障）。
         List<String> validIds = new ArrayList<>(request.hitIds().size());
@@ -102,8 +105,8 @@ public class GroundedGenerationService {
             validIds.add(parseUuid(id));
         }
 
-        // ② 依据取回（租户上下文由外层 TenantScopedGeneration 建立）
-        List<Chunk> loaded = retrievalPort.loadByIds(validIds);
+        // ② 依据取回（租户过滤由 scope 渲染进 SQL 谓词）
+        List<Chunk> loaded = retrievalPort.loadByIds(scope, validIds);
 
         // ③ 存在性校验
         //    ⛔ 绝不静默丢弃：调用方传了 5 个 ID 只取回 3 个，

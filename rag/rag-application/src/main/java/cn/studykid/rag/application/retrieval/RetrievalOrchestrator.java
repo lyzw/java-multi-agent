@@ -14,6 +14,7 @@ import cn.studykid.rag.core.retrieval.RetrievalResult;
 import cn.studykid.rag.core.retrieval.RetrievalResult.HitReason;
 import cn.studykid.rag.core.retrieval.RetrievalResult.RetrievalChannel;
 import cn.studykid.rag.core.retrieval.RetrievalResult.ScoredChunk;
+import cn.studykid.rag.core.scope.RagScopeFilter;
 import cn.studykid.rag.core.version.EditionScope;
 import cn.studykid.rag.ports.RetrievalPort;
 
@@ -66,24 +67,31 @@ public class RetrievalOrchestrator {
     /**
      * 执行检索编排。
      *
+     * <p><b>⚠️ {@code scope} 必须逐层透传，不得在本层「就地决定」</b>（RLS 清理 · M3）：
+     * 作用域是<b>行级隔离的唯一权威</b>，判定点在<b>入口</b>（认证/租户上下文解析），
+     * 编排层只是搬运工。若编排层自己合成一个 scope，就会出现
+     * 「入口判的是租户 A、SQL 过滤的是租户 B」这种<b>两处各自为政</b>的隔离缺陷——
+     * 而且它不会报错，只会静默返回空或返回错租户的数据。
+     *
+     * @param scope 行级作用域（隔离权威；逐层透传给端口）
      * @param request 检索请求
      * @return 检索结果
      */
-    public RetrievalResult retrieve(RetrievalRequest request) {
+    public RetrievalResult retrieve(RagScopeFilter scope, RetrievalRequest request) {
         // ① 知识点解析
-        List<KnowledgePoint> knowledgePoints = resolveKnowledgePoints(request);
+        List<KnowledgePoint> knowledgePoints = resolveKnowledgePoints(scope, request);
 
         // ② 多路召回：稠密 + 词法（保留检索器给出的真实分数）
-        List<ScoredChunk> candidates = new ArrayList<>(retrievalPort.search(request));
+        List<ScoredChunk> candidates = new ArrayList<>(retrievalPort.search(scope, request));
         if (request.knowledgePointDirected()) {
             // ⚠️ 知识点补全引入的片段没有独立的检索分数，
             //    统一赋予「知识点补全基准分」——它必须低于真实命中分，
             //    否则补全内容会挤掉直接命中的高价值内容。
             candidates.addAll(scoreAs(candidates, retrievalPort.findByKnowledgePoint(
-                    request.knowledgePointId(), request.editionScope()),
+                    scope, request.knowledgePointId(), request.editionScope()),
                     RetrievalChannel.KNOWLEDGE_POINT, HitReason.KP_AGGREGATED));
             candidates.addAll(scoreAs(candidates, retrievalPort.findPrerequisites(
-                    request.knowledgePointId(), request.editionScope()),
+                    scope, request.knowledgePointId(), request.editionScope()),
                     RetrievalChannel.PREREQUISITE_EXPANSION, HitReason.PREREQUISITE));
         }
 
@@ -101,7 +109,7 @@ public class RetrievalOrchestrator {
         List<ScoredChunk> completed = roleFiltered;
         if (request.knowledgePointDirected()) {
             List<Chunk> siblings = retrievalPort.findByKnowledgePoint(
-                    request.knowledgePointId(), request.editionScope());
+                    scope, request.knowledgePointId(), request.editionScope());
             List<ScoredChunk> siblingScored = scoreAs(candidates, siblings,
                     RetrievalChannel.KNOWLEDGE_POINT, HitReason.KP_AGGREGATED);
             // ⚠️ 补全过程同样受角色过滤约束：补全不能绕过泄题闸门。
@@ -213,10 +221,10 @@ public class RetrievalOrchestrator {
                 scored.channel(), scored.reason());
     }
 
-    private List<KnowledgePoint> resolveKnowledgePoints(RetrievalRequest request) {
+    private List<KnowledgePoint> resolveKnowledgePoints(RagScopeFilter scope, RetrievalRequest request) {
         if (request.knowledgePointDirected()) {
             return List.of();
         }
-        return retrievalPort.resolveKnowledgePoints(request.query(), request.subject());
+        return retrievalPort.resolveKnowledgePoints(scope, request.query(), request.subject());
     }
 }

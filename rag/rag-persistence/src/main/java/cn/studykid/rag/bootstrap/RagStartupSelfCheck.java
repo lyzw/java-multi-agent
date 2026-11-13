@@ -12,6 +12,8 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import cn.studykid.rag.core.scope.RlsDependencyProbe;
+
 /**
  * 启动自检（RAG-D09 G2 条件②「自检通过」）。
  *
@@ -39,6 +41,16 @@ import org.springframework.stereotype.Component;
  *       只能检出「连上的角色有 BYPASSRLS」，检不出「配置把两个角色写成了同一个」。
  *       所以既要比配置名，也要比运行期 {@code current_user}。</li>
  * </ol>
+ *
+ * <p><b>⚠️ M3 定位（RLS→应用层迁移进行中）</b>：自 M3 起，<b>行级隔离的权威已上移到
+ * 应用层显式谓词</b>——检索面由 {@code RagScopeFilter} 渲染、管理/worker 面由
+ * {@code {rag_tenant}} UUID 字面量注入（见 WP-M3-2 四面登记表），不再依赖
+ * {@code rag_current_tenant()} 读 GUC 才能工作。本自检保留的 RLS 各项
+ * （非特权角色 / 上下文函数存在 / rag_chunk RLS 启用 / 无租户只见全局语料）
+ * 在 M3–M4 期间是<b>纵深防御</b>（RLS 兼容层仍在线），随 M4-R 各批次退役对应表策略、
+ * 最终 M5 删 {@code rag_current_tenant()} 后退出。本类用语从「RLS 生效」改为
+ * 「应用层 ScopeFilter 装配完整 / RLS 纵深防御在场」以反映这一现状，
+ * 但<b>不降级任何既有检查</b>：只要 RLS 还在，它就是最后一道兜底，必须仍然有效。
  *
  * <p>任何一项失败都会抛出 {@link IllegalStateException} 中止启动，
  * 绝不带着不安全的配置对外服务。
@@ -87,10 +99,13 @@ public class RagStartupSelfCheck implements ApplicationRunner {
             throw new IllegalStateException(
                     "RAG 启动自检未通过：" + String.join("; ", failures));
         }
-        log.info("RAG 启动自检全部通过：pgvector 就绪 / 连接角色非特权 / RLS 生效 / "
+        log.info("RAG 启动自检全部通过：pgvector 就绪 / 连接角色非特权 / "
+                + "应用层 ScopeFilter 装配完整（显式谓词为隔离权威）/ RLS 纵深防御在场 / "
                 + "无租户上下文只见全局语料 / 运维角色与主数据源角色互斥 / "
                 + "库结构与代码版本一致"
                 + "（运维通道 " + (opsEnabled ? "已接入" : "显式关闭") + "）。");
+        // M4 准备期埋点：rlsDependent 静态预期与运行期中央绑定器信号（随逐批退役递减至 0）。
+        log.info("rlsDependent 度量基线：{}", RlsDependencyProbe.snapshot());
     }
 
     private void checkPgVector(List<String> failures) {

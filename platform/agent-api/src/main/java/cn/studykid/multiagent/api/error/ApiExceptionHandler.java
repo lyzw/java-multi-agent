@@ -23,6 +23,7 @@ import cn.studykid.multiagent.core.compliance.ZeroRetentionViolationException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.ports.persistence.PlatformOpsUnavailableException;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
+import org.springframework.web.servlet.support.RequestContextUtils;
 
 /**
  * 全局异常处理。

@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.infrastructure.security;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -61,6 +62,19 @@ class RuleBasedPolicyEngineTest {
         void tenantCantUsePlatformRule() {
             Decision d = engine(OPS_WRITE_SHARED).decide(tenant(), Action.WRITE, ragChunkCollection());
             assertInstanceOf(Decision.Deny.class, d);
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 租户态伪造 PLATFORM_ADMIN 角色 + PLATFORM 规则 → 必须被拒（WP-M1-4 反证）")
+        void tenantForgingAdminRoleCannotUsePlatformRule() {
+            // ⚠️ 攻击形态：租户请求在角色集里塞进 PLATFORM_ADMIN，
+            //    试图只凭角色拿到平台全域。scope 维度必须独立把关：
+            //    REQUIREMENT_NOT_MET 的判定只看 scope，角色不参与前置校验。
+            SubjectContext forged = tenant("PLATFORM_ADMIN");
+            Decision d = engine(OPS_WRITE_SHARED).decide(forged, Action.WRITE, ragChunkCollection());
+            Decision.Deny deny = assertInstanceOf(Decision.Deny.class, d);
+            assertEquals("REQUIREMENT_NOT_MET", deny.reasonCode(),
+                    "伪造角色的租户主体必须在前置校验处被拒（而非 NO_RULE 等无关理由）");
         }
     }
 

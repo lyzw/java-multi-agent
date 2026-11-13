@@ -11,10 +11,17 @@ import java.util.UUID;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import tools.jackson.databind.ObjectMapper;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.agentchat.AgentChatAuditPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 
@@ -33,6 +40,11 @@ import cn.studykid.multiagent.ports.persistence.RunClaimPort;
  * <p><b>RLS 铁律</b>：全部 SQL 走 {@link TransactionalConnectionHolder#inTransaction}，
  * 事务内、业务 SQL 前由 {@link TenantSessionBinder} 绑定 {@code app.tenant_id}；
  * 用 app_agent（NOBYPASSRLS）。所有语句带 {@code tenant_id} 条件。
+ * ⚠️ RLS 退役期（改造计划 WP-M1-2）：GUC 绑定在 holder 中心统一执行，保留至
+ * M4 退役批次；显式谓词保证 RLS 退役后功能不变。
+ *
+ * <p><b>影子态（WP-M1-2）</b>：写主导仓，无行租户染色点；{@code begin}/{@code finish}
+ * 入口 1:1 {@code compare("run")}（与 {@code JdbcRunClaimRepository} 同纪律）。
  *
  * <p><b>事务毒化</b>：任何 SQLException 都不在本类吞掉；
  * {@code TransactionalConnectionHolder} 会拒绝提交被毒化的事务，
@@ -92,12 +104,34 @@ public class JdbcAgentChatAuditRepository implements AgentChatAuditPort {
 
     private final DataSource dataSource;
 
+    // ── 影子态接入（WP-M1-2，默认不启用零行为变更）────────────────────
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private volatile boolean shadowEnabled;
+    private @NonNull String sentinelTenantId = "";
+
     public JdbcAgentChatAuditRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
     }
 
+    /**
+     * 影子态装配入口：容器里存在 {@link AuthzShadowBinding} 即开启（P1 影子期），
+     * 不存在即完全关闭（零行为变更）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
     @Override
     public @NonNull AuditHandle begin(@NonNull BeginRecord record) {
+        shadowCompare(record.tenantId());
         TransactionalConnectionHolder.inTransaction(
                 dataSource, systemContext(record.tenantId()),
                 conn -> {
@@ -113,6 +147,7 @@ public class JdbcAgentChatAuditRepository implements AgentChatAuditPort {
 
     @Override
     public void finish(@NonNull AuditHandle handle, @NonNull FinishRecord record) {
+        shadowCompare(handle.tenantId());
         TransactionalConnectionHolder.inTransaction(
                 dataSource, systemContext(handle.tenantId()),
                 conn -> {
@@ -266,5 +301,16 @@ public class JdbcAgentChatAuditRepository implements AgentChatAuditPort {
         } catch (IllegalArgumentException e) {
             return false;
         }
+    }
+
+    // ── 影子辅助（守卫要求：声明与调用分离，入口真调用）────────────
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次绑定租户（只记日志）。
+     * 写主导仓无行租户染色点；全 SQL 显式 {@code tenant_id} 谓词 ⇒ hasTenantPredicate=true。
+     */
+    void shadowCompare(@NonNull String boundTenantId) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, "run",
+                SubjectContext.forTenant(boundTenantId), boundTenantId, true);
     }
 }

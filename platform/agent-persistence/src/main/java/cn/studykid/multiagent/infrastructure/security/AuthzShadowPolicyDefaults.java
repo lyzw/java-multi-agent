@@ -108,6 +108,12 @@ public final class AuthzShadowPolicyDefaults {
             "idempotency_record",
             // outbox_event：唤醒信号表（Run 创建写、Worker 读）。读带显式 tenant_id 谓词。
             "outbox_event",
+            // run_event：Run 事件时间线（SSE 续传依据，(tenant_id, run_id) 内 seq 唯一）。
+            // 写主导（先锁 run 行再 MAX+1 追加）；SQL 全显式 tenant_id 谓词。
+            "run_event",
+            // rate_limit_bucket：固定窗口限流桶（租户域基础设施）。原子 upsert + 计数读，
+            // SQL 显式 (tenant_id, bucket_key) 谓词；返回计数无行租户 ⇒ compare-only。
+            "rate_limit_bucket",
             // ── 2026-11-09 第六批（A 组：删除/撤回域租户读，P4-D04）──────
             // consent_withdrawal：监护人撤回同意。读（findDueWithdrawals）带显式 tenant_id 谓词。
             "consent_withdrawal",

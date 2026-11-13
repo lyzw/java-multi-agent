@@ -4,6 +4,8 @@ import org.jspecify.annotations.NonNull;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import cn.studykid.rag.core.scope.RagCorpusScope;
+import cn.studykid.rag.core.scope.RlsDependencyProbe;
+import cn.studykid.rag.infrastructure.shadow.RagShadow;
 import cn.studykid.rag.management.core.RagManagementContext;
 
 /**
@@ -28,6 +30,16 @@ import cn.studykid.rag.management.core.RagManagementContext;
  * 把 {@link RagCorpusScope#PLATFORM} 的哨兵写进 {@code app.tenant_id}，
  * {@code rag_current_tenant()} 会直接抛 SQLSTATE 42501
  * （迁移 V8 §1 的越权封堵），表现为一条难以定位的 500。
+ *
+ * <p><b>⚠️ M3 定位（RLS→应用层迁移进行中）</b>：本类的 {@code set_config} 调用
+ * 在 M3 期间<b>必须保留</b>——它是 RLS 的兼容层，此刻移除会让
+ * {@code rag_current_tenant()} 返回 NULL，租户行被 FORCE RLS 静默过滤
+ * （检索恒空、写入被 WITH CHECK 拒，均不报错，正是风险登记册 R1 的 Sev-0 场景）。
+ * <b>行级隔离的权威已上移到应用层显式谓词</b>
+ * （检索面 {@code RagScopeFilter} + 管理/worker 面 {@code {rag_tenant}} UUID 字面量注入，
+ * 见 WP-M3-2 登记表），本调用仅作纵深防御，随 M4-R 各批次（该表策略退役时同步移除）
+ * 与 M5（删 {@code rag_current_tenant()}）一并退出。<b>语义不变</b>：
+ * 平台档显式置空、租户档绑真实租户。
  */
 final class RagSessionScope {
 
@@ -57,9 +69,15 @@ final class RagSessionScope {
             //    用 update() 会抛「A result was returned when none was expected」。
             jdbcTemplate.queryForObject(
                     "SELECT set_config('app.tenant_id', '', true)", String.class);
+            RlsDependencyProbe.record(RlsDependencyProbe.Batch.CENTRAL);
+            // M2 影子观察采集点：记录一次仍走 RLS 兼容层（GUC 置空分支）。禁用时 no-op。
+            RagShadow.recordRlsBind("rag_session_scope");
         } else {
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, sessionTenant);
+            RlsDependencyProbe.record(RlsDependencyProbe.Batch.CENTRAL);
+            // M2 影子观察采集点：记录一次仍走 RLS 兼容层（GUC 置租户分支）。禁用时 no-op。
+            RagShadow.recordRlsBind("rag_session_scope");
         }
     }
 }

@@ -7,13 +7,17 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 /**
  * RAG 入库 / 索引 Worker 启动入口（RAG-D09 R2-1：可部署索引制品）。
  *
- * <p>组件扫描<b>仅限 {@code cn.studykid.rag.worker}</b>，刻意不扫描
+ * <p>组件扫描<b>以 {@code cn.studykid.rag.worker} 为主</b>，刻意不扫描
  * rag-api / rag-bootstrap / rag-infrastructure（其 bean 经 {@code @Bean} 显式装配），
  * 以避免：
  * <ul>
  *   <li>误托管 rag-api 的检索 REST 端点（Worker 不对外提供检索服务）；</li>
  *   <li>与 rag-bootstrap 重复装配检索链路 bean 造成冲突。</li>
  * </ul>
+ *
+ * <p>⚠️ 额外显式包含 {@code cn.studykid.rag.infrastructure.shadow}——
+ * 仅当 {@code rag.shadow.enabled=true} 时该包才会注册影子观测 Bean（默认关闭、零行为变更），
+ * 用于 M2 影子观察期覆盖 R3 摄取/索引/巡检面。<b>不影响</b>上面「不扫描 infrastructure 其余部分」的约束。
  *
  * <p>⚠️ 本应用<b>不</b>解析令牌、<b>不</b>自建用户体系——
  *   租户上下文由 {@code ChunkIndexer}/{@code CorpusRepository} 在事务内
@@ -26,7 +30,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *    但任务永远停在 PENDING——这是最难排查的静默失败形态
  *    （无异常、无日志、无告警，只有用户抱怨「上传后一直没反应」）。
  */
-@SpringBootApplication(scanBasePackages = "cn.studykid.rag.worker")
+@SpringBootApplication(scanBasePackages = {"cn.studykid.rag.worker", "cn.studykid.rag.infrastructure.shadow"})
 @EnableScheduling
 public class RagWorkerApplication {
 

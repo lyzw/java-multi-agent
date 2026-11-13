@@ -52,6 +52,11 @@ public interface IngestJobPort {
      * 领取在事务内 {@code set_config('app.tenant_id', ...)} 后执行——
      * <b>由 RLS 策略本身做隔离</b>，不依赖应用层过滤兜底。
      *
+     * <p><b>⚠️ 隔离权威口径（RLS 清理 · M3，2026-11-12）</b>：实现（{@code claimNextJobForTenant}）
+     * 的 SQL 自带显式 {@code AND tenant_id = ?::uuid} 谓词（与 RLS 策略同向双保险），
+     * <b>隔离权威是该显式谓词 + 调用方显式租户参数</b>；{@code set_config} 是 RLS
+     * 在场期的兼容层，随 M4-R3 批次退役移除，移除后领取语义不变。
+     *
      * @param tenantId 租户 ID（须为该 worker 被授权处理的租户）
      * @return 领取到的 job（已置为 {@link IngestJobStatus#PARSING} 且写入 started_at），
      *         无待处理任务返回 {@code null}

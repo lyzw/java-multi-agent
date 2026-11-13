@@ -64,7 +64,7 @@ class ChunkIndexerGlobalScopeTest {
         assertTrue(global.contains("c.chunk_id > ?::uuid"), "键集分页游标仍按 uuid 比较");
         // 除桶谓词外两段 SQL 必须逐字相同（否则「同一份口径」只是注释）
         assertEquals(ChunkIndexer.PENDING_SQL
-                        .replace("WHERE c.tenant_id = rag_current_tenant()",
+                        .replace("WHERE c.tenant_id = {rag_tenant}",
                                  "WHERE c.tenant_id = rag_global_tenant_id()"),
                 global);
     }

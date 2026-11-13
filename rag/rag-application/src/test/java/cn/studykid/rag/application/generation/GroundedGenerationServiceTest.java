@@ -16,6 +16,7 @@ import cn.studykid.rag.core.chunk.Chunk;
 import cn.studykid.rag.core.chunk.ChunkRole;
 import cn.studykid.rag.core.generation.GenerationRequest;
 import cn.studykid.rag.core.generation.GenerationResult;
+import cn.studykid.rag.core.scope.RagScopeFilter;
 import cn.studykid.rag.core.retrieval.RetrievalRequest.RetrievalMode;
 import cn.studykid.rag.core.version.EditionCoordinate;
 import cn.studykid.rag.core.version.EditionScope;
@@ -36,6 +37,12 @@ import cn.studykid.rag.ports.RetrievalPort;
  * </ol>
  */
 class GroundedGenerationServiceTest {
+
+    /**
+     * 测试用作用域（RLS 清理 · M3）：生成期取回依据的读侧口径与检索期同构。
+     */
+    private static final RagScopeFilter SCOPE =
+            new RagScopeFilter.TenantWithGlobal("11111111-1111-1111-1111-111111111111");
 
     private static final EditionCoordinate PEP_2024 = new EditionCoordinate(
             EditionCoordinate.Subject.MATH, EditionCoordinate.GradeBand.GRADE_8,
@@ -65,27 +72,29 @@ class GroundedGenerationServiceTest {
 
         @Override
         public List<cn.studykid.rag.core.retrieval.RetrievalResult.ScoredChunk> search(
-                cn.studykid.rag.core.retrieval.RetrievalRequest request) {
+                RagScopeFilter scope, cn.studykid.rag.core.retrieval.RetrievalRequest request) {
             return List.of();
         }
 
         @Override
-        public List<Chunk> findByKnowledgePoint(String knowledgePointId, EditionScope editionScope) {
+        public List<Chunk> findByKnowledgePoint(RagScopeFilter scope, String knowledgePointId,
+                                                EditionScope editionScope) {
             return List.of();
         }
 
         @Override
-        public List<Chunk> findPrerequisites(String knowledgePointId, EditionScope editionScope) {
+        public List<Chunk> findPrerequisites(RagScopeFilter scope, String knowledgePointId,
+                                              EditionScope editionScope) {
             return List.of();
         }
 
         @Override
-        public List<Chunk> findSectionNeighbors(Chunk chunk, int limit) {
+        public List<Chunk> findSectionNeighbors(RagScopeFilter scope, Chunk chunk, int limit) {
             return List.of();
         }
 
         @Override
-        public List<Chunk> loadByIds(List<String> chunkIds) {
+        public List<Chunk> loadByIds(RagScopeFilter scope, List<String> chunkIds) {
             List<Chunk> out = new ArrayList<>();
             for (Chunk c : available) {
                 if (chunkIds.contains(c.id())) {
@@ -97,7 +106,7 @@ class GroundedGenerationServiceTest {
 
         @Override
         public List<cn.studykid.rag.core.knowledge.KnowledgePoint> resolveKnowledgePoints(
-                String query, String subject) {
+                RagScopeFilter scope, String query, String subject) {
             return List.of();
         }
     }
@@ -113,7 +122,7 @@ class GroundedGenerationServiceTest {
                 new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, "顶点公式"))));
 
         assertThatThrownBy(() ->
-                service.generate(request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
+                service.generate(SCOPE, request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
                         ID_A, ID_B)))
                 .isInstanceOf(MissingBasisException.class)
                 .hasMessageContaining(ID_B);
@@ -125,7 +134,7 @@ class GroundedGenerationServiceTest {
         GroundedGenerationService service = new GroundedGenerationService(new StubPort(List.of()));
 
         assertThatThrownBy(() ->
-                service.generate(request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
+                service.generate(SCOPE, request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
                         "not-a-uuid")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("not-a-uuid");
@@ -138,7 +147,7 @@ class GroundedGenerationServiceTest {
                 chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, "顶点坐标公式"),
                 chunk(ID_B, PEP_2024, ChunkRole.EXERCISE_ANSWER, "答案：x = 2"))));
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A, ID_B));
 
         assertThat(result.hasAnswer()).isTrue();
@@ -157,7 +166,7 @@ class GroundedGenerationServiceTest {
                 chunk(ID_A, PEP_2024, ChunkRole.EXERCISE_ANSWER, "答案：x = 2"),
                 chunk(ID_B, PEP_2024, ChunkRole.EXAMPLE_SOLUTION, "解：由配方法得"))));
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A, ID_B));
 
         assertThat(result.hasAnswer()).isFalse();
@@ -172,7 +181,7 @@ class GroundedGenerationServiceTest {
         GroundedGenerationService service = new GroundedGenerationService(new StubPort(List.of(
                 chunk(ID_A, PEP_2024, ChunkRole.EXERCISE_ANSWER, "答案：x = 2"))));
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.VERIFY, EditionScope.strict(PEP_2024), ID_A));
 
         assertThat(result.hasAnswer()).isTrue();
@@ -187,7 +196,7 @@ class GroundedGenerationServiceTest {
                 chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, "2024版讲法"),
                 chunk(ID_B, PEP_2012, ChunkRole.EXPLANATION, "2012版讲法"))));
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A, ID_B));
 
         assertThat(result.basis()).extracting(Chunk::id).containsExactly(ID_A);
@@ -203,7 +212,7 @@ class GroundedGenerationServiceTest {
         GroundedGenerationService service = new GroundedGenerationService(
                 new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, body))));
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A));
 
         // 原文必须逐字出现
@@ -223,7 +232,7 @@ class GroundedGenerationServiceTest {
         GroundedGenerationService service = new GroundedGenerationService(
                 new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, "顶点公式"))));
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A, ID_A, ID_A));
 
         assertThat(result.basis()).hasSize(1);
@@ -236,7 +245,7 @@ class GroundedGenerationServiceTest {
         GroundedGenerationService service = new GroundedGenerationService(
                 new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, "顶点公式"))));
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A));
 
         assertThat(result.generator()).isEqualTo(GenerationResult.GENERATOR_EXCERPT_ASSEMBLY);
@@ -278,7 +287,7 @@ class GroundedGenerationServiceTest {
                 new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, body))),
                 new StubModel("根据依据 1，顶点横坐标为 -b/2a。"));
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A));
 
         assertThat(result.generator()).isEqualTo(GenerationResult.GENERATOR_LLM_GROUNDED);
@@ -298,7 +307,7 @@ class GroundedGenerationServiceTest {
                 new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, body))),
                 new FailingModel());
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A));
 
         // ⚠️ 回落而非崩溃：学生至少能看到可核对的原文
@@ -315,7 +324,7 @@ class GroundedGenerationServiceTest {
                 new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, body))),
                 new StubModel("   "));
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A));
 
         assertThat(result.generator()).isEqualTo(GenerationResult.GENERATOR_EXCERPT_ASSEMBLY);
@@ -328,7 +337,7 @@ class GroundedGenerationServiceTest {
         GroundedGenerationService service = new GroundedGenerationService(
                 new StubPort(List.of(chunk(ID_A, PEP_2024, ChunkRole.EXPLANATION, "顶点公式"))));
 
-        GenerationResult result = service.generate(
+        GenerationResult result = service.generate(SCOPE,
                 request(RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024), ID_A));
 
         assertThat(result.generator()).isEqualTo(GenerationResult.GENERATOR_EXCERPT_ASSEMBLY);

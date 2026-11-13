@@ -7,6 +7,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import cn.studykid.rag.application.generation.GroundedGenerationService;
 import cn.studykid.rag.core.generation.GenerationRequest;
 import cn.studykid.rag.core.generation.GenerationResult;
+import cn.studykid.rag.core.scope.RagScopeFilter;
 import cn.studykid.rag.ports.TenantScopedGeneration;
 
 /**
@@ -50,7 +51,10 @@ public class JdbcTenantScopedGeneration implements TenantScopedGeneration {
         return transactionTemplate.execute(status -> {
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, tenantId);
-            return generationService.generate(request);
+            // ⚠️ 作用域在此判定（入口层）并逐层透传（M3 显式化）：
+            //    生成期取回依据的读侧口径与检索期同构（见 JdbcTenantScopedRetrieval）。
+            RagScopeFilter scope = new RagScopeFilter.TenantWithGlobal(tenantId);
+            return generationService.generate(scope, request);
         });
     }
 }

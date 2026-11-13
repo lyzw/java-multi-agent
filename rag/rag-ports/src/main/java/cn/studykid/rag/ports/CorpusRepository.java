@@ -17,6 +17,12 @@ import cn.studykid.rag.core.chunk.Chunk;
  * <p><b>⚠️ 租户上下文</b>：方法显式接收 {@code tenantId}，由实现在事务内
  * {@code set_config('app.tenant_id', ...)}，使 RLS FORCE 生效。
  * RAG 不自行解析令牌，租户由调用方（platform 工具执行上下文）传入。
+ *
+ * <p><b>⚠️ 隔离权威口径（RLS 清理 · M3，2026-11-12）</b>：写路径隔离由 SQL 显式
+ * {@code tenant_id} 列值/谓词保证（写入行的租户归属就是方法参数 {@code tenantId}），
+ * <b>不依赖</b>会话 GUC；{@code set_config} 是 RLS 在场期的兼容层
+ * （FORCE RLS 写策略 WITH CHECK 仍读 {@code rag_current_tenant()}），随 M4-R1
+ * 批次退役移除，移除后本端口语义不变。
  */
 public interface CorpusRepository {
 

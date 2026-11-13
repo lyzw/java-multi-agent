@@ -12,9 +12,15 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import cn.studykid.multiagent.application.cap.ContextPolicyReader;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.AgentManagePort;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort.AgentItem;
@@ -36,7 +42,9 @@ import cn.studykid.multiagent.ports.persistence.AuditPort;
  * 走 {@code AuditPort.recordRequired}，审计写入失败即抛异常（无审计的发布 = 无声变更，R-1 要防）。
  *
  * <p>⚠️ 全部走 {@code tenantConnection} 绑定 RLS；事务内显式 commit/rollback，
- * Repository 绝不自行提交借用连接。
+ * Repository 绝不自行提交借用连接。⚠️ RLS 退役期（改造计划 WP-M1-2）：GUC 绑定在
+ * holder 中心统一执行，保留至 M4 退役批次；SQL 全显式 {@code tenant_id} 谓词，
+ * RLS 退役后功能不变。
  *
  * <p>⚠️ <b>刻意去掉 {@code @Repository} 组件扫描</b>（W-PERM-P0-T6）：
  * 本类现在被 {@code DualWriteAgentManagePort} 装饰（迁移期双写），
@@ -45,14 +53,15 @@ import cn.studykid.multiagent.ports.persistence.AuditPort;
  * 装配改由 {@code ApplicationConfiguration} 显式 {@code @Bean} 完成，
  * 与 {@code runClaimPort}（P3-D07）的既有惯例一致。
  *
- * <p><b>P1 影子态（RLS→应用层迁移）盲区标注</b>：本仓为<b>写主导</b>
+ * <p><b>P1 影子态（RLS→应用层迁移，改造计划 WP-M1-2）</b>：本仓为<b>写主导</b>
  * （{@code INSERT…RETURNING} 创建 Agent/版本/执行快照），不参与 P1 影子染色
  * （12 文 §4.5 / 13 文 §5.2 明确 P1 只观测「返回行给调用方的读路径」）。
  * 唯一的 SELECT（{@code agentExists} 的 {@code SELECT 1} 存在性检查）自带显式
  * {@code tenant_id = ?::uuid} 谓词，但<b>不向调用方返回数据行</b>（返回布尔），
  * 与 {@code JdbcRunClaimRepository} 的 {@code isCurrentGeneration} 同口径 ——
- * 无可染色的行级租户归属。⚠️ 因此本仓在 P1 的租户隔离仍由 <b>RLS 强制</b>兜底；
- * 写事务的「未来应用层强制」属于 P2 双写/阻断范围。
+ * 无可染色的行级租户归属。⚠️ 已按写路径样板接入<b>影子比对</b>（compare-only）：
+ * {@code createAgent} / {@code publishVersion} 入口 1:1 {@code compare("agent")}；
+ * 租户隔离在 P1 仍由 RLS 强制兜底；写事务的「未来应用层强制」属于 P2 双写/阻断范围。
  */
 public class JdbcAgentManageRepository implements AgentManagePort {
 
@@ -68,10 +77,31 @@ public class JdbcAgentManageRepository implements AgentManagePort {
     private final DataSource dataSource;
     private final AuditPort audit;
 
+    // ── 影子态接入（WP-M1-2，默认不启用零行为变更）────────────────────
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private volatile boolean shadowEnabled;
+    private @NonNull String sentinelTenantId = "";
+
     public JdbcAgentManageRepository(@NonNull DataSource dataSource,
                                      @NonNull AuditPort audit) {
         this.dataSource = dataSource;
         this.audit = audit;
+    }
+
+    /**
+     * 影子态装配入口：容器里存在 {@link AuthzShadowBinding} 即开启（P1 影子期），
+     * 不存在即完全关闭（零行为变更）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
     }
 
     @Override
@@ -87,6 +117,8 @@ public class JdbcAgentManageRepository implements AgentManagePort {
             throw new IllegalArgumentException(
                     "Agent 名称超长（>" + MAX_NAME_LENGTH + "）: " + name.length());
         }
+        // ⚠️ 影子比对（P1 只记日志）：Gate 算出的 ScopeFilter vs 本次绑定租户。
+        shadowCompare(tenantId);
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             Connection conn = lease.connection();
             conn.setAutoCommit(false);
@@ -144,6 +176,8 @@ public class JdbcAgentManageRepository implements AgentManagePort {
         if (definition == null || definition.isBlank()) {
             throw new IllegalArgumentException("发布版本必须包含 definition（JSON）");
         }
+        // ⚠️ 影子比对（P1 只记日志）：Gate 算出的 ScopeFilter vs 本次绑定租户。
+        shadowCompare(tenantId);
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             Connection conn = lease.connection();
             conn.setAutoCommit(false);
@@ -330,5 +364,16 @@ public class JdbcAgentManageRepository implements AgentManagePort {
         }
         return TransactionalConnectionHolder.openTenantConnection(
                 dataSource, new TenantContext(tenantId, "system", java.util.Set.of(), 0L));
+    }
+
+    // ── 影子辅助（守卫要求：声明与调用分离，入口真调用）────────────
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次绑定租户（只记日志）。
+     * 写主导仓无行租户染色点；全 SQL 显式 {@code tenant_id} 谓词 ⇒ hasTenantPredicate=true。
+     */
+    void shadowCompare(@NonNull String boundTenantId) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, "agent",
+                SubjectContext.forTenant(boundTenantId), boundTenantId, true);
     }
 }

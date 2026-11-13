@@ -218,7 +218,7 @@ class IndexGenerationBuilderTest {
             String normalizedGlobal = IndexGenerationBuilder.GLOBAL_SCAN_SQL
                     .replace("rag_global_tenant_id()", "BUCKET");
             String normalizedTenant = IndexGenerationBuilder.SCAN_SQL
-                    .replace("rag_current_tenant()", "BUCKET");
+                    .replace("{rag_tenant}", "BUCKET");
             assertThat(normalizedGlobal).isEqualTo(normalizedTenant);
         }
 

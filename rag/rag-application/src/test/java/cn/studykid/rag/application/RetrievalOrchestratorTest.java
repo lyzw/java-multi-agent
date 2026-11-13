@@ -17,6 +17,7 @@ import cn.studykid.rag.core.retrieval.RetrievalResult;
 import cn.studykid.rag.core.retrieval.RetrievalResult.HitReason;
 import cn.studykid.rag.core.retrieval.RetrievalResult.RetrievalChannel;
 import cn.studykid.rag.core.retrieval.RetrievalResult.ScoredChunk;
+import cn.studykid.rag.core.scope.RagScopeFilter;
 import cn.studykid.rag.core.version.EditionCoordinate;
 import cn.studykid.rag.core.version.EditionScope;
 import cn.studykid.rag.ports.RetrievalPort;
@@ -28,6 +29,15 @@ import cn.studykid.rag.ports.RetrievalPort;
  * 若顺序颠倒，被过滤掉的内容已流入上下文，闸门形同虚设。
  */
 class RetrievalOrchestratorTest {
+
+    /**
+     * 测试用作用域（RLS 清理 · M3）。
+     *
+     * <p>⚠️ 编排层<b>不</b>决定作用域，它只是搬运工——所以测试里给什么，
+     * 编排层就应当原样传到端口。此处固定一个普通租户档。
+     */
+    private static final RagScopeFilter SCOPE =
+            new RagScopeFilter.TenantWithGlobal("11111111-1111-1111-1111-111111111111");
 
     private static final EditionCoordinate PEP_2024 = new EditionCoordinate(
             EditionCoordinate.Subject.MATH, EditionCoordinate.GradeBand.GRADE_8,
@@ -67,12 +77,13 @@ class RetrievalOrchestratorTest {
         }
 
         @Override
-        public List<ScoredChunk> search(RetrievalRequest request) {
+        public List<ScoredChunk> search(RagScopeFilter scope, RetrievalRequest request) {
             return searchResults;
         }
 
         @Override
-        public List<Chunk> findByKnowledgePoint(String knowledgePointId, EditionScope editionScope) {
+        public List<Chunk> findByKnowledgePoint(RagScopeFilter scope, String knowledgePointId,
+                                                EditionScope editionScope) {
             return knowledgePointResults;
         }
 
@@ -94,12 +105,13 @@ class RetrievalOrchestratorTest {
         }
 
         @Override
-        public List<Chunk> findPrerequisites(String knowledgePointId, EditionScope editionScope) {
+        public List<Chunk> findPrerequisites(RagScopeFilter scope, String knowledgePointId,
+                                              EditionScope editionScope) {
             return List.of();
         }
 
         @Override
-        public List<Chunk> findSectionNeighbors(Chunk chunk, int limit) {
+        public List<Chunk> findSectionNeighbors(RagScopeFilter scope, Chunk chunk, int limit) {
             return List.of();
         }
 
@@ -111,13 +123,13 @@ class RetrievalOrchestratorTest {
          * {@code GroundedGenerationServiceTest} 单独覆盖。
          */
         @Override
-        public List<Chunk> loadByIds(List<String> chunkIds) {
+        public List<Chunk> loadByIds(RagScopeFilter scope, List<String> chunkIds) {
             return List.of();
         }
 
         @Override
         public List<cn.studykid.rag.core.knowledge.KnowledgePoint> resolveKnowledgePoints(
-                String query, String subject) {
+                RagScopeFilter scope, String query, String subject) {
             return List.of();
         }
     }
@@ -133,7 +145,7 @@ class RetrievalOrchestratorTest {
         RetrievalOrchestrator orchestrator = new RetrievalOrchestrator(
                 new StubRetrievalPort(candidates, List.of()), 0.0);
 
-        RetrievalResult result = orchestrator.retrieve(new RetrievalRequest(
+        RetrievalResult result = orchestrator.retrieve(SCOPE, new RetrievalRequest(
                 "顶点公式", RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
                 null, "数学", "八年级", 10));
 
@@ -152,7 +164,7 @@ class RetrievalOrchestratorTest {
         RetrievalOrchestrator orchestrator = new RetrievalOrchestrator(
                 new StubRetrievalPort(candidates, List.of()), 0.0);
 
-        RetrievalResult result = orchestrator.retrieve(new RetrievalRequest(
+        RetrievalResult result = orchestrator.retrieve(SCOPE, new RetrievalRequest(
                 "顶点公式", RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
                 null, "数学", "八年级", 10));
 
@@ -168,7 +180,7 @@ class RetrievalOrchestratorTest {
         RetrievalOrchestrator orchestrator = new RetrievalOrchestrator(
                 new StubRetrievalPort(candidates, List.of(), 0.9), 0.95);
 
-        RetrievalResult result = orchestrator.retrieve(new RetrievalRequest(
+        RetrievalResult result = orchestrator.retrieve(SCOPE, new RetrievalRequest(
                 "完全无关的问题", RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
                 null, "数学", "八年级", 10));
 
@@ -187,7 +199,7 @@ class RetrievalOrchestratorTest {
         RetrievalOrchestrator orchestrator = new RetrievalOrchestrator(
                 new StubRetrievalPort(searchHits, siblings), 0.0);
 
-        RetrievalResult result = orchestrator.retrieve(new RetrievalRequest(
+        RetrievalResult result = orchestrator.retrieve(SCOPE, new RetrievalRequest(
                 "顶点公式", RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
                 "kp-1", "数学", "八年级", 10));
 
@@ -206,7 +218,7 @@ class RetrievalOrchestratorTest {
         RetrievalOrchestrator orchestrator = new RetrievalOrchestrator(
                 new StubRetrievalPort(candidates, List.of()), 0.0);
 
-        RetrievalResult result = orchestrator.retrieve(new RetrievalRequest(
+        RetrievalResult result = orchestrator.retrieve(SCOPE, new RetrievalRequest(
                 "顶点公式", RetrievalMode.EXPLAIN,
                 EditionScope.preferredWithFallback(PEP_2024), null, "数学", "八年级", 10));
 
@@ -232,7 +244,7 @@ class RetrievalOrchestratorTest {
         RetrievalOrchestrator orchestrator = new RetrievalOrchestrator(
                 StubRetrievalPort.scored(List.of(weakButRanked)), 0.2);
 
-        RetrievalResult result = orchestrator.retrieve(new RetrievalRequest(
+        RetrievalResult result = orchestrator.retrieve(SCOPE, new RetrievalRequest(
                 "完全无关的问题", RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
                 null, "数学", "八年级", 10));
 
@@ -257,7 +269,7 @@ class RetrievalOrchestratorTest {
         RetrievalOrchestrator orchestrator = new RetrievalOrchestrator(
                 StubRetrievalPort.scored(List.of(b, a)), 0.0);
 
-        RetrievalResult result = orchestrator.retrieve(new RetrievalRequest(
+        RetrievalResult result = orchestrator.retrieve(SCOPE, new RetrievalRequest(
                 "顶点公式", RetrievalMode.EXPLAIN, EditionScope.strict(PEP_2024),
                 null, "数学", "八年级", 10));
 

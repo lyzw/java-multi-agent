@@ -131,7 +131,7 @@ public class IndexGenerationBuilder {
                  ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
             JOIN rag_source src
                  ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-            WHERE c.tenant_id = rag_current_tenant()
+            WHERE c.tenant_id = {rag_tenant}
               AND src.ver_status = 'VERIFIED'
               AND doc.ver_status = 'VERIFIED'
               AND doc.retrievable
@@ -148,7 +148,7 @@ public class IndexGenerationBuilder {
                  ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
             JOIN rag_source src
                  ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-            WHERE c.tenant_id = rag_current_tenant()
+            WHERE c.tenant_id = {rag_tenant}
               AND src.ver_status = 'VERIFIED'
               AND doc.ver_status = 'VERIFIED'
               AND doc.retrievable
@@ -164,12 +164,12 @@ public class IndexGenerationBuilder {
      * （与 {@code ChunkIndexer.GLOBAL_PENDING_SQL} 同款纪律）。
      */
     static final String GLOBAL_SCAN_SQL = SCAN_SQL.replace(
-            "WHERE c.tenant_id = rag_current_tenant()",
+            "WHERE c.tenant_id = {rag_tenant}",
             "WHERE c.tenant_id = rag_global_tenant_id()");
 
     /** 全局桶的计数 SQL —— 同样派生自 {@link #COUNT_SQL}。 */
     static final String GLOBAL_COUNT_SQL = COUNT_SQL.replace(
-            "WHERE c.tenant_id = rag_current_tenant()",
+            "WHERE c.tenant_id = {rag_tenant}",
             "WHERE c.tenant_id = rag_global_tenant_id()");
 
     /** 扫描通道：租户桶走应用连接；全局桶走运维数据源且**不设会话租户**。 */
@@ -415,10 +415,11 @@ public class IndexGenerationBuilder {
     }
 
     private long countEligible(@NonNull String tenantId) {
+        String countSql = COUNT_SQL.replace("{rag_tenant}", "'" + tenantId + "'::uuid");
         Long n = transactionTemplate.execute(status -> {
             jdbcTemplate.queryForObject(
                     "SELECT set_config('app.tenant_id', ?, true)", String.class, tenantId);
-            return jdbcTemplate.queryForObject(COUNT_SQL, Long.class);
+            return jdbcTemplate.queryForObject(countSql, Long.class);
         });
         return n == null ? 0 : n;
     }
@@ -457,7 +458,11 @@ public class IndexGenerationBuilder {
 
     /** 租户通道（应用连接 + 本租户谓词 + 设会话租户）。 */
     private ScanChannel tenantChannel(@NonNull String tenantId) {
-        return new ScanChannel(jdbcTemplate, transactionTemplate, SCAN_SQL, COUNT_SQL, tenantId);
+        // ⚠️ M3（RLS 清理）：租户谓词由显式 UUID 字面量注入（set_config 仅保留为 RLS 兼容层）。
+        String tenantLiteral = "'" + tenantId + "'::uuid";
+        String scan = SCAN_SQL.replace("{rag_tenant}", tenantLiteral);
+        String count = COUNT_SQL.replace("{rag_tenant}", tenantLiteral);
+        return new ScanChannel(jdbcTemplate, transactionTemplate, scan, count, tenantId);
     }
 
     /** 全局通道（运维连接 + 全局哨兵谓词 + **不设**会话租户）。 */

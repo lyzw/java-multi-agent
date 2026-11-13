@@ -23,10 +23,20 @@ import cn.studykid.multiagent.infrastructure.security.AuthzDecisionRecorder;
 import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
 import cn.studykid.multiagent.infrastructure.security.JdbcAuthzDecisionLog;
 import cn.studykid.multiagent.infrastructure.security.NoOpAuthzDecisionRecorder;
+import cn.studykid.multiagent.infrastructure.persistence.JdbcAgentChatAuditRepository;
+import cn.studykid.multiagent.ports.persistence.AuditPort;
+import cn.studykid.multiagent.infrastructure.persistence.JdbcAgentManageRepository;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcAgentMetricRepository;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcAgentQueryRepository;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository;
+import cn.studykid.multiagent.infrastructure.persistence.JdbcExecutionSnapshotResolver;
+import cn.studykid.multiagent.infrastructure.persistence.JdbcRateLimiter;
+import cn.studykid.multiagent.infrastructure.persistence.cap.JdbcAgentReleaseArchiveRepository;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcResultQueryRepository;
+import cn.studykid.multiagent.infrastructure.persistence.JdbcRunEventAppendRepository;
+import cn.studykid.multiagent.infrastructure.persistence.JdbcRunClaimRepository;
+import cn.studykid.multiagent.infrastructure.persistence.JdbcRunMessageRepository;
+import cn.studykid.multiagent.infrastructure.persistence.JdbcRunStepRepository;
 import cn.studykid.multiagent.infrastructure.persistence.cap.JdbcDelegationBudgetRepository;
 
 /**
@@ -60,13 +70,23 @@ class AuthzShadowWiringTest {
             "agent.authz.shadow.sampling.always-sample-resource-types", "run,tool_operation",
             "agent.authz.decision-log.enabled", "false");
 
-    /** 断言目标：5 个已接影子钩子的仓库（不论其注册方式）。 */
+    /** 断言目标：已接影子钩子的仓库（不论其注册方式）。 */
     private static final List<Class<?>> WIRED_REPOS = List.of(
             JdbcAgentQueryRepository.class,
             JdbcResultQueryRepository.class,
             JdbcBudgetRepository.class,
             JdbcAgentMetricRepository.class,
-            JdbcDelegationBudgetRepository.class);
+            JdbcDelegationBudgetRepository.class,
+            JdbcRunStepRepository.class,
+            JdbcRunMessageRepository.class,
+            JdbcRunClaimRepository.class,
+            JdbcExecutionSnapshotResolver.class,
+            JdbcAgentChatAuditRepository.class,
+            JdbcRunEventAppendRepository.class,
+            JdbcRateLimiter.class,
+            JdbcAgentReleaseArchiveRepository.class,
+            JdbcAgentManageRepository.class,
+            cn.studykid.multiagent.infrastructure.statistics.JdbcStatisticsRepository.class);
 
     /**
      * 组件扫描形态的仓库（{@code @Repository}）。
@@ -79,10 +99,12 @@ class AuthzShadowWiringTest {
     private static final List<Class<?>> COMPONENT_REPOS = List.of(
             JdbcAgentQueryRepository.class,
             JdbcResultQueryRepository.class,
-            JdbcAgentMetricRepository.class);
+            JdbcAgentMetricRepository.class,
+            JdbcRunEventAppendRepository.class,
+            cn.studykid.multiagent.infrastructure.statistics.JdbcStatisticsRepository.class);
 
     @Test
-    @DisplayName("⚠️ 开启时：5 个仓库的影态字段真的被 Spring 填上（否则影子期从未运行却报 0）")
+    @DisplayName("⚠️ 开启时：已接影子钩子的仓库影态字段真的被 Spring 填上（否则影子期从未运行却报 0）")
     void enabled_wiresAllRepositories() throws Exception {
         try (AnnotationConfigApplicationContext ctx = context(SHADOW_ON)) {
             assertThat(ctx.getBean(AuthzShadowBinding.class)).isNotNull();
@@ -172,6 +194,78 @@ class AuthzShadowWiringTest {
         @Bean
         JdbcDelegationBudgetRepository jdbcDelegationBudgetRepository(DataSource dataSource) {
             return new JdbcDelegationBudgetRepository(dataSource);
+        }
+
+        /** 与生产一致（ApplicationConfiguration#runStepPort）：@Bean 注册 + 影子 setter 注入。 */
+        @Bean
+        JdbcRunStepRepository jdbcRunStepRepository(DataSource dataSource) {
+            return new JdbcRunStepRepository(dataSource);
+        }
+
+        /** 与生产一致（ApplicationConfiguration#runMessagePort）：@Bean 注册 + 影子 setter 注入。 */
+        @Bean
+        JdbcRunMessageRepository jdbcRunMessageRepository(DataSource dataSource) {
+            return new JdbcRunMessageRepository(dataSource);
+        }
+
+        /** 与生产一致（ApplicationConfiguration#runClaimPort）：@Bean 注册 + 影子 setter 注入。 */
+        @Bean
+        JdbcRunClaimRepository jdbcRunClaimRepository(DataSource dataSource) {
+            return new JdbcRunClaimRepository(dataSource);
+        }
+
+        /** 与生产一致（ApplicationConfiguration#executionSnapshotPort）：@Bean 注册 + 影子 setter 注入。 */
+        @Bean
+        JdbcExecutionSnapshotResolver jdbcExecutionSnapshotResolver(DataSource dataSource) {
+            return new JdbcExecutionSnapshotResolver(dataSource);
+        }
+
+        /** 与生产一致（AgentChatConfiguration#agentChatAuditPort）：@Bean 注册 + 影子 setter 注入。 */
+        @Bean
+        JdbcAgentChatAuditRepository jdbcAgentChatAuditRepository(DataSource dataSource) {
+            return new JdbcAgentChatAuditRepository(dataSource);
+        }
+
+        /** 与生产一致（ApplicationConfiguration#rateLimitPort）：@Bean 注册 + 影子 setter 注入。 */
+        @Bean
+        JdbcRateLimiter jdbcRateLimiter(DataSource dataSource) {
+            return new JdbcRateLimiter(dataSource, 1L, 1L);
+        }
+
+        /** 与生产一致（ApplicationConfiguration#agentReleaseArchivePort）：@Bean 注册 + 影子 setter 注入。 */
+        @Bean
+        cn.studykid.multiagent.infrastructure.persistence.cap.JdbcAgentReleaseArchiveRepository
+                jdbcAgentReleaseArchiveRepository(DataSource dataSource) {
+            return new cn.studykid.multiagent.infrastructure.persistence.cap
+                    .JdbcAgentReleaseArchiveRepository(dataSource);
+        }
+
+        /**
+         * 与生产一致（ApplicationConfiguration#agentManagePort 内层构造）：@Bean 注册 +
+         * 影子 setter 注入。生产外层再包 DualWriteAgentManagePort；装配观测只看内层仓
+         * 的影态字段是否真被 Spring 填上。审计用匿名空实现（装配测试不触审计语义）。
+         */
+        @Bean
+        JdbcAgentManageRepository jdbcAgentManageRepository(DataSource dataSource) {
+            return new JdbcAgentManageRepository(dataSource, new AuditPort() {
+                @Override
+                public void recordRequired(String tenantId, String actorId, String action,
+                        String resourceType, String resourceId,
+                        java.util.Map<String, Object> detail) {
+                }
+
+                @Override
+                public void recordAccess(String tenantId, String actorId, String action,
+                        String resourceType, String resourceId,
+                        java.util.Map<String, Object> detail) {
+                }
+
+                @Override
+                public java.util.List<AuditPort.AuditView> findByResource(String tenantId,
+                        String resourceType, String resourceId) {
+                    return java.util.List.of();
+                }
+            });
         }
     }
 

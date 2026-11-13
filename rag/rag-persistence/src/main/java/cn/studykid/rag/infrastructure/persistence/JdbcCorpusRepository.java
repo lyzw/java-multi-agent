@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import cn.studykid.rag.core.chunk.Chunk;
+import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
 import cn.studykid.rag.infrastructure.ops.RagOpsUnavailableException;
 import cn.studykid.rag.ports.CorpusRepository;
@@ -24,9 +25,9 @@ import cn.studykid.rag.ports.CorpusRepository;
  *
  * <p><b>⚠️ 租户隔离</b>：方法在事务内 {@code set_config('app.tenant_id', tenantId, true)}，
  * 使 V1 的 RLS FORCE 策略对本次写入生效（含子资源外键的复合租户约束）。
- * SQL 中显式取 {@code rag_current_tenant()} 做写入值是**功能性的**（不是优化器提示）：
+ * SQL 中显式取 {@code {rag_tenant}} 做写入值是**功能性的**（不是优化器提示）：
  * 它把写入牢牢钉在「本租户」这一档，全局哨兵租户因此永远写不出来
- * （即便有人直连改 {@code app.tenant_id}，也会先被 {@code rag_current_tenant()} 抛错拦住）。
+ * （即便有人直连改 {@code app.tenant_id}，也会先被 {@code {rag_tenant}} 抛错拦住）。
  */
 public class JdbcCorpusRepository implements CorpusRepository {
 
@@ -60,6 +61,16 @@ public class JdbcCorpusRepository implements CorpusRepository {
         this.opsSession = opsSession;
     }
 
+    /**
+     * 全局哨兵租户的显式 UUID 字面量（RLS 清理 · M3）。
+     *
+     * <p>⚠️ 原 SQL 用 {@code {rag_sentinel}}（读 IMMUTABLE 常量函数，不依赖 GUC）。
+     * 改为绑定应用侧常量 {@link RagScope#GLOBAL_TENANT_ID} 的字面量，
+     * 使谓词不再依赖任何 GUC / PG 函数，M5 删函数时零改动。
+     */
+    private static final String SENTINEL_TENANT_LITERAL =
+            "'" + RagScope.GLOBAL_TENANT_ID + "'::uuid";
+
     // ---------------------------------------------------------------------
     // ⚠️⚠️ 代际号的取法（RAG-D13 §3.5.2 蓝绿切换）
     //
@@ -91,6 +102,9 @@ public class JdbcCorpusRepository implements CorpusRepository {
         //    （A result was returned when none was expected）。
         jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                 String.class, tenantId);
+        // ⚠️ M3（RLS 清理）：租户列从「读 GUC 的 {rag_tenant}」收口为显式 UUID 字面量，
+        //    隔离权威移交应用层；set_config 兼容层保留至 M4-R2 退役。
+        String tenantLiteral = "'" + tenantId + "'::uuid";
         // ⚠️⚠️ V1.0.2 §4 Z11 / 不变式 3「陈旧向量不可能」——**重灌纪律内置化**：
         //    必须是 ON CONFLICT DO UPDATE 且**把 text_jieba 清成空串**。
         //    理由：ChunkIndexer 的待索引判据是 `text_jieba='' OR 无向量行`。
@@ -104,10 +118,10 @@ public class JdbcCorpusRepository implements CorpusRepository {
                      page_number, section_path, exercise_no, char_start, char_end, kp_ids,
                      exercise_ref, content_hash, embed_model, index_generation,
                      in_answer_zone, block_type, matched_prefix)
-                VALUES (?::uuid, rag_current_tenant(), ?::uuid, ?::uuid, ?::rag_chunk_role, ?,
+                VALUES (?::uuid, {rag_tenant}, ?::uuid, ?::uuid, ?::rag_chunk_role, ?,
                         '', ?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?,
                         COALESCE((SELECT g.generation FROM rag_index_generation g
-                                   WHERE g.tenant_id = rag_current_tenant()
+                                   WHERE g.tenant_id = {rag_tenant}
                                      AND g.status = 'ACTIVE' LIMIT 1), 1),
                         ?, ?, ?)
                 ON CONFLICT (chunk_id) DO UPDATE SET
@@ -127,7 +141,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
                     in_answer_zone = EXCLUDED.in_answer_zone,
                     block_type = EXCLUDED.block_type,
                     matched_prefix = EXCLUDED.matched_prefix
-                """,
+                """.replace("{rag_tenant}", tenantLiteral),
                 chunk.id(), chunk.documentId(), editionId, chunk.role().name(), chunk.text(),
                 chunk.locator().pageNumber(), chunk.locator().sectionPath(),
                 chunk.locator().exerciseNo(), chunk.locator().charStart(),
@@ -140,13 +154,14 @@ public class JdbcCorpusRepository implements CorpusRepository {
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, index_generation, embed_model, embedding)
-                VALUES (?::uuid, rag_current_tenant(), COALESCE((SELECT g.generation FROM rag_index_generation g
-                                       WHERE g.tenant_id = rag_current_tenant()
+                VALUES (?::uuid, {rag_tenant}, COALESCE((SELECT g.generation FROM rag_index_generation g
+                                       WHERE g.tenant_id = {rag_tenant}
                                          AND g.status = 'ACTIVE' LIMIT 1), 1), ?, %s)
                 ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
                     embed_model = EXCLUDED.embed_model,
                     embedding = EXCLUDED.embedding
-                """.formatted(vectorColumn.castPlaceholder()),
+                """.replace("{rag_tenant}", tenantLiteral)
+                      .formatted(vectorColumn.castPlaceholder()),
                 chunk.id(), embedModel, vectorToString(embedding));
     }
 
@@ -160,9 +175,11 @@ public class JdbcCorpusRepository implements CorpusRepository {
                 String.class, tenantId);
         // ⚠️ document_id 必须显式转 uuid（列是 uuid，参数以字符串传入时
         //    PG 无 uuid = varchar 运算符）。
+        // ⚠️ M3（RLS 清理）：补显式租户谓词——原仅靠 set_config + RLS FORCE 兜底，
+        //    M4-R2 退役 RLS 后会退化成「按 document_id 跨租户 UPDATE」（Sev-0）。
         jdbcTemplate.update(
-                "UPDATE rag_document SET parse_status = ? WHERE document_id = ?::uuid",
-                parseStatus, documentId);
+                "UPDATE rag_document SET parse_status = ? WHERE tenant_id = ?::uuid AND document_id = ?::uuid",
+                parseStatus, tenantId, documentId);
     }
 
     @Override
@@ -178,8 +195,11 @@ public class JdbcCorpusRepository implements CorpusRepository {
         //    PG 无 {@code uuid = varchar} 运算符，运行期直接报
         //    「operator does not exist: uuid = character varying」。
         //    这条路径此前从未被真正调用过（重索引从未跑通），故一直潜伏。
+        // ⚠️ M3（RLS 清理）：补显式租户谓词——原仅靠 set_config + RLS FORCE 兜底，
+        //    M4-R2 退役 RLS 后会退化成「按 chunk_id 跨租户 UPDATE」（Sev-0）。
         jdbcTemplate.update(
-                "UPDATE rag_chunk SET text_jieba = ? WHERE chunk_id = ?::uuid", jiebaTokens, chunkId);
+                "UPDATE rag_chunk SET text_jieba = ? WHERE tenant_id = ?::uuid AND chunk_id = ?::uuid",
+                jiebaTokens, tenantId, chunkId);
     }
 
     @Override
@@ -192,22 +212,25 @@ public class JdbcCorpusRepository implements CorpusRepository {
         //    （A result was returned when none was expected）。
         jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                 String.class, tenantId);
+        // ⚠️ M3（RLS 清理）：租户列收口为显式 UUID 字面量，隔离权威移交应用层。
+        String tenantLiteral = "'" + tenantId + "'::uuid";
         // ⚠️ ON CONFLICT (chunk_id)：片段已存在则更新向量与模型标识；否则插入。
-        //    PK 为 chunk_id（单列），tenant_id 经 rag_current_tenant() 取值，
-        //    与 V1 的 RLS WITH CHECK 一致（tenant_id = rag_current_tenant()）。
-        // ⚠️ chunk_id 必须显式转 uuid：列是 uuid、参数以字符串传入时，
+        //    PK 为 chunk_id（单列），tenant_id 经显式字面量取值，
+        //    与 V1 的 RLS WITH CHECK 一致（tenant_id = 本租户）。
+        // ⚠️ chunk_id 必须显式转 uuid：列是 uuid，参数以字符串传入时，
         //    PG 报「column chunk_id is of type uuid but expression is of type character varying」。
         //    2026-10-23 由管理面「重跑索引」端点首次真实触发并暴露（此前该路径从未跑通）。
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, index_generation, embed_model, embedding)
-                VALUES (?::uuid, rag_current_tenant(), COALESCE((SELECT g.generation FROM rag_index_generation g
-                                       WHERE g.tenant_id = rag_current_tenant()
+                VALUES (?::uuid, {rag_tenant}, COALESCE((SELECT g.generation FROM rag_index_generation g
+                                       WHERE g.tenant_id = {rag_tenant}
                                          AND g.status = 'ACTIVE' LIMIT 1), 1), ?, %s)
                 ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     embed_model = EXCLUDED.embed_model
-                """.formatted(vectorColumn.castPlaceholder()),
+                """.replace("{rag_tenant}", tenantLiteral)
+                      .formatted(vectorColumn.castPlaceholder()),
                 chunkId, embedModel, vectorToString(embedding));
     }
 
@@ -251,16 +274,17 @@ public class JdbcCorpusRepository implements CorpusRepository {
             throw new IllegalArgumentException("代际号必须 >= 1，收到：" + generation);
         }
         // ⚠️ 走运维会话窗（BYPASSRLS），且**不设会话租户**：
-        //    填全局哨兵会让 rag_current_tenant() 直接抛错（V8 封堵）。
+        //    填全局哨兵会让 {rag_tenant} 直接抛错（V8 封堵）。
         requireOpsSession().inGlobalCorpusSession((template, tx) -> template.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, scope, index_generation, embed_model, embedding)
-                VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM', ?, ?, %s)
+                VALUES (?::uuid, {rag_sentinel}, 'PLATFORM', ?, ?, %s)
                 ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     embed_model = EXCLUDED.embed_model
-                WHERE rag_chunk_embedding.tenant_id = rag_global_tenant_id()
-                """.formatted(vectorColumn.castPlaceholder()),
+                WHERE rag_chunk_embedding.tenant_id = {rag_sentinel}
+                """.replace("{rag_sentinel}", SENTINEL_TENANT_LITERAL)
+                      .formatted(vectorColumn.castPlaceholder()),
                 chunkId, generation, embedModel, vectorToString(embedding)));
     }
 
@@ -275,7 +299,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
      * 而本方法跑在运维连接上——注解只会白借一条应用连接，
      * 对运维连接上的原子性毫无作用（还会在窗口外触发 guarded 数据源的拒绝）。
      *
-     * <p>⚠️ {@code AND tenant_id = rag_global_tenant_id()} <b>不是冗余</b>：
+     * <p>⚠️ {@code AND tenant_id = {rag_sentinel}} <b>不是冗余</b>：
      * 租户版那条 UPDATE 靠 RLS 的 USING 谓词把行范围限在本租户，
      * 而运维角色带 BYPASSRLS、策略对它不设防 —— 去掉这个谓词，
      * 一个传错的 chunk_id 就会改到<b>别的租户</b>的词法列且无人拦。
@@ -284,8 +308,9 @@ public class JdbcCorpusRepository implements CorpusRepository {
     public void updateJiebaTokensInGlobalBucket(@NonNull String chunkId,
                                                 @NonNull String jiebaTokens) {
         requireOpsSession().inGlobalCorpusSession((template, tx) -> template.update(
-                "UPDATE rag_chunk SET text_jieba = ?"
-                        + " WHERE chunk_id = ?::uuid AND tenant_id = rag_global_tenant_id()",
+                ("UPDATE rag_chunk SET text_jieba = ?"
+                        + " WHERE chunk_id = ?::uuid AND tenant_id = {rag_sentinel}")
+                        .replace("{rag_sentinel}", SENTINEL_TENANT_LITERAL),
                 jiebaTokens, chunkId));
     }
 
@@ -301,7 +326,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
      * 「{@code scope='PLATFORM' ⇔ tenant_id=哨兵}」——照租户版那样省略这一列，
      * 全局插入会因为「租户是哨兵、作用域却是 TENANT」被 CHECK <b>恒拒</b>
      * （2026-10-29 对空 DDL 逐列核对时发现；租户路径不踩这条，因为它的
-     * {@code rag_current_tenant()} 永远不是哨兵，默认值恰好自洽）。
+     * {@code {rag_tenant}} 永远不是哨兵，默认值恰好自洽）。
      */
     @Override
     public void upsertEmbeddingInGlobalBucket(@NonNull String chunkId,
@@ -311,16 +336,17 @@ public class JdbcCorpusRepository implements CorpusRepository {
         requireOpsSession().inGlobalCorpusSession((template, tx) -> template.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, scope, index_generation, embed_model, embedding)
-                VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM',
+                VALUES (?::uuid, {rag_sentinel}, 'PLATFORM',
                         COALESCE((SELECT g.generation FROM rag_index_generation g
-                                   WHERE g.tenant_id = rag_global_tenant_id()
+                                   WHERE g.tenant_id = {rag_sentinel}
                                      AND g.status = 'ACTIVE' LIMIT 1), 1),
                         ?, %s)
                 ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     embed_model = EXCLUDED.embed_model
-                WHERE rag_chunk_embedding.tenant_id = rag_global_tenant_id()
-                """.formatted(vectorColumn.castPlaceholder()),
+                WHERE rag_chunk_embedding.tenant_id = {rag_sentinel}
+                """.replace("{rag_sentinel}", SENTINEL_TENANT_LITERAL)
+                      .formatted(vectorColumn.castPlaceholder()),
                 chunkId, embedModel, vectorToString(embedding)));
     }
 
@@ -350,10 +376,10 @@ public class JdbcCorpusRepository implements CorpusRepository {
                          page_number, section_path, exercise_no, char_start, char_end, kp_ids,
                          exercise_ref, content_hash, embed_model, index_generation,
                          in_answer_zone, block_type, matched_prefix, scope)
-                    VALUES (?::uuid, rag_global_tenant_id(), ?::uuid, ?::uuid, ?::rag_chunk_role, ?,
+                    VALUES (?::uuid, {rag_sentinel}, ?::uuid, ?::uuid, ?::rag_chunk_role, ?,
                             '', ?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?,
                             COALESCE((SELECT g.generation FROM rag_index_generation g
-                                       WHERE g.tenant_id = rag_global_tenant_id()
+                                       WHERE g.tenant_id = {rag_sentinel}
                                          AND g.status = 'ACTIVE' LIMIT 1), 1),
                             ?, ?, ?,
                             'PLATFORM')
@@ -374,7 +400,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
                         in_answer_zone = EXCLUDED.in_answer_zone,
                         block_type = EXCLUDED.block_type,
                         matched_prefix = EXCLUDED.matched_prefix
-                    """,
+                    """.replace("{rag_sentinel}", SENTINEL_TENANT_LITERAL),
                     chunk.id(), chunk.documentId(), editionId, chunk.role().name(), chunk.text(),
                     chunk.locator().pageNumber(), chunk.locator().sectionPath(),
                     chunk.locator().exerciseNo(), chunk.locator().charStart(),
@@ -390,16 +416,17 @@ public class JdbcCorpusRepository implements CorpusRepository {
             opsTemplate.update("""
                     INSERT INTO rag_chunk_embedding
                         (chunk_id, tenant_id, scope, index_generation, embed_model, embedding)
-                    VALUES (?::uuid, rag_global_tenant_id(), 'PLATFORM',
+                    VALUES (?::uuid, {rag_sentinel}, 'PLATFORM',
                             COALESCE((SELECT g.generation FROM rag_index_generation g
-                                       WHERE g.tenant_id = rag_global_tenant_id()
+                                       WHERE g.tenant_id = {rag_sentinel}
                                          AND g.status = 'ACTIVE' LIMIT 1), 1),
                             ?, %s)
                     ON CONFLICT (tenant_id, chunk_id, index_generation) DO UPDATE SET
                         embedding = EXCLUDED.embedding,
                         embed_model = EXCLUDED.embed_model
-                    WHERE rag_chunk_embedding.tenant_id = rag_global_tenant_id()
-                    """.formatted(vectorColumn.castPlaceholder()),
+                WHERE rag_chunk_embedding.tenant_id = {rag_sentinel}
+                """.replace("{rag_sentinel}", SENTINEL_TENANT_LITERAL)
+                      .formatted(vectorColumn.castPlaceholder()),
                     chunk.id(), embedModel, vectorToString(embedding));
             return null;
         }));
@@ -411,15 +438,16 @@ public class JdbcCorpusRepository implements CorpusRepository {
      * <p>⚠️ <b>不标 {@code @Transactional}</b>：同 {@link #updateJiebaTokensInGlobalBucket}
      * —— 注解绑定的主事务管理器对运维连接无效。
      *
-     * <p>⚠️ {@code AND tenant_id = rag_global_tenant_id()} 承重（非冗余）：
+     * <p>⚠️ {@code AND tenant_id = {rag_sentinel}} 承重（非冗余）：
      * 运维角色带 BYPASSRLS、策略不设防，去掉它一个传错的 document_id 会改到别的租户。
      */
     @Override
     public void markDocumentParseStatusInGlobalBucket(@NonNull String documentId,
                                                      @NonNull String parseStatus) {
         requireOpsSession().inGlobalCorpusSession((opsTemplate, opsTx) -> opsTemplate.update(
-                "UPDATE rag_document SET parse_status = ?"
-                        + " WHERE document_id = ?::uuid AND tenant_id = rag_global_tenant_id()",
+                ("UPDATE rag_document SET parse_status = ?"
+                        + " WHERE document_id = ?::uuid AND tenant_id = {rag_sentinel}")
+                        .replace("{rag_sentinel}", SENTINEL_TENANT_LITERAL),
                 parseStatus, documentId));
     }
 

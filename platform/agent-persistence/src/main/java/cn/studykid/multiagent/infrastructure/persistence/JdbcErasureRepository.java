@@ -33,8 +33,8 @@ import org.springframework.beans.factory.annotation.Autowired;
  *
  * <p><b>五条不变量</b>：
  * <ol>
- *   <li><b>全部走租户连接</b>（D-4）—— 经 {@link TransactionalConnectionHolder#inTransaction}，
- *       使 RLS 策略对每个 DELETE 生效。本类<b>刻意不提供</b> admin 连接的删除路径：
+ *   <li><b>全部走租户连接</b>（D-4）—— 经 {@link TransactionalConnectionHolder#inTransaction}。
+ *       本类<b>刻意不提供</b> admin 连接的删除路径：
  *       批量删除的影响面太大，不能依赖调用方记得传租户。</li>
  *   <li><b>Prompt 只置空不删行</b>（D-2）—— 删 {@code run} 行会经
  *       {@code ON DELETE CASCADE} 级联删除 {@code weakness_record}，那是业务数据。</li>
@@ -54,8 +54,14 @@ import org.springframework.beans.factory.annotation.Autowired;
  * 与 {@link #findCertificates}（查删除凭证）均带显式 {@code tenant_id = ?::uuid} 谓词
  * （{@code hasTenantPredicate=true}），已接影子钩子。
  * 其余方法为 DELETE/UPDATE/INSERT（写路径，含 {@code consent_withdrawal} /
- * {@code erasure_certificate} 之外的多张表的清理），写隔离由 RLS 的 {@code WITH CHECK}
- * 保证，属 P2 双写期接入范围 —— P1 不观测。
+ * {@code erasure_certificate} 之外的多张表的清理），属 P2 双写期接入范围 —— P1 不观测。
+ *
+ * <p>⚠️ <b>隔离保证口径（RLS 清理 · WP-M1-3 修正）</b>：本类<b>全部</b>语句
+ * （读与写）都自带显式 {@code tenant_id = ?::uuid} 谓词（逐条核对见各方法），
+ * 隔离由<b>应用层谓词</b>保证，不依赖 RLS 的 {@code WITH CHECK} —— 后者只是纵深防御。
+ * 因此 RLS 退役后本类的隔离语义<b>不变</b>（rlsDependent=0）。
+ * {@link #inTenantTx} 的 holder 中心租户绑定是 M1 的许可形态
+ * （RLS 在场时工作的前提），随 M4/M5 退役批次统一收口。
  */
 public class JdbcErasureRepository implements ErasurePort {
 
@@ -604,6 +610,13 @@ public class JdbcErasureRepository implements ErasurePort {
         return out;
     }
 
+    /**
+     * 租户事务入口（holder 中心绑定，M1 许可形态）。
+     *
+     * <p>⚠️ 隔离<b>不</b>依赖这里的租户绑定：本类全部语句自带显式
+     * {@code tenant_id} 谓词（见类注释「隔离保证口径」）。
+     * 绑定本身随 RLS 退役在 M4/M5 统一收口，届时本方法逐字不变、语义不变。
+     */
     private <T> T inTenantTx(String tenantId, TxAction<T> action) {
         return TransactionalConnectionHolder.inTransaction(
                 dataSource,

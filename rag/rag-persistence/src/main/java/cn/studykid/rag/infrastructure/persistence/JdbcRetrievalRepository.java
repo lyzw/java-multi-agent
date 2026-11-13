@@ -22,6 +22,7 @@ import cn.studykid.rag.core.retrieval.RetrievalRequest;
 import cn.studykid.rag.core.retrieval.RetrievalResult.HitReason;
 import cn.studykid.rag.core.retrieval.RetrievalResult.RetrievalChannel;
 import cn.studykid.rag.core.retrieval.RetrievalResult.ScoredChunk;
+import cn.studykid.rag.core.scope.RagScopeFilter;
 import cn.studykid.rag.core.source.TrustTier;
 import cn.studykid.rag.core.version.EditionCoordinate;
 import cn.studykid.rag.core.version.EditionCoordinate.GradeBand;
@@ -29,6 +30,9 @@ import cn.studykid.rag.core.version.EditionCoordinate.Publisher;
 import cn.studykid.rag.core.version.EditionCoordinate.Subject;
 import cn.studykid.rag.core.version.EditionCoordinate.Term;
 import cn.studykid.rag.core.version.EditionScope;
+import cn.studykid.rag.infrastructure.persistence.scope.RagSqlFragment;
+import cn.studykid.rag.infrastructure.persistence.scope.RagSqlScopeTranslator;
+import cn.studykid.rag.infrastructure.shadow.RagShadow;
 import cn.studykid.rag.infrastructure.text.ChineseTokenizer;
 import cn.studykid.rag.management.core.CorpusSource;
 import cn.studykid.rag.ports.EmbeddingPort;
@@ -52,14 +56,29 @@ import cn.studykid.rag.ports.RetrievalPort;
  * {@code RetrievalPolicy.allowsRole} 角色过滤——答案类内容不进应用层内存。
  * （编排层 {@code RetrievalOrchestrator} 会再做一次，幂等。）
  *
- * <p><b>⚠️ 租户隔离（双作用域，迁移 V8 起）</b>：依赖 RLS 的读策略
- * {@code tenant_id IN (rag_current_tenant(), rag_global_tenant_id())}，
- * 由调用方在事务内 {@code set_config('app.tenant_id', ..., true)} 提供当前租户；
- * 本类不自行解析令牌、不硬编码租户。
+ * <p><b>⚠️ 租户隔离（双作用域，迁移 V8 起）</b>：读侧谓词是
+ * {@code tenant_id IN (本租户, 全局哨兵)} —— <b>本租户私有数据 ∪ 平台公开数据</b>。
+ *
+ * <p><b>⚠️ 隔离权威口径（RLS 清理 · M3，2026-11-12）</b>：本类的租户谓词
+ * <b>由调用方显式传入</b>的 {@link RagScopeFilter} 经 {@link RagSqlScopeTranslator}
+ * 渲染成绑定参数，<b>不再</b>依赖 {@code rag_current_tenant()} 读取会话变量。
+ * <ul>
+ *   <li><b>为什么必须改</b>：{@code rag_current_tenant()} 读的是会话变量
+ *       {@code app.tenant_id}；变量未绑定 ⇒ 返回 NULL ⇒
+ *       {@code IN (NULL, 哨兵)} 恒不匹配 ⇒ <b>租户语料静默消失</b>
+ *       （不报错，检索恒空，排查成本极高）；</li>
+ *   <li><b>为什么 RLS 在场期行为不变</b>：显式谓词渲染出的集合与现役 RLS 读策略
+ *       {@code tenant_id = ANY(ARRAY[rag_current_tenant(), rag_global_tenant_id()])}
+ *       <b>逐字等价</b>（同一个本租户 + 同一个哨兵），两层同向收紧 ⇒ 结果集不变；</li>
+ *   <li><b>为什么哨兵绑常量而不是函数</b>：{@code rag_global_tenant_id()} 是
+ *       IMMUTABLE 常量函数（不依赖 GUC），但它随 M5 删除；
+ *       应用侧已有同值 Java 常量 {@link cn.studykid.rag.core.scope.RagScope#GLOBAL_TENANT_ID}，
+ *       绑常量可让 M5 删函数时 SQL 侧零改动。</li>
+ * </ul>
  *
  * <p>⚠️⚠️ <b>SQL 里的显式租户谓词是功能性的，不是「优化器提示」</b>
  * （旧注释这么写过，是错的，且错得很危险）：RLS 读策略放开全局后，
- * 若这里仍写 {@code c.tenant_id = rag_current_tenant()}，
+ * 若这里仍写 {@code c.tenant_id = <本租户>}，
  * 全局语料会被这层 AND 条件<b>静默滤空</b>——实测同一份数据、同一个会话，
  * 老写法返回 1 行（只有自己）、新写法返回 2 行（全局 + 自己），
  * 见 {@code scripts/rag-corpus-scope-counterproof.sh} 的 P1-4/P1-1。
@@ -168,6 +187,14 @@ public class JdbcRetrievalRepository implements RetrievalPort {
     private final VectorColumn vectorColumn;
 
     /**
+     * 作用域 → SQL 谓词的翻译器（M3 显式化）。
+     *
+     * <p>⚠️ 本类<b>不</b>自行拼租户谓词：谓词形态由 {@link RagSqlScopeTranslator}
+     * 单点产出，避免「同一语义两处拼写」漂移（那正是全局语料被静默滤空的成因）。
+     */
+    private final RagSqlScopeTranslator scopeTranslator;
+
+    /**
      * 完整构造器：显式指定租户权威门槛（评审 P0-7 · G-3）与向量列形态。
      *
      * <p>⚠️ 门槛是<b>部署级服务端策略</b>（RAG-R07：生产下限 OFFICIAL_TUTORIAL），
@@ -183,6 +210,20 @@ public class JdbcRetrievalRepository implements RetrievalPort {
     public JdbcRetrievalRepository(JdbcTemplate jdbcTemplate, EmbeddingPort embeddingPort,
                                    cn.studykid.rag.core.source.TrustTier minTrustTier,
                                    VectorColumn vectorColumn) {
+        this(jdbcTemplate, embeddingPort, minTrustTier, vectorColumn,
+                RagSqlScopeTranslator.withDefaultSentinel());
+    }
+
+    /**
+     * 完整构造器（含作用域翻译器）。
+     *
+     * @param scopeTranslator 作用域翻译器（哨兵值须与
+     *        {@link cn.studykid.rag.core.scope.RagScope#GLOBAL_TENANT_ID} 同值）
+     */
+    public JdbcRetrievalRepository(JdbcTemplate jdbcTemplate, EmbeddingPort embeddingPort,
+                                   cn.studykid.rag.core.source.TrustTier minTrustTier,
+                                   VectorColumn vectorColumn,
+                                   RagSqlScopeTranslator scopeTranslator) {
         if (jdbcTemplate == null) {
             throw new IllegalArgumentException("jdbcTemplate 不能为空");
         }
@@ -191,6 +232,9 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         }
         if (minTrustTier == null) {
             throw new IllegalArgumentException("minTrustTier 不能为空");
+        }
+        if (scopeTranslator == null) {
+            throw new IllegalArgumentException("scopeTranslator 不能为空");
         }
         if (vectorColumn == null) {
             throw new IllegalArgumentException("vectorColumn 不能为空");
@@ -207,6 +251,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         this.jdbcTemplate = jdbcTemplate;
         this.embeddingPort = embeddingPort;
         this.vectorColumn = vectorColumn;
+        this.scopeTranslator = scopeTranslator;
         // ⚠️⚠️ 门槛展开为「达标等级 IN 列表」而非 `trust_tier >= ?`：
         //    PG 枚举按声明序比较，rag_trust_tier 声明序与权威语义**相反**
         //    （UNVERIFIED 序数最大却最不权威）——`>=` 会整体反转语义，
@@ -222,9 +267,12 @@ public class JdbcRetrievalRepository implements RetrievalPort {
     }
 
     @Override
-    public @NonNull List<ScoredChunk> search(@NonNull RetrievalRequest request) {
-        List<ScoredChunk> dense = denseSearch(request);
-        List<ScoredChunk> lexical = lexicalSearch(request);
+    public @NonNull List<ScoredChunk> search(@NonNull RagScopeFilter scope,
+                                             @NonNull RetrievalRequest request) {
+        // M2 影子观察采集点（R1 检索读面）。禁用时 RagShadow.collect 为 no-op。
+        RagShadow.collect("retrieval");
+        List<ScoredChunk> dense = denseSearch(scope, request);
+        List<ScoredChunk> lexical = lexicalSearch(scope, request);
 
         // RRF 融合：按通道内排名倒数求和，排名取 1-based。
         Map<String, Double> fused = new LinkedHashMap<>();
@@ -256,19 +304,22 @@ public class JdbcRetrievalRepository implements RetrievalPort {
     }
 
     @Override
-    public @NonNull List<Chunk> findByKnowledgePoint(@NonNull String knowledgePointId,
-                                                    @NonNull EditionScope editionScope) {
+    public @NonNull List<Chunk> findByKnowledgePoint(@NonNull RagScopeFilter scope,
+                                                     @NonNull String knowledgePointId,
+                                                     @NonNull EditionScope editionScope) {
+        RagSqlFragment frag = scopeTranslator.render(scope, "c.tenant_id");
         String sql = """
                 SELECT %s
                 FROM rag_chunk c
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
+                WHERE %s
 %s
                   AND c.kp_ids @> CAST(ARRAY[?::uuid] AS uuid[])
-                """.formatted(SELECT_COLUMNS, admissiblePredicate);
-        List<Chunk> chunks = jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs), knowledgePointId);
+                """.formatted(SELECT_COLUMNS, frag.sql(), admissiblePredicate);
+        List<Chunk> chunks = jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs),
+                concat(frag.params(), new Object[]{}, knowledgePointId));
         // 版本过滤在 SQL 之外做：edition 坐标需 domain 对象比较。
         return chunks.stream()
                 .filter(c -> editionScope.admits(c.edition()))
@@ -276,15 +327,17 @@ public class JdbcRetrievalRepository implements RetrievalPort {
     }
 
     @Override
-    public @NonNull List<Chunk> findPrerequisites(@NonNull String knowledgePointId,
-                                                 @NonNull EditionScope editionScope) {
+    public @NonNull List<Chunk> findPrerequisites(@NonNull RagScopeFilter scope,
+                                                   @NonNull String knowledgePointId,
+                                                   @NonNull EditionScope editionScope) {
+        RagSqlFragment frag = scopeTranslator.render(scope, "tenant_id");
         String prereqSql = """
                 SELECT prerequisites
                 FROM rag_knowledge_point
-                WHERE tenant_id IN (rag_current_tenant(), rag_global_tenant_id()) AND kp_id = ?::uuid
-                """;
+                WHERE %s AND kp_id = ?::uuid
+                """.formatted(frag.sql());
         UUID[] prereqs = queryForUuidArray(
-                jdbcTemplate, prereqSql, knowledgePointId);
+                jdbcTemplate, prereqSql, concat(frag.params(), new Object[]{}, knowledgePointId));
         if (prereqs == null || prereqs.length == 0) {
             return List.of();
         }
@@ -302,33 +355,37 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
+                WHERE %s
 %s
                   AND c.kp_ids && ?::uuid[]
-                """.formatted(SELECT_COLUMNS, admissiblePredicate);
-        List<Chunk> chunks = jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs), arr.toString());
+                """.formatted(SELECT_COLUMNS, frag.sql(), admissiblePredicate);
+        List<Chunk> chunks = jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs),
+                concat(frag.params(), new Object[]{}, arr.toString()));
         return chunks.stream()
                 .filter(c -> editionScope.admits(c.edition()))
                 .toList();
     }
 
     @Override
-    public @NonNull List<Chunk> findSectionNeighbors(@NonNull Chunk chunk, int limit) {
+    public @NonNull List<Chunk> findSectionNeighbors(@NonNull RagScopeFilter scope,
+                                                     @NonNull Chunk chunk, int limit) {
+        RagSqlFragment frag = scopeTranslator.render(scope, "c.tenant_id");
         String sql = """
                 SELECT %s
                 FROM rag_chunk c
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
+                WHERE %s
 %s
-                  AND c.document_id = ?
-                  AND c.chunk_id <> ?
+                  AND c.document_id = ?::uuid
+                  AND c.chunk_id <> ?::uuid
                 ORDER BY abs(c.page_number - ?), c.char_start
                 LIMIT ?
-                """.formatted(SELECT_COLUMNS, admissiblePredicate);
+                """.formatted(SELECT_COLUMNS, frag.sql(), admissiblePredicate);
         return jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs),
-                chunk.documentId(), chunk.id(), chunk.locator().pageNumber(), limit);
+                concat(frag.params(), new Object[]{},
+                        chunk.documentId(), chunk.id(), chunk.locator().pageNumber(), limit));
     }
 
     /**
@@ -354,7 +411,10 @@ public class JdbcRetrievalRepository implements RetrievalPort {
      * 就会出现「内容已下架但讲解仍引用它」——比不引用更糟。
      */
     @Override
-    public @NonNull List<Chunk> loadByIds(@NonNull List<String> chunkIds) {
+    public @NonNull List<Chunk> loadByIds(@NonNull RagScopeFilter scope,
+                                          @NonNull List<String> chunkIds) {
+        // M2 影子观察采集点（R1 检索读面）。禁用时 RagShadow.collect 为 no-op。
+        RagShadow.collect("retrieval");
         if (chunkIds.isEmpty()) {
             return List.of();
         }
@@ -366,30 +426,35 @@ public class JdbcRetrievalRepository implements RetrievalPort {
             arr.append(chunkIds.get(i));
         }
         arr.append('}');
+        RagSqlFragment frag = scopeTranslator.render(scope, "c.tenant_id");
         String sql = """
                 SELECT %s
                 FROM rag_chunk c
                 JOIN rag_edition ed ON c.edition_id = ed.edition_id AND c.tenant_id = ed.tenant_id
                 JOIN rag_document doc ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
+                WHERE %s
 %s
                   AND c.chunk_id = ANY(?::uuid[])
-                """.formatted(SELECT_COLUMNS, admissiblePredicate);
-        return jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs), arr.toString());
+                """.formatted(SELECT_COLUMNS, frag.sql(), admissiblePredicate);
+        return jdbcTemplate.query(sql, (rs, i) -> mapChunk(rs),
+                concat(frag.params(), new Object[]{}, arr.toString()));
     }
 
     @Override
-    public @NonNull List<KnowledgePoint> resolveKnowledgePoints(@NonNull String query,
-                                                              @Nullable String subject) {
+    public @NonNull List<KnowledgePoint> resolveKnowledgePoints(@NonNull RagScopeFilter scope,
+                                                                 @NonNull String query,
+                                                                 @Nullable String subject) {
+        RagSqlFragment frag = scopeTranslator.render(scope, "tenant_id");
         String sql = """
                 SELECT kp_id, subject, grade, canonical_name, aliases, prerequisites, facets
                 FROM rag_knowledge_point
-                WHERE tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
-                """ + (subject == null ? "" : " AND subject = ?");
+                WHERE %s
+                """.formatted(frag.sql()) + (subject == null ? "" : " AND subject = ?");
         List<KnowledgePoint> all = jdbcTemplate.query(
                 sql, (rs, i) -> mapKnowledgePoint(rs),
-                subject == null ? new Object[0] : new Object[]{subject});
+                subject == null ? frag.params().toArray()
+                        : concat(frag.params(), new Object[]{}, subject));
         String normalized = KnowledgePoint.normalize(query);
         // ⚠️ 排序仅作「优先返回更具体（名称更长）的知识点」的启发式；
         //    真实置信度应由评测集标定（RAG-D08 §4）。
@@ -404,7 +469,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
     // 通道实现
     // ---------------------------------------------------------------------
 
-    private List<ScoredChunk> denseSearch(RetrievalRequest request) {
+    private List<ScoredChunk> denseSearch(RagScopeFilter scope, RetrievalRequest request) {
         float[] queryVector = embeddingPort.embed(List.of(request.query())).get(0);
         vectorColumn.requireDimension(queryVector);
         String vec = vectorToString(queryVector);
@@ -421,6 +486,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         //
         //    ⚠️ 无代际记录时退回「不过滤」（兼容迁移前的空库与存量数据）：
         //    子查询返回 NULL → `g.status = 'ACTIVE'` 不成立 → 用 COALESCE 兜底到「代际不限」。
+        RagSqlFragment frag = scopeTranslator.render(scope, "c.tenant_id");
         String sql = """
                 SELECT %s,
                        (1 - (e.embedding <=> %s)) AS score
@@ -444,16 +510,20 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                      ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src
                      ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
+                WHERE %s
 %s
                 ORDER BY e.embedding <=> %s
                 LIMIT ?
-                """.formatted(SELECT_COLUMNS, cast, admissiblePredicate, cast);
+                """.formatted(SELECT_COLUMNS, cast, frag.sql(), admissiblePredicate, cast);
+        // ⚠️ 参数顺序必须与 SQL 中占位符出现顺序严格一致：
+        //    ① 查询向量（SELECT 里的 cast）② 作用域参数 ③ 查询向量（ORDER BY 里的 cast）④ limit。
+        //    顺序错了不会立刻报错，只会让「相似度」变成别的值——最难查的一类静默失真。
         return jdbcTemplate.query(sql, (rs, i) -> toScoredChunk(rs,
-                RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH), vec, vec, limit);
+                RetrievalChannel.DENSE_VECTOR, HitReason.DIRECT_MATCH),
+                concat(frag.params(), new Object[]{vec}, vec, limit));
     }
 
-    private List<ScoredChunk> lexicalSearch(RetrievalRequest request) {
+    private List<ScoredChunk> lexicalSearch(RagScopeFilter scope, RetrievalRequest request) {
         List<String> tokens = ChineseTokenizer.tokenizeToList(request.query());
         if (tokens.isEmpty()) {
             return List.of();
@@ -462,6 +532,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         //    ts_rank 后续排序，RRF 融合时再综合两通道。
         String tsQuery = String.join(" | ", tokens);
         int limit = request.topK() * CANDIDATE_MULTIPLIER;
+        RagSqlFragment frag = scopeTranslator.render(scope, "c.tenant_id");
         String sql = """
                 SELECT %s,
                        ts_rank(to_tsvector('simple', c.text_jieba),
@@ -473,14 +544,42 @@ public class JdbcRetrievalRepository implements RetrievalPort {
                      ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
                 JOIN rag_source src
                      ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
-                WHERE c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
+                WHERE %s
 %s
                   AND to_tsvector('simple', c.text_jieba) @@ to_tsquery('simple', ?)
                 ORDER BY score DESC
                 LIMIT ?
-                """.formatted(SELECT_COLUMNS, admissiblePredicate);
+                """.formatted(SELECT_COLUMNS, frag.sql(), admissiblePredicate);
+        // ⚠️ 参数顺序：① tsQuery（score 里的）② 作用域参数 ③ tsQuery（WHERE 里的）④ limit。
         return jdbcTemplate.query(sql, (rs, i) -> toScoredChunk(rs,
-                RetrievalChannel.LEXICAL, HitReason.ALIAS_MATCH), tsQuery, tsQuery, limit);
+                RetrievalChannel.LEXICAL, HitReason.ALIAS_MATCH),
+                concat(frag.params(), new Object[]{tsQuery}, tsQuery, limit));
+    }
+
+    /**
+     * 把作用域参数与业务参数按给定顺序拼接成一个参数数组。
+     *
+     * <p><b>⚠️ 顺序在这里集中一次</b>，而不是在 8 个调用点各写一遍：
+     * 分散写必然出现某处漏掉作用域参数（⇒ 少绑一个参数 ⇒ PG 报参数个数不符，
+     * 尚属可见故障）或顺序错位（⇒ 值绑到别的占位符 ⇒ 静默失真，最难查）。
+     *
+     * @param scopeParams 作用域参数（由 {@link RagSqlScopeTranslator} 产出，顺序已定）
+     * @param head 前置业务参数（出现在作用域参数<b>之前</b>的占位符）
+     * @param rest 后置业务参数（出现在作用域参数<b>之后</b>的占位符）
+     */
+    private static Object[] concat(List<Object> scopeParams, Object[] head, Object... rest) {
+        Object[] all = new Object[head.length + scopeParams.size() + rest.length];
+        int i = 0;
+        for (Object h : head) {
+            all[i++] = h;
+        }
+        for (Object p : scopeParams) {
+            all[i++] = p;
+        }
+        for (Object r : rest) {
+            all[i++] = r;
+        }
+        return all;
     }
 
     private void accumulate(Map<String, Double> fused, Map<String, ScoredChunk> byId,

@@ -21,6 +21,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import cn.studykid.rag.core.chunk.Chunk;
 import cn.studykid.rag.core.chunk.ChunkRole;
 import cn.studykid.rag.core.ingest.IngestJob;
+import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.core.ingest.IngestJobStatus;
 import cn.studykid.rag.core.version.EditionCoordinate;
 import cn.studykid.rag.infrastructure.ops.RagOpsSessionPort;
@@ -33,8 +34,9 @@ import cn.studykid.rag.infrastructure.persistence.VectorColumn;
  *
  * <p><b>为什么是「结构性」断言而非只测通不通</b>：运维角色带 BYPASSRLS，
  * 库层不再限制它写到哪个桶。于是「全局摄入只写全局桶」这件事的保证完全落在
- * 两段代码上——落库 SQL 的桶谓词（字面 {@code rag_global_tenant_id()}）与方法名
- * （全局版没有租户参数）。本测试把这两处直接钉死；一旦有人把它们改回绑定参数，
+ * 两段代码上——落库 SQL 的桶谓词（M3 起由 {@code RagScope.GLOBAL_TENANT_ID} 绑定，
+ * 即 {@code rag_global_tenant_id()} 的返回值 {@code '00000000-...-000000000000'}，随 M5 删函数后 SQL 零改动）
+ * 与方法名（全局版没有租户参数）。本测试把这两处直接钉死；一旦有人把它们改回绑定参数，
  * 这里先红，而不是等运维在租户桶里发现一批「不知道谁写的」行。
  */
 class GlobalIngestRepositoryTest {
@@ -125,14 +127,17 @@ class GlobalIngestRepositoryTest {
                 new float[] {1, 2, 3, 4}, "m");
 
         assertEquals(1, opsSession.entries(), "整段落库在同一次运维会话窗内");
+        // ⚠️ M3（RLS 清理）：全局桶哨兵由 Java 常量 RagScope.GLOBAL_TENANT_ID 绑定
+        // （= rag_global_tenant_id() 的返回值 '00000000-...-000000000000'，随 M5 删函数后 SQL 零改动）。
+        // 这里钉死「写进的是哨兵租户 + PLATFORM 作用域」，与改前（rag_global_tenant_id() 字面量）语义等价。
         boolean chunkInsert = sink.stream().anyMatch(s ->
-                s.contains("INSERT INTO rag_chunk") && s.contains("rag_global_tenant_id()")
+                s.contains("INSERT INTO rag_chunk") && s.contains(RagScope.GLOBAL_TENANT_ID)
                         && s.contains("'PLATFORM'"));
         boolean embedInsert = sink.stream().anyMatch(s ->
-                s.contains("INSERT INTO rag_chunk_embedding") && s.contains("rag_global_tenant_id()")
+                s.contains("INSERT INTO rag_chunk_embedding") && s.contains(RagScope.GLOBAL_TENANT_ID)
                         && s.contains("'PLATFORM'"));
-        assertTrue(chunkInsert, "rag_chunk 必须写全局桶（tenant_id=rag_global_tenant_id() 且 scope='PLATFORM'）");
-        assertTrue(embedInsert, "rag_chunk_embedding 必须写全局桶（tenant_id=rag_global_tenant_id() 且 scope='PLATFORM'）");
+        assertTrue(chunkInsert, "rag_chunk 必须写全局桶（tenant_id=哨兵常量 " + RagScope.GLOBAL_TENANT_ID + " 且 scope='PLATFORM'）");
+        assertTrue(embedInsert, "rag_chunk_embedding 必须写全局桶（tenant_id=哨兵常量 " + RagScope.GLOBAL_TENANT_ID + " 且 scope='PLATFORM'）");
         // ⚠️ 应用连接一次都没被用：全局写绝不回落应用角色
         verifyNoInteractions(appJdbc);
     }
@@ -146,9 +151,10 @@ class GlobalIngestRepositoryTest {
 
         repo.markDocumentParseStatusInGlobalBucket("doc-1", "CHUNKED");
 
+        // ⚠️ M3：tenant_id 收口为显式哨兵常量字面量（= rag_global_tenant_id() 返回值），BYPASSRLS 下承重不变。
         assertTrue(sink.stream().anyMatch(s ->
-                s.contains("UPDATE rag_document") && s.contains("tenant_id = rag_global_tenant_id()")),
-                "rag_document 回写必须收口在全局桶");
+                s.contains("UPDATE rag_document") && s.contains("tenant_id = '" + RagScope.GLOBAL_TENANT_ID + "'::uuid")),
+                "rag_document 回写必须收口在全局桶（tenant_id=哨兵常量 " + RagScope.GLOBAL_TENANT_ID + "）");
     }
 
     @Test

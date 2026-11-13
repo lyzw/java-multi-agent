@@ -14,9 +14,15 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.TransactionalConnectionHolder;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.AgentReleaseArchivePort;
 
 /**
@@ -36,11 +42,37 @@ import cn.studykid.multiagent.ports.persistence.AgentReleaseArchivePort;
  * 值来自 {@code AgentReleaseArchive.deriveContextPolicy(agent)}，
  * 与发布期门禁、运行期读取共用同一归一化实现。存量版本行幂等补插快照时
  * 沿用同一参数，但**不回写**既有不可变快照（符合 [D4]「在途 Run 沿用原快照」）。
+ *
+ * <p><b>影子态（改造计划 WP-M1-2）</b>：写主导仓（INSERT 版本/快照 + 存在性回查），
+ * 无行租户染色点；{@link #archiveRelease} 入口 {@code compare("agent_version")}；
+ * GUC 绑定在 holder 中心统一执行，保留至 M4 退役批次；SQL 全显式 {@code tenant_id}
+ * 谓词，RLS 退役后功能不变。
  */
 public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePort {
 
     private static final Logger log = LoggerFactory.getLogger(
             JdbcAgentReleaseArchiveRepository.class);
+
+    // ── 影子态接入（WP-M1-2，默认不启用零行为变更）────────────────────
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private volatile boolean shadowEnabled;
+    private @NonNull String sentinelTenantId = "";
+
+    /**
+     * 影子态装配入口：容器里存在 {@link AuthzShadowBinding} 即开启（P1 影子期），
+     * 不存在即完全关闭（零行为变更）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
 
     /**
      * DEC-9 运行期容量配置快照（与 {@code application.yml} 的 {@code agent.run.*} 一致）。
@@ -80,6 +112,8 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
                                   @NonNull String definition,
                                   @Nullable String agentConfig,
                                   @NonNull String contextPolicy) {
+        // ⚠️ 影子比对（P1 只记日志）：Gate 算出的 ScopeFilter vs 本次绑定租户。
+        shadowCompare(tenantId);
         return TransactionalConnectionHolder.inTransaction(
                 dataSource, tenantContext(tenantId),
                 conn -> doArchive(conn, tenantId, agentId, version, definition, agentConfig,
@@ -201,6 +235,17 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
 
     private static TenantContext tenantContext(String tenantId) {
         return new TenantContext(tenantId, "system", Set.of(), 0L);
+    }
+
+    // ── 影子辅助（守卫要求：声明与调用分离，入口真调用）────────────
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次绑定租户（只记日志）。
+     * 写主导仓无行租户染色点；全 SQL 显式 {@code tenant_id} 谓词 ⇒ hasTenantPredicate=true。
+     */
+    void shadowCompare(@NonNull String boundTenantId) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, "agent_version",
+                SubjectContext.forTenant(boundTenantId), boundTenantId, true);
     }
 
     /**

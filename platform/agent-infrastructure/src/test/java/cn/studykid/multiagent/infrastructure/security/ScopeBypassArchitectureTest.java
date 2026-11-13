@@ -46,6 +46,19 @@ class ScopeBypassArchitectureTest {
             "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/security/RuleBasedPolicyEngine.java");
 
     /**
+     * {@code SubjectContext} 的唯一合法构造点（WP-M1-4 · 12 文 §2.2）。
+     *
+     * <p>⚠️ <b>为什么只许记录自身</b>：{@code scope} 是「平台全域放行」的唯一开关，
+     * 产出 {@code Scope.PLATFORM} 的唯一路径是<b>运维通道认证入口</b>。
+     * 把构造点钉死在工厂所在的记录自身，意味着当前主代码里
+     * <b>没有任何业务/接口代码能以任意 scope 构造主体</b>（{@code forTenant}
+     * 硬编码 {@code TENANT}）。将来运维通道入口接入时，必须把该文件
+     * 显式登记进本清单并过评审 —— 与 {@link #UNRESTRICTED_PRODUCERS} 同一纪律。
+     */
+    private static final Set<String> SUBJECT_CONTEXT_CONSTRUCTORS = Set.of(
+            "agent-core/src/main/java/cn/studykid/multiagent/core/tenant/SubjectContext.java");
+
+    /**
      * 已接 Gate 的仓库台账（D5 逐域改造进度）。
      *
      * <p>登记条件：持有 {@code ScopedDataAccess} 字段。
@@ -98,6 +111,16 @@ class ScopeBypassArchitectureTest {
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcApprovalRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcConfigPublishRequestRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcRunCreationRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcRunStepRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcRunMessageRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcRunClaimRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcExecutionSnapshotResolver.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAgentChatAuditRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcRunEventAppendRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcRateLimiter.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcAgentReleaseArchiveRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcAgentManageRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/statistics/JdbcStatisticsRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcErasureRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcRiskEventRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigLifecycleRepository.java");
@@ -155,6 +178,10 @@ class ScopeBypassArchitectureTest {
     private static final Pattern UNRESTRICTED_NEW =
             Pattern.compile("new\\s+ScopeFilter\\s*\\.\\s*Unrestricted\\s*\\(");
 
+    /** {@code SubjectContext} 的直接构造 / 工厂调用形态（WP-M1-4）。 */
+    private static final Pattern SUBJECT_CONSTRUCT =
+            Pattern.compile("\\bnew\\s+SubjectContext\\s*\\(|\\bSubjectContext\\s*\\.\\s*from\\s*\\(");
+
     /** 持有 `ScopedDataAccess` 的形态（字段 / 参数 / 局部变量声明）。 */
     private static final Pattern SCOPED_HOLDER =
             Pattern.compile("\\bScopedDataAccess\\b\\s+[A-Za-z_]");
@@ -184,6 +211,30 @@ class ScopeBypassArchitectureTest {
             assertThat(violations)
                     .as("⚠️⚠️ 主源码中除策略引擎外不得构造 Unrestricted："
                             + "它等价于「不受任何租户约束」，业务代码一旦拿到就是全量越权")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ SubjectContext 构造点唯一（scope 推导反证 · WP-M1-4）")
+        void subjectContextConstructionIsCentralized() {
+            List<String> violations = new ArrayList<>();
+
+            for (Path file : mainSourceFiles()) {
+                String code = stripCommentsAndStrings(read(file));
+                if (!SUBJECT_CONSTRUCT.matcher(code).find()) {
+                    continue;
+                }
+                String rel = relative(file);
+                if (!SUBJECT_CONTEXT_CONSTRUCTORS.contains(rel)) {
+                    violations.add(rel);
+                }
+            }
+
+            assertThat(violations)
+                    .as("⚠️⚠️ 主源码中除工厂所在记录外不得构造 SubjectContext："
+                            + "scope 是「平台全域放行」的唯一开关，产出 Scope.PLATFORM 的唯一路径"
+                            + "是运维通道认证入口 —— 新构造点必须显式登记进许可清单并过评审，"
+                            + "否则租户请求可能伪造 scope=PLATFORM 拿到 Unrestricted")
                     .isEmpty();
         }
 
@@ -295,6 +346,11 @@ class ScopeBypassArchitectureTest {
                     missing.add(rel);
                 }
             }
+            for (String rel : SUBJECT_CONTEXT_CONSTRUCTORS) {
+                if (!Files.exists(platformRoot().resolve(rel))) {
+                    missing.add(rel);
+                }
+            }
 
             assertThat(missing)
                     .as("台账里的路径必须真实存在，否则守卫在保护一个已经不存在的文件（静默失效）")
@@ -324,6 +380,45 @@ class ScopeBypassArchitectureTest {
             assertThat(UNRESTRICTED_NEW.matcher(stripCommentsAndStrings(violating)).find())
                     .as("⚠️⚠️ 注入的越权构造必须被检出，否则 R3 守卫是空转")
                     .isTrue();
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 业务代码里伪造 SubjectContext 构造必须被检出（WP-M1-4 反证）")
+        void detectsInjectedSubjectConstruction() {
+            String violating = """
+                    package evil;
+                    import cn.studykid.multiagent.core.security.Scope;
+                    import cn.studykid.multiagent.core.tenant.SubjectContext;
+                    import cn.studykid.multiagent.core.tenant.TenantContext;
+                    class EvilAuth {
+                        SubjectContext forge(TenantContext ctx) {
+                            return SubjectContext.from(ctx, Scope.PLATFORM);
+                        }
+                    }
+                    """;
+
+            assertThat(SUBJECT_CONSTRUCT.matcher(stripCommentsAndStrings(violating)).find())
+                    .as("⚠️⚠️ 业务侧伪造 SubjectContext 构造必须被检出，"
+                            + "否则 scope 推导守卫是空转")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("✅ SubjectContext.forTenant（硬编码租户态）不误报（负样本）")
+        void doesNotFlagForTenantFactory() {
+            String compliant = """
+                    package ok;
+                    import cn.studykid.multiagent.core.tenant.SubjectContext;
+                    class OkRepository {
+                        void shadow(String tenantId) {
+                            var subject = SubjectContext.forTenant(tenantId);
+                        }
+                    }
+                    """;
+
+            assertThat(SUBJECT_CONSTRUCT.matcher(stripCommentsAndStrings(compliant)).find())
+                    .as("forTenant 是硬编码 TENANT 的合法工厂，不得被误判")
+                    .isFalse();
         }
 
         @Test

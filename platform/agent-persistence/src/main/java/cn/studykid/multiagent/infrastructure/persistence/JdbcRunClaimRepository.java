@@ -16,9 +16,15 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import cn.studykid.multiagent.core.run.RunState;
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.AuditPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 
@@ -34,13 +40,15 @@ import cn.studykid.multiagent.ports.persistence.RunClaimPort;
  *       与数据库触发器形成双保险。</li>
  * </ol>
  *
- * <p><b>P1 影子态（RLS→应用层迁移）盲区标注</b>：本仓为<b>写主导</b>（几乎全是
- * {@code UPDATE … RETURNING} 的领取/续租/释放/提交/取消），不参与 P1 影子染色
+ * <p><b>P1 影子态（RLS→应用层迁移）处理（改造计划 WP-M1-1）</b>：本仓为<b>写主导</b>
+ * （几乎全是 {@code UPDATE … RETURNING} 的领取/续租/释放/提交/取消），不参与 P1 影子染色
  * （12 文 §4.5 / 13 文 §5.2 明确 P1 只观测「返回行给调用方的读路径」）。
  * 唯一的 SELECT（{@code messageTokenOf} 取 token、{@code isCurrentGeneration} /
  * {@code isCancelled} 的存在性布尔检查）均<b>不向调用方返回数据行</b>，无可染色的行级租户归属。
- * ⚠️ 因此本仓在 P1 的租户隔离仍由 <b>RLS 强制</b>兜底；其领取/提交的「未来应用层强制」
- * 属于 P2 双写/阻断范围，不在此处影子观测。
+ * ⚠️ 已按写路径样板接入<b>影子比对</b>（{@code compare}，无染色点）：在全部 5 个 GUC 绑定
+ * 站点前 1:1 观测「Gate 算出的 ScopeFilter vs 本次绑定租户」；全部 SQL 自带显式
+ * {@code tenant_id} 谓词 ⇒ {@code hasTenantPredicate=true}。租户隔离在 P1 仍由 RLS
+ * 强制兜底；绑定站点的自管 GUC bind 保留至 M4 退役 {@code run} 策略批次。
  */
 public class JdbcRunClaimRepository implements RunClaimPort {
 
@@ -93,6 +101,27 @@ public class JdbcRunClaimRepository implements RunClaimPort {
         this.audit = audit;
     }
 
+    // ── 影子态接入（P1 影子比对 / 改造计划 WP-M1-1）──────────────────────
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private volatile boolean shadowEnabled;
+    private @NonNull String sentinelTenantId = "";
+
+    /**
+     * 影子态装配入口：容器里存在 {@link AuthzShadowBinding} 即开启（P1 影子期），
+     * 不存在即完全关闭（零行为变更）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
+
     @Override
     public @NonNull List<LeasedTask> claimTasks(@NonNull String tenantId,
                                                 @NonNull String workerId,
@@ -142,6 +171,7 @@ public class JdbcRunClaimRepository implements RunClaimPort {
             boolean prev = conn.getAutoCommit();
             conn.setAutoCommit(false);
             try {
+                shadowCompare(tenantId);
                 TenantSessionBinder.bind(conn, systemContext(tenantId));
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     // ⚠️ 占位符顺序必须与新 SQL 逐字对应：CTE 内 tenant_id → LIMIT，
@@ -311,6 +341,7 @@ public class JdbcRunClaimRepository implements RunClaimPort {
             boolean prev = conn.getAutoCommit();
             conn.setAutoCommit(false);
             try {
+                shadowCompare(tenantId);
                 TenantSessionBinder.bind(conn, systemContext(tenantId));
                 T result = action.apply(conn);
                 conn.commit();
@@ -440,6 +471,7 @@ public class JdbcRunClaimRepository implements RunClaimPort {
         try (Connection conn = dataSource.getConnection()) {
             conn.setAutoCommit(false);
             try {
+                shadowCompare(tenantId);
                 TenantSessionBinder.bind(conn, systemContext(tenantId));
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, tenantId);
@@ -462,6 +494,18 @@ public class JdbcRunClaimRepository implements RunClaimPort {
     /** 系统身份仅用于绑定 RLS 上下文，不携带任何角色权限。 */
     private static TenantContext systemContext(String tenantId) {
         return new TenantContext(tenantId, "system", java.util.Set.of(), 0L);
+    }
+
+    // ── 影子辅助（守卫要求：声明与调用分离，5 个绑定站点 1:1 真调用）────
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次绑定租户（只记日志）。
+     * 写主导仓无行级染色点，每个 GUC 绑定站点前的比对是本仓唯一的影子观测面；
+     * 全部 SQL 自带显式 {@code tenant_id} 谓词 ⇒ {@code hasTenantPredicate=true}。
+     */
+    void shadowCompare(@NonNull String boundTenantId) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, "run",
+                SubjectContext.forTenant(boundTenantId), boundTenantId, true);
     }
 
     @Override
@@ -507,6 +551,7 @@ public class JdbcRunClaimRepository implements RunClaimPort {
         try (Connection conn = dataSource.getConnection()) {
             conn.setAutoCommit(false);
             try {
+                shadowCompare(tenantId);
                 TenantSessionBinder.bind(conn, systemContext(tenantId));
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, tenantId);
@@ -573,6 +618,7 @@ public class JdbcRunClaimRepository implements RunClaimPort {
             boolean prev = conn.getAutoCommit();
             conn.setAutoCommit(false);
             try {
+                shadowCompare(tenantId);
                 TenantSessionBinder.bind(conn, systemContext(tenantId));
                 int affected;
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {

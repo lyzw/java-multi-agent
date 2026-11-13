@@ -10,9 +10,15 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.springframework.beans.factory.annotation.Autowired;
 import tools.jackson.databind.ObjectMapper;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.RunMessagePort;
 
 /**
@@ -21,6 +27,10 @@ import cn.studykid.multiagent.ports.persistence.RunMessagePort;
  * <p><b>⚠️ 写 {@code public.run_message}（带 FORCE RLS）</b>：必须在事务内先绑定租户，
  * 否则 RLS 默认拒绝 → <b>静默零行写入</b>（不报错）。
  * 这条症状极具欺骗性：「执行全绿、Run 成功、回放永远是空的」。
+ * ⚠️ RLS 退役期（RLS依赖清理改造计划 M1/M4）：本连接自管（不经
+ * {@code TransactionalConnectionHolder}），GUC 绑定是本类连接的 RLS 前置，
+ * <b>保留至 M4 退役 {@code run_message} 策略批次</b>；SQL 自带显式
+ * {@code tenant_id} 谓词，RLS 退役后功能不变。
  *
  * <p><b>⚠️ 幂等</b>：按 {@code (tenant_id, run_id, idem_key)} 冲突时覆盖——
  * 执行循环重试/重放会重新走一遍埋点，不去重会让回放出现重复对话。
@@ -46,8 +56,29 @@ public class JdbcRunMessageRepository implements RunMessagePort {
 
     private final DataSource dataSource;
 
+    // ── 影子态接入（P1 影子 / 改造计划 WP-M1-1）──────────────────────────
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private volatile boolean shadowEnabled;
+    private @NonNull String sentinelTenantId = "";
+
     public JdbcRunMessageRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    /**
+     * 影子态装配入口：容器里存在 {@link AuthzShadowBinding} 即开启（P1 影子期），
+     * 不存在即完全关闭（零行为变更）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
     }
 
     @Override
@@ -62,6 +93,9 @@ public class JdbcRunMessageRepository implements RunMessagePort {
                        @Nullable Long inputTokens,
                        @Nullable Long outputTokens,
                        @Nullable Long latencyMs) {
+        // ⚠️ 影子比对（P1 只记日志）：Gate 算出的 ScopeFilter vs 本次绑定租户。
+        //    INSERT 自带显式 tenant_id 谓词 ⇒ hasTenantPredicate=true（不产 rlsDependent）。
+        shadowCompare(tenantId);
         try (Connection conn = openTenant(tenantId)) {
             String json = serialize(content);
             try (PreparedStatement ps = conn.prepareStatement(
@@ -141,9 +175,20 @@ public class JdbcRunMessageRepository implements RunMessagePort {
     private Connection openTenant(String tenantId) throws SQLException {
         Connection conn = dataSource.getConnection();
         conn.setAutoCommit(false);
-        // ⚠️ RLS 铁律：事务内、任何业务 SQL 之前绑定
+        // ⚠️ RLS 铁律：事务内、任何业务 SQL 之前绑定（保留至 M4 退役 run_message 策略批次）
         TenantSessionBinder.bind(conn,
                 new TenantContext(tenantId, "agent-run-message-writer", Set.of(), 0L));
         return conn;
+    }
+
+    // ── 影子辅助（守卫要求：声明与调用分离，查询路径必须真调用）────────
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次写入绑定租户（只记日志）。
+     * 写路径没有结果行可染色，比对是本仓唯一的影子观测点。
+     */
+    void shadowCompare(@NonNull String boundTenantId) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, "run_message",
+                SubjectContext.forTenant(boundTenantId), boundTenantId, true);
     }
 }

@@ -10,6 +10,7 @@ import org.jspecify.annotations.NonNull;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import cn.studykid.rag.core.scope.RagScope;
 import cn.studykid.rag.core.source.SourceVerification.VerificationMethod;
 import cn.studykid.rag.core.source.TrustTier;
 import cn.studykid.rag.management.core.RagManagementContext;
@@ -32,7 +33,7 @@ import cn.studykid.rag.management.ports.DictionaryPort.Scope;
  *
  * <p><b>⚠️ 读写不对称是刻意的</b>（V7 双作用域）：
  * <ul>
- *   <li><b>读</b>：平台全局项（{@code tenant_id = rag_global_tenant_id()} 哨兵）∪ 本租户项，
+ *   <li><b>读</b>：平台全局项（{@code tenant_id = {rag_sentinel}} 哨兵）∪ 本租户项，
  *       同 code 租户覆盖全局；</li>
  *   <li><b>写/删</b>：<b>恒只作用于本租户</b>——租户发布的每一项都是租户级私有项，
  *       永远产不出全局项。全局项只能由平台侧通道（超级用户/运维角色）写入。</li>
@@ -81,25 +82,30 @@ public class JdbcDictionaryRepository implements DictionaryPort {
         // 动态类型：平台全局项 ∪ 本租户项（RLS 的 _read 策略已把范围收在这两类里）。
         //
         // ⚠️ 这里的谓词<b>不能只靠 RLS</b>，也不能写成等值：
-        //   · 写 `tenant_id = rag_current_tenant()` 会把全局行**静默滤掉**
+        //   · 写 `tenant_id = {rag_tenant}` 会把全局行**静默滤掉**
         //     ——策略放开了、SQL 没跟上，表现是「字典没变化」而非报错。
         //   · 全局行的 tenant_id 是哨兵值（迁移 V8 把 V7 的 NULL 表示法统一成哨兵，
         //     语料链的复合外键与含 tenant_id 的主键决定了只能用哨兵），
-        //     所以判别写成 `= rag_global_tenant_id()`，与策略、CHECK 三处同一个权威。
+        //     所以判别写成 `= {rag_sentinel}`，与策略、CHECK 三处同一个权威。
+        // ⚠️ M3（RLS 清理）：把 GUC 函数收口为显式 UUID 字面量，隔离权威移交应用层。
+        //    租户档 queryTenantId() = 该租户；平台档 = 全局哨兵——与现役 RLS 策略逐字等价。
+        String tenantLiteral = "'" + context.queryTenantId() + "'::uuid";
+        String sentinelLiteral = "'" + RagScope.GLOBAL_TENANT_ID + "'::uuid";
         List<DictEntry> rows = transactionTemplate.execute(status -> {
-            // ⚠️ 平台全局档不建立会话租户：谓词里的 rag_current_tenant() 退化为 NULL，
+            // ⚠️ 平台全局档不建立会话租户：谓词里的 {rag_tenant} 退化为 NULL，
             //    `IN (NULL, 哨兵)` 只剩全局项——正是「平台侧看到平台字典」的口径。
             //    这一句是**显式清空**而不是跳过（连接池/角色默认值会伪装成租户档）。
             RagSessionScope.apply(jdbcTemplate, context);
             return jdbcTemplate.query(
                     """
                     SELECT code, label, sort_order, enabled,
-                           (tenant_id = rag_global_tenant_id()) AS is_global
+                           (tenant_id = {rag_sentinel}) AS is_global
                     FROM rag_dictionary
-                    WHERE tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
+                    WHERE tenant_id IN ({rag_tenant}, {rag_sentinel})
                       AND dict_type = ?
                     ORDER BY sort_order, code
-                    """,
+                    """.replace("{rag_tenant}", tenantLiteral)
+                         .replace("{rag_sentinel}", sentinelLiteral),
                     (rs, i) -> new DictEntry(
                             type,
                             rs.getString("code"),
@@ -146,16 +152,17 @@ public class JdbcDictionaryRepository implements DictionaryPort {
         if (!isEditable(entry.type())) {
             throw new IllegalStateException("字典类型不可维护：" + entry.type());
         }
+        String tenantLiteral = "'" + context.tenantId() + "'::uuid";
         transactionTemplate.executeWithoutResult(status -> {
             setTenant(context.tenantId());
             jdbcTemplate.update("""
                     INSERT INTO rag_dictionary (tenant_id, dict_type, code, label, sort_order, enabled)
-                    VALUES (rag_current_tenant(), ?, ?, ?, ?, ?)
+                    VALUES ({rag_tenant}, ?, ?, ?, ?, ?)
                     ON CONFLICT (tenant_id, dict_type, code)
                     DO UPDATE SET label = EXCLUDED.label,
                                   sort_order = EXCLUDED.sort_order,
                                   enabled = EXCLUDED.enabled
-                    """,
+                    """.replace("{rag_tenant}", tenantLiteral),
                     entry.type(), entry.code(), entry.label(),
                     entry.sortOrder(), entry.enabled());
         });
@@ -166,13 +173,14 @@ public class JdbcDictionaryRepository implements DictionaryPort {
         if (!isEditable(type)) {
             throw new IllegalStateException("字典类型不可维护：" + type);
         }
+        String tenantLiteral = "'" + context.tenantId() + "'::uuid";
         transactionTemplate.executeWithoutResult(status -> {
             setTenant(context.tenantId());
             jdbcTemplate.update(
                     """
                     DELETE FROM rag_dictionary
-                    WHERE tenant_id = rag_current_tenant() AND dict_type = ? AND code = ?
-                    """,
+                    WHERE tenant_id = {rag_tenant} AND dict_type = ? AND code = ?
+                    """.replace("{rag_tenant}", tenantLiteral),
                     type, code);
         });
     }

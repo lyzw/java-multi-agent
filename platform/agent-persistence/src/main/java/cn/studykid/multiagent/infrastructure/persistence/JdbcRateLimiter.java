@@ -9,10 +9,17 @@ import java.util.Set;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 
 /**
@@ -32,7 +39,11 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
  * 去掉它则冲突目标不存在，upsert 退化为插入重复行。
  *
  * <p><b>连接所有权</b>：全部经 {@link TransactionalConnectionHolder#inTransaction}
- * （P2-D05 铁律）。
+ * （P2-D05 铁律）。⚠️ RLS 退役期（改造计划 WP-M1-2）：GUC 绑定在 holder 中心统一执行，
+ * 保留至 M4 退役批次；SQL 显式 {@code (tenant_id, bucket_key)} 谓词，RLS 退役后功能不变。
+ *
+ * <p><b>影子态（WP-M1-2）</b>：租户域基础设施，写主导（原子 upsert）无行租户染色点；
+ * {@link #check} / {@link #currentCount} 入口 {@code compare("rate_limit_bucket")}。
  */
 public class JdbcRateLimiter implements RateLimitPort {
 
@@ -41,6 +52,27 @@ public class JdbcRateLimiter implements RateLimitPort {
     private final DataSource dataSource;
     private final long limit;
     private final long windowSeconds;
+
+    // ── 影子态接入（WP-M1-2，默认不启用零行为变更）────────────────────
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private volatile boolean shadowEnabled;
+    private @NonNull String sentinelTenantId = "";
+
+    /**
+     * 影子态装配入口：容器里存在 {@link AuthzShadowBinding} 即开启（P1 影子期），
+     * 不存在即完全关闭（零行为变更）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
+    }
 
     /**
      * 桶级限额覆盖（P4-D13）。
@@ -140,6 +172,7 @@ public class JdbcRateLimiter implements RateLimitPort {
 
     @Override
     public @NonNull Decision check(@NonNull String tenantId, @NonNull String bucketKey) {
+        shadowCompare(tenantId);
         long effectiveLimit = limitFor(bucketKey);
         try {
             WindowCount counted = incrementAndCount(tenantId, bucketKey);
@@ -192,6 +225,7 @@ public class JdbcRateLimiter implements RateLimitPort {
 
     @Override
     public long currentCount(@NonNull String tenantId, @NonNull String bucketKey) {
+        shadowCompare(tenantId);
         return inTenantTx(tenantId, conn -> {
             String sql = """
                     SELECT count FROM rate_limit_bucket
@@ -287,6 +321,17 @@ public class JdbcRateLimiter implements RateLimitPort {
                 dataSource,
                 new TenantContext(tenantId, "system", Set.of(), 0L),
                 action::run);
+    }
+
+    // ── 影子辅助（守卫要求：声明与调用分离，入口真调用）────────────
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次绑定租户（只记日志）。
+     * 基础设施计数面无行租户染色点；显式 {@code tenant_id} 谓词 ⇒ hasTenantPredicate=true。
+     */
+    void shadowCompare(@NonNull String boundTenantId) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, "rate_limit_bucket",
+                SubjectContext.forTenant(boundTenantId), boundTenantId, true);
     }
 
     @FunctionalInterface

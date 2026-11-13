@@ -28,6 +28,12 @@ import org.jspecify.annotations.Nullable;
  * 会话租户为 NULL 时 RLS 读策略只放行全局行，SQL 谓词再绑定哨兵——
  * 两层各自独立成立。若将来某条 SQL 误绑了真实租户，
  * 结果是「0 行」而不是「泄漏该租户数据」，这正是选择「不设会话租户」的理由。
+ *
+ * <p><b>⚠️ 隔离权威口径（RLS 清理 · M3，2026-11-12）</b>：三档的隔离权威是
+ * <b>SQL 显式谓词</b>（TENANT=绑定该租户 / PLATFORM=绑定哨兵 / ALL=运维通道），
+ * 上表的「会话租户 {@code app.tenant_id}」列描述的是 RLS 在场期的<b>兼容层</b>
+ * 行为（FORCE RLS 策略仍读 GUC，PLATFORM 档置空 GUC 使策略只剩哨兵一支）。
+ * 兼容层随 M4-R 批次退役移除，移除后三档语义由本表「SQL 租户谓词」列独立成立。
  */
 public enum RagCorpusScope {
 

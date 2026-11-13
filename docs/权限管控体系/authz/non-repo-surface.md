@@ -80,3 +80,50 @@
 > 只在仓库**持有 `ScopedDataAccess`** 时生效；未接线的仓库当前既无 Gate 也无影子比对，
 > 因此 P1 的 `AUTHZ_MISMATCH=0` **不能**外推为「全量已隔离」——它只覆盖上述 4 仓。
 > 这是 P1 出口结论必须写明的限定条件。
+
+---
+
+## 3. WP-M1-2 仓库 Gate 决策台账（2026-11-12 triage 定案）
+
+> 本节是改造计划 WP-M1-2 的落定产物。**修正**：上文「A 类剩余约 55 个待接线」为过时口径——
+> 实测 2026-11-12：59 个 `Jdbc*Repository` 中 38 个已接影子、本日新增 3 个
+> （RunStep / RunMessage / RunClaim），台账 `INTEGRATED` 已达 41。
+> `AUTHZ_MISMATCH=0` 的覆盖面结论以本节台账为准。
+
+### 3.1 本日新接（影子比对，守卫全绿）
+
+| 类 | 决策 | 形态 | bind 去向 |
+|---|---|---|---|
+| `JdbcRunStepRepository` | `INTEGRATED` | 写路径 `compare("run_step")` | M4 退役 run_step 批 |
+| `JdbcRunMessageRepository` | `INTEGRATED` | 写路径 `compare("run_message")` | M4 退役 run_message 批 |
+| `JdbcRunClaimRepository` | `INTEGRATED` | 写主导：5 个 GUC 绑定站点 1:1 `compare("run")`，无染色点 | M4 退役 run 批 |
+
+### 3.2 数据访问面 triage 结论（2026-11-12 更新：7 项待接线已全部完成）
+
+| 类 | 决策 | 理由 / 替代控制 | 后续动作 |
+|---|---|---|---|
+| `AdminTenantRepository` | `PLATFORM_LEVEL_EXEMPT`（分面） | 全局 `tenant` 表（无 RLS 无 tenant_id）走系统身份；RLS 表读取（principal/agent/tenant_config_override 计数与 listPrincipals）= 平台管理员**按设计跨租户**，控制器 PLATFORM_ADMIN 闸门 + SQL 显式谓词双重控制 | ⚠️ `verifyIsolation`（:209-233）是 **RLS 校验端点本身**（读 `current_setting` 断言 RLS 生效）——**不是隐性依赖、不改 SubjectContext**；RLS 退役后该端点语义失效（`tenant_id <> 目标` 计数将泄漏全量）⇒ **M5 必须下线或重写**，改列 WP-M5 清单 |
+| `JdbcStatisticsRepository` | `INTEGRATED` ✅ **已接线** | **纠正计划过时项**：实测无任何 `current_setting` 代码读取（WP-M1-3 的「隐性 GUC」指称不成立）；全 SQL 显式 `tenant_id = ?::uuid` + holder 中心绑定；纯聚合无行租户（不染色） | ✅ 已接 `compare("run")`（聚合扇出同连接同租户，由同一比对覆盖） |
+| `JdbcAgentChatAuditRepository` | `INTEGRATED` ✅ **已接线** | 租户读路径，显式谓词 + holder 中心绑定 | ✅ 已接 compare |
+| `JdbcAgentManageRepository` | `INTEGRATED` ✅ **已接线** | 写主导（INSERT…RETURNING），javadoc 已自标不参与染色；TenantConnectionLease 自管 | ✅ 已接 compare（`createAgent`/`publishVersion` 入口） |
+| `JdbcAgentReleaseArchiveRepository` | `INTEGRATED` ✅ **已接线** | 混合读写，显式谓词 + holder 中心绑定 | ✅ 已接 compare |
+| `JdbcExecutionSnapshotResolver` | `INTEGRATED` ✅ **已接线** | 读路径，显式 `a.tenant_id` 谓词；`execution_snapshot` 资源类型已登记 | ✅ 已接 compare-only（SELECT 未取 tenant_id 列，无行租户） |
+| `JdbcRunEventAppendRepository` | `INTEGRATED` ✅ **已接线** | 读 + 追加，显式谓词 + TenantConnectionLease 自管 | ✅ 已接 compare |
+| `JdbcRateLimiter` | `INTEGRATED` ✅ **已接线** | `rate_limit_bucket` 租户域基础设施，显式 `tenant_id + bucket_key` 谓词，返回计数无行租户 | ✅ 已接 compare-only（`check`/`currentCount` 入口） |
+| `JdbcPlatformAuditRepository` | `PLATFORM_LEVEL_EXEMPT` | `platform.platform_audit_event`：无 `tenant_id`、无 RLS，平台运维审计 | 登记「豁免理由 + 替代控制」（平台通道认证） |
+| `JdbcPlatformPrincipalRepository` | `PLATFORM_LEVEL_EXEMPT` | `platform.platform_user`：无 `tenant_id`、无 RLS，平台控制台用户域 | 同上 |
+| `JdbcTenantLifecycleProbe` | `PLATFORM_LEVEL_EXEMPT` | 只读全局 `tenant` 表 status（无租户数据行） | 同上 |
+
+### 3.3 台账外确认（此前误报为未登记）
+
+- `JdbcToolOperationLedger`：**已在 `INTEGRATED` 台账**且有专属 `JdbcToolOperationLedgerShadowTest`（此前 diff 正则漏匹配非 `Repository` 后缀类名，误报）。
+- `PrincipalRepository` / `StudentDataRepository` / `GetStudentProfileTool` / `RecordWeaknessTool`：triage 结论见改造计划 WP-M1-1（bind 保留 M4-B4/B2，接线动作随 M3 前置）。
+
+### 3.4 纪律与闭账状态
+
+**WP-M1-2 出口达成（2026-11-12）**：原「待接线」7 项全部按非侵入样板完成
+（compare-only 写路径/聚合面 + `@Autowired(required=false) bindAuthzShadow` +
+双台账登记），三层守卫（`ScopeBypassArchitectureTest` / `ShadowPolicyCoverageTest` /
+`AuthzShadowWiringTest` 4 用例）全绿；`INTEGRATED` 台账达 **49**。
+新增登记资源类型：`run_event`、`rate_limit_bucket`（否则 Gate 恒返 NO_RULE 假违例）。
+剩余闭账项：豁免 4 项 + 既有 7 项补「豁免理由 + 替代控制」两列（本表已含豁免理由）。

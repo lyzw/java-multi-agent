@@ -19,6 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import cn.studykid.rag.core.chunk.Chunk;
 import cn.studykid.rag.core.scope.RagScope;
+import cn.studykid.rag.core.scope.RagScopeFilter;
 // ⚠️ RetrievalMode 是 RetrievalRequest 的**嵌套**枚举，
 //    直接 import ...core.retrieval.RetrievalMode 找不到符号（2026-10-22 编译实测）。
 import cn.studykid.rag.core.retrieval.RetrievalRequest.RetrievalMode;
@@ -475,6 +476,55 @@ class RetrievalRepositoryIT {
     }
 
     /**
+     * ⚠️⚠️ <b>M3 显式化改造的核心反证</b>：应用层显式谓词与原 GUC 谓词
+     * <b>必须给出逐行相同的行集</b>。
+     *
+     * <p><b>为什么这是关键的一条</b>：M3 把
+     * {@code tenant_id IN (rag_current_tenant(), rag_global_tenant_id())}
+     * 改成 {@code tenant_id IN (?, ?)}（绑定参数）。两者<b>必须</b>等价——
+     * 否则意味着「RLS 退役那一刻，检索结果会变」。
+     * 而这类变化<b>不会</b>在 RLS 还在场时暴露（RLS 会把差异掩盖掉），
+     * 只能在退役那一刻才炸——届时语料可能已经按新口径被写入。
+     *
+     * <p><b>本用例怎么做到「不靠 RLS 掩盖」</b>：两条谓词在<b>同一会话</b>下分别执行，
+     * 而 RLS 策略本身对两者放行同一集合 ⇒ 若两条 SQL 谓词不等价，差值就会暴露出来。
+     * 再叠加「撤掉显式谓词会少 1 行」的反向对照，确保这不是恒真的断言。
+     *
+     * <p>⚠️ <b>反证的强度边界（诚实声明）</b>：本用例证明的是
+     * <b>谓词等价</b>，不是「RLS 已退役」。退役后的行为由 M4-R 批次的
+     * 「drop 策略 → 观察 1 周」流程复核。
+     */
+    @Test
+    @DisplayName("⚠️⚠️ 显式绑定谓词与 GUC 谓词逐行等价（RLS 退役不改变检索结果）")
+    void explicitPredicateIsEquivalentToGucPredicate() {
+        requireAdminConnection();
+        seedGlobalChain();
+        try {
+            // ① 同一会话、同一数据：GUC 形态 vs 显式绑定形态
+            int gucShape = countChunksAs(T,
+                    "c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())");
+            int explicitShape = countChunksAs(T,
+                    "c.tenant_id IN (?::uuid, ?::uuid)", T, RagScope.GLOBAL_TENANT_ID);
+
+            assertEquals(gucShape, explicitShape,
+                    "显式谓词必须与 GUC 谓词给出完全相同的行数：GUC 形态=" + gucShape
+                            + " 显式形态=" + explicitShape
+                            + "。不等价意味着 RLS 退役那一刻检索结果会变（且不会报错）");
+
+            // ② 反向对照：把显式谓词退化成「仅本租户」，行数必须少 1（全局那条被滤空）。
+            //    这一步确保 ① 不是恒真断言——若两条谓词写法随便怎么改都相等，
+            //    ① 就没有守门能力。
+            int tenantOnlyShape = countChunksAs(T, "c.tenant_id = ?::uuid", T);
+            assertEquals(explicitShape - 1, tenantOnlyShape,
+                    "「仅本租户」形态必须比「本租户 ∪ 全局」形态少 1 行（全局那条 chunk）："
+                            + "仅本租户=" + tenantOnlyShape + " 显式双桶=" + explicitShape
+                            + "。若相等，说明全局夹具没生效，① 是恒真的假绿");
+        } finally {
+            retireGlobalChain();
+        }
+    }
+
+    /**
      * 租户写不进全局桶。
      *
      * <p>⚠️ 带<b>反自证对照</b>：同一条 INSERT 语句形状，租户桶写成功、
@@ -552,6 +602,18 @@ class RetrievalRepositoryIT {
 
     /** 在指定租户上下文下，按给定谓词数 rag_chunk（复刻检索仓库的三表 JOIN 形状）。 */
     private int countChunksAs(String tenantId, String predicate) {
+        return countChunksAs(tenantId, predicate, new Object[0]);
+    }
+
+    /**
+     * 在指定租户上下文下，按给定谓词（可带绑定参数）数 rag_chunk。
+     *
+     * <p>⚠️ 支持绑定参数是<b>必需</b>的：M3 显式化后，应用层谓词不再引用
+     * {@code rag_current_tenant()}，而是绑具体租户值。
+     * 若本辅助方法只能写「GUC 形态」的谓词，就<b>无法</b>验证新谓词与老谓词等价——
+     * 那正是 M3 最需要的那条反证。
+     */
+    private int countChunksAs(String tenantId, String predicate, Object... params) {
         Integer n = transactionTemplate.execute(status -> {
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, tenantId);
@@ -562,7 +624,7 @@ class RetrievalRepositoryIT {
                             + " JOIN rag_source src ON doc.source_id = src.source_id"
                             + "                             AND c.tenant_id = src.tenant_id"
                             + " WHERE " + predicate,
-                    Integer.class);
+                    Integer.class, params);
         });
         return n == null ? 0 : n;
     }
@@ -588,22 +650,46 @@ class RetrievalRepositoryIT {
     // 夹具：在同一事务内 set_config 模拟主平台传入的租户上下文
     // ---------------------------------------------------------------------
 
+    /**
+     * 按租户执行「取回依据」。
+     *
+     * <p>⚠️ <b>set_config 与 scope 必须同时给出</b>（RLS 清理 · M3 的双写期形态）：
+     * <ul>
+     *   <li>{@code set_config} 是 <b>RLS 在场期的兼容层</b>（FORCE RLS 策略仍读 GUC），
+     *       随 M4-R1 批次退役移除；</li>
+     *   <li>{@code scope} 是 <b>应用层隔离权威</b>（渲染进 SQL 显式谓词），
+     *       退役前后都在。</li>
+     * </ul>
+     * 两者必须指向<b>同一个租户</b>——不一致时两层各自过滤，结果是「0 行」而非泄漏，
+     * 但那属于配置错误，本 IT 的等价性用例正是为了钉住「两层同租户」这条纪律。
+     */
     private List<Chunk> loadByIdsAs(String tenantId, List<String> chunkIds) {
         return transactionTemplate.execute(status -> {
             // ⚠️ set_config 是 SELECT（返回一行），必须用 queryForObject() 而非 update()。
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, tenantId);
-            return repository.loadByIds(chunkIds);
+            return repository.loadByIds(scopeFor(tenantId), chunkIds);
         });
     }
 
+    /** 按租户执行检索（scope 与 set_config 同租户，见 {@link #loadByIdsAs}）。 */
     private List<ScoredChunk> searchAs(String tenantId, RetrievalRequest req) {
         return transactionTemplate.execute(status -> {
             // ⚠️ set_config 是 SELECT（返回一行），必须用 queryForObject() 而非 update()。
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, tenantId);
-            return repository.search(req);
+            return repository.search(scopeFor(tenantId), req);
         });
+    }
+
+    /**
+     * 构造检索面的作用域（读侧口径：本租户 ∪ 全局哨兵）。
+     *
+     * <p>与 {@code JdbcTenantScopedRetrieval} 生产路径同构——测试不能自己发明
+     * 一个「测试专用作用域」，否则测的就不是生产走的那条路。
+     */
+    private static RagScopeFilter scopeFor(String tenantId) {
+        return new RagScopeFilter.TenantWithGlobal(tenantId);
     }
 
     private void seedTenantT() {

@@ -108,7 +108,7 @@ class ChunkIndexerTest {
         // ⚠️ 这里让被 mock 的 DB **无视 LIMIT** 返回 5 条：
         //    若实现只把上限寄托在 SQL 的 LIMIT ? 上，就会处理 5 条——
         //    而管理面向调用方承诺的是「最多处理 N 条」。
-        when(jdbc.query(eq(ChunkIndexer.PENDING_SQL),
+        when(jdbc.query(eq(ChunkIndexer.PENDING_SQL.replace("{rag_tenant}", "'t'::uuid")),
                 ArgumentMatchers.<RowMapper<ChunkIndexer.PendingChunk>>any(),
                 ArgumentMatchers.any(), ArgumentMatchers.any()))
                 .thenReturn(List.of(
@@ -135,7 +135,7 @@ class ChunkIndexerTest {
     void fewerPendingThanLimitAreAllIndexed() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         TransactionTemplate tx = passthroughTransactionTemplate();
-        when(jdbc.query(eq(ChunkIndexer.PENDING_SQL),
+        when(jdbc.query(eq(ChunkIndexer.PENDING_SQL.replace("{rag_tenant}", "'t'::uuid")),
                 ArgumentMatchers.<RowMapper<ChunkIndexer.PendingChunk>>any(),
                 ArgumentMatchers.any(), ArgumentMatchers.any()))
                 .thenReturn(List.of(new ChunkIndexer.PendingChunk("c1", "文本一")));
@@ -164,8 +164,8 @@ class ChunkIndexerTest {
                 "缺词法切词的片段必须被补齐");
         org.junit.jupiter.api.Assertions.assertTrue(sql.contains("rag_chunk_embedding"),
                 "缺向量的片段必须被补齐");
-        org.junit.jupiter.api.Assertions.assertTrue(sql.contains("c.tenant_id = rag_current_tenant()"),
-                "扫描必须按租户收口（RLS）");
+        org.junit.jupiter.api.Assertions.assertTrue(sql.contains("c.tenant_id = {rag_tenant}"),
+                "扫描必须按租户收口（M3 起显式占位符 {rag_tenant} → UUID 字面量，不再依赖 rag_current_tenant() 读 GUC）");
         // ⚠️ 键集分页游标必须显式转 uuid：chunk_id 是 uuid 列，
         //    参数以字符串传入时 PG 无 uuid > varchar 运算符 → 运行期 500。
         //    （2026-10-23 实测踩中：这条 SQL 在被管理端点真正调用前从未跑过。）

@@ -47,6 +47,11 @@ spring:
       fetch-size: 100
 
 rag:
+  # ── M2 影子观察期（默认关闭；开启后各仓储采集点才生效，零行为变更）────
+  shadow:
+    enabled: ${RAG_SHADOW_ENABLED:false}
+    sample-rate: ${RAG_SHADOW_SAMPLE_RATE:1.0}
+    block-on-violation: ${RAG_SHADOW_BLOCK:false}
   # ── 语料物理载体落盘根目录（ObjectStorePort 的本地桩实现）──────────
   # ⚠️ 这是「落桶语义的最小实现」：把上传字节写到本地目录，
   #    返回相对路径作为 objectRef。真实部署应替换为 MinIO / S3 适配器

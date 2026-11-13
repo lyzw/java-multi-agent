@@ -11,10 +11,17 @@ import java.util.UUID;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 
+import cn.studykid.multiagent.core.tenant.SubjectContext;
 import cn.studykid.multiagent.core.tenant.TenantContext;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowBinding;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowHooks;
+import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
+import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort;
 
 /**
@@ -26,11 +33,17 @@ import cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort;
  * {@code tenant_id = current_tenant_id()}。未绑定 {@code app.tenant_id}
  * 时可见 <b>0 行</b>，症状是「Agent 明明有快照，却解析不出来」——
  * 与「Agent 真的没发布」<b>症状完全相同</b>，会把排查方向带偏。
+ * ⚠️ RLS 退役期（改造计划 WP-M1-2）：GUC 绑定在 holder 中心统一执行，保留至
+ * M4 退役批次；SQL 三表显式 {@code tenant_id} 等值谓词，RLS 退役后功能不变。
  *
  * <p><b>⚠️ 嵌套事务</b>：本类在 {@code RunCreationService} 的写入事务内被调用，
  * {@link TransactionalConnectionHolder#inTransaction} 检测到外层事务已激活，
  * 会<b>复用同一连接且不提交</b>，故解析与写入天然同事务——
  * 不存在「解析完再改版」的窗口。
+ *
+ * <p><b>影子态（WP-M1-2）</b>：入口 1:1 {@code compare("execution_snapshot")}；
+ * SELECT 未取 {@code tenant_id} 列（仅 snapshot_id/version_number），无行租户可染色 ⇒
+ * compare-only（与聚合面同一纪律）。
  */
 public class JdbcExecutionSnapshotResolver implements ExecutionSnapshotPort {
 
@@ -80,8 +93,30 @@ public class JdbcExecutionSnapshotResolver implements ExecutionSnapshotPort {
 
     private final DataSource dataSource;
 
+    // ── 影子态接入（WP-M1-2，默认不启用零行为变更）────────────────────
+    private @Nullable ScopedDataAccess scoped;
+    private @Nullable AuthzShadowReporter reporter;
+    private volatile boolean shadowEnabled;
+    // ⚠️ 装配守卫按反射统一读取四字段（compare-only 仓也为保持契约一致而声明）
+    private @NonNull String sentinelTenantId = "";
+
     public JdbcExecutionSnapshotResolver(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    /**
+     * 影子态装配入口：容器里存在 {@link AuthzShadowBinding} 即开启（P1 影子期），
+     * 不存在即完全关闭（零行为变更）。
+     */
+    @Autowired(required = false)
+    public void bindAuthzShadow(@Nullable AuthzShadowBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        this.scoped = binding.scoped();
+        this.reporter = binding.reporter();
+        this.shadowEnabled = true;
+        this.sentinelTenantId = binding.sentinelTenantId();
     }
 
     @Override
@@ -95,6 +130,8 @@ public class JdbcExecutionSnapshotResolver implements ExecutionSnapshotPort {
             log.debug("快照解析跳过：agentId 非 UUID");
             return Optional.empty();
         }
+        // ⚠️ 影子比对（P1 只记日志）：Gate 算出的 ScopeFilter vs 本次绑定租户。
+        shadowCompare(tenantId);
         return TransactionalConnectionHolder.inTransaction(
                 dataSource,
                 new TenantContext(tenantId, "system", Set.of(), 0L),
@@ -122,5 +159,16 @@ public class JdbcExecutionSnapshotResolver implements ExecutionSnapshotPort {
         } catch (IllegalArgumentException e) {
             return false;
         }
+    }
+
+    // ── 影子辅助（守卫要求：声明与调用分离，入口真调用）────────────
+
+    /**
+     * 影子比对：Gate 算出的 ScopeFilter vs 本次绑定租户（只记日志）。
+     * SELECT 未取 {@code tenant_id} 列，无行租户可染色 ⇒ compare-only。
+     */
+    void shadowCompare(@NonNull String boundTenantId) {
+        AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, "execution_snapshot",
+                SubjectContext.forTenant(boundTenantId), boundTenantId, true);
     }
 }

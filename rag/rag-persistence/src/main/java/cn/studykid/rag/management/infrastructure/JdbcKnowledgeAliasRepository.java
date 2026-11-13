@@ -99,16 +99,20 @@ public class JdbcKnowledgeAliasRepository implements KnowledgeAliasPort {
         String kw = (keyword == null || keyword.isBlank()) ? null : keyword.trim();
         List<KnowledgePointBrief> rows = transactionTemplate.execute(tx -> {
             RagSessionScope.apply(jdbcTemplate, context);
-            return jdbcTemplate.query("""
+            // ⚠️ M3（RLS 清理）：租户谓词由显式 UUID 字面量注入（rag_global_tenant_id() 为
+            //    IMMUTABLE 常量、不依赖 GUC，按 M3 修正口径保留；set_config 仅兼容层）。
+            String tenantLiteral = "'" + context.queryTenantId() + "'::uuid";
+            String sql = """
                     SELECT kp_id::text, subject, grade, canonical_name,
                            COALESCE(array_length(aliases, 1), 0) AS alias_count,
                            COALESCE(array_length(prerequisites, 1), 0) AS prereq_count
                       FROM rag_knowledge_point
-                     WHERE tenant_id IN (rag_current_tenant(), rag_global_tenant_id())
+                     WHERE tenant_id IN ({rag_tenant}, rag_global_tenant_id())
                        AND (?::text IS NULL OR canonical_name ILIKE '%' || ?::text || '%')
                      ORDER BY subject, grade, canonical_name
                      LIMIT ?
-                    """,
+                    """.replace("{rag_tenant}", tenantLiteral);
+            return jdbcTemplate.query(sql,
                     (rs, i) -> new KnowledgePointBrief(
                             rs.getString(1), rs.getString(2), rs.getString(3),
                             rs.getString(4), rs.getInt(5), rs.getInt(6)),
