@@ -36,6 +36,15 @@
       <artifactId>spring-boot-starter-security</artifactId>
     </dependency>
     <!--
+      异常日志的请求上下文要打 JSON body（RequestLogContext）。
+      Jackson 3（tools.jackson），随 Spring Boot 4.1 基线；版本由父 POM 的
+      dependencyManagement 统一管理，此处不写 version。
+    -->
+    <dependency>
+      <groupId>tools.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <!--
       D-001 IAM：解析 Bearer 令牌为可信 TenantContext。
       ⚠️ 依赖 infrastructure 是**本层的必要例外**：认证链的具体实现
       （验签、角色复核）按 ADR-006 属基础设施层。

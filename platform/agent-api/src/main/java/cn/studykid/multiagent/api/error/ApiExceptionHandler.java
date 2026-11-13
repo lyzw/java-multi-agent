@@ -3,6 +3,7 @@ package cn.studykid.multiagent.api.error;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -23,7 +24,15 @@ import cn.studykid.multiagent.core.compliance.ZeroRetentionViolationException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.ports.persistence.PlatformOpsUnavailableException;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
-import org.springframework.web.servlet.support.RequestContextUtils;
+
+import java.io.IOException;
+import java.util.List;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.servlet.HandlerMapping;
 
 /**
  * 全局异常处理。
@@ -35,6 +44,19 @@ import org.springframework.web.servlet.support.RequestContextUtils;
  * <p>另一个原则：<b>异常与拒绝必须可区分</b>。
  * 「系统故障」返回 5xx，「明确拒绝」返回 4xx——
  * 把拒绝伪装成故障会导致监控误报，把故障伪装成拒绝会导致问题被忽略。
+ *
+ * <p><b>日志侧：每条异常日志都带「接口地址 + 参数」</b>
+ * （见 {@link RequestLogContext}）。排障的第一条线索永远是「哪个接口、带了什么参数」，
+ * 没有它就得回头翻前端代码猜请求长什么样。
+ * JSON 请求的载荷全在 body 里，因此<b>JSON 请求打 body、其余请求打参数</b>
+ * （body 由入口过滤器有界缓存，异常到达时仍可回读）。
+ *
+ * <p>⚠️ <b>但「记参数」不等于「把凭据抄进日志」</b>：口令 / 令牌 / 密钥一类
+ * 敏感键，以及形如 JWT、Bearer 的值，在 {@link RequestLogContext} 内一律掩码；
+ * 参数与 body 值里的控制字符也被净化（防日志注入）。
+ *
+ * <p>⚠️ <b>返回给客户端的消息不受影响</b>：本类只往<b>服务端日志</b>补上下文，
+ * 响应体仍是归一化的 code 与固定文案——排障信息进日志，不进响应。
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -56,8 +78,8 @@ public class ApiExceptionHandler {
     @ExceptionHandler(PlatformExecutionTicketService.TicketRejectedException.class)
     public ResponseEntity<ErrorResponse> handleTicketRejected(
             PlatformExecutionTicketService.TicketRejectedException e) {
-        log.info("执行票证签发被拒: code={} status={} msg={}",
-                e.reasonCode(), e.status().value(), e.getMessage());
+        log.info("执行票证签发被拒: code={} status={} msg={} | {}",
+                e.reasonCode(), e.status().value(), e.getMessage(), requestContext());
         return ResponseEntity.status(e.status())
                 .body(new ErrorResponse(e.reasonCode(), e.getMessage()));
     }
@@ -72,8 +94,8 @@ public class ApiExceptionHandler {
     @ExceptionHandler(PlatformRagGovernanceTicketService.GovernanceTicketRejectedException.class)
     public ResponseEntity<ErrorResponse> handleGovernanceTicketRejected(
             PlatformRagGovernanceTicketService.GovernanceTicketRejectedException e) {
-        log.info("治理票据签发被拒: code={} status={} msg={}",
-                e.reasonCode(), e.status().value(), e.getMessage());
+        log.info("治理票据签发被拒: code={} status={} msg={} | {}",
+                e.reasonCode(), e.status().value(), e.getMessage(), requestContext());
         return ResponseEntity.status(e.status())
                 .body(new ErrorResponse(e.reasonCode(), e.getMessage()));
     }
@@ -85,8 +107,8 @@ public class ApiExceptionHandler {
      */
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ErrorResponse> handleAccessDenied(AccessDeniedException e) {
-        log.warn("授权拒绝: principal={}, action={}",
-                e.principalId(), e.action());
+        log.warn("授权拒绝: principal={}, action={} | {}",
+                e.principalId(), e.action(), requestContext());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(new ErrorResponse("ACCESS_DENIED", "无权执行该操作"));
     }
@@ -110,7 +132,8 @@ public class ApiExceptionHandler {
     @ExceptionHandler(ExecutionSnapshotUnavailableException.class)
     public ResponseEntity<ErrorResponse> handleSnapshotUnavailable(
             ExecutionSnapshotUnavailableException e) {
-        log.warn("执行快照不可解析: tenant={}, agentId={}", e.tenantId(), e.agentId());
+        log.warn("执行快照不可解析: tenant={}, agentId={} | {}",
+                e.tenantId(), e.agentId(), requestContext());
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(new ErrorResponse("AGENT_SNAPSHOT_UNAVAILABLE",
                         "该 Agent 尚无可用的已发布版本"));
@@ -124,7 +147,7 @@ public class ApiExceptionHandler {
      */
     @ExceptionHandler(IdempotencyConflictException.class)
     public ResponseEntity<ErrorResponse> handleIdempotencyConflict(IdempotencyConflictException e) {
-        log.warn("幂等冲突");
+        log.warn("幂等冲突 | {}", requestContext());
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new ErrorResponse("IDEMPOTENCY_CONFLICT",
                         "该幂等键已被一个不同的请求占用"));
@@ -144,7 +167,8 @@ public class ApiExceptionHandler {
     @ExceptionHandler(RunBudgetLimitInvalidException.class)
     public ResponseEntity<ErrorResponse> handleRunBudgetLimitInvalid(
             RunBudgetLimitInvalidException e) {
-        log.warn("Run 级额度声明被拒: tenant={}, 声明={}", e.tenantId(), e.declaredAmount());
+        log.warn("Run 级额度声明被拒: tenant={}, 声明={} | {}",
+                e.tenantId(), e.declaredAmount(), requestContext());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(new ErrorResponse("RUN_BUDGET_LIMIT_INVALID",
                         "声明的 Run 级额度不可用（须不超过租户账户总额度，且租户已开通预算账户）"));
@@ -160,8 +184,8 @@ public class ApiExceptionHandler {
     @ExceptionHandler(ZeroRetentionViolationException.class)
     public ResponseEntity<ErrorResponse> handleZeroRetention(ZeroRetentionViolationException e) {
         // ⚠️ 合规事件需留痕，但**不记录被拦截的数据内容**
-        log.error("零保留闸门拦截: state={}, provider={}, classification={}",
-                e.state(), e.providerId(), e.classification());
+        log.error("零保留闸门拦截: state={}, provider={}, classification={} | {}",
+                e.state(), e.providerId(), e.classification(), requestContext());
         return ResponseEntity.status(HttpStatus.UNAVAILABLE_FOR_LEGAL_REASONS)
                 .body(new ErrorResponse("COMPLIANCE_BLOCKED",
                         "当前合规状态不允许该请求"));
@@ -175,10 +199,9 @@ public class ApiExceptionHandler {
      */
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ErrorResponse> handleUnreadable(HttpMessageNotReadableException e) {
-        log.debug("请求体不可读");
-        return ResponseEntity.badRequest()
-                .body(new ErrorResponse("INVALID_REQUEST",
-                        "请求体格式错误或包含不被接受的字段"));
+        log.debug("请求体不可读 | {}", requestContext());
+        return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST",
+                "请求体格式错误或包含不被接受的字段");
     }
 
     /**
@@ -190,9 +213,8 @@ public class ApiExceptionHandler {
      */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ErrorResponse> handleInvalidArgument(IllegalArgumentException e) {
-        log.warn("参数校验失败: {}", e.getMessage());
-        return ResponseEntity.badRequest()
-                .body(new ErrorResponse("INVALID_REQUEST", "请求参数不合法"));
+        log.warn("参数校验失败: {} | {}", e.getMessage(), requestContext());
+        return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "请求参数不合法");
     }
 
     /**
@@ -217,7 +239,7 @@ public class ApiExceptionHandler {
     @ExceptionHandler(MonitoringViewService.MonitoringUnavailableException.class)
     public ResponseEntity<ErrorResponse> handleMonitoringUnavailable(
             MonitoringViewService.MonitoringUnavailableException e) {
-        log.error("监控数据源不可用: {}", e.getMessage());
+        log.error("监控数据源不可用: {} | {}", e.getMessage(), requestContext());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(new ErrorResponse("MONITORING_UNAVAILABLE", "监控数据暂时不可用"));
     }
@@ -256,7 +278,7 @@ public class ApiExceptionHandler {
     @ExceptionHandler(PlatformOpsUnavailableException.class)
     public ResponseEntity<ErrorResponse> handlePlatformOpsUnavailable(
             PlatformOpsUnavailableException e) {
-        log.error("平台运维角色未接入（fail-closed）: {}", e.getMessage());
+        log.error("平台运维角色未接入（fail-closed）: {} | {}", e.getMessage(), requestContext());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(new ErrorResponse("PLATFORM_OPS_UNAVAILABLE", "平台运维通道未接入"));
     }
@@ -264,16 +286,17 @@ public class ApiExceptionHandler {
     @ExceptionHandler(org.springframework.web.HttpMediaTypeNotSupportedException.class)
     public ResponseEntity<ErrorResponse> handleUnsupportedMediaType(
             org.springframework.web.HttpMediaTypeNotSupportedException e) {
-        log.warn("媒体类型不支持");
+        log.warn("媒体类型不支持 | {}", requestContext());
         return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
                 .body(new ErrorResponse("UNSUPPORTED_MEDIA_TYPE", "请求媒体类型不受支持"));
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception e) {
-        log.error("未预期异常", e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(new ErrorResponse("INTERNAL_ERROR", "服务暂时不可用"));
+        // ⚠️ 最后一个参数是 Throwable：slf4j 会在占位符用完后把它当异常处理（打印堆栈），
+        //    不会被当成「多出来的参数」丢掉。
+        log.error("未预期异常 | {}", requestContext(), e);
+        return error(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "服务暂时不可用");
     }
 
     // ── 以下两个是 P4-D09 端到端验证发现的真实缺陷 ──────────────────────
@@ -313,21 +336,20 @@ public class ApiExceptionHandler {
         // ⚠️ 未映射到 HttpStatus 的状态码按 500 处理：
         //    它意味着控制器声明了一个不存在的状态，属编程错误，不能当 4xx 放行。
         if (status == null) {
-            log.error("控制器声明了非法状态码: code={}", e.getStatusCode().value());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(new ErrorResponse("INTERNAL_ERROR", "服务暂时不可用"));
+            log.error("控制器声明了非法状态码: code={} | {}",
+                    e.getStatusCode().value(), requestContext());
+            return error(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "服务暂时不可用");
         }
         // ⚠️ 控制器显式声明的 5xx 状态码保持原样，不转换为 500：
         //    例如 503 SERVICE_UNAVAILABLE 表示服务暂时不可用，
         //    转换为 500 会丢失语义，让客户端无法区分「服务故障」与「服务不可用」。
         if (status.is5xxServerError()) {
-            log.warn("控制器声明了服务端错误状态: code={}", e.getStatusCode());
-            return ResponseEntity.status(status)
-                    .body(new ErrorResponse(codeOf(status), messageOf(status)));
+            log.warn("控制器声明了服务端错误状态: code={} | {}",
+                    e.getStatusCode(), requestContext());
+            return error(status, codeOf(status), messageOf(status));
         }
-        log.info("控制器声明的状态: code={}", e.getStatusCode());
-        return ResponseEntity.status(status)
-                .body(new ErrorResponse(codeOf(status), messageOf(status)));
+        log.info("控制器声明的状态: code={} | {}", e.getStatusCode(), requestContext());
+        return error(status, codeOf(status), messageOf(status));
     }
 
     /**
@@ -345,7 +367,8 @@ public class ApiExceptionHandler {
 @ExceptionHandler(ConfigOverrideController.ApprovalRequiredException.class)
 public ResponseEntity<ErrorResponse> handleApprovalRequired(
         ConfigOverrideController.ApprovalRequiredException e) {
-    log.info("高危配置键试图直写（须走审批）: key={} tier={}", e.key(), e.tier());
+    log.info("高危配置键试图直写（须走审批）: key={} tier={} | {}",
+            e.key(), e.tier(), requestContext());
     return ResponseEntity.status(HttpStatus.CONFLICT)
             .body(new ErrorResponse("CONFIG_APPROVAL_REQUIRED",
                     "该配置项为高危变更，须提交变更申请并经审批后生效"));
@@ -367,7 +390,7 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
     public ResponseEntity<ErrorResponse> handleConfigRelaxation(
             ConfigTighteningPolicy.ConfigRelaxationException e) {
         // ⚠️ 固定文案、不回显 e.getMessage()：后者含新旧值，可能携带用户输入。
-        log.info("配置变更被收紧策略拒绝: key={}", e.key());
+        log.info("配置变更被收紧策略拒绝: key={} | {}", e.key(), requestContext());
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new ErrorResponse("CONFIG_RELAXATION_REJECTED",
                         "该变更被安全策略拒绝：配置只允许收紧，不允许放松"));
@@ -396,8 +419,8 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
     @ExceptionHandler(cn.studykid.multiagent.application.cap.ConfigPublishRejectedException.class)
     public ResponseEntity<ErrorResponse> handlePublishRejected(
             cn.studykid.multiagent.application.cap.ConfigPublishRejectedException e) {
-        log.info("配置发布被拒: reasonCode={}, field={}",
-                e.reasonCode(), e.field());
+        log.info("配置发布被拒: reasonCode={}, field={} | {}",
+                e.reasonCode(), e.field(), requestContext());
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                 .body(new ErrorResponse("CONFIG_PUBLISH_REJECTED",
                         "配置未通过发布门禁: " + e.reasonCode() + "（字段 " + e.field() + "）"));
@@ -412,7 +435,8 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
     @ExceptionHandler(cn.studykid.multiagent.application.cap.ConfigPublishConflictException.class)
     public ResponseEntity<ErrorResponse> handlePublishConflict(
             cn.studykid.multiagent.application.cap.ConfigPublishConflictException e) {
-        log.info("配置发布冲突（基线已被推进）: expectedPublishSeq={}", e.expectedPublishSeq());
+        log.info("配置发布冲突（基线已被推进）: expectedPublishSeq={} | {}",
+                e.expectedPublishSeq(), requestContext());
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new ErrorResponse("CONFIG_PUBLISH_CONFLICT",
                         "配置已被他人变更，请重新读取当前状态后再发布"));
@@ -427,7 +451,7 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
     @ExceptionHandler(cn.studykid.multiagent.core.tenant.TenantMismatchException.class)
     public ResponseEntity<ErrorResponse> handleTenantMismatch(
             cn.studykid.multiagent.core.tenant.TenantMismatchException e) {
-        log.warn("租户不匹配被拒: {}", e.getMessage());
+        log.warn("租户不匹配被拒: {} | {}", e.getMessage(), requestContext());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(new ErrorResponse("TENANT_MISMATCH", "无权访问该租户的资源"));
     }
@@ -442,7 +466,7 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
     @ExceptionHandler(cn.studykid.multiagent.core.run.IllegalStateTransitionException.class)
     public ResponseEntity<ErrorResponse> handleIllegalTransition(
             cn.studykid.multiagent.core.run.IllegalStateTransitionException e) {
-        log.info("非法状态转移: {}", e.getMessage());
+        log.info("非法状态转移: {} | {}", e.getMessage(), requestContext());
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new ErrorResponse("ILLEGAL_STATE_TRANSITION", "请求与当前资源状态冲突"));
     }
@@ -457,7 +481,7 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
     public ResponseEntity<ErrorResponse> handlePublishRequestNotFound(
             cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort
                     .NotFoundException e) {
-        log.info("配置发布申请单不存在: {}", e.getMessage());
+        log.info("配置发布申请单不存在: {} | {}", e.getMessage(), requestContext());
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(new ErrorResponse("NOT_FOUND", "资源不存在"));
     }
@@ -472,7 +496,7 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
     public ResponseEntity<ErrorResponse> handleConfigChangeNotFound(
             cn.studykid.multiagent.ports.persistence.ConfigChangePort
                     .ChangeNotFoundException e) {
-        log.info("配置变更申请不存在: {}", e.getMessage());
+        log.info("配置变更申请不存在: {} | {}", e.getMessage(), requestContext());
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(new ErrorResponse("NOT_FOUND", "资源不存在"));
     }
@@ -495,9 +519,8 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
     @ExceptionHandler(UnauthenticatedException.class)
     public ResponseEntity<ErrorResponse> handleUnauthenticated(UnauthenticatedException e) {
         // ⚠️ 消息固定为「未认证」，不回显 getMessage()（不含令牌内容但也无必要透出细节）
-        log.info("缺少认证凭据: principal=匿名");
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                .body(new ErrorResponse("UNAUTHENTICATED", "未认证"));
+        log.info("缺少认证凭据: principal=匿名 | {}", requestContext());
+        return error(HttpStatus.UNAUTHORIZED, "UNAUTHENTICATED", "未认证");
     }
 
     /**
@@ -529,7 +552,8 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
     public ResponseEntity<ErrorResponse> handleNoResourceFound(
             org.springframework.web.servlet.resource.NoResourceFoundException e) {
         // ⚠️ 不回显 e.getMessage()：它含请求路径原文（可能含客户端数据）
-        log.info("请求路径未映射到任何端点: path={}", e.getResourcePath());
+        log.info("请求路径未映射到任何端点: path={} | {}",
+                e.getResourcePath(), requestContext());
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(new ErrorResponse(codeOf(HttpStatus.NOT_FOUND), messageOf(HttpStatus.NOT_FOUND)));
     }
@@ -549,9 +573,107 @@ public ResponseEntity<ErrorResponse> handleApprovalRequired(
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<ErrorResponse> handleMethodNotSupported(
             HttpRequestMethodNotSupportedException e) {
-        log.info("HTTP 方法不被支持: {}", e.getMessage());
+        log.info("HTTP 方法不被支持: {} | {}", e.getMessage(), requestContext());
         return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
                 .body(new ErrorResponse("METHOD_NOT_ALLOWED", "请求使用的 HTTP 方法不被该资源支持"));
+    }
+
+    // ── SSE 错误路径修复（2026-11-13）──────────────────────────
+    // 背景：SSE 端点（produces=text/event-stream）的客户端固定发
+    // Accept: text/event-stream。若把结构化错误交给 Spring 消息转换器，
+    // 因 Accept 与 producible 媒体类型不兼容会抛 HttpMediaTypeNotAcceptableException，
+    // 导致异常处理器自身失败（WARN: Failure in @ExceptionHandler），客户端拿不到错误。
+    // 因此对 SSE 请求直写 application/json 错误体，绕过内容协商。
+
+    /** 当前请求是否来自 SSE 端点（须以 text/event-stream 接受）。 */
+    private boolean isSseRequest() {
+        var attrs = RequestContextHolder.getRequestAttributes();
+        if (!(attrs instanceof ServletRequestAttributes sar) || sar.getResponse() == null) {
+            return false;
+        }
+        HttpServletRequest req = sar.getRequest();
+        Object producible = req.getAttribute(HandlerMapping.PRODUCIBLE_MEDIA_TYPES_ATTRIBUTE);
+        if (producible instanceof List<?> types) {
+            for (Object t : types) {
+                if (t instanceof MediaType mt && mt.isCompatibleWith(MediaType.TEXT_EVENT_STREAM)) {
+                    return true;
+                }
+            }
+        }
+        String accept = req.getHeader("Accept");
+        return accept != null && accept.contains(MediaType.TEXT_EVENT_STREAM_VALUE);
+    }
+
+    /**
+     * 归一化错误响应：SSE 请求直写 JSON（绕过 Accept 协商），其余请求走正常 ResponseEntity。
+     */
+    private ResponseEntity<ErrorResponse> error(HttpStatus status, String code, String message) {
+        ErrorResponse body = new ErrorResponse(code, message);
+        if (isSseRequest()) {
+            writeSseSafeError(status, body);
+            return null;
+        }
+        return ResponseEntity.status(status).body(body);
+    }
+
+    private void writeSseSafeError(HttpStatus status, ErrorResponse body) {
+        try {
+            var sar = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+            if (sar == null || sar.getResponse() == null) {
+                return;
+            }
+            HttpServletResponse res = sar.getResponse();
+            res.setStatus(status.value());
+            res.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            res.setCharacterEncoding("UTF-8");
+            res.getWriter().write("{\"code\":" + jsonString(body.code())
+                    + ",\"message\":" + jsonString(body.message()) + "}");
+            res.getWriter().flush();
+        } catch (IOException e) {
+            log.warn("SSE 错误响应直写失败 | {}", requestContext(), e);
+        }
+    }
+
+    /** 极小化的 JSON 字符串转义（错误体仅含受控的 code/message，无用户输入）。 */
+    private static String jsonString(String s) {
+        StringBuilder b = new StringBuilder("\"");
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"' -> b.append("\\\"");
+                case '\\' -> b.append("\\\\");
+                case '\n' -> b.append("\\n");
+                case '\r' -> b.append("\\r");
+                case '\t' -> b.append("\\t");
+                case '\b' -> b.append("\\b");
+                case '\f' -> b.append("\\f");
+                default -> {
+                    if (c < 0x20) {
+                        b.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        b.append(c);
+                    }
+                }
+            }
+        }
+        return b.append('"').toString();
+    }
+
+    /**
+     * 当前请求的上下文（接口地址 + 参数），供日志行携带。
+     *
+     * <p><b>为什么走 {@link RequestLogContext} 而不是直接把
+     * {@code HttpServletRequest} 注入每个处理方法</b>：注入会让本类每个处理方法的
+     * 签名都变，而这些方法是被<b>直接单测调用</b>的
+     * （{@code ApiExceptionHandlerTest} 逐个调处理器断言状态码）——
+     * 签名一变，就等于把「没有请求上下文」这条路径从测试里删掉了。
+     *
+     * <p>取不到请求时返回 {@code -}（占位符，不是空串）：
+     * 处理器既可能在 Web 请求里跑，也可能被内部流程直接调用，
+     * 两种情况下日志都必须是可读的。
+     */
+    private static String requestContext() {
+        return RequestLogContext.describe();
     }
 
     /** 4xx 状态 → 归一化 code。 */
