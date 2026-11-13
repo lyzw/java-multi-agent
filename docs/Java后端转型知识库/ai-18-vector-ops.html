@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A18 · 向量库运维与索引代际 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-18-vector-ops" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A18 · 向量库运维与索引代际</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A18 · 向量库运维与索引代际 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">维度是契约、halfvec 4000 上限与「能存不能索引」、BUILDING/ACTIVE/RETIRED 蓝绿代际、异步构建 Worker 四条纪律、text_jieba 预分词与重灌纪律</p>
+  <div class="ph-meta"><span>覆盖：A18.1–A18.10</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a18">
+  <div class="breadcrumb"><b>AI 专题 · A18</b> / 向量库运维与索引代际</div>
+  <h2><span class="num">A18.</span> 向量库运维与索引代际：维度契约、蓝绿重建与嵌入一致性</h2>
+  <p><a href="ai-07-corpus-engineering.html">A7</a> 讲的是<strong>语料怎么进来</strong>（PDF → 解析 → 切分 → 入库），<a href="ai-01-fundamentals.html#ai1-6">A1.6</a> 讲 Embedding 与向量列的基本概念。本册讲<strong>向量怎么活下来</strong>：维度为什么是契约而不是常量、换模型怎么做到零停机、后台构建 Worker 的四条纪律、中文全文检索为什么要在应用侧预分词。这是 RAG 系统上线后<strong>运维频率最高</strong>的一块——换模型、重建索引、补向量、清残留，每次都在这个面上。</p>
+  <div class="callout c-info"><span class="ct">本册与 A7 / A1 的分工</span><p><a href="ai-07-corpus-engineering.html">A7</a>：语料流水线（解析、切分、入库、检索准入、十条文档失真）。<a href="ai-01-fundamentals.html#ai1-6">A1.6</a>：Embedding 概念与「4096 维建不了索引」这个坑的一句话结论。<strong>本册</strong>：向量列与索引的工程细节——`VectorColumn` 为什么被建模成 record、代际状态机怎么转、构建 Worker 为什么没有分布式锁。</p></div>
+
+  <h3 id="a18-1">A18.1 维度是契约不是常量：从「写库时才炸」到「启动即失败」</h3>
+  <p><code class="inline-code">VectorColumn</code> 的类注释记录了一次真实的认知升级（:9-19）：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">为什么把维度显式建模（VectorColumn.java:9-19）</span><button>复制</button></div><pre><code>此前代码把 vector(1024) 当【常量】，于是「换一个大维度模型」的
+表现是【写库时才炸】：
+  · 索引流水线会逐条失败
+  · 查询向量的维度不符也只会被 PG 拒绝
+  · 错误信息离根因很远（expected N dimensions, not M）
+
+现在：
+  · 维度来自 EmbeddingPort.dimension()、类型来自配置
+  · 两端（写入 SQL 的 cast、查询 SQL 的 cast）都用同一个对象
+  · 并在【发请求给数据库之前】校验维度</code></pre></div>
+  <p>这是传统 Java 后端最能共鸣的一类改进：<strong>把一个魔法数字提升为领域对象</strong>。收益不只是可读性——<code class="inline-code">record VectorColumn(String type, int dimension)</code> 在<strong>构造器里</strong>就做了两件事：类型白名单校验（cast 要拼进 SQL，绝不接受任意字符串）、维度必须为正。于是错误在装配期就暴露。</p>
+  <p><code class="inline-code">requireDimension(float[] vector)</code> 的错误文案本身是运维资产，值得完整引用：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">requireDimension 的错误文案（VectorColumn.java:65-77）</span><button>复制</button></div><pre><code>向量维度与列 halfvec(4096) 不符：实际 1024 维。
+三者必须同时改：嵌入模型、rag.embedding.dimension、
+rag_chunk_embedding.embedding 的列类型（并全量重建索引）。</code></pre></div>
+  <p>它把「改哪里」直接写进异常。对比 PG 原生报错的 <code class="inline-code">expected 4096 dimensions, not 1024</code>——后者只告诉你结果不符，不告诉你该改三处。<strong>好的错误消息是写给凌晨三点被叫起来的人看的。</strong><span class="tag t-live">已实现</span></p>
+  <div class="evidence"><b>证据：</b> <span class="mono">rag/rag-persistence/.../persistence/VectorColumn.java:9-81</span>；<span class="mono">VectorColumnTest.java</span>。</div>
+
+  <h3 id="a18-2">A18.2 halfvec 4000 维上限与「能存不能索引」：一个必须摊开的取舍</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">维度上限与索引能力（VectorColumn.java:19-36）</span><button>复制</button></div><pre><code>维度上限（pgvector 0.8.x，HNSW / IVFFlat 索引）：
+  vector   → 2000 维
+  halfvec  → 4000 维
+
+超过上限仍可【存储】，但【建不了 ANN 索引】
+→ 稠密检索退化为全表精确扫描 → 语料规模一大就是瓶颈
+
+本项目实测配置：qwen3-embedding:8b / 4096 维 / halfvec
+→ 4096 &gt; 4000 → rag_chunk_embedding_hnsw_idx 【刻意不存在】</code></pre></div>
+  <p>这个取舍在 DDL 里有完整记录（<code class="inline-code">01_rag_ddl.sql</code> 约 :957-966），而且是把<strong>旧定义留档注释掉</strong>而不是删除：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">sql</span><span class="file">被刻意注释掉的 HNSW 索引（deploy/sql/rag/01_rag_ddl.sql:957-966）</span><button>复制</button></div><pre><code>-- ⚠️ 本索引在 halfvec(4096) 下【刻意不存在】（2026-10-28 换真实嵌入模型）：
+--   pgvector 的 HNSW/IVFFlat 对 halfvec 只支持到 4000 维（vector 2000 维），
+--   4096 维能存不能建 ANN 索引，稠密检索退化为全表精确扫描。
+--   当前语料量级（数百片段）下精确扫描既快又无召回损失；
+--   规模化后再二选一：MRL 截断到 ≤4000 维，或改用二进制量化（bit 可到 64000 维）。
+--   旧定义留档：USING hnsw (embedding public.vector_cosine_ops) WITH (m='16', ef_construction='64')
+-- CREATE INDEX rag_chunk_embedding_hnsw_idx ON rag.rag_chunk_embedding USING hnsw (embedding public.halfvec_cosine_ops) WITH (m='16', ef_construction='64');</code></pre></div>
+  <div class="callout c-warn"><span class="ct">「刻意不存在」与「忘了建」在执行层面完全不同</span><p>把索引定义注释掉并写下三段理由（为什么不存在 / 现在为什么可以 / 将来怎么解决），远优于删掉它。删除会让下一个人（或半年后的你）以为「性能优化没做」而盲目加上索引，然后建不出来或建了也没用。<strong>取舍必须留痕，否则取舍会重开。</strong>三条后续路线也写清了：MRL 截断到 ≤4000 维 / 二进制量化（bit 类型可到 64000 维）/ 换回小维度模型——<a href="ai-01-fundamentals.html#ai1-6">A1.6</a> 的「三条路都还没做」即指此。</p></div>
+  <p>判断是否需要索引的运维口径：<strong>先看语料规模</strong>。数百片段量级下全表精确扫描比 HNSW 更快且<strong>无召回损失</strong>（ANN 是近似算法）；到万级片段再考虑改。不要因为「向量检索就该有 HNSW 索引」而提前优化。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">deploy/sql/rag/01_rag_ddl.sql:955-973</span>；<span class="mono">VectorColumn.java:19-36, 49-56</span>；<span class="mono">问题记录/09-RAG与检索质量.md RAG-04</span>。</div>
+
+  <h3 id="a18-3">A18.3 嵌入端口：批大小、超时与「每条向量都要校验」</h3>
+  <p><code class="inline-code">OpenAiCompatibleEmbeddingPort</code> 对接任何 OpenAI 语义的 <code class="inline-code">/embeddings</code>（BGE-M3 网关、Ollama、vLLM <code class="inline-code">--task embed</code>）。三处实现细节：</p>
+  <table>
+    <thead><tr><th>项</th><th>取值 / 行为</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>批大小</td><td><code class="inline-code">DEFAULT_BATCH_SIZE = 16</code></td><td>网关普遍对请求体大小敏感；<code class="inline-code">embed()</code> 按批切分并汇总</td></tr>
+      <tr><td>超时</td><td><code class="inline-code">DEFAULT_TIMEOUT = 120s</code></td><td>本地大模型首 token 前排队可能很慢，给足但不无限</td></tr>
+      <tr><td>API Key 缺省</td><td>空时填 <code class="inline-code">"empty"</code></td><td>Ollama 不校验 key，但 OpenAI 协议的 Authorization 头不能是空值</td></tr>
+      <tr><td>端点归一</td><td>容忍有无 <code class="inline-code">/v1</code> 与尾斜杠，统一成 <code class="inline-code">&lt;base&gt;/embeddings</code></td><td>减少「配置写法不同就调不通」的支持成本</td></tr>
+      <tr><td><strong>维度校验</strong></td><td>构造期要 <code class="inline-code">expectedDimension</code>，<strong>并对每一条返回向量校验长度</strong></td><td>一条维度不符的向量会让整个事务回滚 → 索引流水线里意味着「静默少索引一批 chunk」</td></tr>
+    </tbody>
+  </table>
+  <p>为什么是「每一条」而不是「第一条」：批量接口理论上可能对个别条目返回异常长度（网关实现差异）。校验第一条只能证明网关大体正确，校验每一条才能保证<strong>没有一条脏数据进库</strong>——而脏数据进向量表的后果是索引流水线静默少一批，比直接报错更难查。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">rag/rag-infrastructure/.../embedding/OpenAiCompatibleEmbeddingPort.java:36-107</span>；另有 <span class="mono">LocalDeterministicEmbeddingPort.java</span>（无外部依赖的确定性实现，供离线测试）。</div>
+
+  <h3 id="a18-4">A18.4 蓝绿代际：BUILDING / ACTIVE / RETIRED 状态机</h3>
+  <p>换嵌入模型最危险的动作是「原地改列」。不同模型的向量空间不可比，旧向量不会被新查询向量正确命中——你会得到「检索恒低分且不报错」。解法是<strong>代际（generation）</strong>：新旧向量并存，新代际在后台建好再切换。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">代际状态机（IndexGeneration.java:19-24）</span><button>复制</button></div><pre><code>BUILDING ──构建完成──▶ ACTIVE ──被新代际替换──▶ RETIRED
+   │                      ▲                        │
+   └──── 不可直接激活 ─────┘                        └── 可回到 ACTIVE（回滚）
+
+「回滚」= 把一个 RETIRED 代际重新置为 ACTIVE，
+        同时把原 ACTIVE 置为 RETIRED。
+【任何时刻每个租户至多一个 ACTIVE】——这是检索「只读一个代际」的前提。</code></pre></div>
+  <p>表结构（<code class="inline-code">09_v1_0_3_index_generation_alter.sql:33-60</code>）的关键列：<code class="inline-code">tenant_id / generation / embed_model / dimension / status / indexed_chunks / total_chunks / scope</code>，主键是 <code class="inline-code">(tenant_id, generation)</code>，状态有 CHECK 约束。注意 <code class="inline-code">dimension</code> 列的存在理由写得很好：<strong>「换模型若变维度，此列让『列维度 vs 期望维度』的不符在切换前就被发现」</strong>——把 A18.1 的启动期校验延伸到了代际元数据。</p>
+  <div class="callout c-violet"><span class="ct">为什么改主键而不是新建一张向量表</span><p>迁移注释说得直白：若拆表，「每次换模型都要新建一张『向量表』并改检索 SQL —— 那才是真正的灾难」。改主键为 <code class="inline-code">(tenant_id, chunk_id, index_generation)</code> 后，检索只需多一个 <code class="inline-code">AND e.index_generation = &lt;当前代际&gt;</code> 谓词。<strong>一个谓词 vs 一套动态表名</strong>，这个取舍决定了系统能不能长期维护。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">rag/rag-core/.../indexing/IndexGeneration.java:19-103</span>；<span class="mono">deploy/sql/rag/09_v1_0_3_index_generation_alter.sql:1-60</span>。</div>
+
+  <h3 id="a18-5">A18.5 索引构建 Worker：四条纪律与「为什么没有分布式锁」</h3>
+  <p>改造前的形态：<code class="inline-code">POST /index-generations/{g}/build</code> 在 HTTP 线程上一次性跑完全部片段——数万片段阻塞数十分钟，进程重启后进度丢失、无法续跑。现在的形态：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">Worker 轮询 + 分批推进（IndexGenerationBuildWorker.java:19-46）</span><button>复制</button></div><pre><code>HTTP 端点：只创建 BUILDING 代际，立即返回
+worker  ：每 2 秒问一次「有没有待构建的代际」→ 处理一批 → 释放
+
+⚠️ 四条关键纪律：
+① fixedDelay 而非 fixedRate
+   一批可能跑数秒到数分钟，fixedRate 会让下一轮追赶上一轮，堆积并发线程
+
+② 异常绝不让线程死掉
+   单批失败只记日志并跳过，下一轮重试——
+   否则一次数据库抖动会永久停止所有代际构建（且表面无异常）
+
+③ 租户清单由配置显式给出
+   worker 以非特权角色连接，rag_index_generation 受 RLS FORCE 约束，
+   未设会话租户【读不到任何行】。跨租户扫描会「看起来在跑、实际永远领不到」
+
+④ 全局桶走独立通道
+   清单里出现全局哨兵时调 buildGlobalBatch，其写连接是 BYPASSRLS 的
+   运维角色且不设会话租户。把哨兵填进 app.tenant_id 会让 rag_current_tenant()
+   直接抛错（V8 封堵「租户伪装成平台身份」）</code></pre></div>
+  <p>第 ② 条是 Spring <code class="inline-code">@Scheduled</code> 的经典坑：定时任务里抛未捕获异常，调度器可能停止该任务的后续触发——<strong>一次抖动永久停摆，而且没人知道</strong>。第 ③ 条是 RLS + 定时任务的组合坑：非特权角色 + FORCE RLS + 未设会话租户 = 查询恒空，日志上「什么都没发生」。</p>
+  <h4 class="sub-mini">为什么没有分布式锁</h4>
+  <p>注释里的取舍很清晰：多 worker 实例可能同时捡到同一个代际，<strong>当前依赖幂等</strong>——<code class="inline-code">upsertEmbeddingForGeneration</code> 是 <code class="inline-code">ON CONFLICT DO UPDATE</code>，重复嵌入同一片段只是浪费算力，不会产生错误数据。代价是算力浪费，收益是不引入额外中间件（与 RAG-D02「零新增中间件」一致）。若后续 worker 多副本且算力敏感，<strong>应改为「按代际号取模分片」而非加锁</strong>。</p>
+  <p>这个判断值得学习：<strong>不是所有并发都需要锁</strong>。当操作天然幂等且重复代价可接受时，不做协调是更简单的正确答案；但必须把「什么条件下这个判断会失效」写清楚（多副本 + 算力敏感 → 改分片）。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">rag/rag-worker/.../IndexGenerationBuildWorker.java:1-120</span>（含 <code class="inline-code">@Scheduled(fixedDelayString = "${rag.generation.build.poll-interval-ms:2000}", initialDelayString = "10000")</code> 与可空 <code class="inline-code">IndexGenerationBuilder</code> 降级）。</div>
+
+  <h3 id="a18-6">A18.6 重灌纪律：text_jieba 与 embed_model 两个必须同时更新的列</h3>
+  <p>索引流水线的待索引判据是 <code class="inline-code">text_jieba='' OR 无向量行</code>。由此推出两个极容易踩的坑，每个都有真实事故：</p>
+  <table>
+    <thead><tr><th>坑</th><th>机制</th><th>后果</th></tr></thead>
+    <tbody>
+      <tr><td><strong>重灌不清 text_jieba</strong></td><td>改了切分规则但重灌时 <code class="inline-code">text_jieba</code> 保持非空 → 判据认为「已索引过」→ 旧片段永远不被重新嵌入</td><td>「改了切分规则但检索没变」（D04 §5.4 记录）。<code class="inline-code">ReingestDisciplineGuardTest</code> 守的就是这条</td></tr>
+      <tr><td><strong>换模型不更新 embed_model</strong></td><td><code class="inline-code">embed_model</code> 是「这批向量出自哪个模型」的代际标识；不同模型向量空间不可比</td><td>旧向量不会被新查询命中 → 检索恒低分但不报错</td></tr>
+    </tbody>
+  </table>
+  <p>正确写法（<code class="inline-code">JdbcCorpusRepository</code> 的 <code class="inline-code">saveChunkAndEmbedding</code> / <code class="inline-code">upsertEmbedding</code>）：<code class="inline-code">ON CONFLICT (chunk_id) DO UPDATE</code> 时<strong>同时</strong>写 <code class="inline-code">text_jieba = ''</code> 与 <code class="inline-code">embed_model = EXCLUDED.embed_model</code>。守卫测试断言的就是这两个字面片段（<a href="ai-17-test-engineering.html#a17-7">A17.7</a> 讲了源码守卫的适用边界）。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">rag/rag-persistence/.../JdbcCorpusRepository.java</span>（saveChunkAndEmbedding / upsertEmbedding）；<span class="mono">rag/rag-persistence/src/test/.../ReingestDisciplineGuardTest.java</span>；<span class="mono">问题记录</span> D04 §5.4。</div>
+
+  <h3 id="a18-7">A18.7 中文全文检索：为什么必须在应用侧预分词</h3>
+  <p>PG 的 <code class="inline-code">to_tsvector('simple', 中文整段)</code> 不会按词切分——它会把整段当一个 token，全文检索等于失效。本项目的解法是：<strong>应用侧先用 jieba 预分词，把结果存进 <code class="inline-code">text_jieba</code> 列，再对该列建 GIN 索引</strong>：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">sql</span><span class="file">预分词的全文索引（deploy/sql/rag/01_rag_ddl.sql:973）</span><button>复制</button></div><pre><code>CREATE INDEX rag_chunk_jieba_idx
+    ON rag.rag_chunk USING gin (to_tsvector('simple'::regconfig, text_jieba));</code></pre></div>
+  <p>三个设计后果：<strong>①</strong> <code class="inline-code">text_jieba</code> 是<strong>派生列</strong>，分词规则一变就必须重灌（A18.6 第一个坑的由来）；<strong>②</strong> 写入路径必须保证「有向量必有分词」或反之，否则判据失效；<strong>③</strong> 检索时查询词也要用同一套分词，天然与 <a href="ai-01-fundamentals.html#ai1-7">A1.7</a> 的 RRF 混合检索配合——全文通道与稠密通道的量纲不同，所以用 RRF 而不是分数加权。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">deploy/sql/rag/01_rag_ddl.sql:973</span>；<span class="mono">docs/Agent记忆机制分析与设计方案.md:857</span>（同款说明）；<a href="ai-01-fundamentals.html#ai1-7">A1.7</a> RRF 与门禁。</div>
+
+  <h3 id="a18-8">A18.8 换模型的完整操作顺序：一个可执行的 Runbook</h3>
+  <p>把前面各节串成一次真实操作。任何一步顺序错了都会导致「检索静默退化」：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">换嵌入模型 Runbook（依据 VectorColumn / IndexGeneration / 09 alter 的纪律）</span><button>复制</button></div><pre><code>① 先确认新模型维度
+   若 > 4000（halfvec）或 > 2000（vector）→ 该模型无法建 ANN 索引
+   → 记下「将退化为全表扫描」，评估语料规模能否接受
+
+② 改配置三处【必须同时】
+   rag.embedding.model / rag.embedding.dimension / vector-type
+   ⚠️ 只改一处 = 启动期 requireDimension 失败（这是好事，比静默错好）
+
+③ 建新代际（BUILDING），不碰 ACTIVE
+   让后台 Worker 分批构建；期间旧代际继续服务 → 零停机
+
+④ 观察构建进度：indexed_chunks / total_chunks
+   worker 崩溃会留痕（日志），但不会自动停止其它代际
+
+⑤ 构建完成后切指针：新代际 ACTIVE、旧代际 RETIRED
+   ⚠️ 每租户至多一个 ACTIVE（状态机硬约束）
+
+⑥ 验证：抽检若干查询，确认分数分布恢复正常区间
+   若恒低分 → 大概率是查询向量与索引向量不同源（配置漂移）
+
+⑦ 保留旧代际一段时间以便回滚
+   回滚 = RETIRED 重新置 ACTIVE，原 ACTIVE 置 RETIRED
+
+⛔ 绝不做的三件事：
+   · 原地 UPDATE 向量列（旧向量会被新查询命中错乱，且无法回滚）
+   · 先改查询侧再改索引侧（期间全部查询恒低分）
+   · 换模型后不重建索引就宣布完成</code></pre></div>
+  <div class="callout c-danger"><span class="ct">第 ⑥ 步为什么必须是「抽检」而不是「跑一轮看看」</span><p>维度不符、模型不同源、代际指针错，这三种错的共同表现都是<strong>「检索能返回结果，但分数普遍偏低」</strong>——不报错。只有把分数分布与历史基线对比（<a href="ai-03-hard-problems.html#a3-6">A3.6</a> 的检索质量静默退化）才能发现。运维上这意味着：换模型必须有<strong>前后对比的分数基线</strong>，否则「切换成功」只是「切换完成」。</p></div>
+  <div class="evidence"><b>证据：</b> 综合 <span class="mono">VectorColumn.java:65-77</span>（三处同改）、<span class="mono">IndexGeneration.java:19-24</span>（状态机）、<span class="mono">09_v1_0_3_index_generation_alter.sql:1-60</span>（改主键与上线顺序）、<span class="mono">01_rag_ddl.sql:955-966</span>（索引取舍）。</div>
+
+  <h3 id="a18-9">A18.9 与 pgvector 扩展的交互：启动自检与「官方镜像陷阱」</h3>
+  <p>pgvector 是<strong>PG 扩展而非 Java 依赖</strong>（<a href="ai-01-fundamentals.html#ai1-6">A1.6</a> 的一句话结论在此展开）：<code class="inline-code">postgres:17</code> 官方镜像里执行 <code class="inline-code">CREATE EXTENSION vector</code> 会失败，必须用 <code class="inline-code">pgvector/pgvector:pg17</code>。启动自检直接查系统表：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">sql</span><span class="file">启动自检口径（RagStartupSelfCheck）</span><button>复制</button></div><pre><code>SELECT extname FROM pg_extension WHERE extname = 'vector'
+→ 查不到即 fail-closed 拒绝启动，而不是「先跑起来再说」</code></pre></div>
+  <p>记忆模块的 <code class="inline-code">PgVectorAvailability</code> 采用了相反策略：<strong>探测不到就 WARN + 降级</strong>（P2 向量召回是增强功能，不是 Run 的必要条件，见 <a href="ai-13-agent-memory.html#a13-9">A13.9</a>）。同一个「pgvector 不可用」，在 RAG（核心能力）是 fail-closed，在记忆（增强能力）是 fail-soft——<strong>降级策略由能力的必要性决定，不由技术栈决定</strong>。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">rag/rag-persistence/.../bootstrap/RagStartupSelfCheck.java:96-100</span>；<span class="mono">platform/agent-persistence/.../memory/persistence/PgVectorAvailability.java:115,123</span>。</div>
+
+  <h3 id="a18-10">A18.10 未落地与证据边界</h3>
+  <table>
+    <thead><tr><th style="width:30%">项</th><th style="width:16%">状态</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>ANN 索引（HNSW / IVFFlat）</td><td><span class="tag t-gap">刻意不存在</span></td><td>4096 维 &gt; halfvec 4000 上限；当前语料量级下全表扫描更快且无召回损失。规模化需三选一（MRL 截断 / 二进制量化 / 换小维度模型），均未做</td></tr>
+      <tr><td>cross-encoder 重排器</td><td><span class="tag t-plan">仅选型</span></td><td><code class="inline-code">bge-reranker-v2-m3</code> 已选但未接入；当前「重排」= RRF 融合分 + 版本惩罚（<a href="ai-01-fundamentals.html#ai1-7">A1.7</a>）</td></tr>
+      <tr><td>分布式锁 / 按代际分片</td><td><span class="tag t-plan">未实现（当前靠幂等）</span></td><td>多 worker 可能重复嵌入同代际；单副本下无害，多副本 + 算力敏感时应改分片</td></tr>
+      <tr><td>代际清理策略</td><td><span class="tag t-unknown">未确认</span></td><td>RETIRED 代际「可保留用于回滚，也可清理」，但自动清理的保留期与触发条件未在代码中找到明确实现</td></tr>
+      <tr><td>rag 侧 SSE 进度流</td><td><span class="tag t-conflict">文档冲突</span></td><td><span class="mono">rag-api/pom.xml</span> description 写「SSE 进度流」，但 rag 全树无 <code class="inline-code">SseEmitter</code> 实现——进度靠 HTTP 轮询（<a href="06-reference.html#ch20-1">§20.1 第 7 行</a>）</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-ai"><span class="ct">迁移提示：向量库运维的四条通用原则</span><p><strong>① 维度当契约</strong>——魔法数字提升为领域对象，在发库请求前校验，错误文案直接写「改哪三处」；<strong>② 换模型走代际</strong>——旧向量原地改写等于不可回滚的赌注，双代际并存才能零停机 + 可回滚；<strong>③ 定时任务防停摆</strong>——fixedDelay + 异常不外抛 + RLS 租户显式给，三条缺一条就「看起来在跑、实际永远不动」；<strong>④ 派生列要防陈旧</strong>——<code class="inline-code">text_jieba</code> / <code class="inline-code">embed_model</code> 这类派生列，重灌时必须一并失效，否则判据会认为「已完成」。</p></div>
+  <div class="evidence"><b>证据源：</b><span class="mono">rag/rag-persistence/.../VectorColumn.java</span>、<span class="mono">rag/rag-infrastructure/.../embedding/{OpenAiCompatible,LocalDeterministic}EmbeddingPort.java</span>、<span class="mono">rag/rag-core/.../indexing/IndexGeneration.java</span>、<span class="mono">rag/rag-worker/.../IndexGenerationBuildWorker.java</span>、<span class="mono">rag/rag-persistence/.../JdbcCorpusRepository.java</span>、<span class="mono">deploy/sql/rag/01_rag_ddl.sql:340-410, 955-975</span>、<span class="mono">09_v1_0_3_index_generation_alter.sql</span>、<span class="mono">rag/rag-persistence/src/test/.../ReingestDisciplineGuardTest.java</span>、<span class="mono">问题记录/09-RAG与检索质量.md RAG-04</span>。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-17-test-engineering.html"><span class="pn-label">← 上一册</span><span class="pn-title">A17 · AI 测试工程与故障注入</span></a>
+  <a class="pn-right" href="ai-19-roadmap.html"><span class="pn-label">下一册 →</span><span class="pn-title">A19 · 能力缺口与增强路线</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

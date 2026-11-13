@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第三篇 · 经验迁移 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="03-java-skill-transfer" data-ai="0">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">第三篇 · 经验迁移</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">基础六篇 · 分册</div>
+  <h1>第三篇 · 经验迁移</h1>
+  <p class="ph-sub">复用 / 调整 / 补充矩阵、八个心智模型、编码红线（第 8–10 章）</p>
+  <div class="ph-meta"><span>覆盖：第 8–10 章</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<div class="part-divider" id="part3">
+  <div class="pn">第三篇 · 能力迁移</div>
+  <h2>把 Java 后端经验翻译到这个项目</h2>
+  <p>第 8–10 章：知识迁移矩阵、必须重建的心智模型、编码红线。这是「转型」二字的核心。</p>
+</div>
+
+<!-- ==================== 第 8 章 ==================== -->
+
+<section class="chapter" id="ch8">
+  <div class="breadcrumb"><b>第三篇</b> / 第 8 章</div>
+  <h2><span class="num">8.</span> 知识迁移矩阵：复用 / 调整 / 补充</h2>
+  <p>下表逐项回答「我原来会的，在这里还算不算数」。标注含义见 <a href="index.html#ch0-2">§0.2</a>。</p>
+  <table>
+    <thead><tr><th>你已掌握</th><th>项目里的对应物</th><th>结论</th><th>差异与落点</th></tr></thead>
+    <tbody>
+      <tr><td>Spring Boot 自动装配、<span class="inline-code">@Configuration</span>、Bean 生命周期</td><td><span class="inline-code">platform-bootstrap</span> 组合根（29 个配置类）</td><td><span class="tag t-adjust">需调整</span></td><td>装配是<strong>显式的</strong>：<span class="inline-code">@SpringBootApplication(scanBasePackages="cn.studykid.multiagent")</span> 扫全部模块；组件扫描类若有 ≥2 个构造器，生产装配必须 <span class="inline-code">@Autowired</span>；同类型多 Bean 在<strong>注入点</strong>用 <span class="inline-code">@Qualifier</span>，<strong>不要</strong>加 <span class="inline-code">@Primary</span>（DataSource 是例外）</td></tr>
+      <tr><td>Controller / DTO / 统一异常处理</td><td><span class="inline-code">agent-api</span>、<span class="inline-code">@RestControllerAdvice</span></td><td><span class="tag t-reuse">可直接复用</span></td><td>多一层「请求体字段白名单」：平台链禁带 <span class="inline-code">tenantId</span>，越权尝试要留痕；错误码 <span class="inline-code">code</span> 与审计 <span class="inline-code">reason_code</span> 同值</td></tr>
+      <tr><td>JPA / MyBatis、ORM 实体映射</td><td>JdbcTemplate + 手写 SQL，约 45+ 个 <span class="inline-code">Jdbc*Repository</span></td><td><span class="tag t-adjust">需调整</span></td><td>没有 ORM：<strong>枚举参数写 <span class="inline-code">?::enum</span>、uuid 列用 <span class="inline-code">?::uuid</span></strong>；<span class="inline-code">INSERT…RETURNING</span> 是 SELECT 必须走 <span class="inline-code">executeQuery</span>；<span class="inline-code">authz_decision_log</span> 禁止 RETURNING（无 SELECT 权限）</td></tr>
+      <tr><td><span class="inline-code">@Transactional</span> / 声明式事务</td><td><span class="inline-code">TransactionalConnectionHolder</span> + 手工连接管理</td><td><span class="tag t-new">需补充</span></td><td>事务内<strong>第一条业务 SQL 之前</strong>必须绑定 <span class="inline-code">app.tenant_id</span>；Repository 不 commit；事务内 SQL 失败绝不能被 fail-soft 吞掉后 COMMIT（PG 已 aborted 的事务 COMMIT 静默等价 ROLLBACK），holder 用 <span class="inline-code">POISONED</span> 状态在顶层 commit 前抛异常</td></tr>
+      <tr><td>MySQL / 单库单实例</td><td>PG 17 + RLS + FORCE + 复合外键 + 三套连接角色</td><td><span class="tag t-new">需补充</span></td><td>「查不到」可能是权限而非数据；用 BYPASSRLS 角色验隔离是假绿；FORCE RLS 下 <span class="inline-code">IN (SELECT … LIMIT … FOR UPDATE SKIP LOCKED)</span> 的 LIMIT 会静默失效（Sev-0），范式见 <a href="#ch10-3">§10.3</a></td></tr>
+      <tr><td>同步 REST 请求-响应</td><td>SSE 长连接 + 服务端轮询推送</td><td><span class="tag t-adjust">需调整</span></td><td><span class="inline-code">SseEmitter</span> 与 <span class="inline-code">done</span> 应用层终帧；Boot 4 / Spring 7 的序列化会二次包裹帧（真实事故 TST-20）；EventSource 不能带 Authorization 头，令牌入 query 会落访问日志</td></tr>
+      <tr><td>线程池 / <span class="inline-code">@Async</span> / 定时任务</td><td>Outbox + MQ/表队列 + 租约 Worker</td><td><span class="tag t-new">需补充</span></td><td>异步边界通过<strong>持久化 ID 与明确 DTO</strong>传递上下文，不依赖跨线程 ThreadLocal；MQ 只唤醒，状态回库重读；至少一次投递 ⇒ 消费幂等</td></tr>
+      <tr><td>状态字段 <span class="inline-code">status varchar</span></td><td><span class="inline-code">RunState</span> 状态机 + 终态不可迁出 + fencing token</td><td><span class="tag t-adjust">需调整</span></td><td>迁移必须过 <span class="inline-code">requireTransitionTo()</span>；别为「幂等重试」把 FAILED 退回 RUNNING；<span class="inline-code">WAITING_APPROVAL</span> 是挂起非终态；<span class="inline-code">run_step</span> 必填 fencing_token</td></tr>
+      <tr><td>配置中心 / <span class="inline-code">application-{profile}.yml</span></td><td>env + yml + <strong>库表配置源</strong>三层</td><td><span class="tag t-adjust">需调整</span></td><td>能力目录、模型目录、发布头都在库里且<strong>版本化发布</strong>；Run 创建时固化快照；rag 侧确认无 profiles，开关全是 <span class="inline-code">@ConditionalOnProperty</span></td></tr>
+      <tr><td>单测 + Mockito + 集成测试</td><td>行为单测 / 链路 E2E / 闭环三级 + 反向验证</td><td><span class="tag t-new">需补充</span></td><td>「有一行」≠「数字算对了」；守卫不得引用被测实现自己的常量；每个守卫必问「撤掉修复点会红吗」；判绿看 XML <span class="inline-code">&lt;testcase&gt;</span> 与 <span class="inline-code">skipped=0</span>，见 <a href="05-troubleshooting.html#ch14">第 14 章</a></td></tr>
+      <tr><td>日志 / 链路追踪 / 监控</td><td>MDC 三要素 + Micrometer + Prometheus/Grafana</td><td><span class="tag t-adjust">需调整</span></td><td>指标标签代码级白名单 + 运行期拒绝高基数；明细走日志、聚合走指标；成本与 judge 成本必须<strong>分账</strong>，绝不混进 <span class="inline-code">usage_record</span> / <span class="inline-code">cost_amount</span></td></tr>
+      <tr><td>普通 CRUD 权限判断</td><td>能力闭包 + 15 步准入 + 逐跳重新授权</td><td><span class="tag t-new">需补充</span></td><td>模型只提出「计划/工具调用建议」，授权、调度、执行、持久化由平台负责；步骤 13 后、外部副作用发出前要重新确认 authzVersion 与闭包指纹（TOCTOU 线性化边界）</td></tr>
+      <tr><td>调用第三方 HTTP API</td><td>模型网关 / MCP / RAG 检索端口</td><td><span class="tag t-adjust">需调整</span></td><td>跨进程契约字段必须按<strong>对端真实校验</strong>取值：曾因假 Server 允许空 <span class="inline-code">revisionCode=""</span> 而真 rag 拒空串 → 检索 500 → 降级空命中；修复为 <span class="inline-code">"未指定"</span></td></tr>
+      <tr><td>领域建模 / 分层 / 接口隔离</td><td>六边形 + 纯领域层 + 端口</td><td><span class="tag t-reuse">可直接复用</span></td><td>概念完全一致，只是边界更严、由静态守卫强制；新增存储后端 = 实现一个 <span class="inline-code">ScopeTranslator</span>，不需要新增权限规则</td></tr>
+      <tr><td>Maven 多模块构建</td><td>两个独立 reactor，各自 <span class="inline-code">clean verify</span></td><td><span class="tag t-adjust">需调整</span></td><td>不要试图用一个根 pom 同时构建两边；不带 <span class="inline-code">-am</span> 易报找不到符号；不带 <span class="inline-code">clean</span> 时陈旧报告会造成假红</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ==================== 第 9 章 ==================== -->
+
+<section class="chapter" id="ch9">
+  <div class="breadcrumb"><b>第三篇</b> / 第 9 章</div>
+  <h2><span class="num">9.</span> 必须重新建立的八个心智模型</h2>
+
+  <h3 id="ch9-1">9.1 「数据库连接」不等于「请求上下文」</h3>
+  <p>传统做法把租户 ID 放进 ThreadLocal，SQL 里拼 <span class="inline-code">WHERE tenant_id = ?</span>。这里租户身份绑定在 <strong>PG 连接的会话变量</strong>上（<span class="inline-code">set_config('app.tenant_id', ?, true)</span>），连接池复用时若上一次请求残留，下一个请求会<strong>沿用上一个租户的身份</strong>静默越权。所以：事务内绑定、业务 SQL 前绑定、Repository 不 commit、验隔离用非特权角色。详见 <a href="01-project-overview.html#ch2-3">§2.3</a>。</p>
+
+  <h3 id="ch9-2">9.2 「消息发出去」不等于「任务会执行」</h3>
+  <p>Outbox 把消息与业务数据放进同一事务，换取的是「不会静默丢任务」，代价是至少一次投递。MQ payload 不可信（只带 ID），Worker 必须回库重读状态；消费端按 eventType 分流、按幂等键去重；终态后禁止补 attempt。详见 <a href="01-project-overview.html#ch2-2">§2.2</a> 与 <a href="04-runtime-flows.html#ch11">第 11 章</a>。</p>
+
+  <h3 id="ch9-3">9.3 「配置改了就生效」在这里是双刃剑</h3>
+  <p>能力目录与模型目录改完即生效，但 <strong>Run 创建时把配置钉死成 <span class="inline-code">execution_snapshot</span></strong>。发布引用必须是 <span class="inline-code">id@version</span>，禁止 latest 漂移；审批要求 <span class="inline-code">approver_id &lt;&gt; requester_id</span>；指针切换用 CAS + 全局单调序号。于是「我刚发布的新配置为什么这个 Run 没用上」往往是正常行为，不是 bug。</p>
+
+  <h3 id="ch9-4">9.4 「查不到数据」要分四种情况</h3>
+  <table>
+    <thead><tr><th>可能原因</th><th>判别方法</th></tr></thead>
+    <tbody>
+      <tr><td>确实没有数据</td><td>用非特权角色 + 绑定正确租户后查 <span class="inline-code">count(*)</span></td></tr>
+      <tr><td>没绑 <span class="inline-code">app.tenant_id</span>，FORCE RLS 静默 0 行</td><td><span class="inline-code">SELECT current_setting('app.tenant_id', true)</span></td></tr>
+      <tr><td>连错库 / 连错实例（5432 vs 5433；本地 vs 远程 RDS）</td><td><span class="inline-code">SELECT current_database(), inet_server_addr(), inet_server_port()</span></td></tr>
+      <tr><td>用了 BYPASSRLS 角色导致「假绿/假空」结论反转</td><td><span class="inline-code">SELECT current_user, rolbypassrls FROM pg_roles WHERE rolname = current_user</span></td></tr>
+    </tbody>
+  </table>
+  <p>项目里有一句很值得记住的话：<strong>FORCE RLS 表判空必须先绑租户，否则是假空</strong>。真实案例见 <a href="05-troubleshooting.html#ch16-9">§16.9</a>（平台档 500 与「全表 0 行」的区分）。</p>
+
+  <h3 id="ch9-5">9.5 「LLM 调用」是预算问题，不只是 HTTP 调用</h3>
+  <p>上下文压缩方案把请求看成<strong>全窗口预算</strong>：system + tools + memory + RAG + history + 当前输入 + 输出预留，一起受 <span class="inline-code">hard-ceiling</span> 约束。核心不变量包括：稳定前缀不压缩（systemPrompt 基段 + toolSchemas 逐字保留）、首轮任务锚 pinned、RAG/记忆等不可信内容绝不进 systemPrompt（作带围栏的 USER 消息）、RAG 命中配额硬顶且引用也扣预算、净成本守恒 <span class="inline-code">saved = (before − after) × price_input − summaryCost</span>。</p>
+  <p>关闭态必须与「没有压缩功能」<strong>逐位等价</strong>：<span class="inline-code">RequestAssemblyPort</span> 规定实现短路后直接返回 <span class="inline-code">input.legacyRequest()</span> <strong>同一引用</strong>，调用方靠引用身份分流，绝不在 worker 里再抄一份 enabled 判定。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">platform/agent-ports/.../ports/contextwiring/RequestAssemblyPort.java（注释节选）</span><button>复制</button></div><pre><code>/**
+ * ⚠️ 关闭等价桥是构造级保证：agent.context.enabled=false 时实现必须短路——
+ * 零策略解析、零能力读取、零预算、零管线、零布局、零摘要、零指标、零事件，
+ * 直接返回 input.legacyRequest() 同一引用。
+ *
+ * ⚠️ fail-closed：冻结策略非法 / 预算超硬顶 / 装配链路异常时抛
+ * RequestAssemblyException（带对外稳定原因码），调用方必须按该码拒绝该 Run，
+ * ⛔ 绝不静默回退 legacy（那会让「配错策略」被伪装成「策略正常」）。
+ */</code></pre></div>
+
+  <h3 id="ch9-6">9.6 「答案对」不等于「链路对」</h3>
+  <p>项目区分 L0 系统事实 / L1 自动终态校验 / L2 抽样标注 / L3 有噪信号，并有 P7 三条铁律：指标是事实表的确定函数（幂等 <span class="inline-code">ON CONFLICT (trace_id) DO UPDATE</span>）、只算<strong>收敛</strong> Trace、后端回填前端不推算。「未采集 ≠ 0」；只校验 3% 时写「99% 正确」是误导，必须同时给出覆盖率。L2 判分结论只写 <span class="inline-code">agent_trace_metric.attribution_correct</span>，机器判分绝不写 <span class="inline-code">agent_eval_sample</span>。</p>
+
+  <h3 id="ch9-7">9.7 「降级」在这个项目里通常是错误答案</h3>
+  <p>传统服务里「依赖不可用先降级返回缓存/默认值」是常见容错。这里的业务语义（防泄题、防幻觉、防越权）使<strong>明确失败优于看起来成功</strong>：解析器未确认时显式失败而非回落占位；策略非法抛 <span class="inline-code">RequestAssemblyException</span>；能力闭包解析不出按「未声明」处理；检索依据不足输出「依据不足」而不是用模型参数内知识补；占位端口默认由 <span class="inline-code">LocalPortGate</span> 拒绝装配。</p>
+
+  <h3 id="ch9-8">9.8 「测试全绿」只是候选证据</h3>
+  <p>项目的统一教训是「<strong>全绿不是证据，可复现的全绿才是</strong>」（<span class="inline-code">问题记录/07-测试基建与验证方法论.md</span>）。要额外确认：本轮确实执行了用例（不是被 <span class="inline-code">@EnabledIfEnvironmentVariable</span> 整类跳过）、<span class="inline-code">skipped=0</span>、断言走的是真实链路而不是夹具、撤掉修复点会转红、运行的是刚构建的产物而不是旧 jar。展开见 <a href="05-troubleshooting.html#ch14">第 14 章</a>。</p>
+  <div class="xref">交叉引用：这八个模型分别对应 <a href="#ch10">第 10 章</a> 的红线、<a href="05-troubleshooting.html#ch14">第 14 章</a> 的验证方法论、<a href="05-troubleshooting.html#ch16">第 16 章</a> 的事故复盘。</div>
+</section>
+
+<!-- ==================== 第 10 章 ==================== -->
+
+<section class="chapter" id="ch10">
+  <div class="breadcrumb"><b>第三篇</b> / 第 10 章</div>
+  <h2><span class="num">10.</span> 编码红线与高频坑清单</h2>
+  <p>本章是「写代码之前先读一遍」的清单，全部来自项目已登记的真实事故或迁移铁律。每条都尽量给出可检索的类名/守卫名，便于对照源码。</p>
+
+  <h3 id="ch10-1">10.1 数据访问红线</h3>
+  <table>
+    <thead><tr><th>#</th><th>红线</th><th>违反后的症状</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>RLS：<span class="inline-code">set_config('app.tenant_id',?,true)</span> 必须在<strong>事务内、业务 SQL 前</strong>；Repository 不 commit</td><td>静默 0 行 / 串租户越权</td></tr>
+      <tr><td>2</td><td>验隔离用 <span class="inline-code">app_agent</span>（NOBYPASSRLS）；<span class="inline-code">ai_agent</span> 是假绿</td><td>隔离测试「通过」但生产不可信</td></tr>
+      <tr><td>3</td><td>枚举参数 <span class="inline-code">?::enum</span>；uuid 列 <span class="inline-code">?::uuid</span>；<span class="inline-code">INSERT…RETURNING</span> 是 SELECT，走 <span class="inline-code">executeQuery</span></td><td>SQLSTATE 报错 / 结果集读不到</td></tr>
+      <tr><td>4</td><td><span class="inline-code">authz_decision_log</span> 禁 RETURNING（该表不给应用角色 SELECT）</td><td>每次判定写失败，被限频告警吞掉 → 「判定照常、审计零行、系统全绿」</td></tr>
+      <tr><td>5</td><td><span class="inline-code">run_step</span> 必填 <span class="inline-code">fencing_token</span>；终态后禁补 attempt</td><td>并发覆盖终态</td></tr>
+      <tr><td>6</td><td>业务 SQL 用 <span class="inline-code">app_agent</span>，绝不用 <span class="inline-code">agent_retention</span>；新表进 platform 域要同步 <span class="inline-code">03_platform_roles.sql</span>，重跑 03 后紧跟 04</td><td>权限漂移 / 04 的 REVOKE 被静默覆盖</td></tr>
+      <tr><td>7</td><td><span class="inline-code">ON CONFLICT DO UPDATE</span> 需要 UPDATE 权限，新幂等 upsert 同步授权 + <span class="inline-code">SchemaDriftIT</span></td><td>本地绿、活库红</td></tr>
+      <tr><td>8</td><td>事务内 SQL 失败绝不能被 fail-soft 吞掉后 COMMIT；用 <span class="inline-code">POISONED</span> 在顶层 commit 前抛异常</td><td>PG 已 aborted 事务 COMMIT 静默等价 ROLLBACK，数据悄悄没写</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch10-2">10.2 装配、消息与业务语义红线</h3>
+  <table>
+    <thead><tr><th>#</th><th>红线</th><th>违反后的症状</th></tr></thead>
+    <tbody>
+      <tr><td>9</td><td>组件扫描类有 ≥2 个构造器 ⇒ 生产装配显式 <span class="inline-code">@Autowired</span>；同类型多 Bean 在注入点 <span class="inline-code">@Qualifier</span>，勿加 <span class="inline-code">@Primary</span>（DataSource 例外）</td><td>启动期 NoUniqueBeanDefinition / 注入错实现</td></tr>
+      <tr><td>10</td><td>两 reactor 两库 ⇒ 各一个 persistence 模块（ADR-011）；main 侧 JDBC/Hikari/驱动/Flyway import 只许在 persistence；迁移＝纯文件移动</td><td>架构守卫变红；跨库事故</td></tr>
+      <tr><td>11</td><td>消息双通道：默认 database 且生产跑 database；DB 通道按租户取全部 PENDING ⇒ <strong>必须按 eventType 分流</strong>；采集绝不复用 <span class="inline-code">agent.run.execute</span></td><td>已终态 Run 被重跑（Sev-0）</td></tr>
+      <tr><td>12</td><td><span class="inline-code">scenario</span> 只认 <span class="inline-code">run.input_payload.scenario</span>（创建期白名单，非法 400），绝不从正文派生；SQL 先判 <span class="inline-code">jsonb_typeof(...)='string'</span></td><td>场景标签被正文污染，指标口径失真</td></tr>
+      <tr><td>13</td><td>平台 JWT 用 <span class="inline-code">PLATFORM_JWT_PRIVATE_KEY</span>，租户域用 <span class="inline-code">JWT_PRIVATE_KEY</span>；请求级 SSE 租户链恒丢 thinking、禁带 tenantId</td><td>身份域越界 / 敏感推理泄漏</td></tr>
+      <tr><td>14</td><td>record 加字段并留兼容构造器后，所有复制/投影/发布态转换必须<strong>全参构造逐字段带过</strong></td><td>兼容构造器静默清空后加字段（铁律 #10）</td></tr>
+      <tr><td>15</td><td><span class="inline-code">AgentOverrides</span> 是权限解析唯一实现；风险事件只存 detailDigest；无物理删除端点</td><td>权限旁路 / 审计泄漏</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch10-3">10.3 FORCE RLS 下的领取查询范式（Sev-0 级）</h3>
+  <p>已登记事故：在 FORCE RLS 表上写 <span class="inline-code">IN (SELECT … LIMIT … FOR UPDATE SKIP LOCKED)</span> 时，security-barrier 会让 <span class="inline-code">IN</span> 退化为逐行 SubPlan，<strong>LIMIT 静默失效</strong>；用 superuser 复现不出来（因为绕过 RLS），必须用非特权真库 IT。正确范式是物化候选集再 UPDATE：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">sql</span><span class="file">范式（示意；项目内实现见 agent-persistence 的 PgQueueRepository / JdbcRunClaimRepository）</span><button>复制</button></div><pre><code><span class="cm">-- ❌ 错误范式：FORCE RLS 下 LIMIT 可能静默失效</span>
+<span class="kw">UPDATE</span> task <span class="kw">SET</span> state = 'RUNNING'
+ <span class="kw">WHERE</span> id <span class="kw">IN</span> (<span class="kw">SELECT</span> id <span class="kw">FROM</span> task
+                  <span class="kw">WHERE</span> state = 'PENDING'
+                  <span class="kw">LIMIT</span> 10 <span class="kw">FOR UPDATE SKIP LOCKED</span>);
+
+<span class="cm">-- ✅ 正确范式：先物化候选集，再 UPDATE … FROM candidates</span>
+<span class="kw">WITH</span> candidates <span class="kw">AS MATERIALIZED</span> (
+  <span class="kw">SELECT</span> id <span class="kw">FROM</span> task
+   <span class="kw">WHERE</span> state = 'PENDING'
+   <span class="kw">LIMIT</span> 10 <span class="kw">FOR UPDATE SKIP LOCKED</span>
+)
+<span class="kw">UPDATE</span> task t <span class="kw">SET</span> state = 'RUNNING'
+  <span class="kw">FROM</span> candidates c <span class="kw">WHERE</span> t.id = c.id;</code></pre></div>
+  <p class="table-note">上例为教学用等价示意，实际列名、租户绑定与 fencing token 以仓储实现为准。关键点：<span class="inline-code">MATERIALIZED</span> 保证候选集先被一次性取定。</p>
+
+  <h3 id="ch10-4">10.4 测试与脚本的高频坑</h3>
+  <table>
+    <thead><tr><th>坑</th><th>正确做法</th></tr></thead>
+    <tbody>
+      <tr><td>用例数按控制台 <span class="inline-code">Tests run:</span> 统计</td><td>按 XML <span class="inline-code">&lt;testcase&gt;</span> 元素计数；参数化/嵌套下根 <span class="inline-code">tests</span> 属性会偏离</td></tr>
+      <tr><td><span class="inline-code">mvn -q</span> + grep 汇总行做反证</td><td><span class="inline-code">-q</span> 会抑制那一行 ⇒ 假阴性；改数 XML，并内置「本轮确实跑了用例」断言</td></tr>
+      <tr><td><span class="inline-code">mvn … | tee log</span> 不带 <span class="inline-code">set -o pipefail</span></td><td>退出码取自 tee（恒 0）⇒ 构建失败仍报绿；CI 已把 pipefail 列为必须</td></tr>
+      <tr><td>IT 用 <span class="inline-code">@EnabledIfEnvironmentVariable</span> 守门却没有断言 <span class="inline-code">skipped=0</span></td><td>Python <span class="inline-code">subprocess</span> 传 env 可能丢 <span class="inline-code">IT_PG_URL</span> ⇒ 全跳过假绿；应在 bash 内 <span class="inline-code">source scripts/it-env.sh</span> 后跑 Maven</td></tr>
+      <tr><td>Boot 4.1.1 里沿用旧的 <span class="inline-code">TestRestTemplate</span></td><td>用 <span class="inline-code">@SpringBootTest(RANDOM_PORT)</span> + <span class="inline-code">@AutoConfigureRestTestClient</span> + <span class="inline-code">RestTestClient</span> + <span class="inline-code">@MockitoBean</span></td></tr>
+      <tr><td>单模块不带 <span class="inline-code">-am</span>；不带 <span class="inline-code">clean</span></td><td>前者找不到符号，后者陈旧报告假红</td></tr>
+      <tr><td>撤点（反证）脚本被 SIGTERM / SIGINT 打断</td><td><span class="inline-code">finally</span> 可能不执行 ⇒ 残留撤点源码静默失真；必须装信号处理器先复原文件，跑完/跑断后做「old 锚点计数=1 + new 残留全无 + <span class="inline-code">git diff --check</span>」三件套</td></tr>
+      <tr><td>BSD grep 遇 Unicode 静默零命中；<span class="inline-code">doesNotMatch(regex)</span> 是全串语义</td><td>用 <span class="inline-code">grep -aE</span> / ripgrep；「含模式即失败」用 <span class="inline-code">Pattern.find()</span> 取反</td></tr>
+      <tr><td>yml 断言用解析后的对象</td><td>用 <span class="inline-code">raw()</span> 读原文；守卫剥离注释要识别 char 字面量（<span class="inline-code">stripCommentsKeepStrings</span>）</td></tr>
+      <tr><td>record DTO 用 primitive boolean 且允许缺字段</td><td>Jackson 会 400；DTO 字段形态要与前端真实请求字节对齐</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet">
+    <span class="ct">反向验证脚本长什么样</span>
+    <p>项目里没有 <span class="inline-code">*-rv-*.py</span> 文件；反向验证实际是 <span class="inline-code">scripts/*-counterproof.sh</span>（如 <span class="inline-code">m3-context-policy-counterproof.sh</span>、<span class="inline-code">g2-b-counterproof.sh</span>、<span class="inline-code">m8a-context-state-counterproof.sh</span>），<span class="inline-code">RV-*</span> 只是脚本内部的注入锚点编号。标准手法：<strong>精确计数替换注入一个缺陷 → 跑指定测试 → 期望如期转红 → 还原并校验 md5</strong>；「结论不变（仍全绿）」或「编译失败」一律判<strong>无效反证</strong>。</p>
+  </div>
+</section>
+
+<nav class="page-nav">
+  <a href="02-environment-config.html"><span class="pn-label">← 上一册</span><span class="pn-title">第二篇 · 环境与配置</span></a>
+  <a class="pn-right" href="04-runtime-flows.html"><span class="pn-label">下一册 →</span><span class="pn-title">第四篇 · 运行链路</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

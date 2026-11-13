@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A4 · 多级 Agent 编排与路由 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-04-agent-orchestration" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A4 · 多级 Agent 编排与路由</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A4 · 多级 Agent 编排与路由 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">委派状态机、RouteAgent 规则转发、Skill/Tool/MCP 统一配置、生命周期与安全验收</p>
+  <div class="ph-meta"><span>覆盖：覆盖：A4.1–A4.9</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a4">
+  <div class="breadcrumb"><b>AI 专题 · A4</b> / 多级 Agent 编排与路由</div>
+  <h2><span class="num">A4.</span> 多级 Agent 编排与路由：从委派状态机到规则转发引擎</h2>
+  <p>这是本项目 AI 能力里<strong>结构最复杂、文档与代码口径差最大</strong>的一块。它回答三个问题：一个 Agent 如何把任务委派给子 Agent（编排与状态机）、委派链里「选哪个子 Agent」如何变成确定性规则（RouteAgent 规则转发）、以及 Agent / Skill / Tool / MCP 四类能力如何用一套配置与权限体系统一管理。本册以<strong>代码事实</strong>为准，把「文档自称未上线、代码其实已实现」的口径差逐条摊开。</p>
+  <div class="callout c-ai">
+    <span class="ct">本册最重要的一条口径纠偏</span>
+    <p><span class="mono">docs/多级 Agent优化/10_RouteAgent规则转发设计.md</span> 头部写「状态：设计方案候选；<strong>未上线</strong>，无兼容包袱，可重建模型」，但同一批文档的 §9 实施表 S0–S6 全部标 ✅，代码里 <span class="inline-code">platform/agent-routing/</span> 模块（<span class="inline-code">RoutingEngine</span> + 6 个测试类）真实存在，00 号文档 <span class="mono">:360</span> 也写明「路由策略的内容模型…已由 10 号设计定稿并实现（第三十八批消解）」。<strong>结论：把「设计候选」误读为「未实现」会低估系统能力；把「已实现」误读为「生产可用」会踩到 P3 门禁未闭环的坑。</strong>两种误读本册都会标出来。</p>
+  </div>
+  <div class="evidence"><b>证据基线：</b><span class="mono">docs/多级 Agent优化/00_修订说明与评审决议项.md</span>（决议与批次状态权威表）、<span class="mono">06_配置数据模型与生命周期设计.md</span>、<span class="mono">07_执行链集成设计.md</span>、<span class="mono">08_安全测试与验收矩阵.md</span>、<span class="mono">10_RouteAgent规则转发设计.md</span>、<span class="mono">11_RouteAgent请求示例模拟.md</span>、<span class="mono">docs/Agent - Skill- Tool -MCP 统一配置与权限管控体系.md</span>、<span class="mono">docs/P0/P1/ADR-012_委派调用状态机与取消语义.md</span>，以及 <span class="mono">platform/agent-routing/</span>、<span class="mono">platform/agent-core/</span>、<span class="mono">platform/agent-application/</span>、<span class="mono">deploy/sql/platform/</span> 源码。三档标注：<span class="tag t-live">已实现</span>（有代码/测试/真库 IT）/ <span class="tag t-plan">仅设计</span>（文档描述）/ <span class="tag t-gap">证据空白</span>（查不到）。</div>
+  <div class="callout c-info">
+    <span class="ct">本册只讲「配置与编排」，运行时实现另有三册</span>
+    <p>A4 覆盖的是 Agent / Skill / Tool / MCP 的<strong>配置模型、发布流程与委派编排</strong>。如果你要找的是运行时实现，见 v2.4 新增三册：<a href="ai-16-mcp-runtime.html">A16</a>（MCP 客户端实现：HttpMcpTransport / SSRF 三件套 / 按 server 熔断 / 输出在 Gate 边界可信化）、<a href="ai-14-model-gateway.html">A14</a>（模型解析与网关归一化）、<a href="ai-15-streaming-sse.html">A15</a>（handoff 事件与流式编排的对外协议）。三册与 A4 交叉引用，不重复。</p>
+  </div>
+
+  <h3 id="a4-1">A4.1 先分清三层概念：编排、路由、能力配置</h3>
+  <p>新人最容易把这三层混成一件事。它们各自解决不同问题，落在不同模块，失败模式也不同：</p>
+  <table>
+    <thead><tr><th>层</th><th>解决的问题</th><th>核心代码落点</th><th>失败时的典型症状</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td><strong>① 编排与委派</strong></td><td>父 Agent 把子任务交给谁、状态怎么流转、取消/超时/预算怎么算</td><td class="mono">agent-application/orchestration/DelegationExecutor.java<br>agent-core/orchestration/AgentInvocationStatus.java</td><td>子调用卡在 UNKNOWN、跨进程崩溃后无人接管、终态被重写</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td><strong>② 规则路由</strong></td><td>委派链内「按策略规则选哪个子 Agent」，要求确定性、可重放</td><td class="mono">agent-routing/RoutingEngine.java<br>PredicateEvaluator.java / PublishGuards.java</td><td>同一输入路由到不同目标、谓词报错被当成「不命中」</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td><strong>③ 能力配置与权限</strong></td><td>Agent / Skill / Tool / MCP 的定义、发布、绑定、授权</td><td class="mono">agent-core/cap/EffectiveClosure.java<br>agent-application/cap/ConfigPublishWorkflowService.java</td><td>能力存在但不生效、发布头选错版本、越权启用工具</td><td><span class="tag t-live">已实现</span>（灰度开关默认关）</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn">
+    <span class="ct">还有一个容易被混进来的第四层：入口级语义路由（L5）</span>
+    <p><span class="inline-code">ModelAgentRouter.askModel()</span>（<span class="mono">agent-worker/.../agentchat/ModelAgentRouter.java:26</span>，<span class="inline-code">ROUTER_MAX_TOKENS=192</span>）是<strong>入口级</strong>路由：把顶层候选 Agent 的 id / 名称 / 描述放进一次无工具的模型调用，由 LLM 选一个，再做严格白名单校验，否则 fail-closed。它和 ② 的 <span class="inline-code">RoutingEngine</span> <strong>不是一回事</strong>：后者是委派链<strong>内部</strong>的纯函数规则引擎，模型零参与。前者消耗 token、单独计量、不进压缩预算（见 <a href="ai-01-fundamentals.html#ai1-2">A1.2</a>、<a href="04-runtime-flows.html#ch12-1">§12.1</a> 的 L5）。</p>
+  </div>
+
+  <h3 id="a4-2">A4.2 委派调用状态机：ADR-012 冻结的是「现状」，不是新设计</h3>
+  <p><span class="mono">ADR-012_委派调用状态机与取消语义.md:30</span> 原文：「本 ADR 不改任何实现：它冻结的是<strong>现状</strong>，不是新设计……逐条一致，无需改动」，决策日期 2026-10-25，状态「已决策」。这类 ADR 的读法与常规不同——它是<strong>对既有代码行为的契约化封存</strong>，所以「ADR 已决策」不等于「某天有人实现了它」，而是「代码本来就这样，以后不许偏离」。</p>
+  <div class="steps">
+    <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">七态封闭集合（AgentInvocationStatus.java，MultiAgentSchemaIT 断言恰好七态）</span><button>复制</button></div><pre><code>QUEUED ──start──▶ RUNNING ──finish──▶ SUCCEEDED   （终态）
+   │                 ├──fail──────▶ FAILED       （终态）
+   │                 ├──cancel────▶ CANCELLED    （终态）
+   │                 └──timeout───▶ TIMED_OUT    （终态）
+   └──cancel──────────────────────▶ CANCELLED    （终态）
+
+UNKNOWN ──adopt/reconcile──▶ 上述终态之一   （不是终态，是「待对账」）</code></pre></div>
+  </div>
+  <table>
+    <thead><tr><th>语义点</th><th>规则（ADR-012 定位）</th><th>为什么容易错</th></tr></thead>
+    <tbody>
+      <tr><td>取消 ≠ 撤销</td><td><span class="mono">:52-62</span> 取消是请求语义，不保证外部副作用回滚；已发生的子调用结果按对账处理</td><td>调用方以为 cancel 后「什么都没发生」，实际工具可能已执行</td></tr>
+      <tr><td>UNKNOWN 五类触发</td><td><span class="mono">:81-101</span> 明确列出哪些情况只能收敛到 UNKNOWN（如响应丢失、凭证过期无法判定）</td><td>把 UNKNOWN 当成 FAILED，或当成 SUCCEEDED「猜一个」</td></tr>
+      <tr><td>接管三步</td><td><span class="mono">:107-117</span> 在途委派被新 Worker 接管需满足 fencing / 租约 / 状态条件</td><td>裸奔的跨进程接管会让两个 Worker 同时推进同一个子调用</td></tr>
+      <tr><td>预算处置矩阵</td><td><span class="mono">:119-130</span> 不同终态下预留额度如何释放 / 结算</td><td>失败也占额度、或成功没结算，都会让成本账悄悄错</td></tr>
+      <tr><td>验收绑定</td><td><span class="mono">08_安全测试与验收矩阵.md:486-494</span> MA-T24a～T24i 每条绑定既有用例，如 MA-T24f=<span class="mono">DelegationExecutorTest#expiredFencingTokenMustNotAcceptResult</span></td><td>只跑新增测试、不跑绑定的既有用例，会漏掉状态机被改坏的回归</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger">
+    <span class="ct">与 ADR-012 配套的 Sev-0 铁律</span>
+    <p>终态后禁止补 attempt（写入口 fail-closed）；<span class="inline-code">run_step</span> 必填 fencing token；状态收敛用三态 CAS（<span class="inline-code">AgentInvocationPort.markTerminal</span>），影响行数不等于 1 必须抛异常，否则会静默把「别人已经收敛的终态」再改一次。这些与 <a href="03-java-skill-transfer.html#ch10-2">§10.2 编码红线</a>、<a href="ai-03-hard-problems.html#a3-8">A3.8 静默失真案例</a> 是同一套纪律在不同层次的体现。</p>
+  </div>
+
+  <h3 id="a4-3">A4.3 RouteAgent 规则转发：纯函数引擎 + 发布期静态守卫</h3>
+  <p>RouteAgent 是<strong>设计文档里的角色名，不是 Java 类名</strong>（<span class="tag t-gap">证据空白</span>：全仓 <span class="mono">find platform -iname "*RouteAgent*"</span> 无结果）。它的工程落地是独立 Maven 模块 <span class="mono">platform/agent-routing/</span>，<span class="mono">pom.xml:14-17</span> 自述「RouteAgent 的规则转发引擎（10 号设计）：封闭谓词文法 + 确定性求值 + 有界 DNF 规范化 + 发布期静态守卫 V1-V10」，且<strong>零框架依赖</strong>，决策必须是纯函数 <span class="inline-code">f(策略版本, 规范化输入, 拓扑)</span>。</p>
+  <div class="grid2">
+    <div class="card"><h4>引擎只选目标，不做准入</h4><p><span class="mono">RoutingEngine.java:18-22</span>：「本类只负责『选哪个目标』，不负责『这个目标允不允许』」——拓扑包含、固定版本、逐跳授权、深度/次数/超时/预算属于<strong>阶段⑤</strong>，由调用方 <span class="inline-code">DelegationExecutor</span> 执行。</p><p>把「选择」和「准入」分开，才可能让规则引擎保持纯函数、可重放、可单测。</p></div>
+    <div class="card"><h4>四条铁律（RoutingEngine.java:31-38）</h4><p>① 按 ordinal 升序，首个 TRUE 命中；② <span class="inline-code">Truth.ERROR</span> 永不等于命中（谓词求值出错≠规则匹配）；③ <span class="inline-code">RULES_ONLY</span> 模式不消费模型候选；④ 纯函数，不读时钟/环境/IO。</p><p>③ 和 ④ 是「同一策略可重放」的前提，也是 <span class="mono">RoutingReplayIT</span> 8 例能成立的基础。</p></div>
+  </div>
+  <table>
+    <thead><tr><th>mode</th><th>语义（10 号设计 :99-111）</th><th>代码</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">RULES_ONLY</td><td>纯规则引擎决策，模型零参与</td><td class="mono">RoutingMode.java</td></tr>
+      <tr><td class="mono">RULE_FIRST</td><td>规则优先，规则不命中时才用模型候选</td><td class="mono">RoutingEngine.adoptCandidate()</td></tr>
+      <tr><td class="mono">SEMANTIC</td><td>目标由模型按 §3 契约选定</td><td class="mono">RoutingMode.java:33</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet">
+    <span class="ct">发布期静态守卫 V1–V10 与「有界 DNF」</span>
+    <p>规则策略在发布前会被静态展开与校验（<span class="mono">10_…md:203-230</span>，代码 <span class="mono">PublishGuards.java</span> + <span class="mono">PublishGuardsTest.java</span>）。关键点：DNF（析取范式）展开<strong>有界</strong>——超过 4096 个乘积项即拒发，避免组合爆炸；V10 不得跳过 V4–V6。重放不变式 <span class="mono">:264</span>：「<span class="inline-code">(policyRef, canonicalInputSha256) → finalTarget</span> 唯一」，由 <span class="mono">RoutingReplayIT</span> 8 例钉死。这套设计把「规则引擎的不确定性」在发布期就消灭掉，运行期只做确定性求值。</p>
+  </div>
+  <div class="callout c-info">
+    <span class="ct">11 号「请求示例模拟」暴露的 6 个缺口，后来都关了</span>
+    <p><span class="mono">11_RouteAgent请求示例模拟.md:547-556</span> 用一次完整请求走查，暴露 G-1 <span class="inline-code">input_digest/output_digest</span> 恒 NULL、G-2 <span class="inline-code">trace_id</span> 写成 runId、G-3 <span class="inline-code">configVersion</span> 硬编码 0、G-4 <span class="inline-code">input</span> 可缺省、G-5 <span class="inline-code">additionalProperties</span> 字符串比较、G-6 未知字段拒收未实现。<span class="mono">10_…md:403</span> S0 标 ✅「§8 六个缺口 G-1~G-6…S3 的硬前置」，说明它们在进入运行期实现前被当作硬前置修掉。这是「文档走查 → 缺口登记 → 实现关单」的一条完整可追溯链。</p>
+  </div>
+
+  <h3 id="a4-4">A4.4 Skill / Tool / MCP 统一配置：依赖方向与四者区别</h3>
+  <p><span class="mono">docs/Agent - Skill- Tool -MCP 统一配置与权限管控体系.md:105-111</span> 给出不可反转的依赖方向，这是理解整个能力体系的骨架：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">能力依赖方向（唯一执行入口：ToolInvocationGate，ADR-011）</span><button>复制</button></div><pre><code>ToolDefinition ─┐
+                ├──▶ SkillDefinition ──▶ AgentDefinition
+McpServerDef ───┘
+
+所有 Native / MCP 工具执行，必须且只能经 ToolInvocationGate。</code></pre></div>
+  <table>
+    <thead><tr><th>对象</th><th>关键字段 / 约束</th><th>容易踩的坑</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Tool</strong></td><td><span class="inline-code">kind=native|mcp</span>、<span class="inline-code">riskLevel</span> 必填</td><td>把 MCP 工具当 Native 工具直接调，绕过 <span class="inline-code">ToolInvocationGate</span></td></tr>
+      <tr><td><strong>Skill</strong></td><td><span class="inline-code">declaredTools/declaredMcp</span>、<span class="inline-code">riskCeiling</span>、<span class="inline-code">inherits</span> 写入即拒</td><td>试图用继承“加能力”——设计上只允许组合，不允许继承扩散</td></tr>
+      <tr><td><strong>MCP Server</strong></td><td>仅 <span class="inline-code">http/sse</span>、<span class="inline-code">dynamicDiscovery=false</span></td><td>指望动态发现新工具——被显式禁止，必须走发布</td></tr>
+      <tr><td><strong>Agent</strong></td><td><span class="inline-code">enabledSkills</span> 是唯一启用途径，<span class="inline-code">overrides</span> 只收紧</td><td>用 overrides「加一个工具」——解析实现 <span class="inline-code">AgentOverrides</span> 只做收紧，加能力必须走 <span class="inline-code">enabledSkills</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-info">
+    <span class="ct">参数策略是「取更严交集」，不是「覆盖」</span>
+    <p><span class="mono">:134-168</span> 层级：强制安全约束 &gt; Tool 策略 &gt; Skill 策略，取 AND；<span class="inline-code">AllowedOps = { op ∈ (SkillAllowedOps ∩ ClosureOps) | ForcedSafety(op) = true }</span>。这里的 <span class="inline-code">ClosureOps</span> 来自有效闭包（见 A4.5）——意味着「策略允许」和「闭包里有」是两个独立条件，缺一不可。</p>
+  </div>
+  <div class="callout c-warn">
+    <span class="ct">Skill 的两级描述：路由用一级，执行注入用二级</span>
+    <p><span class="mono">docs/多级 Agent优化/agent-capability-contracts-v1/README.md:26-38</span>：1 级 <span class="inline-code">purpose</span> 给路由选型看，2 级 <span class="inline-code">usage[]</span> 在执行时注入；「描述不是授权」，且两级内容都计入 <span class="inline-code">configFingerprint</span>。代码落点 <span class="inline-code">agent-core/cap/SkillDescription.java</span>。改一句描述会改变配置指纹，进而让已发布的闭包指纹对不上——这不是 bug，是设计上的「描述也是契约」。</p>
+  </div>
+
+  <h3 id="a4-5">A4.5 配置数据模型与生命周期：从六张表到三步发布</h3>
+  <p>06 号设计 <span class="mono">:8-90</span> 定义 <strong>V1 最小集 7 张表</strong>：<span class="inline-code">cap_tool_def</span>（Tool 单一事实源）、<span class="inline-code">cap_mcp_server_def</span>、<span class="inline-code">cap_skill_def</span>、<span class="inline-code">cap_agent_def</span>、<span class="inline-code">cap_authz_version</span>、<span class="inline-code">execution_capability_snapshot</span>、<span class="inline-code">cap_config_release</span>。DDL 实际快照含 <strong>16 张</strong> <span class="inline-code">cap_*</span> 表（含发布请求、指针、决策日志等增量交付物），落点在 <span class="mono">deploy/sql/platform/01_platform_ddl.sql</span>（<span class="inline-code">cap_agent_def:1620</span>、<span class="inline-code">cap_mcp_server_def:2036</span>、<span class="inline-code">cap_result_contract:2109</span>、<span class="inline-code">cap_routing_policy:2156</span>、<span class="inline-code">cap_agent_child_ref:1593</span>、<span class="inline-code">agent_invocation:1308</span>）。</p>
+  <div class="callout c-ai">
+    <span class="ct">「六张 cap_* 表」是不准确的说法 <span class="tag t-conflict">文档冲突</span></span>
+    <p>有材料写「六张 cap_* 表」，但 06 号设计实际列 7 张（其中一张叫 <span class="inline-code">execution_capability_snapshot</span>、不带 cap_ 前缀），DDL 快照则含 16 张 cap_* 表。三处口径都不同。培训时建议直接说「V1 设计定义 7 张核心表，DDL 已扩展到 16 张 cap_* 表，以 <span class="mono">01_platform_ddl.sql</span> 为准」。</p>
+  </div>
+  <h4 style="margin:18px 0 8px;font-size:15px">生命周期状态机（06 号设计 :105-114）</h4>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">cap_*_def 生命周期</span><button>复制</button></div><pre><code>DRAFT ──validate──▶ VALIDATED ──approve（双人复核）──▶ PUBLISHED
+                                                      │
+                                                      └──deactivate──▶ DEPRECATED
+                                                                       （不可被新引用，单向终态）
+
+关键：published 与 lifecycle_state 是两件不同的事；停用是单向终态。
+已发布版本行内容不可改写，只允许 PUBLISHED→DEPRECATED 的纯元数据停用。</code></pre></div>
+  <table>
+    <thead><tr><th>发布动作</th><th>端点 / 服务</th><th>写不写配置表</th></tr></thead>
+    <tbody>
+      <tr><td>申请 request</td><td class="mono">POST /publishes → ConfigPublishWorkflowService:43</td><td><strong>不写</strong>，仅生成 PENDING 申请单</td></tr>
+      <tr><td>审批 decide</td><td class="mono">/{id}/decision → APPROVED</td><td><strong>仍不写</strong></td></tr>
+      <tr><td>执行 apply</td><td class="mono">/{id}/apply → APPLIED</td><td><strong>此步才真正写入</strong>配置表</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet">
+    <span class="ct">发布头权威解析：绝不用「is_current 标志」或「max(seq)」</span>
+    <p><span class="mono">agent-core/cap/ConfigRelease.java:9-15</span>：「当前生效版本 = 最近一条 <span class="inline-code">status=PUBLISHED</span> 发布头的 <span class="inline-code">objectVersions</span>；<strong>绝不</strong>以 <span class="inline-code">is_current</span> 之类可变标志判断……<strong>绝不</strong>以 <span class="inline-code">max(configPublishSeq)</span> 选当前」。原因与 <a href="ai-03-hard-problems.html#a3-6">A3.6</a> 的枚举序坑同类：用一个看起来「最新」的代理量去代替真正的权威状态，会在回滚、并发发布时静默选错版本。CAS 用 <span class="inline-code">IS NOT DISTINCT FROM</span> 而非 <span class="inline-code">=</span>，因为首次发布基线是 NULL，<span class="inline-code">NULL=NULL</span> 恒 UNKNOWN 会静默失败。</p>
+  </div>
+  <div class="callout c-danger">
+    <span class="ct">assignment-copilot 的 childAgentRefs 陷阱 <span class="tag t-live">已实现规避</span></span>
+    <p><span class="mono">deploy/sql/platform/07_agent_definition_upgrade.sql:119-122</span> 明确记录：<span class="inline-code">assignment-copilot</span> 种子行的 <span class="inline-code">orchestration.childAgentRefs[].id</span> 写的是<strong>名字</strong>（<span class="inline-code">"math-tutor"</span>）而非 UUID，<span class="inline-code">projectChildRefs</span> 直接当 UUID 写库会报 <span class="inline-code">invalid input syntax for type uuid</span>，整笔 apply <strong>500 且事务回滚</strong>。发布前必须换成子 Agent 的 <span class="inline-code">agent_id</span>。本轮核对发现：<span class="mono">02_platform_seed.sql</span> 中该行<strong>当前仍写名字</strong>——陷阱数据还在仓库里，靠 07 号升级脚本的带外口径规避。<span class="inline-code">ChildAgentRef.java:26-31</span> 要求 <span class="inline-code">agentId</span> + <span class="inline-code">releaseVersion&gt;0</span>（禁 latest），投影表 <span class="inline-code">cap_agent_child_ref</span> 的复合外键指向 <span class="inline-code">agent.agent_id</span>（UUID）。</p>
+  </div>
+
+  <h3 id="a4-6">A4.6 安全测试与验收矩阵：八个端到端场景 + 多级 Agent 补充用例</h3>
+  <p><span class="mono">08_安全测试与验收矩阵.md:8-26</span> 定义 8 个冻结 V1 前置的端到端场景：</p>
+  <table>
+    <thead><tr><th>场景</th><th>预期</th><th>验证的重点</th></tr></thead>
+    <tbody>
+      <tr><td>S1 已授权</td><td class="mono">ALLOW</td><td>正常放行</td></tr>
+      <tr><td>S2 未授权</td><td class="mono">DENY</td><td>明确拒绝，不降级</td></tr>
+      <tr><td>S3 主体撤权</td><td class="mono">DENY(stale_authz)</td><td>撤权后的陈旧授权版本不被接受</td></tr>
+      <tr><td>S4 Skill 收紧</td><td class="mono">按更严交集</td><td>策略取 AND 不是 OR</td></tr>
+      <tr><td>S5 MCP 变更</td><td class="mono">DENY(config_stale)</td><td>配置指纹变了，旧闭包失效</td></tr>
+      <tr><td>S6 审批缺失</td><td class="mono">DENY</td><td>三步发布未走完不能生效</td></tr>
+      <tr><td>S7 预算不足</td><td class="mono">DENY</td><td>预算作为准入前置</td></tr>
+      <tr><td><strong>S8 外部结果未知</strong></td><td class="mono">ALLOW + UNKNOWN</td><td><strong>关键：ALLOW 但 executionStatus=UNKNOWN，不等于成功，进对账队列</strong></td></tr>
+    </tbody>
+  </table>
+  <p>补充用例矩阵 <span class="mono">:90</span> 起：MA-T01～MA-T29，按主题分组——路由策略 MA-T05a~f、多级递归 MA-T05g~j / MA-T09a~c、状态机 MA-T24a~i、取消默认值 MA-T25a~h、投影 MA-T26a~f。<span class="mono">:67-79</span> 还给出量化 SLA：本地权限判定 <span class="inline-code">p99 &lt; 1ms</span>、配置发布→生效「异步 ≤ 1s」、决策日志字段完整率 100%、防绕过「0 通过」。<span class="mono">00_…md:364</span> 记录第十二批本机真实 PG17 + RabbitMQ「1212 例 / 0 failures / 0 errors / 0 skipped」。</p>
+  <div class="callout c-warn">
+    <span class="ct">门禁未闭环 + 一个必须诚实说明的红</span>
+    <p><span class="mono">00_…md:50</span>：「P3 安全和恢复验收未通过前，多级 Agent 不得标记为生产可用」，<span class="mono">:44</span> 仍注「仍未闭环，不得自行推进」。另一处需要诚实说明：<span class="mono">00_…md:419-421</span> 记「<span class="inline-code">mvn verify</span>（额外跑 failsafe 的 <span class="inline-code">*IT.java</span>）目前本机仍红：既有测试污染（E2E 上下文向真实队列发布消息 → 通道切换守卫 fail-closed），在上一提交上同样红，与本批改动无关」。<strong>所以「全量 IT 绿」只成立于第十二批的 <span class="inline-code">mvn test</span>（1212 例），不是 <span class="inline-code">verify</span>。</strong>判绿口径见 <a href="05-troubleshooting.html#ch14-6">§14.6</a>。</p>
+  </div>
+
+  <h3 id="a4-7">A4.7 评审决议项：五条前置决策，逐条「已决策 ≠ 已落地」</h3>
+  <p><span class="mono">00_…md:38-50</span>（决策人 zhouwei，2026-10-25）记录了五条评审前置决策。00 文件自己也强调「<strong>「已决策」≠「已落地」</strong>」——在各自落地批次之前不得按已落地口径引用：</p>
+  <table>
+    <thead><tr><th>#</th><th>决策结论（一句话）</th><th>落地状态</th><th>档位</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><span class="inline-code">SEQUENTIAL</span> 不纳入 P2，语义收敛为「父 Agent 自己串行并聚合，框架不代劳」</td><td>第三十二批 C32-1 已落地</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>2</td><td>取消平台默认值：非 LEAF 发布必须显式声明最大深度/子调用数/超时，缺失即拒发；深度<strong>不级联</strong></td><td>第三十三批 C33-1 已落地</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>3</td><td>状态枚举/父子取消语义/重试/UNKNOWN 条件冻结 → ADR-012（+08 §MA-T24a～T24i）</td><td>第三十一批 C31-1 已冻结，无需改实现</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>4</td><td><span class="inline-code">cap_agent_child_ref</span> 存储：父子关系投影必落库；带子引用而投影未装配 → 拒发（fail-closed）</td><td>第三十四批 C34-1 已落地</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>5</td><td>P3 安全和恢复验收未通过前，多级 Agent 不得标记为生产可用</td><td>仍未闭环，不得自行推进</td><td><span class="tag t-plan">门禁未闭环</span></td></tr>
+    </tbody>
+  </table>
+  <p>补充决议：决策 2b（<span class="mono">:368</span>）深度「不级联」维持现状；口径更正（<span class="mono">:46</span>）指出第三十一批写的「父的输出契约在父这一层校验聚合结果」<strong>与实现不符</strong>——<span class="inline-code">resultContractRef</span> 是<strong>链接契约</strong>，由调用方声明、约束被调方输出。这类「决议原文写错、后续批次纠正」的记录，正是要把「已决策≠已落地」写进培训材料的原因。</p>
+
+  <h3 id="a4-8">A4.8 代码落地对照表：哪些找得到，哪些只有文档</h3>
+  <table>
+    <thead><tr><th>概念 / 关键词</th><th>代码落点</th><th>档位</th></tr></thead>
+    <tbody>
+      <tr><td><span class="inline-code">AgentOverrides</span></td><td class="mono">agent-application/cap/AgentOverrides.java:19（全仓唯一 overrides 解析实现）</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td><span class="inline-code">EffectiveClosure</span></td><td class="mono">agent-core/cap/EffectiveClosure.java:48（record，7 分量含 childAgents + orchestration）</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>委派 Delegation</td><td class="mono">agent-application/orchestration/ 12 个主类：DelegationExecutor / DelegationGuard / InFlightDelegationAdopter / DelegationBudgetReconciliationService / ChildResultContractValidator / AgentOrchestrationParser 等</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>子 Agent 执行</td><td class="mono">agent-worker/execute/WorkerChildAgentRunner.java、LazyChildAgentRunner.java、ChildAgentRunner(port)</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>规则引擎 RoutingEngine</td><td class="mono">agent-routing/RoutingEngine.java、PolicySpec.java、PredicateEvaluator.java、PublishGuards.java + 6 个 *Test.java</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>L5 语义路由</td><td class="mono">agent-worker/agentchat/ModelAgentRouter.java（ROUTER_MAX_TOKENS=192）+ AgentRouter.java</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>三步发布</td><td class="mono">agent-application/cap/ConfigPublishWorkflowService.java:43-45 + ConfigPublishController / CapConfigPublishController</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td><span class="inline-code">assignment-copilot</span></td><td class="mono">02_platform_seed.sql:263（种子行）+ 07_agent_definition_upgrade.sql:119（陷阱口径）；无测试代码引用</td><td><span class="tag t-doc">数据+文档</span></td></tr>
+      <tr><td><strong>名为 RouteAgent 的 Java 类</strong></td><td class="mono">find platform -iname "*RouteAgent*" → 无结果</td><td><span class="tag t-gap">证据空白</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="a4-9">A4.9 本册的未闭环缺口与证据空白</h3>
+  <p>下列条目在 00 号文档里被「本批只登记不修」地明确记录，是<strong>已知且未闭环</strong>的真实缺口。把「已实现」和「这些缺口还在」放在一起看，才是完整现状：</p>
+  <table>
+    <thead><tr><th>缺口</th><th>00 号文档定位与结论</th><th>档位</th></tr></thead>
+    <tbody>
+      <tr><td>契约引用形状自相矛盾</td><td><span class="mono">:471</span> <span class="inline-code">common.schema.json#/$defs/fixedVersionRef</span> 把固定版本引用定义为对象 <span class="inline-code">{id, version}</span>，而 <span class="inline-code">AgentOrchestrationParser.parsePinnedRef</span> 要求字符串 <span class="inline-code">"id@version"</span>；按 schema 构造的客户端会被拒 <span class="tag t-unknown">细节未逐行证实</span></td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td>限制值上界后端不校验</td><td><span class="mono">:472</span> schema 给了深度 ≤8 / 子调用 ≤64 / 超时 ≤3600000ms 上界，构造器只校验下界</td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td>契约 Schema 存 JSONB 文本口径不一致</td><td><span class="mono">:451</span> <span class="inline-code">schema_json</span> 是 JSONB，与写入文本不逐字符相同，而 <span class="inline-code">CapObjectFingerprint</span> 算的是原始文本指纹</td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td>草稿态写入通道不可达</td><td><span class="mono">:357/:378</span> DRAFT 在数据层可表达但无写入路径，<span class="inline-code">DRAFT → VALIDATED</span> 当前不可达；路由策略同款</td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td>跨进程接管演练 / 故障注入</td><td><span class="mono">:365</span>、08 文 MA-T24h「仍缺：强制杀进程 / 断连」</td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td>Run 级默认时间上限</td><td><span class="mono">:352</span> 未声明时间预算的 Run 仍不限时，尚未引入配置侧默认上限</td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td>模型调用不计入 Run 额度</td><td><span class="mono">:376</span> 根/子 Agent 的 <span class="inline-code">ModelGateway.complete</span> 都不经预算预留；彻底修需冻结成本模型，属未闭环范围</td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td>ctx.channel / ctx.locale 无可信来源</td><td><span class="mono">:351</span> <span class="inline-code">DelegationExecutor</span> 只能按缺席传入，引用这两个 ctx 的规则一律求值为 ERROR</td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td>策略「比拓扑更窄」仅规则路径成立</td><td><span class="mono">:360</span> <span class="mono">RULE_FIRST</span> / <span class="mono">SEMANTIC</span> 的语义候选不受策略规则约束</td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td><span class="inline-code">assignment-copilot</span> 业务语义</td><td>是库中真实 Agent 名，但 P0-D00 / SRS / RAG-D00 三处明确排除「作业批改与自动打分」，语义冲突未消</td><td><span class="tag t-conflict">文档冲突</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet">
+    <span class="ct">把「口径滞后」当成一类独立证据来处理</span>
+    <p>10 号文档头部「未上线」与其 §9 全 ✅、代码已存在之间的状态字段为何没更新，文档内无解释——这是<strong>口径滞后</strong>，不是「未实现」，也不是可以靠推测补齐的谜题。正确做法是像本册一样：以代码/测试/真库 IT 为「已实现」判据，以文档原文记录「它自称是什么」，把两者并列标注，然后<strong>向维护者确认</strong>。这与 <a href="06-reference.html#ch20">第 20 章</a> 处理冲突的方法论一致。</p>
+  </div>
+  <div class="xref">交叉引用：委派状态机与其他七态/终态铁律见 <a href="03-java-skill-transfer.html#ch10-2">§10.2</a>；规则路由与 L5 语义路由的层次区别见 <a href="04-runtime-flows.html#ch12-1">§12.1</a>；Skill/Tool/MCP 的能力闭包与发布头见 <a href="ai-05-config-governance.html#a5-9">A5.9</a>；三步发布的性能基准见 <a href="ai-05-config-governance.html#a5-11">A5.11</a>；本节登记缺口引发的事故见 <a href="ai-06-incident-library.html#a6-1">A6.1</a>；能力生效与越权案例见 <a href="05-troubleshooting.html#ch16">第 16 章</a> P3。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-03-hard-problems.html"><span class="pn-label">← 上一册</span><span class="pn-title">A3 · 特殊 AI 问题处理</span></a>
+  <a class="pn-right" href="ai-05-config-governance.html"><span class="pn-label">下一册 →</span><span class="pn-title">A5 · 配置治理与权限体系</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

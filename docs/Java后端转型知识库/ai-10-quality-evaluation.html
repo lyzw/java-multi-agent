@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A10 · 对话质量评估、判定与归因体系 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-10-quality-evaluation" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A10 · 对话质量评估、判定与归因体系</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A10 · 对话质量评估、判定与归因体系 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">L1 链路完整性与 L2 归因判分、questionId 白名单、judge 成本分账、机器判分不污染人工抽样、幻觉检测与告警闭环</p>
+  <div class="ph-meta"><span>覆盖：A10.1–A10.10</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a10">
+  <div class="breadcrumb"><b>AI 专题 · A10</b> / 对话质量评估、判定与归因体系</div>
+  <h2><span class="num">A10.</span> 对话质量评估、判定与归因体系：从 Run 终态到可证伪的质量信号</h2>
+  <p><a href="ai-09-quality-assurance.html">A9</a> 讲「怎么证明系统是对的」——那是<strong>工程正确性</strong>；本册讲「怎么证明 Agent 的答案是对的」——这是<strong>内容质量</strong>。项目在 P7 指标体系与「Agent 对话质量跟踪/回溯/评估体系」两份设计文档之上，落地了一条从 Run 终态自动采集、L1 链路判分、L2 LLM-as-judge 归因判分、确定性抽样到人工审查与告警的闭环。本册把这条链路的<strong>真实落点、隔离铁律与尚未落地的部分</strong>逐层拆开，每条都给代码或 DDL 证据。</p>
+  <div class="callout c-info"><span class="ct">本册与已有册的分工</span><p><a href="ai-06-incident-library.html">A6</a> 是事故案例集，<a href="ai-09-quality-assurance.html">A9</a> 是工程质量的守卫与反证，<a href="04-runtime-flows.html#ch11">第 11 章</a> 是一次 Run 的执行链路。本册只回答一个问题：<strong>Run 跑完之后，系统怎么自动判断「答得好不好、错在哪」，并且不让这个判断本身把账目和指标搞脏</strong>。所有数字带出处与时点；「仅设计 / 未落地」的内容用 <span class="tag t-gap">证据空白</span> 或 <span class="tag t-plan">仅设计</span> 标注，不写成已实现。</p></div>
+
+  <h3 id="a10-1">A10.1 两套「L1/L2」语境：先分清再谈判分</h3>
+  <p>仓库里存在<strong>两套都叫 L1/L2 的分层</strong>，混用会直接讲错口径。第一套是 <span class="tag t-live">已实现</span> 的<strong>可信度分层 L0–L3</strong>（P7 指标体系），第二套是<strong>评估双轨 L1/L2</strong>（本册主线）。</p>
+  <table>
+    <thead><tr><th style="width:14%">语境</th><th style="width:22%">分层</th><th>含义与纪律</th><th style="width:22%">出处</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="4">可信度分层<br>（L0–L3）</td><td>L0 系统事实</td><td>高可信，可直接下结论（如终态、工具调用结果）</td><td class="mono" rowspan="4">docs/管理后台开发计划/<br>P7_Agent效果指标体系.md 行 22–25</td></tr>
+      <tr><td>L1 自动终态校验</td><td>高可信，但<strong>必须同时显示覆盖率</strong>，否则「校验通过」无意义</td></tr>
+      <tr><td>L2 抽样标注</td><td>黄金基线；<strong>n&lt;30 显示「样本不足」</strong>，不显示百分比</td></tr>
+      <tr><td>L3 有噪信号</td><td>只看趋势，只触发复核，不下结论（用户反馈等）</td></tr>
+      <tr><td rowspan="2">评估双轨<br>（本册主线）</td><td>L1 = 链路完整性</td><td><span class="inline-code">L1AttributionEvaluator</span>，checkerCode <span class="inline-code">TRACE_LINK_L1</span>；判「链路全不全」，<strong>不判答案对不对</strong></td><td class="mono" rowspan="2">docs/Agent对话质量跟踪_回溯_评估体系_详细设计.md §7（行 520–555）</td></tr>
+      <tr><td>L2 = 归因正确性</td><td><span class="inline-code">L2AttributionEvaluator</span>，LLM-as-judge + 人工黄金基线；判「错因/标准解析是否实质一致」</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn"><span class="ct">一条派生纪律：假成功占比</span><p>「假成功占比」= L1 ∩ L2，任一为空则整体返回 <span class="inline-code">null</span>，<strong>禁止单边推算</strong>（P7 指标体系 行 27）。同理，<span class="inline-code">MIN_SAMPLE_SIZE = 30</span> 在 <span class="mono">AgentMetricPort.java:304</span> 与 <span class="mono">QualityAlertEvaluator.java:53</span> 两处都写死为「样本不足不判」，不是随便设的阈值。</p></div>
+
+  <h3 id="a10-2">A10.2 评估链路全景：从 Run 终态到审查任务</h3>
+  <p>评估不是独立于业务的一条线，而是挂在 Run 终态上的一段异步流水线。下图是依据详细设计 §0.0 / §5 / §7 与各端口源码绘制的真实链路；<strong>默认消息通道是 database（DB 队列），Rabbit 为备用</strong>，与<a href="ai-01-fundamentals.html">A1</a> 的双通道口径一致。</p>
+  <div class="figure">
+  <svg viewBox="0 0 920 356" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+    <defs><marker id="a10a" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#1d4ed8"/></marker><marker id="a10b" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#0f766e"/></marker></defs>
+    <rect x="14" y="20" width="176" height="60" rx="7" fill="#e8effd" stroke="#c6d9fb"/><text x="26" y="43" font-size="12.5" font-weight="700" fill="#173a8f">① Run 终态</text><text x="26" y="62" font-size="10.8" fill="#4b5563">run_message 回放底座</text><text x="26" y="76" font-size="10" fill="#6b7280">PUBLIC · FORCE RLS</text>
+    <rect x="216" y="20" width="184" height="60" rx="7" fill="#e8effd" stroke="#c6d9fb"/><text x="228" y="43" font-size="12.5" font-weight="700" fill="#173a8f">② trace.collect 事件</text><text x="228" y="62" font-size="10.8" fill="#4b5563">DB 队列（默认）/ Rabbit</text><text x="228" y="76" font-size="10" fill="#6b7280">eventType 分流，不复用执行链</text>
+    <rect x="426" y="20" width="184" height="60" rx="7" fill="#e2f4f0" stroke="#bfe3da"/><text x="438" y="43" font-size="12.5" font-weight="700" fill="#0b5d56">③ 自动采集</text><text x="438" y="62" font-size="10.8" fill="#4b5563">AgentMetricCollector</text><text x="438" y="76" font-size="10" fill="#6b7280">确定性派生 → agent_trace_metric</text>
+    <rect x="636" y="20" width="270" height="60" rx="7" fill="#e2f4f0" stroke="#bfe3da"/><text x="648" y="43" font-size="12.5" font-weight="700" fill="#0b5d56">④ 评估编排</text><text x="648" y="62" font-size="10.8" fill="#4b5563">TraceEvaluationService.evaluate(...)</text><text x="648" y="76" font-size="10" fill="#6b7280">L1 → recordTaskOutcome → L2（fire-and-forget）</text>
+    <line x1="192" y1="50" x2="212" y2="50" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a10a)"/>
+    <line x1="402" y1="50" x2="422" y2="50" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a10a)"/>
+    <line x1="612" y1="50" x2="632" y2="50" stroke="#0f766e" stroke-width="2" marker-end="url(#a10b)"/>
+
+    <rect x="636" y="116" width="270" height="60" rx="7" fill="#f0eafe" stroke="#d9c9f7"/><text x="648" y="139" font-size="12.5" font-weight="700" fill="#5b21b6">⑤ L1 链路完整性</text><text x="648" y="158" font-size="10.8" fill="#4b5563">TRACE_LINK_L1 → agent_task_outcome</text><text x="648" y="172" font-size="10" fill="#6b7280">空结果 → L1_GAP 人审，不伪造覆盖率</text>
+    <rect x="426" y="116" width="184" height="60" rx="7" fill="#f0eafe" stroke="#d9c9f7"/><text x="438" y="139" font-size="12.5" font-weight="700" fill="#5b21b6">⑥ L2 归因判分</text><text x="438" y="158" font-size="10.8" fill="#4b5563">ModelAttributionJudge</text><text x="438" y="172" font-size="10" fill="#6b7280">EVAL_JUDGE_COST 独立预算</text>
+    <rect x="216" y="116" width="184" height="60" rx="7" fill="#fff5dc" stroke="#f0dca6"/><text x="228" y="139" font-size="12.5" font-weight="700" fill="#6d4a05">⑦ 确定性抽样</text><text x="228" y="158" font-size="10.8" fill="#4b5563">floorMod(hashCode,10000)</text><text x="228" y="172" font-size="10" fill="#6b7280">review_task(SAMPLE_RANDOM/L1_GAP)</text>
+    <rect x="14" y="116" width="176" height="60" rx="7" fill="#fff5dc" stroke="#f0dca6"/><text x="26" y="139" font-size="12.5" font-weight="700" fill="#6d4a05">⑧ 人工审查</text><text x="26" y="158" font-size="10.8" fill="#4b5563">PENDING→IN_REVIEW</text><text x="26" y="172" font-size="10" fill="#6b7280">→RESOLVED / DISMISSED</text>
+    <path d="M770 82 L770 112" stroke="#0f766e" stroke-width="2" marker-end="url(#a10b)"/>
+    <line x1="632" y1="146" x2="614" y2="146" stroke="#8b5cf6" stroke-width="2" marker-end="url(#a10a)"/>
+    <line x1="422" y1="146" x2="404" y2="146" stroke="#8b5cf6" stroke-width="2" marker-end="url(#a10a)"/>
+    <line x1="212" y1="146" x2="194" y2="146" stroke="#8b5cf6" stroke-width="2" marker-end="url(#a10a)"/>
+
+    <rect x="14" y="212" width="892" height="48" rx="7" fill="#e8effd" stroke="#c6d9fb"/><text x="26" y="234" font-size="12.5" font-weight="700" fill="#173a8f">⑨ 数据落点（分域存放，互不污染）</text><text x="26" y="252" font-size="10.8" fill="#4b5563">platform.agent_trace_metric（派生宽表 · 机器结论 attribution_correct）　｜　platform.agent_eval_sample（人工标注）　｜　platform.agent_task_outcome（L1 回执）　｜　platform.review_task（审查队列）</text>
+    <rect x="14" y="276" width="892" height="56" rx="7" fill="#fdeaea" stroke="#f3c4c4"/><text x="26" y="299" font-size="12.5" font-weight="700" fill="#8f1717">⑩ 监控与告警（P4）</text><text x="26" y="317" font-size="10.8" fill="#4b5563">Grafana 16 面板 + /actuator/prometheus + QualityAlertEvaluator（SLA-3 / SLA-7 / 内容质量 / SLA-2）+ ReviewAlertService（单条 Trace）</text><text x="26" y="330" font-size="10" fill="#9a4b12">告警在应用层建 review_task 并用唯一索引去重；Prometheus 侧无 rule_files（刻意取舍，见 A12）</text>
+  </svg>
+  <div class="cap">图 A10-1　质量评估闭环：从 Run 终态到审查任务（依据详细设计 §0.0 / §5 / §7、AgentMetricPort、TraceEvaluationService 与 QualityAlertEvaluator）</div>
+  </div>
+  <p>关键事实：<strong>G1 回放底座</strong>在 <span class="mono">RunExecutionLoop</span> 的四处埋点（M1–M4）写 <span class="inline-code">public.run_message</span>（<span class="mono">content jsonb</span>，role ∈ SYSTEM/USER/ASSISTANT/TOOL，租户域 FORCE RLS）；<strong>G2 自动采集</strong>由 Run 终态触发 <span class="inline-code">agent.trace.collect</span>，经双通道进入 <span class="mono">AgentMetricCollector.collect()</span>，确定性派生后 <span class="inline-code">upsert agent_trace_metric</span> + <span class="inline-code">replaceToolCalls agent_trace_tool_call</span>。</p>
+  <div class="evidence"><b>证据源：</b><span class="mono">docs/Agent对话质量跟踪_回溯_评估体系_详细设计.md</span> §0.0/§5/§7/§9、<span class="mono">docs/Agent对话质量跟踪_回溯_评估体系设计方案.md</span> §2.3、<span class="mono">docs/管理后台开发计划/P7_Agent效果指标体系.md</span>、<span class="mono">platform/agent-ports/.../metrics/AgentMetricPort.java</span>、<span class="mono">platform/agent-application/.../evaluation/TraceEvaluationService.java</span>。</div>
+
+  <h3 id="a10-3">A10.3 L1 链路完整性判分：判链路，不判答案</h3>
+  <p><span class="mono">L1AttributionEvaluator.java</span>（行 34–141）刻意把「链路完整性」与「答案正确性」分开。它只检查有没有助手输出、输出是否被截断、工具调用是否失败等结构性事实；<strong>evidenceDigest 只用结构性事实做 sha256，不含原文</strong>（行 118–126）。</p>
+  <table>
+    <thead><tr><th style="width:20%">要素</th><th>取值 / 行为</th><th style="width:26%">证据</th></tr></thead>
+    <tbody>
+      <tr><td>checkerCode</td><td><span class="inline-code">TRACE_LINK_L1</span></td><td class="mono">L1AttributionEvaluator.java:38</td></tr>
+      <tr><td>Outcome</td><td><span class="inline-code">PASS</span> / <span class="inline-code">PARTIAL</span> / <span class="inline-code">FAIL</span></td><td class="mono">同文件 :54–61</td></tr>
+      <tr><td>信号（signal）</td><td><span class="inline-code">NO_ASSISTANT_OUTPUT</span>、<span class="inline-code">EMPTY_ASSISTANT_OUTPUT</span>、<span class="inline-code">TRUNCATED_OUTPUT</span>、<span class="inline-code">TOOL_EXECUTION_FAILED</span>、<span class="inline-code">COMPLETE_TRACE</span></td><td class="mono">同文件 :20–26</td></tr>
+      <tr><td>无消息 / 无 USER</td><td><span class="inline-code">judge()</span> 返回 <span class="inline-code">Optional.empty()</span> → 编排层转 <span class="inline-code">L1_GAP</span> 人审任务，**不伪造覆盖率**</td><td class="mono">同文件 :68–77；TraceEvaluationService.java:104–108</td></tr>
+      <tr><td>回执落点</td><td><span class="inline-code">platform.agent_task_outcome</span>（唯一键 <span class="inline-code">(trace_id, checker_code)</span>），字段含 <span class="inline-code">verified</span> / <span class="inline-code">evidenceDigest</span>；回填宽表 <span class="inline-code">auto_checked</span>/<span class="inline-code">auto_verified</span></td><td class="mono">AgentMetricPort.java:411–419；详细设计 :560–568</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-info"><span class="ct">为什么截断不算「通过」</span><p><span class="mono">EvaluationClosedLoopIT</span> 有一条专门断言：当 <span class="inline-code">finishReason=LENGTH</span>（输出被 token 上限截断）时，L1 不判通过（行 141–159）。这是典型的「有一行 ≠ 数字算对了」：只统计「跑完了」会把截断输出当成成功，而截断往往是预算或 maxTokens 配置失当的信号。</p></div>
+
+  <h3 id="a10-4">A10.4 L2 归因判分：8 值 Outcome 与 fail-closed</h3>
+  <p><span class="mono">L2AttributionEvaluator.java</span>（行 46–185）是全链路里 fail-closed 纪律最密集的一环。它用一个 8 值 Outcome 把「判不了」的所有原因显式编码出来，<strong>任何一个环节缺失都不猜测、不降级为「算它错」</strong>。</p>
+  <table>
+    <thead><tr><th style="width:30%">Outcome</th><th>触发条件</th></tr></thead>
+    <tbody>
+      <tr><td><span class="inline-code">GRADED</span></td><td>题库命中 + 判定器返回明确结论</td></tr>
+      <tr><td><span class="inline-code">SKIPPED_SAMPLING</span></td><td>确定性抽样未命中（默认 sample-rate 0.05）</td></tr>
+      <tr><td><span class="inline-code">UNGRADED_DISABLED</span></td><td>总开关 <span class="inline-code">agent.quality.eval.llm-judge.enabled=false</span>（生产默认）</td></tr>
+      <tr><td><span class="inline-code">UNGRADED_NO_JUDGE</span></td><td>判定器 Bean 未注册（默认不注册，见 A10.10）</td></tr>
+      <tr><td><span class="inline-code">UNGRADED_NO_QUESTION_ID</span></td><td>Run 未携带合法 questionId（无精确关联键）</td></tr>
+      <tr><td><span class="inline-code">UNGRADED_NO_FACTS</span></td><td>事实端口无助手输出等必要事实</td></tr>
+      <tr><td><span class="inline-code">UNGRADED_NO_REFERENCE</span></td><td>题库中无该 questionId 的标准解析</td></tr>
+      <tr><td><span class="inline-code">UNGRADED_JUDGE_UNSURE</span></td><td>判定器低置信 / 解析失败 → 待人工复核</td></tr>
+    </tbody>
+  </table>
+  <p><strong>判定器 <span class="mono">ModelAttributionJudge</span></strong>（行 41–231）实现 <span class="inline-code">AttributionJudge</span>，默认模型 <span class="inline-code">MiniMax-M2.5</span>，严格 rubric SYSTEM_PROMPT（行 48–62）。它有<strong>六种返回 empty</strong> 的情形：无单价、预算超限、模型异常、非 STOP、请求工具、解析失败/低置信（行 121–207）。三段 <span class="inline-code">PromptGuard.wrapToolResult</span> 围栏分别用于 <span class="inline-code">question</span>、<span class="inline-code">agent-attribution</span>、<span class="inline-code">standard-analysis</span>（行 173–183）——防止被评估的文本里藏注入指令影响判分。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">platform/agent-application/.../evaluation/L2AttributionEvaluator.java 行 155–156 / 162–171（节选）</span><button>复制</button></div><pre><code>// 机器判分的唯一落点：只写宽表的 attribution_correct
+metrics.recordAttributionGrade(tenantId, traceId, grade);   // 绝不调 recordEvalSample(...)
+
+// 确定性抽样：同一 traceId 可复现，便于回放与反证
+boolean shouldSample(...) {
+    return Math.floorMod(traceId.hashCode(), 10000) &lt; sampleRateBasisPoints;
+}</code></pre></div>
+  <div class="callout c-ai"><span class="ct">迁移提示：把「LLM-as-judge」当成一个 must-fail-closed 的服务</span><p>传统后端做「对账/校验」，失败通常是重试或告警。这里的判定器把「无法判定」当成一等公民：没有单价就不调模型、预算超限就不调模型、低置信就不给结论。核心心智模型是——<strong>评估器本身也是被评估对象</strong>，它的结论只有在「能证明自己判得准」时才落库，其余一律走人工或保持空值。这与<a href="ai-09-quality-assurance.html#a9-4">A9.4 的反证纪律</a>是同一套哲学。</p></div>
+
+  <h3 id="a10-5">A10.5 questionId 白名单与标准答案解析</h3>
+  <p>L2 的「精确关联」是整套体系的地基：<strong>只认 <span class="inline-code">questionId</span> 精确关联，绝不接题面文本、模糊匹配或猜默认题</strong>。这是为了避免「拿相似题的标准答案判这道题」，那会制造看起来很美的假正确率。</p>
+  <table>
+    <thead><tr><th style="width:24%">组件</th><th>规则</th><th style="width:24%">证据</th></tr></thead>
+    <tbody>
+      <tr><td><span class="mono">QuestionIdTag</span></td><td><span class="inline-code">INPUT_FIELD="questionId"</span>、<span class="inline-code">MAX_LENGTH=128</span>、白名单 <span class="inline-code">[A-Za-z0-9_.:-]+</span>（<strong>不含中文/空白/句读，比 scenario 更严</strong>）；非法/未标注一律 <span class="inline-code">null</span>，不截断不猜</td><td class="mono">QuestionIdTag.java:20–33</td></tr>
+      <tr><td>SQL 类型闸门</td><td>先判 <span class="inline-code">jsonb_typeof(input_payload -&gt; 'questionId') = 'string'</span>，挡住 object/array（否则 <span class="inline-code">-&gt;&gt;</span> 会把整段 JSON 结构转成文本）</td><td class="mono">JdbcTraceFactRepository.java:115–118,165</td></tr>
+      <tr><td>应用层二次校验</td><td><span class="mono">L2AttributionEvaluator</span> 再次 <span class="inline-code">QuestionIdTag.normalize</span>（纵深防御），只按显式 questionId 查题库</td><td class="mono">同文件 :128–145</td></tr>
+      <tr><td><span class="mono">LocalFileReferenceAnswerSource</span></td><td>默认 <span class="inline-code">classpath:agent-eval/reference-answers.json</span>（<strong>空题库</strong>），生产用 <span class="inline-code">file:</span> 覆盖；<span class="inline-code">EXPECTED_VERSION=1</span>、上限 2MB；加载期校验字段类型、questionId 白名单、标准解析非空、<strong>重复 questionId 拒绝启动</strong>；只存 questionId + 标准解析，不保留题面；启动期一次性加载，<strong>不热生效</strong></td><td class="mono">同文件 :21–22,36–45,90–127</td></tr>
+      <tr><td><span class="mono">NoReferenceAnswerSource</span></td><td><span class="inline-code">resolve()</span> 恒 empty，<span class="inline-code">@ConditionalOnMissingBean</span> 让位；<strong>是安全默认值，不代表「功能已落地」</strong></td><td class="mono">同文件 :10–23</td></tr>
+    </tbody>
+  </table>
+  <p>类似的还有 <span class="mono">ScenarioTag</span>：<span class="inline-code">MAX_LENGTH=64</span> code point、白名单 <span class="inline-code">[\p{L}\p{N}_.:/+\-]+</span>（含中文，不含空白与句读），<strong>只校验显式分类码，绝不从自由文本派生</strong>；非法值一律 <span class="inline-code">null</span>。创建 Run 时 <span class="mono">CreateRunRequest</span> 用创建期白名单校验，非法直接 400（新口径）；未标注在读取侧译为哨兵 <span class="inline-code">(unlabeled)</span> → <span class="inline-code">scenario IS NULL</span>。详见 <a href="ai-01-fundamentals.html">A1</a> 与 <a href="ai-09-quality-assurance.html">A9</a>。</p>
+  <div class="evidence"><b>证据源：</b><span class="mono">platform/agent-ports/.../metrics/QuestionIdTag.java</span>、<span class="mono">ScenarioTag.java</span>、<span class="mono">platform/agent-persistence/.../JdbcTraceFactRepository.java</span>、<span class="mono">platform/agent-application/.../evaluation/LocalFileReferenceAnswerSource.java</span>、<span class="mono">NoReferenceAnswerSource.java</span>、<span class="mono">platform/agent-api/.../run/CreateRunRequest.java:163–187</span>。</div>
+
+  <h3 id="a10-6">A10.6 成本隔离铁律：judge 成本绝不混 usage_record / cost_amount</h3>
+  <p>这是项目反复强调的一条铁律（工作记忆铁律 8）：<strong>机器判分绝不写 <span class="inline-code">agent_eval_sample</span>，judge 成本绝不混 <span class="inline-code">usage_record</span>/<span class="inline-code">cost_amount</span></strong>。原因很实际：如果把评估模型调用混进业务账，租户账单会突然多出一笔它没请求过的开销；如果把机器结论混进人工样本，人工覆盖率和 n 就不可信了。</p>
+  <table>
+    <thead><tr><th style="width:22%">科目</th><th>实现方式</th><th style="width:28%">证据</th></tr></thead>
+    <tbody>
+      <tr><td>评估 judge 成本</td><td><span class="mono">EvaluationCostBudget</span>，<span class="inline-code">SUBJECT = "EVAL_JUDGE_COST"</span>，进程内 <span class="inline-code">tryReserve</span>（最坏上限预留）→ <span class="inline-code">settle</span>（真实 token 结算）→ <span class="inline-code">release</span>（失败释放）；按 UTC 自然日归零；默认日预算 1.00 元</td><td class="mono">EvaluationCostBudget.java:33–40,59–91；platform/platform-bootstrap/src/main/resources/application.yml:98</td></tr>
+      <tr><td>业务 Run 成本</td><td><span class="mono">usage_record</span> + <span class="inline-code">cost_amount</span>，走 <span class="mono">BudgetPort</span>（详见 <a href="ai-11-cost-governance.html#a11-2">A11.2</a>）</td><td class="mono">JdbcBudgetRepository.java</td></tr>
+      <tr><td>物理隔离守卫</td><td><span class="mono">L2ProductionGuardTest</span> 断言 judge 源码 <span class="inline-code">doesNotContain("usage_record","cost_amount","AgentMetricPort","recordAttributionGrade")</span>，budget 源码 <span class="inline-code">doesNotContain("usage_record","agent_trace_metric","AgentMetricPort")</span>，并要求三段 <span class="inline-code">promptGuard.wrapToolResult(</span> 恰好 3 次</td><td class="mono">L2ProductionGuardTest.java:137–166</td></tr>
+      <tr><td>共享单价但分账</td><td><span class="inline-code">platform/platform-bootstrap/src/main/resources/application.yml</span> 中 <span class="inline-code">"[MiniMax-M2.5]"</span> 的冻结价<strong>业务 Run 与 L2 judge 共用同一份</strong>——共享的是单价，不是账本</td><td class="mono">platform/platform-bootstrap/src/main/resources/application.yml:540–547</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn"><span class="ct">已知边界：单进程预算</span><p><span class="mono">EvaluationCostBudget</span> 是<strong>单进程</strong>预算，多实例部署时总量上限 = 实例数 × dailyLimit（源码注释 :33–35）。这是<strong>当前设计缺口</strong>，不是特性；进度台账把它登记为「多实例共享预算」待办（见 A10.10）。同理，点号模型名必须写成方括号字面键 <span class="inline-code">"[MiniMax-M2.5]"</span>，否则 Spring Binder 拆层、judge 拒调、业务成本记 0，由 <span class="mono">ApplicationConfigKeyAlignmentTest.dottedModelIdKeepsItsPricing</span> 锁死（详见 <a href="ai-11-cost-governance.html#a11-4">A11.4</a>）。</p></div>
+
+  <h3 id="a10-7">A10.7 机器判分不污染人工抽样：唯一落点与真库反证</h3>
+  <p>机器结论落到哪里，是一个看起来很小、实际会毁掉整套指标体系的问题。项目的结论是：<strong>L2 机器判分只写 <span class="inline-code">platform.agent_trace_metric.attribution_correct</span></strong>，不改 <span class="inline-code">sampled</span>/<span class="inline-code">human_verdict</span>，也不写 <span class="inline-code">agent_eval_sample</span>。</p>
+  <table>
+    <thead><tr><th style="width:24%">通道</th><th>落点</th><th>写了会破坏什么</th></tr></thead>
+    <tbody>
+      <tr><td>机器判分（L2）</td><td><span class="inline-code">agent_trace_metric.attribution_correct</span> 单列 + <span class="inline-code">computed_at</span></td><td>—</td></tr>
+      <tr><td>人工标注</td><td><span class="inline-code">agent_eval_sample</span>（<span class="inline-code">verdict</span> 三值 + <span class="inline-code">attribution_correct</span>），回填 <span class="inline-code">sampled</span>/<span class="inline-code">human_verdict</span></td><td>—</td></tr>
+      <tr><td>若机器写回人工列</td><td class="mono">✗ 禁止</td><td>① 回写 <span class="inline-code">sampled=TRUE</span> → 人工覆盖率假指标；② <span class="inline-code">human_verdict</span> 非 SUCCESS → <span class="inline-code">false_ok</span> 凭空劣化样本；③ <span class="inline-code">agent_eval_sample</span> 混入机器结论 → 人工 n 不可信。见 <span class="mono">AgentMetricPort.java:111–133</span> Javadoc</td></tr>
+    </tbody>
+  </table>
+  <p>DDL 层面也有护栏：<span class="inline-code">agent_eval_sample_verdict_ck</span> 与 <span class="inline-code">agent_trace_metric_verdict_ck</span> 都只允许 <span class="inline-code">SUCCESS/PARTIAL/FAIL</span>（<span class="mono">01_platform_ddl.sql:673,808</span>），机器结论的枚举根本进不去人工列。实现在 <span class="mono">JdbcAgentMetricRepository.java:634–665</span>：<span class="inline-code">UPDATE platform.agent_trace_metric SET attribution_correct=?, computed_at=now() WHERE trace_id=? AND tenant_id=?::uuid</span>，0 行命中记 WARN 不静默。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">真库 IT 断言（三处独立验证，均依赖 IT_PG_URL 活库）</span><button>复制</button></div><pre><code>L2AttributionClosedLoopIT    : 命中题库判 true 只写 attribution_correct，
+                              sampled / human_verdict / eval_sample / usage_record 零污染（:176–211）
+JdbcAgentMetricAttributionIT : machineGradeMustNotPolluteHumanSampling()（:144–160）
+                              n&lt;30：count=1 但 rate=null（:191–203）；未评级 graded 折 null 绝不 0%（:220–233）
+L2AttributionEvaluatorTest   : verify(metrics, never()).recordEvalSample(any()) —— 7 处（:96…194）</code></pre></div>
+  <p><strong>文档与代码的一处口径差</strong> <span class="tag t-conflict">文档冲突</span>：详细设计 §2.3（行 244）写「不在宽表加 <span class="inline-code">attribution_correct</span> 列、落在 <span class="inline-code">agent_eval_sample</span>」——这是<strong>原始设计意图</strong>；实际落地是<strong>两列都有</strong>（<span class="mono">01_platform_ddl.sql:669,794</span>），机器写宽表、人工写样本表。以 DDL 与源码为准。</p>
+
+  <h3 id="a10-8">A10.8 幻觉检测与编造出处：编造引用即 Sev-0</h3>
+  <p><span class="mono">HallucinationDetector</span>（行 27–128）在首期「不做 RAG」的语境下采取了一个非常激进但清晰的判据：<strong>输出里出现「出处断言」即视为编造</strong>（DEC-5，行 12–16）。它不是判断知识点是否存在（那是内容质量评审的事），而是<strong>只看输出文本里有没有编造的出处</strong>，且注入不得豁免（行 18–20）。</p>
+  <table>
+    <thead><tr><th style="width:14%">规则</th><th>含义</th><th style="width:14%">规则</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td>H-1a</td><td>章节引用</td><td>H-1b</td><td>教材名</td></tr>
+      <tr><td>H-1c</td><td>版本页</td><td>H-1d</td><td>图表引用</td></tr>
+      <tr><td>H-2a</td><td>页码</td><td>H-2b</td><td>ISBN</td></tr>
+      <tr><td>H-3</td><td>检索措辞</td><td>H-4</td><td>出处断言</td></tr>
+      <tr><td>H-5a</td><td>泛化教材诉求</td><td>H-5b</td><td>教材课堂断言</td></tr>
+      <tr><td>H-6a</td><td>诉诸权威</td><td>H-6b</td><td>诉诸研究数据</td></tr>
+    </tbody>
+  </table>
+  <p>配套 <span class="mono">HallucinatedSourceException</span>（行 6–8）明确：触发即<strong>阻断输出并记审计，不得降级为警告</strong>，是 Sev-0 失败判据。检测入口有 <span class="inline-code">detect()</span>、<span class="inline-code">assertNoFabricatedSource()</span>、<span class="inline-code">ruleNames()</span>（行 79–111）。测试 <span class="mono">BusinessAcceptanceEvalTest</span> 覆盖 E-3~E-6 编造出处、E-7 注入不豁免，并诚实声明：<strong>本测试不产出「SB-01 达到 80%」这类结论</strong>，那需要真模型调用 + 人工评审（行 26–29）。</p>
+  <div class="callout c-info"><span class="ct">「BusinessAcceptanceEval」主类未找到</span><p>全仓 <span class="inline-code">*BusinessAcceptance*</span> 只命中一个<strong>测试类</strong>，没有独立主类 <span class="mono">BusinessAcceptanceEval</span>。业务验收评测集实际由该测试 + <span class="mono">eval/cases/br01-attribution.json</span>（<span class="inline-code">caseSetId="BR-01"</span>）+ <span class="mono">HallucinationDetector</span> 共同承担。写文档或做交接时不要假设存在一个叫「业务验收评估器」的运行时 Bean。</p></div>
+
+  <h3 id="a10-9">A10.9 告警与审查闭环：不猜基线，n&lt;30 不告警</h3>
+  <p>质量告警分成两类：<strong>比例类</strong>跨 Trace 统计（<span class="mono">QualityAlertEvaluator</span>）与<strong>单条 Trace</strong>规则（<span class="mono">ReviewAlertService</span>）。两者都命中后建 <span class="inline-code">review_task</span>，靠 <span class="inline-code">uq_review_task_open</span> 部分唯一索引去重。</p>
+  <table>
+    <thead><tr><th style="width:16%">规则</th><th>判据</th><th>动作</th></tr></thead>
+    <tbody>
+      <tr><td>SLA-3</td><td><span class="inline-code">MODEL_ERROR + TOOL_5XX</span> 占比 &gt; 10%</td><td>HIGH / ALERT</td></tr>
+      <tr><td>SLA-7</td><td>单工具失败率 &gt; 20% 且调用数 ≥ 30</td><td>NORMAL / ALERT</td></tr>
+      <tr><td>内容质量</td><td>n≥30 时幻觉率 &gt; 5%（<strong>分母是 sampledCount 不是 traceCount</strong>）</td><td>HIGH / ALERT</td></tr>
+      <tr><td>SLA-2</td><td>当前成功率 &lt; 基线 − 3σ；σ 用二项近似 <span class="inline-code">sqrt(p(1-p)/n)</span>，历史窗 n&lt;30 记「不判」</td><td>HIGH / ALERT</td></tr>
+      <tr><td>BEH-4</td><td><span class="inline-code">loop_suspected_count &gt; 0</span>（循环）</td><td>HIGH / ANOMALY</td></tr>
+      <tr><td>COST-4</td><td><span class="inline-code">coalesce(in,out) &gt; 20000</span> token</td><td>NORMAL / ANOMALY</td></tr>
+      <tr><td>MAX_ROUNDS / SAFETY_BLOCK</td><td>触顶 / 安全拦截</td><td>HIGH / ANOMALY · ALERT</td></tr>
+    </tbody>
+  </table>
+  <p>关键纪律是<strong>「不猜基线」</strong>：基线从历史 7d 窗口实测算，任一窗 <span class="inline-code">n&lt;30</span> 不告警，<strong>绝不硬编码 3σ 数字</strong>（<span class="mono">QualityAlertEvaluator.java:24–46,158–181</span>）。命中后 <span class="inline-code">fire()</span> 用 <span class="inline-code">"ALERT:"+rule+":"+UTC日期</span> 作 traceId、全零 UUID 作平台级 <span class="inline-code">tenant_id</span> 哨兵（行 198–225）。这保证同一天同类告警只建一条任务，重复触发是预期去重而非异常。</p>
+  <p>用户反馈走 <span class="mono">TenantFeedbackController</span>：<span class="inline-code">POST /api/metrics/feedback</span>，请求体<strong>刻意不含 tenantId</strong>，由已验签令牌 <span class="inline-code">CurrentPrincipal.context()</span> 派生；traceId 服务端带租户谓词解析，跨租户 404；<span class="inline-code">kind ∈ THUMB_UP/THUMB_DOWN/RETRY/ABANDON</span>；<strong>不写原文</strong>，L3 有噪信号只触发复核（行 43–44,71–116）。</p>
+
+  <h3 id="a10-10">A10.10 未落地 / 未确认：把「骨架」和「已跑通」分开</h3>
+  <p>这是本册最重要的一节。仓库里<strong>评估体系的骨架已经落地并 fail-closed</strong>，但离「真实判分产出可信指标」还差几件明确登记的事。以下都出自 <span class="mono">docs/项目进度台账.md</span> 行 2668–2676 与详细设计 §13（行 659–673），逐条标注状态。</p>
+  <table>
+    <thead><tr><th style="width:25%">项</th><th style="width:16%">状态</th><th>事实与影响</th></tr></thead>
+    <tbody>
+      <tr><td>L1 / L2 判分骨架</td><td><span class="tag t-live">已实现</span></td><td>口径已确认（2026-11-11），骨架落地，<strong>默认仍 fail-closed</strong>：双开关默认 false，看板显示「未启用/样本不足」，绝不编造</td></tr>
+      <tr><td>L2 题库内容</td><td><span class="tag t-gap">证据空白</span></td><td>默认 <span class="inline-code">classpath:agent-eval/reference-answers.json</span> 是<strong>空题库</strong>（<span class="inline-code">questions: []</span>）；IT 用 <span class="mono">reference-answers-it.json</span></td></tr>
+      <tr><td>questionId 调用侧</td><td><span class="tag t-gap">证据空白</span></td><td>后端契约与创建期校验就绪，但<strong>题库/前端业务页创建 Run 时真正传 questionId</strong> 尚未接通；否则 L2 恒 <span class="inline-code">UNGRADED_NO_QUESTION_ID</span></td></tr>
+      <tr><td>多实例共享预算</td><td><span class="tag t-plan">仅设计</span></td><td>当前单进程，上限 = 实例数 × dailyLimit</td></tr>
+      <tr><td>scenario 调用侧</td><td><span class="tag t-gap">证据空白</span></td><td>同理，仓库内调用方默认不传标签 ⇒ 面板 13 仍出现「未标注」</td></tr>
+      <tr><td>Prometheus alert rules</td><td><span class="tag t-gap">证据空白</span></td><td><span class="mono">monitoring/prometheus/prometheus.yml</span> 无 <span class="inline-code">rule_files</span>；告警刻意放应用层以便建 review_task，代价是运维接 Alertmanager 需另建规则（详见 <a href="ai-12-observability-runbook.html#a12-7">A12.7</a>）</td></tr>
+      <tr><td>ReviewAttributionHook</td><td><span class="tag t-gap">证据空白</span></td><td>接线已完成（端口 + 仓储 resolve 后回调，仅 PROMPT/CONFIG/MODEL，fail-soft，<span class="inline-code">ObjectProvider</span> 可选注入），<strong>当前无任何实现 = NoOp，不回写</strong>；待产品定 <span class="inline-code">root_cause=PROMPT → attribution_correct=true 还是别的</span></td></tr>
+      <tr><td>run_message 保留期 / 回放受众</td><td><span class="tag t-unknown">未确认</span></td><td>代码按默认 30 天、不额外存敏感原文实施；教育/未成年人数据期限与脱敏、学生端是否开放查看，<strong>无正式产品口径</strong></td></tr>
+      <tr><td>预期量级</td><td><span class="tag t-unknown">未确认</span></td><td>按 &lt;1k Run/日 设计，待产品确认</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger"><span class="ct">最容易被误读成「已完成」的两件事</span><p>① <strong>「骨架已落地」≠「判分已生效」</strong>：默认开关 false + 空题库 + 未注册判定器，意味着生产上 L2 现在恒为 <span class="inline-code">UNGRADED_*</span>，看板显示「未启用」。② <strong>「EvaluationClosedLoopIT 有 9 例」≠「业务验收达标」</strong>：早期文档写「4 例」是过时口径（进度台账已记 9 例）；而「SB-01 达到 80%」需要真模型 + 人工评审，当前测试<strong>不产出该结论</strong>。把测试通过当成指标达标，正是本项目最忌讳的静默失真。</p></div>
+  <div class="callout c-ai"><span class="ct">迁移提示：给「质量」建立可证伪的证据链</span><p>传统 Java 后端的质量往往止于单元测试和接口自动化。本项目要求的是：每一个质量结论都能回答「撤掉修复点会不会变红」。对应到内容质量，就是——判不了要显式编码（8 值 Outcome）、机器与人工分域存放（两张表）、成本独立科目（EVAL_JUDGE_COST）、样本不足不给百分比（n&lt;30）、编造出处即 Sev-0。<strong>「看起来对」不算对，「能被证明对」才算对。</strong></p></div>
+
+  <div class="evidence"><b>证据源：</b><span class="mono">docs/Agent对话质量跟踪_回溯_评估体系_详细设计.md</span>（672 行）、<span class="mono">docs/Agent对话质量跟踪_回溯_评估体系设计方案.md</span>（291 行）、<span class="mono">docs/管理后台开发计划/P7_Agent效果指标体系.md</span>、<span class="mono">docs/项目进度台账.md</span> 行 2668–2676、<span class="mono">platform/agent-application/src/main/java/.../evaluation/</span>（12 个类）、<span class="mono">platform/agent-application/src/main/java/.../review/QualityAlertEvaluator.java</span> / <span class="mono">ReviewAlertService.java</span>、<span class="mono">platform/agent-ports/.../metrics/AgentMetricPort.java</span>、<span class="mono">platform/agent-persistence/.../JdbcAgentMetricRepository.java</span>、<span class="mono">deploy/sql/platform/01_platform_ddl.sql</span>、五个闭环 IT（EvaluationClosedLoopIT / L2AttributionClosedLoopIT / TraceMetricContentAccuracyIT / JdbcAgentMetricAttributionIT / JdbcAgentMetricScenarioIT）与 <span class="mono">L2ProductionGuardTest</span>。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-09-quality-assurance.html"><span class="pn-label">← 上一册</span><span class="pn-title">A9 · 测试、守卫与质量保障体系</span></a>
+  <a class="pn-right" href="ai-11-cost-governance.html"><span class="pn-label">下一册 →</span><span class="pn-title">A11 · 租户级成本治理与 Token 计费</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

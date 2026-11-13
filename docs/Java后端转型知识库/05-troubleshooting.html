@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第五篇 · 问题排查 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="05-troubleshooting" data-ai="0">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">第五篇 · 问题排查</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">基础六篇 · 分册</div>
+  <h1>第五篇 · 问题排查</h1>
+  <p class="ph-sub">五段式方法论、六类诊断表、十例事故复盘、提交清单（第 14–17 章）</p>
+  <div class="ph-meta"><span>覆盖：第 14–17 章</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<div class="part-divider" id="part5">
+  <div class="pn">第五篇 · 问题排查与方法论（重点）</div>
+  <h2>现象 → 原因 → 定位 → 解决 → 验证</h2>
+  <p>第 14–17 章：方法论、分类诊断手册、真实事故复盘、提交前清单。这一篇是日常最高频使用的部分。</p>
+</div>
+
+<!-- ==================== 第 14 章 ==================== -->
+
+<section class="chapter" id="ch14">
+  <div class="breadcrumb"><b>第五篇</b> / 第 14 章</div>
+  <h2><span class="num">14.</span> 排查总方法论</h2>
+
+  <h3 id="ch14-1">14.1 五段式记录模板</h3>
+  <p>项目 <span class="inline-code">问题记录/README.md</span> 规定每条问题固定三段（问题描述 / 产生原因 / 相关解决方案），本手册按培训需要扩展为<strong>五段式</strong>。任何一次排查都按这个结构写，避免「改好了但不知道为什么好」：</p>
+  <table>
+    <thead><tr><th>段</th><th>要回答的问题</th><th>反面例子</th><th>合格例子</th></tr></thead>
+    <tbody>
+      <tr><td><strong>① 现象</strong></td><td>谁在什么环境、看到什么可观测结果？有没有报错？</td><td>「检索不好使」</td><td>「POST /api/v1/retrieval 返回 200 且 hits=[]；同 query 直连 rag 返回 2 命中」</td></tr>
+      <tr><td><strong>② 可能原因</strong></td><td>列出 2–4 个可证伪的假设，按先验排序</td><td>「大概是配置问题」</td><td>「a) revisionCode 空串被拒 b) 嵌入维度漂移 c) 租户未绑定」</td></tr>
+      <tr><td><strong>③ 定位方式</strong></td><td>用哪条命令 / 哪个日志 / 哪张表把假设逐一排除？</td><td>「看了一下代码」</td><td>「curl 原始字节 + 只读 SQL 查 count(*) + <span class="inline-code">current_setting('app.tenant_id')</span>」</td></tr>
+      <tr><td><strong>④ 解决方案</strong></td><td>改了哪个文件、为什么这样改、有没有更根本的修法</td><td>「重启就好了」</td><td>「按对端真实校验把默认 revisionCode 改为『未指定』，并补契约守卫」</td></tr>
+      <tr><td><strong>⑤ 验证步骤</strong></td><td>如何证明修好了、且撤掉修复会红？</td><td>「测试全绿」</td><td>「两真进程 369 帧 / 2 命中；9/9 反证撤点转红；skipped=0」</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-info">
+    <span class="ct">为什么强调「可证伪」</span>
+    <p>本项目最贵的缺陷不是抛异常的那些，而是<strong>不报错、数字悄悄错、或功能空转</strong>的那一类。如果假设无法用一条命令证伪，你就永远不知道自己修的是不是真因。项目方法论归档称之为「<strong>绿不等于对</strong>」「<strong>能力的存在 ≠ 能力的生效</strong>」。</p>
+  </div>
+
+  <h3 id="ch14-2">14.2 核心概念：静默失真（Silent Distortion）</h3>
+  <p>这是贯穿全项目的问题分类。它不是「报错」，而是<strong>系统继续正常运行，但结果已经错了，且没有任何信号</strong>。项目里出现过的形态：</p>
+  <table>
+    <thead><tr><th>形态</th><th>例子</th><th>判别口诀</th></tr></thead>
+    <tbody>
+      <tr><td>静默 0 行</td><td>FORCE RLS 未绑租户 → 删/查返回 0 行；平台档会话置空后应用角色读全局行恒 0</td><td>「查不到」先查 <span class="inline-code">current_setting</span> 和 <span class="inline-code">current_user</span></td></tr>
+      <tr><td>静默回滚</td><td>事务内 SQL 失败被 fail-soft 吞掉后 COMMIT，PG 已 aborted 事务静默等价 ROLLBACK</td><td>看影响行数，不看有没有抛异常</td></tr>
+      <tr><td>静默降级</td><td>下游 500 被降级成「空命中」；解析器失败回落占位实现</td><td>区分「确实没有」与「拿不到而假装没有」</td></tr>
+      <tr><td>数字悄悄错</td><td>成本只算工具次数；JOIN 从表把他租户 attempt 计入本租户失败率；压缩 before 注水</td><td>「有一行」≠「数字算对了」，要独立复算</td></tr>
+      <tr><td>功能空转</td><td>影子能力没接线、守卫引用被测实现常量、假 Server 掩盖契约失配、Worker 未开 @EnableScheduling</td><td>问「撤掉修复点会红吗」</td></tr>
+      <tr><td>假绿 / 假红</td><td>IT 全类跳过、<span class="inline-code">mvn -q</span> 吞汇总行、陈旧报告、旧 jar 仍在运行</td><td>看 XML <span class="inline-code">&lt;testcase&gt;</span>、<span class="inline-code">skipped=0</span>、产物 inode</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch14-3">14.3 三级验收</h3>
+  <p>出自 <span class="inline-code">docs/上下文压缩完整方案_设计与实施_v1.0.md §7.3</span>，是项目所有功能交付的统一门槛：</p>
+  <table>
+    <thead><tr><th>级别</th><th>内容</th><th>合格判据（举例）</th></tr></thead>
+    <tbody>
+      <tr><td>① 行为单测</td><td>预算分配、水位线、增量合并、围栏注入、配置门禁、record 全参拷贝</td><td>边界值、确定性、fail-closed 分支都覆盖</td></tr>
+      <tr><td>② 链路 E2E</td><td>三条链路各跑一次真实编排（生产 Bean、真网关或可控桩）</td><td>断言压缩<strong>确实发生</strong>，且事件/指标自动产出</td></tr>
+      <tr><td>③ 闭环</td><td>真跑一次 Run 或 SSE 请求</td><td>断言 <span class="inline-code">usage_record</span> 的 token 真的下降、checkpoint 真的落、下一轮真的复用、答案关键事实与未压缩版一致</td></tr>
+    </tbody>
+  </table>
+  <p>配套的三条约束：<strong>守卫绝不引用被测实现自己的常量</strong>（否则实现改了守卫跟着改，等于没守）；<strong>从编排入口进，不直连端口</strong>（否则绕过接线层）；<strong>弱断言要造出挤出压力</strong>（否则永远不触发）。</p>
+
+  <h3 id="ch14-4">14.4 反向验证（撤点 / 反证）</h3>
+  <p>定义：临时撤掉刚实现的修复点，指定测试必须<strong>如期转红</strong>；复原后文件哈希一致。这是「测试是否真的有检出力」的唯一可靠证据。<span class="inline-code">rag/docs/RAG-D08_评测体系与质量门禁.md</span> 的 FR-RAG-010 更把它写成门禁条件：「每条门禁至少一条『移除该机制后转红』的用例，反证未执行视为门禁未生效」。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">scripts/m3-context-policy-counterproof.sh（头部注释，原样节选）</span><button>复制</button></div><pre><code><span class="cm"># S1-M3 反证脚本：钉住 execution_snapshot.context_policy 双写入口不是假绿。</span>
+<span class="cm"># RV-M3-01（旧直发强制写 {}）：把 JdbcAgentManageRepository 的派生值硬编码成</span>
+<span class="cm">#   "{}"，AgentRepositoryIT#publishVersionSnapshotsContextPolicy 必须红。</span>
+<span class="cm">#   若仍绿，说明旧直发入口其实没有写规范快照。</span>
+<span class="cm"># … 共 RV-M3-01 .. RV-M3-06 六个独立假绿形态 …</span>
+<span class="cm"># ⚠️ 判定：结论不变（仍全绿）或编译失败均判「无效反证」。</span>
+<span class="cm"># ⚠️ 中断安全：SIGTERM/SIGINT 时先复原当前撤点文件再退出，</span>
+<span class="cm">#    避免残留撤点源码造成后续静默失真。</span>
+set -u
+OLD_MANAGE='        String contextPolicy = ContextPolicyReader.snapshotFromAgentConfig(definition);'
+NEW_MANAGE='        String contextPolicy = "{}"; <span class="cm">// RV-M3-01</span>'
+restore() { <span class="cm"># 从 /tmp 备份逐个 cp 回原路径</span> … }</code></pre></div>
+  <p><strong>中断安全</strong>是血的教训：撤点脚本被 SIGTERM / SIGINT 打断时 <span class="inline-code">finally</span> 可能不执行，残留的撤点源码会静默失真（M10 曾残留 <span class="inline-code">MAX_INJECT_HITS=16</span>）。跑完或跑断后都要做三件套校验：<strong>old 锚点全量计数 = 1 + new 残留标记全无 + <span class="inline-code">git diff --check</span></strong>。</p>
+  <p><span class="tag t-unknown">未确认</span> 仓库内<strong>没有</strong> <span class="inline-code">*-rv-*.py</span> 文件；反向验证脚本是 <span class="inline-code">scripts/*-counterproof.sh</span>（另有 <span class="inline-code">doc-c*.py</span> 文档门禁回写脚本），<span class="inline-code">RV-*</span> 只是脚本内的锚点编号。</p>
+
+  <h3 id="ch14-5">14.5 假绿识别清单</h3>
+  <ul class="checklist">
+    <li><span class="inline-code">@EnabledIfEnvironmentVariable(IT_PG_URL)</span> 有没有把整类 IT 跳过？看 <span class="inline-code">skipped=0</span> 而不是 <span class="inline-code">BUILD SUCCESS</span>。</li>
+    <li>用例数是按 XML <span class="inline-code">&lt;testcase&gt;</span> 数出来的吗？参数化 / 嵌套下根 <span class="inline-code">tests</span> 属性会偏离。</li>
+    <li>夹具是不是比被测路径更「方便」？（TST-14：手工插 <span class="inline-code">execution_snapshot</span> 导致「发布的 Agent 永远不可运行」全绿。）</li>
+    <li>断言是不是同义反复？（P2：用「打算查谁」比「查到了谁」，恒不违例。）</li>
+    <li>守卫是不是引用了被测实现自己的常量？</li>
+    <li>单测替身是不是返回了常量 / 绕过了框架真实序列化？（TST-20：真实 HTTP 字节是 <span class="inline-code">data:event: delta</span> 二次包裹。）</li>
+    <li>用的是 <span class="inline-code">ai_agent</span>(BYPASSRLS) 还是 <span class="inline-code">app_agent</span>？前者验隔离必然假绿。</li>
+    <li>运行的是刚构建的 jar 吗？（inode / 构建时间线；<span class="inline-code">clean</span> 后旧进程仍在跑。）</li>
+    <li><span class="inline-code">AUTHZ_MISMATCH=0</span> 是不是因为影子链根本没接线？应看 <span class="inline-code">rlsDependent()</span> 归零。</li>
+    <li>「和基准库一致」是否只是「基准库本身错得很一致」？（TST-12。）</li>
+    <li>假 Server 放宽了哪些对端真实校验？（跨进程契约失配。）</li>
+    <li>报表数字是不是来自被 IT 污染的库？（P8：常驻实例把 IT 遗留 Run 当真活跑。）</li>
+  </ul>
+
+  <h3 id="ch14-6">14.6 判绿口径与 CI 纪律</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">.github/workflows/ci.yml（原样引用，两条关键纪律）</span><button>复制</button></div><pre><code><span class="cm"># ⚠️ set -o pipefail 是必须的：默认 shell 是 bash -e {0}，不含 pipefail；</span>
+<span class="cm">#    mvn ... | tee log 的退出码取自 tee（恒为 0）—— 失败仍报绿</span>
+set -o pipefail
+mvn -B clean verify \
+  -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \
+  -Dit.test='*IT,!RealBrokerEndToEndIT' \
+  -Dfailsafe.failIfNoSpecifiedTests=false 2&gt;&amp;1 | tee /tmp/ci-it.log</code></pre></div>
+  <p>文档原话：<strong>判绿不是 <span class="inline-code">BUILD SUCCESS</span>，而是 <span class="inline-code">Tests run: N, Failures: 0, Errors: 0, Skipped: 0</span></strong>；CI 还断言跳过数为 0、执行数 <span class="inline-code">&lt; 1000</span> 判失败（防整批没跑）。报告位置：<span class="inline-code">*/target/surefire-reports/TEST-*.xml</span> 与 <span class="inline-code">*/target/failsafe-reports/</span>。</p>
+
+  <h3 id="ch14-7">14.7 排查决策树（先看哪一层）</h3>
+  <div class="figure">
+  <svg viewBox="0 0 900 340" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+    <defs><marker id="a8" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#1d4ed8"/></marker></defs>
+    <rect x="330" y="12" width="240" height="44" rx="7" fill="#e8effd" stroke="#c6d9fb"/><text x="345" y="40" font-size="13" font-weight="700" fill="#173a8f">症状：不报错但结果不对 / 全绿</text>
+    <path d="M450 58 L450 78" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a8)"/>
+    <rect x="310" y="80" width="280" height="44" rx="7" fill="#fff5dc" stroke="#f0dca6"/><text x="325" y="108" font-size="12.5" font-weight="700" fill="#6d4a05">① 先确认「跑的是不是这份代码/这个库」</text>
+    <text x="610" y="100" font-size="11" fill="#6b7280">jar inode、current_database()、current_user、env 来源、进程端口</text>
+    <path d="M450 126 L450 146" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a8)"/>
+    <rect x="310" y="148" width="280" height="44" rx="7" fill="#fff5dc" stroke="#f0dca6"/><text x="325" y="176" font-size="12.5" font-weight="700" fill="#6d4a05">② 再确认「数据是真的没有，还是读不到」</text>
+    <text x="610" y="168" font-size="11" fill="#6b7280">app.tenant_id 绑定、RLS/FORCE、只读直连库 count(*)、下游 500 降级</text>
+    <path d="M450 194 L450 214" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a8)"/>
+    <rect x="310" y="216" width="280" height="44" rx="7" fill="#fff5dc" stroke="#f0dca6"/><text x="325" y="244" font-size="12.5" font-weight="700" fill="#6d4a05">③ 再确认「链路有没有真的接上」</text>
+    <text x="610" y="236" font-size="11" fill="#6b7280">Bean 装配、eventType 分流、@EnableScheduling、feature flag、夹具覆盖</text>
+    <path d="M450 262 L450 282" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a8)"/>
+    <rect x="250" y="284" width="400" height="44" rx="7" fill="#e2f4f0" stroke="#bfe3da"/><text x="266" y="312" font-size="12.5" font-weight="700" fill="#0b5d56">④ 独立复算数字 → 撤点反证 → 两真进程联调 → 写回问题记录</text>
+  </svg>
+  <div class="cap">图 14-1　静默失真的通用排查顺序：先证据边界，再数据可见性，再链路接线，最后才谈业务逻辑</div>
+  </div>
+  <div class="callout c-ok">
+    <span class="ct">十条总体方法论（项目归档原文要点）</span>
+    <p>绿不等于对；能力的存在 ≠ 能力的生效；同义反复是假绿第一来源；单测替身会掩盖真问题；排除法要按<strong>读方实际查的那张表</strong>来验；基线必须绑定目标环境的实际形态且一源一份；接缝必须「插电」；跨库/跨进程契约要按对端真实校验；聚合口径污染比主表泄漏更难发现；<strong>fail-closed 贯穿三层</strong>，任何「降级即放行」都要被双层守卫堵住。出处：<span class="inline-code">docs/RLS到应用层权限迁移-问题方案与方法论归档.md</span>。</p>
+  </div>
+</section>
+
+<!-- ==================== 第 15 章 ==================== -->
+
+<section class="chapter" id="ch15">
+  <div class="breadcrumb"><b>第五篇</b> / 第 15 章</div>
+  <h2><span class="num">15.</span> 分类诊断手册（现象 / 原因 / 定位 / 解决 / 验证）</h2>
+  <p>按症状定位到分组，再按行执行。表中命令均以仓库根为当前目录；路径均为相对路径。所有「验证」栏都要求<strong>可复现</strong>，不以「不报错了」为终点。</p>
+
+  <h3 id="ch15-1">15.1 启动与配置类</h3>
+  <table>
+    <thead><tr><th>现象</th><th>可能原因</th><th>定位方式</th><th>解决</th><th>验证</th></tr></thead>
+    <tbody>
+      <tr><td><span class="inline-code">auth.jwt.private-key 未配置</span> / 拒绝启动</td><td>未传 <span class="inline-code">dev</span> profile；或 jwt.env 未生成/未被 source</td><td><span class="inline-code">env | grep -E 'SPRING_PROFILES|JWT_PRIVATE'</span>；核对 dev-backend.sh 的 source 顺序</td><td><span class="inline-code">SPRING_PROFILES_ACTIVE=dev</span>；<span class="inline-code">gen-jwt-keys.sh</span> 生成 jwt.env</td><td><span class="inline-code">curl /api/auth/jwks</span> 返回 200 且 kid 稳定（重启不变）</td></tr>
+      <tr><td><span class="inline-code">no main manifest attribute</span></td><td>用 thin jar 直接 <span class="inline-code">java -jar</span>（见 <a href="02-environment-config.html#ch7-3">§7.3</a>）</td><td><span class="inline-code">unzip -p &lt;jar&gt; META-INF/MANIFEST.MF</span> 看有无 Main-Class</td><td>改用 <span class="inline-code">-exec.jar</span> 或 <span class="inline-code">scripts/dev-backend.sh</span></td><td>MANIFEST 含 <span class="inline-code">Start-Class: …PlatformApplication</span></td></tr>
+      <tr><td><span class="inline-code">ACCESS_REFUSED</span> / health DOWN</td><td><span class="inline-code">RABBITMQ_PASSWORD</span> 未填（yml 默认空）</td><td>核对 env；<span class="inline-code">./scripts/dev-rabbitmq.sh status</span></td><td>填口令并确认 vhost=agent</td><td><span class="inline-code">dev-rabbitmq.sh verify</span>，quorum 队列 delivery-limit=3</td></tr>
+      <tr><td>RAG 启动自检拒绝</td><td>主数据源用了 owner / BYPASSRLS 账号；或 ops 角色与主数据源同名</td><td>看启动日志中 <span class="inline-code">RagStartupSelfCheck</span>；<span class="inline-code">SELECT current_user, rolbypassrls …</span></td><td>改回 <span class="inline-code">rag_app</span>；ops 用 <span class="inline-code">rag_ops</span>；只跑检索则显式 <span class="inline-code">RAG_OPS_ENABLED=false</span></td><td>以 rag_app 实连，<span class="inline-code">check-rag-ops-role.sh</span> 13 项全过</td></tr>
+      <tr><td>每个 Run 都 <span class="inline-code">FAILED / CONFIG_UNAVAILABLE</span></td><td>双写开关默认关、读侧却把快照当硬前置（CFG-01）；或快照写链断（DAT-01）</td><td>逐项盘点 6 个配置来源；<span class="inline-code">SELECT count(*) FROM execution_snapshot</span></td><td>改<strong>默认值</strong>而不改 fail-closed；补齐写链各层</td><td>真实 API 建 Run，快照四字段齐全且抵达模型调用，见 <a href="#ch16-1">§16.1</a></td></tr>
+      <tr><td>模型成本记 0 / judge 拒调</td><td>yml 裸键 <span class="inline-code">MiniMax-M2.5:</span> 被按点号拆开</td><td><span class="inline-code">grep -n 'MiniMax' application.yml</span>；跑 <span class="inline-code">ApplicationConfigKeyAlignmentTest</span></td><td>写成 <span class="inline-code">"[MiniMax-M2.5]"</span></td><td>单测 <span class="inline-code">dottedModelIdKeepsItsPricing</span> 绿 + 真调用成本非 0</td></tr>
+      <tr><td>装配期报「拒绝装配 EmbeddingPort」</td><td><span class="inline-code">RAG_EMBEDDING_BASE_URL</span> 缺失；文案会误导去开占位闸门</td><td>核对 rag.env；<span class="inline-code">curl &lt;base&gt;/embeddings</span></td><td>直连真实嵌入端口（只转发 chat 的网关会 404）</td><td>一次真实 embed 返回维度与 <span class="inline-code">RAG_EMBEDDING_DIMENSION</span> 一致</td></tr>
+      <tr><td>向量列维度校验拒启</td><td><span class="inline-code">RAG_EMBEDDING_DIMENSION / VECTOR_TYPE</span> 与库列不一致</td><td>查 <span class="inline-code">rag_chunk_embedding</span> 列定义；核对两份 yml</td><td>按 <span class="inline-code">deploy/sql/rag/</span> 的迁移对齐，或改配置</td><td>装配通过 + 一次检索有命中</td></tr>
+      <tr><td><span class="inline-code">Port 8080 already in use</span></td><td>旧实例未退 / IDE 里跑着旧构建</td><td><span class="inline-code">lsof -i:8080</span>；核对进程启动参数与 jar 时间</td><td>结束自己启动的旧进程</td><td>新进程日志的构建时间与 jar 一致</td></tr>
+      <tr><td>前端 502 或代理 404</td><td>用了 127.0.0.1 访问前端；或 <span class="inline-code">/api/v1</span> 代理排在 <span class="inline-code">/api</span> 之后</td><td>看浏览器 Network 的请求目标端口；读 <span class="inline-code">vite.config.ts</span> 代理顺序</td><td>改用 localhost；调整代理顺序</td><td><span class="inline-code">curl localhost:5173/api/auth/jwks</span> 与直连 8080 一致；RAG 请求落在 8081</td></tr>
+      <tr><td>改了配置却「没生效」</td><td>只重启了一边（JWT 漂移）；SERVER_PORT relaxed binding 压过 yml；旧 jar 仍在运行</td><td><span class="inline-code">env | grep SERVER_PORT</span>；核对运行 jar inode 与启动时间</td><td>统一 env 来源；两边同步重启；重新打包</td><td><span class="inline-code">gen-jwt-keys.sh --check</span> 一致；跨服务调用非 401</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch15-2">15.2 身份与权限类</h3>
+  <table>
+    <thead><tr><th>现象</th><th>可能原因</th><th>定位方式</th><th>解决</th><th>验证</th></tr></thead>
+    <tbody>
+      <tr><td>登录 401 <span class="inline-code">invalid_credentials</span></td><td>账号不存在 / 口令错 / <strong>连错库</strong>；响应不区分三者</td><td><span class="inline-code">dev-seed.sh --diagnose &lt;账号&gt;</span>；<span class="inline-code">SELECT current_database(), (SELECT count(*) FROM public.principal)</span></td><td>确认库后重建账号；别反复试口令</td><td><span class="inline-code">--list</span> 显示账号；登录返回 accessToken</td></tr>
+      <tr><td>平台令牌打租户域端点 401</td><td>audience 不匹配（设计如此）</td><td>解码 JWT 看 <span class="inline-code">aud</span>；核对端点归属</td><td>走<strong>执行票证</strong>通道；不要放宽 aud 校验、不要往请求体塞 tenantId</td><td>票证 60s 内可建 Run；响应 code 能在 platform_audit_event 反查</td></tr>
+      <tr><td>票证 404 / 409</td><td>租户「三处齐」登记缺失或生命周期状态不一致</td><td><span class="inline-code">./scripts/check-tenant-registry.sh</span>；看响应 <span class="inline-code">code</span>（= reason_code）</td><td>补登记脚本（幂等、默认 dry-run）；根治在种子「三处齐」</td><td>巡检四项全 0 违规、退出码 0；票证签发成功</td></tr>
+      <tr><td>大台登录正常、调 RAG 全 401</td><td>jwt.env 换密钥后只重启一边；或值被加了引号</td><td><span class="inline-code">gen-jwt-keys.sh --check</span>；核对两边 source 的 jwt.env</td><td>同步重启 8080/8081；去掉值两端引号</td><td>用平台签发的令牌调 <span class="inline-code">/api/v1/retrieval</span> 返回 200</td></tr>
+      <tr><td>工具调用越权未被拦</td><td>能力闭包校验只在呈现层 / CAP 开关全关（P0-1a）</td><td>逐环节源码核对；<span class="inline-code">grep closure ToolInvocationGate</span></td><td>加 <span class="inline-code">CapabilityClosureGuard</span>（OFF/WARN/ENFORCE），插在 findHandler 之后、Schema 校验之前</td><td>越权工具被拒 / 闭包内工具不受影响 / 解析不出 fail-closed 三类用例</td></tr>
+      <tr><td>权限影子恒不违例、零检出力</td><td>同义反复：把「打算查谁」当行租户；用行租户当主体（P2）</td><td>注入他租户行的反例检出力测试</td><td>行租户从<strong>结果行</strong>读出；主体与行归属分离；用真实 RuleBasedPolicyEngine 回归</td><td>主体 A + 行 B 必须违例；改回旧实现即红</td></tr>
+      <tr><td><span class="inline-code">AUTHZ_MISMATCH=0</span> 被视为迁移完成</td><td>影子链根本没接线（P3「接缝插电」缺失）</td><td>检查各仓储私有字段 <span class="inline-code">scoped</span> / <span class="inline-code">shadowEnabled</span> 实际取值</td><td>由 <span class="inline-code">AuthzShadowConfiguration</span> 装配；单开关语义（Bean 在即开）</td><td><span class="inline-code">AuthzShadowWiringTest</span> + <span class="inline-code">rlsDependent()</span> 归零，而非 mismatch=0</td></tr>
+      <tr><td>审计零行但系统全绿</td><td><span class="inline-code">authz_decision_log</span> 写了 RETURNING 却无 SELECT 权限；异常被限频告警吞掉（P6）</td><td>真库实证（单测动态代理测不到）；查表行数与启动期守卫</td><td>显式 REVOKE SELECT；两道 RETURNING 守卫；启动期零行写入探测失败拒启</td><td><span class="inline-code">AuthzDecisionLogSchemaTest</span> + 活库 <span class="inline-code">insertWithReturningIsDenied</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch15-3">15.3 数据库与 RLS 类</h3>
+  <table>
+    <thead><tr><th>现象</th><th>可能原因</th><th>定位方式</th><th>解决</th><th>验证</th></tr></thead>
+    <tbody>
+      <tr><td>查询返回空 / 数据库不存在</td><td>连到 5432 旧 PG16（无 agent_dev）；或连到远程 RDS 而非本地容器</td><td><span class="inline-code">SELECT current_database(), inet_server_port()</span>；<span class="inline-code">docker ps</span></td><td>统一用 5433 与容器 <span class="inline-code">agent-pg17</span>；核对 env 连接串</td><td>同 SQL 在目标库返回期望行数</td></tr>
+      <tr><td>FORCE RLS 表删/查 0 行但不报错</td><td>未绑 <span class="inline-code">app.tenant_id</span></td><td><span class="inline-code">SELECT current_setting('app.tenant_id', true)</span></td><td>事务内、业务 SQL 前绑定；判空前也要先绑</td><td>用 <span class="inline-code">app_agent</span> 实连，绑定后行数正确</td></tr>
+      <tr><td>隔离测试「通过」但生产不可信</td><td>用了 <span class="inline-code">ai_agent</span>(BYPASSRLS) 或 superuser</td><td><span class="inline-code">SELECT current_user, rolbypassrls FROM pg_roles WHERE rolname=current_user</span></td><td>全部改用非特权角色</td><td>任一真库 IT 用 ai_agent 跑过即判假绿重跑</td></tr>
+      <tr><td>新增表后应用角色无权限</td><td>角色在 DDL 之前建（ALTER DEFAULT PRIVILEGES 只覆盖此后新建表）；或新表没同步 03</td><td>以 app_agent 试 <span class="inline-code">SELECT</span>；比对 01 快照与 03 授权</td><td>按 01→02→03→04 顺序重放；platform 域新表同步 03；重跑 03 后紧跟 04</td><td><span class="inline-code">SchemaDriftIT</span> + 巡检脚本退出码 0</td></tr>
+      <tr><td>幂等 upsert 本地绿、活库红</td><td><span class="inline-code">ON CONFLICT DO UPDATE</span> 需要 UPDATE 权限，未授权</td><td>用应用角色在<strong>活库</strong>跑同一语句</td><td>同步授权并补 <span class="inline-code">SchemaDriftIT</span></td><td>活库非特权角色执行成功，重复执行行数不增长</td></tr>
+      <tr><td>领取任务时 LIMIT 静默失效</td><td>FORCE RLS 下 <span class="inline-code">IN (SELECT … LIMIT … FOR UPDATE SKIP LOCKED)</span> 退化为逐行 SubPlan</td><td>非特权真库 IT（superuser 不复现）；观察实际领取条数</td><td>改 <span class="inline-code">WITH candidates AS MATERIALIZED (…) UPDATE … FROM candidates</span></td><td>并发展开压力时领取条数 ≤ LIMIT，且撤点反证转红</td></tr>
+      <tr><td>事务「成功」但数据没写</td><td>事务内 SQL 失败被 fail-soft 吞掉后 COMMIT（PG 静默 ROLLBACK）</td><td>检查每条 DML 影响行数；看 <span class="inline-code">TransactionalConnectionHolder</span> 状态</td><td>用 <span class="inline-code">POISONED</span> 在顶层 commit 前抛异常</td><td>注入一次 SQL 失败，顶层必须抛异常且数据零变更</td></tr>
+      <tr><td>JOIN 查询把他租户 attempt 计入统计</td><td>RLS 对查询树每一张表注入谓词，应用层只在主表渲染 <span class="inline-code">WHERE</span>（P5/J10）</td><td>穷举 JOIN 清单；用 <span class="inline-code">BEGIN…PREPARE…ROLLBACK</span> 在活库解析校验</td><td>补 <span class="inline-code">att.tenant_id = op.tenant_id</span> 与 <span class="inline-code">op.tenant_id = ?::uuid</span>；JOIN 从表二次染色</td><td>4 条改动 SQL 全部 <span class="inline-code">ALL_PREPARE_OK</span> + 跨租户统计不变</td></tr>
+      <tr><td>SQL 报 <span class="inline-code">function max(uuid) does not exist</span></td><td>染色查询对 uuid 用 <span class="inline-code">MAX()</span></td><td>活库执行原 SQL</td><td>改成按行取出再比较（<span class="inline-code">rs.getString</span>）</td><td>活库解析通过</td></tr>
+      <tr><td>结构自检数字对不上</td><td>README 写 70 表、脚本常量写 71（含 <span class="inline-code">platform.review_task</span>）；DDL 头注释是历史基线</td><td><span class="inline-code">source scripts/it-env.sh --probe</span>；比对 <span class="inline-code">init-db.sh EXPECT_*</span></td><td>以脚本常量为最新权威；改结构时同步 01/02/EXPECT_*/probe</td><td>三项精确相等 + <span class="inline-code">context_policy</span> 列存在</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch15-4">15.4 跨服务与契约类</h3>
+  <table>
+    <thead><tr><th>现象</th><th>可能原因</th><th>定位方式</th><th>解决</th><th>验证</th></tr></thead>
+    <tbody>
+      <tr><td>单测全绿、真联调检索 500 并降级空命中</td><td>假 Server 允许 <span class="inline-code">revisionCode=""</span>，真 rag 拒空串</td><td>两真进程 + curl 原始字节；比对 mock 校验强度</td><td>按对端真实校验取值（修复为 <span class="inline-code">"未指定"</span>），补契约守卫</td><td>真实 HTTP 返回 200 + 命中；撤掉修复即 500</td></tr>
+      <tr><td>platform 调 RAG 返回 503 / 空命中</td><td><span class="inline-code">agent.rag.base-url</span> 指错；rag 未起；嵌入不可用</td><td>核对 yml/env；直接 <span class="inline-code">POST localhost:8081/api/v1/retrieval</span></td><td>修正地址、启动 rag、配好嵌入模型</td><td>区分「确实 0 命中」与「下游 500 降级」：看响应体与 rag 日志</td></tr>
+      <tr><td>平台档管理端点 500（SQLSTATE 42501）</td><td>把全局哨兵塞进 <span class="inline-code">set_config('app.tenant_id')</span>（作用域错配）</td><td>真实 HTTP + 只读直连库核对全表行数</td><td>平台档走 <span class="inline-code">rag_ops</span> 运维通道；统一用 <span class="inline-code">RagSessionScope.apply</span></td><td>平台档 200 / 行数与只读 SQL 一致；缺通道返 503 而非空列表</td></tr>
+      <tr><td>检索恒低分、无报错</td><td>两进程 <span class="inline-code">rag.embedding.*</span> 漂移，索引向量与查询向量不同源</td><td>逐项 diff 两份 yml；核对模型版本与维度</td><td>统一配置并重建索引代际</td><td>同 query 在标定集上分数回到阈值以上</td></tr>
+      <tr><td>SSE 帧格式怪异（前端解析不到）</td><td>Spring 7 对 <span class="inline-code">send(String)</span> 二次包裹成 <span class="inline-code">data:event: delta</span></td><td><span class="inline-code">curl -N</span> 看原始字节；DevTools Network</td><td>后端捕获 <span class="inline-code">SseEventBuilder</span>（name/data 分字段），禁 <span class="inline-code">send(String)</span> 双重包裹</td><td>帧统计 + 双重包裹计数 + 后端异常计数一起断言</td></tr>
+      <tr><td>前端说「SSE 已支持」但控制台能跑</td><td>误把轮询当 SSE；EventSource 不能带 Authorization 头</td><td>看 <span class="inline-code">admin-console/src/api/agentLabApi.ts</span> 注释；抓请求头</td><td>明确区分：该页面用轮询；需要 SSE 时用 fetch + 自写分帧</td><td>Network 面板看到 <span class="inline-code">text/event-stream</span> 或明确无该请求</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch15-5">15.5 消息、Worker 与运行链路类</h3>
+  <table>
+    <thead><tr><th>现象</th><th>可能原因</th><th>定位方式</th><th>解决</th><th>验证</th></tr></thead>
+    <tbody>
+      <tr><td>Run 建得出来但永远 QUEUED</td><td>Outbox 未发布 / Worker 未开 / 租户 slugs 不含目标租户</td><td>查 <span class="inline-code">outbox_event</span> 的 published/failed/attempts；查 <span class="inline-code">agent.worker.tenant-slugs</span></td><td>修连接/口令、启动 worker、补齐租户清单</td><td>真实 API 建 Run 后状态抵达 RUNNING 并调用模型</td></tr>
+      <tr><td>已终态 Run 被重跑</td><td>DB 通道按租户取全部 PENDING 却未按 eventType 分流（Sev-0）</td><td>看消息 eventType 与消费者映射；查 run_step 是否终态后新增</td><td><span class="inline-code">EventRoutedMessageHandler</span> → <span class="inline-code">TraceCollectMessageHandler</span> 三态；采集绝不复用 <span class="inline-code">agent.run.execute</span></td><td>重投采集事件后 Run 状态/attempt 不变、无二次计费</td></tr>
+      <tr><td><span class="inline-code">claim</span> 返回 0 行、无异常无日志</td><td>常驻实例抢先 claim + ack（P8）；或租约未过期</td><td>核对同库是否存在第二个消费者；查 t-a 的 Run 行数增量</td><td>IT 用独立库；<span class="inline-code">claimTasks</span> 排除 SSE 直连 lease owner</td><td>IT 前后数据量不增长</td></tr>
+      <tr><td>上传成功但 ingest-jobs 永远 PENDING</td><td>rag-worker 没起 / 缺 <span class="inline-code">@EnableScheduling</span></td><td>看 worker 进程与日志；查 <span class="inline-code">rag.ingest.consumer.enabled</span></td><td>启动 worker 并确认调度开启</td><td>job 从 PENDING → 完成，chunk 与 embedding 同事务可见</td></tr>
+      <tr><td>Outbox 坏消息无限重试打满日志</td><td>异常被吞掉，状态永远 PENDING</td><td>查 <span class="inline-code">attempts</span> 与 error 字段</td><td>未预期异常同样 markFailed；达阈值告警并人工介入、不自动重置</td><td>失败次数达阈值后不再增长，日志有明确 error</td></tr>
+      <tr><td>消息跨租户进入 MQ</td><td>仓储忽略 tenantId 参数返回他人行</td><td>看 <span class="inline-code">OutboxPublisher</span> 的 error 日志「跨租户事件」</td><td>保留发送前归属复核（第二道防线）</td><td>注入错配行，发布器拒绝发布并标记失败</td></tr>
+      <tr><td>请求级 SSE 审计停在 RUNNING</td><td><span class="inline-code">finish()</span> 未按 fencing token 收敛</td><td>查审计表影响行数与状态</td><td>影响行数 ≠ 1 必抛；按 fencing token 收敛</td><td>正常/异常两条路径审计均达终态</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch15-6">15.6 测试、构建与产物类</h3>
+  <table>
+    <thead><tr><th>现象</th><th>可能原因</th><th>定位方式</th><th>解决</th><th>验证</th></tr></thead>
+    <tbody>
+      <tr><td><span class="inline-code">FATAL: remaining connection slots…</span> / too many clients</td><td>每个测试方法新建 Hikari 池且从不关闭（TST-01）</td><td><span class="inline-code">pg_stat_activity</span> 计数；池创建/关闭计数</td><td>管理员池改 <span class="inline-code">private static</span> + <span class="inline-code">@AfterAll</span> 关闭（两者缺一不可）</td><td>连接峰值 99 → 10；测试全绿且 skipped=0</td></tr>
+      <tr><td>生产种子数据被 IT 清零</td><td>IT 基座取真实租户 t-a/t-b，<span class="inline-code">@BeforeEach</span> 整租户清表（TST-04）</td><td>IT 前后对照表行数</td><td>用 <span class="inline-code">it-</span> 前缀专用租户；计数断言按 IT 租户统计</td><td>跑完全量 IT 后 <span class="inline-code">cap_agent_def</span> 等行数不变</td></tr>
+      <tr><td>反证「如期保持绿」但明显不该绿</td><td><span class="inline-code">mvn -q</span> 抑制了被 grep 依赖的汇总行（TST-05）</td><td>审计反证脚本与构建输出契约</td><td>改数 XML <span class="inline-code">&lt;testcase&gt;</span>，内置「本轮确实跑了用例」断言</td><td>每个注入点都恰好转红，其余保持绿</td></tr>
+      <tr><td>构建失败仍报绿</td><td><span class="inline-code">mvn | tee</span> 无 <span class="inline-code">set -o pipefail</span></td><td>看 CI job 的 shell 设置</td><td>加 <span class="inline-code">set -o pipefail</span></td><td>故意注入一次编译失败，job 必须红</td></tr>
+      <tr><td><span class="inline-code">*IT</span> 全部 skipped</td><td>Python <span class="inline-code">subprocess</span> 传 env 丢了 <span class="inline-code">IT_PG_URL</span>；或 <span class="inline-code">it-env.sh</span> 在 source 阶段就退出</td><td>看 failsafe XML 的 skipped 属性；在 bash 内 <span class="inline-code">source scripts/it-env.sh --probe</span></td><td>同一 bash 会话内 source 后跑 Maven；显式带 <span class="inline-code">IT_HOST/IT_PORT/IT_ADMIN_USER</span></td><td><span class="inline-code">skipped=0</span> 且用例数符合预期</td></tr>
+      <tr><td>单模块构建报找不到符号</td><td>没带 <span class="inline-code">-am</span>；或 <span class="inline-code">platform-bootstrap</span> 被单独 <span class="inline-code">-pl</span> 跑</td><td>核对命令</td><td>加 <span class="inline-code">-am</span>；bootstrap 不单独跑</td><td>clean verify 全绿</td></tr>
+      <tr><td>测试「假红」</td><td>不带 <span class="inline-code">clean</span>，读到陈旧报告</td><td>看报告时间戳</td><td>先清 <span class="inline-code">*/target/{surefire,failsafe}-reports</span> 再跑</td><td>报告时间戳与本轮构建一致</td></tr>
+      <tr><td>Boot 4.1.1 下 IT 报 <span class="inline-code">Failed to find merged annotation for @BootstrapWith</span></td><td>repackage 把主构件替换成 fat jar，failsafe 的普通 classloader 读不到 <span class="inline-code">BOOT-INF/classes</span></td><td>比对 surefire / failsafe 的 classpath 构成</td><td>repackage 挂 <span class="inline-code">&lt;classifier&gt;exec&lt;/classifier&gt;</span>（项目已修）</td><td>failsafe 能内省 <span class="inline-code">PlatformApplication</span></td></tr>
+      <tr><td>撤点后源码被改脏</td><td>脚本被中断，<span class="inline-code">finally</span> 未执行</td><td><span class="inline-code">git status</span> + grep 残留标记</td><td>信号处理器先复原；三件套校验</td><td>old 锚点计数=1、new 残留全无、<span class="inline-code">git diff --check</span> 干净</td></tr>
+      <tr><td>改动后「没生效」</td><td>运行 jar inode ≠ 磁盘 jar；IDE 跑的是旧构建</td><td><span class="inline-code">ls -li &lt;jar&gt;</span> 与进程 fd 比对；看构建时间线</td><td>重新打包并重启；命令行用 dev-backend.sh</td><td>新行为可观测，且可用撤点反证</td></tr>
+    </tbody>
+  </table>
+  <div class="xref">交叉引用：以上每一类都能在 <a href="#ch16">第 16 章</a> 找到对应真实事故的完整复盘；命令汇总在 <a href="06-reference.html#ch18">第 18 章</a>；未确认与冲突条目在 <a href="06-reference.html#ch20">第 20 章</a>。</div>
+</section>
+
+<!-- ==================== 第 16 章 ==================== -->
+
+<section class="chapter" id="ch16">
+  <div class="breadcrumb"><b>第五篇</b> / 第 16 章</div>
+  <h2><span class="num">16.</span> 真实事故复盘（十例）</h2>
+  <p>全部来自仓库内的问题记录、审查文档与方法论归档。编号沿用原文，出处给到文件与章节，便于回溯原文。</p>
+
+  <div class="card" style="margin:16px 0">
+    <h4 id="ch16-1">案例 1 · CFG-01：灰度开关默认关 + 读侧硬依赖，出厂默认跑不了任何 Run</h4>
+    <table><tbody>
+      <tr><th>现象</th><td><span class="inline-code">execution_capability_snapshot</span> 恒 0 行；每个 Run 收敛 <span class="inline-code">FAILED / CONFIG_UNAVAILABLE</span>，现场看着像「配置缺失」。</td></tr>
+      <tr><th>原因</th><td><span class="inline-code">config.flag.cap-dual-write</span> 默认 false（yml、@Value 缺省、env 三处一致），唯一写入点第一行 <span class="inline-code">if (!dualWriteSwitch.isEnabled()) return;</span> 静默返回、零日志；而读侧把「有快照」升级成执行准入硬前置。</td></tr>
+      <tr><th>定位</th><td><span class="inline-code">git log -L</span> 查 yml 变更史 + 逐项盘点 6 个配置来源 + 实测表行数。</td></tr>
+      <tr><th>解决</th><td>改默认值 false→true，原则是「<strong>改默认值，不改 fail-closed</strong>」（fail-closed 本身是对的，它拦的正是「配置缺失伪装成配置正常」）；装配期开关为关时一次性 WARN；<span class="inline-code">log.debug</span> 升为 warn。</td></tr>
+      <tr><th>验证</th><td>文档登记为「代码已修，真实端到端需重启 8080 后复跑才算闭环」；并明确登记「早期那 19 行快照是谁写的<strong>未能确定</strong>，不编故事」。</td></tr>
+    </tbody></table>
+    <p><small>出处：<span class="inline-code">问题记录/01-配置与开关.md:8-52</span></small></p>
+  </div>
+
+  <div class="card" style="margin:16px 0">
+    <h4 id="ch16-2">案例 2 · DAT-01：快照写链五层断链</h4>
+    <table><tbody>
+      <tr><th>现象</th><td>全库快照 0 行，Run 建得出来、跑不起来，全部 FAILED。</td></tr>
+      <tr><th>原因</th><td>五层叠加：①1130 个已发布 Agent 中仅 1 个有 CAP 版本行；②<span class="inline-code">cap_authz_version</span> 真实主体 0 行；③平台对象未登记进 PLATFORM 发布头、种子绕过发布流程；④复合外键要求先有 run 行；⑤双写方 <span class="inline-code">catch (RuntimeException)</span> 吞掉三层失败只记 WARN。</td></tr>
+      <tr><th>定位</th><td>按<strong>读方实际查的那张表</strong>逐层核对写链 + 实测行数（TST-11 方法论）。</td></tr>
+      <tr><th>解决</th><td>三个回填脚本（不写 1、跳过 <span class="inline-code">it-*</span> 夹具、requester/approver 必须不同）；三层 fail-soft 保留但加可观测。</td></tr>
+      <tr><th>验证</th><td>真实 API 建 Run，快照写出 <span class="inline-code">agent_version=1 / config_version=1033 / authz_version=1 / effective_closure 1649 字节</span>，Run 抵达真实模型调用；<span class="inline-code">CapabilitySnapshotWriteChainIT</span> 钉住契约。</td></tr>
+    </tbody></table>
+    <p><small>出处：<span class="inline-code">问题记录/02-数据一致性与写链.md:8-47</span></small></p>
+  </div>
+
+  <div class="card" style="margin:16px 0">
+    <h4 id="ch16-3">案例 3 · TST-01：管理员连接池永久泄漏（报错点与真因相隔一个类）</h4>
+    <table><tbody>
+      <tr><th>现象</th><td>全量构建在 <span class="inline-code">ConfigEndpointIT</span> 处整体失败：<span class="inline-code">FATAL: remaining connection slots are reserved for roles with the SUPERUSER attribute</span>。</td></tr>
+      <tr><th>原因</th><td>JUnit 每方法新建实例 → <span class="inline-code">private HikariDataSource adminPool</span> 每方法新建池；Hikari <span class="inline-code">minimumIdle</span> 默认等于 <span class="inline-code">maximumPoolSize</span> 且从不关闭。实测 2 秒内创建 <strong>54 个池</strong>、只关 5 个，<span class="inline-code">pg_stat_activity</span> 达 99 条打满 100。「泄漏者是超管，被拒者却是普通角色」。</td></tr>
+      <tr><th>定位</th><td><span class="inline-code">pg_stat_activity</span> 计数 + failsafe 阶段池创建/关闭计数。</td></tr>
+      <tr><th>解决</th><td>管理员池改 <span class="inline-code">private static</span> + <span class="inline-code">@AfterAll</span> 关闭，<strong>两个动作缺一不可</strong>。</td></tr>
+      <tr><th>验证</th><td>连接峰值 <strong>99 → 10</strong>。</td></tr>
+    </tbody></table>
+    <p><small>出处：<span class="inline-code">问题记录/07-测试基建与验证方法论.md:10-48</span></small></p>
+  </div>
+
+  <div class="card" style="margin:16px 0">
+    <h4 id="ch16-4">案例 4 · TST-04 / TST-14：夹具把缺陷完整盖住</h4>
+    <table><tbody>
+      <tr><th>现象</th><td>①跑完 IT 后 <span class="inline-code">cap_agent_def</span> 从 1176 → 1、指针 → 0，生产链路上表现为快照永远 0 行；②「发布 → 运行」这条真实链路<strong>从未被任何 IT 覆盖</strong>，于是「经 API 发布的 Agent 永远不可运行」测试全绿。</td></tr>
+      <tr><th>原因</th><td>①IT 基座取真实业务租户 t-a/t-b，<span class="inline-code">@BeforeEach</span> 按 tenant_id 整租户清 CAP 表；②所有 <span class="inline-code">execution_snapshot</span> 夹具都是手工插的——「夹具比被测路径更方便」。</td></tr>
+      <tr><th>定位</th><td>IT 前后对照表行数；对照真实 HTTP 发布链路。</td></tr>
+      <tr><th>解决</th><td>①改用 <span class="inline-code">it-cap-it-a/b</span> 专用租户，全表计数断言改为按 IT 租户计数；②新增 <span class="inline-code">apiPublishedAgentCanCreateRun</span>，全程走 <span class="inline-code">POST /api/agents → /versions → /api/runs</span>。</td></tr>
+      <tr><th>验证</th><td>①全量 IT 后行数不变（407 / 12 / 2）；②<strong>红→绿已验证</strong>：临时把 PLATFORM 指针移回空发布头 → 测试转红。</td></tr>
+    </tbody></table>
+    <p><small>出处：<span class="inline-code">问题记录/07-测试基建与验证方法论.md:117-138, 326-347</span></small></p>
+  </div>
+
+  <div class="card" style="margin:16px 0">
+    <h4 id="ch16-5">案例 5 · TST-05 / TST-20：输出契约与框架字节失配造成两层假绿</h4>
+    <table><tbody>
+      <tr><th>现象</th><td>①反证脚本 5/7 被误报「如期保持绿」；②后端 2893 例 / 前端 543 例全绿，真实 HTTP 字节却是 <span class="inline-code">data:event: delta</span>（Spring 7 二次包裹）。</td></tr>
+      <tr><th>原因</th><td>①<span class="inline-code">mvn -q</span> 抑制的不只是噪音，也包括被 grep 依赖的 <span class="inline-code">[INFO] Tests run:</span> 行；②夹具绕过了 <span class="inline-code">SseEmitter</span> 序列化路径，断言的是「自己拼的字符串」而不是「框架写出的字节」。</td></tr>
+      <tr><th>定位</th><td>①反证结果异常一致时的脚本审计；②真实 DevTools / <span class="inline-code">curl -N</span> 原始字节。</td></tr>
+      <tr><th>解决</th><td>①改数 XML <span class="inline-code">&lt;testcase&gt;</span> 并内置「本轮确实跑了用例」断言，否则判<strong>无效</strong>而非绿；②后端替身改捕获 <span class="inline-code">SseEventBuilder</span>（name/data 分字段），加「禁止 send(String) 双重包裹」反向守卫，前端补两例。</td></tr>
+      <tr><th>验证</th><td>curl 原始字节 + Node fetch 看浏览器视角流收尾；帧统计、双重包裹计数、后端异常计数一起断言。</td></tr>
+    </tbody></table>
+    <p><small>出处：<span class="inline-code">问题记录/07-测试基建与验证方法论.md:142-157, 443-466</span></small></p>
+  </div>
+
+  <div class="card" style="margin:16px 0">
+    <h4 id="ch16-6">案例 6 · P2：结果集染色校验的同义反复（方法论归档称「全文最深刻」）</h4>
+    <table><tbody>
+      <tr><th>现象</th><td>染色「恒不违例、零检出力，比不做染色更危险（提供虚假覆盖感）」；第二层逐行比对除 <span class="inline-code">None</span> 外毫无检出力，且被单测替身返回的常量 filter 完美掩盖。</td></tr>
+      <tr><th>原因</th><td>把「查询绑定租户」当行租户传给 <span class="inline-code">TaintVerifier</span>（比对「我们打算查谁 vs 我们打算查谁」）；再用行租户当主体，<span class="inline-code">row.tenantId == 行租户</span> 恒等。</td></tr>
+      <tr><th>定位</th><td>注入<strong>他租户行</strong>的反例检出力测试。</td></tr>
+      <tr><th>解决</th><td>行租户必须从结果行读出（<span class="inline-code">SELECT tenant_id::text</span> + <span class="inline-code">rs.getString</span>）；主体与行归属分离；用真实 <span class="inline-code">RuleBasedPolicyEngine</span> 回归；聚合查询不可染色。</td></tr>
+      <tr><th>验证</th><td><span class="inline-code">JdbcResultQueryRepositoryShadowTest</span> 首跑即抓到哨兵行共享行误判；「改回旧实现即红」。</td></tr>
+    </tbody></table>
+    <p><small>出处：<span class="inline-code">docs/RLS到应用层权限迁移-问题方案与方法论归档.md:37-49</span></small></p>
+  </div>
+
+  <div class="card" style="margin:16px 0">
+    <h4 id="ch16-7">案例 7 · P8：IT 与运行实例共库污染，长期被当作 flaky 忽略</h4>
+    <table><tbody>
+      <tr><th>现象</th><td>常驻 8080 实例按 <span class="inline-code">tenant-slugs</span>（默认 t-a）轮询同一 <span class="inline-code">agent_dev</span>，抢先 claim+ack 删除消息（<span class="inline-code">claim</span> 返回 0 行、无异常无日志），把 IT 遗留 Run 当真活跑完（t-a 累积 <strong>588 条 Run</strong>，几乎全 FAILED），改写统计基线。</td></tr>
+      <tr><th>原因</th><td>IT 与运行实例共用一套库；断言隐含「数据量不会涨」的前提。</td></tr>
+      <tr><th>定位</th><td>核对 t-a 的 Run 行数与每轮增量。</td></tr>
+      <tr><th>解决</th><td>整库隔离（<span class="inline-code">scripts/dev-it-db.sh</span> 建 <span class="inline-code">agent_it</span>）；<span class="inline-code">ItTenantProvisioner</span> 强制 <span class="inline-code">it-</span> 前缀；幂等断言改「行数不增长」。</td></tr>
+      <tr><th>验证</th><td><span class="inline-code">ItTenantProvisionerIT</span> 断言行数不增长；<span class="inline-code">GovernanceQueryIT</span> 补租户过滤条件。</td></tr>
+    </tbody></table>
+    <p><small>出处：<span class="inline-code">docs/RLS到应用层权限迁移-问题方案与方法论归档.md:134-148</span></small></p>
+  </div>
+
+  <div class="card" style="margin:16px 0">
+    <h4 id="ch16-8">案例 8 · P3 / P0-1a：能力存在 ≠ 能力生效（Sev-0 越权面）</h4>
+    <table><tbody>
+      <tr><th>现象</th><td>强制层完全没有闭包校验，闭包只在呈现层生效；<span class="inline-code">ToolInvocationGate.invokeAllLegacy</span> 里 grep closure 零命中 → <strong>任何已注册工具都可被任意 Agent 调用</strong>。另一路：D2–D7 能力与单测全绿，但没有任何装配把 Gate / Reporter 交给仓库，5 个仓 <span class="inline-code">scoped</span> 恒 null；「≥2 周 AUTHZ_MISMATCH=0」的出口条件会在一次都没运行过的情况下达成。</td></tr>
+      <tr><th>原因</th><td>legacy 授权只判角色不判工具名；装配层（接缝）缺失。</td></tr>
+      <tr><th>定位</th><td>源码 grep + 逐环节代码验证；检查私有字段实际取值。</td></tr>
+      <tr><th>解决</th><td>新增 <span class="inline-code">CapabilityClosureGuard</span>（OFF/WARN/ENFORCE，默认 warn，因 live DB 能力目录 6 张表全 0 行，直接 ENFORCE 会让平台不可用）；新增 <span class="inline-code">AuthzShadowConfiguration</span>，<strong>单开关语义</strong>（Bean 在即开、不在即关），刻意不做「Bean 在 + enabled 布尔」双开关。</td></tr>
+      <tr><th>验证</th><td>越权工具被拒 / 闭包内不受影响 / 解析不出 fail-closed / 无快照 fail-closed / WARN 只告警 / 子 Agent 用自己的闭包；<span class="inline-code">AuthzShadowWiringTest</span> 断言私有字段真的被填。</td></tr>
+    </tbody></table>
+    <p><small>出处：<span class="inline-code">审查文档/AI全流程审查报告_2026-10-31.md:18</span>、<span class="inline-code">AI全流程修复报告_2026-10-31.md:41-74</span>、方法论归档 :53-65</small></p>
+  </div>
+
+  <div class="card" style="margin:16px 0">
+    <h4 id="ch16-9">案例 9 · D-01/D-02：平台档 500 与「读不到而假装空」的区分</h4>
+    <table><tbody>
+      <tr><th>现象</th><td>平台档 <span class="inline-code">ingest-jobs</span> 与 <span class="inline-code">knowledge-points</span> 均 500；<span class="inline-code">queryTenantId()</span> 返回全局哨兵被直接 <span class="inline-code">set_config</span>，<span class="inline-code">rag_current_tenant()</span> 越权封堵抛 SQLSTATE 42501。</td></tr>
+      <tr><th>原因</th><td>注释方向对、实现方向错：<span class="inline-code">listIngestJobs</span> 沿用租户档 <span class="inline-code">ctx.requireTenant()</span>；平台档会话按设计置空，应用角色对全局行恒读 0 行（静默「暂无任务」）。</td></tr>
+      <tr><th>定位</th><td>真实 HTTP + <strong>只读直连库核对</strong>「<span class="inline-code">rag_knowledge_point</span> 全表 0 行 → 返回 [] 是真值，不是读不到而假装空」。</td></tr>
+      <tr><th>解决</th><td>平台档走 <span class="inline-code">rag_ops</span> 运维通道（SQL 写死 <span class="inline-code">tenant_id = rag_global_tenant_id()</span>，缺通道 503 而非静默空列表）；统一改用 <span class="inline-code">RagSessionScope.apply</span>。</td></tr>
+      <tr><th>验证</th><td>5 项缺陷完成三道验证（自动化全量 / 反向验证 / 真实 HTTP + 浏览器闭环）；RAG 全量 778 用例 0 失败 0 跳过、前端 58 文件 626 用例全绿、<strong>9/9</strong> 反证「撤掉修复点即变红」；平台档 200 / 2 行与只读 SQL 一致。</td></tr>
+    </tbody></table>
+    <p><small>出处：<span class="inline-code">问题记录/E2E端到端测试_2026-11-10/缺陷修复报告_2026-11-10.md:12-38</span></small></p>
+  </div>
+
+  <div class="card" style="margin:16px 0">
+    <h4 id="ch16-10">案例 10 · P5 / P0-3b：数字悄悄错的两类形态</h4>
+    <table><tbody>
+      <tr><th>现象</th><td>①JOIN 从表泄漏使他租户 attempt 计入本租户失败率/超时率——「后果不是多返回几行，而是<strong>指标口径污染</strong>，既不报错也不越权可见」；②<span class="inline-code">usage_record.input_tokens/output_tokens</span> 无任何写入方，<span class="inline-code">cost_amount</span> 是「工具次数 × ¥0.50」固定代理值，模型 Token 完全不入账。</td></tr>
+      <tr><th>原因</th><td>①RLS 对查询树每一张表注入谓词，应用层 ScopeFilter 默认只在主表渲染 WHERE，唯一真实缺口是单键 JOIN；②计量链路未接线，<span class="inline-code">maxLlmCalls</span> 声明但生产零调用。</td></tr>
+      <tr><th>定位</th><td>①由「估算」改为<strong>穷举</strong>（platform 15 处 / RAG 24 处 / SQL 5 处）；②逐环节代码验证 + 表行数/写入方盘点。</td></tr>
+      <tr><th>解决</th><td>①补 <span class="inline-code">att.tenant_id = op.tenant_id</span> 与 <span class="inline-code">op.tenant_id = ?::uuid</span>，JOIN 从表二次染色，加 <span class="inline-code">JoinTenantPredicateArchitectureTest</span>；②新增单价表 + 真实 token 计价 + 预留/结算/释放三段式，调用前 <span class="inline-code">snapshot.allowsLlmCall()</span> 拦截。</td></tr>
+      <tr><th>验证</th><td>①4 条改动 SQL 全部在活库以 <span class="inline-code">BEGIN…PREPARE…ROLLBACK</span> 零写入解析校验，输出 <span class="inline-code">ALL_PREPARE_OK</span>；②文档标注「已修复，单价为占位价，上线前须替换」<span class="tag t-unknown">未确认：正式单价是否已替换</span>。</td></tr>
+    </tbody></table>
+    <p><small>出处：<span class="inline-code">docs/RLS到应用层权限迁移-问题方案与方法论归档.md:83-96</span>、<span class="inline-code">审查文档/AI全流程审查报告_2026-10-31.md:20,63</span></small></p>
+  </div>
+
+  <div class="callout c-warn">
+    <span class="ct">还有一类值得单独记住：文档与实现不一致</span>
+    <p>本手册 <a href="06-reference.html#ch20">第 20 章</a> 列出的 18 条冲突里，至少有 5 条本身就会造成排查方向错误：本地启动指南的 jar 名、README 的 70 表、developer-onboarding 的「RLS 已替换」、rag-api 的「SSE 进度流」、RAG-D05 的「RRF 未实现」。<strong>遇到「按文档做却不对」时，先把文档当作待验证的假设</strong>。</p>
+  </div>
+</section>
+
+<!-- ==================== 第 17 章 ==================== -->
+
+<section class="chapter" id="ch17">
+  <div class="breadcrumb"><b>第五篇</b> / 第 17 章</div>
+  <h2><span class="num">17.</span> 防御性实践与提交前清单</h2>
+
+  <h3 id="ch17-1">17.1 提交前 Checklist</h3>
+  <div class="grid2">
+    <div class="card"><h4>代码与结构</h4><ul class="checklist">
+      <li>依赖方向没倒流；JDBC/Hikari/Flyway import 只在 persistence 模块</li>
+      <li>record 加字段后所有复制/投影/发布态转换都用了全参构造</li>
+      <li>新表同步 01 终态 + 02 种子 + 03 授权 + 活库 ALTER + EXPECT_*/probe</li>
+      <li>枚举/uuid 参数写了 <span class="inline-code">?::type</span>；没在 <span class="inline-code">authz_decision_log</span> 用 RETURNING</li>
+      <li>事务内 SQL 失败不会被 fail-soft 吞掉后 COMMIT</li>
+      <li>配置键路径、数值引号、含点号模型 ID 的方括号写法都核对过</li>
+    </ul></div>
+    <div class="card"><h4>行为与证据</h4><ul class="checklist">
+      <li>三级验收闭合：行为单测 / 链路 E2E / 真跑闭环</li>
+      <li>每个新增守卫都有「撤点 → 恰好变红 → 恢复」记录</li>
+      <li>用例数按 XML <span class="inline-code">&lt;testcase&gt;</span> 统计，<span class="inline-code">skipped=0</span></li>
+      <li>IT 跑在独立库，验收隔离用非特权角色</li>
+      <li>两 reactor 各自 <span class="inline-code">clean verify</span>，且显式带本地 IT 环境变量</li>
+      <li>运行产物 = 本轮构建；跨进程字段按对端真实校验</li>
+      <li>撤点脚本跑完/跑断后做了三件套校验</li>
+    </ul></div>
+  </div>
+
+  <h3 id="ch17-2">17.2 变更类型 → 必做验证矩阵</h3>
+  <table>
+    <thead><tr><th>你改了什么</th><th>必做验证</th><th>典型遗漏</th></tr></thead>
+    <tbody>
+      <tr><td>DDL / 种子</td><td>01/02/03/04 重放 + <span class="inline-code">SchemaStructureTest</span> + <span class="inline-code">SchemaDriftIT</span> + <span class="inline-code">it-env.sh --probe</span></td><td>只改了活库没改快照；重跑 03 忘了 04</td></tr>
+      <tr><td>新增 Repository / SQL</td><td>非特权活库解析校验 + 跨租户反例 + JOIN 从表染色</td><td>用 owner 账号测，权限问题全被绕过</td></tr>
+      <tr><td>消息消费 / Outbox</td><td>双通道重投 + eventType 分流 + 终态后不补 attempt + 无二次计费</td><td>只测 happy path，重投把终态 Run 重跑</td></tr>
+      <tr><td>SSE / 协议</td><td>真实字节（curl -N）+ 两前端解析 + 终帧收口 + 14 事件字典</td><td>用字符串拼帧的 mock 测试自欺</td></tr>
+      <tr><td>压缩 / 预算</td><td>关闭态逐位等价 + OFF/TIERED 双臂真实计费 + 净省口径 + 稳定前缀不破</td><td>只比 token 数，不算净成本</td></tr>
+      <tr><td>跨服务契约</td><td>两真进程 + 真实请求字节 + 空命中与降级区分</td><td>假 Server 放宽校验</td></tr>
+      <tr><td>feature flag / 配置</td><td>6 个配置来源盘点 + 开关在/不在两态 + fail-closed 边界</td><td>改了默认值却把 fail-closed 一起改松</td></tr>
+      <tr><td>前端</td><td><span class="inline-code">npm run typecheck</span> + <span class="inline-code">npm test</span> + 代理顺序 + 真实端点 404/501 口径</td><td>把 401 当成后端没起</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch17-3">17.3 工程规范（分散在文档中，无独立 CONTRIBUTING）</h3>
+  <ul>
+    <li>分支 <span class="inline-code">feature/&lt;模块&gt;-&lt;简述&gt;</span>；发布分支 <span class="inline-code">main</span>。</li>
+    <li>提交消息 <span class="inline-code">&lt;type&gt;(&lt;scope&gt;): &lt;简述&gt;</span>，<span class="inline-code">type</span> 取 <span class="inline-code">feat/fix/refactor/docs/test/build/chore</span>；单一关注点。</li>
+    <li>Review 必须<strong>非作者</strong>；静态检查开启 <span class="inline-code">-parameters</span>；提交前 <span class="inline-code">mvn test</span> 全绿。</li>
+    <li>问题记录固定三段式；只记录实际遇到并登记过的问题，不写前瞻性设计建议。</li>
+    <li>门禁阈值「只增不减」；变更须升评测集版本、留痕、附放宽前后实测对比（RAG-D08 T-4）。</li>
+    <li>守卫升级按 G1 A.5 台账登记，<strong>不删守卫</strong>；白名单按「文件 → 令牌」精确到令牌，防止整文件豁免。</li>
+  </ul>
+
+  <h3 id="ch17-4">17.4 症状 → 章节速查</h3>
+  <table>
+    <thead><tr><th>你现在的症状</th><th>先看</th><th>再看</th></tr></thead>
+    <tbody>
+      <tr><td>服务起不来 / 配置报缺失</td><td><a href="#ch15-1">§15.1</a></td><td><a href="02-environment-config.html#ch5">第 5 章</a>、<a href="02-environment-config.html#ch7-3">§7.3</a></td></tr>
+      <tr><td>401 / 越权 / 审计零行</td><td><a href="#ch15-2">§15.2</a></td><td><a href="01-project-overview.html#ch2-4">§2.4</a>、<a href="#ch16-8">§16.8</a></td></tr>
+      <tr><td>查不到数据 / 数字不对</td><td><a href="#ch15-3">§15.3</a></td><td><a href="03-java-skill-transfer.html#ch9-4">§9.4</a>、<a href="#ch16-10">§16.10</a></td></tr>
+      <tr><td>全绿但功能没生效</td><td><a href="#ch14-5">§14.5</a></td><td><a href="#ch14-4">§14.4</a>、<a href="#ch16-4">§16.4</a></td></tr>
+      <tr><td>Run 卡住 / 被重跑</td><td><a href="#ch15-5">§15.5</a></td><td><a href="04-runtime-flows.html#ch11">第 11 章</a>、<a href="#ch16-7">§16.7</a></td></tr>
+      <tr><td>联调 500 / SSE 帧不对</td><td><a href="#ch15-4">§15.4</a></td><td><a href="04-runtime-flows.html#ch12">第 12 章</a>、<a href="#ch16-5">§16.5</a></td></tr>
+      <tr><td>构建假红 / 假绿 / 报告不对</td><td><a href="#ch15-6">§15.6</a></td><td><a href="#ch14-6">§14.6</a>、<a href="06-reference.html#ch18">第 18 章</a></td></tr>
+      <tr><td>不知道某条信息能不能信</td><td><a href="06-reference.html#ch20">第 20 章</a></td><td><a href="index.html#ch0-2">§0.2</a></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<nav class="page-nav">
+  <a href="04-runtime-flows.html"><span class="pn-label">← 上一册</span><span class="pn-title">第四篇 · 运行链路</span></a>
+  <a class="pn-right" href="06-reference.html"><span class="pn-label">下一册 →</span><span class="pn-title">第六篇 · 速查与事实边界</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

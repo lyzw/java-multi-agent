@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A1 · AI 知识点精讲 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-01-fundamentals" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A1 · AI 知识点精讲</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A1 · AI 知识点精讲 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">LLM / Token / 上下文窗口 / Embedding / RRF / 幻觉 / 评测 / 成本，全部落到本项目实体</p>
+  <div class="ph-meta"><span>覆盖：A1.1–A1.11</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="ai1">
+  <div class="breadcrumb"><b>AI 专题 · A1</b> / AI 知识点精讲</div>
+  <h2><span class="num">A1.</span> AI 知识点精讲：从概念到本仓库的落点</h2>
+  <p>这一册专门讲 AI 相关知识，但<strong>不是通用科普</strong>：每个概念都给出它在本仓库里的实体（类、表、配置键、文档、事故），并标注是「已在代码实现」还是「仅文档设计目标」。目标是让有 Java 后端经验的人建立起一套可查证的心智模型，而不是记住若干模型名词。</p>
+  <div class="callout c-ai">
+    <span class="ct">本册的证据标签</span>
+    <p><span class="tag t-live">已实现</span> 有源码 / DDL / yml / 测试可直接定位　<span class="tag t-plan">仅设计</span> 只在方案、待评审文档中出现　<span class="tag t-gap">证据空白</span> 仓库查不到结论　<span class="tag t-conflict">文档冲突</span> 两份权威材料互相矛盾　<span class="tag t-unknown">未确认</span> 本次勘察无法核实。</p>
+  </div>
+
+  <h3 id="ai1-1">A1.1 为什么 AI 系统不能按 CRUD 的思路验收</h3>
+  <p>CRUD 服务的正确性是二值的：给定输入，写库结果要么对要么错，异常会抛出来。AI 链路里「错了」经常<strong>不报错</strong>——响应 200、日志正常、看板有数，但数字悄悄偏了、检索静默降级成空命中、或功能在空转。这是本仓库反复出现 <span class="inline-code">静默失真</span> 一词的根本原因。</p>
+  <table>
+    <thead><tr><th>维度</th><th>传统 Java 后端</th><th>本项目 AI 链路</th><th>直接后果</th></tr></thead>
+    <tbody>
+      <tr><td>正确性</td><td>确定性，输入相同输出相同</td><td>模型输出概率性；压缩/抽检/降级会改变送模型的字节</td><td>「测过一次」不能推及所有请求</td></tr>
+      <tr><td>资源单位</td><td>请求数 / 连接数 / 行数</td><td><strong>token</strong>：输入 + 输出都计费，且上下文窗口是有界硬资源</td><td>不控制上下文长度 = 成本与超限双重风险</td></tr>
+      <tr><td>状态位置</td><td>DB 是唯一状态，请求本身无状态</td><td>请求级 SSE 后端<strong>不存对话正文</strong>，多轮历史由前端内存回传</td><td>「重放一次」不是同一个请求</td></tr>
+      <tr><td>外部数据</td><td>参数绑定后视为数据</td><td>检索命中、工具结果、压缩态都是<strong>不可信文本</strong>，可携带指令</td><td>必须围栏 + USER 角色注入</td></tr>
+      <tr><td>验收口径</td><td>断言相等 / 影响行数 = 1</td><td>需要统计口径（样本量、置信度、覆盖率）+ 行为单测 + 链路 E2E</td><td>「测试全绿」只是候选证据</td></tr>
+      <tr><td>失败表现</td><td>异常、5xx、事务回滚</td><td>静默 0 行 / 静默回滚 / 静默降级 / 数字悄悄错 / 功能空转 / 假绿</td><td>见 <a href="ai-03-hard-problems.html#a3-8">A3.8 静默失真案例矩阵</a></td></tr>
+    </tbody>
+  </table>
+  <div class="evidence"><b>证据：</b> <span class="mono">docs/上下文压缩完整方案_设计与实施_v1.0.md §0.2</span>（8 条现状差距，逐条附代码位置）；<span class="mono">docs/问题记录/README.md §「静默失败分类 M1–M4」</span>；<span class="mono">审查文档/AI全流程审查报告_2026-10-31.md</span>。</div>
+
+  <h3 id="ai1-2">A1.2 一次 LLM 调用在本项目里长什么样</h3>
+  <p>不要把「调模型」理解成一次普通 HTTP 调用。在本仓库里，一次调用必须同时闭环<strong>请求装配、成本预留、usage 结算、指标观测、幂等键</strong>五件事，缺一件就可能出现「账目丢失但不报错」。</p>
+  <ol class="steps">
+    <li><strong>装配请求</strong>：<span class="inline-code">RequestAssemblyPort.assemble(input)</span> 产出唯一送模型的 <span class="inline-code">ModelRequest</span>；关闭态必须返回 <span class="inline-code">legacyRequest</span> <strong>同一引用</strong>。见 <a href="ai-02-decisions.html#a2-6">A2.6</a>。</li>
+    <li><strong>调用前预留</strong>：<span class="inline-code">RunExecutionLoop.reserveModelCost():1650-1691</span> 按 <span class="inline-code">estimatedInput × INPUT_TOKEN_ESTIMATE_SAFETY_FACTOR</span> 预留。</li>
+    <li><strong>发出请求</strong>：<span class="inline-code">MiniMaxModelGateway</span> / <span class="inline-code">OpenAiCompatibleModelGateway</span>（<span class="inline-code">POST /chat/completions</span>），未知 provider 回落 <span class="inline-code">FakeModelGateway</span>（fail-soft，需警惕）。</li>
+    <li><strong>调用后结算</strong>：<span class="inline-code">settleModelCost():1707-1739</span> 按 <span class="inline-code">response.usage()</span> 真实 token 与 <span class="inline-code">ModelPricing.cost()</span> 写 <span class="inline-code">usage_record</span>；失败 <span class="inline-code">releaseModelCost()</span>。</li>
+    <li><strong>幂等</strong>：<span class="inline-code">modelCallId()</span> 由 <span class="inline-code">runId + 领取代次 + 调用序号</span> 派生确定性 UUID，是 <span class="inline-code">usage_record.operation_id</span> 的唯一约束键；同一次重试算出不同键会<strong>重复计费</strong>。</li>
+  </ol>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">一次模型调用的真实账单路径（RunExecutionLoop）</span><button>复制</button></div><pre><code>reserveModelCost()   // 调用前：按估算上限预留，budget.tryReserve
+  │
+  ├─ modelGateway.complete(assembly.request())   // 唯一送模型请求
+  │       └─ response.usage() → input_tokens / output_tokens
+  │
+  └─ settleModelCost()  // 调用后：真实 token × 单价 → usage_record.cost_amount
+         └─ ModelPricing.cost(...)  HALF_UP 6 位小数，对齐 numeric(18,6)
+
+单价来源：application.yml:518-538 → agent.pricing.models
+          精确匹配 → 最长前缀 → "default" 兜底
+          查不到单价必须返回 empty，不得按 0 元放行（ModelPricingPolicy:33-37）</code></pre></div>
+  <p>表 <span class="inline-code">public.usage_record</span> 的字段是 <span class="inline-code">tenant_id / run_id / step_id / operation_id / model_id / input_tokens / output_tokens / cost_amount numeric(18,6) / currency / reservation_id</span>，带 <span class="inline-code">FORCE ROW LEVEL SECURITY</span> 与部分唯一索引 <span class="inline-code">idx_usage_operation_once</span>。<span class="tag t-live">已实现</span></p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-worker/.../execute/RunExecutionLoop.java:1620-1758</span>；<span class="mono">deploy/sql/platform/01_platform_ddl.sql:3024-3038, 4529</span>；<span class="mono">platform/agent-core/.../config/ModelPricing.java:28-74</span>；<span class="mono">docs/租户级Token计费系统设计方案_v1.0.md §0.1</span>（状态「待评审」）。</div>
+  <div class="callout c-warn"><span class="ct">一个容易误写的口径</span><p>单价<strong>不在</strong> <span class="inline-code">model_catalog</span> 表里，全仓也不存在名为 <span class="inline-code">model_pricing</span> 的表或配置键。模型目录管「用哪个模型、什么能力」，单价在 yml 的 <span class="inline-code">agent.pricing.models</span>。<span class="tag t-gap">证据空白</span> 中若看到 <span class="inline-code">model_pricing</span> 字样，属早期设计稿用语。</p></div>
+
+  <h3 id="ai1-3">A1.3 Token、上下文窗口与「估算误差」</h3>
+  <p>上下文窗口是模型一次调用能容纳的 token 上限，它不是「消息条数」。本仓库最初只有「消息序列预算 16000」，不含 systemPrompt、工具 Schema、RAG 块，这是 ADR-013 要解决的头号问题。</p>
+  <table>
+    <thead><tr><th>概念</th><th>本项目取值 / 实现</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>上下文窗口 <span class="inline-code">context_window_tokens</span></td><td>默认 <span class="inline-code">32768</span>；由 <span class="inline-code">07_model_catalog_context_upgrade.sql</span> 给 <span class="inline-code">model_catalog</span> 加列</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>可用输入 <span class="inline-code">max_input_tokens</span></td><td>默认 <span class="inline-code">28672</span>（= window − 4096 输出预留）；<span class="inline-code">ContextBudget.hardLimit()</span></td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>硬顶 <span class="inline-code">hard-ceiling-tokens</span></td><td><span class="inline-code">128000</span>（<span class="inline-code">AGENT_CONTEXT_HARD_CEILING_TOKENS</span>）</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>token 计数器</td><td><span class="inline-code">HeuristicTokenCounter</span>（启发式），<strong>无 tiktoken / JTokkit 依赖</strong></td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>估算误差</td><td>中英混合 <strong>30–50%</strong>；由 <span class="inline-code">TokenEstimationCalibrator</span> 按真实 <span class="inline-code">prompt_tokens</span> 反馈校正（<span class="inline-code">min-samples=30</span>、<span class="inline-code">alpha=0.20</span>、bias clamp <span class="inline-code">0.80–2.00</span>）</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>精确 tokenizer / prompt caching</td><td>列已预留 <span class="inline-code">tokenizer_id / supports_prompt_caching = false</span>，能力未启用</td><td><span class="tag t-plan">仅设计</span></td></tr>
+    </tbody>
+  </table>
+  <p><strong>全窗口预算口径</strong>是本项目最需要重建的概念之一。它不是一个数字，而是九项之和；任何一项漏算，压缩后的实际请求就可能超窗，而系统不报错：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">全窗口预算构成（上下文压缩完整方案 §1.2）</span><button>复制</button></div><pre><code>window = systemPrompt 基段
+       + skillGuidance
+       + toolSchemas                 ← 旧预算 16000 漏算
+       + 记忆 block
+       + 裁剪说明 notice
+       + RAG 命中块                 ← 旧预算 16000 漏算
+       + 历史对话
+       + 当前用户输入
+       + 输出预留 (4096)
+
+pinned = count(systemBase) + count(toolSchemas)
+       + count(firstUserTurn) + count(currentInput) + GUARD_OVERHEAD
+if (pinned + reserve > usableInput) → CONTEXT_PINNED_OVERFLOW（fail-closed）</code></pre></div>
+  <p>另一个必须记住的实现细节：<span class="inline-code">estimate</span> 委托 <span class="inline-code">ContextLayout.countRendered</span>，即<strong>先渲染成真实文本再数 token</strong>，而不是对结构化对象估算——否则围栏标记、JSON 标点、换行都会被漏掉。<span class="tag t-live">已实现</span>（ADR-013 D27）</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">docs/上下文压缩完整方案_设计与实施_v1.0.md §0.2 / §1.2 / §2.2 / §5.2</span>；<span class="mono">platform/platform-bootstrap/src/main/resources/application.yml:231-262</span>；<span class="mono">deploy/sql/platform/07_model_catalog_context_upgrade.sql:29-34</span>。</div>
+
+  <h3 id="ai1-4">A1.4 Prompt 的结构、四种角色与「稳定前缀」</h3>
+  <p>LLM 请求里每条消息都有角色，角色决定模型如何对待这段文本。本项目把它们用得很严格：</p>
+  <table>
+    <thead><tr><th>角色</th><th>本项目用途</th><th>硬约束</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">system</td><td>系统提示基段、能力说明、工具 Schema</td><td>逐字保留、位置固定、<strong>永不压缩</strong>；绝不塞外部数据或压缩态</td></tr>
+      <tr><td class="mono">user</td><td>当前输入、<strong>所有外部不可信数据</strong>（RAG 命中 / 工具结果 / 上一轮压缩态）</td><td>必须经 <span class="inline-code">PromptGuard</span> 围栏包装</td></tr>
+      <tr><td class="mono">assistant</td><td>历史回复、流式 delta</td><td>内容不可作为「事实」抽进压缩状态（否则把幻觉洗成事实）</td></tr>
+      <tr><td class="mono">tool</td><td>工具结果回灌</td><td>同上，按不可信数据处理</td></tr>
+    </tbody>
+  </table>
+  <p><strong>稳定前缀（pinned）</strong>是压缩算法与 prompt caching 的共同前提：前缀只要有一个字节变化，缓存就失效，压缩的「净成本守恒」也算不出来。因此项目把 <span class="inline-code">systemBase / toolSchemas / firstUserTurn / currentInput</span> 单独钉住，弹性池 <span class="inline-code">ragCap / memoryCap / summaryCap</span> 是<strong>上限 cap 而非目标配额</strong>，未用额度回流给 history。</p>
+  <div class="callout c-violet"><span class="ct">为什么「关闭态必须同一引用」是 AI 特有的要求</span><p>传统功能开关关掉时，只要行为等价即可。这里要求 <span class="inline-code">agent.context.enabled=false</span> 时 <span class="inline-code">RequestAssemblyPort</span> 直接短路，<strong>原样返回 <span class="inline-code">input.legacyRequest()</span> 同一对象引用</strong>，且零策略解析、零预算、零管线、零事件、零指标。原因是要能用「引用身份」在测试中证明请求字节逐位未变，而不必逐字段比对；一旦多一个拷贝，前缀就可能漂移，缓存与成本口径都失真。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-ports/.../ports/contextwiring/RequestAssemblyPort.java:16-21, 27-29</span>；<span class="mono">RequestAssemblyResult.java:17-20, 79-81</span>；<span class="mono">docs/上下文压缩完整方案_设计与实施_v1.0.md §5.1 / §5.2</span>；<span class="mono">ADR-013 D27 / D38 / D41</span>。</div>
+
+  <h3 id="ai1-5">A1.5 工具调用（Tool Calling）：不是「让框架自动执行」</h3>
+  <p>主流框架常提供「模型说要调工具 → 框架自动调 → 结果回灌」的内置循环。本项目<strong>明确禁止</strong>这条自动路径：授权、Schema 校验、ToolOperation 账本必须在注册与执行环节插入。</p>
+  <ul>
+    <li><span class="inline-code">ADR-011 §3.3</span>：利用 Spring AI 2.0「移除内置工具执行循环、须显式注册 <span class="inline-code">ToolCallback</span>」的变化，在注册环节插入授权 / Schema 校验 / 账本；<strong>禁止使用 <span class="inline-code">ToolCallingAdvisor</span> 自动执行路径</strong>。</li>
+    <li>执行侧是 15 步准入链 <span class="inline-code">CapExecutionFlow</span>（第 3 步即 <span class="inline-code">EffectiveClosure</span>），加 <span class="inline-code">ExecutionAdmissionChecker</span> 的 TOCTOU 复核、<span class="inline-code">ToolInvocationGate</span> 的幂等键、<span class="inline-code">fencing_token</span> 防陈旧领取代次。</li>
+    <li>工具结果一律 <span class="inline-code">PromptGuard.wrapToolResult(toolName, payload)</span> 包成 <span class="inline-code">&lt;tool_result trust="untrusted"&gt;</span> 后作 <strong>USER 消息</strong>注入，绝不拼进 systemPrompt。</li>
+    <li>重试刻意避开 Spring 的 <span class="inline-code">@Retryable</span>：<span class="inline-code">record_weakness</span> 这类写操作重复执行按 <strong>Sev-0</strong> 定级，重试统一在 Outbox Publisher 与 ModelGateway 自研。</li>
+  </ul>
+  <div class="callout c-warn"><span class="ct">Spring AI 到底用没用</span><p><span class="tag t-gap">证据空白</span> 两个 reactor 的 <span class="inline-code">pom.xml</span> 均<strong>无 Spring AI 依赖声明</strong>。它在仓库里的角色只有三个：ADR-011 选 Java 21 / Boot 4.1.1 的理由之一、<span class="inline-code">ToolCallback</span> 约束的设计依据、以及早期方案中「包在适配层后」的历史主张（与最终基线不一致）。<strong>不能写成「本项目基于 Spring AI 开发」</strong>。详见 <a href="ai-02-decisions.html#a2-10">A2.10</a>。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">docs/P0/P1/ADR-011_技术基线_Java21_SpringBoot41.md §3.3 / §2.2</span>；<span class="mono">docs/Agent设计总览.md §4</span>；<span class="mono">docs/P0/P1/ADR-001_主MQ选型_RabbitMQ.md §5</span>。</div>
+
+  <h3 id="ai1-6">A1.6 Embedding、向量列与「维度上限」这个坑</h3>
+  <p>Embedding 把文本映射成向量，检索时用向量距离找相似片段。这里最容易踩的不是算法，而是<strong>维度与索引上限</strong>。</p>
+  <table>
+    <thead><tr><th>事实</th><th>值 / 说明</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>向量扩展</td><td><span class="inline-code">pgvector ≥ 0.8.7</span>，是 <strong>PG 扩展而非 Java 依赖</strong>；启动自检直接查 <span class="inline-code">pg_extension WHERE extname='vector'</span></td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>官方镜像陷阱</td><td><span class="inline-code">postgres:17</span> 里 <span class="inline-code">CREATE EXTENSION vector</span> 会失败，须用 <span class="inline-code">pgvector/pgvector:pg17</span></td><td><span class="tag t-live">已实现</span>（文档 + 自检）</td></tr>
+      <tr><td>设计选型</td><td><span class="inline-code">BGE-M3 / 1024 维</span>，种子 <span class="inline-code">embedding=bge-m3(1024)</span></td><td><span class="tag t-plan">仅设计</span></td></tr>
+      <tr><td>本地 / 实际</td><td><span class="inline-code">qwen3-embedding:8b / 4096 维</span>，经 OpenAI 兼容 <span class="inline-code">/embeddings</span>；<span class="inline-code">RAG_EMBEDDING_DIMENSION=4096</span>、<span class="inline-code">RAG_EMBEDDING_VECTOR_TYPE=halfvec</span></td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>列类型</td><td><span class="inline-code">halfvec(4096)</span>；迁移脚本 <span class="inline-code">deploy/sql/rag/04_migrate_embedding_halfvec_4096.sql</span></td><td><span class="tag t-live">已实现</span>（终态）</td></tr>
+      <tr><td><strong>索引上限</strong></td><td><span class="inline-code">VectorColumn.MAX_INDEXABLE_DIMENSIONS_HALFVEC = 4000</span>（<span class="inline-code">vector</span> 是 2000）→ <strong>4096 维建不了 HNSW / IVFFlat 索引</strong>，稠密通道退化为全表精确扫描</td><td><span class="tag t-live">已实现</span>（代码常量）</td></tr>
+    </tbody>
+  </table>
+  <p>这个取舍的账面结论是：数百片段规模下全表扫描更快、且无召回损失；规模化时有三条路（MRL 截断到 ≤4000 维 / 二值量化 / 换回 1024 维模型），<strong>三条都还没做</strong>，问题记录 RAG-04 明确标「⛔ 未解决（已知取舍）」。<span class="tag t-gap">证据空白</span></p>
+  <div class="callout c-danger"><span class="ct">最容易静默失真的一个配置</span><p><span class="inline-code">rag-worker</span> 侧注释写得很直白：<strong>索引向量与查询向量必须同源同模型</strong>，两处配置项一旦漂移，症状是「检索恒低分且不报错」。相关键：<span class="inline-code">rag.embedding.base-url / api-key / model / dimension / batch-size / timeout-seconds / vector-type</span>。换模型按 <span class="inline-code">RAG-D00 RD-12</span> 走<strong>新代际 + 蓝绿切换</strong>，绝不原地改列。<span class="tag t-conflict">文档冲突</span> <span class="mono">RAG-D03 §6</span> 曾记线上仍是 <span class="inline-code">vector(1024)</span>、迁移未执行，与 <span class="inline-code">init-db.sh</span> 的终态探针不一致——属不同时点记录，现场须查活库。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">rag/rag-persistence/.../persistence/VectorColumn.java:19-57</span>；<span class="mono">rag/rag-persistence/.../bootstrap/RagStartupSelfCheck.java:96-100</span>；<span class="mono">rag/docs/RAG-D02_总体架构与技术选型.md §3.1/§3.2</span>；<span class="mono">rag/docs/RAG-D03_数据模型与索引设计.md §3.4</span>；<span class="mono">问题记录/09-RAG与检索质量.md RAG-04</span>。</div>
+
+  <h3 id="ai1-7">A1.7 混合检索、RRF 融合与分数门禁</h3>
+  <p>本项目同时用<strong>全文检索</strong>（<span class="inline-code">tsvector</span> + 应用层中文预分词）与<strong>向量检索</strong>召回，再用 RRF 把两路排名融合。理解「两个分数不是一回事」比记公式重要。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">RRF 与分数门禁（RAG-D05 §2.1 / §6.2）</span><button>复制</button></div><pre><code>RRF: score(d) = Σ 1 / (k + rank),  k = 60
+     代码：rrf = 1.0 / (RRF_K + (rank + 1))     // JdbcRetrievalRepository
+
+否决「分数加权」的理由：
+  ts_rank 与 cosine 量纲不同，需要人工标定且随语料变化 → 会静默漂移
+
+两个必须分开的字段：
+  ScoredChunk.score        = 相关性分（用于分数门禁）
+  ScoredChunk.fusionScore  = RRF 融合分（双通道最大约 0.033，用于排序）
+
+门禁阈值：
+  minRetrieverScore = 0.38   （2026-10-28 首次标定；原设计 0.35 / 配置默认 0.2 已废弃）
+  entailmentThreshold = 0.75 （未标定）</code></pre></div>
+  <p><strong>真实事故：</strong>曾把 RRF 融合分写进 <span class="inline-code">score</span>，而门禁拿 <span class="inline-code">score</span> 与 0.38 比——RRF 最大约 0.033，于是<strong>门禁恒不通过</strong>，表现为「检索永远无结果」但没有任何异常。另一个：版本降权若用<strong>减法</strong>作用在 RRF 量纲上，会把异版本分数一律压成 0、组内次序全丢；若作用在相关性分上，「降权」又退化为<strong>静默过滤</strong>。现在实现是 <span class="inline-code">rankPenalty</span> 乘法版本惩罚。<span class="tag t-live">已实现</span></p>
+  <p>还有一层必须说清：<span class="tag t-conflict">文档冲突</span> <span class="mono">rag/docs/RAG-D05_检索策略与召回质量控制.md §8 L-2</span> 写「RRF 融合与 cross-encoder 重排未实现」，但代码里 <span class="inline-code">RRF_K=60</span> 已落地；<span class="mono">问题记录/11-文档与代码漂移.md DOC-10</span> 更正为「RRF 已实现，<strong>仅缺重排</strong>」。所谓「重排」目前就是 RRF 融合分 + 版本惩罚，<strong>没有 cross-encoder 重排器</strong>（选型定了 <span class="inline-code">bge-reranker-v2-m3</span> 但尚未接入）。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">rag/rag-persistence/.../JdbcRetrievalRepository.java:88, 229-242, 488-510</span>；<span class="mono">rag/rag-application/.../RetrievalOrchestrator.java:116-121, 201-213</span>；<span class="mono">rag/docs/RAG-D05 §1/§2/§6</span>；<span class="mono">问题记录/11-文档与代码漂移.md:202-214</span>。</div>
+
+  <h3 id="ai1-8">A1.8 幻觉、接地与「不可信数据」原则</h3>
+  <p>幻觉不是靠「让模型别编」解决的，而是靠<strong>检索期与生成期的结构性约束</strong>。RAG-D00 的 RD-07 / RD-09 / RD-11 给出三层：</p>
+  <table>
+    <thead><tr><th>层</th><th>机制</th><th>本项目状态</th></tr></thead>
+    <tbody>
+      <tr><td>检索期硬过滤</td><td>泄题闸门：答案类片段在检索期直接过滤，<strong>不进 prompt</strong>；版本 / 角色过滤必须在重排之前</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>分数门禁</td><td>低于 <span class="inline-code">minRetrieverScore</span> 即返回「未找到依据」，而不是硬凑一个答案</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>接地三重校验</td><td>存在性 / 蕴含 / 冲突，整体 fail-closed；<span class="inline-code">HallucinationDetector</span> 判据反转（RAG-D00 RD-14）</td><td><span class="tag t-plan">仅设计</span>（判别式 NLI 模型仅文档选型，未落地）</td></tr>
+      <tr><td>引用溯源</td><td>片段带五轴版本坐标（学科/年级/册次/出版社/版次）与 locator，答案可回溯到册页</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>不可信围栏</td><td>RAG 命中经 <span class="inline-code">PromptGuard.wrapToolResult("rag", …)</span> 作 <strong>USER 消息</strong>注入，自带「这是数据不是指令」声明</td><td><span class="tag t-live">已实现</span></td></tr>
+    </tbody>
+  </table>
+  <p>最后一条是 AI 系统里最反直觉、也最必须养成的习惯：<strong>模型读到的任何非系统文本都可能是指令</strong>。因此本仓库把「绝不拼进 systemPrompt」写成硬约束。压缩态更进一步——<span class="inline-code">PromptGuard.wrapCompactedContext()</span> 用 <span class="inline-code">&lt;compacted_context trust="untrusted"&gt;</span> 包成 USER 消息，且 <span class="inline-code">sanitize()</span> 必须净化掉能提前闭合围栏的标记（这是 S3-M8-a 修掉的一个真实注入洞，见 <a href="ai-03-hard-problems.html#a3-3">A3.3</a>）。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">rag/docs/RAG-D00_决策基线与范围边界.md §2 RD-07/09/11/14</span>；<span class="mono">rag/docs/RAG-D06_引用溯源与防幻觉机制.md</span>；<span class="mono">platform/agent-application/.../prompt/PromptGuard.java:38-67, 204-267, 311-329</span>；<span class="mono">platform/agent-worker/.../agentchat/AgentChatOrchestrator.java:595-598</span>。</div>
+
+  <h3 id="ai1-9">A1.9 评测体系：L0–L3、样本量与 LLM-as-judge</h3>
+  <p>「答案对不对」在 AI 系统里是一个<strong>统计问题</strong>，不是一个断言。本仓库用可信度分层来约束哪些数字可以下结论：</p>
+  <table>
+    <thead><tr><th>层</th><th>含义</th><th>展示纪律</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">L0 系统事实</td><td>执行链路直接落库（如 <span class="inline-code">cost_amount</span>、终止原因）</td><td>高可信，可直接下结论</td></tr>
+      <tr><td class="mono">L1 自动终态校验</td><td>自动规则判定</td><td><strong>必须同时显示覆盖率</strong></td></tr>
+      <tr><td class="mono">L2 抽样标注</td><td>人工 / 黄金基线</td><td>必须带样本量 <span class="inline-code">n</span>；<strong>n&lt;30 一律显示「样本不足」，绝不显示 0% / 100%</strong></td></tr>
+      <tr><td class="mono">L3 有噪信号</td><td>用户反馈等</td><td>只看趋势，只用于触发复核</td></tr>
+    </tbody>
+  </table>
+  <p><strong>LLM-as-judge（用模型判模型）</strong>在本项目的落地是 <span class="inline-code">ModelAttributionJudge</span>：只判「Agent 错因归因 vs 题库标准解析」的实质一致性，严格 rubric、结构化输出 <span class="inline-code">{correct, reason, confidence}</span>，<span class="inline-code">temperature=0</span>、<span class="inline-code">max-tokens=256</span>、<span class="inline-code">min-confidence=0.75</span>；六种情况 fail-closed 返回 empty（单价缺失 / 预算超限 / 模型异常超时 / 非 STOP / 请求工具 / 解析失败或置信度不足）。题面、Agent 归因、标准解析三段都经 <span class="inline-code">PromptGuard.wrapToolResult</span> 围栏。<span class="tag t-live">已实现</span></p>
+  <p>关联纪律同样是 AI 特有的：<span class="inline-code">questionId</span> 只能来自 <span class="inline-code">run.input_payload.questionId</span>，SQL 先判 <span class="inline-code">jsonb_typeof(...)='string'</span>，再走 <span class="inline-code">QuestionIdTag</span> 白名单 <span class="inline-code">[A-Za-z0-9_.:-]+</span>；缺失 / 非法 / 非字符串一律 <span class="inline-code">empty</span>，<strong>不做题面文本相似度猜测</strong>，也不写进指标宽表（避免看板分组基数爆炸）。</p>
+  <div class="callout c-violet"><span class="ct">机器判分 ≠ 人工裁定：一次物理分离的修复（R2）</span><p>早期设计把机器结论写成 <span class="inline-code">verdict='ATTRIBUTION'</span> 塞进人工标注表 <span class="inline-code">agent_eval_sample</span>，撞上两张表的 CHECK 白名单；即使放宽约束，也会让 <span class="inline-code">recordEvalSample</span> 把 <span class="inline-code">sampled</span> 置 TRUE，<strong>把机器结论算进人工抽样覆盖率</strong>——一个不报错、只是数字悄悄错的失真。修复不是加白名单，而是<strong>物理分离写入路径</strong>：机器轨只写 <span class="inline-code">agent_trace_metric.attribution_correct</span>，不碰 <span class="inline-code">sampled / human_verdict</span>。注意 <span class="inline-code">agent_eval_sample.attribution_correct</span> 这一列<strong>确实存在</strong>（人工轨），不要误写成「列不存在」。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">docs/管理后台开发计划/P7_Agent效果指标体系.md §0</span>；<span class="mono">docs/Agent对话质量跟踪_回溯_评估体系_详细设计.md §0.0 R2 / §13</span>；<span class="mono">platform/agent-application/.../evaluation/ModelAttributionJudge.java</span>；<span class="mono">L2AttributionEvaluator.java:38-44, 155-156</span>；<span class="mono">JdbcAgentMetricRepository.java:634-638</span>。</div>
+
+  <h3 id="ai1-10">A1.10 成本模型：业务账、评估账与压缩净省</h3>
+  <p>AI 系统至少有<strong>三本不能混的账</strong>，混淆任意两本都会让看板数字失真：</p>
+  <table>
+    <thead><tr><th>账</th><th>写在何处</th><th>红线</th></tr></thead>
+    <tbody>
+      <tr><td>业务 Run 成本</td><td><span class="inline-code">usage_record.input_tokens / output_tokens / cost_amount</span>，预留→结算→释放</td><td>只反映该 Run 自己的模型 / 工具调用</td></tr>
+      <tr><td>Judge 评估开销</td><td>独立科目 <span class="inline-code">EVAL_JUDGE_COST</span>，进程内日预算 <span class="inline-code">daily-cost-limit-yuan=1.00</span></td><td><strong>绝不写 <span class="inline-code">usage_record</span>、不调 <span class="inline-code">AgentMetricPort.upsert</span>、不碰 <span class="inline-code">cost_amount</span></strong>；否则「单 Run 成本」「按模型成本」全部偏高，且评估越勤偏得越多</td></tr>
+      <tr><td>压缩收益</td><td>影子期指标 <span class="inline-code">context.tokens.before / actual / estimation_error_ratio / bias</span>（由独立开关 <span class="inline-code">agent.context.calibration.enabled</span> 控制，默认开）</td><td>压缩行为指标（<span class="inline-code">compaction_total / checkpoint.* / tokens.after</span>）在影子期<strong>禁止出现</strong>；关闭态必须零压缩行为指标</td></tr>
+    </tbody>
+  </table>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">压缩净成本守恒（上下文压缩完整方案 §7.1 / §7.5）</span><button>复制</button></div><pre><code>saved = (before − after) × price_input − summaryCost
+
+saved ≤ 0 连续 20 次  → 自动降级 TRIM_ONLY 并告警
+n &lt; 30                → 不显示百分比（统计口径，同 L2 抽样）
+前提：model.pricing.models 必须配到真实模型，
+      否则业务 Run 成本按 0 记，saved 恒失真。</code></pre></div>
+  <p><strong>一个真实的「配置键把 AI 链路悄悄弄坏」案例：</strong>模型 ID 含点号 <span class="inline-code">MiniMax-M2.5</span> 若写成 yml 裸键，Spring Binder 会拆成 <span class="inline-code">MiniMax-M2</span> + 子键 <span class="inline-code">5</span>，症状是<strong>业务 Run 成本静默按 0 记、L2 judge 因查不到单价直接拒调</strong>，两者都不报错。必须写成方括号字面键 <span class="inline-code">"[MiniMax-M2.5]":</span>，并有 <span class="inline-code">ApplicationConfigKeyAlignmentTest#dottedModelIdKeepsItsPricing</span> 锁死。完整因果链见 <a href="ai-03-hard-problems.html#a3-5">A3.5</a>。</p>
+  <p class="mini"><span class="tag t-conflict">文档冲突</span> <span class="mono">docs/上下文压缩开发计划_v1.0.md §6.2</span> 曾把「<span class="inline-code">model.pricing.models</span> 未配 MiniMax-M2.5、成本按 0 记」登记为 IN-1 阻塞；而当前 <span class="mono">application.yml:531-538</span> 已写入国内计价 <span class="inline-code">0.002100 / 0.008400</span>（每千 token）并有守卫。这是不同时点快照，<strong>以当前 yml 与守卫测试为准</strong>，现场仍应核对活库与运行实例。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-application/.../evaluation/EvaluationCostBudget.java:16-40, 59-107</span>；<span class="mono">application.yml:518-538</span>；<span class="mono">ApplicationConfigKeyAlignmentTest.java:203-228</span>；<span class="mono">docs/P0/P1/ADR-013 D25</span>；<span class="mono">docs/上下文压缩影子对照零差异报告_v1.0.md §1 / A.5</span>。</div>
+
+  <h3 id="ai1-11">A1.11 概念 → 本项目落点 → 证据 速查表</h3>
+  <table>
+    <thead><tr><th>AI 概念</th><th>本项目落点</th><th>可查证据</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>LLM 请求 / 响应</td><td class="mono">ModelRequest / ModelGateway / ChatStreamGateway</td><td class="mono">agent-ports, agent-infrastructure</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>Token 与窗口</td><td class="mono">HeuristicTokenCounter / ContextBudget</td><td class="mono">agent-context</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>压缩 / 分层策略</td><td class="mono">ContextAssembler / W0–W3 / TIERED</td><td class="mono">agent-context, ADR-013</td><td><span class="tag t-live">已实现</span>（W3 真摘要未启用）</td></tr>
+      <tr><td>会话记忆</td><td class="mono">agent-memory / MemoryRecallService</td><td class="mono">Agent记忆机制分析与设计方案.md §0.1 / §4.0；详见 <a href="ai-13-agent-memory.html">A13</a></td><td><span class="tag t-live">P0/P1</span> <span class="tag t-plan">P2/P3 未完成</span></td></tr>
+      <tr><td>Embedding / 向量库</td><td class="mono">pgvector halfvec(4096) / VectorColumn</td><td class="mono">rag-persistence, RAG-D03</td><td><span class="tag t-live">已实现</span></td></tr>
+      <tr><td>流式 token 输出</td><td class="mono">ChatStreamGateway / AgentChatEvent 13 类事件</td><td class="mono">详见 <a href="ai-15-streaming-sse.html">A15</a></td><td><span class="tag t-live">已实现</span>（无断线重连）</td></tr>
+      <tr><td>多模型路由 / 网关归一化</td><td class="mono">ModelResolver / AbstractModelGateway / ModelErrorKind</td><td class="mono">详见 <a href="ai-14-model-gateway.html">A14</a></td><td><span class="tag t-live">已实现</span> <span class="tag t-gap">无 fallback 链</span></td></tr>
+      <tr><td>MCP 工具协议</td><td class="mono">McpTransportPort / HttpMcpTransport / McpEndpointGuard</td><td class="mono">详见 <a href="ai-16-mcp-runtime.html">A16</a></td><td><span class="tag t-live">客户端已实现</span></td></tr>
+      <tr><td>重排（cross-encoder）</td><td class="mono">bge-reranker-v2-m3（选型）</td><td class="mono">RAG-D02 §3.2, RAG-D12 §2.3</td><td><span class="tag t-plan">仅设计</span>，未接入</td></tr>
+      <tr><td>蕴含判定 NLI</td><td class="mono">判别式 NLI 模型（未指明权重）</td><td class="mono">RAG-D02 §3.2, RAG-D00 RD-Q3</td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td>LLM-as-judge</td><td class="mono">ModelAttributionJudge</td><td class="mono">agent-application/evaluation</td><td><span class="tag t-live">骨架已实现</span>，题库为空</td></tr>
+      <tr><td>能力闭包 / 授权</td><td class="mono">EffectiveClosure / AgentOverrides</td><td class="mono">agent-core, Agent设计总览.md</td><td><span class="tag t-live">类已实现</span>，<span class="tag t-plan">运行期强制层默认关</span></td></tr>
+      <tr><td>图式编排</td><td class="mono">LangGraph4j / Spring AI Graph / 自研 DSL</td><td class="mono">主流Agent框架设计对比…v3.2.md, ST2 §2</td><td><span class="tag t-gap">未定案</span>，待 PoC</td></tr>
+      <tr><td>多 Agent 编排</td><td class="mono">DelegationExecutor / 七态状态机</td><td class="mono">ADR-012</td><td><span class="tag t-live">已冻结语义</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn"><span class="ct">本册的未确认清单</span><p>① embedding 模型无单一定案（设计 BGE-M3 1024 / 实际 qwen3 4096 / 种子 bge-m3 1024 / 待确认清单 T-5 全部待决策）；② NLI 模型具体权重与部署形态；③ Chinese 分词器具体实现库名；④ 生产模型供应商的正式选型 ADR 不存在（<span class="mono">D-002</span> 只确认三家零保留书面条款）；⑤ 图式编排引擎最终选型；⑥ <span class="inline-code">halfvec(4096)</span> 规模化处置方案三选一均未做；⑦ 真模型（非桩）端到端验收尚未完成。以上均不得写成既成事实，详见 <a href="ai-02-decisions.html#a2-11">A2.11 未定案清单</a>。</p></div>
+  <div class="xref">交叉引用：概念如何变成架构决策见 <a href="ai-02-decisions.html#a2-1">A2.1</a>；这些概念出过哪些事故见 <a href="ai-03-hard-problems.html#a3-1">A3.1</a>；配置键逐项见 <a href="02-environment-config.html#ch5-6">§5.6</a>；运行链路见 <a href="04-runtime-flows.html#ch12">§12</a>；RAG 七步见 <a href="04-runtime-flows.html#ch13-2">§13.2</a>。</div>
+</section>
+<nav class="page-nav">
+  <a href="06-reference.html"><span class="pn-label">← 上一册</span><span class="pn-title">第六篇 · 速查与事实边界</span></a>
+  <a class="pn-right" href="ai-02-decisions.html"><span class="pn-label">下一册 →</span><span class="pn-title">A2 · 技术选型决策</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

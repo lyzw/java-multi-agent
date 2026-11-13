@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A12 · 可观测性、审计链与运维 Runbook · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-12-observability-runbook" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A12 · 可观测性、审计链与运维 Runbook</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A12 · 可观测性、审计链与运维 Runbook <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">两套指标体系、Grafana 16 面板、日志上下文净化、审计防篡改真相、禁 RETURNING 铁律、告警与 fail-closed 门禁、CAP 灰度与密钥轮换</p>
+  <div class="ph-meta"><span>覆盖：A12.1–A12.10</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a12">
+  <div class="breadcrumb"><b>AI 专题 · A12</b> / 可观测性、审计链与运维 Runbook</div>
+  <h2><span class="num">A12.</span> 可观测性、审计链与运维 Runbook：从指标到不可抵赖的证据</h2>
+  <p><a href="ai-10-quality-evaluation.html">A10</a> 讲质量信号怎么产生，<a href="ai-11-cost-governance.html">A11</a> 讲成本怎么记账，本册讲<strong>系统怎么把运行状态暴露出来、把关键操作变成不可抵赖的证据、以及线上怎么安全地切换开关和轮换密钥</strong>。这里既有可直接复用的工程实践（Micrometer、MDC、Grafana、触发器），也有本项目特有的<strong>「配了等于没配」陷阱</strong>——守卫数组被注释成空、指标出口的鉴权落差、审计守卫空转。照 A9 的纪律，这些都要摊开讲，不粉饰成「已就绪」。</p>
+  <div class="callout c-info"><span class="ct">本册与已有册的分工</span><p><a href="05-troubleshooting.html#ch14">第 14 章</a> 讲「出问题怎么排查」，<a href="ai-09-quality-assurance.html">A9</a> 讲「怎么证明系统正确」，本册讲「<strong>平时靠什么看见系统、事后靠什么举证、上线靠什么不出事</strong>」。三条线互补：可观测性是眼睛，审计链是黑匣子，Runbook 是操作手册。</p></div>
+
+  <h3 id="a12-1">A12.1 两套指标体系：自研 AgentMetrics（空转）vs Micrometer（真实出口）</h3>
+  <p>代码里存在<strong>两套并存</strong>的指标实现，混用会讲错「Prometheus 到底抓的是什么」。这是本次勘察最值得纠正的一处口径。</p>
+  <table>
+    <thead><tr><th style="width:18%">维度</th><th>自研 AgentMetrics</th><th>Micrometer 观测器（真实出口）</th></tr></thead>
+    <tbody>
+      <tr><td>路径</td><td><span class="mono">agent-application/.../observability/AgentMetrics.java</span></td><td><span class="mono">agent-infrastructure/.../observer/metrics/Micrometer*Observer.java</span></td></tr>
+      <tr><td>类型 / 名称</td><td>只有 counter；名称运行时传入（测试中出现 <span class="inline-code">run_completed_total</span> / <span class="inline-code">tool_invoked_total</span> / <span class="inline-code">sse_active</span>）</td><td>Counter / Timer / Gauge / DistributionSummary，<strong>有固定名称</strong>（<span class="inline-code">ai.trace.*</span> / <span class="inline-code">ai.model.calls.*</span> / <span class="inline-code">ai.execution.*</span> / <span class="inline-code">cap.*</span>）</td></tr>
+      <tr><td>标签治理</td><td>8 个白名单键 + 14 个高基数禁入键（<span class="inline-code">run_id/user_id/trace_id…</span>），违规 fail-fast</td><td><span class="inline-code">tenant/model/provider/finish/error/outcome/retryable/resource_type</span>（另一套约束）</td></tr>
+      <tr><td>生产是否有人写</td><td><span class="tag t-gap">未找到</span> 生产主源树无任何 <span class="inline-code">increment(...)</span> 调用，仅测试调用 ⇒ <strong>运行时注册表为空</strong></td><td><span class="tag t-live">已实现</span> 由 Observer 在运行时写入</td></tr>
+      <tr><td>出口</td><td><span class="mono">MetricsController</span> 的 <span class="inline-code">GET /metrics</span>（文本）</td><td><span class="inline-code">/actuator/prometheus</span>（Prometheus 主路径）</td></tr>
+    </tbody>
+  </table>
+  <p><strong>Prometheus 抓的是 Micrometer</strong>：<span class="mono">application.yml:821–842</span> 暴露 <span class="inline-code">health,prometheus</span>，<span class="mono">monitoring/prometheus/prometheus.yml</span> 配置 job <span class="inline-code">java-multi-agent</span>，<span class="inline-code">metrics_path=/actuator/prometheus</span>，target <span class="inline-code">host.docker.internal:8080</span>，<span class="inline-code">scrape_interval: 15s</span>。Grafana 面板 3 的 <span class="inline-code">sum(ai_model_calls_total)</span> 正是 <span class="inline-code">ai.model.calls.total</span> 的 Prometheus 命名形态。</p>
+  <div class="callout c-warn"><span class="ct">/metrics 的注释与实现不一致</span> <span class="tag t-conflict">文档冲突</span><p><span class="mono">MetricsController.java</span> 类注释（行 13–21）声称「免认证、建议放管理端口」，但 <span class="mono">SecurityConfiguration.PUBLIC_ENDPOINTS</span>（行 140–147）<strong>不含</strong> <span class="inline-code">/metrics</span>，两条 FilterChain 均为 <span class="inline-code">.anyRequest().authenticated()</span>。按当前代码，<span class="inline-code">/metrics</span> 会被认证拦截，且注册表为空。培训与联调应以 <span class="inline-code">/actuator/prometheus</span> 为真实出口，<strong>不要拿 401/404 当功能缺失结论</strong>（inode 与构建时点也要核对，见 <a href="ai-09-quality-assurance.html#a9-8">A9.8</a>）。</p></div>
+
+  <h3 id="a12-2">A12.2 指标清单与日志上下文：看见系统且不泄露</h3>
+  <p><strong>Micrometer 固定指标清单</strong>（可直接在 Prometheus 查）：</p>
+  <table>
+    <thead><tr><th style="width:32%">指标名</th><th style="width:16%">类型</th><th>含义 / 出处</th></tr></thead>
+    <tbody>
+      <tr><td><span class="inline-code">ai.trace.total</span> / <span class="inline-code">ai.trace.latency</span></td><td>Counter / Timer</td><td>链路总数 / P50·P95·P99 耗时（<span class="mono">MicrometerTraceObserver</span>）</td></tr>
+      <tr><td><span class="inline-code">ai.model.calls.total</span> / <span class="inline-code">ai.model.calls.latency</span></td><td>Counter / Timer</td><td>模型调用次数 / 耗时（<span class="mono">MicrometerModelCallObserver</span>）</td></tr>
+      <tr><td><span class="inline-code">ai.model.tokens.input</span> / <span class="inline-code">.output</span></td><td>DistributionSummary</td><td>输入/输出 token 分布</td></tr>
+      <tr><td><span class="inline-code">ai.execution.loops.total</span> / <span class="inline-code">.steps</span> / <span class="inline-code">.latency.total</span> / <span class="inline-code">.trimmed</span></td><td>Counter / Summary / Timer</td><td>执行环、步数、耗时、裁剪次数（<span class="mono">MicrometerExecutionObserver</span>）</td></tr>
+      <tr><td><span class="inline-code">cap.tool_availability_ratio</span> / <span class="inline-code">cap.enforcement_status</span></td><td>Gauge</td><td>工具可用率 / CAP 授权状态（0=off,1=gray,2=on）</td></tr>
+      <tr><td><span class="inline-code">cap.authz_mismatch_total</span> / <span class="inline-code">cap.authz_*_total</span></td><td>Counter</td><td>影子权限判定偏差 / 各类影子样本（<span class="mono">MicrometerAuthzMismatchMetrics</span>）</td></tr>
+    </tbody>
+  </table>
+  <p><strong>日志上下文 LogContext</strong>（<span class="mono">agent-application/.../observability/LogContext.java</span>）用 MDC 注入三要素：<span class="inline-code">traceId</span> / <span class="inline-code">tenantId</span> / <span class="inline-code">principalId</span>，缺省 <span class="inline-code">"-"</span>，系统作业 <span class="inline-code">"system"</span>，MQ 头 <span class="inline-code">x-trace-id</span>（行 37–65）。<span class="mono">logback-spring.xml:25</span> 的 pattern 把它们打进每条日志：<span class="inline-code">%X{traceId:--} %X{tenantId:--} %X{principalId:--}</span>。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">platform/agent-application/.../observability/LogContext.java 行 206–219（sanitize，节选）</span><button>复制</button></div><pre><code>// 白名单净化：防 CR/LF/ANSI 日志注入；traceId 来自外部请求头，属攻击者可控输入
+String sanitize(String v) {
+    if (v == null || v.isEmpty()) return NONE;
+    String cleaned = v.replaceAll("[^A-Za-z0-9._:@-]", "");
+    return cleaned.isEmpty() ? NONE
+         : cleaned.length() &gt; MAX_VALUE_LENGTH ? cleaned.substring(0, MAX_VALUE_LENGTH) : cleaned;
+}</code></pre></div>
+  <p>注意 <span class="inline-code">sanitize</span> 是<strong>净化（过滤非法字符）而非对敏感值打码</strong>：它防的是日志注入（换行伪造日志行、ANSI 控制序列），<span class="inline-code">MAX_VALUE_LENGTH=64</span> 截断超长值。跨线程传递用 <span class="inline-code">wrap(Runnable/Callable)</span> 与 <span class="inline-code">push(Snapshot)</span> try-with-resources，并要求在 <span class="inline-code">finally</span> 调用 <span class="inline-code">clear()</span>。HTTP 入口在 <span class="mono">RequestLoggingConfiguration</span>（行 54,109–127）写 traceId、回写响应头、finally 清 MDC；MQ 侧 <span class="mono">RabbitExecutionListener</span>（行 100,119）从消息头取。</p>
+
+  <h3 id="a12-3">A12.3 Grafana 16 面板：清单、数据源与文档口径差</h3>
+  <p>唯一 dashboard 定义是 <span class="mono">monitoring/grafana/dashboards/agent-quality.json</span>（588 行，uid <span class="inline-code">agent-quality-overview</span>）。本次勘察逐面板核对了 JSON，确认为 <strong>16 个面板</strong>；14/15/16 个数据源用 <span class="inline-code">platform-pg</span>（Postgres），只有面板 3 用 <span class="inline-code">prometheus-uid</span>。</p>
+  <table>
+    <thead><tr><th style="width:6%">id</th><th>面板标题</th><th style="width:14%">类型</th><th style="width:14%">数据源</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>链路成功率（近 24h）</td><td>stat</td><td>postgres</td></tr>
+      <tr><td>2</td><td>Run 数量（近 24h）</td><td>stat</td><td>postgres</td></tr>
+      <tr><td>3</td><td>模型调用（Prometheus · <span class="inline-code">ai_model_calls_total</span>）</td><td>stat</td><td><strong>prometheus</strong></td></tr>
+      <tr><td>4</td><td>终止原因分布</td><td>piechart</td><td>postgres</td></tr>
+      <tr><td>5</td><td>Run 耗时（P50 / P95，5 分钟桶）</td><td>timeseries</td><td>postgres</td></tr>
+      <tr><td>6</td><td>Token 用量（input / output，5 分钟桶）</td><td>timeseries</td><td>postgres</td></tr>
+      <tr><td>7</td><td>工具失败率 Top（按 Trace × 工具聚合）</td><td>bargauge</td><td>postgres</td></tr>
+      <tr><td>8</td><td>最近 Run 明细（点开走 <span class="inline-code">/api/runs/{runId}/transcript</span>）</td><td>table</td><td>postgres</td></tr>
+      <tr><td>9</td><td>评估覆盖率（自动校验 / 人工抽样 · 必须并排看）</td><td>table</td><td>postgres</td></tr>
+      <tr><td>10</td><td>L1 链路完整率（仅已自动校验的 Trace）</td><td>stat</td><td>postgres</td></tr>
+      <tr><td>11</td><td>待审任务数（PENDING / IN_REVIEW）</td><td>stat</td><td>postgres</td></tr>
+      <tr><td>12</td><td>审查队列明细（HIGH 优先）</td><td>table</td><td>postgres</td></tr>
+      <tr><td>13</td><td>按场景拆分（自动/人工覆盖率 · n&lt;30 不展示百分比）</td><td>table</td><td>postgres</td></tr>
+      <tr><td>14</td><td>成本趋势（按小时 · 仅统计已采集成本的行）</td><td>table</td><td>postgres</td></tr>
+      <tr><td>15</td><td>内容质量 · 归因正确率（L2 · 仅已评级样本）</td><td>table</td><td>postgres</td></tr>
+      <tr><td>16</td><td>内容质量 · 幻觉率（人工抽样口径）</td><td>table</td><td>postgres</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn"><span class="ct">「16 面板」与「13 面板」都出现在文档里</span> <span class="tag t-conflict">文档冲突</span><p>详细设计 §12（行 655）写「Prometheus scrape + <strong>16 面板</strong>」，§13①（行 661）却写「看板 <strong>13 面板</strong>全部 SQL 实跑通过」；§9.1 清单表与 JSON 细节也有差异（如面板 5 只有 P50/P95、文档清单未列面板 8）。<strong>以 JSON 的 16 个面板为准</strong>，文档数字是不同时点的快照。另外，「n&lt;30 不展示百分比」「未采集 = null 不等于 0」是面板 SQL 与 <span class="mono">PlatformAgentMetricsController</span> 共同的口径纪律，与 <a href="ai-10-quality-evaluation.html#a10-1">A10.1</a> 呼应。</p></div>
+  <p><strong>效果指标 API</strong>：<span class="mono">PlatformAgentMetricsController</span>（基路径 <span class="inline-code">/api/platform/v1/metrics/agent</span>）提供 <span class="inline-code">/overview</span>、<span class="inline-code">/terminations</span>、<span class="inline-code">/latency</span>、<span class="inline-code">/tools</span>、<span class="inline-code">/anomalies</span>、<span class="inline-code">/scenarios</span>、<span class="inline-code">/trace/{traceId}</span> 七个读端点（权限 <span class="inline-code">platform.resource.read</span>）与 <span class="inline-code">/collect</span>、<span class="inline-code">/eval-samples</span>、<span class="inline-code">/feedback</span>、<span class="inline-code">/risk-events</span>、<span class="inline-code">/task-outcomes</span> 五个录入端点（权限 <span class="inline-code">platform.resource.manage</span>，不新增权限）。铁律：<strong>只做观测不做执行，不返回对话/工具原文，未采集一律 null 不渲染 0</strong>（行 39–44）。<span class="inline-code">/scenarios</span> 刻意不接受 scenario 参数防自锁（行 141–147）。</p>
+
+  <h3 id="a12-4">A12.4 审计链真相：不是哈希链，是 append-only 触发器 + 凭据隔离</h3>
+  <div class="callout c-danger"><span class="ct">先纠正三个常见误解</span><p>① <span class="tag t-gap">未找到</span> 独立表 <span class="inline-code">agent_chat_audit</span>：请求级对话审计由 <span class="mono">JdbcAgentChatAuditRepository</span> 写 <span class="inline-code">run</span>/<span class="inline-code">run_event</span>/<span class="inline-code">run_step</span> 三张表。<br>② <span class="tag t-gap">未找到</span> 精确表 <span class="inline-code">platform_audit</span>：实际是 <span class="inline-code">platform.platform_audit_event</span>。<br>③ <span class="tag t-gap">未找到</span> 哈希链：全库 grep <span class="inline-code">prev_hash/hash_chain/merkle/nonce</span> 均无匹配。<strong>审计的不可抵赖靠「DB 触发器 append-only + 角色凭据隔离 + 敏感信息拒写 + fail-closed」，不靠链式哈希。</strong></p></div>
+  <table>
+    <thead><tr><th style="width:26%">表</th><th>用途 / 关键字段</th></tr></thead>
+    <tbody>
+      <tr><td><span class="inline-code">public.audit_record</span></td><td>租户侧通用行为审计（<span class="mono">01_platform_ddl.sql:1488–1507</span>）：<span class="inline-code">audit_id/tenant_id/actor_id/action/resource_type/resource_id/detail(jsonb)/correlation_id/created_at</span>；FORCE RLS + 策略 <span class="inline-code">audit_record_tenant_isolation</span></td></tr>
+      <tr><td><span class="inline-code">platform.platform_audit_event</span></td><td>平台域管理审计（无 tenant_id，行 1064–1078）：<span class="inline-code">actor_type/action/target_type/decision/reason_code/ip/ticket_scope</span>；<span class="inline-code">ticket_scope</span> CHECK 三值 PLATFORM/TENANT/ALL</td></tr>
+      <tr><td><span class="inline-code">platform.authz_decision_log</span></td><td>授权判定流水（行 971–1002）：每次 AccessGate 判定一行（主体+动作+资源+permitted+reason_code），<span class="inline-code">tenant_id text</span> 故意 text，<strong>不挂 RLS</strong>，隔离靠授权（app_agent 仅 INSERT，读走 platform_ops）</td></tr>
+      <tr><td><span class="inline-code">public.cap_decision_log</span> / <span class="inline-code">rag.rag_access_audit</span></td><td>CAP 决策审计（租户隔离）/ RAG 侧访问审计，分域存放</td></tr>
+    </tbody>
+  </table>
+  <p><strong>防篡改的实现</strong>：触发器 <span class="inline-code">trg_audit_record_append_only</span>（行 4663）对 <span class="inline-code">BEFORE DELETE OR UPDATE</span> 执行 <span class="mono">public.forbid_audit_mutation()</span>。加固版（<span class="mono">04_retention_role.sql</span> 行 176–192）规定：<strong>DELETE 仅放行具备 <span class="inline-code">agent_retention</span> 成员身份的连接</strong>（<span class="inline-code">pg_has_role(current_user,'agent_retention','MEMBER')</span>）且须声明 <span class="inline-code">agent.retention.actor</span> 留痕；<strong>UPDATE 永远拒绝</strong>。<span class="inline-code">agent_retention</span> 唯一拥有 DELETE 权，从 <span class="inline-code">app_agent</span> 撤销；重跑 <span class="mono">03_platform_roles.sql</span> 的 <span class="inline-code">GRANT … ON ALL TABLES</span> 会<strong>静默回授 DELETE</strong>，所以重跑 03 后必须紧接 04。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">sql</span><span class="file">deploy/sql/platform/04_retention_role.sql 行 176–192（forbid_audit_mutation，节选）</span><button>复制</button></div><pre><code>CREATE FUNCTION public.forbid_audit_mutation() RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    RAISE EXCEPTION 'audit_record is append-only: UPDATE denied';
+  END IF;
+  -- DELETE：仅 agent_retention 成员且声明了留痕 actor
+  IF NOT pg_has_role(current_user, 'agent_retention', 'MEMBER')
+     OR current_setting('agent.retention.actor', true) IS NULL THEN
+    RAISE EXCEPTION 'audit DELETE requires isolated retention credential';
+  END IF;
+  RETURN OLD;
+END $$ LANGUAGE plpgsql;</code></pre></div>
+  <p><span class="mono">JdbcAuditRepository</span> 有三条不变量（行 33–43）：<strong>敏感信息拒写</strong>（写前逐字段跑 <span class="mono">IdentifyingPattern</span>，命中身份证/手机/学号/邮箱即抛异常<strong>整条不写</strong>，行 227–263）；<strong>关键审计 fail-closed / 访问日志 fail-open</strong>（行 93–94 vs 106–116）；<strong>追加不可改靠 DB 触发器</strong>。按键豁免 <span class="inline-code">VALUE_SCAN_EXEMPT_KEYS</span>（<span class="inline-code">runId/operationId/approvalId/resourceId/correlationId</span>），<span class="inline-code">studentId</span> 不在豁免名单。<span class="mono">AuditChainIT</span>（<span class="inline-code">IT_PG_URL</span> 活库、非特权 <span class="inline-code">app_agent</span>）用反证证明：drop 掉触发器后 UPDATE/DELETE 被静默放行（T-4，行 150–179，<span class="inline-code">restoreTrigger</span> 在 finally），且跨租户隔离、敏感信息拒写、fail-closed vs fail-open 都有断言。</p>
+
+  <h3 id="a12-5">A12.5 禁 RETURNING 铁律：authz_decision_log 只 INSERT 无 SELECT</h3>
+  <p>这条铁律针对的是 <span class="inline-code">platform.authz_decision_log</span>，<strong>不适用于 <span class="inline-code">audit_record</span>/<span class="inline-code">usage_record</span></strong>（后两者有 SELECT + RLS，可用 RETURNING）。</p>
+  <table>
+    <thead><tr><th style="width:20%">环节</th><th>事实</th></tr></thead>
+    <tbody>
+      <tr><td>授权设计</td><td>该表按设计<strong>只给应用角色 INSERT、显式 REVOKE SELECT</strong>（<span class="mono">03_platform_roles.sql:263,273–274</span>，DRY 断言 :291–297）</td></tr>
+      <tr><td>为什么禁 RETURNING</td><td>PG 的 <span class="inline-code">INSERT … RETURNING &lt;col&gt;</span> 需要返回列的 <strong>SELECT 权限</strong>；无 SELECT 会 <span class="inline-code">permission denied</span>，且失败被「限频告警 + 绝不外抛」吞掉 → 表现为<strong>「判定照常、审计零行、系统全绿」</strong>（<span class="mono">13_RLS到应用层权限迁移_设计与实施计划.md:137–143</span>）</td></tr>
+      <tr><td>源码守卫</td><td><span class="mono">AuthzDecisionLogSchemaTest#insertMustNotUseReturning</span>（行 75–90）断言 <span class="inline-code">.doesNotContainIgnoringCase("RETURNING")</span></td></tr>
+      <tr><td>活库守卫</td><td><span class="mono">AuthzDecisionLogLiveIT#insertWithReturningIsDenied</span>（单测盲区，靠真库证明）</td></tr>
+      <tr><td>启动零行探测</td><td><span class="mono">JdbcAuthzDecisionLog.probe()</span>（行 86–91,139–159）用 <span class="inline-code">INSERT … SELECT … WHERE FALSE</span> 零行探测表/权限/列漂移；<span class="mono">AuthzDecisionLogGuard</span> 在装配层决定是否拒绝启动</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-info"><span class="ct">三类审计表，三种信任模型</span><p><span class="inline-code">audit_record</span>（租户行为审计，RLS 隔离）、<span class="inline-code">platform_audit_event</span>（平台管理审计，无租户）、<span class="inline-code">authz_decision_log</span>（授权判定流水，仅 INSERT 无 SELECT）分域存放。它们的共同点是<strong>「只增不改」</strong>，差别在于「谁能读」：租户侧靠 RLS、平台侧靠专用数据源 <span class="inline-code">platform_ops</span>、决策日志靠「应用不可读」。把三张表当一张用，会同时踩权限和隔离两个坑。</p></div>
+  <p><strong>平台审计数据源 assembly</strong>：<span class="mono">JdbcPlatformAuditRepository</span>（注意包是 <span class="mono">infrastructure.security</span>）只追加写 <span class="inline-code">platform.platform_audit_event</span>，供 <span class="inline-code">/api/platform/v1/audit-events</span>；它<strong>不挂 <span class="inline-code">@Repository</span></strong>——<span class="inline-code">app_agent</span> 对该表无授权，组件扫描会挂到主数据源导致 permission denied，必须走 <span class="mono">platformIdentityDataSource()</span>（<span class="inline-code">platform_ops</span>）。写字段与 <span class="inline-code">?::</span> 占位符<strong>按位置</strong>一一对应（行 42–66），列顺序漂移会「审计还在、证据换人」。</p>
+
+  <h3 id="a12-6">A12.6 审计守卫空转：红队死代码的活例</h3>
+  <p>这是一条必须如实讲的负面证据：<span class="mono">AuditTamperProofGuard</span>（<span class="mono">agent-persistence/.../bootstrap/config/AuditTamperProofGuard.java</span>）设计意图是「验证应用角色结构上不能删审计行」，但<strong>当前受阈表数组被整行注释，实际为空</strong>。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">platform/agent-persistence/.../bootstrap/config/AuditTamperProofGuard.java 行 33–52（真实源码）</span><button>复制</button></div><pre><code>/** 受阈表：审计行 与 删除凭证（凭证被删则举证链自毁）。 */
+private static final String[] GUARDED_TABLES = {
+//            "audit_record", "erasure_certificate",
+};
+...
+@Override
+public void run(ApplicationArguments args) {
+    for (String table : GUARDED_TABLES) {   // ← 空数组：循环体不执行任何检查
+        ...
+    }
+}</code></pre></div>
+  <p>因此 <span class="inline-code">run()</span> 的循环不执行任何检查，<strong>该守卫目前不守任何表</strong> <span class="tag t-gap">证据空白</span>。配置键 <span class="inline-code">agent.retention.require-isolated-credential</span>（默认 false，<span class="mono">application.yml:396</span>）即使设为 true，也因数组为空而不会触发拒绝启动。这不是文档里写的「已就绪」——源码就是反证。它与 <a href="ai-09-quality-assurance.html#a9-7">A9.7</a> 的「红队死代码」、<a href="ai-09-quality-assurance.html#a9-4">A9.4</a> 的「能力存在 ≠ 生效」是同一类问题，<strong>再次说明「守卫类存在」不等于「守卫在守卫」</strong>。真正的不可抵赖目前靠 A12.4 的 DB 触发器与角色隔离，而不是这个 Java 守卫。</p>
+
+  <h3 id="a12-7">A12.7 告警与 fail-closed 门禁：开关怎么安全落地</h3>
+  <p><strong>告警</strong>分应用层与 Prometheus 两侧，见 <a href="ai-10-quality-evaluation.html#a10-9">A10.9</a> 的 SLA-2/3/7 与 BEH/COST 规则。这里补一条关键取舍：<span class="mono">monitoring/prometheus/prometheus.yml</span>（16 行）<strong>无 <span class="inline-code">rule_files</span>、无 <span class="inline-code">alerting</span>、无 <span class="inline-code">groups</span></strong> <span class="tag t-gap">未落地</span>。原因是刻意把比例告警放应用层（<span class="mono">QualityAlertEvaluator</span>），因为 <span class="inline-code">rule_files</span> 告警<strong>不能建 review_task</strong>、无法复用 <span class="inline-code">uq_review_task_open</span> 去重；代价是运维接 Alertmanager 需另建规则。部分早期文档仍写「alert rules 本期补齐」，与 2026-11-09 的取舍未同步。</p>
+  <p><strong>fail-closed 门禁</strong>汇总（缺配置或状态不对就拒绝启动，而不是带病运行）：</p>
+  <table>
+    <thead><tr><th style="width:30%">门禁</th><th>触发条件 → 行为</th></tr></thead>
+    <tbody>
+      <tr><td>JWT 私钥缺失</td><td>生产 profile（非 dev/local/test）未配置私钥 → <span class="inline-code">IllegalStateException</span> 拒绝启动；<strong>禁止启动时生成新密钥</strong>（否则滚动重启全员掉线），dev 下临时生成打醒目 WARN（<span class="mono">AuthConfiguration.java:90–134</span>）</td></tr>
+      <tr><td>平台身份数据源缺失</td><td><span class="inline-code">PlatformOpsUnavailableException</span>，<strong>绝不回落应用角色</strong>（行 245–251）</td></tr>
+      <tr><td>CAP 开启但流程未装配</td><td><span class="mono">CapEnforcementReadinessGuard</span>：开启但 <span class="mono">CapExecutionFlow</span> 未装配 → 拒绝启动；关闭时打印显眼 SECURITY WARN</td></tr>
+      <tr><td>审计凭据未隔离</td><td><span class="mono">AuditTamperProofGuard</span> 设计上「require-isolated-credential 时应用角色仍有 DELETE → 拒绝启动」，<strong>但当前数组为空、实际不生效</strong>（见 A12.6）</td></tr>
+      <tr><td>决策日志不可写</td><td><span class="mono">JdbcAuthzDecisionLog.probe()</span> 返回 false，由装配层决定是否拒绝启动</td></tr>
+    </tbody>
+  </table>
+  <p>配套配置：<span class="inline-code">CONFIG_FLAG_CAP_ENFORCEMENT_REQUIRED</span>、<span class="inline-code">CONFIG_FLAG_CAP_CLOSURE_ENFORCEMENT</span>（默认 warn）、<span class="inline-code">CONFIG_FLAG_CAP_AUTHORIZATION_ENFORCED</span>（默认 false）、<span class="inline-code">CONFIG_FLAG_CAP_DUAL_WRITE</span>（默认 true）、<span class="inline-code">AGENT_RETENTION_REQUIRE_ISOLATED_CREDENTIAL</span>（默认 false）。<span class="mono">CapEnforcementMetrics</span> 用 Gauge <span class="inline-code">cap.enforcement_status</span> 暴露 0/1/2 三态，放在 bootstrap 是因为 <span class="mono">CapEnforcementSwitch</span> 所在的 agent-application <strong>不依赖 Micrometer</strong>。</p>
+
+  <h3 id="a12-8">A12.8 运维 Runbook：CAP 三段灰度与全量开启</h3>
+  <p><span class="mono">docs/CAP_运维检查清单_Runbook_20261104.md</span>（80 行）与三个配套脚本（<span class="mono">cap-gray-step.sh</span> / <span class="mono">cap-gray-metrics-check.sh</span> / <span class="mono">cap-enable-global.sh</span>）给出一条<strong>人工闸门</strong>的灰度路径。红线：<strong>全局开关 <span class="inline-code">config.flag.cap-authorization-enforced</span> 默认 false，「翻 true」留给人工</strong>。</p>
+  <table>
+    <thead><tr><th style="width:14%">阶段</th><th>动作 / 判据</th></tr></thead>
+    <tbody>
+      <tr><td>§0 前置</td><td><span class="inline-code">/actuator/prometheus</span> 可 curl；<span class="inline-code">micrometer-registry-prometheus</span> 依赖已加；该端点在匿名白名单；开关为 <span class="inline-code">${CONFIG_FLAG_CAP_AUTHORIZATION_ENFORCED:false}</span></td></tr>
+      <tr><td>§1 三段灰度</td><td>单租户 → 五租户 → 约十五租户，各观察 24h；<span class="inline-code">--log-scan</span> 按租户扫 <span class="inline-code">[authz-mismatch]</span> WARN（因 <span class="inline-code">cap_authz_mismatch_total</span> 是全局按 resource_type、<strong>不带租户标签</strong>）。E1 = 全系列 mismatch=0；E2 = <span class="inline-code">cap_tool_availability_ratio</span> 灰度值 ≥ 基线 −1%</td></tr>
+      <tr><td>§2 熔断/回退</td><td>开关置 false + <span class="inline-code">_TENANTS=''</span> 重启/热载；<strong>关开关 ≠ 删 cap_* 数据</strong>（DualWrite 语义）；E1 非零查影子判定绑定漂移，E2 跌破查 RLS/Schema/预算误拒</td></tr>
+      <tr><td>§3 全量开启</td><td><span class="inline-code">CAP_GRAY_ALL_GREEN=yes ./scripts/cap-enable-global.sh --metrics-base-url http://&lt;host&gt;:8080</span>，人工执行三步 export/重启，确认启动日志 <span class="inline-code">CAP 授权链路=ENABLED</span>（E3）</td></tr>
+      <tr><td>§4 开启后 24h</td><td>全租户 mismatch=0、工具可用率偏差&lt;1%、启动日志 ENABLED；三判据全过 = P0-1d 交付完成</td></tr>
+    </tbody>
+  </table>
+  <p><strong>前置评估的口径变化</strong> <span class="tag t-conflict">文档冲突</span>：<span class="mono">docs/P0-1d_全量开启_CAP_前置评估_20261104.md</span>（行 5–6）结论是「P5 指针读路径已在代码库完整实现并通过测试覆盖，<strong>『P5 未落地』这一门禁理由已不成立</strong>」；唯一剩余前置是<strong>运行时灰度验证</strong>。本文档为评估，<strong>不主动翻转开关</strong>（仍 false）。P5 四构件：<span class="mono">JdbcPublishedVersionPort.resolveFromPointer</span>（fail-closed，绝不以 <span class="inline-code">max(seq)</span> 选当前版本）、<span class="mono">JdbcConfigPointerRepository.compareAndSet</span>、<span class="mono">JdbcConfigPublishTransaction</span>（同事务原子提交）、<span class="mono">PlatformOpsConfigPublishTransaction</span>（BYPASSRLS 平台通道）。三条运行时判据（mismatch 连续 24h=0、工具可用率无退化、切换 5 分钟内完成）仍 ⏳ 待运行时验证。</p>
+
+  <h3 id="a12-9">A12.9 密钥轮换与环境治理：明文即泄露</h3>
+  <p><span class="mono">docs/安全-P0-3-密钥轮换操作清单.md</span>（123 行，状态「待运维执行」，2026-10-27）明确：<strong>代码侧无法替你轮换 RDS 口令</strong>，这是运维执行项。为什么紧急：<span class="inline-code">platform_ops</span> 持 BYPASSRLS，其口令明文存于多份 env；gitignore 已生效但<strong>「未入库 ≠ 未泄露」</strong>——终端历史、IDEA、聊天记录仍可能泄露，轮换是唯一可靠止损。</p>
+  <table>
+    <thead><tr><th style="width:20%">敏感资产</th><th>轮换要点</th></tr></thead>
+    <tbody>
+      <tr><td><span class="inline-code">platform_ops</span> 🔴</td><td><span class="inline-code">ALTER ROLE platform_ops WITH PASSWORD '&lt;新强口令&gt;';</span>（更稳妥：新建 <span class="inline-code">platform_ops_v2</span> + 切权 + 删旧）→ 同步 <span class="mono">platform.env</span>/部署机/CI/密钥库 → 重启验证 → 用非特权账号验跨租户被 RLS 拦截 → 旧口令连库必须被拒</td></tr>
+      <tr><td><span class="inline-code">rag_app</span> 🟡</td><td>暴露频率最高（<span class="mono">rag.env</span>/终端历史）；更新 <span class="mono">rag.env</span> 与 <span class="inline-code">IT_RAG_PG_PASSWORD</span>；8 模块 IT 全绿；IT 凭证此后只经环境变量注入</td></tr>
+      <tr><td>主应用库 / RabbitMQ</td><td>重启全部 Spring 进程冒烟；RabbitMQ 管理台轮换 + 重启 worker + Quorum 队列双向验证</td></tr>
+      <tr><td>JWT 私钥（两对）🔴</td><td>RS256 轮换意义有限但<strong>明文落盘/进聊天即视为泄露必须轮换</strong>；采用 <strong>kid 双密钥滚动</strong>：新 kid 上线 → 旧 kid 保留至存量令牌过期（TTL 900s）→ 摘除；TTL 内在线令牌仍有效</td></tr>
+    </tbody>
+  </table>
+  <p><strong>环境治理目标结构</strong>：<span class="inline-code">*.env.example</span> 入库仅占位符 <span class="inline-code">&lt;MUST-FILL&gt;</span>，真实值在 <span class="mono">platform.env</span>/<span class="mono">rag.env</span>/<span class="mono">jwt.env</span>（chmod 600、不入库、属主分开，唯一共用 <span class="mono">jwt.env</span>）。CI 守卫检测非 example 文件出现 <span class="inline-code">jdbc:postgresql://…:…@</span> 或 <span class="inline-code">PASSWORD=.+</span> 即失败。密钥库选型路径：macOS Keychain/pass → 阿里云 KMS → Vault/Nacos。卫生习惯：<span class="inline-code">chmod 600</span>、<span class="inline-code">HISTCONTROL=ignoreboth</span> + <span class="inline-code">history -c</span>、头部标注轮换日期与执行人。</p>
+  <p><strong>密钥映射与隔离</strong>：<span class="mono">scripts/gen-jwt-keys.sh</span> 生成的 <span class="inline-code">JWT_PRIVATE_KEY</span> / <span class="inline-code">PLATFORM_JWT_PRIVATE_KEY</span> 格式均为 <span class="inline-code">&lt;私钥Base64URL&gt;.&lt;公钥Base64URL&gt;</span>；<span class="mono">application.yml:674,699</span> 分别映射租户域与平台域；TTL 60–3600s，平台默认 900s（<span class="mono">AuthConfiguration.java:46–47,208</span>）。<span class="inline-code">AI_AGENT_PASSWORD</span>（RDS 上带 CREATEDB/CREATEROLE 的 owner <span class="inline-code">ai_agent</span>）<strong>刻意不落盘</strong>，只经环境变量注入。<strong>上下文压缩用独立 HMAC 密钥 <span class="inline-code">AGENT_CONTEXT_STATE_HMAC_KEY</span>，绝不复用 JWT 私钥</strong>（<span class="mono">上下文压缩完整方案_设计与实施_v1.0.md:384</span>；详见 <a href="ai-03-hard-problems.html">A3</a>）。</p>
+
+  <h3 id="a12-10">A12.10 未落地 / 未确认：把「配了」和「生效了」分开</h3>
+  <table>
+    <thead><tr><th style="width:28%">项</th><th style="width:14%">状态</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>审计防篡改 Java 守卫</td><td><span class="tag t-gap">空转</span></td><td><span class="mono">AuditTamperProofGuard.GUARDED_TABLES</span> 为空数组，<span class="inline-code">run()</span> 不检查任何表（A12.6）；真正的不可抵赖靠 DB 触发器</td></tr>
+      <tr><td>Prometheus alert rules</td><td><span class="tag t-gap">未落地</span></td><td><span class="mono">prometheus.yml</span> 无 <span class="inline-code">rule_files</span>；告警在应用层建 review_task（A12.7）</td></tr>
+      <tr><td>自研 <span class="mono">AgentMetrics</span> / <span class="inline-code">/metrics</span></td><td><span class="tag t-gap">空转 + 鉴权落差</span></td><td>生产无 <span class="inline-code">increment</span> 调用；<span class="inline-code">/metrics</span> 注释称免认证但实际需认证（A12.1）；真实出口是 <span class="inline-code">/actuator/prometheus</span></td></tr>
+      <tr><td>Grafana 面板口径</td><td><span class="tag t-conflict">文档冲突</span></td><td>JSON 16 个面板；文档 §12 写 16、§13 写 13、§9.1 清单与细节有差异（A12.3）</td></tr>
+      <tr><td>run_message 保留期 / 回放受众</td><td><span class="tag t-unknown">未确认</span></td><td>默认 30 天、不额外存敏感原文；教育/未成年人数据期限与脱敏、学生端是否开放，无正式产品口径（与 <a href="ai-10-quality-evaluation.html#a10-10">A10.10</a> 同源）</td></tr>
+      <tr><td>CAP 全量开启运行时判据</td><td><span class="tag t-unknown">待验证</span></td><td>P5 指针读路径 ✅ 已满足；三条运行时判据（mismatch 24h=0、工具可用率无退化、切换 5 分钟内）⏳ 待灰度验证；不主动翻转开关（A12.8）</td></tr>
+      <tr><td>密钥轮换清单验收</td><td><span class="tag t-plan">待运维执行</span></td><td>§4 四项验收尚未勾选：旧口令连库被拒、三 env 不入库且 example 入库、RLS 用例全绿、至少 platform_ops 完成密钥库迁移</td></tr>
+      <tr><td>治理体系中的 Skill / MCP</td><td><span class="tag t-conflict">文档冲突（v2.4 修正）</span></td><td><span class="mono">docs/governance/01</span>（2026-10-22）写「Skill 与 MCP 在代码中尚不存在」；<strong>MCP 客户端已于 2026-10-23（W-PERM-P4，git b770141）落地并在 ApplicationConfiguration 接线，详见 <a href="ai-16-mcp-runtime.html">A16</a></strong>；Skill 这一半仍成立（仅配置层，无运行时执行物）</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-ai"><span class="ct">迁移提示：让「绿」重新意味着「真的在守」</span><p>传统运维把「加了监控 / 加了守卫 / 配了开关」当成完成。本项目的教训是：<strong>指标可能没人写（AgentMetrics 空转）、守卫可能守着空数组（AuditTamperProofGuard）、开关可能只改了配置没接执行侧（tenant_quota）、说明可能停留在旧快照（16 vs 13 面板）</strong>。可复用的是 Micrometer / MDC / Grafana / 触发器 / kid 滚动这些成熟手段；必须新建的是<strong>「的配置到底有没有生效」的证伪习惯</strong>——看真实出口抓不抓得到、看守卫数组里有没有表、看关了开关数据是不是还在、看文档数字和 JSON/DDL 对不对得上。<strong>可观测性的第一原则，是先观测「观测系统本身」。</strong></p></div>
+  <div class="evidence"><b>证据源：</b><span class="mono">docs/Agent对话质量跟踪_回溯_评估体系_详细设计.md</span> §9、<span class="mono">docs/CAP_运维检查清单_Runbook_20261104.md</span>、<span class="mono">docs/安全-P0-3-密钥轮换操作清单.md</span>、<span class="mono">docs/P0-1d_全量开启_CAP_前置评估_20261104.md</span>、<span class="mono">docs/governance/01</span> / <span class="mono">02</span>、<span class="mono">monitoring/grafana/dashboards/agent-quality.json</span>、<span class="mono">monitoring/prometheus/prometheus.yml</span>、<span class="mono">platform/application/.../observability/AgentMetrics.java</span> / <span class="mono">LogContext.java</span>、<span class="mono">platform/agent-api/.../observability/MetricsController.java</span> / <span class="mono">platform/PlatformAgentMetricsController.java</span>、<span class="mono">platform/agent-persistence/.../JdbcAuditRepository.java</span> / <span class="mono">infrastructure/security/JdbcPlatformAuditRepository.java</span> / <span class="mono">bootstrap/config/AuditTamperProofGuard.java</span>、<span class="mono">platform/platform-bootstrap/.../CapEnforcementMetrics.java</span> / <span class="mono">CapEnforcementReadinessGuard.java</span>、<span class="mono">deploy/sql/platform/01_platform_ddl.sql</span> / <span class="mono">03_platform_roles.sql</span> / <span class="mono">04_retention_role.sql</span>、<span class="mono">AuditChainIT</span> / <span class="mono">AuthzDecisionLogSchemaTest</span> / <span class="mono">AuthzDecisionLogLiveIT</span> 与三个 <span class="mono">cap-*.sh</span> 脚本。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-11-cost-governance.html"><span class="pn-label">← 上一册</span><span class="pn-title">A11 · 租户级成本治理与 Token 计费</span></a>
+  <a class="pn-right" href="ai-13-agent-memory.html"><span class="pn-label">下一册 →</span><span class="pn-title">A13 · Agent 记忆机制与跨 Run 状态</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

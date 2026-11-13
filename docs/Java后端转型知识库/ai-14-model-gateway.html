@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A14 · 模型统一配置与模型网关 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-14-model-gateway" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A14 · 模型统一配置与模型网关</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A14 · 模型统一配置与模型网关 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">model_catalog 单一事实源、解析优先级四级 fail-closed、ModelErrorKind 六分类与 retryable、凭据脱敏不挂 cause、MiniMax tool_call_id 事故与七种故障注入</p>
+  <div class="ph-meta"><span>覆盖：A14.1–A14.11</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a14">
+  <div class="breadcrumb"><b>AI 专题 · A14</b> / 模型统一配置与模型网关</div>
+  <h2><span class="num">A14.</span> 模型统一配置与模型网关：单一事实源、归一化与凭据边界</h2>
+  <p><a href="ai-02-decisions.html#a2-9">A2.9</a> 讲「为什么要统一模型配置」的决策口径，<a href="ai-11-cost-governance.html">A11</a> 讲「调一次模型记多少钱」；本册讲中间那段工程实现：<strong>一次调用前，模型怎么从目录里解析出来（fail-closed、不缓存、禁用即不可用）；调用后，异常怎么归一成六类（误标 retryable = 无限重试）；密钥怎么不进日志（脱敏双正则 + 异常不挂 cause）</strong>。这一段是 Java 后端最能直接复用方法论的部分——适配器模式、错误分类、脱敏——但每一处都有 AI 特有的坑。</p>
+  <div class="callout c-info"><span class="ct">本册与已有册的分工</span><p><a href="ai-01-fundamentals.html#ai1-2">A1.2</a> 讲一次 LLM 调用的账单路径，本册讲它的<strong>前置解析与异常面</strong>；<a href="ai-03-hard-problems.html#a3-4">A3.4</a> 讲跨进程契约失配，本册 A14.8 的 MiniMax tool_call_id 事故是其代表性案例；<a href="ai-12-observability-runbook.html#a12-1">A12.1</a> 讲指标出口，本册 A14.4 讲网关的观察者装饰层；<code class="inline-code">agent.pricing.models</code> 单价配置见 <a href="ai-11-cost-governance.html#a11-4">A11.4</a>。</p></div>
+
+  <h3 id="a14-1">A14.1 单一事实源：model_catalog 表、「密钥与目录分离」铁律与无租户无 RLS 的理由</h3>
+  <p>所有「用哪个模型」的事实收敛在一张平台全局表 <code class="inline-code">public.model_catalog</code>（<code class="inline-code">01_platform_ddl.sql:5926</code> 起，21 列），三个刻意的「没有」：</p>
+  <table>
+    <thead><tr><th>设计</th><th>内容</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>无租户列</td><td>表上没有 tenant_id，也不挂 RLS</td><td>模型目录是<strong>平台资源</strong>：哪个模型可用、什么能力，是平台决策，不是租户数据。租户配额在预算侧管（<a href="ai-11-cost-governance.html#a11-8">A11.8</a>）</td></tr>
+      <tr><td>无密钥列</td><td>API Key 绝不入 model_catalog；凭据在 <code class="inline-code">model_provider_credential</code>（<code class="inline-code">encrypted_key</code> AES-256-GCM + <code class="inline-code">key_checksum</code> 明文 SHA-256 用于篡改检测、不回显）</td><td>目录数据会进管理后台列表与解析结果；密钥与目录的生命周期、可见面完全不同。DDL 注释原文：api_key 明文绝不落库</td></tr>
+      <tr><td>无「列不存在就回落默认」</td><td><code class="inline-code">JdbcModelCatalogRepository</code> 刻意不做缺列降级（约 :277）</td><td>缺列说明 DDL 与代码漂移，静默回落会把「结构坏了」变成「能力错了」——fail-closed</td></tr>
+    </tbody>
+  </table>
+  <p>窗口相关三列（<code class="inline-code">context_window_tokens</code> 默认 32768 / <code class="inline-code">max_input_tokens</code> 默认 28672 / <code class="inline-code">tokenizer_id</code>）是 <a href="ai-01-fundamentals.html#ai1-3">A1.3</a> 全窗口预算的数据来源；「每场景至多一个默认」由部分唯一索引 <code class="inline-code">model_catalog_scenario_default_uq</code> 在库里强制，不靠应用层自觉。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">deploy/sql/platform/01_platform_ddl.sql:5926-6020</span>（model_catalog / model_provider_credential / 唯一索引）；<span class="mono">platform/agent-persistence/.../JdbcModelCatalogRepository.java</span>；管理入口 <span class="mono">platform/agent-api/.../admin/AdminModelConfigController.java</span> / <span class="mono">AdminModelCredentialController.java</span> / <span class="mono">InternalModelConfigController.java</span>。</div>
+
+  <h3 id="a14-2">A14.2 场景模型：ModelScenario 七个内置场景与字符串常量的取舍</h3>
+  <p><code class="inline-code">ModelScenario</code> 定义七个内置场景常量：<code class="inline-code">agent-chat</code> / <code class="inline-code">console-chat</code> / <code class="inline-code">embedding</code> / <code class="inline-code">summarization</code> / <code class="inline-code">classification</code> / <code class="inline-code">moderation</code> / <code class="inline-code">default</code>。注意它是 <strong>public static final String 而非枚举</strong>：场景是开放集合（后续加 <code class="inline-code">rerank</code>、<code class="inline-code">judge</code> 之类不该改端口层），端口方法签名收 <code class="inline-code">String scenario</code>，常量只是「平台已知的拼写」。<span class="tag t-live">已实现</span></p>
+  <p>同一物理模型可以在多个场景各占一行（场景名 + 模型名联合唯一），这让「对话用大模型、分类用小模型、嵌入用专用模型」成为配置问题而非代码问题——<a href="ai-10-quality-evaluation.html">A10</a> 的 judge 场景、RAG 的 embedding 场景都从这里解析。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-ports/.../modelcatalog/ModelScenario.java:21-39</span>、<span class="mono">ModelDefinition.java</span>。</div>
+
+  <h3 id="a14-3">A14.3 解析优先级四级：显式名 → 同名 → 场景默认 → default，fail-closed 不猜模型</h3>
+  <p><code class="inline-code">ModelResolver</code> 的解析顺序（类注释 :20-34）是本册最常被引用的规则：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">解析优先级（ModelResolver.java:20-34）</span><button>复制</button></div><pre><code>同一场景内：
+① 显式指定的模型名在该场景内命中「启用」模型
+② 显式名退化为全目录同名「启用」模型（跨场景同名兜底）
+③ 该场景的默认模型（每场景至多一个，部分唯一索引强制）
+④ default 场景的默认模型
+⑤ 都没有 → 返回空（fail-closed：绝不随便挑一个模型）
+
+两条横切规则：
+- 已禁用模型不参与解析：is_enabled=false 即使被显式点名、
+  即使在默认位，一律跳过（:29-31）
+- 不缓存：每次解析都读端口（端口实现可自带缓存）（:32-34）
+  → 管理后台改完，下一次调用即刻生效；无需重启、无需清缓存</code></pre></div>
+  <p><code class="inline-code">resolveRequired</code>（:106-119）是 fail-closed 的强制形态：解析不到直接抛异常，异常文案里写明「fail-closed 拒绝猜测模型」。<strong>这里没有 fallback 链</strong>——找不到就是找不到，不会「退到一个更便宜的模型」（见 A14.10 的未落地清单与理由）。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-application/.../modelcatalog/ModelResolver.java:20-34, 52-70, 78-89, 106-119</span>；Agent 侧装配 <span class="mono">platform/agent-worker/.../execute/AgentModelConfigAssembler.java</span> / <span class="mono">RootAgentModelConfigProvider.java</span> / <span class="mono">WorkerChildAgentModelConfigProvider.java</span>。</div>
+
+  <h3 id="a14-4">A14.4 网关抽象：AbstractModelGateway 的三层职责与观察者装饰</h3>
+  <p>三个真实实现（<code class="inline-code">MiniMaxModelGateway</code> / <code class="inline-code">OpenAiCompatibleModelGateway</code> / <code class="inline-code">FakeModelGateway</code>）都继承 <code class="inline-code">AbstractModelGateway</code>，基类把三件事收口，适配器只实现 <code class="inline-code">invokeGuarded</code>：</p>
+  <table>
+    <thead><tr><th>层</th><th>基类行为</th><th>为什么放基类</th></tr></thead>
+    <tbody>
+      <tr><td>归一化</td><td><code class="inline-code">complete()</code> 捕获适配器异常并 <code class="inline-code">classify()</code> 成 ModelErrorKind</td><td>若各适配器自己实现 complete()，漏掉一个分支就会把不可重试误判为可重试（:31-35 注释）</td></tr>
+      <tr><td>超时</td><td><code class="inline-code">callWithTimeout()</code>（:94-136）在受控线程里执行并施加时限；<strong>已归一化的异常原样上抛</strong>（:119-127）——外层再 classify 一次会把 kind 降级成 PROVIDER_ERROR</td><td>超时控制与线程上下文传递是横切关注点</td></tr>
+      <tr><td>观测</td><td><code class="inline-code">ObservableModelGateway</code>（ports 层装饰器）把每次调用的 before/after/exception 分发给 <code class="inline-code">ModelCallObserver</code> 链（Slf4j / Micrometer / EventPort 桥 / Noop 四个实现）</td><td>指标与日志不侵入适配器；真实出口见 <a href="ai-12-observability-runbook.html#a12-1">A12.1</a></td></tr>
+    </tbody>
+  </table>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-infrastructure/.../model/AbstractModelGateway.java:31-136</span>；<span class="mono">platform/agent-ports/.../observer/ObservableModelGateway.java</span>；<span class="mono">platform/agent-infrastructure/.../observer/{logging,metrics,bridge,noop}/</span>。</div>
+
+  <h3 id="a14-5">A14.5 ModelErrorKind 六分类与 retryable 语义：误标 = 无限重试</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">ModelErrorKind（ModelGateway.java:31-50）</span><button>复制</button></div><pre><code>enum ModelErrorKind {
+    TIMEOUT(true),          // 可重试
+    RATE_LIMITED(true),     // 可重试
+    PROVIDER_ERROR(true),   // 可重试（供应商 5xx / 网络）
+    INVALID_REQUEST(false), // 不可重试：context length exceeded 等，重试无意义
+    UNAUTHORIZED(false),    // 不可重试：密钥错，重试只会再错
+    CONTENT_BLOCKED(false); // 不可重试：内容拦截，重试同样内容同样被拦
+    ...
+    boolean retryable();
+}</code></pre></div>
+  <p>这张表是<strong>重试策略的单一依据</strong>：重试统一在 Worker 侧（<code class="inline-code">RunExecutionLoop.java:63-65</code> 注释：绝不引入 Spring <code class="inline-code">@Retryable</code>，两者同时生效会双重重试），判据就是 <code class="inline-code">kind.retryable()</code>。由此推出两条红线：<strong>把不可重试误标为可重试 = 无限重试烧钱</strong>；对已归一化异常二次分类 = kind 降级。写新适配器时 classify 分支必须覆盖供应商文档里的每一种 4xx/429/5xx。</p>
+  <div class="callout c-warn"><span class="ct">Fake 网关的 fail-soft 尾巴</span><p>未知 provider 会回落 <code class="inline-code">FakeModelGateway</code>（见 <a href="ai-02-decisions.html#a2-9">A2.9</a>）——这在生产是一根「不报错但没调真模型」的尾巴。判断链路是否走了真模型，查 <code class="inline-code">model_catalog</code> 的 provider 拼写与网关装配（<code class="inline-code">WorkerRealModelGatewayResolutionTest</code> 断言的就是这个）。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-ports/.../model/ModelGateway.java:31-50</span>；<span class="mono">platform/agent-worker/.../execute/RunExecutionLoop.java:63-65</span>；<span class="mono">platform/platform-bootstrap/.../WorkerRealModelGatewayResolutionTest.java</span>。</div>
+
+  <h3 id="a14-6">A14.6 凭据脱敏：双正则、***REDACTED*** 与 safeMessage 不挂 cause</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">CredentialRedactor（CredentialRedactor.java:21-32, 66-75）</span><button>复制</button></div><pre><code>正则一（形态匹配）：sk-xxxx… / ghp_xxxx… / AKIA… / xoxb-… / Bearer xxx
+正则二（键值匹配）：authorization|api-key|secret|token|password = …
+占位符：***REDACTED***
+
+safeMessage(context, error) 刻意不把 error 设为 cause：
+日志框架打印被抑制的异常时会带出原始消息——供应商异常若挂在
+cause 链上，原始消息（可能含回显的密钥）会绕过脱敏层直接进日志。</code></pre></div>
+  <p>这条「不挂 cause」是 AI 系统特有的纪律：传统后端的异常链是调试资产，这里它是<strong>泄露通道</strong>。供应商 401 文案常回显请求头片段，脱敏只处理字符串、不处理对象图，所以必须从源头切断。<span class="tag t-live">已实现</span></p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-infrastructure/.../model/CredentialRedactor.java</span>；密钥供给 <span class="mono">ModelCredentialProvider.java</span>（env 解析）。</div>
+
+  <h3 id="a14-7">A14.7 MDC 与线程边界：模型调用为什么要 LogContext.wrap</h3>
+  <p><code class="inline-code">callWithTimeout</code> 在受控线程执行适配器调用，而 <strong>MDC（日志上下文）是 ThreadLocal 的，不跨线程</strong>。若不搬运，模型报错日志会退化成 <code class="inline-code">[- - -]</code>——没有 traceId、没有租户、没有主体，跨 <a href="ai-12-observability-runbook.html#a12-2">A12.2</a> 的日志上下文纪律就断了。基类用 <code class="inline-code">LogContext.wrap</code> 把上下文带进执行线程（:97-102 附近）。给 Java 后端的提示：这等价于你在异步编排里手工传播 MDC，但这里的上下文除了 traceId 还有租户与主体——少一个，多租户问题的排查就瞎一只眼。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-infrastructure/.../model/AbstractModelGateway.java:94-136</span>；<span class="mono">platform/agent-application/.../observability/LogContext.java</span>。</div>
+
+  <h3 id="a14-8">A14.8 真实供应商的坑：MiniMax tool_call_id 成对结构事故</h3>
+  <div class="callout c-danger"><span class="ct">2026-10-28 MiniMax 真实端到端事故（MiniMaxModelGateway.java:47-50 注释存档）</span><p>旧实现按「工具名 = call id」重组多轮工具消息，且只回发 tool 消息 → 供应商报 <code class="inline-code">400 invalid params, tool result's tool id(...) not found (2013)</code>，<strong>整次请求被拒收</strong>。根因：tool_call_id 是供应商生成的成对标识（assistant 的 tool_calls 与 tool 的 tool_call_id 必须逐字配对），不是自己起的工具名。这也是 <a href="ai-03-hard-problems.html#a3-4">A3.4</a>「跨进程 AI 服务契约失配」的范式案例：<strong>OpenAI 兼容</strong>不等于<strong>语义一致</strong>，每个供应商在工具协议的边角都有自己的方言，集成测试必须用真实供应商跑一轮（或用契约测试固化成对结构）。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-infrastructure/.../model/MiniMaxModelGateway.java:47-50</span>（事故存档注释）；<span class="mono">MiniMaxModelGatewayTest.java</span> / <span class="mono">OpenAiCompatibleModelGatewayTest.java</span>。</div>
+
+  <h3 id="a14-9">A14.9 能力探测的诚实性：未探测前恒 false</h3>
+  <p><code class="inline-code">model_catalog</code> 的能力三列——<code class="inline-code">supports_prompt_caching</code> / <code class="inline-code">supports_tokenize_api</code> 默认 false、<code class="inline-code">tokenizer_id</code> 默认 NULL（DDL :5947-5952 的 R10 规则）。语义是「<strong>未探测 = 不支持</strong>」，不是「默认支持」。这条与 <a href="ai-01-fundamentals.html#ai1-3">A1.3</a> 直接挂钩：若假设供应商支持精确计数而实际不支持，token 估算会系统性偏小，压缩后的请求<strong>静默超窗</strong>。诚实的能力台账是全窗口预算能算准的前提。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">deploy/sql/platform/01_platform_ddl.sql:5947-5952</span>（R10 注释）。</div>
+
+  <h3 id="a14-10">A14.10 未落地清单：fallback 链 / 网关重试 / 模型熔断 / Prompt Registry</h3>
+  <table>
+    <thead><tr><th>能力</th><th>状态</th><th>说明（全仓 grep 零命中的证据口径）</th></tr></thead>
+    <tbody>
+      <tr><td>多模型 fallback 链</td><td><span class="tag t-gap">未落地</span></td><td>Resolver 只解析一个模型，取不到即 fail-closed；不存在「主模型失败退备选」的代码路径。属有意取舍：静默换模型会破坏成本与质量口径（换模型 = 换单价 + 换能力）</td></tr>
+      <tr><td>网关级自动重试</td><td><span class="tag t-gap">未落地（刻意）</span></td><td>重试只在 Worker 侧按 retryable 分类做；网关每次调用就是一次。理由写在 RunExecutionLoop:63-65：避免双重重试</td></tr>
+      <tr><td>模型侧熔断器</td><td><span class="tag t-gap">未落地</span></td><td>全仓唯一熔断器是 MCP 侧的 <code class="inline-code">McpCircuitBreaker</code>（见 <a href="ai-16-mcp-runtime.html#a16-7">A16.7</a>）；模型失败率治理目前靠指标观测（<a href="ai-12-observability-runbook.html#a12-7">A12.7</a> 告警）</td></tr>
+      <tr><td>Prompt 模板管理 / Registry / 版本化</td><td><span class="tag t-gap">未落地</span></td><td>grep <code class="inline-code">prompt_template|PromptTemplate|提示词模板|提示词管理</code> 零命中；DDL 无 prompt 表。系统提示实际来自 <code class="inline-code">cap_agent_def.instructions</code> 的 <code class="inline-code">inlineInstructions</code> 内联字符串，「版本」随 CAP 发布流程走（<a href="ai-05-config-governance.html#a5-7">A5.7</a>）。<strong>注意不是「完全没设计」</strong>：契约里已定义 <code class="inline-code">systemPromptRef</code> 引用式提示词库，但 V1 <strong>明确拒绝执行</strong>（fail-closed），详见 <a href="ai-19-roadmap.html#a19-1">A19.1</a></td></tr>
+    </tbody>
+  </table>
+  <p>把「没有」写清楚与把「有」写清楚同样重要：这四项是业界宣传画的常客，如果按「Agent 平台应该都有」的想象去写方案，就会重演 <a href="ai-11-cost-governance.html#a11-1">A11.1</a>「把设计稿当实现」的错误。</p>
+
+  <h3 id="a14-11">A14.11 用 Fake 网关做测试：七种故障注入与「假密钥进异常消息」的证明法</h3>
+  <p><code class="inline-code">FakeModelGateway</code> 内置 <code class="inline-code">FaultMode</code> 七态：<code class="inline-code">NONE / TIMEOUT / RATE_LIMITED / PROVIDER_ERROR / INVALID_REQUEST / UNAUTHORIZED / CONTENT_BLOCKED</code>（:30-45），与 <code class="inline-code">ModelErrorKind</code> 一一对应。两个范式级的技巧：</p>
+  <ul>
+    <li><strong>假密钥进异常消息</strong>（:84-98）：Fake 网关把 <code class="inline-code">FAKE_SECRET</code> 刻意拼进异常文案（如 <code class="inline-code">"HTTP 429 rate_limit_exceeded; api-key=sk-fake…"</code>）——若脱敏层被绕过，<code class="inline-code">ModelGatewayContractTest</code> 立刻失败。<strong>把安全属性写成可执行断言</strong>，而不是靠 code review 盯。</li>
+    <li><strong>流式路径先归一化再回放</strong>（:114-115）：故障模式在流式入口先抛归一化异常，否则回放罐头响应——保证「流式的错误分类」与「一次性调用」不分叉。</li>
+  </ul>
+  <p>TIMEOUT 模式的实现是睡到超时+500ms、由外层 <code class="inline-code">callWithTimeout</code> 中断它——测的就是超时控制本身。这套 Fake 网关配合 <a href="ai-09-quality-assurance.html">A9</a> 的两套 IT 独立库，构成「无网络、无凭据、不抖动」的 AI 测试底座。给 Java 后端的迁移提示：这等价于 WireMock 对 HTTP 的作用，但多了一层「错误分类契约」——你的 Mock 不仅要回放响应，还要回放<strong>失败形态</strong>。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-infrastructure/.../model/FakeModelGateway.java:21-115</span>；<span class="mono">platform/agent-infrastructure/src/test/.../model/ModelGatewayContractTest.java</span>。</div>
+
+  <div class="callout c-ai"><span class="ct">迁移提示：网关层的「三层收口 + 一条红线」</span><p>可复用：适配器模式收归一化/超时/观测三层、错误分类带 retryable、脱敏从字符串与对象图两面堵、能力台账未探测恒 false。必须新建的心智：<strong>异常链即泄露面</strong>（不挂 cause）、<strong>「OpenAI 兼容」≠ 语义一致</strong>（工具协议方言）、<strong>不缓存解析结果</strong>是特性不是缺陷（改完即生效）。</p></div>
+  <div class="evidence"><b>证据源：</b><span class="mono">platform/agent-application/.../modelcatalog/ModelResolver.java</span>、<span class="mono">platform/agent-ports/.../modelcatalog/ModelScenario.java</span> / <span class="mono">ModelGateway.java</span> / <span class="mono">observer/ObservableModelGateway.java</span>、<span class="mono">platform/agent-infrastructure/.../model/{Abstract,MiniMax,OpenAiCompatible,Fake}ModelGateway.java</span> / <span class="mono">CredentialRedactor.java</span> / <span class="mono">ModelCredentialProvider.java</span>、<span class="mono">platform/agent-persistence/.../JdbcModelCatalogRepository.java</span>、<span class="mono">deploy/sql/platform/01_platform_ddl.sql:5926-6020</span>、<span class="mono">platform/agent-worker/.../execute/RunExecutionLoop.java:63-65</span>。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-13-agent-memory.html"><span class="pn-label">← 上一册</span><span class="pn-title">A13 · Agent 记忆机制与跨 Run 状态</span></a>
+  <a class="pn-right" href="ai-15-streaming-sse.html"><span class="pn-label">下一册 →</span><span class="pn-title">A15 · 流式输出与前端 SSE 消费</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

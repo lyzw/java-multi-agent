@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A9 · 测试、守卫与质量保障体系 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-09-quality-assurance" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A9 · 测试、守卫与质量保障体系</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A9 · 测试、守卫与质量保障体系 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">三级验收、两套 IT 独立库、27 守卫、37 反证脚本、132 组时点与 CI 判绿口径</p>
+  <div class="ph-meta"><span>覆盖：A9.1–A9.9</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a9">
+  <div class="breadcrumb"><b>AI 专题 · A9</b> / 测试、守卫与质量保障体系</div>
+  <h2><span class="num">A9.</span> 测试、守卫与质量保障体系：从用例规模到反证工程</h2>
+  <p>第 14 章讲了排查方法论，ai-03 讲了反向验证与静默失真案例，A6 是事故库。本册把散落各处的<strong>质量保障体系本身</strong>集中成可操作清单：测试分层与规模口径、两套 IT 独立库、27 个架构/源码守卫、37 个反证脚本与 132 组撤点反证、CI 的三个假绿缺陷、护栏成熟度评估，以及 16 条独有的防假绿方法论。</p>
+  <div class="callout c-info"><span class="ct">本册与已有册的分工</span><p><a href="05-troubleshooting.html#ch14">第 14 章</a> 讲「遇到异常怎么想」，<a href="ai-03-hard-problems.html#a3-7">A3.7</a> 讲「反证是什么」，<a href="ai-06-incident-library.html">A6</a> 是案例集。本册回答的是「<strong>怎么把质量体系搭起来、怎么判绿、怎么写守卫与反证脚本</strong>」——是工程操作手册，不是事故复盘。数字全部标出处与时点，不写死。</p></div>
+
+  <h3 id="a9-1">A9.1 三级验收与规模口径</h3>
+  <p>三级验收出自 <span class="mono">docs/上下文压缩完整方案_设计与实施_v1.0.md</span> §7.3，由 <span class="mono">上下文压缩开发计划_v1.0.md</span> 行 502–508 固化为执行单：</p>
+  <table>
+    <thead><tr><th style="width:16%">级</th><th>内容</th><th>完成标志</th></tr></thead>
+    <tbody>
+      <tr><td>① 行为单测</td><td>预算 / 水位 / 合并 / 围栏 / 门禁 / 全参拷贝</td><td>用例全绿 <strong>+ 撤点变红</strong></td></tr>
+      <tr><td>② 链路 E2E</td><td>三条链路各跑一次真实编排（生产 Bean，仅替换网络出口）</td><td>压缩确实发生且事件 / 指标自动产出</td></tr>
+      <tr><td>③ 闭环</td><td>真跑一次 Run/SSE → <span class="inline-code">usage_record</span> 数字下降 → checkpoint 落库 → 下一轮复用 → 答案关键事实与未压缩版一致</td><td>四段断言全通过</td></tr>
+    </tbody>
+  </table>
+  <p><strong>规模数字必须带时点</strong>。以下是四个时点快照，权威计数口径是<strong>遍历 XML 的 <span class="inline-code">&lt;testcase&gt;</span> 元素</strong>（不用根 <span class="inline-code">&lt;testsuite tests=&gt;</span>，嵌套 / 参数化下会偏小）：</p>
+  <table>
+    <thead><tr><th>时点</th><th>platform 单测</th><th>platform IT</th><th>rag 单测</th><th>rag IT</th><th>出处</th></tr></thead>
+    <tbody>
+      <tr><td>G2 签核</td><td>3103</td><td>639（5 既有跳过）</td><td>756</td><td>65</td><td class="mono">G2验收签核包 行 221–224</td></tr>
+      <tr><td>S1-M3 收口</td><td>3110</td><td>641（5 既有跳过）</td><td>756</td><td>65</td><td class="mono">实施记录 行 782–787</td></tr>
+      <tr><td>#73</td><td>3193</td><td>641</td><td>756</td><td>65</td><td class="mono">实施记录 行 958</td></tr>
+      <tr><td><strong>最新（M10 后，11-12）</strong></td><td><strong>3209</strong></td><td><strong>641</strong></td><td><strong>756</strong></td><td><strong>65</strong></td><td class="mono">实施记录 行 958：surefire 384 文件 / 3209 / 0 失败 / 0 错误 / 0 跳过</td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">不同文档出现 3110/641、756/65、778、626 等多组数字，随提交持续变化，<strong>不写死</strong>；以当次 XML <span class="inline-code">&lt;testcase&gt;</span> 计数为准。物理规模实测：<span class="inline-code">*GuardTest.java</span> <strong>27 个</strong>（platform 22 + rag 5）、<span class="inline-code">*IT.java</span> <strong>85 个</strong>、<span class="inline-code">scripts/*counterproof*.sh</span> <strong>37 个</strong>。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">docs/集成测试（IT）运行指南.md 行 179–183 / 432–435</span><button>复制</button></div><pre><code># platform 全 reactor（CI 等价）
+cd platform
+mvn -o clean verify \
+  -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \
+  -Dit.test='*IT,!RealBrokerEndToEndIT' -Dfailsafe.failIfNoSpecifiedTests=false
+
+# rag reactor（先 source IT 环境，--reset 推倒重建）
+source scripts/rag-it-env.sh --reset
+cd rag &amp;&amp; mvn -o clean verify
+
+# 单跑某个 IT 的极简口径（反证脚本大量使用）
+-Dtest=__none__ -Dsurefire.failIfNoSpecifiedTests=false -Dit.test=XXX</code></pre></div>
+
+  <h3 id="a9-2">A9.2 IT 独立库体系：两套 reactor、两套库、两套守门写法</h3>
+  <p>这是最容易被 Java 后端低估的一环：<strong>IT 连错库 = 假绿</strong>。platform 与 rag 各有独立 IT 库，连 env 脚本的参数都不一样。</p>
+  <table>
+    <thead><tr><th style="width:18%">维度</th><th>platform</th><th>rag</th></tr></thead>
+    <tbody>
+      <tr><td>入口脚本</td><td class="mono">scripts/it-env.sh</td><td class="mono">scripts/rag-it-env.sh</td></tr>
+      <tr><td>目标库</td><td><span class="inline-code">agent_it</span>（<span class="inline-code">IT_DB</span> 可覆盖）</td><td><span class="inline-code">study_rag_it</span>（<span class="inline-code">RAG_IT_DB</span> 可覆盖）</td></tr>
+      <tr><td>关键参数</td><td><span class="inline-code">--probe</span>（连通性 + 结构自检）</td><td><strong>只支持 <span class="inline-code">--reset</span></strong>（DROP DATABASE 后重建）；<strong>无 --probe</strong></td></tr>
+      <tr><td>连接参数</td><td><span class="inline-code">IT_HOST / IT_PORT / IT_ADMIN_USER</span>（默认 ai_agent）/ <span class="inline-code">IT_DB</span></td><td><span class="inline-code">RAG_PG_CONTAINER / RAG_TEMPLATE_DB=ragdb / RAG_IT_DB / RAG_PG_HOST / RAG_PG_PORT</span></td></tr>
+      <tr><td>应用角色</td><td><span class="inline-code">IT_PG_USER=app_agent</span>（受 RLS）；<span class="inline-code">IT_PG_ADMIN_USER=ai_agent</span>（结构/夹具）</td><td><span class="inline-code">rag_it_app</span>（NOBYPASSRLS）/ <span class="inline-code">rag_it_admin</span>（BYPASSRLS，seed/清理）/ <span class="inline-code">rag_it_ops</span>（BYPASSRLS，运维）</td></tr>
+      <tr><td>结构来源</td><td><span class="mono">init-db.sh</span> 灌 <span class="mono">01_platform_ddl.sql</span>（71 表 / 44 RLS / 52 策略）</td><td><span class="mono">ragdb</span> <strong>只读 pg_dump --schema-only</strong>，不改 ragdb / study_rag</td></tr>
+      <tr><td>导出的 env</td><td><span class="inline-code">IT_PG_* + RABBITMQ_* + IT_RETENTION_*</span></td><td>9 个 <span class="inline-code">IT_RAG_*</span>（app/admin/ops 三通道各 URL/USER/PASSWORD）</td></tr>
+    </tbody>
+  </table>
+  <p><strong>守门写法的差异（13 册未区分）</strong> <span class="tag t-live">已实现</span>：platform <strong>75 个</strong> <span class="inline-code">*IT.java</span> 用类级 <span class="inline-code">@EnabledIfEnvironmentVariable(named="IT_PG_URL", matches=".+"))</span>；rag 的 <strong>4 个</strong> IT 类用 <span class="inline-code">Assumptions.assumeTrue(System.getenv("IT_RAG_PG_URL") != null)</span>（<span class="mono">rag-it-env.sh</span> 行 6）。不带环境时整类跳过：rag 基线「只有 682 单测」；配好后「10 模块 / <strong>745 testcase</strong>（682 单测 + 63 IT）/ 0 失败 / 0 错误 / <strong>0 跳过</strong>」。</p>
+  <div class="callout c-danger"><span class="ct">典型假绿：缺环境变量 → 整类跳过 → 构建全绿</span><p>Python <span class="mono">subprocess</span> 传 env 可能丢 <span class="inline-code">IT_PG_URL</span> / <span class="inline-code">IT_RAG_PG_URL</span> → <span class="inline-code">@EnabledIfEnvironmentVariable</span> / <span class="inline-code">assumeTrue</span> 全跳过 → Maven 报 BUILD SUCCESS 而<strong>一条 IT 都没跑</strong>。CI 因此硬断言 <span class="inline-code">skipped != 0 → exit 1</span>（<span class="mono">ci.yml</span> 行 301–303）：「构建绿不等于验证过」。另一个实例：缺 <span class="inline-code">IT_RETENTION_*</span> → <span class="mono">RetentionErasureIT</span> 整类挂起，20 例一条没跑，failsafe 只显示 <span class="inline-code">Skipped: 1</span>。</p></div>
+  <p><strong>四道隔离闸 + 判据反证（platform 独有）</strong> <span class="tag t-live">已实现</span>：<span class="mono">集成测试（IT）运行指南.md</span> 行 140–164 描述「建库 / 结构 / 导出变量 / 构建（surefire）」四层，最后一道 <span class="inline-code">ItTargetDatabaseIsolationTest</span> 放在 surefire（任何 IT 连库之前失败 → 给出「一条人话」而不是「五十条诡异断言」）。<span class="inline-code">ItTargetDatabase.violation/requireIsolated</span> 硬编码 <span class="inline-code">agent_dev</span>/<span class="inline-code">study_rag</span> 兜底 + 读 <span class="mono">platform.env</span> 的 <span class="inline-code">SPRING_DATASOURCE_URL</span> 交叉比对；<span class="mono">ItTargetDatabaseTest</span> 10 例反证。<strong>诚实边界</strong>：判据只做字符串比对、<strong>不连库</strong>（刻意如此，避免网络抖动假红）。</p>
+  <p><strong>共库拒绝</strong>：platform <span class="mono">it-env.sh</span> 行 111–117 目标库 == 应用库且 <span class="inline-code">IT_ALLOW_SHARED_DB != 1</span> → die；rag <span class="mono">rag-it-env.sh</span> 行 104–119 黑名单（<span class="inline-code">postgres/template*/ragdb/study_rag/agent_dev/agent_it</span>）+ 与 <span class="mono">rag.env</span> 的 <span class="inline-code">RAG_PG_URL</span> 交叉比对，<span class="inline-code">--reset</span> 只允许名字含 <span class="inline-code">it</span> 的库。</p>
+  <p><strong>造数与回收</strong>：<span class="inline-code">ItTenantProvisioner</span>（test 作用域，唯一幂等供给入口）强制 <span class="inline-code">it-</span> 前缀，连 tenant/agent/agent_version/execution_snapshot 一起建（因 <span class="inline-code">run.snapshot_id</span> 复合外键）。<strong>幂等必须靠行数钉死</strong>：<span class="inline-code">ON CONFLICT DO NOTHING</span> 不报错 ≠ 真幂等——唯一约束是 <span class="inline-code">(tenant_id, snapshot_id)</span> 而 <span class="inline-code">snapshot_id</span> 每次新随机，冲突<strong>永不发生</strong>、每轮泄漏一份租户；改为 <span class="inline-code">AND NOT EXISTS</span> 且 <span class="mono">ItTenantProvisionerIT</span> 断言<strong>行数不增长</strong>。<span class="inline-code">execution_snapshot</span> 不可删（<span class="inline-code">forbid_snapshot_mutation</span> 触发器）→ 正解是复用种子租户 <span class="inline-code">t-a</span>/<span class="inline-code">t-b</span>，断言写<strong>增量</strong>（before/after 差值）。多个 IT 在 <span class="inline-code">@BeforeAll</span> 用管理通道 purge 上一轮遗留 Run（子表 CASCADE 删、快照不动），约 20+ 处。</p>
+  <div class="callout c-warn"><span class="ct">rag 侧的「探针库 ≠ 生产库」边界</span><p><span class="mono">rag-it-env.sh</span> 行 28–36、223–244：探针刻意用 <span class="inline-code">vector(1024)</span> + <span class="inline-code">chunk_id</span> 单列唯一约束，而活库是 <span class="inline-code">halfvec(4096)</span> + <span class="inline-code">(tenant_id, chunk_id, index_generation)</span> 复合主键 → <strong>这轮 IT 不覆盖生产向量列形态与索引代际语义</strong>，是独立待办。另每次 source <span class="inline-code">TRUNCATE</span> 全部 rag 表、只留 4 行全局字典（杜绝跨轮夹具累积）；口令 <span class="mono">openssl rand</span> 缓存 <span class="mono">/tmp/rag-it-env.password</span>（0600），仓库零凭据。共享库假绿实例：<span class="inline-code">legalTransitionChainWritesAudit</span> 在共享库因同 ISBN 残留审计行让 <span class="inline-code">auditCount &gt;= 2</span> 恒真；干净隔离库暴露 <span class="inline-code">applyVerification</span> 把 ADMIT 审计一并跳过（已修）。</p></div>
+
+  <h3 id="a9-3">A9.3 架构守卫与源码守卫：27 个类守什么</h3>
+  <p>守卫是把「架构纪律」编译成测试。Java 后端要学的不只是「有哪些守卫」，更是「<strong>守卫怎么写才不失真</strong>」（A9.4）。</p>
+  <table>
+    <thead><tr><th style="width:30%">守卫类</th><th>守护对象</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">ModuleDependencyDirectionTest</td><td>模块依赖方向 4 规则：core 不依赖任何模块、ports 不认识实现、application 不依赖 infrastructure、worker/api 不直连持久层；白名单例外需登记</td></tr>
+      <tr><td class="mono">DatabaseBoundaryTest</td><td>数据库依赖只在 agent-persistence；ORM/JDBC 实现包、<span class="inline-code">java.sql.*</span>/<span class="inline-code">javax.sql.DataSource</span> 白名单；SQL 资源集中；<strong>防空转反向断言</strong>（至少扫 12 pom / 300 主源码 / 150 测试文件 / 命中 ≥10 夹具 / JDBC 文件 &gt;20）</td></tr>
+      <tr><td class="mono">AgentCorePurityTest</td><td>领域层禁 Spring/Jakarta/Hibernate/Flyway/MQ/驱动/logback，只读 JSpecify；CI 显式点名</td></tr>
+      <tr><td class="mono">ApplicationConfigKeyAlignmentTest</td><td>代码读的每个配置键必须在 yml 真实存在（防缩进挂错父键静默落默认值）；MiniMax-M2.5 点号模型名按字面键绑定</td></tr>
+      <tr><td class="mono">L2ProductionGuardTest</td><td>L2 判分骨架跨 4 模块结构红线（questionId 精确关联、不写人工标注表、成本隔离、从编排入口进），9 项全红反证</td></tr>
+      <tr><td class="mono">ScopeBypassArchitectureTest</td><td>R3 不变式（Unrestricted 唯一产出点）、接线诚实性（声明已接 Gate 必须真调钩子）、台账完整性；<strong>「定义辅助方法」不算「已接」</strong></td></tr>
+      <tr><td class="mono">AgentChatProductionGuardTest</td><td>请求级 Agent 对话跨 5 模块红线（路径 matcher / SSE 异步放行 / MATERIALIZED CTE 防 RLS 超发 / 无 Outbox / 装配）；<strong>yml 含 <span class="inline-code">http://</span> 不能 Java 扫，单独原文读取</strong></td></tr>
+      <tr><td class="mono">SchemaDriftIT（真库）</td><td>活库结构 == <span class="mono">01_platform_ddl.sql</span> 快照；RLS FORCE/ENABLE 标志、列、策略比对</td></tr>
+      <tr><td class="mono">RealBrokerEndToEndIT</td><td>真实 RabbitMQ 发布确认 → 入队 → 消费；独立测试拓扑（<span class="inline-code">.it</span> 后缀），断言生产队列深度不变、队列名 ≠ 生产名</td></tr>
+      <tr><td class="mono">McpEndpointGuardTest</td><td>SSRF 防御，端口注入两次 DNS 解析控制（DNS rebinding 不可靠时序）</td></tr>
+      <tr><td class="mono">DelegationGuardTest</td><td>委派五步闸门</td></tr>
+      <tr><td class="mono">ToolInvocationGateBudgetGuardTest / ClosureGuardTest</td><td>工具闸门预算预留 fail-closed / 能力闭包</td></tr>
+      <tr><td class="mono">AuthzDecisionLogGuardTest / AuditTamperProofGuardTest / CapEnforcementReadinessGuardTest / ApprovalReadinessGuardTest</td><td>决策日志三种「开关开着却零记录」形态；审计防篡改告警/拒启；CAP 开启未装配即失败；运行时人工审批缺口可见</td></tr>
+      <tr><td class="mono">ReviewTaskFixtureGuardTest</td><td>4 类闭环 IT 的 cleanup 必须回收 <span class="inline-code">platform.review_task</span>，<span class="mono">JdbcReviewTaskRepositoryIT</span> 断言须按 tenantId 过滤（防残留挤出 LIMIT 50 假红）</td></tr>
+      <tr><td class="mono">ModelCatalogContextCapabilityGuardTest</td><td>模型目录 5 列全链路一致（防 <span class="inline-code">ON CONFLICT DO UPDATE</span> 漏列静默覆盖）</td></tr>
+      <tr><td class="mono">ContextCompression*GuardTest（10+ 个）</td><td>S1/M3/M5b/M5c/M6/M7/M8a/M10/M13/G2 端口与事件契约冻结、白名单装配、合法键名等</td></tr>
+      <tr><td class="mono">rag 侧：ReingestDisciplineGuardTest / NestedTypeImportGuardTest / PremiseTopLevelTypeGuardTest / RagManagementControllerSentinelGuardTest / InspectionGuardTest / RagDatabaseBoundaryTest</td><td>重灌纪律 <span class="inline-code">ON CONFLICT</span> 清空 <span class="inline-code">text_jieba</span>；JDK 21.0.12 javac 嵌套类型枚举符号解析缺陷→端口/模型层禁嵌套类型；哨兵 UUID 回落已删；未过抽检不得 VERIFIED；rag 版数据库边界</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet"><span class="ct">守卫在 CI 里是「隐式执行」，不是独立 job</span><p><span class="tag t-gap">证据空白（易误解）</span> <span class="mono">grep 'GuardTest|Guard' .github/workflows/ci.yml</span> 命中 <strong>0</strong>——CI 只显式点名 <span class="inline-code">ApplicationConfigTest</span> 与 <span class="inline-code">AgentCorePurityTest</span>。其余 25 个守卫类靠 <span class="mono">mvn clean verify</span> 的 surefire 默认 includes（<span class="inline-code">*Test</span> 等）全量执行。<strong>不要以为「每个守卫在 CI 有独立可见门禁」</strong>；当前不具备。这一点与 A9.5 的 CI 假绿缺陷叠加，是需要警惕的组合。</p></div>
+
+  <h3 id="a9-4">A9.4 守卫怎么写才不失真：七条代码级纪律</h3>
+  <p>这一段是本册对 Java 后端最有迁移价值的部分。每条都有代码注释实证，不是通用建议。</p>
+  <table>
+    <thead><tr><th style="width:26%">纪律</th><th>出处与实证</th></tr></thead>
+    <tbody>
+      <tr><td><strong>① 不引用被测实现常量</strong></td><td><span class="mono">ContextCompressionM6GuardTest.java</span> 行 52–54：「本类<strong>不引用被测实现自己的常量</strong>：线格式用字面量冻结，源码用语义锚点，避免『改常量 = 改测试』的自证循环」；M3 GuardTest 行 83「与 DDL/07 脚本逐字比对的列定义（不引用被测实现常量）」。</td></tr>
+      <tr><td><strong>② <span class="inline-code">Pattern.find()</span> 取反，不用 <span class="inline-code">doesNotMatch</span></strong></td><td><span class="mono">ContextCompressionM6GuardTest.java</span> 行 56–57、485–487；<span class="mono">M8aGuardTest.java</span> 行 34、539–541：「所有『不得出现某模式』断言均用 <span class="inline-code">Pattern.find()</span> 取反，不用 AssertJ <span class="inline-code">doesNotMatch</span>（它是<strong>全串不匹配</strong>语义，长函数里恒真，是假绿源）」。</td></tr>
+      <tr><td><strong>③ <span class="inline-code">stripCommentsKeepStrings</span> 识别 char 字面量</strong></td><td><span class="mono">ContextCompressionS1GuardTest.java</span> 行 561–600：「字符字面量（如 <span class="inline-code">'"'</span> / <span class="inline-code">'\\'</span> / <span class="inline-code">'/'</span>）必须先于字符串处理：否则 <span class="inline-code">'"'</span> 会被误判为字符串起点，吞掉后续注释，守卫拿到含注释的源码 → 假绿」。</td></tr>
+      <tr><td><strong>④ yml 用 <span class="inline-code">raw()</span> 读原文</strong></td><td><span class="mono">ContextCompressionM8aGuardTest.java</span> 行 472–475；<span class="mono">AgentChatProductionGuardTest.java</span> 行 34–36：「yml 含 <span class="inline-code">http://</span> 不能用 Java 扫描器剥离，单独用原文读取」；「yml 断言用解析后的对象 → 用 <span class="inline-code">raw()</span> 读原文」。</td></tr>
+      <tr><td><strong>⑤ 防空转反向断言</strong></td><td><span class="mono">DatabaseBoundaryTest.java</span> 行 40–41、124–125、203–208、248–256；<span class="mono">ScopeBypassArchitectureTest.java</span> 行 38–40：「路径发现失败会让空集合恒绿，本项目踩过多次，故每个扫描都带『至少扫到 N 个模块/文件』的反向断言」；「每条断言都配一个反证用例：把违规代码喂给扫描器，必须变红」。</td></tr>
+      <tr><td><strong>⑥ 剥注释保留字符串</strong></td><td><span class="mono">ApplicationConfigKeyAlignmentTest.java</span> 行 277–287、384–428；<span class="mono">L2ProductionGuardTest.java</span> 行 34：「只剥注释、不剥字符串：配置键就写在字符串里」；「注释里提到某常量就会让守卫假绿」。</td></tr>
+      <tr><td><strong>⑦ 不复制第二份实现</strong></td><td><span class="mono">DatabaseBoundaryTest.java</span> 行 64–69：Java SQL 豁免只给 DB 模块 + agent-test-support，「刻意不复制第二份实现，避免租户回收纪律分裂成两套真相」。</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-info"><span class="ct">zsh / shell 的同类坑</span><p><span class="mono">scripts/it-env.sh</span> 行 32–42：zsh 取脚本路径时 <span class="inline-code">BASH_SOURCE</span> 恒空、<span class="inline-code">funcfiletrace</span> 因缺 zsh/parameter 模块不可用，唯有 prompt 转义 <span class="inline-code">%x</span> 稳定给出路径；<span class="mono">scripts/export-rls-policies.sh</span> 行 186：macOS 自带 bash 3.2 在 <span class="inline-code">set -u</span> 下 <span class="inline-code">declare -A</span> 报错，故用纯文本而非关联数组。<span class="tag t-gap">证据空白</span> 「zsh 无数组切片」的专门写法本轮未检索到明确条目，勿据传闻补写。</p></div>
+
+  <h3 id="a9-5">A9.5 反向验证（撤点反证）体系：37 脚本、中断安全与三件套</h3>
+  <p>以 <span class="mono">scripts/m3-context-policy-counterproof.sh</span>（六点反证）为标准样本，反证脚本的工程结构固定为十步：</p>
+  <div class="steps">
+    <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">撤点反证脚本标准结构（m3-context-policy-counterproof.sh）</span><button>复制</button></div><pre><code>1. 头部注释：声明要证伪的每个假绿形态 + 期望变红的测试
+2. OLD/NEW 锚点对：逐字字面量，NEW 带 // RV-M3-01 标记
+3. 备份 + trap：cp 到 /tmp；trap restore EXIT；trap 'restore; exit 130' INT TERM
+4. md5 前后比对：MD5_BEFORE=$(md5_all)
+5. 精确计数注入：Python s.count(old)，n != 1 → ANCHOR_MISMATCH exit 3
+   （多行锚点用 Python str.count，不能用 grep -cF 按行误计）
+6. clear_report：必须删旧报告，否则编译失败时读到上一次报告 → 假红/假绿
+7. run_mvn 故意不返回 mvn 码：红/绿只以「报告」判定，编译失败由「无报告」拦截
+8. expect_red / expect_green：严格匹配 Tests run: 1, Failures: 1, Errors: 0, Skipped: 0
+9. 恢复：restore()
+10. 收尾三件套：old 锚点全量计数=1 + 残留 RV 标记全无
+             + md5 复原一致 + git diff --check PASS</code></pre></div>
+  </div>
+  <p><strong>中断安全</strong> <span class="tag t-live">已实现</span>：<span class="inline-code">trap restore EXIT</span> + <span class="inline-code">trap 'restore; exit 130' INT TERM</span> 同时出现于 m3 / m8a / m8b-l2 / m8b2-checkpoint / m10-rag-quota / g2-b 六个脚本。教训出处：M10 曾被 SIGTERM/SIGINT 打断导致 <span class="inline-code">MAX_INJECT_HITS=16</span> 残留源码；<span class="mono">m10-rag-quota-counterproof.sh</span> 行 93 记录「曾导致 file2.bak 从未生成、restore 静默 ENOENT、撤点残留源码而收尾误判」→ 改为 Python 文件 IO + 备份完整性检查。</p>
+  <p><strong>判定标准</strong>：「<strong>结论不变（仍全绿）或编译失败均判无效反证</strong>」（<span class="mono">m3-...sh</span> 行 26；<span class="mono">g2-b-counterproof.sh</span> 行 20–21「编译失败不算『用例红』——它证明不了任何运行时结论」）。实例 RV-67：首版直接给 record 加组件导致测试编译失败，已改为「不破坏构造器的提前暴露 <span class="inline-code">contextState()</span> 访问器」撤点，保证编译通过、只让目标守卫红。</p>
+  <div class="callout c-warn"><span class="ct">残留标记计数不能误伤合法字面量</span><p><span class="mono">m8b-l2-assembly-counterproof.sh</span> 行 195：残留 RV 标记计数需排除守卫纪律断言里的合法字面量 <span class="inline-code">.contains("RV-M8B-0X")</span>——那是常驻代码，不是残留。另 <span class="mono">g2-b-counterproof.sh</span> 行 26–33 硬编码绝对路径 <span class="mono">ROOT=/Users/zhouwei/...</span>，可移植性注意点。</p></div>
+  <p><strong>132 组时点快照</strong>（<span class="tag t-live">文档证据</span>，13 册尚未写入「132」）：</p>
+  <table>
+    <thead><tr><th>时点</th><th>累计</th><th>构成</th><th>出处</th></tr></thead>
+    <tbody>
+      <tr><td>影子报告 A.3</td><td><strong>100</strong></td><td>S1 14 + M5 28 + M6 36 + M13 8 + #38 4 + M10 10</td><td class="mono">影子对照零差异报告 行 225</td></tr>
+      <tr><td>实施记录 §11.4（ADR D47）</td><td><strong>120</strong></td><td>115 + G2-b 3 + G2-c 2（未含 M3 6）</td><td class="mono">实施记录 行 709</td></tr>
+      <tr><td>G2 签核 §5.4 / ADR D47</td><td><strong>126</strong></td><td>上 100 + M7 15 + G2-b 3 + G2-c 2 + S1-M3 6</td><td class="mono">G2验收签核包 行 242–256</td></tr>
+      <tr><td><strong>最新（M10 六点后，11-12）</strong></td><td><strong>132</strong></td><td>126 + S3-M10 6（RV-201~210 属 M10 10 组中的六点新增批次，见实施记录行 9）</td><td class="mono">实施记录 行 9</td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">100 / 120 / 126 / 132 是<strong>不同撰写时点的快照，不是矛盾</strong>；引用必须带时点与出处。分组逐一出处：<span class="mono">G2验收签核包</span> 行 246–256。反证脚本实例还有 <span class="mono">g2-c-replay-counterproof.sh</span>、<span class="mono">m8a/m8b/m8b2/m10</span> 系列、<span class="mono">counterproof-p4d13.sh</span>/<span class="mono">p4d15.sh</span>、<span class="mono">rag-corpus-scope-counterproof.sh</span>（49KB，只读）、<span class="mono">rag-dict-scope-counterproof.sh</span>、<span class="mono">authz-join-fk-counterproof.sh</span>。<span class="tag t-gap">证据空白</span> 仓库无 <span class="inline-code">*rv*.py</span> / <span class="inline-code">*-rv-*.py</span> 文件，实际是 37 个 <span class="inline-code">scripts/*-counterproof*.sh</span> + 25 个 <span class="mono">scripts/doc-c*.py</span>（文档门禁回写脚本）。</p>
+
+  <h3 id="a9-6">A9.6 CI 与判绿口径：三个必红/假绿缺陷</h3>
+  <p><span class="mono">.github/workflows/ci.yml</span> 行 10–14 首部注释如实记录三个「从未在 Runner 上真实运行过」的缺陷：</p>
+  <table>
+    <thead><tr><th style="width:20%">缺陷</th><th>机理</th><th>修复</th></tr></thead>
+    <tbody>
+      <tr><td>a) <span class="inline-code">mvn | tee</span> 吞退出码</td><td>默认 shell <span class="inline-code">bash -e {0}</span> 无 pipefail，退出码取自 tee（恒 0）。实测 <span class="inline-code">bash -e -c 'false | tee /tmp/x; echo $?'</span> → <strong>0</strong></td><td>两处加 <span class="inline-code">set -o pipefail</span>（行 74、254）</td></tr>
+      <tr><td>b) unit job 无库必红</td><td>29 项装配测试装配完整 Spring 上下文启动即查 tenant 表（空库报 <span class="inline-code">relation "tenant" does not exist</span>）</td><td>4 类加 <span class="inline-code">@EnabledIfEnvironmentVariable(IT_PG_URL)</span>，只到 <span class="mono">mvn clean package</span></td></tr>
+      <tr><td>c) integration job 无 broker 必红</td><td><span class="mono">RealBrokerEndToEndIT</span> 无跳过门禁，无 broker → 3 ERROR</td><td><span class="inline-code">-Dit.test='*IT,!RealBrokerEndToEndIT'</span>，同时排除 <span class="mono">MessagingCanaryWiringTest</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger"><span class="ct">a + c 叠加 = 界面全绿而构建实际是坏的</span><p><span class="mono">项目进度台账.md</span> 行 257–260：「broker IT 报错本应拖垮构建，但 tee 吞掉退出码 → 步骤转绿；随后的断言又因『781 项都跑了、0 跳过』通过 → <strong>CI 界面全绿而构建实际是坏的</strong>……第 13 次，且发生在专门为拆穿假绿而写的脚本里」。</p></div>
+  <p><strong>判绿口径清单</strong>（逐条可操作）：</p>
+  <ul>
+    <li>真绿定义：<span class="inline-code">Tests run: N, Failures: 0, Errors: 0, Skipped: 0</span>，<strong>不是 BUILD SUCCESS</strong>。</li>
+    <li><span class="inline-code">skipped != 0 → exit 1</span>（<span class="mono">ci.yml</span> 行 301–303）。</li>
+    <li>执行数下限：低于实测基线 1289（单测 872 + IT 417）→ 判环境退步；下限设 <strong>1000</strong> 留余量（行 305–312）。「不是『代码变好了所以测得少』」。</li>
+    <li>XML <span class="inline-code">&lt;testcase&gt;</span> 计数，不用根 <span class="inline-code">&lt;testsuite tests=&gt;</span>（<span class="mono">G2验收签核包</span> 行 215–217）。</li>
+    <li><strong>CI-4 断言失真</strong>：台账行 262–266「<span class="inline-code">skipped</span> 的 grep 未锚定行尾，把逐类明细行与模块汇总行重复计数——实测无库场景：未锚定 <strong>366</strong> vs 真实 <strong>180</strong>（虚高一倍）」→ 修复用 <span class="inline-code">grep -oE "... Skipped: [0-9]+$"</span> 锚定行尾（行 85、292）。</li>
+    <li><strong><span class="inline-code">-Dtest</span> 纯排除陷阱</strong>：<span class="mono">ci.yml</span> 行 262–276「<span class="inline-code">-Dtest='!MessagingCanaryWiringTest'</span>（纯排除）会让 surefire 扫描集合从『默认 includes』退化成『全部类』→ 38 个 <span class="inline-code">*IT</span> 被拉进单元测试阶段，<span class="mono">RealBrokerEndToEndIT</span> 当场 3 ERROR，failsafe 根本没跑（绿但没跑）」。实测对照：纯排除扫到 38 个 *IT / 432 项 / 3 ERROR；带正向模式扫到 0 个 *IT / 141 项 / 0 ERROR。正解：<span class="inline-code">-Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest'</span>。</li>
+    <li>门禁 job 用 <span class="inline-code">needs.&lt;job&gt;.result</span> 判定，<strong>不能</strong>用 <span class="inline-code">job.status</span>（后者读本 job 自身状态，永远显示「通过」，<span class="mono">P1-10_重估门禁结论.md</span> 行 68 的 Sev-1 缺陷 4）。</li>
+    <li>不带 <span class="inline-code">-am</span> 找不到符号（Maven 单模块从本地仓库取依赖 jar）；不带 <span class="inline-code">clean</span> 时陈旧报告假红（先清 <span class="mono">*/target/{surefire,failsafe}-reports</span> 再跑）。</li>
+  </ul>
+  <p><strong>CI 未覆盖（诚实登记）</strong>：<span class="mono">ci.yml</span> 行 16–18「P4-D17 消息通道默认走 database（PG 队列）→ 本 CI 不需要 RabbitMQ service……broker 端到端（E-1/E-2/E-3）<strong>仍不在 CI 覆盖范围内</strong>」；<span class="mono">集成测试（IT）运行指南.md</span> 行 299–307 要求台账记为「未覆盖」，不能因为「CI 绿了」就当作 broker 链路没问题。<span class="tag t-gap">证据空白</span> CI 从未在真实 Runner 上跑过（本地等价执行 ≠ Runner 实跑）；jacoco 覆盖率数字无有效来源（台账行 302「两种说法均已作废」）。</p>
+
+  <h3 id="a9-7">A9.7 护栏设计评估：11 层防线、成熟度 B- 与红队死代码</h3>
+  <p>两份评估文档（均 2026-10-30，<span class="tag t-doc">评估文档</span>，含源码 file:line 证据）：</p>
+  <div class="grid2">
+    <div class="card"><h4>《护栏设计评估报告.md》</h4><p>11 层防线（Layer 0 配置期静态守卫 <span class="inline-code">PublishGuards V1-V10</span> → Layer 9 输出质量 <span class="inline-code">HallucinationDetector</span>）；七条统一原则（Fail-Closed / 纵深防御 / 配置期 vs 运行期分离 / 枚举原因码 / 单调性约束 / 不可绕过 / 公共实现唯一化）。发现 <strong>13 个问题</strong>：Sev-0/1 五个（<span class="inline-code">PromptGuard.sanitize</span> 黑名单绕过、<span class="inline-code">flatten()</span> 数据丢失、<span class="inline-code">detectSuspicious</span> 在 sanitize 后匹配、<span class="inline-code">safeRender</span> 无循环引用、<span class="inline-code">IdempotencyGuard IN_FLIGHT</span> 悬挂无恢复）+ Sev-2 五个 + Sev-3 三个。总体：「Fail-Closed 原则贯彻彻底，没有发现 fail-open 路径」。</p></div>
+    <div class="card"><h4>《护栏设计综合评估文档2.md》</h4><p>一句话结论：「骨架与纪律是一流水准，但<strong>三处默认态缺位</strong>（能力闭环默认关闭、BYPASSRLS 静默绕过 RLS、零保留闸门硬编码 SYNTHETIC）将其从『生产可用』拉回『演示可用』」。成熟度按层：L0 B- / L1 C / L2 C+ / L3 A- / L4 B- / 横切纪律 A；<strong>整体 B-（偏下）——设计分 A，默认生效分 C</strong>。对照主流：执行控制类 ≥ 主流，内容安全类 D~C+，是代差维度。</p></div>
+  </div>
+  <div class="callout c-warn"><span class="ct">红队测试验的是死代码——最隐蔽的假绿</span><p><span class="mono">护栏设计综合评估文档2.md</span> 行 63、162：「R-7 验证的 <span class="inline-code">wrapToolResult</span> 在生产主路径<strong>无调用方</strong>，真实走 <span class="inline-code">ToolOutcomeRenderer.outcomeText</span> 仅加自然语言前缀 + 8000 字符截断——<strong>测试验证的是死代码</strong>」；「P1-2……删除/改写 R-7 死代码测试覆盖 <span class="inline-code">ToolOutcomeRenderer</span>」。这是 A3「功能空转」的极致形态：<strong>测试全绿、守卫全绿，但被测代码根本不在生产路径上</strong>。Java 后端迁移时必须建立的反向检查：「这个被测试的方法，生产链路真的调用了它吗？」</p></div>
+  <p><strong>fail-closed 门禁（已实现）</strong>：<span class="inline-code">CapEnforcementReadinessGuard</span>（开启却未装配执行流即失败）、<span class="inline-code">AuthzDecisionLogGuard</span>（开开关无记录器 / 零行写入探测失败 → 拒启）、<span class="inline-code">AuditTamperProofGuard</span>（应用角色能删审计 → 告警或拒启）、<span class="inline-code">ApprovalReadinessGuard</span>（缺口日志可见）。<strong>运行期灰度门禁（仅脚本 / 设计，未自动化执行）</strong>：<span class="mono">scripts/cap-enable-global.sh</span>「绝不自动翻转任何开关……真正动作必须由运维手动执行」，前置 P1 三段灰度全绿 + P3 全局 <span class="inline-code">AUTHZ_MISMATCH</span> 连续 24h=0，开启后 24h 观察全租户 <span class="inline-code">cap_authz_mismatch_total=0</span>、工具可用率偏差 &lt;1%。</p>
+  <p><strong>未闭环</strong>：P0-1/2/3、P1-1/2/3/4 均列在修复路线图，验收标准写了但<strong>未标记已完成</strong>；P2-2 审计「不可篡改」依赖可自设 GUC <span class="inline-code">agent.retention.actor</span>；P3-2 <span class="mono">PlatformDdl.java</span> 行 15–17「迁移链已删、快照带外恢复，CI 无活库 == 快照比对」（此点部分被 <span class="mono">SchemaDriftIT</span> 补上，但 CI 未接入活库）。<span class="tag t-gap">证据空白</span> 两份评估报告提出的 sanitize 白名单 / <span class="inline-code">flatten()</span> 重写 / 原始文本匹配 / 循环引用检测 / 悬挂恢复等方案，与护栏报告 13 个问题的<strong>逐项闭环映射查不到</strong>。</p>
+
+  <h3 id="a9-8">A9.8 十三条独有方法论增量（13 册未写入 / 未系统呈现）</h3>
+  <p>这是本册最「可迁移」的部分：每条都是从真实事故中提炼、且带代码级证据的验证方法。</p>
+  <table>
+    <thead><tr><th style="width:6%">#</th><th style="width:24%">方法论</th><th>要点与出处</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>IT 四道隔离闸 + 判据反证</td><td>建库/结构/导出变量/构建四层，最后一道放 surefire（任何 IT 连库前失败 → 一条人话）；判据只做字符串比对、不连库（网络抖动会假绿）。<span class="mono">集成测试（IT）运行指南.md</span> 行 140–164</td></tr>
+      <tr><td>2</td><td>双写守门注解写法差异</td><td>platform <span class="inline-code">@EnabledIfEnvironmentVariable</span>（75 类）vs rag <span class="inline-code">Assumptions.assumeTrue</span>（4 类）；13 册统一讲前者，未区分</td></tr>
+      <tr><td>3</td><td>「幂等」由行数不增长钉死</td><td><span class="inline-code">ON CONFLICT DO NOTHING</span> 不报错 ≠ 真幂等（唯一约束含随机 snapshot_id，冲突永不发生）；<span class="mono">ItTenantProvisionerIT</span> 断言行数不增长</td></tr>
+      <tr><td>4</td><td>双凭据隔离 + <span class="inline-code">@BeforeAll</span> 身份断言</td><td><span class="mono">RetentionErasureIT</span>：应用池验「删不了」、清理池验「删得对」；<span class="inline-code">@BeforeAll</span> 断言两侧身份「防清理池其实连成应用角色」；缺凭据即拒启</td></tr>
+      <tr><td>5</td><td>「可写 / 在写 / 开启」三类证明不可互替</td><td><span class="inline-code">AuthzDecisionLogGuard</span> 用零行写入探测（<span class="inline-code">INSERT…SELECT…WHERE FALSE</span>）证「可写」而非 <span class="inline-code">has_table_privilege</span>（对列漂移无感）；库 owner 回读整行证「在写」；影子期时长证「开启」</td></tr>
+      <tr><td>6</td><td>同义反复是假绿第一来源</td><td>首版用「查询绑定租户」当行租户传给 <span class="inline-code">TaintVerifier</span>（比的是「打算查谁 vs 打算查谁」，恒不违例）；正解「行租户必须从结果行读出 <span class="inline-code">rs.getString("tenant_id")</span>，主体与行归属分离」+ 真实 <span class="inline-code">RuleBasedPolicyEngine</span> 回归（主体 A + 行 B 必须违例）</td></tr>
+      <tr><td>7</td><td>能力存在 ≠ 生效（装配守卫）</td><td><span class="mono">AuthzShadowConfiguration</span> 单开关语义（存在即开、不存在即关，刻意不做双开关防「半开静默失效」）；<span class="mono">AuthzShadowWiringTest</span> 无 DB 验 5 仓私有字段真被填；<span class="mono">ShadowPolicyCoverageTest</span> 钩子 resourceType 未登记即红（防恒定 <span class="inline-code">NO_RULE</span> 假 mismatch）</td></tr>
+      <tr><td>8</td><td>SQL 语法/列解析必须在活库实证</td><td>影子单测用 <span class="inline-code">NoConnectDataSource</span> 测不到 SQL 语法；P5 把 4 条改动 SQL 在 <span class="mono">agent_dev</span>（<span class="inline-code">app_agent</span>，<span class="inline-code">BEGIN…PREPARE…ROLLBACK</span> 零写入）做解析校验输出 <span class="inline-code">ALL_PREPARE_OK</span>；J3 首版 <span class="inline-code">MAX(av.tenant_id)::text</span> 活库报 <span class="inline-code">function max(uuid) does not exist</span></td></tr>
+      <tr><td>9</td><td>采样率 0.1% 盲区与确定性分桶</td><td>0.1% 在「(主体,资源)×300s 一桶」下单组合约 <strong>100 小时</strong>才采到一次，两月观察期小流量租户一次没被看过却读数 <span class="inline-code">AUTHZ_MISMATCH=0</span>；正解确定性分桶（可复现）+ 窗口滚动（长期覆盖）+ 高敏清单 100%</td></tr>
+      <tr><td>10</td><td>影子对照「零差异」可证伪口径</td><td>6 维定义（请求字节同一对象引用字段逐字不变 / 请求构造零压缩接线 / 观测者只读 / 不多发事件不多扣 token / 行为指标为空 / 开关独立）；<strong>G1 放行 ≠ 构建绿</strong>；覆盖边界诚实标注（SSE/Console 走结构证据不声称过校准桥，守卫将来接上就红强制升级口径）</td></tr>
+      <tr><td>11</td><td>inode 校验</td><td>8080 运行进程持有旧 jar（inode 与磁盘 exec jar 不一致）连远程 RDS <span class="mono">agent_dev</span>，误判「端点/功能缺失」；<strong>联调前核对 inode 与构建时间线，必要时重启对齐；401/404 不作功能结论</strong></td></tr>
+      <tr><td>12</td><td>反证分层形同虚设的三层判定</td><td>① 注入是否真的发生 → ② 注入是否打在保证不变量的<strong>全部</strong>机制上 → ③ 断言是否真有判别力。只验第①层会漏后两层；实例 A-2 原 sed 模式行首 <span class="inline-code">ORDER BY</span> 匹配失败（注入从未发生）；修好后仍绿（全序由排序键+游标谓词两处共同保证，只破坏一处恒真）</td></tr>
+      <tr><td>13</td><td>单模块与全 reactor 的库状态差异</td><td>「单模块跑会改变库状态，进而改变其它 IT 结果」：<span class="mono">MessagingSwitchGuardIT.refusesWhenDatabaseHasResidual</span> 前置「DB 队列里确有残留」，单跑 platform-bootstrap 条件不满足→失败；全 reactor 顺序跑（agent-infrastructure 先跑留下残留）→通过。<strong>不是测试不稳定，是「测试之间共享数据库状态」的事实</strong></td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-info"><span class="ct">还有三条同源纪律（已散布在 A3 / 第 14 章）</span><p>① <strong>临时库清理不能绕过不变量</strong>：一次性测试库若必须清理，只能在该库上用 <span class="inline-code">session_replication_role = replica</span>，<strong>绝不改动产品 schema 或触发器</strong>；② <strong>非特权真库 IT</strong>：CI 创建 <span class="inline-code">app_agent NOSUPERUSER NOBYPASSRLS</span>，整段 GRANT 放一个事务（任意一条失败连带回滚全部，表现为「授权数=0」却无明显报错），15 项约束校验用 <span class="inline-code">app_agent</span>；③ <strong>影子对照零差异</strong>的完整 6 维口径见 <a href="ai-03-hard-problems.html#a3-7">A3.7</a>。</p></div>
+
+  <h3 id="a9-9">A9.9 未找到证据 / 无法确认，以及提交前质量清单</h3>
+  <div class="callout c-info"><span class="ct">测试的写法细节在 A17</span><p>本册讲体系（三级验收、守卫清单、反证体系、CI 判绿口径、成熟度评估）。<strong>一个测试具体该怎么写</strong>——Fake 网关七态故障注入、假密钥证明脱敏、契约矩阵、IT 独立库守门写法、源码守卫的适用边界——见 <a href="ai-17-test-engineering.html">A17</a>。</p></div>
+  
+  <p><strong>证据空白（严格单列，不推测）</strong> <span class="tag t-gap">证据空白</span></p>
+  <ul>
+    <li><span class="inline-code">*rv*.py</span> / <span class="inline-code">*-rv-*.py</span> 实体文件全仓查不到；实际是 37 个 <span class="inline-code">scripts/*-counterproof*.sh</span> + 25 个 <span class="mono">scripts/doc-c*.py</span>。</li>
+    <li><span class="inline-code">*guard*.sh</span> 查不到；守卫是 27 个 Java 测试类，shell 侧只有 <span class="mono">cap-gray-*</span> / <span class="mono">cap-enable-global.sh</span> 等运行期灰度门禁脚本。</li>
+    <li>CI 对 27 个守卫的显式门禁查不到（只点名 2 个，其余靠 surefire 默认 includes）。</li>
+    <li>护栏评估 BUG-1..5 修复方案的代码落地情况查不到（方案级，未逐项核实与 13 个问题的闭环映射）。</li>
+    <li>表数期望值冲突：<span class="mono">集成测试（IT）运行指南.md</span> 行 393–394 说期望 <strong>66 表</strong>（public 46 + platform 20，「2026-11-03 已修」），而 <span class="mono">scripts/it-env.sh</span> 行 190 与 <span class="mono">init-db.sh</span> 行 147–149 是 <strong>71 表 / 44 RLS / 52 策略</strong>（11-08/11-12 追加后）。<strong>以当前脚本值 71/44/52 为准</strong>；指南的 66 是历史快照。</li>
+    <li>rag 侧 <span class="inline-code">--probe</span> 参数查不到（只支持 <span class="inline-code">--reset</span>）；<span class="inline-code">--probe</span> 是 platform 专有。</li>
+    <li>jacoco 覆盖率数字查不到有效来源；CI 在真实 Runner 的运行记录查不到（本地等价执行 ≠ Runner 实跑）。</li>
+  </ul>
+  <p><strong>提交前质量清单</strong>（把本册落成动作，与 <a href="05-troubleshooting.html#ch17">第 17 章</a> 的通用清单互补）：</p>
+  <div class="checklist">
+    <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">A9 质量保障提交前核对（结合 A9.1–A9.8）</span><button>复制</button></div><pre><code>□ 全 reactor clean verify：XML &lt;testcase&gt; 计数达标；Failures=0 Errors=0 Skipped=0
+□ IT 环境：platform source it-env.sh（含 --probe）；rag source rag-it-env.sh（--reset）
+□ 断言 skipped=0；执行数不低于实测基线（否则判环境退步，不判「代码变好」）
+□ 管道命令带 set -o pipefail；-Dtest 用正向模式 + 排除，不用纯排除
+□ 新增守卫：不引用被测实现常量；含防空转反向断言；"不得出现"用 Pattern.find() 取反
+□ yml 断言用 raw() 原文；剥注释保留字符串（含 char 字面量识别）
+□ 反证脚本：trap restore EXIT + INT/TERM；多行锚点用 Python str.count
+□ 反证后三件套：old 锚点计数=1 + 残留 RV 标记全无 + md5 复原 + git diff --check
+□ 反证判定：结论仍全绿或编译失败 → 判无效反证，重做撤点
+□ 跨进程契约：按对端真实校验取值，不用假 server 的宽松桩（revisionCode="" 事故）
+□ 生产路径核对：被守卫/测试覆盖的方法，在编排入口真的有调用方（红队死代码）
+□ 库隔离：IT 库 ≠ 应用库；非特权角色 app_agent / rag_it_app 实测；不用 BYPASSRLS 假绿
+□ 结构变更：01 终态 + 02 种子 + 活库 ALTER；同步 init-db.sh EXPECT 与 it-env.sh --probe
+□ 时点核对：运行 jar inode == 磁盘 jar；401/404 不作功能结论；文档数字带日期与出处</code></pre></div>
+  </div>
+  <div class="evidence"><b>证据源：</b><span class="mono">docs/集成测试（IT）运行指南.md</span>、<span class="mono">docs/上下文压缩完整方案_设计与实施_v1.0.md</span> §7.3、<span class="mono">docs/上下文压缩开发计划_v1.0.md</span>、<span class="mono">docs/上下文压缩G2验收签核包_v1.0.md</span>、<span class="mono">docs/上下文压缩实施记录_v1.0.md</span>、<span class="mono">docs/上下文压缩影子对照零差异报告_v1.0.md</span>、<span class="mono">审查文档/护栏设计评估报告.md</span>、<span class="mono">审查文档/护栏设计综合评估文档2.md</span>、<span class="mono">.github/workflows/ci.yml</span>、<span class="mono">scripts/it-env.sh</span> / <span class="mono">rag-it-env.sh</span> / 37 个 <span class="mono">*counterproof*.sh</span>，以及 27 个 <span class="mono">*GuardTest.java</span> 源码注释。</div>
+  <div class="callout c-ai"><span class="ct">迁移提示：把「测试」升级为「证据工程」</span><p>传统 Java 后端的验收往往止于「单测覆盖率 + CI 绿」。本项目的教训是：<strong>CI 绿可能吞了退出码、IT 可能一条没跑、守卫可能在验死代码、反证可能只是注入失败或编译失败、文档数字可能是三个版本前的快照</strong>。可复用的是 JUnit / Mockito / Maven reactor；必须新建立的是「<strong>每一条结论都要有可证伪的证据链</strong>」——判绿看 XML <span class="inline-code">&lt;testcase&gt;</span> 且 <span class="inline-code">skipped=0</span>，架构纪律写成守卫，修复点写成撤点反证，运维开关写成 fail-closed 门禁。<strong>这不是多写代码，是让「绿」这个词重新有意义。</strong></p></div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-08-data-governance.html"><span class="pn-label">← 上一册</span><span class="pn-title">A8 · 数据源权威性与合规治理</span></a>
+  <a class="pn-right" href="ai-10-quality-evaluation.html"><span class="pn-label">下一册 →</span><span class="pn-title">A10 · 对话质量评估、判定与归因体系</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

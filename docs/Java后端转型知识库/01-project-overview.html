@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第一篇 · 认识项目 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="01-project-overview" data-ai="0">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">第一篇 · 认识项目</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">基础六篇 · 分册</div>
+  <h1>第一篇 · 认识项目</h1>
+  <p class="ph-sub">项目全景、技术架构、目录与模块地图（第 1–3 章）</p>
+  <div class="ph-meta"><span>覆盖：第 1–3 章</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<div class="part-divider" id="part1">
+  <div class="pn">第一篇 · 认识项目</div>
+  <h2>先建立全局地图，再谈配置</h2>
+  <p>第 1–3 章：业务定位、技术架构、目录与模块。回答「这是什么系统、由几个进程组成、代码放在哪」。</p>
+</div>
+
+<!-- ==================== 第 1 章 ==================== -->
+
+<section class="chapter" id="ch1">
+  <div class="breadcrumb"><b>第一篇</b> / 第 1 章</div>
+  <h2><span class="num">1.</span> 项目全景：业务、边界与进程拓扑</h2>
+
+  <h3 id="ch1-1">1.1 业务定位与首期场景</h3>
+  <p>项目是一个<strong>面向初中生错题归因与个性化辅导场景的企业级、多租户、可审计、可恢复的 Java SaaS Agent 平台</strong>（<span class="inline-code">docs/业务架构图.md</span> / <span class="inline-code">docs/系统架构图.md</span>）。业务上分成两个平面：</p>
+  <div class="grid2">
+    <div class="card"><h4>租户平面（Tenant Control Plane）</h4><p>学生 / 家长 / 教师提交「题目文本 + 解题过程 + 已知正确答案」，Agent 读取学习画像 → 归因分析 → 生成讲解 → 记录薄弱点 → 返回结构化结果。这是 P0-D00 定义的首个业务场景 <strong>BR-01</strong>。</p><p>首期只有两个工具：<span class="inline-code">get_student_profile</span>（只读）与 <span class="inline-code">record_weakness</span>（唯一有副作用工具，幂等键为 <span class="inline-code">student_id + run_id + knowledge_point</span>）。</p></div>
+    <div class="card"><h4>平台平面（Platform Control Plane）</h4><p><span class="inline-code">admin-console</span> 是独立的控制面：独立主体、独立令牌域（<span class="inline-code">aud=admin-console-api</span>）、独立授权域与 <span class="inline-code">platform</span> schema，而不是「拥有全租户权限的超级租户控制台」。管理租户、平台用户/角色、Agent / Tool / Skill / MCP 能力目录、模型目录、审计与语料治理。</p></div>
+  </div>
+  <div class="callout c-warn">
+    <span class="ct">明确不做的事（避免误读需求）</span>
+    <p><span class="inline-code">docs/P0/P0/P0-D00_决策基线与业务场景定义.md</span> 与 SRS 明确排除<strong>作业批改与自动打分</strong>（涉及评分公平性与申诉链路）与<strong>实时在线辅导</strong>；主平台 DEC-5 原本「首期不纳入 RAG」，RAG 子项目是对该决策的重审（<span class="inline-code">rag/docs/RAG-D00_决策基线与范围边界.md</span>）。库中确有名为 <span class="inline-code">assignment-copilot</span> 的 Agent，但文档并未把它定义为作业批改打分能力 <span class="tag t-unknown">未确认：其确切业务语义</span>。</p>
+  </div>
+
+  <h3 id="ch1-2">1.2 系统与进程拓扑</h3>
+  <p>最需要扭转的第一印象是：<strong>这不是一个 Spring Boot 应用，而是两个互相独立的 Maven reactor、多个进程、两套数据库、两个前端工程</strong>。</p>
+  <div class="figure">
+  <svg viewBox="0 0 940 470" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,Segoe UI,sans-serif">
+    <defs>
+      <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#1d4ed8"/></marker>
+      <marker id="ar2" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#0f766e"/></marker>
+    </defs>
+    <rect x="8" y="8" width="924" height="196" rx="10" fill="#f7f9fc" stroke="#dfe5ee"/>
+    <text x="22" y="30" font-size="12" font-weight="700" fill="#173a8f">浏览器（两个独立前端工程）</text>
+    <rect x="26" y="44" width="250" height="60" rx="7" fill="#e8effd" stroke="#c6d9fb"/>
+    <text x="40" y="66" font-size="13" font-weight="700" fill="#173a8f">frontend · Vite :5173</text>
+    <text x="40" y="87" font-size="11.5" fill="#4b5563">租户前台：辅导台 / 知识检索 / 对话</text>
+    <rect x="296" y="44" width="270" height="60" rx="7" fill="#e2f4f0" stroke="#bfe3da"/>
+    <text x="310" y="66" font-size="13" font-weight="700" fill="#0b5d56">admin-console · Vite :5180 /admin</text>
+    <text x="310" y="87" font-size="11.5" fill="#4b5563">平台控制台：Antd 5 / RAG 语料治理</text>
+    <rect x="586" y="44" width="320" height="60" rx="7" fill="#fff5dc" stroke="#f0dca6"/>
+    <text x="600" y="66" font-size="12.5" font-weight="700" fill="#6d4a05">Vite devServer 代理（顺序敏感）</text>
+    <text x="600" y="87" font-size="11.5" fill="#4b5563">/api/v1 → 8081　必须先于　/api → 8080</text>
+    <rect x="26" y="120" width="880" height="66" rx="7" fill="#ffffff" stroke="#dfe5ee"/>
+    <text x="40" y="143" font-size="12" font-weight="700" fill="#1f2937">HTTP / SSE / multipart（同源转发；后端 cors.disable()，禁止独立域名直连）</text>
+    <text x="40" y="167" font-size="11.5" fill="#4b5563">SSE：平台链 /api/agent/chat/stream；租户链 /api/knowledge/agent/chat/stream；Run 事件 /api/runs/{id}/events</text>
+
+    <rect x="8" y="218" width="560" height="238" rx="10" fill="#f7f9fc" stroke="#dfe5ee"/>
+    <text x="22" y="240" font-size="12" font-weight="700" fill="#173a8f">platform reactor（cn.studykid.multiagent · 13 模块）</text>
+    <rect x="26" y="252" width="245" height="66" rx="7" fill="#e8effd" stroke="#c6d9fb"/>
+    <text x="40" y="274" font-size="13" font-weight="700" fill="#173a8f">platform-bootstrap :8080</text>
+    <text x="40" y="295" font-size="11.5" fill="#4b5563">REST / SSE / 组合根 / 内嵌 Worker</text>
+    <rect x="291" y="252" width="253" height="66" rx="7" fill="#ffffff" stroke="#dfe5ee"/>
+    <text x="305" y="274" font-size="12.5" font-weight="700" fill="#1f2937">PG 17 · agent_dev</text>
+    <text x="305" y="295" font-size="11.5" fill="#4b5563">事实源 + Outbox + DB 表队列 + RLS</text>
+    <rect x="26" y="330" width="245" height="60" rx="7" fill="#ffffff" stroke="#dfe5ee"/>
+    <text x="40" y="352" font-size="12.5" font-weight="700" fill="#1f2937">RabbitMQ 4.3.6 :5672</text>
+    <text x="40" y="372" font-size="11.5" fill="#4b5563">Quorum Queue / 手动 ack / delivery-limit=3</text>
+    <rect x="291" y="330" width="253" height="60" rx="7" fill="#ffffff" stroke="#dfe5ee"/>
+    <text x="305" y="352" font-size="12.5" font-weight="700" fill="#1f2937">模型网关 / MCP / 工具 SPI</text>
+    <text x="305" y="372" font-size="11.5" fill="#4b5563">MiniMax 等 OpenAI 兼容端点</text>
+    <text x="26" y="414" font-size="11.5" fill="#6b7280">默认消息通道 = database（agent_message_queue）；RabbitMQ 是可选双通道</text>
+    <text x="26" y="438" font-size="11.5" fill="#6b7280">JWT：租户域 aud=agent-platform　｜　平台域 aud=admin-console-api</text>
+
+    <rect x="584" y="218" width="348" height="238" rx="10" fill="#f7f9fc" stroke="#dfe5ee"/>
+    <text x="598" y="240" font-size="12" font-weight="700" fill="#0b5d56">rag reactor（cn.studykid.rag · 10 模块）</text>
+    <rect x="600" y="252" width="310" height="60" rx="7" fill="#e2f4f0" stroke="#bfe3da"/>
+    <text x="614" y="274" font-size="13" font-weight="700" fill="#0b5d56">rag-bootstrap :8081</text>
+    <text x="614" y="295" font-size="11.5" fill="#4b5563">/api/v1/retrieval + /api/v1/management</text>
+    <rect x="600" y="324" width="310" height="60" rx="7" fill="#ffffff" stroke="#dfe5ee"/>
+    <text x="614" y="346" font-size="12.5" font-weight="700" fill="#1f2937">rag-worker（无 Web 容器）</text>
+    <text x="614" y="367" font-size="11.5" fill="#4b5563">@Scheduled + SKIP LOCKED 轮询入库</text>
+    <rect x="600" y="396" width="310" height="48" rx="7" fill="#ffffff" stroke="#dfe5ee"/>
+    <text x="614" y="416" font-size="12" font-weight="700" fill="#1f2937">PG 17 + pgvector · study_rag</text>
+    <text x="614" y="435" font-size="11.5" fill="#4b5563">schema rag / halfvec(4096) / 独立 RLS</text>
+
+    <line x1="470" y1="285" x2="596" y2="285" stroke="#1d4ed8" stroke-width="2" marker-end="url(#ar)"/>
+    <text x="476" y="277" font-size="11" fill="#1d4ed8">HttpRagRetrievalGateway</text>
+    <line x1="596" y1="345" x2="596" y2="345" stroke="#0f766e" stroke-width="2"/>
+    <path d="M700 324 L700 316" stroke="#0f766e" stroke-width="2" marker-end="url(#ar2)"/>
+    <text x="710" y="315" font-size="11" fill="#0f766e">共享库</text>
+    <path d="M760 396 L760 388" stroke="#0f766e" stroke-width="2" marker-end="url(#ar2)"/>
+  </svg>
+  <div class="cap">图 1-1　进程与服务拓扑（依据 application.yml、vite.config.ts、各启动类与 scripts/dev-*.sh 绘制）</div>
+  </div>
+
+  <h3 id="ch1-3">1.3 端口与服务清单</h3>
+  <table>
+    <thead><tr><th>组件</th><th>端口 / 地址</th><th>证据</th><th>备注</th></tr></thead>
+    <tbody>
+      <tr><td>platform-bootstrap</td><td class="mono">8080</td><td class="mono">platform.env.example / dev-backend.sh</td><td>application.yml 内<strong>无</strong> server.port 段，由环境变量提供</td></tr>
+      <tr><td>rag-bootstrap</td><td class="mono">8081</td><td class="mono">rag/rag-bootstrap/.../application.yml</td><td><span class="inline-code">${RAG_SERVER_PORT:8081}</span></td></tr>
+      <tr><td>本地 PG（platform）</td><td class="mono">127.0.0.1:5433</td><td class="mono">scripts/dev-postgres.sh</td><td>容器 <span class="inline-code">agent-pg17</span>，镜像 postgres:17，trust 认证</td></tr>
+      <tr><td>本地 RabbitMQ</td><td class="mono">5672 / 15672</td><td class="mono">scripts/dev-rabbitmq.sh</td><td>vhost <span class="inline-code">agent</span>，管理台 15672</td></tr>
+      <tr><td>RAG 本地 PG 容器</td><td class="mono">rag-pg-s2（动态端口）</td><td class="mono">scripts/rag-it-env.sh</td><td>宿主端口由 <span class="inline-code">docker port</span> 读取；<span class="tag t-unknown">未确认：该容器的创建脚本</span></td></tr>
+      <tr><td>frontend / admin-console</td><td class="mono">5173 / 5180</td><td class="mono">各 vite.config.ts</td><td>admin-console 部署 base 为 <span class="inline-code">/admin/</span></td></tr>
+      <tr><td>Docling 解析服务</td><td class="mono">127.0.0.1:5001</td><td class="mono">deploy/docling/docker-compose.yml</td><td>独立容器，仅绑定本机</td></tr>
+      <tr><td>Prometheus / Grafana</td><td class="mono">9090 / 3000</td><td class="mono">monitoring/docker-compose.yml</td><td>Grafana 有 16 面板质量看板</td></tr>
+      <tr><td>E2E 演练临时进程</td><td class="mono">8091 / 8092</td><td class="mono">scripts/e2e-index-generation.sh</td><td>bootstrap / worker 临时实例</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch1-4">1.4 三组容易混淆的「双」</h3>
+  <table>
+    <thead><tr><th>维度</th><th>A 侧</th><th>B 侧</th><th>不能混用的原因</th></tr></thead>
+    <tbody>
+      <tr><td>Maven reactor</td><td><span class="inline-code">platform/</span>（13 模块，<span class="inline-code">cn.studykid.multiagent</span>）</td><td><span class="inline-code">rag/</span>（10 模块，<span class="inline-code">cn.studykid.rag</span>）</td><td>各自独立 <span class="inline-code">clean verify</span>，禁止互塞代码（ADR-011 / C12）</td></tr>
+      <tr><td>数据库</td><td><span class="inline-code">agent_dev</span>（public + platform 两域，71 表 / 44 RLS 表 / 52 策略）</td><td><span class="inline-code">study_rag</span>（schema rag，11 表 / 35 策略，halfvec(4096)）</td><td>库不同、角色不同；<span class="inline-code">platform.env</span> 与 <span class="inline-code">rag.env</span> 绝不能互相 source</td></tr>
+      <tr><td>前端</td><td><span class="inline-code">frontend/</span>（租户前台，无 UI 组件库）</td><td><span class="inline-code">admin-console/</span>（平台控制台，Antd 5，base /admin）</td><td>登录端点、令牌域、会话键、RAG 作用域头都不同</td></tr>
+    </tbody>
+  </table>
+  <div class="xref">交叉引用：reactor 模块清单见 <a href="#ch3-2">§3.2</a> / <a href="#ch3-3">§3.3</a>；数据库结构口径见 <a href="02-environment-config.html#ch6-2">§6.2</a>；令牌域与执行票证见 <a href="#ch2-4">§2.4</a>；前端代理顺序见 <a href="02-environment-config.html#ch7-5">§7.5</a>。</div>
+</section>
+
+<!-- ==================== 第 2 章 ==================== -->
+
+<section class="chapter" id="ch2">
+  <div class="breadcrumb"><b>第一篇</b> / 第 2 章</div>
+  <h2><span class="num">2.</span> 技术架构：六边形、事实源与五条链路</h2>
+
+  <h3 id="ch2-1">2.1 六边形分层与依赖方向</h3>
+  <p>两个 reactor 都采用<strong>端口-适配器（六边形）架构</strong>：依赖永远指向中心，<span class="inline-code">agent-core</span> 是纯领域对象、零框架依赖（不 import Spring）；<span class="inline-code">agent-ports</span> 定义接口；<span class="inline-code">agent-infrastructure</span> / <span class="inline-code">agent-persistence</span> 提供实现；<span class="inline-code">platform-bootstrap</span> 是唯一的组合根，决定容器里装哪些 Bean。</p>
+  <div class="figure">
+  <svg viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+    <defs><marker id="a3" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#1d4ed8"/></marker></defs>
+    <g>
+      <rect x="20" y="30" width="150" height="58" rx="7" fill="#e8effd" stroke="#c6d9fb"/><text x="34" y="54" font-size="13" font-weight="700" fill="#173a8f">agent-api</text><text x="34" y="75" font-size="11" fill="#4b5563">Controller / DTO / SSE</text>
+      <rect x="20" y="112" width="150" height="58" rx="7" fill="#e8effd" stroke="#c6d9fb"/><text x="34" y="136" font-size="13" font-weight="700" fill="#173a8f">agent-worker</text><text x="34" y="157" font-size="11" fill="#4b5563">执行循环 / 闸门</text>
+      <rect x="20" y="194" width="150" height="46" rx="7" fill="#ffffff" stroke="#dfe5ee"/><text x="34" y="222" font-size="12" fill="#4b5563">platform-bootstrap（装配）</text>
+      <rect x="215" y="30" width="160" height="58" rx="7" fill="#e2f4f0" stroke="#bfe3da"/><text x="229" y="54" font-size="13" font-weight="700" fill="#0b5d56">agent-application</text><text x="229" y="75" font-size="11" fill="#4b5563">用例编排 / 策略</text>
+      <rect x="215" y="112" width="160" height="58" rx="7" fill="#e2f4f0" stroke="#bfe3da"/><text x="229" y="136" font-size="13" font-weight="700" fill="#0b5d56">agent-context</text><text x="229" y="157" font-size="11" fill="#4b5563">纯算法压缩层</text>
+      <rect x="215" y="194" width="160" height="46" rx="7" fill="#ffffff" stroke="#dfe5ee"/><text x="229" y="222" font-size="12" fill="#4b5563">agent-routing 规则引擎</text>
+      <rect x="420" y="70" width="170" height="80" rx="7" fill="#f0eafe" stroke="#d9c9f7"/><text x="434" y="98" font-size="13.5" font-weight="700" fill="#5b21b6">agent-ports</text><text x="434" y="120" font-size="11" fill="#4b5563">107 个顶层接口</text><text x="434" y="138" font-size="11" fill="#4b5563">中性 DTO / 端口契约</text>
+      <rect x="635" y="70" width="170" height="80" rx="7" fill="#fff5dc" stroke="#f0dca6"/><text x="649" y="98" font-size="13.5" font-weight="700" fill="#6d4a05">agent-core</text><text x="649" y="120" font-size="11" fill="#4b5563">RunState / TenantContext</text><text x="649" y="138" font-size="11" fill="#4b5563">ScopeFilter / EffectiveClosure</text>
+      <rect x="420" y="194" width="385" height="46" rx="7" fill="#ffffff" stroke="#dfe5ee"/><text x="434" y="222" font-size="12" fill="#4b5563">agent-infrastructure（非 DB 适配）→ agent-persistence（唯一 JDBC / Flyway / Hikari 边界）</text>
+    </g>
+    <line x1="172" y1="59" x2="211" y2="59" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a3)"/>
+    <line x1="172" y1="141" x2="211" y2="141" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a3)"/>
+    <line x1="377" y1="59" x2="416" y2="85" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a3)"/>
+    <line x1="377" y1="141" x2="416" y2="125" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a3)"/>
+    <line x1="592" y1="110" x2="631" y2="110" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a3)"/>
+    <line x1="635" y1="130" x2="592" y2="130" stroke="#0f766e" stroke-width="2" stroke-dasharray="4 3"/>
+    <text x="612" y="164" font-size="10.5" fill="#0f766e">实现方向（适配器 → 端口）</text>
+    <text x="420" y="26" font-size="11.5" fill="#6b7280">依赖方向（外层 → 中心），由 ModuleDependencyDirectionTest / DatabaseBoundaryTest 静态守卫</text>
+  </svg>
+  <div class="cap">图 2-1　platform reactor 的分层与依赖方向（示意，模块清单以 §3.2 为准）</div>
+  </div>
+  <div class="callout c-ok">
+    <span class="ct"><span class="tag t-reuse">可直接复用</span> 但边界更严</span>
+    <p>分层与 Spring 的依赖注入、接口与实现分离、配置类装配你都熟悉。这里的差别是<strong>边界由测试强制</strong>：<span class="inline-code">ModuleDependencyDirectionTest</span> 检查倒流、<span class="inline-code">DatabaseBoundaryTest</span> 检查 <span class="inline-code">java.sql.*</span> / <span class="inline-code">org.springframework.jdbc.*</span> / Hikari 只许出现在 persistence 模块、<span class="inline-code">AgentCorePurityTest</span> 检查领域层零框架依赖。写错 import 会在构建期变红，而不是 Code Review 时才被指出。</p>
+  </div>
+
+  <h3 id="ch2-2">2.2 PostgreSQL 是唯一事实源：Outbox + 租约 + Worker</h3>
+  <p>架构文档里写得最重的一条原则：「<strong>PostgreSQL 是任务状态的权威事实来源；MQ 只负责唤醒和分发</strong>」；「Run 与 Outbox 事件在同一数据库事务中提交」（<span class="inline-code">docs/系统架构图.md</span> / <span class="inline-code">docs/P0/P2/P2-D02_Outbox发布与MQ消费.md</span>）。</p>
+  <ol>
+    <li>API 创建 Run 时，在<strong>同一个事务</strong>里写 <span class="inline-code">run</span> 行 + <span class="inline-code">outbox_event</span> 行。若「先落库再发 MQ」，进程在两者之间崩溃会造成<strong>任务永久丢失且无任何报错</strong>。</li>
+    <li><span class="inline-code">OutboxRelay</span> 按租户驱动 <span class="inline-code">OutboxPublisher</span>，把待发消息推到消息通道；发布器在发送前还会复核消息里的 <span class="inline-code">tenantId</span> 是否与自己绑定的租户一致（第二道防线）。</li>
+    <li>消息<strong>只携带</strong> <span class="inline-code">tenant_id + run_id + message_id</span>，不携带可信权限与任务状态；Worker 领取后必须<strong>回数据库重读</strong>。</li>
+    <li>领取靠租约 + <strong>fencing token</strong> 防脑裂；崩溃恢复由 <span class="inline-code">RunRecoverySweeper</span> 接管过期 RUNNING；UNKNOWN 状态走对账而非盲目重放。</li>
+    <li>代价是<strong>至少一次投递</strong>，因此消费端必须幂等；终态后禁止补 attempt。</li>
+  </ol>
+  <p>消息通道有两条，默认 <span class="inline-code">agent.messaging.mode=database</span>（PG 表 <span class="inline-code">agent_message_queue</span>），可切到 RabbitMQ；<span class="inline-code">agent.mq.*</span> 定义 quorum 队列与死信。两条通道都要求按 <strong>eventType 分流</strong>（<span class="inline-code">EventRoutedMessageHandler</span> → <span class="inline-code">TraceCollectMessageHandler</span>），否则采集事件会被当成执行事件，把已终态的 Run 重跑 — 这是项目登记过的 Sev-0 级风险。</p>
+
+  <h3 id="ch2-3">2.3 租户隔离：RLS 与正在进行的迁移</h3>
+  <p>数据库侧 44 张表启用（并 FORCE）行级安全，52 条策略形如 <span class="inline-code">tenant_id = current_tenant_id()</span>，函数读取会话变量 <span class="inline-code">app.tenant_id</span>。应用侧的连接由 <span class="inline-code">TenantSessionBinder</span> 在<strong>事务内、业务 SQL 之前</strong>用 <span class="inline-code">set_config(..., true)</span> 绑定，事务结束自动失效，避免连接池串租户。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">platform/agent-persistence/.../persistence/TenantSessionBinder.java</span><button>复制</button></div><pre><code>/** 与 DDL 中 current_tenant_id() 读取的键名保持一致。 */
+public static final String SESSION_VAR = "app.tenant_id";
+private static final String SQL_SET_TENANT =
+        "SELECT set_config('" + SESSION_VAR + "', ?, true)";   // is_local=true：事务局部
+
+public static void bind(@NonNull Connection connection, @NonNull TenantContext context)
+        throws SQLException {
+    try (PreparedStatement ps = connection.prepareStatement(SQL_SET_TENANT)) {
+        ps.setString(1, context.tenantId());
+        ps.execute();
+    }
+}</code></pre></div>
+  <p>同时项目正在把行级隔离的「唯一权威」从 RLS 谓词逐步迁移到应用层的 <span class="inline-code">ScopeFilter</span>（四种形态：<span class="inline-code">TenantWithShared</span> / <span class="inline-code">TenantOnly</span> / <span class="inline-code">Unrestricted</span> / fail-closed 的 <span class="inline-code">None()</span>），双写期纪律是「RLS 一条策略都不许动，应用层过滤全部加在 RLS 之内取交集」。</p>
+  <div class="callout c-warn">
+    <span class="ct"><span class="tag t-conflict">文档冲突</span> 迁移状态要以代码为准</span>
+    <p><span class="inline-code">docs/developer-onboarding.md</span> 写的是「用应用层 ScopeFilter <strong>替换</strong> PG RLS 谓词」，属于目标态描述；据项目进度台账，RLS→应用层迁移仍在进行中，尚有相当数量 <span class="inline-code">Jdbc*Repository</span> 未接入 Gate，出口条件是 <span class="inline-code">rlsDependent()</span> 归零，而不是 <span class="inline-code">AUTHZ_MISMATCH=0</span>。 <span class="tag t-unknown">未确认：当前精确剩余数量需现场核对</span>。详见 <a href="05-troubleshooting.html#ch16-8">§16.8 案例</a>。</p>
+  </div>
+
+  <h3 id="ch2-4">2.4 双身份域与执行票证</h3>
+  <table>
+    <thead><tr><th>项</th><th>租户域</th><th>平台域</th></tr></thead>
+    <tbody>
+      <tr><td>令牌 audience</td><td class="mono">agent-platform</td><td class="mono">admin-console-api</td></tr>
+      <tr><td>签发密钥</td><td class="mono">JWT_PRIVATE_KEY</td><td class="mono">PLATFORM_JWT_PRIVATE_KEY</td></tr>
+      <tr><td>登录端点</td><td class="mono">POST /api/auth/token</td><td class="mono">POST /api/platform/v1/auth/login</td></tr>
+      <tr><td>账号表</td><td class="mono">public.principal（受 RLS）</td><td class="mono">platform.platform_user（无租户、无 RLS）</td></tr>
+      <tr><td>前端会话键</td><td>frontend/auth/session.tsx</td><td class="mono">sessionStorage['admin-console.platform.session']</td></tr>
+    </tbody>
+  </table>
+  <p>平台令牌打租户域端点必然 401 — 这是 <span class="inline-code">JwtTokenService</span> 对 <span class="inline-code">aud</span> 的硬比对，<strong>不要为了页面能跑而放宽</strong>。合法通道是平台侧签发的<strong>短时执行票证</strong>（<span class="inline-code">platform.security.execution-ticket.*</span>，TTL 60 秒），四道闸门：平台权限 → 配置开关 → 按目标租户限流 → 租户/成员状态与角色交集。响应体里的 <span class="inline-code">code</span> 就是审计表的 <span class="inline-code">reason_code</span>，可直接反查 <span class="inline-code">platform.platform_audit_event</span>。</p>
+
+  <h3 id="ch2-5">2.5 五条执行链路与请求级 SSE</h3>
+  <p>上下文压缩方案把运行形态分成 L1 异步 Worker / <strong>L2 请求级 SSE</strong> / L3 控制台直连 / L4 子 Agent / L5 语义路由。请求级 SSE 有两条链：</p>
+  <ul>
+    <li><strong>平台链</strong> <span class="inline-code">/api/agent/chat/stream</span>（可下发 thinking）；<strong>租户链</strong> <span class="inline-code">/api/knowledge/agent/chat/stream</span>（恒丢 thinking、禁带 tenantId）。</li>
+    <li>不写 Outbox、不发 MQ；审计 <span class="inline-code">begin()</span> 写 RUNNING，<span class="inline-code">finish()</span> 按 fencing token 收敛，影响行数 ≠ 1 必须抛异常。</li>
+    <li>RAG 命中经 <span class="inline-code">PromptGuard.wrapToolResult("rag", …)</span> 作为 <strong>user 消息</strong>注入，绝不进 systemPrompt。</li>
+    <li>SSE v1.1 冻结 14 个事件，新增第 14 事件 <span class="inline-code">context.checkpoint</span>，线序 <span class="inline-code">answer → usage → context.checkpoint? → done</span>；<span class="inline-code">done</span> 是应用层终帧。客户端 carry-over 状态默认不落库，用独立 HMAC 校验（<span class="inline-code">AGENT_CONTEXT_STATE_HMAC_KEY</span>，绝不复用 JWT 私钥）。</li>
+  </ul>
+  <div class="xref">交叉引用：完整 Run 生命周期见 <a href="04-runtime-flows.html#ch11">第 11 章</a>；SSE 与压缩链路见 <a href="04-runtime-flows.html#ch12">第 12 章</a>；协议事件字典出处见 <a href="06-reference.html#ch19">第 19 章</a>。</div>
+
+  <h3 id="ch2-6">2.6 贯穿全项目的设计原则</h3>
+  <table>
+    <thead><tr><th>原则</th><th>在这项目里的具体含义</th><th>违反后的典型症状</th></tr></thead>
+    <tbody>
+      <tr><td>fail-closed</td><td>配置缺失、策略解析不到、能力未知、凭据缺失时<strong>拒绝</strong>而非放行；<span class="inline-code">ScopeFilter.None()</span> 恒假返回 0 行</td><td>「静默放行」或「静默 0 行」，功能空转却不报错</td></tr>
+      <tr><td>Run 创建期快照固化</td><td>能力闭包、配置、上下文策略在建 Run 时钉死成 <span class="inline-code">execution_snapshot</span>；发布引用必须 <span class="inline-code">id@version</span>，禁止 latest 漂移</td><td>发布后旧 Run 行为漂移、无法复现</td></tr>
+      <tr><td>闭包只收紧不扩张</td><td>能力目录解析不到的对象抛 <span class="inline-code">ClosureResolutionException</span>；委派不授权限，每跳重新授权</td><td>越权工具调用</td></tr>
+      <tr><td>平台级对象带外运维</td><td>平台域用独立 <span class="inline-code">platform_ops</span> 通道；应用层不提供创建超级管理员端点</td><td>把 BYPASSRLS 角色当业务账号用 → 租户隔离被关掉</td></tr>
+      <tr><td>无物理删除端点</td><td>清理走保留期与状态收敛；风险事件只存 detailDigest</td><td>审计链断裂</td></tr>
+      <tr><td>指标低基数</td><td>标签用代码级白名单；<span class="inline-code">run_id/user_id/student_id</span> 等高基数标签注册即抛异常；明细走日志、聚合走指标</td><td>Prometheus 基数爆炸 / 日志泄漏个人信息</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ==================== 第 3 章 ==================== -->
+
+<section class="chapter" id="ch3">
+  <div class="breadcrumb"><b>第一篇</b> / 第 3 章</div>
+  <h2><span class="num">3.</span> 目录结构与模块地图</h2>
+
+  <h3 id="ch3-1">3.1 仓库根目录</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">仓库根（节选，非完整清单）</span><button>复制</button></div><pre><code>java-multi-agent/
+├── platform/                 # reactor A：13 个 Maven 模块，cn.studykid.multiagent
+├── rag/                      # reactor B：10 个 Maven 模块，cn.studykid.rag
+├── frontend/                 # 租户前台：React 18 + TS 5 + Vite 6，:5173
+├── admin-console/            # 平台控制台：React 18 + Antd 5 + Vite 6，:5180 /admin
+├── deploy/
+│   ├── sql/                  # 库结构与种子的唯一权威源（01→02→03→04）
+│   └── docling/              # Docling 解析服务 compose + Python 分块桥
+├── scripts/                  # 环境、建库、构建、IT、反证、灰度、巡检（约 95 个文件）
+├── monitoring/               # Prometheus + Grafana（16 面板质量看板）
+├── docs/                     # 主平台设计 / ADR / 门禁 / 复盘（约 203 个 md）
+├── rag/docs/                 # RAG-D00 ~ RAG-D26（27 份）
+├── 问题记录/                  # 13 类、207 条三段式问题记录
+├── 审查文档/                  # AI 全流程审查 / 修复 / 护栏评估
+├── platform.env(.example)    # 8080 运行态配置（真实文件 0600，被忽略）
+├── rag.env(.example)         # 8081 运行态配置
+└── jwt.env(.example)         # 跨进程 JWT 密钥对（脚本生成，0600）</code></pre></div>
+  <p><span class="tag t-unknown">未确认</span> 仓库根<strong>没有</strong> <span class="inline-code">README.md</span>、<span class="inline-code">Makefile</span>、根级 <span class="inline-code">docker-compose.yml</span> 或独立的 <span class="inline-code">CONTRIBUTING.md</span>；compose 仅存在于 <span class="inline-code">monitoring/</span> 与 <span class="inline-code">deploy/docling/</span>。工程规范分散在 <span class="inline-code">docs/P0/P1/P1-D10_工程基线与本地开发手册.md §6</span> 等文档中。</p>
+
+  <h3 id="ch3-2">3.2 platform reactor：13 个模块</h3>
+  <table>
+    <thead><tr><th>模块</th><th>定位</th><th>你应该在这里找什么</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">agent-core</td><td>纯领域层</td><td><span class="inline-code">RunState</span>、<span class="inline-code">TenantContext</span>、<span class="inline-code">ScopeFilter</span>、<span class="inline-code">CapAgentDef</span>、<span class="inline-code">ConfigRelease</span></td></tr>
+      <tr><td class="mono">agent-routing</td><td>规则转发引擎（纯函数）</td><td><span class="inline-code">RoutingEngine</span>、<span class="inline-code">PolicyCodec</span>、<span class="inline-code">PublishGuards</span>；唯一引入 re2j 防 ReDoS</td></tr>
+      <tr><td class="mono">agent-ports</td><td>端口契约（107 个顶层接口）</td><td><span class="inline-code">RunCreationPort</span>、<span class="inline-code">MessageSender</span>、<span class="inline-code">ModelGateway</span>、<span class="inline-code">RequestAssemblyPort</span>、<span class="inline-code">AgentChatEvent</span></td></tr>
+      <tr><td class="mono">agent-context</td><td>上下文压缩纯算法层</td><td><span class="inline-code">CompactionPipeline</span>(W1/W2/W3)、<span class="inline-code">ContextBudget</span>、<span class="inline-code">RagHitQuota</span>、<span class="inline-code">ContextAssembler</span></td></tr>
+      <tr><td class="mono">agent-test-support</td><td>跨模块测试支撑件</td><td><span class="inline-code">ItTenantProvisioner</span>、<span class="inline-code">ItTargetDatabase</span>、<span class="inline-code">PlatformDdl</span>、§9 场景注册表</td></tr>
+      <tr><td class="mono">agent-application</td><td>用例编排 / 应用策略</td><td><span class="inline-code">RunCreationService</span>、<span class="inline-code">ConfigPublishService</span>、<span class="inline-code">L1/L2AttributionEvaluator</span>、<span class="inline-code">PromptGuard</span></td></tr>
+      <tr><td class="mono">agent-infrastructure</td><td>非数据库基础设施适配</td><td><span class="inline-code">MiniMaxModelGateway</span>、<span class="inline-code">JwtTokenService</span>、<span class="inline-code">RabbitMessageSender</span>、<span class="inline-code">HttpRagRetrievalGateway</span></td></tr>
+      <tr><td class="mono">agent-persistence</td><td><strong>唯一</strong>数据库访问边界</td><td>约 45+ 个 <span class="inline-code">Jdbc*Repository</span>、三套 Hikari 数据源、<span class="inline-code">TenantSessionBinder</span>、<span class="inline-code">PgQueueRepository</span></td></tr>
+      <tr><td class="mono">agent-memory</td><td>跨 Run 记忆（纯领域）</td><td><span class="inline-code">MemoryRecallService</span>、<span class="inline-code">MemoryConsolidator</span></td></tr>
+      <tr><td class="mono">agent-infra</td><td>检索引擎（G3，草稿期）</td><td><span class="inline-code">RetrievalService</span>、<span class="inline-code">VectorSearchEngine</span>；POM 自述为占位实现</td></tr>
+      <tr><td class="mono">agent-worker</td><td>执行引擎</td><td><span class="inline-code">RunExecutionLoop</span>、<span class="inline-code">ToolInvocationGate</span>、<span class="inline-code">OutboxPublisher</span>/<span class="inline-code">OutboxRelay</span>、<span class="inline-code">AgentChatOrchestrator</span></td></tr>
+      <tr><td class="mono">agent-api</td><td>HTTP / SSE 入口</td><td><span class="inline-code">RunController</span>、<span class="inline-code">RunEventStreamer</span>、<span class="inline-code">AgentChatController</span>、<span class="inline-code">SecurityConfiguration</span> 相关控制器</td></tr>
+      <tr><td class="mono">platform-bootstrap</td><td>启动与装配（组合根）</td><td><span class="inline-code">PlatformApplication</span>、<span class="inline-code">ApplicationConfiguration</span>、<span class="inline-code">WorkerLoopConfig</span>、<span class="inline-code">application.yml</span></td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">⚠️ <span class="inline-code">agent-infra</span> 与 <span class="inline-code">agent-infrastructure</span> 是<strong>两个不同模块</strong>，前者是 G3 检索引擎，后者是非数据库适配层。reactor 顺序按依赖拓扑显式排列，见 <span class="inline-code">platform/pom.xml &lt;modules&gt;</span>。</p>
+
+  <h3 id="ch3-3">3.3 rag reactor：10 个模块</h3>
+  <table>
+    <thead><tr><th>模块</th><th>定位</th><th>代表类 / 事实</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">rag-core</td><td>领域层（零框架）</td><td><span class="inline-code">Chunk</span>、<span class="inline-code">ChunkRole</span>、<span class="inline-code">Citation</span>、<span class="inline-code">EditionCoordinate</span>（版本五轴）、<span class="inline-code">TrustTier</span></td></tr>
+      <tr><td class="mono">rag-ports</td><td>端口定义（顶层类型）</td><td><span class="inline-code">CorpusRepository</span>、<span class="inline-code">EmbeddingPort</span>、<span class="inline-code">DocumentParserPort</span>；类注释说明顶层化是为规避 JDK 21 javac 符号解析缺陷</td></tr>
+      <tr><td class="mono">rag-premise</td><td>物料前期处理</td><td><span class="inline-code">PremisePreprocessor</span>、<span class="inline-code">HeadingHierarchyChunker</span>、<span class="inline-code">HybridChunkerClient</span>；明确不依赖 Spring/Jackson</td></tr>
+      <tr><td class="mono">rag-application</td><td>应用层</td><td><span class="inline-code">IngestionPipeline</span>、<span class="inline-code">IngestJobOrchestrator</span>、<span class="inline-code">RetrievalOrchestrator</span>（检索七步）、<span class="inline-code">GroundedGenerationService</span></td></tr>
+      <tr><td class="mono">rag-infrastructure</td><td>非 DB 适配</td><td><span class="inline-code">OpenAiCompatibleEmbeddingPort</span>、<span class="inline-code">DoclingDocumentParserPort</span>、<span class="inline-code">LocalPortGate</span>、<span class="inline-code">ChineseTokenizer</span></td></tr>
+      <tr><td class="mono">rag-persistence</td><td>唯一 DB 边界（跨 4 个顶层包）</td><td><span class="inline-code">JdbcRetrievalRepository</span>（稠密 + 词法 + RRF）、<span class="inline-code">VectorColumn</span>、<span class="inline-code">RagStartupSelfCheck</span>、<span class="inline-code">LocalObjectStoreAdapter</span></td></tr>
+      <tr><td class="mono">rag-worker</td><td>入库与索引 Worker</td><td><span class="inline-code">RagWorkerApplication</span>（<span class="inline-code">@EnableScheduling</span>）、<span class="inline-code">IngestJobConsumer</span>（PG <span class="inline-code">FOR UPDATE SKIP LOCKED</span> 轮询）</td></tr>
+      <tr><td class="mono">rag-api</td><td>检索面 REST</td><td><span class="inline-code">RagRetrievalController</span>：<span class="inline-code">POST /api/v1/retrieval</span> 与 <span class="inline-code">/generate</span></td></tr>
+      <tr><td class="mono">rag-management</td><td>语料管理面 REST</td><td><span class="inline-code">RagManagementController</span>（约 43 个端点，上传 / 预览 / 校对 / 审核 / 代际 / 字典）</td></tr>
+      <tr><td class="mono">rag-bootstrap</td><td>HTTP 启动与装配</td><td><span class="inline-code">RagApplication</span>、<span class="inline-code">RagJwtAuthFilter</span>（纯 JDK RS256 验签）、<span class="inline-code">application.yml</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn">
+    <span class="ct">三个「看起来像、其实不是」的技术选型</span>
+    <p>① <strong>没有独立向量库 Java 依赖</strong>：pgvector 是 PG 扩展，通过 SQL 的 <span class="inline-code">&lt;=&gt;</span> 算子与 <span class="inline-code">?::halfvec</span> cast 使用。② <strong>rag 侧零 MQ</strong>：入库任务靠 PG <span class="inline-code">FOR UPDATE SKIP LOCKED</span> 轮询 + <span class="inline-code">@Scheduled</span>，主平台已有 RabbitMQ，刻意不引入第二套。③ <strong>没有 cross-encoder 重排器</strong>：代码里的「重排」是 RRF 融合分排序 + 版本惩罚；<span class="inline-code">bge-reranker-v2-m3</span> 选型已定但尚未接入 <span class="tag t-conflict">文档冲突：RAG-D05 记「RRF 未实现」，与代码不符</span>。</p>
+  </div>
+
+  <h3 id="ch3-4">3.4 支撑目录与测试分布</h3>
+  <table>
+    <thead><tr><th>目录</th><th>内容</th><th>使用时机</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">deploy/sql/platform|rag/</td><td>01 DDL 终态快照 / 02 种子 / 03 角色授权 / 04 运维角色；另有 07_* 等<strong>活库幂等 ALTER</strong></td><td>建库、结构变更、跨环境对齐</td></tr>
+      <tr><td class="mono">scripts/</td><td>dev-* 环境、init-db / *-it-db / *-it-env、*-counterproof.sh 反证、cap-gray-* 灰度、check-* 巡检</td><td>几乎每一步操作都有对应脚本</td></tr>
+      <tr><td class="mono">docs/、rag/docs/</td><td>ADR / 架构图 / 阶段计划 / 门禁签核包 / 实测报告</td><td>理解「为什么」，注意历史滞后</td></tr>
+      <tr><td class="mono">问题记录/、审查文档/</td><td>13 类问题三段式记录、护栏与全流程审查报告</td><td>排查时按症状反查同类事故</td></tr>
+      <tr><td class="mono">platform/*/target/{surefire,failsafe}-reports/</td><td>单测 / IT 的 XML 与 txt 报告</td><td>判绿口径是 XML 的 <span class="inline-code">&lt;testcase&gt;</span> 计数，不是控制台汇总行</td></tr>
+    </tbody>
+  </table>
+  <p>命名约定：<span class="inline-code">XxxTest.java</span> 由 surefire 执行（默认 include 不含 <span class="inline-code">*IT</span>），<span class="inline-code">XxxIT.java</span> 由 failsafe 在 <span class="inline-code">integration-test</span> / <span class="inline-code">verify</span> 阶段执行。platform 侧实测有 81 个 <span class="inline-code">*IT.java</span>，其中 57 个集中在 <span class="inline-code">agent-persistence</span>、22 个在 <span class="inline-code">platform-bootstrap</span>。IT 用 <span class="inline-code">@EnabledIfEnvironmentVariable(named="IT_PG_URL", matches=".+")</span> 守门，<strong>无库时整类跳过而不是失败</strong>——这是「假绿」的高发点，见 <a href="05-troubleshooting.html#ch14-5">§14.5</a>。</p>
+  <div class="xref">交叉引用：目录树与模块职责在 <a href="03-java-skill-transfer.html#ch8">第 8 章</a> 会被翻译成「从 Java 后端经验迁移」的对照表；配置与脚本的逐项说明见 <a href="02-environment-config.html#ch4">第 4 章</a> 起。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="index.html"><span class="pn-label">← 上一册</span><span class="pn-title">总入口 · 学习路径</span></a>
+  <a class="pn-right" href="02-environment-config.html"><span class="pn-label">下一册 →</span><span class="pn-title">第二篇 · 环境与配置</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

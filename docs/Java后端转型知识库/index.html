@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>总入口 · 学习路径 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="index" data-ai="0">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">总入口 · 学习路径</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">知识库总入口</div>
+  <h1>总入口 · 学习路径</h1>
+  <p class="ph-sub">知识库导航、阅读路径、证据约定与维护说明</p>
+  <div class="ph-meta"><span>覆盖：第 0 章 / 知识库索引</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<header id="cover">
+  <div class="eyebrow">KNOWLEDGE BASE · v2.4 · 多文件版 · 面向有 Java 后端经验的工程师</div>
+  <h1>Java 后端转型知识库</h1>
+  <p class="sub">从「写 CRUD 服务」到「配置并维护多租户 Agent 编排平台」：基础六篇 + AI 专题十六册，可离线检索、逐册打印</p>
+  <div class="meta-grid">
+    <div class="meta-card"><div class="k">仓库快照日期</div><div class="v">2026-11-12</div></div>
+    <div class="meta-card"><div class="k">代码基线</div><div class="v mono">HEAD 306f114</div></div>
+    <div class="meta-card"><div class="k">技术基线</div><div class="v">Java 21 / Spring Boot 4.1.1 / PG 17</div></div>
+    <div class="meta-card"><div class="k">事实来源</div><div class="v">仓库源码 / 配置 / 脚本 / ADR / 实施记录</div></div>
+  </div>
+  <div class="callout c-info">
+    <span class="ct">这套知识库解决什么问题</span>
+    <p>你已经会 Spring Boot、JPA/MyBatis、MySQL、REST 接口与单元测试。但在这个仓库里，「启动一个服务」涉及两套 Maven reactor、两套数据库、三个角色体系、一份跨进程 JWT 密钥、若干 fail-closed 开关；「测试全绿」也不等于「功能正确」。本知识库把这两段距离拆成可循序渐进执行的章节，并把 AI 相关知识点、开发过程中的选型决策、特殊 AI 问题处理、多级 Agent 编排、配置治理与权限、真实事故案例、RAG 语料工程、数据源合规、测试与质量保障、对话质量评估与归因、租户级成本治理与 Token 计费、可观测性与运维 Runbook、跨 Run 记忆、模型网关、流式输出、MCP 运行时单独编成十六册，并把项目里真实踩过的坑整理成<strong>现象 → 原因 → 定位 → 解决 → 验证</strong>五段式案例。</p>
+  </div>
+  <div class="callout c-warn">
+    <span class="ct">阅读前必须接受的一条约定</span>
+    <p>本知识库只陈述仓库里可查证的事实。凡是文档之间互相矛盾、只有注释提及而代码未落地、或本次勘察无法核实的内容，一律用 <span class="tag t-unknown">未确认</span> / <span class="tag t-conflict">文档冲突</span> 标注，并在 <a href="06-reference.html#ch20">第 20 章</a> 汇总。<strong>不做推测性补全</strong>。命令中的口令、密钥一律写占位符。</p>
+  </div>
+</header>
+
+<!-- ==================== 第 0 章 ==================== -->
+
+<section class="chapter" id="kb-index">
+  <div class="breadcrumb"><b>总览</b> / 知识库文件清单</div>
+  <h2><span class="num">★</span> 知识库由哪些文件组成</h2>
+  <p>原 v1 是 271 KB 的单文件 HTML。v2 按<strong>主题域</strong>拆成 26 个页面，放进 <span class="inline-code">docs/Java后端转型知识库/</span>：基础六篇各一册、AI 专题十九册、总入口一页；v2.1 新增 A4 多级 Agent 编排、A5 配置治理与权限、A6 真实事故案例库三册；v2.2 新增 A7 RAG 语料工程、A8 数据源权威性与合规、A9 测试与质量保障体系三册；v2.3 新增 A10 对话质量评估与判定、A11 租户级成本治理与 Token 计费、A12 可观测性、审计链与运维 Runbook 三册；v2.4 新增 A13 Agent 记忆机制、A14 模型统一配置与模型网关、A15 流式输出与前端 SSE 消费、A16 MCP 客户端实现与运行时防护四册，补齐「配置/决策册讲为什么、运行时册讲怎么做」的另一半；v2.5 新增 A17 AI 测试工程与故障注入、A18 向量库运维与索引代际、A19 能力缺口与增强路线三册，补齐「怎么证明对、数据层怎么养、下一步补什么」。样式与全站目录抽到 <span class="inline-code">assets/</span> 共享，任一册双击即可离线打开，跨册引用自动带文件名。</p>
+  <div class="kb-grid">
+<a class="kb-card" href="01-project-overview.html"><span class="kc-num">01</span><span class="kc-title">第一篇 · 认识项目</span><span class="kc-desc">项目全景、技术架构、目录与模块地图（第 1–3 章）</span><span class="kc-range">覆盖 第 1–3 章</span></a>
+<a class="kb-card" href="02-environment-config.html"><span class="kc-num">02</span><span class="kc-title">第二篇 · 环境与配置</span><span class="kc-desc">开发环境、三层配置、数据库初始化、启动与联调（第 4–7 章）</span><span class="kc-range">覆盖 第 4–7 章</span></a>
+<a class="kb-card" href="03-java-skill-transfer.html"><span class="kc-num">03</span><span class="kc-title">第三篇 · 经验迁移</span><span class="kc-desc">复用 / 调整 / 补充矩阵、八个心智模型、编码红线（第 8–10 章）</span><span class="kc-range">覆盖 第 8–10 章</span></a>
+<a class="kb-card" href="04-runtime-flows.html"><span class="kc-num">04</span><span class="kc-title">第四篇 · 运行链路</span><span class="kc-desc">Run 生命周期、请求级 SSE 与上下文压缩、RAG 检索（第 11–13 章）</span><span class="kc-range">覆盖 第 11–13 章</span></a>
+<a class="kb-card" href="05-troubleshooting.html"><span class="kc-num">05</span><span class="kc-title">第五篇 · 问题排查</span><span class="kc-desc">五段式方法论、六类诊断表、十例事故复盘、提交清单（第 14–17 章）</span><span class="kc-range">覆盖 第 14–17 章</span></a>
+<a class="kb-card" href="06-reference.html"><span class="kc-num">06</span><span class="kc-title">第六篇 · 速查与事实边界</span><span class="kc-desc">命令速查、文档索引、冲突与未确认清单、附录（第 18–20 章 + 附录 A/B/C）</span><span class="kc-range">覆盖 第 18–20 章 + 附录</span></a>
+<a class="kb-card ai" href="ai-01-fundamentals.html"><span class="kc-num">A1</span><span class="kc-title">A1 · AI 知识点精讲</span><span class="kc-desc">LLM / Token / 上下文窗口 / Embedding / RRF / 幻觉 / 评测 / 成本，全部落到本项目实体</span><span class="kc-range">覆盖 A1.1–A1.11</span></a>
+<a class="kb-card ai" href="ai-02-decisions.html"><span class="kc-num">A2</span><span class="kc-title">A2 · 技术选型决策</span><span class="kc-desc">ADR 全清单、备选方案与取舍理由、状态与未定案清单</span><span class="kc-range">覆盖 A2.1–A2.12</span></a>
+<a class="kb-card ai" href="ai-03-hard-problems.html"><span class="kc-num">A3</span><span class="kc-title">A3 · 特殊 AI 问题处理</span><span class="kc-desc">上下文压缩、注入防护、契约失配、成本污染、静默失真与反向验证</span><span class="kc-range">覆盖 A3.1–A3.10</span></a>
+<a class="kb-card ai" href="ai-04-agent-orchestration.html"><span class="kc-num">A4</span><span class="kc-title">A4 · 多级 Agent 编排与路由</span><span class="kc-desc">委派状态机、RouteAgent 规则转发、Skill/Tool/MCP 统一配置、生命周期与安全验收</span><span class="kc-range">覆盖 A4.1–A4.9</span></a>
+<a class="kb-card ai" href="ai-05-config-governance.html"><span class="kc-num">A5</span><span class="kc-title">A5 · 配置治理与权限体系</span><span class="kc-desc">RLS→应用层迁移、rlsDependent 判绿、分层授权、配置生命周期、本地判定性能基准</span><span class="kc-range">覆盖 A5.1–A5.11</span></a>
+<a class="kb-card ai" href="ai-06-incident-library.html"><span class="kc-num">A6</span><span class="kc-title">A6 · 真实事故案例库</span><span class="kc-desc">32 条新案例，五段式可回溯：静默失真 / 假绿假红 / 契约失配 / RLS / 构建产物 / 并发 / RAG 与成本</span><span class="kc-range">覆盖 A6.1–A6.9</span></a>
+  <a class="kb-card ai" href="ai-07-corpus-engineering.html"><span class="kc-num">A7</span><span class="kc-title">A7 · RAG 语料工程化与数据流水线</span><span class="kc-desc">从原始 PDF 到可检索向量：十段工程链、两套解析后端、V1.0→V1.0.2 与 10 条文档失真</span><span class="kc-range">覆盖 A7.1–A7.10</span></a>
+  <a class="kb-card ai" href="ai-08-data-governance.html"><span class="kc-num">A8</span><span class="kc-title">A8 · 数据源权威性与合规治理</span><span class="kc-desc">TrustTier 五级、检索四轴闸门、租户三档作用域与 rag_ops BYPASSRLS 通道</span><span class="kc-range">覆盖 A8.1–A8.9</span></a>
+  <a class="kb-card ai" href="ai-09-quality-assurance.html"><span class="kc-num">A9</span><span class="kc-title">A9 · 测试、守卫与质量保障体系</span><span class="kc-desc">三级验收、两套 IT 独立库、27 守卫、37 反证脚本、132 组时点与 CI 判绿口径</span><span class="kc-range">覆盖 A9.1–A9.9</span></a>
+  <a class="kb-card ai" href="ai-10-quality-evaluation.html"><span class="kc-num">A10</span><span class="kc-title">A10 · 对话质量评估、判定与归因体系</span><span class="kc-desc">L1 链路完整性与 L2 LLM-as-judge 归因判分、questionId 白名单、judge 成本分账、机器判分不污染人工抽样、幻觉检测与告警闭环</span><span class="kc-range">覆盖 A10.1–A10.10</span></a>
+  <a class="kb-card ai" href="ai-11-cost-governance.html"><span class="kc-num">A11</span><span class="kc-title">A11 · 租户级成本治理与 Token 计费</span><span class="kc-desc">金额预算三表、usage_record 幂等账、per-1k 单价与方括号字面键、预留—结算—释放、judge 分账、G2 压缩成本实测，以及未落地的 Token 配额方案</span><span class="kc-range">覆盖 A11.1–A11.10</span></a>
+  <a class="kb-card ai" href="ai-12-observability-runbook.html"><span class="kc-num">A12</span><span class="kc-title">A12 · 可观测性、审计链与运维 Runbook</span><span class="kc-desc">两套指标体系、Grafana 16 面板、日志上下文净化、审计防篡改真相、禁 RETURNING 铁律、告警与 fail-closed 门禁、CAP 灰度与密钥轮换</span><span class="kc-range">覆盖 A12.1–A12.10</span></a>
+  <a class="kb-card ai" href="ai-13-agent-memory.html"><span class="kc-num">A13</span><span class="kc-title">A13 · Agent 记忆机制与跨 Run 状态</span><span class="kc-desc">weakness_record 事件日志 → student_memory 聚合记忆、强度衰减 λ=0.01、单次出现永不召回、读时重算、记忆围栏与二次注入、降级纪律与模块边界守卫</span><span class="kc-range">覆盖 A13.1–A13.10</span></a>
+  <a class="kb-card ai" href="ai-14-model-gateway.html"><span class="kc-num">A14</span><span class="kc-title">A14 · 模型统一配置与模型网关</span><span class="kc-desc">model_catalog 单一事实源、解析优先级四级 fail-closed、ModelErrorKind 六分类与 retryable、凭据脱敏不挂 cause、MiniMax tool_call_id 事故与七种故障注入</span><span class="kc-range">覆盖 A14.1–A14.11</span></a>
+  <a class="kb-card ai" href="ai-15-streaming-sse.html"><span class="kc-num">A15</span><span class="kc-title">A15 · 流式输出与前端 SSE 消费</span><span class="kc-desc">ChatStreamGateway 独立端口、13 类事件协议、双身份域双端点与 thinking 可见性、超时三层对齐、前端增量解析与状态机、truncated 诚实语义</span><span class="kc-range">覆盖 A15.1–A15.10</span></a>
+  <a class="kb-card ai" href="ai-16-mcp-runtime.html"><span class="kc-num">A16</span><span class="kc-title">A16 · MCP 客户端实现与运行时防护</span><span class="kc-desc">HttpMcpTransport 两条决策、SSRF 三件套与二次解析复验、云元数据地址绝对禁止、按 server 熔断、输出不可信在 Gate 边界可信化、MCP 工具共用唯一执行入口</span><span class="kc-range">覆盖 A16.1–A16.10</span></a>
+  <a class="kb-card ai" href="ai-17-test-engineering.html"><span class="kc-num">A17</span><span class="kc-title">A17 · AI 测试工程与故障注入</span><span class="kc-desc">Fake 网关七态故障注入、假密钥证明脱敏、错误归一化契约矩阵、IT 独立库与守门写法、源码级守卫的边界、CI 反假绿四件套</span><span class="kc-range">覆盖 A17.1–A17.10</span></a>
+  <a class="kb-card ai" href="ai-18-vector-ops.html"><span class="kc-num">A18</span><span class="kc-title">A18 · 向量库运维与索引代际</span><span class="kc-desc">维度是契约、halfvec 4000 上限与「能存不能索引」、BUILDING/ACTIVE/RETIRED 蓝绿代际、异步构建 Worker 四条纪律、text_jieba 与重灌纪律</span><span class="kc-range">覆盖 A18.1–A18.10</span></a>
+  <a class="kb-card ai" href="ai-19-roadmap.html"><span class="kc-num">A19</span><span class="kc-title">A19 · 能力缺口与增强路线</span><span class="kc-desc">引用式提示词库的 fail-closed 设计、缺口四分类与优先级、五种可复用增强模式、不建议做的方向、接手者第一周路线</span><span class="kc-range">覆盖 A19.1–A19.8</span></a>
+  </div>
+  <div class="callout c-info">
+    <span class="ct">拆分范围与维护约定</span>
+    <p>拆分边界＝原手册的「篇」：一册覆盖 3–4 章，保持每册可独立阅读、有自己的页头与上下册导航。AI 专题册是新增内容，不替换原有章节。共享资源只有 3 个：<span class="inline-code">assets/handbook.css</span>（样式）、<span class="inline-code">assets/site-data.js</span>（全站目录与检索索引）、<span class="inline-code">assets/handbook.js</span>（导航 / 搜索 / 复制 / 打印）。新增或改章节时，改对应册 + <span class="inline-code">site-data.js</span> 的条目即可。</p>
+  </div>
+  <table>
+    <thead><tr><th>目录 / 文件</th><th>作用</th><th>是否需逐册改动</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">index.html</td><td>总入口、全站卡片目录、学习路径、证据约定</td><td>新增分册时改动</td></tr>
+      <tr><td class="mono">01…06-*.html</td><td>基础六篇正文（原 20 章 + 附录，内容不删减）</td><td>仅改对应册</td></tr>
+      <tr><td class="mono">ai-0*-*.html / ai-1*-*.html</td><td>AI 知识点 / 选型决策 / 特殊问题处理 / 多级 Agent 编排 / 配置治理与权限 / 真实事故案例库 / RAG 语料工程 / 数据源合规 / 测试与质量保障 / 对话质量评估与判定 / 成本治理与计费 / 可观测性与运维 / 记忆机制 / 模型网关 / 流式输出 / MCP 运行时十六册</td><td>仅改对应册</td></tr>
+      <tr><td class="mono">assets/handbook.css</td><td>全站统一样式（含打印 / PDF）</td><td>改一次全站生效</td></tr>
+      <tr><td class="mono">assets/site-data.js</td><td>全站目录结构 + 章节关键词索引</td><td>章节增删时改动</td></tr>
+      <tr><td class="mono">assets/handbook.js</td><td>侧栏生成、滚动高亮、全站搜索、代码复制</td><td>一般不动</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="chapter" id="ch0">
+  <div class="breadcrumb"><b>前置</b> / 使用说明</div>
+  <h2><span class="num">0.</span> 使用说明与证据约定</h2>
+
+  <h3 id="ch0-1">0.1 按目标选择阅读路径</h3>
+  <table>
+    <thead><tr><th>你的当前目标</th><th>建议路径</th><th>可以先跳过</th></tr></thead>
+    <tbody>
+      <tr><td>今天就把本地环境跑起来</td><td><a href="02-environment-config.html#ch4">第 4 章</a> → <a href="02-environment-config.html#ch5">第 5 章</a> → <a href="02-environment-config.html#ch6">第 6 章</a> → <a href="02-environment-config.html#ch7">第 7 章</a> → <a href="05-troubleshooting.html#ch15-1">§15.1 启动类故障</a></td><td>第 9、12、13 章</td></tr>
+      <tr><td>理解「为什么代码这样分层」</td><td><a href="01-project-overview.html#ch1">第 1 章</a> → <a href="01-project-overview.html#ch2">第 2 章</a> → <a href="01-project-overview.html#ch3">第 3 章</a> → <a href="03-java-skill-transfer.html#ch8">第 8 章</a> → <a href="03-java-skill-transfer.html#ch9">第 9 章</a></td><td>第 5、6 章的逐项配置表</td></tr>
+      <tr><td>接手一个线上/联调问题</td><td><a href="05-troubleshooting.html#ch14">第 14 章</a> → <a href="05-troubleshooting.html#ch15">第 15 章</a> → <a href="05-troubleshooting.html#ch16">第 16 章</a> → <a href="06-reference.html#ch18">第 18 章</a></td><td>第 1 篇</td></tr>
+      <tr><td>准备提交代码 / 参与门禁</td><td><a href="03-java-skill-transfer.html#ch10">第 10 章</a> → <a href="05-troubleshooting.html#ch14-3">§14.3 三级验收</a> → <a href="05-troubleshooting.html#ch14-4">§14.4 反向验证</a> → <a href="05-troubleshooting.html#ch17">第 17 章</a></td><td>第 6、7 章</td></tr>
+      <tr><td>完整系统学习（推荐）</td><td>按章节顺序 0 → 20 通读</td><td>—</td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">章节之间用「见 §x.y」交叉引用；拆分为多文件后，跨册引用会自动带上目标文件名。左侧目录是全站导航，右上角搜索框可跨全部分册检索标题、配置键与类名。</p>
+
+  <h3 id="ch0-2">0.2 事实来源与标注图例</h3>
+  <p>本手册的事实按以下优先级取用，冲突时以更靠近可执行物的一方为准，并在正文标注：</p>
+  <ol>
+    <li><strong>源码与构建产物</strong>：<span class="inline-code">pom.xml</span>、<span class="inline-code">*.java</span>、<span class="inline-code">application.yml</span>、<span class="inline-code">*.sql</span>、可执行 jar 的 MANIFEST；</li>
+    <li><strong>可执行脚本</strong>：<span class="inline-code">scripts/*.sh</span>、<span class="inline-code">.github/workflows/ci.yml</span>；</li>
+    <li><strong>配置模板与结构 README</strong>：<span class="inline-code">*.env.example</span>、<span class="inline-code">deploy/sql/README.md</span>；</li>
+    <li><strong>设计/复盘文档</strong>：<span class="inline-code">docs/**</span>、<span class="inline-code">rag/docs/**</span>、<span class="inline-code">问题记录/**</span>、<span class="inline-code">审查文档/**</span>（其中不少是历史快照，可能滞后）。</li>
+  </ol>
+  <table>
+    <thead><tr><th>标注</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag t-reuse">可直接复用</span></td><td>传统 Java 后端的既有经验在这里依然成立，照做即可</td></tr>
+      <tr><td><span class="tag t-adjust">需调整</span></td><td>概念相似但语义、边界或默认值不同，照搬会出错</td></tr>
+      <tr><td><span class="tag t-new">需补充</span></td><td>传统 Java 后端通常不涉及，必须新建立的心智模型</td></tr>
+      <tr><td><span class="tag t-unknown">未确认</span></td><td>仓库中没有可核实依据，或本次勘察未逐项验证；需现场核对</td></tr>
+      <tr><td><span class="tag t-conflict">文档冲突</span></td><td>两份权威材料给出的结论不一致，已列出双方口径</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet">
+    <span class="ct">为什么专门标「未确认」</span>
+    <p>这个项目有大量历史设计文档和实测记录，部分写于早期基线（例如 21 张表、Flyway 迁移链、普通 jar 启动）。把过时文档当成现行事实，正是本项目多起「静默失真」事故的根因。第 20 章集中列出全部已知冲突，遇到命令跑不通请先查那里。</p>
+  </div>
+
+  <h3 id="ch0-3">0.3 代码块与示例的约定</h3>
+  <ul>
+    <li>所有命令行、SQL、Java 片段统一使用同一套代码块样式；标题栏标注语言与<strong>真实文件路径</strong>（路径相对仓库根）。</li>
+    <li>示例中的 <span class="inline-code">&lt;口令&gt;</span>、<span class="inline-code">&lt;host&gt;</span>、<span class="inline-code">&lt;MUST-FILL&gt;</span> 是占位符，不是可复制的真实值；仓库内真实的 <span class="inline-code">*.env</span> 均为 0600 权限且被忽略，手册不复现其中任何密钥。</li>
+    <li>命令大多以仓库根目录为当前工作目录；需要进入 <span class="inline-code">platform/</span> 或 <span class="inline-code">rag/</span> 时会显式写出。</li>
+    <li>凡引用真实事故，均给出问题记录/文档的路径与原文编号（如 <span class="inline-code">TST-01</span>、<span class="inline-code">P8</span>），便于回溯。</li>
+  </ul>
+
+  <div class="callout c-ai"><span class="ct">v2.2 新增 A7–A9：数据工程与证据工程</span><p>如果你的工作涉及「语料入库/检索质量」，直接读 <a href="ai-07-corpus-engineering.html">A7</a>（从教材 PDF 到可检索向量的十段工程链、两套解析后端实测、线上化方案 V1.0→V1.0.2、10 条文档失真清单）与 <a href="ai-08-data-governance.html">A8</a>（TrustTier 五级、检索四轴闸门、租户三档作用域、rag_ops BYPASSRLS 通道）；如果你负责「怎么证明系统是对的」，读 <a href="ai-09-quality-assurance.html">A9</a>（三级验收、两套 IT 独立库、27 守卫、37 反证脚本、132 组时点、CI 判绿口径）。三册均沿用「已实现 / 仅设计 / 证据空白」三级标注，与 A1–A6 交叉引用。</p></div>
+  <div class="callout c-ai"><span class="ct">v2.3 新增 A10–A12：质量判定、成本账本与可观测性</span><p>如果你关心「怎么自动判答案对不对、成本记在哪本账、系统怎么被看见与举证」，读 <a href="ai-10-quality-evaluation.html">A10</a>（L1/L2 判分、judge 独立预算、机器判分不污染人工抽样）、<a href="ai-11-cost-governance.html">A11</a>（金额预算三表、usage_record 幂等、per-1k 单价、G2 压缩成本实测，以及「设计未落地」的 Token 配额方案）与 <a href="ai-12-observability-runbook.html">A12</a>（两套指标体系、Grafana 16 面板、审计 append-only 真相、禁 RETURNING 铁律、CAP 灰度与密钥轮换）。三册沿用「已实现 / 仅设计 / 证据空白 / 未确认 / 文档冲突」分级标注，与 A1–A9 交叉引用。</p></div>
+  <div class="callout c-ai"><span class="ct">v2.4 新增 A13–A16：记忆、模型网关、流式与 MCP 运行时</span><p>基础册与 A2/A4/A5 讲「为什么这样设计、配置长什么样」；v2.4 四册补上「<strong>运行时到底怎么跑</strong>」：读 <a href="ai-13-agent-memory.html">A13</a>（跨 Run 记忆：事件日志与聚合记忆分离、强度衰减与读时重算、记忆为什么也必须围栏、失败降级不穿透）、<a href="ai-14-model-gateway.html">A14</a>（model_catalog 单一事实源与解析四级 fail-closed、异常六分类与 retryable、凭据脱敏与 safeMessage 不挂 cause）、<a href="ai-15-streaming-sse.html">A15</a>（13 类事件协议、双身份域双端点、超时三层对齐、前端状态机与 truncated 语义）与 <a href="ai-16-mcp-runtime.html">A16</a>（SSRF 三件套、云元数据绝对禁止、按 server 熔断、MCP 工具共用唯一执行入口）。四册均逐节给源码证据，与 A1–A12 交叉引用。</p></div>
+  <div class="callout c-ai"><span class="ct">v2.5 新增 A17–A19：测试工程、向量运维与增强路线</span><p>前三批解决「是什么、为什么、怎么跑」，v2.5 三册解决「<strong>怎么证明它是对的、数据层怎么养、下一步往哪走</strong>」：<a href="ai-17-test-engineering.html">A17</a>（故障注入式契约测试、假密钥证明脱敏、CI 反假绿四件套）、<a href="ai-18-vector-ops.html">A18</a>（维度契约、蓝绿代际重建、构建 Worker 四条纪律、换模型 Runbook）、<a href="ai-19-roadmap.html">A19</a>（缺口四分类与重评条件、五种可复用增强模式、不建议做的三类方向、接手者第一周路线）。A19 同时给出了全库的「能力边界地图」，建议在通读前十八册后作为收尾阅读。</p></div>
+  <h3 id="ch0-4">0.4 维护说明</h3>
+  <p>本知识库为<strong>多文件 HTML</strong>，共 26 个页面 + 3 个共享资源，全部位于 <span class="inline-code">docs/Java后端转型知识库/</span>，无外部 CDN 依赖，双击 <span class="inline-code">index.html</span> 即可离线使用，也可逐页用浏览器「打印为 PDF」。样式与全站目录集中在 <span class="inline-code">assets/handbook.css</span> / <span class="inline-code">assets/site-data.js</span> / <span class="inline-code">assets/handbook.js</span>，改一次全站生效；新增章节只需保持 <span class="inline-code">&lt;section class="chapter" id="…"&gt;</span> 与带 <span class="inline-code">id</span> 的 <span class="inline-code">h3</span> 结构，并把新条目登记进 <span class="inline-code">site-data.js</span>。结构基线、配置键、脚本清单发生变化时，应同步更新 <a href="02-environment-config.html#ch5">第 5 章</a>、<a href="02-environment-config.html#ch6">第 6 章</a>、<a href="06-reference.html#ch18">第 18 章</a> 与 <a href="06-reference.html#ch20">第 20 章</a>。</p>
+</section>
+
+
+<section class="chapter" id="kb-ai-path">
+  <div class="breadcrumb"><b>总览</b> / AI 专题阅读路径</div>
+  <h2><span class="num">★</span> AI 十九册怎么读</h2>
+  <p>AI 十九册是应「AI 知识点专门介绍 + 开发中的选型与特殊 AI 问题单独成章」而新增的，与基础六篇互相引用，但<strong>不依赖阅读顺序</strong>。建议先读 A1 建立概念，再按角色选读；v2.1 新加的 A4（多级 Agent 编排）/ A5（配置治理与权限）/ A6（真实事故案例库）分别承接「架构怎么搭」「配置怎么治」「坑怎么避」三条线；v2.2 的 A7（RAG 语料工程）/ A8（数据源合规）/ A9（测试与质量保障）承接「数据怎么造、谁可信、怎么证明是对的」三条线；v2.3 的 A10（对话质量评估与判定）/ A11（成本治理与计费）/ A12（可观测性与运维）承接「答案怎么判、钱怎么记、线上怎么守」三条线；v2.4 的 A13（记忆）/ A14（模型网关）/ A15（流式）/ A16（MCP 运行时）承接「跨 Run 状态、模型调用、token 到浏览器、外部工具」四条运行时主线；v2.5 的 A17（测试工程）/ A18（向量库运维）/ A19（缺口与增强路线）承接「怎么证明对、向量怎么养、下一步补什么」三条工程化主线。</p>
+  <table>
+    <thead><tr><th>你的情况</th><th>建议路径</th><th>先跳过</th></tr></thead>
+    <tbody>
+      <tr><td>只写过 CRUD，第一次接触 LLM 系统</td><td><a href="ai-01-fundamentals.html">A1 全部</a> → <a href="02-environment-config.html#ch5">§5 配置</a> → <a href="04-runtime-flows.html#ch12">§12 SSE 与压缩</a></td><td>A2 决策编号细节</td></tr>
+      <tr><td>要参与架构评审 / 想知道「为什么这样选」</td><td><a href="ai-02-decisions.html">A2 全部</a> → <a href="06-reference.html#ch20">§20 冲突清单</a></td><td>A3 的代码级细节</td></tr>
+      <tr><td>接手线上 AI 链路异常 / 数字对不上</td><td><a href="ai-03-hard-problems.html">A3 全部</a> → <a href="05-troubleshooting.html#ch15">§15 诊断表</a> → <a href="05-troubleshooting.html#ch14-4">§14.4 反向验证</a></td><td>A1 基础概念</td></tr>
+      <tr><td>要做灰度 / 门禁 / 反证</td><td><a href="ai-03-hard-problems.html#a3-7">A3.7 假绿识别</a> → <a href="ai-02-decisions.html#a2-6">A2.6 ADR-013</a> → <a href="04-runtime-flows.html#ch12-4">§12.4 门禁状态</a></td><td>A1</td></tr>
+<tr><td>接手多级 Agent / 委派 / 能力发布</td><td><a href="ai-04-agent-orchestration.html">A4 全部</a> → <a href="ai-05-config-governance.html#a5-7">A5.7 配置生命周期</a> → <a href="ai-02-decisions.html#a2-3">A2.3 ADR-011</a></td><td>A1 概念细节</td></tr>
+<tr><td>做权限迁移 / 配置治理 / 判绿</td><td><a href="ai-05-config-governance.html">A5 全部</a>（重点 <a href="ai-05-config-governance.html#a5-3">A5.3 rlsDependent</a>）→ <a href="05-troubleshooting.html#ch15-3">§15.3 RLS 诊断表</a></td><td>A4 编排细节</td></tr>
+<tr><td>要扩充事故库 / 学排查方法论</td><td><a href="ai-06-incident-library.html">A6 全部</a> → <a href="05-troubleshooting.html#ch14">第 14 章</a> → <a href="05-troubleshooting.html#ch16">第 16 章已有十例</a></td><td>重复案例（已去重）</td></tr>
+<tr><td>要评估答案质量 / 建判分体系</td><td><a href="ai-10-quality-evaluation.html">A10 全部</a>（重点 <a href="ai-10-quality-evaluation.html#a10-4">A10.4 L2 判分</a>）→ <a href="ai-09-quality-assurance.html">A9</a></td><td>A2 决策编号细节</td></tr>
+<tr><td>要理清成本 / 计费 / 预算</td><td><a href="ai-11-cost-governance.html">A11 全部</a>（重点 <a href="ai-11-cost-governance.html#a11-1">A11.1 两套账本</a>、<a href="ai-11-cost-governance.html#a11-10">A11.10 未落地</a>）→ <a href="ai-10-quality-evaluation.html#a10-6">A10.6 分账</a></td><td>A7 语料细节</td></tr>
+<tr><td>要做可观测 / 审计 / 上线灰度</td><td><a href="ai-12-observability-runbook.html">A12 全部</a>（重点 <a href="ai-12-observability-runbook.html#a12-4">A12.4 审计链</a>、<a href="ai-12-observability-runbook.html#a12-8">A12.8 Runbook</a>）→ <a href="ai-05-config-governance.html">A5 权限</a></td><td>A1 概念细节</td></tr>
+<tr><td>要做跨 Run 记忆 / 学生画像持久化</td><td><a href="ai-13-agent-memory.html">A13 全部</a>（重点 <a href="ai-13-agent-memory.html#a13-3">A13.3 强度衰减</a>、<a href="ai-13-agent-memory.html#a13-6">A13.6 记忆围栏</a>）→ <a href="ai-03-hard-problems.html#a3-3">A3.3 注入</a></td><td>A7 语料细节</td></tr>
+<tr><td>要接模型 / 调网关 / 配模型目录</td><td><a href="ai-14-model-gateway.html">A14 全部</a>（重点 <a href="ai-14-model-gateway.html#a14-3">A14.3 解析优先级</a>、<a href="ai-14-model-gateway.html#a14-5">A14.5 六分类</a>）→ <a href="ai-02-decisions.html#a2-9">A2.9 统一配置决策</a></td><td>A11 计费细节</td></tr>
+<tr><td>要做前端对话 / 联调流式接口</td><td><a href="ai-15-streaming-sse.html">A15 全部</a>（重点 <a href="ai-15-streaming-sse.html#a15-3">A15.3 事件协议</a>、<a href="ai-15-streaming-sse.html#a15-6">A15.6 超时对齐</a>）→ <a href="04-runtime-flows.html#ch12">§12 压缩 SSE</a></td><td>A10 判分细节</td></tr>
+<tr><td>要接外部工具 / 防 SSRF / 评 MCP 安全</td><td><a href="ai-16-mcp-runtime.html">A16 全部</a>（重点 <a href="ai-16-mcp-runtime.html#a16-4">A16.4 SSRF 三件套</a>）→ <a href="ai-04-agent-orchestration.html#a4-4">A4.4 能力配置</a></td><td>A5 迁移细节</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-ai">
+    <span class="ct">AI 专题册的证据纪律</span>
+    <p>凡是「已在代码实现」「仅文档设计目标」「文档与代码冲突」「仓库查不到结论」都会分别标注。特别提示：仓库中<strong>只有 4 份 ADR</strong>（001 / 011 / 012 / 013），早期方案里规划过的 ADR-002～010 并不存在；把某个约束归因为「ADR-011 决定了双 reactor 双库」是错的，详见 <a href="ai-02-decisions.html#a2-12">A2.12</a>。A4–A12 沿同一纪律，额外用 <span class="tag t-live">已实现</span> / <span class="tag t-plan">仅设计</span> / <span class="tag t-gap">证据空白</span> 三档标注，并把「文档自称未上线、代码其实已实现」的口径差逐条摊开。</p>
+  </div>
+</section>
+
+<section class="chapter" id="kb-boundary">
+  <div class="breadcrumb"><b>总览</b> / 版本与事实边界</div>
+  <h2><span class="num">★</span> 版本关系与事实边界</h2>
+  <table>
+    <thead><tr><th>项</th><th>v1 单文件版</th><th>v2 多文件知识库（当前）</th></tr></thead>
+    <tbody>
+      <tr><td>路径</td><td class="mono">docs/Java后端转型培训手册.html</td><td class="mono">docs/Java后端转型知识库/</td></tr>
+      <tr><td>文件数</td><td>1 个 HTML（约 271 KB）</td><td>26 个 HTML + 3 个共享资源</td></tr>
+      <tr><td>内容</td><td>六篇 20 章 + 附录 A/B/C</td><td>原有内容全部保留，另增 AI 专题十九册（A1–A19，v2.1 加 A4/A5/A6，v2.2 加 A7/A8/A9，v2.3 加 A10/A11/A12，v2.4 加 A13–A16，v2.5 加 A17–A19）</td></tr>
+      <tr><td>目录 / 检索</td><td>页内目录、页内搜索</td><td>全站目录（26 个页面）+ 跨册关键词检索</td></tr>
+      <tr><td>状态</td><td><span class="tag t-doc">归档</span> 保留但不再维护</td><td><span class="tag t-live">现行</span> 后续维护以此为准</td></tr>
+    </tbody>
+  </table>
+  <p class="mini">事实边界不变：文档之间互相矛盾、只有注释提及而代码未落地、或本次勘察无法核实的内容，一律用 <span class="tag t-unknown">未确认</span> / <span class="tag t-conflict">文档冲突</span> 标注，并在 <a href="06-reference.html#ch20">第 20 章</a> 汇总；AI 专题册另用 <span class="tag t-live">已实现</span> / <span class="tag t-plan">仅设计</span> / <span class="tag t-gap">证据空白</span> 三级标签区分状态。命令中的口令、密钥一律写占位符。</p>
+  <div class="callout c-warn"><span class="ct">快照时点提示：工作区有未提交的在途改动</span><p>本知识库依据 2026-11-12 的<strong>已提交文档、签核包与源码证据</strong>编写。交付时工作区还并行存在一批<strong>未提交</strong>的 S3-M10 RAG 配额薄适配改动（ADR-013 新增 <span class="inline-code">D51</span>、<span class="inline-code">RagHitQuotaPort</span> / <span class="inline-code">RagHitQuotaAdapter</span> 接入编排器）。凡涉及「<span class="inline-code">RagHitQuota</span> 是否接线 / M10 状态 / ADR-013 决策编号」的表述，均在 <a href="ai-02-decisions.html#a2-12">A2.12</a> 与 <a href="ai-03-hard-problems.html#a3-2">A3.2</a> 标注时点差异；<strong>运行态请以实际代码、配置与运行实例为准</strong>。</p></div>
+</section>
+<nav class="page-nav">
+  <a href="ai-19-roadmap.html"><span class="pn-label">← 上一册</span><span class="pn-title">A19 · 能力缺口与增强路线</span></a>
+  <a class="pn-right" href="01-project-overview.html"><span class="pn-label">下一册 →</span><span class="pn-title">第一篇 · 认识项目</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

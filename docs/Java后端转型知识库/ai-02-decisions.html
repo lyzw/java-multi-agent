@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A2 · 技术选型决策 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-02-decisions" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A2 · 技术选型决策</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A2 · 技术选型决策 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">ADR 全清单、备选方案与取舍理由、状态与未定案清单</p>
+  <div class="ph-meta"><span>覆盖：A2.1–A2.12</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="ai2">
+  <div class="breadcrumb"><b>AI 专题 · A2</b> / 技术选型决策</div>
+  <h2><span class="num">A2.</span> 技术选型决策：备选、取舍理由、状态与未定案</h2>
+  <p>这一册专门回答「为什么是这样，而不是那样」。项目里确实留下了一批有编号、有备选、有否决理由的决策记录，也留下一批<strong>被反复引用却从未真正定案</strong>的说法。把两者区分开，是接手架构评审或灰度放行的前提。</p>
+  <div class="callout c-ai"><span class="ct">本册怎么写</span><p>每条决策按统一五段展开：<strong>要解决的问题 → 考虑过的备选 → 最终选择 → 取舍理由 / 证据 → 当前状态</strong>。状态用 <span class="tag t-live">已落地</span> / <span class="tag t-plan">已决策待签</span> / <span class="tag t-gap">未定案</span> / <span class="tag t-conflict">已漂移</span> 标注。凡仓库查不到结论的，全部汇总到 <a href="#a2-11">A2.11</a>，不补推测。</p></div>
+
+  <h3 id="a2-1">A2.1 先看清决策材料的分布与「编号真相」</h3>
+  <p>本仓库的决策记录分散在四类文件里，编号体系互不相通。最容易犯的错，是把「文档里提到过的 ADR 编号」当成「存在的文件」。</p>
+  <table>
+    <thead><tr><th>类别</th><th>实际存在的文件</th><th>编号范围</th><th>性质</th></tr></thead>
+    <tbody>
+      <tr><td>正式 ADR</td><td class="mono">docs/P0/P1/ADR-001_主MQ选型_RabbitMQ.md<br>ADR-011_技术基线_Java21_SpringBoot41.md<br>ADR-012_委派调用状态机与取消语义.md<br>ADR-013_上下文压缩统一入口与全窗口预算.md</td><td><strong>只有 001 / 011 / 012 / 013 共 4 份</strong></td><td>有备选、有否决理由、有状态与日期</td></tr>
+      <tr><td>决策基线</td><td class="mono">docs/P0/P0/P0-D00_决策基线与业务场景定义.md</td><td>DEC-1～13（2026-10-17 批准）</td><td>项目级红线与版本基线</td></tr>
+      <tr><td>阶段设计</td><td class="mono">docs/P0/P2|P3|P4|FE/**（约 60 份）</td><td>P2-D01…、P4-D17、FE-D11…</td><td>含大量局部方案与勘误</td></tr>
+      <tr><td>RAG 决策</td><td class="mono">rag/docs/RAG-D00_决策基线与范围边界.md ～ RAG-D26</td><td>RD-01～14（D00）+ 27 份 D 系列</td><td>D00/D02/D03/D05/D12 是选型主文档</td></tr>
+      <tr><td>待确认清单</td><td class="mono">RAG语料录入线上化自动化方案 V1.0.2_待确认项决策清单.md</td><td>T-2～T-8、D-001、ENV</td><td>原文：「全部待决策，本文不替决策方做选择」</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger"><span class="ct">编号真相（写文档前必须核对）</span><p><strong>ADR-002～010、ADR-014 及之后的文件都不存在。</strong> <span class="mono">docs/Java SaaS Agent 平台：规划与技术架构设计方案 v3.1.md</span> 附录 I 规划过 ADR-001～010（含 ADR-002「JDBC/jOOQ/MyBatis 与事务边界」、ADR-005 预算单位、ADR-006 RLS 角色、ADR-007 对象存储、ADR-009 事件保留/SSE 游标、ADR-010 指标维度），<span class="mono">P0-D00</span> 也提到「ADR-001～011」「起草 ADR-007/009/010」，但仓库里只有 4 份。<strong>引用 ADR-002 的结论等于引用一份不存在的文件。</strong></p></div>
+  <p>另一处高频错误：多份文档把「两 reactor 两库互不塞代码 ⇒ 各一个 persistence 模块」归因为 <strong>ADR-011</strong>（如 <span class="mono">docs/模型统一配置架构设计.md:149</span>、<span class="mono">docs/上下文压缩开发计划_v1.0.md:71</span>、v1 手册铁律表）。而 ADR-011 全文 190 行只讲「Java 21 + Spring Boot 4.1.1 技术基线」，无 reactor / 两库 / persistence 字样。该约束真实存在（约束 C12 / C1、两个 pom 的模块清单可证），但<strong>归因为 ADR-011 是文档归因错误</strong>。详见 <a href="#a2-12">A2.12</a>。<span class="tag t-conflict">文档冲突</span></p>
+
+  <h3 id="a2-2">A2.2 决策记录模板，以及「怎么判断一条决策还有效」</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">本仓库 ADR 的实际结构（以 ADR-001 为例）</span><button>复制</button></div><pre><code>表头  ：编号 / 标题 / 状态 / 日期 / 决策人 / 关联需求与风险
+§1    ：背景与要解决的问题
+§2    ：考虑过的备选方案 + 逐条否决理由   ← 最有价值的部分
+§3    ：最终选择 + 约束与验收项
+§4～§5：落地细节、勘误、回滚路径
+§6～§7：PoC 验证清单、已知风险登记</code></pre></div>
+  <p>判断优先级（从强到弱）：<strong>运行中的代码与配置 &gt; 可执行的脚本 / 守卫测试 &gt; 标「已采纳 / 已实现」的 ADR &gt; 标「待评审 / 提案」的方案 &gt; 早期规划文档</strong>。理由是本仓库存在大量「设计稿写 <span class="inline-code">true</span>、实际 yml 是 <span class="inline-code">false</span>」「文档写未实现、代码已实现」的漂移，例如：</p>
+  <table>
+    <thead><tr><th>项</th><th>设计稿</th><th>实际</th></tr></thead>
+    <tbody>
+      <tr><td><span class="inline-code">agent.context.enabled</span></td><td>方案 §3.2-C 写 <span class="inline-code">true</span></td><td><span class="inline-code">application.yml:232</span> / <span class="inline-code">platform.env.example:43</span> 均为 <strong>false</strong></td></tr>
+      <tr><td><span class="inline-code">max-state-chars</span></td><td>方案写 <span class="inline-code">8000</span></td><td>yml 为 <strong>8192</strong></td></tr>
+      <tr><td>RRF 融合</td><td>RAG-D05 §8 写「未实现」</td><td>代码 <span class="inline-code">RRF_K=60</span> 已落地（DOC-10 更正）</td></tr>
+      <tr><td>主 MQ 与默认通道</td><td>ADR-001 定「主 MQ = RabbitMQ」</td><td><span class="inline-code">agent.messaging.mode</span> 默认 <strong>database</strong>，Rabbit 成为可选通道</td></tr>
+    </tbody>
+  </table>
+  <div class="evidence"><b>证据：</b> <span class="mono">docs/P0/P1/ADR-001</span> 全文；<span class="mono">application.yml:232, 250, 448</span>；<span class="mono">问题记录/11-文档与代码漂移.md DOC-10</span>。</div>
+
+  <h3 id="a2-3">A2.3 ADR-011：Java 21 + Spring Boot 4.1.1</h3>
+  <table>
+    <thead><tr><th>项</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td>问题</td><td>v3.1 设计方案第 83 行写 <span class="inline-code">Spring Boot 3.x</span>，DEC-4 决定改用 Java 21 + Boot 4.x，偏离需留决策记录</td></tr>
+      <tr><td>备选</td><td><strong>4.0.x</strong>（否：OSS 支持至 2026-12-31）／<strong>4.1.1</strong>（选：OSS 至 2027-07-31，2026-08-20 修复 98 个缺陷）／<strong>4.2.x</strong>（否：未 GA）</td></tr>
+      <tr><td>Java 21 理由</td><td>jOOQ 3.20+ 与 Spring AI 2.0 均要求 Java 21；LTS；本机已有 JDK 21.0.12</td></tr>
+      <tr><td>配套矩阵</td><td>Framework 7.0.x / Security 7.1 / Jakarta EE 11 / Jackson 3 / Hibernate 7 / Flyway 12.x / jOOQ 3.21.x / Tomcat 11 / JUnit 6</td></tr>
+      <tr><td>最高风险</td><td><span class="inline-code">@Retryable</span> 双重重试（故本 ADR §5 明确「禁用内置 @Retryable」）、Jackson 3、Security 7 全组件化、70+ starter 变更、Undertow 移除</td></tr>
+      <tr><td>回滚</td><td>Spring Boot 3.5.x + Java 21（<strong>仅过渡目标</strong>，3.5 于 2026-06-30 OSS EOL）</td></tr>
+      <tr><td>状态</td><td><span class="tag t-plan">已决策待 M1 签署</span>，但 §4.1 已完成 8 模块 BUILD SUCCESS 与 <span class="inline-code">AgentCorePurityTest</span>(3) / <span class="inline-code">StateMachineTest</span>(10) / <span class="inline-code">ConfigFailClosedTest</span>(19)</td></tr>
+    </tbody>
+  </table>
+  <p>这里有个对 Java 后端很实用的迁移提示：<strong>Boot 4 的「破坏性」主要不在 API，而在默认值与自动装配</strong>。项目因此把「配置 fail-closed」写成硬约束——缺失 / 非法配置拒绝启动，而不是给一个「能跑」的默认值。相关守卫见 <a href="03-java-skill-transfer.html#ch10">§10</a>。</p>
+
+  <h3 id="a2-4">A2.4 ADR-001 / DEC-12：主 MQ 为什么是 RabbitMQ 4.3.6</h3>
+  <table>
+    <thead><tr><th>项</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td>问题</td><td>主 MQ 与投递 / 死信 / 重放策略</td></tr>
+      <tr><td>备选</td><td><strong>Kafka</strong>（否决）、<strong>NATS</strong>（否决）、<strong>双栈</strong>（明确禁止）</td></tr>
+      <tr><td>最终选择</td><td>RabbitMQ <strong>4.3.6 社区版 + Quorum Queue</strong>；Exchange <span class="inline-code">agent.run.dispatch</span>(direct,durable)、Queue <span class="inline-code">agent.run.execute</span>(quorum)、死信 <span class="inline-code">agent.run.dead</span>、<span class="inline-code">x-delivery-limit=3</span>（quorum 默认 20）</td></tr>
+      <tr><td>核心理由</td><td><strong>MQ 只作唤醒信号</strong>，权威事实源永远是 PostgreSQL。因此真实需求只有五项：at-least-once、幂等消费、死信、积压可观测、低资源占用——<strong>不是高吞吐日志流</strong>。Kafka 的 partition / consumer group / retention 设计、JVM+KRaft 运维负担、无内建死信，全部与「每 Run 一条唤醒消息」的量级不匹配</td></tr>
+      <tr><td>约束</td><td>Erlang/OTP 25.0+；Khepri（Mnesia 已移除）；社区支持截至 <strong>2026-11-30</strong>；消息体仅 5 字段 <span class="inline-code">runId/tenantId/attempt/fencingToken/enqueuedAt</span></td></tr>
+      <tr><td>勘误</td><td>§4.1：<span class="inline-code">agent.run.reconcile</span> 队列<strong>未落地</strong>，UNKNOWN 对账走 DB 侧 <span class="inline-code">ToolOperationReconciliationService</span>，不经 MQ</td></tr>
+      <tr><td>残余风险</td><td><span class="mono">P4-R022_RabbitMQ停维残余风险安全复核登记.md</span> 评级 <strong>Accepted with conditions</strong>，其中 R-022-R2（卷丢失致已确认消息永久丢）为 <strong>Sev-0</strong>，且「无任何一项 R-022-Rx 在当前代码中被自动闭环」</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn"><span class="ct">一个因 yml 标量类型导致的 Sev-0</span><p><span class="inline-code">YamlPropertiesFactoryBean</span> 会丢弃裸标量 <span class="inline-code">delivery-limit: 3</span>，队列退回 quorum 默认 <strong>20</strong>，<span class="inline-code">record_weakness</span> 最多可重复写 20 次。修复是把数值<strong>加引号</strong>并加 <span class="inline-code">ApplicationConfigTest</span> 断言。见 <a href="ai-03-hard-problems.html#a3-8">A3.8 案例 7</a>。</p></div>
+
+  <h3 id="a2-5">A2.5 P4-D17：为什么又新增一条 database 消息通道</h3>
+  <p>这是「决策发生演变」的最好样本：ADR-001 定下 RabbitMQ，一年内的工程实践又追加了一条等价通道，并把它设为运行期默认。</p>
+  <table>
+    <thead><tr><th>项</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td>问题</td><td>交换机 / quorum 队列 / 消费容器 / <span class="inline-code">@RabbitListener</span> 全部无条件装配 → CI 必须起 broker、换载体要改代码、无法按租户灰度</td></tr>
+      <tr><td>备选</td><td>保留 <span class="inline-code">rabbitmq</span> 通道；新增 <span class="inline-code">database</span> 通道（PG 表 <span class="inline-code">agent_message_queue</span>）</td></tr>
+      <tr><td>语义逐条对齐</td><td>至少一次；有限重试 <span class="inline-code">x-delivery-limit=3 ⇄ attempts</span>；死信 <span class="inline-code">agent.run.dead ⇄ agent_message_dead_letter</span>；背压 ready 深度 ⇄ 各租户 PENDING 行数之和</td></tr>
+      <tr><td>选择理由</td><td>database 通道<strong>零外部依赖</strong>（PG 本就是强依赖），使 CI / 本地 / 试运营小客群无 broker 运行；切换只需改一个环境变量，可回滚</td></tr>
+      <tr><td>关键设计</td><td>端口不变（<span class="inline-code">MessageSender / MessageHandler / QueueDepthProbe</span>）；<span class="inline-code">TenantRoutingMessageSender</span> 按 tenantId 灰度；<span class="inline-code">MessagingSwitchGuard</span> 启动期排空检查（有残留即拒绝启动）；配置一律 fail-closed</td></tr>
+      <tr><td>不复用 outbox</td><td><span class="inline-code">outbox_event</span> 是发布侧事务日志（是否已交给通道），队列表是通道侧（是否已被消费）；混用会让「已发布但未消费」无法表达</td></tr>
+      <tr><td>运行期默认</td><td><span class="inline-code">application.yml:448</span> → <span class="inline-code">mode: "${AGENT_MESSAGING_MODE:database}"</span>；生产跑 database <span class="tag t-live">已落地</span></td></tr>
+      <tr><td>诚实边界</td><td>broker 端到端 E-1/E-2/E-3 不在 CI 覆盖；DB 队列吞吐未经压测；切换不是热切；<span class="tag t-gap">证据空白</span> 查不到「永久以 database 取代 RabbitMQ」的决策</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger"><span class="ct">这条决策衍生出的 Sev-0</span><p>DB 通道按租户领取<strong>全部</strong> PENDING 消息，而执行消息与采集消息同表。若整表交给采集处理器，<strong>已终态的 Run 会被重新执行</strong>。修复是 <span class="inline-code">EventRoutedMessageHandler</span> 按 <span class="inline-code">eventType</span> 分流（<span class="inline-code">"agent.trace.collect"</span> → <span class="inline-code">TraceCollectMessageHandler</span>），对未知类型 <span class="inline-code">REJECTED</span> 兜底，且发送侧单建独立路由键。完整链路见 <a href="ai-03-hard-problems.html#a3-8">A3.8 案例 4</a>。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">docs/P0/P4/P4-D17_消息通道可切换.md §1–§7</span>；<span class="mono">application.yml:448</span>；<span class="mono">docs/项目进度台账.md:2302</span>；实测「database 无 broker 时 822 项 0 跳过、0 次 broker 连接尝试」。</div>
+
+  <h3 id="a2-6">A2.6 PG 事实源 + Outbox + Worker：没有 ADR，但有红线</h3>
+  <p>这条最重要的架构决策<strong>没有独立 ADR</strong>，权威表述是 <span class="mono">P0-D03_MVP范围与非目标清单.md §4</span> 的红线 1/3/5/7 与 v3.1 设计方案 §5。它属于「决策基线」而非「ADR」。</p>
+  <table>
+    <thead><tr><th>红线</th><th>结论</th><th>被否决的做法</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>PostgreSQL 是 Run / 事件 / Outbox / ToolOperation / Approval / Usage 的<strong>唯一权威事实源</strong></td><td>Redis 锁结果覆盖数据库判断（v3.1:779）</td></tr>
+      <tr><td>3</td><td>Run + 初始事件 + 幂等记录 + <span class="inline-code">outbox_event</span> <strong>同一事务</strong></td><td>「COMMIT 后发 MQ」——发消息前崩溃会让 Run 静默卡死</td></tr>
+      <tr><td>5</td><td>MQ 里的 <span class="inline-code">RUN_REQUESTED</span> 只是<strong>候选任务提示</strong>；Worker 回库读权威状态、条件更新领取、<span class="inline-code">fencing_token</span> 递增</td><td>把 MQ payload 当状态</td></tr>
+      <tr><td>7</td><td><span class="inline-code">UNKNOWN</span> 必须对账，<strong>不盲目重放</strong></td><td>失败即重投</td></tr>
+    </tbody>
+  </table>
+  <p>Outbox 发布器的租户策略也留了明确的备选否决记录：<strong>B. 全租户轮询</strong>（一个发布器遍历所有租户）被否，理由是「需跨租户权限，破坏隔离」；选 <strong>A. 单租户循环</strong>，首期 <span class="inline-code">deployment.pilot.max-tenants=1</span>。其余硬约束：发布器查询必须带 <span class="inline-code">tenant_id</span>（RLS）；<span class="inline-code">publisher-confirm-type: correlated</span>，未确认不得标 PUBLISHED；消息体最小化、禁带 Prompt / 工具参数 / 学生数据 / 答案，由 <span class="inline-code">OutboxMessage</span> 类型层白名单 + 黑名单强制；禁止自动 ACK；死信不挂 DLX、不自动消费。</p>
+  <p class="mini"><span class="tag t-gap">证据空白</span> 查不到「曾考虑并否决 Redis / 独立事件库作为状态存储」的备选论证文档；红线 1 只给结论。<span class="tag t-plan">仅设计</span> <span class="mono">P2-D02 §6.2</span> 自记一个未收紧的并发窗口：<span class="inline-code">claimSpecificRun</span> 同事务内「先读 token 再条件更新」仍是两个快照，需 P3 故障注入验证。</p>
+
+  <h3 id="a2-7">A2.7 ADR-013：上下文压缩统一入口与全窗口预算</h3>
+  <p>这是本项目<strong>与 AI 关联最紧密、记录最完整</strong>的一份 ADR（2026-11-11，状态「已采纳」）。它同时是理解 <a href="04-runtime-flows.html#ch12">§12</a> 与 <a href="ai-03-hard-problems.html#a3-2">A3.2</a> 的钥匙。</p>
+  <table>
+    <thead><tr><th>项</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td>问题</td><td>旧 <span class="inline-code">ContextBudgetTrimmer</span> 是「无摘要的整轮硬丢弃」，预算 16000 只约束消息序列；SSE 链路完全没有预算保护（100 轮 × 32000 字符）</td></tr>
+      <tr><td>决策 7 条</td><td>① 三条模型链路共用<strong>一个</strong> <span class="inline-code">ContextAssembler</span>；② 预算口径改为<strong>全窗口</strong>；③ 四级水位 W0–W3，前两级零 LLM；④ 新增第 13 模块 <span class="inline-code">agent-context</span>（纯 Java、零 Spring/JDBC/Hikari/Flyway）；⑤ 三层配置 + Run 创建时快照固化；⑥ SSE 压缩态默认<strong>客户端 carry-over，不落正文</strong>；⑦ <span class="inline-code">enabled=false</span> 逐位等价、可一键回滚；压缩评测绝不写 <span class="inline-code">agent_eval_sample</span></td></tr>
+      <tr><td><strong>被否决的备选</strong></td><td>仅滑窗裁剪 + 调大预算（不解决信息丢失）／每轮全量 LLM 摘要（成本与延迟）／<strong>LLMLingua-2</strong> token 级硬压缩（列 P3，仅 rag 侧可选）／<strong>Spring AI ChatMemory + pgvector 语义召回</strong>（platform 库未装 pgvector、<span class="inline-code">EmbeddingPort</span> 未实现，列 P3）／训练式 compaction 与 KV-Cache 压缩（供应商侧能力）</td></tr>
+      <tr><td>复审触发</td><td>换模型窗口变化 &gt;2×／供应商提供精确 tokenizer 或 prompt caching／platform 库装 pgvector／<span class="inline-code">context.estimation_error_ratio</span> P95&gt;0.25 持续一周／放开会话正文持久化</td></tr>
+    </tbody>
+  </table>
+  <p><strong>实施期补充决策台账</strong>（ADR-013 行 40–79）。已提交快照含 <strong>D13–D50 共 38 条</strong>，非仅 D26–D49；<strong>交付时工作区另有未提交的 D51</strong>（S3-M10 RAG 配额薄适配，见下表末行与 <a href="#a2-12">A2.12</a>）。按主题分组如下，完整逐条原文见 ADR 文件：</p>
+  <table>
+    <thead><tr><th>主题</th><th>编号</th><th>核心结论</th></tr></thead>
+    <tbody>
+      <tr><td>模块与分层</td><td class="mono">D26, D33</td><td>算法内核留 <span class="inline-code">agent-context</span>，<span class="inline-code">RoundSplitter</span> 行为等价重实现且不反向依赖 worker；<span class="inline-code">agent-ports</span> 冻结四个中性端口，不依赖 <span class="inline-code">agent-context</span></td></tr>
+      <tr><td>预算与布局</td><td class="mono">D27–D29</td><td><span class="inline-code">firstUserTurn</span> 独立 pinned；W2 目标 = <span class="inline-code">targetRatio × window</span>；<span class="inline-code">StructuredState</span> 12 字段唯一全参构造、<strong>不含原始对话正文</strong></td></tr>
+      <tr><td>增量与逐字约束</td><td class="mono">D30–D32</td><td>只处理 <span class="inline-code">seq &gt; upToSeq</span>；关键 span 必须<strong>逐字出现</strong>在同一条增量消息，否则整批 <span class="inline-code">VERBATIM_VIOLATION</span> 且游标不推进；手写确定性 JSON + SHA-256 digest，零 Jackson</td></tr>
+      <tr><td>SSE 协议</td><td class="mono">D34–D36</td><td>v1.1 <strong>只追加不改旧帧</strong>，新增第 14 事件；<span class="inline-code">onContextCompacted</span> 用 default 空实现；两前端 parse-only、<span class="inline-code">state</span> 当不透明串、不落存储、请求体不带 <span class="inline-code">contextState</span></td></tr>
+      <tr><td>装配唯一入口</td><td class="mono">D37–D42</td><td><span class="inline-code">RagHitQuota</span> 纯算法先行；装配是「请求变换器」而非「构造器」，关闭态原样返回同一引用；<span class="inline-code">RequestAssemblyPort</span> 是唯一送模型请求；fail-closed 六稳定码；请求 / 成本 / 观测同源；守卫按 G1 A.5 升级不删除</td></tr>
+      <tr><td>G2 验收与反证</td><td class="mono">D43–D47</td><td>OFF/TIERED 双臂须同一 Spring 上下文、按<strong>真实送出的 <span class="inline-code">ModelRequest</span></strong> 计费；三点撤点各让 IT 恰好红 1 条；双通道重投只验「输出确定 / 无副作用 / 不二次计费」；非空转证据用 acked 增量与 <span class="inline-code">computed_at</span> 前移；G2 签核 TL/QA 待落笔</td></tr>
+      <tr><td>快照与 M8</td><td class="mono">D48–D50</td><td><span class="inline-code">execution_snapshot.context_policy</span> 加列不加表，<span class="inline-code">{}</span>＝未声明而非关闭，M7 运行期<strong>不读快照</strong>；D49 定案线序 <span class="inline-code">answer → usage → context.checkpoint? → done</span>、独立 HMAC envelope、六项静默丢弃、不启用 W3 真摘要与 checkpoint 表；D50 为 S3-M8-a 请求侧落地</td></tr>
+      <tr><td>RAG 配额薄适配</td><td class="mono">D51</td><td><span class="tag t-plan">工作区未提交</span> 新增中性端口 <span class="inline-code">RagHitQuotaPort</span> + 唯一生产委托点 <span class="inline-code">RagHitQuotaAdapter</span>；worker 只构造中性 <span class="inline-code">Hit</span> / 消费 <span class="inline-code">Allocation</span>，端口自带冻结渲染口径杜绝「计量算 A、实际发 B」；关闭态 / 失败一律回退 legacy <span class="inline-code">MAX_INJECT_HITS</span> 固定口径，fail-soft 不发 error 帧；守卫从「零接线」升级为「唯一委托点 + 白名单外禁止」</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet"><span class="ct">同一份 ADR 里的数字会随时点变化</span><p>累计反向验证组数在三处不同：<strong>100 组</strong>（影子报告 A.3）／<strong>120 组</strong>（ADR D47）／<strong>126 组</strong>（G2 签核包 §5.4、ADR D48）。这是不同撰写时点的快照，<strong>不是矛盾</strong>，引用时必须带时点与出处。同理 G3 通过条件在「开发计划 §8.2」与 v1 手册「§12.4」表述不同。</p></div>
+
+  <h3 id="a2-8">A2.8 RAG-D00 / D02：向量库、嵌入模型与规模边界</h3>
+  <table>
+    <thead><tr><th>选型问题</th><th>备选</th><th>结论与取舍理由</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>向量存储</td><td>Milvus / Qdrant / Elasticsearch / pgvector</td><td><strong>选 pgvector（PG 17 同实例、独立 schema <span class="inline-code">rag</span>）</strong>：RLS 沿用主平台已验证方案、片段元数据与向量<strong>同事务</strong>、零新增中间件（主平台 R-022 已在 MQ 停维吃过亏）、约 5×10⁷ 向量前 HNSW 可接受、全文 + 向量同库做 RRF</td><td><span class="tag t-live">已落地</span></td></tr>
+      <tr><td>规模边界</td><td>—</td><td>决策边界「千万级片段以内」；>1500 万片段、或 100 万片段下 P95&gt;500ms 调优无效、或写入 &gt;1000 chunk/s 持续 10 分钟 → <strong>重开 ADR</strong> 评估专用向量库</td><td><span class="tag t-plan">待评审</span></td></tr>
+      <tr><td>MQ</td><td>引入第二套 MQ</td><td>否决。明确「不引入第二套 MQ」，rag 侧执行通道用 PG <span class="inline-code">FOR UPDATE SKIP LOCKED</span> 轮询 + <span class="inline-code">@Scheduled</span></td><td><span class="tag t-live">已落地</span></td></tr>
+      <tr><td>中文分词</td><td><span class="inline-code">zhparser</span> / <span class="inline-code">pg_jieba</span> 扩展</td><td>否决（增加部署耦合、与「零新增中间件」相悖）；选<strong>应用层预分词 + <span class="inline-code">tsvector('simple',…)</span> + <span class="inline-code">text_jieba</span> 列 + GIN</strong></td><td><span class="tag t-plan">路径已定</span>，<span class="tag t-gap">具体分词库名未指明</span></td></tr>
+      <tr><td>嵌入模型</td><td>BGE-M3(1024) / qwen3-embedding:8b(4096)</td><td>设计选 BGE-M3，本地开发与实际接 qwen3 4096；换模型走 <strong>RD-12 新代际 + 蓝绿切换</strong>，不原地改列</td><td><span class="tag t-conflict">两者并存</span>，<span class="tag t-gap">无单一定案</span></td></tr>
+      <tr><td>重排</td><td>双塔 / cross-encoder</td><td>选型 <span class="inline-code">bge-reranker-v2-m3</span>，精度显著高于双塔、是召回质量决定性环节；<strong>但至今未接入</strong>，RAG-D12 §2.3 直认「关键组件缺位逼出了补丁式复杂度」</td><td><span class="tag t-plan">选型已定未接入</span></td></tr>
+      <tr><td>蕴含判定</td><td>生成模型自判 / 判别式 NLI</td><td>选<strong>判别式 NLI 模型（与生成模型不同）</strong>；具体权重与部署形态列为 RD-Q3 待确认</td><td><span class="tag t-gap">证据空白</span></td></tr>
+      <tr><td>文档解析</td><td>Apache Tika 类纯文本抽取 / 版面感知解析器</td><td>选 <strong>Docling 类版面感知解析器</strong>，纯文本抽取仅作降级兜底；接入参数在待确认清单 T-4 全部待决策</td><td><span class="tag t-plan">部分</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn"><span class="ct">读 RAG 决策文档的两个陷阱</span><p>① <span class="mono">RAG-D02 §8</span> 明确列出 L-1～L-7 已知限制：基础设施适配器、模块骨架、中文分词、嵌入/蕴含模型具体权重、评测集标注、与主平台联通、规模压测<strong>均未实现 / 未标定</strong>——表格里的「选型」不等于「已接入」。② <span class="mono">RAG-D00 §0</span> 记 A-008 评测结论「🔴 未产出」，并规定「A-008 结论产出前不得接入主平台」，<span class="tag t-gap">证据空白</span>：本次勘察未找到该结论已产出的证据。</p></div>
+
+  <h3 id="a2-9">A2.9 模型统一配置与网关：单一事实源，但有一条 fail-soft 尾巴</h3>
+  <table>
+    <thead><tr><th>项</th><th>结论</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>目标</td><td>所有 LLM / Embedding 模型定义集中到 <span class="inline-code">model_catalog</span> 表，运行时统一读配置源；<strong>禁止硬编码或分散定义</strong>；密钥与目录分离、fail-closed、改完即生效</td><td><span class="tag t-live">已落地</span></td></tr>
+      <tr><td>解析优先级</td><td><span class="inline-code">ModelResolver</span>：显式 modelName → 场景默认 → <span class="inline-code">default</span> 场景默认 → 空（fail-closed）；不缓存</td><td><span class="tag t-live">已落地</span></td></tr>
+      <tr><td>场景 code</td><td><span class="inline-code">agent-chat / console-chat / embedding / summarization / classification / moderation / default</span>（字符串，非枚举）</td><td><span class="tag t-live">已落地</span></td></tr>
+      <tr><td>密钥</td><td><span class="inline-code">agent.model.&lt;provider&gt;.api-key</span> 环境变量；第三轮新增 <span class="inline-code">model_provider_credential</span> 表（AES-256-GCM，主密钥 <span class="inline-code">agent.model-credential.master-key</span>），DB 优先、env 回落；明文绝不落库</td><td><span class="tag t-live">已落地</span></td></tr>
+      <tr><td>多 provider</td><td><span class="inline-code">MiniMaxModelGateway</span>（专用）+ <span class="inline-code">OpenAiCompatibleModelGateway</span>（openai/deepseek/workbuddy/ollama）；<strong>未知 provider 回落 <span class="inline-code">FakeModelGateway</span> 并告警（fail-soft）</strong></td><td><span class="tag t-live">已落地</span> <span class="tag t-plan">非 fail-closed</span></td></tr>
+      <tr><td>跨 reactor</td><td>RAG <strong>不直连平台库</strong>，用 <span class="inline-code">ModelCatalogClient</span> 走 <span class="inline-code">GET /api/internal/models/resolve?scenario=embedding</span>，响应不含密钥；TTL 缓存 5 分钟；解析失败回落 yml（fail-soft）</td><td><span class="tag t-live">已落地</span></td></tr>
+      <tr><td>RAG 生成模型</td><td><span class="inline-code">GenerationModelPort</span> + <span class="inline-code">rag.generation.model.*</span>，<strong>默认关闭（fail-closed）</strong>；端口失败回落逐字摘录，<span class="inline-code">generator</span> 标 <span class="inline-code">LLM_GROUNDED_SYNTHESIS</span> / <span class="inline-code">EXCERPT_ASSEMBLY</span></td><td><span class="tag t-live">已落地</span></td></tr>
+      <tr><td>真闭环前提</td><td>文档 §7.1 明示：<strong>目录需被实际种入</strong>；未种入时回落字面名（fail-soft，不报错但也不走集中管理）</td><td><span class="tag t-unknown">需现场核对活库</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="a2-10">A2.10 Agent 框架：自研 vs 主流 harness，结论是「不推翻重做」</h3>
+  <p><span class="mono">docs/主流Agent框架设计对比与演进建议_v3.2.md</span>（文件名 v3.2，<strong>文内自标 v3.4 修订版、状态「待评审」</strong>）对比了 LangGraph、OpenAI Agents SDK、Claude Agent SDK、AutoGen、LlamaIndex、CrewAI 六个主流 harness（低代码 Dify/Coze 排除），并明确「目标不是推翻重做」。</p>
+  <table>
+    <thead><tr><th>维度</th><th>评估结论</th></tr></thead>
+    <tbody>
+      <tr><td>🟢 达到甚至超过主流生产水准</td><td><strong>持久化可靠性</strong>（effectively-once + fencing + 孤儿 Run 兜底）、<strong>闸门链执行架构</strong>（TOCTOU + 15 步准入）</td></tr>
+      <tr><td>🔴 代差</td><td>① CAP 治理运行期未生效；② 端到端从未在真实 LLM 下验证；③ 护栏停留正则黑名单、无 LLM07 检测；④ 缺一等公民长期记忆与标准化 tracing</td></tr>
+      <tr><td>编排差距</td><td>自研是「手写命令式单循环 + 硬编码 8/15 步」，缺声明式图 / 条件边 / 动态子图 / 原生 checkpoint 重放</td></tr>
+    </tbody>
+  </table>
+  <p><strong>图式编排引擎最终选型未定案</strong>。三条候选路径（<span class="mono">阶段二详细设计_架构升级_v1.0.md §2</span>）是 LangGraph4j（社区非官方移植）／Spring AI 图支持／自研轻量 DSL + 现有循环适配；交付物为「对比报告 + PoC」，PoC 须跑通 LEAF / ROUTER / SEQUENTIAL / 崩溃恢复四场景。<span class="mono">演进执行计划与系统设计_v1.0.md:95</span> 登记为 I5，状态「先做 PoC 验证，若不通过则回退到自研轻量 DSL」。<span class="tag t-gap">未定案</span></p>
+  <p>另有一份 <span class="mono">rag/docs/RAG-D12_处理路径梳理与业务流程再设计.md §2</span> 对比 RAGFlow / Dify / FastGPT / Haystack / LlamaIndex·LangChain，但声明「对比的目的不是选型替换，而是找到复杂度应该安放在哪里」——把这类文档读成「选型报告」会误判。<span class="tag t-doc">文档</span></p>
+
+  <h3 id="a2-11">A2.11 「看起来像选型、其实没定」清单</h3>
+  <p>以下是本次勘察逐项核对后，<strong>仓库里查不到结论</strong>的常见选型问题。写方案、做评审、答问时都应标注「未定案」，不要从早期方案里挑一句当结论。</p>
+  <table>
+    <thead><tr><th>#</th><th>问题</th><th>仓库里的真实状态</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>ADR-002～010</td><td><strong>文件不存在</strong>；v3.1 附录 I 只是规划清单</td></tr>
+      <tr><td>2</td><td>ORM / 数据访问（Spring JDBC / jOOQ / MyBatis）</td><td>v3.0/v3.1 与 <span class="mono">系统架构图.md:386</span> 均标「待决策」；代码里大量 <span class="inline-code">Jdbc*Repository</span>，但<strong>无 ADR 记录该选择及理由</strong></td></tr>
+      <tr><td>3</td><td>Spring AI 2.0 是否引入</td><td>仅注释 / ADR 理由 / 早期方案主张；<strong>两个 reactor 的 pom 均无依赖</strong>；查不到「决定引入」或「决定不引入」的 ADR</td></tr>
+      <tr><td>4</td><td>jOOQ 3.21.x 是否引入</td><td>仅出现在 ADR-011 的 Java 21 理由与版本矩阵；pom 无依赖</td></tr>
+      <tr><td>5</td><td>Redis（限流 / 热点缓存）</td><td>v3.0/v3.1 选型表列为 <span class="inline-code">[ ] 待确认</span>，且注明「不能作为唯一任务状态」；查不到落地决策</td></tr>
+      <tr><td>6</td><td>图式编排引擎</td><td>三路对比 + PoC 计划，<strong>无定案文档、无 PoC 结论</strong></td></tr>
+      <tr><td>7</td><td>生产模型供应商正式选型</td><td><span class="mono">D-002_模型零保留确认清单.md</span> 只确认 deepseek / minimax / workbuddy 三家<strong>零保留书面条款</strong>（且信息登记表多项空白、接入区域未勾选、「零保留 ≠ 不出境」）；CMP P0-2 仍把供应商选型列为待评估</td></tr>
+      <tr><td>8</td><td>embedding 模型唯一结论</td><td>设计 BGE-M3(1024) / 本地 qwen3(4096) / 种子 bge-m3(1024) / 待确认清单 T-5 全部待决策 / RAG-D02 §8 L-4「未选定具体权重与部署形态」</td></tr>
+      <tr><td>9</td><td>NLI 蕴含模型权重与形态</td><td>RD-Q3 待确认</td></tr>
+      <tr><td>10</td><td>cross-encoder 重排接入排期</td><td>选型已定，<strong>尚未接入</strong>；RAG-D12 把它排到「依赖 RAG-D08 评测集」之后</td></tr>
+      <tr><td>11</td><td><span class="inline-code">halfvec(4096)</span> 规模化处置</td><td>MRL 截断 / 二值量化 / 换 1024 维模型三条路<strong>都还没做</strong></td></tr>
+      <tr><td>12</td><td>中文分词具体实现库</td><td>路径已定，库名未指明；RAG-D05 §8 L-3 写「中文分词未实现」</td></tr>
+      <tr><td>13</td><td>Docling 服务接入参数（T-4）</td><td>基址 / 版本 / API 路径 / 响应字段 / 超时全部待决策；代码里 <span class="inline-code">PARSER_VERSION = "docling-pending-t4"</span> 占位</td></tr>
+      <tr><td>14</td><td>100 万片段压测 / 1500 万重评</td><td>未做 / 未触发</td></tr>
+      <tr><td>15</td><td>A-008 评测结论 / RAG 与主平台端到端闭环</td><td>未产出、未形成</td></tr>
+      <tr><td>16</td><td>「永久以 database 取代 RabbitMQ」</td><td>P4-D17 写 database 为「新增，暂时替代」、rabbitmq「保留」；查不到永久决策</td></tr>
+      <tr><td>17</td><td>护栏 ML 分类器 / LLM07 / 长期记忆 / OTel 具体产品</td><td>CMP §5 的 P0-3 / P1-2 / P1-3 只给「做法」，未定产品</td></tr>
+      <tr><td>18</td><td>CAP 开关全量开启放行结论</td><td><span class="inline-code">config.flag.cap-authorization-enforced</span> 默认 false；修复报告记「能力目录为空时 enforce 会拒掉所有工具调用」；查不到全量开启签核证据</td></tr>
+      <tr><td>19</td><td>PG 事实源之外备选状态存储的否决理由</td><td>红线 1 只给结论，无论证文档</td></tr>
+      <tr><td>20</td><td>context 压缩之外新增模块的独立 ADR</td><td>不存在；<span class="inline-code">agent-context</span> 第 13 模块的引入记在 ADR-013 决策第 3 条</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout c-warn"><span class="ct">时点差异：工作区的 D51 与文档里的「零接线」</span><p>本知识库以<strong>已提交文档与签核包</strong>为事实基线，其中 <span class="mono">上下文压缩G2验收签核包_v1.0.md §1.3</span>、<span class="mono">上下文压缩实施记录_v1.0.md §9</span> 都写「<span class="inline-code">RagHitQuota</span> 是纯算法内核、<strong>零生产接线</strong>，L2 SSE 薄适配归后续阶段」。但交付时<strong>工作区存在一批未提交的 S3-M10 薄适配改动</strong>：ADR-013 新增 <span class="inline-code">D51</span>，新增 <span class="inline-code">RagHitQuotaPort</span> / <span class="inline-code">RagHitQuotaAdapter</span> / <span class="inline-code">RagHitQuotaConfiguration</span>，且 <span class="inline-code">AgentChatOrchestrator</span> 已注入端口并调用 <span class="inline-code">applyRagQuota</span>。<br>两者是<strong>不同时点</strong>而非简单矛盾：D51 明确保留 <span class="inline-code">enabled=false</span> 与失败回退 legacy 固定口径的逐位等价基线，并把 M10 守卫从「零接线」升级为「唯一生产委托点 + 白名单外禁止」。ADR-013 第 81 行的 S2 边界注仍写「M10 不接线」，属同一文件内的时点漂移。<span class="tag t-unknown">未确认</span> 这批改动尚未提交、未纳入签核包，<strong>运行态是否启用须现场核对代码、<span class="inline-code">agent.context.rag-quota.*</span> 配置与运行实例</strong>，不得据文档或工作区单方面下结论。</p></div>
+  <h3 id="a2-12">A2.12 决策状态总表，以及「归因错误」的示范</h3>
+  <table>
+    <thead><tr><th>决策</th><th>编号 / 出处</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>Java 21 + Boot 4.1.1</td><td class="mono">ADR-011 / DEC-4</td><td><span class="tag t-plan">已决策待 M1 签署</span>（代码已按此基线构建）</td></tr>
+      <tr><td>RabbitMQ 4.3.6 + Quorum</td><td class="mono">ADR-001 / DEC-12</td><td><span class="tag t-plan">已决策待 M1 签署</span>；<span class="tag t-conflict">运行期默认已改为 database 通道</span></td></tr>
+      <tr><td>PostgreSQL 17</td><td class="mono">DEC-13</td><td><span class="tag t-live">已决策</span>（支持至 2029-11-08）</td></tr>
+      <tr><td>委派七态状态机</td><td class="mono">ADR-012</td><td><span class="tag t-live">冻结现状</span>，ADR 明确「不改任何实现」</td></tr>
+      <tr><td>上下文压缩统一入口</td><td class="mono">ADR-013</td><td><span class="tag t-live">已采纳</span>；G1 通过、G2 对话确认放行（线下补签）、<span class="tag t-plan">G3 仍待 TL/QA/FE 落签</span></td></tr>
+      <tr><td>消息双通道</td><td class="mono">P4-D17</td><td><span class="tag t-live">代码完成并本机实跑</span>（四场景，822 项 0 跳过）</td></tr>
+      <tr><td>pgvector / 五轴版本 / RRF</td><td class="mono">RAG-D00 RD-01/03/RD-09、RAG-D05</td><td><span class="tag t-plan">决策基线，待项目负责人签署</span></td></tr>
+      <tr><td>模型统一配置</td><td class="mono">模型统一配置架构设计.md</td><td><span class="tag t-live">第一至第四轮已落地</span></td></tr>
+      <tr><td>模型零保留</td><td class="mono">D-002</td><td><span class="tag t-live">GATE-2 已闭环</span>（三家书面承诺、23 项测试）</td></tr>
+      <tr><td>框架 / 图式编排</td><td class="mono">CMP / ST2 / EVO I5</td><td><span class="tag t-gap">未定案</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger"><span class="ct">归因错误示范：ADR-011 到底决定了什么</span><p><strong>错误写法：</strong>「两 reactor 两库 ⇒ 各一个 persistence 模块（ADR-011）」——v1 手册铁律表、<span class="mono">docs/模型统一配置架构设计.md:149/262</span>、<span class="mono">docs/上下文压缩开发计划_v1.0.md:60/71</span> 都这么写。<br><strong>核对结果：</strong>ADR-011 全文（190 行）主题为「Java 21 + Spring Boot 4.1.1 技术基线」，<strong>不含 reactor / 两库 / persistence 字样</strong>。约束本身真实存在，但出处是：约束 C12「两 reactor 两库互不塞代码」、C1「DB 写入只在 <span class="inline-code">agent-persistence</span>」、两个 pom 各自的 <span class="inline-code">&lt;module&gt;agent-persistence&lt;/module&gt;</span> / <span class="inline-code">&lt;module&gt;rag-persistence&lt;/module&gt;</span>，以及模块边界守卫。<br><strong>正确写法：</strong>「项目铁律 C12 / C1 + 两个 pom 的模块清单；多份文档把它归因为 ADR-011，但 ADR-011 正文无此条目」。<span class="tag t-conflict">文档冲突</span></p></div>
+  <p>同样的核对纪律适用于门禁数字：<strong>100 / 120 / 126 组反向验证</strong>是三个时点的快照；<strong>platform 3103/639 → 3110/641 → 3193/641</strong>、<strong>rag 756/65</strong> 也是不同批次。引用时带出处与日期，不要写「项目累计 126 组」而不说明口径。</p>
+  <div class="evidence"><b>证据：</b> 本册全部结论来自 4 份 ADR、<span class="mono">P0-D00</span>、<span class="mono">P4-D17</span>、<span class="mono">RAG-D00/D02/D05/D12</span>、<span class="mono">模型统一配置架构设计.md</span>、<span class="mono">主流Agent框架设计对比与演进建议_v3.2.md</span>、<span class="mono">上下文压缩G2验收签核包_v1.0.md</span> 与两个 reactor 的 pom / yml / 源码。</div>
+  <div class="xref">交叉引用：这些决策背后的 AI 概念见 <a href="ai-01-fundamentals.html#ai1">A1 全册</a>；由决策衍生的事故见 <a href="ai-03-hard-problems.html#a3-8">A3.8</a>；配置键落点见 <a href="02-environment-config.html#ch5-6">§5.6</a>；ADR 与文档索引见 <a href="06-reference.html#ch19-1">§19.1</a>；冲突总表见 <a href="06-reference.html#ch20">第 20 章</a>。</div>
+</section>
+<nav class="page-nav">
+  <a href="ai-01-fundamentals.html"><span class="pn-label">← 上一册</span><span class="pn-title">A1 · AI 知识点精讲</span></a>
+  <a class="pn-right" href="ai-03-hard-problems.html"><span class="pn-label">下一册 →</span><span class="pn-title">A3 · 特殊 AI 问题处理</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

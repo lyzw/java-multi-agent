@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第四篇 · 运行链路 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="04-runtime-flows" data-ai="0">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">第四篇 · 运行链路</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">基础六篇 · 分册</div>
+  <h1>第四篇 · 运行链路</h1>
+  <p class="ph-sub">Run 生命周期、请求级 SSE 与上下文压缩、RAG 检索（第 11–13 章）</p>
+  <div class="ph-meta"><span>覆盖：第 11–13 章</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<div class="part-divider" id="part4">
+  <div class="pn">第四篇 · 运行链路</div>
+  <h2>跟着一次请求走完整个系统</h2>
+  <p>第 11–13 章：Run 生命周期、请求级 SSE 与上下文压缩、RAG 双进程链路。把前两篇的静态知识串成动态流程。</p>
+</div>
+
+<!-- ==================== 第 11 章 ==================== -->
+
+<section class="chapter" id="ch11">
+  <div class="breadcrumb"><b>第四篇</b> / 第 11 章</div>
+  <h2><span class="num">11.</span> 一次 Run 的完整生命周期</h2>
+
+  <h3 id="ch11-1">11.1 端到端流程</h3>
+  <div class="figure">
+  <svg viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+    <defs><marker id="a6" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#1d4ed8"/></marker><marker id="a7" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#0f766e"/></marker></defs>
+    <rect x="14" y="22" width="168" height="62" rx="7" fill="#e8effd" stroke="#c6d9fb"/><text x="28" y="45" font-size="12.5" font-weight="700" fill="#173a8f">① HTTP 创建 Run</text><text x="28" y="65" font-size="11" fill="#4b5563">POST /api/runs</text><text x="28" y="80" font-size="10.5" fill="#6b7280">RunController</text>
+    <rect x="212" y="22" width="176" height="62" rx="7" fill="#e8effd" stroke="#c6d9fb"/><text x="226" y="45" font-size="12.5" font-weight="700" fill="#173a8f">② 授权 + 快照固化</text><text x="226" y="65" font-size="11" fill="#4b5563">RunCreationService</text><text x="226" y="80" font-size="10.5" fill="#6b7280">能力闭包 / 预算 / 策略</text>
+    <rect x="418" y="22" width="188" height="62" rx="7" fill="#e2f4f0" stroke="#bfe3da"/><text x="432" y="45" font-size="12.5" font-weight="700" fill="#0b5d56">③ 同事务写库</text><text x="432" y="65" font-size="11" fill="#4b5563">run + outbox_event</text><text x="432" y="80" font-size="10.5" fill="#6b7280">BEGIN … COMMIT（PG 事实源）</text>
+    <rect x="636" y="22" width="270" height="62" rx="7" fill="#fff5dc" stroke="#f0dca6"/><text x="650" y="45" font-size="12.5" font-weight="700" fill="#6d4a05">④ OutboxRelay 发布</text><text x="650" y="65" font-size="11" fill="#4b5563">按租户 OutboxPublisher → 消息通道</text><text x="650" y="80" font-size="10.5" fill="#6b7280">database（默认） / RabbitMQ；复核 tenantId</text>
+    <line x1="184" y1="53" x2="208" y2="53" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a6)"/>
+    <line x1="390" y1="53" x2="414" y2="53" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a6)"/>
+    <line x1="608" y1="53" x2="632" y2="53" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a6)"/>
+    <path d="M770 88 L770 116" stroke="#0f766e" stroke-width="2" marker-end="url(#a7)"/>
+    <rect x="636" y="118" width="270" height="62" rx="7" fill="#e2f4f0" stroke="#bfe3da"/><text x="650" y="141" font-size="12.5" font-weight="700" fill="#0b5d56">⑤ 分流 + 领取</text><text x="650" y="161" font-size="11" fill="#4b5563">EventRoutedMessageHandler（按 eventType）</text><text x="650" y="176" font-size="10.5" fill="#6b7280">claim：租约 + fencing token；回库重读状态</text>
+    <rect x="330" y="118" width="272" height="62" rx="7" fill="#e8effd" stroke="#c6d9fb"/><text x="344" y="141" font-size="12.5" font-weight="700" fill="#173a8f">⑥ RunExecutionLoop</text><text x="344" y="161" font-size="11" fill="#4b5563">RequestAssemblyPort → ModelGateway</text><text x="344" y="176" font-size="10.5" fill="#6b7280">ToolInvocationGate / 闭包守卫 / 预算裁剪</text>
+    <rect x="14" y="118" width="282" height="62" rx="7" fill="#ffffff" stroke="#dfe5ee"/><text x="28" y="141" font-size="12.5" font-weight="700" fill="#1f2937">⑦ 落步骤 + 事件 + 指标</text><text x="28" y="161" font-size="11" fill="#4b5563">run_step / run_event / usage_record</text><text x="28" y="176" font-size="10.5" fill="#6b7280">按 fencing token 收敛；影响行数≠1 必抛</text>
+    <line x1="632" y1="149" x2="606" y2="149" stroke="#0f766e" stroke-width="2" marker-end="url(#a7)"/>
+    <line x1="326" y1="149" x2="300" y2="149" stroke="#0f766e" stroke-width="2" marker-end="url(#a7)"/>
+    <rect x="14" y="212" width="892" height="50" rx="7" fill="#f0eafe" stroke="#d9c9f7"/><text x="28" y="234" font-size="12.5" font-weight="700" fill="#5b21b6">⑧ 终态：SUCCEEDED / FAILED / CANCELLED / TIMED_OUT（终态不可迁出）</text><text x="28" y="252" font-size="11" fill="#4b5563">SSE：GET /api/runs/{runId}/events（服务端 500ms 轮询 + Last-Event-ID 续传）　｜　结果：GET /api/runs/{runId}/result　｜　回放：transcript</text>
+    <path d="M155 184 L155 208" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a6)"/>
+    <rect x="14" y="282" width="892" height="36" rx="7" fill="#fdeaea" stroke="#f3c4c4"/><text x="28" y="305" font-size="11.5" fill="#8f1717">兜底：Outbox 重试 / 死信队列 delivery-limit=3 / RunRecoverySweeper 接管过期 RUNNING / UNKNOWN 走对账不盲目重放</text>
+  </svg>
+  <div class="cap">图 11-1　一次异步 Run 的完整链路（依据 agent-api / agent-application / agent-worker / agent-persistence 的类与 P2-D02）</div>
+  </div>
+
+  <h3 id="ch11-2">11.2 分阶段对照表</h3>
+  <table>
+    <thead><tr><th>阶段</th><th>入口 / 关键类</th><th>持久化</th><th>失败语义</th></tr></thead>
+    <tbody>
+      <tr><td>创建</td><td class="mono">RunController → RunCreationService</td><td><span class="inline-code">run</span>、<span class="inline-code">execution_snapshot</span></td><td>非法 scenario 400；预算/配置非法 fail-closed</td></tr>
+      <tr><td>同事务发布准备</td><td class="mono">RunCreationPort.OutboxBatch</td><td><span class="inline-code">outbox_event</span> 与 run 同事务</td><td>进程崩溃不丢任务</td></tr>
+      <tr><td>发布</td><td class="mono">OutboxRelay / OutboxPublisher</td><td>标记 published / failed + attempts</td><td>broker 未确认不标记；达阈值人工介入、不自动重置</td></tr>
+      <tr><td>消费分流</td><td class="mono">EventRoutedMessageHandler</td><td>—</td><td>不按 eventType 分流会重跑终态 Run（Sev-0）</td></tr>
+      <tr><td>领取</td><td class="mono">JdbcRunClaimRepository / LeasedTask</td><td>租约 + fencing token</td><td>claim 返回 0 行且无日志时要怀疑被别的实例抢走</td></tr>
+      <tr><td>执行</td><td class="mono">RunExecutionLoop / ToolInvocationGate / ContextRequestAssemblyAdapter</td><td><span class="inline-code">run_step</span>、<span class="inline-code">usage_record</span></td><td>策略非法抛 <span class="inline-code">RequestAssemblyException</span>，不静默回退</td></tr>
+      <tr><td>收敛</td><td class="mono">JdbcRunStepRepository / RunRecoverySweeper</td><td>终态 + 事件</td><td>影响行数 ≠ 1 必须抛异常</td></tr>
+      <tr><td>呈现</td><td class="mono">RunEventStreamer / RunEventController</td><td>只读 <span class="inline-code">run_event</span></td><td>SSE 为服务端轮询推送（500ms / 30min 超时），不是真推送</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch11-3">11.3 三处必须自己能说清的一致性边界</h3>
+  <ol>
+    <li><strong>Run 与 Outbox 的事务边界</strong>：为什么不能先发消息？答案见 <a href="01-project-overview.html#ch2-2">§2.2</a> 与 <span class="inline-code">OutboxPublisher</span> 类注释「消息发出前进程崩溃 → 任务永久丢失且无任何报错」。</li>
+    <li><strong>消息与状态的信任边界</strong>：MQ payload 不是事实源，Worker 回库重读；同时 <span class="inline-code">OutboxPublisher.publishOne</span> 在发送前复核 <span class="inline-code">tenantId</span>，防止仓储实现出错造成跨租户发布。</li>
+    <li><strong>终态与并发的边界</strong>：fencing token、终态不可迁出、影响行数断言、崩溃恢复扫描，四者一起防脑裂与重复执行。</li>
+  </ol>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">platform/agent-worker/.../worker/dispatch/OutboxPublisher.java（发送前租户归属复核，节选）</span><button>复制</button></div><pre><code><span class="cm">// ⚠️ 租户归属复核（P4-D05 / I-D05-1）：仓储若忽略 tenantId 参数返回了别的租户的行，
+//    此处必须拦下——消息一旦跨租户进入 MQ 就难以精确删除。</span>
+<span class="kw">if</span> (!tenantId.equals(message.tenantId())) {
+    handleFailure(event, "跨租户事件，拒绝发布（本发布器绑定 tenantId="
+            + tenantId + "，事件属于 tenantId=" + message.tenantId() + "）");
+    log.error("⚠️⚠️ 检测到跨租户事件，已拒绝发布并标记失败: …");
+    <span class="kw">return false</span>;
+}
+<span class="cm">// ⚠️ 必须等 broker 确认（publisher confirms）：发出即标记会让消息静默丢失</span>
+sender.send(event.eventType(), message);
+outbox.markOutboxPublished(tenantId, event.outboxId(), clock.instant());</code></pre></div>
+
+  <h3 id="ch11-4">11.4 端到端验证清单（不要只看「Run 建出来了」）</h3>
+  <ul class="checklist">
+    <li>用<strong>真实 HTTP 发布链路</strong>创建 Agent 版本，再建 Run（不要手工插 <span class="inline-code">execution_snapshot</span> 夹具 —— TST-14 的教训）。</li>
+    <li>Run 状态确实从 <span class="inline-code">QUEUED → RUNNING → 终态</span>，且抵达过<strong>真实模型调用或可控网关</strong>。</li>
+    <li><span class="inline-code">execution_snapshot</span> 写出 <span class="inline-code">agent_version</span> / <span class="inline-code">config_version</span> / <span class="inline-code">authz_version</span> / <span class="inline-code">effective_closure</span> 四字段（DAT-01 事故的验证口径）。</li>
+    <li><span class="inline-code">usage_record</span> 的 token 与 <span class="inline-code">cost_amount</span> 真的入账，且不是「工具次数 × 固定值」的代理值（P0-3b 事故）。</li>
+    <li>跨租户验证：用 t-a / t-b 各造一条，确认互不可见；用 <strong>app_agent</strong> 而非 ai_agent。</li>
+    <li>撤点反向验证：临时移开一个关键机制，指定用例必须转红，复原后 md5 一致。</li>
+  </ul>
+</section>
+
+<!-- ==================== 第 12 章 ==================== -->
+
+<section class="chapter" id="ch12">
+  <div class="breadcrumb"><b>第四篇</b> / 第 12 章</div>
+  <h2><span class="num">12.</span> 请求级 SSE 与上下文压缩链路</h2>
+
+  <h3 id="ch12-1">12.1 五条执行链路的定位</h3>
+  <table>
+    <thead><tr><th>链路</th><th>形态</th><th>入口</th><th>上下文特点</th></tr></thead>
+    <tbody>
+      <tr><td>L1</td><td>异步 Worker</td><td class="mono">RunExecutionLoop</td><td>服务端持久化快照；全窗口预算</td></tr>
+      <tr><td>L2</td><td><strong>请求级 SSE</strong></td><td class="mono">AgentChatOrchestrator</td><td>后端无状态 + 前端内存维护多轮 history；不存正文</td></tr>
+      <tr><td>L3</td><td>控制台直连</td><td class="mono">ConsoleChatController</td><td>平台链纯 LLM 多轮</td></tr>
+      <tr><td>L4</td><td>子 Agent</td><td class="mono">WorkerChildAgentRunner</td><td>不继承父 checkpoint；首轮锚独立 pinned</td></tr>
+      <tr><td>L5</td><td>语义路由</td><td class="mono">ModelAgentRouter</td><td>LLM 选 Agent + 白名单校验 + fail-closed</td></tr>
+    </tbody>
+  </table>
+  <p>与其混淆的还有<strong>两层「路由」</strong>：<span class="inline-code">agent-routing</span> 的 <span class="inline-code">RoutingEngine</span> 是纯函数规则转发引擎（按 ordinal 首个 TRUE 命中，只选目标不做准入）；<span class="inline-code">ModelAgentRouter</span> 才是入口级语义路由。两者不是一回事。</p>
+
+  <h3 id="ch12-2">12.2 SSE v1.1 协议与两条链</h3>
+  <table>
+    <thead><tr><th>项</th><th>平台链</th><th>租户链</th></tr></thead>
+    <tbody>
+      <tr><td>路径</td><td class="mono">/api/agent/chat/stream</td><td class="mono">/api/knowledge/agent/chat/stream</td></tr>
+      <tr><td>消费前端</td><td>admin-console（AI 实验室）</td><td>frontend（辅导台 Agent 对话）</td></tr>
+      <tr><td>thinking 帧</td><td>可下发</td><td><strong>恒丢弃</strong></td></tr>
+      <tr><td>请求体 tenantId</td><td>—</td><td><strong>禁止携带</strong>（白名单拒收并留痕）</td></tr>
+      <tr><td>Outbox / MQ</td><td colspan="2"><strong>都不写、都不发</strong></td></tr>
+      <tr><td>审计</td><td colspan="2"><span class="inline-code">begin()</span> 写 RUNNING → <span class="inline-code">finish()</span> 按 fencing token 收敛，影响行数≠1 必抛</td></tr>
+    </tbody>
+  </table>
+  <p>协议 v1.1 只做追加，<strong>不改任何 v1 帧的一个字节</strong>：冻结 14 个事件字典，新增第 14 事件 <span class="inline-code">context.checkpoint</span>，线序 <span class="inline-code">answer → usage → context.checkpoint? → done</span>；<span class="inline-code">done</span> 是应用层终帧。客户端 carry-over envelope 默认<strong>不落库</strong>，用独立 HMAC 校验；<span class="inline-code">SEND/STOP/RETRY</span> 必须把旧 state 展开，不能丢字段。</p>
+  <p>另有一条 Run 事件流 <span class="inline-code">GET /api/runs/{runId}/events</span>：服务端 <span class="inline-code">SseEmitter</span> + 500ms 轮询、30min 超时，前端用短连接 + 3s 轮询续传（<span class="inline-code">Last-Event-ID</span>），<strong>不用 EventSource</strong>——因为它不能带 Authorization 头，令牌放 query 会落访问日志。</p>
+
+  <h3 id="ch12-3">12.3 上下文压缩管线与硬不变量</h3>
+  <p><span class="inline-code">agent-context</span> 是零 LLM / 零 IO 的纯算法层：<span class="inline-code">CompactionPipeline</span> 按 W1 外置 → W2 裁剪 → W3 增量摘要三段执行；四级水位线由 <span class="inline-code">ContextBudget</span> / <span class="inline-code">BudgetAllocator</span> 决策；<span class="inline-code">RagHitQuota</span> 负责 RAG 命中配额（chunkId 去重 → 确定性全序 → 动态 top-k → 单块截断 → 引用也扣预算）。</p>
+  <table>
+    <thead><tr><th>不变量</th><th>含义</th><th>为什么重要</th></tr></thead>
+    <tbody>
+      <tr><td>稳定前缀不压缩</td><td>systemPrompt 基段 + toolSchemas 逐字保留；记忆/裁剪说明/摘要块后置为带围栏的 USER 消息</td><td>保证前缀缓存命中；不可信内容不进 systemPrompt</td></tr>
+      <tr><td>关闭态逐位等价</td><td>开关 false 时返回 <span class="inline-code">legacyRequest</span> 同一引用，零策略/预算/指标/事件</td><td>G1「影子对照零差异」放行条件</td></tr>
+      <tr><td>硬顶与引用扣预算</td><td>压缩后 after ≤ budget，且 chunkId+locator 引用也计入</td><td>防止「正文减了、引用又涨回来」</td></tr>
+      <tr><td>严格净省</td><td>before 按含重复的全量命中计算，末级 tie-break 确定性</td><td>防止用注水的 before 数字伪造收益</td></tr>
+      <tr><td>首轮锚 pinned、L4 不继承父 checkpoint</td><td>任务锚独立固定；子 Agent 用自己的首轮</td><td>防止多轮压缩把原始任务挤掉</td></tr>
+      <tr><td>净成本守恒</td><td><span class="inline-code">saved = (before − after) × price_input − summaryCost</span>；连续 N 次 ≤0 自动降为 TRIM_ONLY 并告警</td><td>「token 变少」不等于「成本变低」</td></tr>
+    </tbody>
+  </table>
+  <p>三级回滚路径：<span class="inline-code">enabled=false</span> → <span class="inline-code">strategy=OFF</span> → <span class="inline-code">TRIM_ONLY</span>。影子期严禁改变任何模型请求字节。</p>
+
+  <h3 id="ch12-4">12.4 门禁、里程碑与当前状态</h3>
+  <p>上下文压缩方案定义了阶段 S0–S6 / 门禁 G0–G6 / 里程碑 MS-1–MS-6，通用完成门槛 G-a～G-j（含三级验收、反向验证、fail-closed）。与本手册最相关的三道：</p>
+  <table>
+    <thead><tr><th>门禁</th><th>通过条件（文档口径）</th><th>禁止事项</th></tr></thead>
+    <tbody>
+      <tr><td>G1</td><td>影子对照零差异 + TL / QA 签核</td><td>本阶段禁止改变压缩行为或<strong>请求字节</strong></td></tr>
+      <tr><td>G2</td><td>三级验收在 L1 闭合 + QA 签核</td><td>任一真库 IT 用 ai_agent 跑过即判假绿重跑</td></tr>
+      <tr><td>G3</td><td>SSE 100 轮压测 + 协议兼容报告 + QA / FE 签核</td><td>跨进程契约失配不允许用假 Server 掩盖</td></tr>
+    </tbody>
+  </table>
+  <p><span class="tag t-unknown">未确认：当前各门禁的正式签署结论</span>。仓库中 <span class="inline-code">docs/上下文压缩G2验收签核包_v1.0.md</span> 是 G2 证据汇总入口，<span class="inline-code">rag/docs/RAG-D09_阶段门禁与主平台接入计划.md</span>（早期版本）写「三道门禁全部未通过」；工作区进度记录则称 G1 / G2 已对话确认放行、G3 待 TL/QA/FE 落签。<strong>以签核包与实际签署记录为准，本手册不代替门禁结论</strong>。</p>
+  <div class="callout c-warn">
+    <span class="ct">项目里有多套 G 编号，引用必须带出处</span>
+    <p>上下文压缩 G0–G6、RAG-D09 的 G1/G2/G3（建设阶段，无连字符）、RAG-D07 的 G-1～G-5（语料准入）、RAG-D08 的 G-1～G-9（CI 门禁）、P0 的 GATE-1/2/3（模型零保留）。<span class="inline-code">rag/docs/RAG-D09 §0.3</span> 明确要求「跨文档引用必须带出处，裸写 G-1 视为引用不完整」。同理 S 编号也有上下文压缩 S0–S6 / RAG 录入 S1–S2 / RAG-D09 R1–R3 三套。</p>
+  </div>
+
+  <h3 id="ch12-5">12.5 前端消费位置（便于联调定位）</h3>
+  <table>
+    <thead><tr><th>SSE 端点</th><th>前端定义</th><th>消费页面 / hook</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">GET /api/runs/{id}/events</td><td class="mono">frontend/src/api/client.ts</td><td class="mono">features/run/eventStream.ts → pages/RunProgressPage.tsx</td></tr>
+      <tr><td class="mono">POST /api/knowledge/chat/stream</td><td class="mono">frontend/src/api/generalChatApi.ts</td><td class="mono">features/chat/useGeneralChat.ts → pages/chat/GeneralChatPage.tsx</td></tr>
+      <tr><td class="mono">POST /api/knowledge/agent/chat/stream</td><td class="mono">frontend/src/api/agentChatApi.ts</td><td class="mono">features/agentChat/useAgentChat.ts → pages/chat/AgentChatPage.tsx</td></tr>
+      <tr><td class="mono">POST /api/chat/stream</td><td class="mono">admin-console/src/api/aiChatApi.ts</td><td class="mono">features/aiChat/useAiChat.ts</td></tr>
+      <tr><td class="mono">POST /api/agent/chat/stream</td><td class="mono">admin-console/src/api/agentChatApi.ts</td><td class="mono">pages/agentlab/AgentChatPage.tsx</td></tr>
+    </tbody>
+  </table>
+  <p>两端都用 <span class="inline-code">fetch + response.body.getReader()</span> 与自写 <span class="inline-code">IncrementalSseParser</span> 分帧。已完成的真实联调记录（项目台账）：369 帧 / 2 次 RAG 命中、租户链 thinking=0、Outbox 不写；两前端接真实端点时 404 / 501 的口径已固定。</p>
+</section>
+
+<!-- ==================== 第 13 章 ==================== -->
+
+<section class="chapter" id="ch13">
+  <div class="breadcrumb"><b>第四篇</b> / 第 13 章</div>
+  <h2><span class="num">13.</span> RAG 链路：从 PDF 到可溯源答案</h2>
+
+  <h3 id="ch13-1">13.1 两个进程、两套连接、一条共享库</h3>
+  <table>
+    <thead><tr><th>项</th><th class="mono">rag-bootstrap (8081)</th><th class="mono">rag-worker</th></tr></thead>
+    <tbody>
+      <tr><td>职责</td><td>检索面 + 管理面 HTTP</td><td>异步入库、切分、向量化、索引代际</td></tr>
+      <tr><td>驱动方式</td><td>HTTP 请求</td><td><span class="inline-code">@Scheduled</span> 轮询 PG <span class="inline-code">FOR UPDATE SKIP LOCKED</span></td></tr>
+      <tr><td>扫描包</td><td>5 个包，<strong>刻意排除 worker</strong></td><td>仅 <span class="inline-code">cn.studykid.rag.worker</span></td></tr>
+      <tr><td>共有配置</td><td colspan="2">同一 <span class="inline-code">study_rag</span> 库；<span class="inline-code">rag.embedding.*</span> 与 <span class="inline-code">rag.ops.*</span> 必须逐项一致</td></tr>
+    </tbody>
+  </table>
+  <p><span class="inline-code">rag-worker</span> 不提供 Web 容器，也没有 MQ 依赖；「不引入第二套 MQ」是 RAG-D02 的明确选型。若 Worker 没起来，表现是上传成功但 <span class="inline-code">ingest-jobs</span> 永远 PENDING，而 HTTP 服务健康检查正常。</p>
+
+  <h3 id="ch13-2">13.2 入库到检索的七步</h3>
+  <ol class="steps">
+    <li><strong>上传 / 登记来源</strong>：<span class="inline-code">POST /api/v1/management/sources</span>、<span class="inline-code">/documents</span>（multipart，256MB 上限）、<span class="inline-code">/documents/preview</span>（上传前 dry-run 解析预览）。三层去重预检：<span class="inline-code">DUP_SOURCE / DUP_EDITION / DUP_CARRIER</span>。</li>
+    <li><strong>建 IngestJob</strong>：一次处理尝试一条事实记录，重试新建一行、旧行永久留痕；Worker 轮询领取。</li>
+    <li><strong>版面解析</strong>：<span class="inline-code">DoclingDocumentParserPort</span>（HTTP 到 :5001）/ MinerU MiddleJson；输出是带版面结构的块序列而非纯文本；<span class="inline-code">BlockRoleResolver</span> 判定片段角色（正文/例题/习题/答案册…）。</li>
+    <li><strong>切分</strong>：<span class="inline-code">IngestionPipeline</span> 结构优先、语义兜底；<span class="inline-code">rag.premise.enabled</span> 灰度切换到 <span class="inline-code">rag-premise</span> 的 BlockChunker SPI；<span class="inline-code">chunk_policy</span> 留痕。</li>
+    <li><strong>向量化与索引</strong>：<span class="inline-code">OpenAiCompatibleEmbeddingPort</span>（/embeddings）→ <span class="inline-code">ChunkIndexer</span> / <span class="inline-code">IndexGenerationBuilder</span>；<strong>chunk 与 embedding 必须同事务写入</strong>；中文预分词写 <span class="inline-code">text_jieba</span> 供 <span class="inline-code">tsvector</span> 词法通道。</li>
+    <li><strong>检索七步</strong>：<span class="inline-code">RetrievalOrchestrator</span> ①知识点解析 ②多路召回（稠密 <span class="inline-code">&lt;=&gt;</span> + 词法）③版本过滤 ④角色过滤 ⑤知识点补全 ⑥排序（RRF 融合分 + 版本惩罚）⑦分数门禁。<strong>过滤条件是硬过滤，不是排序偏好</strong>。</li>
+    <li><strong>接地生成 / 引用</strong>：<span class="inline-code">GroundedGenerationService</span> 校验 <span class="inline-code">hitIds</span> → 复用检索闸门 → 逐字装配（<span class="inline-code">generator=EXCERPT_ASSEMBLY</span>）或 LLM 接地合成；引用必须指向可核验位置，依据不足输出「依据不足」，<span class="inline-code">disclaimer</span> 必须随 answer 展示。</li>
+  </ol>
+
+  <h3 id="ch13-3">13.3 教辅语料的四个特有约束</h3>
+  <table>
+    <thead><tr><th>约束</th><th>落地</th><th>违反后果</th></tr></thead>
+    <tbody>
+      <tr><td>版本五轴</td><td>学科 × 学段/年级 × 册次 × 出版社 × 修订版次；缺一轴不可入库；<span class="inline-code">EditionScope</span> 三档 STRICT / PREFERRED_WITH_FALLBACK / CROSS_EDITION</td><td>跨版本串答案</td></tr>
+      <tr><td>片段角色 + 泄题闸门</td><td>答案类内容为独立 <span class="inline-code">ChunkRole</span>，检索期硬过滤，EXPLAIN 模式不进 prompt</td><td>泄题（比答错更严重）</td></tr>
+      <tr><td>权威等级与准入状态机</td><td><span class="inline-code">TrustTier</span> 连续分级；<span class="inline-code">VERIFIED</span> 是入索引必要条件且<strong>只能由人工签发</strong>（自动链路终点恒为 PENDING / IN_REVIEW）</td><td>伪造证据 / 自动放行</td></tr>
+      <tr><td>分数门禁</td><td><span class="inline-code">rag.retrieval.min-score</span>（标定值 0.38，与模型+语料绑定）；低于阈值即「未找到依据」</td><td>拒答成为非法输出 → 幻觉</td></tr>
+    </tbody>
+  </table>
+  <p>索引代际蓝绿：<span class="inline-code">BUILDING → ACTIVE → RETIRED</span>，换嵌入模型时构建新一代再切换，检索只读 ACTIVE；代际构建已从 HTTP 同步改为 Worker 轮询分批（RAG-D22/D23），并有 <span class="inline-code">scripts/e2e-index-generation.sh</span> 端到端演练。</p>
+
+  <h3 id="ch13-4">13.4 对外 HTTP 契约速查</h3>
+  <table>
+    <thead><tr><th>面</th><th>方法 / 路径</th><th>关键头 / 语义</th></tr></thead>
+    <tbody>
+      <tr><td>检索面</td><td class="mono">POST /api/v1/retrieval</td><td><span class="inline-code">X-Tenant-Id</span> 必需；非法 UUID → 400；全局哨兵 → 400；嵌入不可用 → 503</td></tr>
+      <tr><td>检索面</td><td class="mono">POST /api/v1/retrieval/generate</td><td><span class="inline-code">hitIds</span> 非空且 ≤50；依据被闸门滤光 → 200 + 空 answer</td></tr>
+      <tr><td>管理面</td><td class="mono">/api/v1/management/**（约 43 个端点）</td><td><span class="inline-code">X-Tenant-Id</span>、<span class="inline-code">X-Rag-Scope: TENANT|PLATFORM|ALL</span>、<span class="inline-code">X-Tenant-Min-Trust-Tier</span></td></tr>
+      <tr><td>管理面示例</td><td class="mono">GET /ingest-jobs、POST /reindex、GET /index-generations、PATCH /chunks/{id}/role</td><td>平台档写入需治理票据；缺 <span class="inline-code">rag_ops</span> 通道 → 503 而非静默空列表</td></tr>
+    </tbody>
+  </table>
+  <p><span class="tag t-conflict">文档冲突</span> <span class="inline-code">rag/rag-api/pom.xml</span> 的 description 写「SSE 进度流」，但 <span class="inline-code">rag/</span> 全树没有 <span class="inline-code">SseEmitter</span> / <span class="inline-code">text/event-stream</span> / <span class="inline-code">produces</span> 的实现；<strong>RAG 后端当前没有 SSE 端点</strong>，前端的进度靠 <span class="inline-code">GET /ingest-jobs[/{id}]</span> HTTP 轮询。前端消费的 SSE 全部来自 platform（8080）。</p>
+
+  <h3 id="ch13-5">13.5 跨服务契约：最容易「假绿」的地方</h3>
+  <p>platform 通过 <span class="inline-code">HttpRagRetrievalGateway</span>（地址来自 <span class="inline-code">agent.rag.base-url</span>）调用 <span class="inline-code">/api/v1/retrieval</span>。已登记的真实事故：<strong>假 Server 允许空 <span class="inline-code">revisionCode=""</span>，单测全绿，而真 rag 拒空串 → 检索 500 → 降级为空命中</strong>；修复值改为 <span class="inline-code">"未指定"</span>。</p>
+  <div class="callout c-danger">
+    <span class="ct">跨进程契约的通用纪律</span>
+    <p>凡是跨进程 HTTP 的字段，必须按<strong>对端真实校验</strong>取值，而不是按本端 mock 的宽松程度。联调时至少做一次「两个真进程 + 真实字节」验证；空命中必须区分「确实没命中」与「下游 500 后被降级成空命中」——后者是静默失真，正是 <a href="05-troubleshooting.html#ch14-2">§14.2</a> 定义的典型形态。</p>
+  </div>
+  <p>RAG 命中回到 platform 后，经 <span class="inline-code">PromptGuard.wrapToolResult("rag", …)</span> 作 <strong>user 消息</strong>注入；<span class="inline-code">scenario</span> 只认 <span class="inline-code">run.input_payload.scenario</span>，不从正文派生。</p>
+  <div class="xref">交叉引用：RAG 配置见 <a href="02-environment-config.html#ch5-4">§5.4</a>；rag 两进程差异见 <a href="02-environment-config.html#ch5-7">§5.7</a>；平台档 500 的真实复盘见 <a href="05-troubleshooting.html#ch16-9">§16.9</a>；跨服务故障排查见 <a href="05-troubleshooting.html#ch15-4">§15.4</a>。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="03-java-skill-transfer.html"><span class="pn-label">← 上一册</span><span class="pn-title">第三篇 · 经验迁移</span></a>
+  <a class="pn-right" href="05-troubleshooting.html"><span class="pn-label">下一册 →</span><span class="pn-title">第五篇 · 问题排查</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

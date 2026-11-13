@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A19 · 能力缺口与增强路线 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-19-roadmap" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A19 · 能力缺口与增强路线</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A19 · 能力缺口与增强路线 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">引用式提示词库的 fail-closed 设计、缺口分级与优先级、可复用增强模式、给接手者的第一周路线</p>
+  <div class="ph-meta"><span>覆盖：A19.1–A19.8</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a19">
+  <div class="breadcrumb"><b>AI 专题 · A19</b> / 能力缺口与增强路线</div>
+  <h2><span class="num">A19.</span> 能力缺口与增强路线：从「没有」到「该怎么补」</h2>
+  <p>前十八册讲的是<strong>系统现在是什么样</strong>。这一册讲<strong>它还不是什么样，以及如果要补，该从哪下手</strong>。这不是一份愿望清单——每一条都基于前十八册已核实的证据，标注了「缺口在哪、为什么缺、补的时候要注意什么」。对 Java 后端转型者来说，这一册的价值在于：<strong>看懂一个系统的能力边界，比记住它的功能列表更重要</strong>，因为你要做的就是扩展它。</p>
+  <div class="callout c-info"><span class="ct">本册的定位与读法</span><p>如果你刚接手这个项目，先读 A19.8 的「第一周路线」；如果你要规划迭代，读 A19.2–A19.6 的缺口分级与优先级；如果你在做架构评审，A19.7 的「可复用增强模式」给出了每一次扩展都该遵守的形态。<strong>本册不代替项目排期</strong>——它只回答「技术上该注意什么」。</p></div>
+
+  <h3 id="a19-1">A19.1 引用式提示词库：一个「已定义但被明确拒绝」的缺口</h3>
+  <p>这是本册最值得细讲的一条，因为它<strong>推翻了「Prompt 完全没有设计」这个粗略结论</strong>。真实状态是：契约里已定义，运行期明确拒绝执行。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">systemPrompt 的三种结果（AgentModelConfigAssembler.java:320-370）</span><button>复制</button></div><pre><code>/**
+ * 解析系统提示：读 cap_agent_def.instructions
+ *
+ * ⚠️ V1 只支持 inlineInstructions
+ *    （契约的 systemPromptRef 引用式提示词库在 V1 未实现）
+ *    —— 出现 systemPromptRef 时【明确拒绝】（返回 null → 拒绝执行），
+ *    而不是静默忽略：静默忽略会让运维以为「提示词已生效」，
+ *    而运行期实际用的是另一段（甚至没有）文本。
+ *
+ * ⚠️ 「声明坏了」与「没声明」是两种不同的失败：
+ *   · 没声明（{}）→ 系统提示词为空串，Agent 照常跑
+ *     （它可能本来就不需要特殊指令）
+ *   · 声明坏了（JSON 非法 / 用了未实现的引用式）→ 【拒绝执行】
+ *     带着一份「读不懂的提示词」跑，等于静默丢掉了业务指令，
+ *     而模型仍然按「无约束」行事 —— 这是最坏的一类假成功。
+ */</code></pre></div>
+  <p>三个层次的事实必须分清，混说任何一个都会写错方案：</p>
+  <table>
+    <thead><tr><th>层次</th><th>事实</th><th>证据</th></tr></thead>
+    <tbody>
+      <tr><td>契约层 <span class="tag t-live">已定义</span></td><td><code class="inline-code">systemPromptRef</code> 是一个<strong>已定义</strong>的字段，指代「引用式提示词库」</td><td>代码显式判断 <code class="inline-code">root.containsKey("systemPromptRef")</code></td></tr>
+      <tr><td>实现层 <span class="tag t-gap">零落地</span></td><td><strong>V1 未实现</strong>；grep <code class="inline-code">prompt_template|PromptTemplate|提示词模板</code> 全仓<strong>零命中</strong>，DDL 无提示词表</td><td>全仓 grep + <code class="inline-code">deploy/sql/</code> 无对应表</td></tr>
+      <tr><td>运行期 <span class="tag t-live">fail-closed</span></td><td>配置里写了 <code class="inline-code">systemPromptRef</code> → <strong>拒绝执行</strong>（fail-closed），不是静默降级</td><td><code class="inline-code">systemPrompt()</code> 返回 null → 调用侧拒绝</td></tr>
+      <tr><td>当前实际</td><td>系统提示来自 <code class="inline-code">cap_agent_def.instructions</code> 的 <code class="inline-code">inlineInstructions</code> 内联字符串；「版本」随 CAP 发布流程走（<a href="ai-05-config-governance.html#a5-7">A5.7</a> 三步发布），不是独立的提示词版本库</td><td><code class="inline-code">AgentModelConfigAssembler.java:351-365</code></td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet"><span class="ct">这个 fail-closed 设计本身就是教材</span><p>面对「不支持的功能被配置了」，有三种处理方式——静默忽略（最差）、静默降级（次差）、<strong>明确拒绝（本项目选择）</strong>。理由写在注释里：静默忽略会让运维以为「提示词已生效」，而实际跑的是另一段文本。同样重要的是<strong>区分「没声明」与「声明坏了」</strong>：<code class="inline-code">{}</code> 是合法的「不需要提示词」，Agent 照常跑；解析失败或用了未实现的引用式则是「带着读不懂的指令跑」，必须拒绝。<strong>这两种情况的失败语义不同，处理方式也不该相同。</strong></p></div>
+  <h4 class="sub-mini">如果要补，该注意什么</h4>
+  <ul>
+    <li><strong>不要绕过 CAP 发布流程</strong>：提示词一旦可被引用，它就必须有版本、有发布、有回滚——否则「改提示词」会变成一次不可审计的热更新。参考 <a href="ai-05-config-governance.html#a5-7">A5.7</a> 的三步发布（登记 → 双人复核 → CAS 切指针）。</li>
+    <li><strong>围栏常量必须与 PromptGuard 同源</strong>：提示词正文会被拼进系统提示，若模板里允许插入变量，就重新打开了 <a href="ai-03-hard-problems.html#a3-3">A3.3</a> 的注入面。模板变量必须走 <code class="inline-code">PromptGuard</code> 围栏。</li>
+    <li><strong>保留 inlineInstructions</strong>：作为「不需要版本管理的小改动」的逃生通道，强行统一到引用式会增加低价值流程成本。</li>
+    <li><strong>补测试时优先测「拒绝路径」</strong>：这套设计现在唯一被保证的行为就是「遇到 systemPromptRef 就拒绝」，实现引用式之后这条测试要保留（防止回退成静默忽略）。</li>
+  </ul>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-worker/.../execute/AgentModelConfigAssembler.java:320-370</span>（systemPrompt 三种结果与注释）；全仓 grep <code class="inline-code">prompt_template|PromptTemplate|提示词模板|提示词管理</code> = 0 命中（2026-11-12）。</div>
+
+  <h3 id="a19-2">A19.2 缺口全景：按「性质」而非「热度」分类</h3>
+  <p>把十八册里散落的「未落地」条目汇总，按<strong>性质</strong>分成四类。分类决定处理方式——这是本册的核心方法：</p>
+  <table>
+    <thead><tr><th>性质</th><th>含义</th><th>处理方式</th><th>条目</th></tr></thead>
+    <tbody>
+      <tr><td><strong>A. 刻意不做</strong> <span class="tag t-gap">有意为之</span></td><td>做过取舍，有明确理由，现在做反而有害</td><td><strong>不要动</strong>；只在条件变化时重评</td><td>模型 fallback 链、网关级重试、模型侧熔断、SSE 断线重连、模糊测试式动态发现、HNSW 索引（4096 维建不了）</td></tr>
+      <tr><td><strong>B. 分期未到</strong> <span class="tag t-plan">已排期</span></td><td>有设计、有分期，只是排期在后</td><td>按既有分期推进，<strong>不插队</strong></td><td>记忆 P2 向量召回、P3 会话记忆、MCP stdio 传输、代际分布式分片</td></tr>
+      <tr><td><strong>C. 结构缺口</strong> <span class="tag t-gap">该补</span></td><td>契约已定义、实现缺失，且缺了会有真实风险</td><td><strong>优先补</strong>，补时要防回退</td><td>引用式提示词库（A19.1）、Agent Chat 事件序列号与重放、MCP Server 暴露</td></tr>
+      <tr><td><strong>D. 证据空白</strong> <span class="tag t-unknown">先勘察</span></td><td>不知道做没做、或不知道效果如何</td><td><strong>先勘察再决策</strong>，不要凭想象排期</td><td>记忆召回的实际教育效果、代际清理策略、oauth 凭据完整性、流式故障矩阵覆盖度</td></tr>
+    </tbody>
+  </table>
+  <p>这个分类的回答方式是「<strong>这条缺口该不该补</strong>」——A 类不该补，B 类不用现在补，C 类该补，D 类先查。<strong>能分清这四类，比列一百条 TODO 有用。</strong></p>
+  <div class="evidence"><b>证据：</b> 汇总自 <a href="ai-13-agent-memory.html#a13-summary">A13.11</a>、<a href="ai-14-model-gateway.html#a14-10">A14.10</a>、<a href="ai-15-streaming-sse.html#a15-10">A15.10</a>、<a href="ai-16-mcp-runtime.html#a16-10">A16.10</a>、<a href="ai-17-test-engineering.html#a17-10">A17.10</a>、<a href="ai-18-vector-ops.html#a18-10">A18.10</a>；总表见 <a href="06-reference.html#ch20-5">§20.5</a>。</div>
+
+  <h3 id="a19-3">A19.3 A 类：刻意不做的六项，及其「什么条件下该重评」</h3>
+  <p><span class="tag t-gap">未落地</span> 在这里<strong>不等于欠债</strong>。下面每一项的「不做的理由」都能在代码或 DDL 里找到原文，这是它与「懒得做」的唯一区别（判据见本节末尾的警示框）。</p>
+  <p>这一节是本册最容易被误读的部分——「未落地」不等于「欠债」。每一项都附了重评条件，这是判断「现在还该不该不做」的唯一依据：</p>
+  <table>
+    <thead><tr><th>缺口</th><th>不做的理由</th><th>重评条件</th></tr></thead>
+    <tbody>
+      <tr><td>多模型 fallback 链</td><td>静默换模型会同时改变单价与能力，破坏成本与质量两条口径（<a href="ai-14-model-gateway.html#a14-10">A14.10</a>）</td><td>需要「单一供应商不可用时的业务连续性 SLA」时——届时要做<strong>显式降级</strong>（标记模型降级 + 成本按实际价）而非静默切换</td></tr>
+      <tr><td>网关级自动重试</td><td>与 Worker 侧重试同时生效 = 双重重试（<a href="ai-14-model-gateway.html#a14-5">A14.5</a>）</td><td>只有当重试职责整体迁到网关侧、Worker 侧撤除时才做（二选一，不能并存）</td></tr>
+      <tr><td>模型侧熔断器</td><td>模型网关是一等资源、失败率靠指标告警治理；MCP 才需要熔断（<a href="ai-16-mcp-runtime.html#a16-7">A16.7</a>）</td><td>单供应商失败率波动导致成本/延迟显著恶化时——先看指标能否支撑决策</td></tr>
+      <tr><td>SSE 断线重连 / 事件重放</td><td>聊天链路未做事件序号，重放需要后端持久化缓冲；Run 链路已有序号（<a href="ai-15-streaming-sse.html#a15-10">A15.10</a>）</td><td>用户投诉「长回答断线后全部丢失」成为主要问题时——需先给事件加 sequenceNo</td></tr>
+      <tr><td>MCP 动态工具发现</td><td>DDL CHECK 强制 <code class="inline-code">dynamic_discovery=false</code>：新工具必须走发布流程（<a href="ai-16-mcp-runtime.html#a16-9">A16.9</a>）</td><td><strong>不建议重评</strong>：这是安全边界而非性能取舍</td></tr>
+      <tr><td>HNSW 索引</td><td>4096 维 &gt; halfvec 4000 上限，建不了；当前语料量级全表扫描更快且无召回损失（<a href="ai-18-vector-ops.html#a18-2">A18.2</a>）</td><td>语料达万级片段，且已选定三条路线之一（MRL 截断 / 二进制量化 / 换小维度模型）</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn"><span class="ct">「刻意不做」也要有证据，否则会变成「懒得做」的借口</span><p>区分标准很简单：<strong>能否指出写在代码/DDL 里的具体理由</strong>。A 类六项全部有注释或约束可查（fallback 的注释、重试的注释、DDL 的 CHECK、索引的留档注释）。如果你发现某个「未落地」找不到这类证据，它就不属于 A 类，应该归入 C 或 D。</p></div>
+
+  <h3 id="a19-4">A19.4 C 类优先补：三项结构缺口的实施要点</h3>
+  <table>
+    <thead><tr><th>缺口</th><th>缺口性质</th><th>实施要点</th></tr></thead>
+    <tbody>
+      <tr><td><strong>引用式提示词库</strong></td><td>契约已定义、运行期拒绝</td><td>见 A19.1 四条；核心是<strong>接入 CAP 发布流程 + 模板变量走围栏 + 保留 inline 逃生通道</strong></td></tr>
+      <tr><td><strong>Agent Chat 事件序列号</strong></td><td>Run 链路有、聊天链路无</td><td>加 <code class="inline-code">sequenceNo</code> 到 <code class="inline-code">AgentChatEvent</code>；前端 <code class="inline-code">IncrementalSseParser</code> 按序号去重/补洞；<strong>架构测试会强制双前端同步</strong>（<a href="ai-15-streaming-sse.html#a15-9">A15.9</a>）。注意这是断线重连的前置条件，但加了序号不等于做了重连</td></tr>
+      <tr><td><strong>MCP Server 暴露</strong></td><td>本仓只有客户端</td><td>方向相反：把本平台工具暴露为 MCP server 供外部 Agent 调用。<strong>必须复用现有闸门</strong>（授权/预算/审批），否则等于给自己开了一个绕过全部治理的入口（<a href="ai-16-mcp-runtime.html#a16-9">A16.9</a>）</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="a19-5">A19.5 可复用的五种增强模式：每次扩展都该遵守的形态</h3>
+  <p>前十八册里反复出现的不是具体功能，而是几种<strong>扩展形态</strong>。任何新能力都应先问「它属于哪一种」，答案会直接决定设计：</p>
+  <table>
+    <thead><tr><th>模式</th><th>形态</th><th>范式案例</th><th>扩展时最易犯的错</th></tr></thead>
+    <tbody>
+      <tr><td><strong>① 端口 + 可空注入</strong></td><td>新能力做成 ports 接口，宿主类用可空依赖；null = 未装配，能力降级但不影响主流程</td><td><code class="inline-code">McpHandlerProvider</code>（可空 = 只有原生工具）、<code class="inline-code">IndexGenerationBuilder</code>（可空 = 静默待命）</td><td>用 <code class="inline-code">new</code> 直接实例化 → 装配缺失时不会降级而是 NPE；且测试无法替换</td></tr>
+      <tr><td><strong>② 增强 + 降级不穿透</strong></td><td>增强功能失败只 WARN + 本次不生效，绝不耗尽主流程</td><td>记忆召回失败 → <code class="inline-code">memoryBlock=null</code>（<a href="ai-13-agent-memory.html#a13-7">A13.7</a>）；播放 checkpoint 失败 → 退回 v1 字节（<a href="ai-15-streaming-sse.html#a15-3">A15.3</a>）</td><td>把增强失败当核心失败抛出去 → 一个非关键组件拖垮整个 Run</td></tr>
+      <tr><td><strong>③ fail-closed 未知</strong></td><td>拿不准就拒绝，绝不「先跑起来」</td><td>配置坏了拒绝执行（A19.1）、解析不到模型抛异常（<a href="ai-14-model-gateway.html#a14-3">A14.3</a>）、pgvector 缺失拒绝启动（<a href="ai-18-vector-ops.html#a18-9">A18.9</a>）</td><td>静默回落默认值 → 变成「配置坏了但没人知道」</td></tr>
+      <tr><td><strong>④ 唯一信任边界</strong></td><td>不可信内容的可信化只在一个地方做</td><td>MCP 输出在 Gate 边界可信化（<a href="ai-16-mcp-runtime.html#a16-8">A16.8</a>）；记忆/压缩态/RAG 统一走 <code class="inline-code">PromptGuard</code> 围栏</td><td>在多层各清一次 → 既多余又不足，且审计无单一锚点</td></tr>
+      <tr><td><strong>⑤ 双写同一事务 + 派生列失效</strong></td><td>主数据与派生数据同事务写，且派生列在变更时显式失效</td><td><code class="inline-code">text_jieba=''</code> 与 <code class="inline-code">embed_model=EXCLUDED</code>（<a href="ai-18-vector-ops.html#a18-6">A18.6</a>）</td><td>只更新主数据 → 派生列陈旧，判据认为「已完成」，静默不重算</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet"><span class="ct">怎么用这五种模式</span><p>接手一个「加个功能」的需求时，先用这五条过一遍：它是增强还是核心（决定 ②）？依赖该可空吗（①）？未知情况该拒还是该默认（③）？哪些内容不可信、在哪统一处理（④）？有没有派生数据要失效（⑤）？<strong>五问过完，设计基本就定了</strong>——这比参考任何框架文档都更贴合这个仓库。</p></div>
+
+  <h3 id="a19-6">A19.6 D 类：证据空白清单与勘察方法</h3>
+  <p>这一节的条目全部是 <span class="tag t-unknown">未确认</span>——不知道做没做、或不知道效果如何。它们的正确处理方式是<strong>先勘察再决策</strong>，而不是凭想象排期。</p>
+  <table>
+    <thead><tr><th>待确认项</th><th>为什么值得查</th><th>怎么查（可执行）</th></tr></thead>
+    <tbody>
+      <tr><td>记忆召回的实际效果</td><td>P1 已上线，但「召回是否提升正确率」无实测结论（<a href="ai-13-agent-memory.html#a13-summary">A13.11</a>）</td><td>用 <a href="ai-10-quality-evaluation.html">A10</a> 的 L2 判分体系积累样本；对比「开/关记忆」两组正确率，n≥30 才有意义</td></tr>
+      <tr><td>RETIRED 代际的清理策略</td><td>不清理会持续占用存储，清理过早丢回滚能力</td><td>grep <code class="inline-code">RETIRED</code> 的删除/归档路径；查是否有定时任务触碰 <code class="inline-code">rag_index_generation</code></td></tr>
+      <tr><td>MCP oauth 凭据完整性</td><td>DDL 允许 <code class="inline-code">auth_kind='oauth'</code>，但运行时是否支持 oauth 流程未逐行核验</td><td>读 <code class="inline-code">RefMcpCredentialPort</code> 全部实现分支；查 <code class="inline-code">McpCredentialSecurityTest</code> 覆盖哪些 auth_kind</td></tr>
+      <tr><td>流式故障矩阵覆盖度</td><td>Fake 的 streamChat 已逐态归一化，但断言是否逐态覆盖未核（<a href="ai-17-test-engineering.html#a17-10">A17.10</a>）</td><td>列 <code class="inline-code">MiniMaxModelGatewayStreamTest</code> 的 @Test 清单，与 FaultMode 七态对表</td></tr>
+      <tr><td>rag 侧 SSE 进度流</td><td>pom description 写有、代码无（<a href="06-reference.html#ch20-1">§20.1 第 7 行</a>）</td><td>确认是文档滞后还是功能回退；若真的要补，进度查询已有轮询接口可复用</td></tr>
+    </tbody>
+  </table>
+  <p>勘察纪律：<strong>每查清一条，就把结论写回对应册与 <a href="06-reference.html#ch20">第 20 章</a></strong>，而不是记在脑子里或群里。这个知识库的价值全在「结论可回溯」——一条口头结论等于没有。</p>
+
+  <h3 id="a19-7">A19.7 不建议做的事：三类常见但错误的扩展方向</h3>
+  <table>
+    <thead><tr><th>看起来该做</th><th>为什么不建议</th><th>正确做法</th></tr></thead>
+    <tbody>
+      <tr><td>引入 Spring AI 全家桶替换自研网关</td><td>两个 reactor 的 pom 均无 Spring AI 依赖；它的作用只是 ADR-011 的设计依据之一（<a href="ai-01-fundamentals.html#ai1-5">A1.5</a>）。引入即等于重做已经验证过的归一化/脱敏/观察者三层</td><td>若确需，先做 PoC 证明「替换后仍满足六分类与脱敏契约」，再谈</td></tr>
+      <tr><td>给 Agent 聊天加 WebSocket 替代 SSE</td><td>SSE 的单向/文本/HTTP 特性正好匹配「一问一答 + 事件流」；WS 带来的双向能力当前无需求，却要重做鉴权（<code class="inline-code">DispatcherType.ASYNC</code> 那套不再适用）与双前端协议</td><td>真需要双向时再评估；当前缺口是重连，不是通道能力</td></tr>
+      <tr><td>把提示词直接塞进数据库做热更新</td><td>绕开 CAP 发布流程 = 无版本、无复核、无回滚，且会重新打开注入面（A19.1）</td><td>走 A5.7 三步发布；模板变量走 PromptGuard 围栏</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="a19-8">A19.8 接手者的第一周路线：从「看懂」到「能改」</h3>
+  <table>
+    <thead><tr><th>天</th><th>目标</th><th>读什么 / 做什么</th><th>验收标准</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>跑起来</td><td><a href="02-environment-config.html#ch4">第 4 章</a>→<a href="02-environment-config.html#ch7">第 7 章</a>；<code class="mono">scripts/dev-*.sh</code></td><td>两个 jar 起得来、健康检查通过、能发一次真实对话</td></tr>
+      <tr><td>D2</td><td>看清拓扑</td><td><a href="01-project-overview.html#ch2">第 2 章</a>、<a href="04-runtime-flows.html#ch11">第 11 章</a></td><td>能不看文档画出 Run 链路与五条执行链路</td></tr>
+      <tr><td>D3</td><td>理解一次 LLM 调用</td><td><a href="ai-14-model-gateway.html">A14</a> + <a href="ai-11-cost-governance.html#a11-3">A11.3</a></td><td>能说出解析 → 调用 → 结算的完整路径与失败分类</td></tr>
+      <tr><td>D4</td><td>理解答案怎么到前端</td><td><a href="ai-15-streaming-sse.html">A15</a> + <a href="04-runtime-flows.html#ch12">第 12 章</a></td><td>能解释 13 类事件、双端点、超时三层为什么这样定</td></tr>
+      <tr><td>D5</td><td>建立安全直觉</td><td><a href="ai-13-agent-memory.html#a13-6">A13.6</a>、<a href="ai-16-mcp-runtime.html#a16-4">A16.4</a>、<a href="ai-03-hard-problems.html#a3-3">A3.3</a></td><td>能说出「不可信内容」在这个系统里有哪几个入口、分别在哪收口</td></tr>
+      <tr><td>D6</td><td>学会验收</td><td><a href="ai-17-test-engineering.html">A17</a> + <a href="ai-09-quality-assurance.html#a9-5">A9.5 反证</a></td><td>能写一个撤点反证脚本，并说明什么结果算「无效反证」</td></tr>
+      <tr><td>D7</td><td>找准切入点</td><td>A19.2 缺口分类 + <a href="06-reference.html#ch20">第 20 章</a></td><td>能给自己挑一个 C 类缺口，并说出它属于五种增强模式的哪一种</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-ai"><span class="ct">给转型者的心里话</span><p>这套系统里最反直觉的一条经验是：<strong>「没做什么」和「做了什么」同等重要</strong>。十八册里至少有六处「刻意不做」，每一处都有写在代码里的理由。传统后端习惯用「功能完备度」评价系统，而 AI 系统的成熟度更多体现在<strong>边界是否清晰、失败是否可解释、取舍是否留痕</strong>。你在这个项目里最该练的，不是把功能堆齐，而是<strong>在每一个「要不要做」的岔路口给出有证据的判断</strong>——这也是这个知识库反复用「证据 → 已实现 / 仅设计 / 证据空白」三档标注的原因。</p></div>
+  <div class="evidence"><b>证据源：</b> 本册为综述性分册，事实均引用自 <a href="ai-01-fundamentals.html">A1</a>–<a href="ai-18-vector-ops.html">A18</a> 各册已标注的源码位置，以及 <a href="06-reference.html#ch20">第 20 章</a> 的冲突与证据空白总表。新增论断仅一处直接取自代码：<span class="mono">platform/agent-worker/.../AgentModelConfigAssembler.java:320-370</span>（systemPrompt 的三种结果）。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-18-vector-ops.html"><span class="pn-label">← 上一册</span><span class="pn-title">A18 · 向量库运维与索引代际</span></a>
+  <a class="pn-right" href="index.html"><span class="pn-label">下一册 →</span><span class="pn-title">总入口 · 学习路径</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A7 · RAG 语料工程化与数据流水线 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-07-corpus-engineering" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A7 · RAG 语料工程化与数据流水线</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A7 · RAG 语料工程化与数据流水线 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">从原始 PDF 到可检索向量：十段工程链、两套解析后端、V1.0→V1.0.2 与 10 条文档失真</p>
+  <div class="ph-meta"><span>覆盖：A7.1–A7.10</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a7">
+  <div class="breadcrumb"><b>AI 专题 · A7</b> / RAG 语料工程化</div>
+  <h2><span class="num">A7.</span> RAG 语料工程化与数据流水线：从原始 PDF 到可检索向量</h2>
+  <p>第 13 章讲的是「一次检索怎么走到答案」，A1 讲的是 pgvector / halfvec / RRF 的<strong>概念</strong>。本册补上中间最容易被 Java 后端忽略的一段：<strong>数据本身是怎么被造出来的</strong>。一份 162 页教材要变成可检索片段，经历解析 → 切分 → 角色判定 → 知识点挂接 → 嵌入 → 索引 → 检索准入七道工序，其间有两套解析后端、双切分策略、一条离线脚本路径和一套线上化流水线并存。这段工程化历史里藏着本项目最密集的「文档结论被代码反证」案例。</p>
+  <div class="callout c-info"><span class="ct">先建立时点轴：三处「矛盾」其实是版本漂移</span><p>本册材料跨 2026-10-28 至 11-10。三个关键时点：① <strong>10-28</strong> 换 <span class="inline-code">qwen3-embedding:8b</span>（4096 维）+ <span class="inline-code">halfvec(4096)</span> 上线；② <strong>11-04</strong> D21/D24/D25 与交互验收，此时部分文档仍写「真实嵌入 Port 未接」「09/10/11 迁移未执行」；③ <strong>11-10</strong> 批量 <span class="mono">fix(rag)</span> 落地真实嵌入端口、版权收紧、平台档摄取。凡遇「文档说没做、代码已有」或反之，先分清时点，再以<strong>代码 + 真库证据</strong>为准。<span class="tag t-conflict">文档冲突</span> 集中在 <a href="#a7-9">A7.9</a>。</p></div>
+
+  <h3 id="a7-1">A7.1 七段流水线总览与「整册失败」纪律</h3>
+  <p>两条权威文档给出的链路完全一致：D04 §1 与入库操作手册 §2。Java 后端要习惯的第一条纪律是<strong>原子性以「整册」为单位</strong>，不是逐片段事务。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">rag/docs/RAG-D04_教辅数据处理流水线.md §1（行 30–47）+ docs/RAG语料入库操作手册.md §2（行 82–100）</span><button>复制</button></div><pre><code>原始 PDF/扫描件
+   → ① 版面感知解析（Docling / MinerU）
+   → ② 结构化切分（heading / hybrid）
+   → ③ 角色判定（10 类：讲解 / 例题 / 答案解析 / 练习 / …）
+   → ④ 知识点挂接（kp_ids + rag_kp_alias）
+   → ⑤ 嵌入（4096 维 halfvec）
+   → ⑥ 索引（text_jieba + rag_chunk_embedding）
+   → ⑦ 检索准入（四轴闸门，见 A7.7）
+
+「整册失败，不部分入库。」</code></pre></div>
+  <p>操作手册对 upload 之后的一句话描述是：<span class="inline-code">解析(Docling) → 清洗 → 切分 → 角色判定 → 知识点挂接 → 嵌入 → 索引</span>。注意这里没有「审核发布」——签发 VERIFIED 是人工在管理面做的第八步，见 <a href="#a7-6">A7.6</a>。</p>
+  <div class="xref">交叉引用：检索侧四轴闸门 <a href="#a7-7">A7.7</a>；数据模型与 8 值状态机 <a href="#a7-8">A7.8</a>；权威性与合规 <a href="ai-08-data-governance.html#a8-4">A8.4</a>。</div>
+
+  <h3 id="a7-2">A7.2 切分方案调研：为什么是「MinerU 解析 + 标题层级切分」</h3>
+  <p><span class="mono">中文教材PDF切分方案调研.md</span> §4（行 137–148）给出首选组合，这是 D26 选型的直接依据：<span class="tag t-live">已实现（部分）</span></p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">中文教材PDF切分方案调研.md §4 优先推荐（行 137–148）</span><button>复制</button></div><pre><code>首选组合：MinerU（或 PP-StructureV3）做解析层
+         + Docling HybridChunker / 自建「标题层级分块」做切分层。
+
+教材切分成败在此：必须保留「第X章 → X.Y → (一)」多级标题链。</code></pre></div>
+  <p>「必须保留多级标题链」是本项目切分方案的<strong>第一性约束</strong>：片段若脱离标题层级，检索能命中但答案无法溯源到章节，直接动摇 A8 的权威性体系。PP-StructureV3 <span class="tag t-plan">仅设计（占位）</span>：<span class="mono">rag-premise/.../adapter/paddle/PaddleStructureParseBackend.java</span> 存在，但 D26 行 13 明确「无服务可测」。</p>
+  <table>
+    <thead><tr><th style="width:22%">实测项</th><th>数字与结论</th><th style="width:26%">证据</th></tr></thead>
+    <tbody>
+      <tr><td>MinerU flash 档解析</td><td><strong>162 页</strong>英语教材 → <strong>189 秒</strong> → <strong>3099 块</strong> → heading 切分 <strong>2042 片段</strong> → 泄题闸门 <span class="inline-code">leak=0</span></td><td class="mono">RAG-D26 行 26</td></tr>
+      <tr><td>Docling 分段解析</td><td>整册不可行，改为<strong>每段 20 页 / 共 9 段</strong> → 约 <strong>8 分钟</strong> → heading 切分 <strong>972 片段</strong> → 4096 维嵌入 <strong>972 条全部入库</strong></td><td class="mono">RAG-D26 行 27</td></tr>
+      <tr><td>Docling 镜像与协议</td><td>镜像 <strong>15.4GB</strong>；<span class="inline-code">POST /v1/convert/file</span>；必须 <span class="inline-code">HttpClient.Version.HTTP_1_1</span>（否则 h2c 400）；公式内容在 <span class="inline-code">orig</span>；答案区跨块需状态</td><td class="mono">deploy/docling/README.md §2.5 行 73–228</td></tr>
+      <tr><td>分块桥</td><td><strong>6.4 秒</strong> → <strong>444 chunks</strong>，<span class="inline-code">item_refs 100%</span>、<span class="inline-code">char_spans 100%</span></td><td class="mono">deploy/docling/chunk_service/README.md</td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">这四条数字是「选型不是拍脑袋」的实证：20 页/段是测出来的边界，不是文档默认值。Java 后端若接手解析服务，改协议版本或段长前先复现这组数字。</p>
+
+  <h3 id="a7-3">A7.3 rag-premise 模块：把解析与切分做成可替换的两段工序</h3>
+  <p>D26 新增独立 Maven 模块 <span class="mono">rag/rag-premise/</span>，把原来塞在 <span class="inline-code">IngestionPipeline</span> 里的解析/切分抽成 SPI + 适配器。这是六边形架构在 RAG 侧的一次落地，Java 后端可直接复用「端口-适配器」经验。<span class="tag t-live">已实现</span></p>
+  <div class="grid2">
+    <div class="card"><h4>SPI（可替换点）</h4><p><span class="inline-code">spi/DocumentParseBackend</span>：解析后端；<span class="inline-code">spi/BlockChunker</span>：切分策略。新增后端只需实现接口，不改流水线。</p></div>
+    <div class="card"><h4>适配器（已落地）</h4><p><span class="inline-code">adapter/mineru/MineruParseBackend</span>、<span class="inline-code">adapter/paddle/PaddleStructureParseBackend</span>（占位）；<span class="inline-code">chunker/HeadingHierarchyChunker</span>、<span class="inline-code">chunker/HybridChunkerClient</span>；<span class="inline-code">ChunkBridgeUnavailableException</span> 做 fail-closed。</p></div>
+    <div class="card"><h4>归一化与标识</h4><p><span class="inline-code">normalize/NormalizationRules</span>、<span class="inline-code">SectionPathResolver</span>、<span class="inline-code">ChunkIdentifiers</span>：产出 <span class="inline-code">section_path</span>、稳定 <span class="inline-code">chunkId</span>、<span class="inline-code">contentHash</span>。</p></div>
+    <div class="card"><h4>策略参数（冻结）</h4><p><span class="inline-code">ChunkPolicy.HEADING_HIERARCHY / HYBRID_CHUNKER</span>；<span class="inline-code">ChunkPolicyConfig.DEFAULT_MAX_TOKENS=512</span>、<span class="inline-code">DEFAULT_OVERLAP_RATIO=0.15</span>，<span class="inline-code">stableString()</span> 产出可留痕指纹。</p></div>
+  </div>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">rag/rag-premise/.../normalize/ChunkIdentifiers.java 行 38–65</span><button>复制</button></div><pre><code>chunkId()    = UUID.nameUUIDFromBytes("chunk:{documentId}:{pageNumber}:{charStart}")
+contentHash() = 片段文本 SHA-256
+
+// 中文分词在 Java 应用层做，DB 侧 GIN 索引：
+// rag-infrastructure/.../text/ChineseTokenizer.java 类注释行 6–23
+// 中文 unigram + bigram 混合 + 拉丁/数字整块保留
+// DB 侧建 GIN(to_tsvector('simple', text_jieba))</code></pre></div>
+  <p><strong>双模式装配与配置载体缺口</strong>：<span class="inline-code">LocalRagPortsConfig.premiseChunker()</span> / <span class="inline-code">premisePreprocessor()</span> 决定走新链路还是旧内置切分；<span class="inline-code">IngestionPipeline.ingest()</span> 行 136–148 是分支点：<span class="inline-code">if (premiseChunker != null) return ingestViaPremise(...); return ingestLegacyLoop(...);</span>。<span class="tag t-gap">证据空白</span> <span class="inline-code">rag.premise.*</span> 未写入任何 <span class="inline-code">application.yml</span>，只在代码 <span class="inline-code">@Value</span> 默认值与 <span class="mono">rag.env.example</span> 的 <span class="inline-code">RAG_PREMISE_ENABLED=false</span> —— 运行态是否启用须现场核对。</p>
+  <div class="callout c-warn"><span class="ct">重灌纪律：改了切分规则但检索没变？</span><p><span class="inline-code">JdbcCorpusRepository.saveChunkAndEmbedding()</span>（行 83–151）用 <span class="inline-code">ON CONFLICT (chunk_id) DO UPDATE ... text_jieba = ''</span> 清空分词列；<span class="inline-code">ChunkIndexer.PENDING_SQL</span>（行 336–353）只补 <span class="inline-code">VERIFIED + retrievable</span> 且 <span class="inline-code">text_jieba=''</span> 或无向量的片段。<strong>因果链</strong>：重灌时若不把 <span class="inline-code">text_jieba</span> 清空 → 索引器判定「无需处理」→ 旧向量继续被检索 → 「切分规则改了但检索结果没变」的静默陈旧。守卫 <span class="inline-code">ReingestDisciplineGuardTest</span> 钉住这条纪律。</p></div>
+
+  <h3 id="a7-4">A7.4 线上化方案演进：V1.0 → V1.0.1 → 评审反转 → V1.0.2</h3>
+  <p>这是「文档被代码/评审反证」的教科书级案例链。四份方案文档 + 一份评审意见 + 一份决策清单，记录了一个方案如何被逐步修正。</p>
+  <table>
+    <thead><tr><th style="width:14%">版本</th><th>核心主张</th><th style="width:30%">后续反转 / 落地</th></tr></thead>
+    <tbody>
+      <tr><td><strong>V1.0</strong><br><span class="tag t-doc">仅设计</span></td><td>诊断离线脚本 + DBA 手执行 SQL + 管理端签发的断裂链路；G1/G2/G3 三门禁全未过；<span class="inline-code">DocumentParserPort</span> 无生产实现。五段主链路，消费已建未用的 <span class="inline-code">rag_ingest_job</span>，PG <span class="inline-code">FOR UPDATE SKIP LOCKED</span> 起步不上 MQ。</td><td>已在代码落地：<span class="inline-code">IngestJobConsumer</span> 类注释行 18–31 + <span class="inline-code">@Scheduled(fixedDelay=2000ms)</span> 行 59。</td></tr>
+      <tr><td><strong>V1.0.1</strong><br><span class="tag t-conflict">被反证</span></td><td>P1~P7 修订；<strong>P1 错误断言「检索闸门缺失」</strong>，据此规划 S2b 大半工作。</td><td>评审意见 §三（行 36–107）用 <span class="inline-code">JdbcRetrievalRepository.admissiblePredicate</span> 反证：<strong>闸门已实现全部四轴，S2b 是重复建设</strong>。V1.0.2 据此重写。</td></tr>
+      <tr><td><strong>V1.0.1 评审</strong><br><span class="tag t-live">结论成立</span></td><td>反转 P1；新提 N1~N5 缺陷。N1（唯一索引冲突 T-10）落地为部分唯一索引。</td><td>交叉验证 <span class="inline-code">ADMISSIBLE_TEMPLATE</span> 确为四轴单一真源，评审正确。</td></tr>
+      <tr><td><strong>V1.0.2</strong><br><span class="tag t-doc">当前方案</span></td><td>不重建四轴闸门，只做「门槛维度对齐 + 覆盖审计 + 双向回归 IT」。前置依赖 <span class="inline-code">rag_tenant.min_trust_tier</span> 字段。</td><td><span class="tag t-gap">证据空白</span> 全 <span class="mono">deploy/sql</span> 无 <span class="inline-code">rag_tenant</span> / <span class="inline-code">min_trust_tier</span> / <span class="inline-code">min-trust-tier</span> 任何匹配。逐租户差异化仍待 RAG-R23。<span class="tag t-conflict">编号漂移</span> RAG-R23 在 V1.0.2 指「逐租户门槛」，在 RAG-D07 指「表数基线 10→11 不一致」。</td></tr>
+    </tbody>
+  </table>
+  <p><strong>迁移脚本与真库演练</strong> <span class="tag t-live">已实现（DDL + 真库）</span>：<span class="mono">deploy/sql/rag/</span> 下 13 个迁移脚本齐全，<span class="inline-code">01_rag_ddl.sql</span> 是终态快照。05（S1 骨架 + 部分唯一索引）、06（S3 抽检表 <span class="inline-code">rag_inspection_record</span> + <span class="inline-code">rag_kp_alias</span>）、07（元数据确认默认 false，fail-closed）、08（审核员名录 <span class="inline-code">rag_reviewer_roster</span>）、09（索引代际蓝绿）、10（版面事实三列）、11（代际构建游标）、12（版本五轴回填）、13（<span class="inline-code">chunk_policy</span> 留痕）。D25 在本地 <span class="mono">rag-pg-s2</span>（PG 17.11 + pgvector 0.8.7）执行 08/09/10/11：<strong>09 代际表 + 向量表主键改造 70ms、数据零丢失（chunk=28, embedding=20）、幂等重放全通过</strong>。</p>
+  <div class="callout c-warn"><span class="ct">文档内部打架：以 D25 真库证据为准</span><p>D21（11-04）§九行 253 仍写「09/10/11 三个脚本未在真实库执行过」，与同期 D25「执行成功、70ms、零丢失」直接冲突；V1.0.2 待确认清单 §9（行 206–211）还写「全部 DDL 从未在真库执行、本机无 psql/PostgreSQL」，也被 D25 与远程 <span class="mono">study_rag</span> 验收推翻。<strong>这是「文档时点滞后于真库」的典型，不是「功能没做」。</strong></p></div>
+
+  <h3 id="a7-5">A7.5 录入交互与语料管理 UI：从「对象中心」到「任务中心」</h3>
+  <p><span class="mono">RAG语料录入交互优化方案_交互文档.md</span> §0（行 21–36）把交互目标定为：<span class="inline-code">一次拖入 → 自动处理 → 一个待办 → 一次确认</span>，主路径人工步骤 <strong>~18 步 → 4 步</strong>，跨越界面 <strong>6 → 1</strong>。D13 定义四治理域 + Dashboard、13 页；D14 产出 13 页高保真视觉稿（<span class="mono">rag/docs/ui-mock/screens/*.html</span>，静态资产）；D15 落地改造，D16~D24 补齐 8 项后端待办 <span class="tag t-live">已实现（前后端代码）</span>。</p>
+  <div class="grid2">
+    <div class="card"><h4>四域 13 页（admin-console 路由）</h4><p><strong>录入与校对</strong>：<span class="inline-code">/rag/dashboard</span>、<span class="inline-code">/rag/sources/new</span>、<span class="inline-code">/rag/sources</span>、<span class="inline-code">/rag/doc-upload</span>、<span class="inline-code">/rag/chunk-fix</span>；<strong>审核</strong>：<span class="inline-code">/rag/verify</span>、<span class="inline-code">/rag/inspection</span>、<span class="inline-code">/rag/recall</span>；<strong>规则配置</strong>：<span class="inline-code">/rag/reviewers</span>、<span class="inline-code">/rag/kp-alias</span>、<span class="inline-code">/rag/dictionaries</span>；<strong>运维</strong>：<span class="inline-code">/rag/jobs</span>、<span class="inline-code">/rag/reindex</span>。定位：<span class="mono">admin-console/src/layout/navConfig.tsx</span> 行 185–328。</p></div>
+    <div class="card"><h4>dry-run 预览（纯内存、零副作用）</h4><p><span class="mono">RAG-D24</span> §2 / §6；代码 <span class="inline-code">DocumentPreviewService</span>，端点 <span class="inline-code">POST /sources/{sourceId}/documents/preview</span>（<span class="mono">RagManagementController</span> 行 1173），测试 <span class="inline-code">DocumentPreviewServiceTest</span> 5 项全绿含 <span class="inline-code">previewOnlyParses</span>。<span class="tag t-gap">证据空白</span> 平台全局档不支持预览（501）、无预览缓存。</p></div>
+  </div>
+  <p><strong>验收记录（11-04，真库 + 真浏览器）</strong> <span class="tag t-live">已实现</span>：后端 <span class="mono">rag-management</span> 220 通过 / 0 失败；<span class="mono">admin-console</span> 460 通过；<span class="mono">frontend</span> 578 通过；<strong>合计 1258 项断言</strong>。必测场景逐条核对为 ✅8 / 🟡3 / ❌2——未做的两条是「多文件含 .doc → 就地提示」（上传仍是单文件表单）与「拖入重复文件 → 可点跳转已有语料」（后端只返回 <span class="inline-code">DUP_*</span> 错误码）。<span class="tag t-unknown">未确认</span> 这是 11-04 的时点状态；D24 后上传入口已改「拖拽 → 预览 → 确认」两步，是否补齐批量拖拽与重复跳转需现场核对，不可断言当前仍 ❌。</p>
+  <div class="callout c-info"><span class="ct">诚实标注的范例：501 + 原因 + 替代路径</span><p>验收记录 §5.3：<span class="inline-code">RESPLIT</span>/<span class="inline-code">REPLACE_FILE</span> 重处理没有编排器入口，系统用 <strong>501 + 原因 + 替代路径</strong> 明确告知，而不是静默假装成功。这正是 A3 讲的 fail-closed 在交互层的体现：<strong>「做不了」要说出来，不能让用户以为做成了</strong>。同节还记录平台库 <span class="mono">public.principal</span> 当前为空（IAM 发号未开始），真实审核员名录数据缺失。</p></div>
+
+  <h3 id="a7-6">A7.6 入库操作手册：面向运维的实际步骤与坑</h3>
+  <p><span class="mono">docs/RAG语料入库操作手册.md</span> 共 10 章：前置准备 → 登记来源 → 上传 → 查看进度 → 人工抽检 → 签发 VERIFIED → 批量入库 → 常见错误 → 运维检查清单。几个 Java 后端接手时最容易踩的点：</p>
+  <table>
+    <thead><tr><th style="width:26%">操作面</th><th>规则 / 限制</th><th style="width:22%">证据</th></tr></thead>
+    <tbody>
+      <tr><td>管理面鉴权</td><td>必须携带令牌，无令牌一律 <strong>401</strong>；令牌 <strong>15 分钟</strong>过期。缺 <span class="inline-code">X-Tenant-Id</span> 一定失败（<strong>400</strong>）。</td><td class="mono">手册 §1 行 29–78 / §5 行 232–297</td></tr>
+      <tr><td>批量入库</td><td>单文件 <strong>200MB</strong> / ZIP <strong>2GB</strong> / <strong>100</strong> 个文件 / <strong>20 页/段</strong>；20 页≈<strong>40s</strong>、148 页≈<strong>450s</strong>、162 页≈<strong>500s</strong>。</td><td class="mono">手册 §8 行 443–505</td></tr>
+      <tr><td>reindex 语义</td><td><strong>只补缺失向量，不重新解析 / 切分</strong>。改了切分规则必须走重灌，不是 reindex。</td><td class="mono">手册 §9 行 509–562</td></tr>
+      <tr><td>管理 REST 端点</td><td><span class="mono">RagManagementController</span> 约 <strong>40 个</strong>端点：<span class="inline-code">POST/GET /sources</span>、<span class="inline-code">/sources/{id}/verification</span>、<span class="inline-code">/metadata-confirmation</span>、<span class="inline-code">/documents/{id}/chunks</span>、<span class="inline-code">PATCH /chunks/{id}/role</span>、<span class="inline-code">/inspection</span>、<span class="inline-code">/review-queue</span>、<span class="inline-code">/ingest-jobs</span>、<span class="inline-code">/reindex</span>、<span class="inline-code">/index-generations</span> 等。</td><td class="mono">行 335–2605</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet"><span class="ct">五个 @Scheduled 定时任务（都在 rag-worker？不，有一个在别处）</span><p><span class="inline-code">IngestJobConsumer</span>（2000ms）、<span class="inline-code">IngestJobSweeper</span>（300000ms）、<span class="inline-code">IngestAlertEvaluator</span>（300000ms）、<span class="inline-code">IndexGenerationBuildWorker</span>（2000ms）在 <span class="mono">rag-worker</span>；但 <strong><span class="inline-code">GlobalIngestJobConsumer</span>（2000ms）在 <span class="mono">rag-persistence</span> 模块</strong>（行 53）。所有任务靠 PG <span class="inline-code">FOR UPDATE SKIP LOCKED</span> 轮询领取，每次一条、<span class="inline-code">fixedDelay</span> 调度——与 platform 的 Outbox/MQ 通道是两套完全不同的并发模型。</p></div>
+
+  <h3 id="a7-7">A7.7 检索准入：四轴闸门、六个 WHERE 条件与两个真实缺陷</h3>
+  <p>这是本册最有培训价值的一段：<strong>一个 SQL 常量如何成为「单一真源」，以及它怎样在真库里被两次修正</strong>。<span class="inline-code">JdbcRetrievalRepository.ADMISSIBLE_TEMPLATE</span>（行 101–161）被 6 处检索 SELECT 共用，展开成 6 条 WHERE 条件，对应 D07 定义的四轴（G-0 两级校验 / G-4 版权 / staleness 有效期 / G-3 权威门槛）：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">sql</span><span class="file">rag/rag-persistence/.../persistence/JdbcRetrievalRepository.java 行 153–161</span><button>复制</button></div><pre><code>AND src.ver_status = 'VERIFIED'
+AND doc.ver_status = 'VERIFIED'
+AND doc.retrievable
+AND src.license_status IN ('LICENSED', 'FAIR_USE_QUOTATION')
+AND doc.license_status IN ('LICENSED', 'FAIR_USE_QUOTATION')
+AND src.verified_at + make_interval(days =&gt; src.ver_valid_days) &gt;= now()
+AND src.trust_tier IN (%s)   -- TrustTier.meets() 展开，不用 &gt;= 比枚举声明序
+
+-- 门槛来源：服务端配置 rag.retrieval.min-trust-tier（默认 OFFICIAL_TUTORIAL）
+-- 绝不读请求头（行 143–147）；全局语料双作用域 c.tenant_id IN (current, global)</code></pre></div>
+  <p><strong>两个真实缺陷及修复</strong>（同一文件注释）：</p>
+  <table>
+    <thead><tr><th style="width:18%">轴</th><th>缺陷现象</th><th>根因</th><th>修复</th></tr></thead>
+    <tbody>
+      <tr><td>版权轴</td><td><strong>2026-11-10</strong> 六年级物料导入实测：全库常驻 <span class="inline-code">PENDING</span>，检索却照单全收</td><td>旧谓词 <span class="inline-code">&lt;&gt; 'RESTRICTED'</span> 把 <span class="inline-code">PENDING</span> 当可用，且<strong>版权轴没有任何写入路径</strong></td><td>收紧为显式白名单 <span class="inline-code">IN ('LICENSED','FAIR_USE_QUOTATION')</span></td></tr>
+      <tr><td>权威门槛</td><td><strong>2026-10-27</strong> 线上 RDS 实测：<span class="inline-code">&gt;=</span> 写反导致全部正常语料被滤空</td><td>PG 枚举的<strong>声明序</strong>与权威语义相反（<span class="inline-code">OFFICIAL_PUBLISHER(4)</span> 最高但声明序未必最大）</td><td>改为 <span class="inline-code">TrustTier.meets()</span> 在 Java 侧展开 <span class="inline-code">IN</span> 列表，不用 DB 枚举比较</td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">第一处是「默认值 + 无写入路径 = 全库静默放行」，第二处是「枚举序 ≠ 业务序」。两者都不是语法错误、都不会报错，只会让检索结果悄悄错——正是 A3 定义的静默失真。</p>
+  <p><strong>入库侧闸门</strong> <span class="tag t-live">已实现</span>：<span class="inline-code">InspectionGuard</span> 要求抽检 <span class="inline-code">PASSED</span> 才可签 VERIFIED（<span class="inline-code">NOT_REQUIRED</span> 也<strong>不</strong>放行，行 68–80）；<span class="inline-code">DocumentVerification.requireSourceAllowsVerified()</span> 要求「载体不得高于来源」（行 98–109）；<span class="inline-code">SegregationOfDuties</span> 要求审核员 ≠ 采集员 + VERIFIED 双人复核（行 92–112）。详见 <a href="ai-08-data-governance.html#a8-4">A8.4</a>。</p>
+
+  <h3 id="a7-8">A7.8 数据模型：三层来源、4096 维、五轴版本与 8 值状态机</h3>
+  <p>唯一权威是 <span class="mono">deploy/sql/rag/01_rag_ddl.sql</span>（pg_dump 终态快照）。Java 后端需要注意「文档基线 11 表」已经过时，现库约 15 张表。</p>
+  <div class="grid2">
+    <div class="card"><h4>三层来源模型</h4><p><span class="inline-code">rag_source</span>（作品）→ <span class="inline-code">rag_document</span>（物理载体）→ <span class="inline-code">rag_chunk</span>（片段）。<strong><span class="inline-code">rag_chunk</span> 无 <span class="inline-code">source_id</span> 列</strong>，来源须经 <span class="inline-code">rag_document</span> 中转（<span class="mono">JdbcRetrievalRepository</span> 类注释行 73–78）。</p></div>
+    <div class="card"><h4>向量与 ANN 缺口</h4><p><span class="inline-code">rag_chunk_embedding.embedding public.halfvec(4096) NOT NULL</span>（DDL 行 389）。<strong>halfvec 的 HNSW/IVFFlat 只支持到 4000 维</strong>，所以 DDL 行 960–961 明写「本索引刻意不存在」，稠密检索退化为全表精确扫描。<span class="tag t-gap">未解决</span>：语料规模上去会先撞延迟。</p></div>
+    <div class="card"><h4>版本五轴</h4><p><span class="inline-code">EditionCoordinate(subject, grade, term, publisher, revision_code)</span>；<span class="inline-code">rag_edition_unique</span> 五轴唯一 + <span class="inline-code">effective_from/effective_to</span>。<strong>出版社 ≠ 出版机构</strong>：<span class="inline-code">rag_source.publisher</span> 是出版机构（上海教育出版社），<span class="inline-code">rag_edition.publisher</span> 是版本体系（沪教版），不可互换。12 号回填脚本把占位修订码改为「历史存量（未标注版次）」。</p></div>
+    <div class="card"><h4>状态机与角色</h4><p><span class="inline-code">rag_ingest_status</span> <strong>8 值</strong>：<span class="inline-code">PENDING/PARSING/CHUNKING/EMBEDDING/INDEXING/SUCCEEDED/FAILED/REJECTED</span>（无 CANCELLED，取消 = REJECTED + <span class="inline-code">error_detail='SOURCE_REVOKED'</span>）。<span class="inline-code">rag_chunk_role</span> <strong>10 类</strong>，部分索引 <span class="inline-code">rag_chunk_retrievable_idx</span> 排除答案类防泄题。</p></div>
+  </div>
+  <p><strong>locator / chunkId 引用</strong>：<span class="inline-code">Chunk.Locator(pageNumber, sectionPath, exerciseNo, charStart, charEnd)</span> 与 <span class="inline-code">chunkId = UUID.nameUUIDFromBytes("chunk:{documentId}:{page}:{charStart}")</span>（在线）；<strong>离线脚本 <span class="mono">scripts/rag_import_pdf.py</span> 用 <span class="inline-code">uuid5(NS, "chunk|{isbn}|{page}")</span></strong>（行 40、302），两套派生规则并存——同一教材经两条路径入库会得到不同 chunkId，<span class="tag t-conflict">文档冲突</span> 不是「单一算法」。离线脚本 <span class="inline-code">classify()</span> 只产出 5 类角色，与 DDL 的 10 类枚举也不一致。</p>
+  <div class="callout c-info"><span class="ct">离线脚本路径：线上化方案要替代的对象</span><p><span class="mono">scripts/rag_import_pdf.py</span> 文件头行 2–26 说得很直白：「RAG 服务没有文件上传通道（<span class="inline-code">object_ref</span> 只存引用、正文不入库），所以真实教材入库走这条离线路径；本脚本只生成 SQL，不连库、不写库」。流程：本地抽取 → 生成 SQL → DBA 执行 → 管理端签发 → <span class="inline-code">/reindex</span> 补向量。关键规则：<span class="inline-code">strip_boilerplate()</span>（跨页重复页眉，<span class="inline-code">threshold=max(3, len(pages)//3)</span>）、<span class="inline-code">classify()</span> 五类角色、<span class="inline-code">toc_units()</span>、<span class="inline-code">page_offset()</span> 众数自标定、<span class="inline-code">appendix_pieces()</span> 词表按单元重切状态机；剪枝 DELETE 只删未被 <span class="inline-code">rag_answer_citation</span> 引用的片段。这是「两代工程形态」并存的实证：Python 离线脚本 vs Java SPI + 多后端 + 分块桥。</p></div>
+
+  <h3 id="a7-9">A7.9 十条文档失真清单：以代码 / 真库为准绳</h3>
+  <p>把第一份勘察发现的矛盾集中列出，这是本册最值得反复读的一节。<strong>每一条都是「文档说 A、代码做 B」的实证，不是猜测。</strong></p>
+  <table>
+    <thead><tr><th style="width:5%">#</th><th style="width:29%">文档口径</th><th>代码 / 真库口径</th><th style="width:14%">结论</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>V1.0.1 P1「检索闸门缺失」，要建 S2b</td><td><span class="inline-code">admissiblePredicate</span> 已实现四轴；评审意见反证，V1.0.2 重写</td><td><span class="tag t-live">评审正确</span></td></tr>
+      <tr><td>2</td><td>D21（11-04）「真实嵌入模型 BGE-M3 未接」「三个占位 Port 未接」</td><td>10-28 起真实 Ollama 实测；11-10 <span class="inline-code">EmbeddingPorts.create()</span>（base-url 非空 → 真实模型）</td><td>D21 该条<strong>已过期</strong></td></tr>
+      <tr><td>3</td><td>D21 §九「09/10/11 未在真库执行」</td><td>同期 D25：执行成功、70ms、零丢失、幂等重放通过</td><td>以 D25 为准</td></tr>
+      <tr><td>4</td><td>V1.0.2 决策清单「从未在真库执行、本机无 psql」</td><td>D25 本地 <span class="mono">rag-pg-s2</span> + 验收记录远程 RDS <span class="mono">study_rag</span></td><td>时点差</td></tr>
+      <tr><td>5</td><td><span class="mono">navConfig.tsx</span> 行 325「蓝绿代际后端尚未提供」</td><td><span class="mono">RagManagementController</span> 已有 4 个代际端点 + D25 六步全通</td><td>前端文案<strong>滞后</strong></td></tr>
+      <tr><td>6</td><td><span class="mono">IngestionPipeline.java</span> 类注释「宁可过判为讲解」</td><td>D04 §3.1 勘误：「不确定宁可过判答案类」（防泄题）</td><td>代码注释<strong>未同步勘误</strong></td></tr>
+      <tr><td>7</td><td>在线 chunkId <span class="inline-code">chunk:{documentId}:{page}:{charStart}</span></td><td>离线脚本 <span class="inline-code">chunk|{isbn}|{page}</span>，两规则并存</td><td>非单一算法</td></tr>
+      <tr><td>8</td><td>DDL <span class="inline-code">rag_chunk_role</span> 10 类</td><td>离线脚本 <span class="inline-code">classify()</span> 只产出 5 类</td><td>两条路径<strong>不等价</strong></td></tr>
+      <tr><td>9</td><td>RAG-R23 = 逐租户门槛（V1.0.2 / RAG-D11）</td><td>RAG-R23 = 表数基线 10→11 不一致（RAG-D07）</td><td><strong>同编号两类事项</strong></td></tr>
+      <tr><td>10</td><td>验收记录（11-04）「单文件表单、批量拖拽未做」</td><td>D24（11-04）改为「拖拽 → 预览 → 确认」两步</td><td>须按版本区分</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger"><span class="ct">把「文档失真」当成工程能力来训练</span><p>Java 后端常见习惯是「读设计文档 → 照着实现」。在这个仓库里，设计文档跨越至少三个时点，且部分文档自述「从未在真库执行」却与同期真库演练报告冲突。本项目的纪律是：<strong>结论必须落到可执行物（代码 / DDL / 脚本 / 真库 IT），文档只提供线索</strong>。这也是 A3 / A9 反复强调的「判绿看 XML <span class="inline-code">&lt;testcase&gt;</span>、不看 BUILD SUCCESS」同源方法论——<strong>不信任中间态陈述，只信可复现的证据</strong>。</p></div>
+
+  <h3 id="a7-10">A7.10 未找到证据 / 无法确认</h3>
+  <div class="callout c-info"><span class="ct">向量侧的运维细节在 A18</span><p>本册讲语料怎么进来（解析 / 切分 / 入库 / 检索准入）。向量落库之后的事——维度契约、halfvec 4000 上限与「能存不能索引」、BUILDING/ACTIVE/RETIRED 蓝绿代际、构建 Worker 四条纪律、换模型 Runbook——见 <a href="ai-18-vector-ops.html">A18</a>。</p></div>
+  
+  <p>以下事项本次勘察查不到或无法确认，严格不推测。<span class="tag t-gap">证据空白</span></p>
+  <ul>
+    <li><span class="inline-code">rag_tenant</span> 表 / <span class="inline-code">min_trust_tier</span> 列：全 <span class="mono">deploy/sql</span> 无匹配；归属「platform 下发 vs 本方案新建」在 V1.0.2 设计文档 T-1 仍「待确认」。</li>
+    <li><span class="inline-code">OcrPort</span> / 扫描件 OCR 实现：全仓无此文件（V1.0.1 P6 要求拆 born-digital / 扫描 OCR，仅文档）；是否有非此命名的 OCR 内嵌在解析后端中无法确认。</li>
+    <li>PP-StructureV3 真实服务与实测数据：D26 称「占位，无服务可测」，未找到活体实测。</li>
+    <li>真实审核员名录 / 平台 <span class="mono">public.principal</span> 内容：验收记录称「当前为空」，11-10 之后是否发号填充无法确认。</li>
+    <li><span class="inline-code">RESPLIT</span>/<span class="inline-code">REPLACE_FILE</span> 重处理的编排器实现：仅 501 标注，无代码或迁移。</li>
+    <li>拖拽批量上传 / 重复文件跳转 / 抽检「有遗漏」入口的当前状态：验收记录（11-04）为未做，D24 只确认改了「两步上传预览」，是否补齐批量拖拽无证据。</li>
+    <li><span class="inline-code">halfvec(4096)</span> ANN 索引后续方案：DDL 明确「刻意不存在」，10-28 问题记录标「未解决」，未找到引入 ANN（升级 pgvector / 降维 / IVFFlat）的迁移或决策。</li>
+    <li>生产环境（非本地 / 非开发 RDS）的 08~13 迁移执行状态：D25 是本地、验收是开发 RDS，生产库无证据。</li>
+    <li><strong>RAG-R23 权威定义</strong>：同一编号在 V1.0.2 / RAG-D11 指「逐租户门槛」，在 RAG-D07 指「表数基线漂移」，仓库无法判定哪个是「官方」语义。</li>
+  </ul>
+  <div class="evidence"><b>证据源：</b><span class="mono">中文教材PDF切分方案调研.md</span>、<span class="mono">rag/docs/RAG-D04_教辅数据处理流水线.md</span>、<span class="mono">RAG-D13/D14/D15/D16/D21/D24/D25/D26</span>、<span class="mono">RAG语料录入线上化自动化方案.md</span>、<span class="mono">V1.0.1/V1.0.2 + 设计/计划/评审意见/决策清单</span>、<span class="mono">RAG语料录入交互优化方案_交互文档.md</span>、<span class="mono">RAG语料录入交互优化_验收记录.md</span>、<span class="mono">docs/RAG语料入库操作手册.md</span>、<span class="mono">docs/RAG检索与端到端实测问题记录_20261028.md</span>、<span class="mono">docs/重规划/RAG语料平台级治理_第一刀实测记录.md</span>、<span class="mono">deploy/docling/README.md</span> 与 <span class="mono">deploy/sql/rag/01_rag_ddl.sql</span>，以及 <span class="mono">rag/rag-premise/</span>、<span class="mono">rag-persistence/</span>、<span class="mono">rag-management/</span> 源码。</div>
+  <div class="callout c-ai"><span class="ct">给 Java 后端的迁移提示</span><p>这一册的「切分 / 嵌入 / 向量」概念在 A1 已讲，本册讲的是<strong>工程化</strong>：SPI 化解析与切分、确定性 chunkId、重灌时清空派生列、闸门单一真源、文档时点纪律。可复用的是六边形分层与幂等设计；需要补的是「<strong>数据流水线也是代码</strong>」——解析后端的实测数字、段长边界、枚举序陷阱、离线/在线两套派生规则，都必须像接口契约一样被守卫钉死，否则就会出现「改了规则但检索没变」这类静默失真。</p></div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-06-incident-library.html"><span class="pn-label">← 上一册</span><span class="pn-title">A6 · 真实事故案例库</span></a>
+  <a class="pn-right" href="ai-08-data-governance.html"><span class="pn-label">下一册 →</span><span class="pn-title">A8 · 数据源权威性与合规治理</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

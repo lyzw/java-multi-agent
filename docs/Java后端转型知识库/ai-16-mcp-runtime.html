@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A16 · MCP 客户端实现与运行时防护 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-16-mcp-runtime" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A16 · MCP 客户端实现与运行时防护</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A16 · MCP 客户端实现与运行时防护 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">HttpMcpTransport 两条决策、SSRF 三件套与二次解析复验、云元数据地址绝对禁止、按 server 熔断、输出不可信在 Gate 边界可信化、MCP 工具共用唯一执行入口</p>
+  <div class="ph-meta"><span>覆盖：A16.1–A16.10</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a16">
+  <div class="breadcrumb"><b>AI 专题 · A16</b> / MCP 客户端实现与运行时防护</div>
+  <h2><span class="num">A16.</span> MCP 客户端实现与运行时防护：传输、SSRF 三件套与按 server 熔断</h2>
+  <p>MCP（Model Context Protocol）是「让 Agent 摸到外部世界」的协议，也是把 SSRF、凭据泄露、不可信输出三条风险一起带进门的地方。本册以<strong>客户端运行时</strong>为主线：传输怎么建连、地址怎么校验、熔断怎么分组、输出在哪可信化。</p>
+
+  <h3 id="a16-1">A16.1 定位纠偏：A4 讲配置模型，本册讲客户端运行时</h3>
+  <div class="callout c-warn"><span class="ct">先纠正一处滞后的文档口径</span><p><code class="inline-code">docs/governance/01-现状分析（2026-10-22）</code>写「Skill 与 MCP 在代码中尚不存在」，<a href="ai-12-observability-runbook.html#a12-10">A12.10</a> 沿用了这一结论；但 <strong>MCP 客户端已于 2026-10-23 随 W-PERM-P4（commit b770141）落地</strong>：16 个类（端口 6 + 基础设施 10）、约 1586 行基础设施代码、7 个专项测试，且在 <code class="inline-code">ApplicationConfiguration</code> 完整接线。<span class="tag t-conflict">文档冲突</span> 已登记 <a href="06-reference.html#ch20-5">§20.5</a>。<a href="ai-04-agent-orchestration.html#a4-4">A4.4</a> 讲的是 MCP 的<strong>配置数据模型</strong>（cap_mcp_server_def 表、依赖方向、四类能力区别）；本册讲<strong>运行时实现</strong>——两者合起来才是完整的 MCP。</p></div>
+  <p>证据速览：<span class="mono">git show b770141</span>（feat(platform): W-PERM-P4 MCP 安全接入）；<span class="mono">platform/agent-ports/.../mcp/</span>（6 端口）+ <span class="mono">platform/agent-infrastructure/.../mcp/</span>（10 类）；<span class="mono">platform/platform-bootstrap/.../ApplicationConfiguration.java:1660-1700</span>（三个 @Bean：McpCircuitBreaker(5, 30s) / McpTransportPort / McpHandlerProvider）。</p>
+
+  <h3 id="a16-2">A16.2 端口面与装配：六个端口、可空处理器与「未装配 = 只有原生工具」</h3>
+  <table>
+    <thead><tr><th>端口 / 类</th><th>层</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">McpTransportPort</td><td>ports</td><td>传输契约（initialize → tools/list → tools/call）</td></tr>
+      <tr><td class="mono">McpAddressResolverPort</td><td>ports</td><td>DNS 解析抽象（可替换，供守卫二次解析复验）</td></tr>
+      <tr><td class="mono">McpCredentialPort</td><td>ports</td><td>凭据供给（RefMcpCredentialPort 实现，逐请求解析）</td></tr>
+      <tr><td class="mono">McpHandlerProvider</td><td>ports</td><td>MCP 工具处理器动态解析（DbMcpHandlerProvider：按已发布版本查表构造 McpBackedToolHandler）</td></tr>
+      <tr><td class="mono">McpManifestPort</td><td>ports</td><td>manifest 读取（TransportMcpManifestPort / UnconfiguredMcpManifestPort 兜底）</td></tr>
+      <tr><td class="mono">McpEndpointGuard / McpCircuitBreaker</td><td>infrastructure</td><td>SSRF 校验 / 按 server 熔断</td></tr>
+    </tbody>
+  </table>
+  <p><code class="inline-code">ToolInvocationGate</code> 的 <code class="inline-code">mcpHandlers</code> 字段<strong>可为空</strong>（:109 注释）：null = MCP 未装配，此时只有静态注册的原生工具可用。这是一个 fail-safe 的降级语义——MCP 是能力扩展，不装配不应该让原生工具也挂掉。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-ports/.../mcp/*.java</span>；<span class="mono">platform/agent-infrastructure/.../mcp/*.java</span>；<span class="mono">platform/agent-worker/.../execute/ToolInvocationGate.java:106-113</span>。</div>
+
+  <h3 id="a16-3">A16.3 HttpMcpTransport：协议流程、「不用 HttpClient」与「不做连接池」的两条决策</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">两条反直觉决策（HttpMcpTransport.java:42-57 类注释）</span><button>复制</button></div><pre><code>决策一：不用 java.net.http.HttpClient
+  HttpClient 按域名发起连接 —— 「校验过的 IP」与「实际连上的 IP」
+  可能是两个东西（DNS rebinding 窗口）。
+  本类直接建连到已校验的 IP，原始主机名放进 Host 头；
+  HTTPS 用 SSLSocketFactory.createSocket(socket, host, port, true)
+  让 JDK 依旧按主机名做证书校验（SNI + endpoint identification）
+  → 钉死目标 IP，又不牺牲 TLS 主机名校验。
+
+决策二：不做连接池
+  池化连接会把「建立连接时的凭据」固化在连接上，
+  凭据轮换后旧连接仍在用旧凭据。
+  V1 每请求一条新连接（Connection: close），凭据逐请求解析，
+  轮换立即生效。性能优化留给 P5（需带凭据版本进池键）。
+
+协议：MCP 2024-11-05（HTTP / SSE 传输）
+输出：远端返回文本原样透传，由调用方在 Gate 边界可信化。</code></pre></div>
+  <p>这两条决策是「安全属性优先于性能」的完整示范：<strong>每请求新建连接</strong>在传统后端是反模式（三次握手开销），在这里是凭据轮换生效性的保障。给 Java 后端的提示：当你看到的代码「违背常识」时，先找它的安全注释——本仓库把每条反直觉决策的 why 都写在 javadoc 里，这正是 <a href="ai-02-decisions.html#a2-2">A2.2</a>「决策记录怎么判断还有效」的代码级对应物。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-infrastructure/.../mcp/HttpMcpTransport.java:42-66</span>（682 行）。</div>
+
+  <h3 id="a16-4">A16.4 SSRF 三件套：解析后校验、二次解析复验、连接地址=被校验地址</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">McpEndpointGuard 防 rebinding（McpEndpointGuard.java:26-172）</span><button>复制</button></div><pre><code>① 解析后校验：对解析出的实际 IP 逐个过地址策略
+② 二次解析复验：连接前再解析一次，
+   两次结果不一致 = DNS 在两次解析之间换了指向
+   —— 这正是 rebinding 的动作本身 → 整体拒绝
+③ 连接地址 = 被校验的地址（与决策一配合：建连到 IP 而非域名）</code></pre></div>
+  <p>三件套缺一不可：只做 ①，攻击者在校验与连接之间换 DNS 记录（rebinding）；只做 ②③ 而校验逻辑错，等于白测。<code class="inline-code">McpEndpointGuardTest</code> 逐条覆盖这些场景。<span class="tag t-live">已实现</span></p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-infrastructure/.../mcp/McpEndpointGuard.java:26-48, 144-172</span>；<span class="mono">McpEndpointGuardTest.java</span>。</div>
+
+  <h3 id="a16-5">A16.5 fail-closed 语义：一个 IP 被禁即整体拒绝</h3>
+  <p>校验不是「挑一个能用的」：域名解析出 <code class="inline-code">[公网 IP, 内网 IP]</code> 本身就是可疑信号（正常 CDN 不会把内网地址混进公网解析），任一结果被禁即整体拒绝。这与 <a href="ai-05-config-governance.html#a5-5">A5.5</a> 的「ALLOW ≠ 成功」同族：<strong>授权语义里没有「部分通过」</strong>。防御深度上，SSRF 防护共三层：地址策略（应用层）→ 端点守卫（基础设施）→ 连接钉死 IP（传输层）；单层被绕过（如策略漏了一个 CIDR）还有下一层兜底。</p>
+
+  <h3 id="a16-6">A16.6 地址策略：信任级别、私有 CIDR 与云元数据地址的绝对禁止</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">McpAddressPolicy（McpAddressPolicy.java:19-50）</span><button>复制</button></div><pre><code>默认禁止：回环 / 私有 CIDR / 链路本地（169.254.0.0/16）……
+  设计文档 06 §5 的豁免：trustTier=internal 显式授权可放行私有地址
+
+绝对禁止（任何信任级别都不豁免，本类的刻意收紧）：
+  169.254.169.254   AWS / GCP / Azure 实例元数据
+  169.254.170.2     AWS ECS 任务凭据
+  fd00:ec2::254     AWS EC2 IPv6 元数据
+  100.100.100.200   阿里云元数据
+
+理由：读到元数据 = 读到实例角色的临时凭据
+  = 横向移动到整个云账号。没有任何业务理由需要
+  MCP 访问元数据地址 —— 所以不做豁免，直接禁止。</code></pre></div>
+  <div class="callout c-danger"><span class="ct">为什么「字面覆盖」还要刻意收紧</span><p>设计文档的「除非 trustTier=internal」在字面上也覆盖了 169.254.0.0/16；实现把它拆开：<strong>私有地址可按信任级别豁免，元数据地址不可</strong>。这是「威胁建模驱动实现」的例子——规则不是从文档抄的，是从「攻击者拿到它会发生什么」倒推的。Java 后端对接外部 HTTP 时的同款检查清单：SSRF 三件套 + 元数据黑名单 + 凭据不进池。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-application/.../cap/McpAddressPolicy.java:19-50</span>；<span class="mono">McpAddressPolicyTest.java</span> / <span class="mono">McpSecurityBehaviorTest.java</span>。</div>
+
+  <h3 id="a16-7">A16.7 熔断器：按 server 维度、CLOSED/OPEN/HALF_OPEN 与快速失败</h3>
+  <p><code class="inline-code">McpCircuitBreaker</code>（装配参数：阈值 5 次失败、OPEN 持续 30s，<code class="inline-code">ApplicationConfiguration:1660-1663</code>）按 <strong>server 维度</strong>分组熔断：一个坏掉的 MCP Server 不应让其它 server 全部不可用（对比全局熔断：「一坏全坏」）。状态机 <code class="inline-code">CLOSED → OPEN → HALF_OPEN</code>：失败累计到阈值进 OPEN；OPEN 期间<strong>快速失败</strong>——每次调用都去等一次超时，是把熔断做成了限流；30s 后进 HALF_OPEN 放探测请求，成功复位 CLOSED。</p>
+  <p>注意它与 <a href="ai-14-model-gateway.html#a14-10">A14.10</a> 的关系：模型侧<strong>没有</strong>熔断器（失败率治理靠指标 + 告警），MCP 侧有——因为 MCP server 是「自己登记的外部依赖」，质量不可控且数量多；模型网关是平台统一管理的一等资源，熔断的收益场景不同。同一个「要不要熔断」的问题，两处答案不同，且都有明确理由。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-infrastructure/.../mcp/McpCircuitBreaker.java:21-78</span>；<span class="mono">platform/platform-bootstrap/.../ApplicationConfiguration.java:1660-1663</span>。</div>
+
+  <h3 id="a16-8">A16.8 输出不可信：可信化在 Gate 边界，不在传输层</h3>
+  <p><code class="inline-code">HttpMcpTransport</code> 对远端返回的文本<strong>原样透传</strong>（:56-57 注释：「本类不做任何『清洗后即安全』的假设」）。可信化统一在 Gate 边界做：MCP 工具结果经 <code class="inline-code">McpUntrustedOutput / UntrustedOutputEnvelope</code> 包装，再按 <a href="ai-01-fundamentals.html#ai1-8">A1.8</a> 的不可信数据原则处理（围栏 + USER 消息注入）。为什么不在传输层清洗：传输层不知道下游怎么用这段文本，任何「清洗」都可能既是多余的又是不足的；<strong>信任边界唯一且明确</strong>，审计与测试才有单一锚点（与 <a href="ai-13-agent-memory.html#a13-6">A13.6</a> 记忆围栏同一设计哲学）。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">HttpMcpTransport.java:56-57</span>；<span class="mono">McpUntrustedOutput.java</span> / <span class="mono">UntrustedOutputEnvelope.java</span> / <span class="mono">McpOpAllowlistNormalizer.java</span>；<span class="mono">McpUntrustedOutputTest.java</span>。</div>
+
+  <h3 id="a16-9">A16.9 唯一执行入口：MCP 工具与原生工具共用 ToolInvocationGate</h3>
+  <p>这一条写在三处注释里（:106-113、:313-315）：<strong>MCP 工具不另开执行入口</strong>，与原生工具共用 <code class="inline-code">ToolInvocationGate</code> 这一条路径——否则八道闸门（Schema 校验、执行时授权、幂等键、账本、审批、预算、执行、账本更新）对 MCP 全部失效。配置层 <code class="inline-code">cap_mcp_server_def</code> 的 CHECK 约束（<code class="inline-code">transport ∈ {http,sse,stdio}</code>、<code class="inline-code">dynamic_discovery = false</code> 强制）与运行时这条「共用入口」配对：<strong>配置面管「能不能登记」，运行面管「能不能执行」，两面都不留旁路</strong>。<a href="ai-04-agent-orchestration.html#a4-4">A4.4</a> 的依赖方向图（ToolDefinition / McpServerDef → SkillDefinition → AgentDefinition，唯一执行入口 ToolInvocationGate）在这里落到代码。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-worker/.../execute/ToolInvocationGate.java:106-113, 313-315</span>；<span class="mono">deploy/sql/platform/01_platform_ddl.sql:2033-2056</span>（cap_mcp_server_def 及 CHECK）；<span class="mono">McpBackedToolHandler.java</span>。</div>
+
+  <h3 id="a16-10">A16.10 未落地 / 未确认清单</h3>
+  <table>
+    <thead><tr><th style="width:28%">项</th><th style="width:16%">状态</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>stdio 传输</td><td><span class="tag t-gap">DDL 有、运行时未见</span></td><td><code class="inline-code">cap_mcp_server_def</code> 的 CHECK 允许 transport='stdio'（须带 command），但 <code class="inline-code">HttpMcpTransport</code> 只实现 http/sse；stdio 走本地进程，容器化部署下语义完全不同，未见实现与测试</td></tr>
+      <tr><td>oauth 凭据</td><td><span class="tag t-unknown">未确认</span></td><td>auth_kind CHECK 允许 token|oauth|none；RefMcpCredentialPort 的实现细节与 oauth 流程完整性未逐行核验，现场以代码为准</td></tr>
+      <tr><td>MCP Server 暴露（本仓作为 server）</td><td><span class="tag t-gap">未实现</span></td><td>本仓库只有 MCP <strong>客户端</strong>；把自身工具暴露为 MCP server 无任何代码</td></tr>
+      <tr><td>动态发现</td><td><span class="tag t-live">显式禁止</span></td><td>不是未落地而是<strong>被禁止</strong>：DDL CHECK 强制 dynamic_discovery=false，新工具必须走三步发布（<a href="ai-05-config-governance.html#a5-7">A5.7</a>）</td></tr>
+      <tr><td>连接池（凭据版本进池键）</td><td><span class="tag t-plan">P5 立项</span></td><td>V1 每请求一连接的性能优化项，注释明示留给 P5 且需带凭据版本进池键</td></tr>
+      <tr><td>Skill 运行时</td><td><span class="tag t-gap">仅配置层</span></td><td>与 MCP 不同：Skill 有配置表与发布流程（<a href="ai-04-agent-orchestration.html#a4-4">A4.4</a>），但运行时消费侧未见独立执行物——governance/01 的「Skill 不存在」这一半结论仍成立</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-ai"><span class="ct">迁移提示：把 MCP 防护翻成 Java 后端语言</span><p>MCP 客户端 ≈ 一个<strong>会执行外部指令的出站 HTTP 集成层</strong>，它的防护清单其实适用于所有「按配置调用外部端点」的场景（webhook、回调、第三方 API）：SSRF 三件套（解析后校验 / 二次解析复验 / 连接=校验值）、云元数据绝对禁止、凭据逐请求解析不进池、按依赖维度熔断快速失败、输出在唯一信任边界可信化、唯一执行入口不留旁路。AI 特有的部分只有最后一条的「八道闸门」——那是 <a href="ai-04-agent-orchestration.html">A4</a> 的领地。</p></div>
+  <div class="evidence"><b>证据源：</b><span class="mono">platform/agent-ports/.../mcp/</span>（6 端口）、<span class="mono">platform/agent-infrastructure/.../mcp/</span>（10 类 1586 行）、<span class="mono">platform/agent-application/.../cap/Mcp{AddressPolicy,ServerConfigValidator,OpAllowlistNormalizer,UntrustedOutput}*.java</span>、<span class="mono">platform/agent-worker/.../execute/ToolInvocationGate.java</span>、<span class="mono">platform/platform-bootstrap/.../ApplicationConfiguration.java:1660-1700</span>、<span class="mono">deploy/sql/platform/01_platform_ddl.sql:2033-2056</span>、测试 <span class="mono">McpEndpointGuardTest / McpCredentialSecurityTest / McpAddressPolicyTest / McpServerConfigValidatorTest / McpSecurityBehaviorTest / McpUntrustedOutputTest / McpOpAllowlistNormalizerTest</span>、<span class="mono">git b770141</span>（W-PERM-P4 提交）。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-15-streaming-sse.html"><span class="pn-label">← 上一册</span><span class="pn-title">A15 · 流式输出与前端 SSE 消费</span></a>
+  <a class="pn-right" href="ai-17-test-engineering.html"><span class="pn-label">下一册 →</span><span class="pn-title">A17 · AI 测试工程与故障注入</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

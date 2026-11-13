@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第二篇 · 环境与配置 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="02-environment-config" data-ai="0">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">第二篇 · 环境与配置</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">基础六篇 · 分册</div>
+  <h1>第二篇 · 环境与配置</h1>
+  <p class="ph-sub">开发环境、三层配置、数据库初始化、启动与联调（第 4–7 章）</p>
+  <div class="ph-meta"><span>覆盖：第 4–7 章</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<div class="part-divider" id="part2">
+  <div class="pn">第二篇 · 环境与配置</div>
+  <h2>从零把两套服务跑起来</h2>
+  <p>第 4–7 章：开发环境、配置项逐项说明、数据库初始化、启动顺序与验证。这一篇可以直接照着做。</p>
+</div>
+
+<!-- ==================== 第 4 章 ==================== -->
+
+<section class="chapter" id="ch4">
+  <div class="breadcrumb"><b>第二篇</b> / 第 4 章</div>
+  <h2><span class="num">4.</span> 开发环境、依赖与前置检查</h2>
+
+  <h3 id="ch4-1">4.1 版本矩阵</h3>
+  <table>
+    <thead><tr><th>组件</th><th>版本 / 坐标</th><th>出处</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>JDK</td><td class="mono">21（maven.compiler.release=21）</td><td class="mono">platform/pom.xml、rag/pom.xml</td><td>编译参数 <span class="inline-code">-parameters</span> + <span class="inline-code">-proc:full</span>；本地实测 21.0.12 LTS</td></tr>
+      <tr><td>Maven</td><td class="mono">3.10.0</td><td class="mono">docs/本地启动指南.md §1.1</td><td>文档明确「勿用 brew 版」；本机路径 <span class="inline-code">/Users/zhouwei/software/apache-maven-3.10.0/bin</span></td></tr>
+      <tr><td>Spring Boot</td><td class="mono">4.1.1</td><td class="mono">根 pom 的 spring-boot-dependencies BOM</td><td>ADR-011 明确<strong>禁止 4.0.x</strong>（支持期）；两 reactor 对齐</td></tr>
+      <tr><td>Spring Framework / Jackson</td><td class="mono">Jackson 3（tools.jackson.core）</td><td class="mono">各模块 pom</td><td>具体版本由 BOM 管理，POM 未显式写 <span class="tag t-unknown">未确认：解析版本</span></td></tr>
+      <tr><td>PostgreSQL</td><td class="mono">17（容器 postgres:17）</td><td class="mono">scripts/dev-postgres.sh、ADR-011</td><td>RAG 侧需 pgvector 扩展；文档实测环境为 PG 17.11 + pgvector 0.8.7</td></tr>
+      <tr><td>RabbitMQ</td><td class="mono">4.3.6-management</td><td class="mono">scripts/dev-rabbitmq.sh、ADR-001</td><td>Quorum Queue；<span class="inline-code">spring-boot-starter-amqp</span> 版本由 BOM 管理</td></tr>
+      <tr><td>Node / npm</td><td class="mono">v24.21.0 / npm 11.19.0</td><td class="mono">docs/本地启动指南.md</td><td>nvm 管理；文档注明 v22 亦兼容</td></tr>
+      <tr><td>前端构建</td><td class="mono">React 18 + TS 5 + Vite 6 + Vitest 3</td><td class="mono">frontend/package.json、admin-console/package.json</td><td>admin-console 另用 Antd 5、react-markdown、KaTeX</td></tr>
+      <tr><td>其它显式依赖</td><td class="mono">jspecify 1.0.0 / re2j 1.8</td><td class="mono">platform/pom.xml</td><td>re2j 仅用于路由引擎正则，防 ReDoS</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn">
+    <span class="ct">注释里出现、但 POM 里没有的依赖</span>
+    <p><span class="inline-code">Spring AI 2.0</span>（<span class="inline-code">ChatClient</span>、<span class="inline-code">ToolCallingAdvisor</span>）与 <span class="inline-code">jOOQ 3.20+</span> 只出现在注释和 ADR-011 的选型理由中，<strong>两个 reactor 的 pom 均无对应依赖声明</strong>。LLM 编排目前是命令式手写循环 + 端口接口，不要按 Spring AI 的 API 去找代码。 <span class="tag t-unknown">未确认：未来是否引入</span></p>
+  </div>
+
+  <h3 id="ch4-2">4.2 JAVA_HOME：脚本里有三种取值</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">仓库中出现的三种 JAVA_HOME 写法（按使用场景选择其一）</span><button>复制</button></div><pre><code><span class="cm"># ① 集成测试 / 反证脚本 / 上下文压缩签核包（推荐用于命令行）</span>
+export JAVA_HOME=/opt/homebrew/opt/openjdk@21 &amp;&amp; export PATH="$JAVA_HOME/bin:$PATH"
+
+<span class="cm"># ② 本地启动指南（历史实测路径，含 Maven 3.10.0）</span>
+export JAVA_HOME=/Users/zhouwei/software/Java/jdk-21.0.12.jdk/Contents/Home
+export PATH="$JAVA_HOME/bin:/Users/zhouwei/software/apache-maven-3.10.0/bin:$PATH"
+
+<span class="cm"># ③ dev-backend.sh / dev-rag.sh 的缺省值（未显式设置时生效）</span>
+JAVA_HOME=${JAVA_HOME:-/Users/zhouwei/software/Java/jdk-21.0.12.jdk/Contents/Home}</code></pre></div>
+  <p>第 ② / ③ 种含<strong>本机绝对路径</strong>，换机器时请以 <span class="inline-code">/usr/libexec/java_home -v 21</span>（macOS）或 <span class="inline-code">/opt/homebrew/opt/openjdk@21</span> 重新确认 <span class="tag t-unknown">未确认：其它开发机上的 JDK 安装路径</span>。先执行 <span class="inline-code">java -version</span> 与 <span class="inline-code">mvn -v</span>，确认两者指向同一个 21。</p>
+
+  <h3 id="ch4-3">4.3 前置检查清单</h3>
+  <ul class="checklist">
+    <li><span class="inline-code">java -version</span> 与 <span class="inline-code">mvn -v</span> 均为 Java 21；<span class="inline-code">mvn -o</span> 可离线解析依赖（仓库内有 <span class="inline-code">.m2-local</span> / <span class="inline-code">.m2repo</span>）。</li>
+    <li>Docker 可用：本地 PG / RabbitMQ / Docling / 监控都以容器方式提供；文档记载 Docker Hub 不可达时需镜像加速（<span class="inline-code">RMQ_MIRROR=docker.1ms.run</span>）。</li>
+    <li>Node 由 nvm 加载：新终端报 <span class="inline-code">zsh: command not found: npm</span> 时检查 <span class="inline-code">~/.zshrc</span> 是否 source 了 <span class="inline-code">nvm.sh</span>。</li>
+    <li>三份 <span class="inline-code">*.env.example</span> 已复制为同名的 <span class="inline-code">*.env</span> 并填好 <span class="inline-code">&lt;MUST-FILL&gt;</span>；<span class="inline-code">jwt.env</span> 由脚本生成而非手填。</li>
+    <li><span class="inline-code">git status</span>：本项目存在并行开发，构建失败时先确认不是他人未完成的改动，<strong>不要擅自回退</strong>。</li>
+  </ul>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">前置检查（仓库根目录）</span><button>复制</button></div><pre><code>java -version; mvn -v; node --version; npm --version
+./scripts/dev-postgres.sh status &amp;&amp; ./scripts/dev-rabbitmq.sh status
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+git status --short</code></pre></div>
+
+  <h3 id="ch4-4">4.4 环境层面的已知限制</h3>
+  <table>
+    <thead><tr><th>现象</th><th>原因</th><th>处置</th></tr></thead>
+    <tbody>
+      <tr><td>本机无 <span class="inline-code">psql</span> / Docker 不可用</td><td>部分开发机只装了 JDBC 通道</td><td>用 <span class="inline-code">scripts/tools/*.java</span> 单文件源码启动的校验/播种脚本，或 <span class="inline-code">docker exec &lt;container&gt; psql</span></td></tr>
+      <tr><td>存在两个 PG 实例</td><td>5433 是 PG17 <span class="inline-code">agent_dev</span>；5432 曾为旧 PG16 且无该库</td><td>连库前先 <span class="inline-code">SELECT current_database()</span>，详见 <a href="05-troubleshooting.html#ch15-3">§15.3</a></td></tr>
+      <tr><td>前端 <span class="inline-code">vitest</span> 报 exit 137</td><td>并发 jsdom 内存不足</td><td>保留 <span class="inline-code">pool: forks + singleFork: true</span></td></tr>
+      <tr><td>RAG 本地 PG 容器缺失</td><td><span class="inline-code">rag-it-env.sh</span> / E2E 脚本假定 <span class="inline-code">rag-pg-s2</span> 已在运行</td><td><span class="tag t-unknown">未确认：仓库内未找到其创建脚本，需现场核对</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ==================== 第 5 章 ==================== -->
+
+<section class="chapter" id="ch5">
+  <div class="breadcrumb"><b>第二篇</b> / 第 5 章</div>
+  <h2><span class="num">5.</span> 配置项全解：三层模型与逐项清单</h2>
+
+  <h3 id="ch5-1">5.1 配置从哪里来：三层模型</h3>
+  <div class="figure">
+  <svg viewBox="0 0 900 220" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+    <defs><marker id="a4" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#1d4ed8"/></marker></defs>
+    <rect x="20" y="46" width="230" height="96" rx="8" fill="#e8effd" stroke="#c6d9fb"/>
+    <text x="36" y="72" font-size="13" font-weight="700" fill="#173a8f">① 环境变量（*.env）</text>
+    <text x="36" y="94" font-size="11.5" fill="#4b5563">连接串 / 口令 / 密钥 / 灰度开关</text>
+    <text x="36" y="114" font-size="11.5" fill="#4b5563">platform.env · rag.env · jwt.env</text>
+    <text x="36" y="133" font-size="11" fill="#6b7280">shell source 或 IDEA EnvFile 注入</text>
+    <rect x="310" y="46" width="250" height="96" rx="8" fill="#e2f4f0" stroke="#bfe3da"/>
+    <text x="326" y="72" font-size="13" font-weight="700" fill="#0b5d56">② application.yml</text>
+    <text x="326" y="94" font-size="11.5" fill="#4b5563">${ENV_VAR:默认值} 占位 + 业务默认值</text>
+    <text x="326" y="114" font-size="11.5" fill="#4b5563">platform-bootstrap / rag-bootstrap</text>
+    <text x="326" y="133" font-size="11" fill="#6b7280">/ rag-worker 共 4 份，无 profiles</text>
+    <rect x="620" y="46" width="260" height="96" rx="8" fill="#fff5dc" stroke="#f0dca6"/>
+    <text x="636" y="72" font-size="13" font-weight="700" fill="#6d4a05">③ 数据库配置源</text>
+    <text x="636" y="94" font-size="11.5" fill="#4b5563">model_catalog / 能力目录 / 发布头</text>
+    <text x="636" y="114" font-size="11.5" fill="#4b5563">种子 deploy/sql/platform/seed_model_catalog.sql</text>
+    <text x="636" y="133" font-size="11" fill="#6b7280">改完即生效；Run 创建时固化进快照</text>
+    <line x1="252" y1="94" x2="306" y2="94" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a4)"/>
+    <line x1="562" y1="94" x2="616" y2="94" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a4)"/>
+    <text x="20" y="176" font-size="11.5" fill="#6b7280">优先级：命令行参数 &gt; 环境变量（relaxed binding）&gt; yml 默认值 &gt; 代码内 @Value 缺省</text>
+    <text x="20" y="196" font-size="11.5" fill="#b91c1c">⚠️ 三者都遵循 fail-closed：解析不到必需项时拒绝启动，而不是给一个「能跑」的默认值</text>
+  </svg>
+  <div class="cap">图 5-1　配置的三层来源（依据 env.example、application.yml、seed_model_catalog.sql）</div>
+  </div>
+  <p>一个非常容易踩的点：<span class="inline-code">model_catalog</span> <strong>不是</strong> yml 配置项，而是库表（平台库全局表、无租户、无 RLS、不含密钥）；网关密钥只从 <span class="inline-code">AGENT_MODEL_MINIMAX_API_KEY</span> 环境变量注入。想「改配置」时先判断它属于哪一层。</p>
+
+  <h3 id="ch5-2">5.2 env 文件的格式纪律</h3>
+  <div class="callout c-danger">
+    <span class="ct">三份 env.example 共同声明的硬约束</span>
+    <p>只允许 <span class="inline-code">KEY=VALUE</span> 与 <span class="inline-code">#</span> 注释；<strong>不写</strong> <span class="inline-code">export</span> / <span class="inline-code">$(...)</span> / <span class="inline-code">if…fi</span>；<strong>值不加引号</strong>——IDEA 的 EnvFile 插件不剥引号，会给值原样加上引号。典型症状：jwt.env 里公钥被带引号后，<strong>大台登录正常、调 RAG 全 401</strong>（Base64 校验失败）。</p>
+  </div>
+  <p>复制与生成的标准动作：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">仓库根目录</span><button>复制</button></div><pre><code>cp platform.env.example platform.env
+cp rag.env.example rag.env
+scripts/gen-jwt-keys.sh           # 生成 jwt.env（0600，含两域私钥 + RAG 两个公钥）
+scripts/gen-jwt-keys.sh --check   # 与运行中平台的 JWKS 比对，确认两侧配套
+chmod 600 platform.env rag.env jwt.env</code></pre></div>
+  <p><span class="tag t-adjust">需调整</span> 传统项目里常把配置写进 <span class="inline-code">application-dev.yml</span> 并用 <span class="inline-code">spring.profiles.active</span> 切换。这里 <strong>rag 侧确认没有任何 Spring profile</strong>（无 <span class="inline-code">application-{profile}.yml</span>、无 <span class="inline-code">@Profile</span>），功能开关全部是 <span class="inline-code">@ConditionalOnProperty</span>；platform 侧的 <span class="inline-code">SPRING_PROFILES_ACTIVE=dev</span> 主要用于 JWT 私钥的开发态放行，不能当环境切换机制理解。</p>
+
+  <h3 id="ch5-3">5.3 platform.env.example 逐项</h3>
+  <table>
+    <thead><tr><th>分组</th><th>变量</th><th>示例 / 占位</th><th>必需性与含义</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="2">运行态</td><td class="mono">SPRING_PROFILES_ACTIVE</td><td class="mono">dev</td><td><strong>必需</strong>；非 dev/local/test 时缺 JWT 私钥会 fail-closed 拒绝启动</td></tr>
+      <tr><td class="mono">SERVER_PORT</td><td class="mono">8080</td><td>application.yml 无 server 段，端口由此提供</td></tr>
+      <tr><td rowspan="4">主应用库</td><td class="mono">SPRING_DATASOURCE_URL</td><td class="mono">jdbc:postgresql://&lt;host&gt;:5432/agent_dev</td><td><strong>必需</strong>；本地容器是 5433</td></tr>
+      <tr><td class="mono">SPRING_DATASOURCE_USERNAME / PASSWORD</td><td class="mono">&lt;MUST-FILL&gt;</td><td><strong>必需</strong>；应用角色应为非特权 <span class="inline-code">app_agent</span></td></tr>
+      <tr><td class="mono">SPRING_DATASOURCE_DRIVER_CLASS_NAME</td><td class="mono">org.postgresql.Driver</td><td>可留默认</td></tr>
+      <tr><td class="mono">（yml 内）hikari.connection-init-sql</td><td class="mono">SET search_path TO public</td><td>每连接固定 search_path；测试环境池上限降到 4</td></tr>
+      <tr><td rowspan="3">RabbitMQ</td><td class="mono">RABBITMQ_USER / VHOST</td><td class="mono">agent / agent</td><td>由 dev-rabbitmq.sh 准备</td></tr>
+      <tr><td class="mono">RABBITMQ_PASSWORD</td><td class="mono">&lt;MUST-FILL&gt;</td><td><strong>必需</strong>；yml 默认空 → 不填会 <span class="inline-code">ACCESS_REFUSED</span>、health DOWN</td></tr>
+      <tr><td class="mono">AGENT_MESSAGING_MODE</td><td class="mono">database（yml 默认）</td><td>切 <span class="inline-code">rabbitmq</span> 属通道切换，非热切，须先排空旧通道</td></tr>
+      <tr><td rowspan="4">平台运维通道</td><td class="mono">AGENT_PLATFORM_OPS_ENABLED</td><td class="mono">true</td><td>/api/platform/v1/** 依赖</td></tr>
+      <tr><td class="mono">AGENT_PLATFORM_OPS_DATASOURCE_URL / USERNAME</td><td class="mono">agent_dev / platform_ops</td><td>独立 Hikari 池，池上限刻意只有 2</td></tr>
+      <tr><td class="mono">AGENT_PLATFORM_OPS_DATASOURCE_PASSWORD</td><td class="mono">&lt;MUST-FILL&gt;</td><td><strong>必需</strong></td></tr>
+      <tr><td class="mono">（说明）</td><td>—</td><td>该角色 BYPASSRLS，<strong>绝不可</strong>填进主数据源用户名</td></tr>
+      <tr><td rowspan="3">模型网关</td><td class="mono">AGENT_MODEL_MINIMAX_API_KEY</td><td class="mono">&lt;MUST-FILL&gt;</td><td><strong>必需</strong>，敏感</td></tr>
+      <tr><td class="mono">AGENT_MODEL_MINIMAX_BASE_URL</td><td class="mono">https://api.minimax.cn/v1</td><td>OpenAI 兼容端点</td></tr>
+      <tr><td class="mono">AGENT_MODEL_MINIMAX_DEFAULT_MODEL</td><td class="mono">MiniMax-M2.5</td><td>模型 ID 含点号，见 <a href="#ch5-8">§5.8</a></td></tr>
+      <tr><td rowspan="2">上下文压缩</td><td class="mono">AGENT_CONTEXT_ENABLED</td><td class="mono">false</td><td>影子期默认<strong>关闭</strong>；开启前须完成接线并通过 G1 零差异门禁</td></tr>
+      <tr><td class="mono">AGENT_CONTEXT_*（阈值/校准，共约 17 项）</td><td>见模板</td><td>硬顶 128000 / 默认输入 16000 / trigger 0.70 / target 0.40 / recent-turns 6 / checkpoint TTL 1800s …</td></tr>
+      <tr><td>独立密钥</td><td class="mono">AGENT_CONTEXT_STATE_HMAC_KEY</td><td class="mono">&lt;MUST-FILL&gt;</td><td><strong>必需、敏感</strong>；绝不复用 JWT 私钥，不入库、不进日志、不落盘</td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">完整清单以 <span class="inline-code">platform.env.example</span> 为准（本表未逐个列出全部校准参数）。JWT 密钥刻意<strong>不</strong>放在 platform.env。</p>
+
+  <h3 id="ch5-4">5.4 rag.env.example 逐项</h3>
+  <table>
+    <thead><tr><th>分组</th><th>变量</th><th>示例 / 占位</th><th>必需性与含义</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="3">PostgreSQL</td><td class="mono">RAG_PG_URL</td><td class="mono">jdbc:postgresql://&lt;host&gt;:5432/study_rag</td><td><strong>必需</strong></td></tr>
+      <tr><td class="mono">RAG_PG_USERNAME</td><td class="mono">rag_app</td><td><strong>必须 NOSUPERUSER + NOBYPASSRLS</strong>；填 owner（如 ai_agent）会被 <span class="inline-code">RagStartupSelfCheck</span> 拒启</td></tr>
+      <tr><td class="mono">RAG_PG_PASSWORD</td><td class="mono">&lt;MUST-FILL&gt;</td><td><strong>必需</strong></td></tr>
+      <tr><td rowspan="4">运维通道</td><td class="mono">RAG_OPS_ENABLED</td><td class="mono">true</td><td>开着但 URL/USERNAME 缺失 = <strong>拒绝启动</strong>（不是「通道不可用」）；只想跑检索就显式写 false</td></tr>
+      <tr><td class="mono">RAG_OPS_DATASOURCE_URL / USERNAME</td><td class="mono">study_rag / rag_ops</td><td>USERNAME <strong>不得与主数据源同名</strong>；启动自检既比配置名也比 <span class="inline-code">current_user</span></td></tr>
+      <tr><td class="mono">RAG_OPS_DATASOURCE_PASSWORD</td><td class="mono">&lt;MUST-FILL&gt;</td><td><strong>必需</strong></td></tr>
+      <tr><td class="mono">RAG_SERVER_PORT</td><td class="mono">8081</td><td>与 8080 避让</td></tr>
+      <tr><td>占位闸门</td><td class="mono">RAG_LOCAL_PORTS_ENABLED</td><td class="mono">true（本地模板）</td><td>默认 yml 为 false（fail-closed）；生产开启 = 占位实现参与泄题判定与幻觉检测</td></tr>
+      <tr><td rowspan="4">嵌入模型</td><td class="mono">RAG_EMBEDDING_BASE_URL</td><td class="mono">http://127.0.0.1:11434/v1</td><td>缺则拒绝装配 EmbeddingPort；报错文案会误导到「占位实现」，真因是这里没配</td></tr>
+      <tr><td class="mono">RAG_EMBEDDING_MODEL / API_KEY</td><td class="mono">&lt;模型名&gt; / &lt;本地密钥&gt;</td><td>只转发 chat 的代理网关会让 embeddings 404，须直连模型端口</td></tr>
+      <tr><td class="mono">RAG_EMBEDDING_DIMENSION / VECTOR_TYPE</td><td class="mono">4096 / halfvec</td><td><strong>必须与库里向量列实际形态一致</strong>，否则装配期拒启</td></tr>
+      <tr><td class="mono">BATCH_SIZE / TIMEOUT_SECONDS</td><td class="mono">8 / 300</td><td>与 bootstrap、worker 三处必须保持一致</td></tr>
+      <tr><td>分数门禁（注释）</td><td class="mono">RAG_RETRIEVAL_MIN_SCORE</td><td class="mono">0.38</td><td>可选；与「嵌入模型 + 语料」绑定，换任一项要按 RAG-D08 §4 重标定</td></tr>
+      <tr><td>Docling（注释）</td><td class="mono">RAG_DOCLING_BASE_URL</td><td class="mono">http://127.0.0.1:5001</td><td>配置了即启用；T-4 完成前适配器<strong>显式失败</strong>而非回落占位</td></tr>
+      <tr><td>物料前期处理（注释）</td><td class="mono">RAG_PREMISE_ENABLED / CHUNK_POLICY</td><td class="mono">false / heading</td><td>合法值 heading、heading_hierarchy、hybrid、hybrid_chunker；未知值启动期拒绝装配</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch5-5">5.5 jwt.env：一份文件、两个进程、四个变量</h3>
+  <table>
+    <thead><tr><th>变量</th><th>读取方</th><th>内容</th><th>敏感</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">JWT_PRIVATE_KEY</td><td>platform 8080</td><td>租户域「私钥.公钥」成对 Base64URL</td><td>🔑 私钥</td></tr>
+      <tr><td class="mono">PLATFORM_JWT_PRIVATE_KEY</td><td>platform 8080</td><td>平台域「私钥.公钥」成对 Base64URL</td><td>🔑 私钥</td></tr>
+      <tr><td class="mono">RAG_TENANT_JWT_PUBLIC_KEY</td><td>rag 8081</td><td>租户域验签公钥</td><td>公钥（非机密）</td></tr>
+      <tr><td class="mono">RAG_PLATFORM_JWT_PUBLIC_KEY</td><td>rag 8081</td><td>平台域验签公钥</td><td>公钥（非机密）</td></tr>
+    </tbody>
+  </table>
+  <p>刻意让一个文件同时承载签发与验签：手工把公钥搬到另一处，就会出现两边各持一把钥匙的漂移。<strong>换密钥后平台与 RAG 必须同步重启</strong>，只重启一边就会表现为「平台登录正常、跨服务调用全 401」。<span class="inline-code">AuthConfiguration</span> 强制私钥/公钥成对，只配私钥时故障只在生产暴露。</p>
+  <p><span class="inline-code">dev-backend.sh</span> 和 <span class="inline-code">dev-rag.sh</span> 都 <span class="inline-code">source ./jwt.env</span>；<span class="inline-code">rag-worker</span> 不发 HTTP 请求，不需要 JWT 公钥。</p>
+
+  <h3 id="ch5-6">5.6 platform 的 application.yml 分组</h3>
+  <p>文件：<span class="inline-code">platform/platform-bootstrap/src/main/resources/application.yml</span>（约 847 行）。文件头声明「fail-closed：下列每项都是必填，缺失或非法时应用应拒绝启动」，并规定<strong>数值必须加引号</strong>（<span class="inline-code">YamlPropertiesFactoryBean</span> 会丢弃裸标量）。</p>
+  <table>
+    <thead><tr><th>分组</th><th>代表键</th><th>值 / 默认</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>数据源 / Flyway</td><td class="mono">spring.flyway.default-schema、spring.datasource.hikari.*</td><td>public / 池 10</td><td>url / username / password 刻意不写，由 env 注入</td></tr>
+      <tr><td>RabbitMQ</td><td class="mono">spring.rabbitmq.listener.simple.*、publisher-confirm-type</td><td>manual / false / prefetch 10 / correlated</td><td>手动 ack、有限重投、publisher confirms 是 Outbox 可靠性前提</td></tr>
+      <tr><td>Worker</td><td class="mono">agent.worker.enabled / relay-interval-ms / concurrency / outbox-batch / lease-seconds</td><td>true / 200 / 4 / 50 / 30</td><td>缺失即拒启；<span class="inline-code">tenant-slugs</span> 默认 t-a</td></tr>
+      <tr><td>消息通道</td><td class="mono">agent.messaging.mode / poll-interval-ms / visibility-timeout-ms</td><td>database / 200 / 300000</td><td>与 <span class="inline-code">switch-guard.rabbit-residual-check</span> 配套</td></tr>
+      <tr><td>MQ 拓扑</td><td class="mono">agent.mq.exchange / queues.execute.name / delivery-limit</td><td>agent.run.dispatch / agent.run.execute / 3</td><td>reconcile 队列声明<strong>已删除</strong>（代码从未落地）并有守卫断言其不存在</td></tr>
+      <tr><td>质量评测 L1/L2</td><td class="mono">agent.quality.eval.enabled / llm-judge.enabled / reference-source.enabled</td><td>true / false / false</td><td>L2 judge 骨架默认双 false + 空题库 ⇒ fail-closed</td></tr>
+      <tr><td>分层抽样</td><td class="mono">agent.quality.sampler.*</td><td>24h / 每租户 20 / 全局 200</td><td>按租户配额</td></tr>
+      <tr><td>限流 / 权限影子</td><td class="mono">agent.rate-limit.* / agent.authz.shadow.enabled / decision-log.enabled</td><td>30/60s / false / false</td><td>影子是单开关语义：Bean 在即开、不在即关</td></tr>
+      <tr><td>上下文压缩</td><td class="mono">agent.context.* / calibration.* / state-hmac-key</td><td>enabled=false / …</td><td>影子期除 enabled 外尚未被组合根消费，接线后才生效</td></tr>
+      <tr><td>恢复 / 背压 / 记忆 / 保留期</td><td class="mono">agent.recovery.* / backpressure.* / memory.* / retention.*</td><td>见文件</td><td>五类保留期全部必填；retention 用独立数据源</td></tr>
+      <tr><td>成本与容量</td><td class="mono">agent.run.max-cost-per-run / max-llm-calls / max-steps / pricing.models.*</td><td>2.00 / 12 / 20</td><td>每千 token 单价表，最长前缀匹配，缺价记 0 并 WARN</td></tr>
+      <tr><td>工具 / 审批 / 合规</td><td class="mono">agent.tool.risk-level-map / approval.required-by-risk / compliance.zero-retention.*</td><td>READ / WRITE_PROFILE；未登记工具按 WRITE_EXTERNAL 兜底</td><td>风险等级一致性有启动期守卫</td></tr>
+      <tr><td>认证</td><td class="mono">auth.jwt.* / auth.platform-jwt.* / auth.login.known-roles</td><td>aud=agent-platform / admin-console-api；TTL 900s</td><td>两域 audience 必须不同</td></tr>
+      <tr><td>feature flag</td><td class="mono">config.flag.cap-dual-write / cap-authorization-enforced[.tenants] / cap-closure-enforcement</td><td>true / false+空 / warn</td><td>双写默认 true 是执行链前置条件；灰度白名单是「先行者」不是「豁免」</td></tr>
+      <tr><td>观测</td><td class="mono">management.endpoints.web.exposure.include / logging.level.*</td><td>health,prometheus</td><td>最小暴露面；访问日志 URI 不含 query</td></tr>
+      <tr><td>RAG 地址</td><td class="mono">agent.rag.base-url</td><td>http://127.0.0.1:8081</td><td>platform → rag 唯一地址来源</td></tr>
+    </tbody>
+  </table>
+  <p><span class="tag t-unknown">未确认</span> application.yml 内<strong>无</strong> <span class="inline-code">server:</span> 段、<strong>无</strong> <span class="inline-code">model-catalog</span> 键、<strong>无</strong>独立的 SSE 配置键；SSE 相关能力由代码与 <span class="inline-code">agent.context.max-state-chars</span> 等键间接约束。</p>
+
+  <h3 id="ch5-7">5.7 rag 的两份 yml 与一致性纪律</h3>
+  <table>
+    <thead><tr><th>维度</th><th class="mono">rag-bootstrap/application.yml</th><th class="mono">rag-worker/application.yml</th></tr></thead>
+    <tbody>
+      <tr><td>应用名 / 端口</td><td>java-saas-rag / <span class="inline-code">${RAG_SERVER_PORT:8081}</span></td><td>java-saas-rag-worker / <strong>无 server.port</strong>（无 Web 容器）</td></tr>
+      <tr><td>启动类</td><td class="mono">RagApplication</td><td class="mono">RagWorkerApplication + @EnableScheduling</td></tr>
+      <tr><td>扫描包</td><td>bootstrap / api / application / infrastructure / management</td><td><strong>仅</strong> cn.studykid.rag.worker</td></tr>
+      <tr><td>multipart</td><td>256MB（整册扫描件）</td><td>无</td></tr>
+      <tr><td>数据源</td><td colspan="2">两者一致：<span class="inline-code">search_path TO rag, public</span>，<span class="inline-code">spring.flyway.enabled=false</span>，长连接保活参数</td></tr>
+      <tr><td>嵌入与运维通道</td><td colspan="2"><strong>逐项同名同默认值</strong>；注释明确「一旦漂移就是检索恒低分且不报错」</td></tr>
+      <tr><td>独有</td><td>corpus-bucket / generation.model / retrieval.min-score / security（两域公钥）</td><td>indexer.auto-start / batch-size / tenants</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger">
+    <span class="ct">rag-worker 的两个静默故障点</span>
+    <p>① 漏掉 <span class="inline-code">@EnableScheduling</span>（或启动错类）→ 进程「照常启动、照常健康」，但入库任务永远 PENDING。② 两份 yml 的 <span class="inline-code">rag.embedding.*</span> 漂移 → 索引向量与查询向量不同源，检索恒低分，<strong>没有任何报错</strong>。这是典型的「静默失真」，验证方式见 <a href="05-troubleshooting.html#ch15-5">§15.5</a>。</p>
+  </div>
+
+  <h3 id="ch5-8">5.8 配置层的五个高频坑</h3>
+  <table>
+    <thead><tr><th>#</th><th>坑</th><th>后果</th><th>正确做法</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>yml 里模型 ID 写成裸键 <span class="inline-code">MiniMax-M2.5:</span></td><td>Spring Binder 按点号拆成 <span class="inline-code">MiniMax-M2</span> + <span class="inline-code">5</span> ⇒ 启动失败 / 成本记 0 / judge 拒调</td><td>写 <span class="inline-code">"[MiniMax-M2.5]"</span>；已有 <span class="inline-code">ApplicationConfigKeyAlignmentTest#dottedModelIdKeepsItsPricing</span> 守卫</td></tr>
+      <tr><td>2</td><td>配置挂错父键（如 <span class="inline-code">platform.security.*</span> 挂到 agent 下）</td><td>静默落回默认值，功能空转</td><td>对照 yml 原文核对完整路径；父子键有守卫测试</td></tr>
+      <tr><td>3</td><td>yml 数值写成裸标量</td><td>被 <span class="inline-code">YamlPropertiesFactoryBean</span> 丢弃，绑成 0 或空</td><td>数值加引号，如 <span class="inline-code">"30"</span></td></tr>
+      <tr><td>4</td><td>误以为 <span class="inline-code">SERVER_PORT</span> 环境变量只影响 rag</td><td>relaxed binding 会压过 yml，8080/8081 可能串端口</td><td>分别用 <span class="inline-code">SERVER_PORT</span> / <span class="inline-code">RAG_SERVER_PORT</span>，且不要同时 source 两份 env</td></tr>
+      <tr><td>5</td><td>灰度开关默认关、读侧却硬依赖</td><td>出厂默认建得出 Run 但全部收敛 <span class="inline-code">FAILED / CONFIG_UNAVAILABLE</span></td><td>项目事故 CFG-01 的处置原则是「<strong>改默认值，不改 fail-closed</strong>」，见 <a href="05-troubleshooting.html#ch16-2">§16.2</a></td></tr>
+    </tbody>
+  </table>
+  <div class="xref">交叉引用：配置生效顺序与启动的关系见 <a href="#ch7">第 7 章</a>；配置类故障速查见 <a href="05-troubleshooting.html#ch15-1">§15.1</a>；完整配置键索引见 <a href="06-reference.html#appendix-b">附录 B</a>。</div>
+</section>
+
+<!-- ==================== 第 6 章 ==================== -->
+
+<section class="chapter" id="ch6">
+  <div class="breadcrumb"><b>第二篇</b> / 第 6 章</div>
+  <h2><span class="num">6.</span> 数据库初始化、角色与结构基线</h2>
+
+  <h3 id="ch6-1">6.1 唯一初始化序列：01 → 02 → 03 → 04</h3>
+  <p><span class="inline-code">deploy/sql/README.md</span> 自称「库结构与种子数据的唯一权威源」：Flyway 迁移链（platform V1~V34 / rag V1~V8）已于 2026-10-27 删除，增量补丁于 2026-11-01 全部收编，现在<strong>每个目标库只按一条序列初始化</strong>，没有第二个来源。</p>
+  <div class="figure">
+  <svg viewBox="0 0 900 176" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+    <defs><marker id="a5" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#0f766e"/></marker></defs>
+    <rect x="16" y="34" width="190" height="76" rx="8" fill="#e8effd" stroke="#c6d9fb"/><text x="30" y="58" font-size="12.5" font-weight="700" fill="#173a8f">01_*_ddl.sql</text><text x="30" y="79" font-size="11" fill="#4b5563">完整结构终态快照</text><text x="30" y="98" font-size="11" fill="#4b5563">由库 owner 执行</text>
+    <rect x="234" y="34" width="190" height="76" rx="8" fill="#e8effd" stroke="#c6d9fb"/><text x="248" y="58" font-size="12.5" font-weight="700" fill="#173a8f">02_*_seed.sql</text><text x="248" y="79" font-size="11" fill="#4b5563">租户/能力目录/字典</text><text x="248" y="98" font-size="11" fill="#4b5563">发布头 + 指针 + 夹具</text>
+    <rect x="452" y="34" width="190" height="76" rx="8" fill="#e2f4f0" stroke="#bfe3da"/><text x="466" y="58" font-size="12.5" font-weight="700" fill="#0b5d56">03_*_roles.sql</text><text x="466" y="79" font-size="11" fill="#4b5563">建应用角色 + 授权</text><text x="466" y="98" font-size="11" fill="#4b5563">含 ALTER DEFAULT PRIVILEGES</text>
+    <rect x="670" y="34" width="212" height="76" rx="8" fill="#e2f4f0" stroke="#bfe3da"/><text x="684" y="58" font-size="12.5" font-weight="700" fill="#0b5d56">04_*_role.sql</text><text x="684" y="79" font-size="11" fill="#4b5563">保留期 / 运维专用角色</text><text x="684" y="98" font-size="11" fill="#4b5563">重跑 03 后必须紧接重跑 04</text>
+    <line x1="208" y1="72" x2="230" y2="72" stroke="#0f766e" stroke-width="2" marker-end="url(#a5)"/>
+    <line x1="426" y1="72" x2="448" y2="72" stroke="#0f766e" stroke-width="2" marker-end="url(#a5)"/>
+    <line x1="644" y1="72" x2="666" y2="72" stroke="#0f766e" stroke-width="2" marker-end="url(#a5)"/>
+    <text x="16" y="144" font-size="11.5" fill="#b91c1c">⚠️ 角色必须建在 DDL 之后：ALTER DEFAULT PRIVILEGES 只覆盖此后新建的表，顺序颠倒 = 应用角色对全部表无权限</text>
+    <text x="16" y="164" font-size="11.5" fill="#6b7280">总入口：scripts/init-db.sh platform|rag（建库 → DDL → 种子 → 角色 → 自检一条命令）</text>
+  </svg>
+  <div class="cap">图 6-1　数据库初始化序列与身份纪律</div>
+  </div>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">deploy/sql/README.md §执行方式（原样引用，占位符保留）</span><button>复制</button></div><pre><code>scripts/init-db.sh platform \
+  --host &lt;host&gt; --port 5432 \
+  --admin-user &lt;具备 CREATEDB/CREATEROLE 的账号&gt; --admin-password '&lt;口令&gt;' \
+  --db agent_dev \
+  --app-password '&lt;app_agent 口令&gt;' \
+  --ops-password '&lt;platform_ops 口令&gt;' \
+  --retention-password '&lt;agent_retention 口令&gt;'
+
+scripts/init-db.sh rag \
+  --host &lt;host&gt; --port 5432 \
+  --admin-user &lt;...&gt; --admin-password '&lt;口令&gt;' \
+  --db study_rag \
+  --rag-password '&lt;rag_app 口令&gt;' \
+  --rag-ops-password '&lt;rag_ops 口令&gt;'</code></pre></div>
+  <p>手工逐文件方式同样在 README 中给出（<span class="inline-code">psql -v ON_ERROR_STOP=1 -f …</span>），并强调：DDL/种子由<strong>库 owner</strong> 执行、<span class="inline-code">CREATE ROLE</span> 是集群级、<span class="inline-code">study_rag</span> 的 vector/pgcrypto 扩展装在 public、<strong>验 RLS 必须用非特权角色</strong>。</p>
+
+  <h3 id="ch6-2">6.2 结构基线与数字冲突</h3>
+  <table>
+    <thead><tr><th>口径来源</th><th>platform</th><th>rag</th><th>评价</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">scripts/init-db.sh 自检常量</td><td><strong>71 表 / 44 RLS 表 / 52 策略</strong></td><td>11 表 / 35 策略 / halfvec(4096)</td><td><strong>以脚本为最新权威</strong></td></tr>
+      <tr><td class="mono">scripts/it-env.sh --probe</td><td>71 / 44 / 52 + <span class="inline-code">execution_snapshot.context_policy</span> 列</td><td>—</td><td>精确相等断言，结构漂移即拒跑 IT</td></tr>
+      <tr><td class="mono">deploy/sql/README.md</td><td>70 表 / 44 RLS / 52 策略</td><td>11 表 / 11 RLS / 35 策略 / 36 索引</td><td><span class="tag t-conflict">文档冲突</span> 70 未同步（新增 <span class="inline-code">platform.review_task</span> 后应为 71）</td></tr>
+      <tr><td class="mono">01_platform_ddl.sql 文件头注释</td><td>65 表 / 42 RLS / 50 策略</td><td>11 表 / 35 策略</td><td><span class="tag t-conflict">文档冲突</span> 导出时的历史基线</td></tr>
+      <tr><td>SQL 文本直接计数</td><td>71 条 <span class="inline-code">CREATE TABLE</span> / 52 条 <span class="inline-code">CREATE POLICY</span></td><td>13 / 37</td><td><span class="tag t-unknown">未确认：rag 侧差额来源（注释内语句 / 分区子表等）</span></td></tr>
+    </tbody>
+  </table>
+  <p>结构变更的正规动作（README §结构变更今后怎么做）：<strong>① 改 01 终态快照 → ② 在目标库手工执行等价 ALTER → ③ 涉及种子则同步改 02 → ④ 跑构建期结构守卫（<span class="inline-code">SchemaStructureTest</span> 等）与 <span class="inline-code">SchemaDriftIT</span></strong>。若改了 platform 域的新表，还要同步 <span class="inline-code">03_platform_roles.sql</span> 授权，并在重跑 03 后紧接重跑 04（否则 04 的 <span class="inline-code">REVOKE</span> 被 03 静默覆盖）。</p>
+  <p><strong>不要再新增增量 patch 脚本</strong>——那正是 2026-11-01 收敛掉的东西。活库等价 ALTER 目前以 <span class="inline-code">07_*.sql</span> 等形式存在（如 <span class="inline-code">07_execution_snapshot_context_policy.sql</span>、<span class="inline-code">07_model_catalog_context_upgrade.sql</span>），且均声明 <span class="inline-code">IF NOT EXISTS</span> 幂等。</p>
+
+  <h3 id="ch6-3">6.3 角色体系：谁可以做什么</h3>
+  <table>
+    <thead><tr><th>角色</th><th>库</th><th>RLS 属性</th><th>用途</th><th>绝不能</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">app_agent</td><td>agent_dev</td><td>NOBYPASSRLS（<span class="inline-code">@Primary</span> 数据源）</td><td><strong>所有业务 SQL</strong>，租户隔离的实际执行者</td><td>用 <span class="inline-code">ai_agent</span> 代替它验隔离（会假绿）</td></tr>
+      <tr><td class="mono">ai_agent</td><td>agent_dev</td><td>BYPASSRLS / owner</td><td>DDL、迁移、带外运维</td><td>出现在业务 SQL / RLS 验证中</td></tr>
+      <tr><td class="mono">platform_ops</td><td>agent_dev</td><td>BYPASSRLS（平台域）</td><td><span class="inline-code">/api/platform/v1/**</span> 与 PLATFORM 作用域发布</td><td>填进 <span class="inline-code">SPRING_DATASOURCE_USERNAME</span></td></tr>
+      <tr><td class="mono">agent_retention</td><td>agent_dev</td><td>凭据隔离</td><td>保留期清理任务</td><td>用于业务查询</td></tr>
+      <tr><td class="mono">rag_app</td><td>study_rag</td><td>NOSUPERUSER + NOBYPASSRLS</td><td>检索与租户档语料</td><td>换成 owner 账号（启动自检拒启）</td></tr>
+      <tr><td class="mono">rag_ops</td><td>study_rag</td><td>LOGIN + BYPASSRLS</td><td>全局语料治理通道，最小授权 13 项</td><td>与主数据源同名；手工 GRANT（04 是「先 REVOKE ALL 再 GRANT」的自收敛脚本）</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger">
+    <span class="ct">RLS 验证的铁律</span>
+    <p>验隔离要用 <span class="inline-code">app_agent</span> / <span class="inline-code">rag_app</span>；用 <span class="inline-code">ai_agent</span>（BYPASSRLS）会得到「隔离失效」或「隔离有效」的<strong>假结论</strong>。FORCE RLS 下未绑定租户的删/查会静默返回 0 行；FORCE RLS 表<strong>判空必须先绑租户</strong>，否则是假空。此外 <span class="inline-code">ON CONFLICT DO UPDATE</span> 需要额外 UPDATE 权限，新幂等 upsert 必须同步授权并补 <span class="inline-code">SchemaDriftIT</span>。</p>
+  </div>
+
+  <h3 id="ch6-4">6.4 集成测试必须用独立库</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">两个 reactor 各自的 IT 环境入口</span><button>复制</button></div><pre><code><span class="cm"># platform：连独立库 agent_it，--probe 精确断言 71/44/52 与 context_policy 列</span>
+IT_HOST=127.0.0.1 IT_PORT=5433 IT_ADMIN_USER=agent \
+  source scripts/it-env.sh --probe
+
+<span class="cm"># rag：从 ragdb 只读 pg_dump --schema-only 建 study_rag_it，导出 IT_RAG_* 变量</span>
+source scripts/rag-it-env.sh          # --reset 可重建
+
+<span class="cm"># 建库侧（与上面导出变量侧分工）</span>
+./scripts/dev-it-db.sh                # 本地容器形态
+export AI_AGENT_PASSWORD='&lt;口令&gt;'; ./scripts/init-it-db.sh   # 远端 RDS 形态</code></pre></div>
+  <ul>
+    <li>IT 租户造数统一走 <span class="inline-code">ItTenantProvisioner.provision(adminPool, slug)</span>，强制 <span class="inline-code">it-</span> 前缀，幂等建 tenant / agent / version / snapshot。</li>
+    <li><span class="inline-code">execution_snapshot</span> 不可删；<span class="inline-code">*IT</span> 造 Run 必须 <span class="inline-code">@BeforeAll</span> 回收。</li>
+    <li>IT 与常驻 8080 实例<strong>绝不能共库</strong>：实例会按 <span class="inline-code">agent.worker.tenant-slugs</span> 抢先 claim + ack，把 IT 遗留 Run 当真活跑，污染统计基线。这是真实事故 P8，见 <a href="05-troubleshooting.html#ch16-7">§16.7</a>。</li>
+    <li>双 reactor 全量 verify 在本地库上必须显式带 <span class="inline-code">IT_HOST=127.0.0.1 IT_PORT=5433 IT_ADMIN_USER=agent</span>，否则 <span class="inline-code">it-env.sh</span> 在 source 阶段就因缺口令退出，Maven 根本没启动（看起来像构建失败，其实是环境没起来）。</li>
+  </ul>
+</section>
+
+<!-- ==================== 第 7 章 ==================== -->
+
+<section class="chapter" id="ch7">
+  <div class="breadcrumb"><b>第二篇</b> / 第 7 章</div>
+  <h2><span class="num">7.</span> 启动步骤、验证与联调</h2>
+
+  <h3 id="ch7-1">7.1 一键方式（最快）</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">scripts/dev-env-up.sh（内部依次做：PG + RabbitMQ + 自检 + 冒烟 + 打包）</span><button>复制</button></div><pre><code>./scripts/dev-env-up.sh                  # 全量
+./scripts/dev-env-up.sh --smoke-only     # 只跑纯领域冒烟（最快）
+./scripts/dev-env-up.sh --with-ollama    # 顺带检查 Ollama（缺失仅提示、不阻塞）
+./scripts/dev-env-up.sh --help
+
+<span class="cm"># 冒烟测试单独跑（纯领域对象、零连接，用于验证概念理解）</span>
+mvn -o -pl agent-core test -Dtest=QuickstartDemoTest</code></pre></div>
+
+  <h3 id="ch7-2">7.2 分步启动（推荐理解顺序）</h3>
+  <ol class="steps">
+    <li><strong>准备配置</strong>：复制三份 env.example 并填值；<span class="inline-code">scripts/gen-jwt-keys.sh</span> 生成 jwt.env；<span class="inline-code">chmod 600</span>。见 <a href="#ch5-2">§5.2</a>。</li>
+    <li><strong>起依赖服务</strong>：<span class="inline-code">RMQ_MIRROR=docker.1ms.run ./scripts/dev-rabbitmq.sh start</span>，然后 <span class="inline-code">./scripts/dev-postgres.sh start</span>；用各自的 <span class="inline-code">status</span> 确认。</li>
+    <li><strong>初始化库结构</strong>：<span class="inline-code">scripts/init-db.sh platform|rag …</span>（或本地容器脚本 <span class="inline-code">dev-postgres.sh start</span> 已幂等应用 01 快照 + 种子 + 授权）；核对 <span class="inline-code">./scripts/dev-postgres.sh verify</span>。</li>
+    <li><strong>本地账号</strong>（可选）：<span class="inline-code">./scripts/dev-seed.sh --list</span> 查看；租户账号与平台账号是两套，平台账号用 <span class="inline-code">dev-seed-platform-users.sh --commit</span>。口令一律通过环境变量传入。</li>
+    <li><strong>构建</strong>：<span class="inline-code">cd platform &amp;&amp; mvn -o clean verify</span> 与 <span class="inline-code">cd rag &amp;&amp; mvn -o clean verify</span>；只打包用 <span class="inline-code">mvn -o -pl platform-bootstrap -am package -DskipTests</span>。</li>
+    <li><strong>启 platform</strong>：<span class="inline-code">scripts/dev-backend.sh</span>（读 platform.env + jwt.env，跑 <span class="inline-code">-exec.jar</span>）。</li>
+    <li><strong>启 rag</strong>：<span class="inline-code">scripts/dev-rag.sh [端口]</span>（默认 8081）；如需异步入库/索引，另起 <span class="inline-code">rag-worker</span> 进程。</li>
+    <li><strong>启前端</strong>：<span class="inline-code">cd frontend &amp;&amp; npm run dev</span>（:5173）与 <span class="inline-code">cd admin-console &amp;&amp; npm run dev</span>（:5180/admin），二者按需启动。</li>
+    <li><strong>联调验证</strong>：按 <a href="#ch7-4">§7.4</a> 的判据逐项确认，最后跑一次跨服务检索或 SSE 请求。</li>
+  </ol>
+
+  <h3 id="ch7-3">7.3 两个 jar：一个必须避开的命令陷阱</h3>
+  <div class="callout c-danger">
+    <span class="ct"><span class="tag t-conflict">文档冲突</span> 已由产物 MANIFEST 实证</span>
+    <p><span class="inline-code">platform-bootstrap</span> 的 <span class="inline-code">spring-boot-maven-plugin:repackage</span> 配了 <span class="inline-code">&lt;classifier&gt;exec&lt;/classifier&gt;</span>（为保证 failsafe 的 <span class="inline-code">@SpringBootTest</span> 能读到类）。因此 target 下有两个 jar：</p>
+    <ul>
+      <li><span class="inline-code">platform-bootstrap-1.0.1-SNAPSHOT.jar</span>（约 164 KB）＝ <strong>thin jar，MANIFEST 无 Main-Class，不能直接 java -jar</strong>；</li>
+      <li><span class="inline-code">platform-bootstrap-1.0.1-SNAPSHOT-exec.jar</span>（约 42 MB）＝ 可执行 fat jar，<span class="inline-code">Start-Class: …PlatformApplication</span>。</li>
+    </ul>
+    <p>而 <span class="inline-code">docs/本地启动指南.md §0 / §4.1</span>（2026-10-19 实测版）给出的启动命令用的是<strong>不带 exec 的名字</strong>；<span class="inline-code">platform-bootstrap/pom.xml</span> 的注释却写「部署时使用带 exec 后缀的包，见 docs/本地启动指南.md」。两者自相矛盾。<strong>现行正确命令以 <span class="inline-code">scripts/dev-backend.sh</span> 为准</strong>。</p>
+  </div>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">正确的手工启动方式（与 scripts/dev-backend.sh 等价）</span><button>复制</button></div><pre><code>set -a; source ./platform.env; [ -f ./jwt.env ] &amp;&amp; source ./jwt.env; set +a
+"$JAVA_HOME/bin/java" -jar \
+  platform/platform-bootstrap/target/platform-bootstrap-1.0.1-SNAPSHOT-exec.jar \
+  --spring.profiles.active=dev --server.port=8080
+
+<span class="cm"># rag 侧没有 classifier，主构件本身即 fat jar（约 28 MB，MANIFEST 有 Main-Class）</span>
+set -a; source ./rag.env; [ -f ./jwt.env ] &amp;&amp; source ./jwt.env; set +a
+"$JAVA_HOME/bin/java" -jar \
+  rag/rag-bootstrap/target/rag-bootstrap-1.0.1-SNAPSHOT.jar \
+  --server.port=8081</code></pre></div>
+  <p>另一条相关纪律：<strong>运行中的 jar inode 必须等于磁盘上的 jar</strong>。<span class="inline-code">clean</span> 之后旧进程仍在跑旧代码，任何「我已经改了、怎么没生效」的结论都要先按构建时间线核对。这也是 <span class="inline-code">dev-backend.sh</span> 开头注释「为什么不用 IDE 启动」的原因。</p>
+
+  <h3 id="ch7-4">7.4 存活判据与健康检查</h3>
+  <table>
+    <thead><tr><th>检查</th><th>命令</th><th>期望</th></tr></thead>
+    <tbody>
+      <tr><td>platform 存活</td><td class="mono">curl -s http://localhost:8080/api/auth/jwks</td><td>200 + <span class="inline-code">{"kid":…,"alg":"RSA",…}</span></td></tr>
+      <tr><td>前端存活</td><td class="mono">curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5173/</td><td>200 + HTML（用 <strong>localhost</strong>，不用 127.0.0.1）</td></tr>
+      <tr><td>代理链路</td><td class="mono">curl -s http://localhost:5173/api/auth/jwks</td><td>与直连 8080 一致</td></tr>
+      <tr><td>RAG 检索面</td><td class="mono">POST /api/v1/retrieval（带 X-Tenant-Id）</td><td>200 + hits；嵌入不可用为 503</td></tr>
+      <tr><td>跨服务验签</td><td>登录取租户令牌 → 走前端发起检索/对话</td><td>不是 401；401 优先怀疑 jwt.env 漂移</td></tr>
+      <tr><td>IT 结构</td><td class="mono">source scripts/it-env.sh --probe</td><td>71 / 44 / 52 与 context_policy 列全部精确相等</td></tr>
+    </tbody>
+  </table>
+  <p><span class="tag t-conflict">文档冲突</span> <span class="inline-code">docs/本地启动指南.md §4.3</span> 记载「<span class="inline-code">/actuator/health</span> 当前返回 500，根因未诊断」，并建议用 <span class="inline-code">/api/auth/jwks</span> 判活。这是 2026-10-19 的历史实测；当前版本的健康状态 <span class="tag t-unknown">未确认，需现场核对</span>。不要把「health 500」当成今天的既定事实，也不要把它当成可以跳过健康检查的理由。</p>
+
+  <h3 id="ch7-5">7.5 前端代理顺序与同源约束</h3>
+  <p>两份 <span class="inline-code">vite.config.ts</span> 都明确写了同一条纪律：<strong><span class="inline-code">/api/v1</span> 代理必须排在 <span class="inline-code">/api</span> 之前</strong>，否则 RAG 请求被前缀匹配抢到 8080 → 404。默认值：</p>
+  <table>
+    <thead><tr><th>前缀</th><th>frontend 目标</th><th>admin-console 目标</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">/api/v1</td><td class="mono">VITE_DEV_RAG_API_TARGET ?? http://127.0.0.1:8081</td><td class="mono">VITE_DEV_RAG_TARGET ?? http://127.0.0.1:8081</td></tr>
+      <tr><td class="mono">/api、/actuator</td><td colspan="2" class="mono">VITE_DEV_API_TARGET ?? http://127.0.0.1:8080</td></tr>
+    </tbody>
+  </table>
+  <p>后端 <span class="inline-code">SecurityConfiguration</span> 为 <span class="inline-code">cors.disable()</span>，因此前端<strong>不能</strong>独立域名直连，必须走 devServer 同源代理；绝不可为图方便给后端开 <span class="inline-code">cors.allowOrigins("*")</span>（令牌在 Authorization 头）。切换后端地址用 <span class="inline-code">VITE_DEV_API_TARGET=http://… npm run dev</span>。</p>
+
+  <h3 id="ch7-6">7.6 停止服务</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">停止（注意 destroy 会删数据卷）</span><button>复制</button></div><pre><code><span class="cm"># 前端 / 后端进程：Ctrl+C；或按端口结束</span>
+lsof -ti:8080 | xargs kill -9      # 仅在确认是自己的进程后使用
+
+./scripts/dev-rabbitmq.sh stop
+./scripts/dev-postgres.sh stop
+<span class="cm"># ./scripts/dev-postgres.sh destroy  ⚠️ 会删除数据卷，需确认后再用</span></code></pre></div>
+  <div class="xref">交叉引用：启动/配置类故障的完整排查表见 <a href="05-troubleshooting.html#ch15-1">§15.1</a>；跨服务 401 的定位路径见 <a href="05-troubleshooting.html#ch15-4">§15.4</a>；常用命令汇总见 <a href="06-reference.html#ch18">第 18 章</a>。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="01-project-overview.html"><span class="pn-label">← 上一册</span><span class="pn-title">第一篇 · 认识项目</span></a>
+  <a class="pn-right" href="03-java-skill-transfer.html"><span class="pn-label">下一册 →</span><span class="pn-title">第三篇 · 经验迁移</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A15 · 流式输出与前端 SSE 消费 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-15-streaming-sse" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A15 · 流式输出与前端 SSE 消费</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A15 · 流式输出与前端 SSE 消费 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">ChatStreamGateway 独立端口、13 类事件协议、双身份域双端点与 thinking 可见性、超时三层对齐、前端增量解析与状态机、truncated 诚实语义</p>
+  <div class="ph-meta"><span>覆盖：A15.1–A15.10</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a15">
+  <div class="breadcrumb"><b>AI 专题 · A15</b> / 流式输出与前端 SSE 消费</div>
+  <h2><span class="num">A15.</span> 流式输出与前端 SSE 消费：从供应商 token 流到浏览器增量渲染</h2>
+  <p><a href="04-runtime-flows.html#ch12">第 12 章</a> 的 SSE v1.1 讲的是<strong>上下文压缩态</strong>怎么走事件流（context.checkpoint 等）；本册讲另一条更贴近用户的流：<strong>答案本身怎么一个 token 一个 token 到达浏览器</strong>——供应商侧 SSE 怎么解析、平台怎么定义 13 类事件协议、双身份域为什么是两个端点、前端怎么用增量解析器 + 状态机做到「迟到事件不串台、截断不伪装」。</p>
+  <div class="callout c-info"><span class="ct">本册与已有册的分工</span><p><a href="ai-14-model-gateway.html">A14</a> 讲一次性归一化调用（ModelGateway），本册讲它的流式兄弟端口；<a href="ai-03-hard-problems.html#a3-2">A3.2</a> 讲压缩管线，本册 A15.9 讲压缩态在前端的 carry-over 消费；<code class="inline-code">usage</code> 事件与 <a href="ai-11-cost-governance.html#a11-2">A11.2</a> 的账本挂钩；联调排障见 <a href="05-troubleshooting.html#ch15-4">§15.4 跨服务契约诊断</a>。</p></div>
+
+  <h3 id="a15-1">A15.1 为什么要独立 ChatStreamGateway 端口：不污染领域契约</h3>
+  <p><code class="inline-code">ModelGateway.complete()</code> 是领域层（Worker 执行 Agent Run）用的<strong>一次性归一化调用</strong>，按 ADR-002 不暴露任何流式/响应式类型。控制台对话是<strong>平台工具</strong>而非租户 Run，其流式需求单独成端口 <code class="inline-code">ChatStreamGateway</code>（<code class="inline-code">MiniMaxModelGateway</code> 同时实现两者）。端口契约里三条最重要的纪律（类注释）：</p>
+  <ul>
+    <li>每个内容增量通过 <code class="inline-code">StreamDeltaConsumer.onDelta</code> <strong>实时回吐，不得缓冲到结束才一次性抛出</strong>——否则「流式」只是分批；</li>
+    <li><code class="inline-code">onDelta</code> 回调内的异常由调用方（控制器）捕获并终止流，实现方不得吞掉或重新归一化已抛出的 <code class="inline-code">ModelGatewayException</code>；</li>
+    <li>入参/出参沿用 <code class="inline-code">ModelRequest/ModelResponse</code>，不引入供应商或 Spring AI 专属类型——领域中立。</li>
+  </ul>
+  <p>另有一个容易被忽略的默认行为：<code class="inline-code">onThinking</code>（推理草稿增量）默认空实现。注释写明：<strong>思考内容未经答案级安全审核，仅展示给平台管理员（控制台工具），不可回落到面向学生的通道</strong>——这是 A15.4 双端点设计的伏笔。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-ports/.../model/ChatStreamGateway.java</span>（类契约与 StreamDeltaConsumer javadoc）。</div>
+
+  <h3 id="a15-2">A15.2 供应商侧 SSE 解析：stream=true 覆盖、逐行读取、[DONE] 与 ThinkFilter</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">MiniMax streamChat 解析（MiniMaxModelGateway.java:104-267）</span><button>复制</button></div><pre><code>streamChat(request, consumer)
+  ├─ 组装请求体时覆盖 stream=false → stream=true
+  ├─ streamAndParse(): 逐行读 SSE
+  │    ├─ 注释行（:开头）跳过
+  │    ├─ data: [DONE] → 终止，整合终态 ModelResponse（含完整正文与 usage）
+  │    └─ data: {json} → delta 增量
+  │         └─ ThinkFilter 分流：
+  │              &lt;think&gt;…&lt;/think&gt; 内 → consumer.onThinking（推理草稿）
+  │              外 → consumer.onDelta（答案正文）
+  └─ 返回整合后的终态响应（供用量结算 / 前端兜底展示）</code></pre></div>
+  <p>三个实现细节值得抄走：<strong>①</strong> 增量不保证按词/句边界切分，消费者必须能处理任意切分（前端按纯文本拼接）；<strong>②</strong> 思考与答案是两条流（onThinking/onDelta），不是靠前端猜 <code class="inline-code">&lt;think&gt;</code> 标签；<strong>③</strong> 终态响应仍带完整 usage——流式不等于放弃计量（<a href="ai-11-cost-governance.html#a11-3">A11.3</a> 的结算时序对流式同样成立）。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-infrastructure/.../model/MiniMaxModelGateway.java:104-267</span>（含 ThinkFilter 内部类）；<span class="mono">MiniMaxModelGatewayStreamTest.java</span>。</div>
+
+  <h3 id="a15-3">A15.3 13 类事件协议：sealed interface 的事件清单与终态语义</h3>
+  <p>编排器 <code class="inline-code">AgentChatOrchestrator</code>（约 1259 行）把一次对话的完整过程定义成 <code class="inline-code">AgentChatEvent</code> sealed interface，前端与后端共用同一份事件名清单：</p>
+  <table>
+    <thead><tr><th>事件</th><th>负载要点</th><th>语义</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">run.start</td><td>runId</td><td>编排开始</td></tr>
+      <tr><td class="mono">route</td><td>agentId / agentName / reason</td><td>选中哪个 Agent、为什么</td></tr>
+      <tr><td class="mono">rag.query / rag.hits</td><td>query+topK / 命中列表 + injected 标志</td><td>检索过程可见（injected=false 表示命中被门禁拦下）</td></tr>
+      <tr><td class="mono">skill / tool</td><td>id / name / phase（start|end|error）</td><td>能力执行过程</td></tr>
+      <tr><td class="mono">handoff</td><td>from / note</td><td>子 Agent 委派（对应 <a href="ai-04-agent-orchestration.html#a4-2">A4.2</a> 委派状态机）</td></tr>
+      <tr><td class="mono">thinking / delta</td><td>text 增量</td><td>推理草稿 / 答案正文（两条流）</td></tr>
+      <tr><td class="mono">answer</td><td>text</td><td>终态完整答案</td></tr>
+      <tr><td class="mono">usage</td><td>inputTokens / outputTokens</td><td>计量事件（→ <a href="ai-11-cost-governance.html#a11-2">A11.2</a> 账本）</td></tr>
+      <tr><td class="mono">error</td><td>kind / message</td><td>编排中失败（非终帧）</td></tr>
+      <tr><td class="mono">done</td><td>truncated / contextStateVersion</td><td><strong>应用层终帧</strong>：客户端收到即收口，不等 TCP EOF</td></tr>
+    </tbody>
+  </table>
+  <p>这份协议被 <code class="inline-code">frontend/tests/agentChat.architecture.test.ts</code> <strong>逐事件名比对双前端工程</strong>锁定——协议改动必须同步 frontend 与 admin-console，架构测试守着这条纪律（见 A15.9）。<code class="inline-code">ContextCheckpoint</code>（第 ⑭ 事件，压缩态 carry-over）在协议清单内，当前快照 HEAD 已含发射实现（S3-M8-b-2 / D49，<a href="04-runtime-flows.html#ch12-2">§12.2</a>）：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">第 14 事件的线序与 fail-soft（AgentChatOrchestrator:322-339）</span><button>复制</button></div><pre><code>线序（硬约束）：… → answer → usage → context.checkpoint → done
+  ⛔ 严格置于 usage 之后、done 之前 —— 保持旧 13 帧相对次序不变，
+     done 仍是唯一的应用层终帧（客户端不必知道第 14 帧存在）
+
+state 是不透明 base64：结构化状态 JSON + 元数据，经独立 HMAC 密钥
+  AGENT_CONTEXT_STATE_HMAC_KEY 签名（⛔ 绝不复用 JWT 密钥）
+  服务端下一轮按不可信数据处理，六项校验（D49）任一失败即丢弃退回全量历史
+
+fail-soft（可选增强）：未装配 / 关闭态 / 无新增 / 抽取回落 / 超长 /
+  密钥不可用 → 一律 null，不发事件、Done 退回 v1 字节，主流程不受影响
+
+审计只记标量：tier / fallback / upToTurn / digest / stateChars
+  ⛔ 绝不把压缩态正文或状态串写进审计可信面</code></pre></div>
+  <p>三个设计点值得记住：<strong>①</strong> 第 14 帧是「可选增强」，关闭态与旧客户端都逐位等价（<a href="04-runtime-flows.html#ch12-3">§12.3</a> 的关闭态同一引用纪律在此延续）；<strong>②</strong> 审计只留标量事实，压缩态正文绝不进可信面——这是 <a href="ai-12-observability-runbook.html#a12-2">A12.2</a>「看见系统且不泄露」在事件层的体现；<strong>③</strong> HMAC 密钥独立于 JWT，密钥复用是这条链路上最容易被顺手做错的越权面。<span class="tag t-live">已实现</span></p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-ports/.../agentchat/AgentChatEvent.java:29-342</span>（sealed interface 与全部 record）；<span class="mono">platform/agent-worker/.../agentchat/AgentChatOrchestrator.java</span>；<span class="mono">frontend/tests/agentChat.architecture.test.ts</span>。</div>
+
+  <h3 id="a15-4">A15.4 双身份域双端点：平台链与租户链、thinking 草稿可见性边界</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">双端点（AgentChatController.java:35-70）</span><button>复制</button></div><pre><code>POST /api/agent/chat/stream        平台链（aud=admin-console-api）
+  → admin-console 使用；允许下发 event: thinking（推理草稿）
+
+POST /api/knowledge/agent/chat/stream  租户链（aud=agent-platform）
+  → frontend 使用；身份取自已验签令牌；恒丢弃思考草稿
+
+硬规则：
+- 身份不入参：tenantId/principalId/Bearer 全部由
+  AgentChatIdentityResolver 从已验签属性解析
+- 租户链请求体出现 tenantId → 直接 400
+  「租户链不得在请求体中指定 tenantId」（:126-130，防越权）
+- 平台链的 tenantId 仅作为「目标租户」，必须合法且存在</code></pre></div>
+  <p>thinking 的可见性差异不是功能开关而是<strong>安全边界</strong>：推理草稿未过答案级审核，把它下发给学生会多开一个内容泄露面。两链共享同一编排器、同一份事件协议与状态机语义，「只是身份来源与草稿可见性不同」——这是把差异面压到最小的刻意设计。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-api/.../chat/AgentChatController.java:35-70, 107-130</span>；<span class="mono">AgentChatIdentityResolver</span>。</div>
+
+  <h3 id="a15-5">A15.5 后端 SSE 实现纪律：SseEmitter、虚拟线程、反代缓冲与 ASYNC 放行</h3>
+  <ul>
+    <li>帧一律用 <code class="inline-code">SseEmitter.event().name().data()</code> 构造，<strong>绝不手工拼 event:/data: 字符串</strong>（:51-53 注释）——换行转义、多行 data 的坑框架已处理；</li>
+    <li>响应头带 <code class="inline-code">X-Accel-Buffering: no</code>（:192）关闭 Nginx 等反代缓冲——否则 token 会被反代攒成一坨再吐，「流式」名存实亡；</li>
+    <li>Security 链必须放行 <code class="inline-code">DispatcherType.ASYNC</code>（:54）：SSE 的异步终止块若被二次授权拦截，客户端会拿到「流中断但无 error」的悬空状态；</li>
+    <li>每连接一个虚拟线程（:89-90），SSE 超时 <code class="inline-code">SSE_TIMEOUT_MS=180_000</code>（:72-73）。</li>
+  </ul>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-api/.../chat/AgentChatController.java:51-90, 192</span>；<span class="mono">ConsoleChatController.java</span>（控制台直连对话同构实现）。</div>
+
+  <h3 id="a15-6">A15.6 超时三层对齐与失败口径分层：180s / 150s / 120s</h3>
+  <table>
+    <thead><tr><th>层</th><th>值</th><th>来源</th></tr></thead>
+    <tbody>
+      <tr><td>后端 SSE 整体超时</td><td><code class="inline-code">180_000 ms</code></td><td><code class="inline-code">AgentChatController.java:72-73</code>，注释要求「须大于两前端的 120s / 150s 请求超时，否则会先被服务端截断」</td></tr>
+      <tr><td>frontend 请求超时</td><td><code class="inline-code">AGENT_CHAT_TIMEOUT_MS = 150_000</code></td><td><code class="inline-code">frontend/src/api/agentChatApi.ts:36</code></td></tr>
+      <tr><td>admin-console 请求超时</td><td><code class="inline-code">AGENT_LIVE_TIMEOUT_MS = 120_000</code></td><td><code class="inline-code">admin-console/src/api/agentChatApi.ts:48</code></td></tr>
+    </tbody>
+  </table>
+  <p><strong>方向必须严格递增（后端 &gt; frontend &gt; admin-console）</strong>：若服务端先超时，客户端拿到的是「连接被服务端掐断」而非应用语义的 error/done，失败口径就乱了。失败口径本身分两层：<strong>建连前失败</strong>（身份/参数/限流）走 HTTP 4xx；<strong>编排中失败</strong>走 <code class="inline-code">event: error</code> + <code class="inline-code">event: done</code>，审计仍收敛 FAILED（:56-57）。这与 <a href="ai-12-observability-runbook.html#a12-4">A12.4</a> 的审计闭环对接。</p>
+  <div class="evidence"><b>证据：</b> 三处常量如上；<span class="mono">AgentChatController.java:56-57</span>（失败口径分层注释）。</div>
+
+  <h3 id="a15-7">A15.7 前端增量解析器：IncrementalSseParser 与逐字段解析</h3>
+  <p><code class="inline-code">frontend/src/features/run/sse.ts</code> 提供两块能力：<code class="inline-code">parseFrame</code>（:30-81）按 SSE 规范逐字段解析（event:/data:/id:/retry: 与注释行）；<code class="inline-code">IncrementalSseParser</code>（:105-129）做<strong>边读边出</strong>——chunk 到达即切分完整帧、保留半截帧等下一个 chunk。为什么必须增量：后端单次响应可能连发大量事件（Run 事件接口单次上限 200 条，:103 附近注释），整段等 buffer 会造成用户可见的长白屏。注意 <code class="inline-code">id</code> 字段的注释明确「是 Last-Event-ID 的值」，但<strong>当前没有任何代码消费它做重连</strong>——这是 A15.10 未落地清单的第一条。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">frontend/src/features/run/sse.ts:15, 30-129</span>；<span class="mono">frontend/tests/sse.test.ts</span>。</div>
+
+  <h3 id="a15-8">A15.8 前端状态机：useReducer 六种 Action 与乐观 UI</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">agentChat 状态机（agentChatState.ts:407-580 + useAgentChat.ts）</span><button>复制</button></div><pre><code>Action 六种：SEND / STREAM / FAIL / STOP / RETRY / NEW_SESSION
+
+乐观 UI：SEND 先插入 user + assistant 两个气泡，
+         assistant 初始为 streaming 态；FAIL 转 failed
+
+四条不串台纪律：
+① controllerRef 身份比较（useAgentChat.ts:95 附近）：
+   旧请求的迟到事件与失败不写进新气泡
+② id 在 dispatch 之前生成（:121-122）：reducer 异步生效，
+   从 state 读回刚插入的气泡会晚一帧
+③ done 到达即释放「在途」锁（:86-88）：不等微任务队列
+④ stop() 是正常操作，不 dispatch FAIL（:141）——
+   用户主动停止 ≠ 系统失败
+
+存储纪律：会话历史只在内存，不写 sessionStorage/localStorage（:10）</code></pre></div>
+  <p><strong>truncated 是独立状态</strong>，不是 failed 的别名：流结束但没收到 done 终帧 → 标 truncated，「已到达正文保留 + 不伪装完整也不伪装系统故障」（<code class="inline-code">agentChatApi.ts:23-25</code>）。这个三态区分（完整/截断/失败）是 AI 前端最容易偷懒做坏的地方——把截断渲染成失败会制造假报警，渲染成完整会撒谎。另两条诚实边界：live 模式收到 404/501 明示「能力未接入」，<strong>绝不退化成假流</strong>（:13-18）；sample 回放醒目标注「非真实模型输出」。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">frontend/src/features/agentChat/agentChatState.ts:32-630</span>；<span class="mono">frontend/src/features/agentChat/useAgentChat.ts</span>；<span class="mono">frontend/src/api/agentChatApi.ts:10-47</span>；配套测试 <span class="mono">frontend/tests/agentChat.{api,state}.test.ts</span>。</div>
+
+  <h3 id="a15-9">A15.9 双工程同构与压缩态 carry-over：架构测试锁协议、contextState 只上送 committed</h3>
+  <p>frontend（租户端）与 admin-console（平台端）各有一份 <code class="inline-code">agentChatState.ts / useAgentChat.ts / agentChatApi.ts</code>，<strong>协议与状态机语义刻意同构</strong>，由 <code class="inline-code">agentChat.architecture.test.ts</code> 逐事件名比对双工程锁定。改协议的流程因此是：改后端事件 → 同步两份前端 → 架构测试与各端单测一起转绿，少一边都不行。</p>
+  <p>压缩态 carry-over（与 <a href="04-runtime-flows.html#ch12-2">§12.2</a> 对接）：后端在 <code class="inline-code">context.checkpoint</code> 事件下发压缩状态，前端把它作为 <code class="inline-code">contextState</code> 在下一次请求回传。前端纪律：<strong>只回传已完成且未截断的 committed 状态</strong>（<code class="inline-code">useAgentChat.ts:78-80</code>），pending/截断/失败态绝不上送——半截压缩态回传会让后端把「上一轮的残缺」当成「这一轮的事实」。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">frontend/tests/agentChat.architecture.test.ts</span>；<span class="mono">admin-console/src/features/aiChat/</span>（同构实现 + <span class="mono">MarkdownAnswer.tsx</span> 增量渲染）；<span class="mono">frontend/tests/agentChat.contextState.test.tsx</span>。</div>
+
+  <h3 id="a15-10">A15.10 未落地清单：断线重连、Last-Event-ID 续传、事件序列号与重放</h3>
+  <table>
+    <thead><tr><th>能力</th><th>状态</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>SSE 断线重连 / Last-Event-ID 续传</td><td><span class="tag t-gap">未落地</span></td><td><code class="inline-code">sse.ts</code> 定义了 id 字段语义，但无任何重连消费代码；断线 = 用户重发。设计上后端也未存「按 Last-Event-ID 重放」的缓冲</td></tr>
+      <tr><td>Agent Chat 事件序列号 / 重放</td><td><span class="tag t-gap">未落地</span></td><td><code class="inline-code">AgentChatEvent</code> 无 sequenceNo 字段——对比 Run 链路的 <code class="inline-code">RunEventStreamer</code>（有事件序号，服务端轮询推送）。聊天链路因此<strong>不可断点续传</strong>，这是与 Run 链路的关键能力差</td></tr>
+      <tr><td>会话历史持久化</td><td><span class="tag t-gap">未落地（刻意）</span></td><td>前端会话只在内存；历史靠后端 run_message（保留期见 <a href="ai-12-observability-runbook.html#a12-10">A12.10</a>），前端不留存是隐私取舍</td></tr>
+    </tbody>
+  </table>
+  <p>给 Java 后端的迁移提示：SSE 不等于 WebSocket——它是<strong>单向、文本、基于 HTTP</strong> 的协议，天然没有 WS 的重连/续传语义；「断线怎么办」要在应用层自己设计（事件序号 + 重放缓冲），本项目聊天链路明确选择了「不做」，把复杂度留给 Run 链路。知道<strong>哪里刻意没做</strong>与知道哪里做了同样重要。</p>
+
+  <div class="callout c-ai"><span class="ct">迁移提示：流式链路的「一协议两端口三层超时」</span><p>可复用：独立流式端口不污染领域契约、sealed interface 事件协议 + 架构测试锁双端、SseEmitter 三条纪律（不手拼帧 / 关反代缓冲 / 放行 ASYNC）、乐观 UI + 身份比较防串台。必须新建的心智：<strong>done 是应用层终帧</strong>（不等 EOF）、<strong>truncated 三态</strong>（完整/截断/失败不能互相伪装）、<strong>超时方向严格递增</strong>（后端 &gt; 前端，否则口径乱）、<strong>carry-over 只上送 committed</strong>（半截状态是下一轮的毒药）。</p></div>
+  <div class="evidence"><b>证据源：</b><span class="mono">platform/agent-ports/.../model/ChatStreamGateway.java</span>、<span class="mono">platform/agent-ports/.../agentchat/AgentChatEvent.java</span>、<span class="mono">platform/agent-infrastructure/.../model/MiniMaxModelGateway.java</span>、<span class="mono">platform/agent-api/.../chat/AgentChatController.java</span> / <span class="mono">ConsoleChatController.java</span>、<span class="mono">platform/agent-worker/.../agentchat/AgentChatOrchestrator.java</span>、<span class="mono">frontend/src/api/agentChatApi.ts</span>、<span class="mono">frontend/src/features/run/sse.ts</span>、<span class="mono">frontend/src/features/agentChat/{agentChatState,useAgentChat}.ts</span>、<span class="mono">admin-console/src/features/aiChat/</span>、<span class="mono">frontend/tests/</span> 与 <span class="mono">admin-console/tests/</span> 的 agentChat 系列测试。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-14-model-gateway.html"><span class="pn-label">← 上一册</span><span class="pn-title">A14 · 模型统一配置与模型网关</span></a>
+  <a class="pn-right" href="ai-16-mcp-runtime.html"><span class="pn-label">下一册 →</span><span class="pn-title">A16 · MCP 客户端实现与运行时防护</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

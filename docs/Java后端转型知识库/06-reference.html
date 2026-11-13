@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第六篇 · 速查与事实边界 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="06-reference" data-ai="0">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">第六篇 · 速查与事实边界</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">基础六篇 · 分册</div>
+  <h1>第六篇 · 速查与事实边界</h1>
+  <p class="ph-sub">命令速查、文档索引、冲突与未确认清单、附录（第 18–20 章 + 附录 A/B/C）</p>
+  <div class="ph-meta"><span>覆盖：第 18–20 章 + 附录</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<div class="part-divider" id="part6">
+  <div class="pn">第六篇 · 速查与事实边界</div>
+  <h2>把手册当成可检索的工具书</h2>
+  <p>第 18–20 章与附录：命令速查、文档索引、冲突与未确认清单、术语表、配置键索引。</p>
+</div>
+
+<!-- ==================== 第 18 章 ==================== -->
+
+<section class="chapter" id="ch18">
+  <div class="breadcrumb"><b>第六篇</b> / 第 18 章</div>
+  <h2><span class="num">18.</span> 常用命令速查</h2>
+  <p>下列命令来自仓库内的脚本、CI 配置与实测文档，按场景分组。带 <span class="inline-code">&lt;…&gt;</span> 的为占位符。执行前先确认当前目录（本表默认仓库根）。</p>
+
+  <h3 id="ch18-1">18.1 环境与依赖服务</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">scripts/dev-postgres.sh、dev-rabbitmq.sh、dev-env-up.sh</span><button>复制</button></div><pre><code>RMQ_MIRROR=docker.1ms.run ./scripts/dev-rabbitmq.sh start
+./scripts/dev-postgres.sh start
+./scripts/dev-postgres.sh status &amp;&amp; ./scripts/dev-rabbitmq.sh status
+./scripts/dev-postgres.sh verify          <span class="cm"># 约束自检（非特权角色）</span>
+./scripts/dev-env-up.sh                   <span class="cm"># 一键：依赖 + 自检 + 冒烟 + 打包</span>
+./scripts/dev-env-up.sh --smoke-only
+scripts/gen-jwt-keys.sh &amp;&amp; scripts/gen-jwt-keys.sh --check
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" </code></pre></div>
+
+  <h3 id="ch18-2">18.2 构建与测试（双 reactor）</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">CI / 文档 / 反证脚本中的真实命令</span><button>复制</button></div><pre><code><span class="cm"># 完整构建（CI 等价，含 IT；在各自 reactor 根目录执行）</span>
+cd platform &amp;&amp; mvn -o clean verify \
+  -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \
+  -Dit.test='*IT,!RealBrokerEndToEndIT' -Dfailsafe.failIfNoSpecifiedTests=false
+cd rag &amp;&amp; mvn -o clean verify
+
+<span class="cm"># 签核包口径：两个 reactor 连跑（JAVA_HOME 显式指定）</span>
+JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn -o -f platform/pom.xml clean verify &amp;&amp; \
+JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn -o -f rag/pom.xml clean verify
+
+<span class="cm"># 快速反馈 / 单模块 / 只打包</span>
+mvn -o -pl agent-core test -Dtest=QuickstartDemoTest
+mvn -o -pl agent-context -am test
+mvn -o -pl platform-bootstrap -am package -DskipTests
+cd rag &amp;&amp; mvn -o -pl rag-bootstrap -am package -DskipTests
+
+<span class="cm"># 只跑 IT（务必在同一 bash 会话内 source 环境）</span>
+source scripts/it-env.sh --probe &amp;&amp; cd platform &amp;&amp; mvn -o clean verify
+source scripts/rag-it-env.sh &amp;&amp; cd rag &amp;&amp; mvn -o clean verify
+mvn -o -pl platform-bootstrap verify -Dit.test='StatisticsEndpointIT' \
+  -Dtest='Test*,*Test,*Tests,*TestCase,!MessagingCanaryWiringTest' \
+  -Dfailsafe.failIfNoSpecifiedTests=false
+<span class="cm"># 单跑 IT 的极简口径：-Dtest=__none__ -Dsurefire.failIfNoSpecifiedTests=false -Dit.test=XXX</span></code></pre></div>
+  <div class="callout c-warn">
+    <span class="ct">双 reactor verify 的三个隐性前提</span>
+    <p>① 本地库必须显式 <span class="inline-code">IT_HOST=127.0.0.1 IT_PORT=5433 IT_ADMIN_USER=agent</span>，否则 <span class="inline-code">it-env.sh</span> 在 source 阶段就因缺 <span class="inline-code">AI_AGENT_PASSWORD</span> 退出，Maven 根本没启动（看起来像构建失败）；② 不带 <span class="inline-code">clean</span> 会读到陈旧报告造成假红；③ <span class="inline-code">mvn … | tee</span> 必须配 <span class="inline-code">set -o pipefail</span>。</p>
+  </div>
+
+  <h3 id="ch18-3">18.3 判绿与报告位置</h3>
+  <table>
+    <thead><tr><th>用途</th><th>位置 / 命令</th></tr></thead>
+    <tbody>
+      <tr><td>单测报告</td><td class="mono">*/target/surefire-reports/TEST-*.xml</td></tr>
+      <tr><td>IT 报告</td><td class="mono">*/target/failsafe-reports/*.txt / TEST-*.xml</td></tr>
+      <tr><td>CI 日志</td><td class="mono">/tmp/ci-unit.log、/tmp/ci-it.log</td></tr>
+      <tr><td>用例计数</td><td>统计 XML 的 <span class="inline-code">&lt;testcase&gt;</span> 元素（非根 <span class="inline-code">tests</span> 属性）</td></tr>
+      <tr><td>判绿口径</td><td><span class="inline-code">Tests run: N, Failures: 0, Errors: 0, Skipped: 0</span></td></tr>
+      <tr><td>清陈旧报告</td><td class="mono">rm -rf */target/surefire-reports */target/failsafe-reports */target/failsafe-summary.xml</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch18-4">18.4 数据库、IT 库与巡检</h3>
+  <table>
+    <thead><tr><th>脚本</th><th>用途 / 关键参数</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">scripts/init-db.sh platform|rag</td><td>建库总入口；<span class="inline-code">--host --port --db --admin-user --admin-password --app-password --ops-password --retention-password / --rag-password --rag-ops-password</span></td></tr>
+      <tr><td class="mono">scripts/dev-it-db.sh / init-it-db.sh</td><td>本地容器 / 远端 RDS 建 <span class="inline-code">agent_it</span>（后者需 <span class="inline-code">AI_AGENT_PASSWORD</span>，支持 <span class="inline-code">--recreate</span>）</td></tr>
+      <tr><td class="mono">source scripts/it-env.sh --probe</td><td>导出 IT 变量并精确断言 71 表 / 44 RLS / 52 策略 / context_policy 列</td></tr>
+      <tr><td class="mono">source scripts/rag-it-env.sh [--reset]</td><td>准备 <span class="inline-code">study_rag_it</span>，导出 9 个 <span class="inline-code">IT_RAG_*</span> 变量</td></tr>
+      <tr><td class="mono">scripts/dev-seed.sh --list|--lookup|--diagnose</td><td>租户账号盘点 / 查 tenant_id / 诊断账号状态</td></tr>
+      <tr><td class="mono">scripts/dev-seed-platform-users.sh --commit</td><td>平台账号播种（默认 dry-run；口令走 <span class="inline-code">SEED_ACCOUNT_PASSWORD</span>）</td></tr>
+      <tr><td class="mono">scripts/check-tenant-registry.sh</td><td>租户「三处齐」巡检，退出码 0 才算一致</td></tr>
+      <tr><td class="mono">scripts/check-rag-ops-role.sh</td><td>rag_ops 最小授权 13 项复核</td></tr>
+      <tr><td class="mono">scripts/check-cap-release-head.sh</td><td>能力目录「发布头 + 当前指针」一致性</td></tr>
+      <tr><td class="mono">scripts/quality-schema-check.sh --host … --db …</td><td>质量体系活库结构自检，缺一项即红</td></tr>
+      <tr><td class="mono">scripts/compare-db-schema.sh &lt;库A&gt; &lt;库B&gt;</td><td>12 项结构比对；<span class="tag t-unknown">未确认：该脚本无执行位，需 <span class="inline-code">bash &lt;文件&gt;</span> 调用</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch18-5">18.5 服务启停与联调</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">bash</span><span class="file">启动 / 验证 / 停止</span><button>复制</button></div><pre><code>scripts/dev-backend.sh                 <span class="cm"># 8080，读 platform.env + jwt.env，跑 -exec.jar</span>
+scripts/dev-rag.sh [端口]              <span class="cm"># 8081，读 rag.env + jwt.env</span>
+cd frontend &amp;&amp; npm run dev            <span class="cm"># http://localhost:5173</span>
+cd admin-console &amp;&amp; npm run dev      <span class="cm"># http://localhost:5180/admin</span>
+
+curl -s http://localhost:8080/api/auth/jwks        <span class="cm"># 存活判据</span>
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5173/
+curl -s http://localhost:5173/api/auth/jwks        <span class="cm"># 代理链路</span>
+curl -N -H "Accept: text/event-stream" …          <span class="cm"># SSE 原始字节</span>
+
+lsof -ti:8080 | xargs kill -9        <span class="cm"># 仅确认是自己的进程后使用</span>
+./scripts/dev-rabbitmq.sh stop; ./scripts/dev-postgres.sh stop</code></pre></div>
+
+  <h3 id="ch18-6">18.6 前端、灰度、反证与巡检</h3>
+  <table>
+    <thead><tr><th>场景</th><th>命令</th></tr></thead>
+    <tbody>
+      <tr><td>前端</td><td class="mono">npm install / npm run dev / npm run typecheck / npm test / npm run build / npm run preview</td></tr>
+      <tr><td>切换后端地址</td><td class="mono">VITE_DEV_API_TARGET=http://… npm run dev</td></tr>
+      <tr><td>CAP 租户灰度</td><td class="mono">scripts/cap-gray-step.sh --name &lt;阶段&gt; --tenants &lt;ids&gt; --observe-minutes 1440 --metrics-base-url … --log-scan "…"</td></tr>
+      <tr><td>灰度指标判定</td><td class="mono">scripts/cap-gray-metrics-check.sh check --base-url … --tenant &lt;id&gt; --baseline-ratio &lt;0.xx&gt;</td></tr>
+      <tr><td>全量开启</td><td class="mono">scripts/cap-enable-global.sh　<span class="tag t-unknown">人工检查单，不自动翻开关</span></td></tr>
+      <tr><td>反向验证</td><td class="mono">scripts/m3-context-policy-counterproof.sh、g2-b-counterproof.sh、g2-c-replay-counterproof.sh、m8a-context-state-counterproof.sh</td></tr>
+      <tr><td>文档门禁回写</td><td class="mono">python3 scripts/doc-c*.py（幂等可重跑）、scripts/doc-table-check.py</td></tr>
+      <tr><td>RAG 行为 / 并发验证</td><td class="mono">scripts/rag-v1_0_2-behavior-verify.sh、-concurrency-verify.sh、e2e-index-generation.sh</td></tr>
+      <tr><td>监控</td><td class="mono">cd monitoring &amp;&amp; docker compose up -d（9090 / 3000；先 source platform.env 注入 GRAFANA_PG_*）</td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">⚠️ 部分脚本权限为 <span class="inline-code">-rw-r--r--</span>（如 <span class="inline-code">compare-db-schema.sh</span>、<span class="inline-code">c15-*-counterproof.sh</span>、<span class="inline-code">c16-1-counterproof.sh</span>），直接 <span class="inline-code">./</span> 调用会失败，请用 <span class="inline-code">bash &lt;文件&gt;</span>。</p>
+</section>
+
+<!-- ==================== 第 19 章 ==================== -->
+
+<section class="chapter" id="ch19">
+  <div class="breadcrumb"><b>第六篇</b> / 第 19 章</div>
+  <h2><span class="num">19.</span> 文档索引与交叉引用</h2>
+  <p>仓库内 md 数量很多（docs/ 约 203 份、rag/docs/ 27 份、问题记录 19 份、根目录方案 13 份）。下表是培训与日常排查最高频的入口，路径均相对仓库根。</p>
+
+  <h3 id="ch19-1">19.1 架构与决策</h3>
+  <table>
+    <thead><tr><th>文档</th><th>用途</th><th>本手册对应章节</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">docs/业务架构图.md</td><td>六大业务域、能力治理四件套、15 步准入、ERD</td><td><a href="01-project-overview.html#ch1">1</a>、<a href="01-project-overview.html#ch2">2</a></td></tr>
+      <tr><td class="mono">docs/系统架构图.md</td><td>分层、模块依赖、「不可妥协的原则」10 条</td><td><a href="01-project-overview.html#ch2-1">2.1</a></td></tr>
+      <tr><td class="mono">docs/Agent设计总览.md</td><td>「以代码为准」的能力治理与七条承重不变式</td><td><a href="01-project-overview.html#ch2">2</a></td></tr>
+      <tr><td class="mono">docs/P0/P1/ADR-011_技术基线_Java21_SpringBoot41.md</td><td>Java 21 / Boot 4.1.1 基线偏离记录</td><td><a href="02-environment-config.html#ch4-1">4.1</a></td></tr>
+      <tr><td class="mono">docs/P0/P1/ADR-013_上下文压缩统一入口与全窗口预算.md</td><td>D13–D50 决策台账（工作区另增未提交的 D51）、铁律编号权威出处</td><td><a href="04-runtime-flows.html#ch12">12</a>、<a href="03-java-skill-transfer.html#ch10">10</a></td></tr>
+      <tr><td class="mono">docs/P0/P1/ADR-001_主MQ选型_RabbitMQ.md</td><td>Quorum Queue 选型</td><td><a href="01-project-overview.html#ch2-2">2.2</a></td></tr>
+      <tr><td class="mono">docs/P0/P0/P0-D00_决策基线与业务场景定义.md</td><td>DEC-1～13、BR-01、SB-01～07、GATE-1/2/3</td><td><a href="01-project-overview.html#ch1-1">1.1</a></td></tr>
+      <tr><td class="mono">docs/P0/P2/P2-D02_Outbox发布与MQ消费.md</td><td>为什么必须用 Outbox、至少一次投递</td><td><a href="01-project-overview.html#ch2-2">2.2</a>、<a href="04-runtime-flows.html#ch11">11</a></td></tr>
+      <tr><td class="mono">docs/developer-onboarding.md</td><td>六边形、三个核心概念、影子权限（注意部分为目标态描述）</td><td><a href="01-project-overview.html#ch2-1">2.1</a>、<a href="01-project-overview.html#ch2-3">2.3</a></td></tr>
+      <tr><td class="mono">docs/重规划/平台身份与租户身份分离改造方案.md</td><td>Platform / Tenant Control Plane 三套连接角色</td><td><a href="01-project-overview.html#ch2-4">2.4</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch19-2">19.2 配置、启动与工程基线（含滞后提示）</h3>
+  <table>
+    <thead><tr><th>文档</th><th>用途</th><th>提示</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">platform.env.example / rag.env.example / jwt.env.example</td><td>运行态配置模板与格式纪律</td><td><strong>权威</strong>，见 <a href="02-environment-config.html#ch5">第 5 章</a></td></tr>
+      <tr><td class="mono">deploy/sql/README.md</td><td>库结构与种子唯一权威源、01→02→03→04、身份纪律</td><td>表数 70 未同步，见 <a href="#ch20">§20.1</a></td></tr>
+      <tr><td class="mono">docs/P0/P1/P1-D10_工程基线与本地开发手册.md</td><td>代码规范、SQL 纪律（?::uuid）、提交前全绿</td><td>见 <a href="05-troubleshooting.html#ch17-3">§17.3</a></td></tr>
+      <tr><td class="mono">docs/本地启动指南.md</td><td>2026-10-19 实测的端口/账号/避坑清单</td><td><span class="tag t-conflict">历史版本</span>：jar 名、21 表、Flyway、health 500 均已过时，见 <a href="02-environment-config.html#ch7-3">§7.3</a></td></tr>
+      <tr><td class="mono">docs/集成测试（IT）运行指南.md</td><td>IT 命令、环境变量、判绿口径</td><td>见 <a href="#ch18-2">§18.2</a></td></tr>
+      <tr><td class="mono">.github/workflows/ci.yml</td><td>CI 各 job、pipefail、跳过数断言</td><td>见 <a href="05-troubleshooting.html#ch14-6">§14.6</a></td></tr>
+      <tr><td class="mono">docs/模型统一配置架构设计.md</td><td>model_catalog / ModelResolver / 密钥分离</td><td>见 <a href="02-environment-config.html#ch5-1">§5.1</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch19-3">19.3 门禁、验收与复盘</h3>
+  <table>
+    <thead><tr><th>文档</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">docs/上下文压缩开发计划_v1.0.md</td><td>WBS M1–M16、S0–S6 / G0–G6 / MS-1–MS-6、通用门槛 G-a～G-j</td></tr>
+      <tr><td class="mono">docs/上下文压缩完整方案_设计与实施_v1.0.md §7.3</td><td><strong>三级验收 + 反向验证</strong>原文；指标体系 §7.1、告警 §7.5</td></tr>
+      <tr><td class="mono">docs/上下文压缩实施记录_v1.0.md</td><td>S0/S1/S2 实施与 XML <span class="inline-code">&lt;testcase&gt;</span> 权威口径</td></tr>
+      <tr><td class="mono">docs/上下文压缩G2验收签核包_v1.0.md</td><td>G2 证据汇总与签核入口</td></tr>
+      <tr><td class="mono">docs/上下文压缩影子对照零差异报告_v1.0.md</td><td>G1 零差异定义、撤点 RV-12～15</td></tr>
+      <tr><td class="mono">docs/上下文压缩SSE协议v1.1变更说明.md</td><td>14 事件字典、context.checkpoint 线序</td></tr>
+      <tr><td class="mono">docs/管理后台开发计划/P7_Agent效果指标体系.md</td><td>L0–L3、「未采集≠0」、三条铁律</td></tr>
+      <tr><td class="mono">docs/RLS到应用层权限迁移-问题方案与方法论归档.md</td><td><strong>十条总体方法论</strong> + P1～P9 事故</td></tr>
+      <tr><td class="mono">问题记录/README.md、07-测试基建与验证方法论.md</td><td>13 类 207 条三段式问题；TST-01～20 假绿案例</td></tr>
+      <tr><td class="mono">审查文档/AI全流程审查报告_2026-10-31.md、AI全流程修复报告_2026-10-31.md</td><td>一页结论、P0 六子项修复与遗留口径</td></tr>
+      <tr><td class="mono">问题记录/E2E端到端测试_2026-11-10/缺陷修复报告_2026-11-10.md</td><td>5 项缺陷三道验证、9/9 反证</td></tr>
+      <tr><td class="mono">docs/E2E实测缺陷修复与复验_20261023.md</td><td>「证伪矩阵」范式源头</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch19-4">19.4 RAG 文档（RAG-D00 ~ D26）</h3>
+  <p><span class="inline-code">rag/docs/</span> 共 27 份连续编号文档。重点入口：</p>
+  <table>
+    <thead><tr><th>文档</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">RAG-D00_决策基线与范围边界.md</td><td>对主平台 DEC-5 的重审、RD-01～14（五轴、知识点本体、片段角色、泄题闸门、分数门禁）</td></tr>
+      <tr><td class="mono">RAG-D02_总体架构与技术选型.md</td><td>架构主文档：pgvector、不引入第二套 MQ、与主平台的 <span class="inline-code">search_knowledge_base</span> 接入</td></tr>
+      <tr><td class="mono">RAG-D09_阶段门禁与主平台接入计划.md</td><td>G1/G2/G3 定义与签署人、§0.3 三套 G 编号消歧</td></tr>
+      <tr><td class="mono">RAG-D08_评测体系与质量门禁.md</td><td>FR-RAG-010 反证要求、阈值只增不减</td></tr>
+      <tr><td class="mono">RAG-D10_语料数据管理模块.md</td><td>管理面 vs 检索面、端点契约与错误码</td></tr>
+      <tr><td class="mono">RAG-D11_全局与租户双作用域.md</td><td>X-Rag-Scope 三档、rag_ops 通道</td></tr>
+      <tr><td class="mono">RAG-D18 / D22 / D23 / D24 / D26</td><td>索引代际蓝绿、构建异步化、全局桶、上传预览、rag-premise 双解析/双切分</td></tr>
+      <tr><td class="mono">RAG-D25_测试库迁移与代际切换演练报告.md</td><td>PG 17.11 + pgvector 0.8.7 实测环境与 5 个缺陷</td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">文档状态提示：<span class="inline-code">RAG-D07</span> 自述 v0.1-draft 待评审未签署；<span class="inline-code">RAG-D08</span> 自述「交付为评测基础设施，非达标结论」；<span class="inline-code">RAG-D05</span> 的「RRF 未实现」与当前代码不符。引用时请核对代码。</p>
+
+  <h3 id="ch19-5">19.5 前端与其它</h3>
+  <table>
+    <thead><tr><th>文档 / 文件</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">admin-console/README.md</td><td>独立控制台的定位、登录域、Nginx 部署形态、启动命令</td></tr>
+      <tr><td class="mono">frontend/vite.config.ts、admin-console/vite.config.ts</td><td>dev 端口、代理顺序、vitest singleFork</td></tr>
+      <tr><td class="mono">rag/docs/ui-mock/screens/*.html（13 张）+ 对应 png</td><td>静态高保真视觉稿（无业务逻辑联动）</td></tr>
+      <tr><td class="mono">monitoring/grafana/dashboards/agent-quality.json</td><td>16 面板质量看板（PG + Prometheus 双数据源）</td></tr>
+      <tr><td class="mono">deploy/docling/README.md</td><td>docling-serve 部署、<span class="inline-code">POST /v1/convert/file</span>、分段解析参数</td></tr>
+      <tr><td class="mono">docs/项目进度台账.md</td><td>「任务—产出—证据对照」总台账（约 250KB）</td></tr>
+    </tbody>
+  </table>
+  <h3 id="ch19-6">19.6 v2.3 新增：质量 / 成本 / 可观测证据源</h3>
+  <table>
+    <thead><tr><th>文档 / 文件</th><th>用途</th><th>对应册</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">docs/Agent对话质量跟踪_回溯_评估体系_详细设计.md</td><td>L0–L3 可信度、G1–G4 链路、L1/L2 判分、P4 监控 16 面板</td><td><a href="ai-10-quality-evaluation.html">A10</a></td></tr>
+      <tr><td class="mono">docs/管理后台开发计划/P7_Agent效果指标体系.md</td><td>可信度分层、「未采集 ≠ 0」、三条铁律</td><td><a href="ai-10-quality-evaluation.html#a10-1">A10.1</a></td></tr>
+      <tr><td class="mono">docs/租户级Token计费系统设计方案_v1.0.md</td><td>Token 配额三表与 TokenQuota* 类（<span class="tag t-gap">待评审、未落地</span>）</td><td><a href="ai-11-cost-governance.html#a11-1">A11.1</a></td></tr>
+      <tr><td class="mono">docs/上下文压缩G2验收签核包_v1.0.md</td><td>双臂 token 实测 45747→31082 / 15102→6280</td><td><a href="ai-11-cost-governance.html#a11-7">A11.7</a></td></tr>
+      <tr><td class="mono">monitoring/grafana/dashboards/agent-quality.json、monitoring/prometheus/prometheus.yml</td><td>16 面板定义与 Prometheus scrape（无 rule_files）</td><td><a href="ai-12-observability-runbook.html#a12-3">A12.3</a></td></tr>
+      <tr><td class="mono">docs/CAP_运维检查清单_Runbook_20261104.md、docs/安全-P0-3-密钥轮换操作清单.md</td><td>三段灰度 E1/E2/E3、kid 双密钥滚动</td><td><a href="ai-12-observability-runbook.html#a12-8">A12.8</a></td></tr>
+      <tr><td class="mono">docs/P0-1d_全量开启_CAP_前置评估_20261104.md、docs/governance/01-02</td><td>P5 指针读已满足、Skill/MCP 尚不存在</td><td><a href="ai-12-observability-runbook.html#a12-10">A12.10</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch19-7">19.7 v2.4 新增：记忆 / 网关 / 流式 / MCP 运行时证据源</h3>
+  <table>
+    <thead><tr><th>文档 / 文件</th><th>用途</th><th>对应册</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">docs/Agent记忆机制分析与设计方案.md</td><td>五类记忆盘点、P0–P3 分期与 §4.0 实施状态回填（2026-11-06）</td><td><a href="ai-13-agent-memory.html">A13</a></td></tr>
+      <tr><td class="mono">platform/agent-memory/（domain / port / application 三层）+ deploy/sql/platform/01_platform_ddl.sql:3087-3156</td><td>student_memory 表、强度公式与六条仓储不变量</td><td><a href="ai-13-agent-memory.html#a13-2">A13.2</a> / <a href="ai-13-agent-memory.html#a13-3">A13.3</a></td></tr>
+      <tr><td class="mono">platform/agent-application/.../modelcatalog/ModelResolver.java + agent-infrastructure/.../model/AbstractModelGateway.java</td><td>解析四级优先、归一化基类与超时/线程边界</td><td><a href="ai-14-model-gateway.html">A14</a></td></tr>
+      <tr><td class="mono">deploy/sql/platform/01_platform_ddl.sql:5926-6020</td><td>model_catalog / model_provider_credential / 场景默认唯一索引</td><td><a href="ai-14-model-gateway.html#a14-1">A14.1</a></td></tr>
+      <tr><td class="mono">platform/agent-ports/.../agentchat/AgentChatEvent.java + frontend/src/features/run/sse.ts + frontend/src/features/agentChat/</td><td>13 类事件协议、增量解析器与前端状态机</td><td><a href="ai-15-streaming-sse.html">A15</a></td></tr>
+      <tr><td class="mono">platform/agent-api/.../chat/AgentChatController.java:35-70</td><td>双身份域双端点、thinking 可见性、租户链 400 规则</td><td><a href="ai-15-streaming-sse.html#a15-4">A15.4</a></td></tr>
+      <tr><td class="mono">platform/agent-infrastructure/.../mcp/ + platform/agent-application/.../cap/McpAddressPolicy.java（git b770141）</td><td>MCP 客户端 10 类 1586 行、SSRF 三件套与云元数据绝对禁止</td><td><a href="ai-16-mcp-runtime.html">A16</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch19-8">19.8 v2.5 新增：测试 / 向量运维 / 增强路线证据源</h3>
+  <table>
+    <thead><tr><th>文档 / 文件</th><th>用途</th><th>对应册</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">platform/agent-infrastructure/.../model/FakeModelGateway.java + ModelGatewayContractTest.java</td><td>七态故障注入、假密钥证明脱敏、AT-MODEL-001/002 验收映射</td><td><a href="ai-17-test-engineering.html">A17</a></td></tr>
+      <tr><td class="mono">.github/workflows/ci.yml</td><td>pipefail、跳过数上下限、job 职责分离、非特权角色四条反假绿纪律</td><td><a href="ai-17-test-engineering.html#a17-8">A17.8</a></td></tr>
+      <tr><td class="mono">scripts/it-env.sh + scripts/rag-it-env.sh</td><td>IT 独立库、同名即拒绝、三专用角色（rag_it_app / admin / ops）</td><td><a href="ai-17-test-engineering.html#a17-6">A17.6</a></td></tr>
+      <tr><td class="mono">rag/.../VectorColumn.java + deploy/sql/rag/01_rag_ddl.sql:955-975</td><td>维度契约、halfvec 4000 上限、刻意不建的 HNSW 索引与三条后续路线</td><td><a href="ai-18-vector-ops.html#a18-2">A18.2</a></td></tr>
+      <tr><td class="mono">rag/.../IndexGeneration.java + 09_v1_0_3_index_generation_alter.sql + IndexGenerationBuildWorker.java</td><td>BUILDING/ACTIVE/RETIRED 状态机、改主键而非拆表、Worker 四条纪律</td><td><a href="ai-18-vector-ops.html#a18-4">A18.4</a> / <a href="ai-18-vector-ops.html#a18-5">A18.5</a></td></tr>
+      <tr><td class="mono">rag/.../JdbcCorpusRepository.java + ReingestDisciplineGuardTest.java</td><td>text_jieba 与 embed_model 双列重灌纪律、源码守卫的适用边界</td><td><a href="ai-18-vector-ops.html#a18-6">A18.6</a></td></tr>
+      <tr><td class="mono">platform/agent-worker/.../AgentModelConfigAssembler.java:320-370</td><td>systemPromptRef 引用式提示词库「已定义但明确拒绝」的 fail-closed 设计</td><td><a href="ai-19-roadmap.html#a19-1">A19.1</a></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="chapter" id="ch20">
+  <div class="breadcrumb"><b>第六篇</b> / 第 20 章</div>
+  <h2><span class="num">20.</span> 已确认冲突与「未确认」清单</h2>
+  <div class="callout c-violet">
+    <span class="ct">为什么这一章必须存在</span>
+    <p>用户要求「对项目中无法确认的信息明确标注，不要臆测」。本章集中列出本次勘察发现的全部口径冲突与证据空白。<strong>手册正文已就地标注，此处是可检索的总表</strong>。遇到命令跑不通、数字对不上、文档与代码不一致时，先查这里。</p>
+  </div>
+
+  <h3 id="ch20-1">20.1 明确的文档 / 产物冲突</h3>
+  <table>
+    <thead><tr><th>#</th><th>冲突</th><th>A 口径</th><th>B 口径</th><th>本手册采用 / 建议</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>platform 可执行 jar 名</td><td><span class="inline-code">docs/本地启动指南.md</span> 用 <span class="inline-code">…-SNAPSHOT.jar</span></td><td><span class="inline-code">dev-backend.sh</span> 与 POM 注释用 <span class="inline-code">…-SNAPSHOT-exec.jar</span></td><td><strong>以 -exec.jar 为准</strong>；实测 thin jar 的 MANIFEST 无 Main-Class（<a href="02-environment-config.html#ch7-3">§7.3</a>）</td></tr>
+      <tr><td>2</td><td>建库与迁移方式</td><td>本地启动指南写「Flyway 迁移 / 21 张表」</td><td><span class="inline-code">deploy/sql/README.md</span> 写迁移链已删、只按 01→04；脚本常量 71 表</td><td><strong>以 README + init-db.sh 为准</strong>；指南为 2026-10-19 历史版本</td></tr>
+      <tr><td>3</td><td>platform 表数</td><td>README 70 表</td><td><span class="inline-code">init-db.sh EXPECT_TABLES=71</span>、<span class="inline-code">it-env.sh --probe</span> 71、SQL 文本 71 条 CREATE TABLE</td><td><strong>71</strong>（新增 <span class="inline-code">platform.review_task</span> 后 README 未同步）</td></tr>
+      <tr><td>4</td><td>DDL 头注释基线</td><td><span class="inline-code">01_platform_ddl.sql</span> 头注释 65 表 / 42 RLS / 50 策略</td><td>当前 71 / 44 / 52</td><td>头注释是导出时历史基线，不作准</td></tr>
+      <tr><td>5</td><td>rag 表/策略数</td><td>活库口径 11 表 / 35 策略</td><td><span class="inline-code">01_rag_ddl.sql</span> 文本 13 条 CREATE TABLE / 37 条 CREATE POLICY</td><td><span class="tag t-unknown">差额来源未确认</span>（注释内语句 / 分区子表等需现场核对）</td></tr>
+      <tr><td>6</td><td>RLS 迁移状态</td><td><span class="inline-code">developer-onboarding.md</span>「ScopeFilter 已替换 PG RLS 谓词」</td><td>迁移方案与进度台账：仍在迁移，出口条件是 <span class="inline-code">rlsDependent()</span> 归零</td><td>按<strong>目标态 vs 进行中</strong>区分；当前精确剩余数量 <span class="tag t-unknown">未确认</span></td></tr>
+      <tr><td>7</td><td>rag 后端 SSE</td><td><span class="inline-code">rag-api/pom.xml</span> description 写「SSE 进度流」</td><td><span class="inline-code">rag/</span> 全树无 SseEmitter / text/event-stream / produces 实现</td><td><strong>当前无 SSE 端点</strong>；进度靠 HTTP 轮询，前端 SSE 全来自 platform</td></tr>
+      <tr><td>8</td><td>RRF / 重排器</td><td><span class="inline-code">RAG-D05</span> 记「RRF 融合与 cross-encoder 重排未实现」</td><td><span class="inline-code">JdbcRetrievalRepository</span> 已实现 RRF 融合；cross-encoder 确未接入</td><td>以代码为准；文档滞后</td></tr>
+      <tr><td>9</td><td>IT 数量</td><td><span class="inline-code">platform/pom.xml</span> 注释「14 个集成测试类」</td><td>实测 81 个 <span class="inline-code">*IT.java</span></td><td>注释为历史遗留</td></tr>
+      <tr><td>10</td><td>门禁结论</td><td><span class="inline-code">RAG-D09</span>（早期版本）「三道门禁全部未通过」</td><td>工作区进度记录：G1/G2 已对话确认放行、G3 待落签</td><td><span class="tag t-unknown">未确认</span>；以签核包与正式签署记录为准，本手册不代替门禁结论</td></tr>
+      <tr><td>11</td><td>健康端点</td><td>本地启动指南记 <span class="inline-code">/actuator/health</span> 返回 500、根因未诊断</td><td>当前版本未复测</td><td><span class="tag t-unknown">未确认</span>；判活可用 <span class="inline-code">/api/auth/jwks</span>，但不要跳过健康检查</td></tr>
+      <tr><td>12</td><td>本地开发账号</td><td>本地启动指南列出 4 个租户账号 + 6 个平台账号</td><td>同文档 §6.1 红色批注：这批账号在<strong>远程 RDS 那套库</strong>里一个都没有</td><td>登录前先确认进程连的是哪个库；口令本手册不复现</td></tr>
+      <tr><td>13</td><td>测试用例总数</td><td>不同文档/台账出现 3110/641、756/65、778、626 等多组数字</td><td>随提交持续变化</td><td><strong>不写死</strong>；以当次 XML <span class="inline-code">&lt;testcase&gt;</span> 计数为准</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch20-2">20.2 证据空白 / 需现场核对</h3>
+  <table>
+    <thead><tr><th>#</th><th>条目</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>14</td><td>Spring Framework、各 starter、PG 驱动、Flyway、Micrometer、Jackson、Lombok 的<strong>解析版本</strong></td><td><span class="tag t-unknown">未确认</span>：POM 未显式写版本，由 Boot 4.1.1 BOM 管理；以 <span class="inline-code">mvn dependency:tree</span> 现场核对</td></tr>
+      <tr><td>15</td><td>Spring AI 2.0 / jOOQ 3.20+</td><td><span class="tag t-unknown">仅注释提及</span>：无任何依赖声明；未来是否引入未确认</td></tr>
+      <tr><td>16</td><td><span class="inline-code">V1__baseline_schema.sql</span></td><td><span class="tag t-unknown">仅注释提及</span>：platform/ 内不存在该 Flyway 主迁移脚本</td></tr>
+      <tr><td>17</td><td><span class="inline-code">*-rv-*.py</span> 反向验证脚本</td><td><span class="tag t-unknown">不存在</span>：实际为 <span class="inline-code">*-counterproof.sh</span>，<span class="inline-code">RV-*</span> 是脚本内锚点编号</td></tr>
+      <tr><td>18</td><td>RAG 本地 PG 容器 <span class="inline-code">rag-pg-s2</span> 的创建 / 启动脚本</td><td><span class="tag t-unknown">未找到</span>：<span class="inline-code">rag-it-env.sh</span> 与 E2E 脚本只引用并要求其已运行</td></tr>
+      <tr><td>19</td><td>rag 侧 <span class="inline-code">06/08/09/10/11/13_*_alter.sql</span> 的幂等性</td><td><span class="tag t-unknown">文件头未逐条声明</span>；仅 05/07 明确写有幂等语义</td></tr>
+      <tr><td>20</td><td><span class="inline-code">export-rls-policies.sh</span> 入参、<span class="inline-code">rag_import_pdf.py</span> 全参数、<span class="inline-code">dev-seed-rag-corpus.sql</span> 与 docling chunk_service 内容</td><td><span class="tag t-unknown">未逐行核实</span></td></tr>
+      <tr><td>21</td><td>根级 <span class="inline-code">README.md</span> / <span class="inline-code">Makefile</span> / <span class="inline-code">docker-compose.yml</span> / <span class="inline-code">CONTRIBUTING.md</span></td><td><span class="tag t-unknown">确认不存在</span>；compose 仅 monitoring/ 与 deploy/docling/ 两处</td></tr>
+      <tr><td>22</td><td>rag 侧 Spring profiles</td><td><span class="tag t-unknown">确认无</span>；功能开关全部为 <span class="inline-code">@ConditionalOnProperty</span></td></tr>
+      <tr><td>23</td><td><span class="inline-code">assignment-copilot</span> 的确切业务语义</td><td><span class="tag t-unknown">未确认</span>：是库中真实 Agent 名，但 P0-D00 / SRS / RAG-D00 三处明确排除「作业批改与自动打分」</td></tr>
+      <tr><td>24</td><td>ADR-002～010 是否存在</td><td><span class="tag t-unknown">未见成品</span>：仓库中实际 ADR 文件仅 001 / 011 / 012 / 013；P0-D00 §8 TODO-8 把 007/009/010 列为待起草</td></tr>
+      <tr><td>25</td><td>模型单价是否已从占位价替换为正式价</td><td><span class="tag t-unknown">未确认</span>：修复报告标注「上线前须替换」</td></tr>
+      <tr><td>26</td><td>其它开发机的 JDK / Maven / Docker 镜像可达性</td><td><span class="tag t-unknown">未确认</span>：脚本内多处为本机绝对路径</td></tr>
+      <tr><td>27</td><td>大量设计文档（P0-D04、RAG-D02～D07、护栏评估 HTML 等）的逐字条文</td><td><span class="tag t-unknown">本次未逐字读取全文</span>：仅通过索引、引用与关键章节确认存在与用途，未据此补写结论</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch20-3">20.3 本次勘察的方法与边界</h3>
+  <ul>
+    <li><strong>快照</strong>：2026-11-12，<span class="inline-code">HEAD 306f114</span>。勘察时工作区存在 4 个未提交改动（<span class="inline-code">AgentChatOrchestrator</span>、<span class="inline-code">AgentChatConfiguration</span> 及其测试，M8-b 相关）；本手册同时参考了已提交代码与工作区当前文件，结论可能随后续提交变化。</li>
+    <li><strong>取用顺序</strong>：源码与构建产物 &gt; 可执行脚本 &gt; 配置模板与结构 README &gt; 设计与复盘文档。冲突时以更靠近可执行物的一方为准，并在正文列出的双方口径。</li>
+    <li><strong>隐私与安全</strong>：真实 <span class="inline-code">platform.env</span> / <span class="inline-code">rag.env</span> / <span class="inline-code">jwt.env</span> 均为 0600 且被忽略，本次<strong>未读取其内容</strong>，手册未复现任何密钥、口令或本地开发账号凭据；所有敏感值写作占位符。</li>
+    <li><strong>未做的事</strong>：未启动服务、未连数据库实测、未执行构建或测试、未修改任何项目源码或配置。文中「实测数字」均引自仓库内已有记录（已给出处），不是本手册重新跑出来的结果。</li>
+    <li><strong>维护建议</strong>：结构基线、配置键、脚本清单变化时，同步更新 <a href="02-environment-config.html#ch5">第 5 章</a>、<a href="02-environment-config.html#ch6">第 6 章</a>、<a href="#ch18">第 18 章</a> 与本章；解决一条冲突就把对应行改为「已解决 + 提交号」，不要静默删除。</li>
+  </ul>
+  <h3 id="ch20-4">20.4 v2.3 新增：质量 / 成本 / 可观测的未落地与冲突</h3>
+  <table>
+    <thead><tr><th>#</th><th>条目</th><th>状态 / 采用口径</th></tr></thead>
+    <tbody>
+      <tr><td>28</td><td><span class="inline-code">attribution_correct</span> 落点</td><td><span class="tag t-conflict">文档冲突</span>：详细设计 §2.3 写落 <span class="inline-code">agent_eval_sample</span>，DDL 两列都有；<strong>机器写 <span class="inline-code">agent_trace_metric</span>、人工写 <span class="inline-code">agent_eval_sample</span></strong>（<a href="ai-10-quality-evaluation.html#a10-7">A10.7</a>）</td></tr>
+      <tr><td>29</td><td>L2 题库 / questionId 调用侧 / 多实例预算</td><td><span class="tag t-gap">证据空白</span>：默认空题库 + 双开关 false + 单进程预算，生产恒 <span class="inline-code">UNGRADED_*</span>（<a href="ai-10-quality-evaluation.html#a10-10">A10.10</a>）</td></tr>
+      <tr><td>30</td><td><span class="mono">ReviewAttributionHook</span> 实现</td><td><span class="tag t-gap">未确认</span>：接线完成但 NoOp，回写口径待产品定（<a href="ai-10-quality-evaluation.html#a10-10">A10.10</a>）</td></tr>
+      <tr><td>31</td><td>租户级 Token 配额三表 / TokenQuota* 类 / <span class="inline-code">agent.billing.*</span></td><td><span class="tag t-gap">未落地</span>：仅存在于待评审设计稿；结构仍 71 表 / 44 RLS / 52 策略（<a href="ai-11-cost-governance.html#a11-10">A11.10</a>）</td></tr>
+      <tr><td>32</td><td>模型单价是否为正式价</td><td><span class="tag t-unknown">未确认</span>：<span class="mono">platform/platform-bootstrap/src/main/resources/application.yml</span> 自述占位价，上线前须替换；点号模型名必须方括号字面键（<a href="ai-11-cost-governance.html#a11-4">A11.4</a>）</td></tr>
+      <tr><td>33</td><td>Grafana 面板数</td><td><span class="tag t-conflict">文档冲突</span>：详细设计 §12 写 16、§13 写 13，JSON 实为 16（<a href="ai-12-observability-runbook.html#a12-3">A12.3</a>）</td></tr>
+      <tr><td>34</td><td><span class="inline-code">/metrics</span> 出口</td><td><span class="tag t-conflict">文档冲突</span>：注释称免认证但未进匿名白名单、自研 <span class="mono">AgentMetrics</span> 生产无 increment；真实出口是 <span class="inline-code">/actuator/prometheus</span>（<a href="ai-12-observability-runbook.html#a12-1">A12.1</a>）</td></tr>
+      <tr><td>35</td><td><span class="mono">AuditTamperProofGuard</span></td><td><span class="tag t-gap">空转</span>：<span class="inline-code">GUARDED_TABLES</span> 数组被注释为空，不守任何表；不可抵赖靠 DB 触发器（<a href="ai-12-observability-runbook.html#a12-6">A12.6</a>）</td></tr>
+      <tr><td>36</td><td>Prometheus alert rules</td><td><span class="tag t-gap">未落地</span>：<span class="mono">prometheus.yml</span> 无 <span class="inline-code">rule_files</span>，告警刻意放应用层（<a href="ai-12-observability-runbook.html#a12-7">A12.7</a>）</td></tr>
+      <tr><td>37</td><td>CAP 全量开启 / 密钥轮换</td><td><span class="tag t-unknown">待验证 / 待执行</span>：P5 指针读已满足但三条运行时判据待灰度；轮换清单状态「待运维执行」（<a href="ai-12-observability-runbook.html#a12-8">A12.8</a>）</td></tr>
+      <tr><td>38</td><td>审计表名与防篡改机制</td><td><span class="tag t-gap">未找到</span>：无 <span class="inline-code">agent_chat_audit</span> / <span class="inline-code">platform_audit</span> 精确表名、无哈希链；实为 <span class="inline-code">audit_record</span> + append-only 触发器（<a href="ai-12-observability-runbook.html#a12-4">A12.4</a>）</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch20-5">20.5 v2.4 新增：运行时四册涉及的未落地与冲突</h3>
+  <table>
+    <thead><tr><th>#</th><th>条目</th><th>状态 / 采用口径</th></tr></thead>
+    <tbody>
+      <tr><td>39</td><td>「Skill 与 MCP 在代码中尚不存在」</td><td><span class="tag t-conflict">文档冲突</span>：<span class="mono">docs/governance/01（2026-10-22）</span> 此结论已被 <strong>2026-10-23 的 W-PERM-P4（git b770141）推翻</strong>：MCP 客户端 16 类约 1586 行已落地并在 <span class="inline-code">ApplicationConfiguration</span> 接线；<strong>Skill 这一半仍成立</strong>（仅配置层，无运行时执行物）。<a href="ai-12-observability-runbook.html#a12-10">A12.10</a> 的原表述按此修正（<a href="ai-16-mcp-runtime.html#a16-1">A16.1</a>）</td></tr>
+      <tr><td>40</td><td>记忆 P2 向量召回</td><td><span class="tag t-plan">部分落地</span>：<span class="inline-code">EmbeddingPort</span> 与 <span class="inline-code">PgVectorAvailability</span> 降级判据已建；<span class="inline-code">student_memory.embedding</span> 列与索引未建（pgvector 未获库 owner 批准）。开配置 ≠ 在跑，现场查列（<a href="ai-13-agent-memory.html#a13-9">A13.9</a>）</td></tr>
+      <tr><td>41</td><td>模型 fallback 链 / 网关重试 / 模型侧熔断 / Prompt Registry</td><td><span class="tag t-gap">未落地</span>：全仓 grep 零命中；前两项属刻意取舍（fail-closed 不猜模型、避免双重重试），熔断只在 MCP 侧（<a href="ai-14-model-gateway.html#a14-10">A14.10</a>）</td></tr>
+      <tr><td>42</td><td>SSE 断线重连 / Last-Event-ID 续传 / Agent Chat 事件序列号</td><td><span class="tag t-gap">未落地</span>：<span class="inline-code">sse.ts</span> 定义 id 字段语义但无重连消费；<span class="inline-code">AgentChatEvent</span> 无 sequenceNo（对比 Run 链路 <span class="inline-code">RunEventStreamer</span> 有）——聊天链路不可断点续传（<a href="ai-15-streaming-sse.html#a15-10">A15.10</a>）</td></tr>
+      <tr><td>43</td><td>MCP stdio 传输 / oauth 凭据 / MCP Server 暴露</td><td><span class="tag t-gap">未落地</span> <span class="tag t-unknown">未确认</span>：DDL CHECK 允许 stdio 与 oauth 但运行时只见 http/sse 与 token；本仓库只有 MCP 客户端（<a href="ai-16-mcp-runtime.html#a16-10">A16.10</a>）</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="ch20-6">20.6 v2.5 新增：测试 / 向量 / 路线的未落地与口径修正</h3>
+  <table>
+    <thead><tr><th>#</th><th>条目</th><th>状态 / 采用口径</th></tr></thead>
+    <tbody>
+      <tr><td>44</td><td>Prompt 管理「完全未设计」的旧口径</td><td><span class="tag t-conflict">口径修正</span>：<strong>不是「没有设计」</strong>——契约已定义 <span class="inline-code">systemPromptRef</span>（引用式提示词库），但 V1 <strong>明确拒绝执行</strong>（fail-closed），系统提示实际走 <span class="inline-code">inlineInstructions</span>。实现层仍为零（grep 零命中、DDL 无表）（<a href="ai-19-roadmap.html#a19-1">A19.1</a>、<a href="ai-14-model-gateway.html#a14-10">A14.10</a>）</td></tr>
+      <tr><td>45</td><td>真实供应商契约的自动化回归</td><td><span class="tag t-gap">未落地</span>：真实端到端只在人工走查时跑，无 CI nightly 真打供应商；供应商行为漂移无自动探针（<a href="ai-17-test-engineering.html#a17-10">A17.10</a>）</td></tr>
+      <tr><td>46</td><td>ANN 索引（HNSW / IVFFlat）</td><td><span class="tag t-gap">刻意不存在</span>：4096 维 &gt; halfvec 4000 上限；DDL 已留档注释与三条后续路线（MRL 截断 / 二进制量化 / 换小维度模型），均未做（<a href="ai-18-vector-ops.html#a18-2">A18.2</a>）</td></tr>
+      <tr><td>47</td><td>RETIRED 代际清理策略</td><td><span class="tag t-unknown">未确认</span>：代际「可保留用于回滚，也可清理」，但自动清理的保留期与触发条件未在代码中找到明确实现（<a href="ai-18-vector-ops.html#a18-10">A18.10</a>）</td></tr>
+      <tr><td>48</td><td>Agent Chat 事件序列号 / 重放 / 断线重连</td><td><span class="tag t-gap">未落地</span>：<span class="inline-code">AgentChatEvent</span> 无 sequenceNo（对比 Run 链路有）；聊天链路不可断点续传（<a href="ai-15-streaming-sse.html#a15-10">A15.10</a>、<a href="ai-19-roadmap.html#a19-4">A19.4</a>）</td></tr>
+      <tr><td>49</td><td>测试规模数字写进文档</td><td><span class="tag t-conflict">纪律提醒</span>：测试数随提交变化，<strong>不要写死</strong>；A17.9 表中的 472/90/113/40 是 2026-11-12 快照，仅用于理解结构比例（与本表第 13 行同源）</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ==================== 附录 ==================== -->
+
+<section class="chapter" id="appendix">
+  <div class="breadcrumb"><b>附录</b> / 术语、配置键与知识点索引</div>
+  <h2><span class="num">附.</span> 附录：术语表与配置键索引</h2>
+
+  <h3 id="appendix-a">附录 A · 术语表</h3>
+  <table>
+    <thead><tr><th>术语</th><th>含义</th><th>详见</th></tr></thead>
+    <tbody>
+      <tr><td>Run / Step</td><td>一次 Agent 执行及其内部步骤；状态机终态不可迁出</td><td><a href="04-runtime-flows.html#ch11">11</a></td></tr>
+      <tr><td>Outbox</td><td>与业务数据同事务写入的待发消息表，杜绝「落库后崩溃丢任务」</td><td><a href="01-project-overview.html#ch2-2">2.2</a></td></tr>
+      <tr><td>fencing token</td><td>租约令牌，防止旧持有者在租约过期后继续写状态</td><td><a href="01-project-overview.html#ch2-2">2.2</a></td></tr>
+      <tr><td>RLS / FORCE RLS</td><td>PG 行级安全；FORCE 使表 owner 也受策略约束（除非 BYPASSRLS）</td><td><a href="01-project-overview.html#ch2-3">2.3</a></td></tr>
+      <tr><td>app.tenant_id</td><td>事务局部会话变量，RLS 策略读取的租户身份</td><td><a href="01-project-overview.html#ch2-3">2.3</a></td></tr>
+      <tr><td>ScopeFilter</td><td>应用层行级隔离语义对象：TenantWithShared / TenantOnly / Unrestricted / None</td><td><a href="01-project-overview.html#ch2-3">2.3</a></td></tr>
+      <tr><td>EffectiveClosure</td><td>一次调用实际依赖的全部对象固定版本（Agent → Skill → Tool/MCP）</td><td><a href="01-project-overview.html#ch3-2">3.2</a>、<a href="03-java-skill-transfer.html#ch9-3">9.3</a></td></tr>
+      <tr><td>CAP</td><td>能力统一治理体系（cap_* 定义表、发布头、指针、闭包）</td><td><a href="01-project-overview.html#ch2-6">2.6</a></td></tr>
+      <tr><td>execution_snapshot</td><td>建 Run 时固化的能力/配置/策略快照</td><td><a href="04-runtime-flows.html#ch11-2">11.2</a></td></tr>
+      <tr><td>三步发布</td><td>登记对象 → 双人复核 → CAS 切指针；引用用 id@version</td><td><a href="03-java-skill-transfer.html#ch9-3">9.3</a></td></tr>
+      <tr><td>L1–L5 链路</td><td>异步 Worker / 请求级 SSE / 控制台直连 / 子 Agent / 语义路由</td><td><a href="04-runtime-flows.html#ch12-1">12.1</a></td></tr>
+      <tr><td>context.checkpoint</td><td>SSE v1.1 第 14 事件，客户端 carry-over 状态，默认不落库</td><td><a href="04-runtime-flows.html#ch12-2">12.2</a></td></tr>
+      <tr><td>W1/W2/W3</td><td>压缩管线：外置 → 裁剪 → 增量摘要</td><td><a href="04-runtime-flows.html#ch12-3">12.3</a></td></tr>
+      <tr><td>fail-closed</td><td>配置/策略/能力缺失时拒绝而非放行</td><td><a href="01-project-overview.html#ch2-6">2.6</a></td></tr>
+      <tr><td>三级验收 / 反向验证</td><td>行为单测 → 链路 E2E → 真跑闭环；撤点必须转红</td><td><a href="05-troubleshooting.html#ch14-3">14.3</a>、<a href="05-troubleshooting.html#ch14-4">14.4</a></td></tr>
+      <tr><td>静默失真</td><td>不报错、数字悄悄错、功能空转、假绿</td><td><a href="05-troubleshooting.html#ch14-2">14.2</a></td></tr>
+      <tr><td>执行票证</td><td>平台侧签发的短时租户域令牌，用于合法跨身份域执行</td><td><a href="01-project-overview.html#ch2-4">2.4</a></td></tr>
+      <tr><td>平台档 / 租户档</td><td>RAG 语料的全局作用域与租户作用域，走不同连接通道</td><td><a href="04-runtime-flows.html#ch13-4">13.4</a></td></tr>
+      <tr><td>版本五轴</td><td>学科 × 学段/年级 × 册次 × 出版社 × 修订版次</td><td><a href="04-runtime-flows.html#ch13-3">13.3</a></td></tr>
+      <tr><td>RRF / halfvec</td><td>倒数排名融合；pgvector 的半精度向量类型</td><td><a href="04-runtime-flows.html#ch13-2">13.2</a>、<a href="01-project-overview.html#ch3-3">3.3</a></td></tr>
+      <tr><td>索引代际</td><td>BUILDING → ACTIVE → RETIRED，换嵌入模型时蓝绿切换</td><td><a href="04-runtime-flows.html#ch13-3">13.3</a></td></tr>
+      <tr><td>三处齐</td><td>租户在平台侧登记 + 配额 + 业务侧镜像三处一致</td><td><a href="02-environment-config.html#ch6-3">6.3</a></td></tr>
+      <tr><td>EXCERPT_ASSEMBLY</td><td>接地生成的逐字摘录模式（零幻觉基线）</td><td><a href="04-runtime-flows.html#ch13-2">13.2</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="appendix-b">附录 B · 配置键索引（按前缀检索）</h3>
+  <table>
+    <thead><tr><th>键 / 变量（前缀）</th><th>来源</th><th>用途</th><th>章节</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">SPRING_DATASOURCE_*</td><td>platform.env</td><td>主应用库连接（url/username/password 刻意不写进 yml）</td><td><a href="02-environment-config.html#ch5-3">5.3</a></td></tr>
+      <tr><td class="mono">SPRING_PROFILES_ACTIVE / SERVER_PORT</td><td>platform.env</td><td>dev 放行与端口</td><td><a href="02-environment-config.html#ch5-3">5.3</a></td></tr>
+      <tr><td class="mono">RABBITMQ_*</td><td>platform.env</td><td>broker 凭据与 vhost</td><td><a href="02-environment-config.html#ch5-3">5.3</a></td></tr>
+      <tr><td class="mono">AGENT_PLATFORM_OPS_*</td><td>platform.env</td><td>平台运维数据源（BYPASSRLS）</td><td><a href="02-environment-config.html#ch5-3">5.3</a></td></tr>
+      <tr><td class="mono">AGENT_MODEL_MINIMAX_*</td><td>platform.env</td><td>模型网关密钥/端点/默认模型</td><td><a href="02-environment-config.html#ch5-3">5.3</a></td></tr>
+      <tr><td class="mono">AGENT_CONTEXT_*</td><td>platform.env / yml</td><td>压缩阈值、校准、HMAC、TTL</td><td><a href="02-environment-config.html#ch5-6">5.6</a>、<a href="04-runtime-flows.html#ch12">12</a></td></tr>
+      <tr><td class="mono">agent.messaging.* / agent.mq.*</td><td>application.yml</td><td>消息通道模式、队列拓扑、重试</td><td><a href="02-environment-config.html#ch5-6">5.6</a></td></tr>
+      <tr><td class="mono">agent.worker.*</td><td>application.yml</td><td>Worker 轮询、并发、租约、租户清单</td><td><a href="02-environment-config.html#ch5-6">5.6</a></td></tr>
+      <tr><td class="mono">agent.quality.* / sampler.*</td><td>application.yml</td><td>L1/L2 评测、分层抽样</td><td><a href="02-environment-config.html#ch5-6">5.6</a></td></tr>
+      <tr><td class="mono">agent.authz.*</td><td>application.yml</td><td>影子权限与决策日志</td><td><a href="02-environment-config.html#ch5-6">5.6</a></td></tr>
+      <tr><td class="mono">agent.recovery.* / backpressure.* / retention.* / memory.*</td><td>application.yml</td><td>恢复、背压、保留期、跨 Run 记忆</td><td><a href="02-environment-config.html#ch5-6">5.6</a></td></tr>
+      <tr><td class="mono">agent.run.* / pricing.models.*</td><td>application.yml</td><td>成本上限与模型单价（含点号方括号键）</td><td><a href="02-environment-config.html#ch5-8">5.8</a></td></tr>
+      <tr><td class="mono">config.flag.*</td><td>application.yml</td><td>CAP 双写 / 强制 / 闭包灰度</td><td><a href="02-environment-config.html#ch5-6">5.6</a></td></tr>
+      <tr><td class="mono">auth.jwt.* / auth.platform-jwt.*</td><td>application.yml</td><td>两域签发参数</td><td><a href="02-environment-config.html#ch5-6">5.6</a></td></tr>
+      <tr><td class="mono">platform.security.*</td><td>application.yml</td><td>执行票证 / RAG 治理票据开关与 TTL</td><td><a href="01-project-overview.html#ch2-4">2.4</a></td></tr>
+      <tr><td class="mono">platform.env 的 deployment.* / dr.*</td><td>application.yml</td><td>试点上限 / 灾备指标</td><td><a href="02-environment-config.html#ch5-6">5.6</a></td></tr>
+      <tr><td class="mono">JWT_PRIVATE_KEY / PLATFORM_JWT_PRIVATE_KEY</td><td>jwt.env</td><td>两域签发私钥（成对）</td><td><a href="02-environment-config.html#ch5-5">5.5</a></td></tr>
+      <tr><td class="mono">RAG_TENANT/PLATFORM_JWT_PUBLIC_KEY</td><td>jwt.env</td><td>rag 验签公钥</td><td><a href="02-environment-config.html#ch5-5">5.5</a></td></tr>
+      <tr><td class="mono">RAG_PG_* / RAG_OPS_*</td><td>rag.env</td><td>主库与运维通道</td><td><a href="02-environment-config.html#ch5-4">5.4</a></td></tr>
+      <tr><td class="mono">RAG_EMBEDDING_*</td><td>rag.env / 两份 yml</td><td>嵌入模型、维度、向量类型（三处必须一致）</td><td><a href="02-environment-config.html#ch5-4">5.4</a>、<a href="02-environment-config.html#ch5-7">5.7</a></td></tr>
+      <tr><td class="mono">RAG_LOCAL_PORTS_ENABLED</td><td>rag.env</td><td>占位端口闸门（默认 false）</td><td><a href="02-environment-config.html#ch5-4">5.4</a></td></tr>
+      <tr><td class="mono">RAG_RETRIEVAL_MIN_SCORE / MIN_TRUST_TIER</td><td>yml（可 env 覆盖）</td><td>分数门禁与最低权威等级</td><td><a href="04-runtime-flows.html#ch13-3">13.3</a></td></tr>
+      <tr><td class="mono">RAG_DOCLING_* / RAG_PREMISE_*</td><td>env（注释默认关）</td><td>解析后端与切分灰度</td><td><a href="02-environment-config.html#ch5-4">5.4</a></td></tr>
+      <tr><td class="mono">rag.indexer.* / rag.ingest.*</td><td>rag-worker yml / @Value</td><td>索引器轮询、消费者/清扫/告警开关</td><td><a href="02-environment-config.html#ch5-7">5.7</a></td></tr>
+      <tr><td class="mono">IT_PG_URL / IT_RAG_* / AI_AGENT_PASSWORD</td><td>it-env.sh / rag-it-env.sh</td><td>IT 独立库连接与守门</td><td><a href="02-environment-config.html#ch6-4">6.4</a></td></tr>
+      <tr><td class="mono">VITE_DEV_API_TARGET / VITE_DEV_RAG_*_TARGET</td><td>前端 env</td><td>Vite 代理目标</td><td><a href="02-environment-config.html#ch7-5">7.5</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="appendix-c">附录 C · 知识点与章节对照</h3>
+  <table>
+    <thead><tr><th>知识点</th><th>主章节</th><th>练习题（自测）</th></tr></thead>
+    <tbody>
+      <tr><td>两套 reactor / 两套库 / 两个前端</td><td><a href="01-project-overview.html#ch1">1</a>、<a href="01-project-overview.html#ch3">3</a></td><td>不查手册画出图 1-1，并标出 5 个端口</td></tr>
+      <tr><td>配置三层模型与 fail-closed</td><td><a href="02-environment-config.html#ch5">5</a></td><td>说出 model_catalog 属于哪一层、密钥为何不能入库</td></tr>
+      <tr><td>01→02→03→04 与角色纪律</td><td><a href="02-environment-config.html#ch6">6</a></td><td>解释「角色必须在 DDL 之后建」和「重跑 03 后紧跟 04」</td></tr>
+      <tr><td>启动与 jar 陷阱</td><td><a href="02-environment-config.html#ch7">7</a></td><td>用 MANIFEST 证明哪个 jar 可执行</td></tr>
+      <tr><td>复用 / 调整 / 补充</td><td><a href="03-java-skill-transfer.html#ch8">8</a>、<a href="03-java-skill-transfer.html#ch9">9</a></td><td>挑 3 条自己最熟的经验，说出在项目里的差异</td></tr>
+      <tr><td>编码红线</td><td><a href="03-java-skill-transfer.html#ch10">10</a></td><td>默写 RLS 绑定三条件与 SKIP LOCKED 正确范式</td></tr>
+      <tr><td>Run / SSE / RAG 链路</td><td><a href="04-runtime-flows.html#ch11">11</a>–<a href="04-runtime-flows.html#ch13">13</a></td><td>说出一次 Run 的三处一致性边界、SSE 终帧线序、检索七步</td></tr>
+      <tr><td>五段式排查与静默失真</td><td><a href="05-troubleshooting.html#ch14">14</a>、<a href="05-troubleshooting.html#ch15">15</a></td><td>任选一个「查不到数据」场景，写出五段式记录</td></tr>
+      <tr><td>三级验收与反向验证</td><td><a href="05-troubleshooting.html#ch14-3">14.3</a>、<a href="05-troubleshooting.html#ch14-4">14.4</a></td><td>为一个新守卫设计一个撤点锚点，说明什么结果算无效反证</td></tr>
+      <tr><td>事实边界</td><td><a href="#ch20">20</a></td><td>列举 3 条会误导排查方向的文档冲突</td></tr>
+      <tr><td>AI 概念与 Token 口径</td><td><a href="ai-01-fundamentals.html#ai1-2">A1.2</a></td><td>解释一次 LLM 调用里 input/output tokens 在哪本账出现，为何估算不等于计费</td></tr>
+      <tr><td>选型决策与 ADR 状态</td><td><a href="ai-02-decisions.html#a2-3">A2.3</a></td><td>说出仓库实际只有哪 4 份 ADR，并判断一条历史决策是否仍有效</td></tr>
+      <tr><td>特殊 AI 问题与静默失真</td><td><a href="ai-03-hard-problems.html#a3-2">A3.2</a></td><td>复述上下文压缩从首轮锚到轮末 checkpoint 的 fail-closed 边界</td></tr>
+      <tr><td>多级 Agent 编排</td><td><a href="ai-04-agent-orchestration.html#a4-2">A4.2</a></td><td>画出委派状态机，并说明终态后为什么不能补 attempt</td></tr>
+      <tr><td>配置治理与权限判绿</td><td><a href="ai-05-config-governance.html#a5-3">A5.3</a></td><td>解释为什么 AUTHZ_MISMATCH=0 不是隔离证据，要看 rlsDependent()</td></tr>
+      <tr><td>事故库与排查方法论</td><td><a href="ai-06-incident-library.html#a6-1">A6.1</a></td><td>从案例中挑一例，按五段式写出「不报错但结果错」的定位路径</td></tr>
+      <tr><td>RAG 语料流水线</td><td><a href="ai-07-corpus-engineering.html#a7-1">A7.1</a></td><td>说出七段流水线的失败纪律与整册失败判据</td></tr>
+      <tr><td>数据源权威与合规</td><td><a href="ai-08-data-governance.html#a8-1">A8.1</a></td><td>用 TrustTier 与租户三档作用域判定一份语料是否可被检索</td></tr>
+      <tr><td>测试、守卫与反证</td><td><a href="ai-09-quality-assurance.html#a9-3">A9.3</a></td><td>给出一个守卫的撤点锚点，并说明什么结果算无效反证</td></tr>
+      <tr><td>对话质量评估与归因</td><td><a href="ai-10-quality-evaluation.html#a10-4">A10.4</a>、<a href="ai-10-quality-evaluation.html#a10-6">A10.6</a></td><td>区分 L1 链路完整性与 L2 归因判分，说明 judge 成本为什么不进 usage_record</td></tr>
+      <tr><td>租户成本与 Token 计费</td><td><a href="ai-11-cost-governance.html#a11-3">A11.3</a>、<a href="ai-11-cost-governance.html#a11-10">A11.10</a></td><td>画出预留→结算→释放时序，并指出 Token 配额三表是否已落地</td></tr>
+      <tr><td>可观测性、审计与 Runbook</td><td><a href="ai-12-observability-runbook.html#a12-3">A12.3</a>、<a href="ai-12-observability-runbook.html#a12-4">A12.4</a></td><td>说出真实指标出口、Grafana 面板数，以及审计链为什么不是哈希链</td></tr>
+      <tr><td>跨 Run 记忆</td><td><a href="ai-13-agent-memory.html#a13-3">A13.3</a>、<a href="ai-13-agent-memory.html#a13-6">A13.6</a></td><td>默写强度公式并解释单次出现为什么永不召回；说出记忆为什么是注入的二次传播路径</td></tr>
+      <tr><td>模型解析与网关</td><td><a href="ai-14-model-gateway.html#a14-3">A14.3</a>、<a href="ai-14-model-gateway.html#a14-5">A14.5</a></td><td>写出解析四级优先级与 fail-closed 语义；说出哪三类错误不可重试、误标会怎样</td></tr>
+      <tr><td>流式与前端消费</td><td><a href="ai-15-streaming-sse.html#a15-6">A15.6</a>、<a href="ai-15-streaming-sse.html#a15-8">A15.8</a></td><td>解释超时为什么必须后端 &gt; 前端；说出 truncated 与 failed 的语义区别</td></tr>
+      <tr><td>MCP 运行时防护</td><td><a href="ai-16-mcp-runtime.html#a16-4">A16.4</a>、<a href="ai-16-mcp-runtime.html#a16-9">A16.9</a></td><td>默写 SSRF 三件套；解释 MCP 工具为什么必须共用 ToolInvocationGate 这一条路径</td></tr>
+      <tr><td>AI 测试工程</td><td><a href="ai-17-test-engineering.html#a17-3">A17.3</a>、<a href="ai-17-test-engineering.html#a17-8">A17.8</a></td><td>用假密钥写一条「脱敏没被绕过」的断言；说出 CI 里「跳过」为什么必须当失败治理</td></tr>
+      <tr><td>向量库运维</td><td><a href="ai-18-vector-ops.html#a18-2">A18.2</a>、<a href="ai-18-vector-ops.html#a18-8">A18.8</a></td><td>解释 4096 维为什么建不了索引；口述换模型的七步 Runbook 与「绝不做的三件事」</td></tr>
+      <tr><td>能力边界与增强</td><td><a href="ai-19-roadmap.html#a19-2">A19.2</a>、<a href="ai-19-roadmap.html#a19-5">A19.5</a></td><td>把一条「未落地」归入 A/B/C/D 四类并说明依据；用五种增强模式描述一个新需求的设计</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<nav class="page-nav">
+  <a href="05-troubleshooting.html"><span class="pn-label">← 上一册</span><span class="pn-title">第五篇 · 问题排查</span></a>
+  <a class="pn-right" href="ai-01-fundamentals.html"><span class="pn-label">下一册 →</span><span class="pn-title">A1 · AI 知识点精讲</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

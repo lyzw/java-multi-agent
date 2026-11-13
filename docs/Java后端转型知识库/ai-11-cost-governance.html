@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A11 · 租户级成本治理与 Token 计费 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-11-cost-governance" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A11 · 租户级成本治理与 Token 计费</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A11 · 租户级成本治理与 Token 计费 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">金额预算三表、usage_record 幂等账、per-1k 单价与方括号字面键、预留—结算—释放、judge 分账、G2 压缩成本实测，以及「设计未落地」的 Token 配额方案</p>
+  <div class="ph-meta"><span>覆盖：A11.1–A11.10</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a11">
+  <div class="breadcrumb"><b>AI 专题 · A11</b> / 租户级成本治理与 Token 计费</div>
+  <h2><span class="num">A11.</span> 租户级成本治理与 Token 计费：已落地的金额账 vs 仅设计的 Token 配额</h2>
+  <p>LLM 系统把「成本」从运维指标变成了业务账目：每一次模型调用都要在正确的租户、正确的 Run、正确的操作上记一笔，且重复消费不能重复计费。本册先讲清楚<strong>仓库里真正跑起来的金额账</strong>（预算三表 + 单价表 + 真实 token 计量），再专门用一节指出：<strong>那份看起来很完整、标题叫「租户级 Token 计费系统设计方案」的文档，其规划的三张表和全部 TokenQuota* 类在代码库里一行都没有落地</strong>。把这两件事分开，是本册最重要的纪律。</p>
+  <div class="callout c-danger"><span class="ct">先读这条事实边界</span><p>仓库里存在两套东西：<strong>① 已落地（源码 + DDL 可证）</strong>——金额预算三表 <span class="inline-code">budget_account</span>/<span class="inline-code">budget_reservation</span>/<span class="inline-code">usage_record</span>、模型单价配置 <span class="inline-code">agent.pricing.models</span>、真实 token 计价（P0-3b 成本入账改造）。<strong>② 纯设计、零落地</strong>——<span class="mono">docs/租户级Token计费系统设计方案_v1.0.md</span>（状态：待评审）规划的三张新表 <span class="inline-code">tenant_token_quota</span>/<span class="inline-code">tenant_token_account</span>/<span class="inline-code">token_quota_reservation</span>、全部 <span class="mono">TokenQuota*</span> 类与 <span class="inline-code">agent.billing.*</span> 配置键。<strong>全库 grep 这些标识符只命中该文档自身</strong>；结构快照仍是 71 表 / 44 RLS / 52 策略，不是文档期望的 72/45/53。培训与交接时只把 ① 当现行事实。</p></div>
+
+  <h3 id="a11-1">A11.1 两套账本对照：别把设计稿当实现</h3>
+  <table>
+    <thead><tr><th style="width:18%">维度</th><th>已落地：金额预算账（P0-3b）</th><th>仅设计：Token 配额账（待评审）</th></tr></thead>
+    <tbody>
+      <tr><td>核心表</td><td><span class="inline-code">public.budget_account</span>、<span class="inline-code">public.budget_reservation</span>、<span class="inline-code">public.usage_record</span></td><td><span class="inline-code">platform.tenant_token_quota</span>、<span class="inline-code">public.tenant_token_account</span>、<span class="inline-code">public.token_quota_reservation</span> <span class="tag t-gap">未落地</span></td></tr>
+      <tr><td>计量单位</td><td>金额 CNY（<span class="inline-code">numeric(18,6)</span>）+ 真实 input/output token</td><td>token 额度（input + output）</td></tr>
+      <tr><td>幂等键</td><td><span class="inline-code">(tenant_id, operation_id)</span>，唯一索引 <span class="inline-code">idx_usage_operation_once</span></td><td>同 <span class="inline-code">operation_id</span>（文档规划）</td></tr>
+      <tr><td>隔离</td><td>FORCE RLS + 租户策略 + 非特权 <span class="inline-code">app_agent</span> 验证</td><td>文档规划 FORCE RLS / 平台域表无 RLS</td></tr>
+      <tr><td>代码入口</td><td><span class="mono">JdbcBudgetRepository implements BudgetPort</span></td><td><span class="mono">TokenQuotaPort/Service/Observer/Sweeper</span> <span class="tag t-gap">全库未找到</span></td></tr>
+      <tr><td>配置键</td><td><span class="inline-code">agent.pricing.models.*</span>、<span class="inline-code">agent.run.max-cost-per-run</span></td><td><span class="inline-code">agent.billing.*</span>（shadow.enabled / upper-bound.input-factor / usage-missing-floor-tokens / reservation-ttl-seconds…）<span class="tag t-gap">全库未找到</span></td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">「两道闸门取更严者」是<strong>设计文档的目标态</strong>（金额维度 BudgetPort + token 维度 TokenQuotaPort），不是当前运行状态；当前只有金额维度在工作。设计文档另注明「不新建平行账本、计量事实继续复用 usage_record」，并明确 <span class="mono">docs/租户级Token计费系统设计方案_v1.0.md</span> 第 3 行状态为「待评审」。</p>
+
+  <h3 id="a11-2">A11.2 usage_record 事实账：字段、幂等与租户隔离</h3>
+  <p><span class="inline-code">public.usage_record</span> 是「已计量（metered）」的权威事实表。建表在 <span class="mono">01_platform_ddl.sql:3024–3038</span>，字段如下：</p>
+  <table>
+    <thead><tr><th style="width:22%">字段</th><th>类型 / 默认</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><span class="inline-code">usage_id</span></td><td>uuid PK</td><td>主键</td></tr>
+      <tr><td><span class="inline-code">tenant_id</span></td><td>uuid NOT NULL</td><td>租户隔离键，FORCE RLS</td></tr>
+      <tr><td><span class="inline-code">run_id</span></td><td>uuid NOT NULL</td><td>归属 Run</td></tr>
+      <tr><td><span class="inline-code">step_id</span></td><td>uuid 可空</td><td><strong>当前恒 NULL</strong>：写入 SQL 未含该列（已知缺口，见 A11.10）</td></tr>
+      <tr><td><span class="inline-code">operation_id</span></td><td>uuid 可空</td><td>逻辑操作幂等键，来源 <span class="mono">modelCallId(runId,attempt,ordinal)</span></td></tr>
+      <tr><td><span class="inline-code">model_id</span></td><td>text NOT NULL</td><td>模型 ID</td></tr>
+      <tr><td><span class="inline-code">input_tokens</span> / <span class="inline-code">output_tokens</span></td><td>bigint DEFAULT 0</td><td>真实 token，CHECK 非负</td></tr>
+      <tr><td><span class="inline-code">cost_amount</span></td><td>numeric(18,6) DEFAULT 0</td><td>金额，币种默认 CNY</td></tr>
+      <tr><td><span class="inline-code">reservation_id</span></td><td>uuid 可空</td><td>关联的预留流水；无预留的「只计量」路径为 NULL</td></tr>
+    </tbody>
+  </table>
+  <p><strong>幂等</strong>靠部分唯一索引 <span class="inline-code">idx_usage_operation_once UNIQUE (tenant_id, operation_id) WHERE operation_id IS NOT NULL</span>（行 4529）。写入只用一条 SQL（<span class="mono">JdbcBudgetRepository.insertUsageOnce</span>，行 448–479）：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">sql</span><span class="file">platform/agent-persistence/.../JdbcBudgetRepository.java 行 452–460（节选）</span><button>复制</button></div><pre><code>INSERT INTO usage_record
+  (tenant_id, run_id, operation_id, reservation_id,
+   model_id, input_tokens, output_tokens, cost_amount, currency)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (tenant_id, operation_id) WHERE operation_id IS NOT NULL DO NOTHING
+RETURNING usage_id</code></pre></div>
+  <p>注意这里<strong>用了 RETURNING</strong>——因为 <span class="inline-code">usage_record</span> 对 <span class="inline-code">app_agent</span> 有 SELECT + RLS；「禁 RETURNING」铁律只针对 <span class="inline-code">authz_decision_log</span>（该表仅 INSERT、显式 REVOKE SELECT），不要张冠李戴，详见 <a href="ai-12-observability-runbook.html#a12-5">A12.5</a>。所有写入都经 <span class="mono">inTenantTx()</span> 绑定租户（行 887–892），每条 SQL 带 <span class="inline-code">WHERE tenant_id = ?::uuid</span>，符合 RLS 铁律。<span class="inline-code">currency</span> 取 <span class="inline-code">BudgetPort.SETTLEMENT_CURRENCY = CNY</span>。</p>
+  <div class="callout c-warn"><span class="ct">「一次性写明细」而非「累加」</span><p>每次模型调用写<strong>一行明细</strong>，不在 Repository 里做 token「累计」。真实 token 由 <span class="mono">RunExecutionLoop.settleModelCost</span> 从 <span class="inline-code">response.usage()</span> 取出后传入；累计成本体现在 <span class="inline-code">budget_account.settled_amount</span> 的逐级累加。<span class="mono">ModelPricing</span> 不在这里计算，只接收上层 <span class="inline-code">actualAmount</span> 原样写入（行 473）。</p></div>
+
+  <h3 id="a11-3">A11.3 一次模型调用的成本时序：预留 → 结算 → 释放</h3>
+  <p>成本链路在 <span class="mono">RunExecutionLoop.java</span> 里有三个明确的钩子，对应「调用前 / 调用后 / 失败」三态：</p>
+  <table>
+    <thead><tr><th style="width:18%">阶段</th><th>方法 / 行</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td>调用前预留</td><td><span class="mono">reserveModelCost</span> :862–873</td><td>按保守上界预留：<span class="inline-code">reservedInput = estimatedInput × INPUT_TOKEN_ESTIMATE_SAFETY_FACTOR</span>（因子 2），输出按 <span class="inline-code">agentConfig.maxTokens()</span>；预留被拒 → <span class="inline-code">commitFailure(...,"BUDGET_EXHAUSTED")</span></td></tr>
+      <tr><td>调用后结算</td><td><span class="mono">settleModelCost</span> :923,1717–1730</td><td>有预留走 <span class="inline-code">budget.settle(...)</span>（预留全额扣回、只计实结额）；无预留走 <span class="inline-code">budget.recordModelUsage(...)</span></td></tr>
+      <tr><td>失败释放</td><td><span class="mono">releaseModelCost</span> :899,911</td><td>模型调用异常时释放预留；<span class="inline-code">llmCalls++</span> 仅成功后计</td></tr>
+    </tbody>
+  </table>
+  <p><strong>operation_id 必须确定性且含 attempt</strong>：<span class="mono">modelCallId(runId, attempt, ordinal) = UUID.nameUUIDFromBytes((runId + "|" + attempt + "|" + ordinal).getBytes(UTF_8))</span>（行 1630–1634）。Javadoc 强调「必须确定性、必须含 attempt，否则重复计费或漏记」——attempt 每次领取 +1，使同一 Run 的重试落在不同的 operation_id 上，既避免重复扣费，又不漏记真实的多次调用。</p>
+  <div class="figure">
+  <svg viewBox="0 0 920 210" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+    <defs><marker id="a11a" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#1d4ed8"/></marker><marker id="a11b" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#0f766e"/></marker></defs>
+    <rect x="14" y="26" width="180" height="60" rx="7" fill="#e8effd" stroke="#c6d9fb"/><text x="26" y="49" font-size="12.5" font-weight="700" fill="#173a8f">① reserveModelCost</text><text x="26" y="68" font-size="10.6" fill="#4b5563">上界预留（含 attempt 的 opId）</text><text x="26" y="81" font-size="10" fill="#6b7280">budget_reservation</text>
+    <rect x="224" y="26" width="180" height="60" rx="7" fill="#fff5dc" stroke="#f0dca6"/><text x="236" y="49" font-size="12.5" font-weight="700" fill="#6d4a05">② 模型网关调用</text><text x="236" y="68" font-size="10.6" fill="#4b5563">response.usage()</text><text x="236" y="81" font-size="10" fill="#6b7280">不回 usage → 记 0（见 A11.7）</text>
+    <rect x="434" y="26" width="200" height="60" rx="7" fill="#e2f4f0" stroke="#bfe3da"/><text x="446" y="49" font-size="12.5" font-weight="700" fill="#0b5d56">③ settleModelCost</text><text x="446" y="68" font-size="10.6" fill="#4b5563">实结：预留全额扣回 + 实结额</text><text x="446" y="81" font-size="10" fill="#6b7280">usage_record 一条明细</text>
+    <rect x="664" y="26" width="242" height="60" rx="7" fill="#e2f4f0" stroke="#bfe3da"/><text x="676" y="49" font-size="12.5" font-weight="700" fill="#0b5d56">④ budget_account 累加</text><text x="676" y="68" font-size="10.6" fill="#4b5563">reserved → settled</text><text x="676" y="81" font-size="10" fill="#6b7280">CHECK budget_no_overspend</text>
+    <line x1="196" y1="56" x2="220" y2="56" stroke="#1d4ed8" stroke-width="2" marker-end="url(#a11a)"/>
+    <line x1="406" y1="56" x2="430" y2="56" stroke="#8b5cf6" stroke-width="2" marker-end="url(#a11a)"/>
+    <line x1="636" y1="56" x2="660" y2="56" stroke="#0f766e" stroke-width="2" marker-end="url(#a11b)"/>
+    <path d="M314 88 L314 124" stroke="#c2410c" stroke-width="2" marker-end="url(#a11a)"/>
+    <rect x="224" y="126" width="410" height="56" rx="7" fill="#fdeaea" stroke="#f3c4c4"/><text x="236" y="148" font-size="12.5" font-weight="700" fill="#8f1717">失败分支：releaseModelCost → 释放预留（:899,:911）</text><text x="236" y="167" font-size="10.6" fill="#9a4b12">预留被拒 → BUDGET_EXHAUSTED（调用数=0）；模型异常 → 释放，绝不吞掉已发生的扣款</text>
+    <rect x="14" y="126" width="196" height="56" rx="7" fill="#f0eafe" stroke="#d9c9f7"/><text x="26" y="148" font-size="12" font-weight="700" fill="#5b21b6">上限闸门</text><text x="26" y="166" font-size="10.6" fill="#4b5563">max-cost-per-run=2.00</text><text x="26" y="178" font-size="10" fill="#6b7280">超限错误码 MAX_COST</text>
+  </svg>
+  <div class="cap">图 A11-1　一次模型调用的成本时序（依据 RunExecutionLoop 与 JdbcBudgetRepository）</div>
+  </div>
+
+  <h3 id="a11-4">A11.4 模型定价配置：per-1k 单价与方括号字面键</h3>
+  <p>先澄清一个易混淆点：<span class="mono">docs/模型统一配置架构设计.md</span> 讲的是 <span class="inline-code">model_catalog</span>（模型目录 + 密钥/目录分离 + ModelResolver），该表<strong>没有定价字段</strong>。<strong>定价是另一套独立机制</strong>，落在 <span class="mono">application.yml</span> 的 <span class="inline-code">agent.pricing.models</span>（行 514–547），计价单位<strong>每千 token（per-1k）</strong>，币种 CNY。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">yaml</span><span class="file">platform/platform-bootstrap/src/main/resources/application.yml 行 530–547（节选）</span><button>复制</button></div><pre><code>agent:
+  pricing:
+    models:
+      fake-model: { input-per-1k-tokens: "0", output-per-1k-tokens: "0" }
+      gpt-4o:     { input-per-1k-tokens: "0.018", output-per-1k-tokens: "0.072" }
+      qwen-max:   { input-per-1k-tokens: "0.02",  output-per-1k-tokens: "0.06" }
+      "[MiniMax-M2.5]":            # ← 点号模型名必须用方括号字面键
+        input-per-1k-tokens:  "0.002100"
+        output-per-1k-tokens: "0.008400"</code></pre></div>
+  <div class="callout c-danger"><span class="ct">点号模型名必须写 <span class="inline-code">"[MiniMax-M2.5]"</span></span><p>根因：<span class="inline-code">MiniMax-M2.5</span> 含点号，裸键会被 <strong>Spring Binder 拆层</strong>成 <span class="inline-code">MiniMax-M2</span> + 子键 <span class="inline-code">5</span>。症状极其隐蔽：<strong>业务 Run 成本静默按 0 记、L2 judge 因查不到单价而拒调，且两者都不报错</strong>。必须写成方括号字面键。守卫 <span class="mono">ApplicationConfigKeyAlignmentTest#dottedModelIdKeepsItsPricing</span>（行 203–228）与 <span class="mono">L2ProductionGuardTest</span>（行 157–165）锁死此约定。这也是工作记忆里的高频坑之一。</p></div>
+  <p><strong>读价与计算</strong>：装配在 <span class="mono">WorkerExecutionConfig.modelPricingPolicy()</span>（行 832–858），用 <span class="inline-code">Binder.get(environment).bind("agent.pricing.models", Bindable.mapOf(String.class,Object.class))</span> 读 raw map 再 <span class="inline-code">ModelPricingPolicy.of(raw)</span>，空表告警。匹配顺序是<strong>精确 → 最长前缀（如 <span class="inline-code">gpt-4o-2024-08-06</span> 命中 <span class="inline-code">gpt-4o</span>）→ default 兜底</strong>，<strong>查不到返回 empty 而非 0 元</strong>（<span class="mono">ModelPricingPolicy.java:33–37,123–149</span>）。计算在 <span class="mono">ModelPricing.cost()</span>（行 62–74）：<span class="inline-code">in = inputPerThousandTokens × inputTokens / 1000</span>，各自 <span class="inline-code">HALF_UP, SCALE=6</span> 后相加，与列精度 <span class="inline-code">numeric(18,6)</span> 对齐。</p>
+  <div class="callout c-warn"><span class="ct">单价是占位价，不是报价</span><p><span class="mono">platform/platform-bootstrap/src/main/resources/application.yml</span> 行 532–534 自述「以下为<strong>占位价</strong>，上线前必须按供应商最新报价替换；换模型必须同步改这里——没有第二处真相源」。培训里引用的 0.002100 / 0.008400 是冻结价示例，<strong>不是供应商当前报价</strong>，不要拿去算真实账单。</p></div>
+
+  <h3 id="a11-5">A11.5 记 0 的诚实语义：未配价与上游不回 usage</h3>
+  <p>项目对「算不出成本」采取的是<strong>如实记 0，不报错也不估算</strong>，而不是拍一个估值填进去。这有两处来源：</p>
+  <table>
+    <thead><tr><th style="width:26%">场景</th><th>行为</th><th style="width:28%">证据</th></tr></thead>
+    <tbody>
+      <tr><td>模型未配单价</td><td><span class="mono">recordModelUsage</span> 路径：<span class="inline-code">reservation_id=NULL</span>，<strong>成本记 0，token 如实记</strong>，只计量不扣款</td><td class="mono">JdbcBudgetRepository.java:490–493,497–535</td></tr>
+      <tr><td>上游不回 usage</td><td><span class="inline-code">usage.path("prompt_tokens").asLong(0)</span> / <span class="inline-code">completion_tokens.asLong(0)</span> → <span class="mono">ModelPricing.cost(0,0)=0</span>，账上记 0</td><td class="mono">OpenAiCompatibleModelGateway.java:365–366；ModelPricing.java:52–56</td></tr>
+      <tr><td>查不到定价</td><td><span class="mono">ModelPricingPolicy.pricingOf</span> 返回 <span class="inline-code">Optional.empty()</span>（非 0 元），调用侧决定记 0 行为</td><td class="mono">ModelPricingPolicy.java:33–37</td></tr>
+    </tbody>
+  </table>
+  <p>回归测试 <span class="mono">RunExecutionLoopModelCostTest.unpricedModelStillRecordsTokens</span>（行 303）断言：未配价时 <span class="inline-code">token 如实记 500/100、cost=0、reserveCalls=0</span>。这是「成本记 0」的<strong>有意设计</strong>而非 bug；但它也意味着<strong>配额若仅依赖 usage 回传会被绕过</strong>——设计文档因此规划了保底结算 <span class="inline-code">usage-missing-floor-tokens</span>，但该配置与代码<strong>均未落地</strong>（见 A11.10）。</p>
+
+  <h3 id="a11-6">A11.6 分账铁律：judge 成本绝不混 usage_record / cost_amount</h3>
+  <p>与 <a href="ai-10-quality-evaluation.html#a10-6">A10.6</a> 呼应，从成本账本这一侧再看一次：<strong>评估判分模型的调用必须独立科目，绝不写业务账</strong>。</p>
+  <table>
+    <thead><tr><th style="width:22%">科目</th><th>承担者</th><th>落账位置</th></tr></thead>
+    <tbody>
+      <tr><td>业务 Run 成本</td><td><span class="mono">BudgetPort</span> / <span class="mono">JdbcBudgetRepository</span></td><td><span class="inline-code">usage_record</span>、<span class="inline-code">cost_amount</span>、<span class="inline-code">budget_account.settled_amount</span></td></tr>
+      <tr><td>L2 judge 成本</td><td><span class="mono">EvaluationCostBudget</span>（<span class="inline-code">SUBJECT="EVAL_JUDGE_COST"</span>）</td><td>进程内预留/结算快照，<strong>不写</strong> <span class="inline-code">usage_record</span> / <span class="inline-code">cost_amount</span> / 业务指标端口</td></tr>
+      <tr><td>机器判分结论</td><td><span class="mono">L2AttributionEvaluator</span></td><td>只写 <span class="inline-code">agent_trace_metric.attribution_correct</span>，<strong>不写</strong> <span class="inline-code">agent_eval_sample</span></td></tr>
+    </tbody>
+  </table>
+  <p>共享的是<strong>单价</strong>（<span class="inline-code">"[MiniMax-M2.5]"</span> 的冻结价），不是账本。物理隔离由 <span class="mono">L2ProductionGuardTest.judgeCostIsPhysicallyIsolatedFromBusinessCost</span> 用源码断言保证（行 137–166）。<strong>宽表 <span class="inline-code">agent_trace_metric</span> 冗余的 <span class="inline-code">input_tokens/output_tokens/cost_amount</span> 是派生口径</strong>（给监控面板用），不是账本真相；真相在 <span class="inline-code">usage_record</span>。</p>
+
+  <h3 id="a11-7">A11.7 上下文压缩的成本实证：G2 双臂 input_tokens 真下降</h3>
+  <p>上下文压缩（<a href="ai-03-hard-problems.html#a3-1">A3.1</a> / <a href="04-runtime-flows.html#ch12">第 12 章</a>）是不是真的省了钱？项目用一组真库双臂实测回答，口径是 <strong>input_tokens（用量/token 口径）</strong>，不是直接的金额。</p>
+  <table>
+    <thead><tr><th>轮次</th><th>OFF 臂 input_tokens</th><th>TIERED 臂 input_tokens</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>147</td><td>147</td></tr>
+      <tr><td>2</td><td>3138</td><td>3138</td></tr>
+      <tr><td>3</td><td>6129</td><td>6129</td></tr>
+      <tr><td>4</td><td>9120</td><td>9120</td></tr>
+      <tr><td>5</td><td>12111</td><td>6268</td></tr>
+      <tr><td>6</td><td>15102</td><td>6280</td></tr>
+      <tr><td><strong>累计</strong></td><td><strong>45747</strong></td><td><strong>31082</strong></td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">末轮 <span class="inline-code">15102 → 6280</span>，下降 <strong>58.4%</strong>；累计 <span class="inline-code">45747 → 31082</span>，下降 <strong>32.1%</strong>。出处：<span class="mono">docs/上下文压缩G2验收签核包_v1.0.md</span> 行 110–122（#47 单类定向真库 IT 实测），<span class="mono">docs/上下文压缩实施记录_v1.0.md</span> 行 635–638 同数字。这是 <strong>input_tokens 下降</strong>，节省金额需乘单价换算。</p>
+  <div class="callout c-info"><span class="ct">防假绿：必须按真实请求计费</span><p><span class="mono">ContextCompressionG2GuardTest</span> 专门防止「用假 request 跑出好看数字」：按<strong>真实 ModelRequest</strong> 计费（行 53）、OFF/TIERED 双臂账本同源（行 98）、断言 <span class="inline-code">usage_record.input_tokens 真下降</span>（行 131），并配三点撤点反证脚本（行 266）。这体现 A9 的方法论：<strong>「有一行」≠「数字算对了」</strong>。</p></div>
+
+  <h3 id="a11-8">A11.8 租户配额与旁路：哪些真接通了，哪些没有</h3>
+  <table>
+    <thead><tr><th style="width:26%">能力</th><th style="width:14%">状态</th><th>事实</th></tr></thead>
+    <tbody>
+      <tr><td>金额预算账户</td><td><span class="tag t-live">已实现</span></td><td><span class="inline-code">budget_account(total_limit/reserved_amount/settled_amount)</span>，CHECK <span class="inline-code">budget_no_overspend</span>；Run 级上限取 <span class="inline-code">run.budget_amount</span></td></tr>
+      <tr><td>Run 级 max-cost-per-run</td><td><span class="tag t-live">已实现</span></td><td>配置 <span class="inline-code">agent.run.max-cost-per-run=2.00</span>，由 <span class="mono">ConfigReadService</span> 接通；超限时错误码 MAX_COST</td></tr>
+      <tr><td>tenant_quota（Agent/并发/预算上限）</td><td><span class="tag t-plan">部分接通</span></td><td>表 <span class="inline-code">platform.tenant_quota</span>（无 RLS，平台域）+ Repository + <span class="mono">PlatformTenantController</span> CRUD（<span class="inline-code">platform.tenant.quota.update</span>）已落地；<strong>但执行侧未见消费点</strong>：<span class="inline-code">agent.tenant.max-concurrent-runs</span> 的 <span class="inline-code">effective=false</span>（<span class="mono">ConfigReadService.java:138–139</span>），并发实际无限制</td></tr>
+      <tr><td>租户级 token 额度 / 套餐 / 账单</td><td><span class="tag t-gap">未落地</span></td><td>文档规划 <span class="inline-code">period_key/limit_tokens/tenant_token_account</span>，DDL 与 Java 均无；无账单/套餐/发票表</td></tr>
+      <tr><td>Console SSE 对话</td><td><span class="tag t-gap">已知旁路</span></td><td>走独立 <span class="mono">ConsoleChatController</span> 的 <span class="mono">ConsoleBudgetPort</span>（上下文窗口预算保护），<strong>不写 usage_record、不进金额预算</strong>，文档列为 P1 必接项</td></tr>
+      <tr><td>对账</td><td><span class="tag t-plan">无生产调度</span></td><td><span class="mono">BudgetReconciliationService.reconcileAll()</span> 存在，<strong>无 <span class="inline-code">@Scheduled</span> 触发</strong>；<span class="mono">JdbcBudgetRepository.isConsistent</span> 做账实校验</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="a11-9">A11.9 已落地的守卫与测试：账目正确性的证据</h3>
+  <table>
+    <thead><tr><th style="width:34%">测试</th><th>验证内容</th></tr></thead>
+    <tbody>
+      <tr><td><span class="mono">RunExecutionLoopModelCostTest</span></td><td>5 例：真实 token + 成本进计量行、<span class="inline-code">MAX_COST</span> 上限、<strong>未配价记 0 的回归</strong>、<span class="inline-code">BUDGET_EXHAUSTED</span> fail-closed、失败释放预留</td></tr>
+      <tr><td><span class="mono">BudgetReservationIT</span></td><td>T-1~T-11 真库 IT：并发不超发、确定性交错、<span class="inline-code">budget_no_overspend</span> CHECK、同 operation 幂等、<strong>重复结算不重复计费（usage_record 一条、settled 只加一次）</strong>、超预留拒绝、释放幂等、UNKNOWN 保持 RESERVED、对账、账实不符只报不改、已结算不可迁回</td></tr>
+      <tr><td><span class="mono">ApplicationConfigKeyAlignmentTest</span></td><td><strong>dottedModelIdKeepsItsPricing</strong>：点号键字面绑定，断言 0.002100 / 0.008400；<span class="inline-code">noMisnestedResidueForKnownKeys</span></td></tr>
+      <tr><td><span class="mono">JdbcAgentMetricAttributionIT</span></td><td><strong>machineGradeMustNotPolluteHumanSampling</strong>：机器判分不污染人工抽样</td></tr>
+      <tr><td><span class="mono">L2ProductionGuardTest</span></td><td>judge 成本物理隔离、dotted 键与 daily-cost-limit 断言</td></tr>
+      <tr><td><span class="mono">ContextCompressionG2GuardTest</span></td><td>G2 真跑 IT 防假绿：按真实请求计费、双臂同源、input_tokens 真下降、三点撤点反证</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="a11-10">A11.10 未落地 / 未确认：设计稿与实现的完整差距</h3>
+  <table>
+    <thead><tr><th style="width:30%">项</th><th style="width:14%">状态</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>三张 Token 配额表</td><td><span class="tag t-gap">未落地</span></td><td><span class="inline-code">tenant_token_quota</span> / <span class="inline-code">tenant_token_account</span> / <span class="inline-code">token_quota_reservation</span> 全库仅命中设计文档；结构快照 71 表 / 44 RLS / 52 策略（<span class="mono">init-db.sh EXPECT_*</span>），非文档期望的 72/45/53</td></tr>
+      <tr><td>TokenQuota* 全部类</td><td><span class="tag t-gap">未落地</span></td><td><span class="mono">TokenQuotaPort/Service/Policy/Estimate/Decision</span>、<span class="mono">JdbcTokenQuotaRepository</span>、<span class="mono">TokenQuotaSweeper/Observer</span>、<span class="mono">TenantTokenUsageController</span> 等全库 Java 未找到</td></tr>
+      <tr><td><span class="inline-code">agent.billing.*</span> 配置键</td><td><span class="tag t-gap">未落地</span></td><td>shadow.enabled / config.flag.billing-enforced / upper-bound.input-factor / usage-missing-floor-tokens / reservation-ttl-seconds / sweeper.interval-seconds / warn.event-enabled 均未在 <span class="mono">platform/platform-bootstrap/src/main/resources/application.yml</span> 与 <span class="mono">ConfigReadService.CATALOG</span> 中找到</td></tr>
+      <tr><td><span class="inline-code">step_id</span> 写入</td><td><span class="tag t-gap">已知缺口</span></td><td><span class="mono">insertUsageOnce</span> SQL 无 <span class="inline-code">step_id</span> 列，恒 NULL（设计文档 §3.5 亦指出）</td></tr>
+      <tr><td>保底结算 / 对账调度</td><td><span class="tag t-plan">仅设计</span></td><td><span class="inline-code">usage-missing-floor-tokens</span> 防绕过未落地；对账无 <span class="inline-code">@Scheduled</span></td></tr>
+      <tr><td>账单形态 / 计费周期 / 超限策略</td><td><span class="tag t-unknown">未确认</span></td><td>设计文档 §12 列 6 项待确认：计费周期默认值、超限策略（REJECT vs 挂起）、额度归属、SSE 是否纳入、账单形态、是否双余额展示；文档明说「不含真实支付」</td></tr>
+      <tr><td>计费 ADR</td><td><span class="tag t-gap">未落盘</span></td><td>设计文档建议补一份 ADR-013（预算单位/价格版本/预留结算模型），但仓库的 <span class="mono">ADR-013</span> 主题是上下文压缩，编号已被占用</td></tr>
+      <tr><td>文档行号</td><td><span class="tag t-conflict">文档冲突</span></td><td>设计文档基于旧快照，所引 DDL 行号（如 <span class="inline-code">usage_record:2845–2868</span>）已漂移；当前实际在 <span class="mono">01_platform_ddl.sql:3024</span>，以现仓为准</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-ai"><span class="ct">迁移提示：从「记日志」到「记账」</span><p>传统后端把「调用外部服务的消耗」记进日志或监控，错了最多影响图表。这里它变成<strong>带幂等键、租户边界、预留—结算—释放语义的账目</strong>：重复消费不能重复扣费（<span class="inline-code">operation_id</span> 含 attempt）、跨租户读不到（FORCE RLS + 非特权验证）、算不出就如实记 0（不估算）、评估成本另立科目（EVAL_JUDGE_COST）。可复用的是事务与唯一约束；必须新建的是<strong>「每一笔钱都能对上到底是哪次模型调用」的可追溯性</strong>——这也是为什么 <a href="ai-10-quality-evaluation.html">A10</a> 和本册都反复强调分账。</p></div>
+  <div class="evidence"><b>证据源：</b><span class="mono">docs/租户级Token计费系统设计方案_v1.0.md</span>（578 行，状态：待评审）、<span class="mono">docs/模型统一配置架构设计.md</span>（268 行）、<span class="mono">docs/上下文压缩G2验收签核包_v1.0.md</span> 行 110–122、<span class="mono">deploy/sql/platform/01_platform_ddl.sql</span>（<span class="inline-code">usage_record</span> :3024、<span class="inline-code">budget_account</span> :1514、索引 :4529）、<span class="mono">platform/agent-persistence/.../JdbcBudgetRepository.java</span>、<span class="mono">platform/agent-worker/.../RunExecutionLoop.java</span>、<span class="mono">platform/agent-core/.../ModelPricing.java</span>、<span class="mono">platform/agent-application/.../config/ModelPricingPolicy.java</span>、<span class="mono">platform/platform-bootstrap/src/main/resources/application.yml</span> 行 514–547、<span class="mono">scripts/init-db.sh</span> 行 147–149，以及 <span class="mono">BudgetReservationIT</span> / <span class="mono">RunExecutionLoopModelCostTest</span> / <span class="mono">ApplicationConfigKeyAlignmentTest</span> 等测试源码。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-10-quality-evaluation.html"><span class="pn-label">← 上一册</span><span class="pn-title">A10 · 对话质量评估、判定与归因体系</span></a>
+  <a class="pn-right" href="ai-12-observability-runbook.html"><span class="pn-label">下一册 →</span><span class="pn-title">A12 · 可观测性、审计链与运维 Runbook</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

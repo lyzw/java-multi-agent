@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A8 · 数据源权威性与合规治理 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-08-data-governance" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A8 · 数据源权威性与合规治理</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A8 · 数据源权威性与合规治理 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">TrustTier 五级、检索四轴闸门、租户三档作用域与 rag_ops BYPASSRLS 通道</p>
+  <div class="ph-meta"><span>覆盖：A8.1–A8.9</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a8">
+  <div class="breadcrumb"><b>AI 专题 · A8</b> / 数据源权威性与合规治理</div>
+  <h2><span class="num">A8.</span> 数据源权威性与合规治理：从信任等级到租户三档作用域</h2>
+  <p>A7 讲「语料怎么造出来」，本册讲「<strong>哪些语料可以被检索、谁能看、谁不能删、怎么证明</strong>」。核心材料是 <span class="mono">rag/docs/RAG-D07_数据源权威性与合规治理.md</span>（107KB，全仓最大未引用文档）+ <span class="mono">docs/重规划/RAG语料平台级治理_*</span> + <span class="mono">RAG-D11</span>。A5 讲过权限代码（RLS→ScopeFilter），本册聚焦<strong>数据本身的治理</strong>：信任等级、版权分级、版本坐标、审计、租户作用域、BYPASSRLS 运维通道。</p>
+  <div class="callout c-danger"><span class="ct">第一件事：D07 的数据基线已经不存在了</span><p>D07 封面写「数据依据 = <span class="mono">rag/rag-infrastructure/.../db/migration/V1__rag_corpus_baseline.sql</span>，<strong>11 表 / 10 条 RLS</strong>」。该 migration 目录<strong>现已删除</strong>（与 platform 侧迁移链已删同理）。现库结构唯一权威源是 <span class="mono">deploy/sql/rag/01_rag_ddl.sql</span>（1555 行 pg_dump 终态快照）+ 增量 <span class="mono">05~13_*.sql</span>。<strong>因此 D07 登记的多个「🔴 未实现」缺口，已被后续基线补上</strong>——本册对「已实现」的认定<strong>以代码 / DDL / 测试为准</strong>，并单列与 D07 文档的口径冲突。<span class="tag t-conflict">文档冲突</span></p></div>
+
+  <h3 id="a8-1">A8.1 信任等级：TrustTier 五级与冲突仲裁语义</h3>
+  <p><span class="tag t-live">已实现</span> <span class="mono">rag-core/.../source/TrustTier.java</span> 定义五个权威等级，Java 后端要理解「等级不表示内容正确，只表示在出版/审校链条上的位置」：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">rag/rag-core/src/main/java/cn/studykid/rag/core/source/TrustTier.java</span><button>复制</button></div><pre><code>OFFICIAL_PUBLISHER(4)   官方出版社
+OFFICIAL_TUTORIAL(3)    官方教辅
+PEER_REVIEWED_PAPER(2)  同行评议论文
+PREPRINT(1)             预印本
+UNVERIFIED(0)           未验证
+
+meets()                       // 门槛判定
+standaloneSupportAllowed()    // 仅前两级 true：return this == OFFICIAL_PUBLISHER
+                              //                    || this == OFFICIAL_TUTORIAL;</code></pre></div>
+  <p>类注释即规则来源（行 21–29）：冲突仲裁「<strong>高等级优先；同等级冲突必须并列呈现并标注分歧，不允许静默择一</strong>」。测试 <span class="mono">KnowledgePointAndAuthorityTest</span> 覆盖 6 项断言（D07 §0.1）。</p>
+  <p><strong>校验状态机</strong> <span class="tag t-live">已实现</span>：<span class="mono">rag-core/.../source/SourceVerification.java</span> 定义 <span class="inline-code">VerificationStatus</span>（PENDING / IN_REVIEW / VERIFIED / REJECTED / REVOKED，行 69–80）与 <span class="inline-code">VerificationMethod</span>（NONE / ISBN / DOI / MANUAL_REVIEW / OFFICIAL_HASH，行 83–94）。关键不变量：<span class="inline-code">indexable()</span> 仅 VERIFIED 为真（行 53–55）；<span class="inline-code">isStale(validDays)</span> 判失效（行 61–66）；<strong>构造器强制 VERIFIED 必须有 evidenceRef + verifiedAt</strong>（行 38–44）——这是 fail-closed 在领域对象层的体现，不容许「凭空可信」。</p>
+  <p><strong>三轴字段拆分</strong> <span class="tag t-live">已实现</span>：<span class="mono">deploy/sql/rag/01_rag_ddl.sql</span> 的 <span class="inline-code">rag_source</span>（行 672–710）含 <span class="inline-code">trust_tier</span> / <span class="inline-code">ver_status</span> / <span class="inline-code">ver_method</span> / <span class="inline-code">ver_evidence</span> / <span class="inline-code">verified_at</span> / <span class="inline-code">verified_by</span> / <span class="inline-code">ver_valid_days DEFAULT 365</span> / <span class="inline-code">license_status</span> / <span class="inline-code">object_ref</span> / <span class="inline-code">content_hash</span>；约束 <span class="inline-code">rag_source_identifier_chk</span>（教材/教辅须有 ISBN，论文/预印本须有 DOI）、<span class="inline-code">rag_source_verified_requires_evidence_chk</span>、<span class="inline-code">rag_source_ver_valid_days_chk</span>。</p>
+  <div class="callout c-warn"><span class="ct">D07 说「license_status 是 TEXT，V2 改枚举」——已经不是了</span><p>DDL 行 154 已是 <span class="inline-code">CREATE TYPE rag_license_status AS ENUM</span>。这类「设计文档写未来时、代码已到下一版」的漂移在本专题反复出现（另见 <a href="#a8-5">A8.5</a> 载体级状态、<a href="#a8-7">A8.7</a> 启动自检）。</p></div>
+
+  <h3 id="a8-2">A8.2 版本坐标与生效机制：五轴 + 时间窗</h3>
+  <p>权威性不是一维的。同一本教材有不同年级、学期、版本体系，检索时必须能区分「2024 沪教版七年级上」与「2019 人教版七年级上」。<span class="tag t-live">已实现</span></p>
+  <div class="grid2">
+    <div class="card"><h4>五轴坐标 EditionCoordinate</h4><p><span class="inline-code">(subject, grade, term, publisher, revisionCode)</span>；<span class="mono">rag_edition</span>（DDL 行 497–515）五轴唯一 <span class="inline-code">rag_edition_unique</span>；<span class="inline-code">rag_edition_term_chk</span> 约束「上册/下册/全一册」。</p></div>
+    <div class="card"><h4>生效时间窗</h4><p><span class="inline-code">effective_from / effective_to</span>（D07 §5.1）；作用域模式枚举 <span class="inline-code">STRICT / PREFERRED_WITH_FALLBACK / CROSS_EDITION</span>（DDL 行 115–119），控制跨版本回退策略。</p></div>
+    <div class="card"><h4>落地改造 D16</h4><p><span class="mono">RAG-D16_版本五轴落库改造说明.md</span> §3.1 <span class="inline-code">SourceRegistration</span>、§3.4 <span class="inline-code">registerSource</span> 同事务落库；§6 新增测试覆盖 <strong>10 项</strong>。</p></div>
+    <div class="card"><h4>出版社 ≠ 出版机构</h4><p><span class="inline-code">rag_source.publisher</span> = 出版机构（上海教育出版社）；<span class="inline-code">rag_edition.publisher</span> = 版本体系（沪教版）。<strong>不可互换</strong>，D07 与 12 号回填脚本均强调。</p></div>
+  </div>
+  <p><strong>回填纪律</strong>：<span class="mono">12_backfill_edition_axes.sql</span> 把占位五轴按标题推断回填，带<strong>枚举越界断言</strong>（行 111–131，越界则回滚，防检索 500）；<span class="inline-code">revision_code</span> 从 <span class="inline-code">src-&lt;来源ID&gt;</span> 改为「<strong>历史存量（未标注版次）</strong>」（行 107–109）。这是「不臆测」的优雅处理：不确定的版本不编一个假值，而是显式标注未标注。</p>
+
+  <h3 id="a8-3">A8.3 检索期四轴硬过滤：ADMISSIBLE_TEMPLATE 单一真源</h3>
+  <p>这是 D07 目标语义「权威闸门」在代码里的最终形态，也是 A7.7 展开过的常量。这里从<strong>治理视角</strong>再看一遍：六处检索 SELECT 共用一条谓词模板，任何一处想绕过都必须改这个唯一常量。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">sql</span><span class="file">rag-persistence/.../JdbcRetrievalRepository.java 行 153–161（6 处 SELECT 共用）</span><button>复制</button></div><pre><code>AND src.ver_status = 'VERIFIED'          -- G-0 来源已校验
+AND doc.ver_status = 'VERIFIED'          -- G-0 载体已校验
+AND doc.retrievable                       -- 载体未被撤回
+AND src.license_status IN ('LICENSED','FAIR_USE_QUOTATION')  -- G-4 来源版权
+AND doc.license_status IN ('LICENSED','FAIR_USE_QUOTATION')  -- G-4 载体版权
+AND src.verified_at + make_interval(days =&gt; src.ver_valid_days) &gt;= now()  -- staleness
+AND src.trust_tier IN (%s)               -- G-3 权威门槛，meets() 展开</code></pre></div>
+  <p>门槛来自<strong>服务端配置</strong> <span class="inline-code">rag.retrieval.min-trust-tier</span>（默认 <span class="inline-code">OFFICIAL_TUTORIAL</span>），<strong>绝不读请求头</strong>（行 143–146）——否则租户可以自带请求头绕过权威门槛。等级用 <span class="inline-code">TrustTier.meets()</span> 展开 <span class="inline-code">IN</span> 列表，规避 PG 枚举声明序反转（A7.7 的 10-27 真实踩坑）。</p>
+  <table>
+    <thead><tr><th style="width:18%">轴</th><th>治理目标</th><th>代码落点</th></tr></thead>
+    <tbody>
+      <tr><td>G-0 两级校验</td><td>来源与载体<strong>各自</strong> VERIFIED 且载体 retrievable，防止「来源可信但载体被撤」</td><td class="mono">ADMISSIBLE_TEMPLATE 前 3 行</td></tr>
+      <tr><td>G-4 版权</td><td>两级版权都必须在显式白名单内；<span class="inline-code">PENDING</span> 不再被当作可用</td><td class="mono">第 4–5 行（11-10 修复）</td></tr>
+      <tr><td>staleness</td><td>校验有效期 <span class="inline-code">ver_valid_days</span>（默认 365 天），过期自动失去检索资格</td><td class="mono">第 6 行</td></tr>
+      <tr><td>G-3 权威门槛</td><td>部署级最低信任等级；不用 DB 枚举大小比较</td><td class="mono">第 7 行 + TrustTier.meets()</td></tr>
+      <tr><td>作用域（附加）</td><td>全局语料双作用域 <span class="inline-code">c.tenant_id IN (rag_current_tenant(), rag_global_tenant_id())</span></td><td class="mono">6 处 SELECT 均含</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-violet"><span class="ct">逐租户差异化门槛仍未落地</span><p><span class="tag t-gap">证据空白</span> V1.0.2 前置依赖 <span class="inline-code">rag_tenant.min_trust_tier</span> 字段，但全 <span class="mono">deploy/sql</span> 无 <span class="inline-code">rag_tenant</span> / <span class="inline-code">min_trust_tier</span> / <span class="inline-code">min-trust-tier</span> 任何匹配；代码多处注释「待 RAG-R23 落地」（<span class="mono">RagManagementController.java</span> 行 130、<span class="mono">RagInfrastructureConfig.java</span> 行 299）。当前只有<strong>部署级</strong>统一门槛，没有租户级差异化。<span class="tag t-conflict">编号漂移</span> 此处 RAG-R23 与 D07 的 RAG-R23（表数基线）不是同一件事。</p></div>
+
+  <h3 id="a8-4">A8.4 入库期闸门：抽检、载体不高于来源、职责分离</h3>
+  <p>检索期闸门挡住「不该被看到的」，入库期闸门挡住「不该被签发的」。<span class="tag t-live">已实现</span> 三道代码级防线：</p>
+  <div class="grid2">
+    <div class="card"><h4>InspectionGuard（抽检闸门）</h4><p><span class="mono">rag-persistence/.../management/core/InspectionGuard.java</span>：抽检 <span class="inline-code">PASSED</span> 才可签 VERIFIED（行 78–80）；<strong><span class="inline-code">NOT_REQUIRED</span> 也不放行</strong>（行 68–73）；<span class="inline-code">requireInspectionPassed()</span>（行 92–99）。「没要求抽检」≠「通过抽检」——这正是 fail-closed。</p></div>
+    <div class="card"><h4>DocumentVerification（载体级）</h4><p><span class="mono">.../management/core/DocumentVerification.java</span>：<span class="inline-code">requireSourceAllowsVerified()</span> 要求「<strong>载体不得高于来源</strong>」（行 98–109）；<span class="inline-code">retrievableAfter()</span> 仅 VERIFIED 为真（行 121–123）；状态机复用 <span class="inline-code">VerificationTransition</span>（行 80–84）。</p></div>
+    <div class="card"><h4>SegregationOfDuties（职责分离）</h4><p><span class="mono">.../management/core/SegregationOfDuties.java</span>：审核员 ≠ 采集员 + VERIFIED 须双人复核（行 92–112）；角色名约定 <span class="inline-code">REVIEWER/AUDITOR/SUPERADMIN/RAG_CORPUS_GOVERNANCE</span>（行 168–189）；平台/租户主体类型不可互冒（行 35–42）。</p></div>
+    <div class="card"><h4>DDL 支撑</h4><p><span class="mono">06_v1_0_2_s3_alter.sql</span> → <span class="inline-code">rag_inspection_record</span> + <span class="inline-code">inspection_status</span> CHECK；<span class="mono">08_..._reviewer_roster_alter.sql</span> → <span class="inline-code">rag_reviewer_roster</span>（含 <span class="inline-code">can_co_sign</span> CHECK）；<span class="mono">07_..._metadata_confirm_alter.sql</span> → <span class="inline-code">metadata_confirmed/_at/_by</span>（默认 false，fail-closed）。</p></div>
+  </div>
+  <div class="callout c-info"><span class="ct">D07 说这些是「未实现」，已经被补上了</span><p>D07 §8 风险登记册 RAG-R01/R02 记「检索/入库路径无权威闸门」，FR-RAG-014/015 记「启动自检未实现」——代码侧 <span class="inline-code">ADMISSIBLE_TEMPLATE</span> 与 <span class="inline-code">RagStartupSelfCheck</span>（见 <a href="#a8-7">A8.7</a>）均已实现。<strong>读 D07 时务必把「🔴 未实现」当成 2026-10 时点的快照，而不是当前结论。</strong></p></div>
+
+  <h3 id="a8-5">A8.5 合规治理：版权分级、审计追加写、保留与删除边界</h3>
+  <p><strong>版权分级</strong> <span class="tag t-live">已实现</span>：<span class="inline-code">rag_license_status</span> 四值枚举，检索白名单仅 <span class="inline-code">LICENSED / FAIR_USE_QUOTATION</span>（A8.3）；<span class="inline-code">CorpusSource.licensePermitsRetrieval()</span>（行 149–151）。撤回时强制 <span class="inline-code">license_status='RESTRICTED'</span> 并级联下架载体（<span class="mono">JdbcCorpusManagementRepository.java</span> 行 722–732、775–800）。<span class="tag t-doc">仅设计</span> 四值判定标准、短引文长度上限、受限语料引用表现、授权续期与 <span class="inline-code">object_ref</span> 治理（D07 §4.2–4.5）均标「待法务确认」。</p>
+  <p><strong>审计与追溯</strong> <span class="tag t-live">部分已实现</span>：<span class="inline-code">rag_access_audit</span>（DDL 行 281–291）的 <span class="inline-code">action</span> CHECK 含 <strong>7 值</strong> <span class="inline-code">RETRIEVE/INGEST/CITE/EXPORT/REVOKE/ADMIT/REJECT</span>（比 D07 记的 5 值多 ADMIT/REJECT，V3 迁移）；触发器 <span class="inline-code">trg_rag_audit_append_only</span>（行 1130）+ <span class="inline-code">rag.forbid_rag_audit_mutation()</span>（行 217–221）保证追加不可改。写入实现：<span class="inline-code">appendAuditWithinTenant()</span>（与状态变更同事务，行 803–830）、<span class="inline-code">JdbcTenantScopedRetrieval</span> 检索动作 INSERT（行 57–59）、平台票据 <span class="inline-code">platform_audit_event.ticket_scope</span>（<span class="mono">01_platform_ddl.sql</span> 行 1076–1077）。</p>
+  <div class="callout c-ok"><span class="ct">设计正确：审计表天然不存敏感原文</span><p><span class="inline-code">rag_access_audit</span> 只有 <span class="inline-code">request_digest CHAR(64)</span>，<strong>没有</strong> <span class="inline-code">query</span> / <span class="inline-code">chunk.text</span> / <span class="inline-code">verbatim_quote</span> 列（DDL 行 281–291），从结构上满足 D07 §7.4「审计不落正文」的要求。这比「约定不要写正文」更可靠——<strong>没有列，就写不进去</strong>。</p></div>
+  <p><strong>保留与删除</strong>需要区分两个 reactor，这是最容易搞混的边界：</p>
+  <table>
+    <thead><tr><th style="width:16%">侧</th><th>已实现</th><th>证据空白 / 冲突</th></tr></thead>
+    <tbody>
+      <tr><td><strong>platform 侧</strong><br><span class="tag t-live">已实现</span></td><td><span class="mono">RetentionPurgeService.java</span> / <span class="mono">RetentionJob.java</span> / <span class="mono">JdbcErasureRepository.java</span>；表 <span class="inline-code">consent_withdrawal</span> / <span class="inline-code">erasure_certificate</span>；触发器 <span class="inline-code">forbid_audit_mutation()</span> 受控通道 <span class="inline-code">current_setting('agent.retention.actor', TRUE)</span>。四类保留期：学习画像 12 月（删行）、Prompt/工具结果 90 天（字段置空 <span class="inline-code">'{}'</span>）、审计 180 天（受控删）、Trace 30 天（删行）。实测 20 项 IT + 6 项连通性 + 4 组反证。</td><td>受控通道 GUC 可自设（评估文档 §7 P2-2 仍列为风险）。</td></tr>
+      <tr><td><strong>rag 侧</strong><br><span class="tag t-gap">证据空白</span></td><td>撤回走状态流转：写 <span class="inline-code">ver_status='REVOKED'</span>、<span class="inline-code">retrievable=false</span>、<span class="inline-code">revoked_at/now()</span>、<span class="inline-code">license_status='RESTRICTED'</span>（行 790–800），级联下架全部载体。<strong>没有物理删除语义</strong>（<span class="mono">04_rag_ops_role.sql</span> 行 31：「一张表都不给 DELETE：语料治理没有删除语义」）。</td><td>保留期清理作业 / 审计受控清理 / <span class="inline-code">rag_answer_citation ≥ 12 月</span> 配置全查不到（<span class="mono">rag/</span> 下无 Retention/Purge/Erasure 文件）。审计表追加写触发器<strong>禁止 DELETE 且无受控通道</strong>。</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn"><span class="ct">未关闭的删除风险（D07 RAG-R04 / RAG-R05）</span><p><span class="tag t-conflict">文档冲突</span> D07 §5.5 INV-4-a/b 要求 V2 加<strong>禁删触发器</strong>并改 <span class="inline-code">ON DELETE RESTRICT</span>；现 DDL <strong>仍无</strong> rag_source/edition/document/chunk 的禁删触发器（仅审计表有），且级联链全部 <span class="inline-code">ON DELETE CASCADE</span>（行 1138–1210，其中 <span class="inline-code">rag_citation_chunk_fk ... ON DELETE CASCADE</span> 行 1154）。<strong>物理删 chunk 仍会静默抹除历史引用</strong>。另 <span class="inline-code">rag_answer_citation.invalidated_at/invalid_reason</span>（D07 §5.4 要求）DDL 中查不到；<span class="inline-code">verbatim_quote</span> CHECK 非空（行 312）与「撤回后脱敏置空」仍冲突。RAG 侧删除治理<strong>尚未闭环</strong>。</p></div>
+
+  <h3 id="a8-6">A8.6 租户三档作用域：TENANT / PLATFORM / ALL</h3>
+  <p><span class="tag t-live">已实现</span>（与 A5 的权限代码不同，这里讲<strong>数据作用域模型</strong>）。<span class="mono">rag-core/.../scope/RagScope.java</span> 定义 <span class="inline-code">GLOBAL_TENANT_ID = "00000000-0000-0000-0000-000000000000"</span>（行 40）与 <span class="inline-code">isGlobalTenant()</span>（行 53–55）；<span class="inline-code">RagCorpusScope</span> 定义 TENANT / PLATFORM / ALL 三档。</p>
+  <div class="grid2">
+    <div class="card"><h4>8 张表双作用域</h4><p><span class="inline-code">rag_source/edition/document/chunk/chunk_embedding/knowledge_point/knowledge_prerequisite/dictionary</span>（D11 §2）。每张有 <span class="inline-code">scope TEXT DEFAULT 'TENANT'</span> + <span class="inline-code">*_scope_ck CHECK((PLATFORM ⇔ tenant_id=哨兵) OR (TENANT ⇔ tenant_id≠哨兵))</span>。</p></div>
+    <div class="card"><h4>读 / 写分策略</h4><p>读 <span class="inline-code">tenant_id IN (rag_current_tenant(), rag_global_tenant_id())</span>；写/改/删 <span class="inline-code">rag_current_tenant()</span> 且写/改带 <span class="inline-code">scope='TENANT'</span>（DDL 行 1229–1547）。审计/引用/job 仍单条严格相等。</p></div>
+    <div class="card"><h4>两层过滤同步（守卫钉死）</h4><p><span class="mono">JdbcRetrievalRepository</span> 的 SQL 双作用域谓词 + <span class="mono">RetrievalRepositoryIT#sqlPredicateLayerMustKeepPaceWithRls</span> 断言「差值必须是 1」——防止 SQL 层与 RLS 层不同步导致跨租户泄漏。</p></div>
+    <div class="card"><h4>管理面三档上下文</h4><p><span class="mono">RagManagementContext.forTenant/forPlatform/forAll</span>：<span class="inline-code">sessionTenantId()</span>（平台档 null）与 <span class="inline-code">queryTenantId()</span>（平台档哨兵）<strong>刻意不同值</strong>（行 97–118）；<span class="inline-code">requireTenant()</span> 非租户档抛 ISE（行 131–139）。</p></div>
+  </div>
+  <p><strong>API 与边界</strong>：<span class="mono">RagManagementController.SCOPE_HEADER = RagCorpusScope.HEADER</span>（即 <span class="inline-code">X-Rag-Scope</span>，行 141）；所有写端点走 <span class="inline-code">requireWriteContext(...)</span>；<strong>ALL 档跨租户盘点一律返回 501</strong>（类注释行 80），前端置灰，未接入通道归 503。<span class="mono">RagTenantContext</span> 构造器拒哨兵。</p>
+  <div class="callout c-info"><span class="ct">作用域加固：哨兵作会话身份直接 RAISE 42501</span><p><span class="mono">01_rag_ddl.sql</span> 行 230–254 的 <span class="inline-code">rag_current_tenant()</span> 已加固：若会话身份是哨兵则 <span class="inline-code">RAISE 42501</span>（insufficient_privilege），堵住「用全局哨兵冒充当前租户」的越权路径。<span class="inline-code">rag_global_tenant_id()</span>（行 261–270）只返回哨兵常量。</p></div>
+
+  <h3 id="a8-7">A8.7 rag_ops BYPASSRLS 通道：边界三道与启动自检</h3>
+  <p>全局语料要跨租户写，必须有一个 BYPASSRLS 通道。这是 A5 讲过的「平台级对象带外运维」在 RAG 侧的具体形态，<strong>也是权限风险最高的地方</strong>。</p>
+  <div class="code-block"><div class="code-head"><span class="lang">sql</span><span class="file">deploy/sql/rag/04_rag_ops_role.sql 行 68–93、123–150</span><button>复制</button></div><pre><code>CREATE ROLE %I LOGIN NOSUPERUSER BYPASSRLS
+    NOCREATEDB NOCREATEROLE NOINHERIT;
+
+-- 一张表都不给 DELETE：语料治理没有删除语义。
+-- 授权：全库 SELECT；仅 6 张表 INSERT/UPDATE；rag_inspection_record 只 INSERT；
+--       新增表默认只 SELECT（ALTER DEFAULT PRIVILEGES）。</code></pre></div>
+  <p><span class="tag t-conflict">文件名口径漂移</span>：D11 / 重规划方案写 <span class="mono">05_rag_ops_role.sql</span>，实际文件是 <span class="mono">04_rag_ops_role.sql</span>。应用角色 <span class="inline-code">rag_app</span> 严禁 BYPASSRLS。</p>
+  <p><strong>边界三道（应用侧结构约束）</strong> <span class="tag t-live">已实现</span>：DDL 注释行 17–24 诚实写明「<strong>数据库层不再限制它写哪个桶，限长完全由应用侧三道结构约束承担</strong>」。</p>
+  <ol>
+    <li><span class="mono">rag-persistence/.../ops/GuardedRagOpsDataSource</span>：窗口外取连接抛（行 34–38）；拒外部凭据（行 44–48）。</li>
+    <li><span class="inline-code">RagOpsSessionPort.inGlobalCorpusSession()</span>：方法名写死 Global，不接收租户参数，SQL 用 <span class="inline-code">rag_global_tenant_id()</span> 字面函数（行 15–18、48）。另有 <span class="inline-code">RagOpsDataSourceProvider / RagOpsSessionGuard / RagOpsConfiguration / RagOpsUnavailableException</span>。</li>
+    <li>独立运维连接池 <span class="mono">JdbcCorpusRepository.saveChunkAndEmbeddingInGlobalBucket()</span>（行 338–406）+ <span class="inline-code">requireOpsSession()</span>（行 426–432），无 DELETE 权限。</li>
+  </ol>
+  <p><strong>启动自检</strong> <span class="tag t-live">已实现</span>：<span class="mono">rag-persistence/.../bootstrap/RagStartupSelfCheck.java</span> 检查 pgvector、连接角色<strong>非 superuser 且非 BYPASSRLS</strong>（行 96–129）、<span class="inline-code">rag_current_tenant</span>/<span class="inline-code">rag_global_tenant_id</span> 存在、rag_chunk RLS 启用、fail-closed 探针 <span class="inline-code">SELECT count(*) FROM rag_chunk WHERE scope &lt;&gt; 'PLATFORM'</span>（行 182–189）、<strong>运维角色与主数据源角色互斥</strong>（<span class="inline-code">checkOpsRoleSeparation/assessOpsRoleSeparation</span> 行 195–251）、库结构版本一致（行 253–338）。任一项失败抛 <span class="inline-code">IllegalStateException</span> 中止启动（行 85–89）。这正是 A5 提到的 `RagStartupSelfCheck` 与 D07「FR-RAG-014/015 自检未实现」的口径差。</p>
+  <p><strong>反证与巡检</strong>：P13 组 26 条实测（<span class="mono">scripts/rag-corpus-scope-counterproof.sh</span> 行 578–609）证明「ops 写得进哨兵桶 / 删不动任何行 / 读得到全部租户私有行」；只读巡检脚本 <span class="mono">scripts/check-rag-ops-role.sh</span> 13 项，退出码 0/1/2。</p>
+  <p><strong>平台治理票据</strong> <span class="tag t-live">已实现</span>：<span class="mono">platform/agent-api/.../PlatformRagGovernanceTicketService.java</span> 四道闸门（授权 <span class="inline-code">platform.resource.manage</span> on <span class="inline-code">rag_corpus</span>、配置开关、档位仅 PLATFORM、按平台主体限流），TTL <strong>60~900s</strong>（行 96–107），审计落 <span class="inline-code">ticket_scope</span>（行 280–299）。票据只在内存（<span class="mono">admin-console/src/api/ragTicket.ts</span>）。</p>
+
+  <h3 id="a8-8">A8.8 两份「未实现」提案：平台目录 Gate 与 admin-console 松绑</h3>
+  <table>
+    <thead><tr><th style="width:24%">提案</th><th>目标与机制</th><th style="width:24%">当前状态</th></tr></thead>
+    <tbody>
+      <tr><td><strong>平台级目录完整性纳入 Gate</strong><br><span class="mono">docs/重规划/平台级目录结构完整性纳入Gate方案.md</span>（228 行，标「提案（待评审）」）</td><td>8 条不变量 <span class="inline-code">HI-1~HI-8</span>（指针完整性 / 引用可达性 / 传递闭包 / 无悬空引用 / 三态不被归一化 / 凭据引用不被静默清空 / 生命周期与发布状态不矛盾 / 孤儿节点）+ 7 个 <span class="inline-code">CATALOG_*</span> 原因码；三个落点：配置期 <span class="inline-code">ConfigValidationGate</span>、架构期 <span class="inline-code">MultiAgentSchemaStructureTest</span>、巡检期 <span class="mono">scripts/catalog-health-check.sh</span>。动机：平台级三张表 <span class="inline-code">cap_tool_def/cap_skill_def/cap_mcp_server_def</span> 是 <span class="inline-code">namespace='platform'</span>、无 <span class="inline-code">tenant_id</span>、无 RLS，逐行 taint 物理上不适用；「局部操作、全局后果、每一行都合法」的传染缺陷。</td><td><span class="tag t-gap">证据空白（未实现）</span> <span class="inline-code">ConfigValidationGate.java</span> 实读只有 <span class="inline-code">validateScopeConsistency / TwoPersonReview / RiskLevels / McpServers / HttpTools / AgentInstructions</span>，无 <span class="inline-code">validateCatalogIntegrity</span>；巡检脚本不存在；<span class="inline-code">CatalogIntegrityChecker</span> 与 <span class="inline-code">CATALOG_*</span> 在 platform/admin-console/scripts 零命中。</td></tr>
+      <tr><td><strong>admin-console Agent 操作租户绑定松绑</strong><br><span class="mono">docs/重规划/admin-console_Agent操作_租户绑定松绑方案.md</span>（359 行）</td><td>S0 平台级（不需要租户/Agent）、S1 租户级（显式 <span class="inline-code">target_tenant_id</span>）、S2 执行级（拆分选租户与选 Agent）；推荐路径 A（平台链 + 显式路径参数）。红线 4 条：执行必须指名 Agent、票证必须指名租户成员、票证只在内存、平台不写租户私有 Agent 配置。动机：把「租户」从「由 Agent 反推」的隐式前置降级为显式可选作用域（现 <span class="mono">AgentLabPage.tsx</span> 行 258 <span class="inline-code">ticketTenantId = selectedAgent?.tenantId ?? ''</span>）。</td><td><span class="tag t-gap">证据空白（未落地）</span> <span class="mono">AgentLabPage.tsx</span> 仍是原写法；<span class="inline-code">executionTenantId</span> 零命中；<span class="mono">tests/agentLabScope.test.tsx</span> 不存在；platform 的 <span class="inline-code">/tenants/{tenantId}/agents/**</span> S1 读端点未找到。方案自述「落地前需经 Q1–Q4 拍板」。</td></tr>
+    </tbody>
+  </table>
+  <p class="table-note">注意区分：RAG 侧的<strong>语料</strong>三档作用域<strong>已实现</strong>（A8.6）；本节的「松绑」是 <strong>admin-console 的 Agent 操作</strong>，未实现。两者都涉及「平台 vs 租户」，但不是同一件事。</p>
+
+  <h3 id="a8-9">A8.9 代码落地对照总表与未找到证据</h3>
+  <p>把本册所有主题按「已实现 / 仅设计 / 证据空白 / 冲突」四档汇总，便于现场核对。</p>
+  <table>
+    <thead><tr><th style="width:18%">主题</th><th style="width:34%">代码 / DDL 证据</th><th>仅文档 / 空白 / 冲突</th></tr></thead>
+    <tbody>
+      <tr><td>权威等级</td><td><span class="inline-code">rag_source.trust_tier</span> + enum <span class="inline-code">rag_trust_tier</span>；<span class="mono">TrustTier.java</span> / <span class="mono">SourceVerification.java</span>；<span class="mono">KnowledgePointAndAuthorityTest</span></td><td>冲突仲裁<strong>展示</strong>语义（同等级并列呈现）仅设计；D07「闸门未实现」↔ <span class="inline-code">ADMISSIBLE_TEMPLATE</span> 已四轴</td></tr>
+      <tr><td>版权分级</td><td>enum <span class="inline-code">rag_license_status</span>；<span class="inline-code">licensePermitsRetrieval()</span>；撤回强制 RESTRICTED</td><td>四值判定标准 / 短引文长度 / 法务结论「待确认」；D07「TEXT 改枚举」↔ 已是枚举</td></tr>
+      <tr><td>载体层</td><td><span class="inline-code">rag_document.ver_status/retrievable/revoked_at/revoked_reason/license_status</span> + <span class="inline-code">rag_document_retrievable_idx</span>；<span class="mono">DocumentVerification.java</span></td><td>D07 §2.6/RAG-R20「载体无状态字段、撤回无法表达」↔ <strong>已实现</strong></td></tr>
+      <tr><td>版本</td><td><span class="inline-code">rag_edition</span> 五轴 + <span class="inline-code">rag_edition_unique</span> + <span class="inline-code">effective_from/to</span>；<span class="mono">RAG-D16</span></td><td>旧新版优先级三档模式（RD-04，D05 待写）</td></tr>
+      <tr><td>审计</td><td><span class="inline-code">rag_access_audit</span>（7 种 action）+ <span class="inline-code">trg_rag_audit_append_only</span>；<span class="inline-code">appendAuditWithinTenant</span> / <span class="inline-code">JdbcTenantScopedRetrieval</span>；<span class="inline-code">ticket_scope</span></td><td>180 天保留期作业 / 外部锚定 / 读取正文 action / <span class="inline-code">document_id</span> 列均证据空白；D07「5 种 action / 无审计写入」↔ 7 种 + 已写入</td></tr>
+      <tr><td>撤回</td><td>状态流转 + 级联下架载体（行 790–800）；<span class="inline-code">VerificationTransition</span></td><td><span class="inline-code">invalidated_at/invalid_reason</span> / 禁删触发器 / <span class="inline-code">ON DELETE RESTRICT</span> 均空白，RAG-R04/R05 未关闭</td></tr>
+      <tr><td>三档作用域</td><td><span class="mono">RagScope.java</span> / <span class="mono">RagCorpusScope.java</span> / <span class="mono">RagManagementContext.java</span>；<span class="inline-code">scope</span> + <span class="inline-code">*_scope_ck</span>；读写分策略</td><td>ALL 档跨租户盘点 501（U-9）；<span class="mono">04_rag_ops_role.sql</span> 文件名 ≠ 方案的 <span class="mono">05_*</span></td></tr>
+      <tr><td>BYPASSRLS 通道</td><td><span class="mono">04_rag_ops_role.sql</span>；ops 五件套；<span class="mono">RagStartupSelfCheck</span>；P13 反证 + <span class="mono">check-rag-ops-role.sh</span></td><td>D07 FR-RAG-014/015「自检未实现」↔ 已实现</td></tr>
+      <tr><td>数据血缘</td><td><span class="inline-code">rag_answer_citation</span> 引用链（间接承载）</td><td>专门血缘表 / 字段 / 可视化：全仓 <span class="inline-code">lineage</span>/<span class="inline-code">血缘</span>/<span class="inline-code">事实源</span> 零命中</td></tr>
+      <tr><td>保留与删除</td><td>platform：<span class="mono">RetentionPurgeService</span> / <span class="mono">RetentionJob</span> / <span class="inline-code">consent_withdrawal</span> / <span class="inline-code">erasure_certificate</span>（P4-D04 真库实测）</td><td>RAG 侧无任何 Retention/Purge/Erasure 文件；D07 §7.3/7.5 建议未实现</td></tr>
+      <tr><td>目录完整性 Gate</td><td>无</td><td><span class="inline-code">CatalogIntegrityChecker</span> / HI-1~8 / <span class="inline-code">CATALOG_*</span> / <span class="mono">catalog-health-check.sh</span> 全查不到</td></tr>
+      <tr><td>admin-console 松绑</td><td>无</td><td><span class="inline-code">executionTenantId</span> / <span class="mono">agentLabScope.test.tsx</span> / S1 读端点全查不到</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn"><span class="ct">未找到证据 / 无法确认（严格单列）</span><p>① D07 声称的 <span class="mono">V1__rag_corpus_baseline.sql</span> <strong>不存在</strong>（11 表基线已被 <span class="mono">01_rag_ddl.sql</span> 约 15 表 + 增量取代）；② 数据血缘专用表/字段/代码零命中；③ <span class="inline-code">rag_answer_citation.invalidated_at</span> / <span class="inline-code">invalid_reason</span> 查不到；④ <span class="inline-code">rag_access_audit.document_id</span> 列查不到；⑤ RAG 侧保留期清理 / 审计受控清理通道查不到；⑥ 审计外部锚定查不到；⑦ 冲突自动识别链路（<span class="mono">GroundingService</span> 产 CONFLICTING）查不到——<span class="mono">GroundingVerdict.java</span> 只有枚举；⑧ 目录 Gate 与 admin-console 松绑的落点组件全部查不到；⑨ 法务对 L-A~L-I / RD-Q4 / 片段级正文入库合规边界的书面结论查不到；⑩ <span class="mono">rag_chunk</span> 上源状态冗余列（D07 §5.3.3 方案 3-A）查不到；⑪ 逐租户差异化权威门槛（RAG-R23）的 platform 下发字段未落地。</p></div>
+  <div class="evidence"><b>证据源：</b><span class="mono">rag/docs/RAG-D07_数据源权威性与合规治理.md</span>（1286 行）、<span class="mono">RAG-D00/D02/D11/D16/D21</span>、<span class="mono">docs/重规划/RAG语料平台级治理_第一刀/第二刀实测记录.md</span>、<span class="mono">docs/重规划/平台级目录结构完整性纳入Gate方案.md</span>、<span class="mono">docs/重规划/admin-console_Agent操作_租户绑定松绑方案.md</span>、<span class="mono">docs/P0/P4/P4-D04_数据保留与删除机制.md</span>、<span class="mono">deploy/sql/rag/01_rag_ddl.sql</span> + <span class="mono">03/04/05~13_*.sql</span>、<span class="mono">deploy/sql/platform/01_platform_ddl.sql</span>，以及 <span class="mono">rag-core/</span>、<span class="mono">rag-persistence/</span>、<span class="mono">rag-management/</span>、<span class="mono">platform/agent-api/</span> 源码。</div>
+  <div class="callout c-ai"><span class="ct">迁移提示：治理不是「加字段」，是「可证伪的不变量」</span><p>Java 后端容易把合规理解为「表里加个 status 字段」。本册展示的是另一套：信任等级与版权分级是<strong>领域模型 + DDL 约束 + 检索 SQL 硬过滤</strong>三处一致；审计用<strong>触发器禁止 UPDATE/DELETE</strong>而不是靠约定；运维通道用<strong>独立连接池 + 方法名写死 Global + 启动自检</strong>而不是靠代码审查；作用域用 <strong>CHECK 约束 + 两层过滤同步守卫</strong>而不是靠 Repository 自觉。可复用的是「把不变量写进结构与守卫」；需要补的是「文档会滞后于代码三个版本」的时点意识——<strong>现场一定以可执行物为准</strong>。</p></div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-07-corpus-engineering.html"><span class="pn-label">← 上一册</span><span class="pn-title">A7 · RAG 语料工程化与数据流水线</span></a>
+  <a class="pn-right" href="ai-09-quality-assurance.html"><span class="pn-label">下一册 →</span><span class="pn-title">A9 · 测试、守卫与质量保障体系</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A17 · AI 测试工程与故障注入 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-17-test-engineering" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A17 · AI 测试工程与故障注入</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 十九册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A17 · AI 测试工程与故障注入 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">Fake 网关七态故障注入、假密钥证明脱敏、错误归一化契约矩阵、IT 独立库与守门写法、源码级守卫的边界、CI 反假绿四件套</p>
+  <div class="ph-meta"><span>覆盖：A17.1–A17.10</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a17">
+  <div class="breadcrumb"><b>AI 专题 · A17</b> / AI 测试工程与故障注入</div>
+  <h2><span class="num">A17.</span> AI 测试工程与故障注入：无网络、无凭据、可证伪</h2>
+  <p><a href="ai-09-quality-assurance.html">A9</a> 讲的是<strong>质量保障体系</strong>——三级验收、27 个守卫、37 个反证脚本、CI 判绿口径；本册讲更下一层、也更可复用的东西：<strong>怎么写一个 AI 系统的测试</strong>。核心矛盾是：AI 测试不能依赖真实供应商（要凭据、会抖动、行为会变），但「不依赖真实供应商」很容易滑向「测了个假的」。本册的答案是一套可执行的工程手法——<strong>故障注入式契约测试</strong>：用 Fake 网关注入七种失败形态，用假密钥把脱敏写成断言，用独立库把「隔离」变成可验证命题。</p>
+  <div class="callout c-info"><span class="ct">本册与 A9 的分工</span><p><a href="ai-09-quality-assurance.html">A9</a>：体系视角（有几层防线、多少个守卫、CI 怎么判绿、成熟度评估）。本册：<strong>手法视角</strong>（一个测试该怎么写、断言什么、什么该用源码扫描、什么必须上真库）。两册交叉引用不重复：A9.2 的 IT 独立库制度在这里给出工程细节，A9.4 的「守卫怎么写才不失真」在这里给出可抄的范式。</p></div>
+
+  <h3 id="a17-1">A17.1 为什么 AI 测试必须 Mock 供应商：三条硬理由与一条边界</h3>
+  <p><code class="inline-code">FakeModelGateway</code> 的类注释把「用途」写得非常克制，值得逐字读（:14-22）：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">为什么需要 Fake（FakeModelGateway.java:14-22）</span><button>复制</button></div><pre><code>用途：让契约测试能在【无网络、无真实凭据】的前提下验证
+      「归一化」与「脱敏」是否正确。
+
+若直接对接真实供应商做测试：
+  · 既需要凭据（CI 无凭据环境直接跑不了）
+  · 也会因供应商行为变更而使测试不稳定
+
+边界：这是 PoC 的测试替身，【不得用于生产】。
+     真实实现继承 AbstractModelGateway 并覆写 invokeGuarded。</code></pre></div>
+  <p>三条理由里，第三条最容易被忽略：<strong>供应商行为变更</strong>。OpenAI 兼容不等于语义一致（<a href="ai-14-model-gateway.html#a14-8">A14.8</a> 的 MiniMax tool_call_id 事故就是活例），若测试直连供应商，供应商某天改一个字段，你的测试就红了——但这不代表你的代码坏了。测试应该断言<strong>你的归一化契约</strong>，而不是供应商的当下行为。</p>
+  <p>反过来，Fake 也有一个必须守住的边界：它<strong>不能证明「真实供应商下也对」</strong>。所以本项目的分层是——Fake 测归约与脱敏（纯逻辑），真库 IT 测持久化与隔离（<a href="#a17-5">A17.5</a>），真实供应商只在人工端到端走查时用一次并留下记录（<a href="ai-03-hard-problems.html#a3-4">A3.4</a> 的事故就是这样发现的）。<strong>三层各证各的，谁都不冒充谁。</strong></p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-infrastructure/.../model/FakeModelGateway.java:14-27</span>。</div>
+
+  <h3 id="a17-2">A17.2 七态故障注入：把「供应商会怎么坏」变成枚举</h3>
+  <p><code class="inline-code">FaultMode</code> 七态与 <code class="inline-code">ModelErrorKind</code> 六分类严格对应（外加 NONE），这不是巧合而是设计要求——<strong>每一种「供应商会怎么坏」都必须有枚举值</strong>，否则那类失败就没有测试覆盖：</p>
+  <table>
+    <thead><tr><th>FaultMode</th><th>模拟的真实场景</th><th>对应 kind</th><th>retryable</th><th>实现手法</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">NONE</td><td>正常返回</td><td>—</td><td>—</td><td>回放 cannedResponse（带 usage）</td></tr>
+      <tr><td class="mono">TIMEOUT</td><td>上游不响应</td><td>TIMEOUT</td><td><span class="tag t-live">true</span></td><td><strong>睡到 timeout+500ms</strong>，由外层 <code class="inline-code">callWithTimeout</code> 中断它——测的是超时控制本身，不是 sleep</td></tr>
+      <tr><td class="mono">RATE_LIMITED</td><td>429 限流</td><td>RATE_LIMITED</td><td><span class="tag t-live">true</span></td><td>异常消息含 <code class="inline-code">api-key=&lt;FAKE_SECRET&gt;</code></td></tr>
+      <tr><td class="mono">PROVIDER_ERROR</td><td>500 内部错误</td><td>PROVIDER_ERROR</td><td><span class="tag t-live">true</span></td><td>异常消息含 <code class="inline-code">Authorization: Bearer &lt;FAKE_SECRET&gt;</code></td></tr>
+      <tr><td class="mono">INVALID_REQUEST</td><td>上下文超限 400</td><td>INVALID_REQUEST</td><td><span class="tag t-gap">false</span></td><td>「context length exceeded」——重试无意义</td></tr>
+      <tr><td class="mono">UNAUTHORIZED</td><td>401 密钥错</td><td>UNAUTHORIZED</td><td><span class="tag t-gap">false</span></td><td>「invalid api key: &lt;FAKE_SECRET&gt;」</td></tr>
+      <tr><td class="mono">CONTENT_BLOCKED</td><td>内容拦截</td><td>CONTENT_BLOCKED</td><td><span class="tag t-gap">false</span></td><td>「content blocked by safety policy」</td></tr>
+    </tbody>
+  </table>
+  <p>注意三种故障（RATE_LIMITED / PROVIDER_ERROR / UNAUTHORIZED）的异常消息里<strong>刻意塞了假密钥</strong>，这是下一节要讲的证明法。<span class="tag t-live">已实现</span></p>
+  <div class="evidence"><b>证据：</b> <span class="mono">FakeModelGateway.java:30-45</span>（FaultMode）、<span class="mono">:70-105</span>（七态实现与异常文案）。</div>
+
+  <h3 id="a17-3">A17.3 用假密钥证明脱敏：把安全属性写成可执行断言</h3>
+  <p>这是本册最值得抄走的一个范式。传统做法是「code review 检查脱敏逻辑有没有漏」，问题是：<strong>你无法证明它覆盖了所有路径</strong>。本项目的做法是把不可证伪的「我们做了脱敏」变成可证伪的断言：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">假密钥证明法（FakeModelGateway.java:47-48 + :83-98）</span><button>复制</button></div><pre><code>// 1. 在测试替身里放一个已知的假密钥
+private static final String FAKE_SECRET = "sk-fake1234567890abcdefghijklmn";
+
+// 2. 让它在异常消息里以真实泄露形态出现
+case RATE_LIMITED:
+    throw new ModelGatewayException(ModelErrorKind.RATE_LIMITED,
+            "HTTP 429 rate_limit_exceeded; api-key=" + FAKE_SECRET);
+case UNAUTHORIZED:
+    throw new ModelGatewayException(ModelErrorKind.UNAUTHORIZED,
+            "invalid api key: " + FAKE_SECRET);
+
+// 3. 契约测试断言：任何对外可见的字符串都不含 FAKE_SECRET
+//    （日志、safeMessage、异常 message、审计字段…逐面检查）
+//    → 若脱敏被绕过，测试立刻失败</code></pre></div>
+  <p>这个范式的三个要素缺一不可：<strong>①</strong> 假密钥必须是<strong>可识别的形态</strong>（<code class="inline-code">sk-</code> 前缀，能被 <a href="ai-14-model-gateway.html#a14-6">A14.6</a> 的双正则匹配）；<strong>②</strong> 必须出现在<strong>真实泄露会出现的那个位置</strong>（异常 message，而不是随便一个字段）；<strong>③</strong> 断言必须覆盖<strong>所有对外出口</strong>（<code class="inline-code">ModelGatewayContractTest</code> 对应 AT-MODEL-002「秘密不出现在日志」）。</p>
+  <div class="callout c-violet"><span class="ct">推广：这套手法不限于密钥</span><p>同一个思路可以证明任何「不该出现的东西不出现」：租户 A 的 tenantId 不出现在租户 B 的响应里（越权）、学生 PII 不出现在日志里（合规）、压缩态正文不出现在审计可信面（<a href="ai-15-streaming-sse.html#a15-3">A15.3</a> 的标量审计）。<strong>用一个哨兵值 + 全出口断言，把「应该不会」变成「证明不会」</strong>——这是 AI 系统里最划算的测试投资，因为这类泄露一旦发生不可撤销。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">FakeModelGateway.java:47-48, 83-98</span>；<span class="mono">ModelGatewayContractTest.java</span>（AT-MODEL-002 映射，类注释 :23-35）。</div>
+
+  <h3 id="a17-4">A17.4 错误归一化契约矩阵：六分类 × retryable 的断言表</h3>
+  <p>契约测试的组织方式本身就是知识：<code class="inline-code">ModelGatewayContractTest</code> 用 <code class="inline-code">@Nested</code> 把断言按验收项分组，每条对应 P0-D04 的一个验收 ID（AT-MODEL-001 / AT-MODEL-002）。这种「验收 ID ↔ 测试类」的映射让「哪条验收没有测试」变成可查的。</p>
+  <table>
+    <thead><tr><th>断言项</th><th>验证什么</th><th>为什么这条重要</th></tr></thead>
+    <tbody>
+      <tr><td>normalCall</td><td>正常响应带 usage，且 <code class="inline-code">totalTokens()</code> 等于 input+output</td><td>usage 是 <a href="ai-11-cost-governance.html#a11-3">A11.3</a> 结算的唯一输入；丢了或算错，账目静默失真</td></tr>
+      <tr><td>timeoutNormalized</td><td>TIMEOUT 且 <code class="inline-code">retryable()==true</code></td><td>超时无副作用，可退避重试</td></tr>
+      <tr><td>rateLimitedNormalized</td><td>RATE_LIMITED 且可重试</td><td>唯一「应该重试」的限流类失败</td></tr>
+      <tr><td>providerErrorNormalized</td><td>PROVIDER_ERROR 且可重试</td><td>5xx 通常是暂时性</td></tr>
+      <tr><td>invalidRequestNotRetryable</td><td>INVALID_REQUEST 且 <code class="inline-code">retryable()==false</code></td><td><strong>最关键的一条</strong>：误标为可重试 = 无限重试烧钱（<a href="ai-14-model-gateway.html#a14-5">A14.5</a>）</td></tr>
+      <tr><td>unauthorizedNotRetryable</td><td>UNAUTHORIZED 且不可重试</td><td>密钥错，重试只会再错</td></tr>
+      <tr><td>contentBlockedNotRetryable</td><td>CONTENT_BLOCKED 且不可重试</td><td>同样内容同样被拦</td></tr>
+    </tbody>
+  </table>
+  <p>给 Java 后端的迁移提示：这个矩阵的<strong>结构</strong>比内容更值钱。任何「把外部异常翻译成本地枚举」的适配层都该有这样一张表，且<strong>每个枚举值都要有测试</strong>——覆盖率低的适配层，坏就坏在没人测的那个分支上。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">ModelGatewayContractTest.java:44-80+</span>（@Nested 分组与逐条断言）；<span class="mono">ModelGateway.java:31-50</span>（六分类定义）。</div>
+
+  <h3 id="a17-5">A17.5 流式与一次性路径的语义同源：别让两条路径各坏各的</h3>
+  <p>Fake 网关同时实现 <code class="inline-code">ModelGateway</code>（一次性）与 <code class="inline-code">ChatStreamGateway</code>（流式），注释点明一条纪律（:114-115）：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">流式故障语义必须同源（FakeModelGateway.java:113-116）</span><button>复制</button></div><pre><code>⚠️ 错误语义必须与 invokeGuarded 同源：
+   故障模式【先归一化抛错】，否则回放罐头响应
+   （作为单个增量实时回吐，再返回整包）。
+
+反例后果：
+   流式路径把 TIMEOUT 当成「正常返回了空内容」
+   → 前端显示一个空答案 + done，用户以为模型没话说
+   → 而一次性路径同一场景会抛 TIMEOUT
+   → 两条路径对同一故障给出不同结论，排查时必然走错方向</code></pre></div>
+  <p>这条纪律的一般形式：<strong>当同一能力有两条实现路径（同步/异步、一次性/流式、本地/远程），必须有一条测试锁定「失败语义一致」</strong>。不能只测成功路径的同构。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">FakeModelGateway.java:107-140</span>（streamChat 的 switch 逐态归一化）；<span class="mono">MiniMaxModelGatewayStreamTest.java</span>。</div>
+
+  <h3 id="a17-6">A17.6 IT 独立库与守门写法：把「隔离」变成可验证命题</h3>
+  <p>集成测试最大的假绿来源是<strong>与运行实例共用库</strong>。<code class="inline-code">scripts/it-env.sh</code> 的头注释记录了一次真实教训：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">为什么必须换库（scripts/it-env.sh:6-17）</span><button>复制</button></div><pre><code>在此之前，IT 与运行实例共用一个库（agent_dev），于是：
+  · IT 往 t-a 灌 Run/快照 → 运行实例的调试数据被污染
+  · 运行实例的常驻 worker 会抢 IT 造的 Run → 报「任务未被领取」
+  · execution_snapshot 有 forbid_snapshot_mutation 触发器、物理删不掉
+    → 所以污染【不可逆】（实测 t-a 累积 1018 Run / 139 快照）
+
+正解不是「记得清理」，而是【换库】：IT 跑 agent_it，agent_dev 只服务运行实例。
+并把最容易回归的那一步做成 fail-closed：
+  ⚠️ 目标库与应用库同名时【直接拒绝】
+  —— 「IT 又浇回 agent_dev」不再靠人记。</code></pre></div>
+  <p>三个可迁移的设计点：<strong>①</strong> 「记得清理」不是工程方案（触发器让清理都不可能），换库才是；<strong>②</strong> 把纪律做成 fail-closed 断言（同名即拒绝），而不是写进文档靠自觉；<strong>③</strong> 守门变量（<code class="inline-code">IT_PG_URL</code> / <code class="inline-code">IT_RAG_PG_URL</code>）缺失时整类跳过——但这正是 <a href="#a17-8">A17.8</a> 要盯的假绿入口，所以 CI 必须断言「跳过数不超上限」。</p>
+  <p>RAG 侧同理且更严格（<code class="inline-code">scripts/rag-it-env.sh</code>）：本地 Docker 容器 <code class="inline-code">study_rag_it</code> 与 <code class="inline-code">ragdb</code> / <code class="inline-code">study_rag</code> 完全分开；<strong>三条专用角色</strong>——<code class="inline-code">rag_it_app</code>（NOBYPASSRLS，业务断言一律走它）/ <code class="inline-code">rag_it_admin</code>（BYPASSRLS，seed 清理）/ <code class="inline-code">rag_it_ops</code>（BYPASSRLS，运维通道）。用超级用户跑租户隔离测试会得到「隔离失效」的<strong>虚假结论</strong>——这条坑 CI 注释里也写了一遍。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">scripts/it-env.sh:1-40</span>、<span class="mono">scripts/rag-it-env.sh:1-30</span>；<span class="mono">.github/workflows/ci.yml:85-95</span>（非特权角色注释）。</div>
+
+  <h3 id="a17-7">A17.7 源码级守卫的边界：什么能用源码扫描、什么必须上真库</h3>
+  <p><code class="inline-code">ReingestDisciplineGuardTest</code> 是一份罕见的「诚实守卫」——它在注释里<strong>主动声明自己的局限</strong>（:15-25）：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">源码扫描守卫的自我声明（ReingestDisciplineGuardTest.java:15-25）</span><button>复制</button></div><pre><code>⚠️ 为什么用源码扫描而不是行为测试：
+  真正的验证需要「同一片段写两次 → 查 text_jieba 是否为空」，
+  这要求一个带 pgvector 的真库 IT。
+
+  源码级断言【无法证明运行时正确】，但能【廉价地挡住最危险的回退】——
+  有人把 ON CONFLICT DO UPDATE ... text_jieba = '' 删掉或改回纯 INSERT。
+
+  行为级 IT 在有库环境时补（见计划文档 S2-5 的验收判据）。</code></pre></div>
+  <p>它守的是三个字面断言：方法内必须含 <code class="inline-code">ON CONFLICT (chunk_id) DO UPDATE</code>、必须含 <code class="inline-code">text_jieba = ''</code>、INSERT 列清单必须显式含 <code class="inline-code">text_jieba,</code>。背后的真实事故：D04 §5.4 记录「改了切分规则但检索没变」——根因是重灌不清 <code class="inline-code">text_jieba</code>，而索引判据是 <code class="inline-code">text_jieba='' OR 无向量行</code>，于是旧片段永远不被重新嵌入。</p>
+  <table>
+    <thead><tr><th>能且适合用源码扫描</th><th>必须上真库</th></tr></thead>
+    <tbody>
+      <tr><td>「某段 SQL 片段还在不在」（防回退）</td><td>「同一片段写两次后 <code class="inline-code">text_jieba</code> 真的是空」（行为正确性）</td></tr>
+      <tr><td>「某个守卫数组是否被注释成空」（<a href="ai-12-observability-runbook.html#a12-6">A12.6</a> 的 <code class="inline-code">GUARDED_TABLES</code>）</td><td>「触发器真的拦住了 UPDATE」（<code class="inline-code">AuditChainIT</code>）</td></tr>
+      <tr><td>「领域层有没有偷偷 import Spring」（<code class="inline-code">AgentCorePurityTest</code>）</td><td>「RLS 对非特权角色真的生效」（用 <code class="inline-code">app_agent</code> 跑）</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-warn"><span class="ct">源码守卫最大的风险：它自己变成假绿</span><p>源码扫描断言的是「文本存在」，不是「逻辑正确」。若有人把 <code class="inline-code">text_jieba = ''</code> 挪到一个永不执行的分支里，守卫照样绿。所以本项目的纪律是：<strong>源码守卫只能当「防回退的锁」，不能当「功能正确性的证明」</strong>，且必须配一条真库 IT 兜底（S2-5）。这与 <a href="ai-09-quality-assurance.html#a9-7">A9.7</a>「11 层防线、成熟度 B-」的评估口径一致。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">rag/rag-persistence/src/test/.../ReingestDisciplineGuardTest.java</span>；<span class="mono">platform/agent-core/.../AgentCorePurityTest</span>；<span class="mono">docs/问题记录</span> D04 §5.4。</div>
+
+  <h3 id="a17-8">A17.8 CI 的四条反假绿纪律：pipefail、跳过数上限、job 职责分离、非特权角色</h3>
+  <p>CI 文件头记录了一次「从未真实运行过」的教训（2026-10-22 实测修订），三个缺陷全是假绿形态：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">yaml</span><span class="file">反假绿四件套（.github/workflows/ci.yml:10-18, 60-110）</span><button>复制</button></div><pre><code>① pipefail —— 否则 mvn | tee 吞掉退出码
+   GitHub Actions 的 run: 默认 shell 是 bash -e {0}，【不含 pipefail】。
+   `bash -e -c 'false | tee /tmp/x; echo $?'` → 0
+   即：构建失败该步骤仍报绿。
+   修复：run 开头显式 `set -o pipefail`
+
+② 跳过数上限 —— 否则「全跳过了」也显示通过
+   unit-test job 不提供 IT_PG_URL → 249 项 IT 被整体跳过，
+   界面依旧显示「构建与单元测试 ✅ 通过」——绿得没有意义。
+   修复A：unit-test 只跑到 package（不跑 verify），IT 交给独立 job
+   修复B：断言 skipped ≤ 60（已知需库集合 25，超出即有测试被误门禁）
+   修复C：断言 ran ≥ 480（低于基线说明环境退步，而非「测得少说明代码好」）
+
+③ job 职责分离 —— 需要库的测试不能混在无库 job 里
+
+④ 非特权角色 —— 集成测试应用连接用 app_agent，不用 superuser
+   超级用户绕过 RLS，用它跑租户隔离测试会得到「隔离失效」的虚假结论</code></pre></div>
+  <p>第 ② 条最有普适价值：<strong>「跳过」必须被当成一种失败来治理</strong>。JUnit 的 <code class="inline-code">@EnabledIfEnvironmentVariable</code> 守门很方便，但它让「测试没跑」和「测试通过」在界面上看起来一样。加一条上限断言，就把这个盲区堵上了。注意注释里的实测数据：无库场景锚定行尾后计数 180（未锚定时 366，因为逐类明细行也被计入）——<strong>计数脚本本身也要防止数错</strong>。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">.github/workflows/ci.yml:1-30</span>（设计要点与三缺陷）、<span class="mono">:60-110</span>（pipefail / 上下限断言）、<span class="mono">:200+</span>（非特权角色创建）。</div>
+
+  <h3 id="a17-9">A17.9 测试规模与结构：472 单测 / 90 IT / 113 前端测试的分布含义</h3>
+  <table>
+    <thead><tr><th>类别</th><th>数量</th><th>位置</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>Java 单元测试</td><td>472 <code class="inline-code">*Test.java</code></td><td><code class="inline-code">platform/</code> + <code class="inline-code">rag/</code></td><td>无外部依赖，跑得快</td></tr>
+      <tr><td>Java 集成测试</td><td>90 <code class="inline-code">*IT.java</code></td><td>同上</td><td>需 <code class="inline-code">IT_PG_URL</code> / <code class="inline-code">IT_RAG_PG_URL</code>，缺失则整类跳过</td></tr>
+      <tr><td>前端测试</td><td>113 <code class="inline-code">*.test.ts(x)</code></td><td><code class="inline-code">frontend/tests</code>、<code class="inline-code">admin-console/tests</code></td><td>含 <code class="inline-code">agentChat.architecture.test.ts</code>（跨工程协议比对，<a href="ai-15-streaming-sse.html#a15-9">A15.9</a>）</td></tr>
+      <tr><td>反证脚本</td><td>40 个 <code class="inline-code">*counterproof*.sh</code></td><td><code class="inline-code">scripts/</code></td><td>撤点必须转红（<a href="ai-09-quality-assurance.html#a9-5">A9.5</a>）</td></tr>
+      <tr><td>专项测试（MCP）</td><td>7 类</td><td>infrastructure + application</td><td>端点守卫 / 凭据安全 / 地址策略 / 配置校验 / 行为 / 不可信输出 / 白名单</td></tr>
+    </tbody>
+  </table>
+  <p>注意「数量随提交变化，不要写死到文档里」（<a href="06-reference.html#ch20-1">§20.1 第 13 行</a>已登记这条纪律）。上表是 2026-11-12 快照的实测数，用于理解<strong>结构比例</strong>（单测 : IT ≈ 5:1），而不是用来对账。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">find platform rag -name "*Test.java" | wc -l</span> = 472；<span class="mono">-name "*IT.java"</span> = 90；<span class="mono">frontend/tests + admin-console/tests</span> = 113；<span class="mono">scripts/*counterproof*.sh</span> = 40（2026-11-12 实测）。</div>
+
+  <h3 id="a17-10">A17.10 本册的未落地与证据边界</h3>
+  <table>
+    <thead><tr><th style="width:30%">项</th><th style="width:16%">状态</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>真实供应商契约的自动化回归</td><td><span class="tag t-gap">未落地</span></td><td>真实端到端只在人工走查时跑（如 2026-10-28 MiniMax 那次）；无 CI 内 nightly 真打供应商的 job</td></tr>
+      <tr><td>流式路径的完整故障矩阵测试</td><td><span class="tag t-unknown">部分覆盖</span></td><td>Fake 的 streamChat 已逐态归一化，但断言覆盖度未逐态核对</td></tr>
+      <tr><td>真库行为 IT 补齐源码守卫</td><td><span class="tag t-plan">计划中</span></td><td><code class="inline-code">ReingestDisciplineGuardTest</code> 自称「行为级 IT 在有库环境时补（S2-5）」，该 IT 是否已存在未逐条核实</td></tr>
+      <tr><td>供应商行为漂移的检测</td><td><span class="tag t-gap">未落地</span></td><td>供应商改协议（如 tool_call_id 形态变化）只能靠线上事故或人工走查发现，无自动探针</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-ai"><span class="ct">迁移提示：AI 测试的三条可复用骨架</span><p><strong>① 故障用枚举</strong>——每一种「外部会怎么坏」都该有一个枚举值和一条断言，缺一个就是缺一块覆盖；<strong>② 安全用哨兵</strong>——把「不该出现的东西」具化成已知值，再对全出口断言，比 code review 强得多；<strong>③ 跳过要计数</strong>——「没跑」和「通过」在 CI 界面上长得一样，必须用上限断言把它们分开。</p></div>
+  <div class="evidence"><b>证据源：</b><span class="mono">platform/agent-infrastructure/.../model/FakeModelGateway.java</span>、<span class="mono">platform/agent-infrastructure/src/test/.../model/{ModelGatewayContractTest,MiniMaxModelGatewayTest,MiniMaxModelGatewayStreamTest,OpenAiCompatibleModelGatewayTest}.java</span>、<span class="mono">scripts/it-env.sh</span> / <span class="mono">scripts/rag-it-env.sh</span>、<span class="mono">rag/rag-persistence/src/test/.../ReingestDisciplineGuardTest.java</span>、<span class="mono">.github/workflows/ci.yml</span>。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-16-mcp-runtime.html"><span class="pn-label">← 上一册</span><span class="pn-title">A16 · MCP 客户端实现与运行时防护</span></a>
+  <a class="pn-right" href="ai-18-vector-ops.html"><span class="pn-label">下一册 →</span><span class="pn-title">A18 · 向量库运维与索引代际</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.5</strong> · 多文件版 · 生成于 2026-11-12（v2.5 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>
