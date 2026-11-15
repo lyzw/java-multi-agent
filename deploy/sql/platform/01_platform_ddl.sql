@@ -1,8 +1,17 @@
 -- =====================================================================
 -- platform 完整结构（pg_dump --schema-only 导出）
 -- 【来源】迁移脚本 V1→V34 在全新空库上逐个实跑（0 错误）后 pg_dump 导出，
---   再在第二个空库复放验证结构等价（65 表 / 680 列 / 255 约束 / 15 枚举 /
---   15 函数 / 172 索引 / 33 触发器 / 42 RLS 开启 / 50 RLS 策略）。
+--   再在第二个空库复放验证结构等价（71 表 / 680 列 / 255 约束 / 15 枚举 /
+--   15 函数 / 172 索引 / 33 触发器 / 44 RLS 开启 / 52 RLS 策略）。
+--   ⚠️ 2026-11-15 更正（P0）：原头注释写「65 表 / 42 RLS 开启 / 50 RLS 策略」，
+--   是 V1→V34 快照时的旧值，后续增量加了 student_memory 等对象后已漂移。
+--   本文件实计 CREATE TABLE = 71、ENABLE/FORCE ROW LEVEL SECURITY = 44、
+--   CREATE POLICY = 52，与 scripts/it-env.sh --probe 的期望值（表 71 / RLS 44 /
+--   策略 52）交叉一致。这三项由 PlatformDdlHeaderCountTest 静态守卫钉死：
+--   改动 DDL 却忘同步头注释，或有人把数字改回旧值，守卫立刻变红。
+--   ⚠️ 其余快照数字（680 列 / 255 约束 / 172 索引 / 33 触发器）沿用 pg_dump
+--   的统计口径（含约束隐式生成的对象），本次未重新核定，不能拿 grep 行数
+--   直接比对；守卫也刻意只校验口径明确的三项，避免制造恒定假红。
 --   ⚠️ 不是从远程 agent_dev 导的 —— 远程 Flyway 只到 V27，
 --   缺 V31 platform 身份域 / V32 字典 / V33 指标 / V34 状态守卫的对象；
 --   以远程为源会把这四个版本的对象从仓库里永久丢掉。
@@ -2737,6 +2746,7 @@ CREATE TABLE public.run (
     error_code text,
     error_message text,
     correlation_id text NOT NULL,
+    requester_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     completed_at timestamp with time zone,
@@ -2771,6 +2781,13 @@ COMMENT ON COLUMN public.run.budget_amount IS 'Run 级预算额度（NULL = 不�
 --
 
 COMMENT ON COLUMN public.run.trace_id IS '一次用户 Agent 会话任务的唯一标识（P7）。⚠️ 存量行为 NULL —— 当时的会话标识只落在 agent_invocation.trace_id（仅覆盖有委派的链路）或以 correlation_id 代用。采集器对存量 Run 降级取 correlation_id，并在指标行标记 trace_id_source，NULL 的语义是「当时未记录」，不是「不存在这条 Trace」。';
+
+
+--
+-- Name: COLUMN run.requester_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.run.requester_id IS '创建该 Run 的主体（principal.principal_id）。受众角色（STUDENT/PARENT/TEACHER，F1 · 2026-11-14）的 Run 可见范围按本列隔离：只可见 requester_id = 本人 的行；历史行与无主体上下文的系统内部创建为 NULL，对受众不可见（治理角色不受限）。';
 
 
 --
@@ -2812,6 +2829,18 @@ CREATE TABLE public.run_step (
 );
 
 ALTER TABLE ONLY public.run_step FORCE ROW LEVEL SECURITY;
+
+-- ⚠️ 跨层口径入库（E2E 二轮优化，2026-11-14）：
+--    本表没有独立「步骤状态」枚举，state 复用 public.run_state。
+--    生产链路（JdbcRunStepRepository / JdbcAgentChatAuditRepository）把每一步
+--    单条 INSERT 写死 'RUNNING'，语义是「该步骤已发生」，**不是进行中**；
+--    完成以 completed_at IS NOT NULL 判定，不存在「先 RUNNING 再改终态」的两阶段。
+--    output_payload 当前无写入方，NULL 语义为「未采集」而非空内容。
+--    此前这个口径只存在于两个 Java 注释里，DDL / API / 前端 / 测试夹具各自
+--    按 run_state 字面语义解释，导致结果页把已完成步骤显示为「执行中」且无正文。
+COMMENT ON TABLE public.run_step IS '步骤既成事实记录：单条 INSERT 写入，state 恒为 RUNNING 表示「该步骤已发生」而非进行中，完成以 completed_at 判定；output_payload 当前无写入方。';
+COMMENT ON COLUMN public.run_step.state IS '恒为 RUNNING（public.run_state 无步骤完成语义值）：表示「该步骤已发生」，不表示进行中；不得按 Run 状态机生命周期解释。';
+COMMENT ON COLUMN public.run_step.output_payload IS '当前生产链路无写入方，NULL 表示「未采集」而非空内容；保留期脱敏会写为 {}。';
 
 
 --

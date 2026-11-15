@@ -111,7 +111,19 @@ public class OutboxPublisher {
             //    发出即标记的话，消息未到达时 Outbox 已不再重试 → 任务静默丢失
             sender.send(event.eventType(), message);
 
-            outbox.markOutboxPublished(tenantId, event.outboxId(), clock.instant());
+            // ⚠️ P0 修复（2026-11-15）：只把「真正完成 PENDING → PUBLISHED 转换」计为成功。
+            boolean stateClaimed =
+                    outbox.markOutboxPublished(tenantId, event.outboxId(), clock.instant());
+            if (!stateClaimed) {
+                // 并发领取下另一个发布实例已先收敛状态。消息**已经发出**，
+                // 消费端 RunDispatchConsumer 对重复消息返回 DUPLICATE_DISCARDED 幂等丢弃。
+                // ⚠️ 绝不能走 handleFailure(...)：那会把一条发布成功的事件写成 FAILED
+                //    （状态倒退）并触发「需人工介入」误告警。这里只记 WARN + 不计成功数。
+                log.warn("Outbox 重复发布（状态已被其他发布者收敛，下游幂等承接）: "
+                                + "outboxId={}, runId={}, tenantId={}",
+                        event.outboxId(), event.runId(), tenantId);
+                return false;
+            }
             if (log.isDebugEnabled()) {
                 log.debug("Outbox 已发布: outboxId={}, runId={}",
                         event.outboxId(), event.runId());

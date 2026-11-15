@@ -666,8 +666,13 @@ class OutboxRelayTest {
         }
 
         @Override
-        public void markOutboxPublished(String t, String o, Instant a) {
+        public boolean markOutboxPublished(String t, String o, Instant a) {
+            // 条件状态转换：重复标记返回 false，不重复记录（见 P0 修复）。
+            if (published.contains(o)) {
+                return false;
+            }
             published.add(o);
+            return true;
         }
 
         @Override

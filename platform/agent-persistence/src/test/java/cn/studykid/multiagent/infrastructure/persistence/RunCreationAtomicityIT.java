@@ -356,15 +356,21 @@ class RunCreationAtomicityIT {
                 .stream().filter(e -> e.runId().equals(runId)).findFirst()
                 .orElseThrow(() -> new AssertionError("新建的 Outbox 应为待发布"));
 
-        repo.markOutboxPublished(tenantA, pending.outboxId(), CLOCK.instant());
+        assertThat(repo.markOutboxPublished(tenantA, pending.outboxId(), CLOCK.instant()))
+                .as("首次标记必须真正完成 PENDING → PUBLISHED 条件状态转换")
+                .isTrue();
 
         assertThat(count(tenantA,
                 "SELECT count(*) FROM outbox_event WHERE outbox_id=?::uuid AND state='PUBLISHED'",
                 pending.outboxId()))
                 .isEqualTo(1);
 
-        // 重复标记须幂等，不报错
-        repo.markOutboxPublished(tenantA, pending.outboxId(), CLOCK.instant());
+        // 重复标记须幂等，不报错，但必须诚实返回 false。
+        // ⚠️ P0 反向验证：撤掉 JdbcRunCreationRepository SQL 里的 AND state='PENDING'
+        //    条件，这里立刻变红 —— 否则并发重复发布会被计为两次成功（指标虚高）。
+        assertThat(repo.markOutboxPublished(tenantA, pending.outboxId(), CLOCK.instant()))
+                .as("重复标记不得被误认为又一次成功发布")
+                .isFalse();
     }
 
     @Test

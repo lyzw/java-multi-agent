@@ -10,6 +10,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -46,8 +53,9 @@ class OutboxDispatchTest {
      */
     private static class FakeOutbox implements RunCreationPort {
         final List<RunCreationPort.PendingOutbox> pending = new ArrayList<>();
-        final List<String> published = new ArrayList<>();
-        final List<String> failed = new ArrayList<>();
+        // 真并发用例会让两个发布者同时写这两个列表，用 COW 避免 ArrayList 并发写损坏。
+        final List<String> published = new CopyOnWriteArrayList<>();
+        final List<String> failed = new CopyOnWriteArrayList<>();
 
         @Override
         public IdempotencyDecision findExistingResource(String t, IdempotencyKey k,
@@ -73,12 +81,19 @@ class OutboxDispatchTest {
         }
 
         @Override
-        public void markOutboxPublished(String t, String o, Instant a) {
+        public synchronized boolean markOutboxPublished(String t, String o, Instant a) {
+            // 模拟 DB 的条件状态转换：只有仍为 PENDING 的那次 UPDATE 影响 1 行。
+            // synchronized 保证 check-then-act 在真并发用例里是原子的（等价于 DB 行锁）。
+            // published 因此代表「真正完成收敛的事件」，而非「调用次数」。
+            if (published.contains(o)) {
+                return false;
+            }
             published.add(o);
+            return true;
         }
 
         @Override
-        public void markOutboxFailed(String t, String o, String e) {
+        public synchronized void markOutboxFailed(String t, String o, String e) {
             failed.add(o);
         }
     }
@@ -180,6 +195,66 @@ class OutboxDispatchTest {
                     .as("发布器是消息进入 MQ 的最后关口，须复核消息体")
                     .isEmpty();
             assertThat(outbox.failed).containsExactly("ob-5");
+        }
+
+        @Test
+        @DisplayName("⚠️ 并发重复领取：只有一次被计为成功发布，且绝不误标 FAILED")
+        void duplicatePublishCountedOnceAndNeverFailed() {
+            FakeOutbox outbox = outboxWith("ob-dup", 0);
+            AtomicInteger sent = new AtomicInteger();
+            MessageSender sender = (type, msg) -> sent.incrementAndGet();
+
+            // 两个发布实例都从无锁 SELECT 捞到同一条 PENDING ——
+            // Fake 的 loadPendingOutbox 不看 published，正是生产里
+            // loadPendingOutbox「无锁 SELECT + rollbackQuietly」的形态。
+            OutboxPublisher a = publisher(outbox, sender);
+            OutboxPublisher b = publisher(outbox, sender);
+
+            int n1 = a.publishOnce();
+            int n2 = b.publishOnce();
+
+            assertThat(n1 + n2)
+                    .as("撤掉 OutboxPublisher 对 markOutboxPublished 返回值的判断，"
+                            + "这里会是 2 —— 发布成功数指标静默虚高（P0 反向验证点）")
+                    .isEqualTo(1);
+            assertThat(outbox.published).containsExactly("ob-dup");
+            assertThat(outbox.failed)
+                    .as("消息已经成功发出；重复者绝不能被写成 FAILED（状态倒退 + 误告警）")
+                    .isEmpty();
+            assertThat(sent.get())
+                    .as("诚实边界：本修复不阻止重复投递，消费端 DUPLICATE_DISCARDED 幂等承接")
+                    .isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("⚠️ 真并发：两个发布者同时领取同一条，成功数合计仍为 1")
+        void trulyConcurrentPublishersHaveSingleWinner() throws Exception {
+            FakeOutbox outbox = outboxWith("ob-race", 0);
+            AtomicInteger sent = new AtomicInteger();
+            MessageSender sender = (type, msg) -> sent.incrementAndGet();
+
+            CountDownLatch start = new CountDownLatch(1);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                Future<Integer> f1 = pool.submit(() -> {
+                    start.await();
+                    return publisher(outbox, sender).publishOnce();
+                });
+                Future<Integer> f2 = pool.submit(() -> {
+                    start.await();
+                    return publisher(outbox, sender).publishOnce();
+                });
+                start.countDown();
+
+                int total = f1.get(5, TimeUnit.SECONDS) + f2.get(5, TimeUnit.SECONDS);
+                assertThat(total)
+                        .as("真并发下也必须只有一个发布者完成状态收敛")
+                        .isEqualTo(1);
+                assertThat(outbox.published).containsExactly("ob-race");
+                assertThat(outbox.failed).isEmpty();
+            } finally {
+                pool.shutdownNow();
+            }
         }
     }
 

@@ -756,11 +756,16 @@ public class RunExecutionLoop {
                         && java.time.Instant.now().isAfter(task.deadlineAt())) {
                     log.warn("根 Run 业务超时，停止执行: runId={}, deadline={}",
                             task.runId(), task.deadlineAt());
-                    appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
-                            java.util.Map.of("state", "TIMED_OUT"));
-                    notifyLoopComplete(tenantId, task.runId(),
-                            commitFailure(tenantId, task, "业务超时", "TIMEOUT"), steps);
-                    return commitFailure(tenantId, task, "业务超时", "TIMEOUT");
+                    // ⚠️ P0 修复（2026-11-15）：此前此处对 commitFailure 调用了**两次**——
+                    //    第一次 CAS 成功把 Run 收敛为 FAILED，第二次必然因世代已变而失败，
+                    //    于是 return 拿到 skippedStaleGeneration，上层把「超时失败」误判为
+                    //    「陈旧世代跳过」，且失败事件被写两遍。现在只调用一次并复用同一结局。
+                    //    「失败事件」由 commitFailure 统一写入，不再在此另发一条 state=TIMED_OUT
+                    //    （TIMED_OUT 不是 run_state 的取值，与 FAILED 终态互相矛盾）。
+                    ExecutionOutcome rootTimedOut =
+                            commitFailure(tenantId, task, "业务超时", "TIMEOUT");
+                    notifyLoopComplete(tenantId, task.runId(), rootTimedOut, steps);
+                    return rootTimedOut;
                 }
 
                 // ── §2 循环体 ────────────────────────────────────────────
@@ -898,8 +903,12 @@ public class RunExecutionLoop {
                 } catch (StepDeadlineExceededException e) {
                     releaseModelCost(tenantId, modelReservation.get());
                     log.warn("模型调用越过根截止时间，Run 收敛为 TIMEOUT: {}", e.getMessage());
-                    appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
-                            Map.of("state", "TIMED_OUT", "phase", "MODEL_CALL"));
+                    // ⚠️ P0 修复（2026-11-15）：删掉这里额外的 RUN_FAILED 事件。
+                    //    commitFailure 内部已统一写 {"state":"FAILED"}，此处再写一条
+                    //    {"state":"TIMED_OUT","phase":"MODEL_CALL"} 会形成两条互相矛盾的
+                    //    失败事件，且 TIMED_OUT 不是 public.run_state 的取值（超时一律
+                    //    FAILED + error_code=TIMEOUT）。阶段信息已由下面的 reason
+                    //    「单步模型调用超时」保留，无需重复事件。
                     ExecutionOutcome timedOut =
                             commitFailure(tenantId, task, "单步模型调用超时", "TIMEOUT");
                     notifyLoopComplete(tenantId, task.runId(), timedOut, steps);
@@ -1018,8 +1027,9 @@ public class RunExecutionLoop {
                             () -> toolGate.invokeAll(tenantId, task, response.toolCalls()));
                 } catch (StepDeadlineExceededException e) {
                     log.warn("工具调用越过根截止时间，Run 收敛为 TIMEOUT: {}", e.getMessage());
-                    appendEvent(tenantId, task.runId(), RunEventPort.Types.RUN_FAILED,
-                            Map.of("state", "TIMED_OUT", "phase", "TOOL_CALL"));
+                    // ⚠️ P0 修复（2026-11-15）：同模型超时分支，删掉矛盾/重复的
+                    //    RUN_FAILED 事件，由 commitFailure 统一写终态事件；
+                    //    阶段信息由 reason「单步工具调用超时」保留。
                     ExecutionOutcome timedOut =
                             commitFailure(tenantId, task, "单步工具调用超时", "TIMEOUT");
                     notifyLoopComplete(tenantId, task.runId(), timedOut, steps);
@@ -1179,9 +1189,11 @@ public class RunExecutionLoop {
             // ── §5.1 步数超限 ──────────────────────────────────────────
             log.warn("步数超限: runId={}, steps={}, max={}",
                     task.runId(), steps, snapshot.maxSteps());
-            notifyLoopComplete(tenantId, task.runId(),
-                    commitFailure(tenantId, task, "步数超限", "MAX_STEPS"), steps);
-            return commitFailure(tenantId, task, "步数超限", "MAX_STEPS");
+            // ⚠️ P0 修复：commitFailure 只调一次，返回与通知复用同一结局（见根超时分支注释）。
+            ExecutionOutcome maxSteps =
+                    commitFailure(tenantId, task, "步数超限", "MAX_STEPS");
+            notifyLoopComplete(tenantId, task.runId(), maxSteps, steps);
+            return maxSteps;
 
         } catch (ModelGateway.ModelGatewayException e) {
             // ── §3 三种异常语义 ────────────────────────────────────────
@@ -1203,9 +1215,11 @@ public class RunExecutionLoop {
             // ⚠️ 能走到这里说明工具闸门没有正确处理 UNKNOWN ——
             //    闸门应在内部转为 unknownResultOccurred()，而非抛出
             log.error("工具异常逃逸出闸门（不应发生）: runId={}", task.runId(), e);
-            notifyLoopComplete(tenantId, task.runId(),
-                    commitFailure(tenantId, task, "工具执行异常", "TOOL_INTERNAL"), steps);
-            return commitFailure(tenantId, task, "工具执行异常", "TOOL_INTERNAL");
+            // ⚠️ P0 修复：commitFailure 只调一次，返回与通知复用同一结局。
+            ExecutionOutcome toolInternal =
+                    commitFailure(tenantId, task, "工具执行异常", "TOOL_INTERNAL");
+            notifyLoopComplete(tenantId, task.runId(), toolInternal, steps);
+            return toolInternal;
 
         } catch (RequestAssemblyException e) {
             // ⚠️ M7-b fail-closed：策略非法 / 预算超硬顶 / 装配链路异常
@@ -1221,9 +1235,11 @@ public class RunExecutionLoop {
             return rejected;
         } catch (RuntimeException e) {
             log.error("执行过程未预期异常: runId={}", task.runId(), e);
-            notifyLoopComplete(tenantId, task.runId(),
-                    commitFailure(tenantId, task, "执行异常", "INTERNAL_ERROR"), steps);
-            return commitFailure(tenantId, task, "执行异常", "INTERNAL_ERROR");
+            // ⚠️ P0 修复：commitFailure 只调一次，返回与通知复用同一结局。
+            ExecutionOutcome internalError =
+                    commitFailure(tenantId, task, "执行异常", "INTERNAL_ERROR");
+            notifyLoopComplete(tenantId, task.runId(), internalError, steps);
+            return internalError;
         }
     }
 

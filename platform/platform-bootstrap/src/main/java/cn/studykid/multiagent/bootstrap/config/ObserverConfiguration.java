@@ -13,7 +13,9 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 
+import cn.studykid.multiagent.application.observability.AgentMetrics;
 import cn.studykid.multiagent.context.TokenEstimationCalibrator;
+import cn.studykid.multiagent.infrastructure.observer.metrics.AgentMetricsExecutionObserver;
 import cn.studykid.multiagent.infrastructure.observer.metrics.ContextCalibrationObserver;
 import cn.studykid.multiagent.ports.context.TokenCounter;
 import cn.studykid.multiagent.ports.model.ModelGateway;
@@ -181,6 +183,25 @@ public class ObserverConfiguration {
     public EventPortExecutionObserver eventPortExecutionObserver(
             @Autowired(required = false) RunEventPort eventPort) {
         return new EventPortExecutionObserver(eventPort);
+    }
+
+    /**
+     * 把执行循环事实桥接到 {@link AgentMetrics}（P0 修复 · 2026-11-15）。
+     *
+     * <p>⚠️ <b>这是 {@code /metrics} 从「恒空」变为「有数」的承重 Bean</b>：
+     * 改动前 {@code AgentMetrics.increment} 全仓零调用，端点永远只输出注释头，
+     * 而所有单测只测纯函数故全绿。本 Bean 一旦移除，{@code /metrics} 立即回到空
+     * ——由 {@code MetricsEndpointWiringTest} 反向验证钉死。
+     *
+     * <p>本类实现 {@link ExecutionObserver}，注册后自动进入 Spring 收集的
+     * {@code List<ExecutionObserver>} → {@link #executionObserverChain}，
+     * 而该链在生产装配里已真实注入 {@code RunExecutionLoop}；
+     * 因此<b>不需要新增第二条执行链</b>。
+     */
+    @Bean
+    @ConditionalOnMissingBean(AgentMetricsExecutionObserver.class)
+    public AgentMetricsExecutionObserver agentMetricsExecutionObserver(AgentMetrics metrics) {
+        return new AgentMetricsExecutionObserver(metrics);
     }
 
     /**

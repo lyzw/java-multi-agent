@@ -31,10 +31,24 @@ public class AuditTamperProofGuard implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(AuditTamperProofGuard.class);
 
-    /** 受阈表：审计行 与 删除凭证（凭证被删则举证链自毁）。 */
+    /**
+     * 受阈表：审计行 与 删除凭证（凭证被删则举证链自毁）。
+     *
+     * <p>⚠️ <b>此清单绝不可为空</b>（P0 修复 · 2026-11-15）：曾因两行被注释掉而
+     * 退化为「空数组」，{@link #run(ApplicationArguments)} 的循环零次执行——
+     * 启动日志既无「✅ 通过」也无「⚠️ SECURITY」，单测只测纯函数 {@link #assess}
+     * 故全绿。这是本项目吃过亏的「配了等于没配且静默」故障形态。
+     * 现在 {@link #run} 开头对空清单 <b>fail-fast 拒绝启动</b>，
+     * 使「再次把它注释空」在启动期就红，而不必等一次审计被删。
+     */
     private static final String[] GUARDED_TABLES = {
-//            "audit_record", "erasure_certificate",
+            "audit_record", "erasure_certificate",
     };
+
+    /** 受检表数量（供架构守卫测试断言「清单非空」，避免再次静默退化）。 */
+    public static int guardedTableCount() {
+        return GUARDED_TABLES.length;
+    }
 
     private final JdbcTemplate jdbcTemplate;
     private final boolean isolationRequired;
@@ -47,6 +61,13 @@ public class AuditTamperProofGuard implements ApplicationRunner {
 
     @Override
     public void run(org.springframework.boot.ApplicationArguments args) {
+        // ⚠️ fail-fast：空清单 = 零检查 = 「审计不可篡改」退化为无保证且无任何日志。
+        //    这里必须硬失败，让「把清单注释空」在启动期立刻暴露（P0 反向验证点）。
+        if (GUARDED_TABLES.length == 0) {
+            throw new IllegalStateException(
+                    "审计凭据隔离守卫的受检表清单为空：将零检查且不产生任何日志，"
+                    + "「审计不可篡改」退化为无保证。请恢复 audit_record / erasure_certificate。");
+        }
         for (String table : GUARDED_TABLES) {
             Boolean canDelete = queryDeletePrivilege(table);
             if (canDelete == null) {
@@ -65,6 +86,10 @@ public class AuditTamperProofGuard implements ApplicationRunner {
                 log.info("✅ 审计凭据隔离校验通过: {}", assessment.message());
             }
         }
+        // 「确实执行过」的事实：即使某张表因查询不可用被跳过，这条也证明循环跑完了，
+        // 不会退回到「什么都没发生且日志全空」的静默态。
+        log.info("审计凭据隔离校验完成：受检 {} 张表（isolationRequired={}）",
+                GUARDED_TABLES.length, isolationRequired);
     }
 
     private @Nullable Boolean queryDeletePrivilege(String table) {

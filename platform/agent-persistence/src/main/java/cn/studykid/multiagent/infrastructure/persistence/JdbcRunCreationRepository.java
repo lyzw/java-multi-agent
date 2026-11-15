@@ -137,6 +137,36 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                                                 @NonNull String correlationId,
                                                 @NonNull OutboxMessage agentPayload,
                                                 @NonNull RunLimits limits) {
+        // ⚠️ 旧重载兼容入口：无主体上下文 → requester 为空。
+        //    绝不另写一份 SQL —— 列口径漂移会让「有/无 requester」的 Run 走出两条写路径。
+        return insertRunAtomically(tenantId, runId, snapshotId, key, digest, inputPayload,
+                correlationId, agentPayload, limits, null);
+    }
+
+    @Override
+    public @NonNull String insertRunAtomically(@NonNull String tenantId,
+                                                @NonNull String runId,
+                                                @NonNull String snapshotId,
+                                                @NonNull IdempotencyKey key,
+                                                @NonNull RequestDigest digest,
+                                                @NonNull Map<String, Object> inputPayload,
+                                                @NonNull String correlationId,
+                                                @NonNull OutboxMessage agentPayload,
+                                                @NonNull RunLimits limits,
+                                                @Nullable String requesterId) {
+        // ⚠️ F1（2026-11-14）：requester_id 是 uuid 列（受众隔离锚点）。
+        //    非法形态（字符串业务键，如测试夹具 "it-admin"）→ 落 NULL + warn，
+        //    绝不让 ?::uuid 绑定在 SQL 层抛 22P02（Run 静默回滚但上层只见含糊 500，
+        //    F3 同款错误模式）。
+        //    为什么落 NULL 是安全的：受众隔离的判定前提是「受众主体必持 UUID
+        //    principalId」——受众角色必须来自 principal_role 库登记，而
+        //    findRoles 对非 UUID principalId 恒返回空集（非受众）。因此
+        //    非 UUID requester 语义上就是「无主体上下文」，与历史行同口径；
+        //    「受众 + 非 UUID」组合在结构上不可达，隔离不会因本守卫 fail-open。
+        final String normalizedRequesterId = normalizedRequesterId(requesterId);
+        if (requesterId != null && normalizedRequesterId == null) {
+            log.warn("requesterId 非合法 UUID，落 NULL（run.requester_id 为 uuid 列）: {}", requesterId);
+        }
         // 消息体安全校验：即便调用方误传敏感字段，也在入库前拦下
         OutboxMessage.assertPayloadSafe(agentPayload.toPayload());
 
@@ -149,7 +179,7 @@ public class JdbcRunCreationRepository implements RunCreationPort {
             Connection outer = TransactionalConnectionHolder.current();
             try {
                 insertAll(outer, tenantId, runId, snapshotId, key, digest,
-                        inputPayload, correlationId, agentPayload, limits);
+                        inputPayload, correlationId, agentPayload, limits, normalizedRequesterId);
                 // ⚠️ 不在此处 commit —— 外层事务尚未结束，
                 //    提前提交会让外层后续失败时无法回滚本次写入。
                 return runId;
@@ -170,7 +200,7 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                 TenantSessionBinder.bind(conn, systemContext(tenantId));
 
                 insertAll(conn, tenantId, runId, snapshotId, key, digest,
-                        inputPayload, correlationId, agentPayload, limits);
+                        inputPayload, correlationId, agentPayload, limits, normalizedRequesterId);
 
                 conn.commit();
                 if (log.isDebugEnabled()) {
@@ -199,6 +229,24 @@ public class JdbcRunCreationRepository implements RunCreationPort {
     }
 
     /**
+     * requesterId 归一化：非合法 UUID → null（落库语义「无主体上下文」）。
+     *
+     * <p>⚠️ 参见调用处的隔离 fail-open 论证：非 UUID requester 只可能来自
+     * 系统内部/测试夹具，落 NULL 与历史行同口径。
+     */
+    private static @Nullable String normalizedRequesterId(@Nullable String requesterId) {
+        if (requesterId == null) {
+            return null;
+        }
+        try {
+            java.util.UUID.fromString(requesterId);
+            return requesterId;
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /**
      * 四者同写入（红线 3）。
      *
      * <p>⚠️ <b>不自行提交</b>：提交与回滚由调用方（事务边界）决定。
@@ -210,11 +258,12 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                            IdempotencyKey key, RequestDigest digest,
                            Map<String, Object> inputPayload, String correlationId,
                            OutboxMessage agentPayload,
-                           RunLimits limits)
+                           RunLimits limits,
+                           @Nullable String requesterId)
             throws SQLException {
         // 1) Run
         insertRun(conn, tenantId, runId, snapshotId, key, digest, inputPayload, correlationId,
-                limits);
+                limits, requesterId);
         // 2) 初始事件（SSE 续传起点，sequence_no 从 1 开始）
         insertInitialEvent(conn, tenantId, runId, correlationId);
         // 3) 幂等记录
@@ -226,15 +275,18 @@ public class JdbcRunCreationRepository implements RunCreationPort {
     private void insertRun(Connection conn, String tenantId, String runId, String snapshotId,
                            IdempotencyKey key, RequestDigest digest,
                            Map<String, Object> inputPayload, String correlationId,
-                           RunLimits limits)
+                           RunLimits limits,
+                           @Nullable String requesterId)
             throws SQLException {
-        // ⚠️ run_id / snapshot_id / tenant_id 均为 uuid 列，必须显式 ::uuid 转换，
+        // ⚠️ run_id / snapshot_id / tenant_id / requester_id 均为 uuid 列，必须显式 ::uuid 转换，
         //    否则 setString 传入的 varchar 会被 PG 拒绝（类型不匹配）。
+        // ⚠️ requester_id 可空（NULL = 无主体上下文）：受众隔离（F1）的归属依据，
+        //    与 Run 同事务落库——事后补写会留下「已创建但无归属」的窗口。
         String sql = """
                 INSERT INTO run (run_id, tenant_id, snapshot_id, idempotency_key, request_digest,
                                  state, attempt, fencing_token, input_payload, correlation_id,
-                                 deadline_at, budget_amount)
-                VALUES (?::uuid, ?::uuid, ?::uuid, ?, ?, 'QUEUED', 0, 0, ?::jsonb, ?, ?, ?)
+                                 deadline_at, budget_amount, requester_id)
+                VALUES (?::uuid, ?::uuid, ?::uuid, ?, ?, 'QUEUED', 0, 0, ?::jsonb, ?, ?, ?, ?::uuid)
                 ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -258,6 +310,11 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                 ps.setNull(9, java.sql.Types.NUMERIC);
             } else {
                 ps.setBigDecimal(9, limits.budgetAmount());
+            }
+            if (requesterId == null) {
+                ps.setNull(10, java.sql.Types.OTHER);
+            } else {
+                ps.setString(10, requesterId);
             }
             ps.executeUpdate();
         }
@@ -417,12 +474,21 @@ public class JdbcRunCreationRepository implements RunCreationPort {
     }
 
     @Override
-    public void markOutboxPublished(@NonNull String tenantId, @NonNull String outboxId,
-                                    @NonNull Instant publishedAt) {
+    public boolean markOutboxPublished(@NonNull String tenantId, @NonNull String outboxId,
+                                       @NonNull Instant publishedAt) {
+        // ⚠️ P0 修复（2026-11-15）：此前 UPDATE 没有 state 条件，两个发布实例并发看到
+        //    同一条 PENDING 并各自 send 后，都会把 UPDATE 视为成功 ⇒ publishOnce()
+        //    计数虚高、且「重复发布」在日志里完全不可见。现在改为条件状态转换：
+        //    只有仍为 PENDING 的那次 UPDATE 才影响 1 行，其余返回 0 ⇒ false。
+        //    ⚠️ 这**不阻止**重复投递（消息已发出），也不改变既有幂等约定：
+        //    消费端 RunDispatchConsumer.claimSpecificRun 对重复消息返回
+        //    DUPLICATE_DISCARDED，终态 Run 不会被重跑。作用仅是「账目与可观测不失真」。
+        //    ⚠️ 不能把「影响 0 行」当异常处理：sender.send 已成功，标 FAILED 会让状态倒退。
         String sql = """
                 UPDATE outbox_event
                 SET state = 'PUBLISHED', published_at = ?
                 WHERE tenant_id = ?::uuid AND outbox_id = ?::uuid
+                  AND state = 'PENDING'
                 """;
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             Connection conn = lease.connection();
@@ -430,8 +496,9 @@ public class JdbcRunCreationRepository implements RunCreationPort {
                 ps.setTimestamp(1, Timestamp.from(publishedAt));
                 ps.setString(2, tenantId);
                 ps.setString(3, outboxId);
-                ps.executeUpdate();
+                int updated = ps.executeUpdate();
                 lease.commitQuietly();
+                return updated == 1;
             }
         } catch (SQLException e) {
             throw new IllegalStateException("标记 Outbox 已发布失败", e);

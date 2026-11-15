@@ -113,6 +113,39 @@ public interface RunCreationPort {
     }
 
     /**
+     * 在<b>当前事务</b>中原子写入 Run、初始事件、幂等记录与 Outbox，
+     * 并写入 Run 的<b>资源上限</b>与<b>创建主体</b>（requester_id）。
+     *
+     * <p>⚠️ <b>requester_id 是受众隔离（F1 · 2026-11-14）的归属依据</b>：
+     * 受众主体（STUDENT/PARENT/TEACHER）对 Run 的可见范围收窄到
+     * {@code requester_id = principal_id}。创建时不落主体，
+     * 隔离就成了无源之水 —— 因此它必须与 Run <b>同事务</b>落库。
+     *
+     * <p>⚠️ <b>default 实现委托旧重载（requester 被丢弃）而非抛异常</b>：
+     * 与 {@code limits} 的「显式失败」不同风险级——limits 丢失会击穿
+     * 资金/时间硬约束，而 requester 丢失只影响受众隔离的数据完整性
+     * （该 Run 对所有人可见性不变），生产实现（{@code JdbcRunCreationRepository}）
+     * 必须覆写本方法；未升级的测试替身走旧签名即可编译。
+     *
+     * @param requesterId 创建主体标识（{@code context.principalId()}）；
+     *                    允许 {@code null}（无主体上下文的系统内部创建）
+     * @return 实际写入的 Run ID
+     */
+    default @NonNull String insertRunAtomically(@NonNull String tenantId,
+                                                @NonNull String runId,
+                                                @NonNull String snapshotId,
+                                                @NonNull IdempotencyKey key,
+                                                @NonNull RequestDigest digest,
+                                                @NonNull Map<String, Object> inputPayload,
+                                                @NonNull String correlationId,
+                                                @NonNull OutboxMessage agentPayload,
+                                                @NonNull RunLimits limits,
+                                                @Nullable String requesterId) {
+        return insertRunAtomically(tenantId, runId, snapshotId, key, digest,
+                inputPayload, correlationId, agentPayload, limits);
+    }
+
+    /**
      * 查询幂等记录并给出判定（ADR-003）。
      *
      * <p>在<b>当前事务</b>内查询（若外层有事务）。返回：
@@ -142,11 +175,23 @@ public interface RunCreationPort {
     @NonNull OutboxBatch loadPendingOutbox(@NonNull String tenantId, int limit);
 
     /**
-     * 标记 Outbox 事件已发布。
+     * 标记 Outbox 事件已发布（<b>条件状态转换</b>，P0 修复 · 2026-11-15）。
      *
-     * <p>⚠️ 幂等：重复标记同一事件不得报错（发布成功但标记失败的场景下会重试）。
+     * <p>⚠️ 幂等：重复标记同一事件不得报错（发布成功但标记失败的场景下会重试），
+     * 但<b>必须能区分「谁真正完成了状态转换」</b>。多实例并发领取时，
+     * {@code loadPendingOutbox} 的无锁 SELECT 会让两个发布者看到同一条 PENDING，
+     * 各自 {@code sender.send(...)} 后再标记 —— 这是本项目已文档化的设计取舍
+     * （DDL 注释「重复投递由消费端幂等处理」；消费端
+     * {@code RunDispatchConsumer.claimSpecificRun} 对重复消息返回 DUPLICATE_DISCARDED，
+     * 不会重跑终态 Run）。因此<b>这里不改状态机、不加跨进程锁</b>，
+     * 只把「本实例是不是那个把 PENDING 收敛成 PUBLISHED 的人」变成可观测事实，
+     * 否则 {@code publishOnce()} 会把重复发布也计为成功，指标静默虚高。
+     *
+     * @return {@code true} = 本次真正把 {@code PENDING} 收敛为 {@code PUBLISHED}；
+     *         {@code false} = 该事件已被其他发布者收敛（重复发布，已由下游幂等承接）
      */
-    void markOutboxPublished(@NonNull String tenantId, @NonNull String outboxId, @NonNull Instant publishedAt);
+    boolean markOutboxPublished(@NonNull String tenantId, @NonNull String outboxId,
+                                @NonNull Instant publishedAt);
 
     /** 记录 Outbox 发布失败，供后续重试与告警。 */
     void markOutboxFailed(@NonNull String tenantId, @NonNull String outboxId, @NonNull String error);

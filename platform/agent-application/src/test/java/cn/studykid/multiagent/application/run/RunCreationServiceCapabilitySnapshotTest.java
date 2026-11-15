@@ -109,8 +109,9 @@ class RunCreationServiceCapabilitySnapshotTest {
         }
 
         @Override
-        public void markOutboxPublished(@NonNull String tenantId, @NonNull String outboxId,
-                                        @NonNull Instant publishedAt) {
+        public boolean markOutboxPublished(@NonNull String tenantId, @NonNull String outboxId,
+                                           @NonNull Instant publishedAt) {
+            return true;
         }
 
         @Override

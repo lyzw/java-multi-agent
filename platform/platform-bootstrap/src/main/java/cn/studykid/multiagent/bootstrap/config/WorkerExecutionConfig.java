@@ -956,9 +956,26 @@ public class WorkerExecutionConfig {
     @Bean
     public RunDispatchConsumer runDispatchConsumer(
             RunClaimPort claimPort,
-            RunDispatchConsumer.RunExecutor executor) {
-        log.info("装配 Worker 消费者: 租约={}s（执行器已接入）", leaseSeconds);
-        return new RunDispatchConsumer(claimPort, Duration.ofSeconds(leaseSeconds), executor);
+            RunDispatchConsumer.RunExecutor executor,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            cn.studykid.multiagent.ports.observer.TraceObserverChain traceObserverChain) {
+        // ⚠️ P0 修复（2026-11-15）：TraceObserverChain 此前有 Bean、有三个实现，
+        //    却**没有任何注入点** ⇒ ai.trace.* 指标与 MDC traceId 永不产出。
+        //    这里用 TracedRunExecutor 把执行器包一层，接进真实消费链路。
+        //    required=false 是为了不破坏裁剪上下文（如 worker 关闭的 CI 测试），
+        //    但缺失时**必须显式 WARN**，绝不静默 —— 并由 ObserverWiringTest
+        //    断言生产装配下该链非 null（撤掉接线即红）。
+        RunDispatchConsumer.RunExecutor effective = executor;
+        if (traceObserverChain != null) {
+            effective = new cn.studykid.multiagent.worker.dispatch.TracedRunExecutor(
+                    executor, traceObserverChain);
+            log.info("装配 Worker 消费者: 租约={}s（执行器已接入，端到端追踪已接线）", leaseSeconds);
+        } else {
+            log.warn("⚠️ TraceObserverChain 未装配：端到端追踪链路断开，ai.trace.* 将无数据"
+                    + "（生产环境不应出现，见 ObserverWiringTest）");
+            log.info("装配 Worker 消费者: 租约={}s（执行器已接入）", leaseSeconds);
+        }
+        return new RunDispatchConsumer(claimPort, Duration.ofSeconds(leaseSeconds), effective);
     }
 
     /**

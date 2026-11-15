@@ -352,7 +352,7 @@ public class RagStartupSelfCheck implements ApplicationRunner {
             {"rag_kp_alias", "V1.0.2-S3"},
     };
 
-    /** 原始实现（保留签名，调用新实现）。 */
-    private void checkSchemaVersionLegacy(List<String> failures) {        checkSchemaVersion(failures);
-    }
+    // 2026-11-15 清理：此处曾有一个私有方法 checkSchemaVersionLegacy，
+    // 声明与实现挤在同一行、且全仓零调用方（死方法）。真实自检入口是
+    // checkSchemaVersion(failures)，删除该残留不影响任何链路。
 }
