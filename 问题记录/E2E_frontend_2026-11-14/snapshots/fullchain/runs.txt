@@ -1,0 +1,177 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：STUDENT · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生（本版本）"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e9]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e10]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e11]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e12]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e13]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e14]
+          - StaticText "Agent 对话"
+  - main
+    - heading "检索记录" [level=1, ref=e6]
+    - paragraph
+      - StaticText "按状态和时间找出分析过的题目。"
+    - generic
+      - sectionheader
+        - heading "筛选" [level=2, ref=e15]
+      - LabelText
+        - StaticText "状态"
+      - combobox "状态" [expanded=false, ref=e7]: 全部
+        - MenuListPopup
+          - option "全部" [selected, ref=e16]
+          - option "排队中" [ref=e17]
+          - option "分析中" [ref=e18]
+          - option "已取消" [ref=e19]
+          - option "已完成" [ref=e20]
+          - option "失败" [ref=e21]
+          - option "超时" [ref=e22]
+      - LabelText
+        - StaticText "学科"
+      - combobox "学科" [expanded=false, ref=e8]: 全部
+        - MenuListPopup
+          - option "全部" [selected, ref=e23]
+          - option "数学" [ref=e24]
+          - option "物理" [ref=e25]
+          - option "化学" [ref=e26]
+          - option "生物" [ref=e27]
+          - option "语文" [ref=e28]
+          - option "英语" [ref=e29]
+      - paragraph
+        - StaticText "这里按状态和学科筛选。学科与年级由后端回填， 只显示词表内的取值——不在词表内一律为空（显示「—」）。"
+    - generic
+      - sectionheader
+        - heading "查询结果" [level=2, ref=e30]
+      - table
+        - rowgroup
+          - row
+            - columnheader "运行标识" [ref=e101]
+            - columnheader "学科 · 年级" [ref=e102]
+            - columnheader "状态" [ref=e103]
+            - columnheader "发起时间" [ref=e104]
+            - columnheader "完成时间" [ref=e105]
+            - columnheader "领取次数" [ref=e106]
+            - columnheader "操作" [ref=e107]
+        - row
+          - cell "c767bd28-f45c-4be1-9ba8-ed6d5d2d62f7" [ref=e31]
+            - link "c767bd28-f45c-4be1-9ba8-ed6d5d2d62f7" [ref=e108]
+          - cell "—" [ref=e32]
+          - cell "已完成" [ref=e33]
+          - cell "11月14日 16:15" [ref=e34]
+          - cell "11月14日 16:15" [ref=e35]
+          - cell "1" [ref=e36]
+          - cell "查看结果" [ref=e37]
+            - link "查看结果" [ref=e109]
+        - row
+          - cell "9a8e750b-9e3c-4e56-b9bf-271f602c0550" [ref=e38]
+            - link "9a8e750b-9e3c-4e56-b9bf-271f602c0550" [ref=e110]
+          - cell "数学 · 初一" [ref=e39]
+          - cell "已完成" [ref=e40]
+          - cell "11月14日 14:58" [ref=e41]
+          - cell "11月14日 14:59" [ref=e42]
+          - cell "1" [ref=e43]
+          - cell "查看结果" [ref=e44]
+            - link "查看结果" [ref=e111]
+        - row
+          - cell "004857ab-8188-4f63-9d4d-73e29bc311fe" [ref=e45]
+            - link "004857ab-8188-4f63-9d4d-73e29bc311fe" [ref=e112]
+          - cell "数学 · 初一" [ref=e46]
+          - cell "已完成" [ref=e47]
+          - cell "11月14日 14:51" [ref=e48]
+          - cell "11月14日 14:51" [ref=e49]
+          - cell "1" [ref=e50]
+          - cell "查看结果" [ref=e51]
+            - link "查看结果" [ref=e113]
+        - row
+          - cell "251a7d44-32c6-4869-9aec-4b0be3c82a50" [ref=e52]
+            - link "251a7d44-32c6-4869-9aec-4b0be3c82a50" [ref=e114]
+          - cell "数学 · 初一" [ref=e53]
+          - cell "已完成" [ref=e54]
+          - cell "11月14日 14:49" [ref=e55]
+          - cell "11月14日 14:49" [ref=e56]
+          - cell "1" [ref=e57]
+          - cell "查看结果" [ref=e58]
+            - link "查看结果" [ref=e115]
+        - row
+          - cell "85970666-9dff-4a10-b9c9-63240778f358" [ref=e59]
+            - link "85970666-9dff-4a10-b9c9-63240778f358" [ref=e116]
+          - cell "数学 · 初三" [ref=e60]
+          - cell "已完成" [ref=e61]
+          - cell "11月14日 14:36" [ref=e62]
+          - cell "11月14日 14:36" [ref=e63]
+          - cell "1" [ref=e64]
+          - cell "查看结果" [ref=e65]
+            - link "查看结果" [ref=e117]
+        - row
+          - cell "08c9cbc6-d1bb-4b8a-8525-761598757075" [ref=e66]
+            - link "08c9cbc6-d1bb-4b8a-8525-761598757075" [ref=e118]
+          - cell "数学 · 初三" [ref=e67]
+          - cell "已完成" [ref=e68]
+          - cell "11月14日 14:36" [ref=e69]
+          - cell "11月14日 14:36" [ref=e70]
+          - cell "1" [ref=e71]
+          - cell "查看结果" [ref=e72]
+            - link "查看结果" [ref=e119]
+        - row
+          - cell "51528f42-fdeb-4b52-b9ad-ec89204e26b7" [ref=e73]
+            - link "51528f42-fdeb-4b52-b9ad-ec89204e26b7" [ref=e120]
+          - cell "数学 · 初三" [ref=e74]
+          - cell "失败" [ref=e75]
+          - cell "11月14日 14:35" [ref=e76]
+          - cell "11月14日 14:35" [ref=e77]
+          - cell "1" [ref=e78]
+          - cell "查看进度" [ref=e79]
+            - link "查看进度" [ref=e121]
+        - row
+          - cell "85ac3697-cab9-4cd9-b6c0-9f86fdd5dbf0" [ref=e80]
+            - link "85ac3697-cab9-4cd9-b6c0-9f86fdd5dbf0" [ref=e122]
+          - cell "数学 · 初三" [ref=e81]
+          - cell "失败" [ref=e82]
+          - cell "11月14日 14:31" [ref=e83]
+          - cell "11月14日 14:31" [ref=e84]
+          - cell "1" [ref=e85]
+          - cell "查看进度" [ref=e86]
+            - link "查看进度" [ref=e123]
+        - row
+          - cell "867d98ab-53dd-4bcb-8828-f562752ec25e" [ref=e87]
+            - link "867d98ab-53dd-4bcb-8828-f562752ec25e" [ref=e124]
+          - cell "—" [ref=e88]
+          - cell "失败" [ref=e89]
+          - cell "11月14日 14:24" [ref=e90]
+          - cell "11月14日 14:29" [ref=e91]
+          - cell "1" [ref=e92]
+          - cell "查看进度" [ref=e93]
+            - link "查看进度" [ref=e125]
+        - row
+          - cell "8e36c89c-177d-4346-a9e4-c12e8a2f8740" [ref=e94]
+            - link "8e36c89c-177d-4346-a9e4-c12e8a2f8740" [ref=e126]
+          - cell "—" [ref=e95]
+          - cell "失败" [ref=e96]
+          - cell "11月14日 14:23" [ref=e97]
+          - cell "11月14日 14:29" [ref=e98]
+          - cell "1" [ref=e99]
+          - cell "查看进度" [ref=e100]
+            - link "查看进度" [ref=e127]
+      - StaticText "已显示全部 10 条"

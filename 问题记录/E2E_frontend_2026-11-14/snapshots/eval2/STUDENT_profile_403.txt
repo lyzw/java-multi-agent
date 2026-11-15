@@ -1,0 +1,44 @@
+- generic [ref=e1] clickable [onclick]
+  - main
+    - generic
+      - StaticText "错题归因辅导"
+    - heading "把错题变成 下一次的分数" [level=1, ref=e2]
+      - StaticText "把错题变成"
+      - LineBreak "\n"
+      - StaticText "下一次的分数"
+    - paragraph
+      - StaticText "不只知道错了，还知道为什么错，以及下一步先补哪一块。"
+    - list
+      - listitem [level=1]
+        - strong
+          - StaticText "看得到失分在哪"
+        - StaticText "按知识点拆解每道错题的失分原因，不只给一个分数。"
+      - listitem [level=1]
+        - strong
+          - StaticText "补得上有章法"
+        - StaticText "从薄弱点出发排学习顺序，一步一步补，而不是刷题海。"
+      - listitem [level=1]
+        - strong
+          - StaticText "收得少、放心用"
+        - StaticText "只采集匿名编号、年级、学科和薄弱点，不收姓名、学校、班级。"
+    - sectionheader
+      - heading "登录" [level=2, ref=e3]
+      - paragraph
+        - StaticText "用学校发的账号登录。"
+    - form
+      - LabelText
+        - StaticText "租户标识"
+      - textbox "租户标识" [required, ref=e5]
+      - LabelText
+        - StaticText "账号"
+      - textbox "账号" [required, ref=e6]
+      - LabelText
+        - StaticText "密码"
+      - generic
+        - textbox "密码" [required, ref=e7]
+        - button "显示密码" [ref=e8]
+          - StaticText "显示密码"
+      - status
+        - StaticText "请填写所有必填字段"
+      - button "登录" [disabled, ref=e4]
+    - StaticText "不采集姓名、学校、班级等身份信息"

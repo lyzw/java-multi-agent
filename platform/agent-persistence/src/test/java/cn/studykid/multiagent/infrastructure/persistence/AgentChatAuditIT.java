@@ -194,6 +194,7 @@ class AgentChatAuditIT {
         assertThat(steps).extracting(StepRow::stepType).containsExactly("RAG", "MODEL_ROUND_1");
         assertThat(steps).allSatisfy(s -> {
             assertThat(s.state()).as("run_step 用 RUNNING 表达「该步骤已发生」").isEqualTo("RUNNING");
+            assertThat(s.completed()).as("步骤完成以 completed_at 判定，不靠 state").isTrue();
             assertThat(s.fencingToken()).isZero();
         });
         assertThat(countOutbox(tenantA, runId)).isZero();
@@ -316,7 +317,8 @@ class AgentChatAuditIT {
     private record EventRow(long sequenceNo, String eventType, String payload) {
     }
 
-    private record StepRow(int stepNumber, String state, String stepType, long fencingToken) {
+    private record StepRow(int stepNumber, String state, String stepType, long fencingToken,
+                            boolean completed) {
     }
 
     private static RunRow runRow(String tenant, String runId) throws Exception {
@@ -364,14 +366,16 @@ class AgentChatAuditIT {
         return inTenant(appPool, tenant, conn -> {
             List<StepRow> rows = new ArrayList<>();
             try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT step_number, state, step_type, fencing_token FROM run_step "
+                    "SELECT step_number, state, step_type, fencing_token, "
+                  + "(completed_at IS NOT NULL) AS completed FROM run_step "
                   + "WHERE tenant_id = ?::uuid AND run_id = ?::uuid ORDER BY step_number")) {
                 ps.setString(1, tenant);
                 ps.setString(2, runId);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         rows.add(new StepRow(rs.getInt("step_number"), rs.getString("state"),
-                                rs.getString("step_type"), rs.getLong("fencing_token")));
+                                rs.getString("step_type"), rs.getLong("fencing_token"),
+                                rs.getBoolean("completed")));
                     }
                 }
             }

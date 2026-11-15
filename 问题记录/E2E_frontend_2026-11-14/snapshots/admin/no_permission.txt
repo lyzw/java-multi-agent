@@ -1,0 +1,99 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：TENANT_ADMIN · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e7]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e8]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e9]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e10]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e11]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e12]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e13]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e14]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "知识库治理"
+    - paragraph
+      - StaticText "需内容审核 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "语料管理" [ref=e15]
+          - StaticText "语料管理"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e16]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e17]
+          - StaticText "未知操作处置"
+      - listitem [level=1]
+        - link "审计查询" [ref=e18]
+          - StaticText "审计查询"
+    - paragraph
+      - StaticText "平台配置与运维"
+    - paragraph
+      - StaticText "需租户管理员 / 运维"
+    - list
+      - listitem [level=1]
+        - link "配置总览" [ref=e19]
+          - StaticText "配置总览"
+      - listitem [level=1]
+        - link "运行与容量" [ref=e20]
+          - StaticText "运行与容量"
+      - listitem [level=1]
+        - link "工具与审批" [ref=e21]
+          - StaticText "工具与审批"
+      - listitem [level=1]
+        - link "合规与零保留" [ref=e22]
+          - StaticText "合规与零保留"
+      - listitem [level=1]
+        - link "Agent 配置" [ref=e23]
+          - StaticText "Agent 配置"
+      - listitem [level=1]
+        - link "系统健康" [ref=e24]
+          - StaticText "系统健康"
+  - main
+    - paragraph
+      - StaticText "403"
+    - heading "无权限" [level=1, ref=e6]
+    - paragraph
+      - StaticText "你已登录，但当前账号没有执行该操作的权限。"
+    - alert
+      - paragraph
+        - StaticText "访问被拒绝"
+      - paragraph
+        - StaticText "当前账号无权执行该操作。这不是登录失效，重新登录不会解决。"
+      - paragraph
+        - StaticText "如需访问，请联系管理员为你分配相应权限。"
+      - generic
+        - link "返回工作台" [ref=e25]
+        - button "返回上一页" [ref=e26]

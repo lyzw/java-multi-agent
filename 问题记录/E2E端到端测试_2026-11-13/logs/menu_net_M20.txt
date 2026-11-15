@@ -1,0 +1,4 @@
+[80120.202] GET http://localhost:5180/api/platform/v1/tenants?limit=200 (Fetch) 200
+[80120.203] GET http://localhost:5180/api/v1/management/dictionaries (Fetch) 200
+[80120.204] GET http://localhost:5180/api/platform/v1/tenants?limit=200 (Fetch) 200
+[80120.205] GET http://localhost:5180/api/v1/management/dictionaries (Fetch) 200

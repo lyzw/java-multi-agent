@@ -47,6 +47,9 @@ public interface RunQueryPort {
      * @param completedAt 完成时刻；非终态为 {@code null}
      * @param attempt     领取次数
      * @param errorCode   失败原因码；成功或未失败为 {@code null}
+     * @param requesterId 创建该 Run 的主体（{@code run.requester_id}）；
+     *                     历史行 / 运维代操作为 {@code null}。
+     *                     ⚠️ 受众主体的归属校验据此判定（F1 隔离）：不归属 → 与「不存在」同 404。
      */
     record RunStatus(
             @NonNull String runId,
@@ -54,7 +57,8 @@ public interface RunQueryPort {
             @NonNull Instant createdAt,
             @Nullable Instant completedAt,
             int attempt,
-            @Nullable String errorCode
+            @Nullable String errorCode,
+            @Nullable String requesterId
     ) {
         public RunStatus {
             if (state == null || state.isBlank()) {

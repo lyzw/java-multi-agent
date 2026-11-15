@@ -14,6 +14,8 @@
 
 import { Link } from 'react-router-dom'
 import { Icon, type IconName } from '@/components/Icon'
+import { errorGuidance } from '@/api/errorGuidance'
+import type { NormalizedError } from '@/api/errors'
 
 /* ── 面包屑：深层页位置指示（F3）─────────────────────── */
 
@@ -242,6 +244,45 @@ export function ErrorState({
         </button>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * 由归一化错误直接渲染的错误态（E2E 二次评估 N2 / N6）。
+ *
+ * ⛔ 页面**不得**再自己写一份「可能是网络问题 + 重试按钮」——
+ *    F8 修了进度页、画像页却漏了，正是各写一份的后果。
+ *    是否给重试、给什么下一步，一律由 `errorGuidance` 决定：
+ *      403 / 404 / 401 = 终态，不给重试；
+ *      5xx / 超时 / 网络 = 临时故障，可重试。
+ *
+ * ⚠️ `onRetry` 由调用方提供；终态错误即便传了也会被忽略，
+ *    这是刻意的安全默认值（不给「必然失败」的重试按钮）。
+ */
+export function ErrorStateFromError({
+  error,
+  onRetry,
+  reasonPrefix,
+  retryLabel,
+}: {
+  error: NormalizedError | null
+  onRetry?: () => void
+  /** 需要标明是哪个区块失败时加前缀，如「学习画像」 */
+  reasonPrefix?: string
+  /** 覆盖按钮文案（如报表区块沿用「重新读取」）；终态错误不渲染按钮 */
+  retryLabel?: string
+}): JSX.Element {
+  const guidance = errorGuidance(error)
+  const reason = error === null
+    ? guidance.reason
+    : error.message || guidance.reason
+  return (
+    <ErrorState
+      reason={reasonPrefix !== undefined ? `${reasonPrefix}：${reason}` : reason}
+      next={guidance.next}
+      onRetry={guidance.retryable ? onRetry : undefined}
+      retryLabel={retryLabel ?? guidance.retryLabel}
+    />
   )
 }
 

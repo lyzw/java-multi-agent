@@ -95,7 +95,8 @@ export const NAV_GROUPS: NavGroup[] = [
         label: '平台审计',
         path: '/audit',
         icon: <FileProtectOutlined />,
-        requiredRoles: [ROLES.SUPER_ADMIN, ROLES.AUDITOR],
+        // DEF-02：与 router AUDIT_SCOPE、后端冻结矩阵保持一致（SECURITY_ADMIN 持 audit.read）。
+        requiredRoles: [ROLES.SUPER_ADMIN, ROLES.SECURITY_ADMIN, ROLES.AUDITOR],
         description:
           '平台管理动作审计（登录/租户生命周期/配额/能力授权/用户管理），读 platform_audit_event，与租户业务审计物理分域。仅追加、只读。',
         phase: '平台治理',

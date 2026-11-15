@@ -779,8 +779,14 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
 
             Map<String, ModelResponse.ToolCallRequest> calls = withStableCallIds(
                     response.toolCalls());
-            for (ModelResponse.ToolCallRequest call : calls.values()) {
-                sink.accept(new AgentChatEvent.Tool(call.callId(), call.toolName(), "call",
+            for (Map.Entry<String, ModelResponse.ToolCallRequest> entry : calls.entrySet()) {
+                // ⚠️ toolCallId 取 Map 的 key，不取 call.callId()：
+                //   calls 已由 withStableCallIds 归一（key == 归一后的 callId，恒非 null），
+                //   而 ModelResponse.ToolCallRequest.callId 的契约是 @Nullable（模型可能不返回 id），
+                //   直接读它会把 null 灌进 AgentChatEvent.Tool 的 @NonNull toolCallId。
+                String callId = entry.getKey();
+                ModelResponse.ToolCallRequest call = entry.getValue();
+                sink.accept(new AgentChatEvent.Tool(callId, call.toolName(), "call",
                         AgentChatEvent.StepStatus.PENDING, argumentsJson(call.arguments()),
                         null, null));
                 if (DelegationToolSchema.TOOL_NAME.equals(call.toolName())) {
@@ -943,8 +949,12 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
     private static void emitToolResults(@NonNull Sink sink, @NonNull RunState state,
                                         @NonNull Map<String, ModelResponse.ToolCallRequest> calls,
                                         @NonNull ToolInvocationResult result) {
-        for (ModelResponse.ToolCallRequest call : calls.values()) {
-            String id = call.callId();
+        for (Map.Entry<String, ModelResponse.ToolCallRequest> entry : calls.entrySet()) {
+            // ⚠️ id 取 Map 的 key（== withStableCallIds 归一后的 callId，恒非 null），
+            //   不取 call.callId()（其契约为 @Nullable，模型可能不返回 id）。
+            //   否则 null 会灌进 AgentChatEvent.Tool 的 @NonNull toolCallId（SpotBugs NP）。
+            String id = entry.getKey();
+            ModelResponse.ToolCallRequest call = entry.getValue();
             String tool = call.toolName();
             if (result.succeededTools().contains(tool)) {
                 String output = result.outputOf(tool).orElse("");

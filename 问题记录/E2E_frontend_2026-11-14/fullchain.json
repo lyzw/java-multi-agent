@@ -1,0 +1,50 @@
+{
+  "runId": "d6c8f6bc-9a10-4bf7-9898-9f0e6c098b21",
+  "steps": [
+    {
+      "label": "1 学生登录成功（未停留在登录页）",
+      "ok": true,
+      "detail": "url=http://localhost:5173/"
+    },
+    {
+      "label": "2 工作台可访问",
+      "ok": true,
+      "detail": "url=http://localhost:5173/"
+    },
+    {
+      "label": "2b 导航不含管理区（角色=受众）",
+      "ok": true,
+      "detail": "未见配置/审批/审计入口"
+    },
+    {
+      "label": "3 /runs 可访问且呈现列表",
+      "ok": true,
+      "detail": "url=http://localhost:5173/runs"
+    },
+    {
+      "label": "4 无「没有可用的 Agent」阻断提示",
+      "ok": true,
+      "detail": "已解除"
+    },
+    {
+      "label": "4b 渲染 Agent 下拉框",
+      "ok": true,
+      "detail": "存在"
+    },
+    {
+      "label": "5 提交后跳转到 Run 进度页",
+      "ok": true,
+      "detail": "url=http://localhost:5173/runs/d6c8f6bc-9a10-4bf7-9898-9f0e6c098b21 runId=d6c8f6bc-9a10-4bf7-9898-9f0e6c098b21"
+    },
+    {
+      "label": "6 进度页呈现执行状态",
+      "ok": true,
+      "detail": "含状态文本=True"
+    },
+    {
+      "label": "7 结果页呈现归因内容",
+      "ok": true,
+      "detail": "含归因关键词=True"
+    }
+  ]
+}

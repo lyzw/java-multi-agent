@@ -1,0 +1,94 @@
+A01 登录-空 body                                POST  /api/platform/v1/auth/login                              -> 401
+A02 登录-不存在的账号                                POST  /api/platform/v1/auth/login                              -> 401
+A03 登录-错误口令                                  POST  /api/platform/v1/auth/login                              -> 401
+A04 登录-租户账号尝试登录平台                            POST  /api/platform/v1/auth/login                              -> 401
+login:plat-superadmin                        POST  /api/platform/v1/auth/login                              -> 200
+login:plat-lifecycle                         POST  /api/platform/v1/auth/login                              -> 200
+login:plat-resource                          POST  /api/platform/v1/auth/login                              -> 200
+login:plat-security                          POST  /api/platform/v1/auth/login                              -> 200
+login:plat-auditor                           POST  /api/platform/v1/auth/login                              -> 200
+login:plat-support                           POST  /api/platform/v1/auth/login                              -> 200
+A05 /auth/me 无令牌                             GET   /api/platform/v1/auth/me                                 -> 401
+A06 /auth/me 伪造令牌                            GET   /api/platform/v1/auth/me                                 -> 401
+A07 /auth/me 有效令牌                            GET   /api/platform/v1/auth/me                                 -> 200
+RBAC:plat-superadmin:平台用户列表                  GET   /api/platform/v1/users                                   -> 200
+RBAC:plat-superadmin:角色矩阵                    GET   /api/platform/v1/roles                                   -> 200
+RBAC:plat-superadmin:租户列表                    GET   /api/platform/v1/tenants                                 -> 200
+RBAC:plat-superadmin:平台审计                    GET   /api/platform/v1/audit-events                            -> 200
+RBAC:plat-superadmin:Agent 注册表               GET   /api/platform/v1/capabilities/agents                     -> 200
+RBAC:plat-superadmin:Tool 目录                 GET   /api/platform/v1/capabilities/tools                      -> 200
+RBAC:plat-superadmin:Skill 目录                GET   /api/platform/v1/capabilities/skills                     -> 200
+RBAC:plat-superadmin:MCP 目录                  GET   /api/platform/v1/capabilities/mcps                       -> 200
+RBAC:plat-superadmin:字典                      GET   /api/platform/v1/dictionaries                            -> 200
+RBAC:plat-superadmin:权限清单                    GET   /api/platform/v1/permissions                             -> 200
+RBAC:plat-superadmin:人工审查队列                  GET   /api/platform/v1/review-tasks                            -> 200
+RBAC:plat-superadmin:Agent 指标                GET   /api/platform/v1/metrics/agent                           -> 404
+RBAC:plat-lifecycle:平台用户列表                   GET   /api/platform/v1/users                                   -> 403
+RBAC:plat-lifecycle:角色矩阵                     GET   /api/platform/v1/roles                                   -> 403
+RBAC:plat-lifecycle:租户列表                     GET   /api/platform/v1/tenants                                 -> 200
+RBAC:plat-lifecycle:平台审计                     GET   /api/platform/v1/audit-events                            -> 403
+RBAC:plat-lifecycle:Agent 注册表                GET   /api/platform/v1/capabilities/agents                     -> 403
+RBAC:plat-lifecycle:Tool 目录                  GET   /api/platform/v1/capabilities/tools                      -> 403
+RBAC:plat-lifecycle:Skill 目录                 GET   /api/platform/v1/capabilities/skills                     -> 403
+RBAC:plat-lifecycle:MCP 目录                   GET   /api/platform/v1/capabilities/mcps                       -> 403
+RBAC:plat-lifecycle:字典                       GET   /api/platform/v1/dictionaries                            -> 403
+RBAC:plat-lifecycle:权限清单                     GET   /api/platform/v1/permissions                             -> 403
+RBAC:plat-lifecycle:人工审查队列                   GET   /api/platform/v1/review-tasks                            -> 403
+RBAC:plat-lifecycle:Agent 指标                 GET   /api/platform/v1/metrics/agent                           -> 404
+RBAC:plat-resource:平台用户列表                    GET   /api/platform/v1/users                                   -> 403
+RBAC:plat-resource:角色矩阵                      GET   /api/platform/v1/roles                                   -> 403
+RBAC:plat-resource:租户列表                      GET   /api/platform/v1/tenants                                 -> 403
+RBAC:plat-resource:平台审计                      GET   /api/platform/v1/audit-events                            -> 403
+RBAC:plat-resource:Agent 注册表                 GET   /api/platform/v1/capabilities/agents                     -> 200
+RBAC:plat-resource:Tool 目录                   GET   /api/platform/v1/capabilities/tools                      -> 200
+RBAC:plat-resource:Skill 目录                  GET   /api/platform/v1/capabilities/skills                     -> 200
+RBAC:plat-resource:MCP 目录                    GET   /api/platform/v1/capabilities/mcps                       -> 200
+RBAC:plat-resource:字典                        GET   /api/platform/v1/dictionaries                            -> 200
+RBAC:plat-resource:权限清单                      GET   /api/platform/v1/permissions                             -> 403
+RBAC:plat-resource:人工审查队列                    GET   /api/platform/v1/review-tasks                            -> 200
+RBAC:plat-resource:Agent 指标                  GET   /api/platform/v1/metrics/agent                           -> 404
+RBAC:plat-security:平台用户列表                    GET   /api/platform/v1/users                                   -> 403
+RBAC:plat-security:角色矩阵                      GET   /api/platform/v1/roles                                   -> 403
+RBAC:plat-security:租户列表                      GET   /api/platform/v1/tenants                                 -> 403
+RBAC:plat-security:平台审计                      GET   /api/platform/v1/audit-events                            -> 200
+RBAC:plat-security:Agent 注册表                 GET   /api/platform/v1/capabilities/agents                     -> 403
+RBAC:plat-security:Tool 目录                   GET   /api/platform/v1/capabilities/tools                      -> 403
+RBAC:plat-security:Skill 目录                  GET   /api/platform/v1/capabilities/skills                     -> 403
+RBAC:plat-security:MCP 目录                    GET   /api/platform/v1/capabilities/mcps                       -> 403
+RBAC:plat-security:字典                        GET   /api/platform/v1/dictionaries                            -> 403
+RBAC:plat-security:权限清单                      GET   /api/platform/v1/permissions                             -> 403
+RBAC:plat-security:人工审查队列                    GET   /api/platform/v1/review-tasks                            -> 403
+RBAC:plat-security:Agent 指标                  GET   /api/platform/v1/metrics/agent                           -> 404
+RBAC:plat-auditor:平台用户列表                     GET   /api/platform/v1/users                                   -> 403
+RBAC:plat-auditor:角色矩阵                       GET   /api/platform/v1/roles                                   -> 403
+RBAC:plat-auditor:租户列表                       GET   /api/platform/v1/tenants                                 -> 200
+RBAC:plat-auditor:平台审计                       GET   /api/platform/v1/audit-events                            -> 200
+RBAC:plat-auditor:Agent 注册表                  GET   /api/platform/v1/capabilities/agents                     -> 200
+RBAC:plat-auditor:Tool 目录                    GET   /api/platform/v1/capabilities/tools                      -> 200
+RBAC:plat-auditor:Skill 目录                   GET   /api/platform/v1/capabilities/skills                     -> 200
+RBAC:plat-auditor:MCP 目录                     GET   /api/platform/v1/capabilities/mcps                       -> 200
+RBAC:plat-auditor:字典                         GET   /api/platform/v1/dictionaries                            -> 200
+RBAC:plat-auditor:权限清单                       GET   /api/platform/v1/permissions                             -> 403
+RBAC:plat-auditor:人工审查队列                     GET   /api/platform/v1/review-tasks                            -> 200
+RBAC:plat-auditor:Agent 指标                   GET   /api/platform/v1/metrics/agent                           -> 404
+RBAC:plat-support:平台用户列表                     GET   /api/platform/v1/users                                   -> 403
+RBAC:plat-support:角色矩阵                       GET   /api/platform/v1/roles                                   -> 403
+RBAC:plat-support:租户列表                       GET   /api/platform/v1/tenants                                 -> 200
+RBAC:plat-support:平台审计                       GET   /api/platform/v1/audit-events                            -> 403
+RBAC:plat-support:Agent 注册表                  GET   /api/platform/v1/capabilities/agents                     -> 200
+RBAC:plat-support:Tool 目录                    GET   /api/platform/v1/capabilities/tools                      -> 200
+RBAC:plat-support:Skill 目录                   GET   /api/platform/v1/capabilities/skills                     -> 200
+RBAC:plat-support:MCP 目录                     GET   /api/platform/v1/capabilities/mcps                       -> 200
+RBAC:plat-support:字典                         GET   /api/platform/v1/dictionaries                            -> 200
+RBAC:plat-support:权限清单                       GET   /api/platform/v1/permissions                             -> 403
+RBAC:plat-support:人工审查队列                     GET   /api/platform/v1/review-tasks                            -> 200
+RBAC:plat-support:Agent 指标                   GET   /api/platform/v1/metrics/agent                           -> 404
+ISO 平台令牌->租户域 /api/cap/catalog/tools         GET   /api/cap/catalog/tools                                   -> 401
+ISO 平台令牌->租户域 /api/agents                    GET   /api/agents                                              -> 401
+ISO 平台令牌->租户域 /api/admin/tenants             GET   /api/admin/tenants                                       -> 401
+ISO 平台令牌->租户域 /api/cap/config/routing-policies/dry-run GET   /api/cap/config/routing-policies/dry-run                 -> 401
+WRITE-DENY:plat-support                      POST  /api/platform/v1/users                                   -> 403
+WRITE-DENY:plat-auditor                      POST  /api/platform/v1/users                                   -> 403
+WRITE-DENY:plat-resource                     POST  /api/platform/v1/users                                   -> 403
+RAG 无租户头                                     GET   /api/v1/sources                                          -> 404
+TOTAL 93 -> /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/http/api_probe.jsonl

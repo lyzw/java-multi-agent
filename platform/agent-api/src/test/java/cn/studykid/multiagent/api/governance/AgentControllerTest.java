@@ -3,6 +3,8 @@ package cn.studykid.multiagent.api.governance;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -21,6 +23,7 @@ import cn.studykid.multiagent.ports.persistence.AgentManagePort;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort.AgentItem;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort.AgentVersionItem;
+import cn.studykid.multiagent.ports.persistence.Page;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
@@ -136,6 +139,71 @@ class AgentControllerTest {
                 .when(authorization).requireAuthorized(any(), any(), any());
 
         assertThatThrownBy(() -> c.getAgent(AGENT_ID))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    // ── GET /api/agents（受众只读面 · F1 · 2026-11-14） ──
+
+    @Test
+    @DisplayName("受众（仅 AGENT_LIST）→ 200 + 裁剪视图：不下发 latestDefinition、只列已发布")
+    void listAgents_audience_getsTrimmedPublishedOnly() {
+        stubContext(Set.of(AuthorizationService.Roles.STUDENT));
+        AgentController c = controller();
+        when(authorization.isAuthorized(any(), eq(AuthorizationService.Actions.AGENT_MANAGE), any()))
+                .thenReturn(false);
+        when(authorization.isAuthorized(any(), eq(AuthorizationService.Actions.AGENT_LIST), any()))
+                .thenReturn(true);
+        Instant published = Instant.now();
+        when(agents.listAgents(eq(TENANT_ID), any(), anyInt())).thenReturn(Page.of(List.of(
+                new AgentItem(AGENT_ID, "demo-agent", "demo", 3, 2,
+                        "{\"modelRef\":\"MiniMax-M2.5\"}", published),
+                // 未发布版本：受众面**不可见**（不是可发起对象）
+                new AgentItem("agent-2", "draft-agent", "draft", 1, 1, "{}", null)), null));
+
+        var resp = c.listAgents(50, null);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().items()).hasSize(1);
+        var item = resp.getBody().items().get(0);
+        assertThat(item.agentId()).isEqualTo(AGENT_ID);
+        assertThat(item.name()).isEqualTo("demo-agent");
+        assertThat(item.latestVersionNumber()).isEqualTo(2);
+        assertThat(item.latestPublishedAt()).isEqualTo(published);
+        assertThat(item.latestDefinition())
+                .as("受众面不得下发定义快照全文（系统提示词属治理面）").isNull();
+        assertThat(item.versionCount())
+                .as("受众面不需要版本存量信息").isZero();
+    }
+
+    @Test
+    @DisplayName("治理面（AGENT_MANAGE）→ 完整视图：保留 latestDefinition 与版本计数")
+    void listAgents_governance_getsFullView() {
+        stubContext(Set.of(AuthorizationService.Roles.TENANT_ADMIN));
+        AgentController c = controller();
+        when(authorization.isAuthorized(any(), eq(AuthorizationService.Actions.AGENT_MANAGE), any()))
+                .thenReturn(true);
+        Instant published = Instant.now();
+        when(agents.listAgents(eq(TENANT_ID), any(), anyInt())).thenReturn(Page.of(List.of(
+                new AgentItem(AGENT_ID, "demo-agent", "demo", 3, 2,
+                        "{\"modelRef\":\"MiniMax-M2.5\"}", published),
+                new AgentItem("agent-2", "draft-agent", "draft", 1, 1, "{}", null)), null));
+
+        var resp = c.listAgents(50, null);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().items()).hasSize(2);
+        assertThat(resp.getBody().items().get(0).latestDefinition()).isNotNull();
+        assertThat(resp.getBody().items().get(0).versionCount()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("无任何 Agent 读权限 → 403（两个动作都无 → fail-closed）")
+    void listAgents_denied_without_anyAgentReadPermission() {
+        stubContext(Set.of("TENANT_VIEWER"));
+        AgentController c = controller();
+        when(authorization.isAuthorized(any(), any(), any())).thenReturn(false);
+        doThrow(new AccessDeniedException("principal-1", AuthorizationService.Actions.AGENT_MANAGE, null))
+                .when(authorization).requireAuthorized(any(), any(), any());
+
+        assertThatThrownBy(() -> c.listAgents(50, null))
                 .isInstanceOf(AccessDeniedException.class);
     }
 }

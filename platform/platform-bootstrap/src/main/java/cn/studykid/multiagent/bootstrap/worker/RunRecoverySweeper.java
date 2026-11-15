@@ -2,6 +2,7 @@ package cn.studykid.multiagent.bootstrap.worker;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -70,7 +71,7 @@ public class RunRecoverySweeper {
      * 而系统表面一切正常。故它不是给日志用的计数值，
      * 是给 {@link #healthy()} 用的健康事实。
      */
-    private volatile int portUnavailableStreak;
+    private final AtomicInteger portUnavailableStreak = new AtomicInteger();
 
     /**
      * 健康状态：{@code false} 表示本轮起崩溃恢复<b>未真正生效</b>。
@@ -141,7 +142,7 @@ public class RunRecoverySweeper {
 
     /** 租户枚举端口连续不可用的轮次数（{@code 0} = 本轮正常）。 */
     public int portUnavailableStreak() {
-        return portUnavailableStreak;
+        return portUnavailableStreak.get();
     }
 
     /**
@@ -160,7 +161,7 @@ public class RunRecoverySweeper {
             log.info("崩溃恢复链路已恢复健康（此前原因：{}）", unhealthyReason);
         }
         unhealthyReason = null;
-        portUnavailableStreak = 0;
+        portUnavailableStreak.set(0);
     }
 
     /**
@@ -195,15 +196,15 @@ public class RunRecoverySweeper {
             //    日志只保留「首次 + 每 40 轮一次摘要」，既不刷屏也不丢最高优先级那一次。
             String reason = "租户枚举端口 PlatformTenantPort 不可用"
                     + "（平台运维通道未接入？），过期 RUNNING 无法自动接管";
-            boolean firstFailure = portUnavailableStreak == 0;
-            portUnavailableStreak++;
+            boolean firstFailure = portUnavailableStreak.get() == 0;
+            portUnavailableStreak.incrementAndGet();
             unhealthyReason = reason;
             if (firstFailure) {
                 log.error("⚠️⚠️ 崩溃恢复链路不可用：{}（连续失败 1 轮；"
                         + "worker 崩溃后遗留的 RUNNING 将无人接管，属静默失效）", reason);
-            } else if (portUnavailableStreak % 40 == 0) {
+            } else if (portUnavailableStreak.get() % 40 == 0) {
                 log.error("⚠️⚠️ 崩溃恢复链路持续不可用：{}（已连续失败 {} 轮）",
-                        reason, portUnavailableStreak);
+                        reason, portUnavailableStreak.get());
             }
             if (requireTenantPort) {
                 // fail-closed：本环境声明了「没有恢复能力就不该继续跑」
@@ -229,15 +230,15 @@ public class RunRecoverySweeper {
         } catch (RuntimeException e) {
             String reason = "租户枚举失败（PlatformTenantPort.listTenants 抛异常），"
                     + "过期 RUNNING 无法自动接管: " + e;
-            boolean firstFailure = portUnavailableStreak == 0;
-            portUnavailableStreak++;
+            boolean firstFailure = portUnavailableStreak.get() == 0;
+            portUnavailableStreak.incrementAndGet();
             unhealthyReason = reason;
             if (firstFailure) {
                 log.error("⚠️⚠️ 崩溃恢复链路不可用：{}（连续失败 1 轮；"
                         + "worker 崩溃后遗留的 RUNNING 将无人接管，属静默失效）", reason);
-            } else if (portUnavailableStreak % 40 == 0) {
+            } else if (portUnavailableStreak.get() % 40 == 0) {
                 log.error("⚠️⚠️ 崩溃恢复链路持续不可用：{}（已连续失败 {} 轮）",
-                        reason, portUnavailableStreak);
+                        reason, portUnavailableStreak.get());
             }
             if (requireTenantPort) {
                 throw new IllegalStateException("崩溃恢复链路不可用且已配置 "

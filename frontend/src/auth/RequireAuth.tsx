@@ -16,7 +16,7 @@ export function RequireAuth({ children }: { children: ReactNode }): JSX.Element 
 
   if (!authenticated) {
     // 记住原目标，登录后可回跳
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />
+    return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
   }
   return <>{children}</>
 }

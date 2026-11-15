@@ -55,7 +55,11 @@ public class RoleBasedAuthorizationService implements AuthorizationService {
                     //    授予集合与 TOOL_INVOKE 对齐（管理员 / 作者 / Worker）——
                     //    能驱动 Agent 执行的人，才允许把工作交给子 Agent。
                     //    ⚠️ 刻意不给 VIEWER / APPROVER：只读与审批角色不产生委派。
-                    Actions.AGENT_DELEGATE),
+                    Actions.AGENT_DELEGATE,
+                    // ⚠️ **只读列举 Agent（F1 · E2E 2026-11-14）**：
+                    //    管理员的「什么都能做」是既有不变式，新动作必须同步登记，
+                    //    否则自检会判定「动作存在但无人可执行」。
+                    Actions.AGENT_LIST),
             Roles.AGENT_AUTHOR, Set.of(
                     Actions.RUN_CREATE, Actions.RUN_READ, Actions.RUN_CANCEL,
                     Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ,
@@ -66,14 +70,22 @@ public class RoleBasedAuthorizationService implements AuthorizationService {
                     //    作者负责准备变更，审批权在管理员。
                     //    这使双人复核在**权限层面**就有落点，
                     //    而不只是靠同一管理员的自律。
-                    Actions.CONFIG_REQUEST),
+                    Actions.CONFIG_REQUEST,
+                    // ⚠️ 作者本就在管理自己的 Agent，列举是天然读面
+                    Actions.AGENT_LIST),
             Roles.APPROVER, Set.of(
                     Actions.RUN_READ, Actions.APPROVAL_CONSUME,
                     Actions.UNKNOWN_DISPOSE, Actions.EVENT_SUBSCRIBE),
             Roles.VIEWER, Set.of(
                     Actions.RUN_READ, Actions.RESULT_READ, Actions.EVENT_SUBSCRIBE,
                     // ⚠️ 画像读取（P4-D09 / G6）：只读角色读只读数据，语义一致
-                    Actions.PROFILE_READ),
+                    Actions.PROFILE_READ
+                    // ⚠️ **刻意不给 AGENT_LIST**：VIEWER 是**运维侧**只读观察者，
+                    //    而 Agent 列表端点在治理面（G2-2 契约：无 AGENT_MANAGE → 403）。
+                    //    需要「列举可发起辅导的 Agent」的是**受众**（STUDENT/PARENT/TEACHER），
+                    //    两者定位不同：受众要自助发起，观察者只看自己的 Run。
+                    //    给了 VIEWER 会与既有治理契约冲突（AgentEndpointIT 锁定 403）。
+                    ),
             // Worker 服务账号：需要执行与处置能力，但不需人工审批
             // ⚠️ **刻意不含 PROFILE_READ**（P4-D09 / G6）：
             //    Worker 是执行侧服务账号，读学生画像不属于其职责；
@@ -87,6 +99,37 @@ public class RoleBasedAuthorizationService implements AuthorizationService {
                     //    真正的<b>逐跳授权</b>还要过 DelegationGuard 的
                     //    目标声明 / 深度 / 次数 / 预算 / authzVersion 判定。
                     Actions.AGENT_DELEGATE),
+            // ⚠️ **受众角色（STUDENT/PARENT/TEACHER）**（F1 · E2E 2026-11-14 正规实现）：
+            //    面向「错题归因辅导」核心受众的最小能力集——**只读 + 本人 Run 自助**，
+            //    不含任何治理/管理动作（fail-closed）：
+            //    · STUDENT：可发起辅导（RUN_CREATE）、查看**本人** Run 的状态/事件/结果。
+            //      ⛔ 不给 PROFILE_READ：主体与「学生匿名编号」之间**没有绑定关系**
+            //      （principal 表刻意不采集，PIPL/DEC-6），放开即等于租户内画像任意读。
+            //    · PARENT/TEACHER：与 STUDENT 相同的 Run 读能力 + PROFILE_READ
+            //      （PROFILE_READ 的动作契约本就写明「家长/教师可读画像」；
+            //      与 VIEWER 的租户级画像只读同口径——画像按匿名编号组织，无真实身份）。
+            //    · ⛔ 不给 RUN_CANCEL / TOOL_INVOKE / AUDIT_READ / AGENT_MANAGE /
+            //      CONFIG_*：受众不是治理主体；取消与处置由运营角色执行。
+            //    · AGENT_LIST（只读）：「发起辅导」页的 Agent 下拉框所需。
+            //      ⛔ 只给**列举**这一个只读面，且控制器会裁剪治理元数据
+            //      （不下发 latestDefinition 提示词全文、只列已发布版本）。
+            //      不给则会出现「能发起却看不见可发起什么」的**能力—依赖不匹配**：
+            //      接口 403 → 前端空列表 → 页面误报「没有可用的 Agent」。
+            //    · ⚠️ Run 数据隔离不靠权限矩阵（动作级）实现，而靠
+            //      {@code AuthorizationService.Roles#isAudienceOnly} 的资源级收窄
+            //      （run.requester_id = principalId）——动作级授权回答「能不能读 Run」，
+            //      资源级收窄回答「能读**哪些** Run」，二者缺一不可。
+            Roles.STUDENT, Set.of(
+                    Actions.RUN_CREATE, Actions.RUN_READ,
+                    Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ, Actions.AGENT_LIST),
+            Roles.PARENT, Set.of(
+                    Actions.RUN_READ, Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ,
+                    // ⚠️ 画像读取（P4-D09 / G6）：家长是画像数据的合法读方（受众契约）
+                    Actions.PROFILE_READ,
+                    Actions.AGENT_LIST),
+            Roles.TEACHER, Set.of(
+                    Actions.RUN_READ, Actions.EVENT_SUBSCRIBE, Actions.RESULT_READ,
+                    Actions.PROFILE_READ, Actions.AGENT_LIST),
             // ⚠️ **平台级管理员（PLATFORM_ADMIN）**：
             //    平台/运维级治理角色，可覆盖全部动作（含平台级端点）。
             //    默认不授予任何主体 —— 仅在 out-of-band 授权通道（bootstrap）授予后才生效，

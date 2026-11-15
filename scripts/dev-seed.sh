@@ -258,6 +258,16 @@ cmd_seed() {
   sql+="FROM principal p CROSS JOIN (VALUES ${role_values}) AS r(role) "
   sql+="WHERE p.login_name = '${login}' "
   sql+="ON CONFLICT DO NOTHING;"$'\n'
+  # ⚠️ P0（E2E 二次评估 2026-11-14）：主体授权版本行必须在**主体开通时**建。
+  #    cap_authz_version 的六处生产读点一律 require()（缺行即 fail-closed），
+  #    而此前 initialize() 零生产调用方 —— 新账号发起 Run 时能力快照双写被跳过，
+  #    Run 返回 201 后静默 FAILED（CONFIG_UNAVAILABLE）。
+  #    ⛔ 这是「写侧显式授权」，绝不等于把读点改成「缺行即补建」。
+  #    principal_id 是 uuid 列，cap_authz_version.principal_id 是 text，故需 ::text。
+  sql+="INSERT INTO cap_authz_version (tenant_id, principal_id, authz_version, version, updated_at) "
+  sql+="SELECT p.tenant_id, p.principal_id::text, 1, 0, now() "
+  sql+="FROM principal p WHERE p.login_name = '${login}' "
+  sql+="ON CONFLICT (tenant_id, principal_id) DO NOTHING;"$'\n'
   sql+="COMMIT;"$'\n'
 
   # 幂等说明：全部 ON CONFLICT DO NOTHING，

@@ -232,8 +232,17 @@ describe('进度页：失败态不再死路 + 手动刷新', () => {
     vi.stubGlobal('fetch', fetchMock)
   })
 
-  it('失败终态给出「重新发起」与「回检索记录」两个出口', async () => {
-    // 状态端点返回 FAILED（终态）→ 轮询自停
+  const RETRY_FORM = {
+    studentId: 'S-2026-0001',
+    subject: '数学',
+    grade: '初一',
+    questionText: '题目内容',
+    studentSolution: '我的解题过程',
+    correctAnswer: '已知正确答案',
+  }
+
+  /** 构造一个 FAILED 终态的状态端点 + 空事件流。 */
+  function mockFailedRun(runId: string, errorCode: string): void {
     fetchMock.mockImplementation((input: string) => {
       if (typeof input === 'string' && input.includes('/api/runs/')) {
         return Promise.resolve({
@@ -241,9 +250,9 @@ describe('进度页：失败态不再死路 + 手动刷新', () => {
           status: 200,
           text: async () =>
             JSON.stringify({
-              runId: 'run-x',
+              runId,
               state: 'FAILED',
-              errorCode: 'INTERNAL',
+              errorCode,
               createdAt: '2026-10-24T10:00:00.000Z',
             }),
         } as unknown as Response)
@@ -255,9 +264,11 @@ describe('进度页：失败态不再死路 + 手动刷新', () => {
         text: async () => JSON.stringify({ events: [] }),
       } as unknown as Response)
     })
+  }
 
+  function renderProgress(entry: { pathname: string; state?: unknown }): void {
     render(
-      <MemoryRouter initialEntries={['/runs/run-x']}>
+      <MemoryRouter initialEntries={[entry]}>
         <SessionProvider>
           <Routes>
             <Route path="/runs/:runId" element={<RunProgressPage />} />
@@ -265,11 +276,42 @@ describe('进度页：失败态不再死路 + 手动刷新', () => {
         </SessionProvider>
       </MemoryRouter>,
     )
+  }
+
+  it('临时故障终态（带原题）给出「重新发起这道题」与「回检索记录」两个出口', async () => {
+    mockFailedRun('run-x', 'MODEL_TIMEOUT')
+    renderProgress({
+      pathname: '/runs/run-x',
+      state: { retryForm: RETRY_FORM, agentId: 'agent-1' },
+    })
 
     expect(await screen.findByRole('link', { name: /重新发起这道题/ })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /回检索记录/ })).toBeInTheDocument()
     // 成功态的 CTA 不应出现
     expect(screen.queryByRole('link', { name: /查看归因结果/ })).not.toBeInTheDocument()
+  })
+
+  it('N4：原题丢失（刷新后）→ 文案改为「再辅导一道」，不假装还能带回题目', async () => {
+    mockFailedRun('run-x2', 'MODEL_TIMEOUT')
+    renderProgress({ pathname: '/runs/run-x2' })
+
+    expect(await screen.findByRole('link', { name: /再辅导一道/ })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /重新发起这道题/ })).not.toBeInTheDocument()
+  })
+
+  it('⛔ N3：租户级配置/预算故障不得给「重新发起」（必然失败的死循环）', async () => {
+    mockFailedRun('run-x3', 'BUDGET_EXHAUSTED')
+    renderProgress({
+      pathname: '/runs/run-x3',
+      state: { retryForm: RETRY_FORM, agentId: 'agent-1' },
+    })
+
+    expect(await screen.findByText(/服务配置尚未就绪/)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /重新发起这道题/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /再辅导一道/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /回工作台/ })).toBeInTheDocument()
+    // ⛔ 内部错误码不得原样甩给学生
+    expect(document.body.textContent ?? '').not.toContain('BUDGET_EXHAUSTED')
   })
 
   it('状态区提供「刷新状态」手动刷新按钮', async () => {

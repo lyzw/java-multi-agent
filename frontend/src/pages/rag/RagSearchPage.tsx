@@ -21,6 +21,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Loading, Empty, ErrorState, CapabilityNote } from '@/shared/states'
 import { useRagSearch } from '@/features/rag/useRagSearch'
+import { readStoredTenantId, rememberTenantId } from '@/features/rag/ragTenantStorage'
 import { useSession } from '@/auth/session'
 import { PageHead, Panel } from '@/components/ui'
 import type {
@@ -91,47 +92,9 @@ function SourceCard({
   )
 }
 
-const TENANT_STORAGE_KEY = 'rag.tenantId'
-const TENANT_STORAGE_TTL = 7 * 24 * 60 * 60 * 1000 // 7 天
-
-/** 存储结构 */
-interface StoredTenant {
-  value: string
-  timestamp: number
-}
-
-/** 读取上次使用的租户标识（仅本地记忆，不涉及任何凭据）。 */
-function readStoredTenantId(): string {
-  try {
-    const stored = window.localStorage.getItem(TENANT_STORAGE_KEY)
-    if (stored === null) return ''
-    const parsed: StoredTenant = JSON.parse(stored)
-    // ⚠️ 7 天后自动过期，避免永久存储
-    if (Date.now() - parsed.timestamp > TENANT_STORAGE_TTL) {
-      window.localStorage.removeItem(TENANT_STORAGE_KEY)
-      return ''
-    }
-    return parsed.value
-  } catch {
-    // ⚠️ 隐私模式/禁用存储时 localStorage 可能抛错——此时退回空串，让用户手填。
-    return ''
-  }
-}
-
-function rememberTenantId(tenantId: string): void {
-  try {
-    if (tenantId === '') {
-      window.localStorage.removeItem(TENANT_STORAGE_KEY)
-    } else {
-      window.localStorage.setItem(
-        TENANT_STORAGE_KEY,
-        JSON.stringify({ value: tenantId, timestamp: Date.now() }),
-      )
-    }
-  } catch {
-    // 记忆失败不影响检索本身，静默忽略。
-  }
-}
+// ⚠️ 租户标识的本地记忆统一走 `@/features/rag/ragTenantStorage`：
+//    管理页与检索页曾共用同一个 key 却各写各的格式（JSON vs 裸字符串），
+//    导致跨页串写。两页现在共用同一份读写实现 + 7 天 TTL。
 
 export function RagSearchPage(): JSX.Element {
   const [query, setQuery] = useState('')

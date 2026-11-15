@@ -1,0 +1,91 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：STUDENT · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e12]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e13]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e14]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e15]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e16]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e17]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e18]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e19]
+          - StaticText "报表中心"
+  - main
+    - paragraph
+      - StaticText "AI 对话"
+    - heading "通用知识问答" [level=1, ref=e6]
+    - paragraph
+      - StaticText "不挂教材语料的自由问答：逐 token 流式呈现，多轮上下文由本页维护。需要可溯源依据请走「知识检索」。"
+    - link "Agent 编排对话" [ref=e7]
+    - StaticText "这条链路的诚实边界"
+    - list
+      - listitem [level=1]
+        - ListMarker "• "
+        - StaticText "不是教材语料问答：不检索 RAG、没有引用与出处，回答由模型生成、可能有误，请自行核对。"
+      - listitem [level=1]
+        - ListMarker "• "
+        - StaticText "不读写业务数据：输入只来自本次键入与本页内存里的多轮历史，后端不读取任何 Run / 学习画像 / 学生信息。"
+      - listitem [level=1]
+        - ListMarker "• "
+        - StaticText "不伪造进度：文字来自真实 token 帧，没有打字机特效；断流会如实标注「部分内容」，不伪装成完整答案。"
+      - listitem [level=1]
+        - ListMarker "• "
+        - StaticText "会话只在内存：不写入浏览器存储，刷新即清空；推理草稿按设计不下发到租户通道。"
+    - generic
+      - sectionheader
+        - heading "对话设置" [level=2, ref=e20]
+        - paragraph
+          - StaticText "系统提示词为本页预设常量，不接受自由输入。"
+      - LabelText
+        - StaticText "回答场景"
+        - combobox "回答场景" [expanded=false, ref=e21]: 自由问答
+          - MenuListPopup
+            - option "自由问答" [selected, ref=e26]
+            - option "概念讲解" [ref=e27]
+            - option "知识梳理" [ref=e28]
+            - option "易错辨析" [ref=e29]
+      - StaticText "不加额外提示词，按原问题回答。"
+      - StaticText "通道：租户 SSE · 逐 token 流式"
+    - generic
+      - log "对话消息列表"
+        - paragraph
+          - StaticText "还没有提问。选一个示例开始，或直接输入问题。"
+        - button "用一句话解释条件概率，并举一个生活里的例子" [ref=e22]
+        - button "牛顿第三定律和二力平衡有什么区别？" [ref=e23]
+        - button "帮我梳理「函数」这个概念的知识脉络" [ref=e24]
+        - button "为什么天空是蓝色的？请用初中生能懂的话说明" [ref=e25]
+      - textbox "问题输入" [ref=e8]
+      - button "发送" [disabled, ref=e9]
+      - button "停止" [disabled, ref=e10]
+      - button "新会话" [disabled, ref=e11]
+      - StaticText "共 "
+      - StaticText "0"
+      - StaticText " 条 · 会话仅存内存 · 上限 "
+      - StaticText "1000"
+      - StaticText " 字"

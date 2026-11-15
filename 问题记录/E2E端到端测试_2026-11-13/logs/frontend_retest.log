@@ -1,0 +1,72 @@
+=== 单测复验：失败文件单独跑 ===
+Error: Not implemented: window.getComputedStyle(elt, pseudoElt)
+    at module.exports (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/jsdom/lib/jsdom/browser/not-implemented.js:9:17)
+    at window.getComputedStyle (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/jsdom/lib/jsdom/browser/Window.js:895:7)
+    at measureScrollbarSize (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-util/lib/getScrollBarSize.js:35:32)
+    at getTargetScrollBarSize (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-util/lib/getScrollBarSize.js:83:10)
+    at /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/@rc-component/portal/lib/useScrollLocker.js:27:72
+    at /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-util/lib/hooks/useLayoutEffect.js:18:12
+    at commitHookEffectListMount (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:23189:26)
+    at commitPassiveMountOnFiber (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:24970:11)
+    at commitPassiveMountEffects_complete (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:24930:9)
+    at commitPassiveMountEffects_begin (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:24917:7) [90mundefined[39m
+
+·stderr | tests/agentDefinitionBackfill.test.tsx > Agent 详情 · 概览呈现全部信息 > ✅ 旧体系实体行与权威定义**并列**呈现（不是合并成一份）
+Error: Not implemented: window.getComputedStyle(elt, pseudoElt)
+    at module.exports (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/jsdom/lib/jsdom/browser/not-implemented.js:9:17)
+    at window.getComputedStyle (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/jsdom/lib/jsdom/browser/Window.js:895:7)
+    at measureScrollbarSize (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-util/lib/getScrollBarSize.js:35:32)
+    at getTargetScrollBarSize (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-util/lib/getScrollBarSize.js:83:10)
+    at /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-table/lib/Table.js:427:71
+    at /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-util/lib/hooks/useLayoutEffect.js:18:12
+    at commitHookEffectListMount (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:23189:26)
+    at commitPassiveMountOnFiber (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:24970:11)
+    at commitPassiveMountEffects_complete (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:24930:9)
+    at commitPassiveMountEffects_begin (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:24917:7) [90mundefined[39m
+
+·stderr | tests/agentDefinitionBackfill.test.tsx > Agent 详情 · 概览呈现全部信息 > ✅ 编排声明按结构展开（模式 / 子 Agent / 限制 / 策略引用）
+Error: Not implemented: window.getComputedStyle(elt, pseudoElt)
+    at module.exports (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/jsdom/lib/jsdom/browser/not-implemented.js:9:17)
+    at window.getComputedStyle (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/jsdom/lib/jsdom/browser/Window.js:895:7)
+    at measureScrollbarSize (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-util/lib/getScrollBarSize.js:35:32)
+    at getTargetScrollBarSize (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-util/lib/getScrollBarSize.js:83:10)
+    at /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-table/lib/Table.js:427:71
+    at /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/rc-util/lib/hooks/useLayoutEffect.js:18:12
+    at commitHookEffectListMount (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:23189:26)
+    at commitPassiveMountOnFiber (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:24970:11)
+    at commitPassiveMountEffects_complete (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:24930:9)
+    at commitPassiveMountEffects_begin (/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/react-dom/cjs/react-dom.development.js:24917:7) [90mundefined[39m
+
+··
+
+ Test Files  1 passed (1)
+      Tests  18 passed (18)
+   Start at  17:48:33
+   Duration  63.80s (transform 265ms, setup 1.09s, collect 13.38s, tests 45.48s, environment 2.88s, prepare 367ms)
+
+=== 构建复验：全新 outDir（避免清空 dist 触发沙箱守卫） ===
+dist-e2e-20261113/assets/KaTeX_SansSerif-Bold-CFMepnvq.ttf            24.50 kB
+dist-e2e-20261113/assets/KaTeX_Main-Bold-Cx986IdX.woff2               25.32 kB
+dist-e2e-20261113/assets/KaTeX_Main-Regular-B22Nviop.woff2            26.27 kB
+dist-e2e-20261113/assets/KaTeX_Typewriter-Regular-D3Ib7_Hf.ttf        27.56 kB
+dist-e2e-20261113/assets/KaTeX_AMS-Regular-BQhdFMY1.woff2             28.08 kB
+dist-e2e-20261113/assets/KaTeX_Main-Bold-Jm3AIy58.woff                29.91 kB
+dist-e2e-20261113/assets/KaTeX_Main-Regular-Dr94JaBh.woff             30.77 kB
+dist-e2e-20261113/assets/KaTeX_Math-BoldItalic-B3XSjfu4.ttf           31.20 kB
+dist-e2e-20261113/assets/KaTeX_Math-Italic-flOr_0UB.ttf               31.31 kB
+dist-e2e-20261113/assets/KaTeX_Main-BoldItalic-DzxPMmG6.ttf           32.97 kB
+dist-e2e-20261113/assets/KaTeX_AMS-Regular-DMm9YOAa.woff              33.52 kB
+dist-e2e-20261113/assets/KaTeX_Main-Italic-3WenGoN9.ttf               33.58 kB
+dist-e2e-20261113/assets/KaTeX_Main-Bold-waoOVXN0.ttf                 51.34 kB
+dist-e2e-20261113/assets/KaTeX_Main-Regular-ypZvNtVU.ttf              53.58 kB
+dist-e2e-20261113/assets/KaTeX_AMS-Regular-DRggAlZN.ttf               63.63 kB
+dist-e2e-20261113/assets/index-Cy1wQvEl.css                           13.36 kB │ gzip:   3.07 kB
+dist-e2e-20261113/assets/MarkdownAnswer-BHTWEwkl.css                  29.64 kB │ gzip:   8.06 kB
+dist-e2e-20261113/assets/MarkdownAnswer-qEdynPdh.js                  448.49 kB │ gzip: 135.42 kB
+dist-e2e-20261113/assets/index-C8fewHFV.js                         1,822.12 kB │ gzip: 568.34 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 16.57s

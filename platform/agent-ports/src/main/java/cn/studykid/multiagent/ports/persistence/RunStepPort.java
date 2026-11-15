@@ -38,6 +38,15 @@ public interface RunStepPort {
      * <p>实现应保证<b>幂等</b>（按 {@code (tenant_id, run_id, step_number)} 冲突时覆盖），
      * 以便执行循环重试/重放不重复造步骤。
      *
+     * <p>⚠️ <b>步骤状态口径（E2E 二轮优化，2026-11-14）</b>：本 Port 刻意<b>不接收
+     * state / output</b>。步骤是「已发生的事实」，单条 INSERT 同时写入 startedAt 与
+     * completedAt；{@code run_step.state} 复用 {@code public.run_state} 并写死
+     * {@code 'RUNNING'}，语义是「该步骤已发生」，<b>不是进行中</b>，也不存在
+     * 「先 RUNNING、成功后再 UPDATE 终态」的两阶段。完成以
+     * {@code completed_at IS NOT NULL} 判定；{@code output_payload} 当前无写入方。
+     * 该口径已同步写入 {@code 01_platform_ddl.sql} 的 COMMENT 与前端结果页，
+     * 读侧不得按 Run 状态机生命周期解释。
+     *
      * @param tenantId     租户（RLS 绑定 + 外键）
      * @param runId        Run 标识
      * @param fencingToken 执行循环世代号（红线 5）

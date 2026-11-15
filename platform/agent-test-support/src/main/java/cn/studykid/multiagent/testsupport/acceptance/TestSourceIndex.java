@@ -9,8 +9,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import com.google.re2j.Matcher;
+import com.google.re2j.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -36,7 +36,7 @@ public final class TestSourceIndex {
     /** 方法声明的形态（用于定位方法起点）。 */
     private static final Pattern METHOD_DECL = Pattern.compile(
             "(?:public|private|protected)?\\s*(?:static\\s+)?(?:final\\s+)?"
-                    + "(?:<[^>]+>\\s*)?(?:void|boolean|int|long|double|String|"
+                    + "(?:<[^>]+>\\s*)?(?:void|boolean|int|long|double|"
                     + "Optional<[^>]+>|List<[^>]+>|Set<[^>]+>|Map<[^>]+>|"
                     + "[A-Z][A-Za-z0-9_]*)\\s+(\\w+)\\s*\\(");
 

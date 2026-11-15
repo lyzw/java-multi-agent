@@ -1,0 +1,74 @@
+[
+  {
+    "user": "plat-superadmin",
+    "role": "PLATFORM_SUPER_ADMIN",
+    "loginUrl": "/admin/tenants",
+    "rolesClaim": [
+      "PLATFORM_SUPER_ADMIN"
+    ],
+    "auditMenuNode": true,
+    "leafMenuCount": 4,
+    "auditDeepLink403": false,
+    "usersNewButtonVisible": true
+  },
+  {
+    "user": "plat-lifecycle",
+    "role": "TENANT_LIFECYCLE_ADMIN",
+    "loginUrl": "/admin/tenants",
+    "rolesClaim": [
+      "TENANT_LIFECYCLE_ADMIN"
+    ],
+    "auditMenuNode": false,
+    "leafMenuCount": 3,
+    "auditDeepLink403": true,
+    "usersNewButtonVisible": false
+  },
+  {
+    "user": "plat-resource",
+    "role": "PLATFORM_RESOURCE_ADMIN",
+    "loginUrl": "/admin/tenants",
+    "rolesClaim": [
+      "PLATFORM_RESOURCE_ADMIN"
+    ],
+    "auditMenuNode": false,
+    "leafMenuCount": 3,
+    "auditDeepLink403": true,
+    "usersNewButtonVisible": false
+  },
+  {
+    "user": "plat-security",
+    "role": "PLATFORM_SECURITY_ADMIN",
+    "loginUrl": "/admin/tenants",
+    "rolesClaim": [
+      "PLATFORM_SECURITY_ADMIN"
+    ],
+    "auditMenuNode": true,
+    "leafMenuCount": 4,
+    "auditDeepLink403": false,
+    "usersNewButtonVisible": false
+  },
+  {
+    "user": "plat-auditor",
+    "role": "PLATFORM_AUDITOR",
+    "loginUrl": "/admin/tenants",
+    "rolesClaim": [
+      "PLATFORM_AUDITOR"
+    ],
+    "auditMenuNode": true,
+    "leafMenuCount": 4,
+    "auditDeepLink403": false,
+    "usersNewButtonVisible": false
+  },
+  {
+    "user": "plat-support",
+    "role": "PLATFORM_SUPPORT",
+    "loginUrl": "/admin/tenants",
+    "rolesClaim": [
+      "PLATFORM_SUPPORT"
+    ],
+    "auditMenuNode": false,
+    "leafMenuCount": 3,
+    "auditDeepLink403": true,
+    "usersNewButtonVisible": false
+  }
+]

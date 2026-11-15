@@ -31,6 +31,8 @@
     <jspecify.version>1.0.0</jspecify.version>
     <!-- 路由引擎的正则求值器：线性时间、无回溯（10 号设计 §4.4「防 ReDoS」）。 -->
     <re2j.version>1.8</re2j.version>
+    <!-- SpotBugs 抑制注解（仅编译期标记，provided 作用域，不进运行包）。 -->
+    <spotbugs.version>4.10.5</spotbugs.version>
   </properties>
 
   <modules>
@@ -147,6 +149,23 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
+    </dependency>
+    <!-- 全模块线性时间正则引擎（ADR：防 ReDoS 基线，替代 java.util.regex）。 -->
+    <dependency>
+      <groupId>com.google.re2j</groupId>
+      <artifactId>re2j</artifactId>
+      <version>${re2j.version}</version>
+    </dependency>
+    <!--
+      SpotBugs 抑制注解（@SuppressFBWarnings）。仅编译期标记，provided 作用域，
+      不进运行包。与 @SuppressWarnings("java:Sxxxx") 处置 Sonar 误报保持同一套纪律：
+      架构性误报显式标注原因，而非为扫绿而改行为。
+    -->
+    <dependency>
+      <groupId>com.github.spotbugs</groupId>
+      <artifactId>spotbugs-annotations</artifactId>
+      <version>${spotbugs.version}</version>
+      <scope>provided</scope>
     </dependency>
   </dependencies>
 

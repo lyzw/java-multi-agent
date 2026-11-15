@@ -1,0 +1,92 @@
+[
+  {
+    "id": "DOC-01",
+    "source": "admin-console/README.md §3「导航与路由」表",
+    "doc": "仅列 8 个菜单：平台用户 / 角色权限矩阵 / Agent 注册表 / Tool / Skill / MCP / 租户管理 / 平台审计",
+    "actual": "实测侧栏 9 个分组共 30 个叶子菜单（含 RAG 语料治理 13 页、系统配置 2 页、观测度量 3 页、AI 实验室 3 页、路由策略 1 页）",
+    "type": "文档不完整（实现超出文档）",
+    "severity": "P3",
+    "evidence": "logs/menu_walk.jsonl（M01–M30）、screenshots/M*.png"
+  },
+  {
+    "id": "DOC-02",
+    "source": "docs/管理后台系统设计方案.html §4 / docs/管理后台开发计划/（P1–P5 阶段交付）",
+    "doc": "承诺四类实体完整 CRUD + 版本历史、发布中心/三步审批/回滚、依赖图谱与影响分析、运行监控（authzVersion/DENY 告警）、双复核与凭据登记等界面",
+    "actual": "router.tsx 中这些页面全部未挂载；对应源码文件仍留在 src/pages（DashboardPage.tsx、publish/*、dependencies/*、monitoring/*、catalog/ReadOnlyCatalogPage.tsx 等）。30 个可达菜单中无上述入口",
+    "type": "功能缺失 / 文档严重滞后（需确认是有意下架还是未交付）",
+    "severity": "P2",
+    "evidence": "src/router.tsx、src/layout/navConfig.tsx、logs/menu_walk.jsonl"
+  },
+  {
+    "id": "DOC-03",
+    "source": "docs/管理后台开发计划/README.md §工程基线、00_计划总览 §1.1",
+    "doc": "前端技术栈：React 18 + TS + Zustand + React Query + Vite；图谱 react-flow；图表 ECharts/Recharts；根路由即控制台",
+    "actual": "package.json 无 Zustand / React Query / react-flow / ECharts / Recharts；状态用 React Context(SessionProvider)，UI 为 Ant Design v5；部署为 /admin 子路径（base + basename）",
+    "type": "文档滞后（admin-console/README.md §2/§1 已更新，开发计划未同步）",
+    "severity": "P3",
+    "evidence": "admin-console/package.json、src/auth/session.tsx、vite.config.ts、src/config/constants.ts"
+  },
+  {
+    "id": "DOC-04",
+    "source": "docs/管理后台开发计划/README.md §关键约束「作用域红线」、00_计划总览 §1",
+    "doc": "平台级（Tool/Skill/MCP）写发布保持带外运维通道，后端对 PLATFORM 作用域 HTTP 写入口返回 403，控制台不暴露 PLATFORM 作用域写入口",
+    "actual": "当前实现提供平台链写入口：能力目录「登记 / 停用 / 申请队列（审批执行）」、租户管理「开通租户 / 生命周期变更」、平台用户「新建 / 编辑 / 重置密码 / 角色赋撤」，均已在本轮实测打开并可提交",
+    "type": "设计变更后旧文档未标注废弃（README §3/§6 已按新口径描述）",
+    "severity": "P2",
+    "evidence": "logs/interactions.jsonl（I-C04/I-C06/I-G02/I-G10 等）、screenshots/I_*.png"
+  },
+  {
+    "id": "DOC-05",
+    "source": "docs/重规划/平台身份与租户身份分离改造方案.md §10「Admin Console 功能范围」",
+    "doc": "菜单模块 6 类：平台总览 / 租户管理 / 平台用户与权限 / 平台资源与能力目录 / 全局安全策略 / 运行监控与审计",
+    "actual": "实测 9 分组 30 页，无「平台总览」独立页（根路径直接 Navigate → /tenants）、无「全局安全策略」独立页；新增 RAG 语料治理、观测度量、AI 实验室三大块",
+    "type": "文档滞后 / 范围已显著扩张",
+    "severity": "P2",
+    "evidence": "src/router.tsx、logs/menu_walk.jsonl"
+  },
+  {
+    "id": "DOC-06",
+    "source": "docs/重规划/平台身份与租户身份分离改造方案.md §5.3 平台角色目录",
+    "doc": "PLATFORM_AUDITOR 仅 platform.audit.read（脱敏）；PLATFORM_SUPPORT 仅 platform.support.diagnostics.read；PLATFORM_SECURITY_ADMIN 为 policy.* + role.read",
+    "actual": "后端冻结矩阵 PlatformRolePermissionMatrix 与 DB platform_role_permission 均给 AUDITOR 追加 audit.export / tenant.read / quota.read / capability.read / resource.read，给 SUPPORT 追加 tenant.read / quota.read / capability.read / resource.read，给 SECURITY_ADMIN 追加 audit.read / support.diagnostics.read。实测 AUDITOR/SUPPORT 对 /tenants、/capabilities/*、/review-tasks 返回 200",
+    "type": "实现与设计方案不一致（冻结矩阵为当前事实源，需安全评审确认最小特权口径）",
+    "severity": "P2",
+    "evidence": "platform/agent-ports/.../PlatformRolePermissionMatrix.java、evidence/db_verify.json、http/api_probe.jsonl"
+  },
+  {
+    "id": "DOC-07",
+    "source": "admin-console/README.md §3「角色权限矩阵」行",
+    "doc": "后端 PlatformRolePermissionMatrix，6 角色 23 权限",
+    "actual": "allPlatformPermissions() 与 DB platform_permission 均为 24 项（含 platform.tenant.execution_ticket）",
+    "type": "文档数字过期",
+    "severity": "P3",
+    "evidence": "platform/agent-ports/.../PlatformRolePermissionMatrix.java、evidence/db_verify.json（platform_permission rows=24）"
+  },
+  {
+    "id": "DOC-08",
+    "source": "docs/重规划/平台身份与租户身份分离改造方案.md §10「禁区」与 §5.6",
+    "doc": "不进常规菜单：浏览租户完整会话 / 提示词 / 运行输出；支持人员协助须走独立受控访问入口，不复用平台登录态",
+    "actual": "AI 实验室 3 页与观测度量「人工审查队列（含完整对话回放、TOOL 段）」进入常规菜单；实测 PLATFORM_SUPPORT / PLATFORM_AUDITOR 对 /platform/v1/review-tasks 返回 200。页面文案声明回放内容为平台自身质量跟踪数据、Agent 编排对话不展示租户 Run 正文",
+    "type": "潜在越界风险（数据边界需安全评审确认，本轮不判定为已违规）",
+    "severity": "P1（风险确认项）",
+    "evidence": "logs/menu_walk.jsonl M27–M30 告警文案、http/api_probe.jsonl RBAC 矩阵"
+  },
+  {
+    "id": "DOC-09",
+    "source": "docs/管理后台开发计划/README.md §状态",
+    "doc": "「尚未进入编码阶段，待用户授权按 P0→P5 推进」",
+    "actual": "admin-console 已实现 30 个页面并运行于 5180；后端平台链端点齐备；本轮完成全量 E2E 实测",
+    "type": "文档状态严重过期",
+    "severity": "P3",
+    "evidence": "logs/menu_walk_run.log、logs/all_batches_run.log"
+  },
+  {
+    "id": "DOC-10",
+    "source": "admin-console/README.md §4/§5/§6",
+    "doc": "dev 端口 5180 + /admin 路径部署；平台令牌 sessionStorage 独立键、900s 无 refresh；SoD 自身保护；三步工作流；MCP 凭据不回显；空/403/503 三态区分",
+    "actual": "实测全部一致：登录 200、过期与伪造令牌处理正确、SoD 按钮禁用、申请队列/登记/停用弹窗齐备、MCP 页面无凭据明文",
+    "type": "一致（无差异）",
+    "severity": "-",
+    "evidence": "logs/interactions.jsonl、http/api_probe.jsonl、screenshots/"
+  }
+]

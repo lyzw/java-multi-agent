@@ -1,0 +1,12 @@
+[80120.355] GET http://localhost:5180/api/platform/v1/metrics/agent/scenarios?hours=24 (Fetch) 200
+[80120.356] GET http://localhost:5180/api/platform/v1/metrics/agent/overview?hours=24 (Fetch) 200
+[80120.357] GET http://localhost:5180/api/platform/v1/metrics/agent/terminations?hours=24 (Fetch) 200
+[80120.358] GET http://localhost:5180/api/platform/v1/metrics/agent/latency?hours=24 (Fetch) 200
+[80120.359] GET http://localhost:5180/api/platform/v1/metrics/agent/tools?hours=24 (Fetch) 200
+[80120.360] GET http://localhost:5180/api/platform/v1/metrics/agent/anomalies?hours=24&limit=20 (Fetch) 200
+[80120.361] GET http://localhost:5180/api/platform/v1/metrics/agent/scenarios?hours=24 (Fetch) 200
+[80120.362] GET http://localhost:5180/api/platform/v1/metrics/agent/overview?hours=24 (Fetch) 200
+[80120.363] GET http://localhost:5180/api/platform/v1/metrics/agent/terminations?hours=24 (Fetch) 200
+[80120.364] GET http://localhost:5180/api/platform/v1/metrics/agent/latency?hours=24 (Fetch) 200
+[80120.365] GET http://localhost:5180/api/platform/v1/metrics/agent/tools?hours=24 (Fetch) 200
+[80120.366] GET http://localhost:5180/api/platform/v1/metrics/agent/anomalies?hours=24&limit=20 (Fetch) 200

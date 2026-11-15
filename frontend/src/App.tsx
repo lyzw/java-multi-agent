@@ -20,8 +20,10 @@ import {
 import { SessionProvider, useSession } from '@/auth/session'
 import { RequireAuth } from '@/auth/RequireAuth'
 import { RequireRole } from '@/auth/RequireRole'
+import { RequireTask } from '@/auth/RequireTask'
 import { setUnauthorizedHandler } from '@/api/client'
 import { AppShell } from '@/layouts/AppShell'
+import { AppErrorBoundary } from '@/shared/AppErrorBoundary'
 import { PageHead } from '@/components/ui'
 
 import { LoginPage } from '@/pages/LoginPage'
@@ -137,41 +139,43 @@ function Shell(): JSX.Element {
 }
 
 function AppRoutes(): JSX.Element {
+  const location = useLocation()
   return (
-    <>
+    <AppErrorBoundary resetKey={location.pathname}>
       <UnauthorizedBridge />
       <ScrollReset />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
 
         <Route element={<Shell />}>
-          {/* ── 辅导（学生侧，不挂 area，任何已登录用户可见）── */}
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/runs" element={<RunSearchPage />} />
-          <Route path="/runs/new" element={<NewRunPage />} />
-          <Route path="/runs/:runId" element={<RunProgressPage />} />
-          <Route path="/runs/:runId/result" element={<RunResultPage />} />
-          <Route path="/profile" element={<ProfileLookup />} />
-          <Route path="/profile/:studentId" element={<ProfilePage />} />
-          <Route path="/rag" element={<RagSearchPage />} />
+          {/* ── 辅导（业务面按「角色 × 任务」裁剪，见 capabilities.ts）──
+              ⚠️ T1 硬门禁：导航可见的每个入口都必须能被该角色完成真实操作；
+                 这里让 URL 直达与导航口径一致（不再出现「藏了入口但输网址能进」）。 */}
+          <Route path="/" element={<RequireTask task="dashboard"><DashboardPage /></RequireTask>} />
+          <Route path="/runs" element={<RequireTask task="run:list"><RunSearchPage /></RequireTask>} />
+          <Route path="/runs/new" element={<RequireTask task="run:create"><NewRunPage /></RequireTask>} />
+          <Route path="/runs/:runId" element={<RequireTask task="run:list"><RunProgressPage /></RequireTask>} />
+          <Route path="/runs/:runId/result" element={<RequireTask task="run:list"><RunResultPage /></RequireTask>} />
+          {/* ⚠️ N2：STUDENT 无 PROFILE_READ；直达也要给「明确说明不可用」，而不是填完编号再撞 403。 */}
+          <Route path="/profile" element={<RequireTask task="profile:read"><ProfileLookup /></RequireTask>} />
+          <Route path="/profile/:studentId" element={<RequireTask task="profile:read"><ProfilePage /></RequireTask>} />
+          <Route path="/rag" element={<RequireTask task="rag:search"><RagSearchPage /></RequireTask>} />
           {/* 通用知识问答：真·LLM SSE 多轮对话（租户令牌 / 独立身份域端点）。
               ⚠️ 不挂 area：与辅导台其它学生侧页面一致，任何已登录用户可见；
               后端不读取任何租户业务数据，输入只来自本次会话。 */}
-          <Route path="/chat" element={<GeneralChatPage />} />
+          <Route path="/chat" element={<RequireTask task="chat:general"><GeneralChatPage /></RequireTask>} />
           {/* 通用 Agent 编排对话（租户链 SSE：路由/RAG/Skill/Tool/回传逐帧可见）。
               ⚠️ 端点 /api/knowledge/agent/chat/stream 仍在租户安全链，不挂 area；
               真实端点未部署时如实报「能力未接入」，样例回放明确标注非真实输出。 */}
-          <Route path="/agent-chat" element={<AgentChatPage />} />
+          <Route path="/agent-chat" element={<RequireTask task="chat:agent"><AgentChatPage /></RequireTask>} />
           {/* ⚠️ 业务无权限整页（code=ACCESS_DENIED，与「未登录」严格区分，
             不触发登录跳转；由页面在捕获到无权限时 navigate 至此）。 */}
           <Route path="/no-permission" element={<NoPermissionPage />} />
 
-          {/* ⚠️ 报表中心：租户级**聚合**视图（辅导量 / 错题 / 学生活跃 /
-              知识点排行 / 检索次数 / 语料导入与准入）。
-              与「检索记录」的区别：前者是逐条明细，后者是按天汇总。
-              ⚠️ 不挂 area：聚合数据不含个体信息，任何已登录用户可见本租户汇总
-              （与后端 StatisticsController 复用 RUN_READ 动作的授权范围一致）。 */}
-          <Route path="/reports" element={<ReportsPage />} />
+          {/* ⚠️ N5：报表中心是租户级**聚合**视图，归位到治理面，受众不开放。
+              后端复用 RUN_READ 是有意设计（非越权），这里只调整入口定位，
+              避免学生看到「发起量 13」与本人口径「10 条」被误读为数据错误。 */}
+          <Route path="/reports" element={<RequireTask task="reports:read"><ReportsPage /></RequireTask>} />
           {/* ⚠️ RAG 管理面（RAG-D10）：语料登记、校验审核、索引统计。
               与 /rag 检索面是**两个方向的闸门**，故单独成页。 */}
           <Route
@@ -205,7 +209,7 @@ function AppRoutes(): JSX.Element {
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>
-    </>
+    </AppErrorBoundary>
   )
 }
 

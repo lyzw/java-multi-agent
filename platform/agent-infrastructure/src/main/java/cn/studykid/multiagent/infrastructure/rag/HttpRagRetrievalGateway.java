@@ -84,11 +84,20 @@ public class HttpRagRetrievalGateway implements RagRetrievalPort {
     /** 测试构造：可注入 mock HttpClient / 本地 WireMock 地址。 */
     public HttpRagRetrievalGateway(@NonNull HttpClient client, @NonNull String baseUrl) {
         this.client = client;
-        String normalized = baseUrl == null ? "" : baseUrl.trim().replaceAll("/+$", "");
+        String normalized = baseUrl == null ? "" : stripTrailingSlashes(baseUrl.trim());
         if (normalized.isEmpty()) {
             throw new IllegalArgumentException("rag.base-url 不能为空");
         }
         this.retrievalUri = URI.create(normalized + RETRIEVAL_PATH);
+    }
+
+    /** 去除末尾连续的 {@code /}（不用正则，避免引入正则引擎开销与潜在 ReDoS）。 */
+    private static String stripTrailingSlashes(@NonNull String s) {
+        int end = s.length();
+        while (end > 0 && s.charAt(end - 1) == '/') {
+            end--;
+        }
+        return end == s.length() ? s : s.substring(0, end);
     }
 
     @Override

@@ -2017,17 +2017,17 @@ public class ToolInvocationGate {
          * 此前本类只暴露计数 → 调用方拿不到名字。
          * 计数用于「统计」，名字用于「**说清发生了什么**」，二者不可互相替代。
          */
-        public java.util.List<String> succeededTools() {
+        public @NonNull List<String> succeededTools() {
             return java.util.List.copyOf(succeeded);
         }
 
         /** 被拒绝的工具名（不可变副本）。 */
-        public java.util.List<String> rejectedTools() {
+        public @NonNull List<String> rejectedTools() {
             return java.util.List.copyOf(rejected);
         }
 
         /** 执行失败的工具名（不可变副本）。 */
-        public java.util.List<String> failedTools() {
+        public @NonNull List<String> failedTools() {
             return java.util.List.copyOf(failed);
         }
 

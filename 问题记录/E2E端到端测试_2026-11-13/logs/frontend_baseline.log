@@ -1,0 +1,56 @@
+=== npm test ===
+                              [33mclass[39m=[32m"ant-table-thead"[39m
+                            [36m>[39m
+                              [36m<tr>[39m
+                                [36m<th[39m
+                                  [33mclass[39m=[32m"ant-table-cell"[39m
+                                  [33mscope[39m=[32m"col"[39m
+                                [36m>[39m
+                                  [0m名称[0m
+                                [36m</th>[39m
+                                [36m<th[39m
+                                  [33mclass[39m=[32m"ant-table-cell"[39m
+                                  [33mscope[39m=[32m"col"[39m
+                                [36m>[39m
+                                  [0mAgent 标识[0m
+                                [36m</th>[39m
+                                [36m<th[39m
+                                  [33mclass[39m=[32m"ant-table-cell"[39m
+                                  [33mscope[39m=[32m"col"[39...
+ ❯ Proxy.waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ tests/agentDefinitionBackfill.test.tsx:516:11
+    514|     fireEvent.click(screen.getByRole('button', { name: /创建 Agent 并提交发布…
+    515| 
+    516|     await waitFor(() => expect(screen.getByText(/请输入名称/)).toBeTruthy())
+       |           ^
+    517|     // ⛔ 校验发生在**建行之前** ⇒ 不得留下一个没有多级定义的孤儿 Agent
+    518|     expect(createAgent).not.toHaveBeenCalled()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 65 passed (66)
+      Tests  1 failed | 704 passed (705)
+   Start at  17:36:44
+   Duration  566.84s (transform 2.71s, setup 1.38s, collect 19.60s, tests 542.31s, environment 2.28s, prepare 247ms)
+
+=== npm run build ===
+
+> java-saas-agent-admin-console@0.1.0 build
+> tsc --noEmit && vite build
+
+vite v6.4.5 building for production...
+transforming...
+✓ 3428 modules transformed.
+✗ Build failed in 21.60s
+error during build:
+[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":65,"threshold":50,"scope":"turn","targets":["/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/dist/assets"],"targetCount":1}
+    at checkBulkDeleteGuard (/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/vendor/shim/node-safe-delete-shim.cjs:243:19)
+    at tryTrash (/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/vendor/shim/node-safe-delete-shim.cjs:595:5)
+    at tryRm (/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/vendor/shim/node-safe-delete-shim.cjs:806:5)
+    at Object.wrappedRmSync [as rmSync] (/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/vendor/shim/node-safe-delete-shim.cjs:812:15)
+    at emptyDir (file:///Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/vite/dist/node/chunks/dep-CkSfqg8D.js:6855:19)
+    at prepareOutDir (file:///Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/vite/dist/node/chunks/dep-CkSfqg8D.js:46591:7)
+    at buildEnvironment (file:///Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/vite/dist/node/chunks/dep-CkSfqg8D.js:46555:7)
+    at async Object.defaultBuildApp [as buildApp] (file:///Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/vite/dist/node/chunks/dep-CkSfqg8D.js:47031:5)
+    at async CAC.<anonymous> (file:///Users/zhouwei/code-workspace/ai-tech/java-multi-agent/admin-console/node_modules/vite/dist/node/cli.js:863:7)

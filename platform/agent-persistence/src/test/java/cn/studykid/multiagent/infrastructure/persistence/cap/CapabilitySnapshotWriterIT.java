@@ -71,7 +71,14 @@ class CapabilitySnapshotWriterIT extends CapITBase {
     /** 平台对象 id 用 {@code it-cap-} 前缀：基座每例清理已覆盖该前缀。 */
     private static final String TOOL_ID = "it-cap-g3-tool";
     private static final String SKILL_ID = "it-cap-g3-skill";
-    private static final String PRINCIPAL = "it-g3-principal";
+    /**
+     * ⚠️ 必须是合法 UUID 形态（2026-11-14 F1）：{@code RunCreationService.createRun}
+     * 会把 {@code TenantContext.principalId()} 落到 {@code run.requester_id}（uuid 列，
+     * 受众隔离锚点）——字符串业务键会以 {@code invalid input syntax for type uuid} 崩掉
+     * Run 创建（与 F3「字符串 agentId 进 uuid 列」同款错误模式）。
+     * {@code cap_authz_version.principal_id} 是 text 列，UUID 字符串同样兼容。
+     */
+    private static final String PRINCIPAL = "b100d000-0000-4000-8000-c00000000001";
 
     /** v1：叶子 Agent（无 Skill）—— 闭包可解析，不依赖任何平台发布。 */
     private static final String LEAF_DEFINITION = """

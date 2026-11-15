@@ -1,0 +1,8 @@
+{"step": "open /users", "ts": "2026-11-14T00:14:44"}
+{"step": "click 新建用户", "result": "\"clicked\"", "ts": "2026-11-14T00:14:46"}
+{"step": "validation(empty/short)", "explain": "\"[\\\"格式非法：4-20 位字母/数字/下划线，以字母开头\\\",\\\"密码长度至少 10 位\\\"]\"", "ts": "2026-11-14T00:14:48"}
+{"step": "after create submit", "ui_appeared": "\"APPEARED\"", "ts": "2026-11-14T00:14:52"}
+{"step": "API verify create", "http": 200, "found": true, "record": {"id": "5cb0c3fa-39c6-4d7f-86b4-c597ae09244c", "username": "e2ewalk11140014", "displayName": "E2E Walk", "email": "e2ewalk@example.com", "status": "ACTIVE", "authSource": "LOCAL", "mfaRequired": false, "authzVersion": 1, "lastLoginAt": null, "createdAt": "2026-11-13T16:14:50.229406Z", "updatedAt": "2026-11-13T16:14:50.229406Z", "roles": []}}
+{"step": "disable user (UI)", "row_click": "\"clicked_disable\"", "confirm": "\"clicked\"", "ts": "2026-11-14T00:14:55"}
+{"step": "API verify disable", "http": 200, "status": "DISABLED", "record": {"id": "5cb0c3fa-39c6-4d7f-86b4-c597ae09244c", "username": "e2ewalk11140014", "displayName": "E2E Walk", "email": "e2ewalk@example.com", "status": "DISABLED", "authSource": "LOCAL", "mfaRequired": false, "authzVersion": 2, "lastLoginAt": null, "createdAt": "2026-11-13T16:14:50.229406Z", "updatedAt": "2026-11-13T16:14:54.376586Z", "roles": []}}
+{"step": "RAG governance ticket", "click": "\"clicked\"", "banner_before": "\"平台全局语料：读写分开——读用登录态，写要治理票据 这里看的是平台自己维护、全部租户共享的那批语料。登记、校验流转、重跑索引都会影响所有租户的检索结果，所以后端除「平台域身份」外还校验一张短时治理票据的档位；缺票是 403。\"", "banner_after": "\"平台全局语料：读写分开——读用登录态，写要治理票据 这里看的是平台自己维护、全部租户共享的那批语料。登记、校验流转、重跑索引都会影响所有租户的检索结果，所以后端除「平台域身份」外还校验一张短时治理票据的档位；缺票是 403。\"", "ts": "2026-11-14T00:15:00"}

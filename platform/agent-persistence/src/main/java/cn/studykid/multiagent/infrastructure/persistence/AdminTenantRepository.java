@@ -117,6 +117,15 @@ public class AdminTenantRepository implements AdminTenantPort {
                         throw new IllegalStateException("开通租户未返回行");
                     }
                     TenantRow row = mapTenant(rs);
+                    String tenantId = rs.getString("tenant_id");
+                    // ⚠️ P0（E2E 二次评估）：与平台侧开通链补齐同样的运行前置。
+                    // ⚠️ 铁律 1：budget_account / cap_authz_version 是 FORCE RLS 表，
+                    //    本仓储用 app_agent（NOBYPASSRLS）连接且 openSystem() 清空了
+                    //    租户上下文 —— 不绑定 GUC 就写，会静变成 0 行（假绿）。
+                    //    故必须在业务 SQL 之前、同一事务内绑定目标租户。
+                    TenantSessionBinder.bind(conn,
+                            new TenantContext(tenantId, "system", Set.of(), 0L));
+                    TenantRuntimeDefaults.insertRuntimePrerequisites(conn, tenantId);
                     conn.commit();
                     return row;
                 }

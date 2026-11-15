@@ -6,6 +6,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -70,6 +71,22 @@ public final class OutputModeration {
     }
 
     /**
+     * 大小写不敏感 + Unicode 感知的编译标志。
+     *
+     * <p><b>⚠️ 必须同时带 {@code UNICODE_CASE}</b>：只写 {@code CASE_INSENSITIVE}
+     * 时，JDK 的忽略大小写匹配只按<b>本地化</b>的 Unicode 规则表走，
+     * 在默认 Locale 下会把土耳其语 {@code İ}/{@code ı} 等字母按非 Unicode 规则比较，
+     * 匹配结果随运行环境漂移（S5866）。加上 {@code UNICODE_CASE} 后匹配语义恒定。
+     *
+     * <p><b>⚠️ 声明位置不可后移</b>：静态字段按声明顺序初始化，
+     * 若本常量声明在 {@link #TOXICITY_RULES}/{@link #JAILBREAK_RULES} 之后，
+     * 规则表初始化时读到的是默认值 {@code 0}（＝无任何标志），
+     * 大小写不敏感会<b>静默失效</b>。
+     */
+    private static final int CI_UNICODE =
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE;
+
+    /**
      * 有害内容规则。
      *
      * <p>⚠️ 面向初中生：自伤/自杀倾向必须<b>阻断</b>——
@@ -79,7 +96,7 @@ public final class OutputModeration {
             new Rule("T-1 自伤/自杀", Pattern.compile(
                     "(自杀|自残|结束自己的生命|不想活了|想死|轻生)")),
             new Rule("T-2 暴力伤害", Pattern.compile(
-                    "(打(死|伤)(你|他|她|他)|伤害(自己|同学|他人)|报复社会)")),
+                    "(打(死|伤)(你|他|她)|伤害(自己|同学|他人)|报复社会)")),
             new Rule("T-3 侮辱贬损", Pattern.compile(
                     "(你是(笨蛋|蠢货|废物|垃圾)|智障|弱智|去死)")));
 
@@ -92,12 +109,12 @@ public final class OutputModeration {
      */
     private static final List<Rule> JAILBREAK_RULES = List.of(
             new Rule("J-1 输出伪装成指令", Pattern.compile(
-                    "(?i)(execute|run|run the following)\\s+(as\\s+)?(command|指令)")),
+                    "(execute|run|run the following)\\s+(as\\s+)?(command|指令)", CI_UNICODE)),
             new Rule("J-2 声称已解锁", Pattern.compile(
-                    "(?i)(developer\\s+mode|jailbreak|开发者模式|无限制模式|已被解锁)")),
+                    "(developer\\s+mode|jailbreak|开发者模式|无限制模式|已被解锁)", CI_UNICODE)),
             new Rule("J-3 诱导覆写上层指令", Pattern.compile(
-                    "(?i)(ignore|忽略|disregard)\\s+(all\\s+)?(previous|prior|上述|以上)\\s+"
-                            + "(instructions?|指令|规则)")));
+                    "(ignore|忽略|disregard)\\s+(all\\s+)?(previous|prior|上述|以上)\\s+"
+                            + "(instructions?|指令|规则)", CI_UNICODE)));
 
     /** 每类命中的<b>默认</b>处置（fail-closed：有害类不得默认放行）。 */
     private static final Map<Category, Action> DEFAULT_ACTIONS =
@@ -214,7 +231,17 @@ public final class OutputModeration {
         }
     }
 
-    /** 把命中的片段统一替换为占位符。 */
+    /**
+     * 把命中的片段统一替换为占位符。
+     *
+     * <p><b>⚠️ 本方法刻意留在 JDK {@code java.util.regex} 引擎上</b>：
+     * 入参 {@code pattern} 来自 {@link DataClassification.IdentifyingPattern#pattern()}，
+     * 那份正则用了<b>零宽前后瞻/后顾</b>（{@code (?<![0-9A-Za-z])} 等），
+     * 而 RE2/J 语法<b>不支持环视断言</b>（编译期直接抛
+     * {@code PatternSyntaxException}），线性时间正则引擎无法承接。
+     * 换引擎会让「检测与脱敏共用同一份正则」这条硬约束无从谈起，
+     * 故此路径保留 JDK 引擎；其余模块的 ReDoS 风险另由 re2j 收敛。
+     */
     private static String maskWith(String text, Pattern pattern, String placeholder) {
         Matcher m = pattern.matcher(text);
         return m.replaceAll(Matcher.quoteReplacement(placeholder));

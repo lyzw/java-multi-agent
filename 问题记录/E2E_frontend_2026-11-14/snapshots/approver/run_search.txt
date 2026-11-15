@@ -1,0 +1,87 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：APPROVER · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e9]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e10]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e11]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e12]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e13]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e14]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e15]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e16]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e17]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e18]
+          - StaticText "未知操作处置"
+  - main
+    - heading "检索记录" [level=1, ref=e6]
+    - paragraph
+      - StaticText "按状态和时间找出分析过的题目。"
+    - generic
+      - sectionheader
+        - heading "筛选" [level=2, ref=e19]
+      - LabelText
+        - StaticText "状态"
+      - combobox "状态" [expanded=false, ref=e7]: 全部
+        - MenuListPopup
+          - option "全部" [selected, ref=e20]
+          - option "排队中" [ref=e21]
+          - option "分析中" [ref=e22]
+          - option "已取消" [ref=e23]
+          - option "已完成" [ref=e24]
+          - option "失败" [ref=e25]
+          - option "超时" [ref=e26]
+      - LabelText
+        - StaticText "学科"
+      - combobox "学科" [expanded=false, ref=e8]: 全部
+        - MenuListPopup
+          - option "全部" [selected, ref=e27]
+          - option "数学" [ref=e28]
+          - option "物理" [ref=e29]
+          - option "化学" [ref=e30]
+          - option "生物" [ref=e31]
+          - option "语文" [ref=e32]
+          - option "英语" [ref=e33]
+      - paragraph
+        - StaticText "这里按状态和学科筛选。学科与年级由后端回填， 只显示词表内的取值——不在词表内一律为空（显示「—」）。"
+    - generic
+      - sectionheader
+        - heading "查询结果" [level=2, ref=e34]
+      - paragraph
+        - StaticText "没有符合条件的记录"
+      - paragraph
+        - StaticText "换个状态或学科再试，或到「报表中心」按天查看汇总。"

@@ -81,6 +81,17 @@ public class RunQueryController {
                     org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在");
         }
 
+        // ⚠️ 受众数据隔离（F1）：仅持受众角色的主体只能读**本人创建**的 Run。
+        //    不归属（含 requester 为空的历史/代操作行）与「不存在」统一 404——
+        //    区分即构成存在性探测通道，与上方纪律同源。
+        if (AuthorizationService.Roles.isAudienceOnly(context.roles())
+                && !context.principalId().equals(status.requesterId())) {
+            log.info("Run 状态查询未命中（受众隔离）: tenant={}, runId={}",
+                    context.tenantId(), runId);
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在");
+        }
+
         return ResponseEntity.ok(new RunStatusResponse(
                 status.runId(),
                 status.state(),

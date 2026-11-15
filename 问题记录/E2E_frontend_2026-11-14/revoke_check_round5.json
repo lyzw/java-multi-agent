@@ -1,0 +1,59 @@
+{
+  "round": 5,
+  "date": "2026-11-15",
+  "total": 7,
+  "turned_red": 7,
+  "all_red": true,
+  "cases": [
+    {
+      "id": "R5-DEF1",
+      "desc": "AppErrorBoundary 不再捕获渲染异常 → 子组件抛错时整页白屏（无兜底）",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "「捕获异常并展示整页兜底」与「返回登录页清会话」至少 1 条转红"
+    },
+    {
+      "id": "R5-DEF2",
+      "desc": "installGlobalErrorHandlers 不安装监听 → 全局未捕获错误无人兜底",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "「捕获 error 与 rejection 并交给 reporter」转红"
+    },
+    {
+      "id": "R5-D1",
+      "desc": "配置「恢复默认」去掉二次确认 → 点一下即清掉租户覆盖值",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "「确认被拒时不得调用 onClear」转红"
+    },
+    {
+      "id": "R5-D2",
+      "desc": "治理翻页失败改回 setError → 已加载列表被整页错误态替换",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "「D2：翻页失败只记 loadMoreError，保留列表、不污染首屏 error」转红"
+    },
+    {
+      "id": "R5-D3",
+      "desc": "AgentsPage 切视图不清 actionError → 发布失败错误串味进新建表单",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "「发布失败后切到新建视图，错误提示消失」转红"
+    },
+    {
+      "id": "R5-D6",
+      "desc": "renderDetail 删掉类型守卫 → 后端回带 null/数组时 Object.entries 抛错崩页",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "「null / 字符串 / 数组 → '—'」至少 1 条转红"
+    },
+    {
+      "id": "R5-D7",
+      "desc": "路由守卫 state.from 丢掉 search → 带 query 页面登录回跳丢失参数",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "「RequireAuth/RequireRole/RequireTask state.from 含完整 query」三条全转红"
+    }
+  ],
+  "post_check": []
+}

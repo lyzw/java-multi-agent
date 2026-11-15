@@ -11,6 +11,7 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapObjectType;
@@ -133,8 +134,12 @@ public class CachingClosureResolver implements ClosureResolver {
              * 整个 {@code agent-application} 模块编译失败。
              */
             @Override
+            @SuppressFBWarnings("IA_AMBIGUOUS_INVOCATION_OF_INHERITED_OR_OUTER_METHOD")
             protected boolean removeEldestEntry(
                     Map.Entry<String, CachingClosureResolver.Entry> eldest) {
+                // SpotBugs 误报：本匿名 LinkedHashMap 子类的 removeEldestEntry 必须写
+                // 全限定名 CachingClosureResolver.Entry，否则会被继承的 Map.Entry 遮蔽、
+                // 覆写失效、编译失败（详见上方类注释）。此处调用均指向确定对象，无歧义。
                 return size() > CachingClosureResolver.this.maxEntries;
             }
         });

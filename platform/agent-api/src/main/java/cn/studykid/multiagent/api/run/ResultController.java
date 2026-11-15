@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.persistence.ResultQueryPort;
+import cn.studykid.multiagent.ports.persistence.RunQueryPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 
 /**
@@ -36,15 +37,18 @@ public class ResultController {
     private static final Logger log = LoggerFactory.getLogger(ResultController.class);
 
     private final ResultQueryPort resultQuery;
+    private final RunQueryPort runQuery;
     private final AuthorizationService authorization;
     private final RateLimitPort rateLimiter;
     private final RunController.CurrentPrincipal currentPrincipal;
 
     public ResultController(ResultQueryPort resultQuery,
+                            RunQueryPort runQuery,
                             AuthorizationService authorization,
                             RateLimitPort rateLimiter,
                             RunController.CurrentPrincipal currentPrincipal) {
         this.resultQuery = resultQuery;
+        this.runQuery = runQuery;
         this.authorization = authorization;
         this.rateLimiter = rateLimiter;
         this.currentPrincipal = currentPrincipal;
@@ -79,6 +83,18 @@ public class ResultController {
             log.info("Run 结果查询未命中: tenant={}, runId={}", context.tenantId(), runId);
             throw new ResponseStatusException(
                     org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在");
+        }
+
+        // ⚠️ 受众数据隔离（F1）：仅持受众角色的主体只能读**本人创建**的 Run 的结果。
+        //    结果含讲解/错因/步骤，是受众隔离最敏感的面 —— 不归属统一 404。
+        if (AuthorizationService.Roles.isAudienceOnly(context.roles())) {
+            RunQueryPort.RunStatus status = runQuery.findStatus(context.tenantId(), runId);
+            if (status == null || !context.principalId().equals(status.requesterId())) {
+                log.info("Run 结果查询未命中（受众隔离）: tenant={}, runId={}",
+                        context.tenantId(), runId);
+                throw new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在");
+            }
         }
 
         return ResponseEntity.ok(new ResultResponse(
@@ -153,8 +169,13 @@ public class ResultController {
     /**
      * 解题步骤。
      *
+     * <p>⚠️ {@code state} 复用 {@code run_state} 枚举但语义不同：生产链路恒为
+     * {@code 'RUNNING'}，表示「该步骤已发生」而非进行中；完成以
+     * {@code completed_at} 判定。前端结果页据此显示「已完成」，
+     * <b>不得</b>按 Run 状态机显示成「执行中」。
+     *
      * @param number   步骤序号
-     * @param state    步骤状态
+     * @param state    步骤状态；生产恒为 {@code 'RUNNING'}（已发生，非进行中）
      * @param stepType 步骤类型
      * @param output   步骤产出载荷的原始 JSON 文本；
      *                 ⚠️ <b>当前无生产写入方</b>（P4-D10 L-2），故其形状尚未定义

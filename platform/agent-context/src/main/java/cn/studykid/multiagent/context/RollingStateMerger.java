@@ -96,6 +96,8 @@ public final class RollingStateMerger {
      * @param policyVersion 当前策略指纹；与 {@code oldState.policyVersion()} 不符即丢弃重建
      * @param extractor     外部抽取器（零 LLM 由本类保证：只在有新轮次时调用一次）
      */
+    // S2789 误报：null 判空是 RV-30 契约要求的 fail-closed 闸门（详见方法体内注释）。
+    @SuppressWarnings("java:S2789")
     public static @NonNull MergeResult merge(@NonNull StructuredState oldState,
                                              @NonNull List<SeqMessage> delta,
                                              @NonNull String policyVersion,
@@ -132,6 +134,10 @@ public final class RollingStateMerger {
             return new MergeResult(oldState, 0, skipped, false, true,
                     FALLBACK_EXTRACTOR_FAILED, false);
         }
+        // ⚠️ S2789 在此为**误报**，此判空是**契约要求的 fail-closed 闸门**，不可删：
+        //    端口虽声明 @NonNull Optional<StructuredState>，但 RV-30 明确要求
+        //    「抽取器返回 null 一律回落，绝不伪造状态」——null 不是"空 Optional"，
+        //    直接 .get() 会抛 NPE 把回落语义变成崩溃。回归见 RollingStateMergerTest#extractorFailuresFailClosed。
         if (extracted == null || extracted.isEmpty()) {
             return new MergeResult(oldState, 0, skipped, false, true,
                     FALLBACK_EXTRACTOR_FAILED, false);

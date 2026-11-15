@@ -150,6 +150,7 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
 
     @Override
     @NonNull
+    @SuppressWarnings("java:S2077") // 安全：SQL 由常量列名(selectColumns()) + 静态子句拼接，动态值全部经 PreparedStatement 参数绑定，无用户输入拼入。
     public Optional<ConfigPublishRequest> find(@Nullable String tenantId,
                                                 @NonNull String requestId) {
         String sql = selectColumns() + """
@@ -367,6 +368,7 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
         }
     }
 
+    @SuppressWarnings("java:S2077") // 安全：同 find —— 常量列名 + 静态子句拼接，动态值全部经 PreparedStatement 参数绑定。
     private ConfigPublishRequest loadForUpdate(Connection conn, String tenantId,
                                                String requestId) throws SQLException {
         String sql = selectColumns() + """

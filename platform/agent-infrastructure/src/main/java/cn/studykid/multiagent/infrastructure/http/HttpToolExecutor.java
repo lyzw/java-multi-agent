@@ -173,6 +173,30 @@ public class HttpToolExecutor {
      */
     private record RequestPlan(@NonNull String method, @NonNull String url,
                                @Nullable byte[] body) {
+        // S6218：byte[] 用引用相等不符合预期，显式按内容比较。
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof RequestPlan p)) return false;
+            return method.equals(p.method)
+                    && url.equals(p.url)
+                    && java.util.Arrays.equals(body, p.body);
+        }
+        @Override
+        public int hashCode() {
+            int h = java.util.Objects.hash(method, url);
+            h = 31 * h + java.util.Arrays.hashCode(body);
+            return h;
+        }
+        /**
+         * S6218：数组字段默认 {@code toString} 打印的是<b>引用</b>（如 {@code [B@1a2b3c}），
+         * 排障时看不到实际内容；此处按内容渲染。
+         */
+        @Override
+        public String toString() {
+            return "RequestPlan[method=" + method + ", url=" + url
+                    + ", body=" + java.util.Arrays.toString(body) + "]";
+        }
     }
 
     /**
@@ -293,6 +317,27 @@ public class HttpToolExecutor {
      */
     private record RawResponse(int status, @NonNull Map<String, String> headers,
                                @NonNull byte[] body) {
+        // S6218：byte[] 用引用相等不符合预期，显式按内容比较。
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof RawResponse r)) return false;
+            return status == r.status
+                    && headers.equals(r.headers)
+                    && java.util.Arrays.equals(body, r.body);
+        }
+        @Override
+        public int hashCode() {
+            int h = java.util.Objects.hash(status, headers);
+            h = 31 * h + java.util.Arrays.hashCode(body);
+            return h;
+        }
+        /** S6218：数组字段按<b>内容</b>渲染，而非打印引用地址。 */
+        @Override
+        public String toString() {
+            return "RawResponse[status=" + status + ", headers=" + headers
+                    + ", body=" + java.util.Arrays.toString(body) + "]";
+        }
     }
 
     /**

@@ -75,6 +75,9 @@ describe('Run 状态映射', () => {
     it('成功为 success', () => {
       expect(stateTone('SUCCEEDED')).toBe('success')
     })
+    it('CANCELLED 是中性终态，不与失败混色', () => {
+      expect(stateTone('CANCELLED')).toBe('neutral')
+    })
     it('⛔ TIMED_OUT 与 FAILED 同为 failure 但标签不同', () => {
       expect(stateTone('TIMED_OUT')).toBe('failure')
       expect(stateTone('FAILED')).toBe('failure')
@@ -84,8 +87,24 @@ describe('Run 状态映射', () => {
   })
 
   describe('补充说明', () => {
-    it('FAILED 带 errorCode 时展示原因', () => {
-      expect(stateHint('FAILED', 'MODEL_TIMEOUT')).toBe('失败原因：MODEL_TIMEOUT')
+    it('⛔ N3：FAILED 带 errorCode 时给可读原因，绝不原样透出内部码', () => {
+      expect(stateHint('FAILED', 'MODEL_TIMEOUT')).toBe('失败原因：这次分析临时未能完成')
+      expect(stateHint('FAILED', 'BUDGET_EXHAUSTED')).toBe('失败原因：服务配置尚未就绪')
+    })
+    it('⛔ 反证：任何内部错误码都不得出现在面向学生的提示里', () => {
+      for (const code of [
+        'CONFIG_UNAVAILABLE',
+        'BUDGET_EXHAUSTED',
+        'AUTHZ_UNAVAILABLE',
+        'MODEL_TIMEOUT',
+        'PROVIDER_ERROR',
+        'SOME_FUTURE_INTERNAL_CODE',
+      ]) {
+        const hint = stateHint('FAILED', code) ?? ''
+        expect(hint).not.toContain(code)
+        expect(hint).not.toContain('网络问题')
+        expect(hint).not.toContain('稍后再试')
+      }
     })
     it('FAILED 无 errorCode 时给出兜底', () => {
       expect(stateHint('FAILED')).toBe('本次执行未完成')
@@ -93,8 +112,25 @@ describe('Run 状态映射', () => {
     it('TIMED_OUT 有独立说明', () => {
       expect(stateHint('TIMED_OUT')).toBe('执行超时未能完成')
     })
+    it('⛔ CANCELLED 有独立说明且忽略 errorCode（不与 FAILED 合并）', () => {
+      expect(stateHint('CANCELLED')).toBe('本次执行已取消')
+      expect(stateHint('CANCELLED', 'MODEL_ERROR')).toBe('本次执行已取消')
+      expect(stateHint('CANCELLED')).not.toContain('失败原因')
+    })
+    it('⛔ TIMED_OUT 忽略 errorCode，不把超时说成服务配置故障', () => {
+      expect(stateHint('TIMED_OUT', 'MODEL_TIMEOUT')).toBe('执行超时未能完成')
+      expect(stateHint('TIMED_OUT', 'BUDGET_EXHAUSTED')).toBe('执行超时未能完成')
+      expect(stateHint('TIMED_OUT', 'BUDGET_EXHAUSTED')).not.toContain('失败原因')
+    })
+    it('⛔ 反证：把 TIMED_OUT / CANCELLED 合并进 FAILED 分支会被上面抓到', () => {
+      const flawedHint = (state: string): string | null =>
+        ['FAILED', 'TIMED_OUT', 'CANCELLED'].includes(state) ? '失败原因：…' : null
+      expect(flawedHint('TIMED_OUT')).not.toBe(stateHint('TIMED_OUT'))
+      expect(flawedHint('CANCELLED')).not.toBe(stateHint('CANCELLED'))
+    })
     it('非失败态无说明', () => {
       expect(stateHint('RUNNING')).toBeNull()
+      expect(stateHint('SUCCEEDED', 'MODEL_ERROR')).toBeNull()
     })
   })
 })

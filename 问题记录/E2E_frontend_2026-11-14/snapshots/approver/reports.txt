@@ -1,0 +1,182 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：APPROVER · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e17]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e18]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e19]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e20]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e21]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e22]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e23]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e24]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e25]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e26]
+          - StaticText "未知操作处置"
+  - main
+    - paragraph
+      - StaticText "统计与报表"
+    - heading "报表中心" [level=1, ref=e6]
+    - paragraph
+      - StaticText "按天看辅导、错题与语料的变化。全部为租户级聚合，不含任何学生可识别信息。"
+    - button "刷新" [ref=e7]
+    - group "报表区块导航"
+      - link "统计区间" [ref=e8]
+      - link "每日错题分析" [ref=e9]
+      - link "每日辅导量与成功率" [ref=e10]
+      - link "知识点薄弱排行" [ref=e11]
+      - link "每日活跃与新增学生" [ref=e12]
+      - link "每日搜索的问题数" [ref=e13]
+      - link "每日导入 RAG 的资料数" [ref=e14]
+      - link "RAG 语料增长与准入率" [ref=e15]
+      - link "相关页面" [ref=e16]
+    - generic
+      - sectionheader
+        - heading "统计区间" [level=2, ref=e33]
+        - paragraph
+          - StaticText "后端把区间钳制在 1～90 天，超出会静默截断。"
+      - LabelText
+        - StaticText "统计天数"
+      - combobox "统计天数" [expanded=false, ref=e27]: 最近 30 天
+        - MenuListPopup
+          - option "最近 7 天" [ref=e41]
+          - option "最近 14 天" [ref=e42]
+          - option "最近 30 天" [selected, ref=e43]
+          - option "最近 90 天" [ref=e44]
+      - StaticText "UTC 日期口径"
+      - StaticText "日期按 UTC 归日，与后端聚合口径一致（跨午夜不会错位）。"
+    - generic
+      - sectionheader
+        - heading "每日错题分析" [level=2, ref=e34]
+        - paragraph
+          - StaticText "按天的错因记录条数——一道题可能记多条错因。"
+      - paragraph
+        - StaticText "这个区间还没有错题分析记录"
+      - paragraph
+        - StaticText "完成一次错题归因后，这里会逐日显示分析条数。"
+    - generic
+      - sectionheader
+        - heading "每日辅导量与成功率" [level=2, ref=e35]
+        - paragraph
+          - StaticText "发起量含在途；成功率的分母只算终态。"
+      - paragraph
+        - StaticText "这个区间还没有辅导记录"
+      - paragraph
+        - StaticText "发起一次辅导后，这里会逐日显示量与终态构成。"
+    - generic
+      - sectionheader
+        - heading "知识点薄弱排行" [level=2, ref=e36]
+        - paragraph
+          - StaticText "Top 10；可切换「所选区间内」与「全历史累计」两个口径。"
+      - paragraph
+        - StaticText "这个区间还没有薄弱知识点"
+      - paragraph
+        - StaticText "产生错因记录后，这里会按命中次数排出最需要补强的知识点。"
+    - generic
+      - sectionheader
+        - heading "每日活跃与新增学生" [level=2, ref=e37]
+        - paragraph
+          - StaticText "活跃 = 当日产生过错因记录的去重学生数，不是登录学生数。"
+      - paragraph
+        - StaticText "这个区间还没有学生活跃数据"
+      - paragraph
+        - StaticText "产生错因记录后，这里会显示每日活跃与新增。"
+    - generic
+      - sectionheader
+        - heading "每日搜索的问题数" [level=2, ref=e38]
+        - paragraph
+          - StaticText "按天统计的 RAG 检索次数——检索审计从本次改造起才开始落库。"
+      - paragraph
+        - StaticText "这个区间还没有检索记录"
+      - paragraph
+        - StaticText "检索审计从本次改造起才开始落库，出现一次检索后这里就会有数据。"
+    - generic
+      - sectionheader
+        - heading "每日导入 RAG 的资料数" [level=2, ref=e39]
+        - paragraph
+          - StaticText "资料来源 / 文档载体 / 片段三个层级并列，不做求和。"
+      - paragraph
+        - StaticText "这个区间还没有导入记录"
+      - paragraph
+        - StaticText "登记语料来源、导入文档载体并切分片段后，这里会逐日显示增量。"
+    - generic
+      - sectionheader
+        - heading "RAG 语料增长与准入率" [level=2, ref=e40]
+        - paragraph
+          - StaticText "来源状态分布 + 准入率 + 缺向量片段；增量趋势见上方「每日导入」。"
+      - StaticText "来源总数"
+      - paragraph
+        - StaticText "0"
+      - paragraph
+        - StaticText "含尚未审核的"
+      - StaticText "当前准入"
+      - paragraph
+        - StaticText "0"
+      - paragraph
+        - StaticText "可被检索到"
+      - StaticText "准入率"
+      - paragraph
+        - StaticText "—"
+      - paragraph
+        - StaticText "分母含未审核来源"
+      - StaticText "缺向量片段"
+      - paragraph
+        - StaticText "0"
+      - paragraph
+        - StaticText "占比 —"
+      - button "导出 CSV" [ref=e28]
+      - StaticText "导出的数字与下方表格逐格一致（同源数据）。"
+      - region "语料来源校验状态分布" [ref=e29] focusable [tabindex]
+        - table "语料来源校验状态分布"
+          - caption
+            - StaticText "语料来源校验状态分布"
+          - rowgroup
+            - row
+              - columnheader "校验状态" [ref=e46]
+              - columnheader "来源数" [ref=e47]
+      - paragraph
+        - StaticText "准入率的正确读法"
+      - paragraph
+        - StaticText "准入率的分母含尚未审核的来源。低准入率可能只是「还没审」， 不等于「语料有问题」——请对照上方状态分布里的「待校验」数量再下结论。 准入与否由服务端按租户权威门槛计算，前端不自行推算。"
+    - generic
+      - sectionheader
+        - heading "相关页面" [level=2, ref=e45]
+      - link "检索记录（逐条明细）" [ref=e30]
+      - link "语料管理（来源与载体）" [ref=e31]
+      - link "审计查询" [ref=e32]
+      - paragraph
+        - StaticText "报表是聚合视图；要看逐条记录请到「检索记录」与「审计查询」。"

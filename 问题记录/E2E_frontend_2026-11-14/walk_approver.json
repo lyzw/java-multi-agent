@@ -1,0 +1,156 @@
+[
+  {
+    "path": "/",
+    "label": "dashboard",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2370,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/dashboard.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/dashboard.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/runs",
+    "label": "run_search",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2559,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/run_search.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/run_search.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/runs/new",
+    "label": "new_run",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2902,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/new_run.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/new_run.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/profile",
+    "label": "profile_lookup",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 1586,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/profile_lookup.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/profile_lookup.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/rag",
+    "label": "rag_search",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 4716,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/rag_search.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/rag_search.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/reports",
+    "label": "reports",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 5495,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/reports.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/reports.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/no-permission",
+    "label": "no_permission",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 1772,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/no_permission.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/no_permission.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/approvals",
+    "label": "approvals",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 1999,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/approvals.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/approvals.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/reconciliation",
+    "label": "reconciliation",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2201,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/reconciliation.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/reconciliation.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/config",
+    "label": "config_gate",
+    "expect": "redirect",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2370,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/config_gate.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/config_gate.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/agents",
+    "label": "agents_gate",
+    "expect": "redirect",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2370,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/agents_gate.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/agents_gate.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/audit",
+    "label": "audit_gate",
+    "expect": "redirect",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2370,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/audit_gate.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/audit_gate.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/health",
+    "label": "health_gate",
+    "expect": "redirect",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2370,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/health_gate.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/health_gate.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  },
+  {
+    "path": "/rag/management",
+    "label": "rag_mgmt_gate",
+    "expect": "redirect",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2370,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/approver/rag_mgmt_gate.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/approver/rag_mgmt_gate.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：APPROVER · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主导航\" "
+  }
+]

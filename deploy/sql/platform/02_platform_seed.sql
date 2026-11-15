@@ -278,6 +278,17 @@ INSERT INTO public.agent_version VALUES ('09b9c5a1-d45b-4695-914a-15363e5b332c',
 
 INSERT INTO public.budget_account VALUES ('40cd0917-c12a-46a3-a6af-a9c4e0233f1b', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 'CNY', 100000.000000, 0.000000, 0.000000, '2026-10-27 14:40:18.45903+00', '2026-10-27 14:40:18.45903+00');
 
+-- ── 执行链授权版本：worker 服务主体（P0 · E2E 二次评估 2026-11-14）─────────
+-- ⚠️ 生产链路由 JdbcPlatformTenantRepository.provisionTenant 同事务建行；
+--    种子必须同形，否则「空库复放出来的库」与「走 API 开通的租户」行为不同。
+--    CapExecutionFlow / DelegationExecutor 等六处 require(tenant_id,'worker')
+--    缺行即 fail-closed（AUTHZ_UNAVAILABLE）。
+-- ⛔ 主体级授权版本行不由种子提供（principal 不入种子），
+--    由账号开通脚本 dev-seed.sh 与 scripts/provision_tenant_runtime.py 幂等补齐。
+INSERT INTO public.cap_authz_version (tenant_id, principal_id, authz_version, version, updated_at)
+VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 'worker', 1, 0, now())
+ON CONFLICT (tenant_id, principal_id) DO NOTHING;
+
 
 --
 -- Data for Name: cap_agent_def; Type: TABLE DATA; Schema: public; Owner: -
@@ -591,6 +602,11 @@ ON CONFLICT (tenant_id) DO NOTHING;
 INSERT INTO public.budget_account (account_id, tenant_id, currency, total_limit, reserved_amount, settled_amount, created_at, updated_at)
 VALUES ('c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f', 'b0b5eed0-1111-4222-8333-444455556666', 'CNY', 1000.000000, 0.000000, 0.000000, now(), now())
 ON CONFLICT (account_id) DO NOTHING;
+
+-- ── B2b. t-b 执行链授权版本（worker 服务主体，P0 · 2026-11-14）──
+INSERT INTO public.cap_authz_version (tenant_id, principal_id, authz_version, version, updated_at)
+VALUES ('b0b5eed0-1111-4222-8333-444455556666', 'worker', 1, 0, now())
+ON CONFLICT (tenant_id, principal_id) DO NOTHING;
 
 -- ── B3. t-b 的 agent1 + v1 + 执行快照（跨租户用例建 Run 的前置）───
 INSERT INTO public.agent (agent_id, tenant_id, name, description, created_at, updated_at)

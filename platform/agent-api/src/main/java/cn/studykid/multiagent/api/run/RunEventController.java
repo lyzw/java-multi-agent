@@ -23,6 +23,7 @@ import cn.studykid.multiagent.core.run.RunState;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.persistence.RunEventQueryPort;
+import cn.studykid.multiagent.ports.persistence.RunQueryPort;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 
 /**
@@ -111,6 +112,7 @@ public class RunEventController {
     }
 
     private final RunEventQueryPort eventQuery;
+    private final RunQueryPort runQuery;
     private final AuthorizationService authorization;
     private final cn.studykid.multiagent.api.run.RunController.CurrentPrincipal currentPrincipal;
 
@@ -141,10 +143,11 @@ public class RunEventController {
      */
     /** 「限流已装配、推送器用默认参数」的便捷构造器（单测用）。 */
     public RunEventController(@NonNull RunEventQueryPort eventQuery,
+                              @NonNull RunQueryPort runQuery,
                               @NonNull AuthorizationService authorization,
                               cn.studykid.multiagent.api.run.RunController.CurrentPrincipal currentPrincipal,
                               @NonNull RateLimitPort rateLimiter) {
-        this(eventQuery, authorization, currentPrincipal, rateLimiter,
+        this(eventQuery, runQuery, authorization, currentPrincipal, rateLimiter,
                 new RunEventStreamer(500L, 30 * 60 * 1000L));
     }
 
@@ -156,11 +159,13 @@ public class RunEventController {
      */
     @org.springframework.beans.factory.annotation.Autowired
     public RunEventController(@NonNull RunEventQueryPort eventQuery,
+                              @NonNull RunQueryPort runQuery,
                               @NonNull AuthorizationService authorization,
                               cn.studykid.multiagent.api.run.RunController.CurrentPrincipal currentPrincipal,
                               @NonNull RateLimitPort rateLimiter,
                               @NonNull RunEventStreamer streamer) {
         this.eventQuery = eventQuery;
+        this.runQuery = runQuery;
         this.authorization = authorization;
         this.currentPrincipal = currentPrincipal;
         this.rateLimiter = rateLimiter;
@@ -211,6 +216,18 @@ public class RunEventController {
         if (state == null) {
             // ⚠️ 不区分「不存在」与「无权限」—— 区分即提供存在性探测通道
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "资源不存在");
+        }
+
+        // 4b) ⚠️ 受众数据隔离（F1）：仅持受众角色的主体只能订阅**本人创建**的 Run。
+        //     不归属（含 requester 为空的历史/代操作行）与「不存在」统一 404——
+        //     与上方纪律同源：区分即存在性探测通道。
+        if (AuthorizationService.Roles.isAudienceOnly(context.roles())) {
+            RunQueryPort.RunStatus status = runQuery.findStatus(context.tenantId(), runId);
+            if (status == null || !context.principalId().equals(status.requesterId())) {
+                log.info("事件流订阅未命中（受众隔离）: tenant={}, runId={}",
+                        context.tenantId(), runId);
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "资源不存在");
+            }
         }
 
         // 5) 读取续传起点之后的事件

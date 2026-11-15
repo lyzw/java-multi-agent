@@ -19,7 +19,7 @@ import {
   type CSSProperties,
   type FormEvent,
 } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { createRun, ApiError, getDictionaries, listAgents } from '@/api/client'
 import type { AgentItem } from '@/api/types'
 import { isIdempotencyConflict, type NormalizedError } from '@/api/errors'
@@ -29,6 +29,11 @@ import {
   discardIdempotencyKey,
 } from '@/features/run/idempotency'
 import { scanForm, hasViolation, type Violation } from '@/features/compliance/scan'
+import {
+  readRetryState,
+  makeRetryState,
+  type FormState,
+} from '@/features/run/retryForm'
 import { Field } from '@/shared/Field'
 import { ErrorView } from '@/shared/ErrorView'
 import { PageHead, Panel } from '@/components/ui'
@@ -50,15 +55,6 @@ const DEFAULT_AGENT_ID = import.meta.env['VITE_AGENT_ID'] ?? 'default-agent'
  */
 const FALLBACK_SUBJECTS = ['数学', '物理', '化学', '生物', '语文', '英语'] as const
 const FALLBACK_GRADES = ['初一', '初二', '初三'] as const
-
-interface FormState {
-  studentId: string
-  subject: string
-  grade: string
-  questionText: string
-  studentSolution: string
-  correctAnswer: string
-}
 
 const EMPTY_FORM: FormState = {
   studentId: '',
@@ -91,7 +87,11 @@ const REQUIRED_FIELDS: readonly RequiredField[] = [
 
 export function NewRunPage(): JSX.Element {
   const navigate = useNavigate()
-  const [form, setForm] = useState<FormState>(EMPTY_FORM)
+  // ⚠️ N4：从「重新发起这道题」跳转过来时带回原题（location.state，不落存储）。
+  //    缺失/非法则退化为空白表单，与原先行为一致。
+  const location = useLocation()
+  const retry = useMemo(() => readRetryState(location.state), [location.state])
+  const [form, setForm] = useState<FormState>(retry.retryForm ?? EMPTY_FORM)
   const [violations, setViolations] = useState<Record<string, Violation[]>>({})
   const [error, setError] = useState<NormalizedError | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -113,7 +113,7 @@ export function NewRunPage(): JSX.Element {
    * 也不知道能不能提交的表单要好。
    */
   const [agents, setAgents] = useState<AgentItem[]>([])
-  const [agentId, setAgentId] = useState<string>(DEFAULT_AGENT_ID)
+  const [agentId, setAgentId] = useState<string>(retry.agentId ?? DEFAULT_AGENT_ID)
 
   useEffect(() => {
     let cancelled = false
@@ -278,7 +278,12 @@ export function NewRunPage(): JSX.Element {
         input,
       })
       clearIdempotencyKey()
-      navigate(`/runs/${response.runId}`, { replace: true })
+      // ⚠️ N4：把原题带到进度页，失败时「重新发起这道题」才能名副其实。
+      //    location.state 是内存态，刷新即失效（符合 S-4，不落 localStorage）。
+      navigate(`/runs/${response.runId}`, {
+        replace: true,
+        state: makeRetryState(form, agentId),
+      })
     } catch (cause) {
       if (cause instanceof ApiError) {
         // ⛔ 409 时清除 key 但**不自动换 key 重试** —— 可能造成重复 Run
@@ -311,6 +316,11 @@ export function NewRunPage(): JSX.Element {
         title="发起辅导"
         lead="请提交一道错题。我们只采集随机匿名编号、年级、学科与解题过程，不会收集姓名、学校、班级等身份信息。"
       />
+      {retry.retryForm !== undefined ? (
+        <p className="notice" role="status">
+          已带回上一道题的内容，请核对后再提交；修改任何一项都会作为一次新的分析。
+        </p>
+      ) : null}
 
       <Panel title="错题信息" icon="file">
         {/*

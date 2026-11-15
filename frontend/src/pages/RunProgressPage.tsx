@@ -19,10 +19,12 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useLocation } from 'react-router-dom'
 import { createRunEventPoller, type StreamSnapshot } from '@/features/run/eventStream'
 import { useRunStatus } from '@/features/run/useRunStatus'
 import { stateLabel, stateTone, stateHint, isTerminalState } from '@/features/run/runState'
+import { errorGuidance, runFailureGuidance } from '@/api/errorGuidance'
+import { readRetryState, makeRetryState } from '@/features/run/retryForm'
 import { useSession } from '@/auth/session'
 import { Unavailable, Breadcrumbs } from '@/shared/states'
 import { PageHead } from '@/components/ui'
@@ -38,6 +40,9 @@ function formatTime(iso: string): string {
 export function RunProgressPage(): JSX.Element {
   const { runId } = useParams<{ runId: string }>()
   const { onUnauthorized } = useSession()
+  // ⚠️ N4：从发起页带过来的原题（location.state，不落存储）。
+  const location = useLocation()
+  const retry = useMemo(() => readRetryState(location.state), [location.state])
 
   const [snapshot, setSnapshot] = useState<StreamSnapshot | null>(null)
 
@@ -46,6 +51,8 @@ export function RunProgressPage(): JSX.Element {
   const {
     status,
     error: statusError,
+    errorInfo: statusErrorInfo,
+    notFound: statusNotFound,
     done: statusDone,
     reload: reloadStatus,
     loading: statusLoading,
@@ -87,14 +94,26 @@ export function RunProgressPage(): JSX.Element {
 
   const currentState = status?.state ?? eventState
 
+  // ⚠️ N6：状态读取失败同样按 status 分流；403/404/401 是终态，不给刷新/重试。
+  //    ⛔ 必须早于 shouldShowSyncing 与停轮询 effect 计算——
+  //    否则权限错误时页面会同时说「正在处理 / 正在同步最新状态…」
+  //    和「重试不会改变结果」，二者自相矛盾（铁律 15，F8 只修了 404）。
+  const statusGuidance = useMemo(
+    () => errorGuidance(statusErrorInfo),
+    [statusErrorInfo],
+  )
+  const statusReadIsTerminal =
+    statusErrorInfo !== null && !statusNotFound && !statusGuidance.retryable
+
   // ⚠️ 到达终态即停一切轮询：SSE 流在本项目**永远收不到终态事件**
   //    （run_event 只有 RUN_CREATED），故若只靠 SSE，本页会一直打后端。
   useEffect(() => {
-    if (statusDone && pollerRef.current) {
+    // ⚠️ 状态读取的终态错误也要停 SSE 轮询：403/401 不会随时间自愈。
+    if ((statusDone || statusReadIsTerminal) && pollerRef.current) {
       pollerRef.current.stop()
       pollerRef.current = null
     }
-  }, [statusDone])
+  }, [statusDone, statusReadIsTerminal])
 
   const errorCode = useMemo(() => {
     // ⚠️ FE-D9：G3 的 errorCode 是**权威**（run 表的 error_code 列）；
@@ -117,9 +136,17 @@ export function RunProgressPage(): JSX.Element {
    *    SSE 的 `snapshot.done` 只有收到终态事件才为真，而本项目
    *    `run_event` 只有 `RUN_CREATED` → 它**永远**不会为真。
    *    若以它为准，页面会永远显示「正在同步最新状态…」。
-   */
+   *
+ * ⚠️ F7（E2E 2026-11-14）：404（不存在 / 无权查看）**不是「仍在同步」**——
+ *    那里什么都不会同步到；继续显示「正在同步最新状态…」是**误导**。
+ * ⚠️ N6（二轮优化）：403/401 等**语义终态错误**同理。此前只排除 404，
+ *    权限拒绝时页面会一边说「正在处理」一边说「重试不会改变结果」。
+ */
   const shouldShowSyncing =
-    !statusDone && (currentState === null || !isTerminalState(currentState))
+    !statusNotFound &&
+    !statusDone &&
+    !statusReadIsTerminal &&
+    (currentState === null || !isTerminalState(currentState))
 
   if (runId === undefined) {
     return (
@@ -142,6 +169,15 @@ export function RunProgressPage(): JSX.Element {
 
   const tone = stateTone(currentState ?? '')
   const hint = stateHint(currentState ?? '', errorCode)
+  // ⚠️ N3：内部 errorCode 绝不原样甩给学生；按类别给可读文案与差异化 CTA。
+  //    service-config（CONFIG_UNAVAILABLE / BUDGET_EXHAUSTED …）= 租户级故障，
+  //    「重新发起」是必然失败的死循环，必须移除。
+  const failure = useMemo(
+    () => runFailureGuidance(errorCode, runId),
+    [errorCode, runId],
+  )
+  // ⚠️ statusGuidance / statusReadIsTerminal 已上移至 currentState 之后，
+  //    供 shouldShowSyncing 与停轮询 effect 共用。
 
   return (
     <>
@@ -158,13 +194,22 @@ export function RunProgressPage(): JSX.Element {
       {/* 状态区 */}
       <section className={`status status--${tone}`} aria-live="polite">
         <p className="status__label">
-          {currentState !== null
-            ? stateLabel(currentState)
-            : snapshot?.done === true
-              ? '已结束'
-              : '正在处理'}
+          {statusNotFound
+            ? '资源不存在'
+            : statusReadIsTerminal
+              ? '无法查看状态'
+              : currentState !== null
+                ? stateLabel(currentState)
+                : snapshot?.done === true
+                  ? '已结束'
+                  : '正在处理'}
         </p>
-        {hint !== null ? <p className="status__hint">{hint}</p> : null}
+        {hint !== null && !statusNotFound ? <p className="status__hint">{hint}</p> : null}
+        {statusNotFound ? (
+          <p className="status__hint">
+            该分析不存在，或不属于当前账号，因此无法查看进度与结果。
+          </p>
+        ) : null}
         {/*
           ⚠️ 2026-10-24：手动刷新按钮。
              轮询是 10 秒一拍（限流配额约束），用户等不及时应当能主动催一次；
@@ -176,14 +221,19 @@ export function RunProgressPage(): JSX.Element {
             type="button"
             className="btn btn--quiet"
             onClick={reloadStatus}
-            disabled={statusLoading}
+            // ⚠️ 铁律 15：终态错误（404 / 403）不得给「刷新状态」——
+            //    刷新不会让资源出现，也不会让权限凭空生效。
+            disabled={statusLoading || statusNotFound || statusReadIsTerminal}
             aria-busy={statusLoading}
           >
             <Icon name="refresh" />
             {statusLoading ? '刷新中…' : '刷新状态'}
           </button>
-          {statusError !== null ? (
+          {statusError !== null && !statusNotFound && !statusReadIsTerminal ? (
             <span className="muted">上一次读取失败，可再试一次</span>
+          ) : null}
+          {statusReadIsTerminal ? (
+            <span className="muted">{statusGuidance.next}</span>
           ) : null}
         </p>
       </section>
@@ -198,7 +248,7 @@ export function RunProgressPage(): JSX.Element {
         **对已完成的运行说「请稍候」是直接的误导**。
         故改为以 G3 状态（statusDone）为准。
       */}
-      {snapshot !== null && snapshot.degraded && !snapshot.done && !statusDone ? (
+      {snapshot !== null && snapshot.degraded && !snapshot.done && !statusDone && !statusNotFound && !statusReadIsTerminal ? (
         <p className="notice" role="status">
           正在处理，请稍候。详细执行步骤将在功能完善后展示。
         </p>
@@ -215,10 +265,20 @@ export function RunProgressPage(): JSX.Element {
         并**明确告知**「暂时读不到最新状态」——
         ⛔ 不得显示成「系统故障」（那会让人以为这次辅导失败了），
         ⛔ 也不得静默（那会让人以为状态是新鲜的）。
+
+        ⚠️ F7（E2E 2026-11-14）：**404 不属于「暂时读不到」**。
+        404 = 资源不存在 / 不属于当前主体，重试也不会变；
+        此时说「暂时读不到最新状态」并让用户继续等，是**误导**。
       */}
-      {statusError !== null ? (
+      {statusError !== null && !statusNotFound && !statusReadIsTerminal ? (
         <p className="notice" role="status">
           暂时读不到最新状态，下面显示的是事件流里的进度。
+        </p>
+      ) : null}
+      {/* ⚠️ 403 等终态权限错误：不得说成「暂时读不到」，也不给任何重试暗示 */}
+      {statusReadIsTerminal ? (
+        <p className="marked" role="alert">
+          {statusGuidance.reason}。{statusGuidance.next}
         </p>
       ) : null}
 
@@ -271,17 +331,48 @@ export function RunProgressPage(): JSX.Element {
             错题辅导的重试成本极低（同一道题重新提交即可），
             把入口摆在状态旁边，比让人回工作台再点一遍「发起辅导」少三步。
       */}
+      {/*
+        ⚠️ N3（E2E 二次评估）：原实现对**所有**非成功终态一律给「重新发起这道题」。
+           CONFIG_UNAVAILABLE / BUDGET_EXHAUSTED 的根因是租户级配置与预算账户，
+           学生重试多少次都只会再失败一次 —— 那是引导用户进死循环。
+        ⚠️ N4：临时故障允许重试时，把原题通过 location.state 带回；
+           刷新进度页后 state 丢失，文案改为「再辅导一道」，不再名实不符。
+      */}
       {statusDone && status != null && status.state !== 'SUCCEEDED' ? (
-        <div className="status-line" style={{ marginTop: 'var(--s-4)', flexWrap: 'wrap', gap: 'var(--s-3)' }}>
-          <Link to="/runs/new" className="btn btn--quiet">
-            <Icon name="plus" />
-            重新发起这道题
-          </Link>
-          <Link to="/runs" className="btn btn--quiet">
-            <Icon name="search" />
-            回检索记录
-          </Link>
-        </div>
+        <>
+          <p
+            className="marked marked--calm"
+            role="status"
+            style={{ marginTop: 'var(--s-4)' }}
+          >
+            {failure.advice}
+          </p>
+          <div className="status-line" style={{ marginTop: 'var(--s-3)', flexWrap: 'wrap', gap: 'var(--s-3)' }}>
+            {failure.canRetry ? (
+              <Link
+                to="/runs/new"
+                state={
+                  retry.retryForm !== undefined
+                    ? makeRetryState(retry.retryForm, retry.agentId ?? '')
+                    : undefined
+                }
+                className="btn btn--quiet"
+              >
+                <Icon name="plus" />
+                {retry.retryForm !== undefined ? '重新发起这道题' : '再辅导一道'}
+              </Link>
+            ) : (
+              <Link to="/" className="btn btn--quiet">
+                <Icon name="dashboard" />
+                回工作台
+              </Link>
+            )}
+            <Link to="/runs" className="btn btn--quiet">
+              <Icon name="search" />
+              回检索记录
+            </Link>
+          </div>
+        </>
       ) : null}
 
       {/* 重连指示：诚实告知数据更新状态 */}

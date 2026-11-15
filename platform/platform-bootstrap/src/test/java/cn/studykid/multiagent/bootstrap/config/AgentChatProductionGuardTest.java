@@ -120,7 +120,10 @@ class AgentChatProductionGuardTest {
         assertThat(code).contains("INSERT INTO run")
                 .contains("INSERT INTO run_event")
                 .contains("INSERT INTO run_step")
-                .contains("UPDATE run");
+                .contains("UPDATE run")
+                // ⚠️ 跨层口径锚点：步骤 state 恒为 RUNNING（「已发生」，非进行中），
+                //    完成以 completed_at 判定。删掉这个字面量等于改了口径，必须红。
+                .contains("'RUNNING'::run_state");
     }
 
     @Test

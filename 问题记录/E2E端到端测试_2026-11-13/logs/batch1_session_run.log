@@ -1,0 +1,44 @@
+[  通过] I-L01  超管账号真实表单登录                             -> url=http://localhost:5180/admin/tenants; roles=['PLATFORM_SUPER_ADMIN']; expiresIn≈899s
+[  通过] I-L02  「忘记密码？」提示                              -> Agent Platform
+一个控制台
+管好所有 Agent
+
+注册、发布、观测 Agent 及其调用的 Tool、Skill 与 MCP， 并按租户看清每一次执行。
+
+Agent 注册与版本
+定义、发布与回滚每一个 Agent 的行为。
+Tool 与 Skill 编排
+把可复用能力挂到正确的调用
+[  失败] I-L03  退出登录                                   -> url=http://localhost:5180/admin/tenants; session={'accessToken': 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjEzZjI0OCJ9.eyJpc3MiOiJodHRwczovL2F1dGg
+[  失败] I-L04  未登录深链 → 登录 → 回跳原页                      -> before=http://localhost:5180/admin/users; after=http://localhost:5180/admin/users
+[  通过] I-L05  过期原因提示 + next 回跳                       -> warning=True; after=http://localhost:5180/admin/tools
+[  通过] I-L06  业务无权限整页 /no-permission                 -> 403 · 无权限
+E2E测试原因
+返回租户管理
+[  通过] I-L06b 无权限页「返回租户管理」按钮                         -> http://localhost:5180/admin/tenants
+[  通过] I-L07  未知路径 404 兜底                            -> 平台管理控制台
+平台治理
+租户管理
+平台用户
+角色权限矩阵
+平台审计
+能力目录
+RAG · 录入与校对
+RAG · 审核
+RAG · 规则配置
+RAG · 运维
+系统配置
+观测度量
+AI 实验室
+管理员
+平台管理控制台
+404
+这个地址没有对应的页面。可能是链接已过期，或地址输入有误。
+回租户注册表
+[  通过] I-L07b 404 页「回登录页」按钮                          -> http://localhost:5180/admin/login
+[  失败] I-L08  侧栏折叠 / 展开状态切换                          -> 200 -> 200 -> 200
+[  通过] I-L09  /tenants/new 深链打开开通租户弹窗                -> url=http://localhost:5180/admin/tenants; modal=['开通租户\nSlug\n2-63 位，仅限小写字母、数字和连字符（-），不能以连字符开头或结尾\n名称\n套餐（可选）\n留空使用平台默认套餐；如需指定，请输入套餐标识\n开 通']
+[  通过] I-L10  令牌即将过期告警与续期入口                          -> warn=True; btn=True
+[  通过] I-L11  伪造令牌被拒后清会话跳登录                          -> url=http://localhost:5180/admin/login?reason=expired&next=%2Ftenants; session=None
+[  通过] I-L12  异常后恢复登录                                -> http://localhost:5180/admin/tenants
+BATCH1 DONE

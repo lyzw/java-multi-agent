@@ -153,9 +153,9 @@ class GovernanceQueryIT {
                     sameInstantRuns.add(newRun(tenantA, sameInstant)));
 
             Page<RunListQueryPort.RunListItem> p1 =
-                    runList.list(tenantA, null, null, null, null, null, 3);
+                    runList.list(tenantA, null, null, null, null, null, null, 3);
             Page<RunListQueryPort.RunListItem> p2 =
-                    runList.list(tenantA, null, null, null, null, p1.nextCursor(), 3);
+                    runList.list(tenantA, null, null, null, null, null, p1.nextCursor(), 3);
 
             List<String> firstPage = p1.items().stream()
                     .map(RunListQueryPort.RunListItem::runId).toList();
@@ -212,19 +212,19 @@ class GovernanceQueryIT {
     @DisplayName("✅ G-2 游标翻页不重不漏；并发新插入不影响已翻页的结果")
     void cursorPagingHasNoGapOrOverlap() {
         String marker = newRun(tenantA);
-        List<String> all = runList.list(tenantA, null, null, null, null, null, 100)
+        List<String> all = runList.list(tenantA, null, null, null, null, null, null, 100)
                 .items().stream().map(RunListQueryPort.RunListItem::runId).toList();
         assertThat(all).contains(marker);
 
         // 第一页
-        Page<RunListQueryPort.RunListItem> p1 = runList.list(tenantA, null, null, null, null, null, 2);
+        Page<RunListQueryPort.RunListItem> p1 = runList.list(tenantA, null, null, null, null, null, null, 2);
         assertThat(p1.hasMore()).isTrue();
 
         // ⛔ 翻页期间插入一条更「新」的 Run（created_at 更晚 = 排序更靠前）
         newRun(tenantA);
 
         Page<RunListQueryPort.RunListItem> p2 =
-                runList.list(tenantA, null, null, null, null, p1.nextCursor(), 2);
+                runList.list(tenantA, null, null, null, null, null, p1.nextCursor(), 2);
 
         List<String> seen = java.util.stream.Stream.concat(
                         p1.items().stream().map(RunListQueryPort.RunListItem::runId),
@@ -242,10 +242,10 @@ class GovernanceQueryIT {
     @Test
     @DisplayName("✅ G-3 坏游标 / 非正 limit → 拒绝（不静默当成第一页）")
     void invalidArgumentsAreRejected() {
-        assertThatThrownBy(() -> runList.list(tenantA, null, null, null, null, "not-base64!!", 10))
+        assertThatThrownBy(() -> runList.list(tenantA, null, null, null, null, null, "not-base64!!", 10))
                 .as("⛔ 坏游标必须报错，不能静默当成第一页")
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> runList.list(tenantA, null, null, null, null, null, 0))
+        assertThatThrownBy(() -> runList.list(tenantA, null, null, null, null, null, null, 0))
                 .isInstanceOf(IllegalArgumentException.class);
         // ⚠️ limit 上限 100 是在**端点层**（GovernanceSupport）强制的契约，
         //    仓库层只挡非正数——那条断言在 GovernanceEndpointIT 里。
@@ -256,15 +256,15 @@ class GovernanceQueryIT {
     void filtersWork() {
         String runId = newRun(tenantA);
 
-        assertThat(runList.list(tenantA, "QUEUED", null, null, null, null, 50).items())
+        assertThat(runList.list(tenantA, null, "QUEUED", null, null, null, null, 50).items())
                 .as("新建的 Run 应处于 QUEUED")
                 .anySatisfy(i -> assertThat(i.runId()).isEqualTo(runId));
 
         Instant future = Instant.now().plusSeconds(3600);
-        assertThat(runList.list(tenantA, null, null, future, null, null, 50).items())
+        assertThat(runList.list(tenantA, null, null, null, future, null, null, 50).items())
                 .as("未来起点不应命中任何行")
                 .isEmpty();
-        assertThat(runList.list(tenantA, null, null, null, Instant.parse("2000-01-01T00:00:00Z"), null, 50)
+        assertThat(runList.list(tenantA, null, null, null, null, Instant.parse("2000-01-01T00:00:00Z"), null, 50)
                 .items())
                 .as("过去终点不应命中任何行")
                 .isEmpty();
@@ -281,7 +281,7 @@ class GovernanceQueryIT {
         //    真正的隔离不变式是：**B 看不到 A 的任何一行**。
         //    ——此前写成 isEmpty()，首轮恰好成立，一旦 B 有了自己的数据就转红，
         //    且失败现场指向错误的排查方向（F-9 同形态）。
-        List<String> visibleToB = runList.list(tenantB, null, null, null, null, null, 100)
+        List<String> visibleToB = runList.list(tenantB, null, null, null, null, null, null, 100)
                 .items().stream()
                 .map(RunListQueryPort.RunListItem::runId)
                 .toList();
@@ -421,7 +421,7 @@ class GovernanceQueryIT {
         String mathRun = newRunWithPayload(tenantA, Map.of("subject", "数学", "grade", "初二"));
         String physicsRun = newRunWithPayload(tenantA, Map.of("subject", "物理", "grade", "初三"));
 
-        List<String> mathIds = runList.list(tenantA, null, "数学", null, null, null, 200)
+        List<String> mathIds = runList.list(tenantA, null, null, "数学", null, null, null, 200)
                 .items().stream()
                 .map(RunListQueryPort.RunListItem::runId).toList();
 
@@ -770,7 +770,7 @@ class GovernanceQueryIT {
         long scanned = 0;
         for (int page = 0; page < 500; page++) {
             Page<RunListQueryPort.RunListItem> p =
-                    runList.list(tenantId, null, null, null, upperBound, cursor, 200);
+                    runList.list(tenantId, null, null, null, null, upperBound, cursor, 200);
             for (RunListQueryPort.RunListItem i : p.items()) {
                 scanned++;
                 if (i.runId().equals(runId)) {

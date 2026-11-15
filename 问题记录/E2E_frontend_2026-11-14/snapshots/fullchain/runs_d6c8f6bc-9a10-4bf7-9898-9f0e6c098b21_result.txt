@@ -1,0 +1,97 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：STUDENT · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生（本版本）"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e19]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e20]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e21]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e22]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e23]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e24]
+          - StaticText "Agent 对话"
+  - main
+    - navigation "位置" [ref=e6]
+      - list
+        - listitem [level=1]
+          - link "检索记录" [ref=e25]
+        - listitem [level=1]
+          - StaticText "归因结果"
+    - heading "归因结果" [level=1, ref=e7]
+    - paragraph
+      - StaticText "运行标识 "
+      - code
+        - StaticText "d6c8f6bc-9a10-4bf7-9898-9f0e6c098b21"
+    - StaticText "已完成"
+    - StaticText "状态码"
+    - StaticText "SUCCEEDED"
+    - generic
+      - heading "讲解" [level=2, ref=e8]
+      - paragraph
+        - StaticText "### 错因分析\n\n学生只代入了一个点 \\(x=0\\)，得到 \\(y=3\\)，这只能说明点 \\((0,3)\\) 不在 \\(x\\) 轴上，"
+        - strong
+          - StaticText "不能证明抛物线与 \\(x\\) 轴没有其他交点"
+        - StaticText "。\n\n因此，“没有交点”的结论虽然正确，但理由不充分，存在“以一个点代替整体”的逻辑错误。\n\n### 正确解法\n\n抛物线的一般式为：\n\n\\[\ny=ax^2+bx+c\n\\]\n\n本题中 \\(a=1,\\ b=-2,\\ c=3\\)。计算判别式：\n\n\\[\n\\Delta=b^2-4ac=(-2)^2-4\\times1\\times3=4-12=-8<0\n\\]\n\n因为判别式小于 \\(0\\)，所以抛物线与 \\(x\\) 轴没有交点。\n\n也可以配方验证：\n\n\\[\ny=x^2-2x+3=(x-1)^2+2\n\\]\n\n由于 \\((x-1)^2\\geq 0\\)，所以 \\(y\\geq 2>0\\)，因此图像始终在 \\(x\\) 轴上方，没有交点。\n\n### 针对性练习\n\n1. 判断 \\(y=x^2+2x+3\\) 与 \\(x\\) 轴是否相交，并说明理由。\n2. 判断 \\(y=x^2-4x+4\\) 与 \\(x\\) 轴是否相交，并说明理由。\n3. 判断 \\(y=-x^2+2x-3\\) 与 \\(x\\) 轴是否相交，并说明理由。\n\n"
+        - strong
+          - StaticText "参考答案："
+        - StaticText "\n\n1. \\(\\Delta=4-12=-8<0\\)，不相交。\n2. \\(\\Delta=16-16=0\\)，只有一个交点。\n3. \\(\\Delta=4-12=-8<0\\)，不相交。\n\n练习时注意：要证明“与 \\(x\\) 轴没有交点”，需要说明"
+        - strong
+          - StaticText "对任意 \\(x\\)"
+        - StaticText "，抛物线的纵坐标都不等于 \\(0\\)，不能只检验一个点。"
+    - generic
+      - heading "这次辅导有用吗？" [level=2, ref=e9]
+      - paragraph
+        - StaticText "点一个就好。你的反馈只用来改进讲解质量，不会影响你的账号和成绩。"
+      - button "有帮助" [ref=e10]
+      - button "没帮助" [ref=e11]
+      - button "再讲一次" [ref=e12]
+      - button "先不看了" [ref=e13]
+    - generic
+      - heading "解题步骤" [level=2, ref=e14]
+      - list
+        - listitem [level=1]
+          - StaticText "第 "
+          - StaticText "1"
+          - StaticText " 步"
+          - StaticText "执行中"
+    - generic
+      - heading "错因归类" [level=2, ref=e15]
+      - paragraph
+        - StaticText "这次分析没有记录到错因"
+      - paragraph
+        - StaticText "错因需要模型实际调用记录工具才会产生；系统不会替你编一条。"
+    - generic
+      - heading "薄弱点回执" [level=2, ref=e16]
+      - paragraph
+        - StaticText "这次分析没有写入薄弱点。分析完成后，这道题会写入薄弱点清单。"
+    - generic
+      - heading "待核对" [level=2, ref=e17]
+      - paragraph
+        - StaticText "当某一步的结果不确定时（状态为 "
+        - code
+          - StaticText "UNKNOWN"
+        - StaticText "），结论会在这里单独列出， 不会混进上面的正常结果。"
+      - paragraph
+        - StaticText "当前没有待核对项。"
+    - paragraph
+      - link "再辅导一道" [ref=e18]

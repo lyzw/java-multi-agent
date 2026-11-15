@@ -63,15 +63,54 @@ server {
 | 菜单 | 路由 | 数据源端点 | 说明 |
 |---|---|---|---|
 | 平台用户 | `/users` | `GET/POST /api/platform/v1/users`、`PUT …/{id}`、`PUT …/{id}/password`、`POST/DELETE …/{id}/roles[/{role}]` | **可写**：建号 / 启停 / 重置密码 / 赋撤角色 |
-| 角色权限矩阵 | `/roles` | `GET /api/platform/v1/roles` | **只读冻结矩阵**（后端 `PlatformRolePermissionMatrix`，6 角色 23 权限），按命名空间 Tabs（user/role/tenant/capability/resource/policy/audit/support） |
+| 角色权限矩阵 | `/roles` | `GET /api/platform/v1/roles` | **只读冻结矩阵**（后端 `PlatformRolePermissionMatrix`，6 角色 **24** 权限，含 `platform.tenant.execution_ticket`），按命名空间 Tabs（user/role/tenant/capability/resource/policy/audit/support） |
 | Agent 注册表 | `/agents` | `GET /api/platform/v1/capabilities/agents` | **只读盘点**：跨租户元数据（BYPASSRLS 数据源 + 平台运营会话窗），按租户 Tabs；未接入会话时 503 fail-closed |
 | Tool | `/tools` | `GET /api/platform/v1/capabilities/tools` + 三步写端点 | 生命周期 Tabs（全部/已发布/草稿/已停用）+ 申请队列 + 登记 + 停用申请 |
 | Skill | `/skills` | `…/capabilities/skills` | 同上（含 Tool/MCP 闭包声明） |
 | MCP Server | `/mcps` | `…/capabilities/mcps` | 同上（transport 列；凭据定位符**永不回显**） |
 | 租户管理 | `/tenants` | `/api/platform/v1/tenants*` | 租户生命周期 / 配额 / 能力授权 |
-| 平台审计 | `/audit` | `GET /api/platform/v1/audit-events` | 仅 SUPER_ADMIN / AUDITOR 可见 |
+| 平台审计 | `/audit` | `GET /api/platform/v1/audit-events` | 仅 SUPER_ADMIN / AUDITOR / SECURITY_ADMIN 可见（后端 `platform.audit.read` 已含三角色） |
 
 后台的旧租户链端点（`/api/cap/*`、`/api/admin/*`）对平台令牌不可达；原租户域页面文件暂留仓库但已不在路由中。
+
+### 3.1 完整可达页面清单（本轮 E2E 实测 30 页，与 navConfig.tsx 一致）
+
+> 上方 8 行是核心读写入口的端点明细；下方为全部 30 个可达页面的分组与路由盘点（2026-11-13 实测，详见 E2E 报告 §2.3）。
+
+| 分组 | 页面 | 路由 |
+|---|---|---|
+| 平台治理 | 租户管理 | /tenants |
+| 平台治理 | 平台用户 | /users |
+| 平台治理 | 角色权限矩阵 | /roles |
+| 平台治理 | 平台审计 | /audit |
+| 能力目录 | Agent 注册表 | /agents |
+| 能力目录 | Tool | /tools |
+| 能力目录 | Skill | /skills |
+| 能力目录 | MCP Server | /mcps |
+| 能力目录 | 路由策略 | /routing-policies |
+| RAG · 录入与校对 | Dashboard 总览 | /rag/dashboard |
+| RAG · 录入与校对 | 来源登记 | /rag/sources/new |
+| RAG · 录入与校对 | 来源列表 | /rag/sources |
+| RAG · 录入与校对 | 载体上传与解析预览 | /rag/doc-upload |
+| RAG · 录入与校对 | 片段校对 | /rag/chunk-fix |
+| RAG · 审核 | 校验决定 | /rag/verify |
+| RAG · 审核 | 抽检队列 | /rag/inspection |
+| RAG · 审核 | 召回解释（质检） | /rag/recall |
+| RAG · 规则配置 | 审核员名录 | /rag/reviewers |
+| RAG · 规则配置 | 知识点别名 | /rag/kp-alias |
+| RAG · 规则配置 | 字典 | /rag/dictionaries |
+| RAG · 运维 | 摄取任务 | /rag/jobs |
+| RAG · 运维 | 重索引 | /rag/reindex |
+| 系统配置 | 字典配置 | /dictionaries |
+| 系统配置 | 模型配置 | /model-catalog |
+| 观测度量 | Agent 效果指标 | /metrics |
+| 观测度量 | 效果数据录入 | /metrics-entry |
+| 观测度量 | 人工审查队列 | /review-queue |
+| AI 实验室 | Agent 效果测试 | /agent-lab |
+| AI 实验室 | AI 对话 | /ai-chat |
+| AI 实验室 | Agent 编排对话 | /agent-chat |
+
+> **文档口径说明（2026-11-13）**：本 README 随本轮实测刷新了导航表（DOC-01）、权限数（DOC-07）、审计角色门禁（DEF-02 修复对应）。其余受控架构文档的同步——设计方案未挂载页面（DOC-02）、作用域红线变更（DOC-04）、重规划 §10 菜单模块（DOC-05）/ §5.3 角色目录（DOC-06）/ 禁区边界（DOC-08）——需随架构评审与安全评审（DOC-08 待签字）逐项确认，差异明细与判定见 E2E 报告 §4 与 §9.2。
 
 ---
 

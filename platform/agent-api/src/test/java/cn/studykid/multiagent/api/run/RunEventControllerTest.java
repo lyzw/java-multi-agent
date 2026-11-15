@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.persistence.RunEventQueryPort;
+import cn.studykid.multiagent.ports.persistence.RunQueryPort;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 
@@ -326,8 +327,12 @@ class RunEventControllerTest {
             }
         };
         // ⚠️ P3-1：限流器必须显式传入，不存在「默认不限流」的入口了。
-        return new RunEventController(query, authz, principal, UNLIMITED);
+        // ⚠️ RunQueryPort 仅在受众隔离（F1）分支被咨询；本用例角色非受众，永不触达。
+        return new RunEventController(query, NOT_AUDIENCED_RUN_QUERY, authz, principal, UNLIMITED);
     }
+
+    /** 状态查询替身：本用例的主体均非受众角色，隔离分支不触达；万一触达则按「不存在」404。 */
+    private static final RunQueryPort NOT_AUDIENCED_RUN_QUERY = (tenantId, runId) -> null;
 
     /**
      * 显式声明「本用例不关心限流」。

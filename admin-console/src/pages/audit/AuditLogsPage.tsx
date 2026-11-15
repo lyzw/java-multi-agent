@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Button,
@@ -73,23 +73,43 @@ export function AuditLogsPage(): JSX.Element {
 
   usePageTitle('平台审计')
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await getPlatformAuditEvents({
-        action: action.trim() || undefined,
-        actorId: actorId.trim() || undefined,
-        targetType: targetType.trim() || undefined,
-        from: windowFrom(windowHours) ?? undefined,
-        limit: 200,
-      })
-      setRows(data)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '平台审计不可用')
-    } finally {
-      setLoading(false)
+  /**
+   * DEF-03（2026-11-13 E2E 实测）：dev 下 React.StrictMode 会连续调用两次 effect，
+   * 审计页因此一次加载发出两条完全相同的 GET /audit-events（仅 from 毫秒差）。
+   * 同参数在途请求复用同一个 Promise：既消除重复请求，也保留手动「刷新」的语义
+   * （在途刷新不会并发叠加，完成后再点会重新发起）。
+   */
+  const inflightRef = useRef<{ key: string; promise: Promise<void> } | null>(null)
+
+  const load = useCallback(async (): Promise<void> => {
+    const key = JSON.stringify([windowHours, action.trim(), actorId.trim(), targetType.trim()])
+    const inflight = inflightRef.current
+    if (inflight !== null && inflight.key === key) {
+      return inflight.promise
     }
+    const promise = (async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const data = await getPlatformAuditEvents({
+          action: action.trim() || undefined,
+          actorId: actorId.trim() || undefined,
+          targetType: targetType.trim() || undefined,
+          from: windowFrom(windowHours) ?? undefined,
+          limit: 200,
+        })
+        setRows(data)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '平台审计不可用')
+      } finally {
+        setLoading(false)
+      }
+    })()
+    inflightRef.current = { key, promise }
+    void promise.finally(() => {
+      if (inflightRef.current?.promise === promise) inflightRef.current = null
+    })
+    return promise
   }, [windowHours, action, actorId, targetType])
 
   useEffect(() => {

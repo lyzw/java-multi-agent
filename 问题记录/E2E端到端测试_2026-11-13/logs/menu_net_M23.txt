@@ -1,0 +1,19 @@
+[80120.214] GET http://localhost:5180/api/platform/v1/tenants?limit=200 (Fetch) 200
+[80120.215] GET http://localhost:5180/api/v1/management/dictionaries (Fetch) 200
+[80120.216] GET http://localhost:5180/api/platform/v1/tenants?limit=200 (Fetch) 200
+[80120.217] GET http://localhost:5180/api/v1/management/dictionaries (Fetch)
+[80120.241] GET http://localhost:5180/admin/src/api/adminApi.ts (Script) 200
+[80120.306] GET http://localhost:5180/admin/src/api/ragClient.ts (Script) 200
+[80120.307] GET http://localhost:5180/admin/src/api/client.ts (Script) 200
+[80120.317] GET http://localhost:5180/admin/src/api/routingPolicyApi.ts (Script) 200
+[80120.319] GET http://localhost:5180/admin/src/api/ragTypes.ts?t=1794303857726 (Script) 200
+[80120.320] GET http://localhost:5180/admin/src/api/agentLabApi.ts (Script) 200
+[80120.321] GET http://localhost:5180/admin/src/api/executionTicketApi.ts (Script) 200
+[80120.323] GET http://localhost:5180/admin/src/api/modelCatalogApi.ts?t=1794364735842 (Script) 200
+[80120.324] GET http://localhost:5180/admin/src/api/dictionaryApi.ts (Script) 200
+[80120.326] GET http://localhost:5180/admin/src/api/aiChatApi.ts (Script) 200
+[80120.329] GET http://localhost:5180/admin/src/api/agentChatApi.ts?t=1794479675288 (Script) 200
+[80120.332] GET http://localhost:5180/admin/src/api/metricsApi.ts (Script) 200
+[80120.334] GET http://localhost:5180/admin/src/api/traceReviewApi.ts (Script) 200
+[80120.341] GET http://localhost:5180/admin/src/api/ragTicket.ts (Script) 200
+[80120.352] GET http://localhost:5180/api/platform/v1/dictionaries?enabledOnly=false (Fetch) 200

@@ -1,0 +1,153 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：TENANT_ADMIN · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e9]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e10]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e11]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e12]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e13]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e14]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e15]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e16]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "知识库治理"
+    - paragraph
+      - StaticText "需内容审核 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "语料管理" [ref=e17]
+          - StaticText "语料管理"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e18]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e19]
+          - StaticText "未知操作处置"
+      - listitem [level=1]
+        - link "审计查询" [ref=e20]
+          - StaticText "审计查询"
+    - paragraph
+      - StaticText "平台配置与运维"
+    - paragraph
+      - StaticText "需租户管理员 / 运维"
+    - list
+      - listitem [level=1]
+        - link "配置总览" [ref=e21]
+          - StaticText "配置总览"
+      - listitem [level=1]
+        - link "运行与容量" [ref=e22]
+          - StaticText "运行与容量"
+      - listitem [level=1]
+        - link "工具与审批" [ref=e23]
+          - StaticText "工具与审批"
+      - listitem [level=1]
+        - link "合规与零保留" [ref=e24]
+          - StaticText "合规与零保留"
+      - listitem [level=1]
+        - link "Agent 配置" [ref=e25]
+          - StaticText "Agent 配置"
+      - listitem [level=1]
+        - link "系统健康" [ref=e26]
+          - StaticText "系统健康"
+  - main
+    - heading "合规与零保留" [level=1, ref=e6]
+    - paragraph
+      - StaticText "哪些模型供应商承诺不留存对话内容，以及当前是否真生效。"
+    - generic
+      - heading "零保留供应商" [level=2, ref=e7]
+      - table
+        - rowgroup
+          - row
+            - columnheader "供应商" [ref=e48]
+            - columnheader "运行态确认" [ref=e49]
+        - row
+          - cell "deepseek" [ref=e27]
+            - code
+              - StaticText "deepseek"
+          - cell "待确认" [ref=e28]
+        - row
+          - cell "minimax" [ref=e29]
+            - code
+              - StaticText "minimax"
+          - cell "待确认" [ref=e30]
+        - row
+          - cell "workbuddy" [ref=e31]
+            - code
+              - StaticText "workbuddy"
+          - cell "待确认" [ref=e32]
+    - paragraph
+      - StaticText "零保留闸门生效中（fail-closed）"
+    - paragraph
+      - StaticText "尚未确认有效证据的供应商，调用真实学生数据会被拒绝；这是默认的安全状态。"
+    - generic
+      - heading "合规配置项" [level=2, ref=e8]
+      - table
+        - rowgroup
+          - row
+            - columnheader "配置键" [ref=e50]
+            - columnheader "声明值" [ref=e51]
+            - columnheader "是否接入运行时" [ref=e52]
+            - columnheader "来源" [ref=e53]
+            - columnheader "说明" [ref=e54]
+        - row
+          - cell "agent.compliance.zero-retention.confirmed-providers" [ref=e33]
+            - code
+              - StaticText "agent.compliance.zero-retention.confirmed-providers"
+          - cell "deepseek,minimax,workbuddy" [ref=e34]
+          - cell "已接入" [ref=e35]
+          - cell "yml" [ref=e36]
+          - cell "P4-D07（C9）已接入零保留注册表；三家均 PENDING → 闸门仍 fail-closed" [ref=e37]
+        - row
+          - cell "agent.compliance.zero-retention.validity-months" [ref=e38]
+            - code
+              - StaticText "agent.compliance.zero-retention.validity-months"
+          - cell "12" [ref=e39]
+          - cell "仅声明未接入" [ref=e40]
+          - cell "yml" [ref=e41]
+          - cell "⛔ 实测：无任何读取点 → 零保留条款**无到期判定**" [ref=e42]
+        - row
+          - cell "agent.compliance.zero-retention.expiry-warn-days" [ref=e43]
+            - code
+              - StaticText "agent.compliance.zero-retention.expiry-warn-days"
+          - cell "30" [ref=e44]
+          - cell "仅声明未接入" [ref=e45]
+          - cell "yml" [ref=e46]
+          - cell "⛔ 实测：无任何读取点 → **无到期告警**" [ref=e47]
+    - paragraph
+      - StaticText "为什么这一页不能改"
+    - paragraph
+      - StaticText "零保留是供应商在合同里承诺的条款，不是可以随手改的配置。这一页只展示，修改要走流程。"
+    - paragraph
+      - StaticText "判断按供应商分别做：和一家确认能留存，不代表另一家也能。"

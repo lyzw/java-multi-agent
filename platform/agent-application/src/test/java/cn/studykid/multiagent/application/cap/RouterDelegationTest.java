@@ -12,6 +12,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.google.re2j.Matcher;
+import com.google.re2j.Pattern;
+
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -697,6 +700,7 @@ class RouterDelegationTest {
 
     /** 从快照文本里取 {@code canonicalInputSha256}（只取 64 位十六进制，不做 JSON 解析）。 */
     private static @NonNull String canonicalDigest(@NonNull String snapshotJson) {
-        return snapshotJson.replaceAll(".*\"canonicalInputSha256\":\"([0-9a-f]{64}).*", "$1");
+        Matcher m = Pattern.compile("\"canonicalInputSha256\":\"([0-9a-f]{64})\"").matcher(snapshotJson);
+        return m.find() ? m.group(1) : snapshotJson;
     }
 }

@@ -1,0 +1,134 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：STUDENT · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e7]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e8]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e9]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e10]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e11]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e12]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e13]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e14]
+          - StaticText "报表中心"
+  - main
+    - heading "知识检索" [level=1, ref=e6]
+    - paragraph
+      - StaticText "输入问题，从教材语料中检索可溯源的讲解与出处；生成回答会基于这些来源，避免凭空编造。"
+    - generic
+      - sectionheader
+        - heading "检索设置" [level=2, ref=e15]
+        - paragraph
+          - StaticText "版本五轴决定引用能否被校验，请按学生正在用的教材填写。"
+      - form
+        - LabelText
+          - StaticText "你的问题"
+        - textbox "你的问题" [ref=e16]
+        - LabelText
+          - StaticText "检索模式"
+        - combobox "检索模式" [expanded=false, ref=e17]: 讲解
+          - MenuListPopup
+            - option "讲解" [selected, ref=e26]
+            - option "解题" [ref=e27]
+            - option "核对" [ref=e28]
+            - option "概览" [ref=e29]
+        - group "教材版本"
+          - Legend
+            - StaticText "教材版本"
+          - LabelText
+            - StaticText "学科"
+          - combobox "学科" [expanded=false, ref=e21]: 数学
+            - MenuListPopup
+              - option "数学" [selected, ref=e30]
+              - option "语文" [ref=e31]
+              - option "英语" [ref=e32]
+              - option "物理" [ref=e33]
+              - option "化学" [ref=e34]
+              - option "生物" [ref=e35]
+              - option "历史" [ref=e36]
+              - option "地理" [ref=e37]
+              - option "道法" [ref=e38]
+          - LabelText
+            - StaticText "年级"
+          - combobox "年级" [expanded=false, ref=e22]: 七年级
+            - MenuListPopup
+              - option "一年级" [ref=e39]
+              - option "二年级" [ref=e40]
+              - option "三年级" [ref=e41]
+              - option "四年级" [ref=e42]
+              - option "五年级" [ref=e43]
+              - option "六年级" [ref=e44]
+              - option "七年级" [selected, ref=e45]
+              - option "八年级" [ref=e46]
+              - option "九年级" [ref=e47]
+              - option "高一" [ref=e48]
+              - option "高二" [ref=e49]
+              - option "高三" [ref=e50]
+          - LabelText
+            - StaticText "册次"
+          - combobox "册次" [expanded=false, ref=e23]: 上册
+            - MenuListPopup
+              - option "上册" [selected, ref=e51]
+              - option "下册" [ref=e52]
+              - option "全一册" [ref=e53]
+          - LabelText
+            - StaticText "出版社"
+          - combobox "出版社" [expanded=false, ref=e24]: 人教版
+            - MenuListPopup
+              - option "人教版" [selected, ref=e54]
+              - option "苏教版" [ref=e55]
+              - option "北师大版" [ref=e56]
+              - option "华师大版" [ref=e57]
+              - option "沪教版" [ref=e58]
+              - option "鲁教版" [ref=e59]
+              - option "鄂教版" [ref=e60]
+              - option "其他" [ref=e61]
+          - LabelText
+            - StaticText "版次"
+          - textbox "版次" [ref=e25]: 2024
+            - StaticText "2024"
+        - group
+          - DisclosureTriangle "高级设置" [expanded=false]
+            - StaticText "高级设置"
+        - StaticText "召回数量与版本范围一般无需调整"
+        - button "检索并生成" [disabled, ref=e18]
+        - StaticText "先在上方写下你的问题"
+    - generic
+      - sectionheader
+        - heading "回答" [level=2, ref=e19]
+        - paragraph
+          - StaticText "内容逐字摘自下方检索来源，未作改写；未接入大模型前不产生新的解释。"
+      - paragraph
+        - StaticText "提交问题后，这里会显示基于检索来源整理的教材原文。"
+    - generic
+      - sectionheader
+        - heading "检索来源" [level=2, ref=e20]
+        - paragraph
+          - StaticText "每个来源都带册/章/页/题引用，可回溯到具体教材位置；编号与上方讲解的「依据 N」一一对应。"
+      - paragraph
+        - StaticText "提交问题后，这里会列出检索到的可溯源语料。"

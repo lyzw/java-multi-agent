@@ -182,16 +182,18 @@ public class PlatformCapabilityConsoleController {
         for (String toolId : def.declaredTools()) {
             toolDefs.findLatestPublished(toolId)
                     .or(() -> toolDefs.find(toolId, Integer.MAX_VALUE))
-                    .map(t -> tools.add(ToolSummaryDto.of(t)))
-                    .orElseGet(() -> missingTools.add(toolId));
+                    .ifPresentOrElse(
+                            t -> tools.add(ToolSummaryDto.of(t)),
+                            () -> missingTools.add(toolId));
         }
         List<McpSummaryDto> servers = new ArrayList<>();
         List<String> missingServers = new ArrayList<>();
         for (var declaration : def.declaredMcp()) {
             serverDefs.findLatestPublished(declaration.serverId())
                     .or(() -> serverDefs.find(declaration.serverId(), Integer.MAX_VALUE))
-                    .map(s -> servers.add(McpSummaryDto.of(s)))
-                    .orElseGet(() -> missingServers.add(declaration.serverId()));
+                    .ifPresentOrElse(
+                            s -> servers.add(McpSummaryDto.of(s)),
+                            () -> missingServers.add(declaration.serverId()));
         }
         return ResponseEntity.ok(new SkillRelationsDto(
                 skillId, tools, missingTools, servers, missingServers));

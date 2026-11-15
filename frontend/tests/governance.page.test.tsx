@@ -405,6 +405,53 @@ describe('P9 UNKNOWN 处置台（G9 接线）', () => {
   })
 })
 
+/**
+ * 问题 8 审计页导出行为级实测（2026-11-14 四轮优化）
+ *
+ * ⚠️ 此前 P10 的 5 条用例连「导出 CSV」按钮都没断言过，更没点过。
+ *    这里用真实 csv 模块（本文件没有 mock 它），拦截 Blob / URL / anchor.click，
+ *    验证「有数据才给导出」+「点击真的产生下载动作」。
+ */
+describe('审计页导出 CSV（问题 8 行为级）', () => {
+  const createObjectURL = vi.hoisted(() => vi.fn((_blob: Blob): string => 'blob:audit'))
+  const revokeObjectURL = vi.hoisted(() => vi.fn())
+
+  beforeEach(() => {
+    createObjectURL.mockClear()
+    revokeObjectURL.mockClear()
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('⛔ 有审计数据时点击「导出 CSV」真的生成 Blob 并触发下载', async () => {
+    queryAuditMock.mockResolvedValue({ items: [sampleAudit()], nextCursor: null })
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const user = userEvent.setup()
+    renderPage(<AuditPage />)
+
+    const button = await screen.findByRole('button', { name: '导出 CSV' })
+    await user.click(button)
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    const blob = createObjectURL.mock.calls[0]?.[0] as Blob
+    expect(blob.type).toBe('text/csv;charset=utf-8')
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:audit')
+    clickSpy.mockRestore()
+  })
+
+  it('⛔ 空数据时不渲染导出按钮（不导出空文件）', async () => {
+    queryAuditMock.mockResolvedValue({ items: [], nextCursor: null })
+    renderPage(<AuditPage />)
+
+    expect(await screen.findByText('没有符合条件的审计记录')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '导出 CSV' })).toBeNull()
+  })
+})
+
 /* ── P10 审计页 ─────────────────────────────────────────── */
 
 describe('P10 审计查询（G10 接线）', () => {

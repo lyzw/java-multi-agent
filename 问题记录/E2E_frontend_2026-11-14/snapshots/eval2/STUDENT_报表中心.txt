@@ -1,0 +1,661 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：STUDENT · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e17]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e18]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e19]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e20]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e21]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e22]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e23]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e24]
+          - StaticText "报表中心"
+  - main
+    - paragraph
+      - StaticText "统计与报表"
+    - heading "报表中心" [level=1, ref=e6]
+    - paragraph
+      - StaticText "按天看辅导、错题与语料的变化。全部为租户级聚合，不含任何学生可识别信息。"
+    - button "刷新" [ref=e7]
+    - group "报表区块导航"
+      - link "统计区间" [ref=e8]
+      - link "每日错题分析" [ref=e9]
+      - link "每日辅导量与成功率" [ref=e10]
+      - link "知识点薄弱排行" [ref=e11]
+      - link "每日活跃与新增学生" [ref=e12]
+      - link "每日搜索的问题数" [ref=e13]
+      - link "每日导入 RAG 的资料数" [ref=e14]
+      - link "RAG 语料增长与准入率" [ref=e15]
+      - link "相关页面" [ref=e16]
+    - generic
+      - sectionheader
+        - heading "统计区间" [level=2, ref=e37]
+        - paragraph
+          - StaticText "后端把区间钳制在 1～90 天，超出会静默截断。"
+      - LabelText
+        - StaticText "统计天数"
+      - combobox "统计天数" [expanded=false, ref=e25]: 最近 30 天
+        - MenuListPopup
+          - option "最近 7 天" [ref=e45]
+          - option "最近 14 天" [ref=e46]
+          - option "最近 30 天" [selected, ref=e47]
+          - option "最近 90 天" [ref=e48]
+      - StaticText "UTC 日期口径"
+      - StaticText "日期按 UTC 归日，与后端聚合口径一致（跨午夜不会错位）。"
+    - generic
+      - sectionheader
+        - heading "每日错题分析" [level=2, ref=e38]
+        - paragraph
+          - StaticText "按天的错因记录条数——一道题可能记多条错因。"
+      - paragraph
+        - StaticText "这个区间还没有错题分析记录"
+      - paragraph
+        - StaticText "完成一次错题归因后，这里会逐日显示分析条数。"
+    - generic
+      - sectionheader
+        - heading "每日辅导量与成功率" [level=2, ref=e39]
+        - paragraph
+          - StaticText "发起量含在途；成功率的分母只算终态。"
+      - StaticText "区间内发起量"
+      - paragraph
+        - StaticText "13"
+      - paragraph
+        - StaticText "上期无基线"
+      - StaticText "成功率"
+      - paragraph
+        - StaticText "54%"
+      - paragraph
+        - StaticText "成功 7 / 终态 13 · 上期无基线"
+      - StaticText "失败"
+      - paragraph
+        - StaticText "6"
+      - paragraph
+        - StaticText "终态为 FAILED"
+      - StaticText "超时"
+      - paragraph
+        - StaticText "0"
+      - paragraph
+        - StaticText "终态为 TIMED_OUT"
+      - StaticText "取消"
+      - paragraph
+        - StaticText "0"
+      - paragraph
+        - StaticText "终态为 CANCELLED"
+      - StaticText "在途"
+      - paragraph
+        - StaticText "0"
+      - paragraph
+        - StaticText "排队中/分析中"
+      - region "折线图，可横向滚动" [ref=e26] focusable [tabindex]
+        - image "折线图：3 条序列，峰值 7 次"
+          - graphics-symbol "10-16：0 次"
+          - StaticText "10-16"
+          - graphics-symbol "10-31：0 次"
+          - StaticText "10-31"
+          - graphics-symbol "11-14：7 次"
+          - StaticText "11-14"
+      - list
+        - listitem [level=1]
+          - StaticText "成功"
+          - StaticText "：合计 "
+          - StaticText "7"
+          - StaticText " 次"
+        - listitem [level=1]
+          - StaticText "失败"
+          - StaticText "：合计 "
+          - StaticText "6"
+          - StaticText " 次"
+        - listitem [level=1]
+          - StaticText "超时"
+          - StaticText "：合计 "
+          - StaticText "0"
+          - StaticText " 次"
+      - paragraph
+        - StaticText "两个口径"
+      - paragraph
+        - StaticText "发起量（13）含在途 Run——回答「今天有多少学生来求助」；成功率的分母是终态数（13）—— 在途 Run 尚无结论，计入分母会把「还没出结果」算成未成功，让成功率失真。"
+      - button "导出 CSV" [ref=e27]
+      - StaticText "导出的数字与下方表格逐格一致（同源数据）。"
+      - region "每日辅导量与终态构成明细" [ref=e28] focusable [tabindex]
+        - table "每日辅导量与终态构成明细"
+          - caption
+            - StaticText "每日辅导量与终态构成明细"
+          - rowgroup
+            - row
+              - columnheader "日期" [ref=e350]
+              - columnheader "发起量" [ref=e351]
+              - columnheader "终态" [ref=e352]
+              - columnheader "成功" [ref=e353]
+              - columnheader "失败" [ref=e354]
+              - columnheader "超时" [ref=e355]
+              - columnheader "取消" [ref=e356]
+              - columnheader "成功率" [ref=e357]
+          - row
+            - cell "2026-10-16" [ref=e50]
+            - cell "0" [ref=e51]
+            - cell "0" [ref=e52]
+            - cell "0" [ref=e53]
+            - cell "0" [ref=e54]
+            - cell "0" [ref=e55]
+            - cell "0" [ref=e56]
+            - cell "—" [ref=e57]
+          - row
+            - cell "2026-10-17" [ref=e58]
+            - cell "0" [ref=e59]
+            - cell "0" [ref=e60]
+            - cell "0" [ref=e61]
+            - cell "0" [ref=e62]
+            - cell "0" [ref=e63]
+            - cell "0" [ref=e64]
+            - cell "—" [ref=e65]
+          - row
+            - cell "2026-10-18" [ref=e66]
+            - cell "0" [ref=e67]
+            - cell "0" [ref=e68]
+            - cell "0" [ref=e69]
+            - cell "0" [ref=e70]
+            - cell "0" [ref=e71]
+            - cell "0" [ref=e72]
+            - cell "—" [ref=e73]
+          - row
+            - cell "2026-10-19" [ref=e74]
+            - cell "0" [ref=e75]
+            - cell "0" [ref=e76]
+            - cell "0" [ref=e77]
+            - cell "0" [ref=e78]
+            - cell "0" [ref=e79]
+            - cell "0" [ref=e80]
+            - cell "—" [ref=e81]
+          - row
+            - cell "2026-10-20" [ref=e82]
+            - cell "0" [ref=e83]
+            - cell "0" [ref=e84]
+            - cell "0" [ref=e85]
+            - cell "0" [ref=e86]
+            - cell "0" [ref=e87]
+            - cell "0" [ref=e88]
+            - cell "—" [ref=e89]
+          - row
+            - cell "2026-10-21" [ref=e90]
+            - cell "0" [ref=e91]
+            - cell "0" [ref=e92]
+            - cell "0" [ref=e93]
+            - cell "0" [ref=e94]
+            - cell "0" [ref=e95]
+            - cell "0" [ref=e96]
+            - cell "—" [ref=e97]
+          - row
+            - cell "2026-10-22" [ref=e98]
+            - cell "0" [ref=e99]
+            - cell "0" [ref=e100]
+            - cell "0" [ref=e101]
+            - cell "0" [ref=e102]
+            - cell "0" [ref=e103]
+            - cell "0" [ref=e104]
+            - cell "—" [ref=e105]
+          - row
+            - cell "2026-10-23" [ref=e106]
+            - cell "0" [ref=e107]
+            - cell "0" [ref=e108]
+            - cell "0" [ref=e109]
+            - cell "0" [ref=e110]
+            - cell "0" [ref=e111]
+            - cell "0" [ref=e112]
+            - cell "—" [ref=e113]
+          - row
+            - cell "2026-10-24" [ref=e114]
+            - cell "0" [ref=e115]
+            - cell "0" [ref=e116]
+            - cell "0" [ref=e117]
+            - cell "0" [ref=e118]
+            - cell "0" [ref=e119]
+            - cell "0" [ref=e120]
+            - cell "—" [ref=e121]
+          - row
+            - cell "2026-10-25" [ref=e122]
+            - cell "0" [ref=e123]
+            - cell "0" [ref=e124]
+            - cell "0" [ref=e125]
+            - cell "0" [ref=e126]
+            - cell "0" [ref=e127]
+            - cell "0" [ref=e128]
+            - cell "—" [ref=e129]
+          - row
+            - cell "2026-10-26" [ref=e130]
+            - cell "0" [ref=e131]
+            - cell "0" [ref=e132]
+            - cell "0" [ref=e133]
+            - cell "0" [ref=e134]
+            - cell "0" [ref=e135]
+            - cell "0" [ref=e136]
+            - cell "—" [ref=e137]
+          - row
+            - cell "2026-10-27" [ref=e138]
+            - cell "0" [ref=e139]
+            - cell "0" [ref=e140]
+            - cell "0" [ref=e141]
+            - cell "0" [ref=e142]
+            - cell "0" [ref=e143]
+            - cell "0" [ref=e144]
+            - cell "—" [ref=e145]
+          - row
+            - cell "2026-10-28" [ref=e146]
+            - cell "0" [ref=e147]
+            - cell "0" [ref=e148]
+            - cell "0" [ref=e149]
+            - cell "0" [ref=e150]
+            - cell "0" [ref=e151]
+            - cell "0" [ref=e152]
+            - cell "—" [ref=e153]
+          - row
+            - cell "2026-10-29" [ref=e154]
+            - cell "0" [ref=e155]
+            - cell "0" [ref=e156]
+            - cell "0" [ref=e157]
+            - cell "0" [ref=e158]
+            - cell "0" [ref=e159]
+            - cell "0" [ref=e160]
+            - cell "—" [ref=e161]
+          - row
+            - cell "2026-10-30" [ref=e162]
+            - cell "0" [ref=e163]
+            - cell "0" [ref=e164]
+            - cell "0" [ref=e165]
+            - cell "0" [ref=e166]
+            - cell "0" [ref=e167]
+            - cell "0" [ref=e168]
+            - cell "—" [ref=e169]
+          - row
+            - cell "2026-10-31" [ref=e170]
+            - cell "0" [ref=e171]
+            - cell "0" [ref=e172]
+            - cell "0" [ref=e173]
+            - cell "0" [ref=e174]
+            - cell "0" [ref=e175]
+            - cell "0" [ref=e176]
+            - cell "—" [ref=e177]
+          - row
+            - cell "2026-11-01" [ref=e178]
+            - cell "0" [ref=e179]
+            - cell "0" [ref=e180]
+            - cell "0" [ref=e181]
+            - cell "0" [ref=e182]
+            - cell "0" [ref=e183]
+            - cell "0" [ref=e184]
+            - cell "—" [ref=e185]
+          - row
+            - cell "2026-11-02" [ref=e186]
+            - cell "0" [ref=e187]
+            - cell "0" [ref=e188]
+            - cell "0" [ref=e189]
+            - cell "0" [ref=e190]
+            - cell "0" [ref=e191]
+            - cell "0" [ref=e192]
+            - cell "—" [ref=e193]
+          - row
+            - cell "2026-11-03" [ref=e194]
+            - cell "0" [ref=e195]
+            - cell "0" [ref=e196]
+            - cell "0" [ref=e197]
+            - cell "0" [ref=e198]
+            - cell "0" [ref=e199]
+            - cell "0" [ref=e200]
+            - cell "—" [ref=e201]
+          - row
+            - cell "2026-11-04" [ref=e202]
+            - cell "0" [ref=e203]
+            - cell "0" [ref=e204]
+            - cell "0" [ref=e205]
+            - cell "0" [ref=e206]
+            - cell "0" [ref=e207]
+            - cell "0" [ref=e208]
+            - cell "—" [ref=e209]
+          - row
+            - cell "2026-11-05" [ref=e210]
+            - cell "0" [ref=e211]
+            - cell "0" [ref=e212]
+            - cell "0" [ref=e213]
+            - cell "0" [ref=e214]
+            - cell "0" [ref=e215]
+            - cell "0" [ref=e216]
+            - cell "—" [ref=e217]
+          - row
+            - cell "2026-11-06" [ref=e218]
+            - cell "0" [ref=e219]
+            - cell "0" [ref=e220]
+            - cell "0" [ref=e221]
+            - cell "0" [ref=e222]
+            - cell "0" [ref=e223]
+            - cell "0" [ref=e224]
+            - cell "—" [ref=e225]
+          - row
+            - cell "2026-11-07" [ref=e226]
+            - cell "0" [ref=e227]
+            - cell "0" [ref=e228]
+            - cell "0" [ref=e229]
+            - cell "0" [ref=e230]
+            - cell "0" [ref=e231]
+            - cell "0" [ref=e232]
+            - cell "—" [ref=e233]
+          - row
+            - cell "2026-11-08" [ref=e234]
+            - cell "0" [ref=e235]
+            - cell "0" [ref=e236]
+            - cell "0" [ref=e237]
+            - cell "0" [ref=e238]
+            - cell "0" [ref=e239]
+            - cell "0" [ref=e240]
+            - cell "—" [ref=e241]
+          - row
+            - cell "2026-11-09" [ref=e242]
+            - cell "0" [ref=e243]
+            - cell "0" [ref=e244]
+            - cell "0" [ref=e245]
+            - cell "0" [ref=e246]
+            - cell "0" [ref=e247]
+            - cell "0" [ref=e248]
+            - cell "—" [ref=e249]
+          - row
+            - cell "2026-11-10" [ref=e250]
+            - cell "0" [ref=e251]
+            - cell "0" [ref=e252]
+            - cell "0" [ref=e253]
+            - cell "0" [ref=e254]
+            - cell "0" [ref=e255]
+            - cell "0" [ref=e256]
+            - cell "—" [ref=e257]
+          - row
+            - cell "2026-11-11" [ref=e258]
+            - cell "0" [ref=e259]
+            - cell "0" [ref=e260]
+            - cell "0" [ref=e261]
+            - cell "0" [ref=e262]
+            - cell "0" [ref=e263]
+            - cell "0" [ref=e264]
+            - cell "—" [ref=e265]
+          - row
+            - cell "2026-11-12" [ref=e266]
+            - cell "0" [ref=e267]
+            - cell "0" [ref=e268]
+            - cell "0" [ref=e269]
+            - cell "0" [ref=e270]
+            - cell "0" [ref=e271]
+            - cell "0" [ref=e272]
+            - cell "—" [ref=e273]
+          - row
+            - cell "2026-11-13" [ref=e274]
+            - cell "0" [ref=e275]
+            - cell "0" [ref=e276]
+            - cell "0" [ref=e277]
+            - cell "0" [ref=e278]
+            - cell "0" [ref=e279]
+            - cell "0" [ref=e280]
+            - cell "—" [ref=e281]
+          - row
+            - cell "2026-11-14" [ref=e282]
+            - cell "13" [ref=e283]
+            - cell "13" [ref=e284]
+            - cell "7" [ref=e285]
+            - cell "6" [ref=e286]
+            - cell "0" [ref=e287]
+            - cell "0" [ref=e288]
+            - cell "54%" [ref=e289]
+    - generic
+      - sectionheader
+        - heading "知识点薄弱排行" [level=2, ref=e40]
+        - paragraph
+          - StaticText "Top 10；可切换「所选区间内」与「全历史累计」两个口径。"
+      - paragraph
+        - StaticText "这个区间还没有薄弱知识点"
+      - paragraph
+        - StaticText "产生错因记录后，这里会按命中次数排出最需要补强的知识点。"
+    - generic
+      - sectionheader
+        - heading "每日活跃与新增学生" [level=2, ref=e41]
+        - paragraph
+          - StaticText "活跃 = 当日产生过错因记录的去重学生数，不是登录学生数。"
+      - paragraph
+        - StaticText "这个区间还没有学生活跃数据"
+      - paragraph
+        - StaticText "产生错因记录后，这里会显示每日活跃与新增。"
+    - generic
+      - sectionheader
+        - heading "每日搜索的问题数" [level=2, ref=e42]
+        - paragraph
+          - StaticText "按天统计的 RAG 检索次数——检索审计从本次改造起才开始落库。"
+      - StaticText "区间内检索次数"
+      - paragraph
+        - StaticText "1"
+      - paragraph
+        - StaticText "按天聚合的 RETRIEVE 审计条数"
+      - StaticText "有检索的日子"
+      - paragraph
+        - StaticText "1"
+      - paragraph
+        - StaticText "共 30 天"
+      - StaticText "日均"
+      - paragraph
+        - StaticText "0"
+      - paragraph
+        - StaticText "含零检索日"
+      - region "柱状图，可横向滚动" [ref=e29] focusable [tabindex]
+        - image "柱状图：共 30 个数据点，合计 1 次，峰值 1 次"
+          - StaticText "10-16"
+          - StaticText "10-17"
+          - StaticText "10-18"
+          - StaticText "10-19"
+          - StaticText "10-20"
+          - StaticText "10-21"
+          - StaticText "10-22"
+          - StaticText "10-23"
+          - StaticText "10-24"
+          - StaticText "10-25"
+          - StaticText "10-26"
+          - StaticText "10-27"
+          - StaticText "10-28"
+          - StaticText "10-29"
+          - StaticText "10-30"
+          - StaticText "10-31"
+          - StaticText "11-01"
+          - StaticText "11-02"
+          - StaticText "11-03"
+          - StaticText "11-04"
+          - StaticText "11-05"
+          - StaticText "11-06"
+          - StaticText "11-07"
+          - StaticText "11-08"
+          - StaticText "11-09"
+          - StaticText "11-10"
+          - StaticText "11-11"
+          - StaticText "11-12"
+          - StaticText "11-13"
+          - graphics-symbol "11-14：1 次"
+          - StaticText "11-14"
+      - paragraph
+        - StaticText "口径说明"
+      - paragraph
+        - StaticText "统计口径是检索次数（每次检索记一条审计），不是「有多少个不同的题目」。 检索审计从本次改造起才落库——早于上线日的那几天显示 0 是数据起点， 不是检索功能异常。"
+        - LineBreak "\n"
+        - StaticText "本表暂无环比：当前只有这一个区间的数据，没有上一等长区间可比—— 没有基线就不编百分比。"
+      - button "导出 CSV" [ref=e30]
+      - StaticText "导出的数字与下方表格逐格一致（同源数据）。"
+      - region "每日搜索的问题数明细" [ref=e31] focusable [tabindex]
+        - table "每日搜索的问题数明细"
+          - caption
+            - StaticText "每日搜索的问题数明细"
+          - rowgroup
+            - row
+              - columnheader "日期" [ref=e358]
+              - columnheader "检索次数" [ref=e359]
+          - row
+            - cell "2026-10-16" [ref=e290]
+            - cell "0" [ref=e291]
+          - row
+            - cell "2026-10-17" [ref=e292]
+            - cell "0" [ref=e293]
+          - row
+            - cell "2026-10-18" [ref=e294]
+            - cell "0" [ref=e295]
+          - row
+            - cell "2026-10-19" [ref=e296]
+            - cell "0" [ref=e297]
+          - row
+            - cell "2026-10-20" [ref=e298]
+            - cell "0" [ref=e299]
+          - row
+            - cell "2026-10-21" [ref=e300]
+            - cell "0" [ref=e301]
+          - row
+            - cell "2026-10-22" [ref=e302]
+            - cell "0" [ref=e303]
+          - row
+            - cell "2026-10-23" [ref=e304]
+            - cell "0" [ref=e305]
+          - row
+            - cell "2026-10-24" [ref=e306]
+            - cell "0" [ref=e307]
+          - row
+            - cell "2026-10-25" [ref=e308]
+            - cell "0" [ref=e309]
+          - row
+            - cell "2026-10-26" [ref=e310]
+            - cell "0" [ref=e311]
+          - row
+            - cell "2026-10-27" [ref=e312]
+            - cell "0" [ref=e313]
+          - row
+            - cell "2026-10-28" [ref=e314]
+            - cell "0" [ref=e315]
+          - row
+            - cell "2026-10-29" [ref=e316]
+            - cell "0" [ref=e317]
+          - row
+            - cell "2026-10-30" [ref=e318]
+            - cell "0" [ref=e319]
+          - row
+            - cell "2026-10-31" [ref=e320]
+            - cell "0" [ref=e321]
+          - row
+            - cell "2026-11-01" [ref=e322]
+            - cell "0" [ref=e323]
+          - row
+            - cell "2026-11-02" [ref=e324]
+            - cell "0" [ref=e325]
+          - row
+            - cell "2026-11-03" [ref=e326]
+            - cell "0" [ref=e327]
+          - row
+            - cell "2026-11-04" [ref=e328]
+            - cell "0" [ref=e329]
+          - row
+            - cell "2026-11-05" [ref=e330]
+            - cell "0" [ref=e331]
+          - row
+            - cell "2026-11-06" [ref=e332]
+            - cell "0" [ref=e333]
+          - row
+            - cell "2026-11-07" [ref=e334]
+            - cell "0" [ref=e335]
+          - row
+            - cell "2026-11-08" [ref=e336]
+            - cell "0" [ref=e337]
+          - row
+            - cell "2026-11-09" [ref=e338]
+            - cell "0" [ref=e339]
+          - row
+            - cell "2026-11-10" [ref=e340]
+            - cell "0" [ref=e341]
+          - row
+            - cell "2026-11-11" [ref=e342]
+            - cell "0" [ref=e343]
+          - row
+            - cell "2026-11-12" [ref=e344]
+            - cell "0" [ref=e345]
+          - row
+            - cell "2026-11-13" [ref=e346]
+            - cell "0" [ref=e347]
+          - row
+            - cell "2026-11-14" [ref=e348]
+            - cell "1" [ref=e349]
+    - generic
+      - sectionheader
+        - heading "每日导入 RAG 的资料数" [level=2, ref=e43]
+        - paragraph
+          - StaticText "资料来源 / 文档载体 / 片段三个层级并列，不做求和。"
+      - paragraph
+        - StaticText "这个区间还没有导入记录"
+      - paragraph
+        - StaticText "登记语料来源、导入文档载体并切分片段后，这里会逐日显示增量。"
+    - generic
+      - sectionheader
+        - heading "RAG 语料增长与准入率" [level=2, ref=e44]
+        - paragraph
+          - StaticText "来源状态分布 + 准入率 + 缺向量片段；增量趋势见上方「每日导入」。"
+      - StaticText "来源总数"
+      - paragraph
+        - StaticText "0"
+      - paragraph
+        - StaticText "含尚未审核的"
+      - StaticText "当前准入"
+      - paragraph
+        - StaticText "0"
+      - paragraph
+        - StaticText "可被检索到"
+      - StaticText "准入率"
+      - paragraph
+        - StaticText "—"
+      - paragraph
+        - StaticText "分母含未审核来源"
+      - StaticText "缺向量片段"
+      - paragraph
+        - StaticText "0"
+      - paragraph
+        - StaticText "占比 —"
+      - button "导出 CSV" [ref=e32]
+      - StaticText "导出的数字与下方表格逐格一致（同源数据）。"
+      - region "语料来源校验状态分布" [ref=e33] focusable [tabindex]
+        - table "语料来源校验状态分布"
+          - caption
+            - StaticText "语料来源校验状态分布"
+          - rowgroup
+            - row
+              - columnheader "校验状态" [ref=e360]
+              - columnheader "来源数" [ref=e361]
+      - paragraph
+        - StaticText "准入率的正确读法"
+      - paragraph
+        - StaticText "准入率的分母含尚未审核的来源。低准入率可能只是「还没审」， 不等于「语料有问题」——请对照上方状态分布里的「待校验」数量再下结论。 准入与否由服务端按租户权威门槛计算，前端不自行推算。"
+    - generic
+      - sectionheader
+        - heading "相关页面" [level=2, ref=e49]
+      - link "检索记录（逐条明细）" [ref=e34]
+      - link "语料管理（来源与载体）" [ref=e35]
+      - link "审计查询" [ref=e36]
+      - paragraph
+        - StaticText "报表是聚合视图；要看逐条记录请到「检索记录」与「审计查询」。"

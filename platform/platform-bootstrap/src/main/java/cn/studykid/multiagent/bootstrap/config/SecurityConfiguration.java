@@ -169,6 +169,7 @@ public class SecurityConfiguration {
      */
     @Bean
     @Order(0)
+    @SuppressWarnings("java:S4502") // 无状态 Bearer JWT（无 Cookie 会话），CSRF 不适用；启用会令非浏览器/SSE 客户端全部 403。
     public SecurityFilterChain platformSecurityFilterChain(HttpSecurity http,
                                                             PlatformBearerTokenFilter tokenFilter)
             throws Exception {
@@ -192,7 +193,16 @@ public class SecurityConfiguration {
                         //    ASYNC dispatch 只能由容器在<b>已完成 REQUEST 授权</b>的同一
                         //    请求上发起，放行它不绕过初始验签。
                         .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
-                        .requestMatchers("/api/platform/v1/auth/**").permitAll()
+                        // ⚠️ 只放行两个**公开**端点，绝不放行 /api/platform/v1/auth/** 整个前缀。
+                        //    DEF-01（2026-11-13 E2E 实测）：/auth/me 是需认证的端点，此前被
+                        //    前缀式 permitAll 一并放行 → 无令牌/伪造令牌直达控制器，
+                        //    @RequestAttribute(平台主体) 缺失抛 MissingRequestAttributeException，
+                        //    被 ApiExceptionHandler 兜底吞成 500 INTERNAL_ERROR。
+                        //    后果：前端 401 清会话分支不触发，认证失败被伪装成服务端故障。
+                        //    收窄后 /auth/me 落入 .authenticated()，由统一 401 入口点返回
+                        //    {"code":"UNAUTHENTICATED","message":"未认证"}。
+                        .requestMatchers("/api/platform/v1/auth/login",
+                                "/api/platform/v1/auth/jwks").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(tokenFilter, UsernamePasswordAuthenticationFilter.class)
                 .exceptionHandling(ex -> ex
@@ -213,6 +223,7 @@ public class SecurityConfiguration {
 
     @Bean
     @Order(1)
+    @SuppressWarnings("java:S4502") // 无状态 Bearer JWT（无 Cookie 会话），CSRF 不适用；启用会令非浏览器/SSE 客户端全部 403。
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                      BearerTokenFilter tokenFilter)
             throws Exception {

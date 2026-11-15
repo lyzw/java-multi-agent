@@ -1,0 +1,2 @@
+[80120.164] GET http://localhost:5180/api/platform/v1/capabilities/mcps (Fetch) 200
+[80120.165] GET http://localhost:5180/api/platform/v1/capabilities/mcps (Fetch) 200

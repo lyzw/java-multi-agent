@@ -1,0 +1,52 @@
+{
+  "round": 4,
+  "date": "2026-11-14",
+  "total": 6,
+  "turned_red": 6,
+  "all_red": true,
+  "cases": [
+    {
+      "id": "R4-1",
+      "desc": "结果页退回「只扫 explanation 前 10000 字符」→ 长文本尾部身份证应漏出",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "T9 长文本尾部 / 错因归类 / 步骤 / 待核对 至少 3 条转红"
+    },
+    {
+      "id": "R4-2",
+      "desc": "结果页删掉「错因归类」按字段拦截 → 手机号会被渲染出来",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "T9「错因归类字段含手机号被拦下」转红"
+    },
+    {
+      "id": "R4-3",
+      "desc": "hook 把 bulkRegister 退回 fire-and-forget（void run()）→ 导入链成片转红",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "25 行串行 / 第 2 批失败续传 / 防重 至少 2 条转红"
+    },
+    {
+      "id": "R4-4",
+      "desc": "页面退回「只显示最后一批结果」→ 结果表累积断言转红",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "「已导入 25 / 25 行」与全局行号断言转红"
+    },
+    {
+      "id": "R4-5",
+      "desc": "删掉 rag.tenantId 的 TTL 过期判定 → 时间旅行用例转红",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "「7 天 + 1ms 后过期清空」转红"
+    },
+    {
+      "id": "R4-6",
+      "desc": "删掉 CSV 公式注入中和 → 前缀用例转红",
+      "exit": 1,
+      "turned_red": true,
+      "expect": "「公式注入四类前缀被中和」转红"
+    }
+  ],
+  "post_check": []
+}

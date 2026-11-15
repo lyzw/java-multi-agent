@@ -1,0 +1,83 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：STUDENT · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生（本版本）"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e7]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e8]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e9]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e10]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e11]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e12]
+          - StaticText "Agent 对话"
+  - main
+    - heading "发起辅导" [level=1, ref=e6]
+    - paragraph
+      - StaticText "请提交一道错题。我们只采集随机匿名编号、年级、学科与解题过程，不会收集姓名、学校、班级等身份信息。"
+    - generic
+      - sectionheader
+        - heading "错题信息" [level=2, ref=e21]
+      - form
+        - LabelText
+          - StaticText "学生匿名编号"
+        - textbox "学生匿名编号" [required, ref=e13]: stu_a1b2c3d4e5f6g7h8
+          - StaticText "stu_a1b2c3d4e5f6g7h8"
+        - paragraph
+          - StaticText "请填写平台生成的匿名编号，不要填姓名"
+        - LabelText
+          - StaticText "辅导 Agent"
+        - combobox "辅导 Agent" [expanded=false, ref=e14]: E2E 错题归因辅导 Agent（v2）
+          - MenuListPopup
+            - option "E2E 错题归因辅导 Agent（v2）" [selected, ref=e22]
+        - paragraph
+          - StaticText "切换 Agent 只影响接下来发起的分析；已发出的分析继续用它开始时的那份配置。"
+        - LabelText
+          - StaticText "学科"
+        - combobox "学科" [expanded=false, ref=e15]: 数学
+          - MenuListPopup
+            - option "数学" [selected, ref=e23]
+            - option "物理" [ref=e24]
+            - option "化学" [ref=e25]
+            - option "生物" [ref=e26]
+            - option "语文" [ref=e27]
+            - option "英语" [ref=e28]
+        - LabelText
+          - StaticText "年级"
+        - combobox "年级" [expanded=false, ref=e16]: 初一
+          - MenuListPopup
+            - option "初一" [selected, ref=e29]
+            - option "初二" [ref=e30]
+            - option "初三" [ref=e31]
+        - LabelText
+          - StaticText "题目内容"
+        - textbox "题目内容" [required, ref=e17]: 已知抛物线 y=x^2-2x+3 与 x 轴无交点，判断下列说法是否正确，并说明理由。
+          - StaticText "已知抛物线 y=x^2-2x+3 与 x 轴无交点，判断下列说法是否正确，并说明理由。"
+        - LabelText
+          - StaticText "我的解题过程"
+        - textbox "我的解题过程" [required, ref=e18]: 我直接代入了 x=0 得到 y=3 大于 0，就认为没有交点。
+          - StaticText "我直接代入了 x=0 得到 y=3 大于 0，就认为没有交点。"
+        - LabelText
+          - StaticText "已知正确答案"
+        - textbox "已知正确答案" [required, ref=e19]: 没有交点是对的，但理由不完整：应通过判别式 b^2-4ac=-8<0 来说明恒大于 0。
+          - StaticText "没有交点是对的，但理由不完整：应通过判别式 b^2-4ac=-8<0 来说明恒大于 0。"
+        - button "开始分析" [ref=e20]

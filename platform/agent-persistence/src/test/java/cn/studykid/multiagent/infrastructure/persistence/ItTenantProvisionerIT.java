@@ -99,16 +99,60 @@ class ItTenantProvisionerIT {
                 .isEqualTo(1L);
     }
 
+    /**
+     * P0（E2E 二次评估 · 2026-11-14）：供给出来的租户必须自带运行前置。
+     *
+     * <p><b>为什么这条不能省</b>：此前 {@code budget_account} 靠 dev-it-db.sh 播种、
+     * {@code cap_authz_version(worker)} 靠各 IT 自己补行，于是「IT 全绿、
+     * 新租户创建 Run 静默 FAILED」长期无人发现。本用例把生产开通事务的形状
+     * 钉在活库上：撤掉 {@link TenantRuntimeDefaults} 的任一 INSERT，这里立刻红。
+     */
+    @Test
+    @DisplayName("✅ 供给租户自带运行前置：budget_account 与 cap_authz_version(worker) 各恰好 1 行")
+    void provisionCreatesRuntimePrerequisites() throws Exception {
+        String tenantId = ItTenantProvisioner.provision(admin, SLUG, "IT 专用租户 · 幂等性验证");
+
+        long[] after = counts(tenantId);
+        assertThat(after[3])
+                .as("budget_account 必须有且仅有 1 行；缺失 ⇒ 模型预留 NO_ACCOUNT ⇒ Run 收敛为 BUDGET_EXHAUSTED")
+                .isEqualTo(1L);
+        assertThat(after[4])
+                .as("cap_authz_version 的 worker 服务主体行必须有且仅有 1 行；"
+                        + "缺失 ⇒ 六处 require() fail-closed ⇒ AUTHZ_UNAVAILABLE")
+                .isEqualTo(1L);
+
+        assertThat(queryLong("SELECT count(*) FROM budget_account "
+                + "WHERE tenant_id = '" + tenantId + "'::uuid AND currency = 'CNY' "
+                + "AND reserved_amount = 0 AND settled_amount = 0"))
+                .as("预算账户必须干净可用（0 预留 / 0 已结算），否则新租户一开跑就超发")
+                .isEqualTo(1L);
+        assertThat(queryLong("SELECT count(*) FROM cap_authz_version "
+                + "WHERE tenant_id = '" + tenantId + "'::uuid "
+                + "AND principal_id = '" + TenantRuntimeDefaults.WORKER_PRINCIPAL_ID + "' "
+                + "AND authz_version = 1"))
+                .as("worker 服务主体必须锁在版本 1；IT 常量与生产常量同源，"
+                        + "防止夹具写 'worker' 而执行链读 'system' 之类的静默漂移")
+                .isEqualTo(1L);
+    }
+
     // ── 辅助 ────────────────────────────────────────────────────────────
 
-    /** @return [agent 行数, agent_version 行数, execution_snapshot 行数] */
+    /**
+     * @return [agent 行数, agent_version 行数, execution_snapshot 行数,
+     *          budget_account 行数, cap_authz_version 的 worker 行数]
+     */
     private static long[] counts(String tenantId) throws SQLException {
         return new long[] {
                 queryLong("SELECT count(*) FROM agent WHERE tenant_id = '" + tenantId + "'::uuid"),
                 queryLong("SELECT count(*) FROM agent_version WHERE tenant_id = '"
                         + tenantId + "'::uuid"),
                 queryLong("SELECT count(*) FROM execution_snapshot WHERE tenant_id = '"
-                        + tenantId + "'::uuid")
+                        + tenantId + "'::uuid"),
+                queryLong("SELECT count(*) FROM budget_account WHERE tenant_id = '"
+                        + tenantId + "'::uuid"),
+                queryLong("SELECT count(*) FROM cap_authz_version WHERE tenant_id = '"
+                        + tenantId + "'::uuid AND principal_id = '"
+                        + TenantRuntimeDefaults.WORKER_PRINCIPAL_ID + "'")
         };
     }
 

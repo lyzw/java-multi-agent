@@ -562,13 +562,16 @@ class TraceCollectEndToEndIT {
         }
     }
 
-    /** 非零执行步骤事实：让「重投不重跑 Run」有可观察的计数基线。 */
+    /**
+     * 非零执行步骤事实：让「重投不重跑 Run」有可观察的计数基线。
+     * ⚠️ 夹具与生产口径一致：state 恒写 'RUNNING'（已发生，非进行中），完成靠 completed_at。
+     */
     private void insertRunStep() throws SQLException {
         try (Connection conn = adminPool.getConnection();
                 PreparedStatement ps = conn.prepareStatement("""
                         INSERT INTO public.run_step (tenant_id, run_id, step_number, state,
                                 step_type, fencing_token, started_at, completed_at)
-                        VALUES (?::uuid, ?::uuid, 1, 'SUCCEEDED', 'THINK', 1, now(), now())
+                        VALUES (?::uuid, ?::uuid, 1, 'RUNNING'::run_state, 'THINK', 1, now(), now())
                         """)) {
             ps.setString(1, tenantId);
             ps.setString(2, runId.toString());

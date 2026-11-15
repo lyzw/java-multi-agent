@@ -8,7 +8,6 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
-import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -228,7 +227,7 @@ public class ReviewSampler {
         return new ReviewTaskSpec(c.traceId(), c.tenantId(), c.runId(), source, priority, note);
     }
 
-    private static String anomalyReason(@Nullable SamplingCandidate c) {
+    private static String anomalyReason(@NonNull SamplingCandidate c) {
         StringBuilder sb = new StringBuilder();
         if (c.loopSuspectedCount() != null && c.loopSuspectedCount() > 0) {
             sb.append("循环×").append(c.loopSuspectedCount());

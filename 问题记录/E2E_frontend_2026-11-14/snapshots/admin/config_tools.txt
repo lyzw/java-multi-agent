@@ -1,0 +1,207 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：TENANT_ADMIN · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e11]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e12]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e13]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e14]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e15]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e16]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e17]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e18]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "知识库治理"
+    - paragraph
+      - StaticText "需内容审核 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "语料管理" [ref=e19]
+          - StaticText "语料管理"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e20]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e21]
+          - StaticText "未知操作处置"
+      - listitem [level=1]
+        - link "审计查询" [ref=e22]
+          - StaticText "审计查询"
+    - paragraph
+      - StaticText "平台配置与运维"
+    - paragraph
+      - StaticText "需租户管理员 / 运维"
+    - list
+      - listitem [level=1]
+        - link "配置总览" [ref=e23]
+          - StaticText "配置总览"
+      - listitem [level=1]
+        - link "运行与容量" [ref=e24]
+          - StaticText "运行与容量"
+      - listitem [level=1]
+        - link "工具与审批" [ref=e25]
+          - StaticText "工具与审批"
+      - listitem [level=1]
+        - link "合规与零保留" [ref=e26]
+          - StaticText "合规与零保留"
+      - listitem [level=1]
+        - link "Agent 配置" [ref=e27]
+          - StaticText "Agent 配置"
+      - listitem [level=1]
+        - link "系统健康" [ref=e28]
+          - StaticText "系统健康"
+  - main
+    - heading "工具与审批" [level=1, ref=e6]
+    - paragraph
+      - StaticText "系统能调用哪些工具，各自的分级与审批口径。"
+    - tablist "子分区"
+      - tab "工具与审批口径" [selected, ref=e8]
+      - tab "Tool 目录" [ref=e9]
+      - tab "Skill 目录" [ref=e10]
+    - tabpanel "工具与审批口径" [ref=e7] focusable [tabindex]
+      - paragraph
+        - StaticText "有一条规则不能调松"
+      - paragraph
+        - StaticText "涉及未成年人的保护项只能调严，不能调松。降低保护强度需要重新走评审，不能在页面上改。"
+      - paragraph
+        - StaticText "审批流本身的运行态尚未接入（待 C4），下方为声明配置。"
+      - generic
+        - heading "工具与审批" [level=2, ref=e29]
+        - table
+          - rowgroup
+            - row
+              - columnheader "配置键" [ref=e85]
+              - columnheader "声明值" [ref=e86]
+              - columnheader "是否接入运行时" [ref=e87]
+              - columnheader "来源" [ref=e88]
+              - columnheader "说明" [ref=e89]
+          - row
+            - cell "agent.run.max-cost-per-run" [ref=e39]
+              - code
+                - StaticText "agent.run.max-cost-per-run"
+            - cell "2.00" [ref=e40]
+            - cell "已接入" [ref=e41]
+            - cell "yml" [ref=e42]
+            - cell "P4-D11 已接入运行时（生产快照读 yml；改后对新执行即刻生效）" [ref=e43]
+          - row
+            - cell "agent.run.max-llm-calls" [ref=e44]
+              - code
+                - StaticText "agent.run.max-llm-calls"
+            - cell "12" [ref=e45]
+            - cell "已接入" [ref=e46]
+            - cell "yml" [ref=e47]
+            - cell "P4-D11 已接入运行时（生产快照读 yml）" [ref=e48]
+          - row
+            - cell "agent.run.max-steps" [ref=e49]
+              - code
+                - StaticText "agent.run.max-steps"
+            - cell "20" [ref=e50]
+            - cell "已接入" [ref=e51]
+            - cell "yml" [ref=e52]
+            - cell "P4-D11 已接入运行时（生产快照读 yml）" [ref=e53]
+          - row
+            - cell "agent.tenant.max-concurrent-runs" [ref=e54]
+              - code
+                - StaticText "agent.tenant.max-concurrent-runs"
+            - cell "5" [ref=e55]
+            - cell "仅声明未接入" [ref=e56]
+            - cell "yml" [ref=e57]
+            - cell "⛔ 实测：常量 KEY_MAX_CONCURRENT_RUNS 定义外引用数 0 → 租户并发**无限制**" [ref=e58]
+          - row
+            - cell "agent.tool.risk-level-map" [ref=e59]
+              - code
+                - StaticText "agent.tool.risk-level-map"
+            - cell "{get_student_profile=READ, record_weakness=WRITE_PROFILE}" [ref=e60]
+            - cell "已接入" [ref=e61]
+            - cell "yml(镜像·启动守卫)" [ref=e62]
+            - cell "P4-D11：权威在代码 ToolHandler.riskLevel()；yml 镜像由启动守卫强制一致，不一致即拒绝启动（fail-closed）" [ref=e63]
+          - row
+            - cell "agent.approval.required-by-risk" [ref=e64]
+              - code
+                - StaticText "agent.approval.required-by-risk"
+            - cell "{READ=NOT_REQUIRED, WRITE_PROFILE=OPTIONAL, WRITE_EXTERNAL=REQUIRED}" [ref=e65]
+            - cell "已接入" [ref=e66]
+            - cell "yml" [ref=e67]
+            - cell "P4-D11 已接入运行时（经快照工厂解析；只能收紧不能放松）" [ref=e68]
+          - row
+            - cell "agent.approval.ttl" [ref=e69]
+              - code
+                - StaticText "agent.approval.ttl"
+            - cell "15m" [ref=e70]
+            - cell "已接入" [ref=e71]
+            - cell "yml" [ref=e72]
+            - cell "P0-2 已接入运行时（待人工审批请求的有效期；超界拒绝启动）" [ref=e73]
+          - row
+            - cell "agent.approval.approver-scope" [ref=e74]
+              - code
+                - StaticText "agent.approval.approver-scope"
+            - cell "PARENT_OR_TEACHER" [ref=e75]
+            - cell "已接入" [ref=e76]
+            - cell "yml" [ref=e77]
+            - cell "P0-2 已接入运行时（待人工审批请求的审批人范围，写入 approval.approver_scope）" [ref=e78]
+      - generic
+        - heading "可调整的审批口径" [level=2, ref=e30]
+        - paragraph
+          - StaticText "保存后何时生效"
+        - paragraph
+          - StaticText "保存后下一个新建的 Run 会使用新值；已经开始执行的 Run 不受影响 （配置在 Run 创建时即被快照固化）。"
+        - paragraph
+          - StaticText "平台数据优先：下表主值展示平台声明值（yml）；若该键被租户覆盖， 主值下方会并列给出租户当前生效值，调整时仍以生效值为基线。"
+        - table
+          - rowgroup
+            - row
+              - columnheader "配置项" [ref=e79]
+              - columnheader "平台声明值" [ref=e80]
+              - columnheader "约束" [ref=e81]
+              - columnheader "操作" [ref=e82]
+          - row
+            - rowheader "agent.approval.required-by-risk" [ref=e31]
+              - code
+                - StaticText "agent.approval.required-by-risk"
+            - cell "{READ=NOT_REQUIRED, WRITE_PROFILE=OPTIONAL, WRITE_EXTERNAL=REQUIRED}" [ref=e32]
+              - code
+                - StaticText "{READ=NOT_REQUIRED, WRITE_PROFILE=OPTIONAL, WRITE_EXTERNAL=REQUIRED}"
+            - cell "只能收紧：下拉框里只列比当前更严的方向。" [ref=e33]
+            - cell "调整" [ref=e34]
+              - button "调整" [ref=e83]
+          - row
+            - rowheader "agent.approval.ttl" [ref=e35]
+              - code
+                - StaticText "agent.approval.ttl"
+            - cell "15m" [ref=e36]
+              - code
+                - StaticText "15m"
+            - cell "只能调小。放宽需要重新走变更评审。" [ref=e37]
+            - cell "调整" [ref=e38]
+              - button "调整" [ref=e84]

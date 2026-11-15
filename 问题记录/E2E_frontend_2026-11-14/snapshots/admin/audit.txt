@@ -1,0 +1,183 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：TENANT_ADMIN · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e11]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e12]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e13]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e14]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e15]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e16]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e17]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e18]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "知识库治理"
+    - paragraph
+      - StaticText "需内容审核 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "语料管理" [ref=e19]
+          - StaticText "语料管理"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e20]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e21]
+          - StaticText "未知操作处置"
+      - listitem [level=1]
+        - link "审计查询" [ref=e22]
+          - StaticText "审计查询"
+    - paragraph
+      - StaticText "平台配置与运维"
+    - paragraph
+      - StaticText "需租户管理员 / 运维"
+    - list
+      - listitem [level=1]
+        - link "配置总览" [ref=e23]
+          - StaticText "配置总览"
+      - listitem [level=1]
+        - link "运行与容量" [ref=e24]
+          - StaticText "运行与容量"
+      - listitem [level=1]
+        - link "工具与审批" [ref=e25]
+          - StaticText "工具与审批"
+      - listitem [level=1]
+        - link "合规与零保留" [ref=e26]
+          - StaticText "合规与零保留"
+      - listitem [level=1]
+        - link "Agent 配置" [ref=e27]
+          - StaticText "Agent 配置"
+      - listitem [level=1]
+        - link "系统健康" [ref=e28]
+          - StaticText "系统健康"
+  - main
+    - heading "审计查询" [level=1, ref=e6]
+    - paragraph
+      - StaticText "谁在什么时候做了什么。"
+    - generic
+      - sectionheader
+        - heading "筛选" [level=2, ref=e29]
+      - LabelText
+        - StaticText "动作"
+      - combobox "动作" [expanded=false, ref=e7]: 全部
+        - MenuListPopup
+          - option "全部" [selected, ref=e30]
+          - option "审批通过" [ref=e31]
+          - option "审批拒绝" [ref=e32]
+          - option "审批消费" [ref=e33]
+          - option "取消运行" [ref=e34]
+          - option "读取画像" [ref=e35]
+          - option "查询审计" [ref=e36]
+          - option "处置未知操作" [ref=e37]
+          - option "查看配置" [ref=e38]
+      - LabelText
+        - StaticText "资源类型"
+      - combobox "资源类型" [expanded=false, ref=e8]: 全部
+        - MenuListPopup
+          - option "全部" [selected, ref=e39]
+          - option "审批" [ref=e40]
+          - option "工具操作" [ref=e41]
+          - option "运行" [ref=e42]
+          - option "学生画像" [ref=e43]
+          - option "配置查看" [ref=e44]
+          - option "审计记录" [ref=e45]
+      - paragraph
+        - StaticText "审计记录只读：没有删除或修改入口，且记录保留 180 天后自动清理。 这里也不会展示请求原文——学生提交的题目与解答不在审计明细里。"
+    - generic
+      - heading "审计记录" [level=2, ref=e9]
+      - button "导出 CSV" [ref=e10]
+      - StaticText "导出的数字与下方表格逐格一致（同源数据）。"
+      - table
+        - rowgroup
+          - row
+            - columnheader "时间" [ref=e91]
+            - columnheader "操作者" [ref=e92]
+            - columnheader "动作" [ref=e93]
+            - columnheader "资源" [ref=e94]
+            - columnheader "明细" [ref=e95]
+        - row
+          - cell "2026/11/14 01:17:31" [ref=e46]
+          - cell "35ec2870-933b-4eed-bbf4-a9cdc6df6b86" [ref=e47]
+          - cell "查询审计" [ref=e48]
+          - cell "audit_record" [ref=e49]
+          - cell "count: 8" [ref=e50]
+        - row
+          - cell "2026/11/14 01:15:38" [ref=e51]
+          - cell "35ec2870-933b-4eed-bbf4-a9cdc6df6b86" [ref=e52]
+          - cell "查看配置" [ref=e53]
+          - cell "config" [ref=e54]
+          - cell "—" [ref=e55]
+        - row
+          - cell "2026/11/14 01:15:38" [ref=e56]
+          - cell "35ec2870-933b-4eed-bbf4-a9cdc6df6b86" [ref=e57]
+          - cell "查看配置" [ref=e58]
+          - cell "config" [ref=e59]
+          - cell "—" [ref=e60]
+        - row
+          - cell "2026/11/14 01:15:10" [ref=e61]
+          - cell "35ec2870-933b-4eed-bbf4-a9cdc6df6b86" [ref=e62]
+          - cell "查看配置" [ref=e63]
+          - cell "config" [ref=e64]
+          - cell "—" [ref=e65]
+        - row
+          - cell "2026/11/14 01:15:09" [ref=e66]
+          - cell "35ec2870-933b-4eed-bbf4-a9cdc6df6b86" [ref=e67]
+          - cell "查看配置" [ref=e68]
+          - cell "config" [ref=e69]
+          - cell "—" [ref=e70]
+        - row
+          - cell "2026/11/14 01:14:41" [ref=e71]
+          - cell "35ec2870-933b-4eed-bbf4-a9cdc6df6b86" [ref=e72]
+          - cell "查看配置" [ref=e73]
+          - cell "config" [ref=e74]
+          - cell "—" [ref=e75]
+        - row
+          - cell "2026/11/14 01:14:41" [ref=e76]
+          - cell "35ec2870-933b-4eed-bbf4-a9cdc6df6b86" [ref=e77]
+          - cell "查看配置" [ref=e78]
+          - cell "config" [ref=e79]
+          - cell "—" [ref=e80]
+        - row
+          - cell "2026/11/14 01:14:13" [ref=e81]
+          - cell "35ec2870-933b-4eed-bbf4-a9cdc6df6b86" [ref=e82]
+          - cell "查看配置" [ref=e83]
+          - cell "config" [ref=e84]
+          - cell "—" [ref=e85]
+        - row
+          - cell "2026/11/14 01:14:13" [ref=e86]
+          - cell "35ec2870-933b-4eed-bbf4-a9cdc6df6b86" [ref=e87]
+          - cell "查看配置" [ref=e88]
+          - cell "config" [ref=e89]
+          - cell "—" [ref=e90]
+      - StaticText "已显示全部 9 条"

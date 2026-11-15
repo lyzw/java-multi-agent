@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.LinkedHashMap;
@@ -455,8 +456,12 @@ class IdempotencyProtocolTest {
         @Test
         @DisplayName("非冲突时 throwIfConflict 不抛异常")
         void nonConflictDoesNotThrow() {
-            IdempotencyDecision.firstExecution("r1").throwIfConflict();
-            IdempotencyDecision.replay("r1").throwIfConflict();
+            assertThatNoException()
+                    .as("首次执行与重放均非冲突，throwIfConflict 必须静默通过")
+                    .isThrownBy(() -> {
+                        IdempotencyDecision.firstExecution("r1").throwIfConflict();
+                        IdempotencyDecision.replay("r1").throwIfConflict();
+                    });
         }
 
         @Test

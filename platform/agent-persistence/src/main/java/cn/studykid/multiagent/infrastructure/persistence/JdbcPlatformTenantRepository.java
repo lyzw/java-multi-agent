@@ -166,6 +166,11 @@ public class JdbcPlatformTenantRepository implements PlatformTenantPort {
                     ps.setString(1, tenantId.toString());
                     ps.executeUpdate();
                 }
+                // ── P0（E2E 二次评估 · 2026-11-14）：租户运行前置，与上面三写同事务 ──
+                // ⚠️ 单一真相源见 TenantRuntimeDefaults：budget_account（否则
+                //    BUDGET_EXHAUSTED）+ cap_authz_version 的 worker 行（否则
+                //    AUTHZ_UNAVAILABLE）。此前两者只能靠人工 SQL 补数绕过。
+                TenantRuntimeDefaults.insertRuntimePrerequisites(conn, tenantId.toString());
                 conn.commit();
                 return new PlatformTenantRow(tenantId.toString(), slug, name,
                         TenantLifecycle.PENDING_SETUP, plan, 1L, 1L, created, updated);

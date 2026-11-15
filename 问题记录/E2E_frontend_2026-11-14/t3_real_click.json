@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-14",
+  "base": "http://localhost:5173",
+  "results": [
+    {
+      "gesture": "A 合成 click（agent-browser click）",
+      "before": "/runs/new",
+      "after": "/runs/new",
+      "submitted": false,
+      "expect": "不跳转＝工具口径限制（非应用缺陷）"
+    },
+    {
+      "gesture": "B 真实键盘手势（focus + press Enter）",
+      "before": "/runs/new",
+      "after": "/runs/a96630d4-0235-4271-96ff-61df1ac3769a",
+      "submitted": true,
+      "expect": "真实用户手势应能提交"
+    }
+  ],
+  "submitted_by": [
+    "B 真实键盘手势（focus + press Enter）"
+  ],
+  "conclusion": "应用表单正常：至少一种真实/规范手势触发了提交；A 组不跳转仅为 agent-browser 合成事件口径，不是应用缺陷。"
+}

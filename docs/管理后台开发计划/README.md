@@ -20,6 +20,8 @@
 
 - **复用优先**：领域规则（校验/闭包/指纹/CAS/双复核）一律复用既有 `cap_*` 服务、`ConfigPublishWorkflowService`、`PermissionResolver`、`authzVersion`、RLS、`AuditPort`；控制台只调用与呈现，禁止重写安全决策语义。
 - **作用域红线**：平台级（Tool/Skill/MCP）写发布保持带外运维通道（BYPASSRLS），**后端**对 PLATFORM 作用域 HTTP 写入口显式返回 403，控制台不暴露 PLATFORM 作用域写入口；租户管理（开通/配置覆盖/主体角色/启停）属 PLATFORM 作用域，仅由超级管理员经运维通道访问。**安全判定一律在后端**，前端仅按角色/作用域条件渲染。
+
+> ⚠️ **设计变更说明（2026-11-13 E2E 实测）**：当前实现已提供平台链写入口——能力目录「登记 / 停用 / 申请队列（审批执行）」、租户管理「开通 / 生命周期变更」、平台用户「新建 / 编辑 / 重置密码 / 角色赋撤」均已在控制台实测打开并可提交。旧口径「控制台不暴露 PLATFORM 作用域写入口」已废弃，以 `admin-console/README.md` §3/§6 为当前事实源；相关差异见 E2E 报告 DOC-04。
 - **独立前端 + 共享后端**：前端是独立工程（独立 `package.json`/Vite 构建/独立部署，根路由即控制台）；后端不新建工程，仅在 `platform/agent-api` 内按需扩展端点；跨工程不 import 源码，现有前端的设计令牌与 UI 模式（AppShell/RequireRole/tightening 风格）作为参考资产**搬运**到独立工程以保证一致。
 - **收紧棘轮**：`overrides` / `paramPolicies` 与租户配置覆盖只能收紧不能放宽，放宽即拒。
 - **fail-closed**：依赖解析/authzVersion 不可用时拒绝并告警，前端须给明确错误态，不可静默放行。
@@ -28,11 +30,11 @@
 
 ## 工程基线
 
-- 前端（独立项目）：React 18 + TS + Zustand + React Query + Vite（独立 `package.json`/构建/部署）；从现有前端**搬运**设计令牌与 UI 模式（`AppShell`/`RequireRole`/`client`/`tightening` 风格）在独立工程内实现，**不跨工程 import**；图谱用 react-flow，图表用 ECharts/Recharts；测试 Vitest + Testing Library；经 dev `server.proxy` 或生产同源反向代理连通共享后端。
+- 前端（独立项目）：React 18 + TypeScript 5 + Vite 6 + **Ant Design v5** + **React Context（`SessionProvider`）**（独立 `package.json`/构建/部署）；从现有前端**搬运**设计令牌与 UI 模式在独立工程内实现，**不跨工程 import**；**无** Zustand / React Query / react-flow / ECharts / Recharts（状态用 Context、UI 用 antd v5）；测试 Vitest + Testing Library；经 dev `server.proxy` 或生产同源反向代理连通共享后端。
 - 后端（共用项目）：复用既有 `platform/agent-api` 单一共享工程，仅在其内按需扩展只读聚合/查询端点（不新建独立后端工程、不新建 `admin` Maven 模块）；复用 `config/CapConfigPublishController` 与 `application/cap/ConfigPublishWorkflowService`，以及 `cap_*` 服务、`PermissionResolver`、`authzVersion`、RLS、`AuditPort`。
 - 构建/测试：前端 `npm ci && npm run build` + Vitest；后端 `JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn -o clean verify`；IT 复用非特权 `app_agent` 账号 + RDS 夹具。
 
 ## 状态
 
 - 设计文档：`docs/管理后台系统设计方案.html`（已完成）。
-- 开发计划：本文件夹（含总览 + 7 阶段，v1.1 已明确「独立前端项目 + 共用后端」架构）。尚未进入编码阶段，待用户授权按 P0→P5 推进。
+- 开发计划：本文件夹（含总览 + 7 阶段，v1.1 架构）。**已实现并实测**：`admin-console` 完成 30 个页面（9 分组），部署于 `/admin` 路径、运行于 5180；后端平台链端点齐备；2026-11-13 完成全量 E2E 实测（结论见 `问题记录/E2E端到端测试_2026-11-13/端到端测试报告_2026-11-13.md`）。后续按 P0→P5 分段交付的能力对象写发布、关系视图、运行监控等仍以本计划为基线推进。

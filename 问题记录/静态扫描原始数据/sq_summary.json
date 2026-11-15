@@ -1,0 +1,143 @@
+{
+  "total": 80,
+  "severity": {
+    "BLOCKER": 6,
+    "CRITICAL": 2,
+    "MAJOR": 68,
+    "MINOR": 4
+  },
+  "type": {
+    "CODE_SMELL": 27,
+    "VULNERABILITY": 4,
+    "BUG": 49
+  },
+  "rule": {
+    "java:S2699": 6,
+    "java:S4502": 2,
+    "java:S5833": 21,
+    "java:S5866": 8,
+    "java:S1872": 2,
+    "java:S8786": 12,
+    "java:S2201": 4,
+    "java:S6829": 1,
+    "java:S2077": 2,
+    "java:S5998": 2,
+    "java:S6218": 2,
+    "java:S6813": 4,
+    "java:S4973": 1,
+    "java:S3078": 5,
+    "java:S2789": 2,
+    "java:S5855": 2,
+    "java:S1313": 4
+  },
+  "module": {
+    "agent-core/src/test/java/cn/studykid/multiagent/core/IdempotencyProtocolTest.java": 1,
+    "agent-core/src/test/java/cn/studykid/multiagent/core/TenantContextTest.java": 1,
+    "agent-test-support/src/test/java/cn/studykid/multiagent/testsupport/db/ItTenantProvisionerTest.java": 1,
+    "agent-persistence/src/test/java/cn/studykid/multiagent/infrastructure/monitoring/AlertWebhookTest.java": 1,
+    "agent-infrastructure/src/test/java/cn/studykid/multiagent/infrastructure/security/AuthzDecisionRecorderTest.java": 1,
+    "agent-infrastructure/src/test/java/cn/studykid/multiagent/infrastructure/security/RoleBasedAuthorizationServiceTest.java": 1,
+    "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/SecurityConfiguration.java": 2,
+    "platform-bootstrap/src/test/java/cn/studykid/multiagent/bootstrap/config/AgentChatProductionGuardTest.java": 4,
+    "agent-application/src/test/java/cn/studykid/multiagent/application/evaluation/ModelAttributionJudgeTest.java": 2,
+    "agent-core/src/main/java/cn/studykid/multiagent/core/compliance/OutputModeration.java": 4,
+    "agent-api/src/test/java/cn/studykid/multiagent/api/security/JwtCurrentPrincipalTest.java": 4,
+    "agent-application/src/test/java/cn/studykid/multiagent/application/evaluation/LocalFileReferenceAnswerSourceTest.java": 1,
+    "agent-persistence/src/test/java/cn/studykid/multiagent/infrastructure/persistence/cap/MultiAgentSchemaStructureTest.java": 4,
+    "agent-application/src/main/java/cn/studykid/multiagent/application/prompt/PromptGuard.java": 5,
+    "agent-api/src/main/java/cn/studykid/multiagent/api/platform/PlatformCapabilityConsoleController.java": 2,
+    "platform-bootstrap/src/test/java/cn/studykid/multiagent/bootstrap/config/ContextCompressionS1GuardTest.java": 1,
+    "agent-application/src/main/java/cn/studykid/multiagent/application/run/RunCreationService.java": 1,
+    "agent-test-support/src/main/java/cn/studykid/multiagent/infrastructure/PlatformDdl.java": 1,
+    "agent-worker/src/test/java/cn/studykid/multiagent/worker/agentchat/AgentChatOrchestratorTest.java": 8,
+    "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcConfigPublishRequestRepository.java": 2,
+    "agent-api/src/main/java/cn/studykid/multiagent/api/platform/PlatformDictionaryController.java": 1,
+    "agent-api/src/main/java/cn/studykid/multiagent/api/config/CapabilityCatalogController.java": 2,
+    "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/http/HttpToolExecutor.java": 2,
+    "agent-infrastructure/src/test/java/cn/studykid/multiagent/infrastructure/RlsPolicyAlignmentTest.java": 1,
+    "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/WorkerExecutionConfig.java": 3,
+    "agent-context/src/main/java/cn/studykid/multiagent/context/VerbatimSpanExtractor.java": 1,
+    "platform-bootstrap/src/test/java/cn/studykid/multiagent/bootstrap/worker/RunRecoverySweeperTest.java": 2,
+    "platform-bootstrap/src/test/java/cn/studykid/multiagent/bootstrap/config/ApplicationConfigKeyAlignmentTest.java": 1,
+    "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcReviewTaskRepository.java": 1,
+    "agent-persistence/src/test/java/cn/studykid/multiagent/infrastructure/persistence/SseDirectRunClaimIT.java": 1,
+    "agent-application/src/main/java/cn/studykid/multiagent/application/evaluation/HallucinationDetector.java": 1,
+    "agent-worker/src/main/java/cn/studykid/multiagent/worker/dispatch/OutboxRelay.java": 1,
+    "agent-test-support/src/main/java/cn/studykid/multiagent/testsupport/acceptance/TestSourceIndex.java": 2,
+    "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/worker/RunRecoverySweeper.java": 2,
+    "agent-api/src/main/java/cn/studykid/multiagent/api/error/RequestLogContext.java": 1,
+    "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/model/ModelCredentialProvider.java": 1,
+    "agent-context/src/main/java/cn/studykid/multiagent/context/RollingStateMerger.java": 1,
+    "agent-api/src/main/java/cn/studykid/multiagent/api/chat/ConsoleChatController.java": 1,
+    "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/messaging/PgQueueListener.java": 2,
+    "agent-infrastructure/src/main/java/cn/studykid/multiagent/infrastructure/rag/HttpRagRetrievalGateway.java": 1,
+    "agent-application/src/test/java/cn/studykid/multiagent/application/cap/RouterDelegationTest.java": 1,
+    "agent-application/src/main/java/cn/studykid/multiagent/application/cap/McpAddressPolicy.java": 4
+  },
+  "critical": [
+    {
+      "severity": "BLOCKER",
+      "type": "CODE_SMELL",
+      "rule": "java:S2699",
+      "file": "agent-core/src/test/java/cn/studykid/multiagent/core/IdempotencyProtocolTest.java",
+      "line": 457,
+      "message": "Add at least one assertion to this test case."
+    },
+    {
+      "severity": "BLOCKER",
+      "type": "CODE_SMELL",
+      "rule": "java:S2699",
+      "file": "agent-core/src/test/java/cn/studykid/multiagent/core/TenantContextTest.java",
+      "line": 92,
+      "message": "Add at least one assertion to this test case."
+    },
+    {
+      "severity": "BLOCKER",
+      "type": "CODE_SMELL",
+      "rule": "java:S2699",
+      "file": "agent-test-support/src/test/java/cn/studykid/multiagent/testsupport/db/ItTenantProvisionerTest.java",
+      "line": 31,
+      "message": "Add at least one assertion to this test case."
+    },
+    {
+      "severity": "BLOCKER",
+      "type": "CODE_SMELL",
+      "rule": "java:S2699",
+      "file": "agent-persistence/src/test/java/cn/studykid/multiagent/infrastructure/monitoring/AlertWebhookTest.java",
+      "line": 78,
+      "message": "Add at least one assertion to this test case."
+    },
+    {
+      "severity": "BLOCKER",
+      "type": "CODE_SMELL",
+      "rule": "java:S2699",
+      "file": "agent-infrastructure/src/test/java/cn/studykid/multiagent/infrastructure/security/AuthzDecisionRecorderTest.java",
+      "line": 20,
+      "message": "Add at least one assertion to this test case."
+    },
+    {
+      "severity": "BLOCKER",
+      "type": "CODE_SMELL",
+      "rule": "java:S2699",
+      "file": "agent-infrastructure/src/test/java/cn/studykid/multiagent/infrastructure/security/RoleBasedAuthorizationServiceTest.java",
+      "line": 263,
+      "message": "Add at least one assertion to this test case."
+    },
+    {
+      "severity": "CRITICAL",
+      "type": "VULNERABILITY",
+      "rule": "java:S4502",
+      "file": "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/SecurityConfiguration.java",
+      "line": 233,
+      "message": "Make sure disabling Spring Security's CSRF protection is safe here."
+    },
+    {
+      "severity": "CRITICAL",
+      "type": "VULNERABILITY",
+      "rule": "java:S4502",
+      "file": "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/SecurityConfiguration.java",
+      "line": 185,
+      "message": "Make sure disabling Spring Security's CSRF protection is safe here."
+    }
+  ]
+}

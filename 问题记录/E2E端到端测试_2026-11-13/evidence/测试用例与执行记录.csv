@@ -1,0 +1,380 @@
+﻿用例ID,分组,操作项,操作步骤,预期结果,实际结果,结论,是否最终回归,证据/截图,备注,时间
+I-L01,登录与会话,超管账号真实表单登录,打开 /login → 填 plat-superadmin / 口令 → 提交,登录成功、落到 /admin/tenants、sessionStorage 写入平台令牌与角色,url=http://localhost:5180/admin/tenants; roles=['PLATFORM_SUPER_ADMIN']; expiresIn≈899s,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L01_login_success.png,,2026-11-13T09:36:43.795681+00:00
+I-L02,登录与会话,「忘记密码？」提示,登录页点击「忘记密码？」,不跳外链，给出「请联系运维通道管理员重置密码」提示,"Agent Platform
+一个控制台
+管好所有 Agent
+
+注册、发布、观测 Agent 及其调用的 Tool、Skill 与 MCP， 并按租户看清每一次执行。
+
+Agent 注册与版本
+定义、发布与回滚每一个 Agent 的行为。
+Tool 与 Skill 编排
+把可复用能力挂到正确的调用位上。
+租户与运行观测
+看清每个租户的用量、状态与执行轨迹。
+登录控制台
+
+使用平台账号继续
+
+仅限平台账号（经运维通道创建），平台身份与租户身份彻底分离
+用户名
+密码
+忘记密码？
+登录
+请联系运维通道管理员重置密码",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L02_forgot_password.png,,2026-11-13T09:36:51.199507+00:00
+I-L03,最终回归/登录会话,退出登录,真实点击页头头像下拉 → 「退出登录」,回登录页且平台会话键清空,triggerClick=✓; itemClick=✓ Done; url=http://localhost:5180/admin/login; session=None,通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L03_logout.png,【最终回归】,2026-11-13T09:36:59.796907+00:00
+I-L04,最终回归/鉴权守卫,未登录深链 → 登录 → 回跳原页,登出后打开 /admin/users → 用超管登录,先被送登录页，登录后回 /admin/users（RequireAuth state.from）,before=http://localhost:5180/admin/login; after=http://localhost:5180/admin/users,通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L04_deep_link_back.png,【最终回归】,2026-11-13T09:37:04.660138+00:00
+I-L05,登录与会话,过期原因提示 + next 回跳,打开 /login?reason=expired&next=/tools → 检查警告 → 登录,登录页显示「会话已过期，请重新登录」；登录后回到 /admin/tools,warning=True; after=http://localhost:5180/admin/tools,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L05_expired_next.png,,2026-11-13T09:37:14.446791+00:00
+I-L06,异常入口,业务无权限整页 /no-permission,访问 /admin/no-permission?reason=…,显示 403 · 无权限 + 后端拒绝原因 + 返回租户管理按钮,"403 · 无权限
+E2E测试原因
+返回租户管理",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L06_no_permission.png,,2026-11-13T09:37:15.931000+00:00
+I-L06b,异常入口,无权限页「返回租户管理」按钮,点击返回按钮,回到 /admin/tenants,http://localhost:5180/admin/tenants,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L06b_no_permission_back.png,,2026-11-13T09:37:22.614125+00:00
+I-L07,异常入口,未知路径 404 兜底,访问 /admin/this-page-does-not-exist-e2e,显示 404 页（非白屏），提供「回租户注册表 / 回登录页」两个去向,"平台管理控制台
+平台治理
+租户管理
+平台用户
+角色权限矩阵
+平台审计
+能力目录
+RAG · 录入与校对
+RAG · 审核
+RAG · 规则配置
+RAG · 运维
+系统配置
+观测度量
+AI 实验室
+管理员
+平台管理控制台
+404
+这个地址没有对应的页面。可能是链接已过期，或地址输入有误。
+回租户注册表
+回登录页
+© 2026 Agent Platform · 平台管理控制台",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L07_not_found.png,,2026-11-13T09:37:24.285824+00:00
+I-L07b,异常入口,404 页「回登录页」按钮,点击回登录页,URL 落到 /admin/login,http://localhost:5180/admin/login,通过,否,,,2026-11-13T09:37:30.674900+00:00
+I-L08,最终回归/导航框架,侧栏折叠 / 展开状态切换,两次真实点击页头折叠图标,icon menu-fold→menu-unfold→menu-fold、collapsed 类与内联 80px/200px 同步切换,"{""collapsed"": false, ""icon"": ""menu-fold"", ""inline"": ""200px""} → {""collapsed"": true, ""icon"": ""menu-unfold"", ""inline"": ""80px""} → {""collapsed"": false, ""icon"": ""menu-fold"", ""inline"": ""200px""}",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L08_sider_collapse.png,【最终回归】clientWidth/getComputedStyle 在本 headless 环境恒返回 200（读数失真），以 icon/class/inline + 截图 REG_sider_collapsed.png 为准,2026-11-13T09:37:44.701286+00:00
+I-L09,深链,/tenants/new 深链打开开通租户弹窗,地址栏直达 /admin/tenants/new,跳回 /tenants?register=1 并自动打开「开通租户」弹窗（不产生第二个表单宿主）,url=http://localhost:5180/admin/tenants; modal=['开通租户\nSlug\n2-63 位，仅限小写字母、数字和连字符（-），不能以连字符开头或结尾\n名称\n套餐（可选）\n留空使用平台默认套餐；如需指定，请输入套餐标识\n开 通'],通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L09_tenant_new_deeplink.png,,2026-11-13T09:37:46.850216+00:00
+I-L10,会话边界,令牌即将过期告警与续期入口,把 sessionStorage.expiresAt 改为 now+30s → 刷新,出现「平台会话即将过期（剩余约 N 秒）」警告 + 「重新登录」按钮,warn=True; btn=True,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L10_expiring_soon.png,,2026-11-13T09:37:49.821666+00:00
+I-L11,会话边界,伪造令牌被拒后清会话跳登录,把 accessToken 改成伪造值 → 刷新受保护页,平台链 401 → 清会话并跳 /login?reason=expired&next=…（不带回旧令牌）,url=http://localhost:5180/admin/login?reason=expired&next=%2Ftenants; session=None,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L11_tampered_token.png,,2026-11-13T09:37:54.062301+00:00
+I-L12,会话边界,异常后恢复登录,重新用超管账号登录,重新获得有效会话，回到业务页,http://localhost:5180/admin/tenants,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_L12_recovered.png,,2026-11-13T09:38:03.400919+00:00
+I-G01,租户管理,生命周期筛选下拉可选项,点击「按生命周期筛选」下拉,展开可选生命周期状态（不只一个「全部」）,"rows_before=2; options=['PENDING_SETUP', 'ACTIVE', 'SUSPENDED', 'DECOMMISSIONING', 'DECOMMISSIONED', 'CANCELLED']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G01_tenant_filter.png,,2026-11-13T09:38:20.660377+00:00
+I-G02,最终回归/租户管理,开通租户空表单必填校验,打开弹窗 → 点击「开 通」,必填校验拦截且无 POST /tenants,"modal=开通租户
+Slug
+2-63 位，仅限小写字母、数字和连字符（-），不能以连字符开头或结尾
+名称
+套餐（可选）
+留空使用平台默认套餐；如需指定，请输入套餐标识
+开 通; primaryClick=✓ Done; errors=['请输入 slug', '请输入名称']; net=No requests captured",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G02_tenant_required.png,【最终回归】,2026-11-13T09:38:28.680977+00:00
+I-G03,租户管理,非法 slug 前后置校验,"slug 填 ""Bad Slug A""（空格/大写）→ 点确定",前端拒绝非法 slug 并给出提示，不写库,"fields=['slug', 'name', 'plan']; errors=['格式非法：2-63 位小写字母/数字/连字符，不以连字符开头或结尾']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G03_tenant_bad_slug.png,,2026-11-13T09:38:31.409517+00:00
+I-G04,最终回归/租户管理,合法输入后取消不产生写入,填合法 slug/名称 → 点弹窗关闭 X（此弹窗无「取消」按钮）,收到关闭指令且无 POST /tenants,fills=✓ Done/✓ Done; closeClick=✓ Done; leaveOrGone=True; net=No requests captured,通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G04_tenant_cancel.png,【最终回归】原用例按「取消按钮」设计有误：开通租户弹窗只有关闭 X；headless 下关闭动画不结束，故以 ant-zoom-leave 判定,2026-11-13T09:38:34.094581+00:00
+I-G05,最终回归/租户管理,生命周期变更弹窗与合法迁移门禁,点击 t-b 行「生命周期」→ 查看当前状态/可选迁移 → 取消,弹窗显示当前状态、仅列出合法迁移、取消不写库；「确定」可点是因为已默认选中唯一合法迁移,"rowBtn=CLICKED; modal=生命周期变更 · t-b
+
+当前状态：ACTIVE
+
+迁移到：
+
+SUSPENDED（暂停，拒新任务）
+仅显示当前状态下的合法迁移（后端状态机强制；非法迁移返回 409）。 终态（DECOMMISSIONED / CANCELLED）无出边。
+取 消
+确 认; select=['SUSPENDED（暂停，拒新任务）']; buttons=['取 消', '确 认']; cancel=CLICKED; net=No requests captured",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G05_tenant_lifecycle.png,【最终回归】原用例假定「未选状态时确定禁用」与实现不符：后端只返回合法迁移且前端预选唯一项，属用例设计修正，非缺陷,2026-11-13T09:38:40.972535+00:00
+I-G06,最终回归/租户管理,租户详情深链与区块,点击 t-b 行「详情」,跳 /admin/tenants/<uuid> 并渲染详情/配额/能力授权区块,rowBtn=CLICKED; url=http://localhost:5180/admin/tenants/b0b5eed0-1111-4222-8333-444455556666; bodyLen=324; hasQuota=True; hasGrant=True,通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G06_tenant_detail.png,【最终回归】,2026-11-13T09:38:48.564945+00:00
+I-G07,平台用户,新建用户空表单必填校验,打开「新建用户」→ 直接确定,用户名/初始密码必填提示，无创建请求,"errors=['请输入用户名', '请输入密码', '密码长度至少 10 位']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G07_user_required.png,,2026-11-13T09:39:02.547755+00:00
+I-G08,平台用户,弱口令复杂度校验,"初始密码填 ""weak"" → 确定",拒绝 <10 位 / 缺大小写与数字的弱口令,"errors=['请输入用户名', '格式非法：4-20 位字母/数字/下划线，以字母开头', '请输入密码', '密码长度至少 10 位']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G08_user_weak_pwd.png,,2026-11-13T09:39:09.851247+00:00
+I-G09,平台用户,非法邮箱格式校验,"邮箱填 ""not-an-email"" → 确定",邮箱格式校验拦截,"errors=['格式非法：4-20 位字母/数字/下划线，以字母开头', '密码长度至少 10 位', '邮箱格式不正确']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G09_user_bad_email.png,,2026-11-13T09:39:17.138341+00:00
+I-G10,最终回归/平台用户,新建用户完整提交（写操作留痕）,打开新建用户 → 填合法字段（e2e_test_1113b）→ 提交 → 重载列表,POST 2xx、成功提示、重载后列表出现新用户、DB 有对应行,"fills={'username': '✓ Done', 'password': '✓ Done', 'displayName': '✓ Done', 'email': '✓ Done'}; primaryClick=✓ Done; net=[80120.19544] POST http://localhost:5180/api/platform/v1/users (Fetch) 201
+[80120.19545] GET http://localhost:5180/api/platform/v1/users (Fetch) 200; message=['已创建']; listContains=True",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G10_user_created.png,测试数据：e2e-20261113-a / E2eTest#2026A1（需维护窗口清理） ｜ 【最终回归】真实写入 e2e_test_1113b；连同本轮早前创建的 e2e_test_1113a 均需维护窗口清理（平台无物理删除端点，只能停用）,2026-11-13T09:39:25.811041+00:00
+I-G11,最终回归/平台用户,重复用户名冲突处理,再次提交同名 e2e_test_1113b,后端 409 且页面给出明确冲突反馈，不静默成功,primaryClick=✓ Done; net=[80120.19823] POST http://localhost:5180/api/platform/v1/users (Fetch) 409; message=['请求与当前资源状态冲突'],通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G11_user_duplicate.png,【最终回归】首轮失败源于测试数据 e2e-20261113-a 含连字符，被前端用户名正则拦截（用例数据错误），非产品缺陷,2026-11-13T09:39:39.889634+00:00
+I-G12,最终回归/平台用户,测试用户行内操作项完整性 + SoD 自身保护,定位 e2e_test_1113a 行与当前超管自身行,普通行具备 编辑/停用/重置密码/角色；自身行的停用/重置密码/角色禁用,"testRowButtons=['编辑', '停用', '重置密码', '角色']; selfRowButtons=[{'dis': False, 't': '编辑'}, {'dis': True, 't': '停用'}, {'dis': True, 't': '重置密码'}, {'dis': True, 't': '角色'}]",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G12_user_row_actions.png,【最终回归】,2026-11-13T09:39:40.827576+00:00
+I-G13,平台用户,SoD 自身保护按钮禁用,检查 plat-superadmin 自身行,不可对自己停用/重置密码/角色增删，对应按钮禁用并注明原因,"selfRow=[{'d': False, 't': '编辑'}, {'d': True, 't': '停用'}, {'d': True, 't': '重置密码'}, {'d': True, 't': '角色'}]",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G13_sod_self_guard.png,,2026-11-13T09:39:41.217187+00:00
+I-G14,角色权限矩阵,7 个命名空间 Tab 逐项切换,逐个点击 7 个命名空间 Tab,每个 Tab 均渲染权限行，且只有一个激活 Tab,"switch=[('用户权限', 2, 1), ('角色权限', 2, 1), ('租户权限', 14, 1), ('资源权限', 16, 1), ('策略权限', 18, 1), ('审计权限', 20, 1), ('支持权限', 21, 1)]",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G14_role_matrix_tabs.png,,2026-11-13T09:40:23.951520+00:00
+I-G15,平台审计,审计筛选与刷新,action 填 LOGIN → 刷新,请求带 action 过滤参数，列表按条件返回且无 5xx,net=[80120.4327] GET http://localhost:5180/api/platform/v1/audit-events?action=LOGIN&from=2026-11-12T09%3A40%3A32.678Z&limit=200 (Fetch) 200,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_G15_audit_filter.png,,2026-11-13T09:40:34.174913+00:00
+I-C01,能力目录/Tool,生命周期 4 个 Tab 状态切换,逐个点击 全部/已发布/草稿/已停用,每个 Tab 正常渲染且只有一个激活态；行数与各自计数一致,"switch=[('全部(7)', 7, 1), ('已发布(7)', 14, 1), ('草稿(0)', 14, 1), ('已停用(0)', 14, 1)]",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C01_tool_tabs.png,,2026-11-13T09:41:10.200279+00:00
+I-C02,能力目录/Tool,搜索无命中边界,搜索不存在的 toolId,列表为空并显示「暂无数据」类空态，不报错、不残留旧数据,"tail=「详情」）可只读查看全字段与关系——抽屉，不离开列表。
+申请队列
+登记 Tool
+Tool 总数
+7
+已发布
+7
+草稿 / 非终态
+0
+已停用
+0
+全部(0)
+已发布(0)
+草稿(0)
+已停用(0)
+ID	名称	类型	风险等级	版本	状态	发布时间	配置指纹	操作
+
+ID
+	
+名称
+	
+类型
+	
+风险等级
+	
+版本
+	
+状态
+	
+发布时间
+	
+配置指纹
+	
+操作
+
+暂无数据
+© 2026 Agent Platform · 平台管理控制台",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C02_tool_search_empty.png,,2026-11-13T09:41:17.235988+00:00
+I-C03,能力目录/Tool,申请队列抽屉,页头点「申请队列」,右侧抽屉打开，展示 PENDING 申请及「通过/执行」操作或空态,drawer=['平台级变更申请队列\n申请号\t操作\t范围\t状态\t申请人\t审批人\t备注 / 失败原因\t提交时间\t决定时间\t执行时间\t操作\n\n申请号\n\t\n操作\n\t\n范围\n\t\n状态\n\t\n申请人\n\t\n审批人\n\t\n备注 / 失败原因\n\t\n提交时间\n\t\n决定时间\n\t\n执行时间\n\t\n操作\n\n暂无申请'],通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C03_tool_request_drawer.png,,2026-11-13T09:41:24.687403+00:00
+I-C04,最终回归/能力目录,登记 Tool 弹窗字段与必填校验,打开登记 Tool → 按文本点击底部「提交登记申请」,弹窗含登记字段与三步工作流说明；空表单被必填校验拦截且无申请提交,"modal=登记 Tool（申请 → 审批 → 执行）
+申请 → 审批 → 执行（三步不可合并）
+申请 → 审批 → 执行（三步不可合并）
+提交只生成申请单，不写配置表；审批人不得等于申请人；执行才真正写入平台配置。平台级对象影响全平台，变更需 PLATFORM_ADMIN 身份。
+Tool 标识
+平台级对象全; fields=['platform-publish_toolId', 'platform-publish_name', 'platform-publish_riskLevel', 'platform-publish_kind', 'platform-publish_inputSchema', 'platform-publish_paramPolicies', 'platform-publish_expectedPublishSeq', 'platform-publish_reason']; btnByText=CLICKED; errors=['请输入 Tool 标识', '请输入风险等级（riskLevel）', '变更理由不能为空（将留痕）']; net=No requests captured",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C04_tool_register_required.png,【最终回归】按钮位于视口外 y≈1585，CSS 选择器点击落空；按文本 DOM 点击后校验正常出现,2026-11-13T09:41:32.728106+00:00
+I-C05,最终回归/能力目录,Tool 详情抽屉只读全字段,点击 it-r2b-tool 行「详情」,抽屉打开、含定义字段与版本生命周期，且无写/删按钮,"rowBtn=CLICKED; drawer= Tool 详情 · it-r2b-tool
+定义字段
+标识（toolId）	it-r2b-tool	名称（name）	it tool
+类型（kind）	NATIVE	风险等级（riskLevel）	READ
+所属 MCP Server（mcpServerId）	内置（不绑定 MCP Server）	远端操作名（mcpToolName）	-
+请求方法（httpMethod）	-	目标 URL（httpUrl）	-
+超时（httpTimeoutMs）	-	入参结构（inputSchema）	
+{
+  ""type"": ""object"",
+  ""required"": [
+    ""studentId""
+  ]
+}
+
+参数策略（paramPolicies）	
+[]
+版本与生命周期
+当前版本（version）	v1	结构版本（schemaVersion）	1
+发布状态（published）	已发布	发布时间（publishedAt）	20",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C05_tool_detail_readonly.png,【最终回归】,2026-11-13T09:41:34.870646+00:00
+I-C06,最终回归/能力目录,停用申请弹窗与单向终态,点击已发布行「停用」,弹出停用申请弹窗，说明迁移到 DEPRECATED 的单向终态与 CAS,"rowBtn=CLICKED; modal=停用 tool（迁移到 DEPRECATED，单向终态）
+对象
+CAS 版本
+停用理由
+取 消
+提交停用申请",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C06_tool_deprecate_modal.png,【最终回归】,2026-11-13T09:41:36.909025+00:00
+I-C07,能力目录/Skill,登记 Skill 闭包声明字段,打开「登记 Skill」,弹窗含 Tool/MCP 闭包声明与风险上限字段,modal=['登记 Skill（申请 → 审批 → 执行）\n申请 → 审批 → 执行（三步不可合并）\n申请 → 审批 → 执行（三步不可合并）\n提交只生成申请单，不写配置表；审批人不得等于申请人；执行才真正写入平台配置。平台级对象影响全平台，变更需 PLATFORM_ADMIN 身份。\nSkill 标识\n平台级对象全平台唯一\n名称\n描述用途（1级 purpose）\n0 / 200\n一句话说清做什么、适用什么请求（≤200 字）。,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C07_skill_register.png,,2026-11-13T09:41:44.986312+00:00
+I-C08,能力目录/MCP,凭据定位符不回显红线,查看 MCP Server 列表与表头,页面不出现凭据定位符/凭据材料明文，仅布尔「是否具备引用」,"leak=False; tail=ofile.internal-studykid.cn/mcp	lookupProfile、lookupGuardian	已登记	READ	已发布	v1	2026-10-27 22:40:18
+	2d7008948ae245ffbf55…
+	
+详 情
+停 用
+© 2026 Agent Platform · 平台管理控制台",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C08_mcp_no_credential.png,,2026-11-13T09:41:47.341659+00:00
+I-C08b,能力目录/MCP,MCP 详情抽屉凭据不回显,点「详情」打开抽屉,抽屉同样不含凭据材料/定位符,leak=False,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C08b_mcp_detail_no_cred.png,,2026-11-13T09:41:53.855246+00:00
+I-C09,能力目录/Agent,跨租户只读注册表,逐个切换租户 Tab；检查页面按钮,只呈现管理元数据，无任何 Agent 写按钮（禁区红线）,"switch=[('全部租户(9)', 9), ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2(8)', 17), ('b0b5eed0-1111-4222-8333-444455556666(1)', 18)]; writeButtons=[]",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C09_agent_registry_readonly.png,,2026-11-13T09:42:14.304101+00:00
+I-C10,最终回归/能力目录,策略试跑的跨身份域失败提示,填 policyId/reason → 点击「试跑（不提交）」,平台令牌打租户域被 401/403 时，页面明示「租户级令牌通道尚未接入」，不伪装成策略问题,btn=CLICKED; net=[80120.20928] POST http://localhost:5180/api/cap/config/routing-policies/dry-run (Fetch) 401; channelHint=True,通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C10_routing_dryrun.png,【最终回归】,2026-11-13T09:42:23.059831+00:00
+I-C11,最终回归/能力目录,提交登记申请的前置校验与身份域提示,填 policyId/reason → 点击「提交登记申请」,请求被身份域隔离拒绝时给出明确错误提示，不静默成功、不写配置,btn=CLICKED; net=[80120.21063] POST http://localhost:5180/api/cap/config/publishes (Fetch) 401; message=['平台令牌对该端点不可达（身份域隔离）'],通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C11_routing_submit.png,【最终回归】,2026-11-13T09:42:31.109816+00:00
+I-C12,系统配置/字典,内置字典禁止物理删除,检查字典配置页操作按钮,只有 新建/新增取值/编辑/停用，无物理删除入口,"buttons=['刷 新', '新 建']; delete=[]",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C12_dictionary_no_delete.png,,2026-11-13T09:42:33.013109+00:00
+I-C12b,系统配置/字典,新建字典弹窗,点「新建」,弹出新建字典表单,modal=['新建字典\n字典编码\n创建后不可修改（前后端契约）\n字典名称\n说明\n排序\n新建的字典恒为「业务」类型\n内置字典由迁移脚本播种（与代码枚举强绑定），不接受应用层创建。\n创 建'],通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C12b_dictionary_new.png,,2026-11-13T09:42:39.504996+00:00
+I-C13,系统配置/模型,模型定义 / 供应商密钥 Tab 切换,切换两个 Tab,两个 Tab 均渲染；密钥 Tab 不出现明文密钥,"switch=['模型定义', '供应商密钥']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C13_model_tabs.png,,2026-11-13T09:42:53.824547+00:00
+I-C14,最终回归/系统配置,新建模型表单字段（Drawer）,点击「新建模型」,右侧抽屉展开，含供应商/场景/模型名称/Base URL/上下文与压缩等字段与保存/取消,"click=✓ Done; drawer=新建模型
+取 消
+保 存
+供应商
+选择或输入供应商
+场景
+default
+模型名称
+显示名
+Base URL
+向量维度（embedding 模型）
+排序
+默认模型
+启用
+支持工具调用
+支持流式
+支持视觉
+上下文与压缩（ADR-013）
+模型能力未做事实探测前，请保持两个开关关闭、计数器留空（R10：不假设供应商支持精确计数 / 前缀缓存）。
+总上下文窗口（输入+输出 Token）
+输入硬顶 Token（≤ 总窗口 − 4096）
+精确计数器标识
+支持前缀缓存
+支持 /tokenize 精确计数
+描述; fields=['provider', 'scenario', 'modelName', 'displayName', 'baseUrl', 'dimension', 'sortOrder', 'contextWindowTokens', 'maxInputTokens', 'tokenizerId', 'description']",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_C14_model_new_modal.png,【最终回归】该页用 Drawer 不是 Modal，首轮按 .ant-modal-wrap 取字段导致空列表,2026-11-13T09:43:06.386609+00:00
+I-R01,RAG 语料治理,语料作用域档位（平台全局/本租户）,检查 Dashboard 作用域单选,存在清晰的平台全局档与租户档切换，且首屏默认平台全局,"radios=[{'checked': True, 'label': '平台全局语料', 'value': 'on'}, {'checked': False, 'label': '本租户语料', 'value': 'on'}, {'checked': False, 'label': '跨租户盘点', 'value': 'on'}]",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_R01_rag_scope_switch.png,,2026-11-13T09:43:18.418790+00:00
+I-R02,RAG 语料治理,来源登记五轴缺项校验,不填五轴直接点「登记来源」,五轴缺一不可入库：前端拦截或后端拒绝，且不产生来源记录,"errors=[]; net=No requests captured; tail=待填
+○ 册次
+待填
+○ 出版社
+待填
+○ 版次
+待填
+权威等级对「可被检索」的影响
+「入库可、检索不可」分离策略（RAG-D00 RD-02）：
+· VERIFIED 且达门槛 → 可检索
+· UNVERIFIED → 仅入库供审核比对，不参与检索
+权威门槛由服务端配置 rag.retrieval.min-trust-tier（默认 OFFICIAL_TUTORIAL）。
+© 2026 Agent Platform · 平台管理控制台",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_R02_rag_source_required.png,,2026-11-13T09:43:27.302682+00:00
+I-R03,RAG 语料治理,来源列表查询与重置,关键词填「数学」→ 查询 → 重置,查询发出带 keyword 的请求；重置恢复默认条件,net=[80120.5975] GET http://localhost:5180/api/v1/management/sources?keyword=%E6%95%B0%E5%AD%A6&includeStale=true&limit=100 (Fetch) 200; rows=0,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_R03_rag_source_query.png,,2026-11-13T09:43:43.300606+00:00
+I-R04,RAG 语料治理,载体上传与解析预览 页面主控件与数据区,导航到 /rag/doc-upload 并检查控件,"页面渲染且具备 ['上传', '选择', '解析'] 等主控","controls={'btn': ['领取治理票据', '作 废'], 'inp': ['', '', '', 'rc_select_1', '粘贴来源 UUID（通常从来源列表页进入）', '', '', '', '', '', ''], 'rows': 0}; hit=['上传', '选择', '解析']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_I-R04_rag_rag_doc-upload.png,,2026-11-13T09:43:45.552924+00:00
+I-R05,RAG 语料治理,片段校对 页面主控件与数据区,导航到 /rag/chunk-fix 并检查控件,"页面渲染且具备 ['查询', '保存', '校对'] 等主控","controls={'btn': ['领取治理票据', '作 废'], 'inp': ['', '', '', 'rc_select_1', '粘贴来源 UUID', '', '', ''], 'rows': 0}; hit=['校对']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_I-R05_rag_rag_chunk-fix.png,,2026-11-13T09:43:47.561853+00:00
+I-R06,RAG 语料治理,校验决定 页面主控件与数据区,导航到 /rag/verify 并检查控件,"页面渲染且具备 ['校验', '提交', '决定'] 等主控","controls={'btn': ['领取治理票据', '作 废', '读 取'], 'inp': ['', '', '', 'rc_select_1', '粘贴来源 UUID（或从 Dashboard / 列表页进入）'], 'rows': 0}; hit=['校验', '决定']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_I-R06_rag_rag_verify.png,,2026-11-13T09:43:49.553850+00:00
+I-R07,RAG 语料治理,抽检队列 页面主控件与数据区,导航到 /rag/inspection 并检查控件,"页面渲染且具备 ['抽检', '查询', '刷新'] 等主控","controls={'btn': ['领取治理票据', '作 废', '加载抽检清单'], 'inp': ['', '', '', 'rc_select_1', '粘贴来源 UUID'], 'rows': 0}; hit=['抽检']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_I-R07_rag_rag_inspection.png,,2026-11-13T09:43:51.475508+00:00
+I-R08,RAG 语料治理,审核员名录 页面主控件与数据区,导航到 /rag/reviewers 并检查控件,"页面渲染且具备 ['新增', '保存', '审核员'] 等主控","controls={'btn': ['＋ 新增审核员', '领取治理票据', '作 废'], 'inp': ['', '', '', 'rc_select_1'], 'rows': 0}; hit=['新增', '保存', '审核员']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_I-R08_rag_rag_reviewers.png,,2026-11-13T09:43:53.411106+00:00
+I-R09,RAG 语料治理,知识点别名 页面主控件与数据区,导航到 /rag/kp-alias 并检查控件,"页面渲染且具备 ['新增', '查询', '别名'] 等主控","controls={'btn': ['领取治理票据', '作 废', '搜 索'], 'inp': ['', '', '', 'rc_select_1', '按规范名搜索'], 'rows': 0}; hit=['别名']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_I-R09_rag_rag_kp-alias.png,,2026-11-13T09:43:55.414953+00:00
+I-R10,RAG 语料治理,RAG 字典 页面主控件与数据区,导航到 /rag/dictionaries 并检查控件,"页面渲染且具备 ['新增', '刷新', '字典'] 等主控","controls={'btn': ['领取治理票据', '作 废'], 'inp': ['', '', '', 'rc_select_1'], 'rows': 4}; hit=['新增', '字典']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_I-R10_rag_rag_dictionaries.png,,2026-11-13T09:43:57.379459+00:00
+I-R11,RAG 语料治理,摄取任务 页面主控件与数据区,导航到 /rag/jobs 并检查控件,"页面渲染且具备 ['刷新', '重试', '领取治理票据'] 等主控","controls={'btn': ['刷 新', '领取治理票据', '作 废', '重 试', '重 试', '重 试'], 'inp': ['', '', '', 'rc_select_1', '', '', '', '', '', '可选：按来源筛选'], 'rows': 13}; hit=['重试', '领取治理票据']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_I-R11_rag_rag_jobs.png,,2026-11-13T09:43:59.393604+00:00
+I-R12,RAG 语料治理,重索引 页面主控件与数据区,导航到 /rag/reindex 并检查控件,"页面渲染且具备 ['重索引', '执行', '领取治理票据'] 等主控","controls={'btn': ['刷 新', '＋ 新建索引代际', '领取治理票据', '作 废', '补齐缺失向量'], 'inp': ['', '', '', 'rc_select_1'], 'rows': 0}; hit=['重索引', '执行', '领取治理票据']",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_I-R12_rag_rag_reindex.png,,2026-11-13T09:44:01.461327+00:00
+I-R13,RAG 语料治理,VERIFIED 双人复核与证据前置,检查校验决定表单说明与控件,页面明示 VERIFIED 须证据与双人复核、REVOKED 须原因；不代签、不绕过 SoD,"tail=全局语料
+本租户语料
+跨租户盘点
+租户
+平台全局语料不属于任何租户
+平台数据优先：首屏默认展示「平台全局语料」（只读）；要看某个租户的语料， 请切到「本租户语料」档并选择租户。
+平台全局语料：读写分开——读用登录态，写要治理票据
+这里看的是平台自己维护、全部租户共享的那批语料。登记、校验流转、重跑索引都会影响所有租户的检索结果，所以后端除「平台域身份」外还校验一张短时治理票据的档位；缺票是 403。
+领取治理票据
+作 废
+当前无票据：本档只读
+来源 ID
+读 取
+请填写来源 ID 并读取，或从 Dashboard / 来源列表进入
+© 2026 Agent Platform · 平台管理控制台",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_R13_rag_verify_sod.png,真实 VERIFIED 签署阻塞：需两个与登记人不同的真实主体及版权授权，见缺陷/阻塞清单,2026-11-13T09:44:04.426130+00:00
+I-M01,观测度量,指标时间窗口切换与「未采集」口径,切换 24h/7d/30d,三个窗口均可切换；未采集指标显示「未采集」而非 0,"switch=[('近 24 小时', True), ('近 7 天', True), ('近 30 天', True)]",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_M01_metrics_windows.png,,2026-11-13T09:44:24.100426+00:00
+I-M02,观测度量,效果数据录入必填校验,空表单点「提交录入」,traceId / tenantId 等必填校验拦截，不产生脏数据,"errors=['请填写 Trace ID', '请填写租户 ID', '请选择标注结论']; tail=UTPUT
+摘要（不得为原文）
+提交录入
+重 置
+四、用户反馈录入（L3 有噪信号）
+终端用户对某次会话的反馈。下游工具故障同样会导致差评，差评率上涨应触发抽样复核，而非直接判定 Agent 劣化。
+Trace ID
+租户 ID
+反馈类型
+THUMB_UP / THUMB_DOWN / RETRY / ABANDON
+提交录入
+重 置
+© 2026 Agent Platform · 平台管理控制台",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_M02_metric_entry_required.png,,2026-11-13T09:44:32.583262+00:00
+I-M03,观测度量,人工审查队列操作项,检查队列页控件并点「查询」,具备 查询/刷新/查看回放/认领/归因关闭/驳回 等操作,"controls={'btn': ['查 询', '刷 新', '查看回放', '认 领', '归因关闭', '驳 回', '查看回放', '认 领', '归因关闭', '驳 回'], 'inp': ['rc_select_1', '租户 ID（可选，精确匹配）'], 'rows': 2}",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_M03_review_queue_controls.png,,2026-11-13T09:44:34.384818+00:00
+I-M03b,观测度量,对话回放抽屉,点「查看回放」,抽屉展示对话回放（含 TOOL 段）或明确无数据,drawer=['对话回放 · 内容级复盘\n关 闭\n平台审查视图\n此视图含 TOOL 消息，仅平台授权账号可见；学生端回放会隐藏 TOOL。回放只呈现事实，不给出「回答是否正确」的判分。\nRun ID\t50747e18-b876-4fe3-a93a-932662f69113\nTrace ID\ttrace-p2-2026-11-08 20:38:03.380201+08\n终态\tSUCCEEDED\t耗时\t5.00 s\n开始\t2026-11-08T12:37:58.38,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_M03b_review_transcript.png,,2026-11-13T09:44:47.332037+00:00
+I-A01,AI 实验室,未选租户时发送按钮禁用（前置校验）,进入 AI 对话，不选择租户,RAG 端点强制 X-Tenant-Id，未选租户时发送禁用并提示原因,sendDisabled=True,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_A01_ai_chat_no_tenant.png,,2026-11-13T09:44:49.897416+00:00
+I-A02,最终回归/AI 实验室,AI 对话租户选择与发送门禁,选租户 → 观察发送按钮 → 输入问题 → 再观察,门禁为「已选租户 + 输入非空」双条件；仅选租户时仍应禁用,"selectClick=✓ Done; options=['IT 租户 B（t-b）', '某某教育科技（t-a）']; optionClick=✓ Done; disabledAfterSelect=True; disabledAfterType=False",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_A02_ai_chat_tenant_selected.png,【最终回归】原用例预期「选租户即解除发送门禁」不完整，属用例设计修正；双条件门禁本身正确,2026-11-13T09:45:02.394776+00:00
+I-A03,AI 实验室,语料问答真实发送与结果/错误分支,选租户 → 输入预设问题 → 发送,返回检索依据与摘录回答；若后端不可用，页面须明确错误分支而非静默空白,"net=[80120.7915] POST http://localhost:5180/api/v1/retrieval (Fetch); answer=True; error=True; tail=
+上册
+出版社
+人教版
+版次
+召回条数（1–50）
+你
+17:45:08
+一元二次方程判别式小于零是什么意思？
+AI 对话
+17:45:08
+接收中
+检索语料
+正在生成回答…
+0 / 500
+发送
+停止
+新会话
+共 2 条 · 会话仅存内存，不写入浏览器存储
+© 2026 Agent Platform · 平台管理控制台
+b0b5eed0-1111-4222-8333-444455556666
+2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2
+IT 租户 B（t-b）
+某某教育科技（t-a）",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_A03_ai_chat_send.png,,2026-11-13T09:45:12.673861+00:00
+I-A04,最终回归/AI 实验室,新会话清空状态,空会话下检查「新会话」可用性；完整清空需先产生真实对话,空会话时按钮禁用（边界正确）；「有会话→清空」需真实模型调用，本轮不擅自发起,newSessionButton={'disabled': True},阻塞,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_A04_ai_chat_new_session.png,【最终回归】关联 BLK-02：发起真实 Run 会触发模型调用与成本/脏数据，需变更窗口与执行票证；边界态已验证（按钮禁用）,2026-11-13T09:45:19.890134+00:00
+I-A05,AI 实验室,样例回放明确标注非真实输出,检查 Agent 编排对话默认档,样例回放页显著标注「非真实模型输出」，不把脚本轨迹冒充真实执行,sampleMarker=True,通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_A05_agent_chat_sample.png,,2026-11-13T09:45:21.913848+00:00
+I-A06,AI 实验室,编排对话样例回放执行,默认样例档点「发送」,SSE 状态机逐阶段呈现（路由/RAG/Skill/Tool/回答）或明确能力未接入,"stages=['路由', 'RAG', 'Skill', 'Tool', '回答', '能力未接入', '回传']; tail=G topK
+thinking 开
+thinking 关
+开启后接收推理草稿；组件时间线始终可见
+还没有提问。选好数据来源后，从下面的示例问题开始。
+一元二次方程判别式小于零是什么意思？
+二次函数的顶点式怎么推导？
+勾股定理适用于哪些三角形？
+0 / 1000
+发送
+停止
+新会话
+共 0 条 · 会话仅存内存 · 样例回放（非真实输出）
+组件状态图例：
+执行中
+成功
+组件失败（Agent 可降级继续）
+提示（如 RAG 零命中）
+单个 Tool/Skill 失败不等于整轮失败；只有 error 帧或传输失败才是整轮 failed。
+© 2026 Agent Platform · 平台管理控制台",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_A06_agent_chat_replay.png,,2026-11-13T09:45:30.969034+00:00
+I-A07,AI 实验室,Agent 效果测试表单与发起门禁,检查 Agent 效果测试页控件,具备租户/Agent/用例选择与发起按钮；缺前置条件时按钮禁用并说明,"controls={'btn': ['发起执行'], 'inp': ['rc_select_3', 'rc_select_4', 'rc_select_5', '用例输入（会被内容合规与 Prompt 防护校验：长度 / 深度 / 元素数都有上界）', '', '留空=不限'], 'rows': 0}",通过,否,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_A07_agent_lab_form.png,真实执行需扮演 ACTIVE 租户成员的 60s 票证，本轮不代签，见阻塞清单,2026-11-13T09:45:34.705179+00:00
+I-P-superadmin,最终回归/角色与权限,PLATFORM_SUPER_ADMIN 导航显隐与审计深链守卫,sessionStorage.clear() → 用 plat-superadmin 登录 → 检查菜单 → 深链 /audit 与 /users,角色声明为 [PLATFORM_SUPER_ADMIN]；审计菜单可见=True；非审计角色 /audit 深链 403,"{""user"": ""plat-superadmin"", ""role"": ""PLATFORM_SUPER_ADMIN"", ""loginUrl"": ""/admin/tenants"", ""rolesClaim"": [""PLATFORM_SUPER_ADMIN""], ""auditMenuNode"": true, ""leafMenuCount"": 4, ""auditDeepLink403"": false, ""usersNewButtonVisible"": true}",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_P_superadmin_role_nav.png,【最终回归】,2026-11-13T09:45:49.301857+00:00
+I-P-lifecycle,最终回归/角色与权限,TENANT_LIFECYCLE_ADMIN 导航显隐与审计深链守卫,sessionStorage.clear() → 用 plat-lifecycle 登录 → 检查菜单 → 深链 /audit 与 /users,角色声明为 [TENANT_LIFECYCLE_ADMIN]；审计菜单可见=False；非审计角色 /audit 深链 403,"{""user"": ""plat-lifecycle"", ""role"": ""TENANT_LIFECYCLE_ADMIN"", ""loginUrl"": ""/admin/tenants"", ""rolesClaim"": [""TENANT_LIFECYCLE_ADMIN""], ""auditMenuNode"": false, ""leafMenuCount"": 3, ""auditDeepLink403"": true, ""usersNewButtonVisible"": true}",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_P_lifecycle_role_nav.png,【最终回归】,2026-11-13T09:46:03.525806+00:00
+I-P-resource,最终回归/角色与权限,PLATFORM_RESOURCE_ADMIN 导航显隐与审计深链守卫,sessionStorage.clear() → 用 plat-resource 登录 → 检查菜单 → 深链 /audit 与 /users,角色声明为 [PLATFORM_RESOURCE_ADMIN]；审计菜单可见=False；非审计角色 /audit 深链 403,"{""user"": ""plat-resource"", ""role"": ""PLATFORM_RESOURCE_ADMIN"", ""loginUrl"": ""/admin/tenants"", ""rolesClaim"": [""PLATFORM_RESOURCE_ADMIN""], ""auditMenuNode"": false, ""leafMenuCount"": 3, ""auditDeepLink403"": true, ""usersNewButtonVisible"": true}",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_P_resource_role_nav.png,【最终回归】,2026-11-13T09:46:16.868170+00:00
+I-P-security,最终回归/角色与权限,PLATFORM_SECURITY_ADMIN 导航显隐与审计深链守卫,sessionStorage.clear() → 用 plat-security 登录 → 检查菜单 → 深链 /audit 与 /users,角色声明为 [PLATFORM_SECURITY_ADMIN]；审计菜单可见=False；非审计角色 /audit 深链 403,"{""user"": ""plat-security"", ""role"": ""PLATFORM_SECURITY_ADMIN"", ""loginUrl"": ""/admin/tenants"", ""rolesClaim"": [""PLATFORM_SECURITY_ADMIN""], ""auditMenuNode"": false, ""leafMenuCount"": 3, ""auditDeepLink403"": true, ""usersNewButtonVisible"": true}",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_P_security_role_nav.png,【最终回归】,2026-11-13T09:46:30.083120+00:00
+I-P-auditor,最终回归/角色与权限,PLATFORM_AUDITOR 导航显隐与审计深链守卫,sessionStorage.clear() → 用 plat-auditor 登录 → 检查菜单 → 深链 /audit 与 /users,角色声明为 [PLATFORM_AUDITOR]；审计菜单可见=True；非审计角色 /audit 深链 403,"{""user"": ""plat-auditor"", ""role"": ""PLATFORM_AUDITOR"", ""loginUrl"": ""/admin/tenants"", ""rolesClaim"": [""PLATFORM_AUDITOR""], ""auditMenuNode"": true, ""leafMenuCount"": 4, ""auditDeepLink403"": false, ""usersNewButtonVisible"": true}",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_P_auditor_role_nav.png,【最终回归】,2026-11-13T09:46:43.899583+00:00
+I-P-support,最终回归/角色与权限,PLATFORM_SUPPORT 导航显隐与审计深链守卫,sessionStorage.clear() → 用 plat-support 登录 → 检查菜单 → 深链 /audit 与 /users,角色声明为 [PLATFORM_SUPPORT]；审计菜单可见=False；非审计角色 /audit 深链 403,"{""user"": ""plat-support"", ""role"": ""PLATFORM_SUPPORT"", ""loginUrl"": ""/admin/tenants"", ""rolesClaim"": [""PLATFORM_SUPPORT""], ""auditMenuNode"": false, ""leafMenuCount"": 3, ""auditDeepLink403"": true, ""usersNewButtonVisible"": true}",通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_P_support_role_nav.png,【最终回归】,2026-11-13T09:46:57.821452+00:00
+I-H01,最终回归/历史缺陷,RAG 摄取任务平台档不再 500（D-01）,打开 /rag/jobs 并观察网络,无 5xx 请求、无页面级 JS 错误,net=No requests captured; serverErrors=[]; console=✗,通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_F_I-H01_hist_regression.png,,2026-11-13T10:19:43.625279+00:00
+I-H02,最终回归/历史缺陷,知识点别名下拉加载不再 500（D-02）,打开 /rag/kp-alias 并观察网络,无 5xx 请求、无页面级 JS 错误,net=No requests captured; serverErrors=[]; console=✗,通过,是,✓ Screenshot saved to /Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E端到端测试_2026-11-13/screenshots/I_F_I-H02_hist_regression.png,,2026-11-13T10:19:45.955001+00:00
+FIX-01,DEF-01/会话,伪造令牌会话 → 401 清会话并跳登录,写入伪造 accessToken 的 sessionStorage → 打开 /tenants,后端 401 UNAUTHENTICATED，前端清会话并跳 /admin/login,"url=http://localhost:5180/admin/login?reason=expired&next=%2Ftenants; session=None; net=[62893.818] GET http://localhost:5180/api/platform/v1/tenants?limit=100 (Fetch) 401
+[62893.819] GET http://localhost:5180/api/platform/v1/tenants?limit=100 (Fetch) 401",通过,是（修复后回归）,logs/regression_after_fix.jsonl,,2026-11-13T11:20:17.218476+00:00
+FIX-02,DEF-01/HTTP,浏览器同源无令牌 GET /auth/me → 401,登录后在页面内用同步 XHR 不带令牌请求 /api/platform/v1/auth/me,"401 {""code"":""UNAUTHENTICATED"",""message"":""未认证""}（修复前为 500 INTERNAL_ERROR）","{'status': 401, 'body': '{""code"":""UNAUTHENTICATED"",""message"":""未认证""}'}",通过,是（修复后回归）,http/api_probe_after_fix.jsonl（A05/A06）,,2026-11-13T11:20:21.417393+00:00
+FIX-03,DEF-04/favicon,图标为内联 data URI，网络无 favicon 404,清空网络日志 → 打开 /tenants → 检查 link[rel=icon] 与网络请求,"href 以 data:image/svg+xml;base64, 开头；无 /favicon.ico 请求、无 404","icon=data:image/svg+xml;base64,PHN2ZyB4bWxucz; net=No requests captured",通过,是（修复后回归）,screenshots/FIX_favicon.png,,2026-11-13T11:20:27.503728+00:00
+FIX-04,DEF-03/审计页,一次加载只发出 1 条 audit-events 查询,清空网络日志 → 打开 /audit（dev StrictMode 下 effect 会跑两次）,GET /api/platform/v1/audit-events 恰好 1 条（修复前 2 条）,count=1; net=[62893.1499] GET http://localhost:5180/api/platform/v1/audit-events?from=2026-11-12T11%3A20%3A28.128Z&limit=200 (Fetch) 200,通过,是（修复后回归）,screenshots/FIX_audit_single_get.png,,2026-11-13T11:20:30.288463+00:00
+FIX-05-superadmin,DEF-02/06/角色与权限,plat-superadmin 审计门禁与用户页写按钮,sessionStorage.clear() → 干净登录 → 审计菜单/深链 /audit → /users 按钮盘点,roles=[PLATFORM_SUPER_ADMIN]；审计菜单=True；/audit 403=False；新建用户按钮=True,roles=['PLATFORM_SUPER_ADMIN']; node=True; 403=False; newBtn=True; leaf=4,通过,是（修复后回归）,evidence/role_matrix_after_fix.json,,2026-11-13T11:20:38.238141+00:00
+FIX-05-lifecycle,DEF-02/06/角色与权限,plat-lifecycle 审计门禁与用户页写按钮,sessionStorage.clear() → 干净登录 → 审计菜单/深链 /audit → /users 按钮盘点,roles=[TENANT_LIFECYCLE_ADMIN]；审计菜单=False；/audit 403=True；新建用户按钮=False,roles=['TENANT_LIFECYCLE_ADMIN']; node=False; 403=True; newBtn=False; leaf=3,通过,是（修复后回归）,evidence/role_matrix_after_fix.json,,2026-11-13T11:20:46.184859+00:00
+FIX-05-resource,DEF-02/06/角色与权限,plat-resource 审计门禁与用户页写按钮,sessionStorage.clear() → 干净登录 → 审计菜单/深链 /audit → /users 按钮盘点,roles=[PLATFORM_RESOURCE_ADMIN]；审计菜单=False；/audit 403=True；新建用户按钮=False,roles=['PLATFORM_RESOURCE_ADMIN']; node=False; 403=True; newBtn=False; leaf=3,通过,是（修复后回归）,evidence/role_matrix_after_fix.json,,2026-11-13T11:20:54.085145+00:00
+FIX-05-security,DEF-02/06/角色与权限,plat-security 审计门禁与用户页写按钮,sessionStorage.clear() → 干净登录 → 审计菜单/深链 /audit → /users 按钮盘点,roles=[PLATFORM_SECURITY_ADMIN]；审计菜单=True；/audit 403=False；新建用户按钮=False,roles=['PLATFORM_SECURITY_ADMIN']; node=True; 403=False; newBtn=False; leaf=4,通过,是（修复后回归）,evidence/role_matrix_after_fix.json,,2026-11-13T11:21:02.019635+00:00
+FIX-05-auditor,DEF-02/06/角色与权限,plat-auditor 审计门禁与用户页写按钮,sessionStorage.clear() → 干净登录 → 审计菜单/深链 /audit → /users 按钮盘点,roles=[PLATFORM_AUDITOR]；审计菜单=True；/audit 403=False；新建用户按钮=False,roles=['PLATFORM_AUDITOR']; node=True; 403=False; newBtn=False; leaf=4,通过,是（修复后回归）,evidence/role_matrix_after_fix.json,,2026-11-13T11:21:10.035847+00:00
+FIX-05-support,DEF-02/06/角色与权限,plat-support 审计门禁与用户页写按钮,sessionStorage.clear() → 干净登录 → 审计菜单/深链 /audit → /users 按钮盘点,roles=[PLATFORM_SUPPORT]；审计菜单=False；/audit 403=True；新建用户按钮=False,roles=['PLATFORM_SUPPORT']; node=False; 403=True; newBtn=False; leaf=3,通过,是（修复后回归）,evidence/role_matrix_after_fix.json,,2026-11-13T11:21:17.964543+00:00
+FIX-06,回归/租户列表,租户注册表渲染,超管登录 → 打开 /tenants,页面含「开通租户」且表格有行,"body=平台管理控制台
+平台治理
+租户管理
+平台用户
+角色权限矩阵
+平台审计
+能力目录
+RAG · 录入与校对
+RAG · 审核
+RAG · 规则配置
+RAG · 运维
+系统配置
+观测度量
+AI 实验室
+管理员
+平台管理控制台
+/
+平台治理
+/
+租户管理
+租户注册表
+按生命周期筛选
+开通租户
+Slug	名称	生命周期	套餐	策略版本	操作
+t-b	IT 租户 B	A",通过,是（修复后回归）,screenshots/FIX_tenants.png,,2026-11-13T11:21:23.675890+00:00
+FIX-07,回归/用户页,新建用户弹窗与空表单校验,点击「新建用户」→ 空表单点确定,弹窗打开；必填校验拦截、无 POST 写请求,"open=CLICKED; primary=CLICKED; modal=新建用户
+用户名
+4-20 位字母、数字或下划线，以字母开头
+初始密码
+显示名
+邮箱
+强制 MFA
+初始角色
+请选择角色（可选，留空则无角色）
+取 消
+确 定; errors=['请输入用户名', '请输入密码', '密码长度至少 10 位']; net=No requests captured",通过,是（修复后回归）,screenshots/FIX_new_user_validation.png,,2026-11-13T11:21:26.267580+00:00
+FIX-08,回归/会话,退出登录,真实点击页头头像下拉 → 退出登录,跳 /admin/login 且 sessionStorage 清空,url=http://localhost:5180/admin/login; session=None,通过,是（修复后回归）,screenshots/FIX_logout.png,,2026-11-13T11:21:30.066295+00:00
+FIX-09,回归/异常入口,404 兜底页,打开不存在的深链,404 页面且提供回租户注册表入口,"平台管理控制台
+平台治理
+租户管理
+平台用户
+角色权限矩阵
+平台审计
+能力目录
+RAG · 录入与校对
+RAG · 审核
+RAG · 规则配置
+RAG · 运维
+系统配置
+观测度量
+AI 实验室
+管理员
+平台管理控制台
+404
+这个地址没有对应的页面。可能是链接已过期，或地址输入有误。
+回租户注册表
+回登录页
+© 2026 Agent Platform · 平台管理控制台",通过,是（修复后回归）,screenshots/FIX_404.png,,2026-11-13T11:21:35.711835+00:00
+FIX-10,回归/API 矩阵,93 条 API/权限矩阵重跑：除 DEF-01 外零回归,经 5180 同源代理重跑完整 api_probe.py，逐 case 比对状态码,仅 A05/A06 由 500 变 401，其余 91 条完全一致,"total_before=93; total_after=93; diff={'A05 /auth/me 无令牌': (500, 401), 'A06 /auth/me 伪造令牌': (500, 401)}",通过,是（修复后回归）,http/api_probe_after_fix.jsonl,,2026-11-13T11:21:35.915864+00:00

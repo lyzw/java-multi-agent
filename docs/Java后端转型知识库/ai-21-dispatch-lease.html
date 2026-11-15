@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A21 · 消息投递、租约与恢复 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-21-dispatch-lease" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A21 · 消息投递、租约与恢复</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 二十一册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A21 · 消息投递、租约与恢复 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">Outbox 事务性投递与「谁驱动发布器」、SKIP LOCKED 领取、租约与 fencing 接管、五种执行结局到 MQ 处置的映射、背压、恢复扫描与 SSE 直连租约</p>
+  <div class="ph-meta"><span>覆盖：A21.1–A21.10</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a21">
+  <div class="breadcrumb"><b>AI 专题 · A21</b> / 消息投递、租约与恢复</div>
+  <h2><span class="num">A21.</span> 消息投递、租约与恢复：从「任务落库」到「谁在跑它」</h2>
+  <p><a href="04-runtime-flows.html#ch11">第 11 章</a> 讲了一次 Run 的<strong>完整生命周期</strong>（业务视角），<a href="ai-20-tool-gate.html">A20</a> 讲了工具执行的<strong>副作用安全</strong>。这一册讲中间的调度层：Run 建好之后，<strong>消息怎么可靠地发出去、任务怎么被某个 Worker 领走、Worker 挂了怎么办、跑完的结果怎么映射回 MQ 的 ack/nack</strong>。这一层全是传统后端熟悉的模式（Outbox、乐观锁、SKIP LOCKED、背压），但有四处 AI 特有的转折。</p>
+  <div class="callout c-info"><span class="ct">本册与第 11 章 / A20 的分工</span><p><a href="04-runtime-flows.html#ch11">第 11 章</a>：Run 从创建到终态的业务流程与一致性边界。<a href="ai-20-tool-gate.html">A20</a>：单个工具调用的八道闸门与副作用状态机。<strong>本册</strong>：调度基础设施——Outbox 中继、租约领取、fencing 接管、恢复扫描、背压。三者串起来是完整的「从请求到执行到记账」。</p></div>
+
+  <h3 id="a21-1">A21.1 Outbox 模式：为什么不能「建完 Run 直接发 MQ」</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">Outbox 的价值（OutboxRelay.java:33-40）</span><button>复制</button></div><pre><code>为何用轮询而非「创建 Run 后直接发 MQ」：
+  Outbox 模式的全部价值在于「Run 与消息在同一事务落库」。
+  改为直发即失去该保证（DB 提交失败但消息已发 → 幽灵任务）。
+
+代价：发布延迟 = 轮询间隔（本片默认 200ms）。
+  这是【有意的取舍】——用 ≤200ms 延迟换「不丢消息」，教育场景完全可接受。</code></pre></div>
+  <p>这个取舍值得完整理解，因为它决定了整个链路的时序特征：</p>
+  <table>
+    <thead><tr><th>方案</th><th>一致性</th><th>延迟</th><th>失效形态</th></tr></thead>
+    <tbody>
+      <tr><td>建完 Run 直接发 MQ</td><td><span class="tag t-gap">无保证</span></td><td>最低</td><td>DB 提交失败但消息已发 → <strong>幽灵任务</strong>（Worker 领不到对应 Run）；或消息发失败但 Run 已建 → 任务永不执行</td></tr>
+      <tr><td>Outbox（本项目）</td><td><span class="tag t-live">同事务原子</span></td><td>+ 一个轮询间隔（200ms）</td><td>消息延迟；极端的「发布成功但标记失败」→ 重复投递（由 A21.4 的「重复即丢弃」吸收）</td></tr>
+    </tbody>
+  </table>
+  <p>第二行的失效形态是关键：Outbox 把「不丢」保证做到了，代价转移到「可能重复」——而重复是<strong>可被幂等吸收的弱失败</strong>，丢消息是<strong>不可恢复的强失败</strong>。这就是 <code class="inline-code">RunDispatchConsumer</code> 注释里那句「Outbox 是 at-least-once，重复是<em>正常形态</em>而非异常」的由来。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-worker/.../dispatch/OutboxRelay.java:33-40</span>；<span class="mono">OutboxPublisher.java</span> / <span class="mono">TenantOutboxPublishers.java</span>；表 <code class="inline-code">outbox_event</code>。</div>
+
+  <h3 id="a21-2">A21.2 「逻辑写了但没有调用方」：一个比 bug 更难发现的失效</h3>
+  <p><code class="inline-code">OutboxRelay</code> 的类注释记录了一次典型事故，值得逐字读（:18-26）：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">零调用方事故（OutboxRelay.java:18-26）</span><button>复制</button></div><pre><code>⚠️ 本类解决的是「谁驱动 OutboxPublisher」——
+   在此之前 publishOnce() 逻辑完整、测试全绿，
+   却【没有任何调用方】：@RabbitListener 与定时任务均为零。
+
+   结果是 Run 创建后消息永远躺在 outbox_event 表里，
+   而系统表面完全正常（API 返回 201、无报错、无告警）。</code></pre></div>
+  <p>这是 <a href="ai-13-agent-memory.html#a13-10">A13.10</a>「三个类零生产实例化」的姊妹事故，也是 <a href="ai-06-incident-library.html">A6</a> 假绿家族里最隐蔽的一类：<strong>测试全绿是因为被测的是「逻辑正确性」，而缺失的是「接线」——两个完全不同的命题</strong>。</p>
+  <div class="callout c-violet"><span class="ct">这类失效的通用识别法</span><p>问三个问题：<strong>①</strong> 这个类的公开方法，谁调用？（grep 调用点，不是 grep 定义）<strong>②</strong> 如果是入口类，它被谁启动？（<code class="inline-code">@Scheduled</code> / <code class="inline-code">@RabbitListener</code> / <code class="inline-code">@Bean</code>）<strong>③</strong> 有没有一个测试断言「它被接上了」？三者缺一，就可能是一个静默死掉的组件。<code class="inline-code">OutboxRelay</code> 事后暴露了 <code class="inline-code">relayOnce()</code> / <code class="inline-code">start()</code> / <code class="inline-code">stop()</code> 三个可测接口，正是为了让「接没接上」能被断言。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">OutboxRelay.java:18-26</span>（事故记录）、<span class="mono">:50-75</span>（可测性设计注释）。</div>
+
+  <h3 id="a21-3">A21.3 多租户发布与背压：隔离的反面是「一坏全坏」</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">两处扩展（OutboxRelay.java:28-32）</span><button>复制</button></div><pre><code>多租户（L-4）：一轮内依次驱动【每个租户各自的发布器】
+  ⚠️ 单个租户发布失败【不得】影响其他租户——
+     否则一个租户的数据问题会让所有租户停摆（隔离的反面）。
+
+背压（L-6）：每轮先问 BackpressureController，
+  队列达高水位即【整轮跳过】并按倍数拉长间隔。</code></pre></div>
+  <p>「单租户失败不得影响其他租户」在多租户系统里是一条常被违反的纪律——最典型的违反方式是「一轮用同一个事务/同一个 foreach 且异常不捕获」，于是第 3 个租户抛异常，第 4..N 个租户这一轮全部不发布。正确写法就是逐个 try-catch，与 <a href="ai-18-vector-ops.html#a18-5">A18.5</a> 索引构建 Worker 的「单租户失败不能终止整个调度」是同一条纪律。</p>
+  <p>背压的设计有两个细节：<strong>①</strong> 达高水位是<strong>整轮跳过</strong>而非「跳过一部分」——部分发布会让「哪些租户这轮发了」变得不可预测，排查困难；<strong>②</strong> 按倍数拉长间隔，而不是固定重试，避免在下游拥塞时继续加压。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">OutboxRelay.java:28-32, 76-110</span>；<span class="mono">platform/agent-application/.../backpressure/BackpressureController.java</span> / <span class="mono">config/BackpressurePolicy.java</span>。</div>
+
+  <h3 id="a21-4">A21.4 「重复消息必须丢弃而非重试」：at-least-once 的正确消费姿势</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">消费纪律（RunDispatchConsumer.java:22-28, 70-80）</span><button>复制</button></div><pre><code>⚠️ 核心：重复消息【必须丢弃而非重试】（P2-D02 §4.1）。
+   Outbox 是 at-least-once，重复是正常形态而非异常。
+   领取失败说明已被他人领走，
+   重试会让消息在多个 Worker 间来回打转。
+
+只负责把消息变成一次租约领取，执行逻辑在别处。
+刻意不在此写业务逻辑 —— 消费路径越短，
+「消息到了却没做事」这类静默卡死越不容易发生。</code></pre></div>
+  <p>「领取失败即丢弃」这个反直觉的选择，前提是<strong>「领取失败」的原因只有一种：已被别人领走</strong>。如果这个前提不成立（比如领取因数据库故障失败），丢弃就会丢任务。所以这里隐含一个设计约束：<strong>领取失败必须是可归因的单义失败</strong>，否则不能丢弃。代码里 <code class="inline-code">claimTask</code> 返回 <code class="inline-code">null</code> 的语义被明确定义为「已被他人领取（重复投递）或不存在」，并注明「调用方不应重试」。</p>
+  <p>第二个设计点是「消费路径越短越好」——消费者只做「消息 → 租约领取 → 交给执行器」三件事，执行逻辑抽成 <code class="inline-code">RunExecutor</code> 接口。这样「消息到了却没做事」这类问题只会出现在很短的代码里，排查面积小。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-worker/.../dispatch/RunDispatchConsumer.java:1-90</span>；<span class="mono">RunClaimPort.claimTask</span> 的返回 null 语义（<code class="inline-code">RunClaimPort.java:70-85</code>）。</div>
+
+  <h3 id="a21-5">A21.5 SKIP LOCKED 领取：多 Worker 不争抢的正确写法</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">领取契约（RunClaimPort.java:50-62）</span><button>复制</button></div><pre><code>领取一批待执行任务并建立租约。
+实现【必须】使用 SELECT ... FOR UPDATE SKIP LOCKED，
+否则多个 Worker 会争抢同一行
+（高并发下退化为串行，且可能重复领取）。</code></pre></div>
+  <p>这条在 <a href="03-java-skill-transfer.html#ch10-3">§10.3</a> 被列为 Sev-0 级坑（「FORCE RLS 下的领取查询范式」）。SKIP LOCKED 的关键作用不是「避免锁等待」而是<strong>「让并发 Worker 各自拿到不同的行」</strong>——没有它，所有 Worker 会排队等同一行的锁，然后依次发现自己「不需要这行」，吞吐退化为串行。</p>
+  <p>还有一层 RLS 的叠加：<code class="inline-code">FORCE ROW LEVEL SECURITY</code> 下的领取查询必须<strong>先绑定租户上下文</strong>，否则策略让它看到 0 行，症状是「Worker 空转但无任何错误」（<a href="ai-18-vector-ops.html#a18-5">A18.5</a> 第 ③ 条纪律的同款）。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">RunClaimPort.java:50-62</span>；<span class="mono">JdbcRunClaimRepository.java</span>；<a href="03-java-skill-transfer.html#ch10-3">§10.3</a>。</div>
+
+  <h3 id="a21-6">A21.6 租约与接管：30 秒的默认值意味着什么</h3>
+  <p><code class="inline-code">DEFAULT_LEASE = 30 秒</code>。这个数字与两处配合：<strong>恢复扫描器每 30 秒扫一次</strong>，<strong>租约超时的 RUNNING 可被接管</strong>。含义是：一个 Worker 崩溃后，<strong>最长约 60 秒</strong>（一个租约周期 + 一个扫描周期）它的任务才会被别人接手。</p>
+  <table>
+    <thead><tr><th>参数</th><th>值</th><th>影响</th></tr></thead>
+    <tbody>
+      <tr><td>租约时长</td><td>30s</td><td>太短 → 正常长任务被误判为失联而重复执行；太长 → 崩溃后恢复慢</td></tr>
+      <tr><td>恢复扫描间隔</td><td>30s</td><td>决定接管延迟的上界（近似）</td></tr>
+      <tr><td>结果</td><td>崩溃恢复 ≈ 30–60s</td><td>教育场景可接受；若做实时性强的场景需要调小并配合租约续期</td></tr>
+    </tbody>
+  </table>
+  <p>这里有个必须理解的张力：<strong>租约时长必须大于「单次处理的最长正常耗时」，否则会把慢任务误判为失联</strong>。这正是 <a href="ai-15-streaming-sse.html#a15-4">A15.4</a> 里 SSE 直连链路要用独立 <code class="inline-code">lease_owner</code> 的原因——见 A21.8。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">RunClaimPort.java:33</span>（<code class="inline-code">DEFAULT_LEASE = Duration.ofSeconds(30)</code>）、<span class="mono">platform/platform-bootstrap/.../worker/RunRecoverySweeper.java</span>。</div>
+
+  <h3 id="a21-7">A21.7 五种执行结局 → MQ 处置：一张映射表决定「重投还是不重投」</h3>
+  <p><code class="inline-code">RunDispatchConsumer.Outcome</code> 把执行结局分成五种，每种对应一个明确的 MQ 动作。这张表是本册最实用的一张：</p>
+  <table>
+    <thead><tr><th>Outcome</th><th>含义</th><th>MQ 处置</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">SUCCEEDED</td><td>正常完成</td><td>ack</td><td>—</td></tr>
+      <tr><td class="mono">FAILED</td><td>可归因失败（已终结）</td><td>ack（不重投）</td><td>重投无意义，Run 已是终态</td></tr>
+      <tr><td class="mono">CANCELLED</td><td>用户取消</td><td>ack</td><td>取消是正常业务结局</td></tr>
+      <tr><td class="mono">RETRYABLE_FAILURE</td><td>可重试失败（如 DB 瞬时不可用）</td><td><strong>nack 重投</strong></td><td>唯一应该重投的类别</td></tr>
+      <tr><td class="mono">UNKNOWN</td><td>结果未知</td><td><strong>ack 丢弃，绝不重投</strong></td><td>注释原话：重投 = 重复副作用 = <strong>Sev-0</strong></td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger"><span class="ct">第五行是整个调度层最重要的判断</span><p>「结果未知」时不重投，与 <a href="ai-20-tool-gate.html#a20-5">A20.5</a> 的 <code class="inline-code">ToolOperationState.UNKNOWN</code> 是同一条原则的两个层次：工具层说「UNKNOWN 不能重试，只能对账」，调度层说「UNKNOWN 的消息不能重投」。<strong>因为重投会让整个 Run 重跑，而重跑会再次执行那些副作用</strong>——即使工具层有幂等保护，也对账链更长了。这里的处置是 ack 丢弃，把「这个 Run 到底做到哪」交给账本与对账，而不是交给消息重投。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">RunDispatchConsumer.java:70-85</span>（Outcome 枚举与逐项注释）。</div>
+
+  <h3 id="a21-8">A21.8 SSE 直连租约：一个必须存在的「例外所有者」</h3>
+  <p>请求级 SSE 链路不经过 MQ / Worker，但如果它也占用普通租约，就会和恢复扫描器冲突。解法是一个专用常量：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">SSE 直连的所有者标记（RunClaimPort.java:35-48）</span><button>复制</button></div><pre><code>SSE_DIRECT_LEASE_OWNER = "agent-chat-sse"
+
+为什么必须有它：
+  RunRecoverySweeper 每 30s 调 claimTasks，而后者会接管「租约已过期的 RUNNING」。
+  只靠「不写 Outbox」挡不住这条 DB 轮询路径 ——
+  一次长 SSE 请求中途租约过期，Run 就会被 Worker 领走重跑。
+
+  故请求级 Run 固定用本所有者标记，
+  claimTasks 在候选集里【显式排除】它
+  （lease_owner IS DISTINCT FROM ...），
+  让「无 Outbox」与「不可被领取」成为【两条独立防线】。
+
+⚠️ 本常量是跨模块契约：审计写入方与领取方都引用它，
+   守卫测试用字面量反查，防止两边各写一份漂移。</code></pre></div>
+  <p>三个可迁移的设计思想：<strong>①</strong> 当一条链路「不该被常规恢复机制接管」时，用<strong>显式标记 + 候选集排除</strong>，而不是靠「它不会超时」的侥幸；<strong>②</strong> 单一防线不够——「不写 Outbox」和「不可被领取」是两条独立防线，任一失效另一条仍在；<strong>③</strong> 跨模块共享的字符串常量要有<strong>守卫测试用字面量反查</strong>，否则两边各写一份、某天悄悄漂移。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">RunClaimPort.java:35-48</span>（常量与注释）；<span class="mono">RunRecoverySweeper.java</span>；守卫测试见 <span class="mono">RunRecoverySweeperTest</span>。</div>
+
+  <h3 id="a21-9">A21.9 停机与资源关闭：为什么「停机窗口内的 DB 异常」要降级</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">停机标志的两个用途（OutboxRelay.java:60-75）</span><button>复制</button></div><pre><code>stopped      用于「停机后不再领取新任务」的语义判断
+shuttingDown 用于「把停机窗口内的 DB 异常降级为 DEBUG」
+
+为什么需要 shuttingDown：
+  否则 DataSource 关闭导致的 HikariDataSource has been closed
+  会被误判成一次真实的发布失败，污染告警。
+
+STOP_TIMEOUT_MS = 30_000  避免无限阻塞上下文关闭</code></pre></div>
+  <p>这是运维质量的细节：<strong>停机过程中必然出现一批「预期内的异常」，如果不区分，它们会污染告警、训练运维忽略告警</strong>（告警疲劳是真实的安全风险）。两个标志分工明确——一个是语义，一个是日志级别，混用一个会导致「停机后仍领取任务」或「真实失败被降级」。</p>
+  <p><code class="inline-code">STOP_TIMEOUT_MS = 30s</code> 上限则防止「优雅停机」变成「关不掉」——后者在容器编排下会导致强杀并中断正在执行的任务。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">OutboxRelay.java:60-80</span>。</div>
+
+  <h3 id="a21-10">A21.10 未落地与证据边界</h3>
+  <table>
+    <thead><tr><th style="width:30%">项</th><th style="width:16%">状态</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>RabbitMQ 通道的 CI 覆盖</td><td><span class="tag t-gap">未覆盖</span></td><td>CI 注释明示：消息通道默认走 database（PG 队列），<strong>broker 端到端（E-1/E-2/E-3）不在 CI 覆盖范围内</strong>，需另加 rabbitmq service</td></tr>
+      <tr><td>租约续期（长任务）</td><td><span class="tag t-unknown">未确认</span></td><td>30s 租约对长任务是否续期、续期机制在哪，未逐条核验；若无续期，长任务会被恢复扫描器误判失联（SSE 链路的 <code class="inline-code">lease_owner</code> 排除 <em>不</em> 解决 MQ 链路的长任务）</td></tr>
+      <tr><td>恢复扫描的判据完整度</td><td><span class="tag t-unknown">未确认</span></td><td>除「租约过期」外是否还有其他接管判据（如心跳、进度停滞），未逐行核验</td></tr>
+      <tr><td>背压阈值与拉长倍率</td><td><span class="tag t-plan">配置化</span></td><td>高水位阈值与间隔倍率由 <code class="inline-code">BackpressurePolicy</code> 配置，生产取值需按实际队列容量标定</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-ai"><span class="ct">迁移提示：调度层的四条通用原则</span><p><strong>① 事务与消息不可分家</strong>——要么 Outbox，要么接受「可能丢」；<strong>②「重复」要设计成可吸收的弱失败</strong>，别把 at-least-once 当成 bug 去修；<strong>③ 结果未知时不要重投</strong>，把不确定性留给账本与对账，而不是让消息反复重跑；<strong>④ 每加一条「不该被常规机制处理」的链路，就给它一个显式标记</strong>，而不是依赖它「碰巧不会出问题」。这四条与 AI 无关，但 AI 系统把它们从「最佳实践」变成了「不做就出事」。</p></div>
+  <div class="evidence"><b>证据源：</b><span class="mono">platform/agent-worker/.../dispatch/{OutboxRelay,OutboxPublisher,TenantOutboxPublishers,RunDispatchConsumer}.java</span>、<span class="mono">platform/agent-ports/.../persistence/{RunClaimPort,OutboxMessage}.java</span>、<span class="mono">platform/agent-persistence/.../JdbcRunClaimRepository.java</span>、<span class="mono">platform/platform-bootstrap/.../worker/RunRecoverySweeper.java</span>、<span class="mono">platform/agent-application/.../backpressure/BackpressureController.java</span> / <span class="mono">config/BackpressurePolicy.java</span>、<span class="mono">.github/workflows/ci.yml:16-18</span>（RabbitMQ 不在 CI 覆盖）。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-20-tool-gate.html"><span class="pn-label">← 上一册</span><span class="pn-title">A20 · 工具调用闸门与副作用安全</span></a>
+  <a class="pn-right" href="index.html"><span class="pn-label">下一册 →</span><span class="pn-title">总入口 · 学习路径</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.6</strong> · 多文件版 · 生成于 2026-11-13（v2.6 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

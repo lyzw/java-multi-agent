@@ -1269,6 +1269,18 @@ main a.mono {
   align-items: center;
 }
 
+/* 顶层错误边界的整页兜底容器（shared/AppErrorBoundary.tsx）。
+   ⚠️ 用 `min-height` 占满视口并把兜底卡片垂直居中，
+   避免致命错误时只剩一缕小字贴在页面顶部。 */
+.fatal-error {
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--s-6) var(--s-4);
+  box-sizing: border-box;
+}
+
 /* 行内编辑面板：左侧细线标示「这一行正在被编辑」，
    ⛔ 不用底色块，避免与禁用态混淆。 */
 .editor-panel {

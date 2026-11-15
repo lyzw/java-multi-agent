@@ -1,0 +1,19 @@
+{
+  "java:S2699": "Tests should include assertions",
+  "java:S4502": "CSRF protections should not be disabled",
+  "java:S5833": "AssertJ methods setting the assertion context should come before an assertion",
+  "java:S5866": "Case insensitive Unicode regular expressions should enable the \"UNICODE_CASE\" flag",
+  "java:S1872": "Classes should not be compared by name",
+  "java:S8786": "Regular expressions should not cause non-linear backtracking",
+  "java:S2201": "Return values from functions without side effects should not be ignored",
+  "java:S6829": "\"@Autowired\" or \"@Inject\" should be used when multiple constructors are provided",
+  "java:S2077": "SQL queries should not be dynamically formatted",
+  "java:S5998": "Regular expressions should not overflow the stack",
+  "java:S6218": "Equals method should be overridden in records containing array fields",
+  "java:S6813": "Field dependency injection should be avoided",
+  "java:S4973": "Strings and Boxed types should be compared using \"equals()\"",
+  "java:S3078": "\"volatile\" variables should not be used with compound operators",
+  "java:S2789": "\"null\" should not be used with \"Optional\"",
+  "java:S5855": "Regex alternatives should not be redundant",
+  "java:S1313": "IP addresses should not be hardcoded"
+}

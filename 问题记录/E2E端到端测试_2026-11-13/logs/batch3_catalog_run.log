@@ -1,0 +1,47 @@
+[  通过] I-C01  生命周期 4 个 Tab 状态切换                      -> switch=[('全部(7)', 7, 1), ('已发布(7)', 14, 1), ('草稿(0)', 14, 1), ('已停用(0)', 14, 1)]
+[  通过] I-C02  搜索无命中边界                                -> tail=「详情」）可只读查看全字段与关系——抽屉，不离开列表。
+申请队列
+登记 Tool
+Tool 总数
+7
+已发布
+7
+草稿 / 非终态
+0
+已停用
+0
+全部(0)
+已发布(0)
+草稿(0)
+已停用(0)
+ID	名称	类型	风险等级	版本	状态	发布时间	配置指纹	操作
+
+ID
+	
+名称
+	
+类
+[  通过] I-C03  申请队列抽屉                                 -> drawer=['平台级变更申请队列\n申请号\t操作\t范围\t状态\t申请人\t审批人\t备注 / 失败原因\t提交时间\t决定时间\t执行时间\t操作\n\n申请号\n\t\n操作\n\t\n范围\n\t\n状态\n\t\n申请人\n\t\n审批人\n\t\n备注 / 失败原因\n\t\n提交
+[  失败] I-C04  登记 Tool 弹窗字段与必填校验                      -> fields=[]; errors=[]
+[  失败] I-C05  详情抽屉只读全字段                              -> drawer=[]; writeButtons=False
+[  失败] I-C06  停用申请弹窗与单向终态                            -> modal=[]
+[  通过] I-C07  登记 Skill 闭包声明字段                        -> modal=['登记 Skill（申请 → 审批 → 执行）\n申请 → 审批 → 执行（三步不可合并）\n申请 → 审批 → 执行（三步不可合并）\n提交只生成申请单，不写配置表；审批人不得等于申请人；执行才真正写入平台配置。平台级对象影响全平台，变更需 PLATFORM_ADMIN 身份。\nS
+[  通过] I-C08  凭据定位符不回显红线                             -> leak=False; tail=ofile.internal-studykid.cn/mcp	lookupProfile、lookupGuardian	已登记	READ	已发布	v1	2026-10-27 22:40:18
+	2d7008948ae245ffbf55…
+	
+详 情
+停 用
+© 20
+[  通过] I-C08b MCP 详情抽屉凭据不回显                          -> leak=False
+[  通过] I-C09  跨租户只读注册表                               -> switch=[('全部租户(9)', 9), ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2(8)', 17), ('b0b5eed0-1111-4222-8333-444455556666(1)', 18)]; writeButtons=[]
+[  失败] I-C10  试跑的跨身份域失败提示                            -> net=No requests captured; hint=False; tail=中——缺它会被拦在审批之后
+试跑探针（probes · 只在本次 dry-run 存在，不进策略正文与指纹）
+每项 {label, input, modelCandidate?, ctx?}；ctx 可覆盖 cha
+[  失败] I-C11  提交登记申请的前置校验                            -> tail=probes · 只在本次 dry-run 存在，不进策略正文与指纹）
+每项 {label, input, modelCandidate?, ctx?}；ctx 可覆盖 channel / locale / run.attempt / run.depth，不得写 tenantId
+试跑（不
+[  通过] I-C12  内置字典禁止物理删除                             -> buttons=['刷 新', '新 建']; delete=[]
+[  通过] I-C12b 新建字典弹窗                                 -> modal=['新建字典\n字典编码\n创建后不可修改（前后端契约）\n字典名称\n说明\n排序\n新建的字典恒为「业务」类型\n内置字典由迁移脚本播种（与代码枚举强绑定），不接受应用层创建。\n创 建']
+[  通过] I-C13  模型定义 / 供应商密钥 Tab 切换                    -> switch=['模型定义', '供应商密钥']
+[  失败] I-C14  新建模型弹窗字段                               -> fields=[]
+BATCH3 DONE

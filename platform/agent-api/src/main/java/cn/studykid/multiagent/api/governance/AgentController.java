@@ -73,6 +73,22 @@ public class AgentController {
      * 列出本租户的 Agent（含最新版本摘要）。
      *
      * <p>游标分页：{@code cursor} 由服务端编码，前端原样回传。
+     *
+     * <p>⚠️ <b>两条放行路径，返回面不同</b>（F1 · E2E 2026-11-14）：
+     * <ul>
+     *   <li><b>治理面</b>（持 {@code AGENT_MANAGE}）：完整视图，含
+     *       {@code latestDefinition}（版本快照全文）与版本计数。</li>
+     *   <li><b>受众面</b>（仅持 {@code AGENT_LIST}，即学生/家长/老师）：
+     *       <b>裁剪视图</b>——只列**已发布**（{@code latestPublishedAt != null}）的 Agent，
+     *       且<b>不下发</b> {@code latestDefinition}（系统提示词全文）与版本计数。
+     *       「发起辅导」页的下拉框只需要 id / 名称 / 版本号 / 发布时间。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>为什么受众面要单独一条路径</b>：此前本端点只认 {@code AGENT_MANAGE}，
+     * 而受众角色按定义不持治理权限 → 接口 403 → 前端空列表 →
+     * 页面误报「没有可用的 Agent」。那是<b>能力与依赖不匹配</b>：
+     * 既然已允许其发起辅导，就必须让其看见「可发起什么」；
+     * 但治理元数据（提示词全文）不该随受众面外泄。
      */
     @GetMapping
     public ResponseEntity<GovernanceSupport.PageResponse<AgentItemResponse>> listAgents(
@@ -80,8 +96,17 @@ public class AgentController {
             @RequestParam(required = false) @Nullable String cursor) {
 
         TenantContext context = currentPrincipal.context();
-        authorization.requireAuthorized(context,
-                AuthorizationService.Actions.AGENT_MANAGE, null);
+        // ⚠️ 治理面与受众面**不共用一个动作**：受众面不得因持有 AGENT_LIST
+        //    而顺带拿到治理视图（提示词全文 / 未发布版本）。
+        boolean governance = authorization.isAuthorized(
+                context, AuthorizationService.Actions.AGENT_MANAGE, null);
+        boolean audience = !governance && authorization.isAuthorized(
+                context, AuthorizationService.Actions.AGENT_LIST, null);
+        if (!governance && !audience) {
+            // ⛔ fail-closed：两个动作都没有 → 403（与治理面同样的拒绝口径）
+            authorization.requireAuthorized(context,
+                    AuthorizationService.Actions.AGENT_MANAGE, null);
+        }
 
         if (GovernanceSupport.rateLimited(rateLimiter, context,
                 RateLimitPort.Buckets.GOVERNANCE_QUERY)) {
@@ -90,9 +115,17 @@ public class AgentController {
 
         int pageSize = GovernanceSupport.limit(limit);
         var page = agents.listAgents(context.tenantId(), cursor, pageSize);
+        // ⚠️ 受众面过滤未发布项：**未发布版本不是可发起对象**（前端亦按
+        //    latestPublishedAt 过滤，两处口径一致）。过滤后本页条数可能少于
+        //    pageSize —— 这是刻意的：受众只应看到可发起项，页大小不是契约。
+        List<AgentItemResponse> items = governance
+                ? page.items().stream().map(AgentItemResponse::of).toList()
+                : page.items().stream()
+                        .filter(item -> item.latestPublishedAt() != null)
+                        .map(AgentItemResponse::ofAudience)
+                        .toList();
         return ResponseEntity.ok(GovernanceSupport.PageResponse.of(
-                page.items().stream().map(AgentItemResponse::of).toList(),
-                page.nextCursor()));
+                items, page.nextCursor()));
     }
 
     /**
@@ -217,6 +250,25 @@ public class AgentController {
             return new AgentItemResponse(item.agentId(), item.name(), item.description(),
                     item.versionCount(), item.latestVersionNumber(),
                     item.latestDefinition(), item.latestPublishedAt());
+        }
+
+        /**
+         * 受众视图（只读 · 仅持 {@code AGENT_LIST} 的主体）。
+         *
+         * <p>⚠️ <b>裁掉的两项都不是「顺手带上」的</b>：
+         * <ul>
+         *   <li>{@code latestDefinition}：已发布版本的<b>定义快照全文</b>
+         *       （含系统提示词 inlineInstructions）——治理面才可见；</li>
+         *   <li>{@code versionCount}：治理面的版本存量信息，受众用不到。</li>
+         * </ul>
+         *
+         * <p>保留 {@code agentId / name / description / latestVersionNumber /
+         * latestPublishedAt}：这是「发起辅导」下拉框渲染与提交的最小必要集。
+         */
+        static AgentItemResponse ofAudience(AgentItem item) {
+            return new AgentItemResponse(item.agentId(), item.name(), item.description(),
+                    0, item.latestVersionNumber(),
+                    null, item.latestPublishedAt());
         }
     }
 

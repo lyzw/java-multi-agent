@@ -143,11 +143,32 @@ public interface AuthorizationService {
          */
         public static final String AGENT_DELEGATE = "agent:delegate";
 
+        /**
+         * 列举<b>可发起辅导</b>的已发布 Agent（受众只读 · F1 · E2E 2026-11-14）。
+         *
+         * <p>⚠️ <b>为什么必须与 {@link #AGENT_MANAGE} 分开</b>：
+         * 「发起辅导」页需要一个 Agent 下拉框，而该列表此前只能经
+         * {@code GET /api/agents} 取得——那是个<b>治理面</b>端点（要求 AGENT_MANAGE）。
+         * 于是受众角色即便已获准发起辅导（RUN_CREATE），页面仍拿不到列表：
+         * 接口 403 → 前端 catch → 空列表 → 页面渲染「没有可用的 Agent」。
+         * <b>能力与依赖不匹配</b>：给了「能发起」却没给「能看见可发起什么」。
+         *
+         * <p>⚠️ <b>本动作只覆盖「列举」这一个只读面</b>：
+         * <ul>
+         *   <li><b>不含</b> {@code latestDefinition}（系统提示词全文）等治理元数据
+         *       ——受众视图在控制器里裁剪，不下发提示词；</li>
+         *   <li><b>只含已发布</b>（{@code latestPublishedAt != null}）的 Agent
+         *       ——未发布版本不是可发起对象；</li>
+         *   <li><b>不含</b> 创建/版本历史/单 Agent 详情等治理写面与敏感读面。</li>
+         * </ul>
+         */
+        public static final String AGENT_LIST = "agent:list";
+
         private static final Set<String> ALL = Set.of(
                 RUN_CREATE, RUN_READ, RUN_CANCEL, EVENT_SUBSCRIBE, RESULT_READ,
                 TOOL_INVOKE, APPROVAL_CONSUME, UNKNOWN_DISPOSE, AUDIT_READ, AGENT_MANAGE,
                 PROFILE_READ, CONFIG_REQUEST, CONFIG_APPROVE, CONFIG_PUBLISH, CONFIG_ROLLBACK,
-                AGENT_DELEGATE);
+                AGENT_DELEGATE, AGENT_LIST);
 
         /** @return 全部受控动作，供启动期自检使用。 */
         public static @NonNull Set<String> all() {
@@ -188,5 +209,40 @@ public interface AuthorizationService {
 
         /** 超级管理员（平台级最高权限，当前预留）。 */
         public static final String SUPER_ADMIN = "SUPER_ADMIN";
+
+        /**
+         * 学生（受众角色，F1 · E2E 2026-11-14 正规实现）。
+         *
+         * <p>⚠️ <b>与 {@link #APPROVER} 的分工</b>：家长/教师的<b>治理审批</b>能力
+         * 仍走 {@link #APPROVER}（DEC-6）；STUDENT/PARENT/TEACHER 是<b>受众侧</b>角色——
+         * 面向「发起辅导 → 进度 → 结果」核心链路的自助能力，不携带任何治理动作。
+         *
+         * <p>⚠️ <b>数据隔离</b>：受众主体对 Run 的可见范围被收窄到
+         * 「本人创建的 Run」（{@code run.requester_id = principal_id}），
+         * 见 {@link #isAudienceOnly}。历史行与运维代操作（requester 为空）对其不可见。
+         */
+        public static final String STUDENT = "STUDENT";
+        /** 家长（受众角色）。读能力与 STUDENT 对齐 + 画像只读（见 {@code PROFILE_READ} 契约）。 */
+        public static final String PARENT = "PARENT";
+        /** 老师（受众角色）。读能力与 STUDENT 对齐 + 画像只读（见 {@code PROFILE_READ} 契约）。 */
+        public static final String TEACHER = "TEACHER";
+
+        /** 受众角色全集：登录可见、无治理权限、Run 可见范围收窄到本人创建。 */
+        public static final Set<String> AUDIENCE_ROLES =
+                Set.of(STUDENT, PARENT, TEACHER);
+
+        /**
+         * 判断主体是否<b>仅</b>持有受众角色（不含任何治理/管理角色）。
+         *
+         * <p>⚠️ <b>隔离语义</b>：返回 {@code true} 时，调用方必须把 Run 的读取范围
+         * 收窄到 {@code requester_id = principalId}（列表加过滤、单条加归属校验，
+         * 且「不归属」与「不存在」统一 404，不构成存在性探测通道）。
+         * 持有任何治理角色（管理员/作者/审批人/Worker 等）的主体不受此收窄。
+         *
+         * @param roles 主体的角色集合（须来自<b>已验签令牌</b>）
+         */
+        public static boolean isAudienceOnly(@NonNull Set<String> roles) {
+            return !roles.isEmpty() && AUDIENCE_ROLES.containsAll(roles);
+        }
     }
 }

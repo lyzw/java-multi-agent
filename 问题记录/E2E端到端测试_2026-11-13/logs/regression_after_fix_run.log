@@ -1,0 +1,67 @@
+[  通过] FIX-01 伪造令牌会话 → 401 清会话并跳登录                   -> url=http://localhost:5180/admin/login?reason=expired&next=%2Ftenants; session=None; net=[62893.818] GET http://localhost:5180/api/platform/v1/tenants?
+[  通过] FIX-02 浏览器同源无令牌 GET /auth/me → 401            -> {'status': 401, 'body': '{"code":"UNAUTHENTICATED","message":"未认证"}'}
+[  通过] FIX-03 图标为内联 data URI，网络无 favicon 404         -> icon=data:image/svg+xml;base64,PHN2ZyB4bWxucz; net=No requests captured
+[  通过] FIX-04 一次加载只发出 1 条 audit-events 查询            -> count=1; net=[62893.1499] GET http://localhost:5180/api/platform/v1/audit-events?from=2026-11-12T11%3A20%3A28.128Z&limit=200 (Fetch) 200
+[  通过] FIX-05-superadmin plat-superadmin 审计门禁与用户页写按钮            -> roles=['PLATFORM_SUPER_ADMIN']; node=True; 403=False; newBtn=True; leaf=4
+[  通过] FIX-05-lifecycle plat-lifecycle 审计门禁与用户页写按钮             -> roles=['TENANT_LIFECYCLE_ADMIN']; node=False; 403=True; newBtn=False; leaf=3
+[  通过] FIX-05-resource plat-resource 审计门禁与用户页写按钮              -> roles=['PLATFORM_RESOURCE_ADMIN']; node=False; 403=True; newBtn=False; leaf=3
+[  通过] FIX-05-security plat-security 审计门禁与用户页写按钮              -> roles=['PLATFORM_SECURITY_ADMIN']; node=True; 403=False; newBtn=False; leaf=4
+[  通过] FIX-05-auditor plat-auditor 审计门禁与用户页写按钮               -> roles=['PLATFORM_AUDITOR']; node=True; 403=False; newBtn=False; leaf=4
+[  通过] FIX-05-support plat-support 审计门禁与用户页写按钮               -> roles=['PLATFORM_SUPPORT']; node=False; 403=True; newBtn=False; leaf=3
+[  通过] FIX-06 租户注册表渲染                                -> body=平台管理控制台
+平台治理
+租户管理
+平台用户
+角色权限矩阵
+平台审计
+能力目录
+RAG · 录入与校对
+RAG · 审核
+RAG · 规则配置
+RAG · 运维
+系统配置
+观测度量
+AI 实验室
+管理员
+平台管理控制台
+/
+平台治理
+/
+租户管理
+租户注册表
+按生命周期筛选
+开通租户
+Sl
+[  通过] FIX-07 新建用户弹窗与空表单校验                           -> open=CLICKED; primary=CLICKED; modal=新建用户
+用户名
+4-20 位字母、数字或下划线，以字母开头
+初始密码
+显示名
+邮箱
+强制 MFA
+初始角色
+请选择角色（可选，留空则无角色）
+取 消
+确 定; errors=['请输入用户名', '请输入密码', '密码长度
+[  通过] FIX-08 退出登录                                   -> url=http://localhost:5180/admin/login; session=None
+[  通过] FIX-09 404 兜底页                                -> 平台管理控制台
+平台治理
+租户管理
+平台用户
+角色权限矩阵
+平台审计
+能力目录
+RAG · 录入与校对
+RAG · 审核
+RAG · 规则配置
+RAG · 运维
+系统配置
+观测度量
+AI 实验室
+管理员
+平台管理控制台
+404
+这个地址没有对应的页面。可能是链接已过期，或地址输入有误。
+回租户注册表
+[  通过] FIX-10 93 条 API/权限矩阵重跑：除 DEF-01 外零回归          -> total_before=93; total_after=93; diff={'A05 /auth/me 无令牌': (500, 401), 'A06 /auth/me 伪造令牌': (500, 401)}
+REGRESSION_TOTAL 15 {'通过': 15}

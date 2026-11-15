@@ -7,6 +7,8 @@
  *    本文件的终态判定与轮询终止条件**均不得遗漏**。
  */
 
+import { readableFailureReason } from '@/api/errorGuidance'
+
 /** 后端 RunState 的全部 6 个取值 */
 export const RUN_STATES = [
   'QUEUED',
@@ -85,12 +87,18 @@ export function stateTone(state: string): StateTone {
   }
 }
 
-/** 失败类终态的补充说明 */
-export function stateHint(state: string, errorCode?: string): string | null {
+/**
+ * 失败类终态的补充说明。
+ *
+ * ⛔ N3（E2E 二次评估）：**绝不把内部 errorCode 原样透出给受众**。
+ *    学生看到 `BUDGET_EXHAUSTED` / `CONFIG_UNAVAILABLE` 既读不懂，
+ *    又会误以为是「自己没钱了」或「网络坏了」。
+ *    统一由 `readableFailureReason` 换成可读原因，差异化 CTA 见
+ *    `runFailureGuidance`（进度页消费）。
+ */
+export function stateHint(state: string, errorCode?: string | null): string | null {
   if (state === 'FAILED') {
-    return errorCode !== undefined && errorCode.length > 0
-      ? `失败原因：${errorCode}`
-      : '本次执行未完成'
+    return readableFailureReason(errorCode) ?? '本次执行未完成'
   }
   if (state === 'TIMED_OUT') {
     return '执行超时未能完成'

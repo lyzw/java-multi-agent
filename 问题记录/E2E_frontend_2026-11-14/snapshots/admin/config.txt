@@ -1,0 +1,477 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：TENANT_ADMIN · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e12]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e13]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e14]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e15]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e16]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e17]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e18]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e19]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "知识库治理"
+    - paragraph
+      - StaticText "需内容审核 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "语料管理" [ref=e20]
+          - StaticText "语料管理"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e21]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e22]
+          - StaticText "未知操作处置"
+      - listitem [level=1]
+        - link "审计查询" [ref=e23]
+          - StaticText "审计查询"
+    - paragraph
+      - StaticText "平台配置与运维"
+    - paragraph
+      - StaticText "需租户管理员 / 运维"
+    - list
+      - listitem [level=1]
+        - link "配置总览" [ref=e24]
+          - StaticText "配置总览"
+      - listitem [level=1]
+        - link "运行与容量" [ref=e25]
+          - StaticText "运行与容量"
+      - listitem [level=1]
+        - link "工具与审批" [ref=e26]
+          - StaticText "工具与审批"
+      - listitem [level=1]
+        - link "合规与零保留" [ref=e27]
+          - StaticText "合规与零保留"
+      - listitem [level=1]
+        - link "Agent 配置" [ref=e28]
+          - StaticText "Agent 配置"
+      - listitem [level=1]
+        - link "系统健康" [ref=e29]
+          - StaticText "系统健康"
+  - main
+    - heading "配置总览" [level=1, ref=e6]
+    - paragraph
+      - StaticText "系统各项配置，以及它们是否真正接入了运行时。"
+    - paragraph
+      - StaticText "这里看到的是配置声明值"
+    - paragraph
+      - StaticText "标记为「仅声明未接入」的项，改了配置也不会改变系统行为—— 它们只是写在文件里的摆设，生产并无读取点。"
+    - generic
+      - heading "运行与容量" [level=2, ref=e7]
+      - table
+        - rowgroup
+          - row
+            - columnheader "配置键" [ref=e200]
+            - columnheader "声明值" [ref=e201]
+            - columnheader "是否接入运行时" [ref=e202]
+            - columnheader "来源" [ref=e203]
+            - columnheader "说明" [ref=e204]
+        - row
+          - cell "agent.backpressure.enabled" [ref=e30]
+            - code
+              - StaticText "agent.backpressure.enabled"
+          - cell "true" [ref=e31]
+          - cell "已接入" [ref=e32]
+          - cell "yml" [ref=e33]
+          - cell "P4-D05 已实现并接入运行时" [ref=e34]
+        - row
+          - cell "agent.backpressure.high-watermark" [ref=e35]
+            - code
+              - StaticText "agent.backpressure.high-watermark"
+          - cell "1000" [ref=e36]
+          - cell "已接入" [ref=e37]
+          - cell "yml" [ref=e38]
+          - cell "P4-D05 已实现" [ref=e39]
+        - row
+          - cell "agent.backpressure.low-watermark" [ref=e40]
+            - code
+              - StaticText "agent.backpressure.low-watermark"
+          - cell "200" [ref=e41]
+          - cell "已接入" [ref=e42]
+          - cell "yml" [ref=e43]
+          - cell "P4-D05 已实现" [ref=e44]
+        - row
+          - cell "agent.backpressure.cooldown-multiplier" [ref=e45]
+            - code
+              - StaticText "agent.backpressure.cooldown-multiplier"
+          - cell "4" [ref=e46]
+          - cell "已接入" [ref=e47]
+          - cell "yml" [ref=e48]
+          - cell "P4-D05 已实现" [ref=e49]
+        - row
+          - cell "agent.rate-limit.limit-per-window" [ref=e50]
+            - code
+              - StaticText "agent.rate-limit.limit-per-window"
+          - cell "30" [ref=e51]
+          - cell "已接入" [ref=e52]
+          - cell "yml" [ref=e53]
+          - cell "P3-D08 已实现" [ref=e54]
+        - row
+          - cell "agent.rate-limit.window-seconds" [ref=e55]
+            - code
+              - StaticText "agent.rate-limit.window-seconds"
+          - cell "60" [ref=e56]
+          - cell "已接入" [ref=e57]
+          - cell "yml" [ref=e58]
+          - cell "P3-D08 已实现" [ref=e59]
+        - row
+          - cell "agent.worker.enabled" [ref=e60]
+            - code
+              - StaticText "agent.worker.enabled"
+          - cell "true" [ref=e61]
+          - cell "已接入" [ref=e62]
+          - cell "yml" [ref=e63]
+          - cell "P4-D03 已实现" [ref=e64]
+        - row
+          - cell "agent.worker.relay-interval-ms" [ref=e65]
+            - code
+              - StaticText "agent.worker.relay-interval-ms"
+          - cell "200" [ref=e66]
+          - cell "已接入" [ref=e67]
+          - cell "yml" [ref=e68]
+          - cell "P4-D03 已实现" [ref=e69]
+        - row
+          - cell "agent.worker.concurrency" [ref=e70]
+            - code
+              - StaticText "agent.worker.concurrency"
+          - cell "4" [ref=e71]
+          - cell "已接入" [ref=e72]
+          - cell "yml" [ref=e73]
+          - cell "P4-D03 已实现" [ref=e74]
+        - row
+          - cell "agent.worker.prefetch" [ref=e75]
+            - code
+              - StaticText "agent.worker.prefetch"
+          - cell "10" [ref=e76]
+          - cell "已接入" [ref=e77]
+          - cell "yml" [ref=e78]
+          - cell "P4-D03 已实现" [ref=e79]
+        - row
+          - cell "agent.worker.outbox-batch" [ref=e80]
+            - code
+              - StaticText "agent.worker.outbox-batch"
+          - cell "50" [ref=e81]
+          - cell "已接入" [ref=e82]
+          - cell "yml" [ref=e83]
+          - cell "P4-D03 已实现" [ref=e84]
+        - row
+          - cell "agent.worker.max-publish-attempts" [ref=e85]
+            - code
+              - StaticText "agent.worker.max-publish-attempts"
+          - cell "5" [ref=e86]
+          - cell "已接入" [ref=e87]
+          - cell "yml" [ref=e88]
+          - cell "P4-D03 已实现" [ref=e89]
+        - row
+          - cell "agent.worker.context-token-budget" [ref=e90]
+            - code
+              - StaticText "agent.worker.context-token-budget"
+          - cell "16000" [ref=e91]
+          - cell "已接入" [ref=e92]
+          - cell "yml" [ref=e93]
+          - cell "A7 已接入运行时（ContextBudgetTrimmer 预算；记忆召回从中扣减）" [ref=e94]
+        - row
+          - cell "deployment.pilot.max-tenants" [ref=e95]
+            - code
+              - StaticText "deployment.pilot.max-tenants"
+          - cell "1" [ref=e96]
+          - cell "已接入" [ref=e97]
+          - cell "yml" [ref=e98]
+          - cell "P4-D05 校验" [ref=e99]
+        - row
+          - cell "agent.budget.reserve-per-tool-call" [ref=e100]
+            - code
+              - StaticText "agent.budget.reserve-per-tool-call"
+          - cell "0.50" [ref=e101]
+          - cell "已接入" [ref=e102]
+          - cell "yml" [ref=e103]
+          - cell "P3-D04 装配期校验（fail-closed）" [ref=e104]
+        - row
+          - cell "auth.jwt.token-ttl-seconds" [ref=e105]
+            - code
+              - StaticText "auth.jwt.token-ttl-seconds"
+          - cell "900" [ref=e106]
+          - cell "已接入" [ref=e107]
+          - cell "yml" [ref=e108]
+          - cell "已接入运行时（仅暴露 ttl，不暴露私钥）" [ref=e109]
+    - generic
+      - heading "跨 Run 记忆" [level=2, ref=e8]
+      - table
+        - rowgroup
+          - row
+            - columnheader "配置键" [ref=e205]
+            - columnheader "声明值" [ref=e206]
+            - columnheader "是否接入运行时" [ref=e207]
+            - columnheader "来源" [ref=e208]
+            - columnheader "说明" [ref=e209]
+        - row
+          - cell "agent.memory.enabled" [ref=e110]
+            - code
+              - StaticText "agent.memory.enabled"
+          - cell "true" [ref=e111]
+          - cell "已接入" [ref=e112]
+          - cell "yml" [ref=e113]
+          - cell "P1 已接入运行时（false = 逐位退回无记忆行为）" [ref=e114]
+        - row
+          - cell "agent.memory.recall-max-items" [ref=e115]
+            - code
+              - StaticText "agent.memory.recall-max-items"
+          - cell "5" [ref=e116]
+          - cell "已接入" [ref=e117]
+          - cell "yml" [ref=e118]
+          - cell "P1 已实现（单次 Run 召回条数上限）" [ref=e119]
+        - row
+          - cell "agent.memory.recall-max-tokens" [ref=e120]
+            - code
+              - StaticText "agent.memory.recall-max-tokens"
+          - cell "800" [ref=e121]
+          - cell "已接入" [ref=e122]
+          - cell "yml" [ref=e123]
+          - cell "P1 已实现（从上下文预算中扣减）" [ref=e124]
+        - row
+          - cell "agent.memory.recall-min-strength" [ref=e125]
+            - code
+              - StaticText "agent.memory.recall-min-strength"
+          - cell "0.40" [ref=e126]
+          - cell "已接入" [ref=e127]
+          - cell "yml" [ref=e128]
+          - cell "P1 已实现（低于门槛不进上下文）" [ref=e129]
+        - row
+          - cell "agent.memory.vector.enabled" [ref=e130]
+            - code
+              - StaticText "agent.memory.vector.enabled"
+          - cell "false" [ref=e131]
+          - cell "已接入" [ref=e132]
+          - cell "yml" [ref=e133]
+          - cell "P2 已实现（⚠️ 需目标库安装 pgvector；缺失即降级并告警）" [ref=e134]
+    - generic
+      - heading "数据保留与删除" [level=2, ref=e9]
+      - table
+        - rowgroup
+          - row
+            - columnheader "配置键" [ref=e210]
+            - columnheader "声明值" [ref=e211]
+            - columnheader "是否接入运行时" [ref=e212]
+            - columnheader "来源" [ref=e213]
+            - columnheader "说明" [ref=e214]
+        - row
+          - cell "agent.retention.enabled" [ref=e135]
+            - code
+              - StaticText "agent.retention.enabled"
+          - cell "true" [ref=e136]
+          - cell "已接入" [ref=e137]
+          - cell "yml" [ref=e138]
+          - cell "P4-D04 已实现" [ref=e139]
+        - row
+          - cell "agent.retention.profile-months" [ref=e140]
+            - code
+              - StaticText "agent.retention.profile-months"
+          - cell "12" [ref=e141]
+          - cell "已接入" [ref=e142]
+          - cell "yml" [ref=e143]
+          - cell "P4-D04 已实现" [ref=e144]
+        - row
+          - cell "agent.retention.memory-months" [ref=e145]
+            - code
+              - StaticText "agent.retention.memory-months"
+          - cell "12" [ref=e146]
+          - cell "已接入" [ref=e147]
+          - cell "yml" [ref=e148]
+          - cell "P1 已实现（记忆与画像同期删除）" [ref=e149]
+        - row
+          - cell "agent.retention.prompt-days" [ref=e150]
+            - code
+              - StaticText "agent.retention.prompt-days"
+          - cell "90" [ref=e151]
+          - cell "已接入" [ref=e152]
+          - cell "yml" [ref=e153]
+          - cell "P4-D04 已实现" [ref=e154]
+        - row
+          - cell "agent.retention.audit-days" [ref=e155]
+            - code
+              - StaticText "agent.retention.audit-days"
+          - cell "180" [ref=e156]
+          - cell "已接入" [ref=e157]
+          - cell "yml" [ref=e158]
+          - cell "P4-D04 已实现" [ref=e159]
+        - row
+          - cell "agent.retention.trace-days" [ref=e160]
+            - code
+              - StaticText "agent.retention.trace-days"
+          - cell "30" [ref=e161]
+          - cell "已接入" [ref=e162]
+          - cell "yml" [ref=e163]
+          - cell "P4-D04 已实现" [ref=e164]
+        - row
+          - cell "agent.retention.withdrawal-grace-days" [ref=e165]
+            - code
+              - StaticText "agent.retention.withdrawal-grace-days"
+          - cell "30" [ref=e166]
+          - cell "已接入" [ref=e167]
+          - cell "yml" [ref=e168]
+          - cell "P4-D04 已实现" [ref=e169]
+        - row
+          - cell "agent.retention.batch-size" [ref=e170]
+            - code
+              - StaticText "agent.retention.batch-size"
+          - cell "1000" [ref=e171]
+          - cell "已接入" [ref=e172]
+          - cell "yml" [ref=e173]
+          - cell "P4-D04 已实现" [ref=e174]
+        - row
+          - cell "agent.retention.interval-ms" [ref=e175]
+            - code
+              - StaticText "agent.retention.interval-ms"
+          - cell "3600000" [ref=e176]
+          - cell "已接入" [ref=e177]
+          - cell "yml" [ref=e178]
+          - cell "P4-D04 已实现" [ref=e179]
+        - row
+          - cell "agent.retention.actor" [ref=e180]
+            - code
+              - StaticText "agent.retention.actor"
+          - cell "retention-job" [ref=e181]
+          - cell "已接入" [ref=e182]
+          - cell "yml" [ref=e183]
+          - cell "P4-D04（非敏感作业名）" [ref=e184]
+    - generic
+      - heading "工具与审批" [level=2, ref=e10]
+      - table
+        - rowgroup
+          - row
+            - columnheader "配置键" [ref=e260]
+            - columnheader "声明值" [ref=e261]
+            - columnheader "是否接入运行时" [ref=e262]
+            - columnheader "来源" [ref=e263]
+            - columnheader "说明" [ref=e264]
+        - row
+          - cell "agent.run.max-cost-per-run" [ref=e215]
+            - code
+              - StaticText "agent.run.max-cost-per-run"
+          - cell "2.00" [ref=e216]
+          - cell "已接入" [ref=e217]
+          - cell "yml" [ref=e218]
+          - cell "P4-D11 已接入运行时（生产快照读 yml；改后对新执行即刻生效）" [ref=e219]
+        - row
+          - cell "agent.run.max-llm-calls" [ref=e220]
+            - code
+              - StaticText "agent.run.max-llm-calls"
+          - cell "12" [ref=e221]
+          - cell "已接入" [ref=e222]
+          - cell "yml" [ref=e223]
+          - cell "P4-D11 已接入运行时（生产快照读 yml）" [ref=e224]
+        - row
+          - cell "agent.run.max-steps" [ref=e225]
+            - code
+              - StaticText "agent.run.max-steps"
+          - cell "20" [ref=e226]
+          - cell "已接入" [ref=e227]
+          - cell "yml" [ref=e228]
+          - cell "P4-D11 已接入运行时（生产快照读 yml）" [ref=e229]
+        - row
+          - cell "agent.tenant.max-concurrent-runs" [ref=e230]
+            - code
+              - StaticText "agent.tenant.max-concurrent-runs"
+          - cell "5" [ref=e231]
+          - cell "仅声明未接入" [ref=e232]
+          - cell "yml" [ref=e233]
+          - cell "⛔ 实测：常量 KEY_MAX_CONCURRENT_RUNS 定义外引用数 0 → 租户并发**无限制**" [ref=e234]
+        - row
+          - cell "agent.tool.risk-level-map" [ref=e235]
+            - code
+              - StaticText "agent.tool.risk-level-map"
+          - cell "{get_student_profile=READ, record_weakness=WRITE_PROFILE}" [ref=e236]
+          - cell "已接入" [ref=e237]
+          - cell "yml(镜像·启动守卫)" [ref=e238]
+          - cell "P4-D11：权威在代码 ToolHandler.riskLevel()；yml 镜像由启动守卫强制一致，不一致即拒绝启动（fail-closed）" [ref=e239]
+        - row
+          - cell "agent.approval.required-by-risk" [ref=e240]
+            - code
+              - StaticText "agent.approval.required-by-risk"
+          - cell "{READ=NOT_REQUIRED, WRITE_PROFILE=OPTIONAL, WRITE_EXTERNAL=REQUIRED}" [ref=e241]
+          - cell "已接入" [ref=e242]
+          - cell "yml" [ref=e243]
+          - cell "P4-D11 已接入运行时（经快照工厂解析；只能收紧不能放松）" [ref=e244]
+        - row
+          - cell "agent.approval.ttl" [ref=e245]
+            - code
+              - StaticText "agent.approval.ttl"
+          - cell "15m" [ref=e246]
+          - cell "已接入" [ref=e247]
+          - cell "yml" [ref=e248]
+          - cell "P0-2 已接入运行时（待人工审批请求的有效期；超界拒绝启动）" [ref=e249]
+        - row
+          - cell "agent.approval.approver-scope" [ref=e250]
+            - code
+              - StaticText "agent.approval.approver-scope"
+          - cell "PARENT_OR_TEACHER" [ref=e251]
+          - cell "已接入" [ref=e252]
+          - cell "yml" [ref=e253]
+          - cell "P0-2 已接入运行时（待人工审批请求的审批人范围，写入 approval.approver_scope）" [ref=e254]
+    - generic
+      - heading "合规与零保留" [level=2, ref=e11]
+      - table
+        - rowgroup
+          - row
+            - columnheader "配置键" [ref=e255]
+            - columnheader "声明值" [ref=e256]
+            - columnheader "是否接入运行时" [ref=e257]
+            - columnheader "来源" [ref=e258]
+            - columnheader "说明" [ref=e259]
+        - row
+          - cell "agent.compliance.zero-retention.confirmed-providers" [ref=e185]
+            - code
+              - StaticText "agent.compliance.zero-retention.confirmed-providers"
+          - cell "deepseek,minimax,workbuddy" [ref=e186]
+          - cell "已接入" [ref=e187]
+          - cell "yml" [ref=e188]
+          - cell "P4-D07（C9）已接入零保留注册表；三家均 PENDING → 闸门仍 fail-closed" [ref=e189]
+        - row
+          - cell "agent.compliance.zero-retention.validity-months" [ref=e190]
+            - code
+              - StaticText "agent.compliance.zero-retention.validity-months"
+          - cell "12" [ref=e191]
+          - cell "仅声明未接入" [ref=e192]
+          - cell "yml" [ref=e193]
+          - cell "⛔ 实测：无任何读取点 → 零保留条款**无到期判定**" [ref=e194]
+        - row
+          - cell "agent.compliance.zero-retention.expiry-warn-days" [ref=e195]
+            - code
+              - StaticText "agent.compliance.zero-retention.expiry-warn-days"
+          - cell "30" [ref=e196]
+          - cell "仅声明未接入" [ref=e197]
+          - cell "yml" [ref=e198]
+          - cell "⛔ 实测：无任何读取点 → **无到期告警**" [ref=e199]

@@ -61,13 +61,16 @@ export function RequireRole({
   const location = useLocation()
 
   if (!authenticated) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />
+    return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
   }
 
-  // ⚠️ B1：真实角色判定。无 area 所需角色 → 跳回工作台（后端仍会二次拦截）。
+  // ⚠️ B1：真实角色判定。无 area 所需角色 → 跳转「无权限」整页（后端仍会二次拦截）。
   //    fail-closed：roles 为空（含旧会话未回带）时一律视为无权，避免误放管理页。
+  //    F2（E2E 2026-11-14）：原为静默跳回工作台，受限访问对用户无感知、易困惑；
+  //    改为跳转无权限页，让受限访问可见、可解释，且仍保留「返回工作台 / 返回上一页」。
   if (!hasRoleAccess(roles, area)) {
-    return <Navigate to="/" replace />
+    const reason = `访问「${area}」区域需要相应权限，当前账号未获得。这不是登录失效，重新登录不会解决。`
+    return <Navigate to={`/no-permission?reason=${encodeURIComponent(reason)}`} replace />
   }
 
   return <>{children}</>

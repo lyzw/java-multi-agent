@@ -35,9 +35,11 @@ public class JdbcRunQueryRepository implements RunQueryPort {
      * ⚠️ <b>不取 {@code input_payload} 与 {@code error_message}</b>：
      * 前者含学生提交的题目与解答（敏感载荷），
      * 后者是内部错误原文（可能含实现细节）。状态查询只需要状态本身。
+     * ⚠️ {@code requester_id} 是受众隔离（F1）的归属依据，必须带出。
      */
     private static final String SQL_FIND_STATUS = """
-            SELECT tenant_id::text AS tenant_id, run_id::text, state::text, created_at, completed_at, attempt, error_code
+            SELECT tenant_id::text AS tenant_id, run_id::text, state::text, created_at, completed_at, attempt, error_code,
+                   requester_id::text AS requester_id
             FROM run
             WHERE tenant_id = ?::uuid AND run_id = ?::uuid
             """;
@@ -105,7 +107,8 @@ public class JdbcRunQueryRepository implements RunQueryPort {
                             //    语义上等价于「1970 年完成的 Run」——错误且误导。
                             toNullableInstant(rs.getTimestamp("completed_at")),
                             rs.getInt("attempt"),
-                            rs.getString("error_code"));
+                            rs.getString("error_code"),
+                            rs.getString("requester_id"));
                 }
             } finally {
                 // ⚠️ 只读查询：回滚以释放读事务。

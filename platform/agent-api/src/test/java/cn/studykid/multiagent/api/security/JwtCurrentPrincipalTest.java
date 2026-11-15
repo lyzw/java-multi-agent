@@ -154,7 +154,7 @@ class JwtCurrentPrincipalTest {
 
             for (java.lang.reflect.Method method : controller.getDeclaredMethods()) {
                 boolean exposed = java.util.Arrays.stream(method.getParameterTypes())
-                        .anyMatch(t -> t.getName().equals(TenantContext.class.getName()));
+                        .anyMatch(t -> t.equals(TenantContext.class));
 
                 assertThat(exposed)
                         .as("%s.%s 直接暴露 TenantContext 参数 —— "
@@ -173,7 +173,8 @@ class JwtCurrentPrincipalTest {
                 .getDeclaredFields();
 
         boolean hasPrincipal = java.util.Arrays.stream(fields)
-                .anyMatch(f -> f.getType().getSimpleName().equals("CurrentPrincipal"));
+                .anyMatch(f -> f.getType().equals(
+                        cn.studykid.multiagent.api.run.RunController.CurrentPrincipal.class));
 
         assertThat(hasPrincipal)
                 .as("控制器必须持有 CurrentPrincipal，否则无认证上下文来源")

@@ -37,6 +37,7 @@ import {
 } from 'react'
 import { Sheet, Loading, LoadingRows, Empty, ErrorState } from '@/shared/states'
 import { useRagManagement, allowedVerificationTargets } from '@/features/rag/useRagManagement'
+import { readStoredTenantId, rememberTenantId } from '@/features/rag/ragTenantStorage'
 import { useSession } from '@/auth/session'
 import {
   listRagDocuments,
@@ -84,8 +85,6 @@ import {
   RAG_LICENSE_LABELS,
 } from '@/api/types'
 
-const TENANT_STORAGE_KEY = 'rag.tenantId'
-
 /** 载体轮询周期（毫秒）。 */
 const DOC_POLL_INTERVAL_MS = 3000
 /** 载体轮询上限（3s × 200 ≈ 10 分钟，覆盖 148 页教材约 450 秒并留余量）。 */
@@ -101,23 +100,8 @@ function isDocInFlight(parseStatus: string): boolean {
   return parseStatus === 'PENDING' || parseStatus === 'PARSING'
 }
 
-/** 读取上次使用的租户标识（仅本地记忆，不涉及任何凭据）。 */
-function readStoredTenantId(): string {
-  try {
-    return window.localStorage.getItem(TENANT_STORAGE_KEY) ?? ''
-  } catch {
-    return ''
-  }
-}
-
-function rememberTenantId(tenantId: string): void {
-  try {
-    if (tenantId === '') window.localStorage.removeItem(TENANT_STORAGE_KEY)
-    else window.localStorage.setItem(TENANT_STORAGE_KEY, tenantId)
-  } catch {
-    // 记忆失败不影响管理操作本身，静默忽略。
-  }
-}
+// ⚠️ 租户标识本地记忆统一走 `@/features/rag/ragTenantStorage`（含 7 天 TTL）。
+//    本页旧实现裸写字符串，与检索页的 JSON 格式冲突，跨页串写会让租户标识变空。
 
 const ALL_STATUSES: RagVerificationStatus[] = [
   'PENDING',
@@ -1442,17 +1426,38 @@ const SAMPLE_JSON = `[
 ]`
 
 function BulkImportPanel({ tenantId }: { tenantId: string }): JSX.Element {
-  const { bulk, bulkRegister, resetBulk } = useRagManagement()
+  const { bulkRegister, resetBulk } = useRagManagement()
   const [registeredBy, setRegisteredBy] = useState('')
   const [byError, setByError] = useState<string | null>(null)
   const [text, setText] = useState('')
   const [rows, setRows] = useState<ImportRow[] | null>(null)
   const [rowErrors, setRowErrors] = useState<(string[] | null)[]>([])
   const [parseError, setParseError] = useState<string | null>(null)
-  // ⚠️ 导入进度状态
+  /**
+   * ⚠️⛔ 导入状态由**本面板单一持有**（E2E 四轮优化，2026-11-14）：
+   *    旧实现 `await bulkRegister(...)` 拿到的是 undefined，导致
+   *    ① 失败静默当成功 ② 所有批次同一微任务链递归 → 进度条被批处理合并
+   *    ③ 每批覆写 hook 的 bulk.response → 结果表只剩最后一批
+   *    ④ 防重只靠不可靠的 fire-and-forget 状态。
+   *    现在逐批 await 真实结果、累积逐行结果、失败即停并保留续传起点。
+   */
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null)
+  const [importResults, setImportResults] = useState<RagBulkImportItemResult[]>([])
+  const [importFailure, setImportFailure] = useState<string | null>(null)
+  const [importCursor, setImportCursor] = useState(0)
+  const [importing, setImporting] = useState(false)
+  /** ⛔ 同步防重：state 更新有延迟，连点两次会重复提交整批。 */
+  const importingRef = useRef(false)
   // ⚠️ 文件 input 本身不可见（sr-only），键盘操作要靠外层 label 转发点击，故留引用。
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  const clearImportState = useCallback(() => {
+    setImportProgress(null)
+    setImportResults([])
+    setImportFailure(null)
+    setImportCursor(0)
+    resetBulk()
+  }, [resetBulk])
 
   const tenantReady = tenantId.trim().length > 0
 
@@ -1479,7 +1484,10 @@ function BulkImportPanel({ tenantId }: { tenantId: string }): JSX.Element {
     setParseError(null)
     setRows(parsed)
     setRowErrors(parsed.map((r) => (validateRow(r).length > 0 ? validateRow(r) : null)))
-  }, [text])
+    // ⚠️ 重新解析＝换了一批数据，旧的导入进度/结果/续传起点必须作废，
+    //    否则会把上一批的结果张冠李戴到新数据上。
+    clearImportState()
+  }, [text, clearImportState])
 
   const onFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -1559,39 +1567,61 @@ function BulkImportPanel({ tenantId }: { tenantId: string }): JSX.Element {
       )
       return
     }
-    // ⚠️ 显示进度
-    setImportProgress({ current: 0, total: submittedItems.length })
+    // ⛔ 同步防重：state 生效前连点两次会重复提交整批（旧实现靠
+    //    fire-and-forget 的 bulk.status，根本挡不住）。
+    if (importingRef.current) return
+    importingRef.current = true
+    setImporting(true)
+    setImportFailure(null)
 
-    // ⚠️ 分批导入，每批 10 行，避免单次请求过大
+    const total = submittedItems.length
     const batchSize = 10
-    let processed = 0
+    // ⚠️ 续传：失败后从已成功行数继续，不重发已成功的批次（无幂等键）。
+    let processed = importCursor
+    // ⚠️ 累积每批逐行结果：旧实现每批覆写 hook 的 bulk.response，
+    //    25 行分 3 批后结果表只剩最后 5 行，「逐行核对」承诺失效。
+    const collected: RagBulkImportItemResult[] = [...importResults]
+    setImportProgress({ current: processed, total })
 
-    const processBatch = async (): Promise<void> => {
-      const batch = submittedItems.slice(processed, processed + batchSize)
-      if (batch.length === 0) {
-        setImportProgress(null)
-        return
-      }
-
+    const run = async (): Promise<void> => {
       try {
-        await bulkRegister(tenantId.trim(), registeredBy.trim(), batch)
-        processed += batch.length
-        setImportProgress({ current: processed, total: submittedItems.length })
-
-        // 继续处理下一批
-        if (processed < submittedItems.length) {
-          await processBatch()
-        } else {
-          setImportProgress(null)
+        while (processed < total) {
+          const batch = submittedItems.slice(processed, processed + batchSize)
+          const outcome = await bulkRegister(tenantId.trim(), registeredBy.trim(), batch)
+          if (!outcome.ok || outcome.response === null) {
+            // ⛔ 真实失败：**停在这里**，进度停在已成功行数，给出续传入口。
+            //    绝不把失败伪装成「全部成功」（铁律 15 同族）。
+            setImportProgress({ current: processed, total })
+            setImportCursor(processed)
+            setImportResults(collected)
+            setImportFailure(
+              `已成功 ${processed} / ${total} 行，第 ${Math.floor(processed / batchSize) + 1} 批失败：` +
+                (outcome.error ?? '未知错误'),
+            )
+            return
+          }
+          // ⚠️ 服务端返回的 index 是**本批内**的下标，必须加上批次偏移，
+          //    才能对回用户原始行号（见 submittedItems 的说明）。
+          for (const item of outcome.response.items) {
+            collected.push({ ...item, index: item.index + processed })
+          }
+          processed += batch.length
+          // ⚠️ 逐批 await 真实网络结果，React 会在每批之间提交渲染：
+          //    进度条真的可观察，而不是同一微任务链里被批处理合并。
+          setImportProgress({ current: processed, total })
+          setImportResults([...collected])
         }
-      } catch (cause) {
+        // 全部成功：进度收尾，保留完整逐行结果供核对。
         setImportProgress(null)
-        setParseError(`导入失败：${cause instanceof Error ? cause.message : '未知错误'}`)
+        setImportCursor(0)
+        setImportResults(collected)
+      } finally {
+        importingRef.current = false
+        setImporting(false)
       }
     }
-
-    void processBatch()
-  }, [tenantReady, registeredBy, submittedItems, bulkRegister, tenantId])
+    void run()
+  }, [tenantReady, registeredBy, submittedItems, bulkRegister, tenantId, importCursor, importResults])
 
   const resultTable = (items: RagBulkImportItemResult[]): JSX.Element => (
     <div className="table-wrap" style={{ marginTop: 'var(--s-3)' }}>
@@ -1725,10 +1755,10 @@ function BulkImportPanel({ tenantId }: { tenantId: string }): JSX.Element {
         </div>
       ) : null}
 
-      {/* ⚠️ 导入进度提示 */}
+      {/* ⚠️ 导入进度提示：失败时**保留**进度（不置 null），让用户看到停在几行 */}
       {importProgress !== null ? (
         <div className="marked marked--calm" style={{ marginTop: 'var(--s-3)' }}>
-          <p className="marked__label">导入进度</p>
+          <p className="marked__label">{importFailure === null ? '导入进度' : '导入已中断'}</p>
           <p style={{ margin: 0 }}>
             已处理 {importProgress.current} / {importProgress.total} 行
           </p>
@@ -1737,6 +1767,17 @@ function BulkImportPanel({ tenantId }: { tenantId: string }): JSX.Element {
             max={importProgress.total}
             style={{ width: '100%', marginTop: 'var(--s-2)' }}
           />
+        </div>
+      ) : null}
+
+      {/* ⛔ 真实失败：显式终态 + 续传入口，绝不伪装成「全部成功」 */}
+      {importFailure !== null ? (
+        <div className="marked" role="alert" style={{ marginTop: 'var(--s-3)' }}>
+          <p className="marked__label">导入失败</p>
+          <p style={{ margin: 0 }}>{importFailure}</p>
+          <p className="muted" style={{ margin: 0 }}>
+            已成功的行不会重发；点「续传剩余」从第 {importCursor + 1} 行继续。
+          </p>
         </div>
       ) : null}
 
@@ -1804,38 +1845,42 @@ function BulkImportPanel({ tenantId }: { tenantId: string }): JSX.Element {
               type="button"
               className="btn"
               onClick={handleImport}
-              disabled={!tenantReady || bulk.status === 'submitting' || submittedItems.length === 0}
+              disabled={
+                !tenantReady ||
+                importing ||
+                submittedItems.length === 0 ||
+                // ⛔ 全部成功后禁止再点：无幂等键，重发＝重复导入。
+                (importFailure === null &&
+                  importResults.length === submittedItems.length &&
+                  submittedItems.length > 0)
+              }
             >
-              {bulk.status === 'submitting' ? '导入中…' : `导入 ${submittedItems.length} 条`}
+              {importing
+                ? '导入中…'
+                : importFailure !== null
+                  ? `续传剩余 ${submittedItems.length - importCursor} 条`
+                  : `导入 ${submittedItems.length} 条`}
             </button>
           </div>
         </div>
       ) : null}
 
-      {bulk.status === 'submitting' ? (
-        <Loading label="正在批量导入" />
-      ) : null}
+      {importing ? <Loading label="正在批量导入" /> : null}
 
-      {bulk.status === 'error' || bulk.status === 'timeout' ? (
-        <div className="marked" role="alert" style={{ marginTop: 'var(--s-3)' }}>
-          <p className="marked__label">导入失败</p>
-          <p style={{ margin: 0 }}>{bulk.error}</p>
-        </div>
-      ) : null}
-
-      {bulk.status === 'success' && bulk.response !== null ? (
+      {/* ⚠️ 结果表用**累积**的逐行结果，不是「最后一批」：25 行分 3 批也要逐行可核对 */}
+      {importResults.length > 0 ? (
         <div style={{ marginTop: 'var(--s-4)' }}>
           <div className="status-line">
             <span className="muted">
-              总数 {bulk.response.total} · 成功{' '}
-              <b className="settled">{bulk.response.succeeded}</b> · 失败{' '}
-              <b className="mark">{bulk.response.failed}</b>
+              已导入 {importResults.length} / {submittedItems.length} 行 · 成功{' '}
+              <b className="settled">{importResults.filter((it) => it.ok).length}</b> · 失败{' '}
+              <b className="mark">{importResults.filter((it) => !it.ok).length}</b>
             </span>
-            <button type="button" className="btn btn--quiet" onClick={resetBulk}>
+            <button type="button" className="btn btn--quiet" onClick={clearImportState}>
               清空结果
             </button>
           </div>
-          {resultTable(bulk.response.items)}
+          {resultTable(importResults)}
         </div>
       ) : null}
     </Sheet>

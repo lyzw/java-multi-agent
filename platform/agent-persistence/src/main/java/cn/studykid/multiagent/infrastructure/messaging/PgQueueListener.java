@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -113,11 +114,11 @@ public class PgQueueListener {
     /** 停机时等待工作线程退出的最长时间（避免无限阻塞上下文关闭）。 */
     private static final long STOP_TIMEOUT_MS = 30_000L;
 
-    /** 累计处理条数（供测试与指标读取）。 */
-    private volatile long totalProcessed;
+    /** 累计处理条数（供测试与指标读取）。原子计数：并发增/读不丢更新。 */
+    private final AtomicLong totalProcessed = new AtomicLong();
 
-    /** 累计进入死信条数。 */
-    private volatile long totalDeadLettered;
+    /** 累计进入死信条数。原子计数：并发增/读不丢更新。 */
+    private final AtomicLong totalDeadLettered = new AtomicLong();
 
     public PgQueueListener(@NonNull List<String> tenantIds,
                             @NonNull PgQueueRepository repository,
@@ -212,7 +213,7 @@ public class PgQueueListener {
             }
         }
         if (processed > 0) {
-            totalProcessed += processed;
+            totalProcessed.addAndGet(processed);
         }
         return processed;
     }
@@ -323,7 +324,7 @@ public class PgQueueListener {
     private void deadLetter(String tenantId, PgQueueRepository.QueuedMessage message, String error) {
         repository.reject(tenantId, message.queueId(), message.eventType(),
                 message.runId(), message.payload(), message.attempts() + 1, error, workerId);
-        totalDeadLettered++;
+        totalDeadLettered.incrementAndGet();
         log.error("消息已进死信: queueId={}, runId={}, error={}",
                 message.queueId(), message.runId(), error);
     }
@@ -390,7 +391,7 @@ public class PgQueueListener {
             }
         }
         log.info("PG 队列监听器已停止（累计处理 {} 条，死信 {} 条）",
-                totalProcessed, totalDeadLettered);
+                totalProcessed.get(), totalDeadLettered.get());
     }
 
     /** @return 本实例负责的租户数（可观测性） */
@@ -400,11 +401,11 @@ public class PgQueueListener {
 
     /** @return 累计完成处理的条数 */
     public long totalProcessed() {
-        return totalProcessed;
+        return totalProcessed.get();
     }
 
     /** @return 累计进入死信的条数 */
     public long totalDeadLettered() {
-        return totalDeadLettered;
+        return totalDeadLettered.get();
     }
 }

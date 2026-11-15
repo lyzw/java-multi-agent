@@ -104,10 +104,15 @@ public interface ResultQueryPort {
     /**
      * 解题步骤。
      *
+     * <p>⚠️ 与 Run 状态共用枚举不等于共用语义：生产链路把步骤 {@code state}
+     * 写死 {@code 'RUNNING'}，表示「该步骤已发生」，<b>不是进行中</b>；
+     * 完成以 {@code completed_at} 判定。{@code output} 当前恒 {@code null}
+     * （无生产写入方），语义是「未采集」而非「无内容」。
+     *
      * @param number   步骤序号（从 1 开始）
-     * @param state    步骤状态
+     * @param state    步骤状态；生产恒为 {@code 'RUNNING'}（不是进行中）
      * @param stepType 步骤类型
-     * @param output   步骤产出；无内容为 {@code null}
+     * @param output   步骤产出；当前恒 {@code null}（未采集）
      */
     record Step(
             int number,

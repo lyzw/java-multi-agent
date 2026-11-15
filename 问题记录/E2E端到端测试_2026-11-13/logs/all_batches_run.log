@@ -1,0 +1,222 @@
+=== START batch1_session.py
+[  通过] I-L01  超管账号真实表单登录                             -> url=http://localhost:5180/admin/tenants; roles=['PLATFORM_SUPER_ADMIN']; expiresIn≈899s
+[  通过] I-L02  「忘记密码？」提示                              -> Agent Platform
+一个控制台
+管好所有 Agent
+
+注册、发布、观测 Agent 及其调用的 Tool、Skill 与 MCP， 并按租户看清每一次执行。
+
+Agent 注册与版本
+定义、发布与回滚每一个 Agent 的行为。
+Tool 与 Skill 编排
+把可复用能力挂到正确的调用
+[  失败] I-L03  退出登录                                   -> url=http://localhost:5180/admin/tenants; session={'accessToken': 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjEzZjI0OCJ9.eyJpc3MiOiJodHRwczovL2F1dGg
+[  失败] I-L04  未登录深链 → 登录 → 回跳原页                      -> before=http://localhost:5180/admin/users; after=http://localhost:5180/admin/users
+[  通过] I-L05  过期原因提示 + next 回跳                       -> warning=True; after=http://localhost:5180/admin/tools
+[  通过] I-L06  业务无权限整页 /no-permission                 -> 403 · 无权限
+E2E测试原因
+返回租户管理
+[  通过] I-L06b 无权限页「返回租户管理」按钮                         -> http://localhost:5180/admin/tenants
+[  通过] I-L07  未知路径 404 兜底                            -> 平台管理控制台
+平台治理
+租户管理
+平台用户
+角色权限矩阵
+平台审计
+能力目录
+RAG · 录入与校对
+RAG · 审核
+RAG · 规则配置
+RAG · 运维
+系统配置
+观测度量
+AI 实验室
+管理员
+平台管理控制台
+404
+这个地址没有对应的页面。可能是链接已过期，或地址输入有误。
+回租户注册表
+[  通过] I-L07b 404 页「回登录页」按钮                          -> http://localhost:5180/admin/login
+[  失败] I-L08  侧栏折叠 / 展开状态切换                          -> 200 -> 200 -> 200
+[  通过] I-L09  /tenants/new 深链打开开通租户弹窗                -> url=http://localhost:5180/admin/tenants; modal=['开通租户\nSlug\n2-63 位，仅限小写字母、数字和连字符（-），不能以连字符开头或结尾\n名称\n套餐（可选）\n留空使用平台默认套餐；如需指定，请输入套餐标识\n开 通']
+[  通过] I-L10  令牌即将过期告警与续期入口                          -> warn=True; btn=True
+[  通过] I-L11  伪造令牌被拒后清会话跳登录                          -> url=http://localhost:5180/admin/login?reason=expired&next=%2Ftenants; session=None
+[  通过] I-L12  异常后恢复登录                                -> http://localhost:5180/admin/tenants
+BATCH1 DONE
+
+=== END batch1_session.py rc 0 sec 89.3
+=== START batch2_governance.py
+[  通过] I-G01  生命周期筛选下拉可选项                            -> rows_before=2; options=['PENDING_SETUP', 'ACTIVE', 'SUSPENDED', 'DECOMMISSIONING', 'DECOMMISSIONED', 'CANCELLED']
+[  失败] I-G02  开通租户空表单必填校验                            -> modal=True; errors=[]
+[  通过] I-G03  非法 slug 前后置校验                          -> fields=['slug', 'name', 'plan']; errors=['格式非法：2-63 位小写字母/数字/连字符，不以连字符开头或结尾']
+[  失败] I-G04  合法输入后取消不产生写入                           -> modal=['开通租户\nSlug\n格式非法：2-63 位小写字母/数字/连字符，不以连字符开头或结尾\n2-63 位，仅限小写字母、数字和连字符（-），不能以连字符开头或结尾\n名称\n套餐（可选）\n留空使用平台默认套餐；如需指定，请输入套餐标识\n开 通']; net=No request
+[  失败] I-G05  生命周期变更弹窗与未选状态门禁                        -> modal=['开通租户\nSlug\n2-63 位，仅限小写字母、数字和连字符（-），不能以连字符开头或结尾\n名称\n套餐（可选）\n留空使用平台默认套餐；如需指定，请输入套餐标识\n开 通']; okDisabled=None
+[  失败] I-G06  租户详情深链与区块                              -> url=http://localhost:5180/admin/tenants; head=平台管理控制台
+平台治理
+租户管理
+平台用户
+角色权限矩阵
+平台审计
+能力目录
+RAG · 录入与校对
+RAG · 审核
+RAG · 规则配置
+RAG · 运维
+系统配置
+观测度量
+AI 实验室
+管理员
+平台
+[  通过] I-G07  新建用户空表单必填校验                            -> errors=['请输入用户名', '请输入密码', '密码长度至少 10 位']
+[  通过] I-G08  弱口令复杂度校验                               -> errors=['请输入用户名', '格式非法：4-20 位字母/数字/下划线，以字母开头', '请输入密码', '密码长度至少 10 位']
+[  通过] I-G09  非法邮箱格式校验                               -> errors=['格式非法：4-20 位字母/数字/下划线，以字母开头', '密码长度至少 10 位', '邮箱格式不正确']
+[  失败] I-G10  新建用户完整提交（写操作留痕）                        -> created=False; modal=True; net=No requests captured
+[  失败] I-G11  重复用户名冲突处理                              -> modalOpen=True; msg=-support	平台支持（开发）	plat-support@example.com	启用	
+平台支持人员
+	LOCAL	否	1	—	
+编辑
+停用
+重置密码
+角色
+© 2026 Agent Platform · 平台管理控制台
+新建用户
+用户名
+格式非法：4-
+[  失败] I-G12  测试用户行内操作项完整性                           -> buttons=None
+[  通过] I-G13  SoD 自身保护按钮禁用                           -> selfRow=[{'d': False, 't': '编辑'}, {'d': True, 't': '停用'}, {'d': True, 't': '重置密码'}, {'d': True, 't': '角色'}]
+[  通过] I-G14  7 个命名空间 Tab 逐项切换                       -> switch=[('用户权限', 2, 1), ('角色权限', 2, 1), ('租户权限', 14, 1), ('资源权限', 16, 1), ('策略权限', 18, 1), ('审计权限', 20, 1), ('支持权限', 21, 1)]
+[  通过] I-G15  审计筛选与刷新                                -> net=[80120.4327] GET http://localhost:5180/api/platform/v1/audit-events?action=LOGIN&from=2026-11-12T09%3A40%3A32.678Z&limit=200 (Fetch) 200
+BATCH2 DONE
+
+=== END batch2_governance.py rc 0 sec 150.8
+=== START batch3_catalog.py
+[  通过] I-C01  生命周期 4 个 Tab 状态切换                      -> switch=[('全部(7)', 7, 1), ('已发布(7)', 14, 1), ('草稿(0)', 14, 1), ('已停用(0)', 14, 1)]
+[  通过] I-C02  搜索无命中边界                                -> tail=「详情」）可只读查看全字段与关系——抽屉，不离开列表。
+申请队列
+登记 Tool
+Tool 总数
+7
+已发布
+7
+草稿 / 非终态
+0
+已停用
+0
+全部(0)
+已发布(0)
+草稿(0)
+已停用(0)
+ID	名称	类型	风险等级	版本	状态	发布时间	配置指纹	操作
+
+ID
+	
+名称
+	
+类
+[  通过] I-C03  申请队列抽屉                                 -> drawer=['平台级变更申请队列\n申请号\t操作\t范围\t状态\t申请人\t审批人\t备注 / 失败原因\t提交时间\t决定时间\t执行时间\t操作\n\n申请号\n\t\n操作\n\t\n范围\n\t\n状态\n\t\n申请人\n\t\n审批人\n\t\n备注 / 失败原因\n\t\n提交
+[  失败] I-C04  登记 Tool 弹窗字段与必填校验                      -> fields=[]; errors=[]
+[  失败] I-C05  详情抽屉只读全字段                              -> drawer=[]; writeButtons=False
+[  失败] I-C06  停用申请弹窗与单向终态                            -> modal=[]
+[  通过] I-C07  登记 Skill 闭包声明字段                        -> modal=['登记 Skill（申请 → 审批 → 执行）\n申请 → 审批 → 执行（三步不可合并）\n申请 → 审批 → 执行（三步不可合并）\n提交只生成申请单，不写配置表；审批人不得等于申请人；执行才真正写入平台配置。平台级对象影响全平台，变更需 PLATFORM_ADMIN 身份。\nS
+[  通过] I-C08  凭据定位符不回显红线                             -> leak=False; tail=ofile.internal-studykid.cn/mcp	lookupProfile、lookupGuardian	已登记	READ	已发布	v1	2026-10-27 22:40:18
+	2d7008948ae245ffbf55…
+	
+详 情
+停 用
+© 20
+[  通过] I-C08b MCP 详情抽屉凭据不回显                          -> leak=False
+[  通过] I-C09  跨租户只读注册表                               -> switch=[('全部租户(9)', 9), ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2(8)', 17), ('b0b5eed0-1111-4222-8333-444455556666(1)', 18)]; writeButtons=[]
+[  失败] I-C10  试跑的跨身份域失败提示                            -> net=No requests captured; hint=False; tail=中——缺它会被拦在审批之后
+试跑探针（probes · 只在本次 dry-run 存在，不进策略正文与指纹）
+每项 {label, input, modelCandidate?, ctx?}；ctx 可覆盖 cha
+[  失败] I-C11  提交登记申请的前置校验                            -> tail=probes · 只在本次 dry-run 存在，不进策略正文与指纹）
+每项 {label, input, modelCandidate?, ctx?}；ctx 可覆盖 channel / locale / run.attempt / run.depth，不得写 tenantId
+试跑（不
+[  通过] I-C12  内置字典禁止物理删除                             -> buttons=['刷 新', '新 建']; delete=[]
+[  通过] I-C12b 新建字典弹窗                                 -> modal=['新建字典\n字典编码\n创建后不可修改（前后端契约）\n字典名称\n说明\n排序\n新建的字典恒为「业务」类型\n内置字典由迁移脚本播种（与代码枚举强绑定），不接受应用层创建。\n创 建']
+[  通过] I-C13  模型定义 / 供应商密钥 Tab 切换                    -> switch=['模型定义', '供应商密钥']
+[  失败] I-C14  新建模型弹窗字段                               -> fields=[]
+BATCH3 DONE
+
+=== END batch3_catalog.py rc 0 sec 152.7
+=== START batch4_rag_lab.py
+'on'}, {'checked': False, 'label': '跨租户盘点',
+[  通过] I-R02  来源登记五轴缺项校验                             -> errors=[]; net=No requests captured; tail=待填
+○ 册次
+待填
+○ 出版社
+待填
+○ 版次
+待填
+权威等级对「可被检索」的影响
+「入库可、检索不可」分离策略（RAG-D00 RD-02）：
+· VERIFIED 且达门槛 → 可检索
+· UNVERIFIED
+[  通过] I-R03  来源列表查询与重置                              -> net=[80120.5975] GET http://localhost:5180/api/v1/management/sources?keyword=%E6%95%B0%E5%AD%A6&includeStale=true&limit=100 (Fetch) 200; rows=0
+[  通过] I-R04  载体上传与解析预览 页面主控件与数据区                    -> controls={'btn': ['领取治理票据', '作 废'], 'inp': ['', '', '', 'rc_select_1', '粘贴来源 UUID（通常从来源列表页进入）', '', '', '', '', '', ''], 'rows': 0}; hit=['上传', '选择', 
+[  通过] I-R05  片段校对 页面主控件与数据区                         -> controls={'btn': ['领取治理票据', '作 废'], 'inp': ['', '', '', 'rc_select_1', '粘贴来源 UUID', '', '', ''], 'rows': 0}; hit=['校对']
+[  通过] I-R06  校验决定 页面主控件与数据区                         -> controls={'btn': ['领取治理票据', '作 废', '读 取'], 'inp': ['', '', '', 'rc_select_1', '粘贴来源 UUID（或从 Dashboard / 列表页进入）'], 'rows': 0}; hit=['校验', '决定']
+[  通过] I-R07  抽检队列 页面主控件与数据区                         -> controls={'btn': ['领取治理票据', '作 废', '加载抽检清单'], 'inp': ['', '', '', 'rc_select_1', '粘贴来源 UUID'], 'rows': 0}; hit=['抽检']
+[  通过] I-R08  审核员名录 页面主控件与数据区                        -> controls={'btn': ['＋ 新增审核员', '领取治理票据', '作 废'], 'inp': ['', '', '', 'rc_select_1'], 'rows': 0}; hit=['新增', '保存', '审核员']
+[  通过] I-R09  知识点别名 页面主控件与数据区                        -> controls={'btn': ['领取治理票据', '作 废', '搜 索'], 'inp': ['', '', '', 'rc_select_1', '按规范名搜索'], 'rows': 0}; hit=['别名']
+[  通过] I-R10  RAG 字典 页面主控件与数据区                       -> controls={'btn': ['领取治理票据', '作 废'], 'inp': ['', '', '', 'rc_select_1'], 'rows': 4}; hit=['新增', '字典']
+[  通过] I-R11  摄取任务 页面主控件与数据区                         -> controls={'btn': ['刷 新', '领取治理票据', '作 废', '重 试', '重 试', '重 试'], 'inp': ['', '', '', 'rc_select_1', '', '', '', '', '', '可选：按来源筛选'], 'rows': 13}; hit=[
+[  通过] I-R12  重索引 页面主控件与数据区                          -> controls={'btn': ['刷 新', '＋ 新建索引代际', '领取治理票据', '作 废', '补齐缺失向量'], 'inp': ['', '', '', 'rc_select_1'], 'rows': 0}; hit=['重索引', '执行', '领取治理票据']
+[  通过] I-R13  VERIFIED 双人复核与证据前置                     -> tail=全局语料
+本租户语料
+跨租户盘点
+租户
+平台全局语料不属于任何租户
+平台数据优先：首屏默认展示「平台全局语料」（只读）；要看某个租户的语料， 请切到「本租户语料」档并选择租户。
+平台全局语料：读写分开——读用登录态，写要治理票据
+这里看的是平台自己维护、全部租户共享的那批语料。登记、校验流
+[  通过] I-M01  指标时间窗口切换与「未采集」口径                       -> switch=[('近 24 小时', True), ('近 7 天', True), ('近 30 天', True)]
+[  通过] I-M02  效果数据录入必填校验                             -> errors=['请填写 Trace ID', '请填写租户 ID', '请选择标注结论']; tail=UTPUT
+摘要（不得为原文）
+提交录入
+重 置
+四、用户反馈录入（L3 有噪信号）
+终端用户对某次会话的反馈。下游工具故障同样会导致差评，差评率上涨应触发抽样复核，而非直接判定 Agent 劣
+[  通过] I-M03  人工审查队列操作项                              -> controls={'btn': ['查 询', '刷 新', '查看回放', '认 领', '归因关闭', '驳 回', '查看回放', '认 领', '归因关闭', '驳 回'], 'inp': ['rc_select_1', '租户 ID（可选，精确匹配）'], 'rows': 2}
+[  通过] I-M03b 对话回放抽屉                                 -> drawer=['对话回放 · 内容级复盘\n关 闭\n平台审查视图\n此视图含 TOOL 消息，仅平台授权账号可见；学生端回放会隐藏 TOOL。回放只呈现事实，不给出「回答是否正确」的判分。\nRun ID\t50747e18-b876-4fe3-a93a-932662f69113\nTrace 
+[  通过] I-A01  未选租户时发送按钮禁用（前置校验）                      -> sendDisabled=True
+[  失败] I-A02  选择租户后解除发送门禁                            -> selects=7; before=True; after=True
+[  通过] I-A03  语料问答真实发送与结果/错误分支                       -> net=[80120.7915] POST http://localhost:5180/api/v1/retrieval (Fetch); answer=True; error=True; tail=
+上册
+出版社
+人教版
+版次
+召回条数（1–50）
+你
+17:45:08
+一元二次方程判别式小于零是
+[  失败] I-A04  新会话清空状态                                -> bodyLen 997 -> 1011
+[  通过] I-A05  样例回放明确标注非真实输出                          -> sampleMarker=True
+[  通过] I-A06  编排对话样例回放执行                             -> stages=['路由', 'RAG', 'Skill', 'Tool', '回答', '能力未接入', '回传']; tail=G topK
+thinking 开
+thinking 关
+开启后接收推理草稿；组件时间线始终可见
+还没有提问。选好数据来源后，从下面的示例问题开始。
+一元二次方程判别式小
+[  通过] I-A07  Agent 效果测试表单与发起门禁                      -> controls={'btn': ['发起执行'], 'inp': ['rc_select_3', 'rc_select_4', 'rc_select_5', '用例输入（会被内容合规与 Prompt 防护校验：长度 / 深度 / 元素数都有上界）', '', '留空=不限'], 'rows': 0
+BATCH4 DONE
+
+=== END batch4_rag_lab.py rc 0 sec 147.8
+=== START batch5_roles.py
+[  失败] I-P-superadmin PLATFORM_SUPER_ADMIN 导航显隐与审计深链守卫       -> {"user": "plat-superadmin", "role": "PLATFORM_SUPER_ADMIN", "loginUrl": "http://localhost:5180/admin/login", "rolesClaim": ["PLATFORM_SUPER_ADMIN"], "
+[  通过] I-P-lifecycle TENANT_LIFECYCLE_ADMIN 导航显隐与审计深链守卫     -> {"user": "plat-lifecycle", "role": "TENANT_LIFECYCLE_ADMIN", "loginUrl": "http://localhost:5180/admin/login", "rolesClaim": ["PLATFORM_SUPER_ADMIN"], 
+[  通过] I-P-resource PLATFORM_RESOURCE_ADMIN 导航显隐与审计深链守卫    -> {"user": "plat-resource", "role": "PLATFORM_RESOURCE_ADMIN", "loginUrl": "http://localhost:5180/admin/tenants", "rolesClaim": ["PLATFORM_RESOURCE_ADMI
+[  通过] I-P-security PLATFORM_SECURITY_ADMIN 导航显隐与审计深链守卫    -> {"user": "plat-security", "role": "PLATFORM_SECURITY_ADMIN", "loginUrl": "http://localhost:5180/admin/tenants", "rolesClaim": ["PLATFORM_SECURITY_ADMI
+[  通过] I-P-auditor PLATFORM_AUDITOR 导航显隐与审计深链守卫           -> {"user": "plat-auditor", "role": "PLATFORM_AUDITOR", "loginUrl": "http://localhost:5180/admin/tenants", "rolesClaim": ["PLATFORM_AUDITOR"], "menuCount
+[  通过] I-P-support PLATFORM_SUPPORT 导航显隐与审计深链守卫           -> {"user": "plat-support", "role": "PLATFORM_SUPPORT", "loginUrl": "http://localhost:5180/admin/tenants", "rolesClaim": ["PLATFORM_SUPPORT"], "menuCount
+ROLE SUMMARY
+plat-superadmin menu 0 auditVisible False audit403 False usersDenied False
+plat-lifecycle menu 0 auditVisible False audit403 True usersDenied True
+plat-resource menu 3 auditVisible False audit403 True usersDenied True
+plat-security menu 3 auditVisible False audit403 True usersDenied True
+plat-auditor menu 4 auditVisible True audit403 False usersDenied True
+plat-support menu 3 auditVisible False audit403 True usersDenied True
+BATCH5 DONE
+
+=== END batch5_roles.py rc 0 sec 92.4
+ALL BATCHES FINISHED

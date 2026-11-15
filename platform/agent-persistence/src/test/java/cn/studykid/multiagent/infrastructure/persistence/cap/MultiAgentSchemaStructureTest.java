@@ -7,8 +7,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+
+import com.google.re2j.Matcher;
+import com.google.re2j.Pattern;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -673,7 +674,7 @@ class MultiAgentSchemaStructureTest {
         String type = m.group(2);
         int dot = type.lastIndexOf('.');
         return new Column(m.group(1), dot < 0 ? type : type.substring(dot + 1),
-                Pattern.compile("(?i)\\bNOT\\s+NULL\\b").matcher(p).find());
+                Pattern.compile("\\bNOT\\s+NULL\\b", Pattern.CASE_INSENSITIVE).matcher(p).find());
     }
 
     /** 解析 {@code CREATE POLICY name ON public.x … ;}，按表归档。 */

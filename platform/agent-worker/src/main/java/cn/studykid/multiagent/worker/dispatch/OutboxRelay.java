@@ -3,6 +3,7 @@ package cn.studykid.multiagent.worker.dispatch;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
@@ -75,8 +76,8 @@ public class OutboxRelay {
     /** 停机时等待工作线程退出的最长时间（避免无限阻塞上下文关闭）。 */
     private static final long STOP_TIMEOUT_MS = 30_000L;
 
-    /** 累计已发布条数（供测试与指标读取）。 */
-    private volatile long totalPublished;
+    /** 累计已发布条数（供测试与指标读取）。原子计数：并发增/读不丢更新。 */
+    private final AtomicLong totalPublished = new AtomicLong();
 
     public OutboxRelay(@NonNull List<OutboxPublisher> publishers,
                        @NonNull BackpressureController backpressure,
@@ -151,9 +152,9 @@ public class OutboxRelay {
                 }
             }
             if (published > 0) {
-                totalPublished += published;
+                totalPublished.addAndGet(published);
                 if (log.isDebugEnabled()) {
-                    log.debug("Outbox 中继发布 {} 条，累计 {}", published, totalPublished);
+                    log.debug("Outbox 中继发布 {} 条，累计 {}", published, totalPublished.get());
                 }
             }
             return published;
@@ -217,7 +218,7 @@ public class OutboxRelay {
                 log.warn("等待 Outbox 中继线程退出被中断（超时 {}ms）", STOP_TIMEOUT_MS);
             }
         }
-        log.info("Outbox 中继已停止（累计发布 {} 条）", totalPublished);
+        log.info("Outbox 中继已停止（累计发布 {} 条）", totalPublished.get());
     }
 
     /** @return 中继是否处于运行态（供测试断言停机语义）。 */
@@ -245,7 +246,7 @@ public class OutboxRelay {
 
     /** @return 累计已发布条数。 */
     public long totalPublished() {
-        return totalPublished;
+        return totalPublished.get();
     }
 
     /**

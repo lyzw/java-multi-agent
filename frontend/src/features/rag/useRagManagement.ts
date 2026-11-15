@@ -146,12 +146,20 @@ export interface UseRagManagementResult {
   verify: (tenantId: string, sourceId: string, payload: RagVerificationRequest) => void
   /** 登记新的语料来源 */
   register: (tenantId: string, payload: RagRegisterSourceRequest) => void
-  /** 批量登记语料来源（数据导入） */
+  /**
+   * 批量登记语料来源（**单批**，返回显式结果）。
+   *
+   * ⛔⛔ 必须可 `await`（E2E 四轮优化，2026-11-14 修复）：
+   *    旧实现是 fire-and-forget（`void run()` 后返回 undefined），调用方
+   *    `await bulkRegister(...)` 立即 resolve ⇒ 失败被静默当成功、
+   *    进度条被批处理合并、多批结果互相覆盖。调用方**必须按真实成败**
+   *    逐批推进，见 `RagManagementPage` 的 handleImport。
+   */
   bulkRegister: (
     tenantId: string,
     registeredBy: string,
     items: RagBulkSourceItem[],
-  ) => void
+  ) => Promise<BulkRegisterOutcome>
   /** 重跑最近一次列表查询 */
   retrySources: () => void
   /** 重跑最近一次统计查询 */
@@ -169,6 +177,19 @@ export interface UseRagManagementResult {
  * 共用一个状态会让「导入完成」的提示误覆盖「审核完成」的提示。
  */
 export type RagBulkStatus = 'idle' | 'submitting' | 'success' | 'error' | 'timeout'
+
+/**
+ * 单批导入的**显式结果**（不是状态机里的中间态）。
+ *
+ * ⚠️ `ok=false` 时 `response` 恒 null、`error` 是已归一化的可读文案；
+ *    `ok=true` 时 `response` 必非空。调用方据此决定「续下一批」还是「停下报错」，
+ *    ⛔ 不得再靠 `await undefined` 猜测成败。
+ */
+export interface BulkRegisterOutcome {
+  ok: boolean
+  response: RagBulkImportResponse | null
+  error: string | null
+}
 
 export interface RagBulkState {
   status: RagBulkStatus
@@ -288,23 +309,29 @@ export function useRagManagement(): UseRagManagementResult {
   }, [])
 
   const bulkRegister = useCallback(
-    (tenantId: string, registeredBy: string, items: RagBulkSourceItem[]) => {
+    async (
+      tenantId: string,
+      registeredBy: string,
+      items: RagBulkSourceItem[],
+    ): Promise<BulkRegisterOutcome> => {
       setBulk({ status: 'submitting', response: null, error: null })
-      const run = async (): Promise<void> => {
-        try {
-          const response = await bulkRegisterRagSources(tenantId, registeredBy, items)
-          setBulk({ status: 'success', response, error: null })
-        } catch (cause) {
-          if (cause instanceof ApiError && isTimeoutError(cause.normalized)) {
-            setBulk({ status: 'timeout', response: null, error: cause.normalized.message })
-          } else if (cause instanceof ApiError) {
-            setBulk({ status: 'error', response: null, error: cause.normalized.message })
-          } else {
-            setBulk({ status: 'error', response: null, error: '导入失败，请稍后重试' })
-          }
+      try {
+        const response = await bulkRegisterRagSources(tenantId, registeredBy, items)
+        setBulk({ status: 'success', response, error: null })
+        return { ok: true, response, error: null }
+      } catch (cause) {
+        const error =
+          cause instanceof ApiError
+            ? cause.normalized.message
+            : '导入失败，请稍后重试'
+        if (cause instanceof ApiError && isTimeoutError(cause.normalized)) {
+          setBulk({ status: 'timeout', response: null, error })
+        } else {
+          setBulk({ status: 'error', response: null, error })
         }
+        // ⛔ 绝不吞掉：调用方靠这个决定「停在已成功行数并给出续传入口」。
+        return { ok: false, response: null, error }
       }
-      void run()
     },
     [],
   )

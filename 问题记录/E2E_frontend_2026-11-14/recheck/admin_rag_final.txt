@@ -1,0 +1,179 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：TENANT_ADMIN · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e7]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e8]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e9]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e10]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e11]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e12]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e13]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e14]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "知识库治理"
+    - paragraph
+      - StaticText "需内容审核 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "语料管理" [ref=e15]
+          - StaticText "语料管理"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e16]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e17]
+          - StaticText "未知操作处置"
+      - listitem [level=1]
+        - link "审计查询" [ref=e18]
+          - StaticText "审计查询"
+    - paragraph
+      - StaticText "平台配置与运维"
+    - paragraph
+      - StaticText "需租户管理员 / 运维"
+    - list
+      - listitem [level=1]
+        - link "配置总览" [ref=e19]
+          - StaticText "配置总览"
+      - listitem [level=1]
+        - link "运行与容量" [ref=e20]
+          - StaticText "运行与容量"
+      - listitem [level=1]
+        - link "工具与审批" [ref=e21]
+          - StaticText "工具与审批"
+      - listitem [level=1]
+        - link "合规与零保留" [ref=e22]
+          - StaticText "合规与零保留"
+      - listitem [level=1]
+        - link "Agent 配置" [ref=e23]
+          - StaticText "Agent 配置"
+      - listitem [level=1]
+        - link "系统健康" [ref=e24]
+          - StaticText "系统健康"
+  - main
+    - heading "知识检索" [level=1, ref=e6]
+    - paragraph
+      - StaticText "输入问题，从教材语料中检索可溯源的讲解与出处；生成回答会基于这些来源，避免凭空编造。"
+    - generic
+      - sectionheader
+        - heading "检索设置" [level=2, ref=e25]
+        - paragraph
+          - StaticText "版本五轴决定引用能否被校验，请按学生正在用的教材填写。"
+      - form
+        - LabelText
+          - StaticText "你的问题"
+        - textbox "你的问题" [ref=e26]: 一元二次方程求根公式是什么
+          - StaticText "一元二次方程求根公式是什么"
+        - LabelText
+          - StaticText "检索模式"
+        - combobox "检索模式" [expanded=false, ref=e27]: 讲解
+          - MenuListPopup
+            - option "讲解" [selected, ref=e36]
+            - option "解题" [ref=e37]
+            - option "核对" [ref=e38]
+            - option "概览" [ref=e39]
+        - group "教材版本"
+          - Legend
+            - StaticText "教材版本"
+          - LabelText
+            - StaticText "学科"
+          - combobox "学科" [expanded=false, ref=e31]: 数学
+            - MenuListPopup
+              - option "数学" [selected, ref=e40]
+              - option "语文" [ref=e41]
+              - option "英语" [ref=e42]
+              - option "物理" [ref=e43]
+              - option "化学" [ref=e44]
+              - option "生物" [ref=e45]
+              - option "历史" [ref=e46]
+              - option "地理" [ref=e47]
+              - option "道法" [ref=e48]
+          - LabelText
+            - StaticText "年级"
+          - combobox "年级" [expanded=false, ref=e32]: 七年级
+            - MenuListPopup
+              - option "一年级" [ref=e49]
+              - option "二年级" [ref=e50]
+              - option "三年级" [ref=e51]
+              - option "四年级" [ref=e52]
+              - option "五年级" [ref=e53]
+              - option "六年级" [ref=e54]
+              - option "七年级" [selected, ref=e55]
+              - option "八年级" [ref=e56]
+              - option "九年级" [ref=e57]
+              - option "高一" [ref=e58]
+              - option "高二" [ref=e59]
+              - option "高三" [ref=e60]
+          - LabelText
+            - StaticText "册次"
+          - combobox "册次" [expanded=false, ref=e33]: 上册
+            - MenuListPopup
+              - option "上册" [selected, ref=e61]
+              - option "下册" [ref=e62]
+              - option "全一册" [ref=e63]
+          - LabelText
+            - StaticText "出版社"
+          - combobox "出版社" [expanded=false, ref=e34]: 人教版
+            - MenuListPopup
+              - option "人教版" [selected, ref=e64]
+              - option "苏教版" [ref=e65]
+              - option "北师大版" [ref=e66]
+              - option "华师大版" [ref=e67]
+              - option "沪教版" [ref=e68]
+              - option "鲁教版" [ref=e69]
+              - option "鄂教版" [ref=e70]
+              - option "其他" [ref=e71]
+          - LabelText
+            - StaticText "版次"
+          - textbox "版次" [ref=e35]: 2024
+            - StaticText "2024"
+        - group
+          - DisclosureTriangle "高级设置" [expanded=false]
+            - StaticText "高级设置"
+        - StaticText "召回数量与版本范围一般无需调整"
+        - button "检索中…" [disabled, ref=e28]
+    - generic
+      - sectionheader
+        - heading "回答" [level=2, ref=e29]
+        - paragraph
+          - StaticText "内容逐字摘自下方检索来源，未作改写；未接入大模型前不产生新的解释。"
+      - paragraph
+        - StaticText "提交问题后，这里会显示基于检索来源整理的教材原文。"
+    - generic
+      - sectionheader
+        - heading "检索来源" [level=2, ref=e30]
+        - paragraph
+          - StaticText "每个来源都带册/章/页/题引用，可回溯到具体教材位置；编号与上方讲解的「依据 N」一一对应。"
+      - status
+        - StaticText "正在检索教材语料"

@@ -3,7 +3,12 @@
 # 租户登记一致性巡检（只读，带外直连库）
 # =====================================================================
 #
-# 【查什么】platform.tenant 与 public.tenant 这两处租户登记的恒等关系：
+# 【查什么】租户「五处齐」：
+#   ① platform.tenant ② public.tenant ③ platform.tenant_quota
+#   ④ public.budget_account ⑤ public.cap_authz_version 的 worker 行。
+#   前三处是登记恒等关系，④⑤ 是 2026-11-14 E2E 二次评估补上的执行链前置
+#   （缺 ④ ⇒ BUDGET_EXHAUSTED、缺 ⑤ ⇒ AUTHZ_UNAVAILABLE，都是「201 后静默 FAILED」）。
+#   前两处登记的恒等关系：
 #   执行票证闸门读平台侧 lifecycle_state，worker 执行前读业务侧 status；
 #   后者本应是前者的**同事务镜像**（provisionTenant / transitionLifecycle 两张表一起写），
 #   但两表之间没有外键也没有触发器，漂移不会报错、只会让人查错方向。
@@ -44,7 +49,7 @@ if [ -z "${CHECK_DB_URL:-}" ] && [ -f "$REPO/platform.env" ]; then
 fi
 [ -n "${CHECK_DB_URL:-}" ] || { echo "❌ CHECK_DB_URL 缺失（或仓库内 platform.env 不存在）"; exit 1; }
 
-echo "=== 租户登记一致性巡检（4 项，只读）==="
+echo "=== 租户登记一致性巡检（五处齐 · 6 项，只读）==="
 echo "  owner 连接: ${CHECK_DB_USER}"
 echo
 exec "$JAVA_BIN" -cp "$PGJAR" "$REPO/scripts/tools/CheckTenantRegistry.java"

@@ -46,6 +46,10 @@ export interface UseGovernancePageResult<T> {
   reload: () => void
   /** 追加下一页。无下一页时**不发起请求**。 */
   loadMore: () => void
+  /** 翻页（loadMore）独立的错误：不污染首屏 error，失败保留已加载列表。 */
+  loadMoreError: string | null
+  /** 清除翻页错误（重试前调用）。 */
+  clearLoadMoreError: () => void
 }
 
 export function useGovernancePage<T>(
@@ -57,6 +61,7 @@ export function useGovernancePage<T>(
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
 
   /** ⛔ 并发守卫：StrictMode 双挂载 + 用户连点「加载更多」
@@ -68,6 +73,7 @@ export function useGovernancePage<T>(
     inFlight.current = true
     setLoading(true)
     setError(null)
+    setLoadMoreError(null)
 
     fetcher({ limit: pageSize, cursor: null })
       .then((page) => {
@@ -104,6 +110,8 @@ export function useGovernancePage<T>(
 
   const reload = useCallback(() => setNonce((n) => n + 1), [])
 
+  const clearLoadMoreError = useCallback(() => setLoadMoreError(null), [])
+
   const loadMore = useCallback(() => {
     if (nextCursor === null || loading || loadingMore || inFlight.current) {
       // ⛔ 无下一页时**不发起请求**：空转翻页会把限流配额耗光
@@ -112,6 +120,7 @@ export function useGovernancePage<T>(
     let cancelled = false
     inFlight.current = true
     setLoadingMore(true)
+    setLoadMoreError(null)
     fetcher({ limit: pageSize, cursor: nextCursor })
       .then((page) => {
         if (cancelled) return
@@ -122,7 +131,9 @@ export function useGovernancePage<T>(
         if (cancelled) return
         const message =
           cause instanceof ApiError ? cause.normalized.message : FALLBACK_ERROR
-        setError(message)
+        // ⚠️ D2：翻页失败**只记 loadMoreError**，不写全局 error ——
+        //    否则已加载并展示的列表会被整页 ErrorState 替换（见各治理页渲染）。
+        setLoadMoreError(message)
       })
       .finally(() => {
         inFlight.current = false
@@ -132,7 +143,7 @@ export function useGovernancePage<T>(
     //    「加载更多」是事件驱动的，用 cancelled 局部守卫已足够，
     //    组件卸载后 setState 在 React 18 中是 no-op，不会报警告。
     void cancelled
-  }, [nextCursor, loading, loadingMore, fetcher, pageSize])
+  }, [nextCursor, loading, loadingMore, fetcher, pageSize, setLoadMoreError])
 
   return {
     items,
@@ -143,5 +154,7 @@ export function useGovernancePage<T>(
     reset,
     reload,
     loadMore,
+    loadMoreError,
+    clearLoadMoreError,
   }
 }

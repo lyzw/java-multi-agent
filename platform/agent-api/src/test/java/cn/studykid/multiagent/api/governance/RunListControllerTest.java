@@ -64,7 +64,7 @@ class RunListControllerTest {
     @Test
     @DisplayName("✅ 合法学科 → 透传给仓储，返回体带出学科/年级")
     void validSubjectIsPassedThroughAndRendered() {
-        when(runList.list(eq(TENANT_ID), isNull(), eq("数学"), any(), any(), any(), anyInt()))
+        when(runList.list(eq(TENANT_ID), isNull(), isNull(), eq("数学"), any(), any(), any(), anyInt()))
                 .thenReturn(Page.of(List.of(item("数学", "初二")), null));
 
         var resp = controller().listRuns(20, null, null, "数学", null, null);
@@ -86,19 +86,19 @@ class RunListControllerTest {
                 .hasMessageContaining("subject");
 
         verify(runList, org.mockito.Mockito.never())
-                .list(any(), any(), any(), any(), any(), any(), anyInt());
+                .list(any(), any(), any(), any(), any(), any(), any(), anyInt());
     }
 
     @Test
     @DisplayName("✅ 学科留空 → 不施加学科筛选")
     void blankSubjectAppliesNoFilter() {
-        when(runList.list(eq(TENANT_ID), isNull(), isNull(), any(), any(), any(), anyInt()))
+        when(runList.list(eq(TENANT_ID), isNull(), isNull(), isNull(), any(), any(), any(), anyInt()))
                 .thenReturn(Page.of(List.of(item(null, null)), null));
 
         var resp = controller().listRuns(20, null, null, "  ", null, null);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        verify(runList).list(eq(TENANT_ID), isNull(), isNull(), any(), any(), any(), anyInt());
+        verify(runList).list(eq(TENANT_ID), isNull(), isNull(), isNull(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -113,7 +113,7 @@ class RunListControllerTest {
     @Test
     @DisplayName("✅ 空白状态 → 不施加状态筛选（`?state=` 不得 500）")
     void blankStateAppliesNoFilter() {
-        when(runList.list(eq(TENANT_ID), isNull(), isNull(), any(), any(), any(), anyInt()))
+        when(runList.list(eq(TENANT_ID), isNull(), isNull(), isNull(), any(), any(), any(), anyInt()))
                 .thenReturn(Page.of(List.of(), null));
 
         var resp = controller().listRuns(20, null, "  ", null, null, null);
@@ -121,6 +121,35 @@ class RunListControllerTest {
         assertThat(resp.getStatusCode())
                 .as("⛔ 畸形参数不该换来服务端故障：空串推进 SQL 会让 PG 抛类型转换错 → 500")
                 .isEqualTo(HttpStatus.OK);
-        verify(runList).list(eq(TENANT_ID), isNull(), isNull(), any(), any(), any(), anyInt());
+        verify(runList).list(eq(TENANT_ID), isNull(), isNull(), isNull(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("⛔ 受众主体（STUDENT）→ 列表收窄到本人创建（requester=principal）；治理角色不受限")
+    void audiencePrincipalIsScopedToOwnRuns() {
+        when(rateLimiter.check(any(), any())).thenReturn(RateLimitPort.Decision.ALLOWED);
+        when(currentPrincipal.context()).thenReturn(new TenantContext(
+                TENANT_ID, "student-1", Set.of("STUDENT"), 1L));
+        when(runList.list(eq(TENANT_ID), eq("student-1"), isNull(), isNull(), any(), any(), any(), anyInt()))
+                .thenReturn(Page.of(List.of(), null));
+        when(authorization.isAuthorized(any(), any(), any())).thenReturn(true);
+
+        var resp = new RunListController(runList, authorization, rateLimiter, currentPrincipal)
+                .listRuns(20, null, null, null, null, null);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        // ⚠️ 隔离的落点是 requesterScope=principalId —— 列表 SQL 只会返回本人创建的 Run
+        verify(runList).list(eq(TENANT_ID), eq("student-1"), isNull(), isNull(),
+                any(), any(), any(), anyInt());
+
+        // 对照：治理角色不收窄（先补齐无收窄分支的 stub，避免 mock 返回 null）
+        when(currentPrincipal.context()).thenReturn(new TenantContext(
+                TENANT_ID, "admin-1", Set.of("TENANT_ADMIN"), 1L));
+        when(runList.list(eq(TENANT_ID), isNull(), isNull(), isNull(), any(), any(), any(), anyInt()))
+                .thenReturn(Page.of(List.of(), null));
+        new RunListController(runList, authorization, rateLimiter, currentPrincipal)
+                .listRuns(20, null, null, null, null, null);
+        verify(runList).list(eq(TENANT_ID), isNull(), isNull(), isNull(),
+                any(), any(), any(), anyInt());
     }
 }

@@ -1,0 +1,80 @@
+[  通过] I-L03  退出登录                                   -> triggerClick=✓; itemClick=✓ Done; url=http://localhost:5180/admin/login; session=None
+[  通过] I-L04  未登录深链 → 登录 → 回跳原页                      -> before=http://localhost:5180/admin/login; after=http://localhost:5180/admin/users
+[  通过] I-L08  侧栏折叠 / 展开状态切换                          -> {"collapsed": false, "icon": "menu-fold", "inline": "200px"} → {"collapsed": true, "icon": "menu-unfold", "inline": "80px"} → {"collapsed": false, "ic
+[  通过] I-G02  开通租户空表单必填校验                            -> modal=开通租户
+Slug
+2-63 位，仅限小写字母、数字和连字符（-），不能以连字符开头或结尾
+名称
+套餐（可选）
+留空使用平台默认套餐；如需指定，请输入套餐标识
+开 通; primaryClick=✓ Done; errors=['请输入 slug', '请输入名称']; net=No r
+[  通过] I-G04  合法输入后取消不产生写入                           -> fills=✓ Done/✓ Done; closeClick=✓ Done; leaveOrGone=True; net=No requests captured
+[  通过] I-G05  生命周期变更弹窗与合法迁移门禁                        -> rowBtn=CLICKED; modal=生命周期变更 · t-b
+
+当前状态：ACTIVE
+
+迁移到：
+
+SUSPENDED（暂停，拒新任务）
+仅显示当前状态下的合法迁移（后端状态机强制；非法迁移返回 409）。 终态（DECOMMISSIONED / CANCELLED）无出边。
+取 消
+确 
+[  通过] I-G06  租户详情深链与区块                              -> rowBtn=CLICKED; url=http://localhost:5180/admin/tenants/b0b5eed0-1111-4222-8333-444455556666; bodyLen=324; hasQuota=True; hasGrant=True
+[  通过] I-G10  新建用户完整提交（写操作留痕）                        -> fills={'username': '✓ Done', 'password': '✓ Done', 'displayName': '✓ Done', 'email': '✓ Done'}; primaryClick=✓ Done; net=[80120.19544] POST http://loc
+[  通过] I-G11  重复用户名冲突处理                              -> primaryClick=✓ Done; net=[80120.19823] POST http://localhost:5180/api/platform/v1/users (Fetch) 409; message=['请求与当前资源状态冲突']
+[  通过] I-G12  测试用户行内操作项完整性 + SoD 自身保护                -> testRowButtons=['编辑', '停用', '重置密码', '角色']; selfRowButtons=[{'dis': False, 't': '编辑'}, {'dis': True, 't': '停用'}, {'dis': True, 't': '重置密码'}, {'dis': Tr
+DISABLE e2e_test_1113b CLICKED 确认停用该用户？
+取 消
+确 定
+DISABLE e2e_test_1113a CLICKED 确认停用该用户？
+取 消
+确 定
+[  通过] I-C04  登记 Tool 弹窗字段与必填校验                      -> modal=登记 Tool（申请 → 审批 → 执行）
+申请 → 审批 → 执行（三步不可合并）
+申请 → 审批 → 执行（三步不可合并）
+提交只生成申请单，不写配置表；审批人不得等于申请人；执行才真正写入平台配置。平台级对象影响全平台，变更需 PLATFORM_ADMIN 身份。
+Tool 标识
+
+[  通过] I-C05  Tool 详情抽屉只读全字段                         -> rowBtn=CLICKED; drawer= Tool 详情 · it-r2b-tool
+定义字段
+标识（toolId）	it-r2b-tool	名称（name）	it tool
+类型（kind）	NATIVE	风险等级（riskLevel）	READ
+所属 MCP Server（mcpServe
+[  通过] I-C06  停用申请弹窗与单向终态                            -> rowBtn=CLICKED; modal=停用 tool（迁移到 DEPRECATED，单向终态）
+对象
+CAS 版本
+停用理由
+取 消
+提交停用申请
+[  通过] I-C10  策略试跑的跨身份域失败提示                          -> btn=CLICKED; net=[80120.20928] POST http://localhost:5180/api/cap/config/routing-policies/dry-run (Fetch) 401; channelHint=True
+[  通过] I-C11  提交登记申请的前置校验与身份域提示                      -> btn=CLICKED; net=[80120.21063] POST http://localhost:5180/api/cap/config/publishes (Fetch) 401; message=['平台令牌对该端点不可达（身份域隔离）']
+[  通过] I-C14  新建模型表单字段（Drawer）                       -> click=✓ Done; drawer=新建模型
+取 消
+保 存
+供应商
+选择或输入供应商
+场景
+default
+模型名称
+显示名
+Base URL
+向量维度（embedding 模型）
+排序
+默认模型
+启用
+支持工具调用
+支持流式
+支持视觉
+上下文与压缩（ADR-013）
+模型能力未做事实探测前
+[  通过] I-A02  AI 对话租户选择与发送门禁                         -> selectClick=✓ Done; options=['IT 租户 B（t-b）', '某某教育科技（t-a）']; optionClick=✓ Done; disabledAfterSelect=True; disabledAfterType=False
+[  阻塞] I-A04  新会话清空状态                                -> newSessionButton={'disabled': True}
+[  通过] I-H01  RAG 摄取任务平台档不再 500（D-01）                -> net=No requests captured; serverErrors=[]; console=✗
+[  通过] I-H02  知识点别名下拉加载不再 500（D-02）                  -> net=No requests captured; serverErrors=[]; console=✗
+[  通过] I-P-superadmin PLATFORM_SUPER_ADMIN 导航显隐与审计深链守卫       -> {"user": "plat-superadmin", "role": "PLATFORM_SUPER_ADMIN", "loginUrl": "/admin/tenants", "rolesClaim": ["PLATFORM_SUPER_ADMIN"], "auditMenuNode": tru
+[  通过] I-P-lifecycle TENANT_LIFECYCLE_ADMIN 导航显隐与审计深链守卫     -> {"user": "plat-lifecycle", "role": "TENANT_LIFECYCLE_ADMIN", "loginUrl": "/admin/tenants", "rolesClaim": ["TENANT_LIFECYCLE_ADMIN"], "auditMenuNode": 
+[  通过] I-P-resource PLATFORM_RESOURCE_ADMIN 导航显隐与审计深链守卫    -> {"user": "plat-resource", "role": "PLATFORM_RESOURCE_ADMIN", "loginUrl": "/admin/tenants", "rolesClaim": ["PLATFORM_RESOURCE_ADMIN"], "auditMenuNode":
+[  通过] I-P-security PLATFORM_SECURITY_ADMIN 导航显隐与审计深链守卫    -> {"user": "plat-security", "role": "PLATFORM_SECURITY_ADMIN", "loginUrl": "/admin/tenants", "rolesClaim": ["PLATFORM_SECURITY_ADMIN"], "auditMenuNode":
+[  通过] I-P-auditor PLATFORM_AUDITOR 导航显隐与审计深链守卫           -> {"user": "plat-auditor", "role": "PLATFORM_AUDITOR", "loginUrl": "/admin/tenants", "rolesClaim": ["PLATFORM_AUDITOR"], "auditMenuNode": true, "leafMen
+[  通过] I-P-support PLATFORM_SUPPORT 导航显隐与审计深链守卫           -> {"user": "plat-support", "role": "PLATFORM_SUPPORT", "loginUrl": "/admin/tenants", "rolesClaim": ["PLATFORM_SUPPORT"], "auditMenuNode": false, "leafMe
+BATCH8 FINAL REGRESSION DONE

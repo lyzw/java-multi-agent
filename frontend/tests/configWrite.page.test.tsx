@@ -167,6 +167,62 @@ describe('可写配置区连通性（FE-D11）', () => {
     })
   })
 
+  /**
+   * 问题 7 行为级专项实测（2026-11-14 四轮优化）：
+   * 此前 beforeEach 把 window.confirm 恒 mock 成 true，所有用例都走「接受」，
+   * 「取消二次确认」这条路径**从未被测过**。这里局部改成 false 真实验证。
+   */
+  it('F3b ⛔ 取消二次确认后不得提交，且编辑器保持打开、不丢现场', async () => {
+    // ⚠️ 本文件没有 afterEach，F3 已调用过 confirm；先清调用记录再改返回值。
+    vi.mocked(window.confirm).mockClear()
+    vi.mocked(window.confirm).mockReturnValue(false)
+    listConfigOverridesMock.mockResolvedValue([
+      override('agent.run.max-steps', '20'),
+    ])
+
+    renderPage(<ConfigRuntimePage />)
+
+    await userEvent.click(await screen.findByText('调整'))
+    await userEvent.clear(screen.getByLabelText('agent.run.max-steps 新值'))
+    await userEvent.type(screen.getByLabelText('agent.run.max-steps 新值'), '10')
+    await userEvent.type(
+      screen.getByLabelText('agent.run.max-steps 变更理由'),
+      '试点期收紧上限以控制成本',
+    )
+    await userEvent.click(screen.getByTestId('submit-agent.run.max-steps'))
+
+    expect(window.confirm).toHaveBeenCalledTimes(1)
+    expect(applyConfigOverrideMock).not.toHaveBeenCalled()
+    expect(clearConfigOverrideMock).not.toHaveBeenCalled()
+    // ⚠️ 取消不该关掉编辑器：用户输入的值与理由都还在，可直接改后重提
+    expect(screen.getByLabelText('agent.run.max-steps 新值')).toHaveValue('10')
+    expect(screen.getByLabelText('agent.run.max-steps 变更理由')).toHaveValue(
+      '试点期收紧上限以控制成本',
+    )
+  })
+
+  it('F3c ⛔ 反向锚点：confirm 返回 true 时同一个提交流程必须真的发出请求', async () => {
+    // ⚠️ 显式恢复 true：F3b 把它改成了 false，且本文件无 afterEach。
+    vi.mocked(window.confirm).mockReturnValue(true)
+    listConfigOverridesMock.mockResolvedValue([
+      override('agent.run.max-steps', '20'),
+    ])
+    applyConfigOverrideMock.mockResolvedValue(override('agent.run.max-steps', '10'))
+
+    renderPage(<ConfigRuntimePage />)
+
+    await userEvent.click(await screen.findByText('调整'))
+    await userEvent.clear(screen.getByLabelText('agent.run.max-steps 新值'))
+    await userEvent.type(screen.getByLabelText('agent.run.max-steps 新值'), '10')
+    await userEvent.type(
+      screen.getByLabelText('agent.run.max-steps 变更理由'),
+      '试点期收紧上限以控制成本',
+    )
+    await userEvent.click(screen.getByTestId('submit-agent.run.max-steps'))
+
+    await waitFor(() => expect(applyConfigOverrideMock).toHaveBeenCalledTimes(1))
+  })
+
   it('F4 连通性：恢复默认调用 clearConfigOverride', async () => {
     listConfigOverridesMock.mockResolvedValue([
       override('agent.run.max-steps', '10', 'TIGHTEN', { source: 'db_override' }),

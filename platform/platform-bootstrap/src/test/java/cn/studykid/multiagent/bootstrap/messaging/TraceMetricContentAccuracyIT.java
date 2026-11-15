@@ -538,13 +538,14 @@ class TraceMetricContentAccuracyIT {
         }
     }
 
+    /** ⚠️ 夹具与生产口径一致：run_step.state 恒写 'RUNNING'（已发生，非进行中），完成靠 completed_at。 */
     private void insertRunSteps() throws SQLException {
         try (Connection conn = adminPool.getConnection()) {
             conn.setAutoCommit(false);
             try (PreparedStatement ps = conn.prepareStatement("""
                     INSERT INTO public.run_step (tenant_id, run_id, step_number, state,
                             step_type, fencing_token, started_at, completed_at)
-                    VALUES (?::uuid, ?::uuid, ?, 'SUCCEEDED', ?, 1, now(), now())
+                    VALUES (?::uuid, ?::uuid, ?, 'RUNNING'::run_state, ?, 1, now(), now())
                     """)) {
                 int n = 1;
                 for (int i = 0; i < 3; i++) {

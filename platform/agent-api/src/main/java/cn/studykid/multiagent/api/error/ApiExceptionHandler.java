@@ -7,6 +7,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
@@ -24,6 +25,7 @@ import cn.studykid.multiagent.core.compliance.ZeroRetentionViolationException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.ports.persistence.PlatformOpsUnavailableException;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
+import cn.studykid.multiagent.ports.security.IdentityDomains;
 
 import java.io.IOException;
 import java.util.List;
@@ -289,6 +291,49 @@ public class ApiExceptionHandler {
         log.warn("媒体类型不支持 | {}", requestContext());
         return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
                 .body(new ErrorResponse("UNSUPPORTED_MEDIA_TYPE", "请求媒体类型不受支持"));
+    }
+
+    /**
+     * 平台主体请求属性缺失 → 401 UNAUTHENTICATED（DEF-01 纵深防御，2026-11-13 E2E 实测）。
+     *
+     * <p>平台控制器统一用
+     * {@code @RequestAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE)} 取主体；
+     * 该属性只由 {@code PlatformBearerTokenFilter} 在<b>验签成功后</b>写入。若某个受保护端点
+     * 被误配为 permitAll（或未来新增端点漏接过滤器），未认证请求会直达控制器并抛
+     * {@link ServletRequestBindingException}（Spring 7 的
+     * {@code RequestAttributeMethodArgumentResolver#handleMissingValue} 直接抛该<b>基类</b>，
+     * 不存在 MissingRequestAttributeException）。此前它落到兜底
+     * {@link #handleUnexpected(Exception)} 变成 500 INTERNAL_ERROR —— 认证失败被伪装成
+     * 服务端故障，前端的「401 → 清会话 + 跳登录」分支也永不触发。
+     *
+     * <p>安全链已收窄为只放行 {@code /auth/login} 与 {@code /auth/jwks}；本处理器是第二道
+     * 保险：即便将来又出现同类配置漂移，语义仍是「未认证」而非「服务故障」。
+     *
+     * <p>⚠️ 判定不看异常消息（会随框架版本变），只看<b>请求事实</b>：平台域 URI +
+     * 请求属性里确实没有已验签主体 ⇒ 401。其余绑定错误（缺 @RequestHeader、
+     * @CookieValue、参数条件不满足等）一律 400，不会被误判成认证失败。
+     * 响应体不回显属性名或异常详情。
+     */
+    @ExceptionHandler(ServletRequestBindingException.class)
+    public ResponseEntity<ErrorResponse> handleServletRequestBinding(
+            ServletRequestBindingException e) {
+        if (missingPlatformPrincipal()) {
+            log.warn("平台链请求缺少主体属性（未认证请求到达受保护端点）| {}", requestContext());
+            return error(HttpStatus.UNAUTHORIZED, "UNAUTHENTICATED", "未认证");
+        }
+        log.info("请求绑定参数缺失 | {}", requestContext());
+        return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "请求参数不完整");
+    }
+
+    /** 平台域请求且请求属性中没有已验签的平台主体 —— 等价于「未认证」。 */
+    private static boolean missingPlatformPrincipal() {
+        var attrs = RequestContextHolder.getRequestAttributes();
+        if (!(attrs instanceof ServletRequestAttributes sar)) {
+            return false;
+        }
+        HttpServletRequest req = sar.getRequest();
+        return req.getRequestURI().startsWith("/api/platform/")
+                && req.getAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE) == null;
     }
 
     @ExceptionHandler(Exception.class)

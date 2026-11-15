@@ -7,6 +7,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.bind.ServletRequestBindingException;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -94,6 +98,53 @@ class ApiExceptionHandlerTest {
                 .as("⛔「路径不存在」与「资源不存在」必须同码，否则客户端要维护两套语义")
                 .isEqualTo(declared.code());
         assertThat(unmapped.message()).isEqualTo(declared.message());
+    }
+
+    @Test
+    @DisplayName("✅ DEF-01：平台域缺主体属性 → 401 UNAUTHENTICATED（不得被兜底吞成 500）")
+    void missingPlatformPrincipalIsUnauthorizedNotServerError() {
+        // 回归背景（2026-11-13 E2E 实测）：/api/platform/v1/auth/me 无令牌/伪造令牌
+        // 均返回 500 INTERNAL_ERROR，前端 401 清会话分支不触发。根因是 Spring 7 的
+        // @RequestAttribute 缺失抛 ServletRequestBindingException，被兜底吞掉。
+        // 安全链已收窄 permitAll；本处理器为第二道保险。
+        MockHttpServletRequest req =
+                new MockHttpServletRequest("GET", "/api/platform/v1/auth/me");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(req));
+        try {
+            ResponseEntity<ErrorResponse> resp = handler.handleServletRequestBinding(
+                    new ServletRequestBindingException("Missing request attribute 'platformPrincipal'"));
+
+            assertThat(resp.getStatusCode())
+                    .as("⛔ 未认证必须是 401；报 500 会把认证失败伪装成服务端故障")
+                    .isEqualTo(HttpStatus.UNAUTHORIZED);
+            assertThat(resp.getStatusCode().is5xxServerError()).isFalse();
+            assertThat(resp.getBody()).isNotNull();
+            assertThat(resp.getBody().code())
+                    .as("⛔ 与 jsonUnauthorized() 入口点同码，前端 client.ts 才能清会话")
+                    .isEqualTo("UNAUTHENTICATED");
+            assertThat(resp.getBody().message())
+                    .as("⛔ 不得回显属性名等内部结构")
+                    .isEqualTo("未认证");
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    @Test
+    @DisplayName("⛔ DEF-01：普通绑定参数缺失仍是 400，不得被泛化成 401")
+    void ordinaryBindingFailureStaysBadRequest() {
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", "/api/admin/dashboard");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(req));
+        try {
+            ResponseEntity<ErrorResponse> resp = handler.handleServletRequestBinding(
+                    new ServletRequestBindingException("Missing request header 'X-Foo'"));
+
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(resp.getBody()).isNotNull();
+            assertThat(resp.getBody().code()).isEqualTo("BAD_REQUEST");
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
     }
 
     @Test

@@ -207,9 +207,18 @@ export interface ResultWeakness {
   confidence: number | null
 }
 
-/** 解题步骤。⚠️ `output` 是原始 JSON 文本，且当前恒无数据（无写入方）。 */
+/**
+ * 解题步骤。
+ *
+ * ⚠️ 跨层口径（E2E 二轮优化）：`run_step.state` 复用 `run_state` 枚举，
+ *    生产链路把每一步**写死 'RUNNING'**，语义是「该步骤已发生」，
+ *    **不是进行中**；完成以 `completed_at` 判定。结果页据此显示「已完成」。
+ * ⚠️ `output` 是原始 JSON 文本，当前生产链路无写入方 ⇒ 恒 null，
+ *    语义是「未采集」，不是「无内容」。
+ */
 export interface ResultStep {
   number: number
+  /** 恒为 'RUNNING'（历史数据可能为 'SUCCEEDED'）；不得按 Run 状态机解释。 */
   state: string
   stepType: string
   output: string | null

@@ -46,7 +46,8 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useSession } from '@/auth/session'
-import { Loading, Empty, ErrorState } from '@/shared/states'
+import { Loading, Empty, ErrorStateFromError } from '@/shared/states'
+import type { NormalizedError } from '@/api/errors'
 import { PageHead, Panel, StatCard, StatusPill } from '@/components/ui'
 import { BarChart, LineChart, RankBars } from '@/components/Chart'
 import { useReports } from '@/features/reports/useReports'
@@ -235,12 +236,12 @@ function DailyTable({
 function DailySearchReport({
   data,
   status,
-  error,
+  errorInfo,
   onRetry,
 }: {
   data: RagDailySearchCount[] | null
   status: 'idle' | 'loading' | 'success' | 'error' | 'timeout'
-  error: string | null
+  errorInfo: NormalizedError | null
   onRetry: () => void
 }): JSX.Element {
   if (status === 'idle') {
@@ -253,12 +254,7 @@ function DailySearchReport({
   if (status === 'loading') return <Loading label="正在读取检索统计" />
   if (status === 'error' || status === 'timeout') {
     return (
-      <ErrorState
-        reason={error ?? '读取检索统计失败'}
-        next="语料检索统计依赖 RAG 管理面端点，请确认租户标识与服务状态。"
-        onRetry={onRetry}
-        retryLabel="重新读取"
-      />
+      <ErrorStateFromError error={errorInfo} onRetry={onRetry} retryLabel="重新读取" />
     )
   }
 
@@ -331,23 +327,18 @@ function DailySearchReport({
 function DailyImportReport({
   data,
   status,
-  error,
+  errorInfo,
   onRetry,
 }: {
   data: RagDailyImportCount[] | null
   status: 'idle' | 'loading' | 'success' | 'error' | 'timeout'
-  error: string | null
+  errorInfo: NormalizedError | null
   onRetry: () => void
 }): JSX.Element {
   if (status === 'loading') return <Loading label="正在读取导入统计" />
   if (status === 'error' || status === 'timeout') {
     return (
-      <ErrorState
-        reason={error ?? '读取导入统计失败'}
-        next="请确认租户标识正确，且 RAG 管理面端点可用。"
-        onRetry={onRetry}
-        retryLabel="重新读取"
-      />
+      <ErrorStateFromError error={errorInfo} onRetry={onRetry} retryLabel="重新读取" />
     )
   }
 
@@ -427,14 +418,14 @@ function DailyImportReport({
 function DailyWeaknessReport({
   data,
   status,
-  error,
+  errorInfo,
   onRetry,
   current,
   previous,
 }: {
   data: WeaknessDayStat[] | null
   status: 'idle' | 'loading' | 'success' | 'error' | 'timeout'
-  error: string | null
+  errorInfo: NormalizedError | null
   onRetry: () => void
   current: PeriodSummary | null
   previous: PeriodSummary | null
@@ -442,12 +433,7 @@ function DailyWeaknessReport({
   if (status === 'loading') return <Loading label="正在读取错题统计" />
   if (status === 'error' || status === 'timeout') {
     return (
-      <ErrorState
-        reason={error ?? '读取错题统计失败'}
-        next="错题统计来自错因记录表，请确认平台服务状态。"
-        onRetry={onRetry}
-        retryLabel="重新读取"
-      />
+      <ErrorStateFromError error={errorInfo} onRetry={onRetry} retryLabel="重新读取" />
     )
   }
 
@@ -517,14 +503,14 @@ function DailyWeaknessReport({
 function DailyRunReport({
   data,
   status,
-  error,
+  errorInfo,
   onRetry,
   current,
   previous,
 }: {
   data: RunDayStat[] | null
   status: 'idle' | 'loading' | 'success' | 'error' | 'timeout'
-  error: string | null
+  errorInfo: NormalizedError | null
   onRetry: () => void
   current: PeriodSummary | null
   previous: PeriodSummary | null
@@ -532,12 +518,7 @@ function DailyRunReport({
   if (status === 'loading') return <Loading label="正在读取辅导统计" />
   if (status === 'error' || status === 'timeout') {
     return (
-      <ErrorState
-        reason={error ?? '读取辅导统计失败'}
-        next="请确认平台服务状态后重试。"
-        onRetry={onRetry}
-        retryLabel="重新读取"
-      />
+      <ErrorStateFromError error={errorInfo} onRetry={onRetry} retryLabel="重新读取" />
     )
   }
 
@@ -657,13 +638,13 @@ function KnowledgePointReport({
   inRange,
   allTime,
   status,
-  error,
+  errorInfo,
   onRetry,
 }: {
   inRange: KnowledgePointRank[] | null
   allTime: KnowledgePointRank[] | null
   status: 'idle' | 'loading' | 'success' | 'error' | 'timeout'
-  error: string | null
+  errorInfo: NormalizedError | null
   onRetry: () => void
 }): JSX.Element {
   const [scope, setScope] = useState<'range' | 'all'>('range')
@@ -671,12 +652,7 @@ function KnowledgePointReport({
   if (status === 'loading') return <Loading label="正在读取知识点排行" />
   if (status === 'error' || status === 'timeout') {
     return (
-      <ErrorState
-        reason={error ?? '读取知识点排行失败'}
-        next="请确认平台服务状态后重试。"
-        onRetry={onRetry}
-        retryLabel="重新读取"
-      />
+      <ErrorStateFromError error={errorInfo} onRetry={onRetry} retryLabel="重新读取" />
     )
   }
 
@@ -774,14 +750,14 @@ function summarizeErrorTypes(rank: KnowledgePointRank): string {
 function DailyStudentReport({
   data,
   status,
-  error,
+  errorInfo,
   onRetry,
   current,
   previous,
 }: {
   data: StudentDayStat[] | null
   status: 'idle' | 'loading' | 'success' | 'error' | 'timeout'
-  error: string | null
+  errorInfo: NormalizedError | null
   onRetry: () => void
   current: PeriodSummary | null
   previous: PeriodSummary | null
@@ -789,12 +765,7 @@ function DailyStudentReport({
   if (status === 'loading') return <Loading label="正在读取学生活跃统计" />
   if (status === 'error' || status === 'timeout') {
     return (
-      <ErrorState
-        reason={error ?? '读取学生活跃统计失败'}
-        next="请确认平台服务状态后重试。"
-        onRetry={onRetry}
-        retryLabel="重新读取"
-      />
+      <ErrorStateFromError error={errorInfo} onRetry={onRetry} retryLabel="重新读取" />
     )
   }
 
@@ -876,23 +847,18 @@ function DailyStudentReport({
 function CorpusAdmissionReport({
   corpus,
   status,
-  error,
+  errorInfo,
   onRetry,
 }: {
   corpus: import('@/api/types').RagStatistics | null
   status: 'idle' | 'loading' | 'success' | 'error' | 'timeout'
-  error: string | null
+  errorInfo: NormalizedError | null
   onRetry: () => void
 }): JSX.Element {
   if (status === 'loading') return <Loading label="正在读取语料概况" />
   if (status === 'error' || status === 'timeout') {
     return (
-      <ErrorState
-        reason={error ?? '读取语料概况失败'}
-        next="请确认租户标识与 RAG 管理面端点可用。"
-        onRetry={onRetry}
-        retryLabel="重新读取"
-      />
+      <ErrorStateFromError error={errorInfo} onRetry={onRetry} retryLabel="重新读取" />
     )
   }
   if (corpus === null) {
@@ -984,7 +950,7 @@ export function ReportsPage(): JSX.Element {
       <PageHead
         title="报表中心"
         eyebrow="统计与报表"
-        lead="按天看辅导、错题与语料的变化。全部为租户级聚合，不含任何学生可识别信息。"
+        lead="按天看辅导、错题与语料的变化。全部为全租户汇总，不含任何学生可识别信息；与你在「检索记录」里看到的本人条数口径不同，两者数字不一致属正常。"
         actions={
           <button type="button" className="btn btn--quiet" onClick={reload}>
             刷新
@@ -1063,7 +1029,7 @@ export function ReportsPage(): JSX.Element {
           <DailyWeaknessReport
             data={weaknesses}
             status={platform.status}
-            error={platform.error}
+            errorInfo={platform.errorInfo}
             onRetry={reload}
             current={currentPeriod}
             previous={previousPeriod}
@@ -1081,7 +1047,7 @@ export function ReportsPage(): JSX.Element {
           <DailyRunReport
             data={runs}
             status={platform.status}
-            error={platform.error}
+            errorInfo={platform.errorInfo}
             onRetry={reload}
             current={currentPeriod}
             previous={previousPeriod}
@@ -1100,7 +1066,7 @@ export function ReportsPage(): JSX.Element {
             inRange={knowledgePointsInRange}
             allTime={knowledgePoints}
             status={platform.status}
-            error={platform.error}
+            errorInfo={platform.errorInfo}
             onRetry={reload}
           />
         </Panel>
@@ -1116,7 +1082,7 @@ export function ReportsPage(): JSX.Element {
           <DailyStudentReport
             data={students}
             status={platform.status}
-            error={platform.error}
+            errorInfo={platform.errorInfo}
             onRetry={reload}
             current={currentPeriod}
             previous={previousPeriod}
@@ -1134,7 +1100,7 @@ export function ReportsPage(): JSX.Element {
           <DailySearchReport
             data={rag.searches?.searchesByDay ?? null}
             status={rag.status}
-            error={rag.error}
+            errorInfo={rag.errorInfo}
             onRetry={reload}
           />
         </Panel>
@@ -1150,7 +1116,7 @@ export function ReportsPage(): JSX.Element {
           <DailyImportReport
             data={rag.imports?.importsByDay ?? null}
             status={rag.status}
-            error={rag.error}
+            errorInfo={rag.errorInfo}
             onRetry={reload}
           />
         </Panel>
@@ -1166,7 +1132,7 @@ export function ReportsPage(): JSX.Element {
           <CorpusAdmissionReport
             corpus={rag.corpus}
             status={rag.status}
-            error={rag.error}
+            errorInfo={rag.errorInfo}
             onRetry={reload}
           />
         </Panel>

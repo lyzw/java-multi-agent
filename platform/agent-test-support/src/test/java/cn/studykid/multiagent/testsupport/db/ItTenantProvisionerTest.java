@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.testsupport.db;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
@@ -30,7 +31,9 @@ class ItTenantProvisionerTest {
     @DisplayName("✅ it- 前缀的 slug 通过")
     void acceptsItPrefixedSlugs() {
         for (String slug : new String[] {"it-pgq-a", "it-stat-a", "it-"}) {
-            ItTenantProvisioner.requireItSlug(slug);
+            assertThatNoException()
+                    .as("it- 前缀 slug=%s 必须被接受", slug)
+                    .isThrownBy(() -> ItTenantProvisioner.requireItSlug(slug));
         }
     }
 

@@ -94,7 +94,12 @@ public class RunListController {
         Instant to = GovernanceSupport.instant(createdTo, "createdTo");
         GovernanceSupport.checkRange(from, to);
 
-        var page = runList.list(context.tenantId(), stateFilter, subjectFilter,
+        // ⚠️ 受众数据隔离（F1）：仅持受众角色（STUDENT/PARENT/TEACHER）的主体
+        //    只能看到**本人创建**的 Run；治理角色不受此收窄。
+        String requesterScope = AuthorizationService.Roles.isAudienceOnly(context.roles())
+                ? context.principalId() : null;
+
+        var page = runList.list(context.tenantId(), requesterScope, stateFilter, subjectFilter,
                 from, to, cursor, pageSize);
         return ResponseEntity.ok(GovernanceSupport.PageResponse.of(
                 page.items().stream().map(RunListItemResponse::of).toList(),

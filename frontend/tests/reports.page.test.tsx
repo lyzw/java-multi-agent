@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { SessionProvider } from '@/auth/session'
 import { ReportsPage } from '@/pages/reports/ReportsPage'
@@ -860,5 +860,75 @@ describe('报表中心：页内定位与键盘可达性', () => {
       // ⚠️ region 必须有可访问名，否则对读屏只是个无名容器
       expect((wrap.getAttribute('aria-label') ?? '').length).toBeGreaterThan(0)
     }
+  })
+})
+
+/**
+ * 问题 5 行为级专项实测（2026-11-14 四轮优化）
+ *
+ * ⚠️ 此前只有「默认 30 天」的参数断言与渲染快照，从未真的**切换**区间，
+ *    也没测过快速连切时的响应竞态。这里用 deferred promise 真实驱动。
+ */
+describe('统计区间：切换真的重发请求，且旧响应不覆盖新响应', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+    getDailyStatisticsMock.mockReset().mockResolvedValue(platformData())
+    getRagDailyImportsMock.mockReset().mockResolvedValue(importData())
+    getRagStatisticsMock.mockReset().mockResolvedValue(corpusData())
+    getRagDailySearchesMock.mockReset()
+  })
+
+  it('⛔ 从默认 30 天切到 90 天，四个端点都带 days=90', async () => {
+    getRagDailySearchesMock.mockResolvedValue(searchData([3, 5, 0]))
+    seedSession()
+    renderPage()
+
+    await waitFor(() => expect(getDailyStatisticsMock).toHaveBeenCalledWith(30))
+    expect(getRagDailySearchesMock).toHaveBeenCalledWith(TENANT, 30)
+
+    fireEvent.change(screen.getByLabelText('统计天数'), { target: { value: '90' } })
+
+    await waitFor(() => expect(getDailyStatisticsMock).toHaveBeenLastCalledWith(90))
+    expect(getRagDailySearchesMock).toHaveBeenLastCalledWith(TENANT, 90)
+    expect(getRagDailyImportsMock).toHaveBeenLastCalledWith(TENANT, 90)
+    // ⚠️ 90 天必须给出「后端可能静默截断」的显式提示（用精确文案，
+    //    避免匹配到 Panel note 里那句静态说明造成假绿）
+    expect(await screen.findByText('已选择最大区间，后端可能静默截断')).toBeInTheDocument()
+  })
+
+  it('⛔ 快速连切：先回的旧响应不得覆盖后发的新响应', async () => {
+    type SearchResponse = ReturnType<typeof searchData>
+    const oldDeferred = (() => {
+      let resolve!: (v: SearchResponse) => void
+      const promise = new Promise<SearchResponse>((r) => { resolve = r })
+      return { promise, resolve }
+    })()
+    const newDeferred = (() => {
+      let resolve!: (v: SearchResponse) => void
+      const promise = new Promise<SearchResponse>((r) => { resolve = r })
+      return { promise, resolve }
+    })()
+    getRagDailySearchesMock
+      .mockResolvedValue(searchData([3, 5, 0])) // 兜底：万一还有第三次请求也不至于挂住
+      .mockImplementationOnce(() => oldDeferred.promise)
+      .mockImplementationOnce(() => newDeferred.promise)
+
+    seedSession()
+    renderPage()
+    await waitFor(() => expect(getRagDailySearchesMock).toHaveBeenCalledTimes(1))
+
+    // 切到 7 天 → 发起第二次请求
+    fireEvent.change(screen.getByLabelText('统计天数'), { target: { value: '7' } })
+    await waitFor(() => expect(getRagDailySearchesMock).toHaveBeenCalledTimes(2))
+
+    // ⚠️ 刻意让**新请求先回**（80 次），旧请求后回（8 次）
+    await act(async () => { newDeferred.resolve(searchData([30, 50, 0])) })
+    await waitFor(() => expect(screen.getAllByText('80').length).toBeGreaterThan(0))
+    await act(async () => { oldDeferred.resolve(searchData([3, 5, 0])) })
+
+    // 旧响应被 cancelled 守卫丢弃 ⇒ 仍显示新响应的 80，不是旧响应的 8
+    await waitFor(() => expect(screen.getAllByText('80').length).toBeGreaterThan(0))
+    expect(screen.queryByText('区间内检索次数')).not.toBeNull()
+    expect(screen.getAllByText('80').length).toBeGreaterThan(0)
   })
 })

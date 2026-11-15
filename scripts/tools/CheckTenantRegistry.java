@@ -3,6 +3,8 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 租户登记一致性巡检（带外、只读）。
@@ -30,6 +32,16 @@ import java.sql.Statement;
  * 另报一条不致命的：{@code platform.tenant} 有行但缺 {@code tenant_quota}
  * （建租户流程一定写配额，缺行说明是手工补录的）—— 计入退出码，因为配额缺失会让
  * 限额判断读到 null。
+ *
+ * <p><b>2026-11-14 扩到「五处齐」</b>（E2E 二次评估 P0）：此前只查三处登记
+ * （platform.tenant / public.tenant / tenant_quota），漏了执行链真正需要的两张
+ * FORCE RLS 表 —— 实测「新租户创建 Run 返回 201，随后静默 FAILED」：
+ * <ul>
+ *   <li>缺 {@code budget_account} ⇒ 模型预留 {@code NO_ACCOUNT} ⇒ {@code BUDGET_EXHAUSTED}；</li>
+ *   <li>缺 {@code cap_authz_version(tenant_id,'worker')} ⇒ 六处
+ *       {@code require()} fail-closed ⇒ {@code AUTHZ_UNAVAILABLE}。</li>
+ * </ul>
+ * 这两项改为巡检项后，「开通链漏写」不再要等 Run 跑失败才倒查。
  *
  * <p><b>连接身份必须是库 owner</b>（{@code platform.env} 的
  * {@code SPRING_DATASOURCE_USERNAME}）：{@code public.tenant} 开了 RLS，
@@ -68,6 +80,10 @@ public final class CheckTenantRegistry {
             "SELECT t.id, t.slug "
                 + "FROM platform.tenant t LEFT JOIN platform.tenant_quota q "
                 + "  ON q.tenant_id = t.id WHERE q.tenant_id IS NULL ORDER BY t.slug"},
+        // ⑤⑥ 不走裸 JOIN：budget_account / cap_authz_version 都是 FORCE RLS 表，
+        // 用 app_agent（NOBYPASSRLS）连、不绑 GUC 会**静默 0 行**，
+        // 于是「明明有账户」会被报成「所有租户都缺」—— 假红比不查更糟。
+        // 故在 reportRuntimePrerequisites 里逐租户 set_config 绑定后再查。
     };
 
     private CheckTenantRegistry() {
@@ -86,6 +102,7 @@ public final class CheckTenantRegistry {
                 int rows = report(conn, check[0], check[1]);
                 violations += rows;
             }
+            violations += reportRuntimePrerequisites(conn);
             conn.rollback();
         } catch (SQLException e) {
             System.out.println("❌ 巡检未能完成：" + e.getMessage());
@@ -96,15 +113,82 @@ public final class CheckTenantRegistry {
 
         System.out.println();
         if (violations == 0) {
-            System.out.println("✓ 两份租户登记一致（4 项检查、0 违规）。");
+            System.out.println("✓ 五处齐（6 项检查、0 违规）。");
         } else {
             System.out.println("✗ 发现 " + violations + " 行漂移。");
-            System.out.println("  补登记（幂等，默认 dry-run）："
-                    + "deploy/sql/platform/patch_platform_tenant_registration.sql");
-            System.out.println("  根治：夹具造租户必须同时产出 platform.tenant + tenant_quota，"
-                    + "见 02_platform_seed.sql 的 platform.tenant 段。");
+            System.out.println("  补治理侧登记（默认 DRY-RUN，--apply 才写）："
+                    + "python3 scripts/provision_tenant_runtime.py "
+                    + "--register-platform --all --slug-prefix <前缀> [--apply]");
+            System.out.println("  补运行前置（幂等，--all 可批量）："
+                    + "python3 scripts/provision_tenant_runtime.py --slug <slug> | --all");
+            System.out.println("  根治：开通链必须同时产出 platform.tenant + tenant_quota "
+                    + "+ budget_account + cap_authz_version(worker)，"
+                    + "见 TenantRuntimeDefaults.insertRuntimePrerequisites。");
         }
         System.exit(violations == 0 ? 0 : 1);
+    }
+
+    /**
+     * ⑤⑥ 逐租户绑定 GUC 后检查两张 FORCE RLS 表。
+     *
+     * <p>{@code set_config('app.tenant_id', ?, true)} 是事务局部的，
+     * 必须在业务 SQL 之前执行；连接只读 + 结尾 rollback，不留任何会话状态。
+     */
+    private static int reportRuntimePrerequisites(Connection conn) throws SQLException {
+        List<String[]> tenants = new ArrayList<>();
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT tenant_id::text, slug FROM public.tenant ORDER BY slug")) {
+            while (rs.next()) {
+                tenants.add(new String[] {rs.getString(1), rs.getString(2)});
+            }
+        }
+
+        int missingBudget = 0;
+        int missingWorker = 0;
+        StringBuilder budgetOut = new StringBuilder();
+        StringBuilder workerOut = new StringBuilder();
+        for (String[] tenant : tenants) {
+            try (var bind = conn.prepareStatement("SELECT set_config('app.tenant_id', ?, true)")) {
+                bind.setString(1, tenant[0]);
+                bind.executeQuery().close();
+            }
+            if (countForTenant(conn,
+                    "SELECT count(*) FROM public.budget_account WHERE tenant_id = ?::uuid",
+                    tenant[0]) == 0) {
+                missingBudget++;
+                budgetOut.append("      - ").append(tenant[0]).append(" | ")
+                        .append(tenant[1]).append('\n');
+            }
+            if (countForTenant(conn,
+                    "SELECT count(*) FROM public.cap_authz_version "
+                            + "WHERE tenant_id = ?::uuid AND principal_id = 'worker'",
+                    tenant[0]) == 0) {
+                missingWorker++;
+                workerOut.append("      - ").append(tenant[0]).append(" | ")
+                        .append(tenant[1]).append('\n');
+            }
+        }
+
+        System.out.println(missingBudget == 0
+                ? "  ✓ ⑤ 业务侧租户缺 budget_account：0 行"
+                : "  ✗ ⑤ 业务侧租户缺 budget_account（Run 静默 BUDGET_EXHAUSTED，"
+                        + missingBudget + " 行）\n" + budgetOut);
+        System.out.println(missingWorker == 0
+                ? "  ✓ ⑥ 业务侧租户缺 worker 授权版本行：0 行"
+                : "  ✗ ⑥ 业务侧租户缺 worker 授权版本行（Run 静默 AUTHZ_UNAVAILABLE，"
+                        + missingWorker + " 行）\n" + workerOut);
+        return missingBudget + missingWorker;
+    }
+
+    private static long countForTenant(Connection conn, String sql, String tenantId)
+            throws SQLException {
+        try (var ps = conn.prepareStatement(sql)) {
+            ps.setString(1, tenantId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0L;
+            }
+        }
     }
 
     private static int report(Connection conn, String label, String sql) throws SQLException {

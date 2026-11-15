@@ -69,7 +69,7 @@ export function ApprovalsPage(): JSX.Element {
       listApprovals({ limit: params.limit, cursor: params.cursor, state }),
     [state],
   )
-  const { items, loading, loadingMore, error, hasMore, reset, loadMore } =
+  const { items, loading, loadingMore, error, hasMore, reset, loadMore, loadMoreError, clearLoadMoreError } =
     useGovernancePage<ApprovalItem>({ fetcher, deps: [state] })
 
   const submit = async (
@@ -285,6 +285,22 @@ export function ApprovalsPage(): JSX.Element {
                 </div>
               )
             })}
+            {loadMoreError !== null ? (
+              <div className="marked" role="alert" style={{ marginTop: 'var(--s-3)' }}>
+                <p className="marked__label">加载更多失败</p>
+                <p style={{ marginBottom: 0 }}>{loadMoreError}</p>
+                <button
+                  type="button"
+                  className="btn btn--quiet"
+                  onClick={() => {
+                    clearLoadMoreError()
+                    loadMore()
+                  }}
+                >
+                  重试加载更多
+                </button>
+              </div>
+            ) : null}
             <ListFooter
               count={items.length}
               hasMore={hasMore}
@@ -347,7 +363,7 @@ export function ReconciliationPage(): JSX.Element {
       listOperations({ limit: params.limit, cursor: params.cursor, state }),
     [state],
   )
-  const { items, loading, loadingMore, error, hasMore, reset, loadMore } =
+  const { items, loading, loadingMore, error, hasMore, reset, loadMore, loadMoreError, clearLoadMoreError } =
     useGovernancePage<OperationItem>({ fetcher, deps: [state] })
 
   const submit = async (
@@ -559,6 +575,22 @@ export function ReconciliationPage(): JSX.Element {
                 </div>
               )
             })}
+            {loadMoreError !== null ? (
+              <div className="marked" role="alert" style={{ marginTop: 'var(--s-3)' }}>
+                <p className="marked__label">加载更多失败</p>
+                <p style={{ marginBottom: 0 }}>{loadMoreError}</p>
+                <button
+                  type="button"
+                  className="btn btn--quiet"
+                  onClick={() => {
+                    clearLoadMoreError()
+                    loadMore()
+                  }}
+                >
+                  重试加载更多
+                </button>
+              </div>
+            ) : null}
             <ListFooter
               count={items.length}
               hasMore={hasMore}
@@ -602,7 +634,7 @@ export function AuditPage(): JSX.Element {
       }),
     [action, resourceType],
   )
-  const { items, loading, loadingMore, error, hasMore, reset, loadMore } =
+  const { items, loading, loadingMore, error, hasMore, reset, loadMore, loadMoreError, clearLoadMoreError } =
     useGovernancePage<AuditEntry>({
       fetcher,
       deps: [action, resourceType],
@@ -727,6 +759,22 @@ export function AuditPage(): JSX.Element {
                 </tbody>
               </table>
             </div>
+            {loadMoreError !== null ? (
+              <div className="marked" role="alert" style={{ marginTop: 'var(--s-3)' }}>
+                <p className="marked__label">加载更多失败</p>
+                <p style={{ marginBottom: 0 }}>{loadMoreError}</p>
+                <button
+                  type="button"
+                  className="btn btn--quiet"
+                  onClick={() => {
+                    clearLoadMoreError()
+                    loadMore()
+                  }}
+                >
+                  重试加载更多
+                </button>
+              </div>
+            ) : null}
             <ListFooter
               count={items.length}
               hasMore={hasMore}
@@ -747,9 +795,15 @@ export function AuditPage(): JSX.Element {
  * 明细里理论上只有标量（P4-D13 写入侧已过 PII 扫描），
  * 真出现嵌套时应保持页面可读，而不是把整棵树铺开。
  */
-function renderDetail(detail: Record<string, unknown>): string {
+export function renderDetail(detail: unknown): string {
+  // ⚠️ D6：后端偶发可能回带非 Record（null / 字符串 / 数组），
+  //    `Object.entries(...)` 在 null 上会抛错并把整页审计列表崩成错误态。
+  //    此处做类型守卫，非对象一律降级为占位，不假设结构。
+  if (detail === null || typeof detail !== 'object' || Array.isArray(detail)) {
+    return '—'
+  }
   const parts: string[] = []
-  for (const [key, value] of Object.entries(detail)) {
+  for (const [key, value] of Object.entries(detail as Record<string, unknown>)) {
     if (value === null) continue
     if (typeof value === 'object') {
       parts.push(`${key}: …`)

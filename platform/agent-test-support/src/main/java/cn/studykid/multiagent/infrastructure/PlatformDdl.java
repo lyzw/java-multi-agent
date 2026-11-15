@@ -6,8 +6,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import com.google.re2j.Matcher;
+import com.google.re2j.Pattern;
 
 /**
  * 结构门禁的<b>唯一</b>取数入口：仓库根 {@code deploy/sql/platform/01_platform_ddl.sql}。

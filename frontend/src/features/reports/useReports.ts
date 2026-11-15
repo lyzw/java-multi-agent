@@ -30,7 +30,7 @@ import {
   getRagStatistics,
   ApiError,
 } from '@/api/client'
-import { isTimeoutError } from '@/api/errors'
+import { isTimeoutError, normalizeNetworkError, type NormalizedError } from '@/api/errors'
 import type {
   DailyStatistics,
   RagDailySearchStatistics,
@@ -46,6 +46,8 @@ export interface PlatformStatsState {
   status: ReportStatus
   data: DailyStatistics | null
   error: string | null
+  /** ⚠️ N6：保留归一化错误，供页面按 status 分流（403/404 是终态，不给重试） */
+  errorInfo: NormalizedError | null
 }
 
 /** RAG 侧聚合状态（检索次数 + 导入量 + 语料准入概况）。 */
@@ -55,42 +57,49 @@ export interface RagStatsState {
   imports: RagDailyImportStatistics | null
   corpus: RagStatistics | null
   error: string | null
+  /** ⚠️ N6：同上，供 ErrorStateFromError 统一分流 */
+  errorInfo: NormalizedError | null
 }
 
-const IDLE_PLATFORM: PlatformStatsState = { status: 'idle', data: null, error: null }
+const IDLE_PLATFORM: PlatformStatsState = {
+  status: 'idle', data: null, error: null, errorInfo: null,
+}
 const IDLE_RAG: RagStatsState = {
   status: 'idle',
   searches: null,
   imports: null,
   corpus: null,
   error: null,
+  errorInfo: null,
 }
 
 const PLATFORM_FALLBACK = '读取平台统计失败，请稍后重试'
 const RAG_FALLBACK = '读取语料统计失败，请稍后重试'
 
 function toPlatformState(cause: unknown): PlatformStatsState {
-  if (cause instanceof ApiError) {
-    return {
-      status: isTimeoutError(cause.normalized) ? 'timeout' : 'error',
-      data: null,
-      error: cause.normalized.message,
-    }
+  const errorInfo = cause instanceof ApiError
+    ? cause.normalized
+    : normalizeNetworkError(cause)
+  return {
+    status: isTimeoutError(errorInfo) ? 'timeout' : 'error',
+    data: null,
+    error: cause instanceof ApiError ? errorInfo.message : PLATFORM_FALLBACK,
+    errorInfo,
   }
-  return { status: 'error', data: null, error: PLATFORM_FALLBACK }
 }
 
 function toRagState(cause: unknown): RagStatsState {
-  if (cause instanceof ApiError) {
-    return {
-      status: isTimeoutError(cause.normalized) ? 'timeout' : 'error',
-      searches: null,
-      imports: null,
-      corpus: null,
-      error: cause.normalized.message,
-    }
+  const errorInfo = cause instanceof ApiError
+    ? cause.normalized
+    : normalizeNetworkError(cause)
+  return {
+    status: isTimeoutError(errorInfo) ? 'timeout' : 'error',
+    searches: null,
+    imports: null,
+    corpus: null,
+    error: cause instanceof ApiError ? errorInfo.message : RAG_FALLBACK,
+    errorInfo,
   }
-  return { status: 'error', searches: null, imports: null, corpus: null, error: RAG_FALLBACK }
 }
 
 export interface UseReportsResult {
@@ -118,13 +127,13 @@ export function useReports(tenantId: string, days: number): UseReportsResult {
 
   useEffect(() => {
     let cancelled = false
-    setPlatform({ status: 'loading', data: null, error: null })
+    setPlatform({ status: 'loading', data: null, error: null, errorInfo: null })
 
     const run = async (): Promise<void> => {
       try {
         const data = await getDailyStatistics(days)
         if (cancelled) return
-        setPlatform({ status: 'success', data, error: null })
+        setPlatform({ status: 'success', data, error: null, errorInfo: null })
       } catch (cause) {
         if (cancelled) return
         setPlatform(toPlatformState(cause))
@@ -144,7 +153,7 @@ export function useReports(tenantId: string, days: number): UseReportsResult {
       return
     }
     let cancelled = false
-    setRag({ status: 'loading', searches: null, imports: null, corpus: null, error: null })
+    setRag({ status: 'loading', searches: null, imports: null, corpus: null, error: null, errorInfo: null })
 
     const run = async (): Promise<void> => {
       try {
@@ -157,7 +166,7 @@ export function useReports(tenantId: string, days: number): UseReportsResult {
           getRagStatistics(tenant),
         ])
         if (cancelled) return
-        setRag({ status: 'success', searches, imports, corpus, error: null })
+        setRag({ status: 'success', searches, imports, corpus, error: null, errorInfo: null })
       } catch (cause) {
         if (cancelled) return
         setRag(toRagState(cause))

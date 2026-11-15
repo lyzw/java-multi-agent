@@ -1,0 +1,344 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：TENANT_ADMIN · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e9]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e10]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e11]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e12]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e13]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e14]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e15]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e16]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "知识库治理"
+    - paragraph
+      - StaticText "需内容审核 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "语料管理" [ref=e17]
+          - StaticText "语料管理"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e18]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e19]
+          - StaticText "未知操作处置"
+      - listitem [level=1]
+        - link "审计查询" [ref=e20]
+          - StaticText "审计查询"
+    - paragraph
+      - StaticText "平台配置与运维"
+    - paragraph
+      - StaticText "需租户管理员 / 运维"
+    - list
+      - listitem [level=1]
+        - link "配置总览" [ref=e21]
+          - StaticText "配置总览"
+      - listitem [level=1]
+        - link "运行与容量" [ref=e22]
+          - StaticText "运行与容量"
+      - listitem [level=1]
+        - link "工具与审批" [ref=e23]
+          - StaticText "工具与审批"
+      - listitem [level=1]
+        - link "合规与零保留" [ref=e24]
+          - StaticText "合规与零保留"
+      - listitem [level=1]
+        - link "Agent 配置" [ref=e25]
+          - StaticText "Agent 配置"
+      - listitem [level=1]
+        - link "系统健康" [ref=e26]
+          - StaticText "系统健康"
+  - main
+    - heading "运行与容量" [level=1, ref=e6]
+    - paragraph
+      - StaticText "并发、限流、背压与 Worker 的声明配置。"
+    - paragraph
+      - StaticText "这里只是声明值"
+    - paragraph
+      - StaticText "下方是配置文件里写明的上限与阈值。当前实际并发、队列积压等实时运行指标尚未接入（待 C3），页面不编造数字。"
+    - generic
+      - heading "运行与容量" [level=2, ref=e7]
+      - table
+        - rowgroup
+          - row
+            - columnheader "配置键" [ref=e147]
+            - columnheader "声明值" [ref=e148]
+            - columnheader "是否接入运行时" [ref=e149]
+            - columnheader "来源" [ref=e150]
+            - columnheader "说明" [ref=e151]
+        - row
+          - cell "agent.backpressure.enabled" [ref=e27]
+            - code
+              - StaticText "agent.backpressure.enabled"
+          - cell "true" [ref=e28]
+          - cell "已接入" [ref=e29]
+          - cell "yml" [ref=e30]
+          - cell "P4-D05 已实现并接入运行时" [ref=e31]
+        - row
+          - cell "agent.backpressure.high-watermark" [ref=e32]
+            - code
+              - StaticText "agent.backpressure.high-watermark"
+          - cell "1000" [ref=e33]
+          - cell "已接入" [ref=e34]
+          - cell "yml" [ref=e35]
+          - cell "P4-D05 已实现" [ref=e36]
+        - row
+          - cell "agent.backpressure.low-watermark" [ref=e37]
+            - code
+              - StaticText "agent.backpressure.low-watermark"
+          - cell "200" [ref=e38]
+          - cell "已接入" [ref=e39]
+          - cell "yml" [ref=e40]
+          - cell "P4-D05 已实现" [ref=e41]
+        - row
+          - cell "agent.backpressure.cooldown-multiplier" [ref=e42]
+            - code
+              - StaticText "agent.backpressure.cooldown-multiplier"
+          - cell "4" [ref=e43]
+          - cell "已接入" [ref=e44]
+          - cell "yml" [ref=e45]
+          - cell "P4-D05 已实现" [ref=e46]
+        - row
+          - cell "agent.rate-limit.limit-per-window" [ref=e47]
+            - code
+              - StaticText "agent.rate-limit.limit-per-window"
+          - cell "30" [ref=e48]
+          - cell "已接入" [ref=e49]
+          - cell "yml" [ref=e50]
+          - cell "P3-D08 已实现" [ref=e51]
+        - row
+          - cell "agent.rate-limit.window-seconds" [ref=e52]
+            - code
+              - StaticText "agent.rate-limit.window-seconds"
+          - cell "60" [ref=e53]
+          - cell "已接入" [ref=e54]
+          - cell "yml" [ref=e55]
+          - cell "P3-D08 已实现" [ref=e56]
+        - row
+          - cell "agent.worker.enabled" [ref=e57]
+            - code
+              - StaticText "agent.worker.enabled"
+          - cell "true" [ref=e58]
+          - cell "已接入" [ref=e59]
+          - cell "yml" [ref=e60]
+          - cell "P4-D03 已实现" [ref=e61]
+        - row
+          - cell "agent.worker.relay-interval-ms" [ref=e62]
+            - code
+              - StaticText "agent.worker.relay-interval-ms"
+          - cell "200" [ref=e63]
+          - cell "已接入" [ref=e64]
+          - cell "yml" [ref=e65]
+          - cell "P4-D03 已实现" [ref=e66]
+        - row
+          - cell "agent.worker.concurrency" [ref=e67]
+            - code
+              - StaticText "agent.worker.concurrency"
+          - cell "4" [ref=e68]
+          - cell "已接入" [ref=e69]
+          - cell "yml" [ref=e70]
+          - cell "P4-D03 已实现" [ref=e71]
+        - row
+          - cell "agent.worker.prefetch" [ref=e72]
+            - code
+              - StaticText "agent.worker.prefetch"
+          - cell "10" [ref=e73]
+          - cell "已接入" [ref=e74]
+          - cell "yml" [ref=e75]
+          - cell "P4-D03 已实现" [ref=e76]
+        - row
+          - cell "agent.worker.outbox-batch" [ref=e77]
+            - code
+              - StaticText "agent.worker.outbox-batch"
+          - cell "50" [ref=e78]
+          - cell "已接入" [ref=e79]
+          - cell "yml" [ref=e80]
+          - cell "P4-D03 已实现" [ref=e81]
+        - row
+          - cell "agent.worker.max-publish-attempts" [ref=e82]
+            - code
+              - StaticText "agent.worker.max-publish-attempts"
+          - cell "5" [ref=e83]
+          - cell "已接入" [ref=e84]
+          - cell "yml" [ref=e85]
+          - cell "P4-D03 已实现" [ref=e86]
+        - row
+          - cell "agent.worker.context-token-budget" [ref=e87]
+            - code
+              - StaticText "agent.worker.context-token-budget"
+          - cell "16000" [ref=e88]
+          - cell "已接入" [ref=e89]
+          - cell "yml" [ref=e90]
+          - cell "A7 已接入运行时（ContextBudgetTrimmer 预算；记忆召回从中扣减）" [ref=e91]
+        - row
+          - cell "deployment.pilot.max-tenants" [ref=e92]
+            - code
+              - StaticText "deployment.pilot.max-tenants"
+          - cell "1" [ref=e93]
+          - cell "已接入" [ref=e94]
+          - cell "yml" [ref=e95]
+          - cell "P4-D05 校验" [ref=e96]
+        - row
+          - cell "agent.budget.reserve-per-tool-call" [ref=e97]
+            - code
+              - StaticText "agent.budget.reserve-per-tool-call"
+          - cell "0.50" [ref=e98]
+          - cell "已接入" [ref=e99]
+          - cell "yml" [ref=e100]
+          - cell "P3-D04 装配期校验（fail-closed）" [ref=e101]
+        - row
+          - cell "auth.jwt.token-ttl-seconds" [ref=e102]
+            - code
+              - StaticText "auth.jwt.token-ttl-seconds"
+          - cell "900" [ref=e103]
+          - cell "已接入" [ref=e104]
+          - cell "yml" [ref=e105]
+          - cell "已接入运行时（仅暴露 ttl，不暴露私钥）" [ref=e106]
+    - generic
+      - heading "可调整的上限" [level=2, ref=e8]
+      - paragraph
+        - StaticText "保存后何时生效"
+      - paragraph
+        - StaticText "保存后下一个新建的 Run 会使用新值；已经开始执行的 Run 不受影响 （配置在 Run 创建时即被快照固化）。"
+      - paragraph
+        - StaticText "平台数据优先：下表主值展示平台声明值（yml）；若该键被租户覆盖， 主值下方会并列给出租户当前生效值，调整时仍以生效值为基线。"
+      - table
+        - rowgroup
+          - row
+            - columnheader "配置项" [ref=e152]
+            - columnheader "平台声明值" [ref=e153]
+            - columnheader "约束" [ref=e154]
+            - columnheader "操作" [ref=e155]
+        - row
+          - rowheader "agent.backpressure.high-watermark" [ref=e107]
+            - code
+              - StaticText "agent.backpressure.high-watermark"
+          - cell "1000" [ref=e108]
+            - code
+              - StaticText "1000"
+          - cell "只能调小。放宽需要重新走变更评审。" [ref=e109]
+          - cell "调整" [ref=e110]
+            - button "调整" [ref=e156]
+        - row
+          - rowheader "agent.rate-limit.limit-per-window" [ref=e111]
+            - code
+              - StaticText "agent.rate-limit.limit-per-window"
+          - cell "30" [ref=e112]
+            - code
+              - StaticText "30"
+          - cell "只能调小。放宽需要重新走变更评审。" [ref=e113]
+          - cell "调整" [ref=e114]
+            - button "调整" [ref=e157]
+        - row
+          - rowheader "agent.retention.profile-months" [ref=e115]
+            - code
+              - StaticText "agent.retention.profile-months"
+          - cell "12" [ref=e116]
+            - code
+              - StaticText "12"
+          - cell "只能调小。放宽需要重新走变更评审。" [ref=e117]
+          - cell "调整" [ref=e118]
+            - button "调整" [ref=e158]
+        - row
+          - rowheader "agent.retention.prompt-days" [ref=e119]
+            - code
+              - StaticText "agent.retention.prompt-days"
+          - cell "90" [ref=e120]
+            - code
+              - StaticText "90"
+          - cell "只能调小。放宽需要重新走变更评审。" [ref=e121]
+          - cell "调整" [ref=e122]
+            - button "调整" [ref=e159]
+        - row
+          - rowheader "agent.run.max-cost-per-run" [ref=e123]
+            - code
+              - StaticText "agent.run.max-cost-per-run"
+          - cell "2.00" [ref=e124]
+            - code
+              - StaticText "2.00"
+          - cell "只能调小。放宽需要重新走变更评审。" [ref=e125]
+          - cell "调整" [ref=e126]
+            - button "调整" [ref=e160]
+        - row
+          - rowheader "agent.run.max-llm-calls" [ref=e127]
+            - code
+              - StaticText "agent.run.max-llm-calls"
+          - cell "12" [ref=e128]
+            - code
+              - StaticText "12"
+          - cell "只能调小。放宽需要重新走变更评审。" [ref=e129]
+          - cell "调整" [ref=e130]
+            - button "调整" [ref=e161]
+        - row
+          - rowheader "agent.run.max-steps" [ref=e131]
+            - code
+              - StaticText "agent.run.max-steps"
+          - cell "20" [ref=e132]
+            - code
+              - StaticText "20"
+          - cell "只能调小。放宽需要重新走变更评审。" [ref=e133]
+          - cell "调整" [ref=e134]
+            - button "调整" [ref=e162]
+        - row
+          - rowheader "agent.tenant.max-concurrent-runs" [ref=e135]
+            - code
+              - StaticText "agent.tenant.max-concurrent-runs"
+          - cell "—" [ref=e136]
+            - code
+              - StaticText "—"
+          - cell "只能调小。放宽需要重新走变更评审。" [ref=e137]
+          - cell "调整" [ref=e138]
+            - button "调整" [ref=e163]
+        - row
+          - rowheader "agent.worker.concurrency" [ref=e139]
+            - code
+              - StaticText "agent.worker.concurrency"
+          - cell "4" [ref=e140]
+            - code
+              - StaticText "4"
+          - cell "只能调小。放宽需要重新走变更评审。" [ref=e141]
+          - cell "调整" [ref=e142]
+            - button "调整" [ref=e164]
+        - row
+          - rowheader "deployment.pilot.max-tenants" [ref=e143]
+            - code
+              - StaticText "deployment.pilot.max-tenants"
+          - cell "1" [ref=e144]
+            - code
+              - StaticText "1"
+          - cell "只能调小。放宽需要重新走变更评审。" [ref=e145]
+          - cell "调整" [ref=e146]
+            - button "调整" [ref=e165]

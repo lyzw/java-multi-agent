@@ -1,0 +1,2 @@
+[80120.156] GET http://localhost:5180/api/platform/v1/audit-events?from=2026-11-12T09%3A21%3A50.391Z&limit=200 (Fetch) 200
+[80120.157] GET http://localhost:5180/api/platform/v1/audit-events?from=2026-11-12T09%3A21%3A50.393Z&limit=200 (Fetch) 200

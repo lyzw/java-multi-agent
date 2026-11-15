@@ -596,7 +596,7 @@ export function AgentsPage(): JSX.Element {
       listAgents({ limit: params.limit, cursor: params.cursor }),
     [],
   )
-  const { items, loading, loadingMore, error, hasMore, reset, loadMore } =
+  const { items, loading, loadingMore, error, hasMore, reset, loadMore, loadMoreError, clearLoadMoreError } =
     useGovernancePage<AgentItem>({ fetcher, deps: [] })
 
   const submitCreate = async (): Promise<void> => {
@@ -732,7 +732,16 @@ export function AgentsPage(): JSX.Element {
         title="Agent 配置"
         lead="定义分析流程用的智能体。"
         actions={
-          <button type="button" className="btn" onClick={() => setCreating((v) => !v)}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              // ⚠️ D3：切换「新建 / 发布」视图时清空上一次动作的残留错误，
+              //    避免发布失败的错误串味进新建表单（反之亦然）。
+              setCreating((v) => !v)
+              setActionError(null)
+            }}
+          >
             {creating ? '取消新建' : '新建 Agent'}
           </button>
         }
@@ -811,7 +820,9 @@ export function AgentsPage(): JSX.Element {
                         <button
                           type="button"
                           onClick={() => {
+                            // ⚠️ D3：进入发布视图先清空新建残留错误（见上方说明）。
                             setPublishFor(agent.agentId)
+                            setActionError(null)
                             prefillSpec(agent.latestDefinition)
                           }}
                         >
@@ -823,6 +834,22 @@ export function AgentsPage(): JSX.Element {
                 </tbody>
               </table>
             </div>
+            {loadMoreError !== null ? (
+              <div className="marked" role="alert" style={{ marginTop: 'var(--s-3)' }}>
+                <p className="marked__label">加载更多失败</p>
+                <p style={{ marginBottom: 0 }}>{loadMoreError}</p>
+                <button
+                  type="button"
+                  className="btn btn--quiet"
+                  onClick={() => {
+                    clearLoadMoreError()
+                    loadMore()
+                  }}
+                >
+                  重试加载更多
+                </button>
+              </div>
+            ) : null}
             <ListFooter
               count={items.length}
               hasMore={hasMore}

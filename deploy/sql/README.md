@@ -55,7 +55,7 @@ deploy/sql/
 | `platform/patch_audit_ticket_scope.sql` | audit 工单范围列补录 | 列已在 01 快照内；`scripts/dev-it-db.sh` 的重放循环一并移除 |
 | `platform/patch_cap_release_head.sql` | 发布头/指针补齐 | 与 02 附录 A 同源，附录 A 已覆盖 |
 | `platform/patch_execution_ticket_permission.sql` | 权限码补录 | 权限矩阵以代码 `PlatformRolePermissionMatrix` 为权威源，治理副本随种子 |
-| `platform/patch_platform_tenant_registration.sql` | 租户平台侧登记补录 | 被 02 种子「三处齐」形状覆盖 |
+| `platform/patch_platform_tenant_registration.sql` | 租户平台侧登记补录 | 被 02 种子「三处齐」形状覆盖；运行时补齐能力迁至 `scripts/provision_tenant_runtime.py --register-platform`（默认 DRY-RUN，`--apply` 才写） |
 | `rag/04_migrate_embedding_halfvec_4096.sql` | 向量列 halfvec(4096) 迁移 | 一次性迁移；`01_rag_ddl.sql` 终态即 halfvec(4096) |
 | `scripts/cleanup-platform-stray-agent-tables.sql` | 平台误建表清理 | 一次性清理；重建后无此问题 |
 

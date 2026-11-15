@@ -1,0 +1,129 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：TENANT_ADMIN · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e7]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e8]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e9]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e10]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e11]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e12]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e13]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e14]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "知识库治理"
+    - paragraph
+      - StaticText "需内容审核 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "语料管理" [ref=e15]
+          - StaticText "语料管理"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e16]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e17]
+          - StaticText "未知操作处置"
+      - listitem [level=1]
+        - link "审计查询" [ref=e18]
+          - StaticText "审计查询"
+    - paragraph
+      - StaticText "平台配置与运维"
+    - paragraph
+      - StaticText "需租户管理员 / 运维"
+    - list
+      - listitem [level=1]
+        - link "配置总览" [ref=e19]
+          - StaticText "配置总览"
+      - listitem [level=1]
+        - link "运行与容量" [ref=e20]
+          - StaticText "运行与容量"
+      - listitem [level=1]
+        - link "工具与审批" [ref=e21]
+          - StaticText "工具与审批"
+      - listitem [level=1]
+        - link "合规与零保留" [ref=e22]
+          - StaticText "合规与零保留"
+      - listitem [level=1]
+        - link "Agent 配置" [ref=e23]
+          - StaticText "Agent 配置"
+      - listitem [level=1]
+        - link "系统健康" [ref=e24]
+          - StaticText "系统健康"
+  - main
+    - heading "发起辅导" [level=1, ref=e6]
+    - paragraph
+      - StaticText "请提交一道错题。我们只采集随机匿名编号、年级、学科与解题过程，不会收集姓名、学校、班级等身份信息。"
+    - generic
+      - sectionheader
+        - heading "错题信息" [level=2, ref=e32]
+      - form
+        - LabelText
+          - StaticText "学生匿名编号"
+        - textbox "学生匿名编号" [required, ref=e25]
+        - paragraph
+          - StaticText "请填写平台生成的匿名编号，不要填姓名"
+        - paragraph
+          - StaticText "没有可用的 Agent"
+        - paragraph
+          - StaticText "当前租户下没有已发布的 Agent。请联系管理员创建并发布 Agent 后再发起辅导。"
+        - LabelText
+          - StaticText "学科"
+        - combobox "学科" [expanded=false, ref=e26]: 数学
+          - MenuListPopup
+            - option "数学" [selected, ref=e33]
+            - option "物理" [ref=e34]
+            - option "化学" [ref=e35]
+            - option "生物" [ref=e36]
+            - option "语文" [ref=e37]
+            - option "英语" [ref=e38]
+        - LabelText
+          - StaticText "年级"
+        - combobox "年级" [expanded=false, ref=e27]: 初一
+          - MenuListPopup
+            - option "初一" [selected, ref=e39]
+            - option "初二" [ref=e40]
+            - option "初三" [ref=e41]
+        - LabelText
+          - StaticText "题目内容"
+        - textbox "题目内容" [required, ref=e28]
+        - LabelText
+          - StaticText "我的解题过程"
+        - textbox "我的解题过程" [required, ref=e29]
+        - LabelText
+          - StaticText "已知正确答案"
+        - textbox "已知正确答案" [required, ref=e30]
+        - status
+          - StaticText "还有 4 项必填未填：学生匿名编号、题目内容、我的解题过程、已知正确答案"
+        - button "开始分析" [disabled, ref=e31]

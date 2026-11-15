@@ -228,8 +228,9 @@ public class CapabilityCatalogController {
         for (String toolId : def.declaredTools()) {
             toolDefs.findLatestPublished(toolId)
                     .or(() -> toolDefs.find(toolId, Integer.MAX_VALUE))
-                    .map(t -> tools.add(ToolSummary.of(t)))
-                    .orElseGet(() -> missingTools.add(toolId));
+                    .ifPresentOrElse(
+                            t -> tools.add(ToolSummary.of(t)),
+                            () -> missingTools.add(toolId));
         }
 
         List<McpSummary> servers = new ArrayList<>();
@@ -237,8 +238,9 @@ public class CapabilityCatalogController {
         for (McpDeclaration declaration : def.declaredMcp()) {
             serverDefs.findLatestPublished(declaration.serverId())
                     .or(() -> serverDefs.find(declaration.serverId(), Integer.MAX_VALUE))
-                    .map(s -> servers.add(McpSummary.of(s)))
-                    .orElseGet(() -> missingServers.add(declaration.serverId()));
+                    .ifPresentOrElse(
+                            s -> servers.add(McpSummary.of(s)),
+                            () -> missingServers.add(declaration.serverId()));
         }
 
         return ResponseEntity.ok(new SkillRelationsResponse(

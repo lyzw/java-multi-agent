@@ -24,6 +24,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.persistence.RunEventQueryPort;
+import cn.studykid.multiagent.ports.persistence.RunQueryPort;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
 
@@ -159,9 +160,14 @@ class SseStreamingTest {
         }
     }
 
+    /**
+     * 状态查询替身：本用例主体角色为空（非受众），隔离分支不触达；
+     * 万一触达则按「不存在」404（fail-closed）。
+     */
+    private static final RunQueryPort NULL_RUN_QUERY = (tenantId, runId) -> null;
+
     /** 可脚本化限流替身。 */
-    private static RateLimitPort limiter(RateLimitPort.Decision forced) {
-        return new RateLimitPort() {
+    private static RateLimitPort limiter(RateLimitPort.Decision forced) {        return new RateLimitPort() {
             @Override public Decision check(String tenantId, String bucketKey) {
                 return forced;
             }
@@ -180,7 +186,7 @@ class SseStreamingTest {
         @Test
         @DisplayName("⚠️⚠️ 超限 → 429，不返回流")
         void overLimitRejected() {
-            var controller = new RunEventController(new FakeEventQuery(), allowAll(),
+            var controller = new RunEventController(new FakeEventQuery(), NULL_RUN_QUERY, allowAll(),
                     principal(), limiter(RateLimitPort.Decision.REJECTED));
 
             assertThatThrownBy(() -> controller.streamEvents(RUN_ID, null))
@@ -193,7 +199,7 @@ class SseStreamingTest {
         @Test
         @DisplayName("⚠️ 限流组件故障（FAIL_CLOSED）→ 同样 429")
         void failClosedAlsoRejected() {
-            var controller = new RunEventController(new FakeEventQuery(), allowAll(),
+            var controller = new RunEventController(new FakeEventQuery(), NULL_RUN_QUERY, allowAll(),
                     principal(), limiter(RateLimitPort.Decision.FAIL_CLOSED));
 
             assertThatThrownBy(() -> controller.streamEvents(RUN_ID, null))
@@ -210,7 +216,7 @@ class SseStreamingTest {
         @Test
         @DisplayName("⚠️⚠️ 授权失败 → 拒绝（不建连）")
         void deniedStillRejected() {
-            var controller = new RunEventController(new FakeEventQuery(), denyAll(),
+            var controller = new RunEventController(new FakeEventQuery(), NULL_RUN_QUERY, denyAll(),
                     principal(), limiter(RateLimitPort.Decision.ALLOWED));
 
             assertThatThrownBy(() -> controller.streamEvents(RUN_ID, null))
@@ -223,7 +229,7 @@ class SseStreamingTest {
         void missingRunReturns404() {
             var query = new FakeEventQuery();
             query.state = null;
-            var controller = new RunEventController(query, allowAll(), principal(),
+            var controller = new RunEventController(query, NULL_RUN_QUERY, allowAll(), principal(),
                     limiter(RateLimitPort.Decision.ALLOWED));
 
             assertThatThrownBy(() -> controller.streamEvents(RUN_ID, null))
@@ -302,7 +308,7 @@ class SseStreamingTest {
     class PayloadWhitelist {
 
         private final RunEventController controller = new RunEventController(
-                new FakeEventQuery(), allowAll(), principal(),
+                new FakeEventQuery(), NULL_RUN_QUERY, allowAll(), principal(),
                 limiter(RateLimitPort.Decision.ALLOWED));
 
         @Test

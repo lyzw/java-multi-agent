@@ -29,17 +29,22 @@ public interface RunListQueryPort {
     /**
      * 查询 Run 列表（游标分页）。
      *
-     * @param tenantId 租户标识；<b>必须来自认证上下文</b>
-     * @param state    状态过滤；{@code null} 表示不限
-     * @param subject  学科过滤；{@code null} 表示不限。
-     *                ⚠️ 必须是<b>词表内</b>的规范值（调用方已校验），
-     *                实现方仍须按归一后的值比较（去首尾空白）
-     * @param from     起始时刻（含）；{@code null} 表示不限
-     * @param to       结束时刻（含）；{@code null} 表示不限
-     * @param cursor   起始游标；{@code null} 表示第一页
-     * @param limit    页大小（调用方已校验上限）
+     * @param tenantId     租户标识；<b>必须来自认证上下文</b>
+     * @param requesterId  创建主体过滤；{@code null} 表示不限（治理角色）。
+     *                     ⚠️ 受众主体（F1 隔离）必须传其 principalId——
+     *                     只返回本人创建的 Run；{@code requester_id} 为空的
+     *                     历史行 / 运维代操作行对受众<b>不可见</b>。
+     * @param state        状态过滤；{@code null} 表示不限
+     * @param subject      学科过滤；{@code null} 表示不限。
+     *                     ⚠️ 必须是<b>词表内</b>的规范值（调用方已校验），
+     *                     实现方仍须按归一后的值比较（去首尾空白）
+     * @param from         起始时刻（含）；{@code null} 表示不限
+     * @param to           结束时刻（含）；{@code null} 表示不限
+     * @param cursor       起始游标；{@code null} 表示第一页
+     * @param limit        页大小（调用方已校验上限）
      */
     @NonNull Page<RunListItem> list(@NonNull String tenantId,
+                                    @Nullable String requesterId,
                                     @Nullable String state,
                                     @Nullable String subject,
                                     @Nullable Instant from,

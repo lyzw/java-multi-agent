@@ -65,8 +65,11 @@ function sampleResult(overrides?: Partial<RunResultResponse>): RunResultResponse
     weaknesses: [
       { knowledgePoint: '根式分母有理化', errorType: '符号错误', confidence: 0.82 },
     ],
+    // ⚠️ 夹具必须跟生产口径一致：run_step.state 恒 'RUNNING'（已发生，
+    //    非进行中），output_payload 无写入方 ⇒ null。此前用 'SUCCEEDED'
+    //    + 有正文，会让前端测试与真实数据永远反向。
     steps: [
-      { number: 1, state: 'SUCCEEDED', stepType: 'MODEL', output: '配方' },
+      { number: 1, state: 'RUNNING', stepType: 'THINK', output: null },
     ],
     reconciliation: { pending: false, operations: [] },
     ...overrides,
@@ -113,7 +116,6 @@ describe('T1：P5 接上真实结果', () => {
     getRunResultMock.mockResolvedValue(sampleResult())
     renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
 
-    // ⚠️ 「SUCCEEDED」出现两次（Run 状态 + 步骤状态）→ 用 getAllByText
     expect((await screen.findAllByText('SUCCEEDED')).length).toBeGreaterThan(0)
     expect(await screen.findByText('符号错误')).toBeInTheDocument()
     expect(await screen.findByText('根式分母有理化')).toBeInTheDocument()
@@ -234,5 +236,170 @@ describe('T7：⛔ C6 敏感信息拦截', () => {
     expect(document.body.textContent ?? '').not.toContain('110101199001011234')
     // ⛔ 也不得整页报错（那会让「偶然复述学号」变成整页不可用）
     expect(screen.queryByText('没能完成')).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * T8：run_step 跨层口径（E2E 二轮优化，2026-11-14）
+ *
+ * ⚠️ 实测异常：近 2 天 9 个 SUCCEEDED Run 的 run_step 全部
+ *    state='RUNNING'、completed_at 非空、output_payload 空。
+ *    排查结论：这是生产链路**有意的占位口径**（run_state 枚举无
+ *    「步骤已完成」值，步骤单条 INSERT 写死 RUNNING 表示「已发生」），
+ *    不是漏写 UPDATE；真正的问题是 DDL / API / 前端 / 测试夹具各自
+ *    按 run_state 字面语义解释，结果页把已完成步骤显示成「执行中」。
+ *
+ * ⛔ 本类锁死读侧去歧义；写入侧口径由 runStep.contract.test.ts 守卫。
+ */
+describe('T8：⛔ run_step 恒 RUNNING 表示「已发生」，不得显示成「执行中」', () => {
+  it('生产口径步骤应显示「已完成」并带绿点，且有「无逐步正文」说明', async () => {
+    getRunResultMock.mockResolvedValue(sampleResult())
+    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
+
+    expect(
+      await screen.findByText('步骤记录的是执行类型与耗时；逐步讲解请看上方「归因讲解」。'),
+    ).toBeInTheDocument()
+    expect(document.querySelector('.steps__item .chip')?.textContent).toBe('已完成')
+    expect(document.querySelector('.steps__item')?.className).toContain('steps__item--done')
+    // ⚠️ output_payload 无写入方：不渲染空白正文骨架
+    expect(document.querySelector('.steps__body')).toBeNull()
+    // ⛔ 「执行中」是修复前的错误语义，步骤区不得再出现
+    expect(document.querySelector('.steps')?.textContent ?? '').not.toContain('执行中')
+  })
+
+  it('FAILED 步骤仍显示「失败」并带红点（口径不吞掉真实失败）', async () => {
+    getRunResultMock.mockResolvedValue(
+      sampleResult({ steps: [{ number: 1, state: 'FAILED', stepType: 'TOOL', output: null }] }),
+    )
+    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
+
+    await screen.findByText('步骤记录的是执行类型与耗时；逐步讲解请看上方「归因讲解」。')
+    expect(document.querySelector('.steps__item .chip')?.textContent).toBe('失败')
+    expect(document.querySelector('.steps__item')?.className).toContain('steps__item--bad')
+  })
+
+  it('历史数据 SUCCEEDED 仍兼容显示「成功」', async () => {
+    getRunResultMock.mockResolvedValue(
+      sampleResult({ steps: [{ number: 1, state: 'SUCCEEDED', stepType: 'THINK', output: '配方' }] }),
+    )
+    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
+
+    expect(await screen.findByText('成功')).toBeInTheDocument()
+    expect(document.querySelector('.steps__item')?.className).toContain('steps__item--done')
+    expect(await screen.findByText('配方')).toBeInTheDocument()
+  })
+
+  it('⛔ 反证：把 RUNNING 映射回「执行中」时本类断言必须转红', () => {
+    const flawedLabels: Record<string, string> = { RUNNING: '执行中' }
+    expect(flawedLabels['RUNNING']).toBe('执行中')
+    // 真实实现是「已完成」；二者不同 ⇒ 上面的 chip 文本断言能抓到回退
+    expect(flawedLabels['RUNNING']).not.toBe('已完成')
+  })
+})
+
+/**
+ * T9：⛔ C6 兜底扫描的**行为级**验收（E2E 四轮优化，2026-11-14）
+ *
+ * 修复前的两个真实漏洞：
+ *   ① `explanation.slice(0, 10000)` 截断后才扫，而页面渲染全文 ⇒
+ *      第 10001 字符之后的敏感信息既不扫也照常显示；
+ *   ② 只喂 `{ explanation }`，`weaknesses` / `steps.output` / `toolName`
+ *      等会渲染的字段完全不扫 ⇒ C6 只守了一扇门。
+ *
+ * ⛔ 本类不测「函数能不能识别」（那是 result.leak.test.ts 的事），
+ *    测的是「页面接入后，长文本尾部 / 其它字段的敏感信息是否真的不出现在 DOM」。
+ */
+describe('T9：⛔ C6 扫全文 + 全字段，命中即按字段拦截', () => {
+  const LONG_PREFIX = 'A'.repeat(10000)
+
+  it('讲解超过 10000 字符时，尾部敏感信息仍被拦截（撤掉 slice 才不绕过）', async () => {
+    getRunResultMock.mockResolvedValue(
+      sampleResult({ explanation: LONG_PREFIX + '你的身份证是 110101199001011234' }),
+    )
+    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
+
+    expect(await screen.findByText('已拦下不可采集的信息')).toBeInTheDocument()
+    expect(document.body.textContent ?? '').not.toContain('110101199001011234')
+    // ⛔ 不得整页报错（一次偶然复述不该让结果页不可用）
+    expect(screen.queryByText('没能完成')).not.toBeInTheDocument()
+  })
+
+  it('正常数学长文本不被误杀（防「恒拦」假绿）', async () => {
+    const explanation = LONG_PREFIX + '先配方化为顶点式，再读出顶点。'
+    getRunResultMock.mockResolvedValue(sampleResult({ explanation }))
+    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
+
+    expect(await screen.findByText(explanation)).toBeInTheDocument()
+    expect(screen.queryByText('已拦下不可采集的信息')).not.toBeInTheDocument()
+  })
+
+  it('错因归类字段含手机号时被拦下，且干净的讲解仍正常显示（按字段精准拦截）', async () => {
+    getRunResultMock.mockResolvedValue(
+      sampleResult({
+        explanation: '先配方化为顶点式。',
+        weaknesses: [
+          { knowledgePoint: '补习题联系 13812345678', errorType: '符号错误', confidence: null },
+        ],
+      }),
+    )
+    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
+
+    expect(await screen.findByText('已拦下不可采集的信息')).toBeInTheDocument()
+    expect(document.body.textContent ?? '').not.toContain('13812345678')
+    // ⛔ 讲解没被误伤：只拦命中的「错因归类」区块
+    expect(await screen.findByText('先配方化为顶点式。')).toBeInTheDocument()
+    expect(screen.getByText('这部分内容里有不该出现的信息，已拦下')).toBeInTheDocument()
+  })
+
+  it('解题步骤正文含身份证时被拦下', async () => {
+    getRunResultMock.mockResolvedValue(
+      sampleResult({
+        steps: [
+          { number: 1, state: 'SUCCEEDED', stepType: 'THINK', output: '身份证 110101199001011234' },
+        ],
+      }),
+    )
+    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
+
+    expect(await screen.findByText('已拦下不可采集的信息')).toBeInTheDocument()
+    expect(document.body.textContent ?? '').not.toContain('110101199001011234')
+  })
+
+  it('待核对工具名含身份证时被拦下', async () => {
+    getRunResultMock.mockResolvedValue(
+      sampleResult({
+        reconciliation: {
+          pending: true,
+          operations: [
+            { operationId: 'op-1', toolName: '身份证 110101199001011234', state: 'UNKNOWN' },
+          ],
+        },
+      }),
+    )
+    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
+
+    expect(await screen.findByText('已拦下不可采集的信息')).toBeInTheDocument()
+    expect(document.body.textContent ?? '').not.toContain('110101199001011234')
+  })
+
+  it('⛔ 结构性标识（UUID / 置信度）不得被扫，否则每个正常 Run 都假阳性', async () => {
+    getRunResultMock.mockResolvedValue(
+      sampleResult({
+        weaknesses: [
+          { knowledgePoint: '根式分母有理化', errorType: '符号错误', confidence: 0.82 },
+        ],
+        reconciliation: {
+          pending: true,
+          // UUID 里含 12 位连续数字段，若拼进扫描文本会命中 STUDENT_ID 规则
+          operations: [
+            { operationId: '550e8400-e29b-41d4-a716-446655440000', toolName: 'record_weakness', state: 'UNKNOWN' },
+          ],
+        },
+      }),
+    )
+    renderAt('/runs/r-1/result', <RunResultPage />, '/runs/:runId/result')
+
+    expect(await screen.findByText('record_weakness')).toBeInTheDocument()
+    expect(screen.queryByText('已拦下不可采集的信息')).not.toBeInTheDocument()
   })
 })

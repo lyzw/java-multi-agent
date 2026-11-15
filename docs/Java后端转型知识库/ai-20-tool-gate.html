@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A20 · 工具调用闸门与副作用安全 · Java 后端转型知识库</title>
+<link rel="stylesheet" href="assets/handbook.css">
+</head>
+<body data-page="ai-20-tool-gate" data-ai="1">
+<div id="topbar">
+  <button class="tb-btn" id="menu-toggle" aria-label="目录">☰ 目录</button>
+  <a class="tb-home" href="index.html">总目录</a>
+  <span class="tb-title">Java 后端转型知识库</span>
+  <span class="tb-page">A20 · 工具调用闸门与副作用安全</span>
+  <span class="tb-spacer"></span>
+  <input id="search" type="search" placeholder="全站检索：章节 / 配置键 / 类名…" autocomplete="off">
+  <button class="tb-btn" id="print-btn">打印 / PDF</button>
+</div>
+<div id="search-results"></div>
+<aside id="sidebar">
+  <div class="sb-label">目录 · 六篇 + AI 二十一册</div>
+  <nav id="toc"><noscript>需要启用 JavaScript 才能生成全站目录；正文仍可完整阅读。</noscript></nav>
+</aside>
+<button id="backtop" title="回到顶部">↑</button>
+<main id="main"><div class="wrap">
+<header class="page-head">
+  <div class="ph-kicker">AI 专题 · 专门章节</div>
+  <h1>A20 · 工具调用闸门与副作用安全 <span class="ai-badge">AI</span></h1>
+  <p class="ph-sub">八道闸门的执行顺序、风险三级与 fail-closed 兜底、ToolOperation 八态状态机、UNKNOWN 的三种禁止、fencing token 与 DB 触发器双防线、幂等键命名空间</p>
+  <div class="ph-meta"><span>覆盖：A20.1–A20.12</span><span>基线：2026-11-12 仓库快照</span><span>事实边界：见第 20 章</span></div>
+</header>
+<section class="chapter" id="a20">
+  <div class="breadcrumb"><b>AI 专题 · A20</b> / 工具调用闸门与副作用安全</div>
+  <h2><span class="num">A20.</span> 工具调用闸门与副作用安全：不可绕过的边界</h2>
+  <p>这是整个平台<strong>最核心的安全机制</strong>，也是前十九册反复提及却没有展开的一块——「八道闸门」在 A4、A16、A19 里出现了十余次，每次都只是一句话。<code class="inline-code">ToolInvocationGate</code> 有 2048 行，是这个仓库里最长的单个业务类，它回答一个问题：<strong>模型建议要执行一个有副作用的动作时，平台如何在不信任模型的前提下保证「不重复执行、不越权执行、不超预算执行、失败可知」</strong>。</p>
+  <div class="callout c-info"><span class="ct">为什么这一册必须单独存在</span><p>传统 Java 后端处理「调用外部写接口」用事务 + 重试就够了。但这里的前提变了：<strong>调用方是模型，它会幻觉、会被注入、会重复请求</strong>；而且副作用可能「请求已发出但响应丢失」——此时结果不可知。这三件事叠加，让「重试」从安全操作变成<strong>可能造成重复副作用的高危操作</strong>。本册讲的就是围绕这个前提建立的一整套机制。</p></div>
+  <div class="callout c-warn"><span class="ct">本册与相邻册的分工</span><p><a href="ai-04-agent-orchestration.html">A4</a> 讲能力的<strong>配置模型</strong>（谁声明了哪些工具），<a href="ai-16-mcp-runtime.html">A16</a> 讲 MCP 的<strong>传输与 SSRF 防护</strong>，本册讲<strong>执行闸门本身</strong>——不管工具来自原生、MCP 还是 HTTP，都必须过同一道门。三者合起来才是完整的工具链路。</p></div>
+
+  <h3 id="a20-1">A20.1 执行链八步：顺序本身就是安全设计</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">不可绕过的执行链（ToolInvocationGate.java:37-50）</span><button>复制</button></div><pre><code>Schema 校验 → 执行时重新授权 → 幂等键 → 账本 → 审批 → 预算 → 执行 → 账本更新
+
+⚠️ 本类是不可绕过的安全边界。
+⚠️ 禁止使用 Spring AI ToolCallingAdvisor 的自动执行路径——
+   它会绕过上述全部闸门（ADR-011 §3.3）。本类是唯一入口。</code></pre></div>
+  <p>顺序不能乱，每一步的理由都是「放在别处的代价更高」：</p>
+  <table>
+    <thead><tr><th>#</th><th>步骤</th><th>放在这个位置的理由</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td>能力闭包校验</td><td>在 <code class="inline-code">findHandler</code> 之后、Schema 之前：<strong>「未登记」与「未声明」是两个不同的拒绝原因</strong>，混在一起现场无法区分「工具不存在」与「越权调用」；且在真正执行前拦成本最低</td></tr>
+      <tr><td>0'</td><td>取消检查</td><td>闸门级双保险：即使循环级检查已放过当前轮（取消在模型返回后到达），本检查保证批次内后续工具不再启动</td></tr>
+      <tr><td>1</td><td>Schema 校验</td><td>失败不执行。日志必须带<strong>模型实际提交的参数名</strong>——否则「模型传错参数名」与「网关解析成空表」两种真因完全同形</td></tr>
+      <tr><td>2</td><td>执行时重新授权</td><td><strong>不是创建 Run 时授权一次就够</strong>：主体权限可能已被撤销（<a href="ai-05-config-governance.html#a5-5">A5.5</a> 的分层授权）</td></tr>
+      <tr><td>3</td><td>幂等键</td><td>在账本之前——账本的唯一约束靠它（A20.6）</td></tr>
+      <tr><td>4</td><td>账本登记</td><td>在执行之前登记 <code class="inline-code">PENDING → IN_FLIGHT</code>：若先执行后登记，崩溃时就丢了「已发出」的证据</td></tr>
+      <tr><td>5</td><td>审批</td><td>高风险工具需要人类/策略批准（A20.4）</td></tr>
+      <tr><td>6</td><td>预算预留</td><td>执行前预留，失败即拒绝（<a href="ai-11-cost-governance.html#a11-3">A11.3</a>）</td></tr>
+      <tr><td>7</td><td>执行</td><td>唯一真正调用外部的地方</td></tr>
+      <tr><td>8</td><td>账本更新</td><td>落 SUCCEEDED / FAILED / UNKNOWN</td></tr>
+    </tbody>
+  </table>
+  <p>注意第 4 步和第 8 步是<strong>两次账本操作</strong>，中间夹着执行。这个「登记 → 执行 → 记账」的三段式是所有「必须知道副作用到底有没有发生」的场景的通用骨架。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-worker/.../execute/ToolInvocationGate.java:37-50</span>（执行链与禁令）、<span class="mono">:1115-1260</span>（invokeAllLegacy 的实际顺序与各处注释）。</div>
+
+  <h3 id="a20-2">A20.2 风险三级与 fail-closed 兜底：未登记即最高风险</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">风险三级与兜底（ToolRiskLevel.java:19-41）</span><button>复制</button></div><pre><code>READ            只读，无外部副作用
+WRITE_PROFILE   写平台内部档案（如学习画像），有副作用但不对外
+WRITE_EXTERNAL  对外部业务系统产生副作用，风险最高
+
+⚠️ fail-closed：未登记的工具名【不返回 null 放行】，
+   而是按 WRITE_EXTERNAL 处理并要求显式复核。
+   新增工具若忘记配置 risk-level-map，会被自动当作最高风险。
+
+   宁可多审批，不可漏审批。</code></pre></div>
+  <p>这个兜底方向的选择值得停下来想：如果默认是 <code class="inline-code">READ</code>，那么「忘记配置」这个<strong>最常见的人为疏漏</strong>会直接变成一个无审批、无账本、无幂等的裸奔工具。默认取最严，等于让疏漏的后果是「多问一次」而不是「静默放行」。</p>
+  <p>三级还各带一个派生语义：<code class="inline-code">defaultApproval()</code>（READ→NOT_REQUIRED / WRITE_PROFILE→OPTIONAL / WRITE_EXTERNAL→REQUIRED）、<code class="inline-code">hasSideEffect()</code>（非 READ）、<code class="inline-code">requiresIdempotencyKey()</code>（有副作用即需要）。<strong>一句话定义，三个派生判断共用</strong>——这是把「风险等级」做成领域概念而非散落 if-else 的好处。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-core/.../config/ToolRiskLevel.java:1-60</span>；配置键 <code class="inline-code">agent.tool.risk-level-map</code>。</div>
+
+  <h3 id="a20-3">A20.3 「只能收紧不能放松」：配置与代码的 maxWith 合并</h3>
+  <p><code class="inline-code">RiskBasedApprovalPolicy</code> 里有一条极重要的红线（:78-90），它解决的是「配置被误改成更松怎么办」：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">只能收紧不能放松（RiskBasedApprovalPolicy.java:78-92）</span><button>复制</button></div><pre><code>// ⚠️⚠️ 只能收紧不能放松（P0-D03 红线 15 / R-020）：
+//    实际要求 = 该等级的默认要求 maxWith 配置值。
+//    默认要求是「代码层的下限」，配置只能把它调严，不能调松。
+//
+//    ⚠️ 此处合并【必须在本类内部】做，不能只依赖装配层——
+//    策略若被直接构造（测试/其他装配路径），绕过合并即等于门禁可被放松。
+
+ApprovalRequirement effective = level.defaultApproval().maxWith(configured);</code></pre></div>
+  <p>两个设计点：<strong>①</strong> 「代码是下限、配置只能更严」让运维调参不会意外削弱安全；<strong>②</strong> 合并在类内部而非装配层，因为<strong>装配层可以被绕过</strong>（测试直接 new、未来新增装配路径），而类内部不能。后者是更深的教训：<strong>安全约束要放在「所有路径都必经」的位置</strong>，而不是「当前所有路径都经过」的位置。</p>
+  <p>这段代码的来历也值得记：注释自己写明这是 P4-D08 R-3 的修复——原先硬编码「非 READ 一律需审批」，与 yml 声明的 <code class="inline-code">WRITE_PROFILE: OPTIONAL</code> <strong>相矛盾</strong>，导致配置的 OPTIONAL 语义从未被任何代码读取。<strong>配置写了但没被读，是最难发现的一类失效</strong>（<a href="ai-12-observability-runbook.html#a12-10">A12.10</a>「配了≠生效」的同族）。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-application/.../approval/RiskBasedApprovalPolicy.java:1-95</span>；配置键 <code class="inline-code">agent.approval.required-by-risk</code>。</div>
+
+  <h3 id="a20-4">A20.4 审批的默认方向：恒 FAIL_CLOSED 而非 APPROVED</h3>
+  <p>审批链路有三个默认桩，每一个的默认行为都经过刻意选择：</p>
+  <table>
+    <thead><tr><th>桩</th><th>默认行为</th><th>默认方向的理由</th></tr></thead>
+    <tbody>
+      <tr><td><code class="inline-code">NO_APPROVAL_PORT</code></td><td>恒返回 <code class="inline-code">NO_APPROVAL</code></td><td>审批权威接入前，需要审批的工具一律被拒；路径从「恒拒」变为「查不到有效审批即拒」，<strong>已具备被真实审批驱动</strong>的能力</td></tr>
+      <tr><td><code class="inline-code">DENY_ALL_APPROVALS</code></td><td>恒 <code class="inline-code">FAIL_CLOSED</code></td><td>注释原话：绝不能默认 <code class="inline-code">APPROVED</code></td></tr>
+      <tr><td><code class="inline-code">NO_CANCEL</code></td><td>永不取消</td><td>取消链路未接入前不改变既有行为；装配 <code class="inline-code">RunClaimPort.isCancelled</code> 后即生效</td></tr>
+    </tbody>
+  </table>
+  <p>注意前两个是「保守拒」、第三个是「保守放行」——方向不同但逻辑一致：<strong>默认值应该让系统保持当前已验证的安全状态，而不是引入未验证的行为</strong>。取消是「减少副作用」的动作，默认不取消不会造出新风险；审批是「增加放行」的动作，默认放行会。</p>
+  <div class="callout c-violet"><span class="ct">构造器膨胀的正确解法</span><p>这个类有 7 个构造器（依赖逐步增加），注释里写着一条纪律：「<strong>新增依赖一律加在最完整的那一个</strong>，其余保持不变并委托——避免再次出现『两个构造器导致 Spring 无法选择』（F-6）」。这类「重载构造器 + 最完整者委托」的写法在演化式依赖注入下很常见，关键是把<strong>增量收敛到一个入口</strong>，否则组合数会爆炸。</p></div>
+  <div class="evidence"><b>证据：</b> <span class="mono">ToolInvocationGate.java:171-215</span>（三个默认桩）、<span class="mono">:265-300</span>（构造器纪律注释）。</div>
+
+  <h3 id="a20-5">A20.5 ToolOperation 八态状态机：为什么「未知」必须是独立状态</h3>
+  <p>这是本册的<strong>理论核心</strong>。状态机的定义（<code class="inline-code">ToolOperationState</code>）把「失败」拆成了两种本质不同的情况：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">八态与合法迁移（ToolOperationState.java:44-70）</span><button>复制</button></div><pre><code>PENDING              已登记幂等键，尚未发出外部调用
+IN_FLIGHT            已发出调用，等待结果
+SUCCEEDED            成功且结果已持久化。终态
+FAILED               明确失败（下游明确拒绝/参数错误），可安全重试。终态
+UNKNOWN              结果未知：已发出但无响应。须对账，【不得盲目重试】
+RECONCILED_SUCCEEDED 对账确认成功。终态
+RECONCILED_ABSENT    对账确认未发生。终态
+MANUAL_DISPOSED      人工判定无法确定，登记责任人与处置结论。终态
+
+合法迁移：
+  PENDING   → IN_FLIGHT, FAILED
+  IN_FLIGHT → SUCCEEDED, FAILED, UNKNOWN
+  UNKNOWN   → RECONCILED_SUCCEEDED, RECONCILED_ABSENT, MANUAL_DISPOSED
+              ⚠️【不能直接重试】—— 只能通过对账或人工处置离开
+  FAILED    → PENDING（可重新排队）
+  SUCCEEDED / RECONCILED_* / MANUAL_DISPOSED → 无出边（终态）</code></pre></div>
+  <p>为什么不能用 <code class="inline-code">FAILED</code> 覆盖 <code class="inline-code">UNKNOWN</code>：当请求已发出但响应丢失（超时、断网、下游崩溃），<strong>副作用可能已经发生</strong>。若当成普通失败重试，就会造成重复副作用（R-003 / Sev-0 级）。所以 UNKNOWN 有<strong>三条禁止</strong>（类注释原文）：</p>
+  <table>
+    <thead><tr><th>禁止</th><th>原因</th><th>错误做法的后果</th></tr></thead>
+    <tbody>
+      <tr><td><strong>不得</strong>当普通 FAILED 盲目重试</td><td>可能造成重复副作用</td><td>同一个「记录薄弱点」被写两次，学生画像被污染</td></tr>
+      <tr><td><strong>不得</strong>直接释放预算预留</td><td>成本实际可能已发生</td><td>账实不符，租户被白嫖或平台超额支出</td></tr>
+      <tr><td>必须进入对账流程</td><td>下游可查则收敛，不可查则转人工队列</td><td>UNKNOWN 永久悬空，没人知道这笔操作到底做了没</td></tr>
+    </tbody>
+  </table>
+  <p>还有一个容易混淆的三层概念（注释专门澄清）：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">三层 Attempt 必须区分（ToolOperationState.java:9-16）</span><button>复制</button></div><pre><code>Run attempt          Run 的第 n 次整体执行尝试
+ToolOperation        一个【逻辑】工具操作（对账与幂等的最小单位）
+ToolOperationAttempt 该逻辑操作的第 m 次【调用】尝试
+
+UNKNOWN 归属 ToolOperation 而非 attempt：
+  它表达「这个逻辑操作的结果未知」，与「尝试了几次」正交。</code></pre></div>
+  <p>这个区分决定了对账的粒度：如果 UNKNOWN 记在 attempt 上，「这个操作到底成没成」就要遍历所有 attempt 才能回答；记在 operation 上，一行就能答。<strong>状态机的归属层级，决定了运维查询的复杂度。</strong></p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-core/.../run/ToolOperationState.java:1-110</span>（八态、合法迁移表、三层概念、UNKNOWN 三条禁止）。</div>
+
+  <h3 id="a20-6">A20.6 幂等键：命名空间不可省略，分隔符避开管道符</h3>
+  <div class="code-block"><div class="code-head"><span class="lang">java</span><span class="file">幂等键构造（IdempotencyKey.java:12-70）</span><button>复制</button></div><pre><code>键 = 命名空间 + 具体键值
+  命名空间不可省略：不同用途的键若混在一起，run:xxx 与 tool:xxx
+  可能在同一租户内撞值，导致「用工具键去查 Run」的错误复用。
+
+首期键定义：
+  创建 Run           run.create       调用方提供（建议 UUID）
+  record_weakness    tool.record_weakness   student_id + run_id + knowledge_point
+  其他工具调用       tool.invoke       run_id + [agent_ref + '/'] + tool_name + call_id
+
+分隔符用 '/' 而非 '|'：
+  管道符在日志、SQL LIKE、正则中语义复杂，容易引发转义问题。
+  斜杠更安全，且天然可读。
+
+⚠️ 键值不得包含学生可识别信息（P0-D00 §4 白名单）：
+   student_id 必须是随机标识，不能是姓名/学号。</code></pre></div>
+  <p>三个细节都值得抄：<strong>① 命名空间</strong>——同一个租户内不同实体的键空间必须隔离，否则唯一约束会跨表误撞；<strong>② 分隔符选择</strong>——这是个纯粹的运维友好度决策，但影响长期的排障效率；<strong>③ PII 白名单</strong>——幂等键会进日志和索引，所以键值本身不能携带有意义的个人信息，这条经常被忽略。</p>
+  <p>工具侧的键还要带 <code class="inline-code">agent_ref</code>（可省略段），而且是<strong>两条执行链路共用</strong>的（<code class="inline-code">invokeAllLegacy</code> 注释：「只在 CAP 链路加分域的话，迁移开关一关就退回『父子互相吞调用』」）。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-core/.../idempotency/IdempotencyKey.java:12-70</span>；<span class="mono">ToolInvocationGate.java:1766-1775</span>（buildIdempotencyKey）、<span class="mono">:1126-1129</span>（agentRef 两条链路共用）。</div>
+
+  <h3 id="a20-7">A20.7 账本：为什么 UNKNOWN 必须落库而不是只记内存</h3>
+  <p><code class="inline-code">RunToolLedgerPort</code> 的类注释只有两句话，但它是整个机制能成立的前提：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">账本必须存在的理由（RunToolLedgerPort.java:14-22）</span><button>复制</button></div><pre><code>为什么这个账本必须存在：
+  工具「请求已发出但响应丢失」时，副作用可能已发生。
+  若只在内存记 UNKNOWN，请求结束即蒸发 ——
+  无人能对账、盲目重试无法被拦截（红线 7 在持久层不成立）。
+
+状态机即契约：
+  所有迁移先经 requireTransitionTo 校验，
+  DB 触发器 forbid_attempt_after_terminal 是第二道防线。</code></pre></div>
+  <p>「状态机即契约」这句话点出了双层防御的结构：<strong>应用层校验（快速失败、可读错误）+ 数据库触发器（不可绕过、兜底）</strong>。这个组合在 <a href="ai-12-observability-runbook.html#a12-4">A12.4</a> 的审计链（append-only 触发器）也出现过——同一套「应用层给体验、DB 层给保证」的思路。</p>
+  <table>
+    <thead><tr><th>方法</th><th>迁移</th><th>关键约束</th></tr></thead>
+    <tbody>
+      <tr><td><code class="inline-code">register</code></td><td>（新建）→ PENDING/IN_FLIGHT</td><td>幂等键唯一约束命中时<strong>返回既有操作</strong>而非新建——这是对账与幂等的最小单位</td></tr>
+      <tr><td><code class="inline-code">recordResult</code></td><td>IN_FLIGHT → SUCCEEDED/FAILED/UNKNOWN</td><td>UNKNOWN 时 attempt 行强制 <code class="inline-code">result_unknown=true</code>（CHECK 约束）；操作已终态时必须抛出</td></tr>
+      <tr><td><code class="inline-code">reconcile</code></td><td>UNKNOWN → RECONCILED_*</td><td><strong>仅当当前状态为 UNKNOWN 时允许</strong>——对任意状态收敛会绕过状态机，让「成功被改判」成为可能</td></tr>
+    </tbody>
+  </table>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-ports/.../persistence/RunToolLedgerPort.java:14-80</span>；<code class="inline-code">JdbcToolOperationLedger.java</code>。</div>
+
+  <h3 id="a20-8">A20.8 数据库第二道防线：CHECK 约束与禁止新增 attempt 的触发器</h3>
+  <p>应用层可能被绕过（直接 SQL、新代码路径、bug），所以关键不变量在库里再写一遍：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">sql</span><span class="file">DDL 里的三条硬约束（deploy/sql/platform/01_platform_ddl.sql）</span><button>复制</button></div><pre><code>-- ① tool_operation（:2963-2985）
+CONSTRAINT tool_operation_manual_needs_actor CHECK (
+    state <> 'MANUAL_DISPOSED'
+    OR (manual_disposed_by IS NOT NULL AND manual_disposed_at IS NOT NULL))
+→ 人工处置必须登记「谁、何时」，不允许无主处置
+
+CONSTRAINT tool_operation_unknown_needs_disposition CHECK (
+    state <> 'RECONCILED_SUCCEEDED' OR reconciled_at IS NOT NULL)
+→ 对账成功必须有时间戳
+
+COMMENT ON COLUMN tool_operation.budget_reservation_id IS
+  '关联预算预留。UNKNOWN 状态下不得自动释放预留——成本可能已发生（R-007）'
+
+-- ② tool_operation_attempt（:3001-3015）
+CONSTRAINT tool_attempt_unknown_flag CHECK (
+    state <> 'UNKNOWN' OR result_unknown = true)
+→ UNKNOWN 与 result_unknown 标志强绑定，不能只改状态不改标志
+
+-- ③ 触发器 forbid_attempt_after_terminal（:513-538）
+IF op_state IN ('SUCCEEDED','RECONCILED_SUCCEEDED','RECONCILED_ABSENT','MANUAL_DISPOSED')
+   THEN RAISE EXCEPTION '逻辑操作已终态 %，禁止新增 attempt';
+IF op_state = 'UNKNOWN'
+   THEN RAISE EXCEPTION '逻辑操作处于 UNKNOWN，禁止新增 attempt（等同盲目重试，Sev-0）';
+→ ⚠️ 这条最关键：它把「不许盲目重试」从文档纪律变成了数据库强制</code></pre></div>
+  <p>触发器里 <code class="inline-code">FOR UPDATE</code> 锁住操作行再判断，避免了并发下的检查-使用间隙。错误码用 <code class="inline-code">restrict_violation</code>，语义上明确是「引用完整性类拒绝」而非普通错误。<strong>UNKNOWN 分支的注释直接写了「等同盲目重试，Sev-0」</strong>——把严重级别写进数据库错误信息，是为了让任何绕过应用层的人立刻意识到后果。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">deploy/sql/platform/01_platform_ddl.sql:513-538</span>（触发器函数）、<span class="mono">:2963-3015</span>（两张表与 CHECK）、<span class="mono">:3932-3945</span>（唯一约束）。</div>
+
+  <h3 id="a20-9">A20.9 fencing token：租约只能「劝阻」，fencing 才能「阻止」</h3>
+  <p>这部分与 <a href="04-runtime-flows.html#ch11">第 11 章</a> 的 Run 生命周期直接相关，但机制层面的解释值得在这里完整给一遍。虽然 fencing 属于 Run 领取，工具执行同样携带它：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">fencing 与租约的区别（RunClaimPort.java:14-30）</span><button>复制</button></div><pre><code>红线原文：Worker 接管前必须持有有效租约；租约超时后可被强制接管，
+        接管后【旧世代不得提交】结果。
+
+为什么需要 fencing token 而不只是租约：
+  租约只能「劝阻」，无法「阻止」。
+  若 Worker A 租约超时但尚未察觉，Worker B 接管后 A 又提交了结果——
+  此时若只校验租约时间，双方都认为自己是合法持有者。
+
+  fencing token 是【单调递增的世代号】，
+  旧世代提交会被【数据库直接拒绝】，提供强保证而非软约束。
+
+DB 层已有 enforce_fencing_on_write 触发器兜底——
+本端口只负责正确递增世代号，最终防线在 DB。</code></pre></div>
+  <p><code class="inline-code">ToolInvocationGate</code> 的每一次 <code class="inline-code">register</code> / <code class="inline-code">recordResult</code> 都带 <code class="inline-code">fencingToken</code> 参数，正是这条强保证在工具链路上的延续：<strong>一个已经失去租约的 Worker 即使还在跑，它写的账本也会被拒</strong>。这消除了「僵尸 Worker 污染账本」的整类问题。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">platform/agent-ports/.../persistence/RunClaimPort.java:14-30</span>；<span class="mono">ToolOperationState.java</span> 与 <code class="inline-code">tool_operation.fencing_token</code> 列（<code class="inline-code">01_platform_ddl.sql:2974</code>）。</div>
+
+  <h3 id="a20-10">A20.10 「呈现层不是防线」：能力闭包为什么必须在执行侧再校验</h3>
+  <p>这是本仓库反复出现的一条方法论，在 <code class="inline-code">invokeAllLegacy</code> 的注释里有一段最直白的表述：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">闭包校验为什么必须存在（ToolInvocationGate.java:1148-1160）</span><button>复制</button></div><pre><code>⚠️ 为什么这条闸门必须存在：闭包此前【只在呈现层生效】
+   （模型看不到越权工具），强制层却没有 ——
+   于是模型若被注入诱导而报出越权工具名，闸门照样放行。
+
+「呈现层不是防线」正是本仓反复消除的那类假防线。</code></pre></div>
+  <p>逻辑链条很短但极重要：<strong>「模型看不到」≠「模型不会请求」</strong>。提示词注入的目标恰恰是让模型请求它本来不该请求的东西。所以「过滤候选工具列表」只能算 UX 优化，真正的防线是执行时的拒绝。<strong>任何「通过不给入口来防」的设计，在可被操纵的调用者面前都等于没有。</strong></p>
+  <p>同族的假防线还有（各册已分别讲过，此处汇总）：<a href="ai-12-observability-runbook.html#a12-6">A12.6</a> 的审计守卫空转（<code class="inline-code">GUARDED_TABLES</code> 为空数组）、<a href="ai-05-config-governance.html#a5-3">A5.3</a> 的 <code class="inline-code">AUTHZ_MISMATCH=0</code> 不等于隔离证据、以及本节的闭包呈现层。<strong>识别假防线的通用问法是：这条检查被绕过时，会有任何可观测的后果吗？</strong>没有，它就是假的。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">ToolInvocationGate.java:1140-1170</span>（闭包校验与注释）。</div>
+
+  <h3 id="a20-11">A20.11 一个真实教训：Worker 上下文缺角色 = 授权链路根本没接上</h3>
+  <p><code class="inline-code">systemContext()</code> 的注释记录了一次修复（P4-D08 R-4），它揭示了一个反直觉的事实——<strong>「更严」也可能是错的</strong>：</p>
+  <div class="code-block"><div class="code-head"><span class="lang">text</span><span class="file">必须有 WORKER 角色（ToolInvocationGate.java:1776-1793）</span><button>复制</button></div><pre><code>⚠️⚠️ 必须携带 WORKER 角色（P4-D08 R-4 修复）：
+   授权按【角色】判定（RoleBasedAuthorizationService: roles → 动作集合），
+   空角色集 → isAuthorized 恒 false → 工具执行时必被「无权调用该工具」拦下。
+
+   Roles.WORKER 本就含 TOOL_INVOKE（权限模型为 Worker 设计的既有角色），
+   且本次修复【未扩大】该角色的动作集合。
+
+   修复前 Worker 上下文无任何角色 = 授权链路根本没接上，
+   那不是更严的安全姿态，而是「看起来有防线、实际不存在」。</code></pre></div>
+  <p>这个教训的普适性很高：<strong>「全部拒绝」看起来是最安全的状态，实际上它让整条链路失效且无人察觉</strong>——因为拒绝是「正常」的，没人会去查为什么。安全机制必须能被验证「在应该放行时确实放行」，否则它和一个恒假的开关没有区别。这也解释了为什么 <a href="ai-17-test-engineering.html#a17-3">A17.3</a> 要用假密钥证明「脱敏没被绕过」——<strong>正向证明和反向证明缺一不可</strong>。</p>
+  <div class="evidence"><b>证据：</b> <span class="mono">ToolInvocationGate.java:1776-1793</span>（systemContext 与注释）。</div>
+
+  <h3 id="a20-12">A20.12 未落地与证据边界</h3>
+  <table>
+    <thead><tr><th style="width:30%">项</th><th style="width:16%">状态</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>真实审批权威接入</td><td><span class="tag t-plan">桩就位、权威未接</span></td><td><code class="inline-code">ApprovalPort</code> 默认恒 <code class="inline-code">NO_APPROVAL</code>；审批台/策略引擎接入前，需审批的工具一律被拒（方向正确但功能未通）</td></tr>
+      <tr><td>审批台待办可见性</td><td><span class="tag t-gap">需装配</span></td><td><code class="inline-code">approvalRequestSettings</code> 可为空 = 不登记待办，此时需要审批的工具仍被拒，但审批台<strong>看不到待办</strong>（P0-2 原症状）；生产必须传入</td></tr>
+      <tr><td>取消链路</td><td><span class="tag t-plan">桩就位</span></td><td><code class="inline-code">CancelGuard</code> 默认 <code class="inline-code">NO_CANCEL</code>；装配为 <code class="inline-code">RunClaimPort.isCancelled</code> 后生效</td></tr>
+      <tr><td>Run 级预算探针</td><td><span class="tag t-gap">需装配</span></td><td><code class="inline-code">runBudget</code> 可为空 = 仅租户级预算生效，<strong>子 Agent 可把 Run 额度烧穿</strong>；生产必须传入</td></tr>
+      <tr><td>能力闭包守卫</td><td><span class="tag t-gap">需装配</span></td><td><code class="inline-code">closureGuard</code> 可为空 = 既有链路不校验闭包（历史行为）；生产必须传入，否则闭包只在呈现层生效（A20.10）</td></tr>
+      <tr><td>账本对账的自动化程度</td><td><span class="tag t-unknown">未确认</span></td><td><code class="inline-code">reconcile</code> 的调用方（是否已有定时对账任务、下游可查性判断）未逐条核验</td></tr>
+    </tbody>
+  </table>
+  <div class="callout c-danger"><span class="ct">六个「可为空」是本册最需要警惕的一栏</span><p>这些依赖标注为「可为空」不是设计优雅，而是<strong>演化过程中的兼容策略</strong>：每个都可以在未装配时让系统「按历史行为运行」。但其中四个注明「生产装配必须传入」——<strong>如果生产漏装，对应防线就静默消失，而系统表面完全正常</strong>。这正是 <a href="ai-19-roadmap.html#a19-2">A19.2</a> C 类「结构缺口」的典型形态：不是没写，是可能没接上。检查方式是看装配测试（<code class="inline-code">MemoryWiringTest</code> 那一族，见 <a href="ai-13-agent-memory.html#a13-10">A13.10</a>）。</p></div>
+
+  <div class="callout c-ai"><span class="ct">迁移提示：从「调用外部接口」到「管理副作用」</span><p>可复用：幂等键 + 状态机 + 账本这套三段式，你把它套在任何「调用外部写接口」的场景都成立。必须新建的心智有三条——<strong>①「失败」要拆成「明确失败」和「结果未知」</strong>，后者的正确处理是查而不是重试；<strong>②状态机的归属层级决定运维成本</strong>（UNKNOWN 记在逻辑操作而非调用尝试上）；<strong>③安全约束要放在所有路径必经之处</strong>（类内部而非装配层，数据库而非应用层）。这三条与具体是不是 AI 系统无关，但只有 AI 系统会把它们逼到必须做对的程度。</p></div>
+  <div class="evidence"><b>证据源：</b><span class="mono">platform/agent-worker/.../execute/ToolInvocationGate.java</span>（2048 行，执行链与全部注释）、<span class="mono">platform/agent-core/.../run/ToolOperationState.java</span>、<span class="mono">platform/agent-core/.../config/ToolRiskLevel.java</span>、<span class="mono">platform/agent-core/.../idempotency/IdempotencyKey.java</span>、<span class="mono">platform/agent-application/.../approval/RiskBasedApprovalPolicy.java</span>、<span class="mono">platform/agent-ports/.../persistence/RunToolLedgerPort.java</span> / <span class="mono">RunClaimPort.java</span>、<span class="mono">deploy/sql/platform/01_platform_ddl.sql:513-538, 2963-3015, 3932-3945</span>。</div>
+</section>
+
+<nav class="page-nav">
+  <a href="ai-19-roadmap.html"><span class="pn-label">← 上一册</span><span class="pn-title">A19 · 能力缺口与增强路线</span></a>
+  <a class="pn-right" href="ai-21-dispatch-lease.html"><span class="pn-label">下一册 →</span><span class="pn-title">A21 · 消息投递、租约与恢复</span></a>
+</nav>
+<footer class="footer">
+  <p><strong>Java 后端转型知识库 v2.6</strong> · 多文件版 · 生成于 2026-11-13（v2.6 扩容）· 代码基线 <span class="mono">HEAD 306f114</span></p>
+  <p>本册内容基于仓库快照，冲突与证据空白集中列于 <a href="06-reference.html#ch20">第 20 章</a>。请勿把历史实测数字当作当前环境的结论；涉及结构、配置、门禁的正式依据以源码、脚本与签核包为准。v1 单文件版保留在 <span class="mono">docs/Java后端转型培训手册.html</span>，仅作归档，后续维护以本知识库为准。</p>
+  <p><a href="index.html">返回总目录</a> · <a href="06-reference.html#ch19">第 19 章 文档索引</a> · <a href="06-reference.html#ch18">第 18 章 命令速查</a> · <a href="ai-01-fundamentals.html">AI 知识点精讲</a></p>
+</footer>
+</div></main>
+<script src="assets/site-data.js"></script>
+<script src="assets/handbook.js"></script>
+</body>
+</html>

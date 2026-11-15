@@ -1,0 +1,41 @@
+[  通过] I-G01  生命周期筛选下拉可选项                            -> rows_before=2; options=['PENDING_SETUP', 'ACTIVE', 'SUSPENDED', 'DECOMMISSIONING', 'DECOMMISSIONED', 'CANCELLED']
+[  失败] I-G02  开通租户空表单必填校验                            -> modal=True; errors=[]
+[  通过] I-G03  非法 slug 前后置校验                          -> fields=['slug', 'name', 'plan']; errors=['格式非法：2-63 位小写字母/数字/连字符，不以连字符开头或结尾']
+[  失败] I-G04  合法输入后取消不产生写入                           -> modal=['开通租户\nSlug\n格式非法：2-63 位小写字母/数字/连字符，不以连字符开头或结尾\n2-63 位，仅限小写字母、数字和连字符（-），不能以连字符开头或结尾\n名称\n套餐（可选）\n留空使用平台默认套餐；如需指定，请输入套餐标识\n开 通']; net=No request
+[  失败] I-G05  生命周期变更弹窗与未选状态门禁                        -> modal=['开通租户\nSlug\n2-63 位，仅限小写字母、数字和连字符（-），不能以连字符开头或结尾\n名称\n套餐（可选）\n留空使用平台默认套餐；如需指定，请输入套餐标识\n开 通']; okDisabled=None
+[  失败] I-G06  租户详情深链与区块                              -> url=http://localhost:5180/admin/tenants; head=平台管理控制台
+平台治理
+租户管理
+平台用户
+角色权限矩阵
+平台审计
+能力目录
+RAG · 录入与校对
+RAG · 审核
+RAG · 规则配置
+RAG · 运维
+系统配置
+观测度量
+AI 实验室
+管理员
+平台
+[  通过] I-G07  新建用户空表单必填校验                            -> errors=['请输入用户名', '请输入密码', '密码长度至少 10 位']
+[  通过] I-G08  弱口令复杂度校验                               -> errors=['请输入用户名', '格式非法：4-20 位字母/数字/下划线，以字母开头', '请输入密码', '密码长度至少 10 位']
+[  通过] I-G09  非法邮箱格式校验                               -> errors=['格式非法：4-20 位字母/数字/下划线，以字母开头', '密码长度至少 10 位', '邮箱格式不正确']
+[  失败] I-G10  新建用户完整提交（写操作留痕）                        -> created=False; modal=True; net=No requests captured
+[  失败] I-G11  重复用户名冲突处理                              -> modalOpen=True; msg=-support	平台支持（开发）	plat-support@example.com	启用	
+平台支持人员
+	LOCAL	否	1	—	
+编辑
+停用
+重置密码
+角色
+© 2026 Agent Platform · 平台管理控制台
+新建用户
+用户名
+格式非法：4-
+[  失败] I-G12  测试用户行内操作项完整性                           -> buttons=None
+[  通过] I-G13  SoD 自身保护按钮禁用                           -> selfRow=[{'d': False, 't': '编辑'}, {'d': True, 't': '停用'}, {'d': True, 't': '重置密码'}, {'d': True, 't': '角色'}]
+[  通过] I-G14  7 个命名空间 Tab 逐项切换                       -> switch=[('用户权限', 2, 1), ('角色权限', 2, 1), ('租户权限', 14, 1), ('资源权限', 16, 1), ('策略权限', 18, 1), ('审计权限', 20, 1), ('支持权限', 21, 1)]
+[  通过] I-G15  审计筛选与刷新                                -> net=[80120.4327] GET http://localhost:5180/api/platform/v1/audit-events?action=LOGIN&from=2026-11-12T09%3A40%3A32.678Z&limit=200 (Fetch) 200
+BATCH2 DONE

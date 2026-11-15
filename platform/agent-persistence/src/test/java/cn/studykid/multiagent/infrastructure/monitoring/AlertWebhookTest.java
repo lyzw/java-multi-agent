@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.infrastructure.monitoring;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
@@ -76,7 +77,8 @@ class AlertWebhookTest {
     @Test
     @DisplayName("✅ Noop 实现可安全调用（关闭态落点）")
     void noopIsSafe() {
-        new NoopAlertWebhook().onCriticalDeny(alert());
-        // 不抛异常即通过：关闭态不外发、不报错。
+        assertThatNoException()
+                .as("关闭态 Noop 落点必须可安全调用，不得抛异常")
+                .isThrownBy(() -> new NoopAlertWebhook().onCriticalDeny(alert()));
     }
 }

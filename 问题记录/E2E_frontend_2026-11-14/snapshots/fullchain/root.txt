@@ -1,0 +1,147 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：STUDENT · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生（本版本）"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e12]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e13]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e14]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e15]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e16]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e17]
+          - StaticText "Agent 对话"
+  - main
+    - heading "工作台" [level=1, ref=e6]
+    - paragraph
+      - StaticText "从一道做错的题开始，看它错在哪一步。"
+    - link "发起辅导" [ref=e7]
+    - generic
+      - sectionheader
+        - heading "开始" [level=2, ref=e19]
+      - link "检索记录 按状态、学科、时间查找分析过的题" [ref=e8]
+        - StaticText "检索记录"
+        - StaticText "按状态、学科、时间查找分析过的题"
+      - link "知识检索 从教材语料检索可溯源的讲解与出处" [ref=e9]
+        - StaticText "知识检索"
+        - StaticText "从教材语料检索可溯源的讲解与出处"
+      - link "学习画像 看看哪些知识点反复出错" [ref=e10]
+        - StaticText "学习画像"
+        - StaticText "看看哪些知识点反复出错"
+      - link "报表中心 按天看辅导、错题、检索与语料导入的汇总" [ref=e11]
+        - StaticText "报表中心"
+        - StaticText "按天看辅导、错题、检索与语料导入的汇总"
+    - generic
+      - sectionheader
+        - heading "近期辅导" [level=2, ref=e18]
+        - paragraph
+          - StaticText "本账号在本租户下最近的分析记录（最多 10 条）。"
+      - table
+        - rowgroup
+          - row
+            - columnheader "运行标识" [ref=e70]
+            - columnheader "学科 · 年级" [ref=e71]
+            - columnheader "状态" [ref=e72]
+            - columnheader "发起时间" [ref=e73]
+            - columnheader "操作" [ref=e74]
+        - row
+          - cell "c767bd28-f45c-4be1-9ba8-ed6d5d2d62f7" [ref=e20]
+            - StaticText "c767bd28-f45c-4be1-9ba8-ed6d5d2d62f7"
+          - cell "—" [ref=e21]
+          - cell "已完成" [ref=e22]
+          - cell "11月14日 16:15" [ref=e23]
+          - cell "查看结果" [ref=e24]
+            - link "查看结果" [ref=e75]
+        - row
+          - cell "9a8e750b-9e3c-4e56-b9bf-271f602c0550" [ref=e25]
+            - StaticText "9a8e750b-9e3c-4e56-b9bf-271f602c0550"
+          - cell "数学 · 初一" [ref=e26]
+          - cell "已完成" [ref=e27]
+          - cell "11月14日 14:58" [ref=e28]
+          - cell "查看结果" [ref=e29]
+            - link "查看结果" [ref=e76]
+        - row
+          - cell "004857ab-8188-4f63-9d4d-73e29bc311fe" [ref=e30]
+            - StaticText "004857ab-8188-4f63-9d4d-73e29bc311fe"
+          - cell "数学 · 初一" [ref=e31]
+          - cell "已完成" [ref=e32]
+          - cell "11月14日 14:51" [ref=e33]
+          - cell "查看结果" [ref=e34]
+            - link "查看结果" [ref=e77]
+        - row
+          - cell "251a7d44-32c6-4869-9aec-4b0be3c82a50" [ref=e35]
+            - StaticText "251a7d44-32c6-4869-9aec-4b0be3c82a50"
+          - cell "数学 · 初一" [ref=e36]
+          - cell "已完成" [ref=e37]
+          - cell "11月14日 14:49" [ref=e38]
+          - cell "查看结果" [ref=e39]
+            - link "查看结果" [ref=e78]
+        - row
+          - cell "85970666-9dff-4a10-b9c9-63240778f358" [ref=e40]
+            - StaticText "85970666-9dff-4a10-b9c9-63240778f358"
+          - cell "数学 · 初三" [ref=e41]
+          - cell "已完成" [ref=e42]
+          - cell "11月14日 14:36" [ref=e43]
+          - cell "查看结果" [ref=e44]
+            - link "查看结果" [ref=e79]
+        - row
+          - cell "08c9cbc6-d1bb-4b8a-8525-761598757075" [ref=e45]
+            - StaticText "08c9cbc6-d1bb-4b8a-8525-761598757075"
+          - cell "数学 · 初三" [ref=e46]
+          - cell "已完成" [ref=e47]
+          - cell "11月14日 14:36" [ref=e48]
+          - cell "查看结果" [ref=e49]
+            - link "查看结果" [ref=e80]
+        - row
+          - cell "51528f42-fdeb-4b52-b9ad-ec89204e26b7" [ref=e50]
+            - StaticText "51528f42-fdeb-4b52-b9ad-ec89204e26b7"
+          - cell "数学 · 初三" [ref=e51]
+          - cell "失败" [ref=e52]
+          - cell "11月14日 14:35" [ref=e53]
+          - cell "查看进度" [ref=e54]
+            - link "查看进度" [ref=e81]
+        - row
+          - cell "85ac3697-cab9-4cd9-b6c0-9f86fdd5dbf0" [ref=e55]
+            - StaticText "85ac3697-cab9-4cd9-b6c0-9f86fdd5dbf0"
+          - cell "数学 · 初三" [ref=e56]
+          - cell "失败" [ref=e57]
+          - cell "11月14日 14:31" [ref=e58]
+          - cell "查看进度" [ref=e59]
+            - link "查看进度" [ref=e82]
+        - row
+          - cell "867d98ab-53dd-4bcb-8828-f562752ec25e" [ref=e60]
+            - StaticText "867d98ab-53dd-4bcb-8828-f562752ec25e"
+          - cell "—" [ref=e61]
+          - cell "失败" [ref=e62]
+          - cell "11月14日 14:24" [ref=e63]
+          - cell "查看进度" [ref=e64]
+            - link "查看进度" [ref=e83]
+        - row
+          - cell "8e36c89c-177d-4346-a9e4-c12e8a2f8740" [ref=e65]
+            - StaticText "8e36c89c-177d-4346-a9e4-c12e8a2f8740"
+          - cell "—" [ref=e66]
+          - cell "失败" [ref=e67]
+          - cell "11月14日 14:23" [ref=e68]
+          - cell "查看进度" [ref=e69]
+            - link "查看进度" [ref=e84]
+    - paragraph
+      - StaticText "登录状态由服务端控制，有效期到后会要求重新登录。"

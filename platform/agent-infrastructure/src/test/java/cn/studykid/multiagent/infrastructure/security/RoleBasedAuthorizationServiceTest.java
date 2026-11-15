@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.infrastructure.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.Set;
@@ -72,6 +73,75 @@ class RoleBasedAuthorizationServiceTest {
             TenantContext approver = ctx("t-a", "p", 0, AuthorizationService.Roles.APPROVER);
             assertThat(service.isAuthorized(approver, AuthorizationService.Actions.APPROVAL_CONSUME, null)).isTrue();
             assertThat(service.isAuthorized(approver, AuthorizationService.Actions.RUN_CREATE, null)).isFalse();
+        }
+
+        @Test
+        @DisplayName("✅ 学生可发起辅导并读本人 Run，但不可触治理动作（F1 · 2026-11-14 正规实现）")
+        void studentCoreFlow() {
+            TenantContext student = ctx("t-a", "s", 0, AuthorizationService.Roles.STUDENT);
+            assertThat(service.isAuthorized(student, AuthorizationService.Actions.RUN_CREATE, null))
+                    .as("学生自助发起辅导是核心链路").isTrue();
+            assertThat(service.isAuthorized(student, AuthorizationService.Actions.RUN_READ, null)).isTrue();
+            assertThat(service.isAuthorized(student, AuthorizationService.Actions.EVENT_SUBSCRIBE, null)).isTrue();
+            assertThat(service.isAuthorized(student, AuthorizationService.Actions.RESULT_READ, null)).isTrue();
+            // ⛔ 治理/管理动作默认拒绝
+            assertThat(service.isAuthorized(student, AuthorizationService.Actions.AGENT_MANAGE, null)).isFalse();
+            assertThat(service.isAuthorized(student, AuthorizationService.Actions.AUDIT_READ, null)).isFalse();
+            assertThat(service.isAuthorized(student, AuthorizationService.Actions.CONFIG_PUBLISH, null)).isFalse();
+            assertThat(service.isAuthorized(student, AuthorizationService.Actions.TOOL_INVOKE, null)).isFalse();
+            // ⛔ 不给 PROFILE_READ：主体与匿名编号无绑定，放开即租户内画像任意读
+            assertThat(service.isAuthorized(student, AuthorizationService.Actions.PROFILE_READ, null)).isFalse();
+            // ✅ 只读列举：发起辅导页的下拉框要能看到「可发起什么」
+            assertThat(service.isAuthorized(student, AuthorizationService.Actions.AGENT_LIST, null))
+                    .as("学生必须能列举可发起辅导的已发布 Agent（否则页面误报「没有可用的 Agent」）")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("✅ 家长/老师可只读列举 Agent（AGENT_LIST），但不得触治理面")
+        void audienceCanListAgentsButNotManage() {
+            for (String role : new String[]{
+                    AuthorizationService.Roles.PARENT, AuthorizationService.Roles.TEACHER}) {
+                TenantContext audience = ctx("t-a", role.toLowerCase(), 0, role);
+                assertThat(service.isAuthorized(audience, AuthorizationService.Actions.AGENT_LIST, null))
+                        .as("%s 可列举可发起辅导的 Agent", role).isTrue();
+                assertThat(service.isAuthorized(audience, AuthorizationService.Actions.AGENT_MANAGE, null))
+                        .as("%s 不得拿到治理面（含 latestDefinition 提示词全文）", role).isFalse();
+            }
+        }
+
+        @Test
+        @DisplayName("✅ 家长/老师为受众只读 + 画像可读，不可创建 Run 或触治理动作")
+        void parentTeacherAudienceScope() {
+            for (String role : new String[]{
+                    AuthorizationService.Roles.PARENT, AuthorizationService.Roles.TEACHER}) {
+                TenantContext audience = ctx("t-a", role.toLowerCase(), 0, role);
+                assertThat(service.isAuthorized(audience, AuthorizationService.Actions.RUN_READ, null))
+                        .as("%s 可读 Run", role).isTrue();
+                assertThat(service.isAuthorized(audience, AuthorizationService.Actions.RESULT_READ, null)).isTrue();
+                assertThat(service.isAuthorized(audience, AuthorizationService.Actions.EVENT_SUBSCRIBE, null)).isTrue();
+                assertThat(service.isAuthorized(audience, AuthorizationService.Actions.PROFILE_READ, null))
+                        .as("%s 可读画像（PROFILE_READ 动作契约：家长/教师可读画像）", role).isTrue();
+                assertThat(service.isAuthorized(audience, AuthorizationService.Actions.RUN_CREATE, null))
+                        .as("%s 不得创建 Run（创建走运营/学生自助）", role).isFalse();
+                assertThat(service.isAuthorized(audience, AuthorizationService.Actions.APPROVAL_CONSUME, null))
+                        .as("治理审批走 APPROVER 角色，受众角色不带").isFalse();
+            }
+        }
+
+        @Test
+        @DisplayName("isAudienceOnly：纯受众角色为真；空角色与混合治理角色为假")
+        void audienceOnlyDetection() {
+            assertThat(AuthorizationService.Roles.isAudienceOnly(Set.of(
+                    AuthorizationService.Roles.STUDENT))).isTrue();
+            assertThat(AuthorizationService.Roles.isAudienceOnly(Set.of(
+                    AuthorizationService.Roles.PARENT, AuthorizationService.Roles.TEACHER))).isTrue();
+            assertThat(AuthorizationService.Roles.isAudienceOnly(Set.of()))
+                    .as("空角色（含旧会话）必须 fail-closed 判为非受众").isFalse();
+            assertThat(AuthorizationService.Roles.isAudienceOnly(Set.of(
+                    AuthorizationService.Roles.STUDENT, AuthorizationService.Roles.TENANT_ADMIN)))
+                    .as("持有任何治理角色即不受受众收窄").isFalse();
+            assertThat(AuthorizationService.Roles.isAudienceOnly(Set.of("UNKNOWN_ROLE"))).isFalse();
         }
 
         @Test
@@ -193,7 +263,10 @@ class RoleBasedAuthorizationServiceTest {
         @DisplayName("requireAuthorized 在通过时静默返回")
         void silentOnAllowed() {
             TenantContext admin = ctx("t-a", "admin", 0, AuthorizationService.Roles.TENANT_ADMIN);
-            service.requireAuthorized(admin, AuthorizationService.Actions.RUN_CREATE, "run-1");
+            assertThatNoException()
+                    .as("管理员应被授权，requireAuthorized 必须静默返回")
+                    .isThrownBy(() ->
+                            service.requireAuthorized(admin, AuthorizationService.Actions.RUN_CREATE, "run-1"));
         }
     }
 

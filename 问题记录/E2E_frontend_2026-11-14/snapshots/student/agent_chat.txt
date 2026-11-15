@@ -1,0 +1,114 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：STUDENT · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e12]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e13]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e14]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e15]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e16]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e17]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e18]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e19]
+          - StaticText "报表中心"
+  - main
+    - paragraph
+      - StaticText "AI 对话"
+    - heading "Agent 编排对话" [level=1, ref=e6]
+    - paragraph
+      - StaticText "一次请求内观察 Agent 路由、RAG 注入、Skill、Tool、结果回传与流式回答；组件过程逐帧可见，停止 / 失败 / 截断分别标记。"
+    - link "通用问答" [ref=e7]
+    - StaticText "这条链路的诚实边界"
+    - list
+      - listitem [level=1]
+        - ListMarker "• "
+        - StaticText "真实端点已接入编排式 SSE：真实模式请求 "
+        - code
+          - StaticText "/api/knowledge/agent/chat/stream"
+        - StaticText "（租户链，服务端完成路由 → RAG → Skill/Tool → 流式回答 + Run 审计）；当前环境未部署时 404/501 会明示「能力未接入」，绝不退化成假流。"
+      - listitem [level=1]
+        - ListMarker "• "
+        - StaticText "样例回放不是真实模型输出：脚本帧先序列化成 SSE 文本，再走同一套解析器与状态机； 它验证前端链路，不证明模型或后端已接入。"
+      - listitem [level=1]
+        - ListMarker "• "
+        - StaticText "thinking 模式 = 组件过程可见：租户通道按设计不下发原始推理草稿； 时间线只展示真实到达的路由 / RAG / Skill / Tool / 回传 / 用量帧。"
+      - listitem [level=1]
+        - ListMarker "• "
+        - StaticText "不读写业务数据、会话只在内存：输入只来自本次键入与完整多轮历史， 不写浏览器存储，刷新即清空。"
+    - alert
+      - StaticText "样例回放 · 非真实模型输出当前轨迹由本地脚本产生（场景：完整链路）。页面中的路由、RAG、 Skill、Tool、回传与正文都经过真实 SSE 解析路径，但不是真实 Agent 执行结果。 要看真实链路请切换到「真实端点」（当前环境需已部署租户链编排端点）。"
+    - generic
+      - sectionheader
+        - heading "编排设置" [level=2, ref=e20]
+        - paragraph
+          - StaticText "真实端点已接入租户链编排 SSE；当前环境未部署时 404/501 会如实报错；样例回放可立即预览完整链路（非真实输出）。"
+      - LabelText
+        - StaticText "数据来源"
+        - combobox "数据来源" [expanded=false, ref=e21]: 样例回放
+          - MenuListPopup
+            - option "样例回放" [selected, ref=e29]
+            - option "真实端点" [ref=e30]
+      - LabelText
+        - StaticText "回放场景"
+        - combobox "回放场景" [expanded=false, ref=e22]: 完整链路
+          - MenuListPopup
+            - option "完整链路" [selected, ref=e31]
+            - option "Skill 失败（Agent 降级）" [ref=e32]
+            - option "Tool 超时（结果回传降级）" [ref=e33]
+            - option "RAG 零命中（合法结果）" [ref=e34]
+      - LabelText
+        - StaticText "指定 AgentId（留空＝自动路由）"
+        - textbox "指定 AgentId（留空＝自动路由）" [ref=e23]
+      - LabelText
+        - StaticText "RAG topK"
+        - spinbutton "RAG topK" [ref=e24]: 5
+          - StaticText "5"
+      - LabelText
+        - checkbox "thinking 模式：展开组件执行过程（不下发推理草稿）" [checked=true, ref=e25]
+        - StaticText "thinking 模式：展开组件执行过程（不下发推理草稿）"
+    - generic
+      - log "Agent 编排对话消息列表"
+        - paragraph
+          - StaticText "还没有提问。选一个示例开始，或直接输入问题。"
+        - button "一元二次方程判别式小于零是什么意思？" [ref=e26]
+        - button "二次函数的顶点式怎么推导？" [ref=e27]
+        - button "勾股定理适用于哪些三角形？" [ref=e28]
+      - textbox "问题输入" [ref=e8]
+      - button "发送" [disabled, ref=e9]
+      - button "停止" [disabled, ref=e10]
+      - button "新会话" [disabled, ref=e11]
+      - StaticText "共 "
+      - StaticText "0"
+      - StaticText " 条 · 会话仅存内存 ·"
+      - StaticText " "
+      - StaticText "样例回放（非真实输出）"
+    - paragraph
+      - StaticText "组件状态说明：单个 Tool / Skill 的「失败」可被 Agent 降级后继续生成，不等于整轮失败； RAG 零命中是合法提示；只有 "
+      - code
+        - StaticText "error"
+      - StaticText " 帧或传输失败才是整轮 failed。"

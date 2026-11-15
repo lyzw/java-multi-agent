@@ -6,38 +6,54 @@
  * ⚠️ 后端对「学生不存在」返回 **200 + notFound:true**（不是 404），
  *    故本 hook **不把 notFound 当作错误**——它是一个**合法状态**，
  *    由页面渲染成「找不到这个匿名编号」而非错误页。
+ *
+ * ⚠️ N2（E2E 二次评估）：除文案外额外保留 `errorInfo`（归一化错误），
+ *    让页面能按 status 分流：403 = 终态权限错误，不给重试；
+ *    5xx / 网络 = 临时故障，才给重试。此前只有一句字符串，
+ *    页面只能一律写「可能是网络问题」——把权限拒绝伪装成临时故障。
  */
 
 import { useCallback, useEffect, useState } from 'react'
 import { getProfile, ApiError } from '@/api/client'
+import { normalizeNetworkError, type NormalizedError } from '@/api/errors'
 import type { ProfileResponse } from '@/api/types'
 
 export interface UseProfileResult {
   profile: ProfileResponse | null
   loading: boolean
+  /** 兼容旧调用方的纯文案（= errorInfo.message） */
   error: string | null
+  /** 归一化错误：供 `ErrorStateFromError` 按 status 分流 */
+  errorInfo: NormalizedError | null
   reload: () => void
 }
 
-/** 未知错误兜底文案 */
-const FALLBACK_ERROR = '画像读取失败，请稍后重试'
+/** 缺编号是本地校验失败，不是后端故障 */
+function missingIdError(): NormalizedError {
+  return {
+    status: 400,
+    code: 'INVALID_REQUEST',
+    message: '缺少匿名编号',
+    fieldErrors: {},
+  }
+}
 
 export function useProfile(studentId: string | undefined): UseProfileResult {
   const [profile, setProfile] = useState<ProfileResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [errorInfo, setErrorInfo] = useState<NormalizedError | null>(null)
   const [nonce, setNonce] = useState(0)
 
   useEffect(() => {
     if (studentId === undefined || studentId === '') {
       setProfile(null)
       setLoading(false)
-      setError('缺少匿名编号')
+      setErrorInfo(missingIdError())
       return
     }
     let cancelled = false
     setLoading(true)
-    setError(null)
+    setErrorInfo(null)
 
     getProfile(studentId)
       .then((data) => {
@@ -47,9 +63,10 @@ export function useProfile(studentId: string | undefined): UseProfileResult {
       })
       .catch((cause: unknown) => {
         if (cancelled) return
-        const message =
-          cause instanceof ApiError ? cause.normalized.message : FALLBACK_ERROR
-        setError(message)
+        const normalized = cause instanceof ApiError
+          ? cause.normalized
+          : normalizeNetworkError(cause)
+        setErrorInfo(normalized)
         setLoading(false)
       })
 
@@ -60,5 +77,11 @@ export function useProfile(studentId: string | undefined): UseProfileResult {
 
   const reload = useCallback(() => setNonce((n) => n + 1), [])
 
-  return { profile, loading, error, reload }
+  return {
+    profile,
+    loading,
+    error: errorInfo?.message ?? null,
+    errorInfo,
+    reload,
+  }
 }

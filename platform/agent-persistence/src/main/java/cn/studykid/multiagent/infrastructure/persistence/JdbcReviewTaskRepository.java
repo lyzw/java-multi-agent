@@ -264,7 +264,8 @@ public class JdbcReviewTaskRepository implements ReviewTaskPort {
 
     /** 该流转是否需要回查任务事实（目前只有 resolve 的回写钩子需要）。 */
     private static boolean needsFacts(@NonNull String sql) {
-        return sql == SQL_RESOLVE;
+        // SQL_RESOLVE 是编译期常量，但用值比较而非引用比较更稳健（S4973）。
+        return SQL_RESOLVE.equals(sql);
     }
 
     /**

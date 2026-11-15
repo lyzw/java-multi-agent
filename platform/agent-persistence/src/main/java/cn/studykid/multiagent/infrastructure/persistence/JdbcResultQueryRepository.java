@@ -70,7 +70,14 @@ public class JdbcResultQueryRepository implements ResultQueryPort {
             LIMIT 50
             """;
 
-    /** 步骤：按 Run 检索（索引 idx_run_step_run 已存在）。 */
+    /**
+     * 步骤：按 Run 检索（索引 idx_run_step_run 已存在）。
+     *
+     * <p>⚠️ {@code state} 恒为 {@code 'RUNNING'}（「该步骤已发生」，非进行中），
+     * {@code output} 恒为 NULL（生产链路无写入方）；口径见
+     * {@code 01_platform_ddl.sql} 的 run_step COMMENT 与前端 {@code RunResultPage}。
+     */
+
     private static final String SQL_LOAD_STEPS = """
             SELECT tenant_id::text AS tenant_id, step_number, state::text, step_type,
                    output_payload::text AS output

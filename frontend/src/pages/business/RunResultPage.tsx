@@ -49,17 +49,21 @@ const TERMINAL_STATES = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'
 /**
  * 步骤状态 → 中文标签。
  *
- * ⚠️ 权威取值：`run_step.state` 的列类型就是 `run_state`
- *    （V1__baseline_schema.sql：`state run_state NOT NULL`），
- *    即 QUEUED / RUNNING / CANCELLED / SUCCEEDED / FAILED / TIMED_OUT。
- *    故这里同时认 'SUCCESS' 与 'SUCCEEDED' 两种写法，
+ * ⚠️⚠️ **跨层口径（E2E 二轮优化，2026-11-14）**：`run_step.state` 复用了
+ *    `public.run_state` 枚举，但生产链路（JdbcRunStepRepository /
+ *    JdbcAgentChatAuditRepository）把每一步**单条 INSERT 写死 'RUNNING'**，
+ *    表示「该步骤已发生」，**不是「执行中」**；步骤完成以 `completed_at` 判定。
+ *    这里曾按 run_state 字面语义把 RUNNING 显示成「执行中」，导致已完成的
+ *    Run 里每个步骤都像卡住 —— **必须映射为「已完成」**。
+ *
+ * ⚠️ 'SUCCEEDED'/'SUCCESS' 仍兼容历史数据与测试夹具；
  *    **未知取值原样显示**（不猜含义，与 runState.ts 的既有原则一致）。
  */
 const STEP_STATE_LABELS: Record<string, string> = {
   SUCCESS: '成功',
   SUCCEEDED: '成功',
   FAILED: '失败',
-  RUNNING: '执行中',
+  RUNNING: '已完成',
   QUEUED: '排队中',
   PENDING: '待执行',
   CANCELLED: '已取消',
@@ -82,6 +86,9 @@ function stepStateModifier(state: string): string {
   switch (state) {
     case 'SUCCESS':
     case 'SUCCEEDED':
+    case 'RUNNING':
+      // ⚠️ run_step 的 RUNNING 是「已发生」占位值（见上方口径说明），
+      //    不是进行中，必须给绿点，否则已完成的步骤全显示中性点。
       return 'steps__item--done'
     case 'FAILED':
       return 'steps__item--bad'
@@ -94,14 +101,41 @@ export function RunResultPage(): JSX.Element {
   const { runId } = useParams<{ runId: string }>()
   const { result, loading, error, reload } = useRunResult(runId)
 
-  // ⚠️ C6 扫描只针对**模型产出的文本**（explanation）。
-  //    结构性字段（状态、题号）不来自模型，扫描它们只会制造误报。
-  // ⚠️ 性能优化：限制扫描文本长度，避免长文本阻塞渲染
+  /**
+   * ⛔⛔ C6 红线：**所有会渲染出来的文本字段**都要扫，且**必须扫全文**。
+   *
+   * 修复背景（E2E 四轮优化，2026-11-14 行为级专项实测发现）：
+   *   旧实现有两个真实漏洞 ——
+   *     ① `explanation.slice(0, 10000)` **截断后才扫描**，而渲染用的是完整文本，
+   *        第 10001 字符之后的身份证/手机号既不扫也照常显示；
+   *     ② 只喂 `{ explanation }` 一个字段，但页面上 `weaknesses.knowledgePoint`、
+   *        `steps[].output`、`reconciliation.operations[].toolName`、`errorCode`
+   *        都会渲染却完全不扫。C6「结果不得含身份信息」等于只守了一扇门。
+   *   `slice` 的初衷是「避免长文本阻塞渲染」，但 `useMemo([result])` 已经保证
+   *   **每次结果只扫一遍**；正则扫描是 O(n)，丢掉尾部换来的性能收益不成立，
+   *   反而把合规红线开了一个口子。⛔ 禁止再把 truncate 加回来。
+   *
+   * 命中后按字段**精准拦截**（只拦命中的区块），不整页报错：
+   *   一次偶然复述学号不该让整页结果不可用（沿用 T7 的既有纪律）。
+   */
   const leakedFields: string[] = useMemo(() => {
-    if (result === null || result.explanation === null) return []
-    // ⚠️ 只扫描前 10000 字符，避免长文本阻塞渲染
-    const text = result.explanation.slice(0, 10000)
-    return findLeakedFields({ explanation: text })
+    if (result === null) return []
+    const joinFields = (parts: (string | null)[]): string =>
+      parts.map((p) => p ?? '').join(' ')
+    // ⚠️⛔ **只扫自由文本字段**：结构性标识（errorCode / state / stepType /
+    //    step.number / operationId(UUID) / confidence 小数）**不进扫描文本**。
+    //    原因：STUDENT_ID 规则是「8–12 位连续数字」，UUID 里的数字段、
+    //    confidence 的小数位都可能命中 → 每个正常 Run 都被假阳性拦下。
+    //    这类字段不来自模型产出，扫描它们既不合规也无收益（沿用原设计口径）。
+    const payload: Record<string, string> = {
+      讲解: result.explanation ?? '',
+      错因归类: result.weaknesses
+        .map((w) => joinFields([w.knowledgePoint, w.errorType]))
+        .join(' '),
+      解题步骤: result.steps.map((s) => s.output ?? '').join(' '),
+      待核对: result.reconciliation.operations.map((o) => o.toolName ?? '').join(' '),
+    }
+    return findLeakedFields(payload)
   }, [result])
 
   if (loading) {
@@ -147,7 +181,9 @@ export function RunResultPage(): JSX.Element {
   }
 
   const explanation = result.explanation
-  const explanationBlocked = explanation !== null && leakedFields.length > 0
+  /** 命中哪个字段就只拦哪个区块，避免「一处偶然复述学号」把整页结果打掉。 */
+  const blocked = (field: string): boolean => leakedFields.includes(field)
+  const explanationBlocked = explanation !== null && blocked('讲解')
   const isTerminal = TERMINAL_STATES.has(result.state)
 
   return (
@@ -227,15 +263,21 @@ export function RunResultPage(): JSX.Element {
       <RunFeedback runId={result.runId} />
 
       <Sheet title="解题步骤">
-        {result.steps.length === 0 ? (
+        {blocked('解题步骤') ? (
+          // ⛔ C6：命中字段不得渲染原文，也不得编造替代内容。
+          <Empty title="这部分内容里有不该出现的信息，已拦下" hint="换一个匿名编号再试，或联系辅导老师确认。" />
+        ) : result.steps.length === 0 ? (
           // ⛔ 真实空态：**不编造步骤**。
-          //    步骤表目前没有写入方，因此这里长期为空——这是真实状态。
           <Empty
             title="没有步骤记录"
-            hint="系统还没开始逐步记录解题过程；这里不会用示例内容填充。"
+            hint="这次运行没有留下步骤记录；这里不会用示例内容填充。"
           />
         ) : (
-          <ol className="steps">
+          <>
+            {/* ⚠️ 口径告知：生产链路只写步骤类型与起止时间，不写逐步正文，
+                output_payload 恒为空。不说明的话用户会以为「步骤内容丢了」。 */}
+            <p className="muted">步骤记录的是执行类型与耗时；逐步讲解请看上方「归因讲解」。</p>
+            <ol className="steps">
             {result.steps.map((step) => {
               // ⚠️ 失败步骤的正文用 .steps__wrong（删除线 + 批改红划线），
               //    与红点一起把「错在第几步」标出来。
@@ -256,12 +298,16 @@ export function RunResultPage(): JSX.Element {
                 </li>
               )
             })}
-          </ol>
+            </ol>
+          </>
         )}
       </Sheet>
 
       <Sheet title="错因归类">
-        {result.weaknesses.length === 0 ? (
+        {blocked('错因归类') ? (
+          // ⛔ C6：命中字段不得渲染原文，也不得编造替代内容。
+          <Empty title="这部分内容里有不该出现的信息，已拦下" hint="换一个匿名编号再试，或联系辅导老师确认。" />
+        ) : result.weaknesses.length === 0 ? (
           // ⛔ 真实空态：**不编造错因**。
           <Empty
             title="这次分析没有记录到错因"
@@ -315,7 +361,12 @@ export function RunResultPage(): JSX.Element {
           当某一步的结果不确定时（状态为 <code>UNKNOWN</code>），结论会在这里单独列出，
           不会混进上面的正常结果。
         </p>
-        {result.reconciliation.pending ? (
+        {blocked('待核对') ? (
+          // ⛔ C6：命中字段不得渲染原文，也不得编造替代内容。
+          <p className="muted" style={{ margin: 0 }}>
+            这部分内容里有不该出现的信息，已拦下。
+          </p>
+        ) : result.reconciliation.pending ? (
           <>
             <p className="muted">
               有 {result.reconciliation.operations.length} 项操作的结果还不确定，

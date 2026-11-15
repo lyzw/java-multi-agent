@@ -610,6 +610,10 @@ window.KB_SITE = {
             {
               "id": "ch19-8",
               "title": "19.8 v2.5 新增：测试 / 向量运维 / 增强路线证据源"
+            },
+            {
+              "id": "ch19-9",
+              "title": "19.9 v2.6 新增：执行安全与调度一致性证据源"
             }
           ],
           "keywords": "<testcase> rag/docs/ search_knowledge_base RAG-D07 RAG-D08 RAG-D05 POST /v1/convert/file ERD1 Boot Queue GATE Outbox Tenant Control Plane README Flyway ModelResolver Scope Nginx Prometheus POST developer-onboarding.md platform.env.example rag.env.example jwt.env.example ci.yml context.checkpoint v0.1-draft vite.config.ts agent-quality.json EVAL_JUDGE_COST usage_record agent_trace_metric attribution_correct tenant_token_quota BudgetPort ModelAttributionJudge AuditTamperProofGuard CapEnforcementMetrics"
@@ -641,9 +645,13 @@ window.KB_SITE = {
             {
               "id": "ch20-6",
               "title": "20.6 v2.5 新增：测试 / 向量 / 路线的未落地与口径修正"
+            },
+            {
+              "id": "ch20-7",
+              "title": "20.7 v2.6 新增：执行安全与调度的未落地与装配风险"
             }
           ],
-          "keywords": "docs/本地启动指南.md …-SNAPSHOT.jar dev-backend.sh …-SNAPSHOT-exec.jar deploy/sql/README.md init-db.sh EXPECT_TABLES=71 it-env.sh --probe platform.review_task 01_platform_ddl.sql 01_rag_ddl.sql developer-onboarding.md rlsDependent() rag-api/pom.xml rag/ RAG-D05 JdbcRetrievalRepository platform/pom.xml *IT.java RAG-D09 /actuator/health /api/auth/jwks <testcase> mvn dependency:tree V1__baseline_schema.sql *-rv-*.py *-counterproof.sh RV-* rag-pg-s2 rag-it-env.sh 06/08/09/10/11/13_*_alter.sql export-rls-policies.sh rag_import_pdf.py dev-seed-rag-corpus.sql README.md Makefile docker-compose.yml CONTRIBUTING.md @ConditionalOnProperty assignment-copilot HEAD 306f114 AuditTamperProofGuard AgentMetrics EVAL_JUDGE_COST tenant_token_quota Grafana rule_files AgentChatOrchestrator AgentChatConfiguration platform.env rag.env jwt.env SNAPSHOT MANIFEST Main Class Flyway README EXPECT_TABLES CREATE TABLE71 TABLE ScopeFilter SSErag SseEmitter HTTP Framework Micrometer Jackson Lombok Boot CONTRIBUTING Spring ConditionalOnProperty Agent TODO Maven Docker HTML HEAD POLICY exec.jar init-db.sh it-env.sh pom.xml counterproof.sh v2.4 A13 A14 A15 A16 b770141 W-PERM-P4 governance01 滞后 MCP 已落地 Skill 运行时 student_memory embedding 未建 fallback 链 Last-Event-ID sequenceNo stdio oauth v2.5 A17 A18 A19 systemPromptRef 引用式提示词库 明确拒绝 inlineInstructions 真实供应商回归 HNSW 刻意不存在 RETIRED 清理 未确认 sequenceNo 测试数字不写死 472 90 113 40"
+          "keywords": "docs/本地启动指南.md …-SNAPSHOT.jar dev-backend.sh …-SNAPSHOT-exec.jar deploy/sql/README.md init-db.sh EXPECT_TABLES=71 it-env.sh --probe platform.review_task 01_platform_ddl.sql 01_rag_ddl.sql developer-onboarding.md rlsDependent() rag-api/pom.xml rag/ RAG-D05 JdbcRetrievalRepository platform/pom.xml *IT.java RAG-D09 /actuator/health /api/auth/jwks <testcase> mvn dependency:tree V1__baseline_schema.sql *-rv-*.py *-counterproof.sh RV-* rag-pg-s2 rag-it-env.sh 06/08/09/10/11/13_*_alter.sql export-rls-policies.sh rag_import_pdf.py dev-seed-rag-corpus.sql README.md Makefile docker-compose.yml CONTRIBUTING.md @ConditionalOnProperty assignment-copilot HEAD 306f114 AuditTamperProofGuard AgentMetrics EVAL_JUDGE_COST tenant_token_quota Grafana rule_files AgentChatOrchestrator AgentChatConfiguration platform.env rag.env jwt.env SNAPSHOT MANIFEST Main Class Flyway README EXPECT_TABLES CREATE TABLE71 TABLE ScopeFilter SSErag SseEmitter HTTP Framework Micrometer Jackson Lombok Boot CONTRIBUTING Spring ConditionalOnProperty Agent TODO Maven Docker HTML HEAD POLICY exec.jar init-db.sh it-env.sh pom.xml counterproof.sh v2.4 A13 A14 A15 A16 b770141 W-PERM-P4 governance01 滞后 MCP 已落地 Skill 运行时 student_memory embedding 未建 fallback 链 Last-Event-ID sequenceNo stdio oauth v2.5 A17 A18 A19 systemPromptRef 引用式提示词库 明确拒绝 inlineInstructions 真实供应商回归 HNSW 刻意不存在 RETIRED 清理 未确认 sequenceNo 测试数字不写死 472 90 113 40 v2.6 A20 A21 ToolInvocationGate ToolOperationState UNKNOWN 八态 可为空 装配风险 closureGuard runBudget approvalRequestSettings 审批权威 CancelGuard 租约续期 长任务 RabbitMQ CI 覆盖 reconcile 对账"
         },
         {
           "id": "appendix",
@@ -1746,6 +1754,128 @@ window.KB_SITE = {
             }
           ],
           "keywords": "systemPromptRef inlineInstructions cap_agent_def.instructions AgentModelConfigAssembler 引用式提示词库 拒绝执行 fail-closed 声明坏了 没声明 静默忽略 静默降级 明确拒绝 prompt_template PromptTemplate 提示词模板 零命中 CAP 发布 三步发布 缺口分类 刻意不做 分期未到 结构缺口 证据空白 重评条件 fallback 链 网关重试 模型熔断 SSE 断线重连 dynamic_discovery HNSW 事件序列号 sequenceNo 重放 MCP Server 暴露 五种增强模式 端口可空注入 增强降级不穿透 fail-closed未知 唯一信任边界 双写同一事务 派生列失效 勘察方法 L2 判分 n30 RETIRED 清理 oauth 凭据 流式故障矩阵 rag SSE 进度流 Spring AI 全家桶 WebSocket 热更新 第一周 D1 D7 转型者 成熟度 边界清晰 失败可解释 取舍留痕"
+        }
+      ]
+    },
+    {
+      "id": "ai-20-tool-gate",
+      "file": "ai-20-tool-gate.html",
+      "group": "AI 专题",
+      "title": "A20 · 工具调用闸门与副作用安全",
+      "sub": "八道闸门的执行顺序、风险三级与 fail-closed 兜底、ToolOperation 八态状态机、UNKNOWN 的三种禁止、fencing token 与 DB 触发器双防线、幂等键命名空间",
+      "ai": true,
+      "chapters": [
+        {
+          "id": "a20",
+          "title": "A20. 工具调用闸门与副作用安全：不可绕过的边界",
+          "subs": [
+            {
+              "id": "a20-1",
+              "title": "A20.1 执行链八步：顺序本身就是安全设计"
+            },
+            {
+              "id": "a20-2",
+              "title": "A20.2 风险三级与 fail-closed 兜底：未登记即最高风险"
+            },
+            {
+              "id": "a20-3",
+              "title": "A20.3 「只能收紧不能放松」：配置与代码的 maxWith 合并"
+            },
+            {
+              "id": "a20-4",
+              "title": "A20.4 审批的默认方向：恒 FAIL_CLOSED 而非 APPROVED"
+            },
+            {
+              "id": "a20-5",
+              "title": "A20.5 ToolOperation 八态状态机：为什么「未知」必须是独立状态"
+            },
+            {
+              "id": "a20-6",
+              "title": "A20.6 幂等键：命名空间不可省略，分隔符避开管道符"
+            },
+            {
+              "id": "a20-7",
+              "title": "A20.7 账本：为什么 UNKNOWN 必须落库而不是只记内存"
+            },
+            {
+              "id": "a20-8",
+              "title": "A20.8 数据库第二道防线：CHECK 约束与禁止新增 attempt 的触发器"
+            },
+            {
+              "id": "a20-9",
+              "title": "A20.9 fencing token：租约只能「劝阻」，fencing 才能「阻止」"
+            },
+            {
+              "id": "a20-10",
+              "title": "A20.10 「呈现层不是防线」：能力闭包为什么必须在执行侧再校验"
+            },
+            {
+              "id": "a20-11",
+              "title": "A20.11 一个真实教训：Worker 上下文缺角色 = 授权链路根本没接上"
+            },
+            {
+              "id": "a20-12",
+              "title": "A20.12 未落地与证据边界"
+            }
+          ],
+          "keywords": "ToolInvocationGate 八道闸门 Schema 校验 执行时重新授权 幂等键 账本 审批 预算 执行 账本更新 ToolCallingAdvisor 不可绕过 ADR-011 ToolRiskLevel READ WRITE_PROFILE WRITE_EXTERNAL fail-closed 未登记即最高风险 risk-level-map defaultApproval hasSideEffect requiresIdempotencyKey RiskBasedApprovalPolicy maxWith 只能收紧不能放松 红线15 R-020 ApprovalRequirement NOT_REQUIRED OPTIONAL REQUIRED agent.approval.required-by-risk NO_APPROVAL_PORT DENY_ALL_APPROVALS FAIL_CLOSED APPROVED NO_CANCEL CancelGuard 构造器膨胀 F-6 ToolOperationState PENDING IN_FLIGHT SUCCEEDED FAILED UNKNOWN RECONCILED_SUCCEEDED RECONCILED_ABSENT MANUAL_DISPOSED 八态 状态机 UNKNOWN 三条禁止 盲目重试 Sev-0 R-003 R-007 三层 Attempt Run attempt ToolOperation ToolOperationAttempt 对账 reconcile 幂等键 IdempotencyKey 命名空间 run.create tool.record_weakness tool.invoke 分隔符 管道符 PII 白名单 agent_ref RunToolLedgerPort register recordResult register 返回既有操作 状态机即契约 forbid_attempt_after_terminal enforce_fencing_on_write restrict_violation result_unknown CHECK 约束 tool_operation tool_operation_attempt fencing_token 单调递增 世代号 僵尸 Worker SSE_DIRECT_LEASE_OWNER 能力闭包 CapabilityClosureGuard 呈现层不是防线 注入诱导 假防线 GUARDED_TABLES AUTHZ_MISMATCH Worker 角色 Roles.WORKER TOOL_INVOKE RoleBasedAuthorizationService 空角色集 P4-D08 R-4 授权链路没接上 可为空 生产必须传入 approvalRequestSettings runBudget closureGuard mcpHandlers httpToolHandlers 装配测试"
+        }
+      ]
+    },
+    {
+      "id": "ai-21-dispatch-lease",
+      "file": "ai-21-dispatch-lease.html",
+      "group": "AI 专题",
+      "title": "A21 · 消息投递、租约与恢复",
+      "sub": "Outbox 事务性投递与「谁驱动发布器」、SKIP LOCKED 领取、租约与 fencing 接管、五种执行结局到 MQ 处置的映射、背压、恢复扫描与 SSE 直连租约",
+      "ai": true,
+      "chapters": [
+        {
+          "id": "a21",
+          "title": "A21. 消息投递、租约与恢复：从「任务落库」到「谁在跑它」",
+          "subs": [
+            {
+              "id": "a21-1",
+              "title": "A21.1 Outbox 模式：为什么不能「建完 Run 直接发 MQ」"
+            },
+            {
+              "id": "a21-2",
+              "title": "A21.2 「逻辑写了但没有调用方」：一个比 bug 更难发现的失效"
+            },
+            {
+              "id": "a21-3",
+              "title": "A21.3 多租户发布与背压：隔离的反面是「一坏全坏」"
+            },
+            {
+              "id": "a21-4",
+              "title": "A21.4 「重复消息必须丢弃而非重试」：at-least-once 的正确消费姿势"
+            },
+            {
+              "id": "a21-5",
+              "title": "A21.5 SKIP LOCKED 领取：多 Worker 不争抢的正确写法"
+            },
+            {
+              "id": "a21-6",
+              "title": "A21.6 租约与接管：30 秒的默认值意味着什么"
+            },
+            {
+              "id": "a21-7",
+              "title": "A21.7 五种执行结局 → MQ 处置：一张映射表决定「重投还是不重投」"
+            },
+            {
+              "id": "a21-8",
+              "title": "A21.8 SSE 直连租约：一个必须存在的「例外所有者」"
+            },
+            {
+              "id": "a21-9",
+              "title": "A21.9 停机与资源关闭：为什么「停机窗口内的 DB 异常」要降级"
+            },
+            {
+              "id": "a21-10",
+              "title": "A21.10 未落地与证据边界"
+            }
+          ],
+          "keywords": "Outbox OutboxRelay OutboxPublisher TenantOutboxPublishers outbox_event 同事务落库 幽灵任务 200ms 轮询 at-least-once 重复是正常形态 零调用方 @RabbitListener @Scheduled publishOnce relayOnce start stop 可测性 多租户发布 单租户失败不影响其他租户 一坏全坏 BackpressureController BackpressurePolicy 高水位 整轮跳过 拉长间隔 RunDispatchConsumer 重复消息丢弃而非重试 领取失败已被别人领走 消费路径越短 RunExecutor Outcome SUCCEEDED FAILED CANCELLED RETRYABLE_FAILURE UNKNOWN ack nack 重投 绝不重投 重复副作用 SKIP LOCKED FOR UPDATE 领取缩容 FORCE RLS 绑定租户 空转 DEFAULT_LEASE 30s RunRecoverySweeper 接管 崩溃恢复 60s 租约续期 长任务 SSE_DIRECT_LEASE_OWNER agent-chat-sse lease_owner DISTINCT FROM 两条独立防线 跨模块契约 字面量反查 漂移 停机 shuttingDown stopped HikariDataSource has been closed 告警疲劳 STOP_TIMEOUT_MS 30s 优雅停机 强杀 RabbitMQ CI 覆盖 E-1 E-2 E-3 database 通道"
         }
       ]
     }

@@ -51,8 +51,16 @@ import { APP_BASE_PATH, ROLES, PLATFORM_SCOPE_ROLES, type Role } from '@/config/
 /** 租户生命周期管理作用域（开通/启停/退役；后端仍按 platform.tenant.* 重授权） */
 const LIFECYCLE_SCOPE: Role[] = [ROLES.SUPER_ADMIN, ROLES.TENANT_LIFECYCLE_ADMIN]
 
-/** 平台审计作用域（需 platform.audit.read；后端仍重授权） */
-const AUDIT_SCOPE: Role[] = [ROLES.SUPER_ADMIN, ROLES.AUDITOR]
+/**
+ * 平台审计作用域（需 platform.audit.read；后端仍重授权）。
+ *
+ * ⚠️ DEF-02（2026-11-13 E2E 实测）：代码冻结矩阵 PlatformRolePermissionMatrix 与
+ *    DB platform_role_permission 均授予 PLATFORM_SECURITY_ADMIN `platform.audit.read`，
+ *    后端 GET /api/platform/v1/audit-events 对该角色实测 200；但前端此处与
+ *    navConfig 的审计菜单只放行 SUPER_ADMIN / AUDITOR，导致安全管理员深链进审计页
+ *    被 RequireRole 拦成 403。三处口径统一为「超管 + 安全管理员 + 审计员」。
+ */
+const AUDIT_SCOPE: Role[] = [ROLES.SUPER_ADMIN, ROLES.SECURITY_ADMIN, ROLES.AUDITOR]
 
 export const router = createBrowserRouter(
   [

@@ -106,6 +106,28 @@ public final class ItTenantProvisioner {
                     }
                 }
 
+                // ── P0（E2E 二次评估 · 2026-11-14）：与生产开通事务同形状的运行前置 ──
+                // ⚠️ 此前 IT 里 budget_account 靠 dev-it-db.sh 播种、cap_authz_version
+                //    靠各 IT 自己 adminExec 补行 —— 测试与生产的形状不一致，
+                //    于是「IT 全绿、新租户跑不起来」长期无人发现。
+                //    adminDataSource 是库 owner（BYPASSRLS），FORCE RLS 表可直接写。
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO budget_account "
+                                + "(tenant_id, currency, total_limit, reserved_amount, settled_amount) "
+                                + "VALUES (?::uuid, 'CNY', 1000.000000, 0, 0) "
+                                + "ON CONFLICT (tenant_id, currency) DO NOTHING")) {
+                    ps.setString(1, tenantId);
+                    ps.executeUpdate();
+                }
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO cap_authz_version "
+                                + "(tenant_id, principal_id, authz_version, version, updated_at) "
+                                + "VALUES (?::uuid, 'worker', 1, 0, now()) "
+                                + "ON CONFLICT (tenant_id, principal_id) DO NOTHING")) {
+                    ps.setString(1, tenantId);
+                    ps.executeUpdate();
+                }
+
                 try (PreparedStatement ps = conn.prepareStatement(
                         "INSERT INTO agent (tenant_id, name) VALUES (?::uuid, 'agent1') "
                                 + "ON CONFLICT (tenant_id, name) DO NOTHING")) {

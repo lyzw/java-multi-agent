@@ -1,0 +1,75 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：APPROVER · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e9]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e10]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e11]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e12]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e13]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e14]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e15]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e16]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e17]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e18]
+          - StaticText "未知操作处置"
+  - main
+    - heading "未知操作处置" [level=1, ref=e6]
+    - paragraph
+      - StaticText "结果不确定的操作，要人工核对后才能继续。"
+    - note
+      - paragraph
+        - StaticText "为什么这里没有「重试」"
+      - paragraph
+        - StaticText "「结果未知」的意思是这次操作可能已经改了数据，也可能没改。此时再执行一次， 就是在不确定的基础上重复施加一次副作用——这是 Sev-0 级风险。 所以这里只提供三种「核对结论」，全部是终态归档。"
+    - LabelText
+      - StaticText "操作状态"
+    - combobox "操作状态" [expanded=false, ref=e7]: 结果未知
+      - MenuListPopup
+        - option "结果未知" [selected, ref=e19]
+        - option "人工核实·已发生" [ref=e20]
+        - option "人工核实·未发生" [ref=e21]
+        - option "人工结案·无法判定" [ref=e22]
+        - option "执行中" [ref=e23]
+        - option "成功" [ref=e24]
+        - option "失败" [ref=e25]
+    - generic
+      - heading "待处置操作" [level=2, ref=e8]
+      - paragraph
+        - StaticText "没有需要处置的操作"
+      - paragraph
+        - StaticText "所有结果不确定的操作都已核对完毕。"

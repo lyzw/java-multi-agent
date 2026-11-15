@@ -6,6 +6,7 @@ import cn.studykid.multiagent.core.tenant.SubjectContext;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -18,8 +19,10 @@ class AuthzDecisionRecorderTest {
 
     @Test
     void noOp_neverThrowsAndHasNoState() {
-        NoOpAuthzDecisionRecorder.INSTANCE.record(SUBJECT, Action.RETRIEVE, RES, true, null);
-        NoOpAuthzDecisionRecorder.INSTANCE.record(SUBJECT, Action.RETRIEVE, RES, false, "DENY");
+        assertDoesNotThrow(() -> {
+            NoOpAuthzDecisionRecorder.INSTANCE.record(SUBJECT, Action.RETRIEVE, RES, true, null);
+            NoOpAuthzDecisionRecorder.INSTANCE.record(SUBJECT, Action.RETRIEVE, RES, false, "DENY");
+        });
     }
 
     @Test

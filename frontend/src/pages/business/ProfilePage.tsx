@@ -10,7 +10,7 @@
 
 import { useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Empty, Loading, ErrorState, Breadcrumbs } from '@/shared/states'
+import { Empty, Loading, ErrorStateFromError, Breadcrumbs } from '@/shared/states'
 import { useProfile } from '@/features/profile/useProfile'
 import type { ProfileResponse } from '@/api/types'
 import { PageHead, Panel } from '@/components/ui'
@@ -58,7 +58,7 @@ export function pickWhitelisted(raw: ProfileResponse): {
 
 export function ProfilePage(): JSX.Element {
   const { studentId } = useParams<{ studentId: string }>()
-  const { profile, loading, error, reload } = useProfile(studentId)
+  const { profile, loading, errorInfo, reload } = useProfile(studentId)
 
   const safe = useMemo(
     () =>
@@ -77,7 +77,7 @@ export function ProfilePage(): JSX.Element {
     )
   }
 
-  if (error !== null) {
+  if (errorInfo !== null) {
     return (
       <>
         <Breadcrumbs
@@ -91,10 +91,18 @@ export function ProfilePage(): JSX.Element {
             </>
           }
         />
-        <ErrorState
-          reason={error}
-          next="可能是网络问题，或这个匿名编号还没被辅导过。"
+        {/*
+          ⛔ N2（E2E 二次评估）：原实现把**任何**错误（含 403 权限拒绝）
+             统一说成「可能是网络问题，或这个编号还没被辅导过」并附重试按钮。
+             学生填完编号才撞墙，然后被引导反复重试一个永远不会成功的动作。
+             现由 `ErrorStateFromError` 统一分流：
+               403 → 「当前账号没有该功能权限，重试不会改变结果，联系管理员」，无重试；
+               5xx / 超时 / 网络 → 保留重试。
+        */}
+        <ErrorStateFromError
+          error={errorInfo}
           onRetry={reload}
+          reasonPrefix="学习画像"
         />
       </>
     )

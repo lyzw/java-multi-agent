@@ -1,0 +1,14 @@
+[  失败] I-P-superadmin PLATFORM_SUPER_ADMIN 导航显隐与审计深链守卫       -> {"user": "plat-superadmin", "role": "PLATFORM_SUPER_ADMIN", "loginUrl": "http://localhost:5180/admin/login", "rolesClaim": ["PLATFORM_SUPER_ADMIN"], "
+[  通过] I-P-lifecycle TENANT_LIFECYCLE_ADMIN 导航显隐与审计深链守卫     -> {"user": "plat-lifecycle", "role": "TENANT_LIFECYCLE_ADMIN", "loginUrl": "http://localhost:5180/admin/login", "rolesClaim": ["PLATFORM_SUPER_ADMIN"], 
+[  通过] I-P-resource PLATFORM_RESOURCE_ADMIN 导航显隐与审计深链守卫    -> {"user": "plat-resource", "role": "PLATFORM_RESOURCE_ADMIN", "loginUrl": "http://localhost:5180/admin/tenants", "rolesClaim": ["PLATFORM_RESOURCE_ADMI
+[  通过] I-P-security PLATFORM_SECURITY_ADMIN 导航显隐与审计深链守卫    -> {"user": "plat-security", "role": "PLATFORM_SECURITY_ADMIN", "loginUrl": "http://localhost:5180/admin/tenants", "rolesClaim": ["PLATFORM_SECURITY_ADMI
+[  通过] I-P-auditor PLATFORM_AUDITOR 导航显隐与审计深链守卫           -> {"user": "plat-auditor", "role": "PLATFORM_AUDITOR", "loginUrl": "http://localhost:5180/admin/tenants", "rolesClaim": ["PLATFORM_AUDITOR"], "menuCount
+[  通过] I-P-support PLATFORM_SUPPORT 导航显隐与审计深链守卫           -> {"user": "plat-support", "role": "PLATFORM_SUPPORT", "loginUrl": "http://localhost:5180/admin/tenants", "rolesClaim": ["PLATFORM_SUPPORT"], "menuCount
+ROLE SUMMARY
+plat-superadmin menu 0 auditVisible False audit403 False usersDenied False
+plat-lifecycle menu 0 auditVisible False audit403 True usersDenied True
+plat-resource menu 3 auditVisible False audit403 True usersDenied True
+plat-security menu 3 auditVisible False audit403 True usersDenied True
+plat-auditor menu 4 auditVisible True audit403 False usersDenied True
+plat-support menu 3 auditVisible False audit403 True usersDenied True
+BATCH5 DONE

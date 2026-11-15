@@ -1,0 +1,6 @@
+[80120.166] GET http://localhost:5180/api/v1/management/ingest-jobs?limit=100 (Fetch) 200
+[80120.167] GET http://localhost:5180/api/platform/v1/tenants?limit=200 (Fetch) 200
+[80120.168] GET http://localhost:5180/api/v1/management/ingest-jobs?limit=100 (Fetch) 200
+[80120.169] GET http://localhost:5180/api/platform/v1/tenants?limit=200 (Fetch) 200
+[80120.170] GET http://localhost:5180/api/v1/management/sources?includeStale=true&limit=100 (Fetch) 200
+[80120.171] GET http://localhost:5180/api/v1/management/statistics (Fetch) 200

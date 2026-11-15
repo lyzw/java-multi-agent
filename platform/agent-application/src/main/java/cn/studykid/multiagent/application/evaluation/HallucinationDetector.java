@@ -1,7 +1,8 @@
 package cn.studykid.multiagent.application.evaluation;
 
 import java.util.List;
-import java.util.regex.Pattern;
+
+import com.google.re2j.Pattern;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -34,7 +35,7 @@ public final class HallucinationDetector {
                     Pattern.compile("(人教版|苏教版|北师大|沪教版|义务教育|普通高中)"
                             + "\\s*[教材课程]?")),
             new Rule("H-1c 版本页",
-                    Pattern.compile("[Pp]\\s?[0-9]{1,4}\\b(?![0-9])")),
+                    Pattern.compile("[Pp]\\s?[0-9]{1,4}\\b")),
             new Rule("H-1d 图/表引用",
                     Pattern.compile("(如图|见图|下表|上表|表\\s*[0-9]+-[0-9]+)"
                             .concat("|图\\s*[0-9]+[-－][0-9]+"))),

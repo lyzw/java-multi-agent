@@ -1,0 +1,4 @@
+[80120.148] GET http://localhost:5180/api/platform/v1/users (Fetch) 200
+[80120.149] GET http://localhost:5180/api/platform/v1/roles (Fetch) 200
+[80120.150] GET http://localhost:5180/api/platform/v1/users (Fetch) 200
+[80120.151] GET http://localhost:5180/api/platform/v1/roles (Fetch) 200

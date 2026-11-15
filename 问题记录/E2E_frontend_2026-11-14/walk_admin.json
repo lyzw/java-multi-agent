@@ -1,0 +1,213 @@
+[
+  {
+    "path": "/",
+    "label": "dashboard",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 3312,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/dashboard.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/dashboard.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/runs",
+    "label": "run_search",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 3501,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/run_search.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/run_search.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/runs/new",
+    "label": "new_run",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 3844,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/new_run.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/new_run.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/profile",
+    "label": "profile_lookup",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2528,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/profile_lookup.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/profile_lookup.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/rag",
+    "label": "rag_search",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 5658,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/rag_search.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/rag_search.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/chat",
+    "label": "general_chat",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 4154,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/general_chat.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/general_chat.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/agent-chat",
+    "label": "agent_chat",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 5272,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/agent_chat.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/agent_chat.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/reports",
+    "label": "reports",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 6437,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/reports.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/reports.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/no-permission",
+    "label": "no_permission",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2714,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/no_permission.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/no_permission.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/config",
+    "label": "config",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 17154,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/config.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/config.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/config/runtime",
+    "label": "config_runtime",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 11675,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/config_runtime.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/config_runtime.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/config/tools",
+    "label": "config_tools",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 7339,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/config_tools.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/config_tools.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/config/compliance",
+    "label": "config_compliance",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 4761,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/config_compliance.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/config_compliance.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/agents",
+    "label": "agents",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2810,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/agents.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/agents.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/approvals",
+    "label": "approvals",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 2941,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/approvals.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/approvals.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/reconciliation",
+    "label": "reconciliation",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 3143,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/reconciliation.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/reconciliation.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/audit",
+    "label": "audit",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 5915,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/audit.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/audit.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/health",
+    "label": "health",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": false,
+    "snap_len": 3122,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/health.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/health.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  },
+  {
+    "path": "/rag/management",
+    "label": "rag_mgmt",
+    "expect": "accessible",
+    "url_after": "",
+    "login_shown": true,
+    "snap_len": 4450,
+    "screenshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/screenshots/admin/rag_mgmt.png",
+    "snapshot": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snapshots/admin/rag_mgmt.txt",
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主",
+    "url_after_retry": "",
+    "snap_head_retry": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     - button \"退出\" [ref=e5]   - navigation \"主"
+  }
+]

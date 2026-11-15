@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.Set;
@@ -91,7 +92,9 @@ class TenantContextTest {
         @DisplayName("同租户校验通过")
         void sameTenantPasses() {
             TenantContext c = ctx("t-a", "p1");
-            c.requireSameTenant("t-a");   // 不应抛异常
+            assertThatNoException()
+                    .as("同租户不应抛 TenantMismatchException")
+                    .isThrownBy(() -> c.requireSameTenant("t-a"));
         }
 
         @Test

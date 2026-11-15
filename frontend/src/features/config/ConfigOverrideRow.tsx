@@ -135,7 +135,13 @@ export function ConfigOverrideRow({
             {overridden && (
               <button
                 type="button"
-                onClick={() => onClear(item.key)}
+                onClick={() => {
+                  // ⚠️ 与「提交变更」同纪律：写操作必须二次确认，避免误清覆盖值。
+                  const confirmed = window.confirm(
+                    `确认要将「${item.key}」恢复为平台默认值吗？\n\n已按租户覆盖的值将被清除。`,
+                  )
+                  if (confirmed) onClear(item.key)
+                }}
                 disabled={busy}
               >
                 恢复默认

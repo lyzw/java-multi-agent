@@ -1,0 +1,46 @@
+[
+  {
+    "label": "fc_chat_page",
+    "path": "/chat",
+    "url": "http://localhost:5173/chat",
+    "login": false,
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     ",
+    "len": 4153,
+    "snap": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snaps/admin/fc_chat_page.txt"
+  },
+  {
+    "label": "fc_chat_after",
+    "url": "http://localhost:5173/chat",
+    "err_kw": null,
+    "len": 4195,
+    "snap": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snaps/admin/fc_chat_after.txt"
+  },
+  {
+    "label": "fc_after_logout",
+    "path": "/",
+    "url": "http://localhost:5173/login",
+    "login": true,
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - main     - generic       - StaticText \"错题归因辅导\"     - heading \"把错题变成 下一次的分数\" [level=1, ref=e2]       - StaticText \"把错题变成\"       - LineBreak \"\\n\"       - Stati",
+    "len": 1251,
+    "snap": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snaps/admin/fc_after_logout.txt"
+  },
+  {
+    "label": "fc_logout_url",
+    "url": "http://localhost:5173/login",
+    "login": true
+  },
+  {
+    "label": "fc_rag_mgmt",
+    "path": "/rag/management",
+    "url": "http://localhost:5173/rag/management",
+    "login": true,
+    "snap_head": "- generic [ref=e1] clickable [onclick]   - link \"跳到主内容\" [ref=e2]   - banner     - StaticText \"错题归因辅导\"     - generic       - StaticText \"角色：TENANT_ADMIN · 租户 8394ad1e\"     - button \"折叠导航\" [ref=e4]     ",
+    "len": 4449,
+    "snap": "/Users/zhouwei/code-workspace/ai-tech/java-multi-agent/问题记录/E2E_frontend_2026-11-14/snaps/admin/fc_rag_mgmt.txt"
+  },
+  {
+    "label": "fc_rag_mgmt_err",
+    "err_kw": "失败",
+    "login": true
+  }
+]

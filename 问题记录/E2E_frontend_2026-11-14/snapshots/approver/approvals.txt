@@ -1,0 +1,71 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：APPROVER · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生 / 家长 / 老师"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e9]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e10]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e11]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e12]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e13]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e14]
+          - StaticText "Agent 对话"
+      - listitem [level=1]
+        - link "学习画像" [ref=e15]
+          - StaticText "学习画像"
+      - listitem [level=1]
+        - link "报表中心" [ref=e16]
+          - StaticText "报表中心"
+    - paragraph
+      - StaticText "运行治理"
+    - paragraph
+      - StaticText "需审批人 / 租户管理员"
+    - list
+      - listitem [level=1]
+        - link "审批台" [ref=e17]
+          - StaticText "审批台"
+      - listitem [level=1]
+        - link "未知操作处置" [ref=e18]
+          - StaticText "未知操作处置"
+  - main
+    - heading "审批台" [level=1, ref=e6]
+    - paragraph
+      - StaticText "等着你确认才能执行的操作。"
+    - generic
+      - sectionheader
+        - heading "筛选" [level=2, ref=e19]
+      - LabelText
+        - StaticText "审批状态"
+      - combobox "审批状态" [expanded=false, ref=e7]: 待审批
+        - MenuListPopup
+          - option "待审批" [selected, ref=e20]
+          - option "已批准" [ref=e21]
+          - option "已拒绝" [ref=e22]
+          - option "已过期" [ref=e23]
+          - option "已使用" [ref=e24]
+    - generic
+      - heading "待审批" [level=2, ref=e8]
+      - paragraph
+        - StaticText "没有等待审批的操作"
+      - paragraph
+        - StaticText "需要人工确认的操作会出现在这里。"

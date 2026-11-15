@@ -91,6 +91,13 @@ export function UsersManagePage(): JSX.Element {
   const { message } = App.useApp()
   const currentUserId = session?.principalId ?? null
   const iAmSuper = isSuperAdmin(currentRoles)
+  /**
+   * DEF-06（2026-11-13 E2E 实测）：6/6 角色均看到「新建用户」等写入口，点击后靠后端
+   * 403 兜底。代码冻结矩阵 PlatformRolePermissionMatrix 中 `platform.user.manage`
+   * 只有 PLATFORM_SUPER_ADMIN 持有（其余 5 角色连 user.read 都没有），因此按角色裁剪
+   * 写入口是 fail-closed 且不会误伤合法操作；后端重授权仍然是唯一安全边界。
+   */
+  const canManageUsers = iAmSuper
 
   usePageTitle('平台用户')
 
@@ -274,6 +281,8 @@ export function UsersManagePage(): JSX.Element {
       key: 'actions',
       width: 250,
       render: (_: unknown, u: PlatformUserDetail) => {
+        // DEF-06：无 platform.user.manage 的角色不渲染任何写入口（后端仍重授权）。
+        if (!canManageUsers) return <Text type="secondary">只读</Text>
         const isSelf = u.id === currentUserId
         const willDisable = u.status === 'ACTIVE'
         const statusBtn = (
@@ -335,16 +344,18 @@ export function UsersManagePage(): JSX.Element {
       extra={
         <Space>
           <Text type="secondary">状态/角色变更最多 900s 内生效（令牌无状态）</Text>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => {
-              createForm.resetFields()
-              setCreateOpen(true)
-            }}
-          >
-            新建用户
-          </Button>
+          {canManageUsers && (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                createForm.resetFields()
+                setCreateOpen(true)
+              }}
+            >
+              新建用户
+            </Button>
+          )}
         </Space>
       }
     >

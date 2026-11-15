@@ -13,8 +13,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+
+import com.google.re2j.Matcher;
+import com.google.re2j.Pattern;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;

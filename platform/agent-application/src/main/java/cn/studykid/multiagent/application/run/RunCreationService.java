@@ -309,7 +309,11 @@ public class RunCreationService {
                     inputPayload,
                     correlationId,
                     message,
-                    limits);
+                    limits,
+                    // ⚠️ 创建主体随 Run 同事务落库（F1 受众隔离的归属依据）：
+                    //    受众角色（STUDENT/PARENT/TEACHER）对 Run 的可见范围
+                    //    收窄到 requester_id = principal_id。
+                    context.principalId());
             // ⚠️⚠️ 双写必须在<b>本事务之内</b>（2026-10-28 实测竞态后修正）：
             //   Outbox 消息与本事务一起提交，Worker 最迟在提交后几十毫秒就能领到任务；
             //   而放在事务外的双写<b>实测晚约 1.15s 才落库</b>

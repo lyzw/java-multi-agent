@@ -1,0 +1,81 @@
+[
+  {
+    "id": "A_run_step_frontend_label",
+    "desc": "撤掉结果页 RUNNING→已完成（改回「执行中」）",
+    "file": "frontend/src/pages/business/RunResultPage.tsx",
+    "tests": [
+      "tests/result.page.test.tsx",
+      "tests/runStep.contract.test.ts"
+    ],
+    "vitest_exit": 1,
+    "must_be_red": true,
+    "is_red": true,
+    "failure_lines": [
+      "❯ tests/result.page.test.tsx (16 tests | 1 failed) 104ms",
+      "✓ T8：⛔ run_step 恒 RUNNING 表示「已发生」，不得显示成「执行中」 > FAILED 步骤仍显示「失败」并带红点（口径不吞掉真实失败） 5ms",
+      "❯ tests/runStep.contract.test.ts (9 tests | 1 failed) 42ms"
+    ],
+    "tail": "ument.querySelector('.steps__item')?.className).toContai…\n    264|     // ⚠️ output_payload 无写入方：不渲染空白正文骨架\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯\n\n FAIL  tests/runStep.contract.test.ts > run_step 口径：契约层与读侧 > 结果页把 RUNNING 映射为「已完成」并给绿点，且告知「无逐步正文」\nAssertionError: expected [Function] to not throw an error but 'Error: 缺少口径锚点：RUNNING: \\'已完成\\'' was thrown\n\n\u001b[32m- Expected:\u001b[39m \nundefined\n\n\u001b[31m+ Received:\u001b[39m \n\"Error: 缺少口径锚点：RUNNING: '已完成'\"\n\n ❯ tests/runStep.contract.test.ts:103:33\n    101|       'return \\'steps__item--done\\'',\n    102|       '逐步讲解请看上方',\n    103|     ], [\"RUNNING: '执行中'\"])).not.toThrow()\n       |                                 ^\n    104|   })\n    105| \n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯\n\n"
+  },
+  {
+    "id": "B_shouldShowSyncing_terminal",
+    "desc": "撤掉 shouldShowSyncing 对终态权限错误的排除",
+    "file": "frontend/src/pages/RunProgressPage.tsx",
+    "tests": [
+      "tests/progress.page.test.tsx"
+    ],
+    "vitest_exit": 1,
+    "must_be_red": true,
+    "is_red": true,
+    "failure_lines": [
+      "❯ tests/progress.page.test.tsx (31 tests | 2 failed) 132ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + CONFIG_UNAVAILABLE：不给重新发起、给回工作台、不透原码、停轮询 5ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + BUDGET_EXHAUSTED：不给重新发起、给回工作台、不透原码、停轮询 5ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + AUTHZ_UNAVAILABLE：不给重新发起、给回工作台、不透原码、停轮询 5ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + NO_ACCOUNT：不给重新发起、给回工作台、不透原码、停轮询 4ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + CONFIG_MISSING：不给重新发起、给回工作台、不透原码、停轮询 3ms"
+    ],
+    "tail": " })).toBeDisabled()\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯\n\n FAIL  tests/progress.page.test.tsx > N6：⛔ 状态读取 403 / 401 必须显式终态、停轮询、不给重试 > 401 → 唯一动作是重新登录，不给重试暗示\nAssertionError: expected '检索记录/分析进度分析进度运行标识：r-1无法查看状态刷新状态会话已结束，…' not to contain '正在同步最新状态'\n\nExpected: \u001b[32m\"正在同步最新状态\"\u001b[39m\nReceived: \u001b[31m\"\u001b[7m检索记录/分析进度分析进度运行标识：r-1无法查看状态刷新状态会话已结束，请重新登录后再继续；重试当前请求不会成功。登录已过期。会话已结束，请重新登录后再继续；重试当前请求不会成功。\u001b[27m正在同步最新状态\u001b[7m…\u001b[27m\"\u001b[39m\n\n ❯ tests/progress.page.test.tsx:309:22\n    307|     const body = document.body.textContent ?? ''\n    308|     expect(body).toContain('重新登录')\n    309|     expect(body).not.toContain('正在同步最新状态')\n       |                      ^\n    310|   })\n    311| \n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯\n\n"
+  },
+  {
+    "id": "C_useRunStatus_stop_on_terminal_error",
+    "desc": "撤掉 403/401 停状态轮询，退回「只有 404 停」的旧实现",
+    "file": "frontend/src/features/run/useRunStatus.ts",
+    "tests": [
+      "tests/progress.page.test.tsx"
+    ],
+    "vitest_exit": 1,
+    "must_be_red": true,
+    "is_red": true,
+    "failure_lines": [
+      "❯ tests/progress.page.test.tsx (31 tests | 2 failed) 133ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + CONFIG_UNAVAILABLE：不给重新发起、给回工作台、不透原码、停轮询 4ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + BUDGET_EXHAUSTED：不给重新发起、给回工作台、不透原码、停轮询 4ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + AUTHZ_UNAVAILABLE：不给重新发起、给回工作台、不透原码、停轮询 5ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + NO_ACCOUNT：不给重新发起、给回工作台、不透原码、停轮询 4ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + CONFIG_MISSING：不给重新发起、给回工作台、不透原码、停轮询 4ms"
+    ],
+    "tail": "entStreamMock.mock.calls.length).toBe(streamCalls)\n    299|   })\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯\n\n FAIL  tests/progress.page.test.tsx > N6：⛔ 状态读取 403 / 401 必须显式终态、停轮询、不给重试 > ⛔ 混合路径：先 5xx 后 403，最终收敛为终态且停轮询\nAssertionError: expected 8 to be 2 // Object.is equality\n\n\u001b[32m- Expected\u001b[39m\n\u001b[31m+ Received\u001b[39m\n\n\u001b[32m- 2\u001b[39m\n\u001b[31m+ 8\u001b[39m\n\n ❯ tests/progress.page.test.tsx:338:48\n    336|     const calls = getRunStatusMock.mock.calls.length\n    337|     await act(async () => { await vi.advanceTimersByTimeAsync(60_000) …\n    338|     expect(getRunStatusMock.mock.calls.length).toBe(calls)\n       |                                                ^\n    339|   })\n    340| \n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯\n\n"
+  },
+  {
+    "id": "D_service_config_code_full_table",
+    "desc": "从租户级故障分类表删掉 CONFIG_MISSING",
+    "file": "frontend/src/api/errorGuidance.ts",
+    "tests": [
+      "tests/errorGuidance.test.ts",
+      "tests/progress.page.test.tsx"
+    ],
+    "vitest_exit": 1,
+    "must_be_red": true,
+    "is_red": true,
+    "failure_lines": [
+      "❯ tests/progress.page.test.tsx (31 tests | 1 failed) 136ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + CONFIG_UNAVAILABLE：不给重新发起、给回工作台、不透原码、停轮询 6ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + BUDGET_EXHAUSTED：不给重新发起、给回工作台、不透原码、停轮询 4ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + AUTHZ_UNAVAILABLE：不给重新发起、给回工作台、不透原码、停轮询 4ms",
+      "✓ N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + NO_ACCOUNT：不给重新发起、给回工作台、不透原码、停轮询 3ms",
+      "× N3：失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + CONFIG_MISSING：不给重新发起、给回工作台、不透原码、停轮询 8ms"
+    ],
+    "tail": "失败 Run 终态的错误码分类（页面级硬门禁） > ⛔ FAILED + CONFIG_MISSING：不给重新发起、给回工作台、不透原码、停轮询\nAssertionError: expected '检索记录/分析进度分析进度运行标识：r-1失败失败原因：本次执行未完成刷新…' to contain '服务配置尚未就绪'\n\nExpected: \u001b[32m\"服务配置尚未就绪\"\u001b[39m\nReceived: \u001b[31m\"检索记录/分析进度分析进度运行标识：r-1失败失败原因：本次执行未完成刷新状态这次分析没有得出结论（运行标识 r-1）。请把运行标识提供给管理员排查；暂不建议对同一道题反复发起。回工作台回检索记录\"\u001b[39m\n\n ❯ tests/progress.page.test.tsx:371:20\n    369|       await act(async () => { await vi.advanceTimersByTimeAsync(20) })\n    370|       const body = document.body.textContent ?? ''\n    371|       expect(body).toContain('服务配置尚未就绪')\n       |                    ^\n    372|       expect(body).toContain('联系管理员')\n    373|       expect(body).toContain('r-1')\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯\n\n"
+  }
+]

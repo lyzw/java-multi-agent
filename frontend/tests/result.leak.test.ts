@@ -2,12 +2,13 @@
  * C6 敏感词兜底扫描契约测试（FE-D6 F-24）
  *
  * ⚠️ 背景：`RunResultPage.findLeakedFields` 是 C6「结果不得含身份信息」的
- *    **渲染前兜底扫描**唯一入口。但当前它被导出却**从未被调用**
- *    （`RunResultPage` 的 `leakedFields` 硬编码为 `[]`），即 C6 兜底**当前 inert**。
+ *    **渲染前兜底扫描**唯一入口，现已在 `RunResultPage` 的 `useMemo` 里真实调用
+ *    （早期版本确实硬编码 `[]`、C6 inert，该形态早已不存在）。
  *
- *    本文件不接假数据，只**锁住函数契约**——保证一旦 G5 结果接口接上、
- *    开发者显式调用 `findLeakedFields(payload)` 时，它确实能识别泄漏字段，
- *    不会因函数本身有 bug 而让 C6 红线静默失效。
+ *    本文件锁住**函数契约**：保证它确实能识别泄漏字段、不误杀正常数学内容。
+ *    ⚠️ 函数契约 ≠ 页面接入契约：页面是否扫描了全文 / 全部渲染字段，
+ *    由 `result.page.test.tsx` 的 T9 行为级用例与 `runStep.contract.test.ts`
+ *    的静态锚点共同守卫（四轮优化发现过「截断在前 + 只扫 explanation」的漏洞）。
  */
 
 import { describe, it, expect } from 'vitest'

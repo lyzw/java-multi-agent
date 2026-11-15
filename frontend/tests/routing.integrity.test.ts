@@ -65,13 +65,20 @@ function collectNavTargets(): string[] {
 
 /** 判断 link 是否被某 route 覆盖（精确匹配，或参数路由的同前缀） */
 function isCovered(link: string, routes: string[]): boolean {
+  // ⚠️ **按 pathname 匹配**：query 不是路径的一部分。
+  //    `navigate('/no-permission?reason=…')`（F2 · E2E 2026-11-14）提取出的
+  //    静态前缀含 `?reason=`，若拿它去和路由表 `/no-permission` 精确比对，
+  //    永远失配 —— 那不是「链接指向不存在的路由」，而是**比对口径错了**。
+  //    ⚠️ 这**不放宽**不变式：剥掉 query 后仍必须命中某个已声明路由，
+  //    否则照样转红（见下方反证用例）。
+  const pathname = link.split('?')[0] ?? link
   for (const route of routes) {
     if (route === '*') continue // 兜底是重定向，不算「真实可达路由」
-    if (route === link) return true
+    if (route === pathname) return true
     // 参数路由：把 :param 段替换为通配后再比前缀
     if (route.includes(':')) {
       const staticPrefix = route.split(':')[0] ?? '' // 例如 /profile/:studentId → /profile/
-      if (staticPrefix.endsWith('/') && link.startsWith(staticPrefix)) return true
+      if (staticPrefix.endsWith('/') && pathname.startsWith(staticPrefix)) return true
     }
   }
   return false
@@ -97,8 +104,7 @@ describe('F-25：链接目标 ⊆ 已声明路由（CI 不变式）', () => {
     '侧栏导航项 %s 应匹配到一个已声明路由',
     (link) => {
       expect(isCovered(link, routes)).toBe(true)
-    },
-  )
+    },  )
 
   /*
    * ⚠️ 反证用例曾以 `/config/audit` 为样本（F4 前它是独立审计页）。
@@ -111,5 +117,16 @@ describe('F-25：链接目标 ⊆ 已声明路由（CI 不变式）', () => {
     // /approvals 是 AppShell 导航项之一；去掉后应失配
     const navStillCovered = navTargets.every((t) => isCovered(t, without))
     expect(navStillCovered).toBe(false)
+  })
+
+  /**
+   * ⚠️ 反证：query 剥离**不得**让「无对应路由的链接」蒙混过关。
+   *
+   * ⚠️ 这条锁的是「按 pathname 匹配」这条新口径的**下界**：
+   * 剥掉 query 只是修正比对口径，**不是**给任意链接开后门。
+   */
+  it('⛔ 反证：query 剥离后仍须命中已声明路由（无路由者照样失配）', () => {
+    expect(isCovered('/no-permission?reason=x', routes)).toBe(true)
+    expect(isCovered('/definitely-not-a-route?reason=x', routes)).toBe(false)
   })
 })

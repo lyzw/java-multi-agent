@@ -1,0 +1,89 @@
+- generic [ref=e1] clickable [onclick]
+  - link "跳到主内容" [ref=e2]
+  - banner
+    - StaticText "错题归因辅导"
+    - generic
+      - StaticText "角色：STUDENT · 租户 8394ad1e"
+    - button "折叠导航" [ref=e4]
+    - button "退出" [ref=e5]
+  - navigation "主导航" [ref=e3]
+    - paragraph
+      - StaticText "辅导台"
+    - paragraph
+      - StaticText "学生（本版本）"
+    - list
+      - listitem [level=1]
+        - link "工作台" [ref=e11]
+          - StaticText "工作台"
+      - listitem [level=1]
+        - link "发起辅导" [ref=e12]
+          - StaticText "发起辅导"
+      - listitem [level=1]
+        - link "检索记录" [ref=e13]
+          - StaticText "检索记录"
+      - listitem [level=1]
+        - link "知识检索" [ref=e14]
+          - StaticText "知识检索"
+      - listitem [level=1]
+        - link "通用问答" [ref=e15]
+          - StaticText "通用问答"
+      - listitem [level=1]
+        - link "Agent 对话" [ref=e16]
+          - StaticText "Agent 对话"
+  - main
+    - navigation "位置" [ref=e6]
+      - list
+        - listitem [level=1]
+          - link "检索记录" [ref=e17]
+        - listitem [level=1]
+          - StaticText "分析进度"
+    - heading "分析进度" [level=1, ref=e7]
+    - paragraph
+      - StaticText "运行标识："
+      - code
+        - StaticText "d6c8f6bc-9a10-4bf7-9898-9f0e6c098b21"
+    - generic
+      - paragraph
+        - StaticText "已完成"
+      - button "刷新状态" [ref=e8]
+    - generic
+      - heading "执行事件" [level=2, ref=e9]
+      - list
+        - listitem [level=1]
+          - StaticText "#"
+          - StaticText "1"
+          - StaticText "RUN_CREATED"
+          - time
+            - StaticText "2026/11/14 17:58:02"
+        - listitem [level=1]
+          - StaticText "#"
+          - StaticText "2"
+          - StaticText "RUN_STARTED"
+          - time
+            - StaticText "2026/11/14 17:58:05"
+        - listitem [level=1]
+          - StaticText "#"
+          - StaticText "3"
+          - StaticText "LOOP_START"
+          - time
+            - StaticText "2026/11/14 17:58:05"
+        - listitem [level=1]
+          - StaticText "#"
+          - StaticText "4"
+          - StaticText "STEP_START"
+          - time
+            - StaticText "2026/11/14 17:58:06"
+        - listitem [level=1]
+          - StaticText "#"
+          - StaticText "5"
+          - StaticText "MODEL_CALL_BEFORE"
+          - time
+            - StaticText "2026/11/14 17:58:06"
+        - listitem [level=1]
+          - StaticText "#"
+          - StaticText "6"
+          - StaticText "MODEL_CALL_DONE"
+          - time
+            - StaticText "2026/11/14 17:58:12"
+    - paragraph
+      - link "查看归因结果" [ref=e10]

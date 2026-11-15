@@ -156,6 +156,15 @@ public class ConsoleChatController {
      * {@code ConsoleBudgetPort} Bean 时仍可启动并走 legacy；生产组合根提供唯一 Bean。
      */
     @Autowired
+    // S2789 误报：此处对 Optional 的 null 判空是**契约钉死的源码形态**，不可删。
+    //   ① 语义上：Spring 的 Optional 注入恒非 null（无 Bean 时给 empty），
+    //      故 `== null` 分支在生产不可达；但它同时是**防御性判空**——
+    //      本构造为 public，直接 new 传入 null 的 Optional 不应让启动期崩成 NPE。
+    //   ② 契约上：ContextCompressionM9GuardTest#controllerSendsOnlyBudgetedRequestAndNeverFallsBack
+    //      （RV-M9-04）逐字断言本表达式存在；删它会让「L3 中性预算端口已接线」
+    //      这条验收断言失守 ⇒ 属"改验收契约迁就 lint"，方向反了。
+    //   故保留原写法并在此显式抑制规则。
+    @SuppressWarnings("java:S2789")
     public ConsoleChatController(
                                  @NonNull @Qualifier("chatStreamGateway")
                                  ChatStreamGateway chatGateway,

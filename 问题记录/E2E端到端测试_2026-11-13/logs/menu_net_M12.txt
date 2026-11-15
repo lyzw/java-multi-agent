@@ -1,0 +1,8 @@
+[80120.174] GET http://localhost:5180/api/platform/v1/dictionaries?enabledOnly=false (Fetch) 200
+[80120.175] GET http://localhost:5180/api/v1/management/ingest-jobs?limit=20 (Fetch) 200
+[80120.176] GET http://localhost:5180/api/v1/management/ingest-jobs?limit=100 (Fetch) 200
+[80120.177] GET http://localhost:5180/api/platform/v1/tenants?limit=200 (Fetch) 200
+[80120.178] GET http://localhost:5180/api/v1/management/ingest-jobs?limit=20 (Fetch) 200
+[80120.179] GET http://localhost:5180/api/v1/management/ingest-jobs?limit=100 (Fetch) 200
+[80120.180] GET http://localhost:5180/api/platform/v1/tenants?limit=200 (Fetch) 200
+[80120.181] GET http://localhost:5180/api/v1/management/sources?includeStale=true&limit=100 (Fetch) 200

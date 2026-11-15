@@ -25,6 +25,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useSession } from '@/auth/session'
 import { ContentErrorBoundary } from '@/shared/ErrorBoundary'
 import { hasRoleAccess } from '@/auth/RequireRole'
+import { canPerformTask, unsupportedRoleOf, type TaskId } from '@/auth/capabilities'
 import { Icon, type IconName } from '@/components/Icon'
 
 /** 侧栏折叠态的本机记忆键（纯布局偏好，不涉及任何凭据 / 受控数据）。 */
@@ -52,8 +53,14 @@ interface NavItem {
   to: string
   label: string
   icon: IconName
-  /** 需要的角色区域；缺省 = 任何已登录用户可见（学生侧页面） */
+  /** 治理面区域（config / approvals / audit …）；与 task 二选一 */
   area?: string
+  /**
+   * 业务面任务（T1 硬门禁）。
+   * ⛔ 每个可见入口都必须登记：没有登记就说明「这个入口没有对应的真实操作用例」，
+   *    正是 F6 / N1 / N2 的共同根因。见 capabilities.ts。
+   */
+  task?: TaskId
 }
 
 interface NavGroup {
@@ -67,22 +74,25 @@ const NAV: NavGroup[] = [
   {
     title: '辅导台',
     icon: 'dashboard',
-    rolesHint: '学生 / 家长 / 老师',
+    // ⚠️ E2E 二次评估 N1：产品裁决「家长 / 老师本版本不开放」，
+    //    rolesHint 不再承诺三个受众；只写实际开放的学生。
+    rolesHint: '学生（本版本）',
     items: [
-      { to: '/', label: '工作台', icon: 'dashboard' },
-      { to: '/runs/new', label: '发起辅导', icon: 'plus' },
-      { to: '/runs', label: '检索记录', icon: 'search' },
-      { to: '/rag', label: '知识检索', icon: 'book' },
+      { to: '/', label: '工作台', icon: 'dashboard', task: 'dashboard' },
+      { to: '/runs/new', label: '发起辅导', icon: 'plus', task: 'run:create' },
+      { to: '/runs', label: '检索记录', icon: 'search', task: 'run:list' },
+      { to: '/rag', label: '知识检索', icon: 'book', task: 'rag:search' },
       // 通用知识问答：不挂教材语料的 SSE 对话（与 /rag 的「可溯源依据」互补）。
-      { to: '/chat', label: '通用问答', icon: 'cpu' },
+      { to: '/chat', label: '通用问答', icon: 'cpu', task: 'chat:general' },
       // 通用 Agent 编排对话：同一租户链的 SSE 过程可视化，端点与 /chat 分开。
-      { to: '/agent-chat', label: 'Agent 对话', icon: 'activity' },
-      { to: '/profile', label: '学习画像', icon: 'profile' },
-      // ⚠️ 报表中心：租户级**聚合**视图（按天看辅导 / 错题 / 检索 / 语料导入）。
-      //    与「检索记录」不同：后者是逐条明细，前者是按天汇总。
-      //    不挂 area —— 聚合数据不含个体信息，与后端 StatisticsController
-      //    复用 RUN_READ 动作的授权范围保持一致（任何已登录用户可见本租户汇总）。
-      { to: '/reports', label: '报表中心', icon: 'activity' },
+      { to: '/agent-chat', label: 'Agent 对话', icon: 'activity', task: 'chat:agent' },
+      // ⚠️ N2：STUDENT 没有 PROFILE_READ，填完编号才撞 403 —— 不再渲染该入口。
+      //    治理角色（TENANT_ADMIN / VIEWER）有 PROFILE_READ，仍可见。
+      { to: '/profile', label: '学习画像', icon: 'profile', task: 'profile:read' },
+      // ⚠️ N5：租户级聚合报表归位到治理面（受众不开放），
+      //    避免学生看到「发起量 13」与本人口径「10 条」两个数字被误读为数据错误。
+      //    聚合数据不含个体信息，后端复用 RUN_READ 是有意设计，此处只调整入口定位。
+      { to: '/reports', label: '报表中心', icon: 'activity', task: 'reports:read' },
     ],
   },
   {
@@ -115,6 +125,42 @@ const NAV: NavGroup[] = [
     ],
   },
 ]
+
+/**
+ * 「本版本未开放角色」终态说明（N1）。
+ *
+ * ⚠️ 为什么是**整页**而不是一个 toast：这些账号此前能登录，
+ *    却既发不出辅导、也看不到任何记录（导航承诺 8 个入口，每个都是 403 / 空态）。
+ *    产品裁决后必须一次性说清楚，而不是让用户逐个入口试错。
+ *
+ * ⛔ 铁律 15：终态 / 权限错误不得伪装成临时故障。
+ *    文案中不得出现「正在处理 / 网络问题 / 稍后再试 / 重新登录即可」，
+ *    也不给「重试」按钮 —— 这里没有任何可重试的动作。
+ */
+function UnsupportedRoleNotice({
+  role,
+  onSignOut,
+}: {
+  role: string
+  onSignOut: () => void
+}): JSX.Element {
+  return (
+    <div className="marked" role="alert" data-testid="role-unavailable-notice">
+      <p className="marked__label">该角色本版本尚未开放</p>
+      <p style={{ margin: 0 }}>
+        当前账号的角色是 <code>{role}</code>。本版本仅向学生账号开放错题归因辅导，
+        家长与老师账号暂不能发起辅导或查看辅导记录。
+      </p>
+      <p className="muted" style={{ marginBottom: 12 }}>
+        这是账号的角色范围，不是登录失效、网络故障或数据没加载。
+        重新登录、刷新或重试都不会改变结果；如需使用，请联系管理员更换为学生账号。
+      </p>
+      <button type="button" className="btn btn--quiet" onClick={onSignOut}>
+        退出登录
+      </button>
+    </div>
+  )
+}
 
 export function AppShell(): JSX.Element {
   const { signOut, expiringSoon, roles, rolesStatus, session, refreshRoles } = useSession()
@@ -188,12 +234,20 @@ export function AppShell(): JSX.Element {
     })
   }
 
-  const visibleNav = NAV.map((group) => ({
-    ...group,
-    items: group.items.filter(
-      (item) => item.area === undefined || hasRoleAccess(roles, item.area),
-    ),
-  })).filter((group) => group.items.length > 0)
+  // ⛔ T1 硬门禁：业务面入口按「角色能否完成真实操作」裁剪，
+  //    治理面仍按 area 判定。两者共用一个 visibleNav，不再出现
+  //    「导航承诺、后端拒绝」的错配（F6 / N1 / N2）。
+  const unsupportedRole = unsupportedRoleOf(roles)
+  const visibleNav = unsupportedRole !== null
+    ? []
+    : NAV.map((group) => ({
+        ...group,
+        items: group.items.filter((item) => {
+          const areaOk = item.area === undefined || hasRoleAccess(roles, item.area)
+          const taskOk = item.task === undefined || canPerformTask(roles, item.task)
+          return areaOk && taskOk
+        }),
+      })).filter((group) => group.items.length > 0)
 
   const roleLabel =
     rolesStatus === 'unknown'
@@ -354,7 +408,11 @@ export function AppShell(): JSX.Element {
           {/* skip link 的焦点靶：tabIndex=-1 让锚点跳转能把焦点也带进来 */}
           <span id="main-content" className="sr-only" tabIndex={-1} />
           <ContentErrorBoundary resetKey={location.pathname}>
-            <Outlet />
+            {unsupportedRole !== null ? (
+              <UnsupportedRoleNotice role={unsupportedRole} onSignOut={handleSignOut} />
+            ) : (
+              <Outlet />
+            )}
           </ContentErrorBoundary>
         </main>
       </div>

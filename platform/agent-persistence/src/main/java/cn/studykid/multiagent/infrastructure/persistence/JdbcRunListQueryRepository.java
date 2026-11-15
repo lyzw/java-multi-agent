@@ -97,6 +97,7 @@ public class JdbcRunListQueryRepository implements RunListQueryPort {
 
     @Override
     public @NonNull Page<RunListItem> list(@NonNull String tenantId,
+                                           @Nullable String requesterId,
                                            @Nullable String state,
                                            @Nullable String subject,
                                            @Nullable Instant from,
@@ -113,6 +114,13 @@ public class JdbcRunListQueryRepository implements RunListQueryPort {
         List<Object> params = new ArrayList<>();
         params.add(tenantId);
 
+        if (requesterId != null) {
+            // ⚠️ 受众隔离（F1）：只返回本人创建的 Run。
+            //    `requester_id IS NULL` 的历史行 / 运维代操作行对受众不可见——
+            //    「没有归属证明的数据」宁可不展示，也不能当作「本人数据」放行。
+            sql.append(" AND requester_id = ?::uuid");
+            params.add(requesterId);
+        }
         if (state != null) {
             sql.append(" AND state = ?::run_state");
             params.add(state);
