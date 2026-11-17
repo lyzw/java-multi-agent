@@ -94,6 +94,28 @@
 
 **关键依赖**：本维度的隔离强制性依赖维度 2 的 `rlsDependent → 0` 迁移出口（`RlsDependencyProbe.EXPECTED` 当前基线 30，退役目标 0）；上下文注入依赖维度 6 的 `RagHitQuotaPort` 配额裁剪与 `PromptGuard` 的不可信围栏；泄题闸门依赖维度 7 的 fail-closed 纪律。
 
+### 1.5 深度补充：本维度能力边界的"三不"声明（避免评估口径污染）
+
+> 1.1~1.4 定义了 RAG 要解决的问题与坐标系。本节补充三条**评估时必须先厘清的边界**——它们是本次源码复核发现的、最容易导致"评错对象"的口径陷阱，直接决定后续所有章节的判断。
+
+1. **不把"链路可达"等同于"质量合格"**：本平台的检索链路（4.5.1 链 A）在机制上完整可达——pgvector 真余弦、ts_rank 真词法、RRF 真融合、同事务审计。但**链路通 ≠ 召回准**：0.38 阈值仅 27 条样本标定、Recall@K 全未实现（R-3）、真实召回质量未测（诚实边界声明四）。评估"这个 RAG 好不好"必须区分"工程闭环度"（高）与"质量可度量性"（低）两根轴，1.3 的五轴模型正是为此设计。
+2. **不把"占位"归错对象**：既有梳理报告称"RAG 向量打分占位未闭环"——**这是归因错误**。向量库/向量打分**已闭环**（pgvector + GIN + 代际过滤），占位的是**嵌入模型**（`LocalDeterministicEmbeddingPort`，默认装配路径），且真正承载"占位打分"的 `RetrievalService` 是 `agent-infra` 的**运行期不可达草稿**（4.5.3 链 C）。引用此旧结论须标注"已被复核纠偏"（`docs/能力维度实现方式梳理报告.md:123,127` 与本报告诚实边界声明五）。
+3. **不把"刻意取舍"当缺陷修**：`halfvec(4096)` + 无 HNSW 索引是 DDL 注释（`01_rag_ddl.sql:960-966`）+ 配置（`rag.env:44-46`）+ 测试（`VectorColumnTest`）共同钉住的设计取舍（pgvector 官方维度上限背书，2.4(13)），不是配置漂移。评估"有没有 ANN 索引"时应记为"规模化路径待启用（MRL/二进制量化）"，而非"缺索引缺陷"。
+
+### 1.6 深度补充：评估坐标系在 RAG 上的"加权优先级"（1.3 五轴的落地取舍）
+
+> 1.3 给了五个评价轴但未排优先级。对教辅 RAG 而言，五轴**不是等权**——错误代价不对称表（8.4）决定了权序。明确权序可避免"用通用 RAG 标尺量教辅系统"的误判。
+
+| 优先级 | 评价轴（1.3） | 教辅场景权重 | 理由（对应错误代价） |
+|---|---|---|---|
+| P0 | **隔离强制性** | 最高 | 跨租户召回=合规事故（极高代价、极难补救，8.4）；DB 层强制不可退让 |
+| P0 | 内建闭环度之"治理轴" | 最高 | 串版本/泄题是第一/第二大事故，必须在数据层硬过滤（L3 判定） |
+| P1 | 失败可诊断性 | 高 | 检索失败误判为"零命中"会掩盖组件故障（AP-13）；但可渐进补 |
+| P2 | **质量可度量性** | 中（当前最低） | 漏召可补救（换问法），故度量缺失不是安全事故；但它是"持续变准"的前置（R-3） |
+| P2 | 治理可审计性 | 中 | 取证重要但属合规增强，schema 已预留（R-7 补实现即可） |
+
+> **判断**：本平台的资源投入顺序（隔离/治理轴 P0 已做到 L3 → 质量度量 P2 待补）与错误代价权序**一致**，是理性的。第七章改进项 R-0~R-7 的优先级（P0 先修口径与度量、P1/P2 补策略与审计）也遵循此权序。若评估者用"召回率高低"作为唯一标尺，会得出"本平台落后"的错误结论——因为那恰是权重最低的一轴，且当前不可测。
+
 ---
 
 ## 二、理论体系（必须引用真实出处）
@@ -228,6 +250,46 @@
 | AP-12 | **召回结果无溯源字段** | 模型引用了内容但查不到出处 | 检查 hit 是否带 `locator`/`edition`/`role`/`reason` | ✅ 已规避（7 字段白名单，`HttpRagRetrievalGateway.parseResult`） |
 | AP-13 | **失败模式伪装成零命中** | RAG 挂了但用户看到"没找到相关内容" | 检查检索失败是否抛异常并被标为组件级 error | ✅ 已规避（`RagUnavailableException` fail-closed，`AgentChatOrchestrator.doRag` 发 `RAG_UNAVAILABLE` 事件） |
 
+### 2.4 深度补充：三个新理论锚点（均经官方出处核实，不与 2.1 重复）
+
+> 本节为本次「13 份报告更详细补充」新增，不改写 2.1 已有十个锚点。选择 **RRF 的原始论文**、**Dense Passage Retrieval（DPR）**、**Matryoshka / 二进制量化的规模化路径** 的原因：2.1(4) 只给了"RRF 只用排名、无需标定"的结论却未给 RRF **原始出处**；2.1(6) 讲了嵌入模型与 Matryoshka 却未给**稠密检索起点 DPR** 与**维度-索引权衡的官方边界**；而这两处恰好是本维度纠偏的两个核心——RRF k=60 与 halfvec(4096) 建不了 ANN 索引——的理论根系。三者是对既有锚点的**补强**，不是替换；每个 URL 均经本次 WebFetch 实际访问、内容支撑陈述。
+
+#### (11) Reciprocal Rank Fusion（RRF）：只用排名、零标定的融合范式——本平台 k=60 的理论出处
+
+- **出处（本次经 WebFetch 官方页核实）**：Cormack, G. V., Clarke, C. L. A., Buettcher, S., *"Reciprocal Rank Fusion Outperforms Condensed Ranking and Query Likelihood Models"*, **SIGIR 2009**（RRF 的原始论文）；本次同时核实了三家官方实现页，均把 RRF 作为混合检索融合的一等原语且**默认 k=60**：
+  - Elasticsearch 官方 *"Reciprocal rank fusion (RRF)"*：https://www.elastic.co/guide/en/elasticsearch/reference/current/rrf.html —— 官方文档原文："RRF is a method for combining multiple result sets with different relevance indicators into a single result set"、"**RRF requires no tuning, and the different relevance indicators do not have to be related to each other** to achieve high-quality results"；给出公式 `score += 1.0/(k + rank)`，且 `rank_constant`（即 k）"**Defaults to 60**"。
+  - Qdrant 官方 *"Hybrid Queries"*：https://qdrant.tech/documentation/concepts/hybrid-queries/ —— 原文："RRF only looks at ranks. A is near the top of both lists, so it comes first, **even though D's BM25 score is far ahead**"；API 示例明确 `{"rrf": {"k": 60}}`，并给出"**Without an eval set: leave weights at the default (1.0, 1.0). Hand-tuned weights without measurement are unlikely to beat the default reliably**"。
+  - Azure AI Search 官方 *"Hybrid search overview"*：https://learn.microsoft.com/en-us/azure/search/hybrid-search-overview —— 原文："Runs full-text search and vector search in parallel. **Merges results from each query by using Reciprocal Rank Fusion (RRF)**"，并解释 BM25（文本）与 HNSW/eKNN（向量）用不同排序函数、由 RRF 统一。
+- **定义（忠于原文）**：RRF 把多路检索的**排名**而非分数融合：`score(d) = Σ_{r∈R(d)} 1/(k + rank_r(d))`（rank 从 1 起）。k 是排序常数，控制低排名结果对最终结果的影响，业界默认 60。它**不看原始分数量纲**，因此无需标定——这正是稠密余弦（0~1 有界）与 BM25（无界）混合时的关键优势。
+- **对本维度的解释力**：本平台 `JdbcRetrievalRepository.java:107` 的 `RRF_K = 60.0` 与 `:590` 的 `1.0/(RRF_K + rank+1)` 是 RRF 范式的**逐字实现**；2.2 表 T2 与 D-5 记录的"RRF 丢失分差信息 → 必须接重排器"正是 RRF 的固有代价。三家官方文档的默认 k=60 **交叉印证了本平台 k=60 不是拍脑袋，而是业界默认值**——这是"红线：不动 RRF k=60"的理论支撑（MEMORY 铁律：改动须走 RAG-D08 §4 且有反向验证）。
+- **边界（诚实）**：Qdrant 官方明确"DBSF（Distribution-Based Score Fusion）在**已校准的检索器上可胜过调优后的加权 RRF**"，说明 RRF 不是最优解，而是"零标定、跨语料稳定"的稳健选择。本平台选 RRF 的代价（丢失分差）真实存在，且因未接重排器（R-2）而**尚未补偿**。
+
+#### (12) Dense Passage Retrieval（DPR）：稠密检索的起点——解释"为何必须有独立的稠密通道"
+
+- **出处（本次经 WebFetch 官方页核实）**：Karpukhin, V., Oğuz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D., Yih, W.-t., *"Dense Passage Retrieval for Open-Domain Question Answering"*, **EMNLP 2020**（arXiv:2008.08291v2）。作者群与 2.1(1) 的 RAG 论文高度重叠（Karpukhin/Lewis/Yih），是 RAG 非参数化记忆"稠密向量索引"的奠基工作。
+- **定义（忠于原文）**：用**双塔（bi-encoder）**分别把 query 与 passage 编码成稠密向量，以内积/余弦相似度检索；相比 BM25 稀疏检索，DPR 在开放域 QA 的 top-20 召回上显著领先。它确立了"语义相似 ≠ 词项重叠"这一现代 RAG 稠密通道的根基。
+- **对本维度的解释力**：本平台 `denseSearch`（`JdbcRetrievalRepository.java:477-524`）用 pgvector `1-(e.embedding <=> ?)` 余弦（`:492`）就是 DPR 式稠密通道的工程实现；而 2.1(4) 强调的"词法通道存在理由——二次函数 vs 反函数"恰是 DPR 式稠密检索的**已知弱点**：纯稠密会把教学上不同的术语靠得很近。这解释了为什么本平台**必须**保留 BM25/ts_rank 词法通道（D-2/T3），而不是"稠密一把梭"。
+- **边界（诚实）**：DPR 是 2020 年工作，其"双塔 vs BM25"的二分已被后续 SPLADE（2.1(4)）、ColBERT、late chunking（2.1(3)）扩展。本平台**未做** query 侧学习型编码（query 与 chunk 用同一 `EmbeddingPort`，且默认还是占位模型），因此稠密通道的真实上限受嵌入模型制约——这是 R-1（真实嵌入）与 R-2（query 改写）要解决的。
+
+#### (13) Matryoshka 表示 + 二进制量化：维度与索引能力的官方边界——halfvec(4096) 取舍的理论根据
+
+- **出处（本次经 WebFetch 官方页核实）**：
+  - Matryoshka Representation Learning：Kusupati, A. et al., **NeurIPS 2022**, arXiv:2205.13147（2.1(6) 已列，本处补充其"规模化路径"角色）。
+  - **pgvector 官方 README（本次 WebFetch 核实，https://github.com/pgvector/pgvector）**：HNSW/IVFFlat 索引"Supported types are: **vector - up to 2,000 dimensions; halfvec - up to 4,000 dimensions; bit - up to 64,000 dimensions**"；FAQ 原文："**What if I want to index vectors with more than 2,000 dimensions? You can use half-precision vectors or half-precision indexing to index up to 4,000 dimensions or binary quantization to index up to 64,000 dimensions. Other options are indexing subvectors (for models that support it) or dimensionality reduction.**"
+- **定义（忠于原文）**：Matryoshka 允许单一模型取前 d 维即得 d 维表示（换维度免重训）；二进制量化把向量压成 `bit`，索引维度上限从 4000 跃升到 64000。pgvector 官方明确给出"超 2000 维"的三条规模化路径：半精度（≤4000）、二进制量化（≤64000）、子向量索引（MRL）/降维。
+- **对本维度的解释力**：这是本维度最重要的一次理论锚定——`01_rag_ddl.sql:960-966` 明写"halfvec(4096) 下 HNSW 刻意不存在……规模化后二选一：MRL 截断到 ≤4000 维，或二进制量化"，与 pgvector 官方 FAQ 的"indexing subvectors / binary quantization"**逐条对应**；`rag.env:44-46` 已显式 `4096/halfvec`，`VectorColumnTest` 断言 `new VectorColumn("halfvec",4096).indexable()==false`。**结论：halfvec(4096) + 无 ANN 索引是设计取舍，不是配置漂移**；规模化正道是 MRL / 二进制量化（pgvector 官方背书），**禁止硬降维**——硬降到 ≤4000 会与 `qwen3-embedding:8b` 的 4096 维输出冲突并使已入库向量失效。
+- **边界（诚实）**：本平台当前语料规模（数百片段）下精确全表扫描"既快又无召回损失"（DDL 注释原话），因此**现阶段没有 ANN 索引不是缺陷**；只有当规模上一个量级、且完成 MRL/二进制量化的代际迁移后，ANN 才成为必需。R-1 原稿建议"硬降到 4000 维建 HNSW"属**已被复核纠偏**的旧结论（见顶部提示块与 P0 验收报告 §3.1），不得再按此改代码。
+
+#### 2.4.1 新锚点 → 本平台代码锚点映射（承接 2.1）
+
+| 理论 | 核心主张 | 本平台对应实现（锚点，本次复核） | 是继承还是背离 |
+|---|---|---|---|
+| RRF（SIGIR 2009 / ES·Qdrant·Azure 官方默认 k=60） | 只用排名融合、零标定、丢失分差须重排补偿 | `JdbcRetrievalRepository.java:107` RRF_K=60、`:590` 融合；`RetrievalOrchestrator.java:129` 排序键=fusionScore；无 rerank（R-2） | **继承**（k 取业界默认），但**补偿缺失** |
+| DPR（EMNLP 2020） | 双塔稠密检索语义相似，纯稠密分不开教学近邻术语 | `denseSearch` `JdbcRetrievalRepository.java:477-524`（pgvector `<=>` :492）；保留词法通道 `:526-557` | **继承 + 主动补强**（双通道抵消纯稠密弱点） |
+| Matryoshka + 二进制量化（NeurIPS 2022 / pgvector 官方） | 超 4000 维 ANN 靠半精度/二进制/MRL，非硬降维 | `01_rag_ddl.sql:960-966` 注释；`rag.env:44-46` 4096/halfvec；`VectorColumnTest.annIndexLimitsMatchPgvectorCapabilities` | **继承取舍**（无 ANN 是刻意），禁硬降维 |
+
+> 结论：三个新锚点补齐了本维度"**RRF 的 k=60 从何而来、稠密通道为何不可省、halfvec(4096) 为何不建 ANN 索引**"三个最容易被误判为"拍脑袋/配置漂移"的理论根系。它们共同支撑一个判断：本平台在检索**机制选型**上是**继承业界共识**（RRF、稠密+词法双通道）并在**业务约束层**做差异化（版本/角色/可信度硬过滤）；把 RRF k=60 或 halfvec(4096) 当成"待修缺陷"是误读，二者都有官方出处背书。
+
 ---
 
 ## 三、竞品实现全景（每个主流方案一段）
@@ -341,6 +403,54 @@
 | 换模型零停机 | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ | ✅ **代际蓝绿** |
 | 检索质量评测 | ⚠️ 平台外 | ⚠️ LangSmith | ⚠️ | ❌ | ❌ | ❌ | ⚠️ **指标已定义，全未实现** |
 | 新旧策略影子比对 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ **影子只比对隔离，不比对策略** |
+
+### 3.8 深度补充：新增竞品（本次 6 个官方页 WebFetch 全部核实，竞品总数 6 → 12）
+
+> 3.1~3.6 已覆盖 6 个主流方案。为达到"竞品扩到 ≥7 个"的要求并覆盖 3.7 速查表暴露的两类空白（**索引级混合检索**与**检索评测**），本节新增 6 个竞品/参照物。**全部经本次 WebFetch 实际访问官方页面、内容支撑陈述**；每个都带可访问官方 URL。凡官方页本次未能抓取的（Pinecone/Weaviate 新 URL 404、Vespa 只返回图片、OpenAI guides 被 Cloudflare 拦截），一律在附录 F 标注"未能核实"，不臆造。
+
+#### 3.8.1 Elasticsearch — BM25 + kNN 的 RRF 混合检索（本次核实）
+
+- **官方定位与机制**：Elasticsearch 官方 *"Reciprocal rank fusion (RRF)"*（https://www.elastic.co/guide/en/elasticsearch/reference/current/rrf.html）明确 RRF 是"combining multiple result sets with different relevance indicators into a single result set"，且"**requires no tuning**"。官方 full example 用 `rrf` retriever 组合一个 `standard` retriever（BM25/term query）与一个 `knn` retriever（向量检索）："execute the `knn` and `standard` retrievers independently ... then use the `rrf` retriever to combine the results"。参数 `rank_constant`（RRF 的 k）"**Defaults to 60**"，`rank_window_size` 控制参与融合的 top 文档数。
+- **对本维度的意义**：这是"**业界默认 k 就是 60**"的最强证据之一——本平台 `RRF_K=60` 与 Elasticsearch 默认完全一致（2.4(11)）。`rank_window_size`（参与融合的候选窗口）直接对应本平台的 `topK * CANDIDATE_MULTIPLIER=3`（`JdbcRetrievalRepository.java:477,534`），说明"召回窗口大小影响融合质量"是共性认知，本平台 R-2 把候选池做成可配（默认 100）与 ES 的可调窗口同构。
+- **官方 URL**：https://www.elastic.co/guide/en/elasticsearch/reference/current/rrf.html ✅本次核实
+
+#### 3.8.2 Qdrant — prefetch + RRF/DBSF 混合查询（本次核实）
+
+- **官方定位与机制**：Qdrant 官方 *"Hybrid Queries"*（https://qdrant.tech/documentation/concepts/hybrid-queries/）以 `prefetch` 为 building block，把 dense vector、sparse vector（SPLADE++）、BM25 full-text 多路结果融合；融合算法有 `rrf` 与 `dbsf`（Distribution-Based Score Fusion），RRF 默认 `{"rrf":{}}`、可配 `k`（示例 `k:60`）与 `weights`（加权 RRF）。官方原文："**RRF only looks at ranks** ... even though D's BM25 score is far ahead"；DBSF "keeps the raw scores ... but normalizes their distributions before combining"；并明确告警"**Without an eval set: leave weights at the default (1.0,1.0). Hand-tuned weights without measurement are unlikely to beat the default reliably**"。
+- **对本维度的意义**：Qdrant 的 DBSF "通道内归一后再融合"正是本平台 **R-2 阶段一"词法通道归一"** 的业界对应物；而"无评测集别手调权重"直接印证本平台 R-3（评测门禁）是 R-2（调权/归一）的**硬前置**——没有评测集就调融合权重是"没有反馈的赌博"（6.2 缺点 5 / R-6 问题陈述）。这条外部证据把 R-2/R-3 的排期依赖从"本报告主张"升级为"官方文档共识"。
+- **官方 URL**：https://qdrant.tech/documentation/concepts/hybrid-queries/ ✅本次核实
+
+#### 3.8.3 Azure AI Search — 混合检索 + 语义重排器（本次核实）
+
+- **官方定位与机制**：Azure AI Search 官方 *"Hybrid search overview"*（https://learn.microsoft.com/en-us/azure/search/hybrid-search-overview）：hybrid search 是"a single query request configured for both full-text and vector queries"，"Runs full-text search and vector search in parallel"并"Merges results ... by using Reciprocal Rank Fusion (RRF)"；文本用 BM25、向量用 HNSW/eKNN；`queryType=semantic` 触发 **semantic ranker**（机器阅读理解式重排）。官方响应示例同时给出 `@search.score`（RRF 融合分，0.03 量级）与 `@search.rerankerScore`（重排分，2.x 量级）。
+- **对本维度的意义**：这是"**排序分与门禁分必须分开**"的又一官方印证——Azure 把融合分（0.03）与重排分（2.x）显式分为两个字段，正对应本平台 `ScoredChunk.fusionScore`（RRF ≤0.033）与 `score`（相关性 0~1）的分离（DD-5/铁律）；混用会导致门禁恒不通过（2026-10-23 事故）。semantic ranker 的存在也再次说明 rerank 是 RAG 标准件（本平台 R-2 缺口）。
+- **官方 URL**：https://learn.microsoft.com/en-us/azure/search/hybrid-search-overview ✅本次核实
+
+#### 3.8.4 LlamaIndex — 嵌入/索引/查询编排与"换模型须重建索引"（本次核实）
+
+- **官方定位与机制**：LlamaIndex 官方 Embeddings 文档（https://developers.llamaindex.ai/python/framework/module_guides/models/embeddings/）：默认用余弦相似度（"By default, LlamaIndex uses cosine similarity when comparing embeddings"），embedding 模型通过 `Settings.embed_model` 全局或 per-index 配置，支持 OpenAI/HuggingFace/LangChain 多种 provider；官方明确警告"**if you change your embedding model after indexing, you must re-index. Embeddings from different models are not interchangeable**"。
+- **对本维度的意义**：这条官方警告正是本平台 D-10"代际蓝绿 + 只读 ACTIVE 代际 + 禁止两代向量混算余弦"的理论依据——LlamaIndex 要求"换模型必须重建索引"（停机式），本平台用代际蓝绿做到**零停机**（C-14 领先项）。本平台把维度从 `EmbeddingPort.dimension()` 单一来源取、装配期拒绝不符（`JdbcRetrievalRepository.java:242-250`），比 LlamaIndex 的"运行时才发现不可互换"更早拦截。
+- **官方 URL**：https://developers.llamaindex.ai/python/framework/module_guides/models/embeddings/ ✅本次核实
+
+#### 3.8.5 Ragas — 检索评测框架（本次核实）
+
+- **官方定位与机制**：Ragas 官方文档 *"List of available metrics"*（https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/）列出 RAG 指标：检索侧 **Context Precision / Context Recall / Context Entities Recall / Noise Sensitivity**，生成侧 **Faithfulness / Response Relevancy**，以及 Nvidia 的 Context Relevance / Response Groundedness。原始论文 arXiv:2309.15217（2.1(7)，本次 WebFetch 再核实）定义其为"reference-free evaluation"框架。
+- **对本维度的意义**：Ragas 是 R-3"检索质量评测体系"最成熟的现成参照——本平台 R-3 定义的 RC-01~09（Recall@K/MRR/误拒/漏拒/门禁一致性）与 Ragas 的 Context Precision/Recall、Faithfulness 高度同源。特别地，Ragas 的 **Context Precision/Recall** 正是 2.1(7) 表格里"Context Relevance"的工程细化；R-3 可选引入 `RagAsFaithfulnessEvaluator` 时，应以 Ragas 官方指标定义为准，并处理 LLM-as-judge 偏差（Zheng et al., arXiv:2306.05685）。
+- **官方 URL**：https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/ ✅本次核实 ； https://arxiv.org/abs/2309.15217 ✅本次核实
+
+#### 3.8.6 Dify — 知识库型 RAG 产品（本次核实）
+
+- **官方定位与机制**：Dify 官方 Knowledge 文档（https://docs.dify.ai/en/cloud/use-dify/knowledge/overview，Last modified 2026-11-11）区分两类知识库：**Classic**（自己控制 chunk 模式/长度、索引方式、检索方式、Top-K、可选 score threshold，甚至可用 Knowledge Pipeline 自建整条处理链）与 **Agent**（自动组织与索引，支持 Fast/Deep/Research 三档 retrieval depth、内置质量检查、golden questions/evaluations/bad cases）。官方原文："the most relevant passages are found and handed to the model along with it"。
+- **对本维度的意义**：Dify 是"**检索质量运营**"的对照物——其"golden questions + evaluations + bad cases + 追踪 retrieval misses"正是本平台 R-3（评测集）+ R-7（审计反哺评测集）+ R-6（影子报表）想达到的产品化闭环。本平台在数据层硬过滤（版本/角色/版权）上远超 Dify，但在"评测/运营可视化"上是 Dify 更成熟——这是 6.2 缺点 3（评测全未实现）的产品级旁证。
+- **官方 URL**：https://docs.dify.ai/en/cloud/use-dify/knowledge/overview ✅本次核实
+
+#### 3.8.7 Anthropic — retrieval 作为 augmentation 与"workflow vs agent"（本次核实）
+
+- **官方定位与机制**：Anthropic 官方 *"Building effective agents"*（https://www.anthropic.com/engineering/building-effective-agents）原文："The basic building block of agentic systems is an LLM enhanced with augmentations such as **retrieval**, tools, and memory"；并明确"**Workflows** are systems where LLMs and tools are orchestrated through predefined code paths" vs "**Agents** ... LLMs dynamically direct their own processes and tool usage"。
+- **对本维度的意义**：这为 5.4 分歧 3（"检索作为编排器确定性阶段 vs 可被模型调用的工具"）提供了官方术语锚点——本平台把检索做成 `AgentChatOrchestrator.doRag()` 的确定性阶段，属于 Anthropic 定义的 **workflow**（predefined code path），而非 agentic 自主检索。这不是"落后"，而是与本平台维度 1"受控运行时"一致的**有意哲学选择**；Anthropic 官方也建议"optimizing single LLM calls with retrieval ... is usually enough"，支持"能不用 agentic 就不用"的克制立场。
+- **官方 URL**：https://www.anthropic.com/engineering/building-effective-agents ✅本次核实
+
+> **新增竞品小结**：6 个新增（Elasticsearch / Qdrant / Azure AI Search / LlamaIndex / Ragas / Dify）+ 1 个理论参照（Anthropic）= 竞品/参照总数 6 → 13（含 Anthropic 作为哲学参照）。最值得本平台借鉴的三条：① Qdrant"无评测集别手调融合权重" → 坐实 R-3 是 R-2 的硬前置；② Azure "融合分与重排分分字段" → 印证 DD-5 门禁/排序分分离；③ Dify "golden questions + bad cases 运营" → 产品级评测闭环参照。**未能核实项**（诚实标注）：Pinecone 多租户页（`docs.pinecone.io/guides/index-data/multitenancy`）与 Weaviate 多租户页（`docs.weaviate.io/weaviate/managing-collections/multi-tenancy`）本次 WebFetch 均 404，Vespa retrieval 页只返回图片、OpenAI retrieval guides 被 Cloudflare 拦截——这些 URL 在附录 B 中保留但标注"本次未能逐字核实"，不作为新增竞品结论的依据。
 
 ---
 
@@ -646,6 +756,111 @@ RAG_SHADOW_ENABLED=true → rag.shadow.enabled=true
 
 这是本平台影子模式与"常见期待"的**根本分歧**，也是本报告与任务书假设的一处**不一致**（见文末诚实边界声明）：`RagShadow` 的比对对象是「显式谓词渲染的结果」vs「RLS 在场时的结果」，用于证明"M4 退役 RLS 后隔离结果不变"。它**没有**为"新旧检索策略双跑"提供任何机制——没有策略 A/B 双跑、没有两套结果集的比对报表、没有自动切流判定。这是**能力缺口**而非差异化设计，改进点 R-6 覆盖。
 
+### 4.5 深度补充：四条完整调用链 + 运行期可达性四问判定（本次逐行复核）
+
+> **背景与纠偏**：以下链路的锚点是本次（P0 修复后）实际 `Read`/`Grep` 核实的当前行号，重点覆盖本维度最容易被误判的"生产检索链路 vs 不可达草稿"。原报告第四/附录 A 的行号（如 `JdbcRetrievalRepository:269-304/:472-557`、`RetrievalOrchestrator:80-170`）为架构快照，本次核实仍成立（详见附录 D）。
+>
+> **运行期可达性判定口径**（项目铁律 17）：「有类/有表/有测 ≠ 被装配/被写入/被注入/被触发告警」。每条链末尾按四问判定：① 是否被 Spring 装配（`@Bean`/构造注入）；② 是否真实写入 DB；③ 是否真实注入执行链；④ 是否触发可观测/告警。四问全"是"才判"真实可达"，否则标注"静态存在"或"部分可达"。
+
+#### 4.5.1 调用链 A（生产检索主链）：HTTP 入口 → 事务内绑租户 → 七步编排 → 双通道 RRF → 同事务审计
+
+```
+【platform 侧入口】
+AgentChatOrchestrator.doRag()  [AgentChatOrchestrator.java:511-564]
+  → RagHitQuotaPort.applyQuota（token 配额裁剪）[:453]
+  → HttpRagRetrievalGateway.retrieve()  [HttpRagRetrievalGateway.java:103-149]
+       3s 连接 / 20s 读超时 / 512KB 封顶 / followRedirects=NEVER
+       → POST /api/v1/retrieval（Bearer + X-Tenant-Id）
+
+【rag 侧入口 + 事务】
+RagJwtAuthFilter.doFilter()  [RagJwtAuthFilter.java:144-212]  401/403 语义
+  → RagRetrievalController.retrieve()  [RagRetrievalController.java:86-104]
+       requireTenant（缺/非 UUID/哨兵 → 400）；scopeMode null→STRICT
+  → JdbcTenantScopedRetrieval.retrieve()  [JdbcTenantScopedRetrieval.java:42-69]
+       TransactionTemplate.execute()  [:46]  ★单事务
+       → SELECT set_config('app.tenant_id',?,true)  [:47]  ← 事务内、业务 SQL 前（铁律 1）
+       → RetrievalOrchestrator.retrieve()  [:48 附近注入调用]
+
+【七步编排】
+RetrievalOrchestrator.retrieve()  [RetrievalOrchestrator.java:80-170]
+  ① resolveKnowledgePoints
+  ② retrievalPort.search → JdbcRetrievalRepository.search()  [:269-304]
+       ├ denseSearch  [:472-524]：embed(query) → `1-(e.embedding<=>?)`  [:492]
+       │              + 代际过滤 `index_generation=(ACTIVE)`  [:498-504]
+       └ lexicalSearch [:526-557]：`ts_rank(to_tsvector('simple',text_jieba),?)`  [:538]
+         → RRF 融合 `fused[id]+=1/(60+rank)`  [:590]；relevance[id]=max(通道原始分)
+  ③ 版本硬过滤 `editionScope.admits()`  [:100]
+  ④ 角色硬过滤 `RetrievalPolicy.allowsRole()`  [:105]  ← 泄题闸门
+  ⑤ 知识点补全（kp_ids / prerequisites）
+  ⑥ 排序 `fusionScore` 降序 + 版本惩罚  [:129, :219]
+  ⑦ 分数门禁 `score()>=minScore(0.38)`  [:137]  ← 相关性分，非 RRF 分
+  → RetrievalFunnel 五段计数  [:149]
+  → INSERT rag_access_audit(action='RETRIEVE')  [JdbcTenantScopedRetrieval.java:63-65]  ★同事务
+       （本次核实实际写 5 列：audit_id/tenant_id/principal_id/action/source_id，
+         其中 principal_id、source_id 均为 NULL；正文 R-7 表述为"4 列"，此处以复核值为准）
+```
+
+**运行期可达性四问**：① 装配 = **是**（`JdbcRetrievalRepository`、`RetrievalOrchestrator`、`JdbcTenantScopedRetrieval` 均由 rag-bootstrap 配置装配，构造注入 `scopeTranslator`/`embeddingPort`）；② 写入 DB = **是**（`rag_access_audit` INSERT 真实执行，`:63-65`，审计失败整次回滚）；③ 注入 = **是**（`RetrievalPort` 真实注入 `RetrievalOrchestrator`，`set_config` 在事务内真实执行）；④ 触发可观测 = **部分**（`RetrievalFunnel` 五段计数在进程内，但跨进程 7 字段白名单不透出 funnel，见 5.3 盲区 3；`rag_access_audit` 无 principal/request_digest，见 R-7）。**结论：生产主链真实可达**，"可观测"环节部分可达——这正是 R-6/R-7 要补的。
+
+#### 4.5.2 调用链 B（摄取写链）：上传 → 任务领取 → 解析/切分/角色判定 → 嵌入 → 分词索引 → 原子落库
+
+```
+上传 PDF → RagManagementController → rag_ingest_job(PENDING)
+  → IngestJobConsumer.claimNext()  [IngestJobConsumer.java:102-125]
+       逐租户显式清单(rag.indexer.tenants) + FOR UPDATE SKIP LOCKED
+  → IngestJobOrchestrator.run()  [IngestJobOrchestrator.java:85-163]
+      ① PARSING  IngestionPipeline.ingest()  [IngestionPipeline.java:136-148]
+           DocumentParserPort：DoclingDocumentParserPort(生产) / MineruResponseMapper /
+             DoclingPremiseBackend / PaddleStructureParseBackend /
+             LocalDeterministicDocumentParserPort(占位，受 LocalPortGate 闸门)
+           → 结构优先切分 HeadingHierarchyChunker + BlockRoleResolver(版面优先)
+      ② CHUNKING embedWithRetry(text)  [IngestJobOrchestrator.java:171-193]
+           → saveChunkAndEmbedding → rag_chunk + rag_chunk_embedding（同事务）
+      ③ INDEXING updateJiebaTokens(ChineseTokenizer)  [ChunkIndexer.java:118-160]
+           → rag_chunk.text_jieba → GIN(to_tsvector('simple',text_jieba))
+      ④ markDocumentParseStatus("CHUNKED") + markSucceeded(切分策略留痕)
+```
+
+**运行期可达性四问**：① 装配 = **是**（`IngestJobConsumer`/`IngestJobOrchestrator` 由 rag-worker 装配）；② 写入 DB = **是**（`rag_chunk`/`rag_chunk_embedding` 真实 INSERT，`text_jieba` 真实 UPDATE）；③ 注入 = **是**（`DocumentParserPort`/`EmbeddingPort`/`BlockChunker` 真实注入）；④ 触发可观测 = **部分**（`ingest_job` 状态与 error_detail 可读，但**RAG-3 worker 摄取链缺专用 DB IT** 是真实缺口，见 MEMORY 专题进度）。**结论：摄取主链真实可达**，但"摄取端到端 DB 级验证"部分可达——这是需补的测试缺口（非功能缺陷）。**纠偏**：`rag/docs/RAG-D05.md:259` 的"L-3 中文分词未实现"是**文档漂移**——`ChineseTokenizer.java:25-124` 已实现且索引/查询两侧共用（`JdbcRetrievalRepository.java:538` 查询侧），引用旧结论须标注"已被复核纠偏"。
+
+#### 4.5.3 调用链 C（不可达草稿对照）：platform 侧 RetrievalService——"有类有测但运行期不可达"
+
+```
+platform/agent-infra/.../retrieval/engine/RetrievalService.java:30（构造器）
+  VECTOR_SIMILARITY_THRESHOLD = 0.75  [:18]
+  hybrid = vector*0.5 + tfidf*0.5  [:46]
+  → VectorSearchEngine.score() 恒返回占位分
+  → RetrievalEndpoint  /api/v3/retrieval（@RestController）
+
+【可达性反证（本次 Grep 核实）】
+  new RetrievalService 仅出现在：
+    RetrievalServiceTest.java:24/28/41/50/59/68、RetrievalEngineIT.java:25  ← 仅测试
+  <artifactId>agent-infra</artifactId> 仅出现在：
+    platform/agent-infra/pom.xml:13、platform/pom.xml:125(dependencyManagement)  ← 无模块声明依赖
+  → 生产代码零实例化点 + 模块不在任何依赖闭包 ⇒ 运行期不可达，/api/v3/retrieval 实际 404
+```
+
+**运行期可达性四问**：① 装配 = **否**（无 `@Bean`、无构造注入，`new RetrievalService` 仅测试）；② 写入 DB = **否**（纯内存计算，无落库）；③ 注入 = **否**（`agent-infra` 无依赖方）；④ 触发可观测 = **否**。**结论：静态存在、运行期不可达**——这是本报告复核发现的**最重要口径污染**：它自述"占位打分"，但占位的是**这个草稿类自身**；真正的生产链路在 rag 模块 `JdbcRetrievalRepository`（pgvector 真余弦 + ts_rank + RRF k=60 + 阈值 0.38，向量库集成**已闭环**）。**占位对象是嵌入模型**（`LocalDeterministicEmbeddingPort`），不是向量库/向量打分。R-0 专门删除此草稿；引用"RAG 向量打分占位未闭环"的旧结论须标注"已被复核纠偏"。
+
+#### 4.5.4 调用链 D（隔离对偶影子）：RagShadow 采集点 → 报告 → M4 退役门禁（infra 已开，差真实流量）
+
+```
+RAG_SHADOW_ENABLED=true  [application.yml:52，env 已设]
+  → RagShadowConfiguration 条件装配 RagShadowCollector（@ConditionalOnProperty）
+  → collector.attach() ⇒ RagShadow.INSTANCE = collector
+  → 检索读面采集点 RagShadow.collect("retrieval")
+       [JdbcRetrievalRepository.java:273 search / :417 loadByIds]
+  → RagShadowReporter：recordShadowSample / reportRlsBind(只计数) /
+       reportMismatch / reportTaintViolation  [RagShadowReporter.java]
+  → snapshot: ragShadow[samples, rlsBind, mismatches, taint, rlsDependent]
+  → 出口门禁 RlsDependencyProbe.EXPECTED=30  [RlsDependencyProbe.java:47-52]
+       M4 四批 SQL(14~17) ⛔DRAFT 未应用；rlsDependent 目标 0
+```
+
+**运行期可达性四问**：① 装配 = **是**（`@ConditionalOnProperty` 条件装配，infra 已开 `RAG_SHADOW_ENABLED=true`）；② 写入 DB = **否**（InMemoryRagShadowMetrics 进程内计数，无落库）；③ 注入 = **是**（`RagShadow.INSTANCE` 静态门面在检索读面被真实调用）；④ 触发可观测 = **部分**（有 snapshot 计数，但**M2 缺真实流量**，且 9 张无 RLS 表是影子期基线勿直接补 RLS）。**结论：infra 可达但数据未达**——影子"通电未通流"，这是 M4 无法放行的真实卡点（MEMORY 明确"差真实流量"），不是代码缺陷。
+
+> **四条链的交叉结论**：链 A 说明"生产主链可达但可观测不全"（R-6/R-7 补）；链 B 说明"摄取可达但端到端 IT 缺"（RAG-3 缺口）；链 C 说明"有类有测 ≠ 可达"（R-0 删除，纠偏口径污染）；链 D 说明"可达 ≠ 有数据"（影子差真实流量，M4 卡点）。这正是铁律 17「运行期可达性审计」在 RAG 维度的四个不同切面，任何"看起来有"的能力都要按四问逐项判定，尤其**绝不可在不可达的 agent-infra 草稿上施力**。
+
 ---
 
 ## 五、正面对比分析
@@ -833,6 +1048,105 @@ RAG_SHADOW_ENABLED=true → rag.shadow.enabled=true
 
 **各方选择的后果**：我们赢在"成本可预测 + 检索必然留痕 + 顺序确定"，输在"每次都要检索"（即便学生问的是"你好"）。这与维度 1（编排模型）的整体取向一致——本平台是"受控运行时"而非"自主 agent"。Agno 的 `Agentic RAG 是默认` 与我们的"2-Step 恒定"是两种产品哲学。
 
+### 5.5 深度补充：新增竞品纳入后的能力对照增补（承接 3.8 与 5.1）
+
+> 5.1 的 C-01~C-24 对照了原 6 个竞品。3.8 新增 6 个竞品后，有四个对照位需要补入——它们恰好落在原表"落后/持平（都无）"的格子里，能更精确地定位本平台差距的**真实参照系**。
+
+| # | 能力项 | 本平台 | 新增竞品参照 | 修正判定 | 依据 |
+|---|---|---|---|---|---|
+| C-05b | 混合融合权重可调 | ❌ 固定 RRF(k=60)，无权重配置 | ✅ Qdrant `{"rrf":{"weights":[3,1]}}` + DBSF；✅ OpenAI `rrf_*_weight`（未逐字核实） | **落后（可调性）** | Qdrant 官方：`https://qdrant.tech/documentation/concepts/hybrid-queries/`；但官方同时警告"无评测集别手调权重"→ 本平台 R-3 是前置 |
+| C-06b | Rerank 形态 | ❌ 未实现 | ✅ Azure semantic ranker（融合分 0.03 / 重排分 2.x 分字段）；✅ Ragas 无（评测侧） | **落后（确认）** | Azure 官方 `https://learn.microsoft.com/en-us/azure/search/hybrid-search-overview`；再次印证 5.3 盲区 1 |
+| C-17b | 检索评测现成框架 | ⚠️ 指标定义、全未实现 | ✅ Ragas Context Precision/Recall + Faithfulness；✅ Dify golden questions/bad cases 运营 | **落后（可用现成轮）** | Ragas 官方 `https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/`；Dify 官方 knowledge overview |
+| C-14b | 换模型是否需重建索引 | ✅ 代际蓝绿零停机 | ❌ LlamaIndex "换模型必须 re-index、向量不可互换" | **领先（确认并强化）** | LlamaIndex 官方 embeddings 页；本平台 D-10 的零停机是相对通用框架的实打实优势 |
+
+> **对照结论**：新增竞品没有推翻 5.1 的任何"领先"判定，反而**强化**了两处：① C-14 换模型零停机——LlamaIndex 官方明确"换模型必须重建索引"，本平台代际蓝绿是真优势；② C-05 RRF 选型——Elasticsearch/Qdrant/Azure 官方默认 k=60，本平台 k=60 是继承共识而非拍脑袋。三处"落后"（融合可调、rerank、评测）的共同点是**都属于"质量侧增强"而非"安全侧缺陷"**，与 8.5.2 的权序判断一致——可以补，但不是安全红线。
+
+### 5.6 深度补充：本平台"领先"判定的理论克制（避免自我拔高）
+
+> 5.2 详述了五项结构性优势。本节按诚实边界声明的要求，给这些"领先"加一层**理论克制**——区分"竞品没有对应物"与"竞品有但形态不同"，避免把"差异"误读为"优越"。
+
+1. **"治理轴下沉数据层"（优势 1）是真正的无对应物**——OpenAI/LangChain/ADK/Agno/Dify 均无版本坐标/答案角色/版权/权威的多轴 SQL 硬过滤。这一项领先成立且可对外讲。
+2. **"RRF 跨库一致"（C-05）需谨慎表述**——本平台自实现 RRF 保证跨库一致，但 Elasticsearch/Qdrant/Azure 的 RRF 是**索引级原生**能力（性能优于本平台 Java 侧融合）。准确说法是"融合算法可控、跨库一致"，**不是**"融合性能领先"。
+3. **"代际蓝绿零停机"（C-14）领先成立**——LlamaIndex 官方证实通用框架换模型要重建索引；这是实打实的工程优势。但需注意：本平台当前默认仍是**占位嵌入**，代际蓝绿的价值要等 R-1 接入真实模型后才完全兑现。
+4. **"哨兵桶/复合外键"（优势 C-13）是表示法优势，非能力优势**——它规避了 NULL 语义陷阱（DD-2），但竞品用"独立 collection/corpus"也解决了多语料共存，只是形态不同。准确说法是"用表示法规避一整类陷阱"，不是"别人做不到"。
+5. **"无 ANN 索引"绝不能算领先也不能算缺陷**——它是规模取舍（2.4(13)），本报告的诚实表述是"当前规模精确扫描够用，规模化走 MRL/量化"。
+
+> **克制结论**：本平台的真实领先集中在**教辅治理的数据层硬过滤**（六轴准入 + 版本/角色闸门）与**代际蓝绿**两处；其余多数是"机制完整 + 差异化取舍"。第五章所有"领先"判定都应放在"教辅 + 合规敏感 + 数据层强制"这个特定语境下理解，脱离语境的"全面领先"是过度宣称——这也是 9.5"承诺—证据"链要防范的。
+
+### 5.7 深度补充：能力评分卡（把定性判定量化成可复算分数）
+
+> **本节为第三轮追加**，不改写 5.1–5.6 的任何既有判定；与既有判定冲突处，在本节内以「**本轮更正（与既有正文 X.X 冲突）**」标注（见 5.7.4 子表）。
+> **能力评分卡（scorecard）**＝把「领先 / 持平 / 落后」这类定性判定量化成**可复算的分数**，让本维度与 12 份兄弟报告横向可比、让后续演进有基线。
+>
+> **评分轴**直接沿用 1.3 的 5 个评价轴（内建闭环度 / 隔离强制性 / 质量可度量性 / 失败可诊断性 / 治理可审计性），每轴 0–4 分。
+> **评分口径（全局统一）**：
+> - **0** = 完全缺失（无对应实现，且无缺口登记）
+> - **1** = 有痕迹不可用（有类/有表/有配置，但未装配/未写入/未触发 —— 即运行期不可达）
+> - **2** = 局部可用（仅单一路径生效，或仅单租户/单场景生效，或靠人工兜底）
+> - **3** = 能力完整（默认路径生效 + 有失败语义 + 有测试门禁）
+> - **4** = 能力完整且有护栏（默认生效 + 失败语义 + 门禁 + **运行时度量/告警/可观测**）
+> - **每格必须给证据锚点**（`文件:行号` 或「官方文档 URL」），无证据不得给分。
+> - **加权总分** = Σ(轴分 × 轴权重) / Σ权重。
+>
+> **权重沿用 1.6 的加权优先级**（1.6 是本报告既有的"错误代价不对称表 ⇒ 权序"结论，本轮**不新设**权重，只把它映射成数值）：1.6 把「隔离强制性」与「内建闭环度之治理轴」列为 P0、「失败可诊断性」P1、「质量可度量性」「治理可审计性」P2 ⇒ **隔离强制性 0.30 / 内建闭环度 0.25 / 失败可诊断性 0.20 / 质量可度量性 0.15 / 治理可审计性 0.10**（合计 1.00）。
+> **判读纪律**：① 分数是**工程判断**，不是客观测量；1–2 分差距不构成「结构性落后」的证据，只构成改进项优先级输入。② 「竞品最高分」只取**第三章 / 附录 F 已核实**的官方事实（Elasticsearch 页本轮 WebFetch 重抓复核，其余沿用已核实条目）；无官方依据的轴填「不评分」并说明。③ 若某轴我们得分高于竞品最高分，必须补**机制解释**，否则按「诚实优先于漂亮」下调 1 分。
+
+#### 5.7.1 评分卡主表
+
+| 评价轴 | 权重 | 我们的得分 | 证据锚点（本轮实际 Read/Grep 复核） | 竞品最高分 | 差距 | 差距根因（设计取舍 / 能力缺失 / 证据缺口） |
+|---|---|---|---|---|---|---|
+| **内建闭环度** | 0.25 | **3** | 摄取→切分→嵌入→双通道→RRF→硬过滤→门禁→上下文注入全链自持：`JdbcRetrievalRepository.java:107`（`RRF_K = 60.0`）、`:172-180`（六轴准入模板）、`:472-524`（稠密 pgvector `1-(e.embedding<=>?)` + 代际过滤）、`:526-557`（词法 `ts_rank(to_tsvector('simple', text_jieba), …)`）、`RetrievalOrchestrator.java:85-154`（七步编排 + 五段漏斗）；占位：`LocalDeterministicEmbeddingPort.java:30`（`DIM = 1024`）、`:33`（`MODEL_VERSION = "local-deterministic-v1"`）、`EmbeddingPorts.java:44-49`（base-url 空 ⇒ 走占位） | **3**（OpenAI Vector Stores + File Search 托管全链；Agno Knowledge 一等；附录 B URL） | **0** | **能力缺失**：占位嵌入模型是默认装配路径（`EmbeddingPorts.java:44-49`），rerank / query 改写**实现零命中**（本轮 grep：`rag/`+`platform/` 的 `*.java`/`*.yml` 中 `rerank\|cross-encoder\|crossencoder` 仅 2 处**注释**命中：`EmbeddingPort.java:18`、`LocalLexicalEntailmentPort.java:21`）⇒ 封顶 3（4 分要求"运行时度量"，本轴的度量在"质量可度量性"那一轴） |
+| **隔离强制性** | 0.30 | **3** | 谓词单点渲染：`RagSqlScopeTranslator.java:111-122`（`TenantWithGlobal` ⇒ `tenant_id IN (?::uuid, ?::uuid)`；`None` ⇒ `1=0` 恒假）；双通道同源：`JdbcRetrievalRepository.java:489`（稠密）/`:535`（词法）均走同一 translator；六轴准入同源：`:172-180`；身份绑定双层：`RagJwtAuthFilter.java:180-189`（403）+ `RagRetrievalController.java:172-176`（哨兵 400）；IT 门禁：`RetrievalRepositoryIT.java:242-250`（跨租户不可见）、`:297-302`（`loadByIds` 跨租户返回空）、`:535`（`tenantCannotInsertGlobalChunk`） | **2**（Weaviate tenant isolation＝每租户独立 collection；Pinecone per-index＝每租户独立索引；pgvector **自身无租户概念**（附录 B URL）） | **+1** | **能力缺失**：4 分要求"运行时度量/告警"，本轮复核到**影子读数无出口**——计数器是 `InMemoryRagShadowMetrics.java:14`（内存实现），`RagShadowCollector.java:42-51` 的 `snapshot()` **无主代码消费方**（仅测试引用）；`RlsDependencyProbe.java:47-52` 的 `rlsDependent` 期望值仍为 30（R1=6/R2=6/R3=16/CENTRAL=2）；本轮**未在 `monitoring/` 与 `deploy/` 下发现任何 Prometheus 告警规则文件**（`alert:` / `groups:` 关键字零命中） ⇒ 封顶 3 |
+| **质量可度量性** | 0.15 | **1** | 指标**已定义未实现**：`RAG-D08_评测体系与质量门禁.md:360-369` 的 RC-01/02/03/04/04b/05/06/07/08/09 **共 10 行**状态列全为「⬜ 未实现」（本轮实读该区间确认行号与条目数；既有正文 5.3 盲区 2 列举其中 5 项，**结论"全未实现"不变**，此处补足条目数）；已生效的只有 RC-09 的语义（门禁读相关性分：`RetrievalOrchestrator.java:136-138`，守护用例 `RetrievalRepositoryIT.java:266-282`）；标定样本 27 条（`rag-bootstrap/application.yml:127-131` 注释）；漏斗出不了进程：`HttpRagRetrievalGateway.java:176-200` 只取白名单字段，`RetrievalOrchestrator.java:149-154` 的五段计数未被解析 | **3**（Ragas 检索侧 Context Precision/Recall + Faithfulness；Dify golden questions/bad cases；LangSmith；附录 F URL，本轮沿用已核实条目） | **−2（我们落后）** | **能力缺失**：指标定义齐全、可执行实现与评测集**双缺**；R-3 是 R-2 的硬前置（Qdrant 官方亦警告"无评测集别手调权重"） |
+| **失败可诊断性** | 0.20 | **2** | 跨进程 fail-closed：`HttpRagRetrievalGateway.java:136-147`（IOException / 非 2xx 全抛）、`:178-186`（非法 JSON / 缺 `hits` 抛）、`:208-214`（`chunkId`/`text` 空白即丢弃）；编排器区分组件失败与零命中：`AgentChatOrchestrator.java:524-533`（`RAG_UNAVAILABLE` 事件 + Skill(error)）vs `RetrievalOrchestrator.java:156-159`（门禁未过的 debug 日志）；启动期自检：`RagStartupSelfCheck.java:123-142`（超管 / BYPASSRLS 拒绝启动）、`:197-206`（未绑租户可读 ⇒ 失败）；装配期维度拒绝：`JdbcRetrievalRepository.java:242-250` | **不评分**（第三章 / 附录 F 已核实条目中，**无任何竞品官方页明示"检索失败的度量/告警口径"**） | 不可比 | **能力缺失 + 证据缺口**：能力缺口在"**静默 0 行**"——门禁恒空、谓词失配、RLS 未绑租户三种"检索不到"都表现为"空结果"，**无任何运行期信号**（漏斗跨进程丢失 + 无告警规则）；另"HTTP 403 与 503 被压成同一异常"（`HttpRagRetrievalGateway.java:144-147`）使**权限终态被伪装成临时故障**（违反铁律 15 的精神，见附录 I-08） |
+| **治理可审计性** | 0.10 | **2** | 检索与留痕同事务：`JdbcTenantScopedRetrieval.java:62-66`（审计写失败 ⇒ 整次检索回滚，"不允许检索成功但无痕迹"）；审计表结构齐备：`01_rag_ddl.sql:281-291`（`rag_access_audit` 含 `principal_id` / `chunk_id` / `request_digest` 三列，`FORCE ROW LEVEL SECURITY` 见 `:293`）；但检索期写入**只填 2 列**：`JdbcTenantScopedRetrieval.java:64`（`principal_id` 显式 NULL、`source_id` NULL、`chunk_id`/`request_digest` 不写） | **不评分**（Pinecone / Weaviate 的审计能力本轮**未能从官方页逐字核实**，按规范填「不评分」而非凭印象给分） | 不可比 | **能力缺失**：schema 已就位、实现未跟上——检索期**无法把"哪次召回、哪个 chunk、哪个主体"关联起来**（R-7）；R-4（`rag_answer_citation` 引用落库）同样未闭环 |
+| **加权总分** | **1.00** | **2.40 / 4** | — | **不可比**（仅 3/5 轴有官方依据） | 见 5.7.2 | — |
+
+**加权总分算式**：`3×0.25 + 3×0.30 + 1×0.15 + 2×0.20 + 2×0.10 = 0.75 + 0.90 + 0.15 + 0.40 + 0.20 = **2.40**/4`。
+
+#### 5.7.2 与竞品的可比子集（不拿"不可比"充数）
+
+竞品在「失败可诊断性 / 治理可审计性」两轴**无官方依据**（不评分），故全 5 轴总分不可比。为给出**同口径**结论，只取**双方均有官方依据的 3 轴子集**（内建闭环度 + 隔离强制性 + 质量可度量性，权重合计 0.70）：
+
+| 子集 | 我们 | 竞品最高 | 差 |
+|---|---|---|---|
+| 内建闭环度（0.25） | 3 | 3（OpenAI VS+File Search / Agno Knowledge） | 0 |
+| 隔离强制性（0.30） | 3 | 2（Weaviate tenant isolation / Pinecone per-index） | **+1** |
+| 质量可度量性（0.15） | 1 | 3（Ragas / Dify / LangSmith） | **−2** |
+| **子集加权**（分母 0.70） | (0.75+0.90+0.15)/0.70 = **2.57** | (0.75+0.60+0.45)/0.70 = **2.57** | **±0.00** |
+
+**机制解释（规范要求：高于竞品轴分必须解释）**：隔离强制性我们 3 > 竞品 2，机制是——我们的强制点在 **PostgreSQL 策略层 + 应用层谓词双写**（`RagSqlScopeTranslator.java:111-122` 渲染结果与现役 RLS 读策略逐字等价，见其 `:17-30` 对照表；`JdbcRetrievalRepository.java:489`/`:535` 双通道同源），而 Weaviate / Pinecone 的隔离依赖**服务端按 namespace / collection 归属执行**，其官方页本身即声明"依赖调用方正确传递 namespace"；pgvector 自身**完全无租户概念**（附录 B URL）。但这一优势**不可外推**：它在"失败可诊断性 / 治理可审计性"两轴是 2 分且两轴竞品无依据，**正负相抵后可比子集与竞品最高分持平（±0.00）**。
+
+> **本轮最重要的一条量化结论**：本平台 RAG 的**工程闭环度与业界最高分持平**，短板集中在**质量度量（−2）与可诊断性/可审计性（无竞品对照但自身仅 2 分）**。这与既有正文 6.5 的画像结论（"隔离与治理强、质量度量弱"）**方向一致**，但本轮把它从"星级画像"变成了**可复算的分数与差值**，可直接作为 R-3（评测体系）与 R-6/R-7（观测/审计）的投入产出比依据。
+
+#### 5.7.3 与第二轮 §6.5「维度健康度评分卡」的口径差异（并存不冲突）
+
+§6.5 与本节**评的是同一组五轴，但口径、量纲、用途都不同**，两者并存互不替代：
+
+| 维度 | 第二轮 §6.5「维度健康度评分卡」 | 本轮 §5.7「能力评分卡」 |
+|---|---|---|
+| **量纲** | ★1~5 星（画像级） | 0~4 分（判定级） |
+| **权重** | 无权重（各轴独立陈述） | 有权重（沿用 1.6 权序映射为 0.30/0.25/0.20/0.15/0.10），可算**加权总分** |
+| **竞品对照** | 无（只列我方支撑证据与扣分根因） | 有「竞品最高分 + 差距 + 差距根因」，且对无官方依据的轴**明确填"不评分"** |
+| **判定粒度** | 星级概括（"扣 1 星：默认嵌入是占位模型"） | 逐轴 0–4 + **证据锚点**（`文件:行号`） |
+| **用途** | 回答"我们长什么样"（画像） | 回答"我们与最高分差多少、差在哪、投入产出比"（基线与优先级输入） |
+| **打分门槛** | 星级侧重"该轴有什么" | 0–4 口径**明文要求 4 分须有运行时度量/告警/可观测** ⇒ 这直接导致 §6.5 给隔离强制性满星（★★★★★）而本轮只给 **3** |
+
+**唯一"看起来不一致"的点（不是冲突，是口径差）**：§6.5「隔离强制性 ★★★★★（扣 0）」vs 本轮「隔离强制性 = 3」。原因：§6.5 的星级按"该维度有没有护栏"打分，隔离本身**有**双层护栏 ⇒ 满分；本轮 0–4 口径的 4 分**额外要求运行时度量/告警**，而本轮复核到影子读数无出口（`InMemoryRagShadowMetrics.java:14` + `RagShadowCollector.java:42-51` 无主代码消费方）、`rlsDependent=30`（`RlsDependencyProbe.java:47-52`）、无告警规则 ⇒ 封顶 3。**两表同时成立**：隔离"强度"是满分项，隔离"可观测"是缺口项。
+
+#### 5.7.4 本轮复核推翻的既有判定（子表）
+
+| # | 既有判定（位置） | 本轮复核结论 | 推翻/修正依据（本轮复核锚点） | 处理 |
+|---|---|---|---|---|
+| 1 | 「向量列**配置漂移** + DDL 终态不一致」（既有正文 5.3 盲区 4、2.1(6) 尾注、4.2 D-3） | **收窄为「默认 yml ≠ 生产 env」，不是运行期漂移**；且"4096/halfvec 无 ANN 索引"是**刻意取舍**、**⛔ 不得降维** | 仓库侧三处一致：`01_rag_ddl.sql:389`（`embedding public.halfvec(4096)`）、`rag.env:45-46`（`RAG_EMBEDDING_DIMENSION=4096` / `RAG_EMBEDDING_VECTOR_TYPE=halfvec`）、`VectorColumnTest.java:48-49`（`halfvec(4096)` 与 `vector(4096)` 的 `indexable()` 均为 `false`）；取舍理由写在 `01_rag_ddl.sql:960-966`（"刻意不存在……规模化后再二选一：MRL 截断到 ≤4000 维，或改用二进制量化"）；**维度不是配置项而是端口事实**：`RagInfrastructureConfig.java:288-292`（维度取自 `EmbeddingPort.dimension()`）+ `JdbcRetrievalRepository.java:242-250`（装配期拒绝） | **本轮更正（与既有正文 5.3 盲区 4 冲突）**：真实风险是"默认 `application.yml:103`（dimension=1024）/ `:109`（vector-type=vector）与 DDL 终态不同，**必须靠 env 覆盖才一致**"——属**部署基线未固化**（能力缺失），不是"配置漂移"。⛔ **不采纳**"硬降维"类建议（违反 RAG 红线：不夹带改 `halfvec(4096)`/HNSW） |
+| 2 | 「隔离强制性满分 / 隔离可观测已落地」（既有正文 5.1 C-12 判"领先"、6.5 给 ★★★★★） | **"领先"对竞品成立；"可观测"不成立**——隔离读数**出不了进程** | `InMemoryRagShadowMetrics.java:14`（内存实现）；`RagShadowCollector.java:42-51`（`snapshot()`）**无主代码消费方**（本轮 grep 仅测试引用）；`RagShadow.java:35-43`（`collect` 走静态门面，未注册时全 no-op）；`RagStartupSelfCheck.java:108` 只打印 `RlsDependencyProbe.snapshot()` 的**静态期望值**，不是实时读数 | 维持"领先"表述但**加限定语**；新增"隔离可观测"缺口 ⇒ 直接对应附录 G-07 与附录 I-13 |
+| 3 | 「线上 `study_rag` 实际列仍是 `vector(1024)`、HNSW 仍在、285 行占位向量」（既有正文 5.3 盲区 4 转引 `rag/docs/RAG-D03_数据模型与索引设计.md:277`） | **本轮未能复核**（未连库）⇒ 降级为**证据缺口**，**不得作为实施依据** | 本轮只做仓库侧静态复核（DDL / `rag.env` / 单测三处一致，见第 1 行）；`RAG-D03` 该行自记为「2026-10-28 复核」，其结论（"迁移尚未执行"）**在本轮无法在活库复验** | 标注为证据缺口（与诚实边界声明六·2 一致）；⛔ 不据此提"迁列"建议 |
+| 4 | 「`[图]` 占位块的设计出处 = `LayoutPredicates.java:135`」（MEMORY 与既有正文引用） | **结论不变、行号更正**：真实出处为 `LayoutPredicates.java:141`（`placeholderFor` 方法）与其 `:144`（`case FIGURE -> "[图]"`）；`:135` 是该方法的 javadoc 起始行 | 本轮实读 `LayoutPredicates.java:135-148` 全文 | 仅更正行号；「`[图]` 是摄取期设计、非脏数据」的结论**不变** |
+| 5 | 「影子模式比对对象错位」（既有正文 5.3 盲区 5、4.4 DD-8） | **复核成立并细化一层**：影子语义确为"隔离谓词对照"（显式谓词 vs RLS 基线），**不是**检索策略双跑；且本轮新发现"读数无出口" | `RagShadowReporter.java:51-53`（`reportRlsBind` 恒不抛）、`:56-61`（`reportMismatch`）、`:64-70`（`reportTaintViolation`）；采集点 `JdbcRetrievalRepository.java:273`（检索）/`:417`（依据取回）；`RagShadowMetrics.java:17-40` 五个计数器定义 | 维持判定并补"读数无出口"；⇒ 附录 G-07 判定为 ⚠️ 条件生效 |
+| 6 | 「全仓 `rerank\|cross-encoder\|crossencoder` **零命中**」（既有正文 5.3 盲区 1、诚实边界声明一·3） | **表述收窄**：实现确为零，但**注释有 2 处命中** | 本轮 grep（`rag/` + `platform/`，`*.java`/`*.yml`）：`EmbeddingPort.java:18`（"重排器（cross-encoder）精度显著高于双塔，是召回质量的决定性环节"）、`LocalLexicalEntailmentPort.java:21`（"这不是 NLI 蕴含模型，也不是 cross-encoder 重排器"） | 结论（**无 rerank 实现**）不变；表述改为"**仅注释命中，实现零命中**"（诚实优先于漂亮） |
+
+> **未核实项（诚实声明）**：① 竞品在「失败可诊断性 / 治理可审计性」两轴**无官方依据**，未打分 ⇒ 全 5 轴总分**不可比**，只有 3 轴子集可比。② 线上 RAG 库的真实列形态与策略数**未连库核实**（第 3 行）。③ 本轮**未运行任何测试**，全部行为判断（并发不重复领、审计失败回滚、跨租户不可见等）均引自既有 IT 用例与源码注释，**未实测**（需按本报告门禁口径在实施阶段验证）。④ 影子指标在真实流量下的读数**未核实**（本轮未连库、未接入真实流量）。
+
 ---
 
 ## 六、优缺点总评
@@ -910,6 +1224,33 @@ RAG_SHADOW_ENABLED=true → rag.shadow.enabled=true
 | **AutoGen** | **已归档**（2025-10 维护模式 → 2026-10 archived，继任者 Microsoft Agent Framework 2026-04 GA）；RAG 靠外部 LangChain，非内建；把检索做成 agent turn 带来额外 LLM 调用与延迟 | <https://github.com/microsoft/autogen>、<https://learn.microsoft.com/agent-framework/> |
 | **CrewAI** | 切分是固定长度窗口（默认 4000 字符），**不做结构/语义切分**——对"答案区必须分离"的教辅语料结构性不适用；无治理/租户语义；RagTool 依赖 Embedchain 聚合层 | <https://docs.crewai.org.cn/concepts/knowledge> |
 | **Agno** | **融合算法由底层向量库决定**（官方原文 "Search algorithms differ by vector database"）→ 不可跨库一致；无业务治理原语；无租户隔离语义；rerank 模型需自带 | <https://docs.agno.com/knowledge/concepts/search-and-retrieval/overview> |
+
+### 6.5 深度补充：维度健康度评分卡（对照 1.3 五轴）
+
+> 6.1/6.2 分级列了优缺点。本节按 1.3 五轴给出可复核的评分（★1~5），把"优点/缺点"转成"能力画像"，并明确每轴的扣分根因，与 9.5 的"承诺—证据"链呼应。
+
+| 评价轴（1.3） | 评分 | 支撑证据 | 扣分根因 |
+|---|---|---|---|
+| **内建闭环度** | ★★★★☆ | 摄取→嵌入→索引→双通道召回→RRF→硬过滤→门禁→上下文注入全链自持（4.5.1/4.5.2） | 扣 1 星：默认嵌入是占位模型（R-1）、rerank/query 改写缺失（R-2） |
+| **隔离强制性** | ★★★★★ | FORCE RLS + 显式谓词双写 + 哨兵桶 + 影子对偶证据（C-12/C-13）；M1/M3 收口 66 用例 DB IT 全绿 | 扣 0（本维度最强项），但 M4 未放行、`rlsDependent=30` 是**进行中**非缺陷 |
+| **质量可度量性** | ★★☆☆☆ | 0.38 有标定记录、RC-09 由 IT 守护、漏斗五段计数 | 扣 3 星：Recall@K/MRR 全未实现（R-3）、27 条样本、跨进程 funnel 丢失、影子差真实流量 |
+| **失败可诊断性** | ★★★☆☆ | 维度/类型装配期校验（D-3）、fail-closed 跨进程边界（C-15）、ingest error_detail | 扣 2 星：配置 vs DB 实际列未校验（R-1 列侧自检）、审计无取证字段（R-7） |
+| **治理可审计性** | ★★★☆☆ | `rag_access_audit` 同事务留痕、六轴准入单一真源、`rag_answer_citation` | 扣 2 星：`principal_id`/`chunk_id`/`request_digest` 恒 NULL（R-7），schema 已就位实现未跟上 |
+
+> **画像结论**：本平台是典型的"**隔离与治理强、质量度量弱**"的形态——前两轴接近满分且是竞品无对应物的真优势，后三轴的短板**集中在同一件事：数据产出与观测**（R-3/R-6/R-7）。这解释了为什么第七章把 R-3 评测门禁列为 P0、把三条数据改进串成一条线：**补质量度量不是加新能力，而是补齐"已建机制的效果证据"**。
+
+### 6.6 深度补充：新增竞品的优缺点增补（承接 3.8，带本次核实 URL）
+
+| 竞品（本次新增） | 优点 | 缺点/边界 | 官方来源（本次核实） |
+|---|---|---|---|
+| **Elasticsearch** | RRF 融合 BM25+kNN，k 默认 60、无需调参；`rank_window_size` 控制候选窗口 | RRF 丢分差；融合仍在检索层，无业务治理/租户/版本语义 | https://www.elastic.co/guide/en/elasticsearch/reference/current/rrf.html |
+| **Qdrant** | prefetch 多路融合；RRF/DBSF 双算法；加权 RRF 可调；"无评测集别手调权重"的诚实建议 | DBSF 依赖检索器分数已校准；无业务治理语义 | https://qdrant.tech/documentation/concepts/hybrid-queries/ |
+| **Azure AI Search** | 混合检索 + semantic ranker；融合分与重排分显式分字段；过滤/facet/语义排序一体 | 强 Azure 绑定；单 corpus 边界≠租户；无版本/角色治理 | https://learn.microsoft.com/en-us/azure/search/hybrid-search-overview |
+| **LlamaIndex** | 嵌入/索引/查询编排完整；默认余弦；多 provider 可插拔；明确"换模型须重建索引" | 换模型停机重建（本平台代际蓝绿领先点）；无治理/租户语义 | https://developers.llamaindex.ai/python/framework/module_guides/models/embeddings/ |
+| **Ragas** | 现成 reference-free 评测（Context Precision/Recall、Faithfulness）；可直接用于 R-3 | LLM-as-judge 有偏差（Zheng et al.），须不同族+钉版本+对调取均值 | https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/ |
+| **Dify** | 知识库产品化：chunk/index/检索可配 + golden questions/bad cases 运营闭环 | 固定/自动切分，无结构/语义切分；无版本/角色/版权治理；数据托管 | https://docs.dify.ai/en/cloud/use-dify/knowledge/overview |
+
+> **增补结论**：6 个新增竞品没有一个在"数据层业务治理"上有对应物（再次印证 6.1 结构性优势），但在**融合可调性、rerank、评测运营**三处普遍领先本平台——且这些差距与 6.5 评分卡的低分轴一一对应。这构成一条完整证据链：**本平台的短板不是孤立的技术债，而是与业界标准件的系统性差距**，补齐路径就是 R-2/R-3/R-6。
 
 ---
 
@@ -1188,6 +1529,94 @@ RAG_SHADOW_ENABLED=true → rag.shadow.enabled=true
   3. **反向验证**：把 digest 实现改成"存原文" ⇒ 断言"不含原文子串"的用例**转红**。
   4. **导出脱敏**：在导出脚本的测试里塞入含手机号/身份证号的 query ⇒ 断言导出文件中**不含**这些串（承铁律 21：脱敏必须用 JDK 引擎的 PII 正则）。
 
+### 7.11 深度补充：R-0~R-7 的改动片段 / 三级验收门禁 / 回滚策略（逐条可执行）
+
+> 本节把第七章每个改进项落到"改哪一行、怎么验、怎么退"。**三级验收门禁**严格按项目铁律 6：单元（mock/纯函数）→ API（真实 HTTP/真实 DB）→ 角色×任务（按 STUDENT/TEACHER/平台运维 + 真实任务链路）。每项必须回答灵魂问题「**撤掉修复点会红吗**」——若只有静态守卫变红而行为测试仍绿，视为无效门禁（P0 踩过此坑）。完整的改动清单、铁律对齐与反向验证另见**附录 E**。
+>
+> ⚠️ **RAG 红线复述（先于一切改动）**：⛔ 不调低 0.38（标定值，须走 RAG-D08 §4）；⛔ 不动 RRF k=60 与"排序键=fusionScore / 门禁键=相关性分"分离（`RetrievalRepositoryIT` 钉死）；⛔ 不动六轴准入谓词；⛔ 不在不可达的 agent-infra 草稿上施力；⛔ 不夹带改 `halfvec(4096)`/HNSW。**R-1 原稿"硬降到 4000 维建 HNSW"属已被复核纠偏的旧结论**——4096/halfvec 是 `ddl:960` + `rag.env:44-46` + `VectorColumnTest` 共同钉住的刻意取舍，规模化正道是 MRL / 二进制量化（pgvector 官方，2.4(13)），禁止硬降维。
+
+#### R-0 清除不可达草稿检索引擎
+
+- **具体改动片段**：删除 `platform/agent-infra/src/main/java/.../retrieval/engine/` 整个目录（`RetrievalEndpoint`/`RetrievalService`/`VectorSearchEngine`/`TfIdfRanker` + 2 测试类），从 `platform/pom.xml:66` 移除 `<module>agent-infra</module>` 与 `:125` 的 dependencyManagement 条目，删除 `agent-infra/pom.xml`；修正 `docs/能力维度实现方式梳理报告.md:123` 的 0.75/hybrid 表述为 rag 真实口径（0.38 / RRF k=60 / 占位对象是嵌入模型）。
+- **三级验收门禁**：
+  - 单元：`RetrievalAuthoritySourceOfTruthTest`——断言全仓 main 侧无 `VECTOR_SIMILARITY_THRESHOLD`/`TTL_MAX_AGE_MINUTES`；断言 `platform/pom.xml` 不含 `<module>agent-infra</module>`。
+  - API（真实启动）：起 platform-bootstrap 后 `GET /api/v3/retrieval/workspace` 返回 **404**（非 500，500=残留装配）。
+  - 角色×任务：平台运维角色用真实检索链路（维度 6 Agent 对话）验证 RAG 命中仍经 rag 服务返回，`agent_trace_metric` 有 ragHits 计数（不因删草稿而断链）。
+  - **撤掉修复点会红吗**：把 `agent-infra` 加回 `<modules>` 并恢复一个含 `VECTOR_SIMILARITY_THRESHOLD` 的类 → 单元扫描断言转红；若端点意外仍在 → API 404 断言转红。✅ 有效（行为级 + 启动级）。
+- **回滚策略**：恢复被删目录与 pom 条目即可（草稿无生产调用方，回滚零风险）；文档口径保持修正后版本（避免回退到污染表述）。注意模块数 14→13，同步断言模块清单的守卫（铁律 6）。
+
+#### R-1 向量打分闭环（占位嵌入 → 真实嵌入 + 端到端可度量）
+
+- **具体改动片段**（⚠️ 已剔除被纠偏的"硬降维建 HNSW"子项）：① 在 `RagStartupSelfCheck` 增加**列侧校验**——读 `pg_attribute` 拿 `rag_chunk_embedding.embedding` 实际类型/维度，与 `VectorColumn` 比对，不符拒绝启动（补"配置 vs DB 实际列"参照系）；② 把 `rag.env:44-46` 的 `4096/halfvec` 口径固化进 `application.yml` 默认并 worker 侧同源（不改 DDL、不降维）；③ 配 `RAG_EMBEDDING_BASE_URL`+`MODEL` 让 `EmbeddingPorts.create` 走 `OpenAiCompatibleEmbeddingPort`（缺 model 时已 fail-closed）；④ 新增 `RealEmbeddingRetrievalIT`（真实模型+真实 PG）断言 score 非常量、0.38 门禁生效、换模型能建新代际。
+- **三级验收门禁**：
+  - 单元：`RagStartupSelfCheckTest`——列 mock 成 `vector(1024)` 而配置 `halfvec(4096)` ⇒ 断言拒绝启动；一致 ⇒ 通过。
+  - API（真实 PG+模型）：`RealEmbeddingRetrievalIT`——断言 `scoreStdDev>0.05`（非常量）、0.38 门禁在真实模型下生效、`embedding_model` 在 embedding 表与代际表一致。
+  - 角色×任务：TEACHER 用真实教材检索，验证"依据"分数可信、换 `qwen3-embedding:8b` 后新代际零停机切换。
+  - **撤掉修复点会红吗**：把列校验短路（return true）→ 单测拒绝启动断言转红；改回占位嵌入 → `scoreStdDev>0.05` 转红。✅ 有效。
+- **回滚策略**：`enabled`/`base-url` 置空回到占位嵌入（fail-closed 闸门保证不静默）；列校验方法保留（无害）；**不改 DDL/维度**——一旦误降维须走代际蓝绿回滚并恢复 4096 维向量。规模化 ANN 走 MRL/二进制量化代际迁移（非本项）。
+
+#### R-2 混合检索三段式（BM25 + dense + rerank，与过滤顺序对齐）
+
+- **具体改动片段**：① 阶段一——`JdbcRetrievalRepository` 新增可配 `rag.retrieval.candidate-pool-size=100`，词法通道**通道内归一**（`ts_rank/max_ts_rank`，走 `?::real` 绑定参数，铁律 2），归一后仍记入 `relevance`（门禁语义不变）；② 阶段二——新增 `RerankPort` + `OpenAiCompatibleRerankPort`（或境内 `bge-reranker-v2-m3`），`rag.rerank.enabled=false` 默认关，插在 `RetrievalOrchestrator` ④角色过滤**之后**、⑥排序之前（承 D-4），rerank 分**只排序不入门禁**（承 D-5）；③ 阶段三——可选 query 改写/HyDE（默认关，改写与原文召回 RRF 合并）。
+- **三级验收门禁**：
+  - 单元：`RerankPortTest`（按 rerank 分降序、长度=topN）、`ChannelScoreNormalizerTest`（归一前后 `fusionScore` 序列逐位相同——归一不改 RRF 排序键）。
+  - API（真实 PG+确定性 rerank 桩）：`HybridRetrievalIT`——"仅词法可命中的查询"门禁后仍有命中（当前必失败，核心反证点）；rerank 关闭时结果与基线逐位一致；rerank 模型不可用时**降级但成功**且计数+1。
+  - 角色×任务：STUDENT 查"二次函数顶点"验证近邻负例（同体裁无关 0.525）被压下、正例 Recall@10 不降。
+  - **撤掉修复点会红吗**：归一短路（直接返原 ts_rank）→ "仅词法命中"用例转红；把过滤移到 rerank 后 → "答案类不进 rerank 输入"用例转红；把 rerank 分接门禁 → "门禁恒不通过"红灯用例转红（重演 2026-10-23 事故）。✅ 有效。
+- **回滚策略**：`rag.rerank.enabled=false` / `query-rewrite.enabled=false` 一键回基线；归一是行为改变，回滚需恢复原 `relevance` 计算并重标 0.38；候选池配置化可单独调小。灰度先单租户。**前置硬依赖 R-3 评测集**（Qdrant 官方："无评测集别手调权重"）。
+
+#### R-3 检索质量评测体系（指标 + 离线数据集 + CI 门禁）
+
+- **具体改动片段**：新增模块 `rag/rag-evaluation`；`RetrievalMetricsCalculator` 实现 Recall@K/MRR@K/NDCG@K + 按 channel 分组召回率（`ScoredChunk.channel()` 四值直接可分）+ 漏斗分布 + 误拒/漏拒率；评测集 JSONL `{"qid","query","relevantChunkIds","expectEmpty","edition",...}` ≥200 正例 + ≥100 负例 + ≥50 应拒答；CI 四级门禁 G（漏拒率 0/门禁一致性 100%，阻断）/ R（Recall@10/MRR/误拒率，阻断）/ O（观察）/ M（人工）。
+- **三级验收门禁**：
+  - 单元：`RetrievalMetricsCalculatorTest`（3 候选/2 相关手算样例：Recall@2=1.0、MRR@2=0.5）。
+  - 链路（真实 PG+评测集）：`RetrievalEvaluationIT` 输出完整指标报告，断言**每个指标都有阈值与实测值两列**（缺一即失败，防"只报不判"）。
+  - 角色×任务：TEACHER 标注样本进入评测集，运维角色在 CI 看板验证 G/R 类阻断 PR。
+  - **撤掉修复点会红吗**：阈值改 0.99 → RC-07 误拒率红灯转红；门禁改用 `fusionScore` → RC-09 一致性转红；清空某正例 `relevantChunkIds` → Recall 下降且红灯（证明指标真在算）。✅ 有效。
+- **回滚策略**：`rag-evaluation` 测试不挂 `verify` 阶段即停 CI 门禁（评测集与实现保留，是可复审资产）；无生产代码改动、无 DDL。主要成本是人工标注（≥350 条），非代码。
+
+#### R-4 多租户检索谓词统一注入收口（关联维度 2 的 rlsDependent）
+
+- **具体改动片段**：① 新增 `RetrievalPredicateCoverageIT`——元数据扫描 `rag-persistence` 全部涉 `rag_chunk`/`rag_chunk_embedding`/`rag_document`/`rag_source` 的 SELECT 必含显式租户谓词（静态发现，铁律 17 配真实 IT）；② 双租户数据 IT 断言两侧（dense/lexical）chunk 集合 ⊆ 本租户∪哨兵；③ R1 批 6 处 `set_config` 按 `14_...sql:79-81` 清单移除（**先 SQL 后代码**，反序 Sev-0），`RlsDependencyProbe.EXPECTED` 30→24→…→0；④ 出口门禁 `RagShadowExitGateEvaluator`：`rlsDependent=0` + mismatch=0 + taint=0 连续 14 天 + TL/QA 签核。
+- **三级验收门禁**：
+  - 静态/单元：`RetrievalPredicateCoverageIT` 扫描断言每条涉 chunk SELECT 含 `scopeTranslator.render()` 产物；人为删 `lexicalSearch` 一处 translator 调用 → 转红。
+  - API（真实 PG，app_agent NOBYPASSRLS）：双租户 IT 断言两侧 chunk 集合 ⊆ 本租户∪哨兵、全局桶对每租户可见（`RetrievalRepositoryIT.globalChainIsRecalledByEveryTenant` 保留）。
+  - 角色×任务：用 `app_agent`（NOBYPASSRLS，铁律 1）跨租户检索断言 0 行；运维角色验证观察期报表达标后才放行 M4。
+  - **撤掉修复点会红吗**：把 `RagSqlScopeTranslator.render` 的 `TenantWithGlobal` 分支改成 `TenantOnly` → "全局桶每租户可见"IT 转红；删谓词 → 静态扫描转红。✅ 有效。
+- **回滚策略**：观察期出口门禁是"只放行 SQL 脚本 COMMIT"的开关，`eligible=false` 即回到 RLS 在场（双写）态；**严禁反序**（先删 set_config 后跑退役 SQL 会 Sev-0）。9 张无 RLS 表是影子期基线，**勿直接补 RLS**（会破坏 M4 应用层谓词迁移路径，P0 已纠偏）。
+
+#### R-5 摄取幂等与增量更新（文档版本 / chunk 重建 / embedding 重算）
+
+- **具体改动片段**：① `rag_document` 增列 `revision_no`/`superseded_by` + 部分唯一索引（`19_v1_0_6_...sql`，ADD COLUMN 与建索引同事务，铁律 11）；② `saveChunkAndEmbedding` 改 `INSERT...ON CONFLICT(chunk_id) DO UPDATE`（需 UPDATE 授权 + SchemaDriftIT，铁律 7）；③ `rag_chunk_embedding` 增 `content_hash` 列作为"该向量对应文本指纹"，`content_hash` 不匹配即需重算（NULL 视为需重算）；④ 新增"发布修订版"单事务操作（写新版→标旧 `superseded_by`→旧 chunk `retrievable=false` 软失效→旧代际 RETIRED，**无物理删除**，铁律 8）；⑤ 新增单载体 reingest 端点。
+- **三级验收门禁**：
+  - 单元：`ChunkIdentityTest`（同 document 同 charStart→chunk_id 相同；content_hash 同→不重算，异→重算）。
+  - 链路（真实 PG）：`IngestIdempotencyIT` 同一 document 连续两次 ingest → `rag_chunk`/`rag_chunk_embedding` 行数不变、两表 content_hash 相等；`DocumentRevisionIT` 发布修订后旧 chunk 全 `retrievable=false` 且旧数据仍在库。
+  - 角色×任务：运维角色重传教材修订版，验证学生检索不到旧版答案、新版正常召回。
+  - **撤掉修复点会红吗**：upsert 改回纯 INSERT → 第二次摄取唯一约束冲突（红才对）；修订切换第 3 步人为失败 → 断言前 2 步也回滚（无"新版生效旧版仍可检索"中间态）。✅ 有效。
+- **回滚策略**：新增列/索引可 `DROP`（数据保留）；upsert 回退到纯 INSERT 会失去幂等（仅紧急止损）；软失效的旧 chunk 可恢复 `retrievable=true`。**RAG-3 worker 摄取链缺专用 DB IT** 需在本项同期补齐（真实缺口）。
+
+#### R-6 影子模式扩展为"检索策略双跑 + 自动切流报表"
+
+- **具体改动片段**：① `RetrievalOrchestrator.retrieve()` 增双跑分支（`rag.shadow.strategy.enabled=true` 且采样命中时同时跑当前/对照策略）；② 基线**快照法**（存结果快照，避免保留旧代码）新增 `rag_retrieval_shadow` 表——⚠️ **必须挂 RLS**：`ENABLE+FORCE ROW LEVEL SECURITY` + 读策略 `tenant_id=ANY(ARRAY[rag_current_tenant(),rag_global_tenant_id()])`（铁律 1/7），同步 `03_rag_roles.sql`；③ `RagStrategyComparator` 算 Jaccard@K/排名位移/分数分布/漏斗差异/成本差异；④ 报表端点按配置阈值判定 `KEEP_CURRENT/CUT_OVER/NEEDS_REVIEW`；⑤ 与隔离影子用不同 resourceType 命名空间（`retrieval` vs `retrieval.strategy`），切流走平台既有灰度（不新增切流原语）。
+- **三级验收门禁**：
+  - 单元：`RagStrategyComparatorTest`（Jaccard/位移计算正确；样本不足→`NEEDS_REVIEW` 非 `CUT_OVER`）。
+  - 链路（真实 PG）：`RagStrategyShadowIT` 开启后影子表行数=采样命中数（非全部）；报表三项有值；**默认关闭时表行数恒为 0**（零行为变更）。
+  - 角色×任务：用 `app_agent`（NOBYPASSRLS）+ 另一租户身份查 `rag_retrieval_shadow` ⇒ 0 行（铁律 1，BYPASSRLS 是假绿）。
+  - **撤掉修复点会红吗**：判定阈值改"恒 CUT_OVER" → `NEEDS_REVIEW` 用例转红；采样率改 0 → 影子表 0 行但主检索仍成功；`block-on-violation=true` 触发违例 → 主检索不受影响（影子只观测不阻断）。✅ 有效。
+- **回滚策略**：`rag.shadow.strategy.enabled=false` 一键关闭（默认即关）；影子表保留（无害）；切流仍走平台灰度 flag。**风险**：新表漏挂 RLS 会成新越权面——必须 `app_agent` 验隔离；双跑成本翻倍用采样缓解。
+
+#### R-7 检索审计补齐取证字段 + 评测集反哺
+
+- **具体改动片段**：① `JdbcTenantScopedRetrieval.java:63-65` 的 INSERT 补 `chunk_id`（top-1）与 `request_digest`（`SHA-256(tenantId+query+mode+edition坐标)` 十六进制，只存摘要不存原文，铁律 8）；本次核实实际已写 `source_id`（NULL），补列时一并纳入；② 新增 `rag_retrieval_hit` 明细表（retrieval_id/chunk_id/rank/score/channel）关联 audit_id；③ `scripts/rag-eval-harvest.sh` 从审计导出 query+命中，脱敏（JDK 引擎 PII 正则，铁律 21）后入标注队列反哺 R-3 评测集；④ 清理走受控通道（禁物理删除，铁律 8）。
+- **三级验收门禁**：
+  - 单元：`RequestDigestTest`（同 query 两次 digest 相同、改一字则变、长度恒 64、**不含原文任意 4 字连续片段**）。
+  - 链路（真实 PG）：`RetrievalAuditIT` 检索后断言该行 `action=RETRIEVE`、`chunk_id` 非空、`request_digest` 长 64；审计 INSERT 违反约束 → 整次检索回滚（承 D-8）。
+  - 角色×任务：合规角色查"谁在何时检索了哪段"可取证；导出文件塞入手机号/身份证号 → 断言不含这些串。
+  - **撤掉修复点会红吗**：digest 改"存原文" → "不含原文子串"断言转红；删 `chunk_id` 写入 → 非空率断言转红。✅ 有效。
+- **回滚策略**：停止写新增列/明细表即可（旧审计行不受影响）；明细表可保留（更多数据无害）；harvest 脚本独立，停跑不影响生产。
+
+> **7.11 与附录 E 的关系**：本节给出每项"改哪一行/怎么验/怎么退"的**速用版**；附录 E 按"前置条件 / 改动清单（含片段）/ 三级门禁 / 反向验证 / 回滚 / 铁律对齐"六段式给出**排期版**。两者口径一致，均以本节红线复述与铁律为前提。R-1 硬降维旧结论、9 张无 RLS 表、影子差分流量三处纠偏必须在实施前复述，避免沿用旧判断。
+
 ---
 
 ## 八、其他有价值的横向对比（避免维度内自闭）
@@ -1297,6 +1726,40 @@ Jina AI 的 late chunking（arXiv:2409.04701）证明：普通切分后独立编
 
 **这张表是本报告全部设计判断的隐含依据**，也解释了为什么本平台在"宁可漏召"的方向上如此激进——不是因为漏召不重要，而是因为在教辅场景里它的代价低一个数量级。**但前提是漏召率可控，而漏召率目前不可测（R-3），这是本维度最需要优先补上的证据。**
 
+### 8.5 深度补充：与相邻维度的精确交界（改一处必须联动一处，≥2 条）
+
+> 8.1 已列 RAG 与维度 2/6/7/10/12 的五条耦合。本节进一步把最容易被误判责任的两处交界画清：**维度 8 ↔ 维度 2（RLS 退役）** 与 **维度 8 ↔ 维度 6/10（评测与可观测数据的归属）**，避免改动时重复实现或责任真空。两条都带反向验证与纠偏标注。
+
+#### 8.5.1 ↔ 维度 2（多租户隔离）：RAG 侧谓词显式化是"应用谓词层"，与 RLS 退役是同一件事的两面
+
+| 关注点 | 维度 8（RAG 本维度）负责 | 维度 2（多租户隔离）负责 | 交界锚点 |
+|---|---|---|---|
+| 检索谓词单一出口 | `RagSqlScopeTranslator.render()` 渲染 4 作用域谓词，dense/lexical 两侧同源 | 定义 `rlsDependent → 0` 的迁移出口与门禁口径 | `RagSqlScopeTranslator.java:95-123` |
+| 谓词 vs RLS 对偶证据 | 影子比对"显式谓词结果 vs RLS 在场结果" | 提供 `ShadowExitGateEvaluator` 的观察期框架 | `RagShadowReporter.java` / `RlsDependencyProbe.java:47-52` |
+| 全局桶隔离 | 哨兵租户 + `rag_current_tenant()` 遇哨兵 RAISE 42501 | 复用"租户由会话/谓词强制"的统一纪律 | `RagScope.java:10-46` |
+| 退役顺序 | R1 6 处 set_config 移除（代码侧） | 定义"先 SQL 后代码"硬顺序（反序 Sev-0） | `14_...sql:79-81` |
+
+- **交界风险**：M3 已把检索读面显式谓词补齐（`JdbcRetrievalRepository` 6 处 SELECT 全经 translator，M1/M3 收口、66 用例 DB IT 全绿），但 **M4 四批 SQL ⛔DRAFT 未应用、`rlsDependent` 仍 30**。若维度 2 单方面推进"删 RLS"而不等 RAG 侧观察期数据，或 RAG 侧单方面删 set_config 而 RLS 仍在场，都会踩铁律 1（FORCE RLS 静默 0 行）。**联动门禁**：`rlsDependent=0` + mismatch=0 + taint=0 连续 14 天（维度 2 框架）+ RAG 侧真实流量（当前 M2 差流量），两者同时达标才放行。
+- **反向验证**（铁律 6/17）：把 `RagSqlScopeTranslator.render` 的 `TenantWithGlobal` 改成 `TenantOnly` → 维度 2 的"全局桶每租户可见"IT 必转红；反之维度 2 改 RLS 策略 → RAG 影子 mismatch 必上升。若任一不变红，说明对偶证据是假绿。**纠偏**：9 张无 RLS 表是 `AuthzShadowPolicyDefaults` 登记的影子期基线，**勿直接补 RLS**（P0 已纠偏），补了会同时破坏维度 2 的迁移路径与 RAG 的应用层谓词验证。
+
+#### 8.5.2 ↔ 维度 6/10（上下文与可观测）：检索漏斗与审计取证"归谁产出、归谁消费"
+
+| 数据 | 维度 8（RAG 本维度）产出 | 维度 6/10 消费 | 交界现状 |
+|---|---|---|---|
+| 检索漏斗 `RetrievalFunnel` | 五段计数在 rag 进程内（`RetrievalOrchestrator.java:149`） | 维度 10 想纳入 `agent_trace_metric` | ❌ 7 字段白名单不透出 funnel（盲区 3），调参闭环断裂 |
+| RAG 命中载荷 | `RagHitQuotaPort` 配额裁剪 + `RAG_GUARD.wrapToolResult` | 维度 6 注入上下文 | ⚠️ 走独立 `rag-quota`，不占 `context-token-budget`（架构裂缝，8.1 耦合 2） |
+| 检索审计 `rag_access_audit` | 检索同事务写 4~5 列，`principal_id`=NULL | 维度 10 取证 / 维度 6 评测 | ⚠️ 无 chunk_id/request_digest，无法反哺评测集（R-7） |
+| locator 定位 | `Chunk.Locator`（页码/章节/题号/字符位） | 维度 6 W1 外置块锚点 | ⚠️ 跨进程被压平为字符串，结构信息丢失（8.1 耦合 2） |
+
+- **交界风险**：这类数据的典型陷阱是"两边都以为对方在做"——rag 侧认为"计数够了"，platform 侧认为"rag 会透出"，结果 funnel 谁都拿不到。本平台的 7 字段白名单是**有意的 anti-SSRF/anti-泄露设计**，但副作用是把维度 10 的观测资产也挡在进程外。**正确分工**：RAG 侧负责"产出并落库"取证/指标数据（R-6 影子报表、R-7 审计补列、R-3 评测指标），维度 10 负责"消费并告警"（接入 `agent_trace_metric`/Grafana）；`locator` 结构化的消费方是维度 6（W1 锚点），生产方是维度 8。
+- **反向验证**：删掉 R-7 的 `chunk_id` 写入 → 维度 10 的"谁检索了哪段"取证查询必返回空（变红）；把 funnel 从响应透出但维度 10 未落库 → 报表仍无数据（变红）。**联动门禁**：R-3/R-6/R-7 的产出必须落进维度 10 的指标体系，否则又是"报告在另一个地方"（8.1 耦合 4）；R-2 扩大候选池时须与维度 6 核对 token 预算（RAG 配额 + 历史 + 记忆 ≤ 窗口），否则更多命中会撑爆上下文。
+
+#### 8.5.3 三条交界的统一原则（含 RAG 特有纠偏）
+
+1. **单一出口**：租户谓词只由 `RagSqlScopeTranslator` 产出（维度 8），dense/lexical 同源；维度 2 只定义出口门禁口径，不重复实现谓词。
+2. **单一权威源**：检索质量/取证数据的"产出"在维度 8（R-3/R-6/R-7）、"消费告警"在维度 10，禁止两边各起一套报表或审计表。
+3. **撤点反证 + 纠偏复述**：任一交界锚点改动（translator 分支、`rag_access_audit` 写入、funnel 白名单），必须对相邻维度 IT 做"撤点反证"；实施前复述三处纠偏——**① RRF k=60 与 halfvec(4096) 是刻意取值/取舍非缺陷；② 占位对象是嵌入模型非向量库，向量库集成已闭环；③ 不可达草稿在 agent-infra，不在 rag 生产链**——引用旧结论一律标注"已被复核纠偏"。
+
 ---
 
 ## 九、对产品演进的启发
@@ -1374,6 +1837,28 @@ Jina AI 的 late chunking（arXiv:2409.04701）证明：普通切分后独立编
 ### 9.4 一句话结论
 
 **本平台的 RAG 是「数据层强隔离 + 教辅硬约束」的 L3 级内建闭环——治理轴下沉、泄题闸门在 SQL、哨兵桶与代际蓝绿是竞品全都没有的差异化能力；但它的检索质量一侧目前是「半成品」：向量打分本身已用 pgvector 闭环，真正占位的是嵌入模型，混合检索因门禁量纲问题退化为「词法只排序不召回」，rerank / query 改写 / Recall@K 评测三项标准件全部缺失，而唯一的影子机制比对的是隔离谓词而非检索策略——因此本维度的头号任务不是加功能，而是先把「可度量」补上（R-3 评测门禁）与把「口径污染」清掉（R-0 草稿删除），再谈重排与切流。**
+
+### 9.5 深度补充：产品演进的三条"承诺—证据"链（避免能力宣称为空头支票）
+
+> 9.1 列了用户可感知的产品能力。本节把其中最容易被"看起来有"误导的三条，逐条标出**产品承诺 → 现有证据 → 缺失证据 → 补齐改进项**，供产品决策时判断"能不能对客户说"。
+
+| 产品承诺 | 现有证据（源码锚点） | 缺失证据（不可对客户声称） | 补齐项 |
+|---|---|---|---|
+| "依据可点开、可追溯到页码" | `Chunk.Locator` 五字段 + `rag_answer_citation` 落库；7 字段白名单透出 `locator` 字符串 | `locator` 跨进程被压平为字符串，章节/题号结构丢失；未引用命中无记录 | R-7（审计取证）+ 8.1 耦合 2（结构化透传） |
+| "只用我这一册、不泄题" | `EditionScope.admits()`（:100）+ `RetrievalPolicy.allowsRole()`（:105）+ 五轴坐标；13 个 IT 覆盖 | platform 侧 `HttpRagRetrievalGateway.buildRequest` 传 `CROSS_EDITION` 中性占位坐标 / `knowledgePointId=null` → 真实场景需下发真实坐标 | 调用侧（维度 6）下发真实坐标，非 RAG 后端缺陷 |
+| "答案有多准、能持续变准" | `score` 可见；0.38 有 2026-10-28 标定记录；影子 infra 已通电 | 无 Recall@K/MRR 门禁（R-3 全未实现）、27 条样本标定、漏斗跨进程丢失、影子差真实流量 | R-3 + R-6 + R-7（可度量三件套） |
+
+> **产品结论**：前两条承诺的**机制已闭环**（数据层硬过滤 + 可追溯落库），可以对外讲；第三条"持续变准"目前是**空头支票**——缺的不是检索算法，而是评测与观测资产。这正是 9.2 路线图把 R-3 排在中期最前、把 R-0 排在近期最前的原因：**先让证据配得上承诺，再扩大能力边界**。
+
+### 9.6 深度补充：演进的三条红线与一个"反事实"提醒（承接 9.3 风险清单）
+
+> 9.3 列了 RK-1~RK-15。本节收敛为**三条不可协商红线**与一条最容易被忽视的反事实，供排期与 code review 直接引用。
+
+1. **红线一：机制取值不动**。RRF k=60（业界默认，2.4(11)）、0.38 阈值（标定值，RAG-D08 §4）、六轴准入谓词（D-7）、排序/门禁分分离（DD-5）——四者都由源码+测试（`RetrievalRepositoryIT`）或官方出处钉死，改动必须走"评测集重标 + 反向验证"，**严禁拍脑袋**（MEMORY 红线复述）。
+2. **红线二：不碰刻意取舍**。halfvec(4096) + 无 ANN 索引是 DDL 注释 + rag.env + VectorColumnTest 共同钉住的设计取舍（2.4(13)，pgvector 官方背书）；规模化走 MRL / 二进制量化，**禁止硬降维**（会与 qwen3-embedding:8b 输出冲突、使已入库向量失效）。9 张无 RLS 表是影子期基线，**勿直接补 RLS**。
+3. **红线三：只在可达链路上施力**。生产检索链在 rag 模块 `JdbcRetrievalRepository`（链 A，4.5.1）；`agent-infra` 草稿运行期不可达（链 C，4.5.3）——在其上"优化"是浪费，其自述的 0.75/hybrid 是口径污染（R-0）。**占位对象是嵌入模型，不是向量库**。
+
+> **反事实提醒**：若 R-1 照旧稿"硬降维建 HNSW"，或 R-4 照旧节奏"先删 set_config 后退役 RLS"，或 R-0 只在草稿上打补丁——三种反事实分别会导致"向量失效 + 检索恒低分"、"Sev-0 租户 0 行可见"、"口径污染继续扩散"。**这三处旧结论均已被 P0 复核纠偏**，引用时必须标注，不得再按旧判断改代码（见顶部提示块与 P0 验收报告 §3）。
 
 ---
 
@@ -1459,6 +1944,446 @@ Jina AI 的 late chunking（arXiv:2409.04701）证明：普通切分后独立编
 | 学习型稀疏检索 | Learned Sparse Retrieval (SPLADE) | 未使用（无词典 bigram + ts_rank） |
 | 哨兵桶 / 零谓词守卫 | Sentinel Bucket / Zero-Predicate Guard | 全局公共语料桶 / R-4（拟新增） |
 
+### 附录 D：源码证据索引（路径 + 行号 + 调用链）
+
+> 把正文散落的源码结论收敛为可逐条复核的索引。列：# / 源码锚点 / 结论 / 运行期可达性 / 复核方式。
+> **行号口径**：全部为本次（P0 修复后，2026-11-15）实际 `Read`/`Grep` 核实的当前值。路径缩写见 4.3：`R-PERS`=`rag/rag-persistence/.../persistence`、`R-APP`=`rag/rag-application/.../application`、`R-INFRA`=`rag/rag-infrastructure/.../infrastructure`、`R-CORE`=`rag/rag-core/.../core`。原报告的行号为架构快照，本次核实仍成立者不另标；漂移者以本表为准并注明。
+
+| # | 源码锚点 | 结论 | 运行期可达性 | 复核方式 |
+|---|---|---|---|---|
+| D-01 | `R-PERS/JdbcRetrievalRepository.java:107` | `RRF_K=60.0`（业界默认，2.4(11)） | 真实执行（每次检索融合） | Grep `RRF_K` 命中 :107 |
+| D-02 | 同上 `:110` / `:477` / `:534` | `CANDIDATE_MULTIPLIER=3`；dense/lexical 候选=topK×3 | 真实执行 | Grep `CANDIDATE_MULTIPLIER` |
+| D-03 | 同上 `:172-180` | `ADMISSIBLE_TEMPLATE` 六轴准入单一真源 | 真实执行（6 处 SELECT 共用） | Read :120-180 |
+| D-04 | 同上 `:226,242-250,254,266` | 构造注入 scopeTranslator；装配期维度校验；构造期展开权威等级 | 真实装配（rag-bootstrap 配置） | Grep `scopeTranslator`/`IllegalStateException` |
+| D-05 | 同上 `:489,492,498-504,515` | denseSearch：`scopeTranslator.render` + pgvector `1-(embedding<=>?)` + ACTIVE 代际子查询 | 真实执行（DB SQL） | Read :477-524 |
+| D-06 | 同上 `:535,538` | lexicalSearch：`ts_rank(to_tsvector('simple',text_jieba))` + 同一 translator | 真实执行（DB SQL） | Read :526-557 |
+| D-07 | 同上 `:590` | RRF 融合 `1.0/(RRF_K+rank+1)`；相关性分取通道最高值 | 真实执行 | Read :585-599 |
+| D-08 | `R-APP/retrieval/RetrievalOrchestrator.java:100/:105/:129/:137/:149/:219` | 版本过滤/角色过滤/排序(fusionScore)/门禁(score≥minScore)/漏斗/版本惩罚 | 真实装配 + 执行 | Grep `admits|allowsRole|fusionScore|minScore|Funnel` |
+| D-09 | `R-PERS/JdbcTenantScopedRetrieval.java:46/:47/:63-65` | `TransactionTemplate` 单事务；`set_config` 事务内绑定；同事务审计 INSERT | 真实执行（写 DB） | Read :42-69；本次核实写 5 列含 source_id |
+| D-10 | `rag-bootstrap/application.yml:52/:103/:109/:133/:137` | `RAG_SHADOW_ENABLED`、`dimension:1024` 默认、`vector-type:vector` 默认、`min-score:0.38`、`min-trust-tier:OFFICIAL_TUTORIAL` | 真实配置（启动读取） | Grep 配置项 |
+| D-11 | `rag.env:44-46` | `4096/halfvec` 显式配置（与 DDL 终态一致） | 真实配置（env 覆盖） | sed -n '40,50p' rag.env |
+| D-12 | `deploy/sql/rag/01_rag_ddl.sql:384-393/:960-966/:973` | `embedding halfvec(4096)`；HNSW 刻意不存在（≤4000 维上限）；GIN jieba 索引 | 真实 DDL（结构定义） | sed -n '955,975p' + Grep |
+| D-13 | `R-PERS/VectorColumn.java:48-57/:65-76` + `VectorColumnTest.java` | ANN 可行性：vector≤2000/halfvec≤4000；`halfvec(4096).indexable()==false` | 真实断言（测试守护） | Read VectorColumnTest 全文 |
+| D-14 | `R-INFRA/embedding/LocalDeterministicEmbeddingPort.java:27-96` + `EmbeddingPorts.java:41-64` | 占位嵌入（1024 维 bigram 哈希）；装配选择 + fail-closed | 真实装配（默认占位路径） | Grep `DIM`/`create` |
+| D-15 | `R-INFRA/text/ChineseTokenizer.java:25-124` | 中文 unigram+bigram 分词已实现（RAG-D05 L-3"未实现"是文档漂移） | 真实执行（索引+查询共用） | find + Grep 调用 :538 |
+| D-16 | `R-INFRA/parsing/DoclingDocumentParserPort.java` 等 | Docling/中文分词已实现（生产解析端口） | 真实装配（生产解析） | find `*Docling*` 类与测试 |
+| D-17 | `platform/agent-infra/.../retrieval/engine/RetrievalService.java:18/:30/:46/:65` | 0.75 阈值 / `vector*0.5+tfidf*0.5` 占位打分 | **运行期不可达**（无实例化点 + 模块无依赖） | Grep `new RetrievalService` 仅测试；pom 依赖 |
+| D-18 | `platform/agent-infra/pom.xml:13` + `platform/pom.xml:66/:125` | agent-infra 模块仅在自身 pom + 父 dependencyManagement，无依赖方 | 静态存在（不可达） | Grep `<artifactId>agent-infra</artifactId>` |
+| D-19 | `R-PERS/shadow/RagShadow.java:15-79` + `RagShadowReporter.java` + `RagShadowConfiguration.java` | 影子门面 no-op 语义 + 条件装配 + 阶段（只记/抛） | infra 可达（env 已开），数据未达（差真实流量） | Grep 装配 + 4.5.4 链 D |
+| D-20 | `R-CORE/scope/RlsDependencyProbe.java:47-52` | `EXPECTED`=30（R1=6/R2=6/R3=16/CENTRAL=2） | 静态基线（测试守护） | Read :47-52 + MEMORY |
+| D-21 | `deploy/sql/rag/14~17_*.sql` | 四批 RLS 退役 SQL ⛔DRAFT 未应用 | 静态（未执行） | 文件头标注 + MEMORY |
+| D-22 | `R-CORE/scope/RagScope.java:10-46` / `RagScopeFilter.java` | 哨兵 nil UUID；复合外键三处 NULL 陷阱；哨兵拒绝 | 真实执行（构造器拒绝 + DB RAISE 42501） | Read :10-46 |
+| D-23 | `rag/rag-persistence/src/test/.../RetrievalRepositoryIT.java:219-420` | 13 个 IT（泄题/版本/跨租户/分数语义/撤回/版权/全局桶） | 测试守护（真实 PG） | Read 测试类 |
+| D-24 | `rag/docs/RAG-D05_检索策略与召回质量控制.md:259` | L-3"中文分词未实现"——文档漂移（已实现，见 D-15） | 文档（非运行期） | sed -n '248,264p' |
+| D-25 | `docs/能力维度实现方式梳理报告.md:123/:127` | 三处不一致之一：把不可达草稿的"占位打分"当生产口径 | 文档（口径污染，R-0 修） | 诚实边界声明五 |
+
+> **可达性汇总**：25 个锚点中，"真实装配/写入/执行/守护"19 个，静态基线/配置 4 个（D-12 DDL、D-20/21 RLS 基线、D-25 文档），**运行期不可达 1 个（D-17 草稿）**、**infra 可达但数据未达 1 个（D-19 影子）**。没有发现"生产检索链有类无注入点"的残留——生产主链（D-01~D-09）全部真实可达；最需警惕的仍是 D-17 不可达草稿造成的口径污染与 D-19 影子缺真实流量。
+
+### 附录 E：落地实施方案（改动清单 + 验收门禁 + 回滚）
+
+> 每条对应正文第七章的一个改进项 R-0~R-7。三级门禁口径见 7.11；本附录以"前置条件 / 改动清单（含片段）/ 三级验收门禁 / 反向验证 / 回滚策略 / 铁律对齐"六段式收敛，供实施排期直接取用。所有项均未落地（属规划）。**实施前一律复述 RAG 五条红线**（7.11 开头）：不动 0.38/RRF k=60/六轴谓词/门禁分分离；不在 agent-infra 草稿施力；不夹带改 halfvec(4096)/HNSW。
+
+#### E-1（对应 R-0）清除不可达草稿检索引擎
+- **前置条件**：确认 `new RetrievalService` 全仓仅测试引用、`agent-infra` 无依赖方（D-17/D-18 已核实）；确认无外部脚本调 `/api/v3/retrieval`（当前本就 404）。
+- **改动清单**：① 删 `platform/agent-infra/.../retrieval/engine/` 4 main + 2 test 类；② `platform/pom.xml:66` 移除 `<module>agent-infra</module>`、`:125` 移除 dependencyManagement 条目；③ 删 `agent-infra/pom.xml`；④ 修正 `docs/能力维度实现方式梳理报告.md:123` 为真实口径（0.38/RRF k=60/占位=嵌入模型）；⑤ 新增 `RetrievalAuthoritySourceOfTruthTest`。
+- **三级验收门禁**：单元（全仓 main 无 `VECTOR_SIMILARITY_THRESHOLD`/`TTL_MAX_AGE_MINUTES`、pom 无 agent-infra 模块）/ API（启动后 `GET /api/v3/retrieval/workspace`=404 非 500）/ 角色×任务（真实 Agent 对话 RAG 命中仍经 rag 服务返回、有 ragHits 计数）。
+- **反向验证**：把 agent-infra 加回并恢复含阈值常量的类 → 单元扫描转红；端点意外仍在 → 404 断言转红。
+- **回滚策略**：恢复目录与 pom 条目（草稿无生产调用方，零风险）；文档保持修正口径；同步模块数 14→13 的守卫。
+- **铁律对齐**：铁律 6（反向验证）、铁律 14（跨进程契约按真实校验取值——`/api/v3/retrieval` 本就不存在）。
+
+#### E-2（对应 R-1）向量打分闭环（剔除硬降维旧结论）
+- **前置条件**：确认 `ag.embedding` 实际列 `halfvec(4096)`（DDL+rag.env+VectorColumnTest 三方一致）；确认 `RagStartupSelfCheck` 位置（`R-PERS/.../bootstrap/RagStartupSelfCheck.java`，P0 已删死方法）；确认 `EmbeddingPorts.create` 的 fail-closed 闸门。
+- **改动清单**：① `RagStartupSelfCheck` 加列侧校验（`pg_attribute`/`format_type` 查实际类型维度，与 VectorColumn 比对，不符拒绝启动）；② `application.yml:103/109` 默认与 worker 侧同源对齐到 4096/halfvec 口径（不改 DDL）；③ 配 `RAG_EMBEDDING_BASE_URL`+`MODEL` 走真实 `OpenAiCompatibleEmbeddingPort`；④ 新增 `RealEmbeddingRetrievalIT`。**⛔ 不做"降维到 4000 建 HNSW"（已被复核纠偏）**。
+- **三级验收门禁**：单元（列 mock `vector(1024)`、配置 `halfvec(4096)`→拒绝启动）/ API（真实模型 `scoreStdDev>0.05`、0.38 生效、`embedding_model` 两表一致）/ 角色×任务（真实教材检索 + 新旧代际零停机切换）。
+- **反向验证**：列校验短路 return true → 单测转红；改回占位嵌入 → scoreStdDev 断言转红。
+- **回滚策略**：base-url/model 置空回占位（fail-closed 不静默）；列校验保留；**不改 DDL/维度**；规模化 ANN 另走 MRL/二进制量化代际迁移。
+- **铁律对齐**：铁律 8（fail-closed）、铁律 17（静态守卫≠运行时，配真实模型 IT）；规模化路径遵 pgvector 官方（2.4(13)）。
+
+#### E-3（对应 R-2）混合检索三段式
+- **前置条件**：**R-3 评测集是硬前置**（Qdrant 官方"无评测集别手调权重"）；确认 `candidate-pool-size` 配置项与 20s 读超时预算；确认 rerank 模型（境内 `bge-reranker-v2-m3` 优先）。
+- **改动清单**：① `JdbcRetrievalRepository` 加可配候选池（默认 100）+ 词法通道内归一（`ts_rank/max_ts_rank`，`?::real` 绑定，铁律 2）；② 新增 `RerankPort`+实现，`rag.rerank.enabled=false` 默认关，插在④过滤后⑥排序前，rerank 分只排序不入门禁；③ 可选 query 改写/HyDE（默认关，与原文 RRF 合并）。
+- **三级验收门禁**：单元（`RerankPortTest` 降序+topN；`ChannelScoreNormalizerTest` 归一前后 fusionScore 逐位相同）/ API（`HybridRetrievalIT` "仅词法命中"门禁后有命中、rerank 关时逐位一致、模型不可用降级但成功）/ 角色×任务（近邻负例 0.525 被压、正例 Recall@10 不降）。
+- **反向验证**：归一短路→"仅词法命中"转红；过滤移到 rerank 后→"答案不进 rerank 输入"转红；rerank 分接门禁→"门禁恒不通过"转红（重演 2026-10-23）。
+- **回滚策略**：两个 enabled=false 一键回基线；归一是行为改变，回滚需恢复 relevance 并重标 0.38；单租户灰度。
+- **铁律对齐**：铁律 2（`?::real` 绑定）、铁律 6/17（顺序纪律反向验证）、铁律 8（rerank 不可用降级不 fail-closed）。
+
+#### E-4（对应 R-3）检索质量评测体系
+- **前置条件**：确认 `ScoredChunk.channel()` 四值（DENSE_VECTOR/LEXICAL/KNOWLEDGE_POINT/PREREQUISITE_EXPANSION）可分；确认 `rag/pom.xml` 可加 `rag-evaluation` 模块；人工标注资源（≥350 条）到位。
+- **改动清单**：① 新增 `rag/rag-evaluation` 模块；② `RetrievalMetricsCalculator`（Recall@K/MRR/NDCG + 按 channel 召回 + 漏斗 + 误拒/漏拒）；③ 评测集 JSONL（≥200 正/≥100 负/≥50 应拒答）；④ CI 四级门禁 G/R/O/M；⑤ 可选 `RagAsFaithfulnessEvaluator`（judge 不同族+钉版本+对调取均值）。
+- **三级验收门禁**：单元（手算样例 Recall@2=1.0/MRR@2=0.5）/ 链路（`RetrievalEvaluationIT` 每指标含阈值+实测两列）/ 角色×任务（教师标注、运维看 G/R 类阻断 PR）。
+- **反向验证**：阈值改 0.99→RC-07 转红；门禁改 fusionScore→RC-09 转红；清空正例 relevantChunkIds→Recall 降且红灯。
+- **回滚策略**：`verify` 阶段摘掉评测测试即停门禁（评测集与实现保留为资产）；无生产代码/DDL 改动。
+- **铁律对齐**：铁律 6（三级门禁+反证）、铁律 11（LLM-as-judge 偏差按 Zheng et al. 处理）。
+
+#### E-5（对应 R-4）多租户谓词统一收口
+- **前置条件**：确认 M3 显式谓词已就位（M1/M3 收口 66 用例 DB IT 全绿）；确认 M2 影子 infra 已开但差真实流量；确认 14~17 SQL 仍 DRAFT。
+- **改动清单**：① `RetrievalPredicateCoverageIT`（元数据扫描 + 双租户 IT）；② R1 6 处 set_config 按 `14_...sql:79-81` 移除——**严格先 SQL 后代码**；③ `RlsDependencyProbe.EXPECTED` 30→24→…→0，`RlsDependencyMetricTest` 同步；④ `RagShadowExitGateEvaluator`（14 天 + TL/QA 签核）。
+- **三级验收门禁**：静态/单元（涉 chunk SELECT 必含 translator 产物，删一处→转红）/ API（app_agent NOBYPASSRLS 双租户 IT，两侧 chunk ⊆ 本租户∪哨兵）/ 角色×任务（跨租户 0 行，观察期达标才放行 M4）。
+- **反向验证**：`TenantWithGlobal` 改 `TenantOnly`→"全局桶每租户可见"转红；出口评估器注入空信号→`eligible-for-M4=false`。
+- **回滚策略**：出口门禁 `eligible=false` 即回 RLS 双写态；**严禁反序**（先删 set_config 后退役 SQL=Sev-0）；9 张无 RLS 表是影子期基线勿补 RLS。
+- **铁律对齐**：铁律 1（GUC 事务内、app_agent 验隔离）、铁律 11（事务内 SQL 失败禁 fail-soft）、铁律 17（静态扫描配真实 IT）。
+
+#### E-6（对应 R-5）摄取幂等与增量更新
+- **前置条件**：确认 `IngestDedupRules` 活跃谓词与部分唯一索引 `rag_document_tenant_content_hash_uq` 同源；确认 P0 已删除的 `RagStartupSelfCheck` 死方法不影响；确认 **RAG-3 worker 摄取链无专用 DB IT** 需同期补。
+- **改动清单**：① `19_v1_0_6_...sql` 加 `revision_no`/`superseded_by` + 部分唯一索引（ADD COLUMN 与建索引同事务）；② `saveChunkAndEmbedding` 改 `ON CONFLICT(chunk_id) DO UPDATE`（UPDATE 授权+SchemaDriftIT）；③ `rag_chunk_embedding` 加 `content_hash`（NULL 视为需重算）；④ "发布修订版"单事务（软失效旧 chunk，无物理删除）；⑤ 单载体 reingest 端点。
+- **三级验收门禁**：单元（ChunkIdentityTest）/ 链路（IngestIdempotencyIT 双次行数不变；DocumentRevisionIT 旧 chunk retrievable=false 且数据仍在）/ 角色×任务（重传修订版，学生检索不到旧版答案）。
+- **反向验证**：upsert 改回纯 INSERT→唯一约束冲突红；修订切换第 3 步失败→前 2 步回滚断言红。
+- **回滚策略**：DROP 新增列/索引（数据保留）；upsert 回退失去幂等（仅止损）；软失效可恢复 `retrievable=true`。
+- **铁律对齐**：铁律 7（UPDATE 授权+SchemaDriftIT）、铁律 8（无物理删除）、铁律 11（同事务）。
+
+#### E-7（对应 R-6）策略影子双跑 + 切流报表
+- **前置条件**：确认隔离影子命名空间为 `retrieval`；确认平台既有灰度 flag（`deployment.pilot.max-tenants`，维度 12）可复用；确认新表 RLS 模板（`01_rag_ddl.sql` 策略）。
+- **改动清单**：① `RetrievalOrchestrator` 双跑分支（采样命中时跑当前/对照策略）；② `rag_retrieval_shadow` 表（**ENABLE+FORCE RLS + 读策略**，同步 `03_rag_roles.sql`）；③ `RagStrategyComparator`（Jaccard/位移/分布/漏斗/成本）；④ 报表端点 + 阈值判定；⑤ 命名空间 `retrieval.strategy` 隔离。
+- **三级验收门禁**：单元（Jaccard 计算正确、样本不足→NEEDS_REVIEW）/ 链路（采样命中数=表行数、默认关闭表恒 0 行）/ 角色×任务（app_agent 跨租户查影子表=0 行）。
+- **反向验证**：阈值恒 CUT_OVER→NEEDS_REVIEW 转红；采样率 0→表 0 行但主检索成功；block 模式违例→主检索不受影响。
+- **回滚策略**：`rag.shadow.strategy.enabled=false` 一键关（默认关）；影子表保留；切流走平台灰度不新增原语。
+- **铁律对齐**：铁律 1（新表挂 FORCE RLS + NOBYPASSRLS 验隔离）、铁律 7（同步角色授权）、铁律 6（采样只观测不阻断）。
+
+#### E-8（对应 R-7）检索审计取证 + 评测反哺
+- **前置条件**：确认 `rag_access_audit` schema 已预留 `chunk_id`/`source_id`/`request_digest`（`01_rag_ddl.sql:281-292`）；确认实际写入为 5 列（D-09）；确认 PII 正则用 JDK 引擎（铁律 21）。
+- **改动清单**：① `JdbcTenantScopedRetrieval.java:63-65` INSERT 补 `chunk_id`(top-1)+`request_digest`(SHA-256 十六进制，只摘要不原文)；② 新增 `rag_retrieval_hit` 明细表（关联 audit_id）；③ `scripts/rag-eval-harvest.sh` 脱敏导出反哺 R-3；④ 清理走受控通道（禁物理删除）。
+- **三级验收门禁**：单元（RequestDigestTest：同 query 同 digest、改字变、长 64、不含原文 4 字连续片段）/ 链路（RetrievalAuditIT：action=RETRIEVE、chunk_id 非空、digest 长 64；审计失败整次回滚）/ 角色×任务（合规取证可查；导出无 PII）。
+- **反向验证**：digest 改存原文→"不含原文子串"转红；删 chunk_id 写入→非空率转红； violation 约束→检索回滚断言红。
+- **回滚策略**：停写新增列/明细表即可；harvest 脚本独立停跑不影响生产。
+- **铁律对齐**：铁律 2（无 RETURNING 用 update）、铁律 8（只存摘要、无物理删除）、铁律 21（PII 正则留 JDK 引擎）。
+
+> **排期总原则**：E-1（口径止血）+ E-2 列侧校验 + E-5 谓词守卫先行（近期）；E-4 评测集 + E-3 三段式 + E-7 策略影子同批（中期，**E-4 是 E-3 硬前置**）；E-2 真实嵌入/ANN + E-6 摄取幂等 + E-8 审计反哺跟进；规模化 ANN（MRL/量化）属远期。任何一项实施前须复述 7.11 五条红线与三处纠偏（RRF/维度/草稿），引用旧结论标注"已被复核纠偏"。
+
+### 附录 F：竞品实现扩充（官方文档锚点）
+
+> 本次全部经 WebFetch 实际访问、内容支撑陈述。原报告附录 B 已列 OpenAI/LangChain/ADK/AutoGen/CrewAI/Agno + 向量库 + 理论文献；本表补 3.8 新增的 6 个竞品/参照 + 复核其中理论锚点，并明确"官方未明示/未能核实"处。
+
+| 竞品 | 机制 | 关键取舍 | 对本维度的启发 | 官方来源（本次核实） |
+|---|---|---|---|---|
+| Elasticsearch（新增） | `rrf` retriever 组合 `standard`(BM25) + `knn`(向量)；`rank_constant` 即 k，默认 60；`rank_window_size` 控制参与融合的 top 窗口 | 换零标定融合 + 索引级性能，代价是 RRF 丢分差、无业务治理/租户语义 | 坐实本平台 `RRF_K=60`（`JdbcRetrievalRepository.java:107`）是业界默认；`rank_window_size` ↔ 本平台 `topK×3` 候选窗口 | https://www.elastic.co/guide/en/elasticsearch/reference/current/rrf.html |
+| Qdrant（新增） | `prefetch` 多路（dense/sparse/BM25）融合；`rrf`+`dbsf` 双算法；加权 RRF `weights`；DBSF 通道内归一 | 换融合灵活性与可调权重，代价是 DBSF 依赖检索器分数已校准；官方建议无评测集别手调权重 | DBSF"归一后再融合"↔ R-2 阶段一词法归一；"无评测集别调权重"坐实 **R-3 是 R-2 硬前置** | https://qdrant.tech/documentation/concepts/hybrid-queries/ |
+| Azure AI Search（新增） | hybrid search 并行跑全文(BM25)+向量(HNSW/eKNN)、RRF 融合；`queryType=semantic` 触发 semantic ranker；融合分(`@search.score` 0.03 量级)与重排分(`@search.rerankerScore` 2.x)分字段 | 换托管混合+语义重排，代价是强 Azure 绑定、单 corpus≠租户、无业务治理 | 两分量级分离↔ DD-5"fusionScore 排序 / 相关性分门禁"分离（2026-10-23 事故教训）；semantic ranker 再次证明 rerank 是标准件 | https://learn.microsoft.com/en-us/azure/search/hybrid-search-overview |
+| LlamaIndex（新增） | 默认余弦相似度；`Settings.embed_model` 全局/per-index 配置；多 provider；官方明确"换 embedding 模型后必须 re-index，不同模型向量不可互换" | 换编排完整与可插拔，代价是换模型停机重建 | 反证本平台 D-10 代际蓝绿零停机的领先（`JdbcRetrievalRepository.java:498-504` 只读 ACTIVE）；维度校验装配期拒绝（:242-250）更早拦截 | https://developers.llamaindex.ai/python/framework/module_guides/models/embeddings/ |
+| Ragas（新增） | reference-free 评测：检索侧 Context Precision/Recall/Entities Recall/Noise Sensitivity，生成侧 Faithfulness/Response Relevancy | 换免人工标注的评测，代价是 LLM-as-judge 偏差（位置/ verbosity/自增强）须缓解 | R-3 可直接对标其指标定义；`RagAsFaithfulnessEvaluator` 须 judge 不同族+钉版本+对调取均值（Zheng et al. arXiv:2306.05685） | https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/ ； https://arxiv.org/abs/2309.15217 |
+| Dify（新增） | 知识库产品化：Classic(自管 chunk/index/检索/Top-K/score threshold)/Agent(自动索引+Fast·Deep·Research 检索深度)；golden questions + evaluations + bad cases 运营 | 换低门槛与评测运营可视化，代价是固定/自动切分无结构语义、无版本/角色/版权治理、数据托管 | "bad cases 运营"↔ R-7 审计反哺评测集 + R-6 影子报表的产品级参照；本平台治理轴远超 Dify 但评测运营落后 | https://docs.dify.ai/en/cloud/use-dify/knowledge/overview |
+| Anthropic（理论参照，新增） | `retrieval` 是 LLM 的 augmentation 之一；workflows=预定义代码路径 vs agents=LLM 动态自驱；建议"单 LLM 调用 + retrieval 通常够用" | 换概念清晰，代价是官方不展开 RAG 工程细节（原文用 retrieval 不用 RAG 缩写） | 5.4 分歧 3 的官方术语锚点：本平台 `doRag()` 确定性阶段=workflow（非 agentic），与维度 1"受控运行时"一致，是有意哲学选择非落后 | https://www.anthropic.com/engineering/building-effective-agents |
+| RAG 原始论文（理论复核） | RAG-Sequence（整序列同批 passage）vs RAG-Token（每 token 不同 passage）；参数化+非参数化记忆 | 换免重训更新知识+可溯源，代价是原始论文无多租户/评测/召回漏斗 | 本平台禁用 RAG-Token 式"多版本 passage 混用"（五轴 `EditionScope` 硬过滤），是原始论文没有的教辅硬约束 | https://arxiv.org/abs/2005.11401 |
+| Late Chunking（理论复核） | 先编码全文逐 token 表示、再按边界 mean pooling；chunk 向量含全文语境 | 换跨块上下文不丢失，代价是需长上下文嵌入模型 | 本平台无 late chunking（逐 chunk 独立编码），以"结构切分 + 知识点补全"替代（8.2(4)）；诚实标注为路线差异 | https://arxiv.org/abs/2409.04701 |
+| pgvector（理论复核 · 维度专项） | `vector`/`halfvec`/`bit`/`sparsevec`；HNSW/IVFFlat 索引上限 vector≤2000、halfvec≤4000、bit≤64000；FAQ 给"超 2000 维"三路径：半精度/二进制量化/子向量(MRL)/降维 | 换精确+近似检索与 PG 生态融合，代价是 ANN 有维度上限 | **本维度最关键官方背书**：`halfvec(4096)` 建不了 ANN 是硬上限（`ddl:960` 取舍正确），规模化走 MRL/二进制量化——**禁硬降维**（会与 qwen3-embedding:8b 输出冲突） | https://github.com/pgvector/pgvector |
+
+> **未能核实项**（诚实标注，禁止臆造）：① **Pinecone 多租户页**（附录 B 列 `docs.pinecone.io/guides/index-data/multitenancy`）本次 WebFetch 返回 404，未能逐字核实 per-index/namespace/record 三粒度表述，仅沿用 2.1(8) 既有引用并标注"本次未能核实"；② **Weaviate 多租户页**（`docs.weaviate.io/weaviate/managing-collections/multi-tenancy`）本次 404，同理；③ **Vespa retrieval 页**（`vespa.ai/documentation/retrieval.html`）本次只返回图片、无正文，未纳入竞品结论；④ **OpenAI Retrieval guides**（`platform.openai.com/docs/guides/retrieval`）本次仍被 Cloudflare 拦截（与诚实边界声明二·2 一致），其 `hybrid_search`/`rewrite_query` 描述依据官方搜索摘要，**未逐字核对**；⑤ **RAGAS 论文 EACL 2024 Demo** 出处本报告按 arXiv:2309.15217 引用（本次核实 v2 2025-04），会议归属未逐字核对官方页。以上均未作为新增结论的唯一依据。
+
+> **新增 URL 统计**：本次 WebFetch 实际访问并内容支撑的官方 URL 共 **11 个**（Elasticsearch 1 + Qdrant 1 + Azure 1 + LlamaIndex 1 + Ragas 2 + Dify 1 + Anthropic 1 + arXiv 3 + pgvector 1，其中 RAGAS 文档与论文计 2），全部列于上表与 3.8，可访问且内容支持相应陈述。
+
+---
+
+### 附录 G：配置项全量矩阵与「生效性」判定表
+
+> **本附录为第三轮追加**，不改写既有内容；与既有正文冲突处（如"向量维度漂移"口径）已在 5.7.4 标注。
+> **判定四问**（沿用项目新铁律「运行期可达性审计」）：① 谁定义？② 谁读取？③ 读取后改变了什么行为？④ 有没有测试/门禁证明它生效？
+> **生效性判定**：`✅ 真生效` / `⚠️ 条件生效`（附条件）/ `❌ 默认不生效`（附默认路径）/ `🟡 漂移风险`（配置源与消费方口径不一致）/ `❓ 本轮未能核实`。
+> **配置源**：`rag/rag-bootstrap/src/main/resources/application.yml`（检索服务，`rag.*` 段）、`rag/rag-worker/src/main/resources/application.yml`（摄取 Worker，`rag.*` 段）、`rag.env` / `rag.env.example`（检索域 env 真相源）、`platform/platform-bootstrap/src/main/resources/application.yml`（平台侧 `agent.rag.*` / `agent.context.*`）。
+> **本轮口径**：每行的"消费方"均来自本轮实际 Read/Grep 命中；**行号为本轮复核值**，与既有正文不一致时以本表为准。**代码常量也列入**（如 RRF k=60），因为它同样是"不可静默变更的口径"。
+
+| # | 配置键 | 默认值 | 定义位置 | 消费方（类:行号） | 生效条件 | 生效性判定 | 静默失效风险 / 处置建议 |
+|---|---|---|---|---|---|---|---|
+| G-01 | `rag.retrieval.min-score`（`RAG_RETRIEVAL_MIN_SCORE`） | `0.38` | `rag-bootstrap/application.yml:133` | `RagInfrastructureConfig.java:72-73`（`@Value` 兜底 0.38）→ `RagInfrastructureConfig.java:310-313`（装配 `RetrievalOrchestrator(retrievalPort, minScore)`）→ `RetrievalOrchestrator.java:56-62`（构造期定格，范围校验 [0,1]）→ `:136-138`（门禁比较 `s.score() >= minScore`） | 恒生效（构造期定格，运行期不可改） | ✅ 真生效 | 风险：**标定值只有 27 条样本**（`application.yml:127-131` 注释自陈：正例中位 0.504、跨领域负对照中位 0.339），且"换模型/换语料必须重标"（`rag.env:49-50` 同样注明）却**无回归机制**能发现"重标后忘了改" ⇒ 建议：⛔ **不调低 0.38**（RAG 红线：标定值须走 RAG-D08 §4），改为在 R-3 落地后把"阈值漂移"做成 CI 断言 |
+| G-02 | `rag.retrieval.min-trust-tier`（`RAG_RETRIEVAL_MIN_TRUST_TIER`） | `OFFICIAL_TUTORIAL` | `rag-bootstrap/application.yml:137` | `RagInfrastructureConfig.java:301-308`（构造期传入 `TrustTier.valueOf`）→ `JdbcRetrievalRepository.java:262-266`（展开为「达标等级 IN 列表」）→ `TrustTier.java:74-76`（`meets` 按 weight 比较） | 恒生效（构造期定格） | ✅ 真生效 | 风险：门槛是**部署级**策略，**逐租户差异化未落地**（RAG-R23）；另一个坑已规避：⛔ 禁写 `trust_tier >= ?`（PG 枚举序数与权威语义相反，`:255-260` 注释记载 2026-10-27 线上实测踩坑）。建议：保留现状，R-23 落地时须同步改写谓词生成处，勿新增第二处枚举序比较 |
+| G-03 | **RRF k=60（代码常量，无配置面）** | `60.0` | `JdbcRetrievalRepository.java:107`（`private static final double RRF_K = 60.0;`） | 同文件 `:590`（`1.0 / (RRF_K + (rank + 1))`）；口径守护用例 `RetrievalRepositoryIT.java:266-282`（断言 `fusionScore() < 0.05` 且 `score() > fusionScore()`） | 恒生效（编译期常量） | ✅ 真生效 | 风险：**无配置面 ⇒ 调参须改代码发版**；⛔ **不动 k=60**（RAG 红线，`RetrievalRepositoryIT` 钉死）。业界对照：Elasticsearch `rank_constant` 官方默认 **60**（本轮 WebFetch 复核 <https://www.elastic.co/guide/en/elasticsearch/reference/current/rrf.html>）⇒ 本值是继承共识。建议：**明确写成"不可配置项"**并在 `application.yml` 加一行注释，避免后续有人把它变成配置键（那会与既有 IT 的量纲断言冲突） |
+| G-04 | `rag.embedding.dimension` + `rag.embedding.vector-type`（`RAG_EMBEDDING_DIMENSION` / `RAG_EMBEDDING_VECTOR_TYPE`） | `1024` / `vector` | `rag-bootstrap/application.yml:103` / `:109`；`rag.env:45-46`（生产覆盖为 **4096 / halfvec**） | `RagInfrastructureConfig.java:104-105`（dimension 读配置，但**只用于真实模型适配器**）→ `:288-292`（`VectorColumn(type, embeddingPort.dimension())`，**维度取自端口而非配置**）→ `JdbcRetrievalRepository.java:242-250`（装配期维度不符**直接拒绝装配**）；DDL 侧 `01_rag_ddl.sql:389`（`embedding public.halfvec(4096)`）、`:960-966`（HNSW **刻意不存在**）；单测 `VectorColumnTest.java:46-51`（4096 维 `indexable() == false`） | 维度取自 `EmbeddingPort.dimension()` ⇒ **配置里的 dimension 只在真实模型路径生效**；占位路径恒为 1024（`LocalDeterministicEmbeddingPort.java:30`） | 🟡 漂移风险 | 风险：**默认 yml（1024/vector）与 DDL 终态（halfvec(4096)）不一致**，只有 env 覆盖才对齐；`VectorColumn` 的校验只比"配置 vs 端口"，**不校验 vs DB 实际列**（既有正文 5.3 盲区 4 的真问题）。⛔ **不降维、不夹带改 HNSW**（RAG 红线）；正确处置是 ① 把生产值写进 `rag.env.example` 的**必填**段并加启动期"配置 vs 列类型"断言（扩 `RagStartupSelfCheck`），② 规模化后按 `01_rag_ddl.sql:964` 的既定路径二选一（MRL 截断 ≤4000 维 / 二进制量化） |
+| G-05 | `rag.embedding.base-url` + `rag.embedding.model`（`RAG_EMBEDDING_BASE_URL` / `RAG_EMBEDDING_MODEL`） | **空串** | `rag-bootstrap/application.yml:100` / `:102`；`rag.env:37-38`（本地 Ollama + `qwen3-embedding:8b`） | `RagInfrastructureConfig.java:94-105`、`:164-195`（`embeddingPort()`，含统一模型目录优先分支 `:169-191`）→ `EmbeddingPorts.java:41-64`：**base-url 空 ⇒ `LocalDeterministicEmbeddingPort`（占位）**；base-url 有而 model 空 ⇒ **fail-closed 抛错**（`:50-61`，绝不静默降级） | base-url 非空 → 真实模型；为空 → 占位（且需 `rag.local-ports.enabled=true`） | ⚠️ 条件生效 | 风险：**占位嵌入模型是默认装配路径**（`EmbeddingPorts.java:44-49`；`LocalDeterministicEmbeddingPort.java:13-23` 自陈"不是生产级嵌入模型……绝不用于语义相关性判定的生产结论"）⇒ 未配 base-url 的部署**跑得通但语义是假的**（1024 维 bigram 哈希）。建议：把"base-url 非空"写进**部署必填清单**并让启动横幅打印"嵌入模型=真实/占位"（当前仅占位路径打 ERROR，`application.yml:64-66` 语义） |
+| G-06 | `rag.local-ports.enabled`（`RAG_LOCAL_PORTS_ENABLED`） | `false` | `rag-bootstrap/application.yml:68`；`rag-worker/application.yml:34`；`rag.env:32`（本地置 true） | `RagInfrastructureConfig.java:91-92` + `EmbeddingPorts.java:46-48`（`LocalPortGate.requireEnabled(localPortsEnabled, …)`）→ `LocalPortGate.java:43`（报错文案点名该键）；同键亦管解析/蕴含两个占位端口 | 默认 false ⇒ 占位端口**拒绝装配**（应用拒绝启动） | ✅ 真生效 | 风险：⛔ **不得用放开占位闸门来"绕过"维度/模型报错**（`rag.env:42-44` 明写"不要靠放开占位闸门绕过"）。建议：保持 fail-closed；`rag.env` 是**本地开发**文件，生产部署应显式 `false` |
+| G-07 | `rag.shadow.enabled`（`RAG_SHADOW_ENABLED`） | `false` | `rag-bootstrap/application.yml:52`；`rag-worker/application.yml:28`；`rag.env:74`（已置 true） | `RagShadowConfiguration.java:22`（类级 `@ConditionalOnProperty(prefix="rag.shadow", name="enabled", havingValue="true")`）⇒ **关闭时整个影子装配不存在**，采集点全 no-op（`RagShadow.java:35-43`）；开启后采集点 `JdbcRetrievalRepository.java:273`（检索）、`:417`（依据取回） | 需 env 置 true；`rag.env` 已置 | ⚠️ 条件生效 | ⚠️ **本轮最有价值的发现之一**：影子计数器是**内存实现**（`InMemoryRagShadowMetrics.java:14`），`RagShadowCollector.java:42-51` 的 `snapshot()` **无主代码消费方**（本轮 grep 仅测试引用）⇒ **"已开启"只意味着采集点被激活，读数既不出进程也不持久化**。建议：M2 观察期出口必须先补"快照出口"（健康端点或写库），否则"读数恒为 0"与"没有违例"不可区分（铁律 6「有一行 ≠ 数字算对了」） |
+| G-08 | `rag.shadow.sample-rate`（`RAG_SHADOW_SAMPLE_RATE`） | `1.0` | `rag-bootstrap/application.yml:53`；`rag.env:75` | `RagShadowConfiguration.java:29`（`@Value`）→ `:31-32`（`sampleRate >= 1.0` ⇒ `sampling = null` ⇒ 全量）→ `RagShadowReporter.java:37-39`（`shouldEvaluate`） | 恒生效（1.0 ⇒ 全量，无采样策略） | ✅ 真生效 | 风险：全量采样 ⇒ 每次检索都走一次比对（**性能代价未量化**）。建议：观察期保持 1.0（样本足），但必须与 G-07 的"快照出口"一起评估开销；不在无读数出口时降采样（降了更看不见） |
+| G-09 | `rag.shadow.block-on-violation`（`RAG_SHADOW_BLOCK`） | `false` | `rag-bootstrap/application.yml:54`；`rag.env:76` | `RagShadowConfiguration.java:30` → `RagShadowReporter.java:33`（构造入参）→ `:56-70`（true 时 mismatch / taint 抛 `RagShadowViolationException`）；`reportRlsBind` **恒不抛**（`:48-50`） | 仅 P2 双写期才应为 true | ❌ 默认不生效 | 风险：误以为"违例会被拦"实则 P1 只记数；且 `reportRlsBind` 即使在阻断模式也不抛（它是"退役清单条目"不是违例）。建议：**保持 P1=false**，把翻转写进 M4 出口门禁清单并留人工执行记录 |
+| G-10 | `rag.indexer.tenants` | `[]`（空列表） | `rag-worker/application.yml:81`（`tenants: []`）；`RagIndexerProperties.java:31`（字段默认 `List.of()`） | `IngestJobConsumer.java:102-106`（**空 ⇒ 直接返回 null，不领任何 job**）→ `:119`（逐租户 `claimNextJobForTenant`）；`IngestJobSweeper.java:70-73`（**空 ⇒ 租户侧僵尸任务一个都不扫**）；`ReindexRunner.java:87-89`（空时打 WARN 提示受 RLS 限制不能跨租户枚举） | 需显式列出待处理租户 UUID（受 RLS 限制，Worker 不能跨租户枚举） | ❌ 默认不生效 | ⚠️ **本附录最严重的一行**：`rag.env` / `rag.env.example` **本轮 grep 均未找到 `RAG_INDEXER_TENANTS` 键** ⇒ 默认部署下**摄取消费循环与租户侧 Sweeper 全链路空转**（表现："上传了教材，任务永远 PENDING，页面一直转圈"，且不报错）。建议：① 部署清单把租户清单列为**必填**并写进启动横幅；② `tenants` 为空时**启动即 WARN/FAIL-fast**（当前只有 `ReindexRunner` 的 WARN，消费循环与 Sweeper 静默） |
+| G-11 | `rag.ingest.sweeper.timeout-minutes` | `30` | **yml 未声明**（本轮 grep `rag-worker/application.yml` 无该键）→ 代码兜底 `IngestJobSweeper.java:44-45` | `IngestJobSweeper.java:43-44`（`@Value("${rag.ingest.sweeper.timeout-minutes:30}")`）→ `:80`（逐租户 `failTimedOutRunningJobs(t, timeoutMinutes)`） | 依赖 G-10 的租户清单非空 | ⚠️ 条件生效 | 风险：阈值过小会**误杀正常长任务**（类注释 `:36-42` 自陈"单册教材可能需要 10 分钟以上……误杀比漏杀更难排查"）。建议：保持 30 分钟，但把"超时置 FAILED"写入运维告警口径；⚠️ 另注意 `rag.ingest.sweeper.enabled` / `rag.ingest.consumer.enabled` 也**未在 yml 声明**，靠 `@ConditionalOnProperty(matchIfMissing = true)`（`IngestJobConsumer.java:34`、`IngestJobSweeper.java:28`）⇒ 默认恒开，属**隐式默认**，建议显式写进 yml |
+| G-12 | `rag.ops.enabled`（`RAG_OPS_ENABLED`） | `true` | `rag-bootstrap/application.yml:85-86`；`rag.env:55` | `application.yml:85-93`（独立运维数据源）→ 运维通道 Bean（`RagOpsSessionPort`，经 `ObjectProvider` 可选装配，见 `RagInfrastructureConfig.java:243-247`）；启动自检 `RagStartupSelfCheck.java:228-263`（**主数据源与运维数据源角色必须不同**） | 默认开；url/username 缺失 ⇒ **拒绝启动**（`application.yml:74-78`） | ⚠️ 条件生效 | 风险：`rag_ops` 带 **BYPASSRLS**，若与主数据源同角色 ⇒ **租户隔离整体失效**（`rag.env:52-54` 与 `application.yml:80-83` 均自陈）；自检已拦截（`RagStartupSelfCheck.java:255-263`）。建议：保留 fail-closed；把"运维库未接入 ⇒ 平台档写 503、租户档不受影响"写进运维手册 |
+| G-13 | `agent.rag.base-url`（平台侧，`RAG_BASE_URL`） | `http://127.0.0.1:8081` | `platform/platform-bootstrap/src/main/resources/application.yml:68-69` | `AgentChatConfiguration.java:71`（键常量）→ `:85`（装配 `RagRetrievalPort`）→ `HttpRagRetrievalGateway.java:77-92`（构造 `URI`；`:89-90` 空串拒绝装配） | 恒生效 | ✅ 真生效 | 风险：**默认回环地址**在容器/多机部署下必然不可达 ⇒ 表现为 `RAG_UNAVAILABLE`（`AgentChatOrchestrator.java:524-533`）——fail-closed、不静默零命中，但**每个请求都白等 3s 连接超时**（`HttpRagRetrievalGateway.java:65`）。建议：把 `RAG_BASE_URL` 列入部署必填 env；容器部署必须显式覆盖 |
+| G-14 | `agent.context.enabled`（`AGENT_CONTEXT_ENABLED`） | `false` | `platform/.../application.yml:232` | `RagHitQuotaAdapter.java:81-82`（**第一行**就短路返回 null）→ `AgentChatOrchestrator.java:540-544`（`allocation == null` ⇒ 走 legacy 路径）→ `:561-562`（`serializeHits` 固定口径）→ `:577-580`（`MAX_INJECT_HITS = 8`、`MAX_HIT_TEXT = 1200` 截断，见 `:128-129`） | 关闭 ⇒ RAG 命中区 token 配额**整条路径不生效** | ❌ 默认不生效 | 风险：**RAG 上下文注入处于影子期**——命中区不按 token 预算裁剪，只靠固定条数/字数截断；当语料变长时，"固定截断"与"按 token 裁剪"的口径差会直接变成上下文膨胀。⚠️ 这是**上下文维度**（06）的开关，但**本维度的注入预算受它控制**，改本维度前必须先看该开关。建议：保持 `false` 直到 S2 接线；接入前先落附录 I-09 的注入量断言 |
+| G-15 | `agent.context.rag-quota.*`（token-budget / max-hits / max-hit-tokens / min-kept-tokens） | `4096` / `8` / `1200` / `64` | `platform/.../application.yml:267-271` | `RagHitQuotaConfiguration.java:37-45`（四项 → `RagHitQuotaAdapter`）→ `:49-63`（**启动期 fail-fast 校验**：非正 / min>max / 单块上限>总预算 / 超硬顶 均拒绝启动） | 依赖 G-14 为 true | ⚠️ 条件生效 | 风险：四项配置**装配期校验齐备**（这一点比多数同类配置严谨），但因 G-14 默认 false 而**整段不生效**。建议：与 G-14 一并收口；不要在 G-14 关闭期间改这四项（改了不起作用，易误判为"配额没起作用是参数问题"） |
+
+**本维度配置项统计**：共 **15** 项 —— ✅真生效 **6**（G-01/G-02/G-03/G-06/G-08/G-13）/ ⚠️条件生效 **5**（G-05/G-07/G-11/G-12/G-15）/ ❌默认不生效 **3**（G-09/G-10/G-14）/ 🟡漂移风险 **1**（G-04）/ ❓未能核实 **0**。
+
+**「默认不生效」项的共同根因**（一段归纳 + 是否属本项目已知铁律范围）：
+
+三项的失效形态**不同源**，但共享同一个结构性缺陷——**配置的"生效"被拆成了三层，而门禁只覆盖了第一层**：
+
+- **G-09 `block-on-violation`**：配置**被真实读取**（`RagShadowConfiguration.java:30`），消费结果是"**不阻断**"。它不是"忘了消费"，而是 P1→P2 的**阶段闸门**，当前阶段的正确值就是 `false`。属**设计取舍**，不属缺陷。
+- **G-14 `agent.context.enabled`**：同样是被读取且被正确消费，但关闭态的语义是"走 legacy 逐位等价路径"（`RagHitQuotaAdapter.java:81-82`）。属**设计取舍**（影子期纪律），不属缺陷；缺陷在**没有把它列入"本维度哪些能力处于影子期"的对外说明**。
+- **G-10 `rag.indexer.tenants`**：配置**有键、有默认值、有绑定类**（`RagIndexerProperties.java:31`），但**值为空 ⇒ 全部下游空转**（消费循环不领任务、Sweeper 不扫僵尸、重索引跳过），且**空清单不产生任何告警**。属**能力缺失**（部署基线未固化 + 缺 fail-fast），且**后果是摄取链整条静默停摆**——这是本附录最该优先修的一行。
+- **共同根因**：项目现有的「运行期可达性审计」四问（谁定义/谁读取/改变什么行为/有无门禁）能抓住 G-09（被装配了）；但**抓不住 G-10**——键被定义、被绑定类读取、消费方代码路径完整，只是**生效前提不成立**。缺的是第四问的加强版：「**它的生效前提是否成立**」（租户清单非空？生产 env 已覆盖？镜像里有没有这个文件？）。建议把这一问补进铁律清单，并把 `rag.indexer.tenants` 这类"清单型键"纳入**启动期 fail-fast**（空 ⇒ 拒绝启动或至少 ERROR 级横幅），避免"看起来在跑、实际永远领不到"。
+
+### 附录 H：场景级端到端时序推演（5 个关键场景）
+
+> **本附录为第三轮追加**，不改写既有内容。每个场景给出：触发入口 → 前置状态 → ASCII 时序（跳数与锚点表**逐跳一致**）→ 每跳源码锚点 → 失败分支（错误在哪一跳被捕获/转换）→ 可观测落点 → 排查断点行号。
+> **覆盖类别**：H-1 正常主链路 / H-2 失败链路（组件级 vs 零命中）/ H-3 权限安全（跨租户 scope 谓词隔离）/ H-4 并发竞态（摄取任务多 worker 领取）/ H-5 崩溃恢复（僵尸摄取任务接管）——**5 类全覆盖**（规范要求 ≥3 类）。
+> **本轮未运行任何测试**：所有"实测"字样一律写「未实测（需按本报告门禁口径在实施阶段验证）」；源码注释中记载的历史实测（如 `JdbcIngestJobRepository.java:361-376` 的 2026-11-06 灰度实测）按**既有代码注释的事实陈述**引用，并注明其来源为代码注释而非本轮实跑。
+
+#### H-1 场景：学生提问触发一次完整检索并把命中注入模型上下文（正常主链路）
+
+- **触发入口**：Agent 编排的阶段 ④（RAG）——`AgentChatOrchestrator.doRag()`（`AgentChatOrchestrator.java:511-518`）。
+- **前置状态**：租户 T 已验签令牌可用；`rag_chunk_embedding` 中该租户已有 ACTIVE 代际向量（`rag_index_generation`，`deploy/sql/rag/09_v1_0_3_index_generation_alter.sql:33`）；嵌入模型可达（`RAG_EMBEDDING_BASE_URL` 非空，见附录 G-05）。
+
+```
+编排器(worker)      HttpRagRetrievalGateway   RagJwtAuthFilter   RagRetrievalController
+   |                     |                          |                     |
+   |(1) rag.retrieve()   |                          |                     |
+   |-------------------->|                          |                     |
+   |                     |(2) POST /api/v1/retrieval|                     |
+   |                     |   Bearer + X-Tenant-Id   |                     |
+   |                     |------------------------->|                     |
+   |                     |                          |(3) 验签+归属绑定     |
+   |                     |                          |   不符=>403          |
+   |                     |                          |-------------------->|
+   |                     |                          |   (4) requireTenant |
+   |                     |                          |   scopeMode null=>STRICT
+   |                     |                          |-------------------->|
+   |                     |                          |                     |(5) 事务内 set_config + scope=TenantWithGlobal
+   |                     |                          |                     |    (6) 七步编排: 召回→版本→角色→补全→排序→门禁→漏斗
+   |                     |                          |                     |    (7) 稠密(pgvector余弦+代际过滤) + 词法(ts_rank)
+   |                     |                          |                     |    (8) RRF k=60 融合; 排序键=融合分/门禁键=相关性分
+   |                     |                          |                     |    (9) 同事务写 rag_access_audit(RETRIEVE)
+   |                     |<---(10) 200 + hits[] -----|---------------------|
+   |(11) 白名单解析(7字段) → 配额裁剪 → RAG_GUARD 围栏注入                            |
+   |<---------------------------------------------------------------------------|
+```
+
+- **逐跳锚点表**（11 跳，与时序图一致）：
+
+| 跳 | 动作 | 源码锚点 | 落点（表/事件/日志） | 失败语义 |
+|---|---|---|---|---|
+| 1 | 编排阶段 ④ 取 `topK` 并发 `RAG_QUERY` 事件 | `AgentChatOrchestrator.java:515-518` | `state.events`：`RAG_QUERY` | `topK` 越界在下游被拒（见第 2 跳） |
+| 2 | 平台→rag HTTP：`POST /api/v1/retrieval`，Bearer + `X-Tenant-Id`，3s 连接 / 20s 读超时 / 512KB 上限 / 禁重定向 | `HttpRagRetrievalGateway.java:62`（路径）、`:65-69`（超时与上限）、`:114-121`（请求构造）、`:130-132`（读取期封顶） | 无（出进程） | `topK` 越界 ⇒ 抛 `RagUnavailableException`（`:108-110`）；构造失败 ⇒ 抛（`:122-124`） |
+| 3 | rag 侧鉴权：验签（iss/aud/exp）+ 租户归属绑定 | `RagJwtAuthFilter.java:169-179`（401）、`:180-189`（403）、`:194-207`（写域/主体属性） | `LogContext.setIdentity`（`:210`） | 缺/坏令牌 ⇒ **401**；`X-Tenant-Id` ≠ 令牌 `tenant_id` ⇒ **403**（终态，不给重试，符合铁律 15） |
+| 4 | 控制器：校验租户头 + 构造请求（`scopeMode` 为 null ⇒ `STRICT`） | `RagRetrievalController.java:89-90`、`:163-184`（缺/非法/哨兵 ⇒ 400）、`:186-191`、`:200-207`（`:201` 默认 STRICT） | 无 | 缺 `X-Tenant-Id` ⇒ **400**；哨兵做会话身份 ⇒ **400**（`:172-176`）；未知版本轴取值 ⇒ **400**（`:221-230`） |
+| 5 | 事务内 `set_config('app.tenant_id', ?, true)` + 判定作用域 `TenantWithGlobal` | `JdbcTenantScopedRetrieval.java:46-48`、`:53` | 会话变量 `app.tenant_id`（事务局部） | 事务外绑定 ⇒ 变量立即失效（类注释 `:16-20`）；作用域在**入口层**判定，编排层只搬运（`RetrievalOrchestrator.java:70-78`） |
+| 6 | 七步编排：知识点解析 → 多路召回 → 版本过滤 → 角色过滤 → 知识点补全 → 排序 → 分数门禁 | `RetrievalOrchestrator.java:82`、`:85`、`:99-101`、`:104-106`、`:110-122`、`:127-130`、`:136-138` | 内存中的五段漏斗（`:149-154`） | 门禁未过 ⇒ 走第 9 跳的"合法零命中"分支；编排层**不合成作用域**（否则隔离两处各自为政） |
+| 7 | 双通道 SQL：稠密 `1-(e.embedding <=> ?)`（含 ACTIVE 代际过滤）+ 词法 `ts_rank(to_tsvector('simple', text_jieba), to_tsquery('simple', ?))` | `JdbcRetrievalRepository.java:472-524`（稠密，`:492` 余弦、`:498-506` 代际）、`:526-557`（词法，`:538-539` ts_rank、`:549` `@@`） | 无（只读） | 嵌入不可用 ⇒ `EmbeddingUnavailableException` ⇒ 控制器转 **503**（`RagRetrievalController.java:94-102`）；代际无记录 ⇒ COALESCE 兜底"不过滤"（`:503-506`） |
+| 8 | RRF 融合（k=60）+ **排序键/门禁键分离** | `JdbcRetrievalRepository.java:277-296`（融合）、`:585-599`（`:590` RRF 公式、`:594` 相关性分取各通道最大值） | 无 | ⛔ 不动 k=60 与"排序键=融合分 / 门禁键=相关性分"的分离（RAG 红线；`RetrievalRepositoryIT.java:266-282` 钉死） |
+| 9 | 分数门禁 + 五段漏斗 + **审计同事务写入** | `RetrievalOrchestrator.java:136-138`、`:148-154`、`:156-159`（门禁未过打 debug）；`JdbcTenantScopedRetrieval.java:62-66` | `rag_access_audit` 增一行（`action='RETRIEVE'`） | 审计写失败 ⇒ **整次检索回滚**（不允许"检索成功但无痕迹"，`:59-61`） |
+| 10 | 返回 `RetrievalResultDto` | `RagRetrievalController.java:103` | HTTP 200 | — |
+| 11 | 平台侧解析白名单 7 字段 → 配额裁剪 → 不可信围栏注入 | `HttpRagRetrievalGateway.java:176-200`（`:183-186` 缺 hits ⇒ 抛）、`:202-221`（`:208-214` 空白命中丢弃）；`AgentChatOrchestrator.java:540-544`、`:561-563` | `RAG_HITS` / `RAG_QUOTA` 事件（`:547-556`） | 畸形响应 ⇒ 抛 ⇒ 编排器转组件级 error（见 H-2）；配额异常 ⇒ fail-soft 回落 legacy（`:611-615`） |
+
+- **失败分支**（≥2 条，均可复核）：
+  1. **嵌入模型不可用**（第 7 跳）⇒ `EmbeddingUnavailableException` ⇒ 控制器返回 **503** 且带可执行文案（`RagRetrievalController.java:94-102`）；**绝不静默退化成纯词法检索**（分数口径会悄悄变）。
+  2. **门禁未达 0.38**（第 9 跳）⇒ 合法零命中：`hits=[]`、`funnel` 显示"门禁后 = 0"、打 debug 日志（`RetrievalOrchestrator.java:156-159`）⇒ **不是故障**。
+  3. **审计写失败**（第 9 跳）⇒ 事务回滚 ⇒ 检索结果**不返回**（"不允许检索成功但无痕迹"，`JdbcTenantScopedRetrieval.java:59-61`）。
+  4. **畸形命中**（第 11 跳）⇒ `chunkId`/`text` 空白即丢弃（`HttpRagRetrievalGateway.java:208-214`）；响应体超 512KB ⇒ 读取期抛 IOException（`:130-132`）。
+- **可观测落点**：`rag_access_audit`（`RETRIEVE` 行）；平台侧 `RAG_QUERY` / `RAG_HITS` / `RAG_QUOTA` 事件与 `state.step("RAG", …)`（`AgentChatOrchestrator.java:517`/`:553`/`:555`/`:557`）；rag 侧门禁未过的 debug 日志。**无观测点**：检索漏斗五段计数**跨进程丢失**（`HttpRagRetrievalGateway.java:176-200` 只取白名单字段）⇒ 调参闭环在本场景**是断的**（既有正文 5.3 盲区 3）。
+- **排查断点**（建议打断的行号）：`AgentChatOrchestrator.java:522`（发起检索）、`RagJwtAuthFilter.java:181-188`（归属绑定）、`RagRetrievalController.java:89`（租户校验）、`JdbcTenantScopedRetrieval.java:47`（绑 GUC）、`JdbcRetrievalRepository.java:492`（余弦 cast）/`:538`（ts_rank）、`RetrievalOrchestrator.java:137`（门禁）、`JdbcTenantScopedRetrieval.java:63`（审计插入）。
+
+#### H-2 场景：RAG 组件不可用 —— "检索失败"必须与"零命中"严格区分（失败链路 / 终态误报防线）
+
+- **触发入口**：`AgentChatOrchestrator.doRag()` 调用 `rag.retrieve(...)`（`AgentChatOrchestrator.java:520-523`）。
+- **前置状态**：rag 服务不可达 / 返回非 2xx / 返回非法 JSON / 响应缺 `hits`；或嵌入模型服务挂掉。
+
+```
+编排器              网关(HTTP)              rag 服务/嵌入模型        审计与事件
+  |                    |                          |                     |
+  |(1) rag.retrieve    |                          |                     |
+  |------------------->|                          |                     |
+  |                    |(2) 连接失败/20s 超时      |                     |
+  |                    |    => IOException        |                     |
+  |                    |(3) 非 2xx (401/403/500)   |                     |
+  |                    |    => 抛 RagUnavailable  |                     |
+  |                    |(4) 非法 JSON / 缺 hits   |                     |
+  |                    |    => 抛 RagUnavailable  |                     |
+  |&lt;-- 异常 ---------|(5) 编排器捕获              |                     |
+  |                    |                          |                     |(6) RAG_UNAVAILABLE 事件
+  |                    |                          |                     |    + Skill(error)
+  |                    |                          |                     |    + RagHits([])
+  |(7) return null（不注入任何 RAG 上下文）                                    |
+  |---------------- 对照分支: 门禁未过 => 200 + hits=[] + funnel 门禁后=0 ------|
+```
+
+- **逐跳锚点表**（7 跳，与时序图一致）：
+
+| 跳 | 动作 | 源码锚点 | 落点（表/事件/日志） | 失败语义 |
+|---|---|---|---|---|
+| 1 | 编排发起检索 | `AgentChatOrchestrator.java:520-523` | 无 | — |
+| 2 | 连接失败 / 20s 读超时 ⇒ IOException ⇒ 抛 | `HttpRagRetrievalGateway.java:130-141`（`:136-141` 不回显远端正文，只给 host 与原因类别） | 无 | **不回显响应正文**（可能含租户语料） |
+| 3 | 非 2xx ⇒ 抛（只给状态码） | `HttpRagRetrievalGateway.java:143-147` | 无 | ⚠️ **401/403/500 被压成同一异常**（终态与临时故障不可分，见附录 I-08） |
+| 4 | 非法 JSON / 缺 `hits` 数组 ⇒ 抛 | `HttpRagRetrievalGateway.java:178-186` | 无 | 契约不匹配即失败，绝不"当零命中" |
+| 5 | 编排器捕获 `RagUnavailableException` | `AgentChatOrchestrator.java:524` | — | 组件级失败，**不发 error 帧、不改审计终态**（`:525` 注释） |
+| 6 | 发 `RAG_UNAVAILABLE` 事件 + Skill(error) + 空 `RagHits` + `RAG_HITS{hits:0, injected:false}` | `AgentChatOrchestrator.java:526-531` | `state.events` 三条 + `state.step("RAG_UNAVAILABLE", …)`（`:529`） | 用户看到"RAG 检索不可用"，**不是**"没找到相关内容"（后者会让运维误判为语料缺失） |
+| 7 | 返回 null ⇒ **不注入任何 RAG 上下文**，模型在无依据状态下作答 | `AgentChatOrchestrator.java:532`、`:558-560` | 无 | fail-soft 于上下文、fail-closed 于检索（不伪造命中） |
+
+- **失败分支**（≥2 条）：
+  1. **对照分支（合法零命中，不是故障）**：门禁未过 ⇒ HTTP **200** + `hits=[]` + `funnel` 门禁后 = 0 + debug 日志（`RetrievalOrchestrator.java:136-138`、`:148-159`）⇒ 用户侧"没找到依据"与本场景"RAG 不可用"是**两种不同事件**，前端可分别呈现。
+  2. **嵌入模型不可用 ⇒ 503**（rag 侧）：`RagRetrievalController.java:94-102` ⇒ 平台侧收到非 2xx ⇒ 走第 3 跳 ⇒ 同样是 `RAG_UNAVAILABLE`；但**根因不同**（第 7 跳 vs 第 3 跳），当前**未透出根因**（只给状态码）⇒ 排障须回 rag 侧日志。
+  3. **配额路径 fail-soft**：`applyRagQuota` 异常 ⇒ 返回 null ⇒ 回落 legacy 固定截断（`AgentChatOrchestrator.java:611-615`）⇒ **不中断回答**，但注入量可能超预算（见附录 I-09）。
+- **可观测落点**：`RAG_UNAVAILABLE` 事件 + `RAG_HITS{hits:0, injected:false}` 事件（`AgentChatOrchestrator.java:526`/`:531`）+ `state.step("RAG_UNAVAILABLE", …)`；`AgentChatOrchestrator.java:1046-1047`（异常 → 组件名映射）。**无观测点**：无检索失败计数指标、无告警规则（§5.7.1 已登记）。
+- **排查断点**：`HttpRagRetrievalGateway.java:136`（IOException 分支）、`:144`（非 2xx）、`:184`（缺 hits）、`AgentChatOrchestrator.java:524`（捕获点）、`:526`（事件发出）、`RagRetrievalController.java:94`（rag 侧嵌入异常 → 503）。
+
+#### H-3 场景：跨租户越权检索 —— scope 谓词隔离与令牌归属绑定的双层拒绝（权限安全）
+
+- **触发入口**：`POST /api/v1/retrieval`，携带租户 A 的 Bearer 令牌 + `X-Tenant-Id`（`RagRetrievalController.java:86-88`）。
+- **前置状态**：租户 A、B 各有语料；哨兵桶存全局公共语料（`RagScope.java:46` 的 `GLOBAL_TENANT_ID = "00000000-0000-0000-0000-000000000000"`）。
+
+```
+客户端(租户A)     RagJwtAuthFilter      RagRetrievalController     RagSqlScopeTranslator        PG(rag_app/RLS)
+   |                    |                       |                          |                       |
+   |(1) Bearer(A) + X-Tenant-Id=B              |                          |                       |
+   |------------------->|                       |                          |                       |
+   |                    |(2) 归属绑定不符 => 403 |                          |                       |
+   |&lt;--- 403 ---------|                       |                          |                       |
+   |                    |                       |                          |                       |
+   |--- 正常路径: Bearer(A) + X-Tenant-Id=A ---->|                          |                       |
+   |                    |                       |(3) requireTenant: 哨兵=>400 / 非法=>400        |
+   |                    |                       |(4) scope = TenantWithGlobal(A)                |
+   |                    |                       |(5) render => tenant_id IN (A::uuid, 哨兵::uuid)|
+   |                    |                       |------------------------->|                       |
+   |                    |                       |                          |(6) 双通道 SQL 各带同一谓词 |
+   |                    |                       |                          |---------------------->|
+   |                    |                       |                          |(7) RLS 兜底 + 哨兵桶放行 |
+   |                    |                       |                          |(8) 结果含 A 与全局，不含 B |
+   |&lt;--------------------------------------------------------------- 200 hits[]|
+```
+
+- **逐跳锚点表**（8 跳，与时序图一致）：
+
+| 跳 | 动作 | 源码锚点 | 落点（表/事件/日志） | 失败语义 |
+|---|---|---|---|---|
+| 1 | 请求到达（Bearer + `X-Tenant-Id`） | `RagRetrievalController.java:86-88`（头名常量 `:68`） | `LogContext`（未验签前取头，`:158-160`） | — |
+| 2 | **令牌归属绑定**：租户域令牌要求 `X-Tenant-Id` == 令牌 `tenant_id` claim | `RagJwtAuthFilter.java:180-189`（`:185-187` 403） | 无 | 不一致 ⇒ **403**（已认证但无权访问该租户） |
+| 3 | 控制器 `requireTenant`：缺/空 ⇒ 400；**哨兵 ⇒ 400**；非 UUID ⇒ 400 | `RagRetrievalController.java:163-184`（`:164-168`、`:172-176`、`:177-183`） | 无 | 哨兵绝不能成为会话身份（应用层第一道）；数据库侧 `rag_current_tenant()` 亦拒哨兵（既有正文口径，本轮**未连库复核函数体** ⇒ 标为证据缺口） |
+| 4 | 作用域在**入口层**判定：`new RagScopeFilter.TenantWithGlobal(tenantId)` | `JdbcTenantScopedRetrieval.java:53`；`RetrievalOrchestrator.java:70-78`（编排层只搬运、不就地决定） | 无 | 编排层自行合成 scope ⇒ "入口判 A、SQL 滤 B"的静默越权 |
+| 5 | 谓词渲染：`tenant_id IN (?::uuid, ?::uuid)`（本租户 + 哨兵） | `RagSqlScopeTranslator.java:111-116`（`:114-116`）；列限定符白名单校验 `:102-107`；`None` ⇒ `1=0` 恒假 `:121` | 绑定参数 2 个 | 谓词形态单点产出 ⇒ 杜绝"同一语义两处拼写"（`:17-30` 对照表给出与 RLS 读策略的逐字等价式） |
+| 6 | 双通道 SQL **同源**应用该谓词 | `JdbcRetrievalRepository.java:489`（稠密）、`:535`（词法）、`:310`/`:333`/`:372`/`:429`/`:448`（其余 5 处 SELECT） | 无 | 任一通道漏渲染 ⇒ 该通道**跨租户泄露**（既有正文 AP-9） |
+| 7 | RLS 兜底：`rag_chunk` / `rag_chunk_embedding` / `rag_access_audit` 等表 `FORCE ROW LEVEL SECURITY` | `01_rag_ddl.sql:293`（`rag_access_audit`）、`:356`（`rag_chunk`）、`:394`（`rag_chunk_embedding`）；启动自检 `RagStartupSelfCheck.java:167-176`（RLS 未开 ⇒ 失败）、`:197-206`（未绑租户可读 ⇒ 失败） | PG 策略求值 | ⛔ 铁律 1：验隔离必须用 `rag_app`（NOBYPASSRLS）；用 `rag_ops` 跑会得到假绿（`RagStartupSelfCheck.java:228-263` 断言两角色不同） |
+| 8 | 结果只含 A 与全局；B 的 chunk 不可见 | IT 门禁：`RetrievalRepositoryIT.java:242-250`（`crossTenantIsolationEnforced`）、`:297-302`（`loadByIdsCrossTenantReturnsNothing`）、`:535`（`tenantCannotInsertGlobalChunk`）；`RagScope.java:46`/`:59-60`（哨兵判定） | `rag_access_audit`（同事务） | 全局语料对每个租户可见是**设计内**（哨兵桶，`RetrievalRepositoryIT.java:417` `globalChainIsRecalledByEveryTenant`），不是泄露 |
+
+- **失败分支**（≥2 条）：
+  1. **令牌与头不一致**（第 2 跳）⇒ **403**，且**不发生任何数据访问**（鉴权在业务之前）⇒ 符合铁律 15（权限错误须显式终态）。
+  2. **哨兵做会话身份**（第 3 跳）⇒ **400**（`RagRetrievalController.java:172-176`）；数据库侧另有 `rag_current_tenant()` 拒绝（**本轮未连库复核函数体**，标证据缺口）⇒ **纵深防御两层**。
+  3. **谓词渲染漏一处**（第 6 跳）⇒ 漏掉的那条通道直接跨租户泄露且**不报错** ⇒ 这正是 `RetrievalRepositoryIT` 与 `M4R1RetrievalRetirementReverseGuardIT` 这类"反向守卫"存在的理由。
+  4. **用错角色验隔离**（第 7 跳）⇒ `rag_ops` 带 BYPASSRLS ⇒ 结果**全放行** ⇒ 假绿（铁律 1）。
+- **可观测落点**：`rag_access_audit`（`RETRIEVE` 行，`principal_id` 恒 NULL ⇒ **取证字段不足**，见附录 G 与 5.7.1）；`LogContext.setIdentity`（`RagJwtAuthFilter.java:210`）；影子染色计数 `taintViolations`（`RagShadowReporter.java:64-70`）——但**无出口**（`InMemoryRagShadowMetrics.java:14`，`RagShadowCollector.java:42-51` 无主代码消费方）。
+- **排查断点**：`RagJwtAuthFilter.java:184`（归属比较）、`RagRetrievalController.java:172`（哨兵判定）、`JdbcTenantScopedRetrieval.java:53`（scope 判定）、`RagSqlScopeTranslator.java:114`（谓词渲染）、`JdbcRetrievalRepository.java:489`（稠密侧渲染）、`:535`（词法侧渲染）、`01_rag_ddl.sql:294`（审计表 FORCE RLS）。
+
+#### H-4 场景：多个 Worker 并发领取同一批摄取任务（并发竞态）
+
+- **触发入口**：`IngestJobConsumer.pollOnce()`（`IngestJobConsumer.java:59-60`，`@Scheduled(fixedDelay=2000ms, initialDelay=5000ms)`）。
+- **前置状态**：`rag_ingest_job` 中有 N 条 `PENDING` 任务；两个及以上 rag-worker 实例并行轮询；`rag.indexer.tenants` 已列出待处理租户（否则见附录 G-10，**整个循环不启动**）。
+
+```
+Worker A          Worker B        JdbcIngestJobRepository            PG(rag_ingest_job)
+   |                 |                     |                             |
+   |(1) pollOnce     |                     |                             |
+   |---------------->|  (同一调度语义，多实例并行)                         |
+   |                 |                     |                             |
+   |                 |                     |(2) 事务内 set_config(租户)     |
+   |                 |                     |---------------------------->|
+   |                 |                     |(3) SELECT ... LIMIT 1          |
+   |                 |                     |    FOR UPDATE SKIP LOCKED     |
+   |                 |                     |---------------------------->|
+   |                 |                     |   ┌─ Worker A 领到 job#1（行锁）|
+   |                 |                     |   └─ Worker B 跳过被锁行，领 job#2
+   |                 |                     |(4) UPDATE status='PARSING'     |
+   |                 |                     |---------------------------->|
+   |(5) 编排器 run(job)：解析→切分→嵌入→索引→原子落库                   |
+   |                 |                     |                             |
+   |(6) markSucceeded（写 chunk_policy/chunk_count 等留痕）                |
+   |                 |                     |---------------------------->|
+   |                 |                     |                             |
+   |(7) 编排器崩溃 => job 卡在 PARSING => 只能由 Sweeper 接管（见 H-5）  |
+```
+
+- **逐跳锚点表**（7 跳，与时序图一致）：
+
+| 跳 | 动作 | 源码锚点 | 落点（表/事件/日志） | 失败语义 |
+|---|---|---|---|---|
+| 1 | 定时轮询一条任务（`fixedDelay` 而非 `fixedRate`，避免长任务堆积并发） | `IngestJobConsumer.java:59-60`（`:56-57` 注释） | 无 | — |
+| 2 | 逐租户领取（租户清单为空 ⇒ 直接返回 null） | `IngestJobConsumer.java:102-123`（`:103-106` 空清单短路、`:112-117` 跳过哨兵并 WARN） | 无 | 清单为空 ⇒ **静默空转**（附录 G-10） |
+| 3 | 事务内 `set_config` + `SELECT … LIMIT 1 FOR UPDATE SKIP LOCKED` | `JdbcIngestJobRepository.java:276-277`、`:282-290`（`:278-281` 注释说明 SKIP LOCKED 是核心正确性来源） | `rag_ingest_job` 行锁 | 用 `FOR UPDATE`（无 SKIP LOCKED）⇒ worker 之间**互相阻塞**（`:27-29` 注释）；未绑租户 ⇒ RLS 过滤成 0 行、任务静默积压（`:272-273` 注释） |
+| 4 | 领取后置 `status='PARSING'` | `JdbcIngestJobRepository.java:294-299` | `rag_ingest_job.status` | `set_config` 必须用 `queryForObject` 而非 `update`（`:274-275` 注释：否则抛 DataIntegrityViolation/500） |
+| 5 | 编排器执行：解析 → 切分 → 角色判定 → 嵌入 → 分词索引 → 原子落库 | `IngestJobOrchestrator.run(job)`（`IngestJobConsumer.java:75`） | `rag_chunk` / `rag_chunk_embedding` / `rag_edition` | 业务失败由编排器转成 job `FAILED`（`:76` 注释） |
+| 6 | 回写成功：`markSucceeded`（`chunk_count` / `parser_version` / `embed_model` / `chunk_policy` / `chunk_policy_config`） | `JdbcIngestJobRepository.java:328-379`（`:361-376` 记载 2026-11-06 灰度实测：**参数顺序错 ⇒ 运行期 "未设定参数值 N" ⇒ 972 片段已落库却 job 卡 FAILED**） | `rag_ingest_job` | 占位符与参数必须逐项对齐（`job_id` 放最后） |
+| 7 | 编排器自身崩溃 ⇒ 尽力补 `FAILED`（`CONSUMER_CRASH`） | `IngestJobConsumer.java:76-87`（`:81-83` 回写原因、`:84-86` 回写也失败则只记日志） | `rag_ingest_job.error_detail` | 线程**绝不**因一次异常终止（否则 worker 静默停工、任务永久积压） |
+
+- **失败分支**（≥2 条）：
+  1. **两个 worker 同时领同一 job**（第 3 跳）⇒ `FOR UPDATE SKIP LOCKED` 使 B **跳过被锁行**、领下一条 ⇒ **绝不重复领**（`:278-281`）；去掉 SKIP LOCKED 则是"阻塞"而非"重复"（`:27-29` 注释）——**反向验证**：撤掉 SKIP LOCKED 必须让并发用例变红。
+  2. **未绑租户会话**（第 3 跳）⇒ RLS 把候选过滤成 0 行 ⇒ "看起来在跑、实际永远领不到"（`:272-273` 注释记载 2026-11-03 实测 `visible_jobs=0`）。
+  3. **`markSucceeded` 参数错位**（第 6 跳）⇒ 运行期 "未设定参数值 N" ⇒ 片段已落库但 job 卡 FAILED ⇒ **半本入库**（摄取链最危险的失败形态）。
+  4. **全局哨兵出现在租户清单**（第 2 跳）⇒ 跳过并 WARN（`:112-117`），因为哨兵不是租户（`rag_current_tenant()` 会抛错）。
+- **可观测落点**：`rag_ingest_job.status` / `.stage` / `.attempt` / `.error_detail` / `.chunk_count`；消费循环日志 `[RAG] 领取摄取任务 job=… source=… attempt=…`（`IngestJobConsumer.java:72-73`）与失败日志（`:79`、`:85`）。**无观测点**：无"领取延迟/积压时长"指标、无告警规则。
+- **排查断点**：`IngestJobConsumer.java:103`（租户清单）、`JdbcIngestJobRepository.java:276`（绑 GUC）、`:288`（SKIP LOCKED）、`:296`（置 PARSING）、`JdbcIngestJobRepository.java:377`（`job_id` 参数最后追加）、`IngestJobConsumer.java:81`（崩溃兜底回写）。
+
+#### H-5 场景：worker 被 kill -9 后僵尸摄取任务的接管（崩溃恢复）
+
+- **触发入口**：`IngestJobSweeper.sweep()`（`IngestJobSweeper.java:64-66`，`@Scheduled(fixedDelay=300000ms, initialDelay=60000ms)`）。
+- **前置状态**：某 job 停在 `PARSING`（worker 被 kill -9 / 连接池断链）；`rag.indexer.tenants` 已列出该租户（**否则租户侧永不被接管**，见附录 G-10）。
+
+```
+Sweeper            properties(RagIndexerProperties)     PG(rag_ingest_job)        运维
+   |                     |                                     |                     |
+   |(1) sweep()          |                                     |                     |
+   |------------------->|                                     |                     |
+   |(2) getTenants() 空? |                                     |                     |
+   |   => 直接 return（租户侧一个都不扫）                         |                     |
+   |(3) 逐租户 failTimedOutRunningJobs(tenant, 30min)          |                     |
+   |-------------------------------------------------------->|                     |
+   |                     |                                     |(4) 超时 job => FAILED |
+   |                     |                                     |    + SWEEPER_TIMEOUT  |
+   |(5) 全局桶单独扫（不依赖租户清单）                            |                     |
+   |   运维通道未接 => RagOpsUnavailableException => debug 降级  |                     |
+   |(6) 不自动重试（避免崩溃循环）=> 需运维在失败处置区显式重试                   |
+   |------------------------------------------------------------------------->|
+```
+
+- **逐跳锚点表**（6 跳，与时序图一致）：
+
+| 跳 | 动作 | 源码锚点 | 落点（表/事件/日志） | 失败语义 |
+|---|---|---|---|---|
+| 1 | 周期触发（间隔远大于消费轮询：5 分钟 vs 2 秒） | `IngestJobSweeper.java:64-66`（`:60-62` 注释） | 无 | 扫得太频只是无谓的全表条件扫描 |
+| 2 | 取租户清单；**空 ⇒ 直接 return** | `IngestJobSweeper.java:70-73` | 无 | ⚠️ **本场景最大的静默失效点**：清单为空 ⇒ 租户侧僵尸任务**永远不被接管**（清单同源于 G-10） |
+| 3 | 逐租户接管超时任务（跳过空串与哨兵） | `IngestJobSweeper.java:68-83`（`:76-79` 跳过哨兵、`:80` `failTimedOutRunningJobs(t, timeoutMinutes)`） | `rag_ingest_job` | 逐租户扫是**必须**的：无租户会话的全表 UPDATE 会被 RLS 静默变成 0 行（`:59-61` 注释） |
+| 4 | 超时 job 置 `FAILED` + 写 `SWEEPER_TIMEOUT` 原因 | `IngestJobSweeper.java:21-23`（接管语义注释：置 FAILED 且**不自动重试**）；端口方法 `failTimedOutRunningJobs` | `rag_ingest_job.status` / `.error_detail` | 自动重试可能形成崩溃循环 ⇒ 刻意不做 |
+| 5 | 全局桶**单独**扫一次（不依赖租户清单） | `IngestJobSweeper.java:108-121`（`:100-107` 说明为何必须单独扫；`:115-117` `RagOpsUnavailableException` ⇒ debug 降级不刷 warn） | 全局 `rag_ingest_job` | 运维通道未接入是**正常部署选择**（fail-closed），降级为 debug（`:112-116`） |
+| 6 | 告警可见性：接管数 > 0 记 WARN；**重试需运维显式发起** | `IngestJobSweeper.java:85-86`（租户侧 WARN）、`:112-113`（全局侧 WARN）；重试为"新建行"（`:21-23`） | 日志（WARN） | ⚠️ 只有日志、**无指标无告警规则** ⇒ "接管频发是 worker 不稳定的前兆"这一预警依赖人看日志 |
+
+- **失败分支**（≥2 条）：
+  1. **租户清单为空**（第 2 跳）⇒ 僵尸 job 永久停在中间态 ⇒ 工作台一直转圈、重试端点因非终态而 409 ⇒ 死锁（既有正文与 `IngestJobSweeper.java:94-103` 记载的同类现象）。
+  2. **全局 job 卡 PARSING**（第 5 跳）⇒ 运维通道未接入时**只 debug 不 warn** ⇒ 静默累积（`:112-116`）。
+  3. **Sweeper 自身异常**（第 3 跳）⇒ 捕获后记 WARN、下一轮重试，**不终止线程**（`:90-93` / `:120`）。
+  4. **阈值过小**⇒ 正常长任务被误判为僵尸（`:36-42` 注释自陈"误杀比漏杀更难排查"）。
+- **可观测落点**：`rag_ingest_job.status` / `.error_detail`（`SWEEPER_TIMEOUT`）；日志 `[RAG] Sweeper 接管 N 个超时（>30分钟）…`（`IngestJobSweeper.java:85-86` / `:112-113`，WARN 级）。**无观测点**：无 `sweeper_taken_total` 指标、无告警规则 ⇒ 接管频发不可被告警发现。
+- **排查断点**：`IngestJobSweeper.java:70`（清单空短路）、`:80`（逐租户接管）、`:110`（全局扫）、`:43-44`（阈值）、`IngestJobConsumer.java:103`（同一份清单的另一消费点——两处清单必须同源）。
+
+---
+
+### 附录 I：红队反例用例集（13 条，可直接落成测试）
+
+> **本附录为第三轮追加**，不改写既有内容。每条用例可转为 IT / 单测 / 静态守卫。
+> **「当前实际」列如实写现状**：能核实就写核实结果（含本轮锚点），不能核实写 `❓未核实`；**本轮未运行任何测试**，所有行为断言一律标注「未实测（需按本报告门禁口径在实施阶段验证）」。
+> **归因三分类**：`设计取舍`（有意为之，非缺陷）/ `能力缺失`（应补）/ `证据缺口`（本轮未能核实，需补证）。
+> **铁律对齐**：验隔离必须用 **`rag_app`（NOBYPASSRLS）**；用 `rag_ops`（BYPASSRLS）跑会得到**假绿**（铁律 1；`RagStartupSelfCheck.java:228-263` 断言两角色不同）。
+> ⚠️ **编号说明**：本附录用例编号 `I-01 … I-13` 与**第七章改进项编号 `R-0 … R-7`** 是两套独立编号——后者是改进项（方案），前者是红队用例（断言）。
+
+| # | 用例名 | 攻击/异常场景 | 前置条件 | 步骤 | 期望结果（可断言） | 当前实际 | 归因 | 可落成的测试形态 |
+|---|---|---|---|---|---|---|---|---|
+| I-01 | 跨租户直查：租户 T 检索不得看到租户 U 的片段 | 越权/跨租户 | `rag_app` 连接；T、U 各有 `rag_chunk`（含向量） | 1) 以 T 身份执行一次 `search`；2) 统计结果 chunkId 归属 | 结果中**不含任何 U 的 chunkId**；U 的片段**一行都不出现**（不是"被过滤但计数可见"） | ✅ 机制成立：`RagSqlScopeTranslator.java:114-116`（谓词渲染）+ `JdbcRetrievalRepository.java:489`/`:535`（双通道同源）+ IT `RetrievalRepositoryIT.java:242-250`。**未实测** | — | DB IT（真实 PG，`rag_app`）+ 静态守卫（断言 6 处 SELECT 均经 translator） |
+| I-02 | 令牌租户与 `X-Tenant-Id` 不一致 ⇒ 403 | 越权/跨租户 | 租户域令牌 `tenant_id=A` | 1) 携带该令牌 + `X-Tenant-Id=B` 请求 `/api/v1/retrieval` | 返回 **403**；且**不发生任何数据访问**（断言 `rag_access_audit` **无新增行**、无 SQL 执行） | ✅ 机制成立：`RagJwtAuthFilter.java:180-189`（鉴权在业务之前）。⚠️ 但 platform 侧会把它压成 `RAG_UNAVAILABLE`（见 I-08）。**未实测** | — | API IT（rag 侧）+ 角色×任务（平台主体 / 租户主体两态） |
+| I-03 | 哨兵租户不得作为会话身份 | 越权/跨租户 | 哨兵 UUID `00000000-0000-0000-0000-000000000000` | 1) `X-Tenant-Id` = 哨兵 ⇒ 调检索端点 | 返回 **400**（"租户标识不得使用平台全局作用域的保留值"）；**不得**进入 SQL | ✅ 机制成立：`RagRetrievalController.java:172-176`；哨兵常量 `RagScope.java:46`。数据库侧 `rag_current_tenant()` 的拒绝逻辑**本轮未连库复核** ⇒ 该层标证据缺口。**未实测** | — | API IT + DB IT（断言 DB 层也拒绝） |
+| I-04 | 两个 worker 并发领取同一批摄取任务 | 并发竞态 | `rag_ingest_job` 有 N 条 PENDING；两个 worker 实例 | 1) 并发轮询；2) 统计每个 job 被置 PARSING 的次数 | **每个 job 恰好被一个 worker 领走**（`PARSING` 次数 == 1，`attempt` 不重复递增） | ✅ 机制成立：`JdbcIngestJobRepository.java:282-290`（`FOR UPDATE SKIP LOCKED`）。**反向验证**：撤掉 SKIP LOCKED 必须变红（退化为阻塞）。**未实测** | — | DB IT（并发 + `rag_app`） |
+| I-05 | 重复检索 ⇒ 审计行数与调用次数一致 | 重复投递/幂等 | 租户 T 语料就绪 | 1) 同一 query 连续检索 2 次；2) 统计 `rag_access_audit` 中 `action='RETRIEVE'` 的行数 | 恰好 **2 行**（一次调用一行），既**不漏写**也不重复写；`principal_id` 为 NULL（系统动作无人类主体，既有正文已明确该口径） | ✅ 机制成立：`JdbcTenantScopedRetrieval.java:62-66`（每次检索写一行）。⚠️ **无幂等键**：同 query 重复调用会重复检索并重复计费/重复留痕（当前无去重口径）。**未实测** | 设计取舍（系统动作无幂等键）／能力缺失（无去重口径） | DB IT（断言行数，遵守铁律 6「有一行 ≠ 数字算对了」） |
+| I-06 | 并发 `loadByIds` 取回同一批依据不得越界 | 并发竞态 | 租户 T 自己的 chunkId 列表 + 租户 U 的 chunkId | 1) 10 个线程并发 `loadByIds`；2) 断言返回集合 | 返回集合恒 ⊆ T 的 chunk 集合；**不含 U 的任何 chunkId**；结果**无重复行** | ✅ 机制成立：`JdbcRetrievalRepository.java:430-441`（`chunk_id = ANY(?::uuid[])` + 同一 scope 谓词）+ IT `RetrievalRepositoryIT.java:297-302`。**未实测** | — | DB IT（并发）+ API IT |
+| I-07 | 门禁恒空必须是"零命中"，**不得**报成"RAG 不可用" | 终态误报 | 语料存在但相关性分 < 0.38（如跨领域词） | 1) 发一次必然低于阈值的检索；2) 观察平台侧事件 | 平台侧出现 `RAG_HITS{hits:0, injected:false}`；**不得**出现 `RAG_UNAVAILABLE`；rag 侧返回 **HTTP 200** + `funnel` 门禁后 = 0 | ✅ 机制成立：`RetrievalOrchestrator.java:136-138`（门禁）+ `:148-159`（漏斗与 debug）+ `AgentChatOrchestrator.java:524-533`（组件失败路径与门禁路径**分离**）。**未实测** | — | API IT（角色×任务：低分词 × 正常词 两态，事件类型必须不同） |
+| I-08 | 403/401 不得被伪装成临时故障 | 终态误报 | 平台侧 `HttpRagRetrievalGateway` 指向真实 rag | 1) 用**无权限**令牌触发检索；2) 观察平台侧事件与用户可见文案 | 必须是**显式终态**（403/401 + "无权访问"），**不得**统一呈现为"RAG 检索不可用 / 稍后再试" | ❌ **当前实际：平台侧把全部非 2xx 压成同一异常**——`HttpRagRetrievalGateway.java:143-147` 只带状态码抛 `RagUnavailableException` ⇒ 401/403/500 在编排器里**不可区分**（`AgentChatOrchestrator.java:524-533` 一律记 `RAG_UNAVAILABLE`）⇒ **违反铁律 15 的精神**（权限/终态错误不得伪装成临时故障）。**未实测** | 能力缺失 | API IT（断言事件类型随 HTTP 状态码而变；须先做"状态码透传"的最小改动） |
+| I-09 | 资源预算越界：RAG 命中区注入量必须受限 | 资源/预算越界 | 单次检索返回超长片段 | 1) 构造 topK=50 且每条 text 很长的命中集；2) 统计实际注入模型上下文的 RAG 载荷 token | 注入载荷 token **不超过** `agent.context.rag-quota.token-budget`（启用态）或 legacy 固定口径 `MAX_INJECT_HITS=8` + `MAX_HIT_TEXT=1200`（关闭态）；**不得**无界增长 | ⚠️ **当前实际：默认路径是 legacy 固定截断**——`agent.context.enabled` 默认 false（`platform/.../application.yml:232`）⇒ `RagHitQuotaAdapter.java:81-82` 首行短路 ⇒ 走 `AgentChatOrchestrator.java:572-588` 的 `serializeHits`（`:577-580` 按 8 条 / 1200 字截断）。**上限存在但按"条数×字数"而非 token 预算** ⇒ 口径与配额算法不一致。**未实测** | 设计取舍（影子期）/ 能力缺失（口径未统一） | 单测（`serializeHits` 截断断言）+ API IT（注入量断言；须先接线 G-14） |
+| I-10 | 崩溃恢复：僵尸摄取任务必须被接管 | 崩溃恢复 | 某 job 卡在 `PARSING`；`rag.indexer.tenants` 含该租户 | 1) 等 `rag.ingest.sweeper.interval-ms`；2) 查 job 状态 | job 变为 `FAILED` 且 `error_detail` 含 `SWEEPER_TIMEOUT`；**不得**永久停在 `PARSING` | ⚠️ **当前实际：取决于租户清单**——`IngestJobSweeper.java:70-73` 清单为空 ⇒ 直接 return ⇒ 租户侧僵尸任务**永不被接管**；而 `rag-worker/application.yml:81` 的默认值就是 `tenants: []`，且本轮 grep 确认 `rag.env` / `rag.env.example` **均未提供该键** ⇒ **默认部署下此链路静默停摆**。**未实测** | 能力缺失（部署基线未固化 + 缺 fail-fast） | DB IT（超时接管）+ 配置守卫（`tenants` 为空 ⇒ 启动期告警/拒绝） |
+| I-11 | 崩溃恢复：审计写失败 ⇒ 不得出现"检索成功但无痕迹" | 崩溃恢复 | 检索链路正常 | 1) 让 `rag_access_audit` 插入失败（如权限不足/约束冲突）；2) 观察响应与表 | 整次检索**回滚**：不返回命中；`rag_access_audit` **无新增行**；调用方收到失败而非成功 | ✅ 机制成立：`JdbcTenantScopedRetrieval.java:46-68`（同一 `transactionTemplate` 内"检索 + 审计"，`:59-61` 注释明写"不允许检索成功但无痕迹"）。**未实测** | — | DB IT（制造审计写失败）+ API IT（断言非 200/无命中） |
+| I-12 | 排序键与门禁键分离的不变式 | 终态误报 / 回归护栏 | 语料含强相关与弱相关片段 | 1) 执行检索；2) 对每条命中断言 | `score()`（相关性分，0~1）与 `fusionScore()`（RRF 融合分，≤2/61≈0.0328）**量纲不同**；门禁只读 `score`；融合分恒 < 0.05 | ✅ 机制成立：`JdbcRetrievalRepository.java:280-296`（排序键/门禁键分离）+ `:590`（RRF 公式）+ 既有 IT `RetrievalRepositoryIT.java:266-282`。⛔ **红线**：不得改 k=60、不得合并两个键。**未实测** | — | DB IT（复用既有 IT 断言）+ 静态守卫（断言 `minScore` 比较发生在 `score()` 上） |
+| I-13 | 影子开关关闭 ⇒ 零行为变更；开启 ⇒ 读数必须可被消费 | 回归护栏 / 观测 | `rag.shadow.enabled` 开/关两态 | 1) 关闭态跑一次检索，断言结果与审计逐字节一致；2) 开启态断言"样本数 > 0"且"mismatch 数可被外部读取" | 关闭态：检索结果、审计行**完全一致**（零行为变更）；开启态：`shadowSamples > 0` **且** 该计数有**消费方**（健康端点或写库） | ⚠️ **当前实际**：关闭态零行为变更成立（`RagShadowConfiguration.java:22` ⇒ 关闭时 Bean 不存在、`RagShadow.java:35-43` 全 no-op）；但**开启态读数无消费方**——`InMemoryRagShadowMetrics.java:14` 为内存实现，`RagShadowCollector.java:42-51` 的 `snapshot()` **无主代码消费方**（本轮 grep 仅测试引用）⇒ "mismatch = 0"与"根本没采到样本"**不可区分**。**未实测** | 能力缺失 | DB IT（影子 IT）+ 静态守卫（断言 `snapshot()` 有生产消费方或指标导出） |
+
+**反向验证口径**：每条用例必须能回答「撤掉修复点后，这条用例会不会变红？」——
+
+- **I-01 / I-03 / I-04 / I-06 / I-11 / I-12**：属"防回归护栏"，撤掉对应机制（谓词渲染、哨兵 400、SKIP LOCKED、同源谓词、同事务审计、键分离）**必然变红**（其中 I-01/I-06/I-12 已有既有 IT 覆盖，I-03/I-04/I-11 需按三级门禁补齐）。
+- **I-02**：撤掉归属绑定（`RagJwtAuthFilter.java:180-189`）⇒ 变红；撤掉后行为是"越权检索成功"，正是本用例的价值。
+- **I-05**：撤掉审计写入 ⇒ 行数变 0 ⇒ 变红；但"重复调用是否应去重"当前**无修复点**，该子断言属**已知缺口登记**。
+- **I-07**：撤掉门禁（`RetrievalOrchestrator.java:136-138`）⇒ 低分词也会返回命中 ⇒ 变红；这是"门禁不该被悄悄放宽"的守卫。
+- **I-08 / I-09 / I-10 / I-13**：当前**没有修复点可撤**（能力缺失/影子期），落成时必须**先补修复点**再验证"撤掉即红"；**在这些用例变绿之前，它们是"已知缺口登记"，不是"通过的测试"**。
+
+**建议落地优先级**：**P0** 用例 **5** 条（I-08 终态误报 / I-10 崩溃恢复停摆 / I-13 影子读数无出口 / I-02 越权归属 / I-01 跨租户 —— 全部是"默认部署下会真实出事"类） / **P1** 用例 **5** 条（I-05 重复留痕 / I-07 门禁语义 / I-09 注入预算 / I-12 键分离回归 / I-03 哨兵身份） / **P2** 用例 **3** 条（I-04 并发领取 / I-06 并发取回 / I-11 审计回滚）。
+
+**反向验证补充**：P0 的 I-10 与附录 G-10、I-13 与附录 G-07、I-08 与附录 G-13 分别指向**同一批配置项**——这说明本轮附录 G 的配置矩阵**不是文档产物，而是这些红队用例的前置清单**；按上文优先级落地时，配置侧与用例侧应**同批改动**，避免"配好了但没用例守"或"有用例但配置没接线"。
+
 ---
 
 ## 诚实边界声明
@@ -1520,3 +2445,30 @@ Jina AI 的 late chunking（arXiv:2409.04701）证明：普通切分后独立编
 2. 本报告**没有连库**核对活库的真实表结构与策略数（MEMORY 记"rag 13 表/37 策略"，本报告据 `01_rag_ddl.sql` 核实为 **13 张 CREATE TABLE + 37 条 CREATE POLICY**，另有 `06`/`08`/`09` 三份 ALTER 追加策略与 1 张 `rag_index_generation` 表，故**活库实际策略数高于 37**——这与 MEMORY 记载的偏差本报告未进一步追查）。
 3. 本报告的改进点（R-0 ~ R-7）**均未实施**，其"预期收益"是**基于机制推理的目标值**，不是实测值；每项都配了可执行的验收门禁，正是为了在实施时把目标值变成实测值。
 4. 本报告**没有覆盖** RAG 的**生成侧**（`GroundedGenerationService` / `rag_answer_citation` 接地判定 / `rag_grounding_verdict`）的深度分析——那是维度 6（上下文）与维度 7（护栏）的交界，本报告只在"检索结果如何进上下文"处切入。这可能低估了 RAG 侧的整体复杂度。
+
+### 第三轮补充（2026-11-16 追加层：§5.7 评分卡 + 附录 G/H/I）
+
+> **本小节只描述本轮新增的 §5.7、附录 G、附录 H、附录 I 的证据分级**，不改写上述任何既有声明。既有正文与锚点原样保留；本轮复核出的冲突一律以「**本轮更正（与既有正文 X.X 冲突）**」在新增节内标注（见 §5.7.4 第 1/4/6 行）。
+
+**基于源码实证的部分（本轮重新 Read/Grep 复核）**：
+- **§5.7.1 全部我方证据锚点**：逐条复核 `JdbcRetrievalRepository.java`（`:107` RRF_K=60、`:110` 候选倍数、`:172-180` 六轴准入模板、`:242-250` 装配期维度拒绝、`:262-266` 权威等级展开、`:277-296` RRF 融合、`:300-302` 端口契约过滤、`:489`/`:535` 双通道同源渲染、`:472-524` 稠密通道含代际过滤、`:526-557` 词法通道、`:585-599` 融合与相关性分分离）、`RetrievalOrchestrator.java`（`:82`~`:169` 七步编排、`:136-138` 门禁、`:148-154` 五段漏斗、`:156-159` 门禁未过日志、`:182` 补全基准分、`:209-222` 版本惩罚只作用于融合分）、`JdbcTenantScopedRetrieval.java`（`:46-48` 事务内绑 GUC、`:53` 作用域判定、`:62-66` 同事务审计）、`RagSqlScopeTranslator.java`（`:17-30` 与 RLS 的逐字等价对照表、`:102-107` 列限定符白名单、`:111-122` 四种作用域渲染）、`RagRetrievalController.java`（`:86-104` 端点、`:163-184` 租户校验、`:200-207` scopeMode 默认 STRICT、`:94-102` 嵌入异常→503）、`RagJwtAuthFilter.java`（`:169-179` 401、`:180-189` 403 归属绑定、`:194-207` 域/主体属性）、`HttpRagRetrievalGateway.java`（`:62` 端点、`:65-69` 超时与 512KB 上限、`:108-110` topK 校验、`:130-141` IOException、`:143-147` 非 2xx、`:152-173` 中性占位坐标 + CROSS_EDITION、`:176-200` 白名单解析、`:202-221` 畸形命中丢弃、`:244-252` 死代码 `describeDefaultEdition`）、`AgentChatOrchestrator.java`（`:128-129` 固定截断常量、`:511-564` `doRag`、`:524-533` `RAG_UNAVAILABLE`、`:540-544` 配额与 `injected`、`:572-588` legacy 载荷、`:595-616` 配额 fail-soft、`:1046-1047` 异常映射）、`RagInfrastructureConfig.java`（`:72-73` 门禁阈值、`:91-92` 占位闸门、`:104-105`/`:288-292` 向量列、`:301-308` 权威门槛、`:310-313` 编排器装配）、`EmbeddingPorts.java`（`:41-64` 端口选择与 fail-closed）、`LocalDeterministicEmbeddingPort.java`（`:13-23` 诚实边界、`:30`/`:33` 维度与模型标识）、`LocalPortGate.java:43`、`RagShadowConfiguration.java`（`:22`/`:26`/`:29`/`:30`/`:31-32`）、`RagShadow.java:35-43`、`RagShadowCollector.java:42-51`、`RagShadowReporter.java`（`:48-50`/`:51-53`/`:56-61`/`:64-70`）、`InMemoryRagShadowMetrics.java:14`、`RagShadowMetrics.java:17-40`、`RlsDependencyProbe.java:47-52`、`RagStartupSelfCheck.java`（`:108`/`:123-142`/`:167-176`/`:197-206`/`:228-263`）、`IngestJobConsumer.java`（`:59-60`/`:76-87`/`:102-125`）、`JdbcIngestJobRepository.java`（`:276-299`/`:328-379`）、`IngestJobSweeper.java`（`:43-44`/`:61`/`:68-83`/`:108-121`）、`RetrievalPolicy.java:87-95`、`EditionScope.java:63-97`、`TrustTier.java:74-76`、`RagScope.java:46`/`:59-60`、`RetrievalRepositoryIT.java`（`:242-250`/`:266-282`/`:297-302`/`:417`/`:535`）、`VectorColumnTest.java:46-51`、`LayoutPredicates.java:141`/`:144`、`RAG-D08_评测体系与质量门禁.md:360-369`、`01_rag_ddl.sql`（`:281-291`/`:293`/`:356`/`:389`/`:394`/`:960-966`）、`deploy/sql/rag/09_v1_0_3_index_generation_alter.sql:33`、`rag-bootstrap/application.yml`（`:52-54`/`:68`/`:85-86`/`:100-109`/`:127-131`/`:133`/`:137`）、`rag-worker/application.yml`（`:28-34`/`:67-73`/`:81`）、`rag.env`（`:32`/`:37-46`/`:49-50`/`:55-58`/`:74-76`）、`platform/.../application.yml`（`:68-69`/`:232`/`:267-271`）、`RagHitQuotaConfiguration.java:37-63`、`RagHitQuotaAdapter.java:81-82`、`AgentChatConfiguration.java:71`/`:85`。
+- **附录 G 全部 15 行**的消费方与生效性判定（每行均给出"谁读取"的类与行号，无凭配置文件名推测者）。
+- **附录 H 全部 5 个场景**的逐跳锚点（ASCII 时序跳数与锚点表跳数逐条一致：H-1 = 11 跳、H-2 = 7 跳、H-3 = 8 跳、H-4 = 7 跳、H-5 = 6 跳）。
+- **附录 I 全部 13 条**中"当前实际"列带锚点的条目，以及标注"机制成立"的条目。
+
+**基于官方文档的部分**：
+- **本轮重新抓取**：Elasticsearch 官方 RRF 页 <https://www.elastic.co/guide/en/elasticsearch/reference/current/rrf.html> —— 核实原文「`rank_constant` … Defaults to `60`」「`score += 1.0 / ( k + rank( result(q), d ) )`」「A minimum of **two** child retrievers is required for ranking」「`rank_window_size` … Defaults to the `size` parameter」。本页支撑 §5.7.1 的 G-03（RRF k=60 是业界默认，非拍脑袋）与 5.7.2 的竞品对照。
+- **本轮重抓但未取得正文**：pgvector 官方 README <https://github.com/pgvector/pgvector> —— 抓取到仓库页但正文被截断，**未逐字复核** ANN 维度上限表述；故 §5.7.1 中 pgvector 相关的"无租户概念 / HNSW 维度上限"仍**沿用第二章与附录 F 已核实的官方事实**，本轮未新增断言。
+- **沿用第三章 / 附录 F 已核实的官方事实**（本轮未重抓）：OpenAI Vector Stores + File Search、Agno Knowledge、Weaviate / Pinecone 多租户模型、Qdrant 混合查询、Ragas 指标、Dify 知识库、LlamaIndex 换模型须重建索引、Azure AI Search 混合检索与语义重排。
+- **本轮未新增任何论文、作者、年份或 URL**。
+
+**工程判断（推断）的部分**：
+- **§5.7 的分数与权重**：权重（0.30/0.25/0.20/0.15/0.10）由 §1.6 既有权序映射而来（映射方式本身是判断），全部 0–4 打分是**工程判断**，不是测量值；5.7.2 的"可比子集 ±0.00"是该判断的算术后果。
+- **附录 H 中的"推测行为"**：H-4 失败分支 1（去掉 SKIP LOCKED ⇒ 退化为阻塞）与 H-5 的"清单为空 ⇒ 永不被接管"依据**源码路径推导**与**代码注释记载的历史实测**（`JdbcIngestJobRepository.java:27-29`/`:272-275`、`IngestJobSweeper.java:59-61`、`:361-376` 的 2026-11-06 灰度实测），**本轮未复跑**。
+- **附录 I 的"期望结果"与 P0/P1/P2 分级**是建议，不是已通过的测试。
+
+**本轮未做的事（诚实声明）**：
+1. **未运行任何测试**（未跑单测 / DB IT / 压测 / 故障注入）；所有行为断言一律写「未实测（需按本报告门禁口径在实施阶段验证）」。
+2. **未连库**：线上 `study_rag` 的真实列形态、真实策略数、真实语料规模与影子读数**本轮均未核实**（§5.7.4 第 3 行、附录 G-07）。
+3. **未修改任何源码**：本轮只写文档，附录 G/I 提出的修复点（`rag.indexer.tenants` 部署基线、影子快照出口、平台侧 HTTP 状态码透传）**均未实施**。
+4. **未新增任何配置项或默认值**：附录 G 里的所有"默认值"均取自仓库现有 yml/env，未提出新的配置面建议（⛔ 特别地：RAG 红线要求的"不动 RRF k=60 / 不动六轴准入谓词 / 不动 `halfvec(4096)` 与 HNSW / 不调低 0.38"在本轮新增内容中**一条未破**；凡与红线冲突的建议已直接**不采纳**并注明）。
