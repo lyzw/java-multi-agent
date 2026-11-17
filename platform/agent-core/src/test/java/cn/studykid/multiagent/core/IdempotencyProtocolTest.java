@@ -131,16 +131,26 @@ class IdempotencyProtocolTest {
         }
 
         @Test
-        @DisplayName("含分隔符的键值被拒绝（避免 composite 歧义）")
+        @DisplayName("⚠️ 组成部分含分隔符不再被拒：改为可逆编码（保住唯一性）")
         void rejectsSeparatorInKey() {
-            // 命名空间禁止含分隔符；复合键的<b>组成部分</b>也禁止（否则无法唯一分解）
+            // 命名空间仍然禁止含分隔符 —— 它不是复合键的组成部分，不能编码。
             assertThatThrownBy(() -> new IdempotencyKey("bad/ns", "k"))
                     .as("命名空间含分隔符会破坏 composite 结构")
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> IdempotencyKey.forRecordWeakness("stu/1", "r1", "KP"))
-                    .as("组成部分含分隔符会使 (a/b,c) 与 (a,b/c) 撞键")
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("studentId");
+
+            // ⚠️ 2026-11-17 实测修复（E2E 2026-11-17）：
+            //    此前这里拒绝含分隔符的组成部分 → 模型写的知识点含斜杠
+            //    （「h=-b/2a，k=c-b²/4a」）→ IllegalArgumentException 冒泡到执行循环
+            //    → 整个 Run 被打成 INTERNAL_ERROR。
+            //    现在改为**可逆编码**：内容照收，唯一性由编码保证。
+            IdempotencyKey encoded = IdempotencyKey.forRecordWeakness("stu/1", "r1", "KP");
+            assertThat(encoded.keyValue())
+                    .as("含分隔符的组成部分必须被编码，不得直接拼进键里")
+                    .isEqualTo("stu%2F1/r1/KP");
+            // 编码后可逆，且 (a/b,c) 与 (a,b/c) 仍是两个不同的键
+            IdempotencyKey other = IdempotencyKey.forRecordWeakness("stu", "1/r1", "KP");
+            assertThat(other.keyValue()).isNotEqualTo(encoded.keyValue());
+            assertThat(IdempotencyKey.decodePart("stu%2F1")).isEqualTo("stu/1");
         }
 
         @Test
@@ -276,11 +286,13 @@ class IdempotencyProtocolTest {
         }
 
         @Test
-        @DisplayName("⚠️ 组成部分含分隔符被拒（同 record_weakness 规则）")
+        @DisplayName("⚠️ 组成部分含分隔符改为编码，不再直接拒绝（空值仍然拒绝）")
         void toolInvokeRejectsSeparator() {
-            assertThatThrownBy(() -> IdempotencyKey.forToolInvoke("run/1", null, "t", "c"))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("runId");
+            // 2026-11-17：含分隔符的组成部分改为可逆编码（见 rejectsSeparatorInKey）。
+            assertThat(IdempotencyKey.forToolInvoke("run/1", null, "t", "c").keyValue())
+                    .as("含分隔符的 runId 必须编码，否则键无法唯一分解")
+                    .isEqualTo("run%2F1/t/c");
+            // 空值仍然拒绝 —— 那是真缺陷，不是内容问题
             assertThatThrownBy(() -> IdempotencyKey.forToolInvoke("run-1", null, "t", ""))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("callId");
@@ -388,14 +400,20 @@ class IdempotencyProtocolTest {
         }
 
         @Test
-        @DisplayName("⚠️ Agent 引用含分隔符被拒（键必须可唯一分解）")
+        @DisplayName("⚠️ Agent 引用含分隔符改为编码（键仍必须可唯一分解）")
         void agentRefWithSeparatorIsRejected() {
-            // ⚠️ (a/b, c) 与 (a, b/c) 会算出同一个键 →
-            //    不同 Agent 的调用互相吞掉 —— 那正是本次要修的缺陷换个方向复发。
-            assertThatThrownBy(() -> IdempotencyKey.forToolInvoke(
-                    "run-1", "agent/child@1", "t", "call-1"))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("agentRef");
+            // ⚠️ (a/b, c) 与 (a, b/c) 会算出同一个键 → 不同 Agent 的调用互相吞掉。
+            //    2026-11-17：不再直接拒绝，改为**可逆编码**（否则含斜杠的
+            //    agentRef 会把整个 Run 打成 INTERNAL_ERROR）。
+            IdempotencyKey key = IdempotencyKey.forToolInvoke(
+                    "run-1", "agent/child@1", "t", "call-1");
+            assertThat(key.keyValue())
+                    .as("含分隔符的 agentRef 必须编码")
+                    .isEqualTo("run-1/agent%2Fchild@1/t/call-1");
+            // 编码后仍可唯一分解：两段不同的 agentRef 不撞键
+            assertThat(key.keyValue())
+                    .isNotEqualTo(IdempotencyKey.forToolInvoke(
+                            "run-1", "other/child@1", "t", "call-1").keyValue());
         }
 
         @Test

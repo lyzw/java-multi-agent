@@ -76,7 +76,8 @@ public class AuthController {
         //    安全边界仍由执行时重授权保证（红线 9），本响应仅作 UI 提示。
         return ResponseEntity.ok(new TokenResponse(
                 result.token(), "Bearer", tokenTtlSeconds(),
-                result.tenantId(), result.principalId(), result.roles()));
+                result.tenantId(), result.principalId(), result.roles(),
+                result.username(), result.studentId()));
     }
 
     /**
@@ -161,7 +162,14 @@ public class AuthController {
      * @param roles 主体在本租户内的角色集合（B1：2026-10-23 新增），仅用于导航显隐
      */
     public record TokenResponse(String accessToken, String tokenType, long expiresIn,
-                                String tenantId, String principalId, java.util.Set<String> roles) {
+                                String tenantId, String principalId, java.util.Set<String> roles,
+                                String username, String studentId) {
+
+        /** 兼容构造器：不携带学生身份的既有调用方。 */
+        public TokenResponse(String accessToken, String tokenType, long expiresIn,
+                             String tenantId, String principalId, java.util.Set<String> roles) {
+            this(accessToken, tokenType, expiresIn, tenantId, principalId, roles, null, null);
+        }
     }
 
     /** JWKS 最小形式。 */

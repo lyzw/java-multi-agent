@@ -49,6 +49,8 @@ describe('通用问答身份域边界', () => {
   const transport = readFrontend('api/generalChatApi.ts')
   const app = readFrontend('App.tsx')
   const shell = readFrontend('layouts/AppShell.tsx')
+  // ⚠️ P1-3（2026-11-17）：受众侧入口的元数据已收敛到 navCatalog，侧栏由它派生。
+  const navCatalog = readFrontend('auth/navCatalog.ts')
   const controller = codeOnly(
     readPlatform(
       'agent-api/src/main/java/cn/studykid/multiagent/api/chat/ConsoleChatController.java',
@@ -63,7 +65,8 @@ describe('通用问答身份域边界', () => {
   it('防空转：四份源码都确实被读到', () => {
     expect(transport).toContain('streamGeneralChat')
     expect(app).toContain('<Route path="/rag"')
-    expect(shell).toContain("to: '/rag'")
+    // ⚠️ P1-3：入口元数据在 navCatalog，侧栏由它派生。
+    expect(navCatalog).toContain("to: '/rag'")
     expect(controller).toContain('@PostMapping(value = "/stream"')
     expect(security).toContain('platformSecurityFilterChain')
   })
@@ -106,7 +109,9 @@ describe('通用问答身份域边界', () => {
 
   it('路由与导航入口必须成对存在（否则新页面是死链）', () => {
     expect(app).toContain('<Route path="/chat"')
-    expect(shell).toContain("to: '/chat'")
-    expect(shell).toContain("label: '通用问答'")
+    expect(navCatalog).toContain("to: '/chat'")
+    expect(navCatalog).toContain("label: '通用问答'")
+    // ⚠️ 侧栏必须**真的**从目录表派生（否则目录表只是摆设）
+    expect(shell).toContain('AUDIENCE_ENTRIES.map(')
   })
 })

@@ -273,6 +273,59 @@ public class RunExecutionLoop {
      */
     private final @Nullable RequestAssemblyPort requestAssemblyPort;
 
+    /** 终态错误码：模型额度/限流耗尽（稳定码，供前端 guidance 分类）。 */
+    public static final String ERROR_MODEL_RATE_LIMITED = "MODEL_RATE_LIMITED";
+    /** 终态错误码：可重试模型错误达硬上限。 */
+    public static final String ERROR_MODEL_RETRY_EXHAUSTED = "MODEL_RETRY_EXHAUSTED";
+    /** 默认重试硬上限（可被构造器/配置覆盖）。 */
+    public static final int DEFAULT_MAX_ATTEMPTS = 3;
+
+    /**
+     * 模型调用重试硬上限（含首次领取）。
+     *
+     * <p>⚠️ 每次领取（MQ 重投或崩溃恢复）都会递增 {@code run.attempt}；
+     * 达到上限后<b>必须</b>收敛 FAILED，绝不再返回可重试结局 ——
+     * 否则 Run 永远停在 RUNNING，进度页永远显示「执行中」。
+     */
+    private int maxAttempts = DEFAULT_MAX_ATTEMPTS;
+
+    /** 测试/注入用：在最小构造器上指定重试硬上限。 */
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             int maxAttempts) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId);
+        this.maxAttempts = positiveAttempts(maxAttempts);
+    }
+
+    /** 测试/注入用：在带事件端口的构造器上指定重试硬上限。 */
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             @NonNull PromptGuard promptGuard,
+                             @Nullable RunEventPort eventPort,
+                             int maxAttempts) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId,
+                promptGuard, eventPort);
+        this.maxAttempts = positiveAttempts(maxAttempts);
+    }
+
+    /** @return 当前生效的重试硬上限（供装配自检与单测断言）。 */
+    public int maxAttempts() {
+        return maxAttempts;
+    }
+
+    private static int positiveAttempts(int value) {
+        if (value <= 0) {
+            throw new IllegalArgumentException("重试硬上限必须为正数，收到: " + value);
+        }
+        return value;
+    }
+
     public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
                              @NonNull RunClaimPort claimPort,
                              @NonNull ToolInvocationGate toolGate,
@@ -1197,9 +1250,34 @@ public class RunExecutionLoop {
 
         } catch (ModelGateway.ModelGatewayException e) {
             // ── §3 三种异常语义 ────────────────────────────────────────
+            // ⚠️ ① 额度/限流耗尽 = **终态**（P0 修复）：
+            //    RATE_LIMITED(429) 与 MiniMax 在 HTTP 200 下用 base_resp.status_code
+            //    报告的配额耗尽都被归一为 exhausted。重试只会继续撞同一堵墙，
+            //    此前返回 RETRYABLE_FAILURE 且不 commitFailure → Run 永远 RUNNING，
+            //    进度页永远「执行中」。这里立即收敛 FAILED（稳定错误码）。
+            if (e.exhausted()) {
+                log.warn("模型额度/限流耗尽，Run 收敛 FAILED: runId={}, kind={}, msg={}",
+                        task.runId(), e.kind(), e.getMessage());
+                ExecutionOutcome exhausted = commitFailure(tenantId, task,
+                        "模型额度已用尽或调用过于频繁", ERROR_MODEL_RATE_LIMITED);
+                notifyLoopComplete(tenantId, task.runId(), exhausted, steps);
+                return exhausted;
+            }
             if (e.kind().retryable()) {
-                log.info("模型调用可重试失败: runId={}, kind={}",
-                        task.runId(), e.kind());
+                // ⚠️ ② 硬上限：达到上限后**必须**收敛 FAILED，不得再返回可重试结局。
+                //    attempt 由领取方（claimTasks / claimSpecificRun）递增，
+                //    MQ 重投与崩溃恢复都算一次。
+                if (task.attempt() >= maxAttempts) {
+                    log.warn("模型调用重试已达硬上限，Run 收敛 FAILED: runId={}, attempt={}, "
+                                    + "maxAttempts={}, kind={}",
+                            task.runId(), task.attempt(), maxAttempts, e.kind());
+                    ExecutionOutcome capped = commitFailure(tenantId, task,
+                            "模型调用重试次数已达上限", ERROR_MODEL_RETRY_EXHAUSTED);
+                    notifyLoopComplete(tenantId, task.runId(), capped, steps);
+                    return capped;
+                }
+                log.info("模型调用可重试失败: runId={}, kind={}, attempt={}/{}",
+                        task.runId(), e.kind(), task.attempt(), maxAttempts);
                 notifyLoopComplete(tenantId, task.runId(),
                         ExecutionOutcome.retryableFailure(e.kind().name()), steps);
                 return ExecutionOutcome.retryableFailure(e.kind().name());

@@ -113,7 +113,8 @@ describe('agentChatReducer · 组件执行过程', () => {
     expect(a?.runId).toBe('run-1')
     expect(a?.route).toMatchObject({ agentId: 'agent-1', agentName: '数学错题归因 Agent' })
     expect(a?.rag).toMatchObject({ query: '判别式 小于零', topK: 5, hits: [HIT], injected: true })
-    expect(a?.usage).toEqual({ inputTokens: 10, outputTokens: 20 })
+    // ⚠️ P1-4：usage 视图带 estimated 标记（估算值必须可区分）。
+    expect(a?.usage).toEqual({ inputTokens: 10, outputTokens: 20, estimated: false })
     expect(a?.steps.map((step) => step.kind)).toEqual([
       'route',
       'rag',

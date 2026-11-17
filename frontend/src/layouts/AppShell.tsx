@@ -26,6 +26,7 @@ import { useSession } from '@/auth/session'
 import { ContentErrorBoundary } from '@/shared/ErrorBoundary'
 import { hasRoleAccess } from '@/auth/RequireRole'
 import { canPerformTask, unsupportedRoleOf, type TaskId } from '@/auth/capabilities'
+import { AUDIENCE_ENTRIES } from '@/auth/navCatalog'
 import { Icon, type IconName } from '@/components/Icon'
 
 /** 侧栏折叠态的本机记忆键（纯布局偏好，不涉及任何凭据 / 受控数据）。 */
@@ -77,23 +78,15 @@ const NAV: NavGroup[] = [
     // ⚠️ E2E 二次评估 N1：产品裁决「家长 / 老师本版本不开放」，
     //    rolesHint 不再承诺三个受众；只写实际开放的学生。
     rolesHint: '学生（本版本）',
-    items: [
-      { to: '/', label: '工作台', icon: 'dashboard', task: 'dashboard' },
-      { to: '/runs/new', label: '发起辅导', icon: 'plus', task: 'run:create' },
-      { to: '/runs', label: '检索记录', icon: 'search', task: 'run:list' },
-      { to: '/rag', label: '知识检索', icon: 'book', task: 'rag:search' },
-      // 通用知识问答：不挂教材语料的 SSE 对话（与 /rag 的「可溯源依据」互补）。
-      { to: '/chat', label: '通用问答', icon: 'cpu', task: 'chat:general' },
-      // 通用 Agent 编排对话：同一租户链的 SSE 过程可视化，端点与 /chat 分开。
-      { to: '/agent-chat', label: 'Agent 对话', icon: 'activity', task: 'chat:agent' },
-      // ⚠️ N2：STUDENT 没有 PROFILE_READ，填完编号才撞 403 —— 不再渲染该入口。
-      //    治理角色（TENANT_ADMIN / VIEWER）有 PROFILE_READ，仍可见。
-      { to: '/profile', label: '学习画像', icon: 'profile', task: 'profile:read' },
-      // ⚠️ N5：租户级聚合报表归位到治理面（受众不开放），
-      //    避免学生看到「发起量 13」与本人口径「10 条」两个数字被误读为数据错误。
-      //    聚合数据不含个体信息，后端复用 RUN_READ 是有意设计，此处只调整入口定位。
-      { to: '/reports', label: '报表中心', icon: 'activity', task: 'reports:read' },
-    ],
+    // ⚠️ P1-3（2026-11-17）：受众侧入口改为从 navCatalog 派生 ——
+    //    与工作台卡片共用同一份元数据，避免「导航说没有、卡片说有」的漂移。
+    //    ⛔ 顺序与文案仍由目录表决定（nav.menu.test.tsx 的 18 link 契约依赖它）。
+    items: AUDIENCE_ENTRIES.map((entry) => ({
+      to: entry.to,
+      label: entry.label,
+      icon: entry.icon,
+      task: entry.task,
+    })),
   },
   {
     title: '知识库治理',

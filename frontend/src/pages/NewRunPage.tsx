@@ -29,6 +29,7 @@ import {
   discardIdempotencyKey,
 } from '@/features/run/idempotency'
 import { scanForm, hasViolation, type Violation } from '@/features/compliance/scan'
+import { useSession } from '@/auth/session'
 import {
   readRetryState,
   makeRetryState,
@@ -38,6 +39,7 @@ import { Field } from '@/shared/Field'
 import { ErrorView } from '@/shared/ErrorView'
 import { PageHead, Panel } from '@/components/ui'
 import { Icon } from '@/components/Icon'
+import { gradeDisplayLabel } from '@/shared/format'
 
 /**
  * 默认 Agent（环境变量注入）。
@@ -57,6 +59,8 @@ const FALLBACK_SUBJECTS = ['数学', '物理', '化学', '生物', '语文', '�
 const FALLBACK_GRADES = ['初一', '初二', '初三'] as const
 
 const EMPTY_FORM: FormState = {
+  // ⚠️ 身份改造（2026-11-17）：studentId **不再由用户填写**，
+  //    提交时由后端按登录态派生。这里保留空串只为兼容 retryForm 的字段白名单。
   studentId: '',
   subject: FALLBACK_SUBJECTS[0],
   grade: FALLBACK_GRADES[0],
@@ -74,12 +78,11 @@ const EMPTY_FORM: FormState = {
  *    `id` 同时是 Field 的 name，也是 DOM 里的 input id。
  */
 interface RequiredField {
-  id: 'studentId' | 'questionText' | 'studentSolution' | 'correctAnswer'
+  id: 'questionText' | 'studentSolution' | 'correctAnswer'
   label: string
 }
 
 const REQUIRED_FIELDS: readonly RequiredField[] = [
-  { id: 'studentId', label: '学生匿名编号' },
   { id: 'questionText', label: '题目内容' },
   { id: 'studentSolution', label: '我的解题过程' },
   { id: 'correctAnswer', label: '已知正确答案' },
@@ -87,6 +90,10 @@ const REQUIRED_FIELDS: readonly RequiredField[] = [
 
 export function NewRunPage(): JSX.Element {
   const navigate = useNavigate()
+  // ⚠️ 身份改造（2026-11-17）：当前学生来自**登录态**，不再让用户手填编号。
+  //    这解决了教师评审实测的 P0-2：填数字编号被当成学号拦下、
+  //    而页面又不告诉学生正确格式 —— 现在根本不需要填。
+  const { currentStudent } = useSession()
   // ⚠️ N4：从「重新发起这道题」跳转过来时带回原题（location.state，不落存储）。
   //    缺失/非法则退化为空白表单，与原先行为一致。
   const location = useLocation()
@@ -155,15 +162,21 @@ export function NewRunPage(): JSX.Element {
     setForm((prev) => ({ ...prev, [name]: value }))
   }
 
-  /** 仅文本字段需预检；枚举字段无自由输入 */
+  /**
+   * 仅文本字段需预检；枚举字段无自由输入。
+   *
+   * ⚠️ 身份改造（2026-11-17）：**studentId 已从预检字段中移除** ——
+   *    它不再来自用户输入，而是后端按登录态派生的 `stu_` 匿名编号，
+   *    天然不命中学号模式。若仍把它列入预检，
+   *    反而会让「后端派生的编号」被当成「用户填的学号」而误拦。
+   */
   const textFields = useMemo(
     () => ({
-      studentId: form.studentId,
       questionText: form.questionText,
       studentSolution: form.studentSolution,
       correctAnswer: form.correctAnswer,
     }),
-    [form.studentId, form.questionText, form.studentSolution, form.correctAnswer],
+    [form.questionText, form.studentSolution, form.correctAnswer],
   )
 
   /**
@@ -262,7 +275,12 @@ export function NewRunPage(): JSX.Element {
 
     setSubmitting(true)
     const input: Record<string, unknown> = {
-      studentId: form.studentId.trim(),
+      // ⚠️ 身份改造（2026-11-17）：带上前端已知的 studentId（若登录响应回带了）。
+      //    ⚠️ 这**不是**权威值 —— 后端一律按 principalId 重新查库派生并覆盖它；
+      //    这里带上只是为了让幂等键的计算与界面展示保持一致。
+      ...(currentStudent.studentId !== null
+        ? { studentId: currentStudent.studentId }
+        : {}),
       subject: form.subject,
       grade: form.grade,
       questionText: form.questionText.trim(),
@@ -328,15 +346,31 @@ export function NewRunPage(): JSX.Element {
             缺项由本页自己的「还有 N 项必填未填」承担 —— 单一真相源。
         */}
         <form ref={formRef} onSubmit={(e) => void handleSubmit(e)} noValidate>
-          <Field
-            name="studentId"
-            label="学生匿名编号"
-            required
-            value={form.studentId}
-            onChange={update('studentId')}
-            violations={violations['studentId']}
-            hint="请填写平台生成的匿名编号，不要填姓名"
-          />
+          {/*
+            ⚠️ 身份改造（2026-11-17）：原先这里是「学生匿名编号」输入框，
+               要求用户手填 `stu_` 开头的匿名编号 —— 而页面又不给格式示例，
+               用户按直觉填数字编号就会被「疑似学号」拦下（教师评审 P0-2）。
+               现在改为**只读展示当前登录的学生**：身份由登录态决定，
+               用户既不需要知道编号格式，也不可能填成别人的编号。
+          */}
+          <div className="field">
+            <label htmlFor="currentStudent">当前学生</label>
+            <input
+              id="currentStudent"
+              name="currentStudent"
+              type="text"
+              readOnly
+              value={currentStudent.username ?? '未识别（请重新登录）'}
+              aria-describedby="currentStudent-hint"
+            />
+            <p className="field__hint" id="currentStudent-hint">
+              {/*
+                ⚠️ 说清「这为什么安全」：编号由系统按账号自动绑定，
+                不采集姓名、学校、班级，也无法被改成别人的。
+              */}
+              系统已按你的登录账号自动绑定学习档案，无需填写编号。
+            </p>
+          </div>
 
           {/*
             ⚠️ 只有列到 Agent 才渲染这个下拉：列表为空/不可达时表单保持原样，
@@ -400,9 +434,11 @@ export function NewRunPage(): JSX.Element {
                 value={form.grade}
                 onChange={(e) => update('grade')(e.target.value)}
               >
+                {/* ⚠️ P2-4（2026-11-17）：显示带等价叫法（初一（七年级）），
+                    取值仍是后端词表原值 —— 统一的是给人看的文字，不是数据契约。 */}
                 {grades.map((item) => (
                   <option key={item} value={item}>
-                    {item}
+                    {gradeDisplayLabel(item)}
                   </option>
                 ))}
               </select>

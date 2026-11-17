@@ -35,9 +35,20 @@ import cn.studykid.multiagent.core.cap.ReasonCode;
  */
 public final class Section9ScenarioSpec {
 
-    /** 设计文档文件名（相对仓库根）。 */
-    private static final String DOC_RELATIVE =
-            "docs/Agent - Skill- Tool -MCP 统一配置与权限管控体系.md";
+    /**
+     * 设计文档文件名（相对仓库根）。
+     *
+     * ⚠️ 2026-11-17：docs/ 目录已按「基线 / 开发 / 证据 / 知识 / 归档」分层重组，
+     *    本文档移入 {@code docs/05_archive/}。
+     *    ⚠️ 这里给出**候选路径列表**（按优先级探测），而不是单一硬编码路径 ——
+     *    文档再被归档/移动时，覆盖测试不至于因为「找不到文件」而误报红，
+     *    但**内容比对仍然照常执行**（找到任一候选即用之）。
+     *    ⛔ 仍保留「全都不存在就抛错」的 fail-closed 行为：
+     *    静默跳过比对等于让冻结判定失去意义。
+     */
+    private static final java.util.List<String> DOC_CANDIDATES = java.util.List.of(
+            "docs/05_archive/Agent - Skill- Tool -MCP 统一配置与权限管控体系.md",
+            "docs/Agent - Skill- Tool -MCP 统一配置与权限管控体系.md");
 
     /** 原因码 token（形如 {@code AUTHZ_STALE}）。 */
     private static final Pattern REASON_CODE_TOKEN = Pattern.compile("\\b([A-Z][A-Z_]{3,})\\b");
@@ -64,9 +75,16 @@ public final class Section9ScenarioSpec {
         if (root == null) {
             throw new IllegalStateException("无法定位仓库根目录");
         }
-        Path doc = root.resolve(DOC_RELATIVE);
-        if (!Files.isRegularFile(doc)) {
-            throw new IllegalStateException("未找到设计文档: " + doc
+        Path doc = null;
+        for (String candidate : DOC_CANDIDATES) {
+            Path path = root.resolve(candidate);
+            if (Files.isRegularFile(path)) {
+                doc = path;
+                break;
+            }
+        }
+        if (doc == null) {
+            throw new IllegalStateException("未找到设计文档: " + root.resolve(DOC_CANDIDATES.get(0))
                     + "（验收矩阵的比对依赖权威文档；缺文档时必须失败而不是跳过）");
         }
         return doc;

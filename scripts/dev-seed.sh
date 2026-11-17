@@ -223,6 +223,21 @@ cmd_seed() {
   info "口令     : ${password}"
   info "角色     : ${roles[*]}"
 
+  # ⚠️ 身份改造（2026-11-17）：登录名即学生用户名。STUDENT 主体在开户时
+  #    绑定一个稳定的匿名业务编号 stu_<md5(login) 前16位>（满足 ^stu_[a-z0-9]{16}$）。
+  #    - 由 login_name 确定性派生：同一账号反复 seed 得到同一编号，画像/薄弱点不丢；
+  #    - 不含姓名/学号/连续 8–12 位数字，不触发学号合规扫描；
+  #    - 只给 STUDENT 绑定，平台/家长/审核主体保持 NULL。
+  #    md5() 为 PostgreSQL 内置函数，返回小写十六进制（属于 [a-z0-9]）。
+  local sid_expr="NULL"
+  for role in "${roles[@]}"; do
+    if [[ "$role" == "STUDENT" ]]; then
+      sid_expr="'stu_' || substr(md5('${login}'), 1, 16)"
+      break
+    fi
+  done
+  info "学生编号 : ${sid_expr}"
+
   local hash
   hash=$(generate_password_hash "$password")
 
@@ -249,8 +264,8 @@ cmd_seed() {
   sql+="INSERT INTO tenant (tenant_id, slug, name, status) "
   sql+="VALUES (gen_random_uuid(), '${slug}', '${name}', 'ACTIVE') "
   sql+="ON CONFLICT (slug) DO NOTHING;"$'\n'
-  sql+="INSERT INTO principal (tenant_id, login_name, password_hash, status) "
-  sql+="SELECT t.tenant_id, '${login}', '${hash}', 'ACTIVE' "
+  sql+="INSERT INTO principal (tenant_id, login_name, password_hash, status, student_id) "
+  sql+="SELECT t.tenant_id, '${login}', '${hash}', 'ACTIVE', ${sid_expr} "
   sql+="FROM tenant t WHERE t.slug = '${slug}' "
   sql+="ON CONFLICT (login_name) DO NOTHING;"$'\n'
   sql+="INSERT INTO principal_role (tenant_id, principal_id, role) "

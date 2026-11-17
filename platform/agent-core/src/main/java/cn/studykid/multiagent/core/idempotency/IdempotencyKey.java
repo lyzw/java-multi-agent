@@ -102,9 +102,15 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
      * <p>参数取自 DEC-6 白名单（随机 studentId + 薄弱知识点），
      * <b>不含姓名/学校/班级</b>。
      *
-     * <p>各组成部分<b>均不得含分隔符</b>，否则拼接后无法唯一分解，
-     * 会导致 {@code (a/b, c)} 与 {@code (a, b/c)} 产生相同的键——那将使
-     * 不同请求错误地复用同一逻辑操作。
+     * <p>⚠️ <b>各组成部分一律先编码再拼接</b>（2026-11-17 实测修复）：
+     * 此前要求各组成部分<b>不得含分隔符</b>，含了就抛
+     * {@link IllegalArgumentException}。实测这会把**整个 Run 打成
+     * INTERNAL_ERROR** —— 因为模型写的薄弱知识点天然含斜杠
+     * （如「h=-b/2a，k=c-b²/4a」），而该异常从幂等键构造处一路冒泡到执行循环。
+     * 现在改为<b>可逆编码</b>（{@link #encodePart}）：内容照单全收，
+     * 唯一性由编码保证（编码后不可能再含分隔符），解析方用
+     * {@link #decodePart} 还原 —— 对未含分隔符的旧内容是<b>恒等变换</b>，
+     * 历史键不受影响。
      *
      * @param studentId      随机学生标识（不得为可识别信息）
      * @param runId          所属 Run
@@ -117,7 +123,8 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
         requirePart(runId, "runId");
         requirePart(knowledgePoint, "knowledgePoint");
         return new IdempotencyKey(NS_TOOL_RECORD_WEAKNESS,
-                studentId + SEPARATOR + runId + SEPARATOR + knowledgePoint);
+                encodePart(studentId) + SEPARATOR + encodePart(runId) + SEPARATOR
+                        + encodePart(knowledgePoint));
     }
 
     /**
@@ -159,9 +166,10 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
         //    键值与历史完全一致 —— 在途的 tool_operation 行因此不受影响。
         String agentPart = agentRef == null || agentRef.isBlank()
                 ? ""
-                : requireAgentRef(agentRef) + SEPARATOR;
+                : encodePart(requireAgentRef(agentRef)) + SEPARATOR;
         return new IdempotencyKey(NS_TOOL_INVOKE,
-                runId + SEPARATOR + agentPart + toolName + SEPARATOR + callId);
+                encodePart(runId) + SEPARATOR + agentPart
+                        + encodePart(toolName) + SEPARATOR + encodePart(callId));
     }
 
     /**
@@ -258,15 +266,36 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
                 callId == null || callId.isBlank() ? "no-call-id" : callId);
     }
 
-    /** 校验单个组成部分：非空且不含分隔符。 */
+    /** 校验单个组成部分：非空。 */
     private static void requirePart(@NonNull String part, @NonNull String name) {
         if (part.isBlank()) {
             throw new IllegalArgumentException(name + " 不能为空");
         }
-        if (part.contains(SEPARATOR)) {
-            throw new IllegalArgumentException(
-                    name + " 不得包含分隔符 '" + SEPARATOR + "'，否则复合键无法唯一分解: " + part);
-        }
+        // ⚠️ 2026-11-17：**不再**拒绝含分隔符的内容。
+        //    实测（E2E 2026-11-17）：模型写的薄弱知识点天然含斜杠
+        //    （「h=-b/2a，k=c-b²/4a」），此前这里抛 IllegalArgumentException，
+        //    异常一路冒泡到执行循环 → 整个 Run 被打成 INTERNAL_ERROR，
+        //    学生只看到「这次分析临时未能完成」。
+        //    唯一性改由 {@link #encodePart} 保证（编码后不可能再含分隔符），
+        //    解析方用 {@link #decodePart} 还原。
+    }
+
+    /**
+     * 组成部分的<b>可逆编码</b>（2026-11-17）。
+     *
+     * <p>只编码两个字符：{@code '%'}（转义前缀本身）与分隔符 {@code '/'}。
+     * 刻意<b>不做全量百分号编码</b> —— 键值要保持人可读（排障时肉眼能看出
+     * 键里是哪个知识点），全量编码会把中文知识点变成一串难读的转义串。
+     *
+     * <p>对不含这两个字符的内容是<b>恒等变换</b> ⇒ 历史键不受影响。
+     */
+    public static @NonNull String encodePart(@NonNull String part) {
+        return part.replace("%", "%25").replace(SEPARATOR, "%2F");
+    }
+
+    /** 组成部分的解码（{@link #encodePart} 的逆运算；对未编码内容是恒等变换）。 */
+    public static @NonNull String decodePart(@NonNull String part) {
+        return part.replace("%2F", SEPARATOR).replace("%25", "%");
     }
 
     /** 唯一约束比对用的复合形式：{@code namespace:keyValue}。 */

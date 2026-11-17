@@ -316,7 +316,7 @@ class ContextCompressionM10GuardTest {
         }
 
         String adr = ContextCompressionS1GuardTest.read(
-                repoRoot().resolve("docs/P0/P1/ADR-013_上下文压缩统一入口与全窗口预算.md"));
+                repoRoot().resolve("docs/01_baseline/milestones/P1/ADR-013_上下文压缩统一入口与全窗口预算.md"));
         assertThat(adr)
                 .as("⛔ ADR-013 未登记 D37：M10 算法先行的决策无架构留痕")
                 .contains("D37")

@@ -53,6 +53,19 @@ export interface SessionState {
    *   （**包括**权威结果为空数组的情形）。
    */
   rolesStatus: RolesStatus
+  /**
+   * 当前学生（身份改造 2026-11-17）。
+   *
+   * ⚠️ 来源是**登录态**（登录名＝学生用户名），不是用户手填的表单字段。
+   *    `username` 为 null 表示旧会话（升级前写入）或非学生主体；
+   *    此时 UI 应显示「未识别当前学生」而不是编造一个编号。
+   */
+  currentStudent: {
+    /** 学生用户名（= 登录名）；老师据此选人 */
+    username: string | null
+    /** 权威匿名业务编号（stu_ 前缀）；仅展示 */
+    studentId: string | null
+  }
   /** 是否处于「即将过期」窗口 */
   expiringSoon: boolean
   /** 登录失效的原因（用于登录页展示提示） */
@@ -65,6 +78,8 @@ export interface SessionState {
    * @param tenantId 权威租户 ID（供 RAG 管理面构造 X-Tenant-Id 头）
    * @param principalId 主体 ID（供审核留痕）
    * @param roles 主体角色集合（B1）；仅用于导航显隐
+   * @param username 登录名＝学生用户名（身份改造 2026-11-17）；仅用于展示
+   * @param studentId 权威学生业务编号（身份改造 2026-11-17）；仅用于展示
    */
   signIn: (
     accessToken: string,
@@ -72,6 +87,8 @@ export interface SessionState {
     tenantId?: string | null,
     principalId?: string | null,
     roles?: string[],
+    username?: string | null,
+    studentId?: string | null,
   ) => void
   signOut: () => void
   /** 由 API 层 401 触发 */
@@ -168,8 +185,11 @@ export function SessionProvider({ children }: { children: ReactNode }): JSX.Elem
         tenantId?: string | null,
         principalId?: string | null,
         roles?: string[],
+        username?: string | null,
+        studentId?: string | null,
       ) => {
-    const saved = saveSession(accessToken, expiresIn, tenantId, principalId, roles)
+    const saved = saveSession(accessToken, expiresIn, tenantId, principalId, roles,
+      username, studentId)
     setSession(saved)
     // ⚠️ `roles === undefined` ⇒ 后端**没有回带**该字段（老版本后端），
     //    与「回带了空数组」（确实无角色）**必须区分**：
@@ -248,6 +268,10 @@ export function SessionProvider({ children }: { children: ReactNode }): JSX.Elem
       authenticated: session !== null && !isExpired(session),
       roles: session?.roles ?? [],
       rolesStatus,
+      currentStudent: {
+        username: session?.username ?? null,
+        studentId: session?.studentId ?? null,
+      },
       expiringSoon,
       expiredNotice,
       signIn,

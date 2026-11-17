@@ -241,14 +241,28 @@ describe('发起辅导页', () => {
         .sort()
 
       // DEC-6 采集白名单：随机 student_id / 年级 / 学科 + 题目与过程
+      // ⚠️ 身份改造（2026-11-17）：studentId 仍在白名单里（后端按登录态派生），
+      //    但**不再是可编辑字段** —— 它由只读的「当前学生」展示取代，
+      //    故 name 变为 currentStudent；studentId 作为 body 字段由后端补齐。
       expect(names).toEqual([
         'correctAnswer',
+        'currentStudent',
         'grade',
         'questionText',
-        'studentId',
         'studentSolution',
         'subject',
       ])
+    })
+
+    it('⛔ 学生标识不得由用户手填（身份改造 2026-11-17）', () => {
+      const { container } = renderWithProviders(<NewRunPage />)
+      // ⛔ 不得存在可编辑的 studentId 输入框 —— 它是登录态派生的，不是手填的。
+      const editable = container.querySelectorAll('input[name="studentId"]')
+      expect(editable.length).toBe(0)
+      // ✅ 当前学生以**只读**方式展示，且显示的是登录名（学生用户名）
+      const current = container.querySelector('input[name="currentStudent"]')
+      expect(current).not.toBeNull()
+      expect(current).toHaveAttribute('readonly')
     })
 
     it('⛔ 应显式告知用户不采集身份信息', () => {
@@ -258,12 +272,14 @@ describe('发起辅导页', () => {
     })
   })
 
-  it('学生标识字段应提示不要填姓名', () => {
+  it('学生标识字段应说明由系统自动绑定（身份改造 2026-11-17）', () => {
     renderWithProviders(<NewRunPage />)
-    // ⛔ 该提示是合规引导，必须存在（label + hint 共两处匹配）
-    const hints = screen.getAllByText(/匿名编号/)
-    expect(hints.length).toBeGreaterThan(0)
-    expect(screen.getByText(/不要填姓名/)).toBeInTheDocument()
+    // ⚠️ 此前要求提示「不要填姓名」，因为那时学生**要自己填编号**。
+    //    现在编号由登录态派生，用户根本不需要填 —— 提示改为说明这一点，
+    //    同时保留「不采集姓名/学校/班级」的合规承诺。
+    expect(screen.getByText(/已按你的登录账号自动绑定学习档案/)).toBeInTheDocument()
+    // ⛔ 不得再要求用户填写编号格式（那正是被拦的根因）
+    expect(screen.queryByText(/不要填姓名/)).not.toBeInTheDocument()
   })
 
   /**
@@ -326,9 +342,8 @@ describe('发起辅导页', () => {
     }
 
     async function fillRequired(): Promise<void> {
-      // ⚠️ 匿名编号刻意避开 8~12 位连续数字：S-3 预检会把长数字串判成学号并阻断提交
-      //    （那是合规防线在正常工作，不是本用例要测的东西）。
-      await userEvent.type(screen.getByLabelText(/学生匿名编号/), 'S-E2E-FE')
+      // ⚠️ 身份改造（2026-11-17）：不再填「学生匿名编号」——
+      //    它由后端按登录态派生，页面根本没有这个输入框了。
       await userEvent.type(screen.getByLabelText(/题目内容/), '2x + 5 = 13，求 x')
       await userEvent.type(screen.getByLabelText(/我的解题过程/), '2x = 7，x = 3.5')
       await userEvent.type(screen.getByLabelText(/已知正确答案/), 'x = 4')
@@ -401,10 +416,8 @@ describe('发起辅导页', () => {
       vi.stubGlobal('fetch', fetchSpy)
       renderWithProviders(<NewRunPage />)
 
-      await userEvent.type(
-        screen.getByLabelText(/学生匿名编号/),
-        'stu_a1b2c3d4e5f6a7b8',
-      )
+      // ⚠️ 身份改造（2026-11-17）：手机号改填在**题目内容**里 ——
+      //    学生标识字段已不存在（后端按登录态派生），预检只作用于用户输入的文本。
       await userEvent.type(
         screen.getByLabelText(/题目内容/),
         '题目',
@@ -453,7 +466,9 @@ describe('发起辅导页', () => {
     expect(submit).not.toBeDisabled()
 
     // 缺项提示必须在上方且是 live region（role=status），否则读屏收不到
-    const missing = screen.getByText(/还有 4 项必填未填/)
+    // ⚠️ 身份改造（2026-11-17）：必填项由 4 项减为 3 项
+    //    （学生标识不再由用户填写）。
+    const missing = screen.getByText(/还有 3 项必填未填/)
     expect(missing).toHaveAttribute('id', 'missing-fields')
     expect(missing).toHaveAttribute('role', 'status')
     expect(submit).toHaveAttribute('aria-describedby', 'missing-fields')
@@ -470,16 +485,14 @@ describe('发起辅导页', () => {
     expect(createRunCalls).toHaveLength(0)
 
     // 焦点必须落到第一个未填字段（否则键盘用户不知道从哪改起）
-    expect(document.activeElement).toBe(screen.getByLabelText(/学生匿名编号/))
+    expect(document.activeElement).toBe(screen.getByLabelText(/题目内容/))
   })
 
   it('⛔ 必填字段必须对读屏可见（required + aria-required，星号只是视觉标记）', () => {
     renderWithProviders(<NewRunPage />)
 
-    const input = screen.getByLabelText(/学生匿名编号/)
-    expect(input).toHaveAttribute('required')
-    expect(input).toHaveAttribute('aria-required', 'true')
-
+    // ⚠️ 身份改造（2026-11-17）：第一个必填字段现在是「题目内容」——
+    //    「学生匿名编号」不再是必填输入框（它由登录态派生）。
     const textarea = screen.getByLabelText(/题目内容/)
     expect(textarea).toHaveAttribute('required')
     expect(textarea).toHaveAttribute('aria-required', 'true')

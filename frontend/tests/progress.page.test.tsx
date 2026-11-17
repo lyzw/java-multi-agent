@@ -420,6 +420,26 @@ describe('N3：失败 Run 终态的错误码分类（页面级硬门禁）', () 
       expect(screen.getByRole('link', { name: /再辅导一道/ })).toBeInTheDocument()
     })
   }
+
+  for (const code of ['MODEL_RATE_LIMITED', 'QUOTA_EXHAUSTED', 'MODEL_RETRY_EXHAUSTED']) {
+    it(`⛔ FAILED + ${code}：显示真实终态原因、不给重试、停下轮询、绝不显示「执行中」`, async () => {
+      getRunStatusMock.mockResolvedValue(sampleStatus({ state: 'FAILED', errorCode: code }))
+      renderAt('/runs/r-1/progress', <RunProgressPage />, '/runs/:runId/progress')
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      const body = document.body.textContent ?? ''
+      expect(body).toContain('本次分析未成功')
+      expect(body).not.toContain(code)
+      expect(body).not.toContain('执行中')
+      expect(body).not.toContain('正在同步最新状态')
+      expect(body).not.toContain('再辅导一道')
+      expect(body).not.toContain('重新发起这道题')
+      expect(screen.getByRole('link', { name: /回工作台/ })).toBeInTheDocument()
+      const calls = getRunStatusMock.mock.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+      expect(getRunStatusMock.mock.calls.length).toBe(calls)
+    })
+  }
 })
 
 /**

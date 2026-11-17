@@ -32,6 +32,19 @@ export interface StoredSession {
    *    不影响加载——安全判定以执行时后端重授权为准。
    */
   roles?: string[]
+  /**
+   * 登录名＝学生用户名（身份改造 2026-11-17）。
+   *
+   * ⚠️ 仅用于展示「当前学生」与老师选人时的称呼；
+   *    写入身份一律由后端按 principalId 派生，前端传值不被采信。
+   */
+  username?: string | null
+  /**
+   * 权威学生业务编号（stu_ 前缀）。
+   *
+   * ⚠️ 旧会话（升级前写入）无此字段时回落 null，不影响加载。
+   */
+  studentId?: string | null
 }
 
 function isBrowser(): boolean {
@@ -56,7 +69,18 @@ export function loadSession(): StoredSession | null {
     const roles = Array.isArray(record['roles'])
       ? (record['roles'] as unknown[]).filter((r): r is string => typeof r === 'string')
       : []
-    return { accessToken: record['accessToken'], expiresAt: record['expiresAt'], tenantId, principalId, roles }
+    // ⚠️ username / studentId 同样是**可选**的：旧会话没有它们也必须能正常加载。
+    const username = typeof record['username'] === 'string' ? record['username'] : null
+    const studentId = typeof record['studentId'] === 'string' ? record['studentId'] : null
+    return {
+      accessToken: record['accessToken'],
+      expiresAt: record['expiresAt'],
+      tenantId,
+      principalId,
+      roles,
+      username,
+      studentId,
+    }
   } catch {
     // JSON 损坏：视为无会话，不抛错打断应用
     return null
@@ -69,6 +93,8 @@ export function saveSession(
   tenantId?: string | null,
   principalId?: string | null,
   roles?: string[],
+  username?: string | null,
+  studentId?: string | null,
 ): StoredSession {
   // ⚠️ 用后端返回的 expiresIn 计算，不读前端配置。
   //    后端该值硬编码 900（不读 auth.jwt.token-ttl-seconds）。
@@ -78,6 +104,8 @@ export function saveSession(
     tenantId: tenantId ?? null,
     principalId: principalId ?? null,
     roles: roles === undefined ? [] : roles,
+    username: username ?? null,
+    studentId: studentId ?? null,
   }
   if (isBrowser()) {
     window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session))

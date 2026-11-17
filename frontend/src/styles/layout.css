@@ -2649,3 +2649,142 @@ tbody tr:hover { background: var(--surface-hover); }
     padding-left: var(--s-2);
   }
 }
+
+/* =====================================================================
+   模型正文的 Markdown + KaTeX 渲染（2026-11-17 · 教师评审 P0-3）
+   ---------------------------------------------------------------------
+   ⚠️ 此前讲解正文只有粗体/行内码被渲染，公式与表格全是源码。
+      这一层给 Markdown 输出与 KaTeX 公式提供**排版**样式；
+      语义与安全性由 shared/MarkdownAnswer.tsx（不装 rehype-raw、
+      链接协议白名单、KaTeX trust:false）负责。
+
+   ⚠️ 浅色主题：正文色用 --ink/--ink-2，底色用 --paper/--surface；
+      公式块用 --surface-sunk 承托，与纸面底色区分但不打眼。
+   ===================================================================== */
+
+.model-markdown {
+  font-size: var(--t-body);
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.model-markdown > :first-child {
+  margin-top: 0;
+}
+
+.model-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.model-markdown p {
+  margin: 0 0 var(--s-3);
+}
+
+.model-markdown h1,
+.model-markdown h2,
+.model-markdown h3,
+.model-markdown h4 {
+  margin: var(--s-4) 0 var(--s-2);
+  font-size: var(--t-title);
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.model-markdown h1 {
+  font-size: var(--t-display);
+}
+
+.model-markdown ul,
+.model-markdown ol {
+  margin: 0 0 var(--s-3);
+  padding-left: var(--s-5);
+}
+
+.model-markdown li {
+  margin-bottom: var(--s-1);
+}
+
+.model-markdown blockquote {
+  margin: 0 0 var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border-left: 3px solid var(--rule-strong);
+  color: var(--ink-2);
+}
+
+.model-markdown hr {
+  margin: var(--s-4) 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.model-markdown code {
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-ctl);
+  background: var(--surface-sunk);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.model-markdown__code-block {
+  margin: 0 0 var(--s-3);
+  padding: var(--s-3);
+  border-radius: var(--radius-card);
+  background: var(--surface-sunk);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-note);
+  line-height: 1.6;
+}
+
+.model-markdown__code-block code {
+  padding: 0;
+  background: none;
+}
+
+.model-markdown__table-wrap {
+  margin: 0 0 var(--s-3);
+  overflow-x: auto;
+}
+
+.model-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-note);
+}
+
+.model-markdown th,
+.model-markdown td {
+  padding: var(--s-2);
+  border: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+
+.model-markdown th {
+  background: var(--surface-sunk);
+  font-weight: 600;
+}
+
+.model-markdown__image-ref {
+  color: var(--ink-2);
+  font-size: var(--t-note);
+}
+
+/* 公式：KaTeX 自身负责排版，这里只兜住**溢出**与**流式半截**两种情形。
+   ⚠️ 流式期间未闭合的公式按源码显示（不红字），那是「还没写完」不是错误。 */
+.model-markdown .katex-display {
+  margin: var(--s-3) 0;
+  padding: var(--s-2);
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--surface-sunk);
+  border-radius: var(--radius-card);
+}
+
+.model-markdown .katex {
+  font-size: 1.05em;
+}
+
+.model-markdown--streaming .katex-error {
+  color: var(--ink-2);
+}

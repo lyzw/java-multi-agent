@@ -189,6 +189,52 @@ describe('runFailureGuidance：内部错误码不得甩给受众', () => {
  *    它们必须 fail-closed 落到 unknown：不猜含义、不原样透出、「附运行标识」，
  *    且绝不给「重新这道题」（那会把未知故障变成必然失败的重试循环）。
  */
+/**
+ * 真实后端终态码（额度耗尽 / 重试上限 / 死信）：非临时，不给重新发起。
+ *
+ * ⚠️ 这些码过去不在分类表里 → 落入 unknown 兜底。虽然 unknown 也不可重试，
+ *    但文案是「本次执行未完成」，无法告诉用户真实原因（额度用尽）——
+ *    这正是缺陷里「进度页说不清为什么失败」的一部分。
+ */
+describe('runFailureGuidance：额度耗尽 / 重试上限是终态，不是临时故障', () => {
+  const QUOTA_CODES = [
+    'MODEL_RATE_LIMITED',
+    'QUOTA_EXHAUSTED',
+    'MODEL_PROVIDER_ERROR',
+    'MODEL_RETRY_EXHAUSTED',
+    'MAX_ATTEMPTS_EXCEEDED',
+  ]
+
+  for (const code of QUOTA_CODES) {
+    it(`⛔ ${code} → quota-exhausted：可失败原因可读、不可重试、不原样透出码`, () => {
+      const g = runFailureGuidance(code, 'run-3')
+      expect(g.kind).toBe('quota-exhausted')
+      expect(g.canRetry).toBe(false)
+      expect(g.contactAdmin).toBe(true)
+      expect(g.reason).not.toContain(code)
+      expect(g.reason).not.toContain('稍等马上就好')
+      expect(g.advice).not.toContain(code)
+      expect(g.advice).toContain('run-3')
+      for (const word of TERMINAL_WORDS) expect(g.advice).not.toContain(word)
+    })
+  }
+
+  it('额度耗尽有专属终态文案（不把「稍等马上就好」当结论）', () => {
+    for (const code of ['MODEL_RATE_LIMITED', 'QUOTA_EXHAUSTED']) {
+      expect(runFailureGuidance(code).reason)
+        .toBe('模型额度已用尽或调用过于频繁，本次分析未成功；请稍后再试或联系管理员')
+    }
+    expect(readableFailureReason('MODEL_RATE_LIMITED'))
+      .toBe('失败原因：模型额度已用尽或调用过于频繁，本次分析未成功；请稍后再试或联系管理员')
+  })
+
+  it('⛔ 反证：把额度耗尽标成可重试（落回 TRANSIENT）会被上面抓到', () => {
+    const flawed = { ...runFailureGuidance('MODEL_RATE_LIMITED'), canRetry: true }
+    expect(flawed.canRetry).toBe(true)
+    expect(flawed.canRetry).not.toBe(runFailureGuidance('MODEL_RATE_LIMITED').canRetry)
+  })
+})
+
 describe('runFailureGuidance：后端真实 errorCode 的消费契约', () => {
   const BACKEND_REAL_CODES = [
     'MAX_LLM_CALLS',

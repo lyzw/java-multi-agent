@@ -495,6 +495,10 @@ agent:
     max-llm-calls: "12"
     # 单 Run 最大步数。初值 20。调优时点：P2
     max-steps: "20"
+    # 模型调用重试硬上限（含首次领取）。达到上限即收敛 FAILED
+    #（error_code=MODEL_RETRY_EXHAUSTED），绝不留在 RUNNING 无限重投。
+    # ⚠️ 额度/限流耗尽是终态，不受此值影响（立即 MODEL_RATE_LIMITED）。
+    max-attempts: "${AGENT_RUN_MAX_ATTEMPTS:3}"
     # ⚠️ 是否要求每个 Run 必须声明 timeoutMs（P2-1）
     #    false = 允许「不限时」的 Run（CreateRunRequest 既定语义，会产生 WARN 日志）
     #    true  = 未声明 timeoutMs 的创建请求在**创建期**直接拒绝（fail-closed）

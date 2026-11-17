@@ -93,6 +93,9 @@ export function RunProgressPage(): JSX.Element {
   }, [snapshot])
 
   const currentState = status?.state ?? eventState
+  // ⚠️ 终态以「状态接口 + 事件流」任一来源为准：
+  //    状态读取失败但事件流已给出 FAILED 时，也必须停轮询、不许显示「执行中」。
+  const currentStateTerminal = currentState !== null && isTerminalState(currentState)
 
   // ⚠️ N6：状态读取失败同样按 status 分流；403/404/401 是终态，不给刷新/重试。
   //    ⛔ 必须早于 shouldShowSyncing 与停轮询 effect 计算——
@@ -109,11 +112,11 @@ export function RunProgressPage(): JSX.Element {
   //    （run_event 只有 RUN_CREATED），故若只靠 SSE，本页会一直打后端。
   useEffect(() => {
     // ⚠️ 状态读取的终态错误也要停 SSE 轮询：403/401 不会随时间自愈。
-    if ((statusDone || statusReadIsTerminal) && pollerRef.current) {
+    if ((statusDone || statusReadIsTerminal || currentStateTerminal) && pollerRef.current) {
       pollerRef.current.stop()
       pollerRef.current = null
     }
-  }, [statusDone, statusReadIsTerminal])
+  }, [statusDone, statusReadIsTerminal, currentStateTerminal])
 
   const errorCode = useMemo(() => {
     // ⚠️ FE-D9：G3 的 errorCode 是**权威**（run 表的 error_code 列）；
@@ -146,6 +149,7 @@ export function RunProgressPage(): JSX.Element {
     !statusNotFound &&
     !statusDone &&
     !statusReadIsTerminal &&
+    !currentStateTerminal &&
     (currentState === null || !isTerminalState(currentState))
 
   if (runId === undefined) {

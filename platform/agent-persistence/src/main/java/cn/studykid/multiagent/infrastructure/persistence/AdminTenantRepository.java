@@ -169,6 +169,10 @@ public class AdminTenantRepository implements AdminTenantPort {
     @Override
     public List<PrincipalRow> listPrincipals(@NonNull String tenantId) {
         String sql = """
+                -- ⚠️ 刻意**不**引用 student_id：该列由迁移补丁添加，
+                --    补丁未应用的库上直接引用会让**整个成员列表 500**
+                --    （column does not exist）。它是可选信息，不是列表的必需项。
+                --    需要该字段时走 PrincipalStore.findStudentId。
                 SELECT p.principal_id, p.login_name, p.display_name, p.status,
                        p.authz_version,
                        COALESCE(array_agg(pr.role ORDER BY pr.role)
@@ -177,7 +181,8 @@ public class AdminTenantRepository implements AdminTenantPort {
                 LEFT JOIN principal_role pr
                        ON pr.tenant_id = p.tenant_id AND pr.principal_id = p.principal_id
                 WHERE p.tenant_id = ?::uuid
-                GROUP BY p.principal_id, p.login_name, p.display_name, p.status, p.authz_version
+                GROUP BY p.principal_id, p.login_name, p.display_name, p.status,
+                         p.authz_version
                 ORDER BY p.login_name
                 """;
         List<PrincipalRow> out = new ArrayList<>();
@@ -193,7 +198,9 @@ public class AdminTenantRepository implements AdminTenantPort {
                                 rs.getString("display_name"),
                                 rs.getString("status"),
                                 rs.getLong("authz_version"),
-                                parseRoles(rs)));
+                                parseRoles(rs),
+                                // ⚠️ 见上方说明：列表查询不取 student_id（迁移补丁未应用时不致 500）。
+                                null));
                     }
                 }
             }

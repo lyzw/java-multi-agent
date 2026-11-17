@@ -141,6 +141,16 @@ public class RecordWeaknessTool implements ToolHandler {
             // 同键但内容不同 → 明确冲突，无副作用
             throw ToolExecutionException.definitelyFailed("幂等冲突：同一键已有不同内容的记录");
 
+        } catch (StudentDataRepository.ProfileUnavailableException e) {
+            // ⚠️⚠️ 画像前置检查失败（2026-11-17 实跑修复）：
+            //    发生在**任何写入之前**，结果确定是「没写进去」⇒ 明确失败。
+            //    若按 UNKNOWN 处理，会凭空多一轮对账，
+            //    并把一个明确的配置缺口（本次请求没声明年级/学科）
+            //    伪装成「下游结果不确定」。
+            log.warn("薄弱点写入前置检查失败（学生画像不可建档）: runId={}, err={}",
+                    context.runId(), e.getMessage());
+            throw ToolExecutionException.definitelyFailed(e.getMessage());
+
         } catch (IllegalStateException e) {
             // ⚠️⚠️ 关键判断：异常发生在**写操作**过程中，
             //    无法确定是否已写入 → 必须按 unknownResult 处理。
@@ -171,7 +181,12 @@ public class RecordWeaknessTool implements ToolHandler {
             return null;
         }
         Optional<String> found = repository.reconcileWeakness(
-                context.tenantId(), parts[0], parts[1], parts[2]);
+                context.tenantId(),
+                // ⚠️ 2026-11-17：键的各段是**编码后**的（IdempotencyKey.encodePart），
+                //    还原时必须解码，否则含斜杠的知识点会被解成错值。
+                cn.studykid.multiagent.core.idempotency.IdempotencyKey.decodePart(parts[0]),
+                cn.studykid.multiagent.core.idempotency.IdempotencyKey.decodePart(parts[1]),
+                cn.studykid.multiagent.core.idempotency.IdempotencyKey.decodePart(parts[2]));
         if (found.isEmpty()) {
             // 确认不存在 → RECONCILED_ABSENT（调用方据此处置）
             return ToolResult.of("{\"reconciled\":\"ABSENT\"}");

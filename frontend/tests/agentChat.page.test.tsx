@@ -142,8 +142,9 @@ describe('AgentChatPage · 样例回放闭环', () => {
 
     await ask('判别式小于零是什么意思？')
     // 等整轮回放到 done 终帧再判断：thinking 关闭时时间线不渲染，
-    // 改等页脚「已收口」标志（仅 done 且未截断出现），避免把回放中途误判成终点。
-    await waitFor(() => expect(document.body.textContent).toContain('已收口'))
+    // 改等页脚「本次回答完整」标志（仅 done 且未截断出现），避免把回放中途误判成终点。
+    // ⚠️ P2-5：「已收口」是研发口径，已改为学生能懂的「本次回答完整」。
+    await waitFor(() => expect(document.body.textContent).toContain('本次回答完整'))
     expect(screen.getByTestId('agent-chat-answer')).toBeInTheDocument()
     expect(screen.queryByTestId('agent-chat-timeline')).not.toBeInTheDocument()
 

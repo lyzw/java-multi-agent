@@ -68,7 +68,15 @@ public final class TenantRegistry {
      */
     public record PrincipalRow(@NonNull String principalId, @NonNull String loginName,
                                @Nullable String displayName, @NonNull String status,
-                               long authzVersion, @NonNull List<String> roles) {
+                               long authzVersion, @NonNull List<String> roles,
+                               @Nullable String studentId) {
+
+        /** 兼容构造器：未携带学生编号的既有调用方。 */
+        public PrincipalRow(@NonNull String principalId, @NonNull String loginName,
+                            @Nullable String displayName, @NonNull String status,
+                            long authzVersion, @NonNull List<String> roles) {
+            this(principalId, loginName, displayName, status, authzVersion, roles, null);
+        }
 
         public PrincipalRow {
             if (principalId == null || principalId.isBlank()) {

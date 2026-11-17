@@ -409,7 +409,9 @@ public class JdbcToolOperationLedger implements RunToolLedgerPort {
                 ? composite.substring(composite.indexOf(':') + 1)
                 : composite;
         String[] parts = keyValue.split("/");
-        return parts.length == 0 ? null : parts[parts.length - 1];
+        return parts.length == 0 ? null
+                : cn.studykid.multiagent.core.idempotency.IdempotencyKey.decodePart(
+                        parts[parts.length - 1]);
     }
 
     // ── 内部 ────────────────────────────────────────────────────────

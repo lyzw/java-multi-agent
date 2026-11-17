@@ -43,6 +43,8 @@ class RunRecoverySweeperTest {
     static final class FakeClaimPort implements RunClaimPort {
         final AtomicInteger claimTasksCount = new AtomicInteger();
         List<RunClaimPort.LeasedTask> toReturn = List.of();
+        String committedErrorCode;
+        String committedState;
 
         @Override public List<RunClaimPort.LeasedTask> claimTasks(
                 String t, String w, Duration d, int l) {
@@ -53,7 +55,15 @@ class RunRecoverySweeperTest {
                 String t, String r, String w, Duration d) { return java.util.Optional.empty(); }
         @Override public boolean renewLease(String t, String r, String w, long f, Duration d) { return true; }
         @Override public boolean releaseLease(String t, String r, String w, long f) { return true; }
-        @Override public boolean commitResult(String t, String r, long f, String s, String p) { return true; }
+        @Override public boolean commitResult(String t, String r, long f, String s, String p) {
+            committedState = s;
+            return true;
+        }
+        @Override public boolean commitResult(String t, String r, long f, String s, String p,
+                                               String ec) {
+            committedErrorCode = ec;
+            return commitResult(t, r, f, s, p);
+        }
         @Override public boolean isCurrentGeneration(String t, String r, long f) { return true; }
         @Override public boolean requestCancel(String t, String r) { return false; }
         @Override public boolean isCancelled(String t, String r) { return false; }
@@ -228,6 +238,21 @@ class RunRecoverySweeperTest {
             assertThat(executed.get())
                     .as("⚠️ 接管的 Run 必须被驱动给执行器（与 MQ 主路径相同），否则仍卡死")
                     .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("⛔ 恢复执行返回 RETRYABLE_FAILURE → best-effort 收敛 FAILED（绝不无限重领）")
+        void retryableFailureFromRecoveryTerminalizesRun() {
+            FakeClaimPort claim = new FakeClaimPort();
+            claim.toReturn = List.of(overdue("run-retryable"));
+            FakeTenantPort tenant = new FakeTenantPort();
+            tenant.tenants = List.of(activeTenant(TENANT));
+
+            sweeper(true, tenant, claim,
+                    (t, task) -> RunDispatchConsumer.Outcome.RETRYABLE_FAILURE).sweep();
+
+            assertThat(claim.committedState).isEqualTo("FAILED");
+            assertThat(claim.committedErrorCode).isEqualTo("MAX_ATTEMPTS_EXCEEDED");
         }
 
         @Test

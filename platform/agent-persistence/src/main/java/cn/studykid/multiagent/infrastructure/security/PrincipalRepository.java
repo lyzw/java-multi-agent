@@ -74,6 +74,11 @@ public class PrincipalRepository implements PrincipalStore {
             return Optional.empty();
         }
 
+        // ⚠️ 刻意**不**在登录查询里 SELECT student_id：
+        //    该列由迁移补丁 patch_platform_principal_student_id.sql 添加，
+        //    在补丁尚未应用的库上，若在此处直接引用会让**每一次登录都失败**
+        //    （column does not exist）。登录是主链路，不能被可选列拖垮。
+        //    学生编号改为由 {@link #findStudentId} 单独查询（缺失时安全降级）。
         String sql = """
                 SELECT principal_id, tenant_id, login_name, password_hash, display_name,
                        status, failed_attempts, locked_until, authz_version
@@ -299,7 +304,46 @@ public class PrincipalRepository implements PrincipalStore {
                 rs.getString("status"),
                 rs.getInt("failed_attempts"),
                 lockedUntil == null ? null : lockedUntil.toInstant(),
-                rs.getLong("authz_version"));
+                rs.getLong("authz_version"),
+                // ⚠️ 登录查询刻意不取 student_id（见 findByLogin 的说明），
+                //    这里恒为 null；学生编号由 findStudentId 单独取。
+                null);
+    }
+
+    /**
+     * 按主体 ID 查学生业务编号（登录态派生学生身份）。
+     *
+     * <p>⚠️ 必须走 {@link #tenantConnection(String)} 绑定 GUC —— FORCE RLS 下
+     * 不绑租户的查询会静默返回 0 行，被误判为「未绑定学生」。
+     */
+    @Override
+    public Optional<String> findStudentId(String tenantId, String principalId) {
+        if (tenantId == null || !UUID_PATTERN.matcher(tenantId).matches()
+                || principalId == null || !UUID_PATTERN.matcher(principalId).matches()) {
+            return Optional.empty();
+        }
+        String sql = """
+                SELECT student_id FROM principal
+                WHERE tenant_id = ?::uuid AND principal_id = ?::uuid
+                """;
+        try (Connection conn = tenantConnection(tenantId);
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, principalId);
+            try (ResultSet rs = ps.executeQuery()) {
+                String id = rs.next() ? rs.getString(1) : null;
+                conn.rollback();
+                return Optional.ofNullable(id);
+            }
+        } catch (SQLException e) {
+            // ⚠️ **安全降级**：迁移补丁尚未应用（列不存在）时，返回「未绑定」而不是抛错。
+            //    这条查询是**可选能力**（把登录名绑定到画像/薄弱点），
+            //    让它把整个登录主链路拖垮是不成比例的失败。
+            //    ⚠️ 但**不能静默**：运维需要知道「学生编号绑定没生效」，
+            //    否则画像/薄弱点会一直为空而没人知道原因。
+            log.warn("查询学生编号失败（迁移补丁未应用？）：{}", e.getMessage());
+            return Optional.empty();
+        }
     }
 
     private static String generateDummyHash() {

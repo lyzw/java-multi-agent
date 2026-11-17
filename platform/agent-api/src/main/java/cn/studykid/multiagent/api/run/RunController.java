@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.api.run;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -20,6 +21,7 @@ import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
+import cn.studykid.multiagent.ports.security.PrincipalStore;
 
 /**
  * Run 创建端点（D1 / FR-003）。
@@ -62,6 +64,13 @@ public class RunController {
     private final cn.studykid.multiagent.application.prompt.PromptGuard promptGuard;
 
     /**
+     * 主体存储（身份改造 2026-11-17）：用于从登录态里的 principalId 派生
+     * 权威 studentId，而**不再信任请求体自带的 studentId**。
+     * 可为 null（老测试桩走 6 参构造器），此时保持旧行为。
+     */
+    private final @Nullable PrincipalStore principals;
+
+    /**
      * 完整构造器（唯一注入点）：含限流器与 Prompt 防护。
      *
      * <p>⚠️ 此前有 4 参 / 5 参 / 6 参三个构造器，Spring 无法选择 → 歧义。
@@ -73,13 +82,26 @@ public class RunController {
                          ZeroRetentionGate retentionGate,
                          CurrentPrincipal currentPrincipal,
                          RateLimitPort rateLimiter,
-                         cn.studykid.multiagent.application.prompt.PromptGuard promptGuard) {
+                         cn.studykid.multiagent.application.prompt.PromptGuard promptGuard,
+                         @Nullable PrincipalStore principals) {
         this.runCreation = runCreation;
         this.authorization = authorization;
         this.retentionGate = retentionGate;
         this.currentPrincipal = currentPrincipal;
         this.rateLimiter = rateLimiter;
         this.promptGuard = promptGuard;
+        this.principals = principals;
+    }
+
+    /** 兼容构造器：既有测试桩（不注入 PrincipalStore，身份派生走请求体）。 */
+    public RunController(RunCreationService runCreation,
+                         AuthorizationService authorization,
+                         ZeroRetentionGate retentionGate,
+                         CurrentPrincipal currentPrincipal,
+                         RateLimitPort rateLimiter,
+                         cn.studykid.multiagent.application.prompt.PromptGuard promptGuard) {
+        this(runCreation, authorization, retentionGate, currentPrincipal, rateLimiter,
+                promptGuard, null);
     }
 
     /**
@@ -119,14 +141,31 @@ public class RunController {
         //    绝不从请求参数或请求体取租户 —— 这是 D1 部署阻断的核心修复。
         TenantContext context = currentPrincipal.context();
 
+        // 0b) 身份改造（2026-11-17）：学生身份来自登录态，不信任请求体手填的编号。
+        //     从验签 principalId 查库派生权威 studentId，覆盖/补齐 input.studentId。
+        //     这样「登录名即用户名」→ 后端认人 → 画像/薄弱点写入同一个匿名编号，
+        //     学生无法冒充他人、也无需再知道 stu_ 格式。
+        CreateRunRequest effective = request;
+        if (principals != null) {
+            var sid = principals.findStudentId(context.tenantId(), context.principalId());
+            if (sid.isPresent() && !sid.get().isBlank()) {
+                java.util.Map<String, Object> merged =
+                        new java.util.LinkedHashMap<>(request.input());
+                merged.put("studentId", sid.get());
+                effective = request.withInput(merged);
+            }
+        }
+
         // 1) 内容合规：拒绝明显可识别信息（纵深防御）
-        request.assertNoIdentifyingContent();
+        //    ⚠️ 扫派生后的 input：注入的是 stu_ 匿名编号（非学号模式），不会误拦；
+        //    而客户端若手填真实学号仍在此被拒（零保留边界不放松）。
+        effective.assertNoIdentifyingContent();
 
         // 1b) ⚠️ Prompt 注入防护（P3-D09 / FR-016）：长度/深度/元素数有界。
         //     ⚠️ 刻意放在**创建之前**：超限输入若先落库再被 Worker 拒绝，
         //     已经消耗了 DB 写入与 MQ 投递——检查必须早于任何成本。
         try {
-            promptGuard.validateBounds(request.input());
+            promptGuard.validateBounds(effective.input());
         } catch (cn.studykid.multiagent.application.prompt.PromptRejectedException e) {
             log.warn("输入被 Prompt 防护拒绝: tenant={}, reason={}, msg={}",
                     context.tenantId(), e.reason(), e.getMessage());
@@ -139,9 +178,9 @@ public class RunController {
         //       硬编码会使闸门的真实数据分支（供应商确认 + 可识别信息拦截）永不触发。
         //       推导规则见 DataClassification.fromContent：内容含可识别信息或调用方
         //       显式声明 REAL_STUDENT → 走真实数据分支；否则 SYNTHETIC（P2 合成模式）。
-        String requestText = requestText(request);
+        String requestText = requestText(effective);
         DataClassification classification =
-                DataClassification.fromContent(requestText, request.dataClassification());
+                DataClassification.fromContent(requestText, effective.dataClassification());
         retentionGate.assertAllowed(
                 currentPrincipal.providerId(), requestText, classification);
 
@@ -164,21 +203,21 @@ public class RunController {
         }
 
         // 4) 用例：原子提交 + 幂等判定
-        //    ⚠️ 传入 request.agentId()（P4-D18 修复）：执行快照由用例在写事务内
+        //    ⚠️ 传入 effective.agentId()（P4-D18 修复）：执行快照由用例在写事务内
         //    解析。此前这里传的是 currentPrincipal.snapshotId()——
         //    一个恒为随机 UUID 的值，必然违反 run_snapshot_fk → 端点恒 500。
         var result = runCreation.createRun(
                 context,
-                request.agentId(),
-                IdempotencyKey.forRunCreate(request.idempotencyKey()),
-                request.input(),
+                effective.agentId(),
+                IdempotencyKey.forRunCreate(effective.idempotencyKey()),
+                effective.input(),
                 // ⚠️ 资源上限随 Run 一起落库：它是整棵委派调用树的共同上界
                 //    （多级 Agent v1.1 · FR-024），逐跳只能收窄不得放宽。
                 //    ⚠️ 时间换算在服务层完成（那里有注入的 Clock）——
                 //    这里若自己取 Instant.now()，就会出现**两个时间源**，
                 //    二者漂移时截止时刻会与实际不符。
-                request.timeoutMs(),
-                request.budgetAmount());
+                effective.timeoutMs(),
+                effective.budgetAmount());
 
         // 5) 幂等重放返回 200，新建返回 201 —— 让客户端能区分
         ResponseEntity.BodyBuilder builder = result.replayed()

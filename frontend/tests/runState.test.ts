@@ -109,6 +109,20 @@ describe('Run 状态映射', () => {
     it('FAILED 无 errorCode 时给出兜底', () => {
       expect(stateHint('FAILED')).toBe('本次执行未完成')
     })
+    it('⛔ FAILED + 额度耗尽码：给出可读终态原因，绝不说「执行中」或原样透出码', () => {
+      for (const code of [
+        'MODEL_RATE_LIMITED',
+        'QUOTA_EXHAUSTED',
+        'MODEL_RETRY_EXHAUSTED',
+        'MAX_ATTEMPTS_EXCEEDED',
+      ]) {
+        const hint = stateHint('FAILED', code) ?? ''
+        expect(hint).toContain('本次分析未成功')
+        expect(hint).not.toContain(code)
+        expect(hint).not.toContain('执行中')
+        expect(stateLabel('FAILED')).not.toBe('执行中')
+      }
+    })
     it('TIMED_OUT 有独立说明', () => {
       expect(stateHint('TIMED_OUT')).toBe('执行超时未能完成')
     })

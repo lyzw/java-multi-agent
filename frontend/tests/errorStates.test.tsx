@@ -134,8 +134,10 @@ describe('N4：重新发起这道题必须带回原题', () => {
       </MemoryRouter>,
     )
 
-    expect((document.querySelector('#studentId') as HTMLInputElement).value).toBe(FORM.studentId)
     expect((document.querySelector('#questionText') as HTMLTextAreaElement).value).toBe(FORM.questionText)
+    // ⚠️ 身份改造（2026-11-17）：学生标识**不再由用户填写** ——
+    //    它由登录态派生，页面没有可编辑的 studentId 输入框了。
+    expect(document.querySelector('#studentId')).toBeNull()
     expect(screen.getByText(/已带回上一道题的内容/)).toBeInTheDocument()
   })
 
@@ -150,7 +152,10 @@ describe('N4：重新发起这道题必须带回原题', () => {
       </MemoryRouter>,
     )
 
-    expect((document.querySelector('#studentId') as HTMLInputElement).value).toBe('')
+    // ⚠️ 身份改造：无 location.state 时不得残留上一题内容；
+    //    学生标识由登录态决定，页面没有 studentId 输入框。
+    expect((document.querySelector('#questionText') as HTMLTextAreaElement).value).toBe('')
+    expect(document.querySelector('#studentId')).toBeNull()
     expect(screen.queryByText(/已带回上一道题的内容/)).not.toBeInTheDocument()
   })
 })

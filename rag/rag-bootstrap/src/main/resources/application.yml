@@ -157,3 +157,8 @@ server:
   #    Spring 的 relaxed binding 会让它**压过本文件**（环境变量优先级高于 application.yml）。
   #    此时请用命令行参数 --server.port= 显式指定。
   port: ${RAG_SERVER_PORT:8081}
+  # ⚠️ 必须显式绑定 IPv4 通配地址：platform 侧 RAG_BASE_URL=http://127.0.0.1:8081 是
+  #    IPv4 回环地址；若这里只绑到 IPv6 回环（::1，localhost 在部分 JDK/OS 上优先解析为它），
+  #    客户端连 127.0.0.1 会 connection refused，表现为「RAG 响应读取失败（不可达）」。
+  #    0.0.0.0 绑定全部 IPv4 网卡，确保与 127.0.0.1 的跨进程契约成立。
+  address: "${RAG_SERVER_ADDRESS:0.0.0.0}"

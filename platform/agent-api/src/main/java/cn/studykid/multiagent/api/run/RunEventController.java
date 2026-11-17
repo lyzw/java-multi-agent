@@ -83,7 +83,7 @@ public class RunEventController {
      */
     private static final java.util.Set<String> ALLOWED_PAYLOAD_FIELDS =
             java.util.Set.of("state", "attempt", "stepType", "toolName",
-                    "operationState", "errorCode", "phase");
+                    "operationState", "errorCode", "phase", "errorKind", "retryable");
 
     private static boolean isScalar(Object v) {
         return v instanceof String || v instanceof Number || v instanceof Boolean;

@@ -325,6 +325,24 @@ public class PgQueueListener {
         repository.reject(tenantId, message.queueId(), message.eventType(),
                 message.runId(), message.payload(), message.attempts() + 1, error, workerId);
         totalDeadLettered.incrementAndGet();
+        // ⚠️ 死信 = 消息层面的终态，但 Run 此刻仍可能是 RUNNING：
+        //    此前只写死信表 + 删队列行，从不碰 run → Run 永远停在 RUNNING，
+        //    进度页永远「执行中」。这里 best-effort 收敛 FAILED（窄 SQL 带
+        //    state='RUNNING' 围栏，幂等且不覆盖其它终态）。
+        //    收敛失败只记 WARN：死信已经落定，不得因收敛失败而把消息退回重投
+        //    （毒消息重投只会再次耗尽次数，且重复副作用风险更高）。
+        try {
+            boolean failed = repository.failRunOnDeadLetter(
+                    tenantId, message.runId(), "MAX_ATTEMPTS_EXCEEDED");
+            if (!failed) {
+                log.warn("死信时 Run 已非 RUNNING（无需收敛，可能已被接管/已终态）: "
+                        + "runId={}, queueId={}", message.runId(), message.queueId());
+            }
+        } catch (RuntimeException e) {
+            log.warn("死信时收敛 Run 失败（交由崩溃恢复扫描器兜底）: "
+                    + "runId={}, queueId={}, cause={}",
+                    message.runId(), message.queueId(), e.toString());
+        }
         log.error("消息已进死信: queueId={}, runId={}, error={}",
                 message.queueId(), message.runId(), error);
     }

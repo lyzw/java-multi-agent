@@ -25,6 +25,23 @@ import org.jspecify.annotations.Nullable;
  */
 public class StudentDataRepository {
 
+    /**
+     * 画像允许的年级取值（与 {@code student_profile.grade_chk} 约束**逐字一致**）。
+     *
+     * <p>⚠️ 枚举必须与 DB CHECK 约束同源：约束外取值会让 INSERT 直接失败，
+     * 而那会把「画像缺失」伪装成「写入结果不确定」。
+     */
+    private static final java.util.Set<String> PROFILE_GRADES =
+            java.util.Set.of("初一", "初二", "初三");
+
+    /** 画像允许的学科取值（与 {@code student_profile.subject_chk} 约束逐字一致）。 */
+    private static final java.util.Set<String> PROFILE_SUBJECTS =
+            java.util.Set.of("数学", "物理", "化学", "语文", "英语", "生物");
+
+    /** Run 输入负载解析器（Jackson 3）。 */
+    private static final tools.jackson.databind.ObjectMapper MAPPER =
+            new tools.jackson.databind.ObjectMapper();
+
     private final DataSource dataSource;
 
     public StudentDataRepository(@NonNull DataSource dataSource) {
@@ -184,6 +201,15 @@ public class StudentDataRepository {
             Double confidence) {
 
         return inTenantScope(tenantId, conn -> {
+            // ⚠️⚠️ **先确保画像存在**（学习闭环前置条件 · 2026-11-17 实跑修复）：
+            //    weakness_record 有外键 weakness_student_fk → student_profile(tenant_id, student_id)，
+            //    而**生产路径此前没有任何创建画像的入口**（只有测试夹具在插），
+            //    于是新学生的第一次 record_weakness 必然撞外键 → SQLException
+            //    → 被当成「写入结果不确定」→ 工具结果 UNKNOWN → 薄弱点永远写不进去。
+            //    这正是 P0-5「weakness_record 真有行」验收长期失败的**真因**
+            //    （此前被误判为「能力目录没纳管」，实际目录修好后仍写不进）。
+            ensureProfile(conn, tenantId, studentId, runId);
+
             // ⚠️ 先查：命中且内容一致 → 幂等重放，返回首次结果
             Optional<String> existing = findExisting(conn, tenantId, studentId,
                     runId, knowledgePoint);
@@ -216,6 +242,106 @@ public class StudentDataRepository {
             }
             throw new IllegalStateException("插入未返回记录");
         });
+    }
+
+    /**
+     * 确保学生画像存在（按本次 Run 请求里学生<b>自己声明</b>的年级/学科建档）。
+     *
+     * <p><b>为什么必须在写薄弱点前建档</b>：{@code weakness_record} 有外键
+     * {@code weakness_student_fk → student_profile(tenant_id, student_id)}，
+     * 而生产路径此前**没有任何创建画像的入口** —— 于是新学生第一次记录薄弱点
+     * 必然撞外键，SQLException 被包装成「写入结果不确定」，
+     * 工具结果落到 UNKNOWN，薄弱点永远写不进去（学习闭环断在最后一步）。
+     *
+     * <p><b>年级/学科的权威来源</b>：Run 的 {@code input_payload}
+     * （学生提交辅导请求时自己填的年级/学科），**不是**平台猜测、也不是固定默认值。
+     * 取不到或取值不在画像枚举内时**不建档**，并抛
+     * {@link ProfileUnavailableException} —— 由调用方转成「明确失败」，
+     * 而不是让外键错误伪装成「写入结果不确定」。
+     *
+     * <p><b>不覆盖既有画像</b>：{@code ON CONFLICT DO NOTHING} —— 首次登记为准。
+     */
+    private void ensureProfile(Connection conn, String tenantId, String studentId, String runId)
+            throws SQLException {
+        // ① 画像已存在 → 不动它（首次登记为准）
+        if (profileExists(conn, tenantId, studentId)) {
+            return;
+        }
+        // ② 从 Run 输入取学生声明的年级/学科
+        String grade = null;
+        String subject = null;
+        String sql = """
+                SELECT input_payload::text FROM run
+                WHERE tenant_id = ?::uuid AND run_id = ?::uuid
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, runId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    grade = readText(rs.getString(1), "grade");
+                    subject = readText(rs.getString(1), "subject");
+                }
+            }
+        }
+        if (grade == null || subject == null
+                || !PROFILE_GRADES.contains(grade) || !PROFILE_SUBJECTS.contains(subject)) {
+            throw new ProfileUnavailableException(
+                    "学生画像未建立且无法建档：本次请求未声明有效的年级/学科"
+                            + "（grade=" + grade + ", subject=" + subject + "）");
+        }
+        // ③ 建档（幂等：并发下 ON CONFLICT 兜住）
+        String insert = """
+                INSERT INTO student_profile
+                    (tenant_id, student_id, grade, subject, created_at, updated_at)
+                VALUES (?::uuid, ?, ?, ?, now(), now())
+                ON CONFLICT (tenant_id, student_id) DO NOTHING
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(insert)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, studentId);
+            ps.setString(3, grade);
+            ps.setString(4, subject);
+            ps.executeUpdate();
+        }
+    }
+
+    /** 画像是否已存在（租户内）。 */
+    private boolean profileExists(Connection conn, String tenantId, String studentId)
+            throws SQLException {
+        String sql = """
+                SELECT 1 FROM student_profile
+                WHERE tenant_id = ?::uuid AND student_id = ?
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, studentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    /** 从 Run 输入 JSON 里取一个文本字段；取不到返回 null。 */
+    private static @Nullable String readText(@Nullable String json, @NonNull String field) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            var node = MAPPER.readTree(json);
+            if (node == null || !node.isObject()) {
+                return null;
+            }
+            var value = node.path(field);
+            if (value == null || !value.isTextual()) {
+                return null;
+            }
+            String text = value.asString();
+            return text == null || text.isBlank() ? null : text.trim();
+        } catch (RuntimeException e) {
+            // ⚠️ 解析失败 = 取不到年级/学科 → 走「不建档」分支，绝不猜值。
+            return null;
+        }
     }
 
     private Optional<String> findExisting(Connection conn, String tenantId, String studentId,
@@ -261,6 +387,23 @@ public class StudentDataRepository {
         private static final long serialVersionUID = 1L;
 
         public DuplicateWeaknessException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * 画像不可用（无法建档）。
+     *
+     * <p>⚠️ <b>刻意不继承 {@link IllegalStateException}</b>：写路径把
+     * {@code IllegalStateException} 一律映射成「写入结果不确定（UNKNOWN）」，
+     * 而本异常发生在**任何写入之前**（建档前置检查阶段），
+     * 结果是确定的「没写进去」—— 映射成 UNKNOWN 会让对账流程凭空多一轮，
+     * 并把一个明确的配置缺口伪装成不确定的下游故障。
+     */
+    public static class ProfileUnavailableException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        public ProfileUnavailableException(String message) {
             super(message);
         }
     }

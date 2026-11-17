@@ -1203,7 +1203,21 @@ public class ToolInvocationGate {
             // ③ 幂等键（ADR-003）
             // ⚠️ 必须传真实 runId：键缺 run 维度会跨 Run 撞键（P4-D08 R-2）
             // ⚠️ 必须传 Agent 维度（第十七批）：键缺 Agent 维度会父子/兄弟 Agent 互相吞调用
-            String idemKey = buildIdempotencyKey(task.runId(), call, agentRef);
+            // ⚠️ 2026-11-17：键构造**必须**裹在 try/catch 里。
+            //    实测（E2E 2026-11-17）：模型写的知识点含斜杠 → 键构造抛
+            //    IllegalArgumentException → 异常一路冒泡到执行循环 →
+            //    整个 Run 被打成 INTERNAL_ERROR，学生只看到「这次分析临时未能完成」。
+            //    键构造失败是**这一次工具调用**的参数问题（fail-closed 拒绝该次调用即可），
+            //    绝不该把整个 Run 连坐成失败。
+            String idemKey;
+            try {
+                idemKey = buildIdempotencyKey(task.runId(), call, agentRef);
+            } catch (RuntimeException e) {
+                log.warn("幂等键构造失败，拒绝该次工具调用: tool={}, runId={}, cause={}",
+                        call.toolName(), task.runId(), e.toString());
+                result.recordRejected(call.toolName(), "幂等键构造失败");
+                continue;
+            }
 
             // ④ ⚠️ 账本登记（P3-D03）：失败即拒绝执行（fail-closed）。
             //    无账可对的调用，其 UNKNOWN 无处安放——对账无从做起。

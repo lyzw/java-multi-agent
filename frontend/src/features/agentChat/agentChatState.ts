@@ -73,6 +73,8 @@ export interface AgentRagView {
 export interface AgentUsageView {
   inputTokens: number
   outputTokens: number
+  /** ⚠️ P1-4：token 数是否为本地估算值（供应商未返回 usage）。 */
+  estimated?: boolean
 }
 
 export interface AgentChatMessage {
@@ -342,6 +344,7 @@ function applyStreamEvent(m: AgentChatMessage, event: AgentStreamEvent): AgentCh
       const usage: AgentUsageView = {
         inputTokens: event.inputTokens,
         outputTokens: event.outputTokens,
+        estimated: event.estimated === true,
       }
       return {
         ...m,

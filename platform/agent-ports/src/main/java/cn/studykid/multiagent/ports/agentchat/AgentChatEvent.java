@@ -258,16 +258,45 @@ public sealed interface AgentChatEvent permits
         }
     }
 
-    /** ⑪ usage · data=JSON。 */
-    record Usage(long inputTokens, long outputTokens) implements AgentChatEvent {
+    /**
+     * ⑪ usage · data=JSON。
+     *
+     * <p>⚠️ {@code estimated} 表示 token 数是**本地估算**（P1-4 · 2026-11-17）：
+     * 许多供应商在流式响应里不发 {@code usage}，或发 {@code usage: null}，
+     * 此时真实用量不可得，只能按文本长度估算。
+     * <p>⚠️ 必须把这个标记**透给前端**：把估算值当真实值展示，
+     * 会让关心额度的学生/家长拿到一个「看起来精确、其实不是」的数字。
+     */
+    record Usage(long inputTokens, long outputTokens, boolean estimated) implements AgentChatEvent {
+
+        /** 兼容构造器：供应商如实返回用量时 {@code estimated=false}。 */
+        public Usage(long inputTokens, long outputTokens) {
+            this(inputTokens, outputTokens, false);
+        }
+
         @Override
         public @NonNull String eventName() {
             return "usage";
         }
 
+        /**
+         * 线格式。
+         *
+         * <p>⚠️ <b>只在 {@code estimated=true} 时才追加该字段</b> ——
+         * SSE v1.1 的 13 个旧帧字节是<b>冻结</b>的
+         * （{@code ContextCompressionM6GuardTest.sseProtocolV11IsAdditiveAndFrozen}），
+         * 供应商如实返回用量时的字节必须与旧版**逐字节相同**，
+         * 否则 v1 客户端的快照比对会静默失败。
+         *
+         * <p>⚠️ 但「是估算值」这一信息**必须**能被前端看到：
+         * 把估算值当精确值展示，等于给出一个「看起来精确、其实不是」的数字。
+         * 故只在携带新信息时追加 —— 这既是<b>加性</b>的（协议 v1.1 的原则），
+         * 又不改动任何旧字节。
+         */
         @Override
         public @NonNull String data() {
-            return "{\"inputTokens\":" + inputTokens + ",\"outputTokens\":" + outputTokens + "}";
+            String base = "{\"inputTokens\":" + inputTokens + ",\"outputTokens\":" + outputTokens;
+            return estimated ? base + ",\"estimated\":true}" : base + "}";
         }
     }
 

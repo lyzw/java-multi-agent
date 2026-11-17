@@ -58,17 +58,29 @@ public class AuthenticationService {
 
     /** 认证结果。仅两种状态，<b>不区分失败原因</b>。 */
     public record AuthResult(boolean success, String token, String principalId, String tenantId,
-                             Set<String> roles) {
+                             Set<String> roles, String username, String studentId) {
 
         public static AuthResult success(String token, String principalId, String tenantId,
-                                        Set<String> roles) {
+                                        Set<String> roles, String username, String studentId) {
             return new AuthResult(true, token, principalId, tenantId,
-                    roles == null ? Set.of() : Set.copyOf(roles));
+                    roles == null ? Set.of() : Set.copyOf(roles), username, studentId);
+        }
+
+        /** 兼容构造器：未携带学生身份的场景（既有测试）。 */
+        public AuthResult(boolean success, String token, String principalId, String tenantId,
+                          Set<String> roles) {
+            this(success, token, principalId, tenantId, roles, null, null);
+        }
+
+        /** 兼容工厂：既有调用方。 */
+        public static AuthResult success(String token, String principalId, String tenantId,
+                                        Set<String> roles) {
+            return success(token, principalId, tenantId, roles, null, null);
         }
 
         /** 统一失败结果：消息与耗时均不可区分。 */
         public static AuthResult failure() {
-            return new AuthResult(false, null, null, null, Set.of());
+            return new AuthResult(false, null, null, null, Set.of(), null, null);
         }
     }
 
@@ -114,7 +126,16 @@ public class AuthenticationService {
         // ⚠️ 回带角色（B1：登录返角色）：角色来自库中登记值（rolesOf），
         //    与 JWT 声明同源但此处直接给前端，免去一次 /api/auth/roles 往返。
         //    前端仅用于**导航显隐**（非安全边界），安全判定仍以执行时重授权为准。
-        return AuthResult.success(token, record.principalId(), record.tenantId(), roles);
+        // ⚠️ 回带登录名（即学生用户名）与学生业务编号（身份改造 2026-11-17）：
+        //    前端据此展示「当前学生」并**不再让用户手填编号**；后端仍以验签令牌里的
+        //    principalId 为唯一可信身份来源，在 Run 创建时重新查库派生 studentId，
+        //    本响应仅作 UI 展示，不作为写入依据。
+        String studentId = record.studentId();
+        if (studentId == null) {
+            studentId = principals.findStudentId(record.tenantId(), record.principalId()).orElse(null);
+        }
+        return AuthResult.success(token, record.principalId(), record.tenantId(), roles,
+                record.loginName(), studentId);
     }
 
     /**

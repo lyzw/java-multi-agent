@@ -2,6 +2,7 @@
 # ⚠️ 下方已有的逐文件规则只是历史产物；整目录忽略才是承重的。
 /.m2repo/
 /.m2-local/
+admin-console/dist*
 
 # ── 本地运行时产物（不提交：体积大且可由工具重新生成）──
 # ⚠️ 清理脚本导出的备份（scripts/agent-cleanup-presets/run.sh --backup-only）

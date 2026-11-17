@@ -46,6 +46,21 @@ export interface LoginResponse {
    *    安全判定以执行时后端重授权为准，前端**不得**据此放行敏感操作。
    */
   roles?: string[]
+  /**
+   * 登录名＝**学生用户名**（身份改造 2026-11-17）。
+   *
+   * ⚠️ 用于「当前学生」展示，以及老师在管理台按用户名选人。
+   *    非学生主体（平台/家长/审核）可能为 null。
+   *    ⚠️ 仅作展示：**写入身份后端一律按 principalId 重新查库派生**，
+   *    前端传什么都不会被采信。
+   */
+  username?: string | null
+  /**
+   * 权威学生业务编号（`stu_` 前缀，后端从登录态派生）。
+   *
+   * ⚠️ 仅用于展示与格式校验对齐；**不是**写入依据。
+   */
+  studentId?: string | null
 }
 
 /**
@@ -563,6 +578,39 @@ export interface RagRetrievalHit {
 }
 
 /** POST /api/v1/retrieval 响应体（对齐 `RetrievalResultDto`）。 */
+/**
+ * 检索漏斗计数（P1-1 · 2026-11-17）。
+ *
+ * ⚠️ **它存在的理由是「诚实」**：0 命中有多种成因（该版本没有语料 /
+ *    命中了但被版本过滤 / 被泄题闸门拦下 / 分数门禁滤光），
+ *    对学生而言表现完全一样：**什么都没显示**。
+ *    此前一律显示「没有找到相关语料，换个说法」——
+ *    于是「这个版本压根没有教材」被说成「你问得不对」，
+ *    学生反复换说法，浪费的全是他的时间。
+ *
+ * ⚠️ 字段与 rag 侧 {@code RetrievalResultDto.FunnelDto} 一一对应。
+ */
+export interface RagRetrievalFunnel {
+  /** 多路召回的原始候选数 */
+  candidates: number
+  /** 版本硬过滤后剩余 */
+  afterVersion: number
+  /** 角色（泄题）硬过滤后剩余 */
+  afterRole: number
+  /** 分数门禁后剩余 */
+  afterGate: number
+  /** topK 截断后实际返回 */
+  returned: number
+  /** 被版本过滤剔除数 */
+  droppedByVersion: number
+  /** 被角色闸门剔除数 */
+  droppedByRole: number
+  /** 被分数门禁剔除数 */
+  droppedByGate: number
+  /** 主因归因：NONE / ROLE / VERSION / GATE */
+  dominantDrop: string
+}
+
 export interface RagRetrievalResponse {
   hits: RagRetrievalHit[]
   /** 是否检测到版本不匹配（前端应显式提示差异） */
@@ -571,6 +619,15 @@ export interface RagRetrievalResponse {
   answerContentSuppressed: boolean
   /** 主版本展示名 */
   primaryEdition: string
+  /**
+   * 检索漏斗计数（P1-1）；用于空结果归因。
+   *
+   * ⚠️ 老版本 rag 服务不返回此字段 —— 故为可选，缺失时按「未知成因」处理，
+   *    不得据此断言「该版本没有语料」。
+   */
+  funnel?: RagRetrievalFunnel | null
+  /** 服务端分数门禁阈值（可选）；用于解释「为什么没命中」 */
+  minScore?: number | null
 }
 
 /**

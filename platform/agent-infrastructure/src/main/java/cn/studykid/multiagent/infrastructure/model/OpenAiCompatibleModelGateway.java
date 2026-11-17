@@ -109,7 +109,7 @@ public final class OpenAiCompatibleModelGateway extends AbstractModelGateway
                 .header("Authorization", "Bearer " + apiKey)
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
-        return streamAndParse(http, consumer);
+        return streamAndParse(http, consumer, request);
     }
 
     /**
@@ -117,7 +117,8 @@ public final class OpenAiCompatibleModelGateway extends AbstractModelGateway
      */
     private @NonNull ModelResponse streamAndParse(
             @NonNull HttpRequest http,
-            ChatStreamGateway.StreamDeltaConsumer consumer) {
+            ChatStreamGateway.StreamDeltaConsumer consumer,
+            @NonNull ModelRequest request) {
         try {
             HttpResponse<InputStream> response =
                     client.send(http, HttpResponse.BodyHandlers.ofInputStream());
@@ -161,7 +162,9 @@ public final class OpenAiCompatibleModelGateway extends AbstractModelGateway
                                 }
                             }
                             JsonNode usage = root.path("usage");
-                            if (!usage.isMissingNode()) {
+                            // ⚠️ 部分供应商流式帧回 usage:null —— isMissingNode() 为 false，
+                            //    但 isObject() 为 false；此时必须跳过，不能把 0 当实测值。
+                            if (usage.isObject()) {
                                 promptTokens = usage.path("prompt_tokens").asLong(promptTokens);
                                 completionTokens = usage.path("completion_tokens")
                                         .asLong(completionTokens);
@@ -182,8 +185,19 @@ public final class OpenAiCompatibleModelGateway extends AbstractModelGateway
                 }
             }
 
-            return new ModelResponse(content.toString().strip(), Map.of(),
-                    new ModelResponse.ModelUsage(promptTokens, completionTokens),
+            String finalContent = content.toString().strip();
+            // usage 缺失/null/0 时本地粗估缺失项，并明确标记为估算，避免与实测用量混淆。
+            boolean estimated = false;
+            if (promptTokens == 0) {
+                promptTokens = TokenEstimate.ofPrompt(request);
+                estimated = true;
+            }
+            if (completionTokens == 0) {
+                completionTokens = TokenEstimate.ofText(finalContent);
+                estimated = true;
+            }
+            return new ModelResponse(finalContent, Map.of(),
+                    new ModelResponse.ModelUsage(promptTokens, completionTokens, estimated),
                     mapFinishReason(finishReason));
         } catch (java.net.http.HttpTimeoutException e) {
             throw new ModelGatewayException(ModelErrorKind.TIMEOUT, "模型流式调用超时");

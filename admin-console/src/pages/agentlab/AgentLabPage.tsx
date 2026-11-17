@@ -231,6 +231,14 @@ export function AgentLabPage(): JSX.Element {
     [agents],
   )
 
+  /**
+   * 选人下拉的选项。
+   *
+   * ⚠️ 身份改造（2026-11-17）：**登录名即学生用户名** ——
+   *    老师按用户名就能认出学生（而不是面对一串 UUID）。
+   *    有绑定学生编号时一并展示，便于核对「这个用户名 ↔ 这份画像/薄弱点」
+   *    的绑定关系；非学生主体不显示编号（不编造）。
+   */
   const principalOptions = useMemo(
     () =>
       principals.map((p) => ({
@@ -238,6 +246,7 @@ export function AgentLabPage(): JSX.Element {
         label:
           `${p.loginName}` +
           (p.displayName ? ` · ${p.displayName}` : '') +
+          (p.studentId ? ` · ${p.studentId}` : '') +
           ` · ${p.roles.length > 0 ? p.roles.join('/') : '无角色'}`,
       })),
     [principals],

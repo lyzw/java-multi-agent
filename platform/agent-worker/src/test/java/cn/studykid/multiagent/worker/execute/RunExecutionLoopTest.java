@@ -97,7 +97,12 @@ class RunExecutionLoopTest {
     }
 
     private static RunClaimPort.LeasedTask task() {
-        return new RunClaimPort.LeasedTask(RUN_ID, 1L, Instant.now().plusSeconds(30), 1);
+        return task(1);
+    }
+
+    /** 指定 attempt 的任务（重试硬上限相关用例用）。 */
+    private static RunClaimPort.LeasedTask task(int attempt) {
+        return new RunClaimPort.LeasedTask(RUN_ID, 1L, Instant.now().plusSeconds(30), attempt);
     }
 
     /**
@@ -1384,8 +1389,8 @@ class RunExecutionLoopTest {
         }
 
         @Test
-        @DisplayName("⛔ E-6b 可重试失败**不得**写终态事件（否则前端误判已结束）")
-        void retryableFailureWritesNoTerminalEvent() {
+        @DisplayName("✅ 可重试失败在硬上限以下 → RETRYABLE_FAILURE，不写终态事件（前端不会误判已结束）")
+        void retryableFailureBelowCapWritesNoTerminalEvent() {
             FakeClaimPort port = new FakeClaimPort();
             RecordingEventPort events = new RecordingEventPort();
             ModelGateway gw = request -> {
@@ -1397,14 +1402,111 @@ class RunExecutionLoopTest {
                             h -> ApprovalPolicy.ApprovalDecision.notRequired(),
                             budget(), ledger()), events);
 
-            var outcome = loop.execute(TENANT, task(), agentConfig(), snapshot(5),
+            var outcome = loop.execute(TENANT, task(1), agentConfig(), snapshot(5),
                     Map.of("q", "x"));
 
             assertThat(outcome.kind())
                     .isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.RETRYABLE_FAILURE);
+            assertThat(port.committedState).isNull();
             assertThat(events.types)
-                    .as("⛔ 会重投的失败不得写终态事件——前端会以为「结束了」而不再等")
+                    .as("会重投的失败不得写终态事件——前端会以为「结束了」而不再等")
                     .containsExactly(RunEventPort.Types.RUN_STARTED);
+        }
+
+        @Test
+        @DisplayName("⛔ 可重试失败达到硬上限 → FAILED(MODEL_RETRY_EXHAUSTED)，写终态事件，绝不再重投")
+        void retryableFailureAtCapTerminalizesRun() {
+            FakeClaimPort port = new FakeClaimPort();
+            RecordingEventPort events = new RecordingEventPort();
+            ModelGateway gw = request -> {
+                throw new ModelGateway.ModelGatewayException(
+                        ModelGateway.ModelErrorKind.TIMEOUT, "timeout");
+            };
+            var loop = loop(gw, port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()), events);
+
+            // 默认上限 3：attempt=3 已达上限 → 必须收敛 FAILED
+            var outcome = loop.execute(TENANT, task(3), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(outcome.kind()).isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(outcome.retryable()).isFalse();
+            assertThat(port.committedState).isEqualTo("FAILED");
+            assertThat(port.committedErrorCode)
+                    .isEqualTo(RunExecutionLoop.ERROR_MODEL_RETRY_EXHAUSTED);
+            assertThat(events.types).contains(RunEventPort.Types.RUN_FAILED);
+        }
+
+        @Test
+        @DisplayName("⛔ 额度/限流耗尽(429)是终态：立即 FAILED(MODEL_RATE_LIMITED)，不返回可重试")
+        void rateLimitedIsTerminalFailure() {
+            FakeClaimPort port = new FakeClaimPort();
+            RecordingEventPort events = new RecordingEventPort();
+            ModelGateway gw = request -> {
+                throw new ModelGateway.ModelGatewayException(
+                        ModelGateway.ModelErrorKind.RATE_LIMITED, "HTTP 429: too many requests");
+            };
+            var loop = loop(gw, port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()), events);
+
+            var outcome = loop.execute(TENANT, task(1), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(outcome.kind()).isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(outcome.retryable()).isFalse();
+            assertThat(port.committedState).isEqualTo("FAILED");
+            assertThat(port.committedErrorCode)
+                    .isEqualTo(RunExecutionLoop.ERROR_MODEL_RATE_LIMITED);
+            assertThat(events.types).contains(RunEventPort.Types.RUN_FAILED);
+        }
+
+        @Test
+        @DisplayName("⛔ MiniMax HTTP 200 + base_resp 配额耗尽（归一为 PROVIDER_ERROR）也是终态")
+        void minimaxQuotaExhaustedIsTerminal() {
+            FakeClaimPort port = new FakeClaimPort();
+            ModelGateway gw = request -> {
+                throw new ModelGateway.ModelGatewayException(
+                        ModelGateway.ModelErrorKind.PROVIDER_ERROR,
+                        "base_resp.status_code=1004 quota exhausted");
+            };
+            var loop = loop(gw, port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()));
+
+            var outcome = loop.execute(TENANT, task(1), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(outcome.kind()).isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(port.committedErrorCode)
+                    .isEqualTo(RunExecutionLoop.ERROR_MODEL_RATE_LIMITED);
+        }
+
+        @Test
+        @DisplayName("⛔ 注入 maxAttempts=1：首次可重试失败即达上限，收敛 FAILED")
+        void injectedMaxAttemptsCapIsHonored() {
+            FakeClaimPort port = new FakeClaimPort();
+            ModelGateway gw = request -> {
+                throw new ModelGateway.ModelGatewayException(
+                        ModelGateway.ModelErrorKind.TIMEOUT, "timeout");
+            };
+            var loop = new RunExecutionLoop(observe(gw), port,
+                    new ToolInvocationGate(List.of(), allowAll(),
+                            h -> ApprovalPolicy.ApprovalDecision.notRequired(),
+                            budget(), ledger()),
+                    Duration.ofSeconds(30), "w-1", 1);
+
+            assertThat(loop.maxAttempts()).isEqualTo(1);
+            var outcome = loop.execute(TENANT, task(1), agentConfig(), snapshot(5),
+                    Map.of("q", "x"));
+
+            assertThat(outcome.kind()).isEqualTo(RunExecutionLoop.ExecutionOutcome.Kind.FAILED);
+            assertThat(port.committedErrorCode)
+                    .isEqualTo(RunExecutionLoop.ERROR_MODEL_RETRY_EXHAUSTED);
         }
     }
 

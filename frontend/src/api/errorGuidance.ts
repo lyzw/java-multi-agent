@@ -96,7 +96,7 @@ export function errorGuidance(error: NormalizedError | null): ErrorGuidance {
 
 /* ── 失败 Run 的 errorCode 指引（N3）───────────────────────── */
 
-export type RunFailureKind = 'service-config' | 'transient' | 'unknown'
+export type RunFailureKind = 'service-config' | 'quota-exhausted' | 'transient' | 'unknown'
 
 export interface RunFailureGuidance {
   kind: RunFailureKind
@@ -125,6 +125,22 @@ const SERVICE_CONFIG_CODES: readonly string[] = [
   'NO_ACCOUNT',
   'CONFIG_MISSING',
   'AGENT_CONFIG_UNAVAILABLE',
+]
+
+/**
+ * 模型额度 / 限流耗尽、重试硬上限、死信收敛 —— 全部是**终态**。
+ *
+ * ⚠️ 这些码由后端 RunExecutionLoop / PgQueueListener / 恢复扫描器真实写入
+ *    run.error_code。它们根因是「额度已耗尽 / 已重试到上限」，重试多少次
+ *    都只会再次失败，绝不能落进 TRANSIENT_CODES（那会给出「再辅导一道」
+ *    的按钮，让用户陷入死循环）。
+ */
+const QUOTA_EXHAUSTED_CODES: readonly string[] = [
+  'MODEL_RATE_LIMITED',
+  'QUOTA_EXHAUSTED',
+  'MODEL_PROVIDER_ERROR',
+  'MODEL_RETRY_EXHAUSTED',
+  'MAX_ATTEMPTS_EXCEEDED',
 ]
 
 /** 临时故障：换一次请求确实可能成功。 */
@@ -165,6 +181,22 @@ export function runFailureGuidance(
       kind: 'service-config',
       reason: '服务配置尚未就绪',
       advice: `这不是题目内容或服务临时波动造成的，而是租户服务配置未完成${ref}。重新发起只会再次失败；请联系管理员开通后，再重新分析这道题。`,
+      canRetry: false,
+      contactAdmin: true,
+    }
+  }
+
+  if (QUOTA_EXHAUSTED_CODES.includes(code)) {
+    // ⚠️ 额度/限流耗尽是终态：明确说清「本次未成功」，不给自动重试暗示。
+    //    MODEL_RATE_LIMITED / QUOTA_EXHAUSTED 用专属文案；
+    //    其余（重试超限 / 死信 / 供应商业务错误）用同源的「已耗尽」文案。
+    const isRateLimit = code === 'MODEL_RATE_LIMITED' || code === 'QUOTA_EXHAUSTED'
+    return {
+      kind: 'quota-exhausted',
+      reason: isRateLimit
+        ? '模型额度已用尽或调用过于频繁，本次分析未成功；请稍后再试或联系管理员'
+        : '模型调用重试次数已达上限，本次分析未成功；请稍后再试或联系管理员',
+      advice: `这不是网络抖动或题目内容问题，而是模型额度或调用次数已耗尽${ref}。重试不会改变结果；请联系管理员恢复额度后再发起。`,
       canRetry: false,
       contactAdmin: true,
     }

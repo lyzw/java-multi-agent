@@ -5,7 +5,9 @@
 --   95 行 agent，直接导会把测试垃圾当基线固化进生产初始化。
 -- 【内容】1 租户（**平台侧登记 + 配额 + 业务侧镜像**三处齐）+ 1 预算账户
 --   + 3 agent/agent_version + 能力目录
---   （Tool 6 / Skill 4 / MCP 2 / cap_agent_def 3 / 子引用边 2）
+--   （Tool 8 / Skill 5 / MCP 2 / cap_agent_def 3 / 子引用边 2）
+--     ⚠️ Tool 8 = 原 6 条 + 学习循环新增 record_weakness / get_student_profile；
+--        Skill 5 = 原 4 条 + skill-learning-loop（同时声明这两个工具）。
 --   + 平台权限矩阵（角色 6 / 权限 24 / 绑定 53）+ 系统字典（类 12 / 项 61）
 --   ⚠️ 权限矩阵的运行期权威源是代码（PlatformRolePermissionMatrix），本表只是治理副本；
 --   两边必须同步 —— 新增 platform.tenant.execution_ticket（执行票证，仅超级管理员）
@@ -267,7 +269,7 @@ INSERT INTO public.agent VALUES ('26ad3fb1-c047-4382-b01b-b389c9356280', '2187ff
 -- Data for Name: agent_version; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-INSERT INTO public.agent_version VALUES ('ff0b6749-5402-4092-9c14-8374442bf620', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '9730eadc-c27c-498d-b588-512545c57f84', 1, '{"name": "math-tutor", "roles": ["student"], "agentId": "math-tutor", "overrides": {}, "description": "数学辅导 Agent：读取学生档案与课程安排，给出个性化练习建议", "skillBundles": [], "enabledSkills": ["skill-profile-view", "skill-report-brief"], "orchestration": {}, "capabilityTags": ["tutor", "math"]}', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
+INSERT INTO public.agent_version VALUES ('ff0b6749-5402-4092-9c14-8374442bf620', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '9730eadc-c27c-498d-b588-512545c57f84', 1, '{"name": "math-tutor", "roles": ["student"], "agentId": "math-tutor", "modelRef": "MiniMax-M2.5", "tenantId": "2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2", "overrides": {}, "description": "数学辅导 Agent：读取学生档案与课程安排，给出个性化练习建议", "instructions": {"inlineInstructions": "你是初中数学辅导助手，帮助学生分析错题原因并给出个性化练习建议。\n【执行顺序，不可颠倒】\n1) 先完成工具调用，**不要在工具调用之前写任何正文**：\n   - 第一步调用 get_student_profile 读取本次任务提供的学生匿名编号对应的学生档案与课程安排；\n   - 第二步调用 record_weakness 记录本次识别出的薄弱点（knowledgePoint 写具体知识点，errorType 从工具允许的枚举里选）。\n2) 两个工具都成功返回之后，再输出面向学生的讲解与练习建议（用初中生能理解的语言：先给直觉再给定义，最后举一个生活里的例子）。\n⚠️ 即使 get_student_profile 返回空画像（新生还没有档案），也必须照常调用 record_weakness。\n⚠️ studentId 一律用本次任务提供的学生匿名编号，绝不编造。\n【公式格式契约】所有数学公式一律用 LaTeX：行内用 \\(...\\)，独立成段用 \\[ ... \\]；花括号必须成对完整（例：\\frac{b}{2a}、x = \\frac{-b}{2a}，不要写裸 \\fracba）；严禁用纯文本拼公式（例如 ''y=a(x-h)^2+k'' 必须写成 \\(y=a(x-h)^2+k\\)）。"}, "skillBundles": [], "enabledSkills": ["skill-profile-view", "skill-report-brief", "skill-learning-loop"], "orchestration": {}, "capabilityTags": ["tutor", "math"], "generationParams": {"temperature": 0.3, "maxOutputTokens": 4096}}', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
 INSERT INTO public.agent_version VALUES ('15c361da-d0c8-42fe-825d-11ad2a9f3e2e', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 'c8408ea9-5fb3-455a-933c-5c329f2ba0c1', 1, '{"name": "profile-reviewer", "roles": ["teacher"], "agentId": "profile-reviewer", "overrides": {}, "description": "档案复核 Agent：复核并维护学生档案中的关键联系字段", "skillBundles": [], "enabledSkills": ["skill-profile-edit"], "orchestration": {}, "capabilityTags": ["reviewer", "profile"]}', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
 INSERT INTO public.agent_version VALUES ('09b9c5a1-d45b-4695-914a-15363e5b332c', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '26ad3fb1-c047-4382-b01b-b389c9356280', 1, '{"name": "assignment-copilot", "roles": ["student", "teacher"], "agentId": "assignment-copilot", "overrides": {}, "description": "作业协同 Agent：串行委派数学辅导与档案复核，聚合结果向家长通报", "skillBundles": [], "enabledSkills": ["skill-profile-view"], "orchestration": {"mode": "SEQUENTIAL", "timeoutMs": 60000, "failurePolicy": "FAIL_FAST", "childAgentRefs": [{"id": "math-tutor", "version": 1, "required": true}, {"id": "profile-reviewer", "version": 1, "required": true}], "maxDelegationDepth": 2, "maxChildInvocations": 3}, "capabilityTags": ["copilot", "orchestrator"]}', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
 
@@ -294,7 +296,10 @@ ON CONFLICT (tenant_id, principal_id) DO NOTHING;
 -- Data for Name: cap_agent_def; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-INSERT INTO public.cap_agent_def VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '9730eadc-c27c-498d-b588-512545c57f84', 1, 'math-tutor', '数学辅导 Agent：读取学生档案与课程安排，给出个性化练习建议', '["student"]', '["skill-profile-view", "skill-report-brief"]', '[]', '["tutor", "math"]', NULL, '{}', 'cap_obj_fp_v1:10bf887c6f17b8911626ca63ac6cd6e25f8729a11699f7fa42db8ac418598e7d', 1, '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', 'PUBLISHED', '{}', '{"inlineInstructions": "你是初中数学辅导助手。先读取学生档案与课程安排，再给出个性化练习建议。回答用初中生能理解的语言：先给直觉再给定义，最后举一个生活里的例子。"}', 'MiniMax-M2.5', '{"temperature": 0.3, "maxOutputTokens": 2048}');
+-- ⚠️ 学习循环（P0-4）：数学辅导 Agent 显式启用 skill-learning-loop，
+--    并在 inlineInstructions 中要求「开头读档案 / 结尾记薄弱点」，studentId 用本次任务
+--    提供的**学生匿名编号**（不编造、不写死真实编号）；该编号随 Run 输入注入系统提示。
+INSERT INTO public.cap_agent_def VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '9730eadc-c27c-498d-b588-512545c57f84', 1, '数学辅导 Agent：读取学生档案与课程安排，给出个性化练习建议', '读取学生档案与课程安排，给出个性化练习建议', '["student"]', '["skill-profile-view", "skill-report-brief", "skill-learning-loop"]', '[]', '["tutor", "math"]', NULL, '{}', 'cap_obj_fp_v1:c9b08ba32cbb655767686416ea73eaa13dfd90490c576f001f7183aee1b66439', 1, '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', 'PUBLISHED', '{}', '{"inlineInstructions": "你是初中数学辅导助手，帮助学生分析错题原因并给出个性化练习建议。\n【执行顺序，不可颠倒】\n1) 先完成工具调用，**不要在工具调用之前写任何正文**：\n   - 第一步调用 get_student_profile 读取本次任务提供的学生匿名编号对应的学生档案与课程安排；\n   - 第二步调用 record_weakness 记录本次识别出的薄弱点（knowledgePoint 写具体知识点，errorType 从工具允许的枚举里选）。\n2) 两个工具都成功返回之后，再输出面向学生的讲解与练习建议（用初中生能理解的语言：先给直觉再给定义，最后举一个生活里的例子）。\n⚠️ 即使 get_student_profile 返回空画像（新生还没有档案），也必须照常调用 record_weakness。\n⚠️ studentId 一律用本次任务提供的学生匿名编号，绝不编造。\n【公式格式契约】所有数学公式一律用 LaTeX：行内用 \\(...\\)，独立成段用 \\[ ... \\]；花括号必须成对完整（例：\\frac{b}{2a}、x = \\frac{-b}{2a}，不要写裸 \\fracba）；严禁用纯文本拼公式（例如 ''y=a(x-h)^2+k'' 必须写成 \\(y=a(x-h)^2+k\\)）。"}', 'MiniMax-M2.5', '{"temperature": 0.3, "maxOutputTokens": 4096}');
 INSERT INTO public.cap_agent_def VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 'c8408ea9-5fb3-455a-933c-5c329f2ba0c1', 1, 'profile-reviewer', '档案复核 Agent：复核并维护学生档案中的关键联系字段', '["teacher"]', '["skill-profile-edit"]', '[]', '["reviewer", "profile"]', NULL, '{}', 'cap_obj_fp_v1:0ba5743f50eaced7e2a2b996bf1838bb7eb9000f1181cb074605e6509f24ece8', 1, '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', 'PUBLISHED', '{}', '{"inlineInstructions": "你是学生档案复核助手。核对档案中的关键联系字段（监护人电话等），发现需要更新的字段时走审批链路后再写入，并在结果中逐项说明改了什么。"}', 'MiniMax-M2.5', '{"temperature": 0.2, "maxOutputTokens": 2048}');
 INSERT INTO public.cap_agent_def VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '26ad3fb1-c047-4382-b01b-b389c9356280', 1, 'assignment-copilot', '作业协同 Agent：串行委派数学辅导与档案复核，聚合结果向家长通报', '["student", "teacher"]', '["skill-profile-view"]', '[]', '["copilot", "orchestrator"]', NULL, '{}', 'cap_obj_fp_v1:4ddce9276cc71d05a8a28acb7902268d63add2a6ca78c97d92b86ce99c668f2e', 1, '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', 'PUBLISHED', '{"mode": "SEQUENTIAL", "timeoutMs": 60000, "failurePolicy": "FAIL_FAST", "childAgentRefs": [{"id": "math-tutor", "version": 1, "required": true}, {"id": "profile-reviewer", "version": 1, "required": true}], "maxDelegationDepth": 2, "maxChildInvocations": 3}', '{"inlineInstructions": "你是作业协同助手。先委派数学辅导 Agent 得到练习建议，再委派档案复核 Agent 核对联系字段，最后把两路结果聚合成一段给家长的通报。"}', 'MiniMax-M2.5', '{"temperature": 0.3, "maxOutputTokens": 4096}');
 
@@ -335,6 +340,11 @@ INSERT INTO public.cap_skill_def VALUES ('skill-profile-view', 1, '档案查看'
 INSERT INTO public.cap_skill_def VALUES ('skill-profile-edit', 1, '档案维护', '查看并更新学生档案（含写档案字段，需走审批链路）', '["tool-profile-read", "tool-profile-update"]', '[]', 'WRITE_PROFILE', '[]', NULL, '[]', 'platform', '78d9ca9d24303101ff296caa78c6bebb6344f26011024177d6adba0f0be5739f', 1, '2026-10-27 14:40:18.498745+00', '2026-10-27 14:40:18.498745+00', '2026-10-27 14:40:18.498745+00', 'PUBLISHED', NULL, NULL, NULL);
 INSERT INTO public.cap_skill_def VALUES ('skill-report-brief', 1, '成绩简报', '拉取成绩报告并经 MCP 校对档案（含 MCP 绑定 Tool）', '["tool-grade-report-fetch", "tool-mcp-profile-lookup"]', '[]', 'READ', '[]', NULL, '[]', 'platform', 'e234f9dbcfb5a77b7c3664da9086036a382ef3bcaed06b156075f1c6a9e48529', 1, '2026-10-27 14:40:18.498745+00', '2026-10-27 14:40:18.498745+00', '2026-10-27 14:40:18.498745+00', 'PUBLISHED', NULL, NULL, NULL);
 INSERT INTO public.cap_skill_def VALUES ('skill-include-guardian', 1, '家长协同', '查询课程安排并向家长发送提示（声明 MCP 直连 + WRITE_EXTERNAL）', '[]', '[{"serverId": "mcp-course-calendar"}]', 'WRITE_EXTERNAL', '[{"op": "lte", "param": "maxRecipients", "value": 50}]', NULL, '[]', 'platform', '63b483d3ba3b41b39518e8c07834357bea3d6289a2621586ffe44a46dc7d8667', 1, '2026-10-27 14:40:18.498745+00', '2026-10-27 14:40:18.498745+00', '2026-10-27 14:40:18.498745+00', 'PUBLISHED', NULL, NULL, NULL);
+-- ⚠️ 学习循环 Skill（P0-4）：绑定 get_student_profile + record_weakness。
+--    risk_ceiling=WRITE_PROFILE 覆盖所声明工具的最高风险（见 ConfigValidationGate）。
+--    ON CONFLICT 使已建库可幂等重放本行（不覆盖既有治理内容）。
+INSERT INTO public.cap_skill_def VALUES ('skill-learning-loop', 1, '学习闭环', '开始时读取学生档案，分析结束时记录本次识别的薄弱点', '["get_student_profile", "record_weakness"]', '[]', 'WRITE_PROFILE', '[]', NULL, '[]', 'platform', 'cap_obj_fp_v1:0e2f263f71d195d0b586d073ee7f836212c3b5a86a381acee64c4a601c3318e5', 1, '2026-10-27 14:40:18.498745+00', '2026-10-27 14:40:18.498745+00', '2026-10-27 14:40:18.498745+00', 'PUBLISHED', NULL, NULL, NULL)
+ON CONFLICT (id, version) DO NOTHING;
 
 
 --
@@ -347,6 +357,41 @@ INSERT INTO public.cap_tool_def VALUES ('tool-grade-report-fetch', 1, '成绩报
 INSERT INTO public.cap_tool_def VALUES ('tool-parent-notification', 1, '家长通知发送', 'http', 'WRITE_EXTERNAL', NULL, NULL, '{"type": "object", "required": ["studentId", "message"], "properties": {"message": {"type": "string", "maxLength": 500}, "studentId": {"type": "string"}}}', '[]', 'platform', 'cap_obj_fp_v1:a63a6b7663f05e899ee923465247a96310b8d568093ce29124022d98f95dfe1f', 1, '2026-10-27 14:40:18.498277+00', '2026-10-27 14:40:18.498277+00', '2026-10-27 14:40:18.498277+00', 'PUBLISHED', 'POST', 'https://notify-gateway.internal-studykid.cn/api/v1/messages', 5000, '向学生的监护人发送一条通知消息（最多 500 字），用于作业提醒、成绩通报等场景。');
 INSERT INTO public.cap_tool_def VALUES ('tool-mcp-profile-lookup', 1, '档案查询(MCP)', 'mcp', 'READ', 'mcp-student-profile', 'lookupProfile', '{"type": "object", "required": ["studentId"], "properties": {"studentId": {"type": "string"}}}', '[]', 'platform', 'cap_obj_fp_v1:f7921c1f16b0e74661479ff678a7ef5a46c77c3af63c5066e1f7f73357c6052d', 1, '2026-10-27 14:40:18.498277+00', '2026-10-27 14:40:18.498277+00', '2026-10-27 14:40:18.498277+00', 'PUBLISHED', NULL, NULL, NULL, '通过 MCP 档案服务按学生编码查询学生档案，返回监护人与联系信息。');
 INSERT INTO public.cap_tool_def VALUES ('tool-mcp-schedule', 1, '课程表查询(MCP)', 'mcp', 'READ', 'mcp-course-calendar', 'getSchedule', '{"type": "object", "required": ["studentId"], "properties": {"date": {"type": "string", "description": "yyyy-MM-dd"}, "studentId": {"type": "string"}}}', '[]', 'platform', 'cap_obj_fp_v1:f624e5fe692e6ef1bc47665bce00c43350f625b9d48d4d998212bdb4530f2dac', 1, '2026-10-27 14:40:18.498277+00', '2026-10-27 14:40:18.498277+00', '2026-10-27 14:40:18.498277+00', 'PUBLISHED', NULL, NULL, NULL, '通过 MCP 课程服务查询指定日期（yyyy-MM-dd）的课程安排，返回科目、上课时间与教室。');
+
+-- ⚠️ 学习循环工具（P0-4）：id 必须与 Java ToolHandler.toolName() 完全一致，
+--    否则模型按 Schema 里的 name 发起调用时 ToolInvocationGate.findHandler 找不到 Bean。
+--    input_schema 逐字复制自 GetStudentProfileTool.INPUT_SCHEMA / RecordWeaknessTool.INPUT_SCHEMA；
+--    risk_level 与启动守卫 agent.tool.risk-level-map 一致（READ / WRITE_PROFILE）。
+--    ON CONFLICT 使已建库可幂等重放本行；末尾 description 是模型可见的工具描述。
+INSERT INTO public.cap_tool_def VALUES ('get_student_profile', 1, '学生档案读取', 'native', 'READ', NULL, NULL, '{
+  "type": "object",
+  "required": ["studentId"],
+  "properties": {
+    "studentId": {
+      "type": "string",
+      "pattern": "^stu_[a-z0-9]{16}$"
+    }
+  },
+  "additionalProperties": false
+}
+', '[]', 'platform', 'cap_obj_fp_v1:2e570a3f18eca7284ddd60f90aebf18f729191b7976c83785c693c1eb07c41a1', 1, '2026-10-27 14:40:18.498277+00', '2026-10-27 14:40:18.498277+00', '2026-10-27 14:40:18.498277+00', 'PUBLISHED', NULL, NULL, NULL, '按学生匿名编号读取学生档案，返回年级、学科与已知薄弱点；学生不存在时返回空画像。学生编号使用本次任务提供的学生匿名编号。')
+ON CONFLICT (id, version) DO NOTHING;
+INSERT INTO public.cap_tool_def VALUES ('record_weakness', 1, '薄弱点记录', 'native', 'WRITE_PROFILE', NULL, NULL, '{
+  "type": "object",
+  "required": ["studentId", "knowledgePoint", "errorType"],
+  "properties": {
+    "studentId": { "type": "string", "pattern": "^stu_[a-z0-9]{16}$" },
+    "knowledgePoint": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "errorType": {
+      "type": "string",
+      "enum": ["概念不清", "公式记错", "符号错误", "计算失误", "审题偏差", "步骤缺失"]
+    },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  },
+  "additionalProperties": false
+}
+', '[]', 'platform', 'cap_obj_fp_v1:5f3517a77974aed8da28967055c92f6d08d8583a6eeb4947710c9a1590074061', 1, '2026-10-27 14:40:18.498277+00', '2026-10-27 14:40:18.498277+00', '2026-10-27 14:40:18.498277+00', 'PUBLISHED', NULL, NULL, NULL, '在每次学情分析结束时记录该学生的一个薄弱点（知识点 knowledgePoint + 错误类型 errorType），用于后续个性化辅导。学生编号使用本次任务提供的学生匿名编号。')
+ON CONFLICT (id, version) DO NOTHING;
 
 
 --
@@ -362,7 +407,7 @@ INSERT INTO public.cap_tool_def VALUES ('tool-mcp-schedule', 1, '课程表查询
 -- 为什么放在种子里：定义表里的 lifecycle_state='PUBLISHED' **不等于运行期可用**。
 -- 运行期只按 指针 → 发布头 → object_versions → id@精确版本 解析
 -- （JdbcPublishedVersionPort.resolveFromPointer）。只灌定义的种子会留下
--- 「目录有 14 个已发布对象、发布头只有 2 个、TENANT 指针一条都没有」的库，
+-- 「目录有 15 个已发布对象（MCP 2 / Skill 5 / Tool 8）、发布头只有 2 个、TENANT 指针一条都没有」的库，
 -- 于是除 e2e-minimax 之外的每个 Agent 在双写打开后都算不出闭包 →
 -- 该 Run 没有能力快照 → 执行准入判 CONFIG_UNAVAILABLE（2026-10-29 现场）。
 -- 这一段与 deploy/sql/platform/patch_cap_release_head.sql **同源**，

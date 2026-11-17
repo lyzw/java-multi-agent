@@ -57,10 +57,22 @@ public interface ModelGateway {
         private static final long serialVersionUID = 1L;
 
         private final transient ModelErrorKind kind;
+        /**
+         * 额度/限流是否已耗尽（终态，重试无意义）。
+         *
+         * <p>由构造期从 {@link #kind} 与错误信息推导，网关实现<b>无需改动</b>即可受益：
+         * <ul>
+         *   <li>{@link ModelErrorKind#RATE_LIMITED}（HTTP 429）直接判为耗尽；</li>
+         *   <li>MiniMax 在 HTTP 200 下用 {@code base_resp.status_code} 报告配额/鉴权失败，
+         *       被归一为 {@link ModelErrorKind#PROVIDER_ERROR}，只能从错误信息结构识别。</li>
+         * </ul>
+         */
+        private final transient boolean exhausted;
 
         public ModelGatewayException(@NonNull ModelErrorKind kind, @NonNull String message) {
             super(message);
             this.kind = kind;
+            this.exhausted = detectExhausted(kind, message);
         }
 
         public ModelGatewayException(@NonNull ModelErrorKind kind,
@@ -68,10 +80,36 @@ public interface ModelGateway {
                                      @Nullable Throwable cause) {
             super(message, cause);
             this.kind = kind;
+            this.exhausted = detectExhausted(kind, message);
         }
 
         public @NonNull ModelErrorKind kind() {
             return kind;
+        }
+
+        /** @return 是否为额度/限流耗尽 —— 终态，消费者应立即收敛 Run 而非重试。 */
+        public boolean exhausted() {
+            return exhausted;
+        }
+
+        private static boolean detectExhausted(ModelErrorKind kind, String message) {
+            if (kind == ModelErrorKind.RATE_LIMITED) {
+                return true;
+            }
+            if (message == null || message.isBlank()) {
+                return false;
+            }
+            String lower = message.toLowerCase(java.util.Locale.ROOT);
+            // ⚠️ 结构性识别 MiniMax 的 HTTP 200 + base_resp.status_code 业务错误
+            //    （配额耗尽 / 鉴权失败在此路径上均归一为 PROVIDER_ERROR）。
+            return lower.contains("base_resp.status_code")
+                    || lower.contains("quota")
+                    || lower.contains("exhausted")
+                    || lower.contains("insufficient")
+                    || lower.contains("rate limit")
+                    || lower.contains("too many requests")
+                    || message.contains("额度")
+                    || message.contains("限流");
         }
     }
 }

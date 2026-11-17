@@ -32,8 +32,18 @@ public record ModelResponse(
         }
     }
 
-    /** 用量。token 数与成本估算依据。 */
-    public record ModelUsage(long inputTokens, long outputTokens) {
+    /**
+     * 用量。token 数与成本估算依据。
+     *
+     * @param estimated 是否为本地估算值。流式响应里部分供应商返回 {@code usage: null}
+     *                  或 0 值；此时回退到本地粗估并标记本标志，便于成本口径区分「实测」与「估算」。
+     */
+    public record ModelUsage(long inputTokens, long outputTokens, boolean estimated) {
+        /** 兼容构造器：供应商如实返回用量（或测试夹具）默认 {@code estimated=false}。 */
+        public ModelUsage(long inputTokens, long outputTokens) {
+            this(inputTokens, outputTokens, false);
+        }
+
         public ModelUsage {
             if (inputTokens < 0 || outputTokens < 0) {
                 throw new IllegalArgumentException("token 数不能为负");

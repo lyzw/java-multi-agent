@@ -33,7 +33,9 @@ PORT="${PG_PORT:-5433}"
 SQL_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../deploy/sql/platform" && pwd)"
 SNAPSHOT="$SQL_REPO_DIR/01_platform_ddl.sql"
 # 校验/种子脚本仍在原位置（它们不是迁移，是验证夹具）
-VERIFY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/agent-infrastructure/src/main/resources/db/migration/verify" && pwd)"
+# ⚠️ 2026-11-17：该目录已随持久化模块收敛迁到 **agent-persistence**
+#    （原 agent-infrastructure 路径已不存在，脚本此前会在此行直接失败）。
+VERIFY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/agent-persistence/src/main/resources/db/migration/verify" 2>/dev/null && pwd)"
 
 # 非特权验证角色（验证 RLS 必须用它——超级用户会绕过策略）
 APP_ROLE="${PG_APP_ROLE:-app_agent}"
@@ -138,7 +140,9 @@ cmd_migrate() {
   #    前提没了，所以这里改成先判断结构是否已建（以 run 表为准）。
   #    要重建请执行 '$0 destroy' 后重跑 start。
   if psql_super -tAc "SELECT 1 FROM pg_class WHERE relname='run' LIMIT 1" | grep -q 1; then
-    say "结构已存在于 $DB_NAME，跳过快照"
+    # ⚠️ 必须写成 ${DB_NAME}：紧跟变量名的中文字符会被 bash 当成
+    #    变量名的一部分（报 `DB_NAME?: unbound variable`）。
+    say "结构已存在于 ${DB_NAME}，跳过快照"
   else
     say "应用结构快照：$(basename "$SNAPSHOT")"
     local tmp

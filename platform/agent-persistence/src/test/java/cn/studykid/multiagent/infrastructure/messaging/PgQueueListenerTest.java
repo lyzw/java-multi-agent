@@ -45,6 +45,7 @@ class PgQueueListenerTest {
         final List<String> retriedBy = new ArrayList<>();
         final List<String> rejectedBy = new ArrayList<>();
         final List<UUID> deadLettered = new ArrayList<>();
+        final List<String> failedRunsOnDeadLetter = new ArrayList<>();
         int handledCalls;
 
         FakeQueueRepository() {
@@ -76,6 +77,12 @@ class PgQueueListenerTest {
                            String workerId) {
             rejectedBy.add(workerId);
             deadLettered.add(queueId);
+        }
+
+        @Override
+        public boolean failRunOnDeadLetter(String tenantId, String runId, String errorCode) {
+            failedRunsOnDeadLetter.add(runId + ":" + errorCode);
+            return true;
         }
     }
 
@@ -137,6 +144,9 @@ class PgQueueListenerTest {
         assertThat(repository.deadLettered)
                 .as("⚠️⚠️ 必须直接进死信（死信表是「只进不出」的最终出口）")
                 .containsExactly(msg.queueId());
+        assertThat(repository.failedRunsOnDeadLetter)
+                .as("⚠️ 死信还必须收敛 Run 为 FAILED，否则 Run 永远停在 RUNNING/「执行中」")
+                .containsExactly("run-1:MAX_ATTEMPTS_EXCEEDED");
         assertThat(processed).isZero();
     }
 
@@ -214,5 +224,8 @@ class PgQueueListenerTest {
         assertThat(retryRepo.retriedBy.get(0)).isNotBlank();
         assertThat(rejectRepo.rejectedBy).hasSize(1);
         assertThat(rejectRepo.rejectedBy.get(0)).isNotBlank();
+        assertThat(rejectRepo.failedRunsOnDeadLetter)
+                .as("消费被拒进死信时同样要收敛 Run（REJECTED 也是终态）")
+                .containsExactly("run-1:MAX_ATTEMPTS_EXCEEDED");
     }
 }

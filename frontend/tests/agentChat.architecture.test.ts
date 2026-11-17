@@ -41,6 +41,11 @@ const stateCode = codeOnly(state)
 const page = read('src/pages/chat/AgentChatPage.tsx')
 const app = read('src/App.tsx')
 const shell = read('src/layouts/AppShell.tsx')
+// ⚠️ P1-3（2026-11-17）：受众侧入口的**元数据**已收敛到 navCatalog，
+//    侧栏由它派生。故「入口是否存在」要看目录表，
+//    「侧栏是否真的用了目录表」要看 AppShell —— 两者都要断言，
+//    否则就成了「目录里写了但侧栏没用」的空转。
+const navCatalog = read('src/auth/navCatalog.ts')
 const chatPage = read('src/pages/chat/GeneralChatPage.tsx')
 const layoutCss = codeOnly(read('src/styles/layout.css'))
 const tokensCss = codeOnly(read('src/styles/tokens.css'))
@@ -73,7 +78,9 @@ describe('租户身份域与推理草稿边界', () => {
     expect(stateCode).toContain('agentChatReducer')
     expect(page).toContain('export function AgentChatPage')
     expect(app).toContain('path="/agent-chat"')
-    expect(shell).toContain("to: '/agent-chat'")
+    expect(navCatalog).toContain("to: '/agent-chat'")
+    // ⚠️ 侧栏必须**真的**从目录表派生（否则目录表只是摆设）
+    expect(shell).toContain('AUDIENCE_ENTRIES.map(')
     expect(chatPage).toContain('to="/agent-chat"')
     expect(adminTransport).toContain('AGENT_LIVE_STREAM_PATH')
   })
@@ -240,9 +247,13 @@ describe('页面、路由与样式完整性', () => {
   it('✅ 路由 + 侧栏 + 通用问答页入口成对存在，侧栏恰好 18 项', () => {
     expect(app).toContain('<Route path="/agent-chat"')
     expect(app).toContain('<AgentChatPage />')
-    expect(shell).toContain("to: '/agent-chat'")
+    expect(navCatalog).toContain("to: '/agent-chat'")
     expect(chatPage).toContain('to="/agent-chat"')
-    const navTargets = [...shell.matchAll(/to:\s*'([^']*)'/g)].map((m) => m[1] ?? '')
+    // ⚠️ 侧栏 18 项：受众侧来自目录表，治理面仍写在外壳里 —— 两处合计仍是 18。
+    expect(shell).toContain('AUDIENCE_ENTRIES.map(')
+    const catalogTargets = [...navCatalog.matchAll(/to:\s*'([^']*)'/g)].map((m) => m[1] ?? '')
+    const shellTargets = [...shell.matchAll(/to:\s*'([^']*)'/g)].map((m) => m[1] ?? '')
+    const navTargets = [...catalogTargets, ...shellTargets]
     expect(navTargets).toHaveLength(18)
     expect(navTargets.filter((t) => t === '/agent-chat')).toHaveLength(1)
   })

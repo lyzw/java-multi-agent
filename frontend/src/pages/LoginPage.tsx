@@ -18,7 +18,7 @@
  *       批改红只留给错误 —— 现代化不等于换一套设计语言。
  */
 
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { login, ApiError } from '@/api/client'
 import type { NormalizedError } from '@/api/errors'
@@ -29,6 +29,121 @@ import { Icon } from '@/components/Icon'
 
 interface LocationState {
   from?: string
+}
+
+/**
+ * P2-1：记住上次租户标识（2026-11-17）。
+ *
+ * ⚠️ 存 **localStorage** 而非 sessionStorage：租户标识不是令牌，
+ *    也不是任何凭据（它只是「哪个学校」的公开路由键），且本次改造的
+ *    目标就是让学生**不必每次手填 36 位 UUID**。
+ *    ⛔ 但绝不存密码：密码只在内存中停留，提交即清。
+ */
+const TENANT_HINT_KEY = 'agent.lastTenantId'
+
+function readTenantHint(): string {
+  try {
+    return window.localStorage.getItem(TENANT_HINT_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function writeTenantHint(value: string): void {
+  try {
+    if (value.trim() === '') {
+      window.localStorage.removeItem(TENANT_HINT_KEY)
+      return
+    }
+    window.localStorage.setItem(TENANT_HINT_KEY, value.trim())
+  } catch {
+    /* 隐私模式/存储禁用 → 记住租户只是便利项，失败不应影响登录 */
+  }
+}
+
+/**
+ * P2-2：连续失败计数与锁定倒计时（2026-11-17）。
+ *
+ * ⚠️ **为什么在前端计数、而不是让后端区分「密码错」与「账号被锁」**：
+ *    后端所有失败路径**刻意返回完全相同的 401 且耗时一致**（D-001 §3.2），
+ *    以消除账号枚举面。若为了提示「已被锁定」而让后端回 423，
+ *    等于**重建了被刻意消除的枚举面**（可据此探测某账号是否存在）。
+ *
+ * ✅ 因此这里用**本浏览器的失败计数**给出**诚实但不泄露**的提示：
+ *    「连续失败 N 次，账号可能被临时锁定（默认 15 分钟后自动解锁）」——
+ *    措辞是「可能」，因为前端确实不知道服务端状态；
+ *    同时给出倒计时，让学生**别再猛试**（越试越锁）。
+ *
+ * ⛔ 计数存 sessionStorage（关标签页即失效）：它不是账号状态，
+ *    也不该跨设备累积成「这个账号到处被试」的画像。
+ */
+const LOGIN_FAIL_KEY = 'agent.loginFailures'
+
+/** 后端默认锁定时长（分钟）—— 与 auth.lock-duration-minutes 一致。 */
+const LOCK_MINUTES = 15
+/** 连续失败多少次后开始提示可能已被锁定（后端阈值是 5 次）。 */
+const WARN_AFTER_FAILURES = 3
+
+interface FailRecord {
+  count: number
+  /** 首次失败时刻（epoch ms），用于估算解锁时间 */
+  firstAt: number
+}
+
+function readFailures(): FailRecord {
+  try {
+    const raw = window.sessionStorage.getItem(LOGIN_FAIL_KEY)
+    if (raw === null) return { count: 0, firstAt: 0 }
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return { count: 0, firstAt: 0 }
+    const rec = parsed as Record<string, unknown>
+    const count = typeof rec['count'] === 'number' ? rec['count'] : 0
+    const firstAt = typeof rec['firstAt'] === 'number' ? rec['firstAt'] : 0
+    return { count, firstAt }
+  } catch {
+    return { count: 0, firstAt: 0 }
+  }
+}
+
+function writeFailures(rec: FailRecord): void {
+  try {
+    window.sessionStorage.setItem(LOGIN_FAIL_KEY, JSON.stringify(rec))
+  } catch {
+    /* 存储不可用 → 只是失去提示，不影响登录本身 */
+  }
+}
+
+function clearFailures(): void {
+  try {
+    window.sessionStorage.removeItem(LOGIN_FAIL_KEY)
+  } catch {
+    /* 同上 */
+  }
+}
+
+/**
+ * P2-3：登录后回跳白名单（2026-11-17）。
+ *
+ * ⚠️ 此前是 `navigate(state?.from ?? '/')` —— **无白名单**。
+ *    攻击者可构造 `/login` 链接带 `state.from = 'https://evil.example'`
+ *    或任意站内路径（如某个已完成 Run 的进度页），
+ *    登录后即被送到那里 —— 既能被用于钓鱼，也能把用户落到
+ *    一个「早已完成的旧 run」页面（教师评审实测项 P2-3）。
+ *
+ * ✅ 现在只接受**以单个斜杠开头的站内相对路径**：
+ *    · 必须以 '/' 开头（相对路径 'foo' 会被当相对路径拼接）
+ *    · 不能以 '//' 开头（协议相对 URL → 外站）
+ *    · 不能含 '\'（部分浏览器会把 '' 当 '/'，形成绕过）
+ *    · 不能含控制字符
+ */
+function safeRedirect(target: string | undefined): string {
+  if (typeof target !== 'string' || target === '') return '/'
+  if (!target.startsWith('/')) return '/'
+  if (target.startsWith('//')) return '/'
+  if (target.includes('\\')) return '/'
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(target)) return '/'
+  return target
 }
 
 /** 左栏产品叙事的三条价值点 —— 只讲产品做什么，不讲技术实现。 */
@@ -45,16 +160,44 @@ export function LoginPage(): JSX.Element {
   // 登录页不用 PageHead（无壳、无页头组件），标题在此单独同步
   usePageTitle('登录')
 
-  const [tenantId, setTenantId] = useState('')
+  // ⚠️ P2-1：初始值取上次用过的租户（读一次即可，不必进 state 依赖）。
+  const [tenantId, setTenantId] = useState(() => readTenantHint())
   const [loginName, setLoginName] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<NormalizedError | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // ⚠️ P2-2：连续失败次数与剩余等待秒数（0 = 不显示倒计时）
+  const [failCount, setFailCount] = useState(() => readFailures().count)
+  const [lockSecondsLeft, setLockSecondsLeft] = useState(0)
   // 密码明文开关：⛔ 不做「记住我」——令牌寿命与合规口径见文件头注释
   const [passwordVisible, setPasswordVisible] = useState(false)
 
   // ⚠️ 表单完整性检查：所有字段都非空才算完整
   const isComplete = tenantId.trim().length > 0 && loginName.trim().length > 0 && password.length > 0
+
+  /**
+   * P2-2：锁定倒计时（秒级）。
+   *
+   * ⚠️ 只在「连续失败达到阈值」后才启动，且**每秒只重算一次**：
+   *    倒计时是给学生的等待指引，不是装饰；无谓的高频渲染会拖慢登录页。
+   *    倒计时归零后自动停止（不再每秒 setState）。
+   */
+  useEffect(() => {
+    if (failCount < WARN_AFTER_FAILURES) {
+      setLockSecondsLeft(0)
+      return
+    }
+    const rec = readFailures()
+    if (rec.count === 0 || rec.firstAt === 0) return
+    const unlockAt = rec.firstAt + LOCK_MINUTES * 60 * 1000
+    const tick = (): void => {
+      const left = Math.max(0, Math.ceil((unlockAt - Date.now()) / 1000))
+      setLockSecondsLeft(left)
+    }
+    tick()
+    const handle = window.setInterval(tick, 1000)
+    return () => window.clearInterval(handle)
+  }, [failCount])
 
   const handleSubmit = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
@@ -86,10 +229,27 @@ export function LoginPage(): JSX.Element {
         response.tenantId ?? tenantId,
         response.principalId ?? null,
         response.roles,
+        // ⚠️ 身份改造（2026-11-17）：登录名＝学生用户名，studentId 由后端派生。
+        //    这两个值只用于**展示**；写入身份后端仍按 principalId 重新查库派生。
+        response.username ?? null,
+        response.studentId ?? null,
       )
+      // ⚠️ P2-1：记住租户，下次不必再手填 UUID。
+      writeTenantHint(response.tenantId ?? tenantId)
+      // ⚠️ P2-2：登录成功即清零失败计数。
+      clearFailures()
+      setFailCount(0)
+      setLockSecondsLeft(0)
       const state = location.state as LocationState | null
-      navigate(state?.from ?? '/', { replace: true })
+      // ⚠️ P2-3：回跳走白名单，避免落到外站或陈旧页面。
+      navigate(safeRedirect(state?.from), { replace: true })
     } catch (cause) {
+      // ⚠️ P2-2：先记失败次数（成功登录会清零），再展示错误。
+      const prev = readFailures()
+      const next: FailRecord =
+        prev.count === 0 ? { count: 1, firstAt: Date.now() } : { count: prev.count + 1, firstAt: prev.firstAt }
+      writeFailures(next)
+      setFailCount(next.count)
       if (cause instanceof ApiError) {
         setError(cause.normalized)
       } else {
@@ -234,6 +394,23 @@ export function LoginPage(): JSX.Element {
                   </button>
                 </div>
               </div>
+
+              {/*
+                ⚠️ P2-2：连续失败提示。
+                    措辞刻意用「可能」—— 前端并不知道服务端是否真的锁定，
+                    说成「已被锁定」就是编造；而说成「密码错误」又与后端
+                    刻意统一的失败语义冲突。
+                    倒计时给出「等多久再试」，避免学生越试越锁。
+              */}
+              {failCount >= WARN_AFTER_FAILURES ? (
+                <p role="status" className="login__hint">
+                  已连续 {failCount} 次登录失败。账号可能被临时锁定
+                  {lockSecondsLeft > 0
+                    ? `，请在 ${Math.floor(lockSecondsLeft / 60)} 分 ${lockSecondsLeft % 60} 秒后再试`
+                    : '，请稍后再试'}
+                  。
+                </p>
+              ) : null}
 
               {error !== null ? <ErrorView error={error} /> : null}
 

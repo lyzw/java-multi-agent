@@ -82,7 +82,10 @@ function toRunEvent(frame: ParsedFrame): RunEvent | null {
   const at = typeof record['at'] === 'string' ? record['at'] : ''
 
   // 只取白名单字段
-  const payload: RunEventPayload = { sequenceNo, at }
+  // ⚠️ 用交叉类型允许写入白名单里的新增字段（errorKind / retryable 尚未进
+  //    api/types.ts 的 RunEventPayload），但对外仍是 RunEventPayload，
+  //    不扩大消费面（后端白名单才是真相源）。
+  const payload = { sequenceNo, at } as RunEventPayload & Record<string, unknown>
   const optionalKeys = [
     'state',
     'stepType',
@@ -90,10 +93,15 @@ function toRunEvent(frame: ParsedFrame): RunEvent | null {
     'operationState',
     'errorCode',
     'phase',
+    'errorKind',
   ] as const
   for (const key of optionalKeys) {
     const value = record[key]
     if (typeof value === 'string') payload[key] = value
+  }
+  // retryable 是布尔标量（MODEL_CALL_ERROR 事件），不是字符串
+  if (typeof record['retryable'] === 'boolean') {
+    payload['retryable'] = record['retryable']
   }
   if (typeof record['attempt'] === 'number') {
     payload.attempt = record['attempt']

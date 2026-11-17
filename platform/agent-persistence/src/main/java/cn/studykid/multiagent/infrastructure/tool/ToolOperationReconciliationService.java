@@ -8,6 +8,7 @@ import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.run.ToolOperationState;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
 
@@ -137,7 +138,8 @@ public class ToolOperationReconciliationService {
             return null;
         }
         return new ParsedKey(
-                parts[0].substring("tool.record_weakness:".length()),
-                parts[1], parts[2]);
+                IdempotencyKey.decodePart(parts[0].substring("tool.record_weakness:".length())),
+                IdempotencyKey.decodePart(parts[1]),
+                IdempotencyKey.decodePart(parts[2]));
     }
 }

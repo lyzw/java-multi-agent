@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { PageHead, Panel, StatusPill } from '@/components/ui'
+import { MarkdownAnswer } from '@/shared/MarkdownAnswer'
 import { scanText } from '@/features/compliance/scan'
 import {
   questionBefore,
@@ -114,7 +115,9 @@ function AssistantBody({
 
       {message.content !== '' && (
         <div className="gchat__text" aria-label="回答正文">
-          {message.content}
+          {/* ⚠️ P0-3（2026-11-17）：改为 Markdown + KaTeX 渲染。
+              此前是裸文本 —— 数学回答里的公式与表格全是源码。 */}
+          <MarkdownAnswer content={message.content} streaming={streaming} />
         </div>
       )}
 

@@ -121,7 +121,8 @@ export type AgentStreamEvent =
   | { type: 'thinking'; text: string; at: number }
   | { type: 'delta'; text: string; at: number }
   | { type: 'answer'; text: string; at: number }
-  | { type: 'usage'; inputTokens: number; outputTokens: number; at: number }
+  // ⚠️ P1-4：estimated 表示 token 数是**本地估算**（供应商流式不返回 usage）。
+  | { type: 'usage'; inputTokens: number; outputTokens: number; estimated?: boolean; at: number }
   | { type: 'error'; code: string; message: string; at: number }
   /** 协议 v1.1 第 14 事件：只解析、只内存暂存不透明 state，S3-M13 起由 hook 逐字上送。 */
   | ({ type: 'context.checkpoint' } & AgentContextCheckpoint & { at: number })
@@ -538,6 +539,8 @@ export function decodeAgentFrame(frame: AgentSseFrame): AgentStreamEvent | null 
         type: 'usage',
         inputTokens: num(p?.['inputTokens']) ?? 0,
         outputTokens: num(p?.['outputTokens']) ?? 0,
+        // ⚠️ 旧后端不传该字段 → 视为「非估算」（保持既有展示）。
+        estimated: p?.['estimated'] === true,
         at,
       }
     }

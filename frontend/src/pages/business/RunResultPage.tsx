@@ -23,7 +23,7 @@ import { Sheet, Empty, Loading, ErrorState, Breadcrumbs } from '@/shared/states'
 import { scanText } from '@/features/compliance/scan'
 import { useRunResult } from '@/features/run/useRunResult'
 import { RunFeedback } from '@/features/run/RunFeedback'
-import { ModelText } from '@/shared/ModelText'
+import { MarkdownAnswer } from '@/shared/MarkdownAnswer'
 import { stateLabel } from '@/features/run/runState'
 import { PageHead, StatusPill } from '@/components/ui'
 import { Icon } from '@/components/Icon'
@@ -255,7 +255,9 @@ export function RunResultPage(): JSX.Element {
             hint="换一个匿名编号再试，或联系辅导老师确认。"
           />
         ) : (
-          <ModelText text={explanation} />
+          // ⚠️ P0-3（2026-11-17）：讲解正文改为 Markdown + KaTeX 渲染。
+          //    此前只认粗体/行内码，公式与表格全是源码（教师评审实测 0 个公式节点）。
+          <MarkdownAnswer content={explanation} />
         )}
       </Sheet>
 

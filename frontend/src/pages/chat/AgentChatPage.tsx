@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { Icon, type IconName } from '@/components/Icon'
+import { MarkdownAnswer } from '@/shared/MarkdownAnswer'
 import { PageHead, Panel, StatusPill, type PillTone } from '@/components/ui'
 import { scanText } from '@/features/compliance/scan'
 import {
@@ -264,7 +265,9 @@ function AssistantBody({
 
       {message.content !== '' ? (
         <div className="achat__answer" data-testid="agent-chat-answer" aria-label="回答正文">
-          {message.content}
+          {/* ⚠️ P0-3（2026-11-17）：改为 Markdown + KaTeX 渲染。
+              此前是裸文本 —— 公式、标题、表格全部以源码显示。 */}
+          <MarkdownAnswer content={message.content} streaming={message.status === 'streaming'} />
         </div>
       ) : null}
 
@@ -308,13 +311,18 @@ function AssistantBody({
       {message.usage !== undefined ? (
         <p className="achat__usage">
           用量：输入 {message.usage.inputTokens} · 输出 {message.usage.outputTokens} tokens
+          {/* ⚠️ P1-4（2026-11-17）：估算值必须**标明** ——
+              把估算值当精确值展示，等于给出一个「看起来精确、其实不是」的数字。 */}
+          {message.usage.estimated === true ? '（估算值）' : ''}
         </p>
       ) : null}
 
       {message.status !== 'failed' ? (
         <p className="gchat__footnote">
           通用 Agent 编排 · {SOURCE_LABEL[message.source ?? 'live']} ·{' '}
-          {status === 'done' && !truncated ? '已收口' : '尚未完整收口'} · 会话只保留在内存中
+          {/* ⚠️ P2-5（2026-11-17）：「已收口 / 尚未完整收口」是研发口径，
+              学生看不懂「收口」是什么意思。改为直白的完成度表述。 */}
+          {status === 'done' && !truncated ? '本次回答完整' : '本次回答可能不完整'} · 会话只保留在内存中
         </p>
       ) : null}
     </div>

@@ -188,6 +188,35 @@ class OpenAiCompatibleModelGatewayTest {
         assertThat(delta.toString()).isEqualTo("2+3=5");
         assertThat(resp.content()).isEqualTo("2+3=5");
         assertThat(resp.usage().inputTokens()).isEqualTo(10);
+        assertThat(resp.usage().estimated()).isFalse();
+    }
+
+    @Test
+    @DisplayName("✅ 流式 usage:null 回退本地估算并标记 estimated=true")
+    void streamNullUsageFallsBackToEstimate() throws Exception {
+        server.stop(0);
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            String frame = "data: {\"choices\":[{\"delta\":{\"content\":\"你好世界\"},"
+                    + "\"finish_reason\":\"stop\"}],\"usage\":null}\n\n"
+                    + "data: [DONE]\n\n";
+            byte[] bytes = frame.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
+
+        OpenAiCompatibleModelGateway gw = new OpenAiCompatibleModelGateway(baseUrl, "sk-test", "gpt-4o");
+        StringBuilder delta = new StringBuilder();
+        ModelResponse resp = gw.streamChat(sampleRequest(), new ChatSink(delta));
+
+        assertThat(delta.toString()).isEqualTo("你好世界");
+        assertThat(resp.usage().estimated()).isTrue();
+        assertThat(resp.usage().inputTokens()).isPositive();
+        assertThat(resp.usage().outputTokens()).isPositive();
     }
 
     private static final class ChatSink

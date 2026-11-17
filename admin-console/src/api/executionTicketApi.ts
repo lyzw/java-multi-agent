@@ -34,13 +34,22 @@ export interface ExecutionTicket {
   jti: string
 }
 
-/** 可被指名的租户成员（登录名/状态/角色；不含任何凭据）。 */
+/**
+ * 可被指名的租户成员（登录名/状态/角色；不含任何凭据）。
+ *
+ * ⚠️ `studentId`（身份改造 2026-11-17）：学生的**匿名业务编号**，
+ *    与登录名 1:1 绑定。登录名即学生用户名（老师按此选人），
+ *    本字段用于在选人界面**核对**绑定关系，不参与任何凭据计算。
+ *    非学生主体为 null。
+ */
 export interface TenantPrincipal {
   principalId: string
   loginName: string
   displayName: string | null
   status: string
   roles: string[]
+  /** 权威学生业务编号（stu_ 前缀）；非学生主体为 null。 */
+  studentId?: string | null
 }
 
 /**

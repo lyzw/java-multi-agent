@@ -38,6 +38,16 @@ public interface PrincipalStore {
 
     Set<String> findRoles(String tenantId, String principalId);
 
+    /**
+     * 按主体 ID 查学生业务编号（登录态派生学生身份用）。
+     *
+     * <p>⚠️ 只读、租户内查询；不存在或未绑定返回 {@link Optional#empty()}。
+     * 默认实现供测试桩沿用；生产实现见 {@code PrincipalRepository}（租户内 RLS 查询）。
+     */
+    default Optional<String> findStudentId(String tenantId, String principalId) {
+        return Optional.empty();
+    }
+
 public record PrincipalRecord(String principalId,
                               String tenantId,
                               String loginName,
@@ -46,7 +56,17 @@ public record PrincipalRecord(String principalId,
                               String status,
                               int failedAttempts,
                               @Nullable Instant lockedUntil,
-                              long authzVersion) {
+                              long authzVersion,
+                              /** 学生业务编号（登录名即用户名）；非学生主体为 null。 */
+                              @Nullable String studentId) {
+
+    /** 兼容构造器：未绑定学生编号的主体（既有测试与种子）。 */
+    public PrincipalRecord(String principalId, String tenantId, String loginName,
+                           String passwordHash, @Nullable String displayName, String status,
+                           int failedAttempts, @Nullable Instant lockedUntil, long authzVersion) {
+        this(principalId, tenantId, loginName, passwordHash, displayName, status,
+                failedAttempts, lockedUntil, authzVersion, null);
+    }
 }
 
 /**

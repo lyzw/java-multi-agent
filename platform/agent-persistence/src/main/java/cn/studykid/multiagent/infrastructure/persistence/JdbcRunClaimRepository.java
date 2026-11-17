@@ -17,6 +17,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 
 import cn.studykid.multiagent.core.run.RunState;
 import cn.studykid.multiagent.core.tenant.SubjectContext;
@@ -55,6 +56,18 @@ public class JdbcRunClaimRepository implements RunClaimPort {
     private static final Logger log = LoggerFactory.getLogger(JdbcRunClaimRepository.class);
 
     private final DataSource dataSource;
+
+    /**
+     * Run 重试硬上限（{@code agent.run.max-attempts}，默认 3）。
+     *
+     * <p>⚠️ claimTasks 是崩溃恢复的唯一接管入口：此前对 attempt 无任何上限，
+     * 失败 Run 每 30 秒被重新领取一次、attempt 无限递增，永不收敛 FAILED。
+     * 这里在领取前先把<b>租约已过期且已达上限</b>的 RUNNING 收敛为 FAILED，
+     * 同一事务内的后续领取自然看不到它们（state 已变）。
+     * 字段初值保证直接 new 出来（单测）时也有确定行为；生产由 Spring 注入覆盖。
+     */
+    @Value("${agent.run.max-attempts:3}")
+    private int maxAttempts = 3;
 
     /**
      * 审计端口（P3-D07 / R-1）。
@@ -138,6 +151,25 @@ public class JdbcRunClaimRepository implements RunClaimPort {
         //    （3 个候选全部 RETURNING，attempt 全变 1）。超发 Worker 配额，且把本不该本次领取的
         //    行一并带走。同样的 SQL 用 superuser 跑则正确返回 1 行 —— 这正是「必须非特权角色测」的原因。
         //    MATERIALIZED 强制候选集只求值一次，LIMIT 才是真上限；并发下 SKIP LOCKED 语义不变。
+        // ⚠️ 先收敛「租约过期且 attempt 已达上限」的 RUNNING 为 FAILED（P0 修复）：
+        //    同一事务内先 UPDATE，后续领取的 SELECT 自然看不到它们（state 已变 FAILED），
+        //    等价于「领取候选排除 attempt >= maxAttempts」，且不会让超限行无限重领。
+        //    用行级 fencing 无关的窄更新（state='RUNNING' 围栏即可）：这些行租约已过期，
+        //    原持有者若仍活着，其 commitResult 会因 state 非 RUNNING 而失败（幂等收敛）。
+        String failOverCapSql = """
+                UPDATE run
+                SET state = 'FAILED',
+                    error_code = 'MAX_ATTEMPTS_EXCEEDED',
+                    result_payload = jsonb_build_object('reason', '重试次数已达上限'),
+                    completed_at = now(),
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = now()
+                WHERE tenant_id = ?::uuid
+                  AND state = 'RUNNING'
+                  AND attempt >= ?
+                  AND (lease_expires_at IS NULL OR lease_expires_at < now())
+                """;
         String sql = """
                 WITH candidates AS MATERIALIZED (
                     SELECT run_id FROM run
@@ -173,6 +205,18 @@ public class JdbcRunClaimRepository implements RunClaimPort {
             try {
                 shadowCompare(tenantId);
                 TenantSessionBinder.bind(conn, systemContext(tenantId));
+                // 先收敛超限的过期 RUNNING（state='RUNNING' + attempt>=上限 双围栏）；
+                // 同一事务内 UPDATE 先行，下面的候选 SELECT 自然不再看到这些行。
+                try (PreparedStatement ps = conn.prepareStatement(failOverCapSql)) {
+                    ps.setString(1, tenantId);
+                    ps.setInt(2, maxAttempts);
+                    int overCap = ps.executeUpdate();
+                    if (overCap > 0) {
+                        log.warn("租户 {} 收敛重试超限的过期 RUNNING {} 个 "
+                                        + "(error_code=MAX_ATTEMPTS_EXCEEDED, maxAttempts={})",
+                                tenantId, overCap, maxAttempts);
+                    }
+                }
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     // ⚠️ 占位符顺序必须与新 SQL 逐字对应：CTE 内 tenant_id → LIMIT，
                     //    外层 UPDATE 的 lease_owner → lease 秒数（顺序与旧版不同，错位会导致

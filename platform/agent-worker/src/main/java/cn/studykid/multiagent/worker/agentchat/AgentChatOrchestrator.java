@@ -302,7 +302,8 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
 
             // ⑧ 成功收口：answer 用「用户实际看到的 delta 拼接」，保证与已到达增量同前缀。
             sink.accept(new AgentChatEvent.Answer(state.answer().toString()));
-            sink.accept(new AgentChatEvent.Usage(state.inputTokens(), state.outputTokens()));
+            sink.accept(new AgentChatEvent.Usage(state.inputTokens(), state.outputTokens(),
+                    state.estimated));
             state.events().add(event("USAGE", Map.of(
                     "inputTokens", state.inputTokens(),
                     "outputTokens", state.outputTokens())));
@@ -759,6 +760,11 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
                     });
             state.inputTokens += response.usage().inputTokens();
             state.outputTokens += response.usage().outputTokens();
+            // ⚠️ P1-4（2026-11-17）：任一环节是估算值，整轮就标为估算 ——
+            //    只要有一次是猜的，给出「精确数字」就是在骗人。
+            if (response.usage().estimated()) {
+                state.estimated = true;
+            }
             state.modelRounds = round;
             state.events().add(event("MODEL_ROUND", Map.of(
                     "round", round,
@@ -1143,6 +1149,8 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
         root.put("agentVersion", state.agentVersion);
         root.put("inputTokens", state.inputTokens);
         root.put("outputTokens", state.outputTokens);
+        // ⚠️ P1-4：审计里也记下「是否估算」—— 否则事后无法解释用量数字的来源。
+        root.put("usageEstimated", state.estimated);
         root.put("modelRounds", state.modelRounds);
         root.put("toolRounds", state.toolRounds);
         root.put("ragHits", state.ragHits);
@@ -1196,6 +1204,8 @@ public class AgentChatOrchestrator implements AgentChatOrchestratorPort {
         int agentVersion;
         long inputTokens;
         long outputTokens;
+        /** ⚠️ P1-4：token 数是否含本地估算值。 */
+        boolean estimated;
         int modelRounds;
         int toolRounds;
         int ragHits;

@@ -80,6 +80,8 @@ class AgentChatEventTest {
             "先移项",
             "你好",
             "{\"text\":\"你好，世界\"}",
+            // ⚠️ P1-4（2026-11-17）：estimated 标记**只在为 true 时追加** ——
+            //    供应商如实返回用量时字节与旧版逐字节相同（SSE v1.1 冻结要求）。
             "{\"inputTokens\":10,\"outputTokens\":20}",
             "{\"kind\":\"ROUTE_FAILED\",\"message\":\"没有可执行 Agent\"}",
             "{\"truncated\":false}");

@@ -11,6 +11,8 @@ import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { useSession } from '@/auth/session'
+import { canPerformTask } from '@/auth/capabilities'
+import { WORKBENCH_ENTRIES, type CatalogEntry } from '@/auth/navCatalog'
 import { Empty, Loading, ErrorState } from '@/shared/states'
 import { listRuns, ApiError } from '@/api/client'
 import { formatSubject } from '@/shared/format'
@@ -98,8 +100,23 @@ function ActionCard({ to, icon, title, desc }: ActionCardProps): JSX.Element {
   )
 }
 
+/**
+ * 工作台入口（按角色过滤）。
+ *
+ * ⚠️ P1-3（2026-11-17）：此前这里**硬编码**了 4 张卡片（含学生无权访问的
+ *    「学习画像 / 报表中心」），而侧边栏已按能力隐藏了它们 ——
+ *    学生从工作台点进去直接吃 403 终态页。
+ *    现在与侧边栏共用 {@link WORKBENCH_ENTRIES} + {@link canPerformTask}，
+ *    **同一份真相源**，不再漂移。
+ */
+function useWorkbenchEntries(): CatalogEntry[] {
+  const { roles } = useSession()
+  return WORKBENCH_ENTRIES.filter((entry) => canPerformTask(roles, entry.task))
+}
+
 export function DashboardPage(): JSX.Element {
   const { session } = useSession()
+  const workbenchEntries = useWorkbenchEntries()
   const [runs, setRuns] = useState<RunListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<NormalizedError | null>(null)
@@ -143,36 +160,15 @@ export function DashboardPage(): JSX.Element {
             这里只留四个**不同目标**的入口。
         */}
         <div className="action-grid">
-          <ActionCard
-            to="/runs"
-            icon="search"
-            title="检索记录"
-            desc="按状态、学科、时间查找分析过的题"
-          />
-          <ActionCard
-            to="/rag"
-            icon="book"
-            title="知识检索"
-            desc="从教材语料检索可溯源的讲解与出处"
-          />
-          <ActionCard
-            to="/profile"
-            icon="profile"
-            title="学习画像"
-            desc="看看哪些知识点反复出错"
-          />
-          {/*
-            ⚠️ 报表中心入口：**独立成页**而非内嵌工作台。
-               工作台是「今天要做什么」，报表是「一段时间里发生了什么」——
-               两者时间尺度不同，塞在一起会让工作台被图表淹没。
-               入口放在这里，是为了让「想看统计」的人不必猜菜单在哪。
-          */}
-          <ActionCard
-            to="/reports"
-            icon="activity"
-            title="报表中心"
-            desc="按天看辅导、错题、检索与语料导入的汇总"
-          />
+          {workbenchEntries.map((entry) => (
+            <ActionCard
+              key={entry.to}
+              to={entry.to}
+              icon={entry.icon}
+              title={entry.label}
+              desc={entry.desc ?? ''}
+            />
+          ))}
         </div>
       </Panel>
 

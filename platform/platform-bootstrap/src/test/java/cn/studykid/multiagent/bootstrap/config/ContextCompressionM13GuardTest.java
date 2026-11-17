@@ -225,10 +225,10 @@ class ContextCompressionM13GuardTest {
             assertThat(tenantHook).as("租户 hook 缺锚点 %s", anchor).contains(anchor);
         }
 
-        String adr = source("docs/P0/P1/ADR-013_上下文压缩统一入口与全窗口预算.md");
-        String protocol = source("docs/上下文压缩SSE协议v1.1变更说明.md");
-        String record = source("docs/上下文压缩实施记录_v1.0.md");
-        String shadow = source("docs/上下文压缩影子对照零差异报告_v1.0.md");
+        String adr = source("docs/01_baseline/milestones/P1/ADR-013_上下文压缩统一入口与全窗口预算.md");
+        String protocol = source("docs/05_archive/上下文压缩SSE协议v1.1变更说明.md");
+        String record = source("docs/05_archive/上下文压缩实施记录_v1.0.md");
+        String shadow = source("docs/05_archive/上下文压缩影子对照零差异报告_v1.0.md");
         // 旧 mock 基线锚点保留，防止「升级即删历史」；新锚点证明正式收发放行已登记。
         assertThat(adr).contains("D36").contains("M13 mock").contains("不得进入 M7 接线")
                 .contains("D53").contains("S3-M13 正式收发").contains("committed")

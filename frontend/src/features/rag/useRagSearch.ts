@@ -31,8 +31,89 @@ export type RetrievalStatus =
   | 'loading'
   | 'success'
   | 'empty'
+  /** ⚠️ P1-1：该版本坐标**没有语料**（召回候选为 0）——不是「问得不对」。 */
+  | 'emptyNoCorpus'
+  /** ⚠️ P1-1：有候选但被**版本过滤**剔除 —— 换版本范围即可。 */
+  | 'emptyVersionFiltered'
+  /** ⚠️ P1-1：有候选但被**泄题闸门**剔除 —— 讲解模式下本就不给答案。 */
+  | 'emptyRoleGated'
+  /** ⚠️ P1-1：有候选但被**分数门禁**滤光 —— 命中了但相关度不够。 */
+  | 'emptyScoreGated'
+  /** ⚠️ P1-1：成因未知（老版本 rag 服务不返回漏斗）。 */
+  | 'emptyUnknown'
   | 'error'
   | 'timeout'
+
+/**
+ * 由检索漏斗判定空结果成因（P1-1 · 2026-11-17）。
+ *
+ * ⚠️ **判定顺序不可调换**：成因是有优先级的 ——
+ *    「这个版本压根没有教材」比「命中了但被滤掉」更根本，
+ *    前者若被误报成后者，学生会去反复换问法（无用），
+ *    而正确提示应是「换版本范围」。
+ *
+ * ⚠️ 只依据服务端返回的漏斗计数，**不猜测**：缺漏斗 → emptyUnknown，
+ *    绝不臆断成「没有语料」。
+ */
+export function classifyEmptyRetrieval(response: RagRetrievalResponse | null): RetrievalStatus {
+  const funnel = response?.funnel
+  if (funnel === undefined || funnel === null) {
+    return 'emptyUnknown'
+  }
+  // 召回阶段就没有候选 = 该版本坐标下没有语料
+  if (funnel.candidates === 0) {
+    return 'emptyNoCorpus'
+  }
+  // 有候选，但版本过滤剔除得最多
+  if (funnel.dominantDrop === 'VERSION') {
+    return 'emptyVersionFiltered'
+  }
+  if (funnel.dominantDrop === 'ROLE') {
+    return 'emptyRoleGated'
+  }
+  if (funnel.dominantDrop === 'GATE') {
+    return 'emptyScoreGated'
+  }
+  // 兜底：按剔除数排序判断主因（服务端 dominantDrop 缺失/未知时）
+  const drops: Array<[string, number]> = [
+    ['VERSION', funnel.droppedByVersion],
+    ['ROLE', funnel.droppedByRole],
+    ['GATE', funnel.droppedByGate],
+  ]
+  drops.sort((a, b) => b[1] - a[1])
+  const [top, topCount] = drops[0] ?? ['NONE', 0]
+  if (topCount === 0) {
+    return 'emptyUnknown'
+  }
+  if (top === 'VERSION') return 'emptyVersionFiltered'
+  if (top === 'ROLE') return 'emptyRoleGated'
+  return 'emptyScoreGated'
+}
+
+/** 空结果成因 → 给学生看的标题与提示（**不甩锅给学生**）。 */
+export const EMPTY_RETRIEVAL_COPY: Record<string, { title: string; hint: string }> = {
+  emptyNoCorpus: {
+    title: '这个版本范围里还没有教材语料',
+    hint: '不是你的问题没问对 —— 是当前选的版本坐标还没有收录教材。'
+      + '把版本范围改成「跨版本查找」，或换一个年级 / 册次再试。',
+  },
+  emptyVersionFiltered: {
+    title: '语料存在，但不在你当前选的版本里',
+    hint: '把版本范围改成「跨版本查找」或「优先本版，可回退同册」就能看到邻近版本的内容。',
+  },
+  emptyRoleGated: {
+    title: '找到了相关教材，但讲解模式不展示答案片段',
+    hint: '切换检索模式为「原文片段」即可查看原始语料。',
+  },
+  emptyScoreGated: {
+    title: '找到了相关度不够高的片段',
+    hint: '换一种问法（把题目里的关键条件写出来）更容易命中。',
+  },
+  emptyUnknown: {
+    title: '没有找到相关语料',
+    hint: '换个说法，或把版本范围改成「优先本版，可回退同册」再试。',
+  },
+}
 
 export interface RetrievalState {
   status: RetrievalStatus
@@ -217,8 +298,10 @@ export function useRagSearch(): UseRagSearchResult {
         if (cancelled) return
         const hits = resp.hits ?? []
         // ⚠️ 0 命中是合法结果（分数门禁过滤后可能为空），不是故障。
+        // ⚠️ P1-1：进一步按**漏斗计数**区分成因，避免把「这个版本没教材」
+        //    说成「换个说法」（教师评审实测：学生无法判断该换问法还是换版本）。
         setRetrieval({
-          status: hits.length === 0 ? 'empty' : 'success',
+          status: hits.length === 0 ? classifyEmptyRetrieval(resp) : 'success',
           hits,
           response: resp,
           error: null,

@@ -65,9 +65,9 @@ class ContextCompressionM9GuardTest {
             "agent-api/src/test/java/cn/studykid/multiagent/api/chat/ConsoleChatControllerTest.java";
 
     private static final String ADR =
-            "docs/P0/P1/ADR-013_上下文压缩统一入口与全窗口预算.md";
+            "docs/01_baseline/milestones/P1/ADR-013_上下文压缩统一入口与全窗口预算.md";
     private static final String G1_LEDGER =
-            "docs/上下文压缩影子对照零差异报告_v1.0.md";
+            "docs/05_archive/上下文压缩影子对照零差异报告_v1.0.md";
     private static final String COUNTERPROOF =
             "scripts/m9-console-budget-counterproof.sh";
 

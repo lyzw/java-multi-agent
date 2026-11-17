@@ -25,11 +25,11 @@
 └──────────────────────────┬──────────────────────────────┘
                        HTTP │ /api/v1/management/**
 ┌──────────────────────────▼──────────────────────────────┐
-│ rag-api            IngestJobController（新增）            │
-│ rag-management     importDocument 改造 / 抽检 / 别名 / 审核强制 │
+│ rag-api            Retrieval 接口（含 SSE 进度流）         │
+│ rag-management     RagManagementController (IngestJob 管理 / 抽检 / 别名 / 审核强制) │
 ├──────────────────────────────────────────────────────────┤
 │ rag-application    IngestionPipeline（生产化）             │
-│                    IngestJobOrchestrator（新增：编排+落库）  │
+│                    IngestJobOrchestrator & GlobalIngestJobOrchestrator（新增）  │
 │ rag-core           移植的清洗/切分纯函数 / 去重判定 / 抽检规则 │
 ├──────────────────────────────────────────────────────────┤
 │ rag-ports          DocumentParserPort(不变) / OcrPort(新增) │

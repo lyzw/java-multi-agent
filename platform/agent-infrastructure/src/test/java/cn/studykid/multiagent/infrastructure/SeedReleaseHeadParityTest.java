@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>要防的事</b>：「指针 → 发布头 → {@code object_versions}」是运行期解析精确版本的
  * <b>唯一</b>口径，没有任何一条 SQL 读 {@code lifecycle_state}。
  * 种子只灌定义表会复现 2026-10-29 现场的库：PLATFORM 头只有 2 个对象、TENANT 指针 0 条，
- * 而目录有 14 个已发布对象 → 除 {@code e2e-minimax} 外每个 Agent 闭包算不出 →
+ * 而目录有 15 个已发布对象（MCP 2 / Skill 5 / Tool 8）→ 除 {@code e2e-minimax} 外每个 Agent 闭包算不出 →
  * Run 无能力快照 → {@code CONFIG_UNAVAILABLE}。
  *
  * <p><b>⚠️ 2026-11-01 数据库脚本收敛后的形状</b>：原「补丁 + 种子附录」两份同源

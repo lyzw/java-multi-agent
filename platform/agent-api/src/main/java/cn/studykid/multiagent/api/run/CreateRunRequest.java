@@ -187,6 +187,19 @@ public record CreateRunRequest(
         input = Map.copyOf(input);
     }
 
+    /**
+     * 用给定 input 派生一个新请求（身份改造 2026-11-17）。
+     *
+     * <p>用于 Controller 从登录态派生的权威 studentId 覆盖客户端手填值：
+     * 复用全参构造以保证 scenario 归一化、Map.copyOf、资源上限校验一致执行，
+     * <b>绝不</b>绕过 compact 构造器直接改字段。
+     */
+    public @NonNull CreateRunRequest withInput(@NonNull Map<String, Object> newInput) {
+        return new CreateRunRequest(this.idempotencyKey, this.agentId, newInput,
+                this.requestedBy, this.timeoutMs, this.budgetAmount,
+                this.dataClassification, this.scenario);
+    }
+
     /** 便捷构造：省略 requestedBy（由认证上下文推导）与所有资源上限。 */
     public CreateRunRequest(@NonNull String idempotencyKey,
                             @NonNull String agentId,

@@ -2642,6 +2642,12 @@ CREATE TABLE public.principal (
     login_name text NOT NULL,
     password_hash text NOT NULL,
     display_name text,
+    -- 学生业务编号：登录名即学生用户名（老师按此选人），本列是与之 1:1 绑定的
+    -- 匿名业务 id，供画像/薄弱点等业务表（student_id）使用。
+    -- ⚠️ 格式必须与 GetStudentProfileTool / RecordWeaknessTool 的
+    --    ^stu_[a-z0-9]{16}$ 一致，否则 Worker 侧写入画像/薄弱点时被拒。
+    -- nullable：平台/家长/审核等非学生主体没有学生编号。
+    student_id text,
     status text DEFAULT 'ACTIVE'::text NOT NULL,
     failed_attempts integer DEFAULT 0 NOT NULL,
     locked_until timestamp with time zone,
@@ -2651,6 +2657,7 @@ CREATE TABLE public.principal (
     CONSTRAINT principal_authz_version_positive CHECK ((authz_version >= 1)),
     CONSTRAINT principal_failed_attempts_nonneg CHECK ((failed_attempts >= 0)),
     CONSTRAINT principal_login_name_format CHECK ((login_name ~ '^[a-z0-9][a-z0-9._-]{2,63}$'::text)),
+    CONSTRAINT principal_student_id_format CHECK ((student_id IS NULL OR (student_id ~ '^stu_[a-z0-9]{16}$'::text))),
     CONSTRAINT principal_password_hash_present CHECK ((password_hash ~~ '$pbkdf2-sha256$i=%$%'::text)),
     CONSTRAINT principal_status_enum CHECK ((status = ANY (ARRAY['ACTIVE'::text, 'DISABLED'::text, 'LOCKED'::text])))
 );
@@ -4648,6 +4655,14 @@ COMMENT ON INDEX public.part_uniq_reservation_operation IS '同一 ToolOperation
 --
 
 CREATE UNIQUE INDEX uq_principal_login_name ON public.principal USING btree (login_name);
+
+
+--
+-- Name: uq_principal_student_id; Type: INDEX; Schema: public; Owner: -
+--
+-- 学生编号在租户内唯一：同一租户两个主体不得指向同一份画像/薄弱点。
+-- 用 partial index 排除 NULL（非学生主体无编号，允许多个 NULL）。
+CREATE UNIQUE INDEX uq_principal_student_id ON public.principal USING btree (tenant_id, student_id) WHERE (student_id IS NOT NULL);
 
 
 --

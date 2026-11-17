@@ -20,10 +20,11 @@
 
 import { useMemo, useState, type FormEvent } from 'react'
 import { Loading, Empty, ErrorState, CapabilityNote } from '@/shared/states'
-import { useRagSearch } from '@/features/rag/useRagSearch'
+import { useRagSearch, EMPTY_RETRIEVAL_COPY } from '@/features/rag/useRagSearch'
 import { readStoredTenantId, rememberTenantId } from '@/features/rag/ragTenantStorage'
 import { useSession } from '@/auth/session'
 import { PageHead, Panel } from '@/components/ui'
+import { gradeDisplayLabel } from '@/shared/format'
 import type {
   RagRetrievalMode,
   RagScopeMode,
@@ -100,9 +101,18 @@ export function RagSearchPage(): JSX.Element {
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<RagRetrievalMode>('EXPLAIN')
   const [subject, setSubject] = useState<string>(RAG_SUBJECTS[0])
-  const [grade, setGrade] = useState<string>(RAG_GRADES[6]) // 七年级
+  // ⚠️ P1-1（2026-11-17）：默认版本坐标改为**库里确实有语料**的组合。
+  //    此前默认是「七年级 / 上册 / 人教版」—— 实测该坐标在语料库中为 **0 块**，
+  //    于是学生第一次检索必然空结果，且毫无提示（教师评审实测项）。
+  //    现按 rag 库实况（2026-11-17 实查 rag_chunk）选默认：
+  //      数学 / 六年级 / 上册 / 沪教版 = 1589 块（数学类最多）
+  //    ⚠️ 换语料库后应重查一遍：
+  //      SELECT e.subject,e.grade,e.term,e.publisher,count(ch.chunk_id)
+  //      FROM rag.rag_chunk ch JOIN rag.rag_edition e ON e.edition_id=ch.edition_id
+  //      GROUP BY 1,2,3,4 ORDER BY 5 DESC;
+  const [grade, setGrade] = useState<string>(RAG_GRADES[5]) // 六年级
   const [term, setTerm] = useState<string>(RAG_TERMS[0]) // 上册
-  const [publisher, setPublisher] = useState<string>(RAG_PUBLISHERS[0]) // 人教版
+  const [publisher, setPublisher] = useState<string>(RAG_PUBLISHERS[4]) // 沪教版
   const [revisionCode, setRevisionCode] = useState('2024')
   const [topK, setTopK] = useState(8)
   // ⚠️ 空串 → 后端按 STRICT 处理（scopeMode 可空）。
@@ -172,6 +182,12 @@ export function RagSearchPage(): JSX.Element {
     ]
   }, [retrieval.status, retrieval.hits, generation.status, generation.citations])
 
+  // ⚠️ P1-1：空结果成因 → 文案（成因未知时回落通用文案）
+  const emptyCopy = EMPTY_RETRIEVAL_COPY[retrieval.status] ?? EMPTY_RETRIEVAL_COPY['emptyUnknown']!
+  // ⚠️ 「换版本范围有用」的两种成因：压根没语料 / 被版本过滤剔除。
+  const versionScopeHelpful =
+    retrieval.status === 'emptyNoCorpus' || retrieval.status === 'emptyVersionFiltered'
+
   return (
     <>
       <PageHead
@@ -233,9 +249,11 @@ export function RagSearchPage(): JSX.Element {
                   value={grade}
                   onChange={(e) => setGrade(e.target.value)}
                 >
+                  {/* ⚠️ P2-4（2026-11-17）：与发起辅导页统一叫法，
+                      取值仍是语料版本坐标原值（后端按 displayName 精确匹配）。 */}
                   {RAG_GRADES.map((g) => (
                     <option key={g} value={g}>
-                      {g}
+                      {gradeDisplayLabel(g)}
                     </option>
                   ))}
                 </select>
@@ -464,12 +482,55 @@ export function RagSearchPage(): JSX.Element {
           </p>
         ) : retrieval.status === 'loading' ? (
           <Loading label="正在检索教材语料" />
-        ) : retrieval.status === 'empty' ? (
-          <Empty
-            icon="search"
-            title="没有找到相关语料"
-            hint="换个说法，或把版本范围改成「优先本版，可回退同册」再试。"
-          />
+        ) : retrieval.status.startsWith('empty') ? (
+          // ⚠️ P1-1（2026-11-17）：按**检索漏斗**区分空结果成因 ——
+          //    「这个版本没教材」与「你问得不对」对学生是完全不同的两件事，
+          //    此前一律说成后者，学生只能反复换问法，浪费的全是自己的时间。
+          <>
+            <Empty
+              icon="search"
+              title={emptyCopy.title}
+              hint={emptyCopy.hint}
+            />
+            {/*
+              ⚠️ P1-1（2026-11-17）：给一个**可点**的下一步 ——
+                只写「把版本范围改成跨版本查找」等于让学生去翻「高级设置」，
+                大多数人不会去找。直接给一个按钮：改范围并立刻重检。
+              */}
+              {versionScopeHelpful ? (
+                <div className="btn-row" style={{ marginTop: 'var(--s-3)' }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      setScopeMode('CROSS_EDITION')
+                      // 用改后的范围立即重检一次（与「检索并生成」同一条路径）
+                      search(
+                        {
+                          query: query.trim(),
+                          mode,
+                          edition: {
+                            subject,
+                            grade,
+                            term,
+                            publisher,
+                            revisionCode: revisionCode.trim() === '' ? '2024' : revisionCode.trim(),
+                          },
+                          scopeMode: 'CROSS_EDITION',
+                          knowledgePointId: null,
+                          subject: null,
+                          grade: null,
+                          topK,
+                        },
+                        tenantId.trim(),
+                      )
+                    }}
+                  >
+                    跨版本再找一次
+                  </button>
+                </div>
+              ) : null}
+          </>
         ) : retrieval.status === 'error' || retrieval.status === 'timeout' ? (
           <ErrorState
             reason={retrieval.error ?? '检索失败'}

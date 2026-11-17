@@ -15,6 +15,7 @@ import cn.studykid.multiagent.application.observability.LogContext;
 import cn.studykid.multiagent.ports.persistence.PlatformTenantPort;
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 import cn.studykid.multiagent.worker.dispatch.RunDispatchConsumer;
+import cn.studykid.multiagent.worker.execute.RunExecutionLoop;
 
 /**
  * 崩溃恢复扫描器（第二十一批 · 接通 claimTasks 生产调用方）。
@@ -274,7 +275,14 @@ public class RunRecoverySweeper {
                     for (RunClaimPort.LeasedTask task : tasks) {
                         recovered++;
                         try {
-                            executor.execute(tenantId, task);
+                            RunDispatchConsumer.Outcome outcome = executor.execute(tenantId, task);
+                            // ⚠️ 崩溃恢复路径**没有 MQ 重投兜底**：若返回 RETRYABLE_FAILURE，
+                            //    此前丢弃返回值 → Run 留在 RUNNING（租约未释放），
+                            //    下轮租约过期又被认领，无限循环（attempt 一直 +1）。
+                            //    这里 best-effort 收敛 FAILED，让超限/持续失败的 Run 有终态。
+                            if (outcome == RunDispatchConsumer.Outcome.RETRYABLE_FAILURE) {
+                                failRecoveredRetryable(tenantId, task);
+                            }
                         } catch (RuntimeException e) {
                             // ⚠️ 执行器已内部兜底收敛（commit 失败=白干，不抛），
                             // 此处仅记录，不中断其他租户的恢复。
@@ -290,6 +298,26 @@ public class RunRecoverySweeper {
         }
         if (recovered > 0) {
             log.info("崩溃恢复扫描完成：本轮接管并执行 {} 个过期 RUNNING", recovered);
+        }
+    }
+
+    /**
+     * 恢复执行返回「可重试失败」时的 best-effort 收敛。
+     *
+     * <p>崩溃恢复没有 MQ 重投通道：不收敛就会随租约反复过期而无限接管，
+     * Run 永远 RUNNING、进度页永远「执行中」。以 fencing 写终态，
+     * 失败（世代已失效 = 有人正在处理）只记 WARN，不在此重试。
+     */
+    private void failRecoveredRetryable(String tenantId, RunClaimPort.LeasedTask task) {
+        log.warn("恢复执行返回可重试失败，收敛 Run 为 FAILED: runId={}, tenant={}",
+                task.runId(), tenantId);
+        try {
+            claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
+                    "FAILED", RunExecutionLoop.failurePayload("重试次数已达上限"),
+                    "MAX_ATTEMPTS_EXCEEDED");
+        } catch (RuntimeException ce) {
+            log.warn("恢复 Run 兜底收敛失败（可能已被接管）: runId={}, cause={}",
+                    task.runId(), ce.toString());
         }
     }
 }

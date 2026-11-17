@@ -87,7 +87,55 @@ class MiniMaxModelGatewayStreamTest {
             assertThat(response.content()).isEqualTo("你好世界");
             assertThat(response.usage().inputTokens()).isEqualTo(5);
             assertThat(response.usage().outputTokens()).isEqualTo(3);
+            assertThat(response.usage().estimated()).isFalse();
             assertThat(response.finishReason()).isEqualTo(ModelResponse.FinishReason.STOP);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void streamWithNullUsageFallsBackToEstimatedTokens() throws Exception {
+        // 供应商把 usage 显式置 null：isMissingNode()==false 但 isObject()==false，
+        // token 必须本地粗估并标记 estimated，不能停留在 0。
+        String sseBody = String.join("\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"你好世界\"},"
+                        + "\"finish_reason\":\"stop\"}],\"usage\":null}",
+                "",
+                "data: [DONE]",
+                "",
+                "");
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            byte[] body = sseBody.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, body.length);
+            try (var os = exchange.getResponseBody()) {
+                os.write(body);
+            }
+        });
+        server.start();
+        try {
+            MiniMaxModelGateway gateway = new MiniMaxModelGateway(
+                    "http://localhost:" + server.getAddress().getPort() + "/v1", "sk-test", "MiniMax-M2.5");
+            ModelRequest request = new ModelRequest("MiniMax-M2.5", "你是一个数学老师", "1+1=?", 0.7, 100,
+                    Duration.ofSeconds(30), Map.of(), List.of(ModelMessage.user("1+1=?")));
+
+            ModelResponse response = gateway.streamChat(request,
+                    new ChatStreamGateway.StreamDeltaConsumer() {
+                        @Override
+                        public void onDelta(String token) {
+                        }
+
+                        @Override
+                        public void onThinking(String token) {
+                        }
+                    });
+
+            assertThat(response.content()).isEqualTo("你好世界");
+            assertThat(response.usage().estimated()).isTrue();
+            assertThat(response.usage().inputTokens()).isPositive();
+            assertThat(response.usage().outputTokens()).isPositive();
         } finally {
             server.stop(0);
         }

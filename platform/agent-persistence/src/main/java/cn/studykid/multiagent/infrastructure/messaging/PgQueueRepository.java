@@ -321,6 +321,49 @@ public class PgQueueRepository {
     }
 
     /**
+     * 消息进死信时，<b>best-effort</b> 把对应 Run 收敛为 {@code FAILED}（错误码
+     * {@code MAX_ATTEMPTS_EXCEEDED}）。
+     *
+     * <p>⚠️ 为什么必须有它：消息重投次数耗尽后只写 {@code agent_message_dead_letter}
+     * 并删除队列行，<b>从不更新 run</b> —— Run 永远停在 RUNNING，进度页永远
+     * 显示「执行中」。这里以 {@code state='RUNNING'} 为围栏做窄更新：
+     * 已是其它终态的不覆盖（幂等），正在被他人接管执行的也不误伤到
+     * 提交阶段之外（fencing 由执行循环的 commitResult 继续保证）。
+     *
+     * @return 是否真的把一条 RUNNING 收敛为 FAILED
+     */
+    public boolean failRunOnDeadLetter(@NonNull String tenantId, @NonNull String runId,
+                                       @NonNull String errorCode) {
+        String sql = """
+                UPDATE run
+                SET state = 'FAILED',
+                    error_code = ?,
+                    result_payload = jsonb_build_object('reason', ?),
+                    completed_at = now(),
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = now()
+                WHERE tenant_id = ?::uuid AND run_id = ?::uuid
+                  AND state = 'RUNNING'
+                """;
+        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
+            Connection conn = lease.connection();
+            int updated;
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, errorCode);
+                ps.setString(2, "重试次数已达上限");
+                ps.setString(3, tenantId);
+                ps.setString(4, runId);
+                updated = ps.executeUpdate();
+            }
+            lease.commitQuietly();
+            return updated > 0;
+        } catch (SQLException e) {
+            throw new IllegalStateException("死信时收敛 Run 失败（runId=" + runId + "）", e);
+        }
+    }
+
+    /**
      * 待处理深度（仅 PENDING）。
      *
      * <p>⚠️ <b>口径与 Rabbit 一致</b>：只算 ready 态，不算 INFLIGHT

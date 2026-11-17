@@ -571,9 +571,9 @@ class ContextCompressionM6GuardTest {
     @DisplayName("✅ RV-72（S3-M13 升级）：协议 v1.1 / Observer / G1 边界文档与 D33–D35、D53 同步冻结")
     void protocolDocsFreezeM6AndM13Boundary() {
         String adr = read(repoRoot().resolve(
-                "docs/P0/P1/ADR-013_上下文压缩统一入口与全窗口预算.md"));
-        String protocol = read(repoRoot().resolve("docs/上下文压缩SSE协议v1.1变更说明.md"));
-        String observerGuide = read(repoRoot().resolve("docs/OBSERVER-INJECTION-GUIDE.md"));
+                "docs/01_baseline/milestones/P1/ADR-013_上下文压缩统一入口与全窗口预算.md"));
+        String protocol = read(repoRoot().resolve("docs/05_archive/上下文压缩SSE协议v1.1变更说明.md"));
+        String observerGuide = read(repoRoot().resolve("docs/05_archive/OBSERVER-INJECTION-GUIDE.md"));
 
         assertThat(adr)
                 .as("⛔ ADR 未登记 M6 三项决策：契约冻结没有架构依据")

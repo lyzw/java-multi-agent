@@ -48,6 +48,8 @@ export function stateLabel(state: string): string {
     case 'QUEUED':
       return '排队中'
     case 'RUNNING':
+      // ⚠️ 只有 RUNNING 才是「执行中」：FAILED 等终态绝不能复用此文案
+      //    （否则后端已收敛失败、前端仍显示「执行中」，用户会一直等）。
       return '执行中'
     case 'SUCCEEDED':
       return '已完成'
