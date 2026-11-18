@@ -38,6 +38,15 @@ import { AgentMetricsPage } from '@/pages/metrics/AgentMetricsPage'
 import { MetricEntryPage } from '@/pages/metrics/MetricEntryPage'
 import { ReviewQueuePage } from '@/pages/quality/ReviewQueuePage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
+// O7：已实现但未接入路由的页面（后端端点均已确认存在）。
+import { DependencyGraphPage } from '@/pages/dependencies/DependencyGraphPage'
+import { ImpactAnalysisPage } from '@/pages/dependencies/ImpactAnalysisPage'
+import { DelegationTopologyPage } from '@/pages/dependencies/DelegationTopologyPage'
+import { PublishCenterPage } from '@/pages/publish/PublishCenterPage'
+import { PublishReleasesPage } from '@/pages/publish/PublishReleasesPage'
+import { MonitoringHealthPage } from '@/pages/monitoring/MonitoringHealthPage'
+import { MonitoringDeniesPage } from '@/pages/monitoring/MonitoringDeniesPage'
+import { RouteErrorBoundary } from '@/shared/AppErrorBoundary'
 import { APP_BASE_PATH, ROLES, PLATFORM_SCOPE_ROLES, type Role } from '@/config/constants'
 
 /**
@@ -64,7 +73,13 @@ const AUDIT_SCOPE: Role[] = [ROLES.SUPER_ADMIN, ROLES.SECURITY_ADMIN, ROLES.AUDI
 
 export const router = createBrowserRouter(
   [
-    { path: '/login', element: <LoginPage /> },
+    {
+      // ⚠️ 根 errorElement（O1）：data router 会吞掉路由树内渲染错误，组件式
+      //    ErrorBoundary 挡不住；必须挂 errorElement 才能兜住路由内崩溃。
+      //    包一层 pathless 根路由，统一覆盖登录页 + 受保护区 + 404。
+      errorElement: <RouteErrorBoundary />,
+      children: [
+        { path: '/login', element: <LoginPage /> },
     {
       // 业务无权限整页（已登录但缺权限，区别于「未登录」跳登录）。
       // 由 `notifyAccessDenied` 在捕获到 ACCESS_DENIED 时跳转。
@@ -365,11 +380,21 @@ export const router = createBrowserRouter(
             </RequireRole>
           ),
         },
+        // O7：孤儿页面接入（导航见 navConfig「运维观测与发布」分组）。
+        { path: 'dependencies/graph', element: <DependencyGraphPage /> },
+        { path: 'dependencies/impact', element: <ImpactAnalysisPage /> },
+        { path: 'dependencies/delegations', element: <DelegationTopologyPage /> },
+        { path: 'publish', element: <PublishCenterPage /> },
+        { path: 'publish/releases', element: <PublishReleasesPage /> },
+        { path: 'monitoring/health', element: <MonitoringHealthPage /> },
+        { path: 'monitoring/denies', element: <MonitoringDeniesPage /> },
         {
           // 404 兜底（评审 §1.2 P0）：未知路径不再白屏，给真实去向
           path: '*',
           element: <NotFoundPage />,
         },
+      ],
+    },
       ],
     },
   ],
