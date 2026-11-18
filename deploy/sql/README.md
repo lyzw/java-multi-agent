@@ -26,6 +26,10 @@ deploy/sql/
 │   │                                      + §2b platform 域授权（原 09/11 号脚本收编）
 │   ├── 04_retention_role.sql              agent_retention 保留期专用角色（凭据隔离）
 │   ├── 04_platform_admin_grant.sql        PLATFORM_ADMIN 带外赋权模板（非初始化序列）
+│   ├── 05_chat_audit.sql                  对话审计插件表（chat_audit_record 租户级
+│   │                                      FORCE RLS + chat_audit_unattributed）
+│   │                                      ⚠️ 幂等补丁，供**存量库**单独执行；
+│   │                                      新库由 01_platform_ddl.sql 终态快照覆盖，
 │   └── 06_platform_grant.sql              平台角色绑定模板（带外运维通道，非初始化序列）
 └── rag/                                   目标库：study_rag
     ├── 01_rag_ddl.sql                     完整结构（11 表 / halfvec(4096) / 36 索引 /

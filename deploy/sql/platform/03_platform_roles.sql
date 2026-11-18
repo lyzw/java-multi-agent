@@ -273,6 +273,34 @@ SELECT format('REVOKE DELETE ON platform.review_task FROM %I', :'app_role') \gex
 SELECT format('GRANT INSERT ON platform.authz_decision_log TO %I', :'app_role') \gexec
 SELECT format('REVOKE SELECT ON platform.authz_decision_log FROM %I', :'app_role') \gexec
 
+-- ── 应用角色：对话审计插件（P2 · 2026-11-18 补） ─────────────────────
+-- public 域的 `GRANT … ON ALL TABLES` 已覆盖三张表，这里的价值全在**收紧**：
+--   · chat_audit_record：只追加。SELECT 由 RLS 限定在自租户内（读原文用于效果评估，
+--     跨租户不可达）；UPDATE/DELETE 显式撤销 —— 审计原文被改写等于证据被伪造，
+--     删除通道只留 agent_retention（见 04_retention_role.sql）。
+--   · chat_audit_unattributed：同上，且它含的是**未归属**请求的元数据，
+--     写者只有请求入口的审计过滤器。
+--   · chat_audit_config：前端整表覆盖写，需要 UPDATE；DELETE 撤销（配置是单例，
+--     永远只有 upsert，没有删除语义）。
+DO $$
+DECLARE
+    app text := current_setting('my.app_role');
+BEGIN
+    IF to_regclass('public.chat_audit_record') IS NOT NULL THEN
+        EXECUTE format('GRANT SELECT, INSERT ON public.chat_audit_record TO %I', app);
+        EXECUTE format('REVOKE UPDATE, DELETE ON public.chat_audit_record FROM %I', app);
+    END IF;
+    IF to_regclass('public.chat_audit_unattributed') IS NOT NULL THEN
+        EXECUTE format('GRANT SELECT, INSERT ON public.chat_audit_unattributed TO %I', app);
+        EXECUTE format('REVOKE UPDATE, DELETE ON public.chat_audit_unattributed FROM %I', app);
+    END IF;
+    IF to_regclass('public.chat_audit_config') IS NOT NULL THEN
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE ON public.chat_audit_config TO %I', app);
+        EXECUTE format('REVOKE DELETE ON public.chat_audit_config FROM %I', app);
+    END IF;
+END;
+$$;
+
 -- ── 自检：授权未生效即报错（fail-closed）──────────────────────────
 DO $$
 DECLARE

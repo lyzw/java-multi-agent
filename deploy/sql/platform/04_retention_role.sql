@@ -132,6 +132,22 @@ FROM unnest(ARRAY['student_memory']) AS t \gexec
 SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO %I', t, :'retention_role')
 FROM unnest(ARRAY['run_message']) AS t \gexec
 
+-- ⚠️ 对话审计原文（chat_audit_record，P2 · 2026-11-18）必须**显式**列在这里：
+--    它是「聊天相关所有请求」的端到端原文（用户问题 / 模型回答 / thinking / 逐分片），
+--    敏感度与 run_message 同级。写侧由 app_agent 追加（无 UPDATE/DELETE），
+--    保留期到期后的物理删除只走本角色 —— 否则「只记得 30 天」就只是写侧承诺。
+--    ⚠️ 只在表存在时授权：存量库可能尚未执行 05_chat_audit.sql，
+--    写死表名会让整个保留期脚本因缺表报错中断（其余清理也随之不跑）。
+DO $$
+DECLARE
+    r text := current_setting('my.retention_role');
+BEGIN
+    IF to_regclass('public.chat_audit_record') IS NOT NULL THEN
+        EXECUTE format('GRANT SELECT, DELETE ON public.chat_audit_record TO %I', r);
+    END IF;
+END;
+$$;
+
 SELECT format('GRANT SELECT, UPDATE ON %s TO %I', t, :'retention_role')
 FROM unnest(ARRAY['run', 'run_step', 'tool_operation']) AS t \gexec
 
@@ -148,6 +164,18 @@ SELECT format('GRANT SELECT ON tenant TO %I', :'retention_role') \gexec
 --    故本脚本必须排在授权脚本**之后**执行，重跑时一并重跑。
 SELECT format('REVOKE DELETE ON %s FROM %I', t, :'app_role')
 FROM unnest(ARRAY['audit_record', 'erasure_certificate']) AS t \gexec
+
+-- ⚠️ 对话审计原文同样撤销（P2）：应用侧无物理删除端点，
+--    删除只能由本角色按保留期 / 监护人撤回执行。
+DO $$
+DECLARE
+    a text := current_setting('my.app_role');
+BEGIN
+    IF to_regclass('public.chat_audit_record') IS NOT NULL THEN
+        EXECUTE format('REVOKE DELETE, UPDATE ON public.chat_audit_record FROM %I', a);
+    END IF;
+END;
+$$;
 
 
 -- =====================================================================

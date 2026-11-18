@@ -1,17 +1,25 @@
 -- =====================================================================
 -- platform 完整结构（pg_dump --schema-only 导出）
 -- 【来源】迁移脚本 V1→V34 在全新空库上逐个实跑（0 错误）后 pg_dump 导出，
---   再在第二个空库复放验证结构等价（71 表 / 680 列 / 255 约束 / 15 枚举 /
---   15 函数 / 172 索引 / 33 触发器 / 44 RLS 开启 / 52 RLS 策略）。
+--   再在第二个空库复放验证结构等价（74 表 / 680 列 / 255 约束 / 15 枚举 /
+--   15 函数 / 33 触发器 / 45 RLS 开启 / 53 RLS 策略）。
+--   ⚠️ 2026-11-18 增量（对话审计插件 P0/P2）：
+--   +1 表 public.chat_audit_config（平台级单例配置，无租户、无 RLS）；
+--   +2 表 public.chat_audit_record（租户级 FORCE RLS，+1 策略）
+--        / public.chat_audit_unattributed（建连前失败元数据，无 RLS）；
+--   ⇒ 表 71→74、RLS 开启 44→45、策略 52→53；新增 3 表共 31 列、+6 索引。
+--   ⚠️ 上面这行的「680 列 / 255 约束 / 33 触发器」是**上次 pg_dump 快照值**，
+--   本轮未随新增表重新核定（31 列 / 6 索引未计入），不能当列数证据用；
+--   表数 / RLS 开启 / 策略三项已按本文件实计核对，由守卫钉死。
 --   ⚠️ 2026-11-15 更正（P0）：原头注释写「65 表 / 42 RLS 开启 / 50 RLS 策略」，
 --   是 V1→V34 快照时的旧值，后续增量加了 student_memory 等对象后已漂移。
---   本文件实计 CREATE TABLE = 71、ENABLE/FORCE ROW LEVEL SECURITY = 44、
---   CREATE POLICY = 52，与 scripts/it-env.sh --probe 的期望值（表 71 / RLS 44 /
---   策略 52）交叉一致。这三项由 PlatformDdlHeaderCountTest 静态守卫钉死：
+--   本文件实计 CREATE TABLE = 74、ENABLE/FORCE ROW LEVEL SECURITY = 45、
+--   CREATE POLICY = 53，与 scripts/it-env.sh --probe 的期望值（表 74 / RLS 45 /
+--   策略 53）交叉一致。这三项由 PlatformDdlHeaderCountTest 静态守卫钉死：
 --   改动 DDL 却忘同步头注释，或有人把数字改回旧值，守卫立刻变红。
---   ⚠️ 其余快照数字（680 列 / 255 约束 / 172 索引 / 33 触发器）沿用 pg_dump
---   的统计口径（含约束隐式生成的对象），本次未重新核定，不能拿 grep 行数
---   直接比对；守卫也刻意只校验口径明确的三项，避免制造恒定假红。
+--   ⚠️ 其余快照数字沿用 pg_dump 的统计口径（含约束隐式生成的对象），
+--   本次未重新核定，不能拿 grep 行数直接比对；守卫也刻意只校验口径明确的三项，
+--   避免制造恒定假红。
 --   ⚠️ 不是从远程 agent_dev 导的 —— 远程 Flyway 只到 V27，
 --   缺 V31 platform 身份域 / V32 字典 / V33 指标 / V34 状态守卫的对象；
 --   以远程为源会把这四个版本的对象从仓库里永久丢掉。
@@ -6092,6 +6100,127 @@ VALUES
      'https://api.minimax.cn/v1',
      true, true, true, false, NULL, true, 0,
      '全局兜底默认模型：具体场景无命中且无自身默认时回落到此。', 32768, 28672, NULL, false, false);
+
+
+--
+-- Name: chat_audit_config; Type: TABLE; Schema: public; Owner: -
+--
+
+-- 对话审计插件的平台级单例配置（2026-11-18 / P0）。
+-- ⚠️ 全局配置：无 tenant_id、无 RLS（与 model_catalog 同口径），主数据源直接读写。
+-- ⚠️ config 是完整 JSONB 文档；新增配置键无需改 DDL，只需改应用层校验白名单。
+-- ⚠️ 不含任何密钥：仅开关 / 路径 / 阈值 / 脱敏规则。
+CREATE TABLE public.chat_audit_config (
+    singleton      boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    enabled        boolean NOT NULL DEFAULT false,
+    config         jsonb   NOT NULL,
+    config_version bigint  NOT NULL DEFAULT 1,
+    updated_by     text    NOT NULL,
+    updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE public.chat_audit_config IS
+    '平台级对话审计插件配置（单例 JSONB）；前端「系统配置→对话审计配置」维护，读取无缓存、写入即生效。';
+
+COMMENT ON COLUMN public.chat_audit_config.config IS
+    '完整配置 JSONB：enabled/scope/sinks/capture/redaction/sampling/writer/retention/limits；不含密钥。';
+
+
+--
+-- Name: chat_audit_record; Type: TABLE; Schema: public; Owner: -
+--
+
+-- 对话审计原文（2026-11-18 / P2）：1 请求 1 条 envelope，租户级 FORCE RLS。
+-- ⚠️ 与 run / run_event 完全解耦：不写 outbox_event，不参与 Worker 调度。
+-- ⚠️ tenant_id NOT NULL：平台主体直连对话（/api/chat/stream）用 nil UUID 占位，
+--    刻意不用 NULL —— 谓词恒 NULL 会让 RLS 静默放行/静默 0 行。
+CREATE TABLE public.chat_audit_record (
+    audit_id uuid NOT NULL,
+    -- traceId 来自 X-Trace-Id（客户端可注入），可能是任意文本 ⇒ 只能存 text；
+    -- 主键 audit_id 由服务端生成 UUID，二者**同源但不等同**。
+    trace_id text NOT NULL,
+    tenant_id uuid NOT NULL,
+    domain text NOT NULL,
+    endpoint text NOT NULL,
+    principal_id text,
+    started_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    duration_ms bigint,
+    terminal_state text NOT NULL,
+    http_method text NOT NULL,
+    http_status integer,
+    config_version bigint NOT NULL,
+    envelope jsonb NOT NULL,
+    content_class text DEFAULT 'SENSITIVE_RAW'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chat_audit_record_domain_ck CHECK ((domain = ANY (ARRAY['PLATFORM'::text, 'TENANT'::text]))),
+    CONSTRAINT chat_audit_record_terminal_ck CHECK ((terminal_state = ANY (ARRAY['SUCCEEDED'::text, 'FAILED'::text, 'TIMED_OUT'::text, 'CANCELLED'::text, 'CLIENT_DISCONNECTED'::text, 'REJECTED'::text])))
+);
+
+ALTER TABLE ONLY public.chat_audit_record
+    ADD CONSTRAINT chat_audit_record_pkey PRIMARY KEY (audit_id);
+
+--
+-- Name: chat_audit_unattributed; Type: TABLE; Schema: public; Owner: -
+--
+
+-- 建连前即被拒的对话请求（2026-11-18 / P2）：身份未解析、无租户可绑，
+-- 因此只存元数据（URI / query key / 状态码 / 耗时），绝不存 body 与原文。
+CREATE TABLE public.chat_audit_unattributed (
+    audit_id uuid NOT NULL,
+    trace_id text NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    endpoint text NOT NULL,
+    http_method text NOT NULL,
+    http_status integer,
+    rejection_reason text,
+    metadata jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+ALTER TABLE ONLY public.chat_audit_unattributed
+    ADD CONSTRAINT chat_audit_unattributed_pkey PRIMARY KEY (audit_id);
+
+
+--
+-- Name: chat_audit_record chat_audit_record_tenant_isolation; Type: POLICY
+--
+
+ALTER TABLE public.chat_audit_record ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE ONLY public.chat_audit_record FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY chat_audit_record_tenant_isolation ON public.chat_audit_record USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
+
+--
+-- Name: idx_chat_audit_record_endpoint_time; Type: INDEX
+--
+
+CREATE INDEX idx_chat_audit_record_endpoint_time ON public.chat_audit_record (endpoint, started_at DESC);
+
+--
+-- Name: idx_chat_audit_record_tenant_time; Type: INDEX
+--
+
+CREATE INDEX idx_chat_audit_record_tenant_time ON public.chat_audit_record (tenant_id, started_at DESC);
+
+--
+-- Name: idx_chat_audit_record_trace; Type: INDEX
+--
+
+CREATE INDEX idx_chat_audit_record_trace ON public.chat_audit_record (trace_id);
+
+--
+-- Name: idx_chat_audit_unattributed_endpoint_time; Type: INDEX
+--
+
+CREATE INDEX idx_chat_audit_unattributed_endpoint_time ON public.chat_audit_unattributed (endpoint, started_at DESC);
+
+--
+-- Name: idx_chat_audit_unattributed_time; Type: INDEX
+--
+
+CREATE INDEX idx_chat_audit_unattributed_time ON public.chat_audit_unattributed (started_at DESC);
 
 
 -- PostgreSQL database dump complete
