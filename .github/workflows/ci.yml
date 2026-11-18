@@ -325,7 +325,7 @@ jobs:
         working-directory: platform
         run: mvn -B org.owasp:dependency-check-maven:check \
           -DfailBuildOnCVSS=7 \
-          -DsuppressionFile=../docs/security-suppressions.xml || true
+          -DsuppressionFile=../docs/05_archive/security-suppressions.xml || true
         # ⚠️ OWASP 数据库首次下载较慢；CI 缓存后可接受
         # ⚠️ 漏洞库滞后于依赖发布，故不设阻塞；高危项须人工复核
 

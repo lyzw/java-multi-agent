@@ -35,9 +35,23 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLASSES_DIR="$ROOT_DIR/platform/agent-infrastructure/target/classes"
 
 # ⚠️ 变量后紧跟全角标点会被 shell 解析为变量名的一部分（见下方同类注释）。
-JAVA_HOME="${JAVA_HOME:-/Users/zhouwei/software/Java/jdk-21.0.12.jdk/Contents/Home}"
-JAVA_BIN="$JAVA_HOME/bin/java"
-JSHELL_BIN="$JAVA_HOME/bin/jshell"
+# ⚠️ O17：不再硬编码某台机器的 JDK 绝对路径（含具体小版本号，换机/升级即失效）。
+#    优先用调用方 JAVA_HOME；否则依次尝试 PATH 中的 java、Homebrew openjdk@21。
+if [ -z "${JAVA_HOME:-}" ]; then
+  if command -v java >/dev/null 2>&1; then
+    JAVA_BIN="$(command -v java)"
+  elif [ -x /opt/homebrew/opt/openjdk@21/bin/java ]; then
+    JAVA_HOME=/opt/homebrew/opt/openjdk@21
+    JAVA_BIN="$JAVA_HOME/bin/java"
+  else
+    echo "找不到 Java 21：请设置 JAVA_HOME 或确保 java 在 PATH 中" >&2
+    exit 1
+  fi
+else
+  JAVA_BIN="$JAVA_HOME/bin/java"
+fi
+# jshell 与 java 同目录（无论 JAVA_HOME 还是 PATH 解析都成立）。
+JSHELL_BIN="$(dirname "$JAVA_BIN")/jshell"
 
 # ── 输出 ────────────────────────────────────────────────
 info()  { printf "  %s\n" "$*"; }
