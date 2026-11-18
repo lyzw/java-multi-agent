@@ -290,7 +290,49 @@ class ChatAuditEndToEndIT {
                 .isNull();
     }
 
+    // ════════════════════════════════════════════════════════════
+    // 4. 同步端点：走另一条收敛分支（convergeSync），不得因为「不是 SSE」而无记录
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("✅ 同步端点 404：记 REJECTED（不是无记录），且身份已归属到真实租户")
+    void synchronousEndpointIsRecordedThroughSyncConvergence() {
+        // /api/runs/{runId} 不在 SSE 链路上：它走 convergeSync，是另一条收敛分支
+        String traceId = TRACE_PREFIX + "sync";
+        Resp resp = get("/api/runs/00000000-0000-4000-8000-000000000000", tenantToken(), traceId);
+        assertThat(resp.status())
+                .as("不存在的 runId 必须 404（若变 401/500，说明这条用例测的就不是同步收敛分支）")
+                .isEqualTo(404);
+
+        Map<String, String> row = awaitRecord(traceId);
+        assertThat(row)
+                .as("⛔ 同步端点没有审计记录：过滤器只覆盖了 SSE 分支，非流式请求全部漏记")
+                .isNotNull();
+        assertThat(row.get("terminal_state"))
+                .as("4xx 但租户已解析：应记 REJECTED 并保留租户归属，而不是丢记录或记 SUCCEEDED")
+                .isEqualTo("REJECTED");
+        assertThat(row.get("http_status")).isEqualTo("404");
+        assertThat(row.get("domain"))
+                .as("URI 在 /api/runs 下（非 /api/knowledge/），域判定靠身份补写而非仅看路径")
+                .isEqualTo("TENANT");
+        assertThat(row.get("tenant_id")).isEqualTo(tenantId);
+        assertThat(row.get("error_code")).isEqualTo("HTTP_404");
+    }
+
     // ── 夹具 ────────────────────────────────────────────────────────
+
+    private Resp get(String path, @Nullable String token, String traceId) {
+        var spec = rest.get().uri(path).header("X-Trace-Id", traceId);
+        if (token != null) {
+            spec.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+        }
+        var result = spec.exchange().expectBody(String.class).returnResult();
+        assertThat(result.getResponseHeaders().getFirst("X-Trace-Id"))
+                .as("同步端点同样要回写 traceId")
+                .isEqualTo(traceId);
+        int status = result.getStatus().value();
+        return new Resp(status, result.getResponseBody() == null ? "" : result.getResponseBody());
+    }
 
     private Resp post(String path, @Nullable String token, String traceId, String body) {
         var spec = rest.post().uri(path)
