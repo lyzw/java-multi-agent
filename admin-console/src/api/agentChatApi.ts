@@ -279,7 +279,7 @@ function errorFromHttp(status: number, body: unknown, path: string): AgentChatEr
     return {
       code: 'INVALID_REQUEST',
       message: '请求被拒绝（400）',
-      hint: '检查 AgentId / topK / 历史消息是否合法，或换一种问法。',
+      hint: '检查 message 是否为空、AgentId / topK / 历史消息是否合法；若提示「平台链必须显式指定目标租户」，请在上方选一个租户或让后端配置默认租户。',
       retryable: false,
       status,
     }

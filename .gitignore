@@ -91,3 +91,5 @@ deploy/docling/samples/*.pdf
 /test_mineru_out.md
 /问题记录/E2E端到端测试_2026-11-10/logs/
 /问题记录/E2E端到端测试_2026-11-10/screenshots/
+/问题记录/*/*/**.png
+/问题记录/*/*/*/**.png

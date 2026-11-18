@@ -597,6 +597,9 @@ export function AgentChatPage(): JSX.Element {
             <br />
             4）本页只走平台身份域 <code>/api/agent/**</code>，不读取租户 Run 输出，不复用租户链{' '}
             <code>/api/knowledge/**</code>。会话仅存内存。
+            <br />
+            5）<b>租户留空时走服务端配置的默认租户</b>（AI 实验室通用对话无需绑定具体租户）；若后端未配置该默认租户，
+            会明确返回「平台链必须显式指定目标租户」，此时请在上方选择一个租户。
           </>
         }
       />
@@ -658,7 +661,7 @@ export function AgentChatPage(): JSX.Element {
             />
           </div>
           <div className="agent-chat__param">
-            <span className="agent-chat__param-label">租户（可选，注入 X-Tenant-Id）</span>
+            <span className="agent-chat__param-label">租户（可选，留空走服务端默认租户）</span>
             <Select
               allowClear
               showSearch
