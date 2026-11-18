@@ -2,6 +2,15 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# O6：告警规则与 Alertmanager 路由（规则文件随容器挂载，见 docker-compose.yml）。
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
 scrape_configs:
   - job_name: prometheus
     static_configs:

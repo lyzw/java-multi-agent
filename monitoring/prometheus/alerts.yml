@@ -1,0 +1,60 @@
+# Agent 平台告警规则（O6）。
+#
+# ⚠️ 指标名取自源码真实注册名（Micrometer 的 `.` 在 Prometheus 暴露时转 `_`）：
+#   - ai.model.calls.total / ai.model.calls.latency / ai.model.tokens.input|output
+#     （agent-infrastructure/.../MicrometerModelCallObserver.java:39-42）
+#   - ai.execution.* / ai.trace.*（MicrometerExecutionObserver / MicrometerTraceObserver）
+#   - cap.enforcement_status（bootstrap/config/CapEnforcementMetrics.java:24，0=off 1=gray 2=on）
+# 每组的 `for` 都避免瞬时抖动误报；`annotations.summary/description` 用中文，
+# 指向可执行的排查入口而非泛泛的「网络问题」。
+groups:
+  - name: agent-model-gateway
+    rules:
+      - alert: ModelCallErrorRateHigh
+        # error 标签由 onException 以异常 kind 标记（MicrometerModelCallObserver:116,126）。
+        expr: |
+          sum(rate(ai_model_calls_total{error!=""}[5m]))
+            / clamp_min(sum(rate(ai_model_calls_total[5m])), 0.001) > 0.20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "模型调用错误率 > 20%"
+          description: "近 5 分钟模型调用错误率超阈值，检查供应商配额/密钥/网关超时与 finish_reason 分布。"
+
+      - alert: ModelCallLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(ai_model_calls_latency_bucket[5m])) by (le)) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "模型调用 P95 延迟 > 30s"
+          description: "近 10 分钟模型调用 P95 超阈值，结合 deadline 与租约检查是否存在队头阻塞。"
+
+  - name: agent-capability-enforcement
+    rules:
+      - alert: CapEnforcementDisabledInProduction
+        # cap.enforcement_status 为拉模型 Gauge；0=全局关闭且无灰度白名单。
+        expr: cap_enforcement_status == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "能力闭包校验处于关闭状态"
+          description: "cap-closure-enforcement 非 enforce 且无灰度白名单，越权调用工具的风险未关闭；装载能力目录后应切 enforce 并开启 cap-enforcement-required。"
+
+  - name: rag-ingest
+    rules:
+      # RAG 摄取失败率由 IngestAlertEvaluator 以结构化日志给出（阈值 20%）。
+      # 若摄取侧另行暴露了 Prometheus 指标，可在此补充对应 expr；当前以日志告警为准，
+      # 本组仅保留「应用实例消失」这种普适的可用性告警，避免引用不存在的指标造成恒静默。
+      - alert: AgentInstanceDown
+        expr: up{job="java-multi-agent"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Agent 应用实例不可抓取"
+          description: "java-multi-agent 目标连续 2 分钟无法抓取 /actuator/prometheus，检查进程存活与端口 8080。"

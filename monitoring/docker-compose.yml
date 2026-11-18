@@ -13,6 +13,19 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.enable-lifecycle'
 
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager:/etc/alertmanager
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+
   grafana:
     image: grafana/grafana:11.3.0
     container_name: grafana
@@ -36,7 +49,9 @@ services:
       - ./grafana/dashboards:/etc/grafana/dashboards:ro
     depends_on:
       - prometheus
+      - alertmanager
 
 volumes:
   prometheus_data:
+  alertmanager_data:
   grafana_data:
