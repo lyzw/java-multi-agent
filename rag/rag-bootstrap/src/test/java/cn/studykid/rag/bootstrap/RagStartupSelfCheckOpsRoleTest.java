@@ -21,8 +21,9 @@ class RagStartupSelfCheckOpsRoleTest {
 
     private static RagStartupSelfCheck selfCheck(boolean opsEnabled,
                                                  String opsUsername, String mainUsername) {
-        // 判定函数不碰库，JdbcTemplate 只为满足构造。
-        return new RagStartupSelfCheck(new JdbcTemplate(), opsEnabled, opsUsername, mainUsername);
+        // 判定函数不碰库，JdbcTemplate 只为满足构造；向量列形态与本组判定无关。
+        return new RagStartupSelfCheck(new JdbcTemplate(), opsEnabled, opsUsername, mainUsername,
+                new cn.studykid.rag.infrastructure.persistence.VectorColumn("vector", 1024));
     }
 
     private static List<String> assess(RagStartupSelfCheck check, String currentUser) {

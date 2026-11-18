@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import cn.studykid.rag.core.scope.RlsDependencyProbe;
+import cn.studykid.rag.infrastructure.persistence.VectorColumn;
 
 /**
  * 启动自检（RAG-D09 G2 条件②「自检通过」）。
@@ -71,15 +72,20 @@ public class RagStartupSelfCheck implements ApplicationRunner {
     /** 主数据源用户名（{@code spring.datasource.username}）。 */
     private final String mainUsername;
 
+    /** 代码实际使用的向量列形态（类型 + 维度，权威源来自 EmbeddingPort）。 */
+    private final VectorColumn vectorColumn;
+
     public RagStartupSelfCheck(
             JdbcTemplate jdbcTemplate,
             @Value("${rag.ops.enabled:true}") boolean opsEnabled,
             @Value("${rag.ops.datasource.username:}") String opsUsername,
-            @Value("${spring.datasource.username:}") String mainUsername) {
+            @Value("${spring.datasource.username:}") String mainUsername,
+            VectorColumn vectorColumn) {
         this.jdbcTemplate = jdbcTemplate;
         this.opsEnabled = opsEnabled;
         this.opsUsername = opsUsername == null ? "" : opsUsername.trim();
         this.mainUsername = mainUsername == null ? "" : mainUsername.trim();
+        this.vectorColumn = vectorColumn;
     }
 
     @Override
@@ -93,6 +99,7 @@ public class RagStartupSelfCheck implements ApplicationRunner {
         checkFailClosedEmptyCorpus(failures);
         checkOpsRoleSeparation(failures);
         checkSchemaVersion(failures);
+        checkVectorColumn(failures);
 
         if (!failures.isEmpty()) {
             log.error("RAG 启动自检未通过（{} 项）：{}", failures.size(), failures);
@@ -102,7 +109,7 @@ public class RagStartupSelfCheck implements ApplicationRunner {
         log.info("RAG 启动自检全部通过：pgvector 就绪 / 连接角色非特权 / "
                 + "应用层 ScopeFilter 装配完整（显式谓词为隔离权威）/ RLS 纵深防御在场 / "
                 + "无租户上下文只见全局语料 / 运维角色与主数据源角色互斥 / "
-                + "库结构与代码版本一致"
+                + "向量列类型/维度与配置一致 / 库结构与代码版本一致"
                 + "（运维通道 " + (opsEnabled ? "已接入" : "显式关闭") + "）。");
         // M4 准备期埋点：rlsDependent 静态预期与运行期中央绑定器信号（随逐批退役递减至 0）。
         log.info("rlsDependent 度量基线：{}", RlsDependencyProbe.snapshot());
@@ -262,6 +269,101 @@ public class RagStartupSelfCheck implements ApplicationRunner {
             failures.add("当前数据库连接角色正是运维角色 " + opsUsername
                     + "（BYPASSRLS 会绕过全部租户 RLS 策略，且不会留下任何异常日志）"
                     + " → 请用 rag_app 启动主数据源");
+        }
+    }
+
+    /**
+     * 校验数据库里 {@code rag_chunk_embedding.embedding} 的真实类型/维度，
+     * 是否与代码实际使用的 {@link VectorColumn}（来自嵌入端口 dimension + 配置 vector-type）一致。
+     *
+     * <p><b>为什么需要这一项</b>：装配期 {@code JdbcRetrievalRepository} 只校验
+     * 「vectorColumn.dimension == embeddingPort.dimension」——两者同源，恒等，
+     * 挡不住「配置写 vector/1024、库列却是 halfvec(4096)」这种错配。
+     * 后者在启动与装配期<b>全程无异常</b>，直到第一次稠密检索/写入才在 PG 侧报
+     * 「expected 4096 dimensions, not 1024」或 cast 失败，错误离根因很远。
+     *
+     * <p><b>为何不硬编码 halfvec(4096)</b>：IT 探针库刻意用 vector(1024)（占位嵌入 1024 维），
+     * 活库用 halfvec(4096)——两者都是合法形态。所以只比「代码声明 vs 库实际」，
+     * 一致即放行，错配即 fail-fast。
+     *
+     * @param failures 失败项收集
+     */
+    void checkVectorColumn(List<String> failures) {
+        String dbTypeName;
+        Integer dbDimension;
+        try {
+            // format_type(atttypid, atttypmod) 返回形如 "halfvec(4096)" / "vector(1024)" / "vector"。
+            String formatted = jdbcTemplate.queryForObject(
+                    "SELECT format_type(a.atttypid, a.atttypmod) "
+                            + "FROM pg_attribute a "
+                            + "JOIN pg_class c ON c.oid = a.attrelid "
+                            + "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                            + "WHERE n.nspname = 'rag' AND c.relname = 'rag_chunk_embedding' "
+                            + "AND a.attname = 'embedding'", String.class);
+            if (formatted == null || formatted.isBlank()) {
+                failures.add("无法读取 rag.rag_chunk_embedding.embedding 的列类型"
+                        + "（库结构缺失或迁移未执行）");
+                return;
+            }
+            dbTypeName = extractVectorTypeName(formatted);
+            dbDimension = extractVectorDimension(formatted);
+        } catch (Exception e) {
+            failures.add("读取 rag.rag_chunk_embedding.embedding 列类型失败：" + e.getMessage());
+            return;
+        }
+        assessVectorColumn(failures, vectorColumn, dbTypeName, dbDimension);
+    }
+
+    /** 从 {@code "public.halfvec(4096)"} / {@code "halfvec(4096)"} 取类型名（小写、去 schema 前缀）。 */
+    static String extractVectorTypeName(String formatted) {
+        String s = formatted == null ? "" : formatted.trim().toLowerCase(Locale.ROOT);
+        int paren = s.indexOf('(');
+        if (paren >= 0) {
+            s = s.substring(0, paren);
+        }
+        int dot = s.lastIndexOf('.');
+        if (dot >= 0) {
+            s = s.substring(dot + 1);
+        }
+        return s.trim();
+    }
+
+    /** 从 {@code "halfvec(4096)"} 取维度；无 {@code (n)} 时返回 null（该列未声明维度）。 */
+    static Integer extractVectorDimension(String formatted) {
+        if (formatted == null) {
+            return null;
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\\(\\s*(\\d+)\\s*\\)").matcher(formatted);
+        return m.find() ? Integer.valueOf(m.group(1)) : null;
+    }
+
+    /**
+     * 向量列形态一致性判定（纯函数，可单测）。
+     *
+     * @param configured     代码实际使用的列形态
+     * @param dbTypeName     DB 列类型名（如 halfvec / vector，小写）
+     * @param dbDimension    DB 列声明维度；null = 未声明（如 {@code vector} 无长度）
+     */
+    static void assessVectorColumn(List<String> failures, VectorColumn configured,
+                                   String dbTypeName, Integer dbDimension) {
+        if (configured == null) {
+            failures.add("代码未装配 VectorColumn，无法校验向量列一致性");
+            return;
+        }
+        if (dbTypeName == null || dbTypeName.isBlank()) {
+            failures.add("DB 向量列类型名为空，无法校验一致性");
+            return;
+        }
+        if (!configured.type().equalsIgnoreCase(dbTypeName)) {
+            failures.add("向量列类型不一致：代码配置 rag.embedding.vector-type="
+                    + configured.type() + "，但库列 rag_chunk_embedding.embedding 是 "
+                    + dbTypeName + " → 请改配置与库列一致，或按 deploy/sql/rag 的列级迁移改列并重建索引");
+        }
+        if (dbDimension != null && configured.dimension() != dbDimension) {
+            failures.add("向量列维度不一致：代码/嵌入端口维度=" + configured.dimension()
+                    + "，但库列 rag_chunk_embedding.embedding 声明为 " + dbDimension
+                    + " → 三者必须同步改：嵌入模型、rag.embedding.dimension、库列类型（并全量重建索引）");
         }
     }
 

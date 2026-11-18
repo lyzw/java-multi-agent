@@ -108,6 +108,7 @@ class RagStartupSelfCheckSchemaTest {
         assertEquals(0, failures.size());
 
         // 顺带确认构造器签名仍可用
-        new RagStartupSelfCheck(new JdbcTemplate(), false, "", "rag_app");
+        new RagStartupSelfCheck(new JdbcTemplate(), false, "", "rag_app",
+                new cn.studykid.rag.infrastructure.persistence.VectorColumn("vector", 1024));
     }
 }
