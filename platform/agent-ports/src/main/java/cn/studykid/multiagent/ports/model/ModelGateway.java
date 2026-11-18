@@ -29,8 +29,16 @@ public interface ModelGateway {
     enum ModelErrorKind {
         /** 超时。可在无副作用前提下重试。 */
         TIMEOUT(true),
-        /** 限流。可退避重试。 */
-        RATE_LIMITED(true),
+        /**
+         * 额度耗尽 / 限流（HTTP 429 或供应商报告的配额耗尽）。
+         *
+         * <p>⚠️ <b>本平台收敛为终态、不重试</b>：重试只会继续撞同一堵墙，
+         * 并持续消耗配额与时间（Run 会永远停在 RUNNING、进度页永远「执行中」）。
+         * 统一由 {@link ModelGatewayException#exhausted()} 在构造期识别，
+         * Run 执行层据此立即收敛 FAILED，故这里标记 {@code retryable=false} ——
+         * 与运行行为一致，observer 记录的 retryable 标签也更准确。
+         */
+        RATE_LIMITED(false),
         /** 供应商内部错误。可退避重试。 */
         PROVIDER_ERROR(true),
         /** 请求非法（上下文超限、参数错误）。重试无意义。 */
@@ -100,15 +108,22 @@ public interface ModelGateway {
                 return false;
             }
             String lower = message.toLowerCase(java.util.Locale.ROOT);
-            // ⚠️ 结构性识别 MiniMax 的 HTTP 200 + base_resp.status_code 业务错误
-            //    （配额耗尽 / 鉴权失败在此路径上均归一为 PROVIDER_ERROR）。
-            return lower.contains("base_resp.status_code")
-                    || lower.contains("quota")
+            // ⚠️ 只识别**语义明确**的额度/限流耗尽信号。
+            //    ⛔ 不再用 `base_resp.status_code` 裸串判定：MiniMax 对任意
+            //    base_resp.status_code != 0（内容拦截 / 参数非法 / 系统繁忙）都抛
+            //    ProviderStatusException(200, "base_resp.status_code=…")，
+            //    全部归一为 PROVIDER_ERROR(retryable=true)。若按裸串判耗尽，
+            //    可重试的瞬时错误会被误收敛为 FAILED，永不重试。
+            //    真正的配额/鉴权失败其 status_msg 会带下列语义词。
+            return lower.contains("quota")
                     || lower.contains("exhausted")
                     || lower.contains("insufficient")
                     || lower.contains("rate limit")
                     || lower.contains("too many requests")
+                    || lower.contains("balance")
                     || message.contains("额度")
+                    || message.contains("余额")
+                    || message.contains("欠费")
                     || message.contains("限流");
         }
     }

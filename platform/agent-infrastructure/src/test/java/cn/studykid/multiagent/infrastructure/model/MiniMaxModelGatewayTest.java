@@ -306,7 +306,9 @@ class MiniMaxModelGatewayTest {
             assertThat(gateway.classify(new MiniMaxModelGateway.ProviderStatusException(503, "x")))
                     .isEqualTo(ModelGateway.ModelErrorKind.PROVIDER_ERROR);
             assertThat(ModelGateway.ModelErrorKind.UNAUTHORIZED.retryable()).isFalse();
-            assertThat(ModelGateway.ModelErrorKind.RATE_LIMITED.retryable()).isTrue();
+            assertThat(ModelGateway.ModelErrorKind.RATE_LIMITED.retryable())
+                    .as("限流=终态不重试：retryable 与 exhausted 语义须一致")
+                    .isFalse();
         }
 
         @Test

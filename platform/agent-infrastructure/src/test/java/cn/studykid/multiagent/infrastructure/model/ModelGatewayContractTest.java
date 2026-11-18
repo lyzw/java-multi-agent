@@ -69,12 +69,17 @@ class ModelGatewayContractTest {
         }
 
         @Test
-        @DisplayName("✅ 限流 → RATE_LIMITED 且可重试")
+        @DisplayName("✅ 限流 → RATE_LIMITED，收敛为终态且 exhausted=true（不重试）")
         void rateLimitedNormalized() {
             var gw = new FakeModelGateway(FakeModelGateway.FaultMode.RATE_LIMITED, null);
             var e = assertThrows(() -> gw.complete(request()));
             assertThat(e.kind()).isEqualTo(ModelGateway.ModelErrorKind.RATE_LIMITED);
-            assertThat(e.kind().retryable()).isTrue();
+            assertThat(e.kind().retryable())
+                    .as("限流在本平台是终态：retryable 与 exhausted 语义须一致")
+                    .isFalse();
+            assertThat(e.exhausted())
+                    .as("✅ RATE_LIMITED 必须由 exhausted 触发 Run 立即收敛 FAILED")
+                    .isTrue();
         }
 
         @Test
@@ -84,6 +89,30 @@ class ModelGatewayContractTest {
             var e = assertThrows(() -> gw.complete(request()));
             assertThat(e.kind()).isEqualTo(ModelGateway.ModelErrorKind.PROVIDER_ERROR);
             assertThat(e.kind().retryable()).isTrue();
+        }
+
+        @Test
+        @DisplayName("⛔⛔ 非额度类 base_resp 业务错误（内容拦截/系统忙）不得被判为 exhausted 终态")
+        void nonQuotaBusinessErrorIsNotExhausted() {
+            // ⚠️ 回归：MiniMax 对任意 base_resp.status_code != 0 都抛
+            //    ProviderStatusException(200, "base_resp.status_code=…")，
+            //    若 detectExhausted 用裸串判定，会把可重试的瞬时错误误收敛为 FAILED。
+            var e = new ModelGateway.ModelGatewayException(
+                    ModelGateway.ModelErrorKind.PROVIDER_ERROR,
+                    "base_resp.status_code=2013 content filtered");
+            assertThat(e.exhausted())
+                    .as("⚠️⚠️ 仅含 base_resp.status_code 而无额度语义词，必须可重试")
+                    .isFalse();
+            assertThat(e.kind().retryable()).isTrue();
+        }
+
+        @Test
+        @DisplayName("✅ 带额度语义的 PROVIDER_ERROR → exhausted=true（MiniMax HTTP200 配额耗尽）")
+        void quotaSemanticErrorIsExhausted() {
+            var e = new ModelGateway.ModelGatewayException(
+                    ModelGateway.ModelErrorKind.PROVIDER_ERROR,
+                    "base_resp.status_code=1004 quota exhausted");
+            assertThat(e.exhausted()).isTrue();
         }
 
         @Test

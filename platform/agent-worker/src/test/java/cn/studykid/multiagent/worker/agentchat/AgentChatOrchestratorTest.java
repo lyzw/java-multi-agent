@@ -197,6 +197,36 @@ class AgentChatOrchestratorTest {
                 .doesNotContain("整段正文-非增量");
     }
 
+    @Test
+    @DisplayName("⛔ 估算 token 如实透传：estimated=true 同时进 SSE data 与审计；精确值逐字不变（对照）")
+    void estimatedUsageIsPropagatedToSseAndAudit() {
+        Harness estimated = new Harness();
+        estimated.gateway.then(answerEstimated(ANSWER_MARKER));
+        estimated.orchestrator.run(estimated.platform(), estimated.request(null), estimated.sink);
+
+        AgentChatEvent.Usage usage = firstOf(estimated.sink, AgentChatEvent.Usage.class);
+        assertThat(usage.estimated())
+                .as("⛔ 供应商 usage:null 时本地估算必须标 estimated，不得当精确值下发")
+                .isTrue();
+        assertThat(usage.data()).contains("\"estimated\":true");
+        assertThat(estimated.audit.finishRecord.resultPayload())
+                .as("⛔ 审计必须记下数字来源，否则事后无法解释用量")
+                .contains("\"usageEstimated\":true");
+        assertThat(estimated.audit.finishRecord.state()).isEqualTo("SUCCEEDED");
+
+        // 反向对照：供应商如实返回用量时，estimated=false 且 13 帧字节不追加字段。
+        Harness verified = new Harness();
+        verified.gateway.then(answer(ANSWER_MARKER));
+        verified.orchestrator.run(verified.platform(), verified.request(null), verified.sink);
+
+        AgentChatEvent.Usage exact = firstOf(verified.sink, AgentChatEvent.Usage.class);
+        assertThat(exact.estimated()).isFalse();
+        assertThat(exact.data())
+                .as("⛔ 精确用量不得追加 estimated 字段：SSE v1.1 旧帧字节冻结")
+                .doesNotContain("estimated");
+        assertThat(verified.audit.finishRecord.resultPayload()).contains("\"usageEstimated\":false");
+    }
+
     // ── RAG 语义 ──────────────────────────────────────────────────────
 
     @Test
@@ -1242,6 +1272,15 @@ class AgentChatOrchestratorTest {
             consumer.onDelta(delta);
             return new ModelResponse("整段正文-非增量", Map.of(),
                     new ModelUsage(7, 3), FinishReason.STOP);
+        };
+    }
+
+    /** 供应商 usage:null 场景：模型自报「本地估算」，用于验证 estimated 全链路透传。 */
+    private static Function<ChatStreamGateway.StreamDeltaConsumer, ModelResponse> answerEstimated(String delta) {
+        return consumer -> {
+            consumer.onDelta(delta);
+            return new ModelResponse("整段正文-非增量", Map.of(),
+                    new ModelUsage(7, 3, true), FinishReason.STOP);
         };
     }
 

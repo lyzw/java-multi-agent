@@ -93,6 +93,13 @@ public class WorkerExecutionConfig {
     String maxSteps;
 
     /**
+     * Run 重试硬上限——必须与 DB 层 {@code JdbcRunClaimRepository} 的同名配置一致，
+     * 否则「DB 允许领到第 N 次 / 循环却在第 3 次收敛」两层口径分裂。
+     */
+    @Value("${agent.run.max-attempts:3}")
+    int maxAttempts;
+
+    /**
      * 平台级**映射型**配置（风险映射 + 审批要求）。
      *
      * <p>⚠️ 必须经 {@link PlatformConfigMaps}（Binder）绑定：
@@ -747,7 +754,9 @@ public class WorkerExecutionConfig {
                 //    缺失 = run_message 永远为空（回放永远是空的且无报错）。
                 runMessagePort,
                 // ⚠️ M7-b：唯一送模型的统一装配入口。
-                requestAssemblyPort);
+                requestAssemblyPort,
+                // ⚠️ 与 DB 层 JdbcRunClaimRepository 共用同一重试硬上限配置。
+                maxAttempts);
     }
 
     /**

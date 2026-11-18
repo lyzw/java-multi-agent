@@ -252,7 +252,9 @@ class RunRecoverySweeperTest {
                     (t, task) -> RunDispatchConsumer.Outcome.RETRYABLE_FAILURE).sweep();
 
             assertThat(claim.committedState).isEqualTo("FAILED");
-            assertThat(claim.committedErrorCode).isEqualTo("MAX_ATTEMPTS_EXCEEDED");
+            assertThat(claim.committedErrorCode)
+                    .as("⚠️ 不能谎报「重试次数已达上限」——仍有额度，只是恢复路径无重投通道")
+                    .isEqualTo("RECOVERY_RETRY_UNAVAILABLE");
         }
 
         @Test

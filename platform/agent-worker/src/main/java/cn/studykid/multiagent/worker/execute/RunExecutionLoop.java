@@ -628,6 +628,44 @@ public class RunExecutionLoop {
     }
 
     /**
+     * 生产装配用：最完整构造器 + 可配置的重试硬上限。
+     *
+     * <p>⚠️ 与 DB 层 {@code JdbcRunClaimRepository.maxAttempts} 共用
+     * {@code agent.run.max-attempts} 配置，避免两层口径分裂：
+     * DB 允许领到第 N 次、循环却在第 3 次就以 MODEL_RETRY_EXHAUSTED 收敛。
+     * 既有 22 参构造器保持默认 3，测试不受影响。
+     */
+    public RunExecutionLoop(@NonNull ObservableModelGateway modelGateway,
+                             @NonNull RunClaimPort claimPort,
+                             @NonNull ToolInvocationGate toolGate,
+                             @NonNull Duration leaseDuration,
+                             @NonNull String workerId,
+                             @NonNull PromptGuard promptGuard,
+                             @Nullable RunEventPort eventPort,
+                             @Nullable InFlightDelegationAdopter adopter,
+                             int contextTokenBudget,
+                             @Nullable TenantLifecycleProbe lifecycleProbe,
+                             @Nullable RunStepPort stepPort,
+                             @Nullable RiskEventPort riskEventPort,
+                             @Nullable ExecutionObserverChain observerChain,
+                             @Nullable ExecutorService preemptionExecutor,
+                             @Nullable BudgetPort budget,
+                             @Nullable ModelPricingPolicy pricing,
+                             @Nullable RunContinuation continuation,
+                             @Nullable MemoryRecallService memoryRecallService,
+                             @Nullable MemoryConsolidator memoryConsolidator,
+                             @Nullable MessageSender traceSender,
+                             @Nullable RunMessagePort messagePort,
+                             @Nullable RequestAssemblyPort requestAssemblyPort,
+                             int maxAttempts) {
+        this(modelGateway, claimPort, toolGate, leaseDuration, workerId, promptGuard, eventPort,
+                adopter, contextTokenBudget, lifecycleProbe, stepPort, riskEventPort, observerChain,
+                preemptionExecutor, budget, pricing, continuation, memoryRecallService,
+                memoryConsolidator, traceSender, messagePort, requestAssemblyPort);
+        this.maxAttempts = positiveAttempts(maxAttempts);
+    }
+
+    /**
      * 执行一次已领取的任务。
      *
      * @param task      D2 已领取的任务（含 fencingToken）

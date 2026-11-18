@@ -312,9 +312,12 @@ public class RunRecoverySweeper {
         log.warn("恢复执行返回可重试失败，收敛 Run 为 FAILED: runId={}, tenant={}",
                 task.runId(), tenantId);
         try {
+            // ⚠️ 不谎报「重试次数已达上限」：能返回 RETRYABLE_FAILURE 恰恰说明
+            //    仍有重试额度（超限行已被 claimTasks 的 failOverCapSql 排除）。
+            //    真实原因是「恢复路径没有 MQ 重投通道」，用专属终态码如实归因。
             claimPort.commitResult(tenantId, task.runId(), task.fencingToken(),
-                    "FAILED", RunExecutionLoop.failurePayload("重试次数已达上限"),
-                    "MAX_ATTEMPTS_EXCEEDED");
+                    "FAILED", RunExecutionLoop.failurePayload("恢复路径无重投通道，可重试失败直接收敛"),
+                    "RECOVERY_RETRY_UNAVAILABLE");
         } catch (RuntimeException ce) {
             log.warn("恢复 Run 兜底收敛失败（可能已被接管）: runId={}, cause={}",
                     task.runId(), ce.toString());
