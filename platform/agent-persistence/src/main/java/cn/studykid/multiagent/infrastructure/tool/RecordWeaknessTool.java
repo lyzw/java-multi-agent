@@ -180,13 +180,19 @@ public class RecordWeaknessTool implements ToolHandler {
             log.warn("幂等键格式不符，无法对账，转人工: key={}", idempotencyKey);
             return null;
         }
-        Optional<String> found = repository.reconcileWeakness(
-                context.tenantId(),
-                // ⚠️ 2026-11-17：键的各段是**编码后**的（IdempotencyKey.encodePart），
-                //    还原时必须解码，否则含斜杠的知识点会被解成错值。
-                cn.studykid.multiagent.core.idempotency.IdempotencyKey.decodePart(parts[0]),
-                cn.studykid.multiagent.core.idempotency.IdempotencyKey.decodePart(parts[1]),
-                cn.studykid.multiagent.core.idempotency.IdempotencyKey.decodePart(parts[2]));
+        // ⚠️ 2026-11-17：键的各段是**编码后**的（IdempotencyKey.encodePart），
+        //    还原时必须解码，否则含斜杠的知识点会被解成错值。
+        //    但 "%25" 也可能是旧键字面文本 → 知识点用双候选：先解码值、再原值，
+        //    避免因解码误把旧键查成 ABSENT（不改键格式，在途幂等语义不变）。
+        String studentId = cn.studykid.multiagent.core.idempotency.IdempotencyKey.decodePart(parts[0]);
+        String runId = cn.studykid.multiagent.core.idempotency.IdempotencyKey.decodePart(parts[1]);
+        Optional<String> found = Optional.empty();
+        for (String kp : cn.studykid.multiagent.core.idempotency.IdempotencyKey.decodeCandidates(parts[2])) {
+            found = repository.reconcileWeakness(context.tenantId(), studentId, runId, kp);
+            if (found.isPresent()) {
+                break;
+            }
+        }
         if (found.isEmpty()) {
             // 确认不存在 → RECONCILED_ABSENT（调用方据此处置）
             return ToolResult.of("{\"reconciled\":\"ABSENT\"}");

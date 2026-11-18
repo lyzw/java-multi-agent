@@ -154,6 +154,21 @@ class IdempotencyProtocolTest {
         }
 
         @Test
+        @DisplayName("⚠️ 历史键字面 %25：对账用双候选，解码值与原值都给出")
+        void decodeCandidatesForLegacyLiteralPercent() {
+            // "%25" 既是 encodePart("%") 也可能是旧键字面文本。
+            // 对账端必须同时拿到两个候选，先解码值、再原值，避免误查成 ABSENT。
+            assertThat(IdempotencyKey.decodeCandidates("完成率%25"))
+                    .containsExactly("完成率%", "完成率%25");
+            // 无歧义时只有一个候选，避免重复查询。
+            assertThat(IdempotencyKey.decodeCandidates("一元二次方程"))
+                    .containsExactly("一元二次方程");
+            // 新键编码内容：解码值优先。
+            assertThat(IdempotencyKey.decodeCandidates("h=-b%2F2a"))
+                    .containsExactly("h=-b/2a", "h=-b%2F2a");
+        }
+
+        @Test
         @DisplayName("保留期默认 24 小时")
         void retention() {
             assertThat(IdempotencyKey.DEFAULT_RETENTION).hasHours(24);

@@ -95,8 +95,17 @@ public class ToolOperationReconciliationService {
             return Outcome.DEFERRED;
         }
 
-        var found = studentData.reconcileWeakness(
-                tenantId, key.studentId(), key.runId(), key.knowledgePoint());
+        // ⚠️ 知识点候选：新键用解码值、旧键（字面含 %25/%2F）用原值。
+        //    "%25" 既是 encodePart("%") 也可能是旧键字面，仅凭字符串无法判定，
+        //    故依次尝试，绝不因解码把旧键查成 ABSENT。
+        java.util.Optional<String> found = java.util.Optional.empty();
+        for (String kp : key.knowledgePointCandidates()) {
+            found = studentData.reconcileWeakness(
+                    tenantId, key.studentId(), key.runId(), kp);
+            if (found.isPresent()) {
+                break;
+            }
+        }
 
         if (found.isPresent()) {
             ledger.reconcile(tenantId, op.operationId(),
@@ -126,7 +135,8 @@ public class ToolOperationReconciliationService {
      *
      * @return 不可解析返回 {@code null}（转人工）
      */
-    private record ParsedKey(String studentId, String runId, String knowledgePoint) { }
+    private record ParsedKey(String studentId, String runId,
+                             java.util.List<String> knowledgePointCandidates) { }
 
     private ParsedKey parseRecordWeaknessKey(String composite) {
         // composite 格式：tool.record_weakness:<studentId>/<runId>/<knowledgePoint>
@@ -140,6 +150,6 @@ public class ToolOperationReconciliationService {
         return new ParsedKey(
                 IdempotencyKey.decodePart(parts[0].substring("tool.record_weakness:".length())),
                 IdempotencyKey.decodePart(parts[1]),
-                IdempotencyKey.decodePart(parts[2]));
+                IdempotencyKey.decodeCandidates(parts[2]));
     }
 }

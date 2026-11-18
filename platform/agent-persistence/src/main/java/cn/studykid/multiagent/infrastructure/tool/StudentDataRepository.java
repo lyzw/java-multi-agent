@@ -279,8 +279,22 @@ public class StudentDataRepository {
             ps.setString(2, runId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    grade = readText(rs.getString(1), "grade");
-                    subject = readText(rs.getString(1), "subject");
+                    // ⚠️ 只解析一次 input_payload：grade/subject 从同一棵 JSON 树取，
+                    //    不要对同一文本做两次 MAPPER.readTree。解析失败 = 取不到 → 不建档、绝不猜值。
+                    String raw = rs.getString(1);
+                    if (raw != null && !raw.isBlank()) {
+                        try {
+                            var payload = MAPPER.readTree(raw);
+                            if (payload != null && payload.isObject()) {
+                                grade = textField(payload, "grade");
+                                subject = textField(payload, "subject");
+                            }
+                        } catch (RuntimeException e) {
+                            // 与原 readText 一致：解析失败走「不建档」分支，grade/subject 保持 null。
+                            grade = null;
+                            subject = null;
+                        }
+                    }
                 }
             }
         }
@@ -323,25 +337,15 @@ public class StudentDataRepository {
     }
 
     /** 从 Run 输入 JSON 里取一个文本字段；取不到返回 null。 */
-    private static @Nullable String readText(@Nullable String json, @NonNull String field) {
-        if (json == null || json.isBlank()) {
+    /** 从已解析的 JSON 节点取文本字段（trim，空串归一为 null）。 */
+    private static @Nullable String textField(
+            tools.jackson.databind.JsonNode node, @NonNull String field) {
+        var value = node.path(field);
+        if (value == null || !value.isTextual()) {
             return null;
         }
-        try {
-            var node = MAPPER.readTree(json);
-            if (node == null || !node.isObject()) {
-                return null;
-            }
-            var value = node.path(field);
-            if (value == null || !value.isTextual()) {
-                return null;
-            }
-            String text = value.asString();
-            return text == null || text.isBlank() ? null : text.trim();
-        } catch (RuntimeException e) {
-            // ⚠️ 解析失败 = 取不到年级/学科 → 走「不建档」分支，绝不猜值。
-            return null;
-        }
+        String text = value.asString();
+        return text == null || text.isBlank() ? null : text.trim();
     }
 
     private Optional<String> findExisting(Connection conn, String tenantId, String studentId,

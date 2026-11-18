@@ -298,6 +298,26 @@ public record IdempotencyKey(@NonNull String namespace, @NonNull String keyValue
         return part.replace("%2F", SEPARATOR).replace("%25", "%");
     }
 
+    /**
+     * 解码候选值（第一优先 = 新格式解码，第二优先 = 原始字面）。
+     *
+     * <p>⚠️ <b>为什么需要两个候选</b>：{@code "%25"} 既是 {@code encodePart("%")} 的结果，
+     * 也可能是 2026-11-17 之前旧键里的<b>字面文本</b>。仅凭字符串无法判定来源，
+     * 强行 {@link #decodePart} 会把旧键的「完成率%25」误转成「完成率%」，
+     * 导致对账按错误的知识点查不到记录。
+     *
+     * <p>因此<b>对账消费端</b>应依次尝试两个候选：先用解码值（新键），
+     * 未命中再回退原值（旧键）。本方法<b>不改变键格式</b>，在途键的幂等语义不受影响。
+     *
+     * @return 两个候选；若解码后与原值相同则只返回一个（避免重复查询）
+     */
+    public static java.util.List<@NonNull String> decodeCandidates(@NonNull String part) {
+        String decoded = decodePart(part);
+        return decoded.equals(part)
+                ? java.util.List.of(part)
+                : java.util.List.of(decoded, part);
+    }
+
     /** 唯一约束比对用的复合形式：{@code namespace:keyValue}。 */
     public @NonNull String composite() {
         return namespace + ":" + keyValue;
