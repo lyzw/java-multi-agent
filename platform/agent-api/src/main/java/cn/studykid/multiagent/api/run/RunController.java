@@ -145,15 +145,24 @@ public class RunController {
         //     从验签 principalId 查库派生权威 studentId，覆盖/补齐 input.studentId。
         //     这样「登录名即用户名」→ 后端认人 → 画像/薄弱点写入同一个匿名编号，
         //     学生无法冒充他人、也无需再知道 stu_ 格式。
+        //     ⚠️ fail-closed：PrincipalStore 已装配时，查不到绑定也必须**剔除**
+        //     请求体自带的 studentId —— 否则迁移补丁未应用 / 非学生主体时，
+        //     客户端手填的 stu_xxx 会原样进入下游，冒充他人写薄弱点。
+        //     stu_ 前缀绕开学号扫描、又符合 RecordWeaknessTool 的格式，
+        //     是真实的越权写通道，绝不能因为「查不到就放行」而留下。
         CreateRunRequest effective = request;
         if (principals != null) {
             var sid = principals.findStudentId(context.tenantId(), context.principalId());
+            java.util.Map<String, Object> merged =
+                    new java.util.LinkedHashMap<>(request.input());
             if (sid.isPresent() && !sid.get().isBlank()) {
-                java.util.Map<String, Object> merged =
-                        new java.util.LinkedHashMap<>(request.input());
                 merged.put("studentId", sid.get());
-                effective = request.withInput(merged);
+            } else {
+                merged.remove("studentId");
+                log.warn("身份派生未绑定，已剔除请求体 studentId: tenant={}, principal={}",
+                        context.tenantId(), context.principalId());
             }
+            effective = request.withInput(merged);
         }
 
         // 1) 内容合规：拒绝明显可识别信息（纵深防御）

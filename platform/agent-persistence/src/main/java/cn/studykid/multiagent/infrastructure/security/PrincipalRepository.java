@@ -59,6 +59,32 @@ public class PrincipalRepository implements PrincipalStore {
     // ── 查询 ────────────────────────────────────────────────────
 
     /**
+     * 登录查询：<b>携带</b> {@code student_id}，让认证层无需再单独查一次库。
+     *
+     * <p>⚠️ 该列由迁移补丁 {@code patch_platform_principal_student_id.sql} 添加。
+     * 为兼容尚未打补丁的库，这里做<b>一次性安全降级</b>：首次因「列不存在」失败时，
+     * 把 {@link #studentIdColumnAbsent} 置位并回退到不含该列的旧 SQL，此后一律走旧 SQL。
+     * 这样补丁应用后登录只需一次查询（快路径真正生效），补丁缺失时登录主链路也不被拖垮。
+     */
+    private static final String SQL_FIND_BY_LOGIN = """
+            SELECT principal_id, tenant_id, login_name, password_hash, display_name,
+                   status, failed_attempts, locked_until, authz_version, student_id
+            FROM principal
+            WHERE tenant_id = ?::uuid AND login_name = ?
+            """;
+
+    /** 迁移补丁应用前的兼容查询（无 student_id 列）。 */
+    private static final String SQL_FIND_BY_LOGIN_LEGACY = """
+            SELECT principal_id, tenant_id, login_name, password_hash, display_name,
+                   status, failed_attempts, locked_until, authz_version
+            FROM principal
+            WHERE tenant_id = ?::uuid AND login_name = ?
+            """;
+
+    /** student_id 列是否缺失（迁移补丁未应用）；volatile 保证跨线程可见。 */
+    private volatile boolean studentIdColumnAbsent = false;
+
+    /**
      * 按登录名查账号。
      *
      * @return 不存在时返回 {@link Optional#empty()}
@@ -74,30 +100,39 @@ public class PrincipalRepository implements PrincipalStore {
             return Optional.empty();
         }
 
-        // ⚠️ 刻意**不**在登录查询里 SELECT student_id：
-        //    该列由迁移补丁 patch_platform_principal_student_id.sql 添加，
-        //    在补丁尚未应用的库上，若在此处直接引用会让**每一次登录都失败**
-        //    （column does not exist）。登录是主链路，不能被可选列拖垮。
-        //    学生编号改为由 {@link #findStudentId} 单独查询（缺失时安全降级）。
-        String sql = """
-                SELECT principal_id, tenant_id, login_name, password_hash, display_name,
-                       status, failed_attempts, locked_until, authz_version
-                FROM principal
-                WHERE tenant_id = ?::uuid AND login_name = ?
-                """;
+        boolean withStudentId = !studentIdColumnAbsent;
+        String sql = withStudentId ? SQL_FIND_BY_LOGIN : SQL_FIND_BY_LOGIN_LEGACY;
         try (Connection conn = tenantConnection(tenantId)) {
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, tenantId);
                 ps.setString(2, loginName);
                 try (ResultSet rs = ps.executeQuery()) {
-                    PrincipalRecord record = rs.next() ? map(rs) : null;
+                    PrincipalRecord record = rs.next() ? map(rs, withStudentId) : null;
                     conn.rollback();
                     return Optional.ofNullable(record);
                 }
             }
         } catch (SQLException e) {
+            // ⚠️ 列不存在（PG SQLState 42703）= 迁移补丁未应用：一次性降级到旧 SQL。
+            //    其余 SQL 异常维持原 fail-closed（抛异常）语义，不吞。
+            if (withStudentId && isUndefinedColumn(e)) {
+                log.warn("principal.student_id 列不存在（迁移补丁未应用），登录查询降级为不含该列: {}",
+                        e.getMessage());
+                studentIdColumnAbsent = true;
+                return findByLogin(tenantId, loginName);
+            }
             throw new IllegalStateException("查询账号失败", e);
         }
+    }
+
+    /** 判定是否为「列不存在」（PG undefined_column = 42703），沿异常链查找。 */
+    private static boolean isUndefinedColumn(SQLException e) {
+        for (SQLException cur = e; cur != null; cur = cur.getNextException()) {
+            if ("42703".equals(cur.getSQLState())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -293,8 +328,10 @@ public class PrincipalRepository implements PrincipalStore {
         return conn;
     }
 
-    private PrincipalRecord map(ResultSet rs) throws SQLException {
+    private PrincipalRecord map(ResultSet rs, boolean withStudentId) throws SQLException {
         Timestamp lockedUntil = rs.getTimestamp("locked_until");
+        // ⚠️ withStudentId=false（补丁未应用的兼容查询）时列不存在，不能误取。
+        String studentId = withStudentId ? rs.getString("student_id") : null;
         return new PrincipalRecord(
                 rs.getString("principal_id"),
                 rs.getString("tenant_id"),
@@ -305,9 +342,7 @@ public class PrincipalRepository implements PrincipalStore {
                 rs.getInt("failed_attempts"),
                 lockedUntil == null ? null : lockedUntil.toInstant(),
                 rs.getLong("authz_version"),
-                // ⚠️ 登录查询刻意不取 student_id（见 findByLogin 的说明），
-                //    这里恒为 null；学生编号由 findStudentId 单独取。
-                null);
+                studentId);
     }
 
     /**

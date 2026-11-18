@@ -20,7 +20,6 @@ import cn.studykid.multiagent.api.security.PlatformSecurity;
 import cn.studykid.multiagent.core.tenant.TenantRegistry.PrincipalRow;
 import cn.studykid.multiagent.ports.persistence.AdminTenantPort;
 import cn.studykid.multiagent.ports.security.IdentityDomains;
-import cn.studykid.multiagent.ports.security.PrincipalStore;
 import cn.studykid.multiagent.ports.security.Namespaces;
 import cn.studykid.multiagent.ports.security.PlatformPrincipal;
 
@@ -45,17 +44,13 @@ public class PlatformExecutionTicketController {
     private final PlatformExecutionTicketService tickets;
     private final AdminTenantPort principals;
     private final PlatformSecurity security;
-    /** 主体存储：用于取学生的匿名业务编号（身份改造 2026-11-17）。 */
-    private final PrincipalStore principalStore;
 
     public PlatformExecutionTicketController(PlatformExecutionTicketService tickets,
                                             AdminTenantPort principals,
-                                            PlatformSecurity security,
-                                            PrincipalStore principalStore) {
+                                            PlatformSecurity security) {
         this.tickets = tickets;
         this.principals = principals;
         this.security = security;
-        this.principalStore = principalStore;
     }
 
     /**
@@ -94,24 +89,16 @@ public class PlatformExecutionTicketController {
             PlatformPrincipal principal,
             @PathVariable String tenantId) {
         security.require(principal, Namespaces.Platform.TENANT_READ, "tenant", tenantId);
+        // ⚠️ 身份改造（2026-11-17）：补上**学生业务编号** ——
+        //    老师按「登录名（= 学生用户名）」选人，同时能核对它绑定的
+        //    匿名编号是否与该账号的画像/薄弱点一致。
+        //    ⚠️ 编号由 AdminTenantRepository.listPrincipals 在一条 SQL 里带出
+        //    （补丁未应用时一次性降级为 null），**不再逐行 findStudentId**（N+1）。
+        //    非学生主体即使库里有值也不外显：列表只对学生角色展示编号。
         return ResponseEntity.ok(principals.listPrincipals(tenantId).stream()
-                // ⚠️ 身份改造（2026-11-17）：补上**学生业务编号** ——
-                //    老师按「登录名（= 学生用户名）」选人，同时能核对它绑定的
-                //    匿名编号是否与该账号的画像/薄弱点一致。
-                //    ⚠️ 逐个查（findStudentId 走租户内 RLS 查询）：
-                //    成员列表规模是租户级（数十条），不是全表扫描；
-                //    且该查询在迁移补丁未应用时**安全降级**为「未绑定」，
-                //    不会让整个列表 500。
-                .map(row -> TenantPrincipalResponse.of(row, studentIdOf(tenantId, row)))
+                .map(row -> TenantPrincipalResponse.of(row,
+                        row.roles().contains("STUDENT") ? row.studentId() : null))
                 .toList());
-    }
-
-    /** 取该主体的学生业务编号；未绑定或列不存在时为 null。 */
-    private @Nullable String studentIdOf(String tenantId, PrincipalRow row) {
-        if (!row.roles().contains("STUDENT")) {
-            return null;
-        }
-        return principalStore.findStudentId(tenantId, row.principalId()).orElse(null);
     }
 
     // ── 响应 / 请求记录 ────────────────────────────────────
@@ -154,8 +141,8 @@ public class PlatformExecutionTicketController {
         /**
          * 带学生业务编号的构造（身份改造 2026-11-17）。
          *
-         * ⚠️ 编号来自 {@code PrincipalStore.findStudentId}（逐个查），
-         *    而不是列表 SQL —— 后者在迁移补丁未应用的库上会直接 500。
+         * ⚠️ 编号由 {@code AdminTenantRepository.listPrincipals} 在列表 SQL 中一次性带出
+         *    （补丁未应用时降级为 null），不再逐行 findStudentId。
          */
         static TenantPrincipalResponse of(PrincipalRow row, @Nullable String studentId) {
             return new TenantPrincipalResponse(row.principalId(), row.loginName(),

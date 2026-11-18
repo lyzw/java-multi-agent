@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -30,6 +31,7 @@ import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.security.AccessDeniedException;
 import cn.studykid.multiagent.ports.security.AuthorizationService;
+import cn.studykid.multiagent.ports.security.PrincipalStore;
 import cn.studykid.multiagent.application.prompt.PromptGuard;
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 
@@ -509,7 +511,96 @@ class RunControllerTest {
         }
     }
 
+    @Nested
+    @DisplayName("⚠️ 身份派生（PrincipalStore）：studentId 只信登录态，查不到必须剔除")
+    class IdentityDerivation {
+
+        /** PrincipalStore 替身：只让 findStudentId 返回脚本值，其余方法不参与本测试。 */
+        private cn.studykid.multiagent.ports.security.PrincipalStore storeWith(
+                java.util.Optional<String> sid) {
+            return new cn.studykid.multiagent.ports.security.PrincipalStore() {
+                @Override public Optional<PrincipalStore.PrincipalRecord> findByLogin(String t, String l) {
+                    return Optional.empty();
+                }
+                @Override public boolean verifyPassword(PrincipalStore.PrincipalRecord r, String p, Instant n) {
+                    return false;
+                }
+                @Override public void recordFailure(PrincipalStore.PrincipalRecord r, Instant n, int m, Duration d) { }
+                @Override public void recordSuccess(PrincipalStore.PrincipalRecord r, Instant n) { }
+                @Override public void revokeAuthorization(PrincipalStore.PrincipalRecord r, Instant n) { }
+                @Override public Set<String> findRoles(String t, String p) { return Set.of(); }
+                @Override public Optional<String> findStudentId(String t, String p) { return sid; }
+            };
+        }
+
+        @Test
+        @DisplayName("✅ 查到绑定 → 权威 studentId 覆盖请求体手填值")
+        void boundStudentIdOverridesClientValue() {
+            var capture = new CapturingRunCreationService();
+            var controller = new RunController(capture, allowAll(), retentionGate, principal,
+                    ALLOW_LIMIT, new PromptGuard(),
+                    storeWith(Optional.of("stu_a1b2c3d4e5f6g7h8")));
+
+            var response = controller.createRun(requestWithInput(Map.of(
+                    "question", "解方程", "studentId", "stu_z9y8x7w6v5u4t3s2")));
+
+            assertThat(response.getStatusCode().value()).isEqualTo(201);
+            assertThat(capture.lastInput)
+                    .as("⚠️ 必须覆盖，否则学生可冒充他人写薄弱点")
+                    .containsEntry("studentId", "stu_a1b2c3d4e5f6g7h8");
+        }
+
+        @Test
+        @DisplayName("⚠️⚠️ 查不到绑定 → 剔除请求体 studentId（fail-closed，禁止冒充）")
+        void unboundRemovesClientStudentId() {
+            var capture = new CapturingRunCreationService();
+            var controller = new RunController(capture, allowAll(), retentionGate, principal,
+                    ALLOW_LIMIT, new PromptGuard(), storeWith(Optional.empty()));
+
+            var response = controller.createRun(requestWithInput(Map.of(
+                    "question", "解方程", "studentId", "stu_z9y8x7w6v5u4t3s2")));
+
+            assertThat(response.getStatusCode().value()).isEqualTo(201);
+            assertThat(capture.lastInput)
+                    .as("⚠️⚠️ 未绑定时必须剔除客户端 studentId，否则可冒充他人写薄弱点")
+                    .doesNotContainKey("studentId");
+        }
+
+        @Test
+        @DisplayName("⚠️ 空串绑定同样视为未绑定（isBlank 分支）")
+        void blankStudentIdTreatedAsUnbound() {
+            var capture = new CapturingRunCreationService();
+            var controller = new RunController(capture, allowAll(), retentionGate, principal,
+                    ALLOW_LIMIT, new PromptGuard(), storeWith(Optional.of("  ")));
+
+            controller.createRun(requestWithInput(Map.of(
+                    "question", "解方程", "studentId", "stu_z9y8x7w6v5u4t3s2")));
+
+            assertThat(capture.lastInput).doesNotContainKey("studentId");
+        }
+    }
+
     // ── 测试替身 ────────────────────────────────────────────────────
+
+    /** 用例替身：记录最后一次 createRun 的 input —— 身份派生测试用。 */
+    private static class CapturingRunCreationService
+            extends cn.studykid.multiagent.application.run.RunCreationService {
+        private Map<String, Object> lastInput;
+
+        CapturingRunCreationService() {
+            super(null, new FixedSnapshotResolver(SNAPSHOT_ID), new NoopTransactionRunner(), CLOCK);
+        }
+
+        @Override
+        public CreateRunResult createRun(TenantContext context, String agentId,
+                                         cn.studykid.multiagent.core.idempotency.IdempotencyKey key,
+                                         Map<String, Object> input,
+                                         Long timeoutMs,
+                                         java.math.BigDecimal budgetAmount) {
+            this.lastInput = input;
+            return new CreateRunResult(UUID.randomUUID().toString(), false);
+        }
+    }
 
     /** 用例替身：记录是否被调用。 */
     private static class CountingRunCreationService

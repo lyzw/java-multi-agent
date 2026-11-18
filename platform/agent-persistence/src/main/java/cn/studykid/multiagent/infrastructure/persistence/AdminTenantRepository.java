@@ -16,6 +16,8 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
@@ -40,7 +42,44 @@ import cn.studykid.multiagent.ports.persistence.AdminTenantPort;
 @Repository
 public class AdminTenantRepository implements AdminTenantPort {
 
+    private static final Logger log = LoggerFactory.getLogger(AdminTenantRepository.class);
+
     private final DataSource dataSource;
+
+    /**
+     * 成员列表 SQL：<b>一次性携带 student_id</b>，消除控制器逐行 findStudentId 的 N+1。
+     * 补丁（patch_platform_principal_student_id.sql）未应用时降级到 {@link #LIST_PRINCIPALS_LEGACY}。
+     */
+    private static final String LIST_PRINCIPALS_WITH_STUDENT_ID = """
+            SELECT p.principal_id, p.login_name, p.display_name, p.status,
+                   p.authz_version, p.student_id,
+                   COALESCE(array_agg(pr.role ORDER BY pr.role)
+                            FILTER (WHERE pr.role IS NOT NULL), '{}') AS roles
+            FROM principal p
+            LEFT JOIN principal_role pr
+                   ON pr.tenant_id = p.tenant_id AND pr.principal_id = p.principal_id
+            WHERE p.tenant_id = ?::uuid
+            GROUP BY p.principal_id, p.login_name, p.display_name, p.status,
+                     p.authz_version, p.student_id
+            ORDER BY p.login_name
+            """;
+
+    /** 迁移补丁应用前的兼容查询（无 student_id 列）。 */
+    private static final String LIST_PRINCIPALS_LEGACY = """
+            SELECT p.principal_id, p.login_name, p.display_name, p.status,
+                   p.authz_version,
+                   COALESCE(array_agg(pr.role ORDER BY pr.role)
+                            FILTER (WHERE pr.role IS NOT NULL), '{}') AS roles
+            FROM principal p
+            LEFT JOIN principal_role pr
+                   ON pr.tenant_id = p.tenant_id AND pr.principal_id = p.principal_id
+            WHERE p.tenant_id = ?::uuid
+            GROUP BY p.principal_id, p.login_name, p.display_name, p.status,
+                     p.authz_version
+            ORDER BY p.login_name
+            """;
+
+    private volatile boolean studentIdColumnAbsent = false;
 
     public AdminTenantRepository(@NonNull DataSource dataSource) {
         this.dataSource = dataSource;
@@ -168,23 +207,8 @@ public class AdminTenantRepository implements AdminTenantPort {
      */
     @Override
     public List<PrincipalRow> listPrincipals(@NonNull String tenantId) {
-        String sql = """
-                -- ⚠️ 刻意**不**引用 student_id：该列由迁移补丁添加，
-                --    补丁未应用的库上直接引用会让**整个成员列表 500**
-                --    （column does not exist）。它是可选信息，不是列表的必需项。
-                --    需要该字段时走 PrincipalStore.findStudentId。
-                SELECT p.principal_id, p.login_name, p.display_name, p.status,
-                       p.authz_version,
-                       COALESCE(array_agg(pr.role ORDER BY pr.role)
-                                FILTER (WHERE pr.role IS NOT NULL), '{}') AS roles
-                FROM principal p
-                LEFT JOIN principal_role pr
-                       ON pr.tenant_id = p.tenant_id AND pr.principal_id = p.principal_id
-                WHERE p.tenant_id = ?::uuid
-                GROUP BY p.principal_id, p.login_name, p.display_name, p.status,
-                         p.authz_version
-                ORDER BY p.login_name
-                """;
+        boolean withStudentId = !studentIdColumnAbsent;
+        String sql = withStudentId ? LIST_PRINCIPALS_WITH_STUDENT_ID : LIST_PRINCIPALS_LEGACY;
         List<PrincipalRow> out = new ArrayList<>();
         try (TenantConnectionLease lease = openTenant(tenantId)) {
             Connection conn = lease.connection();
@@ -199,15 +223,31 @@ public class AdminTenantRepository implements AdminTenantPort {
                                 rs.getString("status"),
                                 rs.getLong("authz_version"),
                                 parseRoles(rs),
-                                // ⚠️ 见上方说明：列表查询不取 student_id（迁移补丁未应用时不致 500）。
-                                null));
+                                // ⚠️ 补丁未应用（降级查询）时列不存在，误取会抛 SQLException。
+                                withStudentId ? rs.getString("student_id") : null));
                     }
                 }
             }
         } catch (SQLException e) {
+            if (withStudentId && isUndefinedColumn(e)) {
+                log.warn("principal.student_id 列不存在（迁移补丁未应用），成员列表降级为不含该列: {}",
+                        e.getMessage());
+                studentIdColumnAbsent = true;
+                return listPrincipals(tenantId);
+            }
             throw new IllegalStateException("列出租户主体失败", e);
         }
         return out;
+    }
+
+    /** 判定是否为「列不存在」（PG undefined_column = 42703），沿异常链查找。 */
+    private static boolean isUndefinedColumn(SQLException e) {
+        for (SQLException cur = e; cur != null; cur = cur.getNextException()) {
+            if ("42703".equals(cur.getSQLState())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

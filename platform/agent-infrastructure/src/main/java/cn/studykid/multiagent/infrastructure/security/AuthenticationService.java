@@ -130,6 +130,8 @@ public class AuthenticationService {
         //    前端据此展示「当前学生」并**不再让用户手填编号**；后端仍以验签令牌里的
         //    principalId 为唯一可信身份来源，在 Run 创建时重新查库派生 studentId，
         //    本响应仅作 UI 展示，不作为写入依据。
+        // ⚠️ findByLogin 已在补丁应用后携带 student_id（快路径生效）；
+        //    仅当列缺失降级 / 非学生主体时才回退到单独查询。
         String studentId = record.studentId();
         if (studentId == null) {
             studentId = principals.findStudentId(record.tenantId(), record.principalId()).orElse(null);
