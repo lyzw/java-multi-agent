@@ -93,7 +93,14 @@ public class ChatAuditRecorder implements ChatAuditRecorderPort {
         private int httpStatus;
         private boolean bodyTruncated;
         private boolean answerTruncated;
+        /** 已真正写入（提交给 writer）：之后一切写入都无效。 */
         private volatile boolean finished;
+        /** 终态已登记（业务侧关闭）：此后不再接受帧 / 分片 / 结果。 */
+        private volatile boolean terminalRegistered;
+        /** HTTP 侧事实（状态码 / 身份 / 原始 body）已补齐。 */
+        private volatile boolean sealed;
+        private @Nullable String terminalState;
+        private @Nullable ErrorInfo error;
         private int frameSeq;
         private int chunkSeq;
 
@@ -132,7 +139,7 @@ public class ChatAuditRecorder implements ChatAuditRecorderPort {
 
         @Override
         public void recordRequest(@Nullable RequestInfo info, boolean truncated) {
-            if (finished) {
+            if (terminalRegistered || finished) {
                 return;
             }
             try {
@@ -163,7 +170,7 @@ public class ChatAuditRecorder implements ChatAuditRecorderPort {
         @Override
         public void recordModelMessages(@Nullable String prompt,
                                         @NonNull List<ChatAuditEnvelope.Turn> messages) {
-            if (finished) {
+            if (terminalRegistered || finished) {
                 return;
             }
             try {
@@ -176,7 +183,7 @@ public class ChatAuditRecorder implements ChatAuditRecorderPort {
 
         @Override
         public void recordFrame(@NonNull String name, @Nullable String data) {
-            if (finished) {
+            if (terminalRegistered || finished) {
                 return;
             }
             try {
@@ -202,7 +209,7 @@ public class ChatAuditRecorder implements ChatAuditRecorderPort {
 
         @Override
         public void recordChunk(@NonNull String kind, @NonNull String text) {
-            if (finished) {
+            if (terminalRegistered || finished) {
                 return;
             }
             try {
@@ -224,7 +231,7 @@ public class ChatAuditRecorder implements ChatAuditRecorderPort {
 
         @Override
         public void setResult(@Nullable Result r) {
-            if (finished) {
+            if (terminalRegistered || finished) {
                 return;
             }
             try {
@@ -249,7 +256,31 @@ public class ChatAuditRecorder implements ChatAuditRecorderPort {
 
         @Override
         public void finish(@NonNull String terminalState, @Nullable ErrorInfo error) {
-            if (finished) {
+            if (terminalRegistered || finished) {
+                return;
+            }
+            terminalRegistered = true;
+            this.terminalState = terminalState;
+            this.error = error;
+            flushIfReady();
+        }
+
+        @Override
+        public void seal() {
+            sealed = true;
+            flushIfReady();
+        }
+
+        /**
+         * 两阶段收敛的提交点：<b>终态已登记 且 HTTP 侧事实已补齐</b>才真正写库。
+         *
+         * <p><b>⚠️ 为什么不能谁先到谁写</b>：SSE 把编排甩到虚拟线程，装饰器可能在
+         * HTTP 过滤器 {@code finally}（那里才补状态码 / 原始 body）之前收敛。
+         * 先到先写会产出「SUCCEEDED 但状态码 0、原始 body 为空」的残缺记录——
+         * 记录看起来完整，却还原不了客户端到底发了什么。
+         */
+        private void flushIfReady() {
+            if (finished || !sealed || !terminalRegistered) {
                 return;
             }
             finished = true;
@@ -259,7 +290,7 @@ public class ChatAuditRecorder implements ChatAuditRecorderPort {
                 ChatAuditEnvelope.Http http = new ChatAuditEnvelope.Http(
                         ctx.httpMethod(), ctx.requestUri(),
                         redactor.redactHeaders(ctx.headers()),
-                        httpStatus, startedAt);
+                        resolveHttpStatus(terminalState), startedAt);
                 ChatAuditEnvelope envelope = new ChatAuditEnvelope(
                         ctx.auditId(), ctx.traceId(), ctx.endpoint(), domain,
                         tenantId, principalId, startedAt, completed, duration,
@@ -273,11 +304,30 @@ public class ChatAuditRecorder implements ChatAuditRecorderPort {
         }
 
         /**
-         * 组装请求原文（三处来源合并，缺一不影响其它）。
+         * 收敛时的 HTTP 状态码。
          *
-         * <p>⚠️ 开关在这里统一裁决：{@code capture.rawRequestBody} / {@code
-         * capture.modelRequestMessages} 关闭时对应字段落 null，而不是「记了但前端不显示」。
+         * <p><b>⚠️ 这里存在真实竞态</b>：SSE 把编排甩到虚拟线程，装饰器可能在
+         * HTTP 过滤器的 {@code finally} 之前收敛，而状态码正是在那个 finally 里
+         * 才 {@code setHttpStatus(response.getStatus())}。直接落库会让「成功记录」带着
+         * 状态码 0，看起来像记录残缺。
+         *
+         * <p>补 {@code 200} 不是猜：能推出 SSE 帧就说明连接已以 200 建立
+         * （控制器固定返回 {@code ResponseEntity.ok()}，4xx/5xx 根本到不了编排器）。
+         * 其它终态不做任何补全——「没取到就留空」比编造一个状态码诚实。
          */
+        private int resolveHttpStatus(@NonNull String terminalState) {
+            if (httpStatus > 0) {
+                return httpStatus;
+            }
+            return "SUCCEEDED".equals(terminalState) ? 200 : 0;
+        }
+
+    /**
+     * 组装请求原文（三处来源合并，缺一不影响其它）。
+     *
+     * <p>⚠️ 开关在这里统一裁决：{@code capture.rawRequestBody} / {@code
+     * capture.modelRequestMessages} 关闭时对应字段落 null，而不是「记了但前端不显示」。
+     */
         private @Nullable RequestInfo assembleRequest() {
             boolean captureBody = config.capture().rawRequestBody();
             boolean captureModel = config.capture().modelRequestMessages();

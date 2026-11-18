@@ -104,8 +104,24 @@ public interface ChatAuditRecorderPort {
         /** 标记回答因超长被截断。 */
         void markAnswerTruncated();
 
-        /** 收敛终态并提交写入。幂等：多次调用只生效一次。 */
+        /**
+         * 收敛终态并提交写入。幂等：多次调用只生效一次。
+         *
+         * <p><b>⚠️ 只是「登记终态」，不一定立刻落库</b>：真正的提交还要等
+         * {@link #seal()}——HTTP 侧事实（状态码 / 原始 body）在过滤器 {@code finally}
+         * 才补齐，而 SSE 的装饰器可能在虚拟线程上先收敛。两阶段是必须的，
+         * 否则短流会出现「记录成功但状态码 0、原始 body 空」的残缺记录。
+         */
         void finish(@NonNull String terminalState, @Nullable ErrorInfo error);
+
+        /**
+         * HTTP 侧事实已补齐（状态码 / 身份 / 原始 body 都写完），可以落库了。
+         *
+         * <p>与 {@link #finish} 构成两阶段收敛：<b>两个条件都满足才提交</b>，
+         * 与到达顺序无关。缺任一个都不提交——宁可等到异步兜底，
+         * 也不写一条自相矛盾的记录。
+         */
+        void seal();
 
         /** 关闭态单例会话（所有方法 no-op）。 */
         Session NOOP = new Session() {
@@ -120,6 +136,7 @@ public interface ChatAuditRecorderPort {
             @Override public void setHttpStatus(int s) {}
             @Override public void markAnswerTruncated() {}
             @Override public void finish(@NonNull String s, @Nullable ErrorInfo e) {}
+            @Override public void seal() {}
         };
     }
 

@@ -153,6 +153,10 @@ public class ChatAuditWebFilter extends OncePerRequestFilter {
                 // body 只有下游读过之后才拿得到（请求流是一次性的），故在链尾取
                 RequestBodies.cachedBody(request).ifPresent(body ->
                         scope.setRawRequestBody(body, RequestBodies.isTruncated(request)));
+                // ⚠️ 两阶段收敛的第二阶段：HTTP 侧事实（状态码 / 身份 / 原始 body）到此补齐。
+                //    必须在收敛分支之前调用——SSE 的装饰器可能已经先登记了终态，
+                //    只有 seal 之后它才允许落库（否则记录会缺状态码与原文）。
+                scope.seal();
                 if (request.isAsyncStarted()) {
                     registerAsyncFallback(request, scope);
                 } else {
@@ -196,7 +200,17 @@ public class ChatAuditWebFilter extends OncePerRequestFilter {
             request.getAsyncContext().addListener(new AsyncListener() {
                 @Override
                 public void onComplete(AsyncEvent event) {
-                    scope.finish("SUCCEEDED", null);
+                    // ⚠️ 只有编排器真的接管过，异步结束才算成功。
+                    //    编排器未参与时（装饰器缺失 / 装配被熔断 / 控制器提前收尾）根本没有
+                    //    done 帧可依据——直接记 SUCCEEDED 会把「没跑起来」伪装成成功，
+                    //    这正是审计最能骗人的假绿。
+                    if (scope.orchestrated()) {
+                        scope.finish("SUCCEEDED", null);
+                    } else {
+                        scope.finish("FAILED", new ErrorInfo("stream",
+                                "STREAM_NOT_ORCHESTRATED",
+                                "异步结束但编排器未参与，无终帧可判定成功"));
+                    }
                 }
 
                 @Override

@@ -181,6 +181,10 @@ class AuditingAgentChatOrchestratorTest {
         @Override public void setResult(@Nullable Result r) { this.result = r; }
         @Override public void setHttpStatus(int status) { }
         @Override public void markAnswerTruncated() { }
+        /** 测试替身不区分两阶段：seal 无副作用（真实实现在 flushIfReady 里等它）。 */
+        @Override public void seal() {
+        }
+
         @Override public void finish(@NonNull String state, @Nullable ErrorInfo e) {
             if (finished) {
                 return;

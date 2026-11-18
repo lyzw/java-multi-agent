@@ -122,4 +122,13 @@ public final class ChatAuditScope {
     public void finish(@NonNull String terminalState, @Nullable ErrorInfo error) {
         session.finish(terminalState, error);
     }
+
+    /**
+     * HTTP 侧事实已补齐（过滤器 {@code finally} 里补完状态码 / 身份 / 原始 body 之后调用）。
+     *
+     * <p>与 {@link #finish} 构成两阶段收敛，见 {@code ChatAuditRecorderPort.Session#seal()}。
+     */
+    public void seal() {
+        session.seal();
+    }
 }
