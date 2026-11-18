@@ -516,32 +516,46 @@ export function AiChatPage(): JSX.Element {
         </Paragraph>
       </div>
 
+      {/*
+        ⚠️ L4（UI 评审 2026-11-17）：长篇技术说明默认折叠，首屏只留一句概述。
+           管理员进来第一眼应是操作区（通道 / 参数 / 输入框），不是整屏 API 枚举。
+           折叠仅改视觉层级，全文仍留在 DOM（测试与「展开核对」都成立）。
+      */}
       <Alert
         type="info"
         showIcon
         message="这条链路的诚实边界"
         description={
-          <>
-            1）<b>语料问答不是大模型对话</b>：回答由 <code>/api/v1/retrieval</code> +{' '}
-            <code>/api/v1/retrieval/generate</code> 产生，当前生成方式恒为{' '}
-            <b>EXCERPT_ASSEMBLY（逐字摘录装配）</b>，后端刻意未接 LLM；生成方式与引用会随每条回答展示。
-            <br />
-            2）<b>直接对话是真·LLM，但只是「管理员本人在聊」</b>：走平台会话令牌，租户取自令牌上下文，
-            后端不读取任何租户 Run 数据，与红线 R6「平台控制台不展示运行输出」不冲突。多轮上下文由本页维护并回传。
-            <br />
-            3）<b>不伪造进度</b>：语料问答按真实阶段增量渲染（检索 → 依据 → 回答）；直接对话的{' '}
-            <code>delta</code> 来自真实 token 流，二者都不编造打字机特效或进度百分比。传输标识{' '}
-            <code>{ragCorpusTransport.id}</code> ·{' '}
-            <Tag color="default" bordered={false}>
-              SYNC_PIPELINE
-            </Tag>{' '}
-            / <code>{DIRECT_GENERATOR_LABEL}</code>。
-            <br />
-            4）<b>回答排版只作用于直接对话</b>：LLM 输出按 Markdown + LaTeX 渲染
-            （<code>$…$</code> / <code>$$…$$</code> / <code>\[…\]</code> / <code>\(…\)</code>），
-            可切「原文」核对未重排的模型字节；<b>语料问答的逐字摘录一律原样显示</b>，
-            不把摘录里的符号解释成格式。
-          </>
+          <div className="ai-chat__honesty">
+            <p style={{ margin: 0 }}>
+              语料问答按教材原文逐字摘录、不是大模型自由生成；直接对话是真·LLM，但不读取任何租户运行输出。
+              需要接口级细节可展开查看。
+            </p>
+            <details className="ai-chat__honesty-detail">
+              <summary>展开技术细节</summary>
+              <div style={{ marginTop: 8 }}>
+                1）<b>语料问答不是大模型对话</b>：回答由 <code>/api/v1/retrieval</code> +{' '}
+                <code>/api/v1/retrieval/generate</code> 产生，当前生成方式恒为{' '}
+                <b>EXCERPT_ASSEMBLY（逐字摘录装配）</b>，后端刻意未接 LLM；生成方式与引用会随每条回答展示。
+                <br />
+                2）<b>直接对话是真·LLM，但只是「管理员本人在聊」</b>：走平台会话令牌，租户取自令牌上下文，
+                后端不读取任何租户 Run 数据，与红线 R6「平台控制台不展示运行输出」不冲突。多轮上下文由本页维护并回传。
+                <br />
+                3）<b>不伪造进度</b>：语料问答按真实阶段增量渲染（检索 → 依据 → 回答）；直接对话的{' '}
+                <code>delta</code> 来自真实 token 流，二者都不编造打字机特效或进度百分比。传输标识{' '}
+                <code>{ragCorpusTransport.id}</code> ·{' '}
+                <Tag color="default" bordered={false}>
+                  SYNC_PIPELINE
+                </Tag>{' '}
+                / <code>{DIRECT_GENERATOR_LABEL}</code>。
+                <br />
+                4）<b>回答排版只作用于直接对话</b>：LLM 输出按 Markdown + LaTeX 渲染
+                （<code>$…$</code> / <code>$$…$$</code> / <code>\[…\]</code> / <code>\(…\)</code>），
+                可切「原文」核对未重排的模型字节；<b>语料问答的逐字摘录一律原样显示</b>，
+                不把摘录里的符号解释成格式。
+              </div>
+            </details>
+          </div>
         }
       />
 
@@ -553,7 +567,7 @@ export function AiChatPage(): JSX.Element {
           type="warning"
           showIcon
           message="请先选择租户"
-          description="RAG 检索/生成端点强制要求 X-Tenant-Id 请求头，缺失后端返回 400（不是静默空结果）。未选租户时发送按钮不可用。"
+          description="语料问答需要知道查哪个租户的教材，选定后才能提问；未选时发送按钮不可用。"
         />
       )}
 

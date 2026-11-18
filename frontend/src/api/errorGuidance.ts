@@ -143,6 +143,15 @@ const QUOTA_EXHAUSTED_CODES: readonly string[] = [
   'MAX_ATTEMPTS_EXCEEDED',
 ]
 
+/**
+ * 崩溃恢复路径的终态：仍有重试额度，但恢复扫描没有 MQ 重投通道，故如实收敛。
+ * ⚠️ 是终态（不诱导「再试一次」），但根因不是额度耗尽，文案要区分。
+ */
+const RECOVERY_TERMINAL_CODES: readonly string[] = [
+  'RECOVERY_RETRY_UNAVAILABLE',
+  'RESUME_CONTINUATION_UNAVAILABLE',
+]
+
 /** 临时故障：换一次请求确实可能成功。 */
 const TRANSIENT_CODES: readonly string[] = [
   'MODEL_TIMEOUT',
@@ -159,6 +168,14 @@ const TRANSIENT_CODES: readonly string[] = [
   'NO_ASSISTANT_OUTPUT',
 ]
 
+/**
+ * 失败 Run 的指引。
+ *
+ * ⚠️ L5（UI 评审 2026-11-17）：advice 文案精简为「原因 + 下一步」两句，去掉重复啰嗦。
+ *    **是否附运行标识由调用方决定**：传 runId 才拼入（errorGuidance.test.ts 的消费契约）；
+ *    进度页 PageHead 已在首行显示「运行标识：<code>…</code>」，故它调用时**不传** runId，
+ *    避免正文再重复一遍完整 UUID（噪音、分散注意）。
+ */
 export function runFailureGuidance(
   errorCode: string | null | undefined,
   runId?: string,
@@ -180,7 +197,7 @@ export function runFailureGuidance(
     return {
       kind: 'service-config',
       reason: '服务配置尚未就绪',
-      advice: `这不是题目内容或服务临时波动造成的，而是租户服务配置未完成${ref}。重新发起只会再次失败；请联系管理员开通后，再重新分析这道题。`,
+      advice: `租户服务配置尚未完成${ref}，重新发起只会再次失败；请联系管理员开通后再分析这道题。`,
       canRetry: false,
       contactAdmin: true,
     }
@@ -196,7 +213,18 @@ export function runFailureGuidance(
       reason: isRateLimit
         ? '模型额度已用尽或调用过于频繁，本次分析未成功；请稍后再试或联系管理员'
         : '模型调用重试次数已达上限，本次分析未成功；请稍后再试或联系管理员',
-      advice: `这不是网络抖动或题目内容问题，而是模型额度或调用次数已耗尽${ref}。重试不会改变结果；请联系管理员恢复额度后再发起。`,
+      advice: `模型额度或调用次数已耗尽${ref}，重试不会改变结果；请联系管理员恢复额度后再发起。`,
+      canRetry: false,
+      contactAdmin: true,
+    }
+  }
+
+  if (RECOVERY_TERMINAL_CODES.includes(code)) {
+    // ⚠️ 终态、不诱导重试，但根因是「恢复路径无重投通道」，不是额度耗尽。
+    return {
+      kind: 'unknown',
+      reason: '本次执行在恢复后未能继续，已停止',
+      advice: `服务恢复后这次分析未能继续排队${ref}。请稍后重新发起；若反复出现请联系管理员。`,
       canRetry: false,
       contactAdmin: true,
     }
@@ -206,7 +234,7 @@ export function runFailureGuidance(
     return {
       kind: 'transient',
       reason: '这次分析临时未能完成',
-      advice: `可能是模型或服务临时不可用${ref}。可以用原题重新发起一次；若连续失败请联系管理员。`,
+      advice: `可能是模型或服务临时不可用${ref}，可以用原题重新发起；若连续失败请联系管理员。`,
       canRetry: true,
       contactAdmin: false,
     }

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Card,
@@ -11,6 +11,7 @@ import {
   App as AntApp,
   Modal,
   Select,
+  Tooltip,
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { ApiError } from '@/api/client'
@@ -39,6 +40,29 @@ const LIFECYCLE_COLOR: Record<string, string> = {
   DECOMMISSIONING: 'volcano',
   DECOMMISSIONED: 'red',
   CANCELLED: 'default',
+}
+
+/**
+ * L2（UI 评审 2026-11-17）：徽章统一为中文语义，枚举值保留在 tooltip 供管理员精确对应后端。
+ * ⚠️ 仅改「显示层」，筛选 value / nextActions / 状态机迁移仍用英文枚举，逻辑零改动。
+ */
+const LIFECYCLE_LABEL: Record<string, string> = {
+  PENDING_SETUP: '待开通',
+  ACTIVE: '已启用',
+  SUSPENDED: '已暂停',
+  DECOMMISSIONING: '退役中',
+  DECOMMISSIONED: '已退役',
+  CANCELLED: '已取消',
+}
+
+function lifecycleTag(s: string): JSX.Element {
+  return (
+    <Tooltip title={`生命周期枚举：${s}`}>
+      <Tag color={LIFECYCLE_COLOR[s] ?? 'default'}>
+        {LIFECYCLE_LABEL[s] ?? s}
+      </Tag>
+    </Tooltip>
+  )
 }
 
 /**
@@ -100,6 +124,17 @@ export function TenantRegistryPage(): JSX.Element {
 
   usePageTitle('租户管理')
 
+  /** L2/L3：各状态计数（供徽章图例与表格下方概览），随表格数据联动。 */
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const t of data) counts[t.lifecycleState] = (counts[t.lifecycleState] ?? 0) + 1
+    return counts
+  }, [data])
+  const configuredCount = useMemo(
+    () => data.filter((t) => t.plan != null && t.plan.trim() !== '').length,
+    [data],
+  )
+
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -157,7 +192,10 @@ export function TenantRegistryPage(): JSX.Element {
               style={{ width: 180 }}
               value={statusFilter}
               onChange={(v) => setStatusFilter(v)}
-              options={Object.keys(LIFECYCLE_COLOR).map((s) => ({ value: s, label: s }))}
+              options={Object.keys(LIFECYCLE_COLOR).map((s) => ({
+                value: s,
+                label: `${LIFECYCLE_LABEL[s] ?? s}（${s}）`,
+              }))}
             />
             <Button
               type="primary"
@@ -185,11 +223,20 @@ export function TenantRegistryPage(): JSX.Element {
             {
               title: '生命周期',
               dataIndex: 'lifecycleState',
-              render: (s: string) => (
-                <Tag color={LIFECYCLE_COLOR[s] ?? 'default'}>{s}</Tag>
-              ),
+              render: (s: string) => lifecycleTag(s),
             },
-            { title: '套餐', dataIndex: 'plan', render: (v: string | null) => v ?? '-' },
+            {
+              title: '套餐',
+              dataIndex: 'plan',
+              render: (v: string | null) =>
+                v != null && v.trim() !== '' ? (
+                  v
+                ) : (
+                  <Tooltip title="该租户尚未配置套餐">
+                    <Typography.Text type="secondary">未配置</Typography.Text>
+                  </Tooltip>
+                ),
+            },
             { title: '策略版本', dataIndex: 'effectivePolicyVersion', width: 100 },
             {
               title: '操作',
@@ -209,6 +256,30 @@ export function TenantRegistryPage(): JSX.Element {
             },
           ]}
         />
+
+        {/* L2/L3：图例 + 概览。既解释徽章与「未配置」含义，又填充表格下方空白。 */}
+        {!loading && data.length > 0 && (
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 16px',
+            marginTop: 16, paddingTop: 12, borderTop: '1px solid #f0f0f0',
+          }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              共 {data.length} 个租户 · 已配置套餐 {configuredCount} 个
+            </Typography.Text>
+            <Space size={[4, 8]} wrap>
+              {Object.keys(LIFECYCLE_COLOR).map((s) =>
+                (statusCounts[s] ?? 0) > 0 ? (
+                  <span key={s} style={{ whiteSpace: 'nowrap' }}>
+                    {lifecycleTag(s)} <Typography.Text type="secondary">{statusCounts[s]}</Typography.Text>
+                  </span>
+                ) : null,
+              )}
+            </Space>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              套餐「未配置」＝该租户尚未开通套餐
+            </Typography.Text>
+          </div>
+        )}
       </Card>
 
       <Modal

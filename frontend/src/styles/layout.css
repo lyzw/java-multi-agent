@@ -2217,6 +2217,35 @@ tbody tr:hover { background: var(--surface-hover); }
       文字一律 --ink / --ink-2（--ink-3 只许给装饰），状态色仍只有
       批改红 --mark 与低饱和青 --settled。 */
 
+/* L1（UI 评审 2026-11-17）：技术性说明默认折叠，首屏只留一句人话。
+   summary 保持可点击、可读；展开后内容维持原有 marked 纸感样式。 */
+.gchat__disclosure {
+  margin: 0 0 var(--s-4);
+  font-size: var(--t-note);
+  color: var(--ink-2);
+}
+
+.gchat__disclosure > summary {
+  cursor: pointer;
+  display: inline-block;
+  padding: 2px 0;
+  color: var(--ink-2);
+}
+
+.gchat__disclosure > summary:hover,
+.gchat__disclosure[open] > summary {
+  color: var(--ink);
+}
+
+.gchat__disclosure[open] > summary {
+  margin-bottom: var(--s-2);
+}
+
+/* 样例回放横幅折叠后，内部 banner 不再需要顶部外边距 */
+.achat__banner-wrap[open] .achat__banner {
+  margin-top: 0;
+}
+
 .gchat__notice {
   margin: 0 0 var(--s-4);
 }

@@ -436,3 +436,16 @@
   padding: 1px 5px;
   font-size: 12px;
 }
+
+/* L4（UI 评审 2026-11-17）：诚实边界长说明默认折叠，首屏只留一句概述。 */
+.ai-chat__honesty-detail > summary {
+  cursor: pointer;
+  color: #2f6df6;
+  font-size: 12px;
+  display: inline-block;
+  margin-top: 6px;
+}
+
+.ai-chat__honesty-detail[open] > summary {
+  margin-bottom: 2px;
+}

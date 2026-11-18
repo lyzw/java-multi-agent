@@ -429,7 +429,7 @@ export function AgentChatPage(): JSX.Element {
       <PageHead
         title="Agent 编排对话"
         eyebrow="AI 对话"
-        lead="一次请求内观察 Agent 路由、RAG 注入、Skill、Tool、结果回传与流式回答；组件过程逐帧可见，停止 / 失败 / 截断分别标记。"
+        lead="问一个问题，看看 AI 是怎样一步步找到依据、组织出回答的。每一步都真实发生，没有预先编造的过程。"
         actions={
           <Link to="/chat" className="btn btn--quiet">
             通用问答
@@ -437,43 +437,55 @@ export function AgentChatPage(): JSX.Element {
         }
       />
 
-      <div className="gchat__notice marked marked--calm">
-        <span className="marked__label">这条链路的诚实边界</span>
-        <ul className="gchat__notice-list">
-          <li>
-            <b>真实端点已接入编排式 SSE</b>：真实模式请求 <code>{AGENT_CHAT_PATH}</code>
-            （租户链，服务端完成路由 → RAG → Skill/Tool → 流式回答 + Run 审计）；当前环境未部署时
-            404/501 会明示「能力未接入」，绝不退化成假流。
-          </li>
-          <li>
-            <b>样例回放不是真实模型输出</b>：脚本帧先序列化成 SSE 文本，再走同一套解析器与状态机；
-            它验证前端链路，不证明模型或后端已接入。
-          </li>
-          <li>
-            <b>thinking 模式 = 组件过程可见</b>：租户通道按设计不下发原始推理草稿；
-            时间线只展示真实到达的路由 / RAG / Skill / Tool / 回传 / 用量帧。
-          </li>
-          <li>
-            <b>不读写业务数据、会话只在内存</b>：输入只来自本次键入与完整多轮历史，
-            不写浏览器存储，刷新即清空。
-          </li>
-        </ul>
-      </div>
+      {/*
+        ⚠️ L1（UI 评审 2026-11-17）：技术性说明默认折叠，首屏只留一句人话。
+           全文仍在 DOM（可展开、测试可读），仅改变视觉层级。
+      */}
+      <details className="gchat__disclosure">
+        <summary>关于这些回答，你需要知道</summary>
+        <div className="gchat__notice marked marked--calm">
+          <span className="marked__label">这条链路的诚实边界</span>
+          <ul className="gchat__notice-list">
+            <li>
+              <b>真实端点已接入编排式 SSE</b>：真实模式请求 <code>{AGENT_CHAT_PATH}</code>
+              （租户链，服务端完成路由 → RAG → Skill/Tool → 流式回答 + Run 审计）；当前环境未部署时
+              404/501 会明示「能力未接入」，绝不退化成假流。
+            </li>
+            <li>
+              <b>样例回放不是真实模型输出</b>：脚本帧先序列化成 SSE 文本，再走同一套解析器与状态机；
+              它验证前端链路，不证明模型或后端已接入。
+            </li>
+            <li>
+              <b>thinking 模式 = 组件过程可见</b>：租户通道按设计不下发原始推理草稿；
+              时间线只展示真实到达的路由 / RAG / Skill / Tool / 回传 / 用量帧。
+            </li>
+            <li>
+              <b>不读写业务数据、会话只在内存</b>：输入只来自本次键入与完整多轮历史，
+              不写浏览器存储，刷新即清空。
+            </li>
+          </ul>
+        </div>
+      </details>
 
       {source === 'sample' ? (
-        <div
-          className="achat__banner marked marked--calm"
-          role="alert"
-          data-testid="agent-chat-sample-banner"
-        >
-          <span className="marked__label">样例回放 · 非真实模型输出</span>
-          当前轨迹由本地脚本产生（场景：
-          {SCENARIOS.find((s) => s.value === scenario)?.label ?? scenario}）。页面中的路由、RAG、
-          Skill、Tool、回传与正文都经过真实 SSE 解析路径，但<b>不是</b>真实 Agent 执行结果。
-          要看真实链路请切换到「真实端点」（当前环境需已部署租户链编排端点）。
-        </div>
+        <details className="gchat__disclosure achat__banner-wrap">
+          <summary>这是演示数据，不是真实回答</summary>
+          <div
+            className="achat__banner marked marked--calm"
+            role="alert"
+            data-testid="agent-chat-sample-banner"
+          >
+            <span className="marked__label">样例回放 · 非真实模型输出</span>
+            当前轨迹由本地脚本产生（场景：
+            {SCENARIOS.find((s) => s.value === scenario)?.label ?? scenario}）。页面中的路由、RAG、
+            Skill、Tool、回传与正文都经过真实 SSE 解析路径，但<b>不是</b>真实 Agent 执行结果。
+            要看真实链路请切换到「真实端点」（当前环境需已部署租户链编排端点）。
+          </div>
+        </details>
       ) : null}
 
+      <details className="gchat__disclosure">
+        <summary>高级设置（一般用不到）</summary>
       <Panel title="编排设置" note="真实端点已接入租户链编排 SSE；当前环境未部署时 404/501 会如实报错；样例回放可立即预览完整链路（非真实输出）。">
         <div className="gchat__toolbar">
           <label className="gchat__field" htmlFor="achat-source" data-testid="agent-chat-source">
@@ -538,6 +550,7 @@ export function AgentChatPage(): JSX.Element {
           </label>
         </div>
       </Panel>
+      </details>
 
       <div className="gchat">
         <div
@@ -663,10 +676,13 @@ export function AgentChatPage(): JSX.Element {
         </div>
       </div>
 
-      <p className="achat__legend">
-        组件状态说明：单个 Tool / Skill 的「失败」可被 Agent 降级后继续生成，<b>不等于整轮失败</b>；
-        RAG 零命中是合法提示；只有 <code>error</code> 帧或传输失败才是整轮 failed。
-      </p>
+      <details className="gchat__disclosure">
+        <summary>怎么看每一步的状态</summary>
+        <p className="achat__legend">
+          组件状态说明：单个 Tool / Skill 的「失败」可被 Agent 降级后继续生成，<b>不等于整轮失败</b>；
+          RAG 零命中是合法提示；只有 <code>error</code> 帧或传输失败才是整轮 failed。
+        </p>
+      </details>
     </>
   )
 }

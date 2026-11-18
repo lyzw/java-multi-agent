@@ -136,7 +136,7 @@ function clearFailures(): void {
  *    · 不能含 '\'（部分浏览器会把 '' 当 '/'，形成绕过）
  *    · 不能含控制字符
  */
-function safeRedirect(target: string | undefined): string {
+export function safeRedirect(target: string | undefined): string {
   if (typeof target !== 'string' || target === '') return '/'
   if (!target.startsWith('/')) return '/'
   if (target.startsWith('//')) return '/'
@@ -190,12 +190,18 @@ export function LoginPage(): JSX.Element {
     const rec = readFailures()
     if (rec.count === 0 || rec.firstAt === 0) return
     const unlockAt = rec.firstAt + LOCK_MINUTES * 60 * 1000
-    const tick = (): void => {
+    // tick 返回 true = 仍在倒计时（left>0）；false = 已归零。
+    const tick = (): boolean => {
       const left = Math.max(0, Math.ceil((unlockAt - Date.now()) / 1000))
       setLockSecondsLeft(left)
+      return left > 0
     }
-    tick()
-    const handle = window.setInterval(tick, 1000)
+    // ⚠️ 归零即停：兑现「倒计时结束后不再每秒 setState」的注释，
+    //    避免定时器空转到 failCount 变化 / 组件卸载。
+    if (!tick()) return
+    const handle = window.setInterval(() => {
+      if (!tick()) window.clearInterval(handle)
+    }, 1000)
     return () => window.clearInterval(handle)
   }, [failCount])
 

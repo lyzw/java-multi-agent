@@ -74,4 +74,16 @@ describe('MarkdownAnswer · 公式渲染契约', () => {
     expect(() => render(<MarkdownAnswer content={'$\\frac{1}{$'} />)).not.toThrow()
     expect(document.body.textContent.length).toBeGreaterThan(0)
   })
+
+  it('F. ⛔ 行内代码里的 $ 不得破坏同行真实公式的渲染', () => {
+    // 回归：`echo $HOME` 里的 $ 曾被当成公式定界符，导致同一行的 $x$ 错位、0 个公式节点。
+    const { container } = render(
+      <MarkdownAnswer content={'用 `echo $HOME` 命令；另外 $x$ 是公式。'} />,
+    )
+
+    expect(container.querySelectorAll('.katex').length,
+      '行内代码之外的 $x$ 必须仍然渲染成公式')
+      .toBeGreaterThanOrEqual(1)
+    expect(outsideMath(container)).toContain('echo $HOME')
+  })
 })

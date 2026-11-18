@@ -176,9 +176,11 @@ export function RunProgressPage(): JSX.Element {
   // ⚠️ N3：内部 errorCode 绝不原样甩给学生；按类别给可读文案与差异化 CTA。
   //    service-config（CONFIG_UNAVAILABLE / BUDGET_EXHAUSTED …）= 租户级故障，
   //    「重新发起」是必然失败的死循环，必须移除。
+  // ⚠️ L5（UI 评审 2026-11-17）：不传 runId —— PageHead 首行已显示完整运行标识，
+  //    advice 再拼一遍纯属重复噪音。函数保留该参数供其它无顶部标识的场景使用。
   const failure = useMemo(
-    () => runFailureGuidance(errorCode, runId),
-    [errorCode, runId],
+    () => runFailureGuidance(errorCode),
+    [errorCode],
   )
   // ⚠️ statusGuidance / statusReadIsTerminal 已上移至 currentState 之后，
   //    供 shouldShowSyncing 与停轮询 effect 共用。

@@ -98,31 +98,23 @@ export function closeUnclosedFence(src: string): string {
 }
 
 /**
- * 把代码块内容换成等长空格（保留换行与索引），供定界符扫描使用。
- * 这样代码块里的 <code>$</code> 不会被误判成公式边界。
+ * 把代码区间内容换成**等长空格**（保留换行与索引），供定界符扫描使用。
+ *
+ * <p>⚠️ 必须同时屏蔽**围栏代码块与行内代码**（{@link CODE_SPAN_RE}），口径与
+ * {@link mapOutsideCode} / {@code normalizeMathDelimiters} 一致。此前只屏蔽围栏，
+ * 行内代码里的 <code>$</code>（如 <code>`echo $HOME`</code>）会参与公式配对，
+ * 使同一行真正的 <code>$…$</code> 错位、整个公式不再渲染。
+ *
+ * <p>等长替换是关键：{@code scanDollarTokens} 给出的 index 要直接用于原串切片。
  */
-function maskCodeBlocks(src: string): string {
+function maskCodeSpans(src: string): string {
   const chars = src.split('')
-  let offset = 0
-  let fenceStart: number | null = null
-  let fence: { char: string; len: number } | null = null
-  for (const line of src.split('\n')) {
-    const match = /^ {0,3}(`{3,}|~{3,})/.exec(line)
-    if (match !== null) {
-      const token = match[1] ?? ''
-      const char = token[0] ?? ''
-      if (fence === null) {
-        fence = { char, len: token.length }
-        fenceStart = offset
-      } else if (char === fence.char && token.length >= fence.len && fenceStart !== null) {
-        for (let i = fenceStart; i < offset + line.length && i < chars.length; i += 1) {
-          if (chars[i] !== '\n') chars[i] = ' '
-        }
-        fence = null
-        fenceStart = null
-      }
+  for (const match of src.matchAll(CODE_SPAN_RE)) {
+    const start = match.index ?? 0
+    const end = start + match[0].length
+    for (let i = start; i < end && i < chars.length; i += 1) {
+      if (chars[i] !== '\n') chars[i] = ' '
     }
-    offset += line.length + 1
   }
   return chars.join('')
 }
@@ -159,7 +151,7 @@ function scanDollarTokens(masked: string): Token[] {
  * 单个 <code>$</code> 是行内（同一行内配对）。跨行的孤立 <code>$</code> 不配对。
  */
 export function escapeUnclosedDollars(src: string): string {
-  const masked = maskCodeBlocks(src)
+  const masked = maskCodeSpans(src)
   const tokens = scanDollarTokens(masked)
   const escapes: Token[] = []
 

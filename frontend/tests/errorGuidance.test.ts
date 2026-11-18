@@ -233,6 +233,18 @@ describe('runFailureGuidance：额度耗尽 / 重试上限是终态，不是临�
     expect(flawed.canRetry).toBe(true)
     expect(flawed.canRetry).not.toBe(runFailureGuidance('MODEL_RATE_LIMITED').canRetry)
   })
+
+  it('恢复路径无重投通道是终态，但文案不得谎称「额度耗尽」', () => {
+    for (const code of ['RECOVERY_RETRY_UNAVAILABLE', 'RESUME_CONTINUATION_UNAVAILABLE']) {
+      const g = runFailureGuidance(code, 'run-r')
+      expect(g.canRetry).toBe(false)
+      expect(g.contactAdmin).toBe(true)
+      expect(g.reason).not.toContain(code)
+      expect(g.reason).not.toContain('额度')
+      expect(g.reason).toContain('恢复')
+      for (const word of TERMINAL_WORDS) expect(g.advice).not.toContain(word)
+    }
+  })
 })
 
 describe('runFailureGuidance：后端真实 errorCode 的消费契约', () => {

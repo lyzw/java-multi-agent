@@ -324,7 +324,7 @@ export function GeneralChatPage(): JSX.Element {
       <PageHead
         title="通用知识问答"
         eyebrow="AI 对话"
-        lead="不挂教材语料的自由问答：逐 token 流式呈现，多轮上下文由本页维护。需要可溯源依据请走「知识检索」。"
+        lead="有什么想问的尽管问，回答会一句一句出现在下方。需要能从教材里找到出处的答案，请走「知识检索」。"
         actions={
           <Link to="/agent-chat" className="btn btn--quiet">
             Agent 编排对话
@@ -332,25 +332,33 @@ export function GeneralChatPage(): JSX.Element {
         }
       />
 
-      <div className="gchat__notice marked marked--calm">
-        <span className="marked__label">这条链路的诚实边界</span>
-        <ul className="gchat__notice-list">
-          <li>
-            <b>不是教材语料问答</b>：不检索 RAG、没有引用与出处，回答由模型生成、可能有误，请自行核对。
-          </li>
-          <li>
-            <b>不读写业务数据</b>：输入只来自本次键入与本页内存里的多轮历史，后端不读取任何 Run / 学习画像 / 学生信息。
-          </li>
-          <li>
-            <b>不伪造进度</b>：文字来自真实 token 帧，没有打字机特效；断流会如实标注「部分内容」，不伪装成完整答案。
-          </li>
-          <li>
-            <b>会话只在内存</b>：不写入浏览器存储，刷新即清空；推理草稿按设计不下发到租户通道。
-          </li>
-        </ul>
-      </div>
+      {/*
+        ⚠️ L1（UI 评审 2026-11-17）：技术性的「诚实边界」默认折叠。
+           学生关心的是「这个回答准不准」，不是 RAG / Run / token / 租户通道。
+           折叠只改变首屏视觉层级，说明全文仍保留在 DOM（可展开、测试可读）。
+      */}
+      <details className="gchat__disclosure">
+        <summary>关于这些回答，你需要知道</summary>
+        <div className="gchat__notice marked marked--calm">
+          <span className="marked__label">这条链路的诚实边界</span>
+          <ul className="gchat__notice-list">
+            <li>
+              <b>不是教材语料问答</b>：不检索 RAG、没有引用与出处，回答由模型生成、可能有误，请自行核对。
+            </li>
+            <li>
+              <b>不读写业务数据</b>：输入只来自本次键入与本页内存里的多轮历史，后端不读取任何 Run / 学习画像 / 学生信息。
+            </li>
+            <li>
+              <b>不伪造进度</b>：文字来自真实 token 帧，没有打字机特效；断流会如实标注「部分内容」，不伪装成完整答案。
+            </li>
+            <li>
+              <b>会话只在内存</b>：不写入浏览器存储，刷新即清空；推理草稿按设计不下发到租户通道。
+            </li>
+          </ul>
+        </div>
+      </details>
 
-      <Panel title="对话设置" note="系统提示词为本页预设常量，不接受自由输入。">
+      <Panel title="回答方式" note="选一种讲解风格，回答会更贴近你的需要。">
         <div className="gchat__toolbar">
           <label className="gchat__field" htmlFor="gchat-scene">
             <span>回答场景</span>
@@ -368,7 +376,6 @@ export function GeneralChatPage(): JSX.Element {
             </select>
           </label>
           <span className="gchat__hint">{scene?.hint ?? ''}</span>
-          <span className="gchat__hint">通道：租户 SSE · 逐 token 流式</span>
         </div>
       </Panel>
 
