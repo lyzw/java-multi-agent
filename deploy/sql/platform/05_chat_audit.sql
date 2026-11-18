@@ -3,11 +3,18 @@
 -- =====================================================================
 --
 -- 【本脚本做什么】
---   1. public.chat_audit_record  —— 租户级审计原文（1 请求 1 条，envelope 全量），
+--   1. public.chat_audit_config —— 平台级单例配置（无租户、无 RLS，与 model_catalog
+--      同口径：全局配置不是租户数据，套 RLS 会让运维通道读不到自己写的开关）；
+--   2. public.chat_audit_record  —— 租户级审计原文（1 请求 1 条，envelope 全量），
 --      ENABLE + FORCE RLS，策略与既有租户表同构（tenant_id = current_tenant_id()）；
---   2. public.chat_audit_unattributed —— 建连前即被拒的请求（401/400/429 等，
+--   3. public.chat_audit_unattributed —— 建连前即被拒的请求（401/400/429 等，
 --      身份尚未解析、无租户可绑），**只存元数据，绝不存原文**；
---   3. 两个表的索引。
+--   4. 三张表的索引。
+--
+-- 【⚠️ 为什么 config 也放在本脚本】
+--   `chat_audit_config` 是插件的 P0 配置底座，没有它整条链路读不到开关；
+--   它此前只存在于 01 终态快照里 ⇒ **存量库跑 05 会缺这张表**，配置页一开就 500。
+--   三张表同属一个插件、同一条部署命令，必须一起补齐。
 --
 -- 【为什么必须独立成表，而不是复用 run / run_event / audit_record】
 --   `AgentChatAuditPort` 明文规定「不存正文」（JdbcAgentChatAuditRepository 拒绝
@@ -30,6 +37,8 @@
 -- 【授权】
 --   表级授权统一在 03_platform_roles.sql（app_agent：public 域 ALL TABLES ⇒
 --   新库按 01 → 03 顺序自动覆盖；存量库重跑 03 即可）。
+--   三张表的收紧口径：record / unattributed 只追加（SELECT+INSERT，REVOKE UPDATE/DELETE）；
+--   config 需 SELECT+INSERT+UPDATE（前端整表覆盖写），DELETE 撤销（单例无删除语义）。
 --   受控删除（保留期 / 监护人撤回）在 04_retention_role.sql：
 --   DELETE 只给 agent_retention，应用角色被显式 REVOKE。
 --
@@ -41,7 +50,25 @@
 
 \set ON_ERROR_STOP on
 
--- ── 1. 审计主表（租户域） ────────────────────────────────────────────
+-- ── 1. 插件配置（平台级单例，无 RLS） ────────────────────────────────
+-- 与 model_catalog 同口径：全局配置，主数据源直接读写。
+-- config 是完整 JSONB 文档 —— 新增配置键无需改 DDL，只需改应用层校验白名单。
+-- ⚠️ 不含任何密钥：仅开关 / 路径 / 阈值 / 脱敏规则。
+CREATE TABLE IF NOT EXISTS public.chat_audit_config (
+    singleton      boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    enabled        boolean NOT NULL DEFAULT false,
+    config         jsonb   NOT NULL,
+    config_version bigint  NOT NULL DEFAULT 1,
+    updated_by     text    NOT NULL,
+    updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE public.chat_audit_config IS
+    '平台级对话审计插件配置（单例 JSONB）；前端「系统配置→对话审计配置」维护，读取无缓存、写入即生效。';
+COMMENT ON COLUMN public.chat_audit_config.config IS
+    '完整配置 JSONB：enabled/scope/sinks/capture/redaction/sampling/writer/retention/limits；不含密钥。';
+
+-- ── 2. 审计主表（租户域） ────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.chat_audit_record (
     audit_id       uuid        NOT NULL,
     trace_id       text        NOT NULL,
@@ -109,7 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_audit_record_endpoint_time
 CREATE INDEX IF NOT EXISTS idx_chat_audit_record_trace
     ON public.chat_audit_record (trace_id);
 
--- ── 2. 建连前失败（无已解析租户，只存元数据） ────────────────────────
+-- ── 3. 建连前失败（无已解析租户，只存元数据） ────────────────────────
 CREATE TABLE IF NOT EXISTS public.chat_audit_unattributed (
     audit_id         uuid        NOT NULL,
     trace_id         text        NOT NULL,
@@ -133,16 +160,24 @@ CREATE INDEX IF NOT EXISTS idx_chat_audit_unattributed_time
 CREATE INDEX IF NOT EXISTS idx_chat_audit_unattributed_endpoint_time
     ON public.chat_audit_unattributed (endpoint, started_at DESC);
 
--- ── 3. 自检（结构不存在就报错，绝不静默跳过） ────────────────────────
+-- ── 4. 自检（结构不存在就报错，绝不静默跳过） ────────────────────────
 DO $$
 DECLARE
     missing text;
 BEGIN
     SELECT string_agg(t, ', ') INTO missing
-    FROM unnest(ARRAY['chat_audit_record', 'chat_audit_unattributed']) AS t
+    FROM unnest(ARRAY['chat_audit_config', 'chat_audit_record', 'chat_audit_unattributed']) AS t
     WHERE to_regclass('public.' || t) IS NULL;
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION '对话审计建表失败，缺失: %', missing;
+    END IF;
+
+    -- config 必须**没有** RLS：套上 RLS 而无租户谓词 ⇒ 平台运维通道读自己写的开关也 0 行。
+    IF EXISTS (
+        SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relname = 'chat_audit_config' AND c.relrowsecurity
+    ) THEN
+        RAISE EXCEPTION 'chat_audit_config 不应开启 RLS——它是平台级单例配置';
     END IF;
 
     IF NOT EXISTS (
@@ -166,5 +201,6 @@ SELECT c.relname AS table_name,
        c.relrowsecurity AS rls_enabled,
        c.relforcerowsecurity AS rls_forced
 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = 'public' AND c.relname IN ('chat_audit_record', 'chat_audit_unattributed')
+WHERE n.nspname = 'public'
+  AND c.relname IN ('chat_audit_config', 'chat_audit_record', 'chat_audit_unattributed')
 ORDER BY c.relname;
