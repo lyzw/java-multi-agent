@@ -41,6 +41,10 @@ public interface PlatformAuditPort {
      *                    规范集之外一律写 {@code null} —— 库侧有 CHECK，
      *                    未校验文本会让一次审计写入抛 SQLException，
      *                    把「503 拒绝」变成「500 故障」，即闸门自己制造事故（U-8 / 方案 §5 A4）。
+     * @param capability  统一能力标识（第 3 刀，如 rag.corpus.ingest）；null = 该审计与能力调用无关。
+     * @param channel     触发入口（第 3 刀，PLATFORM_DIRECT / AGENT_ORCH / TENANT_SESSION）；
+     *                    null = 旧调用点 / 非能力调用。两者与 ticketScope + correlationId 一起
+     *                    支撑方案 §5 A7「谁、以哪档、从哪个入口、跑了哪个能力」的追责口径。
      */
     record PlatformAuditEvent(
             @NonNull UUID id,
@@ -54,8 +58,18 @@ public interface PlatformAuditPort {
             @Nullable UUID correlationId,
             @Nullable String ip,
             @NonNull Instant occurredAt,
-            @Nullable String ticketScope
+            @Nullable String ticketScope,
+            @Nullable String capability,
+            @Nullable String channel
     ) {
+        /** 旧 12 参构造器：保留全部既有调用点（能力 / 入口为 null = 非能力调用）。 */
+        public PlatformAuditEvent(UUID id, String actorId, String actorType, String action,
+                                  String targetType, String targetId, String decision,
+                                  String reasonCode, UUID correlationId, String ip,
+                                  Instant occurredAt, String ticketScope) {
+            this(id, actorId, actorType, action, targetType, targetId, decision, reasonCode,
+                    correlationId, ip, occurredAt, ticketScope, null, null);
+        }
     }
 
     /** 平台审计查询条件。 */

@@ -139,6 +139,22 @@ public class PlatformRagGovernanceTicketService {
                                    @NonNull String platformUserId,
                                    @NonNull Instant expiresAt,
                                    @NonNull String jti) {
+
+        /**
+         * 映射为统一票据声明（第 2 刀 · R3 收口）：治理票是<b>平台域</b>、带
+         * {@code rag_scope}、绑定 RAG 录入能力与平台直录入口。下游 PolicyGate 用它在
+         * 一处完成"票与本次调用"的三元组匹配，杜绝治理票被当执行票 / 租户票误用。
+         */
+        public cn.studykid.multiagent.ports.invocation.TicketClaims toClaims() {
+            return new cn.studykid.multiagent.ports.invocation.TicketClaims(
+                    jti,
+                    cn.studykid.multiagent.ports.invocation.TicketClaims.Domain.PLATFORM,
+                    platformUserId,
+                    scope,
+                    cn.studykid.multiagent.ports.invocation.Capability.RAG_CORPUS_INGEST.id(),
+                    cn.studykid.multiagent.ports.invocation.Channel.PLATFORM_DIRECT.name(),
+                    expiresAt);
+        }
     }
 
     /**
@@ -282,7 +298,9 @@ public class PlatformRagGovernanceTicketService {
         audit.record(new PlatformAuditEvent(
                 UUID.randomUUID(), principal.userId(), "PLATFORM_USER",
                 AUDIT_ACTION, TARGET_TYPE, null, decision, reasonCode,
-                null, null, Instant.now(), auditableScope(requestedScope)));
+                null, null, Instant.now(), auditableScope(requestedScope),
+                cn.studykid.multiagent.ports.invocation.Capability.RAG_CORPUS_INGEST.id(),
+                cn.studykid.multiagent.ports.invocation.Channel.PLATFORM_DIRECT.name()));
     }
 
     /**

@@ -46,8 +46,9 @@ public class JdbcPlatformAuditRepository implements PlatformAuditPort {
         String sql = """
                 INSERT INTO platform.platform_audit_event
                     (id, actor_id, actor_type, action, target_type, target_id,
-                     decision, reason_code, correlation_id, ip, occurred_at, ticket_scope)
-                VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::uuid, ?, ?, ?::uuid, ?::inet, ?, ?)
+                     decision, reason_code, correlation_id, ip, occurred_at, ticket_scope,
+                     capability, channel)
+                VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::uuid, ?, ?, ?::uuid, ?::inet, ?, ?, ?, ?)
                 """;
         try (Connection conn = openSystem();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -63,6 +64,8 @@ public class JdbcPlatformAuditRepository implements PlatformAuditPort {
             ps.setString(10, event.ip());
             ps.setTimestamp(11, Timestamp.from(event.occurredAt()));
             ps.setString(12, event.ticketScope());
+            ps.setString(13, event.capability());
+            ps.setString(14, event.channel());
             ps.executeUpdate();
             conn.commit();
         } catch (SQLException e) {
@@ -74,7 +77,8 @@ public class JdbcPlatformAuditRepository implements PlatformAuditPort {
     public @NonNull List<PlatformAuditEvent> query(@NonNull PlatformAuditQuery query) {
         StringBuilder sql = new StringBuilder(
                 "SELECT id, actor_id, actor_type, action, target_type, target_id, "
-                        + "decision, reason_code, correlation_id, ip, occurred_at, ticket_scope "
+                        + "decision, reason_code, correlation_id, ip, occurred_at, ticket_scope, "
+                        + "capability, channel "
                         + "FROM platform.platform_audit_event WHERE 1=1");
         List<Object> params = new ArrayList<>();
         if (query.actorId() != null && !query.actorId().isBlank()) {
@@ -144,6 +148,8 @@ public class JdbcPlatformAuditRepository implements PlatformAuditPort {
                 correlation,
                 rs.getString("ip"),
                 ts == null ? Instant.EPOCH : ts.toInstant(),
-                rs.getString("ticket_scope"));
+                rs.getString("ticket_scope"),
+                rs.getString("capability"),
+                rs.getString("channel"));
     }
 }

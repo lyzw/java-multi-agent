@@ -1083,6 +1083,8 @@ CREATE TABLE platform.platform_audit_event (
     ip inet,
     occurred_at timestamp with time zone DEFAULT now() NOT NULL,
     ticket_scope character varying(32),
+    capability character varying(128),
+    channel character varying(32),
     CONSTRAINT platform_audit_event_ticket_scope_ck CHECK (((ticket_scope IS NULL) OR (ticket_scope = ANY (ARRAY['PLATFORM'::character varying, 'TENANT'::character varying, 'ALL'::character varying]))))
 );
 
@@ -1091,6 +1093,8 @@ CREATE TABLE platform.platform_audit_event (
 --    （实测：psql 在 `|| '非票据类…'` 处报 syntax error at or near "||"，
 --     整个快照在空库上直接建不起来）。要分行只能靠 psql 的续行，不能靠表达式。
 COMMENT ON COLUMN platform.platform_audit_event.ticket_scope IS '治理票据声明的档位＝作用域（同一根轴的两个说法：票据只带 rag_scope 一个声明，值域即 RAG 侧 RagCorpusScope 三档）。非票据类审计行为 NULL，这是常态而不是缺失。⚠️ 写入方只准落这三个规范值：被拒请求里的档位是调用方可控文本，规范集之外一律写 NULL —— 把未校验文本塞进带 CHECK 的列，表现是「审计写入 SQLException 把一次 503 拒绝变成 500」，即闸门自己制造故障。追责口径（方案 §5 A4）= actor_id（谁）+ 本列（哪档）+ decision + occurred_at。';
+COMMENT ON COLUMN platform.platform_audit_event.capability IS '统一能力标识（双入口方案第 3 刀，如 rag.corpus.ingest）。NULL = 非能力调用的审计（旧调用点保持 NULL）。与 channel、ticket_scope、correlation_id 共同支撑追责口径 §5 A7：谁、从哪个入口、以哪档、跑了哪个能力。';
+COMMENT ON COLUMN platform.platform_audit_event.channel IS '触发入口（双入口方案第 3 刀）：PLATFORM_DIRECT / AGENT_ORCH / TENANT_SESSION。NULL = 旧调用点 / 非能力调用。与 capability 成对出现。';
 
 
 --

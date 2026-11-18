@@ -127,6 +127,23 @@ public class PlatformExecutionTicketService {
                                  @NonNull Set<String> roles,
                                  @NonNull Instant expiresAt,
                                  @NonNull String jti) {
+
+        /**
+         * 映射为统一票据声明（第 2 刀 · R3 收口）：执行票是<b>租户域</b>、作用域恒
+         * TENANT、绑定"发起 Run"能力；入口不限制（平台直录与 Agent 编排都能触发执行），
+         * 故 channel 声明为 null = 不限制。下游凭它在同一闸门里识别域与主体，
+         * 杜绝把执行票当平台治理票用的提权。
+         */
+        public cn.studykid.multiagent.ports.invocation.TicketClaims toClaims() {
+            return new cn.studykid.multiagent.ports.invocation.TicketClaims(
+                    jti,
+                    cn.studykid.multiagent.ports.invocation.TicketClaims.Domain.TENANT,
+                    principalId,
+                    cn.studykid.multiagent.ports.invocation.Scope.TENANT.auditValue(),
+                    cn.studykid.multiagent.ports.invocation.Capability.RUN_EXECUTE.id(),
+                    null,
+                    expiresAt);
+        }
     }
 
     /**
@@ -318,7 +335,9 @@ public class PlatformExecutionTicketService {
                 AUDIT_ACTION, TARGET_TYPE, isUuid(tenantId) ? tenantId : null,
                 decision, reasonCode,
                 principalUuid,
-                null, Instant.now(), null));
+                null, Instant.now(), null,
+                cn.studykid.multiagent.ports.invocation.Capability.RUN_EXECUTE.id(),
+                null));
     }
 
     private static boolean isUuid(String value) {

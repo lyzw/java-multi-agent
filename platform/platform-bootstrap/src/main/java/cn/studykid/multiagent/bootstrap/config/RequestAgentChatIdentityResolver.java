@@ -11,6 +11,9 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.agentchat.AgentChatIdentityResolver;
 import cn.studykid.multiagent.ports.agentchat.AgentChatRequest.Context;
+import cn.studykid.multiagent.ports.invocation.Channel;
+import cn.studykid.multiagent.ports.invocation.InvocationContext;
+import cn.studykid.multiagent.ports.invocation.TicketClaims;
 import cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe;
 import cn.studykid.multiagent.ports.security.PlatformPrincipal;
 import cn.studykid.multiagent.ports.tenant.TenantLifecycle;
@@ -26,7 +29,9 @@ import cn.studykid.multiagent.ports.tenant.TenantLifecycle;
  * <ul>
  *   <li>平台链 {@code /api/agent/chat/stream}：{@link SecurityConfiguration#PLATFORM_PRINCIPAL_ATTRIBUTE}
  *       必须是 {@link PlatformPrincipal}（{@code aud=admin-console-api}，自身不持租户）；
- *       目标租户由请求体显式给出；{@code thinkingAllowed=true}。</li>
+ *       目标租户由请求体显式给出，<b>未给出时回落到配置化默认租户</b>
+ *       （{@code agent.chat.default-tenant-id}，供 AI 实验室通用对话使用，未配置则 fail-closed）；
+ *       {@code thinkingAllowed=true}。</li>
  *   <li>租户链 {@code /api/knowledge/agent/chat/stream}：
  *       {@link SecurityConfiguration#TENANT_CONTEXT_ATTRIBUTE} 必须是 {@link TenantContext}
  *       （{@code aud=agent-platform}）；租户从令牌取；{@code thinkingAllowed=false}。</li>
@@ -53,9 +58,17 @@ public final class RequestAgentChatIdentityResolver implements AgentChatIdentity
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final TenantLifecycleProbe lifecycleProbe;
+    /** 平台链未显式指定租户时的兜底目标；null/空白 = 不启用兜底，保持 fail-closed。 */
+    private final @Nullable String defaultTenantId;
 
     public RequestAgentChatIdentityResolver(@NonNull TenantLifecycleProbe lifecycleProbe) {
+        this(lifecycleProbe, null);
+    }
+
+    public RequestAgentChatIdentityResolver(@NonNull TenantLifecycleProbe lifecycleProbe,
+                                             @Nullable String defaultTenantId) {
         this.lifecycleProbe = lifecycleProbe;
+        this.defaultTenantId = defaultTenantId;
     }
 
     @Override
@@ -72,7 +85,13 @@ public final class RequestAgentChatIdentityResolver implements AgentChatIdentity
                 throw new UnauthorizedAgentChatException(
                         "平台对话端点需要平台令牌（aud=admin-console-api）");
             }
-            String target = activeTenant(requestedTenantId, "平台链必须显式指定目标租户");
+            // 平台管理员的通用对话不需要绑定具体租户：未指定时回落到配置化默认租户。
+            // ⚠️ 回落值仍走 activeTenant 的 UUID + 生命周期校验——配置错（非法/不存在/已暂停）
+            //    同样 fail-closed，绝不因为「是默认的」就跳过校验。
+            String targetTenant = requestedTenantId == null || requestedTenantId.isBlank()
+                    ? defaultTenantId
+                    : requestedTenantId;
+            String target = activeTenant(targetTenant, "平台链必须显式指定目标租户，且未配置默认租户");
             return new Context(target, principal.userId(),
                     Context.Domain.PLATFORM, true, bearerToken);
         }
@@ -89,6 +108,49 @@ public final class RequestAgentChatIdentityResolver implements AgentChatIdentity
         activeTenant(tenant.tenantId(), "目标租户不存在");
         return new Context(tenant.tenantId(), tenant.principalId(),
                 Context.Domain.TENANT, false, bearerToken);
+    }
+
+    /**
+     * 统一调用上下文解析（第 1 刀 · 收口判定的落点）。
+     *
+     * <p>在既有 {@link #resolve(boolean, String)} 完成验签 / UUID / 生命周期校验之后，
+     * 把结果归一为 {@link InvocationContext}，供 {@code PolicyGate} 统一裁决。
+     * <b>不改动旧契约</b>：旧的 {@code resolve} 与其 8 处调用点保持逐字兼容。
+     *
+     * <p><b>R1 关闭点</b>：{@code scopeExplicit} 严格等于"请求体是否显式给出目标租户"。
+     * 平台链未给租户而回落到配置默认租户时，本值为 false，PolicyGate 对该上下文的
+     * <b>写意图一律拒绝</b>（{@code SCOPE_IMPLICIT_WRITE_DENIED}），只读视图仍可用。
+     * 租户链的租户来自已验签令牌，恒为显式。
+     *
+     * <p><b>R2 关闭点</b>：本方法不接收 thinkingAllowed 入参；该值由
+     * {@link InvocationContext#thinkingAllowed()} 从 {@link Channel} 派生，
+     * 草稿可见性不再随上下文 / 票据跨渠道流转。
+     *
+     * @param platformChain 是否平台链（与 resolve 的首参同义）
+     * @param requestedTenantId 请求体显式租户（平台链可为 null = 回落默认租户）
+     * @param capability 能力标识（由控制器按端点声明，如 agent.chat.orchestrate）
+     * @param purpose 目的串（"write:" 前缀 = 写意图；其余为读）
+     * @param correlationId 链路关联 id
+     * @param ticket 已验签票据声明（无票据传 null）
+     */
+    public @NonNull InvocationContext resolveInvocation(
+            boolean platformChain,
+            @Nullable String requestedTenantId,
+            @NonNull String capability,
+            @NonNull String purpose,
+            @NonNull String correlationId,
+            @Nullable TicketClaims ticket) {
+        Context trusted = resolve(platformChain, requestedTenantId);
+        boolean explicit = !platformChain
+                || (requestedTenantId != null && !requestedTenantId.isBlank());
+        InvocationContext.Domain domain = platformChain
+                ? InvocationContext.Domain.PLATFORM
+                : InvocationContext.Domain.TENANT;
+        Channel channel = platformChain ? Channel.PLATFORM_DIRECT : Channel.TENANT_SESSION;
+        return new InvocationContext(
+                trusted.principalId(), domain, channel,
+                cn.studykid.multiagent.ports.invocation.Scope.TENANT,
+                trusted.tenantId(), capability, purpose, correlationId, explicit, ticket);
     }
 
     /**

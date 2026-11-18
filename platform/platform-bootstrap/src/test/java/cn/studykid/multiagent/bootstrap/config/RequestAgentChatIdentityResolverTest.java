@@ -19,6 +19,9 @@ import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.ports.agentchat.AgentChatIdentityResolver.InvalidAgentChatTargetException;
 import cn.studykid.multiagent.ports.agentchat.AgentChatIdentityResolver.UnauthorizedAgentChatException;
 import cn.studykid.multiagent.ports.agentchat.AgentChatRequest.Context;
+import cn.studykid.multiagent.ports.invocation.Channel;
+import cn.studykid.multiagent.ports.invocation.InvocationContext;
+import cn.studykid.multiagent.ports.invocation.Scope;
 import cn.studykid.multiagent.ports.persistence.TenantLifecycleProbe;
 import cn.studykid.multiagent.ports.security.PlatformPrincipal;
 import cn.studykid.multiagent.ports.tenant.TenantLifecycle;
@@ -34,6 +37,7 @@ import cn.studykid.multiagent.ports.tenant.TenantLifecycle;
 class RequestAgentChatIdentityResolverTest {
 
     private static final String TENANT = "11111111-1111-1111-1111-111111111111";
+    private static final String DEFAULT_TENANT = "22222222-2222-2222-2222-222222222222";
     private static final String PRINCIPAL = "student-1";
     private static final String PLATFORM_USER = "plat-user-1";
     private static final String TOKEN = "signed.jwt.value";
@@ -64,9 +68,15 @@ class RequestAgentChatIdentityResolverTest {
     }
 
     private static RequestAgentChatIdentityResolver resolver(String state) {
+        return resolver(state, null);
+    }
+
+    /** defaultTenant=null 表示「未配置默认租户」，必须保持旧的 fail-closed 行为。 */
+    private static RequestAgentChatIdentityResolver resolver(String state, String defaultTenant) {
         TenantLifecycleProbe probe = mock(TenantLifecycleProbe.class);
         when(probe.lifecycleState(TENANT)).thenReturn(Optional.ofNullable(state));
-        return new RequestAgentChatIdentityResolver(probe);
+        when(probe.lifecycleState(DEFAULT_TENANT)).thenReturn(Optional.ofNullable(state));
+        return new RequestAgentChatIdentityResolver(probe, defaultTenant);
     }
 
     @Test
@@ -149,6 +159,44 @@ class RequestAgentChatIdentityResolverTest {
     }
 
     @Test
+    @DisplayName("平台链未指定租户 + 已配置默认租户 → 用默认租户，仍经 UUID/生命周期校验")
+    void platformChainFallsBackToConfiguredDefaultTenant() {
+        bind(platformRequest());
+
+        Context ctx = resolver(TenantLifecycle.ACTIVE, DEFAULT_TENANT).resolve(true, null);
+
+        assertThat(ctx.tenantId())
+                .as("显式租户缺失时必须用配置默认租户，不能再抛「平台链必须显式指定目标租户」")
+                .isEqualTo(DEFAULT_TENANT);
+        assertThat(ctx.domain()).isEqualTo(Context.Domain.PLATFORM);
+        assertThat(ctx.thinkingAllowed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("⛔ 默认租户仍走 ACTIVE/存在性校验：配置成已暂停租户照样拒")
+    void configuredDefaultTenantMustBeActive() {
+        bind(platformRequest());
+
+        assertThatThrownBy(() -> resolver(TenantLifecycle.SUSPENDED, DEFAULT_TENANT)
+                .resolve(true, null))
+                .isInstanceOf(InvalidAgentChatTargetException.class)
+                .hasMessageContaining("SUSPENDED");
+        assertThatThrownBy(() -> resolver(null, DEFAULT_TENANT).resolve(true, null))
+                .isInstanceOf(InvalidAgentChatTargetException.class)
+                .hasMessageContaining("不存在");
+    }
+
+    @Test
+    @DisplayName("✅ 显式 tenantId 优先于默认租户（默认租户只兜底，不抢已有选择）")
+    void explicitTenantWinsOverDefault() {
+        bind(platformRequest());
+
+        Context ctx = resolver(TenantLifecycle.ACTIVE, DEFAULT_TENANT).resolve(true, TENANT);
+
+        assertThat(ctx.tenantId()).isEqualTo(TENANT);
+    }
+
+    @Test
     @DisplayName("⛔ 无令牌 / 无 Web 请求上下文一律 401，绝不编造默认身份")
     void missingTokenOrContextFailsClosed() {
         MockHttpServletRequest noToken = platformRequest();
@@ -161,6 +209,51 @@ class RequestAgentChatIdentityResolverTest {
         assertThatThrownBy(() -> resolver(TenantLifecycle.ACTIVE).resolve(true, TENANT))
                 .isInstanceOf(UnauthorizedAgentChatException.class)
                 .hasMessageContaining("无 HTTP 请求上下文");
+    }
+
+    @Test
+    @DisplayName("第1刀 R1：平台链显式租户 → 统一上下文 scopeExplicit=true")
+    void resolveInvocationPlatformExplicitIsScopeExplicit() {
+        bind(platformRequest());
+
+        InvocationContext ctx = resolver(TenantLifecycle.ACTIVE)
+                .resolveInvocation(true, TENANT, "agent.chat.orchestrate", "read:chat", "corr-1", null);
+
+        assertThat(ctx.tenantId()).isEqualTo(TENANT);
+        assertThat(ctx.scope()).isEqualTo(Scope.TENANT);
+        assertThat(ctx.channel()).isEqualTo(Channel.PLATFORM_DIRECT);
+        assertThat(ctx.domain()).isEqualTo(InvocationContext.Domain.PLATFORM);
+        assertThat(ctx.scopeExplicit()).isTrue();
+        assertThat(ctx.capability()).isEqualTo("agent.chat.orchestrate");
+    }
+
+    @Test
+    @DisplayName("⛔ 第1刀 R1：平台链默认租户回落 → scopeExplicit=false（PolicyGate 据此拒写）")
+    void resolveInvocationDefaultTenantIsNotScopeExplicit() {
+        bind(platformRequest());
+
+        InvocationContext ctx = resolver(TenantLifecycle.ACTIVE, DEFAULT_TENANT)
+                .resolveInvocation(true, null, "rag.corpus.ingest", "write:ingest", "corr-2", null);
+
+        assertThat(ctx.tenantId()).isEqualTo(DEFAULT_TENANT);
+        assertThat(ctx.scopeExplicit()).isFalse();
+        assertThat(ctx.isWrite()).isTrue();
+    }
+
+    @Test
+    @DisplayName("⛔ 第1刀 R2：推理草稿可见性只由入口派生，租户链恒 false")
+    void resolveInvocationThinkingDerivesFromChannel() {
+        bind(platformRequest());
+        InvocationContext platformCtx = resolver(TenantLifecycle.ACTIVE)
+                .resolveInvocation(true, TENANT, "agent.chat.orchestrate", "read:chat", "c1", null);
+        assertThat(platformCtx.thinkingAllowed()).isTrue();
+
+        bind(tenantRequest());
+        InvocationContext tenantCtx = resolver(TenantLifecycle.ACTIVE)
+                .resolveInvocation(false, null, "agent.chat.orchestrate", "read:chat", "c2", null);
+        assertThat(tenantCtx.thinkingAllowed()).isFalse();
+        assertThat(tenantCtx.channel()).isEqualTo(Channel.TENANT_SESSION);
+        assertThat(tenantCtx.scopeExplicit()).isTrue();
     }
 
     @Test
