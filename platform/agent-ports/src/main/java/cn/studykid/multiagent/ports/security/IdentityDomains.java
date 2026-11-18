@@ -26,6 +26,15 @@ public final class IdentityDomains {
     public static final String PRINCIPAL_TYPE_PLATFORM = "PLATFORM_USER";
 
     /**
+     * 租户链写入的可信 {@code TenantContext} 请求属性名。
+     *
+     * <p>⚠️ 与 {@link #PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE} 同纪律：控制器（以及
+     * 对话审计过滤器）只从请求属性取身份，不自己解析令牌，避免过滤器链里出现两套实现。
+     */
+    public static final String TENANT_CONTEXT_REQUEST_ATTRIBUTE =
+            "cn.studykid.multiagent.tenantContext";
+
+    /**
      * 平台管理链写入的可信 {@link PlatformPrincipal} 请求属性名。
      *
      * <p>控制器只从该请求属性取平台主体，不自己解析令牌

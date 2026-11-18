@@ -12,6 +12,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.stereotype.Repository;
 
+import cn.studykid.multiagent.application.agentchataudit.AuditingAgentChatOrchestrator;
 import cn.studykid.multiagent.application.cap.ClosureResolver;
 import cn.studykid.multiagent.application.modelcatalog.ModelResolver;
 import cn.studykid.multiagent.context.GlobalContextPolicy;
@@ -76,7 +77,7 @@ class AgentChatConfigurationWiringTest {
     void routerAndIdentityResolverAreReal() {
         assertThat(config.agentRouter(mock(ChatStreamGateway.class), "MiniMax-M2.5"))
                 .isInstanceOf(ModelAgentRouter.class);
-        assertThat(config.agentChatIdentityResolver(mock(TenantLifecycleProbe.class)))
+        assertThat(config.agentChatIdentityResolver(mock(TenantLifecycleProbe.class), ""))
                 .isInstanceOf(RequestAgentChatIdentityResolver.class);
     }
 
@@ -112,15 +113,50 @@ class AgentChatConfigurationWiringTest {
                 mock(ContextCheckpointEmitter.class),
                 mock(RagHitQuotaPort.class));
 
-        assertThat(port).isInstanceOf(AgentChatOrchestrator.class);
+        // 生产装配在编排器外面包了一层「对话审计装饰器」（只观察、不改写）；
+        // 守卫要继续检查真实编排器的依赖注入，必须先解开这层包装。
+        assertThat(port).isInstanceOf(AuditingAgentChatOrchestrator.class);
+        AgentChatOrchestratorPort real = ((AuditingAgentChatOrchestrator) port).unwrap();
+        assertThat(real).isInstanceOf(AgentChatOrchestrator.class);
         for (Field field : AgentChatOrchestrator.class.getDeclaredFields()) {
             if (field.isSynthetic() || Modifier.isStatic(field.getModifiers())) {
                 continue;
             }
             field.setAccessible(true);
-            assertThat(field.get(port))
+            assertThat(field.get(real))
                     .as("编排器依赖 %s 不得为 null（否则运行期 NPE 或功能空转）", field.getName())
                     .isNotNull();
         }
+    }
+
+    @Test
+    @DisplayName("⛔ 应急熔断开时编排器返回原实例（不做审计包装）")
+    void emergencyStopReturnsRawOrchestrator() throws Exception {
+        AgentChatConfiguration stopped = new AgentChatConfiguration();
+        Field flag = AgentChatConfiguration.class.getDeclaredField("chatAuditEmergencyStop");
+        flag.setAccessible(true);
+        flag.setBoolean(stopped, true);
+
+        AgentChatOrchestratorPort port = stopped.agentChatOrchestrator(
+                mock(AgentChatAuditPort.class),
+                mock(RagRetrievalPort.class),
+                mock(ChatStreamGateway.class),
+                mock(AgentRouter.class),
+                mock(AgentQueryPort.class),
+                mock(ExecutionSnapshotPort.class),
+                mock(ClosureResolver.class),
+                mock(CapAgentDefPort.class),
+                mock(CapToolDefPort.class),
+                mock(ModelResolver.class),
+                mock(ToolInvocationGate.class),
+                mock(ContextStateVerifier.class),
+                mock(ContextPolicyVersionPort.class),
+                mock(RequestAssemblyPort.class),
+                mock(ContextCheckpointEmitter.class),
+                mock(RagHitQuotaPort.class));
+
+        assertThat(port)
+                .as("应急熔断必须让编排器「完全不被包装」——否则救火时仍会走审计代码路径")
+                .isInstanceOf(AgentChatOrchestrator.class);
     }
 }

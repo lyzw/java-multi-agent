@@ -372,8 +372,16 @@ public class ApiExceptionHandler {
      *
      * <p>⚠️ <b>消息需归一化</b>：{@code getReason()} 由控制器编写，
      * 本项目约定其为不含内部结构的短句（如「资源不存在」）；
-     * 但为防止后续新增端点误传敏感信息，此处<b>不回显原文</b>，
+     * 但为防止后续新增端点误传敏感信息，此处<b>不回显原文到响应</b>，
      * 仅按状态码给出固定文案。
+     *
+     * <p>⚠️ <b>原因必须进日志</b>（2026-11-18 实测补强）：4xx 中尤其是
+     * {@code BAD_REQUEST}，控制器抛出的 reason 往往正是「哪个参数不合法」
+     *（如 {@code message 不能为空}）。若日志也只打归一化的
+     * 「请求参数不合法」，排障时只知道「参数错了」却不知道错在哪个参数——
+     * 与 {@link RequestLogContext}「打 body 才有第一条线索」同源。
+     * 因此日志额外带 {@code reason=…}，但经 {@link RequestLogContext#declaredReason}
+     * 净化控制字符 + 有界截断（防日志注入 / 日志冲垮），响应体仍不含它。
      */
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ErrorResponse> handleResponseStatus(ResponseStatusException e) {
@@ -393,7 +401,9 @@ public class ApiExceptionHandler {
                     e.getStatusCode(), requestContext());
             return error(status, codeOf(status), messageOf(status));
         }
-        log.info("控制器声明的状态: code={} | {}", e.getStatusCode(), requestContext());
+        log.info("控制器声明的状态: code={} - message={} - reason={} | {}",
+                codeOf(status), messageOf(status), RequestLogContext.declaredReason(e.getReason()),
+                requestContext());
         return error(status, codeOf(status), messageOf(status));
     }
 

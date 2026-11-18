@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequestWrapper;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -153,6 +156,24 @@ class RequestLogContextJsonBodyTest {
         assertThat(ctx)
                 .as("「我们没读到」与「客户端没传」是两件事，日志里必须能分开")
                 .contains("body={unavailable}");
+    }
+
+    @Test
+    @DisplayName("✅ 缓存请求被安全过滤器再包一层后仍取到 body：不能只认最外层实例类型")
+    void bodyFoundThroughWrapperChain() throws Exception {
+        CachedBodyHttpServletRequest cached = jsonRequest("{\"message\":\"\",\"tenantId\":\"t-1\"}");
+        // 生产里安全链（SecurityContextHolderAwareRequestFilter 等）会在缓存过滤器之后
+        // 再包一层；RequestContextHolder 里拿到的是最外层包装，不是缓存请求本身。
+        HttpServletRequest outer = new HttpServletRequestWrapper(cached);
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(outer));
+
+        String ctx = RequestLogContext.describe();
+
+        assertThat(ctx)
+                .as("⛔ 只做 instanceof CachedBodyHttpServletRequest 会在生产链路退化成 body={unavailable}")
+                .contains("body=")
+                .contains("\"message\":\"\"")
+                .doesNotContain("body={unavailable}");
     }
 
     @Test

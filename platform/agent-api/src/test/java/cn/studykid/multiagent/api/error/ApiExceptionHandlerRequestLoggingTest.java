@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -64,6 +66,19 @@ class ApiExceptionHandlerRequestLoggingTest {
         @PostMapping("/api/v1/test/boom-json")
         public String boomJson(@RequestBody Map<String, Object> payload) {
             throw new IllegalArgumentException("参数不合法: " + payload.get("tenantId"));
+        }
+
+        /** 模拟 AgentChatController：控制器声明 400 + 具体原因。 */
+        @PostMapping("/api/v1/test/declared-bad-request")
+        public String declaredBadRequest(@RequestBody Map<String, Object> payload) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "message 不能为空");
+        }
+
+        /** 原因含 CR/LF：不得把控制器文本原样拼进日志（日志注入）。 */
+        @PostMapping("/api/v1/test/injected-reason")
+        public String injectedReason(@RequestBody Map<String, Object> payload) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "message 不能为空\n2026-11-18 WARN 管理员已授权");
         }
     }
 
@@ -197,5 +212,38 @@ class ApiExceptionHandlerRequestLoggingTest {
                 .as("⛔ body 里的口令明文不得进日志")
                 .doesNotContain("hunter2");
         assertThat(logs).contains("\"password\":\"***\"");
+    }
+
+    @Test
+    @DisplayName("✅ INVALID_REQUEST 日志带控制器声明的原因：「哪个参数不合法」不能只留在响应里被归一化掉")
+    void declaredBadRequestReasonIsLogged() throws Exception {
+        mvc.perform(post("/api/v1/test/declared-bad-request")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content("{\"message\":\"\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message").value("请求参数不合法"));
+
+        String logs = loggedText();
+        assertThat(logs)
+                .as("⛔ 响应必须归一化，但日志必须带控制器真实原因——否则排障只看到「参数不合法」却不知是哪个参数")
+                .contains("reason=message 不能为空")
+                .contains("code=INVALID_REQUEST");
+    }
+
+    @Test
+    @DisplayName("⛔ 控制器原因里的 CR/LF 不得原样进日志（防日志注入）")
+    void declaredReasonIsSanitized() throws Exception {
+        mvc.perform(post("/api/v1/test/injected-reason")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"\"}"))
+                .andExpect(status().isBadRequest());
+
+        String logs = loggedText();
+        assertThat(logs)
+                .as("⛔ 未净化的换行可伪造整行假日志")
+                .doesNotContain("message 不能为空\n2026-11-18 WARN 管理员已授权")
+                .contains("message 不能为空 2026-11-18 WARN 管理员已授权");
     }
 }

@@ -70,9 +70,15 @@ public class SecurityConfiguration {
     private static final String AUTH_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
 
-    /** 请求属性名：已验签的可信 {@link TenantContext}。 */
+    /**
+     * 请求属性名：已验签的可信 {@link TenantContext}。
+     *
+     * <p>⚠️ 常量值以 {@link IdentityDomains#TENANT_CONTEXT_REQUEST_ATTRIBUTE} 为准：
+     * 对话审计过滤器（在 agent-api 模块，读不到 bootstrap 的常量）也用它取身份，
+     * 两处写两个字符串迟早会漂移成「过滤器读到的永远是 null」。
+     */
     public static final String TENANT_CONTEXT_ATTRIBUTE =
-            "cn.studykid.multiagent.tenantContext";
+            IdentityDomains.TENANT_CONTEXT_REQUEST_ATTRIBUTE;
 
     /** 请求属性名：已验签的可信 {@link PlatformPrincipal}（平台管理链写入）。 */
     public static final String PLATFORM_PRINCIPAL_ATTRIBUTE =

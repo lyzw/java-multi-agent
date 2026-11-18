@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import cn.studykid.multiagent.application.agentchataudit.AuditingAgentChatOrchestrator;
 import cn.studykid.multiagent.application.cap.ClosureResolver;
 import cn.studykid.multiagent.application.modelcatalog.ModelResolver;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcAgentChatAuditRepository;
@@ -67,6 +68,16 @@ public class AgentChatConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(AgentChatConfiguration.class);
 
+    /**
+     * 对话审计应急熔断（启动期，最高优先级）。
+     *
+     * <p>⚠️ 为 {@code true} 时<b>不包装</b>编排器，返回原实例（零开销、零风险）。
+     * 平时关闭审计用配置页面的 {@code enabled=false}（下一个请求即生效）；
+     * 这个开关只用于「配置读不出来 / 前端进不去」的救火场景。
+     */
+    @Value("${agent.chat-audit.emergency-stop:false}")
+    private boolean chatAuditEmergencyStop;
+
     /** 与 application.yml 的 {@code agent.rag.base-url} 同源（含环境变量覆盖）。 */
     private static final String RAG_BASE_URL_KEY = "agent.rag.base-url";
     private static final String RAG_BASE_URL_DEFAULT = "http://127.0.0.1:8081";
@@ -118,8 +129,11 @@ public class AgentChatConfiguration {
     /** 身份解析器（组合根独占 SecurityConfiguration 的请求属性常量）。 */
     @Bean
     public AgentChatIdentityResolver agentChatIdentityResolver(
-            @NonNull TenantLifecycleProbe lifecycleProbe) {
-        return new RequestAgentChatIdentityResolver(lifecycleProbe);
+            @NonNull TenantLifecycleProbe lifecycleProbe,
+            @Value("${agent.chat.default-tenant-id:}") @NonNull String defaultTenantId) {
+        // 空串表示未配置 → 构造器内按「无默认租户」处理，保持 fail-closed。
+        return new RequestAgentChatIdentityResolver(lifecycleProbe,
+                defaultTenantId.isBlank() ? null : defaultTenantId);
     }
 
     /**
@@ -168,9 +182,15 @@ public class AgentChatConfiguration {
         log.info("装配请求级 Agent 编排器: 路由/RAG/配额/Skill/Tool/审计/统一装配/轮末压缩态均已接真实实现"
                 + "（不写 Outbox，lease_owner={}）",
                 cn.studykid.multiagent.ports.persistence.RunClaimPort.SSE_DIRECT_LEASE_OWNER);
-        return new AgentChatOrchestrator(audit, rag, chatGateway, router, agents,
-                snapshots, closureResolver, modelConfig, toolGate,
+        AgentChatOrchestratorPort real = new AgentChatOrchestrator(audit, rag, chatGateway,
+                router, agents, snapshots, closureResolver, modelConfig, toolGate,
                 contextStateVerifier, contextPolicyVersionPort, requestAssemblyPort,
                 contextCheckpointEmitter, ragHitQuotaPort);
+        if (chatAuditEmergencyStop) {
+            log.warn("对话审计应急熔断已开启（agent.chat-audit.emergency-stop=true）："
+                    + "编排器不做审计包装，本实例不产生任何审计记录");
+            return real;
+        }
+        return new AuditingAgentChatOrchestrator(real);
     }
 }

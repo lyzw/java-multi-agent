@@ -10,7 +10,9 @@ import java.util.TreeMap;
 import com.google.re2j.Matcher;
 import com.google.re2j.Pattern;
 
+import jakarta.servlet.ServletRequest;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequestWrapper;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -57,6 +59,12 @@ import org.springframework.web.servlet.HandlerMapping;
  * <p><b>打了 body 不等于放弃纪律</b>：body 里的口令 / 令牌 / 密钥一类敏感键、
  * 以及 JWT / Bearer 形态的值，一律掩码；控制字符净化、长度有上限。
  * 也就是说，「记下这次请求」仍然不等于「把凭据抄进日志」。
+ *
+ * <p>⚠️ <b>缓存请求会被安全链再包一层</b>：本过滤器注册在安全链之前，
+ * 异常到达处理器时 {@code RequestContextHolder} 里是最外层包装。取 body 时沿
+ * {@link HttpServletRequestWrapper} 链下探找缓存包装器（见 {@code cachedBodyOf}），
+ * 不能只认最外层实例类型——否则生产日志里 body 永远是 {@code {unavailable}}，
+ * 而绕过安全链的单测却全绿。
  *
  * <p><b>无请求上下文时返回 {@code -}</b>：不是空串——「没有上下文」与
  * 「上下文是空串」在日志里长得一样，而后者往往意味着上游塞了空租户，
@@ -205,7 +213,8 @@ final class RequestLogContext {
         if (!isJsonRequest(request)) {
             return null;
         }
-        if (!(request instanceof CachedBodyHttpServletRequest cached)) {
+        CachedBodyHttpServletRequest cached = cachedBodyOf(request);
+        if (cached == null) {
             return "{unavailable}";
         }
         byte[] body = cached.cachedBody();
@@ -214,6 +223,36 @@ final class RequestLogContext {
         }
         String raw = new String(body, charsetOf(request));
         return sanitize(renderJson(raw), MAX_BODY_LENGTH);
+    }
+
+    /**
+     * 从请求（<b>可能已被安全链再包若干层</b>）里找到缓存包装器。
+     *
+     * <p><b>为什么不能直接 instanceof</b>：缓存过滤器注册在安全链之前，之后
+     * Spring Security 的 {@code SecurityContextHolderAwareRequestFilter} 等会再包一层
+     * {@link HttpServletRequestWrapper}。等异常到达处理器时，
+     * {@code RequestContextHolder} 里拿到的是<b>最外层</b>包装——不是缓存请求本身，
+     * 直接 {@code request instanceof CachedBodyHttpServletRequest} 恒 false，
+     * 于是生产日志里 body 永远显示 {@code {unavailable}}，而单测（不走安全链）却全绿。
+     * 这与「静态守卫绿、运行期失真」是同一类坑，必须沿包装链逐层下探。
+     *
+     * <p>只下探到第一个非包装请求即止；向上取整条链保证顺序无关
+     *（无论安全链包了几层都能找到）。找不到返回 {@code null}，由调用方标注 unavailable。
+     */
+    @Nullable
+    private static CachedBodyHttpServletRequest cachedBodyOf(HttpServletRequest request) {
+        ServletRequest current = request;
+        while (current instanceof HttpServletRequest servletRequest) {
+            if (servletRequest instanceof CachedBodyHttpServletRequest cached) {
+                return cached;
+            }
+            if (servletRequest instanceof HttpServletRequestWrapper wrapper) {
+                current = wrapper.getRequest();
+            } else {
+                return null;
+            }
+        }
+        return null;
     }
 
     /** Content-Type 是否为 JSON（含 {@code application/vnd.api+json} 这类后缀形式）。 */
@@ -450,6 +489,23 @@ final class RequestLogContext {
             return NONE;
         }
         return sanitize(raw, 16);
+    }
+
+    /**
+     * 控制器声明原因的日志呈现：净化控制字符 + 有界截断后带进日志。
+     *
+     * <p><b>为什么走这里</b>：4xx 的原因（如 {@code message 不能为空}）往往就是
+     * 「哪个参数不合法」的唯一线索，只打归一化的「请求参数不合法」等于把线索丢掉。
+     * 但这段文本由控制器拼装，可能夹带用户输入（租户标识 / 原始值），
+     * 且 CR/LF 会伪造整行假日志——因此与 body/参数走同一套净化，绝不裸拼。
+     *
+     * <p>空原因给 {@link #NONE}，与「控制器没声明原因」区分开。
+     */
+    static String declaredReason(@Nullable String raw) {
+        if (raw == null || raw.isBlank()) {
+            return NONE;
+        }
+        return sanitize(raw, MAX_BODY_VALUE_LENGTH);
     }
 
     /** 是否 multipart 请求。 */

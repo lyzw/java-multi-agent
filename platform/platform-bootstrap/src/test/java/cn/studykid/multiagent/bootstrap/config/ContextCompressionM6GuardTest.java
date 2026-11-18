@@ -144,21 +144,50 @@ class ContextCompressionM6GuardTest {
      * G1 A.5 S3-M8 台账登记的<b>请求侧 contextState 白名单</b>（精确到文件 → 令牌）。
      *
      * <p>⛔ 不是整模块豁免：新增生产文件携带 {@code contextState} 必须显式登记，
-     * 否则下方的白名单外扫描立即红。当前 M8-a 只允许 8 个文件出现以下三种令牌。
+     * 否则下方的白名单外扫描立即红。当前只允许下列 12 个文件出现这三种令牌。
+     *
+     * <p><b>2026-11-18 对话审计插件登记（3 个文件）</b>：审计信封的
+     * {@code RequestInfo.contextState} 是<b>只读事实快照</b>，不是压缩态生产者 ——
+     * 插件只做「收到什么就逐字抄什么」，绝不解析 / 校验 / 改写 / 回填该值：
+     * <ul>
+     *   <li>{@code agent-ports/ChatAuditEnvelope.java} —— 信封契约声明该字段（类型
+     *       {@code @Nullable String}，无语义），审计要能复现「用户到底带了什么 state 进来」；</li>
+     *   <li>{@code agent-application/AuditingAgentChatOrchestrator.java} —— 编排边界
+     *       {@code request.contextState()} 原样搬进审计请求快照，不 trim / 不解码；</li>
+     *   <li>{@code agent-infrastructure/ChatAuditRecorder.java} —— 汇报时从既有请求
+     *       基底同值搬运，不解析、不生成、不外发。</li>
+     * </ul>
+     * 三个文件都<b>不</b>持有 {@code contextStateVersion} / {@code contextStateVerifier}，
+     * 也未新增请求侧读点：{@code AgentChatController} 的逐字透传断言（下方 ④）与
+     * 「请求键恰好一处」断言不受影响，审计不构成第二个 state 生产者或消费者。
+     * {@code Map.of} 上限 10 组，故此处改用 {@code Map.ofEntries}。
      */
-    private static final Map<String, Set<String>> M8A_CONTEXT_STATE_ALLOWED = Map.of(
-            "agent-ports/AgentChatRequest.java", Set.of("contextState"),
-            "agent-ports/AgentChatEvent.java", Set.of("contextState", "contextStateVersion"),
-            "agent-ports/ContextStateVerifier.java", Set.of("contextState"),
-            "agent-context/ContextStateEnvelope.java", Set.of("contextState"),
-            "agent-api/AgentChatController.java", Set.of("contextState"),
-            "agent-worker/AgentChatOrchestrator.java", Set.of("contextState"),
-            "platform-bootstrap/AgentChatConfiguration.java", Set.of("contextStateVerifier"),
-            "platform-bootstrap/ContextStateVerifierAdapter.java", Set.of("contextState"),
-            "platform-bootstrap/ContextStateVerifierConfiguration.java",
-            Set.of("contextState", "contextStateVerifier"));
+    private static final Map<String, Set<String>> M8A_CONTEXT_STATE_ALLOWED = Map.ofEntries(
+            Map.entry("agent-ports/AgentChatRequest.java", Set.of("contextState")),
+            Map.entry("agent-ports/AgentChatEvent.java",
+                    Set.of("contextState", "contextStateVersion")),
+            Map.entry("agent-ports/ContextStateVerifier.java", Set.of("contextState")),
+            Map.entry("agent-context/ContextStateEnvelope.java", Set.of("contextState")),
+            Map.entry("agent-api/AgentChatController.java", Set.of("contextState")),
+            Map.entry("agent-worker/AgentChatOrchestrator.java", Set.of("contextState")),
+            Map.entry("platform-bootstrap/AgentChatConfiguration.java",
+                    Set.of("contextStateVerifier")),
+            Map.entry("platform-bootstrap/ContextStateVerifierAdapter.java",
+                    Set.of("contextState")),
+            Map.entry("platform-bootstrap/ContextStateVerifierConfiguration.java",
+                    Set.of("contextState", "contextStateVerifier")),
+            // ── 2026-11-18 对话审计插件：信封契约 + 搬运两处（只读事实，零语义）──
+            Map.entry("agent-ports/ChatAuditEnvelope.java", Set.of("contextState")),
+            Map.entry("agent-application/AuditingAgentChatOrchestrator.java",
+                    Set.of("contextState")),
+            Map.entry("agent-infrastructure/ChatAuditRecorder.java", Set.of("contextState")));
 
-    /** 必须真实出现的令牌；没有这些就是「白名单登记了但实现空转」。 */
+    /**
+     * 必须真实出现的令牌；没有这些就是「白名单登记了但实现空转」。
+     *
+     * <p>对话审计三文件同样设为必需：审计信封一旦静默丢掉 {@code contextState}，
+     * 事后就无法复现「用户当时带了什么 state 进来」，且守卫会随字段删除而假绿。
+     */
     private static final Map<String, Set<String>> M8A_CONTEXT_STATE_REQUIRED = Map.of(
             "agent-ports/AgentChatRequest.java", Set.of("contextState"),
             "agent-ports/AgentChatEvent.java", Set.of("contextStateVersion"),
@@ -166,7 +195,11 @@ class ContextCompressionM6GuardTest {
             "agent-worker/AgentChatOrchestrator.java", Set.of("contextState"),
             "platform-bootstrap/AgentChatConfiguration.java", Set.of("contextStateVerifier"),
             "platform-bootstrap/ContextStateVerifierConfiguration.java",
-            Set.of("contextStateVerifier"));
+            Set.of("contextStateVerifier"),
+            // ── 2026-11-18 对话审计插件：信封声明 + 两处逐字搬运都不得消失 ──
+            "agent-ports/ChatAuditEnvelope.java", Set.of("contextState"),
+            "agent-application/AuditingAgentChatOrchestrator.java", Set.of("contextState"),
+            "agent-infrastructure/ChatAuditRecorder.java", Set.of("contextState"));
 
     private static final List<String> M8A_CONTEXT_STATE_TOKENS =
             List.of("contextState", "contextStateVersion", "contextStateVerifier");

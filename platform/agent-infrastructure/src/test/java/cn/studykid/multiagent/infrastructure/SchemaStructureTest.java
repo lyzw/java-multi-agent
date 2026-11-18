@@ -42,7 +42,13 @@ class SchemaStructureTest {
     private static final Set<String> RLS_EXEMPT_TABLES = Set.of(
             "public.tenant",
             "public.cap_tool_def", "public.cap_skill_def", "public.cap_mcp_server_def",
-            "public.model_catalog", "public.model_provider_credential");
+            "public.model_catalog", "public.model_provider_credential",
+            // 对话审计插件（2026-11-18）：这两张表**刻意**没有租户维度——
+            // · chat_audit_config 是平台级单例配置（全平台一份，无租户可分）；
+            // · chat_audit_unattributed 是「身份未成立」的请求元数据（401/429 等），
+            //   此刻根本没有可信租户可绑；它只存 URI / 方法 / 状态码，绝不存原文。
+            // ⚠️ 审计**原文**在 public.chat_audit_record，那张表有 FORCE RLS + 租户策略。
+            "public.chat_audit_config", "public.chat_audit_unattributed");
 
     /** 必须存在的安全约束关键词——缺一即视为安全能力退化。 */
     private static final List<String> REQUIRED_SECURITY_MECHANISMS = List.of(

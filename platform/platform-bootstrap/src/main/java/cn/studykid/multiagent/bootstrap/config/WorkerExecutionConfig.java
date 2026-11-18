@@ -20,6 +20,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+import cn.studykid.multiagent.application.agentchataudit.AuditingChatStreamGateway;
 import cn.studykid.multiagent.application.approval.RiskBasedApprovalPolicy;
 import cn.studykid.multiagent.application.config.BudgetPolicy;
 import cn.studykid.multiagent.application.config.EffectiveConfigResolver;
@@ -145,6 +146,15 @@ public class WorkerExecutionConfig {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     ModelResolver modelResolver;
 
+    /**
+     * 对话审计应急熔断（与 {@code ChatAuditConfiguration} 同一配置键）。
+     *
+     * <p>⚠️ 直接构造本类的单元测试读到的是字段初始值 {@code false} ⇒ <b>包装</b>；
+     * 这是有意的：漏包装是「审计静默失效」，比多包一层难发现得多。
+     */
+    @Value("${agent.chat-audit.emergency-stop:false}")
+    boolean chatAuditEmergencyStop = false;
+
     /** 按 provider 解析 API Key（环境变量，不入库）。同上为 required=false。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     ModelCredentialProvider modelCredentialProvider;
@@ -187,7 +197,13 @@ public class WorkerExecutionConfig {
     @Bean
     public ChatStreamGateway chatStreamGateway() {
         // rawModelGateway() 返回的实例必然实现 ChatStreamGateway（MiniMax/Fake 均双实现）
-        return (ChatStreamGateway) rawModelGateway();
+        ChatStreamGateway raw = (ChatStreamGateway) rawModelGateway();
+        if (chatAuditEmergencyStop) {
+            log.warn("对话审计应急熔断已开启：流式网关不做审计包装");
+            return raw;
+        }
+        // 审计装饰器只读线程内的审计作用域；无作用域（未命中审计端点）时原样委托。
+        return new AuditingChatStreamGateway(raw);
     }
 
     /**
