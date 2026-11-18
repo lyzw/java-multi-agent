@@ -31,6 +31,7 @@ import { RagIngestJobsPage } from '@/pages/rag/RagIngestJobsPage'
 import { RagReindexPage } from '@/pages/rag/RagReindexPage'
 import { DictionaryAdminPage } from '@/pages/dictionaries/DictionaryAdminPage'
 import { ModelCatalogPage } from '@/pages/models/ModelCatalogPage'
+import { ChatAuditConfigPage } from '@/pages/settings/ChatAuditConfigPage'
 import { AgentLabPage } from '@/pages/agentlab/AgentLabPage'
 import { AiChatPage } from '@/pages/agentlab/AiChatPage'
 import { AgentChatPage } from '@/pages/agentlab/AgentChatPage'
@@ -322,6 +323,15 @@ export const router = createBrowserRouter(
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>
               <ModelCatalogPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 对话审计配置（平台级单例）：控制"聊天相关所有请求"的端到端审计录制，写入即生效
+          path: 'chat-audit-config',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <ChatAuditConfigPage />
             </RequireRole>
           ),
         },

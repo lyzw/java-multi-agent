@@ -354,6 +354,16 @@ export const NAV_GROUPS: NavGroup[] = [
           '模型配置（Model Catalog）：模型定义 CRUD（供应商 / 场景 / 能力开关 / 维度 / 排序）+ 供应商密钥（仅脱敏回显，明文只上传不回显）。写端点需 PLATFORM_ADMIN，安全边界以执行时后端重授权为准。',
         phase: '系统配置',
       },
+      {
+        key: 'chat-audit-config',
+        label: '对话审计配置',
+        path: '/chat-audit-config',
+        icon: <FileProtectOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '对话审计插件（平台级单例）：控制"聊天相关所有请求"的端到端录制——端点范围、原文/thinking/逐分片采集、DB+目录双写、脱敏、采样、保留期。保存后写入即生效，无需重启。凭据类 Header 后端强制脱敏，不可关闭。',
+        phase: '系统配置',
+      },
     ],
   },
   {
