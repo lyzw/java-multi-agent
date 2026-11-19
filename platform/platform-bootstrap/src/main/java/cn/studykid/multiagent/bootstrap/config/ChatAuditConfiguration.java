@@ -21,9 +21,12 @@ import cn.studykid.multiagent.infrastructure.agentchataudit.AsyncChatAuditWriter
 import cn.studykid.multiagent.infrastructure.agentchataudit.ChatAuditRecorder;
 import cn.studykid.multiagent.infrastructure.agentchataudit.DirectoryChatAuditSink;
 import cn.studykid.multiagent.infrastructure.persistence.agentchataudit.JdbcChatAuditConfigRepository;
+import cn.studykid.multiagent.infrastructure.persistence.agentchataudit.JdbcChatAuditRecordQueryRepository;
 import cn.studykid.multiagent.infrastructure.persistence.agentchataudit.JdbcChatAuditSink;
+import cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider;
 import cn.studykid.multiagent.ports.agentchat.audit.ChatAuditConfig;
 import cn.studykid.multiagent.ports.agentchat.audit.ChatAuditConfigPort;
+import cn.studykid.multiagent.ports.agentchat.audit.ChatAuditRecordQueryPort;
 import cn.studykid.multiagent.ports.agentchat.audit.ChatAuditRecorderPort;
 import cn.studykid.multiagent.ports.agentchat.audit.ChatAuditSinkPort;
 import cn.studykid.multiagent.ports.agentchat.audit.ChatAuditWriterPort;
@@ -97,6 +100,26 @@ public class ChatAuditConfiguration {
     @Bean
     public ChatAuditRecorderPort chatAuditRecorder(ChatAuditWriterPort writer) {
         return new ChatAuditRecorder(writer);
+    }
+
+    /**
+     * 审计记录查询端口（平台审计/效果评估角色读，跨租户）。
+     *
+     * <p>⚠️ <b>必须用 BYPASSRLS 运维数据源，不是主数据源</b>：{@code chat_audit_record}
+     * 是 FORCE RLS 租户表，主数据源 app_agent 只能读当前绑定租户；平台审计角色无可绑租户，
+     * 用主数据源会得到恒 0 行（静默空表）。运维通道未接入时
+     * {@link PlatformOpsDataSourceProvider#platformIdentityDataSource()} 返回「取连接即失败」
+     * 的替身 → 全局 503，绝不静默降级成主数据源。
+     *
+     * <p>⚠️ <b>这是运维 BYPASSRLS 数据源的一条新增（只读）消费路径</b>，已在
+     * {@code PlatformOpsDataSourceArchitectureTest.PROVIDER_HOLDERS} 显式登记；
+     * 仓储全类只有 SELECT，不写 outbox、不参与 Worker、不碰任何业务表。
+     */
+    @Bean
+    public ChatAuditRecordQueryPort chatAuditRecordQueryPort(PlatformOpsDataSourceProvider platformOps) {
+        log.info("装配对话审计记录查询端口: chat_audit_record + chat_audit_unattributed，"
+                + "BYPASSRLS 运维数据源（enabled={}），只读跨租户", platformOps.isEnabled());
+        return new JdbcChatAuditRecordQueryRepository(platformOps.platformIdentityDataSource());
     }
 
     /**

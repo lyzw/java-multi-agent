@@ -63,7 +63,7 @@ public final class GovernanceSupport {
      * @throws IllegalArgumentException 格式非法 → <b>400</b>
      */
     @Nullable
-    static Instant instant(@Nullable String raw, String paramName) {
+    public static Instant instant(@Nullable String raw, String paramName) {
         if (raw == null || raw.isBlank()) {
             return null;
         }
@@ -75,8 +75,12 @@ public final class GovernanceSupport {
         }
     }
 
-    /** 时间区间合法性：from 不得晚于 to。 */
-    static void checkRange(@Nullable Instant from, @Nullable Instant to) {
+    /**
+     * 时间区间合法性：from 不得晚于 to。
+     *
+     * <p>public 供跨包端点复用（如对话审计记录查询页），避免每个端点各写一份时间校验。
+     */
+    public static void checkRange(@Nullable Instant from, @Nullable Instant to) {
         if (from != null && to != null && from.isAfter(to)) {
             throw new IllegalArgumentException("createdFrom/from 不得晚于 createdTo/to");
         }
@@ -117,9 +121,9 @@ public final class GovernanceSupport {
      *
      * @param allowed 允许值集合；为 {@code null} 表示不校验
      */
-    static void requireEnum(@Nullable String value,
-                            java.util.Set<String> allowed,
-                            String paramName) {
+    public static void requireEnum(@Nullable String value,
+                                   java.util.Set<String> allowed,
+                                   String paramName) {
         if (value == null || value.isBlank() || allowed == null) {
             return;
         }

@@ -67,7 +67,14 @@ class PlatformOpsDataSourceArchitectureTest {
             //    它拿到的不是受守卫数据源，而是 platformIdentityDataSource()（原始池）：
             //    受守卫包装只在 PLATFORM 发布会话窗口内交连接，身份域路径不在窗口内。
             //    ⚠️ 前提：该路径仅供平台身份/管理面（低频、带认证或 fail-closed），不得扩散。
-            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/AuthConfiguration.java");
+            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/AuthConfiguration.java",
+            // ⚠️ 对话审计记录「查询」路径（2026-11-18）：
+            //    chat_audit_record 是 FORCE RLS 租户表，平台审计角色跨租户读原文必须
+            //    BYPASSRLS；主数据源 app_agent 只能读当前租户、会得到静默空表。
+            //    该端口全类只有 SELECT（JdbcChatAuditRecordQueryRepository），不写任何表、
+            //    不写 outbox、不参与 Worker，端点由 platform.audit.read 鉴权把关，
+            //    运维通道未接入时 fail-closed（503），不静默降级成主数据源。
+            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ChatAuditConfiguration.java");
 
     /** 受会话守卫的数据源的合法引用方（只有持有者能构造它）。 */
     private static final Set<String> GUARD_HOLDERS = Set.of(
