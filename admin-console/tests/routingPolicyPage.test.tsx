@@ -10,6 +10,9 @@ import { App as AntApp } from 'antd'
  * <p><b>只 mock 传输层，不 mock `routingPolicyApi`</b>：让码值映射、
  * 401/403 与 429 分类这些真实代码也进入断言范围 —— 它们正是
  * 「界面把没跑成显示成没问题」会出错的地方。
+ *
+ * <p>页面已从「手写四段 JSON」改为可视化控件：这里通过真实控件操作，
+ * 断言生成的四段文本符合后端文法，且原有试跑/申请语义没有退化。
  */
 vi.mock('@/api/client', async () => {
   const actual = await vi.importActual<typeof import('@/api/client')>('@/api/client')
@@ -56,10 +59,13 @@ function renderPage() {
   )
 }
 
-/** 打开表单里第 index 个 antd Select 并选中指定 label 的选项（portal 渲染）。 */
-async function pickOption(index: number, optionLabel: string): Promise<void> {
-  const combobox = screen.getAllByRole('combobox')[index]!
-  fireEvent.mouseDown(combobox, { button: 0 })
+/** 按 Form.Item 标签找到其内的 Select 并选中选项（portal 渲染）。 */
+async function pickNoMatchAction(optionLabel: string): Promise<void> {
+  const item = screen.getByText('无命中处置').closest('.ant-form-item')
+  expect(item).not.toBeNull()
+  const selector = item!.querySelector('.ant-select-selector')
+  expect(selector).not.toBeNull()
+  fireEvent.mouseDown(selector!)
   const option = await screen.findByText(optionLabel, {
     selector: '.ant-select-item-option-content',
   })
@@ -69,6 +75,20 @@ async function pickOption(index: number, optionLabel: string): Promise<void> {
 /** 策略标识是行级必填；试跑不要求「变更理由」（理由属于申请单）。 */
 function fillPolicyId(value = 'order-routing'): void {
   fireEvent.change(screen.getByLabelText(/策略标识/), { target: { value } })
+}
+
+/** 从最近一次 dry-run 请求里取出策略草稿文本。 */
+function lastDryRunPolicy(): [
+  { policyId: string; inputSchema: string; evaluation: string; sampleSet: string },
+  string | null,
+] {
+  const [url, init] = mockedRequest.mock.calls[0]!
+  expect(url).toBe('/cap/config/routing-policies/dry-run')
+  const body = JSON.parse(String(init!.body)) as {
+    policy: { policyId: string; inputSchema: string; evaluation: string; sampleSet: string }
+    probes: string | null
+  }
+  return [body.policy, body.probes]
 }
 
 const DRY_RUN_RESULT: RoutingDryRunResult = {
@@ -104,33 +124,50 @@ const DRY_RUN_RESULT: RoutingDryRunResult = {
   replayDate: '2026-10-28',
 }
 
-describe('管理台 · 路由策略登记与试跑（A7-1 / A7-1b）', () => {
-  it('✅ 渲染策略标识、三段策略文本与探针字段', () => {
+describe('管理台 · 路由策略可视化登记与试跑（A7-1 / A7-1b）', () => {
+  it('✅ 渲染基本字段与四段可视化编辑器，不再要求手写 JSON', () => {
     renderPage()
     expect(screen.getByLabelText(/策略标识/)).toBeTruthy()
-    expect(screen.getByLabelText(/输入词汇表/)).toBeTruthy()
-    expect(screen.getByLabelText(/有序规则列表/)).toBeTruthy()
-    expect(screen.getByLabelText(/回放样本/)).toBeTruthy()
-    expect(screen.getByLabelText(/试跑探针/)).toBeTruthy()
+    expect(screen.getByText('① 基本信息')).toBeTruthy()
+    expect(screen.getByText('② 输入字段（词汇表）')).toBeTruthy()
+    expect(screen.getByText('③ 路由规则')).toBeTruthy()
+    expect(screen.getByText('④ 发布期回放样本')).toBeTruthy()
+    expect(screen.getByText('⑤ 试跑探针')).toBeTruthy()
+    expect(screen.getByText('实时预览与校验')).toBeTruthy()
+    // 旧的手写 JSON 文本框已移除
+    expect(screen.queryByLabelText(/有序规则列表/)).toBeNull()
+    expect(screen.queryByLabelText(/输入词汇表（inputSchema/)).toBeNull()
   })
 
-  it('✅ 试跑把三段文本按**原文逐字**送后端（不重新序列化）', async () => {
+  it('✅ 把可视化配置生成的四段文本按后端文法送后端', async () => {
     mockedRequest.mockResolvedValue(DRY_RUN_RESULT)
-    const raw = '{\n  "type":"object",  "properties": {"b":{"type":"string"},"a":{"type":"string"}}\n}'
-
     renderPage()
-    fireEvent.change(screen.getByLabelText(/策略标识/), { target: { value: 'order-routing' } })
-    fireEvent.change(screen.getByLabelText(/输入词汇表/), { target: { value: raw } })
+    fillPolicyId('order-routing')
     fireEvent.click(screen.getByRole('button', { name: /试跑/ }))
 
     await waitFor(() => expect(mockedRequest).toHaveBeenCalledTimes(1))
-    expect(mockedRequest.mock.calls[0]![0]).toBe('/cap/config/routing-policies/dry-run')
-    const body = JSON.parse(String(mockedRequest.mock.calls[0]![1]!.body)) as {
-      policy: { policyId: string; inputSchema: string }
+    const [policy, probes] = lastDryRunPolicy()
+    expect(policy.policyId).toBe('order-routing')
+
+    const schema = JSON.parse(policy.inputSchema) as {
+      type: string; properties: Record<string, { type: string }>; required: string[]
     }
-    // ⚠️ 逐字相等：改写空白与键序等于每次发布都声称「我改过」（内容指纹按行算）
-    expect(body.policy.inputSchema).toBe(raw)
-    expect(body.policy.policyId).toBe('order-routing')
+    expect(schema.type).toBe('object')
+    expect(schema.properties.topic?.type).toBe('string')
+    expect(schema.required).toContain('topic')
+
+    const rules = JSON.parse(policy.evaluation) as { ruleId: string; when: Record<string, unknown> }[]
+    expect(rules).toHaveLength(2)
+    expect(Object.keys(rules[0]!.when)).toEqual(['and'])
+    expect(JSON.stringify(rules)).not.toContain('"gt"')
+
+    const samples = JSON.parse(policy.sampleSet) as { label: string; via: string }[]
+    expect(samples).toHaveLength(2)
+    expect(samples[0]!.via).toBe('RULE_MATCH')
+
+    const probesJson = JSON.parse(probes!) as { label: string; input: Record<string, string> }[]
+    expect(probesJson).toHaveLength(1)
+    expect(probesJson[0]!.input.topic).toBe('order_status')
   })
 
   it('✅ 回显守卫结论、稳定码、投影后的输入与回放日', async () => {
@@ -161,7 +198,6 @@ describe('管理台 · 路由策略登记与试跑（A7-1 / A7-1b）', () => {
     fireEvent.click(expander!)
 
     await screen.findByText(/求值轨迹/)
-    // 轨迹只含实际判过的规则：r-2 不在任何列里，只可能来自轨迹
     expect(container.textContent).toContain('r-2')
     expect(container.textContent).toContain('未命中')
     expect(container.textContent).toContain('命中')
@@ -186,20 +222,21 @@ describe('管理台 · 路由策略登记与试跑（A7-1 / A7-1b）', () => {
     await waitFor(() => expect(mockedRequest).toHaveBeenCalledTimes(1))
   })
 
-  it('⛔ 探针不是合法 JSON → 当场拒，不发请求（结构性预检，不碰文法）', async () => {
+  it('⛔ 规则引用了未声明字段 → 当场拒，不发请求（结构预检，不碰文法）', async () => {
     renderPage()
     fillPolicyId()
-    fireEvent.change(screen.getByLabelText(/试跑探针/), { target: { value: '[ 这不是 JSON' } })
+    // 删掉默认规则正在引用的 topic 字段
+    fireEvent.click(screen.getByLabelText('删除字段 topic'))
     fireEvent.click(screen.getByRole('button', { name: /试跑/ }))
 
-    await waitFor(() => expect(screen.getByText(/探针列表（probes） 不是合法 JSON/)).toBeTruthy())
+    await waitFor(() => expect(screen.getAllByText(/未在输入词汇表中声明/).length).toBeGreaterThan(0))
     expect(mockedRequest).not.toHaveBeenCalled()
   })
 
   it('⛔ DEFAULT_TARGET 但兜底目标为空 → 当场拒（与后端行级校验同口径）', async () => {
     renderPage()
     fillPolicyId()
-    await pickOption(1, 'DEFAULT_TARGET')
+    await pickNoMatchAction('走兜底目标')
     fireEvent.click(screen.getByRole('button', { name: /试跑/ }))
 
     await waitFor(() => expect(screen.getByText(/必须填写兜底目标/)).toBeTruthy())
@@ -231,8 +268,10 @@ describe('管理台 · 路由策略登记与试跑（A7-1 / A7-1b）', () => {
     expect(payload.agents).toBeUndefined()
     expect(payload.routingPolicies).toHaveLength(1)
     expect(payload.routingPolicies?.[0]?.policyId).toBe('order-routing')
-    // ⚠️ 版本号与内容指纹由服务端决定：客户端若能指定它们，
-    //    就等于能指定「内容没变」这个证明
+    // 空样本集也要显式写 "[]"：后端 DTO 拒绝空白字符串
+    expect(payload.routingPolicies?.[0]?.sampleSet).not.toBe('')
+    // 版本号与内容指纹由服务端决定：客户端若能指定它们，
+    // 就等于能指定「内容没变」这个证明
     expect(JSON.stringify(payload)).not.toMatch(/"version"/)
     expect(JSON.stringify(payload)).not.toMatch(/fingerprint/i)
     // 申请单已生成 ≠ 配置已改变：界面必须给 requestId 并说明后两步

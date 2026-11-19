@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   App as AntApp,
   Alert,
@@ -32,27 +32,46 @@ import {
   type DryRunProbeResult,
   type RoutingDryRunResult,
 } from '@/api/routingPolicyApi'
-import { isValidJson } from '../agentDefinition'
 import type { PublishRoutingPolicySpec, PublishRequestItem } from '@/api/types'
+import {
+  MODE_HINT,
+  flattenFields,
+  makeDefaultDraft,
+  pretty,
+  serializeInputSchema,
+  serializeProbes,
+  serializeRules,
+  serializeSamples,
+  validateDraft,
+} from './routingBuilder/routingVisualModel'
+import type { VisualDraft } from './routingBuilder/routingVisualModel'
+import {
+  PreviewPanel,
+  ProbeEditor,
+  RuleEditor,
+  SampleEditor,
+  SchemaEditor,
+} from './routingBuilder/routingVisualEditors'
 
 const { Paragraph, Text } = Typography
 
 /**
- * 路由策略登记 + 试跑（10 号设计 §7 债 5 · 管理台 A7-1b / A7-1）。
+ * 路由策略登记（可视化配置）+ 试跑（10 号设计 §7 债 5 · 管理台 A7-1b / A7-1）。
+ *
+ * <p><b>交互模型</b>：策略的四段文本（inputSchema / evaluation / sampleSet / probes）
+ * 不再由人手输 JSON，而是由本页的表单控件维护一份结构化草稿，再按后端
+ * `PolicyCodec` 的文法序列化成 JSON 文本。这样非技术用户也能用「选字段、选算子、
+ * 填取值」的方式完成配置；右侧始终显示即将提交的 JSON 与结构校验提示。
  *
  * <p><b>为什么「试跑」必须在这个页面上</b>：规则写错字段名<b>不会报错</b> ——
  * 词汇表外的字段在投影时被静默丢弃，线上只表现为「路由经常走兜底」。
  * 发布期守卫（V3~V10）拦得住，但只有<b>提交之后</b>才拦得住，
  * 而配置者需要的是「提交之前就知道」。
  *
- * <p><b>⚠️ 本页不含第二份求值器</b>：三段策略文本（{@code inputSchema} /
- * {@code evaluation} / {@code sampleSet}）与探针一律按<b>原文</b>送后端，
- * 前端只做<b>结构性</b>预检（是不是合法 JSON、必填格是否空着）。
- * 文法、上限、谓词求值、守卫判定的唯一真相在后端 {@code agent-routing}；
- * 这里若复刻一份，漂移的症状就是「界面显示命中 A、运行期去了 B」。
- *
- * <p><b>⚠️ 原文透传的另一半理由</b>：内容指纹按「这一行内容没变」计算，
- * 前端重新序列化会改写空白与键序，等于每次发布都声称「我改过」。
+ * <p><b>⚠️ 本页不含第二份求值器</b>：结构化草稿只做<b>结构性</b>预检
+ * （字段是否声明、算子参数是否完整、条数/深度上限、样本覆盖提示），
+ * 文法、语义守卫与准入判定的唯一真相在后端 {@code agent-routing}。
+ * 这里若复刻一份求值器，漂移的症状就是「界面显示命中 A、运行期去了 B」。
  *
  * <p><b>⚠️ 结论的边界要写在界面上</b>：dry-run 判的是<b>选择</b>（会走到哪个目标、为什么），
  * <b>准入</b>（目标 ∈ 父声明、固定版本、逐跳授权、深度/次数/超时/预算）在运行期判 ——
@@ -63,55 +82,26 @@ const { Paragraph, Text } = Typography
  * 绝不把「没跑成」显示成「跑通且没问题」（与 AI 实验室同口径）。
  */
 
-/** 表单值：三段策略文本与探针都是<b>原文字符串</b>，不是对象。 */
-interface DraftForm {
+interface BasicForm {
   policyId: string
-  mode: PublishRoutingPolicySpec['mode']
-  noMatchAction: PublishRoutingPolicySpec['noMatchAction']
-  onConflict?: PublishRoutingPolicySpec['onConflict']
+  mode: VisualDraft['mode']
+  noMatchAction: VisualDraft['noMatchAction']
+  onConflict?: VisualDraft['onConflict']
   defaultTarget?: string
-  inputSchema: string
-  evaluation: string
-  sampleSet?: string
-  probes: string
   reason: string
 }
 
-/** 结构性预检：只判「能不能是一段 JSON」，不判文法（文法归后端）。 */
-function checkStructure(v: DraftForm): string | null {
-  if (!v.policyId.trim()) return '策略标识不能为空'
-  for (const [label, raw] of [
-    ['输入词汇表（inputSchema）', v.inputSchema],
-    ['规则列表（evaluation）', v.evaluation],
-  ] as const) {
-    if (!isValidJson(raw)) return `${label} 不是合法 JSON`
+/** 基础字段由 Form 持有，四段结构化内容由可视化编辑器持有，合并后才是完整草稿。 */
+function withBasic(draft: VisualDraft, basic: Partial<BasicForm>): VisualDraft {
+  return {
+    ...draft,
+    policyId: basic.policyId ?? draft.policyId,
+    mode: basic.mode ?? draft.mode,
+    noMatchAction: basic.noMatchAction ?? draft.noMatchAction,
+    onConflict: basic.onConflict,
+    defaultTarget: basic.defaultTarget ?? draft.defaultTarget,
   }
-  for (const [label, raw] of [
-    ['回放样本（sampleSet）', v.sampleSet],
-    ['探针列表（probes）', v.probes],
-  ] as const) {
-    if (raw && raw.trim() && !isValidJson(raw)) return `${label} 不是合法 JSON`
-  }
-  // 这一条是行级结构，不是语义：后端 DEFAULT_TARGET 缺兜底目标会直接 400，
-  // 在这里先问一句，省得作者填完理由走到审批才发现。
-  if (v.noMatchAction === 'DEFAULT_TARGET' && !(v.defaultTarget ?? '').trim()) {
-    return 'noMatchAction=DEFAULT_TARGET 时必须填写兜底目标'
-  }
-  return null
 }
-
-/** 试跑只校验草稿字段：变更理由属于申请单， dry-run 不产生申请单，不该拦它。 */
-const DRAFT_FIELDS: (keyof DraftForm)[] = [
-  'policyId',
-  'mode',
-  'noMatchAction',
-  'onConflict',
-  'defaultTarget',
-  'inputSchema',
-  'evaluation',
-  'sampleSet',
-  'probes',
-]
 
 export function RoutingPolicyPage(): JSX.Element {
   const { message } = AntApp.useApp()
@@ -121,42 +111,78 @@ export function RoutingPolicyPage(): JSX.Element {
   /** 已生成的申请单标识（本页不跳「发布中心」：那条路由在纯平台控制台里并不存在） */
   const [requestId, setRequestId] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ kind: 'error' | 'warning'; text: string } | null>(null)
-  const [form] = Form.useForm<DraftForm>()
+  const [form] = Form.useForm<BasicForm>()
+  const [visual, setVisual] = useState<VisualDraft>(() => makeDefaultDraft())
 
-  const readDraft = async (names?: (keyof DraftForm)[]): Promise<DraftForm | null> => {
-    let values: DraftForm
+  // 基础字段逐个订阅：右侧预览与校验随输入实时更新
+  const wPolicyId = Form.useWatch('policyId', form)
+  const wMode = Form.useWatch('mode', form)
+  const wNoMatch = Form.useWatch('noMatchAction', form)
+  const wConflict = Form.useWatch('onConflict', form)
+  const wDefaultTarget = Form.useWatch('defaultTarget', form)
+  const currentDraft = useMemo(
+    () => withBasic(visual, {
+      policyId: wPolicyId, mode: wMode, noMatchAction: wNoMatch,
+      onConflict: wConflict, defaultTarget: wDefaultTarget,
+    }),
+    [visual, wPolicyId, wMode, wNoMatch, wConflict, wDefaultTarget],
+  )
+
+  const flatFields = useMemo(() => flattenFields(visual.fields), [visual.fields])
+  const knownTargets = useMemo(() => {
+    const values = [
+      ...currentDraft.rules.map((r) => r.target.trim()),
+      ...currentDraft.samples.map((s) => s.expectTarget.trim()),
+      currentDraft.defaultTarget.trim(),
+    ]
+    return values.filter((v, i) => v && values.indexOf(v) === i)
+  }, [currentDraft])
+
+  /** 读取表单 + 结构自检；文法与守卫仍归后端。变更理由属于申请单，dry-run 不校验它。 */
+  const readDraft = async (includeReason = false): Promise<{ draft: VisualDraft; reason: string } | null> => {
+    const fields: (keyof BasicForm)[] = [
+      'policyId', 'mode', 'noMatchAction', 'onConflict', 'defaultTarget',
+      ...(includeReason ? (['reason'] as (keyof BasicForm)[]) : []),
+    ]
+    let basic: BasicForm
     try {
-      values = await form.validateFields(names)
+      basic = await form.validateFields(fields)
     } catch {
       return null
     }
-    const structural = checkStructure(values)
-    if (structural) {
-      message.error(structural)
+    const draft = withBasic(visual, basic)
+    const report = validateDraft(draft)
+    if (report.errors.length) {
+      message.error(report.errors[0])
       return null
     }
-    return values
+    return { draft, reason: (basic.reason ?? '').trim() }
   }
 
-  const toSpec = (v: DraftForm): PublishRoutingPolicySpec => ({
-    policyId: v.policyId.trim(),
-    mode: v.mode,
-    // ⚠️ 原文透传：不 JSON.stringify(JSON.parse(...))，那会改写空白与键序
-    inputSchema: v.inputSchema,
-    evaluation: v.evaluation,
-    noMatchAction: v.noMatchAction,
-    defaultTarget: (v.defaultTarget ?? '').trim() || undefined,
-    onConflict: v.onConflict || undefined,
-    sampleSet: v.sampleSet?.trim() ? v.sampleSet : undefined,
+  const toSpec = (d: VisualDraft): PublishRoutingPolicySpec => ({
+    policyId: d.policyId.trim(),
+    mode: d.mode,
+    // 四段文本由可视化编辑器按后端文法生成；空样本集显式写 "[]"（后端 DTO 拒空白）
+    inputSchema: pretty(serializeInputSchema(d)),
+    evaluation: pretty(serializeRules(d)),
+    noMatchAction: d.noMatchAction,
+    defaultTarget: d.defaultTarget.trim() || undefined,
+    onConflict: d.onConflict || undefined,
+    sampleSet: pretty(serializeSamples(d)),
   })
 
   const runDry = async (): Promise<void> => {
-    const v = await readDraft(DRAFT_FIELDS)
-    if (!v) return
+    const parsed = await readDraft()
+    if (!parsed) return
+    const d = parsed.draft
     setRunning(true)
     setNotice(null)
     try {
-      setResult(await dryRunRoutingPolicy({ policy: toSpec(v), probes: v.probes.trim() || null }))
+      const probes = serializeProbes(d)
+      setResult(await dryRunRoutingPolicy({
+        policy: toSpec(d),
+        probes: probes.length ? pretty(probes) : null,
+      }))
     } catch (e) {
       if (isTenantChannelBlocked(e)) {
         setNotice({
@@ -180,28 +206,31 @@ export function RoutingPolicyPage(): JSX.Element {
   }
 
   const submit = async (): Promise<void> => {
-    const v = await readDraft()
-    if (!v) return
-    if (!v.reason.trim()) {
+    const parsed = await readDraft(true)
+    if (!parsed) return
+    const d = parsed.draft
+    const reason = parsed.reason
+    if (!reason) {
       message.error('变更理由不能为空（将留痕）')
       return
     }
-    const spec: PublishRoutingPolicySpec = toSpec(v)
+    const spec: PublishRoutingPolicySpec = toSpec(d)
     setSubmitting(true)
     try {
       const req: PublishRequestItem = await submitPublishRequest({
         operation: 'PUBLISH',
         scope: 'TENANT',
         routingPolicies: [spec],
-        reason: v.reason.trim(),
+        reason,
       })
       message.success('策略登记申请已提交，待双人复核后执行')
       setRequestId(req.requestId)
       form.resetFields()
+      setVisual(makeDefaultDraft())
       setResult(null)
     } catch (e) {
       if (e instanceof ApiError && e.status === 400) {
-        message.error('申请被门禁预检拒绝（400）：请检查策略标识与三段文本')
+        message.error('申请被门禁预检拒绝（400）：请检查策略标识与四段配置内容')
       } else if (e instanceof ApiError && e.status === 403) {
         message.error('作用域不被允许（403）')
       } else {
@@ -250,158 +279,164 @@ export function RoutingPolicyPage(): JSX.Element {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Typography.Title level={4}>路由策略登记</Typography.Title>
+      <Typography.Title level={4} style={{ marginBottom: 0 }}>
+        路由策略登记
+      </Typography.Title>
 
       <Alert
         type="info"
         showIcon
-        message="先试跑，再提交；提交走「申请 → 双人复核 → 执行」"
+        message="用下拉、开关和条件选择器完成配置；先试跑，再提交"
         description={
-          '试跑（dry-run）把这份草稿原样交给运行期同一个引擎与守卫，不落库、不产生申请单。'
+          '页面会把可视化配置转换成后端需要的策略文本，无需手写规则代码。'
+          + '试跑（dry-run）把这份草稿原样交给运行期同一个引擎与守卫，不落库、不产生申请单。'
           + '它判的是「会走到哪个目标、为什么」，不是「这个目标能不能被委派」'
           + '（准入在运行期判，dry-run 没有父声明）—— 试跑没问题不等于上线一定成功。'
         }
       />
 
-      <Card title="策略草稿">
-        <Form
-          form={form}
-          layout="vertical"
-          initialValues={{
-            mode: 'RULES_ONLY',
-            noMatchAction: 'REJECT',
-            onConflict: 'RULE_WINS',
-            inputSchema:
-              '{\n  "type": "object",\n  "properties": {\n    "text": { "type": "string" }\n  }\n}',
-            evaluation: '[\n  {\n    "ruleId": "r-1",\n    "target": "faq-answer",\n    "when": {}\n  }\n]',
-            probes: '[\n  {\n    "label": "示例探针",\n    "input": { "text": "怎么退货" }\n  }\n]',
-          }}
-        >
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{
+          mode: 'RULES_ONLY',
+          noMatchAction: 'REJECT',
+          onConflict: 'RULE_WINS',
+        }}
+      >
+        <Card title="① 基本信息" size="small">
           <Row gutter={16}>
-            <Col span={8}>
+            <Col xs={24} md={8}>
               <Form.Item
                 name="policyId"
-                label="策略标识（policyId · 可读字符串）"
+                label="策略标识（policyId）"
                 rules={[{ required: true, message: '请输入策略标识' }]}
-                extra="不是 UUID；版本号与内容指纹由服务端决定"
+                extra="可读字符串，不是 UUID；版本号与内容指纹由服务端决定"
               >
                 <Input placeholder="如 order-routing" />
               </Form.Item>
             </Col>
-            <Col span={6}>
-              <Form.Item name="mode" label="目标选择方式（mode）">
+            <Col xs={24} md={6}>
+              <Form.Item name="mode" label="目标选择方式" extra={MODE_HINT[wMode ?? 'RULES_ONLY']}>
                 <Select
                   options={[
-                    { value: 'RULES_ONLY', label: 'RULES_ONLY（推荐：模型零参与）' },
-                    { value: 'RULE_FIRST', label: 'RULE_FIRST' },
-                    { value: 'SEMANTIC', label: 'SEMANTIC' },
+                    { value: 'RULES_ONLY', label: '仅规则（推荐，模型零参与）' },
+                    { value: 'RULE_FIRST', label: '规则优先，模型兜底' },
+                    { value: 'SEMANTIC', label: '语义（完全交给模型）' },
                   ]}
                 />
               </Form.Item>
             </Col>
-            <Col span={5}>
-              <Form.Item name="noMatchAction" label="无命中处置（noMatchAction）">
+            <Col xs={24} md={5}>
+              <Form.Item name="noMatchAction" label="无命中处置">
                 <Select
                   options={[
-                    { value: 'REJECT', label: 'REJECT（拒绝委派）' },
-                    { value: 'DEFAULT_TARGET', label: 'DEFAULT_TARGET' },
+                    { value: 'REJECT', label: '拒绝委派' },
+                    { value: 'DEFAULT_TARGET', label: '走兜底目标' },
                   ]}
                 />
               </Form.Item>
             </Col>
-            <Col span={5}>
-              <Form.Item name="onConflict" label="冲突裁决（onConflict）" extra="仅 RULE_FIRST / SEMANTIC 有意义">
+            <Col xs={24} md={5}>
+              <Form.Item
+                name="onConflict"
+                label="冲突裁决"
+                extra="仅「规则优先 / 语义」有意义"
+              >
                 <Select
                   allowClear
                   options={[
-                    { value: 'RULE_WINS', label: 'RULE_WINS' },
-                    { value: 'CANDIDATE_WINS', label: 'CANDIDATE_WINS' },
+                    { value: 'RULE_WINS', label: '规则优先' },
+                    { value: 'CANDIDATE_WINS', label: '模型候选优先' },
                   ]}
                 />
               </Form.Item>
             </Col>
           </Row>
-
           <Form.Item
             name="defaultTarget"
-            label="兜底目标（defaultTarget）"
-            extra="noMatchAction=DEFAULT_TARGET 时必须非空；它仍要经过运行期准入"
+            label="兜底目标"
+            extra="「无命中处置 = 走兜底目标」时必填；它仍要经过运行期准入"
           >
-            <Input placeholder="如 fallback-agent" style={{ width: 320 }} />
+            <Input placeholder="如 fallback-agent" style={{ maxWidth: 360 }} />
           </Form.Item>
+        </Card>
 
-          <Divider orientation="left" plain>
-            三段策略文本（原文送后端，前端不重新序列化）
-          </Divider>
+        <Row gutter={16} style={{ marginTop: 16 }}>
+          <Col xs={24} xl={16}>
+            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+              <Card title="② 输入字段（词汇表）" size="small">
+                <SchemaEditor
+                  value={visual.fields}
+                  onChange={(fields) => setVisual((prev) => ({ ...prev, fields }))}
+                />
+              </Card>
 
-          <Form.Item
-            name="inputSchema"
-            label="输入词汇表（inputSchema · 顶层 type=object）"
-            rules={[{ required: true, message: '输入词汇表不能为空' }]}
-            extra="规则里的 in.* 只能引用这里声明过的字段；这里没声明的字段会被静默丢弃"
-          >
-            <Input.TextArea rows={8} style={{ fontFamily: 'monospace', fontSize: 12 }} />
-          </Form.Item>
+              <Card title="③ 路由规则" size="small">
+                <RuleEditor
+                  value={visual.rules}
+                  onChange={(rules) => setVisual((prev) => ({ ...prev, rules }))}
+                  fields={flatFields}
+                  knownTargets={knownTargets}
+                />
+              </Card>
 
-          <Form.Item
-            name="evaluation"
-            label="有序规则列表（evaluation · Rule 数组）"
-            rules={[{ required: true, message: '规则列表不能为空' }]}
-            extra="数组次序即求值次序，首个命中即止；有界 DNF 上限与守卫由后端判定"
-          >
-            <Input.TextArea rows={12} style={{ fontFamily: 'monospace', fontSize: 12 }} />
-          </Form.Item>
+              <Card title="④ 发布期回放样本" size="small">
+                <SampleEditor
+                  value={visual.samples}
+                  onChange={(samples) => setVisual((prev) => ({ ...prev, samples }))}
+                  fields={flatFields}
+                  knownTargets={knownTargets}
+                />
+              </Card>
 
-          <Form.Item
-            name="sampleSet"
-            label="发布期回放样本（sampleSet · 可空）"
-            extra="守卫 V9 要求每条规则的目标至少被一个样本命中——缺它会被拦在审批之后"
-          >
-            <Input.TextArea rows={6} style={{ fontFamily: 'monospace', fontSize: 12 }} />
-          </Form.Item>
+              <Card title="⑤ 试跑探针" size="small">
+                <ProbeEditor
+                  value={visual.probes}
+                  onChange={(probes) => setVisual((prev) => ({ ...prev, probes }))}
+                  fields={flatFields}
+                />
+              </Card>
 
-          <Form.Item
-            name="probes"
-            label="试跑探针（probes · 只在本次 dry-run 存在，不进策略正文与指纹）"
-            extra="每项 {label, input, modelCandidate?, ctx?}；ctx 可覆盖 channel / locale / run.attempt / run.depth，不得写 tenantId"
-          >
-            <Input.TextArea rows={8} style={{ fontFamily: 'monospace', fontSize: 12 }} />
-          </Form.Item>
+              <Card title="⑥ 校验并提交登记申请" size="small">
+                <Paragraph type="secondary">
+                  右侧会实时显示结构校验与最终 JSON。试跑只是<b>看结论</b>；
+                  登记策略仍要走三步工作流，「我批了」与「配置真的变了」必须可区分。
+                </Paragraph>
+                <Form.Item
+                  name="reason"
+                  label="变更理由（将留痕）"
+                  rules={[{ required: true, message: '变更理由不能为空（将留痕）' }]}
+                >
+                  <Input.TextArea rows={2} placeholder="为何要登记/修改这份策略" />
+                </Form.Item>
+                <Divider style={{ margin: '8px 0 16px' }} />
+                <Space wrap>
+                  <Button
+                    icon={<ExperimentOutlined />}
+                    loading={running}
+                    onClick={() => void runDry()}
+                  >
+                    试跑（不提交）
+                  </Button>
+                  <Button
+                    type="primary"
+                    icon={<SendOutlined />}
+                    loading={submitting}
+                    onClick={() => void submit()}
+                  >
+                    提交登记申请
+                  </Button>
+                </Space>
+              </Card>
+            </Space>
+          </Col>
 
-          <Space>
-            <Button
-              icon={<ExperimentOutlined />}
-              loading={running}
-              onClick={() => void runDry()}
-            >
-              试跑（不提交）
-            </Button>
-          </Space>
-
-          <Divider orientation="left" plain>
-            提交发布申请
-          </Divider>
-
-          <Paragraph type="secondary" style={{ marginBottom: 8 }}>
-            试跑只是<b>看结论</b>；登记策略仍要走三步工作流，「我批了」与「配置真的变了」必须可区分。
-          </Paragraph>
-          <Form.Item
-            name="reason"
-            label="变更理由"
-            rules={[{ required: true, message: '变更理由不能为空（将留痕）' }]}
-          >
-            <Input.TextArea rows={2} placeholder="为何要登记/修改这份策略" />
-          </Form.Item>
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            loading={submitting}
-            onClick={() => void submit()}
-          >
-            提交登记申请
-          </Button>
-        </Form>
-      </Card>
+          <Col xs={24} xl={8}>
+            <PreviewPanel draft={currentDraft} />
+          </Col>
+        </Row>
+      </Form>
 
       {requestId && (
         <Alert
