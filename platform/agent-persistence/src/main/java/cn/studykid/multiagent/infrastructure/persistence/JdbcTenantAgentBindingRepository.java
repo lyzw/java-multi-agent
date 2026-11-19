@@ -99,11 +99,37 @@ public class JdbcTenantAgentBindingRepository implements TenantAgentBindingPort 
                        config = EXCLUDED.config,
                        updated_at = now()
                 """;
-        execute(tenantId, sql, List.of(tenantId, agentId, pinnedVersion,
-                config == null || config.isBlank() ? "{}" : config));
+        // ⚠️ **参数必须逐个显式绑定，不能用 List.of(...)**：
+        //    List.of 拒绝 null 元素，而「不固定版本」正是 pinned_version = NULL，
+        //    于是 List.of(tenantId, agentId, null, ...) 直接抛 NPE ——
+        //    表现为「默认绑定（不固定版本）必然 500」，且只在真发请求时才炸。
+        //
+        // ⚠️ **必须显式提交**：tenantConnection() 拿到的连接是
+        //    setAutoCommit(false) 的事务连接，租约关闭时会**回滚**未提交的写入。
+        //    漏掉 commit ⇒ 接口返回 200、审计也写了，但绑定行根本没落库
+        //    （读回来还是旧值，且下一次重试又「成功」——静默失真）。
+        try (TenantConnectionLease lease = tenantConnection(tenantId);
+             PreparedStatement ps = lease.connection().prepareStatement(sql)) {
+            ps.setString(1, tenantId);
+            ps.setString(2, agentId);
+            if (pinnedVersion == null) {
+                ps.setNull(3, java.sql.Types.INTEGER);
+            } else {
+                ps.setInt(3, pinnedVersion);
+            }
+            ps.setString(4, config == null || config.isBlank() ? "{}" : config);
+            ps.executeUpdate();
+            lease.commitQuietly();
+        } catch (SQLException e) {
+            throw new IllegalStateException("写入租户-Agent 绑定失败", e);
+        }
+        // ⚠️ 审计明细里的标识符必须用**豁免键**：agentId 是平台生成的不透明标识符，
+        //    但 UUID 里可能撞上 8–12 位连续数字而被 PII 扫描器判成学号 → 审计写入
+        //    被拒 → 整个操作 500（且取决于随机 UUID，概率性发作，极难复现）。
+        //    豁免键见 JdbcAuditRepository.VALUE_SCAN_EXEMPT_KEYS。
         audit.recordRequired(tenantId, actorId, AuditPort.Actions.AGENT_BINDING_BIND,
                 "tenant_agent_binding", tenantId + ":" + agentId,
-                Map.of("agentId", agentId));
+                Map.of("resourceId", agentId));
         return find(tenantId, agentId).orElseThrow();
     }
 
@@ -118,14 +144,31 @@ public class JdbcTenantAgentBindingRepository implements TenantAgentBindingPort 
                    SET pinned_version = ?, config = ?::jsonb, updated_at = now()
                  WHERE tenant_id = ?::uuid AND agent_id = ?::uuid AND status = 'ACTIVE'
                 """;
-        int updated = execute(tenantId, sql, List.of(pinnedVersion,
-                config == null || config.isBlank() ? "{}" : config, tenantId, agentId));
+        // ⚠️ 同 bind：pinnedVersion 为 null 表示「清空固定版本」，
+        //    用 List.of 会因 null 元素直接 NPE ⇒ 清空固定版本永远做不到。
+        int updated;
+        try (TenantConnectionLease lease = tenantConnection(tenantId);
+             PreparedStatement ps = lease.connection().prepareStatement(sql)) {
+            if (pinnedVersion == null) {
+                ps.setNull(1, java.sql.Types.INTEGER);
+            } else {
+                ps.setInt(1, pinnedVersion);
+            }
+            ps.setString(2, config == null || config.isBlank() ? "{}" : config);
+            ps.setString(3, tenantId);
+            ps.setString(4, agentId);
+            updated = ps.executeUpdate();
+            // ⚠️ 同 bind：自持事务连接必须显式提交，否则租约关闭时回滚本次写入。
+            lease.commitQuietly();
+        } catch (SQLException e) {
+            throw new IllegalStateException("写入租户-Agent 绑定失败", e);
+        }
         if (updated == 0) {
             throw new BindingNotFoundException(tenantId, agentId);
         }
         audit.recordRequired(tenantId, actorId, AuditPort.Actions.AGENT_BINDING_UPDATE,
                 "tenant_agent_binding", tenantId + ":" + agentId,
-                Map.of("agentId", agentId));
+                Map.of("resourceId", agentId));
         return find(tenantId, agentId).orElseThrow();
     }
 
@@ -143,7 +186,7 @@ public class JdbcTenantAgentBindingRepository implements TenantAgentBindingPort 
         }
         audit.recordRequired(tenantId, actorId, AuditPort.Actions.AGENT_BINDING_UNBIND,
                 "tenant_agent_binding", tenantId + ":" + agentId,
-                Map.of("agentId", agentId));
+                Map.of("resourceId", agentId));
     }
 
     private @NonNull List<BindingItem> query(String sql, List<Object> params) {
@@ -171,7 +214,13 @@ public class JdbcTenantAgentBindingRepository implements TenantAgentBindingPort 
             for (int i = 0; i < params.size(); i++) {
                 ps.setObject(i + 1, params.get(i));
             }
-            return ps.executeUpdate();
+            int updated = ps.executeUpdate();
+            // ⚠️ **必须提交**：tenantConnection() 的连接是 autocommit=false 的事务连接，
+            //    租约 close() 会回滚未提交的写入。漏掉这行 ⇒ 接口报成功、审计也写了，
+            //    但绑定行没落库（读回旧值），是典型的静默失真。
+            //    commitQuietly 对借用外层事务的连接是 no-op，不会抢外层的提交权。
+            lease.commitQuietly();
+            return updated;
         } catch (SQLException e) {
             throw new IllegalStateException("写入租户-Agent 绑定失败", e);
         }
@@ -189,12 +238,19 @@ public class JdbcTenantAgentBindingRepository implements TenantAgentBindingPort 
     private static BindingItem map(ResultSet rs) throws SQLException {
         Timestamp created = rs.getTimestamp("created_at");
         Timestamp updated = rs.getTimestamp("updated_at");
+        // ⚠️ **wasNull() 只反映「最近一次读取的那一列」**，不是「上一次被读为 NULL 的列」。
+        //   所以必须在读完 pinned_version 的**当下**立刻取 wasNull()；
+        //   若后面又读了 tenant_id / agent_id / status，标志会被冲掉，
+        //   于是「未固定版本（NULL）」会被读成 0 —— 而 0 违反表上的
+        //   CHECK (pinned_version IS NULL OR pinned_version > 0)，
+        //   前端把 0 原样回传给更新端点就会直接撞约束报错。
         int pinned = rs.getInt("pinned_version");
+        Integer pinnedVersion = rs.wasNull() ? null : pinned;
         return new BindingItem(
                 rs.getString("tenant_id"),
                 rs.getString("agent_id"),
                 rs.getString("status"),
-                rs.wasNull() ? null : pinned,
+                pinnedVersion,
                 rs.getString("config"),
                 created.toInstant(),
                 updated.toInstant());
