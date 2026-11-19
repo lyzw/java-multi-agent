@@ -89,9 +89,15 @@ public class ChatAuditConfigController {
     }
 
     private void recordAudit(@NonNull String actor, long version) {
+        // ⚠️ target_id 在 platform_audit_event 里是 uuid 列（DDL 允许 NULL）。
+        //    chat_audit_config 是单例行，其主键列名恰好叫 singleton（boolean），
+        //    没有 UUID 身份；传字面量 "singleton" 会让 INSERT 直接抛
+        //    "invalid input syntax for type uuid"，把一次成功保存变成 500。
+        //    与 PlatformRagGovernanceTicketService 一致：资源类型写 target_type，
+        //    无 UUID 身份的 target_id 一律留 null。
         audit.record(new PlatformAuditEvent(
                 UUID.randomUUID(), actor, "PLATFORM_USER",
-                "CHAT_AUDIT_CONFIG_UPDATE", "chat_audit_config", "singleton",
+                "CHAT_AUDIT_CONFIG_UPDATE", "chat_audit_config", null,
                 "ALLOWED", null, null, null, Instant.now(), null,
                 "chat.audit.config", "PLATFORM_DIRECT"));
     }
