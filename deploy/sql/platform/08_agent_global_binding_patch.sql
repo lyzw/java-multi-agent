@@ -11,6 +11,16 @@
 --   1) 先备份；本脚本会改写表结构，事务失败会整体回滚。
 --   2) 若不同租户存在同名 Agent，先人工改名；本脚本拒绝静默覆盖。
 --   3) 应用代码需与本脚本同步发布，否则旧 SQL 仍带 tenant_id 会报错。
+--   4) **本脚本建表但不授权**：表级授权统一在 03_platform_roles.sql。
+--      存量库的正确顺序是「先跑本脚本 → 再重跑 03」（新库是 01 → 03）。
+--      跳过 03 ⇒ tenant_agent_binding 无授权 ⇒ 应用角色一访问即 permission denied，
+--      而报错点在业务代码，离「表没授权」的真实成因极远。
+--
+-- 【⚠️ 脚本内部有硬顺序：必须先摘 RLS 策略、再删 tenant_id 列】
+--   租户策略（tenant_id = current_tenant_id()）依赖 tenant_id 列；
+--   列先删会报 "cannot drop column tenant_id ... other objects depend on it"，
+--   而本脚本整体在事务里 ⇒ 整笔回滚 ⇒ 存量库迁移零效果，且不留下任何痕迹。
+--   演练时真炸过一次，故固化在第 2.1 步。
 -- =====================================================================
 
 BEGIN;
@@ -73,6 +83,37 @@ ALTER TABLE public.agent_version
 ALTER TABLE public.agent
     DROP CONSTRAINT IF EXISTS agent_tenant_id_fkey;
 
+-- 2.1 ⛔ **必须先摘 RLS 与策略，再删 tenant_id 列**。
+--     租户策略（tenant_id = current_tenant_id()）**依赖 tenant_id 列**，
+--     列先删会报：
+--       ERROR: cannot drop column tenant_id of table agent
+--              because other objects depend on it
+--       DETAIL: policy agent_tenant_isolation on table agent depends on column tenant_id
+--     —— 本脚本整体在事务里，一处报错 ⇒ 整笔回滚 ⇒ 存量库迁移零效果，
+--     且报错点在 ALTER TABLE 而非「策略」，排查方向会被带偏。
+--     （顺序颠倒的版本在迁移演练中被真炸过一次，故此处固化为硬顺序。）
+--
+--     全局定义表不再需要租户 RLS；绑定表才是租户隔离边界。
+ALTER TABLE public.agent NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.agent DISABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS agent_tenant_isolation ON public.agent;
+
+ALTER TABLE public.agent_version NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.agent_version DISABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS agent_version_tenant_isolation ON public.agent_version;
+
+ALTER TABLE public.cap_agent_def NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.cap_agent_def DISABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS cap_agent_def_tenant_isolation ON public.cap_agent_def;
+
+ALTER TABLE public.cap_agent_child_ref NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.cap_agent_child_ref DISABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS cap_agent_child_ref_tenant_isolation ON public.cap_agent_child_ref;
+
+ALTER TABLE public.execution_snapshot NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.execution_snapshot DISABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS execution_snapshot_tenant_isolation ON public.execution_snapshot;
+
 ALTER TABLE public.agent
     DROP CONSTRAINT IF EXISTS agent_tenant_agent_unique,
     DROP CONSTRAINT IF EXISTS agent_name_per_tenant,
@@ -118,28 +159,7 @@ ALTER TABLE public.run
     ADD CONSTRAINT run_snapshot_fk
     FOREIGN KEY (snapshot_id) REFERENCES public.execution_snapshot(snapshot_id);
 
--- 3. 全局定义表不再需要租户 RLS；绑定表才是租户隔离边界。
-ALTER TABLE public.agent NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.agent DISABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS agent_tenant_isolation ON public.agent;
-
-ALTER TABLE public.agent_version NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.agent_version DISABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS agent_version_tenant_isolation ON public.agent_version;
-
-ALTER TABLE public.cap_agent_def NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.cap_agent_def DISABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS cap_agent_def_tenant_isolation ON public.cap_agent_def;
-
-ALTER TABLE public.cap_agent_child_ref NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.cap_agent_child_ref DISABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS cap_agent_child_ref_tenant_isolation ON public.cap_agent_child_ref;
-
-ALTER TABLE public.execution_snapshot NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.execution_snapshot DISABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS execution_snapshot_tenant_isolation ON public.execution_snapshot;
-
--- 4. 索引改成全局键。
+-- 3. 索引改成全局键。
 DROP INDEX IF EXISTS public.idx_agent_version_agent;
 CREATE INDEX idx_agent_version_agent ON public.agent_version USING btree (agent_id);
 DROP INDEX IF EXISTS public.idx_cap_agent_def_tenant;
@@ -149,7 +169,7 @@ CREATE INDEX idx_cap_agent_child_ref_child ON public.cap_agent_child_ref USING b
 DROP INDEX IF EXISTS public.idx_cap_agent_child_ref_parent;
 CREATE INDEX idx_cap_agent_child_ref_parent ON public.cap_agent_child_ref USING btree (parent_agent_id, parent_release_version, ordinal);
 
--- 5. 已生成的 TENANT 发布头中若还带 agent，必须清理：
+-- 4. 已生成的 TENANT 发布头中若还带 agent，必须清理：
 --    新模型下 agent 只出现在 PLATFORM 发布头，TENANT 发布头不再承载 agent。
 UPDATE public.cap_config_release
    SET object_versions = (
