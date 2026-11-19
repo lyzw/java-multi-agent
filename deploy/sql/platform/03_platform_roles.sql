@@ -301,6 +301,30 @@ BEGIN
 END;
 $$;
 
+-- ── 应用角色：全局 Agent 的租户绑定（P2 · 2026-11-19 补）────────────────
+-- ⚠️ 这张表是**新表**，必须显式登记：public 域的 `GRANT … ON ALL TABLES`
+--    只覆盖**执行本脚本时已存在**的表；存量库是「先跑 08 建表、后跑 03」，
+--    若不在此显式授权，绑定表会因缺授权而让应用角色一访问就 permission denied，
+--    而报错点在业务代码，离「表没授权」的真实成因极远。
+--
+-- 收紧口径：
+--   · SELECT：读绑定（租户可见性判定依据）；RLS 策略 tenant_id =
+--     current_tenant_id() 把可见范围限定在自租户内，跨租户不可达。
+--   · INSERT / UPDATE：建立绑定、改 pinned_version/config、停用绑定。
+--   · DELETE **撤销**：解绑是**逻辑停用**（status='SUSPENDED'），不是物理删除。
+--     物理删除会抹掉「谁在什么时候把哪个 Agent 分给了谁」的痕迹，
+--     与「无物理删除端点」「解绑保留历史与审计痕迹」同口径。
+DO $$
+DECLARE
+    app text := current_setting('my.app_role');
+BEGIN
+    IF to_regclass('public.tenant_agent_binding') IS NOT NULL THEN
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE ON public.tenant_agent_binding TO %I', app);
+        EXECUTE format('REVOKE DELETE ON public.tenant_agent_binding FROM %I', app);
+    END IF;
+END;
+$$;
+
 -- ── 自检：授权未生效即报错（fail-closed）──────────────────────────
 DO $$
 DECLARE
