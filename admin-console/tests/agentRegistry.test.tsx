@@ -14,8 +14,28 @@ vi.mock('@/api/adminApi', () => ({
   decidePlatformPublishRequest: vi.fn(),
   applyPlatformPublishRequest: vi.fn(),
   submitPlatformLifecycleRequest: vi.fn(),
+  // 运营代租户配置 Agent（写通道）
+  createPlatformAgent: vi.fn(),
+  submitPlatformAgentPublishRequest: vi.fn(),
+  submitPlatformAgentLifecycleRequest: vi.fn(),
+  listPlatformAgentRequests: vi.fn(),
+  decidePlatformAgentPublishRequest: vi.fn(),
+  applyPlatformAgentPublishRequest: vi.fn(),
+  getPlatformAgentDefinition: vi.fn(),
+  // 全局 Agent 与租户的多对多绑定（直接配置 CRUD）
+  listPlatformAgentBindings: vi.fn(),
+  listPlatformAgentTenants: vi.fn(),
+  bindPlatformAgent: vi.fn(),
+  updatePlatformAgentBinding: vi.fn(),
+  unbindPlatformAgent: vi.fn(),
 }))
-import { getConsoleAgentRegistry } from '@/api/adminApi'
+import {
+  getConsoleAgentRegistry,
+  listPlatformAgentTenants,
+  submitPlatformAgentLifecycleRequest,
+  getPlatformAgentDefinition,
+  unbindPlatformAgent,
+} from '@/api/adminApi'
 import { ApiError } from '@/api/client'
 
 import { AgentRegistryPage } from '@/pages/console/AgentRegistryPage'
@@ -36,6 +56,10 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.mocked(getConsoleAgentRegistry).mockReset()
+  vi.mocked(submitPlatformAgentLifecycleRequest).mockReset()
+  vi.mocked(getPlatformAgentDefinition).mockReset()
+  vi.mocked(listPlatformAgentTenants).mockReset()
+  vi.mocked(unbindPlatformAgent).mockReset()
 })
 
 // ---- 夹具：两个租户各若干 Agent ----
@@ -97,13 +121,13 @@ function renderRegistry() {
   )
 }
 
-describe('平台控制台 · Agent 注册表 /agents（只读盘点 · 按租户分组）', () => {
-  it('✅ 按租户分 Tabs：全部租户 + 每个 tenantId 各一个 Tab', async () => {
+describe('平台控制台 · Agent 注册表 /agents（运营代配置 · 按租户分组）', () => {
+  it('✅ 按租户分 Tabs：全部绑定 + 每个 tenantId 各一个 Tab', async () => {
     vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
     const { container } = renderRegistry()
     await waitFor(() => expect(screen.getByText('alpha-1')).toBeTruthy())
     const labels = Array.from(container.querySelectorAll('.ant-tabs-tab')).map((t) => t.textContent ?? '')
-    expect(labels.some((l) => l.includes('全部租户'))).toBe(true)
+    expect(labels.some((l) => l.includes('全部绑定'))).toBe(true)
     expect(labels.some((l) => l.includes('tenant-alpha'))).toBe(true)
     expect(labels.some((l) => l.includes('tenant-beta'))).toBe(true)
   })
@@ -124,32 +148,73 @@ describe('平台控制台 · Agent 注册表 /agents（只读盘点 · 按租户
     })
   })
 
-  it('✅ 只读盘点：无「登记」按钮；页头声明禁区红线', async () => {
+  it('✅ 全局实体声明：页头声明全局 Agent + 多对多绑定，保留申请队列与新建入口', async () => {
     vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
     renderRegistry()
     await waitFor(() =>
       expect(
-        screen.getByText(/只读盘点——仅含管理元数据，定义正文与运行输出不出平台边界/),
+        screen.getByText(/Agent 为全局实体；租户通过配置绑定使用/),
       ).toBeTruthy(),
     )
-    expect(screen.getByText(/平台不提供 Agent 写端点（禁区）/)).toBeTruthy()
-    // ⚠️ 注册表页**不得**有任何登记入口（平台不提供 Agent 写端点）
-    expect(screen.queryByRole('button', { name: /登记/ })).toBeNull()
-    // 也没有申请队列（它属于三步工作流页头，本页是纯只读页）
-    expect(screen.queryByRole('button', { name: /申请队列/ })).toBeNull()
+    expect(screen.getByText(/同一 Agent 可分配给多个租户/)).toBeTruthy()
+    // ⚠️ 写入口：新建 Agent + 申请队列必须可见
+    expect(screen.getByRole('button', { name: /新建 Agent/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /申请队列/ })).toBeTruthy()
   })
 
-  it('✅ 只读盘点：行尾只有「详情」（只读入口）；停用/删除/编辑等写入口不该有', async () => {
+  it('✅ 行尾写入口：每行有 编辑 / 分配租户 / 停用 / 详情；已停用行的「停用」被禁用', async () => {
     vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
     const { container } = renderRegistry()
     await waitFor(() => expect(screen.getByText('beta-1')).toBeTruthy())
-    const buttonTexts = Array.from(container.querySelectorAll('td button, .ant-card-extra button')).map(
-      (b) => (b.textContent ?? '').replace(/\s+/g, ''),
-    ).filter((t) => t.length > 0)
-    // ⚠️ 注册表是纯只读盘点：行内按钮允许且只允许「详情」（读取），
-    //    停用 / 编辑 / 删除 / 登记这类写入口一个都不许出现。
-    expect(buttonTexts).toHaveLength(ENTRIES.length)
-    expect(buttonTexts.every((t) => t === '详情')).toBe(true)
+    const body = container.querySelector<HTMLElement>('.ant-table-tbody')!
+    // 每行四个动作按钮（编辑 / 分配租户 / 停用 / 详情）
+    const rowButtons = Array.from(body.querySelectorAll('tr'))
+      .map((tr) =>
+        Array.from(tr.querySelectorAll('td button')).map((b) => (b.textContent ?? '').replace(/\s+/g, '')),
+      )
+      .filter((btns) => btns.length > 0)
+    expect(rowButtons).toHaveLength(ENTRIES.length)
+    expect(rowButtons.every((btns) =>
+      ['编辑', '分配租户', '停用', '详情'].every((t) => btns.includes(t)),
+    )).toBe(true)
+    // beta-1 已 DEPRECATED → 停用按钮禁用
+    const betaRow = Array.from(body.querySelectorAll('tr')).find((tr) => tr.textContent?.includes('beta-1'))!
+    const deprecateBtn = Array.from(betaRow.querySelectorAll('td button')).find((b) => b.textContent?.includes('停用'))!
+    expect(deprecateBtn.hasAttribute('disabled')).toBe(true)
+  })
+
+  it('✅ 分配租户：读取该全局 Agent 的绑定列表，停用分配走直接配置 CRUD', async () => {
+    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+    vi.mocked(listPlatformAgentTenants).mockResolvedValue([
+      {
+        tenantId: 'tenant-alpha',
+        agentId: 'alpha-1',
+        status: 'ACTIVE',
+        pinnedVersion: null,
+        config: '{}',
+        createdAt: '2026-10-20T00:00:00Z',
+        updatedAt: '2026-10-20T00:00:00Z',
+      },
+    ] as never)
+    vi.mocked(unbindPlatformAgent).mockResolvedValue(undefined as never)
+    const { container } = renderRegistry()
+    await waitFor(() => expect(screen.getByText('alpha-1')).toBeTruthy())
+
+    const firstRow = container.querySelector<HTMLElement>(
+      '.ant-table-tbody tr:not(.ant-table-measure-row)',
+    )!
+    fireEvent.click(within(firstRow).getByRole('button', { name: /分配租户/ }))
+
+    await waitFor(() => expect(listPlatformAgentTenants).toHaveBeenCalledWith('alpha-1'))
+    const title = await screen.findByText('分配租户（Agent alpha-1）')
+    const drawer = title.closest('.ant-drawer') as HTMLElement
+    expect(within(drawer).getByText('tenant-alpha')).toBeTruthy()
+    expect(within(drawer).getByText('跟随发布头')).toBeTruthy()
+
+    fireEvent.click(within(drawer).getByRole('button', { name: /停用分配/ }))
+    await waitFor(() =>
+      expect(unbindPlatformAgent).toHaveBeenCalledWith('tenant-alpha', 'alpha-1'),
+    )
   })
 
   it('✅ 双击行打开详情抽屉：内容来自行内字段，注册表**零新请求**', async () => {
@@ -175,6 +240,60 @@ describe('平台控制台 · Agent 注册表 /agents（只读盘点 · 按租户
     await waitFor(() => expect(screen.getByText('beta-1')).toBeTruthy())
     fireEvent.click(within(container.querySelector<HTMLElement>('.ant-table-tbody')!).getAllByRole('button', { name: /详\s*情/ })[2]!)
     await waitFor(() => expect(screen.getByText('tenant-beta :: beta-1')).toBeTruthy())
+  })
+
+  it('✅ 停用（删除语义）：填理由提交 → 走平台链生命周期申请（DEPRECATED 终态），携带 tenantId / 版本号', async () => {
+    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+    vi.mocked(submitPlatformAgentLifecycleRequest).mockResolvedValue({ requestId: 'req-1' } as never)
+    const { container } = renderRegistry()
+    await waitFor(() => expect(screen.getByText('alpha-1')).toBeTruthy())
+
+    // 在第一行的行尾点「停用」
+    const firstRow = container.querySelector<HTMLElement>('.ant-table-tbody tr:not(.ant-table-measure-row)')!
+    fireEvent.click(within(firstRow).getByRole('button', { name: /停用/ }))
+    // 弹窗出现：填变更理由
+    const textarea = await screen.findByPlaceholderText('说明停用原因（必填）')
+    fireEvent.change(textarea, { target: { value: '不再使用' } })
+    fireEvent.click(screen.getByRole('button', { name: /提交停用申请/ }))
+
+    await waitFor(() =>
+      expect(submitPlatformAgentLifecycleRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: 'tenant-alpha',
+          objectId: 'alpha-1',
+          // alpha-1 defVersion=2 → 停用针对权威定义的当前版本
+          version: 2,
+          expectedFrom: 'PUBLISHED',
+          reason: '不再使用',
+        }),
+      ),
+    )
+  })
+
+  it('✅ 修改：点「编辑」先按 tenantId 取权威定义回填（取不到如实标记写入口可用）', async () => {
+    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+    vi.mocked(getPlatformAgentDefinition).mockResolvedValue({
+      agentId: 'alpha-1',
+      version: 2,
+      name: '订单助手',
+      roles: ['order-reader'],
+      enabledSkills: [],
+      skillBundles: [],
+      capabilityTags: [],
+      overrides: '{}',
+      orchestration: '{}',
+      instructions: '{}',
+      generationParams: '{}',
+      published: true,
+    } as never)
+    const { container } = renderRegistry()
+    await waitFor(() => expect(screen.getByText('alpha-1')).toBeTruthy())
+
+    const firstRow = container.querySelector<HTMLElement>('.ant-table-tbody tr:not(.ant-table-measure-row)')!
+    fireEvent.click(within(firstRow).getByRole('button', { name: /编辑/ }))
+    await waitFor(() =>
+      expect(getPlatformAgentDefinition).toHaveBeenCalledWith('tenant-alpha', 'alpha-1'),
+    )
   })
 
   it('⛔ 503（platform-ops 数据源未配置）→ 展示「平台运营会话窗未接入」Alert，跨租户盘点如实声明不可用', async () => {

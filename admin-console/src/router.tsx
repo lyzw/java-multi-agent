@@ -137,7 +137,8 @@ export const router = createBrowserRouter(
           ),
         },
         {
-          // 跨租户 Agent 注册表（只读盘点；平台链 + BYPASSRLS 会话窗）
+      // 跨租户 Agent 注册表（Agent 为全局实体，租户通过 tenant_agent_binding 多对多绑定；
+      // 定义走三步发布工作流，绑定走直接配置 CRUD）
           path: 'agents',
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>

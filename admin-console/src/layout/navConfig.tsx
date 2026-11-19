@@ -116,7 +116,7 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: <RobotOutlined />,
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
-          '跨租户 Agent 只读盘点（平台链 /api/platform/v1/capabilities/agents，BYPASSRLS 数据源 + 会话窗）。只有元数据：定义正文、运行输出永不出现（禁区红线），不提供写端点。',
+          '跨租户 Agent 注册表：Agent 为全局实体，运营统一维护定义；租户通过 tenant_agent_binding 多对多绑定使用。定义走三步发布工作流，绑定走直接配置 CRUD。',
         phase: '能力目录',
       },
       {

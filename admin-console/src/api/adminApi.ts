@@ -57,6 +57,14 @@ import type {
   UserRolesResponse,
   PlatformAgentRegistryItem,
   PlatformPermissionSummary,
+  PlatformCreateAgentRequest,
+  PlatformAgentCreated,
+  PlatformAgentPublishRequest,
+  PlatformAgentLifecycleRequest,
+  PlatformAgentDecision,
+  PlatformAgentApplyRequest,
+  PlatformAgentBinding,
+  PlatformAgentBindingRequest,
 } from '@/api/types'
 
 /** POST /api/auth/token —— 无需鉴权 */
@@ -567,6 +575,142 @@ export function getConsoleCapabilityPointer(): Promise<{
   updatedAt: string | null
 }> {
   return request('/platform/v1/capabilities/pointer', { method: 'GET' })
+}
+
+/* ── 平台控制台 · 运营代租户配置 Agent（/api/platform/v1/capabilities/agent-config） ──
+   ⚠️ 产品口径：所有 Agent 由运营统一配置，租户不再自行维护 Agent / Skill / Tool。
+   本组端点不新造写通道 —— 复用租户链三步发布工作流，只是 tenantId 由运营显式传入，
+   仓储层仍按 tenantId 绑定租户上下文 + 应用角色连接（RLS 隔离不变）。
+   ⚠️ 与只读盘点 GET /agents 的区别：本组提供写端点与单条定义回填（编辑用）。 */
+
+/** POST /agent-config/agents —— 在目标租户下创建 Agent 行（拿到 agentId）。 */
+export function createPlatformAgent(
+  payload: PlatformCreateAgentRequest,
+): Promise<PlatformAgentCreated> {
+  return request<PlatformAgentCreated>('/platform/v1/capabilities/agent-config/agents', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** POST /agent-config/publish-requests —— 提交 Agent 定义发布申请（不写配置表）。 */
+export function submitPlatformAgentPublishRequest(
+  payload: PlatformAgentPublishRequest,
+): Promise<PlatformRequestItem> {
+  return request<PlatformRequestItem>('/platform/v1/capabilities/agent-config/publish-requests', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** POST /agent-config/lifecycle-requests —— 提交 Agent 停用申请（DEPRECATED 终态）。 */
+export function submitPlatformAgentLifecycleRequest(
+  payload: PlatformAgentLifecycleRequest,
+): Promise<PlatformRequestItem> {
+  return request<PlatformRequestItem>('/platform/v1/capabilities/agent-config/lifecycle-requests', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** GET /agent-config/publish-requests —— 目标租户下的变更申请（状态过滤 + 游标分页）。 */
+export function listPlatformAgentRequests(params: {
+  tenantId: string
+  state?: string
+  limit?: number
+}): Promise<PlatformRequestItem[]> {
+  const qs = new URLSearchParams()
+  qs.set('tenantId', params.tenantId)
+  if (params.state) qs.set('state', params.state)
+  if (params.limit) qs.set('limit', String(params.limit))
+  return request<PlatformRequestItem[]>(
+    `/platform/v1/capabilities/agent-config/publish-requests?${qs.toString()}`,
+    { method: 'GET' },
+  )
+}
+
+/** POST /agent-config/publish-requests/{requestId}/decision —— 审批（双人复核）。 */
+export function decidePlatformAgentPublishRequest(
+  requestId: string,
+  payload: PlatformAgentDecision,
+): Promise<PlatformRequestItem> {
+  return request<PlatformRequestItem>(
+    `/platform/v1/capabilities/agent-config/publish-requests/${requestId}/decision`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  )
+}
+
+/** POST /agent-config/publish-requests/{requestId}/apply —— 执行（此步才真正写入）。 */
+export function applyPlatformAgentPublishRequest(
+  requestId: string,
+  payload: PlatformAgentApplyRequest,
+): Promise<PlatformRequestItem> {
+  return request<PlatformRequestItem>(
+    `/platform/v1/capabilities/agent-config/publish-requests/${requestId}/apply`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  )
+}
+
+/** GET /agent-config/agents/{agentId}/definition?tenantId= —— 权威定义（编辑回填）。 */
+export function getPlatformAgentDefinition(
+  tenantId: string,
+  agentId: string,
+): Promise<AgentDefinition> {
+  const qs = new URLSearchParams()
+  qs.set('tenantId', tenantId)
+  return request<AgentDefinition>(
+    `/platform/v1/capabilities/agent-config/agents/${encodeURIComponent(agentId)}/definition?${qs.toString()}`,
+    { method: 'GET' },
+  )
+}
+
+/** GET /agent-config/bindings?tenantId= —— 租户已绑定的 Agent。 */
+export function listPlatformAgentBindings(tenantId: string): Promise<PlatformAgentBinding[]> {
+  const qs = new URLSearchParams()
+  qs.set('tenantId', tenantId)
+  return request<PlatformAgentBinding[]>(
+    `/platform/v1/capabilities/agent-config/bindings?${qs.toString()}`,
+    { method: 'GET' },
+  )
+}
+
+/** GET /agent-config/agents/{agentId}/bindings —— Agent 被分配给的租户。 */
+export function listPlatformAgentTenants(agentId: string): Promise<PlatformAgentBinding[]> {
+  return request<PlatformAgentBinding[]>(
+    `/platform/v1/capabilities/agent-config/agents/${encodeURIComponent(agentId)}/bindings`,
+    { method: 'GET' },
+  )
+}
+
+/** POST /agent-config/bindings —— 建立或重新激活分配。 */
+export function bindPlatformAgent(
+  payload: PlatformAgentBindingRequest,
+): Promise<PlatformAgentBinding> {
+  return request<PlatformAgentBinding>(
+    '/platform/v1/capabilities/agent-config/bindings',
+    { method: 'POST', body: JSON.stringify(payload) },
+  )
+}
+
+/** PUT /agent-config/bindings —— 更新分配配置。 */
+export function updatePlatformAgentBinding(
+  payload: PlatformAgentBindingRequest,
+): Promise<PlatformAgentBinding> {
+  return request<PlatformAgentBinding>(
+    '/platform/v1/capabilities/agent-config/bindings',
+    { method: 'PUT', body: JSON.stringify(payload) },
+  )
+}
+
+/** DELETE /agent-config/bindings?tenantId=&agentId= —— 停用分配。 */
+export function unbindPlatformAgent(tenantId: string, agentId: string): Promise<void> {
+  const qs = new URLSearchParams()
+  qs.set('tenantId', tenantId)
+  qs.set('agentId', agentId)
+  return request<void>(
+    `/platform/v1/capabilities/agent-config/bindings?${qs.toString()}`,
+    { method: 'DELETE' },
+  )
 }
 
 /* ══ 平台身份域（重规划 §7 / §9 · /api/platform/v1/*）══

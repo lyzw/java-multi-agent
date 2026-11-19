@@ -17,6 +17,7 @@ import {
 import { SendOutlined } from '@ant-design/icons'
 import { ApiError } from '@/api/client'
 import { createAgent, submitPublishRequest } from '@/api/adminApi'
+import type { SubmitPublishRequest } from '@/api/types'
 import type { AgentDefinition } from '@/api/types'
 import {
   evaluatePublishGate,
@@ -84,6 +85,16 @@ export interface AgentDraftPanelProps {
   definitionUnavailable: boolean
   /** 旧体系实体行（提供 name / description 的兜底初值） */
   legacy?: { name?: string | null; description?: string | null } | null
+  /**
+   * 提交通道注入（平台控制台复用本表单时用）。
+   *
+   * <p>默认 = 租户链 {@code createAgent} / {@code submitPublishRequest}。
+   * 平台控制台（运营代租户配置）注入包了 tenantId 的平台链函数 —— 表单本身不漂移。
+   */
+  submitApi?: {
+    createAgent: (input: { name: string; description?: string | null }) => Promise<{ agentId: string }>
+    submitPublishRequest: (payload: SubmitPublishRequest) => Promise<{ requestId: string }>
+  }
   /** 提交结束（成功或失败）后的回调 */
   onSubmitted?: (result: AgentDraftSubmitResult) => void
 }
@@ -111,10 +122,13 @@ export function AgentDraftPanel({
   definition,
   definitionUnavailable,
   legacy,
+  submitApi,
   onSubmitted,
 }: AgentDraftPanelProps): JSX.Element {
   const { message } = AntApp.useApp()
   const [form] = Form.useForm<AgentDraftForm>()
+  const doCreateAgent = submitApi?.createAgent ?? createAgent
+  const doSubmitPublish = submitApi?.submitPublishRequest ?? submitPublishRequest
   const [submitting, setSubmitting] = useState(false)
   /** 当前所在的字段分组页签（第三十七批 · C37-3） */
   const [draftTab, setDraftTab] = useState('basic')
@@ -232,14 +246,14 @@ export function AgentDraftPanel({
     try {
       let targetAgentId = agentId ?? ''
       if (registration) {
-        const agent = await createAgent({
+        const agent = await doCreateAgent({
           name: normalized.draft.name,
           description: normalized.draft.description,
         })
         createdAgentId = agent.agentId
         targetAgentId = agent.agentId
       }
-      const req = await submitPublishRequest({
+      const req = await doSubmitPublish({
         operation: 'PUBLISH',
         scope: 'TENANT',
         agents: [{ agentId: targetAgentId, ...normalized.draft }],

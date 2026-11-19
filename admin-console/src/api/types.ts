@@ -593,6 +593,70 @@ export interface PlatformDecision {
   note?: string
 }
 
+/* ── 平台控制台 · 运营代租户配置 Agent（/api/platform/v1/capabilities/agent-config） ── */
+
+/** POST /agent-config/agents —— 在目标租户下创建 Agent 行（只建行，定义走发布申请）。 */
+export interface PlatformCreateAgentRequest {
+  tenantId: string
+  name: string
+  description?: string | null
+}
+
+/** 创建 Agent 行的返回值。 */
+export interface PlatformAgentCreated {
+  agentId: string
+  name?: string
+  description?: string
+}
+
+/** POST /agent-config/bindings —— 租户-Agent 多对多分配（直接配置 CRUD）。 */
+export interface PlatformAgentBindingRequest {
+  tenantId: string
+  agentId: string
+  pinnedVersion?: number | null
+  config?: string | null
+}
+
+/** GET /agent-config/bindings —— 租户-Agent 绑定视图。 */
+export interface PlatformAgentBinding {
+  tenantId: string
+  agentId: string
+  status: 'ACTIVE' | 'SUSPENDED'
+  pinnedVersion: number | null
+  config: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** POST /agent-config/publish-requests —— Agent 定义发布申请（TENANT 作用域）。 */
+export interface PlatformAgentPublishRequest {
+  tenantId: string
+  agents: PublishAgentSpec[]
+  expectedPublishSeq?: number | null
+  reason: string
+}
+
+/** POST /agent-config/lifecycle-requests —— Agent 停用申请（一律 DEPRECATED 终态）。 */
+export interface PlatformAgentLifecycleRequest {
+  tenantId: string
+  objectId: string
+  version: number
+  expectedFrom: string
+  reason: string
+}
+
+/** POST /agent-config/publish-requests/{requestId}/decision —— 审批（双人复核）。 */
+export interface PlatformAgentDecision {
+  tenantId: string
+  decision: 'APPROVE' | 'REJECT'
+  note?: string
+}
+
+/** POST /agent-config/publish-requests/{requestId}/apply —— 执行（带 tenantId）。 */
+export interface PlatformAgentApplyRequest {
+  tenantId: string
+}
+
 /* ── C34-3：能力目录关系视图 ── */
 
 /** Tool 紧凑摘要（关系视图用）。 */
@@ -914,9 +978,12 @@ export interface UserRolesResponse {
 /* ── 平台控制台 · 能力目录（平台链 /api/platform/v1/capabilities/*） ── */
 
 /**
- * 跨租户 Agent 注册表条目（平台控制台只读盘点）。
+ * 跨租户 Agent 注册表中的一行 = 一条「租户-全局 Agent」绑定视图。
+ * tenantId 表示该 Agent 被分配给哪个租户，不表示归属；同一 agentId 可出现多行。
  *
- * ⚠️ 只有管理元数据：definition 正文、运行输出、会话内容永不出现（禁区红线）。
+ * ⚠️ 只有管理元数据：definition 正文、运行输出、会话内容永不出现在**清单**里（禁区红线）。
+ * 修改回填走单条端点 GET /agent-config/agents/{id}/definition?tenantId=（显式逐租户），
+ * 与清单的「定义正文不出平台边界」不冲突。
  */
 export interface PlatformAgentRegistryItem {
   tenantId: string
