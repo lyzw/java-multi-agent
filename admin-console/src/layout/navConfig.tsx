@@ -55,6 +55,24 @@ export interface NavGroup {
  */
 export const NAV_GROUPS: NavGroup[] = [
   {
+    key: 'overview',
+    label: '概览',
+    icon: <AppstoreOutlined />,
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    children: [
+      {
+        key: 'dashboard',
+        label: '运行总览',
+        path: '/dashboard',
+        icon: <LineChartOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '平台健康、能力构成、告警级别、审计覆盖与近期拒绝的只读聚合；未采集指标如实标注，绝不编造。',
+        phase: '概览',
+      },
+    ],
+  },
+  {
     key: 'governance',
     label: '平台治理',
     icon: <ApartmentOutlined />,
@@ -530,3 +548,31 @@ export const NAV_GROUPS: NavGroup[] = [
 
 /** 扁平视图（由分组派生）——供仪表盘等只读消费方使用。 */
 export const NAV_NODES: NavNode[] = NAV_GROUPS.flatMap((g) => g.children)
+
+/**
+ * 按路径定位导航节点：精确匹配优先，其次最长前缀。
+ *
+ * 前缀匹配按长度降序取最长者——否则 `/rag/sources` 会先于 `/rag/sources/new`
+ * 命中，把「来源登记」误判成「来源列表」。深链 `/tenants/:id` 借此仍定位到租户管理。
+ */
+export function findNavNode(pathname: string, nodes: NavNode[] = NAV_NODES): NavNode | undefined {
+  const path = pathname.replace(/\/+$/, '') || '/'
+  return (
+    nodes.find((n) => n.path === path) ??
+    nodes
+      .filter((n) => path.startsWith(`${n.path}/`))
+      .sort((a, b) => b.path.length - a.path.length)[0]
+  )
+}
+
+/** 按路径定位所属分组——侧栏钻取定位与面包屑反查共用，避免两处口径分家。 */
+export function findNavGroup(
+  pathname: string,
+  groups: NavGroup[] = NAV_GROUPS,
+): NavGroup | undefined {
+  const node = findNavNode(
+    pathname,
+    groups.flatMap((g) => g.children),
+  )
+  return node ? groups.find((g) => g.children.some((n) => n.key === node.key)) : undefined
+}

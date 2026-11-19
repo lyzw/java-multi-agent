@@ -1,60 +1,69 @@
 import { Breadcrumb as AntBreadcrumb } from 'antd'
 import { HomeOutlined } from '@ant-design/icons'
-import { useLocation, useNavigate } from 'react-router-dom'
-import { NAV_GROUPS, type NavNode } from '@/layout/navConfig'
+import { useLocation } from 'react-router-dom'
+import { findNavNode, type NavGroup } from '@/layout/navConfig'
 import { useMemo } from 'react'
 
+interface BreadcrumbProps {
+  /** 已按角色过滤的可见分组——面包屑不能暴露无权分组的标签。 */
+  groups: NavGroup[]
+  /** 点击「分组」级：侧栏退回到该分组的页面索引。 */
+  onGroupClick: () => void
+}
+
 /**
- * 面包屑导航：从当前路径反查 分组 → 节点 链路。
+ * 面包屑导航：控制台 › 分组 › 页面。
  *
- * 路径映射表由 NAV_GROUPS 派生（单一来源），避免硬编码。
+ * 与侧栏钻取联动——中间「分组」一级可点击，点击后侧栏退回分组索引
+ * （由 AdminLayout 的 onGroupClick 切换），从而在视觉上形成
+ * 「菜单本身就是一条可回退的路径」的面包屑结构。
+ *
+ * 路径映射由 NAV_GROUPS 派生 + findNavNode/findNavGroup 反查（单一来源），
+ * 精确匹配优先、最长前缀兜底，深链 /tenants/:id 亦能定位。
  */
-export function Breadcrumb(): JSX.Element {
+export function Breadcrumb({ groups, onGroupClick }: BreadcrumbProps): JSX.Element {
   const location = useLocation()
-  const navigate = useNavigate()
 
-  const crumbs = useMemo(() => {
-    const path = location.pathname.replace(/\/+$/, '') || '/'
-    const flat: (NavNode & { groupLabel: string })[] = []
-    for (const g of NAV_GROUPS) {
-      for (const n of g.children) {
-        flat.push({ ...n, groupLabel: g.label })
-      }
+  const { group, node } = useMemo(() => {
+    const n = findNavNode(
+      location.pathname,
+      groups.flatMap((g) => g.children),
+    )
+    if (!n) return { group: undefined, node: undefined }
+    return {
+      group: groups.find((g) => g.children.some((c) => c.key === n.key)),
+      node: n,
     }
+  }, [location.pathname, groups])
 
-    // 精确匹配优先，再前缀匹配（如 /tenants/:id 匹配 /tenants）
-    const exact = flat.find((n) => n.path === path)
-    const node = exact ?? flat.find((n) => path.startsWith(n.path + '/') || path === n.path)
+  const items = [
+    {
+      key: 'root',
+      title: '平台控制台',
+      icon: <HomeOutlined />,
+      onClick: onGroupClick, // 首页一级同样退回分组索引，不跳路由（避免改默认落地行为）。
+      className: 'dc-crumb-root',
+    },
+    ...(group
+      ? [
+          {
+            key: 'group',
+            title: group.label,
+            onClick: onGroupClick,
+            className: 'dc-crumb-link',
+          },
+        ]
+      : []),
+    ...(node
+      ? [
+          {
+            key: 'leaf',
+            title: node.label,
+            className: 'dc-crumb-current',
+          },
+        ]
+      : []),
+  ] as Parameters<typeof AntBreadcrumb>[0]['items']
 
-    if (!node) {
-      return [
-        { label: '平台管理控制台', path: '/' },
-      ]
-    }
-
-    return [
-      { label: '平台管理控制台', path: '/' },
-      { label: node.groupLabel, path: undefined },
-      { label: node.label, path: node.path },
-    ]
-  }, [location.pathname])
-
-  return (
-    <AntBreadcrumb
-      style={{ marginBottom: 16 }}
-      items={crumbs.map((c, i) => ({
-        key: i,
-        title: c.label,
-        href: c.path && i > 0 ? c.path : undefined,
-        onClick: (e: React.MouseEvent) => {
-          if (c.path && i > 0) {
-            e.preventDefault()
-            navigate(c.path)
-          }
-        },
-        icon: i === 0 ? <HomeOutlined /> : undefined,
-        className: i === 0 ? 'breadcrumb-home' : undefined,
-      }))}
-    />
-  )
+  return <AntBreadcrumb items={items} className="dc-crumb" />
 }

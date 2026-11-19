@@ -4,6 +4,7 @@ import { RequireAuth } from '@/auth/RequireAuth'
 import { RequireRole } from '@/auth/RequireRole'
 import { LoginPage } from '@/pages/LoginPage'
 import { NoPermissionPage } from '@/pages/NoPermissionPage'
+import { DashboardPage } from '@/pages/DashboardPage'
 import { TenantRegistryPage } from '@/pages/TenantRegistryPage'
 import { TenantNewPage } from '@/pages/TenantNewPage'
 import { TenantDetailPage } from '@/pages/TenantDetailPage'
@@ -97,6 +98,15 @@ export const router = createBrowserRouter(
       ),
       children: [
         { index: true, element: <Navigate to="/tenants" replace /> },
+        {
+          // 运行总览 Dashboard（平台级聚合，只读；未采集指标如实标注）
+          path: 'dashboard',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <DashboardPage />
+            </RequireRole>
+          ),
+        },
         {
           path: 'tenants',
           element: <TenantRegistryPage />,

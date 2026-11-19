@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Layout, Menu, Avatar, Dropdown, Typography, Grid, Alert, Button, Space } from 'antd'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Layout, Menu, Dropdown, Grid, Alert, Button, Space } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  UserOutlined,
   LogoutOutlined,
+  LeftOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { NAV_GROUPS, NAV_NODES } from '@/layout/navConfig'
+import { NAV_GROUPS, findNavNode } from '@/layout/navConfig'
 import { Breadcrumb } from '@/layout/Breadcrumb'
 import { useSession } from '@/auth/session'
 import { clearSession } from '@/auth/tokenStorage'
@@ -18,8 +18,25 @@ import { usePageTitle } from '@/shared/usePageTitle'
 const { Header, Sider, Content } = Layout
 const { useBreakpoint } = Grid
 
+/** 侧栏视图：'index' = 全部分组索引；分组 key = 该组页面列表。 */
+type DrillView = string | null
+
+/** 侧栏顶部铭牌标记（黄铜同心准星）——控制面的品牌锚点。 */
+function BrandMark(): JSX.Element {
+  return (
+    <svg className="dc-brandmark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+      <rect x="1" y="1" width="24" height="24" rx="3" stroke="#A9761B" strokeWidth="1.4" />
+      <path d="M6 13h4M16 13h4M13 6v4M13 16v4" stroke="#A9761B" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="13" cy="13" r="3.4" stroke="#A9761B" strokeWidth="1.4" />
+      <circle cx="13" cy="13" r="1" fill="#A9761B" />
+    </svg>
+  )
+}
+
 export function AdminLayout(): JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
+  /** 当前钻取到的分组；null = 显示全部分组索引。 */
+  const [drill, setDrill] = useState<DrillView>(null)
   const { roles, signOut, expiringSoon, expiresInSeconds } = useSession()
   const location = useLocation()
   const navigate = useNavigate()
@@ -45,145 +62,214 @@ export function AdminLayout(): JSX.Element {
     [roles],
   )
 
-  const menuItems: MenuProps['items'] = visibleGroups.map((g) => ({
-    key: `group:${g.key}`,
-    icon: g.icon,
-    label: g.label,
-    children: g.children.map((n) => ({
-      key: n.path,
-      icon: n.icon,
-      label: n.label,
-    })),
-  }))
-
-  const visiblePaths = useMemo(
-    () => new Set(visibleGroups.flatMap((g) => g.children.map((n) => n.path))),
-    [visibleGroups],
+  /** 当前路由命中的节点/分组（精确优先、最长前缀兜底，深链 /tenants/:id 亦定位）。 */
+  const matched = useMemo(
+    () =>
+      findNavNode(
+        location.pathname,
+        visibleGroups.flatMap((g) => g.children),
+      ),
+    [location.pathname, visibleGroups],
   )
-
-  const matched = NAV_NODES.find(
-    (n) => visiblePaths.has(n.path) && location.pathname.startsWith(n.path),
+  const currentGroup = useMemo(
+    () => (matched ? visibleGroups.find((g) => g.children.some((n) => n.key === matched.key)) : undefined),
+    [matched, visibleGroups],
   )
-  const selectedKey = matched?.path ?? '/tenants'
   const pageTitle = matched?.label ?? '平台管理控制台'
   usePageTitle(pageTitle)
 
-  /** 展开态：选中项所在分组必须展开，其余保留用户手动折叠的选择。 */
-  const [openKeys, setOpenKeys] = useState<string[]>([])
-  const activeGroupKeys = visibleGroups
-    .filter((g) => g.children.some((n) => n.path === selectedKey))
-    .map((g) => `group:${g.key}`)
-
+  /**
+   * 路由变化时自动把侧栏定位到所属分组——深链、刷新、浏览器前进后退都不丢层级。
+   * 仅在 pathname **真正变化** 时执行：用户在索引态手动后退（不改路由）不会被强行拽回钻取态。
+   */
+  const lastPath = useRef<string | null>(null)
   useEffect(() => {
-    if (activeGroupKeys.length === 0) return
-    setOpenKeys((prev) => {
-      const missing = activeGroupKeys.filter((k) => !prev.includes(k))
-      return missing.length === 0 ? prev : [...prev, ...missing]
-    })
-  }, [activeGroupKeys.join('|')])
+    if (lastPath.current === location.pathname) return
+    lastPath.current = location.pathname
+    setDrill(currentGroup?.key ?? null)
+  }, [location.pathname, currentGroup])
+
+  /**
+   * 钻取视图的菜单项：
+   *  - 索引态：一列分组，右侧带页面数——像目录，也像面包屑的「上一级」。
+   *  - 钻取态：首项是「返回全部分组」，随后是该组页面列表。
+   * 折叠态强制显示分组索引（80px 宽放页面名无意义），点分组即展开并钻入。
+   */
+  // ⚠️ 角色异步回补可能让 drill 指向的分组忽然无权访问；此时必须回退索引态，
+  //    否则下方 activeGroup!.children 会在真实浏览器里抛 TypeError（jsdom 仅打 uncaught，测试仍绿）。
+  const activeGroup = drill === null ? undefined : visibleGroups.find((g) => g.key === drill)
+  const isIndex = collapsed || !activeGroup
+
+  const menuItems: MenuProps['items'] = useMemo(() => {
+    if (isIndex || !activeGroup) {
+      return visibleGroups.map((g) => ({
+        key: `group:${g.key}`,
+        icon: g.icon,
+        label: (
+          <span className="dc-drill-index-label">
+            <span className="dc-drill-index-name">{g.label}</span>
+            <span className="dc-drill-index-count">{g.children.length}</span>
+          </span>
+        ),
+      }))
+    }
+    const g = activeGroup!
+    return [
+      {
+        key: '__back__',
+        icon: <LeftOutlined />,
+        label: <span className="dc-drill-back">全部分组</span>,
+        className: 'dc-drill-back-item',
+      },
+      ...g.children.map((n) => ({
+        key: n.path,
+        icon: n.icon,
+        label: n.label,
+      })),
+    ]
+  }, [isIndex, activeGroup, visibleGroups])
+
+  /** 选中态：索引态高亮当前路由所属分组；钻取态高亮当前页面。 */
+  const selectedKey = isIndex
+    ? currentGroup
+      ? `group:${currentGroup.key}`
+      : ''
+    : matched && activeGroup?.children.some((n) => n.path === matched.path)
+      ? matched.path
+      : ''
+
+  /**
+   * 面包屑「控制台 / 分组」级点击 = 路径向上，退回分组索引（不跳路由、不改默认落地行为）。
+   * 钻入某个分组是索引态下点分组项的动作，两者职责分离、语义单一。
+   */
+  const handleCrumbGroup = (): void => {
+    setDrill(null)
+  }
+
+  /** 会话余量百分比：平台令牌固定 2h（7200s），按比例画刻度条；真实到期仍以 expiringSoon 为准。 */
+  const sessionPercent = Math.max(0, Math.min(100, Math.round((expiresInSeconds / 7200) * 100)))
+  const mm = String(Math.floor(expiresInSeconds / 60)).padStart(2, '0')
+  const ss = String(expiresInSeconds % 60).padStart(2, '0')
 
   const userMenu = {
     items: [{ key: 'logout', icon: <LogoutOutlined />, label: '退出登录' }],
     onClick: ({ key }: { key: string }) => {
       if (key === 'logout') {
         signOut()
-        // ⚠️ navigate 的目标相对 Router basename（/admin），不带前缀；
-        //    写 `${APP_BASE_PATH}/login` 会拼成 /admin/admin/login → 404。
+        // ⚠️ navigate 目标相对 Router basename（/admin），不带前缀（否则 /admin/admin/login）。
         navigate('/login')
       }
     },
   }
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ minHeight: '100vh', background: 'var(--dc-paper)' }}>
       <Sider
+        theme="dark"
         collapsible
         collapsed={collapsed}
         trigger={null}
         breakpoint="lg"
         collapsedWidth={screens.xs ? 0 : 80}
+        width={248}
+        style={{ display: 'flex', flexDirection: 'column' }}
       >
-        <div
-          style={{
-            height: 48,
-            margin: 16,
-            color: '#fff',
-            fontWeight: 600,
-            fontSize: 16,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: collapsed ? 'center' : 'flex-start',
-            overflow: 'hidden',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {collapsed ? 'PC' : '平台管理控制台'}
+        <div className={`dc-brand${collapsed ? ' dc-brand--collapsed' : ''}`}>
+          <BrandMark />
+          {!collapsed && (
+            <div>
+              <div className="dc-brand__name">平台控制台</div>
+              <div className="dc-brand__sub">运营 / 治理 / 观测</div>
+            </div>
+          )}
         </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          openKeys={collapsed ? [] : openKeys}
-          onOpenChange={(keys) => setOpenKeys(keys as string[])}
-          items={menuItems}
-          onClick={({ key }) => {
-            // 分组标题不承载路由：只有叶子节点（路径）才导航
-            if (key.startsWith('group:')) return
-            navigate(key)
-          }}
-        />
+        <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+          <Menu
+            theme="dark"
+            mode="inline"
+            inlineCollapsed={collapsed}
+            selectedKeys={[selectedKey]}
+            items={menuItems}
+            onClick={({ key }) => {
+              if (key === '__back__') {
+                setDrill(null)
+                return
+              }
+              if (key.startsWith('group:')) {
+                setDrill(key.slice('group:'.length))
+                setCollapsed(false)
+                return
+              }
+              navigate(key)
+            }}
+            style={{ borderInlineEnd: 0, background: 'transparent' }}
+          />
+        </div>
+        {!collapsed && (
+          <div className="dc-session">
+            <div className="dc-session__row">
+              <span>平台令牌剩余</span>
+              <span className="dc-session__time">{mm}:{ss}</span>
+            </div>
+            <div className="dc-session__bar" aria-hidden="true">
+              <i style={{ width: `${sessionPercent}%` }} />
+            </div>
+          </div>
+        )}
       </Sider>
-      <Layout>
+      <Layout style={{ background: 'var(--dc-paper)', minWidth: 0 }}>
         <Header
           style={{
-            background: '#fff',
-            padding: '0 16px',
+            height: 64,
+            padding: '0 28px',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
+            gap: 16,
+            borderBottom: '1px solid var(--dc-line)',
+            position: 'sticky',
+            top: 0,
+            zIndex: 20,
           }}
         >
-          <span onClick={() => setCollapsed((c) => !c)} style={{ cursor: 'pointer', fontSize: 18 }}>
-            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-          </span>
-          <Dropdown menu={userMenu} placement="bottomRight">
-            <span style={{ cursor: 'pointer' }}>
-              <Avatar icon={<UserOutlined />} />
-              <Typography.Text style={{ marginLeft: 8 }}>管理员</Typography.Text>
+          <Button
+            type="text"
+            aria-label={collapsed ? '展开导航' : '折叠导航'}
+            icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            onClick={() => setCollapsed((c) => !c)}
+            style={{ color: 'var(--dc-text-2)' }}
+          />
+          {/* 面包屑即唯一路径指示，收敛在顶栏：控制台 › 分组 › 页面，分组/首页可点回退侧栏。 */}
+          <Breadcrumb groups={visibleGroups} onGroupClick={handleCrumbGroup} />
+          <div style={{ flex: 1 }} />
+          <div className="dc-envchip">
+            <span className="pulse" />
+            生产环境
+          </div>
+          <Dropdown menu={userMenu} placement="bottomRight" trigger={['click', 'hover']}>
+            <span style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
+              <span className="dc-avatar">管</span>
             </span>
           </Dropdown>
         </Header>
-        <Content style={{ margin: 16 }}>
-          {/* ⚠️ **即将过期提示必须渲染出来**（评测 P1-5）：`expiringSoon` 此前
-              每秒算一次却没有任何组件消费 —— 平台令牌 2 小时硬过期，
-              用户毫无预兆地被踢回登录页且现场全丢。这里把「还剩多少秒」摆出来，
-              并给一个**保住现场**的续期入口（重新登录后回到当前页）。 */}
+        <Content style={{ margin: 0, padding: '22px 28px 56px', minWidth: 0 }}>
+          {/* ⚠️ 会话过期提示必须渲染：平台令牌 2h 硬过期，给保住现场的续期入口。
+              navigate 目标相对 basename；不能先 signOut（否则 RequireAuth 兜底丢 reason/next）。 */}
           {expiringSoon && (
             <Alert
               type="warning"
               showIcon
-              style={{ marginBottom: 12 }}
+              style={{ marginBottom: 16 }}
               message={`平台会话即将过期（剩余约 ${expiresInSeconds} 秒）`}
-              description="平台令牌有效期 2 小时且不可续期。为避免操作中断，请尽快完成当前操作并重新登录——重新登录后会回到当前页面。"
+              description="平台令牌有效期 2 小时且不可续期。请尽快完成当前操作并重新登录——重新登录后会回到当前页面。"
               action={
                 <Space>
                   <Button
                     size="small"
                     onClick={() => {
-                      // 带上原因与回跳目标：登录页据此提示「为什么被踢出」并回跳本页
                       const rel = location.pathname.startsWith(APP_BASE_PATH)
                         ? location.pathname.slice(APP_BASE_PATH.length)
                         : location.pathname
-                      // ⚠️ **这里不能用 signOut()**：它会翻转认证态，而此时还在受保护路由上，
-                      //    RequireAuth 随即渲染 `<Navigate to="/login" replace>` 兜底 ——
-                      //    那条兜底**不带 reason/next**，会把「为什么被踢出」和「回哪去」
-                      //    一起抹掉（实测 URL 变成裸 /admin/login）。
-                      //    根因是优先级：React Router 的导航是 transition（低优先级），
-                      //    而认证态更新是同步的，先落地的永远是后者。
-                      //    故这里只清存储、不动 React 态：登录成功后 signIn 会整体替换。
                       clearSession()
-                      // ⚠️ 同上：navigate 目标相对 basename，不能带 /admin 前缀，
-                      //    否则「重新登录」落到 /admin/admin/login?... → 404，用户回不来。
                       navigate(`/login?reason=expired&next=${encodeURIComponent(rel)}`)
                     }}
                   >
@@ -193,27 +279,7 @@ export function AdminLayout(): JSX.Element {
               }
             />
           )}
-          <Breadcrumb />
-          <div
-            style={{
-              padding: 24,
-              background: '#fff',
-              borderRadius: 8,
-              minHeight: 'calc(100vh - 176px)',
-            }}
-          >
-            <Outlet />
-          </div>
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '16px 0',
-              color: '#888',
-              fontSize: 12,
-            }}
-          >
-            © 2026 Agent Platform · 平台管理控制台
-          </div>
+          <Outlet />
         </Content>
       </Layout>
     </Layout>

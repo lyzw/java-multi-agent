@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>平台控制台 · 运行总览 Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================
+   TOKENS —— 视觉主张「控制面 / Control Surface」
+   来自精密仪器与工程制图：可信、精密、有边界、可追溯。
+   图表只用四个语义色 + 灰阶，不用彩虹渐变。
+   ============================================================ */
+:root{
+  --ink:        #16211F;
+  --ink-2:      #22302D;
+  --ink-3:      #2E403B;
+  --paper:      #F4F5F1;
+  --surface:    #FFFFFF;
+  --line:       #DCE1DB;
+  --line-soft:  #E8EBE6;
+  --line-strong:#C5CEC7;
+  --text:       #1B2624;
+  --text-2:     #586862;
+  --text-3:     #8B9791;
+  --brass:      #A9761B;
+  --brass-deep: #855C12;
+  --brass-soft: #F1E6CE;
+  --red:        #B23A2E;
+  --red-soft:   #F6E6E2;
+  --teal:       #1C6E5E;
+  --teal-soft:  #E3EFEA;
+  --amber:      #A9761B;
+
+  --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+          'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --sider-w: 248px;
+  --sider-w-collapsed: 68px;
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+html,body{ height:100%; margin:0; }
+body{
+  font-family:var(--sans); color:var(--text); background:var(--paper);
+  -webkit-font-smoothing:antialiased; font-size:14px; line-height:1.55;
+}
+button{ font-family:inherit; cursor:pointer; }
+a{ color:inherit; text-decoration:none; }
+:focus-visible{ outline:2px solid var(--brass); outline-offset:2px; border-radius:2px; }
+::selection{ background:var(--brass-soft); color:var(--ink); }
+.mono{ font-family:var(--mono); font-variant-numeric:tabular-nums; }
+
+.app{ display:flex; min-height:100vh; }
+
+/* ============ SIDER ============ */
+.sider{
+  width:var(--sider-w); flex:0 0 var(--sider-w); background:var(--ink); color:#D9E0DC;
+  display:flex; flex-direction:column; position:sticky; top:0; height:100vh;
+  transition:width .22s ease, flex-basis .22s ease; overflow:hidden;
+}
+.app.is-collapsed .sider{ width:var(--sider-w-collapsed); flex-basis:var(--sider-w-collapsed); }
+.brand{ height:64px; flex:0 0 64px; display:flex; align-items:center; gap:12px; padding:0 20px; border-bottom:1px solid rgba(255,255,255,.08); white-space:nowrap; }
+.brand__mark{ flex:0 0 26px; width:26px; height:26px; }
+.brand__name{ font-weight:600; font-size:15px; color:#F3F5F2; letter-spacing:.01em; }
+.brand__sub{ font-size:11px; color:var(--text-3); margin-top:-2px; }
+.app.is-collapsed .brand{ padding:0; justify-content:center; }
+.app.is-collapsed .brand__name,.app.is-collapsed .brand__sub{ display:none; }
+.nav{ flex:1 1 auto; overflow-y:auto; padding:14px 0 8px; }
+.nav::-webkit-scrollbar{ width:0; }
+.nav-group{ margin-bottom:10px; }
+.nav-group__head{
+  width:100%; display:flex; align-items:center; gap:10px; padding:7px 20px;
+  background:none; border:0; border-left:2px solid transparent; color:#93A29B;
+  font-size:11.5px; font-weight:600; letter-spacing:.06em; text-align:left;
+}
+.nav-group__head:hover{ color:#C9D3CD; }
+.nav-group__head .caret{ margin-left:auto; transition:transform .18s ease; opacity:.6; }
+.nav-group.is-closed .nav-group__head .caret{ transform:rotate(-90deg); }
+.app.is-collapsed .nav-group__head{ justify-content:center; padding:10px 0; }
+.app.is-collapsed .nav-group__head .g-label,.app.is-collapsed .nav-group__head .caret{ display:none; }
+.nav-item{
+  width:100%; display:flex; align-items:center; gap:12px; padding:8px 20px 8px 22px;
+  background:none; border:0; border-left:2px solid transparent; color:#B7C3BD;
+  font-size:13px; text-align:left; position:relative; white-space:nowrap;
+}
+.nav-item:hover{ background:rgba(255,255,255,.035); color:#EDF1EE; }
+.nav-item.is-active{ background:rgba(169,118,27,.14); border-left-color:var(--brass); color:#F6EAD0; font-weight:500; }
+.nav-item__ico{ width:17px; height:17px; flex:0 0 17px; opacity:.85; }
+.nav-item.is-active .nav-item__ico{ opacity:1; color:var(--brass); }
+.nav-item__dot{
+  margin-left:auto; min-width:18px; height:18px; padding:0 5px; border-radius:9px;
+  background:var(--brass); color:var(--ink); font-family:var(--mono); font-size:10.5px; font-weight:500;
+  display:flex; align-items:center; justify-content:center;
+}
+.nav-item__dot.is-alert{ background:var(--red); color:#fff; }
+.app.is-collapsed .nav-item{ justify-content:center; padding:10px 0; }
+.app.is-collapsed .nav-item__label,.app.is-collapsed .nav-item__dot{ display:none; }
+.app.is-collapsed .nav-group__items{ display:none; }
+.session{ flex:0 0 auto; padding:14px 20px 18px; border-top:1px solid rgba(255,255,255,.08); white-space:nowrap; }
+.session__row{ display:flex; align-items:baseline; justify-content:space-between; }
+.session__label{ font-size:11px; color:#8B9A93; }
+.session__time{ font-family:var(--mono); font-size:12px; color:#E7C98C; font-weight:500; }
+.session__bar{ height:3px; margin-top:9px; background:rgba(255,255,255,.1); border-radius:2px; overflow:hidden; }
+.session__bar i{ display:block; height:100%; width:71%; background:var(--brass); }
+.app.is-collapsed .session{ padding:14px 0; text-align:center; }
+.app.is-collapsed .session__label,.app.is-collapsed .session__time{ display:none; }
+
+/* ============ MAIN / CONTROL BAR ============ */
+.main{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
+.controlbar{
+  height:64px; flex:0 0 64px; background:var(--surface); border-bottom:1px solid var(--line);
+  display:flex; align-items:center; gap:16px; padding:0 28px; position:sticky; top:0; z-index:20;
+}
+.icon-btn{ width:34px; height:34px; display:flex; align-items:center; justify-content:center; background:transparent; border:1px solid transparent; border-radius:5px; color:var(--text-2); }
+.icon-btn:hover{ background:var(--paper); border-color:var(--line); color:var(--ink); }
+.locator{ display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text-2); }
+.locator b{ color:var(--text); font-weight:600; }
+.locator .sep{ color:var(--line-strong); }
+.controlbar__spacer{ flex:1; }
+.env-chip{ display:flex; align-items:center; gap:7px; font-size:12px; color:var(--text-2); padding:5px 11px; border:1px solid var(--line); border-radius:5px; }
+.env-chip .pulse{ width:7px; height:7px; border-radius:50%; background:var(--teal); box-shadow:0 0 0 3px var(--teal-soft); }
+.search{ display:flex; align-items:center; gap:8px; height:34px; width:190px; padding:0 11px; border:1px solid var(--line); border-radius:5px; color:var(--text-3); }
+.search input{ border:0; outline:0; background:none; font:inherit; color:var(--text); width:100%; font-size:12.5px; }
+.search input::placeholder{ color:var(--text-3); }
+.bell{ position:relative; }
+.bell::after{ content:''; position:absolute; top:6px; right:6px; width:6px; height:6px; border-radius:50%; background:var(--red); box-shadow:0 0 0 2px var(--surface); }
+.avatar{ width:32px; height:32px; border-radius:5px; background:var(--ink); color:#E7C98C; display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:11px; font-weight:500; letter-spacing:.02em; }
+
+/* ============ WORKSPACE ============ */
+.workspace{ padding:26px 28px 56px; max-width:1500px; width:100%; margin:0 auto; }
+.page-head{ display:flex; align-items:flex-end; justify-content:space-between; gap:20px; margin-bottom:20px; }
+.page-head h1{ font-size:23px; font-weight:600; margin:0; letter-spacing:-.01em; }
+.page-head p{ margin:5px 0 0; color:var(--text-2); font-size:13px; }
+.page-actions{ display:flex; gap:10px; align-items:center; }
+.btn{ display:inline-flex; align-items:center; gap:7px; height:36px; padding:0 15px; border-radius:5px; font-size:13px; font-weight:500; border:1px solid var(--line-strong); background:var(--surface); color:var(--text); transition:background .15s ease, border-color .15s ease; }
+.btn:hover{ background:var(--paper); border-color:var(--text-3); }
+.btn--primary{ background:var(--ink); border-color:var(--ink); color:#F4F1E8; }
+.btn--primary:hover{ background:var(--ink-2); border-color:var(--ink-2); }
+.btn .ic{ width:15px; height:15px; }
+
+/* 时间范围切换 —— 下划线指示,非药丸 */
+.range{ display:flex; align-items:center; gap:2px; border:1px solid var(--line); border-radius:5px; padding:3px; background:var(--surface); }
+.range button{ border:0; background:none; padding:5px 12px; border-radius:3px; font-size:12.5px; color:var(--text-2); font-family:var(--mono); }
+.range button.is-on{ background:var(--ink); color:#F4F1E8; }
+
+/* 告警条 */
+.notice{ display:flex; align-items:flex-start; gap:12px; border:1px solid #EBCBC5; border-left:3px solid var(--red); background:var(--red-soft); border-radius:0 6px 6px 0; padding:12px 16px; margin-bottom:20px; }
+.notice__ico{ flex:0 0 18px; color:var(--red); margin-top:1px; }
+.notice strong{ font-size:13px; color:#7E2A21; }
+.notice p{ margin:3px 0 0; font-size:12px; color:#8B4A42; }
+.notice a{ color:var(--red); font-weight:500; text-decoration:underline; text-underline-offset:2px; }
+
+/* ---------- KPI 指标卡 ---------- */
+.kpis{ display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-bottom:18px; }
+.kpi{ background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:16px 16px 0; position:relative; overflow:hidden; animation:rise .5s both; }
+.kpi:nth-child(2){ animation-delay:.05s; } .kpi:nth-child(3){ animation-delay:.1s; }
+.kpi:nth-child(4){ animation-delay:.15s; } .kpi:nth-child(5){ animation-delay:.2s; }
+.kpi__label{ font-size:12px; color:var(--text-2); }
+.kpi__val{ font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:28px; font-weight:500; letter-spacing:-.03em; line-height:1.2; margin-top:6px; }
+.kpi__val small{ font-size:14px; color:var(--text-3); letter-spacing:0; }
+.kpi__delta{ font-size:11.5px; margin-top:4px; display:flex; align-items:center; gap:5px; }
+.delta{ font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:3px; }
+.delta--up{ color:var(--teal); background:var(--teal-soft); }
+.delta--down{ color:var(--red); background:var(--red-soft); }
+.delta--flat{ color:var(--text-2); background:var(--paper); }
+.kpi__delta span{ color:var(--text-3); }
+.kpi__spark{ height:38px; margin:6px -16px 0; display:block; width:calc(100% + 32px); }
+
+/* ---------- 面板 ---------- */
+.panel{ background:var(--surface); border:1px solid var(--line); border-radius:6px; min-width:0; }
+.panel__head{ display:flex; align-items:center; justify-content:space-between; gap:14px; padding:14px 18px; border-bottom:1px solid var(--line-soft); }
+.panel__title{ font-size:13.5px; font-weight:600; }
+.panel__title small{ display:block; font-weight:400; color:var(--text-3); font-size:11px; margin-top:2px; }
+.panel__meta{ font-size:11px; color:var(--text-3); font-family:var(--mono); }
+.panel__body{ padding:16px 18px; }
+
+.grid-main{ display:grid; grid-template-columns:minmax(0,1.9fr) minmax(0,1fr); gap:16px; margin-bottom:16px; }
+.grid-sub{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; margin-bottom:16px; }
+@media(max-width:1180px){ .grid-main{ grid-template-columns:1fr; } }
+
+/* ---------- 趋势图 ---------- */
+.legend{ display:flex; align-items:center; gap:16px; font-size:11.5px; color:var(--text-2); }
+.legend i{ display:inline-block; width:14px; height:2px; vertical-align:middle; margin-right:6px; }
+.legend .line-req{ background:var(--brass); }
+.legend .line-den{ background:var(--red); }
+.chart-wrap{ position:relative; }
+.chart-wrap svg{ display:block; width:100%; height:auto; }
+.chart-grid line{ stroke:var(--line-soft); stroke-width:1; }
+.chart-grid text{ fill:var(--text-3); font-family:var(--mono); font-size:10px; }
+.chart-tip{
+  position:absolute; pointer-events:none; opacity:0; transition:opacity .12s;
+  background:var(--ink); color:#F2EFE6; border-radius:5px; padding:8px 11px;
+  font-size:11.5px; font-family:var(--mono); white-space:nowrap; z-index:5;
+  box-shadow:0 8px 20px rgba(22,33,31,.2);
+}
+.chart-tip.is-on{ opacity:1; }
+.chart-tip b{ color:#E7C98C; font-weight:500; }
+.chart-tip .r{ color:#E9A9A0; }
+
+/* ---------- 环图 ---------- */
+.donut-wrap{ display:flex; align-items:center; gap:20px; }
+.donut{ flex:0 0 148px; width:148px; height:148px; position:relative; }
+.donut svg{ display:block; width:100%; height:100%; transform:rotate(-90deg); }
+.donut circle{ fill:none; stroke-width:16; }
+.donut__center{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+.donut__center b{ font-family:var(--mono); font-size:26px; font-weight:500; letter-spacing:-.03em; }
+.donut__center span{ font-size:11px; color:var(--text-3); }
+.donut-legend{ flex:1; display:flex; flex-direction:column; gap:11px; min-width:0; }
+.dl-row{ display:grid; grid-template-columns:10px 1fr auto; align-items:center; gap:9px; font-size:12px; }
+.dl-row i{ width:9px; height:9px; border-radius:2px; }
+.dl-row span{ color:var(--text-2); }
+.dl-row b{ font-family:var(--mono); font-weight:500; }
+.dl-row b em{ font-style:normal; color:var(--text-3); font-size:11px; margin-left:4px; }
+
+/* ---------- 排行横条 ---------- */
+.rank-list{ display:flex; flex-direction:column; gap:14px; }
+.rank-row{ display:grid; grid-template-columns:112px 1fr 62px; align-items:center; gap:12px; }
+.rank-row__name{ font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rank-track{ height:8px; background:var(--paper); border-radius:2px; overflow:hidden; }
+.rank-track i{ display:block; height:100%; background:var(--ink); border-radius:2px; }
+.rank-row:nth-child(1) .rank-track i{ background:var(--brass); }
+.rank-row:nth-child(2) .rank-track i{ background:var(--ink-2); }
+.rank-row__val{ font-family:var(--mono); font-size:12px; text-align:right; color:var(--text-2); }
+
+/* ---------- 配额占用 ---------- */
+.quota-list{ display:flex; flex-direction:column; gap:13px; }
+.quota-row{ display:grid; grid-template-columns:100px 1fr 44px; align-items:center; gap:12px; }
+.quota-row__name{ font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.quota-track{ height:8px; background:var(--paper); border-radius:2px; overflow:hidden; position:relative; }
+.quota-track i{ display:block; height:100%; background:var(--teal); border-radius:2px; }
+.quota-track i.warn{ background:var(--brass); }
+.quota-track i.crit{ background:var(--red); }
+.quota-row__val{ font-family:var(--mono); font-size:12px; text-align:right; }
+.quota-row__val.crit{ color:var(--red); }
+
+/* ---------- 成本柱状图 ---------- */
+.bars{ position:relative; height:150px; display:flex; align-items:flex-end; gap:10px; padding:0 4px 0 34px; }
+.bars__ylabels{ position:absolute; left:0; top:0; bottom:22px; width:30px; display:flex; flex-direction:column; justify-content:space-between; font-family:var(--mono); font-size:10px; color:var(--text-3); text-align:right; }
+.bars__plot{ position:absolute; left:34px; right:4px; top:0; bottom:22px; border-bottom:1px solid var(--line); }
+.bars__threshold{ position:absolute; left:34px; right:4px; border-top:1px dashed var(--red); opacity:.6; }
+.bars__threshold span{ position:absolute; right:0; top:-15px; font-family:var(--mono); font-size:10px; color:var(--red); }
+.bar-col{ flex:1; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; height:100%; position:relative; z-index:1; }
+.bar-col__fill{ width:70%; max-width:26px; background:var(--brass); border-radius:2px 2px 0 0; transition:height .4s ease; }
+.bar-col__fill.is-over{ background:var(--red); }
+.bar-col__label{ position:absolute; bottom:-21px; font-family:var(--mono); font-size:10px; color:var(--text-3); }
+.bar-col__val{ font-family:var(--mono); font-size:10px; color:var(--text-2); margin-bottom:4px; }
+
+/* ---------- 时间线 ---------- */
+.timeline{ position:relative; padding-left:2px; }
+.tl-item{ display:grid; grid-template-columns:56px 1fr; gap:14px; padding:0 0 16px; position:relative; }
+.tl-item::before{ content:''; position:absolute; left:62px; top:5px; bottom:-4px; width:1px; background:var(--line); }
+.tl-item:last-child::before{ display:none; }
+.tl-time{ font-family:var(--mono); font-size:11.5px; color:var(--text-3); padding-top:1px; font-variant-numeric:tabular-nums; }
+.tl-body{ padding-left:14px; }
+.tl-body__tick{ position:absolute; left:59px; top:4px; width:7px; height:7px; border-radius:50%; background:var(--surface); border:2px solid var(--text-3); }
+.tl-body__tick.is-brass{ border-color:var(--brass); }
+.tl-body__tick.is-red{ border-color:var(--red); }
+.tl-title{ font-size:12.5px; color:var(--ink); }
+.tl-meta{ font-size:11px; color:var(--text-3); margin-top:3px; font-family:var(--mono); }
+
+.toast{ position:fixed; right:24px; bottom:24px; z-index:60; display:flex; align-items:center; gap:10px; background:var(--ink); color:#F2EFE6; padding:12px 16px; border-radius:6px; font-size:13px; box-shadow:0 10px 30px rgba(22,33,31,.22); transform:translateY(16px); opacity:0; pointer-events:none; transition:transform .22s ease, opacity .22s ease; }
+.toast.is-show{ transform:translateY(0); opacity:1; }
+.toast i{ width:7px; height:7px; border-radius:50%; background:#8FD9B6; }
+.footnote{ margin-top:34px; padding-top:16px; border-top:1px solid var(--line); font-size:11px; color:var(--text-3); display:flex; gap:8px; align-items:center; }
+.footnote .k{ width:7px; height:7px; background:var(--brass); border-radius:1px; }
+
+@keyframes rise{ from{ opacity:0; transform:translateY(10px);} to{ opacity:1; transform:none;} }
+
+@media(max-width:1340px){ .kpis{ grid-template-columns:repeat(3,1fr); } }
+@media(max-width:860px){
+  .sider{ position:fixed; z-index:40; box-shadow:8px 0 30px rgba(22,33,31,.18); }
+  .app:not(.is-collapsed) .sider{ width:var(--sider-w); flex-basis:var(--sider-w); }
+  .app.is-collapsed .sider{ width:0; flex-basis:0; }
+  .app.is-collapsed .brand,.app.is-collapsed .nav,.app.is-collapsed .session{ display:none; }
+  .workspace{ padding:22px 16px 44px; }
+  .controlbar{ padding:0 16px; }
+  .search,.env-chip{ display:none; }
+  .kpis{ grid-template-columns:repeat(2,1fr); }
+  .grid-main,.grid-sub{ grid-template-columns:1fr; }
+  .donut-wrap{ flex-direction:column; align-items:stretch; }
+  .donut{ align-self:center; }
+  .page-head{ flex-direction:column; align-items:flex-start; gap:14px; }
+}
+@media(max-width:520px){ .kpis{ grid-template-columns:1fr; } }
+@media(prefers-reduced-motion:reduce){ *,*::before,*::after{ animation:none !important; transition:none !important; } }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ============ SIDER ============ -->
+  <aside class="sider" aria-label="主导航">
+    <div class="brand">
+      <svg class="brand__mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+        <rect x="1" y="1" width="24" height="24" rx="3" stroke="#A9761B" stroke-width="1.4"/>
+        <path d="M6 13h4M16 13h4M13 6v4M13 16v4" stroke="#A9761B" stroke-width="1.4" stroke-linecap="round"/>
+        <circle cx="13" cy="13" r="3.4" stroke="#A9761B" stroke-width="1.4"/>
+        <circle cx="13" cy="13" r="1" fill="#A9761B"/>
+      </svg>
+      <div><div class="brand__name">平台控制台</div><div class="brand__sub">运营 / 治理 / 观测</div></div>
+    </div>
+    <nav class="nav">
+      <div class="nav-group" data-group>
+        <button class="nav-group__head" type="button"><span class="g-label">概览</span><svg class="caret" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+        <div class="nav-group__items">
+          <button class="nav-item is-active" type="button" aria-current="page"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="2.5" y="2.5" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="11.5" y="2.5" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="2.5" y="11.5" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="11.5" y="11.5" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.3"/></svg><span class="nav-item__label">运行总览</span></button>
+        </div>
+      </div>
+      <div class="nav-group" data-group>
+        <button class="nav-group__head" type="button"><span class="g-label">平台治理</span><svg class="caret" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+        <div class="nav-group__items">
+          <button class="nav-item" type="button"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 8h15M7 8v8" stroke="currentColor" stroke-width="1.3"/></svg><span class="nav-item__label">租户管理</span></button>
+          <button class="nav-item" type="button"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="6.5" r="3" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 17c0-3.3 2.9-5.5 6.5-5.5s6.5 2.2 6.5 5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span class="nav-item__label">平台用户</span></button>
+          <button class="nav-item" type="button"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3 7.5h14M3 12h14M8 3v14" stroke="currentColor" stroke-width="1.3"/></svg><span class="nav-item__label">角色权限矩阵</span></button>
+          <button class="nav-item" type="button"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 2.5 17 5v5c0 4-3 6.6-7 7.5-4-0.9-7-3.5-7-7.5V5l7-2.5Z" stroke="currentColor" stroke-width="1.3"/><path d="m7 10 2 2 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nav-item__label">平台审计</span></button>
+          <button class="nav-item" type="button"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 3h12v14H4zM7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span class="nav-item__label">对话审计记录</span></button>
+        </div>
+      </div>
+      <div class="nav-group" data-group>
+        <button class="nav-group__head" type="button"><span class="g-label">能力目录</span><svg class="caret" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+        <div class="nav-group__items">
+          <button class="nav-item" type="button"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M8 2v3M12 2v3M8 15v3M12 15v3M2 8h3M2 12h3M15 8h3M15 12h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span class="nav-item__label">Agent 注册表</span><span class="nav-item__dot">3</span></button>
+          <button class="nav-item" type="button"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M13.5 6.5a3 3 0 1 0-4-4L8 4l4 4 1.5-1.5ZM6.5 11.5l-4 4a2.1 2.1 0 0 0 3 3l4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nav-item__label">Tool</span></button>
+          <button class="nav-item" type="button"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3 3 7l7 4 7-4-7-4ZM3 11l7 4 7-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nav-item__label">Skill</span></button>
+          <button class="nav-item" type="button"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="2.5" stroke="currentColor" stroke-width="1.3"/><circle cx="14" cy="14" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M8 6h3a3 3 0 0 1 3 3v2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span class="nav-item__label">MCP Server</span></button>
+          <button class="nav-item" type="button"><svg class="nav-item__ico" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 6h5l3 4h6M3 14h5l3-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="3" cy="6" r="1.4" fill="currentColor"/><circle cx="17" cy="10" r="1.4" fill="currentColor"/><circle cx="3" cy="14" r="1.4" fill="currentColor"/></svg><span class="nav-item__label">路由策略</span></button>
+        </div>
+      </div>
+      <div class="nav-group is-closed" data-group>
+        <button class="nav-group__head" type="button"><span class="g-label">RAG 语料治理</span><svg class="caret" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+        <div class="nav-group__items">
+          <button class="nav-item" type="button"><span class="nav-item__label">来源登记</span></button>
+          <button class="nav-item" type="button"><span class="nav-item__label">片段校对</span></button>
+          <button class="nav-item" type="button"><span class="nav-item__label">抽检队列</span><span class="nav-item__dot is-alert">7</span></button>
+          <button class="nav-item" type="button"><span class="nav-item__label">召回解释</span></button>
+        </div>
+      </div>
+      <div class="nav-group is-closed" data-group>
+        <button class="nav-group__head" type="button"><span class="g-label">观测度量</span><svg class="caret" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+        <div class="nav-group__items">
+          <button class="nav-item" type="button"><span class="nav-item__label">Agent 效果指标</span></button>
+          <button class="nav-item" type="button"><span class="nav-item__label">人工审查队列</span><span class="nav-item__dot is-alert">2</span></button>
+          <button class="nav-item" type="button"><span class="nav-item__label">运行健康快照</span></button>
+        </div>
+      </div>
+      <div class="nav-group is-closed" data-group>
+        <button class="nav-group__head" type="button"><span class="g-label">系统配置</span><svg class="caret" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+        <div class="nav-group__items">
+          <button class="nav-item" type="button"><span class="nav-item__label">模型配置</span></button>
+          <button class="nav-item" type="button"><span class="nav-item__label">字典配置</span></button>
+          <button class="nav-item" type="button"><span class="nav-item__label">对话审计配置</span></button>
+        </div>
+      </div>
+    </nav>
+    <div class="session">
+      <div class="session__row"><span class="session__label">平台令牌剩余</span><span class="session__time">01:42:18</span></div>
+      <div class="session__bar" aria-hidden="true"><i></i></div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+    <header class="controlbar">
+      <button class="icon-btn" id="collapseBtn" type="button" aria-label="折叠导航"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+      <div class="locator"><span>平台控制台</span><span class="sep">/</span><b>运行总览</b></div>
+      <div class="controlbar__spacer"></div>
+      <div class="env-chip"><span class="pulse"></span>生产环境</div>
+      <label class="search"><svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><input type="search" placeholder="搜索租户、Agent、审计…" aria-label="全局搜索" /></label>
+      <button class="icon-btn bell" type="button" aria-label="通知"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5 8a5 5 0 0 1 10 0c0 4 1.5 5 1.5 5h-13S5 12 5 8Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8.5 15.5a1.5 1.5 0 0 0 3 0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+      <div class="avatar" title="当前管理员">ZW</div>
+    </header>
+
+    <main class="workspace">
+      <div class="page-head">
+        <div><h1>运行总览</h1><p>平台健康、能力使用与治理状态 · 数据截至 2026-11-20 00:00</p></div>
+        <div class="page-actions">
+          <div class="range" role="group" aria-label="时间范围">
+            <button type="button" class="is-on" data-range="24h">24 小时</button>
+            <button type="button" data-range="7d">7 天</button>
+            <button type="button" data-range="30d">30 天</button>
+          </div>
+          <button class="btn" type="button" id="exportBtn"><svg class="ic" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3v10m0 0 4-4m-4 4-4-4M4 15.5h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>导出报表</button>
+        </div>
+      </div>
+
+      <div class="notice" role="status">
+        <svg class="notice__ico" width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3 2.5 17h15L10 3Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M10 8v4M10 14.2v.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <div><strong>2 条严重授权拒绝待归因</strong><p>监控数据源正常返回，这不是「看不到」。请到 <a href="#" onclick="return false">拒绝告警</a> 逐条排查授权依据是否失效。</p></div>
+      </div>
+
+      <!-- ===== KPI ===== -->
+      <section class="kpis" aria-label="关键指标">
+        <div class="kpi" data-kpi="tenants">
+          <div class="kpi__label">活跃租户</div><div class="kpi__val" data-val>12</div>
+          <div class="kpi__delta"><span class="delta delta--up" data-delta>+2</span><span data-note>较上周期</span></div>
+          <svg class="kpi__spark" data-spark viewBox="0 0 160 38" preserveAspectRatio="none" aria-hidden="true"></svg>
+        </div>
+        <div class="kpi" data-kpi="requests">
+          <div class="kpi__label">请求总量</div><div class="kpi__val" data-val>1.28<small>M</small></div>
+          <div class="kpi__delta"><span class="delta delta--up" data-delta>+12.4%</span><span data-note>较上周期</span></div>
+          <svg class="kpi__spark" data-spark viewBox="0 0 160 38" preserveAspectRatio="none" aria-hidden="true"></svg>
+        </div>
+        <div class="kpi" data-kpi="latency">
+          <div class="kpi__label">平均时延</div><div class="kpi__val" data-val>142<small>ms</small></div>
+          <div class="kpi__delta"><span class="delta delta--up" data-delta>−8.1%</span><span data-note>越低越好</span></div>
+          <svg class="kpi__spark" data-spark viewBox="0 0 160 38" preserveAspectRatio="none" aria-hidden="true"></svg>
+        </div>
+        <div class="kpi" data-kpi="success">
+          <div class="kpi__label">任务成功率</div><div class="kpi__val" data-val>96.8<small>%</small></div>
+          <div class="kpi__delta"><span class="delta delta--up" data-delta>+0.6%</span><span data-note>链路成功 ≠ 任务成功</span></div>
+          <svg class="kpi__spark" data-spark viewBox="0 0 160 38" preserveAspectRatio="none" aria-hidden="true"></svg>
+        </div>
+        <div class="kpi" data-kpi="denies">
+          <div class="kpi__label">严重拒绝</div><div class="kpi__val" data-val>2</div>
+          <div class="kpi__delta"><span class="delta delta--down" data-delta>+2</span><span data-note>需人工归因</span></div>
+          <svg class="kpi__spark" data-spark viewBox="0 0 160 38" preserveAspectRatio="none" aria-hidden="true"></svg>
+        </div>
+      </section>
+
+      <!-- ===== 主趋势 + 状态分布 ===== -->
+      <div class="grid-main">
+        <section class="panel" aria-labelledby="trend-h">
+          <div class="panel__head">
+            <div class="panel__title" id="trend-h">请求量与授权拒绝趋势<small>左轴 请求量 · 右轴 拒绝数</small></div>
+            <div class="legend"><span><i class="line-req"></i>请求量</span><span><i class="line-den"></i>授权拒绝</span></div>
+          </div>
+          <div class="panel__body chart-wrap" id="trendWrap">
+            <svg id="trendSvg" viewBox="0 0 760 240" role="img" aria-label="请求量与授权拒绝趋势图">
+              <g class="chart-grid" id="trendGrid"></g>
+              <path id="trendArea" fill="rgba(169,118,27,.10)"></path>
+              <path id="trendLine" fill="none" stroke="var(--brass)" stroke-width="2" stroke-linejoin="round"></path>
+              <polyline id="denyLine" fill="none" stroke="var(--red)" stroke-width="1.6" stroke-linejoin="round"></polyline>
+              <line id="crosshair" x1="0" y1="16" x2="0" y2="196" stroke="var(--text-3)" stroke-width="1" stroke-dasharray="3 3" style="display:none"></line>
+              <circle id="dotReq" r="4.5" fill="var(--brass)" stroke="#fff" stroke-width="2" style="display:none"></circle>
+              <circle id="dotDen" r="4.5" fill="var(--red)" stroke="#fff" stroke-width="2" style="display:none"></circle>
+            </svg>
+            <div class="chart-tip" id="trendTip"></div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="dist-h">
+          <div class="panel__head"><div class="panel__title" id="dist-h">能力状态分布<small>在册 39 项 · 全局目录</small></div><span class="panel__meta">实时</span></div>
+          <div class="panel__body">
+            <div class="donut-wrap">
+              <div class="donut">
+                <svg viewBox="0 0 120 120" aria-hidden="true">
+                  <circle cx="60" cy="60" r="46" stroke="var(--line-soft)"></circle>
+                  <circle id="seg1" cx="60" cy="60" r="46" stroke="var(--teal)"></circle>
+                  <circle id="seg2" cx="60" cy="60" r="46" stroke="var(--brass)"></circle>
+                  <circle id="seg3" cx="60" cy="60" r="46" stroke="var(--line-strong)"></circle>
+                  <circle id="seg4" cx="60" cy="60" r="46" stroke="var(--red)"></circle>
+                </svg>
+                <div class="donut__center"><b>39</b><span>在册能力</span></div>
+              </div>
+              <div class="donut-legend">
+                <div class="dl-row"><i style="background:var(--teal)"></i><span>已发布</span><b>28<em>72%</em></b></div>
+                <div class="dl-row"><i style="background:var(--brass)"></i><span>审批中</span><b>4<em>10%</em></b></div>
+                <div class="dl-row"><i style="background:var(--line-strong)"></i><span>草稿</span><b>5<em>13%</em></b></div>
+                <div class="dl-row"><i style="background:var(--red)"></i><span>已停用</span><b>2<em>5%</em></b></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ===== 排行 + 配额 ===== -->
+      <div class="grid-sub">
+        <section class="panel" aria-labelledby="rank-h">
+          <div class="panel__head"><div class="panel__title" id="rank-h">Agent 调用排行<small>按请求量 · 当前周期</small></div><span class="panel__meta">Top 5</span></div>
+          <div class="panel__body">
+            <div class="rank-list">
+              <div class="rank-row"><span class="rank-row__name">答疑助手</span><div class="rank-track"><i style="width:100%"></i></div><span class="rank-row__val">42.6k</span></div>
+              <div class="rank-row"><span class="rank-row__name">知识点检索</span><div class="rank-track"><i style="width:73%"></i></div><span class="rank-row__val">31.2k</span></div>
+              <div class="rank-row"><span class="rank-row__name">作业讲解</span><div class="rank-track"><i style="width:44%"></i></div><span class="rank-row__val">18.9k</span></div>
+              <div class="rank-row"><span class="rank-row__name">口语陪练</span><div class="rank-track"><i style="width:29%"></i></div><span class="rank-row__val">12.4k</span></div>
+              <div class="rank-row"><span class="rank-row__name">题库同步</span><div class="rank-track"><i style="width:16%"></i></div><span class="rank-row__val">6.8k</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="quota-h">
+          <div class="panel__head"><div class="panel__title" id="quota-h">租户配额占用<small>综合用量 · 令牌 / 存储 / 并发</small></div><span class="panel__meta">4 / 12</span></div>
+          <div class="panel__body">
+            <div class="quota-list">
+              <div class="quota-row"><span class="quota-row__name">青藤教育</span><div class="quota-track"><i class="warn" style="width:78%"></i></div><span class="quota-row__val">78%</span></div>
+              <div class="quota-row"><span class="quota-row__name">启明中学</span><div class="quota-track"><i style="width:64%"></i></div><span class="quota-row__val">64%</span></div>
+              <div class="quota-row"><span class="quota-row__name">砚台科技</span><div class="quota-track"><i style="width:41%"></i></div><span class="quota-row__val">41%</span></div>
+              <div class="quota-row"><span class="quota-row__name">知行学堂</span><div class="quota-track"><i class="crit" style="width:93%"></i></div><span class="quota-row__val crit">93%</span></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ===== 成本 + 审计 ===== -->
+      <div class="grid-sub">
+        <section class="panel" aria-labelledby="cost-h">
+          <div class="panel__head"><div class="panel__title" id="cost-h">模型调用成本<small>近 7 日 · 千元</small></div><span class="panel__meta">预算阈值 18k</span></div>
+          <div class="panel__body">
+            <div class="bars" id="costBars">
+              <div class="bars__ylabels"><span>20</span><span>10</span><span>0</span></div>
+              <div class="bars__plot"></div>
+              <div class="bars__threshold" style="bottom:calc(22px + 90%)"><span>18k</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="audit-h">
+          <div class="panel__head"><div class="panel__title" id="audit-h">最近审计<small>仅追加 · 只读</small></div><a class="panel__meta" href="#" onclick="return false" style="color:var(--brass-deep)">查看全部</a></div>
+          <div class="panel__body">
+            <div class="timeline">
+              <div class="tl-item"><div class="tl-time">14:22</div><span class="tl-body__tick is-red" aria-hidden="true"></span><div class="tl-body"><div class="tl-title">授权拒绝 · 授权依据失效</div><div class="tl-meta">租户 8f2c… · 主体已撤权</div></div></div>
+              <div class="tl-item"><div class="tl-time">13:05</div><span class="tl-body__tick is-brass" aria-hidden="true"></span><div class="tl-body"><div class="tl-title">Agent「答疑助手」v12 发布</div><div class="tl-meta">SUPER_ADMIN · 已批准</div></div></div>
+              <div class="tl-item"><div class="tl-time">11:47</div><span class="tl-body__tick" aria-hidden="true"></span><div class="tl-body"><div class="tl-title">平台用户登录</div><div class="tl-meta">AUDITOR · 来源 10.20…</div></div></div>
+              <div class="tl-item"><div class="tl-time">09:31</div><span class="tl-body__tick is-brass" aria-hidden="true"></span><div class="tl-body"><div class="tl-title">租户「青藤教育」配额调整</div><div class="tl-meta">TENANT_LIFECYCLE_ADMIN</div></div></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="footnote"><span class="k" aria-hidden="true"></span>运行总览 Dashboard · 视觉重设计预览 · 图表为内联 SVG/CSS 绘制，无外部依赖</div>
+    </main>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"><i aria-hidden="true"></i><span id="toastText">已导出</span></div>
+
+<script>
+(function(){
+  var app = document.getElementById('app');
+
+  /* ---------- 侧栏交互 ---------- */
+  document.getElementById('collapseBtn').addEventListener('click', function(){ app.classList.toggle('is-collapsed'); });
+  document.querySelectorAll('[data-group] .nav-group__head').forEach(function(head){
+    head.addEventListener('click', function(){ head.closest('[data-group]').classList.toggle('is-closed'); });
+  });
+  document.querySelectorAll('.nav-item').forEach(function(item){
+    item.addEventListener('click', function(){
+      document.querySelectorAll('.nav-item').forEach(function(i){ i.classList.remove('is-active'); i.removeAttribute('aria-current'); });
+      item.classList.add('is-active'); item.setAttribute('aria-current','page');
+    });
+  });
+
+  /* ---------- 数据：三档时间范围 ---------- */
+  var DATA = {
+    '24h': {
+      req:[22,18,15,12,14,20,35,55,72,80,78,85,88,82,90,95,88,76,68,60,52,45,38,30],
+      den:[1,1,0,1,2,1,3,4,3,5,4,6,5,7,9,7,5,4,3,2,2,1,1,1],
+      labels:['00','02','04','06','08','10','12','14','16','18','20','22'],
+      kpi:{ tenants:['12','+2','较上周期','up'], requests:['1.28','M','+12.4%','up'], latency:['142','ms','−8.1%','up'], success:['96.8','%','+0.6%','up'], denies:['2','','+2','down'] },
+      spark:{ tenants:[3,3,4,4,5,5,5,6,6,7,7,8], requests:[30,35,33,42,48,45,55,62,58,70,78,88], latency:[80,76,78,70,66,68,60,58,55,52,50,46], success:[70,72,71,74,76,75,78,80,82,84,86,88], denies:[2,2,3,2,4,3,5,4,6,5,7,6] }
+    },
+    '7d': {
+      req:[58,66,62,74,70,82,88], den:[5,4,6,3,7,9,6],
+      labels:['11-14','11-15','11-16','11-17','11-18','11-19','11-20'],
+      kpi:{ tenants:['12','+2','较上周期','up'], requests:['8.94','M','+9.2%','up'], latency:['148','ms','−5.3%','up'], success:['96.1','%','+0.3%','up'], denies:['9','','+3','down'] },
+      spark:{ tenants:[3,4,4,5,6,7,8], requests:[50,62,55,70,66,80,88], latency:[70,68,72,64,60,58,55], success:[72,74,73,76,78,80,82], denies:[3,5,4,6,7,6,9] }
+    },
+    '30d': {
+      req:[48,55,52,60,66,63,72,78,74,86,90], den:[3,4,3,5,4,6,5,7,6,8,7],
+      labels:['10-22','10-26','10-30','11-03','11-07','11-11','11-15','11-20'],
+      kpi:{ tenants:['12','+3','较上周期','up'], requests:['37.6','M','+15.7%','up'], latency:['151','ms','−3.8%','up'], success:['95.4','%','+1.1%','up'], denies:['21','','+5','down'] },
+      spark:{ tenants:[2,3,4,4,5,6,7,8], requests:[40,48,52,50,62,70,68,88], latency:[82,78,76,72,70,66,62,58], success:[68,70,72,74,73,78,82,86], denies:[2,3,4,3,5,6,7,9] }
+    }
+  };
+
+  /* ---------- 迷你趋势线 ---------- */
+  function drawSpark(svg, values, color){
+    var w=160,h=38,pad=3,min=Math.min.apply(null,values),max=Math.max.apply(null,values);
+    var span=(max-min)||1;
+    var pts=values.map(function(v,i){
+      var x=pad+i*(w-pad*2)/(values.length-1);
+      var y=h-pad-((v-min)/span)*(h-pad*2);
+      return x.toFixed(1)+','+y.toFixed(1);
+    });
+    svg.innerHTML='<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+color+'" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>'+
+      '<circle cx="'+pts[pts.length-1].split(',')[0]+'" cy="'+pts[pts.length-1].split(',')[1]+'" r="2.4" fill="'+color+'"/>';
+  }
+
+  /* ---------- 主趋势图 ---------- */
+  var svg=document.getElementById('trendSvg');
+  var grid=document.getElementById('trendGrid');
+  var area=document.getElementById('trendArea');
+  var line=document.getElementById('trendLine');
+  var denyLine=document.getElementById('denyLine');
+  var cross=document.getElementById('crosshair');
+  var dotReq=document.getElementById('dotReq'), dotDen=document.getElementById('dotDen');
+  var tip=document.getElementById('trendTip');
+  var wrap=document.getElementById('trendWrap');
+  var X0=44,X1=736,YT=16,YB=196;
+  var cur=null;
+
+  function px(i){ return X0+i*(X1-X0)/(cur.req.length-1); }
+  function pyReq(v){ return YB-(v/100)*(YB-YT); }
+  function pyDen(v){ return YB-(v/15)*(YB-YT); }
+
+  function drawChart(){
+    var reqPts=cur.req.map(function(v,i){ return px(i).toFixed(1)+','+pyReq(v).toFixed(1); });
+    var denPts=cur.den.map(function(v,i){ return px(i).toFixed(1)+','+pyDen(v).toFixed(1); });
+    line.setAttribute('d','M'+reqPts.join(' L'));
+    area.setAttribute('d','M'+X0+','+YB+' L'+reqPts.join(' L')+' L'+X1+','+YB+' Z');
+    denyLine.setAttribute('points',denPts.join(' '));
+
+    var g='';
+    [0,25,50,75,100].forEach(function(v){
+      var y=pyReq(v);
+      g+='<line x1="'+X0+'" y1="'+y+'" x2="'+X1+'" y2="'+y+'"/>';
+      g+='<text x="'+(X0-8)+'" y="'+(y+3)+'" text-anchor="end">'+v+'</text>';
+    });
+    [0,5,10,15].forEach(function(v){
+      var y=pyDen(v);
+      g+='<text x="'+(X1+8)+'" y="'+(y+3)+'" text-anchor="start">'+v+'</text>';
+    });
+    cur.labels.forEach(function(lb,i){
+      var idx=Math.round(i*(cur.req.length-1)/(cur.labels.length-1));
+      g+='<text x="'+px(idx).toFixed(1)+'" y="'+(YB+18)+'" text-anchor="middle">'+lb+'</text>';
+    });
+    grid.innerHTML=g;
+  }
+
+  function hideTip(){ cross.style.display='none'; dotReq.style.display='none'; dotDen.style.display='none'; tip.classList.remove('is-on'); }
+
+  wrap.addEventListener('mousemove',function(e){
+    if(!cur) return;
+    var r=svg.getBoundingClientRect();
+    var vb=(e.clientX-r.left)/r.width*760;
+    if(vb<X0||vb>X1){ hideTip(); return; }
+    var i=Math.round((vb-X0)/(X1-X0)*(cur.req.length-1));
+    var x=px(i), yr=pyReq(cur.req[i]), yd=pyDen(cur.den[i]);
+    cross.setAttribute('x1',x); cross.setAttribute('x2',x); cross.style.display='';
+    dotReq.setAttribute('cx',x); dotReq.setAttribute('cy',yr); dotReq.style.display='';
+    dotDen.setAttribute('cx',x); dotDen.setAttribute('cy',yd); dotDen.style.display='';
+    var lb=cur.labels[Math.min(cur.labels.length-1, Math.round(i*(cur.labels.length-1)/(cur.req.length-1)))];
+    tip.innerHTML=lb+':00 &nbsp; <b>请求 '+cur.req[i]+'k</b> &nbsp; <span class="r">拒绝 '+cur.den[i]+'</span>';
+    tip.classList.add('is-on');
+    var tipX=(x/760)*r.width;
+    tip.style.left=Math.max(4,Math.min(r.width-tip.offsetWidth-4,tipX-tip.offsetWidth/2))+'px';
+    tip.style.top='6px';
+  });
+  wrap.addEventListener('mouseleave',hideTip);
+
+  /* ---------- 成本柱状图 ---------- */
+  var costs=[12.4,14.1,11.8,16.2,15.4,18.9,17.2];
+  var days=['11-14','11-15','11-16','11-17','11-18','11-19','11-20'];
+  var bars=document.getElementById('costBars');
+  costs.forEach(function(v,i){
+    var col=document.createElement('div'); col.className='bar-col';
+    col.innerHTML='<span class="bar-col__val">'+v+'</span><div class="bar-col__fill'+(v>18?' is-over':'')+'" style="height:'+(v/20*100)+'%"></div><span class="bar-col__label">'+days[i]+'</span>';
+    bars.appendChild(col);
+  });
+
+  /* ---------- 状态/时间范围切换 ---------- */
+  function applyRange(key){
+    cur=DATA[key];
+    var colorMap={ tenants:'var(--teal)', requests:'var(--brass)', latency:'var(--ink-2)', success:'var(--teal)', denies:'var(--red)' };
+    Object.keys(cur.kpi).forEach(function(k){
+      var card=document.querySelector('[data-kpi="'+k+'"]');
+      var d=cur.kpi[k];
+      card.querySelector('[data-val]').innerHTML=d[0]+(d[1]?'<small>'+d[1]+'</small>':'');
+      var delta=card.querySelector('[data-delta]');
+      delta.textContent=d[2];
+      delta.className='delta delta--'+(d[3]==='up'?'up':'down');
+      card.querySelector('[data-note]').textContent=({tenants:'较上周期',requests:'较上周期',latency:'越低越好',success:'链路成功 ≠ 任务成功',denies:'需人工归因'})[k];
+      drawSpark(card.querySelector('[data-spark]'),cur.spark[k],colorMap[k]);
+    });
+    drawChart();
+  }
+
+  document.querySelectorAll('[data-range]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      document.querySelectorAll('[data-range]').forEach(function(b){ b.classList.remove('is-on'); });
+      btn.classList.add('is-on');
+      applyRange(btn.getAttribute('data-range'));
+    });
+  });
+
+  /* ---------- toast ---------- */
+  var toast=document.getElementById('toast'), toastText=document.getElementById('toastText'), timer;
+  function showToast(msg){ toastText.textContent=msg; toast.classList.add('is-show'); clearTimeout(timer); timer=setTimeout(function(){ toast.classList.remove('is-show'); },2400); }
+  document.getElementById('exportBtn').addEventListener('click',function(){ showToast('报表已导出'); });
+
+  /* ---------- 环形图（按 28/4/5/2 / 39 比例） ---------- */
+  var C=2*Math.PI*46, total=39, segs=[28,4,5,2];
+  var offset=0;
+  segs.forEach(function(v,i){
+    var len=C*v/total;
+    var el=document.getElementById('seg'+(i+1));
+    el.setAttribute('stroke-dasharray',len.toFixed(2)+' '+(C-len).toFixed(2));
+    el.setAttribute('stroke-dashoffset',(-offset).toFixed(2));
+    offset+=len;
+  });
+
+  applyRange('24h');
+})();
+</script>
+</body>
+</html>
