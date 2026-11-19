@@ -7,12 +7,12 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 /**
- * 平台控制台 · 跨租户 Agent 注册表（只读 · 第三十九批）。
+ * 平台控制台 · 跨租户 Agent 注册表（只读 · 第三十九批 · Agent 视角扩展）。
  *
  * <p>⚠️ <b>仅管理元数据</b>：平台控制台呈现「各租户登记了哪些 Agent、
- * 版本/发布/启用技能/角色清单」这类**结构性信息**，用于资源盘点与运维画像；
- * Agent 的业务指令（definition 正文 / 运行输出 / 会话内容）<b>绝不出现在任何字段</b> ——
- * 那是重规划 §10 的禁区红线（平台不浏览租户私有业务内容）。
+ * 版本/发布/启用技能/角色清单/模型绑定/编排模式」这类**结构性信息**，
+ * 用于资源盘点与运维画像；Agent 的业务指令（definition 正文 / 运行输出 / 会话内容）
+ * <b>绝不出现在任何字段</b> —— 那是禁区红线。
  *
  * <p>⚠️ <b>数据源必须走平台运维角色（BYPASSRLS）</b>：
  * {@code agent} / {@code cap_agent_def} 带 RLS（租户隔离策略），
@@ -32,7 +32,20 @@ public interface PlatformAgentDirectoryPort {
      */
     List<PlatformAgentRow> listAgents(@Nullable String tenantIdFilter);
 
-    /** 一条 Agent 注册表条目（管理元数据，绝无业务指令正文）。 */
+    /**
+     * 一条 Agent 注册表条目（管理元数据，绝无业务指令正文）。
+     *
+     * <p>⚠️ <b>Agent 视角扩展（2026-11-19）</b>：原字段只覆盖「租户绑定 + 能力清单」，
+     * 不足以让运营看清 Agent 的**完整身份画像**。新增：
+     * <ul>
+     *   <li>{@code modelRef} — Agent 绑定的模型引用（必填；null = 未绑模型，fail-closed）；</li>
+     *   <li>{@code skillBundles} — Agent 启用的技能包清单（bundled 能力组）；</li>
+     *   <li>{@code hasInstructions} — 是否有非空提示词（instructions ≠ {}）；</li>
+     *   <li>{@code hasOrchestration} — 是否有非空编排声明（orchestration ≠ {}）；</li>
+     *   <li>{@code orchestrationMode} — 编排模式（LEAF / ROUTER / SEQUENTIAL / null 未声明）；</li>
+     *   <li>{@code tenantCount} — 该 Agent 被多少个租户 ACTIVE 绑定（复用度指标）。</li>
+     * </ul>
+     */
     record PlatformAgentRow(
             @NonNull String tenantId,
             @NonNull String agentId,
@@ -49,6 +62,18 @@ public interface PlatformAgentDirectoryPort {
             @NonNull List<String> enabledSkills,
             @NonNull List<String> capabilityTags,
             /** 收紧覆盖（overrides）是否非空（true = 该 Agent 有字段级收紧覆盖） */
-            boolean hasOverrides) {
+            boolean hasOverrides,
+            /** Agent 绑定的模型引用（cap_agent_def.model_ref）；null = 未绑模型 */
+            @Nullable String modelRef,
+            /** Agent 启用的技能包清单（cap_agent_def.skill_bundles） */
+            @NonNull List<String> skillBundles,
+            /** 是否有非空提示词（instructions ≠ {}） */
+            boolean hasInstructions,
+            /** 是否有非空编排声明（orchestration ≠ {}） */
+            boolean hasOrchestration,
+            /** 编排模式（LEAF / ROUTER / SEQUENTIAL）；null = 未声明（视为 LEAF） */
+            @Nullable String orchestrationMode,
+            /** 该 Agent 被多少个租户 ACTIVE 绑定（复用度指标，跨 tenant_agent_binding 聚合） */
+            int tenantCount) {
     }
 }

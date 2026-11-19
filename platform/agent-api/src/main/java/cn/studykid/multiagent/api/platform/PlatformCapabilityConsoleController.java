@@ -576,12 +576,17 @@ public class PlatformCapabilityConsoleController {
                               @Nullable Instant latestPublishedAt, @Nullable Integer defVersion,
                               @Nullable String lifecycleState, @NonNull List<String> roles,
                               @NonNull List<String> enabledSkills,
-                              @NonNull List<String> capabilityTags, boolean hasOverrides) {
+                              @NonNull List<String> capabilityTags, boolean hasOverrides,
+                              @Nullable String modelRef, @NonNull List<String> skillBundles,
+                              boolean hasInstructions, boolean hasOrchestration,
+                              @Nullable String orchestrationMode, int tenantCount) {
         static AgentRowDto of(PlatformAgentRow r) {
             return new AgentRowDto(r.tenantId(), r.agentId(), r.name(), r.description(),
                     r.versionCount(), r.latestVersionNumber(), r.latestPublishedAt(),
                     r.defVersion(), r.lifecycleState(), r.roles(), r.enabledSkills(),
-                    r.capabilityTags(), r.hasOverrides());
+                    r.capabilityTags(), r.hasOverrides(),
+                    r.modelRef(), r.skillBundles(), r.hasInstructions(), r.hasOrchestration(),
+                    r.orchestrationMode(), r.tenantCount());
         }
     }
 

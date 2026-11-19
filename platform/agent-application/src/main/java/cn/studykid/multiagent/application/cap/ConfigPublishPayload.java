@@ -728,6 +728,28 @@ public record ConfigPublishPayload(
     }
 
     /**
+     * 生成一个「平台级 Agent 发布」方案（全局 Agent · 无租户绑定）。
+     *
+     * <p>⚠️ <b>作用域固定为 {@code PLATFORM}</b>，且只含 Agent：
+     * 全局 Agent 可尚未绑定任何租户，改用平台运维通道发布其权威定义。
+     * 输出契约 / 路由策略是租户级对象，不得随本方案一起发布（配置期门禁会拒）。
+     *
+     * @param agents             Agent 定义草稿
+     * @param expectedPublishSeq CAS 基线
+     * @return 变更方案
+     */
+    public static @NonNull ConfigPublishPayload publishPlatformAgents(
+            @NonNull List<AgentSpec> agents,
+            @Nullable Long expectedPublishSeq) {
+        if (agents.isEmpty()) {
+            throw new IllegalArgumentException("平台级 Agent 发布方案不得为空");
+        }
+        return new ConfigPublishPayload(ConfigPublishRequest.Operation.PUBLISH,
+                ConfigRelease.Scope.PLATFORM, expectedPublishSeq, agents, null, null,
+                List.of(), List.of());
+    }
+
+    /**
      * 把方案转成便于审计的摘要（<b>不含用户自由文本</b>）。
      *
      * @return 摘要 JSON 文本

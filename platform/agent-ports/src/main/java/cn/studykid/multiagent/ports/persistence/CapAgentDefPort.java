@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 
@@ -29,7 +30,7 @@ public interface CapAgentDefPort {
     /**
      * 按精确版本读取。
      */
-    @NonNull Optional<CapAgentDef> find(@NonNull String tenantId,
+    @NonNull Optional<CapAgentDef> find(@Nullable String tenantId,
                                          @NonNull String agentId,
                                          int version);
 
@@ -41,6 +42,18 @@ public interface CapAgentDefPort {
      */
     @NonNull Optional<CapAgentDef> findLatest(@NonNull String tenantId,
                                                @NonNull String agentId);
+
+    /**
+     * 读取最新版本行，<b>不按租户绑定过滤</b>。
+     *
+     * <p>⚠️ 仅供 PLATFORM 作用域发布全局 Agent 时计算版本号使用 —— 全局 Agent 可以
+     * 尚无任何 {@code tenant_agent_binding}，走 {@link #findLatest} 会因绑定 EXISTS
+     * 过滤而永远返回空（版本号恒从 1 起、重复发布撞号）。默认实现委托哨兵租户，
+     * JDBC 实现覆写为无绑定过滤的查询。
+     */
+    default @NonNull Optional<CapAgentDef> findLatestGlobal(@NonNull String agentId) {
+        return findLatest("00000000-0000-0000-0000-000000000000", agentId);
+    }
 
     /**
      * 读取<b>最新已发布</b>版本行（按 version 倒序取第一行，<b>按发布状态过滤</b>）。

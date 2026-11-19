@@ -230,6 +230,25 @@ public class ConfigPublishService {
      * 且发布命令带对应对象 → <b>拒绝发布</b>：
      * 「登记能力没接上」不等于「对象可以随便发」。
      */
+    /**
+     * 平台通道专用构造器：只额外装配发布归档端口（全局 Agent 发布必需）。
+     * 编排闭包 / 子引用 / 契约 / 策略均为 {@code null} —— 平台 Agent 只支持 LEAF。
+     */
+    public ConfigPublishService(@NonNull ConfigPublishTransaction tx,
+                                @NonNull ConfigPointerPort pointers,
+                                @NonNull ConfigReleasePort releases,
+                                @NonNull CapToolDefPort toolDefs,
+                                @NonNull CapSkillDefPort skillDefs,
+                                @NonNull CapMcpServerDefPort serverDefs,
+                                @NonNull CapAgentDefPort agentDefs,
+                                @NonNull DecisionAuditPort audit,
+                                @NonNull ConfigValidationGate gate,
+                                @NonNull Clock clock,
+                                @Nullable AgentReleaseArchivePort archive) {
+        this(tx, pointers, releases, toolDefs, skillDefs, serverDefs, agentDefs, audit, gate,
+                clock, DEFAULT_MAX_ATTEMPTS, null, null, null, null, archive);
+    }
+
     public ConfigPublishService(@NonNull ConfigPublishTransaction tx,
                                 @NonNull ConfigPointerPort pointers,
                                 @NonNull ConfigReleasePort releases,
@@ -731,7 +750,7 @@ public class ConfigPublishService {
      * @param tenantId 租户标识
      * @param agent    已发布的 Agent 定义行（权威真源）
      */
-    private void archiveRelease(@NonNull String tenantId, @NonNull CapAgentDef agent) {
+    private void archiveRelease(@Nullable String tenantId, @NonNull CapAgentDef agent) {
         if (archive == null) {
             throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_UNKNOWN, "agent",
                     "Agent 发布归档能力未装配（归档仓储缺失），拒绝发布: agent="

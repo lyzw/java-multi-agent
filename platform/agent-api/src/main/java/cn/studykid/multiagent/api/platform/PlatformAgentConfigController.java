@@ -69,19 +69,35 @@ import cn.studykid.multiagent.ports.security.PlatformPrincipal;
 public class PlatformAgentConfigController {
 
     private final ConfigPublishWorkflowService workflow;
+    private final cn.studykid.multiagent.application.cap.PlatformCapabilityPublishService
+            platformPublisher;
     private final AgentManagePort agentManage;
     private final CapAgentDefPort agentDefs;
     private final TenantAgentBindingPort bindings;
     private final PlatformSecurity security;
     private final PlatformAuditPort audit;
 
+    /** 测试用：未装配平台发布通道（无租户发布会 fail-closed）。 */
     public PlatformAgentConfigController(ConfigPublishWorkflowService workflow,
                                          AgentManagePort agentManage,
                                          CapAgentDefPort agentDefs,
                                          TenantAgentBindingPort bindings,
                                          PlatformSecurity security,
                                          PlatformAuditPort audit) {
+        this(workflow, null, agentManage, agentDefs, bindings, security, audit);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PlatformAgentConfigController(ConfigPublishWorkflowService workflow,
+                                         cn.studykid.multiagent.application.cap
+                                                 .PlatformCapabilityPublishService platformPublisher,
+                                         AgentManagePort agentManage,
+                                         CapAgentDefPort agentDefs,
+                                         TenantAgentBindingPort bindings,
+                                         PlatformSecurity security,
+                                         PlatformAuditPort audit) {
         this.workflow = workflow;
+        this.platformPublisher = platformPublisher;
         this.agentManage = agentManage;
         this.agentDefs = agentDefs;
         this.bindings = bindings;
@@ -105,8 +121,14 @@ public class PlatformAgentConfigController {
             @RequestBody @Nullable CreateAgentView request) {
         security.require(principal, Namespaces.Platform.RESOURCE_MANAGE,
                 "agent_config", request == null ? null : request.tenantId());
-        if (request == null || isBlank(request.tenantId()) || !isUuid(request.tenantId().trim())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantId 须为 UUID");
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
+        }
+        // tenantId 可选：留空 = 只创建全局 Agent 行，不建立初始绑定；后续再「分配租户」。
+        // 给了则必须是合法 UUID（防止拼写错误静默变成全局 Agent）。
+        String tenantId = isBlank(request.tenantId()) ? null : request.tenantId().trim();
+        if (tenantId != null && !isUuid(tenantId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantId 须为 UUID 或留空");
         }
         String name = request.name() == null ? "" : request.name().trim();
         if (name.isEmpty() || name.length() > 128
@@ -117,7 +139,6 @@ public class PlatformAgentConfigController {
         if (request.description() != null && request.description().length() > 1024) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "description 不能超过 1024 字");
         }
-        String tenantId = request.tenantId().trim();
         try {
             var item = agentManage.createAgent(tenantId, name, request.description(),
                     principal.userId());
@@ -139,21 +160,38 @@ public class PlatformAgentConfigController {
             @RequestBody @Nullable PublishRequestView request) {
         security.require(principal, Namespaces.Platform.RESOURCE_MANAGE,
                 "agent_config", request == null ? null : request.tenantId());
-        requireTenant(request == null ? null : request.tenantId());
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
+        }
         if (request.agents() == null || request.agents().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "agents 不能为空");
         }
         requireReason(request.reason());
+        // tenantId 留空 = 全局 Agent 走 PLATFORM 作用域（平台运维通道）发布；
+        // 给了则走现有 TENANT 作用域，行为不变。
+        String tenantId = isBlank(request.tenantId()) ? null : request.tenantId().trim();
+        if (tenantId != null && !isUuid(tenantId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantId 须为 UUID 或留空");
+        }
         try {
-            ConfigPublishRequest created = workflow.requestPublish(
-                    request.tenantId().trim(), ConfigRelease.Scope.TENANT,
-                    toAgentSpecs(request.agents()), request.expectedPublishSeq(),
-                    request.reason().trim(), principal.userId());
-            recordAudit(principal, "agent_config.publish.request", request.tenantId().trim(),
-                    created.requestId());
+            ConfigPublishRequest created;
+            if (tenantId == null) {
+                created = requirePlatformPublisher().requestPublishAgents(
+                        toAgentSpecs(request.agents()), request.expectedPublishSeq(),
+                        request.reason().trim(), principal.userId());
+            } else {
+                created = workflow.requestPublish(
+                        tenantId, ConfigRelease.Scope.TENANT,
+                        toAgentSpecs(request.agents()), request.expectedPublishSeq(),
+                        request.reason().trim(), principal.userId());
+            }
+            recordAudit(principal, "agent_config.publish.request", tenantId, created.requestId());
             return ResponseEntity.ok(RequestDto.of(created));
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (IllegalStateException e) {
+            // 平台运维通道未装配（fail-closed）→ 503，明确「环境缺凭据」而非业务失败。
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
         }
     }
 
@@ -201,9 +239,12 @@ public class PlatformAgentConfigController {
             @RequestBody @Nullable DecisionView request) {
         security.require(principal, Namespaces.Platform.RESOURCE_MANAGE,
                 "agent_config", requestId);
-        requireTenant(request == null ? null : request.tenantId());
         if (request == null || request.decision() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "decision 必填");
+        }
+        String tenantId = isBlank(request.tenantId()) ? null : request.tenantId().trim();
+        if (tenantId != null && !isUuid(tenantId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantId 须为 UUID 或留空");
         }
         ConfigPublishRequestPort.@Nullable Decision decision =
                 "APPROVE".equalsIgnoreCase(request.decision())
@@ -215,10 +256,12 @@ public class PlatformAgentConfigController {
                     "decision 仅支持 APPROVE / REJECT");
         }
         try {
-            ConfigPublishRequest updated = workflow.decide(request.tenantId().trim(), requestId,
-                    decision, request.note(), principal.userId());
-            recordAudit(principal, "agent_config.publish.decision:" + decision,
-                    request.tenantId().trim(), requestId);
+            ConfigPublishRequest updated = tenantId == null
+                    ? requirePlatformPublisher().decide(requestId, decision, request.note(),
+                            principal.userId())
+                    : workflow.decide(tenantId, requestId, decision, request.note(),
+                            principal.userId());
+            recordAudit(principal, "agent_config.publish.decision:" + decision, tenantId, requestId);
             return ResponseEntity.ok(RequestDto.of(updated));
         } catch (IllegalArgumentException | ConfigPublishRequestPort.NotFoundException
                  | ConfigPublishRequestPort.StateConflictException
@@ -236,12 +279,16 @@ public class PlatformAgentConfigController {
             @RequestBody @Nullable TenantScopedView request) {
         security.require(principal, Namespaces.Platform.RESOURCE_MANAGE,
                 "agent_config", requestId);
-        requireTenant(request == null ? null : request.tenantId());
+        String tenantId = request == null || isBlank(request.tenantId())
+                ? null : request.tenantId().trim();
+        if (tenantId != null && !isUuid(tenantId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantId 须为 UUID 或留空");
+        }
         try {
-            ConfigPublishRequest updated = workflow.apply(request.tenantId().trim(), requestId,
-                    principal.userId());
-            recordAudit(principal, "agent_config.publish.apply",
-                    request.tenantId().trim(), requestId);
+            ConfigPublishRequest updated = tenantId == null
+                    ? requirePlatformPublisher().apply(requestId, principal.userId())
+                    : workflow.apply(tenantId, requestId, principal.userId());
+            recordAudit(principal, "agent_config.publish.apply", tenantId, requestId);
             return ResponseEntity.ok(RequestDto.of(updated));
         } catch (ConfigPublishRequestPort.NotFoundException e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "申请不存在");
@@ -250,6 +297,8 @@ public class PlatformAgentConfigController {
         } catch (ConfigPublishBaselineConflictException
                  | ConfigPublishRequestPort.StateConflictException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
         }
     }
 
@@ -260,13 +309,12 @@ public class PlatformAgentConfigController {
     public ResponseEntity<List<RequestDto>> listRequests(
             @RequestAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE)
             PlatformPrincipal principal,
-            @RequestParam String tenantId,
+            @RequestParam(required = false) @Nullable String tenantId,
             @RequestParam @Nullable String state,
             @RequestParam @Nullable String cursor,
             @RequestParam @Nullable Integer limit) {
         security.require(principal, Namespaces.Platform.RESOURCE_READ,
                 "agent_config", tenantId);
-        requireTenant(tenantId);
         ConfigPublishRequest.@Nullable State parsed = null;
         if (!isBlank(state)) {
             try {
@@ -276,6 +324,14 @@ public class PlatformAgentConfigController {
             }
         }
         int pageSize = limit == null ? 50 : Math.max(1, Math.min(limit, 200));
+        if (isBlank(tenantId)) {
+            // 无租户：列出全局 Agent 的 PLATFORM 作用域申请。
+            return ResponseEntity.ok(requirePlatformPublisher().list(parsed, cursor, pageSize)
+                    .items().stream().map(RequestDto::of).toList());
+        }
+        if (!isUuid(tenantId.trim())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantId 须为 UUID 或留空");
+        }
         Page<ConfigPublishRequest> page = workflow.list(tenantId.trim(), parsed, cursor, pageSize);
         return ResponseEntity.ok(page.items().stream().map(RequestDto::of).toList());
     }
@@ -290,14 +346,25 @@ public class PlatformAgentConfigController {
             @RequestAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE)
             PlatformPrincipal principal,
             @PathVariable String agentId,
-            @RequestParam String tenantId) {
+            @RequestParam(required = false) @Nullable String tenantId) {
         security.require(principal, Namespaces.Platform.RESOURCE_READ,
                 "agent_config", tenantId);
-        requireTenant(tenantId);
-        CapAgentDef def = agentDefs.findLatest(tenantId.trim(), agentId)
-                .or(() -> agentDefs.findLatestPublished(tenantId.trim(), agentId))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "该 Agent 尚无权威定义"));
+        CapAgentDef def;
+        if (isBlank(tenantId)) {
+            // 全局 Agent（未绑定租户）：不看绑定可见性，直接按 agentId 取最新定义。
+            def = agentDefs.findLatestGlobal(agentId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                            "该 Agent 尚无权威定义"));
+        } else {
+            if (!isUuid(tenantId.trim())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "tenantId 须为 UUID 或留空");
+            }
+            def = agentDefs.findLatest(tenantId.trim(), agentId)
+                    .or(() -> agentDefs.findLatestPublished(tenantId.trim(), agentId))
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                            "该 Agent 尚无权威定义"));
+        }
         return ResponseEntity.ok(AgentDefinitionDto.of(def));
     }
 
@@ -414,6 +481,16 @@ public class PlatformAgentConfigController {
         } catch (IllegalArgumentException e) {
             return false;
         }
+    }
+
+    /** 无租户路径必须先确认平台发布通道已装配，否则 fail-closed（503，不给 NPE）。 */
+    private cn.studykid.multiagent.application.cap.PlatformCapabilityPublishService
+            requirePlatformPublisher() {
+        if (platformPublisher == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "平台 Agent 发布通道未装配，无法处理无租户的全局 Agent 请求");
+        }
+        return platformPublisher;
     }
 
     private static boolean isBlank(@Nullable String s) {

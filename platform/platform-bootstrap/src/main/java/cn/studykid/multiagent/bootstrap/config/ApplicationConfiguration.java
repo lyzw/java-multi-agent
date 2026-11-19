@@ -1315,6 +1315,7 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort childRefs,
             cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts,
             cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort routingPolicies,
+            @org.springframework.beans.factory.annotation.Qualifier("agentReleaseArchivePort")
             cn.studykid.multiagent.ports.persistence.AgentReleaseArchivePort archive,
             java.time.Clock clock) {
         // ⚠️ 输出契约仓储必须注入：未装配时「发布命令带契约」会被拒（fail-closed），
@@ -1518,6 +1519,23 @@ public class ApplicationConfiguration {
     }
 
     /**
+     * 平台通道的 Agent 发布归档仓储（运维连接）。
+     *
+     * <p>全局 Agent 在 PLATFORM 作用域发布时也要归档到 agent_version /
+     * execution_snapshot（否则 run.snapshot_id 外键断裂）。这两张表已全局化、
+     * 无 tenant_id 列，用零 UUID 哨兵绑定上下文即可；走运维连接是因为发布
+     * 头与指针是 PLATFORM 行，整笔事务必须在同一条运维连接上。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.persistence.AgentReleaseArchivePort
+            platformOpsAgentReleaseArchivePort(
+            cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
+                    platformOps) {
+        return new cn.studykid.multiagent.infrastructure.persistence.cap
+                .JdbcAgentReleaseArchiveRepository(platformOps.guardedOrUnavailableDataSource());
+    }
+
+    /**
      * 平台通道的变更申请单仓储（运维连接）。
      *
      * <p>⚠️ **必须是运维连接**：本表的 RLS 读写策略是严格相等
@@ -1561,13 +1579,17 @@ public class ApplicationConfiguration {
             @org.springframework.beans.factory.annotation.Qualifier("platformOpsDecisionAuditPort")
             cn.studykid.multiagent.ports.persistence.DecisionAuditPort audit,
             cn.studykid.multiagent.application.cap.ConfigValidationGate gate,
-            java.time.Clock clock) {
+            java.time.Clock clock,
+            @org.springframework.beans.factory.annotation.Qualifier(
+                    "platformOpsAgentReleaseArchivePort")
+            cn.studykid.multiagent.ports.persistence.AgentReleaseArchivePort archive) {
         // ⚠️ 闭包校验器 / 关系投影 / 契约 / 策略一律**不装配**（null）：
-        //    PLATFORM 作用域的发布**不含**租户级对象，装配它们只会让人
-        //    「误以为平台通道也能发 Agent」—— 真发了会被配置期门禁拒。
+        //    PLATFORM 作用域的发布**不含**租户级对象；全局 Agent 只支持 LEAF。
+        //    ⚠️ 归档端口必须装配：全局 Agent 发布也要归档到 agent_version /
+        //    execution_snapshot，否则 run.snapshot_id 外键断裂（fail-closed 见 publish）。
         return new cn.studykid.multiagent.application.cap.ConfigPublishService(
                 platformOpsPublishTransaction, pointers, releases, toolDefs, skillDefs,
-                serverDefs, agentDefs, audit, gate, clock);
+                serverDefs, agentDefs, audit, gate, clock, archive);
     }
 
     /**
@@ -1591,12 +1613,13 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.CapToolDefPort toolDefs,
             cn.studykid.multiagent.ports.persistence.CapSkillDefPort skillDefs,
             cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort serverDefs,
+            cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
             @org.springframework.beans.factory.annotation.Qualifier("platformOpsConfigPointerPort")
             cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
             java.time.Clock clock) {
         return new cn.studykid.multiagent.application.cap.PlatformCapabilityPublishService(
                 platformOps, requests, publisher, lifecycle, toolDefs, skillDefs, serverDefs,
-                pointers, clock);
+                pointers, clock, agentDefs);
     }
 
     /**

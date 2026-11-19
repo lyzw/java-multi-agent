@@ -334,48 +334,101 @@ export function McpCatalogDetail({ id }: { id: string }): JSX.Element {
   )
 }
 
-/* ── Agent（只读盘点 · 无单条端点）────────────────────────────── */
+/* ── Agent 详情（Agent 视角 · 2026-11-19 重构）────────────────── */
 
 /**
- * Agent 双击详情：只渲染**行内已有**的管理元数据（不发任何请求）。
+ * Agent 详情抽屉：Agent 全局画像 + 租户绑定清单。
  *
- * <p>⚠️ Agent 是租户私有的，平台只有跨租户登记表盘点端点（无单条详情端点）；
- * 定义正文 / 运行输出 / 会话内容不下探 —— 这不是「查不到」，是禁区。
+ * <p>⚠️ Agent 是**全局实体**，{@link PlatformAgentRegistryItem} 后端返回的是
+ * tenant_agent_binding 行（每条 = 一条租户-Agent 绑定）。主表（AgentRegistryPage）
+ * 按 agentId 去重聚合为本组件传入 {@code agentUniq}，详情抽屉可以拿到完整画像。
+ *
+ * <p>⚠️ 定义正文 / 运行输出 / 会话内容不下探 —— 这不是「查不到」，是禁区红线。
  */
-export function AgentRegistryDetail({ item }: { item: PlatformAgentRegistryItem }): JSX.Element {
+export function AgentRegistryDetail({
+  item,
+  agentUniq,
+}: {
+  item: PlatformAgentRegistryItem
+  agentUniq: Array<PlatformAgentRegistryItem & { boundTenants: string[] }>
+}): JSX.Element {
+  const full = agentUniq.find((a) => a.agentId === item.agentId) ?? { ...item, boundTenants: [item.tenantId] }
+  const mode = (full.orchestrationMode ?? '').toUpperCase() || 'LEAF'
   return (
     <>
-      <Descriptions
-        bordered
-        column={2}
-        size="small"
-        items={[
-          { key: 'tenant', label: '租户', children: <Typography.Text code>{item.tenantId}</Typography.Text> },
-          { key: 'id', label: 'Agent 标识', children: <Typography.Text code>{item.agentId}</Typography.Text> },
-          { key: 'name', label: '名称', children: item.name ?? '-' },
-          { key: 'desc', label: '描述', children: item.description ?? '-', span: 2 },
-          { key: 'state', label: '生命周期', children: lifecycleTag(item.lifecycleState) },
-          { key: 'defVersion', label: '定义版本', children: item.defVersion === null ? <Typography.Text type="secondary">无定义</Typography.Text> : <Typography.Text>v{item.defVersion}</Typography.Text> },
-          {
-            key: 'version',
-            label: '发布版本',
-            children: item.versionCount === 0
-              ? <Typography.Text type="secondary">尚无版本</Typography.Text>
-              : <Typography.Text>v{item.latestVersionNumber} · 共 {item.versionCount}</Typography.Text>,
-          },
-          { key: 'publishedAt', label: '最近发布', children: timeCell(item.latestPublishedAt) },
-          { key: 'roles', label: '角色', children: codeList(item.roles) },
-          { key: 'skills', label: '启用技能', children: codeList(item.enabledSkills) },
-          { key: 'tags', label: '能力标签', children: codeList(item.capabilityTags) },
-          { key: 'overrides', label: '收紧覆盖', children: item.hasOverrides ? '有覆盖' : <Typography.Text type="secondary">无</Typography.Text> },
-        ]}
-      />
+      {/* ── 第一块：Agent 身份画像（2 列）── */}
+      <Descriptions bordered column={2} size="small" title="Agent 身份画像">
+        <Descriptions.Item label="Agent 标识">
+          <Typography.Text code>{full.agentId}</Typography.Text>
+        </Descriptions.Item>
+        <Descriptions.Item label="名称">{full.name ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="描述" span={2}>{full.description ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="模型引用">
+          {full.modelRef
+            ? <Typography.Text code>{full.modelRef}</Typography.Text>
+            : <Typography.Text type="danger">⚠️ 未绑模型（fail-closed）</Typography.Text>}
+        </Descriptions.Item>
+        <Descriptions.Item label="编排模式">
+          {mode === 'LEAF' ? <Tag color="default">LEAF 叶子</Tag>
+           : mode === 'ROUTER' ? <Tag color="purple">ROUTER 路由</Tag>
+           : mode === 'SEQUENTIAL' ? <Tag color="orange">SEQUENTIAL 串行</Tag>
+           : <Tag>{mode}</Tag>}
+        </Descriptions.Item>
+        <Descriptions.Item label="生命周期">{lifecycleTag(full.lifecycleState)}</Descriptions.Item>
+        <Descriptions.Item label="定义版本">
+          {full.defVersion === null
+            ? <Typography.Text type="secondary">无定义</Typography.Text>
+            : <Typography.Text>v{full.defVersion}</Typography.Text>}
+        </Descriptions.Item>
+        <Descriptions.Item label="发布版本">
+          {full.versionCount === 0
+            ? <Typography.Text type="secondary">尚无版本</Typography.Text>
+            : `v${full.latestVersionNumber} · 共 ${full.versionCount}`}
+        </Descriptions.Item>
+        <Descriptions.Item label="最近发布">{timeCell(full.latestPublishedAt)}</Descriptions.Item>
+        <Descriptions.Item label="租户绑定数">
+          <Typography.Text strong>{full.tenantCount ?? full.boundTenants.length}</Typography.Text>
+        </Descriptions.Item>
+        <Descriptions.Item label="提示词">
+          {full.hasInstructions ? <Tag color="green">已声明</Tag> : <Typography.Text type="secondary">未声明</Typography.Text>}
+        </Descriptions.Item>
+        <Descriptions.Item label="收紧覆盖">
+          {full.hasOverrides ? <Tag color="gold">有覆盖</Tag> : <Typography.Text type="secondary">无</Typography.Text>}
+        </Descriptions.Item>
+      </Descriptions>
+
+      {/* ── 第二块：能力清单 ── */}
+      <Descriptions bordered column={1} size="small" title="能力清单" style={{ marginTop: 16 }}>
+        <Descriptions.Item label="角色">{codeList(full.roles)}</Descriptions.Item>
+        <Descriptions.Item label="启用技能">{codeList(full.enabledSkills)}</Descriptions.Item>
+        <Descriptions.Item label="技能包">{codeList(full.skillBundles ?? [])}</Descriptions.Item>
+        <Descriptions.Item label="能力标签">{codeList(full.capabilityTags)}</Descriptions.Item>
+      </Descriptions>
+
+      {/* ── 第三块：租户绑定清单（多对多关系清晰呈现）── */}
       <Alert
         type="info"
         showIcon
+        style={{ marginTop: 16, marginBottom: 8 }}
+        message={<Typography.Text strong>租户绑定清单（{full.boundTenants.length} 个）</Typography.Text>}
+        description="同一 Agent 可分配给多个租户，同一租户可绑定多个 Agent；停用绑定不影响 Agent 定义本身。"
+      />
+      {full.boundTenants.length === 0 ? (
+        <Typography.Text type="secondary">尚未绑定任何租户</Typography.Text>
+      ) : (
+        full.boundTenants.map((t) => (
+          <Tag key={t} color="blue" style={{ margin: 4, fontSize: 12 }}>
+            <Typography.Text code>{t}</Typography.Text>
+          </Tag>
+        ))
+      )}
+
+      <Alert
+        type="warning"
+        showIcon
         style={{ marginTop: 16 }}
-        message="跨租户只读盘点"
-        description="Agent 的定义正文与运行输出不跨租户出平台边界（禁区红线）；本详情只呈现管理元数据，缺失字段按「未提供」如实呈现。"
+        message="禁区红线"
+        description="Agent 的定义正文（instructions / orchestration / generationParams）、运行输出与会话内容不跨租户出平台边界；本详情只呈现管理元数据，缺失字段按「未提供」如实呈现。"
       />
     </>
   )

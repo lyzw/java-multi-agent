@@ -104,8 +104,12 @@ public class JdbcAgentManageRepository implements AgentManagePort {
         this.sentinelTenantId = binding.sentinelTenantId();
     }
 
+    /** PLATFORM 作用域（全局 Agent，无绑定租户）的哨兵上下文标识。 */
+    private static final String GLOBAL_CONTEXT_TENANT =
+            "00000000-0000-0000-0000-000000000000";
+
     @Override
-    public @NonNull AgentItem createAgent(@NonNull String tenantId,
+    public @NonNull AgentItem createAgent(@Nullable String tenantId,
                                                         @NonNull String name,
                                                         @Nullable String description,
                                                         @NonNull String creatorId)
@@ -118,8 +122,13 @@ public class JdbcAgentManageRepository implements AgentManagePort {
                     "Agent 名称超长（>" + MAX_NAME_LENGTH + "）: " + name.length());
         }
         // ⚠️ 影子比对（P1 只记日志）：Gate 算出的 ScopeFilter vs 本次绑定租户。
-        shadowCompare(tenantId);
-        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
+        //    tenantId=null（全局 Agent 未绑定）时无租户主体可比对，跳过。
+        if (tenantId != null) {
+            shadowCompare(tenantId);
+        }
+        // agent 表是全局实体、无 RLS；tenantId=null 时用零 UUID 哨兵绑定上下文即可。
+        String contextTenant = tenantId == null ? GLOBAL_CONTEXT_TENANT : tenantId;
+        try (TenantConnectionLease lease = tenantConnection(contextTenant)) {
             Connection conn = lease.connection();
             conn.setAutoCommit(false);
             try {
@@ -139,21 +148,26 @@ public class JdbcAgentManageRepository implements AgentManagePort {
                         agentId = rs.getString(1);
                     }
                 }
-                // 全局 Agent 创建后立即与目标租户建立绑定；后续可再绑其它租户。
-                try (PreparedStatement ps = conn.prepareStatement("""
-                        INSERT INTO tenant_agent_binding (tenant_id, agent_id, status)
-                        VALUES (?::uuid, ?::uuid, 'ACTIVE')
-                        """)) {
-                    ps.setString(1, tenantId);
-                    ps.setString(2, agentId);
-                    ps.executeUpdate();
+                // 全局 Agent 有初始租户时立即建立绑定；tenantId=null（运营尚未指定）时
+                // 只建全局行，后续由「分配租户」动作建立绑定。
+                if (tenantId != null) {
+                    try (PreparedStatement ps = conn.prepareStatement("""
+                            INSERT INTO tenant_agent_binding (tenant_id, agent_id, status)
+                            VALUES (?::uuid, ?::uuid, 'ACTIVE')
+                            """)) {
+                        ps.setString(1, tenantId);
+                        ps.setString(2, agentId);
+                        ps.executeUpdate();
+                    }
                 }
                 conn.commit();
                 // ⚠️ 审计明细<b>不</b>放 name：name 是用户自由文本，PIPL 敏感信息扫描（fail-closed）
                 //     会拒写含 UUID/数字串的名称，进而让「创建 Agent」整条失败（测试已踩到）。
                 //     审计的 R-1 可追溯性由 actor+action+resourceId(agentId)+时间戳满足；
                 //     名称经 audit_record→agent 关联即可还原（见 ConfigAuditPage），无需落明细。
-                audit.recordRequired(tenantId, creatorId,
+                // 审计 tenant_id 是 NOT NULL 且受 RLS 约束：无租户时用零 UUID 哨兵
+                // （与平台域/决策日志同口径），保证 R-1 可追溯性不断链。
+                audit.recordRequired(contextTenant, creatorId,
                         AuditPort.Actions.AGENT_CREATE, "agent", agentId,
                         Map.of());
                 // ⚠️ 新建 Agent 尚无版本：versionCount=0 / latestVersionNumber=0 / 无 definition

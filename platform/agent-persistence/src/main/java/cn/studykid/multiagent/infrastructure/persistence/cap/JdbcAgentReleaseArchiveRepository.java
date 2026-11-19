@@ -106,7 +106,7 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
     }
 
     @Override
-    public boolean archiveRelease(@NonNull String tenantId,
+    public boolean archiveRelease(@Nullable String tenantId,
                                   @NonNull String agentId,
                                   int version,
                                   @NonNull String definition,
@@ -213,8 +213,14 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
         }
     }
 
-    private static TenantContext tenantContext(String tenantId) {
-        return new TenantContext(tenantId, "system", Set.of(), 0L);
+    private static final String GLOBAL_CONTEXT_TENANT =
+            "00000000-0000-0000-0000-000000000000";
+
+    private static TenantContext tenantContext(@Nullable String tenantId) {
+        // PLATFORM 作用域发布全局 Agent 时 tenantId 为 null；归档表（agent_version /
+        // execution_snapshot）已全局化、无 tenant_id 列，这里仅用哨兵绑定 RLS 上下文。
+        return new TenantContext(tenantId == null ? GLOBAL_CONTEXT_TENANT : tenantId,
+                "system", Set.of(), 0L);
     }
 
     // ── 影子辅助（守卫要求：声明与调用分离，入口真调用）────────────
@@ -223,7 +229,11 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
      * 影子比对：Gate 算出的 ScopeFilter vs 本次绑定租户（只记日志）。
      * 写主导仓无行租户染色点；全 SQL 显式 {@code tenant_id} 谓词 ⇒ hasTenantPredicate=true。
      */
-    void shadowCompare(@NonNull String boundTenantId) {
+    void shadowCompare(@Nullable String boundTenantId) {
+        // PLATFORM 作用域无租户主体可比对，跳过影子比对（与 JdbcConfigReleaseRepository 同口径）。
+        if (boundTenantId == null) {
+            return;
+        }
         AuthzShadowHooks.compare(scoped, reporter, shadowEnabled, "agent_version",
                 SubjectContext.forTenant(boundTenantId), boundTenantId, true);
     }

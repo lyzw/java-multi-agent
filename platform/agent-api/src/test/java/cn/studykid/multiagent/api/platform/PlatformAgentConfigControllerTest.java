@@ -13,6 +13,7 @@ import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -25,6 +26,8 @@ import cn.studykid.multiagent.ports.audit.PlatformAuditPort;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort.PlatformAuditEvent;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort.PlatformAuditQuery;
 import cn.studykid.multiagent.ports.persistence.AgentManagePort;
+import cn.studykid.multiagent.ports.persistence.AgentQueryPort.AgentItem;
+import cn.studykid.multiagent.ports.persistence.AgentQueryPort.AgentVersionItem;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort;
 import cn.studykid.multiagent.ports.persistence.TenantAgentBindingPort;
@@ -101,6 +104,32 @@ class PlatformAgentConfigControllerTest {
             return new ConfigPublishRequest("req-1", tenantId, op, "{}", "reason",
                     "ops-user", ConfigPublishRequest.State.PENDING, null, null,
                     Instant.now(), null, null, null, ConfigRelease.Scope.TENANT);
+        }
+    }
+
+    /**
+     * 平台发布通道替身：记录无租户发布是否被路由过来。
+     * 用 9 参构造（agentDefs=null），仅覆写 {@code requestPublishAgents}。
+     */
+    private static final class FakePlatformPublisher
+            extends cn.studykid.multiagent.application.cap.PlatformCapabilityPublishService {
+        int agentPublishCalls;
+        List<ConfigPublishPayload.AgentSpec> lastAgents;
+
+        FakePlatformPublisher() {
+            super(null, null, null, null, null, null, null, null, java.time.Clock.systemUTC());
+        }
+
+        @Override
+        public ConfigPublishRequest requestPublishAgents(
+                List<ConfigPublishPayload.AgentSpec> agents,
+                @Nullable Long expectedPublishSeq, String reason, String requesterId) {
+            agentPublishCalls++;
+            lastAgents = agents;
+            return new ConfigPublishRequest("req-global", null,
+                    ConfigPublishRequest.Operation.PUBLISH, "{}", reason, requesterId,
+                    ConfigPublishRequest.State.PENDING, null, null,
+                    Instant.now(), null, null, null, ConfigRelease.Scope.PLATFORM);
         }
     }
 
@@ -291,5 +320,78 @@ class PlatformAgentConfigControllerTest {
         assertThat(bindings.find(TENANT, AGENT).orElseThrow().status()).isEqualTo("SUSPENDED");
         assertThat(workflow.publishTenants).isEmpty();
         assertThat(workflow.lifecycleTenants).isEmpty();
+    }
+
+    @Test
+    @DisplayName("✅ 无租户发布申请：路由到 PLATFORM 通道，租户工作流零触达")
+    void publishWithoutTenantRoutesToPlatformChannel() {
+        RecordingAuthorizer auth = new RecordingAuthorizer("platform.resource.manage");
+        FakeWorkflow workflow = new FakeWorkflow();
+        FakePlatformPublisher platform = new FakePlatformPublisher();
+        PlatformAgentConfigController controller = new PlatformAgentConfigController(
+                workflow, platform, null, null, new FakeBindings(),
+                new PlatformSecurity(auth), NOOP_AUDIT);
+
+        controller.requestPublish(MANAGER, new PlatformAgentConfigController.PublishRequestView(
+                null,
+                List.of(new PlatformAgentConfigController.AgentSpecView(
+                        AGENT, "助手", null, List.of(), List.of(), List.of(), List.of(),
+                        "{}", "{}", "{}", null, "{}")),
+                null, "新增全局助手"));
+
+        assertThat(platform.agentPublishCalls).isEqualTo(1);
+        assertThat(platform.lastAgents).hasSize(1);
+        assertThat(workflow.publishTenants).isEmpty();
+    }
+
+    @Test
+    @DisplayName("✅ 新建 Agent 无 tenantId：透传 null，只建全局行不建绑定（仓储语义由 IT 覆盖）")
+    void createAgentWithoutTenantPassesNull() {
+        RecordingAuthorizer auth = new RecordingAuthorizer("platform.resource.manage");
+        final String[] captured = new String[1];
+        AgentManagePort manage = new AgentManagePort() {
+            @Override
+            public @NonNull AgentItem
+                    createAgent(@Nullable String tenantId, @NonNull String name,
+                                @Nullable String description, @NonNull String creatorId) {
+                captured[0] = tenantId; // 故意写 null 以验证透传（铁律 29：List.of 拒绝 null）
+                return new AgentItem(
+                        AGENT, name, description, 0, 0, null, null);
+            }
+
+            @Override
+            public @NonNull AgentVersionItem
+                    publishVersion(@NonNull String tenantId, @NonNull String agentId,
+                                   @NonNull String definition, @NonNull String publisherId) {
+                throw new UnsupportedOperationException("本用例不触达 publishVersion");
+            }
+        };
+        PlatformAgentConfigController controller = new PlatformAgentConfigController(
+                new FakeWorkflow(), null, manage, null, new FakeBindings(),
+                new PlatformSecurity(auth), NOOP_AUDIT);
+
+        controller.createAgent(MANAGER,
+                new PlatformAgentConfigController.CreateAgentView(null, "全局助手", "desc"));
+
+        assertThat(captured[0]).isNull();
+    }
+
+    @Test
+    @DisplayName("⛔ 平台发布通道未装配 + 无租户 → 503，不给 NPE（fail-closed）")
+    void publishWithoutTenantNoChannelGives503() {
+        RecordingAuthorizer auth = new RecordingAuthorizer("platform.resource.manage");
+        PlatformAgentConfigController controller = new PlatformAgentConfigController(
+                new FakeWorkflow(), null, null, new FakeBindings(),
+                new PlatformSecurity(auth), NOOP_AUDIT);
+
+        assertThatThrownBy(() ->
+                controller.requestPublish(MANAGER, new PlatformAgentConfigController.PublishRequestView(
+                        null,
+                        List.of(new PlatformAgentConfigController.AgentSpecView(
+                                AGENT, "助手", null, List.of(), List.of(), List.of(), List.of(),
+                                "{}", "{}", "{}", null, "{}")),
+                        null, "新增全局助手")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("503");
     }
 }

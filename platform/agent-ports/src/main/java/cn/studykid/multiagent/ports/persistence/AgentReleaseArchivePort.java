@@ -38,7 +38,8 @@ public interface AgentReleaseArchivePort {
     /**
      * 归档一次 Agent 发布（写 {@code agent_version} + {@code execution_snapshot}）。
      *
-     * @param tenantId    租户标识
+     * @param tenantId    租户标识；PLATFORM 作用域发布全局 Agent 时为 {@code null}
+     *                    （仓储内部用零 UUID 哨兵绑定 RLS 上下文，归档表已全局化）
      * @param agentId     Agent 标识
      * @param version     版本号（与 {@code cap_agent_def.version} 一致）
      * @param definition    归档用的定义 JSON 文本（<b>由 {@code cap_agent_def} 派生</b>）
@@ -47,7 +48,7 @@ public interface AgentReleaseArchivePort {
      *                      （{@code {}} = 未声明 / 回落默认；不可空）
      * @return {@code true} = 本次写入；{@code false} = 该版本已归档（未覆盖）
      */
-    boolean archiveRelease(@NonNull String tenantId,
+    boolean archiveRelease(@Nullable String tenantId,
                            @NonNull String agentId,
                            int version,
                            @NonNull String definition,

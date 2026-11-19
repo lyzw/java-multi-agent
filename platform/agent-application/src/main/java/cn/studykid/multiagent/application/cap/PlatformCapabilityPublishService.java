@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapHttpToolConfig;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
@@ -28,6 +29,7 @@ import cn.studykid.multiagent.core.cap.SkillDescription;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.McpTrustTier;
 import cn.studykid.multiagent.core.cap.ReasonCode;
+import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
 import cn.studykid.multiagent.ports.persistence.CapSkillDefPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
@@ -86,6 +88,9 @@ public class PlatformCapabilityPublishService {
     private final ConfigPointerPort pointers;
     private final Clock clock;
 
+    /** 全局 Agent 定义端口；仅 {@code requestPublishAgents} 使用，未装配时该方法 fail-closed。 */
+    private final @Nullable CapAgentDefPort agentDefs;
+
     /**
      * @param session    平台运维会话（提供受守卫的运维连接窗口）
      * @param requests   申请单仓储（<b>必须</b>用平台运维连接实现 ——
@@ -107,6 +112,26 @@ public class PlatformCapabilityPublishService {
                                             @NonNull CapMcpServerDefPort serverDefs,
                                             @NonNull ConfigPointerPort pointers,
                                             @NonNull Clock clock) {
+        this(session, requests, publisher, lifecycle, toolDefs, skillDefs, serverDefs,
+                pointers, clock, null);
+    }
+
+    /**
+     * 全参构造：额外注入全局 Agent 定义端口，使平台通道可发布全局 Agent。
+     *
+     * <p>{@code agentDefs} 为 {@code null} 时，{@link #requestPublishAgents} fail-closed，
+     * 既有 Tool/Skill/MCP 发布路径行为不变。
+     */
+    public PlatformCapabilityPublishService(@NonNull PlatformOpsSessionPort session,
+                                            @NonNull ConfigPublishRequestPort requests,
+                                            @NonNull ConfigPublishService publisher,
+                                            @NonNull ConfigLifecycleService lifecycle,
+                                            @NonNull CapToolDefPort toolDefs,
+                                            @NonNull CapSkillDefPort skillDefs,
+                                            @NonNull CapMcpServerDefPort serverDefs,
+                                            @NonNull ConfigPointerPort pointers,
+                                            @NonNull Clock clock,
+                                            @Nullable CapAgentDefPort agentDefs) {
         this.session = session;
         this.requests = requests;
         this.publisher = publisher;
@@ -116,6 +141,7 @@ public class PlatformCapabilityPublishService {
         this.serverDefs = serverDefs;
         this.pointers = pointers;
         this.clock = clock;
+        this.agentDefs = agentDefs;
     }
 
     // ── 第一步：申请 ───────────────────────────────────────────────
@@ -146,6 +172,38 @@ public class PlatformCapabilityPublishService {
         // ⚠️ 申请阶段就跑一次门禁预检：非法方案在**申请时**就该被拒，
         //    而不是先占住一个审批名额，等审批通过后执行才失败。
         publisher.validateForReview(buildCommand(payload, requesterId, "system", false));
+        return insert(payload, reason, requesterId);
+    }
+
+    /**
+     * 提交<b>全局 Agent</b> 定义发布申请（PLATFORM 作用域，无 tenantId）。
+     *
+     * <p>⚠️ 用于「运营新建 Agent 且未指定初始绑定租户」的场景：Agent 是全局实体，
+     * 尚未绑定租户时无法走 TENANT 作用域发布，改用平台运维通道。
+     * 版本号按全局定义的最大版本 + 1、内容指纹由服务端计算（均不采信客户端）。
+     *
+     * @param agents              Agent 定义草稿
+     * @param expectedPublishSeq  CAS 基线（可空）
+     * @param reason              变更理由
+     * @param requesterId         申请人主体标识
+     * @return 申请单（PENDING）
+     */
+    public @NonNull ConfigPublishRequest requestPublishAgents(
+            @NonNull List<ConfigPublishPayload.@NonNull AgentSpec> agents,
+            @Nullable Long expectedPublishSeq,
+            @NonNull String reason,
+            @NonNull String requesterId) {
+        if (agents.isEmpty()) {
+            throw new IllegalArgumentException("全局 Agent 发布申请不得为空");
+        }
+        if (agentDefs == null) {
+            throw new IllegalStateException(
+                    "平台通道未装配全局 Agent 定义端口，拒绝发布全局 Agent（fail-closed）");
+        }
+        ConfigPublishPayload payload =
+                ConfigPublishPayload.publishPlatformAgents(agents, expectedPublishSeq);
+        // 申请期就跑门禁预检（形状 / 引用），非法方案在申请时即拒，不占审批名额。
+        publisher.validateForReview(buildAgentCommand(payload, requesterId, "system", false));
         return insert(payload, reason, requesterId);
     }
 
@@ -206,8 +264,13 @@ public class PlatformCapabilityPublishService {
             ConfigPublishPayload payload = ConfigPublishPayload.fromJson(request.payload());
             try {
                 switch (payload.operation()) {
-                    case PUBLISH -> publisher.publish(buildCommand(payload,
-                            request.requesterId(), request.approverId(), true));
+                    case PUBLISH -> publisher.publish(
+                            payload.scope() == ConfigRelease.Scope.PLATFORM
+                                    && !payload.agents().isEmpty()
+                                    ? buildAgentCommand(payload, request.requesterId(),
+                                            request.approverId(), true)
+                                    : buildCommand(payload, request.requesterId(),
+                                            request.approverId(), true));
                     case LIFECYCLE_TRANSITION -> executeLifecycle(request, payload);
                     case ROLLBACK -> throw new ConfigPublishRejectedException(
                             ReasonCode.RESOURCE_UNKNOWN, "operation",
@@ -306,6 +369,39 @@ public class PlatformCapabilityPublishService {
                     spec.type(), spec.objectId(), spec.version(), e);
             throw e;
         }
+    }
+
+    /**
+     * 构造平台级<b>全局 Agent</b> 发布命令（PLATFORM 作用域 + tenantId=null）。
+     *
+     * <p>⚠️ 版本号取「全局最大版本 + 1」（{@code findLatestGlobal}，不按绑定过滤），
+     * 内容指纹由服务端按 {@link CapObjectFingerprint} 计算——都不采信客户端。
+     *
+     * @param resolveBaseline {@code true} = 解析 CAS 基线（执行期）；{@code false} = 不解析（申请期）
+     */
+    private ConfigPublishCommand buildAgentCommand(ConfigPublishPayload payload, String requesterId,
+                                                   String approverId, boolean resolveBaseline) {
+        Instant now = clock.instant();
+        List<CapAgentDef> defs = new ArrayList<>();
+        for (ConfigPublishPayload.AgentSpec spec : payload.agents()) {
+            int version = agentDefs.findLatestGlobal(spec.agentId())
+                    .map(CapAgentDef::version).orElse(0) + 1;
+            CapAgentDef draft = new CapAgentDef(spec.agentId(), version, spec.name(),
+                    spec.description(), spec.roles(), spec.enabledSkills(), spec.skillBundles(),
+                    spec.capabilityTags(), spec.overrides(), spec.orchestration(),
+                    spec.instructions(), spec.modelRef(), spec.generationParams(),
+                    "pending", 1, now, null);
+            String fingerprint = CapObjectFingerprint.of(draft);
+            defs.add(new CapAgentDef(spec.agentId(), version, spec.name(), spec.description(),
+                    spec.roles(), spec.enabledSkills(), spec.skillBundles(),
+                    spec.capabilityTags(), spec.overrides(), spec.orchestration(),
+                    spec.instructions(), spec.modelRef(), spec.generationParams(),
+                    fingerprint, 1, now, null));
+        }
+        Long baseline = resolveBaseline ? resolveBaseline() : null;
+        return new ConfigPublishCommand(ConfigRelease.Scope.PLATFORM, null, baseline,
+                requesterId, approverId, null,
+                List.of(), List.of(), List.of(), defs, null, List.of(), List.of());
     }
 
     /**

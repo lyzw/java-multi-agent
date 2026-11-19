@@ -595,9 +595,9 @@ export interface PlatformDecision {
 
 /* ── 平台控制台 · 运营代租户配置 Agent（/api/platform/v1/capabilities/agent-config） ── */
 
-/** POST /agent-config/agents —— 在目标租户下创建 Agent 行（只建行，定义走发布申请）。 */
+/** POST /agent-config/agents —— 创建 Agent 行（tenantId 留空 = 只建全局行，不建租户绑定）。 */
 export interface PlatformCreateAgentRequest {
-  tenantId: string
+  tenantId?: string | null
   name: string
   description?: string | null
 }
@@ -628,9 +628,9 @@ export interface PlatformAgentBinding {
   updatedAt: string
 }
 
-/** POST /agent-config/publish-requests —— Agent 定义发布申请（TENANT 作用域）。 */
+/** POST /agent-config/publish-requests —— Agent 定义发布申请（tenantId 留空 = PLATFORM 全局发布）。 */
 export interface PlatformAgentPublishRequest {
-  tenantId: string
+  tenantId?: string | null
   agents: PublishAgentSpec[]
   expectedPublishSeq?: number | null
   reason: string
@@ -645,16 +645,16 @@ export interface PlatformAgentLifecycleRequest {
   reason: string
 }
 
-/** POST /agent-config/publish-requests/{requestId}/decision —— 审批（双人复核）。 */
+/** POST /agent-config/publish-requests/{requestId}/decision —— 审批（双人复核；tenantId 留空 = 全局申请）。 */
 export interface PlatformAgentDecision {
-  tenantId: string
+  tenantId?: string | null
   decision: 'APPROVE' | 'REJECT'
   note?: string
 }
 
-/** POST /agent-config/publish-requests/{requestId}/apply —— 执行（带 tenantId）。 */
+/** POST /agent-config/publish-requests/{requestId}/apply —— 执行（tenantId 留空 = 全局申请）。 */
 export interface PlatformAgentApplyRequest {
-  tenantId: string
+  tenantId?: string | null
 }
 
 /* ── C34-3：能力目录关系视图 ── */
@@ -1002,6 +1002,18 @@ export interface PlatformAgentRegistryItem {
   capabilityTags: string[]
   /** 收紧覆盖（overrides）是否非空 */
   hasOverrides: boolean
+  /** Agent 绑定的模型引用（cap_agent_def.model_ref）；null = 未绑模型，fail-closed 拒绝执行 */
+  modelRef?: string | null
+  /** Agent 启用的技能包清单（cap_agent_def.skill_bundles） */
+  skillBundles?: string[]
+  /** 是否有非空提示词（instructions ≠ {}） */
+  hasInstructions?: boolean
+  /** 是否有非空编排声明（orchestration ≠ {}） */
+  hasOrchestration?: boolean
+  /** 编排模式（LEAF / ROUTER / SEQUENTIAL）；null/缺省 = 视为 LEAF 未声明 */
+  orchestrationMode?: string | null
+  /** 该 Agent 被多少个租户 ACTIVE 绑定（复用度指标，跨 tenant_agent_binding 聚合） */
+  tenantCount?: number
 }
 
 /** 平台链上的目录项形状与租户链 /api/cap/catalog/* 完全一致（复用旧契约类型）。 */

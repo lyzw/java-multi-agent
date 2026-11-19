@@ -24,11 +24,13 @@ public interface AgentManagePort {
     /**
      * 创建 Agent。
      *
+     * @param tenantId  初始绑定租户；{@code null} = 只创建全局 Agent 行、不建绑定
+     *                  （供运营新建时尚未指定租户的场景，后续再分配）
      * @param creatorId 创建人（来自认证上下文，<b>不得</b>取自请求体）
      * @throws IllegalArgumentException           名称非法（空 / 超长）→ 端点转 400
      * @throws DuplicateAgentNameException       租户内重名（唯一约束冲突）→ 端点转 409
      */
-    @NonNull AgentItem createAgent(@NonNull String tenantId,
+    @NonNull AgentItem createAgent(@Nullable String tenantId,
                                    @NonNull String name,
                                    @Nullable String description,
                                    @NonNull String creatorId)

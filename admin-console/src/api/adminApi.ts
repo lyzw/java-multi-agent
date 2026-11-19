@@ -579,11 +579,12 @@ export function getConsoleCapabilityPointer(): Promise<{
 
 /* ── 平台控制台 · 运营代租户配置 Agent（/api/platform/v1/capabilities/agent-config） ──
    ⚠️ 产品口径：所有 Agent 由运营统一配置，租户不再自行维护 Agent / Skill / Tool。
-   本组端点不新造写通道 —— 复用租户链三步发布工作流，只是 tenantId 由运营显式传入，
-   仓储层仍按 tenantId 绑定租户上下文 + 应用角色连接（RLS 隔离不变）。
+   本组端点有租户时复用租户链三步发布工作流（tenantId 由运营显式传入，
+   仓储层仍按 tenantId 绑定租户上下文 + 应用角色连接，RLS 隔离不变）；
+   tenantId 留空时走 PLATFORM 全局发布通道，授权沿用平台域 RESOURCE_ADMIN。
    ⚠️ 与只读盘点 GET /agents 的区别：本组提供写端点与单条定义回填（编辑用）。 */
 
-/** POST /agent-config/agents —— 在目标租户下创建 Agent 行（拿到 agentId）。 */
+/** POST /agent-config/agents —— 创建 Agent 行（tenantId 留空 = 只建全局行不建绑定；定义仍走发布申请）。 */
 export function createPlatformAgent(
   payload: PlatformCreateAgentRequest,
 ): Promise<PlatformAgentCreated> {
@@ -593,7 +594,7 @@ export function createPlatformAgent(
   })
 }
 
-/** POST /agent-config/publish-requests —— 提交 Agent 定义发布申请（不写配置表）。 */
+/** POST /agent-config/publish-requests —— 提交 Agent 定义发布申请（tenantId 留空 = PLATFORM 全局发布）。 */
 export function submitPlatformAgentPublishRequest(
   payload: PlatformAgentPublishRequest,
 ): Promise<PlatformRequestItem> {
@@ -613,14 +614,14 @@ export function submitPlatformAgentLifecycleRequest(
   })
 }
 
-/** GET /agent-config/publish-requests —— 目标租户下的变更申请（状态过滤 + 游标分页）。 */
+/** GET /agent-config/publish-requests —— 变更申请（tenantId 留空 = 全局申请；状态过滤 + 游标分页）。 */
 export function listPlatformAgentRequests(params: {
-  tenantId: string
+  tenantId?: string | null
   state?: string
   limit?: number
 }): Promise<PlatformRequestItem[]> {
   const qs = new URLSearchParams()
-  qs.set('tenantId', params.tenantId)
+  if (params.tenantId) qs.set('tenantId', params.tenantId)
   if (params.state) qs.set('state', params.state)
   if (params.limit) qs.set('limit', String(params.limit))
   return request<PlatformRequestItem[]>(

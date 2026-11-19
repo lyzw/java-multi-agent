@@ -90,6 +90,30 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
             LIMIT 1
             """;
 
+    private static final String SQL_FIND_GLOBAL = """
+            SELECT d.agent_id::text, d.version, d.name, d.description,
+                   d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
+                   d.capability_tags::text, d.overrides::text, d.orchestration::text,
+                   d.instructions::text, d.model_ref, d.generation_params::text,
+                   d.config_fingerprint,
+                   d.schema_version, d.created_at, d.published_at
+            FROM cap_agent_def d
+            WHERE d.agent_id = ?::uuid AND d.version = ?
+            """;
+
+    private static final String SQL_FIND_LATEST_GLOBAL = """
+            SELECT d.agent_id::text, d.version, d.name, d.description,
+                   d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
+                   d.capability_tags::text, d.overrides::text, d.orchestration::text,
+                   d.instructions::text, d.model_ref, d.generation_params::text,
+                   d.config_fingerprint,
+                   d.schema_version, d.created_at, d.published_at
+            FROM cap_agent_def d
+            WHERE d.agent_id = ?::uuid
+            ORDER BY d.version DESC
+            LIMIT 1
+            """;
+
     private static final String SQL_FIND_LATEST_PUBLISHED = """
             SELECT d.agent_id::text, d.version, d.name, d.description,
                    d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
@@ -195,9 +219,25 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
     }
 
     @Override
-    public @NonNull Optional<CapAgentDef> find(@NonNull String tenantId,
+    public @NonNull Optional<CapAgentDef> find(@Nullable String tenantId,
                                                 @NonNull String agentId,
                                                 int version) {
+        if (tenantId == null) {
+            // PLATFORM 作用域冲突回查：按 agentId+version 直接查，不走绑定过滤。
+            return TransactionalConnectionHolder.inTransaction(
+                    dataSource, tenantContext(GLOBAL_CONTEXT_TENANT),
+                    conn -> {
+                        try (PreparedStatement ps = conn.prepareStatement(SQL_FIND_GLOBAL)) {
+                            ps.setString(1, agentId);
+                            ps.setInt(2, version);
+                            try (ResultSet rs = ps.executeQuery()) {
+                                return rs.next()
+                                        ? Optional.of(map(rs))
+                                        : Optional.<CapAgentDef>empty();
+                            }
+                        }
+                    });
+        }
         shadowCompare(RESOURCE_TYPE, tenantId, true);
         return TransactionalConnectionHolder.inTransaction(
                 dataSource, tenantContext(tenantId),
@@ -211,6 +251,23 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
                                     rs.next() ? Optional.of(map(rs)) : Optional.<CapAgentDef>empty();
                             row.ifPresent(d -> shadowTaint(RESOURCE_TYPE, tenantId, tenantId));
                             return row;
+                        }
+                    }
+                });
+    }
+
+    @Override
+    public @NonNull Optional<CapAgentDef> findLatestGlobal(@NonNull String agentId) {
+        // 无绑定过滤：全局 Agent 可以尚未分配任何租户。用哨兵上下文绑定 RLS。
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(GLOBAL_CONTEXT_TENANT),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_FIND_LATEST_GLOBAL)) {
+                        ps.setString(1, agentId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            return rs.next()
+                                    ? Optional.of(map(rs))
+                                    : Optional.<CapAgentDef>empty();
                         }
                     }
                 });
