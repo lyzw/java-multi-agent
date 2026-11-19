@@ -233,14 +233,20 @@ class AuthzShadowLiveIT {
 
     // ── 活库读取（只读；RLS 生效，必须逐事务绑定租户） ────────────────────
 
-    /** 读出租户下 agent 表的<b>真实行租户</b>（不是查询绑定租户）。 */
+    /**
+     * 读出租户下<b>真实带 tenant_id 的行</b>（不是查询绑定租户），供影子染色使用。
+     *
+     * <p>⚠️ agent 已全局化（无 tenant_id、无 RLS），不能再作染色载体；
+     * 改用仍带 FORCE RLS 的 {@code tenant_agent_binding}（租户-Agent 多对多绑定）。
+     */
     private static List<String> readAgentRowTenants(String tenantId) throws SQLException {
         List<String> out = new ArrayList<>();
         try (Connection conn = pool.getConnection()) {
             conn.setAutoCommit(false);
             bindTenant(conn, tenantId);
             try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT tenant_id::text FROM public.agent WHERE tenant_id = ?::uuid")) {
+                    "SELECT tenant_id::text FROM public.tenant_agent_binding "
+                            + "WHERE tenant_id = ?::uuid")) {
                 ps.setString(1, tenantId);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
@@ -253,7 +259,7 @@ class AuthzShadowLiveIT {
         return out;
     }
 
-    /** 按 agent 行数降序返回租户 id —— 只取有数据的租户，避免在空库上得出假结论。 */
+    /** 按绑定行数降序返回租户 id —— 只取有数据的租户，避免在空库上得出假结论。 */
     private static List<String> tenantsByAgentCountDesc() throws SQLException {
         List<String> candidates = new ArrayList<>();
         try (Connection conn = pool.getConnection();
@@ -279,7 +285,9 @@ class AuthzShadowLiveIT {
         try (Connection conn = pool.getConnection()) {
             conn.setAutoCommit(false);
             bindTenant(conn, tenantId);
-            try (PreparedStatement ps = conn.prepareStatement("SELECT count(*) FROM public.agent")) {
+            // agent 已全局化（无 RLS）：按带 RLS 的绑定表行数衡量该租户「有数据」。
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT count(*) FROM public.tenant_agent_binding")) {
                 try (ResultSet rs = ps.executeQuery()) {
                     long n = rs.next() ? rs.getLong(1) : 0L;
                     conn.commit();

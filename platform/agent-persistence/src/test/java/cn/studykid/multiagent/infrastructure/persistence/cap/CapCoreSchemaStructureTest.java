@@ -32,13 +32,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class CapCoreSchemaStructureTest {
 
-    /** 平台级表：V1 仅 platform 定义，**刻意不启用** RLS（§6.1）。 */
-    private static final Set<String> PLATFORM_TABLES = Set.of(
-            "cap_tool_def", "cap_skill_def", "cap_mcp_server_def");
+    /** 全局/平台级表：无 tenant_id，**刻意不启用** RLS（§6.1）。 */
+    private static final Set<String> GLOBAL_TABLES = Set.of(
+            "cap_tool_def", "cap_skill_def", "cap_mcp_server_def",
+            // Agent 已是全局实体；租户可见性由 tenant_agent_binding 决定。
+            "cap_agent_def");
 
     /** 租户级表：必须启用 RLS 且带 tenant_id。 */
     private static final Set<String> TENANT_TABLES = Set.of(
-            "cap_agent_def", "cap_authz_version", "execution_capability_snapshot",
+            "cap_authz_version", "execution_capability_snapshot",
             "cap_result_event", "cap_execution_intent", "cap_config_release");
 
     @Test
@@ -51,7 +53,7 @@ class CapCoreSchemaStructureTest {
     @DisplayName("⚠️ 九张核心表全部建出")
     void allCoreTablesCreated() {
         assertThat(PlatformDdl.createdTables()).containsAll(qualified(TENANT_TABLES));
-        assertThat(PlatformDdl.createdTables()).containsAll(qualified(PLATFORM_TABLES));
+        assertThat(PlatformDdl.createdTables()).containsAll(qualified(GLOBAL_TABLES));
     }
 
     @Test
@@ -67,14 +69,14 @@ class CapCoreSchemaStructureTest {
     }
 
     @Test
-    @DisplayName("⚠️ platform 级表必须**不**启用 RLS（误开会让平台定义对所有租户不可见）")
+    @DisplayName("⚠️ 全局/平台级表必须**不**启用 RLS（误开会让全局定义对所有租户不可见）")
     void platformTablesHaveNoRls() {
         List<String> rlsTables = PlatformDdl.rlsTables("ENABLE");
-        List<String> wronglyProtected = PLATFORM_TABLES.stream()
+        List<String> wronglyProtected = GLOBAL_TABLES.stream()
                 .filter(t -> rlsTables.contains("public." + t))
                 .toList();
         assertThat(wronglyProtected)
-                .as("以下 platform 表被误开 RLS，平台级定义将对所有租户不可见: %s", wronglyProtected)
+                .as("以下全局/平台表被误开 RLS，定义将对所有租户不可见: %s", wronglyProtected)
                 .isEmpty();
     }
 

@@ -203,8 +203,10 @@ class TenantSessionBinderIT {
         try (Connection conn = pool.getConnection()) {
             conn.setAutoCommit(false);
             TenantSessionBinder.bind(conn, ctx);
-            try (PreparedStatement ps =
-                         conn.prepareStatement("SELECT name FROM agent ORDER BY name")) {
+            // 经绑定表取该租户可见的 Agent 名；RLS 与 GUC 绑定都在 binding 上生效。
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT a.name FROM tenant_agent_binding b "
+                            + "JOIN agent a ON a.agent_id = b.agent_id ORDER BY a.name")) {
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         names.add(rs.getString(1));
@@ -218,7 +220,9 @@ class TenantSessionBinderIT {
     }
 
     private long countAgent(Connection conn) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("SELECT count(*) FROM agent")) {
+        // agent 已全局化（无 RLS）：用仍带 FORCE RLS 的绑定表检验 fail-closed。
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT count(*) FROM tenant_agent_binding")) {
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? rs.getLong(1) : -1;
             }

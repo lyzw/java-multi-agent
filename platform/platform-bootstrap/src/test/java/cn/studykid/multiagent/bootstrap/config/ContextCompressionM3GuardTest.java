@@ -148,7 +148,7 @@ class ContextCompressionM3GuardTest {
                 }
                 String name = file.getFileName().toString();
                 insertFiles.add(name);
-                if (!code.contains("context_policy") || !code.contains("ps.setString(5, contextPolicy);")) {
+                if (!code.contains("context_policy") || !code.contains("ps.setString(4, contextPolicy);")) {
                     missingColumn.add(name);
                 }
             }
@@ -165,11 +165,11 @@ class ContextCompressionM3GuardTest {
 
         for (String rel : List.of(MANAGE, REPO)) {
             assertThat(src(rel))
-                    .as("⛔ %s 的 INSERT 列/值清单不是七列同口径", rel)
-                    .contains("(tenant_id, version_id, agent_config, prompt_config, "
+                    .as("⛔ %s 的 INSERT 列/值清单不是六列同口径", rel)
+                    .contains("(version_id, agent_config, prompt_config, "
                             + "tool_contracts, run_config,")
                     .contains("context_policy)")
-                    .contains("VALUES (?::uuid, ?::uuid, ?::jsonb, '{}'::jsonb, "
+                    .contains("VALUES (?::uuid, ?::jsonb, '{}'::jsonb, "
                             + "'{}'::jsonb, ?::jsonb, ?::jsonb)");
         }
 

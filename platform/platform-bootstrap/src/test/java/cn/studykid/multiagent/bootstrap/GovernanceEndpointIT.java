@@ -179,8 +179,11 @@ class GovernanceEndpointIT {
             // ⚠️ 快照必须取**本租户**的（2026-11-01 实测）：run_snapshot_fk 是
             //    (tenant_id, snapshot_id) 复合外键，无序 LIMIT 1 会拿到别的租户的
             //    快照 → 复合 FK 校验必炸「Key is not present」。
-            snapshotId = adminQuery("SELECT snapshot_id::text FROM execution_snapshot"
-                    + " WHERE tenant_id = '" + tenantA + "'::uuid LIMIT 1");
+            snapshotId = adminQuery("SELECT es.snapshot_id::text FROM tenant_agent_binding b "
+                    + "JOIN agent_version v ON v.agent_id=b.agent_id "
+                    + "JOIN execution_snapshot es ON es.version_id=v.version_id "
+                    + "WHERE b.tenant_id='" + tenantA + "'::uuid AND b.status='ACTIVE' "
+                    + "ORDER BY v.version_number DESC LIMIT 1");
         }
         String runId = UUID.randomUUID().toString();
         adminExec("""

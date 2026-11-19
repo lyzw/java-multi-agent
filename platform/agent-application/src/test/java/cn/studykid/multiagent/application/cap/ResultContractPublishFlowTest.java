@@ -141,7 +141,7 @@ class ResultContractPublishFlowTest {
                         + CONTRACT_ID + "@1\"}")),
                 List.of(contract(1, SCHEMA))));
 
-        assertThat(world.agents).containsKey(TENANT + "/leaf-agent@1");
+        assertThat(world.agents).containsKey("leaf-agent@1");
     }
 
     @Test
@@ -415,7 +415,7 @@ class ResultContractPublishFlowTest {
         final CapAgentDefPort agentDefs = new CapAgentDefPort() {
             @Override
             public boolean insert(CapAgentDef def) {
-                String key = def.tenantId() + "/" + def.agentId() + "@" + def.version();
+                String key = def.agentId() + "@" + def.version();
                 if (agents.containsKey(key)) {
                     return false;
                 }
@@ -426,13 +426,12 @@ class ResultContractPublishFlowTest {
 
             @Override
             public Optional<CapAgentDef> find(String tenantId, String agentId, int version) {
-                return Optional.ofNullable(agents.get(tenantId + "/" + agentId + "@" + version));
+                return Optional.ofNullable(agents.get(agentId + "@" + version));
             }
 
             @Override
             public Optional<CapAgentDef> findLatest(String tenantId, String agentId) {
                 return agents.values().stream()
-                        .filter(a -> tenantId.equals(a.tenantId()))
                         .filter(a -> agentId.equals(a.agentId()))
                         .max((x, y) -> Integer.compare(x.version(), y.version()));
             }

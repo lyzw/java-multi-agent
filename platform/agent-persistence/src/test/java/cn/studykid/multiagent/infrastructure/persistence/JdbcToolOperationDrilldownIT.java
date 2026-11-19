@@ -70,10 +70,11 @@ class JdbcToolOperationDrilldownIT {
         } catch (SQLException e) {
             throw new IllegalStateException("读取 IT 库 run 失败", e);
         }
+        // 快照已全局化：从绑定表找一个与 A 不同的租户（有 Agent 可用）。
         try (Connection c = adminPool.getConnection();
              Statement st = c.createStatement();
              var rs = st.executeQuery(
-                     "SELECT tenant_id::text FROM public.execution_snapshot "
+                     "SELECT DISTINCT tenant_id::text FROM public.tenant_agent_binding "
                              + "WHERE tenant_id <> '" + tenantA + "' LIMIT 1")) {
             tenantB = rs.next() ? rs.getString(1) : tenantA;
         } catch (SQLException e) {

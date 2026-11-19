@@ -51,8 +51,10 @@ public class CapDualWriteComparator {
             SELECT v.agent_id::text, v.version_number, v.definition::text,
                    a.name, a.description, v.published_at
             FROM agent_version v
-            JOIN agent a ON a.agent_id = v.agent_id AND a.tenant_id = v.tenant_id
-            WHERE v.tenant_id = ?::uuid
+            JOIN tenant_agent_binding b
+              ON b.agent_id = v.agent_id AND b.tenant_id = ?::uuid
+             AND b.status = 'ACTIVE'
+            JOIN agent a ON a.agent_id = v.agent_id
             ORDER BY v.agent_id, v.version_number
             """;
 
@@ -60,31 +62,44 @@ public class CapDualWriteComparator {
             SELECT v.agent_id::text, v.version_number, v.definition::text,
                    a.name, a.description, v.published_at
             FROM agent_version v
-            JOIN agent a ON a.agent_id = v.agent_id AND a.tenant_id = v.tenant_id
-            WHERE v.tenant_id = ?::uuid AND v.agent_id = ?::uuid
+            JOIN tenant_agent_binding b
+              ON b.agent_id = v.agent_id AND b.tenant_id = ?::uuid
+             AND b.status = 'ACTIVE'
+            JOIN agent a ON a.agent_id = v.agent_id
+            WHERE v.agent_id = ?::uuid
             ORDER BY v.agent_id, v.version_number
             """;
 
     private static final String SQL_CAP = """
-            SELECT agent_id::text, version, name, description,
-                   roles::text, enabled_skills::text, skill_bundles::text,
-                   capability_tags::text, overrides::text, config_fingerprint
-            FROM cap_agent_def
-            WHERE tenant_id = ?::uuid
-            ORDER BY agent_id, version
+            SELECT d.agent_id::text, d.version, d.name, d.description,
+                   d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
+                   d.capability_tags::text, d.overrides::text, d.config_fingerprint
+            FROM cap_agent_def d
+            JOIN tenant_agent_binding b
+              ON b.agent_id = d.agent_id AND b.tenant_id = ?::uuid
+             AND b.status = 'ACTIVE'
+            ORDER BY d.agent_id, d.version
             """;
 
     private static final String SQL_CAP_ONE_AGENT = """
-            SELECT agent_id::text, version, name, description,
-                   roles::text, enabled_skills::text, skill_bundles::text,
-                   capability_tags::text, overrides::text, config_fingerprint
-            FROM cap_agent_def
-            WHERE tenant_id = ?::uuid AND agent_id = ?::uuid
-            ORDER BY agent_id, version
+            SELECT d.agent_id::text, d.version, d.name, d.description,
+                   d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
+                   d.capability_tags::text, d.overrides::text, d.config_fingerprint
+            FROM cap_agent_def d
+            JOIN tenant_agent_binding b
+              ON b.agent_id = d.agent_id AND b.tenant_id = ?::uuid
+             AND b.status = 'ACTIVE'
+            WHERE d.agent_id = ?::uuid
+            ORDER BY d.agent_id, d.version
             """;
 
     private static final String SQL_LEGACY_SNAPSHOT_COUNT = """
-            SELECT count(*) FROM execution_snapshot WHERE tenant_id = ?::uuid
+            SELECT count(DISTINCT es.snapshot_id)
+            FROM execution_snapshot es
+            JOIN agent_version v ON v.version_id = es.version_id
+            JOIN tenant_agent_binding b
+              ON b.agent_id = v.agent_id AND b.tenant_id = ?::uuid
+             AND b.status = 'ACTIVE'
             """;
 
     private static final String SQL_CAP_SNAPSHOT_COUNT = """

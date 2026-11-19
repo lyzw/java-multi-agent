@@ -96,20 +96,19 @@ class ConfigValidationGateTest {
     }
 
     @Test
-    @DisplayName("⛔ PLATFORM 作用域不得携带租户 Agent（跨租户结构泄漏）")
-    void platformScopeRejectsAgentDefs() {
+    @DisplayName("✅ PLATFORM 作用域可携带全局 Agent 定义（租户可见性由绑定决定）")
+    void platformScopeAcceptsGlobalAgentDefs() {
         ConfigPublishCommand cmd = new ConfigPublishCommand(ConfigRelease.Scope.PLATFORM, null,
                 null, "requester-1", "approver-1", null,
                 List.of(), List.of(), List.of(),
                 List.of(new cn.studykid.multiagent.core.cap.CapAgentDef(
-                        "00000000-0000-0000-0000-000000000001", "agent-1", 1,
-                        "a", null, List.of(), List.of(), List.of(), List.of(), "{}", "fp",
+                        "00000000-0000-0000-0000-000000000001", 1,
+                        "agent-1", null, List.of(), List.of(), List.of(), List.of(),
+                        "{}", "{}", "{}", null, "{}", "fp",
                         1, Instant.EPOCH, null)),
                 null);
 
-        assertThatThrownBy(() -> gate.validate(cmd))
-                .isInstanceOf(ConfigPublishRejectedException.class)
-                .hasMessageContaining("租户级 Agent");
+        assertThatCode(() -> gate.validate(cmd)).doesNotThrowAnyException();
     }
 
     @Test

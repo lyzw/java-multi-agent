@@ -45,12 +45,11 @@ class CapTransactionContractIT extends CapITBase {
                     st.execute("SELECT set_config('app.tenant_id', '" + tenantId + "', true)");
                 }
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, "
+                        "INSERT INTO cap_agent_def (agent_id, version, name, "
                                 + "enabled_skills, overrides, config_fingerprint, created_at, "
-                                + "updated_at, published_at) VALUES (?::uuid, ?::uuid, 1, "
+                                + "updated_at, published_at) VALUES (?::uuid, 1, "
                                 + "'tx-agent', '[]'::jsonb, '{}'::jsonb, 'fp-tx', now(), now(), now())")) {
-                    ps.setString(1, tenantId);
-                    ps.setString(2, agentId);
+                    ps.setString(1, agentId);
                     ps.executeUpdate();
                 }
                 // 同事务内自增授权版本
@@ -96,8 +95,8 @@ class CapTransactionContractIT extends CapITBase {
         assertThat(version).isEqualTo(1L);
 
         // 提交后：版本行与授权版本都可见
-        long defRows = adminQueryLong("SELECT count(*) FROM cap_agent_def WHERE tenant_id = '"
-                + tenantA + "'::uuid AND agent_id = '" + agentId + "'::uuid");
+        long defRows = adminQueryLong("SELECT count(*) FROM cap_agent_def WHERE agent_id = '"
+                + agentId + "'::uuid");
         assertThat(defRows).isEqualTo(1L);
 
         long authzRows = adminQueryLong("SELECT count(*) FROM cap_authz_version "
@@ -117,12 +116,11 @@ class CapTransactionContractIT extends CapITBase {
                     st.execute("SELECT set_config('app.tenant_id', '" + tenantA + "', true)");
                 }
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, "
+                        "INSERT INTO cap_agent_def (agent_id, version, name, "
                                 + "enabled_skills, overrides, config_fingerprint, created_at, "
-                                + "updated_at, published_at) VALUES (?::uuid, ?::uuid, 1, "
+                                + "updated_at, published_at) VALUES (?::uuid, 1, "
                                 + "'rb-agent', '[]'::jsonb, '{}'::jsonb, 'fp-rb', now(), now(), now())")) {
-                    ps.setString(1, tenantA);
-                    ps.setString(2, agentId);
+                    ps.setString(1, agentId);
                     ps.executeUpdate();
                 }
                 try (PreparedStatement ps = conn.prepareStatement(
@@ -137,8 +135,8 @@ class CapTransactionContractIT extends CapITBase {
             }
         }
 
-        long defRows = adminQueryLong("SELECT count(*) FROM cap_agent_def WHERE tenant_id = '"
-                + tenantA + "'::uuid AND agent_id = '" + agentId + "'::uuid");
+        long defRows = adminQueryLong("SELECT count(*) FROM cap_agent_def WHERE agent_id = '"
+                + agentId + "'::uuid");
         assertThat(defRows).as("⛔ 回滚后仍留版本行：出现半成品状态").isZero();
 
         long authzRows = adminQueryLong("SELECT count(*) FROM cap_authz_version "
@@ -147,10 +145,13 @@ class CapTransactionContractIT extends CapITBase {
     }
 
     @Test
-    @DisplayName("✅ 同事务不泄漏：事务内写入对其他租户不可见")
+    @DisplayName("✅ 同事务不泄漏：未提交的写入对其他连接不可见；提交后仅绑定租户可见")
     void sameTransactionDoesNotLeak() throws Exception {
+        // Agent 是全局实体：只在 tenantA 建绑定；定义表全局可见，隔离由仓储的绑定校验承担。
         String agentId = createAgentWithVersion(tenantA, agentName("cap-tx-iso-agent"), "{}", true);
+        JdbcCapAgentDefRepository repo = new JdbcCapAgentDefRepository(appPool);
 
+        String isoName = "iso-agent-" + java.util.UUID.randomUUID().toString().substring(0, 8);
         try (Connection conn = appPool.getConnection()) {
             conn.setAutoCommit(false);
             try {
@@ -158,19 +159,18 @@ class CapTransactionContractIT extends CapITBase {
                     st.execute("SELECT set_config('app.tenant_id', '" + tenantA + "', true)");
                 }
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, "
+                        "INSERT INTO cap_agent_def (agent_id, version, name, "
                                 + "enabled_skills, overrides, config_fingerprint, created_at, "
-                                + "updated_at, published_at) VALUES (?::uuid, ?::uuid, 1, "
-                                + "'iso-agent', '[]'::jsonb, '{}'::jsonb, 'fp-iso', now(), now(), now())")) {
-                    ps.setString(1, tenantA);
-                    ps.setString(2, agentId);
+                                + "updated_at, published_at) VALUES (?::uuid, 2, "
+                                + "'" + isoName + "', '[]'::jsonb, '{}'::jsonb, 'fp-iso', now(), now(), now())")) {
+                    ps.setString(1, agentId);
                     ps.executeUpdate();
                 }
-                // ⚠️ 事务**未提交**时，另一租户不得看到这行
-                long visibleToB = appCountAsTenant(tenantB,
-                        "SELECT count(*) FROM cap_agent_def WHERE agent_id = '" + agentId + "'");
-                assertThat(visibleToB)
-                        .as("⛔ 未提交的数据被其他租户看到：事务隔离或 RLS 失效")
+                // ⚠️ 事务**未提交**时，任何其它连接都不得看到这行（事务隔离，与 RLS 无关）
+                long uncommitted = adminQueryLong("SELECT count(*) FROM cap_agent_def "
+                        + "WHERE agent_id = '" + agentId + "' AND name = '" + isoName + "'");
+                assertThat(uncommitted)
+                        .as("⛔ 未提交的数据被其它连接看到：事务隔离失效")
                         .isZero();
                 conn.commit();
             } finally {
@@ -178,16 +178,10 @@ class CapTransactionContractIT extends CapITBase {
             }
         }
 
-        // 提交后：仍然只有 A 可见
-        long visibleToB = appCountAsTenant(tenantB,
-                "SELECT count(*) FROM cap_agent_def WHERE agent_id = '" + agentId + "'");
-        assertThat(visibleToB)
-                .as("⛔ 提交后 B 仍能看到 A 的行 = RLS 失效")
-                .isZero();
-
-        long visibleToA = appCountAsTenant(tenantA,
-                "SELECT count(*) FROM cap_agent_def WHERE agent_id = '" + agentId + "'");
-        assertThat(visibleToA).isEqualTo(1L);
+        // 提交后：定义表是全局的（原始表两边都能查到），但租户可见性由绑定决定——
+        // A 有绑定 → 仓储可见；B 无绑定 → 仓储不可见。
+        assertThat(repo.findLatest(tenantA, agentId)).isPresent();
+        assertThat(repo.findLatest(tenantB, agentId)).isEmpty();
     }
 
     @Test
@@ -208,14 +202,13 @@ class CapTransactionContractIT extends CapITBase {
     @DisplayName("✅ 已发布版本行不可变：DB 层拒绝改写")
     void publishedVersionRowIsImmutable() {
         String agentId = createAgentWithVersion(tenantA, agentName("cap-imm-agent"), "{}", true);
-        adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, enabled_skills, "
+        adminExec("INSERT INTO cap_agent_def (agent_id, version, name, enabled_skills, "
                 + "overrides, config_fingerprint, created_at, updated_at, published_at) VALUES ('"
-                + tenantA + "'::uuid, '" + agentId + "'::uuid, 1, 'imm', '[]'::jsonb, "
+                + agentId + "'::uuid, 1, 'imm', '[]'::jsonb, "
                 + "'{}'::jsonb, 'fp-imm', now(), now(), now())");
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> adminExec(
-                "UPDATE cap_agent_def SET name = 'tampered' WHERE tenant_id = '" + tenantA
-                        + "'::uuid AND agent_id = '" + agentId + "'::uuid"))
+                "UPDATE cap_agent_def SET name = 'tampered' WHERE agent_id = '" + agentId + "'::uuid"))
                 .as("⛔ 已发布版本行可被改写：改配置会退化为原地篡改，发布指针与内容将不一致")
                 // ⚠️ 断言查**整条栈**而不是顶层消息：
                 //    adminExec 把底层异常包成 IllegalStateException("管理员写入失败: <SQL>")，
@@ -228,16 +221,14 @@ class CapTransactionContractIT extends CapITBase {
     @DisplayName("✅ 草稿版本行可编辑（草稿编辑不修改已发布版本行）")
     void draftVersionRowIsEditable() {
         String agentId = createAgentWithVersion(tenantA, agentName("cap-draft-agent"), "{}", false);
-        adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, enabled_skills, "
+        adminExec("INSERT INTO cap_agent_def (agent_id, version, name, enabled_skills, "
                 + "overrides, config_fingerprint, created_at, updated_at) VALUES ('"
-                + tenantA + "'::uuid, '" + agentId + "'::uuid, 1, 'draft', '[]'::jsonb, "
+                + agentId + "'::uuid, 1, 'draft', '[]'::jsonb, "
                 + "'{}'::jsonb, 'fp-draft', now(), now())");
 
-        adminExec("UPDATE cap_agent_def SET name = 'draft-v2' WHERE tenant_id = '" + tenantA
-                + "'::uuid AND agent_id = '" + agentId + "'::uuid");
+        adminExec("UPDATE cap_agent_def SET name = 'draft-v2' WHERE agent_id = '" + agentId + "'::uuid");
 
-        String name = adminQuery("SELECT name FROM cap_agent_def WHERE tenant_id = '"
-                + tenantA + "'::uuid AND agent_id = '" + agentId + "'::uuid");
+        String name = adminQuery("SELECT name FROM cap_agent_def WHERE agent_id = '" + agentId + "'::uuid");
         assertThat(name).isEqualTo("draft-v2");
     }
 
@@ -258,18 +249,18 @@ class CapTransactionContractIT extends CapITBase {
     }
 
     @Test
-    @DisplayName("✅ 跨租户引用被复合外键挡住")
+    @DisplayName("✅ 引用不存在的 Agent 被外键挡住（Agent 全局化后不再有跨租户复合外键）")
     void crossTenantReferenceRejected() {
-        String agentIdB = UUID.randomUUID().toString();
-        adminExec("INSERT INTO agent (agent_id, tenant_id, name) VALUES ('" + agentIdB
-                + "'::uuid, '" + tenantB + "'::uuid, '" + freshName("cap-xt-agent") + "')");
-
+        // Agent 已是全局实体：cap_agent_def_agent_fk 仅引用 agent_id。
+        // 「跨租户引用」在新模型下不再成立（一个 Agent 可绑多租户），
+        // 等价的不变式是「指向不存在 Agent 的引用必须被外键拒绝」。
+        String ghostAgentId = UUID.randomUUID().toString();
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> adminExec(
-                "INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, enabled_skills, "
+                "INSERT INTO cap_agent_def (agent_id, version, name, enabled_skills, "
                         + "overrides, config_fingerprint, created_at, updated_at) VALUES ('"
-                        + tenantA + "'::uuid, '" + agentIdB + "'::uuid, 1, 'xt', '[]'::jsonb, "
+                        + ghostAgentId + "'::uuid, 1, 'xt', '[]'::jsonb, "
                         + "'{}'::jsonb, 'fp-xt', now(), now())"))
-                .as("⛔ 跨租户 agent 引用未被外键挡住")
+                .as("⛔ 指向不存在 Agent 的引用未被外键挡住")
                 // ⚠️ 断言查**约束名**而不是英文词 "foreign key"：
                 //    数据库的 lc_messages 可能被设为中文，错误文案里没有那个英文词，
                 //    按文案断言会得到「功能正常但测试红」的假失败。

@@ -102,6 +102,15 @@ public interface AuditPort {
         /** Agent 版本发布（P4-D14 / G2 / P18）。定义不可变快照。 */
         public static final String AGENT_PUBLISH = "AGENT_PUBLISH";
 
+        /** 租户-Agent 绑定建立。 */
+        public static final String AGENT_BINDING_BIND = "AGENT_BINDING_BIND";
+
+        /** 租户-Agent 绑定配置更新。 */
+        public static final String AGENT_BINDING_UPDATE = "AGENT_BINDING_UPDATE";
+
+        /** 租户-Agent 绑定停用。 */
+        public static final String AGENT_BINDING_UNBIND = "AGENT_BINDING_UNBIND";
+
         /** 查看配置（P4-D14 / C6 / P19）。fail-open 访问日志。 */
         public static final String CONFIG_VIEW = "CONFIG_VIEW";
 

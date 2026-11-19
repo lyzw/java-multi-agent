@@ -35,46 +35,65 @@ public class JdbcCapAgentChildRefRepository implements CapAgentChildRefPort {
     /** 影子比对/染色的资源类型（P0-1b 第 1 批）。 */
     private static final String RESOURCE_TYPE = "cap_agent_child_ref";
 
+    private static final String GLOBAL_CONTEXT_TENANT = "00000000-0000-0000-0000-000000000000";
+
     private static final String SQL_INSERT = """
             INSERT INTO cap_agent_child_ref
-                (tenant_id, parent_agent_id, parent_release_version,
+                (parent_agent_id, parent_release_version,
                  child_agent_id, child_release_version, ordinal, required, created_at)
-            VALUES (?::uuid, ?::uuid, ?, ?::uuid, ?, ?, ?, ?)
-            ON CONFLICT (tenant_id, parent_agent_id, parent_release_version,
+            VALUES (?::uuid, ?, ?::uuid, ?, ?, ?, ?)
+            ON CONFLICT (parent_agent_id, parent_release_version,
                          child_agent_id, child_release_version) DO NOTHING
             """;
 
     private static final String SQL_LIST_BY_PARENT = """
-            SELECT tenant_id::text, parent_agent_id::text, parent_release_version,
-                   child_agent_id::text, child_release_version, ordinal, required, created_at
-            FROM cap_agent_child_ref
-            WHERE tenant_id = ?::uuid AND parent_agent_id = ?::uuid
-              AND parent_release_version = ?
-            ORDER BY ordinal ASC
+            SELECT c.parent_agent_id::text, c.parent_release_version,
+                   c.child_agent_id::text, c.child_release_version,
+                   c.ordinal, c.required, c.created_at
+            FROM cap_agent_child_ref c
+            WHERE c.parent_agent_id = ?::uuid AND c.parent_release_version = ?
+              AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                           WHERE b.tenant_id = ?::uuid
+                             AND b.agent_id = c.parent_agent_id
+                             AND b.status = 'ACTIVE')
+            ORDER BY c.ordinal ASC
             """;
 
     private static final String SQL_LIST_BY_PARENT_AGENT = """
-            SELECT tenant_id::text, parent_agent_id::text, parent_release_version,
-                   child_agent_id::text, child_release_version, ordinal, required, created_at
-            FROM cap_agent_child_ref
-            WHERE tenant_id = ?::uuid AND parent_agent_id = ?::uuid
-            ORDER BY parent_release_version ASC, ordinal ASC
+            SELECT c.parent_agent_id::text, c.parent_release_version,
+                   c.child_agent_id::text, c.child_release_version,
+                   c.ordinal, c.required, c.created_at
+            FROM cap_agent_child_ref c
+            WHERE c.parent_agent_id = ?::uuid
+              AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                           WHERE b.tenant_id = ?::uuid
+                             AND b.agent_id = c.parent_agent_id
+                             AND b.status = 'ACTIVE')
+            ORDER BY c.parent_release_version ASC, c.ordinal ASC
             """;
 
     private static final String SQL_LIST_BY_CHILD = """
-            SELECT tenant_id::text, parent_agent_id::text, parent_release_version,
-                   child_agent_id::text, child_release_version, ordinal, required, created_at
-            FROM cap_agent_child_ref
-            WHERE tenant_id = ?::uuid AND child_agent_id = ?::uuid
-            ORDER BY parent_agent_id ASC, parent_release_version ASC, ordinal ASC
+            SELECT c.parent_agent_id::text, c.parent_release_version,
+                   c.child_agent_id::text, c.child_release_version,
+                   c.ordinal, c.required, c.created_at
+            FROM cap_agent_child_ref c
+            WHERE c.child_agent_id = ?::uuid
+              AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                           WHERE b.tenant_id = ?::uuid
+                             AND b.agent_id = c.parent_agent_id
+                             AND b.status = 'ACTIVE')
+            ORDER BY c.parent_agent_id ASC, c.parent_release_version ASC, c.ordinal ASC
             """;
 
     private static final String SQL_LIST_BY_TENANT = """
-            SELECT tenant_id::text, parent_agent_id::text, parent_release_version,
-                   child_agent_id::text, child_release_version, ordinal, required, created_at
-            FROM cap_agent_child_ref
-            WHERE tenant_id = ?::uuid
-            ORDER BY parent_agent_id ASC, parent_release_version ASC, ordinal ASC
+            SELECT c.parent_agent_id::text, c.parent_release_version,
+                   c.child_agent_id::text, c.child_release_version,
+                   c.ordinal, c.required, c.created_at
+            FROM cap_agent_child_ref c
+            JOIN tenant_agent_binding b
+              ON b.agent_id = c.parent_agent_id AND b.tenant_id = ?::uuid
+             AND b.status = 'ACTIVE'
+            ORDER BY c.parent_agent_id ASC, c.parent_release_version ASC, c.ordinal ASC
             """;
 
     private final DataSource dataSource;
@@ -113,17 +132,16 @@ public class JdbcCapAgentChildRefRepository implements CapAgentChildRefPort {
     @Override
     public boolean insert(@NonNull CapAgentChildRef ref) {
         return TransactionalConnectionHolder.inTransaction(
-                dataSource, tenantContext(ref.tenantId()),
+                dataSource, tenantContext(GLOBAL_CONTEXT_TENANT),
                 conn -> {
                     try (PreparedStatement ps = conn.prepareStatement(SQL_INSERT)) {
-                        ps.setString(1, ref.tenantId());
-                        ps.setString(2, ref.parentAgentId());
-                        ps.setInt(3, ref.parentReleaseVersion());
-                        ps.setString(4, ref.childAgentId());
-                        ps.setInt(5, ref.childReleaseVersion());
-                        ps.setInt(6, ref.ordinal());
-                        ps.setBoolean(7, ref.required());
-                        ps.setTimestamp(8, Timestamp.from(ref.createdAt()));
+                        ps.setString(1, ref.parentAgentId());
+                        ps.setInt(2, ref.parentReleaseVersion());
+                        ps.setString(3, ref.childAgentId());
+                        ps.setInt(4, ref.childReleaseVersion());
+                        ps.setInt(5, ref.ordinal());
+                        ps.setBoolean(6, ref.required());
+                        ps.setTimestamp(7, Timestamp.from(ref.createdAt()));
                         return ps.executeUpdate() > 0;
                     }
                 });
@@ -139,14 +157,14 @@ public class JdbcCapAgentChildRefRepository implements CapAgentChildRefPort {
                 conn -> {
                     List<CapAgentChildRef> rows = new ArrayList<>();
                     try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_BY_PARENT)) {
-                        ps.setString(1, tenantId);
-                        ps.setString(2, parentAgentId);
-                        ps.setInt(3, parentReleaseVersion);
+                        ps.setString(1, parentAgentId);
+                        ps.setInt(2, parentReleaseVersion);
+                        ps.setString(3, tenantId);
                         try (ResultSet rs = ps.executeQuery()) {
                             while (rs.next()) {
                                 CapAgentChildRef d = map(rs);
                                 rows.add(d);
-                                shadowTaint(RESOURCE_TYPE, tenantId, d.tenantId());
+                                shadowTaint(RESOURCE_TYPE, tenantId, tenantId);
                             }
                         }
                     }
@@ -163,13 +181,13 @@ public class JdbcCapAgentChildRefRepository implements CapAgentChildRefPort {
                 conn -> {
                     List<CapAgentChildRef> rows = new ArrayList<>();
                     try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_BY_PARENT_AGENT)) {
-                        ps.setString(1, tenantId);
-                        ps.setString(2, parentAgentId);
+                        ps.setString(1, parentAgentId);
+                        ps.setString(2, tenantId);
                         try (ResultSet rs = ps.executeQuery()) {
                             while (rs.next()) {
                                 CapAgentChildRef d = map(rs);
                                 rows.add(d);
-                                shadowTaint(RESOURCE_TYPE, tenantId, d.tenantId());
+                                shadowTaint(RESOURCE_TYPE, tenantId, tenantId);
                             }
                         }
                     }
@@ -186,13 +204,13 @@ public class JdbcCapAgentChildRefRepository implements CapAgentChildRefPort {
                 conn -> {
                     List<CapAgentChildRef> rows = new ArrayList<>();
                     try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_BY_CHILD)) {
-                        ps.setString(1, tenantId);
-                        ps.setString(2, childAgentId);
+                        ps.setString(1, childAgentId);
+                        ps.setString(2, tenantId);
                         try (ResultSet rs = ps.executeQuery()) {
                             while (rs.next()) {
                                 CapAgentChildRef d = map(rs);
                                 rows.add(d);
-                                shadowTaint(RESOURCE_TYPE, tenantId, d.tenantId());
+                                shadowTaint(RESOURCE_TYPE, tenantId, tenantId);
                             }
                         }
                     }
@@ -213,7 +231,7 @@ public class JdbcCapAgentChildRefRepository implements CapAgentChildRefPort {
                             while (rs.next()) {
                                 CapAgentChildRef d = map(rs);
                                 rows.add(d);
-                                shadowTaint(RESOURCE_TYPE, tenantId, d.tenantId());
+                                shadowTaint(RESOURCE_TYPE, tenantId, tenantId);
                             }
                         }
                     }
@@ -262,7 +280,6 @@ public class JdbcCapAgentChildRefRepository implements CapAgentChildRefPort {
     private static CapAgentChildRef map(ResultSet rs) throws SQLException {
         Timestamp createdAt = rs.getTimestamp("created_at");
         return new CapAgentChildRef(
-                rs.getString("tenant_id"),
                 rs.getString("parent_agent_id"),
                 rs.getInt("parent_release_version"),
                 rs.getString("child_agent_id"),

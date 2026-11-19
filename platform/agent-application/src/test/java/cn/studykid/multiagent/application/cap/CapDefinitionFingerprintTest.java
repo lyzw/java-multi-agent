@@ -89,7 +89,7 @@ class CapDefinitionFingerprintTest {
     @DisplayName("✅ 三字段与时间戳无关：草稿 → 发布态指纹不变")
     void publishingDoesNotChangeFingerprint() {
         CapAgentDef draft = agent("{\"inlineInstructions\":\"提示词\"}", "Model-A", "{}");
-        CapAgentDef published = new CapAgentDef(draft.tenantId(), draft.agentId(),
+        CapAgentDef published = new CapAgentDef(draft.agentId(),
                 draft.version(), draft.name(), draft.description(), draft.roles(),
                 draft.enabledSkills(), draft.skillBundles(), draft.capabilityTags(),
                 draft.overrides(), draft.orchestration(),

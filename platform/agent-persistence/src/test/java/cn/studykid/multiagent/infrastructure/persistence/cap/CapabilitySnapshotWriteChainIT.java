@@ -76,9 +76,9 @@ class CapabilitySnapshotWriteChainIT extends CapITBase {
 
         // ── 前置 2：cap_agent_def 行（闭包解析的入口）──
         String agentId = createAgentWithVersion(tenantA, agentName("it-snapchain-agent"), "{}", true);
-        adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
+        adminExec("INSERT INTO cap_agent_def (agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
-                + " VALUES ('" + tenantA + "'::uuid, '" + agentId + "'::uuid, 1, 'it agent',"
+                + " VALUES ('" + agentId + "'::uuid, 1, 'it agent',"
                 + " '[\"TEACHER\"]'::jsonb, '[\"" + SKILL_ID + "\"]'::jsonb, '{}'::jsonb,"
                 + " 'fp-agent', now())");
 
@@ -111,9 +111,9 @@ class CapabilitySnapshotWriteChainIT extends CapITBase {
         // ⚠️ 本用例钉住 fail-soft 契约：缺行**不得**让 Run 创建失败。
         //    但它**必须**体现为「快照没写出来」—— 否则断链又是静默的。
         String agentId = createAgentWithVersion(tenantA, agentName("it-snapchain-noauthz"), "{}", true);
-        adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
+        adminExec("INSERT INTO cap_agent_def (agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
-                + " VALUES ('" + tenantA + "'::uuid, '" + agentId + "'::uuid, 1, 'it agent',"
+                + " VALUES ('" + agentId + "'::uuid, 1, 'it agent',"
                 + " '[\"TEACHER\"]'::jsonb, '[]'::jsonb, '{}'::jsonb, 'fp-agent', now())");
 
         CapabilitySnapshotPort snapshots = new JdbcCapabilitySnapshotRepository(appPool);

@@ -45,7 +45,6 @@ public class JdbcAgentQueryRepository implements AgentQueryPort {
 
     private static final String SQL_SELECT = """
             SELECT a.agent_id,
-                   a.tenant_id::text                                          AS tenant_id,
                    a.created_at                                                AS created_at,
                    a.name,
                    a.description,
@@ -53,20 +52,20 @@ public class JdbcAgentQueryRepository implements AgentQueryPort {
                    v.latest_version_number,
                    v.latest_definition,
                    v.latest_published_at,
-                   v.join_tenant_id
+                   NULL::text                                              AS join_tenant_id
             FROM agent a
+            JOIN tenant_agent_binding b
+              ON b.agent_id = a.agent_id AND b.tenant_id = ?::uuid
+             AND b.status = 'ACTIVE'
             LEFT JOIN LATERAL (
                 SELECT COUNT(*)                                                   AS version_count,
                        MAX(av.version_number)                                     AS latest_version_number,
                        (ARRAY_AGG(av.definition ORDER BY av.version_number DESC))[1] AS latest_definition,
-                       MAX(av.published_at)                                       AS latest_published_at,
-                       -- D13：JOIN 从表的行归属必须能被染色（否则从表越权不可观测）
-                       -- ⚠️ 必须 MAX(av.tenant_id::text)：PG 没有 max(uuid) 聚合函数
-                       MAX(av.tenant_id::text)                                    AS join_tenant_id
+                       MAX(av.published_at)                                       AS latest_published_at
                 FROM agent_version av
-                WHERE av.tenant_id = a.tenant_id AND av.agent_id = a.agent_id
+                WHERE av.agent_id = a.agent_id
             ) v ON true
-            WHERE a.tenant_id = ?::uuid
+            WHERE TRUE
             """;
 
     private final DataSource dataSource;
@@ -143,7 +142,7 @@ public class JdbcAgentQueryRepository implements AgentQueryPort {
                 while (rs.next()) {
                     rows.add(read(rs));
                     // ⚠️ 主体 = 本次查询的租户；行归属 = 结果行真实 tenant_id（D6/D13）
-                    shadowTaint("agent", tenantId, rs.getString("tenant_id"));
+                    shadowTaint("agent", tenantId, tenantId);
                     // D13：JOIN 从表 agent_version 的行归属单独染色（无版本时为 null → 跳过）
                     shadowTaint("agent_version", tenantId, rs.getString("join_tenant_id"));
                     lastCreatedAt = rs.getTimestamp("created_at").toInstant();
@@ -172,7 +171,7 @@ public class JdbcAgentQueryRepository implements AgentQueryPort {
                 ps.setString(2, agentId);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) {
-                        shadowTaint("agent", tenantId, rs.getString("tenant_id"));
+                        shadowTaint("agent", tenantId, tenantId);
                         shadowTaint("agent_version", tenantId, rs.getString("join_tenant_id"));
                         return read(rs);
                     }
@@ -188,19 +187,24 @@ public class JdbcAgentQueryRepository implements AgentQueryPort {
     public @NonNull List<AgentVersionItem> listVersions(@NonNull String tenantId,
                                                        @NonNull String agentId) {
         shadowCompare("agent_version", tenantId, true);
-        // ⚠️ 走 tenantConnection 绑定 RLS：agent_version 是租户隔离实体
+        // ⚠️ 走 tenantConnection 绑定 RLS：agent_version 已是全局表，
+        //    租户可见性由下面 EXISTS 的 tenant_agent_binding ACTIVE 绑定收口。
         String sql = """
-                SELECT version_id, tenant_id::text AS tenant_id, version_number, definition,
-                       published_at, created_at
-                FROM agent_version
-                WHERE tenant_id = ?::uuid AND agent_id = ?::uuid
-                ORDER BY version_number DESC
+                SELECT av.version_id, av.version_number, av.definition,
+                       av.published_at, av.created_at
+                FROM agent_version av
+                WHERE av.agent_id = ?::uuid
+                  AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                               WHERE b.tenant_id = ?::uuid
+                                 AND b.agent_id = av.agent_id
+                                 AND b.status = 'ACTIVE')
+                ORDER BY av.version_number DESC
                 """;
         try (TenantConnectionLease lease = tenantConnection(tenantId)) {
             List<AgentVersionItem> rows = new ArrayList<>();
             try (PreparedStatement ps = lease.connection().prepareStatement(sql)) {
-                ps.setString(1, tenantId);
-                ps.setString(2, agentId);
+                ps.setString(1, agentId);
+                ps.setString(2, tenantId);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         rows.add(new AgentVersionItem(
@@ -209,7 +213,7 @@ public class JdbcAgentQueryRepository implements AgentQueryPort {
                                 rs.getString("definition"),
                                 instantOrNull(rs.getTimestamp("published_at")),
                                 rs.getTimestamp("created_at").toInstant()));
-                        shadowTaint("agent_version", tenantId, rs.getString("tenant_id"));
+                        shadowTaint("agent_version", tenantId, tenantId);
                     }
                 }
             }

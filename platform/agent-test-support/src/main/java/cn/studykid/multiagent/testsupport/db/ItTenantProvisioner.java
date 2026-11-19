@@ -30,15 +30,24 @@ import javax.sql.DataSource;
  * 在结构上<b>不可能重合</b>。这不是命名习惯，是可断言的结构约束。
  *
  * <p><b>为什么必须连 agent / agent_version / execution_snapshot 一起建</b>：
- * {@code run.snapshot_id} 必填且带复合外键 {@code (tenant_id, snapshot_id)}，
+ * {@code run.snapshot_id} 必填且带外键 {@code run_snapshot_fk → execution_snapshot}，
  * 只建 tenant 的话任何造 Run 的查询都会被外键挡下。
+ *
+ * <p><b>⚠️ Agent 是全局实体（2026-11-19 改）</b>：{@code agent} / {@code agent_version} /
+ * {@code execution_snapshot} 已不带 {@code tenant_id}，也不再挂租户 RLS；
+ * 租户可见性由 {@code tenant_agent_binding} 的多对多绑定决定。因此：
+ * <ul>
+ *   <li>{@code agent.name} 全局唯一 ⇒ 所有 IT 租户<b>共用</b>同一个 {@code agent1}，
+ *       这正是新模型要表达的「一个 Agent 分配给多个租户」，而不是每个租户各造一份；</li>
+ *   <li>「该租户能不能看到 agent1」= 绑定表里有没有一行 ACTIVE 绑定；
+ *       故 {@link #snapshotId} 必须经绑定解析，不能再按 {@code execution_snapshot.tenant_id} 取。</li>
+ * </ul>
  *
  * <p><b>⚠️ 快照不可删除</b>：{@code execution_snapshot} 上有禁止 UPDATE/DELETE 的不可变触发器，
  * 因此本方法只能<b>幂等创建</b>（同一 slug 反复调用不新增行），
  * 不能「每用例建一个随机租户再用完删除」—— 那种写法实际是<b>永远删不掉</b>，
  * 每轮残留一个租户 + 一个快照，还会污染别的 IT 用
- * {@code SELECT snapshot_id FROM execution_snapshot LIMIT 1} 取快照的写法
- * （取到别的租户的快照 → 复合外键报错，现象与本 IT 无关）。
+ * {@code SELECT snapshot_id FROM execution_snapshot LIMIT 1} 取快照的写法。
  */
 public final class ItTenantProvisioner {
 
@@ -128,44 +137,53 @@ public final class ItTenantProvisioner {
                     ps.executeUpdate();
                 }
 
+                // Agent 是全局实体：dev-it-db.sh 种子已建好唯一的 agent1 + v1 + 快照，
+                // 本夹具只做两件事：全局 agent1 不存在时补建（保险），然后给本 IT 租户
+                // 加一条 ACTIVE 绑定（一个 Agent 分配给多个租户，正是新模型语义）。
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO agent (tenant_id, name) VALUES (?::uuid, 'agent1') "
-                                + "ON CONFLICT (tenant_id, name) DO NOTHING")) {
+                        "INSERT INTO agent (name, description) "
+                                + "SELECT 'agent1', 'IT 用 agent（全局）' "
+                                + "WHERE NOT EXISTS (SELECT 1 FROM agent WHERE name='agent1')")) {
+                    ps.executeUpdate();
+                }
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO tenant_agent_binding (tenant_id, agent_id, status, config) "
+                                + "SELECT ?::uuid, a.agent_id, 'ACTIVE', '{}'::jsonb "
+                                + "FROM agent a WHERE a.name='agent1' "
+                                + "AND NOT EXISTS (SELECT 1 FROM tenant_agent_binding b "
+                                + " WHERE b.tenant_id=?::uuid AND b.agent_id=a.agent_id)")) {
                     ps.setString(1, tenantId);
+                    ps.setString(2, tenantId);
                     ps.executeUpdate();
                 }
 
+                // v1 / 快照全局只有一份，同样用 NOT EXISTS 按 agent_id+version 判重。
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO agent_version (tenant_id, agent_id, version_number, definition) "
-                                + "SELECT a.tenant_id, a.agent_id, 1, '{\"kind\":\"tutor\"}'::jsonb "
-                                + "FROM agent a WHERE a.tenant_id = ?::uuid AND a.name = 'agent1' "
-                                + "ON CONFLICT (tenant_id, agent_id, version_number) DO NOTHING")) {
-                    ps.setString(1, tenantId);
+                        "INSERT INTO agent_version (agent_id, version_number, definition) "
+                                + "SELECT a.agent_id, 1, '{\"kind\":\"tutor\"}'::jsonb "
+                                + "FROM agent a WHERE a.name='agent1' "
+                                + "AND NOT EXISTS (SELECT 1 FROM agent_version v "
+                                + " WHERE v.agent_id=a.agent_id AND v.version_number=1)")) {
                     ps.executeUpdate();
                 }
 
                 // ⚠️⚠️ 这里**不能**只靠 `ON CONFLICT DO NOTHING` 保证幂等：
-                //     execution_snapshot 的唯一约束是 (tenant_id, snapshot_id)，
-                //     而 snapshot_id 每次插入都是新的随机值 ⇒ **冲突永远不会发生**，
-                //     `ON CONFLICT DO NOTHING` 等于没写。实测同一 slug 连跑 5 轮后
-                //     库里留下 5 份快照 —— 而快照被不可变触发器保护、**删不掉**，
-                //     于是「幂等创建」变成了每轮永久泄漏一份。
-                //     故必须用 NOT EXISTS 把「已有同版本快照」显式排除。
+                //     execution_snapshot 的快照 id 是随机值 ⇒ 冲突永不发生；
+                //     而它被不可变触发器保护、删不掉，故必须 NOT EXISTS 显式排除，
+                //     否则同一 slug 每轮永久泄漏一份快照。
                 try (PreparedStatement ps = conn.prepareStatement(
                         "INSERT INTO execution_snapshot "
-                                + "(tenant_id, version_id, agent_config, prompt_config, "
+                                + "(version_id, agent_config, prompt_config, "
                                 + " tool_contracts, run_config) "
-                                + "SELECT v.tenant_id, v.version_id, '{}', '{}', '{}', "
+                                + "SELECT v.version_id, '{}', '{}', '{}', "
                                 + "'{\"maxCostPerRun\":\"2.00\",\"maxLlmCalls\":12,"
                                 + "\"maxSteps\":20,\"approvalRequired\":\"OPTIONAL\"}' "
                                 + "FROM agent_version v JOIN agent a "
-                                + "  ON a.agent_id = v.agent_id AND a.tenant_id = v.tenant_id "
-                                + "WHERE v.tenant_id = ?::uuid AND a.name = 'agent1' "
-                                + "AND v.version_number = 1 "
+                                + "  ON a.agent_id = v.agent_id AND a.name='agent1' "
+                                + "WHERE v.version_number = 1 "
                                 + "AND NOT EXISTS ("
                                 + "  SELECT 1 FROM execution_snapshot s "
-                                + "   WHERE s.tenant_id = v.tenant_id AND s.version_id = v.version_id)")) {
-                    ps.setString(1, tenantId);
+                                + "   WHERE s.version_id = v.version_id)")) {
                     ps.executeUpdate();
                 }
 
@@ -184,22 +202,27 @@ public final class ItTenantProvisioner {
     }
 
     /**
-     * 取该租户自己的一个执行快照 id。
+     * 取该租户<b>可用的</b>一个执行快照 id。
      *
-     * <p>⚠️ <b>必须按租户过滤</b>：{@code SELECT snapshot_id FROM execution_snapshot LIMIT 1}
-     * 拿到的可能是别的租户的快照，插 Run 时复合外键 {@code (tenant_id, snapshot_id)} 会失败，
-     * 而报错信息只说外键冲突，不说「你取错租户的快照了」。
+     * <p>⚠️ <b>必须经 {@code tenant_agent_binding} 过滤</b>：快照已是全局实体、无 tenant 列，
+     * 「该租户能用哪些快照」完全由 ACTIVE 绑定决定。
+     * {@code SELECT snapshot_id FROM execution_snapshot LIMIT 1} 会拿到未分配给该租户的 Agent
+     * 的快照 —— 运行期 resolver 也会因无绑定拒用，造出来的 Run 与真实链路语义不符。
      */
     public static String snapshotId(DataSource adminDataSource, String tenantId) throws SQLException {
         try (Connection conn = adminDataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(
-                     "SELECT snapshot_id::text FROM execution_snapshot "
-                             + "WHERE tenant_id = ?::uuid LIMIT 1")) {
+                     "SELECT es.snapshot_id::text "
+                             + "FROM tenant_agent_binding b "
+                             + "JOIN agent_version v ON v.agent_id = b.agent_id "
+                             + "JOIN execution_snapshot es ON es.version_id = v.version_id "
+                             + "WHERE b.tenant_id = ?::uuid AND b.status='ACTIVE' "
+                             + "ORDER BY v.version_number DESC LIMIT 1")) {
             ps.setString(1, tenantId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
                     throw new IllegalStateException(
-                            "租户 " + tenantId + " 没有执行快照（provision 未生效？）");
+                            "租户 " + tenantId + " 没有绑定的执行快照（provision 未生效？）");
                 }
                 return rs.getString(1);
             }

@@ -189,7 +189,8 @@ public class AdminTenantRepository implements AdminTenantPort {
     /** 某租户的 Agent 定义数（绑定目标租户上下文）。 */
     @Override
     public long countAgentDefs(@NonNull String tenantId) {
-        return countBound(tenantId, "SELECT count(*) FROM agent WHERE tenant_id = ?::uuid");
+        return countBound(tenantId, "SELECT count(*) FROM tenant_agent_binding "
+                + "WHERE tenant_id = ?::uuid AND status = 'ACTIVE'");
     }
 
     /** 某租户的配置覆盖数（绑定目标租户上下文）。 */

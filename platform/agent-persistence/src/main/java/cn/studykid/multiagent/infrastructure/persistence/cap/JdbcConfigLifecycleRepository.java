@@ -113,7 +113,7 @@ public class JdbcConfigLifecycleRepository implements ConfigLifecyclePort {
                                 + " WHERE id = ? AND version = ? AND lifecycle_state = ?::cap_lifecycle_state";
                         case TYPE_AGENT -> "UPDATE cap_agent_def"
                                 + " SET lifecycle_state = ?::cap_lifecycle_state"
-                                + " WHERE tenant_id = ?::uuid AND agent_id = ?::uuid AND version = ?"
+                                + " WHERE agent_id = ?::uuid AND version = ?"
                                 + " AND lifecycle_state = ?::cap_lifecycle_state";
                         // ⚠️ 契约 / 策略的 id 是**可读字符串**（V23 / V24 的教训），
                         //    绝不能写 ?::uuid —— 非 UUID 形式的 id 会让整条语句报错，
@@ -162,8 +162,8 @@ public class JdbcConfigLifecycleRepository implements ConfigLifecyclePort {
                                 + " WHERE id = ? AND version = ?";
                         case TYPE_MCP_SERVER -> "SELECT lifecycle_state FROM cap_mcp_server_def"
                                 + " WHERE id = ? AND version = ?";
-                        case TYPE_AGENT -> "SELECT tenant_id::text, lifecycle_state FROM cap_agent_def"
-                                + " WHERE tenant_id = ?::uuid AND agent_id = ?::uuid AND version = ?";
+                        case TYPE_AGENT -> "SELECT lifecycle_state FROM cap_agent_def"
+                                + " WHERE agent_id = ?::uuid AND version = ?";
                         case TYPE_RESULT_CONTRACT -> "SELECT tenant_id::text, lifecycle_state FROM cap_result_contract"
                                 + " WHERE tenant_id = ?::uuid AND contract_id = ? AND version = ?";
                         case TYPE_ROUTING_POLICY -> "SELECT tenant_id::text, lifecycle_state FROM cap_routing_policy"
@@ -215,8 +215,7 @@ public class JdbcConfigLifecycleRepository implements ConfigLifecyclePort {
      * 却不知道真正的原因是「租户上下文没绑」。
      */
     private static boolean isTenantScoped(@NonNull String type) {
-        return TYPE_AGENT.equals(type)
-                || TYPE_RESULT_CONTRACT.equals(type)
+        return TYPE_RESULT_CONTRACT.equals(type)
                 || TYPE_ROUTING_POLICY.equals(type);
     }
 
@@ -249,7 +248,7 @@ public class JdbcConfigLifecycleRepository implements ConfigLifecyclePort {
      */
     private static @Nullable String shadowResourceType(@NonNull String type) {
         return switch (type) {
-            case TYPE_AGENT -> "cap_agent_def";
+            // Agent 已是全局实体，没有可比的租户行归属；不参与租户染色影子比对。
             case TYPE_RESULT_CONTRACT -> "cap_result_contract";
             case TYPE_ROUTING_POLICY -> "cap_routing_policy";
             default -> null;

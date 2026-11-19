@@ -96,10 +96,14 @@ class ConfigPublishManagementIT extends CapITBase {
      * **验不出「归档是否由本次真源派生」**。
      */
     private static String createBareAgent(String tenantId, String name) {
-        adminExec("INSERT INTO agent (tenant_id, name) VALUES ('" + tenantId
-                + "'::uuid, '" + name + "') ON CONFLICT (tenant_id, name) DO NOTHING");
-        return adminQuery("SELECT agent_id::text FROM agent WHERE tenant_id = '" + tenantId
-                + "'::uuid AND name = '" + name + "'");
+        // Agent 全局化：建全局行 + 目标租户的 ACTIVE 绑定（名字全局唯一）。
+        adminExec("INSERT INTO agent (name) VALUES ('" + name + "') "
+                + "ON CONFLICT (name) DO NOTHING");
+        String agentId = adminQuery("SELECT agent_id::text FROM agent WHERE name = '" + name + "'");
+        adminExec("INSERT INTO tenant_agent_binding (tenant_id, agent_id, status) VALUES ('"
+                + tenantId + "'::uuid, '" + agentId + "'::uuid, 'ACTIVE') "
+                + "ON CONFLICT (tenant_id, agent_id) DO UPDATE SET status='ACTIVE'");
+        return agentId;
     }
 
     private static long requestRows() {
@@ -254,8 +258,7 @@ class ConfigPublishManagementIT extends CapITBase {
 
         String where = " FROM execution_snapshot es "
                 + "JOIN agent_version v ON v.version_id = es.version_id "
-                + "WHERE v.tenant_id = '" + tenantA + "'::uuid "
-                + "AND v.agent_id = '" + agentId + "'::uuid "
+                + "WHERE v.agent_id = '" + agentId + "'::uuid "
                 + "AND v.version_number = 1";
         String expected = """
                 {"maxInputTokens":12000,"recentTurns":7,"strategy":"TIERED"}

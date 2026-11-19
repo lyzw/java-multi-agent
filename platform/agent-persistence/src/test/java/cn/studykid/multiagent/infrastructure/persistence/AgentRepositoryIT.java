@@ -249,10 +249,9 @@ class AgentRepositoryIT {
         String expected = adminQuery(
                 ("SELECT es.snapshot_id::text FROM execution_snapshot es "
                         + "JOIN agent_version v ON v.version_id = es.version_id "
-                        + "  AND v.tenant_id = es.tenant_id "
-                        + "WHERE es.tenant_id='%s'::uuid AND v.agent_id='%s'::uuid "
+                        + "WHERE v.agent_id='%s'::uuid "
                         + "ORDER BY v.version_number DESC LIMIT 1")
-                        .formatted(tenantA, agent.agentId()));
+                        .formatted(agent.agentId()));
         assertThat(resolved.snapshotId())
                 .as("⛔ 解析器须取最新已发布版本的快照（ORDER BY version_number DESC）")
                 .isEqualTo(expected);
@@ -261,6 +260,51 @@ class AgentRepositoryIT {
         assertThat(resolved.agentVersion())
                 .as("⛔ agentVersion 必须是快照所属的那一条版本行的 version_number")
                 .isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("✅ 绑定 pinned_version：固定旧版不跟随最新发布；固定到不可用版本时 fail-closed")
+    void pinnedBindingVersionOverridesLatest() {
+        String name = "agent-pinned-" + UUID.randomUUID();
+        var agent = manage.createAgent(tenantA, name, null, "creator-1");
+        manage.publishVersion(tenantA, agent.agentId(), "{\"kind\":\"tutor\",\"v\":1}", "publisher-1");
+        manage.publishVersion(tenantA, agent.agentId(), "{\"kind\":\"tutor\",\"v\":2}", "publisher-1");
+
+        String v1Snapshot = adminQuery(
+                ("SELECT es.snapshot_id::text FROM execution_snapshot es "
+                        + "JOIN agent_version v ON v.version_id = es.version_id "
+                        + "WHERE v.agent_id='%s'::uuid AND v.version_number=1")
+                        .formatted(agent.agentId()));
+        String pinSql = ("UPDATE tenant_agent_binding SET pinned_version=%d "
+                + "WHERE tenant_id='%s'::uuid AND agent_id='%s'::uuid")
+                .formatted(1, tenantA, agent.agentId());
+        String unpinSql = ("UPDATE tenant_agent_binding SET pinned_version=NULL "
+                + "WHERE tenant_id='%s'::uuid AND agent_id='%s'::uuid")
+                .formatted(tenantA, agent.agentId());
+        var resolver = new JdbcExecutionSnapshotResolver(appPool);
+
+        // 固定 v1：即使 v2 已发布，也必须解析回 v1 的那条快照。
+        adminExec(pinSql);
+        var pinned = resolver.resolveSnapshot(tenantA, agent.agentId()).orElseThrow();
+        assertThat(pinned.agentVersion())
+                .as("⛔ 绑定固定版本必须覆盖「总是取最新」的默认行为")
+                .isEqualTo(1);
+        assertThat(pinned.snapshotId()).isEqualTo(v1Snapshot);
+
+        // 控制组：清空固定版本后恢复跟随最新发布（v2）。
+        adminExec(unpinSql);
+        assertThat(resolver.resolveSnapshot(tenantA, agent.agentId()).orElseThrow().agentVersion())
+                .as("控制组：pinned_version 为空时必须取最新已发布版本")
+                .isEqualTo(2);
+
+        // 固定到一个不存在/未发布的版本：宁可不可用，也不能静默回退到 v2。
+        adminExec(("UPDATE tenant_agent_binding SET pinned_version=99 "
+                + "WHERE tenant_id='%s'::uuid AND agent_id='%s'::uuid")
+                .formatted(tenantA, agent.agentId()));
+        assertThat(resolver.resolveSnapshot(tenantA, agent.agentId()))
+                .as("⛔ 固定版本不可用时必须 fail-closed；回退最新版会让租户跑在未授权的版本上")
+                .isEmpty();
+        adminExec(unpinSql);
     }
 
     @Test
@@ -336,20 +380,19 @@ class AgentRepositoryIT {
     }
 
     private static long countVersions(String tenant, String agentId) {
+        // agent_version 是全局实体（无 tenant_id）：版本归属只由 agent_id 决定。
         return Long.parseLong(adminQuery(
-                "SELECT count(*)::text FROM agent_version "
-                        + "WHERE tenant_id='%s'::uuid AND agent_id='%s'::uuid"
-                        .formatted(tenant, agentId)));
+                "SELECT count(*)::text FROM agent_version WHERE agent_id='%s'::uuid"
+                        .formatted(agentId)));
     }
 
-    /** 该 Agent 名下已产生的执行快照行数（经 agent_version 关联）。 */
+    /** 该 Agent 名下已产生的执行快照行数（经 agent_version 关联，全局）。 */
     private static long countSnapshots(String tenant, String agentId) {
         return Long.parseLong(adminQuery(
                 "SELECT count(*)::text FROM execution_snapshot es "
                         + "JOIN agent_version v ON v.version_id = es.version_id "
-                        + "  AND v.tenant_id = es.tenant_id "
-                        + "WHERE es.tenant_id='%s'::uuid AND v.agent_id='%s'::uuid"
-                        .formatted(tenant, agentId)));
+                        + "WHERE v.agent_id='%s'::uuid"
+                        .formatted(agentId)));
     }
 
     /**
@@ -368,13 +411,11 @@ class AgentRepositoryIT {
                      "SELECT es.agent_config::text, es.prompt_config::text, "
                              + "es.tool_contracts::text, es.run_config::text, "
                              + "es.context_policy::text "
-                             + "FROM execution_snapshot es "
+                             +                      "FROM execution_snapshot es "
                              + "JOIN agent_version v ON v.version_id = es.version_id "
-                             + "  AND v.tenant_id = es.tenant_id "
-                             + "WHERE es.tenant_id=?::uuid AND v.agent_id=?::uuid "
+                             + "WHERE v.agent_id=?::uuid "
                              + "ORDER BY v.version_number")) {
-            ps.setString(1, tenant);
-            ps.setString(2, agentId);
+            ps.setString(1, agentId);
             try (var rs = ps.executeQuery()) {
                 while (rs.next()) {
                     rows.add(new String[] {
@@ -396,6 +437,17 @@ class AgentRepositoryIT {
         assertThat(mapper.readTree(actual))
                 .as("definition 作为 jsonb 会被 PG 规范化（键序/空白），须语义比较而非字串比较")
                 .isEqualTo(mapper.readTree(expected));
+    }
+
+    /** 管理连接执行夹具 UPDATE（绑定表有 FORCE RLS，测试造数需绕过）。 */
+    private static void adminExec(String sql) {
+        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
+             Connection conn = adminPool.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.executeUpdate();
+        } catch (Exception e) {
+            throw new IllegalStateException("管理员执行失败: " + sql, e);
+        }
     }
 
     private static String adminQuery(String sql) {

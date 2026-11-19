@@ -163,9 +163,9 @@ class CapCompensationIT extends CapITBase {
 
     private String seedAgent(String tenantId, String enabledSkillsJson) {
         String agent = createAgentWithVersion(tenantId, agentName("it-agent"), "{}", true);
-        adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
+        adminExec("INSERT INTO cap_agent_def (agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
-                + " VALUES ('" + tenantId + "'::uuid, '" + agent + "'::uuid, 1, 'it agent',"
+                + " VALUES ('" + agent + "'::uuid, 1, 'it agent',"
                 + " '[\"TEACHER\"]'::jsonb, '" + enabledSkillsJson + "'::jsonb, '{}'::jsonb,"
                 + " 'fp-agent', now())");
         return agent;

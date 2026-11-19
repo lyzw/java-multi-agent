@@ -223,9 +223,9 @@ class ConfigLifecycleIT extends CapITBase {
 
         // Agent 启用该 Skill → 闭包解析必然失败
         String agentId = createAgentWithVersion(tenantA, agentName("it-lc-agent"), "{}", true);
-        adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
+        adminExec("INSERT INTO cap_agent_def (agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
-                + " VALUES ('" + tenantA + "'::uuid, '" + agentId + "'::uuid, 1, 'it agent',"
+                + " VALUES ('" + agentId + "'::uuid, 1, 'it agent',"
                 + " '[\"TEACHER\"]'::jsonb, '[\"" + SKILL_ID + "\"]'::jsonb, '{}'::jsonb,"
                 + " 'fp-agent', now())");
 

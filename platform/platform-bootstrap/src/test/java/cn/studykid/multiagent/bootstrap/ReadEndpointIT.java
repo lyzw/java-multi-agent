@@ -165,8 +165,11 @@ class ReadEndpointIT {
                     "INSERT INTO run (run_id, tenant_id, snapshot_id, idempotency_key, "
                   + "request_digest, state, input_payload, result_payload, completed_at, "
                   + "correlation_id, created_at) "
-                  + "VALUES (?::uuid, ?::uuid, (SELECT snapshot_id FROM execution_snapshot "
-                  + "  WHERE tenant_id = ?::uuid LIMIT 1), ?, ?, ?::run_state, "
+                  + "VALUES (?::uuid, ?::uuid, (SELECT es.snapshot_id FROM tenant_agent_binding b "
+                  + "  JOIN agent_version v ON v.agent_id=b.agent_id "
+                  + "  JOIN execution_snapshot es ON es.version_id=v.version_id "
+                  + "  WHERE b.tenant_id=?::uuid AND b.status='ACTIVE' "
+                  + "  ORDER BY v.version_number DESC LIMIT 1), ?, ?, ?::run_state, "
                   + "  '{}'::jsonb, " + resultPayload + ", " + completedAt + ", ?, now())")) {
                 ps.setString(1, runId);
                 ps.setString(2, tenantId);

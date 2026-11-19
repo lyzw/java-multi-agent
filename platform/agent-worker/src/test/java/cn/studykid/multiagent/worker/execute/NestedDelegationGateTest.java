@@ -275,17 +275,17 @@ class NestedDelegationGateTest {
 
         InMemoryAgentDefs(CapAgentDef... defs) {
             for (CapAgentDef def : defs) {
-                rows.put(key(def.tenantId(), def.agentId(), def.version()), def);
+                rows.put(key(def.agentId(), def.version()), def);
             }
         }
 
-        private static String key(String tenantId, String agentId, int version) {
-            return tenantId + "/" + agentId + "@" + version;
+        private static String key(String agentId, int version) {
+            return agentId + "@" + version;
         }
 
         @Override
         public boolean insert(@NonNull CapAgentDef def) {
-            String k = key(def.tenantId(), def.agentId(), def.version());
+            String k = key(def.agentId(), def.version());
             if (rows.containsKey(k)) {
                 return false;
             }
@@ -296,14 +296,13 @@ class NestedDelegationGateTest {
         @Override
         public @NonNull Optional<CapAgentDef> find(@NonNull String tenantId,
                                                    @NonNull String agentId, int version) {
-            return Optional.ofNullable(rows.get(key(tenantId, agentId, version)));
+            return Optional.ofNullable(rows.get(key(agentId, version)));
         }
 
         @Override
         public @NonNull Optional<CapAgentDef> findLatest(@NonNull String tenantId,
                                                          @NonNull String agentId) {
             return rows.values().stream()
-                    .filter(d -> tenantId.equals(d.tenantId()))
                     .filter(d -> agentId.equals(d.agentId()))
                     .max((x, y) -> Integer.compare(x.version(), y.version()));
         }

@@ -310,29 +310,34 @@ class RunCreationEndpointIT {
      */
     private Fixture publishedAgent() {
         String agentId = UUID.randomUUID().toString();
+        // Agent 全局化：全局行 + 目标租户绑定。
         exec("""
-                INSERT INTO agent (agent_id, tenant_id, name, description, created_at, updated_at)
-                VALUES ('%s'::uuid, '%s'::uuid, 'rc-%s', 'seeded', now(), now())
-                """.formatted(agentId, tenant(), agentId));
+                INSERT INTO agent (agent_id, name, description, created_at, updated_at)
+                VALUES ('%s'::uuid, 'rc-%s', 'seeded', now(), now())
+                """.formatted(agentId, agentId));
+        exec("""
+                INSERT INTO tenant_agent_binding (tenant_id, agent_id, status)
+                VALUES ('%s'::uuid, '%s'::uuid, 'ACTIVE')
+                """.formatted(tenant(), agentId));
 
         String versionId = execReturning("""
                 INSERT INTO agent_version
-                    (tenant_id, agent_id, version_number, definition, published_at, created_at)
-                VALUES ('%s'::uuid, '%s'::uuid, 1, '{}'::jsonb, now(), now())
+                    (agent_id, version_number, definition, published_at, created_at)
+                VALUES ('%s'::uuid, 1, '{}'::jsonb, now(), now())
                 RETURNING version_id::text
-                """.formatted(tenant(), agentId));
+                """.formatted(agentId));
 
         // ⚠️ 回读的是 snapshot_id（execution_snapshot 的主键），
         //    而非 version_id —— 外键 run_snapshot_fk 引的是前者。
         String snapshotId = execReturning("""
                 INSERT INTO execution_snapshot
-                    (tenant_id, version_id, agent_config, prompt_config,
+                    (version_id, agent_config, prompt_config,
                      tool_contracts, run_config, created_at)
-                VALUES ('%s'::uuid, '%s'::uuid, '{}', '{}', '{}',
+                VALUES ('%s'::uuid, '{}', '{}', '{}',
                         '{"maxCostPerRun":"2.00","maxLlmCalls":12,"maxSteps":20,
                           "approvalRequired":"OPTIONAL"}'::jsonb, now())
                 RETURNING snapshot_id::text
-                """.formatted(tenant(), versionId));
+                """.formatted(versionId));
 
         return new Fixture(agentId, snapshotId);
     }
@@ -341,14 +346,18 @@ class RunCreationEndpointIT {
     private Fixture publishedButNoSnapshotAgent() {
         String agentId = UUID.randomUUID().toString();
         exec("""
-                INSERT INTO agent (agent_id, tenant_id, name, description, created_at, updated_at)
-                VALUES ('%s'::uuid, '%s'::uuid, 'rc-ns-%s', 'seeded', now(), now())
-                """.formatted(agentId, tenant(), agentId));
+                INSERT INTO agent (agent_id, name, description, created_at, updated_at)
+                VALUES ('%s'::uuid, 'rc-ns-%s', 'seeded', now(), now())
+                """.formatted(agentId, agentId));
+        exec("""
+                INSERT INTO tenant_agent_binding (tenant_id, agent_id, status)
+                VALUES ('%s'::uuid, '%s'::uuid, 'ACTIVE')
+                """.formatted(tenant(), agentId));
         exec("""
                 INSERT INTO agent_version
-                    (tenant_id, agent_id, version_number, definition, published_at, created_at)
-                VALUES ('%s'::uuid, '%s'::uuid, 1, '{}'::jsonb, now(), now())
-                """.formatted(tenant(), agentId));
+                    (agent_id, version_number, definition, published_at, created_at)
+                VALUES ('%s'::uuid, 1, '{}'::jsonb, now(), now())
+                """.formatted(agentId));
         return new Fixture(agentId, null);
     }
 
@@ -356,21 +365,25 @@ class RunCreationEndpointIT {
     private Fixture unpublishedAgent() {
         String agentId = UUID.randomUUID().toString();
         exec("""
-                INSERT INTO agent (agent_id, tenant_id, name, description, created_at, updated_at)
-                VALUES ('%s'::uuid, '%s'::uuid, 'rc-d-%s', 'seeded', now(), now())
-                """.formatted(agentId, tenant(), agentId));
+                INSERT INTO agent (agent_id, name, description, created_at, updated_at)
+                VALUES ('%s'::uuid, 'rc-d-%s', 'seeded', now(), now())
+                """.formatted(agentId, agentId));
+        exec("""
+                INSERT INTO tenant_agent_binding (tenant_id, agent_id, status)
+                VALUES ('%s'::uuid, '%s'::uuid, 'ACTIVE')
+                """.formatted(tenant(), agentId));
         String versionId = execReturning("""
                 INSERT INTO agent_version
-                    (tenant_id, agent_id, version_number, definition, published_at, created_at)
-                VALUES ('%s'::uuid, '%s'::uuid, 1, '{}'::jsonb, NULL, now())
+                    (agent_id, version_number, definition, published_at, created_at)
+                VALUES ('%s'::uuid, 1, '{}'::jsonb, NULL, now())
                 RETURNING version_id::text
-                """.formatted(tenant(), agentId));
+                """.formatted(agentId));
         exec("""
                 INSERT INTO execution_snapshot
-                    (tenant_id, version_id, agent_config, prompt_config,
+                    (version_id, agent_config, prompt_config,
                      tool_contracts, run_config, created_at)
-                VALUES ('%s'::uuid, '%s'::uuid, '{}', '{}', '{}', '{}'::jsonb, now())
-                """.formatted(tenant(), versionId));
+                VALUES ('%s'::uuid, '{}', '{}', '{}', '{}'::jsonb, now())
+                """.formatted(versionId));
         return new Fixture(agentId, versionId);
     }
 
@@ -386,13 +399,13 @@ class RunCreationEndpointIT {
         String agentId = queryOrNull("""
                 SELECT cd.agent_id::text
                 FROM cap_agent_def cd
-                JOIN agent a ON a.agent_id = cd.agent_id AND a.tenant_id = cd.tenant_id
+                JOIN agent a ON a.agent_id = cd.agent_id
+                JOIN tenant_agent_binding b ON b.agent_id = cd.agent_id
                 JOIN agent_version av ON av.agent_id = cd.agent_id
-                    AND av.tenant_id = cd.tenant_id AND av.version_number = cd.version
+                    AND av.version_number = cd.version
                     AND av.published_at IS NOT NULL
                 JOIN execution_snapshot es ON es.version_id = av.version_id
-                    AND es.tenant_id = av.tenant_id
-                WHERE cd.tenant_id = '%s'::uuid
+                WHERE b.tenant_id = '%s'::uuid AND b.status='ACTIVE'
                   AND a.name NOT LIKE 'it-%%'
                   AND jsonb_array_length(cd.enabled_skills) > 0
                 LIMIT 1
@@ -576,8 +589,7 @@ class RunCreationEndpointIT {
         // ⛔ 发布即产快照：库中必须真的多了一行，且挂在该版本上
         String snapshotId = queryOrNull(
                 "SELECT snapshot_id::text FROM execution_snapshot "
-                        + "WHERE tenant_id = '" + tenant() + "'::uuid "
-                        + "AND version_id = '" + versionId + "'::uuid");
+                        + "WHERE version_id = '" + versionId + "'::uuid");
         assertThat(snapshotId)
                 .as("⛔ 发布必须同时产出执行快照 —— 否则该 Agent 永远不可运行")
                 .isNotBlank();

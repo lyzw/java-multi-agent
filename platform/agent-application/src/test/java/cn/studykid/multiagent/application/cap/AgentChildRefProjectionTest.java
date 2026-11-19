@@ -111,7 +111,7 @@ class AgentChildRefProjectionTest {
                         + "投影能力缺失不得成为整个平台级发布的隐形前置依赖")
                 .doesNotThrowAnyException();
 
-        assertThat(world.agents).containsKey(TENANT + "/" + PARENT + "@1");
+        assertThat(world.agents).containsKey(PARENT + "@1");
     }
 
     @Test
@@ -296,7 +296,7 @@ class AgentChildRefProjectionTest {
         final CapAgentDefPort agentDefs = new CapAgentDefPort() {
             @Override
             public boolean insert(CapAgentDef def) {
-                String key = def.tenantId() + "/" + def.agentId() + "@" + def.version();
+                String key = def.agentId() + "@" + def.version();
                 if (agents.containsKey(key)) {
                     return false;
                 }
@@ -307,7 +307,7 @@ class AgentChildRefProjectionTest {
 
             @Override
             public Optional<CapAgentDef> find(String tenantId, String agentId, int version) {
-                CapAgentDef found = agents.get(tenantId + "/" + agentId + "@" + version);
+                CapAgentDef found = agents.get(agentId + "@" + version);
                 if (found != null) {
                     return Optional.of(found);
                 }

@@ -38,8 +38,7 @@ public final class AgentReleaseArchive {
     @NonNull
     public static String deriveDefinition(@NonNull CapAgentDef agent) {
         StringBuilder sb = new StringBuilder(320);
-        sb.append("{\"tenantId\":").append(quote(agent.tenantId()))
-                .append(",\"agentId\":").append(quote(agent.agentId()))
+        sb.append("{\"agentId\":").append(quote(agent.agentId()))
                 .append(",\"version\":").append(agent.version())
                 .append(",\"name\":").append(agent.name() == null ? "null" : quote(agent.name()))
                 .append(",\"description\":")

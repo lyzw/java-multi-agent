@@ -57,6 +57,10 @@ class MultiAgentSchemaStructureTest {
     private static final List<String> GUARDED_TABLES =
             List.of("agent_invocation", "cap_agent_child_ref", "cap_result_contract");
 
+    /** 其中仍是租户级、必须挂 RLS 的两张表。 */
+    private static final List<String> TENANT_RLS_TABLES =
+            List.of("agent_invocation", "cap_result_contract");
+
     /** 委派记录的状态集合（07 §状态与失败语义）：<b>封闭</b>，不多不少。 */
     private static final Set<String> INVOCATION_STATUSES = Set.of(
             "QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "UNKNOWN");
@@ -144,9 +148,12 @@ class MultiAgentSchemaStructureTest {
 
         assertThat(s.columns().keySet())
                 .as("cap_agent_child_ref 缺少关键列")
-                .contains("tenant_id", "parent_agent_id", "parent_release_version",
+                .contains("parent_agent_id", "parent_release_version",
                         "child_agent_id", "child_release_version",
                         "ordinal", "required", "created_at");
+        assertThat(s.columns().keySet())
+                .as("cap_agent_child_ref 已是全局关系投影，不应再有 tenant_id")
+                .doesNotContain("tenant_id");
 
         // ⚠️ 父子两侧都必须是**固定版本**（原 V19 的不可妥协约束 5）。
         assertThat(s.columnType("parent_release_version")).isEqualToIgnoringCase("INTEGER");
@@ -199,14 +206,23 @@ class MultiAgentSchemaStructureTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("⚠️ 三张表的主键都必须包含 tenant_id")
+    @DisplayName("⚠️ 租户级表的主键必须包含 tenant_id")
     void primaryKeysAreTenantScoped() {
-        for (String table : GUARDED_TABLES) {
+        for (String table : TENANT_RLS_TABLES) {
             assertThat(SCHEMAS.get(table).primaryKey())
                     .as("%s 的主键必须以 tenant_id 打头（否则跨租户寻址失去隔离维度）", table)
                     .isNotEmpty()
                     .startsWith("tenant_id");
         }
+    }
+
+    @Test
+    @DisplayName("⚠️ cap_agent_child_ref 主键必须按父子固定版本唯一（全局，无 tenant_id）")
+    void childRefPrimaryKeyIsGlobal() {
+        assertThat(SCHEMAS.get("cap_agent_child_ref").primaryKey())
+                .as("全局关系投影的主键应由父子两侧的固定版本组成")
+                .containsExactly("parent_agent_id", "parent_release_version",
+                        "child_agent_id", "child_release_version");
     }
 
     @Test
@@ -233,13 +249,22 @@ class MultiAgentSchemaStructureTest {
                 .hasSize(2);
 
         for (ForeignKey fk : toAgentDef) {
-            // ⚠️ 复合外键的第一列必须是 tenant_id —— 顺带保证租户一致。
+            // ⚠️ 全局 Agent 关系不再带 tenant_id：父/子各自按 (agent_id, version) 定位。
             assertThat(fk.columns())
-                    .as("复合外键 %s 必须以 tenant_id 打头（顺带保证租户一致）", fk.name())
-                    .startsWith("tenant_id");
+                    .as("复合外键 %s 不得再带 tenant_id（Agent 已是全局实体）", fk.name())
+                    .doesNotContain("tenant_id");
             assertThat(fk.referencedColumns())
-                    .as("复合外键 %s 必须指向 (tenant_id, agent_id, version)", fk.name())
-                    .containsExactly("tenant_id", "agent_id", "version");
+                    .as("复合外键 %s 必须指向 (agent_id, version)", fk.name())
+                    .containsExactly("agent_id", "version");
+            if (fk.name().contains("parent")) {
+                assertThat(fk.columns())
+                        .as("父侧外键必须指向父 Agent 的固定版本")
+                        .containsExactly("parent_agent_id", "parent_release_version");
+            } else {
+                assertThat(fk.columns())
+                        .as("子侧外键必须指向子 Agent 的固定版本")
+                        .containsExactly("child_agent_id", "child_release_version");
+            }
             // ⚠️ 子引用被删 → 投影行必须跟着删（ON DELETE CASCADE），
             //    否则父版本删除后会留下悬空的边。
             assertThat(fk.onDelete())
@@ -344,9 +369,9 @@ class MultiAgentSchemaStructureTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("⚠️ 三张表都必须启用 RLS **且 FORCE**（未 FORCE 时表 owner 仍能跨租户读）")
-    void allThreeTablesAreRlsForced() {
-        for (String table : GUARDED_TABLES) {
+    @DisplayName("⚠️ 租户级表必须启用 RLS **且 FORCE**；全局关系投影不得挂租户 RLS")
+    void tenantTablesAreRlsForced() {
+        for (String table : TENANT_RLS_TABLES) {
             assertThat(PlatformDdl.rlsTables("ENABLE"))
                     .as("%s 未启用 RLS → 跨租户泄漏（R-004 · Sev-0）", table)
                     .contains("public." + table);
@@ -355,12 +380,15 @@ class MultiAgentSchemaStructureTest {
                             + "隔离形同虚设", table)
                     .contains("public." + table);
         }
+        assertThat(PlatformDdl.rlsTables("ENABLE"))
+                .as("cap_agent_child_ref 是全局关系投影，挂租户 RLS 会让跨租户共享的父子边不可见")
+                .doesNotContain("public.cap_agent_child_ref");
     }
 
     @Test
     @DisplayName("⚠️ RLS 策略必须**读写双向**收口（只写 USING 不写 WITH CHECK 等于只挡读）")
     void rlsPoliciesGuardBothReadsAndWrites() {
-        for (String table : GUARDED_TABLES) {
+        for (String table : TENANT_RLS_TABLES) {
             List<String> policies = SCHEMAS.get(table).policies();
             assertThat(policies)
                     .as("%s 没有 RLS 策略", table)

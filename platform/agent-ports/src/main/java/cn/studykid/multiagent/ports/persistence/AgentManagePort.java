@@ -75,7 +75,7 @@ public interface AgentManagePort {
         private static final long serialVersionUID = 1L;
 
         public DuplicateAgentNameException(String name) {
-            super("租户内已存在同名 Agent: " + name);
+            super("已存在同名 Agent（全局唯一）: " + name);
         }
     }
 }

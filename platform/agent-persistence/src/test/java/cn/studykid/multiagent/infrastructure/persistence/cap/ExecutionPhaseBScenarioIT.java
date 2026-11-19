@@ -175,9 +175,9 @@ class ExecutionPhaseBScenarioIT extends CapITBase {
 
     private String seedAgent(String tenantId) {
         String agentId = createAgentWithVersion(tenantId, agentName("it-r2b-agent"), "{}", true);
-        adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
+        adminExec("INSERT INTO cap_agent_def (agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
-                + " VALUES ('" + tenantId + "'::uuid, '" + agentId + "'::uuid, 1, 'it agent',"
+                + " VALUES ('" + agentId + "'::uuid, 1, 'it agent',"
                 + " '[\"TEACHER\"]'::jsonb, '[\"" + SKILL_ID + "\"]'::jsonb, '{}'::jsonb,"
                 + " 'fp-agent', now())");
         return agentId;

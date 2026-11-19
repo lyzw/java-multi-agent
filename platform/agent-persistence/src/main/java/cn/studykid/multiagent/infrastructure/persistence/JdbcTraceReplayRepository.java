@@ -291,11 +291,19 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
 
     private Optional<Map<String, Object>> readSnapshot(Connection conn, String tenantId,
                                                        String snapshotId) throws SQLException {
+        // ⚠️ execution_snapshot 已全局化：表本身没有 tenant_id、也不受 RLS 保护。
+        //    租户可见性改由 tenant_agent_binding（ACTIVE 绑定）收口——
+        //    否则任意租户只要拿到 snapshotId 就能读别的租户 Agent 的配置快照。
+        //    绑定表仍有 FORCE RLS 且连接已绑租户，这里再带显式 tenant 谓词做双保险。
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT tenant_id, snapshot_id, version_id, agent_config, prompt_config, "
-                        + "       tool_contracts, run_config, created_at "
-                        + "FROM public.execution_snapshot "
-                        + "WHERE tenant_id = ?::uuid AND snapshot_id = ?::uuid")) {
+                "SELECT es.snapshot_id, es.version_id, es.agent_config, es.prompt_config, "
+                        + "       es.tool_contracts, es.run_config, es.created_at "
+                        + "FROM public.execution_snapshot es "
+                        + "JOIN public.agent_version v ON v.version_id = es.version_id "
+                        + "JOIN public.tenant_agent_binding b "
+                        + "  ON b.agent_id = v.agent_id AND b.tenant_id = ?::uuid "
+                        + " AND b.status = 'ACTIVE' "
+                        + "WHERE es.snapshot_id = ?::uuid")) {
             ps.setString(1, tenantId);
             ps.setString(2, snapshotId);
             shadowCompare("execution_snapshot", tenantId, true);
@@ -303,8 +311,8 @@ public class JdbcTraceReplayRepository implements TraceReplayPort {
                 if (!rs.next()) {
                     return Optional.empty();
                 }
-                String rowTenant = rs.getString("tenant_id");
-                shadowTaint("execution_snapshot", tenantId, rowTenant);
+                // 全局表的「行归属」只能来自绑定侧：本行可见即意味着该租户有 ACTIVE 绑定。
+                shadowTaint("execution_snapshot", tenantId, tenantId);
                 Map<String, Object> out = new LinkedHashMap<>();
                 out.put("snapshotId", rs.getString("snapshot_id"));
                 out.put("versionId", rs.getString("version_id"));

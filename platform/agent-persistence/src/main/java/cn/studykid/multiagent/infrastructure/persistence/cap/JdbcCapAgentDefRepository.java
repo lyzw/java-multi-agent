@@ -45,78 +45,87 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
     /** 影子比对/染色的资源类型（P0-1b 第 1 批）。 */
     private static final String RESOURCE_TYPE = "cap_agent_def";
 
+    private static final String GLOBAL_CONTEXT_TENANT = "00000000-0000-0000-0000-000000000000";
+
     private static final String SQL_INSERT = """
             INSERT INTO cap_agent_def
-                (tenant_id, agent_id, version, name, description, roles, enabled_skills,
+                (agent_id, version, name, description, roles, enabled_skills,
                  skill_bundles, capability_tags, overrides, orchestration, instructions,
                  model_ref, generation_params, config_fingerprint,
                  schema_version, created_at, updated_at, published_at)
-            VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb,
+            VALUES (?::uuid, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb,
                     ?::jsonb, ?::jsonb, ?::jsonb, ?, ?::jsonb, ?, ?, ?, ?, ?)
-            ON CONFLICT (tenant_id, agent_id, version) DO NOTHING
+            ON CONFLICT (agent_id, version) DO NOTHING
             """;
 
     private static final String SQL_FIND = """
-            SELECT tenant_id::text, agent_id::text, version, name, description,
-                   roles::text, enabled_skills::text, skill_bundles::text,
-                   capability_tags::text, overrides::text, orchestration::text,
-                   instructions::text, model_ref, generation_params::text,
-                   config_fingerprint,
-                   schema_version, created_at, published_at
-            FROM cap_agent_def
-            WHERE tenant_id = ?::uuid AND agent_id = ?::uuid AND version = ?
+            SELECT d.agent_id::text, d.version, d.name, d.description,
+                   d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
+                   d.capability_tags::text, d.overrides::text, d.orchestration::text,
+                   d.instructions::text, d.model_ref, d.generation_params::text,
+                   d.config_fingerprint,
+                   d.schema_version, d.created_at, d.published_at
+            FROM cap_agent_def d
+            WHERE d.agent_id = ?::uuid AND d.version = ?
+              AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                           WHERE b.tenant_id = ?::uuid
+                             AND b.agent_id = d.agent_id
+                             AND b.status = 'ACTIVE')
             """;
 
     private static final String SQL_FIND_LATEST = """
-            SELECT tenant_id::text, agent_id::text, version, name, description,
-                   roles::text, enabled_skills::text, skill_bundles::text,
-                   capability_tags::text, overrides::text, orchestration::text,
-                   instructions::text, model_ref, generation_params::text,
-                   config_fingerprint,
-                   schema_version, created_at, published_at
-            FROM cap_agent_def
-            WHERE tenant_id = ?::uuid AND agent_id = ?::uuid
-            ORDER BY version DESC
+            SELECT d.agent_id::text, d.version, d.name, d.description,
+                   d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
+                   d.capability_tags::text, d.overrides::text, d.orchestration::text,
+                   d.instructions::text, d.model_ref, d.generation_params::text,
+                   d.config_fingerprint,
+                   d.schema_version, d.created_at, d.published_at
+            FROM cap_agent_def d
+            WHERE d.agent_id = ?::uuid
+              AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                           WHERE b.tenant_id = ?::uuid
+                             AND b.agent_id = d.agent_id
+                             AND b.status = 'ACTIVE')
+            ORDER BY d.version DESC
             LIMIT 1
             """;
 
     private static final String SQL_FIND_LATEST_PUBLISHED = """
-            SELECT tenant_id::text, agent_id::text, version, name, description,
-                   roles::text, enabled_skills::text, skill_bundles::text,
-                   capability_tags::text, overrides::text, orchestration::text,
-                   instructions::text, model_ref, generation_params::text,
-                   config_fingerprint,
-                   schema_version, created_at, published_at
-            FROM cap_agent_def
-            WHERE tenant_id = ?::uuid AND agent_id = ?::uuid
-              AND published_at IS NOT NULL
-            ORDER BY version DESC
+            SELECT d.agent_id::text, d.version, d.name, d.description,
+                   d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
+                   d.capability_tags::text, d.overrides::text, d.orchestration::text,
+                   d.instructions::text, d.model_ref, d.generation_params::text,
+                   d.config_fingerprint,
+                   d.schema_version, d.created_at, d.published_at
+            FROM cap_agent_def d
+            WHERE d.agent_id = ?::uuid
+              AND d.published_at IS NOT NULL
+              AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                           WHERE b.tenant_id = ?::uuid
+                             AND b.agent_id = d.agent_id
+                             AND b.status = 'ACTIVE')
+            ORDER BY d.version DESC
             LIMIT 1
             """;
 
     /**
-     * 每 Agent 一行的最高版本（按 {@code agent_id} 分组取 {@code MAX(version)}）。
-     *
-     * <p>⚠️ 与 {@code JdbcCapMcpServerDefRepository} 的 {@code listAll} 同口径；
-     * ⚠️ {@code cap_agent_def} 是 RLS 表 —— 必须经 {@code tenantConnection(tenantId)}
-     * 绑定租户上下文后查询（外层 WHERE tenant_id 与 RLS 策略双保险）。
+     * 每个已绑定 Agent 一行的最高版本。定义表是全局的，租户可见性完全由绑定表决定。
      */
     private static final String SQL_LIST_LATEST_PER_AGENT = """
-            SELECT tenant_id::text, agent_id::text, version, name, description,
-                   roles::text, enabled_skills::text, skill_bundles::text,
-                   capability_tags::text, overrides::text, orchestration::text,
-                   instructions::text, model_ref, generation_params::text,
-                   config_fingerprint,
-                   schema_version, created_at, published_at
-            FROM cap_agent_def
-            WHERE tenant_id = ?::uuid
-              AND (agent_id, version) IN (
-                  SELECT agent_id, MAX(version)
-                    FROM cap_agent_def
-                   WHERE tenant_id = ?::uuid
-                   GROUP BY agent_id
-              )
-            ORDER BY agent_id ASC
+            SELECT d.agent_id::text, d.version, d.name, d.description,
+                   d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
+                   d.capability_tags::text, d.overrides::text, d.orchestration::text,
+                   d.instructions::text, d.model_ref, d.generation_params::text,
+                   d.config_fingerprint,
+                   d.schema_version, d.created_at, d.published_at
+            FROM cap_agent_def d
+            JOIN tenant_agent_binding b
+              ON b.agent_id = d.agent_id
+             AND b.tenant_id = ?::uuid
+             AND b.status = 'ACTIVE'
+            WHERE d.version = (SELECT max(d2.version) FROM cap_agent_def d2
+                                WHERE d2.agent_id = d.agent_id)
+            ORDER BY d.agent_id ASC
             """;
 
     private final DataSource dataSource;
@@ -155,31 +164,30 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
     @Override
     public boolean insert(@NonNull CapAgentDef def) {
         return TransactionalConnectionHolder.inTransaction(
-                dataSource, tenantContext(def.tenantId()),
+                dataSource, tenantContext(GLOBAL_CONTEXT_TENANT),
                 conn -> {
                     try (PreparedStatement ps = conn.prepareStatement(SQL_INSERT)) {
-                        ps.setString(1, def.tenantId());
-                        ps.setString(2, def.agentId());
-                        ps.setInt(3, def.version());
-                        ps.setString(4, def.name());
-                        ps.setString(5, def.description());
-                        ps.setString(6, toJson(def.roles()));
-                        ps.setString(7, toJson(def.enabledSkills()));
-                        ps.setString(8, toJson(def.skillBundles()));
-                        ps.setString(9, toJson(def.capabilityTags()));
-                        ps.setString(10, def.overrides());
-                        ps.setString(11, def.orchestration());
-                        ps.setString(12, def.instructions());
-                        ps.setString(13, def.modelRef());
-                        ps.setString(14, def.generationParams());
-                        ps.setString(15, def.configFingerprint());
-                        ps.setInt(16, def.schemaVersion());
+                        ps.setString(1, def.agentId());
+                        ps.setInt(2, def.version());
+                        ps.setString(3, def.name());
+                        ps.setString(4, def.description());
+                        ps.setString(5, toJson(def.roles()));
+                        ps.setString(6, toJson(def.enabledSkills()));
+                        ps.setString(7, toJson(def.skillBundles()));
+                        ps.setString(8, toJson(def.capabilityTags()));
+                        ps.setString(9, def.overrides());
+                        ps.setString(10, def.orchestration());
+                        ps.setString(11, def.instructions());
+                        ps.setString(12, def.modelRef());
+                        ps.setString(13, def.generationParams());
+                        ps.setString(14, def.configFingerprint());
+                        ps.setInt(15, def.schemaVersion());
+                        ps.setTimestamp(16, Timestamp.from(def.createdAt()));
                         ps.setTimestamp(17, Timestamp.from(def.createdAt()));
-                        ps.setTimestamp(18, Timestamp.from(def.createdAt()));
                         if (def.publishedAt() == null) {
-                            ps.setNull(19, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                            ps.setNull(18, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
                         } else {
-                            ps.setTimestamp(19, Timestamp.from(def.publishedAt()));
+                            ps.setTimestamp(18, Timestamp.from(def.publishedAt()));
                         }
                         return ps.executeUpdate() > 0;
                     }
@@ -195,13 +203,13 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
                 dataSource, tenantContext(tenantId),
                 conn -> {
                     try (PreparedStatement ps = conn.prepareStatement(SQL_FIND)) {
-                        ps.setString(1, tenantId);
-                        ps.setString(2, agentId);
-                        ps.setInt(3, version);
+                        ps.setString(1, agentId);
+                        ps.setInt(2, version);
+                        ps.setString(3, tenantId);
                         try (ResultSet rs = ps.executeQuery()) {
                             Optional<CapAgentDef> row =
                                     rs.next() ? Optional.of(map(rs)) : Optional.<CapAgentDef>empty();
-                            row.ifPresent(d -> shadowTaint(RESOURCE_TYPE, tenantId, d.tenantId()));
+                            row.ifPresent(d -> shadowTaint(RESOURCE_TYPE, tenantId, tenantId));
                             return row;
                         }
                     }
@@ -216,12 +224,12 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
                 dataSource, tenantContext(tenantId),
                 conn -> {
                     try (PreparedStatement ps = conn.prepareStatement(SQL_FIND_LATEST)) {
-                        ps.setString(1, tenantId);
-                        ps.setString(2, agentId);
+                        ps.setString(1, agentId);
+                        ps.setString(2, tenantId);
                         try (ResultSet rs = ps.executeQuery()) {
                             Optional<CapAgentDef> row =
                                     rs.next() ? Optional.of(map(rs)) : Optional.<CapAgentDef>empty();
-                            row.ifPresent(d -> shadowTaint(RESOURCE_TYPE, tenantId, d.tenantId()));
+                            row.ifPresent(d -> shadowTaint(RESOURCE_TYPE, tenantId, tenantId));
                             return row;
                         }
                     }
@@ -236,12 +244,12 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
                 dataSource, tenantContext(tenantId),
                 conn -> {
                     try (PreparedStatement ps = conn.prepareStatement(SQL_FIND_LATEST_PUBLISHED)) {
-                        ps.setString(1, tenantId);
-                        ps.setString(2, agentId);
+                        ps.setString(1, agentId);
+                        ps.setString(2, tenantId);
                         try (ResultSet rs = ps.executeQuery()) {
                             Optional<CapAgentDef> row =
                                     rs.next() ? Optional.of(map(rs)) : Optional.<CapAgentDef>empty();
-                            row.ifPresent(d -> shadowTaint(RESOURCE_TYPE, tenantId, d.tenantId()));
+                            row.ifPresent(d -> shadowTaint(RESOURCE_TYPE, tenantId, tenantId));
                             return row;
                         }
                     }
@@ -258,12 +266,11 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
                     try (PreparedStatement ps =
                                  conn.prepareStatement(SQL_LIST_LATEST_PER_AGENT)) {
                         ps.setString(1, tenantId);
-                        ps.setString(2, tenantId);
                         try (ResultSet rs = ps.executeQuery()) {
                             while (rs.next()) {
                                 CapAgentDef d = map(rs);
                                 rows.add(d);
-                                shadowTaint(RESOURCE_TYPE, tenantId, d.tenantId());
+                                shadowTaint(RESOURCE_TYPE, tenantId, tenantId);
                             }
                         }
                     }
@@ -312,7 +319,6 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
     private static CapAgentDef map(ResultSet rs) throws SQLException {
         Timestamp publishedAt = rs.getTimestamp("published_at");
         return new CapAgentDef(
-                rs.getString("tenant_id"),
                 rs.getString("agent_id"),
                 rs.getInt("version"),
                 rs.getString("name"),

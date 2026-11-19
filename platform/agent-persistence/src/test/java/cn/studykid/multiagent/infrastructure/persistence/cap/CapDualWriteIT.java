@@ -112,9 +112,9 @@ class CapDualWriteIT extends CapITBase {
                 .isEmpty();
 
         // 旧路径数据一条不少
+        // agent_version 是全局实体（无 tenant_id）。
         long legacyVersions = adminQueryLong("SELECT count(*) FROM agent_version "
-                + "WHERE tenant_id = '" + tenantA + "'::uuid AND agent_id = '" + agentId
-                + "'::uuid AND version_number IN (1,2)");
+                + "WHERE agent_id = '" + agentId + "'::uuid AND version_number IN (1,2)");
         assertThat(legacyVersions)
                 .as("⛔ 旧路径数据丢失：回退必须做到无数据丢失")
                 .isEqualTo(2L);
@@ -181,8 +181,7 @@ class CapDualWriteIT extends CapITBase {
         agentManage.publishVersion(tenantA, agentId, DEFINITION, "publisher-1");
 
         // 人为制造漂移：删掉新模型行（旧模型仍在）
-        adminExec("DELETE FROM cap_agent_def WHERE tenant_id = '" + tenantA
-                + "'::uuid AND agent_id = '" + agentId + "'::uuid");
+        adminExec("DELETE FROM cap_agent_def WHERE agent_id = '" + agentId + "'::uuid");
 
         CapDualWriteComparator comparator = new CapDualWriteComparator(appPool);
         CapDualWriteReport report = comparator.compare(tenantA, agentId);

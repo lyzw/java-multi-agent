@@ -70,8 +70,10 @@ class MultiAgentPersistenceIT extends CapITBase {
         //    否则上一例的委派记录会让下一例的「唯一约束」「RLS 隔离」断言失真。
         adminExec("DELETE FROM agent_invocation WHERE tenant_id IN ('"
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
-        adminExec("DELETE FROM cap_agent_child_ref WHERE tenant_id IN ('"
-                + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
+        // cap_agent_child_ref 是全局表（无 tenant_id）：按绑定到 IT 租户的 Agent 清理。
+        adminExec("DELETE FROM cap_agent_child_ref WHERE parent_agent_id IN ("
+                + "SELECT agent_id FROM tenant_agent_binding WHERE tenant_id IN ('"
+                + tenantA + "'::uuid, '" + tenantB + "'::uuid))");
         adminExec("DELETE FROM cap_result_contract WHERE tenant_id IN ('"
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
     }
@@ -113,9 +115,9 @@ class MultiAgentPersistenceIT extends CapITBase {
      * 少了它，插入报的是外键违约，而不是「边不存在」。
      */
     private void seedAgentDefVersion(String tenantId, String agentId, int version) {
-        adminExec("INSERT INTO cap_agent_def (tenant_id, agent_id, version, name, roles,"
+        adminExec("INSERT INTO cap_agent_def (agent_id, version, name, roles,"
                 + " enabled_skills, overrides, config_fingerprint, published_at)"
-                + " VALUES ('" + tenantId + "'::uuid, '" + agentId + "'::uuid, " + version
+                + " VALUES ('" + agentId + "'::uuid, " + version
                 + ", 'it agent', '[\"TEACHER\"]'::jsonb, '[]'::jsonb, '{}'::jsonb, 'fp-agent-"
                 + version + "', now())");
     }

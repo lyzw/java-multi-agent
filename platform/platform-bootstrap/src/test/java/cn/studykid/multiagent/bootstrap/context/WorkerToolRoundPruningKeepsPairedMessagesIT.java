@@ -302,10 +302,9 @@ class WorkerToolRoundPruningKeepsPairedMessagesIT {
 
                 try (PreparedStatement ps = conn.prepareStatement("""
                         DELETE FROM public.cap_agent_def
-                        WHERE tenant_id = ?::uuid AND agent_id = ?::uuid
+                        WHERE agent_id = ?::uuid
                         """)) {
-                    ps.setString(1, tenant);
-                    ps.setString(2, tieredAgentId);
+                    ps.setString(1, tieredAgentId);
                     ps.executeUpdate();
                 }
                 insertCapAgentDef(conn, tenant, tieredAgentId, AGENT_NAME_TIERED,
@@ -350,21 +349,29 @@ class WorkerToolRoundPruningKeepsPairedMessagesIT {
         String id = UUID.nameUUIDFromBytes(("m15-wtp-" + name).getBytes(StandardCharsets.UTF_8))
                 .toString();
         try (PreparedStatement ps = conn.prepareStatement("""
-                INSERT INTO agent (agent_id, tenant_id, name, description)
-                VALUES (?::uuid, ?::uuid, ?, ?)
-                ON CONFLICT (tenant_id, name) DO NOTHING
+                INSERT INTO agent (agent_id, name, description)
+                VALUES (?::uuid, ?, ?)
+                ON CONFLICT (name) DO NOTHING
                 """)) {
             ps.setString(1, id);
-            ps.setString(2, tenant);
-            ps.setString(3, name);
-            ps.setString(4, description);
+            ps.setString(2, name);
+            ps.setString(3, description);
+            ps.executeUpdate();
+        }
+        // 运行时租户可见性 = tenant_agent_binding 里该租户→agent 的 ACTIVE 行
+        try (PreparedStatement ps = conn.prepareStatement("""
+                INSERT INTO tenant_agent_binding (tenant_id, agent_id, status)
+                VALUES (?::uuid, ?::uuid, 'ACTIVE')
+                ON CONFLICT (tenant_id, agent_id) DO UPDATE SET status='ACTIVE'
+                """)) {
+            ps.setString(1, tenant);
+            ps.setString(2, id);
             ps.executeUpdate();
         }
         try (PreparedStatement ps = conn.prepareStatement("""
-                SELECT agent_id::text FROM agent WHERE tenant_id = ?::uuid AND name = ?
+                SELECT agent_id::text FROM agent WHERE name = ?
                 """)) {
-            ps.setString(1, tenant);
-            ps.setString(2, name);
+            ps.setString(1, name);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
                     throw new IllegalStateException("IT Agent 创建后查不到: " + name);
@@ -377,12 +384,11 @@ class WorkerToolRoundPruningKeepsPairedMessagesIT {
     private static void upsertAgentVersion(Connection conn, String tenant, String agentId)
             throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement("""
-                INSERT INTO agent_version (tenant_id, agent_id, version_number, definition, published_at)
-                SELECT ?::uuid, ?::uuid, 1, '{"kind":"tutor"}'::jsonb, now()
-                ON CONFLICT (tenant_id, agent_id, version_number) DO NOTHING
+                INSERT INTO agent_version (agent_id, version_number, definition, published_at)
+                VALUES (?::uuid, 1, '{"kind":"tutor"}'::jsonb, now())
+                ON CONFLICT (agent_id, version_number) DO NOTHING
                 """)) {
-            ps.setString(1, tenant);
-            ps.setString(2, agentId);
+            ps.setString(1, agentId);
             ps.executeUpdate();
         }
     }
@@ -392,21 +398,20 @@ class WorkerToolRoundPruningKeepsPairedMessagesIT {
                                           String generationParams) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement("""
                 INSERT INTO cap_agent_def
-                    (tenant_id, agent_id, version, name, description, roles, enabled_skills,
+                    (agent_id, version, name, description, roles, enabled_skills,
                      skill_bundles, capability_tags, overrides, orchestration, instructions,
                      model_ref, generation_params, config_fingerprint, schema_version, published_at)
-                VALUES (?::uuid, ?::uuid, 1, ?, ?, '[]'::jsonb, '[]'::jsonb,
+                VALUES (?::uuid, 1, ?, ?, '[]'::jsonb, '[]'::jsonb,
                         '[]'::jsonb, '["tutor"]'::jsonb, '{}'::jsonb, '{}'::jsonb,
                         ?::jsonb, ?, ?::jsonb, ?, 1, now())
                 """)) {
-            ps.setString(1, tenant);
-            ps.setString(2, agentId);
-            ps.setString(3, name);
-            ps.setString(4, description);
-            ps.setString(5, "{\"inlineInstructions\":\"" + STABLE_SYSTEM_PROMPT + "\"}");
-            ps.setString(6, MODEL_ID);
-            ps.setString(7, generationParams);
-            ps.setString(8, "it-m15-wtp-fp-" + name);
+            ps.setString(1, agentId);
+            ps.setString(2, name);
+            ps.setString(3, description);
+            ps.setString(4, "{\"inlineInstructions\":\"" + STABLE_SYSTEM_PROMPT + "\"}");
+            ps.setString(5, MODEL_ID);
+            ps.setString(6, generationParams);
+            ps.setString(7, "it-m15-wtp-fp-" + name);
             ps.executeUpdate();
         }
     }

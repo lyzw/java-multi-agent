@@ -883,7 +883,7 @@ public class ConfigPublishService {
         //    instructions / modelRef / generationParams 静默清成 "{}" / null / "{}"，
         //    于是「三步发布」写进库与归档的是另一个对象 —— 运行期取不到模型，
         //    所有经治理通道发布的 Agent 一律 fail-closed（2026-11-09 实跑证实）。
-        return new CapAgentDef(def.tenantId(), def.agentId(), def.version(), def.name(),
+        return new CapAgentDef(def.agentId(), def.version(), def.name(),
                 def.description(), def.roles(), def.enabledSkills(), def.skillBundles(),
                 def.capabilityTags(), def.overrides(), def.orchestration(),
                 def.instructions(), def.modelRef(), def.generationParams(),

@@ -790,8 +790,13 @@ class GovernanceQueryIT {
     private static synchronized String snapshotIdFor(String tenantId) {
         return snapshotCache.computeIfAbsent(tenantId, t -> {
             try {
-                return adminQuery("SELECT snapshot_id::text FROM execution_snapshot "
-                        + "WHERE tenant_id = '" + t + "'::uuid LIMIT 1");
+                // 快照已全局化：经 ACTIVE 绑定取该租户可用 Agent 的快照。
+                return adminQuery("SELECT es.snapshot_id::text "
+                        + "FROM tenant_agent_binding b "
+                        + "JOIN agent_version v ON v.agent_id = b.agent_id "
+                        + "JOIN execution_snapshot es ON es.version_id = v.version_id "
+                        + "WHERE b.tenant_id = '" + t + "'::uuid AND b.status='ACTIVE' "
+                        + "ORDER BY v.version_number DESC LIMIT 1");
             } catch (Exception e) {
                 throw new IllegalStateException("租户 " + t + " 没有执行快照，无法造 Run 夹具", e);
             }

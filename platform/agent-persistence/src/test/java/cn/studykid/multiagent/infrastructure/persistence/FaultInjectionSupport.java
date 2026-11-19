@@ -225,10 +225,15 @@ public final class FaultInjectionSupport {
     }
 
     static String snapshotIdBySlug(DataSource admin, String slug) throws SQLException {
+        // 快照已全局化：经 ACTIVE 绑定取该 slug 租户可用的 Agent 快照。
         try (Connection conn = admin.getConnection();
              PreparedStatement ps = conn.prepareStatement(
-                     "SELECT s.snapshot_id::text FROM execution_snapshot s "
-                           + "JOIN tenant t ON t.tenant_id = s.tenant_id WHERE t.slug = ? LIMIT 1")) {
+                     "SELECT es.snapshot_id::text FROM tenant_agent_binding b "
+                           + "JOIN tenant t ON t.tenant_id = b.tenant_id "
+                           + "JOIN agent_version v ON v.agent_id = b.agent_id "
+                           + "JOIN execution_snapshot es ON es.version_id = v.version_id "
+                           + "WHERE t.slug = ? AND b.status='ACTIVE' "
+                           + "ORDER BY v.version_number DESC LIMIT 1")) {
             ps.setString(1, slug);
             try (ResultSet rs = ps.executeQuery()) {
                 Assertions.assertThat(rs.next())
@@ -251,30 +256,44 @@ public final class FaultInjectionSupport {
      * 故必须用 {@code NOT EXISTS} 显式排除「该版本已有快照」。
      */
     static void ensureTenantSnapshot(DataSource admin, String slug) throws SQLException {
+        // Agent / 版本 / 快照都是全局实体；租户可见性由绑定决定。
+        // 全局 agent1 + v1 + 快照由 dev-it-db.sh 种子幂等建好，这里只补该 slug 的绑定。
         try (Connection conn = admin.getConnection()) {
             conn.setAutoCommit(false);
             try (PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO agent_version (tenant_id, agent_id, version_number, definition) "
-                  + "SELECT a.tenant_id, a.agent_id, 1, '{\"kind\":\"tutor\"}'::jsonb "
-                  + "FROM agent a JOIN tenant t ON t.tenant_id = a.tenant_id "
+                    "INSERT INTO agent (name, description) "
+                  + "SELECT 'agent1', 'IT 用 agent（全局）' "
+                  + "WHERE NOT EXISTS (SELECT 1 FROM agent WHERE name='agent1')")) {
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "INSERT INTO tenant_agent_binding (tenant_id, agent_id, status, config) "
+                  + "SELECT t.tenant_id, a.agent_id, 'ACTIVE', '{}'::jsonb "
+                  + "FROM tenant t CROSS JOIN agent a "
                   + "WHERE t.slug = ? AND a.name = 'agent1' "
-                  + "ON CONFLICT (tenant_id, agent_id, version_number) DO NOTHING")) {
+                  + "AND NOT EXISTS (SELECT 1 FROM tenant_agent_binding b "
+                  + " WHERE b.tenant_id = t.tenant_id AND b.agent_id = a.agent_id)")) {
                 ps.setString(1, slug);
                 ps.executeUpdate();
             }
             try (PreparedStatement ps = conn.prepareStatement(
+                    "INSERT INTO agent_version (agent_id, version_number, definition) "
+                  + "SELECT a.agent_id, 1, '{\"kind\":\"tutor\"}'::jsonb FROM agent a "
+                  + "WHERE a.name = 'agent1' "
+                  + "AND NOT EXISTS (SELECT 1 FROM agent_version v "
+                  + " WHERE v.agent_id=a.agent_id AND v.version_number=1)")) {
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = conn.prepareStatement(
                     "INSERT INTO execution_snapshot "
-                  + "(tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config) "
-                  + "SELECT v.tenant_id, v.version_id, '{}', '{}', '{}', "
+                  + "(version_id, agent_config, prompt_config, tool_contracts, run_config) "
+                  + "SELECT v.version_id, '{}', '{}', '{}', "
                   + "'{\"maxCostPerRun\":\"2.00\",\"maxLlmCalls\":12,\"maxSteps\":20,\"approvalRequired\":\"OPTIONAL\"}' "
-                  + "FROM agent_version v JOIN agent a "
-                  + "  ON a.agent_id = v.agent_id AND a.tenant_id = v.tenant_id "
-                  + "JOIN tenant t ON t.tenant_id = v.tenant_id "
-                  + "WHERE t.slug = ? AND a.name = 'agent1' AND v.version_number = 1 "
+                  + "FROM agent_version v JOIN agent a ON a.agent_id = v.agent_id "
+                  + "WHERE a.name = 'agent1' AND v.version_number = 1 "
                   + "AND NOT EXISTS ("
                   + "  SELECT 1 FROM execution_snapshot s "
-                  + "   WHERE s.tenant_id = v.tenant_id AND s.version_id = v.version_id)")) {
-                ps.setString(1, slug);
+                  + "   WHERE s.version_id = v.version_id)")) {
                 ps.executeUpdate();
             }
             conn.commit();

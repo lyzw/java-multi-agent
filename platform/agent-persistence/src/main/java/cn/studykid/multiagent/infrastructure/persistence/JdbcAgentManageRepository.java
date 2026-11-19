@@ -34,7 +34,7 @@ import cn.studykid.multiagent.ports.persistence.AuditPort;
  * 要改只能再发一个版本（{@link #publishVersion}）。
  *
  * <p>⚠️ <b>版本号并发安全</b>：{@code version_number = max(本 agent 现有版本号) + 1}，
- * 由 {@code (tenant_id, agent_id, version_number)} 唯一约束兜底并发竞态——
+ * 由 {@code (agent_id, version_number)} 唯一约束兜底并发竞态——
  * 同一 agent 并发发布时，后提交者拿到唯一冲突（SQLState {@code 23505}），
  * 转为 {@link AgentManagePort.VersionConflictException}（→ 409）。
  *
@@ -124,21 +124,29 @@ public class JdbcAgentManageRepository implements AgentManagePort {
             conn.setAutoCommit(false);
             try {
                 String sql = """
-                        INSERT INTO agent (tenant_id, name, description)
-                        VALUES (?::uuid, ?, ?)
+                        INSERT INTO agent (name, description)
+                        VALUES (?, ?)
                         RETURNING agent_id::text
                         """;
                 String agentId;
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                    ps.setString(1, tenantId);
-                    ps.setString(2, name);
-                    ps.setString(3, description);
+                    ps.setString(1, name);
+                    ps.setString(2, description);
                     try (ResultSet rs = ps.executeQuery()) {
                         if (!rs.next()) {
                             throw new IllegalStateException("Agent 插入未返回 ID");
                         }
                         agentId = rs.getString(1);
                     }
+                }
+                // 全局 Agent 创建后立即与目标租户建立绑定；后续可再绑其它租户。
+                try (PreparedStatement ps = conn.prepareStatement("""
+                        INSERT INTO tenant_agent_binding (tenant_id, agent_id, status)
+                        VALUES (?::uuid, ?::uuid, 'ACTIVE')
+                        """)) {
+                    ps.setString(1, tenantId);
+                    ps.setString(2, agentId);
+                    ps.executeUpdate();
                 }
                 conn.commit();
                 // ⚠️ 审计明细<b>不</b>放 name：name 是用户自由文本，PIPL 敏感信息扫描（fail-closed）
@@ -154,7 +162,7 @@ public class JdbcAgentManageRepository implements AgentManagePort {
             } catch (SQLException | RuntimeException e) {
                 safeRollback(conn);
                 if (e instanceof SQLException se && UNIQUE_VIOLATION.equals(se.getSQLState())) {
-                    // ⚠️ agent_name_per_tenant 唯一约束冲突 → 重名（409，非 400）
+                    // ⚠️ agent_name_key（全局 name）唯一约束冲突 → 重名（409，非 400）
                     throw new AgentManagePort.DuplicateAgentNameException(name);
                 }
                 throw e instanceof RuntimeException re
@@ -182,19 +190,19 @@ public class JdbcAgentManageRepository implements AgentManagePort {
             Connection conn = lease.connection();
             conn.setAutoCommit(false);
             try {
-                // 1) 校验 agent 存在（RLS 已限定租户，不存在即「不属于本租户」）
+                // 1) 校验 agent 存在且对该租户可见（绑定表决定可见性）
                 if (!agentExists(conn, tenantId, agentId)) {
                     throw new AgentQueryPort.AgentNotFoundException(agentId);
                 }
-                // 2) 插入下一版本：版本号 = max(现有) + 1（同一语句原子计算）
+                // 2) 插入下一版本：版本号 = 该 Agent 当前最大版本号 + 1（全局命名空间）
                 String sql = """
                         INSERT INTO agent_version
-                            (tenant_id, agent_id, version_number, definition, published_at, created_at)
-                        SELECT ?::uuid, ?::uuid,
+                            (agent_id, version_number, definition, published_at, created_at)
+                        SELECT ?::uuid,
                                COALESCE((
                                    SELECT MAX(version_number)
                                    FROM agent_version
-                                   WHERE tenant_id = ?::uuid AND agent_id = ?::uuid
+                                   WHERE agent_id = ?::uuid
                                ), 0) + 1,
                                ?::jsonb, now(), now()
                         RETURNING version_id::text, version_number, created_at,
@@ -206,11 +214,9 @@ public class JdbcAgentManageRepository implements AgentManagePort {
                 Instant publishedAt;
                 String storedDefinition;
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                    ps.setString(1, tenantId);
+                    ps.setString(1, agentId);
                     ps.setString(2, agentId);
-                    ps.setString(3, tenantId);
-                    ps.setString(4, agentId);
-                    ps.setString(5, definition);
+                    ps.setString(3, definition);
                     try (ResultSet rs = ps.executeQuery()) {
                         if (!rs.next()) {
                             throw new IllegalStateException("版本插入未返回 ID");
@@ -244,7 +250,7 @@ public class JdbcAgentManageRepository implements AgentManagePort {
                 safeRollback(conn);
                 if (e instanceof SQLException se) {
                     if (UNIQUE_VIOLATION.equals(se.getSQLState())) {
-                        // ⚠️ (tenant_id, agent_id, version_number) 唯一约束冲突 → 并发版本竞态（409）
+                        // ⚠️ (agent_id, version_number) 唯一约束冲突 → 并发版本竞态（409）
                         throw new AgentManagePort.VersionConflictException(
                                 "版本号并发冲突，请刷新后重试（agent=" + agentId + "）");
                     }
@@ -267,7 +273,9 @@ public class JdbcAgentManageRepository implements AgentManagePort {
     private boolean agentExists(Connection conn, String tenantId, String agentId)
             throws SQLException {
         String sql = """
-                SELECT 1 FROM agent WHERE tenant_id = ?::uuid AND agent_id = ?::uuid
+                SELECT 1 FROM tenant_agent_binding b
+                 WHERE b.tenant_id = ?::uuid AND b.agent_id = ?::uuid
+                   AND b.status = 'ACTIVE'
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, tenantId);
@@ -311,16 +319,15 @@ public class JdbcAgentManageRepository implements AgentManagePort {
         String contextPolicy = ContextPolicyReader.snapshotFromAgentConfig(definition);
         String sql = """
                 INSERT INTO execution_snapshot
-                    (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config,
+                    (version_id, agent_config, prompt_config, tool_contracts, run_config,
                      context_policy)
-                VALUES (?::uuid, ?::uuid, ?::jsonb, '{}'::jsonb, '{}'::jsonb, ?::jsonb, ?::jsonb)
+                VALUES (?::uuid, ?::jsonb, '{}'::jsonb, '{}'::jsonb, ?::jsonb, ?::jsonb)
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, tenantId);
-            ps.setString(2, versionId);
-            ps.setString(3, definition == null || definition.isBlank() ? "{}" : definition);
-            ps.setString(4, RUN_CONFIG_DEFAULTS);
-            ps.setString(5, contextPolicy);
+            ps.setString(1, versionId);
+            ps.setString(2, definition == null || definition.isBlank() ? "{}" : definition);
+            ps.setString(3, RUN_CONFIG_DEFAULTS);
+            ps.setString(4, contextPolicy);
             ps.executeUpdate();
         }
     }

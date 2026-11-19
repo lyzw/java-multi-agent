@@ -49,7 +49,8 @@ import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
  * 让四个 IT 的断言口径一致，不出现「一类 IT 用罐头 usage、另一类用真请求计费」的分叉。
  *
  * <p>⚠️ 铁律：① 业务 SQL 一律 {@code app_agent} + 事务内先绑租户；② 造数用 owner
- * 连接也必须带 {@code tenant_id} 谓词；③ {@code execution_snapshot} 不可删，只能
+ * 连接对仍按租户隔离的表必须带 {@code tenant_id} 谓词，全局 Agent 表则靠
+ * {@code tenant_agent_binding} 的 ACTIVE 绑定表达可见性；③ {@code execution_snapshot} 不可删，只能
  * {@code NOT EXISTS} 幂等插入；④ 每个 IT 用独立 slug，避免限流桶与 Run 夹具互相污染。
  */
 public final class AgentChainItSupport {
@@ -98,7 +99,7 @@ public final class AgentChainItSupport {
 
     /**
      * 幂等建「固定 id 的已发布 Agent + v1 + execution_snapshot + cap_agent_def」最小骨架。
-     * cap_agent_def 是发布不可变行：IT 用租户 + agentId 谓词删自有行后重建，保证夹具确定性。
+     * cap_agent_def 是发布不可变行：IT 用 agentId 谓词删自有行后重建，保证夹具确定性。
      */
     public static void seedAgent(DataSource admin, String tenant, String agentId,
                                  String agentName, String modelId, String generationParams)
@@ -107,72 +108,76 @@ public final class AgentChainItSupport {
             conn.setAutoCommit(false);
             try {
                 try (PreparedStatement ps = conn.prepareStatement("""
-                        INSERT INTO agent (agent_id, tenant_id, name, description)
-                        VALUES (?::uuid, ?::uuid, ?, ?)
-                        ON CONFLICT (tenant_id, name) DO NOTHING
+                        INSERT INTO agent (agent_id, name, description)
+                        VALUES (?::uuid, ?, ?)
+                        ON CONFLICT (name) DO NOTHING
                         """)) {
                     ps.setString(1, agentId);
-                    ps.setString(2, tenant);
-                    ps.setString(3, agentName);
-                    ps.setString(4, "S3-M15 链路 IT 固定 Agent");
+                    ps.setString(2, agentName);
+                    ps.setString(3, "S3-M15 链路 IT 固定 Agent");
+                    ps.executeUpdate();
+                }
+                // 运行时租户可见性 = tenant_agent_binding 里该租户→agent 的 ACTIVE 行
+                try (PreparedStatement ps = conn.prepareStatement("""
+                        INSERT INTO tenant_agent_binding (tenant_id, agent_id, status)
+                        VALUES (?::uuid, ?::uuid, 'ACTIVE')
+                        ON CONFLICT (tenant_id, agent_id) DO UPDATE SET status='ACTIVE'
+                        """)) {
+                    ps.setString(1, tenant);
+                    ps.setString(2, agentId);
                     ps.executeUpdate();
                 }
                 try (PreparedStatement ps = conn.prepareStatement("""
                         INSERT INTO agent_version
-                            (tenant_id, agent_id, version_number, definition, published_at)
-                        SELECT ?::uuid, agent_id, 1, '{"kind":"tutor"}'::jsonb, now()
-                        FROM agent WHERE tenant_id = ?::uuid AND name = ?
-                        ON CONFLICT (tenant_id, agent_id, version_number) DO NOTHING
+                            (agent_id, version_number, definition, published_at)
+                        SELECT agent_id, 1, '{"kind":"tutor"}'::jsonb, now()
+                        FROM agent WHERE name = ?
+                        ON CONFLICT (agent_id, version_number) DO NOTHING
                         """)) {
-                    ps.setString(1, tenant);
-                    ps.setString(2, tenant);
-                    ps.setString(3, agentName);
+                    ps.setString(1, agentName);
                     ps.executeUpdate();
                 }
                 // ⚠️ execution_snapshot 不可删：NOT EXISTS 幂等，绝不 ON CONFLICT。
                 try (PreparedStatement ps = conn.prepareStatement("""
                         INSERT INTO execution_snapshot
-                            (tenant_id, version_id, agent_config, prompt_config,
+                            (version_id, agent_config, prompt_config,
                              tool_contracts, run_config)
-                        SELECT v.tenant_id, v.version_id, '{}', '{}', '{}',
+                        SELECT v.version_id, '{}', '{}', '{}',
                                '{"maxCostPerRun":"2.00","maxLlmCalls":12,
                                  "maxSteps":20,"approvalRequired":"OPTIONAL"}'
                         FROM agent_version v JOIN agent a
-                          ON a.agent_id = v.agent_id AND a.tenant_id = v.tenant_id
-                        WHERE v.tenant_id = ?::uuid AND a.name = ? AND v.version_number = 1
+                          ON a.agent_id = v.agent_id
+                        WHERE a.name = ? AND v.version_number = 1
                           AND NOT EXISTS (SELECT 1 FROM execution_snapshot s
-                              WHERE s.tenant_id = v.tenant_id AND s.version_id = v.version_id)
+                              WHERE s.version_id = v.version_id)
                         """)) {
-                    ps.setString(1, tenant);
-                    ps.setString(2, agentName);
+                    ps.setString(1, agentName);
                     ps.executeUpdate();
                 }
                 try (PreparedStatement ps = conn.prepareStatement("""
                         DELETE FROM public.cap_agent_def
-                        WHERE tenant_id = ?::uuid AND agent_id = ?::uuid
+                        WHERE agent_id = ?::uuid
                         """)) {
-                    ps.setString(1, tenant);
-                    ps.setString(2, agentId);
+                    ps.setString(1, agentId);
                     ps.executeUpdate();
                 }
                 try (PreparedStatement ps = conn.prepareStatement("""
                         INSERT INTO cap_agent_def
-                            (tenant_id, agent_id, version, name, description, roles,
+                            (agent_id, version, name, description, roles,
                              enabled_skills, skill_bundles, capability_tags, overrides,
                              orchestration, instructions, model_ref, generation_params,
                              config_fingerprint, schema_version, published_at)
-                        VALUES (?::uuid, ?::uuid, 1, ?, ?, '[]'::jsonb, '[]'::jsonb,
+                        VALUES (?::uuid, 1, ?, ?, '[]'::jsonb, '[]'::jsonb,
                                 '[]'::jsonb, '["tutor"]'::jsonb, '{}'::jsonb, '{}'::jsonb,
                                 ?::jsonb, ?, ?::jsonb, ?, 1, now())
                         """)) {
-                    ps.setString(1, tenant);
-                    ps.setString(2, agentId);
-                    ps.setString(3, agentName);
-                    ps.setString(4, "M15 真编排 + 真压缩夹具");
-                    ps.setString(5, INSTRUCTIONS);
-                    ps.setString(6, modelId);
-                    ps.setString(7, generationParams);
-                    ps.setString(8, "it-m15-fp-" + agentName);
+                    ps.setString(1, agentId);
+                    ps.setString(2, agentName);
+                    ps.setString(3, "M15 真编排 + 真压缩夹具");
+                    ps.setString(4, INSTRUCTIONS);
+                    ps.setString(5, modelId);
+                    ps.setString(6, generationParams);
+                    ps.setString(7, "it-m15-fp-" + agentName);
                     ps.executeUpdate();
                 }
                 conn.commit();

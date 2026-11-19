@@ -86,17 +86,17 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
 
     private static final String SQL_INSERT_VERSION = """
             INSERT INTO agent_version
-                (tenant_id, agent_id, version_number, definition, published_at, created_at)
-            VALUES (?::uuid, ?::uuid, ?, ?::jsonb, now(), now())
-            ON CONFLICT (tenant_id, agent_id, version_number) DO NOTHING
+                (agent_id, version_number, definition, published_at, created_at)
+            VALUES (?::uuid, ?, ?::jsonb, now(), now())
+            ON CONFLICT (agent_id, version_number) DO NOTHING
             RETURNING version_id::text
             """;
 
     private static final String SQL_INSERT_SNAPSHOT = """
             INSERT INTO execution_snapshot
-                (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config,
+                (version_id, agent_config, prompt_config, tool_contracts, run_config,
                  context_policy)
-            VALUES (?::uuid, ?::uuid, ?::jsonb, '{}'::jsonb, '{}'::jsonb, ?::jsonb, ?::jsonb)
+            VALUES (?::uuid, ?::jsonb, '{}'::jsonb, '{}'::jsonb, ?::jsonb, ?::jsonb)
             """;
 
     private final DataSource dataSource;
@@ -123,110 +123,90 @@ public class JdbcAgentReleaseArchiveRepository implements AgentReleaseArchivePor
     private boolean doArchive(Connection conn, String tenantId, String agentId, int version,
                               String definition, @Nullable String agentConfig,
                               @NonNull String contextPolicy) throws SQLException {
-        // ⚠️ **必须先有 agent 行**：agent_version 的外键指向 agent(tenant_id, agent_id)。
-        //    没有 agent 行就插入 = 外键违约 → 整笔发布事务回滚。
-        //    这里显式判一次并给出可读原因，而不是让外键以 PSQLException 冒泡成 500。
-        if (!agentExists(conn, tenantId, agentId)) {
+        // ⚠️ **必须先有全局 agent 行**：agent_version 外键指向 agent(agent_id)。
+        if (!agentExists(conn, agentId)) {
             throw new IllegalStateException(
-                    "归档 Agent 发布失败：agent 行不存在（agent=" + agentId + "）。"
+                    "归档 Agent 发布失败：Agent 主体不存在（agent=" + agentId + "）。"
                             + "治理通道发布前必须先登记 Agent 主体。");
         }
-        Optional<String> versionId = insertVersion(conn, tenantId, agentId, version, definition);
+        Optional<String> versionId = insertVersion(conn, agentId, version, definition);
         boolean inserted = versionId.isPresent();
         if (!inserted) {
-            // ⚠️ 已存在同版本行（不可变版本行不覆盖）。
-            //    这**不是错误**：说明该版本此前已归档过（幂等重放）。
-            //    ⚠️ 但「版本行已存在」**不等于**「执行快照也已存在」：
-            //    存量行可能来自旧通道（直发端点 / 夹具），没有伴随快照 ——
-            //    而没有快照的版本行同样让 run.snapshot_id 外键违约。
-            //    故此处按 version_id 回查并**幂等补插**快照（快照无唯一约束，
-            //    用 NOT EXISTS 守卫防重复，与 ItTenantProvisioner 同一教训）。
-            log.debug("Agent 发布归档：版本行已存在，幂等补齐快照（tenant={}, agent={}, version={}）",
-                    tenantId, agentId, version);
-            versionId = findVersionId(conn, tenantId, agentId, version);
+            log.debug("Agent 发布归档：版本行已存在，幂等补齐快照（agent={}, version={}）",
+                    agentId, version);
+            versionId = findVersionId(conn, agentId, version);
             if (versionId.isEmpty()) {
                 throw new IllegalStateException(
                         "归档 Agent 发布失败：版本行插入被跳过但回查不到版本行"
-                                + "（tenant=" + tenantId + ", agent=" + agentId
-                                + ", version=" + version + "）—— 数据不一致，拒绝发布");
+                                + "（agent=" + agentId + ", version=" + version + "）—— 数据不一致，拒绝发布");
             }
         }
-        insertSnapshotIfAbsent(conn, tenantId, versionId.get(), agentConfig, contextPolicy);
+        insertSnapshotIfAbsent(conn, versionId.get(), agentConfig, contextPolicy);
         return inserted;
     }
 
     /**
      * 回查既有的版本行主键（{@code ON CONFLICT DO NOTHING} 没返回行时用）。
      */
-    private @NonNull Optional<String> findVersionId(Connection conn, String tenantId,
+    private @NonNull Optional<String> findVersionId(Connection conn,
                                                      String agentId, int version)
             throws SQLException {
         String sql = "SELECT version_id::text FROM agent_version "
-                + "WHERE tenant_id = ?::uuid AND agent_id = ?::uuid AND version_number = ?";
+                + "WHERE agent_id = ?::uuid AND version_number = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, tenantId);
-            ps.setString(2, agentId);
-            ps.setInt(3, version);
+            ps.setString(1, agentId);
+            ps.setInt(2, version);
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
             }
         }
     }
 
-    private void insertSnapshotIfAbsent(Connection conn, String tenantId, String versionId,
+    private void insertSnapshotIfAbsent(Connection conn, String versionId,
                                         @Nullable String agentConfig,
                                         @NonNull String contextPolicy) throws SQLException {
-        // ⚠️ NOT EXISTS 守卫而不是唯一约束：execution_snapshot 只有
-        //    (tenant_id, snapshot_id) 主键，快照 id 每次都是新随机值 ——
-        //    ON CONFLICT 永远不触发，「幂等」就成了每轮泄漏一行
-        //    （ItTenantProvisioner 的实测教训）。快照行被不可变触发器保护、删不掉。
-        String guard = "SELECT 1 FROM execution_snapshot "
-                + "WHERE tenant_id = ?::uuid AND version_id = ?::uuid";
+        String guard = "SELECT 1 FROM execution_snapshot WHERE version_id = ?::uuid";
         try (PreparedStatement ps = conn.prepareStatement(guard)) {
-            ps.setString(1, tenantId);
-            ps.setString(2, versionId);
+            ps.setString(1, versionId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     return;
                 }
             }
         }
-        insertSnapshot(conn, tenantId, versionId, agentConfig, contextPolicy);
+        insertSnapshot(conn, versionId, agentConfig, contextPolicy);
     }
 
-    private @NonNull Optional<String> insertVersion(Connection conn, String tenantId,
-                                                     String agentId, int version,
-                                                     String definition) throws SQLException {
+    private @NonNull Optional<String> insertVersion(Connection conn, String agentId,
+                                                     int version, String definition)
+            throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(SQL_INSERT_VERSION)) {
-            ps.setString(1, tenantId);
-            ps.setString(2, agentId);
-            ps.setInt(3, version);
-            ps.setString(4, definition == null || definition.isBlank() ? "{}" : definition);
+            ps.setString(1, agentId);
+            ps.setInt(2, version);
+            ps.setString(3, definition == null || definition.isBlank() ? "{}" : definition);
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? Optional.of(rs.getString("version_id")) : Optional.empty();
             }
         }
     }
 
-    private void insertSnapshot(Connection conn, String tenantId, String versionId,
+    private void insertSnapshot(Connection conn, String versionId,
                                 @Nullable String agentConfig,
                                 @NonNull String contextPolicy) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(SQL_INSERT_SNAPSHOT)) {
-            ps.setString(1, tenantId);
-            ps.setString(2, versionId);
-            ps.setString(3, agentConfig == null || agentConfig.isBlank() ? "{}" : agentConfig);
-            ps.setString(4, RUN_CONFIG_DEFAULTS);
-            ps.setString(5, contextPolicy);
+            ps.setString(1, versionId);
+            ps.setString(2, agentConfig == null || agentConfig.isBlank() ? "{}" : agentConfig);
+            ps.setString(3, RUN_CONFIG_DEFAULTS);
+            ps.setString(4, contextPolicy);
             ps.executeUpdate();
         }
     }
 
-    private static boolean agentExists(Connection conn, String tenantId, String agentId)
+    private static boolean agentExists(Connection conn, String agentId)
             throws SQLException {
-        String sql = "SELECT 1 FROM agent WHERE tenant_id = ?::uuid AND agent_id = ?::uuid";
+        String sql = "SELECT 1 FROM agent WHERE agent_id = ?::uuid";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, tenantId);
-            ps.setString(2, agentId);
+            ps.setString(1, agentId);
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next();
             }

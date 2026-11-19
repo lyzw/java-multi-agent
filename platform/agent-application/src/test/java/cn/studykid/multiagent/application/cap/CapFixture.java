@@ -222,8 +222,8 @@ final class CapFixture {
                                    @NonNull List<String> enabledSkills,
                                    @NonNull String overrides,
                                    @NonNull String orchestration) {
-        agents.put(tenantId + "/" + agentId + "@" + version,
-                agentDef(tenantId, agentId, version, enabledSkills, overrides, orchestration,
+        agents.put(agentId + "@" + version,
+                agentDef(agentId, version, enabledSkills, overrides, orchestration,
                         Instant.EPOCH));
         return this;
     }
@@ -239,8 +239,7 @@ final class CapFixture {
      * 用例会「测了一个不存在的正确性」。
      */
     @NonNull
-    private static CapAgentDef agentDef(@NonNull String tenantId,
-                                        @NonNull String agentId,
+    private static CapAgentDef agentDef(@NonNull String agentId,
                                         int version,
                                         @NonNull List<String> enabledSkills,
                                         @NonNull String overrides,
@@ -249,14 +248,15 @@ final class CapFixture {
         // ⚠️ 内容指纹不含自身（否则自引用无法计算），
         //    故先用占位值构造一行，再按内容算出真实指纹，最后重建该行。
         CapAgentDef provisional = new CapAgentDef(
-                tenantId, agentId, version, agentId, agentId + " desc",
+                agentId, version, agentId, agentId + " desc",
                 List.of("TEACHER"), enabledSkills, List.of(), List.of(),
-                overrides, orchestration, "pending", 1,
+                overrides, orchestration, "{}", null, "{}", "pending", 1,
                 Instant.EPOCH, publishedAt);
         return new CapAgentDef(
-                tenantId, agentId, version, agentId, agentId + " desc",
+                agentId, version, agentId, agentId + " desc",
                 List.of("TEACHER"), enabledSkills, List.of(), List.of(),
-                overrides, orchestration, CapObjectFingerprint.of(provisional), 1,
+                overrides, orchestration, "{}", null, "{}",
+                CapObjectFingerprint.of(provisional), 1,
                 Instant.EPOCH, publishedAt);
     }
 
@@ -276,9 +276,8 @@ final class CapFixture {
                                               int version, @NonNull List<String> enabledSkills,
                                               @NonNull String overrides,
                                               @NonNull String orchestration) {
-        agents.put(tenantId + "/" + agentId + "@" + version,
-                agentDef(tenantId, agentId, version, enabledSkills, overrides, orchestration,
-                        null));
+        agents.put(agentId + "@" + version,
+                agentDef(agentId, version, enabledSkills, overrides, orchestration, null));
         return this;
     }
 
@@ -535,9 +534,11 @@ final class CapFixture {
 
     @NonNull CapAgentDefPort agentDefs() {
         return new CapAgentDefPort() {
+            // Agent 定义是全局版本行：夹具按 agentId@version 寻址。
+            // 端口签名里的 tenantId 仅代表调用方的可见性上下文，不再参与定义行的主键。
             @Override
             public boolean insert(@NonNull CapAgentDef def) {
-                String key = def.tenantId() + "/" + def.agentId() + "@" + def.version();
+                String key = def.agentId() + "@" + def.version();
                 if (agents.containsKey(key)) {
                     return false;
                 }
@@ -548,28 +549,25 @@ final class CapFixture {
             @Override
             public @NonNull Optional<CapAgentDef> find(
                     @NonNull String tenantId, @NonNull String agentId, int version) {
-                return Optional.ofNullable(agents.get(tenantId + "/" + agentId + "@" + version));
+                return Optional.ofNullable(agents.get(agentId + "@" + version));
             }
 
             @Override
             public @NonNull Optional<CapAgentDef> findLatest(
                     @NonNull String tenantId, @NonNull String agentId) {
-                return latestAgent(tenantId, agentId);
+                return latestAgent(agentId);
             }
 
             @Override
             public @NonNull Optional<CapAgentDef>
                     findLatestPublished(@NonNull String tenantId, @NonNull String agentId) {
-                return latestAgent(tenantId, agentId);
+                return latestAgent(agentId);
             }
 
             @Override
             public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
                 Map<String, CapAgentDef> latest = new LinkedHashMap<>();
                 for (CapAgentDef a : agents.values()) {
-                    if (!tenantId.equals(a.tenantId())) {
-                        continue;
-                    }
                     CapAgentDef prev = latest.get(a.agentId());
                     if (prev == null || a.version() > prev.version()) {
                         latest.put(a.agentId(), a);
@@ -580,10 +578,9 @@ final class CapFixture {
                         .toList();
             }
 
-            private Optional<CapAgentDef> latestAgent(
-                    String tenantId, String agentId) {
+            private Optional<CapAgentDef> latestAgent(String agentId) {
                 return agents.values().stream()
-                        .filter(a -> tenantId.equals(a.tenantId()) && agentId.equals(a.agentId()))
+                        .filter(a -> agentId.equals(a.agentId()))
                         .max((a, b) -> Integer.compare(a.version(), b.version()));
             }
         };

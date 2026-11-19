@@ -36,7 +36,10 @@ import org.junit.jupiter.api.Test;
  * </ol>
  *
  * <p><b>豁免</b>：{@code platform.*} schema 是平台目录（无 RLS、无 {@code tenant_id} 列），
- * 由 {@code GuardedPlatformOpsDataSource} 的通道闸门负责；{@code pg_*} 为系统目录。
+ * 由 {@code GuardedPlatformOpsDataSource} 的通道闸门负责；{@code pg_*} 为系统目录；
+ * {@link #GLOBAL_JOIN_TABLES} 是全局实体（无 {@code tenant_id} 列，可见性由
+ * {@code tenant_agent_binding} 决定）。{@code JOIN LATERAL} 是派生表，按其子查询的
+ * {@code FROM} 基表判定是否豁免。
  *
  * <p><b>诚实边界</b>：本守卫只扫 {@code platform/} 模块的 Java 主源码（SQL 以文本块内嵌
  * 在 Java 里）。{@code deploy/sql} 下的运维脚本、{@code rag/} 模块的 JOIN 属 D13 清单
@@ -66,9 +69,24 @@ class JoinTenantPredicateArchitectureTest {
             "budget_reservation",
             "execution_snapshot",
             "principal_role",
+            "tenant_agent_binding",
             "tool_operation",
             "tool_operation_attempt",
             "LATERAL");
+
+    /**
+     * 全局实体表：无 {@code tenant_id} 列，JOIN 条件不可能带租户谓词。
+     *
+     * <p>Agent 已是全局实体（2026-11-19）：租户可见性由
+     * {@code tenant_agent_binding} 决定，定义/版本/快照本身跨租户共享。
+     */
+    private static final Set<String> GLOBAL_JOIN_TABLES = Set.of(
+            "agent", "agent_version", "cap_agent_def",
+            "cap_agent_child_ref", "execution_snapshot");
+
+    /** LATERAL 子查询的数据来源：用它判断该派生表读的是全局表还是租户表。 */
+    private static final Pattern FROM =
+            Pattern.compile("(?i)\\bFROM\\s+([A-Za-z_][\\w.]*)");
 
     // ── 静态扫描 ──────────────────────────────────────────────────
 
@@ -85,11 +103,10 @@ class JoinTenantPredicateArchitectureTest {
                 String code = stripComments(read(file));
                 Matcher m = JOIN.matcher(code);
                 while (m.find()) {
-                    if (!m.group(0).toUpperCase().contains("LATERAL")
-                            && isExemptTable(m.group(2))) {
+                    String window = clauseWindow(code, m);
+                    if (isExemptJoin(m, window)) {
                         continue;
                     }
-                    String window = clauseWindow(code, m);
                     if (!window.toLowerCase().contains("tenant_id")) {
                         violations.add(relative(file) + " → JOIN " + m.group(2)
                                 + "（连接条件内无 tenant_id）");
@@ -212,15 +229,58 @@ class JoinTenantPredicateArchitectureTest {
                     .isEmpty();
         }
 
+        @Test
+        @DisplayName("⚠️⚠️ LATERAL 子查询读租户表却无 tenant_id 必须被检出")
+        void detectsLateralOverTenantTableWithoutPredicate() {
+            String violating = """
+                    class Evil {
+                        String sql = \"\"\"
+                            SELECT r.id FROM budget_reservation r
+                            LEFT JOIN LATERAL (
+                                SELECT o.operation_id FROM tool_operation o
+                                WHERE o.operation_id = r.operation_id
+                                ORDER BY o.attempt_no DESC LIMIT 1
+                            ) latest ON TRUE
+                            \"\"\";
+                    }
+                    """;
+
+            assertThat(violationsIn(violating))
+                    .as("⚠️⚠️ LATERAL 的豁免只取决于子查询基表；读租户表时缺谓词必须判红")
+                    .hasSize(1);
+        }
+
+        @Test
+        @DisplayName("✅ LATERAL 子查询读全局表（agent_version）不误报")
+        void exemptsLateralOverGlobalTable() {
+            String global = """
+                    class Ok {
+                        String sql = \"\"\"
+                            SELECT a.agent_id FROM agent a
+                            LEFT JOIN LATERAL (
+                                SELECT v.version_number FROM agent_version v
+                                WHERE v.agent_id = a.agent_id
+                                ORDER BY v.version_number DESC LIMIT 1
+                            ) av ON TRUE
+                            \"\"\";
+                    }
+                    """;
+
+            assertThat(violationsIn(global))
+                    .as("agent_version 无 tenant_id 列，LATERAL 读它不可能带谓词，不得误报")
+                    .isEmpty();
+        }
+
         /** 把片段喂给同一套扫描逻辑，返回违例描述（复用生产扫描代码路径）。 */
         private static List<String> violationsIn(String code) {
             List<String> violations = new ArrayList<>();
             Matcher m = JOIN.matcher(code);
             while (m.find()) {
-                if (!m.group(0).toUpperCase().contains("LATERAL") && isExemptTable(m.group(2))) {
+                String window = clauseWindow(code, m);
+                if (isExemptJoin(m, window)) {
                     continue;
                 }
-                if (!clauseWindow(code, m).toLowerCase().contains("tenant_id")) {
+                if (!window.toLowerCase().contains("tenant_id")) {
                     violations.add("JOIN " + m.group(2));
                 }
             }
@@ -232,9 +292,27 @@ class JoinTenantPredicateArchitectureTest {
 
     private static boolean isExemptTable(String rawTable) {
         String table = rawTable.toLowerCase();
+        int dot = table.lastIndexOf('.');
+        String bare = dot >= 0 ? table.substring(dot + 1) : table;
         return table.startsWith("platform.")
                 || table.startsWith("pg_")
-                || table.startsWith("information_schema.");
+                || table.startsWith("information_schema.")
+                || GLOBAL_JOIN_TABLES.contains(bare);
+    }
+
+    /**
+     * 本 JOIN 是否整体豁免租户谓词要求。
+     *
+     * <p>普通表 JOIN：看从表本身。{@code LATERAL} 是<b>派生表</b>，没有自己的
+     * {@code tenant_id} 列，租户谓词只能落在子查询读取的基表上 —— 因此看子查询的
+     * {@code FROM} 基表：读全局表时不可能（也无需）带租户谓词，读租户表时照旧必须带。
+     */
+    private static boolean isExemptJoin(Matcher m, String window) {
+        if (m.group(0).toUpperCase().contains("LATERAL")) {
+            Matcher from = FROM.matcher(window);
+            return from.find() && isExemptTable(from.group(1));
+        }
+        return isExemptTable(m.group(2));
     }
 
     private static String normalize(String rawTable) {

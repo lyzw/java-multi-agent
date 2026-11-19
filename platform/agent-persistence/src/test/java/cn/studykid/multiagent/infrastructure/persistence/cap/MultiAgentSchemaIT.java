@@ -39,6 +39,15 @@ class MultiAgentSchemaIT extends CapITBase {
     private static final List<String> GUARDED_TABLES =
             List.of("agent_invocation", "cap_agent_child_ref", "cap_result_contract");
 
+    /**
+     * 仍带 tenant_id + RLS 的表。
+     *
+     * <p>⚠️ cap_agent_child_ref 已随 Agent 全局化去掉 tenant_id / RLS / 复合租户主键
+     * （租户可见性由 tenant_agent_binding 决定），故不再纳入「租户作用域」断言。
+     */
+    private static final List<String> TENANT_SCOPED_TABLES =
+            List.of("agent_invocation", "cap_result_contract");
+
     // ------------------------------------------------------------------
     // 1. 表与列的实际类型
     // ------------------------------------------------------------------
@@ -97,7 +106,7 @@ class MultiAgentSchemaIT extends CapITBase {
     @Test
     @DisplayName("⚠️ 库里的主键必须以 tenant_id 打头")
     void primaryKeysAreTenantScopedInDatabase() {
-        for (String table : GUARDED_TABLES) {
+        for (String table : TENANT_SCOPED_TABLES) {
             List<String> cols = primaryKeyColumns(table);
             assertThat(cols)
                     .as("%s 的主键必须包含 tenant_id", table)
@@ -118,9 +127,10 @@ class MultiAgentSchemaIT extends CapITBase {
                 .allMatch(t -> "cap_agent_def".equals(t));
 
         List<String> fkColumns = foreignKeyColumns("cap_agent_child_ref");
+        // Agent 全局化后外键不再带 tenant_id：首列是 agent 侧列，仍保证引用两端 Agent 一致。
         assertThat(fkColumns)
-                .as("复合外键必须以 tenant_id 打头（顺带保证租户一致）")
-                .allMatch(c -> "tenant_id".equals(c));
+                .as("复合外键首列必须是 Agent 侧列（parent/child_agent_id）")
+                .allMatch(c -> "parent_agent_id".equals(c) || "child_agent_id".equals(c));
     }
 
     // ------------------------------------------------------------------
@@ -130,7 +140,7 @@ class MultiAgentSchemaIT extends CapITBase {
     @Test
     @DisplayName("⚠️ 三张表在库里都必须 RLS enabled **且 FORCE**")
     void allThreeTablesAreRlsForcedInDatabase() {
-        for (String table : GUARDED_TABLES) {
+        for (String table : TENANT_SCOPED_TABLES) {
             // ⚠️ 布尔列必须 ::int —— 驱动不允许把 boolean 直接读成 long。
             assertThat(adminQueryLong("SELECT relrowsecurity::int FROM pg_class"
                     + " WHERE relname = '" + table + "'"
@@ -149,7 +159,7 @@ class MultiAgentSchemaIT extends CapITBase {
     @Test
     @DisplayName("⚠️ 三张表的 RLS 策略必须读写双向收口")
     void rlsPoliciesGuardReadsAndWritesInDatabase() {
-        for (String table : GUARDED_TABLES) {
+        for (String table : TENANT_SCOPED_TABLES) {
             List<String> qual = adminQueryList("SELECT coalesce(qual, '') FROM pg_policies"
                     + " WHERE schemaname = current_schema() AND tablename = '" + table + "'");
             List<String> withCheck = adminQueryList(

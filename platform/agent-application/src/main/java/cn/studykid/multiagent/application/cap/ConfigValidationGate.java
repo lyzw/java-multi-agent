@@ -168,12 +168,8 @@ public final class ConfigValidationGate {
 
     private void validateScopeConsistency(@NonNull ConfigPublishCommand command) {
         if (command.isPlatformScope()) {
-            if (!command.agents().isEmpty()) {
-                throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_UNKNOWN, "scope",
-                        "PLATFORM 作用域的发布不得包含租户级 Agent 定义（" + command.agents().size()
-                                + " 个）：平台发布头若带租户 Agent 结构，会把租户结构泄漏给所有租户"
-                                + "（06 §2 平台级 vs 租户级引用）");
-            }
+            // Agent 已是全局实体：发布头作用域只决定发布记录/指针的寻址方式，
+            // 不决定 Agent 归属；租户可见性由 tenant_agent_binding 决定。
             // ⚠️ 输出契约与路由策略同样是**租户级**对象：
             //    PLATFORM 作用域没有 tenant_id，这两类行要么写不进去（NOT NULL 违例），
             //    要么在补一个 tenant_id 后变成「平台级发布的租户对象」——

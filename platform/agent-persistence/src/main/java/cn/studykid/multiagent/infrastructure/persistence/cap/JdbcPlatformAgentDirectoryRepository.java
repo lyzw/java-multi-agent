@@ -48,13 +48,12 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
      * </ul>
      */
     private static final String SQL = """
-            SELECT a.tenant_id::text        AS tenant_id,
+            SELECT b.tenant_id::text        AS tenant_id,
                    a.agent_id::text         AS agent_id,
                    a.name                   AS name,
                    a.description            AS description,
                    (SELECT count(*) FROM agent_version v
-                     WHERE v.agent_id = a.agent_id
-                       AND v.tenant_id = a.tenant_id) AS version_count,
+                     WHERE v.agent_id = a.agent_id) AS version_count,
                    av.version_number        AS latest_version_number,
                    av.published_at          AS latest_published_at,
                    d.version                AS def_version,
@@ -63,22 +62,24 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
                    d.enabled_skills         AS def_enabled_skills,
                    d.capability_tags        AS def_capability_tags,
                    d.overrides              AS def_overrides
-            FROM agent a
+            FROM tenant_agent_binding b
+            JOIN agent a ON a.agent_id = b.agent_id
             LEFT JOIN LATERAL (
                 SELECT v.version_number, v.published_at
                 FROM agent_version v
-                WHERE v.agent_id = a.agent_id AND v.tenant_id = a.tenant_id
+                WHERE v.agent_id = a.agent_id
                 ORDER BY v.version_number DESC LIMIT 1
             ) av ON TRUE
             LEFT JOIN LATERAL (
                 SELECT d.version, d.lifecycle_state, d.roles, d.enabled_skills,
                        d.capability_tags, d.overrides
                 FROM cap_agent_def d
-                WHERE d.agent_id = a.agent_id AND d.tenant_id = a.tenant_id
+                WHERE d.agent_id = a.agent_id
                 ORDER BY d.version DESC LIMIT 1
             ) d ON TRUE
-            WHERE (?::uuid IS NULL OR a.tenant_id = ?::uuid)
-            ORDER BY a.tenant_id, a.name, a.agent_id
+            WHERE b.status = 'ACTIVE'
+              AND (?::uuid IS NULL OR b.tenant_id = ?::uuid)
+            ORDER BY b.tenant_id, a.name, a.agent_id
             """;
 
     @Override

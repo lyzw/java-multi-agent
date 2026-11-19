@@ -213,8 +213,12 @@ abstract class CapITBase {
         //    且残留的申请单会让「本例没有任何配置写入」的断言失真。
         adminExec("DELETE FROM cap_config_publish_request WHERE tenant_id IN ('"
                 + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
-        adminExec("DELETE FROM cap_agent_def WHERE tenant_id IN ('"
-                + tenantA + "'::uuid, '" + tenantB + "'::uuid)");
+        // ⚠️ Agent 是全局实体：cap_agent_def 已无 tenant_id。
+        //    按「绑定到 IT 专用租户的 Agent」清理其全局定义行（子表 cap_agent_child_ref 级联）。
+        //    不删 agent / agent_version / execution_snapshot —— 它们全局且快照不可删，按名复用。
+        adminExec("DELETE FROM cap_agent_def WHERE agent_id IN ("
+                + "SELECT agent_id FROM tenant_agent_binding WHERE tenant_id IN ('"
+                + tenantA + "'::uuid, '" + tenantB + "'::uuid))");
         // ⚠️ platform 级对象定义（P1）：无 RLS、无 tenant_id，按 id 清理。
         //    只清本轮用例用到的固定 id，避免误删他人数据。
         // ⚠️ **必须**一并清理：跨测试类的残留会让其他 IT 的「零写入」断言失真
@@ -492,18 +496,21 @@ abstract class CapITBase {
      */
     protected static String createAgentWithVersion(String tenantId, String agentName,
                                                    String definitionJson, boolean published) {
-        String agentId = java.util.UUID.randomUUID().toString();
-        // 冲突即说明同名 Agent 已存在 → DO NOTHING 后按名回查，复用既有 agent_id
-        adminExec("INSERT INTO agent (agent_id, tenant_id, name) VALUES ('" + agentId
-                + "'::uuid, '" + tenantId + "'::uuid, '" + agentName + "') "
-                + "ON CONFLICT (tenant_id, name) DO NOTHING");
-        agentId = adminQuery("SELECT agent_id::text FROM agent WHERE tenant_id = '" + tenantId
-                + "'::uuid AND name = '" + agentName + "'");
-        adminExec("INSERT INTO agent_version (version_id, tenant_id, agent_id, version_number, "
-                + "definition, published_at) VALUES (gen_random_uuid(), '" + tenantId
-                + "'::uuid, '" + agentId + "'::uuid, 1, '" + definitionJson + "'::jsonb, "
+        // Agent 是全局实体（name 全局唯一），按名复用；租户可见性由绑定决定。
+        adminExec("INSERT INTO agent (name) VALUES ('" + agentName + "') "
+                + "ON CONFLICT (name) DO NOTHING");
+        String agentId = adminQuery("SELECT agent_id::text FROM agent WHERE name = '"
+                + agentName + "'");
+        // 确保该 IT 租户对它有 ACTIVE 绑定（一个 Agent 可绑多个租户）。
+        adminExec("INSERT INTO tenant_agent_binding (tenant_id, agent_id, status) VALUES ('"
+                + tenantId + "'::uuid, '" + agentId + "'::uuid, 'ACTIVE') "
+                + "ON CONFLICT (tenant_id, agent_id) DO UPDATE SET status='ACTIVE'");
+        // 版本全局唯一约束 (agent_id, version_number)。
+        adminExec("INSERT INTO agent_version (version_id, agent_id, version_number, "
+                + "definition, published_at) VALUES (gen_random_uuid(), '"
+                + agentId + "'::uuid, 1, '" + definitionJson + "'::jsonb, "
                 + (published ? "now()" : "NULL") + ") "
-                + "ON CONFLICT (tenant_id, agent_id, version_number) DO NOTHING");
+                + "ON CONFLICT (agent_id, version_number) DO NOTHING");
         return agentId;
     }
 
@@ -530,19 +537,17 @@ abstract class CapITBase {
      * <p>需要<b>多个不同快照</b>的场景（如同一版本两个快照）请用 {@link #createFreshSnapshot}。
      */
     protected static String createExecutionSnapshot(String tenantId, String agentId) {
+        // 版本 / 快照都是全局实体：无 tenant_id，按 (agent_id, version_number) / version_id 定位。
         String versionId = adminQuery("SELECT version_id::text FROM agent_version "
-                + "WHERE tenant_id = '" + tenantId + "'::uuid AND agent_id = '" + agentId
-                + "'::uuid AND version_number = 1");
-        adminExec("INSERT INTO execution_snapshot (snapshot_id, tenant_id, version_id, "
+                + "WHERE agent_id = '" + agentId + "'::uuid AND version_number = 1");
+        adminExec("INSERT INTO execution_snapshot (snapshot_id, version_id, "
                 + "agent_config, prompt_config, tool_contracts, run_config) "
-                + "SELECT gen_random_uuid(), '" + tenantId + "'::uuid, '" + versionId + "'::uuid, "
+                + "SELECT gen_random_uuid(), '" + versionId + "'::uuid, "
                 + "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb "
                 + "WHERE NOT EXISTS (SELECT 1 FROM execution_snapshot s "
-                + "WHERE s.tenant_id = '" + tenantId + "'::uuid "
-                + "AND s.version_id = '" + versionId + "'::uuid)");
+                + "WHERE s.version_id = '" + versionId + "'::uuid)");
         return adminQuery("SELECT snapshot_id::text FROM execution_snapshot "
-                + "WHERE tenant_id = '" + tenantId + "'::uuid AND version_id = '" + versionId
-                + "'::uuid ORDER BY created_at LIMIT 1");
+                + "WHERE version_id = '" + versionId + "'::uuid ORDER BY created_at LIMIT 1");
     }
 
     /**
@@ -552,12 +557,11 @@ abstract class CapITBase {
      */
     protected static String createFreshSnapshot(String tenantId, String agentId) {
         String versionId = adminQuery("SELECT version_id::text FROM agent_version "
-                + "WHERE tenant_id = '" + tenantId + "'::uuid AND agent_id = '" + agentId
-                + "'::uuid AND version_number = 1");
+                + "WHERE agent_id = '" + agentId + "'::uuid AND version_number = 1");
         String snapshotId = java.util.UUID.randomUUID().toString();
-        adminExec("INSERT INTO execution_snapshot (snapshot_id, tenant_id, version_id, "
+        adminExec("INSERT INTO execution_snapshot (snapshot_id, version_id, "
                 + "agent_config, prompt_config, tool_contracts, run_config) VALUES ('"
-                + snapshotId + "'::uuid, '" + tenantId + "'::uuid, '" + versionId
+                + snapshotId + "'::uuid, '" + versionId
                 + "'::uuid, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb)");
         return snapshotId;
     }

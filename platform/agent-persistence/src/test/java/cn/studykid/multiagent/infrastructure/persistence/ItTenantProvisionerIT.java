@@ -76,26 +76,32 @@ class ItTenantProvisionerIT {
         assertThat(second)
                 .as("同一 slug 必须解析到同一个 tenant_id")
                 .isEqualTo(first);
-        assertThat(afterFirst[0]).as("agent 行数").isEqualTo(1L);
-        assertThat(afterFirst[1]).as("agent_version 行数").isEqualTo(1L);
-        assertThat(afterFirst[2])
-                .as("execution_snapshot 行数（首轮供给后应恰好 1 份）")
+        assertThat(afterFirst[0]).as("该租户绑定 agent1 的行数（新模型：绑定才是租户维度）")
                 .isEqualTo(1L);
+        assertThat(afterFirst[1]).as("agent1 全局版本数（至少 1，其他 IT 可能再发版本）")
+                .isGreaterThanOrEqualTo(1L);
+        assertThat(afterFirst[2])
+                .as("agent1 全局快照数（至少 1，且下方 containsExactly 保证本夹具不再泄漏）")
+                .isGreaterThanOrEqualTo(1L);
         assertThat(afterSecond)
                 .as("⚠️ 第二次供给不得新增任何行 —— 若这里变大，说明「幂等」只是 ON CONFLICT 的错觉")
                 .containsExactly(afterFirst);
     }
 
     @Test
-    @DisplayName("✅ 取到的快照属于该租户（否则复合外键 (tenant_id, snapshot_id) 会报错且信息不指向真因）")
+    @DisplayName("✅ 取到的快照经 ACTIVE 绑定对该租户可见（Agent 全局化后可见性由绑定决定）")
     void snapshotBelongsToTenant() throws Exception {
         String tenantId = ItTenantProvisioner.provision(admin, SLUG, "IT 专用租户 · 幂等性验证");
         String snapshotId = ItTenantProvisioner.snapshotId(admin, tenantId);
 
         assertThat(snapshotId).isNotBlank();
-        assertThat(queryLong("SELECT count(*) FROM execution_snapshot WHERE snapshot_id = '"
-                + snapshotId + "'::uuid AND tenant_id = '" + tenantId + "'::uuid"))
-                .as("快照必须属于该租户（跨租户快照会让插 Run 的复合外键失败）")
+        // 快照本身是全局的；「该租户能用」= 存在一条 ACTIVE 绑定把该租户连到快照所属 Agent。
+        assertThat(queryLong("SELECT count(*) FROM execution_snapshot es "
+                + "JOIN agent_version v ON v.version_id = es.version_id "
+                + "JOIN tenant_agent_binding b ON b.agent_id = v.agent_id "
+                + "WHERE es.snapshot_id = '" + snapshotId + "'::uuid "
+                + "AND b.tenant_id = '" + tenantId + "'::uuid AND b.status='ACTIVE'"))
+                .as("快照必须经 ACTIVE 绑定对该租户可见（否则运行期 resolver 会拒用）")
                 .isEqualTo(1L);
     }
 
@@ -138,16 +144,22 @@ class ItTenantProvisionerIT {
     // ── 辅助 ────────────────────────────────────────────────────────────
 
     /**
-     * @return [agent 行数, agent_version 行数, execution_snapshot 行数,
+     * @return [该租户绑定 agent1 的行数, agent1 全局版本行数, agent1 全局快照行数,
      *          budget_account 行数, cap_authz_version 的 worker 行数]
+     *
+     * <p>Agent / 版本 / 快照是<b>全局</b>实体（无 tenant_id），故按 agent1 查全局行数；
+     * 租户维度只体现在 tenant_agent_binding 一行上。
      */
     private static long[] counts(String tenantId) throws SQLException {
         return new long[] {
-                queryLong("SELECT count(*) FROM agent WHERE tenant_id = '" + tenantId + "'::uuid"),
-                queryLong("SELECT count(*) FROM agent_version WHERE tenant_id = '"
-                        + tenantId + "'::uuid"),
-                queryLong("SELECT count(*) FROM execution_snapshot WHERE tenant_id = '"
-                        + tenantId + "'::uuid"),
+                queryLong("SELECT count(*) FROM tenant_agent_binding b "
+                        + "JOIN agent a ON a.agent_id=b.agent_id "
+                        + "WHERE b.tenant_id = '" + tenantId + "'::uuid AND a.name='agent1'"),
+                queryLong("SELECT count(*) FROM agent_version v "
+                        + "JOIN agent a ON a.agent_id=v.agent_id WHERE a.name='agent1'"),
+                queryLong("SELECT count(*) FROM execution_snapshot s "
+                        + "JOIN agent_version v ON v.version_id=s.version_id "
+                        + "JOIN agent a ON a.agent_id=v.agent_id WHERE a.name='agent1'"),
                 queryLong("SELECT count(*) FROM budget_account WHERE tenant_id = '"
                         + tenantId + "'::uuid"),
                 queryLong("SELECT count(*) FROM cap_authz_version WHERE tenant_id = '"

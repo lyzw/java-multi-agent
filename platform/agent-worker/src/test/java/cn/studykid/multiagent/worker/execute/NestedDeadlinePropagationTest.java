@@ -254,13 +254,13 @@ class NestedDeadlinePropagationTest {
 
         InMemoryAgentDefs(CapAgentDef... defs) {
             for (CapAgentDef def : defs) {
-                rows.put(def.tenantId() + "/" + def.agentId() + "@" + def.version(), def);
+                rows.put(def.agentId() + "@" + def.version(), def);
             }
         }
 
         @Override
         public boolean insert(@NonNull CapAgentDef def) {
-            String key = def.tenantId() + "/" + def.agentId() + "@" + def.version();
+            String key = def.agentId() + "@" + def.version();
             if (rows.containsKey(key)) {
                 return false;
             }
@@ -271,14 +271,13 @@ class NestedDeadlinePropagationTest {
         @Override
         public @NonNull Optional<CapAgentDef> find(@NonNull String tenantId,
                                                    @NonNull String agentId, int version) {
-            return Optional.ofNullable(rows.get(tenantId + "/" + agentId + "@" + version));
+            return Optional.ofNullable(rows.get(agentId + "@" + version));
         }
 
         @Override
         public @NonNull Optional<CapAgentDef> findLatest(@NonNull String tenantId,
                                                          @NonNull String agentId) {
             return rows.values().stream()
-                    .filter(d -> tenantId.equals(d.tenantId()))
                     .filter(d -> agentId.equals(d.agentId()))
                     .max((x, y) -> Integer.compare(x.version(), y.version()));
         }

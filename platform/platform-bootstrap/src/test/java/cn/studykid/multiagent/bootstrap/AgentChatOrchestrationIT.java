@@ -552,40 +552,45 @@ class AgentChatOrchestrationIT {
             try {
                 // agent（固定 id，route 事件断言用）
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO agent (agent_id, tenant_id, name, description) "
-                                + "VALUES (?::uuid, ?::uuid, ?, ?) "
-                                + "ON CONFLICT (tenant_id, name) DO NOTHING")) {
+                        "INSERT INTO agent (agent_id, name, description) "
+                                + "VALUES (?::uuid, ?, ?) "
+                                + "ON CONFLICT (name) DO NOTHING")) {
                     ps.setString(1, AGENT_ID);
-                    ps.setString(2, tenant);
-                    ps.setString(3, AGENT_NAME);
-                    ps.setString(4, "真编排 IT 固定 Agent");
+                    ps.setString(2, AGENT_NAME);
+                    ps.setString(3, "真编排 IT 固定 Agent");
+                    ps.executeUpdate();
+                }
+                // 运行时租户可见性 = tenant_agent_binding 里该租户→agent 的 ACTIVE 行
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO tenant_agent_binding (tenant_id, agent_id, status) "
+                                + "VALUES (?::uuid, ?::uuid, 'ACTIVE') "
+                                + "ON CONFLICT (tenant_id, agent_id) DO UPDATE SET status='ACTIVE'")) {
+                    ps.setString(1, tenant);
+                    ps.setString(2, AGENT_ID);
                     ps.executeUpdate();
                 }
                 // agent_version v1 + published_at（快照解析硬过滤 published_at IS NOT NULL）
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO agent_version (tenant_id, agent_id, version_number, definition, published_at) "
-                                + "SELECT ?::uuid, agent_id, 1, '{\"kind\":\"tutor\"}'::jsonb, now() "
-                                + "FROM agent WHERE tenant_id = ?::uuid AND name = ? "
-                                + "ON CONFLICT (tenant_id, agent_id, version_number) DO NOTHING")) {
-                    ps.setString(1, tenant);
-                    ps.setString(2, tenant);
-                    ps.setString(3, AGENT_NAME);
+                        "INSERT INTO agent_version (agent_id, version_number, definition, published_at) "
+                                + "SELECT agent_id, 1, '{\"kind\":\"tutor\"}'::jsonb, now() "
+                                + "FROM agent WHERE name = ? "
+                                + "ON CONFLICT (agent_id, version_number) DO NOTHING")) {
+                    ps.setString(1, AGENT_NAME);
                     ps.executeUpdate();
                 }
                 // execution_snapshot（不可变表：NOT EXISTS 幂等，绝不靠 ON CONFLICT）
                 try (PreparedStatement ps = conn.prepareStatement(
                         "INSERT INTO execution_snapshot "
-                                + "(tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config) "
-                                + "SELECT v.tenant_id, v.version_id, '{}', '{}', '{}', "
+                                + "(version_id, agent_config, prompt_config, tool_contracts, run_config) "
+                                + "SELECT v.version_id, '{}', '{}', '{}', "
                                 + "'{\"maxCostPerRun\":\"2.00\",\"maxLlmCalls\":12,"
                                 + "\"maxSteps\":20,\"approvalRequired\":\"OPTIONAL\"}' "
                                 + "FROM agent_version v JOIN agent a "
-                                + "  ON a.agent_id = v.agent_id AND a.tenant_id = v.tenant_id "
-                                + "WHERE v.tenant_id = ?::uuid AND a.name = ? AND v.version_number = 1 "
+                                + "  ON a.agent_id = v.agent_id "
+                                + "WHERE a.name = ? AND v.version_number = 1 "
                                 + "AND NOT EXISTS (SELECT 1 FROM execution_snapshot s "
-                                + "  WHERE s.tenant_id = v.tenant_id AND s.version_id = v.version_id)")) {
-                    ps.setString(1, tenant);
-                    ps.setString(2, AGENT_NAME);
+                                + "  WHERE s.version_id = v.version_id)")) {
+                    ps.setString(1, AGENT_NAME);
                     ps.executeUpdate();
                 }
                 // cap_agent_def：运行期真源（instructions / model_ref / generation_params），
@@ -593,22 +598,21 @@ class AgentChatOrchestrationIT {
                 // align_cap_lifecycle_state 触发器会在 published_at 非空时自动置 lifecycle_state=PUBLISHED。
                 try (PreparedStatement ps = conn.prepareStatement(
                         "INSERT INTO cap_agent_def "
-                                + "(tenant_id, agent_id, version, name, description, roles, "
+                                + "(agent_id, version, name, description, roles, "
                                 + " enabled_skills, skill_bundles, capability_tags, overrides, "
                                 + " orchestration, instructions, model_ref, generation_params, "
                                 + " config_fingerprint, schema_version, published_at) "
-                                + "VALUES (?::uuid, ?::uuid, 1, ?, ?, '[]'::jsonb, '[]'::jsonb, "
+                                + "VALUES (?::uuid, 1, ?, ?, '[]'::jsonb, '[]'::jsonb, "
                                 + " '[]'::jsonb, '[\"tutor\"]'::jsonb, '{}'::jsonb, '{}'::jsonb, "
                                 + " ?::jsonb, ?, ?::jsonb, ?, 1, now()) "
-                                + "ON CONFLICT (tenant_id, agent_id, version) DO NOTHING")) {
-                    ps.setString(1, tenant);
-                    ps.setString(2, AGENT_ID);
-                    ps.setString(3, AGENT_NAME);
-                    ps.setString(4, "真编排 IT 固定 Agent");
-                    ps.setString(5, "{\"inlineInstructions\":\"你是初中数学辅导助手，先给直觉再给定义。\"}");
-                    ps.setString(6, "MiniMax-M2.5");
-                    ps.setString(7, "{\"temperature\":0.3,\"maxOutputTokens\":2048}");
-                    ps.setString(8, "it-fixed-agent-fp-v1");
+                                + "ON CONFLICT (agent_id, version) DO NOTHING")) {
+                    ps.setString(1, AGENT_ID);
+                    ps.setString(2, AGENT_NAME);
+                    ps.setString(3, "真编排 IT 固定 Agent");
+                    ps.setString(4, "{\"inlineInstructions\":\"你是初中数学辅导助手，先给直觉再给定义。\"}");
+                    ps.setString(5, "MiniMax-M2.5");
+                    ps.setString(6, "{\"temperature\":0.3,\"maxOutputTokens\":2048}");
+                    ps.setString(7, "it-fixed-agent-fp-v1");
                     ps.executeUpdate();
                 }
                 conn.commit();

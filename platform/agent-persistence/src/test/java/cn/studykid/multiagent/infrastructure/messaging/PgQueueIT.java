@@ -560,8 +560,11 @@ class PgQueueIT {
             try (PreparedStatement ps = conn.prepareStatement(
                     "INSERT INTO run (run_id, tenant_id, snapshot_id, idempotency_key, "
                             + "request_digest, input_payload, correlation_id, state) "
-                            + "SELECT ?::uuid, ?::uuid, snapshot_id, ?, ?, '{}'::jsonb, ?, 'QUEUED' "
-                            + "FROM execution_snapshot WHERE tenant_id = ?::uuid LIMIT 1")) {
+                            + "SELECT ?::uuid, ?::uuid, es.snapshot_id, ?, ?, '{}'::jsonb, ?, 'QUEUED' "
+                            + "FROM tenant_agent_binding b "
+                            + "JOIN agent_version v ON v.agent_id = b.agent_id "
+                            + "JOIN execution_snapshot es ON es.version_id = v.version_id "
+                            + "WHERE b.tenant_id = ?::uuid AND b.status='ACTIVE' LIMIT 1")) {
                 ps.setObject(1, UUID.fromString(runId));
                 ps.setString(2, tenantId);
                 ps.setString(3, "pgq-" + runId);

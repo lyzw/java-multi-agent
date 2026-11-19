@@ -251,7 +251,9 @@ class CapRepositoryIT extends CapITBase {
                 null, null, ExecutionIntent.IntentState.RESERVED,
                 Instant.now(), Instant.now()));
 
-        for (String table : new String[]{"cap_agent_def", "cap_authz_version",
+        // cap_agent_def 已全局化（无 tenant_id/RLS）：它的可见性由仓储的绑定校验负责，
+        // 不再用「B 直接 count 表」断言（那会把全局定义行误判成 RLS 失效）。
+        for (String table : new String[]{"cap_authz_version",
                 "execution_capability_snapshot", "cap_result_event", "cap_execution_intent"}) {
             long visibleToB = appCountAsTenant(tenantB, "SELECT count(*) FROM " + table);
             assertThat(visibleToB)

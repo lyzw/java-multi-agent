@@ -41,6 +41,11 @@ class SchemaStructureTest {
      */
     private static final Set<String> RLS_EXEMPT_TABLES = Set.of(
             "public.tenant",
+            // Agent 已是全局实体（2026-11-19）：定义、版本、父子关系与执行快照
+            // 都不再带 tenant_id，也不再挂租户 RLS。租户可见性由
+            // public.tenant_agent_binding 的多对多绑定决定，该绑定表本身必须挂 RLS。
+            "public.agent", "public.agent_version", "public.cap_agent_def",
+            "public.cap_agent_child_ref", "public.execution_snapshot",
             "public.cap_tool_def", "public.cap_skill_def", "public.cap_mcp_server_def",
             "public.model_catalog", "public.model_provider_credential",
             // 对话审计插件（2026-11-18）：这两张表**刻意**没有租户维度——
@@ -193,9 +198,19 @@ class SchemaStructureTest {
     void helperParsesTenantTables() {
         assertThat(PlatformDdl.policyTables())
                 .as("RLS 策略应覆盖租户域表")
-                .contains("public.agent", "public.run", "public.tool_operation",
+                .contains("public.tenant_agent_binding", "public.run", "public.tool_operation",
                         "public.audit_record")
-                .doesNotContain("public.tenant");
+                .doesNotContain("public.tenant", "public.agent");
+    }
+
+    @Test
+    @DisplayName("⚠️ 全局 Agent 定义表不得挂租户 RLS（可见性由绑定表决定）")
+    void globalAgentTablesAreNotRlsProtected() {
+        assertThat(PlatformDdl.policyTables())
+                .as("全局 Agent 定义若挂租户 RLS，跨租户分配会读不到同一条定义")
+                .doesNotContain("public.agent", "public.agent_version",
+                        "public.cap_agent_def", "public.cap_agent_child_ref",
+                        "public.execution_snapshot");
     }
 
     @Test

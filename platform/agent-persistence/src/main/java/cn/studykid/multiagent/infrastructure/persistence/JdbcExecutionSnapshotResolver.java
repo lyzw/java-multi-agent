@@ -28,13 +28,13 @@ import cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort;
  * {@link ExecutionSnapshotPort} 的 PostgreSQL 实现。
  *
  * <p><b>⚠️ 为什么必须走 {@link TransactionalConnectionHolder}</b>（P2-D05 铁律）：
- * 解析 SQL 查的是 {@code execution_snapshot}，该表
- * {@code ENABLE + FORCE ROW LEVEL SECURITY}，策略为
- * {@code tenant_id = current_tenant_id()}。未绑定 {@code app.tenant_id}
- * 时可见 <b>0 行</b>，症状是「Agent 明明有快照，却解析不出来」——
- * 与「Agent 真的没发布」<b>症状完全相同</b>，会把排查方向带偏。
- * ⚠️ RLS 退役期（改造计划 WP-M1-2）：GUC 绑定在 holder 中心统一执行，保留至
- * M4 退役批次；SQL 三表显式 {@code tenant_id} 等值谓词，RLS 退役后功能不变。
+ * 全局化后 {@code agent} / {@code agent_version} / {@code execution_snapshot}
+ * 都不再带 {@code tenant_id}、也不再挂租户 RLS；租户边界由
+ * {@code tenant_agent_binding}（FORCE RLS + 显式 tenant 谓词 + ACTIVE 状态）承载。
+ * 连接仍必须在事务内绑定租户，否则绑定表在 FORCE RLS 下静默返回 0 行 ——
+ * 症状是「Agent 明明已分配，却解析不出快照」，与「没发布」完全相同。
+ * ⚠️ RLS 退役期（改造计划 WP-M1-2）：GUC 绑定在 holder 中心统一执行；
+ * SQL 仍保留显式 {@code tenant_id} 谓词，退役后应用层语义不变。
  *
  * <p><b>⚠️ 嵌套事务</b>：本类在 {@code RunCreationService} 的写入事务内被调用，
  * {@link TransactionalConnectionHolder#inTransaction} 检测到外层事务已激活，
@@ -50,25 +50,24 @@ public class JdbcExecutionSnapshotResolver implements ExecutionSnapshotPort {
     private static final Logger log = LoggerFactory.getLogger(JdbcExecutionSnapshotResolver.class);
 
     /**
-     * 已发布版本的最新一条 → 其执行快照。
+     * 该租户可见的已发布版本 → 其执行快照。
      *
      * <p>⚠️ <b>必须取 {@code es.snapshot_id} 而非 {@code es.version_id}</b>：
      * {@code execution_snapshot} <b>同时拥有</b> {@code snapshot_id}（自身主键）
-     * 与 {@code version_id}（指向 {@code agent_version}）。而外键
-     * {@code run_snapshot_fk} 声明为
-     * {@code FOREIGN KEY (tenant_id, snapshot_id) REFERENCES execution_snapshot (tenant_id, snapshot_id)}
-     * ——引的是<b>主键列</b>，不是 version_id。
-     * 取错列的症状极具欺骗性：外键报错说
-     * 「run 的 (tenant_id, snapshot_id) 不在 execution_snapshot 里」，
-     * 而那条行**确实存在**，只是主键值对不上；
-     * 排查方向会被带向「租户隔离有问题」或「数据没写进去」，
-     * 而真因只是选错了列。
+     * 与 {@code version_id}（指向 {@code agent_version}）；{@code run.snapshot_id}
+     * 外键引的是<b>主键列</b>。取错列的症状极具欺骗性：外键报错说
+     * 「run 的 snapshot_id 不在 execution_snapshot 里」，而那条行确实存在，
+     * 排查方向会被带向「租户隔离有问题」或「数据没写进去」。
+     *
+     * <p>⚠️ <b>{@code pinned_version} 语义落点</b>：绑定固定了版本就只读那一版；
+     * 为空才取最新版。固定版未发布 / 无快照时返回 empty（fail-closed），
+     * <b>不得静默回退到最新版</b> —— 否则租户以为锁在旧版，实际跑的是新版。
      *
      * <p>⚠️ {@code published_at IS NOT NULL} 是<b>硬过滤</b>：
      * 草稿版本不该被 Run 使用（草稿可能随时被改或删）。
      *
-     * <p>⚠️ 三表都按 {@code tenant_id} 显式等值连接：即便 RLS 将来被误关，
-     * 也不会跨租户取到快照。
+     * <p>⚠️ 租户边界由 {@code tenant_agent_binding} 的显式 tenant 谓词 +
+     * {@code status='ACTIVE'} 收口。已 SUSPENDED 的分配即使快照仍在，也不可解析。
      *
      * <p>⚠️ 内连接 {@code execution_snapshot}：版本已发布但尚未生成快照，
      * 同样属「不可用」，必须当 empty 返回（否则又回到外键报错）。
@@ -80,12 +79,14 @@ public class JdbcExecutionSnapshotResolver implements ExecutionSnapshotPort {
     private static final String SQL_RESOLVE = """
             SELECT es.snapshot_id::text, v.version_number
             FROM agent a
+            JOIN tenant_agent_binding b
+              ON b.agent_id = a.agent_id AND b.tenant_id = ?::uuid
+             AND b.status = 'ACTIVE'
             JOIN agent_version v
-              ON v.agent_id = a.agent_id AND v.tenant_id = a.tenant_id
-            JOIN execution_snapshot es
-              ON es.version_id = v.version_id AND es.tenant_id = v.tenant_id
-            WHERE a.tenant_id = ?::uuid
-              AND a.agent_id = ?::uuid
+              ON v.agent_id = a.agent_id
+             AND (b.pinned_version IS NULL OR v.version_number = b.pinned_version)
+            JOIN execution_snapshot es ON es.version_id = v.version_id
+            WHERE a.agent_id = ?::uuid
               AND v.published_at IS NOT NULL
             ORDER BY v.version_number DESC
             LIMIT 1

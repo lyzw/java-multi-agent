@@ -155,10 +155,15 @@ class AgentEndpointIT {
 
     private String newAgentId() {
         String agentId = UUID.randomUUID().toString();
+        // Agent 全局化：全局行 + 目标租户绑定。
         adminExec("""
-                INSERT INTO agent (agent_id, tenant_id, name, description, created_at, updated_at)
-                VALUES ('%s'::uuid, '%s'::uuid, 'ep-agent-%s', 'seeded', now(), now())
-                """.formatted(agentId, tenantA, agentId));
+                INSERT INTO agent (agent_id, name, description, created_at, updated_at)
+                VALUES ('%s'::uuid, 'ep-agent-%s', 'seeded', now(), now())
+                """.formatted(agentId, agentId));
+        adminExec("""
+                INSERT INTO tenant_agent_binding (tenant_id, agent_id, status)
+                VALUES ('%s'::uuid, '%s'::uuid, 'ACTIVE')
+                """.formatted(tenantA, agentId));
         return agentId;
     }
 
