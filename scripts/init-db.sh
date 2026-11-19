@@ -6,7 +6,7 @@
 #
 #   platform 目标（agent_dev / agent_prod / 隔离 IT 库）：
 #     ① 建库（缺失时，owner=执行 DDL 的角色）
-#     ② 01_platform_ddl.sql    完整结构终态快照（当前 74 表 / 45 RLS 表 / 53 策略）
+#     ② 01_platform_ddl.sql    完整结构终态快照（当前 75 表 / 41 RLS 表 / 49 策略）
 #     ③ 02_platform_seed.sql   种子（t-a + t-b 夹具 + 发布头/指针附录）
 #     ④ 03_platform_roles.sql  角色 + 授权（public 域 + platform 域）
 #     ⑤ 04_retention_role.sql  保留期专用角色（凭据隔离，G3）
@@ -147,15 +147,18 @@ if [ "$TARGET" = platform ]; then
 #    2026-11-18 对话审计插件 P0 配置表 public.chat_audit_config（平台域、无 RLS）：71 → 72。
 #    2026-11-18 对话审计插件 P2 审计主表 public.chat_audit_record（租户域、FORCE RLS）
 #    + public.chat_audit_unattributed（无 RLS）：表 72 → 74，RLS 表 44 → 45，策略 52 → 53。
-  EXPECT_TABLES=74
+#    2026-11-19 全局 Agent（多对多绑定）：+ public.tenant_agent_binding（租户域、FORCE RLS）；
+#    agent / agent_version / cap_agent_def / cap_agent_child_ref / execution_snapshot
+#    改为全局实体（去 tenant_id、去 5 条租户策略）：表 74 → 75，RLS 表 45 → 41，策略 53 → 49。
+  EXPECT_TABLES=75
   # ── RLS 退役期变量（RLS依赖清理改造计划 M4 B1–B4 批）──────────────
   #    每退役一批（DROP POLICY / DISABLE RLS）上调 RLS_RETIRED_*；
   #    期望值 = 基线 − 已退役数。未退役时为 0，行为与原常量完全一致。
   #    改这里必须同步 it-env.sh --probe 的 rls_retired_*（同一份事实）。
   RLS_RETIRED_TABLES=0
   RLS_RETIRED_POLICIES=0
-  EXPECT_RLS_TABLES=$((45 - RLS_RETIRED_TABLES))
-  EXPECT_POLICIES=$((53 - RLS_RETIRED_POLICIES))
+  EXPECT_RLS_TABLES=$((41 - RLS_RETIRED_TABLES))
+  EXPECT_POLICIES=$((49 - RLS_RETIRED_POLICIES))
   echo "· 自检"
   TABLES=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_tables WHERE schemaname IN ('public','platform')")
   RLSTB=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relrowsecurity")

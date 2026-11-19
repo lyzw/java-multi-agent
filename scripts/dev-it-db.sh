@@ -164,29 +164,39 @@ INSERT INTO tenant (tenant_id, slug, name, status, created_at)
 SELECT gen_random_uuid(), 't-b', 'IT 租户 B', 'ACTIVE', now()
 WHERE NOT EXISTS (SELECT 1 FROM tenant WHERE slug='t-b');
 
--- agent + version（t-a 与 t-b 都要：部分 IT 需要 t-b 的快照）
-INSERT INTO agent (agent_id, tenant_id, name, description, created_at)
-SELECT gen_random_uuid(), t.tenant_id, 'agent1', 'IT 用 agent', now()
-FROM tenant t WHERE t.slug IN ('t-a','t-b')
-  AND NOT EXISTS (SELECT 1 FROM agent a WHERE a.tenant_id=t.tenant_id AND a.name='agent1');
+-- ⚠️ Agent 是全局实体（2026-11-19）：agent / agent_version / execution_snapshot
+--    不再有 tenant_id，也不挂 RLS；t-a / t-b 通过 tenant_agent_binding 绑到同一个
+--    agent1。02 种子已为 t-b 建好 agent1(a3f1c2d4) + v1 + 快照，这里只补：
+--      · 全局 agent1 不存在时建一份（name 全局唯一，ON CONFLICT 复用种子那行）；
+--      · t-a / t-b 各自补一条 ACTIVE 绑定（一个 Agent 分配给多个租户）；
+--      · v1 / 快照全局只有一份，用 NOT EXISTS 按 agent_id+version / version_id 排除，
+--        避免快照不可变触发器下每轮永久泄漏一行。
+INSERT INTO agent (agent_id, name, description, created_at)
+SELECT gen_random_uuid(), 'agent1', 'IT 用 agent（全局）', now()
+WHERE NOT EXISTS (SELECT 1 FROM agent WHERE name='agent1');
 
-INSERT INTO agent_version (tenant_id, agent_id, version_number, definition, created_at)
-SELECT a.tenant_id, a.agent_id, 1, '{"kind":"tutor"}'::jsonb, now()
-FROM agent a JOIN tenant t ON t.tenant_id=a.tenant_id
+INSERT INTO tenant_agent_binding (tenant_id, agent_id, status, config)
+SELECT t.tenant_id, a.agent_id, 'ACTIVE', '{}'::jsonb
+FROM tenant t CROSS JOIN agent a
 WHERE t.slug IN ('t-a','t-b') AND a.name='agent1'
-  AND NOT EXISTS (SELECT 1 FROM agent_version v
-                  WHERE v.tenant_id=a.tenant_id AND v.agent_id=a.agent_id
-                    AND v.version_number=1);
+  AND NOT EXISTS (SELECT 1 FROM tenant_agent_binding b
+                  WHERE b.tenant_id=t.tenant_id AND b.agent_id=a.agent_id);
 
--- 执行快照
+INSERT INTO agent_version (agent_id, version_number, definition, created_at)
+SELECT a.agent_id, 1, '{"kind":"tutor"}'::jsonb, now()
+FROM agent a WHERE a.name='agent1'
+  AND NOT EXISTS (SELECT 1 FROM agent_version v
+                  WHERE v.agent_id=a.agent_id AND v.version_number=1);
+
+-- 执行快照（全局，按 version_id 判重，不看租户）
 INSERT INTO execution_snapshot
-  (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config, created_at)
-SELECT v.tenant_id, v.version_id, '{}', '{}', '{}',
+  (version_id, agent_config, prompt_config, tool_contracts, run_config, created_at)
+SELECT v.version_id, '{}', '{}', '{}',
   '{"maxCostPerRun":"2.00","maxLlmCalls":12,"maxSteps":20,"approvalRequired":"OPTIONAL"}'::jsonb,
   now()
-FROM agent_version v JOIN agent a ON a.agent_id=v.agent_id JOIN tenant t ON t.tenant_id=a.tenant_id
-WHERE t.slug IN ('t-a','t-b') AND a.name='agent1' AND v.version_number=1
-  AND NOT EXISTS (SELECT 1 FROM execution_snapshot s WHERE s.tenant_id=v.tenant_id);
+FROM agent_version v JOIN agent a ON a.agent_id=v.agent_id
+WHERE a.name='agent1' AND v.version_number=1
+  AND NOT EXISTS (SELECT 1 FROM execution_snapshot s WHERE s.version_id=v.version_id);
 
 -- 预算账户（工具调用的预算预留需要）
 INSERT INTO budget_account (tenant_id, total_limit, reserved_amount, settled_amount, currency, created_at)

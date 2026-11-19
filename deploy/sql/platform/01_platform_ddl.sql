@@ -1,21 +1,26 @@
 -- =====================================================================
 -- platform 完整结构（pg_dump --schema-only 导出）
 -- 【来源】迁移脚本 V1→V34 在全新空库上逐个实跑（0 错误）后 pg_dump 导出，
---   再在第二个空库复放验证结构等价（74 表 / 680 列 / 255 约束 / 15 枚举 /
---   15 函数 / 33 触发器 / 45 RLS 开启 / 53 RLS 策略）。
+--   再在第二个空库复放验证结构等价（75 表 / 680 列 / 255 约束 / 15 枚举 /
+--   15 函数 / 33 触发器 / 41 RLS 开启 / 49 RLS 策略）。
 --   ⚠️ 2026-11-18 增量（对话审计插件 P0/P2）：
 --   +1 表 public.chat_audit_config（平台级单例配置，无租户、无 RLS）；
 --   +2 表 public.chat_audit_record（租户级 FORCE RLS，+1 策略）
 --        / public.chat_audit_unattributed（建连前失败元数据，无 RLS）；
 --   ⇒ 表 71→74、RLS 开启 44→45、策略 52→53；新增 3 表共 31 列、+6 索引。
+--   ⚠️ 2026-11-19 全局 Agent（多对多绑定）：
+--   +1 表 public.tenant_agent_binding（租户-Agent 绑定，FORCE RLS + 1 策略）；
+--   public.agent / agent_version / cap_agent_def / cap_agent_child_ref /
+--   execution_snapshot 改为全局实体，移除 tenant_id 与 5 条租户策略。
+--   ⇒ 表 74→75、RLS 开启 45→41、策略 53→49。
 --   ⚠️ 上面这行的「680 列 / 255 约束 / 33 触发器」是**上次 pg_dump 快照值**，
 --   本轮未随新增表重新核定（31 列 / 6 索引未计入），不能当列数证据用；
 --   表数 / RLS 开启 / 策略三项已按本文件实计核对，由守卫钉死。
 --   ⚠️ 2026-11-15 更正（P0）：原头注释写「65 表 / 42 RLS 开启 / 50 RLS 策略」，
 --   是 V1→V34 快照时的旧值，后续增量加了 student_memory 等对象后已漂移。
---   本文件实计 CREATE TABLE = 74、ENABLE/FORCE ROW LEVEL SECURITY = 45、
---   CREATE POLICY = 53，与 scripts/it-env.sh --probe 的期望值（表 74 / RLS 45 /
---   策略 53）交叉一致。这三项由 PlatformDdlHeaderCountTest 静态守卫钉死：
+--   本文件实计 CREATE TABLE = 75、ENABLE/FORCE ROW LEVEL SECURITY = 41、
+--   CREATE POLICY = 49，与 scripts/it-env.sh --probe 的期望值（表 75 / RLS 41 /
+--   策略 49）交叉一致。这三项由 PlatformDdlHeaderCountTest 静态守卫钉死：
 --   改动 DDL 却忘同步头注释，或有人把数字改回旧值，守卫立刻变红。
 --   ⚠️ 其余快照数字沿用 pg_dump 的统计口径（含约束隐式生成的对象），
 --   本次未重新核定，不能拿 grep 行数直接比对；守卫也刻意只校验口径明确的三项，
@@ -1312,14 +1317,13 @@ CREATE TABLE platform.tenant_quota (
 
 CREATE TABLE public.agent (
     agent_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    tenant_id uuid NOT NULL,
     name text NOT NULL,
     description text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.agent FORCE ROW LEVEL SECURITY;
+COMMENT ON TABLE public.agent IS '全局 Agent 实体。不归属任何租户；租户通过 public.tenant_agent_binding 建立多对多分配关系。';
 
 
 --
@@ -1458,7 +1462,6 @@ COMMENT ON TABLE public.agent_message_queue IS 'P4-D17 PostgreSQL 异步消息�
 
 CREATE TABLE public.agent_version (
     version_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    tenant_id uuid NOT NULL,
     agent_id uuid NOT NULL,
     version_number integer NOT NULL,
     definition jsonb NOT NULL,
@@ -1467,7 +1470,7 @@ CREATE TABLE public.agent_version (
     CONSTRAINT agent_version_number_positive CHECK ((version_number > 0))
 );
 
-ALTER TABLE ONLY public.agent_version FORCE ROW LEVEL SECURITY;
+COMMENT ON TABLE public.agent_version IS '全局 Agent 不可变版本快照。version_id 为全局主键，同一 Agent 内 version_number 唯一；租户维度由 tenant_agent_binding 与 run 承载。';
 
 
 --
@@ -1612,7 +1615,6 @@ COMMENT ON CONSTRAINT reservation_state_valid ON public.budget_reservation IS '�
 --
 
 CREATE TABLE public.cap_agent_child_ref (
-    tenant_id uuid NOT NULL,
     parent_agent_id uuid NOT NULL,
     parent_release_version integer NOT NULL,
     child_agent_id uuid NOT NULL,
@@ -1624,7 +1626,7 @@ CREATE TABLE public.cap_agent_child_ref (
     CONSTRAINT cap_agent_child_ref_version_ck CHECK (((parent_release_version > 0) AND (child_release_version > 0)))
 );
 
-ALTER TABLE ONLY public.cap_agent_child_ref FORCE ROW LEVEL SECURITY;
+COMMENT ON TABLE public.cap_agent_child_ref IS '全局 Agent 父子关系发布投影；权威来源是 PLATFORM 作用域 Agent release 中的 childAgentRefs。';
 
 
 --
@@ -1639,7 +1641,6 @@ COMMENT ON TABLE public.cap_agent_child_ref IS '父子 Agent 关系的发布投�
 --
 
 CREATE TABLE public.cap_agent_def (
-    tenant_id uuid NOT NULL,
     agent_id uuid NOT NULL,
     version integer NOT NULL,
     name text,
@@ -1664,14 +1665,7 @@ CREATE TABLE public.cap_agent_def (
     CONSTRAINT cap_agent_def_version_positive CHECK ((version > 0))
 );
 
-ALTER TABLE ONLY public.cap_agent_def FORCE ROW LEVEL SECURITY;
-
-
---
--- Name: TABLE cap_agent_def; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.cap_agent_def IS 'Agent 结构化定义（租户级，§6.1 / 06 §1.4）。⚠️ 本表是 Agent 定义的**权威真源**：运行期的提示词/模型/生成参数一律读本表；agent_version.definition 仅作历史归档与 run 快照桥接，不再是配置真源。';
+COMMENT ON TABLE public.cap_agent_def IS 'Agent 结构化定义（全局，§6.1 / 06 §1.4）。⚠️ 本表是 Agent 定义的权威真源：运行期提示词/模型/生成参数一律读本表；agent_version.definition 仅作历史归档与 run 快照桥接。租户可用性由 tenant_agent_binding 决定。';
 
 
 --
@@ -2537,7 +2531,6 @@ COMMENT ON TABLE public.execution_capability_snapshot IS 'Run 级能力闭包快
 
 CREATE TABLE public.execution_snapshot (
     snapshot_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    tenant_id uuid NOT NULL,
     version_id uuid NOT NULL,
     agent_config jsonb NOT NULL,
     prompt_config jsonb NOT NULL,
@@ -2547,7 +2540,7 @@ CREATE TABLE public.execution_snapshot (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.execution_snapshot FORCE ROW LEVEL SECURITY;
+COMMENT ON TABLE public.execution_snapshot IS '全局 Agent 版本的可执行配置快照（由 PLATFORM 发布生成）。run 仍按租户隔离，通过 snapshot_id 引用本表；快照本身不含租户数据。';
 
 
 --
@@ -2975,6 +2968,45 @@ CREATE TABLE public.tenant (
 --
 
 COMMENT ON TABLE public.tenant IS '租户。注意：本表为全局表，不启用 RLS（租户自身即隔离单元）';
+
+
+--
+-- Name: tenant_agent_binding; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.tenant_agent_binding (
+    binding_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    status text DEFAULT 'ACTIVE'::text NOT NULL,
+    pinned_version integer,
+    config jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT tenant_agent_binding_pkey PRIMARY KEY (binding_id),
+    CONSTRAINT tenant_agent_binding_tenant_agent_key UNIQUE (tenant_id, agent_id),
+    CONSTRAINT tenant_agent_binding_status_ck CHECK ((status = ANY (ARRAY['ACTIVE'::text, 'SUSPENDED'::text]))),
+    CONSTRAINT tenant_agent_binding_pinned_version_ck CHECK ((pinned_version IS NULL) OR (pinned_version > 0))
+);
+
+-- ⚠️ 外键走文件统一的 ALTER TABLE 段（见下方 FK CONSTRAINT 区）：
+--    本快照是 pg_dump 终态导出，所有 PRIMARY KEY 都在文件后段才 ADD。
+--    若在 CREATE TABLE 内联写 REFERENCES，建表时 public.tenant(tenant_id) /
+--    public.agent(agent_id) 的主键还不存在 → "no unique constraint matching
+--    given keys"（实测 dev-it-db.sh 在此报错，整库无法从零创建）。
+--    存量升级脚本 08_* 可内联（那时 PK 已在），二者口径差异是刻意的。
+
+ALTER TABLE ONLY public.tenant_agent_binding ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY public.tenant_agent_binding FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_agent_binding_tenant_isolation ON public.tenant_agent_binding
+    USING ((tenant_id = public.current_tenant_id()))
+    WITH CHECK ((tenant_id = public.current_tenant_id()));
+
+COMMENT ON TABLE public.tenant_agent_binding IS '租户与全局 Agent 的多对多配置关联。一个 Agent 可分配给多个租户，一个租户可绑定多个 Agent；status=SUSPENDED 表示暂时停用分配（不改 Agent 本身）。pinned_version 非空时运行期只解析该已发布版本（版本不存在/未发布则不可用，不回退）；为空时取最新已发布版本。';
+
+CREATE INDEX idx_tenant_agent_binding_agent ON public.tenant_agent_binding USING btree (agent_id, status);
+CREATE INDEX idx_tenant_agent_binding_tenant ON public.tenant_agent_binding USING btree (tenant_id, status);
 
 
 --
@@ -3461,11 +3493,11 @@ ALTER TABLE ONLY public.agent_message_queue
 
 
 --
--- Name: agent agent_name_per_tenant; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: agent agent_name_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.agent
-    ADD CONSTRAINT agent_name_per_tenant UNIQUE (tenant_id, name);
+    ADD CONSTRAINT agent_name_key UNIQUE (name);
 
 
 --
@@ -3477,14 +3509,6 @@ ALTER TABLE ONLY public.agent
 
 
 --
--- Name: agent agent_tenant_agent_unique; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.agent
-    ADD CONSTRAINT agent_tenant_agent_unique UNIQUE (tenant_id, agent_id);
-
-
---
 -- Name: agent_version agent_version_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3493,26 +3517,18 @@ ALTER TABLE ONLY public.agent_version
 
 
 --
--- Name: agent_version agent_version_tenant_version_unique; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.agent_version
-    ADD CONSTRAINT agent_version_tenant_version_unique UNIQUE (tenant_id, version_id);
-
-
---
 -- Name: agent_version agent_version_unique; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.agent_version
-    ADD CONSTRAINT agent_version_unique UNIQUE (tenant_id, agent_id, version_number);
+    ADD CONSTRAINT agent_version_unique UNIQUE (agent_id, version_number);
 
 
 --
 -- Name: CONSTRAINT agent_version_unique ON agent_version; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON CONSTRAINT agent_version_unique ON public.agent_version IS '复合唯一约束：同一租户下 agent 版本号唯一。跨租户 agent_id 相同不冲突';
+COMMENT ON CONSTRAINT agent_version_unique ON public.agent_version IS '复合唯一约束：全局 Agent 内版本号唯一；agent_id 全局唯一，跨租户不再分版本。';
 
 
 --
@@ -3568,7 +3584,7 @@ ALTER TABLE ONLY public.budget_reservation
 --
 
 ALTER TABLE ONLY public.cap_agent_child_ref
-    ADD CONSTRAINT cap_agent_child_ref_pk PRIMARY KEY (tenant_id, parent_agent_id, parent_release_version, child_agent_id, child_release_version);
+    ADD CONSTRAINT cap_agent_child_ref_pk PRIMARY KEY (parent_agent_id, parent_release_version, child_agent_id, child_release_version);
 
 
 --
@@ -3576,7 +3592,7 @@ ALTER TABLE ONLY public.cap_agent_child_ref
 --
 
 ALTER TABLE ONLY public.cap_agent_def
-    ADD CONSTRAINT cap_agent_def_pk PRIMARY KEY (tenant_id, agent_id, version);
+    ADD CONSTRAINT cap_agent_def_pk PRIMARY KEY (agent_id, version);
 
 
 --
@@ -3785,14 +3801,6 @@ ALTER TABLE ONLY public.execution_capability_snapshot
 
 ALTER TABLE ONLY public.execution_snapshot
     ADD CONSTRAINT execution_snapshot_pkey PRIMARY KEY (snapshot_id);
-
-
---
--- Name: execution_snapshot execution_snapshot_tenant_snapshot_unique; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.execution_snapshot
-    ADD CONSTRAINT execution_snapshot_tenant_snapshot_unique UNIQUE (tenant_id, snapshot_id);
 
 
 --
@@ -4242,7 +4250,7 @@ CREATE INDEX idx_agent_message_tenant_state ON public.agent_message_queue USING 
 -- Name: idx_agent_version_agent; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_agent_version_agent ON public.agent_version USING btree (tenant_id, agent_id);
+CREATE INDEX idx_agent_version_agent ON public.agent_version USING btree (agent_id);
 
 
 --
@@ -4277,21 +4285,21 @@ CREATE INDEX idx_audit_tenant_time_id ON public.audit_record USING btree (tenant
 -- Name: idx_cap_agent_child_ref_child; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_cap_agent_child_ref_child ON public.cap_agent_child_ref USING btree (tenant_id, child_agent_id, child_release_version);
+CREATE INDEX idx_cap_agent_child_ref_child ON public.cap_agent_child_ref USING btree (child_agent_id, child_release_version);
 
 
 --
 -- Name: idx_cap_agent_child_ref_parent; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_cap_agent_child_ref_parent ON public.cap_agent_child_ref USING btree (tenant_id, parent_agent_id, parent_release_version, ordinal);
+CREATE INDEX idx_cap_agent_child_ref_parent ON public.cap_agent_child_ref USING btree (parent_agent_id, parent_release_version, ordinal);
 
 
 --
--- Name: idx_cap_agent_def_tenant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_cap_agent_def_agent; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_cap_agent_def_tenant ON public.cap_agent_def USING btree (tenant_id, agent_id, version DESC);
+CREATE INDEX idx_cap_agent_def_agent ON public.cap_agent_def USING btree (agent_id, version DESC);
 
 
 --
@@ -4975,19 +4983,27 @@ ALTER TABLE ONLY public.agent_message_queue
 
 
 --
--- Name: agent agent_tenant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.agent
-    ADD CONSTRAINT agent_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenant(tenant_id) ON DELETE CASCADE;
-
-
---
 -- Name: agent_version agent_version_agent_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.agent_version
-    ADD CONSTRAINT agent_version_agent_fk FOREIGN KEY (tenant_id, agent_id) REFERENCES public.agent(tenant_id, agent_id) ON DELETE CASCADE;
+    ADD CONSTRAINT agent_version_agent_fk FOREIGN KEY (agent_id) REFERENCES public.agent(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: tenant_agent_binding tenant_agent_binding_tenant_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tenant_agent_binding
+    ADD CONSTRAINT tenant_agent_binding_tenant_fk FOREIGN KEY (tenant_id) REFERENCES public.tenant(tenant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: tenant_agent_binding tenant_agent_binding_agent_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tenant_agent_binding
+    ADD CONSTRAINT tenant_agent_binding_agent_fk FOREIGN KEY (agent_id) REFERENCES public.agent(agent_id) ON DELETE CASCADE;
 
 
 --
@@ -5011,7 +5027,7 @@ ALTER TABLE ONLY public.budget_account
 --
 
 ALTER TABLE ONLY public.cap_agent_child_ref
-    ADD CONSTRAINT cap_agent_child_ref_child_fk FOREIGN KEY (tenant_id, child_agent_id, child_release_version) REFERENCES public.cap_agent_def(tenant_id, agent_id, version) ON DELETE CASCADE;
+    ADD CONSTRAINT cap_agent_child_ref_child_fk FOREIGN KEY (child_agent_id, child_release_version) REFERENCES public.cap_agent_def(agent_id, version) ON DELETE CASCADE;
 
 
 --
@@ -5019,7 +5035,7 @@ ALTER TABLE ONLY public.cap_agent_child_ref
 --
 
 ALTER TABLE ONLY public.cap_agent_child_ref
-    ADD CONSTRAINT cap_agent_child_ref_parent_fk FOREIGN KEY (tenant_id, parent_agent_id, parent_release_version) REFERENCES public.cap_agent_def(tenant_id, agent_id, version) ON DELETE CASCADE;
+    ADD CONSTRAINT cap_agent_child_ref_parent_fk FOREIGN KEY (parent_agent_id, parent_release_version) REFERENCES public.cap_agent_def(agent_id, version) ON DELETE CASCADE;
 
 
 --
@@ -5027,7 +5043,7 @@ ALTER TABLE ONLY public.cap_agent_child_ref
 --
 
 ALTER TABLE ONLY public.cap_agent_def
-    ADD CONSTRAINT cap_agent_def_agent_fk FOREIGN KEY (tenant_id, agent_id) REFERENCES public.agent(tenant_id, agent_id) ON DELETE CASCADE;
+    ADD CONSTRAINT cap_agent_def_agent_fk FOREIGN KEY (agent_id) REFERENCES public.agent(agent_id) ON DELETE CASCADE;
 
 
 --
@@ -5107,7 +5123,7 @@ ALTER TABLE ONLY public.execution_capability_snapshot
 --
 
 ALTER TABLE ONLY public.execution_snapshot
-    ADD CONSTRAINT execution_snapshot_version_fk FOREIGN KEY (tenant_id, version_id) REFERENCES public.agent_version(tenant_id, version_id);
+    ADD CONSTRAINT execution_snapshot_version_fk FOREIGN KEY (version_id) REFERENCES public.agent_version(version_id);
 
 
 --
@@ -5163,7 +5179,7 @@ ALTER TABLE ONLY public.run_event
 --
 
 ALTER TABLE ONLY public.run
-    ADD CONSTRAINT run_snapshot_fk FOREIGN KEY (tenant_id, snapshot_id) REFERENCES public.execution_snapshot(tenant_id, snapshot_id);
+    ADD CONSTRAINT run_snapshot_fk FOREIGN KEY (snapshot_id) REFERENCES public.execution_snapshot(snapshot_id);
 
 
 --
@@ -5270,12 +5286,6 @@ ALTER TABLE ONLY public.weakness_record
 
 
 --
--- Name: agent; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.agent ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: agent_invocation; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -5312,33 +5322,6 @@ ALTER TABLE public.agent_message_queue ENABLE ROW LEVEL SECURITY;
 --
 
 CREATE POLICY agent_message_queue_tenant_isolation ON public.agent_message_queue USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
-
-
---
--- Name: agent agent_tenant_isolation; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY agent_tenant_isolation ON public.agent USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
-
-
---
--- Name: POLICY agent_tenant_isolation ON agent; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON POLICY agent_tenant_isolation ON public.agent IS '租户隔离策略。tenant_id 必须等于当前事务租户上下文，否则拒绝';
-
-
---
--- Name: agent_version; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.agent_version ENABLE ROW LEVEL SECURITY;
-
---
--- Name: agent_version agent_version_tenant_isolation; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY agent_version_tenant_isolation ON public.agent_version USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
 
 
 --
@@ -5391,32 +5374,6 @@ ALTER TABLE public.budget_reservation ENABLE ROW LEVEL SECURITY;
 --
 
 CREATE POLICY budget_reservation_tenant_isolation ON public.budget_reservation USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
-
-
---
--- Name: cap_agent_child_ref; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.cap_agent_child_ref ENABLE ROW LEVEL SECURITY;
-
---
--- Name: cap_agent_child_ref cap_agent_child_ref_tenant_isolation; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY cap_agent_child_ref_tenant_isolation ON public.cap_agent_child_ref USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
-
-
---
--- Name: cap_agent_def; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.cap_agent_def ENABLE ROW LEVEL SECURITY;
-
---
--- Name: cap_agent_def cap_agent_def_tenant_isolation; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY cap_agent_def_tenant_isolation ON public.cap_agent_def USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
 
 
 --
@@ -5717,19 +5674,6 @@ ALTER TABLE public.execution_capability_snapshot ENABLE ROW LEVEL SECURITY;
 --
 
 CREATE POLICY execution_capability_snapshot_tenant_isolation ON public.execution_capability_snapshot USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
-
-
---
--- Name: execution_snapshot; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.execution_snapshot ENABLE ROW LEVEL SECURITY;
-
---
--- Name: execution_snapshot execution_snapshot_tenant_isolation; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY execution_snapshot_tenant_isolation ON public.execution_snapshot USING ((tenant_id = public.current_tenant_id())) WITH CHECK ((tenant_id = public.current_tenant_id()));
 
 
 --

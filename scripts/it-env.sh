@@ -179,7 +179,11 @@ _it_env_main() {
                 -U "$IT_PG_ADMIN_USER" -tAc "SELECT count(*) FROM pg_policies WHERE schemaname='public'" 2>/dev/null)"
       snapshot_context_policy="$(PGPASSWORD="$IT_PG_ADMIN_PASSWORD" "$psql_bin" -h "$host" -p "$port" -d "$target_db" \
                 -U "$IT_PG_ADMIN_USER" -tAc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='execution_snapshot' AND column_name='context_policy'" 2>/dev/null)"
-      # 结构事实（2026-11-18）：74 表 / 45 RLS 表 / 53 策略
+      # 结构事实（2026-11-19）：75 表 / 41 RLS 表 / 49 策略
+      # 2026-11-19 全局 Agent（多对多绑定）：+tenant_agent_binding（租户域 FORCE RLS，+1 表 +1 策略）；
+      #   agent / agent_version / cap_agent_def / cap_agent_child_ref / execution_snapshot
+      #   改为全局实体，移除 tenant_id 与 5 条租户策略
+      #   ⇒ 表 74 → 75、RLS 表 45 → 41、策略 53 → 49
       # 2026-11-18 对话审计插件 P0 配置表 public.chat_audit_config（平台域、无 RLS）：71 → 72
       # 2026-11-18 对话审计插件 P2：+chat_audit_record（租户域 FORCE RLS）/+chat_audit_unattributed
       #   ⇒ 表 72 → 74、RLS 表 44 → 45、策略 52 → 53
@@ -194,7 +198,7 @@ _it_env_main() {
       #    ⚠️ 这里用**精确相等**而非弱下界：弱下界会把「多了一张没审过的表」
       #    也判成正常，结构漂移必须可见。
       local rls_retired_tables=0 rls_retired_policies=0
-      local expect_tables=74 expect_rls=$((45 - rls_retired_tables)) expect_policies=$((53 - rls_retired_policies))
+      local expect_tables=75 expect_rls=$((41 - rls_retired_tables)) expect_policies=$((49 - rls_retired_policies))
       tables="${tables:-0}"; rls="${rls:-0}"; policies="${policies:-0}"; snapshot_context_policy="${snapshot_context_policy:-0}"
       echo "   结构   : 表 ${tables}（应 ${expect_tables}）｜RLS 表 ${rls}（应 ${expect_rls}）｜策略 ${policies}（应 ${expect_policies}）｜execution_snapshot.context_policy 列 ${snapshot_context_policy}（应 1）"
       if [ "$tables" -ne "$expect_tables" ] || [ "$rls" -ne "$expect_rls" ] || [ "$policies" -ne "$expect_policies" ] \

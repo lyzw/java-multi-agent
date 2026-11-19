@@ -260,18 +260,25 @@ INSERT INTO public.tenant VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 't-a',
 -- Data for Name: agent; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-INSERT INTO public.agent VALUES ('9730eadc-c27c-498d-b588-512545c57f84', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 'math-tutor', '数学辅导 Agent：读取学生档案与课程安排，给出个性化练习建议', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
-INSERT INTO public.agent VALUES ('c8408ea9-5fb3-455a-933c-5c329f2ba0c1', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 'profile-reviewer', '档案复核 Agent：复核并维护学生档案中的关键联系字段', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
-INSERT INTO public.agent VALUES ('26ad3fb1-c047-4382-b01b-b389c9356280', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 'assignment-copilot', '作业协同 Agent：串行委派数学辅导与档案复核，聚合结果向家长通报', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
+INSERT INTO public.agent VALUES ('9730eadc-c27c-498d-b588-512545c57f84', 'math-tutor', '数学辅导 Agent：读取学生档案与课程安排，给出个性化练习建议', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
+INSERT INTO public.agent VALUES ('c8408ea9-5fb3-455a-933c-5c329f2ba0c1', 'profile-reviewer', '档案复核 Agent：复核并维护学生档案中的关键联系字段', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
+INSERT INTO public.agent VALUES ('26ad3fb1-c047-4382-b01b-b389c9356280', 'assignment-copilot', '作业协同 Agent：串行委派数学辅导与档案复核，聚合结果向家长通报', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
+
+-- 全局 Agent 通过绑定表分配给租户（多对多；同一 Agent 可再绑其它租户）。
+INSERT INTO public.tenant_agent_binding (tenant_id, agent_id, status, pinned_version, config)
+VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '9730eadc-c27c-498d-b588-512545c57f84', 'ACTIVE', NULL, '{}'::jsonb),
+       ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 'c8408ea9-5fb3-455a-933c-5c329f2ba0c1', 'ACTIVE', NULL, '{}'::jsonb),
+       ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '26ad3fb1-c047-4382-b01b-b389c9356280', 'ACTIVE', NULL, '{}'::jsonb)
+ON CONFLICT (tenant_id, agent_id) DO NOTHING;
 
 
 --
 -- Data for Name: agent_version; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-INSERT INTO public.agent_version VALUES ('ff0b6749-5402-4092-9c14-8374442bf620', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '9730eadc-c27c-498d-b588-512545c57f84', 1, '{"name": "math-tutor", "roles": ["student"], "agentId": "math-tutor", "modelRef": "MiniMax-M2.5", "tenantId": "2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2", "overrides": {}, "description": "数学辅导 Agent：读取学生档案与课程安排，给出个性化练习建议", "instructions": {"inlineInstructions": "你是初中数学辅导助手，帮助学生分析错题原因并给出个性化练习建议。\n【执行顺序，不可颠倒】\n1) 先完成工具调用，**不要在工具调用之前写任何正文**：\n   - 第一步调用 get_student_profile 读取本次任务提供的学生匿名编号对应的学生档案与课程安排；\n   - 第二步调用 record_weakness 记录本次识别出的薄弱点（knowledgePoint 写具体知识点，errorType 从工具允许的枚举里选）。\n2) 两个工具都成功返回之后，再输出面向学生的讲解与练习建议（用初中生能理解的语言：先给直觉再给定义，最后举一个生活里的例子）。\n⚠️ 即使 get_student_profile 返回空画像（新生还没有档案），也必须照常调用 record_weakness。\n⚠️ studentId 一律用本次任务提供的学生匿名编号，绝不编造。\n【公式格式契约】所有数学公式一律用 LaTeX：行内用 \\(...\\)，独立成段用 \\[ ... \\]；花括号必须成对完整（例：\\frac{b}{2a}、x = \\frac{-b}{2a}，不要写裸 \\fracba）；严禁用纯文本拼公式（例如 ''y=a(x-h)^2+k'' 必须写成 \\(y=a(x-h)^2+k\\)）。"}, "skillBundles": [], "enabledSkills": ["skill-profile-view", "skill-report-brief", "skill-learning-loop"], "orchestration": {}, "capabilityTags": ["tutor", "math"], "generationParams": {"temperature": 0.3, "maxOutputTokens": 4096}}', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
-INSERT INTO public.agent_version VALUES ('15c361da-d0c8-42fe-825d-11ad2a9f3e2e', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 'c8408ea9-5fb3-455a-933c-5c329f2ba0c1', 1, '{"name": "profile-reviewer", "roles": ["teacher"], "agentId": "profile-reviewer", "overrides": {}, "description": "档案复核 Agent：复核并维护学生档案中的关键联系字段", "skillBundles": [], "enabledSkills": ["skill-profile-edit"], "orchestration": {}, "capabilityTags": ["reviewer", "profile"]}', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
-INSERT INTO public.agent_version VALUES ('09b9c5a1-d45b-4695-914a-15363e5b332c', '2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '26ad3fb1-c047-4382-b01b-b389c9356280', 1, '{"name": "assignment-copilot", "roles": ["student", "teacher"], "agentId": "assignment-copilot", "overrides": {}, "description": "作业协同 Agent：串行委派数学辅导与档案复核，聚合结果向家长通报", "skillBundles": [], "enabledSkills": ["skill-profile-view"], "orchestration": {"mode": "SEQUENTIAL", "timeoutMs": 60000, "failurePolicy": "FAIL_FAST", "childAgentRefs": [{"id": "math-tutor", "version": 1, "required": true}, {"id": "profile-reviewer", "version": 1, "required": true}], "maxDelegationDepth": 2, "maxChildInvocations": 3}, "capabilityTags": ["copilot", "orchestrator"]}', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
+INSERT INTO public.agent_version VALUES ('ff0b6749-5402-4092-9c14-8374442bf620', '9730eadc-c27c-498d-b588-512545c57f84', 1, '{"name": "math-tutor", "roles": ["student"], "agentId": "math-tutor", "modelRef": "MiniMax-M2.5", "overrides": {}, "description": "数学辅导 Agent：读取学生档案与课程安排，给出个性化练习建议", "instructions": {"inlineInstructions": "你是初中数学辅导助手，帮助学生分析错题原因并给出个性化练习建议。\n【执行顺序，不可颠倒】\n1) 先完成工具调用，**不要在工具调用之前写任何正文**：\n   - 第一步调用 get_student_profile 读取本次任务提供的学生匿名编号对应的学生档案与课程安排；\n   - 第二步调用 record_weakness 记录本次识别出的薄弱点（knowledgePoint 写具体知识点，errorType 从工具允许的枚举里选）。\n2) 两个工具都成功返回之后，再输出面向学生的讲解与练习建议（用初中生能理解的语言：先给直觉再给定义，最后举一个生活里的例子）。\n⚠️ 即使 get_student_profile 返回空画像（新生还没有档案），也必须照常调用 record_weakness。\n⚠️ studentId 一律用本次任务提供的学生匿名编号，绝不编造。\n【公式格式契约】所有数学公式一律用 LaTeX：行内用 \\(...\\)，独立成段用 \\[ ... \\]；花括号必须成对完整（例：\\frac{b}{2a}、x = \\frac{-b}{2a}，不要写裸 \\fracba）；严禁用纯文本拼公式（例如 ''y=a(x-h)^2+k'' 必须写成 \\(y=a(x-h)^2+k\\)）。"}, "skillBundles": [], "enabledSkills": ["skill-profile-view", "skill-report-brief", "skill-learning-loop"], "orchestration": {}, "capabilityTags": ["tutor", "math"], "generationParams": {"temperature": 0.3, "maxOutputTokens": 4096}}', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
+INSERT INTO public.agent_version VALUES ('15c361da-d0c8-42fe-825d-11ad2a9f3e2e', 'c8408ea9-5fb3-455a-933c-5c329f2ba0c1', 1, '{"name": "profile-reviewer", "roles": ["teacher"], "agentId": "profile-reviewer", "overrides": {}, "description": "档案复核 Agent：复核并维护学生档案中的关键联系字段", "skillBundles": [], "enabledSkills": ["skill-profile-edit"], "orchestration": {}, "capabilityTags": ["reviewer", "profile"]}', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
+INSERT INTO public.agent_version VALUES ('09b9c5a1-d45b-4695-914a-15363e5b332c', '26ad3fb1-c047-4382-b01b-b389c9356280', 1, '{"name": "assignment-copilot", "roles": ["student", "teacher"], "agentId": "assignment-copilot", "overrides": {}, "description": "作业协同 Agent：串行委派数学辅导与档案复核，聚合结果向家长通报", "skillBundles": [], "enabledSkills": ["skill-profile-view"], "orchestration": {"mode": "SEQUENTIAL", "timeoutMs": 60000, "failurePolicy": "FAIL_FAST", "childAgentRefs": [{"id": "math-tutor", "version": 1, "required": true}, {"id": "profile-reviewer", "version": 1, "required": true}], "maxDelegationDepth": 2, "maxChildInvocations": 3}, "capabilityTags": ["copilot", "orchestrator"]}', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00');
 
 
 --
@@ -299,17 +306,17 @@ ON CONFLICT (tenant_id, principal_id) DO NOTHING;
 -- ⚠️ 学习循环（P0-4）：数学辅导 Agent 显式启用 skill-learning-loop，
 --    并在 inlineInstructions 中要求「开头读档案 / 结尾记薄弱点」，studentId 用本次任务
 --    提供的**学生匿名编号**（不编造、不写死真实编号）；该编号随 Run 输入注入系统提示。
-INSERT INTO public.cap_agent_def VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '9730eadc-c27c-498d-b588-512545c57f84', 1, 'math-tutor', '数学辅导 Agent：读取学生档案与课程安排，给出个性化练习建议', '["student"]', '["skill-profile-view", "skill-report-brief", "skill-learning-loop"]', '[]', '["tutor", "math"]', NULL, '{}', 'cap_obj_fp_v1:c9b08ba32cbb655767686416ea73eaa13dfd90490c576f001f7183aee1b66439', 1, '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', 'PUBLISHED', '{}', '{"inlineInstructions": "你是初中数学辅导助手，帮助学生分析错题原因并给出个性化练习建议。\n【执行顺序，不可颠倒】\n1) 先完成工具调用，**不要在工具调用之前写任何正文**：\n   - 第一步调用 get_student_profile 读取本次任务提供的学生匿名编号对应的学生档案与课程安排；\n   - 第二步调用 record_weakness 记录本次识别出的薄弱点（knowledgePoint 写具体知识点，errorType 从工具允许的枚举里选）。\n2) 两个工具都成功返回之后，再输出面向学生的讲解与练习建议（用初中生能理解的语言：先给直觉再给定义，最后举一个生活里的例子）。\n⚠️ 即使 get_student_profile 返回空画像（新生还没有档案），也必须照常调用 record_weakness。\n⚠️ studentId 一律用本次任务提供的学生匿名编号，绝不编造。\n【公式格式契约】所有数学公式一律用 LaTeX：行内用 \\(...\\)，独立成段用 \\[ ... \\]；花括号必须成对完整（例：\\frac{b}{2a}、x = \\frac{-b}{2a}，不要写裸 \\fracba）；严禁用纯文本拼公式（例如 ''y=a(x-h)^2+k'' 必须写成 \\(y=a(x-h)^2+k\\)）。"}', 'MiniMax-M2.5', '{"temperature": 0.3, "maxOutputTokens": 4096}');
-INSERT INTO public.cap_agent_def VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', 'c8408ea9-5fb3-455a-933c-5c329f2ba0c1', 1, 'profile-reviewer', '档案复核 Agent：复核并维护学生档案中的关键联系字段', '["teacher"]', '["skill-profile-edit"]', '[]', '["reviewer", "profile"]', NULL, '{}', 'cap_obj_fp_v1:0ba5743f50eaced7e2a2b996bf1838bb7eb9000f1181cb074605e6509f24ece8', 1, '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', 'PUBLISHED', '{}', '{"inlineInstructions": "你是学生档案复核助手。核对档案中的关键联系字段（监护人电话等），发现需要更新的字段时走审批链路后再写入，并在结果中逐项说明改了什么。"}', 'MiniMax-M2.5', '{"temperature": 0.2, "maxOutputTokens": 2048}');
-INSERT INTO public.cap_agent_def VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '26ad3fb1-c047-4382-b01b-b389c9356280', 1, 'assignment-copilot', '作业协同 Agent：串行委派数学辅导与档案复核，聚合结果向家长通报', '["student", "teacher"]', '["skill-profile-view"]', '[]', '["copilot", "orchestrator"]', NULL, '{}', 'cap_obj_fp_v1:4ddce9276cc71d05a8a28acb7902268d63add2a6ca78c97d92b86ce99c668f2e', 1, '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', 'PUBLISHED', '{"mode": "SEQUENTIAL", "timeoutMs": 60000, "failurePolicy": "FAIL_FAST", "childAgentRefs": [{"id": "math-tutor", "version": 1, "required": true}, {"id": "profile-reviewer", "version": 1, "required": true}], "maxDelegationDepth": 2, "maxChildInvocations": 3}', '{"inlineInstructions": "你是作业协同助手。先委派数学辅导 Agent 得到练习建议，再委派档案复核 Agent 核对联系字段，最后把两路结果聚合成一段给家长的通报。"}', 'MiniMax-M2.5', '{"temperature": 0.3, "maxOutputTokens": 4096}');
+INSERT INTO public.cap_agent_def VALUES ('9730eadc-c27c-498d-b588-512545c57f84', 1, 'math-tutor', '数学辅导 Agent：读取学生档案与课程安排，给出个性化练习建议', '["student"]', '["skill-profile-view", "skill-report-brief", "skill-learning-loop"]', '[]', '["tutor", "math"]', NULL, '{}', 'cap_obj_fp_v1:c9b08ba32cbb655767686416ea73eaa13dfd90490c576f001f7183aee1b66439', 1, '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', 'PUBLISHED', '{}', '{"inlineInstructions": "你是初中数学辅导助手，帮助学生分析错题原因并给出个性化练习建议。\n【执行顺序，不可颠倒】\n1) 先完成工具调用，**不要在工具调用之前写任何正文**：\n   - 第一步调用 get_student_profile 读取本次任务提供的学生匿名编号对应的学生档案与课程安排；\n   - 第二步调用 record_weakness 记录本次识别出的薄弱点（knowledgePoint 写具体知识点，errorType 从工具允许的枚举里选）。\n2) 两个工具都成功返回之后，再输出面向学生的讲解与练习建议（用初中生能理解的语言：先给直觉再给定义，最后举一个生活里的例子）。\n⚠️ 即使 get_student_profile 返回空画像（新生还没有档案），也必须照常调用 record_weakness。\n⚠️ studentId 一律用本次任务提供的学生匿名编号，绝不编造。\n【公式格式契约】所有数学公式一律用 LaTeX：行内用 \\(...\\)，独立成段用 \\[ ... \\]；花括号必须成对完整（例：\\frac{b}{2a}、x = \\frac{-b}{2a}，不要写裸 \\fracba）；严禁用纯文本拼公式（例如 ''y=a(x-h)^2+k'' 必须写成 \\(y=a(x-h)^2+k\\)）。"}', 'MiniMax-M2.5', '{"temperature": 0.3, "maxOutputTokens": 4096}');
+INSERT INTO public.cap_agent_def VALUES ('c8408ea9-5fb3-455a-933c-5c329f2ba0c1', 1, 'profile-reviewer', '档案复核 Agent：复核并维护学生档案中的关键联系字段', '["teacher"]', '["skill-profile-edit"]', '[]', '["reviewer", "profile"]', NULL, '{}', 'cap_obj_fp_v1:0ba5743f50eaced7e2a2b996bf1838bb7eb9000f1181cb074605e6509f24ece8', 1, '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', 'PUBLISHED', '{}', '{"inlineInstructions": "你是学生档案复核助手。核对档案中的关键联系字段（监护人电话等），发现需要更新的字段时走审批链路后再写入，并在结果中逐项说明改了什么。"}', 'MiniMax-M2.5', '{"temperature": 0.2, "maxOutputTokens": 2048}');
+INSERT INTO public.cap_agent_def VALUES ('26ad3fb1-c047-4382-b01b-b389c9356280', 1, 'assignment-copilot', '作业协同 Agent：串行委派数学辅导与档案复核，聚合结果向家长通报', '["student", "teacher"]', '["skill-profile-view"]', '[]', '["copilot", "orchestrator"]', NULL, '{}', 'cap_obj_fp_v1:4ddce9276cc71d05a8a28acb7902268d63add2a6ca78c97d92b86ce99c668f2e', 1, '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', '2026-10-27 14:40:18.500564+00', 'PUBLISHED', '{"mode": "SEQUENTIAL", "timeoutMs": 60000, "failurePolicy": "FAIL_FAST", "childAgentRefs": [{"id": "math-tutor", "version": 1, "required": true}, {"id": "profile-reviewer", "version": 1, "required": true}], "maxDelegationDepth": 2, "maxChildInvocations": 3}', '{"inlineInstructions": "你是作业协同助手。先委派数学辅导 Agent 得到练习建议，再委派档案复核 Agent 核对联系字段，最后把两路结果聚合成一段给家长的通报。"}', 'MiniMax-M2.5', '{"temperature": 0.3, "maxOutputTokens": 4096}');
 
 
 --
 -- Data for Name: cap_agent_child_ref; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-INSERT INTO public.cap_agent_child_ref VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '26ad3fb1-c047-4382-b01b-b389c9356280', 1, '9730eadc-c27c-498d-b588-512545c57f84', 1, 0, true, '2026-10-27 14:40:18.500564+00');
-INSERT INTO public.cap_agent_child_ref VALUES ('2187ffed-3e2e-4fd0-b4a7-54dcc0a483e2', '26ad3fb1-c047-4382-b01b-b389c9356280', 1, 'c8408ea9-5fb3-455a-933c-5c329f2ba0c1', 1, 1, true, '2026-10-27 14:40:18.500564+00');
+INSERT INTO public.cap_agent_child_ref VALUES ('26ad3fb1-c047-4382-b01b-b389c9356280', 1, '9730eadc-c27c-498d-b588-512545c57f84', 1, 0, true, '2026-10-27 14:40:18.500564+00');
+INSERT INTO public.cap_agent_child_ref VALUES ('26ad3fb1-c047-4382-b01b-b389c9356280', 1, 'c8408ea9-5fb3-455a-933c-5c329f2ba0c1', 1, 1, true, '2026-10-27 14:40:18.500564+00');
 
 
 --
@@ -460,6 +467,10 @@ FROM (
         SELECT 'tool', id, max(version)
           FROM public.cap_tool_def
          WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+        UNION ALL
+        SELECT 'agent', agent_id::text, max(version)
+          FROM public.cap_agent_def
+         WHERE lifecycle_state = 'PUBLISHED' GROUP BY agent_id
     ) o
     WHERE o.id ~ '^[A-Za-z0-9_.:@-]+$'
 ) d
@@ -520,6 +531,10 @@ UPDATE public.cap_config_pointer p
                   SELECT 'tool', id, max(version)
                     FROM public.cap_tool_def
                    WHERE lifecycle_state = 'PUBLISHED' GROUP BY id
+                  UNION ALL
+                  SELECT 'agent', agent_id::text, max(version)
+                    FROM public.cap_agent_def
+                   WHERE lifecycle_state = 'PUBLISHED' GROUP BY agent_id
               ) o
               WHERE o.id ~ '^[A-Za-z0-9_.:@-]+$')
         ORDER BY r.config_publish_seq DESC
@@ -528,89 +543,11 @@ UPDATE public.cap_config_pointer p
  WHERE p.pointer_key = 'PLATFORM'
    AND p.current_release_id IS DISTINCT FROM h.release_id;
 
--- ── 4. TENANT 发布头：每个有已发布 Agent 的租户一份（按该租户全部已发布 Agent）──
-INSERT INTO public.cap_config_release
-    (config_publish_seq, scope, tenant_id, object_versions, aggregate_fingerprint,
-     status, requester_id, approver_id, effective_at, created_at)
-SELECT nextval('public.cap_config_publish_seq'), 'TENANT', a.tenant_id,
-       a.json_text::jsonb,
-       'cfg_agg_v1:' || encode(sha256(a.json_text::bytea), 'hex'),
-       'PUBLISHED', 'seed-replay', NULL, now(), now()
-FROM (
-    SELECT g.tenant_id,
-           '[' || string_agg(
-                      '{"type":"agent","id":"' || g.id || '","version":' || g.version || '}',
-                      ',' ORDER BY g.id, g.version) || ']' AS json_text
-    FROM (
-        SELECT tenant_id, agent_id::text AS id, max(version) AS version
-          FROM public.cap_agent_def
-         WHERE lifecycle_state = 'PUBLISHED'
-         GROUP BY tenant_id, agent_id
-    ) g
-    WHERE g.id ~ '^[A-Za-z0-9_.:@-]+$'
-    GROUP BY g.tenant_id
-) a
-WHERE NOT EXISTS (
-        SELECT 1
-        FROM public.cap_config_pointer p
-        JOIN public.cap_config_release r ON r.release_id = p.current_release_id
-        WHERE p.pointer_key = 'TENANT:' || a.tenant_id::text
-          AND r.aggregate_fingerprint =
-              'cfg_agg_v1:' || encode(sha256(a.json_text::bytea), 'hex'));
+-- ── 4. 不再生成 TENANT 发布头 ────────────────────────────────────────
+-- Agent 定义已提升为全局对象，由上面的 PLATFORM 发布头统一寻址；
+-- 租户与 Agent 的分配关系落在 public.tenant_agent_binding，属于直接配置 CRUD，
+-- 不走发布工作流。因此种子不再为每个租户构造包含 agent 的 TENANT release/pointer。
 
--- ── 5. 每个租户一行 TENANT 指针（缺失则插入，已存在则 CAS）──────────────
-INSERT INTO public.cap_config_pointer
-    (pointer_key, scope, tenant_id, current_release_id, current_publish_seq, updated_at)
-SELECT 'TENANT:' || t.tenant_id::text, 'TENANT', t.tenant_id,
-       h.release_id, h.config_publish_seq, now()
-FROM (SELECT DISTINCT tenant_id FROM public.cap_agent_def
-       WHERE lifecycle_state = 'PUBLISHED') t
-JOIN LATERAL (
-        SELECT r.release_id, r.config_publish_seq
-        FROM public.cap_config_release r
-        WHERE r.scope = 'TENANT' AND r.status = 'PUBLISHED' AND r.tenant_id = t.tenant_id
-          AND r.aggregate_fingerprint = (
-              SELECT 'cfg_agg_v1:' || encode(sha256(
-                       ('[' || string_agg(
-                            '{"type":"agent","id":"' || g.id || '","version":' || g.version || '}',
-                            ',' ORDER BY g.id, g.version) || ']')::bytea), 'hex')
-              FROM (SELECT agent_id::text AS id, max(version) AS version
-                      FROM public.cap_agent_def
-                     WHERE lifecycle_state = 'PUBLISHED' AND tenant_id = t.tenant_id
-                     GROUP BY agent_id) g
-              WHERE g.id ~ '^[A-Za-z0-9_.:@-]+$')
-        ORDER BY r.config_publish_seq DESC
-        LIMIT 1
-) h ON true
-WHERE NOT EXISTS (SELECT 1 FROM public.cap_config_pointer p
-                   WHERE p.pointer_key = 'TENANT:' || t.tenant_id::text);
-
-UPDATE public.cap_config_pointer p
-   SET current_release_id  = h.release_id,
-       current_publish_seq = h.config_publish_seq,
-       updated_at          = now()
-  FROM (
-        SELECT r.tenant_id, r.release_id, r.config_publish_seq
-        FROM public.cap_config_release r
-        WHERE r.scope = 'TENANT' AND r.status = 'PUBLISHED'
-          AND r.aggregate_fingerprint = (
-              SELECT 'cfg_agg_v1:' || encode(sha256(
-                       ('[' || string_agg(
-                            '{"type":"agent","id":"' || g.id || '","version":' || g.version || '}',
-                            ',' ORDER BY g.id, g.version) || ']')::bytea), 'hex')
-              FROM (SELECT agent_id::text AS id, max(version) AS version
-                      FROM public.cap_agent_def
-                     WHERE lifecycle_state = 'PUBLISHED' AND tenant_id = r.tenant_id
-                     GROUP BY agent_id) g
-              WHERE g.id ~ '^[A-Za-z0-9_.:@-]+$')
-          AND r.config_publish_seq = (
-              SELECT max(r2.config_publish_seq) FROM public.cap_config_release r2
-               WHERE r2.scope = 'TENANT' AND r2.status = 'PUBLISHED'
-                 AND r2.tenant_id = r.tenant_id
-                 AND r2.aggregate_fingerprint = r.aggregate_fingerprint)
-  ) h
- WHERE p.pointer_key = 'TENANT:' || h.tenant_id::text
-   AND p.current_release_id IS DISTINCT FROM h.release_id;
 
 
 
@@ -654,20 +591,24 @@ VALUES ('b0b5eed0-1111-4222-8333-444455556666', 'worker', 1, 0, now())
 ON CONFLICT (tenant_id, principal_id) DO NOTHING;
 
 -- ── B3. t-b 的 agent1 + v1 + 执行快照（跨租户用例建 Run 的前置）───
-INSERT INTO public.agent (agent_id, tenant_id, name, description, created_at, updated_at)
+INSERT INTO public.agent (agent_id, name, description, created_at, updated_at)
 VALUES ('a3f1c2d4-5e6b-4a7c-8d9e-0f1a2b3c4d5e',
-        'b0b5eed0-1111-4222-8333-444455556666', 'agent1', 'dev 种子 Agent（供跨租户夹具使用）', now(), now())
+        'agent1', 'dev 种子 Agent（供跨租户夹具使用）', now(), now())
 ON CONFLICT (agent_id) DO NOTHING;
 
-INSERT INTO public.agent_version (version_id, tenant_id, agent_id, version_number, definition, published_at, created_at)
+INSERT INTO public.tenant_agent_binding (tenant_id, agent_id, status, pinned_version, config)
+VALUES ('b0b5eed0-1111-4222-8333-444455556666', 'a3f1c2d4-5e6b-4a7c-8d9e-0f1a2b3c4d5e', 'ACTIVE', NULL, '{}'::jsonb)
+ON CONFLICT (tenant_id, agent_id) DO NOTHING;
+
+INSERT INTO public.agent_version (version_id, agent_id, version_number, definition, published_at, created_at)
 VALUES ('b4e2d3c5-6f7c-4b8d-9e0f-1a2b3c4d5e6f',
-        'b0b5eed0-1111-4222-8333-444455556666', 'a3f1c2d4-5e6b-4a7c-8d9e-0f1a2b3c4d5e', 1,
+        'a3f1c2d4-5e6b-4a7c-8d9e-0f1a2b3c4d5e', 1,
         '{"kind":"tutor"}'::jsonb, now(), now())
 ON CONFLICT (version_id) DO NOTHING;
 
-INSERT INTO public.execution_snapshot (snapshot_id, tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config, context_policy, created_at)
+INSERT INTO public.execution_snapshot (snapshot_id, version_id, agent_config, prompt_config, tool_contracts, run_config, context_policy, created_at)
 VALUES ('c5f3e4d6-7a8d-4c9e-0f1a-2b3c4d5e6f7a',
-        'b0b5eed0-1111-4222-8333-444455556666', 'b4e2d3c5-6f7c-4b8d-9e0f-1a2b3c4d5e6f',
+        'b4e2d3c5-6f7c-4b8d-9e0f-1a2b3c4d5e6f',
         '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, now())
 ON CONFLICT (snapshot_id) DO NOTHING;
 
@@ -676,18 +617,15 @@ ON CONFLICT (snapshot_id) DO NOTHING;
 --   13 号回填补丁；收敛后权威源只剩本文件。没有快照，Run 创建链第一步
 --   （execution_capability_snapshot 解析）就断：RunCreationEndpointIT 等直接红，
 --   新初始化的环境所有 Run 都会判成 CONFIG_UNAVAILABLE。
--- 【形状】对全部 PUBLISHED 的 agent_version 逐版本推导一条快照（幂等：
---   NOT EXISTS 守卫跳过已有快照的版本；该表无 (tenant_id, version_id) 唯一约束，
---   不能用 ON CONFLICT）。
--- 【与附录 A 的关系】附录 A 推导「发布头 + 指针」，本段推导「能力快照」，
---   两者同源于定义表，共同保证「灌完种子的库是可跑 Run 的库」。
+-- 【形状】对全部 PUBLISHED 的全局 agent_version 逐版本推导一条快照（幂等：
+--   NOT EXISTS 守卫跳过已有快照的版本；快照按 version_id 全局唯一）。
 INSERT INTO public.execution_snapshot
-    (tenant_id, version_id, agent_config, prompt_config, tool_contracts, run_config, context_policy, created_at)
-SELECT v.tenant_id, v.version_id, '{}', '{}', '{}',
+    (version_id, agent_config, prompt_config, tool_contracts, run_config, context_policy, created_at)
+SELECT v.version_id, '{}', '{}', '{}',
        '{"maxCostPerRun":"2.00","maxLlmCalls":12,"maxSteps":20,"approvalRequired":"OPTIONAL"}'::jsonb,
        '{}'::jsonb,
        now()
 FROM public.agent_version v
 WHERE v.published_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM public.execution_snapshot s
-                  WHERE s.tenant_id = v.tenant_id AND s.version_id = v.version_id);
+                  WHERE s.version_id = v.version_id);
