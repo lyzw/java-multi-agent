@@ -44,7 +44,10 @@ public class AuthConfiguration {
 
     /** 令牌有效期的允许范围。超出即视为配置错误。 */
     private static final int MIN_TTL_SECONDS = 60;
+    /** 租户令牌上界：租户域是长驻运行身份，窗口不宜过长。 */
     private static final int MAX_TTL_SECONDS = 3600;
+    /** 平台令牌上界：admin-console 人工会话，7200 秒 = 2 小时。 */
+    private static final int MAX_PLATFORM_TTL_SECONDS = 7200;
 
     /** 未配置私钥时，仅这些 profile 允许启动生成。 */
     private static final Set<String> DEV_PROFILES = Set.of("dev", "local", "test");
@@ -205,7 +208,7 @@ public class AuthConfiguration {
     public PlatformJwtTokenService platformJwtTokenService(
             @Value("${auth.jwt.issuer}") String issuer,
             @Value("${auth.platform-jwt.audience:admin-console-api}") String audience,
-            @Value("${auth.platform-jwt.token-ttl-seconds:900}") long tokenTtlSeconds,
+            @Value("${auth.platform-jwt.token-ttl-seconds:7200}") long tokenTtlSeconds,
             @Value("${auth.platform-jwt.private-key:}") String privateKeyBase64,
             Environment environment) {
 
@@ -215,10 +218,10 @@ public class AuthConfiguration {
         if (audience == null || audience.isBlank()) {
             throw new IllegalStateException("auth.platform-jwt.audience 不得为空");
         }
-        if (tokenTtlSeconds < MIN_TTL_SECONDS || tokenTtlSeconds > MAX_TTL_SECONDS) {
+        if (tokenTtlSeconds < MIN_TTL_SECONDS || tokenTtlSeconds > MAX_PLATFORM_TTL_SECONDS) {
             throw new IllegalStateException(
                     "auth.platform-jwt.token-ttl-seconds 须在 " + MIN_TTL_SECONDS
-                            + "~" + MAX_TTL_SECONDS + " 之间，当前 " + tokenTtlSeconds);
+                            + "~" + MAX_PLATFORM_TTL_SECONDS + " 之间，当前 " + tokenTtlSeconds);
         }
 
         KeyPair keyPair = resolveKeyPair(privateKeyBase64, environment,

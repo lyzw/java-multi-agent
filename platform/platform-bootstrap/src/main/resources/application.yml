@@ -711,8 +711,9 @@ auth:
   platform-jwt:
     # 平台管理 API 令牌受众（admin-console 专用）
     audience: "${PLATFORM_JWT_AUDIENCE:admin-console-api}"
-    # 平台令牌有效期（秒）。可与租户令牌不同
-    token-ttl-seconds: "900"
+    # 平台令牌有效期（秒）。可与租户令牌不同；范围 60~7200，超出即启动失败。
+    # 2 小时 = 7200 秒：admin-console 管理员人工会话，到期无 refresh、硬跳登录。
+    token-ttl-seconds: "7200"
     # ⚠️ 平台专属 RS256 私钥（Base64 的 PKCS#8 DER）。
     #    建议与租户 private-key 使用不同密钥对，独立轮转。
     #    缺省为空：仅 dev profile 允许启动时生成；

@@ -155,7 +155,7 @@ export function AdminLayout(): JSX.Element {
         </Header>
         <Content style={{ margin: 16 }}>
           {/* ⚠️ **即将过期提示必须渲染出来**（评测 P1-5）：`expiringSoon` 此前
-              每秒算一次却没有任何组件消费 —— 平台令牌 15 分钟硬过期，
+              每秒算一次却没有任何组件消费 —— 平台令牌 2 小时硬过期，
               用户毫无预兆地被踢回登录页且现场全丢。这里把「还剩多少秒」摆出来，
               并给一个**保住现场**的续期入口（重新登录后回到当前页）。 */}
           {expiringSoon && (
@@ -164,7 +164,7 @@ export function AdminLayout(): JSX.Element {
               showIcon
               style={{ marginBottom: 12 }}
               message={`平台会话即将过期（剩余约 ${expiresInSeconds} 秒）`}
-              description="平台令牌有效期 15 分钟且不可续期。为避免操作中断，请尽快完成当前操作并重新登录——重新登录后会回到当前页面。"
+              description="平台令牌有效期 2 小时且不可续期。为避免操作中断，请尽快完成当前操作并重新登录——重新登录后会回到当前页面。"
               action={
                 <Space>
                   <Button

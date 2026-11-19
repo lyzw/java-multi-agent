@@ -42,7 +42,7 @@ public class PlatformAuthController {
 
     public PlatformAuthController(PlatformCredentialAuthenticationService credentials,
                                  PlatformJwtTokenService tokens,
-                                 @Value("${auth.platform-jwt.token-ttl-seconds:900}") long tokenTtlSeconds) {
+                                 @Value("${auth.platform-jwt.token-ttl-seconds:7200}") long tokenTtlSeconds) {
         this.credentials = credentials;
         this.tokens = tokens;
         this.tokenTtlSeconds = tokenTtlSeconds;

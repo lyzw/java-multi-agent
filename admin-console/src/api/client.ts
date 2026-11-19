@@ -124,7 +124,7 @@ export function redirectLogin(): void {
   if (typeof window !== 'undefined') {
     // ⚠️ **必须带上「为什么」和「回哪去」**（评测 P1-5）：
     //    裸跳登录页会让用户以为是自己点的，等他重新登录完又被送回默认页
-    //    （/tenants），刚才的操作现场全丢。平台会话只有 15 分钟且不可续期，
+    //    （/tenants），刚才的操作现场全丢。平台会话只有 2 小时且不可续期，
     //    这种「被踢出且不解释」是控制台里最容易让人失去信任的一处。
     const full = `${window.location.pathname}${window.location.search}`
     // 回跳目标必须是 **basename 相对路径**（navigate() 会再拼一次 basename）。

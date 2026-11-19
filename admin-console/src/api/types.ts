@@ -1017,6 +1017,7 @@ export type ConsoleMcpItem = McpCatalogItem
 export interface PlatformLoginResponse {
   accessToken: string
   tokenType: string
+  /** 有效期（秒），由后端 auth.platform-jwt.token-ttl-seconds 下发（当前 7200 = 2 小时） */
   expiresIn: number
   userId: string
   roles: string[]
