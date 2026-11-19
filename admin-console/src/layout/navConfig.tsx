@@ -101,6 +101,17 @@ export const NAV_GROUPS: NavGroup[] = [
           '平台管理动作审计（登录/租户生命周期/配额/能力授权/用户管理），读 platform_audit_event，与租户业务审计物理分域。仅追加、只读。',
         phase: '平台治理',
       },
+      {
+        key: 'chat-audit-records',
+        label: '对话审计记录',
+        path: '/chat-audit-records',
+        icon: <FileProtectOutlined />,
+        // 与 router AUDIT_SCOPE、后端 platform.audit.read 一致（DEF-02 三处口径统一）。
+        requiredRoles: [ROLES.SUPER_ADMIN, ROLES.SECURITY_ADMIN, ROLES.AUDITOR],
+        description:
+          '对话审计插件录制结果（跨租户只读）：还原每次聊天请求的完整信封——用户问题、回答、thinking、逐分片、RAG 命中、工具调用、终态；含建连前失败（仅元数据）。列表只取摘要，点行按需加载原文。需 platform.audit.read。',
+        phase: '平台治理',
+      },
     ],
   },
   {

@@ -8,6 +8,7 @@ import { TenantRegistryPage } from '@/pages/TenantRegistryPage'
 import { TenantNewPage } from '@/pages/TenantNewPage'
 import { TenantDetailPage } from '@/pages/TenantDetailPage'
 import { AuditLogsPage } from '@/pages/audit/AuditLogsPage'
+import { ChatAuditRecordListPage } from '@/pages/audit/ChatAuditRecordListPage'
 import { RoleMatrixPage } from '@/pages/roles/RoleMatrixPage'
 import { UsersManagePage } from '@/pages/users/UsersManagePage'
 import { AgentRegistryPage } from '@/pages/console/AgentRegistryPage'
@@ -188,6 +189,15 @@ export const router = createBrowserRouter(
           element: (
             <RequireRole roles={AUDIT_SCOPE}>
               <AuditLogsPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 对话审计记录查询（跨租户审计原文 + 建连前失败，只读；需 platform.audit.read）
+          path: 'chat-audit-records',
+          element: (
+            <RequireRole roles={AUDIT_SCOPE}>
+              <ChatAuditRecordListPage />
             </RequireRole>
           ),
         },
