@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ChatAuditConfigMapper">
+    <select id="get"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ChatAuditConfigMapper$ConfigRow">
+        SELECT config::text AS configJson, config_version AS configVersion,
+               updated_by AS updatedBy, updated_at AS updatedAt, enabled
+        FROM public.chat_audit_config WHERE singleton = TRUE
+    </select>
+    <insert id="upsert">
+        INSERT INTO public.chat_audit_config (singleton, enabled, config, config_version, updated_by)
+        VALUES (TRUE, #{enabled}, #{configJson}::jsonb, 1, #{updatedBy})
+        ON CONFLICT (singleton) DO UPDATE SET
+            enabled = EXCLUDED.enabled,
+            config = EXCLUDED.config,
+            config_version = chat_audit_config.config_version + 1,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = now()
+    </insert>
+</mapper>

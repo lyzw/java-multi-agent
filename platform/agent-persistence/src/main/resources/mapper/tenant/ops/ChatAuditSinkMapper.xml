@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ChatAuditSinkMapper">
+    <insert id="writeAttributed">
+        INSERT INTO public.chat_audit_record
+            (audit_id, trace_id, tenant_id, domain, endpoint, principal_id,
+             started_at, completed_at, record)
+        VALUES (#{auditId}::uuid, #{traceId}, #{tenantId}::uuid, #{domain}, #{endpoint},
+                #{principalId}, #{startedAt}, #{completedAt}, #{recordJson}::jsonb)
+    </insert>
+    <insert id="writeUnattributed">
+        INSERT INTO public.chat_audit_unattributed
+            (audit_id, trace_id, started_at, endpoint, http_method, http_status, record)
+        VALUES (#{auditId}::uuid, #{traceId}, #{startedAt}, #{endpoint},
+                #{httpMethod}, #{httpStatus}, #{recordJson}::jsonb)
+    </insert>
+</mapper>
