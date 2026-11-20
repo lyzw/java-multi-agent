@@ -44,7 +44,16 @@ public class MemoryConfiguration {
      * 若这里硬编码系统时钟，{@code MemoryRecallIT} 就只能靠「等」来验证衰减。
      */
     @Bean
-    public MemoryPort memoryPort(DataSource dataSource, Clock clock) {
+    public MemoryPort memoryPort(DataSource dataSource, Clock clock,
+                                 org.springframework.beans.factory.ObjectProvider<
+                                         cn.studykid.multiagent.infrastructure.persistence.mapper.MemoryMapper>
+                                         memoryMapper,
+                                 @org.springframework.beans.factory.annotation.Value(
+                                         "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && memoryMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.memory.persistence.MybatisMemoryRepository(
+                    memoryMapper.getObject(), dataSource);
+        }
         return new JdbcMemoryRepository(dataSource, clock);
     }
 

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformAuditMapper">
+
+    <insert id="insert">
+        INSERT INTO platform.platform_audit_event
+            (id, actor_id, actor_type, action, target_type, target_id,
+             decision, reason_code, correlation_id, ip, occurred_at, ticket_scope,
+             capability, channel)
+        VALUES (#{id}::uuid, #{actorId}::uuid, #{actorType}, #{action}, #{targetType},
+                #{targetId}::uuid, #{decision}, #{reasonCode}, #{correlationId}::uuid,
+                #{ip}::inet, #{occurredAt}, #{ticketScope}, #{capability}, #{channel})
+    </insert>
+
+    <select id="query"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformAuditMapper$AuditEventRow">
+        SELECT id, actor_id AS actorId, actor_type AS actorType, action,
+               target_type AS targetType, target_id AS targetId, decision,
+               reason_code AS reasonCode, correlation_id AS correlationId, ip,
+               occurred_at AS occurredAt, ticket_scope AS ticketScope,
+               capability, channel
+        FROM platform.platform_audit_event
+        <where>
+            <if test="actorId != null and actorId != ''"> AND actor_id = #{actorId}::uuid</if>
+            <if test="action != null and action != ''"> AND action = #{action}</if>
+            <if test="targetType != null and targetType != ''"> AND target_type = #{targetType}</if>
+            <if test="targetId != null and targetId != ''"> AND target_id = #{targetId}::uuid</if>
+            <if test="from != null"> AND occurred_at <![CDATA[ >= ]]> #{from}</if>
+            <if test="to != null"> AND occurred_at <![CDATA[ <= ]]> #{to}</if>
+        </where>
+        ORDER BY occurred_at DESC, id LIMIT #{limit}
+    </select>
+</mapper>

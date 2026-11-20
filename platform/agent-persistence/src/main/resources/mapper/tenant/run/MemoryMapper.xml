@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.MemoryMapper">
+
+    <select id="listMemories"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.MemoryMapper$MemoryRow">
+        SELECT student_id AS studentId, knowledge_point AS knowledgePoint, error_type AS errorType,
+               strength, evidence_count AS evidenceCount, first_seen_at AS firstSeenAt,
+               last_seen_at AS lastSeenAt, last_run_id AS lastRunId
+        FROM student_memory
+        WHERE tenant_id = #{tenantId}::uuid AND student_id = #{studentId}
+        ORDER BY last_seen_at DESC
+    </select>
+
+    <select id="latestWeaknesses"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.MemoryMapper$WeaknessSeedRow">
+        SELECT DISTINCT ON (knowledge_point) knowledge_point AS knowledgePoint,
+               error_type AS errorType, created_at AS createdAt
+        FROM weakness_record
+        WHERE tenant_id = #{tenantId}::uuid AND student_id = #{studentId}
+        ORDER BY knowledge_point, created_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="findMemory"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.MemoryMapper$MemoryRow">
+        SELECT student_id AS studentId, knowledge_point AS knowledgePoint, error_type AS errorType,
+               strength, evidence_count AS evidenceCount, first_seen_at AS firstSeenAt,
+               last_seen_at AS lastSeenAt, last_run_id AS lastRunId
+        FROM student_memory
+        WHERE tenant_id = #{tenantId}::uuid AND student_id = #{studentId}
+          AND knowledge_point = #{knowledgePoint}
+    </select>
+
+    <insert id="insertMemory">
+        INSERT INTO student_memory (tenant_id, student_id, knowledge_point, error_type, strength,
+                                     evidence_count, first_seen_at, last_seen_at, last_run_id)
+        VALUES (#{tenantId}::uuid, #{studentId}, #{knowledgePoint}, #{errorType}, #{strength},
+                #{evidenceCount}, #{firstSeenAt}, #{lastSeenAt}, #{lastRunId}::uuid)
+    </insert>
+
+    <update id="updateMemory">
+        UPDATE student_memory SET error_type = #{errorType}, strength = #{strength},
+               evidence_count = #{evidenceCount}, last_seen_at = #{lastSeenAt},
+               last_run_id = #{lastRunId}::uuid, updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND student_id = #{studentId}
+          AND knowledge_point = #{knowledgePoint}
+    </update>
+
+    <delete id="deleteMemories">
+        DELETE FROM student_memory WHERE tenant_id = #{tenantId}::uuid AND student_id = #{studentId}
+    </delete>
+
+    <select id="countMemories" resultType="long">
+        SELECT count(*) FROM student_memory
+        WHERE tenant_id = #{tenantId}::uuid AND student_id = #{studentId}
+    </select>
+</mapper>

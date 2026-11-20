@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.StatisticsMapper">
+
+    <select id="runByDay"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.StatisticsMapper$RunDayRow">
+        SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, state, count(*) AS count
+        FROM run
+        WHERE tenant_id = #{tenantId}::uuid AND created_at <![CDATA[ >= ]]> #{from} AND created_at <![CDATA[ < ]]> #{to}
+        GROUP BY day, state ORDER BY day
+    </select>
+
+    <select id="weaknessByDay"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.StatisticsMapper$DayCountRow">
+        SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, count(*) AS count
+        FROM weakness_record
+        WHERE tenant_id = #{tenantId}::uuid AND created_at <![CDATA[ >= ]]> #{from} AND created_at <![CDATA[ < ]]> #{to}
+        GROUP BY day ORDER BY day
+    </select>
+
+    <select id="activeStudentsByDay"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.StatisticsMapper$DayCountRow">
+        SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+               count(DISTINCT student_id) AS count
+        FROM weakness_record
+        WHERE tenant_id = #{tenantId}::uuid AND created_at <![CDATA[ >= ]]> #{from} AND created_at <![CDATA[ < ]]> #{to}
+        GROUP BY day ORDER BY day
+    </select>
+
+    <select id="newStudentsByDay"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.StatisticsMapper$DayCountRow">
+        SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, count(*) AS count
+        FROM student_profile
+        WHERE tenant_id = #{tenantId}::uuid AND created_at <![CDATA[ >= ]]> #{from} AND created_at <![CDATA[ < ]]> #{to}
+        GROUP BY day ORDER BY day
+    </select>
+
+    <select id="knowledgePointRank"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.StatisticsMapper$KnowledgePointRow">
+        SELECT knowledge_point AS knowledgePoint, error_type AS errorType, count(*) AS count
+        FROM weakness_record
+        WHERE tenant_id = #{tenantId}::uuid AND created_at <![CDATA[ >= ]]> #{from} AND created_at <![CDATA[ < ]]> #{to}
+        GROUP BY knowledge_point, error_type
+        ORDER BY count DESC LIMIT #{limit}
+    </select>
+</mapper>
