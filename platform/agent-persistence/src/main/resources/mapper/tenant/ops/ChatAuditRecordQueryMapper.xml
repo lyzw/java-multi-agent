@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ChatAuditRecordQueryMapper">
+
+    <select id="list"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ChatAuditRecordQueryMapper$SummaryRow">
+        SELECT audit_id::text AS auditId, trace_id AS traceId, source, tenant_id AS tenantId,
+               domain, principal_id AS principalId, endpoint, started_at AS startedAt,
+               completed_at AS completedAt, duration_ms AS durationMs, terminal_state AS terminalState,
+               http_method AS httpMethod, http_status AS httpStatus,
+               message_preview AS messagePreview, rejection_reason AS rejectionReason
+        FROM (
+            <if test="includeRecord">
+                SELECT audit_id, trace_id, 'RECORD' AS source, tenant_id::text AS tenant_id,
+                       domain, principal_id, endpoint, started_at, completed_at, duration_ms,
+                       terminal_state, http_method, http_status,
+                       left(envelope #>> '{request,message}', 200) AS message_preview,
+                       NULL::text AS rejection_reason
+                FROM public.chat_audit_record
+                <where>
+                    <if test="tenantId != null and tenantId != ''"> AND tenant_id = #{tenantId}::uuid</if>
+                    <if test="endpoint != null and endpoint != ''"> AND endpoint = #{endpoint}</if>
+                    <if test="terminalState != null and terminalState != ''"> AND terminal_state = #{terminalState}</if>
+                    <if test="from != null"> AND started_at &gt;= #{from}</if>
+                    <if test="to != null"> AND started_at &lt; #{to}</if>
+                </where>
+            </if>
+            <if test="includeRecord and includeUnattributed"> UNION ALL </if>
+            <if test="includeUnattributed">
+                SELECT audit_id, trace_id, 'UNATTRIBUTED' AS source, NULL::text AS tenant_id,
+                       NULL::text AS domain, NULL::text AS principal_id, endpoint, started_at,
+                       NULL::timestamptz AS completed_at, NULL::bigint AS duration_ms,
+                       'REJECTED' AS terminal_state, http_method, http_status,
+                       NULL::text AS message_preview, rejection_reason
+                FROM public.chat_audit_unattributed
+                <where>
+                    <if test="endpoint != null and endpoint != ''"> AND endpoint = #{endpoint}</if>
+                    <if test="from != null"> AND started_at &gt;= #{from}</if>
+                    <if test="to != null"> AND started_at &lt; #{to}</if>
+                </where>
+            </if>
+        ) u
+        ORDER BY started_at DESC, audit_id DESC, source DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="detailRecord"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ChatAuditRecordQueryMapper$DetailRow">
+        SELECT audit_id::text AS auditId, trace_id AS traceId, tenant_id::text AS tenantId,
+               domain, principal_id AS principalId, endpoint, started_at AS startedAt,
+               completed_at AS completedAt, duration_ms AS durationMs, terminal_state AS terminalState,
+               http_method AS httpMethod, http_status AS httpStatus, config_version AS configVersion,
+               NULL::text AS rejectionReason, envelope::text AS payloadJson
+        FROM public.chat_audit_record WHERE audit_id = #{auditId}::uuid
+    </select>
+
+    <select id="detailUnattributed"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ChatAuditRecordQueryMapper$DetailRow">
+        SELECT audit_id::text AS auditId, trace_id AS traceId, NULL::text AS tenantId,
+               NULL::text AS domain, NULL::text AS principalId, endpoint, started_at AS startedAt,
+               NULL::timestamptz AS completedAt, NULL::bigint AS durationMs,
+               'REJECTED' AS terminalState, http_method AS httpMethod, http_status AS httpStatus,
+               0::bigint AS configVersion, rejection_reason AS rejectionReason,
+               metadata::text AS payloadJson
+        FROM public.chat_audit_unattributed WHERE audit_id = #{auditId}::uuid
+    </select>
+</mapper>
