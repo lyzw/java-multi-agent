@@ -47,6 +47,11 @@ import { ImpactAnalysisPage } from '@/pages/dependencies/ImpactAnalysisPage'
 import { DelegationTopologyPage } from '@/pages/dependencies/DelegationTopologyPage'
 import { PublishCenterPage } from '@/pages/publish/PublishCenterPage'
 import { PublishReleasesPage } from '@/pages/publish/PublishReleasesPage'
+import { PolicyConfigPage } from '@/pages/publish/PolicyConfigPage'
+import { DraftListPage } from '@/pages/publish/DraftListPage'
+import { PublishFailuresPage } from '@/pages/publish/PublishFailuresPage'
+import { VersionHistoryPage } from '@/pages/publish/VersionHistoryPage'
+import { BusinessAuditLogPage } from '@/pages/audit/BusinessAuditLogPage'
 import { MonitoringHealthPage } from '@/pages/monitoring/MonitoringHealthPage'
 import { MonitoringDeniesPage } from '@/pages/monitoring/MonitoringDeniesPage'
 import { RouteErrorBoundary } from '@/shared/AppErrorBoundary'
@@ -417,6 +422,11 @@ export const router = createBrowserRouter(
         { path: 'dependencies/delegations', element: <DelegationTopologyPage /> },
         { path: 'publish', element: <PublishCenterPage /> },
         { path: 'publish/releases', element: <PublishReleasesPage /> },
+        { path: 'publish/policies', element: <PolicyConfigPage /> },
+        { path: 'publish/drafts', element: <DraftListPage /> },
+        { path: 'publish/failures', element: <PublishFailuresPage /> },
+        { path: 'publish/versions', element: <VersionHistoryPage /> },
+        { path: 'audit/business', element: <BusinessAuditLogPage /> },
         { path: 'monitoring/health', element: <MonitoringHealthPage /> },
         { path: 'monitoring/denies', element: <MonitoringDeniesPage /> },
         {

@@ -144,7 +144,8 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
                                 operation, payload, reason,
                                 requesterId, ConfigPublishRequest.State.PENDING,
                                 null, null, requestedAt, null, null, null,
-                                scopeOf(tenantId));
+                                scopeOf(tenantId),
+                                null, null, null, null, null);
                     });
     }
 
@@ -293,21 +294,24 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
                                              @NonNull String actorId,
                                              @NonNull Instant appliedAt) {
         return transitionTo(tenantId, requestId,
-                ConfigPublishRequest.State.APPLIED, null, actorId, appliedAt);
+                ConfigPublishRequest.State.APPLIED, null, null, null, actorId, appliedAt);
     }
 
     @Override
     @NonNull
     public ConfigPublishRequest markFailed(@Nullable String tenantId,
                                             @NonNull String requestId,
-                                            @NonNull String reason) {
+                                            @NonNull String reason,
+                                            @Nullable String failStage,
+                                            @Nullable String failDetailsJson) {
         return transitionTo(tenantId, requestId,
-                ConfigPublishRequest.State.FAILED, reason, null, null);
+                ConfigPublishRequest.State.FAILED, reason, failStage, failDetailsJson, null, null);
     }
 
     private ConfigPublishRequest transitionTo(String tenantId, String requestId,
                                               ConfigPublishRequest.State target,
-                                              String failureReason, String actorId,
+                                              String failureReason, String failStage, String failDetailsJson,
+                                              String actorId,
                                               Instant appliedAt) {
         try {
             return TransactionalConnectionHolder.inTransaction(dataSource,
@@ -321,23 +325,30 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
                             }
                             String sql = """
                                     UPDATE cap_config_publish_request
-                                    SET state = ?, failure_reason = ?, applied_at = ?
+                                    SET state = ?, failure_reason = ?, fail_stage = ?, fail_details = COALESCE(?::jsonb, '[]'::jsonb), applied_at = ?
                                     WHERE tenant_id IS NOT DISTINCT FROM ?::uuid
                                       AND request_id = ?::uuid
                                     RETURNING request_id::text, tenant_id::text, operation, payload::text,
                                               reason, requester_id, state, approver_id, decision_note,
-                                              requested_at, decided_at, applied_at, failure_reason, scope
+                                              requested_at, decided_at, applied_at, failure_reason, scope,
+                                              resource_kind, resource_id, target_version, fail_stage, fail_details::text
                                     """;
                             ConfigPublishRequest updated;
                             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                                 ps.setString(1, target.name());
                                 ps.setString(2, failureReason);
-                                if (appliedAt == null) {
-                                    ps.setNull(3, java.sql.Types.TIMESTAMP);
+                                if (failStage == null) {
+                                    ps.setNull(3, java.sql.Types.VARCHAR);
                                 } else {
-                                    ps.setTimestamp(3, Timestamp.from(appliedAt));
+                                    ps.setString(3, failStage);
                                 }
-                                bindTenant(ps, 4, tenantId);
+                                ps.setString(4, failDetailsJson == null ? null : failDetailsJson);
+                                if (appliedAt == null) {
+                                    ps.setNull(5, java.sql.Types.TIMESTAMP);
+                                } else {
+                                    ps.setTimestamp(5, Timestamp.from(appliedAt));
+                                }
+                                bindTenant(ps, 6, tenantId);
                                 ps.setString(5, requestId);
                                 try (ResultSet rs = ps.executeQuery()) {
                                     if (!rs.next()) {
@@ -419,7 +430,8 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
         return """
                 SELECT request_id::text, tenant_id::text, operation, payload::text,
                        reason, requester_id, state, approver_id, decision_note,
-                       requested_at, decided_at, applied_at, failure_reason, scope
+                       requested_at, decided_at, applied_at, failure_reason, scope,
+                       resource_kind, resource_id, target_version, fail_stage, fail_details::text
                 FROM cap_config_publish_request
                 """;
     }
@@ -439,7 +451,12 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
                 instantOrNull(rs.getTimestamp("decided_at")),
                 instantOrNull(rs.getTimestamp("applied_at")),
                 rs.getString("failure_reason"),
-                ConfigRelease.Scope.valueOf(rs.getString("scope")));
+                ConfigRelease.Scope.valueOf(rs.getString("scope")),
+                rs.getString("resource_kind"),
+                rs.getString("resource_id"),
+                (Integer) rs.getObject("target_version"),
+                rs.getString("fail_stage"),
+                rs.getString("fail_details"));
     }
 
     private static void bind(PreparedStatement ps, List<Object> params) throws SQLException {

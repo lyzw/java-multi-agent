@@ -7,18 +7,20 @@ import { useMemo } from 'react'
 interface BreadcrumbProps {
   /** 已按角色过滤的可见分组——面包屑不能暴露无权分组的标签。 */
   groups: NavGroup[]
-  /** 点击「分组」级：侧栏退回到该分组的页面索引。 */
-  onGroupClick: () => void
+  /**
+   * 点击「控制台 / 分组」级：展开侧栏对应分组的子菜单（不跳路由、不改默认落地行为）。
+   * 不带参数 = 控制台级，展开当前路由所属分组；带参数 = 展开所点分组。
+   */
+  onGroupClick: (groupKey?: string) => void
 }
 
 /**
  * 面包屑导航：控制台 › 分组 › 页面。
  *
- * 与侧栏钻取联动——中间「分组」一级可点击，点击后侧栏退回分组索引
- * （由 AdminLayout 的 onGroupClick 切换），从而在视觉上形成
- * 「菜单本身就是一条可回退的路径」的面包屑结构。
+ * 与侧栏联动——中间「分组」一级可点击，点击后侧栏就地展开该分组
+ * （由 AdminLayout 的 onGroupClick 追加展开，不替换视图）。
  *
- * 路径映射由 NAV_GROUPS 派生 + findNavNode/findNavGroup 反查（单一来源），
+ * 路径映射由 NAV_GROUPS 派生 + findNavNode 反查（单一来源），
  * 精确匹配优先、最长前缀兜底，深链 /tenants/:id 亦能定位。
  */
 export function Breadcrumb({ groups, onGroupClick }: BreadcrumbProps): JSX.Element {
@@ -41,7 +43,7 @@ export function Breadcrumb({ groups, onGroupClick }: BreadcrumbProps): JSX.Eleme
       key: 'root',
       title: '平台控制台',
       icon: <HomeOutlined />,
-      onClick: onGroupClick, // 首页一级同样退回分组索引，不跳路由（避免改默认落地行为）。
+      onClick: () => onGroupClick(), // 控制台级：展开当前路由所属分组，不跳路由。
       className: 'dc-crumb-root',
     },
     ...(group
@@ -49,7 +51,7 @@ export function Breadcrumb({ groups, onGroupClick }: BreadcrumbProps): JSX.Eleme
           {
             key: 'group',
             title: group.label,
-            onClick: onGroupClick,
+            onClick: () => onGroupClick(group.key),
             className: 'dc-crumb-link',
           },
         ]

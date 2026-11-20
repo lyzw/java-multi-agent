@@ -5,7 +5,6 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   LogoutOutlined,
-  LeftOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { NAV_GROUPS, findNavNode } from '@/layout/navConfig'
@@ -17,9 +16,6 @@ import { usePageTitle } from '@/shared/usePageTitle'
 
 const { Header, Sider, Content } = Layout
 const { useBreakpoint } = Grid
-
-/** 侧栏视图：'index' = 全部分组索引；分组 key = 该组页面列表。 */
-type DrillView = string | null
 
 /** 侧栏顶部铭牌标记（黄铜同心准星）——控制面的品牌锚点。 */
 function BrandMark(): JSX.Element {
@@ -35,8 +31,8 @@ function BrandMark(): JSX.Element {
 
 export function AdminLayout(): JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
-  /** 当前钻取到的分组；null = 显示全部分组索引。 */
-  const [drill, setDrill] = useState<DrillView>(null)
+  /** 已展开的分组子菜单（SubMenu key，形如 `group:xxx`）——点分组就地展开/收起，不替换视图。 */
+  const [openKeys, setOpenKeys] = useState<string[]>([])
   const { roles, signOut, expiringSoon, expiresInSeconds } = useSession()
   const location = useLocation()
   const navigate = useNavigate()
@@ -79,71 +75,49 @@ export function AdminLayout(): JSX.Element {
   usePageTitle(pageTitle)
 
   /**
-   * 路由变化时自动把侧栏定位到所属分组——深链、刷新、浏览器前进后退都不丢层级。
-   * 仅在 pathname **真正变化** 时执行：用户在索引态手动后退（不改路由）不会被强行拽回钻取态。
+   * 路由变化时自动展开当前路由所属分组——深链、刷新、前进后退都能看到自己在哪。
+   * 只做「追加展开」、从不收起其他分组：用户手动展开的多组浏览状态不被路由打断。
    */
   const lastPath = useRef<string | null>(null)
   useEffect(() => {
     if (lastPath.current === location.pathname) return
     lastPath.current = location.pathname
-    setDrill(currentGroup?.key ?? null)
+    if (!currentGroup) return
+    const key = `group:${currentGroup.key}`
+    setOpenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]))
   }, [location.pathname, currentGroup])
 
-  /**
-   * 钻取视图的菜单项：
-   *  - 索引态：一列分组，右侧带页面数——像目录，也像面包屑的「上一级」。
-   *  - 钻取态：首项是「返回全部分组」，随后是该组页面列表。
-   * 折叠态强制显示分组索引（80px 宽放页面名无意义），点分组即展开并钻入。
-   */
-  // ⚠️ 角色异步回补可能让 drill 指向的分组忽然无权访问；此时必须回退索引态，
-  //    否则下方 activeGroup!.children 会在真实浏览器里抛 TypeError（jsdom 仅打 uncaught，测试仍绿）。
-  const activeGroup = drill === null ? undefined : visibleGroups.find((g) => g.key === drill)
-  const isIndex = collapsed || !activeGroup
-
-  const menuItems: MenuProps['items'] = useMemo(() => {
-    if (isIndex || !activeGroup) {
-      return visibleGroups.map((g) => ({
+  /** 菜单数据：分组 = SubMenu（就地展开/收起），页面 = 叶子项。 */
+  const menuItems: MenuProps['items'] = useMemo(
+    () =>
+      visibleGroups.map((g) => ({
         key: `group:${g.key}`,
         icon: g.icon,
         label: (
-          <span className="dc-drill-index-label">
-            <span className="dc-drill-index-name">{g.label}</span>
-            <span className="dc-drill-index-count">{g.children.length}</span>
+          <span className="dc-group-label">
+            <span className="dc-group-name">{g.label}</span>
+            <span className="dc-group-count">{g.children.length}</span>
           </span>
         ),
-      }))
-    }
-    const g = activeGroup!
-    return [
-      {
-        key: '__back__',
-        icon: <LeftOutlined />,
-        label: <span className="dc-drill-back">全部分组</span>,
-        className: 'dc-drill-back-item',
-      },
-      ...g.children.map((n) => ({
-        key: n.path,
-        icon: n.icon,
-        label: n.label,
+        children: g.children.map((n) => ({
+          key: n.path,
+          icon: n.icon,
+          label: n.label,
+        })),
       })),
-    ]
-  }, [isIndex, activeGroup, visibleGroups])
+    [visibleGroups],
+  )
 
-  /** 选中态：索引态高亮当前路由所属分组；钻取态高亮当前页面。 */
-  const selectedKey = isIndex
-    ? currentGroup
-      ? `group:${currentGroup.key}`
-      : ''
-    : matched && activeGroup?.children.some((n) => n.path === matched.path)
-      ? matched.path
-      : ''
+  const selectedKey = matched?.path ?? ''
 
   /**
-   * 面包屑「控制台 / 分组」级点击 = 路径向上，退回分组索引（不跳路由、不改默认落地行为）。
-   * 钻入某个分组是索引态下点分组项的动作，两者职责分离、语义单一。
+   * 面包屑点击：只展开侧栏对应分组、不跳路由——
+   * 「控制台」级展开当前路由所属分组，「分组」级展开所点的那个分组。
    */
-  const handleCrumbGroup = (): void => {
-    setDrill(null)
+  const handleCrumbGroup = (groupKey?: string): void => {
+    const key = `group:${groupKey ?? currentGroup?.key ?? ''}`
+    if (key === 'group:') return
+    setOpenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]))
   }
 
   /** 会话余量百分比：平台令牌固定 2h（7200s），按比例画刻度条；真实到期仍以 expiringSoon 为准。 */
@@ -190,18 +164,9 @@ export function AdminLayout(): JSX.Element {
             inlineCollapsed={collapsed}
             selectedKeys={[selectedKey]}
             items={menuItems}
-            onClick={({ key }) => {
-              if (key === '__back__') {
-                setDrill(null)
-                return
-              }
-              if (key.startsWith('group:')) {
-                setDrill(key.slice('group:'.length))
-                setCollapsed(false)
-                return
-              }
-              navigate(key)
-            }}
+            onClick={({ key }) => navigate(key)}
+            // 折叠态下子菜单改为悬浮弹出，openKeys 无意义且会触发 AntD 警告——只在展开态受控。
+            {...(collapsed ? {} : { openKeys, onOpenChange: (keys: string[]) => setOpenKeys(keys) })}
             style={{ borderInlineEnd: 0, background: 'transparent' }}
           />
         </div>
@@ -238,7 +203,7 @@ export function AdminLayout(): JSX.Element {
             onClick={() => setCollapsed((c) => !c)}
             style={{ color: 'var(--dc-text-2)' }}
           />
-          {/* 面包屑即唯一路径指示，收敛在顶栏：控制台 › 分组 › 页面，分组/首页可点回退侧栏。 */}
+          {/* 面包屑即唯一路径指示，收敛在顶栏：控制台 › 分组 › 页面；点分组只展开侧栏、不跳路由。 */}
           <Breadcrumb groups={visibleGroups} onGroupClick={handleCrumbGroup} />
           <div style={{ flex: 1 }} />
           <div className="dc-envchip">

@@ -62,6 +62,22 @@ import cn.studykid.multiagent.routing.RoutingConfigException;
  */
 public class ConfigPublishWorkflowService {
 
+    /** 执行失败阶段（与 cap_config_publish_request.fail_stage 同口径）。 */
+    public enum FailStage { PRE_CHECK, PARAM_VALIDATE, DEP_CHECK, POINTER_CAS, RUNTIME_SYNC }
+
+    /** 携带失败阶段的发布执行异常。 */
+    public static class StageException extends RuntimeException {
+        public final FailStage stage;
+        public final String detailsJson;
+        public StageException(FailStage stage, String message) { this(stage, message, null); }
+        public StageException(FailStage stage, String message, String detailsJson) {
+            super(message);
+            this.stage = stage;
+            this.detailsJson = detailsJson;
+        }
+    }
+
+
     private static final Logger log = LoggerFactory.getLogger(ConfigPublishWorkflowService.class);
 
     /** 本通道可管理的对象类型（平台级对象不在此列）。 */
@@ -362,8 +378,17 @@ public class ConfigPublishWorkflowService {
         } catch (RuntimeException e) {
             // ⚠️ 失败必须留痕：一份「批过但没生效」的申请不能只存在于异常栈里。
             //    FAILED 是**终态** —— 不自动重试，因为重试等于让审批人批过的东西在无人参与下变形。
+            FailStage stage = null;
+            String detailsJson = null;
+            if (e instanceof StageException se) {
+                stage = se.stage;
+                detailsJson = se.detailsJson;
+            }
             try {
-                requests.markFailed(tenantId, requestId, String.valueOf(e.getMessage()));
+                requests.markFailed(tenantId, requestId,
+                        String.valueOf(e.getMessage()),
+                        stage == null ? null : stage.name(),
+                        detailsJson);
             } catch (RuntimeException markFailure) {
                 log.error("变更申请失败状态回写也失败了: request={}, err={}",
                         requestId, markFailure.getMessage());
@@ -440,29 +465,45 @@ public class ConfigPublishWorkflowService {
     private void precheck(String tenantId, ConfigPublishPayload payload, String requesterId) {
         // ⚠️ 预检**不解析 CAS 基线**：申请阶段拒一个「基线旧了」的提案没有意义 ——
         //    申请只是一份提案，真正的基线校验发生在执行时。
-        ConfigPublishCommand command = buildPublishCommand(tenantId, payload, requesterId, "system", false);
-        // ⚠️ 门禁不通过会抛 ConfigPublishRejectedException —— 申请阶段就拒，
-        //    不占用审批名额，也不留下「批了才发现非法」的申请单。
-        publisher.validateForReview(command);
+        try {
+            ConfigPublishCommand command = buildPublishCommand(tenantId, payload, requesterId, "system", false);
+            publisher.validateForReview(command);
+        } catch (RuntimeException e) {
+            throw new StageException(FailStage.PRE_CHECK, e.getMessage());
+        }
     }
 
     private void executePublish(String tenantId, ConfigPublishRequest request,
                                 ConfigPublishPayload payload) {
         ConfigPublishCommand command = buildPublishCommand(tenantId, payload,
                 request.requesterId(), request.approverId(), true);
-        publisher.publish(command);
+        try {
+            publisher.publish(command);
+        } catch (ConfigPublishBaselineConflictException e) {
+            throw new StageException(FailStage.POINTER_CAS, e.getMessage());
+        } catch (IllegalArgumentException | ConfigPublishRejectedException e) {
+            throw new StageException(FailStage.PARAM_VALIDATE, e.getMessage());
+        } catch (RuntimeException e) {
+            throw new StageException(FailStage.RUNTIME_SYNC, e.getMessage());
+        }
     }
 
     private void executeRollback(String tenantId, ConfigPublishRequest request,
                                  ConfigPublishPayload payload) {
         if (payload.targetReleaseId() == null || payload.targetReleaseId() <= 0) {
-            throw new IllegalArgumentException("回滚申请缺少 targetReleaseId");
+            throw new StageException(FailStage.PARAM_VALIDATE, "回滚申请缺少 targetReleaseId");
         }
         Long baseline = resolveBaseline(tenantId, payload);
         ConfigRollbackCommand command = new ConfigRollbackCommand(
                 ConfigRelease.Scope.TENANT, tenantId, payload.targetReleaseId(), baseline,
                 request.requesterId(), request.approverId(), null, null);
-        publisher.rollback(command);
+        try {
+            publisher.rollback(command);
+        } catch (ConfigPublishBaselineConflictException e) {
+            throw new StageException(FailStage.POINTER_CAS, e.getMessage());
+        } catch (RuntimeException e) {
+            throw new StageException(FailStage.RUNTIME_SYNC, e.getMessage());
+        }
     }
 
     private void executeLifecycle(String tenantId, ConfigPublishRequest request,

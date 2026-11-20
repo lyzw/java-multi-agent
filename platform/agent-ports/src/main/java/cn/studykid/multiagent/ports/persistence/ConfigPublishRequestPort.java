@@ -127,7 +127,9 @@ public interface ConfigPublishRequestPort {
      */
     @NonNull ConfigPublishRequest markFailed(@Nullable String tenantId,
                                               @NonNull String requestId,
-                                              @NonNull String reason);
+                                              @NonNull String reason,
+                                              @Nullable String failStage,
+                                              @Nullable String failDetailsJson);
 
     /** 申请单不存在。 */
     class NotFoundException extends RuntimeException {

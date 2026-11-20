@@ -33,13 +33,22 @@ const controlSurfaceTheme = {
     colorBgContainer: '#FFFFFF',
     colorBgElevated: '#FFFFFF',
     colorBgTextHover: '#F4F5F1',
+    colorFillAlter: '#FAFBF9',
+    colorFillQuaternary: '#FAFBF9',
     borderRadius: 6,
     borderRadiusLG: 8,
     borderRadiusSM: 4,
     fontFamily:
       "'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif",
     fontSize: 14,
+    fontSizeSM: 12,
+    fontSizeLG: 16,
+    lineHeight: 1.5714,
     controlHeight: 36,
+    controlHeightSM: 28,
+    controlHeightLG: 44,
+    motionDurationMid: '0.16s',
+    motionDurationSlow: '0.24s',
   },
   components: {
     Layout: {
@@ -59,15 +68,58 @@ const controlSurfaceTheme = {
     },
     Table: {
       headerBg: '#FAFBF9',
-      headerColor: '#8B9791',
+      headerColor: '#586862',
       headerSplitColor: 'transparent',
+      headerFontWeight: 600,
       rowHoverBg: 'rgba(169,118,27,0.05)',
       borderColor: '#E8EBE6',
+      cellPaddingBlock: 12,
+      cellPaddingInline: 16,
     },
     Button: {
       primaryShadow: 'none',
       defaultShadow: 'none',
       fontWeight: 500,
+    },
+    // 以下组件 token 全站统一——覆盖那些未使用 dc- 类的页面（90+ 页）。
+    // 目标：所有页面共享同一套间距/圆角/字号/交互节奏，而非各自 AntD 默认。
+    Card: {
+      bodyPadding: 16,
+      bodyPaddingSM: 12,
+      headerFontSize: 15,
+    },
+    Typography: {
+      titleMarginTop: 0,
+      titleMarginBottom: 12,
+      colorText: '#1B2624',
+      colorTextSecondary: '#586862',
+    },
+    Pagination: {
+      itemActiveBg: '#A9761B',
+    },
+    Tabs: {
+      itemColor: '#586862',
+      itemActiveColor: '#A9761B',
+      itemHoverColor: '#B9862A',
+      itemSelectedColor: '#A9761B',
+      inkBarColor: '#A9761B',
+      titleFontSize: 14,
+    },
+    Descriptions: {
+      labelBg: '#FAFBF9',
+      titleMarginBottom: 12,
+    },
+    Form: {
+      labelColor: '#586862',
+      verticalLabelPadding: '0 0 6px',
+    },
+    Segmented: {
+      itemSelectedBg: '#FFFFFF',
+      itemSelectedColor: '#855C12',
+      trackBg: '#EDEFEA',
+    },
+    Modal: {
+      titleFontSize: 16,
     },
   },
 }

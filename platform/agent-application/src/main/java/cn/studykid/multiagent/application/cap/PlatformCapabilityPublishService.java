@@ -11,6 +11,8 @@ import java.util.Optional;
 import java.util.Set;
 
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -71,8 +73,9 @@ import cn.studykid.multiagent.ports.persistence.PlatformOpsSessionPort;
  * 两者刻意不合并 —— 合并后「停用」会顺带移动全局指针，
  * 一次误操作就能把全平台的当前配置切走。
  */
-@Slf4j
 public class PlatformCapabilityPublishService {
+
+    private static final Logger log = LoggerFactory.getLogger(PlatformCapabilityPublishService.class);
 
     /** 本服务可做生命周期迁移的平台级对象类型。 */
     public static final Set<String> PLATFORM_LIFECYCLE_OBJECT_TYPES =
@@ -280,7 +283,7 @@ public class PlatformCapabilityPublishService {
             } catch (RuntimeException e) {
                 // ⚠️ 失败必须留痕：一份「批过但没生效」的申请不能只存在于异常栈里。
                 try {
-                    requests.markFailed(null, requestId, String.valueOf(e.getMessage()));
+                    requests.markFailed(null, requestId, String.valueOf(e.getMessage()), null, null);
                 } catch (RuntimeException markFailure) {
                     // ⚠️ 留痕失败不能掩盖原始异常：原始异常才是调用方要知道的。
                     markFailure.addSuppressed(e);

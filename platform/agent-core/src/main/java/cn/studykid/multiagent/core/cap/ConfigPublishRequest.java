@@ -46,6 +46,11 @@ import org.jspecify.annotations.Nullable;
  * @param appliedAt     执行完成时间
  * @param failureReason 执行失败原因（{@code state=FAILED} 时有值）
  * @param scope         变更作用域（第三十四批 · PLATFORM 作用域的申请单）
+ * @param resourceKind   关联资源类型（§二 · 草稿分流时填充，可空）
+ * @param resourceId     关联资源 ID（可空）
+ * @param targetVersion  目标版本号（可空）
+ * @param failStage      失败阶段（§四 · 五阶段枚举，可空）
+ * @param failDetails    结构化失败明细 JSON（可空）
  */
 public record ConfigPublishRequest(
         @NonNull String requestId,
@@ -61,7 +66,17 @@ public record ConfigPublishRequest(
         @Nullable Instant decidedAt,
         @Nullable Instant appliedAt,
         @Nullable String failureReason,
-        ConfigRelease.@NonNull Scope scope) {
+        ConfigRelease.@NonNull Scope scope,
+        /** 关联资源类型（草稿分流时写入）。 */
+        @Nullable String resourceKind,
+        /** 关联资源 ID（草稿分流时写入）。 */
+        @Nullable String resourceId,
+        /** 目标版本号（草稿分流时写入）。 */
+        @Nullable Integer targetVersion,
+        /** 失败阶段（PRE_CHECK / PARAM_VALIDATE / DEP_CHECK / POINTER_CAS / RUNTIME_SYNC）。 */
+        @Nullable String failStage,
+        /** 结构化失败明细（JSON 文本）。 */
+        @Nullable String failDetails) {
 
     /**
      * 兼容构造器：<b>租户级</b>申请单（第三十四批之前的形态）。
@@ -84,7 +99,8 @@ public record ConfigPublishRequest(
                                 @Nullable String failureReason) {
         this(requestId, tenantId, operation, payload, reason, requesterId, state, approverId,
                 decisionNote, requestedAt, decidedAt, appliedAt, failureReason,
-                ConfigRelease.Scope.TENANT);
+                ConfigRelease.Scope.TENANT,
+                null, null, null, null, null);
     }
 
     /** 变更类型。 */

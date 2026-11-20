@@ -149,7 +149,7 @@ public class SecurityConfiguration {
             "/actuator/health",
             "/actuator/health/**",
             "/actuator/prometheus",
-            "/error"
+            "/error",
     };
 
     @Bean
@@ -186,7 +186,7 @@ public class SecurityConfiguration {
                 //    因此直接对话仍强制 authenticated（无匿名放行）。
                 .securityMatcher(PLATFORM_API_PREFIX + "**", CONSOLE_CHAT_PREFIX + "**",
                         AGENT_CHAT_PREFIX + "**",
-                        ADMIN_MODEL_CATALOG_PREFIX + "**", ADMIN_MODEL_CREDENTIALS_PREFIX + "**")
+                        ADMIN_MODEL_CATALOG_PREFIX + "**", ADMIN_MODEL_CREDENTIALS_PREFIX + "**", "/api/cap/**")
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .csrf(csrf -> csrf.disable())

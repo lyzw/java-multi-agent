@@ -174,20 +174,20 @@ body {
   margin: 0 8px;
 }
 
-/* ---------- 钻取式侧栏：分组索引 ↔ 组内页面 ---------- */
-.dc-drill-index-label {
+/* ---------- 侧栏分组：展开式子菜单（标题 + 页面数徽标） ---------- */
+.dc-group-label {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   width: 100%;
 }
-.dc-drill-index-name {
+.dc-group-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.dc-drill-index-count {
+.dc-group-count {
   font-family: var(--dc-mono);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
@@ -198,15 +198,6 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 3px;
   flex: 0 0 auto;
-}
-.dc-drill-back {
-  font-family: var(--dc-mono);
-  font-size: 12px;
-  letter-spacing: 0.02em;
-}
-.dc-drill-back-item {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
-  margin-bottom: 6px !important;
 }
 .dc-envchip {
   display: flex;
