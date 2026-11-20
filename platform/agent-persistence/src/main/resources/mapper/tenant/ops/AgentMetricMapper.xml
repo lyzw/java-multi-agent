@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentMetricMapper">
+
+    <sql id="filter">
+        <if test="tenantId != null"> AND tenant_id = #{tenantId}::uuid</if>
+        <if test="agentId != null"> AND agent_id = #{agentId}::uuid</if>
+        <if test="agentVersion != null"> AND agent_version = #{agentVersion}</if>
+        <if test="scenario != null"> AND scenario = #{scenario}</if>
+    </sql>
+
+    <!-- ① upsert 40 列 + ON CONFLICT DO UPDATE -->
+    <insert id="upsertMetric">
+        INSERT INTO platform.agent_trace_metric (
+            trace_id, tenant_id, run_id, agent_id, agent_version, scenario, model_id,
+            started_at, ended_at, duration_ms, terminal_state, termination_reason,
+            input_tokens, output_tokens, cost_amount, currency,
+            tool_rounds, tool_call_total, tool_call_failed, tool_call_invalid,
+            tool_call_duplicate, loop_suspected_count, max_rounds_reached,
+            clarification_count, think_ms_total, tool_ms_total,
+            auto_checked, auto_verified, sampled, human_verdict,
+            hallucination, instruction_followed,
+            feedback_up, feedback_down, retry_count, abandoned,
+            safety_blocked_count, unauthorized_attempt_count, sensitive_output_hits,
+            trace_id_source, computed_at
+        ) VALUES (
+            #{m.traceId}, #{m.tenantId}::uuid, #{m.runId}::uuid, #{m.agentId}::uuid, #{m.agentVersion},
+            #{m.scenario}, #{m.modelId}, #{m.startedAt}, #{m.endedAt}, #{m.durationMs},
+            #{m.terminalState}, #{m.terminationReason}, #{m.inputTokens}, #{m.outputTokens},
+            #{m.costAmount}, #{m.currency}, #{m.toolRounds}, #{m.toolCallTotal}, #{m.toolCallFailed},
+            #{m.toolCallInvalid}, #{m.toolCallDuplicate}, #{m.loopSuspectedCount}, #{m.maxRoundsReached},
+            #{m.clarificationCount}, #{m.thinkMsTotal}, #{m.toolMsTotal}, #{m.autoChecked},
+            #{m.autoVerified}, #{m.sampled}, #{m.humanVerdict}, #{m.hallucination},
+            #{m.instructionFollowed}, #{m.feedbackUp}, #{m.feedbackDown}, #{m.retryCount},
+            #{m.abandoned}, #{m.safetyBlockedCount}, #{m.unauthorizedAttemptCount},
+            #{m.sensitiveOutputHits}, #{m.traceIdSource}, now()
+        )
+        ON CONFLICT (trace_id) DO UPDATE SET
+            tenant_id = EXCLUDED.tenant_id, run_id = EXCLUDED.run_id,
+            agent_id = EXCLUDED.agent_id, agent_version = EXCLUDED.agent_version,
+            scenario = EXCLUDED.scenario, model_id = EXCLUDED.model_id,
+            started_at = EXCLUDED.started_at, ended_at = EXCLUDED.ended_at,
+            duration_ms = EXCLUDED.duration_ms, terminal_state = EXCLUDED.terminal_state,
+            termination_reason = EXCLUDED.termination_reason,
+            input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens,
+            cost_amount = EXCLUDED.cost_amount, currency = EXCLUDED.currency,
+            tool_rounds = EXCLUDED.tool_rounds, tool_call_total = EXCLUDED.tool_call_total,
+            tool_call_failed = EXCLUDED.tool_call_failed, tool_call_invalid = EXCLUDED.tool_call_invalid,
+            tool_call_duplicate = EXCLUDED.tool_call_duplicate,
+            loop_suspected_count = EXCLUDED.loop_suspected_count,
+            max_rounds_reached = EXCLUDED.max_rounds_reached,
+            clarification_count = EXCLUDED.clarification_count,
+            think_ms_total = EXCLUDED.think_ms_total, tool_ms_total = EXCLUDED.tool_ms_total,
+            computed_at = now()
+    </insert>
+
+    <insert id="insertToolCall">
+        INSERT INTO platform.agent_trace_tool_call
+            (trace_id, tenant_id, tool_name, call_count, failed_count,
+             invalid_count, duplicate_count, total_duration_ms, max_duration_ms, started_at)
+        VALUES (#{r.traceId}, #{r.tenantId}::uuid, #{r.toolName}, #{r.callCount}, #{r.failedCount},
+                #{r.invalidCount}, #{r.duplicateCount}, #{r.totalDurationMs}, #{r.maxDurationMs},
+                #{r.startedAt})
+    </insert>
+
+    <delete id="deleteToolCalls">
+        DELETE FROM platform.agent_trace_tool_call WHERE trace_id = #{traceId}
+    </delete>
+
+    <insert id="insertEvalSample">
+        INSERT INTO platform.agent_eval_sample
+            (trace_id, tenant_id, verdict, hallucination, instruction_followed,
+             attribution_correct, note, sampler)
+        VALUES (#{r.traceId}, #{r.tenantId}::uuid, #{r.verdict}, #{r.hallucination},
+                #{r.instructionFollowed}, #{r.attributionCorrect}, #{r.note}, #{r.sampler})
+    </insert>
+
+    <update id="markSampled">
+        UPDATE platform.agent_trace_metric SET
+            sampled = TRUE, human_verdict = #{verdict}, hallucination = #{hallucination},
+            instruction_followed = #{instructionFollowed}, attribution_correct = #{attributionCorrect}
+        WHERE trace_id = #{traceId} AND tenant_id = #{tenantId}::uuid
+    </update>
+
+    <update id="recordAttribution">
+        UPDATE platform.agent_trace_metric
+        SET attribution_correct = #{correct}, computed_at = now()
+        WHERE trace_id = #{traceId} AND tenant_id = #{tenantId}::uuid
+    </update>
+
+    <insert id="insertFeedback">
+        INSERT INTO platform.agent_trace_feedback (trace_id, tenant_id, kind)
+        VALUES (#{traceId}, #{tenantId}::uuid, #{kind})
+    </insert>
+
+    <update id="bumpFeedback">
+        UPDATE platform.agent_trace_metric SET
+            feedback_up   = coalesce(feedback_up, 0)
+                            + CASE WHEN #{kind} = 'THUMB_UP' THEN 1 ELSE 0 END,
+            feedback_down = coalesce(feedback_down, 0)
+                            + CASE WHEN #{kind} = 'THUMB_DOWN' THEN 1 ELSE 0 END,
+            retry_count   = coalesce(retry_count, 0)
+                            + CASE WHEN #{kind} = 'RETRY' THEN 1 ELSE 0 END
+        WHERE trace_id = #{traceId} AND tenant_id = #{tenantId}::uuid
+    </update>
+
+    <insert id="insertRiskEvent">
+        INSERT INTO platform.agent_risk_event (trace_id, tenant_id, event_type, detail_digest)
+        VALUES (#{traceId}, #{tenantId}::uuid, #{eventType}, #{detailDigest})
+    </insert>
+
+    <update id="bumpRiskCounters">
+        UPDATE platform.agent_trace_metric SET
+            safety_blocked_count = coalesce(safety_blocked_count, 0)
+                                   + CASE WHEN #{eventType} = 'SAFETY_BLOCK' THEN 1 ELSE 0 END,
+            unauthorized_attempt_count = coalesce(unauthorized_attempt_count, 0)
+                                   + CASE WHEN #{eventType} = 'UNAUTHORIZED_CALL' THEN 1 ELSE 0 END,
+            sensitive_output_hits = coalesce(sensitive_output_hits, 0)
+                                   + CASE WHEN #{eventType} = 'SENSITIVE_OUTPUT' THEN 1 ELSE 0 END
+        WHERE trace_id = #{traceId} AND tenant_id = #{tenantId}::uuid
+    </update>
+
+    <insert id="upsertTaskOutcome">
+        INSERT INTO platform.agent_task_outcome
+            (trace_id, tenant_id, checker_code, external_ref, verified, evidence_digest)
+        VALUES (#{traceId}, #{tenantId}::uuid, #{checkerCode}, #{externalRef}, #{verified}, #{evidenceDigest})
+        ON CONFLICT (trace_id, checker_code) DO UPDATE SET
+            verified = EXCLUDED.verified, external_ref = EXCLUDED.external_ref,
+            evidence_digest = EXCLUDED.evidence_digest, checked_at = now()
+    </insert>
+
+    <update id="refreshAutoVerified">
+        UPDATE platform.agent_trace_metric m SET
+            auto_checked  = TRUE,
+            auto_verified = (SELECT bool_and(verified) FROM platform.agent_task_outcome
+                             WHERE trace_id = m.trace_id AND tenant_id = m.tenant_id)
+        WHERE trace_id = #{traceId} AND tenant_id = #{tenantId}::uuid
+    </update>
+
+    <sql id="metricCols">
+        trace_id AS traceId, tenant_id::text AS tenantId, run_id::text AS runId,
+        agent_id::text AS agentId, agent_version AS agentVersion, scenario, model_id AS modelId,
+        started_at AS startedAt, ended_at AS endedAt, duration_ms AS durationMs,
+        terminal_state AS terminalState, termination_reason AS terminationReason,
+        input_tokens AS inputTokens, output_tokens AS outputTokens, cost_amount AS costAmount,
+        currency, tool_rounds AS toolRounds, tool_call_total AS toolCallTotal,
+        tool_call_failed AS toolCallFailed, tool_call_invalid AS toolCallInvalid,
+        tool_call_duplicate AS toolCallDuplicate, loop_suspected_count AS loopSuspectedCount,
+        max_rounds_reached AS maxRoundsReached, clarification_count AS clarificationCount,
+        think_ms_total AS thinkMsTotal, tool_ms_total AS toolMsTotal, auto_checked AS autoChecked,
+        auto_verified AS autoVerified, sampled, human_verdict AS humanVerdict,
+        hallucination, instruction_followed AS instructionFollowed, feedback_up AS feedbackUp,
+        feedback_down AS feedbackDown, retry_count AS retryCount, abandoned,
+        safety_blocked_count AS safetyBlockedCount, unauthorized_attempt_count AS unauthorizedAttemptCount,
+        sensitive_output_hits AS sensitiveOutputHits, trace_id_source AS traceIdSource
+    </sql>
+
+    <select id="findByTraceId"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentMetricMapper$MetricRow">
+        SELECT <include refid="metricCols"/> FROM platform.agent_trace_metric WHERE trace_id = #{traceId}
+    </select>
+
+    <select id="overview"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentMetricMapper$OverviewRow">
+        SELECT
+            count(*) AS traceCount,
+            count(*) FILTER (WHERE terminal_state = 'SUCCEEDED') AS succeeded,
+            avg(duration_ms) AS avgDuration,
+            sum(input_tokens) AS inTokens,
+            sum(output_tokens) AS outTokens,
+            sum(cost_amount) AS cost,
+            avg(cost_amount) AS avgCost,
+            count(*) FILTER (WHERE coalesce(input_tokens,0) + coalesce(output_tokens,0) &gt; 20000) AS oversized,
+            avg(tool_rounds) AS avgRounds,
+            count(*) FILTER (WHERE max_rounds_reached) AS maxRounds,
+            sum(tool_call_total) AS calls,
+            sum(tool_call_invalid) AS invalid,
+            count(*) FILTER (WHERE loop_suspected_count &gt; 0) AS loops,
+            count(auto_checked) AS autoChecked,
+            count(*) FILTER (WHERE auto_verified) AS autoVerified,
+            count(sampled) AS sampled,
+            count(*) FILTER (WHERE human_verdict = 'SUCCESS') AS humanOk,
+            count(*) FILTER (WHERE auto_verified AND sampled AND human_verdict &lt;&gt; 'SUCCESS') AS falseOk,
+            count(*) FILTER (WHERE auto_verified AND sampled) AS falseDenom,
+            count(hallucination) FILTER (WHERE hallucination) AS hallucinated,
+            count(*) FILTER (WHERE instruction_followed) AS followed,
+            count(instruction_followed) AS followedDenom,
+            count(attribution_correct) FILTER (WHERE attribution_correct) AS attrCorrect,
+            count(attribution_correct) AS attrGraded,
+            sum(feedback_up) AS fbUp,
+            sum(feedback_down) AS fbDown,
+            count(*) FILTER (WHERE abandoned) AS abandoned,
+            count(*) FILTER (WHERE safety_blocked_count &gt; 0) AS safety,
+            count(*) FILTER (WHERE unauthorized_attempt_count &gt; 0) AS unauthorized,
+            count(*) FILTER (WHERE sensitive_output_hits &gt; 0) AS sensitive
+        FROM platform.agent_trace_metric
+        WHERE started_at &gt;= #{from} AND started_at &lt; #{to}
+        <include refid="filter"/>
+    </select>
+
+    <select id="terminationDistribution"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentMetricMapper$CountRow">
+        SELECT termination_reason AS key, count(*) AS count
+        FROM platform.agent_trace_metric
+        WHERE started_at &gt;= #{from} AND started_at &lt; #{to}
+        <include refid="filter"/>
+        GROUP BY termination_reason
+    </select>
+
+    <select id="latency"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentMetricMapper$PercentileRow">
+        SELECT percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms) AS p50,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95,
+               percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms) AS p99
+        FROM platform.agent_trace_metric
+        WHERE started_at &gt;= #{from} AND started_at &lt; #{to} AND duration_ms IS NOT NULL
+        <include refid="filter"/>
+    </select>
+
+    <select id="toolBreakdown"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentMetricMapper$ToolAggRow">
+        SELECT tool_name AS toolName, sum(call_count) AS calls, sum(failed_count) AS failed,
+               sum(total_duration_ms) AS totalMs, max(max_duration_ms) AS maxMs
+        FROM platform.agent_trace_tool_call
+        WHERE started_at &gt;= #{from} AND started_at &lt; #{to}
+        <include refid="filter"/>
+        GROUP BY tool_name ORDER BY calls DESC, tool_name LIMIT 50
+    </select>
+
+    <select id="anomalies"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentMetricMapper$AnomalyRow">
+        SELECT trace_id AS traceId, started_at AS startedAt, tool_rounds AS toolRounds,
+               loop_suspected_count AS loopSuspectedCount,
+               coalesce(input_tokens,0) + coalesce(output_tokens,0) AS totalTokens
+        FROM platform.agent_trace_metric
+        WHERE started_at &gt;= #{from} AND started_at &lt; #{to}
+          AND (coalesce(input_tokens,0) + coalesce(output_tokens,0) &gt; 20000
+               OR loop_suspected_count &gt; 0 OR max_rounds_reached)
+        <include refid="filter"/>
+        ORDER BY (coalesce(input_tokens,0) + coalesce(output_tokens,0)) DESC, started_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="scenarios"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentMetricMapper$CountRow">
+        SELECT scenario AS key, count(*) AS count
+        FROM platform.agent_trace_metric
+        WHERE started_at &gt;= #{from} AND started_at &lt; #{to}
+        <if test="tenantId != null"> AND tenant_id = #{tenantId}::uuid</if>
+        <if test="agentId != null"> AND agent_id = #{agentId}::uuid</if>
+        <if test="agentVersion != null"> AND agent_version = #{agentVersion}</if>
+        GROUP BY scenario
+    </select>
+
+    <select id="samplingCandidates"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentMetricMapper$SamplingRow">
+        SELECT trace_id AS traceId, tenant_id::text AS tenantId, run_id::text AS runId, scenario,
+               auto_checked AS autoChecked, auto_verified AS autoVerified,
+               max_rounds_reached AS maxRoundsReached, loop_suspected_count AS loopSuspectedCount,
+               safety_blocked_count AS safetyBlockedCount,
+               coalesce(input_tokens,0) + coalesce(output_tokens,0) AS totalTokens,
+               started_at AS startedAt
+        FROM platform.agent_trace_metric
+        WHERE started_at &gt;= #{from} AND started_at &lt; #{to} AND sampled IS NOT TRUE
+        <include refid="filter"/>
+        ORDER BY
+            CASE
+                WHEN loop_suspected_count &gt; 0 OR max_rounds_reached
+                     OR coalesce(safety_blocked_count, 0) &gt; 0
+                     OR coalesce(input_tokens,0) + coalesce(output_tokens,0) &gt; 20000
+                THEN 0
+                WHEN auto_checked IS NULL THEN 1
+                ELSE 2
+            END,
+            started_at DESC
+        LIMIT #{limit}
+    </select>
+</mapper>

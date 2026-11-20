@@ -17,6 +17,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.SubjectContext;
@@ -39,6 +40,7 @@ import cn.studykid.multiagent.ports.metrics.AgentMetricPort;
  * 让「没测过」与「测了是 0」在 SQL 层就分得开。
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcAgentMetricRepository implements AgentMetricPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcAgentMetricRepository.class);
