@@ -1131,7 +1131,16 @@ public class ApplicationConfiguration {
     /** CAP 审批仓储（P3-T3 · §5.3.1 / §5.3.3）。 */
     @Bean
     public cn.studykid.multiagent.ports.persistence.CapApprovalPort capApprovalPort(
-            DataSource dataSource) {
+            DataSource dataSource,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.CapApprovalMapper>
+                    capApprovalMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && capApprovalMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisCapApprovalRepository(capApprovalMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcCapApprovalRepository(
                 dataSource);
     }

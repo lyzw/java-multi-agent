@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.CapApprovalMapper">
+
+    <sql id="cols">
+        approval_id::text AS approvalId, tenant_id::text AS tenantId, principal_id AS principalId,
+        run_id::text AS runId, invocation_id AS invocationId, operation_id::text AS operationId,
+        tool_id AS toolId, target_resource AS targetResource,
+        approval_scope_hash AS approvalScopeHash, scope_definition AS scopeDefinition,
+        effective_args_hash AS effectiveArgsHash, closure_fingerprint AS closureFingerprint,
+        authz_version AS authzVersion, approver_id AS approverId, approver_scope AS approverScope,
+        decided_at AS decidedAt, expires_at AS expiresAt, approval_state::text AS approvalState,
+        terminal_status AS terminalStatus, cancel_reason AS cancelReason,
+        created_at AS createdAt, updated_at AS updatedAt
+    </sql>
+
+    <select id="findById"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.CapApprovalMapper$ApprovalRow">
+        SELECT <include refid="cols"/> FROM cap_approval
+        WHERE tenant_id = #{tenantId}::uuid AND approval_id = #{approvalId}::uuid
+    </select>
+
+    <select id="findByTool"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.CapApprovalMapper$ApprovalRow">
+        SELECT <include refid="cols"/> FROM cap_approval
+        WHERE tenant_id = #{tenantId}::uuid AND tool_id = #{toolId}
+        ORDER BY created_at ASC, approval_id ASC
+    </select>
+
+    <select id="findByInvocation"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.CapApprovalMapper$ApprovalRow">
+        SELECT <include refid="cols"/> FROM cap_approval
+        WHERE tenant_id = #{tenantId}::uuid AND invocation_id = #{invocationId}
+        ORDER BY created_at ASC
+    </select>
+
+    <select id="insertPending" resultType="java.lang.String">
+        INSERT INTO cap_approval
+            (tenant_id, principal_id, tool_id, target_resource,
+             approval_scope_hash, scope_definition, effective_args_hash,
+             closure_fingerprint, authz_version, approver_id, approver_scope,
+             decided_at, expires_at, approval_state, created_at, updated_at)
+        VALUES (#{tenantId}::uuid, #{principalId}, #{toolId}, #{targetResource},
+                #{approvalScopeHash}, #{scopeDefinition}, #{effectiveArgsHash},
+                #{closureFingerprint}, #{authzVersion}, #{approverId}, #{approverScope},
+                #{decidedAt}, #{expiresAt}, 'PENDING', #{createdAt}, #{updatedAt})
+        RETURNING approval_id::text
+    </select>
+
+    <select id="insertAwaitingHuman" resultType="java.lang.String">
+        INSERT INTO cap_approval
+            (tenant_id, principal_id, tool_id, target_resource,
+             approval_scope_hash, scope_definition, effective_args_hash,
+             closure_fingerprint, authz_version, approver_scope, expires_at,
+             approval_state, created_at, updated_at)
+        VALUES (#{tenantId}::uuid, #{principalId}, #{toolId}, #{targetResource},
+                #{approvalScopeHash}, #{scopeDefinition}, #{effectiveArgsHash},
+                #{closureFingerprint}, #{authzVersion}, #{approverScope}, #{expiresAt},
+                'AWAITING_HUMAN', #{createdAt}, #{updatedAt})
+        RETURNING approval_id::text
+    </select>
+
+    <!-- CAS 预占：6 个前置条件全部匹配才成功 -->
+    <update id="reserve">
+        UPDATE cap_approval
+        SET approval_state = 'RESERVED',
+            invocation_id = #{invocationId},
+            operation_id = #{operationId}::uuid,
+            run_id = COALESCE(run_id, #{runId}::uuid),
+            reserved_at = now(),
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND approval_id = #{approvalId}::uuid
+          AND approval_state = 'PENDING'
+          AND expires_at &gt; now()
+          AND effective_args_hash = #{effectiveArgsHash}
+          AND closure_fingerprint = #{closureFingerprint}
+          AND authz_version = #{authzVersion}
+    </update>
+
+    <update id="markIntent">
+        UPDATE cap_approval
+        SET approval_state = 'INTENT_SUBMITTED', intent_submitted_at = now(), updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND approval_id = #{approvalId}::uuid
+          AND invocation_id = #{invocationId} AND approval_state = 'RESERVED'
+    </update>
+
+    <update id="markIntentIdempotent">
+        UPDATE cap_approval SET updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND approval_id = #{approvalId}::uuid
+          AND invocation_id = #{invocationId}
+          AND approval_state IN ('INTENT_SUBMITTED', 'CONSUMED')
+    </update>
+
+    <update id="consume">
+        UPDATE cap_approval
+        SET approval_state = 'CONSUMED', terminal_status = #{terminalStatus},
+            consumed_at = now(), updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND approval_id = #{approvalId}::uuid
+          AND invocation_id = #{invocationId} AND approval_state = 'INTENT_SUBMITTED'
+    </update>
+
+    <update id="consumeIdempotent">
+        UPDATE cap_approval SET updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND approval_id = #{approvalId}::uuid
+          AND invocation_id = #{invocationId} AND approval_state = 'CONSUMED'
+    </update>
+
+    <update id="cancel">
+        UPDATE cap_approval
+        SET approval_state = 'CANCELLED', cancel_reason = #{reason},
+            cancelled_at = now(), updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND approval_id = #{approvalId}::uuid
+          AND invocation_id = #{invocationId}
+          AND approval_state IN ('PENDING', 'RESERVED', 'INTENT_SUBMITTED')
+    </update>
+</mapper>
