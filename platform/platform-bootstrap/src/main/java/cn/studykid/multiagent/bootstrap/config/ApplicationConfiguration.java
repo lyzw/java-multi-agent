@@ -689,7 +689,7 @@ public class ApplicationConfiguration {
      * 这些端点的底层表无租户无 RLS，仓储从不按 {@code tenantId} 访问数据，
      * 故合成上下文的 {@code tenantId} 仅为占位、绝不被用于数据隔离。
      */
-    private static final String PLATFORM_SENTINEL_TENANT = "__platform_admin__";
+    private static final String PLATFORM_SENTINEL_TENANT = "00000000-0000-0000-0000-000000000000";
 
     /**
      * 当前主体。
@@ -2115,5 +2115,36 @@ public class ApplicationConfiguration {
                 cn.studykid.multiagent.application.config.BudgetPolicy.DEFAULT_RESERVE_AMOUNT,
                 cn.studykid.multiagent.application.cap.CapExecutionFlow.DEFAULT_PRINCIPAL_ID,
                 enforcementSwitch, decisionAuditService, runBudgetProbe);
+    }
+
+    // ── 发布流程管理（Phase 2+） ──────────────────────────────────
+
+    /** 发布策略服务（三层优先级解析）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.PublishPolicyService publishPolicyService(
+            cn.studykid.multiagent.ports.persistence.PublishPolicyPort publishPolicyPort) {
+        return new cn.studykid.multiagent.application.cap.PublishPolicyService(publishPolicyPort);
+    }
+
+    /** 业务审计日志服务（cap_audit_log）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.AuditLogService auditLogService(
+            cn.studykid.multiagent.ports.persistence.AuditLogPort auditLogPort,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.cap.AuditLogService(auditLogPort, clock);
+    }
+
+    /** 变更草稿服务（编辑工作流 + 策略分流 + 结构化失败）。 */
+    @Bean
+    public cn.studykid.multiagent.application.cap.ConfigDraftService configDraftService(
+            cn.studykid.multiagent.ports.persistence.ConfigDraftPort configDraftPort,
+            cn.studykid.multiagent.application.cap.PublishPolicyService publishPolicyService,
+            cn.studykid.multiagent.application.cap.AuditLogService auditLogService,
+            cn.studykid.multiagent.ports.persistence.ConfigPublishRequestPort configPublishRequestPort,
+            cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService workflowService,
+            java.time.Clock clock) {
+        return new cn.studykid.multiagent.application.cap.ConfigDraftService(
+                configDraftPort, publishPolicyService, auditLogService,
+                configPublishRequestPort, workflowService, clock);
     }
 }
