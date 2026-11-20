@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentChatAuditMapper">
+
+    <insert id="insertRun">
+        INSERT INTO run
+            (run_id, tenant_id, snapshot_id, idempotency_key, request_digest,
+             state, fencing_token, lease_owner, lease_expires_at, attempt,
+             input_payload, correlation_id, created_at, updated_at)
+        VALUES (#{runId}::uuid, #{tenantId}::uuid, #{snapshotId}::uuid, #{idempotencyKey}, #{requestDigest},
+                'RUNNING'::run_state, #{fencingToken}, #{leaseOwner}, #{leaseExpiresAt}, 0,
+                #{inputPayloadJson}::jsonb, #{correlationId}, now(), now())
+    </insert>
+
+    <insert id="insertRunEvent">
+        INSERT INTO run_event (tenant_id, run_id, sequence_no, event_type, payload)
+        VALUES (#{tenantId}::uuid, #{runId}::uuid, #{sequenceNo}, #{eventType}, #{payloadJson}::jsonb)
+    </insert>
+
+    <!-- finish: CAS fencing + state=RUNNING 围栏 -->
+    <update id="finishRun">
+        UPDATE run
+        SET state = #{state}::run_state,
+            completed_at = #{completedAt},
+            result_payload = #{resultPayloadJson}::jsonb,
+            error_code = #{errorCode},
+            error_message = #{errorMessage},
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid
+          AND run_id = #{runId}::uuid
+          AND state = 'RUNNING'::run_state
+          AND fencing_token = #{fencingToken}
+    </update>
+
+    <insert id="insertRunStep">
+        INSERT INTO run_step
+            (tenant_id, run_id, step_number, state, step_type,
+             fencing_token, started_at, completed_at)
+        VALUES (#{tenantId}::uuid, #{runId}::uuid, #{stepNumber},
+                'RUNNING'::run_state, #{stepType}, #{fencingToken}, #{startedAt}, #{completedAt})
+    </insert>
+</mapper>
