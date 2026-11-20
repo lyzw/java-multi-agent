@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.RiskEventMapper">
+    <!-- platform schema 但走主数据源 RLS（agent_risk_event 带 tenant_id 列） -->
+    <insert id="insert">
+        INSERT INTO platform.agent_risk_event
+            (trace_id, tenant_id, event_type, detail_digest)
+        VALUES (#{traceId}, #{tenantId}::uuid, #{eventType}, #{detailDigest})
+    </insert>
+</mapper>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.RunStepMapper">
+    <insert id="insertUpsert">
+        INSERT INTO public.run_step
+            (tenant_id, run_id, step_number, state, step_type, fencing_token, started_at, completed_at)
+        VALUES (#{tenantId}::uuid, #{runId}::uuid, #{stepNumber},
+                'RUNNING'::run_state, #{stepType}, #{fencingToken},
+                #{startedAt}, #{completedAt})
+        ON CONFLICT (tenant_id, run_id, step_number) DO UPDATE SET
+            step_type = EXCLUDED.step_type,
+            started_at = EXCLUDED.started_at,
+            completed_at = EXCLUDED.completed_at,
+            fencing_token = EXCLUDED.fencing_token
+    </insert>
+</mapper>

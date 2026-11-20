@@ -229,7 +229,16 @@ public class ApplicationConfiguration {
      */
     @Bean
     public cn.studykid.multiagent.ports.persistence.RunStepPort runStepPort(
-            DataSource dataSource) {
+            DataSource dataSource,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.RunStepMapper>
+                    runStepMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && runStepMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisRunStepRepository(runStepMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcRunStepRepository(
                 dataSource);
     }
@@ -243,7 +252,16 @@ public class ApplicationConfiguration {
      */
     @Bean
     public cn.studykid.multiagent.ports.persistence.RiskEventPort riskEventPort(
-            DataSource dataSource) {
+            DataSource dataSource,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.RiskEventMapper>
+                    riskEventMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && riskEventMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisRiskEventRepository(riskEventMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcRiskEventRepository(
                 dataSource);
     }
@@ -259,7 +277,16 @@ public class ApplicationConfiguration {
      */
     @Bean
     public cn.studykid.multiagent.ports.persistence.RunMessagePort runMessagePort(
-            DataSource dataSource) {
+            DataSource dataSource,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.RunMessageMapper>
+                    runMessageMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && runMessageMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisRunMessageRepository(runMessageMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcRunMessageRepository(
                 dataSource);
     }

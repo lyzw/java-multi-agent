@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.RunMessageMapper">
+    <!--
+      run_message INSERT ON CONFLICT DO UPDATE。
+      ⚠️ 吞异常纪律由上层 Repository 负责，Mapper 只管执行。
+    -->
+    <insert id="insertUpsert">
+        INSERT INTO public.run_message
+            (tenant_id, run_id, step_number, role, content, tool_operation_id,
+             model_id, input_tokens, output_tokens, latency_ms, fencing_token, idem_key)
+        VALUES (#{tenantId}::uuid, #{runId}::uuid, #{stepNumber}, #{role},
+                #{contentJson}::jsonb,
+                #{toolOperationId}::uuid, #{modelId}, #{inputTokens}, #{outputTokens},
+                #{latencyMs}, #{fencingToken}, #{idemKey})
+        ON CONFLICT (tenant_id, run_id, idem_key) DO UPDATE SET
+            content = EXCLUDED.content,
+            tool_operation_id = EXCLUDED.tool_operation_id,
+            model_id = EXCLUDED.model_id,
+            input_tokens = EXCLUDED.input_tokens,
+            output_tokens = EXCLUDED.output_tokens,
+            latency_ms = EXCLUDED.latency_ms,
+            fencing_token = EXCLUDED.fencing_token
+    </insert>
+</mapper>

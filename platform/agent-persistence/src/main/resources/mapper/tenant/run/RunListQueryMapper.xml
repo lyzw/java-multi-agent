@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.RunListQueryMapper">
+
+    <!--
+      Run 列表游标分页查询。
+      ✅ tenant_id 显式条件（第一道，RLS 第二道）
+      ✅ 全序排序 ORDER BY created_at DESC, run_id DESC
+      ✅ limit+1 行判断 hasMore
+      ✅ 只取 subject/grade 两个 JSONB 标量，不取 input_payload 原文
+      ✅ 游标条件：显式 OR 展开（避免 PG 行值比较类型推断坑）
+      ✅ subject 用 btrim 比较（存值可能有首尾空白）
+      ✅ state 用 run_state 枚举转换
+    -->
+    <select id="list" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.RunListQueryMapper$RunListRow">
+        SELECT run_id::text AS runId,
+               state::text AS state,
+               created_at AS createdAt,
+               completed_at AS completedAt,
+               attempt,
+               error_code AS errorCode,
+               input_payload->>'subject' AS subject,
+               input_payload->>'grade'   AS grade
+        FROM run
+        <where>
+            tenant_id = #{tenantId}::uuid
+            <if test="requesterId != null and requesterId != ''">
+                AND requester_id = #{requesterId}::uuid
+            </if>
+            <if test="state != null and state != ''">
+                AND state = #{state}::run_state
+            </if>
+            <if test="subject != null and subject != ''">
+                AND btrim(input_payload->>'subject') = btrim(#{subject})
+            </if>
+            <if test="from != null">
+                AND created_at <![CDATA[ >= ]]> #{from}
+            </if>
+            <if test="to != null">
+                AND created_at <![CDATA[ <= ]]> #{to}
+            </if>
+            <!-- 游标条件：显式 OR 展开，避免 PG 行值比较类型推断踩坑 -->
+            <if test="cursorCreatedAt != null and cursorRunId != null and cursorRunId != ''">
+                AND (created_at <![CDATA[ < ]]> #{cursorCreatedAt}
+                     OR (created_at = #{cursorCreatedAt}
+                         AND run_id <![CDATA[ < ]]> #{cursorRunId}::uuid))
+            </if>
+        </where>
+        ORDER BY created_at DESC, run_id DESC
+        LIMIT #{limit}
+    </select>
+</mapper>
