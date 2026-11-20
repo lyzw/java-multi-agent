@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.BudgetMapper">
+
+    <!-- SQL[0] 条件 UPDATE — 原子预留（余额 ≤ total_limit） -->
+    <update id="tryReserveAccount">
+        UPDATE budget_account
+        SET reserved_amount = reserved_amount + #{amount},
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid
+          AND currency = #{currency}
+          AND reserved_amount + settled_amount + #{amount} <![CDATA[ <= ]]> total_limit
+    </update>
+
+    <!-- SQL[1] INSERT budget_reservation ON CONFLICT DO NOTHING RETURNING -->
+    <insert id="insertReservation" resultType="java.lang.String">
+        INSERT INTO budget_reservation
+                (tenant_id, account_id, run_id, operation_id, reserved_amount, state)
+            SELECT tenant_id, account_id, #{runId}::uuid, #{operationId}::uuid, #{amount}, 'RESERVED'
+            FROM budget_account
+            WHERE tenant_id = #{tenantId}::uuid AND currency = #{currency}
+            ON CONFLICT (tenant_id, operation_id) WHERE operation_id IS NOT NULL
+                DO NOTHING
+            RETURNING reservation_id::text
+    </insert>
+
+    <!-- SQL[2] INSERT usage_record (有 reservation_id) -->
+    <insert id="insertUsage" resultType="java.lang.String">
+        INSERT INTO usage_record
+                (tenant_id, run_id, operation_id, reservation_id,
+                 model_id, input_tokens, output_tokens, cost_amount, currency)
+            VALUES (#{tenantId}::uuid, #{runId}::uuid, #{operationId}::uuid, #{reservationId}::uuid,
+                    #{modelId}, #{inputTokens}, #{outputTokens}, #{costAmount}, #{currency})
+            ON CONFLICT (tenant_id, operation_id) WHERE operation_id IS NOT NULL
+                DO NOTHING
+            RETURNING usage_id::text
+    </insert>
+
+    <!-- SQL[3] INSERT usage_record (无 reservation_id —— 工具调用) -->
+    <insert id="insertUsageNoReservation" resultType="java.lang.String">
+        INSERT INTO usage_record
+                (tenant_id, run_id, operation_id, reservation_id,
+                 model_id, input_tokens, output_tokens, cost_amount, currency)
+            VALUES (#{tenantId}::uuid, #{runId}::uuid, #{operationId}::uuid, NULL,
+                    #{modelId}, #{inputTokens}, #{outputTokens}, #{costAmount}, #{currency})
+            ON CONFLICT (tenant_id, operation_id) WHERE operation_id IS NOT NULL
+                DO NOTHING
+            RETURNING usage_id::text
+    </insert>
+
+    <!-- SQL[4] 结算: reserved -= reservedDecrement, settled += actualAmount -->
+    <update id="settleAccount">
+        UPDATE budget_account
+        SET reserved_amount = reserved_amount - #{reservedDecrement},
+            settled_amount = settled_amount + #{actualAmount},
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND currency = #{currency}
+          AND reserved_amount <![CDATA[ >= ]]> #{reservedDecrement}
+    </update>
+
+    <!-- SQL[5] 释放: reserved -= amount -->
+    <update id="releaseAccount">
+        UPDATE budget_account
+        SET reserved_amount = reserved_amount - #{amount}, updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND currency = #{currency}
+          AND reserved_amount <![CDATA[ >= ]]> #{amount}
+    </update>
+
+    <!-- SQL[6][7] 按 tool_operation 状态筛 orphaned 预留 -->
+    <select id="findReservationsByOpState"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.BudgetMapper$ReservationRow">
+        SELECT r.reservation_id::text AS reservationId,
+               r.run_id::text AS runId,
+               r.operation_id::text AS operationId,
+               r.reserved_amount AS reservedAmount,
+               r.settled_amount AS settledAmount,
+               r.state AS state,
+               (SELECT currency FROM budget_account a
+                 WHERE a.tenant_id = r.tenant_id AND a.account_id = r.account_id) AS currency,
+               r.created_at AS createdAt
+        FROM budget_reservation r
+        JOIN tool_operation o
+          ON o.tenant_id = r.tenant_id AND o.operation_id = r.operation_id
+        WHERE r.tenant_id = #{tenantId}::uuid AND r.state = 'RESERVED'
+          AND o.state IN
+          <foreach collection="states" item="s" open="(" separator="," close=")">#{s}</foreach>
+        ORDER BY r.created_at
+    </select>
+
+    <!-- SQL[8] 查账户余额 -->
+    <select id="findAccount"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.BudgetMapper$AccountRow">
+        SELECT account_id::text AS accountId, currency, total_limit AS totalLimit,
+               reserved_amount AS reservedAmount, settled_amount AS settledAmount
+        FROM budget_account
+        WHERE tenant_id = #{tenantId}::uuid AND currency = #{currency}
+    </select>
+
+    <!-- SQL[9] 四字段一致性快照（子查询聚合） -->
+    <select id="accountConsistency"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.BudgetMapper$ConsistencyRow">
+        SELECT
+            (SELECT reserved_amount FROM budget_account
+              WHERE tenant_id = #{tenantId}::uuid AND currency = #{currency}) AS acctReserved,
+            (SELECT COALESCE(SUM(reserved_amount - settled_amount), 0)
+               FROM budget_reservation
+              WHERE tenant_id = #{tenantId}::uuid AND state = 'RESERVED') AS detailReserved,
+            (SELECT settled_amount FROM budget_account
+              WHERE tenant_id = #{tenantId}::uuid AND currency = #{currency}) AS acctSettled,
+            (SELECT COALESCE(SUM(settled_amount), 0)
+               FROM budget_reservation
+              WHERE tenant_id = #{tenantId}::uuid AND state = 'SETTLED') AS detailSettled
+    </select>
+
+    <!-- SQL[10] 按 operationId 查 reservation（无 FOR UPDATE） -->
+    <select id="findByOperation"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.BudgetMapper$ReservationRow">
+        SELECT reservation_id::text AS reservationId, run_id::text AS runId,
+               operation_id::text AS operationId, reserved_amount AS reservedAmount,
+               settled_amount AS settledAmount, state,
+               (SELECT currency FROM budget_account a
+                 WHERE a.tenant_id = r.tenant_id AND a.account_id = r.account_id) AS currency,
+               r.created_at AS createdAt
+        FROM budget_reservation r
+        WHERE r.tenant_id = #{tenantId}::uuid AND r.operation_id = #{operationId}::uuid
+    </select>
+
+    <!-- SQL[11] FOR UPDATE 锁 reservation -->
+    <select id="lockReservation"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.BudgetMapper$ReservationRow">
+        SELECT reservation_id::text AS reservationId, run_id::text AS runId,
+               operation_id::text AS operationId, reserved_amount AS reservedAmount,
+               settled_amount AS settledAmount, state,
+               (SELECT currency FROM budget_account a
+                 WHERE a.tenant_id = r.tenant_id AND a.account_id = r.account_id) AS currency,
+               r.created_at AS createdAt
+        FROM budget_reservation r
+        WHERE tenant_id = #{tenantId}::uuid AND reservation_id = #{reservationId}::uuid
+        FOR UPDATE
+    </select>
+
+    <!-- 更新 reservation 状态 -->
+    <update id="updateReservationState">
+        UPDATE budget_reservation SET state = #{state}, updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND reservation_id = #{reservationId}::uuid
+    </update>
+
+    <!-- 锁 run 行 FOR UPDATE 读 budget_amount -->
+    <select id="lockRunBudgetCap" resultType="java.math.BigDecimal">
+        SELECT budget_amount FROM run
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+        FOR UPDATE
+    </select>
+
+    <!-- Run 级聚合（无 FOR UPDATE — 调用方已锁 run 行） -->
+    <select id="sumRunOccupied" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(reserved_amount - settled_amount), 0)
+        FROM budget_reservation
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid AND state = 'RESERVED'
+    </select>
+
+    <!-- accountSnapshot: 无 FOR UPDATE 查全部 reservations -->
+    <select id="findReservations"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.BudgetMapper$ReservationRow">
+        SELECT reservation_id::text AS reservationId, run_id::text AS runId,
+               operation_id::text AS operationId, reserved_amount AS reservedAmount,
+               settled_amount AS settledAmount, state,
+               (SELECT currency FROM budget_account a
+                 WHERE a.tenant_id = r.tenant_id AND a.account_id = r.account_id) AS currency,
+               r.created_at AS createdAt
+        FROM budget_reservation r
+        WHERE r.tenant_id = #{tenantId}::uuid
+    </select>
+
+</mapper>

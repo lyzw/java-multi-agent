@@ -195,7 +195,16 @@ public class ApplicationConfiguration {
      */
     @Bean
     public cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort(
-            DataSource dataSource) {
+            DataSource dataSource,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.BudgetMapper>
+                    budgetMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && budgetMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisBudgetRepository(budgetMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository(
                 dataSource);
     }
