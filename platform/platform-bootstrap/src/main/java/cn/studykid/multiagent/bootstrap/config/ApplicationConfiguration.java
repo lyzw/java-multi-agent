@@ -1267,7 +1267,16 @@ public class ApplicationConfiguration {
      */
     @Bean
     public cn.studykid.multiagent.ports.persistence.RunBudgetPort runBudgetPort(
-            javax.sql.DataSource dataSource) {
+            javax.sql.DataSource dataSource,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.RunBudgetMapper>
+                    runBudgetMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && runBudgetMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisRunBudgetRepository(runBudgetMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcRunBudgetRepository(
                 dataSource);
     }

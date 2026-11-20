@@ -11,6 +11,7 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.SubjectContext;
@@ -29,6 +30,7 @@ import cn.studykid.multiagent.ports.persistence.RunQueryPort;
  * 若某天 RLS 策略被误删，显式条件仍能挡住跨租户读取。
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcRunQueryRepository implements RunQueryPort {
 
     /**

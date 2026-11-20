@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.RunBudgetMapper">
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.RunBudgetMapper$RunBudgetRow">
+        SELECT r.run_id AS runId,
+               r.budget_amount AS budgetAmount,
+               SUM(CASE WHEN b.state = 'RESERVED' THEN b.amount ELSE 0 END) AS reservedAmount,
+               SUM(CASE WHEN b.state = 'SETTLED'  THEN b.amount ELSE 0 END) AS settledAmount
+        FROM run r
+        LEFT JOIN budget_reservation b
+               ON b.tenant_id = r.tenant_id AND b.run_id = r.run_id
+        WHERE r.tenant_id = #{tenantId}::uuid AND r.run_id = #{runId}::uuid
+        GROUP BY r.run_id, r.budget_amount
+    </select>
+</mapper>

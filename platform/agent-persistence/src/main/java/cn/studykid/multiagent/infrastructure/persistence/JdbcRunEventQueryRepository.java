@@ -17,6 +17,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.SubjectContext;
@@ -47,6 +48,7 @@ import tools.jackson.databind.ObjectMapper;
  * 走 {@link TenantConnectionLease} 统一入口。
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcRunEventQueryRepository implements RunEventQueryPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcRunEventQueryRepository.class);
