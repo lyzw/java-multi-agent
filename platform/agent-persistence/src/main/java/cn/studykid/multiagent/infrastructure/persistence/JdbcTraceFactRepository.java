@@ -19,6 +19,7 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.SubjectContext;
@@ -52,6 +53,7 @@ import cn.studykid.multiagent.ports.metrics.TraceFactPort;
  * 三处自带显式 {@code tenant_id} 谓词，才传 {@code true}。
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcTraceFactRepository implements TraceFactPort {
 
     private final DataSource dataSource;

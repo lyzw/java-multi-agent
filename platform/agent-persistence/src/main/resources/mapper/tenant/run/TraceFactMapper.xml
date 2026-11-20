@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.TraceFactMapper">
+
+    <!-- SQL[0] run 本体 + jsonb_typeof 白名单 scenario/questionId -->
+    <select id="readRun"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.TraceFactMapper$RunRow">
+        SELECT tenant_id AS tenantId, state, error_code AS errorCode, trace_id AS traceId,
+               correlation_id AS correlationId, created_at AS createdAt, completed_at AS completedAt,
+               CASE WHEN jsonb_typeof(input_payload -> 'scenario') = 'string'
+                    THEN input_payload ->> 'scenario' END AS scenario,
+               CASE WHEN jsonb_typeof(input_payload -> 'questionId') = 'string'
+                    THEN input_payload ->> 'questionId' END AS questionId
+        FROM public.run WHERE run_id = #{runId}::uuid
+    </select>
+
+    <!-- SQL[3] depth=1 invocation（带租户过滤） -->
+    <select id="readFirstInvocation"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.TraceFactMapper$InvocationRow">
+        SELECT tenant_id AS tenantId, trace_id AS traceId FROM public.agent_invocation
+        WHERE run_id = #{runId}::uuid AND tenant_id = #{tenantId}::uuid AND depth = 1
+        ORDER BY started_at LIMIT 1
+    </select>
+
+    <!-- SQL[2] run trace 兜底 -->
+    <select id="readRunTrace"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.TraceFactMapper$RunTraceRow">
+        SELECT tenant_id AS tenantId, trace_id AS traceId, correlation_id AS correlationId
+        FROM public.run WHERE run_id = #{runId}::uuid AND tenant_id = #{tenantId}::uuid
+    </select>
+
+    <!-- SQL[4] 父 agent -->
+    <select id="readInvocationParent"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.TraceFactMapper$InvocationParentRow">
+        SELECT tenant_id AS tenantId, parent_agent_id AS parentAgentId,
+               parent_agent_version AS parentAgentVersion
+        FROM public.agent_invocation
+        WHERE run_id = #{runId}::uuid AND depth = 1 ORDER BY started_at LIMIT 1
+    </select>
+
+    <!-- SQL[5] usage 聚合（FILTER 排除 tool: 前缀） -->
+    <select id="readUsage"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.TraceFactMapper$UsageRow">
+        SELECT sum(input_tokens) AS inTokens,
+               sum(output_tokens) AS outTokens,
+               sum(cost_amount) AS cost,
+               min(currency) AS currency,
+               COALESCE(
+                   min(model_id) FILTER (WHERE model_id NOT LIKE 'tool:%'),
+                   min(model_id)
+               ) AS modelId
+        FROM public.usage_record
+        WHERE run_id = #{runId}::uuid AND tenant_id = #{tenantId}::uuid
+    </select>
+
+    <!-- SQL[6] 工具调用聚合（bool_or / EXTRACT EPOCH） -->
+    <select id="readToolOps"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.TraceFactMapper$ToolOpRow">
+        SELECT op.tenant_id AS tenantId, op.tool_name AS toolName, op.request_digest AS requestDigest,
+               count(*) AS callCount,
+               count(*) FILTER (WHERE att.state IN ('FAILED','UNKNOWN')) AS failedCount,
+               count(*) FILTER (WHERE att.error_class = 'INVALID_ARGUMENT') AS invalidArg,
+               bool_or(att.error_class = 'TIMEOUT') AS hasTimeout,
+               bool_or(att.error_class IN ('UPSTREAM_ERROR','HTTP_5XX','5XX')) AS hasUpstream,
+               sum(EXTRACT(EPOCH FROM (att.completed_at - att.started_at)) * 1000)
+                   FILTER (WHERE att.completed_at IS NOT NULL) AS totalMs,
+               max(EXTRACT(EPOCH FROM (att.completed_at - att.started_at)) * 1000) AS maxMs
+        FROM public.tool_operation op
+        JOIN public.tool_operation_attempt att
+          ON att.operation_id = op.operation_id
+         AND att.tenant_id = op.tenant_id
+        WHERE op.run_id = #{runId}::uuid
+          AND op.tenant_id = #{tenantId}::uuid
+        GROUP BY op.tenant_id, op.tool_name, op.request_digest
+        ORDER BY op.tool_name
+    </select>
+
+    <!-- SQL[7] 步骤聚合 -->
+    <select id="readSteps"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.TraceFactMapper$StepRow">
+        SELECT
+            count(*) AS stepCount,
+            count(*) FILTER (WHERE step_type = 'THINK') AS thinkSteps,
+            count(*) FILTER (WHERE step_type = 'TOOL') AS toolSteps,
+            count(*) FILTER (WHERE step_type = 'ASK_USER') AS askSteps,
+            coalesce(sum(EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)
+                FILTER (WHERE step_type = 'THINK' AND completed_at IS NOT NULL), 0) AS thinkMs,
+            coalesce(max(step_number), 0) AS maxStepNumber
+        FROM public.run_step
+        WHERE run_id = #{runId}::uuid AND tenant_id = #{tenantId}::uuid
+    </select>
+
+    <!-- 平台级工具目录（无租户过滤） -->
+    <select id="knownToolNames" resultType="java.lang.String">
+        SELECT id FROM public.cap_tool_def
+    </select>
+</mapper>
