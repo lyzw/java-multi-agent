@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformPrincipalMapper">
+
+    <sql id="userCols">
+        id, username, email, display_name AS displayName, status, auth_source AS authSource,
+        mfa_required AS mfaRequired, authz_version AS authzVersion, last_login_at AS lastLoginAt,
+        password_hash AS passwordHash, created_at AS createdAt, updated_at AS updatedAt
+    </sql>
+
+    <select id="findByUsername"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformPrincipalMapper$PlatformUserRow">
+        SELECT <include refid="userCols"/> FROM platform.platform_user WHERE username = #{username}
+    </select>
+
+    <select id="findById"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformPrincipalMapper$PlatformUserRow">
+        SELECT <include refid="userCols"/> FROM platform.platform_user WHERE id = #{userId}::uuid
+    </select>
+
+    <select id="listUsers"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformPrincipalMapper$PlatformUserRow">
+        SELECT <include refid="userCols"/> FROM platform.platform_user ORDER BY username
+    </select>
+
+    <select id="findRoles" resultType="java.lang.String">
+        SELECT r.name FROM platform.platform_user_role ur
+        JOIN platform.platform_role r ON r.id = ur.role_id
+        WHERE ur.platform_user_id = #{userId}::uuid
+    </select>
+
+    <select id="rolesByUser"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformPrincipalMapper$RoleAssignmentRow">
+        SELECT ur.platform_user_id AS platformUserId, r.name AS roleName
+        FROM platform.platform_user_role ur
+        JOIN platform.platform_role r ON r.id = ur.role_id
+        ORDER BY ur.platform_user_id, r.name
+    </select>
+
+    <select id="insertUser"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformPrincipalMapper$PlatformUserRow">
+        INSERT INTO platform.platform_user
+            (username, email, display_name, status, auth_source,
+             password_hash, mfa_required, authz_version)
+        VALUES (#{username}, #{email}, #{displayName}, 'ACTIVE', #{authSource}::platform.auth_source,
+                #{passwordHash}, #{mfaRequired}, 1)
+        RETURNING <include refid="userCols"/>
+    </select>
+
+    <update id="updateProfile">
+        UPDATE platform.platform_user
+        SET email = COALESCE(#{email}, email),
+            display_name = COALESCE(#{displayName}, display_name),
+            mfa_required = COALESCE(#{mfaRequired}, mfa_required),
+            updated_at = now()
+        WHERE id = #{userId}::uuid
+    </update>
+
+    <update id="setStatus">
+        UPDATE platform.platform_user
+        SET status = #{status}::platform.user_status, updated_at = now(),
+            authz_version = authz_version + 1
+        WHERE id = #{userId}::uuid
+    </update>
+
+    <update id="updatePasswordHash">
+        UPDATE platform.platform_user
+        SET password_hash = #{passwordHash}, updated_at = now(),
+            authz_version = authz_version + 1
+        WHERE id = #{userId}::uuid
+    </update>
+
+    <insert id="assignRole">
+        INSERT INTO platform.platform_user_role (platform_user_id, role_id, granted_by)
+        SELECT #{userId}::uuid, r.id, #{grantedBy}::uuid
+        FROM platform.platform_role r
+        WHERE r.name = #{roleName}
+        ON CONFLICT (platform_user_id, role_id) DO NOTHING
+    </insert>
+
+    <delete id="revokeRole">
+        DELETE FROM platform.platform_user_role ur
+        USING platform.platform_role r
+        WHERE ur.role_id = r.id
+          AND ur.platform_user_id = #{userId}::uuid
+          AND r.name = #{roleName}
+    </delete>
+
+    <update id="bumpAuthzVersion">
+        UPDATE platform.platform_user
+        SET authz_version = authz_version + 1, updated_at = now()
+        WHERE id = #{userId}::uuid
+    </update>
+</mapper>
