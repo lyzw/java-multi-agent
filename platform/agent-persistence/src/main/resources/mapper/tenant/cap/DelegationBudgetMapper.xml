@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  DelegationBudgetMapper.xml —— 两条反查 SQL 从 JdbcDelegationBudgetRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::text / ::uuid cast、LEFT JOIN、NOT EXISTS、ORDER BY 全部保留）。
+
+  ⚠️ 核心是一条 LEFT JOIN 反查：
+      从 budget_reservation 出发，用 operation_id = agent_invocation.invocation_id 反查委派调用状态，
+      并用 NOT EXISTS tool_operation 把「工具侧」排除掉 —— 与工具侧两条对账查询构成互补划分。
+  ⚠️ 必须 LEFT JOIN 而非 INNER JOIN：委派终态提交报 NOT_FOUND 时闸门持有预留，
+      此时连 agent_invocation 行都没有；INNER JOIN 会把「额度被占、查无实据」这一类漏掉。
+  ⚠️ tenant_id 谓词是第一道隔离；RLS 是第二道（拦截器注入 set_config）。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止把本文件挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.DelegationBudgetMapper">
+
+    <!-- 查询列清单（两条语句共用），逐列与原 SELECT 一致；cast 列显式别名供驼峰映射。 -->
+    <sql id="columns">
+        SELECT r.reservation_id::text AS reservation_id,
+               r.operation_id::text AS operation_id,
+               r.reserved_amount,
+               r.tenant_id::text AS tenant_id,
+               r.created_at, i.status, i.run_id::text AS run_id,
+               i.tenant_id::text AS join_tenant_id
+    </sql>
+
+    <select id="findHeld"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.DelegationBudgetHeldDO">
+        <include refid="columns"/>
+          FROM budget_reservation r
+          LEFT JOIN agent_invocation i
+            ON i.tenant_id = r.tenant_id
+           AND i.invocation_id = r.operation_id
+         WHERE r.tenant_id = #{tenantId}::uuid
+           AND r.state = 'RESERVED'
+           AND NOT EXISTS (
+               SELECT 1 FROM tool_operation o
+                WHERE o.tenant_id = r.tenant_id
+                  AND o.operation_id = r.operation_id
+           )
+         ORDER BY r.created_at ASC
+    </select>
+
+    <select id="findHeldByOperation"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.DelegationBudgetHeldDO">
+        <include refid="columns"/>
+          FROM budget_reservation r
+          LEFT JOIN agent_invocation i
+            ON i.tenant_id = r.tenant_id
+           AND i.invocation_id = r.operation_id
+         WHERE r.tenant_id = #{tenantId}::uuid
+           AND r.operation_id = #{operationId}::uuid
+           AND r.state = 'RESERVED'
+           AND NOT EXISTS (
+               SELECT 1 FROM tool_operation o
+                WHERE o.tenant_id = r.tenant_id
+                  AND o.operation_id = r.operation_id
+           )
+         ORDER BY r.created_at ASC
+    </select>
+
+</mapper>

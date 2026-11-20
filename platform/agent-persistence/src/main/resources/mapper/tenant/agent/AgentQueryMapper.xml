@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  AgentQueryMapper.xml —— SQL 从 JdbcAgentQueryRepository 逐字搬迁
+  （仅 ? -> #{param}，LATERAL 子查询、绑定表 JOIN、全序游标比较全部保留）。
+
+  ⚠️ agent / agent_version 是全局实体表（无 tenant_id 列）：租户可见性完全由
+     tenant_agent_binding 的 ACTIVE 行决定，JOIN 的 b.tenant_id 条件不可删除。
+  ⚠️ 游标分页：limit+1 探底，入参多取 1 条由适配层裁掉；
+     全序 = (created_at, agent_id)，两个分量都参与比较（防同微秒行重复/漏行）。
+  ⚠️ join_tenant_id 恒为 NULL::text：只是把「从表行归属」显式投影给影子染色读取，
+     不参与业务字段（与原实现的 rs.getString("join_tenant_id") 逐字对应）。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentQueryMapper">
+
+    <!--
+      三条查询共用的投影（与旧 JDBC 的 SQL_SELECT 逐字一致）。
+      ⚠️ LEFT JOIN LATERAL 不可拆成两段查询：拆开就重新引入 N+1 与并发窗口。
+      ⚠️ version_number 为 0 的语义：PG 约束 version_number > 0，
+         故 0 唯一表示「该 agent 尚无任何版本」（MAX 为 NULL 时由适配层回落 0）。
+    -->
+    <sql id="selectColumns">
+        SELECT a.agent_id,
+               a.created_at                                                AS created_at,
+               a.name,
+               a.description,
+               COALESCE(v.version_count, 0)                            AS version_count,
+               v.latest_version_number,
+               v.latest_definition,
+               v.latest_published_at,
+               NULL::text                                              AS join_tenant_id
+        FROM agent a
+        JOIN tenant_agent_binding b
+          ON b.agent_id = a.agent_id AND b.tenant_id = #{tenantId}::uuid
+         AND b.status = 'ACTIVE'
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*)                                                   AS version_count,
+                   MAX(av.version_number)                                     AS latest_version_number,
+                   (ARRAY_AGG(av.definition ORDER BY av.version_number DESC))[1] AS latest_definition,
+                   MAX(av.published_at)                                       AS latest_published_at
+            FROM agent_version av
+            WHERE av.agent_id = a.agent_id
+        ) v ON true
+        WHERE TRUE
+    </sql>
+
+    <!--
+      游标分页：#{cursorCreatedAt} / #{cursorAgentId} 为空时走首页分支（与原实现的
+      StringBuilder 拼接等价，只多/少同一段谓词）。
+      ⚠️ 全序比较展开为 OR，不用 row-value 比较 —— 与原实现逐字一致。
+    -->
+    <select id="listAgents"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.model.AgentSummaryDO">
+        <include refid="selectColumns"/>
+        <if test="cursorCreatedAt != null and cursorAgentId != null">
+          AND (a.created_at &lt; #{cursorCreatedAt}
+               OR (a.created_at = #{cursorCreatedAt} AND a.agent_id &lt; #{cursorAgentId}::uuid))
+        </if>
+        ORDER BY a.created_at DESC, a.agent_id DESC LIMIT #{limitPlusOne}
+    </select>
+
+    <!-- 单个 Agent：SQL_SELECT + 主键谓词（与旧实现的字符串拼接等价）。 -->
+    <select id="findAgent"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.model.AgentSummaryDO">
+        <include refid="selectColumns"/>
+          AND a.agent_id = #{agentId}::uuid
+    </select>
+
+    <!--
+      版本历史：agent_version 是全局表，租户可见性由 EXISTS 的 ACTIVE 绑定收口。
+      ⚠️ 不按租户过滤版本行 —— 版本是全局单调的（与原实现同口径）。
+    -->
+    <select id="listVersions"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.model.AgentVersionViewDO">
+        SELECT av.version_id, av.version_number, av.definition,
+               av.published_at, av.created_at
+        FROM agent_version av
+        WHERE av.agent_id = #{agentId}::uuid
+          AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                       WHERE b.tenant_id = #{tenantId}::uuid
+                         AND b.agent_id = av.agent_id
+                         AND b.status = 'ACTIVE')
+        ORDER BY av.version_number DESC
+    </select>
+
+</mapper>

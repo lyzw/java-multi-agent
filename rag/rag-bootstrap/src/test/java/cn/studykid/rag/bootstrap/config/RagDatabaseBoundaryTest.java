@@ -51,7 +51,9 @@ class RagDatabaseBoundaryTest {
             "spring-data-jpa", "postgresql", "mysql-connector-j",
             "mariadb-java-client", "flyway-core", "flyway-database-postgresql",
             "liquibase-core", "HikariCP", "hibernate-core",
-            "mybatis", "mybatis-spring-boot-starter", "jooq", "r2dbc-postgresql");
+            // 架构决策变更（批准引入 MyBatis-Plus）：MP artifact 只准在 rag-persistence 声明
+            "mybatis", "mybatis-spring-boot-starter", "jooq", "r2dbc-postgresql",
+            "mybatis-plus-spring-boot4-starter", "mybatis-plus-core", "mybatis-plus-extension");
 
     /** 具体 JDBC / 驱动 / 迁移工具包：业务模块 main 一律不得 import。 */
     private static final Set<String> JDBC_IMPORTS = Set.of(
@@ -61,7 +63,9 @@ class RagDatabaseBoundaryTest {
     /** 真正的 ORM 包：任何模块、任何 scope 都不得出现。 */
     private static final Set<String> ORM_IMPORTS = Set.of(
             "org.springframework.orm.", "jakarta.persistence.", "org.hibernate.",
-            "org.apache.ibatis.", "org.jooq.", "liquibase.");
+            "org.apache.ibatis.", "org.jooq.", "liquibase.",
+            // 架构决策变更：MP 类型同样只在 rag-persistence（DB_MODULE 豁免）
+            "com.baomidou.");
 
     /** 允许接线依赖数据库模块的外层入口模块。 */
     private static final Set<String> WIRING_MODULES =
@@ -266,6 +270,18 @@ class RagDatabaseBoundaryTest {
         assertThat(jdbcFiles)
                 .as("rag-persistence 必须真的含有 JDBC 实现，否则「全绿」只是空转")
                 .isGreaterThan(20);
+
+        // 架构决策变更：MP 依赖确实落地在 rag-persistence，且未扩散到其它模块
+        String dbPom = read(ragRoot().resolve(DB_MODULE + "/pom.xml"));
+        assertThat(dbPom).contains("mybatis-plus-spring-boot4-starter");
+        List<String> mpLeaks = new ArrayList<>();
+        for (Path pom : modulePoms()) {
+            String module = pom.getParent().getFileName().toString();
+            if (!DB_MODULE.equals(module) && read(pom).contains("mybatis-plus")) {
+                mpLeaks.add(module);
+            }
+        }
+        assertThat(mpLeaks).as("MyBatis-Plus 只允许在 rag-persistence").isEmpty();
     }
 
     // ── 辅助 ──────────────────────────────────────────────────────

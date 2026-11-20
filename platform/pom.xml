@@ -29,6 +29,12 @@
     <!-- 版本基线集中管理，禁止子模块覆盖 -->
     <spring-boot.version>4.1.1</spring-boot.version>
     <jspecify.version>1.0.0</jspecify.version>
+    <!--
+      MyBatis-Plus 基线（架构决策变更：批准引入，仅 agent-persistence 可用）。
+      ⚠️ 必须用 spring-boot4 starter + 3.5.15+（3.5.15 起支持 Boot 4 / Jackson 3）；
+          锁定 3.5.17（本地已缓存，规避 3.5.16 动态参数 issue #7064）。
+    -->
+    <mybatis-plus.version>3.5.17</mybatis-plus.version>
     <!-- 路由引擎的正则求值器：线性时间、无回溯（10 号设计 §4.4「防 ReDoS」）。 -->
     <re2j.version>1.8</re2j.version>
     <!-- SpotBugs 抑制注解（仅编译期标记，provided 作用域，不进运行包）。 -->
@@ -77,6 +83,13 @@
         <version>${spring-boot.version}</version>
         <type>pom</type>
         <scope>import</scope>
+      </dependency>
+
+      <!-- MyBatis-Plus（架构决策变更）：版本集中锁定，子模块不得覆盖 -->
+      <dependency>
+        <groupId>com.baomidou</groupId>
+        <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
+        <version>${mybatis-plus.version}</version>
       </dependency>
 
       <!-- 内部模块 -->

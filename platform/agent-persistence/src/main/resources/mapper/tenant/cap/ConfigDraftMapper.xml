@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  ConfigDraftMapper.xml —— 试点 Port 的复杂 SQL（POC，对应主文档 §5）
+
+  ⚠️ 以下 SQL 从 JdbcConfigDraftRepository 逐字搬迁，保留全部安全注释与语义：
+    · tenant_id IS NOT DISTINCT FROM ?::uuid —— PLATFORM scope（null）与 TENANT scope 都要命中；
+      RLS 策略 tenant_id IS NULL OR tenant_id = current_tenant_id() 由拦截器绑定保证；
+    · 游标分页多取 1 条（limit+1）判下一页，不用 COUNT、不用 MP 的 Page（见主文档 §5.1）；
+    · 全序 ORDER BY updated_at DESC, draft_id DESC —— 防游标翻页重复/漏行；
+    · JSONB 列 ::jsonb / ::text cast 与 JsonbTypeHandler 配合；
+    · 状态迁移 expectedState 的 CAS 条件 UPDATE（禁用 Wrapper 的 set/update，见主文档 §5.2）。
+
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止把本文件挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.ConfigDraftMapper">
+
+    <sql id="selectColumns">
+        SELECT draft_id::text AS draft_id, scope, tenant_id::text AS tenant_id,
+               resource_kind, resource_id, resource_name, base_version, draft_version,
+               draft_state, draft_config::text AS draft_config, config_fingerprint,
+               latest_request_id::text AS latest_request_id, failure_stage,
+               failure_details::text AS failure_details, rejection_reason, operator_id,
+               created_at, updated_at
+        FROM cap_config_draft
+    </sql>
+
+    <!-- ⚠️ tenant_id 条件不可删除：第一道隔离；RLS 是第二道（拦截器注入 set_config） -->
+    <select id="findById" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ConfigDraftDO">
+        <include refid="selectColumns"/>
+        WHERE scope = #{scope}
+          AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+          AND draft_id = #{draftId}::uuid
+    </select>
+
+    <!--
+      游标分页：limit+1 探底
+        · #{cursorCreatedAt} / #{cursorDraftId} 为空时走首页分支（<if test="... != null">）；
+        · 全序比较避免同微秒行重复/漏行（展开 OR，不用 row-value 比较，与原实现一致）；
+        · tenant_id 条件不可删除。
+    -->
+    <select id="listByCursor" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ConfigDraftDO">
+        <include refid="selectColumns"/>
+        WHERE scope = #{scope}
+          AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+        <if test="state != null and state != ''">
+          AND draft_state = #{state}
+        </if>
+        <if test="cursorCreatedAt != null and cursorDraftId != null">
+          AND (updated_at &lt; #{cursorCreatedAt}
+               OR (updated_at = #{cursorCreatedAt} AND draft_id &lt; #{cursorDraftId}::uuid))
+        </if>
+        ORDER BY updated_at DESC, draft_id DESC
+        LIMIT #{limitPlusOne}
+    </select>
+
+    <!-- 找指定资源当前活跃草稿（活跃态白名单 + 全序取最新一条；tenant_id 条件不可删） -->
+    <select id="findActiveByResource" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ConfigDraftDO">
+        <include refid="selectColumns"/>
+        WHERE scope = #{scope}
+          AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+          AND resource_kind = #{resourceKind} AND resource_id = #{resourceId}
+          AND draft_state IN ('DRAFT','PENDING_APPROVAL','PENDING_PUBLISH','APPROVAL_REJECTED','PUBLISH_FAILED')
+        ORDER BY updated_at DESC
+        LIMIT 1
+    </select>
+
+    <!--
+      保存草稿内容：条件 UPDATE，draft_state 白名单是业务守卫（DB CHECK 之外的一层）。
+      ⚠️ draft_config = #{newConfig}::jsonb 的 cast 与原 JDBC 逐字一致；
+         返回行数 0 → 适配层 fail-closed（草稿不存在或状态不允许）。
+    -->
+    <update id="saveContent">
+        UPDATE cap_config_draft
+           SET draft_config = #{newConfig}::jsonb,
+               config_fingerprint = #{newFingerprint},
+               draft_version = draft_version + 1,
+               updated_at = #{now}, operator_id = #{operatorId}
+         WHERE draft_id = #{draftId}::uuid AND scope = #{scope}
+           AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+           AND draft_state IN ('DRAFT','APPROVAL_REJECTED','PUBLISH_FAILED')
+    </update>
+
+    <!--
+      发布失败迁移：原实现先 SELECT ... FOR UPDATE 读状态校验，再 UPDATE。
+      这里等价为「带源状态白名单的单条条件 UPDATE」+ 行数判定（原子，避免两段式竞态）：
+        PENDING_PUBLISH / DRAFT → PUBLISH_FAILED
+      ⚠️ failure_details = ?::jsonb、rejection_reason 置 NULL，与原实现逐列一致。
+    -->
+    <update id="markFailed">
+        UPDATE cap_config_draft
+           SET draft_state = 'PUBLISH_FAILED',
+               failure_stage = #{failStage},
+               failure_details = #{failDetailsJson}::jsonb,
+               rejection_reason = NULL,
+               updated_at = #{now}, operator_id = #{operatorId}
+         WHERE draft_id = #{draftId}::uuid AND scope = #{scope}
+           AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+           AND draft_state IN ('PENDING_PUBLISH','DRAFT')
+    </update>
+
+    <!--
+      状态迁移 CAS：expectedState 放进 WHERE 才算并发安全。
+      原 JDBC 实现先 SELECT ... FOR UPDATE 加载再校验；这里等价为单条条件 UPDATE + 行数判定：
+        返回 1 → 迁移成功；返回 0 → 并发冲突或状态不符，由适配层 fail-closed 抛异常。
+      ⚠️ DB 层 CHECK（cap_config_draft_state_ck）仍是最后防线，保留。
+    -->
+    <update id="transitionState">
+        UPDATE cap_config_draft
+           SET draft_state = #{targetState},
+               <if test="linkedRequestId != null">
+               latest_request_id = #{linkedRequestId}::uuid,
+               </if>
+               operator_id = #{operatorId},
+               updated_at = #{now}
+         WHERE scope = #{scope}
+           AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+           AND draft_id = #{draftId}::uuid
+           AND draft_state = #{expectedState}
+    </update>
+
+    <!--
+      JSONB 写入示例（insert 用 MP BaseMapper.insert + DO 的 @TableField(typeHandler) 即可；
+      若需 RETURNING 时间戳或多表 UPSERT，才写如下自定义语句 —— 保留 ::jsonb cast）：
+      INSERT INTO cap_config_draft
+        (draft_id, scope, tenant_id, ..., draft_config, failure_details, ...)
+      VALUES (#{draftId}::uuid, #{scope}, #{tenantId}::uuid, ..., #{draftConfig,typeHandler=...}::jsonb, #{failureDetails,typeHandler=...}::jsonb, ...)
+      ON CONFLICT ...
+    -->
+
+</mapper>

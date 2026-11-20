@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  ProfileQueryMapper.xml —— 两条 SQL 从 JdbcProfileQueryRepository 逐字搬迁
+  （仅 ? -> #{param}，::uuid cast、ORDER BY / LIMIT 全部保留）。
+
+  ⚠️ tenant_id 条件不可删除：即便 RLS 已隔离，应用侧条件仍是第一道防线。
+  ⚠️ 白名单纪律（DEC-6 / PIPL 未成年人）：只读 grade / subject / updated_at 与
+     薄弱点的 knowledge_point / error_type / confidence / created_at；
+     姓名、学校、班级等列在 DB 层也不存在（V2 迁移刻意不建）。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ProfileQueryMapper">
+
+    <!-- SQL_LOAD_PROFILE：租户 + 学生双谓词。 -->
+    <select id="loadProfile"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.model.StudentProfileDO">
+        SELECT tenant_id, grade, subject, updated_at
+        FROM student_profile
+        WHERE tenant_id = #{tenantId}::uuid AND student_id = #{studentId}
+    </select>
+
+    <!-- SQL_LOAD_WEAKNESSES：最近 50 条（ORDER BY / LIMIT 与原实现逐字一致）。 -->
+    <select id="loadWeaknesses"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.model.WeaknessRecordDO">
+        SELECT tenant_id, knowledge_point, error_type, confidence, created_at
+        FROM weakness_record
+        WHERE tenant_id = #{tenantId}::uuid AND student_id = #{studentId}
+        ORDER BY updated_at DESC
+        LIMIT 50
+    </select>
+
+</mapper>

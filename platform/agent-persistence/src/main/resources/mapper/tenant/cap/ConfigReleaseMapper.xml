@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  ConfigReleaseMapper.xml —— W2 迁移，六条 SQL 从 JdbcConfigReleaseRepository 逐字搬迁
+  （仅 ? → #{param}，其余 cast / 状态白名单 / EXISTS 前置条件 / 排序全部保留）。
+
+  ⚠️ 发布序号由 DB 序列分配（nextval('cap_config_publish_seq')），应用不得先读后加一。
+  ⚠️ 最近发布头必须先过滤 status='PUBLISHED' 再取 seq 最大者；不得在全部行上取 max(seq)
+     ——那会选中 PREPARING（未提交）或 ROLLED_BACK（仅审计旁路）的行。
+  ⚠️ findByReleaseId 刻意不带租户过滤：cap_config_release 的读策略已放行
+     PLATFORM 行与本租户行（V15 分读写策略），租户边界由 DB 保证。
+  ⚠️ markRolledBack 的「仍被指针指向」是前置条件，且只改 status 列；
+     对象版本行与发布记录本身都保留（回滚不覆盖、不删除任何历史记录）。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.ConfigReleaseMapper">
+
+    <sql id="selectColumns">
+        SELECT release_id, config_publish_seq, scope, tenant_id::text, object_versions::text,
+               aggregate_fingerprint, status, requester_id, approver_id,
+               effective_at, created_at
+        FROM cap_config_release
+    </sql>
+
+    <!-- SQL_INSERT：RETURNING 由适配层读回（空结果时 fail-closed 抛异常）。 -->
+    <select id="insertRelease" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ConfigReleaseDO">
+        INSERT INTO cap_config_release
+            (config_publish_seq, scope, tenant_id, object_versions,
+             aggregate_fingerprint, status, requester_id, approver_id,
+             effective_at, created_at)
+        VALUES (nextval('cap_config_publish_seq'), #{scope}, #{tenantId}::uuid,
+                #{objectVersions,typeHandler=cn.studykid.multiagent.infrastructure.persistence.cap.JsonbTypeHandler}::jsonb,
+                #{aggregateFingerprint}, #{status}::cap_release_status, #{requesterId}, #{approverId},
+                #{effectiveAt}, #{createdAt})
+        RETURNING release_id, config_publish_seq, created_at
+    </select>
+
+    <!-- SQL_FIND_BY_SEQ -->
+    <select id="findByPublishSeq" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ConfigReleaseDO">
+        <include refid="selectColumns"/>
+        WHERE config_publish_seq = #{configPublishSeq}
+    </select>
+
+    <!-- SQL_FIND_LATEST_PUBLISHED：先过滤 PUBLISHED，再按 seq 取最新。 -->
+    <select id="findLatestPublished" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ConfigReleaseDO">
+        <include refid="selectColumns"/>
+        WHERE status = 'PUBLISHED'
+          AND scope = #{scope}
+          AND (tenant_id IS NULL OR tenant_id = #{tenantId}::uuid)
+        ORDER BY config_publish_seq DESC
+        LIMIT 1
+    </select>
+
+    <!-- SQL_FIND_BY_ID：不带租户过滤，边界由 RLS 读策略保证。 -->
+    <select id="findByReleaseId" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ConfigReleaseDO">
+        <include refid="selectColumns"/>
+        WHERE release_id = #{releaseId}
+    </select>
+
+    <!-- SQL_MARK_ROLLED_BACK：「仍被指针指向」是前置条件；历史内容一字不改。 -->
+    <update id="markRolledBack">
+        UPDATE cap_config_release
+           SET status = 'ROLLED_BACK'
+         WHERE release_id = #{releaseId}
+           AND status = 'PUBLISHED'
+           AND EXISTS (SELECT 1 FROM cap_config_pointer
+                        WHERE current_release_id = #{releaseId})
+    </update>
+
+    <!--
+      SQL_LIST + 动态游标：全序 (created_at, release_id) 降序。
+      ⚠️ created_at 同刻的多行必须按 release_id 再区分（比较两个分量，防同刻行漏读）；
+      ⚠️ 入参 limitPlusOne 已由适配层 +1，判下一页后裁掉，不用 COUNT / MP Page。
+    -->
+    <select id="listReleases" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ConfigReleaseDO">
+        <include refid="selectColumns"/>
+        WHERE scope = 'TENANT'
+          AND tenant_id = #{tenantId}::uuid
+        <if test="cursorCreatedAt != null and cursorId != null">
+          AND (created_at &lt; #{cursorCreatedAt}
+               OR (created_at = #{cursorCreatedAt} AND release_id &lt; #{cursorId}))
+        </if>
+        ORDER BY created_at DESC, release_id DESC LIMIT #{limitPlusOne}
+    </select>
+
+</mapper>

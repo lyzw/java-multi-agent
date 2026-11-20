@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.TenantAgentBindingMapper">
+
+    <resultMap id="bindingMap" type="cn.studykid.multiagent.infrastructure.persistence.model.TenantAgentBindingDO">
+        <result property="tenantId"       column="tenant_id"/>
+        <result property="agentId"        column="agent_id"/>
+        <result property="status"         column="status"/>
+        <result property="pinnedVersion"  column="pinned_version"/>
+        <result property="config"          column="config"/>
+        <result property="createdAt"       column="created_at"/>
+        <result property="updatedAt"       column="updated_at"/>
+    </resultMap>
+
+    <sql id="selectCols">
+        SELECT tenant_id::text, agent_id::text, status, pinned_version, config,
+               created_at, updated_at
+        FROM tenant_agent_binding
+    </sql>
+
+    <select id="listByTenant" resultMap="bindingMap">
+        <include refid="selectCols"/>
+        WHERE tenant_id = #{tenantId}::uuid ORDER BY agent_id
+    </select>
+
+    <select id="find" resultMap="bindingMap">
+        <include refid="selectCols"/>
+        WHERE tenant_id = #{tenantId}::uuid AND agent_id = #{agentId}::uuid
+    </select>
+
+    <!-- bind 用 INSERT ON CONFLICT DO UPDATE RETURNING：空结果由适配层 fail-closed。 -->
+    <select id="bind" resultMap="bindingMap">
+        INSERT INTO tenant_agent_binding
+            (tenant_id, agent_id, status, pinned_version, config, created_at, updated_at)
+        VALUES (#{tenantId}::uuid, #{agentId}::uuid, 'ACTIVE', #{pinnedVersion}, #{config}::jsonb, now(), now())
+        ON CONFLICT (tenant_id, agent_id) DO UPDATE
+            SET status        = 'ACTIVE',
+                pinned_version = EXCLUDED.pinned_version,
+                config         = EXCLUDED.config,
+                updated_at     = now()
+        RETURNING tenant_id, agent_id, status, pinned_version, config, created_at, updated_at
+    </select>
+
+    <update id="update">
+        UPDATE tenant_agent_binding
+           SET pinned_version = #{pinnedVersion}, config = #{config}::jsonb, updated_at = now()
+         WHERE tenant_id = #{tenantId}::uuid AND agent_id = #{agentId}::uuid AND status = 'ACTIVE'
+    </update>
+
+    <update id="unbind">
+        UPDATE tenant_agent_binding
+           SET status = 'SUSPENDED', updated_at = now()
+         WHERE tenant_id = #{tenantId}::uuid AND agent_id = #{agentId}::uuid AND status = 'ACTIVE'
+    </update>
+
+</mapper>

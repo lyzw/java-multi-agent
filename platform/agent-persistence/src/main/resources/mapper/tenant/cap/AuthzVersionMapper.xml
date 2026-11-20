@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  AuthzVersionMapper.xml —— W2 迁移，SQL 从 JdbcAuthzVersionRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ON CONFLICT / RETURNING / 聚合口径全部保留）。
+
+  ⚠️ tenant_id 谓词不可删除：撤权即时失效的地基，RLS 是第二道防线（拦截器绑定 app.tenant_id）。
+  ⚠️ bump 的 ON CONFLICT DO UPDATE 表达式里的表名限定 cap_authz_version. 不可省略，
+     否则 PG 会解析为 EXCLUDED，递增永远停在 1（不报错，只表现为撤权无效）。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.AuthzVersionMapper">
+
+    <!-- 强一致读：tenant_id = #{tenantId}::uuid AND principal_id = #{principalId} -->
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AuthzVersionDO">
+        SELECT tenant_id::text, principal_id, authz_version, updated_at
+        FROM cap_authz_version
+        WHERE tenant_id = #{tenantId}::uuid AND principal_id = #{principalId}
+    </select>
+
+    <!--
+      原子递增：单条 INSERT ... ON CONFLICT DO UPDATE ... RETURNING（语义与原 JDBC 逐字一致）。
+      表名限定的 cap_authz_version.authz_version / cap_authz_version.version 不可改为裸列名。
+    -->
+    <select id="bump" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AuthzVersionDO">
+        INSERT INTO cap_authz_version (tenant_id, principal_id, authz_version, version, updated_at)
+        VALUES (#{tenantId}::uuid, #{principalId}, 1, 0, now())
+        ON CONFLICT (tenant_id, principal_id) DO UPDATE
+            SET authz_version = cap_authz_version.authz_version + 1,
+                version       = cap_authz_version.version + 1,
+                updated_at    = now()
+        RETURNING authz_version, updated_at
+    </select>
+
+    <!-- 幂等初始化：ON CONFLICT (tenant_id, principal_id) DO NOTHING，绝不重置既有行 -->
+    <insert id="initialize">
+        INSERT INTO cap_authz_version (tenant_id, principal_id, authz_version, version, updated_at)
+        VALUES (#{tenantId}::uuid, #{principalId}, 1, 0, now())
+        ON CONFLICT (tenant_id, principal_id) DO NOTHING
+    </insert>
+
+    <!--
+      租户级水位聚合：
+        count(*) FILTER (WHERE authz_version > 1) 的口径是 authz_version > 1
+        （初始版本恒为 1，故 > 1 精确等于发生过至少一次撤权递增）。
+      COALESCE(max(authz_version), 0) 保证无行时 max 为 0。
+    -->
+    <select id="watermark" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AuthzWatermarkDO">
+        SELECT
+            count(*)                                        AS subject_count,
+            count(*) FILTER (WHERE authz_version > 1)      AS revoked_subjects,
+            COALESCE(max(authz_version), 0)                 AS max_authz_version,
+            max(updated_at)                                 AS last_bump_at
+        FROM cap_authz_version
+        WHERE tenant_id = #{tenantId}::uuid
+    </select>
+
+</mapper>

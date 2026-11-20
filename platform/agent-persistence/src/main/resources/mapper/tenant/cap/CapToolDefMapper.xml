@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  CapToolDefMapper.xml —— 六条 SQL 从 JdbcCapToolDefRepository 逐字搬迁
+  （仅 ? → #{param}，其余 cast / ON CONFLICT / DISTINCT ON / 排序全部保留）。
+
+  ⚠️ cap_tool_def 是 platform 级对象（无 RLS、无 tenant_id 列），但本文件仍由租户
+     SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），所有语句都会经过
+     RlsTenantBindingInterceptor —— 适配层调用前必须先 TenantScope.bind(平台哨兵)。
+  ⚠️ 本表无租户归属，不接租户级影子（P1 平台级豁免），访问控制走平台级运维通道。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.CapToolDefMapper">
+
+    <sql id="selectColumns">
+        SELECT id, version, name, kind, risk_level, mcp_server_id, mcp_tool_name,
+               http_method, http_url, http_timeout_ms,
+               input_schema::text, param_policies::text, description, config_fingerprint,
+               schema_version, created_at, published_at
+        FROM cap_tool_def
+    </sql>
+
+    <!--
+      SQL_INSERT：插入一条不可变版本行（§6.3 第 1 条 · W-PERM-P5）。
+      ⚠️ ON CONFLICT DO NOTHING 而非 DO UPDATE：已发布版本行不可变（§6.1）；
+         重复插入必须保留原行。若用 DO UPDATE，一次误重放就会改写已发布内容。
+      ⚠️ input_schema / param_policies 的 ::jsonb cast 与原 JDBC 逐字一致；
+         namespace 固定写 'platform'（与旧 SQL 的字面量一致）。
+      ⚠️ HTTP 三件套（http_method / http_url / http_timeout_ms）由适配层在
+         非 HTTP 工具时传 null —— 绝不能写空串或 0（DB CHECK 会拒绝，
+         而空串/0 能骗过「是否为空」的判断）。
+    -->
+    <insert id="insertVersion">
+        INSERT INTO cap_tool_def
+            (id, version, name, kind, risk_level, mcp_server_id, mcp_tool_name,
+             http_method, http_url, http_timeout_ms,
+             input_schema, param_policies, namespace, description, config_fingerprint,
+             schema_version, created_at, updated_at, published_at)
+        VALUES (#{id}, #{version}, #{name}, #{kind}, #{riskLevel}, #{mcpServerId}, #{mcpToolName},
+                #{httpMethod}, #{httpUrl}, #{httpTimeoutMs}, #{inputSchema}::jsonb, #{paramPolicies}::jsonb, 'platform',
+                #{description}, #{configFingerprint}, #{schemaVersion}, #{createdAt}, #{updatedAt}, #{publishedAt})
+        ON CONFLICT (id, version) DO NOTHING
+    </insert>
+
+    <!-- SQL_FIND -->
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapToolDefDO">
+        <include refid="selectColumns"/>
+        WHERE id = #{id} AND version = #{version}
+    </select>
+
+    <!-- SQL_FIND_LATEST_PUBLISHED -->
+    <select id="findLatestPublished" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapToolDefDO">
+        <include refid="selectColumns"/>
+        WHERE id = #{id} AND published_at IS NOT NULL
+        ORDER BY version DESC LIMIT 1
+    </select>
+
+    <!-- SQL_FIND_BY_MCP_BINDING -->
+    <select id="findByMcpBinding" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapToolDefDO">
+        <include refid="selectColumns"/>
+        WHERE mcp_server_id = #{mcpServerId} AND mcp_tool_name = #{mcpToolName}
+          AND published_at IS NOT NULL ORDER BY version DESC LIMIT 1
+    </select>
+
+    <!--
+      SQL_LIST_ALL：每个逻辑 id 的最高版本行。
+      ⚠️ 用 DISTINCT ON 而非 GROUP BY + MAX：后者只能拿到版本号，取不到整行；
+         前者一次扫描即得「每个 id 的最高版本整行」。
+      ⚠️ 排序键必须与 DISTINCT ON 的首列一致（PG 强制要求）。
+    -->
+    <select id="listAll" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapToolDefDO">
+        SELECT DISTINCT ON (id) id, version, name, kind, risk_level, mcp_server_id, mcp_tool_name,
+               http_method, http_url, http_timeout_ms,
+               input_schema::text, param_policies::text, description, config_fingerprint,
+               schema_version, created_at, published_at
+        FROM cap_tool_def ORDER BY id, version DESC
+    </select>
+
+    <!--
+      SQL_LIST_BY_MCP_SERVER：按 MCP Server 反查其下挂的 Tool（第三十四批）。
+      ⚠️ 用 DISTINCT ON (mcp_tool_name) 取「每个远端工具名的最高版本」——
+         与 SQL_LIST_ALL 同款口径（关系按对象维度，不按版本维度）。
+      ⚠️ 排序键必须与 DISTINCT ON 的首列一致（PG 强制要求）。
+    -->
+    <select id="listByMcpServer" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapToolDefDO">
+        SELECT DISTINCT ON (mcp_tool_name) id, version, name, kind, risk_level, mcp_server_id, mcp_tool_name,
+               http_method, http_url, http_timeout_ms,
+               input_schema::text, param_policies::text, description, config_fingerprint,
+               schema_version, created_at, published_at
+        FROM cap_tool_def WHERE mcp_server_id = #{mcpServerId}
+        ORDER BY mcp_tool_name, version DESC
+    </select>
+
+</mapper>

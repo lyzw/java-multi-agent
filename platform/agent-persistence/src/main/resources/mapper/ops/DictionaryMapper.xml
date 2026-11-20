@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  DictionaryMapper.xml —— 8 条 SQL 从 JdbcDictionaryRepository 逐字搬迁
+  （仅 ? -> #{param}；platform.sys_dictionary / platform.sys_dictionary_item / ON CONFLICT / CAS / RETURNING / now() 全部保留）。
+
+  ⚠️ 平台域表，BYPASSRLS 运维连接，**不**装 RLS 拦截器。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.DictionaryMapper">
+
+    <resultMap id="DictMap" type="cn.studykid.multiagent.infrastructure.persistence.model.DictionaryDO">
+        <id     property="dictCode"     column="dict_code"/>
+        <result property="dictName"     column="dict_name"/>
+        <result property="description"  column="description"/>
+        <result property="builtIn"      column="built_in"/>
+        <result property="enabled"      column="enabled"/>
+        <result property="sortOrder"    column="sort_order"/>
+        <result property="updatedAt"    column="updated_at"/>
+        <result property="version"      column="version"/>
+    </resultMap>
+
+    <resultMap id="ItemMap" type="cn.studykid.multiagent.infrastructure.persistence.model.DictionaryItemDO">
+        <id     property="dictCode"     column="dict_code"/>
+        <id     property="itemCode"     column="item_code"/>
+        <result property="itemLabel"    column="item_label"/>
+        <result property="sortOrder"    column="sort_order"/>
+        <result property="builtIn"      column="built_in"/>
+        <result property="enabled"      column="enabled"/>
+        <result property="updatedAt"    column="updated_at"/>
+        <result property="version"      column="version"/>
+    </resultMap>
+
+    <select id="listAll" resultMap="DictMap">
+        SELECT dict_code, dict_name, description, built_in, enabled, sort_order
+        FROM platform.sys_dictionary
+        ORDER BY sort_order, dict_code
+    </select>
+
+    <select id="findByCode" resultMap="DictMap">
+        SELECT dict_code, dict_name, description, built_in, enabled, sort_order
+        FROM platform.sys_dictionary WHERE dict_code = #{dictCode}
+    </select>
+
+    <select id="listItems" resultMap="ItemMap">
+        SELECT dict_code, item_code, item_label, sort_order, built_in, enabled
+        FROM platform.sys_dictionary_item
+        WHERE dict_code = #{dictCode}
+        ORDER BY sort_order, item_code
+    </select>
+
+    <select id="findItem" resultMap="ItemMap">
+        SELECT dict_code, item_code, item_label, sort_order, built_in, enabled
+        FROM platform.sys_dictionary_item
+        WHERE dict_code = #{dictCode} AND item_code = #{itemCode}
+    </select>
+
+    <insert id="insert">
+        INSERT INTO platform.sys_dictionary
+            (dict_code, dict_name, description, built_in, enabled, sort_order)
+        VALUES (#{dict.dictCode}, #{dict.dictName}, #{dict.description}, FALSE,
+                #{dict.enabled}, #{dict.sortOrder})
+    </insert>
+
+    <update id="update">
+        UPDATE platform.sys_dictionary
+           SET dict_name = #{dict.dictName},
+               description = #{dict.description},
+               enabled = #{dict.enabled},
+               sort_order = #{dict.sortOrder},
+               updated_at = now(),
+               version = version + 1
+         WHERE dict_code = #{dict.dictCode}
+    </update>
+
+    <insert id="upsertItem">
+        INSERT INTO platform.sys_dictionary_item
+            (dict_code, item_code, item_label, sort_order, built_in, enabled)
+        VALUES (#{item.dictCode}, #{item.itemCode}, #{item.itemLabel},
+                #{item.sortOrder}, #{item.builtIn}, #{item.enabled})
+        ON CONFLICT (dict_code, item_code) DO UPDATE SET
+            item_label = EXCLUDED.item_label,
+            sort_order = EXCLUDED.sort_order,
+            enabled    = EXCLUDED.enabled,
+            updated_at = now(),
+            version    = platform.sys_dictionary_item.version + 1
+    </insert>
+
+    <update id="setItemEnabled">
+        UPDATE platform.sys_dictionary_item
+           SET enabled = #{enabled}, updated_at = now(), version = version + 1
+         WHERE dict_code = #{dictCode} AND item_code = #{itemCode}
+    </update>
+
+</mapper>

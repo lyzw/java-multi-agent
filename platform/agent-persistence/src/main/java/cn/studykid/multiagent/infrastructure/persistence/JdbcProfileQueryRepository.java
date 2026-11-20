@@ -13,6 +13,7 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.SubjectContext;
@@ -30,8 +31,14 @@ import cn.studykid.multiagent.ports.persistence.ProfileQueryPort;
  * {@code grade}/{@code subject}/{@code updated_at} 与 {@code weakness_record} 的
  * 知识点/错因/置信度/时刻。
  * <b>不查</b>姓名、学校、班级等——DB 层也没有这些列（V2 迁移刻意不建）。
+ *
+ * <p>⚠️ <b>默认启用（互补条件）</b>：仅当 {@code persistence.mybatis.enabled} 不是
+ * {@code true}（含未配置）时注册；开启后由 {@code MybatisProfileQueryRepository} 接管，
+ * 本类不被注册 —— 灰度/一键回滚开关，二者不会同时存在于容器。
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false",
+        matchIfMissing = true)
 public class JdbcProfileQueryRepository implements ProfileQueryPort {
 
     /**

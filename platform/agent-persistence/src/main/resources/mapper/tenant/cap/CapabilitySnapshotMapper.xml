@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  CapabilitySnapshotMapper.xml —— 两条 SQL 从 JdbcCapabilitySnapshotRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ::jsonb / ::text cast、ON CONFLICT 全部保留）。
+
+  ⚠️ 快照不可变：ON CONFLICT (run_id) DO NOTHING，同一 runId 的重复保存不覆盖既有快照
+     （06 §2「历史可追溯」）。快照被改写 = 历史失真，事后无法解释「当时到底按哪版配置跑的」。
+
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor：适配层调用前必须先 TenantScope.bind(tenantId)。
+     该表 ENABLE + FORCE ROW LEVEL SECURITY：未绑定 app.tenant_id 时可见 0 行，
+     症状与「Run 真的没建快照」完全相同。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.CapabilitySnapshotMapper">
+
+    <sql id="selectColumns">
+        SELECT run_id::text, tenant_id::text, agent_id::text, effective_closure::text,
+               agent_version, config_version, config_fingerprint, authz_version, created_at
+        FROM execution_capability_snapshot
+    </sql>
+
+    <!--
+      SQL_INSERT：effective_closure 的 ::jsonb cast 与原 JDBC 逐字一致。
+      ⚠️ 返回 0 行 = 已存在同 runId 的快照（适配层映射为 false），不是失败。
+    -->
+    <insert id="insertIfAbsent">
+        INSERT INTO execution_capability_snapshot
+            (run_id, tenant_id, agent_id, effective_closure, agent_version,
+             config_version, config_fingerprint, authz_version, created_at)
+        VALUES (#{runId}::uuid, #{tenantId}::uuid, #{agentId}::uuid, #{effectiveClosure}::jsonb,
+                #{agentVersion}, #{configVersion}, #{configFingerprint}, #{authzVersion}, #{createdAt})
+        ON CONFLICT (run_id) DO NOTHING
+    </insert>
+
+    <!-- SQL_FIND：显式 tenant_id = ?::uuid 是第一道隔离；RLS 是第二道。 -->
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapabilitySnapshotDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+    </select>
+
+</mapper>

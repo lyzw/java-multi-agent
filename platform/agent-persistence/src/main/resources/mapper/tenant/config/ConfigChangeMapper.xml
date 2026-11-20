@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  ConfigChangeMapper.xml —— 五条 SQL 从 JdbcConfigChangeRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ::config_change_state / now() / FOR UPDATE /
+    RETURNING / ORDER BY 全部保留）。
+
+  ⚠️ config_change_request 为租户隔离实体（TENANT_ONLY + FORCE RLS）：
+     tenant_id = #{tenantId}::uuid 是第一道隔离，RLS 是第二道（拦截器注入 set_config）。
+  ⚠️ 游标分页多取 1 条（limit+1）判下一页，不用 COUNT、不用 MP 的 Page；
+     全序 ORDER BY requested_at DESC, change_id DESC 防同刻行重复/漏读。
+  ⚠️ loadForUpdate 是写路径的 FOR UPDATE 锁读（供 decide/apply 使用），P1 不观测；
+     强制租户隔离由 RLS 兜底。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ConfigChangeMapper">
+
+    <!-- 列表 SELECT：含 tenant_id 供逐行染色读取真实行归属。 -->
+    <sql id="listColumns">
+        SELECT tenant_id, change_id::text, config_key, proposed_value, value_type, reason,
+               requester_id, requested_at, state::text,
+               approver_id, decided_at, decision_note, applied_at
+        FROM config_change_request
+    </sql>
+
+    <!-- 写路径 SELECT / RETURNING 列（不含 tenant_id，与原实现逐字一致）。 -->
+    <sql id="rowColumns">
+        change_id::text, config_key, proposed_value, value_type, reason,
+        requester_id, requested_at, state::text,
+        approver_id, decided_at, decision_note, applied_at
+    </sql>
+
+    <select id="insertChange" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigChangeDO">
+        INSERT INTO config_change_request
+            (tenant_id, config_key, proposed_value, value_type, reason, requester_id, requested_at, state)
+        VALUES (#{tenantId}::uuid, #{key}, #{value}, #{valueType}, #{reason}, #{requesterId}, now(), 'PENDING')
+        RETURNING change_id::text, requested_at
+    </select>
+
+    <select id="listByCursor" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigChangeDO">
+        <include refid="listColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid
+        <if test="state != null">
+          AND state = #{state}::config_change_state
+        </if>
+        <if test="cursorCreatedAt != null and cursorChangeId != null">
+          AND (requested_at &lt; #{cursorCreatedAt}
+               OR (requested_at = #{cursorCreatedAt} AND change_id &lt; #{cursorChangeId}::uuid))
+        </if>
+        ORDER BY requested_at DESC, change_id DESC LIMIT #{limitPlusOne}
+    </select>
+
+    <select id="loadForUpdate" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigChangeDO">
+        SELECT <include refid="rowColumns"/>
+        FROM config_change_request
+        WHERE tenant_id = #{tenantId}::uuid AND change_id = #{changeId}::uuid
+        FOR UPDATE
+    </select>
+
+    <select id="updateDecision" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigChangeDO">
+        UPDATE config_change_request
+        SET state = #{targetState}::config_change_state, approver_id = #{approverId}, decided_at = now(),
+            decision_note = #{note}
+        WHERE tenant_id = #{tenantId}::uuid AND change_id = #{changeId}::uuid
+        RETURNING <include refid="rowColumns"/>
+    </select>
+
+    <select id="markApplied" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigChangeDO">
+        UPDATE config_change_request
+        SET state = 'APPLIED', applied_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND change_id = #{changeId}::uuid
+        RETURNING <include refid="rowColumns"/>
+    </select>
+
+</mapper>

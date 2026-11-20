@@ -93,3 +93,9 @@ deploy/docling/samples/*.pdf
 /问题记录/E2E端到端测试_2026-11-10/screenshots/
 /问题记录/*/*/**.png
 /问题记录/*/*/*/**.png
+
+# SonarQube analysis output (generated)
+platform/.sonar/
+/logs/
+.workbuddy
+.workbuddy-ai

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  CapRoutingPolicyMapper.xml —— 四条 SQL 从 JdbcCapRoutingPolicyRepository 逐字搬迁
+  （仅 ? → #{param}，其余 ::uuid / ::jsonb / ::text cast、ON CONFLICT、排序全部保留）。
+
+  ⚠️ policy_id 是可读字符串，不是 UUID：只有 tenant_id 带 ?::uuid cast（V23 教训：
+     给非 UUID id 加 cast 会让整笔发布事务回滚，且 mock 连接的单测永远暴露不了）。
+  ⚠️ lifecycle_state::text 必须出现在投影里：读不到「停用」状态绝不能被降级成
+     「没有停用」（见适配层 lifecycleState 的 fail-closed 说明）。
+  ⚠️ input_schema / evaluation / sample_set 的 ::text 投影保留 PG 规范化后的文本；
+     数组顺序是路由语义（evaluation 的规则次序、sample_set 的字面量集合），不得重排。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor：适配层调用前必须先 TenantScope.bind(tenantId)。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.CapRoutingPolicyMapper">
+
+    <!-- 三条查询共用的投影列（旧 JDBC 的 COLUMNS 常量，逐字保留）。 -->
+    <sql id="selectColumns">
+        SELECT tenant_id::text, policy_id::text, version, mode,
+               input_schema::text, evaluation::text, default_target,
+               no_match_action, on_conflict, sample_set::text,
+               config_fingerprint, schema_version, created_at, published_at,
+               lifecycle_state::text
+        FROM cap_routing_policy
+    </sql>
+
+    <!--
+      SQL_INSERT：插入一条不可变版本行。
+      ⚠️ ON CONFLICT (tenant_id, policy_id, version) DO NOTHING 而非 DO UPDATE：
+         已存在同版本时不覆盖 —— 在途 Run 按快照引用的旧策略会被就地改写则无从复核（MA-T15）。
+      ⚠️ input_schema / evaluation / sample_set 的 ?::jsonb cast 与原 JDBC 逐字一致；
+         published_at 可空（草稿）。
+    -->
+    <insert id="insertVersion">
+        INSERT INTO cap_routing_policy
+            (tenant_id, policy_id, version, mode, input_schema, evaluation, default_target,
+             no_match_action, on_conflict, sample_set, config_fingerprint,
+             schema_version, created_at, published_at)
+        VALUES (#{tenantId}::uuid, #{policyId}, #{version}, #{mode}, #{inputSchema}::jsonb,
+                #{evaluation}::jsonb, #{defaultTarget}, #{noMatchAction}, #{onConflict},
+                #{sampleSet}::jsonb, #{configFingerprint}, #{schemaVersion}, #{createdAt},
+                #{publishedAt})
+        ON CONFLICT (tenant_id, policy_id, version) DO NOTHING
+    </insert>
+
+    <!-- SQL_FIND：显式 tenant_id = ?::uuid 是第一道隔离；RLS 是第二道。 -->
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapRoutingPolicyDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid AND policy_id = #{policyId} AND version = #{version}
+    </select>
+
+    <!-- SQL_FIND_LATEST_PUBLISHED：只返回已发布版本，按 version 倒序取第一行。 -->
+    <select id="findLatestPublished" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapRoutingPolicyDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid AND policy_id = #{policyId}
+          AND published_at IS NOT NULL
+        ORDER BY version DESC
+        LIMIT 1
+    </select>
+
+    <!--
+      SQL_FIND_LATEST：最新版本（<b>含草稿</b>）—— 仅用于「分配下一个版本号」。
+      ⚠️ 必须含草稿：草稿也占用了版本号；只看已发布版本会分配出与草稿撞号的版本，
+         插入被 ON CONFLICT DO NOTHING 静默丢弃 → 「发布成功但策略没生效」。
+    -->
+    <select id="findLatest" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapRoutingPolicyDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid AND policy_id = #{policyId}
+        ORDER BY version DESC
+        LIMIT 1
+    </select>
+
+</mapper>

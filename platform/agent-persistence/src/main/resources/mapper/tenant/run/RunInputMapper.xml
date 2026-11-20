@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  RunInputMapper.xml —— SQL 从 JdbcRunInputRepository.SQL_FIND_INPUT 逐字搬迁
+  （仅 ? → #{param}，其余 cast / 租户谓词全部保留）。
+
+  ⚠️ tenant_id 条件不可删除：与 JdbcRunQueryRepository 同一铁律 —— RLS 之外应用侧条件是第一道防线。
+  ⚠️ input_payload::text cast 与原实现逐字一致；由适配层 parse() 做 JSONB 文本 → Map。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.RunInputMapper">
+
+    <!-- SQL_FIND_INPUT -->
+    <select id="findInput" resultType="cn.studykid.multiagent.infrastructure.persistence.model.RunInputDO">
+        SELECT tenant_id, input_payload::text FROM run
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+    </select>
+
+</mapper>

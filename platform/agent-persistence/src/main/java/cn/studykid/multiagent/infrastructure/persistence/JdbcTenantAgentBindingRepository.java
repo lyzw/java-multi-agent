@@ -16,6 +16,7 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
@@ -29,6 +30,7 @@ import cn.studykid.multiagent.ports.persistence.TenantAgentBindingPort;
  * 平台运营代租户操作时同样显式传入 tenantId，不绕过租户隔离上下文。
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcTenantAgentBindingRepository implements TenantAgentBindingPort {
 
     private static final String SELECT_COLUMNS = """

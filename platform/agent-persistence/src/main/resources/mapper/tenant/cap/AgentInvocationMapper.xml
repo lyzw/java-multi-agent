@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  AgentInvocationMapper.xml —— SQL 从 JdbcAgentInvocationRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ::jsonb / ::text / ON CONFLICT DO NOTHING /
+   CAS 条件 / 终态白名单 / ORDER BY 全部保留）。
+
+  ⚠️ 查询列清单 find 与 listByRun 共用（旧代码的两处 COLUMNS 拼接）：漏列会被 map() 读成 null。
+  ⚠️ tenant_id = #{tenantId}::uuid 是第一道隔离；RLS 是第二道（拦截器注入 set_config）。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.AgentInvocationMapper">
+
+    <!-- 查询列清单（find / listByRun 共用），逐列与原 COLUMNS 一致。 -->
+    <sql id="columns">
+        invocation_id::text, tenant_id::text, run_id::text,
+               parent_invocation_id::text, parent_agent_id::text, parent_agent_version,
+               target_agent_id::text, target_agent_version,
+               requested_target_agent_id::text,
+               status, depth, trace_id, input_digest, output_digest, reason_code,
+               fencing_token, started_at, finished_at,
+               routing_decision::text, policy_ref, policy_fingerprint
+    </sql>
+
+    <!-- 幂等插入：重复投递不创建重复逻辑调用（MA-T10）。 -->
+    <insert id="insertInvocation">
+        INSERT INTO agent_invocation
+            (invocation_id, tenant_id, run_id, parent_invocation_id,
+             parent_agent_id, parent_agent_version,
+             target_agent_id, target_agent_version,
+             requested_target_agent_id,
+             status, depth, trace_id, input_digest, output_digest, reason_code,
+             fencing_token, started_at, finished_at,
+             routing_decision, policy_ref, policy_fingerprint)
+        VALUES (#{invocationId}::uuid, #{tenantId}::uuid, #{runId}::uuid, #{parentInvocationId}::uuid,
+                #{parentAgentId}::uuid, #{parentAgentVersion}, #{targetAgentId}::uuid,
+                #{targetAgentVersion}, #{requestedTargetAgentId}::uuid, #{status}, #{depth},
+                #{traceId}, #{inputDigest}, #{outputDigest}, #{reasonCode}, #{fencingToken},
+                #{startedAt}, #{finishedAt}, #{routingDecision}::jsonb, #{policyRef}, #{policyFingerprint})
+        ON CONFLICT (tenant_id, invocation_id) DO NOTHING
+    </insert>
+
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AgentInvocationDO">
+        SELECT <include refid="columns"/>
+        FROM agent_invocation
+        WHERE tenant_id = #{tenantId}::uuid AND invocation_id = #{invocationId}::uuid
+    </select>
+
+    <select id="listByRun" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AgentInvocationDO">
+        SELECT <include refid="columns"/>
+        FROM agent_invocation
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+        ORDER BY started_at ASC, invocation_id ASC
+    </select>
+
+    <!--
+      接管时提升在途记录的世代令牌（MA-T12 · P3-MA-02）：
+        status NOT IN (终态) + fencing_token < 新令牌 + 单条原子 UPDATE，三条件缺一不可。
+    -->
+    <update id="adoptInFlight">
+        UPDATE agent_invocation
+           SET fencing_token = #{newFencingToken}
+         WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+           AND fencing_token &lt; #{newFencingToken}
+           AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT', 'UNKNOWN')
+    </update>
+
+    <!--
+      终态写入 CAS：fencing_token 精确匹配 + 当前状态非终态，旧世代 / 重复终态均不覆盖。
+    -->
+    <update id="markTerminal">
+        UPDATE agent_invocation
+           SET status = #{status}, reason_code = #{reasonCode},
+               output_digest = #{outputDigest}, finished_at = #{finishedAt}
+         WHERE tenant_id = #{tenantId}::uuid AND invocation_id = #{invocationId}::uuid
+           AND fencing_token = #{fencingToken}
+           AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT', 'UNKNOWN')
+    </update>
+
+    <!-- CAS 未命中后的诊断查询：区分「已是终态」与「token 过期」（MA-T12）。 -->
+    <select id="diagnose" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AgentInvocationDO">
+        SELECT status, fencing_token
+        FROM agent_invocation
+        WHERE tenant_id = #{tenantId}::uuid AND invocation_id = #{invocationId}::uuid
+    </select>
+
+</mapper>

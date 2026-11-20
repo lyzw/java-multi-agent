@@ -15,6 +15,7 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
@@ -64,6 +65,9 @@ import org.springframework.beans.factory.annotation.Autowired;
  */
 @Repository
 @org.springframework.context.annotation.Primary
+// 架构决策变更：MP 开启时由 MybatisConfigPublishRequestRepository 接管本 Port；默认仍用本实现。
+// matchIfMissing=true => 未配置 persistence.mybatis.enabled 时本实现照常生效（行为零变更）。
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestPort {
 
     /** Postgres check_violation（CHECK 约束冲突）。 */

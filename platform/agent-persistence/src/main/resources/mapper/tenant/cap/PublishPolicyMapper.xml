@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  PublishPolicyMapper.xml —— W2 迁移，SQL 从 JdbcPublishPolicyRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / IS NOT DISTINCT FROM / COALESCE / NULLS FIRST / LIMIT 全部保留）。
+
+  ⚠️ tenant_id 条件不可删除：第一道隔离；RLS 是第二道（拦截器注入 set_config）。
+  ⚠️ PLATFORM scope 的 tenant_id 为 NULL，IS NOT DISTINCT FROM #{tenantId}::uuid 才能命中；
+     =#{tenantId} 在 NULL 上恒为 UNKNOWN，会静默查不到平台默认策略。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.PublishPolicyMapper">
+
+    <sql id="selectColumns">
+        SELECT policy_id::text, scope, tenant_id::text, policy_level,
+               resource_kind, resource_id, publish_mode, enabled,
+               updated_by, created_at, updated_at
+        FROM cap_publish_policy
+    </sql>
+
+    <!-- INSERT ... RETURNING created_at, updated_at：时间戳由 DB 生成，适配层回填 record -->
+    <select id="insertPolicy" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.PublishPolicyDO">
+        INSERT INTO cap_publish_policy
+            (policy_id, scope, tenant_id, policy_level, resource_kind,
+             resource_id, publish_mode, enabled, updated_by)
+        VALUES (#{policyId}, #{scope}, #{tenantId}::uuid, #{policyLevel}, #{resourceKind},
+                #{resourceId}, #{publishMode}, #{enabled}, #{updatedBy})
+        RETURNING created_at, updated_at
+    </select>
+
+    <select id="findById" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.PublishPolicyDO">
+        <include refid="selectColumns"/>
+        WHERE scope = #{scope}
+          AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+          AND policy_id = #{policyId}::uuid
+    </select>
+
+    <!-- 条件 UPDATE + RETURNING；0 行 => 适配层返回 Optional.empty（幂等语义不变） -->
+    <select id="updateByKey" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.PublishPolicyDO">
+        UPDATE cap_publish_policy
+        SET publish_mode = #{publishMode}, enabled = #{enabled}, updated_by = #{updatedBy}, updated_at = now()
+        WHERE policy_id = #{policyId}::uuid
+          AND scope = #{scope}
+          AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+        RETURNING created_at, updated_at
+    </select>
+
+    <delete id="deleteByKey">
+        DELETE FROM cap_publish_policy
+        WHERE policy_id = #{policyId}::uuid
+          AND scope = #{scope}
+          AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+    </delete>
+
+    <select id="listEnabled" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.PublishPolicyDO">
+        <include refid="selectColumns"/>
+        WHERE scope = #{scope}
+          AND (tenant_id IS NULL OR tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid)
+          AND enabled = true
+        ORDER BY policy_level, resource_kind NULLS FIRST
+    </select>
+
+    <select id="findByTarget" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.PublishPolicyDO">
+        <include refid="selectColumns"/>
+        WHERE scope = #{scope}
+          AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+          AND policy_level = #{policyLevel}
+          AND COALESCE(resource_kind, '') = COALESCE(#{resourceKind}, '')
+          AND COALESCE(resource_id, '') = COALESCE(#{resourceId}, '')
+        LIMIT 1
+    </select>
+
+</mapper>

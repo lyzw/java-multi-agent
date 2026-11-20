@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  DictionaryMapper.xml —— 平台域字典两表 CRUD，逐字从 JdbcDictionaryRepository 搬迁
+  （仅 ? -> #{param}，其余 ORDER BY / ON CONFLICT / now() 全部保留）。
+
+  ⚠️ 平台域表无 RLS 策略：适配层仍需 TenantScope.bind(PLATFORM_SCOPE_TENANT)
+     哨兵租户，拦截器 set_config 对平台域是无害 no-op。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.DictionaryMapper">
+
+    <select id="listDictionaries" resultType="cn.studykid.multiagent.infrastructure.persistence.model.DictionaryDO">
+        SELECT dict_code, dict_name, description, built_in, enabled, sort_order
+        FROM platform.sys_dictionary
+        ORDER BY sort_order, dict_code
+    </select>
+
+    <select id="findDictionary" resultType="cn.studykid.multiagent.infrastructure.persistence.model.DictionaryDO">
+        SELECT dict_code, dict_name, description, built_in, enabled, sort_order
+        FROM platform.sys_dictionary
+        WHERE dict_code = #{dictCode}
+    </select>
+
+    <select id="listItems" resultType="cn.studykid.multiagent.infrastructure.persistence.model.DictionaryItemDO">
+        SELECT dict_code, item_code, item_label, sort_order, built_in, enabled
+        FROM platform.sys_dictionary_item
+        WHERE dict_code = #{dictCode}
+        ORDER BY sort_order, item_code
+    </select>
+
+    <select id="findItem" resultType="cn.studykid.multiagent.infrastructure.persistence.model.DictionaryItemDO">
+        SELECT dict_code, item_code, item_label, sort_order, built_in, enabled
+        FROM platform.sys_dictionary_item
+        WHERE dict_code = #{dictCode} AND item_code = #{itemCode}
+    </select>
+
+    <insert id="insertDictionary">
+        INSERT INTO platform.sys_dictionary
+            (dict_code, dict_name, description, built_in, enabled, sort_order)
+        VALUES (#{dictCode}, #{dictName}, #{description}, FALSE, #{enabled}, #{sortOrder})
+    </insert>
+
+    <update id="updateDictionary">
+        UPDATE platform.sys_dictionary
+        SET dict_name = #{dictName}, description = #{description},
+            enabled = #{enabled}, sort_order = #{sortOrder},
+            updated_at = now(), version = version + 1
+        WHERE dict_code = #{dictCode}
+    </update>
+
+    <insert id="upsertItem">
+        INSERT INTO platform.sys_dictionary_item
+            (dict_code, item_code, item_label, sort_order, built_in, enabled)
+        VALUES (#{dictCode}, #{itemCode}, #{itemLabel}, #{sortOrder}, #{builtIn}, #{enabled})
+        ON CONFLICT (dict_code, item_code) DO UPDATE SET
+            item_label = EXCLUDED.item_label,
+            sort_order = EXCLUDED.sort_order,
+            enabled    = EXCLUDED.enabled,
+            updated_at = now(),
+            version    = platform.sys_dictionary_item.version + 1
+    </insert>
+
+    <update id="setItemEnabled">
+        UPDATE platform.sys_dictionary_item
+        SET enabled = #{enabled}, updated_at = now(), version = version + 1
+        WHERE dict_code = #{dictCode} AND item_code = #{itemCode}
+    </update>
+
+</mapper>

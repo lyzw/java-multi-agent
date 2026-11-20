@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  ResultEventMapper.xml —— 两条 SQL 从 JdbcResultEventRepository 逐字搬迁
+  （仅 ? → #{param}，其余 cast / ON CONFLICT / 租户谓词全部保留）。
+
+  ⚠️ 写入是 ON CONFLICT (tenant_id, invocation_id) DO NOTHING，不是 upsert：
+     结果事件是「已发生的事实」，先写入者为准。改成 DO UPDATE 会让崩溃恢复重试覆盖既有确定结果
+     （把「结果未知」改写成「确定成功」），掩盖真实状态。
+  ⚠️ result_payload::jsonb cast 与原实现逐字一致；run_id / result_payload 为 null 时由
+     适配层传 null（原实现用 setNull(Types.OTHER)），::uuid / ::jsonb 上 null 仍得 null。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.ResultEventMapper">
+
+    <!-- SQL_INSERT：ON CONFLICT DO NOTHING —— 先写入者为准。 -->
+    <insert id="recordIfAbsent">
+        INSERT INTO cap_result_event
+            (event_id, tenant_id, run_id, invocation_id, terminal_event_id,
+             result_status, result_payload, reason_code, created_at)
+        VALUES (#{eventId}::uuid, #{tenantId}::uuid, #{runId}::uuid, #{invocationId}, #{terminalEventId},
+                #{resultStatus}::cap_result_status, #{resultPayload}::jsonb, #{reasonCode}, #{createdAt})
+        ON CONFLICT (tenant_id, invocation_id) DO NOTHING
+    </insert>
+
+    <!-- SQL_FIND -->
+    <select id="findByInvocation" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ResultEventDO">
+        SELECT event_id::text, tenant_id::text, run_id::text, invocation_id,
+               terminal_event_id, result_status, result_payload::text, reason_code, created_at
+        FROM cap_result_event
+        WHERE tenant_id = #{tenantId}::uuid AND invocation_id = #{invocationId}
+    </select>
+
+</mapper>

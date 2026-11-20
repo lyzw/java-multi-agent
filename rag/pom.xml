@@ -34,6 +34,8 @@
 
     <spring-boot.version>4.1.1</spring-boot.version>
     <jspecify.version>1.0.0</jspecify.version>
+    <!-- MyBatis-Plus 基线（架构决策变更，与 platform 对齐）：见 platform/pom.xml 注释 -->
+    <mybatis-plus.version>3.5.17</mybatis-plus.version>
   </properties>
 
   <modules>
@@ -61,6 +63,13 @@
         <version>${spring-boot.version}</version>
         <type>pom</type>
         <scope>import</scope>
+      </dependency>
+
+      <!-- MyBatis-Plus（架构决策变更）：版本集中锁定，子模块不得覆盖 -->
+      <dependency>
+        <groupId>com.baomidou</groupId>
+        <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
+        <version>${mybatis-plus.version}</version>
       </dependency>
 
       <dependency>

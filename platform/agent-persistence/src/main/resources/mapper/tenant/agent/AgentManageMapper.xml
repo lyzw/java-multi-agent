@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  AgentManageMapper.xml —— SQL 从 JdbcAgentManageRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ::jsonb cast、RETURNING、子查询取 max 全部保留）。
+
+  ⚠️ 平台全局表：agent / tenant_agent_binding / agent_version / execution_snapshot
+     均无 tenant_id 列（绑定关系由 tenant_agent_binding 表达），本文件仍由租户通道
+     SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），经
+     RlsTenantBindingInterceptor 绑定会话变量：租户方法绑该租户，全局 Agent
+     （tenantId=null）绑零 UUID 哨兵。
+  ⚠️ 版本号并发安全：version_number = max(本 agent 现有版本号) + 1，
+     由 (agent_id, version_number) 唯一约束兜底；适配层把 SQLState 23505
+     转成 VersionConflictException（409），本文件不做任何重试。
+  ⚠️ 执行快照必须与版本行同事务（适配层保证）：没有快照 = 该 Agent 永远不可运行。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.AgentManageMapper">
+
+    <!--
+      ⚠️ 声明为 <select> 而非 <insert>：INSERT ... RETURNING 需要读回结果集
+         （与 AgentReleaseArchiveMapper.insertVersion 同款处理），<insert> 只能拿到影响行数。
+      ⚠️ agent 是全局实体、无 RLS；name 的全局唯一约束（agent_name_key）冲突
+         由适配层按 SQLState 23505 转成重名异常。
+    -->
+    <select id="insertAgent"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.model.AgentIdDO">
+        INSERT INTO agent (name, description)
+        VALUES (#{name}, #{description})
+        RETURNING agent_id::text AS agent_id
+    </select>
+
+    <!-- 全局 Agent 有初始租户时立即建立绑定；status 恒为 ACTIVE。 -->
+    <insert id="insertBinding">
+        INSERT INTO tenant_agent_binding (tenant_id, agent_id, status)
+        VALUES (#{tenantId}::uuid, #{agentId}::uuid, 'ACTIVE')
+    </insert>
+
+    <!-- 存在性检查：只看 ACTIVE 绑定（绑定表决定可见性）。 -->
+    <select id="agentExists" resultType="java.lang.Integer">
+        SELECT 1 FROM tenant_agent_binding b
+         WHERE b.tenant_id = #{tenantId}::uuid AND b.agent_id = #{agentId}::uuid
+           AND b.status = 'ACTIVE'
+    </select>
+
+    <!--
+      插入下一版本：版本号 = 该 Agent 当前最大版本号 + 1（全局命名空间，不按租户）。
+      ⚠️ 两次 #{agentId}::uuid 与原实现的两个 ?::uuid 逐字对应；
+         COALESCE(..., 0) + 1 保证首个版本为 1。
+      ⚠️ RETURNING 的 definition::text AS stored_definition 是「落库后的文本」，
+         后续快照必须用它（而不是入参）—— 与原实现同口径。
+    -->
+    <select id="insertVersion"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.model.AgentVersionCreatedDO">
+        INSERT INTO agent_version
+            (agent_id, version_number, definition, published_at, created_at)
+        SELECT #{agentId}::uuid,
+               COALESCE((
+                   SELECT MAX(version_number)
+                   FROM agent_version
+                   WHERE agent_id = #{agentId}::uuid
+               ), 0) + 1,
+               #{definition}::jsonb, now(), now()
+        RETURNING version_id::text AS version_id, version_number, created_at,
+                  published_at, definition::text AS stored_definition
+    </select>
+
+    <!--
+      执行快照：prompt_config / tool_contracts 恒为 '{}'::jsonb（尚无权威模型，
+      凭空造结构等于自创契约）；run_config 取 DEC-9 平台默认档；
+      context_policy 由 ContextPolicyReader 从 definition 派生（适配层计算后传入）。
+    -->
+    <insert id="insertSnapshot">
+        INSERT INTO execution_snapshot
+            (version_id, agent_config, prompt_config, tool_contracts, run_config,
+             context_policy)
+        VALUES (#{versionId}::uuid, #{agentConfig}::jsonb, '{}'::jsonb, '{}'::jsonb,
+                #{runConfig}::jsonb, #{contextPolicy}::jsonb)
+    </insert>
+
+</mapper>

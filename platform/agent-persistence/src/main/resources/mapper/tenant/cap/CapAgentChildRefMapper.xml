@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  CapAgentChildRefMapper.xml —— SQL 从 JdbcCapAgentChildRefRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ON CONFLICT DO NOTHING /
+   EXISTS(tenant_agent_binding ACTIVE) / ORDER BY 全部保留）。
+
+  ⚠️ cap_agent_child_ref 是全局表（无 tenant_id 列）：租户可见性由
+     tenant_agent_binding 的 ACTIVE 绑定决定，SQL 中逐条保留 EXISTS / JOIN 与 ::uuid cast。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.CapAgentChildRefMapper">
+
+    <!-- 四条查询共用的列清单，逐列与原实现一致。 -->
+    <sql id="selectColumns">
+        SELECT c.parent_agent_id::text, c.parent_release_version,
+               c.child_agent_id::text, c.child_release_version,
+               c.ordinal, c.required, c.created_at
+        FROM cap_agent_child_ref c
+    </sql>
+
+    <!-- 幂等插入：唯一约束防止同一父 release 重复声明同一子 release。 -->
+    <insert id="insert">
+        INSERT INTO cap_agent_child_ref
+            (parent_agent_id, parent_release_version,
+             child_agent_id, child_release_version, ordinal, required, created_at)
+        VALUES (#{parentAgentId}::uuid, #{parentReleaseVersion}, #{childAgentId}::uuid,
+                #{childReleaseVersion}, #{ordinal}, #{required}, #{createdAt})
+        ON CONFLICT (parent_agent_id, parent_release_version,
+                     child_agent_id, child_release_version) DO NOTHING
+    </insert>
+
+    <select id="listByParentRelease" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentChildRefDO">
+        <include refid="selectColumns"/>
+        WHERE c.parent_agent_id = #{parentAgentId}::uuid AND c.parent_release_version = #{parentReleaseVersion}
+          AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                       WHERE b.tenant_id = #{tenantId}::uuid
+                         AND b.agent_id = c.parent_agent_id
+                         AND b.status = 'ACTIVE')
+        ORDER BY c.ordinal ASC
+    </select>
+
+    <select id="listByParentAgent" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentChildRefDO">
+        <include refid="selectColumns"/>
+        WHERE c.parent_agent_id = #{parentAgentId}::uuid
+          AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                       WHERE b.tenant_id = #{tenantId}::uuid
+                         AND b.agent_id = c.parent_agent_id
+                         AND b.status = 'ACTIVE')
+        ORDER BY c.parent_release_version ASC, c.ordinal ASC
+    </select>
+
+    <select id="listByChildAgent" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentChildRefDO">
+        <include refid="selectColumns"/>
+        WHERE c.child_agent_id = #{childAgentId}::uuid
+          AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                       WHERE b.tenant_id = #{tenantId}::uuid
+                         AND b.agent_id = c.parent_agent_id
+                         AND b.status = 'ACTIVE')
+        ORDER BY c.parent_agent_id ASC, c.parent_release_version ASC, c.ordinal ASC
+    </select>
+
+    <select id="listByTenant" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentChildRefDO">
+        <include refid="selectColumns"/>
+        JOIN tenant_agent_binding b
+          ON b.agent_id = c.parent_agent_id AND b.tenant_id = #{tenantId}::uuid
+         AND b.status = 'ACTIVE'
+        ORDER BY c.parent_agent_id ASC, c.parent_release_version ASC, c.ordinal ASC
+    </select>
+
+</mapper>

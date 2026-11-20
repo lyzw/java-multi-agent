@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  ConfigPublishRequestMapper.xml —— SQL 从 JdbcConfigPublishRequestRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ::jsonb / now() / COALESCE / FOR UPDATE /
+    IS NOT DISTINCT FROM / ORDER BY 全部保留）。
+
+  ⚠️ tenantId == null 表示 PLATFORM 作用域：
+     「tenant_id = NULL」在 SQL 里恒为 NULL（不是 TRUE），会让平台申请单永远查不到；
+     故所有租户谓词一律用 IS NOT DISTINCT FROM #{tenantId}::uuid。
+  ⚠️ 发布序号/状态迁移在存储层有守卫（decide 只接受 PENDING；
+     markApplied / markFailed 只接受 APPROVED），越级迁移必须失败。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ConfigPublishRequestMapper">
+
+    <sql id="selectColumns">
+        SELECT request_id::text, tenant_id::text, operation, payload::text,
+               reason, requester_id, state, approver_id, decision_note,
+               requested_at, decided_at, applied_at, failure_reason, scope,
+               resource_kind, resource_id, target_version, fail_stage, fail_details::text
+        FROM cap_config_publish_request
+    </sql>
+
+    <!-- decide 的 RETURNING 列（不含资源关联列，与原实现逐字一致）。 -->
+    <sql id="decisionReturnColumns">
+        request_id::text, tenant_id::text, operation, payload::text,
+        reason, requester_id, state, approver_id, decision_note,
+        requested_at, decided_at, applied_at, failure_reason, scope
+    </sql>
+
+    <!-- transition 的 RETURNING 列（含资源关联列与 fail_details，与原实现逐字一致）。 -->
+    <sql id="transitionReturnColumns">
+        request_id::text, tenant_id::text, operation, payload::text,
+        reason, requester_id, state, approver_id, decision_note,
+        requested_at, decided_at, applied_at, failure_reason, scope,
+        resource_kind, resource_id, target_version, fail_stage, fail_details::text
+    </sql>
+
+    <select id="insertRequest" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigPublishRequestDO">
+        INSERT INTO cap_config_publish_request
+            (tenant_id, scope, operation, payload, reason, requester_id, state)
+        VALUES (#{tenantId}::uuid, #{scope}, #{operation},
+                #{payload,typeHandler=cn.studykid.multiagent.infrastructure.persistence.cap.JsonbTypeHandler}::jsonb,
+                #{reason}, #{requesterId}, 'PENDING')
+        RETURNING request_id::text, requested_at
+    </select>
+
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigPublishRequestDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid AND request_id = #{requestId}::uuid
+    </select>
+
+    <select id="listByCursor" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigPublishRequestDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+        <if test="state != null">
+          AND state = #{state}
+        </if>
+        <if test="cursorCreatedAt != null and cursorRequestId != null">
+          AND (requested_at &lt; #{cursorCreatedAt}
+               OR (requested_at = #{cursorCreatedAt} AND request_id &lt; #{cursorRequestId}::uuid))
+        </if>
+        ORDER BY requested_at DESC, request_id DESC LIMIT #{limitPlusOne}
+    </select>
+
+    <select id="loadForUpdate" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigPublishRequestDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid AND request_id = #{requestId}::uuid
+        FOR UPDATE
+    </select>
+
+    <select id="updateDecision" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigPublishRequestDO">
+        UPDATE cap_config_publish_request
+        SET state = #{targetState}, approver_id = #{approverId}, decided_at = now(), decision_note = #{note}
+        WHERE tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid AND request_id = #{requestId}::uuid
+        RETURNING <include refid="decisionReturnColumns"/>
+    </select>
+
+    <!--
+      markApplied / markFailed 共用的条件 UPDATE。
+      ⚠️ 每个 ? 按语义映射到对应 #{param}（state, failure_reason, fail_stage,
+         fail_details, applied_at, tenant_id, request_id）。
+      ⚠️ fail_details = COALESCE(?::jsonb, '[]'::jsonb) 的 JSONB cast 保留；
+         failStage / appliedAt 为空时由 MyBatis 绑定 SQL NULL（与原 setNull 一致）。
+    -->
+    <select id="transition" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigPublishRequestDO">
+        UPDATE cap_config_publish_request
+        SET state = #{targetState}, failure_reason = #{failureReason}, fail_stage = #{failStage},
+            fail_details = COALESCE(#{failDetailsJson,typeHandler=cn.studykid.multiagent.infrastructure.persistence.cap.JsonbTypeHandler}::jsonb, '[]'::jsonb),
+            applied_at = #{appliedAt}
+        WHERE tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+          AND request_id = #{requestId}::uuid
+        RETURNING <include refid="transitionReturnColumns"/>
+    </select>
+
+</mapper>

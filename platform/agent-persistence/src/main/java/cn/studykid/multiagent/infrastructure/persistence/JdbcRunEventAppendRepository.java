@@ -9,6 +9,7 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import tools.jackson.databind.ObjectMapper;
@@ -42,6 +43,9 @@ import cn.studykid.multiagent.ports.persistence.RunEventPort;
  * SQL 全显式 {@code tenant_id} 谓词，RLS 退役后功能不变。
  */
 @Repository
+// 架构决策变更：MP 开启时由 MybatisRunEventAppendRepository 接管本 Port；默认仍用本实现。
+// matchIfMissing=true ⇒ 未配置 persistence.mybatis.enabled 时本实现照常生效（行为零变更）。
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcRunEventAppendRepository implements RunEventPort {
 
     /**

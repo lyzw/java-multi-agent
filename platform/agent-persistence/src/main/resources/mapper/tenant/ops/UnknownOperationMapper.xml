@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  UnknownOperationMapper.xml —— SQL 从 JdbcUnknownOperationRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ::tool_operation_state cast、FOR UPDATE、
+   全序 ORDER BY created_at DESC, operation_id DESC、LIMIT limit+1 全部保留）。
+
+  ⚠️ state 过滤的 cast 必须保留（PG 枚举列）：#{state}::tool_operation_state。
+  ⚠️ 游标比较展开为 OR（不用 row-value），与旧实现逐字一致；同一微秒多行也不会重复/漏行。
+  ⚠️ updateDisposition 只写终态：reconciliation_source='MANUAL' 与 P3-D03 自动对账来源可区分；
+     updated_at = now()（DB 时钟），与原实现一致。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止把本文件挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.UnknownOperationMapper">
+
+    <!-- 查询列清单（list / find / lockAndRead 共用），逐列与原 SQL_SELECT 一致。 -->
+    <sql id="selectColumns">
+        SELECT tenant_id, operation_id, run_id, tool_name, risk_level, state,
+               created_at, updated_at, reconciliation_source,
+               manual_disposed_by, manual_disposed_at
+        FROM tool_operation
+    </sql>
+
+    <select id="list"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.model.ToolOperationDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid
+        <if test="state != null">
+            AND state = #{state}::tool_operation_state
+        </if>
+        <if test="cursorCreatedAt != null and cursorId != null">
+            AND (created_at &lt; #{cursorCreatedAt}
+                 OR (created_at = #{cursorCreatedAt} AND operation_id &lt; #{cursorId}::uuid))
+        </if>
+        ORDER BY created_at DESC, operation_id DESC
+        LIMIT #{limitPlusOne}
+    </select>
+
+    <select id="find"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.model.ToolOperationDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid
+          AND operation_id = #{operationId}::uuid
+    </select>
+
+    <!-- 处置前加行锁读取：必须在事务内（外层 TransactionalConnectionHolder 保证）。 -->
+    <select id="lockAndRead"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.model.ToolOperationDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid
+          AND operation_id = #{operationId}::uuid
+        FOR UPDATE
+    </select>
+
+    <!--
+      人工处置：终态归档（三个 Disposition 取值都是终态），⛔ 没有回到 PENDING / IN_FLIGHT 的路径。
+      manual_disposed_by 由适配层拼装（无 note 时即 operatorId，与旧实现逐字一致）。
+    -->
+    <update id="updateDisposition">
+        UPDATE tool_operation
+        SET state = #{state}::tool_operation_state,
+            reconciled_at = #{now},
+            reconciliation_source = 'MANUAL',
+            manual_disposed_by = #{disposedBy},
+            manual_disposed_at = #{now},
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND operation_id = #{operationId}::uuid
+    </update>
+
+</mapper>

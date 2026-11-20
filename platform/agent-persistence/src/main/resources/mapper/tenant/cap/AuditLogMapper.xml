@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  AuditLogMapper.xml —— SQL 从 JdbcAuditLogRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ::jsonb / ::timestamptz / ::text /
+   IS NOT DISTINCT FROM / COALESCE(?, now()) / ORDER BY / LIMIT 全部保留）。
+
+  ⚠️ tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid —— PLATFORM scope（null）与 TENANT scope 都要命中；
+     RLS 策略由 RlsTenantBindingInterceptor 绑定保证（本表 RLS 仅放行 INSERT + SELECT）。
+  ⚠️ 游标分页多取 1 条（limit+1）判下一页，不用 COUNT、不用 MP 的 Page；
+     全序 ORDER BY created_at DESC, audit_id DESC 防同刻行重复/漏行。
+  ⚠️ 动态过滤的空白判定用 trim() != ''，与旧实现的 !isBlank() 逐字对齐。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.AuditLogMapper">
+
+    <sql id="selectColumns">
+        SELECT audit_id::text, scope, tenant_id::text, resource_kind, resource_id, resource_name,
+               event_type, from_version, to_version, from_state, to_state,
+               before_config::text, after_config::text, diff_summary::text,
+               request_id::text, release_id, operator_id, reason, created_at
+        FROM cap_audit_log
+    </sql>
+
+    <!--
+      INSERT ... RETURNING created_at：DB 时间戳回填（COALESCE(?, now()) 保留）。
+      空结果 => 适配层 fail-closed，抛 "cap_audit_log INSERT 未返回"。
+    -->
+    <select id="insertRecord" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AuditLogDO">
+        INSERT INTO cap_audit_log
+            (audit_id, scope, tenant_id, resource_kind, resource_id, resource_name,
+             event_type, from_version, to_version, from_state, to_state,
+             before_config, after_config, diff_summary,
+             request_id, release_id, operator_id, reason, created_at)
+        VALUES (#{auditId}, #{scope}, #{tenantId}::uuid, #{resourceKind}, #{resourceId}, #{resourceName},
+                #{eventType}, #{fromVersion}, #{toVersion}, #{fromState}, #{toState},
+                #{beforeConfig}::jsonb, #{afterConfig}::jsonb, #{diffSummary}::jsonb,
+                #{requestId}, #{releaseId}, #{operatorId}, #{reason}, COALESCE(#{createdAt}, now()))
+        RETURNING created_at
+    </select>
+
+    <!-- ⚠️ tenant_id 条件不可删除：第一道隔离；RLS 是第二道（拦截器注入 set_config） -->
+    <select id="findById" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AuditLogDO">
+        <include refid="selectColumns"/>
+        WHERE scope = #{scope}
+          AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+          AND audit_id = #{auditId}::uuid
+    </select>
+
+    <!--
+      list / query 共用：动态谓词逐条追加（顺序与旧 StringBuilder 一致），
+      游标比较展开 OR（不用 row-value 比较，与原实现一致），全序排序 + limit+1 探底。
+    -->
+    <select id="query" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AuditLogDO">
+        <include refid="selectColumns"/>
+        WHERE scope = #{scope}
+          AND tenant_id IS NOT DISTINCT FROM #{tenantId}::uuid
+        <if test="resourceKind != null and resourceKind.trim() != ''">
+          AND resource_kind = #{resourceKind}
+        </if>
+        <if test="resourceId != null and resourceId.trim() != ''">
+          AND resource_id = #{resourceId}
+        </if>
+        <if test="eventType != null and eventType.trim() != ''">
+          AND event_type = #{eventType}
+        </if>
+        <if test="operatorId != null and operatorId.trim() != ''">
+          AND operator_id = #{operatorId}
+        </if>
+        <if test="fromTime != null and fromTime.trim() != ''">
+          AND created_at &gt;= #{fromTime}::timestamptz
+        </if>
+        <if test="toTime != null and toTime.trim() != ''">
+          AND created_at &lt;= #{toTime}::timestamptz
+        </if>
+        <if test="cursorCreatedAt != null and cursorAuditId != null">
+          AND (created_at &lt; #{cursorCreatedAt}::timestamptz
+               OR (created_at = #{cursorCreatedAt}::timestamptz AND audit_id &lt; #{cursorAuditId}::uuid))
+        </if>
+        ORDER BY created_at DESC, audit_id DESC
+        LIMIT #{limitPlusOne}
+    </select>
+
+</mapper>

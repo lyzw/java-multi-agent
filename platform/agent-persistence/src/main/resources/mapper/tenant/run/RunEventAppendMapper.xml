@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  RunEventAppendMapper.xml —— 三条 SQL 从 JdbcRunEventAppendRepository 逐字搬迁
+  （仅 ? → #{param}，FOR UPDATE / ::uuid / ::jsonb cast 全部保留）。
+
+  ⚠️ 锁 run 行 → 算 MAX+1 → 插入事件，三步必须同一事务同一连接：
+     适配层用 TransactionalConnectionHolder.inTransaction 保证，MyBatis 借同一条外层连接。
+  ⚠️ 不选 INSERT ... MAX+1（无锁，并发撞唯一约束）；不选 pg_advisory_xact_lock（PG 专有依赖）。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.RunEventAppendMapper">
+
+    <!-- SQL_LOCK_RUN：锁 run 行——串行化同一 Run 的事件追加。 -->
+    <select id="lockRun" resultType="java.lang.String">
+        SELECT run_id FROM run
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+        FOR UPDATE
+    </select>
+
+    <!-- SQL_NEXT_SEQUENCE：序号 = 当前最大值 + 1（COALESCE 处理首条事件）。 -->
+    <select id="nextSequence" resultType="java.lang.Long">
+        SELECT COALESCE(MAX(sequence_no), 0) + 1
+        FROM run_event
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+    </select>
+
+    <!-- SQL_APPEND：payload::jsonb cast 与原实现逐字一致；event_id/created_at 走 DB DEFAULT。 -->
+    <insert id="insertEvent">
+        INSERT INTO run_event (tenant_id, run_id, sequence_no, event_type, payload)
+        VALUES (#{tenantId}::uuid, #{runId}::uuid, #{sequenceNo}, #{eventType}, #{payload}::jsonb)
+    </insert>
+
+</mapper>

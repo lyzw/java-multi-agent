@@ -14,6 +14,7 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.page.PageCursor;
@@ -39,8 +40,14 @@ import cn.studykid.multiagent.ports.persistence.Page;
  * 所以 {@code 0} 唯一表示「该 agent 尚无任何版本」，与「有版本 0」不冲突。
  *
  * <p>⚠️ 全部走 {@code tenantConnection} 绑定 RLS；禁止直接 {@code dataSource.getConnection()}。
+ *
+ * <p>⚠️ <b>默认启用（互补条件）</b>：仅当 {@code persistence.mybatis.enabled} 不是
+ * {@code true}（含未配置）时注册；开启后由 {@code MybatisAgentQueryRepository} 接管，
+ * 本类不被注册 —— 灰度/一键回滚开关，二者不会同时存在于容器。
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false",
+        matchIfMissing = true)
 public class JdbcAgentQueryRepository implements AgentQueryPort {
 
     private static final String SQL_SELECT = """

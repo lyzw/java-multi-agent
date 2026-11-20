@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  CapAgentDefMapper.xml —— 七条 SQL 从 JdbcCapAgentDefRepository 逐字搬迁
+  （仅 ? → #{param}，其余 ::uuid / ::jsonb / ::text cast、ON CONFLICT、
+   tenant_agent_binding EXISTS 过滤、版本全序排序全部保留）。
+
+  ⚠️ cap_agent_def 是全局实体表（无 tenant_id 列），租户可见性完全由
+     tenant_agent_binding 的 ACTIVE 行决定；SQL 里的 EXISTS 子查询是第一道隔离。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor：适配层调用前必须先
+     TenantScope.bind(...)（全局方法绑零 UUID 哨兵，租户方法绑该租户）。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.CapAgentDefMapper">
+
+    <!-- 三条查询共用的投影列（与旧 JDBC 的 SELECT 列表逐字一致）。 -->
+    <sql id="selectColumns">
+        SELECT d.agent_id::text, d.version, d.name, d.description,
+               d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
+               d.capability_tags::text, d.overrides::text, d.orchestration::text,
+               d.instructions::text, d.model_ref, d.generation_params::text,
+               d.config_fingerprint,
+               d.schema_version, d.created_at, d.published_at
+        FROM cap_agent_def d
+    </sql>
+
+    <!--
+      SQL_INSERT：插入一条不可变版本行。
+      ⚠️ ON CONFLICT (agent_id, version) DO NOTHING 而非 DO UPDATE：已发布版本行不可变；
+         重复插入必须保留原行（DB 层另有触发器封禁对已发布行的修改）。
+      ⚠️ agent_id 的 ?::uuid 与四组数组列 + overrides/orchestration/instructions/
+         generation_params 的 ?::jsonb cast 与原 JDBC 逐字一致。
+      ⚠️ created_at / updated_at 同取 #{createdAt} / #{updatedAt}：适配层用 def.createdAt()
+         填两处，与原 JDBC 的两次 setTimestamp 一致。
+      ⚠️ published_at 可空：为 null 时写入 NULL（= 草稿），不可被引用。
+    -->
+    <insert id="insertVersion">
+        INSERT INTO cap_agent_def
+            (agent_id, version, name, description, roles, enabled_skills,
+             skill_bundles, capability_tags, overrides, orchestration, instructions,
+             model_ref, generation_params, config_fingerprint,
+             schema_version, created_at, updated_at, published_at)
+        VALUES (#{agentId}::uuid, #{version}, #{name}, #{description}, #{roles}::jsonb,
+                #{enabledSkills}::jsonb, #{skillBundles}::jsonb, #{capabilityTags}::jsonb,
+                #{overrides}::jsonb, #{orchestration}::jsonb, #{instructions}::jsonb,
+                #{modelRef}, #{generationParams}::jsonb, #{configFingerprint},
+                #{schemaVersion}, #{createdAt}, #{updatedAt}, #{publishedAt})
+        ON CONFLICT (agent_id, version) DO NOTHING
+    </insert>
+
+    <!--
+      SQL_FIND：按 agentId + version 精确读取。
+      ⚠️ tenant_agent_binding 的 ACTIVE 存在性过滤不可删：全局定义表本身没有 tenant_id，
+         这是「该租户是否已分配此 Agent」的唯一判定。
+    -->
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentDefDO">
+        <include refid="selectColumns"/>
+        WHERE d.agent_id = #{agentId}::uuid AND d.version = #{version}
+          AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                       WHERE b.tenant_id = #{tenantId}::uuid
+                         AND b.agent_id = d.agent_id
+                         AND b.status = 'ACTIVE')
+    </select>
+
+    <!-- SQL_FIND_GLOBAL：PLATFORM 作用域冲突回查，按 agentId+version 直接查，不走绑定过滤。 -->
+    <select id="findGlobal" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentDefDO">
+        <include refid="selectColumns"/>
+        WHERE d.agent_id = #{agentId}::uuid AND d.version = #{version}
+    </select>
+
+    <!-- SQL_FIND_LATEST：最新版本行（含草稿），带 ACTIVE 绑定过滤；按 version 倒序取第一行。 -->
+    <select id="findLatest" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentDefDO">
+        <include refid="selectColumns"/>
+        WHERE d.agent_id = #{agentId}::uuid
+          AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                       WHERE b.tenant_id = #{tenantId}::uuid
+                         AND b.agent_id = d.agent_id
+                         AND b.status = 'ACTIVE')
+        ORDER BY d.version DESC
+        LIMIT 1
+    </select>
+
+    <!-- SQL_FIND_LATEST_GLOBAL：无绑定过滤，供全局 Agent 计算版本号（可尚未分配任何租户）。 -->
+    <select id="findLatestGlobal" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentDefDO">
+        <include refid="selectColumns"/>
+        WHERE d.agent_id = #{agentId}::uuid
+        ORDER BY d.version DESC
+        LIMIT 1
+    </select>
+
+    <!--
+      SQL_FIND_LATEST_PUBLISHED：只返回 published_at IS NOT NULL 的行，
+      绝不把草稿版本当成当前版本（草稿不可被调用，见 §6.1「不可变版本行」语义）。
+    -->
+    <select id="findLatestPublished" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentDefDO">
+        <include refid="selectColumns"/>
+        WHERE d.agent_id = #{agentId}::uuid
+          AND d.published_at IS NOT NULL
+          AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                       WHERE b.tenant_id = #{tenantId}::uuid
+                         AND b.agent_id = d.agent_id
+                         AND b.status = 'ACTIVE')
+        ORDER BY d.version DESC
+        LIMIT 1
+    </select>
+
+    <!--
+      SQL_LIST_LATEST_PER_AGENT：每个已绑定 Agent 一行的最高版本。
+      ⚠️ 定义表是全局的，租户可见性完全由绑定表决定（JOIN + ACTIVE 过滤）。
+      ⚠️ version 取 max 的子查询只按 agent_id 关联，不按租户 —— 版本是全局单调的。
+    -->
+    <select id="listLatestPerAgent" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentDefDO">
+        <include refid="selectColumns"/>
+        JOIN tenant_agent_binding b
+          ON b.agent_id = d.agent_id
+         AND b.tenant_id = #{tenantId}::uuid
+         AND b.status = 'ACTIVE'
+        WHERE d.version = (SELECT max(d2.version) FROM cap_agent_def d2
+                            WHERE d2.agent_id = d.agent_id)
+        ORDER BY d.agent_id ASC
+    </select>
+
+</mapper>

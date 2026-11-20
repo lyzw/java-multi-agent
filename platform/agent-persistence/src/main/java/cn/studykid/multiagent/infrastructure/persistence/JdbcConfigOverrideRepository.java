@@ -13,6 +13,7 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.SubjectContext;
@@ -45,6 +46,9 @@ import org.springframework.beans.factory.annotation.Autowired;
  * <p>⚠️ 全部走 {@code tenantConnection} 绑定 RLS；事务内显式 commit/rollback。
  */
 @Repository
+// 架构决策变更：MP 开启时由 MybatisConfigOverrideRepository 接管本 Port；默认仍用本实现。
+// matchIfMissing=true => 未配置 persistence.mybatis.enabled 时本实现照常生效（行为零变更）。
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcConfigOverrideRepository implements ConfigOverridePort {
 
     private final DataSource dataSource;

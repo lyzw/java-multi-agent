@@ -31,6 +31,7 @@ import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.RunCreationPort;
 import cn.studykid.multiagent.ports.persistence.RunLimits;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.type.TypeReference;
@@ -47,6 +48,7 @@ import tools.jackson.databind.ObjectMapper;
  * 若实现内部提交，异常路径上的回滚就会被绕过。
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcRunCreationRepository implements RunCreationPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcRunCreationRepository.class);

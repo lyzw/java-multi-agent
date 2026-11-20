@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  ExecutionIntentMapper.xml —— W2 迁移，SQL 从 JdbcExecutionIntentRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ::cap_intent_state / ON CONFLICT / IN / ORDER BY / LIMIT 全部保留）。
+
+  ⚠️ tenant_id 谓词不可删除：第一道隔离；RLS 是第二道（拦截器注入 set_config）。
+  ⚠️ transitionState 的 expectedFrom 必须在 WHERE 里（CAS）：否则并发下同一意图会被消费两次。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.ExecutionIntentMapper">
+
+    <sql id="selectColumns">
+        SELECT intent_id::text, tenant_id::text, run_id::text, invocation_id, tool_id,
+               tool_version, args_fingerprint, approval_id, intent_state,
+               created_at, updated_at
+        FROM cap_execution_intent
+    </sql>
+
+    <!-- 写入先于外部副作用；ON CONFLICT DO NOTHING 保证 (tenant_id, invocation_id) 幂等 -->
+    <insert id="recordIntent">
+        INSERT INTO cap_execution_intent
+            (intent_id, tenant_id, run_id, invocation_id, tool_id, tool_version,
+             args_fingerprint, approval_id, intent_state, created_at, updated_at)
+        VALUES (#{intentId}::uuid, #{tenantId}::uuid, #{runId}::uuid, #{invocationId}, #{toolId}, #{toolVersion}, #{argsFingerprint}, #{approvalId}, #{intentState}::cap_intent_state, #{createdAt}, #{updatedAt})
+        ON CONFLICT (tenant_id, invocation_id) DO NOTHING
+    </insert>
+
+    <select id="findByInvocation" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ExecutionIntentDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid AND invocation_id = #{invocationId}
+    </select>
+
+    <!-- CAS：expectedFrom 留在 WHERE 中；返回 0 行 = 状态已变，适配层返回 false -->
+    <update id="transitionState">
+        UPDATE cap_execution_intent
+        SET intent_state = #{toState}::cap_intent_state, updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND invocation_id = #{invocationId} AND intent_state = #{expectedFrom}::cap_intent_state
+    </update>
+
+    <!-- 恢复扫描：只捞 RESERVED / INTENT_SUBMITTED；按创建时间升序保证按发生顺序处理 -->
+    <select id="findPending" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.ExecutionIntentDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid
+          AND intent_state IN ('RESERVED', 'INTENT_SUBMITTED')
+        ORDER BY created_at ASC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

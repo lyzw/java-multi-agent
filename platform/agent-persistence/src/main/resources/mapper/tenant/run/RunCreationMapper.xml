@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- RunCreationMapper.xml —— 10 条 SQL 从 JdbcRunCreationRepository 逐字搬迁 -->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.RunCreationMapper">
+
+    <!-- SQL 0. 幂等键查重 -->
+    <select id="checkIdempotency" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.RunCreationMapper$IdempotencyHitRow">
+        SELECT tenant_id::text, request_digest, resource_id
+        FROM idempotency_record
+        WHERE tenant_id = #{tenantId}::uuid AND key_namespace = #{namespace} AND idempotency_key = #{idempotencyKey}
+    </select>
+
+    <!-- SQL 1. INSERT run ON CONFLICT DO NOTHING -->
+    <insert id="insertRun">
+        INSERT INTO run (run_id, tenant_id, snapshot_id, idempotency_key, request_digest,
+                         state, attempt, fencing_token, input_payload, correlation_id,
+                         deadline_at, budget_amount, requester_id)
+        VALUES (#{runId}::uuid, #{tenantId}::uuid, #{snapshotId}::uuid, #{idempotencyKey},
+                #{requestDigest}, 'QUEUED', 0, 0, #{inputPayload}::jsonb, #{correlationId},
+                #{deadlineAt}, #{budgetAmount}, #{requesterId}::uuid)
+        ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+    </insert>
+
+    <!-- SQL 2. INSERT run_event (RUN_CREATED) -->
+    <insert id="insertRunCreatedEvent">
+        INSERT INTO run_event (tenant_id, run_id, sequence_no, event_type, payload)
+        VALUES (#{tenantId}::uuid, #{runId}::uuid, 1, 'RUN_CREATED',
+                jsonb_build_object('correlationId', #{correlationId}::text))
+    </insert>
+
+    <!-- SQL 3. pg_notify 'run_event' -->
+    <select id="pgNotifyRunEvent" resultType="int">
+        SELECT pg_notify('run_event', json_build_object(
+                'tenantId', #{tenantId}::text, 'runId', #{runId}::text,
+                'sequenceNo', #{sequenceNo}::text)::text)
+    </select>
+
+    <!-- SQL 4. INSERT idempotency_record ON CONFLICT DO NOTHING -->
+    <insert id="insertIdempotencyRecord">
+        INSERT INTO idempotency_record (tenant_id, key_namespace, idempotency_key,
+                                         request_digest, resource_type, resource_id, expires_at)
+        VALUES (#{tenantId}::uuid, #{namespace}, #{idempotencyKey}, #{requestDigest},
+                'RUN', #{runId}::uuid, now() + interval '24 hours')
+        ON CONFLICT (tenant_id, key_namespace, idempotency_key) DO NOTHING
+    </insert>
+
+    <!-- SQL 5. INSERT outbox_event (RUN_DISPATCH, PENDING) -->
+    <insert id="insertOutboxDispatch">
+        INSERT INTO outbox_event (tenant_id, run_id, aggregate_type, aggregate_id,
+                                  event_type, payload, state, attempts)
+        VALUES (#{tenantId}::uuid, #{runId}::uuid, 'RUN', #{runId}::uuid,
+                'RUN_DISPATCH', #{payload}::jsonb, 'PENDING', 0)
+    </insert>
+
+    <!-- SQL 6. 回读 run（创建后读初始状态） -->
+    <select id="readRun" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.RunCreationMapper$RunReadRow">
+        SELECT tenant_id::text, run_id, state::text, attempt, fencing_token,
+               lease_owner, lease_expires_at, created_at
+        FROM run WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+    </select>
+
+    <!-- SQL 7. 拉取 PENDING outbox -->
+    <select id="listPendingOutbox" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.RunCreationMapper$PendingOutboxRow">
+        SELECT tenant_id::text, outbox_id, run_id, event_type, payload, attempts
+        FROM outbox_event
+        WHERE tenant_id = #{tenantId}::uuid AND state = 'PENDING'
+        ORDER BY created_at
+        LIMIT #{limit}
+    </select>
+
+    <!-- SQL 8. outbox → PUBLISHED -->
+    <update id="markOutboxPublished">
+        UPDATE outbox_event
+        SET state = 'PUBLISHED', published_at = #{publishedAt}
+        WHERE tenant_id = #{tenantId}::uuid AND outbox_id = #{outboxId}::uuid
+          AND state = 'PENDING'
+    </update>
+
+    <!-- SQL 9. outbox → FAILED -->
+    <update id="markOutboxFailed">
+        UPDATE outbox_event
+        SET state = 'FAILED', attempts = attempts + 1, last_error = #{error}
+        WHERE tenant_id = #{tenantId}::uuid AND outbox_id = #{outboxId}::uuid
+    </update>
+
+</mapper>

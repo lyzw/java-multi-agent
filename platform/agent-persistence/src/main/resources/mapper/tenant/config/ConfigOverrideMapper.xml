@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  ConfigOverrideMapper.xml —— 三条 SQL 从 JdbcConfigOverrideRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ON CONFLICT / now() 全部保留）。
+
+  ⚠️ tenant_config_override 为租户隔离实体（TENANT_ONLY + FORCE RLS）：
+     tenant_id = #{tenantId}::uuid 是第一道隔离，RLS 是第二道（拦截器注入 set_config）。
+  ⚠️ ON CONFLICT (tenant_id, config_key) DO UPDATE 保证同键至多一条（V11 主键即该复合键）。
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor。禁止挂到 ops SqlSessionFactory。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ConfigOverrideMapper">
+
+    <select id="findAllByTenant" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigOverrideDO">
+        SELECT tenant_id, config_key, value_text, value_type, reason, changed_by, updated_at
+        FROM tenant_config_override
+        WHERE tenant_id = #{tenantId}::uuid
+        ORDER BY config_key
+    </select>
+
+    <!-- INSERT ... RETURNING：updated_at 由 DB 生成（now()），空结果由适配层 fail-closed 抛异常。 -->
+    <select id="upsert" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigOverrideDO">
+        INSERT INTO tenant_config_override
+            (tenant_id, config_key, value_text, value_type, reason, changed_by)
+        VALUES (#{tenantId}::uuid, #{key}, #{value}, #{valueType}, #{reason}, #{actorId})
+        ON CONFLICT (tenant_id, config_key) DO UPDATE
+            SET value_text  = EXCLUDED.value_text,
+                value_type  = EXCLUDED.value_type,
+                reason      = EXCLUDED.reason,
+                changed_by  = EXCLUDED.changed_by,
+                updated_at  = now()
+        RETURNING updated_at
+    </select>
+
+    <delete id="deleteByKey">
+        DELETE FROM tenant_config_override
+        WHERE tenant_id = #{tenantId}::uuid AND config_key = #{key}
+    </delete>
+
+</mapper>

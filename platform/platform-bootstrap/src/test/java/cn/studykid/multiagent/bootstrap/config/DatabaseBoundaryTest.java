@@ -52,13 +52,17 @@ class DatabaseBoundaryTest {
             "spring-data-jpa", "postgresql", "mysql-connector-j",
             "mariadb-java-client", "flyway-core", "flyway-database-postgresql",
             "liquibase-core", "HikariCP", "hibernate-core",
-            "mybatis", "mybatis-spring-boot-starter", "jooq", "r2dbc-postgresql");
+            // 架构决策变更（批准引入 MyBatis-Plus）：MP artifact 只准在 agent-persistence 声明
+            "mybatis", "mybatis-spring-boot-starter", "jooq", "r2dbc-postgresql",
+            "mybatis-plus-spring-boot4-starter", "mybatis-plus-core", "mybatis-plus-extension");
 
     /** 具体 ORM / JDBC 实现包：业务模块一律不得 import。 */
     private static final Set<String> FORBIDDEN_IMPORTS = Set.of(
             "org.springframework.jdbc.", "org.springframework.orm.",
             "com.zaxxer.hikari.", "org.postgresql.", "org.flywaydb.",
             "jakarta.persistence.", "org.hibernate.", "org.apache.ibatis.",
+            // 架构决策变更：MP 类型同样不得扩散出数据库模块
+            "com.baomidou.",
             "org.jooq.", "liquibase.");
 
     /**
@@ -257,6 +261,35 @@ class DatabaseBoundaryTest {
     }
 
     // ── 辅助 ──────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("✅ MyBatis-Plus 依赖与 Mapper 只在 agent-persistence（架构决策变更后新增）")
+    void mybatisPlusStaysInDatabaseModule() {
+        String dbPom = read(platformRoot().resolve(DB_MODULE + "/pom.xml"));
+        assertThat(dbPom).contains("mybatis-plus-spring-boot4-starter");
+
+        long mapperFiles = mainJavaFiles().stream()
+                .filter(p -> p.toString().contains("/mapper/"))
+                .filter(p -> stripComments(read(p)).contains("com.baomidou.")
+                        || stripComments(read(p)).contains("org.apache.ibatis."))
+                .count();
+        assertThat(mapperFiles)
+                .as("Mapper/MyBatis 类型必须真实存在于 agent-persistence，防止守卫空转")
+                .isGreaterThan(0);
+
+        // 反向断言：其它业务模块不得声明 MP artifact（DB_ARTIFACTS 已含 MP，此处双重保险）
+        List<String> violations = new ArrayList<>();
+        for (Path pom : modulePoms()) {
+            String module = pom.getParent().getFileName().toString();
+            if (DB_MODULE.equals(module)) {
+                continue;
+            }
+            if (read(pom).contains("mybatis-plus")) {
+                violations.add(module);
+            }
+        }
+        assertThat(violations).as("MyBatis-Plus 只允许在 agent-persistence").isEmpty();
+    }
 
     private static List<Path> modulePoms() {
         List<Path> out = new ArrayList<>();

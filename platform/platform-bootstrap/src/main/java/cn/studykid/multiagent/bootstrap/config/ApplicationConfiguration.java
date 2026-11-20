@@ -292,12 +292,16 @@ public class ApplicationConfiguration {
     public cn.studykid.multiagent.ports.persistence.ReviewTaskPort reviewTaskPort(
             @Qualifier("dataSource") DataSource dataSource,
             org.springframework.beans.factory.ObjectProvider<
-                    cn.studykid.multiagent.ports.quality.ReviewAttributionHook> hookProvider) {
-        // ⚠️ 钩子用 ObjectProvider 可选注入：产品口径未定时**没有任何实现**，
-        //    此时仓储走 NoOp（resolve 不回写）。口径定了之后实现一个
-        //    ReviewAttributionHook Bean，这里自动接上 —— 编排零改动。
-        //    这正是「把接线与口径解耦」的落点：接线（已完成）与口径（待产品）
-        //    分属两个变更通道，不能因为口径没定就把接线也欠着。
+                    cn.studykid.multiagent.ports.quality.ReviewAttributionHook> hookProvider,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.ReviewTaskMapper>
+                    reviewTaskMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && reviewTaskMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisReviewTaskRepository(reviewTaskMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcReviewTaskRepository(
                 dataSource, hookProvider.getIfAvailable());
     }
@@ -359,6 +363,7 @@ public class ApplicationConfiguration {
     @Bean
     public cn.studykid.multiagent.ports.persistence.RateLimitPort rateLimitPort(
             DataSource dataSource,
+            org.springframework.beans.factory.ObjectProvider<cn.studykid.multiagent.infrastructure.persistence.mapper.RateLimitBucketMapper> rateLimitBucketMapper,
             @org.springframework.beans.factory.annotation.Value(
                     "${" + cn.studykid.multiagent.application.config.RateLimitPolicy
                             .KEY_LIMIT + "}") Long limit,
@@ -372,24 +377,25 @@ public class ApplicationConfiguration {
                     "${" + cn.studykid.multiagent.application.config.RateLimitPolicy
                             .KEY_GOVERNANCE_DECIDE_LIMIT + ":}") Long governanceDecideLimit,
             @org.springframework.beans.factory.annotation.Value(
-                    "${agent.rate-limit.sliding-window:false}") boolean slidingWindow) {
-        // ⚠️ 治理桶限额走**独立的配置键 + 缺省回落**，不走 requireLimit 的 fail-closed：
-        //    治理台阈值配错只影响可用性，不会造成越权（见 RateLimitPolicy#governanceLimitFor）。
-        //    但**全局限额仍 fail-closed**（它服务学生侧动作，配错就是安全边界）。
+                    "${agent.rate-limit.sliding-window:false}") boolean slidingWindow,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
         java.util.Map<String, Long> bucketLimits = new java.util.LinkedHashMap<>();
         bucketLimits.put(RateLimitPort.Buckets.GOVERNANCE_QUERY,
                 optionalLimit(governanceQueryLimit, RateLimitPort.Buckets.GOVERNANCE_QUERY));
         bucketLimits.put(RateLimitPort.Buckets.GOVERNANCE_DECIDE,
                 optionalLimit(governanceDecideLimit, RateLimitPort.Buckets.GOVERNANCE_DECIDE));
 
+        long realLimit = RateLimitPolicy.requireLimit(limit);
+        long realWindow = RateLimitPolicy.requireWindowSeconds(windowSeconds);
+
+        if (mybatisEnabled) {
+            return new cn.studykid.multiagent.infrastructure.persistence.MybatisRateLimiter(
+                    rateLimitBucketMapper.getObject(), dataSource,
+                    realLimit, realWindow, bucketLimits, slidingWindow);
+        }
         return new JdbcRateLimiter(
-                dataSource,
-                RateLimitPolicy.requireLimit(limit),
-                RateLimitPolicy.requireWindowSeconds(windowSeconds),
-                bucketLimits,
-                // ⚠️ P3-1 ①：默认固定窗口（保留既有行为），可按环境开启滑动窗口近似，
-                //    消除「窗口末尾 + 下一窗口开头」可达 2×limit 的边界突发
-                slidingWindow);
+                dataSource, realLimit, realWindow, bucketLimits, slidingWindow);
     }
 
     /** 治理桶限额：未配置则用 {@link RateLimitPolicy} 的缺省值；配置了则必须为正。 */
@@ -604,6 +610,8 @@ public class ApplicationConfiguration {
      * <b>看不见委派的预留</b>。不装配这个端口 = 委派侧的额度泄漏永远不被发现。
      */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.DelegationBudgetPort
             delegationBudgetPort(DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -825,6 +833,8 @@ public class ApplicationConfiguration {
 
     /** Agent 结构化定义仓储（P0-T4/T6）。 */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.CapAgentDefPort capAgentDefPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcCapAgentDefRepository(
@@ -844,6 +854,8 @@ public class ApplicationConfiguration {
      * （而不是「发布成功但永远建不出 Run」）。
      */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.AgentReleaseArchivePort
             agentReleaseArchivePort(DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -857,6 +869,8 @@ public class ApplicationConfiguration {
      * {@code childAgentRefs}；本表只是把「边」投影出来便于查询与分析，可重建。
      */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.CapAgentChildRefPort capAgentChildRefPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -867,6 +881,8 @@ public class ApplicationConfiguration {
      * 输出契约仓储（多级 Agent v1.1 · FR-027 · MA-T16）。
      */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.CapResultContractPort capResultContractPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -877,6 +893,8 @@ public class ApplicationConfiguration {
      * 路由策略仓储（多级 Agent v1.1 第十四批 · MA-T05 / MA-T15）。
      */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort capRoutingPolicyPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -895,6 +913,8 @@ public class ApplicationConfiguration {
      * 接入真实 PG 跑 IT 后立刻暴露。
      */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.AgentInvocationPort agentInvocationPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -962,11 +982,21 @@ public class ApplicationConfiguration {
     public cn.studykid.multiagent.ports.persistence.AgentManagePort agentManagePort(
             DataSource dataSource,
             cn.studykid.multiagent.ports.persistence.AuditPort auditPort,
-            cn.studykid.multiagent.ports.persistence.CapDualWritePort capDualWrite) {
+            cn.studykid.multiagent.ports.persistence.CapDualWritePort capDualWrite,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.AgentManageMapper>
+                    agentManageMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        // ⚠️ 双写装饰器必须保留：切换底层实现只换 delegate，不拆装饰器。
+        cn.studykid.multiagent.ports.persistence.AgentManagePort delegate = mybatisEnabled
+                ? new cn.studykid.multiagent.infrastructure.persistence
+                        .MybatisAgentManageRepository(agentManageMapper.getObject(),
+                                dataSource, auditPort)
+                : new cn.studykid.multiagent.infrastructure.persistence
+                        .JdbcAgentManageRepository(dataSource, auditPort);
         return new cn.studykid.multiagent.application.cap.DualWriteAgentManagePort(
-                new cn.studykid.multiagent.infrastructure.persistence.JdbcAgentManageRepository(
-                        dataSource, auditPort),
-                capDualWrite);
+                delegate, capDualWrite);
     }
 
     /**
@@ -977,6 +1007,8 @@ public class ApplicationConfiguration {
      * P1 起，授权判定必须读本端口。
      */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.AuthzVersionPort authzVersionPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcAuthzVersionRepository(
@@ -985,6 +1017,8 @@ public class ApplicationConfiguration {
 
     /** Run 级能力闭包快照仓储（P0-T4）。 */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.CapabilitySnapshotPort
             capabilitySnapshotPort(DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -994,6 +1028,8 @@ public class ApplicationConfiguration {
     /** 配置发布头仓储（P0-T4；CAS 属 P5）。 */
     @Bean
     @org.springframework.context.annotation.Primary
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.ConfigReleasePort configReleasePort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcConfigReleaseRepository(
@@ -1002,6 +1038,8 @@ public class ApplicationConfiguration {
 
     /** 确定结果事件仓储（P0-T5）。 */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.ResultEventPort resultEventPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcResultEventRepository(
@@ -1010,6 +1048,8 @@ public class ApplicationConfiguration {
 
     /** 执行意图仓储（P0-T5）。 */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.ExecutionIntentPort executionIntentPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -1026,6 +1066,8 @@ public class ApplicationConfiguration {
 
     /** 补偿任务仓储（P3-T4 · §5.3.5）。 */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.CompensationTaskPort compensationTaskPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -1044,6 +1086,8 @@ public class ApplicationConfiguration {
 
     /** Tool 定义版本行仓储（P1-T1）。 */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.CapToolDefPort capToolDefPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcCapToolDefRepository(
@@ -1052,6 +1096,8 @@ public class ApplicationConfiguration {
 
     /** Skill 定义版本行仓储（P1-T1）。 */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.CapSkillDefPort capSkillDefPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcCapSkillDefRepository(
@@ -1060,6 +1106,8 @@ public class ApplicationConfiguration {
 
     /** MCP Server 定义版本行仓储（P1-T1）。 */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort capMcpServerDefPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -1097,6 +1145,8 @@ public class ApplicationConfiguration {
      */
     @Bean
     @org.springframework.context.annotation.Primary
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.ConfigPointerPort configPointerPort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap.JdbcConfigPointerRepository(
@@ -1131,6 +1181,8 @@ public class ApplicationConfiguration {
 
     /** 生命周期状态迁移仓储（P5-T4 · §6.6 / 06 §3）。 */
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.ConfigLifecyclePort configLifecyclePort(
             DataSource dataSource) {
         return new cn.studykid.multiagent.infrastructure.persistence.cap
@@ -1513,7 +1565,17 @@ public class ApplicationConfiguration {
     public cn.studykid.multiagent.ports.persistence.DictionaryPort
             platformDictionaryPort(
             cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
-                    platformOps) {
+                    platformOps,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.DictionaryMapper>
+                    dictionaryMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && dictionaryMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisDictionaryRepository(dictionaryMapper.getObject(),
+                            platformOps.platformIdentityDataSource());
+        }
         return new cn.studykid.multiagent.infrastructure.persistence
                 .JdbcDictionaryRepository(platformOps.platformIdentityDataSource());
     }

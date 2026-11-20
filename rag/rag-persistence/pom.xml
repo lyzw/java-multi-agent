@@ -83,6 +83,14 @@
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
     </dependency>
+    <!--
+      MyBatis-Plus（架构决策变更，W0/W1 试点）：版本由父 POM 锁定 3.5.17。
+      仅本模块可用，由 RagDatabaseBoundaryTest 守卫；新 Bean 默认关闭。
+    -->
+    <dependency>
+      <groupId>com.baomidou</groupId>
+      <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.flywaydb</groupId>
       <artifactId>flyway-core</artifactId>

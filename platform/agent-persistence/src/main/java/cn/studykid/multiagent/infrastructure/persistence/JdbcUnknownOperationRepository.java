@@ -14,6 +14,7 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.page.PageCursor;
@@ -43,6 +44,9 @@ import cn.studykid.multiagent.ports.persistence.UnknownOperationPort;
  * 比对与染色只记日志、不改变请求结果（P1 影子期）。
  */
 @Repository
+// 架构决策变更：MP 迁移开启时由 MybatisUnknownOperationRepository 接管本 Port；默认仍用本实现。
+// matchIfMissing=true ⇒ 未配置 persistence.mybatis.enabled 时本实现照常生效（行为零变更）。
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcUnknownOperationRepository implements UnknownOperationPort {
 
     private static final String SQL_SELECT = """

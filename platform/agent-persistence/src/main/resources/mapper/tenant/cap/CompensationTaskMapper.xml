@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  CompensationTaskMapper.xml —— 五条 SQL 从 JdbcCompensationTaskRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid cast、ON CONFLICT、状态白名单、now() 全部保留）。
+
+  ⚠️ 入队幂等靠 UNIQUE (tenant_id, kind, target_id) + ON CONFLICT DO NOTHING，
+     不是「先查后插」：先查后插存在 check-then-act 窗口，并发补偿失败会落两条任务，
+     而补偿必须幂等 —— 多余的一条会让额度被释放两次（额度凭空放大）。
+
+  ⚠️ 扫描只取「到期可重试」的任务（next_retry_at IS NULL OR <= now()）：
+     无退避的直接重试会在下游持续故障时形成热循环。
+
+  ⚠️ payload 列是 text 而非 jsonb，故没有 ::jsonb cast（与旧 JDBC 的 setString 一致）。
+
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor：适配层调用前必须先 TenantScope.bind(tenantId)。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.CompensationTaskMapper">
+
+    <sql id="selectColumns">
+        SELECT task_id::text, tenant_id::text, kind, target_id, invocation_id,
+               payload, state, attempts, last_error, created_at, updated_at, next_retry_at
+        FROM cap_compensation_task
+    </sql>
+
+    <!--
+      SQL_INSERT：ON CONFLICT DO NOTHING 是幂等语义本身，不可改成 DO UPDATE。
+      ⚠️ 返回 0 行 = 已存在同键任务（适配层映射为 false），不是失败。
+    -->
+    <insert id="insertIfAbsent">
+        INSERT INTO cap_compensation_task
+            (task_id, tenant_id, kind, target_id, invocation_id, payload,
+             state, attempts, last_error, created_at, updated_at, next_retry_at)
+        VALUES (#{taskId}::uuid, #{tenantId}::uuid, #{kind}, #{targetId}, #{invocationId}, #{payload},
+                #{state}, #{attempts}, #{lastError}, #{createdAt}, #{updatedAt}, #{nextRetryAt})
+        ON CONFLICT (tenant_id, kind, target_id) DO NOTHING
+    </insert>
+
+    <!-- SQL_FIND_BY_ID：显式 tenant_id = ?::uuid 是第一道隔离；RLS 是第二道。 -->
+    <select id="findById" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CompensationTaskDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid AND task_id = #{taskId}::uuid
+    </select>
+
+    <!-- SQL_FIND_PENDING：按创建时间升序取到期可重试任务；limit 由适配层做 Math.max(1, limit)。 -->
+    <select id="findPending" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CompensationTaskDO">
+        <include refid="selectColumns"/>
+        WHERE tenant_id = #{tenantId}::uuid
+          AND state IN ('PENDING', 'FAILED')
+          AND (next_retry_at IS NULL OR next_retry_at &lt;= now())
+        ORDER BY created_at ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- SQL_MARK_COMPLETED：源状态白名单是 CAS 条件，返回 0 行 = 状态已变（调用方据此判定）。 -->
+    <update id="markCompleted">
+        UPDATE cap_compensation_task
+        SET state = 'COMPLETED', updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND task_id = #{taskId}::uuid
+          AND state IN ('PENDING', 'RUNNING', 'FAILED')
+    </update>
+
+    <!--
+      SQL_MARK_FAILED：attempts 自增 + 写入退避时刻（重试/退避语义在这里，不挪到适配层）。
+      ⚠️ updated_at = now() 用 DB 时钟，与旧实现逐字一致。
+      ⚠️ 源状态白名单只有 PENDING/RUNNING：COMPLETED 的任务不得被重新标失败。
+    -->
+    <update id="markFailed">
+        UPDATE cap_compensation_task
+        SET state = 'FAILED', attempts = attempts + 1, last_error = #{error},
+            next_retry_at = #{nextRetryAt}, updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND task_id = #{taskId}::uuid
+          AND state IN ('PENDING', 'RUNNING')
+    </update>
+
+</mapper>

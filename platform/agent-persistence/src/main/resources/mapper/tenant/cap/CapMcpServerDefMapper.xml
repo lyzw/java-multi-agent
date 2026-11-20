@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  CapMcpServerDefMapper.xml —— 四条 SQL 从 JdbcCapMcpServerDefRepository 逐字搬迁
+  （仅 ? → #{param}，其余 cast / ON CONFLICT / 版本筛选 / 排序全部保留）。
+
+  ⚠️ cap_mcp_server_def 是 platform 级对象（无 RLS、无 tenant_id 列），但本文件仍由租户
+     SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），所有语句都会经过
+     RlsTenantBindingInterceptor —— 适配层调用前必须先 TenantScope.bind(平台哨兵)。
+  ⚠️ 本表无租户归属，不接租户级影子（P1 平台级豁免），访问控制走平台级运维通道。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.CapMcpServerDefMapper">
+
+    <sql id="selectColumns">
+        SELECT id, version, transport, endpoint, command, auth_kind, trust_tier,
+               exposed_tool_allowlist::text, connection_risk, dynamic_discovery,
+               config_fingerprint, credential_ref, schema_version, created_at, published_at
+        FROM cap_mcp_server_def
+    </sql>
+
+    <!--
+      SQL_INSERT：插入一条不可变版本行（§6.3 第 1 条 · W-PERM-P5）。
+      ⚠️ ON CONFLICT DO NOTHING 而非 DO UPDATE：已发布版本行不可变（§6.1）。
+      ⚠️ exposed_tool_allowlist 的 ::jsonb cast 与原 JDBC 逐字一致；
+         由适配层在 null 时传 null（未配置）或写 JSON 文本（含显式空清单 "[]"）。
+    -->
+    <insert id="insertVersion">
+        INSERT INTO cap_mcp_server_def
+            (id, version, transport, endpoint, command, auth_kind, trust_tier,
+             exposed_tool_allowlist, connection_risk, dynamic_discovery,
+             config_fingerprint, credential_ref, schema_version, created_at,
+             updated_at, published_at)
+        VALUES (#{id}, #{version}, #{transport}, #{endpoint}, #{command}, #{authKind}, #{trustTier},
+                #{exposedToolAllowlist}::jsonb, #{connectionRisk}, #{dynamicDiscovery},
+                #{configFingerprint}, #{credentialRef}, #{schemaVersion}, #{createdAt}, #{updatedAt}, #{publishedAt})
+        ON CONFLICT (id, version) DO NOTHING
+    </insert>
+
+    <!-- SQL_FIND -->
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapMcpServerDefDO">
+        <include refid="selectColumns"/>
+        WHERE id = #{id} AND version = #{version}
+    </select>
+
+    <!-- SQL_FIND_LATEST_PUBLISHED -->
+    <select id="findLatestPublished" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapMcpServerDefDO">
+        <include refid="selectColumns"/>
+        WHERE id = #{id} AND published_at IS NOT NULL
+        ORDER BY version DESC LIMIT 1
+    </select>
+
+    <!--
+      SQL_LIST_ALL：列出全部 MCP Server 定义（各逻辑 id 的最高版本行）。
+      ⚠️ 用 (id, version) IN (SELECT id, MAX(version) ... GROUP BY id) 取每 id 最高版本，
+         与 CapToolDefPort#listAll 的「最高版本行」语义一致。
+    -->
+    <select id="listAll" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapMcpServerDefDO">
+        <include refid="selectColumns"/>
+        WHERE (id, version) IN (
+          SELECT id, MAX(version) FROM cap_mcp_server_def GROUP BY id
+        )
+        ORDER BY id ASC
+    </select>
+
+</mapper>

@@ -13,6 +13,7 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import cn.studykid.multiagent.application.cap.ContextPolicyReader;
 import cn.studykid.multiagent.core.tenant.SubjectContext;
@@ -62,7 +63,17 @@ import cn.studykid.multiagent.ports.persistence.AuditPort;
  * 无可染色的行级租户归属。⚠️ 已按写路径样板接入<b>影子比对</b>（compare-only）：
  * {@code createAgent} / {@code publishVersion} 入口 1:1 {@code compare("agent")}；
  * 租户隔离在 P1 仍由 RLS 强制兜底；写事务的「未来应用层强制」属于 P2 双写/阻断范围。
+ *
+ * <p>⚠️ <b>默认启用（互补条件）</b>：仅当 {@code persistence.mybatis.enabled} 不是
+ * {@code true}（含未配置）时应生效；开启后由 {@code MybatisAgentManageRepository} 接管。
+ *
+ * <p>⚠️ <b>本类不是组件扫描 Bean</b>（见上条 W-PERM-P0-T6），实际装配点是
+ * {@code ApplicationConfiguration#agentManagePort} 的 {@code @Bean}。类级条件对
+ * {@code @Bean} 内的 {@code new} <b>不生效</b>——该 {@code @Bean} 的互补条件与
+ * 委托切换属于共享装配改动，由主代理统一处理（本批不改共享配置）。
  */
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false",
+        matchIfMissing = true)
 public class JdbcAgentManageRepository implements AgentManagePort {
 
     /** Agent 名称长度上限（自由文本，过长是异常信号）。 */

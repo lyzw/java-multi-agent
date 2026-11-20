@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.RateLimitBucketMapper">
+
+    <select id="currentCount" resultType="long">
+        SELECT count FROM rate_limit_bucket
+        WHERE tenant_id = #{tenantId}::uuid AND bucket_key = #{bucketKey}
+          AND window_start = to_timestamp(
+                floor(extract(epoch from now()) / #{windowSeconds})::bigint * #{windowSeconds})
+    </select>
+
+    <select id="checkAndIncrement" resultType="long">
+        WITH cur AS (
+            INSERT INTO rate_limit_bucket
+                (tenant_id, bucket_key, window_start, count, updated_at)
+            VALUES (#{tenantId}::uuid, #{bucketKey},
+                    to_timestamp(floor(extract(epoch from now()) / #{windowSeconds})::bigint * #{windowSeconds}),
+                    1, now())
+            ON CONFLICT (tenant_id, bucket_key, window_start)
+            DO UPDATE SET count = rate_limit_bucket.count + 1, updated_at = now()
+            RETURNING count
+        )
+        SELECT count FROM cur
+    </select>
+
+</mapper>

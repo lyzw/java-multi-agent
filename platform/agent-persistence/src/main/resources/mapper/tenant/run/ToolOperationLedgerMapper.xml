@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  ToolOperationLedgerMapper.xml —— 9 条 SQL 从 JdbcToolOperationLedger 逐字搬迁
+  （仅 ? -> #{param}，::uuid / ::jsonb / ::tool_risk_level / ::tool_operation_state / ON CONFLICT / RETURNING / now() 全部保留）。
+
+  ⚠️ 两张表 FORCE RLS：租户谓词 + 拦截器 set_config 双重保证。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ToolOperationLedgerMapper">
+
+    <!-- 0. INSERT 主操作行；RETURNING operation_id（空结果由适配层 fail-closed） -->
+    <select id="inFlight" resultType="string">
+        INSERT INTO tool_operation
+            (tenant_id, run_id, tool_name, risk_level, state,
+             idempotency_key, request_digest, tool_arguments, fencing_token)
+        VALUES (#{tenantId}::uuid, #{runId}::uuid, #{toolName}, #{riskLevel}::tool_risk_level, 'IN_FLIGHT',
+                #{idempotencyKey}, #{requestDigest}, #{toolArguments}::jsonb, #{fencingToken})
+        RETURNING operation_id::text
+    </select>
+
+    <!-- 1. reconcile：迁移到目标态（DB 触发器 forbid_attempt_after_terminal 是第二道防线） -->
+    <update id="reconcile">
+        UPDATE tool_operation
+           SET state = #{newState}::tool_operation_state,
+               reconciliation_source = #{source},
+               reconciled_at = now(),
+               updated_at = now()
+         WHERE tenant_id = #{tenantId}::uuid AND operation_id = #{operationId}::uuid
+    </update>
+
+    <!-- 2. 人工处置：MANUAL_DISPOSED -->
+    <update id="manualDispose">
+        UPDATE tool_operation
+           SET state = 'MANUAL_DISPOSED',
+               reconciliation_source = #{source},
+               manual_disposed_by = #{actorId},
+               manual_disposed_at = now(),
+               updated_at = now()
+         WHERE tenant_id = #{tenantId}::uuid AND operation_id = #{operationId}::uuid
+    </update>
+
+    <!-- 3. 对账：列出所有 UNKNOWN 操作（ORDER BY created_at） -->
+    <select id="listUnknown" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ToolOperationLedgerMapper$ToolOperationSummaryRow">
+        SELECT tenant_id, operation_id::text, run_id::text, tool_name,
+               idempotency_key, created_at
+        FROM tool_operation
+        WHERE tenant_id = #{tenantId}::uuid AND state = 'UNKNOWN'
+        ORDER BY created_at
+    </select>
+
+    <!-- 4. 幂等键查重 -->
+    <select id="findDigestByIdempotencyKey" resultType="string">
+        SELECT o.request_digest
+        FROM tool_operation o
+        WHERE o.tenant_id = #{tenantId}::uuid AND o.idempotency_key = #{idempotencyKey}
+    </select>
+
+    <!-- 5. 按 operation_id 查详情（带 attempt_count 子查询） -->
+    <select id="findById" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ToolOperationLedgerMapper$ToolOperationDetailRow">
+        SELECT o.tenant_id, o.operation_id::text, o.state::text, o.fencing_token,
+               (SELECT count(*) FROM tool_operation_attempt a
+                WHERE a.tenant_id = o.tenant_id AND a.operation_id = o.operation_id)
+               AS attempt_count
+        FROM tool_operation o
+        WHERE o.tenant_id = #{tenantId}::uuid AND o.operation_id = #{operationId}::uuid
+    </select>
+
+    <!-- 6. 按 operation_id 查原始 tool 调用参数 -->
+    <select id="findArgsById" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ToolOperationLedgerMapper$ToolOperationArgsRow">
+        SELECT o.tenant_id, o.tool_name, o.tool_arguments::text, o.idempotency_key
+        FROM tool_operation o
+        WHERE o.tenant_id = #{tenantId}::uuid AND o.operation_id = #{operationId}::uuid
+    </select>
+
+    <!-- 7. 按 idempotency_key 查详情（带 attempt_count 子查询） -->
+    <select id="findByIdempotencyKey" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ToolOperationLedgerMapper$ToolOperationDetailRow">
+        SELECT o.tenant_id, o.operation_id::text, o.state::text, o.fencing_token,
+               (SELECT count(*) FROM tool_operation_attempt a
+                WHERE a.tenant_id = o.tenant_id AND a.operation_id = o.operation_id)
+               AS attempt_count
+        FROM tool_operation o
+        WHERE o.tenant_id = #{tenantId}::uuid AND o.idempotency_key = #{idempotencyKey}
+    </select>
+
+    <!-- 8. 写入 attempt 行（对账） -->
+    <insert id="recordAttempt">
+        INSERT INTO tool_operation_attempt
+            (tenant_id, operation_id, attempt_number, state, fencing_token,
+             completed_at, error_class, error_message, result_unknown)
+        VALUES (#{tenantId}::uuid, #{operationId}::uuid, #{attemptNumber}, #{state}::tool_operation_state,
+                #{fencingToken}, now(), #{errorClass}, #{errorMessage}, #{resultUnknown})
+    </insert>
+
+</mapper>

@@ -10,6 +10,7 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import tools.jackson.core.type.TypeReference;
@@ -30,6 +31,9 @@ import cn.studykid.multiagent.ports.persistence.RunInputPort;
  * 同一铁律 —— RLS 之外应用侧条件是第一道防线。
  */
 @Repository
+// 架构决策变更：MP 开启时由 MybatisRunInputRepository 接管本 Port；默认仍用本实现。
+// matchIfMissing=true ⇒ 未配置 persistence.mybatis.enabled 时本实现照常生效（行为零变更）。
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcRunInputRepository implements RunInputPort {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

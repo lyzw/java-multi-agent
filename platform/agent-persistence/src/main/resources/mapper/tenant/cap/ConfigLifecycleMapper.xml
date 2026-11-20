@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  ConfigLifecycleMapper.xml —— 12 条 SQL 从 JdbcConfigLifecycleRepository 的 switch 分支逐字搬迁
+  （仅 ? -> #{param}，其余 ::cap_lifecycle_state / ::uuid cast 全部保留）。
+
+  ⚠️ CAS 前置条件是「期望原状态」：WHERE ... AND lifecycle_state = #{expectedState}::cap_lifecycle_state。
+     没有它，两个并发操作（一个想发布、一个想停用）会各自读到同一个旧状态，
+     后写者直接覆盖先写者 —— 状态迁移就成了「谁最后写谁赢」。
+
+  ⚠️ PUBLISHED -> DEPRECATED 能穿过不可变触发器：V15 的 forbid_published_def_mutation
+     在 V17 里被扩展为「允许纯元数据的停用迁移」（内容一字未改）。
+     本文件不写 published_at：「已发布」由发布动作决定，生命周期迁移只动状态列。
+
+  ⚠️ 对象类型分两族：
+       · 平台级（tool / skill / mcp_server）：无 tenant_id，按 id 寻址；
+       · 租户级（agent / result_contract / routing_policy）：按 (tenant_id, 业务 id, version) 寻址，
+         且都是 FORCE RLS 表 —— 未绑定租户上下文时读写恒为 0 行（不报错的失败）。
+
+  ⚠️ contract_id / policy_id 是可读字符串，绝不能写 ?::uuid（V23 / V24 的教训）：
+     非 UUID 形式的 id 会让整条语句报错，而那正是「登记失败」与「类型写错」两种现场混在一起的地方。
+
+  ⚠️ 本文件由租户 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     所有语句都会经过 RlsTenantBindingInterceptor：适配层调用前必须先 TenantScope.bind(...)。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.ConfigLifecycleMapper">
+
+    <!-- ══════════ transition：CAS 条件 UPDATE（返回受影响行数，1 = 迁移成功）══════════ -->
+
+    <update id="transitionTool">
+        UPDATE cap_tool_def SET lifecycle_state = #{targetState}::cap_lifecycle_state
+        WHERE id = #{objectId} AND version = #{version}
+          AND lifecycle_state = #{expectedState}::cap_lifecycle_state
+    </update>
+
+    <update id="transitionSkill">
+        UPDATE cap_skill_def SET lifecycle_state = #{targetState}::cap_lifecycle_state
+        WHERE id = #{objectId} AND version = #{version}
+          AND lifecycle_state = #{expectedState}::cap_lifecycle_state
+    </update>
+
+    <update id="transitionMcpServer">
+        UPDATE cap_mcp_server_def SET lifecycle_state = #{targetState}::cap_lifecycle_state
+        WHERE id = #{objectId} AND version = #{version}
+          AND lifecycle_state = #{expectedState}::cap_lifecycle_state
+    </update>
+
+    <!-- agent_id 是 uuid 列：cast 保留；agent 无 tenant_id 列（全局实体）。 -->
+    <update id="transitionAgent">
+        UPDATE cap_agent_def SET lifecycle_state = #{targetState}::cap_lifecycle_state
+        WHERE agent_id = #{objectId}::uuid AND version = #{version}
+          AND lifecycle_state = #{expectedState}::cap_lifecycle_state
+    </update>
+
+    <!-- 租户级：tenant_id 谓词是第一道隔离，RLS 是第二道。 -->
+    <update id="transitionResultContract">
+        UPDATE cap_result_contract SET lifecycle_state = #{targetState}::cap_lifecycle_state
+        WHERE tenant_id = #{tenantId}::uuid AND contract_id = #{objectId} AND version = #{version}
+          AND lifecycle_state = #{expectedState}::cap_lifecycle_state
+    </update>
+
+    <update id="transitionRoutingPolicy">
+        UPDATE cap_routing_policy SET lifecycle_state = #{targetState}::cap_lifecycle_state
+        WHERE tenant_id = #{tenantId}::uuid AND policy_id = #{objectId} AND version = #{version}
+          AND lifecycle_state = #{expectedState}::cap_lifecycle_state
+    </update>
+
+    <!-- ══════════ stateOf：状态读取（无行 -> null，适配层映射为 Optional.empty）══════════ -->
+
+    <select id="selectToolState" resultType="java.lang.String">
+        SELECT lifecycle_state FROM cap_tool_def
+        WHERE id = #{objectId} AND version = #{version}
+    </select>
+
+    <select id="selectSkillState" resultType="java.lang.String">
+        SELECT lifecycle_state FROM cap_skill_def
+        WHERE id = #{objectId} AND version = #{version}
+    </select>
+
+    <select id="selectMcpServerState" resultType="java.lang.String">
+        SELECT lifecycle_state FROM cap_mcp_server_def
+        WHERE id = #{objectId} AND version = #{version}
+    </select>
+
+    <select id="selectAgentState" resultType="java.lang.String">
+        SELECT lifecycle_state FROM cap_agent_def
+        WHERE agent_id = #{objectId}::uuid AND version = #{version}
+    </select>
+
+    <!-- 租户级 2 分支额外取 tenant_id::text：影子染色必须读结果行的真实归属（不是绑定租户）。 -->
+    <select id="selectResultContractState"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.LifecycleStateRow">
+        SELECT tenant_id::text, lifecycle_state FROM cap_result_contract
+        WHERE tenant_id = #{tenantId}::uuid AND contract_id = #{objectId} AND version = #{version}
+    </select>
+
+    <select id="selectRoutingPolicyState"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.LifecycleStateRow">
+        SELECT tenant_id::text, lifecycle_state FROM cap_routing_policy
+        WHERE tenant_id = #{tenantId}::uuid AND policy_id = #{objectId} AND version = #{version}
+    </select>
+
+</mapper>

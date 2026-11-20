@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  CapSkillDefMapper.xml —— 四条 SQL 从 JdbcCapSkillDefRepository 逐字搬迁
+  （仅 ? → #{param}，其余 cast / ON CONFLICT / DISTINCT ON / 排序全部保留）。
+
+  ⚠️ cap_skill_def 是 platform 级对象（无 RLS、无 tenant_id 列），但本文件仍由租户
+     SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），所有语句都会经过
+     RlsTenantBindingInterceptor —— 适配层调用前必须先 TenantScope.bind(平台哨兵)。
+  ⚠️ 本表无租户归属，不接租户级影子（P1 平台级豁免），访问控制走平台级运维通道。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.CapSkillDefMapper">
+
+    <sql id="selectColumns">
+        SELECT id, version, name, description, purpose, usage::text, content::text, declared_tools::text, declared_mcp::text,
+               risk_ceiling, param_policies::text, required_caps::text, config_fingerprint,
+               schema_version, created_at, published_at
+        FROM cap_skill_def
+    </sql>
+
+    <!--
+      SQL_INSERT：插入一条不可变版本行（§6.3 第 1 条 · W-PERM-P5）。
+      ⚠️ ON CONFLICT DO NOTHING 而非 DO UPDATE：已发布版本行不可变（§6.1）。
+      ⚠️ 参数位次（三级描述改造）：
+         1 id / 2 version / 3 name / 4 description（遗留单级描述列，新入库一律 NULL）
+         / 5 purpose / 6 usage · jsonb / 7 content · text / 8 declared_tools · jsonb / 9 declared_mcp · jsonb
+         / 10 risk_ceiling / 11 param_policies · jsonb / 12 required_caps · jsonb
+         / 13 config_fingerprint / 14 schema_version / 15 created_at / 16 updated_at / 17 published_at
+         —— 漏掉 content 之后的 +1 会静默写坏数据（schema_version 写进 published_at…）。
+      ⚠️ namespace 固定写 'platform'（与旧 SQL 的字面量一致）。
+    -->
+    <insert id="insertVersion">
+        INSERT INTO cap_skill_def
+            (id, version, name, description, purpose, usage, content, declared_tools, declared_mcp,
+             risk_ceiling, param_policies, required_caps, namespace,
+             config_fingerprint, schema_version, created_at, updated_at, published_at)
+        VALUES (#{id}, #{version}, #{name}, #{description}, #{purpose}, #{usage}::jsonb, #{content}::text,
+                #{declaredTools}::jsonb, #{declaredMcp}::jsonb, #{riskCeiling}, #{paramPolicies}::jsonb, #{requiredCaps}::jsonb, 'platform',
+                #{configFingerprint}, #{schemaVersion}, #{createdAt}, #{updatedAt}, #{publishedAt})
+        ON CONFLICT (id, version) DO NOTHING
+    </insert>
+
+    <!-- SQL_FIND -->
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapSkillDefDO">
+        <include refid="selectColumns"/>
+        WHERE id = #{id} AND version = #{version}
+    </select>
+
+    <!-- SQL_FIND_LATEST_PUBLISHED -->
+    <select id="findLatestPublished" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapSkillDefDO">
+        <include refid="selectColumns"/>
+        WHERE id = #{id} AND published_at IS NOT NULL
+        ORDER BY version DESC LIMIT 1
+    </select>
+
+    <!--
+      SQL_LIST_ALL：每个逻辑 id 的最高版本行（只读目录，见 CapSkillDefPort#listAll()）。
+      ⚠️ DISTINCT ON + 首列一致的排序键（PG 强制要求）。
+    -->
+    <select id="listAll" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapSkillDefDO">
+        SELECT DISTINCT ON (id) id, version, name, description, purpose, usage::text, content::text,
+               declared_tools::text, declared_mcp::text,
+               risk_ceiling, param_policies::text, required_caps::text, config_fingerprint,
+               schema_version, created_at, published_at
+        FROM cap_skill_def ORDER BY id, version DESC
+    </select>
+
+</mapper>

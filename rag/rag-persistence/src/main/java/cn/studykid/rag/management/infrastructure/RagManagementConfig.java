@@ -6,6 +6,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -339,11 +340,23 @@ public class RagManagementConfig {
      * @return 别名端口
      */
     @Bean
+    // 架构决策变更：MP 试点开启时由 MybatisKnowledgeAliasRepository 接管；默认仍用本实现。
+    @ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
     public cn.studykid.rag.management.ports.KnowledgeAliasPort knowledgeAliasPort(
             JdbcTemplate jdbcTemplate,
             @Qualifier("ragManagementTransactionTemplate")
             TransactionTemplate transactionTemplate) {
         return new JdbcKnowledgeAliasRepository(jdbcTemplate, transactionTemplate);
+    }
+
+    /** MP 试点：别名端口的 MyBatis-Plus 实现（默认关闭，开启时与上面互斥）。 */
+    @Bean
+    @ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
+    public cn.studykid.rag.management.ports.KnowledgeAliasPort mybatisKnowledgeAliasPort(
+            cn.studykid.rag.management.infrastructure.mapper.RagKpAliasMapper mapper,
+            @Qualifier("ragManagementTransactionTemplate")
+            TransactionTemplate transactionTemplate) {
+        return new MybatisKnowledgeAliasRepository(mapper, transactionTemplate);
     }
 
     /**

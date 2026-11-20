@@ -31,6 +31,7 @@ import cn.studykid.multiagent.infrastructure.security.AuthzShadowReporter;
 import cn.studykid.multiagent.infrastructure.security.ScopedDataAccess;
 import cn.studykid.multiagent.ports.persistence.RunToolLedgerPort;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -49,6 +50,7 @@ import org.springframework.stereotype.Repository;
  * </ol>
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcToolOperationLedger implements RunToolLedgerPort {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcToolOperationLedger.class);

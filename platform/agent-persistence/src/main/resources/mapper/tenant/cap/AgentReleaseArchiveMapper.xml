@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  AgentReleaseArchiveMapper.xml —— SQL 从 JdbcAgentReleaseArchiveRepository 逐字搬迁
+  （仅 ? -> #{param}，其余 ::uuid / ::jsonb cast、ON CONFLICT DO NOTHING、RETURNING 全部保留）。
+
+  ⚠️ 平台全局表：agent_version / execution_snapshot 已全局化、无 tenant_id 列。
+     本文件仍由租户通道 SqlSessionFactory 加载（classpath*:mapper/tenant/**/*.xml），
+     经 RlsTenantBindingInterceptor 绑定会话变量（PLATFORM 作用域用零 UUID 哨兵）。
+  ⚠️ agent_version 是不可变版本行（唯一约束 (agent_id, version_number)）：
+     重复归档用 ON CONFLICT DO NOTHING 并返回空结果（适配层据此返回 false，不覆盖既有行）。
+  ⚠️ execution_snapshot 写入前先 SELECT 1 判存在（与旧实现同序），存在即跳过、不回写既有快照。
+-->
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.cap.mapper.AgentReleaseArchiveMapper">
+
+    <!--
+      ⚠️ 声明为 <select> 而非 <insert>：INSERT ... RETURNING 需要读回结果集
+         （与 AuditLogMapper.insertRecord 同款处理），<insert> 只能拿到影响行数。
+    -->
+    <select id="insertVersion"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AgentVersionDO">
+        INSERT INTO agent_version
+            (agent_id, version_number, definition, published_at, created_at)
+        VALUES (#{agentId}::uuid, #{version}, #{definition}::jsonb, now(), now())
+        ON CONFLICT (agent_id, version_number) DO NOTHING
+        RETURNING version_id::text AS version_id
+    </select>
+
+    <select id="findVersionId"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.AgentVersionDO">
+        SELECT version_id::text AS version_id FROM agent_version
+        WHERE agent_id = #{agentId}::uuid AND version_number = #{version}
+    </select>
+
+    <select id="findAgent" resultType="java.lang.Integer">
+        SELECT 1 FROM agent WHERE agent_id = #{agentId}::uuid
+    </select>
+
+    <select id="findSnapshot" resultType="java.lang.Integer">
+        SELECT 1 FROM execution_snapshot WHERE version_id = #{versionId}::uuid
+    </select>
+
+    <insert id="insertSnapshot">
+        INSERT INTO execution_snapshot
+            (version_id, agent_config, prompt_config, tool_contracts, run_config,
+             context_policy)
+        VALUES (#{versionId}::uuid, #{agentConfig}::jsonb, '{}'::jsonb, '{}'::jsonb,
+                #{runConfig}::jsonb, #{contextPolicy}::jsonb)
+    </insert>
+
+</mapper>

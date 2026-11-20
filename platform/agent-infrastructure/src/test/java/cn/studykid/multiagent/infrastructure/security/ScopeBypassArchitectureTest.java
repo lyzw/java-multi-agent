@@ -123,7 +123,28 @@ class ScopeBypassArchitectureTest {
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/statistics/JdbcStatisticsRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcErasureRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/JdbcRiskEventRepository.java",
-            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigLifecycleRepository.java");
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/JdbcConfigLifecycleRepository.java",
+            // ── W2/W3 MyBatis-Plus 适配层（同一 Gate 契约，逐个与旧实现等价）──
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisConfigChangeRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisConfigOverrideRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisConfigPublishRequestRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisRunEventAppendRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisRunInputRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisAgentInvocationRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisAuthzVersionRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisCapAgentChildRefRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisCapAgentDefRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisCapResultContractRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisCapRoutingPolicyRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisCapabilitySnapshotRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisCompensationTaskRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisConfigLifecycleRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisConfigReleaseRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisExecutionIntentRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisResultEventRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisAgentManageRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisAgentQueryRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisProfileQueryRepository.java");
 
     /**
      * 平台级 / 混合作用域仓储（刻意<b>不</b>接 Gate、<b>不</b>登记为已接）：
