@@ -215,7 +215,16 @@ public class ApplicationConfiguration {
     @Bean
     public cn.studykid.multiagent.ports.persistence.RunClaimPort runClaimPort(
             DataSource dataSource,
-            cn.studykid.multiagent.ports.persistence.AuditPort auditPort) {
+            cn.studykid.multiagent.ports.persistence.AuditPort auditPort,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.RunClaimMapper>
+                    runClaimMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && runClaimMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisRunClaimRepository(runClaimMapper.getObject(), dataSource, auditPort);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcRunClaimRepository(
                 dataSource, auditPort);
     }

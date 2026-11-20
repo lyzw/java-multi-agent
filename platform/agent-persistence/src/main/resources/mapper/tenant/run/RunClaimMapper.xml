@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.RunClaimMapper">
+
+    <!--
+      ⚠️ 所有 SQL 从 JdbcRunClaimRepository """...""" 文本块逐字搬运，PG 特有语义零改动承诺：
+        [0] 收敛超限 RUNNING
+        [1] WITH MATERIALIZED CTE + UPDATE…FROM + FOR UPDATE SKIP LOCKED（claimBatch 核心）
+        [2] claimSpecificRun CAS fencing
+        [3] claimParkedRunForResume CAS fencing
+        [4] renewLease CAS fencing
+        [5] releaseLease CAS fencing
+        [6] commitResult CAS fencing + 写结果/错误
+        [7] isCurrentGeneration CAS fencing 校验
+        [8] requestCancel
+        [9] isCancelled
+        [10] failStaleParkedRuns 收敛过期 WAITING_APPROVAL
+    -->
+
+    <!-- [0] 收敛超限 RUNNING：attempt >= maxAttempts + 租约过期 → FAILED(MAX_ATTEMPTS_EXCEEDED) -->
+    <update id="failOverCapExpired">
+        UPDATE run
+        SET state = 'FAILED',
+            error_code = 'MAX_ATTEMPTS_EXCEEDED',
+            result_payload = jsonb_build_object('reason', '重试次数已达上限'),
+            completed_at = now(),
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid
+          AND state = 'RUNNING'
+          AND attempt <![CDATA[ >= ]]> #{maxAttempts}
+          AND (lease_expires_at IS NULL OR lease_expires_at < now())
+    </update>
+
+    <!--
+      [1] 批量领取 —— 核心复杂度集中在此：
+        WITH candidates AS MATERIALIZED → UPDATE…FROM → RETURNING
+        FOR UPDATE SKIP LOCKED 并发 Worker 无阻塞
+        IS DISTINCT FROM 放行 NULL + 排除 SSE_DIRECT_LEASE_OWNER
+    -->
+    <update id="claimBatch">
+        WITH candidates AS MATERIALIZED (
+            SELECT run_id FROM run
+            WHERE tenant_id = #{tenantId}::uuid
+              AND lease_owner IS DISTINCT FROM #{sseDirectLeaseOwner}
+              AND (state = 'QUEUED'
+                   OR (state = 'RUNNING'
+                       AND (lease_expires_at IS NULL OR lease_expires_at < now())))
+            ORDER BY created_at
+            LIMIT #{limit}
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE run r
+        SET state = 'RUNNING',
+            lease_owner = #{workerId},
+            lease_expires_at = now() + (#{leaseSeconds} || ' seconds')::interval,
+            fencing_token = r.fencing_token + 1,
+            attempt = r.attempt + 1,
+            updated_at = now()
+        FROM candidates c
+        WHERE r.run_id = c.run_id
+        RETURNING r.run_id AS runId, r.fencing_token AS fencingToken,
+                  r.lease_expires_at AS leaseExpiresAt, r.attempt AS attempt,
+                  r.deadline_at AS deadlineAt
+    </update>
+
+    <!-- [2] claimSpecificRun：CAS fencing + 状态围栏 -->
+    <update id="claimSpecific">
+        UPDATE run
+        SET state = 'RUNNING',
+            lease_owner = #{workerId},
+            lease_expires_at = now() + (#{leaseSeconds} || ' seconds')::interval,
+            fencing_token = fencing_token + 1,
+            attempt = attempt + 1,
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid
+          AND run_id = #{runId}::uuid
+          AND fencing_token = #{fencingToken}
+          AND (state = 'QUEUED'
+               OR (state = 'RUNNING'
+                   AND (lease_expires_at IS NULL OR lease_expires_at < now())))
+        RETURNING run_id AS runId, fencing_token AS fencingToken,
+                  lease_expires_at AS leaseExpiresAt, attempt AS attempt,
+                  deadline_at AS deadlineAt
+    </update>
+
+    <!-- [3] claimParkedRunForResume：WAITING_APPROVAL CAS fencing + lease IS NULL -->
+    <update id="claimParkedForResume">
+        UPDATE run
+        SET state = 'RUNNING',
+            lease_owner = #{workerId},
+            lease_expires_at = now() + (#{leaseSeconds} || ' seconds')::interval,
+            fencing_token = fencing_token + 1,
+            attempt = attempt + 1,
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid
+          AND run_id = #{runId}::uuid
+          AND fencing_token = #{fencingToken}
+          AND state = 'WAITING_APPROVAL'
+          AND lease_owner IS NULL
+        RETURNING run_id AS runId, fencing_token AS fencingToken,
+                  lease_expires_at AS leaseExpiresAt, attempt AS attempt,
+                  deadline_at AS deadlineAt
+    </update>
+
+    <!-- [4] renewLease：CAS fencing + lease_owner 归属 -->
+    <update id="renewLease">
+        UPDATE run
+        SET lease_expires_at = now() + (#{leaseSeconds} || ' seconds')::interval,
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid
+          AND run_id = #{runId}::uuid
+          AND state = 'RUNNING'
+          AND lease_owner = #{workerId}
+          AND fencing_token = #{fencingToken}
+    </update>
+
+    <!-- [5] releaseLease：CAS fencing + lease_owner 归属 -->
+    <update id="releaseLease">
+        UPDATE run
+        SET lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid
+          AND run_id = #{runId}::uuid
+          AND lease_owner = #{workerId}
+          AND fencing_token = #{fencingToken}
+    </update>
+
+    <!-- [6] commitResult：CAS fencing + state='RUNNING' 围栏 + 写结果/错误 -->
+    <update id="commitResult">
+        UPDATE run
+        SET state = #{newState}::run_state,
+            result_payload = #{resultPayloadJson}::jsonb,
+            error_code = #{errorCode},
+            completed_at = now(),
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid
+          AND run_id = #{runId}::uuid
+          AND state = 'RUNNING'
+          AND fencing_token = #{fencingToken}
+    </update>
+
+    <!-- [7] isCurrentGeneration：SELECT 1 存在性校验 CAS fencing -->
+    <select id="isCurrentGeneration" resultType="boolean">
+        SELECT COUNT(*) > 0 FROM run
+        WHERE tenant_id = #{tenantId}::uuid
+          AND run_id = #{runId}::uuid
+          AND fencing_token = #{fencingToken}
+    </select>
+
+    <!-- readFencingToken：claimSpecificRun / claimParkedRunForResume 前置 SELECT -->
+    <select id="readFencingToken" resultType="java.lang.Long">
+        SELECT fencing_token FROM run
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+    </select>
+
+    <!-- [8] requestCancel：QUEUED/RUNNING → CANCELLED -->
+    <update id="requestCancel">
+        UPDATE run
+        SET state = 'CANCELLED'::run_state,
+            cancel_requested_at = now(),
+            completed_at = now(),
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid
+          AND run_id = #{runId}::uuid
+          AND state IN ('QUEUED', 'RUNNING')
+    </update>
+
+    <!-- [9] isCancelled：state='CANCELLED' OR cancel_requested_at IS NOT NULL -->
+    <select id="isCancelled" resultType="boolean">
+        SELECT COUNT(*) > 0 FROM run
+        WHERE tenant_id = #{tenantId}::uuid
+          AND run_id = #{runId}::uuid
+          AND (state = 'CANCELLED' OR cancel_requested_at IS NOT NULL)
+    </select>
+
+    <!-- [10] failStaleParkedRuns：收敛过期 WAITING_APPROVAL → FAILED -->
+    <update id="failStaleParkedRuns">
+        UPDATE run
+        SET state = 'FAILED'::run_state,
+            error_code = 'APPROVAL_TIMEOUT',
+            error_message = '等待人工审批超时，未执行',
+            result_payload = '{"reason":"approval_timeout"}'::jsonb,
+            completed_at = now(),
+            updated_at = now(),
+            lease_owner = NULL,
+            lease_expires_at = NULL
+        WHERE tenant_id = #{tenantId}::uuid
+          AND state = 'WAITING_APPROVAL'
+          AND updated_at < now() - (#{maxWaitingSeconds} || ' seconds')::interval
+    </update>
+
+</mapper>
