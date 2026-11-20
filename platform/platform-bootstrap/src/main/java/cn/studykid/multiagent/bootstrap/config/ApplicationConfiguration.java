@@ -172,7 +172,16 @@ public class ApplicationConfiguration {
      */
     @Bean
     public cn.studykid.multiagent.ports.persistence.ExecutionSnapshotPort executionSnapshotPort(
-            DataSource dataSource) {
+            DataSource dataSource,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.ExecutionSnapshotMapper>
+                    executionSnapshotMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && executionSnapshotMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisExecutionSnapshotRepository(executionSnapshotMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcExecutionSnapshotResolver(
                 dataSource);
     }
@@ -454,7 +463,16 @@ public class ApplicationConfiguration {
 
     @Bean
     public cn.studykid.multiagent.ports.persistence.AuditPort auditPort(
-            DataSource dataSource) {
+            DataSource dataSource,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.AuditMapper>
+                    auditMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && auditMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisAuditRepository(auditMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcAuditRepository(
                 dataSource);
     }

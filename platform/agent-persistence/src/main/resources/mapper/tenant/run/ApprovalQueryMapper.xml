@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ApprovalQueryMapper">
+    <select id="list" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ApprovalQueryMapper$ApprovalRow">
+        SELECT a.approval_id AS approvalId, a.operation_id AS operationId,
+               a.state AS state, a.requirement AS requirement,
+               a.argument_digest AS argumentDigest, a.target_resource AS targetResource,
+               a.approver_scope AS approverScope, a.approver_id AS approverId,
+               a.expires_at AS expiresAt, a.decided_at AS decidedAt, a.created_at AS createdAt,
+               o.run_id AS runId, a.tenant_id AS tenantId
+        FROM approval a
+        JOIN tool_operation o ON o.tenant_id = a.tenant_id AND o.operation_id = a.operation_id
+        WHERE a.tenant_id = #{tenantId}::uuid
+        <if test="state != null and state != ''"> AND a.state = #{state}::approval_state</if>
+        <if test="cursorApprovalId != null and cursorApprovalId != ''">
+            AND a.approval_id <![CDATA[ < ]]> #{cursorApprovalId}::uuid
+        </if>
+        ORDER BY a.created_at DESC, a.approval_id DESC
+        LIMIT #{limit}
+    </select>
+    <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ApprovalQueryMapper$ApprovalRow">
+        SELECT a.approval_id AS approvalId, a.operation_id AS operationId,
+               a.state AS state, a.requirement AS requirement,
+               a.argument_digest AS argumentDigest, a.target_resource AS targetResource,
+               a.approver_scope AS approverScope, a.approver_id AS approverId,
+               a.expires_at AS expiresAt, a.decided_at AS decidedAt, a.created_at AS createdAt,
+               o.run_id AS runId, a.tenant_id AS tenantId
+        FROM approval a
+        JOIN tool_operation o ON o.tenant_id = a.tenant_id AND o.operation_id = a.operation_id
+        WHERE a.tenant_id = #{tenantId}::uuid AND a.approval_id = #{approvalId}::uuid
+    </select>
+    <update id="decide">
+        UPDATE approval
+        SET state = #{newState}::approval_state, approver_id = #{approverId}, decided_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND approval_id = #{approvalId}::uuid
+    </update>
+</mapper>

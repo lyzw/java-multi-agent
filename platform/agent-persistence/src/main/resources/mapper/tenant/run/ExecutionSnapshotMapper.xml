@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ExecutionSnapshotMapper">
+    <!-- PG JOIN 6 表，零改动搬运 -->
+    <select id="resolve" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ExecutionSnapshotMapper$SnapshotRow">
+        SELECT es.snapshot_id::text AS snapshotId, v.version_number AS versionNumber
+        FROM agent a
+        JOIN tenant_agent_binding b
+          ON b.agent_id = a.agent_id AND b.tenant_id = #{tenantId}::uuid
+         AND b.status = 'ACTIVE'
+        JOIN agent_version v
+          ON v.agent_id = a.agent_id
+         AND (b.pinned_version IS NULL OR v.version_number = b.pinned_version)
+        JOIN execution_snapshot es ON es.version_id = v.version_id
+        WHERE a.agent_id = #{agentId}::uuid
+          AND v.published_at IS NOT NULL
+        ORDER BY v.version_number DESC
+        LIMIT 1
+    </select>
+</mapper>

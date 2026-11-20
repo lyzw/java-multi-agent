@@ -15,6 +15,7 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.page.PageCursor;
@@ -53,6 +54,7 @@ import cn.studykid.multiagent.ports.persistence.Page;
  * 的 {@code loadForUpdate} 同口径，不进「已接 Gate 即全绿」假象）。
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcApprovalQueryRepository implements ApprovalQueryPort {
 
     private static final String SQL_SELECT = """

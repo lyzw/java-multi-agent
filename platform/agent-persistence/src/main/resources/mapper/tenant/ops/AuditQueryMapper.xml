@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.AuditQueryMapper">
+    <select id="query" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.AuditQueryMapper$AuditEntryRow">
+        SELECT tenant_id, audit_id, actor_id, action, resource_type, resource_id,
+               correlation_id, created_at, detail::text AS detail
+        FROM audit_record
+        WHERE tenant_id = #{tenantId}::uuid
+        <if test="action != null and action != ''"> AND action = #{action}</if>
+        <if test="resourceType != null and resourceType != ''"> AND resource_type = #{resourceType}</if>
+        <if test="resourceId != null and resourceId != ''"> AND resource_id = #{resourceId}</if>
+        <if test="from != null"> AND created_at <![CDATA[ >= ]]> #{from}</if>
+        <if test="to != null"> AND created_at <![CDATA[ <= ]]> #{to}</if>
+        ORDER BY created_at DESC
+    </select>
+</mapper>

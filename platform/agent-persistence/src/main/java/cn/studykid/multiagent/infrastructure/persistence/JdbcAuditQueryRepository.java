@@ -15,6 +15,7 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.page.PageCursor;
@@ -41,6 +42,7 @@ import org.springframework.beans.factory.annotation.Autowired;
  * <p>⚠️ <b>分页全序</b>：{@code ORDER BY created_at DESC, audit_id DESC}。
  */
 @Repository
+@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
 public class JdbcAuditQueryRepository implements AuditQueryPort {
 
     private static final String SQL_BASE = """

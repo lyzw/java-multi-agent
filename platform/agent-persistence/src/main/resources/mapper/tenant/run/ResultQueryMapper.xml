@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ResultQueryMapper">
+    <select id="readRun" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ResultQueryMapper$RunRow">
+        SELECT run_id::text AS runId, tenant_id::text AS tenantId,
+               state::text AS state, completed_at AS completedAt,
+               error_code AS errorCode,
+               CASE WHEN state = 'SUCCEEDED'
+                    THEN result_payload->>'content' END AS explanation
+        FROM run
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+    </select>
+    <select id="weaknesses" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ResultQueryMapper$WeaknessRow">
+        SELECT tenant_id::text AS tenantId, knowledge_point AS knowledgePoint,
+               error_type AS errorType, confidence AS confidence
+        FROM weakness_record
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+        ORDER BY created_at ASC LIMIT 50
+    </select>
+    <select id="steps" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ResultQueryMapper$StepRow">
+        SELECT tenant_id::text AS tenantId, step_number AS stepNumber,
+               state::text AS state, step_type AS stepType,
+               output_payload::text AS output
+        FROM run_step
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+        ORDER BY step_number ASC LIMIT 100
+    </select>
+    <select id="unknownTools" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ResultQueryMapper$ToolOpRow">
+        SELECT operation_id::text AS operationId, tenant_id::text AS tenantId,
+               tool_name AS toolName, state::text AS state
+        FROM tool_operation
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid AND state = 'UNKNOWN'
+        ORDER BY created_at ASC LIMIT 50
+    </select>
+</mapper>

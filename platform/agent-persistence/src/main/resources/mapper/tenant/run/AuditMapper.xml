@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.AuditMapper">
+    <select id="findByResource" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.AuditMapper$AuditViewRow">
+        SELECT tenant_id::text AS tenantId, audit_id::text AS auditId,
+               actor_id AS actorId, action AS action,
+               resource_type AS resourceType, resource_id AS resourceId,
+               created_at AS createdAt
+        FROM audit_record
+        WHERE tenant_id = #{tenantId}::uuid AND resource_type = #{resourceType}
+        <if test="resourceId != null and resourceId != ''"> AND resource_id = #{resourceId}</if>
+        ORDER BY created_at ASC
+    </select>
+    <!-- INSERT RETURNING → MyBatis 用 resultType 接 -->
+    <insert id="insert" resultType="java.lang.String">
+        INSERT INTO audit_record (tenant_id, actor_id, action, resource_type, resource_id, detail)
+        VALUES (#{tenantId}::uuid, #{actorId}, #{action}, #{resourceType}, #{resourceId}, #{detailJson}::jsonb)
+        RETURNING audit_id::text
+    </insert>
+</mapper>
