@@ -489,7 +489,16 @@ public class ApplicationConfiguration {
     @Bean
     public cn.studykid.multiagent.ports.persistence.ApprovalPort approvalPort(
             DataSource dataSource,
-            cn.studykid.multiagent.ports.persistence.AuditPort auditPort) {
+            cn.studykid.multiagent.ports.persistence.AuditPort auditPort,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.ApprovalMapper>
+                    approvalMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        if (mybatisEnabled && approvalMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisApprovalRepository(approvalMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.JdbcApprovalRepository(
                 dataSource, auditPort);
     }
@@ -1230,7 +1239,12 @@ public class ApplicationConfiguration {
     public cn.studykid.multiagent.ports.persistence.DecisionAuditPort decisionAuditPort(
             DataSource dataSource,
             @org.springframework.beans.factory.annotation.Value(
-                    "${agent.alerts.webhook-url:}") String alertWebhookUrl) {
+                    "${agent.alerts.webhook-url:}") String alertWebhookUrl,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.DecisionAuditMapper>
+                    decisionAuditMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
         // ⚠️ 告警外发默认关闭（空白 url → Noop）：不配置目标就不外发，
         //    避免「悄悄把审计内容发给一个没人审过的地址」。
         cn.studykid.multiagent.ports.monitoring.AlertWebhookPort webhook =
@@ -1238,6 +1252,10 @@ public class ApplicationConfiguration {
                         ? new cn.studykid.multiagent.infrastructure.monitoring.NoopAlertWebhook()
                         : new cn.studykid.multiagent.infrastructure.monitoring.HttpAlertWebhook(
                                 alertWebhookUrl);
+        if (mybatisEnabled && decisionAuditMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisDecisionAuditRepository(decisionAuditMapper.getObject(), dataSource);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence.cap
                 .JdbcDecisionAuditRepository(dataSource, webhook);
     }
@@ -1621,9 +1639,19 @@ public class ApplicationConfiguration {
     public cn.studykid.multiagent.ports.persistence.PlatformTenantPort
             platformTenantPort(
             cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
-                    platformOps) {
+                    platformOps,
+            org.springframework.beans.factory.ObjectProvider<
+                    cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformTenantMapper>
+                    platformTenantMapper,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
+        javax.sql.DataSource platformIdentity = platformOps.platformIdentityDataSource();
+        if (mybatisEnabled && platformTenantMapper.getIfAvailable() != null) {
+            return new cn.studykid.multiagent.infrastructure.persistence
+                    .MybatisPlatformTenantRepository(platformTenantMapper.getObject(), platformIdentity);
+        }
         return new cn.studykid.multiagent.infrastructure.persistence
-                .JdbcPlatformTenantRepository(platformOps.platformIdentityDataSource());
+                .JdbcPlatformTenantRepository(platformIdentity);
     }
 
     /**

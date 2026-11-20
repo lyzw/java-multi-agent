@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformTenantMapper">
+
+    <!-- SQL[0] listTenants -->
+    <select id="listTenants"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformTenantMapper$PlatformTenantRow">
+        SELECT id AS tenantId, slug, name, lifecycle_state AS lifecycleState, plan,
+               effective_policy_version AS effectivePolicyVersion,
+               tenant_authz_version AS tenantAuthzVersion, created_at AS createdAt,
+               updated_at AS updatedAt
+        FROM platform.tenant
+        <if test="statusFilter != null and statusFilter != ''"> WHERE status = #{statusFilter}</if>
+        ORDER BY created_at DESC LIMIT #{limit}
+    </select>
+
+    <!-- SQL[1] findQuota -->
+    <select id="findQuota"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformTenantMapper$QuotaRow">
+        SELECT agent_limit AS agentLimit, run_concurrency_limit AS runConcurrencyLimit,
+               budget_limit AS budgetLimit
+        FROM platform.tenant_quota WHERE tenant_id = #{tenantId}::uuid
+    </select>
+
+    <!-- SQL[2] provisionTenant INSERT platform.tenant -->
+    <select id="provisionTenant"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformTenantMapper$PlatformTenantRow">
+        INSERT INTO platform.tenant (slug, name, plan, status, lifecycle_state)
+        VALUES (#{slug}, #{name}, #{plan}, 'PENDING_SETUP', 'PENDING_SETUP')
+        RETURNING id AS tenantId, slug, name, lifecycle_state AS lifecycleState, plan,
+                  effective_policy_version AS effectivePolicyVersion,
+                  tenant_authz_version AS tenantAuthzVersion, created_at AS createdAt,
+                  updated_at AS updatedAt
+    </select>
+
+    <!-- SQL[3] updateLifecycle FOR UPDATE 状态机 -->
+    <update id="updateLifecycle">
+        UPDATE platform.tenant SET lifecycle_state = #{toState}, status = #{toStatus}, updated_at = now()
+        WHERE id = #{tenantId}::uuid AND lifecycle_state = #{fromState}
+    </update>
+
+    <!-- SQL[4] insertQuota -->
+    <insert id="insertQuota">
+        INSERT INTO platform.tenant_quota (tenant_id, agent_limit, run_concurrency_limit, budget_limit)
+        VALUES (#{tenantId}::uuid, #{agentLimit}, #{runConcurrencyLimit}, #{budgetLimit})
+    </insert>
+
+    <!-- SQL[5] grantCapability -->
+    <insert id="grantCapability">
+        INSERT INTO platform.tenant_capability_grant (tenant_id, resource_code, scope, status, version)
+        VALUES (#{tenantId}::uuid, #{resourceCode}, #{scope}, 'ACTIVE', 1)
+    </insert>
+
+    <!-- SQL[6] revokeCapability version+1 -->
+    <update id="revokeCapability">
+        UPDATE platform.tenant_capability_grant SET status = 'REVOKED', version = version + 1, updated_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND resource_code = #{resourceCode}
+    </update>
+
+    <!-- SQL[7] listCapabilities -->
+    <select id="listCapabilities"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformTenantMapper$CapabilityGrantRow">
+        SELECT tenant_id::text AS tenantId, resource_code AS resourceCode, scope, status, version
+        FROM platform.tenant_capability_grant WHERE tenant_id = #{tenantId}::uuid
+    </select>
+
+</mapper>

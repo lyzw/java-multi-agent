@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.ApprovalMapper">
+
+    <insert id="insertApproval">
+        INSERT INTO approval (tenant_id, operation_id, state, requirement, argument_digest,
+                              target_resource, approver_scope, approver_id, expires_at)
+        VALUES (#{tenantId}::uuid, #{operationId}::uuid, 'APPROVED', #{requirement},
+                #{argumentDigest}, #{targetResource}, #{approverScope}, #{approverId}, #{expiresAt})
+    </insert>
+
+    <insert id="insertApprovalExistingOp" resultType="java.lang.String">
+        INSERT INTO approval (tenant_id, operation_id, state, requirement, argument_digest,
+                              target_resource, approver_scope, expires_at)
+        SELECT #{tenantId}::uuid, #{operationId}::uuid, 'PENDING', #{requirement},
+               #{argumentDigest}, #{targetResource}, #{approverScope}, #{expiresAt}
+        WHERE NOT EXISTS (SELECT 1 FROM approval WHERE tenant_id = #{tenantId}::uuid
+                          AND operation_id = #{operationId}::uuid)
+        RETURNING approval_id::text
+    </insert>
+
+    <update id="rejectApproval">
+        UPDATE approval SET state = 'REJECTED', approver_id = #{approverId}, decided_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND operation_id = #{operationId}::uuid
+    </update>
+
+    <select id="findApproval"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ApprovalMapper$ApprovalRow">
+        SELECT tenant_id::text AS tenantId, approval_id::text AS approvalId,
+               operation_id::text AS operationId, state::text AS state,
+               requirement::text AS requirement, argument_digest AS argumentDigest,
+               target_resource AS targetResource, approver_scope AS approverScope,
+               expires_at AS expiresAt, approver_id AS approverId,
+               decided_at AS decidedAt, created_at AS createdAt
+        FROM approval
+        WHERE tenant_id = #{tenantId}::uuid AND operation_id = #{operationId}::uuid
+    </select>
+
+    <select id="lockRunState"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.ApprovalMapper$RunStateRow">
+        SELECT state::text AS state, cancel_requested_at AS cancelRequestedAt
+        FROM run WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid FOR UPDATE
+    </select>
+
+    <update id="consumeApproval">
+        UPDATE approval SET state = 'CONSUMED', consumed_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND operation_id = #{operationId}::uuid
+    </update>
+
+    <update id="expireApproval">
+        UPDATE approval SET state = 'EXPIRED', decided_at = now()
+        WHERE tenant_id = #{tenantId}::uuid AND operation_id = #{operationId}::uuid
+    </update>
+
+</mapper>

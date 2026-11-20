@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.DecisionAuditMapper">
+
+    <!-- SQL[0] SELECT decision_id FROM cap_decision_log（用于冲突检查）— 保留由 Repository 处理 -->
+
+    <!-- SQL[1] INSERT cap_decision_log -->
+    <insert id="insert">
+        INSERT INTO cap_decision_log (tenant_id, run_id, invocation_id, authz_decision, exec_decision,
+                                       exec_status, ledger_status, reason_code, authz_version,
+                                       closure_fingerprint, config_publish_seq, release_id, principal_id,
+                                       tool_id, decision_kind, decision_at)
+        VALUES (#{tenantId}::uuid, #{runId}::uuid, #{invocationId}::uuid, #{authzDecision},
+                #{execDecision}, #{execStatus}, #{ledgerStatus}, #{reasonCode}, #{authzVersion},
+                #{closureFingerprint}, #{configPublishSeq}, #{releaseId}, #{principalId},
+                #{toolId}, #{decisionKind}, #{decisionAt})
+        ON CONFLICT DO NOTHING
+    </insert>
+
+    <!-- SQL[2] SELECT count(*) FILTER (WHERE ...) 多维度聚合 -->
+    <select id="aggregate"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.DecisionAuditMapper$AggregateRow">
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE decision_kind = 'INVOCATION') AS invocations,
+               count(*) FILTER (WHERE authz_decision IN ('REJECT', 'DENY')) AS blockedByAuthz,
+               count(*) FILTER (WHERE exec_decision = 'BLOCKED_QUOTA') AS blockedByQuota,
+               count(*) FILTER (WHERE exec_status = 'RECONCILED') AS reconciled,
+               count(*) FILTER (WHERE exec_status LIKE 'ERROR%') AS errors
+        FROM cap_decision_log WHERE tenant_id = #{tenantId}::uuid
+    </select>
+
+    <!-- 辅助: list 最近决策 -->
+    <select id="list"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.DecisionAuditMapper$DecisionLogRow">
+        SELECT decision_id::text AS decisionId, tenant_id::text AS tenantId,
+               run_id::text AS runId, invocation_id::text AS invocationId,
+               authz_decision AS authzDecision, exec_decision AS execDecision,
+               exec_status AS execStatus, ledger_id AS ledgerId,
+               decision_kind AS decisionKind, decision_at AS decisionAt
+        FROM cap_decision_log WHERE tenant_id = #{tenantId}::uuid
+        ORDER BY decision_at DESC LIMIT #{limit}
+    </select>
+
+
+    <!-- findByInvocation -->
+    <select id="findByInvocation"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.DecisionAuditMapper$DecisionLogRow">
+        SELECT decision_id::text AS decisionId, tenant_id::text AS tenantId,
+               run_id::text AS runId, invocation_id::text AS invocationId,
+               authz_decision AS authzDecision, exec_decision AS execDecision,
+               exec_status AS execStatus, ledger_id AS ledgerId,
+               decision_kind AS decisionKind, decision_at AS decisionAt
+        FROM cap_decision_log
+        WHERE tenant_id = #{tenantId}::uuid AND invocation_id = #{invocationId}::uuid
+        ORDER BY decision_at ASC
+    </select>
+
+    <!-- findByRun -->
+    <select id="findByRun"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.DecisionAuditMapper$DecisionLogRow">
+        SELECT decision_id::text AS decisionId, tenant_id::text AS tenantId,
+               run_id::text AS runId, invocation_id::text AS invocationId,
+               authz_decision AS authzDecision, exec_decision AS execDecision,
+               exec_status AS execStatus, ledger_id AS ledgerId,
+               decision_kind AS decisionKind, decision_at AS decisionAt
+        FROM cap_decision_log
+        WHERE tenant_id = #{tenantId}::uuid AND run_id = #{runId}::uuid
+        ORDER BY decision_at ASC
+    </select>
+
+</mapper>

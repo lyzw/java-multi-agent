@@ -13,7 +13,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.mapper.BudgetMapper;
@@ -26,7 +25,7 @@ import cn.studykid.multiagent.ports.persistence.BudgetPort.ReserveOutcome;
 import cn.studykid.multiagent.ports.persistence.BudgetPort.Reservation;
 
 /** BudgetPort MyBatis 实现（条件 UPDATE / ON CONFLICT / FOR UPDATE 锁行）。 */
-@Repository
+// 由 ApplicationConfiguration 显式 @Bean 注册（不挂 @Repository，避免组件扫描重复）
 @ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
 public class MybatisBudgetRepository implements BudgetPort {
 
