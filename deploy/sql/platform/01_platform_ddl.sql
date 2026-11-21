@@ -8,7 +8,7 @@
 --        （均 FORCE RLS，+3 开启；共 +8 策略）
 --   +5 列 public.cap_config_publish_request（resource_kind / resource_id /
 --        target_version / fail_stage / fail_details）。
---   ⇒ 表 75→78、RLS 开启 41→44、策略 49→57（列数仍沿用旧快照口径）。
+--   ⇒ 表 75→78、RLS 开启 41→44、策略 49→62（列数仍沿用旧快照口径）。
 --   ⚠️ 2026-11-18 增量（对话审计插件 P0/P2）：
 --   +1 表 public.chat_audit_config（平台级单例配置，无租户、无 RLS）；
 --   +2 表 public.chat_audit_record（租户级 FORCE RLS，+1 策略）
@@ -25,7 +25,7 @@
 --   ⚠️ 2026-11-15 更正（P0）：原头注释写「65 表 / 42 RLS 开启 / 50 RLS 策略」，
 --   是 V1→V34 快照时的旧值，后续增量加了 student_memory 等对象后已漂移。
 --   本文件实计 CREATE TABLE = 78、ENABLE/FORCE ROW LEVEL SECURITY = 44、
---   CREATE POLICY = 57，与 scripts/it-env.sh --probe 的期望值（表 78 / RLS 44 /
+--   CREATE POLICY = 62，与 scripts/it-env.sh --probe 的期望值（表 78 / RLS 44 /
 --   策略 57）交叉一致。这三项由 PlatformDdlHeaderCountTest 静态守卫钉死：
 --   改动 DDL 却忘同步头注释，或有人把数字改回旧值，守卫立刻变红。
 --   ⚠️ 其余快照数字沿用 pg_dump 的统计口径（含约束隐式生成的对象），
@@ -6266,6 +6266,10 @@ CREATE POLICY cap_publish_policy_write ON public.cap_publish_policy
 CREATE POLICY cap_publish_policy_update ON public.cap_publish_policy
     FOR UPDATE USING (tenant_id IS NULL OR tenant_id = public.current_tenant_id())
     WITH CHECK (tenant_id IS NULL OR tenant_id = public.current_tenant_id());
+-- 2026-11-21 M1 补齐 DELETE 策略：FORCE ROW LEVEL SECURITY 下缺省 DELETE 策略会拒绝，
+-- 但把行为显式写出来比依赖隐式默认更安全；同时加 WITH CHECK 防跨租户删除。
+CREATE POLICY cap_publish_policy_delete ON public.cap_publish_policy
+    FOR DELETE USING (tenant_id IS NULL OR tenant_id = public.current_tenant_id());
 
 
 -- ---------------------------------------------------------------------
@@ -6335,6 +6339,10 @@ CREATE POLICY cap_config_draft_write ON public.cap_config_draft
 CREATE POLICY cap_config_draft_update ON public.cap_config_draft
     FOR UPDATE USING (tenant_id IS NULL OR tenant_id = public.current_tenant_id())
     WITH CHECK (tenant_id IS NULL OR tenant_id = public.current_tenant_id());
+-- 2026-11-21 M1 补齐 DELETE 策略：草稿可被业务角色删除（DISCARD / 清理历史），
+-- 但严格限定到本租户或全局行。
+CREATE POLICY cap_config_draft_delete ON public.cap_config_draft
+    FOR DELETE USING (tenant_id IS NULL OR tenant_id = public.current_tenant_id());
 
 
 -- ---------------------------------------------------------------------
@@ -6395,6 +6403,15 @@ CREATE POLICY cap_audit_log_read ON public.cap_audit_log
     FOR SELECT USING (tenant_id IS NULL OR tenant_id = public.current_tenant_id());
 CREATE POLICY cap_audit_log_write ON public.cap_audit_log
     FOR INSERT WITH CHECK (tenant_id IS NULL OR tenant_id = public.current_tenant_id());
+-- 2026-11-21 M1：审计日志防篡改——业务角色一律不许 UPDATE / DELETE。
+-- FORCE ROW LEVEL SECURITY 缺省是拒绝，但显式写 policy 把意图钉死：将来加任何写入端点
+-- 都必须先 review 这两条，而不是被隐式行为挡住（后者在运维脚本 BYPASSRLS 时静默失效）。
+-- 说明：审计表允许运维角色（BYPASSRLS）按合规流程清理历史 / 修复脏数据，
+-- 但应用角色连 UPDATE 也不该能走通。
+CREATE POLICY cap_audit_log_update_deny ON public.cap_audit_log
+    FOR UPDATE USING (false);
+CREATE POLICY cap_audit_log_delete_deny ON public.cap_audit_log
+    FOR DELETE USING (false);
 
 
 -- ---------------------------------------------------------------------
