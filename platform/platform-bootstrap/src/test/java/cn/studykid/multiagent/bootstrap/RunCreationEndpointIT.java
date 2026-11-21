@@ -13,8 +13,8 @@ import java.util.UUID;
 
 import javax.sql.DataSource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -96,12 +96,12 @@ class RunCreationEndpointIT {
      *
      * <p>⚠️ <b>为什么必须是 static</b>：JUnit 默认每个测试方法新建一个测试类实例，
      * 实例字段因而「每个方法都是 null」→ <b>每个方法都新建一个连接池</b>。
-     * Hikari 的 {@code minimumIdle} 默认等于 {@code maximumPoolSize}，
+     * Hikari 的 {@code minimumIdle} 默认等于 {@code maximumPoolSize}（Druid 侧已用 {@code min-idle} 显式写死，不依赖默认值），
      * 池不关闭则连接永不归还；各 IT 类叠加后打满 PostgreSQL 的
      * {@code max_connections=100} → <b>别的 IT 类的上下文启动失败</b>
      * （报错点与真因相隔一个类，排查方向极易被带偏）。
      */
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
 
     private String tenantA;
     private final List<String> createdRunIds = new java.util.ArrayList<>();
@@ -224,15 +224,17 @@ class RunCreationEndpointIT {
 
     private static synchronized DataSource admin() {
         if (adminPool == null) {
-            HikariConfig cfg = new HikariConfig();
-            cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+            DruidDataSource cfg = new DruidDataSource();
+            cfg.setMaxWait(10_000L);
+            cfg.setConnectTimeout(10_000);
+            cfg.setUrl(System.getenv("IT_PG_URL"));
             cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
             String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
             if (adminPwd != null && !adminPwd.isBlank()) {
                 cfg.setPassword(adminPwd);
             }
-            cfg.setMaximumPoolSize(2);
-            adminPool = new HikariDataSource(cfg);
+            cfg.setMaxActive(2);
+            adminPool = cfg;
         }
         return adminPool;
     }

@@ -20,7 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 
@@ -43,8 +43,8 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class RateLimitIT {
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
     /**
      * 反证专用宽连接池。
      *
@@ -52,7 +52,7 @@ class RateLimitIT {
      * 单连接上 → 并发场景被彻底掩盖（本次实测踩到：反证首跑「1 行」而非「多行」）。
      * <b>池大小必须匹配线程数，否则并发用例退化为串行</b>。
      */
-    private static HikariDataSource wideAdminPool;
+    private static DruidDataSource wideAdminPool;
 
     private static String tenantA;
     private static String tenantB;
@@ -246,9 +246,18 @@ class RateLimitIT {
 
     @Test
     @DisplayName("T-5 ⚠️⚠️ 限流组件故障（关闭连接池）→ FAIL_CLOSED 而非放行")
-    void componentFailureIsFailClosed() {
-        HikariDataSource broken = FaultInjectionSupport.appPool(2);
-        // ⚠️ 先 close 再调用：所有获取连接的尝试都会失败
+    void componentFailureIsFailClosed() throws Exception {
+        DruidDataSource broken = FaultInjectionSupport.appPool(2);
+        // ⚠️⚠️ 必须**先取一次连接**把池真正建起来，再 close。
+        //    Druid 的 init 是惰性的（首次 getConnection 才建池），而
+        //    DruidDataSource.close() 在池**从未初始化**时会直接 return ——
+        //    它不会把 closed 置位，池照常可用。于是「关闭后再取连接」仍然成功，
+        //    组件其实还活着，断言会误判成「故障时放行」
+        //    （实测：expected FAIL_CLOSED but was ALLOWED）。
+        //    Hikari 的 close() 无条件生效，故旧写法能通过 —— 迁到 Druid 必须显式对齐。
+        try (java.sql.Connection ignored = broken.getConnection()) {
+            assertThat(ignored.isValid(1)).as("取到连接即证明池已初始化").isTrue();
+        }
         broken.close();
         var limiter = new JdbcRateLimiter(broken, 10, WINDOW);
 

@@ -10,8 +10,8 @@ import java.util.UUID;
 
 import javax.sql.DataSource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -81,7 +81,8 @@ class GovernanceEndpointIT {
      * <p>⚠️ <b>必须 static 且必须关闭</b>（2026-10-23 实测修正）：
      * JUnit 默认每个测试方法新建一个测试类实例 → 实例字段「每个方法都是 null」
      * → <b>每个方法都新建一个连接池</b>；Hikari 的 {@code minimumIdle}
-     * 默认等于 {@code maximumPoolSize}（此处 2），池不关闭则连接永不归还。
+     * 默认等于 {@code maximumPoolSize}（此处 2，Druid 侧已用 {@code min-idle} 显式写死），
+     * 池不关闭则连接永不归还。
      * 本类 19 个测试方法 = 19 个泄漏池 = 38 条连接，
      * 与其它 IT 类的同类泄漏叠加 → 打满 PostgreSQL 的 {@code max_connections=100}
      * → <b>后续 IT 类的 Spring 上下文启动失败</b>
@@ -89,7 +90,7 @@ class GovernanceEndpointIT {
      * roles with the SUPERUSER attribute}），
      * 报错点在<b>别的类</b>、真因在<b>本类</b>，排查方向极易被带偏。
      */
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
 
     private String tenantA;
     private String tenantB;
@@ -116,8 +117,10 @@ class GovernanceEndpointIT {
 
     private static synchronized void adminPool() {
         if (adminPool == null) {
-            HikariConfig cfg = new HikariConfig();
-            cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+            DruidDataSource cfg = new DruidDataSource();
+            cfg.setMaxWait(10_000L);
+            cfg.setConnectTimeout(10_000);
+            cfg.setUrl(System.getenv("IT_PG_URL"));
             cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
 // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
 //    密码认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，否则连接失败。
@@ -125,8 +128,8 @@ class GovernanceEndpointIT {
             if (adminPwd != null && !adminPwd.isBlank()) {
                 cfg.setPassword(adminPwd);
             }
-            cfg.setMaximumPoolSize(2);
-            adminPool = new HikariDataSource(cfg);
+            cfg.setMaxActive(2);
+            adminPool = cfg;
         }
     }
 

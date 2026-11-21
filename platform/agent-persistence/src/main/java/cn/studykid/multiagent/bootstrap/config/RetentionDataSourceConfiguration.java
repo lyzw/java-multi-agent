@@ -2,8 +2,7 @@ package cn.studykid.multiagent.bootstrap.config;
 
 import javax.sql.DataSource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
@@ -87,25 +86,17 @@ public class RetentionDataSourceConfiguration {
                     + "但未配置数据库用户名（" + KEY_USERNAME + "）。拒绝启动（理由同 URL 缺失）。");
         }
 
-        int maxPoolSize = environment.getProperty(KEY_MAX_POOL_SIZE, Integer.class, 2);
-        if (maxPoolSize < 1) {
-            throw new IllegalStateException(KEY_MAX_POOL_SIZE + " 必须为正数，收到: " + maxPoolSize);
+        int maxActive = environment.getProperty(KEY_MAX_POOL_SIZE, Integer.class, 2);
+        if (maxActive < 1) {
+            throw new IllegalStateException(KEY_MAX_POOL_SIZE + " 必须为正数，收到: " + maxActive);
         }
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
-        cfg.setUsername(username);
-        if (password != null && !password.isBlank()) {
-            cfg.setPassword(password);
-        }
-        cfg.setMaximumPoolSize(maxPoolSize);
-        cfg.setMinimumIdle(1);
-        cfg.setPoolName("agent-retention");
-        cfg.setInitializationFailTimeout(-1);
-        cfg.setConnectionTimeout(5000);
+        DruidDataSource pool = DruidPoolFactory.create(
+                "agent-retention", url, username, password, null,
+                DruidPoolFactory.Tuning.of(maxActive, 1));
 
-        log.info("保留期清理数据源已接入: user={}, maxPool={}", username, maxPoolSize);
-        return new HikariDataSource(cfg);
+        log.info("保留期清理数据源已接入: user={}, maxPool={}", username, maxActive);
+        return pool;
     }
 
     /**

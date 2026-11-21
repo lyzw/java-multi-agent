@@ -36,6 +36,12 @@
     <jspecify.version>1.0.0</jspecify.version>
     <!-- MyBatis-Plus 基线（架构决策变更，与 platform 对齐）：见 platform/pom.xml 注释 -->
     <mybatis-plus.version>3.5.17</mybatis-plus.version>
+    <!--
+      数据库连接池基线：Alibaba Druid（2026-11-21 由 HikariCP 切换，与 platform 对齐）。
+      ⚠️ Druid 不在 Spring Boot 官方 BOM 里，必须由本仓锁定版本，
+          否则「池实现」会变成不受控的传递变量。
+    -->
+    <druid.version>1.2.28</druid.version>
   </properties>
 
   <modules>
@@ -70,6 +76,13 @@
         <groupId>com.baomidou</groupId>
         <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
         <version>${mybatis-plus.version}</version>
+      </dependency>
+
+      <!-- 数据库连接池：Druid（版本集中锁定，子模块不得覆盖） -->
+      <dependency>
+        <groupId>com.alibaba</groupId>
+        <artifactId>druid</artifactId>
+        <version>${druid.version}</version>
       </dependency>
 
       <dependency>

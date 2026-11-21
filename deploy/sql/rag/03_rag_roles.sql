@@ -24,7 +24,7 @@
 --
 -- 【⚠️ search_path】
 --   RAG 全部对象位于 schema rag，而应用 SQL 用**未限定表名**。
---   应用侧已由 HikariCP connection-init-sql 设置：
+--   应用侧已由 Druid connection-init-sql 设置：
 --       SET search_path TO rag, public
 --   手工连库时必须自行执行同一句，否则未限定名解析不到对象
 --   （表现为 relation does not exist）。

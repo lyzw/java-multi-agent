@@ -20,7 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyDecision;
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
@@ -41,8 +41,8 @@ import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class FaultInjectionIT {
 
-    private static HikariDataSource pool;
-    private static HikariDataSource admin;
+    private static DruidDataSource pool;
+    private static DruidDataSource admin;
     private static String tenantA;
     private static String tenantB;
     private static String snapshotA;

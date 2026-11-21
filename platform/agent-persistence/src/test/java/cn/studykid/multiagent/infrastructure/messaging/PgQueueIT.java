@@ -23,8 +23,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
 import cn.studykid.multiagent.ports.messaging.MessageHandler;
@@ -74,8 +74,8 @@ class PgQueueIT {
     private static final String SLUG_A = "it-pgq-a";
     private static final String SLUG_B = "it-pgq-b";
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
     private static PgQueueRepository repository;
     private static String tenantA;
     private static String tenantB;
@@ -461,15 +461,17 @@ class PgQueueIT {
                 "enqueuedAt", Instant.now().toString());
     }
 
-    private static HikariDataSource pool(String user, String password, int size) {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    private static DruidDataSource pool(String user, String password, int size) {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(user);
         if (password != null && !password.isBlank()) {
             cfg.setPassword(password);
         }
-        cfg.setMaximumPoolSize(size);
-        return new HikariDataSource(cfg);
+        cfg.setMaxActive(size);
+        return cfg;
     }
 
     /** E-3 守护：非特权角色运行，否则得到「隔离失效」的虚假结论。 */

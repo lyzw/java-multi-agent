@@ -12,8 +12,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.ports.persistence.AuditPort;
 import cn.studykid.multiagent.ports.persistence.TenantAgentBindingPort;
@@ -29,7 +29,7 @@ import cn.studykid.multiagent.ports.persistence.TenantAgentBindingPort;
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class TenantAgentBindingRepositoryIT {
 
-    private static HikariDataSource appPool;
+    private static DruidDataSource appPool;
     private static JdbcTenantAgentBindingRepository bindings;
     private static JdbcAgentManageRepository agents;
     private static String tenantA;
@@ -49,14 +49,16 @@ class TenantAgentBindingRepositoryIT {
         String user = System.getenv().getOrDefault("IT_PG_USER", "app_agent");
         String pwd = System.getenv("IT_PG_PASSWORD");
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(url);
         cfg.setUsername(user);
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(4);
-        appPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(4);
+        appPool = cfg;
 
         AuditPort audit = new JdbcAuditRepository(appPool);
         bindings = new JdbcTenantAgentBindingRepository(appPool, audit);
@@ -176,7 +178,7 @@ class TenantAgentBindingRepositoryIT {
     }
 
     private static void adminExec(String sql) {
-        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
+        try (DruidDataSource adminPool = adminConfig();
              Connection conn = adminPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.executeUpdate();
@@ -185,15 +187,17 @@ class TenantAgentBindingRepositoryIT {
         }
     }
 
-    private static HikariConfig adminConfig() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    private static DruidDataSource adminConfig() {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
         if (adminPwd != null && !adminPwd.isBlank()) {
             cfg.setPassword(adminPwd);
         }
-        cfg.setMaximumPoolSize(1);
+        cfg.setMaxActive(1);
         return cfg;
     }
 }

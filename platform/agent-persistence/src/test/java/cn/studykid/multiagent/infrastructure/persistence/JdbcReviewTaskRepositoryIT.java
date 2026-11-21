@@ -13,8 +13,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.ports.persistence.ReviewTaskPort;
 import cn.studykid.multiagent.ports.persistence.ReviewTaskPort.Priority;
@@ -35,7 +35,7 @@ import cn.studykid.multiagent.ports.persistence.ReviewTaskPort.Source;
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class JdbcReviewTaskRepositoryIT {
 
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
     private static JdbcReviewTaskRepository repo;
 
     /** 本 IT 专属 run 前缀：清理与断言都锚定它，绝不碰别人的行。 */
@@ -58,15 +58,17 @@ class JdbcReviewTaskRepositoryIT {
 
     @BeforeAll
     static void setUp() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         String pwd = System.getenv("IT_PG_ADMIN_PASSWORD");
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(2);
-        adminPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        adminPool = cfg;
         repo = new JdbcReviewTaskRepository(adminPool);
 
         traceId = "trace-it-" + UUID.randomUUID();

@@ -24,22 +24,32 @@ spring:
     username: ${RAG_PG_USERNAME:rag_app}
     password: ${RAG_PG_PASSWORD:rag_app}
     driver-class-name: org.postgresql.Driver
-    hikari:
+    # ⚠️ Druid 语义键名（2026-11-21 连接池由 HikariCP 切换为 Druid）：
+    #    max-active ≡ 池上限；min-idle ≡ 常驻连接数；
+    #    min-evictable-idle-time-millis ≡ 空闲回收下限；
+    #    max-evictable-idle-time-millis ≡ 空闲回收上限。
+    #    ⚠️ 不要再写 spring.datasource.hikari.* —— 那是 Spring Boot 自带的键，
+    #    本仓已排除 HikariCP，写了不会生效，且「配了不生效」不报错。
+    druid:
       # ⚠️ RAG 全部对象位于独立 schema `rag`（V1 迁移用 CREATE SCHEMA rag + SET search_path 固定创建），
       #    而应用 SQL 一律用**未限定表名**（FROM rag_chunk / JOIN rag_edition / ?::rag_chunk_role /
       #    rag_current_tenant()）。因此每条连接都必须把 search_path 指向 rag，
       #    否则未限定名解析不到对象（表现为 relation does not exist）。
       #    public 保留在末尾：pgvector 的 vector 类型在 public。
       connection-init-sql: SET search_path TO rag, public
+      # ⚠️ 上限 10 / 常驻 10：Hikari 的 minimumIdle 默认等于 maximumPoolSize，
+      #    切换后显式写死，避免 min-idle 落回 0 让池退化成「纯按需建连」。
+      max-active: 10
+      min-idle: 10
       # ⚠️ 空闲保活 + 定期轮换：长册摄取（Docling 解析十几分钟后一次性写 embedding/chunk）
-      #    期间连接长时间空闲，托管 RDS 会回收空闲数百秒的连接；Hikari 默认不保活，
+      #    期间连接长时间空闲，托管 RDS 会回收空闲数百秒的连接；Druid 默认不保活，
       #    写阶段会拿到已被服务端关闭的死连接（This connection has been closed.）。
-      #    keepalive 必须 < max-lifetime；两者都 < 常见 600s 空闲回收线。
-      #    2026-11-10 语文下册 146 页摄取失败即此根因（HikariPool-1 与 rag-platform-ops 同时告警）。
-      keepalive-time: 120000
-      idle-timeout: 300000
-      max-lifetime: 540000
-      validation-timeout: 5000
+      #    keep-alive 必须 > Druid 的回收扫描间隔（60s）；两者都 < 常见 600s 空闲回收线。
+      #    2026-11-10 语文下册 146 页摄取失败即此根因（rag-platform-ops 池同时告警）。
+      keep-alive-between-time-millis: 120000
+      min-evictable-idle-time-millis: 300000
+      max-evictable-idle-time-millis: 540000
+      validation-query-timeout: 5000
   flyway:
     # ⛔ 迁移链 V1~V8 的脚本已从仓库删除，`classpath:db/migration` 现在是空目录。
     #    结构唯一权威源是 deploy/sql/rag/01_rag_ddl.sql（由库 owner 线下执行，

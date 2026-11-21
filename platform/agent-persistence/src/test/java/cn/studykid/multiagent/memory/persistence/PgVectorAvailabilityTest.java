@@ -13,7 +13,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.infrastructure.persistence.FaultInjectionSupport;
 
@@ -40,7 +40,7 @@ class PgVectorAvailabilityTest {
     @Test
     @DisplayName("真实库：探测返回确定的布尔值（可用或不可用，不抛异常）")
     void probeAgainstRealDatabase() {
-        try (HikariDataSource pool = FaultInjectionSupport.appPool(2)) {
+        try (DruidDataSource pool = FaultInjectionSupport.appPool(2)) {
             PgVectorAvailability probe = new PgVectorAvailability(pool);
             // ⚠️ 不断言 true：线上 agent_dev **尚未安装** pgvector（实测
             //    pg_available_extensions 有、pg_extension 没有）。
@@ -86,7 +86,7 @@ class PgVectorAvailabilityTest {
     @Test
     @DisplayName("⚠️ reset() 让缓存失效 —— 装好扩展后不必重启进程")
     void resetInvalidatesCache() throws Exception {
-        try (HikariDataSource pool = FaultInjectionSupport.appPool(2)) {
+        try (DruidDataSource pool = FaultInjectionSupport.appPool(2)) {
             PgVectorAvailability probe = new PgVectorAvailability(pool);
             boolean first = probe.isAvailable();
 
@@ -104,7 +104,7 @@ class PgVectorAvailabilityTest {
     @Test
     @DisplayName("探测 SQL 用 to_regtype 尊重 search_path（跨 schema 不误判）")
     void probeSqlUsesSearchPathAwareCheck() throws Exception {
-        try (HikariDataSource pool = FaultInjectionSupport.appPool(2);
+        try (DruidDataSource pool = FaultInjectionSupport.appPool(2);
              Connection c = pool.getConnection();
              PreparedStatement ps = c.prepareStatement(
                      "SELECT to_regtype('vector') IS NOT NULL AS available");

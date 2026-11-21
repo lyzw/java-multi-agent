@@ -23,8 +23,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
@@ -60,7 +60,7 @@ class RunEventAppendIT {
     private static final String SLUG_A = "it-evt-a";
     private static final String SLUG_B = "it-evt-b";
 
-    private static HikariDataSource appPool;
+    private static DruidDataSource appPool;
     private static JdbcRunEventAppendRepository appendRepo;
     private static JdbcRunEventQueryRepository queryRepo;
     private static RunCreationPort creationRepo;
@@ -92,15 +92,17 @@ class RunEventAppendIT {
         String user = System.getenv().getOrDefault("IT_PG_USER", "app_agent");
         String pwd = System.getenv("IT_PG_PASSWORD");
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(url);
         cfg.setUsername(user);
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
         // ⚠️ 并发用例需要多条连接
-        cfg.setMaximumPoolSize(8);
-        appPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(8);
+        appPool = cfg;
 
         appendRepo = new JdbcRunEventAppendRepository(appPool);
         queryRepo = new JdbcRunEventQueryRepository(appPool);

@@ -1,5 +1,6 @@
 package cn.studykid.rag.infrastructure.ops;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.sql.DataSource;
@@ -8,10 +9,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 /**
- * {@link RagOpsSessionPort} 的实现：独立 Hikari 池 + 线程绑定的会话窗。
+ * {@link RagOpsSessionPort} 的实现：独立 Druid 池 + 线程绑定的会话窗。
  *
  * <p><b>会话窗用 ThreadLocal 深度计数而不是布尔量</b>：嵌套调用（运维事务里再开一次）
  * 若用布尔量，内层 {@code finally} 会把外层还留在窗口里的连接判成「窗口外」。
@@ -37,58 +38,70 @@ public final class RagOpsDataSourceProvider implements RagOpsSessionPort, AutoCl
      *
      * <p><b>⚠️ 为什么必须保活</b>：平台全局摄取是「解析十几分钟 → 末尾一次性写 embedding/chunk」的长事务。
      * 池里预先建好的连接在 Docling 长册解析期间长时间空闲，而托管 RDS（阿里云等）会回收
-     * 空闲超过数百秒的连接；Hikari 默认 {@code keepaliveTime=0}（不保活）、{@code maxLifetime=30min}，
+     * 空闲超过数百秒的连接；Druid 默认 {@code keepAlive=false}（不保活），
      * 于是写阶段拿到一条已被服务端关闭的死连接，报
      * {@code This connection has been closed.}（2026-11-10 语文下册 146 页摄取的实测根因：
      * rag-platform-ops 池告警 Failed to validate connection）。
-     * 保活间隔取 2 分钟，远小于常见 300s 空闲回收线，让 Hikari 在连接被服务端回收前先 ping 一次。
+     * 保活间隔取 2 分钟，远小于常见 300s 空闲回收线，让 Druid 在连接被服务端回收前先 ping 一次。
      */
     static final long OP_POOL_KEEPALIVE_MS = 120_000L;
 
     /**
-     * 连接最大存活（毫秒，9 分钟）。
-     *
-     * <p>必须 <b>大于</b> {@link #OP_POOL_KEEPALIVE_MS}（否则 Hikari 直接拒绝启动），
-     * 且小于托管库常见的连接回收上限；配合保活实现「空闲连接定期轮换、绝不拿死连接」。
-     */
-    static final long OP_POOL_MAX_LIFETIME_MS = 540_000L;
-
-    /**
      * 空闲连接回收（毫秒，5 分钟）。
      *
-     * <p>必须 <b>小于</b> {@link #OP_POOL_MAX_LIFETIME_MS}：Hikari 的默认值是 10 分钟，
-     * 会大于 9 分钟的 maxLifetime，触发 "idleTimeout is close to or more than
-     * maxLifetime, disabling it" 告警并静默禁用空闲回收。显式收紧后语义完整：
-     * 空闲 5 分钟回收、2 分钟保活、9 分钟强制轮换。
+     * <p>必须 <b>大于</b> {@link #OP_POOL_KEEPALIVE_MS}、<b>小于</b>
+     * {@link #OP_POOL_MAX_LIFETIME_MS}：Druid 在 {@code init()} 阶段会校验
+     * {@code maxEvictableIdleTimeMillis >= minEvictableIdleTimeMillis}，
+     * 配错即建池失败。
      */
     static final long OP_POOL_IDLE_TIMEOUT_MS = 300_000L;
+
+    /**
+     * 连接最大存活（毫秒，9 分钟）。
+     *
+     * <p>对应 Druid 的 {@code maxEvictableIdleTimeMillis}（空闲回收上限），
+     * 小于托管库常见的连接回收上限；配合保活实现「空闲连接定期轮换、绝不拿死连接」。
+     */
+    static final long OP_POOL_MAX_LIFETIME_MS = 540_000L;
 
     /** 校验单条连接是否可用的超时（毫秒）。 */
     static final long OP_POOL_VALIDATION_TIMEOUT_MS = 5_000L;
 
+    /**
+     * 空闲连接回收的扫描间隔（毫秒）。
+     *
+     * <p>⚠️ 必须 <b>小于</b> {@link #OP_POOL_KEEPALIVE_MS}：Druid 在 {@code init()} 阶段会校验
+     * 「{@code keepAliveBetweenTimeMillis > timeBetweenEvictionRunsMillis}」，
+     * 配反了就是建池直接失败。
+     */
+    static final long OP_POOL_EVICTION_RUNS_MS = 60_000L;
+
     static {
-        // 装配期常量自检：把「keepalive < idle < maxLifetime」钉在代码里，配错即启动失败。
+        // 装配期常量自检：把「keepalive < idle < maxLifetime」与 Druid 的两条硬约束
+        // 钉在代码里，配错即启动失败。
         if (OP_POOL_KEEPALIVE_MS <= 0
                 || OP_POOL_IDLE_TIMEOUT_MS <= OP_POOL_KEEPALIVE_MS
                 || OP_POOL_MAX_LIFETIME_MS <= OP_POOL_IDLE_TIMEOUT_MS
-                || OP_POOL_VALIDATION_TIMEOUT_MS <= 0) {
+                || OP_POOL_VALIDATION_TIMEOUT_MS <= 0
+                || OP_POOL_KEEPALIVE_MS <= OP_POOL_EVICTION_RUNS_MS) {
             throw new IllegalStateException(
                     "运维池保活参数非法：keepalive=" + OP_POOL_KEEPALIVE_MS
                             + " / idleTimeout=" + OP_POOL_IDLE_TIMEOUT_MS
                             + " / maxLifetime=" + OP_POOL_MAX_LIFETIME_MS
-                            + " / validationTimeout=" + OP_POOL_VALIDATION_TIMEOUT_MS);
+                            + " / validationTimeout=" + OP_POOL_VALIDATION_TIMEOUT_MS
+                            + " / evictionRuns=" + OP_POOL_EVICTION_RUNS_MS);
         }
     }
 
     private final boolean enabled;
     private final String missingConfiguration;
-    private final HikariDataSource pool;
+    private final DruidDataSource pool;
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate transactionTemplate;
     private final AtomicBoolean roleAsserted = new AtomicBoolean(false);
 
     private RagOpsDataSourceProvider(boolean enabled, String missingConfiguration,
-                                     HikariDataSource pool) {
+                                     DruidDataSource pool) {
         this.enabled = enabled;
         this.missingConfiguration = missingConfiguration;
         this.pool = pool;
@@ -114,8 +127,8 @@ public final class RagOpsDataSourceProvider implements RagOpsSessionPort, AutoCl
     /**
      * 接入运维池。
      *
-     * <p>⚠️ {@code initializationFailTimeout = -1}：建池时<b>不</b>尝试连接。
-     * 口令错、库不可达应当表现为「这一次治理动作失败」，
+     * <p>⚠️ <b>刻意不调用 {@code init()}</b>：Druid 的 {@code getConnection()} 会惰性初始化，
+     * 因此建池阶段<b>不</b>尝试连接。口令错、库不可达应当表现为「这一次治理动作失败」，
      * 而不是让一个只跑检索的实例起不来。
      *
      * @param url        JDBC URL
@@ -125,33 +138,42 @@ public final class RagOpsDataSourceProvider implements RagOpsSessionPort, AutoCl
      */
     public static RagOpsDataSourceProvider connected(String url, String username, String password,
                                                      int maxPoolSize) {
-        HikariDataSource cfg = new HikariDataSource();
-        cfg.setJdbcUrl(url);
+        DruidDataSource pool = new DruidDataSource();
+        // ⚠️ 池名必须**每实例唯一**：Druid 用池名做 JMX ObjectName，
+        //    同名池的第二个实例注册失败，关闭时注销抛 InstanceNotFoundException，
+        //    Druid 把它记成 **ERROR** 级别（污染关停日志）。
+        pool.setName("rag-platform-ops-" + System.identityHashCode(pool));
+        pool.setUrl(url);
         // ⚠️ 凭据分开设置，不拼进 URL：拼进 URL 在本仓的 IT 里曾表现为认证方式被改写。
-        cfg.setUsername(username);
-        cfg.setPassword(password);
-        cfg.setDriverClassName("org.postgresql.Driver");
-        cfg.setPoolName("rag-platform-ops");
-        cfg.setMaximumPoolSize(Math.max(1, maxPoolSize));
-        cfg.setMinimumIdle(1);
-        cfg.setConnectionTimeout(5_000L);
-        cfg.setInitializationFailTimeout(-1);
-        cfg.setConnectionInitSql(SEARCH_PATH_SQL);
+        pool.setUsername(username);
+        pool.setPassword(password);
+        pool.setDriverClassName("org.postgresql.Driver");
+        pool.setMaxActive(Math.max(1, maxPoolSize));
+        pool.setMinIdle(1);
+        // ⚠️ 显式 0：建池阶段不预建连接（凭据错误不应让实例起不来）
+        pool.setInitialSize(0);
+        pool.setMaxWait(OP_POOL_VALIDATION_TIMEOUT_MS);
+        pool.setConnectTimeout((int) OP_POOL_VALIDATION_TIMEOUT_MS);
+        pool.setConnectionInitSqls(List.of(SEARCH_PATH_SQL));
         // 空闲保活 + 定期轮换：避免长册摄取期间的连接被托管库回收成死连接。
-        cfg.setKeepaliveTime(OP_POOL_KEEPALIVE_MS);
-        cfg.setIdleTimeout(OP_POOL_IDLE_TIMEOUT_MS);
-        cfg.setMaxLifetime(OP_POOL_MAX_LIFETIME_MS);
-        cfg.setValidationTimeout(OP_POOL_VALIDATION_TIMEOUT_MS);
-        return new RagOpsDataSourceProvider(true, null, cfg);
+        // ⚠️ keepAlive 同时是「维持 minIdle」的前提：Druid 的后台补连接线程
+        //    只在 keepAlive 打开时才会把池补到 minIdle。
+        pool.setKeepAlive(true);
+        pool.setKeepAliveBetweenTimeMillis(OP_POOL_KEEPALIVE_MS);
+        pool.setMinEvictableIdleTimeMillis(OP_POOL_IDLE_TIMEOUT_MS);
+        pool.setMaxEvictableIdleTimeMillis(OP_POOL_MAX_LIFETIME_MS);
+        pool.setValidationQueryTimeout((int) OP_POOL_VALIDATION_TIMEOUT_MS);
+        pool.setTimeBetweenEvictionRunsMillis(OP_POOL_EVICTION_RUNS_MS);
+        return new RagOpsDataSourceProvider(true, null, pool);
     }
 
     /**
-     * 底层 Hikari 池（包内可见，供单测断言保活参数确实装配到位）。
+     * 底层 Druid 池（包内可见，供单测断言保活参数确实装配到位）。
      *
      * <p>⚠️ 不对外暴露真实连接池：外部调用方只能拿 {@link RagOpsSessionPort} 的会话窗；
      * 这里只在同包测试里读取配置，防止「加了保活代码却没生效」的假绿。
      */
-    HikariDataSource pool() {
+    DruidDataSource pool() {
         return pool;
     }
 

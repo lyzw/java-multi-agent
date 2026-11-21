@@ -30,7 +30,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.api.chat.ConsoleChatController.ChatCaller;
 import cn.studykid.multiagent.bootstrap.PlatformApplication;
@@ -118,7 +118,7 @@ class ConsoleChatMessagesWithinBudgetIT {
     /** 桩必须真的下发 thinking，否则「租户链 thinking=0」是空转断言。 */
     private static final String THINKING = "推理片段";
 
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
     private static String tenantId;
 
     /** 唯一送模型的请求（来自网关注入，恒等于 budgetResult.request()）。 */

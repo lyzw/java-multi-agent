@@ -17,8 +17,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
@@ -42,7 +42,7 @@ import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class RunClaimFencingIT {
 
-    private static HikariDataSource appPool;
+    private static DruidDataSource appPool;
     private static JdbcRunClaimRepository claimRepo;
     private static JdbcRunCreationRepository creationRepo;
     private static String tenantId;
@@ -75,14 +75,16 @@ class RunClaimFencingIT {
         String user = System.getenv().getOrDefault("IT_PG_USER", "app_agent");
         String pwd = System.getenv("IT_PG_PASSWORD");
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(url);
         cfg.setUsername(user);
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(4);
-        appPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(4);
+        appPool = cfg;
         claimRepo = new JdbcRunClaimRepository(appPool);
         creationRepo = new JdbcRunCreationRepository(appPool);
 
@@ -103,7 +105,7 @@ class RunClaimFencingIT {
      */
     private static String ensureItTenant() throws Exception {
         String slug = "it-claim-a";
-        try (HikariDataSource pool = new HikariDataSource(adminConfig())) {
+        try (DruidDataSource pool = adminConfig()) {
             String id = ItTenantProvisioner.provision(
                     pool, slug, "IT 专用租户 · 领取与围栏（勿删，幂等创建）");
             // 只清本租户：本租户由 IT 独建，不存在真实业务数据
@@ -116,13 +118,15 @@ class RunClaimFencingIT {
         }
     }
 
-    private static HikariDataSource adminDataSource() {
-        return new HikariDataSource(adminConfig());
+    private static DruidDataSource adminDataSource() {
+        return adminConfig();
     }
 
-    private static HikariConfig adminConfig() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    private static DruidDataSource adminConfig() {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
         // 密口认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，
@@ -131,12 +135,12 @@ class RunClaimFencingIT {
         if (adminPwd != null && !adminPwd.isBlank()) {
             cfg.setPassword(adminPwd);
         }
-        cfg.setMaximumPoolSize(1);
+        cfg.setMaxActive(1);
         return cfg;
     }
 
     private static String adminQuery(String sql) throws Exception {
-        try (HikariDataSource adminPool = adminDataSource();
+        try (DruidDataSource adminPool = adminDataSource();
              Connection conn = adminPool.getConnection();
              var ps = conn.prepareStatement(sql);
              var rs = ps.executeQuery()) {
@@ -238,8 +242,10 @@ class RunClaimFencingIT {
 
     /** 读取当前 token（不在事务内，仅用于比较基准）。 */
     private long currentTokenOf(String runId) throws Exception {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
         // 密口认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，
@@ -248,8 +254,8 @@ class RunClaimFencingIT {
         if (adminPwd != null && !adminPwd.isBlank()) {
             cfg.setPassword(adminPwd);
         }
-        cfg.setMaximumPoolSize(1);
-        try (HikariDataSource adminPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(1);
+        try (DruidDataSource adminPool = cfg;
              Connection conn = adminPool.getConnection();
              var ps = conn.prepareStatement(
                      "SELECT fencing_token FROM run WHERE run_id=?::uuid")) {

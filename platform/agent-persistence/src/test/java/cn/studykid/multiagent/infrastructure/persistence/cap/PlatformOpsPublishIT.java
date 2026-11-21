@@ -6,8 +6,8 @@ import java.util.List;
 
 import javax.sql.DataSource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -69,7 +69,7 @@ class PlatformOpsPublishIT extends CapITBase {
     private static final Clock CLOCK = Clock.systemUTC();
 
     /** 运维角色的连接池（真实 BYPASSRLS 连接）。 */
-    private static HikariDataSource opsPool;
+    private static DruidDataSource opsPool;
 
     // ── 夹具 ──────────────────────────────────────────────────────
 
@@ -92,13 +92,15 @@ class PlatformOpsPublishIT extends CapITBase {
                 + OPS_ROLE);
         adminExec("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO " + OPS_ROLE);
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(OPS_ROLE);
         cfg.setPassword(OPS_PASSWORD);
-        cfg.setMaximumPoolSize(2);
-        cfg.setPoolName("it-platform-ops-pool");
-        opsPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        cfg.setName("it-platform-ops-pool");
+        opsPool = cfg;
     }
 
     /**

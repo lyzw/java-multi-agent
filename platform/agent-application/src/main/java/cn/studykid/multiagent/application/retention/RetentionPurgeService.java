@@ -53,7 +53,7 @@ public class RetentionPurgeService {
      * 停机标志（由 {@link #beginShutdown()} 在应用停机时置位）。
      *
      * <p>⚠️ 用途：停机窗口内 DataSource 会先于本服务关闭，
-     * 此时在途清理类别会抛出 {@code HikariDataSource has been closed}。
+     * 此时在途清理类别会抛出 {@code DataSourceClosedException}（Druid 池已关闭，消息 dataSource already closed）。
      * 这<b>不是</b>真实的合规清理失败（数据仍在、只是停机），
      * 故应降级为 DEBUG 而非 ERROR，避免污染告警与「清理失败」计数。
      */

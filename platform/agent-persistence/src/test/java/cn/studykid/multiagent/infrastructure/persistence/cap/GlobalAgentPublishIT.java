@@ -5,8 +5,8 @@ import java.util.List;
 
 import javax.sql.DataSource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -56,7 +56,7 @@ class GlobalAgentPublishIT extends CapITBase {
     private static final String REQUESTER = "it-global-requester";
     private static final String APPROVER = "it-global-approver";
 
-    private static HikariDataSource opsPool;
+    private static DruidDataSource opsPool;
 
     /**
      * 本类创建的申请单 id。
@@ -91,13 +91,15 @@ class GlobalAgentPublishIT extends CapITBase {
                 + OPS_ROLE);
         adminExec("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO " + OPS_ROLE);
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(OPS_ROLE);
         cfg.setPassword(OPS_PASSWORD);
-        cfg.setMaximumPoolSize(2);
-        cfg.setPoolName("it-global-agent-ops-pool");
-        opsPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        cfg.setName("it-global-agent-ops-pool");
+        opsPool = cfg;
     }
 
     @AfterAll

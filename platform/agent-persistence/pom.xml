@@ -16,8 +16,8 @@
     平台唯一的数据库边界模块：数据访问接口的实现、SQL、连接与事务（含 RLS 租户绑定）、
     数据源/连接池配置、schema 校验脚本，以及全部连库集成测试。
 
-    ⚠️ 本模块是**唯一允许**声明 JDBC/PostgreSQL/Flyway/Hikari 等数据库依赖、
-       唯一允许出现 java.sql.* / org.springframework.jdbc.* / com.zaxxer.hikari.* 的模块。
+    ⚠️ 本模块是**唯一允许**声明 JDBC/PostgreSQL/Flyway/Druid 等数据库依赖、
+       唯一允许出现 java.sql.* / org.springframework.jdbc.* / com.alibaba.druid.* 的模块。
        由 DatabaseBoundaryTest 在构建期锁死。
        业务模块只依赖 agent-ports 的端口契约；组合根（platform-bootstrap）只依赖
        本模块对外暴露的 Bean，不感知具体持久化实现。
@@ -66,10 +66,35 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-jdbc</artifactId>
+      <exclusions>
+        <!--
+          ⚠️⚠️ **必须排除 HikariCP**（2026-11-21 连接池切 Druid）。
+          不排除的后果不是「多一个池」，而是**两套池实现同时在 classpath 上**：
+          Spring Boot 的 DataSourceAutoConfiguration 与 Druid 的自动装配都带
+          @ConditionalOnMissingBean(DataSource.class)，谁先注册完全取决于类扫描顺序——
+          于是「今天建出来的池是 Hikari、明天可能是 Druid」，而配置文件长得一样。
+          这正是本项目反复出现的失真形态：**行为随环境漂移，且不报错**。
+          排除之后：classpath 上只剩 Druid，任何遗漏的自动装配路径都会**响亮失败**，
+          而不是静默回落到 Hikari。
+        -->
+        <exclusion>
+          <groupId>com.zaxxer</groupId>
+          <artifactId>HikariCP</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
+    </dependency>
+    <!--
+      数据库连接池：Alibaba Druid（2026-11-21 由 HikariCP 切换）。
+      ⚠️ 只引核心 jar，不引 druid-spring-boot-starter：本平台三个数据源全部显式装配，
+          自动装配只会与显式 Bean 抢注册顺序。版本由父 POM 锁定 1.2.28。
+    -->
+    <dependency>
+      <groupId>com.alibaba</groupId>
+      <artifactId>druid</artifactId>
     </dependency>
     <!--
       MyBatis-Plus（架构决策变更，W0/W1 试点）：版本由父 POM 锁定 3.5.17。

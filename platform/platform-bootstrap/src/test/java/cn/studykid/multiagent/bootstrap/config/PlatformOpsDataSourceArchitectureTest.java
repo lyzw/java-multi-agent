@@ -180,12 +180,12 @@ class PlatformOpsDataSourceArchitectureTest {
         List<String> violations = new ArrayList<>();
         for (Path file : mainSourceFiles()) {
             String code = stripCommentsAndStrings(read(file));
-            if (!code.contains("new HikariDataSource")) {
+            if (!code.contains("new DruidDataSource")) {
                 continue;
             }
             String rel = relative(file);
             // ⚠️ 只允许两处自建连接池：组合根（保留期/运维池）与数据库边界模块
-            //    agent-persistence（2026-11-06 收敛后，HikariDataSource 的构造随
+            //    agent-persistence（2026-11-06 收敛后，连接池的构造随
             //    数据源配置一并迁入该模块）。其余业务模块不得自建池，
             //    以免绕过运维通道的会话守卫。
             if (!rel.startsWith("platform-bootstrap/")

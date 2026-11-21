@@ -26,7 +26,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
@@ -58,8 +58,8 @@ class BudgetReservationIT {
 
     private static final String CURRENCY = "CNY";
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
     private static JdbcRunCreationRepository creationRepo;
     private static JdbcToolOperationLedger ledger;
     private static JdbcBudgetRepository budget;

@@ -19,8 +19,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
@@ -46,7 +46,7 @@ class TransactionBoundaryIT {
 
     private static final String SLUG = "it-tx-a";
 
-    private static HikariDataSource appPool;
+    private static DruidDataSource appPool;
     private static JdbcRunCreationRepository repo;
     private static String tenantA;
     private static String snapshotId;
@@ -75,8 +75,10 @@ class TransactionBoundaryIT {
         String user = System.getenv().getOrDefault("IT_PG_USER", "app_agent");
         String pwd = System.getenv("IT_PG_PASSWORD");
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(url);
         cfg.setUsername(user);
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
@@ -84,8 +86,8 @@ class TransactionBoundaryIT {
         // ⚠️ 池大小=1：强制最严场景。
         //    池大于 1 时，「复用外层连接」与「另开连接」可能拿到同一物理连接，
         //    掩盖连接复用缺陷；池=1 时若代码错误地另开连接，会取不到连接而失败。
-        cfg.setMaximumPoolSize(1);
-        appPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(1);
+        appPool = cfg;
         repo = new JdbcRunCreationRepository(appPool);
 
         // ⚠️ 用 it- 专用租户，不用种子租户 t-a（2026-11-03 修正）。

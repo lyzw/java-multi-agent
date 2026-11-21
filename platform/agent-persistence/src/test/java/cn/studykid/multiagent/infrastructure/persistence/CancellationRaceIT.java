@@ -17,7 +17,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 
@@ -43,8 +43,8 @@ import cn.studykid.multiagent.ports.persistence.RunClaimPort;
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class CancellationRaceIT {
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
     private static JdbcRunClaimRepository claims;
 
     private static String tenantA;

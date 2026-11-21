@@ -18,8 +18,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyConflictException;
 import cn.studykid.multiagent.core.idempotency.IdempotencyDecision;
@@ -50,7 +50,7 @@ class RunCreationAtomicityIT {
     private static final String SLUG_A = "it-atomic-a";
     private static final String SLUG_B = "it-atomic-b";
 
-    private static HikariDataSource appPool;      // 非特权角色，用于验证 RLS
+    private static DruidDataSource appPool;      // 非特权角色，用于验证 RLS
     private static JdbcRunCreationRepository repo;
     private static String tenantA;
     private static String tenantB;
@@ -80,14 +80,16 @@ class RunCreationAtomicityIT {
         String user = System.getenv().getOrDefault("IT_PG_USER", "app_agent");
         String pwd = System.getenv("IT_PG_PASSWORD");
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(url);
         cfg.setUsername(user);
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(2);
-        appPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        appPool = cfg;
         repo = new JdbcRunCreationRepository(appPool);
 
         // ⚠️ 用 it- 专用租户，不用种子租户 t-a/t-b（2026-11-03 修正）。

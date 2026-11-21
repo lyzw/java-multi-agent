@@ -18,8 +18,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.MetricQuery;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.SamplingCandidate;
@@ -46,20 +46,22 @@ class JdbcAgentMetricSamplingCandidatesIT {
     /** 正常样本数：必须远大于候选上限，才能形成「挤出」压力。 */
     private static final int NORMAL_ROWS = 600;
 
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
     private static JdbcAgentMetricRepository repo;
 
     @BeforeAll
     static void setUp() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         String pwd = System.getenv("IT_PG_ADMIN_PASSWORD");
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(3);
-        adminPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(3);
+        adminPool = cfg;
         repo = new JdbcAgentMetricRepository(adminPool);
     }
 

@@ -43,8 +43,8 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.bootstrap.PlatformApplication;
 import cn.studykid.multiagent.context.HeuristicTokenCounter;
@@ -136,20 +136,22 @@ class ContextCompactionL1RealRunIT {
 
     private static final TokenCounter TOKEN_COUNTER = new HeuristicTokenCounter();
 
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
     private static String provisionedTenantId;
     private static String provisionedSnapshotId;
     private static String offAgentId;
     private static String tieredAgentId;
 
     static {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(env("IT_PG_URL", ""));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(env("IT_PG_URL", ""));
         cfg.setUsername(env("IT_PG_ADMIN_USER", "agent"));
         cfg.setPassword(env("IT_PG_ADMIN_PASSWORD", ""));
-        cfg.setMaximumPoolSize(3);
-        cfg.setPoolName("context-compaction-l1-it-admin");
-        adminPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(3);
+        cfg.setName("context-compaction-l1-it-admin");
+        adminPool = cfg;
         try {
             // ⚠️ 必须早于 Spring 上下文创建：MessagingChannels 启动期按 slug 解析 tenantId。
             provisionedTenantId = ItTenantProvisioner.provision(adminPool, TENANT_SLUG);

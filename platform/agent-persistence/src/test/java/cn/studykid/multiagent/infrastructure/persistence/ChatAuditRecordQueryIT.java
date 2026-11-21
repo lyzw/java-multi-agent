@@ -16,7 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.infrastructure.persistence.agentchataudit.JdbcChatAuditRecordQueryRepository;
 import cn.studykid.multiagent.infrastructure.persistence.agentchataudit.JdbcChatAuditSink;
@@ -52,8 +52,8 @@ class ChatAuditRecordQueryIT {
      */
     private static final String ENDPOINT = "/it/chat-audit-query-test";
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
     private static String tenantA;
     private static String tenantB;
     private static JdbcChatAuditSink sink;

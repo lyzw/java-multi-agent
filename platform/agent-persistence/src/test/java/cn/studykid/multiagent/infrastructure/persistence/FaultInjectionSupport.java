@@ -11,8 +11,8 @@ import javax.sql.DataSource;
 
 import org.assertj.core.api.Assertions;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
@@ -26,7 +26,7 @@ import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
  *       否则超级用户绕过 RLS 会给出「隔离失效」的虚假结论（E-3）。</li>
  *   <li>池扰动用<b>大池 + 短 maxLifetime</b> 制造连接复用与回收，
  *       与既有 {@code TransactionBoundaryIT} 的 {@code maxPoolSize=1} 互补证伪。</li>
- *   <li>{@link #rawAppConnection()} 用于<b>模拟崩溃</b>：Hikari 归还连接时会把
+ *   <li>{@link #rawAppConnection()} 用于<b>模拟崩溃</b>：连接池归还连接时会把
  *       autocommit 重置为 true，PG 下等于<b>提交</b>未提交事务，
  *       会伪造「崩溃后数据仍在」——故崩溃场景必须用裸连接。</li>
  * </ul>
@@ -36,18 +36,30 @@ public final class FaultInjectionSupport {
     private FaultInjectionSupport() {
     }
 
-    public static HikariDataSource appPool(int maxPoolSize) {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    public static DruidDataSource appPool(int maxPoolSize) {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_USER", "app_agent"));
         String pwd = System.getenv("IT_PG_PASSWORD");
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(maxPoolSize);
+        cfg.setMaxActive(maxPoolSize);
         // ⚠️ 短生命周期强制连接回收，制造「连接复用」扰动
-        cfg.setMaxLifetime(1_000);
-        return new HikariDataSource(cfg);
+        //    （Hikari 侧是 setMaxLifetime(1_000)，Druid 侧对应空闲回收上限）。
+        // ⚠️ Druid 对 min/maxEvictableIdleTimeMillis 有 30s 的**建议下限**
+        //    （低于它会每次建池刷一条 SEVERE 日志；虽不抛异常，但会把真实告警淹掉）。
+        //    故取 30_001ms —— 刚好越线，保住「短生命周期」的扰动意图。
+        // ⚠️ Druid 硬约束：maxEvictableIdleTimeMillis 必须 >= minEvictableIdleTimeMillis，
+        //    否则 init() 阶段直接抛 SQLException（建池失败，取第一连接时才炸）。
+        // ⚠️ 回收扫描间隔决定实际回收精度（Druid 默认 60s 才扫一次）：
+        //    只改上限不缩短扫描间隔，实际回收会拖到分钟级，扰动强度大幅缩水。
+        cfg.setMinEvictableIdleTimeMillis(30_001L);
+        cfg.setMaxEvictableIdleTimeMillis(30_001L);
+        cfg.setTimeBetweenEvictionRunsMillis(1_000L);
+        return cfg;
     }
 
     /**
@@ -64,16 +76,18 @@ public final class FaultInjectionSupport {
      *
      * <p>凭据只从环境变量来（{@code IT_RETENTION_USER} / {@code IT_RETENTION_PASSWORD}）。
      */
-    public static HikariDataSource retentionPool(int maxPoolSize) {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    public static DruidDataSource retentionPool(int maxPoolSize) {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_RETENTION_USER", "agent_retention"));
         String pwd = System.getenv("IT_RETENTION_PASSWORD");
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(Math.max(1, maxPoolSize));
-        return new HikariDataSource(cfg);
+        cfg.setMaxActive(Math.max(1, maxPoolSize));
+        return cfg;
     }
 
     /** 裸清理连接（需要「会话级」行为时用，如显式事务内声明 actor）。 */
@@ -84,9 +98,11 @@ public final class FaultInjectionSupport {
         return DriverManager.getConnection(url, user, pwd == null ? "" : pwd);
     }
 
-    public static HikariDataSource adminPool() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    public static DruidDataSource adminPool() {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
         // 密口认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，
@@ -95,8 +111,8 @@ public final class FaultInjectionSupport {
         if (adminPwd != null && !adminPwd.isBlank()) {
             cfg.setPassword(adminPwd);
         }
-        cfg.setMaximumPoolSize(1);
-        return new HikariDataSource(cfg);
+        cfg.setMaxActive(1);
+        return cfg;
     }
 
     /** 模拟 JVM/连接崩溃的裸连接：关闭时由 PostgreSQL 服务端回滚未提交事务。 */
@@ -173,7 +189,7 @@ public final class FaultInjectionSupport {
      * 与「取错夹具」这个真因相距极远。
      */
     static ItTenantRef provisionItTenant(String slug) throws SQLException {
-        try (HikariDataSource admin = adminPool()) {
+        try (DruidDataSource admin = adminPool()) {
             String tenantId = ItTenantProvisioner.provision(admin, slug);
             return new ItTenantRef(tenantId, ItTenantProvisioner.snapshotId(admin, tenantId));
         }
@@ -186,7 +202,7 @@ public final class FaultInjectionSupport {
      * 快照<b>不可删</b>（{@code forbid_snapshot_mutation}），故这里不处理。
      */
     static void purgeItTenantRuns(String slug) throws SQLException {
-        try (HikariDataSource admin = adminPool()) {
+        try (DruidDataSource admin = adminPool()) {
             purgeItTenantRuns(admin, slug);
         }
     }
@@ -195,7 +211,7 @@ public final class FaultInjectionSupport {
      * 同上，但复用调用方已有的管理池。
      *
      * <p>⚠️ 优先用这个重载：{@link #purgeItTenantRuns(String)} 每次都会新建一个
-     * Hikari 池（远端库上一次握手就是几十毫秒），而多数 IT 类已持有类级管理池。
+     * 连接池（远端库上一次握手就是几十毫秒），而多数 IT 类已持有类级管理池。
      */
     static void purgeItTenantRuns(DataSource admin, String slug) throws SQLException {
         try (Connection conn = admin.getConnection()) {

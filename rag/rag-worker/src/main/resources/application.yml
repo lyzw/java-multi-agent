@@ -9,10 +9,20 @@ spring:
     username: ${RAG_PG_USERNAME:rag_app}
     password: ${RAG_PG_PASSWORD:rag_app}
     driver-class-name: org.postgresql.Driver
-    hikari:
+    # ⚠️ Druid 语义键名（2026-11-21 连接池由 HikariCP 切换为 Druid，与 rag-bootstrap 对齐）
+    druid:
       # ⚠️ 同 rag-bootstrap：RAG 对象在独立 schema `rag`，应用 SQL 用未限定表名，
       #    每条连接必须把 search_path 指向 rag，否则解析不到对象。
       connection-init-sql: SET search_path TO rag, public
+      # ⚠️ 上限 10 / 常驻 10：Hikari 的 minimumIdle 默认等于 maximumPoolSize，切换后显式写死。
+      max-active: 10
+      min-idle: 10
+      # ⚠️ 空闲保活 + 定期轮换：与 rag-bootstrap 同值
+      #    （长册摄取期间连接长时间空闲，托管 RDS 会回收成死连接）
+      keep-alive-between-time-millis: 120000
+      min-evictable-idle-time-millis: 300000
+      max-evictable-idle-time-millis: 540000
+      validation-query-timeout: 5000
   flyway:
     # ⛔ 同 rag-bootstrap：迁移脚本已删除，结构以 deploy/sql/rag/01_rag_ddl.sql 为准。
     #    保持 true 会在共享库凭空建出一张 0 行的 public.flyway_schema_history，

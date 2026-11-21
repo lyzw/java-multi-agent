@@ -19,8 +19,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
@@ -50,8 +50,8 @@ class RunAudienceIsolationIT {
     private static final Clock CLOCK =
             Clock.fixed(Instant.parse("2026-11-14T04:00:00Z"), ZoneOffset.UTC);
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
     private static JdbcRunCreationRepository creationRepo;
     private static JdbcRunListQueryRepository runList;
     private static JdbcRunQueryRepository runQuery;
@@ -69,13 +69,15 @@ class RunAudienceIsolationIT {
 
     @BeforeAll
     static void setUp() throws Exception {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_USER", "app_agent"));
         String pwd = System.getenv("IT_PG_PASSWORD");
         if (pwd != null && !pwd.isBlank()) cfg.setPassword(pwd);
-        cfg.setMaximumPoolSize(4);
-        appPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(4);
+        appPool = cfg;
         adminPool = FaultInjectionSupport.adminPool();
 
         creationRepo = new JdbcRunCreationRepository(appPool);

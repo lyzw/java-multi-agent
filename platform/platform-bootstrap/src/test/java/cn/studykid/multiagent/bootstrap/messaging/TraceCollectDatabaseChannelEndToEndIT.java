@@ -22,8 +22,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.bootstrap.PlatformApplication;
 import cn.studykid.multiagent.infrastructure.messaging.TenantRoutingMessageSender;
@@ -86,7 +86,7 @@ class TraceCollectDatabaseChannelEndToEndIT {
     private static final String TENANT_SLUG = "it-trace-collect";
 
     /** ⚠️ 静态：Spring 上下文在测试类实例化前创建，故租户必须先建好。 */
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
 
     @Autowired
     private DataSource dataSource;
@@ -103,13 +103,15 @@ class TraceCollectDatabaseChannelEndToEndIT {
 
     @BeforeAll
     static void setup() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(env("IT_PG_URL", ""));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(env("IT_PG_URL", ""));
         cfg.setUsername(env("IT_PG_ADMIN_USER", "agent"));
         cfg.setPassword(env("IT_PG_ADMIN_PASSWORD", ""));
-        cfg.setMaximumPoolSize(2);
-        cfg.setPoolName("trace-db-it-admin");
-        adminPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        cfg.setName("trace-db-it-admin");
+        adminPool = cfg;
         // ⚠️ 必须在此建租户：上下文启动期要按 slug 解析 tenantId。
         //    provision 是幂等的（重复调用返回同一租户）。
         try {

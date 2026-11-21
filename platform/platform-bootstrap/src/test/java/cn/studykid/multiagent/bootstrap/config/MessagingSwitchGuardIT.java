@@ -17,8 +17,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.infrastructure.messaging.PgQueueRepository;
 import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
@@ -49,8 +49,8 @@ class MessagingSwitchGuardIT {
     /** IT 专用租户 slug（前缀 {@code it-} 由 {@link #provisionTenant} 硬校验）。 */
     private static final String SLUG = "it-switch-a";
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
     private static PgQueueRepository repository;
     private static String tenantA;
 
@@ -141,15 +141,17 @@ class MessagingSwitchGuardIT {
                 adminPool, slug, "IT 专用租户 · 消息通道切换守卫（勿删，幂等创建）");
     }
 
-    private static HikariDataSource pool(String user, String password, int size) {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    private static DruidDataSource pool(String user, String password, int size) {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(user);
         if (password != null && !password.isBlank()) {
             cfg.setPassword(password);
         }
-        cfg.setMaximumPoolSize(size);
-        return new HikariDataSource(cfg);
+        cfg.setMaxActive(size);
+        return cfg;
     }
 
     private static String createRun(String tenantId) throws SQLException {

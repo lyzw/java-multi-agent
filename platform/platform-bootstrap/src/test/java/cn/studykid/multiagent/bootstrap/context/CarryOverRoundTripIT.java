@@ -29,7 +29,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import tools.jackson.databind.JsonNode;
 
@@ -117,8 +117,8 @@ class CarryOverRoundTripIT {
     private static final int HISTORY_PAIRS = 3;
     private static final int MAX_OUTPUT_TOKENS = 512;
 
-    private static HikariDataSource adminPool;
-    private static HikariDataSource appPool;
+    private static DruidDataSource adminPool;
+    private static DruidDataSource appPool;
     private static String tenantId;
 
     private static final List<ModelRequest> captured = new CopyOnWriteArrayList<>();

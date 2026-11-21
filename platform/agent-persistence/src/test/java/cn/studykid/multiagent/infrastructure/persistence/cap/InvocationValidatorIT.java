@@ -365,7 +365,7 @@ class InvocationValidatorIT extends CapITBase {
 
         // ⚠️ **实例 B**：全新独立连接池 —— 与 A 无任何进程内共享状态。
         //    若版本被缓存在实例内存里，B 读到的仍是旧版本 → 撤权跨实例失效。
-        try (com.zaxxer.hikari.HikariDataSource instanceB = newInstancePool()) {
+        try (com.alibaba.druid.pool.DruidDataSource instanceB = newInstancePool()) {
             InvocationValidator validatorB = new InvocationValidator(
                     new JdbcAuthzVersionRepository(instanceB),
                     ROLE_STUB,

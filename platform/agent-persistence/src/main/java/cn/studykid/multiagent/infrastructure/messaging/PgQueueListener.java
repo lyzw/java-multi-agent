@@ -104,7 +104,7 @@ public class PgQueueListener {
      *
      * <p>{@code stopped} 用于「停机后不再领取新任务」的语义判断；
      * {@code shuttingDown} 用于「把停机窗口内的 DB 异常降级为 DEBUG」——
-     * 否则 DataSource 关闭导致的 {@code HikariDataSource has been closed}
+     * 否则 DataSource 关闭导致的 {@code DataSourceClosedException}（Druid 池已关闭，消息 dataSource already closed）
      * 会被误判成一次真实的消费失败，污染告警。
      */
     private volatile boolean shuttingDown = false;
@@ -399,7 +399,7 @@ public class PgQueueListener {
             try {
                 // ⚠️ 关键修复：必须等 worker 线程真正退出，否则守护线程会在
                 //    DataSource 关闭后仍在跑，下一次 getConnection 命中已关闭的池 →
-                //    "HikariDataSource has been closed"。受 Spring LIFO 析构顺序保证，
+                //    "dataSource already closed"。受 Spring LIFO 析构顺序保证，
                 //    本方法返回时 DataSource 尚未关闭，故 join 期间在途消费面对的是
                 //    仍打开的池，可干净收尾。
                 t.join(STOP_TIMEOUT_MS);

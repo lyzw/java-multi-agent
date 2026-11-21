@@ -14,7 +14,7 @@
   <name>agent-context :: 上下文压缩纯算法层</name>
   <description>
     ADR-013 [D1]：上下文预算、水位线、增量摘要状态的纯 Java 实现。
-    ⚠️ 本模块零 Spring / 零 JDBC / 零 Hikari / 零 Flyway（C1 / ADR-011），
+    ⚠️ 本模块零 Spring / 零 JDBC / 零 Druid / 零 Flyway（C1 / ADR-011），
     只允许依赖 agent-ports 的契约与 jspecify；DB 写入只能在 agent-persistence。
   </description>
 

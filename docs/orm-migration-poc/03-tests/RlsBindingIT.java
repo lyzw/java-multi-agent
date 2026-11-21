@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.infrastructure.persistence.FaultInjectionSupport;
 
@@ -39,8 +39,8 @@ import cn.studykid.multiagent.infrastructure.persistence.FaultInjectionSupport;
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class RlsBindingIT {
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
     private static String tenantA;
     private static String tenantB;
 

@@ -13,8 +13,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.testsupport.db.ItTenantProvisioner;
 
@@ -41,19 +41,21 @@ class ItTenantProvisionerIT {
 
     private static final String SLUG = "it-prov-check";
 
-    private static HikariDataSource admin;
+    private static DruidDataSource admin;
 
     @BeforeAll
     static void setUp() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         String pwd = System.getenv("IT_PG_ADMIN_PASSWORD");
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(2);
-        admin = new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        admin = cfg;
     }
 
     @AfterAll

@@ -14,7 +14,7 @@ import java.util.UUID;
 
 import javax.sql.DataSource;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,8 +59,8 @@ class SseDirectRunClaimIT {
     /** 挤出压力：让 SSE 行的 created_at 明显更早，若过滤消失它必然先被 LIMIT 1 选中。 */
     private static final String SSE_CREATED_AT = "now() - interval '10 minutes'";
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
     private static JdbcRunClaimRepository claimRepo;
     private static JdbcRunCreationRepository creationRepo;
     private static String tenantId;

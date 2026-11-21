@@ -21,8 +21,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.security.Action;
 import cn.studykid.multiagent.core.security.ResourceRef;
@@ -85,26 +85,26 @@ class AuthzDecisionLogLiveIT {
     /** 本轮唯一标识，避免与上次运行（含失败残留）混淆。 */
     private static final String RUN_TOKEN = UUID.randomUUID().toString();
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
 
     @BeforeAll
     static void setUp() throws SQLException {
-        HikariConfig app = new HikariConfig();
-        app.setJdbcUrl(URL);
+        DruidDataSource app = new DruidDataSource();
+        app.setUrl(URL);
         app.setUsername(USER);
         app.setPassword(PASSWORD);
-        app.setMaximumPoolSize(2);
-        app.setConnectionTimeout(10_000L);
-        appPool = new HikariDataSource(app);
+        app.setMaxActive(2);
+        app.setMaxWait(10_000L);
+        appPool = app;
 
-        HikariConfig admin = new HikariConfig();
-        admin.setJdbcUrl(URL);
+        DruidDataSource admin = new DruidDataSource();
+        admin.setUrl(URL);
         admin.setUsername(ADMIN_USER);
         admin.setPassword(ADMIN_PASSWORD);
-        admin.setMaximumPoolSize(2);
-        admin.setConnectionTimeout(10_000L);
-        adminPool = new HikariDataSource(admin);
+        admin.setMaxActive(2);
+        admin.setMaxWait(10_000L);
+        adminPool = admin;
 
         // 清掉历史残留（上一次失败运行留下的行），保证断言「恰好 1 行」不会因陈数据误判
         purgeMarkerRows();

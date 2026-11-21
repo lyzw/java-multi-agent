@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.infrastructure.persistence.FaultInjectionSupport;
 import cn.studykid.multiagent.infrastructure.persistence.JdbcErasureRepository;
@@ -55,10 +55,10 @@ class MemoryRecallIT {
 
     private static final String SLUG = "it-mem";
 
-    private static HikariDataSource admin;
-    private static HikariDataSource app;
+    private static DruidDataSource admin;
+    private static DruidDataSource app;
     /** 清理通道：验证「记忆真的被保留期清理删掉」。 */
-    private static HikariDataSource retention;
+    private static DruidDataSource retention;
 
     private static String tenant;
     private static String otherTenant;

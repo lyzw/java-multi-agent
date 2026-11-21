@@ -22,8 +22,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -81,19 +81,21 @@ public final class AgentChainItSupport {
 
     // ── 数据源 / 租户夹具 ────────────────────────────────────────────
 
-    public static HikariDataSource pool(String user, String password) {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    public static DruidDataSource pool(String user, String password) {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(user);
         if (password != null && !password.isBlank()) {
             cfg.setPassword(password);
         }
-        cfg.setMaximumPoolSize(3);
-        cfg.setPoolName("m15-chain-it-" + user);
-        return new HikariDataSource(cfg);
+        cfg.setMaxActive(3);
+        cfg.setName("m15-chain-it-" + user);
+        return cfg;
     }
 
-    public static String provision(HikariDataSource admin, String slug) throws SQLException {
+    public static String provision(DruidDataSource admin, String slug) throws SQLException {
         return ItTenantProvisioner.provision(admin, slug, "S3-M15 链路 IT 专用租户（勿删）");
     }
 

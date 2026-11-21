@@ -13,8 +13,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.core.tenant.TenantRegistry.TenantRow;
@@ -47,8 +47,8 @@ class TenantProvisionRuntimePrerequisitesIT {
 
     private static final String SLUG = "it-runtime-prereq";
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
     private static String tenantId;
 
     @BeforeAll
@@ -140,15 +140,17 @@ class TenantProvisionRuntimePrerequisitesIT {
         }
     }
 
-    private static HikariDataSource pool(String user, String password) {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    private static DruidDataSource pool(String user, String password) {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(user);
         if (password != null && !password.isBlank()) {
             cfg.setPassword(password);
         }
-        cfg.setMaximumPoolSize(2);
-        return new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        return cfg;
     }
 
     private static long queryLong(Connection conn, String sql, String... params)

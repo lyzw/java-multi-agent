@@ -3,7 +3,8 @@
 #
 # ⚠️ **为什么必须收窄连接池**（W-PERM-P0 阶段实测修正）：
 #
-#   Hikari 的默认值是 minimumIdle = maximumPoolSize = 10，
+#   Hikari 的默认值是 minimumIdle = maximumPoolSize = 10
+#   （Druid 侧已用 min-idle 显式写死，不依赖默认值），
 #   即**每个** DataSource 会常驻 10 条连接（哪怕完全空闲）。
 #   而 @SpringBootTest 的 Spring 上下文缓存默认保留 32 个上下文，
 #   每个上下文各持一个 DataSource →
@@ -24,16 +25,20 @@
 # =====================================================================
 spring:
   datasource:
-    hikari:
+    # ⚠️ Druid 语义键名（2026-11-21 连接池由 HikariCP 切换为 Druid）：
+    #    max-active ≡ 池上限；min-idle ≡ 常驻连接数；
+    #    min-evictable-idle-time-millis ≡ 空闲回收下限；
+    #    max-evictable-idle-time-millis ≡ 空闲回收上限。
+    druid:
       # 上限：并发吃紧时的上限
-      maximum-pool-size: 4
-      # ⚠️ 关键：**不**让它等于 maximumPoolSize。
+      max-active: 4
+      # ⚠️ 关键：**不**让它等于 max-active。
       #    相等 = 每个上下文常驻满额连接，32 个上下文就是 320 条。
-      minimum-idle: 1
+      min-idle: 1
       # 空闲连接回收：避免上下文缓存里的连接一直挂着
-      idle-timeout: 30000
+      min-evictable-idle-time-millis: 30000
       # 连接存活探测：避免拿到已被服务端关闭的连接
-      max-lifetime: 600000
+      max-evictable-idle-time-millis: 600000
 
 # ⚠️ 集成测试环境：关闭「Rabbit 侧残留检查」。
 #    理由：测试自身会往 broker 发消息（真实 broker 端到端用例），

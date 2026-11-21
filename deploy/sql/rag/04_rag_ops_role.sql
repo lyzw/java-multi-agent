@@ -112,7 +112,7 @@ SELECT format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA rag FROM %I', :'rag_ops_rol
 --    于是角色级默认看似设上了、实际解析不到任何表：
 --      SHOW search_path → "rag, public"（带引号，实测）
 --      to_regclass('rag_source') → NULL（实测；不带引号时为 rag.rag_source）
---    而**没有任何报错**。应用侧不受影响（HikariCP 的 connection-init-sql 是会话内
+--    而**没有任何报错**。应用侧不受影响（Druid 的 connection-init-sql 是会话内
 --    `SET search_path TO rag, public`，走的是列表语法），受害的是带外 psql 运维——
 --    恰恰是这个角色默认值存在的理由。列表型 GUC 必须逐元素给：
 SELECT format('ALTER ROLE %I SET statement_timeout = %L', :'rag_ops_role', '30s') \gexec

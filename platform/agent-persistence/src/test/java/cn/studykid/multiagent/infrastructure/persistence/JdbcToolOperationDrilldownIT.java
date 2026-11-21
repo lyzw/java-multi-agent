@@ -18,8 +18,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 /**
  * TOOL 消息下钻的<b>真库闭环</b>（2026-11-09 补 · 详细设计 §8.3）。
@@ -43,20 +43,22 @@ class JdbcToolOperationDrilldownIT {
     /** 另一个真实租户（用于跨租户回查断言）。 */
     private static String tenantB;
 
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
     private static JdbcTraceReplayRepository repo;
 
     @BeforeAll
     static void setUp() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         String pwd = System.getenv("IT_PG_ADMIN_PASSWORD");
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(3);
-        adminPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(3);
+        adminPool = cfg;
         repo = new JdbcTraceReplayRepository(adminPool);
         try (Connection c = adminPool.getConnection();
              Statement st = c.createStatement();

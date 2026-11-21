@@ -18,8 +18,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.idempotency.IdempotencyKey;
 import cn.studykid.multiagent.core.idempotency.RequestDigest;
@@ -49,17 +49,17 @@ class GovernanceQueryIT {
     private static final Clock CLOCK =
             Clock.fixed(Instant.parse("2026-10-21T03:00:00Z"), ZoneOffset.UTC);
 
-    private static HikariDataSource appPool;
+    private static DruidDataSource appPool;
 
     /**
      * 管理连接池（库 owner）：造夹具与对照查询用，<b>整个测试类共用一个</b>。
      *
-     * <p>⚠️ 原实现的每个 {@code adminQuery / adminExec} 都 {@code new HikariDataSource(...)}
+     * <p>⚠️ 原实现的每个 {@code adminQuery / adminExec} 都 {@code new DruidDataSource(...)}
      * 再 close —— 一次调用一个池。本类有 40+ 处调用，等于每跑一遍就创建销毁 40+ 个池：
-     * 日志里出现 {@code HikariPool-422} 这类编号、单类耗时被连接建立主导，
+     * 日志里出现 {@code DataSource-<identityHashCode>} 这类编号、单类耗时被连接建立主导，
      * 且池名最大编号正是「泄漏/抖动」的可疑信号。改为类级单例后行为不变、开销归零。
      */
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
     private static JdbcRunListQueryRepository runList;
     private static JdbcApprovalQueryRepository approvals;
     private static JdbcUnknownOperationRepository operations;
@@ -97,14 +97,16 @@ class GovernanceQueryIT {
         String user = System.getenv().getOrDefault("IT_PG_USER", "app_agent");
         String pwd = System.getenv("IT_PG_PASSWORD");
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(url);
         cfg.setUsername(user);
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(4);
-        appPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(4);
+        appPool = cfg;
 
         // 类级单例管理池（见字段注释：原实现每次调用新建一个池）
         adminPool = FaultInjectionSupport.adminPool();

@@ -18,8 +18,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.infrastructure.PlatformDdl;
 
@@ -50,16 +50,18 @@ import cn.studykid.multiagent.infrastructure.PlatformDdl;
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class SchemaDriftIT {
 
-    private static HikariDataSource appPool;
+    private static DruidDataSource appPool;
 
     @BeforeAll
     static void beforeAll() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv("IT_PG_USER"));
         cfg.setPassword(System.getenv("IT_PG_PASSWORD"));
-        cfg.setMaximumPoolSize(2);
-        appPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        appPool = cfg;
     }
 
     @Test

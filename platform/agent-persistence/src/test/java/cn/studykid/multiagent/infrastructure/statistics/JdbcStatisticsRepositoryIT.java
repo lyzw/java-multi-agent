@@ -20,8 +20,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.ports.statistics.StatisticsPort.DailyStatistics;
 import cn.studykid.multiagent.ports.statistics.StatisticsPort.KnowledgePointRank;
@@ -98,17 +98,17 @@ class JdbcStatisticsRepositoryIT {
     /** 本 IT 造的知识点的固定前缀（保证断言不受别的 IT 残留影响）。 */
     private static final String KP_PREFIX = "统计IT知识点";
 
-    private static HikariDataSource pool;
+    private static DruidDataSource pool;
 
     /**
      * 管理连接池（库 owner）：造夹具与对账查询用，<b>整个测试类共用一个</b>。
      *
-     * <p>⚠️ 原实现的 {@code adminExec / adminQuery} 每次都 {@code new HikariDataSource(...)}
+     * <p>⚠️ 原实现的 {@code adminExec / adminQuery} 每次都 {@code new DruidDataSource(...)}
      * 再 close —— 一次调用一个池。本类夹具量大，实测日志出现
-     * {@code HikariPool-422} 这种四位数编号：单类就要建/销毁几百个池，
+     * {@code DataSource-<identityHashCode>} 这种编号：单类就要建/销毁几百个池，
      * 耗时被连接建立主导，池编号本身也成了「是否泄漏」的噪声。
      */
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
     private static JdbcStatisticsRepository repository;
 
     /**
@@ -171,20 +171,22 @@ class JdbcStatisticsRepositoryIT {
         String user = System.getenv().getOrDefault("IT_PG_USER", "app_agent");
         String pwd = System.getenv().getOrDefault("IT_PG_PASSWORD", "");
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(url);
         cfg.setUsername(user);
         if (!pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(4);
-        pool = new HikariDataSource(cfg);
+        cfg.setMaxActive(4);
+        pool = cfg;
         repository = new JdbcStatisticsRepository(pool);
 
         // ⚠️ 专用租户由**库 owner** 幂等创建（应用角色对 tenant 无写权且受 RLS 约束）。
         //    与种子租户 t-a 的区别见类注释：t-a 会被运行实例的 worker 轮询并改写。
         // ⚠️ 管理池整个测试类只建一次（见 adminPool 字段注释），不放进 try-with-resources。
-        adminPool = new HikariDataSource(adminConfig());
+        adminPool = adminConfig();
         try {
             tenantA = ItTenantProvisioner.provision(
                     adminPool, SLUG_A, "IT 专用租户 · 工作台统计 A（勿删，幂等创建）");
@@ -728,15 +730,17 @@ class JdbcStatisticsRepositoryIT {
      * 显式给 {@code IT_PG_ADMIN_PASSWORD}，否则连接失败
      * （作用域级隔离可能被误读为「失效」）。
      */
-    private static HikariConfig adminConfig() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    private static DruidDataSource adminConfig() {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
         if (adminPwd != null && !adminPwd.isBlank()) {
             cfg.setPassword(adminPwd);
         }
-        cfg.setMaximumPoolSize(1);
+        cfg.setMaxActive(1);
         return cfg;
     }
 

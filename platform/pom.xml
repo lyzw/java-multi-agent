@@ -35,6 +35,13 @@
           锁定 3.5.17（本地已缓存，规避 3.5.16 动态参数 issue #7064）。
     -->
     <mybatis-plus.version>3.5.17</mybatis-plus.version>
+    <!--
+      数据库连接池基线：Alibaba Druid（2026-11-21 由 HikariCP 切换）。
+      ⚠️ Druid 核心 jar 的全部依赖均为 provided/optional，不引入传递运行时依赖。
+      ⚠️ 锁版本而非跟随 spring-boot-dependencies：Druid 不在 Spring Boot 官方 BOM 里，
+          交由 Boot BOM 管版本会让「池实现」变成不受控的传递变量。
+    -->
+    <druid.version>1.2.28</druid.version>
     <!-- 路由引擎的正则求值器：线性时间、无回溯（10 号设计 §4.4「防 ReDoS」）。 -->
     <re2j.version>1.8</re2j.version>
     <!-- SpotBugs 抑制注解（仅编译期标记，provided 作用域，不进运行包）。 -->
@@ -90,6 +97,18 @@
         <groupId>com.baomidou</groupId>
         <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
         <version>${mybatis-plus.version}</version>
+      </dependency>
+
+      <!--
+        数据库连接池：Druid（版本集中锁定，子模块不得覆盖）。
+        ⚠️ 只声明**核心 jar**，不引 druid-spring-boot-starter：
+            本平台所有数据源都是显式装配的（见 agent-persistence 的三个 *DataSourceConfiguration），
+            自动装配的 Druid starter 只会与显式 Bean 抢注册顺序。
+      -->
+      <dependency>
+        <groupId>com.alibaba</groupId>
+        <artifactId>druid</artifactId>
+        <version>${druid.version}</version>
       </dependency>
 
       <!-- 内部模块 -->

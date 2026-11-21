@@ -17,8 +17,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.security.Action;
 import cn.studykid.multiagent.core.tenant.SubjectContext;
@@ -66,7 +66,7 @@ class AuthzShadowLiveIT {
     /** 平台域无哨兵（共享）行模型：空哨兵 ⇒ {@code TaintVerifier} 一律按「非共享」处理。 */
     private static final String NO_SENTINEL = "";
 
-    private static HikariDataSource pool;
+    private static DruidDataSource pool;
 
     /** 行数最多的两个租户（真实数据，不硬编码 UUID —— 不同环境种子不同）。 */
     private static String tenantA;
@@ -74,14 +74,14 @@ class AuthzShadowLiveIT {
 
     @BeforeAll
     static void setUp() throws SQLException {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(URL);
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setUrl(URL);
         cfg.setUsername(USER);
         cfg.setPassword(PASSWORD);
         // 池大小 1：强制复用同一物理连接，把「连接级 GUC 串租户」的风险也纳进来
-        cfg.setMaximumPoolSize(1);
-        cfg.setConnectionTimeout(10_000L);
-        pool = new HikariDataSource(cfg);
+        cfg.setMaxActive(1);
+        cfg.setMaxWait(10_000L);
+        pool = cfg;
 
         List<String> tenantsWithData = tenantsByAgentCountDesc();
         assertThat(tenantsWithData)

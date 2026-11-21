@@ -9,8 +9,8 @@ import java.util.Set;
 
 import javax.sql.DataSource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
@@ -72,12 +72,12 @@ class ConfigOverrideEndpointIT {
      *
      * <p>⚠️ <b>为什么必须是 static</b>：JUnit 默认每个测试方法新建一个测试类实例，
      * 实例字段因而「每个方法都是 null」→ <b>每个方法都新建一个连接池</b>。
-     * Hikari 的 {@code minimumIdle} 默认等于 {@code maximumPoolSize}，
+     * Hikari 的 {@code minimumIdle} 默认等于 {@code maximumPoolSize}（Druid 侧已用 {@code min-idle} 显式写死，不依赖默认值），
      * 每个池常驻 2 条连接；池若不关闭，连接就<b>永不归还</b>，
      * 累积后打满 PostgreSQL 的 {@code max_connections=100}
      * → <b>别的 IT 类的 Spring 上下文启动失败</b>（报错点与真因相隔一个类）。
      */
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
 
     private String tenantA;
 
@@ -92,8 +92,10 @@ class ConfigOverrideEndpointIT {
 
     private static synchronized void adminPool() {
         if (adminPool == null) {
-            HikariConfig cfg = new HikariConfig();
-            cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+            DruidDataSource cfg = new DruidDataSource();
+            cfg.setMaxWait(10_000L);
+            cfg.setConnectTimeout(10_000);
+            cfg.setUrl(System.getenv("IT_PG_URL"));
             cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
 // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
 //    密码认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，否则连接失败。
@@ -101,8 +103,8 @@ class ConfigOverrideEndpointIT {
             if (adminPwd != null && !adminPwd.isBlank()) {
                 cfg.setPassword(adminPwd);
             }
-            cfg.setMaximumPoolSize(2);
-            adminPool = new HikariDataSource(cfg);
+            cfg.setMaxActive(2);
+            adminPool = cfg;
         }
     }
 

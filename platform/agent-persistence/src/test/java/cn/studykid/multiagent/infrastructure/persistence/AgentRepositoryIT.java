@@ -14,8 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.ports.persistence.AgentManagePort;
 import cn.studykid.multiagent.ports.persistence.AgentQueryPort;
@@ -42,7 +42,7 @@ import tools.jackson.databind.ObjectMapper;
 @EnabledIfEnvironmentVariable(named = "IT_PG_URL", matches = ".+")
 class AgentRepositoryIT {
 
-    private static HikariDataSource appPool;
+    private static DruidDataSource appPool;
     private static JdbcAgentQueryRepository query;
     private static JdbcAgentManageRepository manage;
     private static String tenantA;
@@ -72,14 +72,16 @@ class AgentRepositoryIT {
         String user = System.getenv().getOrDefault("IT_PG_USER", "app_agent");
         String pwd = System.getenv("IT_PG_PASSWORD");
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(url);
         cfg.setUsername(user);
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(4);
-        appPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(4);
+        appPool = cfg;
 
         // ⚠️ 连通性：审计用**真实** JdbcAuditRepository，使其真写 audit_record
         AuditPort audit = new JdbcAuditRepository(appPool);
@@ -405,7 +407,7 @@ class AgentRepositoryIT {
      */
     private static List<String[]> snapshotRows(String tenant, String agentId) {
         List<String[]> rows = new java.util.ArrayList<>();
-        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
+        try (DruidDataSource adminPool = adminConfig();
              Connection conn = adminPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                      "SELECT es.agent_config::text, es.prompt_config::text, "
@@ -441,7 +443,7 @@ class AgentRepositoryIT {
 
     /** 管理连接执行夹具 UPDATE（绑定表有 FORCE RLS，测试造数需绕过）。 */
     private static void adminExec(String sql) {
-        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
+        try (DruidDataSource adminPool = adminConfig();
              Connection conn = adminPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.executeUpdate();
@@ -451,7 +453,7 @@ class AgentRepositoryIT {
     }
 
     private static String adminQuery(String sql) {
-        try (HikariDataSource adminPool = new HikariDataSource(adminConfig());
+        try (DruidDataSource adminPool = adminConfig();
              Connection conn = adminPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql);
              var rs = ps.executeQuery()) {
@@ -462,9 +464,11 @@ class AgentRepositoryIT {
         }
     }
 
-    private static HikariConfig adminConfig() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    private static DruidDataSource adminConfig() {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
         // 密口认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，
@@ -473,7 +477,7 @@ class AgentRepositoryIT {
         if (adminPwd != null && !adminPwd.isBlank()) {
             cfg.setPassword(adminPwd);
         }
-        cfg.setMaximumPoolSize(1);
+        cfg.setMaxActive(1);
         return cfg;
     }
 }

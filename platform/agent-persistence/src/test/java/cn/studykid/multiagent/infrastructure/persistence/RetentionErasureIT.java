@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.application.retention.ConsentWithdrawalService;
 import cn.studykid.multiagent.application.retention.RetentionPurgeService;
@@ -65,11 +65,11 @@ class RetentionErasureIT {
     private static final String SLUG_A = "t-a";
     private static final String SLUG_B = "t-b";
 
-    private static HikariDataSource admin;
+    private static DruidDataSource admin;
     /** 应用通道（{@code app_agent}）：验证「应用凭据删不了审计」。 */
-    private static HikariDataSource app;
+    private static DruidDataSource app;
     /** 清理通道（{@code agent_retention}）：清理逻辑唯一合法的执行凭据。 */
-    private static HikariDataSource retention;
+    private static DruidDataSource retention;
 
     private static String tenantA;
     private static String tenantB;

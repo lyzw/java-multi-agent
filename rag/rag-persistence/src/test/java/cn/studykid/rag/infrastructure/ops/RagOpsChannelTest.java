@@ -123,9 +123,10 @@ class RagOpsChannelTest {
      * ⚠️ 运维池必须启用「空闲保活 + 定期轮换」，否则长册摄取会在写 embedding 阶段拿到死连接。
      *
      * <p>从真实装配入口 {@link RagOpsConfiguration#ragOpsSessionPort} 进，强转取到底层池读配置——
-     * 撤掉 {@code RagOpsDataSourceProvider.connected} 里的 setKeepaliveTime/setMaxLifetime，
-     * 这里会立刻变红（Hikari 默认 keepalive=60000 / maxLifetime=1800000，与断言的
-     * 2min / 9min 不符）。这钉住的是「2026-11-10 语文下册 146 页摄取 FAILED」的根因不复现。
+     * 撤掉 {@code RagOpsDataSourceProvider.connected} 里的 setKeepAlive/setKeepAliveBetweenTimeMillis/
+     * setMaxEvictableIdleTimeMillis，这里会立刻变红（Druid 默认 keepAlive=false、
+     * 空闲回收上限 15min，与断言的 2min / 9min 不符）。
+     * 这钉住的是「2026-11-10 语文下册 146 页摄取 FAILED」的根因不复现。
      */
     @Test
     void opsPoolMustKeepAliveToAvoidStaleConnectionOnLongIngest() {
@@ -133,19 +134,20 @@ class RagOpsChannelTest {
                 true, "jdbc:postgresql://127.0.0.1:1/none", "rag_ops", "", 1);
 
         RagOpsDataSourceProvider provider = (RagOpsDataSourceProvider) port;
-        com.zaxxer.hikari.HikariDataSource pool = provider.pool();
-        assertEquals(RagOpsDataSourceProvider.OP_POOL_KEEPALIVE_MS, pool.getKeepaliveTime(),
+        com.alibaba.druid.pool.DruidDataSource pool = provider.pool();
+        assertEquals(RagOpsDataSourceProvider.OP_POOL_KEEPALIVE_MS, pool.getKeepAliveBetweenTimeMillis(),
                 "运维池必须启用空闲保活：长册解析十几分钟会耗尽空闲连接，"
                         + "不保活则写阶段拿到 This connection has been closed.");
-        assertEquals(RagOpsDataSourceProvider.OP_POOL_IDLE_TIMEOUT_MS, pool.getIdleTimeout(),
-                "空闲回收必须显式小于 maxLifetime，否则 Hikari 默认 10min 会禁用空闲回收");
-        assertEquals(RagOpsDataSourceProvider.OP_POOL_MAX_LIFETIME_MS, pool.getMaxLifetime(),
-                "运维池必须定期轮换连接，且 maxLifetime > idleTimeout > keepalive");
+        assertEquals(RagOpsDataSourceProvider.OP_POOL_IDLE_TIMEOUT_MS, pool.getMinEvictableIdleTimeMillis(),
+                "空闲回收下限必须显式小于回收上限，否则 Druid 建池即失败"
+                        + "（maxEvictableIdleTimeMillis must be greater than minEvictableIdleTimeMillis）");
+        assertEquals(RagOpsDataSourceProvider.OP_POOL_MAX_LIFETIME_MS, pool.getMaxEvictableIdleTimeMillis(),
+                "运维池必须定期轮换连接，且回收上限 > 回收下限 > 保活间隔");
         assertEquals(RagOpsDataSourceProvider.OP_POOL_VALIDATION_TIMEOUT_MS,
-                pool.getValidationTimeout(), "连接校验超时需显式收紧");
-        assertTrue(pool.getKeepaliveTime() < pool.getIdleTimeout()
-                        && pool.getIdleTimeout() < pool.getMaxLifetime(),
-                "必须满足 keepalive < idleTimeout < maxLifetime，否则 Hikari 拒绝启动或禁用回收");
+                pool.getValidationQueryTimeout(), "连接校验超时需显式收紧");
+        assertTrue(pool.getKeepAliveBetweenTimeMillis() < pool.getMinEvictableIdleTimeMillis()
+                        && pool.getMinEvictableIdleTimeMillis() < pool.getMaxEvictableIdleTimeMillis(),
+                "必须满足 keepalive < 空闲回收下限 < 空闲回收上限，否则 Druid 建池即失败");
         provider.close();
     }
 

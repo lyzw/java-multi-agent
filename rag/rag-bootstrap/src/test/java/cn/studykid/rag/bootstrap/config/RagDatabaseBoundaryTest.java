@@ -51,6 +51,13 @@ class RagDatabaseBoundaryTest {
             "spring-data-jpa", "postgresql", "mysql-connector-j",
             "mariadb-java-client", "flyway-core", "flyway-database-postgresql",
             "liquibase-core", "HikariCP", "hibernate-core",
+            // ⚠️ 连接池基线（2026-11-21 起为 Druid）：与 HikariCP 同属「具体持久化技术」，
+            //    只准在 rag-persistence 声明。
+            //    ⚠️ HikariCP **保留**在名单里：本仓已从 spring-boot-starter-jdbc 排除它，
+            //    若哪天有人「顺手把它加回来」，这里必须红 —— 两套池实现同时在 classpath 上时，
+            //    谁先注册取决于类扫描顺序，池行为会随环境漂移且不报错。
+            "druid", "druid-spring-boot-starter", "druid-spring-boot-3-starter",
+            "druid-spring-boot-4-starter",
             // 架构决策变更（批准引入 MyBatis-Plus）：MP artifact 只准在 rag-persistence 声明
             "mybatis", "mybatis-spring-boot-starter", "jooq", "r2dbc-postgresql",
             "mybatis-plus-spring-boot4-starter", "mybatis-plus-core", "mybatis-plus-extension");
@@ -58,7 +65,7 @@ class RagDatabaseBoundaryTest {
     /** 具体 JDBC / 驱动 / 迁移工具包：业务模块 main 一律不得 import。 */
     private static final Set<String> JDBC_IMPORTS = Set.of(
             "java.sql.", "javax.sql.", "org.springframework.jdbc.",
-            "com.zaxxer.hikari.", "org.postgresql.", "org.flywaydb.");
+            "com.zaxxer.hikari.", "com.alibaba.druid.", "org.postgresql.", "org.flywaydb.");
 
     /** 真正的 ORM 包：任何模块、任何 scope 都不得出现。 */
     private static final Set<String> ORM_IMPORTS = Set.of(
@@ -224,11 +231,26 @@ class RagDatabaseBoundaryTest {
                 DB_MODULE + "/src/main/java/cn/studykid/rag/worker/ReindexRunner.java",
                 DB_MODULE + "/src/main/java/cn/studykid/rag/management/infrastructure/RagManagementConfig.java",
                 DB_MODULE + "/src/main/java/cn/studykid/rag/infrastructure/ops/RagOpsConfiguration.java",
+                // ⚠️ 主数据源自动配置（2026-11-21 连接池切 Druid）：
+                //    三个入口的组件扫描范围互不相交，主池只能靠自动配置覆盖全部入口 ——
+                //    它被搬丢/改名 = 三个入口全部拿不到 DataSource。
+                DB_MODULE + "/src/main/java/cn/studykid/rag/autoconfigure/RagPrimaryDataSourceAutoConfiguration.java",
         };
         for (String path : movedConfigs) {
             assertThat(Files.isRegularFile(root.resolve(path)))
                     .as("迁移后装配类必须仍存在于新模块：%s", path).isTrue();
         }
+
+        // ⚠️ 自动配置必须被 Spring Boot 的 imports 文件登记：
+        //    光有类文件不会生效（自动配置不走组件扫描）。
+        Path imports = root.resolve(DB_MODULE
+                + "/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports");
+        assertThat(Files.isRegularFile(imports))
+                .as("自动配置登记文件必须存在：主池靠它覆盖三个互不相交的入口扫描范围")
+                .isTrue();
+        assertThat(read(imports))
+                .as("主数据源自动配置必须在 imports 文件里登记，否则主池永远不会被装配")
+                .contains("RagPrimaryDataSourceAutoConfiguration");
 
         // 包名不变是本次兼容策略的核心：入口的 scanBasePackages 一个字都不用改。
         String app = read(root.resolve(

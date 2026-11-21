@@ -11,6 +11,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -29,8 +30,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 import tools.jackson.databind.ObjectMapper;
 
 import cn.studykid.multiagent.application.metrics.AgentMetricCollector;
@@ -127,7 +128,7 @@ class L2AttributionClosedLoopIT {
     private static final String ATTRIBUTION_TEXT = "学生错在未先化为标准形式，移项时常数项未变号。";
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
     private static String tenantId;
     private static String snapshotId;
 
@@ -472,15 +473,17 @@ class L2AttributionClosedLoopIT {
         }
     }
 
-    private static HikariDataSource pool(String user, String password) {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    private static DruidDataSource pool(String user, String password) {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(user);
         if (password != null && !password.isBlank()) {
             cfg.setPassword(password);
         }
-        cfg.setMaximumPoolSize(3);
-        cfg.setPoolName("l2-attribution-it-admin");
-        return new HikariDataSource(cfg);
+        cfg.setMaxActive(3);
+        cfg.setName("l2-attribution-it-admin");
+        return cfg;
     }
 }

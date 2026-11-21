@@ -19,8 +19,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort.PlatformAuditEvent;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort.PlatformAuditQuery;
@@ -58,13 +58,15 @@ class PlatformAuditTicketScopeIT {
 
     private static final UUID ACTOR = UUID.randomUUID();
 
-    private static HikariDataSource pool;
+    private static DruidDataSource pool;
     private static JdbcPlatformAuditRepository audit;
 
     @BeforeAll
     static void setUp() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         // ⚠️⚠️ **必须用平台运维凭据**（IT_PG_ADMIN_*），不能用应用凭据（IT_PG_USER）：
         //    本类操作的是 `platform.platform_audit_event` —— **平台域**对象，
         //    按设计「平台级对象走带外运维通道」，应用角色（app_agent）对
@@ -80,8 +82,8 @@ class PlatformAuditTicketScopeIT {
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(4);
-        pool = new HikariDataSource(cfg);
+        cfg.setMaxActive(4);
+        pool = cfg;
         audit = new JdbcPlatformAuditRepository(pool);
     }
 

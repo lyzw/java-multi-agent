@@ -22,8 +22,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
@@ -132,14 +132,14 @@ class PlatformSecurityE2ETest {
      * 管理员连接池（<b>静态 + 必须关闭</b>）。
      *
      * <p>⚠️ <b>2026-10-23 实测修正</b>：本方法原先<b>每次调用都 new 一个
-     * {@code HikariDataSource}</b>，而它被 {@code @BeforeEach} 的
+     * {@code DruidDataSource}</b>，而它被 {@code @BeforeEach} 的
      * {@code seedAccount} 与多个用例反复调用 → 每个池常驻 1 条连接且
      * <b>从不关闭</b> → 连接永不归还。
      * 本类 15 个测试方法 + 若干次 {@code validToken()} 调用
      * → 数十条连接泄漏 → 与其它 IT 类的泄漏叠加后打满 PostgreSQL 的
      * {@code max_connections=100} → <b>别的 IT 类的上下文启动失败</b>。
      */
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
 
     /** 关闭管理员池（<b>必须</b>：不关闭则泄漏依旧）。 */
     @AfterAll
@@ -163,8 +163,10 @@ class PlatformSecurityE2ETest {
      */
     private JdbcTemplate adminJdbc() {
         if (adminPool == null) {
-            HikariConfig cfg = new HikariConfig();
-            cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+            DruidDataSource cfg = new DruidDataSource();
+            cfg.setMaxWait(10_000L);
+            cfg.setConnectTimeout(10_000);
+            cfg.setUrl(System.getenv("IT_PG_URL"));
             cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
             // ⚠️ 管理员池（造跨租户夹具）：本地 trust 认证无需口令；
             //    密码认证的库（RDS / CI）必须显式给 IT_PG_ADMIN_PASSWORD，否则连接失败。
@@ -172,8 +174,8 @@ class PlatformSecurityE2ETest {
             if (adminPwd != null && !adminPwd.isBlank()) {
                 cfg.setPassword(adminPwd);
             }
-            cfg.setMaximumPoolSize(1);
-            adminPool = new HikariDataSource(cfg);
+            cfg.setMaxActive(1);
+            adminPool = cfg;
         }
         return new JdbcTemplate(adminPool);
     }

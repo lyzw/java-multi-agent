@@ -18,8 +18,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.MetricQuery;
 import cn.studykid.multiagent.ports.metrics.AgentMetricPort.ScenarioCount;
@@ -48,21 +48,23 @@ class JdbcAgentMetricScenarioIT {
     private static final String ENGLISH = PREFIX + "english";
     private static final String UNLABELED = PREFIX + "unlabeled";
 
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
     private static JdbcAgentMetricRepository repo;
     private static String tenantId;
 
     @BeforeAll
     static void setUp() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         String pwd = System.getenv("IT_PG_ADMIN_PASSWORD");
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(3);
-        adminPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(3);
+        adminPool = cfg;
         repo = new JdbcAgentMetricRepository(adminPool);
         tenantId = UUID.randomUUID().toString();
     }

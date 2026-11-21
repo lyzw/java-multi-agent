@@ -2,8 +2,7 @@ package cn.studykid.multiagent.bootstrap.config;
 
 import javax.sql.DataSource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,35 +66,33 @@ public class PrimaryDataSourceConfiguration {
                     + "会让全部业务 SQL 以清理角色执行（该角色可删审计记录）。");
         }
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
-        if (username != null) {
-            cfg.setUsername(username);
-        }
-        if (password != null && !password.isBlank()) {
-            cfg.setPassword(password);
-        }
         String driver = trimmed(environment.getProperty("spring.datasource.driver-class-name"));
-        if (driver != null) {
-            cfg.setDriverClassName(driver);
-        }
-        // ⚠️ 与 application.yml 的 spring.datasource.hikari.connection-init-sql 对齐：
+        // ⚠️ 与 application.yml 的 spring.datasource.druid.connection-init-sql 对齐：
         //    不设置 search_path 会让默认 schema 漂移，迁移脚本可能把表建到错误的域。
         String initSql = trimmed(environment.getProperty(
-                "spring.datasource.hikari.connection-init-sql"));
-        if (initSql != null) {
-            cfg.setConnectionInitSql(initSql);
-        }
-        cfg.setMaximumPoolSize(environment.getProperty(
-                "spring.datasource.hikari.maximum-pool-size", Integer.class, 10));
-        cfg.setMinimumIdle(environment.getProperty(
-                "spring.datasource.hikari.minimum-idle", Integer.class, 1));
-        cfg.setPoolName("platform-primary");
-        cfg.setInitializationFailTimeout(-1);
-        cfg.setConnectionTimeout(5000);
+                "spring.datasource.druid.connection-init-sql"));
+        int maxActive = environment.getProperty(
+                "spring.datasource.druid.max-active", Integer.class, 10);
+        int minIdle = environment.getProperty(
+                "spring.datasource.druid.min-idle", Integer.class, 1);
+        long keepAliveMs = environment.getProperty(
+                "spring.datasource.druid.keep-alive-between-time-millis", Long.class,
+                DruidPoolFactory.KEEP_ALIVE_MS);
+        long minEvictableIdleMs = environment.getProperty(
+                "spring.datasource.druid.min-evictable-idle-time-millis", Long.class,
+                DruidPoolFactory.MIN_EVICTABLE_IDLE_MS);
+        long maxEvictableIdleMs = environment.getProperty(
+                "spring.datasource.druid.max-evictable-idle-time-millis", Long.class,
+                DruidPoolFactory.MAX_EVICTABLE_IDLE_MS);
 
-        log.info("应用主数据源已接入: user={}, pool={}", username, cfg.getPoolName());
-        return new HikariDataSource(cfg);
+        DruidDataSource pool = DruidPoolFactory.create(
+                "platform-primary", url, username, password, driver,
+                new DruidPoolFactory.Tuning(maxActive, minIdle, keepAliveMs,
+                        minEvictableIdleMs, maxEvictableIdleMs));
+        DruidPoolFactory.applyConnectionInitSql(pool, initSql);
+
+        log.info("应用主数据源已接入: user={}, pool={}", username, pool.getName());
+        return pool;
     }
 
     private static String trimmed(String value) {

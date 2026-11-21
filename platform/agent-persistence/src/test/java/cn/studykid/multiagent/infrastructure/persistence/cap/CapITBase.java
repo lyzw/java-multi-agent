@@ -6,8 +6,8 @@ import java.sql.SQLException;
 
 import javax.sql.DataSource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -30,10 +30,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 abstract class CapITBase {
 
     /** 应用角色连接池（非特权，验 RLS 必需）。 */
-    protected static HikariDataSource appPool;
+    protected static DruidDataSource appPool;
 
     /** 管理角色连接池（造跨租户夹具）。 */
-    protected static HikariDataSource adminPool;
+    protected static DruidDataSource adminPool;
 
     protected static String tenantA;
     protected static String tenantB;
@@ -44,24 +44,28 @@ abstract class CapITBase {
         String appUser = System.getenv().getOrDefault("IT_PG_USER", "app_agent");
         String appPwd = System.getenv("IT_PG_PASSWORD");
 
-        HikariConfig appCfg = new HikariConfig();
-        appCfg.setJdbcUrl(url);
+        DruidDataSource appCfg = new DruidDataSource();
+        appCfg.setMaxWait(10_000L);
+        appCfg.setConnectTimeout(10_000);
+        appCfg.setUrl(url);
         appCfg.setUsername(appUser);
         if (appPwd != null && !appPwd.isBlank()) {
             appCfg.setPassword(appPwd);
         }
-        appCfg.setMaximumPoolSize(8);
-        appPool = new HikariDataSource(appCfg);
+        appCfg.setMaxActive(8);
+        appPool = appCfg;
 
-        HikariConfig adminCfg = new HikariConfig();
-        adminCfg.setJdbcUrl(url);
+        DruidDataSource adminCfg = new DruidDataSource();
+        adminCfg.setMaxWait(10_000L);
+        adminCfg.setConnectTimeout(10_000);
+        adminCfg.setUrl(url);
         adminCfg.setUsername(System.getenv().getOrDefault("IT_PG_ADMIN_USER", "agent"));
         String adminPwd = System.getenv("IT_PG_ADMIN_PASSWORD");
         if (adminPwd != null && !adminPwd.isBlank()) {
             adminCfg.setPassword(adminPwd);
         }
-        adminCfg.setMaximumPoolSize(2);
-        adminPool = new HikariDataSource(adminCfg);
+        adminCfg.setMaxActive(2);
+        adminPool = adminCfg;
 
         // ⚠️⚠️ **IT 用自己的租户，不得用真实租户**（2026-10-31 实测事故）。
         //
@@ -340,17 +344,19 @@ abstract class CapITBase {
      *
      * @return 独立连接池（调用方负责关闭）
      */
-    protected static HikariDataSource newInstancePool() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    protected static DruidDataSource newInstancePool() {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(System.getenv().getOrDefault("IT_PG_USER", "app_agent"));
         String pwd = System.getenv("IT_PG_PASSWORD");
         if (pwd != null && !pwd.isBlank()) {
             cfg.setPassword(pwd);
         }
-        cfg.setMaximumPoolSize(2);
-        cfg.setPoolName("it-instance-pool");
-        return new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        cfg.setName("it-instance-pool");
+        return cfg;
     }
 
     /**
@@ -374,17 +380,16 @@ abstract class CapITBase {
         } catch (java.io.IOException e) {
             throw new IllegalStateException("无法申请临时端口", e);
         }
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl("jdbc:postgresql://127.0.0.1:" + closedPort + "/postgres?connectTimeout=1");
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setUrl("jdbc:postgresql://127.0.0.1:" + closedPort + "/postgres?connectTimeout=1");
         cfg.setUsername("nobody");
         cfg.setPassword("nobody");
-        cfg.setMaximumPoolSize(1);
+        cfg.setMaxActive(1);
         // ⚠️ 不在初始化阶段就失败：故障必须发生在**业务调用**时，
         //    否则测的是「建池失败」而不是「授权期存储不可用」。
-        cfg.setInitializationFailTimeout(-1);
-        cfg.setConnectionTimeout(2000);
-        cfg.setPoolName("it-unreachable-pool");
-        return new HikariDataSource(cfg);
+        cfg.setMaxWait(2000);
+        cfg.setName("it-unreachable-pool");
+        return cfg;
     }
 
     /**

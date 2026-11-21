@@ -25,8 +25,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.bootstrap.PlatformApplication;
 import cn.studykid.multiagent.core.config.ApprovalRequirement;
@@ -81,7 +81,7 @@ class TraceCollectClosedLoopIT {
 
     private static final String TENANT_SLUG = "it-trace-closed-loop";
 
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
 
     @Autowired
     private DataSource dataSource;
@@ -100,13 +100,15 @@ class TraceCollectClosedLoopIT {
 
     @BeforeAll
     static void setup() {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(env("IT_PG_URL", ""));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(env("IT_PG_URL", ""));
         cfg.setUsername(env("IT_PG_ADMIN_USER", "agent"));
         cfg.setPassword(env("IT_PG_ADMIN_PASSWORD", ""));
-        cfg.setMaximumPoolSize(2);
-        cfg.setPoolName("trace-loop-it-admin");
-        adminPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        cfg.setName("trace-loop-it-admin");
+        adminPool = cfg;
         try {
             ItTenantProvisioner.provision(adminPool, TENANT_SLUG);
         } catch (SQLException e) {

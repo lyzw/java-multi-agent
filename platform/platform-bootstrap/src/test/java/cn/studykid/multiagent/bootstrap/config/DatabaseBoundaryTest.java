@@ -52,6 +52,13 @@ class DatabaseBoundaryTest {
             "spring-data-jpa", "postgresql", "mysql-connector-j",
             "mariadb-java-client", "flyway-core", "flyway-database-postgresql",
             "liquibase-core", "HikariCP", "hibernate-core",
+            // ⚠️ 连接池基线（2026-11-21 起为 Druid）：与 HikariCP 同属「具体持久化技术」，
+            //    只准在 agent-persistence 声明。
+            //    ⚠️ HikariCP **保留**在名单里：本仓已从 spring-boot-starter-jdbc 排除它，
+            //    若哪天有人「顺手把它加回来」，这里必须红 —— 两套池实现同时在 classpath 上时，
+            //    谁先注册取决于类扫描顺序，池行为会随环境漂移且不报错。
+            "druid", "druid-spring-boot-starter", "druid-spring-boot-3-starter",
+            "druid-spring-boot-4-starter",
             // 架构决策变更（批准引入 MyBatis-Plus）：MP artifact 只准在 agent-persistence 声明
             "mybatis", "mybatis-spring-boot-starter", "jooq", "r2dbc-postgresql",
             "mybatis-plus-spring-boot4-starter", "mybatis-plus-core", "mybatis-plus-extension");
@@ -59,7 +66,7 @@ class DatabaseBoundaryTest {
     /** 具体 ORM / JDBC 实现包：业务模块一律不得 import。 */
     private static final Set<String> FORBIDDEN_IMPORTS = Set.of(
             "org.springframework.jdbc.", "org.springframework.orm.",
-            "com.zaxxer.hikari.", "org.postgresql.", "org.flywaydb.",
+            "com.zaxxer.hikari.", "com.alibaba.druid.", "org.postgresql.", "org.flywaydb.",
             "jakarta.persistence.", "org.hibernate.", "org.apache.ibatis.",
             // 架构决策变更：MP 类型同样不得扩散出数据库模块
             "com.baomidou.",
@@ -78,7 +85,7 @@ class DatabaseBoundaryTest {
 
     /**
      * 测试侧唯一有界例外：组合根端点 IT 需要真实连库造数/回收，直接用原生 JDBC 夹具
-     * （Hikari 连接池 + JdbcTemplate）而不经过被测代码，属黑盒验证，不是业务依赖。
+     * （Druid 连接池 + JdbcTemplate）而不经过被测代码，属黑盒验证，不是业务依赖。
      *
      * <p>⚠️ 这里刻意只放行「连接池 + Spring JDBC」两类，且仅限组合根的 {@code src/test}：
      * 任何 JPA/MyBatis/Hibernate/JOOQ 等真正的 ORM 类型，即便在测试里也一律禁止。
@@ -86,7 +93,7 @@ class DatabaseBoundaryTest {
      * 需要保留 test 作用域驱动的兼容点，见交付说明。
      */
     private static final Set<String> TEST_FIXTURE_ALLOWED_PREFIXES =
-            Set.of("com.zaxxer.hikari.", "org.springframework.jdbc.");
+            Set.of("com.alibaba.druid.", "org.springframework.jdbc.");
 
     /** 允许持有原生 JDBC 夹具的模块：数据库模块自身、造数支撑件。 */
     private static final Set<String> TEST_SCOPE_EXEMPT_MODULES =

@@ -19,8 +19,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 
@@ -31,7 +31,7 @@ import cn.studykid.multiagent.core.tenant.TenantContext;
  * <b>数据库连接</b> 上，而连接池会复用连接。若绑定逻辑有误，上一请求的租户身份
  * 会<b>静默沿用</b>到下一请求——越权数据不会报错，只会安静地泄漏。
  *
- * <p>本测试使用<b>真实 HikariCP 连接池且池大小设为 1</b>：这强制所有请求
+ * <p>本测试使用<b>真实 Druid 连接池且池大小设为 1</b>：这强制所有请求
  * 复用同一物理连接，正是最容易发生上下文串租户的场景。生产池更大、
  * 串租户概率更低，但一旦发生影响相同，故以此配置做最严验证。
  *
@@ -59,7 +59,7 @@ class TenantSessionBinderIT {
     private static final String PASSWORD = System.getenv("IT_PG_PASSWORD");
 
 
-    private static HikariDataSource pool;
+    private static DruidDataSource pool;
 
     private static TenantContext tenantA;
     private static TenantContext tenantB;
@@ -69,17 +69,17 @@ class TenantSessionBinderIT {
         assertThat(URL).as("IT_PG_URL 必须设置").isNotBlank();
 
         // 池大小 = 1：强制复用同一连接，最大化串租户风险以做最严验证
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(URL);
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setUrl(URL);
         cfg.setUsername(USER);
         if (PASSWORD != null) {
             cfg.setPassword(PASSWORD);
         }
-        cfg.setMaximumPoolSize(1);
-        cfg.setMinimumIdle(1);
-        cfg.setPoolName("it-tenant-isolation");
-        cfg.setConnectionTimeout(10_000);
-        pool = new HikariDataSource(cfg);
+        cfg.setMaxActive(1);
+        cfg.setMinIdle(1);
+        cfg.setName("it-tenant-isolation");
+        cfg.setMaxWait(10_000);
+        pool = cfg;
 
         // 按 slug 解析租户 ID —— 不硬编码 UUID，重建库后仍有效
         tenantA = new TenantContext(

@@ -30,8 +30,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.bootstrap.PlatformApplication;
 import cn.studykid.multiagent.infrastructure.messaging.RabbitMessageSender;
@@ -138,7 +138,7 @@ class TraceCollectEndToEndIT {
     private TraceMetricCollectorListener traceCollectListener;
 
     /** owner 连接池（造数用）：应用角色对 {@code public.run} 无写权。 */
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
 
     private static AmqpAdmin topologyAdmin;
 
@@ -161,13 +161,15 @@ class TraceCollectEndToEndIT {
         }
 
         // ⚠️ owner 连接池：造数要写 public.run（应用角色受 RLS 且无写权）。
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(env("IT_PG_URL", ""));
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(env("IT_PG_URL", ""));
         cfg.setUsername(env("IT_PG_ADMIN_USER", "agent"));
         cfg.setPassword(env("IT_PG_ADMIN_PASSWORD", ""));
-        cfg.setMaximumPoolSize(2);
-        cfg.setPoolName("trace-it-admin");
-        adminPool = new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        cfg.setName("trace-it-admin");
+        adminPool = cfg;
 
         // ⚠️ 幂等声明本类的 .it 拓扑：显式声明可消除「监听容器先于队列存在」的竞态。
         CachingConnectionFactory cf = new CachingConnectionFactory(host, port);

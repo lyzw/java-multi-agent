@@ -28,7 +28,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import tools.jackson.databind.JsonNode;
 
@@ -143,8 +143,8 @@ class SseHistory100TurnsWithinBudgetIT {
     /** 桩必须真的下发 thinking，否则「租户链 thinking=0」是空转断言。 */
     private static final String THINKING = "推理片段";
 
-    private static HikariDataSource adminPool;
-    private static HikariDataSource appPool;
+    private static DruidDataSource adminPool;
+    private static DruidDataSource appPool;
     private static String tenantId;
 
     private static final List<ModelRequest> captured = new CopyOnWriteArrayList<>();

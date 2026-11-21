@@ -1,9 +1,6 @@
 package cn.studykid.multiagent.bootstrap.config;
 
-import javax.sql.DataSource;
-
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.springframework.context.annotation.Bean;
@@ -99,24 +96,16 @@ public class PlatformOpsDataSourceConfiguration {
             throw new IllegalStateException(KEY_MAX_POOL_SIZE + " 必须为正数，收到: " + maxPoolSize);
         }
 
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url);
-        cfg.setUsername(username);
-        if (password != null && !password.isBlank()) {
-            cfg.setPassword(password);
-        }
         // ⚠️ 池很小是刻意的：平台运维通道只服务「平台级发布」这一条低频路径，
         //    不该占用与主业务池相当的连接额度。
-        cfg.setMaximumPoolSize(maxPoolSize);
-        cfg.setMinimumIdle(1);
-        cfg.setPoolName("agent-platform-ops");
+        DruidDataSource pool = DruidPoolFactory.create(
+                "agent-platform-ops", url, username, password, null,
+                DruidPoolFactory.Tuning.of(maxPoolSize, 1));
+
         // ⚠️ 不在初始化阶段就失败：凭据错误的失败现场应当是
         //    「平台发布时连不上库」，而不是「应用启动时建池失败」——
         //    后者会让一个尚未启用平台发布的实例完全起不来。
-        cfg.setInitializationFailTimeout(-1);
-        cfg.setConnectionTimeout(5000);
-
-        DataSource pool = new HikariDataSource(cfg);
+        //    DruidPoolFactory 刻意不调用 init()，建池阶段因此永不连库。
         return new PlatformOpsDataSourceProvider(true, pool);
     }
 

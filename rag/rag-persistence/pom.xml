@@ -16,9 +16,9 @@
     RAG 子系统唯一的数据库边界模块：JDBC 仓储实现、租户会话 / 事务（set_config）、
     运维连接池（BYPASSRLS 通道）、数据源与 Flyway 配置、启动自检 SQL，以及连库 IT。
 
-    ⚠️ 本模块是 rag reactor 中唯一允许声明 JDBC/PostgreSQL/Flyway/Hikari 依赖、
+    ⚠️ 本模块是 rag reactor 中唯一允许声明 JDBC/PostgreSQL/Flyway/Druid 依赖、
        唯一允许出现 java.sql.* / javax.sql.* / org.springframework.jdbc.* /
-       com.zaxxer.hikari.* 的模块，由 RagDatabaseBoundaryTest 在构建期锁死。
+       com.alibaba.druid.* 的模块，由 RagDatabaseBoundaryTest 在构建期锁死。
 
     ⚠️ 兼容性纪律：迁移时刻意保持全部 Java 包名与类名不变（仅更换所属 Maven 模块）。
        因此上层 import、Spring 组件扫描（cn.studykid.rag.bootstrap / worker /
@@ -74,6 +74,19 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-jdbc</artifactId>
+      <exclusions>
+        <!--
+          ⚠️⚠️ **必须排除 HikariCP**（2026-11-21 连接池切 Druid，与 platform 对齐）。
+          两套池实现同时在 classpath 上时，Spring Boot 的 DataSourceAutoConfiguration
+          与 Druid 自动装配都带 @ConditionalOnMissingBean(DataSource.class)，
+          谁先注册取决于类扫描顺序 —— 池实现随环境漂移却不报错。
+          排除后 classpath 上只剩 Druid，遗漏的自动装配路径会**响亮失败**。
+        -->
+        <exclusion>
+          <groupId>com.zaxxer</groupId>
+          <artifactId>HikariCP</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -82,6 +95,14 @@
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
+    </dependency>
+    <!--
+      数据库连接池：Alibaba Druid（2026-11-21 由 HikariCP 切换，与 platform 对齐）。
+      ⚠️ 只引核心 jar，不引 druid-spring-boot-starter：主数据源与运维池都是显式装配的。
+    -->
+    <dependency>
+      <groupId>com.alibaba</groupId>
+      <artifactId>druid</artifactId>
     </dependency>
     <!--
       MyBatis-Plus（架构决策变更，W0/W1 试点）：版本由父 POM 锁定 3.5.17。

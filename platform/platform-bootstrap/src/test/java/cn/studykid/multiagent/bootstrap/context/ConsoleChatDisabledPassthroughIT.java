@@ -28,7 +28,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.api.chat.ConsoleChatController.ChatCaller;
 import cn.studykid.multiagent.bootstrap.PlatformApplication;
@@ -101,7 +101,7 @@ class ConsoleChatDisabledPassthroughIT {
     private static final String MESSAGE = "请继续回答下一个问题。";
     private static final String ANSWER = "控制台已按原样上下文回答（关闭态 passthrough）";
 
-    private static HikariDataSource adminPool;
+    private static DruidDataSource adminPool;
     private static String tenantId;
 
     private static final AtomicReference<ModelRequest> sentRequest = new AtomicReference<>();

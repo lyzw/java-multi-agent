@@ -37,8 +37,8 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -134,8 +134,8 @@ class AgentChatOrchestrationIT {
     private static final String RAG_TEXT = "RAG_IT_MARKER_外部语料片段";
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    private static HikariDataSource adminPool;
-    private static HikariDataSource appPool;
+    private static DruidDataSource adminPool;
+    private static DruidDataSource appPool;
     private static String tenantId;
 
     @Autowired
@@ -534,15 +534,17 @@ class AgentChatOrchestrationIT {
         T apply(Connection conn) throws Exception;
     }
 
-    private static HikariDataSource pool(String user, String password) {
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(System.getenv("IT_PG_URL"));
+    private static DruidDataSource pool(String user, String password) {
+        DruidDataSource cfg = new DruidDataSource();
+        cfg.setMaxWait(10_000L);
+        cfg.setConnectTimeout(10_000);
+        cfg.setUrl(System.getenv("IT_PG_URL"));
         cfg.setUsername(user);
         if (password != null && !password.isBlank()) {
             cfg.setPassword(password);
         }
-        cfg.setMaximumPoolSize(2);
-        return new HikariDataSource(cfg);
+        cfg.setMaxActive(2);
+        return cfg;
     }
 
     /** 幂等建一条固定 id 的已发布 Agent + 快照 + PUBLISHED cap_agent_def（空 skills 闭包）。 */

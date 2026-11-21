@@ -23,7 +23,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import com.zaxxer.hikari.HikariDataSource;
+import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.agentchataudit.JdbcChatAuditRetentionRepository;
@@ -60,9 +60,9 @@ class ChatAuditRecordIT {
 
     private static final String ENDPOINT = "/api/agent/chat/stream";
 
-    private static HikariDataSource appPool;
-    private static HikariDataSource adminPool;
-    private static HikariDataSource retentionPool;
+    private static DruidDataSource appPool;
+    private static DruidDataSource adminPool;
+    private static DruidDataSource retentionPool;
     private static String tenantA;
     private static String tenantB;
 
@@ -102,7 +102,7 @@ class ChatAuditRecordIT {
         TransactionalConnectionHolder.clear();
     }
 
-    private static void closeQuietly(HikariDataSource pool) {
+    private static void closeQuietly(DruidDataSource pool) {
         if (pool != null) {
             pool.close();
         }

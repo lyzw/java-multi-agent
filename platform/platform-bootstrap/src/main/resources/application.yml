@@ -23,7 +23,7 @@ spring:
   # 迁移脚本全部使用未限定表名；default-schema 明确指向 public，与
   # deploy/sql/platform/05_platform_identity_ddl.sql 的设计一致：
   #   public = 租户业务表（带 RLS）；platform = 平台身份域（无 RLS）。
-  # connection-init-sql 让 HikariCP 每条连接先 SET search_path TO public，
+  # connection-init-sql 让 Druid 每条连接先 SET search_path TO public，
   # 即使连接角色默认 schema 不是 public，也不会把表建错位置（避免 platform 下
   # 出现 agent/run 等重复表）。
   flyway:
@@ -33,10 +33,21 @@ spring:
     #    它读下面这些键，故必须在此显式声明（配置键对齐守卫会逐个核对）。
     #    url / username / password 刻意不写 —— 由 SPRING_DATASOURCE_* 环境变量提供。
     driver-class-name: org.postgresql.Driver
-    hikari:
+    # ⚠️ 键名是 Druid 语义（2026-11-21 连接池由 HikariCP 切换为 Druid）：
+    #    max-active ≡ 池上限；min-idle ≡ 常驻连接数；connection-init-sql ≡ 每连接初始化语句。
+    #    ⚠️ 不要再写 spring.datasource.hikari.* —— 那是 Spring Boot 自带的键，
+    #    本仓已排除 HikariCP，写了不会生效，且「配了不生效」不报错。
+    druid:
       connection-init-sql: SET search_path TO public
-      maximum-pool-size: 10
-      minimum-idle: 1
+      max-active: 10
+      min-idle: 1
+      # ⚠️ 空闲保活 + 定期轮换：托管 RDS 会回收空闲数百秒的连接，
+      #    长事务（长册解析、大批量 embedding）期间池内连接长时间空闲，
+      #    写阶段会拿到已被服务端关闭的死连接（This connection has been closed.）。
+      #    ⚠️ keep-alive 必须 > Druid 的回收扫描间隔（60s，硬约束，违反则建池即失败）。
+      keep-alive-between-time-millis: 120000
+      min-evictable-idle-time-millis: 300000
+      max-evictable-idle-time-millis: 540000
 
   # ── RabbitMQ（DEC-12 / ADR-001）──────────────────────────────────
   # 本地实例：./scripts/dev-rabbitmq.sh start

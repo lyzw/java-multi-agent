@@ -199,7 +199,7 @@ class RetrievalRepositoryIT {
      *
      * <p>⚠️ 必须与应用侧一致：RAG 全部对象位于独立 schema {@code rag}（V1 迁移创建），
      * 而应用 SQL 用的是<b>未限定表名</b>。生产应用通过
-     * {@code spring.datasource.hikari.connection-init-sql=SET search_path TO rag, public}
+     * {@code spring.datasource.druid.connection-init-sql=SET search_path TO rag, public}
      * 设置（见 rag-bootstrap / rag-worker 的 application.yml）；
      * 本 IT 自建 {@link DriverManagerDataSource}，没有 init-sql 机制，
      * 因此改用 PostgreSQL 的 {@code options=-c search_path=...} 在连接建立时生效。
