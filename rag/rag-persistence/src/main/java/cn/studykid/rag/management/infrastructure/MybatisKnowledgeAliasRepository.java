@@ -71,11 +71,27 @@ public class MybatisKnowledgeAliasRepository implements KnowledgeAliasPort {
         }
         String kw = (keyword == null || keyword.isBlank()) ? null : keyword.trim();
         return inScope(context, () -> transactionTemplate.execute(tx -> {
-            // ⚠️ 租户字面量来自可信 context.queryTenantId()（非客户端输入），与原 JDBC 同口径
-            String tenantLiteral = "'" + context.queryTenantId() + "'::uuid";
-            List<KnowledgePointBrief> rows = mapper.listKnowledgePoints(tenantLiteral, kw, limit);
+            // ⚠️ 2026-11-21 H1 修复：不再用 "'" + tenantId + "'::uuid" 字符串拼进 ${}。
+            //    先 parse 成 UUID（非法 UUID 立即抛 IllegalArgumentException，fail-closed），
+            //    再塞进 List<UUID> 由 MyBatis 以 JDBC 参数形式传给 ANY(#{tenantUuids}::uuid[])，
+            //    PG 自动做数组类型绑定，彻底消除 SQL 注入面。
+            UUID tenantUuid = UUID.fromString(requireNonBlank(context.queryTenantId()));
+            List<UUID> tenantUuids = List.of(tenantUuid, RAG_GLOBAL_TENANT);
+            List<KnowledgePointBrief> rows = mapper.listKnowledgePoints(tenantUuids, kw, limit);
             return rows == null ? List.of() : rows;
         }));
+    }
+
+    /** RAG 全局租户 UUID（对应 SQL 函数 rag_global_tenant_id() 返回值）。 */
+    private static final UUID RAG_GLOBAL_TENANT = UUID.fromString(
+            "00000000-0000-0000-0000-000000000000");
+
+    /** 防御性校验：queryTenantId 非空，否则 fail-closed。 */
+    private static String requireNonBlank(String id) {
+        if (id == null || id.isBlank()) {
+            throw new IllegalStateException("当前上下文无租户 ID，无法执行知识点查询（应在 RagTenantScope.bind 后调用）");
+        }
+        return id;
     }
 
     /** 绑定会话作用域（platform 档置空串），执行后无条件清理。 */
