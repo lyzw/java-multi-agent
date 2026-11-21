@@ -138,7 +138,8 @@ public class PublishPolicyService {
 
     /**
      * 类似 {@link #resolveForResources}，但同时返回**最终决定的那条策略**。
-     * 决定算法：所有资源综合后取最严格者；取到的第一条严格者对应的策略为"决策策略"。
+     * 决定算法：所有资源综合后取最严格者，返回该严格度对应的策略；
+     * 无任何匹配策略时按 MANUAL 安全默认处理，policyId 为 null。
      */
     public @NonNull ResolveResult resolveDetailedForResources(@NonNull String scope,
                                                                @Nullable String tenantId,
@@ -146,39 +147,37 @@ public class PublishPolicyService {
         PublishMode strictest = PublishMode.DIRECT;
         PublishPolicy decisionPolicy = null;
         boolean fromGlobal = false;
+        boolean strictestDecided = false;
         for (ResourceRef ref : refs) {
             List<PublishPolicy> enabled = policies.listEnabled(scope, tenantId);
             Optional<PublishPolicy> matched = bestMatch(enabled, scope, tenantId, ref.kind(), ref.id());
             boolean useFallback = false;
             if (matched.isEmpty()) {
-                Optional<PublishPolicy> g = policies.listEnabledGlobals().stream()
-                        .filter(p -> matches(p, scope, tenantId, ref.kind(), ref.id()))
-                        .findFirst();
-                if (g.isPresent()) {
-                    matched = g;
+                // ⚠️ 与 resolveWithGlobalFallback 同口径：GLOBAL 行的 resourceKind/resourceId 为 NULL，
+                //    不能用 matches(..., kind, id) 过滤，否则跨作用域回退永远命中不了。
+                List<PublishPolicy> globals = policies.listEnabledGlobals();
+                if (!globals.isEmpty()) {
+                    matched = Optional.of(globals.get(0));
                     useFallback = true;
                 }
             }
-            PublishMode m;
-            if (matched.isPresent()) {
-                m = PublishMode.valueOf(matched.get().publishMode());
-                if (decisionPolicy == null
-                        || strictest.compareStrictness(m) > 0) {
-                    decisionPolicy = matched.get();
-                    fromGlobal = useFallback;
-                }
-            } else {
-                m = PublishMode.MANUAL;  // 安全默认
-            }
+            PublishPolicy candidate = matched.orElse(null);
+            PublishMode m = candidate == null
+                    ? PublishMode.MANUAL  // 无策略：安全默认，绝不调用 Optional.get()
+                    : PublishMode.valueOf(candidate.publishMode());
             if (m.requiresApproval()) {
-                if (decisionPolicy == null) decisionPolicy = matched.orElse(null);
+                // 任一资源要求审批 → 整批停在审批；决策策略就是这条策略。
                 return new ResolveResult(m,
-                        decisionPolicy == null ? null : decisionPolicy.policyId(),
-                        decisionPolicy == null ? null : decisionPolicy.policyLevel(),
-                        fromGlobal);
+                        candidate == null ? null : candidate.policyId(),
+                        candidate == null ? null : candidate.policyLevel(),
+                        useFallback);
             }
-            if (m == PublishMode.MANUAL) {
-                strictest = PublishMode.MANUAL;
+            // 首条资源定基线；后续仅在更严格时覆盖，避免被 DIRECT 反向降级。
+            if (!strictestDecided || strictest.compareStrictness(m) < 0) {
+                strictest = m;
+                decisionPolicy = candidate;
+                fromGlobal = useFallback;
+                strictestDecided = true;
             }
         }
         return new ResolveResult(strictest,

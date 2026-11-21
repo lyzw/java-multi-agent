@@ -101,6 +101,90 @@ class PublishPolicyRoutingTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    @DisplayName("详细解析：精确作用域无策略时回退到跨作用域 GLOBAL，并钉死审计来源")
+    void detailedGlobalFallbackAcrossScopes() {
+        StubPort port = new StubPort();
+        PublishPolicy global = policy("TENANT", TENANT, "GLOBAL", null, null, PublishMode.DIRECT);
+        port.rows.add(global);
+        PublishPolicyService service = new PublishPolicyService(port);
+
+        var res = service.resolveDetailedForResources("PLATFORM", null,
+                List.of(ResourceRef.of("AGENT", "a-1")));
+
+        assertThat(res.mode()).isEqualTo(PublishMode.DIRECT);
+        assertThat(res.policyId()).isEqualTo(global.policyId());
+        assertThat(res.policyLevel()).isEqualTo("GLOBAL");
+        assertThat(res.fromGlobalFallback()).isTrue();
+    }
+
+    @Test
+    @DisplayName("详细解析：无匹配策略时默认 MANUAL，不再抛 NoSuchElementException")
+    void detailedNoPolicyDefaultsToManual() {
+        PublishPolicyService service = new PublishPolicyService(new StubPort());
+
+        var res = service.resolveDetailedForResources("PLATFORM", null,
+                List.of(ResourceRef.of("AGENT", "a-1")));
+
+        assertThat(res.mode()).isEqualTo(PublishMode.MANUAL);
+        assertThat(res.policyId()).isNull();
+        assertThat(res.policyLevel()).isNull();
+        assertThat(res.fromGlobalFallback()).isFalse();
+    }
+
+    @Test
+    @DisplayName("详细解析：多资源取最严格者，审计指向决定性策略而非较弱的先到策略")
+    void detailedStrictestPolicyWinsAndAuditPointsToIt() {
+        StubPort port = new StubPort();
+        PublishPolicy direct = policy("PLATFORM", null, "RESOURCE_TYPE", "TOOL", null, PublishMode.DIRECT);
+        PublishPolicy manual = policy("PLATFORM", null, "RESOURCE_TYPE", "SKILL", null, PublishMode.MANUAL);
+        port.rows.add(direct);
+        port.rows.add(manual);
+        PublishPolicyService service = new PublishPolicyService(port);
+
+        var res = service.resolveDetailedForResources("PLATFORM", null, List.of(
+                ResourceRef.of("TOOL", "t-1"), ResourceRef.of("SKILL", "s-1")));
+
+        assertThat(res.mode()).isEqualTo(PublishMode.MANUAL);
+        assertThat(res.policyId()).isEqualTo(manual.policyId());
+        assertThat(res.policyLevel()).isEqualTo("RESOURCE_TYPE");
+        assertThat(res.fromGlobalFallback()).isFalse();
+    }
+
+    @Test
+    @DisplayName("详细解析：任一资源要求审批则整批转审批，审计指向审批策略")
+    void detailedApprovalWinsAndShortCircuits() {
+        StubPort port = new StubPort();
+        port.rows.add(policy("PLATFORM", null, "RESOURCE_TYPE", "TOOL", null, PublishMode.MANUAL));
+        PublishPolicy approval = policy("PLATFORM", null, "RESOURCE_TYPE", "SKILL", null,
+                PublishMode.APPROVAL_MANUAL);
+        port.rows.add(approval);
+        PublishPolicyService service = new PublishPolicyService(port);
+
+        var res = service.resolveDetailedForResources("PLATFORM", null, List.of(
+                ResourceRef.of("TOOL", "t-1"), ResourceRef.of("SKILL", "s-1")));
+
+        assertThat(res.mode()).isEqualTo(PublishMode.APPROVAL_MANUAL);
+        assertThat(res.policyId()).isEqualTo(approval.policyId());
+    }
+
+    @Test
+    @DisplayName("详细解析：同作用域精确策略优先于跨作用域 GLOBAL 回退")
+    void detailedExactPolicyWinsOverGlobalFallback() {
+        StubPort port = new StubPort();
+        port.rows.add(policy("TENANT", TENANT, "GLOBAL", null, null, PublishMode.DIRECT));
+        PublishPolicy exact = policy("PLATFORM", null, "RESOURCE_TYPE", "AGENT", null, PublishMode.MANUAL);
+        port.rows.add(exact);
+        PublishPolicyService service = new PublishPolicyService(port);
+
+        var res = service.resolveDetailedForResources("PLATFORM", null,
+                List.of(ResourceRef.of("AGENT", "a-1")));
+
+        assertThat(res.mode()).isEqualTo(PublishMode.MANUAL);
+        assertThat(res.policyId()).isEqualTo(exact.policyId());
+        assertThat(res.fromGlobalFallback()).isFalse();
+    }
+
     private static PublishPolicy policy(String scope, String tenantId, String level,
                                          String kind, String resourceId, PublishMode mode) {
         return new PublishPolicy(UUID.randomUUID(), scope, tenantId, level, kind, resourceId,

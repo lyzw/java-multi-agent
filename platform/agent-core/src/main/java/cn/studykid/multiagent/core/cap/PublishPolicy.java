@@ -66,8 +66,8 @@ public record PublishPolicy(
         }
 
         /**
-         * 严格度比较：返回 this.ordinal - other.ordinal（审批类 > MANUAL > DIRECT）。
-         * 严格度：APPROVAL_MANUAL(2) > APPROVAL_AUTO(3) > MANUAL(1) > DIRECT(0)。
+         * 严格度比较：返回按严格度映射后的整数差值（审批类 > MANUAL > DIRECT）。
+         * 严格度：APPROVAL_AUTO(3) > APPROVAL_MANUAL(2) > MANUAL(1) > DIRECT(0)。
          *
          * 注意：两个 APPROVAL_* 之间谁更严格并不重要——都 requiresApproval()，
          * 调用方取到第一个审批类即可提前返回。这里仅用于"DIRECT vs MANUAL vs APPROVAL"
