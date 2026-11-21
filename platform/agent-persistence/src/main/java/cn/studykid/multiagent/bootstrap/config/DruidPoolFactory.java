@@ -2,7 +2,10 @@ package cn.studykid.multiagent.bootstrap.config;
 
 import java.util.List;
 
+import com.alibaba.druid.filter.Filter;
 import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.wall.WallConfig;
+import com.alibaba.druid.wall.WallFilter;
 
 /**
  * Druid 连接池的统一构造入口（2026-11-21 连接池由 HikariCP 切换为 Druid）。
@@ -216,6 +219,28 @@ final class DruidPoolFactory {
         pool.setMaxEvictableIdleTimeMillis(tuning.maxEvictableIdleMs());
         // ⚠️ 校验超时：保活/校验单条连接不允许无限等待
         pool.setValidationQueryTimeout((int) CONNECT_WAIT_TIMEOUT_MS);
+
+        // ⚠️ 2026-11-21 M2：挂 WallFilter（SQL 防火墙）。
+        //    只允许单语句、允许 PG 注释（方便 #{} 占位符解析里的 -- / /* */）。
+        //    不拦截 DDL / 存储过程 / TRUNCATE / 跨租户查询（PG RLS 已兜住）。
+        WallConfig wc = new WallConfig();
+        wc.setMultiStatementAllow(false);
+        wc.setCommentAllow(true);
+        WallFilter wall = new WallFilter();
+        wall.setDbType("postgresql");
+        wall.setConfig(wc);
+        // 保留 StatFilter（慢 SQL 监控），禁用 ExceptionFilter（把底层异常展开，安全边界内）。
+        // ⚠️ ⚠️ ⚠️ 重要：filters 是 List<Filter>；Druid 会在 init() 里读取它。
+        //    不要用 setFilters(String) 字符串版——那是 druid-spring-boot-starter 的装配方式，
+        //    自装 Bean 时 DruidDataSource#setFilters(String) 不会自动实例化 Filter。
+        pool.setProxyFilters(List.of((Filter) wall));
+
+        // ⚠️ ⚠️ ⚠️ 安全收尾：明确关闭所有远程监控 / 非必要功能（Druid 历史上出过
+        //    反序列化 CVE，零机会暴露端口 = 零攻击面）。
+        pool.setAllowConnect(false);
+        pool.setKeepAlive(true);
+        pool.setUseUnfairLock(true);   // 比默认 fair lock 性能好；公平性在此场景不是必需
+
         return pool;
     }
 

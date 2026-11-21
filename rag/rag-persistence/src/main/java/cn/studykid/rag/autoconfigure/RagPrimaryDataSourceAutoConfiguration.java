@@ -4,11 +4,17 @@ import java.util.List;
 
 import javax.sql.DataSource;
 
+import com.alibaba.druid.filter.Filter;
 import com.alibaba.druid.pool.DruidDataSource;
+import com.alibaba.druid.wall.WallConfig;
+import com.alibaba.druid.wall.WallFilter;
 
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -57,6 +63,8 @@ import org.springframework.core.env.Environment;
 @ConditionalOnClass(DruidDataSource.class)
 public class RagPrimaryDataSourceAutoConfiguration {
 
+    private static final Logger log = LoggerFactory.getLogger(RagPrimaryDataSourceAutoConfiguration.class);
+
     /** 池名（监控与排障用）。 */
     static final String POOL_NAME = "rag-primary";
 
@@ -101,6 +109,14 @@ public class RagPrimaryDataSourceAutoConfiguration {
                     + "摄取/索引链路会静默停在 PENDING（不报错、不推进）。");
         }
         String username = trimmed(environment.getProperty("spring.datasource.username"));
+        // ⚠️ 2026-11-21 M3 fail-closed：username 必填（不能默认 rag_app 明文兜底）。
+        //    平台侧 PrimaryDataSourceConfiguration 对 url 缺失即拒绝启动；
+        //    RAG 与之对齐，避免运维忘了设 RAG_PG_USERNAME 时静默用默认账号。
+        if (username == null) {
+            throw new IllegalStateException("RAG 主数据源未配置 spring.datasource.username。"
+                    + "拒绝启动：连接身份必须由环境变量 RAG_PG_USERNAME 显式注入"
+                    + "（对齐 platform PrimaryDataSourceConfiguration 的 fail-closed 约定）。");
+        }
         String password = environment.getProperty("spring.datasource.password");
         String driver = trimmed(environment.getProperty("spring.datasource.driver-class-name"));
 
@@ -187,6 +203,22 @@ public class RagPrimaryDataSourceAutoConfiguration {
         if (initSql != null) {
             pool.setConnectionInitSqls(List.of(initSql));
         }
+
+        // ⚠️ 2026-11-21 M2：挂 WallFilter（SQL 防火墙）。
+        //    只允许单语句、允许 PG 注释。禁止 setFilters(String) 字符串版——
+        //    自装 Bean 时不会自动实例化 Filter（会被静默忽略）。
+        WallConfig wc = new WallConfig();
+        wc.setMultiStatementAllow(false);
+        wc.setCommentAllow(true);
+        WallFilter wall = new WallFilter();
+        wall.setDbType("postgresql");
+        wall.setConfig(wc);
+        pool.setProxyFilters(List.of((Filter) wall));
+
+        // ⚠️ 安全收尾：明确关闭远程监控 / 非必要功能。
+        //    Druid 1.2.28 历史上出过反序列化 CVE（CVE-2021-25646），
+        //    零机会暴露 JMX / HTTP 监控端点。
+        pool.setAllowConnect(false);
 
         // ⚠️ 刻意不调用 init()：Druid 的 getConnection() 内部会惰性调用它，
         //    「建池阶段不失败」由此得到保留。
