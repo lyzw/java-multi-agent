@@ -1525,13 +1525,15 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.ConfigReleasePort releases,
             cn.studykid.multiagent.ports.persistence.CapResultContractPort contracts,
             cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort routingPolicies,
+            cn.studykid.multiagent.application.cap.PublishPolicyService publishPolicyService,
             java.time.Clock clock) {
         // ⚠️ 输出契约仓储必须注入：未装配时「提交带契约的发布申请」会被拒，
         //    免得申请单看起来带了契约、执行时却被静默丢掉。
         // ⚠️ 路由策略仓储同理（第十四批）。
+        // ⚠️ 发布策略服务注入后，申请会按 DIRECT / MANUAL / APPROVAL_* 自动分流。
         return new cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService(
                 requests, publisher, lifecycle, agentDefs, pointers, releases, contracts,
-                routingPolicies, clock);
+                routingPolicies, clock, publishPolicyService);
     }
 
     /**
@@ -1628,8 +1630,12 @@ public class ApplicationConfiguration {
      * 仅管理元数据，绝无业务指令正文（禁区红线）。
      */
     @Bean
-    @ConditionalOnProperty(name = "persistence.mybatis.enabled",
-             havingValue = "false", matchIfMissing = true)
+    // ⚠️ Mybatis 版绑定在 opsSqlSessionFactory：只有「两个开关同时打开」才让位；
+    //    仅打开 mybatis 而运维凭据未接入时必须留在 Jdbc，否则
+    //    PlatformAgentDirectoryPort 无 Bean（Mybatis 版 Mapper 未扫描，上下文启动失败）。
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnExpression(
+            "!('${persistence.mybatis.enabled:false}'.equals('true') "
+            + "&& '${agent.platform-ops.datasource.enabled:false}'.equals('true'))")
     public cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort
             platformAgentDirectoryPort(
             cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
@@ -1814,10 +1820,11 @@ public class ApplicationConfiguration {
             cn.studykid.multiagent.ports.persistence.CapAgentDefPort agentDefs,
             @org.springframework.beans.factory.annotation.Qualifier("platformOpsConfigPointerPort")
             cn.studykid.multiagent.ports.persistence.ConfigPointerPort pointers,
+            cn.studykid.multiagent.application.cap.PublishPolicyService publishPolicyService,
             java.time.Clock clock) {
         return new cn.studykid.multiagent.application.cap.PlatformCapabilityPublishService(
                 platformOps, requests, publisher, lifecycle, toolDefs, skillDefs, serverDefs,
-                pointers, clock, agentDefs);
+                pointers, clock, agentDefs, publishPolicyService);
     }
 
     /**

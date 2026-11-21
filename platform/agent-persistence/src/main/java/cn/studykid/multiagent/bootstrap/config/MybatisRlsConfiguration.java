@@ -8,6 +8,7 @@ import org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan.Filter;
@@ -113,11 +114,26 @@ public class MybatisRlsConfiguration {
     /**
      * 运维通道 Mapper 绑定：只扫描标注 {@link OpsMapper} 的接口。
      *
-     * <p>外层类已要求 {@code persistence.mybatis.enabled=true}；这里再要求运维角色已接入，
-     * 否则不注册这些 Mapper，对应适配层由 {@code ApplicationConfiguration} 退回 Jdbc 实现。
+     * <p>⚠️ <b>必须双开关同时打开才扫描</b>（{@code persistence.mybatis.enabled=true} 且
+     * {@code agent.platform-ops.datasource.enabled=true}），与 {@code opsSqlSessionFactory}
+     * 的可用性严格同生共死。
+     *
+     * <p><b>为什么不能只靠外层类的 mybatis 条件</b>（一次真实启动失败）：
+     * 本类是静态嵌套 {@code @Configuration}，{@code @MapperScan} 通过
+     * {@code @Import(MapperScannerRegistrar)} 在配置类解析早期就注册 Mapper bean definition；
+     * 外层类条件的否决发生在更晚的阶段，来不及阻止 registrar。于是当「运维开关开、MyBatis 开关关」
+     * 时（例如仅配置了 AGENT_PLATFORM_OPS_ENABLED=true），外层工厂 {@code opsSqlSessionFactory}
+     * 因 mybatis 关闭而不存在，ops Mapper 却被 registrar 注册并引用它，最终启动直接失败：
+     * <blockquote>
+     * Error creating bean with name 'dictionaryMapper': Cannot resolve reference to bean
+     * 'opsSqlSessionFactory' while setting bean property 'sqlSessionFactory'
+     * </blockquote>
+     * 因此把 mybatis 条件显式重复在本类上，让 registrar 在解析阶段就被否决。
+     * 对应适配层由 {@code ApplicationConfiguration} 退回 Jdbc 实现。
      */
     @Configuration
-    @ConditionalOnProperty(name = "agent.platform-ops.datasource.enabled", havingValue = "true")
+    @ConditionalOnExpression("'${persistence.mybatis.enabled:false}'.equals('true') "
+            + "&& '${agent.platform-ops.datasource.enabled:false}'.equals('true')")
     @MapperScan(
             basePackages = "cn.studykid.multiagent.infrastructure.persistence.mapper",
             annotationClass = OpsMapper.class,

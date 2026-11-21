@@ -4,7 +4,7 @@ import java.util.List;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Repository;
 
@@ -20,10 +20,15 @@ import cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort;
  * <p>⚠️ 租户绑定表带 FORCE RLS：绝不能像普通租户仓储那样用哨兵租户 + 主数据源查询，
  * 那会静默返回 0 行（页面显示「暂无 Agent」）。Mapper 已标 {@code @OpsMapper}，
  * 由运维工厂执行，这里直接调用即可。
+ *
+ * <p>⚠️ Mapper 绑定在 {@code opsSqlSessionFactory}：只有「MyBatis + 平台运维数据源」
+ * 双开关同时打开时才生效，否则必须退回 Jdbc 实现（与 {@code MybatisModelCatalogRepository}
+ * 同口径）。只开 MyBatis 开关时注册本 Bean 会因 Mapper 未扫描而让整个上下文启动失败。
  */
 @Repository
 @Primary
-@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
+@ConditionalOnExpression("'${persistence.mybatis.enabled:false}'.equals('true') "
+        + "&& '${agent.platform-ops.datasource.enabled:false}'.equals('true')")
 public class MybatisPlatformAgentDirectoryRepository implements PlatformAgentDirectoryPort {
 
     private static final ObjectMapper JSON = new ObjectMapper();
