@@ -312,11 +312,18 @@ def preflight(cur: Any, tid: str, slug: str, health_url: str | None,
         True,
     ))
 
+    # ⚠️ Agent 已全局化（2026-11-19）：cap_agent_def 没有 tenant_id，租户可见性
+    #    只看 tenant_agent_binding 的 ACTIVE 行；pinned_version 非空时只认该版本，
+    #    不能回退到最新版。旧脚本按 tenant_id 直查会 UndefinedColumn，E2E 直接起不来。
     cur.execute(
-        """SELECT count(*) FROM cap_agent_def
-            WHERE tenant_id = %s::uuid
-              AND lifecycle_state = 'PUBLISHED'::public.cap_lifecycle_state
-              AND model_ref IS NOT NULL AND btrim(model_ref) <> ''""",
+        """SELECT count(*) FROM tenant_agent_binding b
+            JOIN cap_agent_def d
+              ON d.agent_id = b.agent_id
+             AND (b.pinned_version IS NULL OR d.version = b.pinned_version)
+            WHERE b.tenant_id = %s::uuid
+              AND b.status = 'ACTIVE'
+              AND d.lifecycle_state = 'PUBLISHED'::public.cap_lifecycle_state
+              AND d.model_ref IS NOT NULL AND btrim(d.model_ref) <> ''""",
         (tid,),
     )
     published = cur.fetchone()[0]
