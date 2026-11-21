@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "@alibaba-group/open-code-review": "^1.13.11"
+  }
+}
