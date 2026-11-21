@@ -65,6 +65,7 @@ public class MybatisCapResultContractRepository implements CapResultContractPort
     private String sentinelTenantId = "";
     private boolean shadowEnabled;
 
+    @Autowired
     public MybatisCapResultContractRepository(@NonNull CapResultContractMapper mapper,
                                               @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

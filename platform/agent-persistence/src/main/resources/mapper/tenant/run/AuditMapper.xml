@@ -13,9 +13,9 @@
         ORDER BY created_at ASC
     </select>
     <!-- INSERT RETURNING → MyBatis 用 resultType 接 -->
-    <insert id="insert" resultType="java.lang.String">
+    <select id="insert" resultType="java.lang.String">
         INSERT INTO audit_record (tenant_id, actor_id, action, resource_type, resource_id, detail)
         VALUES (#{tenantId}::uuid, #{actorId}, #{action}, #{resourceType}, #{resourceId}, #{detailJson}::jsonb)
         RETURNING audit_id::text
-    </insert>
+    </select>
 </mapper>

@@ -103,6 +103,11 @@ abstract class AbstractRetirementReverseGuardIT {
 
     @AfterEach
     void tearDown() {
+        // ⚠️ @BeforeEach 的退役门禁会先于夹具初始化跳过用例；此时 @AfterEach 仍会执行。
+        //    未初始化连接就清理会把「有意跳过」变成 7 条 NPE，掩盖真实测试结果。
+        if (adminJdbcTemplate == null) {
+            return;
+        }
         for (String sql : cleanupSql()) {
             adminJdbcTemplate.update(sql);
         }

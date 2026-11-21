@@ -15,7 +15,7 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.ports.modelcatalog.ModelCatalogPort;
@@ -37,7 +37,10 @@ import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
  * 与持久化模块其它仓储一致；不依赖 Spring 托管事务（全局表、短事务）。
  */
 @Repository
-@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "false", matchIfMissing = true)
+// ⚠️ Mybatis 版绑定在 opsSqlSessionFactory：只有「两个开关同时打开」才让位；
+//    仅打开 mybatis 而运维凭据未接入时必须留在 Jdbc，否则 ModelCatalogPort 无 Bean。
+@ConditionalOnExpression("!('${persistence.mybatis.enabled:false}'.equals('true') "
+        + "&& '${agent.platform-ops.datasource.enabled:false}'.equals('true'))")
 public class JdbcModelCatalogRepository implements ModelCatalogPort {
 
     private final DataSource dataSource;

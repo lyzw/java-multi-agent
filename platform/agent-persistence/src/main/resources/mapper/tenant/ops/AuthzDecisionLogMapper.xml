@@ -8,4 +8,13 @@
         VALUES (#{occurredAt}, #{tenantId}, #{principalId}, #{scope}, #{action},
                 #{resourceType}, #{permitted}, #{reasonCode})
     </insert>
+
+    <!-- 启动期探测：INSERT ... SELECT ... WHERE FALSE，零行写入但会校验表/列/INSERT 权限。 -->
+    <insert id="probe">
+        INSERT INTO platform.authz_decision_log
+            (occurred_at, tenant_id, principal_id, scope, action, resource_type, permitted, reason_code)
+        SELECT now(), '00000000-0000-0000-0000-000000000000', 'startup-probe', 'STARTUP',
+               'PROBE', 'authz_decision_log', false, 'startup-probe'
+        WHERE FALSE
+    </insert>
 </mapper>

@@ -1,6 +1,13 @@
 spring:
   application:
     name: java-saas-rag
+
+  # ⚠️ 必须排除 MP 自动配置：它会绕过 persistence.mybatis.enabled 自建
+  #    sqlSessionFactory 并扫描 classpath*:mapper/**/*.xml；
+  #    RAG 的工厂只由 RagMybatisRlsConfiguration 按需装配。
+  autoconfigure:
+    exclude:
+      - com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration
   servlet:
     multipart:
       # ⚠️ 载体上传端点（POST /sources/{sourceId}/documents）依赖 multipart 解析。

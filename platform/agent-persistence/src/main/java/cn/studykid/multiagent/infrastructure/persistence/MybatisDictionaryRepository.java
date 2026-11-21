@@ -8,7 +8,6 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.infrastructure.persistence.mapper.DictionaryMapper;
 import cn.studykid.multiagent.infrastructure.persistence.model.DictionaryDO;
@@ -21,7 +20,6 @@ import cn.studykid.multiagent.ports.persistence.DictionaryPort;
  * <p>⚠️ <b>平台域表 + BYPASSRLS</b>：走 opsSqlSessionFactory（运维连接），
  * 不装 RLS 拦截器；表名带 schema（{@code platform.sys_dictionary}）。
  */
-@Repository
 @org.springframework.context.annotation.Primary
 @ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
 public class MybatisDictionaryRepository implements DictionaryPort {

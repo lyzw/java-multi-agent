@@ -7,6 +7,7 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -167,7 +168,11 @@ public class AuthzShadowConfiguration {
      * 不必随开关变化，也就不会出现「改了开关要改装配」的连带改动。
      * 开关打不开、或表不可写时由 {@code AuthzDecisionLogGuard} 在启动期 fail-closed。
      */
+    // ⚠️ MyBatis 开启且决策日志开启时，由组件扫描的 MybatisAuthzDecisionLog 承接；
+    //    这里必须退场，否则 DefaultAccessGate 注入点会得到两个同类型 Bean。
     @Bean
+    @ConditionalOnExpression("!'${persistence.mybatis.enabled:false}'.equals('true') "
+            + "|| !'${agent.authz.decision-log.enabled:false}'.equals('true')")
     public AuthzDecisionRecorder authzDecisionRecorder(
             DataSource dataSource,
             @Value("${agent.authz.decision-log.enabled}") String enabled) {

@@ -12,7 +12,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Repository;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -22,7 +21,6 @@ import cn.studykid.multiagent.infrastructure.persistence.rls.TenantScope;
 import cn.studykid.multiagent.ports.persistence.AuditPort;
 
 /** AuditPort MyBatis 实现（INSERT RETURNING audit_id::text）。 */
-@Repository
 @ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
 public class MybatisAuditRepository implements AuditPort {
 

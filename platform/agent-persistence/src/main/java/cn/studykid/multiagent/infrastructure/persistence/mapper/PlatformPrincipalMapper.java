@@ -5,7 +5,10 @@ import java.util.List;
 
 import org.apache.ibatis.annotations.Param;
 
+import cn.studykid.multiagent.infrastructure.persistence.mapper.OpsMapper;
+
 /** platform.platform_user / platform_user_role 平台身份（opsSqlSessionFactory）。 */
+@OpsMapper
 public interface PlatformPrincipalMapper {
 
     PlatformUserRow findByUsername(@Param("username") String username);

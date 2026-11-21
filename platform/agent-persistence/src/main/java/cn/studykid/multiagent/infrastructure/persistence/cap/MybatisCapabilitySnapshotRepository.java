@@ -61,6 +61,7 @@ public class MybatisCapabilitySnapshotRepository implements CapabilitySnapshotPo
     private String sentinelTenantId = "";
     private boolean shadowEnabled;
 
+    @Autowired
     public MybatisCapabilitySnapshotRepository(@NonNull CapabilitySnapshotMapper mapper,
                                                @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

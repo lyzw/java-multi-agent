@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.bootstrap.config;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import javax.sql.DataSource;
 
 import java.time.Clock;
@@ -193,9 +194,27 @@ public class ApplicationConfiguration {
      * 一致，装配统一归本类，避免被测试切片的组件扫描意外拾取
      * （E2E 15 项曾因此全错）。
      */
+    /**
+     * Jdbc 预算仓储：<b>始终注册</b>。
+     *
+     * <p>⚠️ {@link cn.studykid.multiagent.infrastructure.budget.BudgetReconciliationService}
+     * 除 {@link cn.studykid.multiagent.ports.persistence.BudgetPort} 外还需要具体类型的
+     * {@code findUnknownHeld} 做对账统计。此前它只在「未切 MyBatis」时被隐式创建，
+     * 打开迁移开关后直接缺 Bean —— 这是编译期看不见的装配缺口。
+     */
     @Bean
+    public cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository
+            jdbcBudgetRepository(DataSource dataSource) {
+        return new cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository(
+                dataSource);
+    }
+
+    @Bean
+    @org.springframework.context.annotation.Primary
     public cn.studykid.multiagent.ports.persistence.BudgetPort budgetPort(
             DataSource dataSource,
+            cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository
+                    jdbcBudgetRepository,
             org.springframework.beans.factory.ObjectProvider<
                     cn.studykid.multiagent.infrastructure.persistence.mapper.BudgetMapper>
                     budgetMapper,
@@ -205,8 +224,7 @@ public class ApplicationConfiguration {
             return new cn.studykid.multiagent.infrastructure.persistence
                     .MybatisBudgetRepository(budgetMapper.getObject(), dataSource);
         }
-        return new cn.studykid.multiagent.infrastructure.persistence.JdbcBudgetRepository(
-                dataSource);
+        return jdbcBudgetRepository;
     }
 
     /**
@@ -351,8 +369,12 @@ public class ApplicationConfiguration {
                     cn.studykid.multiagent.infrastructure.persistence.mapper.ReviewTaskMapper>
                     reviewTaskMapper,
             @org.springframework.beans.factory.annotation.Value(
-                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
-        if (mybatisEnabled && reviewTaskMapper.getIfAvailable() != null) {
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.platform-ops.datasource.enabled:false}") boolean platformOpsEnabled) {
+        // review_task 的 statement 只在 mapper/ops/**：运维通道未接入时 Mapper 不会被注册，
+        // 必须留在 Jdbc 实现（其数据源替身会 fail-closed），否则启动期缺 Bean。
+        if (mybatisEnabled && platformOpsEnabled && reviewTaskMapper.getIfAvailable() != null) {
             return new cn.studykid.multiagent.infrastructure.persistence
                     .MybatisReviewTaskRepository(reviewTaskMapper.getObject(), dataSource);
         }
@@ -1606,6 +1628,8 @@ public class ApplicationConfiguration {
      * 仅管理元数据，绝无业务指令正文（禁区红线）。
      */
     @Bean
+    @ConditionalOnProperty(name = "persistence.mybatis.enabled",
+             havingValue = "false", matchIfMissing = true)
     public cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort
             platformAgentDirectoryPort(
             cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider
@@ -1679,8 +1703,11 @@ public class ApplicationConfiguration {
                     cn.studykid.multiagent.infrastructure.persistence.mapper.DictionaryMapper>
                     dictionaryMapper,
             @org.springframework.beans.factory.annotation.Value(
-                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled) {
-        if (mybatisEnabled && dictionaryMapper.getIfAvailable() != null) {
+                    "${persistence.mybatis.enabled:false}") boolean mybatisEnabled,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${agent.platform-ops.datasource.enabled:false}") boolean platformOpsEnabled) {
+        // sys_dictionary 的 Mapper 绑定在 opsSqlSessionFactory：运维通道未接入时不切换。
+        if (mybatisEnabled && platformOpsEnabled && dictionaryMapper.getIfAvailable() != null) {
             return new cn.studykid.multiagent.infrastructure.persistence
                     .MybatisDictionaryRepository(dictionaryMapper.getObject(),
                             platformOps.platformIdentityDataSource());

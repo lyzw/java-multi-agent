@@ -3,28 +3,27 @@ package cn.studykid.multiagent.infrastructure.persistence;
 import java.util.List;
 import java.util.UUID;
 
-import javax.sql.DataSource;
-
 import org.jspecify.annotations.NonNull;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Primary;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Repository;
-import org.springframework.stereotype.Component;
 
 import cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformAuditMapper;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort;
 
-/** PlatformAuditPort MyBatis 实现（platform schema，仅追加）。 */
+/**
+ * PlatformAuditPort MyBatis 实现（platform schema，仅追加）。
+ *
+ * <p>⚠️ Mapper 绑定在 {@code opsSqlSessionFactory}，只有「MyBatis + 平台运维数据源」
+ * 双开关同时打开时才生效；否则必须退回 Jdbc 实现。
+ */
 @Repository
-@Primary
-@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
+@ConditionalOnExpression("'${persistence.mybatis.enabled:false}'.equals('true') "
+        + "&& '${agent.platform-ops.datasource.enabled:false}'.equals('true')")
 public class MybatisPlatformAuditRepository implements PlatformAuditPort {
 
     private final PlatformAuditMapper mapper;
 
-    public MybatisPlatformAuditRepository(@NonNull PlatformAuditMapper mapper,
-                                           @Qualifier("dataSource") @NonNull DataSource dataSource) {
+    public MybatisPlatformAuditRepository(@NonNull PlatformAuditMapper mapper) {
         this.mapper = mapper;
     }
 

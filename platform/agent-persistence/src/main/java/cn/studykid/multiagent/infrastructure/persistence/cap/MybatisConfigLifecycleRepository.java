@@ -82,6 +82,7 @@ public class MybatisConfigLifecycleRepository implements ConfigLifecyclePort {
     private String sentinelTenantId = "";
     private boolean shadowEnabled;
 
+    @Autowired
     public MybatisConfigLifecycleRepository(@NonNull ConfigLifecycleMapper mapper,
                                             @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

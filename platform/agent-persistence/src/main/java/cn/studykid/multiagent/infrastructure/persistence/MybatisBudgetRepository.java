@@ -97,7 +97,7 @@ public class MybatisBudgetRepository implements BudgetPort {
             if (!"RESERVED".equals(r.state())) return false;
             int rows = mapper.settleAccount(tenantId, DEFAULT_CURRENCY, r.reservedAmount(), actualAmount);
             if (rows == 0) throw new IllegalStateException("预算结算失败");
-            mapper.updateReservationState(tenantId, reservationId, "SETTLED");
+            mapper.settleReservation(tenantId, reservationId, actualAmount);
             if (modelId != null || inputTokens > 0 || outputTokens > 0) {
                 mapper.insertUsage(tenantId, r.runId(), r.operationId(), reservationId,
                         modelId, inputTokens, outputTokens, actualAmount, DEFAULT_CURRENCY);
@@ -115,7 +115,7 @@ public class MybatisBudgetRepository implements BudgetPort {
             if (!"RESERVED".equals(r.state())) return false;
             int rows = mapper.releaseAccount(tenantId, DEFAULT_CURRENCY, r.reservedAmount());
             if (rows == 0) throw new IllegalStateException("预算释放失败");
-            mapper.updateReservationState(tenantId, reservationId, "RELEASED");
+            mapper.releaseReservation(tenantId, reservationId, reason);
             return true;
         });
     }

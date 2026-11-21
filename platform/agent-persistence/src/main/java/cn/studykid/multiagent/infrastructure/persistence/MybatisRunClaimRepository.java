@@ -15,7 +15,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Repository;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -42,7 +41,6 @@ import cn.studykid.multiagent.ports.persistence.RunClaimPort.LeasedTask;
  * <p>⚠️ <b>requestCancel 审计</b>：只在真正取消（受影响行数 > 0）时留痕，
  * 避免对已终态 Run 的无效取消污染追溯。
  */
-@Repository
 @org.springframework.context.annotation.Primary
 @ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
 public class MybatisRunClaimRepository implements RunClaimPort {

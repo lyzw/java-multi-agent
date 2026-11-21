@@ -7,6 +7,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 
+import cn.studykid.multiagent.infrastructure.persistence.MybatisAuthzDecisionLog;
 import cn.studykid.multiagent.infrastructure.security.AuthzDecisionRecorder;
 import cn.studykid.multiagent.infrastructure.security.JdbcAuthzDecisionLog;
 
@@ -65,15 +66,21 @@ public class AuthzDecisionLogGuard implements ApplicationRunner {
                             + "请同时开启 agent.authz.shadow.enabled，或关闭 decision-log。");
         }
 
-        if (!(recorder instanceof JdbcAuthzDecisionLog jdbc)) {
+        boolean probeOk;
+        if (recorder instanceof JdbcAuthzDecisionLog jdbc) {
+            probeOk = jdbc.probe();
+        } else if (recorder instanceof MybatisAuthzDecisionLog mybatis) {
+            // MyBatis 迁移开启后记录器换实现，但「配了」仍必须有一次真实探测才算生效。
+            probeOk = mybatis.probe();
+        } else {
             // 装配被替换成了别的实现（例如测试替身误入生产配置）——同样不许静默通过
             throw new IllegalStateException(
                     "决策日志已开启，但当前记录器实现为 " + recorder.getClass().getName()
-                            + "，不是 JdbcAuthzDecisionLog —— 判定不会写入 platform.authz_decision_log。"
+                            + "，不是受支持的落库实现 —— 判定不会写入 platform.authz_decision_log。"
                             + "请检查 AuthzShadowConfiguration#authzDecisionRecorder 是否被覆盖。");
         }
 
-        if (!jdbc.probe()) {
+        if (!probeOk) {
             throw new IllegalStateException(
                     "决策日志已开启，但零行写入探测失败（详见上一条 ERROR 日志）："
                             + "platform.authz_decision_log 缺失 / 当前角色无 INSERT / 列已漂移。"

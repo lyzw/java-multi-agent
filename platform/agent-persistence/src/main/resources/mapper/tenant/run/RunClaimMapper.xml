@@ -31,7 +31,7 @@
         WHERE tenant_id = #{tenantId}::uuid
           AND state = 'RUNNING'
           AND attempt <![CDATA[ >= ]]> #{maxAttempts}
-          AND (lease_expires_at IS NULL OR lease_expires_at < now())
+          AND (lease_expires_at IS NULL OR lease_expires_at &lt; now())
     </update>
 
     <!--
@@ -40,14 +40,14 @@
         FOR UPDATE SKIP LOCKED 并发 Worker 无阻塞
         IS DISTINCT FROM 放行 NULL + 排除 SSE_DIRECT_LEASE_OWNER
     -->
-    <update id="claimBatch">
+    <select id="claimBatch" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.RunClaimMapper$LeasedTaskRow">
         WITH candidates AS MATERIALIZED (
             SELECT run_id FROM run
             WHERE tenant_id = #{tenantId}::uuid
               AND lease_owner IS DISTINCT FROM #{sseDirectLeaseOwner}
               AND (state = 'QUEUED'
                    OR (state = 'RUNNING'
-                       AND (lease_expires_at IS NULL OR lease_expires_at < now())))
+                       AND (lease_expires_at IS NULL OR lease_expires_at &lt; now())))
             ORDER BY created_at
             LIMIT #{limit}
             FOR UPDATE SKIP LOCKED
@@ -64,10 +64,10 @@
         RETURNING r.run_id AS runId, r.fencing_token AS fencingToken,
                   r.lease_expires_at AS leaseExpiresAt, r.attempt AS attempt,
                   r.deadline_at AS deadlineAt
-    </update>
+    </select>
 
     <!-- [2] claimSpecificRun：CAS fencing + 状态围栏 -->
-    <update id="claimSpecific">
+    <select id="claimSpecific" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.RunClaimMapper$LeasedTaskRow">
         UPDATE run
         SET state = 'RUNNING',
             lease_owner = #{workerId},
@@ -80,14 +80,14 @@
           AND fencing_token = #{fencingToken}
           AND (state = 'QUEUED'
                OR (state = 'RUNNING'
-                   AND (lease_expires_at IS NULL OR lease_expires_at < now())))
+                   AND (lease_expires_at IS NULL OR lease_expires_at &lt; now())))
         RETURNING run_id AS runId, fencing_token AS fencingToken,
                   lease_expires_at AS leaseExpiresAt, attempt AS attempt,
                   deadline_at AS deadlineAt
-    </update>
+    </select>
 
     <!-- [3] claimParkedRunForResume：WAITING_APPROVAL CAS fencing + lease IS NULL -->
-    <update id="claimParkedForResume">
+    <select id="claimParkedForResume" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.RunClaimMapper$LeasedTaskRow">
         UPDATE run
         SET state = 'RUNNING',
             lease_owner = #{workerId},
@@ -103,7 +103,7 @@
         RETURNING run_id AS runId, fencing_token AS fencingToken,
                   lease_expires_at AS leaseExpiresAt, attempt AS attempt,
                   deadline_at AS deadlineAt
-    </update>
+    </select>
 
     <!-- [4] renewLease：CAS fencing + lease_owner 归属 -->
     <update id="renewLease">
@@ -192,7 +192,7 @@
             lease_expires_at = NULL
         WHERE tenant_id = #{tenantId}::uuid
           AND state = 'WAITING_APPROVAL'
-          AND updated_at < now() - (#{maxWaitingSeconds} || ' seconds')::interval
+          AND updated_at &lt; now() - (#{maxWaitingSeconds} || ' seconds')::interval
     </update>
 
 </mapper>

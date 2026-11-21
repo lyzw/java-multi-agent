@@ -10,4 +10,7 @@ public interface AuthzDecisionLogMapper {
                 @Param("principalId") String principalId, @Param("scope") String scope,
                 @Param("action") String action, @Param("resourceType") String resourceType,
                 @Param("permitted") boolean permitted, @Param("reasonCode") String reasonCode);
+
+    /** 启动期零行写入探测：与 {@code JdbcAuthzDecisionLog#probe()} 等价。 */
+    int probe();
 }

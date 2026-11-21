@@ -16,6 +16,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * 租户上下文由主平台在工具执行事务内通过 {@code set_config('app.tenant_id', ...)} 注入
  * （RAG-D02 §1.1 单向调用约定：主平台调用 RAG，RAG 不回调主平台）。
  */
+// ⚠️ MP 自动配置在 application.yml 中排除（见 spring.autoconfigure.exclude）：
+// 它绕过 persistence.mybatis.enabled 自建 sqlSessionFactory 并扫描全部 mapper XML。
 @SpringBootApplication(scanBasePackages = {
         "cn.studykid.rag.bootstrap",
         "cn.studykid.rag.api",

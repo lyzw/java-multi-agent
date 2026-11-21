@@ -7,29 +7,31 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import javax.sql.DataSource;
-
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformPrincipalMapper;
 import cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformPrincipalMapper.PlatformUserRow;
 import cn.studykid.multiagent.ports.security.PlatformPrincipalRepository;
 
-/** PlatformPrincipalRepository MyBatis 实现（platform schema 身份表）。 */
+/**
+ * PlatformPrincipalRepository MyBatis 实现（platform schema 身份表）。
+ *
+ * <p>⚠️ Mapper 绑定在 {@code opsSqlSessionFactory}，只有「MyBatis + 平台运维数据源」
+ * 双开关同时打开时才生效；否则必须退回 Jdbc 实现。身份表不给 app_agent 授权，
+ * 绝不能让 mapper 落到租户工厂的 {@code dataSource} 上。
+ */
 @Repository
-@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
+@ConditionalOnExpression("'${persistence.mybatis.enabled:false}'.equals('true') "
+        + "&& '${agent.platform-ops.datasource.enabled:false}'.equals('true')")
 public class MybatisPlatformPrincipalRepository implements PlatformPrincipalRepository {
 
     private final PlatformPrincipalMapper mapper;
-    private final DataSource dataSource;
 
-    public MybatisPlatformPrincipalRepository(@NonNull PlatformPrincipalMapper mapper,
-                                               @Qualifier("dataSource") @NonNull DataSource dataSource) {
-        this.mapper = mapper; this.dataSource = dataSource;
+    public MybatisPlatformPrincipalRepository(@NonNull PlatformPrincipalMapper mapper) {
+        this.mapper = mapper;
     }
 
     @Override

@@ -65,6 +65,7 @@ public class MybatisAuthzVersionRepository implements AuthzVersionPort {
     private boolean shadowEnabled;
     private @NonNull String sentinelTenantId;
 
+    @Autowired
     public MybatisAuthzVersionRepository(@NonNull AuthzVersionMapper mapper,
                                          @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

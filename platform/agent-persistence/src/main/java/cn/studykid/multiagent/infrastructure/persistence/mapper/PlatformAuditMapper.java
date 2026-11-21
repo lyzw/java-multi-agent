@@ -6,7 +6,10 @@ import java.util.UUID;
 
 import org.apache.ibatis.annotations.Param;
 
+import cn.studykid.multiagent.infrastructure.persistence.mapper.OpsMapper;
+
 /** platform.platform_audit_event 平台审计（仅追加）。 */
+@OpsMapper
 public interface PlatformAuditMapper {
 
     int insert(@Param("id") UUID id, @Param("actorId") UUID actorId,

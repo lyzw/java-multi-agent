@@ -9,7 +9,6 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.mapper.RiskEventMapper;
@@ -25,7 +24,6 @@ import cn.studykid.multiagent.ports.persistence.RiskEventPort;
  * <p>⚠️ <b>核心纪律</b>：安全事件写入失败绝不冒泡到执行主流程 ——
  * 一次本可成功的辅导不能因「风险事件没记下」而变成失败。
  */
-@Repository
 public class MybatisRiskEventRepository implements RiskEventPort {
 
     private static final Logger log = LoggerFactory.getLogger(MybatisRiskEventRepository.class);

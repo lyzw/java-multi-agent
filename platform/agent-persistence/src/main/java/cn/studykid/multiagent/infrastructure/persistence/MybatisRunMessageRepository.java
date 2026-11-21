@@ -11,7 +11,6 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.stereotype.Repository;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -29,7 +28,6 @@ import cn.studykid.multiagent.ports.persistence.RunMessagePort;
  * <p>⚠️ <b>幂等键</b>：由 (runId, stepNumber, role, content.size + toolOpId) 拼接 ——
  * 同一轮可能有多条 TOOL 消息（多工具并行），额外含工具标识。
  */
-@Repository
 public class MybatisRunMessageRepository implements RunMessagePort {
 
     private static final Logger log = LoggerFactory.getLogger(MybatisRunMessageRepository.class);

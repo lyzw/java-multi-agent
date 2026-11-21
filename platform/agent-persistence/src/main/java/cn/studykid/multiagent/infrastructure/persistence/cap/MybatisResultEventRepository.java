@@ -55,6 +55,7 @@ public class MybatisResultEventRepository implements ResultEventPort {
     private String sentinelTenantId = "";
     private boolean shadowEnabled;
 
+    @Autowired
     public MybatisResultEventRepository(@NonNull ResultEventMapper mapper,
                                         @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

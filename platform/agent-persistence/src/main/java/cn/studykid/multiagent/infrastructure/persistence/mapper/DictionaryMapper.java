@@ -13,6 +13,7 @@ import cn.studykid.multiagent.infrastructure.persistence.model.DictionaryItemDO;
  *
  * <p>表名带 schema（{@code platform.sys_dictionary}），ON CONFLICT + CAS + RETURNING 全部原样保留。
  */
+@OpsMapper
 public interface DictionaryMapper {
 
     List<DictionaryDO> listAll();

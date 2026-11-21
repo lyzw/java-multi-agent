@@ -9,7 +9,6 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.mapper.RunBudgetMapper;
@@ -17,7 +16,6 @@ import cn.studykid.multiagent.infrastructure.persistence.rls.TenantScope;
 import cn.studykid.multiagent.ports.persistence.RunBudgetPort;
 import cn.studykid.multiagent.ports.persistence.RunBudgetPort.RunBudget;
 
-@Repository
 @org.springframework.context.annotation.Primary
 @ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
 public class MybatisRunBudgetRepository implements RunBudgetPort {

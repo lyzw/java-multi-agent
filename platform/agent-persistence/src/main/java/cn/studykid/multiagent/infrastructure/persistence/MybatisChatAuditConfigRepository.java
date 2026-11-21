@@ -5,8 +5,6 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Repository;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -15,9 +13,13 @@ import cn.studykid.multiagent.ports.agentchat.audit.ChatAuditConfig;
 import cn.studykid.multiagent.ports.agentchat.audit.ChatAuditConfig.State;
 import cn.studykid.multiagent.ports.agentchat.audit.ChatAuditConfigPort;
 
-/** ChatAuditConfigPort MyBatis 实现（config::text JSON 存取 + 版本递增）。 */
-@Repository
-@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
+/**
+ * ChatAuditConfigPort MyBatis 实现（config::text JSON 存取 + 版本递增）。
+ *
+ * <p>⚠️ <b>当前刻意不装配</b>：{@code public.chat_audit_config} 是全局单行表（无 RLS），
+ * 映射到租户 SqlSessionFactory 后会被 RLS 拦截器要求租户主体；保留期定时任务
+ * 在租户上下文之外读配置，开启后必失败。配置仓储继续走 Jdbc 主数据源直连。
+ */
 public class MybatisChatAuditConfigRepository implements ChatAuditConfigPort {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

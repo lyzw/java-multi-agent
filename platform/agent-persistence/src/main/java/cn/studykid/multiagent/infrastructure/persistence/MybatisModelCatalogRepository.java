@@ -8,7 +8,7 @@ import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.infrastructure.persistence.mapper.ModelCatalogMapper;
@@ -27,7 +27,9 @@ import cn.studykid.multiagent.ports.modelcatalog.ModelDefinition;
  */
 @Repository
 @org.springframework.context.annotation.Primary
-@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
+// Mapper 绑定在 opsSqlSessionFactory：两个开关必须同时打开，否则本 Bean 不注册。
+@ConditionalOnExpression("'${persistence.mybatis.enabled:false}'.equals('true') "
+        + "&& '${agent.platform-ops.datasource.enabled:false}'.equals('true')")
 public class MybatisModelCatalogRepository implements ModelCatalogPort {
 
     private final ModelCatalogMapper mapper;

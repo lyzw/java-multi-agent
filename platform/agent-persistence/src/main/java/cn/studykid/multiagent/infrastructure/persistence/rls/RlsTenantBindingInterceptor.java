@@ -55,6 +55,15 @@ public class RlsTenantBindingInterceptor implements Interceptor {
     private static final String SQL_READ_TENANT =
             "SELECT current_setting('" + TenantSessionBinder.SESSION_VAR + "', true)";
 
+    /**
+     * PLATFORM 作用域哨兵租户（零 UUID）：与 JdbcConfigPointerRepository 等实现的
+     * {@code PLATFORM_SCOPE_TENANT} 同值。嵌套事务里在租户绑定连接上执行
+     * PLATFORM 作用域查询是合法路径（JDBC 实现嵌套复用连接、从不重绑），
+     * 且 {@code cap_config_pointer_read} 策略对 {@code tenant_id IS NULL} 行
+     * 天然放行 —— 故哨兵目标不视为漂移、也不重绑。
+     */
+    private static final String PLATFORM_SENTINEL = "00000000-0000-0000-0000-000000000000";
+
     /** 同一连接已绑定的租户（用于漂移校验；连接归还时清空）。 */
     private static final ThreadLocal<String> BOUND_TENANT = new ThreadLocal<>();
 
@@ -69,6 +78,13 @@ public class RlsTenantBindingInterceptor implements Interceptor {
 
         // ③ 漂移校验 + 绑定
         String existing = readBoundTenant(connection);
+        // PLATFORM 哨兵例外：JDBC 嵌套事务语义是「复用外层连接、不重绑」——
+        // 在租户绑定连接上执行 PLATFORM 作用域查询合法（读策略对 NULL 租户行放行，
+        // 写策略对哨兵天然拒绝，fail-closed 方向不变）。反向（真租户进入哨兵连接）仍按漂移拒绝。
+        if (PLATFORM_SENTINEL.equals(tenantId) && existing != null && !existing.isBlank()
+                && !PLATFORM_SENTINEL.equals(existing)) {
+            return invocation.proceed();
+        }
         if (existing != null && !existing.isBlank() && !existing.equals(tenantId)) {
             throw new IllegalStateException("RLS 租户漂移：连接上已绑定 " + existing
                     + "，当前请求主体为 " + tenantId + "。连接池串租户，拒绝执行 SQL");

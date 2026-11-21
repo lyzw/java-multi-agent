@@ -69,6 +69,7 @@ public class MybatisCapAgentDefRepository implements CapAgentDefPort {
     private boolean shadowEnabled;
     private @NonNull String sentinelTenantId;
 
+    @Autowired
     public MybatisCapAgentDefRepository(@NonNull CapAgentDefMapper mapper,
                                         @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

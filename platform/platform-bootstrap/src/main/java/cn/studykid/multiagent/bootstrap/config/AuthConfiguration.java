@@ -1,5 +1,7 @@
 package cn.studykid.multiagent.bootstrap.config;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import java.security.KeyPair;
 import java.time.Clock;
 import java.time.Duration;
@@ -252,8 +254,14 @@ public class AuthConfiguration {
      * {@code permission denied for table platform_user}
      * （2026-11-01 实测踩坑）。运维数据源未接入时 fail-closed
      * （取连接即抛 {@code PlatformOpsUnavailableException}），绝不回落应用角色。
+     *
+     * <p>MyBatis 身份仓储绑定在 {@code opsSqlSessionFactory}，因此只在
+     * 「MyBatis + 运维数据源」双开关同时打开时才让位；只打开 MyBatis 时仍用本实现，
+     * 避免把身份表 Mapper 错绑到租户工厂（app_agent 对身份表无授权）。
      */
     @Bean
+    @ConditionalOnExpression("!('${persistence.mybatis.enabled:false}'.equals('true') "
+            + "&& '${agent.platform-ops.datasource.enabled:false}'.equals('true'))")
     public PlatformPrincipalRepository platformPrincipalRepository(
             cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider platformOps) {
         return new JdbcPlatformPrincipalRepository(platformOps.platformIdentityDataSource());
@@ -268,6 +276,8 @@ public class AuthConfiguration {
      * （{@code UnsatisfiedDependencyException}），2026-11-01 补上。
      */
     @Bean
+    @ConditionalOnExpression("!('${persistence.mybatis.enabled:false}'.equals('true') "
+            + "&& '${agent.platform-ops.datasource.enabled:false}'.equals('true'))")
     public cn.studykid.multiagent.ports.audit.PlatformAuditPort platformAuditPort(
             cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider platformOps) {
         return new cn.studykid.multiagent.infrastructure.security.JdbcPlatformAuditRepository(

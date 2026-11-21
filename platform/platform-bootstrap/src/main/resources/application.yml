@@ -11,6 +11,14 @@ spring:
   application:
     name: java-saas-agent-platform
 
+  # ⚠️ 必须排除 MP 自动配置：它会无视 persistence.mybatis.enabled 自动建
+  #    sqlSessionFactory，并扫描 classpath*:mapper/**/*.xml —— 开关关闭时
+  #    也会解析 mapper XML（且 ops/tenant 两套 statement 会冲突）。
+  #    本项目的 SqlSessionFactory 只由 MybatisRlsConfiguration 按需装配。
+  autoconfigure:
+    exclude:
+      - com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration
+
   # ── Flyway / 数据源 schema 钉死（防 agent 等业务表漂到非 public schema）──
   # 迁移脚本全部使用未限定表名；default-schema 明确指向 public，与
   # deploy/sql/platform/05_platform_identity_ddl.sql 的设计一致：

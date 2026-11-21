@@ -74,7 +74,13 @@ class PlatformOpsDataSourceArchitectureTest {
             //    该端口全类只有 SELECT（JdbcChatAuditRecordQueryRepository），不写任何表、
             //    不写 outbox、不参与 Worker，端点由 platform.audit.read 鉴权把关，
             //    运维通道未接入时 fail-closed（503），不静默降级成主数据源。
-            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ChatAuditConfiguration.java");
+            "platform-bootstrap/src/main/java/cn/studykid/multiagent/bootstrap/config/ChatAuditConfiguration.java",
+            // ⚠️ MyBatis 运维通道（2026-11-20）：仅当 mybatis.enabled=true 且运维凭据
+            //    已接入时，用 platformIdentityDataSource() 建 opsSqlSessionFactory，
+            //    绑定 platform.sys_dictionary / review_task / model_catalog 的 ops Mapper。
+            //    它只取原始池建工厂，不接管受守卫数据源，也不把 BYPASSRLS 连接
+            //    交给任何业务读路径；两个开关任一关闭即不注册该工厂/Mapper。
+            "agent-persistence/src/main/java/cn/studykid/multiagent/bootstrap/config/MybatisRlsConfiguration.java");
 
     /** 受会话守卫的数据源的合法引用方（只有持有者能构造它）。 */
     private static final Set<String> GUARD_HOLDERS = Set.of(

@@ -77,10 +77,15 @@ public interface BudgetMapper {
     Optional<BigDecimal> lockRunBudgetCap(@Param("tenantId") String tenantId,
                                            @Param("runId") String runId);
 
-    /** 更新 reservation 状态 */
-    int updateReservationState(@Param("tenantId") String tenantId,
-                                @Param("reservationId") String reservationId,
-                                @Param("state") String state);
+    /** 结算 reservation（对齐 JDBC markSettled：settled_amount + settled_at；budget_reservation 无 updated_at 列） */
+    int settleReservation(@Param("tenantId") String tenantId,
+                          @Param("reservationId") String reservationId,
+                          @Param("actualAmount") BigDecimal actualAmount);
+
+    /** 释放 reservation（对齐 JDBC release：release_reason） */
+    int releaseReservation(@Param("tenantId") String tenantId,
+                           @Param("reservationId") String reservationId,
+                           @Param("reason") String reason);
 
     /** Run 级聚合: SUM(reserved_amount - settled_amount) */
     BigDecimal sumRunOccupied(@Param("tenantId") String tenantId,

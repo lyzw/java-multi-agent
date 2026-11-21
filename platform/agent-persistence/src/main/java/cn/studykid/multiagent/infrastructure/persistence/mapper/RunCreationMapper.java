@@ -24,8 +24,8 @@ public interface RunCreationMapper {
                   @Param("requestDigest") String requestDigest,
                   @Param("inputPayload") String inputPayload,
                   @Param("correlationId") String correlationId,
-                  @Param("deadlineAt") String deadlineAt,
-                  @Param("budgetAmount") int budgetAmount,
+                  @Param("deadlineAt") java.time.Instant deadlineAt,
+                  @Param("budgetAmount") java.math.BigDecimal budgetAmount,
                   @Param("requesterId") String requesterId);
 
     /** SQL 2. INSERT run_event (RUN_CREATED) */
@@ -33,8 +33,8 @@ public interface RunCreationMapper {
                               @Param("runId") String runId,
                               @Param("correlationId") String correlationId);
 
-    /** SQL 3. pg_notify 'run_event' */
-    int pgNotifyRunEvent(@Param("tenantId") String tenantId,
+    /** SQL 3. pg_notify 'run_event'（PG 返回 void，不能按 int 读结果集） */
+    void pgNotifyRunEvent(@Param("tenantId") String tenantId,
                          @Param("runId") String runId,
                          @Param("sequenceNo") String sequenceNo);
 
@@ -56,10 +56,10 @@ public interface RunCreationMapper {
     /** SQL 7. 拉取 PENDING outbox（按 created_at ASC LIMIT N） */
     List<PendingOutboxRow> listPendingOutbox(@Param("tenantId") String tenantId, @Param("limit") int limit);
 
-    /** SQL 8. outbox → PUBLISHED（CAS state=PENDING） */
+    /** SQL 8. outbox → PUBLISHED（CAS state=PENDING；Instant 由 MyBatis JSR-310 TypeHandler 以 Timestamp 绑定） */
     int markOutboxPublished(@Param("tenantId") String tenantId,
                             @Param("outboxId") String outboxId,
-                            @Param("publishedAt") String publishedAt);
+                            @Param("publishedAt") java.time.Instant publishedAt);
 
     /** SQL 9. outbox → FAILED（attempts+1） */
     int markOutboxFailed(@Param("tenantId") String tenantId,

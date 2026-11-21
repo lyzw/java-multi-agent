@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  RagKpAliasMapper.xml —— RAG W1 试点（对应主文档 §5）
+
+  ⚠️ SQL 从 JdbcKnowledgeAliasRepository 逐字搬迁，保留全部安全注释与语义：
+    · 显式 tenant_id = ?::uuid 谓词（RAG M3 的行隔离权威在应用层谓词）；
+    · ON CONFLICT DO NOTHING = 幂等增补；
+    · listKnowledgePoints 的 tenant 字面量来自可信 context.queryTenantId()，
+      配合 rag_global_tenant_id() 覆盖平台全局行；set_config 由拦截器在同事务建立。
+
+  ⚠️ 本文件由 ragTenantSqlSessionFactory 加载，只经 RagRlsBindingInterceptor。
+-->
+<mapper namespace="cn.studykid.rag.management.infrastructure.mapper.RagKpAliasMapper">
+
+    <!-- ⚠️ ON CONFLICT DO NOTHING + rag_kp_alias_unique = 幂等增补（双击/重试不报错、不重复） -->
+    <insert id="insertIfAbsent">
+        INSERT INTO rag.rag_kp_alias (alias_id, tenant_id, kp_id, alias_text)
+        VALUES (#{aliasId}::uuid, #{tenantId}::uuid, #{kpId}::uuid, #{aliasText})
+        ON CONFLICT (tenant_id, kp_id, alias_text) DO NOTHING
+    </insert>
+
+    <select id="listAliases" resultType="java.lang.String">
+        SELECT alias_text FROM rag.rag_kp_alias
+         WHERE tenant_id = #{tenantId}::uuid AND kp_id = #{kpId}::uuid
+         ORDER BY created_at, alias_text
+    </select>
+
+    <delete id="removeAlias">
+        DELETE FROM rag.rag_kp_alias
+         WHERE tenant_id = #{tenantId}::uuid AND kp_id = #{kpId}::uuid
+           AND alias_text = #{aliasText}
+    </delete>
+
+    <!--
+      知识点摘要：tenantLiteral 是应用层拼好的可信字面量（如 'uuid'::uuid），
+      用 ${tenantLiteral} 原样嵌入（不能用 #{}，否则 ::uuid cast 与 IN 列表会失效）；
+      keyword 仍用 #{} 参数绑定，防 ILIKE 注入。
+      ⚠️ 与旧 SQL 逐字等价：tenant_id IN (rag_tenant, rag_global_tenant_id())。
+    -->
+    <select id="listKnowledgePoints"
+            resultType="cn.studykid.rag.management.ports.KnowledgeAliasPort$KnowledgePointBrief">
+        SELECT kp_id::text, subject, grade, canonical_name,
+               COALESCE(array_length(aliases, 1), 0) AS alias_count,
+               COALESCE(array_length(prerequisites, 1), 0) AS prereq_count
+          FROM rag.rag_knowledge_point
+         WHERE tenant_id IN (${tenantLiteral}, rag_global_tenant_id())
+           AND (#{keyword}::text IS NULL OR canonical_name ILIKE '%' || #{keyword}::text || '%')
+         ORDER BY subject, grade, canonical_name
+         LIMIT #{limit}
+    </select>
+
+</mapper>

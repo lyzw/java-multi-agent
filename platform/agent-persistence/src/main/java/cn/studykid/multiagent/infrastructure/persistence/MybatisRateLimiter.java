@@ -11,7 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.core.tenant.TenantContext;
 import cn.studykid.multiagent.infrastructure.persistence.mapper.RateLimitBucketMapper;
@@ -25,7 +24,6 @@ import cn.studykid.multiagent.ports.persistence.RateLimitPort;
  * <p><b>核心不变量保留</b>：check + increment 由同一条 CTE SQL 原子完成
  * （唯一索引 {@code rate_limit_bucket_unique} 保证并发不超发）—— 不拆成两条 check-then-act。
  */
-@Repository
 @org.springframework.context.annotation.Primary
 @ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
 public class MybatisRateLimiter implements RateLimitPort {

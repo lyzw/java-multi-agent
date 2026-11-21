@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Param;
 
 import cn.studykid.multiagent.infrastructure.persistence.model.ReviewTaskDO;
 
+@OpsMapper
 public interface ReviewTaskMapper {
 
     /** INSERT RETURNING task_id */

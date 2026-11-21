@@ -10,7 +10,7 @@
                 #{argumentDigest}, #{targetResource}, #{approverScope}, #{approverId}, #{expiresAt})
     </insert>
 
-    <insert id="insertApprovalExistingOp" resultType="java.lang.String">
+    <select id="insertApprovalExistingOp" resultType="java.lang.String">
         INSERT INTO approval (tenant_id, operation_id, state, requirement, argument_digest,
                               target_resource, approver_scope, expires_at)
         SELECT #{tenantId}::uuid, #{operationId}::uuid, 'PENDING', #{requirement},
@@ -18,7 +18,7 @@
         WHERE NOT EXISTS (SELECT 1 FROM approval WHERE tenant_id = #{tenantId}::uuid
                           AND operation_id = #{operationId}::uuid)
         RETURNING approval_id::text
-    </insert>
+    </select>
 
     <update id="rejectApproval">
         UPDATE approval SET state = 'REJECTED', approver_id = #{approverId}, decided_at = now()

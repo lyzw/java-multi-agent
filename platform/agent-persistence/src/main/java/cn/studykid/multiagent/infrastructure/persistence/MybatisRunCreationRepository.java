@@ -98,8 +98,8 @@ public class MybatisRunCreationRepository implements RunCreationPort {
                         String outboxJson = JSON.writeValueAsString(agentPayload.toPayload());
                         mapper.insertRun(tenantId, runId, snapshotId, key.keyValue(),
                                 digest.value(), inputJson, correlationId,
-                                limits.deadlineAt() != null ? limits.deadlineAt().toString() : null,
-                                limits.budgetAmount() != null ? limits.budgetAmount().intValue() : 0,
+                                limits.deadlineAt(),
+                                limits.budgetAmount(),
                                 normalized);
                         mapper.insertRunCreatedEvent(tenantId, runId, correlationId);
                         mapper.pgNotifyRunEvent(tenantId, runId, "1");
@@ -178,7 +178,7 @@ public class MybatisRunCreationRepository implements RunCreationPort {
         try {
             return TransactionalConnectionHolder.inTransaction(
                     dataSource, new TenantContext(tenantId, "system", Set.of(), 0L),
-                    conn -> mapper.markOutboxPublished(tenantId, outboxId, publishedAt.toString()) > 0);
+                    conn -> mapper.markOutboxPublished(tenantId, outboxId, publishedAt) > 0);
         } finally {
             TenantScope.clear();
         }

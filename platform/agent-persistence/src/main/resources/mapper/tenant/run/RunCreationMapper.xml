@@ -29,11 +29,14 @@
                 jsonb_build_object('correlationId', #{correlationId}::text))
     </insert>
 
-    <!-- SQL 3. pg_notify 'run_event' -->
-    <select id="pgNotifyRunEvent" resultType="int">
-        SELECT pg_notify('run_event', json_build_object(
-                'tenantId', #{tenantId}::text, 'runId', #{runId}::text,
-                'sequenceNo', #{sequenceNo}::text)::text)
+    <!-- SQL 3. pg_notify 'run_event'（pg_notify 返回 void，须用 CTE 包一层取 boolean，且方法返回 void 丢弃结果） -->
+    <select id="pgNotifyRunEvent" resultType="boolean">
+        WITH notify AS (
+            SELECT pg_notify('run_event', json_build_object(
+                    'tenantId', #{tenantId}::text, 'runId', #{runId}::text,
+                    'sequenceNo', #{sequenceNo}::text)::text)
+        )
+        SELECT true FROM notify
     </select>
 
     <!-- SQL 4. INSERT idempotency_record ON CONFLICT DO NOTHING -->

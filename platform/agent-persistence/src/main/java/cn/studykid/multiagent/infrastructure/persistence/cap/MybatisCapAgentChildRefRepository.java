@@ -61,6 +61,7 @@ public class MybatisCapAgentChildRefRepository implements CapAgentChildRefPort {
     private boolean shadowEnabled;
     private @NonNull String sentinelTenantId;
 
+    @Autowired
     public MybatisCapAgentChildRefRepository(@NonNull CapAgentChildRefMapper mapper,
                                              @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

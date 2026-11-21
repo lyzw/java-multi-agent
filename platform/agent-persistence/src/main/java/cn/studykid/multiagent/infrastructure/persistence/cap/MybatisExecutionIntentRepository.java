@@ -58,6 +58,7 @@ public class MybatisExecutionIntentRepository implements ExecutionIntentPort {
     private String sentinelTenantId = "";
     private boolean shadowEnabled;
 
+    @Autowired
     public MybatisExecutionIntentRepository(@NonNull ExecutionIntentMapper mapper,
                                             @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this.mapper = mapper;

@@ -9,7 +9,6 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.infrastructure.persistence.mapper.ReviewTaskMapper;
 import cn.studykid.multiagent.infrastructure.persistence.model.ReviewTaskDO;
@@ -24,7 +23,6 @@ import cn.studykid.multiagent.ports.persistence.ReviewTaskPort.Priority;
  * 表有 tenant_id 列，走运维连接是因为 platform 域表统一由 platform_ops 角色访问。
  * ⚠️ 动态 list 用 `<where><choose>` 处理默认 PENDING+IN_REVIEW 过滤。
  */
-@Repository
 @org.springframework.context.annotation.Primary
 @ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
 public class MybatisReviewTaskRepository implements ReviewTaskPort {

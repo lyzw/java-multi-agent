@@ -5,10 +5,18 @@ import java.util.List;
 
 import org.apache.ibatis.annotations.Param;
 
-/** 平台 Agent 目录（LATERAL JOIN 复杂查询）。 */
+import cn.studykid.multiagent.infrastructure.persistence.mapper.OpsMapper;
+
+/** 平台 Agent 目录（跨租户只读，必须走 opsSqlSessionFactory + BYPASSRLS）。 */
+@OpsMapper
 public interface PlatformAgentDirectoryMapper {
     List<PlatformAgentRow> listAgents(@Param("tenantIdFilter") String tenantIdFilter);
+
     record PlatformAgentRow(String tenantId, String agentId, String name, String description,
-                            Integer versionCount, Integer latestVersionNumber,
-                            Instant latestPublishedAt, int tenantCount) {}
+                            int versionCount, Integer latestVersionNumber,
+                            Instant latestPublishedAt, Integer defVersion, String defLifecycleState,
+                            String defRoles, String defEnabledSkills, String defCapabilityTags,
+                            String defOverrides, String defModelRef, String defSkillBundles,
+                            String defInstructions, String defOrchestration,
+                            String orchestrationMode, int tenantCount) {}
 }

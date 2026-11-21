@@ -10,13 +10,16 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan.Filter;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.FilterType;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.spring.MybatisSqlSessionFactoryBean;
 
 import cn.studykid.multiagent.infrastructure.persistence.cap.PlatformOpsDataSourceProvider;
+import cn.studykid.multiagent.infrastructure.persistence.mapper.OpsMapper;
 import cn.studykid.multiagent.infrastructure.persistence.rls.RlsTenantBindingInterceptor;
 import cn.studykid.multiagent.infrastructure.persistence.rls.TenantBoundTransactionFactory;
 
@@ -48,6 +51,9 @@ import cn.studykid.multiagent.infrastructure.persistence.rls.TenantBoundTransact
                 "cn.studykid.multiagent.memory.persistence",
                 "cn.studykid.multiagent.infrastructure.statistics"
         },
+        // ⚠️ 平台域 ops Mapper 的 statement 只在 mapper/ops/**，不能绑到租户工厂；
+        //    漏排除会在首次调用时抛 Invalid bound statement（编译期完全看不出来）。
+        excludeFilters = @Filter(type = FilterType.ANNOTATION, classes = OpsMapper.class),
         sqlSessionFactoryRef = "tenantSqlSessionFactory")
 public class MybatisRlsConfiguration {
 
@@ -102,5 +108,20 @@ public class MybatisRlsConfiguration {
         bean.setMapperLocations(new PathMatchingResourcePatternResolver()
                 .getResources("classpath*:mapper/ops/**/*.xml"));
         return bean.getObject();
+    }
+
+    /**
+     * 运维通道 Mapper 绑定：只扫描标注 {@link OpsMapper} 的接口。
+     *
+     * <p>外层类已要求 {@code persistence.mybatis.enabled=true}；这里再要求运维角色已接入，
+     * 否则不注册这些 Mapper，对应适配层由 {@code ApplicationConfiguration} 退回 Jdbc 实现。
+     */
+    @Configuration
+    @ConditionalOnProperty(name = "agent.platform-ops.datasource.enabled", havingValue = "true")
+    @MapperScan(
+            basePackages = "cn.studykid.multiagent.infrastructure.persistence.mapper",
+            annotationClass = OpsMapper.class,
+            sqlSessionFactoryRef = "opsSqlSessionFactory")
+    static class OpsMapperScanConfiguration {
     }
 }

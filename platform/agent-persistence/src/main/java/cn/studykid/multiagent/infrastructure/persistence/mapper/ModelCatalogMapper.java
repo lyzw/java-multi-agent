@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Param;
 
 import cn.studykid.multiagent.infrastructure.persistence.model.ModelCatalogDO;
 
+@OpsMapper
 public interface ModelCatalogMapper {
 
     List<ModelCatalogDO> listAll();

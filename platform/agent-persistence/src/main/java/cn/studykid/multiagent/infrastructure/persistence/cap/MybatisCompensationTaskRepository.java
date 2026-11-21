@@ -66,6 +66,7 @@ public class MybatisCompensationTaskRepository implements CompensationTaskPort {
     private String sentinelTenantId = "";
     private boolean shadowEnabled;
 
+    @Autowired
     public MybatisCompensationTaskRepository(@NonNull CompensationTaskMapper mapper,
                                              @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

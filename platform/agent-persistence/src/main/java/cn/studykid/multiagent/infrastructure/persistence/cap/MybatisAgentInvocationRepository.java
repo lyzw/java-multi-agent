@@ -61,6 +61,7 @@ public class MybatisAgentInvocationRepository implements AgentInvocationPort {
     private @NonNull String sentinelTenantId;
 
     /** Spring 装配入口（保持既有单参 DataSource 构造口径，额外注入 Mapper）。 */
+    @Autowired
     public MybatisAgentInvocationRepository(@NonNull AgentInvocationMapper mapper,
                                             @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

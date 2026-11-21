@@ -159,7 +159,11 @@ class NotFoundMappingIT {
     @Test
     @DisplayName("✅ 未映射路径的响应体是归一化 JSON：code=NOT_FOUND，且不回显路径原文")
     void unmappedPathReturnsNormalizedJsonBody() {
-        String body = rest.get().uri("/api/cap/config/nope")
+        // ⚠️ /api/cap/** 已划入平台身份域安全链（PlatformBearerTokenFilter），
+        //    本类发的是租户 JWT，会在到达 DispatcherServlet 之前被 401 拒绝，
+        //    测不到「未映射路径」的语义。改用同样「前缀下已有控制器、但本路径未映射」
+        //    的租户域路径 /api/config/nope。
+        String body = rest.get().uri("/api/config/nope")
                 .header(HttpHeaders.AUTHORIZATION, auth())
                 .exchange()
                 .expectStatus().isNotFound()
@@ -173,7 +177,7 @@ class NotFoundMappingIT {
                 .contains("\"message\"");
         assertThat(body)
                 .as("⛔ 不得回显请求路径原文（可能含客户端数据）")
-                .doesNotContain("/api/cap/config/nope");
+                .doesNotContain("/api/config/nope");
     }
 
     @Test

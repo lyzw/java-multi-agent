@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.bootstrap.config;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import javax.sql.DataSource;
 
 import org.jspecify.annotations.NonNull;
@@ -108,6 +109,8 @@ public class AgentChatConfiguration {
      * 出现「两个同类型 Bean」或「测试里用了未绑租户的连接」。
      */
     @Bean
+    @ConditionalOnProperty(name = "persistence.mybatis.enabled",
+             havingValue = "false", matchIfMissing = true)
     public AgentChatAuditPort agentChatAuditPort(@NonNull DataSource dataSource) {
         return new JdbcAgentChatAuditRepository(dataSource);
     }

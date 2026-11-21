@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformAgentDirectoryMapper">
+    <!--
+      ⚠️ 与 JdbcPlatformAgentDirectoryRepository.SQL 逐列对齐：缺任何一列都会让
+      平台控制台 Agent 注册表静默丢字段（模型/定义/角色/复用度显示为 0 或空）。
+      ⚠️ 本 Mapper 必须绑 opsSqlSessionFactory（BYPASSRLS）：tenant_agent_binding
+      带 FORCE RLS，走租户工厂＋哨兵租户会静默返回 0 行。
+    -->
+    <select id="listAgents" resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformAgentDirectoryMapper$PlatformAgentRow">
+        SELECT b.tenant_id::text        AS tenantId,
+               a.agent_id::text         AS agentId,
+               a.name                   AS name,
+               a.description            AS description,
+               (SELECT count(*) FROM agent_version v
+                 WHERE v.agent_id = a.agent_id) AS versionCount,
+               av.version_number        AS latestVersionNumber,
+               av.published_at          AS latestPublishedAt,
+               d.version                AS defVersion,
+               d.lifecycle_state::text  AS defLifecycleState,
+               d.roles::text            AS defRoles,
+               d.enabled_skills::text   AS defEnabledSkills,
+               d.capability_tags::text  AS defCapabilityTags,
+               d.overrides::text        AS defOverrides,
+               d.model_ref              AS defModelRef,
+               d.skill_bundles::text    AS defSkillBundles,
+               d.instructions::text     AS defInstructions,
+               d.orchestration::text    AS defOrchestration,
+               om.mode                  AS orchestrationMode,
+               COALESCE(tc.tenant_count, 0) AS tenantCount
+        FROM tenant_agent_binding b
+        JOIN agent a ON a.agent_id = b.agent_id
+        LEFT JOIN LATERAL (
+            SELECT v.version_number, v.published_at
+            FROM agent_version v
+            WHERE v.agent_id = a.agent_id
+            ORDER BY v.version_number DESC LIMIT 1
+        ) av ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT d.version, d.lifecycle_state, d.roles, d.enabled_skills,
+                   d.capability_tags, d.overrides, d.model_ref,
+                   d.skill_bundles, d.instructions, d.orchestration
+            FROM cap_agent_def d
+            WHERE d.agent_id = a.agent_id
+            ORDER BY d.version DESC LIMIT 1
+        ) d ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT CASE
+                WHEN d2.orchestration IS NULL
+                  OR d2.orchestration IN ('{}'::jsonb, 'null'::jsonb, '""'::jsonb)
+                  OR jsonb_typeof(d2.orchestration) &lt;&gt; 'object'
+                    THEN NULL
+                WHEN d2.orchestration ->> 'mode' IS NOT NULL
+                    THEN d2.orchestration ->> 'mode'
+                ELSE NULL
+            END AS mode
+            FROM cap_agent_def d2
+            WHERE d2.agent_id = a.agent_id
+            ORDER BY d2.version DESC LIMIT 1
+        ) om ON TRUE
+        LEFT JOIN (
+            SELECT agent_id, count(*) AS tenant_count
+            FROM tenant_agent_binding
+            WHERE status = 'ACTIVE'
+            GROUP BY agent_id
+        ) tc ON tc.agent_id = a.agent_id
+        WHERE b.status = 'ACTIVE'
+          AND (#{tenantIdFilter}::uuid IS NULL OR b.tenant_id = #{tenantIdFilter}::uuid)
+        ORDER BY b.tenant_id, a.name, a.agent_id
+    </select>
+</mapper>

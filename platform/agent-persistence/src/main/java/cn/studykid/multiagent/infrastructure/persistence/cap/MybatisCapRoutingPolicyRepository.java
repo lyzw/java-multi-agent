@@ -77,6 +77,7 @@ public class MybatisCapRoutingPolicyRepository implements CapRoutingPolicyPort {
     private String sentinelTenantId = "";
     private boolean shadowEnabled;
 
+    @Autowired
     public MybatisCapRoutingPolicyRepository(@NonNull CapRoutingPolicyMapper mapper,
                                              @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

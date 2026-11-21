@@ -69,6 +69,7 @@ public class MybatisConfigReleaseRepository implements ConfigReleasePort {
     private boolean shadowEnabled;
     private @NonNull String sentinelTenantId;
 
+    @Autowired
     public MybatisConfigReleaseRepository(@NonNull ConfigReleaseMapper mapper,
                                           @Qualifier("dataSource") @NonNull DataSource dataSource) {
         this(mapper, dataSource, null, null, false, "");

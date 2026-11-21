@@ -144,7 +144,11 @@ class ScopeBypassArchitectureTest {
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisResultEventRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisAgentManageRepository.java",
             "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisAgentQueryRepository.java",
-            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisProfileQueryRepository.java");
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisProfileQueryRepository.java",
+            // ── W4/W5 MyBatis-Plus 适配层（补登记：持有 Gate 且查询路径真实调用钩子）──
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisAgentReleaseArchiveRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/cap/MybatisDelegationBudgetRepository.java",
+            "agent-persistence/src/main/java/cn/studykid/multiagent/infrastructure/persistence/MybatisUnknownOperationRepository.java");
 
     /**
      * 平台级 / 混合作用域仓储（刻意<b>不</b>接 Gate、<b>不</b>登记为已接）：

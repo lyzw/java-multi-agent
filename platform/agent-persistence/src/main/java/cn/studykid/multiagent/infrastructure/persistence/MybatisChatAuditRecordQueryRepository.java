@@ -8,16 +8,18 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Repository;
 
 import cn.studykid.multiagent.infrastructure.persistence.mapper.ChatAuditRecordQueryMapper;
 import cn.studykid.multiagent.ports.agentchat.audit.ChatAuditRecordQueryPort;
 import cn.studykid.multiagent.ports.persistence.Page;
 
-/** ChatAuditRecordQueryPort MyBatis 实现（RECORD ∪ UNATTRIBUTED 联合查询）。 */
-@Repository
-@ConditionalOnProperty(name = "persistence.mybatis.enabled", havingValue = "true")
+/**
+ * ChatAuditRecordQueryPort MyBatis 实现（RECORD ∪ UNATTRIBUTED 联合查询）。
+ *
+ * <p>⚠️ <b>当前刻意不装配</b>：该查询是平台审计视角的跨租户只读，必须用 BYPASSRLS
+ * 运维数据源；映射到租户 SqlSessionFactory 后既无法跨租户，又会被 RLS 拦截器拒绝裸调用。
+ * 继续走 Jdbc + platformIdentityDataSource 的受守卫通道。
+ */
 public class MybatisChatAuditRecordQueryRepository implements ChatAuditRecordQueryPort {
 
     private final ChatAuditRecordQueryMapper mapper;
